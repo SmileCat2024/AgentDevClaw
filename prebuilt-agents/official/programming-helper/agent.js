@@ -194,9 +194,13 @@ export class ProgrammingHelperAgent extends BasicAgent {
     // playwright 领域 shell（ticket 036）：浏览器页面取证收编为受管线约束的
     // feature 工具（screenshot / pdf / har 产物动词 + env 资产盘点）。
     // 仅 main 身份挂载；后端 playwright 包与浏览器资产由 shell 管理（env 动词
-    // 报告状态），产物强制 workspace 内。CLI 资产目录默认
-    // ~/.agentdev/assets/playwright-shell/browsers（config.browsersPath 可覆盖）。
-    this.use(new PlaywrightShellFeature({ workdir: workspaceDir }));
+    // 报告状态），产物强制 workspace 内。浏览器资产与登录档案按 ADR-0016 经
+    // 装配注入数据根分区（feature 内部缺省仅兜底非 Claw 直用场景）。
+    this.use(new PlaywrightShellFeature({
+      workdir: workspaceDir,
+      browsersPath: join(USER_DATA_ROOT, 'assets', 'playwright-shell', 'browsers'),
+      profilesPath: join(USER_DATA_ROOT, 'playwright-shell', 'profiles'),
+    }));
   }
 
   async onInitiate(ctx) {

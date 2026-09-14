@@ -14,7 +14,7 @@
  * CLI 资产管理（简报 §4 既定模式）：
  * - CLI 入口显式路径寻址（不经 PATH / npx）；会话后端 @playwright/cli 同法；
  * - 浏览器资产目录注入 PLAYWRIGHT_BROWSERS_PATH（自管位置，config 可覆盖；
- *   缺省 ~/.agentdev/assets/playwright-shell/browsers），安装属装配期人工动作；
+ *   缺省 ~/.agentdev/AgentDevClaw/assets/playwright-shell/browsers），安装属装配期人工动作；
  * - env 动词报告存在性/版本/匹配，缺失时给人工修复指引（不裸抛）。
  * - 会话 daemon 跨调用存活：close 动词显式收尾；onDestroy 兜底 kill-all。
  * - headed 模式按宿主平台判断显示环境：Windows/macOS 不依赖 DISPLAY，Linux
@@ -43,7 +43,7 @@ export interface PlaywrightShellFeatureConfig {
   cliEntry?: string;
   /** 会话后端入口（@playwright/cli bin js）；缺省经 createRequire 自动解析 */
   sessionCliEntry?: string;
-  /** 浏览器资产目录（PLAYWRIGHT_BROWSERS_PATH 注入值）；缺省 ~/.agentdev/assets/playwright-shell/browsers */
+  /** 浏览器资产目录（PLAYWRIGHT_BROWSERS_PATH 注入值）；缺省 ~/.agentdev/AgentDevClaw/assets/playwright-shell/browsers */
   browsersPath?: string;
   /** 持久化登录档案根目录；缺省 ~/.agentdev/AgentDevClaw/playwright-shell/profiles */
   profilesPath?: string;
