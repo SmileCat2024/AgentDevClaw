@@ -62,7 +62,12 @@ Feature 的元信息现状是三套平行体系互相不认识：
 修正后的模型：
 
 - **能力标签 `capabilities`：多值数组**（受控词表，可从 `provides` 静态推导），描述 feature 具备哪些形态的能力；在详情层展示，不作分组因素。
-- **面板主分组轴 = `provenance`（来源）**：单值、正交、天然互斥（一个 feature 只有一个来源），且直接回应原始诉求"区分官方与自己加的"。
+- **面板主分组轴 = 展示分组（displayGroup）**：用户视角两档——`bundled`（官方内置：随软件发行的一切）与 `installed`（已安装：用户经 tgz 仓库装入的）。直接回应原始诉求"区分官方与自己加的"。
+
+**二次修订（P1 实施中再次修正）**：中间版曾把细粒度 provenance 直接作面板分组轴（生态 / Claw / 框架 / 宿主内联四组），实施后被推翻——那是**开发者视角的仓库边界**（AgentDev 仓库 vs Claw 仓库 vs 装配代码），对使用面板的用户毫无信息量（"shell-feature 来自生态包、todo 来自 core 内部"的区别用户不关心）。修正为两层模型：
+
+- **数据层**：provenance 五值保留（单值正交、机器可判定），供 Registry 管理、冲突审计与详情弹窗的细粒度来源展示；
+- **展示层**：`builtin / ecosystem / local / inline → bundled`，`packaged → installed`，映射权威在 server，随 catalog 响应携带；单一非兜底分组时面板不渲染组头（当下无自装件即整体平铺，装入首个 feature 后"已安装"组自动出现）。
 
 能力词表（七类，受控）：
 
@@ -89,13 +94,13 @@ Feature 的元信息现状是三套平行体系互相不认识：
 
 对齐 VS Code"来源 = 安装通道，不自我申报"的原则：来源由装配路径决定，由 Claw 宿主投影：
 
-| provenance | 判定 | 徽章（zh） |
-|---|---|---|
-| `builtin` | 框架自有包直出：`@agentdevjs/core`、`@agentdevjs/mcp`（UserInputFeature、LspFeature、MCPFeature 等） | 框架 |
-| `ecosystem` | 独立 feature 生态包（`@agentdevjs/*-feature`，可插拔能力包） | 生态 |
-| `local` | Claw 仓库 local-features / 根级 features | Claw |
-| `inline` | agent.js 内部类 / 包装类 | 宿主 |
-| `packaged` | tgz 仓库解析（detail.channel 区分 official / custom） | 已安装 |
+| provenance | 判定 | 弹窗标签（zh） | 展示分组 |
+|---|---|---|---|
+| `builtin` | 框架自有包直出：`@agentdevjs/core`、`@agentdevjs/mcp`（UserInputFeature、LspFeature、MCPFeature 等） | 框架 | bundled |
+| `ecosystem` | 独立 feature 生态包（`@agentdevjs/*-feature`，可插拔能力包） | 生态 | bundled |
+| `local` | Claw 仓库 local-features / 根级 features | Claw | bundled |
+| `inline` | agent.js 内部类 / 包装类 | 宿主 | bundled |
+| `packaged` | tgz 仓库解析（detail.channel 区分 official / custom） | 已安装 | installed |
 
 边界原则：**框架运行必需的自有包（core / mcp）= builtin；可插拔能力包 = ecosystem**。以"是否框架自有包"划界而非"是否 core"，消除 `@agentdevjs/mcp` 这类非 core 自有包的归类歧义。
 

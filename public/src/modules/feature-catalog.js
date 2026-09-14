@@ -20,7 +20,8 @@ async function fetchFeatureCatalog() {
   const resp = await fetch('/api/feature-catalog');
   if (!resp.ok) throw new Error('/api/feature-catalog ' + resp.status);
   const data = await resp.json();
-  if (!data || !Array.isArray(data.provenances) || !Array.isArray(data.features)) {
+  if (!data || !Array.isArray(data.provenances) || !Array.isArray(data.groups)
+    || !Array.isArray(data.features)) {
     throw new Error('feature-catalog: malformed response');
   }
   return data;
@@ -66,38 +67,40 @@ function enrichFeatureEntry(feature, catalog) {
     ? catalog.features.find(seed => seed.name === feature.name)
     : null;
   if (!entry) {
-    return { ...feature, displayName: undefined, capabilities: [], provenance: null, mapped: false };
+    return { ...feature, displayName: undefined, capabilities: [], provenance: null, group: null, mapped: false };
   }
   return {
     ...feature,
     displayName: entry.displayName,
     capabilities: Array.isArray(entry.capabilities) ? entry.capabilities : [],
     provenance: entry.provenance,
+    group: entry.group,
     mapped: true,
   };
 }
 
 /**
- * 按来源（provenance，单值正交）分组——这是面板主分组轴：
- * 能力标签（tools/policy/mcp…）是多值属性，不做分组因素。
- * 分组顺序 = 响应携带的 provenances 词表顺序，_unmapped 恒在最后；空组剔除。
+ * 按展示分组（用户视角：官方内置 bundled / 已安装 installed）分组。
+ * 细粒度 provenance（仓库边界，开发者视角）是数据层概念，
+ * 只用于弹窗来源标签，不作面板分组轴。
+ * 分组顺序 = 响应携带的 groups 词表顺序，_unmapped 恒在最后；空组剔除。
  * catalog 为 null 时全部进 _unmapped。features 为空返回 []。
  */
-function groupFeaturesByProvenance(features, catalog) {
+function groupFeaturesByDisplayGroup(features, catalog) {
   if (!Array.isArray(features) || features.length === 0) return [];
-  const provenances = (catalog && Array.isArray(catalog.provenances) && catalog.provenances.length > 0)
-    ? catalog.provenances
+  const groups = (catalog && Array.isArray(catalog.groups) && catalog.groups.length > 0)
+    ? catalog.groups
     : [];
-  const order = [...provenances, '_unmapped'];
+  const order = [...groups, '_unmapped'];
   const buckets = new Map(order.map(id => [id, []]));
   for (const feature of features) {
     const enriched = enrichFeatureEntry(feature, catalog);
-    const key = enriched.provenance && buckets.has(enriched.provenance) ? enriched.provenance : '_unmapped';
+    const key = enriched.group && buckets.has(enriched.group) ? enriched.group : '_unmapped';
     buckets.get(key).push(enriched);
   }
   return order
     .filter(id => (buckets.get(id) || []).length > 0)
-    .map(id => ({ provenance: id, features: buckets.get(id) }));
+    .map(id => ({ id, features: buckets.get(id) }));
 }
 
 /**
@@ -127,7 +130,7 @@ window.ClawFW.featureCatalog = {
   loadFeatureCatalog,
   getFeatureCatalogSnapshot,
   enrichFeatureEntry,
-  groupFeaturesByProvenance,
+  groupFeaturesByDisplayGroup,
   resolveDisplayName,
   provenanceI18nKey,
 };

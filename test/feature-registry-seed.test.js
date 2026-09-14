@@ -34,7 +34,15 @@ describe('feature-registry: loadFeatureRegistry', () => {
     assert.ok(registry.features.length > 0);
     assert.ok(registry.capabilities.some(c => c.id === 'tools'));
     assert.deepEqual(registry.provenances, ['ecosystem', 'local', 'builtin', 'inline', 'packaged']);
-    assert.ok(registry.features.every(f => f.displayName && Array.isArray(f.capabilities) && f.provenance));
+    // 展示分组：细粒度 provenance 全部映射到 bundled/installed，词表顺序 installed 在前
+    assert.deepEqual(registry.groups, ['installed', 'bundled']);
+    assert.ok(registry.features.every(f => f.group === 'bundled' || f.group === 'installed'),
+      'every entry carries a display group');
+    const grouped = new Map(registry.features.map(f => [f.provenance, f.group]));
+    for (const [prov, group] of grouped) {
+      if (prov === 'packaged') assert.equal(group, 'installed');
+      else assert.equal(group, 'bundled', `${prov} should map to bundled`);
+    }
   });
 
   it('rejects wrong schemaVersion', () => {

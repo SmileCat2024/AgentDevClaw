@@ -25,14 +25,14 @@ const _featureGroupOpenPref = new Map();
 /**
  * 分组 details ontoggle 回调：用户操作过的组按其偏好恢复。
  */
-function featureGroupToggled(provenance, open) {
-  _featureGroupOpenPref.set(provenance, open);
+function featureGroupToggled(groupId, open) {
+  _featureGroupOpenPref.set(groupId, open);
 }
 window.featureGroupToggled = featureGroupToggled;
 
-// 来源分组头文案（复用 provenance 词表；兜底组独立 key）
-function featureGroupLabel(provenance) {
-  return t(provenance === '_unmapped' ? 'feature_cat_unmapped' : 'feature_prov_' + provenance);
+// 展示分组头文案（官方内置 / 已安装；兜底组独立 key）
+function featureGroupLabel(groupId) {
+  return t(groupId === '_unmapped' ? 'feature_cat_unmapped' : 'feature_group_' + groupId);
 }
 
 function renderFeaturesPanel() {
@@ -46,11 +46,15 @@ function renderFeaturesPanel() {
   if (fc) fc.loadFeatureCatalog().catch(err => console.warn('[feature-catalog] load failed:', err));
   const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
   const groups = fc
-    ? fc.groupFeaturesByProvenance(currentHookInspector.features, catalog)
-    : [{ provenance: '_unmapped', features: currentHookInspector.features }];
+    ? fc.groupFeaturesByDisplayGroup(currentHookInspector.features, catalog)
+    : [{ id: '_unmapped', features: currentHookInspector.features }];
 
   const allEnriched = groups.flatMap(g => g.features);
   const selectedFeature = allEnriched.find(feature => feature.name === selectedFeatureName) || null;
+
+  // 单一非兜底组时不渲染组头（当下全是官方内置、无自装件，组头无信息量）；
+  // 出现第二个组（用户装入首个 feature）或兜底组（seed 缺口信号）时组头自动出现。
+  const suppressHeaders = groups.length === 1 && groups[0].id !== '_unmapped';
 
   const buildFeatureCard = (feature) => {
     const status = getFeatureStatus(feature);
@@ -76,23 +80,27 @@ function renderFeaturesPanel() {
     ].join('');
   };
 
-  const groupsHtml = groups.map(group => {
+  const buildGroup = (group) => {
+    const grid = '<div class="feature-grid">' + group.features.map(buildFeatureCard).join('') + '</div>';
+    if (suppressHeaders) return grid;
     // 用户操作过的组按偏好恢复；未操作过的默认展开
-    const isOpen = _featureGroupOpenPref.has(group.provenance)
-      ? _featureGroupOpenPref.get(group.provenance)
+    const isOpen = _featureGroupOpenPref.has(group.id)
+      ? _featureGroupOpenPref.get(group.id)
       : true;
     return [
       '<details class="feature-group"' + (isOpen ? ' open' : '')
-        + ' ontoggle="window.featureGroupToggled(&quot;' + escapeHtml(group.provenance) + '&quot;, this.open)">',
+        + ' ontoggle="window.featureGroupToggled(&quot;' + escapeHtml(group.id) + '&quot;, this.open)">',
       '<summary class="feature-group-bar">',
       '<span class="feature-group-chev" aria-hidden="true"></span>',
-      '<span class="feature-group-title">' + escapeHtml(featureGroupLabel(group.provenance)) + '</span>',
+      '<span class="feature-group-title">' + escapeHtml(featureGroupLabel(group.id)) + '</span>',
       '<span class="feature-group-count">' + String(group.features.length) + '</span>',
       '</summary>',
-      '<div class="feature-grid">' + group.features.map(buildFeatureCard).join('') + '</div>',
+      grid,
       '</details>',
     ].join('');
-  }).join('');
+  };
+
+  const groupsHtml = groups.map(buildGroup).join('');
 
   // 弹窗通过独立 portal 渲染到 document.body，不嵌入 panel body（避免 transform 降级 fixed）
   renderFeatureDetailOverlay(selectedFeature);

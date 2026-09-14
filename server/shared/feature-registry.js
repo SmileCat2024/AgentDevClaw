@@ -37,6 +37,28 @@ export const FEATURE_CAPABILITIES = [
 
 export const FEATURE_PROVENANCES = ['ecosystem', 'local', 'builtin', 'inline', 'packaged'];
 
+/**
+ * 展示分组（用户视角）。provenance 是数据层概念（仓库边界，开发者视角，
+ * 供 Registry 管理与弹窗细粒度来源展示）；面板分组的粒度以用户为准：
+ * 官方内置（随软件发行的一切）vs 已安装（用户经 tgz 仓库装入的）。
+ * 映射权威在 server，前端只消费响应中的 group 字段。
+ */
+export const FEATURE_DISPLAY_GROUPS = [
+  { id: 'installed', provenances: ['packaged'] },
+  { id: 'bundled', provenances: ['ecosystem', 'local', 'builtin', 'inline'] },
+];
+
+const PROVENANCE_TO_GROUP = new Map(
+  FEATURE_DISPLAY_GROUPS.flatMap(g => g.provenances.map(p => [p, g.id]))
+);
+
+// 词表扩展时漏配映射会让 group 为 undefined、条目悄悄落兜底组——启动即报。
+for (const p of FEATURE_PROVENANCES) {
+  if (!PROVENANCE_TO_GROUP.has(p)) {
+    throw new Error(`feature-registry: provenance "${p}" not mapped to any display group`);
+  }
+}
+
 const CAPABILITY_IDS = new Set(FEATURE_CAPABILITIES.map(c => c.id));
 const PROVENANCE_IDS = new Set(FEATURE_PROVENANCES);
 
@@ -85,6 +107,7 @@ export function loadFeatureRegistry(seedPath = SEED_PATH) {
     schemaVersion: raw.schemaVersion,
     capabilities: FEATURE_CAPABILITIES,
     provenances: FEATURE_PROVENANCES,
-    features: raw.features,
+    groups: FEATURE_DISPLAY_GROUPS.map(g => g.id),
+    features: raw.features.map(entry => ({ ...entry, group: PROVENANCE_TO_GROUP.get(entry.provenance) })),
   };
 }
