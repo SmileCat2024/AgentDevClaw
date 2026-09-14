@@ -251,8 +251,11 @@ export function createConfigSerializer({ read, write }) {
       }
       return config;
     });
-    // Swallow rejections so the chain never breaks for subsequent callers
-    chain = run.catch(e => console.warn(e));
+    // Swallow rejections so the chain never breaks for subsequent callers;
+    // each rejection still propagates to its own caller via `run`.
+    chain = run.catch(() => {
+      // handled by the caller of `run`
+    });
     return run;
   };
 }
