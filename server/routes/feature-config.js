@@ -24,6 +24,7 @@ import {
   readGlobalLayer,
   readLayerFile,
 } from '../shared/feature-config-layers.js';
+import { MOUNT_KEY, validateMountEntry } from '../shared/feature-mount.js';
 
 // ── scope → queue 解析注册表（server 进程内存态，不做热更新） ──────────
 
@@ -138,8 +139,11 @@ export function resolveScopeConfig(params, resolvers = scopeResolvers) {
  * 校验 PUT layer 的请求体。返回错误消息（null = 合法）。
  * 规则：content 必须是对象（非 null 非数组）；顶层 key 必须是字符串 featureName；
  * 内容中任何位置出现 null 拒绝（null 是 merge 的删除语义，不落盘）。
+ * 带 layerId 时追加 $mount 约束：目录层（dir:*）拒绝 $mount 装配声明，
+ * 允许层校验其结构（合法性与 agent 侧提取共用 shared/feature-mount.js）。
+ * 不带 layerId 时（旧调用形态）不做 $mount 约束。
  */
-export function validateLayerContent(content) {
+export function validateLayerContent(content, { layerId } = {}) {
   if (content === null || content === undefined || typeof content !== 'object' || Array.isArray(content)) {
     return 'layer content must be a non-null object';
   }
@@ -149,6 +153,17 @@ export function validateLayerContent(content) {
     }
     if (containsNull(value)) {
       return `null is not allowed in layer content (at key '${key}')`;
+    }
+  }
+  if (layerId !== undefined) {
+    for (const [featureName, featureConfig] of Object.entries(content)) {
+      if (typeof featureConfig !== 'object' || featureConfig === null || Array.isArray(featureConfig)) continue;
+      if (!(MOUNT_KEY in featureConfig)) continue;
+      if (String(layerId).startsWith('dir:')) {
+        return `layer '${layerId}' 不支持 $mount 装配声明（feature '${featureName}'）；装配是 agent 身份级配置`;
+      }
+      const mountError = validateMountEntry(featureConfig[MOUNT_KEY], { featureName });
+      if (mountError) return mountError;
     }
   }
   return null;
@@ -208,7 +223,7 @@ export function setupFeatureConfigRoutes(app, express) {
     if (!layerId || typeof layerId !== 'string') {
       return res.status(400).json({ error: 'layerId required' });
     }
-    const validationError = validateLayerContent(content);
+    const validationError = validateLayerContent(content, { layerId });
     if (validationError) {
       return res.status(400).json({ error: validationError });
     }

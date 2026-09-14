@@ -12,14 +12,20 @@ import { compareSemver } from '../shared/feature-utils.js';
 import { runCommand } from '../routes/fs-operations.js';
 
 async function readArchiveJson(archivePath, archiveEntryPath) {
-  // Windows 下 GNU tar 把 "D:\..." 的盘符冒号当作远程主机分隔符（"Cannot connect to D:"），
-  // 经 cmd /s /c 包装后带引号的绝对路径同样触发该解析。runCommand 以 PROJECT_ROOT 为 cwd，
-  // 仓库内归档改传 POSIX 风格相对路径绕开；仓库外归档退回正斜杠绝对路径。
+  // Windows 下 GNU tar 把 "C:\..." 的盘符冒号当作远程主机分隔符（"Cannot connect
+  // to C: resolve failed"），正斜杠绝对路径同样触发该解析（历史遗留：用户仓库 tgz
+  // 曾因此全部落入 invalid 被静默吞掉）。runCommand 以 PROJECT_ROOT 为 cwd：
+  // 仓库内归档改传 POSIX 风格相对路径绕开；仓库外归档（用户仓库 / 临时目录）在
+  // win32 追加 --force-local 禁用远程主机解释（GNU tar 扩展，BSD tar 无此问题）。
+  // 注意：跨盘符（PROJECT_ROOT 在 D:、用户仓库/临时目录在 C:）时 path.relative
+  // 返回 to 的绝对路径而非 ".." 前缀，必须同时排除绝对路径才算仓库内。
   const relative = path.relative(PROJECT_ROOT, archivePath).replace(/\\/g, '/');
-  const target = relative.startsWith('..')
-    ? archivePath.replace(/\\/g, '/')
-    : relative;
-  const { stdout } = await runCommand('tar', ['-xOf', target, archiveEntryPath]);
+  const insideRepo = !relative.startsWith('..') && !path.isAbsolute(relative);
+  const target = insideRepo ? relative : archivePath.replace(/\\/g, '/');
+  const tarArgs = !insideRepo && process.platform === 'win32'
+    ? ['--force-local', '-xOf', target, archiveEntryPath]
+    : ['-xOf', target, archiveEntryPath];
+  const { stdout } = await runCommand('tar', tarArgs);
   const raw = stdout.trim();
   if (!raw) throw new Error(`Archive entry is empty: ${archiveEntryPath}`);
   return JSON.parse(raw);

@@ -32,6 +32,7 @@ import {
   readAgentLayer,
   readDirLayer,
 } from '../../../server/shared/feature-config-layers.js';
+import { extractFeatureMounts } from '../../../server/shared/feature-mount.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 import { CoderAgent } from './coder-agent.js';
 
@@ -90,13 +91,16 @@ export class ProgrammingHelperAgent extends BasicAgent {
     // 配置队列（ticket 00/03）：[全局层, agent 层, 目录层(构造时 cwd), 会话注入]。
     // 队列在构造函数内组装——同进程多 session 可能对应不同 cwd，禁止进程级缓存。
     // 会话注入（featureOverrides）不落盘。
-    const queue = [
-      readGlobalLayer(),
-      readAgentLayer(),
-      readDirLayer(workspaceDir),
-      runtime.config && typeof runtime.config === 'object' ? (runtime.config.featureOverrides || {}) : {},
-    ];
-    const { merged } = resolveFeatureConfig(queue);
+    // $mount 装配声明先于 merge 提取（允许层：global/agent；目录层与会话注入
+    // 拒绝，见 shared/feature-mount.js），剔除后的纯配置层再进 merge；装配事实
+    // 挂到 pendingFeatureMounts，由宿主（run-prebuilt-agent）构造完成后消费。
+    const { mounts: featureMounts, configLayers } = extractFeatureMounts([
+      { id: 'global', config: readGlobalLayer() },
+      { id: 'agent', config: readAgentLayer() },
+      { id: 'dir', config: readDirLayer(workspaceDir) },
+      { id: 'session', config: runtime.config && typeof runtime.config === 'object' ? (runtime.config.featureOverrides || {}) : {} },
+    ]);
+    const { merged } = resolveFeatureConfig(configLayers);
 
     const excludeMcpServers = Array.from(new Set([
       ...(config.excludeMcpServers ?? []),
@@ -107,6 +111,11 @@ export class ProgrammingHelperAgent extends BasicAgent {
       ...config,
       features: merged,
     });
+
+    // 用户装配的 feature（$mount 声明）。宿主挂载钩子在构造完成后、
+    // prepareRuntime 前走 catalog→provisioner→loader 链动态挂载（runtime
+    // 创建时解析，运行中不热更新）。
+    this.pendingFeatureMounts = featureMounts;
 
     // BasicAgent 已纯基类化（框架 a5fe117 / ticket 009），不再内置装配任何 feature。
     // 原由 BasicAgent 挂载的 MCP/Skill/SubAgent/OpencodeBasic 等，现在装配权在宿主：

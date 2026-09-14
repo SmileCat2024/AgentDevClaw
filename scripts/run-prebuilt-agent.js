@@ -16,6 +16,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
+import { mountUserConfiguredFeatures } from '../server/feature-runtime/user-mount.js';
 import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { buildCallUsageEvents, reportUsageEvent } from './usage-report.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
@@ -742,6 +743,21 @@ SessionLifecycle.prototype.start = async function () {
       handoff: this.runtimeHandoff.handoff,
     }));
     console.log(`[ProtoClaw Runtime] 已挂载 handoff seed (${this.runtimeHandoff.source})`);
+  }
+
+  // 用户 $mount 装配（feature 装配一期）：在官方静态装配与 handoff seed 之后、
+  // prepareRuntime 之前追加挂载。runtime 创建时解析，运行中不热更新；解析/安装/
+  // 同名冲突失败直接抛错终止启动（fail fast，不静默降级）。
+  if (this.agent.pendingFeatureMounts instanceof Map && this.agent.pendingFeatureMounts.size > 0) {
+    const mounted = await mountUserConfiguredFeatures(this.agent, this.agent.pendingFeatureMounts, {
+      agentId,
+      sessionType: this.runtime.sessionType || 'main',
+    });
+    for (const item of mounted) {
+      if (this.agent.pendingFeatureMounts.has(item.name)) continue;
+      console.warn(`[ProtoClaw Runtime] ⚠ 装配键 '${[...this.agent.pendingFeatureMounts.keys()].find((key) => this.agent.pendingFeatureMounts.get(key)?.package === item.package)}' 与 feature 实际 name '${item.name}' 不一致，配置树键请以后者为准`);
+    }
+    console.log(`[ProtoClaw Runtime] ✓ 用户装配 feature 已挂载 (${mounted.length}): ${mounted.map((item) => `${item.name}@${item.package}`).join(', ')}`);
   }
 
   if (typeof this.agent.prepareRuntime === 'function') {

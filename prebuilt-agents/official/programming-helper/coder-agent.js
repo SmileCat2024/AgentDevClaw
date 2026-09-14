@@ -44,6 +44,7 @@ import {
   readLayerFile,
   coderLayerPath,
 } from '../../../server/shared/feature-config-layers.js';
+import { extractFeatureMounts } from '../../../server/shared/feature-mount.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -67,10 +68,13 @@ export class CoderAgent extends BasicAgent {
     // 配置队列：[全局层(feature-setup.json), coder 层(feature-config/coder.json)]。
     // coder 层由工作空间设置的「coder Feature 配置」编辑，覆盖全局层同名项；
     // 队列在构造函数内组装（同进程多 session 场景禁止进程级缓存）。
-    const { merged: systemConfig } = resolveFeatureConfig([
-      readGlobalLayer(),
-      readLayerFile(coderLayerPath()),
+    // $mount 装配声明先于 merge 提取（允许层：global/coder，无目录层），
+    // 剔除后的纯配置层再进 merge；装配事实由宿主（run-prebuilt-agent）消费。
+    const { mounts: featureMounts, configLayers } = extractFeatureMounts([
+      { id: 'global', config: readGlobalLayer() },
+      { id: 'coder', config: readLayerFile(coderLayerPath()) },
     ]);
+    const { merged: systemConfig } = resolveFeatureConfig(configLayers);
 
     // 不挂载 MCP feature：mcp_* 工具会占据 tools 数组头部，把 read/ls 等
     // 核心工具挤到 14 位之后——Lite 级小模型对此敏感，实测会退化为只输出计划
@@ -84,6 +88,10 @@ export class CoderAgent extends BasicAgent {
         ...systemConfig,
       },
     });
+
+    // 用户装配的 feature（$mount 声明），语义同主身份（agent.js）：
+    // 宿主挂载钩子在构造完成后动态挂载；coder 与 main 同权装配，无白名单。
+    this.pendingFeatureMounts = featureMounts;
 
     // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
     // 配置队列中的 skill 配置（全局层或 coder 层）会覆盖默认值。MCP 按上述注释刻意排除，不挂 MCPFeature。

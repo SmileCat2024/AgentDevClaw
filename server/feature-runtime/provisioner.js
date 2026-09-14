@@ -119,6 +119,9 @@ async function runNpmInstall(cwd) {
  * loaded from their source project so Studio retains reload semantics.
  */
 async function provisionAgentSource(plan, environmentDir) {
+  // plan.agent.entry 缺失 = 追加挂载场景（用户 $mount 装配）：宿主进程内已有
+  // 构造完毕的官方 agent，无 agent 源码需要拷贝，只准备依赖环境。
+  if (!plan.agent.entry) return { entry: null, copied: false };
   const agentRoot = path.resolve(plan.agent.root || path.dirname(plan.agent.entry));
   const relativeEntry = path.relative(agentRoot, plan.agent.entry);
   if (relativeEntry.startsWith('..') || path.isAbsolute(relativeEntry)) {
