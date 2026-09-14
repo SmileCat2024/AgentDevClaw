@@ -4449,16 +4449,16 @@ body[data-theme="light"] .feature-group {
   cursor: pointer;
 }
 
-/* 来源分页器：usage-info-segment 同款配方（复用类），面板小号适配 */
+/* 来源分页器：usage-info-segment 同款配方（复用类） */
 .feature-src-seg {
-  padding: 2px;
-  border-radius: 7px;
+  padding: 3px;
+  border-radius: 8px;
 }
 
 .feature-src-seg button {
-  padding: 3px 8px;
-  font-size: 11px;
-  border-radius: 5px;
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 6px;
   white-space: nowrap;
 }
 
