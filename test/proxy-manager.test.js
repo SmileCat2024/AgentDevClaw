@@ -2,12 +2,39 @@ import { createServer } from 'node:http';
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { testProxyConnectivity } from '../server/shared/proxy-manager.js';
+import { DEFAULT_MODEL_TIMEOUT_MS } from '@agentdevjs/core';
+import {
+  buildNoProxyValue,
+  buildProxyDispatcherOptions,
+  testProxyConnectivity,
+} from '../server/shared/proxy-manager.js';
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+describe('proxy dispatcher timeout policy', () => {
+  it('aligns headersTimeout with the framework model-call idle deadline', () => {
+    // 非流式请求的响应头要等服务端生成完整个结果才发出，headersTimeout 事实上
+    // 是"非流式总等待预算"，必须与框架 idle deadline 相等，否则较短一侧先掐断。
+    const options = buildProxyDispatcherOptions();
+    assert.equal(options.headersTimeout, DEFAULT_MODEL_TIMEOUT_MS);
+    // 流式 chunk 间 60s 无数据即判定断流，与框架侧非代理 Agent 一致。
+    assert.equal(options.bodyTimeout, 60_000);
+    assert.equal(options.connect.timeout, 10_000);
+  });
+
+  it('always bypasses loopback hosts in NO_PROXY', () => {
+    const noProxy = buildNoProxyValue('example.com, EXAMPLE.com', '');
+    const entries = noProxy.split(',');
+    assert.ok(entries.includes('example.com'));
+    assert.ok(entries.includes('localhost'));
+    assert.ok(entries.includes('127.0.0.1'));
+    // 去重（大小写不敏感）
+    assert.equal(entries.filter((e) => e.toLowerCase() === 'example.com').length, 1);
+  });
 });
 
 describe('proxy connectivity diagnostics', () => {

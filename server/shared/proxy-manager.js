@@ -27,7 +27,11 @@ const _undici = _require('undici');
 const _defaultGlobalDispatcher = _undici.getGlobalDispatcher();
 const LOOPBACK_NO_PROXY = ['localhost', '127.0.0.1'];
 const PROXY_CONNECT_TIMEOUT_MS = 10_000;
-const PROXY_HEADERS_TIMEOUT_MS = 60_000;
+// 非流式请求的响应头要等服务端生成完整个结果才发出，headersTimeout 事实上是
+// "非流式总等待预算"，须与框架模型调用 idle deadline（600s）对齐。流式 chunk
+// 间无数据由 bodyTimeout（60s）约束，与框架侧非代理 Agent 保持一致。
+const PROXY_HEADERS_TIMEOUT_MS = 600_000;
+const PROXY_BODY_TIMEOUT_MS = 60_000;
 const ORIGINAL_NO_PROXY = {
   upper: process.env.NO_PROXY,
   lower: process.env.no_proxy,
@@ -73,6 +77,17 @@ export function buildNoProxyValue(...values) {
 }
 
 /**
+ * Dispatcher 超时策略（纯函数，便于测试锁定与框架侧对齐关系）。
+ */
+export function buildProxyDispatcherOptions() {
+  return {
+    headersTimeout: PROXY_HEADERS_TIMEOUT_MS,
+    bodyTimeout: PROXY_BODY_TIMEOUT_MS,
+    connect: { timeout: PROXY_CONNECT_TIMEOUT_MS },
+  };
+}
+
+/**
  * Create a dispatcher that proxies external requests and bypasses loopback.
  */
 export function createProxyDispatcher(url, noProxy = '') {
@@ -80,8 +95,7 @@ export function createProxyDispatcher(url, noProxy = '') {
     httpProxy: url,
     httpsProxy: url,
     noProxy: buildNoProxyValue(noProxy),
-    headersTimeout: PROXY_HEADERS_TIMEOUT_MS,
-    connect: { timeout: PROXY_CONNECT_TIMEOUT_MS },
+    ...buildProxyDispatcherOptions(),
   });
 }
 
