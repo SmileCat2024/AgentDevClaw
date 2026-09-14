@@ -113,6 +113,53 @@ describe('feature-catalog: groupFeaturesByType', () => {
     assert.equal(fn('window.ClawFW.featureCatalog.groupFeaturesByType(undefined, null)').length, 0);
   });
 
+  it('capFilter keeps features having that capability (multi-value membership)', () => {
+    const input = `[ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('todo'))}, ${JSON.stringify(inspectorFeature('context-guard'))}, ${JSON.stringify(inspectorFeature('im-operator'))} ]`;
+    // policy：shell（tools+policy）与 context-guard 命中；todo（仅 tools）、im-operator（gateway+tools）排除
+    const policy = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'policy')`);
+    assert.equal(JSON.stringify(policy.map(g => g.id)), JSON.stringify(['ability', 'governance']));
+    assert.equal(policy[0].features[0].name, 'shell');
+    assert.equal(policy[1].features[0].name, 'context-guard');
+    // gateway：仅 im-operator（interface 组）
+    const gateway = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'gateway')`);
+    assert.equal(JSON.stringify(gateway.map(g => g.id)), JSON.stringify(['interface']));
+    assert.equal(gateway[0].features[0].name, 'im-operator');
+  });
+
+  it('capFilter combined with src filter intersects both conditions', () => {
+    const input = `[ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('user-tool'))} ]`;
+    // tools 能力 + installed 来源：只有 user-tool 命中
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'installed', 'tools')`);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].features[0].name, 'user-tool');
+  });
+
+  it('capFilter excludes unmapped entries (unknown capabilities) but keeps them under all', () => {
+    const input = `[ ${JSON.stringify(inspectorFeature('ghost'))} ]`;
+    const filtered = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'tools')`);
+    assert.equal(filtered.length, 0);
+    const all = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'all')`);
+    assert.equal(all[0].id, '_unmapped');
+  });
+
+  it('capFilter with no matching features returns empty group array', () => {
+    const input = `[ ${JSON.stringify(inspectorFeature('todo'))} ]`;
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'gateway')`);
+    assert.equal(groups.length, 0);
+  });
+
+  it('normalizeCapFilter passes all/vocabulary ids and folds stale values to all', () => {
+    const call = (v) => fn(`window.ClawFW.featureCatalog.normalizeCapFilter(${JSON.stringify(v)}, ${JSON.stringify(CATALOG)})`);
+    assert.equal(call('all'), 'all');
+    assert.equal(call('tools'), 'tools');
+    assert.equal(call('mcp'), 'mcp');
+    assert.equal(call('hooks'), 'all', 'legacy vocabulary value folds to all');
+    assert.equal(call(undefined), 'all');
+    assert.equal(call(''), 'all');
+    const noVocab = fn(`window.ClawFW.featureCatalog.normalizeCapFilter('tools', null)`);
+    assert.equal(noVocab, 'all');
+  });
+
   it('typeCollapsedByDefault follows vocabulary flags (system folds)', () => {
     const call = (id) => fn(`window.ClawFW.featureCatalog.typeCollapsedByDefault('${id}', ${JSON.stringify(CATALOG)})`);
     assert.equal(call('system'), true);

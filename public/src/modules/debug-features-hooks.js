@@ -35,7 +35,7 @@ function featureGroupLabel(typeId) {
   return t(typeId === '_unmapped' ? 'feature_cat_unmapped' : 'feature_type_' + typeId);
 }
 
-// ── 来源过滤器（全部 / 官方内置 / 已安装）─────────────────────────
+// ── 面板头部筛选：来源分页器（全部/官方内置/已安装）+ 能力下拉 ──────
 
 const FEATURE_FILTERS = ['all', 'bundled', 'installed'];
 const FEATURE_FILTER_STORAGE_KEY = 'claw_feature_panel_filter';
@@ -45,23 +45,78 @@ try {
   if (FEATURE_FILTERS.includes(saved)) _featurePanelFilter = saved;
 } catch (e) { /* localStorage 不可用时保持默认 */ }
 
+// 能力筛选持久化：合法词表由 catalog 响应携带（前端不硬编码词表），
+// 存储值过期（词表演进）时经 normalizeCapFilter 归一为 'all'，不会滤成空。
+const FEATURE_CAP_STORAGE_KEY = 'claw_feature_panel_cap_filter';
+let _featurePanelCapFilter = 'all';
+try {
+  const saved = localStorage.getItem(FEATURE_CAP_STORAGE_KEY);
+  if (typeof saved === 'string' && saved) _featurePanelCapFilter = saved;
+} catch (e) { /* 同上 */ }
+
+function _persistPanelFilters() {
+  try {
+    localStorage.setItem(FEATURE_FILTER_STORAGE_KEY, _featurePanelFilter);
+    localStorage.setItem(FEATURE_CAP_STORAGE_KEY, _featurePanelCapFilter);
+  } catch (e) { /* 同上 */ }
+}
+
+function _refreshPanelAfterFilterChange() {
+  if (window._scheduleInspectorRefresh) window._scheduleInspectorRefresh(0);
+}
+
 window.setFeaturePanelFilter = function (filter) {
   if (!FEATURE_FILTERS.includes(filter) || filter === _featurePanelFilter) return;
   _featurePanelFilter = filter;
-  try { localStorage.setItem(FEATURE_FILTER_STORAGE_KEY, filter); } catch (e) { /* 同上 */ }
-  if (window._scheduleInspectorRefresh) window._scheduleInspectorRefresh(0);
+  _persistPanelFilters();
+  _refreshPanelAfterFilterChange();
 };
 
+window.setFeaturePanelCapFilter = function (cap) {
+  if (typeof cap !== 'string' || !cap || cap === _featurePanelCapFilter) return;
+  _featurePanelCapFilter = cap;
+  _persistPanelFilters();
+  _refreshPanelAfterFilterChange();
+};
+
+/**
+ * 来源分页器（usage-info-segment 同款视觉配方，面板小号适配）。
+ * onpointerdown 为主路径：面板 body 随轮询全量 innerHTML 替换，click
+ * 序列（mousedown→mouseup→click）跨过替换边界时目标已脱离 DOM、
+ * onclick 属性不再执行——历史上表现为"必须双击才能切换"。pointerdown
+ * 在按下瞬间同步完成切换，不受替换影响；onclick 保留键盘触发路径，
+ * setter 的同值短路保证两路径幂等。
+ */
 function buildFeatureFilterSegment() {
   const keys = { all: 'feature_filter_all', bundled: 'feature_filter_bundled', installed: 'feature_filter_installed' };
-  return '<div class="feature-filter-seg" role="tablist">'
+  return '<div class="usage-info-segment feature-src-seg" role="tablist">'
     + FEATURE_FILTERS.map(f => [
-      '<button type="button" role="tab" class="feature-filter-btn'
-        + (f === _featurePanelFilter ? ' active' : '') + '"'
+      '<button type="button" role="tab" class="' + (f === _featurePanelFilter ? 'active' : '') + '"'
+        + ' onpointerdown="window.setFeaturePanelFilter(\'' + f + '\')"'
         + ' onclick="window.setFeaturePanelFilter(\'' + f + '\')">'
         + escapeHtml(t(keys[f])) + '</button>',
     ].join('')).join('')
     + '</div>';
+}
+
+/**
+ * 能力下拉（多值包含筛选）：第一项"全部"，后续项由 catalog 响应的
+ * capabilities 词表驱动，label 复用详情弹窗的 feature_cap_* 词条
+ * （弹窗与下拉措辞一致，用户不会看到两套叫法）。
+ * data-claw-select + compact：debug-panel-host 渲染后自动做 ClawSelect
+ * 增强（git 仓库/分支下拉同款视觉）。
+ * catalog 未就绪时返回空串（首帧不渲染，catalog 到位后的刷新帧补上）。
+ */
+function buildFeatureCapSelect(catalog) {
+  const fc = window.ClawFW && window.ClawFW.featureCatalog;
+  if (!fc || !catalog || !Array.isArray(catalog.capabilities) || catalog.capabilities.length === 0) return '';
+  const current = fc.normalizeCapFilter(_featurePanelCapFilter, catalog);
+  const options = ['all'].concat(catalog.capabilities.map(c => (typeof c === 'string' ? c : c.id)));
+  return '<select class="feature-cap-select" data-claw-select data-claw-compact="true"'
+    + ' onchange="window.setFeaturePanelCapFilter(this.value)">'
+    + options.map(id => '<option value="' + escapeHtml(id) + '"' + (id === current ? ' selected' : '') + '>'
+      + escapeHtml(t(id === 'all' ? 'feature_filter_all' : 'feature_cap_' + id)) + '</option>').join('')
+    + '</select>';
 }
 
 function renderFeaturesPanel() {
@@ -74,8 +129,9 @@ function renderFeaturesPanel() {
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   if (fc) fc.loadFeatureCatalog().catch(err => console.warn('[feature-catalog] load failed:', err));
   const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
+  const capFilter = fc ? fc.normalizeCapFilter(_featurePanelCapFilter, catalog) : 'all';
   const groups = fc
-    ? fc.groupFeaturesByType(currentHookInspector.features, catalog, _featurePanelFilter)
+    ? fc.groupFeaturesByType(currentHookInspector.features, catalog, _featurePanelFilter, capFilter)
     : [{ id: '_unmapped', features: currentHookInspector.features }];
 
   const allEnriched = groups.flatMap(g => g.features);
@@ -131,7 +187,8 @@ function renderFeaturesPanel() {
 
   const groupsHtml = groups.map(buildGroup).join('')
     || '<div class="feature-filter-empty">' + escapeHtml(t(
-      _featurePanelFilter === 'installed' ? 'feature_filter_empty_installed' : 'feature_filter_empty'
+      capFilter !== 'all' ? 'feature_filter_empty_cap'
+        : _featurePanelFilter === 'installed' ? 'feature_filter_empty_installed' : 'feature_filter_empty'
     )) + '</div>';
 
   // 弹窗通过独立 portal 渲染到 document.body，不嵌入 panel body（避免 transform 降级 fixed）
@@ -165,7 +222,16 @@ function renderFeaturesPanel() {
   return [
     '<div class="hooks-panel feature-detail-shell">',
     '<section class="hooks-section">',
-    '<div class="hooks-section-header"><div class="hooks-section-title">' + escapeHtml(t('panel_all_features')) + '</div><div class="hooks-section-tools">' + buildFeatureFilterSegment() + '</div><div class="hooks-section-meta">' + String(currentHookInspector.features.length) + ' ' + escapeHtml(t('panel_registered')) + '</div></div>',
+    '<div class="hooks-section-header feature-panel-head">',
+    '<div class="feature-panel-head-main">',
+    '<span class="hooks-section-title">' + escapeHtml(t('feature_mounted_title')) + '</span>',
+    '<span class="feature-panel-head-count">' + String(currentHookInspector.features.length) + '</span>',
+    '</div>',
+    '<div class="feature-panel-head-actions">',
+    buildFeatureCapSelect(catalog),
+    buildFeatureFilterSegment(),
+    '</div>',
+    '</div>',
     groupsHtml,
     '</section>',
     standaloneSection,

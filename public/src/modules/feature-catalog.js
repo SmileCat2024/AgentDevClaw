@@ -87,10 +87,13 @@ function enrichFeatureEntry(feature, catalog) {
  * 来源（bundled/installed）是过滤器不作分组轴。
  *
  * filter: 'all' 不过滤；'bundled' | 'installed' 按 entry.group 筛选。
+ * capFilter: 'all' 不过滤；否则按 entry.capabilities 多值包含筛选
+ *   （一个 feature 可同时具备多种能力，命中其一即入选；未映射条目
+ *   capabilities 为空，任何能力筛选都会排除它们）。
  * 分组顺序 = 响应携带的 types 词表顺序，_unmapped 恒在最后；空组剔除。
  * catalog 为 null 时全部进 _unmapped。features 为空返回 []。
  */
-function groupFeaturesByType(features, catalog, filter = 'all') {
+function groupFeaturesByType(features, catalog, filter = 'all', capFilter = 'all') {
   if (!Array.isArray(features) || features.length === 0) return [];
   const types = (catalog && Array.isArray(catalog.types) && catalog.types.length > 0)
     ? catalog.types.map(t => (typeof t === 'string' ? t : t.id))
@@ -100,12 +103,25 @@ function groupFeaturesByType(features, catalog, filter = 'all') {
   for (const feature of features) {
     const enriched = enrichFeatureEntry(feature, catalog);
     if (filter !== 'all' && enriched.group !== filter) continue;
+    if (capFilter !== 'all' && !enriched.capabilities.includes(capFilter)) continue;
     const key = enriched.type && buckets.has(enriched.type) ? enriched.type : '_unmapped';
     buckets.get(key).push(enriched);
   }
   return order
     .filter(id => (buckets.get(id) || []).length > 0)
     .map(id => ({ id, features: buckets.get(id) }));
+}
+
+/**
+ * 能力筛选值归一：'all' 与词表内的能力 id 原样通过，
+ * 词表外/持久化的过期值归一为 'all'（词表演进时存储值不至于过滤成空）。
+ */
+function normalizeCapFilter(value, catalog) {
+  if (value === 'all') return 'all';
+  const ids = catalog && Array.isArray(catalog.capabilities)
+    ? catalog.capabilities.map(c => (typeof c === 'string' ? c : c.id))
+    : [];
+  return ids.includes(value) ? value : 'all';
 }
 
 /**
@@ -147,6 +163,7 @@ window.ClawFW.featureCatalog = {
   getFeatureCatalogSnapshot,
   enrichFeatureEntry,
   groupFeaturesByType,
+  normalizeCapFilter,
   typeCollapsedByDefault,
   resolveDisplayName,
   provenanceI18nKey,

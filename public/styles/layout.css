@@ -4422,38 +4422,62 @@ body[data-theme="light"] .feature-group {
   border-bottom-color: rgba(0, 0, 0, 0.08);
 }
 
-/* ── Features 面板：来源过滤器（分段控件，标题行右侧） ── */
+/* ── Features 面板头部：标题 + 总数小字 + 能力下拉 + 来源分页器 ── */
 
-.feature-filter-seg {
-  display: inline-flex;
+.feature-panel-head {
   align-items: center;
-  gap: 2px;
-  padding: 2px;
-  background: rgba(127, 127, 127, 0.12);
-  border-radius: 6px;
+}
+
+.feature-panel-head-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.feature-panel-head-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary, #888);
+}
+
+.feature-panel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
   flex-shrink: 0;
 }
 
-.feature-filter-btn {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary, #888);
-  font-size: 11px;
-  line-height: 1;
-  padding: 4px 8px;
-  border-radius: 4px;
+/* ClawSelect 增强 wrapper（compact 变体）宽度收窄到面板头部尺寸 */
+.feature-panel-head-actions .claw-select {
+  width: 132px;
+}
+
+/* 原生 select 兜底样式（ClawSelect 增强前/失败时仍可用） */
+.feature-cap-select {
+  height: 26px;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  background: rgba(127, 127, 127, 0.12);
+  color: var(--text-primary, inherit);
   cursor: pointer;
+}
+
+/* 来源分页器：usage-info-segment 同款配方（复用类），面板小号适配 */
+.feature-src-seg {
+  padding: 2px;
+  border-radius: 7px;
+}
+
+.feature-src-seg button {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 5px;
   white-space: nowrap;
-}
-
-.feature-filter-btn:hover {
-  color: var(--text-primary, inherit);
-}
-
-.feature-filter-btn.active {
-  background: rgba(127, 127, 127, 0.22);
-  color: var(--text-primary, inherit);
 }
 
 .feature-filter-empty {
