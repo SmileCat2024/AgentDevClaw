@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// 保证 local-features 与 features/* 的编译产物（gitignored 的 dist）可用且不过时。
+// 保证 local-features、features/* 与（开发态）相邻框架仓库的编译产物
+// （gitignored 的 dist）可用且不过时。
 //
 // 触发重编译的条件（满足其一）：
 //   1. dist 不存在（全新克隆 / 老用户从未构建）；
@@ -11,20 +12,28 @@
 // npm install 产生。没有本模块时，git pull + npm install + npm start
 // 的升级路径会加载陈旧 dist 或直接 import 失败。
 //
+// 开发态还覆盖相邻框架仓库：node_modules/@agentdevjs/* 链接解析到
+// AgentDev/packages/*/dist，git pull 框架仓库不会触发任何重建，服务会
+// 静默跑在陈旧框架代码上（历史事故：模型热切换、超时语义更新不生效）。
+// 检测到任一被消费的框架包过时，即在框架仓库执行 npm run build；
+// 发布态 dist 由 npm registry 安装，跳过检查。
+//
 // 由 preflight.mjs（prestart/predev）调用；也可独立运行。
 import { existsSync, readdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
+import { pathToFileURL } from 'url';
 import { FEATURE_DIRS } from './prebuilt-feature-dirs.mjs';
+import { isDevForm, siblingAgentdevPath, PACKAGE_MAP } from './check-agentdev-local.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const IS_WIN = process.platform === 'win32';
 
 // Windows 上 npm 是 npm.cmd 批处理，必须经 shell 调用（与 build-features.mjs 同约定）。
-function runNpm(args) {
+function runNpm(args, cwd = root) {
   return IS_WIN
-    ? spawnSync(`npm ${args.join(' ')}`, { cwd: root, stdio: 'inherit', shell: true })
-    : spawnSync('npm', args, { cwd: root, stdio: 'inherit' });
+    ? spawnSync(`npm ${args.join(' ')}`, { cwd, stdio: 'inherit', shell: true })
+    : spawnSync('npm', args, { cwd, stdio: 'inherit' });
 }
 
 // 目录树内（排除 skip 中的名字）所有文件的最新 mtime；目录不存在返回 0。
@@ -45,34 +54,74 @@ function newestMtime(dir, skip = new Set(['node_modules'])) {
 }
 
 // 一个可编译单元是否需要重建：源码树（排除产物目录）比 dist 新即过时。
+// dist 不存在时视为过时（返回 true），由调用方触发构建补齐。
 function isStale(srcDir, distDir) {
   const srcNewest = newestMtime(srcDir, new Set(['node_modules', 'dist']));
   const distNewest = newestMtime(distDir, new Set(['node_modules']));
   return srcNewest > distNewest;
 }
 
-function ensure(desc, check, buildScript) {
+// 相邻框架仓库是否有被消费的包需要重建。清单用 PACKAGE_MAP（与
+// check-agentdev-local 的链接/安装校验同源）：Claw 运行时不消费的包
+// （如 deprecated 的 audit-feature）不参与判定——它们的 dist 陈旧与否
+// 与启动正确性无关，纳入只会带来与消费面无关的启动期全量构建。
+function frameworkBuildNeeded(frameworkRoot) {
+  if (!existsSync(join(frameworkRoot, 'package.json'))) return false;
+  return Object.values(PACKAGE_MAP).some((dir) =>
+    isStale(join(frameworkRoot, 'packages', dir), join(frameworkRoot, 'packages', dir, 'dist'))
+  );
+}
+
+function ensure(desc, check, buildScript, cwd = root) {
   if (!check()) return false;
   console.log(`[ensure-builds] ${desc} 缺失或过时，执行 ${buildScript} ...`);
-  const r = runNpm(['run', buildScript]);
+  const r = runNpm(['run', buildScript], cwd);
   if (r.error || r.status !== 0) {
-    console.error(`[ensure-builds] ${buildScript} 失败，请手动执行排查。`);
+    if (buildScript === 'build' && cwd !== root) {
+      console.error(`[ensure-builds] 框架构建失败，请进入 ${cwd} 排查（若刚 git pull，先 npm install 再 npm run build）。`);
+    } else {
+      console.error(`[ensure-builds] ${buildScript} 失败，请手动执行排查。`);
+    }
     process.exit(r.status ?? 1);
   }
   return true;
 }
 
-const builtLf = ensure(
-  'local-features/dist',
-  () => isStale(join(root, 'local-features'), join(root, 'local-features', 'dist')),
-  'build:local-features'
-);
-const builtFeat = ensure(
-  'features/*/dist',
-  () => FEATURE_DIRS.some((n) =>
-    isStale(join(root, 'features', n), join(root, 'features', n, 'dist'))
-  ),
-  'build:features'
-);
+function main() {
+  // 框架 dist 必须先于 local-features：后者的类型检查解析框架 dist 的 d.ts，
+  // 链接指向陈旧 dist 时会把过时类型编进 local-feature 产物。
+  let builtFramework = false;
+  if (isDevForm()) {
+    const sibling = siblingAgentdevPath();
+    if (existsSync(join(sibling, 'package.json'))) {
+      builtFramework = ensure(
+        'AgentDev 框架 dist',
+        () => frameworkBuildNeeded(sibling),
+        'build',
+        sibling
+      );
+    }
+  }
 
-if (!builtLf && !builtFeat) console.log('[ensure-builds] 本地构建产物均为最新，跳过编译。');
+  const builtLf = ensure(
+    'local-features/dist',
+    () => isStale(join(root, 'local-features'), join(root, 'local-features', 'dist')),
+    'build:local-features'
+  );
+  const builtFeat = ensure(
+    'features/*/dist',
+    () => FEATURE_DIRS.some((n) =>
+      isStale(join(root, 'features', n), join(root, 'features', n, 'dist'))
+    ),
+    'build:features'
+  );
+
+  if (!builtFramework && !builtLf && !builtFeat) console.log('[ensure-builds] 本地构建产物均为最新，跳过编译。');
+}
+
+// CLI 守卫：仅直接执行时运行主流程；被测试 / 其他脚本 import 时只暴露纯逻辑。
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main();
+}
+
+export { newestMtime, isStale, frameworkBuildNeeded };
