@@ -348,18 +348,17 @@ export class CallArbiter {
         if (typeof this._agent.consumeContinuationRequest === 'function') {
           try { this._agent.consumeContinuationRequest(); } catch {}
         }
-        // Framework step-limit (reason=limit_reached) is host-recoverable:
-        // give the session Feature one bounded, opt-in chance to continue the
-        // same envelope before closing it as failed. Must run HERE — a step
-        // budget exhaustion arrives as status=failed, so the branch below the
-        // structured-outcome observation is the only reachable checkpoint.
-        if (outcome.status === 'failed' && outcome.reason === 'limit_reached') {
-          const forceContinuation = this._agent?.features?.get?.('force-continuation');
-          const forcedInput = typeof forceContinuation?.requestFrameworkLimitContinuation === 'function'
-            ? forceContinuation.requestFrameworkLimitContinuation(outcome)
-            : null;
+        // Framework step-limit (reason=limit_reached) and retryable API errors
+        // (timeout / disconnect / rate limit / 5xx, after the LLM client
+        // exhausted its own retries) are host-recoverable: give the session
+        // Feature one bounded, opt-in chance to continue the same envelope
+        // before closing it as failed. Must run HERE — both arrive as
+        // status=failed, so the branch below the structured-outcome
+        // observation is the only reachable checkpoint.
+        if (outcome.status === 'failed') {
+          const forcedInput = this._requestForcedContinuationInput(outcome);
           if (typeof forcedInput === 'string' && forcedInput) {
-            console.log(`[CallArbiter] force continuation after framework limit (envelope=${envelope.id})`);
+            console.log(`[CallArbiter] force continuation after ${outcome.reason} (envelope=${envelope.id})`);
             input = forcedInput;
             continue;
           }
@@ -406,6 +405,28 @@ export class CallArbiter {
         input = this._buildRollbackContinuationInput(continuation);
       }
     }
+  }
+
+  /**
+   * Ask the session force-continuation Feature whether this failed Call is
+   * host-recoverable, and if so return the continuation input. Each recovery
+   * contract keeps its own feature-side gate (trigger switch, budget):
+   *   - limit_reached → framework ReAct step budget exhausted
+   *   - error with error.retryable → retryable API failure (timeout,
+   *     disconnect, rate limit, 5xx)
+   */
+  _requestForcedContinuationInput(outcome) {
+    const forceContinuation = this._agent?.features?.get?.('force-continuation');
+    if (!forceContinuation) return null;
+    if (outcome.reason === 'limit_reached'
+      && typeof forceContinuation.requestFrameworkLimitContinuation === 'function') {
+      return forceContinuation.requestFrameworkLimitContinuation(outcome);
+    }
+    if (outcome.reason === 'error' && outcome.error?.retryable === true
+      && typeof forceContinuation.requestApiErrorContinuation === 'function') {
+      return forceContinuation.requestApiErrorContinuation(outcome);
+    }
+    return null;
   }
 
   _finishInterruptedEnvelope(envelope) {

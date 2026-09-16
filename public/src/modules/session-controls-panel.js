@@ -193,6 +193,7 @@
       return {
         outputTruncation: raw.outputTruncation !== false,
         frameworkLimitReached: raw.frameworkLimitReached !== false,
+        apiErrorRetry: raw.apiErrorRetry !== false,
       };
     }
     // raw Feature status shape — the two provider keys are one concern for the
@@ -200,6 +201,7 @@
     return {
       outputTruncation: raw.providerMaxTokens !== false && raw.providerLength !== false,
       frameworkLimitReached: raw.frameworkLimitReached !== false,
+      apiErrorRetry: raw.apiErrorRetry !== false,
     };
   }
 
@@ -336,8 +338,8 @@
       '<div class="force-continuation-master-main">',
       '<div class="force-continuation-master-label">', zh ? '保持任务继续' : 'Keep task moving', '</div>',
       '<div class="force-continuation-master-help">', zh
-        ? '开启后，输出被截断时自动从中断处继续。仅当前会话生效。'
-        : 'When on, truncated output continues automatically from where it stopped. Applies to this session only.', '</div>',
+        ? '开启后，输出被截断或可重试的 API 错误发生时，自动从中断处继续。仅当前会话生效。'
+        : 'When on, truncated output and retryable API errors continue automatically from where it stopped. Applies to this session only.', '</div>',
       '</div>',
       renderSwitch({
         checked: item.enabled === true,
@@ -361,6 +363,14 @@
         title: zh ? '任务步数达到上限' : 'Task ran out of steps',
         help: zh ? '单次任务执行步数达到上限时，自动开启下一段继续执行。' : 'When a task exhausts its step budget, the next segment starts automatically.',
         enabled: triggers.frameworkLimitReached,
+        disabled,
+        zh,
+      }),
+      renderTriggerRow({
+        key: 'apiErrorRetry',
+        title: zh ? 'API 错误自动重试' : 'Retry on API errors',
+        help: zh ? '调用因可重试的 API 错误（超时、断连、限流、服务端错误）失败时，自动开启下一段重试。' : 'When a call fails with a retryable API error (timeout, disconnect, rate limit, server error), the next segment retries automatically.',
+        enabled: triggers.apiErrorRetry,
         disabled,
         zh,
       }),
@@ -427,8 +437,8 @@
 
     const notes = [];
     if (caps.fc) notes.push(zh
-      ? '手动停止与服务错误不会触发自动接续；自动接续次数受上限约束。'
-      : 'Manual stops and service errors never trigger auto-resume; auto-resume is capped.');
+      ? '手动停止与不可重试的错误（如认证失败）不会触发自动接续；自动接续次数受上限约束。'
+      : 'Manual stops and non-retryable errors (e.g. auth failures) never trigger auto-resume; auto-resume is capped.');
     if (caps.guard) notes.push(zh
       ? '超阈值打断触发后自动关闭。'
       : 'The threshold intercept disarms after one trip.');
@@ -506,6 +516,9 @@
     }
     if (trigger === 'frameworkLimitReached') {
       return updateControl({ triggers: { frameworkLimitReached: enabled === true } });
+    }
+    if (trigger === 'apiErrorRetry') {
+      return updateControl({ triggers: { apiErrorRetry: enabled === true } });
     }
   }
 

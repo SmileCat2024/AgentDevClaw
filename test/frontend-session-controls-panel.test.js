@@ -236,7 +236,7 @@ describe('SessionControlsPanel', () => {
     assert.doesNotMatch(html, /data-guard-armed/);
     assert.doesNotMatch(html, /data-rotation-enabled/);
     // 底部说明只覆盖已显示的 section
-    assert.match(html, /手动停止与服务错误不会触发自动接续/);
+    assert.match(html, /手动停止与不可重试的错误（如认证失败）不会触发自动接续/);
     assert.doesNotMatch(html, /超阈值打断触发后自动关闭/);
   });
 

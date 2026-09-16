@@ -2,13 +2,16 @@
  * ForceContinuation Feature
  *
  * The session-local master switch gates individually configurable recovery
- * candidates: provider max_tokens, provider length, and the framework-level
- * CallOutcome.reason=limit_reached. Provider values remain diagnostic facts;
- * the framework reason is the authoritative signal for a Call boundary.
+ * candidates: provider max_tokens, provider length, the framework-level
+ * CallOutcome.reason=limit_reached, and retryable API errors (timeout,
+ * disconnect, rate limit, 5xx — classified by the framework's error
+ * taxonomy, not per-provider codes). Provider values remain diagnostic
+ * facts; the framework reason/error fields are the authoritative signal for
+ * a Call boundary.
  *
- * It deliberately never resumes user cancellations or failed calls. Those are
- * explicit user/host boundaries or errors that require a dedicated retry
- * policy, rather than a generic "keep working" decision.
+ * It deliberately never resumes user cancellations, and non-retryable
+ * errors (auth failure, invalid key, prompt too long) stay terminal —
+ * retrying those cannot succeed.
  */
 
 import { fileURLToPath } from 'url';
@@ -34,6 +37,8 @@ export interface ForceContinuationTriggers {
   providerLength: boolean;
   /** Ask the Claw host to continue after AgentDev exhausts its ReAct-step budget. */
   frameworkLimitReached: boolean;
+  /** Ask the Claw host to start a new segment after a retryable API error. */
+  apiErrorRetry: boolean;
 }
 
 export interface ForceContinuationConfig {
@@ -62,7 +67,30 @@ function parseTriggers(raw: unknown): ForceContinuationTriggers {
     providerMaxTokens: value.providerMaxTokens !== false,
     providerLength: value.providerLength !== false,
     frameworkLimitReached: value.frameworkLimitReached !== false,
+    apiErrorRetry: value.apiErrorRetry !== false,
   };
+}
+
+/** Shape of the CallOutcome error fact relevant to the retry decision. */
+interface OutcomeErrorFact {
+  retryable?: unknown;
+  category?: unknown;
+}
+
+/**
+ * A retryable API error arrives as status=failed + reason=error with the
+ * framework-classified retryable fact set by the LLM layer (connection
+ * errors, timeouts, rate limits, 5xx). Non-retryable errors (auth, invalid
+ * key, prompt too long) carry retryable=false/undefined and never qualify.
+ */
+function isRetryableApiErrorOutcome(outcome: {
+  status?: unknown;
+  reason?: unknown;
+  error?: OutcomeErrorFact | null;
+}): boolean {
+  return normalizeStopReason(outcome?.status) === 'failed'
+    && normalizeStopReason(outcome?.reason) === 'error'
+    && outcome?.error?.retryable === true;
 }
 
 function parseConfig(raw: unknown): Required<ForceContinuationConfig> {
@@ -95,7 +123,7 @@ export class ForceContinuation implements AgentFeature {
 
   readonly name = 'force-continuation';
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
-  readonly description = '在可恢复的模型输出截断时，以受限次数强制 Agent 继续当前任务。';
+  readonly description = '在可恢复的模型输出截断或网络类 API 错误时，以受限次数强制 Agent 继续当前任务。';
 
   private config: Required<ForceContinuationConfig>;
   private logger?: FeatureInitContext['logger'];
@@ -118,7 +146,7 @@ export class ForceContinuation implements AgentFeature {
           enabled: {
             type: 'boolean',
             title: '保持任务继续',
-            description: '总开关。开启后，才会对启用的异常中断候选请求受限继续；不会覆盖用户中断或 API/运行时错误。',
+            description: '总开关。开启后，才会对启用的异常中断候选请求受限继续；不会覆盖用户中断或不可重试的错误。',
             default: false,
           },
           providerMaxTokens: {
@@ -139,6 +167,12 @@ export class ForceContinuation implements AgentFeature {
             description: '框架 Call 因 ReAct step 上限结束后，由宿主在预算内开始下一段。',
             default: true,
           },
+          apiErrorRetry: {
+            type: 'boolean',
+            title: 'API 错误自动重试',
+            description: 'Call 因可重试的网络类 API 错误（超时、断连、限流、5xx）失败结束后，由宿主在预算内开始下一段。',
+            default: true,
+          },
           maxConsecutiveContinuations: {
             type: 'number',
             title: '最大连续继续次数',
@@ -149,7 +183,7 @@ export class ForceContinuation implements AgentFeature {
             step: 1,
           },
         },
-        sections: [{ id: 'continuation', title: '继续策略', properties: ['enabled', 'providerMaxTokens', 'providerLength', 'frameworkLimitReached', 'maxConsecutiveContinuations'] }],
+        sections: [{ id: 'continuation', title: '继续策略', properties: ['enabled', 'providerMaxTokens', 'providerLength', 'frameworkLimitReached', 'apiErrorRetry', 'maxConsecutiveContinuations'] }],
       },
     };
   }
@@ -169,6 +203,7 @@ export class ForceContinuation implements AgentFeature {
         providerMaxTokens: featureConfig.providerMaxTokens === false ? false : this.config.triggers.providerMaxTokens,
         providerLength: featureConfig.providerLength === false ? false : this.config.triggers.providerLength,
         frameworkLimitReached: featureConfig.frameworkLimitReached === false ? false : this.config.triggers.frameworkLimitReached,
+        apiErrorRetry: featureConfig.apiErrorRetry === false ? false : this.config.triggers.apiErrorRetry,
       },
     });
   }
@@ -217,6 +252,11 @@ export class ForceContinuation implements AgentFeature {
             title: '框架执行 step 上限耗尽',
             description: '框架 Call 因 ReAct step 上限结束后，由宿主在预算内开始下一段。',
           },
+          apiErrorRetry: {
+            type: 'boolean',
+            title: 'API 错误自动重试',
+            description: 'Call 因可重试的网络类 API 错误失败结束后，由宿主在预算内开始下一段。',
+          },
           maxConsecutive: {
             type: 'number',
             title: '最大连续继续次数',
@@ -232,6 +272,7 @@ export class ForceContinuation implements AgentFeature {
           providerMaxTokens: this.config.triggers.providerMaxTokens,
           providerLength: this.config.triggers.providerLength,
           frameworkLimitReached: this.config.triggers.frameworkLimitReached,
+          apiErrorRetry: this.config.triggers.apiErrorRetry,
           maxConsecutive: this.config.maxConsecutiveContinuations,
         }),
         execute: (args) => {
@@ -241,6 +282,7 @@ export class ForceContinuation implements AgentFeature {
           if (typeof input.providerMaxTokens === 'boolean') triggers.providerMaxTokens = input.providerMaxTokens;
           if (typeof input.providerLength === 'boolean') triggers.providerLength = input.providerLength;
           if (typeof input.frameworkLimitReached === 'boolean') triggers.frameworkLimitReached = input.frameworkLimitReached;
+          if (typeof input.apiErrorRetry === 'boolean') triggers.apiErrorRetry = input.apiErrorRetry;
           if (Object.keys(triggers).length > 0) this.setTriggers(triggers);
           if (typeof input.maxConsecutive === 'number') this.setMaxConsecutive(input.maxConsecutive);
           return Promise.resolve(this.getStatus());
@@ -374,7 +416,29 @@ export class ForceContinuation implements AgentFeature {
     return '[本条消息由系统自动发送] 当前任务因框架执行步数上限而中断。请检查已有上下文，从中断处继续完成当前任务；不要重复已经完成的工作。';
   }
 
-  async recordCallFinish(ctx: { finishReason?: unknown; outcome?: { status?: unknown; reason?: unknown; model?: { providerStopReason?: unknown } } }): Promise<void> {
+  /**
+   * Called by the Claw CallArbiter after an AgentDev Call failed with a
+   * retryable API error (the LLM client has already exhausted its internal
+   * retries by then). Mirrors requestFrameworkLimitContinuation: at that
+   * point the framework Call has already ended and only the host can start
+   * a segment. Non-retryable errors never pass the retryable check, and
+   * user cancellations arrive as status=cancelled, not here.
+   */
+  requestApiErrorContinuation(outcome: { status?: unknown; reason?: unknown; error?: OutcomeErrorFact | null }): string | null {
+    if (!this.config.enabled || !this.config.triggers.apiErrorRetry) return null;
+    if (!isRetryableApiErrorOutcome(outcome)) return null;
+    if (!this.canRequestContinuation()) return null;
+
+    this.lastFinishReason = normalizeStopReason(outcome.reason);
+    this.lastOutcomeStatus = normalizeStopReason(outcome.status);
+    this.logger?.info('Force continuation requested after retryable API error', {
+      category: typeof outcome.error?.category === 'string' ? outcome.error.category : null,
+      consecutiveContinuations: this.consecutiveContinuations,
+    });
+    return '[本条消息由系统自动发送] 上一段任务因网络类 API 错误而中断。请检查已有上下文，从中断处继续完成当前任务；不要重复已经完成的工作。';
+  }
+
+  async recordCallFinish(ctx: { finishReason?: unknown; outcome?: { status?: unknown; reason?: unknown; error?: OutcomeErrorFact | null; model?: { providerStopReason?: unknown } } }): Promise<void> {
     this.lastFinishReason = typeof ctx.outcome?.reason === 'string'
       ? ctx.outcome.reason
       : typeof ctx.finishReason === 'string' ? ctx.finishReason : null;
@@ -385,6 +449,15 @@ export class ForceContinuation implements AgentFeature {
       // Preserve the same-envelope budget for the host-side continuation that
       // follows this CallFinish hook.
       this.lastAction = 'limit_reached';
+      return;
+    }
+
+    // Same preservation for retryable API errors: the host-side retry follows
+    // immediately after this hook and must share the same-envelope budget.
+    if (this.config.enabled
+      && this.config.triggers.apiErrorRetry
+      && isRetryableApiErrorOutcome({ status: this.lastOutcomeStatus, reason: this.lastFinishReason, error: ctx.outcome?.error })) {
+      this.lastAction = 'failed';
       return;
     }
 

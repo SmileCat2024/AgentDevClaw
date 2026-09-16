@@ -48,7 +48,7 @@ describe('ForceContinuation', () => {
     assert.match(added[0].content, /provider stop reason=length/);
     assert.deepEqual(feature.getStatus(), {
       enabled: true,
-      triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
+      triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true, apiErrorRetry: true },
       maxConsecutiveContinuations: 2,
       consecutiveContinuations: 1,
       lastProviderStopReason: 'length',
@@ -82,6 +82,7 @@ describe('ForceContinuation', () => {
       providerMaxTokens: false,
       providerLength: true,
       frameworkLimitReached: true,
+      apiErrorRetry: true,
     });
   });
 
@@ -106,6 +107,70 @@ describe('ForceContinuation', () => {
     assert.equal(feature.getStatus().lastAction, 'limit_reached');
   });
 
+  describe('retryable API error continuation', () => {
+    const retryableOutcome = {
+      status: 'failed',
+      reason: 'error',
+      error: { category: 'connection_error', retryable: true },
+    };
+
+    it('asks the host for a bounded new segment after a retryable API error', () => {
+      const feature = new ForceContinuation({ enabled: true, maxConsecutiveContinuations: 1 });
+
+      assert.match(feature.requestApiErrorContinuation(retryableOutcome), /API 错误/);
+      assert.equal(feature.getStatus().consecutiveContinuations, 1);
+      // Budget exhausted: the next failure closes the envelope as failed.
+      assert.equal(feature.requestApiErrorContinuation(retryableOutcome), null);
+      assert.equal(feature.getStatus().lastAction, 'limit_reached');
+    });
+
+    it('never continues non-retryable errors, cancellations, or unknown outcomes', () => {
+      const feature = new ForceContinuation({ enabled: true });
+
+      assert.equal(feature.requestApiErrorContinuation({
+        status: 'failed', reason: 'error', error: { category: 'auth_error', retryable: false },
+      }), null);
+      assert.equal(feature.requestApiErrorContinuation({ status: 'failed', reason: 'error' }), null);
+      assert.equal(feature.requestApiErrorContinuation({
+        status: 'cancelled', reason: 'cancelled', error: { retryable: true },
+      }), null);
+      assert.equal(feature.getStatus().consecutiveContinuations, 0);
+    });
+
+    it('keeps the shared continuation budget across consecutive failed calls', async () => {
+      const feature = new ForceContinuation({ enabled: true, maxConsecutiveContinuations: 2 });
+
+      assert.match(feature.requestApiErrorContinuation(retryableOutcome), /API 错误/);
+      // recordCallFinish must preserve the count so consecutive failures share
+      // the same cap as truncation/step-limit continuations.
+      await feature.recordCallFinish({ finishReason: 'error', outcome: retryableOutcome });
+      assert.equal(feature.getStatus().consecutiveContinuations, 1);
+
+      assert.match(feature.requestApiErrorContinuation(retryableOutcome), /API 错误/);
+      await feature.recordCallFinish({ finishReason: 'error', outcome: retryableOutcome });
+      assert.equal(feature.requestApiErrorContinuation(retryableOutcome), null);
+      assert.equal(feature.getStatus().lastAction, 'limit_reached');
+
+      // A terminal non-retryable outcome resets the budget as before.
+      await feature.recordCallFinish({
+        finishReason: 'error',
+        outcome: { status: 'failed', reason: 'error', error: { category: 'auth_error', retryable: false } },
+      });
+      assert.equal(feature.getStatus().consecutiveContinuations, 0);
+      assert.equal(feature.getStatus().lastAction, 'failed');
+    });
+
+    it('stays off beneath the master switch or the candidate switch', () => {
+      const feature = new ForceContinuation({ enabled: true });
+
+      feature.setTriggers({ apiErrorRetry: false });
+      assert.equal(feature.requestApiErrorContinuation(retryableOutcome), null);
+      feature.setTriggers({ apiErrorRetry: true });
+      feature.setEnabled(false);
+      assert.equal(feature.requestApiErrorContinuation(retryableOutcome), null);
+    });
+  });
+
   it('records structured CallFinish semantics and resets a finished call budget', async () => {
     const feature = new ForceContinuation({ enabled: true });
     await feature.decideContinuation(createStepContext().ctx);
@@ -120,7 +185,7 @@ describe('ForceContinuation', () => {
 
     assert.deepEqual(feature.getStatus(), {
       enabled: true,
-      triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
+      triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true, apiErrorRetry: true },
       maxConsecutiveContinuations: 5,
       consecutiveContinuations: 0,
       lastProviderStopReason: 'end_turn',
@@ -163,7 +228,7 @@ describe('ForceContinuation', () => {
 
     assert.deepEqual(feature.getStatus(), {
       enabled: true,
-      triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
+      triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true, apiErrorRetry: true },
       maxConsecutiveContinuations: 10,
       consecutiveContinuations: 10,
       lastProviderStopReason: 'max_tokens',
@@ -205,6 +270,7 @@ describe('ForceContinuation', () => {
         providerMaxTokens: true,
         providerLength: false,
         frameworkLimitReached: true,
+        apiErrorRetry: true,
       });
 
       // 空参数：不改任何字段
