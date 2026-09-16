@@ -6382,13 +6382,13 @@ body[data-theme="light"] .project-docset-detail-empty {
 }
 
 .markdown-body code.inline-code-accent {
-  color: var(--code-accent) !important;
+  color: var(--accent-text) !important;
   background: transparent !important;
   padding: 0 !important;
   border-radius: 0 !important;
   font-size: inherit !important;
   font-family: inherit !important;
-  font-weight: inherit !important;
+  font-weight: 600 !important;
   line-height: inherit !important;
 }
 
