@@ -747,17 +747,43 @@ SessionLifecycle.prototype.start = async function () {
 
   // 用户 $mount 装配（feature 装配一期）：在官方静态装配与 handoff seed 之后、
   // prepareRuntime 之前追加挂载。runtime 创建时解析，运行中不热更新；解析/安装/
-  // 同名冲突失败直接抛错终止启动（fail fast，不静默降级）。
+  // 同名冲突失败直接抛错终止启动（fail fast，不静默降级）。builtin 形态走
+  // agent.js 的 builtinOptionalFeatures 工厂（官方可选插件），repository 形态
+  // 走 tgz 装配链。
   if (this.agent.pendingFeatureMounts instanceof Map && this.agent.pendingFeatureMounts.size > 0) {
-    const mounted = await mountUserConfiguredFeatures(this.agent, this.agent.pendingFeatureMounts, {
-      agentId,
-      sessionType: this.runtime.sessionType || 'main',
-    });
-    for (const item of mounted) {
-      if (this.agent.pendingFeatureMounts.has(item.name)) continue;
-      console.warn(`[ProtoClaw Runtime] ⚠ 装配键 '${[...this.agent.pendingFeatureMounts.keys()].find((key) => this.agent.pendingFeatureMounts.get(key)?.package === item.package)}' 与 feature 实际 name '${item.name}' 不一致，配置树键请以后者为准`);
+    const sessionIdentity = this.runtime.sessionType || 'main';
+    const builtinFactories = agentModule.builtinOptionalFeatures?.[sessionIdentity] || {};
+    const repositoryMounts = new Map();
+    for (const [name, mount] of this.agent.pendingFeatureMounts) {
+      if (mount.kind !== 'builtin') {
+        repositoryMounts.set(name, mount);
+        continue;
+      }
+      const plugin = builtinFactories[name];
+      if (!plugin) {
+        throw new Error(`官方可选插件 '${name}' 不适用于身份 '${sessionIdentity}'（builtinOptionalFeatures 无此声明）`);
+      }
+      if (this.agent.features?.has(name)) {
+        throw new Error(`动态装配 Feature 名称冲突：${name}（Agent 已静态挂载同名 Feature）`);
+      }
+      const configValue = this.agent.config?.features?.[name];
+      const instance = plugin.create(
+        configValue && typeof configValue === 'object' ? configValue : {},
+        { workspaceDir: this.agent.config?.workspaceDir || process.cwd() },
+      );
+      if (String(instance?.name || '') !== name) {
+        throw new Error(`官方可选插件工厂产出 name '${instance?.name}' 与 $mount 键 '${name}' 不一致`);
+      }
+      await this.agent.mountFeature(instance, { strictInit: true });
+      console.log(`[ProtoClaw Runtime] ✓ 官方可选 feature 已挂载: ${name}`);
     }
-    console.log(`[ProtoClaw Runtime] ✓ 用户装配 feature 已挂载 (${mounted.length}): ${mounted.map((item) => `${item.name}@${item.package}`).join(', ')}`);
+    if (repositoryMounts.size > 0) {
+      const mounted = await mountUserConfiguredFeatures(this.agent, repositoryMounts, {
+        agentId,
+        sessionType: sessionIdentity,
+      });
+      console.log(`[ProtoClaw Runtime] ✓ 用户装配 feature 已挂载 (${mounted.length}): ${mounted.map((item) => `${item.name}@${item.package}`).join(', ')}`);
+    }
   }
 
   if (typeof this.agent.prepareRuntime === 'function') {

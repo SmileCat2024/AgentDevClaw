@@ -200,16 +200,10 @@ export class ProgrammingHelperAgent extends BasicAgent {
     // runtimeIdentity 模式同 ClawDispatchFeature（serverOrigin 三级解析）。
     this.use(new CapabilityShellFeature({ serverOrigin: runtimeIdentity.serverOrigin }));
 
-    // playwright 领域 shell（ticket 036）：浏览器页面取证收编为受管线约束的
-    // feature 工具（screenshot / pdf / har 产物动词 + env 资产盘点）。
-    // 仅 main 身份挂载；后端 playwright 包与浏览器资产由 shell 管理（env 动词
-    // 报告状态），产物强制 workspace 内。浏览器资产与登录档案按 ADR-0016 经
-    // 装配注入数据根分区（feature 内部缺省仅兜底非 Claw 直用场景）。
-    this.use(new PlaywrightShellFeature({
-      workdir: workspaceDir,
-      browsersPath: join(USER_DATA_ROOT, 'assets', 'playwright-shell', 'browsers'),
-      profilesPath: join(USER_DATA_ROOT, 'playwright-shell', 'profiles'),
-    }));
+    // playwright 领域 shell（ticket 036）已改为官方可选插件：不再静态装配，
+    // 经 $mount kind:'builtin' 声明后由宿主钩子按 builtinOptionalFeatures
+    // 工厂挂载（见文件尾部导出）。浏览器资产与登录档案仍按 ADR-0016 经装配
+    // 注入数据根分区。
   }
 
   async onInitiate(ctx) {
@@ -239,3 +233,24 @@ export class ProgrammingHelperAgent extends BasicAgent {
 export function resolveAgentClass({ runtime } = {}) {
   return runtime?.sessionType === 'coder' ? CoderAgent : ProgrammingHelperAgent;
 }
+
+/**
+ * 官方可选插件工厂表（$mount kind:'builtin' 的装配权威）。
+ * 键 = runtime feature name（与配置树键一致）；值工厂以（层配置值, 宿主
+ * context）构造 feature 实例。宿主钩子（run-prebuilt-agent.js）在静态装配
+ * 完成后按此表挂载；商店货架（server/routes/feature-store.js）import 本表
+ * 后由工厂实例的 name / description 自加载展示元数据，无需另处维护。
+ */
+export const builtinOptionalFeatures = {
+  main: {
+    'playwright-shell': {
+      create: (config = {}, context = {}) => new PlaywrightShellFeature({
+        workdir: context.workspaceDir || config.workspaceDir || process.cwd(),
+        browsersPath: join(USER_DATA_ROOT, 'assets', 'playwright-shell', 'browsers'),
+        profilesPath: join(USER_DATA_ROOT, 'playwright-shell', 'profiles'),
+        ...config,
+      }),
+    },
+  },
+  coder: {},
+};

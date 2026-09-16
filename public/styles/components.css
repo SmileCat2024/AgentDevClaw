@@ -11556,3 +11556,34 @@ body[data-theme="light"] .rcm-tunnel-diag summary { color: var(--text-secondary)
   .rcm-item { flex-direction: column; }
   .rcm-item-actions { flex-direction: row; }
 }
+
+/* ── Feature 插件商店面板（feature-store.js）────────────────── */
+
+.fs-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 4px 0 10px;
+}
+
+.fs-mounted-section .fs-section-title { margin-top: 0; }
+/* 已装配区与可安装区的间距由 ph-mounts-body 的 flex gap 主导 */
+
+/* 挂载管理页主体：与 Feature 配置页同边距（配置编辑器行级 24px 左右距）；
+   flex gap 对齐面板 hooks-section（筛选 header→分组、分组→分组 14px） */
+.ph-mounts-body {
+  padding: 16px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* 挂载卡片网格：对齐 Features 面板分组内网格（12px 间距） */
+.ph-mount-grid { gap: 12px; }
+
+/* fs-list-add/fs-list-remove 原生用于配置编辑器列表（列向布局），
+   借用到徽章行与标题行时纠正其 align-self，保持垂直居中 */
+.feature-card-badges .fs-list-add,
+.hooks-section-header .fs-list-add { align-self: center; }
+

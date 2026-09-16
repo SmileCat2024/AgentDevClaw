@@ -91,7 +91,7 @@ window.setFeaturePanelCapFilter = function (cap) {
 // 首次到位后触发一帧面板重渲染（与 catalog 首载同模式）；不可用时
 // enrichFeatureEntry 对 commands 维度回退 seed 标注。
 
-let _commandFeatures = null;          // Set<string> | null（null = 数据不可用）
+let _commandFeatures = null;          // Map<string, number> | null（feature → slash 命令数；null = 数据不可用）
 let _commandFeaturesKey = null;
 
 function _ensureCommandFeatures() {
@@ -107,13 +107,13 @@ function _ensureCommandFeatures() {
     .then(res => (res.ok ? res.json() : null))
     .then(data => {
       if (!data || data.ok !== true) throw new Error('commands unavailable');
-      const set = new Set();
+      const counts = new Map();
       for (const cmd of (Array.isArray(data.commands) ? data.commands : [])) {
         const ref = typeof cmd.ref === 'string' ? cmd.ref : (typeof cmd.name === 'string' ? cmd.name : '');
         const feature = ref.split('.')[0];
-        if (feature) set.add(feature);
+        if (feature) counts.set(feature, (counts.get(feature) || 0) + 1);
       }
-      _commandFeatures = set;
+      _commandFeatures = counts;
       // 数据就位后修正面板（commands 筛选维度从 seed 回退切换到运行时真值）
       if (activeFeaturePanel === 'hooks' && typeof renderFeaturePanel === 'function') {
         renderFeaturePanel();
@@ -205,6 +205,8 @@ function renderFeaturesPanel() {
   const buildFeatureCard = (feature) => {
     const status = getFeatureStatus(feature);
     const displayName = fc ? fc.resolveDisplayName(feature, currentLanguage) : feature.name;
+    // slash 命令数：_commandFeatures 为 null（数据不可用）时省略该项，不显示误导性的 0
+    const commandCount = _commandFeatures ? (_commandFeatures.get(feature.name) || 0) : null;
     return [
       '<div class="feature-card" role="button" tabindex="0" onclick="window.openFeatureDetails(&quot;' + escapeHtml(feature.name) + '&quot;)" title="' + escapeHtml(feature.name) + '">',
       '<div class="feature-card-top">',
@@ -220,6 +222,8 @@ function renderFeaturesPanel() {
       '<div class="feature-card-detail">',
       '<span>' + String(feature.hookCount) + ' ' + escapeHtml(t('feature_hooks')) + '</span>',
       '<span>' + String(feature.enabledToolCount) + '/' + String(feature.toolCount) + ' ' + escapeHtml(t('feature_tools')) + '</span>',
+      '<span>' + String(feature.skillCount || 0) + ' ' + escapeHtml(t('feature_skills')) + '</span>',
+      commandCount !== null ? '<span>' + String(commandCount) + ' ' + escapeHtml(t('feature_commands')) + '</span>' : '',
       feature.description ? '<span>' + escapeHtml(feature.description) + '</span>' : '',
       '</div>',
       '</div>',

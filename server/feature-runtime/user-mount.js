@@ -67,5 +67,16 @@ export async function mountUserConfiguredFeatures(agent, mounts, {
     features,
   };
   const environment = await provisionRuntimeEnvironment({ plan, root: environmentRoot });
-  return mountResolvedFeatures(agent, plan, { environmentDir: environment.environmentDir });
+  const mounted = await mountResolvedFeatures(agent, plan, { environmentDir: environment.environmentDir });
+  // $mount 的键是配置树里的 runtime name（配置值按它读取）。若包内 Feature 实例
+  // name 与声明不一致，配置会静默丢失且面板展示名失真——fail fast 让用户修正。
+  for (const item of mounted) {
+    if (!mounts.has(item.name)) {
+      const declaredKey = [...mounts.entries()].find(([, mount]) => mount.package === item.package)?.[0];
+      throw new Error(
+        `Feature 包 ${item.package} 的实例 name 是 '${item.name}'，与 $mount 声明的键 '${declaredKey || '(未知)'}' 不一致；请以实例 name 作为 $mount 的键。`,
+      );
+    }
+  }
+  return mounted;
 }

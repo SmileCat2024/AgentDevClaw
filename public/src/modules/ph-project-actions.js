@@ -35,6 +35,10 @@ window.phOpenModelConfig = async () => {
   const agent = getCurrentAgentRecord();
   if (!agent) return;
   let presets = window.ClawFW?._modelPresets || [];
+  window.phModelConfigAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id;
+  // 先渲染（已有缓存或空态），模型预置属补数据——点击到弹窗出现不等网络
+  renderPhModelConfigOverlay(agent, presets);
+  const stillOpen = () => Boolean(document.getElementById('ph-model-config-host')?.querySelector('.feature-detail-overlay'));
   if (!presets.length) {
     try {
       const resp = await fetch('/protoclaw/model_config');
@@ -44,28 +48,30 @@ window.phOpenModelConfig = async () => {
     } catch (e) {
       console.error('Failed to load presets:', e);
     }
+    if (presets.length && stillOpen()) renderPhModelConfigOverlay(agent, presets);
   }
-  window.phModelConfigAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id;
   // coder 身份的模型配置存 agent-configs/coder.json（运行时同源读取），
   // 与主身份分开拉取；面板渲染与保存共用这份缓存。
   if (window.phModelConfigAgentId === 'programming-helper'
     && !(window.ClawFW && window.ClawFW._coderModelPresets)) {
     try {
       const resp = await fetch('/protoclaw/agent_model_presets?agentId=coder');
-      const data = resp.ok ? await resp.json() : null;
+      const data = await resp.ok ? await resp.json() : null;
       if (window.ClawFW) {
         window.ClawFW._coderModelPresets = (data && data.modelPresets) || {};
       }
+      if (stillOpen()) renderPhModelConfigOverlay(agent, presets);
     } catch (e) {
       console.error('Failed to load coder presets:', e);
     }
   }
-  renderPhModelConfigOverlay(agent, presets);
 };
 
 window.phCloseModelConfig = () => {
-  // Feature 设置二级页持有共享配置编辑器实例，关闭弹窗时一并释放
+  // Feature 设置二级页持有共享配置编辑器实例，关闭弹窗时一并释放；
+  // 身份落点与页内细节态全部重置——只记忆一级分页（模型配置/进程模式/Feature 设置）
   if (typeof _closePhFeatureEditor === 'function') _closePhFeatureEditor();
+  if (typeof window._phResetFeaturePageState === 'function') window._phResetFeaturePageState();
   const host = document.getElementById('ph-model-config-host');
   if (host) host.innerHTML = '';
 };

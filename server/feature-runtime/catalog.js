@@ -52,6 +52,15 @@ async function summarizeArchive(archivePath, source) {
       ? manifest.entry.trim()
       : (typeof pkg.main === 'string' ? pkg.main.trim() : ''),
     manifestPresent: !!manifest,
+    manifestName: typeof manifest?.name === 'string' && manifest.name.trim() ? manifest.name.trim() : '',
+    manifestDescription: typeof manifest?.description === 'string' && manifest.description.trim()
+      ? manifest.description.trim()
+      : (typeof pkg.description === 'string' && pkg.description.trim() ? pkg.description.trim() : ''),
+    // settings schema 原样保留：已装配项的配置面板按此渲染（manifest v2 的 agentdev.settings）
+    manifestSettings: manifest?.settings && typeof manifest.settings === 'object'
+      && !Array.isArray(manifest.settings)
+      ? manifest.settings
+      : null,
   };
 }
 

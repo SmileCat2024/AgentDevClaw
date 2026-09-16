@@ -47,6 +47,8 @@ function createFeatureConfigEditor(options = {}) {
 
   const state = {
     manifests: null,
+    /** 已装配 feature 名全集（server 随 manifests 返回；白名单放行依据） */
+    mountedExtras: null,
     shellAvailability: null,
     /** 宿主模型 preset 清单（dynamicOptions='model-presets' 的选项来源） */
     modelPresets: [],
@@ -75,12 +77,20 @@ function createFeatureConfigEditor(options = {}) {
   }
 
   async function loadStaticData() {
+    // 身份层（agent / coder / dir）带 agentId：服务端合并该身份已装配 feature
+    // 的 settings manifest 并返回 extras 全集（装了它 = 左列可配它）；global 层
+    // 不带，保持官方清单原语义。
+    const manifestsUrl = scopeId === 'global'
+      ? '/protoclaw/system_feature_manifests'
+      : `/protoclaw/system_feature_manifests?agentId=${encodeURIComponent(scopeAgentId)}`;
     const [mRes, saRes, mcRes] = await Promise.all([
-      fetch('/protoclaw/system_feature_manifests'),
+      fetch(manifestsUrl),
       fetch('/protoclaw/shell_availability').catch(() => null),
       fetch('/protoclaw/model_config').catch(() => null),
     ]);
-    state.manifests = (await mRes.json()).features || [];
+    const manifestsData = await mRes.json();
+    state.manifests = manifestsData.features || [];
+    state.mountedExtras = new Set(manifestsData.mountedExtras || []);
     try {
       state.shellAvailability = saRes && saRes.ok ? await saRes.json() : null;
     } catch {
@@ -108,7 +118,10 @@ function createFeatureConfigEditor(options = {}) {
   function buildSections() {
     const sections = [];
     for (const feature of state.manifests) {
-      if (includeFeatures && !includeFeatures.has(feature.featureName)) continue;
+      // includeFeatures 白名单表达的是官方底座（如 coder 层）；已装配项
+      // （$mount）不受白名单约束——装了它就能配它。
+      const mounted = state.mountedExtras?.has(feature.featureName);
+      if (includeFeatures && !mounted && !includeFeatures.has(feature.featureName)) continue;
       const featureName = feature.featureName;
       const manifest = feature.manifest;
       const props = manifest.settings?.properties || {};
@@ -175,6 +188,17 @@ function createFeatureConfigEditor(options = {}) {
         <span class="ph-settings-tab-label">${escapeHtml(s.title)}</span>
       </div>`
     ).join('');
+    // 身份层（agent / coder）左列底部提供"添加 Feature"入口：打开插件商店
+    // 面板并定位到当前编辑的身份。global / dir 层不允许 $mount 装配，不显示。
+    const storeIdentity = scopeId === 'agent' ? 'main' : scopeId === 'coder' ? 'coder' : null;
+    if (storeIdentity) {
+      navEl.insertAdjacentHTML('beforeend', `
+        <div class="ph-settings-tab" data-fce-action="open-store" title="${_fceT('从 Feature 仓库添加插件', 'Add plugins from the feature repository')}">
+          <span class="ph-settings-tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 12h8"></path><path d="M12 8v8"></path></svg></span>
+          <span class="ph-settings-tab-label">${_fceT('添加 Feature', 'Add Feature')}</span>
+        </div>
+      `);
+    }
   }
 
   function selectSection(id) {
@@ -694,6 +718,13 @@ function createFeatureConfigEditor(options = {}) {
       case 'nav':
         selectSection(actionEl.getAttribute('data-id'));
         break;
+      case 'open-store': {
+        const identity = scopeId === 'agent' ? 'main' : scopeId === 'coder' ? 'coder' : null;
+        if (identity && typeof window.phOpenFeatureStore === 'function') {
+          window.phOpenFeatureStore(identity);
+        }
+        break;
+      }
       case 'reset': {
         const fullKey = actionEl.getAttribute('data-key');
         state.pending.set(fullKey, null);

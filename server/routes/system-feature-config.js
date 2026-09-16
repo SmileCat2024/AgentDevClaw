@@ -236,7 +236,7 @@ export function setupSystemFeatureConfigRoutes(app, express) {
     }
   });
 
-  app.get('/protoclaw/system_feature_manifests', async (_req, res) => {
+  app.get('/protoclaw/system_feature_manifests', async (req, res) => {
     try {
       const seen = new Set();
       const features = [];
@@ -293,7 +293,26 @@ export function setupSystemFeatureConfigRoutes(app, express) {
         } catch {}
       }
 
-      res.json({ features });
+      // 已装配项合并（$mount 装配的 feature，配置面与官方清单同一视图）：
+      // 带 agentId 时合并该身份已装配 feature 的 settings manifest，并返回
+      // extras 全集供前端放行白名单过滤（装了它 = 可配它）。
+      let mountedExtras = [];
+      const agentIdParam = typeof req.query.agentId === 'string' ? req.query.agentId.trim() : '';
+      if (agentIdParam) {
+        try {
+          const { collectScopeMountManifests } = await import('./feature-store.js');
+          const result = await collectScopeMountManifests(agentIdParam);
+          mountedExtras = result.extras;
+          for (const item of result.manifests) {
+            if (!seen.has(item.featureName)) {
+              seen.add(item.featureName);
+              features.push(item);
+            }
+          }
+        } catch {}
+      }
+
+      res.json({ features, mountedExtras });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

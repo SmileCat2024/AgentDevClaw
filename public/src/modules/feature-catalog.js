@@ -87,8 +87,8 @@ function deriveRuntimeCapabilities(feature) {
  * seed 未命中时 mapped:false，capabilities 退化为纯运行时推导——
  * 兜底组正常显示不隐藏，且可观测维度的筛选仍然准确。
  *
- * runtime（可缺省）：{ commandFeatures: Set<string> | null }
- * commandFeatures = 提供了 slash 命令的 feature 名集合（null = 数据不可用）。
+ * runtime（可缺省）：{ commandFeatures: Map<string, number> | null }
+ * commandFeatures = feature 名 → slash 命令数（null = 数据不可用）。
  */
 function enrichFeatureEntry(feature, catalog, runtime) {
   const entry = catalog && catalog.features

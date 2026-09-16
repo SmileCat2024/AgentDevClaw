@@ -29,11 +29,17 @@ function isPlainObject(value) {
 
 /**
  * 校验单个 $mount 声明值的结构。返回错误消息（null = 合法）。
+ * 两种形态：
+ * - repository（缺省）：{ package, version }，从 Feature tgz 仓库装配
+ * - builtin：{ kind: 'builtin' }，官方可选插件（local-feature 工厂，无包版本概念）
  * 不接受 null（null 是卸载语义，仅在 extractFeatureMounts 的层序合并中处理）。
  */
 export function validateMountEntry(value, { featureName = '(unknown)' } = {}) {
   if (!isPlainObject(value)) {
-    return `feature '${featureName}' 的 $mount 必须是 { package, version } 对象`;
+    return `feature '${featureName}' 的 $mount 必须是 { package, version } 或 { kind: 'builtin' } 对象`;
+  }
+  if (value.kind === 'builtin') {
+    return null;
   }
   if (!isValidPackageName(String(value.package || ''))) {
     return `feature '${featureName}' 的 $mount.package 不是合法 npm 包名：${String(value.package)}`;
@@ -76,11 +82,14 @@ export function extractFeatureMounts(layers) {
       } else {
         const error = validateMountEntry(mount, { featureName });
         if (error) throw new Error(`层 '${id}' 中 ${error}`);
-        mounts.set(featureName, {
-          package: String(mount.package).trim(),
-          version: String(mount.version).trim(),
-          layerId: id,
-        });
+        mounts.set(featureName, mount.kind === 'builtin'
+          ? { kind: 'builtin', layerId: id }
+          : {
+            kind: 'repository',
+            package: String(mount.package).trim(),
+            version: String(mount.version).trim(),
+            layerId: id,
+          });
       }
       // 纯配置层剔除 $mount 键（浅拷贝，不污染层对象）
       if (layerConfig === config) {

@@ -1650,7 +1650,8 @@ body[data-theme="light"] .feature-prov-badge {
   justify-content: center;
   padding: 18px;
   background: rgba(5, 7, 12, 0.86);
-  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   z-index: 1000;
 }
 
@@ -4413,14 +4414,6 @@ body[data-theme="light"] .rh-group {
 }
 
 /* ── Features 面板分类分组 — bar 式折叠头（视觉对齐 .git-zone-bar，无卡片容器）── */
-
-.feature-group {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-body[data-theme="light"] .feature-group {
-  border-bottom-color: rgba(0, 0, 0, 0.08);
-}
 
 /* ── Features 面板头部：左对齐的分页器（含总数小字）+ 能力下拉 ── */
 
