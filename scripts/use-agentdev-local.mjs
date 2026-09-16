@@ -8,13 +8,15 @@
 //   1. 相邻仓库不在默认位置（../AgentDev）时手动指定路径；
 //   2. npm install 后个别 junction 异常时的手工修复。
 //
-// 切换即就绪：链接完成后检查各包 dist，缺失时自动在框架仓库执行构建
-// （framework dist 缺失会导致运行时 require 失败，不能留到启动期才暴露）。
+// 切换即就绪：链接完成后检查各包 dist，缺失或过时（源码比 dist 新，如
+// git pull 框架仓库之后）时自动在框架仓库执行构建——框架 dist 陈旧会让
+// 运行时静默加载旧框架代码，不能留到启动期才暴露。
 //
 // 注意：package.json/package-lock.json 不被修改；发布依赖语义不变。
 import { existsSync, lstatSync, rmSync, symlinkSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
 import { spawnSync } from 'child_process';
+import { isStale } from './ensure-local-builds.mjs';
 
 // @agentdevjs 包名 -> AgentDev/packages/ 下的目录名（唯一例外：rokid-bot -> rokid-feature）
 const PACKAGE_MAP = {
@@ -22,6 +24,7 @@ const PACKAGE_MAP = {
   llm: 'llm',
   viewer: 'viewer',
   mcp: 'mcp',
+  'create-feature': 'create-feature',
   'audio-feedback-feature': 'audio-feedback-feature',
   'feishu-bot': 'feishu-bot',
   'image-reader-feature': 'image-reader-feature',
@@ -79,13 +82,14 @@ for (const name of PACKAGES) {
 console.log(`[agentdev:local] 完成：${linked}/${PACKAGES.length} 个包已链接。`);
 console.log('[agentdev:local] 提示：已在运行的 Claw 服务与 agent runtime 仍持有旧模块，重启整个服务后生效。');
 
-// 框架 dist 缺失时自动构建（切换即就绪，不把 require 失败留到运行期）。
-const missingDist = PACKAGES.filter((name) => {
+// 框架 dist 缺失或过时自动构建（切换即就绪，不把陈旧代码留到运行期）。
+const staleDist = PACKAGES.filter((name) => {
   const dir = PACKAGE_MAP[name];
-  return existsSync(join(target, 'packages', dir)) && !existsSync(join(target, 'packages', dir, 'dist', 'index.js'));
+  const pkgDir = join(target, 'packages', dir);
+  return existsSync(pkgDir) && isStale(pkgDir, join(pkgDir, 'dist'));
 });
-if (missingDist.length > 0) {
-  console.log(`[agentdev:local] 框架 dist 缺失（${missingDist.length} 个包），自动构建 AgentDev ...`);
+if (staleDist.length > 0) {
+  console.log(`[agentdev:local] 框架 dist 缺失或过时（${staleDist.length} 个包），自动构建 AgentDev ...`);
   const isWin = process.platform === 'win32';
   const r = isWin
     ? spawnSync('npm run build', { cwd: target, stdio: 'inherit', shell: true })

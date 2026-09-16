@@ -8,6 +8,8 @@
  *   - 发布态（semver 依赖）：npm 正式包自带 dist，无本地链接概念，跳过校验。
  *   - 两种形态均保证 local-features 与 features/* 的 dist 可用且不过时
  *     （ensure-local-builds：git pull 升级后自动补编译，避免加载陈旧产物）。
+ *     开发态还覆盖相邻框架仓库的 dist：链接解析到 AgentDev 各包的 dist 目录，
+ *     拉取框架新代码后由 ensure-local-builds 检测过时并自动重新构建。
  */
 import { execSync } from 'child_process';
 import { resolve } from 'path';
