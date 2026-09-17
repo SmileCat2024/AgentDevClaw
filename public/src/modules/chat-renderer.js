@@ -1024,7 +1024,6 @@ function renderSessionReferenceChips(references) {
     const meta = (ref.agentId || '') + '/' + (ref.sessionType || 'main');
     return '<div class="session-ref-chip is-echo" title="' + escapeHtml(meta + ' · ' + (ref.sessionId || '')) + '">'
       + '<span class="session-ref-chip-label">' + escapeHtml(label) + '</span>'
-      + '<span class="session-ref-chip-meta">' + escapeHtml(meta) + '</span>'
       + '</div>';
   }).join('');
   return '<div class="message-session-refs">' + chips + '</div>';

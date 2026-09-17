@@ -167,11 +167,9 @@ function sessionReferenceChipsHtml() {
   if (refs.length === 0) return '';
   return refs.map((ref, idx) => {
     const label = ref.title || ref.sessionId;
-    const meta = `${ref.agentId}/${ref.sessionType}`;
-    return '<div class="session-ref-chip" title="' + escapeHtml(meta + ' · ' + ref.sessionId) + '">'
+    return '<div class="session-ref-chip" title="' + escapeHtml(`${ref.agentId}/${ref.sessionType} · ${ref.sessionId}`) + '">'
       + '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>'
       + '<span class="session-ref-chip-label">' + escapeHtml(label) + '</span>'
-      + '<span class="session-ref-chip-meta">' + escapeHtml(meta) + '</span>'
       + '<button class="session-ref-chip-remove" type="button" onclick="SessionReference.remove(' + idx + ')" title="'
       + escapeHtml(typeof currentLanguage !== 'undefined' && currentLanguage === 'zh' ? '移除' : 'Remove')
       + '">×</button>'

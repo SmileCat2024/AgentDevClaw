@@ -11623,42 +11623,58 @@ body[data-theme="light"] .rcm-tunnel-diag summary { color: var(--text-secondary)
 .attach-menu-item:hover { background: var(--hover-bg); }
 .attach-menu-item svg { color: var(--text-secondary); flex-shrink: 0; }
 
-/* 引用 pill（附件预览区内，与图片缩略图同排） */
+/* 引用 pill（附件预览区内，与图片缩略图同排）：
+   几何对齐 .slash-prompt-pill 配方（胶囊形/内联×），配色取本模块蓝色系，
+   不用紫色 accent 主题变量（--accent-bg/--accent-text 是紫色调） */
 .session-ref-chip {
+  --ref-pill-bg: rgba(79, 140, 255, 0.15);
+  --ref-pill-text: #7cb8ff;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 260px;
-  height: 56px;
-  padding: 0 26px 0 10px;
-  position: relative;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  background: var(--hover-bg);
-  color: var(--text-primary);
-  font-size: 12px;
+  max-width: 320px;
+  padding: 4px 6px 4px 11px;
+  border: none;
+  border-radius: 999px;
+  background: var(--ref-pill-bg);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ref-pill-text);
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
 }
-.session-ref-chip svg { color: var(--text-secondary); flex-shrink: 0; }
+body[data-theme="light"] .session-ref-chip {
+  --ref-pill-bg: rgba(37, 99, 235, 0.10);
+  --ref-pill-text: #2563eb;
+}
+.session-ref-chip svg { color: inherit; flex-shrink: 0; opacity: 0.8; }
 .session-ref-chip-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 500;
 }
-.session-ref-chip-meta { color: var(--text-secondary); flex-shrink: 0; }
 .session-ref-chip-remove {
-  position: absolute;
-  top: 2px;
-  right: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
   border: none;
+  border-radius: 50%;
   background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
+  color: inherit;
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  padding: 2px;
+  opacity: 0.65;
+  flex-shrink: 0;
 }
-.session-ref-chip-remove:hover { color: var(--text-primary); }
+.session-ref-chip-remove:hover {
+  opacity: 1;
+  background: var(--hover-bg);
+}
 
 /* 拖拽悬停高亮（会话拖入 composer 投放区） */
 .user-input-card.session-ref-drop-target {
@@ -11666,9 +11682,9 @@ body[data-theme="light"] .rcm-tunnel-diag summary { color: var(--text-secondary)
   outline-offset: -2px;
 }
 
-/* 乐观气泡上的引用 chips */
+/* 乐观气泡上的引用 chips（无 × 按钮，右侧 padding 与左侧对称） */
 .message-session-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.session-ref-chip.is-echo { height: auto; padding: 3px 10px; border-radius: 999px; }
+.session-ref-chip.is-echo { padding-right: 11px; }
 
 /* 会话选择弹窗 */
 .session-ref-picker-overlay {
