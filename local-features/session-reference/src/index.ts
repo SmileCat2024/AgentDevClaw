@@ -330,12 +330,14 @@ export interface VerifiedSessionReference {
 }
 
 /**
- * 渲染引用注入 reminder。标题由 AI 自动生成，仅供定位参考——文案明确
- * 提示不能代表会话真实内容与方向，以 session_read_overview 实际内容为准。
+ * 渲染引用注入 reminder。只陈述引用事实（每条会话的寻址身份），不讲解
+ * 工具用法——读取工具的 agentId 是必填参数，AI 填参时从行内标注取值即可。
+ * 标题由 AI 自动生成，仅供定位参考——文案明确提示不能代表会话真实内容
+ * 与方向，以 session_read_overview 实际内容为准。
  */
 export function renderReferenceReminder(references: VerifiedSessionReference[]): string {
   const lines = references.map((ref) => {
-    const head = `- ${ref.sessionId}${ref.title ? `「${truncateText(ref.title, 80)}」` : ''} (${ref.agentId}/${ref.sessionType})`;
+    const head = `- ${ref.sessionId}${ref.title ? `「${truncateText(ref.title, 80)}」` : ''} — agent: ${ref.agentId}/${ref.sessionType}`;
     if (ref.availability === 'missing') return `${head} — 已不存在，无法读取，请告知用户该引用已失效`;
     if (ref.availability === 'unknown') return `${head} — 读取入口暂不可用，尝试读取失败时请告知用户`;
     return head;
@@ -464,7 +466,7 @@ export class SessionReferenceFeature implements AgentFeature {
         parallelizable: true,
         description:
           '列出可参考的历史会话目录（跨 agent 聚合）。返回每个会话的 agentId、sessionId、标题、摘要、工作目录与更新时间。' +
-          '先找到目标会话的 sessionId，再用 session_read_overview 查看其 trim 概览。',
+          '先找到目标会话的 agentId 与 sessionId（会话按二元组寻址），再用 session_read_overview 查看其 trim 概览。',
         parameters: {
           type: 'object',
           properties: {
@@ -523,16 +525,19 @@ export class SessionReferenceFeature implements AgentFeature {
             },
             agentId: {
               type: 'string',
-              description: '会话所属的 agent ID（可选，默认当前 agent）',
+              description: '会话所属的 agent ID（session_list 条目或会话引用 reminder 行内标注的 agent 值）',
             },
           },
-          required: ['sessionId'],
+          required: ['sessionId', 'agentId'],
         },
         execute: async (args: any) => {
           const sessionId = cleanText(args?.sessionId);
-          const agentId = cleanText(args?.agentId) || this.agentId;
+          const agentId = cleanText(args?.agentId);
           if (!sessionId) {
             return { error: 'sessionId is required' };
+          }
+          if (!agentId) {
+            return { error: 'agentId is required（会话按 (agentId, sessionId) 二元组寻址，不能省略）' };
           }
           try {
             const record = await fetchSessionRecord(this.serverOrigin, agentId, sessionId);
@@ -568,17 +573,20 @@ export class SessionReferenceFeature implements AgentFeature {
             },
             agentId: {
               type: 'string',
-              description: '会话所属的 agent ID（可选，默认当前 agent）',
+              description: '会话所属的 agent ID（session_list 条目或会话引用 reminder 行内标注的 agent 值）',
             },
           },
-          required: ['sessionId', 'turn'],
+          required: ['sessionId', 'turn', 'agentId'],
         },
         execute: async (args: any) => {
           const sessionId = cleanText(args?.sessionId);
           const turn = Number(args?.turn);
-          const agentId = cleanText(args?.agentId) || this.agentId;
+          const agentId = cleanText(args?.agentId);
           if (!sessionId) {
             return { error: 'sessionId is required' };
+          }
+          if (!agentId) {
+            return { error: 'agentId is required（会话按 (agentId, sessionId) 二元组寻址，不能省略）' };
           }
           if (!Number.isInteger(turn) || turn < 0) {
             return { error: 'turn 必须是非负整数（来自概览中的 T<N> 标注）' };

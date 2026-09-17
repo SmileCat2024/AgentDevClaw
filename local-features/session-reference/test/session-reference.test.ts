@@ -188,8 +188,8 @@ describe('renderReferenceReminder', () => {
     ]);
     assert.match(text, /^\[会话引用\] 用户在本条消息中引用了以下会话/);
     assert.match(text, /标题由 AI 自动生成，仅供参考，不能代表会话真实内容与方向/);
-    assert.match(text, /- session-1789456315259-15c389「修复登录超时」 \(programming-helper\/main\)/);
-    assert.match(text, /- session-1789431188614-41ceab「重构导出逻辑」 \(agent-studio\/main\)/);
+    assert.match(text, /- session-1789456315259-15c389「修复登录超时」 — agent: programming-helper\/main/);
+    assert.match(text, /- session-1789431188614-41ceab「重构导出逻辑」 — agent: agent-studio\/main/);
     assert.match(text, /session_read_overview/);
     assert.match(text, /session_read_turn/);
   });
@@ -198,7 +198,7 @@ describe('renderReferenceReminder', () => {
     const text = renderReferenceReminder([
       { agentId: 'a', sessionId: 's-1', title: '', sessionType: 'main', availability: 'missing' },
     ]);
-    assert.match(text, /- s-1 \(a\/main\) — 已不存在/);
+    assert.match(text, /- s-1 — agent: a\/main — 已不存在/);
   });
 
   it('distinguishes unverified availability from missing', () => {
@@ -245,8 +245,8 @@ describe('injectSessionReferences', () => {
       assert.equal(injected[0].turn, 3);
       assert.equal(injected[0].source, 'session-reference');
       assert.equal(injected[0].tag, 'reminder');
-      assert.match(injected[0].content, /s-1「修复登录超时」 \(programming-helper\/main\)/);
-      assert.match(injected[0].content, /s-2 \(agent-studio\/main\)/);
+      assert.match(injected[0].content, /s-1「修复登录超时」 — agent: programming-helper\/main/);
+      assert.match(injected[0].content, /s-2 — agent: agent-studio\/main/);
       // 每个引用验证一次存在性
       assert.equal(calls.filter((url) => url.includes('session_record')).length, 2);
     } finally {
@@ -333,5 +333,37 @@ describe('injectSessionReferences', () => {
     await feature.onTurnMetadata('not-an-array', { context });
     await feature.onTurnMetadata(null, { context });
     assert.equal(added, 0);
+  });
+});
+
+// ── 读取工具契约：(agentId, sessionId) 二元组寻址 ─────────────────
+
+describe('read tools address sessions by the (agentId, sessionId) pair', () => {
+  const realFetch = globalThis.fetch;
+
+  it('requires agentId in the schema instead of defaulting it to the current agent', () => {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    const tools = new Map(feature.getTools().map((tool) => [tool.name, tool]));
+    assert.deepEqual(tools.get('session_read_overview')!.parameters!.required, ['sessionId', 'agentId']);
+    assert.deepEqual(tools.get('session_read_turn')!.parameters!.required, ['sessionId', 'turn', 'agentId']);
+  });
+
+  it('rejects reads without an explicit agentId before any request goes out', async () => {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    const tools = new Map(feature.getTools().map((tool) => [tool.name, tool]));
+    let fetched = 0;
+    globalThis.fetch = (async () => {
+      fetched += 1;
+      return { ok: true, status: 200, json: async () => ({ messages: [] }) } as any;
+    }) as any;
+    try {
+      const overview = await (tools.get('session_read_overview')!.execute as any)({ sessionId: 's-1' });
+      assert.match(String(overview?.error), /agentId is required/);
+      const turn = await (tools.get('session_read_turn')!.execute as any)({ sessionId: 's-1', turn: 1 });
+      assert.match(String(turn?.error), /agentId is required/);
+      assert.equal(fetched, 0);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
