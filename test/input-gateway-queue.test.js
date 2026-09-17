@@ -78,6 +78,32 @@ describe('input gateway thread-domain queueing (R6)', () => {
     assert.deepEqual(integration.calls.deliver, ['wt-1']);
   });
 
+  it('carries turn metadata into the thread command (and accepts metadata-only turns)', async () => {
+    // 线程域与直投域行为一致：会话引用等 user-turn 自由元数据随指令入箱，
+    // 投递时经 bridge.submitTurn 原样转发，不再在线程域被丢弃。
+    registerRuntime();
+    const integration = buildIntegration({
+      thread: { threadId: 'wt-1', status: 'open', headSessionId: 'session-1', hold: false, pendingSuccession: null },
+    });
+    const turnMetadata = { 'session-reference': [{ agentId: 'programming-helper', sessionId: 'session-7', title: '引用' }] };
+
+    await deliverUserInput(
+      { viewerAgentId: 'viewer-1', text: '带引用的输入', source: 'chat-composer', turnMetadata },
+      { integration, fetchImpl: async () => { throw new Error('direct submit must not happen'); } },
+    );
+
+    assert.equal(integration.calls.append.length, 1);
+    assert.deepEqual(integration.calls.append[0].metadata, turnMetadata);
+
+    // metadata-only（空文本占位）不再被网关拒绝
+    await deliverUserInput(
+      { viewerAgentId: 'viewer-1', text: ' ', source: 'chat-composer', turnMetadata: { ref: 1 } },
+      { integration, fetchImpl: async () => { throw new Error('direct submit must not happen'); } },
+    );
+    assert.equal(integration.calls.append.length, 2);
+    assert.deepEqual(integration.calls.append[1].metadata, { ref: 1 });
+  });
+
   it('stages input while the thread is held or rotating (administrative states queue, not bounce)', async () => {
     registerRuntime();
     const integration = buildIntegration({

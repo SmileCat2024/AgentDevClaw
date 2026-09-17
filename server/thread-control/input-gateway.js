@@ -80,7 +80,11 @@ export async function deliverUserInput(
     }, { fetchImpl });
   }
 
-  if (!normalizedText.trim() && normalizedImages.length === 0) {
+  // 与 appendCommand 的 K8 同源：text / images / metadata 至少其一非空
+  //（metadata-only 如仅携带会话引用；空文本占位 ' ' 由此放行）
+  const hasTurnMetadata = !!(turnMetadata && typeof turnMetadata === 'object'
+    && Object.keys(turnMetadata).length > 0);
+  if (!normalizedText.trim() && normalizedImages.length === 0 && !hasTurnMetadata) {
     throw new UserTurnDeliveryError('text or images must be provided', {
       code: 'invalid_input',
       status: 400,
@@ -96,13 +100,13 @@ export async function deliverUserInput(
     idempotencyKey: sourceRef ? `gw-${sourceRef}` : '',
     ...(normalizedImages.length > 0 ? { images: normalizedImages } : {}),
     ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
+    // Thread Inbox command 契约携带 user-turn 自由元数据：随指令持久化，
+    // 投递时经 bridge.submitTurn 原样转发（消费方如 session-reference 引用
+    // 在线程域与直投域行为一致）
+    ...(turnMetadata && typeof turnMetadata === 'object' && Object.keys(turnMetadata).length > 0
+      ? { metadata: turnMetadata }
+      : {}),
   });
-  // Thread Inbox 的 command 契约不携带 user-turn metadata：带 turnMetadata 的
-  // 输入转入线程域时其自由元数据会丢弃——显式日志而非静默（消费方如
-  // session-reference 引用会失效，前端有同款快路径拦截，此处是竞态兜底）
-  if (turnMetadata && typeof turnMetadata === 'object' && Object.keys(turnMetadata).length > 0) {
-    console.warn('[input-gateway] thread-routed turn dropped user-turn metadata:', Object.keys(turnMetadata));
-  }
 
   // 竞态闭合：路由判定与 append 之间 succession 可能已完成（advanceHead
   // 已清挡板、applySessionSuccession 已投递过一轮）——补一次投递尝试。
