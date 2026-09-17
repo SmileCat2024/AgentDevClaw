@@ -20,7 +20,8 @@
  *
  * 动态清单：菜单唤起时按当前 (runtimeAgent, session) 拉取一次
  * GET /protoclaw/commands（拉取式，无缓存订阅）。会话命令以完整
- * ref（feature.command）展示与调用；过滤同时匹配全名与末段短名。
+ * ref（feature.command）展示与调用；过滤同时匹配全名与末段短名，
+ * 前缀命中排前、局部（子串）命中排后。
  *
  * 暴露：
  * - SlashMenu.isActive() — 菜单激活（可见且有可选项）
@@ -235,12 +236,15 @@ function _hide() {
 
 // ── 过滤与执行 ────────────────────────────────────────────────
 
-function _matches(cmd, query) {
+// 匹配等级：1 = 前缀命中，2 = 局部（子串）命中，0 = 不匹配。
+// 全名与末段短名（ref 去掉 feature 前缀）都参与，/force 命中
+// force-continuation.continue；空 query 恒为前缀命中（浏览全部）
+function _matchRank(cmd, query) {
   const full = cmd.name.toLowerCase();
-  if (full.startsWith(query)) return true;
-  // 末段短名（ref 去掉 feature 前缀）也参与前缀匹配，/force 命中 force-continuation.continue
   const tail = full.slice(full.lastIndexOf('.') + 1);
-  return tail.startsWith(query);
+  if (full.startsWith(query) || tail.startsWith(query)) return 1;
+  if (full.includes(query) || tail.includes(query)) return 2;
+  return 0;
 }
 
 function _syncFromInput(ta) {
@@ -259,12 +263,24 @@ function _syncFromInput(ta) {
   }
   // 命令名 = 首个空白前的部分；/ 后直接空格视为浏览全部
   const query = value.slice(1).split(/\s+/)[0].toLowerCase();
-  _filtered = _allCommands().filter(function (c) {
-    return _matches(c, query);
+  // 前缀命中排前、局部命中排后；同级保持注册顺序（sort 稳定）
+  const ranked = [];
+  _allCommands().forEach(function (c) {
+    const r = _matchRank(c, query);
+    if (r > 0) ranked.push({ c: c, r: r });
   });
+  ranked.sort(function (a, b) { return a.r - b.r; });
+  _filtered = ranked.map(function (x) { return x.c; });
   _highlightIdx = 0;
   _formCmd = null;
   _show();
+}
+
+// 提取命令段之后的剩余文本（/cmd rest → rest；"/ 直接空白"的浏览态
+// 同理保留空白后内容）——命令只消费命令段，用户已输入的正文不吞
+function _remainingText(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/^\/\S*/, '').replace(/^\s+/, '');
 }
 
 async function _execute(cmd, ta) {
@@ -272,7 +288,7 @@ async function _execute(cmd, ta) {
   // prompt 型：选中不执行——挂 pill，用户补充说明后随 Enter 发送时统一触发
   if (cmd.kind === 'prompt' && cmd.destination === 'session') {
     if (ta) {
-      ta.value = '';
+      ta.value = _remainingText(ta.value);
       autoResize(ta);
       _cacheSessionInput(ta);
     }
@@ -284,9 +300,10 @@ async function _execute(cmd, ta) {
     ta?.focus();
     return;
   }
-  // 消费语义：命令执行吃掉整条输入（含同步草稿缓存，防切换会话后复活）
+  // 消费语义：命令执行只吃掉命令段（含同步草稿缓存，防切换会话后
+  // 复活）；命令段之后的正文保留在输入框，由用户继续编辑或发送
   if (ta) {
-    ta.value = '';
+    ta.value = _remainingText(ta.value);
     autoResize(ta);
     _cacheSessionInput(ta);
   }
@@ -319,7 +336,8 @@ async function _execute(cmd, ta) {
 function _completeCommand(ta) {
   const cmd = _filtered[_highlightIdx];
   if (!cmd || !ta) return;
-  ta.value = '/' + cmd.name + ' ';
+  // 补全替换命令段，命令后的正文原样保留
+  ta.value = '/' + cmd.name + ' ' + _remainingText(ta.value);
   autoResize(ta);
   _syncFromInput(ta);
 }
@@ -673,7 +691,11 @@ document.addEventListener('keydown', function (e) {
       e.preventDefault();
       e.stopPropagation();
       void _dispatchPrompts(e.target);
+      return;
     }
+    // 放行 Enter = 普通消息发送：发送成功后输入框被程序化清空，不会触发
+    // input 事件，空态浮层须在此主动关闭（否则悬挂到用户下次键入）
+    if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) _hide();
     return;
   }
   if (_formCmd) {
