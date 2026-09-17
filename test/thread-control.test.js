@@ -25,7 +25,7 @@ import {
   ThreadNotFoundError,
   ThreadRevisionConflictError,
 } from '../server/thread-control/thread-store.js';
-import { createThreadControl } from '../server/thread-control/thread-controller.js';
+import { createThreadControl, bridgeParamsToSubmitTurnArgs } from '../server/thread-control/thread-controller.js';
 import {
   createThreadIntegration,
   isThreadHostSession,
@@ -814,6 +814,9 @@ describe('WorkThreadRuntimeBridge (enabled) + user-turn integration', () => {
   // 历史事故：bridge 传 viewerAgentId（被客户端忽略）→ agentId undefined →
   // 客户端预校验抛 invalid_input（不可重试）→ 接力指令全部被误判 failed。
   // 用真实 submitUserTurn + fetchImpl mock 而非哑 stub，参数漂移当场炸出。
+  // 经生产适配器 bridgeParamsToSubmitTurnArgs（框架 bridge 的 metadata 键 →
+  // submitUserTurn 的 turnMetadata 形参）：历史事故二——直连丢 metadata 且
+  // 指令误标 DELIVERED。
   test('bridge passes contract-valid params to the real submitUserTurn client', async () => {
     const seen = [];
     const fetchImpl = async (url, init) => {
@@ -823,10 +826,11 @@ describe('WorkThreadRuntimeBridge (enabled) + user-turn integration', () => {
     const { core } = makeControl(root, {
       enabled: true,
       resolveRuntimeViewerId: () => 'viewer-contract',
-      submitTurn: (params) => submitUserTurn(params, { fetchImpl }),
+      submitTurn: (params) => submitUserTurn(bridgeParamsToSubmitTurnArgs(params), { fetchImpl }),
     });
     const thread = await core.start({ sessionRef: { agentId: 'agent-c', sessionId: 'cs-1' } });
-    const { command } = await core.appendCommand({ threadId: thread.threadId, text: '契约校验' });
+    const metadata = { 'session-reference': [{ agentId: 'programming-helper', sessionId: 'session-r', title: '引用' }] };
+    const { command } = await core.appendCommand({ threadId: thread.threadId, text: '契约校验', metadata });
 
     const result = await core.deliverPendingCommands(thread.threadId);
     assert.equal(result.delivered, 1);
@@ -835,9 +839,32 @@ describe('WorkThreadRuntimeBridge (enabled) + user-turn integration', () => {
     assert.equal(seen[0].body.text, '契约校验');
     assert.equal(seen[0].body.source, 'thread');
     assert.equal(seen[0].body.sourceRef, command.commandId);
+    // metadata 经适配后进入 user-turn body（P0 回归锁：键名漂移即丢字段）
+    assert.deepEqual(seen[0].body.metadata, metadata);
 
     const record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
+  });
+
+  // H1 回归锁：appendCommand 允许 metadata-only 的空文本指令（' ' 占位），
+  // 适配层必须把它规范化为 viewer 契约可接受的形态——入箱必可投。
+  test('bridge adapter normalizes metadata-only empty-text commands to a deliverable form', async () => {
+    const seen = [];
+    const fetchImpl = async (url, init) => {
+      seen.push({ body: JSON.parse(init.body) });
+      return { ok: true, status: 200, json: async () => ({ success: true, delivery: 'queued' }) };
+    };
+    const { core } = makeControl(root, {
+      enabled: true,
+      resolveRuntimeViewerId: () => 'viewer-normalize',
+      submitTurn: (params) => submitUserTurn(bridgeParamsToSubmitTurnArgs(params), { fetchImpl }),
+    });
+    const thread = await core.start({ sessionRef: { agentId: 'agent-n', sessionId: 'ns-1' } });
+    await core.appendCommand({ threadId: thread.threadId, text: '', metadata: { 'session-reference': [{}] } });
+
+    const result = await core.deliverPendingCommands(thread.threadId);
+    assert.equal(result.delivered, 1, 'metadata-only 空文本指令必须投递成功，不得落 FAILED');
+    assert.equal(seen[0].body.text, ' ');
   });
 });
 

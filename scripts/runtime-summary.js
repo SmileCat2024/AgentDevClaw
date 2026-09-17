@@ -387,7 +387,9 @@ export function createSummaryHandlers(ctx) {
       const metadata = (response.payload?.metadata && typeof response.payload.metadata === 'object' && !Array.isArray(response.payload.metadata))
         ? response.payload.metadata
         : null;
-      if (!text && images.length === 0) {
+      // metadata-only（空文本占位）同样是内容承载：不得在空文本 + 无图片时
+      // 静默丢弃（与 viewer ' ' 占位提交语义一致）
+      if (!text && images.length === 0 && !metadata) {
         return { kind: 'continue' };
       }
       if (text === '/exit') {

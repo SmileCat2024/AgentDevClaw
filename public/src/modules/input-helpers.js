@@ -170,13 +170,32 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
       window.SessionReference?.restore?.(sessionRefs);
       return;
     }
-    await _submitInputViaThread(threadRoute.thread, {
-      input: input || ' ',
-      textarea,
-      targetCacheKey,
-      capabilityActivations,
-      turnMetadata,
-    });
+    try {
+      await _submitInputViaThread(threadRoute.thread, {
+        input: input || ' ',
+        textarea,
+        targetCacheKey,
+        capabilityActivations,
+        turnMetadata,
+      });
+    } catch (threadError) {
+      // Thread Inbox 不可用：归还激活与引用（输入保留供重试），不让异常
+      // 变成 unhandled rejection 把已 consume 的 pill 白白丢掉
+      console.error('Thread Inbox 提交失败:', threadError);
+      window.ClawSlash?.restoreActivations?.(capabilityActivations);
+      window.SessionReference?.restore?.(sessionRefs);
+      if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+        ClawToast.show({
+          id: `thread-cmd-failed-${requestId}`,
+          status: 'error',
+          title: currentLanguage === 'zh'
+            ? '消息暂未发出：请稍后重试'
+            : 'Message not sent: please retry',
+          description: threadError instanceof Error ? threadError.message : String(threadError),
+          autoDismiss: 6000,
+        });
+      }
+    }
     return;
   }
 

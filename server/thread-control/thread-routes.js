@@ -282,7 +282,7 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
         // 随指令流动的附件字段：前端 submitThreadCommand 早已发送，此前路由未
         // 解构导致静默丢弃（skill 激活在线程快路径上丢失）
         ...(Array.isArray(capabilityActivations) && capabilityActivations.length > 0
-          ? { capabilityActivations: capabilityActivations.filter((a) => typeof a === 'string') }
+          ? { capabilityActivations: capabilityActivations.filter((a) => typeof a === 'string' && a) }
           : {}),
         ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata)
           && Object.keys(metadata).length > 0 ? { metadata } : {}),

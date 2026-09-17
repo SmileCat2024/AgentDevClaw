@@ -35,6 +35,32 @@ import { listAgentRuntimes, isManagedRuntimeRunning } from '../shared/agent-acce
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 
 /**
+ * 框架 bridge 参数契约 → Claw submitUserTurn 形参的显式适配。
+ *
+ * 键名映射必须显式：框架 bridge 的参数契约（metadata 键）与 submitUserTurn
+ * 的形参（turnMetadata）不同名，直连会在解构处静默丢字段（历史事故：线程域
+ * 会话引用投递即丢且误标已送达）。text 空串占位规范化为 ' '——appendCommand
+ * 允许 metadata/images 携带的空文本指令，viewer user-turn 契约要求非空字符串。
+ * 契约测试（test/thread-control.test.js）经本函数走真实 submitUserTurn，
+ * 参数漂移当场炸出。
+ */
+export function bridgeParamsToSubmitTurnArgs(params) {
+  return {
+    agentId: params.agentId,
+    text: params.text || ' ',
+    source: params.source,
+    sourceRef: params.sourceRef,
+    ...(Array.isArray(params.capabilityActivations) && params.capabilityActivations.length > 0
+      ? { capabilityActivations: params.capabilityActivations }
+      : {}),
+    ...(Array.isArray(params.images) && params.images.length > 0 ? { images: params.images } : {}),
+    ...(params.metadata && typeof params.metadata === 'object' && Object.keys(params.metadata).length > 0
+      ? { turnMetadata: params.metadata }
+      : {}),
+  };
+}
+
+/**
  * 装配一套线程控制面。
  *
  * @param {object} [options]
@@ -74,7 +100,7 @@ export function createThreadControl({
         enabled: true,
         // 框架桥不带 HTTP 客户端：真实投递必须由宿主注入（viewer 原子
         // user-turn 契约，排队语义由 runtime 侧 CallArbiter 串行消费）。
-        submitTurn: submitUserTurn,
+        submitTurn: (params) => submitUserTurn(bridgeParamsToSubmitTurnArgs(params)),
         resolveRuntimeViewerId: resolveSessionViewerId,
       }),
   });

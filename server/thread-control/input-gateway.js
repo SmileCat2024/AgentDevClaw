@@ -103,10 +103,19 @@ export async function deliverUserInput(
     // Thread Inbox command 契约携带 user-turn 自由元数据：随指令持久化，
     // 投递时经 bridge.submitTurn 原样转发（消费方如 session-reference 引用
     // 在线程域与直投域行为一致）
-    ...(turnMetadata && typeof turnMetadata === 'object' && Object.keys(turnMetadata).length > 0
-      ? { metadata: turnMetadata }
-      : {}),
+    ...(hasTurnMetadata ? { metadata: turnMetadata } : {}),
   });
+  // 幂等命中既有指令时新 payload 不生效（appendCommand 契约）：携带的
+  // metadata 若与已入箱值不同则留痕，重放方可见差异而非静默吞掉
+  if (duplicate && hasTurnMetadata) {
+    const existingMeta = command?.metadata ?? null;
+    if (JSON.stringify(existingMeta) !== JSON.stringify(turnMetadata)) {
+      console.warn('[input-gateway] duplicate command carries different turn metadata; existing entry wins:', {
+        threadId: route.thread.threadId,
+        commandId: command?.commandId,
+      });
+    }
+  }
 
   // 竞态闭合：路由判定与 append 之间 succession 可能已完成（advanceHead
   // 已清挡板、applySessionSuccession 已投递过一轮）——补一次投递尝试。
