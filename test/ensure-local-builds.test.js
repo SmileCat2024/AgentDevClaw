@@ -21,11 +21,15 @@ function freshPackage(dir) {
   mkdirSync(join(dir, 'dist'), { recursive: true });
   const src = join(dir, 'src', 'index.ts');
   const dist = join(dir, 'dist', 'index.js');
+  const dts = join(dir, 'dist', 'index.d.ts');
   writeFileSync(src, 'export {};\n');
   writeFileSync(dist, 'export {};\n');
+  // 满足框架四包的最小导出面；具体缺失声明/导出由专门用例覆盖。
+  writeFileSync(dts, 'export declare const CoreLifecycle: unknown; export declare const HookDeclarations: unknown; export declare const createLLM: unknown; export declare const ViewerWorker: unknown; export declare const MCPFeature: unknown;\n');
   utimesSync(src, PAST, PAST);
   utimesSync(dist, FRESH, FRESH);
-  return { dir, src, dist };
+  utimesSync(dts, FRESH, FRESH);
+  return { dir, src, dist, dts };
 }
 
 describe('isStale（源码树 vs dist 的新旧比较）', () => {
@@ -33,6 +37,7 @@ describe('isStale（源码树 vs dist 的新旧比较）', () => {
     const p = freshPackage(join(root, 'stale-pkg'));
     utimesSync(p.src, FRESH, FRESH); // src 拉新
     utimesSync(p.dist, PAST, PAST);
+    utimesSync(p.dts, PAST, PAST);
     assert.equal(isStale(join(p.dir, 'src'), join(p.dir, 'dist')), true);
   });
 
@@ -86,6 +91,7 @@ describe('frameworkBuildNeeded（相邻框架仓库 dist 过时检测）', () =>
     const llm = freshPackage(join(dir, 'packages', 'llm'));
     utimesSync(llm.src, FRESH, FRESH); // 源码被 git pull 刷新，晚于 dist
     utimesSync(llm.dist, PAST, PAST);
+    utimesSync(llm.dts, PAST, PAST);
     assert.equal(frameworkBuildNeeded(dir), true);
   });
 
@@ -94,6 +100,21 @@ describe('frameworkBuildNeeded（相邻框架仓库 dist 过时检测）', () =>
     mkdirSync(join(dir, 'packages', 'core', 'src'), { recursive: true });
     writeFileSync(join(dir, 'packages', 'core', 'src', 'index.ts'), 'export {};\n');
     utimesSync(join(dir, 'packages', 'core', 'src', 'index.ts'), PAST, PAST);
+    assert.equal(frameworkBuildNeeded(dir), true);
+  });
+
+  it('框架入口声明缺失即触发重建，即使 dist 目录仍有新文件', () => {
+    const dir = fakeFramework();
+    const llm = freshPackage(join(dir, 'packages', 'llm'));
+    rmSync(llm.dts);
+    assert.equal(frameworkBuildNeeded(dir), true);
+  });
+
+  it('框架四包导出面缺失即触发重建，即使文件时间较新', () => {
+    const dir = fakeFramework();
+    const core = freshPackage(join(dir, 'packages', 'core'));
+    writeFileSync(core.dts, 'export {};\n');
+    utimesSync(core.dts, FRESH, FRESH);
     assert.equal(frameworkBuildNeeded(dir), true);
   });
 

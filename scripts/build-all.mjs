@@ -41,9 +41,8 @@ function runNpm(args, cwd = root, label) {
 
 try {
   if (IS_DEV) {
-    // 开发态：node_modules 是 junction，需校验/修复链接 + 构建框架
-    execSync('node scripts/check-agentdev-local.mjs', { cwd: root, stdio: 'inherit' });
-
+    // 开发态先构建框架，再校验/修复链接。dist 缺失时 check 会提前失败，
+    // 必须让框架构建先有机会补齐产物。
     const sibling = resolve(process.env.AGENTDEV_LOCAL_PATH || join(root, '..', 'AgentDev'));
     if (existsSync(join(sibling, 'package.json'))) {
       console.log(`\n[build] 开发态：检测到相邻 AgentDev 框架仓库 ${sibling}，构建框架`);
@@ -52,6 +51,7 @@ try {
       console.warn(`[build] 开发态：未检测到相邻 AgentDev 框架仓库（${sibling}）`);
       console.warn('[build] check:agentdev 已给出修复指引；框架 dist 缺失时请先构建。');
     }
+    execSync('node scripts/check-agentdev-local.mjs', { cwd: root, stdio: 'inherit' });
   } else {
     // 发布态：npm 正式包自带 dist，无需链接/框架构建
     console.log('[build] 发布态：@agentdevjs/* 为 npm 正式包，跳过链接修复与框架构建');

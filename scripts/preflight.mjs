@@ -28,10 +28,14 @@ try {
 }
 
 if (dev) {
-  // 开发态：校验链接；不可用时 check 会自动重建（见 check-agentdev-local）
+  // 开发态先补齐相邻框架 dist，再校验链接和导出。否则 dist 缺失时，
+  // check-agentdev-local 会在自动构建逻辑之前提前退出，挡住自愈路径。
+  execSync('node scripts/ensure-local-builds.mjs --framework-only', { cwd: root, stdio: 'inherit' });
+  // 校验链接；不可用时 check 会自动重建（见 check-agentdev-local）
   execSync('node scripts/check-agentdev-local.mjs', { cwd: root, stdio: 'inherit' });
 } else {
   console.log('[preflight] 发布态：@agentdevjs/* 为 npm 正式包，跳过本地链接校验');
 }
 
-execSync('node scripts/ensure-local-builds.mjs', { cwd: root, stdio: 'inherit' });
+// 链接确认后再构建 Claw 自身，确保类型检查和运行时都解析到正确的框架来源。
+execSync('node scripts/ensure-local-builds.mjs --claw-only', { cwd: root, stdio: 'inherit' });

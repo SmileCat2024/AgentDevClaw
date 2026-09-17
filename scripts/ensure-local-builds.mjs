@@ -24,7 +24,7 @@ import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
 import { pathToFileURL } from 'url';
 import { FEATURE_DIRS } from './prebuilt-feature-dirs.mjs';
-import { isDevForm, siblingAgentdevPath, PACKAGE_MAP } from './check-agentdev-local.mjs';
+import { isDevForm, siblingAgentdevPath, PACKAGE_MAP, probe } from './check-agentdev-local.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const IS_WIN = process.platform === 'win32';
@@ -67,9 +67,16 @@ function isStale(srcDir, distDir) {
 // 与启动正确性无关，纳入只会带来与消费面无关的启动期全量构建。
 function frameworkBuildNeeded(frameworkRoot) {
   if (!existsSync(join(frameworkRoot, 'package.json'))) return false;
-  return Object.values(PACKAGE_MAP).some((dir) =>
-    isStale(join(frameworkRoot, 'packages', dir), join(frameworkRoot, 'packages', dir, 'dist'))
-  );
+  return Object.entries(PACKAGE_MAP).some(([name, dir]) => {
+    const packageDir = join(frameworkRoot, 'packages', dir);
+    // 缺少包目录由 check-agentdev-local 报告；这里不因未消费/未检出的包
+    // 触发一轮不会修复它的全量构建。
+    if (!existsSync(packageDir)) return false;
+    // 时间比较只能发现源码更新；probe 还会捕获 dist/index.js、dist/index.d.ts
+    // 缺失，以及框架四包 d.ts 缺少 Claw 所依赖的导出。
+    return probe(packageDir, name).status !== 'ok' ||
+      isStale(packageDir, join(packageDir, 'dist'));
+  });
 }
 
 function ensure(desc, check, buildScript, cwd = root) {
@@ -87,22 +94,21 @@ function ensure(desc, check, buildScript, cwd = root) {
   return true;
 }
 
-function main() {
+function ensureFrameworkBuild() {
   // 框架 dist 必须先于 local-features：后者的类型检查解析框架 dist 的 d.ts，
   // 链接指向陈旧 dist 时会把过时类型编进 local-feature 产物。
-  let builtFramework = false;
-  if (isDevForm()) {
-    const sibling = siblingAgentdevPath();
-    if (existsSync(join(sibling, 'package.json'))) {
-      builtFramework = ensure(
-        'AgentDev 框架 dist',
-        () => frameworkBuildNeeded(sibling),
-        'build',
-        sibling
-      );
-    }
-  }
+  if (!isDevForm()) return false;
+  const sibling = siblingAgentdevPath();
+  if (!existsSync(join(sibling, 'package.json'))) return false;
+  return ensure(
+    'AgentDev 框架 dist',
+    () => frameworkBuildNeeded(sibling),
+    'build',
+    sibling
+  );
+}
 
+function ensureClawBuilds() {
   const builtLf = ensure(
     'local-features/dist',
     () => isStale(join(root, 'local-features'), join(root, 'local-features', 'dist')),
@@ -115,7 +121,24 @@ function main() {
     ),
     'build:features'
   );
+  return { builtLf, builtFeat };
+}
 
+function main() {
+  const frameworkOnly = process.argv.includes('--framework-only');
+  const clawOnly = process.argv.includes('--claw-only');
+  if (frameworkOnly && clawOnly) {
+    console.error('[ensure-builds] --framework-only 与 --claw-only 不能同时使用。');
+    process.exit(1);
+  }
+
+  const builtFramework = clawOnly ? false : ensureFrameworkBuild();
+  if (frameworkOnly) {
+    if (!builtFramework) console.log('[ensure-builds] AgentDev 框架 dist 均为最新，跳过编译。');
+    return;
+  }
+
+  const { builtLf, builtFeat } = ensureClawBuilds();
   if (!builtFramework && !builtLf && !builtFeat) console.log('[ensure-builds] 本地构建产物均为最新，跳过编译。');
 }
 
