@@ -1020,6 +1020,11 @@ app.post('/api/agents/:agentId/user-turn', express.json(), async (req, res, next
       ...(Array.isArray(req.body?.capabilityActivations)
         ? { capabilityActivations: req.body.capabilityActivations.filter((a) => typeof a === 'string') }
         : {}),
+      // 随消息流动的自由元数据（user-turn 契约的 metadata 字段），与上面的
+      // metadata（操作元数据）无关：框架只透传不解释
+      ...(req.body?.metadata && typeof req.body.metadata === 'object' && !Array.isArray(req.body.metadata)
+        ? { turnMetadata: req.body.metadata }
+        : {}),
       ...metadata,
     });
     res.json({ ...result, ...metadata, operationId: metadata.operationId || null });

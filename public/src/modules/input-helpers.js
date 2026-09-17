@@ -155,6 +155,27 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   // 激活通知（skill pill 等）随消息流动：一次取用，槽位直投 / Thread
   // Inbox 兜底共用；全部失败时归还，重试仍携带
   let capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
+  // 会话引用随消息流动（一次性附件语义，与 persistent 提交同款）：
+  // consume 取走 pill，所有失败路径归还。Thread Inbox 不透传 user-turn
+  // metadata，带引用的提交与图片同语义显式拒绝（引用保留）。
+  let sessionRefs = [];
+  if (window.SessionReference?.peek?.()?.length > 0 && threadRoute.route === 'thread') {
+    window.ClawSlash?.restoreActivations?.(capabilityActivations);
+    if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+      ClawToast.show({
+        id: `slot-ref-unsupported-${requestId}`,
+        status: 'error',
+        title: currentLanguage === 'zh'
+          ? '线程会话暂不支持会话引用：请在普通对话（非线程宿主）中使用'
+          : 'Session references are not supported in thread-hosted sessions; use a regular session',
+        autoDismiss: 5000,
+      });
+    }
+    return;
+  }
+  if (threadRoute.route === 'direct') {
+    sessionRefs = window.SessionReference?.consume?.() || [];
+  }
 
   if (threadRoute.route === 'thread' && input.trim()) {
     if (hasImages) {
@@ -166,19 +187,25 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
     return;
   }
 
+  const turnMetadata = sessionRefs.length > 0
+    ? { 'session-reference': sessionRefs }
+    : null;
+
   try {
     const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         requestId,
-        input,
+        // 引用-only 消息给空文本占位（与 persistent 提交的 text||' ' 一致）
+        input: input || (turnMetadata ? ' ' : input),
         response: {
           kind: 'text',
-          text: input,
+          text: input || (turnMetadata ? ' ' : input),
           payload: {
             ...(images.length > 0 ? { images } : {}),
             ...(capabilityActivations?.length ? { capabilityActivations } : {}),
+            ...(turnMetadata ? { metadata: turnMetadata } : {}),
           },
         },
       }),
@@ -224,23 +251,31 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
     // 兜底落 Thread Inbox，指令不丢，head 就绪后由服务端投递。
     // 带图片时不兜底（inbox 不支持附件），保留输入供用户重试。
     if ((threadRoute.route === 'direct' && threadRoute.thread) && input.trim() && !hasImages) {
+      // Thread Inbox 契约不携带 user-turn metadata：已 consume 的引用归还
+      window.SessionReference?.restore?.(sessionRefs);
+      sessionRefs = [];
       await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey, capabilityActivations });
     } else {
-      // 无兜底路径：归还激活，输入保留供重试
+      // 无兜底路径：归还激活与引用，输入保留供重试
       window.ClawSlash?.restoreActivations?.(capabilityActivations);
+      window.SessionReference?.restore?.(sessionRefs);
     }
   } catch (e) {
     console.error('提交输入失败:', e);
     // 网络层失败的同款兜底：活跃线程的指令改走 Thread Inbox
     if ((threadRoute.route === 'direct' && threadRoute.thread) && input.trim() && !hasImages) {
       try {
+        window.SessionReference?.restore?.(sessionRefs);
+        sessionRefs = [];
         await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey, capabilityActivations });
       } catch {
         // Thread Inbox 也不可用：保留输入文本与激活，用户可重试
         window.ClawSlash?.restoreActivations?.(capabilityActivations);
+        window.SessionReference?.restore?.(sessionRefs);
       }
     } else {
       window.ClawSlash?.restoreActivations?.(capabilityActivations);
+      window.SessionReference?.restore?.(sessionRefs);
     }
   }
 }

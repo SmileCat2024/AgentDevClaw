@@ -56,6 +56,7 @@ export async function deliverUserInput(
     source,
     sourceRef,
     capabilityActivations,
+    turnMetadata,
   } = {},
   { integration = getThreadIntegration(), fetchImpl = fetch } = {},
 ) {
@@ -75,6 +76,7 @@ export async function deliverUserInput(
       source,
       sourceRef,
       ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
+      ...(turnMetadata ? { turnMetadata } : {}),
     }, { fetchImpl });
   }
 
@@ -95,6 +97,12 @@ export async function deliverUserInput(
     ...(normalizedImages.length > 0 ? { images: normalizedImages } : {}),
     ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
   });
+  // Thread Inbox 的 command 契约不携带 user-turn metadata：带 turnMetadata 的
+  // 输入转入线程域时其自由元数据会丢弃——显式日志而非静默（消费方如
+  // session-reference 引用会失效，前端有同款快路径拦截，此处是竞态兜底）
+  if (turnMetadata && typeof turnMetadata === 'object' && Object.keys(turnMetadata).length > 0) {
+    console.warn('[input-gateway] thread-routed turn dropped user-turn metadata:', Object.keys(turnMetadata));
+  }
 
   // 竞态闭合：路由判定与 append 之间 succession 可能已完成（advanceHead
   // 已清挡板、applySessionSuccession 已投递过一轮）——补一次投递尝试。

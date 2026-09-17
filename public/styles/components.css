@@ -11587,3 +11587,203 @@ body[data-theme="light"] .rcm-tunnel-diag summary { color: var(--text-secondary)
 .feature-card-badges .fs-list-add,
 .hooks-section-header .fs-list-add { align-self: center; }
 
+
+/* ── Session reference（会话引用：+ 菜单 / pill / 弹窗 / 拖拽） ────── */
+
+/* + 号附件菜单 popover（锚定 .persistent-input-toolbar-left，位于 + 号上方） */
+.persistent-input-toolbar-left { position: relative; }
+.attach-menu-popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 60;
+  min-width: 132px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary, rgba(30, 30, 36, 0.98));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.attach-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.attach-menu-item:hover { background: var(--hover-bg); }
+.attach-menu-item svg { color: var(--text-secondary); flex-shrink: 0; }
+
+/* 引用 pill（附件预览区内，与图片缩略图同排） */
+.session-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  height: 56px;
+  padding: 0 26px 0 10px;
+  position: relative;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.session-ref-chip svg { color: var(--text-secondary); flex-shrink: 0; }
+.session-ref-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.session-ref-chip-meta { color: var(--text-secondary); flex-shrink: 0; }
+.session-ref-chip-remove {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px;
+}
+.session-ref-chip-remove:hover { color: var(--text-primary); }
+
+/* 拖拽悬停高亮（会话拖入 composer 投放区） */
+.user-input-card.session-ref-drop-target {
+  outline: 2px dashed var(--accent-color, #4f8cff);
+  outline-offset: -2px;
+}
+
+/* 乐观气泡上的引用 chips */
+.message-session-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.session-ref-chip.is-echo { height: auto; padding: 3px 10px; border-radius: 999px; }
+
+/* 会话选择弹窗 */
+.session-ref-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.session-ref-picker {
+  width: min(560px, 92vw);
+  max-height: min(640px, 84vh);
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary, #1e1e24);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.session-ref-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+}
+.session-ref-picker-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.session-ref-picker-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.session-ref-picker-close:hover { background: var(--hover-bg); color: var(--text-primary); }
+.session-ref-picker-search {
+  margin: 0 16px 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.session-ref-picker-search:focus { outline: none; border-color: var(--accent-color, #4f8cff); }
+.session-ref-picker-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.session-ref-picker-empty {
+  padding: 28px 0;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.session-ref-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.session-ref-item:hover { background: var(--hover-bg); }
+.session-ref-item:has(input:checked) { border-color: var(--accent-color, #4f8cff); background: var(--hover-bg); }
+.session-ref-item.is-current { opacity: 0.5; cursor: not-allowed; }
+.session-ref-item input { margin-top: 3px; accent-color: var(--accent-color, #4f8cff); flex-shrink: 0; }
+.session-ref-item-body { min-width: 0; flex: 1; }
+.session-ref-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-ref-item-current { color: var(--text-secondary); font-weight: 400; }
+.session-ref-item-meta { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+.session-ref-item-dir { font-size: 11px; color: var(--text-secondary); opacity: 0.8; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-ref-item-preview {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.session-ref-picker-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-color);
+}
+.session-ref-picker-cancel,
+.session-ref-picker-confirm {
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+}
+.session-ref-picker-confirm { border-color: var(--accent-color, #4f8cff); color: var(--accent-color, #4f8cff); }
+.session-ref-picker-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
+.session-ref-picker-confirm:not(:disabled):hover { background: var(--hover-bg); }
+.session-ref-picker-cancel:hover { background: var(--hover-bg); }

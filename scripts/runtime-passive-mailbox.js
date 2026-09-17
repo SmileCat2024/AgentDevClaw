@@ -81,6 +81,9 @@ export function createPassiveMailboxLoop(ctx) {
         ...(Array.isArray(input.capabilityActivations) && input.capabilityActivations.length > 0
           ? { capabilityActivations: input.capabilityActivations.filter((a) => typeof a === 'string') }
           : {}),
+        ...(input.metadata && typeof input.metadata === 'object' && Object.keys(input.metadata).length > 0
+          ? { metadata: input.metadata }
+          : {}),
       });
       // Serial consumption: don't poll again until this envelope settles.
       await ctx.callArbiter.waitForCompletion(entry.id);

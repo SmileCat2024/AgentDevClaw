@@ -82,6 +82,73 @@ function _storeVisibleSessionInputDraft(root = document) {
   _storeSessionInputDraft(focused || populated || textareas[0]);
 }
 
+// ── 附件菜单（图片 / 会话引用） ─────────────────────────────────
+
+let _attachMenuEl = null;
+
+function closeAttachMenu() {
+  if (_attachMenuEl) {
+    _attachMenuEl.remove();
+    _attachMenuEl = null;
+  }
+  document.removeEventListener('mousedown', _attachMenuOutsideHandler);
+}
+
+function toggleAttachMenu(event) {
+  event.stopPropagation();
+  if (_attachMenuEl) {
+    closeAttachMenu();
+    return;
+  }
+  const zh = currentLanguage === 'zh';
+  const menu = document.createElement('div');
+  menu.className = 'attach-menu-popover';
+  menu.innerHTML = ''
+    + '<button class="attach-menu-item" type="button" data-attach-action="image">'
+    + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>'
+    + '<span>' + (zh ? '图片' : 'Image') + '</span>'
+    + '</button>'
+    + '<button class="attach-menu-item" type="button" data-attach-action="session">'
+    + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>'
+    + '<span>' + (zh ? '会话' : 'Session') + '</span>'
+    + '</button>';
+  const btn = document.getElementById('attach-image-btn');
+  // 锚在 + 号的直接父级（toolbar 左区，CSS position:relative 定位上下文）；
+  // .user-input-card 与更外层容器都不是 positioned 元素，锚错层级会让
+  // absolute 定位的 popover 贴到整个输入容器边缘
+  const anchor = btn?.closest('.persistent-input-toolbar-left') || document.body;
+  anchor.appendChild(menu);
+  _attachMenuEl = menu;
+
+  menu.addEventListener('click', (e) => {
+    const item = e.target.closest('[data-attach-action]');
+    if (!item) return;
+    const action = item.dataset.attachAction;
+    closeAttachMenu();
+    if (action === 'image') {
+      document.getElementById('image-file-input')?.click();
+    } else if (action === 'session') {
+      window.SessionReference?.openPicker?.();
+    }
+  });
+  // 点击菜单外任意处关闭（下一 tick 起生效，避免吞掉本次打开点击）
+  setTimeout(() => {
+    document.addEventListener('mousedown', _attachMenuOutsideHandler);
+  }, 0);
+}
+
+function _attachMenuOutsideHandler(event) {
+  if (!_attachMenuEl) {
+    document.removeEventListener('mousedown', _attachMenuOutsideHandler);
+    return;
+  }
+  if (event.target instanceof Node && _attachMenuEl.contains(event.target)) return;
+  // + 按钮自身的点击交给 toggleAttachMenu（关闭语义），不在此处理
+  if (event.target instanceof Node && event.target.closest && event.target.closest('#attach-image-btn')) return;
+  closeAttachMenu();
+  document.removeEventListener('mousedown', _attachMenuOutsideHandler);
+}
+
 // ── 显示模式判定（行为契约 §3 九级优先级矩阵）─────────────────────────────
 //
 // "什么状态决定什么模式"是契约，判定代码结构不是。本函数是九级优先级的
@@ -177,8 +244,9 @@ function buildComposerCard() {
   attachBtn.className = 'persistent-icon-btn';
   attachBtn.id = 'attach-image-btn';
   attachBtn.type = 'button';
-  attachBtn.onclick = function() { document.getElementById('image-file-input').click(); };
-  attachBtn.title = currentLanguage === 'zh' ? '添加图片' : 'Attach Image';
+  // + 号是附件菜单入口（图片 / 会话引用）：点击弹出 popover，不再直连文件选择
+  attachBtn.onclick = function(event) { toggleAttachMenu(event); };
+  attachBtn.title = currentLanguage === 'zh' ? '添加附件' : 'Attach';
   attachBtn.innerHTML = _COMPOSER_ATTACH_SVG;
   left.appendChild(fileInput);
   left.appendChild(attachBtn);
@@ -333,6 +401,9 @@ function syncPersistentComposerSessionCard(container) {
   if (oldKey === newKey) return false;
   if (oldKey) _sessionInputCache[oldKey] = ta.value || '';
   ta.dataset.sessionKey = newKey || '';
+  // 会话引用按 sessionKey 隔离存储：切换后按新 key 重渲染附件预览，
+  // 否则上一会话的引用 pill 残留显示。
+  window.SessionReference?.notify?.();
   if (!_restoreSessionInputDraft(ta, newKey)) {
     ta.value = '';
     autoResize(ta);

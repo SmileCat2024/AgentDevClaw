@@ -15,6 +15,7 @@ describe('persistent input interrupt precedence', () => {
     };
     const ctx = createFrontendSandbox({
       document: { getElementById: () => button },
+      _pendingImages: [],
       _voiceRecording: true,
       _voiceStopping: false,
       _voiceTranscribing: false,
@@ -30,6 +31,68 @@ describe('persistent input interrupt precedence', () => {
     assert.equal(interruptCalls, 1);
     assert.equal(stopRecordingCalls, 0);
     assert.equal(ctx._voicePendingSend, false);
+  });
+
+  it('sends instead of interrupting when the composer holds text', () => {
+    // 新语义：runtime calling 中按钮显示 stop，但输入框有内容时点击 = 发送
+    //（user-turn 由 ViewerWorker 排队），仅空输入才解释为中断。
+    let interruptCalls = 0;
+    let submitCalls = 0;
+    const classes = new Set(['is-stop']);
+    const button = {
+      classList: {
+        contains: (name) => classes.has(name),
+      },
+    };
+    const textarea = { value: '  继续刚才的任务  ' };
+    const ctx = createFrontendSandbox({
+      document: { getElementById: (id) => (id === 'input-persistent' ? textarea : button) },
+      _pendingImages: [],
+      _voiceRecording: false,
+      _voiceStopping: false,
+      _voiceTranscribing: false,
+      _voicePendingSend: false,
+      interruptAgent: () => { interruptCalls += 1; },
+      stopVoiceRecording: () => {},
+      submitQueuedInput() { submitCalls += 1; },
+    });
+    const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+    ctx.run(sourceBetween(source, 'function onPersistentBtnClick()', 'function _setActionBtnStop()'));
+    ctx.run('let _submitInFlight = false; onPersistentBtnClick();');
+
+    assert.equal(interruptCalls, 0);
+    assert.equal(submitCalls, 1);
+  });
+
+  it('sends instead of interrupting when only session references are attached', () => {
+    // 引用-only 消息（空文本 + 引用 pill）同样走发送而非中断。
+    let interruptCalls = 0;
+    let submitCalls = 0;
+    const classes = new Set(['is-stop']);
+    const button = {
+      classList: {
+        contains: (name) => classes.has(name),
+      },
+    };
+    const textarea = { value: '' };
+    const ctx = createFrontendSandbox({
+      document: { getElementById: (id) => (id === 'input-persistent' ? textarea : button) },
+      _pendingImages: [],
+      _voiceRecording: false,
+      _voiceStopping: false,
+      _voiceTranscribing: false,
+      _voicePendingSend: false,
+      window: { SessionReference: { peek: () => [{ agentId: 'a', sessionId: 's' }] } },
+      interruptAgent: () => { interruptCalls += 1; },
+      stopVoiceRecording: () => {},
+      submitQueuedInput() { submitCalls += 1; },
+    });
+    const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+    ctx.run(sourceBetween(source, 'function onPersistentBtnClick()', 'function _setActionBtnStop()'));
+    ctx.run('let _submitInFlight = false; onPersistentBtnClick();');
+
+    assert.equal(interruptCalls, 0);
+    assert.equal(submitCalls, 1);
   });
 });
 

@@ -325,7 +325,7 @@ function appendNewMessages(newMessages, startIndex) {
 // isConnected 清理兜底。排队路径（queued）已有排队气泡，不走回显。
 let _optimisticEchoes = []; // { text, el }
 
-function pushOptimisticUserEcho({ text, images } = {}) {
+function pushOptimisticUserEcho({ text, images, sessionReferences } = {}) {
   if (typeof isChatSurfaceActive !== 'function' || !isChatSurfaceActive() || !container) return;
   const echoText = (typeof text === 'string' && text.length > 0) ? text : ' ';
   const row = document.createElement('div');
@@ -333,7 +333,8 @@ function pushOptimisticUserEcho({ text, images } = {}) {
   row.innerHTML =
     '<div class="message-meta"><div class="role-badge">user</div></div>'
     + '<div class="message-content markdown-body">' + renderMarkdown(echoText) + '</div>'
-    + renderUserImages(images);
+    + renderUserImages(images)
+    + renderSessionReferenceChips(sessionReferences);
   runWithSuppressedChatViewportObservers(() => {
     const emptyState = container.querySelector('.empty-state');
     if (emptyState) emptyState.remove();
@@ -1009,6 +1010,24 @@ function renderUserImages(images) {
       '</div>';
   }).join('');
   return '<div class="message-images">' + thumbs + '</div>';
+}
+
+/**
+ * 乐观气泡上的引用 chips（与图片缩略图并列）。引用只在发送瞬间随
+ * user-turn metadata 流动，服务端消息不持久化引用字段——chips 不参与
+ * 全量重渲染（重渲染后由 session-reference reminder 呈现引用事实）。
+ */
+function renderSessionReferenceChips(references) {
+  if (!Array.isArray(references) || references.length === 0) return '';
+  const chips = references.map(function(ref) {
+    const label = ref.title || ref.sessionId || '';
+    const meta = (ref.agentId || '') + '/' + (ref.sessionType || 'main');
+    return '<div class="session-ref-chip is-echo" title="' + escapeHtml(meta + ' · ' + (ref.sessionId || '')) + '">'
+      + '<span class="session-ref-chip-label">' + escapeHtml(label) + '</span>'
+      + '<span class="session-ref-chip-meta">' + escapeHtml(meta) + '</span>'
+      + '</div>';
+  }).join('');
+  return '<div class="message-session-refs">' + chips + '</div>';
 }
 
 window.openImageZoom = function(src) {

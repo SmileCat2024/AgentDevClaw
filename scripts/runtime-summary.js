@@ -383,6 +383,10 @@ export function createSummaryHandlers(ctx) {
       const capabilityActivations = Array.isArray(response.payload?.capabilityActivations)
         ? response.payload.capabilityActivations.filter((a) => typeof a === 'string' && a)
         : [];
+      // user-turn 的自由元数据（lease 响应 payload 原样随行；框架只透传不解释）
+      const metadata = (response.payload?.metadata && typeof response.payload.metadata === 'object' && !Array.isArray(response.payload.metadata))
+        ? response.payload.metadata
+        : null;
       if (!text && images.length === 0) {
         return { kind: 'continue' };
       }
@@ -394,6 +398,7 @@ export function createSummaryHandlers(ctx) {
         text: text || ' ',
         ...(images.length > 0 ? { images } : {}),
         ...(capabilityActivations.length > 0 ? { capabilityActivations } : {}),
+        ...(metadata ? { metadata } : {}),
       };
     }
 

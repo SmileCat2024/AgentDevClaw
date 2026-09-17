@@ -5,6 +5,11 @@
  * trim 投影视图）→ 某轮全量（session_read_turn）。纯读取视图：不落盘任何
  * 中间材料文件，每次调用对源会话快照现场投影。
  *
+ * 输入框引用联动：user-turn 的 metadata['session-reference']（条目：
+ * {agentId, sessionId, title?, sessionType?}）在 CallStart 注入一条
+ * reminder，提示 AI 按三级读取协议消费被引用会话。引用随消息一次性流动，
+ * feature 不持有引用状态。
+ *
  * 数据访问走 Claw server：/protoclaw/session_directory（跨 agent 会话目录，
  * 只读各 agent 的 index.json 元数据）与 /protoclaw/session_record（规范化
  * 消息，含远程命名空间转发）。投影复用框架 trim 引擎的纯函数
@@ -13,6 +18,9 @@
  */
 
 import type { AgentFeature, Tool } from '@agentdevjs/core';
+import type { CallStartContext } from '@agentdevjs/core';
+import { CoreLifecycle } from '@agentdevjs/core';
+import type { HookDeclarations } from '@agentdevjs/core';
 import { buildTrimmedSeedMessages, normalizeExportPolicy } from '@agentdevjs/core';
 import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
@@ -310,6 +318,35 @@ function truncateText(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}…`;
 }
 
+/**
+ * 已验证的会话引用条目（injectSessionReferences 的注入输入）。
+ */
+export interface VerifiedSessionReference {
+  agentId: string;
+  sessionId: string;
+  title: string;
+  sessionType: string;
+  availability: 'ok' | 'missing' | 'unknown';
+}
+
+/**
+ * 渲染引用注入 reminder。标题由 AI 自动生成，仅供定位参考——文案明确
+ * 提示不能代表会话真实内容与方向，以 session_read_overview 实际内容为准。
+ */
+export function renderReferenceReminder(references: VerifiedSessionReference[]): string {
+  const lines = references.map((ref) => {
+    const head = `- ${ref.sessionId}${ref.title ? `「${truncateText(ref.title, 80)}」` : ''} (${ref.agentId}/${ref.sessionType})`;
+    if (ref.availability === 'missing') return `${head} — 已不存在，无法读取，请告知用户该引用已失效`;
+    if (ref.availability === 'unknown') return `${head} — 读取入口暂不可用，尝试读取失败时请告知用户`;
+    return head;
+  });
+  return [
+    '[会话引用] 用户在本条消息中引用了以下会话（标题由 AI 自动生成，仅供参考，不能代表会话真实内容与方向，请以实际读取内容为准）：',
+    ...lines,
+    '建议先用 session_read_overview 阅读概览，按需用 session_read_turn 深入相关轮次；与当前任务无关的内容可忽略。',
+  ].join('\n');
+}
+
 function formatDirectoryEntryText(entry: Record<string, unknown>): string[] {
   const title = cleanText(entry.title);
   const agentId = cleanText(entry.agentId);
@@ -330,6 +367,15 @@ function formatDirectoryEntryText(entry: Record<string, unknown>): string[] {
 
 export class SessionReferenceFeature implements AgentFeature {
   readonly name = 'session-reference';
+
+  /**
+   * 输入框引用联动的消费入口：CallStart 读 metadata['session-reference']
+   * 并注入 reminder。observe 语义——注入失败不阻断用户消息。
+   */
+  static hooks: HookDeclarations = {
+    injectSessionReferences: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+  };
+
   private readonly agentId: string;
   private readonly serverOrigin: string;
 
@@ -340,6 +386,57 @@ export class SessionReferenceFeature implements AgentFeature {
     this.serverOrigin = cleanText(config.serverOrigin)
       || process.env.PROTOCLAW_SERVER_ORIGIN
       || 'http://127.0.0.1:1420';
+  }
+
+  /**
+   * 解析并注入本条消息携带的会话引用（metadata['session-reference']）。
+   * 引用随消息一次性消费：注入 reminder 后 metadata 即完成使命，
+   * feature 不保留任何引用状态。
+   */
+  async injectSessionReferences(ctx: CallStartContext): Promise<void> {
+    const raw = (ctx.metadata as Record<string, unknown> | undefined)?.['session-reference'];
+    const entries = Array.isArray(raw)
+      ? raw.filter((item): item is Record<string, unknown> =>
+          !!item && typeof item === 'object' && cleanText((item as Record<string, unknown>).sessionId) !== '')
+      : [];
+    if (entries.length === 0) return;
+
+    const verified = await Promise.all(entries.map(async (entry) => {
+      const agentId = cleanText(entry.agentId) || this.agentId;
+      const sessionId = cleanText(entry.sessionId);
+      const availability = await this.checkAvailability(agentId, sessionId);
+      return {
+        agentId,
+        sessionId,
+        title: cleanText(entry.title),
+        sessionType: cleanText(entry.sessionType) || 'main',
+        availability,
+      };
+    }));
+
+    const text = renderReferenceReminder(verified);
+    const turn = typeof (ctx.agent as any)?._callIndex === 'number'
+      ? (ctx.agent as any)._callIndex
+      : 0;
+    ctx.context.addSystemMessage(text, turn, this.name, 'reminder');
+  }
+
+  /**
+   * 引用目标的存在性验证。404 → 'missing'（reminder 中明示）；其他失败
+   * （网络 / 服务错误）→ 'unknown'，不把基础设施故障误报为会话不存在。
+   */
+  private async checkAvailability(agentId: string, sessionId: string): Promise<'ok' | 'missing' | 'unknown'> {
+    const params = new URLSearchParams({ agentId, sessionId });
+    try {
+      const resp = await fetch(`${this.serverOrigin}/protoclaw/session_record?${params}`, {
+        headers: internalAuthHeaders(),
+      });
+      if (resp.ok) return 'ok';
+      if (resp.status === 404) return 'missing';
+      return 'unknown';
+    } catch {
+      return 'unknown';
+    }
   }
 
   getTools(): Tool[] {

@@ -346,7 +346,18 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
       return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
     const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
-    const raw = await fs.readFile(sessionPath, 'utf8');
+    let raw;
+    try {
+      raw = await fs.readFile(sessionPath, 'utf8');
+    } catch (error) {
+      // 会话文件不存在 = 404（消费方如 session-reference 的存在性校验依赖
+      // 404 区分「已删除」与「服务故障」；落到全局错误处理会变 500）
+      if (error?.code === 'ENOENT') {
+        res.status(404).json({ error: `session not found: ${agentId}/${sessionId}` });
+        return;
+      }
+      throw error;
+    }
     const parsed = JSON.parse(raw);
     const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
     const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);

@@ -61,6 +61,9 @@ export async function submitUserTurn({
   source,
   sourceRef,
   capabilityActivations,
+  // 随消息流动的自由元数据（user-turn 契约的 metadata 字段，框架只透传
+  // 不解释）；此处命名 turnMetadata 以区别于本函数内部的 operation metadata。
+  turnMetadata,
   operationId,
   requestId,
   idempotencyKey,
@@ -117,6 +120,9 @@ export async function submitUserTurn({
         ...(sourceRef ? { sourceRef } : {}),
         ...(Array.isArray(capabilityActivations) && capabilityActivations.length > 0
           ? { capabilityActivations }
+          : {}),
+        ...(turnMetadata && typeof turnMetadata === 'object' && Object.keys(turnMetadata).length > 0
+          ? { metadata: turnMetadata }
           : {}),
       }),
     };

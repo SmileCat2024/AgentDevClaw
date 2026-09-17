@@ -123,20 +123,33 @@ window.getThreadForSession = (agentId, sessionId) => {
   return window.ClawThreads.sessionIndex[`${agentId}::${sessionId}`] || null;
 };
 
-/** 当前激活会话（读全局宿主 agent 记录；无记录时返回 null） */
+/**
+ * 当前激活会话：以用户当前查看的 runtime/session 绑定为准。
+ * 宿主的 active_workspace_session_id 会被 IM、CLI、coder 接力等其他入口
+ * 改写，不能作为当前浏览器输入目标；共享 runtime 下尤其如此。
+ */
 function _currentActiveSession() {
   try {
-    if (typeof getCurrentHostAgentRecord === 'function') {
-      const agent = getCurrentHostAgentRecord();
-      if (agent) {
-        return {
-          agentId: agent.id || '',
-          sessionId: agent.active_workspace_session_id || agent.workspace_sessions?.activeSessionId || '',
-        };
-      }
+    const host = typeof getCurrentHostAgentRecord === 'function'
+      ? getCurrentHostAgentRecord()
+      : null;
+    const runtimeId = String(
+      typeof currentRuntimeAgentId !== 'undefined' ? currentRuntimeAgentId || '' : '',
+    ).trim();
+    const sessionId = runtimeId && typeof getRuntimeWorkspaceSessionId === 'function'
+      ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
+      : '';
+    if (host?.id && sessionId) {
+      return { agentId: host.id, sessionId };
+    }
+    if (host) {
+      return {
+        agentId: host.id || '',
+        sessionId: host.active_workspace_session_id || host.workspace_sessions?.activeSessionId || '',
+      };
     }
   } catch {
-    // getCurrentHostAgentRecord 在 app-main 加载前不可用：视为无激活会话
+    // 输入路由在 app-main 身份尚未完成初始化时退化为 direct。
   }
   return null;
 }

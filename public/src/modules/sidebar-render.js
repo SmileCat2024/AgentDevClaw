@@ -20,6 +20,32 @@
 // Keys are stable project identities so state persists across re-renders.
 const _collapsedProjectGroups = new Set();
 
+/**
+ * 侧栏运行中会话的拖拽源（→ 输入框会话引用）：dragstart 把会话身份写入
+ * 专用 MIME，投放判定与状态管理都在 session-reference-picker 模块。
+ * agentId 取模板写入的 data-ctx-ns（本地条目 = 宿主 agentId，与 session_record
+ * 寻址同源）；不查 allAgents——其字面量字段对 child 会话并不可靠，且远程
+ * 条目不在其中（远程禁拖，见 renderItem 的 draggable 条件）。
+ */
+window.onSidebarSessionDragStart = function(event, el) {
+  const ref = window.SessionReference;
+  if (!ref || !event.dataTransfer) return;
+  const sessionId = el?.dataset?.ctxSessionId || '';
+  const agentId = String(el?.dataset?.ctxNs || '').trim();
+  if (!sessionId || !agentId) { event.preventDefault(); return; }
+  // 条目名可能带过渡标签（"正在关闭"等），只取首文本节点作为标题
+  const nameEl = el?.querySelector('.agent-name');
+  const titleNode = nameEl?.childNodes?.[0];
+  const payload = {
+    agentId,
+    sessionId,
+    sessionType: 'main',
+    title: (titleNode?.textContent || '').trim(),
+  };
+  event.dataTransfer.setData(ref.MIME, JSON.stringify(payload));
+  event.dataTransfer.effectAllowed = 'copy';
+};
+
 // Tracks collapsed state of category groups in the sidebar (系统空间, 工作群, etc.).
 // Keyed by the .agent-group element id so state persists across re-renders.
 const _collapsedCategoryGroups = new Set();
@@ -85,6 +111,7 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
         data-agent-prebuilt="false"
         data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
         data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.hostNamespaceId || entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
+        ${entry.source === 'remote' ? '' : 'draggable="true" ondragstart="onSidebarSessionDragStart(event, this)"'}
       >
         <div class="agent-line">
           <span class="agent-status-dot"></span>

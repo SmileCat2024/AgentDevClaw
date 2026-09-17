@@ -1,6 +1,6 @@
 /**
- * SessionReferenceFeature 纯函数单测：概览渲染（call 边界截断 / todo 语义锚点）、
- * 某轮全量渲染。无 IO、无 mock——渲染逻辑全部为模块级纯函数。
+ * SessionReferenceFeature 单测：概览渲染（call 边界截断 / todo 语义锚点）、
+ * 某轮全量渲染、引用注入 reminder（纯函数 + hook 行为，HTTP 面 mock fetch）。
  */
 
 import { describe, it } from 'node:test';
@@ -10,6 +10,8 @@ import {
   renderSeedOverview,
   extractTodoEvents,
   renderTurnDetail,
+  renderReferenceReminder,
+  SessionReferenceFeature,
 } from '../src/index.js';
 
 // ── renderSeedOverview（trim 视图概览） ───────────────────────────
@@ -173,5 +175,126 @@ describe('renderTurnDetail', () => {
   it('returns null for an unknown turn', () => {
     assert.equal(renderTurnDetail(messages as any, 99, { agentId: 'a', sessionId: 's' }), null);
     assert.equal(renderTurnDetail([] as any, 0, { agentId: 'a', sessionId: 's' }), null);
+  });
+});
+
+// ── renderReferenceReminder（引用注入 reminder） ─────────────────
+
+describe('renderReferenceReminder', () => {
+  it('renders id + title + agent/sessionType with the AI-title disclaimer', () => {
+    const text = renderReferenceReminder([
+      { agentId: 'programming-helper', sessionId: 'session-1789456315259-15c389', title: '修复登录超时', sessionType: 'main', availability: 'ok' },
+      { agentId: 'agent-studio', sessionId: 'session-1789431188614-41ceab', title: '重构导出逻辑', sessionType: 'main', availability: 'ok' },
+    ]);
+    assert.match(text, /^\[会话引用\] 用户在本条消息中引用了以下会话/);
+    assert.match(text, /标题由 AI 自动生成，仅供参考，不能代表会话真实内容与方向/);
+    assert.match(text, /- session-1789456315259-15c389「修复登录超时」 \(programming-helper\/main\)/);
+    assert.match(text, /- session-1789431188614-41ceab「重构导出逻辑」 \(agent-studio\/main\)/);
+    assert.match(text, /session_read_overview/);
+    assert.match(text, /session_read_turn/);
+  });
+
+  it('marks missing sessions explicitly instead of silently dropping them', () => {
+    const text = renderReferenceReminder([
+      { agentId: 'a', sessionId: 's-1', title: '', sessionType: 'main', availability: 'missing' },
+    ]);
+    assert.match(text, /- s-1 \(a\/main\) — 已不存在/);
+  });
+
+  it('distinguishes unverified availability from missing', () => {
+    const text = renderReferenceReminder([
+      { agentId: 'a', sessionId: 's-2', title: 't', sessionType: 'main', availability: 'unknown' },
+    ]);
+    assert.match(text, /读取入口暂不可用/);
+    assert.doesNotMatch(text, /已不存在/);
+  });
+});
+
+// ── injectSessionReferences（CallStart hook 行为） ────────────────
+
+describe('injectSessionReferences', () => {
+  const realFetch = globalThis.fetch;
+
+  it('injects one reminder for metadata references and consumes them once', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      calls.push(String(url));
+      return { ok: true, status: 200, json: async () => ({ messages: [] }) } as any;
+    }) as any;
+    try {
+      const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      const injected: Array<{ content: string; turn: number; source?: string; tag?: string }> = [];
+      const ctx: any = {
+        metadata: {
+          'session-reference': [
+            { agentId: 'programming-helper', sessionId: 's-1', title: '修复登录超时', sessionType: 'main' },
+            { agentId: 'agent-studio', sessionId: 's-2' },
+          ],
+        },
+        agent: { _callIndex: 3 },
+        context: {
+          addSystemMessage(content: string, turn: number, source?: string, tag?: string) {
+            injected.push({ content, turn, source, tag });
+          },
+        },
+      };
+
+      await feature.injectSessionReferences(ctx);
+
+      assert.equal(injected.length, 1);
+      assert.equal(injected[0].turn, 3);
+      assert.equal(injected[0].source, 'session-reference');
+      assert.equal(injected[0].tag, 'reminder');
+      assert.match(injected[0].content, /s-1「修复登录超时」 \(programming-helper\/main\)/);
+      assert.match(injected[0].content, /s-2 \(agent-studio\/main\)/);
+      // 每个引用验证一次存在性
+      assert.equal(calls.filter((url) => url.includes('session_record')).length, 2);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('is a no-op when the turn carries no references', async () => {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    let added = 0;
+    const ctx: any = {
+      metadata: { 'something-else': [1, 2] },
+      agent: {},
+      context: { addSystemMessage() { added += 1; } },
+    };
+    await feature.injectSessionReferences(ctx);
+    assert.equal(added, 0);
+  });
+
+  it('marks 404 references as missing and tolerates fetch failures', async () => {
+    globalThis.fetch = (async (url: any) => {
+      if (String(url).includes('s-gone')) {
+        return { ok: false, status: 404, json: async () => ({ error: 'not found' }) } as any;
+      }
+      throw new Error('network down');
+    }) as any;
+    try {
+      const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      const injected: string[] = [];
+      const ctx: any = {
+        metadata: {
+          'session-reference': [
+            { agentId: 'a', sessionId: 's-gone' },
+            { agentId: 'a', sessionId: 's-net' },
+            { agentId: 'a' },
+          ],
+        },
+        agent: {},
+        context: { addSystemMessage(content: string) { injected.push(content); } },
+      };
+
+      await feature.injectSessionReferences(ctx);
+
+      assert.equal(injected.length, 1);
+      assert.match(injected[0], /s-gone.*已不存在/);
+      assert.match(injected[0], /s-net.*读取入口暂不可用/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

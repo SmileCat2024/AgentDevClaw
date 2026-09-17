@@ -53,6 +53,42 @@ describe('Claw user-turn contract', () => {
     });
   });
 
+  it('carries free-form turn metadata through to the user-turn body', async () => {
+    const calls = [];
+    const fetchImpl = async (url, options = {}) => {
+      calls.push({ url, options });
+      return jsonResponse({ success: true, delivery: 'queued', id: 'q-1', queueLength: 1 });
+    };
+
+    const turnMetadata = { 'session-reference': [{ agentId: 'programming-helper', sessionId: 'session-1', title: '修复登录超时' }] };
+    await submitUserTurn({
+      agentId: 'agent/a',
+      text: 'with references',
+      source: 'chat-composer',
+      turnMetadata,
+    }, {
+      viewerOrigin: 'http://viewer.test',
+      fetchImpl,
+    });
+
+    assert.deepEqual(JSON.parse(calls[0].options.body).metadata, turnMetadata);
+  });
+
+  it('omits the metadata field when the turn carries none', async () => {
+    const calls = [];
+    const fetchImpl = async (url, options = {}) => {
+      calls.push({ url, options });
+      return jsonResponse({ success: true, delivery: 'queued', id: 'q-1', queueLength: 1 });
+    };
+
+    await submitUserTurn({ agentId: 'agent/a', text: 'plain', source: 'chat-composer' }, {
+      viewerOrigin: 'http://viewer.test',
+      fetchImpl,
+    });
+
+    assert.equal('metadata' in JSON.parse(calls[0].options.body), false);
+  });
+
   it('rejects malformed or missing runtime targets before fetch', async () => {
     let calls = 0;
     await assert.rejects(

@@ -264,7 +264,11 @@ function _renderAttachmentPreview() {
   const previews = _getAttachmentPreviewTargets();
   if (previews.length === 0) return;
   const cards = Array.from(document.querySelectorAll('.user-input-card'));
-  if (_pendingImages.length === 0) {
+  // 引用 pill（session-reference-picker 模块局部状态）与图片缩略图同区渲染
+  const refChipsHtml = (typeof window.SessionReference?.chipsHtml === 'function')
+    ? window.SessionReference.chipsHtml()
+    : '';
+  if (_pendingImages.length === 0 && refChipsHtml === '') {
     previews.forEach(function(preview) {
       preview.style.display = 'none';
       preview.innerHTML = '';
@@ -278,7 +282,7 @@ function _renderAttachmentPreview() {
       '<button class="attachment-remove" type="button" onclick="removePendingImage(' + idx + ')" title="' +
         (currentLanguage === 'zh' ? '移除' : 'Remove') + '">×</button>' +
       '</div>';
-  }).join('');
+  }).join('') + refChipsHtml;
   previews.forEach(function(preview) {
     preview.style.display = 'flex';
     preview.innerHTML = html;
@@ -416,9 +420,14 @@ function onPersistentBtnClick() {
   if (!btn) return;
   if (_submitInFlight) return;         // fetch 进行中：阻止连点（防误触暂停）
   if (btn.classList.contains('is-interrupting')) return;
-  // “停止 Agent”优先于语音按钮状态。录音是独立资源，打断 Agent 不应
-  // 把这次点击改写成“停止录音并发送”，否则会出现二次暂停和录音截断。
-  if (btn.classList.contains('is-stop')) {
+  // 输入框有内容时，按钮的语义是发送，即使 runtime 正在处理上一轮；
+  // user-turn 会由 ViewerWorker 排队。仅空输入时才把 stop 状态解释为中断。
+  // 这也避免轮询状态滞后把一个已空闲 runtime 永久卡在 stop 按钮上。
+  const textarea = document.getElementById('input-persistent');
+  const hasText = !!textarea?.value?.trim();
+  const hasImages = _pendingImages.length > 0;
+  const hasSessionReferences = (window.SessionReference?.peek?.() || []).length > 0;
+  if (btn.classList.contains('is-stop') && !hasText && !hasImages && !hasSessionReferences) {
     interruptAgent();
     return;
   }
@@ -561,7 +570,8 @@ async function submitQueuedInput() {
   const textarea = document.getElementById('input-persistent');
   if (!textarea) return;
   const text = textarea.value.trim();
-  if (!text && _pendingImages.length === 0) return;
+  const sessionReferenceCount = (window.SessionReference?.peek?.() || []).length;
+  if (!text && _pendingImages.length === 0 && sessionReferenceCount === 0) return;
   const targetRuntimeId = currentRuntimeAgentId;
   const targetCacheKey = textarea.dataset.sessionKey || _getSessionInputCacheKey();
 
@@ -571,6 +581,9 @@ async function submitQueuedInput() {
   _setActionBtnStop();
 
   let capabilityActivations = null;
+  // 会话引用快照：try 外声明（catch 归还路径可见；try 内 const 会让 catch
+  // 拿到 ReferenceError 而不是空数组——B1 审查修复）
+  let sessionRefs = [];
   try {
     // 图片就绪：等待后台上传，并把宿主与发送目标不一致的附件转存过去。
     // 任何附件失败都显式中止（输入与预览保留，供用户重试），绝不静默丢弃。
@@ -593,6 +606,14 @@ async function submitQueuedInput() {
         throw new Error(currentLanguage === 'zh'
           ? '会话交接进行中：暂不支持图片输入，请在新会话就绪后重发'
           : 'Session handoff in progress: image input is not supported yet');
+      }
+      // Thread Inbox 不透传 user-turn metadata（引用会静默丢失）：与图片同
+      // 拒绝语义，保留引用 pill 供切换普通会话后使用。线程宿主会话（coder）
+      // 是常态而非"交接中"，提示语按实际场景说明
+      if ((window.SessionReference?.peek?.() || []).length > 0) {
+        throw new Error(currentLanguage === 'zh'
+          ? '线程会话暂不支持会话引用：请在普通对话（非线程宿主）中使用'
+          : 'Session references are not supported in thread-hosted sessions; use a regular session');
       }
       if (!text) throw new Error('empty input');
       capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
@@ -635,6 +656,13 @@ async function submitQueuedInput() {
     }
 
     capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
+    // 会话引用随消息流动（一次性附件语义）：consume 取走 pill，失败时归还。
+    // agent calling 中排队输入的 metadata 由框架排队路径消费（call 间 dequeue
+    // 跳过带 metadata 项，留待 drain / lease 转交投递），无需前端拦截。
+    sessionRefs = window.SessionReference?.consume?.() || [];
+    const turnMetadata = sessionRefs.length > 0
+      ? { 'session-reference': sessionRefs }
+      : null;
     const res = await fetch(`/api/agents/${targetRuntimeId}/user-turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
@@ -643,6 +671,7 @@ async function submitQueuedInput() {
         images: images.length > 0 ? images : undefined,
         source: 'chat-composer',
         ...(capabilityActivations?.length ? { capabilityActivations } : {}),
+        ...(turnMetadata ? { metadata: turnMetadata } : {}),
         operationId: `user-turn:${Date.now()}`,
       })
     });
@@ -696,8 +725,10 @@ async function submitQueuedInput() {
         updateQueueIndicator();
       } else if (targetRuntimeId) {
         // 空闲直投（lease / 即时消费）：乐观回显先上屏，真实消息经
-        // poll 回流后由对账无缝替换；排队路径走上方气泡，不回显
-        window.ClawFW?.pushOptimisticUserEcho?.({ text, images });
+        // poll 回流后由对账无缝替换；排队路径走上方气泡，不回显。
+        // 引用 chips 只随乐观气泡呈现（服务端消息不持久化引用字段，
+        // 引用的持久化产物是随后出现的 session-reference reminder）
+        window.ClawFW?.pushOptimisticUserEcho?.({ text, images, sessionReferences: sessionRefs });
         clearInterruptSuppression(targetRuntimeId);
         _markAgentCallStartedForNotify(targetRuntimeId);
         _agentCallActive.set(targetRuntimeId, true);
@@ -715,9 +746,12 @@ async function submitQueuedInput() {
     }
   } catch (e) {
     console.error('排队输入提交失败:', e);
-    // 消息未发出：归还激活 refs，输入框重试发送时仍携带
+    // 消息未发出：归还激活 refs 与会话引用，输入框重试发送时仍携带
     if (capabilityActivations?.length) {
       window.ClawSlash?.restoreActivations?.(capabilityActivations);
+    }
+    if (sessionRefs?.length) {
+      window.SessionReference?.restore?.(sessionRefs);
     }
     window.ClawToast?.show({
       id: `user-turn-failed-${targetRuntimeId}`,

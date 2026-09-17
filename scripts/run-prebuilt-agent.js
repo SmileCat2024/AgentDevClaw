@@ -1128,6 +1128,9 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
         ...(Array.isArray(handled.capabilityActivations) && handled.capabilityActivations.length > 0
           ? { capabilityActivations: handled.capabilityActivations }
           : {}),
+        ...(handled.metadata && typeof handled.metadata === 'object' && Object.keys(handled.metadata).length > 0
+          ? { metadata: handled.metadata }
+          : {}),
       });
       await this.callArbiter.waitForCompletion(entry.id);
     } catch (error) {

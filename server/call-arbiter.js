@@ -64,11 +64,13 @@ export class CallArbiter {
   }
 
   /**
-    * Enqueue a call envelope and kick the processing loop.
-    *
-    * @param {{ id?: string, source: string, sourceRef?: string, text: string, images?: Array<{base64?:string,mediaType?:string,source?:string}> }} envelope
-    * @returns {object} The envelope with assigned id and status
-    */
+   * Enqueue a call envelope and kick the processing loop.
+   *
+   * @param {{ id?: string, source: string, sourceRef?: string, text: string, images?: Array<{base64?:string,mediaType?:string,source?:string}>, capabilityActivations?: string[], metadata?: Record<string, unknown> }} envelope
+   *   metadata 为随消息流动的自由元数据（user-turn 契约），只随首段传给
+   *   onCall 并最终到达 CallStartContext.metadata（框架只透传不解释）。
+   * @returns {object} The envelope with assigned id and status
+   */
   enqueue(envelope) {
     const hasImages = Array.isArray(envelope.images) && envelope.images.length > 0;
 
@@ -84,6 +86,9 @@ export class CallArbiter {
       ...(Array.isArray(envelope.images) && envelope.images.length > 0 ? { images: envelope.images } : {}),
       ...(Array.isArray(envelope.capabilityActivations) && envelope.capabilityActivations.length > 0
         ? { capabilityActivations: envelope.capabilityActivations }
+        : {}),
+      ...(envelope.metadata && typeof envelope.metadata === 'object' && Object.keys(envelope.metadata).length > 0
+        ? { metadata: envelope.metadata }
         : {}),
     };
     this._queue.push(entry);
@@ -204,6 +209,12 @@ export class CallArbiter {
           ...(Array.isArray(data.input.images) && data.input.images.length > 0
             ? { images: data.input.images }
             : {}),
+          ...(Array.isArray(data.input.capabilityActivations) && data.input.capabilityActivations.length > 0
+            ? { capabilityActivations: data.input.capabilityActivations }
+            : {}),
+          ...(data.input.metadata && typeof data.input.metadata === 'object' && Object.keys(data.input.metadata).length > 0
+            ? { metadata: data.input.metadata }
+            : {}),
         });
         count++;
       } catch {
@@ -312,10 +323,11 @@ export class CallArbiter {
       }
 
       // ── Execute one onCall segment ──
-      // capabilityActivations 只随首段携带：续跑段（force-continuation 等）
-      // 的输入不是新用户消息，激活已由首段消费完毕
+      // capabilityActivations / metadata 只随首段携带：续跑段（force-continuation
+      // 等）的输入不是新用户消息，激活与元数据已由首段消费完毕
       const activations = envelope._segmentCount === 1 ? envelope.capabilityActivations : undefined;
-      const result = await this._agent.onCall(input, envelope.images, activations);
+      const turnMetadata = envelope._segmentCount === 1 ? envelope.metadata : undefined;
+      const result = await this._agent.onCall(input, envelope.images, activations, turnMetadata);
       envelope.result = typeof result === 'string' ? result : '';
 
       // ── Observe the structured call outcome ──

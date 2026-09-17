@@ -552,6 +552,9 @@
        voice-input.js（消费其草稿符号）与 input-render.js/persistent-input.js
        （依赖其组件函数）加载。 -->
   <script src="./src/modules/input-composer.js"></script>
+  <!-- 会话引用（+ 菜单弹窗 / 侧栏拖拽 / pill 状态）；消费方（persistent-input
+       的 _renderAttachmentPreview、input-composer 的 + 菜单）均为运行时解析 -->
+  <script src="./src/modules/session-reference-picker.js"></script>
   <script src="./src/modules/voice-input.js"></script>
   <script src="./src/modules/choice-input.js"></script>
   <script src="./src/modules/auto-title.js"></script>
