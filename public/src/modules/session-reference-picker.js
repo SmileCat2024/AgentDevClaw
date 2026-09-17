@@ -366,5 +366,8 @@ window.SessionReference = {
   openPicker: openSessionReferencePicker,
   // 会话切换（sessionKey 变更）后按新 key 重渲染附件预览
   notify: _notifyPreviewChanged,
+  // 附件类会话态的会话 key 权威实现：图片附件（persistent-input.js 的
+  // _imageBucketKey）复用同一 key 源，"哪个会话"的判定只此一份
+  activeKey: _activeRefKey,
   MIME: SESSION_REF_MIME,
 };

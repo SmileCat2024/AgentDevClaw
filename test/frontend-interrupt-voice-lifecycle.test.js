@@ -15,7 +15,7 @@ describe('persistent input interrupt precedence', () => {
     };
     const ctx = createFrontendSandbox({
       document: { getElementById: () => button },
-      _pendingImages: [],
+      _imageBucket: () => [],
       _voiceRecording: true,
       _voiceStopping: false,
       _voiceTranscribing: false,
@@ -47,7 +47,7 @@ describe('persistent input interrupt precedence', () => {
     const textarea = { value: '  继续刚才的任务  ' };
     const ctx = createFrontendSandbox({
       document: { getElementById: (id) => (id === 'input-persistent' ? textarea : button) },
-      _pendingImages: [],
+      _imageBucket: () => [],
       _voiceRecording: false,
       _voiceStopping: false,
       _voiceTranscribing: false,
@@ -77,7 +77,7 @@ describe('persistent input interrupt precedence', () => {
     const textarea = { value: '' };
     const ctx = createFrontendSandbox({
       document: { getElementById: (id) => (id === 'input-persistent' ? textarea : button) },
-      _pendingImages: [],
+      _imageBucket: () => [],
       _voiceRecording: false,
       _voiceStopping: false,
       _voiceTranscribing: false,

@@ -37,8 +37,26 @@ let _localQueuedInputPending = false;
 let _lastQueueBubbleSignature = '';
 let _submitInFlight = false;       // 发送重入保护：fetch 期间阻止二次提交/中断
 
-// 待发送的图片附件
-let _pendingImages = [];
+// 待发送的图片附件：按会话隔离存储（与 SessionReference 的会话引用同套路）。
+// Map<key, entries[]>，key 复用 window.SessionReference.activeKey()——附件类
+// 会话态的"哪个会话"只此一份权威判定（runtimeId::sessionId 组合，挂载/消费/
+// 渲染三时刻读同一值）。会话 A 挂的图片不出现在会话 B 的输入框，切回 A 恢复；
+// 发送只消费发送时刻捕获的桶，await 期间切换会话不误发新会话的图片。
+const _pendingImageBuckets = new Map(); // key → [entry]
+
+function _imageBucketKey() {
+  return window.SessionReference?.activeKey?.() || 'default';
+}
+
+function _imageBucket() {
+  const key = _imageBucketKey();
+  let bucket = _pendingImageBuckets.get(key);
+  if (!Array.isArray(bucket)) {
+    bucket = [];
+    _pendingImageBuckets.set(key, bucket);
+  }
+  return bucket;
+}
 
 // ── 上次对话结束时间显示 ──────────────────────────────────────────
 let _lastCallFinishTime = 0;
@@ -220,7 +238,7 @@ function _addImageFile(file) {
       console.error('[Image Attach] Background upload failed:', err);
     });
 
-    _pendingImages.push(entry);
+    _imageBucket().push(entry);
     _renderAttachmentPreview();
   };
   reader.readAsDataURL(file);
@@ -268,7 +286,8 @@ function _renderAttachmentPreview() {
   const refChipsHtml = (typeof window.SessionReference?.chipsHtml === 'function')
     ? window.SessionReference.chipsHtml()
     : '';
-  if (_pendingImages.length === 0 && refChipsHtml === '') {
+  const pendingImages = _imageBucket();
+  if (pendingImages.length === 0 && refChipsHtml === '') {
     previews.forEach(function(preview) {
       preview.style.display = 'none';
       preview.innerHTML = '';
@@ -276,7 +295,7 @@ function _renderAttachmentPreview() {
     cards.forEach(function(card) { card.classList.remove('has-attachments'); });
     return;
   }
-  const html = _pendingImages.map(function(img, idx) {
+  const html = pendingImages.map(function(img, idx) {
     return '<div class="attachment-thumb">' +
       '<img src="' + img._previewUrl + '" alt="' + escapeHtml(img.source || '') + '">' +
       '<button class="attachment-remove" type="button" onclick="removePendingImage(' + idx + ')" title="' +
@@ -296,34 +315,38 @@ function _renderAttachmentPreview() {
  * 返回可直接随消息发送的 images；failedCount > 0 时调用方必须显式中止——
  * 附件绝不静默丢弃。
  */
-async function _resolvePendingImagesForTarget(targetAgentId) {
+async function _resolvePendingImagesForTarget(targetAgentId, bucketKey = _imageBucketKey()) {
   let failedCount = 0;
   const images = [];
   const targetHostKey = _imageHostKey(targetAgentId);
+  // 只消费发送时刻捕获的会话桶：await 期间切换会话后，新会话挂载的图片
+  // 绝不混入本次发送。桶数组身份不变（remove 用 splice / clear 用 delete），
+  // 成员校验对捕获引用始终有效。
+  const bucket = _pendingImageBuckets.get(bucketKey) || [];
   // await 期间用户可能移除附件（splice 移动索引）：快照迭代 + push 前
   // 成员校验，已移除者既不发送也不计入失败。
-  const snapshot = _pendingImages.slice();
+  const snapshot = bucket.slice();
   for (const entry of snapshot) {
     try {
-      if (!_pendingImages.includes(entry)) {
+      if (!bucket.includes(entry)) {
         continue; // await 期间被用户移除：不转存、不随消息发送
       }
       // 先收尾挂起的后台上传（失败则按目标重新上传拿结论），再做宿主一致性转存
       if (!entry.path && entry._uploadPromise) {
         await entry._uploadPromise.catch(function() { /* 视为未成功，下方重传 */ });
       }
-      if (!_pendingImages.includes(entry)) {
+      if (!bucket.includes(entry)) {
         continue; // await 期间被移除：不发送、不算失败
       }
       if (!entry.path || entry._hostKey !== targetHostKey) {
         await _uploadImageEntryTo(entry, targetAgentId);
       }
-      if (!_pendingImages.includes(entry)) {
+      if (!bucket.includes(entry)) {
         continue; // 转存 await 期间被移除：已转存副本留在远端无副作用，但不随消息发送
       }
       images.push({ path: entry.path, mediaType: entry.mediaType, source: entry.source });
     } catch (err) {
-      if (!_pendingImages.includes(entry)) {
+      if (!bucket.includes(entry)) {
         continue; // 转存失败与移除同窗口：用户已移除的附件不算失败，剩余附件照常发送
       }
       console.error('[Image Attach] upload for target failed:', err);
@@ -333,8 +356,13 @@ async function _resolvePendingImagesForTarget(targetAgentId) {
   return { images, failedCount };
 }
 
-function clearPendingInputImages() {
-  _pendingImages = [];
+/**
+ * 清空指定会话的图片桶（缺省当前会话）。发送成功后按发送时刻捕获的 key
+ * 清空，不误伤其他会话挂着的附件；渲染面读当前会话桶，重渲染幂等。
+ */
+function clearPendingInputImages(bucketKey) {
+  const key = typeof bucketKey === 'string' ? bucketKey : _imageBucketKey();
+  _pendingImageBuckets.delete(key);
   _renderAttachmentPreview();
 }
 
@@ -365,7 +393,7 @@ window.onImageFilesSelected = function(input) {
 };
 
 window.removePendingImage = function(idx) {
-  _pendingImages.splice(idx, 1);
+  _imageBucket().splice(idx, 1);
   _renderAttachmentPreview();
 };
 
@@ -425,7 +453,7 @@ function onPersistentBtnClick() {
   // 这也避免轮询状态滞后把一个已空闲 runtime 永久卡在 stop 按钮上。
   const textarea = document.getElementById('input-persistent');
   const hasText = !!textarea?.value?.trim();
-  const hasImages = _pendingImages.length > 0;
+  const hasImages = _imageBucket().length > 0;
   const hasSessionReferences = (window.SessionReference?.peek?.() || []).length > 0;
   if (btn.classList.contains('is-stop') && !hasText && !hasImages && !hasSessionReferences) {
     interruptAgent();
@@ -571,9 +599,12 @@ async function submitQueuedInput() {
   if (!textarea) return;
   const text = textarea.value.trim();
   const sessionReferenceCount = (window.SessionReference?.peek?.() || []).length;
-  if (!text && _pendingImages.length === 0 && sessionReferenceCount === 0) return;
+  if (!text && _imageBucket().length === 0 && sessionReferenceCount === 0) return;
   const targetRuntimeId = currentRuntimeAgentId;
   const targetCacheKey = textarea.dataset.sessionKey || _getSessionInputCacheKey();
+  // 图片桶 key 同步捕获（与 targetCacheKey 同款防漂移语义）：await 期间切换
+  // 会话后，resolve / 成功清空只作用于发起会话的桶。
+  const targetImageKey = _imageBucketKey();
 
   _submitInFlight = true;
   // 乐观 UI：立即切换为 stop 按钮提供即时视觉反馈，消除"点击没反应"的手感。
@@ -587,7 +618,7 @@ async function submitQueuedInput() {
   try {
     // 图片就绪：等待后台上传，并把宿主与发送目标不一致的附件转存过去。
     // 任何附件失败都显式中止（输入与预览保留，供用户重试），绝不静默丢弃。
-    const resolved = await _resolvePendingImagesForTarget(targetRuntimeId);
+    const resolved = await _resolvePendingImagesForTarget(targetRuntimeId, targetImageKey);
     if (resolved.failedCount > 0) {
       throw new Error(currentLanguage === 'zh'
         ? '部分图片上传失败：请重试或移除失败的附件'
@@ -686,7 +717,7 @@ async function submitQueuedInput() {
         liveTextarea.value = '';
         autoResize(liveTextarea);
       }
-      clearPendingInputImages();
+      clearPendingInputImages(targetImageKey);
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       _clearRecapForNewMessage();
       beginFollowLatestEntryWindow();

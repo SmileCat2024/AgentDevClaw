@@ -435,6 +435,13 @@ window.ClawSlash = {
       _handoffActivations = refs;
     }
   },
+  /**
+   * 会话切换时清空 prompt pill（input-composer 的会话重绑调用）。
+   * invoke 目标是"输入框所属会话"，切走后旧 pill 语义失效；composer
+   * 常驻后切会话不换 textarea 元素，_syncFromInput 的元素归属检测
+   * 不再覆盖此场景，必须由会话切换点显式触发。
+   */
+  clearSessionPrompts: _clearPrompts,
 };
 
 async function _dispatchPrompts(ta) {

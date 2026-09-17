@@ -464,6 +464,28 @@ describe('composer session draft isolation (ticket 036)', () => {
     assert.equal(taRestore.value, 'hello session a');
   });
 
+  it('clears slash prompt pills on session switch only', () => {
+    const ctx = createInputSandbox();
+    loadInputModules(ctx);
+    let cleared = 0;
+    ctx.window.ClawSlash = { clearSessionPrompts: () => { cleared += 1; } };
+
+    // 先以会话 A 挂载 composer（pill 挂在 A 的输入框上）
+    ctx.run('renderInputRequests([])');
+    assert.equal(cleared, 0);
+
+    // 会话 A → B：sessionKey 变化触发附件态收敛（slash pill 无跨会话保留语义）
+    ctx.state.liveKey = 'session-b';
+    ctx.currentRuntimeAgentId = 'agent-2';
+    flipToPersistent(ctx);
+    assert.equal(cleared, 1, '会话切换必须清理上一会话的 slash prompt pill');
+
+    // 同会话的模式翻转不重复清理
+    flipToRequests(ctx, { requestId: 'r1', placeholder: 'Answer me' });
+    flipToPersistent(ctx);
+    assert.equal(cleared, 1, '同会话的模式翻转不得触发 slash pill 清理');
+  });
+
   it('deletes the draft key after a successful persistent submit', async () => {
     const ctx = createInputSandbox();
     loadInputModules(ctx);
@@ -475,7 +497,14 @@ describe('composer session draft isolation (ticket 036)', () => {
       let _pendingQueuedCount = 0;
       let _localQueuedInputPending = false;
       let _lastQueueBubbleSignature = "";
-      let _pendingImages = [];
+      // 图片桶（按会话隔离）：submit 片段引用的伴生 stub，与真实实现同构
+      const _pendingImageBuckets = new Map();
+      function _imageBucketKey() { return 'agent-1::session-a'; }
+      function _imageBucket() {
+        let b = _pendingImageBuckets.get(_imageBucketKey());
+        if (!Array.isArray(b)) { b = []; _pendingImageBuckets.set(_imageBucketKey(), b); }
+        return b;
+      }
     `);
     // 真实提交路径（persistent-input.js）
     const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
@@ -603,14 +632,17 @@ describe('pending image removal race during await (remote image review S1)', () 
     const ctx = createInputSandbox();
     loadInputModules(ctx);
     ctx.run(`
-      let _pendingImages = [];
+      const _pendingImageBuckets = new Map();
+      _pendingImageBuckets.set('bucket', []);
+      function _imageBucketKey() { return 'bucket'; }
       function _imageHostKey() { return 'host-a'; }
       // 模拟转存：传输 await 期间用户点击移除（removePendingImage → splice）
       window.__transferEntry = null;
       async function _uploadImageEntryTo(entry) {
         if (entry.source === 'removed') {
-          const idx = _pendingImages.indexOf(entry);
-          _pendingImages.splice(idx, 1);
+          const bucket = _pendingImageBuckets.get('bucket');
+          const idx = bucket.indexOf(entry);
+          bucket.splice(idx, 1);
         }
         entry.path = '/images/' + entry.source + '.png';
       }
@@ -627,8 +659,8 @@ describe('pending image removal race during await (remote image review S1)', () 
       (async () => {
         const removed = { source: 'removed', path: null, mediaType: 'image/png' };
         const kept = { source: 'kept', path: null, mediaType: 'image/png' };
-        _pendingImages.push(removed, kept);
-        return _resolvePendingImagesForTarget('agent-1');
+        _pendingImageBuckets.get('bucket').push(removed, kept);
+        return _resolvePendingImagesForTarget('agent-1', 'bucket');
       })()
     `);
     // 已移除：不随消息发出（S1 方向 a）；未移除者必发送（S1 方向 b）。
@@ -644,21 +676,83 @@ describe('pending image removal race during await (remote image review S1)', () 
       (async () => {
         const removed = { source: 'removed', path: null, mediaType: 'image/png' };
         const kept = { source: 'kept', path: null, mediaType: 'image/png' };
-        _pendingImages.push(removed, kept);
+        _pendingImageBuckets.get('bucket').push(removed, kept);
         // 转存失败与移除同窗口：移除者不计失败，剩余附件照常发送
         async function _uploadImageEntryTo(entry) {
           if (entry.source === 'removed') {
-            const idx = _pendingImages.indexOf(entry);
-            _pendingImages.splice(idx, 1);
+            const bucket = _pendingImageBuckets.get('bucket');
+            const idx = bucket.indexOf(entry);
+            bucket.splice(idx, 1);
             throw new Error('tunnel reset after removal');
           }
           entry.path = '/images/' + entry.source + '.png';
         }
-        return _resolvePendingImagesForTarget('agent-1');
+        return _resolvePendingImagesForTarget('agent-1', 'bucket');
       })()
     `);
     const paths = (outcome.images || []).map((img) => String(img.path));
     assert.deepEqual([...paths], ['/images/kept.png'], '失败与移除同窗口时，移除者不发送、保留者照常发送');
     assert.equal(outcome.failedCount, 0, '已移除附件的转存失败不得计入 failedCount');
+  });
+});
+
+// ── 图片附件会话隔离：按会话 key 分桶，挂载/消费/清空互不串扰 ─────────────
+describe('pending image session isolation (attachment buckets per session)', () => {
+  function loadImageBucketSandbox() {
+    const ctx = createInputSandbox();
+    loadInputModules(ctx);
+    ctx.run(`
+      const _pendingImageBuckets = new Map();
+      let __activeKey = 'rt-a::sess-a';
+      function _imageBucketKey() { return __activeKey; }
+      function _imageBucket() {
+        const key = _imageBucketKey();
+        let bucket = _pendingImageBuckets.get(key);
+        if (!Array.isArray(bucket)) { bucket = []; _pendingImageBuckets.set(key, bucket); }
+        return bucket;
+      }
+      function _imageHostKey() { return 'host-a'; }
+      async function _uploadImageEntryTo(entry) {
+        entry.path = '/images/' + entry.source + '.png';
+      }
+      function _renderAttachmentPreview() {}
+    `);
+    // 真实实现（resolve + clear 两个片段）
+    const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+    ctx.run(sourceBetween(source, 'async function _resolvePendingImagesForTarget', '// ── window 导出'));
+    return ctx;
+  }
+
+  it('keeps per-session buckets: no carry-over on switch, clear scoped to the sending session', async () => {
+    const ctx = loadImageBucketSandbox();
+    const result = await ctx.run(`
+      (async () => {
+        const imgA = { source: 'img-a', path: null, mediaType: 'image/png', _uploadPromise: null };
+        _imageBucket().push(imgA);
+        const visibleInA = _imageBucket().length;
+        // 切换到会话 B：输入框读 B 桶，A 的附件不可见（预览随当前桶渲染）
+        __activeKey = 'rt-b::sess-b';
+        const visibleInB = _imageBucket().length;
+        const imgB = { source: 'img-b', path: null, mediaType: 'image/png', _uploadPromise: null };
+        _imageBucket().push(imgB);
+        // 会话 A 发送：resolve / 清空只作用于 A 的桶（发送时刻同步捕获的 key）
+        const resolved = await _resolvePendingImagesForTarget('agent-a', 'rt-a::sess-a');
+        clearPendingInputImages('rt-a::sess-a');
+        return {
+          visibleInA,
+          visibleInB,
+          resolvedPaths: resolved.images.map((img) => String(img.path)),
+          failed: resolved.failedCount,
+          remainingB: _pendingImageBuckets.get('rt-b::sess-b').length,
+          remainingA: (_pendingImageBuckets.get('rt-a::sess-a') || []).length,
+        };
+      })()
+    `);
+    assert.equal(result.visibleInA, 1, '挂载时刻附件属于挂载会话的桶');
+    assert.equal(result.visibleInB, 0, '切换会话后输入框不得残留上一会话的图片');
+    assert.deepEqual([...result.resolvedPaths], ['/images/img-a.png'], 'resolve 只消费发送会话的桶');
+    assert.equal(result.failed, 0);
+    assert.equal(result.remainingA, 0, '发送成功的会话桶被清空');
+    assert.equal(result.remainingB, 1, '其他会话挂载的附件不受发送清空影响');
   });
 });

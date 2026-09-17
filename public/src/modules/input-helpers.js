@@ -122,8 +122,11 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   // 任何附件失败都显式中止（输入与预览保留，供用户重试），绝不静默丢弃
   // 附件——与 Thread Inbox 的图片拒绝语义一致。
   let images = [];
+  // 图片桶 key 同步捕获（与 targetCacheKey 同款防漂移）：await 期间切换会话后，
+  // resolve 与成功清空只作用于发起会话挂载的图片桶
+  const targetImageKey = typeof _imageBucketKey === 'function' ? _imageBucketKey() : undefined;
   if (typeof _resolvePendingImagesForTarget === 'function') {
-    const resolved = await _resolvePendingImagesForTarget(targetRuntimeId);
+    const resolved = await _resolvePendingImagesForTarget(targetRuntimeId, targetImageKey);
     if (resolved.failedCount > 0) {
       if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
         ClawToast.show({
@@ -231,7 +234,7 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
         autoResize(liveTextarea);
       }
       if (typeof clearPendingInputImages === 'function') {
-        clearPendingInputImages();
+        clearPendingInputImages(targetImageKey);
       }
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       // 输入卡绑定其渲染时的 runtime；若提交过程中切换了会话，绝不能
@@ -265,6 +268,7 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
         targetCacheKey,
         capabilityActivations,
         turnMetadata,
+        imageKey: targetImageKey,
       });
     } else {
       // 无兜底路径：归还激活与引用，输入保留供重试
@@ -282,6 +286,7 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
           targetCacheKey,
           capabilityActivations,
           turnMetadata,
+          imageKey: targetImageKey,
         });
       } catch {
         // Thread Inbox 也不可用：保留输入文本与激活，用户可重试
@@ -317,7 +322,7 @@ function _notifyThreadImageUnsupported() {
  * 经 Thread Inbox 提交：消息持久化到线程，由服务端投递给当前承接会话。
  * 成功后清空输入（与槽位路径一致），并给出明确反馈，避免「发出去没反应」。
  */
-async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, capabilityActivations, turnMetadata }) {
+async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, capabilityActivations, turnMetadata, imageKey }) {
   const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
   const result = await window.submitThreadCommand(thread.threadId, input, {
     ...(capabilityActivations?.length ? { capabilityActivations } : {}),
@@ -335,7 +340,7 @@ async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, 
     autoResize(liveTextarea);
   }
   if (typeof clearPendingInputImages === 'function') {
-    clearPendingInputImages();
+    clearPendingInputImages(imageKey);
   }
   if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
   if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
