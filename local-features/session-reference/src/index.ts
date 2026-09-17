@@ -18,7 +18,7 @@
  */
 
 import type { AgentFeature, Tool } from '@agentdevjs/core';
-import type { CallStartContext } from '@agentdevjs/core';
+import type { CallStartContext, Context } from '@agentdevjs/core';
 import { CoreLifecycle } from '@agentdevjs/core';
 import type { HookDeclarations } from '@agentdevjs/core';
 import { buildTrimmedSeedMessages, normalizeExportPolicy } from '@agentdevjs/core';
@@ -392,9 +392,27 @@ export class SessionReferenceFeature implements AgentFeature {
    * 解析并注入本条消息携带的会话引用（metadata['session-reference']）。
    * 引用随消息一次性消费：注入 reminder 后 metadata 即完成使命，
    * feature 不保留任何引用状态。
+   *
+   * 消费入口两个且互斥：call 边界（本 CallStart 钩子）与 call 内注入
+   * （onTurnMetadata，agent 正忙时排队的消息经 dispatchTurnMetadata 派发）。
    */
   async injectSessionReferences(ctx: CallStartContext): Promise<void> {
     const raw = (ctx.metadata as Record<string, unknown> | undefined)?.['session-reference'];
+    await this.injectReferences(raw, ctx.context, ctx.agent);
+  }
+
+  /**
+   * call 内注入点的消费入口：运行中追加的带引用消息不再等待 call 结束，
+   * reminder 随注入点落位（与 CallStart 路径共享注入逻辑）。
+   */
+  async onTurnMetadata(
+    value: unknown,
+    { context, agent }: { context: Context; agent?: unknown },
+  ): Promise<void> {
+    await this.injectReferences(value, context, agent);
+  }
+
+  private async injectReferences(raw: unknown, context: Context, agent?: unknown): Promise<void> {
     const entries = Array.isArray(raw)
       ? raw.filter((item): item is Record<string, unknown> =>
           !!item && typeof item === 'object' && cleanText((item as Record<string, unknown>).sessionId) !== '')
@@ -415,10 +433,10 @@ export class SessionReferenceFeature implements AgentFeature {
     }));
 
     const text = renderReferenceReminder(verified);
-    const turn = typeof (ctx.agent as any)?._callIndex === 'number'
-      ? (ctx.agent as any)._callIndex
+    const turn = typeof (agent as any)?._callIndex === 'number'
+      ? (agent as any)._callIndex
       : 0;
-    ctx.context.addSystemMessage(text, turn, this.name, 'reminder');
+    context.addSystemMessage(text, turn, this.name, 'reminder');
   }
 
   /**

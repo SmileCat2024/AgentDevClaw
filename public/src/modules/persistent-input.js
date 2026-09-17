@@ -607,18 +607,17 @@ async function submitQueuedInput() {
           ? '会话交接进行中：暂不支持图片输入，请在新会话就绪后重发'
           : 'Session handoff in progress: image input is not supported yet');
       }
-      // Thread Inbox 不透传 user-turn metadata（引用会静默丢失）：与图片同
-      // 拒绝语义，保留引用 pill 供切换普通会话后使用。线程宿主会话（coder）
-      // 是常态而非"交接中"，提示语按实际场景说明
-      if ((window.SessionReference?.peek?.() || []).length > 0) {
-        throw new Error(currentLanguage === 'zh'
-          ? '线程会话暂不支持会话引用：请在普通对话（非线程宿主）中使用'
-          : 'Session references are not supported in thread-hosted sessions; use a regular session');
-      }
-      if (!text) throw new Error('empty input');
+      // Thread Inbox command 契约已携带 user-turn metadata：会话引用随指令
+      // 入箱，投递时经 bridge 转发，与直投域行为一致
+      if (!text && (window.SessionReference?.peek?.() || []).length === 0) throw new Error('empty input');
+      sessionRefs = window.SessionReference?.consume?.() || [];
+      const threadTurnMetadata = sessionRefs.length > 0
+        ? { 'session-reference': sessionRefs }
+        : null;
       capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
-      const threadResult = await window.submitThreadCommand(threadRoute.thread.threadId, text, {
+      const threadResult = await window.submitThreadCommand(threadRoute.thread.threadId, text || ' ', {
         ...(capabilityActivations?.length ? { capabilityActivations } : {}),
+        ...(threadTurnMetadata ? { metadata: threadTurnMetadata } : {}),
       });
       // await 期间 composer 端点可能翻转（textarea id 随模式切换），但节点
       // 常驻不重建。定位当前 live textarea（优先 persistent 端点，端点已切换
@@ -657,8 +656,8 @@ async function submitQueuedInput() {
 
     capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
     // 会话引用随消息流动（一次性附件语义）：consume 取走 pill，失败时归还。
-    // agent calling 中排队输入的 metadata 由框架排队路径消费（call 间 dequeue
-    // 跳过带 metadata 项，留待 drain / lease 转交投递），无需前端拦截。
+    // agent calling 中排队输入由 react-loop call 内注入消费，metadata 经
+    // dispatchTurnMetadata 派发（reminder 随注入点落位），无需前端拦截。
     sessionRefs = window.SessionReference?.consume?.() || [];
     const turnMetadata = sessionRefs.length > 0
       ? { 'session-reference': sessionRefs }

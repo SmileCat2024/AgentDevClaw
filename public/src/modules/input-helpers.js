@@ -156,40 +156,29 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   // Inbox 兜底共用；全部失败时归还，重试仍携带
   let capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
   // 会话引用随消息流动（一次性附件语义，与 persistent 提交同款）：
-  // consume 取走 pill，所有失败路径归还。Thread Inbox 不透传 user-turn
-  // metadata，带引用的提交与图片同语义显式拒绝（引用保留）。
-  let sessionRefs = [];
-  if (window.SessionReference?.peek?.()?.length > 0 && threadRoute.route === 'thread') {
-    window.ClawSlash?.restoreActivations?.(capabilityActivations);
-    if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
-      ClawToast.show({
-        id: `slot-ref-unsupported-${requestId}`,
-        status: 'error',
-        title: currentLanguage === 'zh'
-          ? '线程会话暂不支持会话引用：请在普通对话（非线程宿主）中使用'
-          : 'Session references are not supported in thread-hosted sessions; use a regular session',
-        autoDismiss: 5000,
-      });
-    }
-    return;
-  }
-  if (threadRoute.route === 'direct') {
-    sessionRefs = window.SessionReference?.consume?.() || [];
-  }
-
-  if (threadRoute.route === 'thread' && input.trim()) {
-    if (hasImages) {
-      _notifyThreadImageUnsupported();
-      window.ClawSlash?.restoreActivations?.(capabilityActivations);
-      return;
-    }
-    await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey, capabilityActivations });
-    return;
-  }
-
+  // consume 取走 pill，所有失败路径归还。Thread Inbox command 契约已携带
+  // user-turn metadata，线程域同样透传。
+  const sessionRefs = window.SessionReference?.consume?.() || [];
   const turnMetadata = sessionRefs.length > 0
     ? { 'session-reference': sessionRefs }
     : null;
+
+  if (threadRoute.route === 'thread' && (input.trim() || turnMetadata)) {
+    if (hasImages) {
+      _notifyThreadImageUnsupported();
+      window.ClawSlash?.restoreActivations?.(capabilityActivations);
+      window.SessionReference?.restore?.(sessionRefs);
+      return;
+    }
+    await _submitInputViaThread(threadRoute.thread, {
+      input: input || ' ',
+      textarea,
+      targetCacheKey,
+      capabilityActivations,
+      turnMetadata,
+    });
+    return;
+  }
 
   try {
     const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
@@ -250,11 +239,14 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
     // 槽位投递失败（runtime 停止/切换中）且当前会话属于活跃线程：
     // 兜底落 Thread Inbox，指令不丢，head 就绪后由服务端投递。
     // 带图片时不兜底（inbox 不支持附件），保留输入供用户重试。
-    if ((threadRoute.route === 'direct' && threadRoute.thread) && input.trim() && !hasImages) {
-      // Thread Inbox 契约不携带 user-turn metadata：已 consume 的引用归还
-      window.SessionReference?.restore?.(sessionRefs);
-      sessionRefs = [];
-      await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey, capabilityActivations });
+    if ((threadRoute.route === 'direct' && threadRoute.thread) && (input.trim() || turnMetadata) && !hasImages) {
+      await _submitInputViaThread(threadRoute.thread, {
+        input: input || ' ',
+        textarea,
+        targetCacheKey,
+        capabilityActivations,
+        turnMetadata,
+      });
     } else {
       // 无兜底路径：归还激活与引用，输入保留供重试
       window.ClawSlash?.restoreActivations?.(capabilityActivations);
@@ -263,11 +255,15 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   } catch (e) {
     console.error('提交输入失败:', e);
     // 网络层失败的同款兜底：活跃线程的指令改走 Thread Inbox
-    if ((threadRoute.route === 'direct' && threadRoute.thread) && input.trim() && !hasImages) {
+    if ((threadRoute.route === 'direct' && threadRoute.thread) && (input.trim() || turnMetadata) && !hasImages) {
       try {
-        window.SessionReference?.restore?.(sessionRefs);
-        sessionRefs = [];
-        await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey, capabilityActivations });
+        await _submitInputViaThread(threadRoute.thread, {
+          input: input || ' ',
+          textarea,
+          targetCacheKey,
+          capabilityActivations,
+          turnMetadata,
+        });
       } catch {
         // Thread Inbox 也不可用：保留输入文本与激活，用户可重试
         window.ClawSlash?.restoreActivations?.(capabilityActivations);
@@ -302,10 +298,11 @@ function _notifyThreadImageUnsupported() {
  * 经 Thread Inbox 提交：消息持久化到线程，由服务端投递给当前承接会话。
  * 成功后清空输入（与槽位路径一致），并给出明确反馈，避免「发出去没反应」。
  */
-async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, capabilityActivations }) {
+async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, capabilityActivations, turnMetadata }) {
   const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
   const result = await window.submitThreadCommand(thread.threadId, input, {
     ...(capabilityActivations?.length ? { capabilityActivations } : {}),
+    ...(turnMetadata ? { metadata: turnMetadata } : {}),
   });
   const delivered = result?.delivery?.delivered > 0;
   // 清空输入（复用槽位路径的清理语义）：composer 常驻后 await 期间可能切换

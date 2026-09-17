@@ -297,4 +297,41 @@ describe('injectSessionReferences', () => {
       globalThis.fetch = realFetch;
     }
   });
+
+  it('onTurnMetadata injects the reminder at the in-call dispatch point (same shape as CallStart)', async () => {
+    // call 内注入入口（agent 忙时排队的消息经 dispatchTurnMetadata 派发）：
+    // 注入产物与 CallStart 路径完全一致，两个入口共享同一注入逻辑。
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({ messages: [] }) })) as any;
+    try {
+      const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      const injected: Array<{ content: string; turn: number; source?: string; tag?: string }> = [];
+      const context: any = {
+        addSystemMessage(content: string, turn: number, source?: string, tag?: string) {
+          injected.push({ content, turn, source, tag });
+        },
+      };
+
+      await feature.onTurnMetadata(
+        [{ agentId: 'programming-helper', sessionId: 's-1', title: '运行中追加', sessionType: 'main' }],
+        { context, agent: { _callIndex: 5 } },
+      );
+
+      assert.equal(injected.length, 1);
+      assert.equal(injected[0].turn, 5);
+      assert.equal(injected[0].source, 'session-reference');
+      assert.equal(injected[0].tag, 'reminder');
+      assert.match(injected[0].content, /s-1「运行中追加」/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('onTurnMetadata is a no-op for non-array payloads', async () => {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    let added = 0;
+    const context: any = { addSystemMessage() { added += 1; } };
+    await feature.onTurnMetadata('not-an-array', { context });
+    await feature.onTurnMetadata(null, { context });
+    assert.equal(added, 0);
+  });
 });

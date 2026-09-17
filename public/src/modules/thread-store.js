@@ -498,6 +498,9 @@ window.submitThreadCommand = async (threadId, text, options = {}) => {
       ...(Array.isArray(options.capabilityActivations) && options.capabilityActivations.length > 0
         ? { capabilityActivations: options.capabilityActivations }
         : {}),
+      ...(options.metadata && typeof options.metadata === 'object' && !Array.isArray(options.metadata)
+        ? { metadata: options.metadata }
+        : {}),
     }),
   });
   const data = await res.json().catch(() => null);
