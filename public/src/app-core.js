@@ -313,6 +313,11 @@ async function invoke(command, payload = {}) {
   if (window.location.protocol === 'http:' && window.location.port === '1420') {
     if (command === 'get_connected_agents') {
       const res = await fetch('/protoclaw/get_connected_agents');
+      if (!res.ok) {
+        // 空快照触发源观测点：服务端瞬时 5xx 在此被静默转译为 []，
+        // 侧栏身份是否被误降级由 loadAgents 的空快照分支决定。
+        console.warn(`[sidebar] get_connected_agents HTTP ${res.status}: connected snapshot unavailable this round`);
+      }
       return res.ok ? res.json() : [];
     }
     if (command === 'get_prebuilt_agents') {

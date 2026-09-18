@@ -389,20 +389,63 @@ async function loadAgents() {
     const prevByAgentId = new Map(allAgents.map((a) => [a.id, a]));
 
     if (connectedAgents.length === 0) {
-      allAgents = runtimeAgents.map((agent) => ({
-        id: agent.id,
-        name: agent.name,
-        description: agent.description || '',
-        status: agent.connected ? 'running' : 'stopped',
-        source: 'external',
-        parent_id: agent.parentAgentId || null,
-        connection_info: agent.connectionInfo || 'viewer://127.0.0.1:2026',
-        pid: agent.pid || null,
-        runtime_session_id: agent.id,
-        message_count: agent.messageCount ?? 0,
-        created_at: agent.createdAt || null,
-        connected: agent.connected ?? false,
-      }));
+      // ── 空快照契约 ──────────────────────────────────────────────
+      // 一次空的 connected 快照不代表"没有任何预制 Agent"：服务端正常
+      // 路径恒返回 prebuilt 宿主条目（即使全部 stopped），空数组只能来
+      // 自请求层失败（invoke 把非 2xx 静默转译为 []）。空快照不得把已
+      // 确认的预制身份降级成 external（历史 bug：分类闪现"外部代理"、
+      // 标题退化为工作空间名）。
+      const diagnoseEmptySnapshot = (phase, prevCount) => {
+        if (typeof queueSidebarDiagnosticEvent === 'function') {
+          queueSidebarDiagnosticEvent({
+            kind: 'empty_connected_snapshot',
+            phase,
+            prevAgentCount: prevCount,
+            runtimeAgentCount: runtimeAgents.length,
+          });
+        }
+        console.warn(`[sidebar] empty connected snapshot (${phase}): prev=${prevCount} viewerRuntime=${runtimeAgents.length}`);
+      };
+      const prevAgents = Array.isArray(allAgents) ? allAgents : [];
+      const prevHasPrebuilt = prevAgents.some((agent) => agent?.source === 'prebuilt');
+      if (runtimeAgents.length === 0) {
+        // S2 双源皆空：无任何新信息，整体保留上一轮——与网络层 throw
+        // 的 catch 路径行为对齐（同样是"这轮没拿到数据"，结局一致）。
+        diagnoseEmptySnapshot('both-sources-empty', prevAgents.length);
+      } else if (prevHasPrebuilt) {
+        // S1 稳态空快照：保留全部身份投影，仅按 viewer runtime 刷新
+        // 存活状态（viewer 匹配不到的条目保留上一轮状态，下一轮正常
+        // 快照会给出权威值）。
+        allAgents = prevAgents.map((agent) => {
+          const runtimeSessionId = getRuntimeId(agent);
+          const runtimeAgent = runtimeSessionId ? runtimeById.get(runtimeSessionId) : runtimeById.get(agent.id);
+          const resolvedConnected = runtimeAgent?.connected ?? agent.connected ?? false;
+          return {
+            ...agent,
+            status: resolvedConnected ? 'running' : 'stopped',
+            message_count: runtimeAgent?.messageCount ?? agent.message_count ?? 0,
+            connected: resolvedConnected,
+          };
+        });
+        diagnoseEmptySnapshot('preserved-identity', prevAgents.length);
+      } else {
+        // S3 首屏无历史：无可保留的已确认身份，维持既有 external 投影。
+        allAgents = runtimeAgents.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          description: agent.description || '',
+          status: agent.connected ? 'running' : 'stopped',
+          source: 'external',
+          parent_id: agent.parentAgentId || null,
+          connection_info: agent.connectionInfo || 'viewer://127.0.0.1:2026',
+          pid: agent.pid || null,
+          runtime_session_id: agent.id,
+          message_count: agent.messageCount ?? 0,
+          created_at: agent.createdAt || null,
+          connected: agent.connected ?? false,
+        }));
+        diagnoseEmptySnapshot('external-fallback-no-history', prevAgents.length);
+      }
     } else {
       allAgents = connectedAgents.map((agent) => {
         const runtimeSessionId = getRuntimeId(agent);
