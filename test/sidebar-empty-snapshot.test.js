@@ -5,6 +5,7 @@
  * 500 被 invoke 静默转译为 []）误判为"没有任何预制 Agent"，整批把侧栏
  * 条目降级为 source:'external'，丢失 sidebar_entry_id / sessionType /
  * active_workspace_* 身份字段，标题退化为工作空间名（"外部代理"分类闪现）。
+ * 空快照本身只表示身份来源暂不可用，不能证明预制身份已经消失。
  *
  * 契约：一次空的 connected 快照不能降级已确认的预制 Agent 身份。
  *  - S1 稳态空快照（上一轮有 prebuilt）：保留身份投影，仅按 viewer
@@ -21,6 +22,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { sanitizeSidebarDiagnosticEvent } from '../server/shared/sidebar-diagnostics.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 const SOURCE_PATH = 'public/src/modules/sidebar-render.js';
@@ -63,9 +65,24 @@ const richChild = () => ({
   open_directory: 'D:/code/demo',
 });
 
-const viewerRuntime = (connected = true) => ({
-  id: 'rt-main',
-  name: '智能编码空间',
+const richCoderChild = () => ({
+  id: 'rt-coder',
+  name: 'Coder 会话',
+  source: 'child',
+  connected: true,
+  parent_id: 'programming-helper',
+  sessionType: 'coder',
+  sidebar_entry_id: 'programming-helper:coder',
+  runtime_session_id: 'rt-coder',
+  active_workspace_session_id: 'coder-session',
+  active_workspace_session_title: 'Coder 任务',
+  active_workspace_display_name: 'Coder 会话',
+  open_directory: 'D:/code/demo',
+});
+
+const viewerRuntime = (connected = true, id = 'rt-main') => ({
+  id,
+  name: id === 'rt-coder' ? 'Coder 会话' : '智能编码空间',
   connected,
   parentAgentId: 'programming-helper',
   messageCount: 3,
@@ -145,7 +162,72 @@ const snapshotOf = (ctx) => ctx.allAgents.map((agent) => ({
   title: agent.active_workspace_session_title,
 }));
 
+function assertPersistableDiagnostic(event) {
+  const persisted = sanitizeSidebarDiagnosticEvent(event, {
+    source: 'client',
+    now: () => Date.parse('2026-09-18T00:00:00.000Z'),
+  });
+  assert.ok(persisted, '诊断事件必须符合服务端持久化协议');
+  assert.equal(persisted.kind, 'system');
+  assert.equal(persisted.operation, 'sidebar_snapshot');
+  assert.equal(persisted.result, 'degraded');
+  return persisted;
+}
+
+async function captureDiagnosticQueueRequest(event) {
+  const requests = [];
+  const ctx = createFrontendSandbox({
+    navigator: {},
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    },
+  });
+  ctx.loadSource('public/src/modules/sidebar-operations.js');
+  await ctx.run(`(async () => {
+    queueSidebarDiagnosticEvent(${JSON.stringify(event)});
+    return flushSidebarDiagnosticEvents();
+  })()`);
+  assert.equal(requests.length, 1, '诊断队列必须发送一次请求');
+  assert.equal(requests[0].url, '/protoclaw/sidebar_diagnostics/events');
+  return JSON.parse(requests[0].options.body).events[0];
+}
+
 describe('loadAgents 空连接快照行为契约', () => {
+  it('空快照诊断经过真实客户端队列后仍符合服务端协议', async () => {
+    const event = {
+      kind: 'system',
+      operation: 'sidebar_snapshot',
+      phase: 'empty-connected-preserved-identity',
+      errorCode: 'empty-connected-snapshot',
+      result: 'degraded',
+      agentCount: 2,
+      runtimeCount: 1,
+    };
+    const sent = await captureDiagnosticQueueRequest(event);
+    assert.deepEqual(assertPersistableDiagnostic(sent), assertPersistableDiagnostic(event));
+  });
+
+  it('invoke 在 HTTP 失败时保留数组兼容性并传递非枚举诊断元数据', async () => {
+    const diagnostics = [];
+    const ctx = createFrontendSandbox({
+      fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
+      queueSidebarDiagnosticEvent: (event) => diagnostics.push(event),
+    });
+    ctx.window.location.protocol = 'http:';
+    ctx.window.location.port = '1420';
+    ctx.loadSource('public/src/app-core.js');
+
+    const result = await ctx.run('invoke("get_connected_agents")');
+    assert.deepEqual(Array.from(result), []);
+    assert.deepEqual(Object.keys(result), [], '诊断元数据不得改变数组快照形状');
+    assert.deepEqual(diagnostics, [], '源错误由 loadAgents 统一归并上报');
+    assert.deepEqual(JSON.parse(JSON.stringify(result.__sidebarDiagnostic)), {
+      errorCode: 'connected-agents-http-503',
+      phase: 'connected-http-error',
+    });
+  });
+
   it('S1: 稳态空快照保留预制身份，不降级为 external', async () => {
     const ctx = createLoadAgentsSandbox({
       connectedPlan: [[richHost(), richChild()], null],
@@ -165,8 +247,9 @@ describe('loadAgents 空连接快照行为契约', () => {
     assert.equal(child.sessionType, 'main');
     assert.equal(child.sidebar_entry_id, 'programming-helper');
     assert.equal(child.title, '主会话标题', '会话标题字段不丢失');
-    assert.ok(ctx.__diagnostics.some((e) => e.kind === 'empty_connected_snapshot'),
-      '空快照须产生诊断事件');
+    const diagnostic = ctx.__diagnostics.find((e) => e.errorCode === 'empty-connected-snapshot');
+    assert.ok(diagnostic, '空快照须产生诊断事件');
+    assertPersistableDiagnostic(diagnostic);
   });
 
   it('S1 后恢复轮: 身份投影完整复原', async () => {
@@ -199,8 +282,9 @@ describe('loadAgents 空连接快照行为契约', () => {
     await ctx.run('loadAgents()');
 
     assert.deepEqual(normalize(ctx.allAgents), before, '双空快照不得改动 allAgents');
-    assert.ok(ctx.__diagnostics.some((e) => e.kind === 'empty_connected_snapshot'),
-      '双空快照须产生诊断事件');
+    const diagnostic = ctx.__diagnostics.find((e) => e.errorCode === 'empty-connected-snapshot');
+    assert.ok(diagnostic, '双空快照须产生诊断事件');
+    assertPersistableDiagnostic(diagnostic);
   });
 
   it('S3: 首屏无历史时维持既有 external 投影（锚定现状）', async () => {
@@ -217,8 +301,9 @@ describe('loadAgents 空连接快照行为契约', () => {
     const entry = ctx.allAgents[0];
     assert.equal(entry.source, 'external');
     assert.equal(entry.id, 'rt-main');
-    assert.ok(ctx.__diagnostics.some((e) => e.kind === 'empty_connected_snapshot'),
-      '首屏空快照须产生诊断事件');
+    const diagnostic = ctx.__diagnostics.find((e) => e.errorCode === 'empty-connected-snapshot');
+    assert.ok(diagnostic, '首屏空快照须产生诊断事件');
+    assertPersistableDiagnostic(diagnostic);
   });
 
   it('S1: 空快照期间按 viewer runtime 刷新存活状态', async () => {
@@ -233,5 +318,21 @@ describe('loadAgents 空连接快照行为契约', () => {
     assert.equal(child.source, 'child', '身份不降级');
     assert.equal(child.connected, false, 'viewer 报断开时刷新为未连接');
     assert.equal(child.status, 'stopped');
+  });
+
+  it('S1: coder 投影保留 sessionType 与 sidebar_entry_id', async () => {
+    const ctx = createLoadAgentsSandbox({
+      connectedPlan: [[richHost(), richChild(), richCoderChild()], null],
+      viewerPlan: [[viewerRuntime(true), viewerRuntime(true, 'rt-coder')],
+        [viewerRuntime(true), viewerRuntime(true, 'rt-coder')]],
+    });
+    await ctx.run('loadAgents()');
+    await ctx.run('loadAgents()');
+
+    const coder = ctx.allAgents.find((agent) => agent.id === 'rt-coder');
+    assert.equal(coder.source, 'child');
+    assert.equal(coder.sessionType, 'coder');
+    assert.equal(coder.sidebar_entry_id, 'programming-helper:coder');
+    assert.equal(coder.parent_id, 'programming-helper');
   });
 });

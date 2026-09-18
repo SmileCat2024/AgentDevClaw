@@ -314,11 +314,20 @@ async function invoke(command, payload = {}) {
     if (command === 'get_connected_agents') {
       const res = await fetch('/protoclaw/get_connected_agents');
       if (!res.ok) {
-        // 空快照触发源观测点：服务端瞬时 5xx 在此被静默转译为 []，
-        // 侧栏身份是否被误降级由 loadAgents 的空快照分支决定。
+        // Keep the array return shape for existing callers, while carrying the
+        // source failure to loadAgents for one consolidated diagnostic event.
         console.warn(`[sidebar] get_connected_agents HTTP ${res.status}: connected snapshot unavailable this round`);
+        const emptySnapshot = [];
+        Object.defineProperty(emptySnapshot, '__sidebarDiagnostic', {
+          value: {
+            errorCode: `connected-agents-http-${res.status}`,
+            phase: 'connected-http-error',
+          },
+          enumerable: false,
+        });
+        return emptySnapshot;
       }
-      return res.ok ? res.json() : [];
+      return res.json();
     }
     if (command === 'get_prebuilt_agents') {
       const res = await fetch('/protoclaw/get_prebuilt_agents');

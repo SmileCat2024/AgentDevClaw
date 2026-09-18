@@ -389,33 +389,40 @@ async function loadAgents() {
     const prevByAgentId = new Map(allAgents.map((a) => [a.id, a]));
 
     if (connectedAgents.length === 0) {
+      const sourceDiagnostic = connectedAgents.__sidebarDiagnostic;
       // ── 空快照契约 ──────────────────────────────────────────────
-      // 一次空的 connected 快照不代表"没有任何预制 Agent"：服务端正常
-      // 路径恒返回 prebuilt 宿主条目（即使全部 stopped），空数组只能来
-      // 自请求层失败（invoke 把非 2xx 静默转译为 []）。空快照不得把已
-      // 确认的预制身份降级成 external（历史 bug：分类闪现"外部代理"、
-      // 标题退化为工作空间名）。
+      // 一次空的 connected 快照不代表"没有任何预制 Agent"：当前服务端正常
+      // 路径会返回 prebuilt 宿主条目（即使全部 stopped），但空数组本身
+      // 不足以证明身份已经消失（也可能是请求失败、初始化或发现过程中的
+      // 短暂不确定状态）。空快照不得把已确认的预制身份降级成 external
+      // （历史 bug：分类闪现"外部代理"、标题退化为工作空间名）。
       const diagnoseEmptySnapshot = (phase, prevCount) => {
         if (typeof queueSidebarDiagnosticEvent === 'function') {
+          // Use the existing system-diagnostic contract. The queue is persisted
+          // through sanitizeSidebarDiagnosticEvent(), which requires a stable
+          // operation/phase pair and only accepts bounded count field names.
           queueSidebarDiagnosticEvent({
-            kind: 'empty_connected_snapshot',
-            phase,
-            prevAgentCount: prevCount,
-            runtimeAgentCount: runtimeAgents.length,
+            kind: 'system',
+            operation: 'sidebar_snapshot',
+            phase: sourceDiagnostic?.phase || `empty-connected-${phase}`,
+            errorCode: sourceDiagnostic?.errorCode || 'empty-connected-snapshot',
+            result: 'degraded',
+            agentCount: prevCount,
+            runtimeCount: runtimeAgents.length,
           });
         }
         console.warn(`[sidebar] empty connected snapshot (${phase}): prev=${prevCount} viewerRuntime=${runtimeAgents.length}`);
       };
       const prevAgents = Array.isArray(allAgents) ? allAgents : [];
-      const prevHasPrebuilt = prevAgents.some((agent) => agent?.source === 'prebuilt');
+      const hasConfirmedPrebuiltIdentity = prevAgents.some((agent) => agent?.source === 'prebuilt');
       if (runtimeAgents.length === 0) {
         // S2 双源皆空：无任何新信息，整体保留上一轮——与网络层 throw
         // 的 catch 路径行为对齐（同样是"这轮没拿到数据"，结局一致）。
         diagnoseEmptySnapshot('both-sources-empty', prevAgents.length);
-      } else if (prevHasPrebuilt) {
-        // S1 稳态空快照：保留全部身份投影，仅按 viewer runtime 刷新
-        // 存活状态（viewer 匹配不到的条目保留上一轮状态，下一轮正常
-        // 快照会给出权威值）。
+      } else if (hasConfirmedPrebuiltIdentity) {
+        // S1 稳态空快照：保留上一轮完整侧栏投影，仅按 viewer runtime
+        // 刷新存活状态（viewer 匹配不到的条目保留上一轮状态，下一轮
+        // 正常快照会给出权威值）。
         allAgents = prevAgents.map((agent) => {
           const runtimeSessionId = getRuntimeId(agent);
           const runtimeAgent = runtimeSessionId ? runtimeById.get(runtimeSessionId) : runtimeById.get(agent.id);
