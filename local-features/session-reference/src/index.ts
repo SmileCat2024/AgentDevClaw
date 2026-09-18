@@ -332,12 +332,15 @@ export interface VerifiedSessionReference {
 /**
  * 渲染引用注入 reminder。只陈述引用事实（每条会话的寻址身份），不讲解
  * 工具用法——读取工具的 agentId 是必填参数，AI 填参时从行内标注取值即可。
+ * agentId 标注必须是可原样填参的纯值，禁止与 sessionType 等其他字段拼接
+ * 成复合 token——历史上 `agent: xxx/main` 的写法会被 AI 整串当 agentId
+ * 传入，下游 404（sessionType 不参与寻址，仅是元数据）。
  * 标题由 AI 自动生成，仅供定位参考——文案明确提示不能代表会话真实内容
  * 与方向，以 session_read_overview 实际内容为准。
  */
 export function renderReferenceReminder(references: VerifiedSessionReference[]): string {
   const lines = references.map((ref) => {
-    const head = `- ${ref.sessionId}${ref.title ? `「${truncateText(ref.title, 80)}」` : ''} — agent: ${ref.agentId}/${ref.sessionType}`;
+    const head = `- ${ref.sessionId}${ref.title ? `「${truncateText(ref.title, 80)}」` : ''} — agentId: ${ref.agentId}（身份: ${ref.sessionType}）`;
     if (ref.availability === 'missing') return `${head} — 已不存在，无法读取，请告知用户该引用已失效`;
     if (ref.availability === 'unknown') return `${head} — 读取入口暂不可用，尝试读取失败时请告知用户`;
     return head;
@@ -525,7 +528,7 @@ export class SessionReferenceFeature implements AgentFeature {
             },
             agentId: {
               type: 'string',
-              description: '会话所属的 agent ID（session_list 条目或会话引用 reminder 行内标注的 agent 值）',
+              description: '会话所属的 agent ID（session_list 条目或会话引用 reminder 行内 agentId 标注的值）',
             },
           },
           required: ['sessionId', 'agentId'],
@@ -573,7 +576,7 @@ export class SessionReferenceFeature implements AgentFeature {
             },
             agentId: {
               type: 'string',
-              description: '会话所属的 agent ID（session_list 条目或会话引用 reminder 行内标注的 agent 值）',
+              description: '会话所属的 agent ID（session_list 条目或会话引用 reminder 行内 agentId 标注的值）',
             },
           },
           required: ['sessionId', 'turn', 'agentId'],

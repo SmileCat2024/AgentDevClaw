@@ -12,6 +12,7 @@ import {
   renderTurnDetail,
   renderReferenceReminder,
   SessionReferenceFeature,
+  type VerifiedSessionReference,
 } from '../src/index.js';
 
 // ── renderSeedOverview（trim 视图概览） ───────────────────────────
@@ -181,24 +182,32 @@ describe('renderTurnDetail', () => {
 // ── renderReferenceReminder（引用注入 reminder） ─────────────────
 
 describe('renderReferenceReminder', () => {
-  it('renders id + title + agent/sessionType with the AI-title disclaimer', () => {
-    const text = renderReferenceReminder([
+  it('renders id + title + agentId(verbatim)/sessionType with the AI-title disclaimer', () => {
+    const references: VerifiedSessionReference[] = [
       { agentId: 'programming-helper', sessionId: 'session-1789456315259-15c389', title: '修复登录超时', sessionType: 'main', availability: 'ok' },
       { agentId: 'agent-studio', sessionId: 'session-1789431188614-41ceab', title: '重构导出逻辑', sessionType: 'main', availability: 'ok' },
-    ]);
+    ];
+    const text = renderReferenceReminder(references);
     assert.match(text, /^\[会话引用\] 用户在本条消息中引用了以下会话/);
     assert.match(text, /标题由 AI 自动生成，仅供参考，不能代表会话真实内容与方向/);
-    assert.match(text, /- session-1789456315259-15c389「修复登录超时」 — agent: programming-helper\/main/);
-    assert.match(text, /- session-1789431188614-41ceab「重构导出逻辑」 — agent: agent-studio\/main/);
+    assert.match(text, /- session-1789456315259-15c389「修复登录超时」 — agentId: programming-helper（身份: main）/);
+    assert.match(text, /- session-1789431188614-41ceab「重构导出逻辑」 — agentId: agent-studio（身份: main）/);
     assert.match(text, /session_read_overview/);
     assert.match(text, /session_read_turn/);
+    // 契约：agentId 标注必须是可原样填参的纯值，禁止复合 token（历史 bug：
+    // `agent: xxx/main` 被 AI 整串当 agentId 传入导致下游 404）
+    for (const ref of references) {
+      assert.ok(text.includes(`agentId: ${ref.agentId}（`), `agentId 标注应原样包含纯 agentId: ${ref.agentId}`);
+    }
+    assert.doesNotMatch(text, /agent: /);
+    assert.doesNotMatch(text, /agentId: [^（\s]+\/[^\s）]/);
   });
 
   it('marks missing sessions explicitly instead of silently dropping them', () => {
     const text = renderReferenceReminder([
       { agentId: 'a', sessionId: 's-1', title: '', sessionType: 'main', availability: 'missing' },
     ]);
-    assert.match(text, /- s-1 — agent: a\/main — 已不存在/);
+    assert.match(text, /- s-1 — agentId: a（身份: main） — 已不存在/);
   });
 
   it('distinguishes unverified availability from missing', () => {
@@ -245,8 +254,8 @@ describe('injectSessionReferences', () => {
       assert.equal(injected[0].turn, 3);
       assert.equal(injected[0].source, 'session-reference');
       assert.equal(injected[0].tag, 'reminder');
-      assert.match(injected[0].content, /s-1「修复登录超时」 — agent: programming-helper\/main/);
-      assert.match(injected[0].content, /s-2 — agent: agent-studio\/main/);
+      assert.match(injected[0].content, /s-1「修复登录超时」 — agentId: programming-helper（身份: main）/);
+      assert.match(injected[0].content, /s-2 — agentId: agent-studio（身份: main）/);
       // 每个引用验证一次存在性
       assert.equal(calls.filter((url) => url.includes('session_record')).length, 2);
     } finally {
