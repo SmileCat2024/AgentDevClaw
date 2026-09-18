@@ -861,7 +861,8 @@ agentList.addEventListener('contextmenu', (event) => {
     const ns = ctxEl.dataset.ctxNs;
     const id = ctxEl.dataset.ctxId;
     const variant = ctxEl.dataset.ctxVariant || 'default';
-    const items = getCtxMenuItems(role, ns, variant, id);
+    const sessionId = ctxEl.dataset.ctxSessionId || '';
+    const items = getCtxMenuItems(role, ns, variant, id, sessionId);
     if (items.length > 0) {
       event.preventDefault();
       window.closeCtxMenu();
@@ -869,7 +870,6 @@ agentList.addEventListener('contextmenu', (event) => {
       closeSessionContextMenu();
       closeCompactMenu();
       closeProjectContextMenu();
-      const sessionId = ctxEl.dataset.ctxSessionId || '';
       window.showCtxMenu(event.clientX, event.clientY, items, { role, ns, id, variant, sessionId });
       return;
     }

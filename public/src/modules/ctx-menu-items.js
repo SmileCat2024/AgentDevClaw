@@ -7,8 +7,9 @@
  *   - ctxRestartAgent: 重启 Agent
  *   - ctxStopAgent: 关闭 Agent
  *   - ctxArchiveAndStopRuntime: 归档会话并关闭 runtime
- *   - ctxRenameSession: 侧栏 runtime 项内联重命名
  *   - ctxGenerateTitle: AI 生成标题
+ *   - ctxCopySessionId: 复制会话 ID 到剪贴板
+ *   - ctxRenameSession: 侧栏 runtime 项内联重命名
  *   - ctxArchiveSession: 归档/取消归档会话
  *   - ctxTodoSession: 设置/取消待办
  *   - dispatchCtxAction: 菜单动作分发器
@@ -69,18 +70,21 @@ function ctxSessionOpsAllowed(ns) {
   return true;
 }
 
-function getCtxMenuItems(role, ns, variant, id) {
+function getCtxMenuItems(role, ns, variant, id, sessionId = '') {
   if (role === 'runtime' && ctxSessionOpsAllowed(ns)) {
-    // 远程运行时叶子：allAgents 无记录，操作经宿主命名空间 id 转发。
+    // 侧栏 runtime 叶子：优先按条目携带的 sessionId 解析目标会话（多个
+    // runtime 并存时 activeSessionId 未必指向被右键的会话）。
     const isZh = currentLanguage === 'zh';
     const agent = allAgents.find((item) => item.id === ns) || null;
-    const activeSessionId = agent?.workspace_sessions?.activeSessionId;
-    const activeSession = activeSessionId ? getWorkspaceSessionById(agent, activeSessionId) : null;
-    const isArchived = activeSession?.archived === true;
+    const targetSessionId = String(sessionId || agent?.workspace_sessions?.activeSessionId || '').trim();
+    const targetSession = targetSessionId ? getWorkspaceSessionById(agent, targetSessionId) : null;
+    const isArchived = targetSession?.archived === true;
+    const isTodo = targetSession?.todo === true;
     // Assembly sessions (agent-studio) are excluded from summary/trim/branch.
-    const isOpsExcluded = isAssemblySession(activeSession);
+    const isOpsExcluded = isAssemblySession(targetSession);
     const historyItems = isOpsExcluded ? [] : [
-      { label: isZh ? '总结历史（摘要）' : 'Summary', submenu: [
+      { type: 'separator' },
+      { label: isZh ? '总结历史（Summary）' : 'Summary', submenu: [
         { label: isZh ? '仅摘要' : 'Summary Only', action: 'summary' },
         { label: isZh ? '摘要并归档原会话' : 'Summary & Archive', action: 'summary-and-archive' },
       ]},
@@ -93,18 +97,28 @@ function getCtxMenuItems(role, ns, variant, id) {
         { label: isZh ? '分支并归档原会话' : 'Branch & Archive', action: 'branch-and-archive' },
       ]},
     ];
-    return [
+    // 分组：标题编辑 / 历史变换 / 会话管理 / runtime 生命周期（危险置底）。
+    const items = [
       { label: isZh ? '重命名' : 'Rename', action: 'rename' },
       { label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
       ...historyItems,
       { type: 'separator' },
-      // restart / stop / archive-and-stop 对远程叶子同样可用：服务端按
-      // ADR-0011 转发远程同名路由（agentId 用宿主命名空间 id）。
+      { label: isZh ? '复制 Session ID' : 'Copy Session ID', action: 'copy-session-id' },
+    ];
+    // TODO toggle — non-archived only（与 session 角色菜单一致）
+    if (!isArchived) {
+      items.push({ label: isTodo ? (isZh ? '取消待办' : 'Remove TODO') : (isZh ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
+    }
+    // restart / stop / archive-and-stop 对远程叶子同样可用：服务端按
+    // ADR-0011 转发远程同名路由（agentId 用宿主命名空间 id）。
+    items.push(
       { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive'), action: 'archive-and-stop' },
+      { type: 'separator' },
       { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
       { label: isZh ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
       { label: isZh ? '删除会话' : 'Delete Session', action: 'delete-session-runtime', danger: true },
-    ];
+    );
+    return items;
   }
   if (role === 'session' && ctxSessionOpsAllowed(ns)) {
     const agent = allAgents.find((item) => item.id === ns) || null;
@@ -123,13 +137,14 @@ function getCtxMenuItems(role, ns, variant, id) {
 
     // Summary / Trim / Branch — only for main/archived sessions
     if (!isOpsExcluded) {
+      items.push({ type: 'separator' });
       if (isArchived) {
         // Archived: no need for "archive original" option, flatten to direct items
-        items.push({ label: isZh ? '总结历史（摘要）' : 'Summary', action: 'summary' });
+        items.push({ label: isZh ? '总结历史（Summary）' : 'Summary', action: 'summary' });
         items.push({ label: isZh ? '精简历史（Trim）' : 'Trim', action: 'trim' });
         items.push({ label: isZh ? '创建分支' : 'Branch', action: 'branch' });
       } else {
-        items.push({ label: isZh ? '总结历史（摘要）' : 'Summary', submenu: [
+        items.push({ label: isZh ? '总结历史（Summary）' : 'Summary', submenu: [
           { label: isZh ? '仅摘要' : 'Summary Only', action: 'summary' },
           { label: isZh ? '摘要并归档原会话' : 'Summary & Archive', action: 'summary-and-archive' },
         ]});
@@ -144,7 +159,9 @@ function getCtxMenuItems(role, ns, variant, id) {
       }
     }
 
+    // Session management group（与 runtime 角色菜单同构）
     items.push({ type: 'separator' });
+    items.push({ label: isZh ? '复制 Session ID' : 'Copy Session ID', action: 'copy-session-id' });
 
     // TODO toggle — non-archived only
     if (!isArchived) {
@@ -154,7 +171,8 @@ function getCtxMenuItems(role, ns, variant, id) {
     // Archive / Unarchive
     items.push({ label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive'), action: 'archive-session' });
 
-    // Delete
+    // Danger zone
+    items.push({ type: 'separator' });
     items.push({ label: isZh ? '删除对话' : 'Delete', action: 'delete-session', danger: true });
 
     return items;
@@ -511,6 +529,37 @@ async function ctxGenerateTitle(target) {
   }
 }
 
+async function ctxCopySessionId(target) {
+  const { ns, id, sessionId } = target;
+  const sid = String(sessionId || id || '').trim();
+  if (!sid) return;
+  const isZh = currentLanguage === 'zh';
+  let ok = false;
+  if (typeof navigator !== 'undefined' && navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(sid); ok = true; } catch { ok = false; }
+  }
+  if (!ok) {
+    // Fallback for non-secure contexts (e.g. accessing the UI via a LAN IP)
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = sid;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch { ok = false; }
+  }
+  ClawToast.show({
+    id: 'ctx-copy-session-id',
+    status: ok ? 'success' : 'error',
+    title: ok ? (isZh ? '会话 ID 已复制' : 'Session ID copied') : (isZh ? '复制会话 ID 失败' : 'Failed to copy session ID'),
+    description: ok ? sid : undefined,
+  });
+}
+
 function ctxRenameSession(target) {
   const { ns: agentId, id: runtimeId, sessionId } = target;
   if (!agentId || !sessionId) return;
@@ -838,7 +887,16 @@ function dispatchCtxAction(action, target) {
 
     case 'todo-session':
       window.closeCtxMenu();
-      ctxTodoSession(target);
+      // ctxTodoSession 以 id 取 sessionId；runtime 角色的 id 是 runtimeId，
+      // 必须回填真实 sessionId（本地条目 id 即 runtimeId 的场景）。
+      if (ns && sid) {
+        ctxTodoSession({ ...target, id: sid });
+      }
+      break;
+
+    case 'copy-session-id':
+      window.closeCtxMenu();
+      ctxCopySessionId(target);
       break;
 
     default:

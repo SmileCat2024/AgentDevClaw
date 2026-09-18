@@ -98,26 +98,33 @@ describe('ctx-menu-items: getCtxMenuItems (runtime)', () => {
   it('runtime + programming-helper → full menu with submenus', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1')`);
-    // Expected: rename, generate-title, summary submenu, trim submenu, branch submenu,
-    //           separator, archive-and-stop, restart, stop, delete-session-runtime
-    assert.equal(items.length, 10);
+    // Expected: rename, generate-title, separator, summary submenu, trim submenu,
+    //           branch submenu, separator, copy-session-id, todo-session,
+    //           archive-and-stop, separator, restart, stop, delete-session-runtime
+    assert.equal(items.length, 14);
     assert.equal(items[0].action, 'rename');
     assert.equal(items[1].action, 'generate-title');
-    assert.ok(items[2].submenu, 'summary should have submenu');
-    assert.equal(items[2].submenu[0].action, 'summary');
-    assert.equal(items[2].submenu[1].action, 'summary-and-archive');
-    assert.ok(items[3].submenu, 'trim should have submenu');
-    assert.ok(items[4].submenu, 'branch should have submenu');
-    assert.equal(items[5].type, 'separator');
-    assert.equal(items[6].action, 'archive-and-stop');
-    assert.equal(items[7].action, 'restart');
-    assert.equal(items[8].action, 'stop');
-    assert.equal(items[8].danger, true);
-    assert.equal(items[9].action, 'delete-session-runtime');
-    assert.equal(items[9].danger, true);
+    assert.equal(items[2].type, 'separator');
+    assert.ok(items[3].submenu, 'summary should have submenu');
+    assert.equal(items[3].label, '总结历史（Summary）');
+    assert.equal(items[3].submenu[0].action, 'summary');
+    assert.equal(items[3].submenu[1].action, 'summary-and-archive');
+    assert.ok(items[4].submenu, 'trim should have submenu');
+    assert.ok(items[5].submenu, 'branch should have submenu');
+    assert.equal(items[6].type, 'separator');
+    assert.equal(items[7].action, 'copy-session-id');
+    assert.equal(items[8].action, 'todo-session');
+    assert.equal(items[8].label, '设为待办'); // active session todo=false → set
+    assert.equal(items[9].action, 'archive-and-stop');
+    assert.equal(items[10].type, 'separator');
+    assert.equal(items[11].action, 'restart');
+    assert.equal(items[12].action, 'stop');
+    assert.equal(items[12].danger, true);
+    assert.equal(items[13].action, 'delete-session-runtime');
+    assert.equal(items[13].danger, true);
   });
 
-  it('runtime with archived active session → unarchive label', () => {
+  it('runtime with archived active session → unarchive label, no todo item', () => {
     const { ctx } = loadCtxMenuItems({
       allAgents: [{
         id: 'programming-helper',
@@ -130,6 +137,17 @@ describe('ctx-menu-items: getCtxMenuItems (runtime)', () => {
     const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1')`);
     const archiveItem = items.find((i) => i.action === 'archive-and-stop');
     assert.ok(archiveItem.label.includes('取消归档'));
+    assert.ok(!items.find((i) => i.action === 'todo-session'));
+  });
+
+  it('runtime sessionId param resolves the targeted session for the todo label', () => {
+    // Multiple runtimes coexist: the entry carries its own sessionId, which may
+    // differ from the host's activeSessionId — the todo label must reflect the
+    // targeted session, not the active one.
+    const { ctx } = loadCtxMenuItems();
+    const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1', 'sess-todo')`);
+    const todoItem = items.find((i) => i.action === 'todo-session');
+    assert.equal(todoItem.label, '取消待办');
   });
 });
 
@@ -139,33 +157,39 @@ describe('ctx-menu-items: getCtxMenuItems (session)', () => {
   it('session main (not archived, not todo) → full menu with submenus', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-active')`);
-    // Expected: generate-title, summary submenu, trim submenu, branch submenu,
-    //           separator, todo-session, archive-session, delete-session
-    assert.equal(items.length, 8);
+    // Expected: generate-title, separator, summary submenu, trim submenu,
+    //           branch submenu, separator, copy-session-id, todo-session,
+    //           archive-session, separator, delete-session
+    assert.equal(items.length, 11);
     assert.equal(items[0].action, 'generate-title');
-    assert.ok(items[1].submenu, 'summary should have submenu');
-    assert.ok(items[2].submenu, 'trim should have submenu');
-    assert.ok(items[3].submenu, 'branch should have submenu');
-    assert.equal(items[4].type, 'separator');
-    assert.equal(items[5].action, 'todo-session');
-    assert.equal(items[5].label, '设为待办'); // not todo → set
-    assert.equal(items[6].action, 'archive-session');
-    assert.equal(items[7].action, 'delete-session');
-    assert.equal(items[7].danger, true);
+    assert.equal(items[1].type, 'separator');
+    assert.ok(items[2].submenu, 'summary should have submenu');
+    assert.equal(items[2].label, '总结历史（Summary）');
+    assert.ok(items[3].submenu, 'trim should have submenu');
+    assert.ok(items[4].submenu, 'branch should have submenu');
+    assert.equal(items[5].type, 'separator');
+    assert.equal(items[6].action, 'copy-session-id');
+    assert.equal(items[7].action, 'todo-session');
+    assert.equal(items[7].label, '设为待办'); // not todo → set
+    assert.equal(items[8].action, 'archive-session');
+    assert.equal(items[9].type, 'separator');
+    assert.equal(items[10].action, 'delete-session');
+    assert.equal(items[10].danger, true);
   });
 
   it('session archived → flattened items, no submenus, no todo', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'archived', 'sess-archived')`);
-    // Expected: generate-title, summary (flat), trim (flat), branch (flat),
-    //           separator, archive-session (unarchive), delete-session
-    assert.equal(items.length, 7);
-    assert.equal(items[1].action, 'summary');
-    assert.ok(!items[1].submenu, 'archived: summary should be flat');
-    assert.equal(items[2].action, 'trim');
-    assert.ok(!items[2].submenu);
-    assert.equal(items[3].action, 'branch');
+    // Expected: generate-title, separator, summary (flat), trim (flat), branch (flat),
+    //           separator, copy-session-id, archive-session (unarchive), separator, delete-session
+    assert.equal(items.length, 10);
+    assert.equal(items[2].action, 'summary');
+    assert.ok(!items[2].submenu, 'archived: summary should be flat');
+    assert.equal(items[3].action, 'trim');
     assert.ok(!items[3].submenu);
+    assert.equal(items[4].action, 'branch');
+    assert.ok(!items[4].submenu);
+    assert.equal(items[6].action, 'copy-session-id');
     // No todo toggle for archived
     assert.ok(!items.find((i) => i.action === 'todo-session'));
   });
@@ -346,7 +370,9 @@ describe('ctx-menu-items: remote runtime leaf menu parity', () => {
     assert.ok(actions.includes('delete-session-runtime'));
     assert.ok(actions.includes('rename'));
     assert.ok(actions.includes('generate-title'));
-    assert.equal(items.filter((item) => item.type === 'separator').length, 1);
+    assert.ok(actions.includes('copy-session-id'), 'remote leaf keeps Copy Session ID (client-side only)');
+    assert.ok(actions.includes('todo-session'), 'remote leaf keeps TODO toggle (forwarded route)');
+    assert.equal(items.filter((item) => item.type === 'separator').length, 3);
   });
 
   it('remote runtime leaf under an unknown host still gets no menu', () => {
@@ -471,6 +497,42 @@ describe('ctx-menu-items: sessionOps capability gating (merged integration)', ()
   it('local agent menu is unaffected by the capability lookup', () => {
     const ctx = loadWithCapability(false);
     const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1')`);
-    assert.equal(items.length, 10, 'local runtime menu unchanged');
+    assert.equal(items.length, 14, 'local runtime menu unchanged');
+  });
+});
+
+// ── copy-session-id action ──────────────────────────────────
+
+describe('ctx-menu-items: copy-session-id action', () => {
+  function loadCopyHarness() {
+    const copied = [];
+    const toasts = [];
+    const { ctx } = loadCtxMenuItems({
+      navigator: { clipboard: { writeText: async (text) => { copied.push(text); } } },
+      ClawToast: {
+        show: (opts) => { toasts.push(opts); },
+        update() {},
+      },
+    });
+    ctx.window.isSecureContext = true;
+    return { ctx, copied, toasts };
+  }
+
+  it('dispatchCtxAction copies the target sessionId and shows a success toast', async () => {
+    const { ctx, copied, toasts } = loadCopyHarness();
+    ctx.run(`dispatchCtxAction('copy-session-id', { ns: 'programming-helper', id: 'rt-1', sessionId: 'sess-abc' })`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(copied.includes('sess-abc'), 'clipboard must receive the sessionId');
+    assert.equal(toasts.length, 1);
+    assert.equal(toasts[0].status, 'success');
+    assert.equal(toasts[0].description, 'sess-abc');
+  });
+
+  it('runtime leaf without explicit sessionId falls back to id', async () => {
+    const { ctx, copied, toasts } = loadCopyHarness();
+    ctx.run(`dispatchCtxAction('copy-session-id', { ns: 'programming-helper', id: 'sess-fallback' })`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(copied.includes('sess-fallback'));
+    assert.equal(toasts[0].status, 'success');
   });
 });

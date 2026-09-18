@@ -51,7 +51,7 @@ const I18N = {
     workspace_new_project: '新建项目',
     workspace_select_directory_new_project: '选择目录并新建项目',
     workspace_compact_session: '编辑',
-    workspace_compact_summary: '总结历史（摘要）',
+    workspace_compact_summary: '总结历史（Summary）',
     workspace_compact_trim: '精简历史（Trim）',
     workspace_compact_summary_confirm: '确定要总结历史并继续会话吗？',
     workspace_compact_trim_confirm: '确定要精简历史并继续会话吗？',
