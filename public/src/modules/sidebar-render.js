@@ -699,7 +699,7 @@ function collectActiveCallRuntimeIds(agents) {
 
 let _callStatesRefreshInProgress = false;
 async function refreshAgentCallStates(agents = allAgents, options = {}) {
-  const { force = false } = options;
+  const { force = false, reuseNotification = null } = options;
   // 互斥锁：防止 Worker 心跳与常规 poll 并发执行导致重复触发通知
   if (_callStatesRefreshInProgress) return;
   const now = Date.now();
@@ -729,6 +729,18 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
     const nextNotificationPayloads = new Map();
     await Promise.all(runtimeIds.map(async (runtimeId) => {
       try {
+        // 同周期复用：poll 主循环的 statusTask 刚在本周期取过焦点 runtime 的
+        // notification，命中时直接复用 payload，避免每轮对同一 runtime 发两次
+        // 相同请求。payload 为空（请求失败/会话切换）时此处分支不命中，照常自取。
+        // 其余入口（Worker 心跳 force、前台回归、初次加载）不传该参数，始终走网络。
+        if (
+          reuseNotification?.payload
+          && normalizeAgentIdentity(reuseNotification.runtimeId) === normalizeAgentIdentity(runtimeId)
+        ) {
+          nextNotificationPayloads.set(runtimeId, reuseNotification.payload);
+          nextCallStates.set(runtimeId, resolveNotificationCallingState(reuseNotification.payload));
+          return;
+        }
         const res = await fetch(`/api/agents/${encodeURIComponent(runtimeId)}/notification`);
         if (!res.ok) return;
         const notifData = await res.json();

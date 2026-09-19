@@ -1246,8 +1246,15 @@ async function runPollCycle() {
     }
     emitMsgMetrics(msgMetrics);
 
-    await statusTask;
-    await refreshAgentCallStates(allAgents);
+    // 焦点 runtime 的 notification 本周期已由 statusTask 取过，结果交给
+    // refreshAgentCallStates 同周期复用（一次请求、两处消费），省去每轮一次
+    // 的重复请求；statusTask 失败/过期时 notifData 为空，对方照常自取兜底。
+    const focusedStatus = await statusTask;
+    await refreshAgentCallStates(allAgents, {
+      reuseNotification: focusedStatus?.notifData
+        ? { runtimeId: pollRuntimeId, payload: focusedStatus.notifData }
+        : null,
+    });
     const statusUiCommitted = commitSessionViewState(pollToken, () => {
       _syncPersistentActionButton();
       _syncPersistentInputUi(pollRuntimeId);

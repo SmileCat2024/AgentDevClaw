@@ -50,6 +50,7 @@
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "@playwright/cli": "0.1.19",
+    "compression": "^1.8.2",
     "express": "^4.21.2",
     "marked": "^18.0.4",
     "multer": "^2.1.1",

@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import { execFile } from 'child_process';
 import { existsSync, readFileSync, promises as fs } from 'fs';
 import os from 'os';
@@ -158,6 +159,10 @@ const __dirname = path.dirname(__filename);
 const app = express();
 // 不暴露 Express 指纹；所有响应统一携带安全头（含 CSP / 点击劫持防护）。
 app.disable('x-powered-by');
+// gzip 压缩挂在最前：同时覆盖直出 JSON、代理转发响应与静态资源。
+// 上游（ViewerWorker / 远程 Claw）不压缩，压缩统一在出口完成，公网隧道段直接受益；
+// 若反向代理剥离 Accept-Encoding 自行压缩，这里收到空 Accept-Encoding 会自动跳过，不会双重压缩。
+app.use(compression());
 app.use(securityHeadersMiddleware);
 const viewerWorker = new ViewerWorker(VIEWER_PORT, false, resolveInstanceUdsPath());
 const clawMcp = new ClawMCPServer();
