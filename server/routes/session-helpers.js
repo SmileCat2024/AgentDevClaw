@@ -1252,7 +1252,11 @@ async function archivePrebuiltSession(agentId, sessionId, archived, options = {}
   return result;
 }
 
+const TODO_COLORS = new Set(['white', 'red', 'yellow', 'green', 'blue']);
+
 async function tagPrebuiltSessionTodo(agentId, sessionId, todo, options = {}) {
+  // 待办颜色仅在 todo=true 时写入；取消待办时一并清除，保持索引干净
+  const color = TODO_COLORS.has(options.color) ? options.color : 'white';
   const newIndex = await updateSessionIndex(agentId, (index) => {
     const existing = index.sessions.find((session) => session.id === sessionId);
     if (!existing) {
@@ -1267,7 +1271,9 @@ async function tagPrebuiltSessionTodo(agentId, sessionId, todo, options = {}) {
       throw error;
     }
     const sessions = index.sessions.map((session) =>
-      session.id === sessionId ? { ...session, todo: !!todo } : session,
+      session.id === sessionId
+        ? { ...session, todo: !!todo, todoColor: todo ? color : null }
+        : session,
     );
     return { activeSessionId: index.activeSessionId, sessions };
   });

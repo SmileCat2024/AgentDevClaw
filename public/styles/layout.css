@@ -394,7 +394,6 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-left: 18px;
 }
 
 .agent-runtime-item {
@@ -424,7 +423,6 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-left: -18px;
   padding: 4px 10px 2px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -541,6 +539,193 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--success-color);
+}
+
+/* 会话 pin 槽位：条目内部开头的第一列（绝对定位，不挤占标题布局）。
+   已待办常驻正 pin；未待办条目 hover 时显示斜 pin。文字经 agent-line
+   的 padding-left 为 pin 腾出空间，无 pin 条目（远程）保持同一文字起点。
+   右侧保留 hover 才出现的 ⋯ 菜单按钮。 */
+.agent-runtime-item {
+  position: relative;
+}
+
+.agent-session-pin-slot {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-runtime-item .agent-line {
+  padding-left: 19px;
+}
+
+/* 全角开括号/引号开头的标题：标点字形墨迹内缩约半字宽，负缩进悬挂补偿，
+   使墨迹起点与普通汉字视觉对齐（0.5em 可按字体观感微调） */
+.agent-runtime-item .agent-name.hanging-punct {
+  text-indent: -0.5em;
+}
+
+/* 运行中（calling）：转圈替代 pin 显示在槽位（复用原指示灯的视觉） */
+.agent-session-pin-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--success-color);
+  border-top-color: transparent;
+  border-radius: 50%;
+  box-sizing: border-box;
+  animation: call-spin 0.8s linear infinite;
+}
+
+/* 刚完成（just-finished）：蓝色脉冲点替代 pin 显示在槽位 */
+.agent-session-pin-finished {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--code-accent);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--code-accent) 60%, transparent);
+  animation: just-finished-pulse 2s ease-in-out infinite;
+}
+
+.agent-session-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+/* 未待办：斜 pin，颜色与 ⋯ 按钮一致（自身 hover 升为主色）。透明度由条目
+   pointermove 按光标水平位置驱动（--pin-hover-op）：靠近左缘渐显，离开归零；
+   透明态禁用点击，避免拦截对条目左侧的点击。 */
+.agent-session-pin.is-slanted {
+  opacity: var(--pin-hover-op, 0);
+  color: var(--text-secondary);
+  pointer-events: none;
+  transform: rotate(45deg);
+  transition: opacity 0.15s linear;
+}
+
+.agent-item:hover .agent-session-pin.is-slanted {
+  pointer-events: auto;
+}
+
+.agent-session-pin.is-slanted:hover {
+  color: var(--text-primary);
+}
+
+/* 已待办：正 pin 常驻，颜色随 todoColor（默认白 = 主文字色，暗色主题下
+   即白色；红黄绿蓝用固定色值） */
+.agent-session-pin.is-set.pin-color-red { color: #ff6b6b; }
+.agent-session-pin.is-set.pin-color-yellow { color: #f5c542; }
+.agent-session-pin.is-set.pin-color-green { color: #51cf66; }
+.agent-session-pin.is-set.pin-color-blue { color: #64b4ff; }
+
+/* 已待办 pin hover：叠加斜杠（禁止符语义），与静止态区分，提示点击取消 */
+.agent-session-pin.is-set {
+  position: relative;
+}
+
+.agent-session-pin.is-set:not(.dragging):hover::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1.5px;
+  height: 18px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.agent-session-pin.dragging {
+  transform: scale(1.2);
+}
+
+/* 斜 pin 拖动中保持旋转，只做放大 */
+.agent-session-pin.is-slanted.dragging {
+  transform: rotate(45deg) scale(1.2);
+}
+
+/* 长按/上拖待办 pin 弹出的颜色选择器：竖向色块面板，在 pin 上方（空间
+   不足时下方）弹出；浮层配色与 ctx 菜单一致 */
+.todo-color-picker {
+  position: fixed;
+  z-index: 3000;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  box-shadow: 0 10px 30px var(--shadow-color);
+}
+
+.todo-color-picker.open {
+  display: inline-flex;
+}
+
+/* 色块：纯色无勾边，hover 轻微放大；白色在浅色面板上靠极淡内环保底 */
+.todo-color-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+.todo-color-swatch.todo-c-white { background: var(--text-primary); box-shadow: inset 0 0 0 1px var(--border-color); }
+.todo-color-swatch.todo-c-red { background: #ff6b6b; }
+.todo-color-swatch.todo-c-yellow { background: #f5c542; }
+.todo-color-swatch.todo-c-green { background: #51cf66; }
+.todo-color-swatch.todo-c-blue { background: #64b4ff; }
+
+.todo-color-swatch.hover,
+.todo-color-swatch:hover {
+  transform: scale(1.12);
+}
+
+/* 当前颜色：细单环标识 */
+.todo-color-swatch.current {
+  box-shadow: 0 0 0 1.5px var(--panel-bg), 0 0 0 3px var(--text-primary);
+}
+
+/* ⋯ 按钮常驻占位（visibility + opacity 由条目 pointermove 的光标位置变量
+   驱动，不用 display）——否则出现/消失时标题可用宽度变化，省略号位置会跳动；
+   visibility 参与 transition，淡出过程中保持可点，淡入立即生效 */
+.agent-runtime-more {
+  display: inline-flex;
+  opacity: var(--more-hover-op, 0);
+  visibility: var(--more-vis, hidden);
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: opacity 0.15s linear, visibility 0.15s linear;
+}
+
+.agent-runtime-more:hover {
+  background: var(--border-color);
+  color: var(--text-primary);
 }
 
 .agent-icon {

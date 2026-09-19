@@ -2076,6 +2076,7 @@ app.post('/protoclaw/prebuilt_sessions/todo', express.json(), async (req, res, n
     const todo = req.body.todo !== false;
     const result = await tagPrebuiltSessionTodo(agent.id, sessionId, todo, {
       includeSessions: req.body.responseMode !== 'delta',
+      color: typeof req.body.color === 'string' ? req.body.color : '',
     });
     res.json(result);
   } catch (error) {
@@ -2127,8 +2128,6 @@ app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) 
           savedAt,
           metaVersion: META_VERSION,
           updatedAt: new Date(savedAt).toISOString(),
-          // Auto-clear todo when session is actively producing new data
-          todo: false,
         };
       });
       return { ...index, sessions };

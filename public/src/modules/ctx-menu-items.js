@@ -735,19 +735,21 @@ async function ctxArchiveSession(target) {
   }
 }
 
-async function ctxTodoSession(target) {
+async function ctxTodoSession(target, explicit = {}) {
   const { ns: agentId, id: sessionId } = target;
   if (!agentId || !sessionId) return;
 
   const agent = allAgents.find((item) => item.id === agentId) || null;
   const session = getWorkspaceSessionById(agent, sessionId);
-  const nextTodo = !(session?.todo === true);
+  const nextTodo = typeof explicit.todo === 'boolean' ? explicit.todo : !(session?.todo === true);
+  const nextColor = typeof explicit.color === 'string' && window.SIDEBAR_TODO_COLORS.has(explicit.color)
+    ? explicit.color : 'white';
 
   // Optimistic update
   if (agent) {
     const currentSessions = getWorkspaceSessions(agent);
     const updatedSessions = currentSessions.map((s) =>
-      s.id === sessionId ? { ...s, todo: nextTodo } : s,
+      s.id === sessionId ? { ...s, todo: nextTodo, todoColor: nextTodo ? nextColor : null } : s,
     );
     updateAgentRecord(agentId, {
       workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
@@ -760,7 +762,7 @@ async function ctxTodoSession(target) {
     const response = await fetch('/protoclaw/prebuilt_sessions/todo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
-      body: JSON.stringify({ agentId, sessionId, todo: nextTodo, responseMode: 'delta' }),
+      body: JSON.stringify({ agentId, sessionId, todo: nextTodo, color: nextColor, responseMode: 'delta' }),
     });
     if (!response.ok) {
       throw new Error(await response.text().catch(() => 'todo session failed'));
@@ -778,11 +780,15 @@ async function ctxTodoSession(target) {
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
   } catch (e) {
-    // Revert on failure
+    // Revert on failure（恢复请求前的真实状态，而非简单取反——颜色要一并还原）
     if (agent) {
+      const previousTodo = session?.todo === true;
+      const previousColor = previousTodo
+        ? (window.SIDEBAR_TODO_COLORS.has(session?.todoColor) ? session.todoColor : 'white')
+        : null;
       const currentSessions = getWorkspaceSessions(agent);
       const revertedSessions = currentSessions.map((s) =>
-        s.id === sessionId ? { ...s, todo: !nextTodo } : s,
+        s.id === sessionId ? { ...s, todo: previousTodo, todoColor: previousColor } : s,
       );
       updateAgentRecord(agentId, {
         workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },

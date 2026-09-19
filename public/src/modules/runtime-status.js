@@ -172,6 +172,33 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // path (sessions may store a lowercased path on Windows).
   const sessionDirMap = new Map();
   const hostAgentId = String(prebuiltAgent?.agentId || prebuiltAgent?.id || '').trim();
+  // 会话级身份路由（原定义于子项收集前，供 todo 关联与子项过滤共用）：
+  // 投影条目（agentId ≠ id，如 programming-helper:coder）只收集
+  // sessionType='coder' 的子项，且不合成镜像条目（宿主 runtime 是 main 会话的）；
+  // 宿主条目排除 coder 会话子项（它们归投影条目）。
+  const isProjectionEntry = String(prebuiltAgent?.agentId || '').trim()
+    && String(prebuiltAgent.agentId).trim() !== String(prebuiltAgent.id || '').trim();
+  const childSessionType = isProjectionEntry
+    ? String(prebuiltAgent.sessionType || '').trim() || 'main'
+    : null;
+
+  // 待办标记：运行中会话条目按 sessionId 关联宿主会话索引的 todo 字段，
+  // 侧栏据此渲染 pin。投影条目（coder）被服务端剥离会话级字段，与上面
+  // sessionDirMap 同理改从全局列表中的宿主记录读取。
+  const sessionTodoMap = new Map();
+  const todoSourceRecord = isProjectionEntry
+    ? ((typeof allAgents !== 'undefined' && Array.isArray(allAgents))
+      ? allAgents.find((item) => item?.id === hostAgentId) || null
+      : null)
+    : prebuiltAgent;
+  for (const session of Array.isArray(todoSourceRecord?.workspace_sessions?.sessions)
+    ? todoSourceRecord.workspace_sessions.sessions : []) {
+    if (session?.todo === true) {
+      const todoSid = String(session?.id || '').trim();
+      if (todoSid) sessionTodoMap.set(todoSid, window.SIDEBAR_TODO_COLORS.has(session.todoColor) ? session.todoColor : 'white');
+    }
+  }
+
   if (hostAgentId === 'programming-helper') {
     // 投影条目（coder）被服务端剥离会话级字段，目录映射改从全局列表中的
     // 宿主记录读取——宿主的 workspace_sessions 覆盖工作空间全部会话身份。
@@ -226,6 +253,9 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     if (!entry?.runtimeId) return;
     if (seenRuntimeIds.has(entry.runtimeId)) return;
     seenRuntimeIds.add(entry.runtimeId);
+    const entryTodoColor = sessionTodoMap.get(String(entry.sessionId || '').trim());
+    entry.todo = entryTodoColor !== undefined;
+    entry.todoColor = entryTodoColor || '';
     if (!entry.projectDir) {
       // PH 宿主走 workspace_sessions 映射（大小写已校正）；其余条目
       // （coder 投影等）用 server 附带的 open_directory 兜底。
@@ -273,14 +303,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // runtime as the prebuilt's primary), the child entry wins and its createdAt
   // is preserved instead of being shadowed by the synthetic's null createdAt.
   //
-  // 会话级身份路由：投影条目（agentId ≠ id，如 programming-helper:coder）只收集
-  // sessionType='coder' 的子项，且不合成镜像条目（宿主 runtime 是 main 会话的）；
-  // 宿主条目排除 coder 会话子项（它们归投影条目）。
-  const isProjectionEntry = String(prebuiltAgent?.agentId || '').trim()
-    && String(prebuiltAgent.agentId).trim() !== String(prebuiltAgent.id || '').trim();
-  const childSessionType = isProjectionEntry
-    ? String(prebuiltAgent.sessionType || '').trim() || 'main'
-    : null;
+  // 会话身份路由的子项过滤见函数前部 isProjectionEntry / childSessionType。
   const childRuntimeIds = new Set();
   // Session ids already presented by a live child runtime. A pending
   // sidebar operation for the same target session hands over to that

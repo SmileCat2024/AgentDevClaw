@@ -20,6 +20,35 @@
 // Keys are stable project identities so state persists across re-renders.
 const _collapsedProjectGroups = new Set();
 
+// 全角开括号/引号开头的标题：标点墨迹内缩约半字宽，命中时加悬挂补偿类负
+// 缩进，使墨迹起点与普通汉字视觉对齐（补偿量见 layout.css .hanging-punct）。
+const SIDEBAR_HANGING_PUNCT_RE = /^[\uFF02\uFF07\uFF08\uFF3B\uFF5B\u2018\u201C\u3008\u300A\u300C\u300E\u3010\u3014]/;
+
+// 邻近渐显：斜 pin 与 ⋯ 按钮的透明度由光标在条目内的水平位置驱动——
+// 靠近左缘渐显 pin，靠近右缘渐显 ⋯；端点阈值内全不透明，向外线性衰减到
+// 透明，避免划过/点击条目时两个图标突现突消的视觉干扰。
+// pin 是弱提示，阈值小于 ⋯（全显 40px，40→100px 渐隐）；⋯ 全显 70px，
+// 70→160px 渐隐。
+function sidebarProximityFade(distance, solid, range) {
+  if (distance <= solid) return 1;
+  if (distance >= solid + range) return 0;
+  return (solid + range - distance) / range;
+}
+
+window.onSidebarItemPointerMove = function(event, el) {
+  const x = event.clientX - el.getBoundingClientRect().left;
+  const fromRight = el.clientWidth - x;
+  el.style.setProperty('--pin-hover-op', sidebarProximityFade(x, 40, 60).toFixed(3));
+  el.style.setProperty('--more-hover-op', sidebarProximityFade(fromRight, 70, 90).toFixed(3));
+  el.style.setProperty('--more-vis', fromRight <= 160 ? 'visible' : 'hidden');
+};
+
+window.onSidebarItemPointerLeave = function(el) {
+  el.style.setProperty('--pin-hover-op', '0');
+  el.style.setProperty('--more-hover-op', '0');
+  el.style.setProperty('--more-vis', 'hidden');
+};
+
 /**
  * 侧栏运行中会话的拖拽源（→ 输入框会话引用）：dragstart 把会话身份写入
  * 专用 MIME，投放判定与状态管理都在 session-reference-picker 模块。
@@ -44,6 +73,61 @@ window.onSidebarSessionDragStart = function(event, el) {
   };
   event.dataTransfer.setData(ref.MIME, JSON.stringify(payload));
   event.dataTransfer.effectAllowed = 'copy';
+};
+
+/**
+ * 侧栏运行中会话条目的 ⋯ 按钮：打开与右键相同的 ctx 菜单（可视引导入口）。
+ * 身份从条目的 data-ctx-* 读取，与 agentList 的 contextmenu 委托共用
+ * getCtxMenuItems；stopPropagation 阻止点击冒泡成切换会话。
+ */
+window.onSidebarSessionCtxMenu = function(event, button) {
+  if (event) event.stopPropagation();
+  const ctxEl = button?.closest('[data-ctx-role]');
+  if (!ctxEl) return;
+  const role = ctxEl.dataset.ctxRole;
+  const ns = ctxEl.dataset.ctxNs;
+  const id = ctxEl.dataset.ctxId;
+  const variant = ctxEl.dataset.ctxVariant || 'default';
+  const sessionId = ctxEl.dataset.ctxSessionId || '';
+  const items = getCtxMenuItems(role, ns, variant, id, sessionId);
+  if (items.length === 0) return;
+  const rect = button.getBoundingClientRect();
+  window.closeCtxMenu();
+  closeAgentContextMenu();
+  closeSessionContextMenu();
+  closeCompactMenu();
+  closeProjectContextMenu();
+  window.showCtxMenu(rect.right, rect.bottom, items, { role, ns, id, variant, sessionId });
+};
+
+/**
+ * 侧栏会话 pin 图标（正立图钉）。斜态（未待办）由 CSS rotate 呈现。
+ */
+const SIDEBAR_PIN_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1"/></svg>';
+
+/**
+ * 侧栏会话 pin 的点击：切换待办（与右键菜单「设为/取消待办」同一条
+ * dispatchCtxAction('todo-session') 链路，含乐观更新与失败回滚）。
+ * 斜 pin（未待办）点击 → 设为待办；已待办 pin 的 tap 分支由
+ * sidebar-pin-color 状态机转调到这里。乐观更新只改会话内容不进
+ * 侧栏渲染签名，需清签名强制立即重渲。
+ */
+window.onSidebarSessionPinClick = function(event, el) {
+  if (event) event.stopPropagation();
+  const ctxEl = el?.closest('[data-ctx-role]');
+  if (!ctxEl) return;
+  const ns = ctxEl.dataset.ctxNs;
+  const sessionId = ctxEl.dataset.ctxSessionId || ctxEl.dataset.ctxId;
+  if (!ns || !sessionId) return;
+  dispatchCtxAction('todo-session', {
+    role: ctxEl.dataset.ctxRole,
+    ns,
+    id: sessionId,
+    sessionId,
+    variant: ctxEl.dataset.ctxVariant || 'default',
+  });
+  lastAgentListRenderSignature = '';
+  renderAgentList();
 };
 
 // Tracks collapsed state of category groups in the sidebar (系统空间, 工作群, etc.).
@@ -112,10 +196,19 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
         data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
         data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.hostNamespaceId || entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
         ${entry.source === 'remote' ? '' : 'draggable="true" ondragstart="onSidebarSessionDragStart(event, this)"'}
+        onpointermove="onSidebarItemPointerMove(event, this)" onpointerleave="onSidebarItemPointerLeave(this)"
       >
+        ${entry.source !== 'remote' ? `<span class="agent-session-pin-slot">${calling
+          ? '<span class="agent-session-pin-spinner" title="' + escapeHtml(zh ? '会话运行中' : 'Session is running') + '"></span>'
+          : (justFinished
+            ? '<span class="agent-session-pin-finished" title="' + escapeHtml(zh ? '刚刚完成' : 'Just finished') + '"></span>'
+            : (entry.todo === true
+              ? `<button class="agent-session-pin is-set pin-color-${escapeHtml(entry.todoColor || 'white')}" type="button" data-todo-color="${escapeHtml(entry.todoColor || 'white')}" title="${escapeHtml(zh ? '点击取消待办，长按上拖换色' : 'Click to remove TODO, drag up for color')}" onpointerdown="onSidebarPinPointerDown(event, this)">${SIDEBAR_PIN_SVG}</button>`
+              : `<button class="agent-session-pin is-slanted" type="button" title="${escapeHtml(zh ? '点击设为待办，长按上拖选色' : 'Click to set TODO, drag up for color')}" onpointerdown="onSidebarPinPointerDown(event, this)">${SIDEBAR_PIN_SVG}</button>`))}</span>`
+        : ''}
         <div class="agent-line">
-          <span class="agent-status-dot"></span>
-          <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(retiringLabel)}</span>` : deleting ? `<span class="agent-runtime-transition-label">${escapeHtml(operationDegraded ? (currentLanguage === 'zh' ? '删除未完成' : 'Delete incomplete') : (currentLanguage === 'zh' ? '正在删除' : 'Deleting'))}</span>` : ''}</div>
+          <div class="agent-name${SIDEBAR_HANGING_PUNCT_RE.test(entry.name || entry.runtimeId) ? ' hanging-punct' : ''}">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(retiringLabel)}</span>` : deleting ? `<span class="agent-runtime-transition-label">${escapeHtml(operationDegraded ? (currentLanguage === 'zh' ? '删除未完成' : 'Delete incomplete') : (currentLanguage === 'zh' ? '正在删除' : 'Deleting'))}</span>` : ''}</div>
+          ${entry.contextMenuEnabled ? `<button class="agent-runtime-more" type="button" title="${escapeHtml(zh ? '更多操作' : 'More actions')}" onclick="onSidebarSessionCtxMenu(event, this)"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>` : ''}
         </div>
       </div>
     `;
@@ -201,7 +294,7 @@ const AGENT_ICONS = {
 
 function getAgentIconHtml(agentId) {
   const iconFile = AGENT_ICONS[agentId];
-  if (!iconFile) return '<span class="agent-status-dot"></span>';
+  if (!iconFile) return '';
   return `<img class="agent-icon" src="images/agent-icons/${iconFile}" alt="" draggable="false" />`;
 }
 
@@ -266,7 +359,6 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
         data-agent-context-menu="${contextMenuEnabled ? 'true' : 'false'}"
       >
         <div class="agent-line">
-          <span class="agent-status-dot"></span>
           <div class="agent-name">${escapeHtml(agent.name || agent.id)}</div>
         </div>
       </div>
