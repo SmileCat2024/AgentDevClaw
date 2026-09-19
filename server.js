@@ -90,6 +90,7 @@ import {
 } from './server/routes/model-config.js';
 import { setupGroupChatRoutes } from './server/routes/group-chat.js';
 import { setupDispatchRoutes, getProjectAdapter, fireBootSchedules } from './server/routes/dispatch.js';
+import { createSseEventsModule, createSseCompressionFilter } from './server/routes/sse-events.js';
 import { setupIMRoutes, readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './server/routes/im.js';
 import { createSessionHelpers } from './server/routes/session-helpers.js';
 import { setupSessionRoutes } from './server/routes/session.js';
@@ -162,7 +163,10 @@ app.disable('x-powered-by');
 // gzip 压缩挂在最前：同时覆盖直出 JSON、代理转发响应与静态资源。
 // 上游（ViewerWorker / 远程 Claw）不压缩，压缩统一在出口完成，公网隧道段直接受益；
 // 若反向代理剥离 Accept-Encoding 自行压缩，这里收到空 Accept-Encoding 会自动跳过，不会双重压缩。
-app.use(compression());
+// SSE 事件流（text/event-stream）必须排除：压缩缓冲会滞留事件帧。
+app.use(compression({
+  filter: createSseCompressionFilter(compression.filter),
+}));
 app.use(securityHeadersMiddleware);
 const viewerWorker = new ViewerWorker(VIEWER_PORT, false, resolveInstanceUdsPath());
 const clawMcp = new ClawMCPServer();
@@ -176,6 +180,11 @@ const PROJECT_REMOTE_CLAW_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 're
 // calls use the process-scoped bearer token injected into child processes.
 app.use(authMiddleware);
 registerAuthRoutes(app, express);
+
+// SSE 推送通道：ViewerWorker 会话事件 → 浏览器（cookie 鉴权随全局 authMiddleware）。
+// 旧框架无事件总线时端点返回 501，前端保持轮询（见 docs/sse-migration-bcd-preparation.md §6.10）。
+const sseEvents = createSseEventsModule({ viewerWorker });
+sseEvents.setupRoutes(app);
 
 // ── Agent discovery + identity extracted to server/routes/agent-discovery.js ──
 // sessionApi is a mutable reference filled after session-helpers is created,
@@ -1447,6 +1456,8 @@ async function shutdown(exitCode = 0) {
     }
   }
 
+  // SSE 长连接先收口（发 shutdown 帧并断开），客户端尽快进入重连/降级路径
+  sseEvents.closeAll();
   await viewerWorker.stop().catch(e => console.warn(e));
   process.exit(exitCode);
 }
