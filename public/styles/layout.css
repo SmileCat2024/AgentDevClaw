@@ -542,9 +542,9 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
 }
 
 /* 会话 pin 槽位：条目内部开头的第一列（绝对定位，不挤占标题布局）。
-   已待办常驻正 pin；未待办条目 hover 时显示斜 pin。文字经 agent-line
-   的 padding-left 为 pin 腾出空间，无 pin 条目（远程）保持同一文字起点。
-   右侧保留 hover 才出现的 ⋯ 菜单按钮。 */
+   已待办常驻正 pin；未待办条目 hover 时显示斜 pin。槽位与顶层 agent-icon
+   同宽同心，标题起点与工作空间条目对齐（见下方 agent-line），无 pin 条目
+   （远程）保持同一文字起点。右侧保留光标邻近渐显的 ⋯ 菜单按钮。 */
 .agent-runtime-item {
   position: relative;
 }
@@ -554,14 +554,16 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   left: 10px;
   top: 50%;
   transform: translateY(-50%);
-  width: 15px;
+  width: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
+/* 会话标题文字起点 = 顶层工作空间条目的文字起点（10 padding + 18 icon +
+   8 gap = 36px），pin/转圈/蓝灯自然占住前面的图标列位置 */
 .agent-runtime-item .agent-line {
-  padding-left: 19px;
+  padding-left: 26px;
 }
 
 /* 全角开括号/引号开头的标题：标点字形墨迹内缩约半字宽，负缩进悬挂补偿，
