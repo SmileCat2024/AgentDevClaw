@@ -24,7 +24,10 @@ const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
 // 独立 UDS 路径：不传 udsPath 会 fallback 到默认 /tmp/agentdev-viewer.sock，
 // 测试启动即 unlink 正在运行的 Claw 主实例 sock，结束时 stop() 又删除——
 // 两者都会让主实例与 runtime 的 IPC 通道永久失联（历史 DX 事故根因）。
-const TEST_UDS_PATH = `/tmp/agentdev-viewer-test-queued-input-${process.pid}.sock`;
+// Windows 走命名管道（文件系统 sock 路径解析到盘根，listen 直接 EACCES）。
+const TEST_UDS_PATH = process.platform === 'win32'
+  ? `\\\\.\\pipe\\agentdev-viewer-test-queued-input-${process.pid}`
+  : `/tmp/agentdev-viewer-test-queued-input-${process.pid}.sock`;
 const AGENT_ID = 'test-queued-input-agent';
 const CLIENT_ID = 'fake-client-id';
 
