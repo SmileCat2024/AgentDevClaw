@@ -28,6 +28,11 @@ function distHasStartOrderFix() {
 }
 
 function getTestUdsPath() {
+  // 与框架同源契约：Windows 走命名管道（文件系统 sock 路径会解析到盘根，
+  // listen 直接 EACCES）；POSIX 用 /tmp 下的 .sock 文件。
+  if (process.platform === 'win32') {
+    return `\\\\.\\pipe\\agentdev-viewer-dist-test-${process.pid}-${Date.now()}`;
+  }
   return `/tmp/agentdev-viewer-dist-test-${process.pid}-${Date.now()}.sock`;
 }
 
@@ -80,7 +85,10 @@ describe('ViewerWorker dist integration (sock path preservation)', () => {
     const primary = new ViewerWorker(port, false, udsPath);
     workers.push(primary);
     await primary.start();
-    assert.ok(existsSync(udsPath), 'primary instance must create the sock file');
+    // 命名管道（win32）不适合 fs 存在性断言，与框架测试一致仅在 POSIX 断言文件
+    if (process.platform !== 'win32') {
+      assert.ok(existsSync(udsPath), 'primary instance must create the sock file');
+    }
     assert.equal(await canConnect(udsPath), true, 'primary UDS listener must be reachable');
 
     const second = new ViewerWorker(port, false, udsPath);
@@ -90,7 +98,9 @@ describe('ViewerWorker dist integration (sock path preservation)', () => {
     // 失败实例的 stop() 同样不得删除路径上属于他人的 sock 文件
     await second.stop();
 
-    assert.ok(existsSync(udsPath), 'sock file must survive the failed second start');
+    if (process.platform !== 'win32') {
+      assert.ok(existsSync(udsPath), 'sock file must survive the failed second start');
+    }
     assert.equal(await canConnect(udsPath), true, 'primary listener must remain reachable');
   });
 });
