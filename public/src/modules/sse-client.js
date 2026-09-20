@@ -175,8 +175,9 @@ function handleMessagesEvent(frame) {
 // ── 非焦点 choice 提醒（§4.3：ClawToast 迁移为事件驱动）─────────────
 // 与 checkGlobalChoiceAlerts 共享 _seenChoiceAlertIds 去重：事件路径与
 // 轮询降级路径（SSE 断连恢复期）谁先处理谁标记，不会重复 toast。
-// 同时触发桌面通知（后台 tab 时 toast 不可见，系统通知直达），
-// 覆盖原 Worker 心跳 refreshChoiceAlertStates 的通知职责。
+// 同时触发桌面通知（后台 tab 时 toast 不可见，系统通知直达）：此处驱动
+// 首发通知，30s 周期重提醒与前台到达后离场补发由心跳低频重扫承担
+// （desktop-notify.js，markObserved:false 语义）。
 
 function notifyChoiceAlerts(alerts) {
   if (!Array.isArray(alerts)) return;

@@ -236,7 +236,9 @@ describe('sse-client: 事件分发焦点路由', () => {
 
   it('焦点 input-requests 真 choice 租约触发桌面通知', () => {
     const notified = [];
-    const { ctx } = loadSseClient({ _tryNotifyInputRequest: (runtimeId, reqId) => notified.push([runtimeId, reqId]) });
+    const { ctx } = loadSseClient({
+      _tryNotifyInputRequest: (runtimeId, reqId, data, opts) => notified.push([runtimeId, reqId, opts]),
+    });
     ctx.run('bootSseClient()');
     latestSource().emit('hello', { hello: true });
     latestSource().emit('input-requests', {
@@ -244,7 +246,9 @@ describe('sse-client: 事件分发焦点路由', () => {
       data: [{ requestId: 'req-c', mode: 'choices', questions: ['继续吗'] }],
     });
     assert.equal(notified.length, 1);
-    assert.deepEqual(notified[0], ['rt-focus', 'req-c']);
+    assert.equal(notified[0][0], 'rt-focus');
+    assert.equal(notified[0][1], 'req-c');
+    assert.equal(notified[0][2]?.markObserved, false); // 焦点分支同样不写观察标记
   });
 
   it('非焦点 input-requests 非 choices 租约不 toast（F1：文本输入请求不误报等待选择）', () => {
