@@ -358,11 +358,16 @@ async function refreshChoiceAlertStates() {
       if (!document.hidden && document.hasFocus()) return;
       // 通知权限未授予时也不需要心跳
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+      // SSE 激活时本地条目由事件实时驱动：call 状态走 notification 帧，
+      // choice 桌面通知走 input-requests 帧（焦点 + 非焦点全覆盖）。
+      // refreshAgentCallStates 内部自动降为远程条目专用轮询（§5.3，
+      // 无远程条目时零请求）；refreshChoiceAlertStates 的数据源
+      // /protoclaw/choice_alerts 仅聚合本地 ViewerWorker runtime，
+      // SSE 激活期间该 fetch 纯冗余，跳过。
+      // SSE 断连/降级瞬间 isSseActive() 翻 false，下一 tick 自动恢复全量。
+      const sseActive = typeof isSseActive === 'function' && isSseActive();
       refreshAgentCallStates(allAgents, { force: true });
-      // 后台时也检查 choice 请求（poll 循环可能被节流，无法及时检测）
-      // 使用独立的 refreshChoiceAlertStates 而非 checkGlobalChoiceAlerts，
-      // 避免 _seenChoiceAlertIds 去重阻断后台通知路径
-      if (Date.now() - _lastChoiceNotifyCheckAt > 2000) {
+      if (!sseActive && Date.now() - _lastChoiceNotifyCheckAt > 2000) {
         _lastChoiceNotifyCheckAt = Date.now();
         refreshChoiceAlertStates().catch(e => console.warn(e));
       }

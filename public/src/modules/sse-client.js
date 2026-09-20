@@ -172,7 +172,9 @@ function handleMessagesEvent(frame) {
 
 // ── 非焦点 choice 提醒（§4.3：ClawToast 迁移为事件驱动）─────────────
 // 与 checkGlobalChoiceAlerts 共享 _seenChoiceAlertIds 去重：事件路径与
-// 轮询路径（远程条目保留）谁先处理谁标记，不会重复 toast。
+// 轮询降级路径（SSE 断连恢复期）谁先处理谁标记，不会重复 toast。
+// 同时触发桌面通知（后台 tab 时 toast 不可见，系统通知直达），
+// 覆盖原 Worker 心跳 refreshChoiceAlertStates 的通知职责。
 
 function notifyChoiceAlerts(alerts) {
   if (!Array.isArray(alerts)) return;
@@ -182,6 +184,12 @@ function notifyChoiceAlerts(alerts) {
     if (_seenChoiceAlertIds.has(requestId)) continue;
     if (_seenChoiceAlertIds.size > 500) _seenChoiceAlertIds.clear();
     _seenChoiceAlertIds.add(requestId);
+    // 后台桌面通知（_tryNotifyInputRequest 内部自判前台：前台时标记
+    // observed 直接返回，后台时弹系统通知）。接替 Worker 心跳
+    // refreshChoiceAlertStates 对非焦点本地 agent 的通知职责。
+    if (typeof _tryNotifyInputRequest === 'function') {
+      _tryNotifyInputRequest(alert.agentId, requestId, null);
+    }
     if (typeof ClawToast === 'undefined' || !ClawToast?.show) continue;
     const matched = (Array.isArray(allAgents) ? allAgents : []).find(
       (a) => (a.runtime_session_id || a.runtimeSessionId) === alert.agentId

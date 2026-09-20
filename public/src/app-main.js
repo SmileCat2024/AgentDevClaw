@@ -1373,14 +1373,11 @@ async function runPollCycle() {
     }
 
     // 全局 choice 请求提醒（跨所有 agent，不限于当前焦点）。
-    // SSE 激活时本地条目由 input-requests 事件驱动 toast（§4.3，与
-    // checkGlobalChoiceAlerts 共享 _seenChoiceAlertIds 去重）；但前台对
-    // 远程条目的 choice 检测现状只走本路径（Worker 心跳前台不请求），存在
-    // 在线远程条目时必须保留轮询。
-    const hasOnlineRemoteEntries = typeof getVisibleRemoteEntries === 'function'
-      && getVisibleRemoteEntries().some((entry) => entry.status === 'connected');
-    const sseSkipChoiceAlerts = typeof isSseActive === 'function'
-      && isSseActive() && !hasOnlineRemoteEntries;
+    // SSE 激活时本地条目由 input-requests 事件驱动 toast + 桌面通知
+    // （§4.3，与 checkGlobalChoiceAlerts 共享 _seenChoiceAlertIds 去重）。
+    // checkGlobalChoiceAlerts 的数据源 /protoclaw/choice_alerts 仅聚合
+    // 本地 ViewerWorker runtime，不含远程条目，SSE 激活时整段跳过。
+    const sseSkipChoiceAlerts = typeof isSseActive === 'function' && isSseActive();
     if (!sseSkipChoiceAlerts && Date.now() - _lastChoiceAlertCheckAt > 3000) {
       _lastChoiceAlertCheckAt = Date.now();
       checkGlobalChoiceAlerts().catch(e => console.warn(e));

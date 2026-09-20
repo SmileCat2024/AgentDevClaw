@@ -484,3 +484,75 @@ describe('desktop-notify: finish visibility', () => {
     assert.equal(notifications.length, 1);
   });
 });
+
+// ── desktop-notify: Worker 心跳按 SSE 状态分流（P3）─────────────────
+// 心跳 IIFE 闭包不可直接触达：Worker stub 捕获 onmessage，测试手动发 tick。
+// refreshChoiceAlertStates 走真实函数体，以 fetch 记录器观测其是否被触发。
+
+function createHeartbeatSandbox({ sseActive = false } = {}) {
+  const fetches = [];
+  const callRefreshes = [];
+  class CapturingWorker {
+    constructor() { CapturingWorker.last = this; }
+    set onmessage(fn) { this._onmessage = fn; }
+    get onmessage() { return this._onmessage; }
+  }
+  const ctx = createFrontendSandbox({
+    allAgents: [{ id: 'runtime-1', name: 'Runtime One' }],
+    currentLanguage: 'en',
+    normalizeAgentIdentity(value) { return String(value || '').trim(); },
+    isSseActive() { return sseActive; },
+    refreshAgentCallStates(agents, options) { callRefreshes.push({ agents, options }); },
+    fetch: async (url) => {
+      fetches.push(String(url));
+      return { ok: true, json: async () => ({ alerts: [] }) };
+    },
+    Notification: function TestNotification() { return { close() {} }; },
+    Blob: function TestBlob() {},
+    URL: { createObjectURL: () => 'blob:test' },
+    Worker: CapturingWorker,
+  });
+  ctx.Notification.permission = 'granted';
+  ctx.window.focus = () => {};
+  ctx.document.hasFocus = () => false;
+  ctx.document.hidden = true;
+  ctx.loadSource('public/src/modules/desktop-notify.js');
+  const tick = () => CapturingWorker.last._onmessage({ data: 'tick' });
+  return { ctx, tick, fetches, callRefreshes };
+}
+
+describe('desktop-notify: Worker 心跳按 SSE 状态分流（P3）', () => {
+  it('SSE 激活时后台 tick：choice 轮询跳过，远程 call 轮询保留', () => {
+    const { tick, fetches, callRefreshes } = createHeartbeatSandbox({ sseActive: true });
+    tick();
+    assert.equal(fetches.length, 0); // /protoclaw/choice_alerts 不再请求
+    assert.equal(callRefreshes.length, 1); // refreshAgentCallStates 保留（内部自降为远程轮询）
+    assert.equal(callRefreshes[0].options?.force, true);
+  });
+
+  it('SSE 降级后下一 tick 自动恢复 choice 轮询', () => {
+    const { ctx, tick, fetches } = createHeartbeatSandbox({ sseActive: true });
+    tick();
+    assert.equal(fetches.length, 0);
+    ctx.isSseActive = () => false; // 断连/降级：isSseActive 翻 false
+    tick();
+    assert.equal(fetches.length, 1);
+    assert.ok(fetches[0].includes('/protoclaw/choice_alerts'));
+  });
+
+  it('SSE 未激活（传统轮询形态）后台 tick：全量职责执行', () => {
+    const { tick, fetches, callRefreshes } = createHeartbeatSandbox({ sseActive: false });
+    tick();
+    assert.equal(callRefreshes.length, 1);
+    assert.equal(fetches.length, 1);
+  });
+
+  it('前台 tick：心跳不介入（poll 循环负责）', () => {
+    const { ctx, tick, fetches, callRefreshes } = createHeartbeatSandbox({ sseActive: false });
+    ctx.document.hidden = false;
+    ctx.document.hasFocus = () => true;
+    tick();
+    assert.equal(fetches.length, 0);
+    assert.equal(callRefreshes.length, 0);
+  });
+});

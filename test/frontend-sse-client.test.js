@@ -259,6 +259,29 @@ describe('sse-client: 事件分发焦点路由', () => {
     assert.equal(calls.toasts.length, 0);
   });
 
+  it('非焦点 choice 帧触发桌面通知并按 requestId 去重（P3：接替心跳通知职责）', () => {
+    const notified = [];
+    const { ctx, calls } = loadSseClient({
+      _tryNotifyInputRequest: (runtimeId, reqId) => notified.push([runtimeId, reqId]),
+    });
+    ctx.run('bootSseClient()');
+    latestSource().emit('hello', { hello: true });
+    latestSource().emit('input-requests', {
+      kind: 'input-requests', agentId: 'rt-other',
+      data: [{ requestId: 'req-nf', mode: 'choices', questions: ['继续吗'] }],
+    });
+    // toast 与桌面通知同帧触发（toast 回前台可见，系统通知后台直达）
+    assert.equal(calls.toasts.length, 1);
+    assert.deepEqual(notified, [['rt-other', 'req-nf']]);
+    // 同 requestId 重复帧：_seenChoiceAlertIds 去重，双路径均不重触发
+    latestSource().emit('input-requests', {
+      kind: 'input-requests', agentId: 'rt-other',
+      data: [{ requestId: 'req-nf', mode: 'choices', questions: ['继续吗'] }],
+    });
+    assert.equal(calls.toasts.length, 1);
+    assert.equal(notified.length, 1);
+  });
+
   it('messages probe 返回 handled404 → 触发 runtime 消失处理（F3）', async () => {
     const handled404 = [];
     const { ctx } = loadSseClient({
