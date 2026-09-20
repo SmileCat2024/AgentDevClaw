@@ -126,7 +126,9 @@ function handleInputRequestsEvent(frame) {
         && Array.isArray(lease?.questions) && lease.questions.length > 0)
       .pop();
     if (choiceLease?.requestId && typeof _tryNotifyInputRequest === 'function') {
-      _tryNotifyInputRequest(frame.agentId, choiceLease.requestId, null);
+      // markObserved:false：前台到达不写观察标记，离场后由心跳 30s 重扫
+      // 补发（基线行为对齐，详见 desktop-notify.js）
+      _tryNotifyInputRequest(frame.agentId, choiceLease.requestId, null, { markObserved: false });
     }
   } else {
     // 与服务端 /protoclaw/choice_alerts 聚合同一谓词（mode=choices 且含
@@ -184,11 +186,12 @@ function notifyChoiceAlerts(alerts) {
     if (_seenChoiceAlertIds.has(requestId)) continue;
     if (_seenChoiceAlertIds.size > 500) _seenChoiceAlertIds.clear();
     _seenChoiceAlertIds.add(requestId);
-    // 后台桌面通知（_tryNotifyInputRequest 内部自判前台：前台时标记
-    // observed 直接返回，后台时弹系统通知）。接替 Worker 心跳
-    // refreshChoiceAlertStates 对非焦点本地 agent 的通知职责。
+    // 后台桌面通知（_tryNotifyInputRequest 内部自判前台：前台时直接
+    // 返回，后台时弹系统通知）。接替 Worker 心跳 refreshChoiceAlertStates
+    // 对非焦点本地 agent 的首发通知职责；markObserved:false 使前台到达
+    // 不写观察标记，离场后由心跳 30s 重扫补发（基线行为对齐）。
     if (typeof _tryNotifyInputRequest === 'function') {
-      _tryNotifyInputRequest(alert.agentId, requestId, null);
+      _tryNotifyInputRequest(alert.agentId, requestId, null, { markObserved: false });
     }
     if (typeof ClawToast === 'undefined' || !ClawToast?.show) continue;
     const matched = (Array.isArray(allAgents) ? allAgents : []).find(

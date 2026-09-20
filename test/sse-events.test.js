@@ -259,6 +259,105 @@ describe('sse-events: event publishing', () => {
   });
 });
 
+// ── 3b. terminal bell 双入口（P3 S1）──────────────────────────────
+
+describe('sse-events: terminal bell dual entry', () => {
+  it('input-requests 事件帧含 choice 租约 → bell 响一次，重复帧去重不重响', async (t) => {
+    const fake = makeFakeWorker();
+    const bells = [];
+    const h = makeHarness(t, { worker: fake.worker, playSound: (name) => bells.push(name) });
+    await h.start();
+    const s = await h.openStream();
+    await s.readUntil(hasHello);
+    assert.equal(bells.length, 0); // 连接时无挂起 choice，hello 不响
+
+    fake.state.inputRequests.set('a1', [{ requestId: 'r1', mode: 'choices', questions: ['继续吗'] }]);
+    fake.emit({ kind: 'input-requests', agentId: 'a1' });
+    assert.ok(await s.readUntil((tx) => tx.includes('event: input-requests')));
+    assert.equal(bells.length, 1);
+    assert.equal(bells[0], 'terminal-bell.mp3');
+
+    // 同 requestId 的租约重写帧：共享 seen 集合去重，不重响
+    fake.emit({ kind: 'input-requests', agentId: 'a1' });
+    await new Promise((r) => setTimeout(r, 20)); // 越过合并窗口
+    assert.equal(bells.length, 1);
+  });
+
+  it('文本输入请求帧不响 bell（谓词与 choice_alerts 聚合同源）', async (t) => {
+    const fake = makeFakeWorker();
+    const bells = [];
+    const h = makeHarness(t, { worker: fake.worker, playSound: (name) => bells.push(name) });
+    await h.start();
+    const s = await h.openStream();
+    await s.readUntil(hasHello);
+    fake.state.inputRequests.set('a1', [{ requestId: 'r-text', mode: 'text' }]);
+    fake.emit({ kind: 'input-requests', agentId: 'a1' });
+    assert.ok(await s.readUntil((tx) => tx.includes('event: input-requests')));
+    assert.equal(bells.length, 0);
+  });
+
+  it('hello 首连快照含挂起 choice → bell；重连 hello 重扫不重响', async (t) => {
+    const fake = makeFakeWorker();
+    fake.state.agents = [{ id: 'a1', name: 'Agent One', connected: true }];
+    fake.state.inputRequests.set('a1', [{ requestId: 'r1', mode: 'choices', questions: ['q'] }]);
+    const bells = [];
+    const h = makeHarness(t, { worker: fake.worker, playSound: (name) => bells.push(name) });
+    await h.start();
+    const s = await h.openStream();
+    await s.readUntil(hasHello);
+    assert.equal(bells.length, 1); // hello 扫描入口
+
+    s.abort();
+    await new Promise((r) => setTimeout(r, 10));
+    const s2 = await h.openStream();
+    await s2.readUntil(hasHello);
+    assert.equal(bells.length, 1); // 重连重扫：seen 集合已含 r1，不重响
+  });
+
+  it('共享 seen 集合：轮询路径已响过的 requestId（预标记）事件帧不重响', async (t) => {
+    const fake = makeFakeWorker();
+    const seen = new Set(['r1']); // 模拟 /protoclaw/choice_alerts 路由已 bell 过
+    const bells = [];
+    const h = makeHarness(t, {
+      worker: fake.worker,
+      playSound: (name) => bells.push(name),
+      seenChoiceRequestIds: () => seen,
+    });
+    await h.start();
+    const s = await h.openStream();
+    await s.readUntil(hasHello);
+    fake.state.inputRequests.set('a1', [{ requestId: 'r1', mode: 'choices', questions: ['q'] }]);
+    fake.emit({ kind: 'input-requests', agentId: 'a1' });
+    assert.ok(await s.readUntil((tx) => tx.includes('event: input-requests')));
+    assert.equal(bells.length, 0); // 跨入口共享去重
+
+    fake.state.inputRequests.set('a1', [
+      { requestId: 'r1', mode: 'choices', questions: ['q'] },
+      { requestId: 'r2', mode: 'choices', questions: ['q2'] },
+    ]);
+    fake.emit({ kind: 'input-requests', agentId: 'a1' });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(bells.length, 1); // 新 requestId 照常响，每批至多一次
+  });
+
+  it('无已连接客户端时事件帧不响（无人听）；客户端接入后 hello 扫描补响', async (t) => {
+    const fake = makeFakeWorker();
+    const bells = [];
+    const h = makeHarness(t, { worker: fake.worker, playSound: (name) => bells.push(name) });
+    await h.start();
+    // 无任何连接：事件只进环形缓冲
+    fake.state.inputRequests.set('a1', [{ requestId: 'r1', mode: 'choices', questions: ['q'] }]);
+    fake.emit({ kind: 'input-requests', agentId: 'a1' });
+    await waitStats(h.mod, (st) => st.pending === 0);
+    assert.equal(bells.length, 0);
+
+    fake.state.agents = [{ id: 'a1', name: 'Agent One', connected: true }];
+    const s = await h.openStream();
+    await s.readUntil(hasHello);
+    assert.equal(bells.length, 1); // hello 扫描入口补响
+  });
+});
+
 // ── 4. 合并窗口 ───────────────────────────────────────────────────
 
 describe('sse-events: coalescing window', () => {

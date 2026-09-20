@@ -262,7 +262,7 @@ describe('sse-client: 事件分发焦点路由', () => {
   it('非焦点 choice 帧触发桌面通知并按 requestId 去重（P3：接替心跳通知职责）', () => {
     const notified = [];
     const { ctx, calls } = loadSseClient({
-      _tryNotifyInputRequest: (runtimeId, reqId) => notified.push([runtimeId, reqId]),
+      _tryNotifyInputRequest: (runtimeId, reqId, data, opts) => notified.push([runtimeId, reqId, opts]),
     });
     ctx.run('bootSseClient()');
     latestSource().emit('hello', { hello: true });
@@ -270,9 +270,13 @@ describe('sse-client: 事件分发焦点路由', () => {
       kind: 'input-requests', agentId: 'rt-other',
       data: [{ requestId: 'req-nf', mode: 'choices', questions: ['继续吗'] }],
     });
-    // toast 与桌面通知同帧触发（toast 回前台可见，系统通知后台直达）
+    // toast 与桌面通知同帧触发（toast 回前台可见，系统通知后台直达）；
+    // markObserved:false：前台到达不写观察标记，离场后由心跳重扫补发
     assert.equal(calls.toasts.length, 1);
-    assert.deepEqual(notified, [['rt-other', 'req-nf']]);
+    assert.equal(notified.length, 1);
+    assert.equal(notified[0][0], 'rt-other');
+    assert.equal(notified[0][1], 'req-nf');
+    assert.equal(notified[0][2]?.markObserved, false);
     // 同 requestId 重复帧：_seenChoiceAlertIds 去重，双路径均不重触发
     latestSource().emit('input-requests', {
       kind: 'input-requests', agentId: 'rt-other',

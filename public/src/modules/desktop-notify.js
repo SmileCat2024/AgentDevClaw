@@ -231,7 +231,7 @@ async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
  *   _markAgentCallStartedForNotify (新一轮 call 清除 finish 状态)
  *     ↔  新 requestId 替换旧条目 (新一轮 choice 清除 input 状态)
  */
-async function _tryNotifyInputRequest(runtimeId, requestId, alertData = null) {
+async function _tryNotifyInputRequest(runtimeId, requestId, alertData = null, opts = {}) {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
 
@@ -239,8 +239,12 @@ async function _tryNotifyInputRequest(runtimeId, requestId, alertData = null) {
   if (!normId || !requestId) return;
 
   // 前台时不需要通知——用户已经看到了 choice 卡片或 toast。
+  // markObserved:false（SSE 事件路径）：前台到达不写观察标记，用户离场后
+  // 由心跳低频重扫补发系统通知（对齐基线：基线心跳前台不运行、从不标记）。
   if (_isNotifyForeground()) {
-    _foregroundObservedInputMap.set(normId, Date.now());
+    if (opts.markObserved !== false) {
+      _foregroundObservedInputMap.set(normId, Date.now());
+    }
     return;
   }
 
@@ -359,15 +363,18 @@ async function refreshChoiceAlertStates() {
       // 通知权限未授予时也不需要心跳
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
       // SSE 激活时本地条目由事件实时驱动：call 状态走 notification 帧，
-      // choice 桌面通知走 input-requests 帧（焦点 + 非焦点全覆盖）。
-      // refreshAgentCallStates 内部自动降为远程条目专用轮询（§5.3，
-      // 无远程条目时零请求）；refreshChoiceAlertStates 的数据源
-      // /protoclaw/choice_alerts 仅聚合本地 ViewerWorker runtime，
-      // SSE 激活期间该 fetch 纯冗余，跳过。
-      // SSE 断连/降级瞬间 isSseActive() 翻 false，下一 tick 自动恢复全量。
+      // choice 首发通知走 input-requests 帧（焦点 + 非焦点全覆盖，
+      // 前台到达不写观察标记）。refreshAgentCallStates 内部自动降为
+      // 远程条目专用轮询（§5.3，无远程条目时零请求）。
+      // choice 低频重扫（30s，基线 2s 的 1/15）补住事件路径覆盖不到的
+      // 两个基线职责：前台到达后离场的补发（markObserved:false 依赖此
+      // 扫描）、长挂起 choice 的 30s 周期重提醒；进入后台首个 tick 即刻
+      // 扫一次（时间戳 0 视为过期）。SSE 断连/降级瞬间 isSseActive()
+      // 翻 false，下一 tick 自动回到基线 2s 节流。
       const sseActive = typeof isSseActive === 'function' && isSseActive();
       refreshAgentCallStates(allAgents, { force: true });
-      if (!sseActive && Date.now() - _lastChoiceNotifyCheckAt > 2000) {
+      const choiceCheckIntervalMs = sseActive ? 30000 : 2000;
+      if (Date.now() - _lastChoiceNotifyCheckAt > choiceCheckIntervalMs) {
         _lastChoiceNotifyCheckAt = Date.now();
         refreshChoiceAlertStates().catch(e => console.warn(e));
       }

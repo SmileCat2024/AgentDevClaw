@@ -522,21 +522,25 @@ function createHeartbeatSandbox({ sseActive = false } = {}) {
 }
 
 describe('desktop-notify: Worker 心跳按 SSE 状态分流（P3）', () => {
-  it('SSE 激活时后台 tick：choice 轮询跳过，远程 call 轮询保留', () => {
+  it('SSE 激活时后台 tick：进入后台即刻重扫一次 pending choice，窗口内不重复', () => {
     const { tick, fetches, callRefreshes } = createHeartbeatSandbox({ sseActive: true });
     tick();
-    assert.equal(fetches.length, 0); // /protoclaw/choice_alerts 不再请求
-    assert.equal(callRefreshes.length, 1); // refreshAgentCallStates 保留（内部自降为远程轮询）
+    // 时间戳 0 视为过期：首个 tick 即刻扫一次（补住前台期间到达的挂起 choice）
+    assert.equal(fetches.length, 1);
+    tick();
+    assert.equal(fetches.length, 1); // 30s 窗口内不重复
+    assert.equal(callRefreshes.length, 2); // 远程 call 轮询每 tick 保留
     assert.equal(callRefreshes[0].options?.force, true);
   });
 
-  it('SSE 降级后下一 tick 自动恢复 choice 轮询', () => {
+  it('SSE 激活 30s 节流：5s 前扫过不再扫；降级后 2s 节流立即恢复', () => {
     const { ctx, tick, fetches } = createHeartbeatSandbox({ sseActive: true });
+    ctx.run(`_lastChoiceNotifyCheckAt = Date.now() - 5000`);
     tick();
-    assert.equal(fetches.length, 0);
+    assert.equal(fetches.length, 0); // 5s < 30s（SSE 激活态节流）
     ctx.isSseActive = () => false; // 断连/降级：isSseActive 翻 false
     tick();
-    assert.equal(fetches.length, 1);
+    assert.equal(fetches.length, 1); // 5s > 2s（降级态节流）→ 立即恢复
     assert.ok(fetches[0].includes('/protoclaw/choice_alerts'));
   });
 
@@ -554,5 +558,36 @@ describe('desktop-notify: Worker 心跳按 SSE 状态分流（P3）', () => {
     tick();
     assert.equal(fetches.length, 0);
     assert.equal(callRefreshes.length, 0);
+  });
+});
+
+describe('desktop-notify: markObserved 选项（SSE 事件路径的观察标记语义）', () => {
+  it('markObserved:false 前台到达不写观察标记，离场后重扫可补发', async () => {
+    const { ctx, notifications } = createDesktopNotifySandbox();
+    ctx.run('_syncForegroundState()'); // 前台：hidden=false + hasFocus=true
+    await ctx.run('_tryNotifyInputRequest("runtime-1", "req-a", null, { markObserved: false })');
+    assert.equal(notifications.length, 0);
+    assert.equal(ctx.run('_foregroundObservedInputMap.has("runtime-1")'), false); // 未标记
+
+    // 用户离场（超宽限期），心跳重扫路径（默认 opts）补发
+    ctx.document.hidden = true;
+    ctx.document.hasFocus = () => false;
+    ctx.run(`_lastForegroundTs = ${Date.now() - 60000}`);
+    await ctx.run('_tryNotifyInputRequest("runtime-1", "req-a")');
+    assert.equal(notifications.length, 1); // 补发成功
+  });
+
+  it('默认（markObserved）前台到达写观察标记，离场后仍抑制', async () => {
+    const { ctx, notifications } = createDesktopNotifySandbox();
+    ctx.run('_syncForegroundState()');
+    await ctx.run('_tryNotifyInputRequest("runtime-1", "req-b")');
+    assert.equal(notifications.length, 0);
+    assert.equal(ctx.run('_foregroundObservedInputMap.has("runtime-1")'), true);
+
+    ctx.document.hidden = true;
+    ctx.document.hasFocus = () => false;
+    ctx.run(`_lastForegroundTs = ${Date.now() - 60000}`);
+    await ctx.run('_tryNotifyInputRequest("runtime-1", "req-b")');
+    assert.equal(notifications.length, 0); // 观察标记持续抑制
   });
 });

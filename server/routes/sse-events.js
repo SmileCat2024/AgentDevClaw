@@ -44,6 +44,13 @@ export function createSseEventsModule(deps = {}) {
     heartbeatMs = SSE_DEFAULTS.heartbeatMs,
     ringSize = SSE_DEFAULTS.ringSize,
     maxClients = SSE_DEFAULTS.maxClients,
+    // bell 双入口所需宿主依赖：playSound 为发声函数（server.js 的
+    // playSoundOnServer，函数声明提升可直接传引用）；seenChoiceRequestIds
+    // 为惰性取共享去重集合（server.js 中该 const 声明晚于模块创建，
+    // 必须延迟到调用时取值），与 /protoclaw/choice_alerts 路由共享，
+    // 跨入口（事件帧 / hello / 轮询降级）去重不重响。
+    playSound = null,
+    seenChoiceRequestIds = null,
   } = deps;
 
   const supported = !!viewerWorker && typeof viewerWorker.onSessionEvent === 'function';
@@ -97,6 +104,14 @@ export function createSseEventsModule(deps = {}) {
       }
       const snapshot = snapshotPayload(entry.kind, entry.agentId);
       if (snapshot == null) return; // agent 已不存在：connection 事件已覆盖清理
+      if (entry.kind === 'input-requests' && Array.isArray(snapshot)) {
+        // bell 双入口之二（事件路径）：谓词与 scanChoiceAlerts 同源
+        bellForChoiceAlerts(snapshot
+          .filter((lease) => lease && lease.mode === 'choices'
+            && Array.isArray(lease.questions) && lease.questions.length > 0
+            && typeof lease.requestId === 'string')
+          .map((lease) => ({ requestId: lease.requestId })));
+      }
       publish(entry.kind, { kind: entry.kind, agentId: entry.agentId, data: snapshot });
     } catch (err) {
       // 组装失败只丢这一帧：快照方法不应抛错，真抛了也不该断掉整条管线
@@ -158,6 +173,28 @@ export function createSseEventsModule(deps = {}) {
     try {
       return viewerWorker.listAgentStates() || [];
     } catch { return []; }
+  }
+
+  /** bell：新 choice 请求到达时服务端提示音。与 /protoclaw/choice_alerts
+   * 路由共享 seen 集合跨入口去重；每批至多响一次（与路由 one bell per
+   * cycle 对齐）；无已连接客户端时不响（基线语义：无人轮询则无人听）。 */
+  const localSeenChoiceIds = new Set();
+
+  function bellForChoiceAlerts(alerts) {
+    if (typeof playSound !== 'function' || !Array.isArray(alerts) || alerts.length === 0) return;
+    if (clients.size === 0) return;
+    const seen = (typeof seenChoiceRequestIds === 'function' && seenChoiceRequestIds())
+      || localSeenChoiceIds;
+    for (const alert of alerts) {
+      const requestId = alert?.requestId;
+      if (!requestId) continue;
+      if (!seen.has(requestId)) {
+        if (seen.size > 500) seen.clear();
+        seen.add(requestId);
+        playSound('terminal-bell.mp3');
+        return;
+      }
+    }
   }
 
   function writeConn(conn, text) {
@@ -223,13 +260,17 @@ export function createSseEventsModule(deps = {}) {
     for (const f of replay) res.write(f.frame);
 
     // hello 收尾：id 取当前 eidSeq，客户端断线重连带该值即可从此处续传
+    const helloChoiceAlerts = scanChoiceAlerts();
+    // bell 双入口之一（首连快照）：重连场景由共享 seen 集合去重不重响；
+    // 服务端重启后集合清空，挂起 choice 响一次（与基线轮询行为对齐）
+    bellForChoiceAlerts(helloChoiceAlerts);
     res.write(formatFrame(eidSeq, 'hello', {
       hello: true,
       resynced: resync,
       resumed: replay.length > 0,
       heartbeatMs,
       coalesceMs,
-      choiceAlerts: scanChoiceAlerts(),
+      choiceAlerts: helloChoiceAlerts,
       agents: agentSummaries(),
     }));
 

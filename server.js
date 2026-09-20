@@ -183,7 +183,13 @@ registerAuthRoutes(app, express);
 
 // SSE 推送通道：ViewerWorker 会话事件 → 浏览器（cookie 鉴权随全局 authMiddleware）。
 // 旧框架无事件总线时端点返回 501，前端保持轮询（见 docs/sse-migration-bcd-preparation.md §6.10）。
-const sseEvents = createSseEventsModule({ viewerWorker });
+// playSoundOnServer 为提升的函数声明可直接传引用；_seenChoiceRequestIds
+// 的 const 声明在下方（choice_alerts 路由区），须惰性取值避开 TDZ。
+const sseEvents = createSseEventsModule({
+  viewerWorker,
+  playSound: playSoundOnServer,
+  seenChoiceRequestIds: () => _seenChoiceRequestIds,
+});
 sseEvents.setupRoutes(app);
 
 // ── Agent discovery + identity extracted to server/routes/agent-discovery.js ──
