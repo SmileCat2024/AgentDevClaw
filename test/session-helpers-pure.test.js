@@ -21,6 +21,8 @@ import {
   sortSidebarSessions,
   trimSessionRecordForWire,
   sliceSessionsForWire,
+  buildChildRuntimeAgent,
+  sessionRecordToWorkspaceMeta,
 } from '../server/routes/session-helpers-pure.js';
 
 // ── extractToolCallLabel ──────────────────────────────────────────
@@ -604,5 +606,123 @@ describe('wire session projection', () => {
     assert.deepEqual(page.slice.map((s) => s.id), ['a', 'c']);
     assert.equal(page.total, 2);
     assert.deepEqual([page.mainTotal, page.archivedTotal], [1, 1]);
+  });
+});
+
+// ── sessionRecordToWorkspaceMeta ─────────────────────────────────
+
+describe('sessionRecordToWorkspaceMeta', () => {
+  it('translates a regular session record with empty display name', () => {
+    const meta = sessionRecordToWorkspaceMeta({
+      id: 'session-1',
+      title: '（精简）排查幽灵会话',
+      agentName: '',
+      formId: '',
+      openDirectory: 'D:\\code\\AgentDevClaw',
+    });
+    assert.deepEqual(meta, {
+      active_workspace_session_id: 'session-1',
+      active_workspace_session_form_id: null,
+      active_workspace_session_title: '（精简）排查幽灵会话',
+      active_workspace_agent_name: '',
+      active_workspace_display_name: '',
+      open_directory: 'D:\\code\\AgentDevClaw',
+    });
+  });
+
+  it('resolves assembly display name from agentName or title', () => {
+    const meta = sessionRecordToWorkspaceMeta({
+      id: 'session-2',
+      title: 'My Assembly',
+      agentName: 'AssembledAgent',
+      formId: 'assembly-form',
+      openDirectory: 'C:\\envs\\AssembledAgent',
+    });
+    assert.equal(meta.active_workspace_display_name, 'AssembledAgent');
+    assert.equal(meta.active_workspace_session_form_id, 'assembly-form');
+
+    const titleOnly = sessionRecordToWorkspaceMeta({
+      id: 'session-3',
+      title: 'My Assembly',
+      formId: 'assembly-form',
+    });
+    assert.equal(titleOnly.active_workspace_display_name, 'My Assembly');
+  });
+});
+
+// ── buildChildRuntimeAgent ───────────────────────────────────────
+
+describe('buildChildRuntimeAgent', () => {
+  // ViewerWorker /api/agents 的原始条目形状（无身份字段）。
+  const viewerAgent = {
+    id: 'agent-vw-7f3',
+    name: '智能编码空间',
+    createdAt: '2026-09-20T12:00:00.000Z',
+    messageCount: 12,
+    connected: true,
+    inputAccepted: true,
+    pendingInputCount: 0,
+  };
+
+  it('projects identity fields the sidebar needs onto the raw viewer entry', () => {
+    const projected = buildChildRuntimeAgent(viewerAgent, {
+      agentId: 'programming-helper',
+      sessionId: 'session-1',
+      sessionType: 'main',
+      sessionMeta: {
+        active_workspace_session_id: 'session-1',
+        active_workspace_session_form_id: null,
+        active_workspace_session_title: '（精简）排查幽灵会话',
+        active_workspace_agent_name: '',
+        active_workspace_display_name: '',
+        open_directory: 'D:\\code\\AgentDevClaw',
+      },
+    });
+    assert.equal(projected.source, 'child');
+    assert.equal(projected.parent_id, 'programming-helper');
+    assert.equal(projected.runtime_session_id, 'agent-vw-7f3');
+    assert.equal(projected.sidebar_entry_id, 'programming-helper');
+    assert.equal(projected.sessionType, 'main');
+    assert.equal(projected.active_workspace_session_id, 'session-1');
+    assert.equal(projected.open_directory, 'D:\\code\\AgentDevClaw');
+    // 名称解析链：display → agent → title → viewer 注册名
+    assert.equal(projected.name, '（精简）排查幽灵会话');
+    assert.equal(projected.status, 'running');
+    // viewer 字段原样保留
+    assert.equal(projected.messageCount, 12);
+    assert.equal(projected.createdAt, '2026-09-20T12:00:00.000Z');
+    assert.equal(projected.connected, true);
+  });
+
+  it('routes coder sessions to the projected sidebar entry id', () => {
+    const projected = buildChildRuntimeAgent(viewerAgent, {
+      agentId: 'programming-helper',
+      sessionId: 'session-c1',
+      sessionType: 'coder',
+    });
+    assert.equal(projected.sidebar_entry_id, 'programming-helper:coder');
+    assert.equal(projected.sessionType, 'coder');
+    // 无 meta 时名称退化为 viewer 注册名，身份字段仍齐全
+    assert.equal(projected.name, '智能编码空间');
+    assert.equal(projected.parent_id, 'programming-helper');
+    assert.equal(projected.runtime_session_id, 'agent-vw-7f3');
+  });
+
+  it('falls back through the name chain to the viewer id', () => {
+    const projected = buildChildRuntimeAgent(
+      { id: 'agent-vw-9', connected: false },
+      { agentId: 'programming-helper' },
+    );
+    assert.equal(projected.name, 'agent-vw-9');
+    assert.equal(projected.status, 'stopped');
+    assert.equal(projected.active_workspace_session_id, null);
+    assert.equal(projected.open_directory, '');
+  });
+
+  it('returns null for non-object viewer entries or missing owner', () => {
+    assert.equal(buildChildRuntimeAgent(null, { agentId: 'programming-helper' }), null);
+    assert.equal(buildChildRuntimeAgent(true, { agentId: 'programming-helper' }), null);
+    assert.equal(buildChildRuntimeAgent(viewerAgent, { agentId: '' }), null);
+    assert.equal(buildChildRuntimeAgent(viewerAgent), null);
   });
 });

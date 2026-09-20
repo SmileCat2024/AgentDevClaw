@@ -25,6 +25,7 @@ import {
 } from '../context-continuity/summarized-handoff.js';
 import { runTrimTranscriptWithSummary } from '../context-continuity/trim-appended-summary.js';
 import { applyContinuityToolPolicy } from '../context-continuity/feature-continuity.js';
+import { buildChildRuntimeAgent, sessionRecordToWorkspaceMeta } from './session-helpers-pure.js';
 
 export function createSessionHandoffHelpers(deps) {
   const {
@@ -220,7 +221,17 @@ export function createSessionHandoffHelpers(deps) {
       handoffPath: resolvedHandoffPath,
       session,
       status,
-      agent: connected,
+      // viewer 原始条目必须经 child 投影下发（前端乐观 upsert 依赖
+      // source / parent_id / runtime_session_id 等身份字段，裸条目会被
+      // 侧栏判为孤儿渲染成"外部代理"幽灵），见 buildChildRuntimeAgent。
+      agent: connected
+        ? buildChildRuntimeAgent(connected, {
+          agentId: agent.id,
+          sessionId: session.id,
+          sessionType: session.sessionType,
+          sessionMeta: sessionRecordToWorkspaceMeta(session),
+        })
+        : null,
     };
   }
 

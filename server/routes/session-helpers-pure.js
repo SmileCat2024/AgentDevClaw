@@ -569,3 +569,81 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
   return Number.isFinite(limit) && limit > 0 ? entries.slice(0, limit) : entries;
 }
 
+/**
+ * Session index record → workspace meta 形状（readWorkspaceSessionMeta 的
+ * canonical 输出契约，供各响应边界共用同一翻译）。
+ *
+ * @param {object} record - session index record
+ * @returns {{
+ *   active_workspace_session_id: string|null,
+ *   active_workspace_session_form_id: string|null,
+ *   active_workspace_session_title: string,
+ *   active_workspace_agent_name: string,
+ *   active_workspace_display_name: string,
+ *   open_directory: string,
+ * }}
+ */
+export function sessionRecordToWorkspaceMeta(record) {
+  const title = cleanSessionText(record?.title);
+  const agentName = cleanSessionText(record?.agentName);
+  const formId = cleanSessionText(record?.formId);
+  return {
+    active_workspace_session_id: cleanSessionText(record?.id) || null,
+    active_workspace_session_form_id: formId || null,
+    active_workspace_session_title: title,
+    active_workspace_agent_name: agentName,
+    active_workspace_display_name: formId === 'assembly-form' ? (agentName || title) : '',
+    open_directory: cleanSessionText(record?.openDirectory),
+  };
+}
+
+/**
+ * ViewerWorker /api/agents 原始条目 → Claw wire 的 child runtime 记录。
+ *
+ * waitForManagedRuntimeReady 返回的是 viewer 原始条目（id / name /
+ * connected / messageCount 等，无 source / parent_id / runtime_session_id）。
+ * 响应路由若把它直接作为 agent 字段下发，前端乐观 upsert 得到一条无身份
+ * 记录：侧栏分组判定其为孤儿，短暂渲染成"外部代理"幽灵条目（直到下一轮
+ * 轮询用 get_connected_agents 的正规投影整体替换）。所有下发 runtime agent
+ * 的响应边界都必须经本投影补齐身份，形状对齐 get_connected_agents 的
+ * child 条目与 /protoclaw/runtime_status 的 agent 块。
+ *
+ * @param {object|null} viewerAgent - ViewerWorker 原始条目（非对象时返回 null）
+ * @param {object} identity
+ * @param {string} identity.agentId 宿主 prebuilt agent id
+ * @param {string} [identity.sessionId] 会话 id
+ * @param {string} [identity.sessionType] 会话身份（缺省 main）
+ * @param {object} [identity.sessionMeta] readWorkspaceSessionMeta /
+ *   sessionRecordToWorkspaceMeta 形状；缺省时身份字段仍补齐、名称退化为
+ *   viewer 注册名
+ * @returns {object|null}
+ */
+export function buildChildRuntimeAgent(viewerAgent, { agentId, sessionId = '', sessionType = '', sessionMeta = null } = {}) {
+  if (!viewerAgent || typeof viewerAgent !== 'object') return null;
+  const owner = cleanSessionText(agentId);
+  if (!owner) return null;
+  const meta = sessionMeta && typeof sessionMeta === 'object' ? sessionMeta : {};
+  const type = cleanSessionText(sessionType) || 'main';
+  const displayName = cleanSessionText(meta.active_workspace_display_name);
+  const agentName = cleanSessionText(meta.active_workspace_agent_name);
+  const title = cleanSessionText(meta.active_workspace_session_title);
+  return {
+    ...viewerAgent,
+    name: displayName || agentName || title || viewerAgent.name || String(viewerAgent.id || ''),
+    description: viewerAgent.description || '',
+    status: viewerAgent.connected ? 'running' : 'stopped',
+    source: 'child',
+    parent_id: owner,
+    sessionType: type,
+    sidebar_entry_id: type === 'main' ? owner : `${owner}:${type}`,
+    runtime_session_id: String(viewerAgent.id || '').trim(),
+    active_workspace_session_id: cleanSessionText(meta.active_workspace_session_id)
+      || cleanSessionText(sessionId) || null,
+    active_workspace_session_form_id: cleanSessionText(meta.active_workspace_session_form_id) || null,
+    active_workspace_session_title: title,
+    active_workspace_agent_name: agentName,
+    active_workspace_display_name: displayName,
+    open_directory: cleanSessionText(meta.open_directory),
+  };
+}
+

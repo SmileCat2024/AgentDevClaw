@@ -11,6 +11,7 @@ import { resolveWorkspaceData, readWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './im.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { resolveAgentProcessMode } from '../shared/process-mode.js';
+import { sessionRecordToWorkspaceMeta } from './session-helpers-pure.js';
 
 export { resolveAgentProcessMode } from '../shared/process-mode.js';
 
@@ -362,10 +363,10 @@ export function createAgentDiscoveryModule(ctx) {
         ? index.sessions.find((session) => cleanSessionText(session?.id) === selectedSessionId) || null
         : null;
       if (!record) return emptyMeta;
-      const title = cleanSessionText(record?.title);
-      const agentName = cleanSessionText(record?.agentName);
-      const formId = cleanSessionText(record?.formId);
-      let displayName = formId === 'assembly-form' ? (agentName || title) : '';
+      // record → meta 翻译收敛在 sessionRecordToWorkspaceMeta；此处只保留
+      // qqbot 门户展示名的渠道级覆盖。
+      const recordMeta = sessionRecordToWorkspaceMeta(record);
+      let displayName = recordMeta.active_workspace_display_name;
       if (!displayName && sanitizeSessionFragment(agentId) === 'qqbot') {
         try {
           const imConfig = await readProjectIMWorkspaceConfig();
@@ -373,12 +374,8 @@ export function createAgentDiscoveryModule(ctx) {
         } catch {}
       }
       return {
-        active_workspace_session_id: selectedSessionId,
-        active_workspace_session_form_id: formId || null,
-        active_workspace_session_title: title,
-        active_workspace_agent_name: agentName,
+        ...recordMeta,
         active_workspace_display_name: displayName,
-        open_directory: cleanSessionText(record?.openDirectory),
       };
     } catch {
       return emptyMeta;

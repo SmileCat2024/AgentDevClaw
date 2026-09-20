@@ -11,6 +11,7 @@ import { readProjectIMWorkspaceConfig } from './im.js';
 import { sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createConnectedAgentsQuery, buildPhProjectScopedSnapshot, buildWireSessionsSnapshot } from './agent-connected.js';
+import { buildChildRuntimeAgent } from './session-helpers-pure.js';
 import { PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { createAgentStartupFns } from './agent-startup.js';
 import { releaseRuntimeState } from '../runtime-call-envelope.js';
@@ -91,6 +92,20 @@ export function createAgentLifecycleModule(ctx) {
       })();
     }
     return _appInfoPromise;
+  }
+
+  // start/restart 响应的 agent 块统一经 child 投影（viewer 原始条目缺身份
+  // 字段，裸下发会在前端乐观 upsert 后被侧栏渲染成"外部代理"幽灵条目）。
+  async function projectStartedRuntimeAgent(connected, agentId, sessionId) {
+    if (!connected) return null;
+    const sessionMeta = sessionId ? await readWorkspaceSessionMeta(agentId, sessionId) : null;
+    const runtime = sessionId ? getAgentRuntime(agentId, sessionId) : null;
+    return buildChildRuntimeAgent(connected, {
+      agentId,
+      sessionId,
+      sessionType: runtime?.sessionType || 'main',
+      sessionMeta,
+    });
   }
 
   async function removeSharedSession(runtime) {
@@ -461,7 +476,7 @@ export function createAgentLifecycleModule(ctx) {
         const selectedSessionId = req.body.sessionId || null;
         const status = await startManagedAgent(agent, selectedSessionId);
         const connected = await waitForManagedRuntimeReady(agent.id, 10000, selectedSessionId);
-        res.json({ status, agent: connected });
+        res.json({ status, agent: await projectStartedRuntimeAgent(connected, agent.id, selectedSessionId) });
       } catch (error) {
         next(error);
       }
@@ -528,7 +543,7 @@ export function createAgentLifecycleModule(ctx) {
         await stopManagedAgent(agent.id, selectedSessionId);
         const status = await startManagedAgent(agent, selectedSessionId);
         const connected = await waitForManagedRuntimeReady(agent.id, 10000, selectedSessionId);
-        res.json({ status, agent: connected });
+        res.json({ status, agent: await projectStartedRuntimeAgent(connected, agent.id, selectedSessionId) });
       } catch (error) {
         next(error);
       }
