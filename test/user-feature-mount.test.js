@@ -354,6 +354,26 @@ describe('feature-store 数据面', () => {
     }]);
   });
 
+  it('builtinOptionalFeatures：playwright-shell 对 main 与 coder 双身份开放，工厂实例 name 与键一致', async (t) => {
+    // agent.js 依赖根级 features/*/dist 与 local-features/dist（均不入库）；
+    // 未构建的环境显式跳过（服务本身也无法在这样的环境运行）
+    let mod;
+    try {
+      mod = await import('../prebuilt-agents/official/programming-helper/agent.js');
+    } catch (error) {
+      t.skip(`agent.js 模块图未构建（features/*/dist 或 local-features/dist 缺失）：${error.message}`);
+      return;
+    }
+    const tables = mod.builtinOptionalFeatures;
+    for (const identity of ['main', 'coder']) {
+      const spec = tables?.[identity]?.['playwright-shell'];
+      assert.ok(spec, `builtinOptionalFeatures.${identity} 应声明 playwright-shell 工厂`);
+      const instance = spec.create();
+      assert.equal(instance?.name, 'playwright-shell',
+        `${identity} 工厂产出 name 必须与 $mount 键一致（宿主钩子按此 fail fast）`);
+    }
+  });
+
   it('summarizeInstanceSurface 静态读取声明面：hooks/tools/skills/commands 与 slash 口径', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'feature-surface-'));
     try {

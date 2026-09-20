@@ -234,23 +234,27 @@ export function resolveAgentClass({ runtime } = {}) {
   return runtime?.sessionType === 'coder' ? CoderAgent : ProgrammingHelperAgent;
 }
 
+/** playwright-shell 插件工厂：main / coder 共用（资产与档案路径按数据根分区）。 */
+function createPlaywrightShellPlugin() {
+  return {
+    create: (config = {}, context = {}) => new PlaywrightShellFeature({
+      workdir: context.workspaceDir || config.workspaceDir || process.cwd(),
+      browsersPath: join(USER_DATA_ROOT, 'assets', 'playwright-shell', 'browsers'),
+      profilesPath: join(USER_DATA_ROOT, 'playwright-shell', 'profiles'),
+      ...config,
+    }),
+  };
+}
+
 /**
  * 官方可选插件工厂表（$mount kind:'builtin' 的装配权威）。
  * 键 = runtime feature name（与配置树键一致）；值工厂以（层配置值, 宿主
  * context）构造 feature 实例。宿主钩子（run-prebuilt-agent.js）在静态装配
  * 完成后按此表挂载；商店货架（server/routes/feature-store.js）import 本表
  * 后由工厂实例的 name / description 自加载展示元数据，无需另处维护。
+ * 表按会话身份（main / coder）分键：插件只对声明了的身份开放挂载。
  */
 export const builtinOptionalFeatures = {
-  main: {
-    'playwright-shell': {
-      create: (config = {}, context = {}) => new PlaywrightShellFeature({
-        workdir: context.workspaceDir || config.workspaceDir || process.cwd(),
-        browsersPath: join(USER_DATA_ROOT, 'assets', 'playwright-shell', 'browsers'),
-        profilesPath: join(USER_DATA_ROOT, 'playwright-shell', 'profiles'),
-        ...config,
-      }),
-    },
-  },
-  coder: {},
+  main: { 'playwright-shell': createPlaywrightShellPlugin() },
+  coder: { 'playwright-shell': createPlaywrightShellPlugin() },
 };
