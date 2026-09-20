@@ -48,6 +48,9 @@ Thumbs.db
 # advclaw auto-update config
 .advclaw-config.json
 
+# local link-diagnosis scripts against a running instance
+.smoke/
+
 # TypeScript cache
 *.tsbuildinfo
 dist/
