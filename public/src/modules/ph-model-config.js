@@ -292,7 +292,7 @@ function _phRenderMountsBody(host) {
       + '</select>'
     : '';
 
-  const addButton = '<button type="button" class="fs-list-add" style="margin-left:auto;" onclick="window.phOpenFeatureStore(\'' + escapeHtml(_phMountData.identityKey) + '\')">'
+  const addButton = '<button type="button" class="ph-mount-add" style="margin-left:auto;" onclick="window.phOpenFeatureStore(\'' + escapeHtml(_phMountData.identityKey) + '\')">'
     + escapeHtml(isZh ? '+ 添加 Feature' : '+ Add Feature') + '</button>';
 
   const buildCard = function(f) {
@@ -335,11 +335,30 @@ function _phRenderMountsBody(host) {
       + '</details>';
   };
 
-  const groupsHtml = groups.map(buildGroup).join('')
-    || '<div class="feature-filter-empty">' + escapeHtml(t(
-      capFilter !== 'all' ? 'feature_filter_empty_cap'
-        : _phMountSrcFilter === 'installed' ? 'feature_filter_empty_installed' : 'feature_filter_empty'
+  // 空态：能力筛选受限或非"已安装"视图保持纯文案；"已安装"视图为空时
+  // 渲染空态卡片（取「交互页面」空态同款视觉配方：虚线卡片 + 图标块 +
+  // 标题 + 描述），添加入口由工具栏按钮承担
+  let emptyHtml;
+  if (capFilter !== 'all' || _phMountSrcFilter !== 'installed') {
+    emptyHtml = '<div class="feature-filter-empty">' + escapeHtml(t(
+      capFilter !== 'all' ? 'feature_filter_empty_cap' : 'feature_filter_empty'
     )) + '</div>';
+  } else {
+    emptyHtml = '<div class="ph-mount-empty-cta">'
+      + '<div class="ph-mount-empty-icon" aria-hidden="true">'
+      + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">'
+      + '<rect x="3" y="3" width="18" height="18" rx="2"></rect>'
+      + '<path d="M12 8v8"></path>'
+      + '<path d="M8 12h8"></path>'
+      + '</svg></div>'
+      + '<div class="ph-mount-empty-title">' + escapeHtml(t('feature_filter_empty_installed')) + '</div>'
+      + '<div class="ph-mount-empty-desc">' + escapeHtml(isZh
+        ? '从 Feature 商店为该身份装配扩展，对新会话生效。'
+        : 'Install extensions for this identity from the feature store; takes effect on new sessions.')
+      + '</div>'
+      + '</div>';
+  }
+  const groupsHtml = groups.map(buildGroup).join('') || emptyHtml;
 
   host.innerHTML = '<div class="ph-mounts-body">'
     + '<div class="hooks-section-header feature-panel-head">'

@@ -5943,7 +5943,7 @@ body[data-theme="light"] .user-choice-card:focus-within {
 }
 .ph-banner-title { font-size: 20px; font-weight: 750; letter-spacing: -0.02em; }
 .ph-banner-desc { margin-top: 4px; font-size: 13px; color: var(--text-secondary); }
-.ph-banner-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.ph-banner-actions { display: flex; gap: 16px; flex-shrink: 0; }
 .ph-banner-btn {
   height: 36px; padding: 0 18px; font-size: 13px; font-weight: 600;
   border: 1px solid rgba(255,255,255,0.14); border-radius: 10px;
@@ -11623,6 +11623,67 @@ body[data-theme="light"] .rcm-tunnel-diag summary { color: var(--text-secondary)
    借用到徽章行与标题行时纠正其 align-self，保持垂直居中 */
 .feature-card-badges .fs-list-add,
 .hooks-section-header .fs-list-add { align-self: center; }
+
+/* 挂载管理页工具栏添加按钮（accent 蓝描边 + 蓝字 + 浅蓝 hover） */
+.ph-mount-add {
+  flex-shrink: 0;
+  padding: 6px 16px;
+  border: 1px solid var(--accent, #5b8def);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent, #5b8def);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ph-mount-add:hover { background: rgba(91, 141, 239, 0.08); }
+
+/* 挂载管理"已安装"空态卡片：取「交互页面」空态（.gen-ui-empty）同款
+   视觉配方（虚线卡片 + 图标块 + 标题 + 描述）；垂直居中于剩余空间
+   （滚动容器内需 min-height 撑满，:has 限定仅空态生效） */
+.ph-mount-empty-cta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 176px;
+  padding: 24px;
+  border: 1px dashed var(--border-color, rgba(128, 128, 128, 0.28));
+  border-radius: 12px;
+  background: linear-gradient(145deg, var(--bg-subtle, rgba(100, 130, 240, 0.045)), transparent);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.ph-mount-empty-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 10px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent, #6391ff) 24%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent, #6391ff) 10%, transparent);
+  color: var(--accent, #6391ff);
+}
+
+.ph-mount-empty-title {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.ph-mount-empty-desc {
+  max-width: 300px;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.ph-mounts-body:has(.ph-mount-empty-cta) { min-height: 100%; }
 
 
 /* ── Session reference（会话引用：+ 菜单 / pill / 弹窗 / 拖拽） ────── */
