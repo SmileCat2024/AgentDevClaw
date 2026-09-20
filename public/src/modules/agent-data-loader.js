@@ -164,6 +164,41 @@ async function loadAgentData(agentId) {
   }
 }
 
+/**
+ * refreshCurrentRuntimeStatus 的 guard-only 轻量形态（SSE 激活时 poll 主循环
+ * 调用）：notification/connection 由事件供数，本函数只拉 context_guard_status
+ * （Claw 侧自持端点，不在 ViewerWorker 事件源内）。guard 不可用时为纯 no-op。
+ */
+async function refreshContextGuardStatus(
+  runtimeId = currentRuntimeAgentId,
+  viewToken = captureSessionViewToken(runtimeId),
+) {
+  const expectedRuntimeId = normalizeAgentIdentity(runtimeId);
+  if (!expectedRuntimeId) return null;
+  const guardSupported = window.SessionControlsPanel?.isGuardAvailable?.() === true;
+  if (!guardSupported) return null;
+  const guardOwnerRecord = getCurrentRuntimeRecord() || getCurrentAgentRecord();
+  const guardAgentId = String(getLogicalAgentId(guardOwnerRecord) || '').trim();
+  const guardSessionId = String(getActiveSessionId(guardOwnerRecord) || '').trim();
+  if (!guardAgentId || !guardSessionId) return null;
+  try {
+    const guardStatusUrl = `/protoclaw/context_guard_status?agentId=${encodeURIComponent(guardAgentId)}&sessionId=${encodeURIComponent(guardSessionId)}`;
+    const guardRes = await fetch(guardStatusUrl).catch(() => null);
+    if (!isSessionViewTokenCurrent(viewToken)) return null;
+    const guardData = guardRes?.ok ? await guardRes.json() : null;
+    if (!isSessionViewTokenCurrent(viewToken)) return null;
+    commitSessionViewState(viewToken, () => {
+      if (typeof applyContextGuardStatus === 'function') {
+        applyContextGuardStatus(guardData, expectedRuntimeId);
+      }
+    });
+    return guardData;
+  } catch (error) {
+    console.warn('Failed to refresh context guard status:', error);
+    return null;
+  }
+}
+
 async function refreshCurrentRuntimeStatus(
   runtimeId = currentRuntimeAgentId,
   viewToken = captureSessionViewToken(runtimeId),

@@ -698,8 +698,76 @@ function collectActiveCallRuntimeIds(agents) {
 }
 
 let _callStatesRefreshInProgress = false;
+
+/**
+ * 单 runtime 的 call 状态应用（notification payload → 侧栏级状态）。
+ * refreshAgentCallStates 的轮询路径与 sse-client 的事件路径（非焦点
+ * notification 事件）共用：_agentCallActive 维护、interrupt 抑制解除、
+ * true→false 完成转换（_recentlyFinishedRuntimes + 桌面通知）。
+ * @returns {boolean} 该 runtime 的可视 call 状态是否发生变化
+ */
+function applyAgentCallStateFromNotification(runtimeId, notifData) {
+  const payload = notifData && typeof notifData === 'object' ? notifData : null;
+  const backendCalling = resolveNotificationCallingState(payload) === true;
+  const prevCalling = _agentCallActive.get(runtimeId) === true;
+  const effectiveCalling = backendCalling
+    && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(payload));
+  if (effectiveCalling) {
+    _markAgentCallStartedForNotify(runtimeId);
+    _agentCallActive.set(runtimeId, true);
+  } else {
+    _agentCallActive.delete(runtimeId);
+  }
+  if (!backendCalling) {
+    clearInterruptSuppression(runtimeId);
+  }
+  if (prevCalling && !effectiveCalling) {
+    if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
+      _recentlyFinishedRuntimes.add(runtimeId);
+    }
+    _tryNotifyAgentFinished(runtimeId, payload);
+  }
+  return prevCalling !== effectiveCalling;
+}
+
+/**
+ * 将 call 状态写入 agent 记录的 callActive（侧栏转圈动画的数据源）。
+ * 仅处理 runtime 匹配的记录；prebuilt 宿主行的清理由 refreshAgentCallStates
+ * 无条件执行（不随 SSE 本地跳过而消失）。
+ * @returns {boolean} 是否有记录被修改
+ */
+function applyCallStateToAgentRecords(runtimeId, calling) {
+  let changed = false;
+  for (const agent of Array.isArray(allAgents) ? allAgents : []) {
+    if (agent?.source === 'prebuilt') continue;
+    if (getAgentRuntimeId(agent) !== runtimeId) continue;
+    const nextCalling = calling === true;
+    if (agent.callActive !== nextCalling) {
+      agent.callActive = nextCalling;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * prebuilt 宿主行不承载 call 态（子会话自持）：无条件清理。SSE 本地跳过
+ * 的提前返回分支同样要执行（事件路径不覆盖该特例）。
+ * @returns {boolean} 是否有记录被修改
+ */
+function cleanPrebuiltHostRows(agents) {
+  let changed = false;
+  for (const agent of Array.isArray(agents) ? agents : []) {
+    if (agent?.source === 'prebuilt' && agent.callActive) {
+      agent.callActive = false;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 async function refreshAgentCallStates(agents = allAgents, options = {}) {
-  const { force = false, reuseNotification = null } = options;
+  const { force = false, reuseNotification = null, includeSseLocals = false } = options;
   // 互斥锁：防止 Worker 心跳与常规 poll 并发执行导致重复触发通知
   if (_callStatesRefreshInProgress) return;
   const now = Date.now();
@@ -712,7 +780,18 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
     // 本地已连接 runtime 与在线远程条目合并后再判空：仅剩远程条目时同样
     // 走完整轮询，不会误入"全清"提前返回分支。
     const runtimeIds = collectActiveCallRuntimeIds(agents);
-    if (runtimeIds.length === 0) {
+    // SSE 激活时本地条目由 notification 事件维护（§5.3 整函数语义切换）：
+    // 不 fetch、不进覆写/孤儿清理。includeSseLocals（visibilitychange 强刷
+    // 等全量对账路径）恢复本地条目的轮询参与。
+    const sseSkipLocal = typeof isSseActive === 'function' && isSseActive() && !includeSseLocals;
+    const polledIds = sseSkipLocal
+      ? runtimeIds.filter((id) => typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(id))
+      : runtimeIds;
+    if (polledIds.length === 0) {
+      if (sseSkipLocal) {
+        cleanPrebuiltHostRows(agents);
+        return; // 本地条目归事件管，远程为空：无需动作
+      }
       let changed = false;
       for (const key of Array.from(_agentCallActive.keys())) {
         _agentCallActive.delete(key);
@@ -725,9 +804,8 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
       return;
     }
 
-    const nextCallStates = new Map();
     const nextNotificationPayloads = new Map();
-    await Promise.all(runtimeIds.map(async (runtimeId) => {
+    await Promise.all(polledIds.map(async (runtimeId) => {
       try {
         // 同周期复用：poll 主循环的 statusTask 刚在本周期取过焦点 runtime 的
         // notification，命中时直接复用 payload，避免每轮对同一 runtime 发两次
@@ -738,47 +816,23 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
           && normalizeAgentIdentity(reuseNotification.runtimeId) === normalizeAgentIdentity(runtimeId)
         ) {
           nextNotificationPayloads.set(runtimeId, reuseNotification.payload);
-          nextCallStates.set(runtimeId, resolveNotificationCallingState(reuseNotification.payload));
           return;
         }
         const res = await fetch(`/api/agents/${encodeURIComponent(runtimeId)}/notification`);
         if (!res.ok) return;
         const notifData = await res.json();
         nextNotificationPayloads.set(runtimeId, notifData);
-        nextCallStates.set(runtimeId, resolveNotificationCallingState(notifData));
       } catch (error) {
       }
     }));
 
     let changed = false;
-    for (const runtimeId of runtimeIds) {
-      const backendCalling = nextCallStates.get(runtimeId) === true;
-      const prevCalling = _agentCallActive.get(runtimeId) === true;
-      const notificationPayload = nextNotificationPayloads.get(runtimeId) || null;
-      // interrupting 是粘性状态；同一 call 的旧 true 不能恢复为 running。
-      const effectiveCalling = backendCalling
-        && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(notificationPayload));
-      if (effectiveCalling) {
-        _markAgentCallStartedForNotify(runtimeId);
-        _agentCallActive.set(runtimeId, true);
-      } else {
-        _agentCallActive.delete(runtimeId);
-      }
-      if (!backendCalling) {
-        clearInterruptSuppression(runtimeId);
-      }
-      if (prevCalling !== effectiveCalling) {
-        changed = true;
-      }
-      // 检测调用完成：true → false 转换，标记为"刚完成"
-      if (prevCalling && !effectiveCalling) {
-        if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
-          _recentlyFinishedRuntimes.add(runtimeId);
-        }
-        _tryNotifyAgentFinished(runtimeId, nextNotificationPayloads.get(runtimeId) || null);
-      }
+    for (const runtimeId of polledIds) {
+      changed = applyAgentCallStateFromNotification(runtimeId, nextNotificationPayloads.get(runtimeId) || null) || changed;
     }
 
+    // 孤儿清理的存活集是全量 runtimeIds（含 SSE 事件维护的本地条目）：
+    // 本地条目仍存活，只是本轮不轮询，不能被"缺席=空闲"语义清掉
     const activeRuntimeIds = new Set(runtimeIds);
     for (const key of Array.from(_agentCallActive.keys())) {
       if (!activeRuntimeIds.has(key)) {
@@ -789,24 +843,14 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
       }
     }
 
-    for (const agent of Array.isArray(agents) ? agents : []) {
-      if (agent?.source === 'prebuilt') {
-        if (agent.callActive) {
-          agent.callActive = false;
-          changed = true;
-        }
-        continue;
-      }
-      const runtimeId = getAgentRuntimeId(agent);
-      if (!runtimeId) continue;
-      const notificationPayload = nextNotificationPayloads.get(runtimeId) || null;
-      const nextCalling = nextCallStates.get(runtimeId) === true
-        && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(notificationPayload));
-      if (agent.callActive !== nextCalling) {
-        agent.callActive = nextCalling;
-        changed = true;
-      }
+    for (const runtimeId of polledIds) {
+      const payload = nextNotificationPayloads.get(runtimeId) || null;
+      const calling = resolveNotificationCallingState(payload) === true
+        && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(payload));
+      changed = applyCallStateToAgentRecords(runtimeId, calling) || changed;
     }
+
+    changed = cleanPrebuiltHostRows(agents) || changed;
 
     if (changed) {
       renderAgentList();

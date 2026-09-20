@@ -852,6 +852,16 @@ window.ClawFW.requestImmediatePoll = function () {
   poll();
 };
 
+// ── SSE 全量对账钩子（§6.5 兜底闭环）────────────────────────────────
+// 看门狗静默 30s、resync 帧（服务端重启 eid 归零 / 缓冲超界）、UDS 重连
+// （connection{reconnected:true}）都经此触发一轮完整轮询：poll 的 SSE 分支
+// 不拉 notification 等状态端点，对账能力只在全量形态存在。
+let _forceFullPollNextCycle = false;
+window.ClawFW.forceFullPollOnce = function () {
+  _forceFullPollNextCycle = true;
+  poll();
+};
+
 // ── dev 计量（ADR-0012，默认关闭）──────────────────────────────────────────
 // URL 带 ?msg_metrics=1 时，每次消息刷新输出 actualBytes（本周期 /messages
 // 数据序列化字节，未发请求为 0）/ fakeFullBytes（假想全量字节，随 probe 下发）/
@@ -920,6 +930,441 @@ window._scheduleInspectorRefresh = function (delayMs) {
   schedulePoll(delayMs || 300);
 };
 
+// ── poll 与 SSE 事件共用的消费函数（§5.2：事件到达路径与 fetch 路径走同一实现）──
+
+/**
+ * Core runtime 消失（404）处理：会话视图清理 + fallback 切换。
+ * poll 周期与 SSE messages 事件取数共用。
+ * @returns {Promise<boolean>} true 表示已处理（调用方应结束本轮）
+ */
+async function handleCoreResponsesNotFound(pollToken) {
+  const pollRuntimeId = pollToken.runtimeId;
+  // In-session partial compact doesn't create a new session, so if we get 404
+  // while compact is in flight, just clear the flag and fall through to normal handling
+  if (_partialCompactInFlight && normalizeAgentIdentity(pollRuntimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)) {
+    clearPartialCompactState();
+  }
+  if (prebuiltSessionSwitchInFlight || suppressSidebarRerender) {
+    schedulePoll(POLL_FAST_INTERVAL_MS);
+    return true;
+  }
+  const failedRuntimeRecord = getRuntimeRecord(pollRuntimeId);
+  const fallbackId = resolveWorkspaceFallbackAgentId(failedRuntimeRecord);
+  const failureCommitted = commitSessionViewPatch(
+    pollToken,
+    fallbackId ? {} : {
+      messages: [],
+      inputRequests: [],
+      todoPlan: getEmptyTodoPlan(),
+    },
+    ({ current }) => {
+      _agentCallActive.delete(pollRuntimeId);
+      clearInterruptSuppression(pollRuntimeId);
+      if (failedRuntimeRecord) {
+        failedRuntimeRecord.callActive = false;
+        failedRuntimeRecord.connected = false;
+      }
+      currentRuntimeAgentId = null;
+      if (fallbackId) {
+        selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
+      } else {
+        focusedAgentId = null;
+        currentWorkspaceTab = null;
+        renderCurrentMainView();
+      }
+    },
+  );
+  if (!failureCommitted) {
+    schedulePoll(POLL_FAST_INTERVAL_MS);
+    return true;
+  }
+  await loadAgents();
+  schedulePoll(POLL_INTERVAL_MS);
+  return true;
+}
+
+/**
+ * messages 增量取数周期（ADR-0013 probe + tail）：seq 对账矩阵决定取数方式，
+ * commit 后渲染。poll 周期（probe 来自 overview 响应）与 SSE messages 事件
+ * （probe 来自事件帧）共用——契约与取数逻辑单点。
+ * @returns {Promise<'committed'|'stale'|'handled404'>}
+ */
+async function runMessagesProbeCycle(pollToken, msgProbe) {
+  const pollRuntimeId = pollToken.runtimeId;
+  const prevKnownMessages = Array.isArray(currentMessages) ? currentMessages : [];
+  const prevKnownCount = prevKnownMessages.length;
+  const msgMetrics = {
+    actualBytes: 0,
+    fakeFullBytes: msgProbe ? msgProbe.fakeFullBytes : 0,
+    changeKind: msgProbe ? msgProbe.changeKind : null,
+    downgraded: false,
+  };
+
+  const fetchMessagesJson = async (query) => {
+    const res = await fetch(`/api/agents/${pollRuntimeId}/messages${query}`);
+    if (res.status === 404) {
+      return { handled404: true };
+    }
+    const data = await res.json();
+    return { data };
+  };
+
+  let messages;
+  // ── seq 对账（ADR-0012 v2）──────────────────────────────────────────
+  // probe.seq 是同步版本号（真实变更时单调递增），changeKind 只是最近一
+  // 次真实变更的取数策略提示。对账矩阵：
+  //   count 回退 / probe 缺省 / 基线缺失 → 全量重建基线
+  //   count > prevKnown                  → 有新消息（append 路径）
+  //   count 相等 + seq 前进              → 内容有变（tail/rewrite 路径）
+  //   count 相等 + seq 未前进            → 真正未变化，零请求
+  const appliedSeq = _appliedMessagesSeq.get(pollRuntimeId) || 0;
+  const seqAdvanced = msgProbe ? msgProbe.seq > appliedSeq : true;
+  if (!msgProbe || msgProbe.count < prevKnownCount || (msgProbe.count > 0 && prevKnownCount === 0)) {
+    // 探测不可用（probe 缺省 / 首次加载 / 拼接基线缺失），或 probe.count 回退
+    // （Worker 重启 / 修剪）→ 全量拉一次重建基线，下周期恢复探测。
+    if (msgProbe && msgProbe.count < prevKnownCount) msgMetrics.downgraded = true;
+    const result = await fetchMessagesJson('');
+    if (result.handled404) return 'handled404';
+    if (!isSessionViewTokenCurrent(pollToken)) {
+      return 'stale';
+    }
+    messages = result.data.messages || [];
+    msgMetrics.actualBytes += computeSerializedBytes(result.data);
+  } else if (!seqAdvanced) {
+    // 未变化：跳过 /messages 请求，复用现有消息数组（本周期零消息请求）
+    messages = prevKnownMessages;
+  } else if (msgProbe.count > prevKnownCount || msgProbe.changeKind === 'append') {
+    const since = prevKnownCount;
+    const result = await fetchMessagesJson(`?since=${since}`);
+    if (result.handled404) return 'handled404';
+    if (!isSessionViewTokenCurrent(pollToken)) {
+      return 'stale';
+    }
+    const delta = Array.isArray(result.data.messages) ? result.data.messages : [];
+    if (delta.length === msgProbe.count - since) {
+      messages = [...prevKnownMessages.slice(0, since), ...delta];
+    } else {
+      // 校验失败（让服务端分类 bug 显形并保正确性）→ 降级全量重建基线
+      msgMetrics.downgraded = true;
+      const full = await fetchMessagesJson('');
+      if (full.handled404) return 'handled404';
+      if (!isSessionViewTokenCurrent(pollToken)) {
+        return 'stale';
+      }
+      messages = full.data.messages || [];
+      msgMetrics.actualBytes += computeSerializedBytes(full.data);
+    }
+    msgMetrics.actualBytes += computeSerializedBytes(result.data);
+  } else if (msgProbe.changeKind === 'tail') {
+    const result = await fetchMessagesJson('?tail=1');
+    if (result.handled404) return 'handled404';
+    if (!isSessionViewTokenCurrent(pollToken)) {
+      return 'stale';
+    }
+    const tail = Array.isArray(result.data.messages) ? result.data.messages : [];
+    if (tail.length === 1 && msgProbe.count === prevKnownCount && prevKnownCount > 0) {
+      messages = [...prevKnownMessages.slice(0, -1), tail[0]];
+    } else {
+      // 校验失败 → 降级全量重建基线
+      msgMetrics.downgraded = true;
+      const full = await fetchMessagesJson('');
+      if (full.handled404) return 'handled404';
+      if (!isSessionViewTokenCurrent(pollToken)) {
+        return 'stale';
+      }
+      messages = full.data.messages || [];
+      msgMetrics.actualBytes += computeSerializedBytes(full.data);
+    }
+    msgMetrics.actualBytes += computeSerializedBytes(result.data);
+  } else {
+    // rewrite（中段替换 / 条数减少：rollback、compact、修剪）→ 全量拉
+    const result = await fetchMessagesJson('');
+    if (result.handled404) return 'handled404';
+    if (!isSessionViewTokenCurrent(pollToken)) {
+      return 'stale';
+    }
+    messages = result.data.messages || [];
+    msgMetrics.actualBytes += computeSerializedBytes(result.data);
+  }
+
+  // 取数成功（含降级）→ 记录已应用的 seq。放 commit 之后会让"commit 被
+  // stale check 拒绝"的周期丢失 seq 进度，但那些周期本来就已放弃本次
+  // 渲染，下周期 count 对账仍会兜底；这里先记，避免同 seq 被重复取数。
+  _appliedMessagesSeq.set(pollRuntimeId, msgProbe ? msgProbe.seq : 0);
+
+  const messagesCommitted = commitSessionViewPatch(pollToken, { messages }, ({ previous, current }) => {
+    // Clear session loading indicator once messages are available
+    if (current.messages.length > 0) clearChatLoadingSession();
+
+    // Render messages immediately — before non-critical async ops
+    // (status refresh, call states, queue sync) that add visible latency.
+    const previousMessages = previous.messages;
+    const nextMessages = current.messages;
+    markAutoTitleCandidate(previousMessages, nextMessages);
+    const firstChangedIndex = findFirstChangedMessageIndex(nextMessages, previousMessages);
+    if (nextMessages.length !== previousMessages.length) {
+      if (nextMessages.length > previousMessages.length && firstChangedIndex === previousMessages.length) {
+        // 有新消息：只追加新的
+        const newMessages = nextMessages.slice(previousMessages.length);
+        if (shouldRenderWorkspaceSurface()) {
+          renderCurrentMainView(current);
+        } else {
+          appendNewMessages(newMessages, nextMessages.length - newMessages.length);
+        }
+      } else {
+        // 消息减少，或消息变多但前缀已变化：完全重建。
+        renderCurrentMainView(current);
+      }
+    } else {
+      if (firstChangedIndex >= 0) {
+        // Rollback + partial compact can replace the middle of the transcript while
+        // keeping the same length after the summary reminder is inserted.
+        if (shouldRenderWorkspaceSurface() || firstChangedIndex < nextMessages.length - 1) {
+          renderCurrentMainView(current);
+        } else {
+          // 最后一条消息变化：替换最后一条（避免滚动重置）
+          updateLastMessage(nextMessages[nextMessages.length - 1]);
+        }
+      }
+    }
+    // 乐观回显对账：真实消息上屏后再移除覆盖层，视觉上无缝替换
+    if (typeof window.ClawFW?.reconcileOptimisticUserEchoes === 'function') {
+      window.ClawFW.reconcileOptimisticUserEchoes(nextMessages);
+    }
+  });
+  if (!messagesCommitted) {
+    return 'stale';
+  }
+  emitMsgMetrics(msgMetrics);
+  return 'committed';
+}
+
+/**
+ * todo / overview / input-requests 的签名对比 + 单事务提交（§5.6：事件路径
+ * 与 poll 路径共用同一消费实现）。三个维度均可选：poll 传全量，事件只传
+ * 到达的 kind（其余维度不进入 patch）。
+ * @returns {boolean} commit 是否成立
+ */
+function commitMetadataUpdate(pollToken, { todoRaw, overviewJson, inputRequestsRaw } = {}) {
+  const hasTodo = todoRaw !== undefined;
+  const hasOverview = overviewJson !== undefined;
+  const hasInput = inputRequestsRaw !== undefined;
+  const nextOverview = hasOverview ? normalizeOverviewSnapshot(overviewJson) : null;
+  const nextOverviewSignature = hasOverview ? getOverviewSignature(nextOverview) : null;
+  const nextTodoPlan = hasTodo ? (todoRaw === null ? null : normalizeTodoPlan(todoRaw)) : null;
+  const nextTodoSignature = nextTodoPlan === null ? null : getTodoPlanSignature(nextTodoPlan);
+  const inputRequests = hasInput ? (Array.isArray(inputRequestsRaw) ? inputRequestsRaw : []) : null;
+  const overviewChanged = hasOverview && nextOverviewSignature !== currentOverviewSignature;
+  const todoChanged = nextTodoPlan !== null && nextTodoSignature !== currentTodoPlanSignature;
+  const inputChanged = inputRequests !== null && JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || []);
+  const metadataPatch = {};
+  if (overviewChanged) metadataPatch.overview = nextOverview;
+  if (todoChanged) metadataPatch.todoPlan = nextTodoPlan;
+  if (inputChanged) metadataPatch.inputRequests = inputRequests;
+  return commitSessionViewPatch(pollToken, metadataPatch, ({ current }) => {
+
+    // 当目标任务进入终态时，自动清除中断标记
+    let interruptCleared = false;
+    let interruptSynced = false;
+    if (nextTodoPlan !== null) {
+      const currentInterruptTarget = getInterruptTargetId();
+      if (currentInterruptTarget) {
+        const target = nextTodoPlan.tasks.find(tk => tk.id === currentInterruptTarget);
+        if (target && (target.status === 'completed' || target.status === 'deleted')) {
+          setInterruptTargetId(null);
+          interruptCleared = true;
+        }
+      }
+
+      // 从 server 同步 interruptTargetId 到本地缓存。
+      // 仅在用户最近未手动操作时同步（避免覆盖乐观更新）。
+      const userActionGraceExpired = (Date.now() - _lastInterruptUserActionAt) > 3000;
+      if (userActionGraceExpired) {
+        const serverTarget = nextTodoPlan.interruptTargetId || null;
+        if (serverTarget !== currentInterruptTarget) {
+          setInterruptTargetId(serverTarget);
+          interruptSynced = true;
+        }
+      }
+
+      // 从 server 同步"任务未完自动继续"开关到本地缓存（同样遵循用户操作宽限期）。
+      if ((Date.now() - _lastTodoForceContinueUserActionAt) > 3000) {
+        const serverForceContinue = nextTodoPlan.forceContinue?.enabled === true;
+        if (serverForceContinue !== getTodoForceContinue()) {
+          setTodoForceContinue(serverForceContinue);
+        }
+      }
+    }
+
+    // All logical values are assigned before any renderer observes them.
+    if (overviewChanged) {
+      if (activeFeaturePanel === 'workspace') {
+        renderFeaturePanel();
+      }
+      if (typeof updateChatContextBar === 'function') {
+        updateChatContextBar(current);
+      }
+    }
+    if (todoChanged) {
+      if (activeFeaturePanel === 'plan') {
+        renderFeaturePanel();
+      }
+      updatePlanBadge();
+    } else if ((interruptCleared || interruptSynced) && activeFeaturePanel === 'plan') {
+      renderFeaturePanel();
+    }
+
+    // If partial compact was in flight but runtime is back to accepting input,
+    // compact is done (or failed) — clear the flag so normal input is shown.
+    if (
+      _partialCompactInFlight
+      && normalizeAgentIdentity(pollToken.runtimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
+      && inputRequests
+      && inputRequests.length > 0
+    ) {
+      clearPartialCompactState();
+    }
+    if (inputChanged) {
+      // patch 写入即声明（工单 037）：metadata commit 阶段 hook 已同步
+      // 渲染输入面，这里只保留随输入变化的重构动作。
+      updateRollbackActionVisibility();
+    } else if (isChatSurfaceActive()) {
+      _syncPersistentInputUi(pollToken.runtimeId);
+    }
+  });
+}
+
+/**
+ * poll 周期尾部的低频兜底段（SSE 激活与 fallback 共用）：loadAgents 节流
+ * 刷新（SSE 下 30s 兜底 + connection 事件即时路径，§5.2）、workspace
+ * sessions 增量、hooks 面板态、final 缓存提交。
+ * @returns {Promise<boolean>} false = token stale，调用方应终止本轮
+ */
+async function _runPollTailLowFrequency(pollToken) {
+  const pollRuntimeId = pollToken.runtimeId;
+  // Refresh the Claw-composed agent list occasionally.
+  // Do not overwrite `allAgents` with the raw viewer session list,
+  // otherwise prebuilt/managed grouping disappears.
+  // SSE 激活时 agent 增删由 connection 事件即时触发 loadAgents，此处只做
+  // 30s 兜底（事件丢失的最后防线）。
+  const agentListIntervalMs = (typeof isSseActive === 'function' && isSseActive()) ? 30000 : 3000;
+  if (Date.now() - lastAgentListRefreshAt > agentListIntervalMs) {
+    lastAgentListRefreshAt = Date.now();
+    await loadAgents();
+    if (!isSessionViewTokenCurrent(pollToken)) {
+      return false;
+    }
+    if (typeof updateChatContextBar === 'function') {
+      updateChatContextBar();
+    }
+    if (typeof updateInputModelSwitcher === 'function') {
+      updateInputModelSwitcher();
+    }
+    if (typeof updateThinkingEffortSwitcher === 'function') {
+      updateThinkingEffortSwitcher();
+    }
+  }
+
+  // Incrementally refresh workspace session data for the active workspace host.
+  // This keeps the UI in sync when sessions are created/deleted via CLI.
+  if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {
+    const wsHostAgent = allAgents.find((a) => a.id === focusedAgentId && isWorkspaceHostUnit(a));
+    if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
+      window._lastWsSessionRefreshAt = Date.now();
+      try {
+        const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id, wsHostAgent);
+        if (freshSessions) {
+          if (!isSessionViewTokenCurrent(pollToken)) {
+            return false;
+          }
+          // Preserve optimistic archived state: during compact+archive operations,
+          // markSessionArchivedForMutation sets archived=true before the server
+          // actually archives (which happens inside compact_and_resume response).
+          // Without this, the 3-second refresh would overwrite the optimistic
+          // state with the server's not-yet-archived data, causing visual flicker.
+          const currentWs = wsHostAgent.workspace_sessions;
+          if (currentWs && Array.isArray(currentWs.sessions) && Array.isArray(freshSessions.sessions)) {
+            const currentById = new Map(currentWs.sessions.map(s => [s.id, s]));
+            freshSessions.sessions = freshSessions.sessions.map(s => {
+              const cur = currentById.get(s.id);
+              if (cur && cur.archived === true && s.archived !== true) {
+                return { ...s, archived: true, todo: false };
+              }
+              return s;
+            });
+          }
+          const prevSig = JSON.stringify(currentWs || {});
+          const nextSig = JSON.stringify(freshSessions);
+          if (prevSig !== nextSig) {
+            // Preserve contextLength/compressRatio when the fresh data from
+            // listPrebuiltSessions returns null (e.g. resolveSessionModelInfo
+            // couldn't resolve a preset). Without this, the 3-second refresh
+            // would wipe out previously valid model info and cause the context
+            // bar to flash defaults.
+            const prevCl = currentWs?.contextLength;
+            const prevCr = currentWs?.compressRatio;
+            if (Number.isFinite(prevCl) && prevCl > 0
+                && !(Number.isFinite(freshSessions.contextLength) && freshSessions.contextLength > 0)) {
+              freshSessions.contextLength = prevCl;
+            }
+            if (Number.isFinite(prevCr) && prevCr > 0 && prevCr <= 100
+                && !(Number.isFinite(freshSessions.compressRatio) && freshSessions.compressRatio > 0)) {
+              freshSessions.compressRatio = prevCr;
+            }
+            wsHostAgent.workspace_sessions = typeof mergeWorkspaceSessionSnapshots === 'function'
+              ? mergeWorkspaceSessionSnapshots(currentWs, freshSessions, wsHostAgent.id)
+              : freshSessions;
+            if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
+              renderCurrentMainView();
+            } else {
+              // Chat mode: only refresh context bar, avoid full re-render that resets scroll
+              if (typeof updateChatContextBar === 'function') {
+                updateChatContextBar();
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  if (activeFeaturePanel) {
+    if (activeFeaturePanel === 'logs') {
+      await loadLogs();
+    } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'plan' && activeFeaturePanel !== 'session-controls') {
+      // resources/viewer 面板数据独立管理，不需要 hooks 数据，跳过以避免无谓渲染
+      // session-controls 面板状态由模块自身的请求-应答链路维护，轮询重渲染会打断开关交互
+      const hooksRes = await fetch(`/api/agents/${pollRuntimeId}/hooks`);
+      const nextHookInspector = normalizeHookInspector(await hooksRes.json());
+      const nextSignature = getHookInspectorSignature(nextHookInspector);
+      const hookInspectorChanged = nextSignature !== currentHookInspectorSignature;
+      const hooksCommitted = commitSessionViewPatch(
+        pollToken,
+        hookInspectorChanged ? { hookInspector: nextHookInspector } : {},
+        () => {
+          if (hookInspectorChanged) {
+            renderFeaturePanel();
+          }
+        },
+      );
+      if (!hooksCommitted) {
+        return false;
+      }
+    }
+  }
+
+  const finalStateCommitted = commitSessionViewState(pollToken, () => {
+    // Write-through: keep cache fresh so switching back is instant.
+    // Cache capture and recap tracking observe one synchronous view state.
+    saveCurrentRuntimeToCache(pollRuntimeId);
+    _trackRecapSessionPresence();
+  });
+  if (!finalStateCommitted) {
+    return false;
+  }
+  return true;
+}
+
 async function runPollCycle() {
   try {
     if (prebuiltSessionSwitchInFlight) {
@@ -927,8 +1372,16 @@ async function runPollCycle() {
       return;
     }
 
-    // 全局 choice 请求提醒（跨所有 agent，不限于当前焦点）
-    if (Date.now() - _lastChoiceAlertCheckAt > 3000) {
+    // 全局 choice 请求提醒（跨所有 agent，不限于当前焦点）。
+    // SSE 激活时本地条目由 input-requests 事件驱动 toast（§4.3，与
+    // checkGlobalChoiceAlerts 共享 _seenChoiceAlertIds 去重）；但前台对
+    // 远程条目的 choice 检测现状只走本路径（Worker 心跳前台不请求），存在
+    // 在线远程条目时必须保留轮询。
+    const hasOnlineRemoteEntries = typeof getVisibleRemoteEntries === 'function'
+      && getVisibleRemoteEntries().some((entry) => entry.status === 'connected');
+    const sseSkipChoiceAlerts = typeof isSseActive === 'function'
+      && isSseActive() && !hasOnlineRemoteEntries;
+    if (!sseSkipChoiceAlerts && Date.now() - _lastChoiceAlertCheckAt > 3000) {
       _lastChoiceAlertCheckAt = Date.now();
       checkGlobalChoiceAlerts().catch(e => console.warn(e));
     }
@@ -1004,10 +1457,43 @@ async function runPollCycle() {
       return;
     }
 
-    // 先单独刷新轻量运行态，再并行请求较重的数据，避免状态栏被慢接口拖住
+    // 先单独刷新轻量运行态，再并行请求较重的数据，避免状态栏被慢接口拖住。
+    // SSE 激活时（§5.2）：notification/connection/overview/todo/input-requests
+    // 由事件供数，本周期只拉 guard 状态；读取即清零的一次性全量标志
+    // （看门狗 / resync / reconnected 触发）让本轮回到完整轮询形态。
     const pollToken = captureSessionViewToken();
     const pollRuntimeId = pollToken.runtimeId;
-    const statusTask = refreshCurrentRuntimeStatus(pollRuntimeId, pollToken);
+    const forceFullThisCycle = _forceFullPollNextCycle;
+    _forceFullPollNextCycle = false;
+    const sseActiveThisCycle = typeof isSseActive === 'function' && isSseActive() && !forceFullThisCycle;
+    const statusTask = sseActiveThisCycle
+      ? refreshContextGuardStatus(pollRuntimeId, pollToken)
+      : refreshCurrentRuntimeStatus(pollRuntimeId, pollToken);
+
+    if (sseActiveThisCycle) {
+      // messages / metadata / 队列 / call 状态全部事件驱动：本周期骨架只保留
+      // 按钮与输入面的本地同步（无请求），以及低频兜底项（tail 共享段）。
+      await statusTask;
+      await refreshAgentCallStates(allAgents, {
+        reuseNotification: null,
+      });
+      const statusUiCommitted = commitSessionViewState(pollToken, () => {
+        _syncPersistentActionButton();
+        _syncPersistentInputUi(pollRuntimeId);
+      });
+      if (!statusUiCommitted) {
+        schedulePoll(POLL_FAST_INTERVAL_MS);
+        return;
+      }
+      commitSessionViewState(pollToken, () => {
+        if (!isRuntimeCalling(pollRuntimeId)) {
+          tryAutoTitleGeneration(currentMessages);
+        }
+      });
+      const tailOk = await _runPollTailLowFrequency(pollToken);
+      schedulePoll(tailOk ? POLL_INTERVAL_MS : POLL_FAST_INTERVAL_MS);
+      return;
+    }
 
     // 消息增量探测（ADR-0012）：probe 随本周期 overview 响应下发，/messages
     // 必须等 probe 决定取数方式后再发，因此不再进入第一波并行请求。
@@ -1023,55 +1509,9 @@ async function runPollCycle() {
       return;
     }
 
-    // Core runtime disappeared. /messages can also 404 after the probe step
-    // (runtime died between the two waves), so the branch is shared.
-    const handleCoreResponsesNotFound = async () => {
-      // In-session partial compact doesn't create a new session, so if we get 404
-      // while compact is in flight, just clear the flag and fall through to normal handling
-      if (_partialCompactInFlight && normalizeAgentIdentity(pollRuntimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)) {
-        clearPartialCompactState();
-      }
-      if (prebuiltSessionSwitchInFlight || suppressSidebarRerender) {
-        schedulePoll(POLL_FAST_INTERVAL_MS);
-        return;
-      }
-      const failedRuntimeRecord = getRuntimeRecord(pollRuntimeId);
-      const fallbackId = resolveWorkspaceFallbackAgentId(failedRuntimeRecord);
-      const failureCommitted = commitSessionViewPatch(
-        pollToken,
-        fallbackId ? {} : {
-          messages: [],
-          inputRequests: [],
-          todoPlan: getEmptyTodoPlan(),
-        },
-        ({ current }) => {
-          _agentCallActive.delete(pollRuntimeId);
-          clearInterruptSuppression(pollRuntimeId);
-          if (failedRuntimeRecord) {
-            failedRuntimeRecord.callActive = false;
-            failedRuntimeRecord.connected = false;
-          }
-          currentRuntimeAgentId = null;
-          if (fallbackId) {
-            selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
-          } else {
-            focusedAgentId = null;
-            currentWorkspaceTab = null;
-            renderCurrentMainView();
-          }
-        },
-      );
-      if (!failureCommitted) {
-        schedulePoll(POLL_FAST_INTERVAL_MS);
-        return;
-      }
-      await loadAgents();
-      schedulePoll(POLL_INTERVAL_MS);
-    };
-
     const coreResponses = [inputRes, overviewRes];
     if (coreResponses.some(res => res.status === 404)) {
-      await handleCoreResponsesNotFound();
+      await handleCoreResponsesNotFound(pollToken);
       return;
     }
 
@@ -1086,165 +1526,17 @@ async function runPollCycle() {
 
     // extractMessagesProbe lives in overview-data.js (script order in
     // index.html); absence (tests / older shell) degrades to the legacy full
-    // fetch, which is exactly the "probe unavailable" path below.
+    // fetch, which is exactly the "probe unavailable" path inside the cycle.
     const msgProbe = typeof extractMessagesProbe === 'function'
       ? extractMessagesProbe(overviewJson)
       : null;
-    const prevKnownMessages = Array.isArray(currentMessages) ? currentMessages : [];
-    const prevKnownCount = prevKnownMessages.length;
-    const msgMetrics = {
-      actualBytes: 0,
-      fakeFullBytes: msgProbe ? msgProbe.fakeFullBytes : 0,
-      changeKind: msgProbe ? msgProbe.changeKind : null,
-      downgraded: false,
-    };
-
-    const fetchMessagesJson = async (query) => {
-      const res = await fetch(`/api/agents/${pollRuntimeId}/messages${query}`);
-      if (res.status === 404) {
-        await handleCoreResponsesNotFound();
-        return { handled404: true };
-      }
-      const data = await res.json();
-      return { data };
-    };
-
-    let messages;
-    // ── seq 对账（ADR-0012 v2）──────────────────────────────────────────
-    // probe.seq 是同步版本号（真实变更时单调递增），changeKind 只是最近一
-    // 次真实变更的取数策略提示。对账矩阵：
-    //   count 回退 / probe 缺省 / 基线缺失 → 全量重建基线
-    //   count > prevKnown                  → 有新消息（append 路径）
-    //   count 相等 + seq 前进              → 内容有变（tail/rewrite 路径）
-    //   count 相等 + seq 未前进            → 真正未变化，零请求
-    // seq 语义消除了"no-op 推送覆盖未消费变更"的丢更新竞态（首条 user
-    // 消息延迟显示的根因）。
-    const appliedSeq = _appliedMessagesSeq.get(pollRuntimeId) || 0;
-    const seqAdvanced = msgProbe ? msgProbe.seq > appliedSeq : true;
-    if (!msgProbe || msgProbe.count < prevKnownCount || (msgProbe.count > 0 && prevKnownCount === 0)) {
-      // 探测不可用（probe 缺省 / 首次加载 / 拼接基线缺失），或 probe.count 回退
-      // （Worker 重启 / 修剪）→ 全量拉一次重建基线，下周期恢复探测。
-      if (msgProbe && msgProbe.count < prevKnownCount) msgMetrics.downgraded = true;
-      const result = await fetchMessagesJson('');
-      if (result.handled404) return;
-      if (!isSessionViewTokenCurrent(pollToken)) {
-        schedulePoll(POLL_FAST_INTERVAL_MS);
-        return;
-      }
-      messages = result.data.messages || [];
-      msgMetrics.actualBytes += computeSerializedBytes(result.data);
-    } else if (!seqAdvanced) {
-      // 未变化：跳过 /messages 请求，复用现有消息数组（本周期零消息请求）
-      messages = prevKnownMessages;
-    } else if (msgProbe.count > prevKnownCount || msgProbe.changeKind === 'append') {
-      const since = prevKnownCount;
-      const result = await fetchMessagesJson(`?since=${since}`);
-      if (result.handled404) return;
-      if (!isSessionViewTokenCurrent(pollToken)) {
-        schedulePoll(POLL_FAST_INTERVAL_MS);
-        return;
-      }
-      const delta = Array.isArray(result.data.messages) ? result.data.messages : [];
-      if (delta.length === msgProbe.count - since) {
-        messages = [...prevKnownMessages.slice(0, since), ...delta];
-      } else {
-        // 校验失败（让服务端分类 bug 显形并保正确性）→ 降级全量重建基线
-        msgMetrics.downgraded = true;
-        const full = await fetchMessagesJson('');
-        if (full.handled404) return;
-        if (!isSessionViewTokenCurrent(pollToken)) {
-          schedulePoll(POLL_FAST_INTERVAL_MS);
-          return;
-        }
-        messages = full.data.messages || [];
-        msgMetrics.actualBytes += computeSerializedBytes(full.data);
-      }
-      msgMetrics.actualBytes += computeSerializedBytes(result.data);
-    } else if (msgProbe.changeKind === 'tail') {
-      const result = await fetchMessagesJson('?tail=1');
-      if (result.handled404) return;
-      if (!isSessionViewTokenCurrent(pollToken)) {
-        schedulePoll(POLL_FAST_INTERVAL_MS);
-        return;
-      }
-      const tail = Array.isArray(result.data.messages) ? result.data.messages : [];
-      if (tail.length === 1 && msgProbe.count === prevKnownCount && prevKnownCount > 0) {
-        messages = [...prevKnownMessages.slice(0, -1), tail[0]];
-      } else {
-        // 校验失败 → 降级全量重建基线
-        msgMetrics.downgraded = true;
-        const full = await fetchMessagesJson('');
-        if (full.handled404) return;
-        if (!isSessionViewTokenCurrent(pollToken)) {
-          schedulePoll(POLL_FAST_INTERVAL_MS);
-          return;
-        }
-        messages = full.data.messages || [];
-        msgMetrics.actualBytes += computeSerializedBytes(full.data);
-      }
-      msgMetrics.actualBytes += computeSerializedBytes(result.data);
-    } else {
-      // rewrite（中段替换 / 条数减少：rollback、compact、修剪）→ 全量拉
-      const result = await fetchMessagesJson('');
-      if (result.handled404) return;
-      if (!isSessionViewTokenCurrent(pollToken)) {
-        schedulePoll(POLL_FAST_INTERVAL_MS);
-        return;
-      }
-      messages = result.data.messages || [];
-      msgMetrics.actualBytes += computeSerializedBytes(result.data);
-    }
-
-    // 取数成功（含降级）→ 记录已应用的 seq。放 commit 之后会让"commit 被
-    // stale check 拒绝"的周期丢失 seq 进度，但那些周期本来就已放弃本次
-    // 渲染，下周期 count 对账仍会兜底；这里先记，避免同 seq 被重复取数。
-    _appliedMessagesSeq.set(pollRuntimeId, msgProbe ? msgProbe.seq : 0);
-
-    const messagesCommitted = commitSessionViewPatch(pollToken, { messages }, ({ previous, current }) => {
-      // Clear session loading indicator once messages are available
-      if (current.messages.length > 0) clearChatLoadingSession();
-
-      // Render messages immediately — before non-critical async ops
-      // (status refresh, call states, queue sync) that add visible latency.
-      const previousMessages = previous.messages;
-      const nextMessages = current.messages;
-      markAutoTitleCandidate(previousMessages, nextMessages);
-      const firstChangedIndex = findFirstChangedMessageIndex(nextMessages, previousMessages);
-      if (nextMessages.length !== previousMessages.length) {
-        if (nextMessages.length > previousMessages.length && firstChangedIndex === previousMessages.length) {
-          // 有新消息：只追加新的
-          const newMessages = nextMessages.slice(previousMessages.length);
-          if (shouldRenderWorkspaceSurface()) {
-            renderCurrentMainView(current);
-          } else {
-            appendNewMessages(newMessages, nextMessages.length - newMessages.length);
-          }
-        } else {
-          // 消息减少，或消息变多但前缀已变化：完全重建。
-          renderCurrentMainView(current);
-        }
-      } else {
-        if (firstChangedIndex >= 0) {
-          // Rollback + partial compact can replace the middle of the transcript while
-          // keeping the same length after the summary reminder is inserted.
-          if (shouldRenderWorkspaceSurface() || firstChangedIndex < nextMessages.length - 1) {
-            renderCurrentMainView(current);
-          } else {
-            // 最后一条消息变化：替换最后一条（避免滚动重置）
-            updateLastMessage(nextMessages[nextMessages.length - 1]);
-          }
-        }
-      }
-      // 乐观回显对账：真实消息上屏后再移除覆盖层，视觉上无缝替换
-      if (typeof window.ClawFW?.reconcileOptimisticUserEchoes === 'function') {
-        window.ClawFW.reconcileOptimisticUserEchoes(nextMessages);
-      }
-    });
-    if (!messagesCommitted) {
+    // 对账矩阵与取数逻辑单点在 runMessagesProbeCycle（SSE messages 事件共用，
+    // §5.2：probe 到达路径从 overview 响应换成事件帧，其余逐字节同源）
+    const probeOutcome = await runMessagesProbeCycle(pollToken, msgProbe);
+    if (probeOutcome !== 'committed') {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
-    emitMsgMetrics(msgMetrics);
 
     // 焦点 runtime 的 notification 本周期已由 statusTask 取过，结果交给
     // refreshAgentCallStates 同周期复用（一次请求、两处消费），省去每轮一次
@@ -1268,93 +1560,13 @@ async function runPollCycle() {
     // synchronous transaction. The transcript remains latency-first above,
     // while usage/todo/input UI never paints a mixed poll generation.
     // overviewJson was already consumed by the probe step above — same body,
-    // same generation.
+    // same generation. 签名对比与提交逻辑单点在 commitMetadataUpdate
+    // （SSE todo/overview/input-requests 事件共用，§5.6）。
     const [todoRaw, inputRequestsRaw] = await Promise.all([
       todoRes.ok ? todoRes.json() : Promise.resolve(null),
       inputRes.json(),
     ]);
-    const nextOverview = normalizeOverviewSnapshot(overviewJson);
-    const nextOverviewSignature = getOverviewSignature(nextOverview);
-    const nextTodoPlan = todoRaw === null ? null : normalizeTodoPlan(todoRaw);
-    const nextTodoSignature = nextTodoPlan === null ? null : getTodoPlanSignature(nextTodoPlan);
-    const inputRequests = Array.isArray(inputRequestsRaw) ? inputRequestsRaw : [];
-    const overviewChanged = nextOverviewSignature !== currentOverviewSignature;
-    const todoChanged = nextTodoPlan !== null && nextTodoSignature !== currentTodoPlanSignature;
-    const inputChanged = JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || []);
-    const metadataPatch = {};
-    if (overviewChanged) metadataPatch.overview = nextOverview;
-    if (todoChanged) metadataPatch.todoPlan = nextTodoPlan;
-    if (inputChanged) metadataPatch.inputRequests = inputRequests;
-    const metadataCommitted = commitSessionViewPatch(pollToken, metadataPatch, ({ current }) => {
-
-      // 当目标任务进入终态时，自动清除中断标记
-      let interruptCleared = false;
-      let interruptSynced = false;
-      if (nextTodoPlan !== null) {
-        const currentInterruptTarget = getInterruptTargetId();
-        if (currentInterruptTarget) {
-          const target = nextTodoPlan.tasks.find(tk => tk.id === currentInterruptTarget);
-          if (target && (target.status === 'completed' || target.status === 'deleted')) {
-            setInterruptTargetId(null);
-            interruptCleared = true;
-          }
-        }
-
-        // 从 server 同步 interruptTargetId 到本地缓存。
-        // 仅在用户最近未手动操作时同步（避免覆盖乐观更新）。
-        const userActionGraceExpired = (Date.now() - _lastInterruptUserActionAt) > 3000;
-        if (userActionGraceExpired) {
-          const serverTarget = nextTodoPlan.interruptTargetId || null;
-          if (serverTarget !== currentInterruptTarget) {
-            setInterruptTargetId(serverTarget);
-            interruptSynced = true;
-          }
-        }
-
-        // 从 server 同步"任务未完自动继续"开关到本地缓存（同样遵循用户操作宽限期）。
-        if ((Date.now() - _lastTodoForceContinueUserActionAt) > 3000) {
-          const serverForceContinue = nextTodoPlan.forceContinue?.enabled === true;
-          if (serverForceContinue !== getTodoForceContinue()) {
-            setTodoForceContinue(serverForceContinue);
-          }
-        }
-      }
-
-      // All logical values are assigned before any renderer observes them.
-      if (overviewChanged) {
-        if (activeFeaturePanel === 'workspace') {
-          renderFeaturePanel();
-        }
-        if (typeof updateChatContextBar === 'function') {
-          updateChatContextBar(current);
-        }
-      }
-      if (todoChanged) {
-        if (activeFeaturePanel === 'plan') {
-          renderFeaturePanel();
-        }
-        updatePlanBadge();
-      } else if ((interruptCleared || interruptSynced) && activeFeaturePanel === 'plan') {
-        renderFeaturePanel();
-      }
-
-      // If partial compact was in flight but runtime is back to accepting input,
-      // compact is done (or failed) — clear the flag so normal input is shown.
-      if (
-        _partialCompactInFlight
-        && normalizeAgentIdentity(pollRuntimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
-        && inputRequests.length > 0
-      ) {
-        clearPartialCompactState();
-      }
-      if (inputChanged) {
-        // patch 写入即声明（工单 037）：metadata commit 阶段 hook 已同步
-        // 渲染输入面，这里只保留随输入变化的重构动作。
-        updateRollbackActionVisibility();
-      } else if (isChatSurfaceActive()) {
-        _syncPersistentInputUi(pollRuntimeId);
-      }
-    });
+    const metadataCommitted = commitMetadataUpdate(pollToken, { todoRaw, overviewJson, inputRequestsRaw });
     if (!metadataCommitted) {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
@@ -1367,124 +1579,10 @@ async function runPollCycle() {
       }
     });
 
-    // Refresh the Claw-composed agent list occasionally.
-    // Do not overwrite `allAgents` with the raw viewer session list,
-    // otherwise prebuilt/managed grouping disappears.
-     if (Date.now() - lastAgentListRefreshAt > 3000) {
-        lastAgentListRefreshAt = Date.now();
-        await loadAgents();
-        if (!isSessionViewTokenCurrent(pollToken)) {
-          schedulePoll(POLL_FAST_INTERVAL_MS);
-          return;
-        }
-        if (typeof updateChatContextBar === 'function') {
-          updateChatContextBar();
-        }
-        if (typeof updateInputModelSwitcher === 'function') {
-          updateInputModelSwitcher();
-        }
-        if (typeof updateThinkingEffortSwitcher === 'function') {
-          updateThinkingEffortSwitcher();
-        }
-     }
-
-    // Incrementally refresh workspace session data for the active workspace host.
-    // This keeps the UI in sync when sessions are created/deleted via CLI.
-    if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {
-      const wsHostAgent = allAgents.find((a) => a.id === focusedAgentId && isWorkspaceHostUnit(a));
-      if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
-        window._lastWsSessionRefreshAt = Date.now();
-        try {
-          const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id, wsHostAgent);
-          if (freshSessions) {
-            if (!isSessionViewTokenCurrent(pollToken)) {
-              schedulePoll(POLL_FAST_INTERVAL_MS);
-              return;
-            }
-            // Preserve optimistic archived state: during compact+archive operations,
-            // markSessionArchivedForMutation sets archived=true before the server
-            // actually archives (which happens inside compact_and_resume response).
-            // Without this, the 3-second refresh would overwrite the optimistic
-            // state with the server's not-yet-archived data, causing visual flicker.
-            const currentWs = wsHostAgent.workspace_sessions;
-            if (currentWs && Array.isArray(currentWs.sessions) && Array.isArray(freshSessions.sessions)) {
-              const currentById = new Map(currentWs.sessions.map(s => [s.id, s]));
-              freshSessions.sessions = freshSessions.sessions.map(s => {
-                const cur = currentById.get(s.id);
-                if (cur && cur.archived === true && s.archived !== true) {
-                  return { ...s, archived: true, todo: false };
-                }
-                return s;
-              });
-            }
-            const prevSig = JSON.stringify(currentWs || {});
-            const nextSig = JSON.stringify(freshSessions);
-            if (prevSig !== nextSig) {
-              // Preserve contextLength/compressRatio when the fresh data from
-              // listPrebuiltSessions returns null (e.g. resolveSessionModelInfo
-              // couldn't resolve a preset). Without this, the 3-second refresh
-              // would wipe out previously valid model info and cause the context
-              // bar to flash defaults.
-              const prevCl = currentWs?.contextLength;
-              const prevCr = currentWs?.compressRatio;
-              if (Number.isFinite(prevCl) && prevCl > 0
-                  && !(Number.isFinite(freshSessions.contextLength) && freshSessions.contextLength > 0)) {
-                freshSessions.contextLength = prevCl;
-              }
-              if (Number.isFinite(prevCr) && prevCr > 0 && prevCr <= 100
-                  && !(Number.isFinite(freshSessions.compressRatio) && freshSessions.compressRatio > 0)) {
-                freshSessions.compressRatio = prevCr;
-              }
-              wsHostAgent.workspace_sessions = typeof mergeWorkspaceSessionSnapshots === 'function'
-                ? mergeWorkspaceSessionSnapshots(currentWs, freshSessions, wsHostAgent.id)
-                : freshSessions;
-              if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
-                renderCurrentMainView();
-              } else {
-                // Chat mode: only refresh context bar, avoid full re-render that resets scroll
-                if (typeof updateChatContextBar === 'function') {
-                  updateChatContextBar();
-                }
-              }
-            }
-          }
-        } catch {}
-      }
-    }
-
-    if (activeFeaturePanel) {
-      if (activeFeaturePanel === 'logs') {
-        await loadLogs();
-      } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'plan' && activeFeaturePanel !== 'session-controls') {
-        // resources/viewer 面板数据独立管理，不需要 hooks 数据，跳过以避免无谓渲染
-        // session-controls 面板状态由模块自身的请求-应答链路维护，轮询重渲染会打断开关交互
-        const hooksRes = await fetch(`/api/agents/${pollRuntimeId}/hooks`);
-        const nextHookInspector = normalizeHookInspector(await hooksRes.json());
-        const nextSignature = getHookInspectorSignature(nextHookInspector);
-        const hookInspectorChanged = nextSignature !== currentHookInspectorSignature;
-        const hooksCommitted = commitSessionViewPatch(
-          pollToken,
-          hookInspectorChanged ? { hookInspector: nextHookInspector } : {},
-          () => {
-            if (hookInspectorChanged) {
-              renderFeaturePanel();
-            }
-          },
-        );
-        if (!hooksCommitted) {
-          schedulePoll(POLL_FAST_INTERVAL_MS);
-          return;
-        }
-      }
-    }
-
-    const finalStateCommitted = commitSessionViewState(pollToken, () => {
-      // Write-through: keep cache fresh so switching back is instant.
-      // Cache capture and recap tracking observe one synchronous view state.
-      saveCurrentRuntimeToCache(pollRuntimeId);
-      _trackRecapSessionPresence();
-    });
-    if (!finalStateCommitted) {
+    // 低频兜底段（loadAgents / workspace sessions / hooks / final cache）
+    // 与 SSE 激活周期共用同一实现
+    const tailOk = await _runPollTailLowFrequency(pollToken);
+    if (!tailOk) {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
@@ -1525,8 +1623,9 @@ applyLanguage();
 // Force a full refresh to catch up.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
-  // Re-sync all agent calling states immediately
-  refreshAgentCallStates(allAgents, { force: true });
+  // Re-sync all agent calling states immediately（回前台是全量对账路径：
+  // SSE 激活时本地条目也参与本轮对账，§5.3 includeSseLocals）
+  refreshAgentCallStates(allAgents, { force: true, includeSseLocals: true });
   // Re-sync current runtime's notification status (button, status bar)
   if (currentRuntimeAgentId) {
     refreshCurrentRuntimeStatus(currentRuntimeAgentId);

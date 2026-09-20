@@ -752,6 +752,11 @@ async function submitQueuedInput() {
         _localQueuedInputPending = true;
         _pendingQueuedCount++;
         _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
+        // 乐观锚点（SSE §5.5）：响应携带服务端排队 id，供 queued-inputs 事件
+        // 快照按 id 对账（无 SSE 时为 no-op，气泡由轮询快照自然覆盖）
+        if (window.ClawFW?.SseClient?.noteQueuedOptimistic && delivery.id) {
+          window.ClawFW.SseClient.noteQueuedOptimistic(delivery.id, text || (images && images.length ? '🖼' : '') || ' ');
+        }
         updateQueueIndicator();
       } else if (targetRuntimeId) {
         // 空闲直投（lease / 即时消费）：乐观回显先上屏，真实消息经
@@ -801,6 +806,21 @@ function updateQueueIndicator() {
   if (container) _renderQueueBubbles(container);
 }
 
+/**
+ * 队列快照的同步消费（轮询路径与 SSE 事件路径共用）：更新 _queuedTexts /
+ * _pendingQueuedCount / 队列气泡 / 输入面声明。texts 已由调用方完成乐观
+ * 对账（SSE 路径经 SseClient.reconcileQueuedTexts）。
+ */
+function applyQueuedInputsTexts(runtimeId, texts, snapshotCount) {
+  _queuedTexts = Array.isArray(texts) ? texts.slice() : [];
+  _pendingQueuedCount = Number.isFinite(snapshotCount) ? snapshotCount : _queuedTexts.length;
+  if (_queuedTexts.length === 0 && !isRuntimeCalling(runtimeId)) {
+    _localQueuedInputPending = false;
+  }
+  updateQueueIndicator();
+  notifyInputSurfaceChanged(currentInputRequests || []);
+}
+
 async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
   if (_persistentUiSyncInFlight) return;
   _persistentUiSyncInFlight = true;
@@ -820,6 +840,17 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
     const expectedRuntimeId = runtimeId;
     _syncPersistentActionButton();
 
+    // SSE 激活时优先消费事件通道缓存的最新快照（零请求）；缓存缺席
+    // （首载/事件未达）时回退 fetch 一次补齐，等事件接管
+    if (typeof isSseActive === 'function' && isSseActive()) {
+      const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(expectedRuntimeId);
+      if (cached && Array.isArray(cached.items)) {
+        const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(cached.items) || [];
+        applyQueuedInputsTexts(expectedRuntimeId, texts, cached.items.length);
+        return;
+      }
+    }
+
     const res = await fetch(`/api/agents/${expectedRuntimeId}/queued-inputs`);
     if (!res.ok || expectedRuntimeId !== currentRuntimeAgentId) return;
     const data = await res.json();
@@ -833,22 +864,14 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
       })
       .filter(Boolean);
 
-    _queuedTexts = viewerQueueTexts.slice();
-    _pendingQueuedCount = _queuedTexts.length;
-    if (_queuedTexts.length === 0 && !isRuntimeCalling(expectedRuntimeId)) {
-      _localQueuedInputPending = false;
-    }
-    if (JSON.stringify(_queuedTexts) !== prevQueueSignature) {
-      updateQueueIndicator();
+    if (JSON.stringify(viewerQueueTexts) !== prevQueueSignature) {
+      applyQueuedInputsTexts(expectedRuntimeId, viewerQueueTexts, queue.length);
     }
   } catch (e) {
     // ignore transient queue sync failures
   } finally {
     _persistentUiSyncInFlight = false;
   }
-  // 队列同步可能翻转显示模式（排空 → 请求卡恢复，工单 037）：声明变更即可，
-  // 渲染器按签名差异决定是否重建；无翻转时是幂等 no-op。
-  notifyInputSurfaceChanged(currentInputRequests || []);
 }
 
 async function interruptAgent() {
