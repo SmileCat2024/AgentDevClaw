@@ -733,17 +733,38 @@ function applyAgentCallStateFromNotification(runtimeId, notifData) {
 /**
  * 将 call 状态写入 agent 记录的 callActive（侧栏转圈动画的数据源）。
  * 仅处理 runtime 匹配的记录；prebuilt 宿主行的清理由 refreshAgentCallStates
- * 无条件执行（不随 SSE 本地跳过而消失）。
+ * 无条件执行（不随 SSE 本地跳过而消失）。agents 缺省取全局 allAgents；
+ * refreshAgentCallStates 覆写循环显式传入本轮的 agents 形参（与重构前
+ * 的遍历范围对齐）。
  * @returns {boolean} 是否有记录被修改
  */
-function applyCallStateToAgentRecords(runtimeId, calling) {
+function applyCallStateToAgentRecords(runtimeId, calling, agents = allAgents) {
   let changed = false;
-  for (const agent of Array.isArray(allAgents) ? allAgents : []) {
+  for (const agent of Array.isArray(agents) ? agents : []) {
     if (agent?.source === 'prebuilt') continue;
     if (getAgentRuntimeId(agent) !== runtimeId) continue;
     const nextCalling = calling === true;
     if (agent.callActive !== nextCalling) {
       agent.callActive = nextCalling;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * 孤儿清理：不在存活集（connected agents + 在线远程）的 call 状态键整体
+ * 回收。存活集是全量 runtimeIds（含 SSE 事件维护的本地条目）：本地条目
+ * 仍存活，只是本轮不轮询，不能被"缺席=空闲"语义清掉。
+ * @returns {boolean} 是否有键被回收
+ */
+function cleanupOrphanCallStates(activeRuntimeIds) {
+  let changed = false;
+  for (const key of Array.from(_agentCallActive.keys())) {
+    if (!activeRuntimeIds.has(key)) {
+      _agentCallActive.delete(key);
+      _interruptSuppression.delete(key);
+      _recentlyFinishedRuntimes.delete(key);
       changed = true;
     }
   }
@@ -789,8 +810,13 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
       : runtimeIds;
     if (polledIds.length === 0) {
       if (sseSkipLocal) {
-        cleanPrebuiltHostRows(agents);
-        return; // 本地条目归事件管，远程为空：无需动作
+        // 本地条目归事件管，远程为空：不 fetch，但断连条目仍需孤儿回收
+        // （connection{connected:false} 事件不清理 call 状态，残留会让
+        // 重连后的空闲 runtime 立即显形错误转圈）
+        let changed = cleanupOrphanCallStates(new Set(runtimeIds));
+        changed = cleanPrebuiltHostRows(agents) || changed;
+        if (changed) renderAgentList();
+        return;
       }
       let changed = false;
       for (const key of Array.from(_agentCallActive.keys())) {
@@ -831,23 +857,28 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
       changed = applyAgentCallStateFromNotification(runtimeId, nextNotificationPayloads.get(runtimeId) || null) || changed;
     }
 
-    // 孤儿清理的存活集是全量 runtimeIds（含 SSE 事件维护的本地条目）：
-    // 本地条目仍存活，只是本轮不轮询，不能被"缺席=空闲"语义清掉
-    const activeRuntimeIds = new Set(runtimeIds);
-    for (const key of Array.from(_agentCallActive.keys())) {
-      if (!activeRuntimeIds.has(key)) {
-        _agentCallActive.delete(key);
-        _interruptSuppression.delete(key);
-        _recentlyFinishedRuntimes.delete(key);
-        changed = true;
-      }
-    }
+    // 孤儿清理（存活集语义见函数注释）
+    changed = cleanupOrphanCallStates(new Set(runtimeIds)) || changed;
 
+    // 覆写循环遍历 agents 全集（与重构前对齐，F2a）：断连/未轮询条目覆写
+    // false，防止 connected 恢复后残留的 callActive 立即显形（侧栏渲染的
+    // connected 条件掩盖断连期间的残留，重连即暴露）。SSE 跳过形态下本地
+    // 存活条目由 notification 事件维护，豁免覆写（缺席≠空闲，§5.3）。
+    const callingByPolled = new Map();
     for (const runtimeId of polledIds) {
       const payload = nextNotificationPayloads.get(runtimeId) || null;
-      const calling = resolveNotificationCallingState(payload) === true
-        && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(payload));
-      changed = applyCallStateToAgentRecords(runtimeId, calling) || changed;
+      callingByPolled.set(runtimeId, resolveNotificationCallingState(payload) === true
+        && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(payload)));
+    }
+    const activeRuntimeIds = new Set(runtimeIds);
+    for (const agent of Array.isArray(agents) ? agents : []) {
+      if (agent?.source === 'prebuilt') continue;
+      const runtimeId = getAgentRuntimeId(agent);
+      if (!runtimeId) continue;
+      const managedBySseEvents = sseSkipLocal && activeRuntimeIds.has(runtimeId)
+        && !(typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(runtimeId));
+      if (managedBySseEvents) continue;
+      changed = applyCallStateToAgentRecords(runtimeId, callingByPolled.get(runtimeId) === true, agents) || changed;
     }
 
     changed = cleanPrebuiltHostRows(agents) || changed;

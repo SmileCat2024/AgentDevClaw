@@ -437,7 +437,7 @@ describe('sse-events: heartbeat, cap and shutdown', () => {
 
     const res2 = await fetch(h.url());
     assert.equal(res2.status, 503);
-    assert.equal((await res2.json()).error, 'sse-connections-full');
+    assert.equal((await res2.json()).error, 'sse_unavailable');
 
     s1.abort();
     await waitStats(h.mod, (st) => st.clients === 0);

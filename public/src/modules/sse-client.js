@@ -124,10 +124,15 @@ function handleInputRequestsEvent(frame) {
       if (latest?.requestId) _tryNotifyInputRequest(frame.agentId, latest.requestId, null);
     }
   } else {
-    notifyChoiceAlerts(requests.map((lease) => ({
-      requestId: lease?.requestId,
-      agentId: frame.agentId,
-    })));
+    // 与服务端 /protoclaw/choice_alerts 聚合同一谓词（mode=choices 且含
+    // 问题项）：普通文本输入请求不进 choice toast（F1）
+    notifyChoiceAlerts(requests
+      .filter((lease) => lease?.mode === 'choices'
+        && Array.isArray(lease?.questions) && lease.questions.length > 0)
+      .map((lease) => ({
+        requestId: lease?.requestId,
+        agentId: frame.agentId,
+      })));
   }
 }
 
@@ -149,7 +154,15 @@ function handleMessagesEvent(frame) {
   // 原样复用（ADR-0013 契约不动）。token 捕获后取数是异步的，stale 由
   // 周期内既有的 isSessionViewTokenCurrent 检查兜底。
   const token = captureSessionViewToken(frame.agentId);
-  runMessagesProbeCycle(token, probe).catch((e) => console.warn('[sse] messages probe cycle failed:', e));
+  runMessagesProbeCycle(token, probe)
+    .then((outcome) => {
+      // /messages 404：runtime 已消失，与轮询路径共用 runtime 消失处理（F3）
+      if (outcome === 'handled404' && typeof handleCoreResponsesNotFound === 'function') {
+        return handleCoreResponsesNotFound(token);
+      }
+      return undefined;
+    })
+    .catch((e) => console.warn('[sse] messages probe cycle failed:', e));
 }
 
 // ── 非焦点 choice 提醒（§4.3：ClawToast 迁移为事件驱动）─────────────

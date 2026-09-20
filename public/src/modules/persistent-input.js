@@ -749,9 +749,17 @@ async function submitQueuedInput() {
           });
         }
       } else if (delivery.delivery === 'queued') {
-        _localQueuedInputPending = true;
-        _pendingQueuedCount++;
-        _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
+        // SSE 乱序防护（F5）：事件帧先到时快照已含该排队项，POST 响应后到
+        // 不再乐观 push，避免气泡瞬时重复（约 1s 才能对账消除）
+        const snapshotAlreadyHasIt = delivery.id
+          && window.ClawFW?.SseClient?.getLastQueuedSnapshot
+          && (window.ClawFW.SseClient.getLastQueuedSnapshot(targetRuntimeId)?.items || [])
+            .some((item) => item?.id === delivery.id);
+        if (!snapshotAlreadyHasIt) {
+          _localQueuedInputPending = true;
+          _pendingQueuedCount++;
+          _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
+        }
         // 乐观锚点（SSE §5.5）：响应携带服务端排队 id，供 queued-inputs 事件
         // 快照按 id 对账（无 SSE 时为 no-op，气泡由轮询快照自然覆盖）
         if (window.ClawFW?.SseClient?.noteQueuedOptimistic && delivery.id) {

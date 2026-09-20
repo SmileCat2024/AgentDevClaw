@@ -132,6 +132,40 @@ describe('refreshAgentCallStates: SSE 语义切换（S3）', () => {
     assert.equal(result, false, 'prebuilt 宿主行被无条件清理');
     assert.equal(env.fetched.length, 0, 'SSE 激活时不因清理而 fetch');
   });
+
+  it('F2b：SSE 激活 + 无远程条目时断连条目仍被孤儿回收（提前返回分支）', async () => {
+    env.setSseActive(true);
+    // rt-dead 曾在调用中，现已断连（不在 agents 的 connected 集）
+    env.run('applyAgentCallStateFromNotification("rt-dead", { callActive: true })');
+    await env.run('refreshAgentCallStates([{ connected: true, runtime_session_id: "rt-alive" }])');
+    const active = env.run('Array.from(_agentCallActive.keys())');
+    assert.deepEqual(JSON.parse(JSON.stringify(active)), [], '断连条目被回收');
+    assert.equal(env.fetched.length, 0);
+  });
+
+  it('F2a：断连 agent 的 callActive 覆写 false（覆写循环遍历 agents 全集）', async () => {
+    env.setSseActive(false);
+    const result = await env.run(`(async () => {
+      const agents = [
+        { connected: true, runtime_session_id: "rt-live", callActive: false },
+        { connected: false, runtime_session_id: "rt-gone", callActive: true },
+      ];
+      await refreshAgentCallStates(agents);
+      return agents.map((a) => [a.runtime_session_id, a.callActive === true]);
+    })()`);
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), [['rt-live', false], ['rt-gone', false]]);
+  });
+
+  it('F2a/S3 平衡：SSE 激活时本地存活条目的 callActive 豁免覆写（缺席≠空闲）', async () => {
+    env.setSseActive(true);
+    const result = await env.run(`(async () => {
+      const agents = [{ connected: true, runtime_session_id: "rt-local-1", callActive: true }];
+      await refreshAgentCallStates(agents);
+      return agents[0].callActive === true;
+    })()`);
+    assert.equal(result, true, '事件维护的本地存活条目不被覆写 false');
+    assert.equal(env.fetched.length, 0, '零 fetch');
+  });
 });
 
 describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）', () => {

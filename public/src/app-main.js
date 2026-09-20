@@ -1533,6 +1533,12 @@ async function runPollCycle() {
     // 对账矩阵与取数逻辑单点在 runMessagesProbeCycle（SSE messages 事件共用，
     // §5.2：probe 到达路径从 overview 响应换成事件帧，其余逐字节同源）
     const probeOutcome = await runMessagesProbeCycle(pollToken, msgProbe);
+    if (probeOutcome === 'handled404') {
+      // /messages 404（runtime 在两波 fetch 之间死亡）：与 input/overview 404
+      // 共用 runtime 消失处理（原"branch is shared"防御语义，F3）
+      await handleCoreResponsesNotFound(pollToken);
+      return;
+    }
     if (probeOutcome !== 'committed') {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
@@ -1541,8 +1547,11 @@ async function runPollCycle() {
     // 焦点 runtime 的 notification 本周期已由 statusTask 取过，结果交给
     // refreshAgentCallStates 同周期复用（一次请求、两处消费），省去每轮一次
     // 的重复请求；statusTask 失败/过期时 notifData 为空，对方照常自取兜底。
+    // forceFull 对账轮传 includeSseLocals：SSE 连接健康时 refreshAgentCallStates
+    // 仍会跳过本地条目，全量形态必须覆盖 call 维度（F2d）。
     const focusedStatus = await statusTask;
     await refreshAgentCallStates(allAgents, {
+      includeSseLocals: forceFullThisCycle,
       reuseNotification: focusedStatus?.notifData
         ? { runtimeId: pollRuntimeId, payload: focusedStatus.notifData }
         : null,

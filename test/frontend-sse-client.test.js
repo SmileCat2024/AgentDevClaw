@@ -212,10 +212,36 @@ describe('sse-client: 事件分发焦点路由', () => {
     assert.equal(calls.tryNotifyInputRequest.length, 0); // stub 未接线时不炸
     latestSource().emit('input-requests', {
       kind: 'input-requests', agentId: 'rt-other',
-      data: [{ requestId: 'req-x', mode: 'choices' }],
+      data: [{ requestId: 'req-x', mode: 'choices', questions: ['继续吗'] }],
     });
     assert.equal(calls.toasts.length, 1);
     assert.equal(calls.toasts[0].id, 'choice-alert-req-x');
+  });
+
+  it('非焦点 input-requests 非 choices 租约不 toast（F1：文本输入请求不误报等待选择）', () => {
+    const { calls } = activeClient();
+    latestSource().emit('input-requests', {
+      kind: 'input-requests', agentId: 'rt-other',
+      data: [
+        { requestId: 'req-text', mode: 'text' },
+        { requestId: 'req-empty', mode: 'choices', questions: [] },
+      ],
+    });
+    assert.equal(calls.toasts.length, 0);
+  });
+
+  it('messages probe 返回 handled404 → 触发 runtime 消失处理（F3）', async () => {
+    const handled404 = [];
+    const { ctx } = loadSseClient({
+      runMessagesProbeCycle: async () => 'handled404',
+      handleCoreResponsesNotFound: (token) => { handled404.push(token); return true; },
+    });
+    ctx.run('bootSseClient()');
+    latestSource().emit('hello', { hello: true });
+    latestSource().emit('messages', { kind: 'messages', agentId: 'rt-focus', probe: { seq: 1 } });
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(handled404.length, 1);
+    assert.equal(handled404[0].runtimeId, 'rt-focus');
   });
 
   it('queued-inputs 事件更新快照缓存并消费文本', () => {

@@ -22,7 +22,7 @@ export const SSE_DEFAULTS = {
   coalesceMs: 250,
   heartbeatMs: 15000,
   ringSize: 512,
-  maxClients: 16,
+  maxClients: 64,
 };
 
 /**
@@ -181,7 +181,7 @@ export function createSseEventsModule(deps = {}) {
       return;
     }
     if (clients.size >= maxClients) {
-      res.status(503).json({ error: 'sse-connections-full', maxClients });
+      res.status(503).json({ error: 'sse_unavailable', maxClients });
       return;
     }
 
