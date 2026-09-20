@@ -344,7 +344,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-project-header-info">' +
       '<div class="ph-project-header-name">' + headerName + '</div>' +
       '</div>' +
-      '<svg class="ph-project-dropdown-arrow" width="12" height="12" viewBox="0 0 12 12"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' +
+      '<svg class="ph-project-dropdown-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
       '</div>' +
       '<div class="ph-project-dropdown-menu">' + dropdownItems + '</div>' +
       '</div>'
@@ -422,12 +422,13 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-project-bar">',
       '<div class="ph-project-bar-left">',
       dropdownHtml,
+      // 目录设置（齿轮图标按钮）紧跟项目选择器，属项目级操作。
+      dirConfigBtn,
       '</div>',
       '<div class="ph-project-bar-right">',
       modelSwitchHtml,
-      dirConfigBtn,
       // 新对话渲染查 workspaceCreate 能力（远程目录经服务端转发创建）。
-      (currentProject && canWorkspaceCreate ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
+      (currentProject && canWorkspaceCreate ? '<button class="ph-banner-btn ph-new-chat-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新建对话' : 'New Chat') + '</button>' : ''),
       '</div>',
       '</div>',
     ].join('');

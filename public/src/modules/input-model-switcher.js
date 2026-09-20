@@ -91,6 +91,8 @@ function _getInputDefaultPresetName() {
 function _closeInputModelDropdown() {
   if (_inputModelDropdown) {
     _inputModelDropdown.classList.remove('visible');
+    let btn = document.getElementById('input-model-switch-btn');
+    if (btn) btn.classList.remove('dd-open');
     setTimeout(function() {
       if (_inputModelDropdown) { _inputModelDropdown.remove(); _inputModelDropdown = null; }
     }, 150);
@@ -248,6 +250,7 @@ window.toggleInputModelDropdown = function(event) {
     });
 
     document.body.appendChild(_inputModelDropdown);
+    btn.classList.add('dd-open');
     // Measure height after insert, then place above the button
     let ddHeight = _inputModelDropdown.offsetHeight;
     _inputModelDropdown.style.top = (rect.top - ddHeight - 4) + 'px';
@@ -365,6 +368,8 @@ function _currentModelSupportsThinking() {
 function _closeThinkingEffortDropdown() {
   if (_inputThinkingDropdown) {
     _inputThinkingDropdown.classList.remove('visible');
+    let btn = document.getElementById('input-thinking-btn');
+    if (btn) btn.classList.remove('dd-open');
     setTimeout(function() {
       if (_inputThinkingDropdown) { _inputThinkingDropdown.remove(); _inputThinkingDropdown = null; }
     }, 150);
@@ -503,6 +508,7 @@ window.toggleThinkingEffortDropdown = function(event) {
   });
 
   document.body.appendChild(_inputThinkingDropdown);
+  btn.classList.add('dd-open');
   // Measure height after insert, then place above the button
   let ddHeight = _inputThinkingDropdown.offsetHeight;
   _inputThinkingDropdown.style.top = (rect.top - ddHeight - 4) + 'px';

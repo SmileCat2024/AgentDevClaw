@@ -108,7 +108,7 @@ body[data-theme="light"] .sidebar-resizer.dragging::after {
   position: relative;
 }
 
-.sidebar-title { font-weight: 700; font-size: 16px; }
+.sidebar-title { font-weight: 700; font-size: 17px; }
 
 /* ── Brand version chip + hover card（标题右侧版本标签 / 悬停名片）── */
 
@@ -124,7 +124,7 @@ body[data-theme="light"] .sidebar-resizer.dragging::after {
   flex-shrink: 0;
   padding: 2px 9px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.02em;
   line-height: 1.5;

@@ -2,8 +2,8 @@
  * dir-config-dialog.js — Feature 配置弹窗（目录层 / 全局层）
  *
  * 两个入口，均为弹窗形式，内嵌共享配置编辑器（feature-config-editor.js）：
- *   - 目录层：编程小助手项目栏（ph-project-bar，sticky 悬浮）上的
- *     "目录设置"按钮，绑定当前项目目录（scopeId='dir:<path>'）；
+ *   - 目录层：编程小助手项目栏（ph-project-bar）左侧项目选择器旁的
+ *     齿轮图标按钮，绑定当前项目目录（scopeId='dir:<path>'）；
  *   - 全局层：左下角设置 flyout 菜单"全局 Feature 设置"
  *     （scopeId='global'）。
  *
@@ -49,10 +49,11 @@ function phDirConfigButtonHtml(agent, dir) {
   dir = (typeof dir === 'string' && dir.trim()) ? dir.trim() : '';
   if (!dir) return '';
   const isZh = currentLanguage === 'zh';
-  return '<button class="ph-banner-btn secondary" type="button"'
+  return '<button class="ph-dir-config-btn" type="button"'
     + ' onclick="window.phOpenDirConfig(\'' + escapeHtml(dir) + '\')"'
-    + ' title="' + escapeHtml(dir) + '">'
-    + escapeHtml(isZh ? '目录设置' : 'Dir Config')
+    + ' title="' + escapeHtml((isZh ? '目录设置 · ' : 'Dir Config · ') + dir) + '"'
+    + ' aria-label="' + escapeHtml(isZh ? '目录设置' : 'Dir Config') + '">'
+    + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg>'
     + '</button>';
 }
 
