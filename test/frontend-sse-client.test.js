@@ -202,7 +202,7 @@ describe('sse-client: 事件分发焦点路由', () => {
     assert.deepEqual(Object.keys(calls.commitMetadataUpdate[1].parts), ['overviewJson']);
   });
 
-  it('input-requests 焦点 → commitMetadataUpdate + 通知；非焦点 → choice toast', () => {
+  it('input-requests 焦点 → commitMetadataUpdate；非焦点 → choice toast', () => {
     const { calls } = activeClient();
     latestSource().emit('input-requests', {
       kind: 'input-requests', agentId: 'rt-focus',
@@ -216,6 +216,35 @@ describe('sse-client: 事件分发焦点路由', () => {
     });
     assert.equal(calls.toasts.length, 1);
     assert.equal(calls.toasts[0].id, 'choice-alert-req-x');
+  });
+
+  it('焦点 input-requests 非 choices 租约不弹选择桌面通知（文本输入请求不误报"需要你的选择"）', () => {
+    const notified = [];
+    const { ctx } = loadSseClient({ _tryNotifyInputRequest: () => { notified.push('hit'); } });
+    ctx.run('bootSseClient()');
+    latestSource().emit('hello', { hello: true });
+    latestSource().emit('input-requests', {
+      kind: 'input-requests', agentId: 'rt-focus',
+      data: [{ requestId: 'req-text', mode: 'text' }],
+    });
+    latestSource().emit('input-requests', {
+      kind: 'input-requests', agentId: 'rt-focus',
+      data: [{ requestId: 'req-empty-q', mode: 'choices', questions: [] }],
+    });
+    assert.equal(notified.length, 0);
+  });
+
+  it('焦点 input-requests 真 choice 租约触发桌面通知', () => {
+    const notified = [];
+    const { ctx } = loadSseClient({ _tryNotifyInputRequest: (runtimeId, reqId) => notified.push([runtimeId, reqId]) });
+    ctx.run('bootSseClient()');
+    latestSource().emit('hello', { hello: true });
+    latestSource().emit('input-requests', {
+      kind: 'input-requests', agentId: 'rt-focus',
+      data: [{ requestId: 'req-c', mode: 'choices', questions: ['继续吗'] }],
+    });
+    assert.equal(notified.length, 1);
+    assert.deepEqual(notified[0], ['rt-focus', 'req-c']);
   });
 
   it('非焦点 input-requests 非 choices 租约不 toast（F1：文本输入请求不误报等待选择）', () => {

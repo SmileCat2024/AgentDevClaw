@@ -118,10 +118,15 @@ function handleInputRequestsEvent(frame) {
     if (typeof commitMetadataUpdate === 'function') {
       commitMetadataUpdate(token, { inputRequestsRaw: requests });
     }
-    // 焦点会话的输入请求通知（_tryNotifyInputRequest 内部自判前台/去重）
-    if (requests.length > 0 && typeof _tryNotifyInputRequest === 'function') {
-      const latest = requests[requests.length - 1];
-      if (latest?.requestId) _tryNotifyInputRequest(frame.agentId, latest.requestId, null);
+    // 焦点会话的 choice 通知（_tryNotifyInputRequest 内部自判前台/去重）。
+    // 谓词与非焦点分支、服务端 /protoclaw/choice_alerts 聚合同源：
+    // 普通文本输入请求在输入框内呈现即可，不得触发"需要你的选择"桌面通知。
+    const choiceLease = requests
+      .filter((lease) => lease?.mode === 'choices'
+        && Array.isArray(lease?.questions) && lease.questions.length > 0)
+      .pop();
+    if (choiceLease?.requestId && typeof _tryNotifyInputRequest === 'function') {
+      _tryNotifyInputRequest(frame.agentId, choiceLease.requestId, null);
     }
   } else {
     // 与服务端 /protoclaw/choice_alerts 聚合同一谓词（mode=choices 且含
