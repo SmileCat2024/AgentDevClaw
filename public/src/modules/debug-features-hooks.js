@@ -35,7 +35,7 @@ function featureGroupLabel(typeId) {
   return t(typeId === '_unmapped' ? 'feature_cat_unmapped' : 'feature_type_' + typeId);
 }
 
-// ── 面板头部筛选：来源分页器（全部/官方内置/已安装）+ 能力下拉 ──────
+// ── 面板头部筛选：来源分页器（全部/默认内置/已安装）+ 能力下拉 ──────
 
 const FEATURE_FILTERS = ['all', 'bundled', 'installed'];
 const FEATURE_FILTER_STORAGE_KEY = 'claw_feature_panel_filter';
@@ -125,8 +125,29 @@ function _ensureCommandFeatures() {
     });
 }
 
+// $mount 装配事实低频拉取（同 catalog 模式）：就位后修正面板来源分类
+// （官方选装/用户扩展经 $mount 挂载即"已安装"，与挂载管理页同口径）。
+function _ensureMountFacts() {
+  const fc = window.ClawFW && window.ClawFW.featureCatalog;
+  if (fc) fc.loadMountFacts().catch(err => console.warn('[feature-catalog] mount facts load failed:', err));
+}
+
 function _runtimeSignals() {
-  return { commandFeatures: _commandFeatures };
+  const fc = window.ClawFW && window.ClawFW.featureCatalog;
+  let mountedNames = null;
+  if (fc && typeof getCurrentControlAgentId === 'function') {
+    // 只对本地编程小助手会话应用 $mount 装配事实：远程会话（record 不在
+    // allAgents）的装配声明不在本机 overview 里；其他宿主不在装配域。
+    // 挂载事实未就绪时为 null，enrich 回退 seed 静态 group。
+    const record = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
+    if (record) {
+      const sessionType = (typeof readCurrentSessionViewState === 'function')
+        ? readCurrentSessionViewState().sessionMeta.sessionType : '';
+      mountedNames = fc.resolveMountedNames(
+        fc.getMountFactsSnapshot(), getCurrentControlAgentId(), sessionType);
+    }
+  }
+  return { commandFeatures: _commandFeatures, mountedNames };
 }
 
 /**
@@ -181,8 +202,10 @@ function renderFeaturesPanel() {
 
   // catalog 低频拉取：首帧未就绪时全部落 _unmapped 组，
   // loadFeatureCatalog resolve 后主动触发一帧刷新修正（见 feature-catalog.js）。
-  // commands 信号同模式（见 _ensureCommandFeatures）。
+  // commands 信号同模式（见 _ensureCommandFeatures）；$mount 装配事实同模式
+  // （就位前来源分类回退 seed 静态 group，见 _ensureMountFacts）。
   _ensureCommandFeatures();
+  _ensureMountFacts();
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   if (fc) fc.loadFeatureCatalog().catch(err => console.warn('[feature-catalog] load failed:', err));
   const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;

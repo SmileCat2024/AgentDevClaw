@@ -180,7 +180,7 @@ function _renderFeatureEntryList() {
  * 挂载管理视图（二级身份页分页之一）：默认装配 + $mount 扩展统一卡片网格。
  * 组织体系与右侧 Features 面板同源（window.ClawFW.featureCatalog）：
  * type 分组轴（能力/会话与行为/渠道与交互/系统组件）+ 能力下拉筛选；
- * 来源分页器（全部/官方内置/已安装）按装配事实过滤（默认装配 vs $mount），
+ * 来源分页器（全部/默认内置/已安装）按装配事实过滤（默认装配 vs $mount），
  * 非 catalog 的静态 provenance 映射——与卡片徽章（默认/扩展）严格一致。
  */
 let _phMountSrcFilter = 'all';   // 'all' | 'bundled'（默认装配）| 'installed'（$mount 扩展）

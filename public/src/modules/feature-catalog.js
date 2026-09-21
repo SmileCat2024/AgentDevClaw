@@ -5,6 +5,10 @@
  * 与 inspector 轮询数据在前端 join（key = 运行时 AgentFeature.name），
  * 为 Features 面板提供 displayName / category / provenance 组织维度。
  *
+ * 来源（bundled/installed）以 $mount 装配事实优先：GET /api/feature-store/overview
+ * 的 mounts 声明（官方选装 builtin 与用户 tgz 扩展）是运行时真值，seed 的
+ * 静态 group 仅在装配事实不可用时兜底（见 resolveMountedNames）。
+ *
  * 纯函数不依赖 t() / escapeHtml / DOM（语言经参数传入），保证 frontend-vm 沙箱可测。
  * 设计：docs/plans/2026-09-13-feature-registry-p1-panel-visibility.md
  */
@@ -56,6 +60,52 @@ function getFeatureCatalogSnapshot() {
   return _catalog;
 }
 
+// ── $mount 装配事实（来源过滤器的运行时真值）──────────────────────
+// mounts 是各身份配置层的 $mount 声明清单（官方选装 builtin 与用户 tgz
+// 扩展都在其中）。低频拉取缓存，与 catalog 同模式：失败不缓存可重试，
+// 就位后主动触发一帧面板重渲染修正来源分类；商店写操作经
+// refreshMountFacts 强制失效。
+
+let _mountFacts = null;         // { [identity]: Set<runtimeName> } | null（null = 未就绪）
+let _mountFactsPromise = null;
+
+async function loadMountFacts(force = false) {
+  if (_mountFactsPromise && !force) return _mountFactsPromise;
+  _mountFactsPromise = (async () => {
+    const resp = await fetch('/api/feature-store/overview');
+    if (!resp.ok) throw new Error('/api/feature-store/overview ' + resp.status);
+    const data = await resp.json();
+    if (!data || typeof data.mounts !== 'object' || data.mounts === null) {
+      throw new Error('feature-store overview: malformed mounts');
+    }
+    const facts = {};
+    for (const [identity, mounts] of Object.entries(data.mounts)) {
+      facts[identity] = new Set(Object.keys(mounts || {}));
+    }
+    const needsRender = _mountFacts === null || force;
+    _mountFacts = facts;
+    if (needsRender && typeof activeFeaturePanel !== 'undefined'
+      && activeFeaturePanel === 'hooks' && typeof renderFeaturePanel === 'function') {
+      renderFeaturePanel();
+    }
+    return facts;
+  })().catch(err => {
+    _mountFactsPromise = null;
+    throw err;
+  });
+  return _mountFactsPromise;
+}
+
+/** 同步取已加载装配事实；未就绪返回 null（渲染层回退 seed 静态 group）。 */
+function getMountFactsSnapshot() {
+  return _mountFacts;
+}
+
+/** 商店写操作后强制失效缓存；成功且面板打开时自动重渲染。 */
+function refreshMountFacts() {
+  return loadMountFacts(true).catch(() => { /* 失败保留旧快照，下次渲染重试 */ });
+}
+
 // ── 纯函数（join / 分组 / 展示）────────────────────────────────────
 
 /** catalog 缺失时的兜底分组词表（仅 _unmapped）。 */
@@ -78,16 +128,32 @@ function deriveRuntimeCapabilities(feature) {
 }
 
 /**
+ * 按当前会话身份解析 $mount 装配名集（来源过滤器的运行时真值）。
+ * mountFacts 未就绪、宿主不在编程小助手双身份装配域（挂载管理与商店
+ * 是编程小助手专属）时返回 null，调用方回退 seed 静态 group。
+ * sessionType：'coder' → coder 身份；其余（''/main）→ main 身份。
+ */
+function resolveMountedNames(mountFacts, hostAgentId, sessionType) {
+  if (!mountFacts || hostAgentId !== 'programming-helper') return null;
+  const identity = String(sessionType || '').trim() === 'coder' ? 'coder' : 'main';
+  return mountFacts[identity] || null;
+}
+
+/**
  * inspector feature 条目 + catalog → enriched 条目。
  * capabilities 是**有效能力**（筛选与展示的唯一依据）：
  * - tools/policy/mcp：inspector 运行时推导，覆盖 seed 标注
  * - skills：快照携带 skillCount（框架 collectFeatureSkills 的归属透出）
  *   时运行时判定；旧框架快照无该字段时回退 seed
  * - commands：commands 清单可用时运行时判定；不可用时回退 seed
+ * - group（bundled/installed）：runtime.mountedNames（当前身份 $mount
+ *   装配名集，见 resolveMountedNames）可用时按装配事实判定，seed 静态
+ *   映射仅兜底——官方选装经 $mount 挂载即"已安装"，与挂载管理页一致
  * seed 未命中时 mapped:false，capabilities 退化为纯运行时推导——
  * 兜底组正常显示不隐藏，且可观测维度的筛选仍然准确。
  *
- * runtime（可缺省）：{ commandFeatures: Map<string, number> | null }
+ * runtime（可缺省）：{ commandFeatures: Map<string, number> | null,
+ * mountedNames: Set<string> | null }
  * commandFeatures = feature 名 → slash 命令数（null = 数据不可用）。
  */
 function enrichFeatureEntry(feature, catalog, runtime) {
@@ -106,15 +172,19 @@ function enrichFeatureEntry(feature, catalog, runtime) {
   } else if (seedCaps.indexOf('commands') !== -1) {
     caps.push('commands');
   }
+  const mountedNames = runtime && runtime.mountedNames;
+  const group = mountedNames
+    ? (mountedNames.has(feature.name) ? 'installed' : 'bundled')
+    : (entry ? entry.group : null);
   if (!entry) {
-    return { ...feature, displayName: undefined, capabilities: caps, provenance: null, group: null, type: null, mapped: false };
+    return { ...feature, displayName: undefined, capabilities: caps, provenance: null, group, type: null, mapped: false };
   }
   return {
     ...feature,
     displayName: entry.displayName,
     capabilities: caps,
     provenance: entry.provenance,
-    group: entry.group,
+    group,
     type: entry.type,
     mapped: true,
   };
@@ -218,6 +288,10 @@ function provenanceI18nKey(provenance, provenances) {
 window.ClawFW.featureCatalog = {
   loadFeatureCatalog,
   getFeatureCatalogSnapshot,
+  loadMountFacts,
+  getMountFactsSnapshot,
+  refreshMountFacts,
+  resolveMountedNames,
   enrichFeatureEntry,
   deriveRuntimeCapabilities,
   groupFeaturesByType,

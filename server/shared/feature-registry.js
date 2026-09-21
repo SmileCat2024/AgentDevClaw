@@ -42,7 +42,7 @@ export const FEATURE_PROVENANCES = ['ecosystem', 'local', 'builtin', 'inline', '
  * 轴 = 用户安装意图（"装它是为了什么"），单值；语义上回答三个问题：
  * 它让 agent 会了什么 / 它怎么管 agent / 它怎么连 agent。
  * system 是宿主运转件（给体系看的），默认折叠。
- * 来源（官方内置 bundled / 已安装 installed）不作分组轴——是面板右上角的过滤器。
+ * 来源（默认内置 bundled / 已安装 installed）不作分组轴——是面板右上角的过滤器。
  */
 export const FEATURE_TYPES = [
   { id: 'ability', collapsed: false },
@@ -54,8 +54,10 @@ export const FEATURE_TYPES = [
 /**
  * 来源过滤器（用户视角）。provenance 是数据层概念（仓库边界，开发者视角，
  * 供 Registry 管理与弹窗细粒度来源展示）；过滤粒度以用户为准：
- * 官方内置（随软件发行的一切）vs 已安装（用户经 tgz 仓库装入的）。
- * 映射权威在 server，前端只消费响应中的 group 字段。
+ * 默认内置（默认装配）vs 已安装（$mount 扩展）。
+ * 此处 provenance → group 是静态兜底映射：前端 Features 面板以当前身份的
+ * $mount 装配事实（/api/feature-store/overview mounts）优先判定，仅在装配
+ * 事实不可用时回退本映射。映射权威在 server，前端只消费响应中的 group 字段。
  */
 export const FEATURE_DISPLAY_GROUPS = [
   { id: 'installed', provenances: ['packaged'] },

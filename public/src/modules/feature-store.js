@@ -94,6 +94,9 @@ async function _fsAfterChange(identity) {
   await _fsReloadOverview();
   // 底层挂载管理页若开着，同步刷新（写操作可能来自商店外的移除按钮）
   if (typeof window._phRefreshMountsView === 'function') window._phRefreshMountsView();
+  // 右侧 Features 面板的来源分类消费同一份装配事实，强制失效缓存重拉
+  const fc = window.ClawFW && window.ClawFW.featureCatalog;
+  if (fc && typeof fc.refreshMountFacts === 'function') fc.refreshMountFacts();
 }
 
 // 写操作共用单飞 + 完成后一次重渲染：busy 只防重入/并发写竞态，

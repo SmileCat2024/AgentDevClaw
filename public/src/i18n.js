@@ -191,7 +191,7 @@ const I18N = {
     feature_type_interface: '渠道与交互',
     feature_type_system: '系统组件',
     feature_filter_all: '全部',
-    feature_filter_bundled: '官方内置',
+    feature_filter_bundled: '默认内置',
     feature_filter_installed: '已安装',
     feature_filter_empty_installed: '尚未安装任何 feature',
     feature_filter_empty: '该来源下暂无 feature',

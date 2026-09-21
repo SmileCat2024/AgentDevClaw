@@ -270,6 +270,30 @@ describe('feature-catalog: enrichFeatureEntry', () => {
     assert.equal(entry.displayName, undefined);
   });
 
+  it('mountedNames overrides seed group: $mount fact wins over static mapping', () => {
+    // 官方选装 playwright-shell：seed 标 bundled（provenance local），但经
+    // $mount 挂载 → 装配事实 installed，与挂载管理页口径一致
+    const input = `[ ${JSON.stringify(inspectorFeature('playwright-shell'))} ]`;
+    const mounted = fn(`window.ClawFW.featureCatalog.enrichFeatureEntry(
+      ${JSON.stringify(inspectorFeature('playwright-shell'))}, ${JSON.stringify(CATALOG)},
+      { mountedNames: new Set(['playwright-shell']) }
+    )`);
+    assert.equal(mounted.group, 'installed');
+    // 同一装配域内未命中 $mount 清单 → 默认装配（bundled），即使 seed 缺失
+    const unmounted = fn(`window.ClawFW.featureCatalog.enrichFeatureEntry(
+      ${JSON.stringify(inspectorFeature('brand-new-feature'))}, ${JSON.stringify(CATALOG)},
+      { mountedNames: new Set(['playwright-shell']) }
+    )`);
+    assert.equal(unmounted.group, 'bundled');
+    assert.equal(unmounted.mapped, false);
+    // 装配事实不可用（null）→ 回退 seed 静态 group
+    const fallback = fn(`window.ClawFW.featureCatalog.enrichFeatureEntry(
+      ${JSON.stringify(inspectorFeature('user-tool'))}, ${JSON.stringify(CATALOG)},
+      { mountedNames: null }
+    )`);
+    assert.equal(fallback.group, 'installed');
+  });
+
   it('deriveRuntimeCapabilities maps inspector signals to vocabulary ids', () => {
     const call = (extra) => fn(`window.ClawFW.featureCatalog.deriveRuntimeCapabilities(${JSON.stringify(inspectorFeature('x', extra))})`);
     assert.equal(JSON.stringify(call({})), JSON.stringify([]), 'zero-signal feature has no capabilities');
@@ -309,6 +333,50 @@ describe('feature-catalog: countFeaturesBySource', () => {
     assert.equal(JSON.stringify(counts), JSON.stringify({ all: 0, bundled: 0, installed: 0 }));
     const none = fn(`window.ClawFW.featureCatalog.countFeaturesBySource(undefined, null)`);
     assert.equal(JSON.stringify(none), JSON.stringify({ all: 0, bundled: 0, installed: 0 }));
+  });
+
+  it('mountedNames feeds pager counts consistently with the rendered list', () => {
+    // 用户场景回归：seed 全 bundled + 一个 $mount 挂载 → installed 1，与配置页一致
+    const input = `[
+      ${JSON.stringify(inspectorFeature('shell'))},
+      ${JSON.stringify(inspectorFeature('todo'))},
+      ${JSON.stringify(inspectorFeature('playwright-shell'))}
+    ]`;
+    const runtime = `{ mountedNames: new Set(['playwright-shell']) }`;
+    const counts = fn(`window.ClawFW.featureCatalog.countFeaturesBySource(${input}, ${JSON.stringify(CATALOG)}, 'all', ${runtime})`);
+    assert.equal(JSON.stringify(counts), JSON.stringify({ all: 3, bundled: 2, installed: 1 }));
+    const installed = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'installed', 'all', ${runtime})`);
+    assert.equal(installed.length, 1);
+    assert.equal(installed[0].features[0].name, 'playwright-shell');
+  });
+});
+
+// ── resolveMountedNames ────────────────────────────────────────────
+
+describe('feature-catalog: resolveMountedNames', () => {
+  const ctx = loadModule();
+  const fn = ctx.run;
+
+  it('selects the identity set by sessionType within the programming-helper domain', () => {
+    const facts = `({ main: new Set(['playwright-shell']), coder: new Set(['github']) })`;
+    const call = (host, sessionType) => fn(
+      `String(window.ClawFW.featureCatalog.resolveMountedNames(${facts}, '${host}', '${sessionType}') === null
+        ? 'null'
+        : [...window.ClawFW.featureCatalog.resolveMountedNames(${facts}, '${host}', '${sessionType}')].sort().join(','))`
+    );
+    assert.equal(call('programming-helper', ''), 'playwright-shell');
+    assert.equal(call('programming-helper', 'main'), 'playwright-shell');
+    assert.equal(call('programming-helper', 'coder'), 'github');
+  });
+
+  it('returns null outside the mount domain or before facts are ready', () => {
+    const facts = `({ main: new Set(['playwright-shell']) })`;
+    // 其他宿主不在双身份装配域（挂载管理/商店是编程小助手专属）
+    assert.equal(fn(`window.ClawFW.featureCatalog.resolveMountedNames(${facts}, 'agent-studio', '')`), null);
+    // 装配事实未就绪
+    assert.equal(fn(`window.ClawFW.featureCatalog.resolveMountedNames(null, 'programming-helper', '')`), null);
+    // 身份清单缺失（响应不含该身份键）
+    assert.equal(fn(`window.ClawFW.featureCatalog.resolveMountedNames({}, 'programming-helper', 'coder')`), null);
   });
 });
 
@@ -389,5 +457,42 @@ describe('feature-catalog: response contract', () => {
     );
     const snap = ctx.run('window.ClawFW.featureCatalog.getFeatureCatalogSnapshot()');
     assert.equal(snap, null);
+  });
+});
+
+// 回归：来源分类的装配事实来源（mounts）与 catalog 同为前端 join 的数据源，
+// 响应路径与 mounts 形状脱节会让面板静默回退 seed 静态分组。
+
+describe('feature-catalog: mount facts contract', () => {
+  it('fetches store overview and caches per-identity mounted-name sets', async () => {
+    const calls = [];
+    const overview = {
+      mounts: {
+        main: { 'playwright-shell': { kind: 'builtin', missing: false } },
+        coder: {},
+      },
+    };
+    const ctx = createFrontendSandbox({
+      fetch: async (url) => { calls.push(url); return { ok: true, json: async () => overview }; },
+    });
+    ctx.loadSource('public/src/modules/feature-catalog.js');
+    await ctx.run('window.ClawFW.featureCatalog.loadMountFacts(true)');
+    const snap = ctx.run('window.ClawFW.featureCatalog.getMountFactsSnapshot()');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0], '/api/feature-store/overview');
+    assert.equal(snap.main.has('playwright-shell'), true);
+    assert.equal(snap.coder.size, 0);
+  });
+
+  it('rejects malformed mounts and leaves the snapshot unset for retry', async () => {
+    const ctx = createFrontendSandbox({
+      fetch: async () => ({ ok: true, json: async () => ({ base: {} }) }),
+    });
+    ctx.loadSource('public/src/modules/feature-catalog.js');
+    await assert.rejects(
+      ctx.run('window.ClawFW.featureCatalog.loadMountFacts(true)'),
+      /malformed/
+    );
+    assert.equal(ctx.run('window.ClawFW.featureCatalog.getMountFactsSnapshot()'), null);
   });
 });
