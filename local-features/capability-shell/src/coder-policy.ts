@@ -70,9 +70,10 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
         adapter: { key: 'threads:watch' },
       },
       'result': {
-        description: '取线程末轮回复文本（coder 的最终报告；send/watch 落定后取证用）',
+        description: '取线程末轮回复全文（coder 的最终报告）；多轮回复时附全部轮次索引，--turn=N 取指定轮回复全文',
         params: [{ name: 'threadId', kind: 'literal' }],
-        usage: 'result <threadId>',
+        flags: ['--turn='],
+        usage: 'result <threadId> [--turn=N]',
         adapter: { key: 'threads:result' },
       },
       'list': {

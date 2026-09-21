@@ -27,7 +27,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 | `create <agentId> <sessionId> ['标题']` | 给已存在的会话加挂线程，返回 threadId |
 | `send <threadId> <idempotencyKey> '<指令文本>' [--no-wait]` | 派发并**阻塞**等本轮落定；`--no-wait` 只确认投递即返回（并行派发用），落定交给 `watch` |
 | `watch <threadId> [threadId...]` | 续挂监视（可多线程 any-settle），任一线程落定即整条返回 |
-| `result <threadId>` | 取线程末轮回复全文（coder 的最终报告，落定后取证用） |
+| `result <threadId> [--turn=N]` | 取线程末轮回复全文（coder 的最终报告，落定后取证用）；多轮回复时附全部轮次索引，--turn=N 取指定轮回复全文 |
 | `list [agentId] [过滤flag]` | 线程列表（默认按最近活动倒序取 10 条非终态线程；支持状态/目录/标题检索，见下文「线程检索」） |
 | `show <threadId>` | 线程详情（pending 指令数 + 事件尾摘要） |
 | `archive <threadId>` / `unarchive <threadId>` | 归档/恢复 |
@@ -215,6 +215,12 @@ coder_shell command="watch wt-xxx"
 
 ```text
 coder_shell command="result wt-xxx"
+```
+
+核心内容不一定在末轮（末轮可能只是简短确认或对追问的回答）。多轮回复时 result 报文尾附全部轮次索引（各轮 turn 号与字符数——字符数是定位实质报告的信号），用 `result wt-xxx --turn=N` 取指定轮回复全文。报文头部的 `session=` 是该线程 head 会话 id（寻址字段）。
+
+```text
+coder_shell command="result wt-xxx --turn=4"
 ```
 
 watch / send 的落定摘要行为一致：

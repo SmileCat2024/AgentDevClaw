@@ -445,7 +445,7 @@ describe('coder_shell result 末轮回复', () => {
     assert.ok(r.output.includes('无末轮回复'), r.output);
   });
 
-  it('超长回复截断并注明全文长度', async () => {
+  it('超长回复不截断：全文透传（末轮回复是交接必读材料）', async () => {
     const longText = 'x'.repeat(5_000);
     const adapters = createThreadsAdapters({
       serverOrigin: 'http://test',
@@ -458,7 +458,116 @@ describe('coder_shell result 末轮回复', () => {
     });
     const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
     assert.equal(r.ok, true, r.output);
-    assert.ok(r.output.includes('截断，全文 5000 字符'), r.output);
+    assert.ok(r.output.includes('chars=5000'), r.output);
+    assert.ok(r.output.endsWith(longText), '全文应完整透传，不截断');
+  });
+
+  it('--turn=N 取指定轮全文；多轮时报文尾附轮次索引（turn + chars）', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.endsWith('/threads/wt-1/events'),
+          body: {
+            ok: true,
+            events: [
+              { type: 'item.completed', item: { type: 'agent_message', turn: 2, text: '第一份实质报告' } },
+              { type: 'item.completed', item: { type: 'agent_message', turn: 4, text: '追问回答：已通过' } },
+            ],
+            cursor: 10,
+          },
+        },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1 --turn=2', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('turn=2'), r.output);
+    assert.ok(r.output.includes('第一份实质报告'), r.output);
+    assert.ok(!r.output.includes('追问回答'), '只取指定轮，不混入其他轮文本');
+    assert.ok(r.output.includes('本线程共 2 条回复'), r.output);
+    assert.ok(r.output.includes('2(chars=7)'), r.output);
+    assert.ok(r.output.includes('4(chars=8)'), r.output);
+  });
+
+  it('缺省取末轮时同样附轮次索引，索引只含轮次号与字符数、不含历史文本', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.includes('/events'),
+          body: {
+            ok: true,
+            events: [
+              { type: 'item.completed', item: { type: 'agent_message', turn: 1, text: '早期报告' } },
+              { type: 'item.completed', item: { type: 'agent_message', turn: 2, text: '最终报告' } },
+            ],
+            cursor: 5,
+          },
+        },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('本线程共 2 条回复'), r.output);
+    assert.ok(r.output.includes('1(chars=4)'), r.output);
+    assert.ok(r.output.includes('--turn=<轮次>'), r.output);
+    assert.ok(!r.output.includes('早期报告'), '索引不得回显历史轮文本');
+  });
+
+  it('报文头附 head session=（线程详情可查时；纯寻址字段）', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.endsWith('/threads/wt-1') && !u.includes('/events'),
+          body: { ok: true, thread: { threadId: 'wt-1', headSessionId: 'session-head' } },
+        },
+        {
+          match: (u) => u.includes('/events'),
+          body: { ok: true, events: [{ type: 'item.completed', item: { type: 'agent_message', turn: 1, text: '报告' } }], cursor: 1 },
+        },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('session=session-head'), r.output);
+  });
+
+  it('--turn 指向不存在的轮次：拒绝并列出可用轮次', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.includes('/events'),
+          body: {
+            ok: true,
+            events: [
+              { type: 'item.completed', item: { type: 'agent_message', turn: 1, text: 'a' } },
+              { type: 'item.completed', item: { type: 'agent_message', turn: 3, text: 'b' } },
+            ],
+            cursor: 5,
+          },
+        },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1 --turn=9', { adapters, bashPath: null });
+    assert.equal(r.ok, false, r.output);
+    assert.ok(r.output.includes('无 turn=9'), r.output);
+    assert.ok(r.output.includes('可用轮次：1,3'), r.output);
+  });
+
+  it('--turn 非法值（负数/非整数）拒绝', async () => {
+    for (const bad of ['--turn=-1', '--turn=abc']) {
+      const adapters = createThreadsAdapters({
+        serverOrigin: 'http://test',
+        fetchImpl: stubFetch([
+          { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 0 } },
+        ]),
+      });
+      const r = await runCapabilityShellPipeline(POLICY, `result wt-1 ${bad}`, { adapters, bashPath: null });
+      assert.equal(r.ok, false, `${bad} 应被拒绝：${r.output}`);
+      assert.ok(r.output.includes('result 拒绝'), r.output);
+    }
   });
 });
 

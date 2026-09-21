@@ -48,8 +48,6 @@ const MAX_CONSECUTIVE_FETCH_ERRORS = 3;
 const STALE_THREAD_MS = 300_000;
 /** 落定报文附带的事件尾条数（取证用，防长文本撑爆上下文）。 */
 const TAIL_EVENT_COUNT = 5;
-/** result 末轮回复的输出上限（超长截断并注明全文长度）。 */
-const MAX_RESULT_CHARS = 4_000;
 /** list 行内标题的显示上限（工单全文标题会撑爆行宽）。 */
 const MAX_TITLE_CHARS = 40;
 /** 超长文本省略展示（标题等短字段用）。 */
@@ -708,33 +706,58 @@ export function createThreadsAdapter(deps: {
         }
       }
 
-      // result <threadId>：取末轮回复（coder 的最终报告）。事件流里
-      // item.completed 且 item.type=agent_message 携带回复全文；send/watch
-      // 落定后取证用（对应 CLI watch --with-result 的能力，可独立调用）。
+      // result <threadId> [--turn=N]：取末轮回复（缺省）或指定轮回复全文。
+      // 事件流里 item.completed 且 item.type=agent_message 携带回复全文；
+      // 核心内容不一定在最后一条（末轮可能只是简短确认/追问回答），
+      // 报文尾附全部轮次索引（turn + 字符数，字符数是定位实质报告的
+      // 信号）供 --turn=N 精取。报文头附 head sessionId（纯寻址字段）。
       case 'result': {
-        const [threadId] = rest;
+        const turnFlag = /^--turn=(.*)$/.exec(rest.find((token) => token.startsWith('--turn=')) || '');
+        const requestedTurn = turnFlag ? Number(turnFlag[1]) : null;
+        if (turnFlag && (!Number.isSafeInteger(requestedTurn) || requestedTurn < 0)) {
+          throw new Error(`result 拒绝：--turn 的值 “${turnFlag[1]}” 必须是非负整数轮次号。用法：result <threadId> [--turn=N]`);
+        }
+        const [threadId] = rest.filter((token) => !token.startsWith('--turn='));
+        let headSessionId = '';
+        try {
+          const threadPayload = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}`);
+          headSessionId = String(threadPayload?.thread?.headSessionId || '');
+        } catch { /* 线程详情瞬时不可达不阻塞取回复，session 字段缺省 */ }
         const payload = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/events`);
         const events = (payload?.events as Array<Record<string, any>>) || [];
-        let last: Record<string, any> | null = null;
-        for (let i = events.length - 1; i >= 0; i--) {
-          const event = events[i];
+        const messages: Array<Record<string, any>> = [];
+        for (const event of events) {
           if (event?.type === 'item.completed' && event?.item?.type === 'agent_message') {
-            last = event;
-            break;
+            messages.push(event.item);
           }
         }
-        if (!last) {
+        if (messages.length === 0) {
           return `result: 线程 ${threadId} 尚无 agent_message 事件（无末轮回复可取）`;
         }
-        const text = String(last.item.text || '');
-        const turn = last.item.turn !== undefined ? ` turn=${last.item.turn}` : '';
-        const body = text.length > MAX_RESULT_CHARS
-          ? `${text.slice(0, MAX_RESULT_CHARS)}\n…（截断，全文 ${text.length} 字符）`
-          : text;
-        return [
-          `result threadId=${threadId}${turn}  chars=${text.length}`,
-          body,
-        ].join('\n');
+        const target = requestedTurn !== null
+          ? messages.find((item) => Number(item?.turn) === requestedTurn)
+          : messages[messages.length - 1];
+        if (!target) {
+          const available = messages.map((item) => item?.turn).join(',');
+          throw new Error(`result 拒绝：线程 ${threadId} 无 turn=${requestedTurn} 的 agent_message。可用轮次：${available}`);
+        }
+        const text = String(target.text || '');
+        const turn = target.turn !== undefined ? ` turn=${target.turn}` : '';
+        const session = headSessionId ? `  session=${headSessionId}` : '';
+        // 末轮回复是调度方必读的交接材料，动词层不截断（与 CLI watch
+        // --with-result 同语义）；极端超长由工具层共享落盘机制兜底
+        //（头尾保留 + 全文写盘附路径）。
+        const lines = [
+          `result threadId=${threadId}${turn}  chars=${text.length}${session}`,
+          text,
+        ];
+        if (messages.length > 1) {
+          const index = messages
+            .map((item) => `${item?.turn}(chars=${String(item?.text || '').length})`)
+            .join('  ');
+          lines.push(`（本线程共 ${messages.length} 条回复，按序：${index}；取指定轮全文：result ${threadId} --turn=<轮次>）`);
+        }
+        return lines.join('\n');
       }
 
       // list [agentId] [--status=...] [--dir=...] [--title=...] [-n=N] [--all] [--failed]
