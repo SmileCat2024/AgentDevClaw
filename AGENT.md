@@ -6,9 +6,10 @@
 
 1. 本文件
 2. [docs/agentdev-claw-product-overview.md](docs/agentdev-claw-product-overview.md) — 产品总览
-3. [docs/dev-context-index.md](docs/dev-context-index.md) — AgentDev 框架与 Claw 的跨仓库连接关系速查
-4. 涉及前端 UI 渲染、workspace 切换、数据加载时序 → 必读 [docs/frontend-rendering-patterns.md](docs/frontend-rendering-patterns.md)
-5. 架构决策记录（ADR），改动相关领域前先读对应篇（[docs/adr/](docs/adr/)）：
+3. [docs/glossary.md](docs/glossary.md) — 领域词汇表：术语 + Avoid 负面清单，改代码前先对齐用词
+4. [docs/dev-context-index.md](docs/dev-context-index.md) — AgentDev 框架与 Claw 的跨仓库连接关系速查
+5. 涉及前端 UI 渲染、workspace 切换、数据加载时序 → 必读 [docs/frontend-rendering-patterns.md](docs/frontend-rendering-patterns.md)
+6. 架构决策记录（ADR），改动相关领域前先读对应篇（[docs/adr/](docs/adr/)）：
    - 0001 导出面治理：Runtime 双类型拆分与按引用导出
    - 0002 Session Continuity as Transformation：会话接续的框架化原则
    - 0003 AgentDev 包结构破坏性拆分：无伞包、core 零重依赖
@@ -22,8 +23,10 @@
    - 0011 ProtoClaw 远程写适配
    - 0012 远程会话历史统一呈现
    - 0013 消息轮询的增量探测：probe + tail
-    - 0014 会话导航事务：导航生命周期的统一封装（Proposed）
-    - 0016 用户数据存储分区治理与 feature 持久资产收敛
+   - 0014 会话导航事务：导航生命周期的统一封装（Proposed）
+   - 0015 内嵌浏览器 viewer：浏览器所有权翻转（Archived，调查完成暂不实施）
+   - 0016 用户数据存储分区治理与 feature 持久资产收敛
+   - 0017 Feature Manifest v2 与宿主侧 Feature Registry
 
 实现层真实入口：
 
@@ -275,6 +278,12 @@ server.js 主进程（Express 1420 + ViewerWorker 2026 + DebugHub）+ per-runtim
 ## import 循环依赖检查（ratchet）
 
 `npm run check:cycles`（[scripts/check-import-cycles.mjs](scripts/check-import-cycles.mjs)）：扫描 server/、scripts/、prebuilt-agents/、local-features/、bin/ 的相对导入图，报告值级循环依赖（`import type` 不算边；动态 import 与 export-from 算边）。public/src 无静态 import 图（script 全局共享模式），不适用。存量环指纹固化在 [.import-cycles-baseline.json](.import-cycles-baseline.json)，`--update-baseline` 显式更新（修复存量环后应修剪），新增环 exit 1。
+
+## 协作纪律（负面清单）
+
+- 删除工具、feature、技能时，同步清理全部注入点（agent prompts、SKILL.md、本文件、i18n 文案、agents/README.md）的引用；活性文档指向已删除能力的链接一律清掉。
+- 如实报告验证结果：未验证就说未验证，已有失败不得写成通过。
+- 不用超时 / 重试掩盖同步问题；发现设计缺陷先对齐再动手，不通过增加兜底分支把问题盖住。
 
 ## 开发时的建议心智
 
