@@ -427,7 +427,7 @@ class SessionLifecycle {
     }
 
     // ── IM bridge messages (carrier mount/unmount, todo-control) ──
-    if (msg.type === 'mount-im-carrier' || msg.type === 'unmount-im-carrier' || msg.type === 'todo-control' || msg.type === 'todo-force-continue') {
+    if (msg.type === 'mount-im-carrier' || msg.type === 'unmount-im-carrier' || msg.type === 'todo-control') {
       this.imBridge.handleIPCMessage(msg);
       return;
     }

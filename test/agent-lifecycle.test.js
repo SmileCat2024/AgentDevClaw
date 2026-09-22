@@ -842,29 +842,7 @@ describe('agent-lifecycle', () => {
       assert.equal(messages.length, 0);
     });
 
-    it('sends todo-force-continue IPC for forceContinue without taskId', async () => {
-      const mod = createAgentLifecycleModule(createMockCtx());
-      const handler = captureTodoControlHandler(mod);
-
-      const child = createMockChild();
-      const messages = [];
-      child.send = (msg) => { messages.push(msg); return true; };
-      injectRuntime('test-agent', 'session-A', child);
-
-      let responseData = null;
-      await handler(
-        { body: { agentId: 'test-agent', sessionId: 'session-A', forceContinue: true } },
-        { json: (data) => { responseData = data; } },
-        (error) => { throw error; },
-      );
-
-      assert.equal(responseData.ok, true);
-      assert.equal(messages.length, 1);
-      assert.equal(messages[0].type, 'todo-force-continue');
-      assert.equal(messages[0].enabled, true);
-    });
-
-    it('rejects invalid forceContinue type', async () => {
+    it('rejects missing taskId payload', async () => {
       const mod = createAgentLifecycleModule(createMockCtx());
       const handler = captureTodoControlHandler(mod);
 
@@ -879,7 +857,31 @@ describe('agent-lifecycle', () => {
         json: () => {},
       };
       await handler(
-        { body: { agentId: 'test-agent', sessionId: 'session-A', forceContinue: 'yes' } },
+        { body: { agentId: 'test-agent', sessionId: 'session-A' } },
+        res,
+        (error) => { throw error; },
+      );
+
+      assert.equal(statusCode, 400);
+      assert.equal(messages.length, 0);
+    });
+
+    it('rejects non-string taskId', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      const child = createMockChild();
+      const messages = [];
+      child.send = (msg) => { messages.push(msg); return true; };
+      injectRuntime('test-agent', 'session-A', child);
+
+      let statusCode = null;
+      const res = {
+        status: (code) => { statusCode = code; return res; },
+        json: () => {},
+      };
+      await handler(
+        { body: { agentId: 'test-agent', sessionId: 'session-A', taskId: 3 } },
         res,
         (error) => { throw error; },
       );
@@ -902,7 +904,7 @@ describe('agent-lifecycle', () => {
       await handler(
         // sessionId intentionally references a session that has no runtime entry —
         // this is the stale-cache window that previously caused {ok:false}
-        { body: { agentId: 'test-agent', runtimeId: 'viewer-agent-1', sessionId: 'session-stale', forceContinue: true } },
+        { body: { agentId: 'test-agent', runtimeId: 'viewer-agent-1', sessionId: 'session-stale', taskId: '3' } },
         { json: (data) => { responseData = data; } },
         (error) => { throw error; },
       );
@@ -910,8 +912,8 @@ describe('agent-lifecycle', () => {
       assert.equal(responseData.ok, true);
       assert.equal(responseData.via, 'runtimeId');
       assert.equal(messages.length, 1);
-      assert.equal(messages[0].type, 'todo-force-continue');
-      assert.equal(messages[0].enabled, true);
+      assert.equal(messages[0].type, 'todo-control');
+      assert.equal(messages[0].taskId, '3');
       assert.equal(messages[0].__targetSessionId, 'session-real', 'runtime targetSessionId is authoritative');
     });
 
@@ -956,24 +958,6 @@ describe('agent-lifecycle', () => {
 
       assert.equal(responseData.ok, false, 'must not fall back to a different session (no cross-session contamination)');
       assert.equal(messages.length, 0);
-    });
-
-    it('rejects a request without taskId or forceContinue payload', async () => {
-      const mod = createAgentLifecycleModule(createMockCtx());
-      const handler = captureTodoControlHandler(mod);
-
-      let statusCode = null;
-      const res = {
-        status: (code) => { statusCode = code; return res; },
-        json: () => {},
-      };
-      await handler(
-        { body: { agentId: 'test-agent', sessionId: 'session-A' } },
-        res,
-        (error) => { throw error; },
-      );
-
-      assert.equal(statusCode, 400);
     });
   });
 });

@@ -631,22 +631,6 @@ function setInterruptTargetId(taskId) {
     _interruptTargetCache.delete(key);
   }
 }
-let _todoForceContinueCache = new Map(); // key: runtimeContextKey, value: boolean
-let _lastTodoForceContinueUserActionAt = 0; // timestamp of last user click on force-continue toggle
-function getTodoForceContinue() {
-  const key = getRuntimeContextKey();
-  if (!key) return false;
-  return _todoForceContinueCache.get(key) === true;
-}
-function setTodoForceContinue(enabled) {
-  const key = getRuntimeContextKey();
-  if (!key) return;
-  if (enabled) {
-    _todoForceContinueCache.set(key, true);
-  } else {
-    _todoForceContinueCache.delete(key);
-  }
-}
 let currentLogs = [];
 let currentLogsSignature = '';
 let currentLogsTruncation = null;

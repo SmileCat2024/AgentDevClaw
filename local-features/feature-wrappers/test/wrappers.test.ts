@@ -44,50 +44,52 @@ describe('feature-wrappers smoke', () => {
   });
 });
 
-describe('ControlledTodoFeature 任务未完强制继续', () => {
-  it('默认关闭：任务未完 + 自然结束 → Continue（自然停止）', async () => {
+describe('ControlledTodoFeature 执行到此处', () => {
+  it('无断点：任务未完 + 自然结束 → Continue（自然停止）', async () => {
     const feature = new ControlledTodoFeature();
     feature.createTask('task-a', 'desc');
     const { ctx } = makeStepCtx(0);
     assert.equal(await feature.recordToolUsage(ctx), Decision.Continue);
   });
 
-  it('开启后：任务未完 + 自然结束 → 注入提醒并 Approve 继续', async () => {
+  it('设置断点后：目标未终态 + 自然结束 → 注入提醒并 Approve 继续', async () => {
     const feature = new ControlledTodoFeature();
     feature.createTask('task-a', 'desc');
-    feature.setForceContinue(true);
+    feature.setInterruptTarget('1');
     const { ctx, injected } = makeStepCtx(0);
     assert.equal(await feature.recordToolUsage(ctx), Decision.Approve);
     assert.equal(injected.length, 1);
     assert.match(injected[0].content, /task-a/);
   });
 
-  it('开启后：无未完成任务 → Continue（自然停止）', async () => {
+  it('目标进入终态 → Deny 停止，断点自动清除', async () => {
     const feature = new ControlledTodoFeature();
-    feature.createTask('task-a');
+    feature.createTask('task-a', 'desc');
+    feature.createTask('task-b', 'desc');
+    feature.setInterruptTarget('1');
     feature.updateTask('1', { status: 'completed' });
-    feature.setForceContinue(true);
     const { ctx, injected } = makeStepCtx(0);
-    assert.equal(await feature.recordToolUsage(ctx), Decision.Continue);
+    assert.equal(await feature.recordToolUsage(ctx), Decision.Deny);
+    assert.equal(feature.getInterruptTarget(), null);
     assert.equal(injected.length, 0);
   });
 
-  it('开启后：带工具调用的 step → Continue（循环本来就继续），且重置连续计数', async () => {
+  it('带工具调用的 step → Continue（循环本来就继续），且重置连续计数', async () => {
     const feature = new ControlledTodoFeature();
-    feature.createTask('task-a');
-    feature.setForceContinue(true);
+    feature.createTask('task-a', 'desc');
+    feature.setInterruptTarget('1');
     const first = makeStepCtx(0);
     await feature.recordToolUsage(first.ctx);
-    assert.equal(feature.getPlanSnapshot().forceContinue.consecutive, 1);
+    assert.equal(feature.getPlanSnapshot().interruptTargetId, '1');
     const withTools = makeStepCtx(2);
     assert.equal(await feature.recordToolUsage(withTools.ctx), Decision.Continue);
-    assert.equal(feature.getPlanSnapshot().forceContinue.consecutive, 0);
+    assert.equal(feature.getPlanSnapshot().interruptTargetId, '1');
   });
 
   it('连续无工具收尾达到上限后 → Continue（避免无界续跑）', async () => {
     const feature = new ControlledTodoFeature();
-    feature.createTask('task-a');
-    feature.setForceContinue(true);
+    feature.createTask('task-a', 'desc');
+    feature.setInterruptTarget('1');
     for (let i = 0; i < 3; i++) {
       const step = makeStepCtx(0);
       assert.equal(await feature.recordToolUsage(step.ctx), Decision.Approve);
@@ -96,28 +98,41 @@ describe('ControlledTodoFeature 任务未完强制继续', () => {
     assert.equal(await feature.recordToolUsage(beyond.ctx), Decision.Continue);
   });
 
-  it('断点优先：强制继续开启时，中断目标任务终态仍 Deny 停止', async () => {
+  it('设置新断点时重置连续计数', async () => {
     const feature = new ControlledTodoFeature();
-    feature.createTask('task-a');
-    feature.createTask('task-b');
-    feature.setForceContinue(true);
+    feature.createTask('task-a', 'desc');
+    feature.createTask('task-b', 'desc');
     feature.setInterruptTarget('1');
-    feature.updateTask('1', { status: 'completed' });
-    const { ctx } = makeStepCtx(0);
-    assert.equal(await feature.recordToolUsage(ctx), Decision.Deny);
-    assert.equal(feature.getInterruptTarget(), null);
+    for (let i = 0; i < 3; i++) {
+      await feature.recordToolUsage(makeStepCtx(0).ctx);
+    }
+    // 上限已耗尽；重新设置断点后预算重置
+    feature.setInterruptTarget('2');
+    const step = makeStepCtx(0);
+    assert.equal(await feature.recordToolUsage(step.ctx), Decision.Approve);
   });
 
-  it('开关与计数随 captureState/restoreState 往返', () => {
+  it('断点目标随 captureState/restoreState 往返', () => {
     const feature = new ControlledTodoFeature();
-    feature.setForceContinue(true);
+    feature.createTask('task-a', 'desc');
+    feature.setInterruptTarget('1');
     const state = feature.captureState() as Record<string, any>;
-    assert.equal(state.forceContinue.enabled, true);
+    assert.equal(state.interruptTargetId, '1');
+    // 旧版快照的 forceContinue 字段（已移除的开关）在恢复时被忽略
+    state.forceContinue = { enabled: true, consecutive: 2 };
     const restored = new ControlledTodoFeature();
     restored.restoreState(state);
-    assert.equal(restored.getForceContinue(), true);
-    assert.deepEqual(restored.getPlanSnapshot().forceContinue, {
-      enabled: true, consecutive: 0, max: 3,
-    });
+    assert.equal(restored.getInterruptTarget(), '1');
+    assert.equal((restored.getPlanSnapshot() as Record<string, any>).forceContinue, undefined);
+  });
+
+  it('restoreState 清除僵尸断点（目标已终态或不存在）', () => {
+    const feature = new ControlledTodoFeature();
+    feature.createTask('task-a', 'desc');
+    feature.updateTask('1', { status: 'completed' });
+    feature.restoreState({ interruptTargetId: '1' });
+    assert.equal(feature.getInterruptTarget(), null);
+    feature.restoreState({ interruptTargetId: '999' });
+    assert.equal(feature.getInterruptTarget(), null);
   });
 });

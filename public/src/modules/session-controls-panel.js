@@ -220,7 +220,7 @@
 
   // ── 渲染 ─────────────────────────────────────────────────────────
   // 结构对齐 todo-plan.js 的 renderPlanPanel：摘要行（strong/label 统计）→
-  // 主开关行（.plan-force-continue 同构）→ 候选列表（.plan-task-list 同构）→
+  // 主开关行 → 候选列表（.plan-task-list 同构）→
   // 底部说明小字；不可用时返回与 hooks 面板一致的通用空态。
 
   function renderSwitch({ checked, disabled, title, attribute }) {

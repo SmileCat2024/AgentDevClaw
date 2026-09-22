@@ -5,8 +5,8 @@
  *   - getEmptyTodoPlan, normalizeTodoPlan, getTodoPlanSignature
  *   - setCurrentTodoPlan, updatePlanBadge
  *   - getTodoStatusLabel, renderPlanTask, renderPlanPanel
- *   - sendTodoControl (TODO 中断控制)
- *   - featurePanelBody click 事件监听器（中断按钮交互）
+ *   - sendTodoControl ("执行到此处"控制)
+ *   - featurePanelBody click 事件监听器（控制按钮交互）
  *
  * 依赖（全局变量/函数，声明于 app-core.js / app-ui.js / 其他模块）：
  *   - currentTodoPlan, currentTodoPlanSignature (app-core.js)
@@ -55,11 +55,6 @@ function normalizeTodoPlan(snapshot) {
       cancelled: typeof summary.cancelled === 'number' ? summary.cancelled : tasks.filter(task => task.status === 'deleted').length,
     },
     interruptTargetId: typeof snapshot.interruptTargetId === 'string' ? snapshot.interruptTargetId : null,
-    forceContinue: snapshot.forceContinue && typeof snapshot.forceContinue === 'object' ? {
-      enabled: snapshot.forceContinue.enabled === true,
-      consecutive: typeof snapshot.forceContinue.consecutive === 'number' ? snapshot.forceContinue.consecutive : 0,
-      max: typeof snapshot.forceContinue.max === 'number' ? snapshot.forceContinue.max : 3,
-    } : null,
   };
 }
 
@@ -121,9 +116,9 @@ function renderPlanTask(task) {
     ? '<div class="plan-task-spinner"></div>'
     : '<div class="plan-task-dot"></div>';
   const actionBtn = isTerminal ? '' : (isInterruptTarget
-    ? '<button class="plan-task-action" data-todo-interrupt data-action="cancel" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '取消停止' : 'Cancel stop') + '</button>'
-    : '<button class="plan-task-action" data-todo-interrupt data-action="set" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '完成后停止' : 'Stop after done') + '</button>');
-  const interruptLabel = isInterruptTarget ? '<span class="plan-task-interrupt-label">' + (currentLanguage === 'zh' ? '停止点' : 'Stop point') + '</span>' : '';
+    ? '<button class="plan-task-action" data-todo-interrupt data-action="cancel" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '取消执行' : 'Cancel') + '</button>'
+    : '<button class="plan-task-action" data-todo-interrupt data-action="set" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '执行到此处' : 'Run to here') + '</button>');
+  const interruptLabel = isInterruptTarget ? '<span class="plan-task-interrupt-label">' + (currentLanguage === 'zh' ? '执行到此为止' : 'Stop here') + '</span>' : '';
   const detailChev = canToggleDetail
     ? '<span class="plan-task-detail-chev' + (detailOpen ? ' is-open' : '') + '" aria-hidden="true">▸</span>'
     : '';
@@ -200,26 +195,6 @@ function renderPlanTaskList(tasks) {
   return html.join('');
 }
 
-// ── 任务未完自动继续开关 ─────────────────────────────────────────
-// 状态以 app-core 的会话级缓存为准（乐观更新，app-main.js 从 server snapshot 同步），
-// 开关复用 feature 面板的 .tool-toggle 组件样式。
-
-function renderPlanForceContinueToggle() {
-  const enabled = getTodoForceContinue();
-  return [
-    '<section class="plan-force-continue">',
-    '<div class="plan-force-continue-main">',
-    '<div class="plan-force-continue-label">' + escapeHtml(t('plan_force_continue')) + '</div>',
-    '<div class="plan-force-continue-help">' + escapeHtml(t(enabled ? 'plan_force_continue_on' : 'plan_force_continue_off')) + '</div>',
-    '</div>',
-    '<label class="tool-toggle" title="' + escapeHtml(t('plan_force_continue_help')) + '">',
-    '<input type="checkbox" class="tool-toggle-input" data-todo-force-continue' + (enabled ? ' checked' : '') + '>',
-    '<span class="tool-toggle-slider"></span>',
-    '</label>',
-    '</section>',
-  ].join('');
-}
-
 function renderPlanPanel() {
   const plan = currentTodoPlan || {};
   const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
@@ -240,7 +215,6 @@ function renderPlanPanel() {
       stats.map(([label, value]) => '<span><strong>' + escapeHtml(String(value)) + '</strong> ' + escapeHtml(label) + '</span>').join(''),
       '</div>',
       '</section>',
-      renderPlanForceContinueToggle(),
       '<div class="plan-empty">',
       '<div class="plan-empty-title">' + escapeHtml(t('plan_empty')) + '</div>',
       '<div class="plan-empty-desc">' + escapeHtml(t('plan_empty_desc')) + '</div>',
@@ -263,7 +237,6 @@ function renderPlanPanel() {
     stats.map(([label, value]) => '<span><strong>' + escapeHtml(String(value)) + '</strong> ' + escapeHtml(label) + '</span>').join(''),
     '</div>',
     '</section>',
-    renderPlanForceContinueToggle(),
     '<section class="plan-task-list">',
     renderPlanTaskList(tasks),
     '</section>',
@@ -271,7 +244,7 @@ function renderPlanPanel() {
   ].join('');
 }
 
-// ── TODO 中断控制（完成后停止）──────────────────────────────────
+// ── TODO"执行到此处"控制 ────────────────────────────────────────
 
 async function sendTodoControl(taskId) {
   const runtimeId = getRuntimeId(currentRuntimeAgentId);
@@ -289,55 +262,6 @@ async function sendTodoControl(taskId) {
     console.error('[TodoControl] request failed:', e);
   }
 }
-
-async function sendTodoForceContinue(enabled, { attempt = 0 } = {}) {
-  const runtimeId = getRuntimeId(currentRuntimeAgentId);
-  if (!runtimeId) return false;
-  const sessionId = getRuntimeWorkspaceSessionId(runtimeId) || undefined;
-  try {
-    const response = await fetch('/protoclaw/todo_control', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // runtimeId 是主定位 id：与轮询数据源 /api/agents/:id/todo 的 :id 相同，
-      // 开关显示哪个 runtime 的快照，控制就发往哪个 runtime，天然一致。
-      // sessionId 仅作 runtimeId 失效时的 fallback。
-      body: JSON.stringify({ agentId: getCurrentControlAgentId(), runtimeId, sessionId, forceContinue: enabled }),
-    });
-    const payload = await response.json().catch(() => null);
-    if (response.ok && payload?.ok === true) return true;
-    // IPC 未送达：runtime 已停止/重启中，或 sessionId 暂态错位（会话切换后
-    // allAgents 尚未刷新的窗口）。续期用户操作时间戳防止轮询快照覆盖乐观
-    // 状态，刷新 agent 列表后重试一次（runtime 重启后 id 可能已更新）。
-    _lastTodoForceContinueUserActionAt = Date.now();
-    if (attempt === 0 && typeof loadAgents === 'function') {
-      await loadAgents();
-      return sendTodoForceContinue(enabled, { attempt: attempt + 1 });
-    }
-    // 重试仍失败：回滚乐观状态，让 UI 回到 server 真实状态（否则
-    // 3 秒宽限期后轮询快照会把开关"悄悄"弹回，表现为按钮自动关回）。
-    setTodoForceContinue(!enabled);
-    _lastTodoForceContinueUserActionAt = Date.now();
-    if (activeFeaturePanel === 'plan') renderFeaturePanel();
-    console.warn('[TodoControl] force-continue not delivered (runtime not reachable), rolled back to', !enabled);
-    return false;
-  } catch (e) {
-    console.error('[TodoControl] force-continue request failed:', e);
-    return false;
-  }
-}
-
-featurePanelBody.addEventListener('change', (e) => {
-  const toggle = e.target?.closest?.('input[data-todo-force-continue]');
-  if (!toggle) return;
-  const enabled = toggle.checked === true;
-  // 乐观更新本地缓存并重渲染；server 侧由 app-main 轮询同步兜底
-  setTodoForceContinue(enabled);
-  _lastTodoForceContinueUserActionAt = Date.now();
-  if (activeFeaturePanel === 'plan') {
-    renderFeaturePanel();
-  }
-  sendTodoForceContinue(enabled);
-});
 
 featurePanelBody.addEventListener('click', (e) => {
   const detailTarget = e.target.closest('[data-plan-task-detail]');

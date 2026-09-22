@@ -790,7 +790,7 @@ export function createAgentLifecycleModule(ctx) {
 
     app.post('/protoclaw/todo_control', express.json(), async (req, res, next) => {
       try {
-        const { taskId, forceContinue } = req.body || {};
+        const { taskId } = req.body || {};
         let target;
         try {
           target = resolveRuntimeControlTarget(req.body);
@@ -820,24 +820,9 @@ export function createAgentLifecycleModule(ctx) {
         if (taskId !== undefined && typeof taskId !== 'string' && taskId !== null) {
           return res.status(400).json({ error: 'taskId must be a string or null' });
         }
-        if (forceContinue !== undefined && typeof forceContinue !== 'boolean') {
-          return res.status(400).json({ error: 'forceContinue must be a boolean' });
+        if (taskId === undefined) {
+          return res.status(400).json({ error: 'taskId is required' });
         }
-        const hasControlPayload = taskId !== undefined || forceContinue !== undefined;
-        if (!hasControlPayload) {
-          return res.status(400).json({ error: 'taskId or forceContinue is required' });
-        }
-
-        const deliver = (send) => {
-          let sent = false;
-          if (forceContinue !== undefined) {
-            sent = send({ type: 'todo-force-continue', enabled: forceContinue });
-          }
-          if (taskId !== undefined) {
-            sent = send({ type: 'todo-control', taskId: taskId || null }) || sent;
-          }
-          return sent;
-        };
 
         // Priority 1: runtimeId (viewerAgentId) — same id space as the frontend's
         // poll source (GET /api/agents/:id/todo), so the toggle always targets
@@ -847,7 +832,7 @@ export function createAgentLifecycleModule(ctx) {
           const rt = getRuntimeByViewerAgentId(runtimeId);
           if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
             try {
-              if (deliver((message) => sendIPCToRuntime(rt, message))) {
+              if (sendIPCToRuntime(rt, { type: 'todo-control', taskId: taskId || null })) {
                 return res.json({ ok: true, agentId, via: 'runtimeId' });
               }
             } catch (err) {
@@ -860,7 +845,7 @@ export function createAgentLifecycleModule(ctx) {
         // Do NOT fall back to pickPrimaryAgentRuntime — that would silently
         // deliver the interrupt to a different session (cross-session contamination).
         if (sessionId) {
-          if (deliver((message) => sendIPCtoSession(agentId, sessionId, message))) {
+          if (sendIPCtoSession(agentId, sessionId, { type: 'todo-control', taskId: taskId || null })) {
             return res.json({ ok: true, agentId, via: 'sessionId' });
           }
         }

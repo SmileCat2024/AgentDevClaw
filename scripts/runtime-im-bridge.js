@@ -289,20 +289,12 @@ export function createIMBridge(ctx) {
           console.error(`[IM-Line] Unmount error for "${carrier}":`, err);
         }
       } else if (msg.type === 'todo-control') {
-        // 设置/取消 TODO 中断目标
+        // 设置/取消"执行到此处"目标
         const todoFeature = ctx.agent?.features?.get?.('todo');
         if (todoFeature && typeof todoFeature.setInterruptTarget === 'function') {
           todoFeature.setInterruptTarget(msg.taskId || null);
         } else {
           console.warn('[IPC] Todo feature not found or does not support setInterruptTarget');
-        }
-      } else if (msg.type === 'todo-force-continue') {
-        // 设置/取消"任务未完强制继续"开关
-        const todoFeature = ctx.agent?.features?.get?.('todo');
-        if (todoFeature && typeof todoFeature.setForceContinue === 'function') {
-          todoFeature.setForceContinue(msg.enabled === true);
-        } else {
-          console.warn('[IPC] Todo feature not found or does not support setForceContinue');
         }
       }
   }

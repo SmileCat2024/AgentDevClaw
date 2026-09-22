@@ -1,12 +1,10 @@
 /**
- * ControlledTodoFeature — 继承框架 TodoFeature，增加会话中断控制能力：
+ * ControlledTodoFeature — 继承框架 TodoFeature，增加"执行到此处"控制能力：
  *
- * 1. "完成后停止"断点（interruptTarget）：目标任务进入终态时 Decision.Deny 结束 call。
- * 2. "任务未完强制继续"（forceContinue）：开关开启时，call 自然结束但任务未完，
- *    注入提醒消息并 Decision.Approve 继续循环。
- *
- * 优先级：断点 Deny 先于强制继续 Approve 判定，两者不冲突——
- * 即便强制继续开启，断点触发时仍会停下。
+ * 断点（interruptTarget）：设置后 agent 必须推进到目标任务完成——
+ * 自然收尾（无工具调用）但目标未进入终态时，注入提醒消息并
+ * Decision.Approve 继续循环；目标任务进入终态时 Decision.Deny
+ * 优雅结束当前 call，断点自动清除。
  *
  * 设计原理（static hooks 静态声明契约）：
  * - TodoFeature 通过 static hooks 声明钩子（含 recordToolUsage → StepFinish guard/advisor）。
@@ -15,8 +13,7 @@
  *   因此 override recordToolUsage 即可在 StepFinish 决策点注入自定义逻辑。
  * - 注意：一旦子类声明自己的 static hooks，将完全 shadow 父类声明（非增量合并），
  *   需声明全部钩子。本类刻意不声明。
- * - interruptTargetId 由前端通过 IPC 设置，下一次 StepFinish 检查到目标 task
- *   进入终态（completed/deleted）时返回 Decision.Deny，优雅结束当前 call。
+ * - interruptTargetId 由前端通过 IPC 设置，下一次 StepFinish 按上述语义判定。
  *
  * 同时通过 declareContinuity 包装向 Claw continuity 协议自声明参与，
  * 让 trim/summary 后任务列表能完整转移到新 runtime。
@@ -29,45 +26,29 @@ import {
 
 const TODO_CONTINUITY_PROTOCOL = 'claw.todo-continuity.v1';
 
-/** 单次 call 内连续"强制继续"的次数上限：模型反复不带工具地收尾时，避免无界续跑 */
+/** 单次 call 内连续推续的次数上限：模型反复不带工具地收尾时，避免无界续跑 */
 const FORCE_CONTINUE_MAX_CONSECUTIVE = 3;
 
 class ControlledTodoFeatureInner extends TodoFeature {
-  /** 当前中断目标 task ID（null = 无中断目标） */
+  /** 当前"执行到此处"目标 task ID（null = 无控制目标） */
   _interruptTargetId: string | null = null;
 
-  /** 任务未完强制继续开关（默认关闭，由前端经 IPC 设置） */
-  _forceContinueEnabled = false;
-  /** 连续强制继续计数（模型带工具推进时清零） */
+  /** 连续推续计数（模型带工具推进时清零） */
   _forceContinueCount = 0;
 
   /**
-   * 设置中断目标。taskId 为 null 或空字符串时取消中断。
+   * 设置"执行到此处"目标。taskId 为 null 或空字符串时取消。
    * 由 IPC 消息调用。
    */
   setInterruptTarget(taskId: string | null) {
     this._interruptTargetId = taskId || null;
-    console.log(`[ControlledTodoFeature] Interrupt target set to: ${this._interruptTargetId || '(none)'}`);
+    this._forceContinueCount = 0;
+    console.log(`[ControlledTodoFeature] Stop-here target set to: ${this._interruptTargetId || '(none)'}`);
     this.pushDebugSnapshot();
   }
 
   getInterruptTarget(): string | null {
     return this._interruptTargetId;
-  }
-
-  /**
-   * 设置"任务未完强制继续"开关。开启后，当 call 自然结束（无工具调用）
-   * 但任务列表仍有 pending/in_progress 任务时，注入提醒消息并强制继续。
-   */
-  setForceContinue(enabled: boolean) {
-    this._forceContinueEnabled = enabled === true;
-    this._forceContinueCount = 0;
-    console.log(`[ControlledTodoFeature] Force continue ${this._forceContinueEnabled ? 'enabled' : 'disabled'}`);
-    this.pushDebugSnapshot();
-  }
-
-  getForceContinue(): boolean {
-    return this._forceContinueEnabled;
   }
 
   /**
@@ -113,11 +94,10 @@ class ControlledTodoFeatureInner extends TodoFeature {
    * Override recordToolUsage（经继承的 static hooks 声明挂载于 StepFinish guard）。
    *
    * 先执行父类逻辑（todo 工具使用统计 + reminder 计数），
-   * 然后按优先级决策：
-   * 1. 中断目标（断点）已进入终态 → Decision.Deny 优雅结束当前 call（优先级最高）
-   * 2. 强制继续开启 && call 自然结束（无工具调用）&& 仍有未完成任务
+   * 然后按"执行到此处"语义决策：
+   * 1. 目标任务已进入终态 → Decision.Deny 优雅结束当前 call，断点自动清除
+   * 2. call 自然结束（无工具调用）但目标未进入终态
    *    → 注入提醒消息并 Decision.Approve 继续循环
-   * 断点 Deny 在前，保证两者不冲突：即便强制继续开启，断点触发时仍会停下。
    */
   async recordToolUsage(ctx: any) {
     const parentResult = await super.recordToolUsage(ctx);
@@ -137,19 +117,17 @@ class ControlledTodoFeatureInner extends TodoFeature {
       return parentResult;
     }
 
-    // 自然结束（无工具调用）时的强制继续判定
-    if (this._forceContinueEnabled) {
-      const activeTasks = this.listTasks().filter(
-        (task) => task.status === 'pending' || task.status === 'in_progress',
-      );
-      if (activeTasks.length > 0) {
+    // 自然结束（无工具调用）但目标未进入终态：注入提醒推续
+    if (this._interruptTargetId) {
+      const target = this.getTask(this._interruptTargetId);
+      if (target) {
         if (this._forceContinueCount >= FORCE_CONTINUE_MAX_CONSECUTIVE) {
           console.warn(`[ControlledTodoFeature] Force continue limit reached (${this._forceContinueCount}), letting call end`);
           return parentResult;
         }
         this._forceContinueCount += 1;
-        ctx.context.add({ role: 'system', content: this.buildForceContinueMessage(activeTasks) });
-        console.log(`[ControlledTodoFeature] Force continue: ${activeTasks.length} active task(s) remain, injected reminder (${this._forceContinueCount}/${FORCE_CONTINUE_MAX_CONSECUTIVE})`);
+        ctx.context.add({ role: 'system', content: this.buildStopHereMessage(target) });
+        console.log(`[ControlledTodoFeature] Stop-here target #${this._interruptTargetId} not reached, injected reminder (${this._forceContinueCount}/${FORCE_CONTINUE_MAX_CONSECUTIVE})`);
         this.pushDebugSnapshot();
         return Decision.Approve;
       }
@@ -168,41 +146,33 @@ class ControlledTodoFeatureInner extends TodoFeature {
   }
 
   /**
-   * 构建强制继续注入消息（复用 listTasks 摘要，不含长描述，控制注入体积）。
+   * 构建"执行到此处"推续消息（面向断点目标，控制注入体积）。
    */
-  private buildForceContinueMessage(activeTasks: { id: string; subject: string; status: string }[]): string {
-    const lines: string[] = ['[任务未完成提醒]', '任务列表中仍有未完成的任务，请继续推进：'];
-    for (const task of activeTasks.slice(0, 20)) {
-      lines.push(`- #${task.id} [${task.status}] ${task.subject}`);
-    }
-    if (activeTasks.length > 20) {
-      lines.push(`（其余 ${activeTasks.length - 20} 项未展示，可用 task_list 查看）`);
-    }
-    lines.push('');
-    lines.push('从中断处继续执行当前任务；任务开始、完成、调整或取消时，使用 Todo 工具同步状态。');
-    lines.push('若某任务确实无法继续或已不适用，请先明确说明原因，再将其标记完成/取消或调整计划。');
-    lines.push('不要向用户提及此内部提示。');
+  private buildStopHereMessage(target: { id: string; subject: string; status: string }): string {
+    const lines: string[] = [
+      '[执行控制提醒]',
+      `用户要求执行到任务 #${target.id}（${target.subject}，当前 ${target.status}）后停止，该任务尚未完成，请继续推进。`,
+      '',
+      '从中断处继续执行当前任务；任务开始、完成、调整或取消时，使用 Todo 工具同步状态。',
+      '若该任务确实无法继续或已不适用，请先明确说明原因，再将其标记完成/取消或调整计划。',
+      '不要向用户提及此内部提示。',
+    ];
     return lines.join('\n');
   }
 
   /**
-   * Override getPlanSnapshot，附加 interruptTargetId / forceContinue 字段供前端消费。
+   * Override getPlanSnapshot，附加 interruptTargetId 字段供前端消费。
    */
   getPlanSnapshot() {
     const snapshot = super.getPlanSnapshot();
     return {
       ...snapshot,
       interruptTargetId: this._interruptTargetId,
-      forceContinue: {
-        enabled: this._forceContinueEnabled,
-        consecutive: this._forceContinueCount,
-        max: FORCE_CONTINUE_MAX_CONSECUTIVE,
-      },
     };
   }
 
   /**
-   * Override captureState，持久化中断目标与强制继续开关。
+   * Override captureState，持久化"执行到此处"目标。
    */
   captureState() {
     // 框架 FeatureStateSnapshot 定义为 unknown（协议层透传），此处包装需展开为对象
@@ -210,17 +180,16 @@ class ControlledTodoFeatureInner extends TodoFeature {
     return {
       ...state,
       interruptTargetId: this._interruptTargetId,
-      forceContinue: { enabled: this._forceContinueEnabled, consecutive: this._forceContinueCount },
     };
   }
 
   /**
-   * Override restoreState，恢复中断目标与强制继续开关。
+   * Override restoreState，恢复"执行到此处"目标。
    */
   restoreState(snapshot: any) {
     super.restoreState(snapshot);
     this._interruptTargetId = snapshot?.interruptTargetId || null;
-    // 如果目标 task 已终态或不存在，清除中断目标（防止僵尸断点在精简/压缩后意外触发）
+    // 如果目标 task 已终态或不存在，清除目标（防止僵尸断点在精简/压缩后意外触发）
     if (this._interruptTargetId) {
       const task = this.getTask(this._interruptTargetId);
       if (!task || task.status === 'completed' || task.status === 'deleted') {
@@ -228,11 +197,7 @@ class ControlledTodoFeatureInner extends TodoFeature {
         this._interruptTargetId = null;
       }
     }
-    const forceContinue = snapshot?.forceContinue;
-    this._forceContinueEnabled = forceContinue?.enabled === true;
-    this._forceContinueCount = typeof forceContinue?.consecutive === 'number'
-      ? Math.max(0, Math.min(FORCE_CONTINUE_MAX_CONSECUTIVE, Math.floor(forceContinue.consecutive)))
-      : 0;
+    this._forceContinueCount = 0;
   }
 }
 

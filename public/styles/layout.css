@@ -5399,38 +5399,6 @@ body[data-theme="light"] .plan-summary {
   font-weight: 650;
 }
 
-/* 开关行：左侧标题/说明，右侧复用 feature 面板的 .tool-toggle 组件 */
-.plan-force-continue {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 2px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-}
-
-body[data-theme="light"] .plan-force-continue {
-  border-bottom-color: rgba(0,0,0,0.08);
-}
-
-.plan-force-continue-main {
-  min-width: 0;
-}
-
-.plan-force-continue-label {
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 560;
-  line-height: 1.35;
-}
-
-.plan-force-continue-help {
-  margin-top: 2px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
 .plan-task-list {
   position: relative;
   padding: 2px 0 4px;
