@@ -779,6 +779,10 @@ async function saveSettingsConfig() {
 // ── window 导出 ──────────────────────────────────────────────
 window.openSettings = openSettings;
 window.closeSettings = closeSettings;
+window.switchSettingsTab = function(tab) {
+  window.ClawFW.settingsTab = tab;
+  renderSettingsOverlay();
+};
 window.addSettingsPreset = addSettingsPreset;
 window.editSettingsPreset = editSettingsPreset;
 window.deleteSettingsPreset = deleteSettingsPreset;
