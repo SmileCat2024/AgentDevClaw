@@ -23,6 +23,7 @@
     "test:features": "node --test \"local-features/dist/*/test/*.test.js\"",
     "pretest:features": "npm run build:local-features",
     "lint": "eslint .",
+    "check:cycles": "node scripts/check-import-cycles.mjs",
     "adv-docs:sync": "node scripts/sync-adv-docs.mjs",
     "build": "node scripts/build-all.mjs"
   },
