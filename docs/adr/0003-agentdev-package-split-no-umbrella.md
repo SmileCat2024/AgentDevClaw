@@ -10,7 +10,7 @@
 
 - 无 `exports` 字段、单入口 `dist/index.js`，tsup 把 core + 19 个 src/features + agents + template + skills + mcp 全部 bundle 进一个 dist
 - 重依赖全量携带：`better-sqlite3`（原生）、`sharp`（原生二进制）、`openai` SDK、`@openai/agents`、MCP 三件套、`sound-play`、`open`——只用 BasicAgent 的宿主也要承担全部安装成本与失败率
-- 9 对双路径 feature（`packages/*` 与 `src/features/*` 各一份源码）两条构建、两条消费路径，是 CLAUDE.md 记录的高频踩坑点
+- 9 对双路径 feature（`packages/*` 与 `src/features/*` 各一份源码）两条构建、两条消费路径，是 AGENT.md 记录的高频踩坑点
 - `BasicAgent` 反向依赖 4 个 feature（MCPFeature / SkillFeature / SubAgentFeature / OpencodeBasicFeature 内置装配），MCP SDK 经此渗入框架核心
 - 批次 2 的 continuity 契约与 WorkThread 正在进主包——框架的根本差异点将被埋进全量桶，第三方无法单独依赖
 

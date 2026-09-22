@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENT.md
 
 本文件是新进入项目的 agent 的认知地图，用于建立"产品目标 → 核心对象 → 代码入口 → 数据流 → 边界"的连续认知。写作原则：只留概念理解、易错点与索引；细节指向权威文档与代码；不写行数、数量等易漂移的快照数据。
 
@@ -271,6 +271,10 @@ server.js 主进程（Express 1420 + ViewerWorker 2026 + DebugHub）+ per-runtim
 时长预算（超预算当 bug 排查，不要调大预算）：单用例 < 100ms（真实 IO / 子进程放宽到 2s）、单文件墙钟 < 1.5s（硬上限 10s）、全量 `test:core` ~15s（上限 30s）。已知合理慢文件（生产语义决定，不要"修复"）：`oauth-codex`（设备码 interval 下限 + 网络退避）、`feature-runtime`（真实子进程生命周期）、`session-summary`（扫描真实 context-handoffs 目录，已知待办：注入隔离）。
 
 写测试规则：模拟等待用最小 interval 或 `mock.timers`，禁止真实 sleep > 500ms；`Promise.race` 竞速的 fallback 定时器，胜出分支必须 `clearTimeout`；`after()` / `finally` 杀掉 spawn 的子进程、restore 全局补丁；不读真实用户数据目录。慢测试排查路径：逐文件计时定位 → `getActiveResourcesInfo()` 残留句柄探针（`Timeout` = 未清理定时器、`PipeWrap`×2 = 未退出子进程）→ 定时器创建堆栈补丁。
+
+## import 循环依赖检查（ratchet）
+
+`npm run check:cycles`（[scripts/check-import-cycles.mjs](scripts/check-import-cycles.mjs)）：扫描 server/、scripts/、prebuilt-agents/、local-features/、bin/ 的相对导入图，报告值级循环依赖（`import type` 不算边；动态 import 与 export-from 算边）。public/src 无静态 import 图（script 全局共享模式），不适用。存量环指纹固化在 [.import-cycles-baseline.json](.import-cycles-baseline.json)，`--update-baseline` 显式更新（修复存量环后应修剪），新增环 exit 1。
 
 ## 开发时的建议心智
 

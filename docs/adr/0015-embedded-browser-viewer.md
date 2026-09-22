@@ -148,7 +148,7 @@ onDestroy（或未来显式 shutdown 动词）回收。SKILL.md"用完 close"纪
 时生成的随机 token（经既有 Inspector snapshot 字段上报，前端拼 iframe
 URL）——防本机其他进程无授权观看。token 机制复用
 `normalizeHookInspector` 的字段链路时，须同步更新前端与框架
-`viewer-html.ts` 两处 normalize（既有陷阱，见 CLAUDE.md）。
+`viewer-html.ts` 两处 normalize（既有陷阱，见 AGENT.md）。
 
 ### 动词面重映射表
 

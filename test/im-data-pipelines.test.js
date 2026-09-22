@@ -1,7 +1,7 @@
 /**
  * Tests for IM domain core data pipelines (extracted from server/routes/im.js).
  *
- * Covers 4 critical data pipelines guided by CLAUDE.md:
+ * Covers 4 critical data pipelines guided by AGENT.md:
  *   1. Config normalization — data shape contract for all IM config
  *   2. Three-way exclusivity — the core routing invariant (line ↔ line ↔ portal)
  *   3. Serialized config mutation — prevents concurrent write corruption

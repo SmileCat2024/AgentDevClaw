@@ -25,7 +25,7 @@
  *   - window.PromptEditorUtils (prompt editor utils)
  */
 
-// ClawFW 是跨模块共享命名空间（见 CLAUDE.md 全局状态纪律），只能合并初始化，
+// ClawFW 是跨模块共享命名空间（见 AGENT.md 全局状态纪律），只能合并初始化，
 // 整体重建会抹掉其他模块先挂上去的属性（如 feature-catalog.js 的 featureCatalog）
 window.ClawFW = window.ClawFW || {};
 Object.assign(window.ClawFW, {

@@ -193,7 +193,7 @@ describe('capability routes', () => {
   });
 
   it('POST /capability_invoke accepts the todo_control-style triple (agentId+runtimeId+sessionId)', async () => {
-    // Frontend control delivery contract (CLAUDE.md §8d): runtimeId is the
+    // Frontend control delivery contract (AGENT.md §8d): runtimeId is the
     // primary locator, agentId the workspace identity, sessionId the viewer
     // binding. resolveRuntimeControlTarget must accept this shape and the
     // route must still land on the exact (agentId, sessionId) runtime.

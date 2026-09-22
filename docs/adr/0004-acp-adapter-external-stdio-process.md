@@ -43,7 +43,7 @@ server 进程管理。承载方式存在三个真实选项（grill Q1/Q3）：
   thread / CallArbiter / 精确 interrupt，破坏既有会话连续性语义；与本会话
   确认的「复用现有投递链路」前提直接冲突。
 - **走 ViewerWorker API**：绕过 thread 控制面，丢失 session 精确定位，
-  与 CLAUDE.md「前端→agent 控制 IPC 必须优先 runtimeId / 精确 session」的
+  与 AGENT.md「前端→agent 控制 IPC 必须优先 runtimeId / 精确 session」的
   纪律相悖。
 - **server 侧游标覆盖层**（server 自维护绝对序号补偿 board 裁剪缺陷）：
   补偿层掩盖框架缺陷，与仓库「在权威源码位置修复」纪律冲突；且 server 重启
