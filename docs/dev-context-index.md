@@ -328,8 +328,8 @@ if (this.handoff.sourceSummary) {
 
 ### 相关文档
 
-- `docs/claw-cli-redesign.md` - 产品语义设计（三种实体：Exploration、Sub-agent、Summary）
-- `docs/context-compaction-structured-output-design.md` - 结构化压缩输出设计
-- `docs/compact-product-semantics-mismatch.md` - 压缩产品语义混淆问题分析
-- `docs/compact-agent-mode-mismatch-problem.md` - 压缩 Agent 模式匹配问题
+- `docs/plans/claw-cli-redesign.md` - 产品语义设计（三种实体：Exploration、Sub-agent、Summary）
+- `docs/plans/context-compaction-structured-output-design.md` - 结构化压缩输出设计
+- `docs/investigations/compact-product-semantics-mismatch.md` - 压缩产品语义混淆问题分析
+- `docs/investigations/compact-agent-mode-mismatch-problem.md` - 压缩 Agent 模式匹配问题
 - `C:\Users\zty20\.claude\skills\claw-cli\SKILL.md` - 用户面向的 claw-cli 技能文档

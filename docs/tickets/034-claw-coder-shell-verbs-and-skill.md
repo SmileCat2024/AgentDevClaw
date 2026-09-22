@@ -2,7 +2,7 @@
 
 - **仓库**：AgentDevClaw
 - **决策依据**：2026-08-31 Capability-Scoped Shell grill 会话（设计树全部确认）；
-  线程生命周期语义以 [docs/work-thread-lifecycle.md](work-thread-lifecycle.md) 为准
+  线程生命周期语义以 [docs/plans/work-thread-lifecycle.md](work-thread-lifecycle.md) 为准
 - **类型**：领域 shell 落地 + 调度链路收编
 - **前置**：033
 - **执行关系**：依赖 033；不得与 033 并行

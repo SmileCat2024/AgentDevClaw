@@ -10,6 +10,10 @@ node_modules/
 docs/*
 !docs/adr/
 !docs/tickets/
+!docs/plans/
+!docs/investigations/
+!docs/audits/
+!docs/release-notes/
 config/
 
 # Agent Studio runtime records (runs.json / runtime-sessions)

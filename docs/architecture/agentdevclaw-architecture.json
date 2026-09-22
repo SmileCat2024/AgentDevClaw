@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AgentDevClaw 系统架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 890],
+    "repository": {
+      "url": "https://github.com/SmileCat2024/AgentDevClaw.git",
+      "revision": "5a0889f16a361365cf232e7d4124f3bbbf2c481c"
+    }
+  },
+  "components": [
+    { "id": "webui", "type": "frontend", "label": "Web UI 前端", "sublabel": "瘦壳 + modules · 端口 1420", "pos": [430, 80], "size": [250, 80],
+      "sources": [{ "path": "public/index.html", "label": "瘦壳入口" }] },
+    { "id": "feature-repo", "type": "database", "label": "Feature 仓库 (tgz)", "sublabel": "resources · user-features", "pos": [790, 84], "size": [250, 84] },
+    { "id": "user-data", "type": "database", "label": "用户数据目录", "sublabel": "~/.agentdev · 会话 · 线程", "pos": [70, 244], "size": [250, 84] },
+    { "id": "claw-server", "type": "backend", "label": "Claw Server 主进程", "sublabel": "Express 路由 · 会话调度", "pos": [430, 240], "size": [260, 96],
+      "sources": [{ "path": "server.js", "label": "主进程入口" }] },
+    { "id": "viewer-worker", "type": "backend", "label": "ViewerWorker / DebugHub", "sublabel": "Inspector 数据流 · 2026", "pos": [790, 244], "size": [250, 84] },
+    { "id": "prebuilt-agents", "type": "backend", "label": "预制 Agents", "sublabel": "四个官方工作空间", "pos": [70, 405], "size": [250, 96],
+      "sources": [{ "path": "prebuilt-agents/official/programming-helper/agent.js", "label": "编程小助手" }] },
+    { "id": "runtime-host", "type": "backend", "label": "Agent Runtime 宿主", "sublabel": "run-prebuilt-agent.js 子进程", "pos": [430, 405], "size": [260, 84],
+      "sources": [{ "path": "scripts/run-prebuilt-agent.js", "label": "宿主脚本" }] },
+    { "id": "acp-adapter", "type": "backend", "label": "ACP 适配器", "sublabel": "claw acp coder · stdio 进程", "pos": [790, 405], "size": [250, 84],
+      "sources": [{ "path": "scripts/run-coder-acp.js", "label": "适配器入口" }] },
+    { "id": "local-features", "type": "backend", "label": "本地 Features", "sublabel": "dispatch · group-admin · …", "pos": [70, 570], "size": [250, 84],
+      "sources": [{ "path": "local-features/index.ts", "label": "barrel 导出" }] },
+    { "id": "im-platform", "type": "external", "label": "IM 平台", "sublabel": "QQ · 微信 · 飞书", "pos": [430, 570], "size": [260, 80] },
+    { "id": "agentdev-framework", "type": "backend", "label": "AgentDev 框架包", "sublabel": "@agentdevjs/core · llm · viewer", "pos": [790, 566], "size": [250, 92] },
+    { "id": "claw-cli", "type": "frontend", "label": "claw CLI / Plain Agent", "sublabel": "bin/claw.mjs · 无头审计", "pos": [430, 735], "size": [260, 84],
+      "sources": [{ "path": "bin/claw.mjs", "label": "CLI 入口" }] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "浏览器", "wraps": ["webui"] },
+    { "kind": "region", "label": "Claw 服务进程（server.js）", "wraps": ["claw-server", "viewer-worker"] },
+    { "kind": "region", "label": "Agent 运行进程", "wraps": ["runtime-host", "prebuilt-agents", "acp-adapter", "local-features"] }
+  ],
+  "connections": [
+    { "id": "webui-server", "from": "webui", "to": "claw-server", "label": "HTTP :1420 · REST/SSE", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelDy": 30 },
+    { "id": "server-userdata", "from": "claw-server", "to": "user-data", "label": "会话 · 线程落盘", "fromSide": "left", "toSide": "right", "labelDy": 76 },
+    { "id": "server-repo", "from": "claw-server", "to": "feature-repo", "label": "catalog · resolver", "fromSide": "top", "toSide": "bottom" },
+    { "id": "server-viewer", "from": "claw-server", "to": "viewer-worker", "label": "托管 · 请求代理", "fromSide": "right", "toSide": "left" },
+    { "id": "server-runtime", "from": "claw-server", "to": "runtime-host", "label": "spawn 子进程 · IPC", "fromSide": "bottom", "toSide": "top", "labelDy": 30 },
+    { "id": "runtime-agents", "from": "runtime-host", "to": "prebuilt-agents", "label": "动态加载 agent.js", "fromSide": "left", "toSide": "right" },
+    { "id": "agents-features", "from": "prebuilt-agents", "to": "local-features", "label": "use(feature) 装配", "fromSide": "bottom", "toSide": "top", "labelDy": 30 },
+    { "id": "agents-im", "from": "prebuilt-agents", "to": "im-platform", "label": "渠道消息收发" },
+    { "id": "runtime-framework", "from": "runtime-host", "to": "agentdev-framework", "label": "import @agentdevjs/*" },
+    { "id": "acp-server", "from": "acp-adapter", "to": "claw-server", "label": "stdio ⇄ 本机 HTTP" },
+    { "id": "cli-framework", "from": "claw-cli", "to": "agentdev-framework", "label": "动态 import" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "四个官方工作空间",
+      "items": [
+        "programming-helper — 编程小助手，main 交互 + coder 无人值守双身份",
+        "agent-studio — 上游制造端，Feature 开发与验证闭环",
+        "qqbot — 多渠道 IM 消息门户与路由",
+        "work-group — 多 Agent 协作群聊（Beta）"
+      ]
+    }
+  ]
+}
