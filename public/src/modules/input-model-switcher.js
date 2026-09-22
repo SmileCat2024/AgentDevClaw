@@ -13,7 +13,9 @@
  *   _performThinkingEffortSwap / window.toggleThinkingEffortDropdown / updateThinkingEffortSwitcher
  *
  * 依赖（全局符号，由先于本文件加载的脚本提供，加载序见 index.html）：
- * - escapeHtml, currentLanguage, ClawToast, window.ClawFW._modelPresets (app-core.js)
+ * - escapeHtml, currentLanguage, ClawToast (app-core.js)
+ * - getClawModelPresets / ensureClawModelPresetsForSession /
+ *   clawModelPresetsMatchSession (model-preset-cache.js)
  * - focusedAgentId (app-core.js / app-main.js)
  * - currentRuntimeAgentId, currentOverviewSnapshot, getActiveWorkspaceSessionId,
  *   getRuntimeAwareAgentRecord, getCurrentHostAgentRecord, getCurrentAgentRecord (app-main.js)
@@ -24,29 +26,11 @@
 
 let _inputModelDropdown = null;
 
-// ── preset 列表按会话命名空间拉取（ADR-0011）────────────────────────
-// agentId 始终携带当前会话身份（远程为 remote:<connId>:… 命名空间）：服务端
-// 派生连接后返回远程自己的 preset 列表，本地会话行为不变。缓存按会话身份
-// 失效，防止本地/远程切换后串用上一会话的列表。
-function _presetCacheMatchesCurrentSession() {
-  let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
-  return typeof window.ClawFW === 'object' && window.ClawFW
-    && Array.isArray(window.ClawFW._modelPresets)
-    && window.ClawFW._modelPresets.length > 0
-    && window.ClawFW._modelPresetsRuntimeId === runtimeId;
-}
-
-async function _fetchPresetsForCurrentSession() {
-  let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
-  const resp = await fetch('/protoclaw/model_config' + (runtimeId ? '?agentId=' + encodeURIComponent(runtimeId) : ''));
-  const data = await resp.json();
-  const presets = Array.isArray(data && data.presets) ? data.presets : [];
-  if (typeof window.ClawFW === 'object' && window.ClawFW) {
-    window.ClawFW._modelPresets = presets;
-    window.ClawFW._modelPresetsRuntimeId = runtimeId;
-  }
-  return presets;
-}
+// ── preset 列表的缓存与回源统一走 owner 模块（model-preset-cache.js）────
+// 会话命名空间语义（ADR-0011）：agentId 始终携带当前会话身份（远程为
+// remote:<connId>:… 命名空间），服务端派生连接后返回远程自己的 preset
+// 列表，本地会话行为不变；缓存按会话身份失效，防止本地/远程切换后
+// 串用上一会话的列表。
 
 function _getInputAgentId() {
   // Model swap is keyed on the HOST agent ID (e.g. 'programming-helper'),
@@ -197,14 +181,13 @@ window.toggleInputModelDropdown = function(event) {
 
   // Fetch presets synchronously from cache or API
   (async function() {
-    let presets = _presetCacheMatchesCurrentSession() ? window.ClawFW._modelPresets : [];
-    if (!presets.length) {
-      try {
-        presets = await _fetchPresetsForCurrentSession();
-      } catch (e) {
-        console.error('[InputModelSwitch] Failed to load presets:', e);
-        return;
-      }
+    let presets;
+    try {
+      presets = await ensureClawModelPresetsForSession(
+        (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '');
+    } catch (e) {
+      console.error('[InputModelSwitch] Failed to load presets:', e);
+      return;
     }
     if (!presets.length) return;
 
@@ -304,7 +287,7 @@ const ANTHROPIC_EFFORT_LABELS = {
 let _inputThinkingDropdown = null;
 
 function _getCurrentPreset() {
-  let presets = (window.ClawFW && window.ClawFW._modelPresets) || [];
+  let presets = getClawModelPresets();
   if (!presets.length) return null;
   let currentName = _getInputDefaultPresetName();
   if (!currentName) return null;
@@ -544,7 +527,9 @@ function updateThinkingEffortSwitcher() {
   // the early return for "不支持思考" blocks the fallback forever.
   // Presets must match the current session namespace (ADR-0011)：缓存按会话
   // 身份失效，回源带当前会话 agentId（远程会话拿到远程自己的 preset 列表）。
-  let presets = _presetCacheMatchesCurrentSession() ? window.ClawFW._modelPresets : [];
+  let presets = clawModelPresetsMatchSession(
+    (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '')
+    ? getClawModelPresets() : [];
   if (!presets.length) {
     // Show a neutral label while loading — NOT "不支持思考" which is misleading
     nameEl.textContent = isZh ? '思考强度' : 'Thinking';
@@ -553,10 +538,12 @@ function updateThinkingEffortSwitcher() {
       btn.classList.remove('thinking-disabled');
       btn.title = '';
     }
-    _fetchPresetsForCurrentSession().then(function() {
+    ensureClawModelPresetsForSession(
+      (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '').then(function() {
       // 只在缓存真正命中时重渲染：列表为空（或 ClawFW 未就绪）时不再递归
       // 回源，避免空 preset 列表场景下的无限 fetch 循环。
-      if (_presetCacheMatchesCurrentSession()) updateThinkingEffortSwitcher();
+      if (clawModelPresetsMatchSession(
+        (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '')) updateThinkingEffortSwitcher();
     }).catch(function() {});
     return;
   }

@@ -461,13 +461,8 @@ function renderFWList(agent, block, formId) {
 }
 
 function renderFWDetail(agent, block, formId, st) {
-  if (!window.ClawFW._modelPresets) {
-    window.ClawFW._modelPresets = [];
-    fetch('/protoclaw/model_config').then(function(r) { return r.json(); }).then(function(d) {
-      window.ClawFW._modelPresets = Array.isArray(d?.presets) ? d.presets : [];
-      fwRerender();
-    }).catch(function() { window.ClawFW._modelPresets = []; });
-  }
+  // 模型预置懒加载统一走 owner 模块（model-preset-cache.js）
+  ensureClawModelPresets().then(function() { fwRerender(); });
   const draft = normalizeAssemblyDraft(getWorkspaceFormDraft(agent)?.[formId] || {});
   const name = String(draft.assembly_name || '').trim();
   const section = st.section || 'features';
@@ -562,7 +557,7 @@ function renderFWFeatures(agent, block, formId, draft) {
   html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '目标' : 'Goal') + '</label>';
   html += '<textarea class="fw-textarea" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '这个 Agent 帮用户做什么？' : 'What does this Agent do?') + '" oninput="window.updateAssemblyDraftField(\'' + formId + '\',\'goal\',this.value)" onblur="window.commitAssemblyDraftField(\'' + formId + '\',\'goal\',this.value)">' + escapeHtml(draft.goal || '') + '</textarea></div>';
   html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? 'LLM 预设' : 'LLM Preset') + '</label>';
-  const _modelPresets = Array.isArray(window.ClawFW._modelPresets) ? window.ClawFW._modelPresets : [];
+  const _modelPresets = getClawModelPresets();
   html += '<select class="flow-editor-select" onchange="window.updateAssemblyDraftField(\'' + formId + '\',\'model_preset\',this.value);window.commitAssemblyDraftField(\'' + formId + '\',\'model_preset\',this.value)">';
   html += '<option value="">' + escapeHtml(currentLanguage === 'zh' ? '使用全局默认模型' : 'Use global default model') + '</option>';
   _modelPresets.forEach(function(p) {

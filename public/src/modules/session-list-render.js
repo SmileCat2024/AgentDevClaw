@@ -379,7 +379,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   // 获取模型显示名称（从全局presets中查找）
   const getModelDisplayName = (modelName) => {
     if (!modelName) return '';
-    const presets = window.ClawFW?._modelPresets || [];
+    const presets = getClawModelPresets();
     const preset = presets.find(p => p.name === modelName);
     if (preset) {
       // 显示模型名称，如果有contextLength则显示

@@ -650,7 +650,7 @@ window._phSwitchSettingsTab = (tab) => {
   _phSettingsTab = tab;
   const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
   if (agent) {
-    const presets = window.ClawFW?._modelPresets || [];
+    const presets = getClawModelPresets();
     renderPhModelConfigOverlay(agent, presets);
   }
 };
@@ -660,7 +660,7 @@ window._phSwitchFeatureSubTab = (sub) => {
   _phFeatureSubTab = sub;
   const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
   if (agent) {
-    const presets = window.ClawFW?._modelPresets || [];
+    const presets = getClawModelPresets();
     renderPhModelConfigOverlay(agent, presets);
   }
 };

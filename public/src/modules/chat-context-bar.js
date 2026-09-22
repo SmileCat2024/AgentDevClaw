@@ -397,27 +397,9 @@ function _getCurrentDefaultPresetName() {
   return (defaultCfg && defaultCfg.primary) || '';
 }
 
-// preset 列表按会话命名空间拉取（ADR-0011）：agentId 始终携带当前会话身份，
-// 远程会话返回远程自己的 preset 列表；缓存按会话身份失效，防切换串列表。
-function _presetCacheMatchesCurrentSession() {
-  let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
-  return typeof window.ClawFW === 'object' && window.ClawFW
-    && Array.isArray(window.ClawFW._modelPresets)
-    && window.ClawFW._modelPresets.length > 0
-    && window.ClawFW._modelPresetsRuntimeId === runtimeId;
-}
-
-async function _fetchPresetsForCurrentSession() {
-  let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
-  const resp = await fetch('/protoclaw/model_config' + (runtimeId ? '?agentId=' + encodeURIComponent(runtimeId) : ''));
-  const data = await resp.json();
-  const presets = Array.isArray(data && data.presets) ? data.presets : [];
-  if (typeof window.ClawFW === 'object' && window.ClawFW) {
-    window.ClawFW._modelPresets = presets;
-    window.ClawFW._modelPresetsRuntimeId = runtimeId;
-  }
-  return presets;
-}
+// preset 列表的缓存与回源统一走 owner 模块（model-preset-cache.js，ADR-0011
+// 会话命名空间语义）：agentId 始终携带当前会话身份，远程会话返回远程自己的
+// preset 列表；缓存按会话身份失效，防切换串列表。
 
 async function _toggleModelDropdown() {
   // If already open, close
@@ -433,14 +415,13 @@ async function _toggleModelDropdown() {
   if (!agentId) return;
 
   // Fetch presets
-  let presets = _presetCacheMatchesCurrentSession() ? window.ClawFW._modelPresets : [];
-  if (!presets.length) {
-    try {
-      presets = await _fetchPresetsForCurrentSession();
-    } catch (e) {
-      console.error('[ModelDropdown] Failed to load presets:', e);
-      return;
-    }
+  let presets;
+  try {
+    presets = await ensureClawModelPresetsForSession(
+      (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '');
+  } catch (e) {
+    console.error('[ModelDropdown] Failed to load presets:', e);
+    return;
   }
   if (!presets.length) return;
 

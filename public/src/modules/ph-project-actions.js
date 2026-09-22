@@ -34,7 +34,7 @@
 window.phOpenModelConfig = async () => {
   const agent = getCurrentAgentRecord();
   if (!agent) return;
-  let presets = window.ClawFW?._modelPresets || [];
+  let presets = getClawModelPresets();
   window.phModelConfigAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id;
   // 先渲染（已有缓存或空态），模型预置属补数据——点击到弹窗出现不等网络
   renderPhModelConfigOverlay(agent, presets);
@@ -43,8 +43,7 @@ window.phOpenModelConfig = async () => {
     try {
       const resp = await fetch('/protoclaw/model_config');
       const data = await resp.json();
-      presets = Array.isArray(data?.presets) ? data.presets : [];
-      if (window.ClawFW) window.ClawFW._modelPresets = presets;
+      presets = setClawModelPresets(Array.isArray(data?.presets) ? data.presets : []);
     } catch (e) {
       console.error('Failed to load presets:', e);
     }
@@ -148,7 +147,7 @@ window.phAutoSaveModelConfig = async () => {
       }
     }
     // 刷新覆层以更新 info 文本
-    const presets = window.ClawFW?._modelPresets || [];
+    const presets = getClawModelPresets();
     const agent = getCurrentAgentRecord();
     if (agent) renderPhModelConfigOverlay(agent, presets);
     renderCurrentMainView();
@@ -507,7 +506,7 @@ window.phSetProcessMode = async (processMode) => {
       throw new Error(result.error || 'Failed to save process mode');
     }
     agent.processMode = result.processMode;
-    const presets = window.ClawFW?._modelPresets || [];
+    const presets = getClawModelPresets();
     renderPhModelConfigOverlay(agent, presets);
     renderCurrentMainView();
   } catch (error) {

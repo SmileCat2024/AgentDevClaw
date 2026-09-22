@@ -187,6 +187,8 @@ function createSandbox({
     var _phOpenSessionsCache = {};
     window.phLoadOpenSessionsCard = function () {};
   `);
+  // 生产顺序：owner 模块先于使用方加载（session-list-render.js 读取模型缓存）
+  ctx.loadSource('public/src/modules/model-preset-cache.js');
   ctx.loadSource('public/src/modules/session-list-render.js');
   // workspace-actions.js 依赖（远程 create 分支触达的以记录替身注入）。
   ctx.run(`

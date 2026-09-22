@@ -21,8 +21,8 @@ async function openSettings() {
   window.ClawFW.settingsOpen = true;
   window.ClawFW.settingsEditing = null;
   window.ClawFW.settingsData = null;
-  window.ClawFW._speechModelConfig = null;
-  window.ClawFW._speechPresets = [];
+  setClawSpeechModelConfig(null);
+  setClawSpeechPresets([]);
   renderSettingsOverlay();
   try {
     const [modelResp, speechResp] = await Promise.all([
@@ -31,11 +31,11 @@ async function openSettings() {
     ]);
     const data = await modelResp.json();
     window.ClawFW.settingsData = data;
-    window.ClawFW._modelPresets = Array.isArray(data?.presets) ? data.presets : [];
+    setClawModelPresets(Array.isArray(data?.presets) ? data.presets : []);
     try {
       const speechData = await speechResp.json();
-      window.ClawFW._speechModelConfig = speechData?.speechModel || null;
-      window.ClawFW._speechPresets = Array.isArray(speechData?.speechPresets) ? speechData.speechPresets : [];
+      setClawSpeechModelConfig(speechData?.speechModel || null);
+      setClawSpeechPresets(Array.isArray(speechData?.speechPresets) ? speechData.speechPresets : []);
     } catch (e) { /* speech config may not exist yet */ }
     renderSettingsOverlay();
   } catch (error) {
@@ -49,7 +49,7 @@ function closeSettings() {
   window.ClawFW.settingsEditing = null;
   window.ClawFW.settingsData = null;
   window.ClawFW._speechEditing = null;
-  window.ClawFW._speechPresets = [];
+  setClawSpeechPresets([]);
   const host = document.getElementById('settings-overlay-host');
   if (host) host.innerHTML = '';
 }
@@ -724,7 +724,7 @@ async function applySettingsPreset(idx) {
     const result = await resp.json();
     window.ClawFW.settingsData.config = result.config;
     window.ClawFW.settingsData.presets = result.presets;
-    window.ClawFW._modelPresets = Array.isArray(result?.presets) ? result.presets : [];
+    setClawModelPresets(Array.isArray(result?.presets) ? result.presets : []);
     renderSettingsOverlay();
     // Refresh session data to reflect updated model config
     let _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
@@ -759,7 +759,7 @@ async function saveSettingsConfig() {
     const result = await resp.json();
     window.ClawFW.settingsData.config = result.config;
     window.ClawFW.settingsData.presets = result.presets;
-    window.ClawFW._modelPresets = Array.isArray(result?.presets) ? result.presets : [];
+    setClawModelPresets(Array.isArray(result?.presets) ? result.presets : []);
     renderSettingsOverlay();
     // Refresh session data to reflect updated model config
     let _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;

@@ -102,6 +102,41 @@ export default [
       // references (e.g. window.foo, inline onclick, frontend-vm test loads)
       // are invisible to ESLint. Disable unused-vars to avoid false positives.
       'no-unused-vars': 'off',
+      // window.ClawFW 下划线键是跨模块共享缓存的存储位，多处直写是历史
+      // bug 温床（同一键多写方、失效语义不一致）。共享缓存必须收敛到唯一
+      // owner 模块（参考 model-preset-cache.js / speech-config-cache.js），
+      // 其他文件经导出的 getter / setter 访问。
+      'no-restricted-syntax': ['error',
+        {
+          selector: "AssignmentExpression[left.type='MemberExpression'][left.computed=false][left.property.type='Identifier'][left.property.name=/^_/][left.object.type='MemberExpression'][left.object.computed=false][left.object.property.name='ClawFW']",
+          message: '禁止直接写入 window.ClawFW 的下划线键。共享缓存请建 owner 模块（参考 model-preset-cache.js），经导出的 setter 写入。',
+        },
+      ],
+    },
+  },
+
+  // 共享缓存 owner 模块：这些键的唯一写方，豁免上述限制。
+  {
+    files: [
+      'public/src/modules/model-preset-cache.js',
+      'public/src/modules/speech-config-cache.js',
+    ],
+    rules: {
+      'no-restricted-syntax': 'off',
+    },
+  },
+
+  // Ratchet 清单：仍含存量 ClawFW 下划线键直写的前端文件（_speechEditing
+  // 设置面板编辑态、_coderModelPresets 单文件内聚缓存）。随各域收敛从此
+  // 清单移除；清单外新增直写直接报 error。
+  {
+    files: [
+      'public/src/modules/model-settings.js',
+      'public/src/modules/speech-settings.js',
+      'public/src/modules/ph-project-actions.js',
+    ],
+    rules: {
+      'no-restricted-syntax': 'warn',
     },
   },
 

@@ -49,15 +49,7 @@ async function wgToggleVoiceRecording(btn) {
 
 async function wgStartVoiceRecording(btn) {
   // Check speech config
-  let speechConfig = window.ClawFW?._speechModelConfig;
-  if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
-    try {
-      const resp = await fetch('/protoclaw/speech_model_config');
-      const data = await resp.json();
-      speechConfig = data?.speechModel;
-      if (window.ClawFW) window.ClawFW._speechModelConfig = speechConfig;
-    } catch (e) { /* ignore */ }
-  }
+  let speechConfig = await ensureClawSpeechModelConfig();
   if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
     alert('语音模型未配置，请在设置中配置 ASR 模型');
     return;

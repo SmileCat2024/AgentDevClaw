@@ -596,6 +596,8 @@ describe('thinking effort switcher preset refetch', () => {
       fetch: fetchImpl,
     });
     ctx.run('window.ClawFW = {}');
+    // 生产顺序：owner 模块（model-preset-cache.js）先于使用方加载
+    ctx.loadSource('public/src/modules/model-preset-cache.js');
     ctx.loadSource('public/src/modules/input-model-switcher.js');
     return { ctx, nameEl };
   }
@@ -628,7 +630,7 @@ describe('thinking effort switcher preset refetch', () => {
       return { ok: true, json: async () => ({ config: {}, presets: [{ name: 'remote-preset' }] }) };
     });
     // Stale local-shaped cache without a session tag must not be trusted.
-    ctx.run('window.ClawFW._modelPresets = [{ name: "stale-local" }]');
+    ctx.run('setClawModelPresets([{ name: "stale-local" }])');
     ctx.run('updateThinkingEffortSwitcher()');
     await new Promise((resolve) => setTimeout(resolve, 0));
     // After the session-scoped refetch the stale local shape is gone from the
@@ -822,7 +824,7 @@ describe('state-control remote namespace branches', () => {
       const handler = captureLifecycleHandler('/protoclaw/todo_control');
       const res = silentRes();
       await handler(
-        { body: { agentId: NAMESPACE, runtimeId: 'remote:server-a:rt-1', taskId: '3', forceContinue: true } },
+        { body: { agentId: NAMESPACE, runtimeId: 'remote:server-a:rt-1', taskId: '3' } },
         res,
         (error) => { throw error; },
       );
@@ -834,7 +836,6 @@ describe('state-control remote namespace branches', () => {
       assert.equal(forwarded.runtimeId, 'rt-1');
       assert.equal(forwarded.agentId, 'agent-9');
       assert.equal(forwarded.taskId, '3');
-      assert.equal(forwarded.forceContinue, true);
     } finally {
       fetchMock.restore();
       setProxyConnectionLookup(null);

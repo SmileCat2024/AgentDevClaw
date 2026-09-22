@@ -230,18 +230,7 @@ async function startVoiceRecording(btn) {
     return navigator.mediaDevices.getUserMedia({ audio: true });
   })();
 
-  const configReady = (async () => {
-    const cached = window.ClawFW?._speechModelConfig;
-    if (cached && cached.baseUrl && cached.apiKey) return cached;
-    try {
-      const resp = await fetch('/protoclaw/speech_model_config');
-      const data = await resp.json();
-      const speechConfig = data?.speechModel;
-      if (window.ClawFW) window.ClawFW._speechModelConfig = speechConfig;
-      return speechConfig;
-    } catch (e) { /* ignore */ }
-    return null;
-  })();
+  const configReady = ensureClawSpeechModelConfig();
 
   let stream;
   let speechConfig;

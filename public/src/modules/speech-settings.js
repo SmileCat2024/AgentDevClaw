@@ -6,8 +6,8 @@
  */
 
 function renderSpeechModelSection(isZh) {
-  const sc = window.ClawFW._speechModelConfig || {};
-  const presets = window.ClawFW._speechPresets || [];
+  const sc = getClawSpeechModelConfig() || {};
+  const presets = getClawSpeechPresets();
   const speechEditing = window.ClawFW._speechEditing; // null = not editing, 'new' = new preset, number = edit existing
   const configured = !!(sc.baseUrl && sc.apiKey);
 
@@ -156,24 +156,24 @@ window.cancelSpeechPresetEdit = function() {
 };
 
 window.deleteSpeechPreset = async function(idx) {
-  const presets = window.ClawFW._speechPresets || [];
+  const presets = getClawSpeechPresets();
   presets.splice(idx, 1);
-  window.ClawFW._speechPresets = presets;
+  setClawSpeechPresets(presets);
   window.ClawFW._speechEditing = null;
   await saveSpeechFullConfig();
 };
 
 window.applySpeechPreset = async function(idx) {
-  const presets = window.ClawFW._speechPresets || [];
+  const presets = getClawSpeechPresets();
   const preset = presets[idx];
   if (!preset) return;
   // Set as active speech model
-  window.ClawFW._speechModelConfig = {
+  setClawSpeechModelConfig({
     baseUrl: preset.baseUrl || '',
     apiKey: preset.apiKey || '',
     model: preset.model || '',
     language: preset.language || 'auto',
-  };
+  });
   await saveSpeechFullConfig();
 };
 
@@ -186,9 +186,9 @@ window.saveSpeechPreset = async function(editIdx) {
     model: (el('speech-preset-model')?.value || '').trim(),
     language: el('speech-preset-language')?.value || 'auto',
   };
-  const presets = window.ClawFW._speechPresets || [];
+  const presets = getClawSpeechPresets();
   // Check if there's currently an active speech model
-  let sc = window.ClawFW._speechModelConfig || {};
+  let sc = getClawSpeechModelConfig() || {};
   let wasActive = !!(sc.baseUrl && sc.apiKey);
   if (editIdx === 'new') {
     presets.push(preset);
@@ -196,7 +196,7 @@ window.saveSpeechPreset = async function(editIdx) {
   } else {
     presets[editIdx] = preset;
   }
-  window.ClawFW._speechPresets = presets;
+  setClawSpeechPresets(presets);
   window.ClawFW._speechEditing = null;
   await saveSpeechFullConfig();
   if (!wasActive) {
@@ -205,8 +205,8 @@ window.saveSpeechPreset = async function(editIdx) {
 };
 
 async function saveSpeechFullConfig() {
-  const speechModel = window.ClawFW._speechModelConfig || { baseUrl: '', apiKey: '', model: '', language: 'auto' };
-  const speechPresets = window.ClawFW._speechPresets || [];
+  const speechModel = getClawSpeechModelConfig() || { baseUrl: '', apiKey: '', model: '', language: 'auto' };
+  const speechPresets = getClawSpeechPresets();
   try {
     const resp = await fetch('/protoclaw/speech_model_config', {
       method: 'PUT',
@@ -214,8 +214,8 @@ async function saveSpeechFullConfig() {
       body: JSON.stringify({ speechModel, speechPresets }),
     });
     const result = await resp.json();
-    window.ClawFW._speechModelConfig = result.speechModel;
-    window.ClawFW._speechPresets = Array.isArray(result.speechPresets) ? result.speechPresets : [];
+    setClawSpeechModelConfig(result.speechModel);
+    setClawSpeechPresets(Array.isArray(result.speechPresets) ? result.speechPresets : []);
     renderSettingsOverlay();
   } catch (error) {
     console.error('Failed to save speech model config:', error);
