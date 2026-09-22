@@ -8,6 +8,7 @@ import { promises as fs } from 'fs';
 import { join, resolve } from 'path';
 import type { StudioFeatureVerification, StudioTestCase, StudioRunRecord } from './assertions.js';
 import { normalizeTestCase, type StudioFeatureCoverage } from './assertions.js';
+import { cleanValue } from './clean-value.js';
 
 export type TestRuntimeStatus = 'not-provisioned' | 'running' | 'stopped';
 
@@ -83,10 +84,6 @@ export const RUNS_KEEP_COUNT = 30;
 export const RUNS_RESULT_TRUNCATE = 2000;
 
 // ── 项目文件读写 ──────────────────────────────────────────────
-
-export function cleanValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
 
 export function normalizeFeatureStatus(value: unknown): StudioFeatureStatus {
   return value === 'mounted' || value === 'verified' || value === 'snapshotted' ? value : 'implemented';

@@ -4,7 +4,6 @@ import type { AgentFeature, CallStartContext, FeatureInitContext, FeatureStateSn
 import { CoreLifecycle } from '@agentdevjs/core';
 import type { AgentStudioProject, WorkspaceState, StudioProjectEntry, TestRuntimeStatus } from './project-store.js';
 import {
-  cleanValue,
   getDefaultStatePath,
   getProjectPath,
   normalizeProject,
@@ -12,6 +11,7 @@ import {
   buildProjectMarkdown,
   REGISTRY_FILE_NAME,
 } from './project-store.js';
+import { cleanValue } from './clean-value.js';
 import { findAgentRegistryModuleUrl, getRuntimeHandle } from './runtime-process.js';
 import { buildStudioTools } from './tools.js';
 
@@ -39,6 +39,8 @@ export {
   type StudioRunRecord,
 } from './assertions.js';
 
+export { cleanValue } from './clean-value.js';
+
 export {
   PROJECT_FILE_NAME,
   REGISTRY_FILE_NAME,
@@ -46,7 +48,6 @@ export {
   RUNS_FILE_NAME,
   RUNS_KEEP_COUNT,
   RUNS_RESULT_TRUNCATE,
-  cleanValue,
   normalizeFeatureStatus,
   normalizeFeatureEntry,
   normalizeTestRuntimeStatus,

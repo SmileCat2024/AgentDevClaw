@@ -27,12 +27,12 @@ import {
 } from './assertions.js';
 import type { StudioFeatureEntry } from './project-store.js';
 import {
-  cleanValue,
   normalizeProject,
   getProjectPath,
   readRuns,
   appendRun,
 } from './project-store.js';
+import { cleanValue } from './clean-value.js';
 import type { AgentStudioFeature } from './index.js';
 import {
   SYNC_TIMEOUT_MS,

@@ -18,9 +18,9 @@ import type {
 import type { StudioRunRecord } from './assertions.js';
 import {
   RUNS_DIR_NAME,
-  cleanValue,
   markRuntimeStopped,
 } from './project-store.js';
+import { cleanValue } from './clean-value.js';
 
 export const READY_TIMEOUT_MS = 60_000;
 export const SYNC_TIMEOUT_MS = 120_000;

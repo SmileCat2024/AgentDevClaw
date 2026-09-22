@@ -3,7 +3,8 @@
 // 纯函数区段：从 index.ts 原样迁出，无实例依赖。
 // 测试经 index.ts 的 re-export 直接消费本模块符号。
 
-import { cleanValue, type StudioFeatureEntry } from './project-store.js';
+import { cleanValue } from './clean-value.js';
+import type { StudioFeatureEntry } from './project-store.js';
 
 export const ASSERTION_KINDS = ['tool-executed', 'tool-denied', 'tool-result-path', 'reply-includes', 'hook-observed'] as const;
 export type AssertionKind = (typeof ASSERTION_KINDS)[number];
