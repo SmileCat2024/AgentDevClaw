@@ -126,7 +126,7 @@ function repoTools(client: GitHubClient, defaults: GitHubToolDefaults): Tool[] {
     },
     {
       name: 'gh_search_code',
-      description: 'Search for code across GitHub repositories. Uses GitHub code search syntax (e.g. "repo:owner/repo function hello").',
+      description: 'Search for code across GitHub repositories. Uses GitHub code search syntax (e.g. "repo:owner/repo function hello"). Note: legacy code search only covers repos indexed by GitHub — small or newer repos may return 0 results even for content that exists (verify with get-file-contents before concluding absence); "repo:" must reference the current canonical repo name (renamed repos fail silently here, or with a 422 on search-issues).',
       parameters: {
         type: 'object',
         properties: {

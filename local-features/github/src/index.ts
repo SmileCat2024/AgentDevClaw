@@ -1,11 +1,8 @@
 /**
- * GitHubFeature — 为 Agent 提供 GitHub 平台的读写能力
+ * GitHubShellFeature — 将 GitHub API 能力收敛为单个领域 shell 工具。
  *
- * 直接调用 GitHub REST/GraphQL API，不依赖 MCP Server 或 gh CLI 执行。
- * 认证策略：manifest 配置的 PAT 优先；未配置时尝试从 gh CLI 读取 token。
- * gh CLI 仅作为认证来源，不参与任何实际 API 调用。
- *
- * 工具按 toolset 分组，通过 manifest 可选择性启用。
+ * API 操作沿用 GitHubClient 与既有工具实现；认证优先使用 manifest PAT，
+ * 未配置时尝试读取本机 gh CLI token。gh CLI 仅作为认证来源。
  */
 
 import { fileURLToPath } from 'url';
@@ -14,6 +11,8 @@ import type { AgentFeature, FeatureInitContext, Tool, PackageInfo, FeatureManife
 import { getPackageInfoFromSource } from '@agentdevjs/core';
 import { GitHubClient } from './client.js';
 import { createGitHubTools, type GitHubToolDefaults } from './tools.js';
+import { createCapabilityShellTool } from '../../capability-shell/src/tool-factory.js';
+import { createGitHubShellAdapters, createGitHubShellPolicy } from './github-shell.js';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -29,7 +28,7 @@ export interface GitHubFeatureConfig {
   enabledToolsets?: string[];
 }
 
-export class GitHubFeature implements AgentFeature {
+export class GitHubShellFeature implements AgentFeature {
   readonly name = 'github';
   readonly dependencies: string[] = [];
   readonly source = __filename.replace(/\\/g, '/');
@@ -221,7 +220,11 @@ export class GitHubFeature implements AgentFeature {
       apiBaseUrl: this._apiBaseUrl,
     });
 
-    return createGitHubTools(client, this._defaults, this._enabledToolsets);
+    const domainTools = createGitHubTools(client, this._defaults, this._enabledToolsets);
+    return [createCapabilityShellTool(
+      createGitHubShellPolicy(domainTools),
+      createGitHubShellAdapters(domainTools),
+    )];
   }
 }
 

@@ -23,7 +23,7 @@ import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/i
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
 import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
-import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
+import { GitHubShellFeature } from '../../../local-features/dist/github/src/index.js';
 import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
 import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import { PlaywrightShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
@@ -186,7 +186,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
     this.use(new UserInputFeature());
     this.use(new GenerativeUISurfaceFeature());
-    this.use(new GitHubFeature());
+    this.use(new GitHubShellFeature());
 
     // 会话内容分级读取（发现 → trim 概览 → 某轮全量）：话题接续的读取面，
     // 纯视图不落盘，agentId 可选参数支持跨 agent 会话参考。
