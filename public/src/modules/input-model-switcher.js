@@ -25,6 +25,7 @@
 // ── 输入框模型切换下拉 ──────────────────────────────────────────────
 
 let _inputModelDropdown = null;
+let _inputModelDropdownLoading = false;
 
 // ── preset 列表的缓存与回源统一走 owner 模块（model-preset-cache.js）────
 // 会话命名空间语义（ADR-0011）：agentId 始终携带当前会话身份（远程为
@@ -74,11 +75,13 @@ function _getInputDefaultPresetName() {
 
 function _closeInputModelDropdown() {
   if (_inputModelDropdown) {
-    _inputModelDropdown.classList.remove('visible');
+    let dropdown = _inputModelDropdown;
+    _inputModelDropdown = null;
+    dropdown.classList.remove('visible');
     let btn = document.getElementById('input-model-switch-btn');
     if (btn) btn.classList.remove('dd-open');
     setTimeout(function() {
-      if (_inputModelDropdown) { _inputModelDropdown.remove(); _inputModelDropdown = null; }
+      dropdown.remove();
     }, 150);
   }
 }
@@ -172,6 +175,7 @@ window.toggleInputModelDropdown = function(event) {
     _closeInputModelDropdown();
     return;
   }
+  if (_inputModelDropdownLoading) return;
 
   let btn = document.getElementById('input-model-switch-btn');
   if (!btn) return;
@@ -179,23 +183,26 @@ window.toggleInputModelDropdown = function(event) {
   let agentId = _getInputAgentId();
   if (!agentId) return;
 
-  // Fetch presets synchronously from cache or API
+  _inputModelDropdownLoading = true;
+  // Fetch presets before creating the dropdown; keep the open action single-flight.
   (async function() {
-    let presets;
     try {
-      presets = await ensureClawModelPresetsForSession(
-        (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '');
-    } catch (e) {
-      console.error('[InputModelSwitch] Failed to load presets:', e);
-      return;
-    }
-    if (!presets.length) return;
+      let presets;
+      try {
+        presets = await ensureClawModelPresetsForSession(
+          (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '');
+      } catch (e) {
+        console.error('[InputModelSwitch] Failed to load presets:', e);
+        return;
+      }
+      if (!presets.length) return;
 
-    let currentPreset = _getInputDefaultPresetName();
+      let currentPreset = _getInputDefaultPresetName();
     let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
 
-    _inputModelDropdown = document.createElement('div');
-    _inputModelDropdown.className = 'ccb-model-dropdown';
+    let dropdown = document.createElement('div');
+    _inputModelDropdown = dropdown;
+    dropdown.className = 'ccb-model-dropdown';
 
     let html = '<div class="ccb-model-dropdown-list">';
     presets.forEach(function(p) {
@@ -218,13 +225,13 @@ window.toggleInputModelDropdown = function(event) {
         + '</div>';
     });
     html += '</div>';
-    _inputModelDropdown.innerHTML = html;
+    dropdown.innerHTML = html;
 
     // Position relative to the button — open upward
     let rect = btn.getBoundingClientRect();
-    _inputModelDropdown.style.left = rect.left + 'px';
+    dropdown.style.left = rect.left + 'px';
 
-    _inputModelDropdown.addEventListener('click', function(e) {
+    dropdown.addEventListener('click', function(e) {
       let item = e.target.closest('.ccb-md-item');
       if (!item) return;
       let presetName = item.dataset.preset;
@@ -232,16 +239,19 @@ window.toggleInputModelDropdown = function(event) {
       _performInputModelSwap(agentId, presetName);
     });
 
-    document.body.appendChild(_inputModelDropdown);
+    document.body.appendChild(dropdown);
     btn.classList.add('dd-open');
     // Measure height after insert, then place above the button
-    let ddHeight = _inputModelDropdown.offsetHeight;
-    _inputModelDropdown.style.top = (rect.top - ddHeight - 4) + 'px';
-    requestAnimationFrame(function() { _inputModelDropdown.classList.add('visible'); });
+    let ddHeight = dropdown.offsetHeight;
+    dropdown.style.top = (rect.top - ddHeight - 4) + 'px';
+    requestAnimationFrame(function() { if (dropdown.isConnected) dropdown.classList.add('visible'); });
 
     setTimeout(function() {
       document.addEventListener('click', _inputModelDropdownOutsideClick, { once: true });
     }, 0);
+    } finally {
+      _inputModelDropdownLoading = false;
+    }
   })();
 };
 
