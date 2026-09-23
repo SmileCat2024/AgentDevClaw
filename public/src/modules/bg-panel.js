@@ -134,8 +134,8 @@
     const duration = taskDurationMs(task);
     const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
     const clock = formatClock(task.startedAt);
-    // 结果行置于卡片末尾：状态（含 exit）· 用时 · 启动时刻
-    const meta = [statusText(task), duration !== null ? formatDuration(duration) : '', clock]
+    // 结果行贴卡片底部：左端状态（含 exit）· 用时，右端启动时刻
+    const result = [statusText(task), duration !== null ? formatDuration(duration) : '']
       .filter(Boolean).join(' · ');
     return `
       <div class="bgp-card" data-bgp-task="${escapeHtml(task.id)}">
@@ -145,7 +145,10 @@
         </div>
         <pre class="bgp-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</pre>
         ${tail ? `<pre class="bgp-tail" data-bgp-tail="${escapeHtml(task.id)}">${escapeHtml(tail)}</pre>` : ''}
-        <div class="bgp-meta">${escapeHtml(meta)}</div>
+        <div class="bgp-result">
+          <span class="bgp-result-main">${escapeHtml(result)}</span>
+          ${clock ? `<span class="bgp-result-time">${clock}</span>` : ''}
+        </div>
       </div>`;
   }
 
@@ -318,7 +321,7 @@
       background: rgba(255, 255, 255, 0.02);
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
       min-width: 0;
     }
     body[data-theme="light"] .bgp-card { background: #ffffff; border-color: #e0e0e0; }
@@ -339,7 +342,7 @@
     }
     /* 命令行：裸文字，最多两行省略（title 悬浮看全文） */
     .bgp-cmd {
-      margin: 0 0 0 14px;
+      margin: 0;
       font-family: ${MONO};
       font-size: 12px;
       line-height: 1.5;
@@ -351,8 +354,9 @@
       -webkit-line-clamp: 2;
       overflow: hidden;
     }
-    /* 状态 · 时长小字行，与命令块文字起点对齐（dot 6px + gap 8px） */
-    .bgp-meta { margin-left: 14px; font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); }
+    /* 结果行：状态 · 用时靠左，启动时刻靠右 */
+    .bgp-result { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    .bgp-result-main, .bgp-result-time { font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); }
     .bgp-tail {
       margin: 0;
       padding: 8px 10px;
