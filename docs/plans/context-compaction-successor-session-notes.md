@@ -178,8 +178,8 @@
 
 相关讨论和参考：
 
-- [docs/cases/analysis-interaction-philosophy.md](./cases/analysis-interaction-philosophy.md)
-- [docs/cases/00-deep-reflection.md](./cases/00-deep-reflection.md)
+- [docs/cases/analysis-interaction-philosophy.md](../cases/analysis-interaction-philosophy.md)
+- [docs/cases/00-deep-reflection.md](../cases/00-deep-reflection.md)
 
 ### 2.2 底层问题：runtime 是否能承受“强上下文压缩”
 

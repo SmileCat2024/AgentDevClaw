@@ -873,7 +873,7 @@ if (el && el.dataset.sessionKey === expectedSessionKey) {
 
 ### 投影模型
 
-侧栏只有一套渲染模型：`工作空间 → 项目目录 → 运行中会话`（决策见 [ADR-0010](adr/0010-sidebar-unified-projection.md)）。本地会话与远程会话在 `renderSidebarChildItems` 处汇合成统一条目流，渲染器不感知来源：
+侧栏只有一套渲染模型：`工作空间 → 项目目录 → 运行中会话`（决策见 [ADR-0010](../adr/0010-sidebar-unified-projection.md)）。本地会话与远程会话在 `renderSidebarChildItems` 处汇合成统一条目流，渲染器不感知来源：
 
 ```js
 // sidebar-render.js renderSidebarChildItems

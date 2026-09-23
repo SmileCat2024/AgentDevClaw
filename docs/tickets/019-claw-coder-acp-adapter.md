@@ -1,7 +1,7 @@
 # 019 — coder ACP stdio adapter 本体
 
 - **仓库**：AgentDevClaw（`D:\code\AgentDevClaw`）
-- **决策依据**：[coder-acp-adapter-design.md](../coder-acp-adapter-design.md) 全文（§4 协议契约 / §6 管线 / §7 映射 / §8 取消 / §9.3 归因）；grill Q2 / Q4–Q10 / Q17–Q19 / Q23–Q25 / Q27-A；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)
+- **决策依据**：[coder-acp-adapter-design.md](../plans/coder-acp-adapter-design.md) 全文（§4 协议契约 / §6 管线 / §7 映射 / §8 取消 / §9.3 归因）；grill Q2 / Q4–Q10 / Q17–Q19 / Q23–Q25 / Q27-A；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)
 - **类型**：新增独立进程（ACP v1 stdio 协议端点）
 - **前置**：018（路由联调）；017（游标正确性，联调前须合入）
 

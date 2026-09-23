@@ -1,10 +1,10 @@
 # coder 工作空间 ACP v1 适配设计
 
 - 日期：2026-08-21
-- 状态：已定稿（grill 会话 Q1–Q27 全部确认；执行为 [docs/tickets](tickets/README.md) 批次 6，017–020）
+- 状态：已定稿（grill 会话 Q1–Q27 全部确认；执行为 [docs/tickets](../tickets/README.md) 批次 6，017–020）
 - 协议参考：`D:\GithubDownload\agent-client-protocol`（规范）、`D:\GithubDownload\typescript-sdk`（TS SDK，包名 `@agentclientprotocol/sdk`）
 - 适配参考：`D:\GithubDownload\codex-acp`（官方 Codex 的 ACP 适配；协议入口 / session 管理 / 事件转换三层结构与本设计同构）
-- 架构决策：[ADR-0004](adr/0004-acp-adapter-external-stdio-process.md)
+- 架构决策：[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)
 
 ## 1. 目标与范围
 

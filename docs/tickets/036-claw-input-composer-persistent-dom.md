@@ -17,7 +17,7 @@
 是两份复制粘贴的 toolbar 模板（重复 DOM id）。轮询每周期 JSON.stringify 对比
 inputRequests，任何变化都触发整块重建——这就是用户感知的"事件打断输入框"。
 
-**行为契约已就绪**：`docs/input-area-behavioral-contract.md`（本次一并落盘）。
+**行为契约已就绪**：`docs/protocols/input-area-behavioral-contract.md`（本次一并落盘）。
 它是本票的验收基线：§3–§9 的可观察行为全部保持，§11 列出的实现手段可自由更换。
 
 - 仓库：/home/dev/AgentDevClaw（本 worktree）
@@ -100,7 +100,7 @@ inputRequests，任何变化都触发整块重建——这就是用户感知的"
 
 ## 行为契约（验收基线）
 
-`docs/input-area-behavioral-contract.md`（本票随附落盘）是唯一行为基线。
+`docs/protocols/input-area-behavioral-contract.md`（本票随附落盘）是唯一行为基线。
 重点验收条款：
 
 - §3 显示模式矩阵（9 级优先级不变）；

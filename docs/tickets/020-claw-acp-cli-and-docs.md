@@ -1,7 +1,7 @@
 # 020 — ACP CLI 接入与文档
 
 - **仓库**：AgentDevClaw（`D:\code\AgentDevClaw`）
-- **决策依据**：[coder-acp-adapter-design.md](../coder-acp-adapter-design.md) §10 / §11 / §13；grill Q13-A；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)
+- **决策依据**：[coder-acp-adapter-design.md](../plans/coder-acp-adapter-design.md) §10 / §11 / §13；grill Q13-A；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)
 - **类型**：CLI + 文档收尾
 - **前置**：019
 

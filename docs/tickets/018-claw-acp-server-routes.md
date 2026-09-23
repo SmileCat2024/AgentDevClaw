@@ -1,7 +1,7 @@
 # 018 — Claw ACP 支撑路由（原子创建 + 精确中断）
 
 - **仓库**：AgentDevClaw（`D:\code\AgentDevClaw`）
-- **决策依据**：[coder-acp-adapter-design.md](../coder-acp-adapter-design.md) §5 / §8 / §9.2 / §10；grill Q3 / Q11 / Q21-A / Q22-A；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)
+- **决策依据**：[coder-acp-adapter-design.md](../plans/coder-acp-adapter-design.md) §5 / §8 / §9.2 / §10；grill Q3 / Q11 / Q21-A / Q22-A；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)
 - **类型**：新增 server 路由（加法式；不改现有响应结构）
 - **前置**：无（可与 017 并行）；019 联调依赖本票
 

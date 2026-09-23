@@ -40,11 +40,11 @@
 
 可以优先阅读以下材料建立上下文：
 
-- [AGENT.md](../AGENT.md)
-- [docs/agentdev-claw-product-overview.md](./agentdev-claw-product-overview.md)
-- [docs/flow-layer-design.md](./flow-layer-design.md)
-- [docs/flow-feature-mode-dual-surface-design-plan.md](./flow-feature-mode-dual-surface-design-plan.md)
-- [docs/feature-metadata.md](./feature-metadata.md)
+- [AGENT.md](../../AGENT.md)
+- [docs/reference/agentdev-claw-product-overview.md](../reference/agentdev-claw-product-overview.md)
+- [docs/plans/flow-layer-design.md](./flow-layer-design.md)
+- [docs/plans/flow-feature-mode-dual-surface-design-plan.md](./flow-feature-mode-dual-surface-design-plan.md)
+- [docs/protocols/feature-metadata.md](../protocols/feature-metadata.md)
 
 几个特别关键的现状：
 
@@ -56,17 +56,17 @@ Agent Project = Persona + Enabled Features + One Orchestration Graph + Runtime S
 
 见：
 
-- [AGENT.md](../AGENT.md)
-- [docs/flow-layer-design.md](./flow-layer-design.md)
+- [AGENT.md](../../AGENT.md)
+- [docs/plans/flow-layer-design.md](./flow-layer-design.md)
 
 2. Flow 已经不是一个外围补充能力，而是运行时与编辑器双侧都在持续扩张的主线。
 
 关键入口：
 
 - Flow 编辑器：[public/flow-editor.js](../public/flow-editor.js)
-- Flow 运行时 Feature：[local-features/flow/src/index.ts](../local-features/flow/src/index.ts)
-- Flow-aware 基类：[local-features/flow/src/flow-aware-feature.ts](../local-features/flow/src/flow-aware-feature.ts)
-- Flow 类型：[local-features/flow/src/types.ts](../local-features/flow/src/types.ts)
+- Flow 运行时 Feature：[local-features/flow/src/index.ts](../../local-features/flow/src/index.ts)
+- Flow-aware 基类：[local-features/flow/src/flow-aware-feature.ts](../../local-features/flow/src/flow-aware-feature.ts)
+- Flow 类型：[local-features/flow/src/types.ts](../../local-features/flow/src/types.ts)
 - Flow capability 聚合接口：[server.js](../server.js)
 
 3. Feature 已经不只是“提供工具”。
@@ -85,9 +85,9 @@ Agent Project = Persona + Enabled Features + One Orchestration Graph + Runtime S
 
 相关参考：
 
-- [local-features/flow/src/flow-aware-feature.ts](../local-features/flow/src/flow-aware-feature.ts)
-- [local-features/feature-dev/skills/agentdev-feature-guide/references/feature-basics.md](../local-features/feature-dev/skills/agentdev-feature-guide/references/feature-basics.md)
-- [local-features/feature-dev/skills/agentdev-feature-guide/references/reverse-hooks.md](../local-features/feature-dev/skills/agentdev-feature-guide/references/reverse-hooks.md)
+- [local-features/flow/src/flow-aware-feature.ts](../../local-features/flow/src/flow-aware-feature.ts)
+- [local-features/feature-dev/skills/agentdev-feature-guide/references/foundation/feature-model.md](../../local-features/feature-dev/skills/agentdev-feature-guide/references/foundation/feature-model.md)
+- [local-features/feature-dev/skills/agentdev-feature-guide/references/runtime/reverse-hooks-reference.md](../../local-features/feature-dev/skills/agentdev-feature-guide/references/runtime/reverse-hooks-reference.md)
 - [node_modules/agentdev/src/core/feature.ts](../node_modules/agentdev/src/core/feature.ts)
 
 也正因为这三点叠加，系统开始逼近一个新阶段：
@@ -119,7 +119,7 @@ Agent Project = Persona + Enabled Features + One Orchestration Graph + Runtime S
 
 - Shell feature 包：[node_modules/@agentdev/shell-feature/dist/index.js](../node_modules/@agentdev/shell-feature/dist/index.js)
 - Shell 类型声明：[node_modules/@agentdev/shell-feature/dist/index.d.ts](../node_modules/@agentdev/shell-feature/dist/index.d.ts)
-- 本地 feature-dev 对 shell 的依赖接口：[local-features/feature-dev/src/index.ts](../local-features/feature-dev/src/index.ts)
+- 本地 feature-dev 对 shell 的依赖接口：[local-features/feature-dev/src/index.ts](../../local-features/feature-dev/src/index.ts)
 
 `feature-dev` 已经把 shell 当成可复用底层通道来使用，而不是只把它当成“给 LLM 看的 bash 工具”。例如：
 
@@ -200,8 +200,8 @@ Agent Project = Persona + Enabled Features + One Orchestration Graph + Runtime S
 
 参考：
 
-- [local-features/flow/src/index.ts](../local-features/flow/src/index.ts)
-- [local-features/feature-dev/src/index.ts](../local-features/feature-dev/src/index.ts)
+- [local-features/flow/src/index.ts](../../local-features/flow/src/index.ts)
+- [local-features/feature-dev/src/index.ts](../../local-features/feature-dev/src/index.ts)
 - [node_modules/@agentdev/audit-feature/dist/index.js](../node_modules/@agentdev/audit-feature/dist/index.js)
 - [node_modules/agentdev/src/features/audio-feedback/index.ts](../node_modules/agentdev/src/features/audio-feedback/index.ts)
 
@@ -254,7 +254,7 @@ Driver is a system-grade feature role.
 
 见：
 
-- [local-features/flow/src/flow-aware-feature.ts](../local-features/flow/src/flow-aware-feature.ts)
+- [local-features/flow/src/flow-aware-feature.ts](../../local-features/flow/src/flow-aware-feature.ts)
 
 这意味着当前系统已经承认：
 
@@ -310,7 +310,7 @@ Driver is a system-grade feature role.
 
 见：
 
-- [local-features/feature-dev/src/index.ts](../local-features/feature-dev/src/index.ts)
+- [local-features/feature-dev/src/index.ts](../../local-features/feature-dev/src/index.ts)
 
 它体现了两件事：
 
@@ -633,7 +633,7 @@ Driver is a system-grade feature role.
 
 见：
 
-- [local-features/flow/src/types.ts](../local-features/flow/src/types.ts)
+- [local-features/flow/src/types.ts](../../local-features/flow/src/types.ts)
 
 这说明系统已经在朝一个更可靠的方向迈步：
 
@@ -693,7 +693,7 @@ Driver is a system-grade feature role.
 
 - [node_modules/agentdev/src/core/agent.ts](../node_modules/agentdev/src/core/agent.ts)
 - [node_modules/agentdev/src/core/agent/tool-executor.ts](../node_modules/agentdev/src/core/agent/tool-executor.ts)
-- [local-features/feature-dev/src/index.ts](../local-features/feature-dev/src/index.ts)
+- [local-features/feature-dev/src/index.ts](../../local-features/feature-dev/src/index.ts)
 
 它的问题不是“绝对不能存在”，而是“不应继续成为跨 feature 复用的唯一主路径”。
 
@@ -720,27 +720,27 @@ Driver is a system-grade feature role.
 
 ### 14.1 产品与主线背景
 
-- [AGENT.md](../AGENT.md)
-- [docs/agentdev-claw-product-overview.md](./agentdev-claw-product-overview.md)
-- [docs/dev-context-index.md](./dev-context-index.md)
+- [AGENT.md](../../AGENT.md)
+- [docs/reference/agentdev-claw-product-overview.md](../reference/agentdev-claw-product-overview.md)
+- [docs/reference/dev-context-index.md](../reference/dev-context-index.md)
 
 ### 14.2 Flow 主线与 Feature mode
 
-- [docs/flow-layer-design.md](./flow-layer-design.md)
-- [docs/flow-feature-mode-dual-surface-design-plan.md](./flow-feature-mode-dual-surface-design-plan.md)
-- [docs/flow-implementation-plan.md](./flow-implementation-plan.md)
-- [local-features/flow/src/index.ts](../local-features/flow/src/index.ts)
-- [local-features/flow/src/types.ts](../local-features/flow/src/types.ts)
-- [local-features/flow/src/flow-aware-feature.ts](../local-features/flow/src/flow-aware-feature.ts)
+- [docs/plans/flow-layer-design.md](./flow-layer-design.md)
+- [docs/plans/flow-feature-mode-dual-surface-design-plan.md](./flow-feature-mode-dual-surface-design-plan.md)
+- [docs/plans/flow-implementation-plan.md](./flow-implementation-plan.md)
+- [local-features/flow/src/index.ts](../../local-features/flow/src/index.ts)
+- [local-features/flow/src/types.ts](../../local-features/flow/src/types.ts)
+- [local-features/flow/src/flow-aware-feature.ts](../../local-features/flow/src/flow-aware-feature.ts)
 - [public/flow-editor.js](../public/flow-editor.js)
 - [server.js](../server.js)
 
 ### 14.3 Feature 基础面与运行时边界
 
-- [local-features/feature-dev/skills/agentdev-feature-guide/references/feature-basics.md](../local-features/feature-dev/skills/agentdev-feature-guide/references/feature-basics.md)
-- [local-features/feature-dev/skills/agentdev-feature-guide/references/lifecycle-hooks.md](../local-features/feature-dev/skills/agentdev-feature-guide/references/lifecycle-hooks.md)
-- [local-features/feature-dev/skills/agentdev-feature-guide/references/reverse-hooks.md](../local-features/feature-dev/skills/agentdev-feature-guide/references/reverse-hooks.md)
-- [local-features/feature-dev/skills/agentdev-feature-guide/references/patterns.md](../local-features/feature-dev/skills/agentdev-feature-guide/references/patterns.md)
+- [local-features/feature-dev/skills/agentdev-feature-guide/references/foundation/feature-model.md](../../local-features/feature-dev/skills/agentdev-feature-guide/references/foundation/feature-model.md)
+- [local-features/feature-dev/skills/agentdev-feature-guide/references/runtime/hook-design.md](../../local-features/feature-dev/skills/agentdev-feature-guide/references/runtime/hook-design.md)
+- [local-features/feature-dev/skills/agentdev-feature-guide/references/runtime/reverse-hooks-reference.md](../../local-features/feature-dev/skills/agentdev-feature-guide/references/runtime/reverse-hooks-reference.md)
+- [local-features/feature-dev/skills/agentdev-feature-guide/references/foundation/design-patterns.md](../../local-features/feature-dev/skills/agentdev-feature-guide/references/foundation/design-patterns.md)
 - [node_modules/agentdev/src/core/feature.ts](../node_modules/agentdev/src/core/feature.ts)
 - [node_modules/agentdev/src/core/agent.ts](../node_modules/agentdev/src/core/agent.ts)
 - [node_modules/agentdev/src/core/hooks-registry.ts](../node_modules/agentdev/src/core/hooks-registry.ts)
@@ -752,7 +752,7 @@ Driver is a system-grade feature role.
 - shell：
   - [node_modules/@agentdev/shell-feature/dist/index.js](../node_modules/@agentdev/shell-feature/dist/index.js)
   - [node_modules/@agentdev/shell-feature/dist/index.d.ts](../node_modules/@agentdev/shell-feature/dist/index.d.ts)
-  - [local-features/feature-dev/src/index.ts](../local-features/feature-dev/src/index.ts)
+  - [local-features/feature-dev/src/index.ts](../../local-features/feature-dev/src/index.ts)
 
 - audio feedback：
   - [node_modules/agentdev/src/features/audio-feedback/index.ts](../node_modules/agentdev/src/features/audio-feedback/index.ts)
@@ -765,7 +765,7 @@ Driver is a system-grade feature role.
 
 这些不是实现文档，但对判断问题空间很有参考价值：
 
-- [docs/cases/00-deep-reflection.md](./cases/00-deep-reflection.md)
+- [docs/cases/00-deep-reflection.md](../cases/00-deep-reflection.md)
 
 尤其值得关注其中关于以下问题的反思：
 

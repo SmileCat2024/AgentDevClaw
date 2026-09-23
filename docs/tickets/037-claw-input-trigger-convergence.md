@@ -15,7 +15,7 @@
 - 工作目录：/home/dev/claw-037-input-triggers
 - 前置：036 已合入（afd688f），`input-composer.js` 常驻 composer 与九级模式判定
   `resolveInputSurfaceMode` 已就位
-- 行为契约基线：`docs/input-area-behavioral-contract.md` §8（事件→显示映射，
+- 行为契约基线：`docs/protocols/input-area-behavioral-contract.md` §8（事件→显示映射，
   覆盖面不得减少）+ §3 模式矩阵
 
 ## 调用点清单（重构对象，约 19 处 / 10 个文件）

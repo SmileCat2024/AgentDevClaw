@@ -6,10 +6,10 @@
 
 1. 本文件
 2. [docs/README.md](docs/README.md) — 文档地图：全部文档按意图导航 + 写文档约定
-3. [docs/agentdev-claw-product-overview.md](docs/agentdev-claw-product-overview.md) — 产品总览
-4. [docs/glossary.md](docs/glossary.md) — 领域词汇表：术语 + Avoid 负面清单，改代码前先对齐用词
-5. [docs/dev-context-index.md](docs/dev-context-index.md) — AgentDev 框架与 Claw 的跨仓库连接关系速查
-6. 涉及前端 UI 渲染、workspace 切换、数据加载时序 → 必读 [docs/frontend-rendering-patterns.md](docs/frontend-rendering-patterns.md)
+3. [docs/reference/agentdev-claw-product-overview.md](docs/reference/agentdev-claw-product-overview.md) — 产品总览
+4. [docs/reference/glossary.md](docs/reference/glossary.md) — 领域词汇表：术语 + Avoid 负面清单，改代码前先对齐用词
+5. [docs/reference/dev-context-index.md](docs/reference/dev-context-index.md) — AgentDev 框架与 Claw 的跨仓库连接关系速查
+6. 涉及前端 UI 渲染、workspace 切换、数据加载时序 → 必读 [docs/reference/frontend-rendering-patterns.md](docs/reference/frontend-rendering-patterns.md)
 7. 架构决策记录（ADR），改动相关领域前先读对应篇（[docs/adr/](docs/adr/)）：
    - 0001 导出面治理：Runtime 双类型拆分与按引用导出
    - 0002 Session Continuity as Transformation：会话接续的框架化原则
@@ -151,7 +151,7 @@ dev agent 注入技能：`agent-studio-workflow`（权威工作流）+ `agentdev
 
 ## ACP 适配层
 
-独立 stdio 进程（`claw acp coder`），只做协议转换与本机 HTTP 调用，执行权威留在 Claw server。设计见 [docs/coder-acp-adapter-design.md](docs/coder-acp-adapter-design.md) 与 ADR-0004。适配器改动只需新起子进程；server 路由改动需要重启整个 Claw 服务。
+独立 stdio 进程（`claw acp coder`），只做协议转换与本机 HTTP 调用，执行权威留在 Claw server。设计见 [docs/plans/coder-acp-adapter-design.md](docs/plans/coder-acp-adapter-design.md) 与 ADR-0004。适配器改动只需新起子进程；server 路由改动需要重启整个 Claw 服务。
 
 ## Agent 制造 → 消费链路（agent-studio → claw CLI）
 
@@ -207,13 +207,13 @@ stdio 分流（CLI 审计接口）：所有日志必须带等级；`AGENTDEV_LOG
 - **端口 1420：Claw 主前端**（用户日常看到）— `public/src/*`，静态文件不需编译，改后重启 Claw 服务生效
 - **端口 2026：DebugHub Viewer**（框架侧）— `AgentDev/src/core/viewer-html.ts` + `viewer-worker.ts`，改后需框架 build + 重启
 
-改错管线 = 白改。渲染契约、去重策略与自检清单见 [docs/frontend-rendering-patterns.md](docs/frontend-rendering-patterns.md)。
+改错管线 = 白改。渲染契约、去重策略与自检清单见 [docs/reference/frontend-rendering-patterns.md](docs/reference/frontend-rendering-patterns.md)。
 
 Inspector 数据流：Agent `buildHookInspectorSnapshot()` → IPC → ViewerWorker → API → Claw 前端 `normalizeHookInspector()`（[modules/overview-data.js](public/src/modules/overview-data.js)）→ `renderFeaturesPanel()`。陷阱：`normalizeHookInspector` 存在于两处（Claw 前端 + 框架 `viewer-html.ts`），新增 inspector snapshot 字段必须同时更新两处，否则字段在重构时被丢弃（历史上踩过）。
 
 ## 会话切换与异步渲染不变量
 
-详见 [docs/frontend-rendering-patterns.md](docs/frontend-rendering-patterns.md)。三条最易踩：
+详见 [docs/reference/frontend-rendering-patterns.md](docs/reference/frontend-rendering-patterns.md)。三条最易踩：
 
 1. `getRuntimeContextKey` 不稳定（依赖异步更新的 `allAgents`），只能作 cache key，不能作 stale check；stale check 只用同步设置的 `currentRuntimeAgentId`
 2. 切换不依赖服务端 current 状态：`switchAgent` 先乐观渲染再 `loadAgentData`，所有 URL 用显式 `agentId`；焦点只持久化到 `localStorage`

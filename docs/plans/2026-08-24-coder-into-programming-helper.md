@@ -1,6 +1,6 @@
 # coder 迁入编程小助手工作空间 — 设计共识与执行蓝图
 
-> 状态：历史设计记录；迁移结果与现行 Thread 生命周期以 [`docs/plans/work-thread-lifecycle.md`](../work-thread-lifecycle.md) 为准。
+> 状态：历史设计记录；迁移结果与现行 Thread 生命周期以 [`docs/plans/work-thread-lifecycle.md`](./work-thread-lifecycle.md) 为准。
 > 日期：2026-08-24
 
 ## 1. 背景与目标

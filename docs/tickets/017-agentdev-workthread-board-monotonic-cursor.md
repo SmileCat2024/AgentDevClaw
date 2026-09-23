@@ -1,7 +1,7 @@
 # 017 — WorkThreadBoard 单调游标修复
 
 - **仓库**：AgentDev（`D:\code\AgentDev`）
-- **决策依据**：[coder-acp-adapter-design.md](../coder-acp-adapter-design.md) §9.1；grill Q26-A；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)（拒绝 server 侧补偿层的理由）
+- **决策依据**：[coder-acp-adapter-design.md](../plans/coder-acp-adapter-design.md) §9.1；grill Q26-A；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)（拒绝 server 侧补偿层的理由）
 - **类型**：框架缺陷修复（增量消费正确性）；ACP 批次的正确性前置
 - **前置**：无（可与 018 并行）
 

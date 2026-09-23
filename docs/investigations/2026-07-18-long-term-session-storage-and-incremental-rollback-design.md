@@ -1569,9 +1569,9 @@ UI 的 rollback action 应由 capability 驱动：只有框架确认某条 local
 | `docs/plans/2026-06-15-agent-checkpoint-rollback-continuation-design.md` | logical envelope、barrier、外部副作用、被否决的 live-stack rollback |
 | `docs/plans/2026-06-18-context-mutation-session-integrity-investigation.md` | message history ≠ call history；handoff/branch/auto-save 完整性 |
 | `docs/plans/2026-06-18-rollback-compact-diagnostic-notes.md` | rollback/partial compact 调用链与历史排障 |
-| `docs/investigations/session-index-performance-investigation.md` | session 写模型与 index 读模型分离；旧结论适用范围 |
+| `docs/investigations/2026-06-17-session-index-performance-investigation.md` | session 写模型与 index 读模型分离；旧结论适用范围 |
 | `docs/audits/session-runtime-state-audit.md` | session file、index record、workspace state、managed runtime 分层 |
-| `docs/investigations/compact-product-semantics-mismatch.md` | exploration summary 与 handoff context 的产品语义差异 |
+| `docs/investigations/2026-05-22-compact-product-semantics-mismatch.md` | exploration summary 与 handoff context 的产品语义差异 |
 | `docs/plans/context-compaction-successor-session-notes.md` | Raw Log / Runtime State / Prompt View 与 Exact Restore / Compacted Resume 区分 |
 
 ---

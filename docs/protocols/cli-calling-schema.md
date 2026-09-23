@@ -4,7 +4,7 @@
 
 > **工作空间 coder**：编程小助手工作空间内的会话身份（`agentId=programming-helper` + `sessionType=coder`），以 **线程（thread）** 为执行承接单位，经 `claw threads` 命令族调用/审计（见 §10）。
 >
-> 权威补充文档：[`agents/README.md`](/D:/code/AgentDevClaw/agents/README.md)。修改 CLI 行为时必须同步更新该文档与本文档。
+> 权威补充文档：[`agents/README.md`](../../agents/README.md)。修改 CLI 行为时必须同步更新该文档与本文档。
 
 ---
 

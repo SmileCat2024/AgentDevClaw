@@ -2,7 +2,7 @@
 
 以 Agent 为中心的可扩展工作台（产品壳层）与 AgentDev 框架的共享运行时协议术语。
 本文件只收本上下文特有的概念，不收通用编程概念。
-工程开发术语（仓库结构、开发形态、渲染管线等）见 [docs/glossary.md](docs/glossary.md)。
+工程开发术语（仓库结构、开发形态、渲染管线等）见 [docs/reference/glossary.md](docs/reference/glossary.md)。
 
 ## Language
 

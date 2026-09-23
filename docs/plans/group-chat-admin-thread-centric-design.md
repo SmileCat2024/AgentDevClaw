@@ -2,7 +2,7 @@
 
 > 状态：详细设计草案，不包含代码改动  
 > 日期：2026-07-12  
-> 前置审计：[group-chat-admin-thread-awareness-audit.md](./group-chat-admin-thread-awareness-audit.md)  
+> 前置审计：[group-chat-admin-thread-awareness-audit.md](../audits/group-chat-admin-thread-awareness-audit.md)  
 > 关联设计：[group-chat-session-lineage-design.md](./group-chat-session-lineage-design.md)、[group-chat-admin-context-injection-design.md](./group-chat-admin-context-injection-design.md)
 
 ## 1. 设计命题

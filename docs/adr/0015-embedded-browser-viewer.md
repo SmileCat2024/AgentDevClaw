@@ -203,5 +203,5 @@ URL）——防本机其他进程无授权观看。token 机制复用
 - ADR-0006 本地显式资源寻址：viewer 端口与 token URL 遵循显式寻址；
   CDP 端口动态分配是 Chromium 标准机制的例外（实际端口经
   DevToolsActivePort 显式读取）。
-- 前端接入将触碰 `docs/frontend-rendering-patterns.md` 的 inspector 字段
+- 前端接入将触碰 `docs/reference/frontend-rendering-patterns.md` 的 inspector 字段
   同步纪律（两处 normalizeHookInspector）。

@@ -1,7 +1,7 @@
 # 021 — ACP adapter 可观测性与黑盒 client 排障
 
 - **仓库**：AgentDevClaw（`D:\code\AgentDevClaw`）
-- **决策依据**：[coder-acp-adapter-design.md](../coder-acp-adapter-design.md) §4 / §6 / §8 / §12；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)
+- **决策依据**：[coder-acp-adapter-design.md](../plans/coder-acp-adapter-design.md) §4 / §6 / §8 / §12；[ADR-0004](../adr/0004-acp-adapter-external-stdio-process.md)
 - **类型**：adapter 诊断能力（通用、低侵入）
 - **前置**：019（adapter 本体）；可与 020 并行
 

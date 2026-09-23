@@ -2,7 +2,7 @@
 
 日期：2026-09-13
 状态：已接受（P1 待实施）
-取代：`docs/feature-metadata.md` 所描述的 `agentdev-feature.json`（schemaVersion 1）规范地位
+取代：`docs/protocols/feature-metadata.md` 所描述的 `agentdev-feature.json`（schemaVersion 1）规范地位
 
 ## 背景与问题
 

@@ -1,5 +1,7 @@
 # Feature 元数据说明
 
+> **状态：规范地位已被取代** — [ADR-0017](../adr/0017-feature-manifest-and-registry.md) 已裁决元数据并入 `package.json`（Feature Manifest v2 + 宿主侧 Feature Registry），本文描述的 `agentdev-feature.json`（schemaVersion 1）不再是演进方向。v1 在 v2 完全落地前仍在运行，本文保留作 v1 行为参考。
+
 ## 背景
 
 AgentDevClaw 当前引入了一个本地 Feature 仓库概念：项目内部维护一组已经打包完成的 `.tgz` 包，首页中的 “Feature 仓库” 工作空间负责扫描这些包并展示信息。

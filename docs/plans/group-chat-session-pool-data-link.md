@@ -2,7 +2,7 @@
 
 > **状态**：已落地（2026-06-26 修复态势感知链路断裂、运行状态判定、popover 稳定性等问题）
 > **定位**：群聊工作空间中"会话池"概念的权威数据链路参考。后续修改态势感知面板、成员 popover、中断控制等功能前必读。
-> **关联文档**：[group-chat-command-center-design.md](./group-chat-command-center-design.md)、[investigations/2026-06-22-group-chat-investigation-and-ui-refactor.md](./investigations/2026-06-22-group-chat-investigation-and-ui-refactor.md)
+> **关联文档**：[group-chat-command-center-design.md](./group-chat-command-center-design.md)、[investigations/2026-06-22-group-chat-investigation-and-ui-refactor.md](../investigations/2026-06-22-group-chat-investigation-and-ui-refactor.md)
 
 ---
 

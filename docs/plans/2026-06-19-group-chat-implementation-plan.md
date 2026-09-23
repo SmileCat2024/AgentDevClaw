@@ -2,7 +2,7 @@
 
 > **状态**：实施中
 > **日期**：2026-06-19（初版），2026-06-19（修订：简化 Phase 1 方向）
-> **前置文档**：[group-chat-command-center-design.md](../group-chat-command-center-design.md)
+> **前置文档**：[group-chat-command-center-design.md](./group-chat-command-center-design.md)
 > **当前进展**：Phase 0 完成（Identity Registry + finishReason），UI Demo 已落地（mock 数据），Phase 1 启动中
 
 ---

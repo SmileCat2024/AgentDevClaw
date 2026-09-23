@@ -30,7 +30,7 @@
 
 ### 第 1 份
 
-文档：[2026-05-29-dispatch-recovery-hardening-guide.md](D:/code/AgentDevClaw/docs/plans/2026-05-29-dispatch-recovery-hardening-guide.md)
+文档：[2026-05-29-dispatch-recovery-hardening-guide.md](./2026-05-29-dispatch-recovery-hardening-guide.md)
 
 目标：
 - 修掉当前最危险的 dispatch 状态机问题
@@ -41,7 +41,7 @@
 
 ### 第 2 份
 
-文档：[2026-05-29-runtime-inbox-foundation-guide.md](D:/code/AgentDevClaw/docs/plans/2026-05-29-runtime-inbox-foundation-guide.md)
+文档：[2026-05-29-runtime-inbox-foundation-guide.md](./2026-05-29-runtime-inbox-foundation-guide.md)
 
 目标：
 - 引入统一 `CallEnvelope` / `RuntimeInbox` 数据模型
@@ -52,7 +52,7 @@
 
 ### 第 3 份
 
-文档：[2026-05-29-call-arbiter-migration-guide.md](D:/code/AgentDevClaw/docs/plans/2026-05-29-call-arbiter-migration-guide.md)
+文档：[2026-05-29-call-arbiter-migration-guide.md](./2026-05-29-call-arbiter-migration-guide.md)
 
 目标：
 - 把 runtime 的唯一 `onCall()` 入口收敛到 arbiter
@@ -63,7 +63,7 @@
 
 ### 第 4 份
 
-文档：[2026-05-29-im-callfinish-unification-guide.md](D:/code/AgentDevClaw/docs/plans/2026-05-29-im-callfinish-unification-guide.md)
+文档：[2026-05-29-im-callfinish-unification-guide.md](./2026-05-29-im-callfinish-unification-guide.md)
 
 目标：
 - 让 QQ / 微信从“直接 onCall 回调回复”切到“订阅 callfinish”
@@ -74,7 +74,7 @@
 
 ### 第 5 份
 
-文档：[2026-05-29-integration-verification-guide.md](D:/code/AgentDevClaw/docs/plans/2026-05-29-integration-verification-guide.md)
+文档：[2026-05-29-integration-verification-guide.md](./2026-05-29-integration-verification-guide.md)
 
 目标：
 - 做集成验证、边界场景验证、回归核查

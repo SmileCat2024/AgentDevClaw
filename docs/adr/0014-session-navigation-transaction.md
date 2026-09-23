@@ -154,6 +154,6 @@ consistency / sidebar-operations / frontend-core-helpers），行为不变的
 - ADR-0010 侧栏统一投影：本 ADR 处理投影之外的导航行为层。
 - ADR-0011/0012 远程写适配与历史呈现：远程命名空间身份解析是
   resolveNavigationIdentity 的一部分。
-- `docs/frontend-rendering-patterns.md` §"会话切换与异步渲染不变量"：
+- `docs/reference/frontend-rendering-patterns.md` §"会话切换与异步渲染不变量"：
   三条不变量（getRuntimeContextKey 只作 cache key、乐观渲染先行、
   runtimeId 优先寻址）全部保留，事务在其上封装。

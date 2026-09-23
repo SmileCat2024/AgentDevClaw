@@ -287,7 +287,7 @@ TypeScript SDK（`D:\GithubDownload\agent-client-protocol` /
 `typescript-sdk`）、官方 Codex 适配 `D:\GithubDownload\codex-acp` 三层结构、
 Claw thread 事件链路 / ViewerWorker interrupt 协议 / WorkThreadBoard 裁剪
 行为源码核查。完整设计见
-[coder-acp-adapter-design.md](../coder-acp-adapter-design.md)。
+[coder-acp-adapter-design.md](../plans/coder-acp-adapter-design.md)。
 
 ### 已确认决策
 
@@ -602,7 +602,7 @@ coder 子代理散装 bash 调度的收编需求。定位裁决：**非沙箱**�
 ## 批次 11：输入区 Composer 常驻化（036）（2026-09-01）
 
 来源：输入区现状调查（19 处重建触发点、四层对抗性补丁、双模板重复）
-+ 行为契约反推。行为契约文档 [input-area-behavioral-contract.md](../input-area-behavioral-contract.md)
++ 行为契约反推。行为契约文档 [input-area-behavioral-contract.md](../protocols/input-area-behavioral-contract.md)
 为唯一验收基线。
 
 ### 本批 tickets

@@ -664,4 +664,4 @@ restoreState(s: any) { this._injected = Boolean(s?.injected); }
 | `docs/plans/2026-06-18-rollback-compact-diagnostic-notes.md` | rollback + partial compact 的诊断记录 |
 | `docs/plans/context-compaction-structured-output-design.md` | 上下文压缩结构化输出设计 |
 | `docs/plans/context-compaction-successor-session-notes.md` | 压缩续接会话的前期讨论备忘 |
-| `docs/frontend-rendering-patterns.md` | 前端渲染机制与去重策略 |
+| `docs/reference/frontend-rendering-patterns.md` | 前端渲染机制与去重策略 |

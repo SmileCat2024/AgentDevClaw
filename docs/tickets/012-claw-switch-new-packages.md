@@ -17,7 +17,7 @@ Claw 当前 27 处 `from 'agentdev'`（agents/coder、prebuilt-agents、scripts�
 4. `use-agentdev-local` / `check:agentdev` 预检脚本适配 junction 目标变化（`node_modules/agentdev` → `node_modules/@agentdev/core`，注意 scope 目录）
 5. `workspace-creators.js` 生成模板同步新 import 形态
 6. 悬置代码处置（Claw 内部决策，随本票执行时定夺）：flow-workspace / agent-creator / feature-creator / dispatch-console 及悬置 local-features——下线或迁移 import，不阻塞切换主线
-7. 文档全量更新：CLAUDE.md（3D/3E 消费路径速查表、第 7 节构建流程、agentdev:local 语义）、agents/README.md、docs/dev-context-index.md
+7. 文档全量更新：CLAUDE.md（3D/3E 消费路径速查表、第 7 节构建流程、agentdev:local 语义）、agents/README.md、docs/reference/dev-context-index.md
 8. `npm test` 全量 + 编程小助手 / qqbot / agent-studio 冒烟
 
 ## 验收标准

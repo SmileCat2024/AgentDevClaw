@@ -4,8 +4,8 @@
 > **状态**：方案已确认，待实施
 > **参与**：产品方向讨论 + 架构推演
 > **前置文档**：
-> - [group-chat-command-center-design.md](../group-chat-command-center-design.md) — 群聊指挥台产品设计主文档
-> - [group-chat-session-pool-data-link.md](../group-chat-session-pool-data-link.md) — 会话池数据链路
+> - [group-chat-command-center-design.md](./group-chat-command-center-design.md) — 群聊指挥台产品设计主文档
+> - [group-chat-session-pool-data-link.md](./group-chat-session-pool-data-link.md) — 会话池数据链路
 > - [2026-06-22-admin-layered-memory-design.md](./2026-06-22-admin-layered-memory-design.md) — 管理员分层记忆模型
 
 ---
@@ -844,7 +844,7 @@ let _viewerAutoSaveTimer = null;
 | 群聊产品设计主文档 | `docs/plans/group-chat-command-center-design.md` | 产品哲学、核心概念、@mention 语义、演进路径 |
 | 会话池数据链路 | `docs/plans/group-chat-session-pool-data-link.md` | 态势感知、成员 popover、中断控制、会话解析 |
 | 管理员分层记忆 | `docs/plans/2026-06-22-admin-layered-memory-design.md` | 群记忆组装、catch-up 机制、GROUP.md 注入 |
-| 前端渲染机制 | `docs/frontend-rendering-patterns.md` | 会话切换、去重策略、异步渲染约束 |
+| 前端渲染机制 | `docs/reference/frontend-rendering-patterns.md` | 会话切换、去重策略、异步渲染约束 |
 
 ---
 

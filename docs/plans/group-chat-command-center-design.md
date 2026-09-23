@@ -3,7 +3,7 @@
 > **状态**：设计探索阶段（核心群聊基础设施 + 管理员上下文增强已落地）
 > **日期**：2026-06-17（2026-06-23 更新实现状态）
 > **参与**：产品方向讨论与架构推演
-> **关联文档**：[agentdev-claw-product-overview.md](./agentdev-claw-product-overview.md)、[flow-layer-design.md](./flow-layer-design.md)、[flow-feature-mode-dual-surface-design-plan.md](./flow-feature-mode-dual-surface-design-plan.md)
+> **关联文档**：[agentdev-claw-product-overview.md](../reference/agentdev-claw-product-overview.md)、[flow-layer-design.md](./flow-layer-design.md)、[flow-feature-mode-dual-surface-design-plan.md](./flow-feature-mode-dual-surface-design-plan.md)
 
 ---
 

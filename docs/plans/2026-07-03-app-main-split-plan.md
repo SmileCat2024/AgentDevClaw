@@ -1296,7 +1296,7 @@ v1 目标"瘦身至 ~1,500 行"已达成。**拆分结束，不再继续。**
 - 剩余内容即各 Phase 计划中标注"永久保留在 main"的域（L/U/X/AJ + 导航入口），边界已最干净，不再拆分。
 - 可选后续（暂不建议主动做）：
   - poll 主循环拆出为 `modules/polling.js` 可将 main 降到 ~790 行，但系统心跳与几乎所有域有交互，跨文件后调试链路变长，收益/成本比不佳。历次计划均将 poll 视为不可压缩核心，维持现状。
-  - `runPollCycle` 内有两段近似重复的"workspace session 增量刷新"块（无 runtime 分支 ~45 行、有 runtime 分支 ~62 行），下次触碰该区域时可顺手合并为单一 helper。属于行为等价重构，需按 `docs/frontend-rendering-patterns.md` 的渲染契约验证。
+  - `runPollCycle` 内有两段近似重复的"workspace session 增量刷新"块（无 runtime 分支 ~45 行、有 runtime 分支 ~62 行），下次触碰该区域时可顺手合并为单一 helper。属于行为等价重构，需按 `docs/reference/frontend-rendering-patterns.md` 的渲染契约验证。
 
 ### 12.4 风险点交棒
 

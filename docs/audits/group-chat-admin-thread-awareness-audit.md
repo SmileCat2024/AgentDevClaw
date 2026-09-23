@@ -3,10 +3,10 @@
 > 状态：调查与设计建议，不包含代码改动  
 > 日期：2026-07-12  
 > 关联文档：
-> - [group-chat-admin-context-injection-design.md](./group-chat-admin-context-injection-design.md)
-> - [group-chat-session-lineage-design.md](./group-chat-session-lineage-design.md)
-> - [group-chat-session-pool-data-link.md](./group-chat-session-pool-data-link.md)
-> - [group-chat-command-center-design.md](./group-chat-command-center-design.md)
+> - [group-chat-admin-context-injection-design.md](../plans/group-chat-admin-context-injection-design.md)
+> - [group-chat-session-lineage-design.md](../plans/group-chat-session-lineage-design.md)
+> - [group-chat-session-pool-data-link.md](../plans/group-chat-session-pool-data-link.md)
+> - [group-chat-command-center-design.md](../plans/group-chat-command-center-design.md)
 
 ## 1. 本次审计要回答的问题
 

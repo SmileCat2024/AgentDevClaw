@@ -40,7 +40,7 @@
 
 如确实需要补文档，可额外更新：
 
-- [docs/plans/dispatch-system-design.md](D:/code/AgentDevClaw/docs/plans/dispatch-system-design.md)
+- [docs/plans/dispatch-system-design.md](./dispatch-system-design.md)
 
 但不要主动改：
 

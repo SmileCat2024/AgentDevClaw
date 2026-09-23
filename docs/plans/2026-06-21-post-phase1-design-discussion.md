@@ -3,7 +3,7 @@
 > **状态**：设计讨论文档（非执行计划）
 > **日期**：2026-06-21
 > **前置文档**：
-> - [group-chat-command-center-design.md](../group-chat-command-center-design.md) — 产品概念设计
+> - [group-chat-command-center-design.md](./group-chat-command-center-design.md) — 产品概念设计
 > - [2026-06-19-group-chat-implementation-plan.md](./2026-06-19-group-chat-implementation-plan.md) — 实施规划
 > - [2026-06-20-group-chat-closed-loop-execution.md](./2026-06-20-group-chat-closed-loop-execution.md) — 闭环执行文档
 > **本文档定位**：记录 Phase 1 完成（含闭环）后，群聊系统下一步演进的设计决策、被否决的方案、核心理念和用户故事。不是执行计划，而是决策沉淀。
