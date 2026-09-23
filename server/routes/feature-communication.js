@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getAgentRuntime } from '../shared/agent-access.js';
+import { isAuthEnabled, resolveRequestAuth } from '../auth.js';
 import { FeatureCommunicationStore, normalizeFeatureCommunicationTarget } from '../feature-communication-store.js';
 
 export const featureCommunicationStore = new FeatureCommunicationStore();
@@ -22,7 +23,10 @@ function requireDeclaredTarget(store, target, res) {
 
 export function setupFeatureCommunicationRoutes(app, express, { communicationStore = featureCommunicationStore, requestTimeoutMs } = {}) {
   app.post('/protoclaw/feature-comms/declare', express.json({ limit: '16kb' }), async (req, res) => {
-    if (req.auth?.kind !== 'internal') return res.status(403).json({ ok: false, code: 'internal_only' });
+    // Internal auth is verified from the request itself (resolveRequestAuth), so
+    // runtime calls keep working when host auth is disabled and the global
+    // middleware never populates req.auth.
+    if (resolveRequestAuth(req)?.kind !== 'internal') return res.status(403).json({ ok: false, code: 'internal_only' });
     const body = req.body || {};
     let target;
     try {
@@ -39,7 +43,7 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
   });
 
   app.get('/protoclaw/feature-comms/channels', (req, res) => {
-    if (req.auth?.kind !== 'session') return res.status(401).end();
+    if (isAuthEnabled() && resolveRequestAuth(req)?.kind !== 'session') return res.status(401).end();
     const agentId = String(req.query?.agentId || '').trim();
     const sessionId = String(req.query?.sessionId || '').trim();
     if (!agentId || !sessionId) return badRequest(res, 'agentId and sessionId are required');
@@ -47,7 +51,7 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
   });
 
   app.post('/protoclaw/feature-comms/publish', express.json({ limit: '256kb' }), async (req, res) => {
-    if (req.auth?.kind !== 'internal') return res.status(403).json({ ok: false, code: 'internal_only' });
+    if (resolveRequestAuth(req)?.kind !== 'internal') return res.status(403).json({ ok: false, code: 'internal_only' });
     const body = req.body || {};
     let target;
     try {
@@ -72,7 +76,10 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
   });
 
   app.get('/protoclaw/feature-comms/stream', (req, res) => {
-    if (req.auth?.kind !== 'session') return res.status(401).end();
+    // Session requirement applies only when host auth is enabled; with auth
+    // disabled the middleware never sets req.auth and every browser session is
+    // trusted (same posture as the rest of the protected surface).
+    if (isAuthEnabled() && resolveRequestAuth(req)?.kind !== 'session') return res.status(401).end();
     let target;
     try { target = normalizeFeatureCommunicationTarget(req.query || {}); }
     catch (error) { return badRequest(res, error.message); }
@@ -122,7 +129,7 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
   });
 
   app.post('/protoclaw/feature-comms/request', express.json({ limit: '128kb' }), async (req, res) => {
-    if (req.auth?.kind !== 'session') return res.status(403).json({ ok: false, code: 'user_session_required' });
+    if (isAuthEnabled() && resolveRequestAuth(req)?.kind !== 'session') return res.status(403).json({ ok: false, code: 'user_session_required' });
     const body = req.body || {};
     if (typeof body.requestType !== 'string' || !body.requestType.trim()) return badRequest(res, 'requestType is required');
     let target;

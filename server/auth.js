@@ -308,6 +308,17 @@ function requestHasSameOrigin(req) {
   return normalizedHost(url.host, url.protocol) === normalizedHost(expectedHost, url.protocol);
 }
 
+export function isAuthEnabled() {
+  return state.enabled === true;
+}
+
+// 与 authMiddleware 同一判定源：internal bearer token 或 session cookie。路由级
+// 显式鉴权用此函数重验，不依赖中间件是否已写入 req.auth（鉴权未启用时
+// 中间件直接放行，req.auth 为 undefined，路由的显式检查必须自行判定）。
+export function resolveRequestAuth(req) {
+  return authenticateInternal(req) || authenticateSession(req);
+}
+
 export function authMiddleware(req, res, next) {
   const pathname = String(req.path || req.url || '').split('?')[0];
   if (!state.enabled || !isProtectedPath(pathname) || isAuthPublicPath(pathname)) {
@@ -441,6 +452,13 @@ export function getInternalAuthToken() {
 
 export function getAuthStateForTest() {
   return { ...publicState() };
+}
+
+// In-memory toggle for tests: never persists, always restore in finally.
+export function setAuthEnabledForTest(enabled) {
+  const previous = state.enabled;
+  state.enabled = enabled === true;
+  return previous;
 }
 
 export const AUTH_PASSWORD_MIN_LENGTH = PASSWORD_MIN_LENGTH;
