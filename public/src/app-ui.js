@@ -1228,17 +1228,24 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
   // ── 根据表面类型控制 rail button 可见性 ──
   const isWorkGroup = !!(agent && agent.id === 'work-group');
   const inChat = isChatSurfaceActive(agent);
-  // 调试类面板（workspace/monitor/hooks/inspector/logs/mcp）只在 AI 对话时显示
-  // resources/viewer/settings 面板只在群聊工作空间显示
+  const availablePanelIds = new Set(window.ClawPanels.getAvailable({
+    agentId: agent?.id || null,
+    surface: isWorkGroup ? 'workspace' : (inChat ? 'chat' : 'workspace'),
+  }).map((panel) => panel.id));
+  let activePanelBecameUnavailable = false;
   railButtons.forEach(btn => {
-    const panel = btn.dataset.panel;
-    if (!panel) return; // 工具按钮（语言/主题/设置）始终显示
-    if (panel === 'resources' || panel === 'viewer' || panel === 'settings' || panel === 'threads') {
-      btn.style.display = isWorkGroup ? '' : 'none';
-    } else {
-      btn.style.display = inChat ? '' : 'none';
+    const panelId = btn.dataset.panel;
+    if (!panelId) return; // 工具按钮（语言/主题/设置）始终显示
+    const available = availablePanelIds.has(panelId);
+    btn.style.display = available ? '' : 'none';
+    if (!available && activeFeaturePanel === panelId) {
+      activeFeaturePanel = null;
+      activePanelBecameUnavailable = true;
     }
   });
+  if (activePanelBecameUnavailable && typeof renderFeaturePanel === 'function') {
+    renderFeaturePanel();
+  }
   // 离开 group chat workspace 时清理状态
   if (!isWorkGroup) {
     if (activeFeaturePanel === 'resources' || activeFeaturePanel === 'viewer' || activeFeaturePanel === 'settings' || activeFeaturePanel === 'threads') activeFeaturePanel = null;
@@ -1461,64 +1468,83 @@ function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
 
 // ── Feature Panels 注册 ──────────────────────────────────────────
 
-const featurePanels = {
-  workspace: {
-    title: () => t('panel_structure'),
-    render: () => renderStructurePanel(),
-  },
-  plan: {
-    title: () => t('panel_plan'),
-    render: () => renderPlanPanel(),
-  },
-  git: {
-    title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
-    render: () => window.GitPanel ? window.GitPanel.render() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-  },
-  monitor: {
-    title: () => t('panel_monitor'),
-    render: () => renderMonitorPanel(),
-  },
-  hooks: {
-    title: () => t('panel_features'),
-    render: () => renderFeaturesPanel(),
-  },
-  inspector: {
-    title: () => t('panel_reverse_hooks'),
-    render: () => renderReverseHooksPanel(),
-  },
-  logs: {
-    title: () => t('panel_logs'),
-    render: () => renderLogsPanel(),
-  },
-  preflight: {
-    title: () => '装配预检',
-    render: () => renderPreflightPanel(),
-  },
-  mcp: {
-    title: () => t('panel_mcp'),
-    render: () => renderMcpPanel(),
-  },
-  genui: {
-    title: () => '交互页面',
-    render: () => window.GenUIPanel ? window.GenUIPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-    preserveOnReRender: true,
-  },
-  'session-controls': {
-    title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
-    render: () => window.SessionControlsPanel
-      ? window.SessionControlsPanel.render()
-      : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-  },
+const featurePanels = Object.create(null);
 
-  settings: {
-    title: () => '群聊设置',
-    render: () => window._wgGetSettingsHtml ? window._wgGetSettingsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-  },
-  threads: {
-    title: () => '工作线程',
-    render: () => window._wgGetThreadsHtml ? window._wgGetThreadsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-  },
-};
+function registerFeaturePanel(panelId, panel) {
+  const registered = window.ClawPanels.register(panelId, panel);
+  featurePanels[registered.id] = registered;
+  return registered;
+}
+window.registerFeaturePanel = registerFeaturePanel;
+
+registerFeaturePanel('workspace', {
+  when: { surfaces: ['chat'] },
+  title: () => t('panel_structure'),
+  render: () => renderStructurePanel(),
+});
+registerFeaturePanel('plan', {
+  when: { surfaces: ['chat'] },
+  title: () => t('panel_plan'),
+  render: () => renderPlanPanel(),
+});
+registerFeaturePanel('git', {
+  when: { surfaces: ['chat'] },
+  title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
+  render: () => window.GitPanel ? window.GitPanel.render() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+});
+registerFeaturePanel('monitor', {
+  when: { surfaces: ['chat'] },
+  title: () => t('panel_monitor'),
+  render: () => renderMonitorPanel(),
+});
+registerFeaturePanel('hooks', {
+  when: { surfaces: ['chat'] },
+  title: () => t('panel_features'),
+  render: () => renderFeaturesPanel(),
+});
+registerFeaturePanel('inspector', {
+  when: { surfaces: ['chat'] },
+  title: () => t('panel_reverse_hooks'),
+  render: () => renderReverseHooksPanel(),
+});
+registerFeaturePanel('logs', {
+  when: { surfaces: ['chat'] },
+  title: () => t('panel_logs'),
+  render: () => renderLogsPanel(),
+});
+registerFeaturePanel('preflight', {
+  when: { surfaces: ['chat'] },
+  title: () => '装配预检',
+  render: () => renderPreflightPanel(),
+});
+registerFeaturePanel('mcp', {
+  when: { surfaces: ['chat'] },
+  title: () => t('panel_mcp'),
+  render: () => renderMcpPanel(),
+});
+registerFeaturePanel('genui', {
+  when: { surfaces: ['chat'] },
+  title: () => '交互页面',
+  render: () => window.GenUIPanel ? window.GenUIPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+  preserveOnReRender: true,
+});
+registerFeaturePanel('session-controls', {
+  when: { surfaces: ['chat'] },
+  title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
+  render: () => window.SessionControlsPanel
+    ? window.SessionControlsPanel.render()
+    : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+});
+registerFeaturePanel('settings', {
+  title: () => '群聊设置',
+  when: { agentIds: ['work-group'] },
+  render: () => window._wgGetSettingsHtml ? window._wgGetSettingsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+});
+registerFeaturePanel('threads', {
+  title: () => '工作线程',
+  when: { agentIds: ['work-group'] },
+  render: () => window._wgGetThreadsHtml ? window._wgGetThreadsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+});
 
 // Sidebar Toggle + narrow-width drawer backdrop
 let _sidebarBackdrop = null;

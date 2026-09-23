@@ -365,20 +365,21 @@
   }
 
   // ════════════════════════════════════════════════════════════════
-  // 面板注册（注入 featurePanels）
-  // ════════════════════════════════════════════════════════════════
+  // 面板注册（由 Claw 面板宿主管理）
+  // ═══════════════════════════════════════════════════════════════
 
   function registerResourcesViewerPanels() {
-    if (typeof featurePanels !== 'undefined' && featurePanels) {
-      featurePanels.resources = {
-        title: () => '资料',
-        render: () => renderResourcesPanel(),
-      };
-      featurePanels.viewer = {
-        title: () => '文档',
-        render: () => renderViewerPanel(),
-      };
-    }
+    if (typeof window.registerFeaturePanel !== 'function') return;
+    window.registerFeaturePanel('resources', {
+      when: { agentIds: ['work-group'] },
+      title: () => '资料',
+      render: () => renderResourcesPanel(),
+    });
+    window.registerFeaturePanel('viewer', {
+      when: { agentIds: ['work-group'] },
+      title: () => '文档',
+      render: () => renderViewerPanel(),
+    });
   }
 
   // ════════════════════════════════════════════════════════════════
