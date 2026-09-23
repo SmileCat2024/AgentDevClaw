@@ -4,12 +4,14 @@
  * 数据链路（ADR-0018 首个真实接入）：
  *   BgRegistry 事件 → ShellBgCommsFeature（shell-bg-comms feature）
  *     → /protoclaw/feature-comms/publish（server store）
- *     → 本面板经 /protoclaw/feature-comms/stream（SSE）订阅渲染；
- *   kill / 输出查看经 /protoclaw/feature-comms/request → runtime
- *   onHostRequest（list / status / kill）。
+ *     → 本面板经 /protoclaw/feature-comms/stream（SSE）订阅渲染。
  *
- * 面板是尽力而为的镜像面：通道不可用时降级为空态提示，任务状态真值
- * 仍是 bash_bg / bg_status。
+ * 面板心智：终端式小卡片，全自动——打开即订阅，事件实时推送，输出
+ * 尾巴随事件下发（feature 端镜像附带），无任何按钮。终止等交互待
+ * 功能定稿后再上；任务状态真值仍是 bash_bg / bg_status。
+ *
+ * 视觉对齐右侧面板既有设计语言（feature-panel-section 卡片、
+ * bash-progress 系列观感、项目等宽字体栈与状态色变量）。
  *
  * 宿主全局依赖（debug-panel-host 契约）：
  *   - focusedAgentId, currentRuntimeAgentId, currentLanguage, activeFeaturePanel
@@ -21,20 +23,21 @@
   const FEATURE_ID = 'shell-bg-comms';
   const CHANNEL_ID = 'shell-bg';
   const REFRESH_SESSION_WATCH_MS = 2_000;
+  const ELAPSED_TICK_MS = 1_000;
+  /** 输出区距底不超过该值视为「跟随底部」，重绘后继续贴底；上翻阅读时不打扰。 */
+  const FOLLOW_THRESHOLD_PX = 28;
 
-  /** taskId -> BgTaskSnapshot（通道事件 + list 请求合并） */
+  /** taskId -> 任务快照（通道事件 + list 合并，含 outputTail） */
   const tasks = new Map();
-  /** taskId -> 展开的输出尾部文本（点"输出"按需经 status 请求拉取） */
-  const outputTails = new Map();
   const state = {
     status: 'idle', // idle | connecting | live | unavailable | closed
-    message: '',
     agentId: '',
     sessionId: '',
   };
   let source = null;
   let sessionWatchTimer = null;
-  let requestSeq = 0;
+  let elapsedTimer = null;
+  let lastHtml = '';
 
   function t(zh, en) {
     return (typeof currentLanguage === 'string' ? currentLanguage : 'zh') === 'zh' ? zh : en;
@@ -63,7 +66,7 @@
     return { agentId, sessionId };
   }
 
-  // ── 服务端请求面 ─────────────────────────────────────────────────
+  // ── 服务端请求面（仅初始快照 / resync 对账用；实时更新走事件流）───
 
   async function channelRequest(requestType, payload) {
     const addressing = currentAddressing();
@@ -89,50 +92,59 @@
 
   // ── 渲染 ─────────────────────────────────────────────────────────
 
-  function statusLabel(task) {
+  function statusText(task) {
     if (task.status === 'running') {
-      return task.readyFired ? t('运行（已就绪）', 'Running (ready)') : t('运行中', 'Running');
+      return task.readyFired ? t('运行 · 已就绪', 'running · ready') : t('运行', 'running');
     }
-    if (task.status === 'done') return `${t('完成', 'Done')}(${task.exitCode ?? '?'})`;
-    if (task.status === 'killed') return t('已终止', 'Killed');
-    if (task.status === 'terminated') return t('被打断', 'Terminated');
-    return escapeHtml(task.status);
+    if (task.status === 'done') return `${t('完成', 'done')} · exit ${task.exitCode ?? '?'}`;
+    if (task.status === 'killed') return t('已终止', 'killed');
+    if (task.status === 'terminated') return t('被打断', 'terminated');
+    return String(task.status || '');
   }
 
+  // 与 tool-progress.js 相同的紧凑时长格式（12s / 2m05s / 1h02m）
   function formatDuration(ms) {
-    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '-';
-    const sec = Math.floor(ms / 1000);
-    if (sec < 60) return `${sec}s`;
-    const min = Math.floor(sec / 60);
-    if (min < 60) return `${min}m${sec % 60}s`;
-    return `${Math.floor(min / 60)}h${min % 60}m`;
+    const totalSeconds = typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0;
+    if (totalSeconds < 60) return `${totalSeconds}s`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes < 60) {
+      return seconds > 0 ? `${minutes}m${String(seconds).padStart(2, '0')}s` : `${minutes}m`;
+    }
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h${String(minutes % 60).padStart(2, '0')}m`;
   }
 
-  function renderTaskRow(task) {
-    const running = task.status === 'running';
-    const expanded = outputTails.has(task.id);
-    const tail = outputTails.get(task.id) || '';
+  function taskDurationMs(task) {
+    if (task.status === 'running') {
+      const startedAt = Number(task.startedAt);
+      if (Number.isFinite(startedAt) && startedAt > 0) return Date.now() - startedAt;
+      return null;
+    }
+    const duration = Number(task.durationMs);
+    return Number.isFinite(duration) && duration > 0 ? duration : null;
+  }
+
+  function renderTaskCard(task) {
+    const duration = taskDurationMs(task);
+    const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
     return `
-      <div class="bgp-task" data-bgp-task="${escapeHtml(task.id)}">
-        <div class="bgp-task-main">
+      <div class="bgp-card" data-bgp-task="${escapeHtml(task.id)}">
+        <div class="bgp-card-head">
           <span class="bgp-dot bgp-dot-${escapeHtml(task.status)}"></span>
-          <span class="bgp-command" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</span>
-          <span class="bgp-meta">${statusLabel(task)} · ${formatDuration(task.durationMs)}</span>
-          <span class="bgp-actions">
-            <button class="bgp-btn" data-bgp-action="output" data-bgp-id="${escapeHtml(task.id)}">${expanded ? t('收起', 'Hide') : t('输出', 'Output')}</button>
-            ${running ? `<button class="bgp-btn bgp-btn-danger" data-bgp-action="kill" data-bgp-id="${escapeHtml(task.id)}">${t('终止', 'Kill')}</button>` : ''}
-          </span>
+          <span class="bgp-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</span>
+          <span class="bgp-meta">${escapeHtml(statusText(task))}${duration !== null ? ` · ${formatDuration(duration)}` : ''}</span>
         </div>
-        ${expanded ? `<pre class="bgp-output">${tail ? escapeHtml(tail) : t('（暂无输出）', '(no output)')}</pre>` : ''}
+        ${tail ? `<pre class="bgp-tail" data-bgp-tail="${escapeHtml(task.id)}">${escapeHtml(tail)}</pre>` : ''}
       </div>`;
   }
 
-  function statusLineHtml() {
+  function linkStatusHtml() {
     switch (state.status) {
-      case 'live': return `<span class="bgp-live-dot"></span>${t('实时', 'Live')}`;
-      case 'connecting': return t('连接中…', 'Connecting…');
-      case 'closed': return t('会话通道已关闭', 'Session channel closed');
-      case 'unavailable': return t('当前会话无实时通道', 'No live channel for this session');
+      case 'live': return `<span class="bgp-link-dot"></span>${t('实时', 'live')}`;
+      case 'connecting': return t('连接中', 'connecting');
+      case 'closed': return t('通道已关闭', 'channel closed');
+      case 'unavailable': return t('当前会话无实时通道', 'no live channel');
       default: return '';
     }
   }
@@ -140,62 +152,92 @@
   function getHtml() {
     const sorted = Array.from(tasks.values())
       .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
-    const rows = sorted.map(renderTaskRow).join('');
-    const empty = sorted.length === 0
+    const cards = sorted.map(renderTaskCard).join('');
+    const empty = sorted.length === 0 && state.status === 'live'
       ? `<div class="feature-panel-empty"><div>${t('暂无后台任务（bash_bg 启动的任务会出现在这里）', 'No background tasks (bash_bg tasks appear here)')}</div></div>`
       : '';
     return `
       <div id="bg-panel-root" class="bgp-root">
-        <div class="bgp-header">
-          <span class="bgp-status">${statusLineHtml()}</span>
-          <button class="bgp-btn" data-bgp-action="refresh">${t('刷新', 'Refresh')}</button>
-        </div>
-        ${rows || empty}
+        <div class="bgp-link">${linkStatusHtml()}</div>
+        ${cards || empty}
       </div>`;
   }
 
+  /** 重绘：innerHTML 比对零变化零 DOM 写入；输出区贴近底部时保持跟随。 */
   function repaint() {
     const root = document.getElementById('bg-panel-root');
     if (!root) return;
-    root.outerHTML = getHtml();
+    const html = getHtml();
+    if (html === lastHtml) return;
+    // 记录各输出区的跟随状态，重写后回贴。
+    const follow = new Map();
+    root.querySelectorAll('[data-bgp-tail]').forEach((el) => {
+      follow.set(el.getAttribute('data-bgp-tail'), el.scrollTop + el.clientHeight >= el.scrollHeight - FOLLOW_THRESHOLD_PX);
+    });
+    const next = root.cloneNode(false);
+    next.innerHTML = html;
+    root.replaceWith(next);
+    lastHtml = html;
+    next.querySelectorAll('[data-bgp-tail]').forEach((el) => {
+      if (follow.get(el.getAttribute('data-bgp-tail')) !== false) el.scrollTop = el.scrollHeight;
+    });
   }
 
   // ── 通道生命周期 ─────────────────────────────────────────────────
 
+  function hasRunningTask() {
+    for (const task of tasks.values()) {
+      if (task.status === 'running') return true;
+    }
+    return false;
+  }
+
+  function syncElapsedTimer() {
+    // 运行中任务的时长行本地插值（事件之间平滑走秒）；无运行任务时停表。
+    if (hasRunningTask() && elapsedTimer === null) {
+      elapsedTimer = setInterval(repaint, ELAPSED_TICK_MS);
+    } else if (!hasRunningTask() && elapsedTimer !== null) {
+      clearInterval(elapsedTimer);
+      elapsedTimer = null;
+    }
+  }
+
   function teardownChannel() {
     if (source) { source.close(); source = null; }
     if (sessionWatchTimer) { clearInterval(sessionWatchTimer); sessionWatchTimer = null; }
+    if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
   }
 
-  function applyEventTask(data) {
+  function applyTask(data) {
     if (!data || typeof data.id !== 'string') return;
     tasks.set(data.id, data);
   }
 
   function handleStreamEvent(data) {
-    const payload = JSON.parse(data);
-    if (payload?.type && payload?.data) applyEventTask(payload.data);
+    let payload;
+    try { payload = JSON.parse(data); } catch { return; }
+    if (payload?.type && payload?.data) applyTask(payload.data);
+    syncElapsedTimer();
     repaint();
   }
 
   async function refreshList() {
-    const seq = ++requestSeq;
     const result = await channelRequest('list', {});
-    if (seq !== requestSeq) return; // 会话切换后过期响应直接丢弃
+    if (!source) return; // 等待期间通道已拆（会话切换），丢弃过期响应
     if (result.ok === true && Array.isArray(result.tasks)) {
       tasks.clear();
-      for (const task of result.tasks) applyEventTask(task);
-      if (state.status !== 'live') { state.status = 'connecting'; }
+      for (const task of result.tasks) applyTask(task);
     } else if (result.code === 'channel_not_declared' || result.code === 'runtime_not_connected') {
       state.status = 'unavailable';
     }
+    syncElapsedTimer();
     repaint();
   }
 
   function startChannel() {
     teardownChannel();
     tasks.clear();
-    outputTails.clear();
+    lastHtml = '';
     const addressing = currentAddressing();
     if (!addressing) {
       state.status = 'unavailable';
@@ -220,17 +262,6 @@
       repaint();
     });
     source.addEventListener('event', (e) => handleStreamEvent(e.data));
-    source.addEventListener('snapshot', (e) => {
-      // 快照负载：{ revision, data }（本通道目前只发事件，快照留作协议兼容）
-      try {
-        const payload = JSON.parse(e.data);
-        if (Array.isArray(payload?.data?.tasks)) {
-          tasks.clear();
-          for (const task of payload.data.tasks) applyEventTask(task);
-        }
-      } catch { /* 忽略畸形负载 */ }
-      repaint();
-    });
     source.addEventListener('resync', () => { void refreshList(); });
     source.addEventListener('closed', () => {
       state.status = 'closed';
@@ -260,63 +291,55 @@
     }, REFRESH_SESSION_WATCH_MS);
   }
 
-  // ── 交互（document 级委托，innerHTML 重写不丢监听）───────────────
+  // ── 样式（模块自持；字体栈 / 颜色 / 卡片语言对齐项目设计体系）─────
 
-  document.addEventListener('click', async (e) => {
-    const button = e.target.closest('#bg-panel-root [data-bgp-action]');
-    if (!button) return;
-    const action = button.dataset.bgpAction;
-    const taskId = button.dataset.bgpId || '';
-    if (action === 'refresh') {
-      await refreshList();
-      return;
-    }
-    if (action === 'output') {
-      if (outputTails.has(taskId)) {
-        outputTails.delete(taskId);
-        repaint();
-        return;
-      }
-      const result = await channelRequest('status', { taskId });
-      if (result.ok === true) {
-        applyEventTask(result.task);
-        outputTails.set(taskId, String(result.outputTail || ''));
-      }
-      repaint();
-      return;
-    }
-    if (action === 'kill') {
-      if (!window.confirm(t('确认终止该后台任务？', 'Kill this background task?'))) return;
-      const result = await channelRequest('kill', { taskId });
-      if (result.ok !== true) {
-        window.alert(t('终止失败：', 'Kill failed: ') + (result.code || ''));
-      }
-      // 终态经通道 finalized 事件回推；失败（通道断）时刷新兜底。
-      await refreshList();
-    }
-  });
-
-  // ── 样式（模块自持，避免全局样式表耦合）──────────────────────────
-
+  const MONO = '"Fira Code", "Cascadia Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace';
   const STYLE = `
-    .bgp-root { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
-    .bgp-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .bgp-status { font-size: 12px; opacity: .8; display: inline-flex; align-items: center; gap: 6px; }
-    .bgp-live-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; display: inline-block; animation: bgp-pulse 1.6s infinite; }
-    @keyframes bgp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-    .bgp-task { border: 1px solid var(--border-color, #333); border-radius: 8px; padding: 8px 10px; }
-    .bgp-task-main { display: flex; align-items: center; gap: 8px; }
-    .bgp-command { font-family: var(--mono-font, monospace); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-    .bgp-meta { font-size: 11px; opacity: .75; white-space: nowrap; }
-    .bgp-actions { display: flex; gap: 4px; }
-    .bgp-btn { font-size: 11px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border-color, #333); background: transparent; color: inherit; cursor: pointer; }
-    .bgp-btn:hover { opacity: .8; }
-    .bgp-btn-danger { color: #ef4444; border-color: #ef444466; }
-    .bgp-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-    .bgp-dot-running { background: #22c55e; }
-    .bgp-dot-done { background: #3b82f6; }
-    .bgp-dot-killed, .bgp-dot-terminated { background: #ef4444; }
-    .bgp-output { margin: 8px 0 0; padding: 8px; font-size: 11px; font-family: var(--mono-font, monospace); white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; background: var(--bg-soft, rgba(127,127,127,.08)); border-radius: 6px; }
+    .bgp-root { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
+    .bgp-link { display: inline-flex; align-items: center; gap: 6px; font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); padding: 0 4px; }
+    .bgp-link-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success-color); flex: none; animation: bgp-pulse 1.2s ease-in-out infinite; }
+    @keyframes bgp-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+    .bgp-card {
+      padding: 12px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+    }
+    body[data-theme="light"] .bgp-card { background: #ffffff; border-color: #e0e0e0; }
+    .bgp-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .bgp-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+    .bgp-dot-running { background: var(--success-color); animation: bgp-pulse 1.2s ease-in-out infinite; }
+    .bgp-dot-done { background: var(--code-accent); }
+    .bgp-dot-killed, .bgp-dot-terminated { background: var(--error-color); }
+    .bgp-cmd {
+      font-family: ${MONO};
+      font-size: 12px;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .bgp-meta { font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+    .bgp-tail {
+      margin: 0;
+      padding: 8px 10px;
+      font-family: ${MONO};
+      font-size: 11px;
+      line-height: 1.5;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: var(--text-secondary);
+      background: var(--hover-bg);
+      border-radius: 8px;
+    }
   `;
   const styleElement = document.createElement('style');
   styleElement.textContent = STYLE;

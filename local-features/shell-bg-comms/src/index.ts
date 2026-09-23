@@ -38,6 +38,8 @@ export interface ShellBgCommsConfig {
 }
 
 const STATUS_TAIL_CHARS = 4_000;
+/** 事件 / list 镜像附带的输出尾巴长度：面板纯事件驱动渲染，不另发请求。 */
+const MIRROR_TAIL_CHARS = 2_000;
 
 export class ShellBgCommsFeature {
   readonly name = 'shell-bg-comms';
@@ -88,7 +90,15 @@ export class ShellBgCommsFeature {
     const taskId = String(body.taskId || '');
     switch (requestType) {
       case 'list':
-        return { ok: true, tasks: registry ? registry.list() : [] };
+        return {
+          ok: true,
+          tasks: registry
+            ? registry.list().map((t) => ({
+                ...registry.snapshot(t),
+                outputTail: registry.tail(t, MIRROR_TAIL_CHARS),
+              }))
+            : [],
+        };
       case 'status': {
         if (!registry || !taskId) return { ok: false, code: 'task_not_found', error: 'taskId is required' };
         const task = registry.get(taskId);
@@ -121,7 +131,9 @@ export class ShellBgCommsFeature {
     try {
       await this.ensureDeclared();
       const registry = this.shell?.getBgRegistry() ?? null;
-      const data = registry && event.task ? registry.snapshot(event.task) : { id: event.task?.id, kind: event.kind };
+      const data = registry && event.task
+        ? { ...registry.snapshot(event.task), outputTail: registry.tail(event.task, MIRROR_TAIL_CHARS) }
+        : { id: event.task?.id, kind: event.kind };
       await this.client.publishEvent(event.kind, data);
     } catch {
       // 镜像面尽力而为：发布失败不影响任务引擎（bg_status 仍是真值）。

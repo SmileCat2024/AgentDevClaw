@@ -115,7 +115,7 @@ describe('通道声明', () => {
 });
 
 describe('observer 事件镜像', () => {
-  it('事件投影为 publishEvent(kind, registry.snapshot(task))', async () => {
+  it('事件投影为 publishEvent(kind, snapshot + outputTail)', async () => {
     const feature = makeFeature();
     await flush();
     const registry = makeRegistry();
@@ -128,7 +128,8 @@ describe('observer 事件镜像', () => {
     assert.ok(publish, 'publish call expected');
     assert.equal(publish.body.kind, 'event');
     assert.equal(publish.body.eventType, 'finalized');
-    assert.deepEqual(publish.body.data, { id: 't1', status: 'done', projected: true });
+    // 输出尾巴随事件下发（面板纯事件驱动渲染，不另发请求）
+    assert.deepEqual(publish.body.data, { id: 't1', status: 'done', projected: true, outputTail: 'tail-of-t1:2000' });
   });
 
   it('发布失败被静默吞掉，后续事件继续尝试', async () => {
@@ -158,12 +159,12 @@ describe('observer 事件镜像', () => {
 });
 
 describe('onHostRequest 请求面', () => {
-  it('list：返回 registry.list()', async () => {
+  it('list：返回 registry.list()（快照 + 输出尾巴）', async () => {
     const feature = makeFeature();
     feature.attachShell({ getBgRegistry: () => makeRegistry() });
     const result = await feature.onHostRequest('list', {});
     assert.equal(result.ok, true);
-    assert.deepEqual(result.tasks, [{ id: 't-list', status: 'running', projected: true }]);
+    assert.deepEqual(result.tasks, [{ id: 't-list', status: 'running', projected: true, outputTail: 'tail-of-t-list:2000' }]);
   });
 
   it('list：未 attachShell 返回空列表', async () => {
