@@ -321,6 +321,29 @@ describe('sse-client: 事件分发焦点路由', () => {
     assert.equal(ctx.run('window.ClawFW.SseClient.getLastQueuedSnapshot("rt-other")'), null);
   });
 
+  it('queued-inputs 事件按身份过滤：reminder 不进气泡文本与待发送计数', () => {
+    const { ctx, calls } = loadSseClient();
+    ctx.run('bootSseClient()');
+    latestSource().emit('hello', { hello: true });
+    latestSource().emit('queued-inputs', {
+      kind: 'queued-inputs', agentId: 'rt-focus',
+      data: [
+        { id: 'q-1', text: '用户消息' },
+        { id: 'q-2', text: '面板动作通报', kind: 'reminder' },
+        { id: 'q-3', text: '下一条用户消息' },
+      ],
+    });
+    assert.equal(calls.applyQueuedInputsTexts.length, 1);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(calls.applyQueuedInputsTexts[0].texts)),
+      ['用户消息', '下一条用户消息'],
+    );
+    assert.equal(calls.applyQueuedInputsTexts[0].count, 2);
+    // 快照缓存保留全量（对账/调试事实），过滤只发生在展示层
+    const snap = ctx.run('window.ClawFW.SseClient.getLastQueuedSnapshot("rt-focus")');
+    assert.equal(snap.items.length, 3);
+  });
+
   it('messages 事件携带 probe 走 runMessagesProbeCycle（仅焦点）', () => {
     const { calls } = activeClient();
     const probe = { seq: 7, count: 3, changeKind: 'append', sinceIndex: 0, fakeFullBytes: 128 };
@@ -476,5 +499,15 @@ describe('sse-client: 排队气泡乐观对账（reconcileQueuedTexts）', () =>
       { id: 'q-t', text: ' ok ' },
     ])`);
     assert.deepEqual(out, ['🖼', 'ok']);
+  });
+
+  it('reminder 项不产生气泡文本（用户输入按身份展示）', () => {
+    const ctx = fresh();
+    const out = runJson(ctx, `window.ClawFW.SseClient.reconcileQueuedTexts([
+      { id: 'q-1', text: '用户消息' },
+      { id: 'q-2', text: '面板动作通报', kind: 'reminder' },
+      { id: 'q-3', images: [{}], kind: 'reminder' },
+    ])`);
+    assert.deepEqual(out, ['用户消息']);
   });
 });

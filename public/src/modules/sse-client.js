@@ -149,7 +149,7 @@ function handleQueuedInputsEvent(frame) {
   _lastQueuedSnapshot = { runtimeId: String(frame.agentId || '').trim(), items, at: Date.now() };
   const texts = reconcileQueuedTexts(items);
   if (typeof applyQueuedInputsTexts === 'function') {
-    applyQueuedInputsTexts(frame.agentId, texts, items.length);
+    applyQueuedInputsTexts(frame.agentId, texts, items.filter(isUserQueuedItem).length);
   }
 }
 
@@ -217,10 +217,17 @@ function notifyChoiceAlerts(alerts) {
 // 纯逻辑（可测）：快照确认乐观 id、TTL 过期清除、保留未决乐观文本。
 // 输出为展示文本序列：快照文本在前，未决乐观文本追加在后。
 
+// 排队快照里 user 与 reminder（机器通报）同队存放（viewer 邮箱不分会话），
+// 但待发送气泡只承载用户输入：展示文本与待发送计数都按 kind 过滤。
+function isUserQueuedItem(item) {
+  return item?.kind !== 'reminder';
+}
+
 function reconcileQueuedTexts(items, nowMs = Date.now()) {
   const snapshotIds = new Set();
   const snapshotTexts = [];
   for (const item of Array.isArray(items) ? items : []) {
+    if (!isUserQueuedItem(item)) continue;
     if (typeof item?.id === 'string' && item.id) snapshotIds.add(item.id);
     const t = typeof item?.text === 'string' ? item.text.trim() : '';
     if (t) snapshotTexts.push(t);

@@ -756,3 +756,63 @@ describe('pending image session isolation (attachment buckets per session)', () 
     assert.equal(result.remainingB, 1, '其他会话挂载的附件不受发送清空影响');
   });
 });
+
+// ── 队列气泡按输入身份过滤（user-turn kind='reminder' 适配）────────────────
+
+describe('queued-input bubble identity filter (user-turn kind)', () => {
+  // 切片加载 persistent-input.js 的队列同步实现（updateQueueIndicator →
+  // applyQueuedInputsTexts → _syncPersistentInputUi），伴生 stub 补齐切片
+  // 引用的同模块全局；SSE 路径的过滤由 frontend-sse-client.test.js 覆盖。
+  function loadQueueSyncSlice(ctx) {
+    const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+    const start = persistentSource.indexOf('function updateQueueIndicator');
+    const end = persistentSource.indexOf('async function interruptAgent', start);
+    ctx.run(`
+      let _persistentUiSyncInFlight = false;
+      let _lastQueueBubbleSignature = "";
+      function isRuntimeCalling() { return false; }
+      function notifyInputSurfaceChanged() {}
+    `);
+    ctx.run(persistentSource.slice(start, end));
+  }
+
+  it('polling snapshot filters reminder items out of bubble texts and count', async () => {
+    const ctx = createInputSandbox();
+    loadQueueSyncSlice(ctx);
+    ctx.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ([
+        { id: 'q-1', text: '用户消息' },
+        { id: 'q-2', text: '面板动作通报', kind: 'reminder' },
+        { id: 'q-3', text: '下一条用户消息' },
+      ]),
+    });
+
+    await ctx.run('_syncPersistentInputUi("agent-1")');
+
+    assert.deepEqual([...ctx.run('_queuedTexts')], ['用户消息', '下一条用户消息']);
+    assert.equal(ctx.run('_pendingQueuedCount'), 2, 'reminder 不计入待发送计数');
+  });
+
+  it('reminder-only queue keeps bubbles empty and resets local pending state', async () => {
+    const ctx = createInputSandbox();
+    loadQueueSyncSlice(ctx);
+    ctx.run(`
+      _queuedTexts = ["残留乐观文本"];
+      _pendingQueuedCount = 1;
+      _localQueuedInputPending = true;
+    `);
+    ctx.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ([{ id: 'q-r', text: '面板动作通报', kind: 'reminder' }]),
+    });
+
+    await ctx.run('_syncPersistentInputUi("agent-1")');
+
+    assert.equal(ctx.run('_queuedTexts.length'), 0, '仅 reminder 排队时不显示气泡');
+    assert.equal(ctx.run('_pendingQueuedCount'), 0);
+    assert.equal(ctx.run('_localQueuedInputPending'), false, 'reminder 不顶起输入面乐观态');
+  });
+});

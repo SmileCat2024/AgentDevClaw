@@ -854,7 +854,8 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
       const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(expectedRuntimeId);
       if (cached && Array.isArray(cached.items)) {
         const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(cached.items) || [];
-        applyQueuedInputsTexts(expectedRuntimeId, texts, cached.items.length);
+        // 待发送气泡/计数只认用户输入：reminder（机器通报）同队存放但不展示
+        applyQueuedInputsTexts(expectedRuntimeId, texts, cached.items.filter((item) => item?.kind !== 'reminder').length);
         return;
       }
     }
@@ -863,7 +864,9 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
     if (!res.ok || expectedRuntimeId !== currentRuntimeAgentId) return;
     const data = await res.json();
     const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
-    const viewerQueueTexts = queue
+    // 同上：reminder（机器通报）不进待发送气泡与待发送计数
+    const userQueue = queue.filter((item) => item?.kind !== 'reminder');
+    const viewerQueueTexts = userQueue
       .map((item) => {
         const t = typeof item?.text === 'string' ? item.text.trim() : '';
         if (t) return t;
@@ -873,7 +876,7 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
       .filter(Boolean);
 
     if (JSON.stringify(viewerQueueTexts) !== prevQueueSignature) {
-      applyQueuedInputsTexts(expectedRuntimeId, viewerQueueTexts, queue.length);
+      applyQueuedInputsTexts(expectedRuntimeId, viewerQueueTexts, userQueue.length);
     }
   } catch (e) {
     // ignore transient queue sync failures
