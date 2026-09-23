@@ -363,7 +363,7 @@
       font-family: ${MONO};
       font-size: 11px;
       line-height: 1.5;
-      max-height: 200px;
+      max-height: calc(7 * 1.5em + 16px);
       overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-all;
