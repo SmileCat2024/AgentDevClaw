@@ -234,6 +234,59 @@ describe('input gateway thread-domain queueing (R6)', () => {
     assert.equal(integration.calls.append.length, 0);
   });
 
+  it('forwards the reminder identity on direct routes (machine notifications never impersonate users)', async () => {
+    registerRuntime({ sessionType: 'main' });
+    const integration = buildIntegration({ thread: null });
+
+    const result = await deliverUserInput(
+      { viewerAgentId: 'viewer-1', text: '通过右侧页面「设置」执行「保存」', kind: 'reminder', source: 'generative-ui' },
+      {
+        integration,
+        fetchImpl: async (url, init) => {
+          submitted.push({ url, body: JSON.parse(init.body) });
+          return { ok: true, json: async () => ({ success: true, delivery: 'queued', id: 'q-1', queueLength: 1 }) };
+        },
+      },
+    );
+
+    assert.equal(result.delivery, 'queued');
+    assert.equal(submitted[0].body.kind, 'reminder');
+  });
+
+  it('rejects reminder turns on thread routes instead of silently downgrading identity', async () => {
+    // WorkThread command 契约没有输入身份槽位：reminder 入箱会在 bridge
+    // 投递时退化为用户消息。显式拒绝保留事实，等契约补齐后再放行。
+    registerRuntime();
+    const integration = buildIntegration({
+      thread: { threadId: 'wt-1', status: 'open', headSessionId: 'session-1', hold: false, pendingSuccession: null },
+    });
+
+    await assert.rejects(
+      deliverUserInput(
+        { viewerAgentId: 'viewer-1', text: '机器通报', kind: 'reminder', source: 'generative-ui' },
+        { integration, fetchImpl: async () => { throw new Error('direct submit must not happen'); } },
+      ),
+      (error) => error instanceof UserTurnDeliveryError
+        && error.code === 'turn_kind_unsupported'
+        && error.status === 400
+        && error.retryable === false,
+    );
+    assert.equal(integration.calls.append.length, 0);
+  });
+
+  it('rejects unknown input identities before any route decision', async () => {
+    registerRuntime({ sessionType: 'main' });
+    const integration = buildIntegration({ thread: null });
+
+    await assert.rejects(
+      deliverUserInput(
+        { viewerAgentId: 'viewer-1', text: 'x', kind: 'bot' },
+        { integration, fetchImpl: async () => { throw new Error('direct submit must not happen'); } },
+      ),
+      (error) => error instanceof UserTurnDeliveryError && error.code === 'invalid_input',
+    );
+  });
+
   it('falls back to direct submit when the runtime entry is gone (A12 known window)', async () => {
     // 条目删除的毫秒级窗口：无请求体事实可依，网关如实回退直投，
     // 由 submitUserTurn 报出真实的运行时错误（不伪造线程路由）。

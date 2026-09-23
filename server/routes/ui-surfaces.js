@@ -389,8 +389,11 @@ export function setupUISurfaceRoutes(app, express) {
       JSON.stringify(fieldValues, null, 2),
     ].join('\n');
 
-    // 与聊天输入框保持相同投递语义：空闲时响应 input request，运行中排队；
-    // 线程交接窗口（coder 宿主）经统一网关转入 Thread Inbox 暂存。
+    // 面板动作是机器通报（reminder 身份），不是用户发言：随 user-turn 契约
+    // 落地为带 source 的 system 消息（LLM 编译层包为 <reminder>，UI 紧凑
+    // 渲染），不响应输入租约、不与真人输入抢答。空闲时由被动邮箱循环唤醒
+    // 新 call，运行中作为 system 消息注入当前 call。投递路径与聊天输入框
+    // 同为统一网关，仅身份不同。
     try {
       const operationMetadata = readOperationMetadata({
         body: req.body,
@@ -400,6 +403,7 @@ export function setupUISurfaceRoutes(app, express) {
       const delivery = await deliverUserInput({
         viewerAgentId: agentId,
         text: messageText,
+        kind: 'reminder',
         source: 'generative-ui',
         sourceRef: eventId,
         ...operationMetadata,

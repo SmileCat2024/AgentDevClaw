@@ -60,6 +60,9 @@ export async function submitUserTurn({
   images,
   source,
   sourceRef,
+  // 输入身份（user-turn 契约的 kind 字段）：'reminder' = 机器通报唤醒，
+  // 落地为带 source 的 system 消息且不响应输入租约；省略即 'user'。
+  kind,
   capabilityActivations,
   // 随消息流动的自由元数据（user-turn 契约的 metadata 字段，框架只透传
   // 不解释）；此处命名 turnMetadata 以区别于本函数内部的 operation metadata。
@@ -99,6 +102,14 @@ export async function submitUserTurn({
       ...metadata,
     });
   }
+  if (kind !== undefined && kind !== 'user' && kind !== 'reminder') {
+    throw new UserTurnDeliveryError("kind must be 'user' or 'reminder' when provided", {
+      code: 'invalid_input',
+      status: 400,
+      retryable: false,
+      ...metadata,
+    });
+  }
 
   let response;
   try {
@@ -118,6 +129,7 @@ export async function submitUserTurn({
         ...(Array.isArray(images) && images.length > 0 ? { images } : {}),
         ...(source ? { source } : {}),
         ...(sourceRef ? { sourceRef } : {}),
+        ...(kind ? { kind } : {}),
         ...(Array.isArray(capabilityActivations) && capabilityActivations.length > 0
           ? { capabilityActivations }
           : {}),

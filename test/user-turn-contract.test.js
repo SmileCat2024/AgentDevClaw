@@ -89,6 +89,41 @@ describe('Claw user-turn contract', () => {
     assert.equal('metadata' in JSON.parse(calls[0].options.body), false);
   });
 
+  it('carries the input identity (kind) through to the user-turn body', async () => {
+    const calls = [];
+    const fetchImpl = async (url, options = {}) => {
+      calls.push({ url, options });
+      return jsonResponse({ success: true, delivery: 'queued', id: 'q-1', queueLength: 1 });
+    };
+
+    await submitUserTurn({
+      agentId: 'agent/a',
+      text: '[面板动作通知]',
+      kind: 'reminder',
+      source: 'generative-ui',
+    }, { viewerOrigin: 'http://viewer.test', fetchImpl });
+
+    assert.equal(JSON.parse(calls[0].options.body).kind, 'reminder');
+  });
+
+  it('rejects unknown input identities before fetch', async () => {
+    let calls = 0;
+    await assert.rejects(
+      submitUserTurn({ agentId: 'agent-a', text: 'new turn', kind: 'bot' }, {
+        viewerOrigin: 'http://viewer.test',
+        fetchImpl: async () => { calls += 1; return jsonResponse({ success: true }); },
+      }),
+      (error) => {
+        assert.ok(error instanceof UserTurnDeliveryError);
+        assert.equal(error.code, 'invalid_input');
+        assert.equal(error.status, 400);
+        assert.equal(error.retryable, false);
+        return true;
+      },
+    );
+    assert.equal(calls, 0);
+  });
+
   it('rejects malformed or missing runtime targets before fetch', async () => {
     let calls = 0;
     await assert.rejects(
@@ -250,6 +285,9 @@ describe('Claw user-turn contract', () => {
     assert.match(calls[0].url, /\/api\/agents\/route-agent\/user-turn$/);
     const delivered = JSON.parse(calls[0].options.body);
     assert.equal(delivered.source, 'generative-ui');
+    // 面板动作是机器通报：以 reminder 身份投递，落地为 system 消息，
+    // 不再伪装成用户发言。
+    assert.equal(delivered.kind, 'reminder');
     assert.match(delivered.text, /"theme": "dark"/);
     assert.match(delivered.text, /通过右侧页面「Settings」执行「Save」/);
   });

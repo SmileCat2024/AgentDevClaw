@@ -208,7 +208,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
           '• Consequential decisions → confirmation dialog before the user commits',
           '',
           'You assemble the panel from a component catalog (Stack, Card, TextInput, Select, Slider, Button, Table, Progress, and more).',
-          'When the user clicks a submit button, their input arrives back to you as a normal chat message.',
+          'When the user clicks a submit button, their input arrives back to you as a system-reminder notification (machine voice, source `generative-ui`), not as user speech.',
           'The panel persists across context compaction, message trimming, and session switching.',
           '',
           'Use the SAME surfaceId to update an existing panel (replaces the full Spec). Returns immediately.',

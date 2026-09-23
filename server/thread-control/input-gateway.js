@@ -23,6 +23,11 @@
  * 「非 head」不在此拦截：那是调用方 UI 上下文的路由问题（前端守卫
  * resolveThreadInputRoute 负责）；网关只拦「线程域归属」这一客观事实。
  *
+ * 输入身份（kind）：'reminder'（机器通报）在直投域随 user-turn 契约原样
+ * 透传（落地为带 source 的 system 消息，不响应输入租约）；线程域的
+ * WorkThread command 契约尚无输入身份槽位，reminder 在线程路由上显式
+ * 拒绝（turn_kind_unsupported），不静默降级为用户消息。
+ *
  * 边界记录（A12 已知窗口）：runtime 条目被删除后（共享进程退出）网关
  * 无法从 viewerAgentId 反查 (agentId, sessionId)——请求体不含会话事实，
  * 只能回退直投，由 submitUserTurn 报出真实的运行时错误。窗口为毫秒级
@@ -46,7 +51,8 @@ export { UserTurnDeliveryError };
  *
  * @param {object} [deps] 测试注入（生产调用不传，走默认单例）
  * @throws UserTurnDeliveryError 直投失败（网络/校验）、线程已关闭
- *   （thread_closed）或收件会话是历史成员（session_not_head）。
+ *   （thread_closed）、收件会话是历史成员（session_not_head）或
+ *   reminder 身份进入线程域（turn_kind_unsupported）。
  */
 export async function deliverUserInput(
   {
@@ -55,6 +61,8 @@ export async function deliverUserInput(
     images,
     source,
     sourceRef,
+    // 输入身份（'user' 缺省 / 'reminder' 机器通报），随 user-turn 契约流动
+    kind,
     capabilityActivations,
     turnMetadata,
   } = {},
@@ -63,6 +71,13 @@ export async function deliverUserInput(
   const normalizedViewerId = String(viewerAgentId || '').trim();
   const normalizedText = typeof text === 'string' ? text : '';
   const normalizedImages = Array.isArray(images) ? images : [];
+  if (kind !== undefined && kind !== 'user' && kind !== 'reminder') {
+    throw new UserTurnDeliveryError("kind must be 'user' or 'reminder' when provided", {
+      code: 'invalid_input',
+      status: 400,
+      retryable: false,
+    });
+  }
 
   const route = await _resolveThreadRoute(normalizedViewerId, integration);
   if (route.route === 'rejected') {
@@ -75,9 +90,19 @@ export async function deliverUserInput(
       ...(normalizedImages.length > 0 ? { images: normalizedImages } : {}),
       source,
       sourceRef,
+      ...(kind ? { kind } : {}),
       ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
       ...(turnMetadata ? { turnMetadata } : {}),
     }, { fetchImpl });
+  }
+
+  // reminder（机器通报）不入箱：WorkThread command 契约没有输入身份槽位，
+  // 入箱后 bridge 投递时只能以用户消息落地——身份被静默改写比拒绝更糟。
+  if (kind === 'reminder') {
+    throw new UserTurnDeliveryError(
+      'Reminder turns cannot be staged in a thread inbox (WorkThread commands carry no turn identity yet)',
+      { code: 'turn_kind_unsupported', status: 400, retryable: false },
+    );
   }
 
   // 与 appendCommand 的 K8 同源：text / images / metadata 至少其一非空
