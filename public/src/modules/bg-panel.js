@@ -338,16 +338,13 @@
       min-width: 0;
     }
     .bgp-time { font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); flex: none; }
-    /* 命令块：最多两行，超长省略（title 悬浮看全文） */
+    /* 命令行：裸文字，最多两行省略（title 悬浮看全文） */
     .bgp-cmd {
       margin: 0 0 0 14px;
-      padding: 6px 8px;
       font-family: ${MONO};
       font-size: 12px;
       line-height: 1.5;
       color: var(--text-primary);
-      background: var(--hover-bg);
-      border-radius: 6px;
       white-space: pre-wrap;
       word-break: break-all;
       display: -webkit-box;
