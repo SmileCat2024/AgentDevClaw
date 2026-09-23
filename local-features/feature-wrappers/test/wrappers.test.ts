@@ -62,7 +62,7 @@ describe('ControlledTodoFeature 执行到此处', () => {
     assert.match(injected[0].content, /task-a/);
   });
 
-  it('目标进入终态 → Deny 停止，断点自动清除', async () => {
+  it('目标进入终态且仍有其他未完成任务 → Deny 停止，断点自动清除', async () => {
     const feature = new ControlledTodoFeature();
     feature.createTask('task-a', 'desc');
     feature.createTask('task-b', 'desc');
@@ -72,6 +72,40 @@ describe('ControlledTodoFeature 执行到此处', () => {
     assert.equal(await feature.recordToolUsage(ctx), Decision.Deny);
     assert.equal(feature.getInterruptTarget(), null);
     assert.equal(injected.length, 0);
+  });
+
+  it('目标是最后一个未完成任务 → 到达终态不 Deny，断点清除走默认决策自然收尾', async () => {
+    const feature = new ControlledTodoFeature();
+    feature.createTask('task-a', 'desc');
+    feature.setInterruptTarget('1');
+    feature.updateTask('1', { status: 'completed' });
+    const { ctx, injected } = makeStepCtx(0);
+    assert.equal(await feature.recordToolUsage(ctx), Decision.Continue);
+    assert.equal(feature.getInterruptTarget(), null);
+    assert.equal(injected.length, 0);
+  });
+
+  it('其他任务均已终态（completed/deleted 混合）也视为最后一个未完成任务 → 不 Deny', async () => {
+    const feature = new ControlledTodoFeature();
+    feature.createTask('task-a', 'desc');
+    feature.createTask('task-b', 'desc');
+    feature.createTask('task-c', 'desc');
+    feature.updateTask('1', { status: 'completed' });
+    feature.updateTask('2', { status: 'deleted' });
+    feature.setInterruptTarget('3');
+    feature.updateTask('3', { status: 'completed' });
+    const { ctx } = makeStepCtx(0);
+    assert.equal(await feature.recordToolUsage(ctx), Decision.Continue);
+    assert.equal(feature.getInterruptTarget(), null);
+  });
+
+  it('目标是最后一个未完成任务但未完成时自然收尾 → 仍推续（Approve + 注入提醒）', async () => {
+    const feature = new ControlledTodoFeature();
+    feature.createTask('task-a', 'desc');
+    feature.setInterruptTarget('1');
+    const { ctx, injected } = makeStepCtx(0);
+    assert.equal(await feature.recordToolUsage(ctx), Decision.Approve);
+    assert.equal(injected.length, 1);
   });
 
   it('带工具调用的 step → Continue（循环本来就继续），且重置连续计数', async () => {

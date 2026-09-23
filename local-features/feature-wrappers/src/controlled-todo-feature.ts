@@ -3,8 +3,11 @@
  *
  * 断点（interruptTarget）：设置后 agent 必须推进到目标任务完成——
  * 自然收尾（无工具调用）但目标未进入终态时，注入提醒消息并
- * Decision.Approve 继续循环；目标任务进入终态时 Decision.Deny
- * 优雅结束当前 call，断点自动清除。
+ * Decision.Approve 继续循环；目标任务进入终态时按剩余计划收口：
+ * 仍有其他未完成任务 → Decision.Deny 优雅结束当前 call；
+ * 目标已是最后一个未完成任务 → 解除断点放行自然收尾
+ * （部分 agent 习惯先调工具标记完成、再输出最终汇报，
+ * 机械 Deny 会把这段汇报拦腰打断），断点自动清除。
  *
  * 设计原理（static hooks 静态声明契约）：
  * - TodoFeature 通过 static hooks 声明钩子（含 recordToolUsage → StepFinish guard/advisor）。
@@ -95,19 +98,31 @@ class ControlledTodoFeatureInner extends TodoFeature {
    *
    * 先执行父类逻辑（todo 工具使用统计 + reminder 计数），
    * 然后按"执行到此处"语义决策：
-   * 1. 目标任务已进入终态 → Decision.Deny 优雅结束当前 call，断点自动清除
+   * 1. 目标任务已进入终态：
+   *    - 仍有其他未完成任务 → Decision.Deny 优雅结束当前 call
+   *    - 目标是最后一个未完成任务 → 解除断点，走默认决策自然收尾，
+   *      保留模型在完成任务后的最终汇报不被打断
    * 2. call 自然结束（无工具调用）但目标未进入终态
    *    → 注入提醒消息并 Decision.Approve 继续循环
    */
   async recordToolUsage(ctx: any) {
     const parentResult = await super.recordToolUsage(ctx);
 
-    if (this._interruptTargetId) {
-      const task = this.getTask(this._interruptTargetId);
+    const targetId = this._interruptTargetId;
+    if (targetId) {
+      const task = this.getTask(targetId);
       if (task && (task.status === 'completed' || task.status === 'deleted')) {
-        console.log(`[ControlledTodoFeature] Interrupt target task ${this._interruptTargetId} reached terminal state (${task.status}), stopping call`);
+        const hasOtherActiveTasks = this.listTasks().some(
+          t => t.id !== targetId && (t.status === 'pending' || t.status === 'in_progress'),
+        );
         this._interruptTargetId = null;
-        return Decision.Deny;
+        if (hasOtherActiveTasks) {
+          console.log(`[ControlledTodoFeature] Interrupt target task ${targetId} reached terminal state (${task.status}), stopping call`);
+          return Decision.Deny;
+        }
+        console.log(`[ControlledTodoFeature] Interrupt target task ${targetId} was the last unfinished task, releasing breakpoint for natural wrap-up`);
+        this.pushDebugSnapshot();
+        return parentResult;
       }
     }
 
