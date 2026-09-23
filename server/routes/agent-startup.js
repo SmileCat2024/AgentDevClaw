@@ -31,6 +31,7 @@ import {
   GLOBAL_SHARED_AGENT_ID,
 } from '../shared/process-mode.js';
 import { releaseRuntimeState } from '../runtime-call-envelope.js';
+import { featureCommunicationStore } from './feature-communication.js';
 import {
   ensureAssemblyWorkspaceBase, ensureAssemblyWorkspaceDependencies,
 } from './assembly-helpers.js';
@@ -422,6 +423,7 @@ export function createAgentStartupFns(deps) {
         rt.signalCode = signal || child.signalCode || null;
         rt.stopped = true;
         releaseRuntimeState(rt.key);
+        if (rt.selectedSessionId) featureCommunicationStore.closeSession(rt.agentId || agent.id, rt.selectedSessionId);
       }
       log(agent.id, `process exited with code ${code ?? 'null'} signal ${signal || child.signalCode || 'none'}`);
 

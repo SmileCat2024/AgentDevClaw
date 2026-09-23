@@ -429,6 +429,26 @@ class SessionLifecycle {
       return;
     }
 
+    if (msg.type === 'feature-comms-request') {
+      const feature = this.agent?.features?.get?.(msg.featureId)
+        || this.agent?.getFeature?.(msg.featureId);
+      const reply = (result) => {
+        try {
+          process.send({ type: 'feature-comms-result', requestId: msg.requestId, sessionId: this.sessionId, result });
+        } catch {}
+      };
+      if (typeof feature?.onHostRequest !== 'function') {
+        reply({ ok: false, code: 'operation_unavailable', error: 'Feature does not handle host requests' });
+        return;
+      }
+      try {
+        reply(await feature.onHostRequest(msg.requestType, msg.payload, { channelId: msg.channelId, sessionId: this.sessionId }));
+      } catch (error) {
+        reply({ ok: false, code: 'operation_failed', error: String(error?.message || error) });
+      }
+      return;
+    }
+
     // ── Generic capability IPC (request/ack) ──────────────────
     // Registry 传输面：server /protoclaw/capability_invoke 与 /protoclaw/commands
     // 的子进程端点。宿主前端转发视为 slash 入口。后续可控 feature 的专用

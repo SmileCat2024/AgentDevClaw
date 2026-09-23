@@ -13,6 +13,7 @@
   "include": [
     "./index.ts",
     "./shared/src/**/*.ts",
+    "./shared/test/**/*.ts",
     "./context-guard/src/**/*.ts",
     "./context-guard/test/**/*.ts",
     "./context-compaction-mirror/src/**/*.ts",

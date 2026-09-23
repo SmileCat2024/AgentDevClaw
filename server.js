@@ -91,6 +91,7 @@ import {
 import { setupGroupChatRoutes } from './server/routes/group-chat.js';
 import { setupDispatchRoutes, getProjectAdapter, fireBootSchedules } from './server/routes/dispatch.js';
 import { createSseEventsModule, createSseCompressionFilter } from './server/routes/sse-events.js';
+import { setupFeatureCommunicationRoutes, featureCommunicationStore } from './server/routes/feature-communication.js';
 import { setupIMRoutes, readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './server/routes/im.js';
 import { createSessionHelpers } from './server/routes/session-helpers.js';
 import { setupSessionRoutes } from './server/routes/session.js';
@@ -191,6 +192,7 @@ const sseEvents = createSseEventsModule({
   seenChoiceRequestIds: () => _seenChoiceRequestIds,
 });
 sseEvents.setupRoutes(app);
+setupFeatureCommunicationRoutes(app, express, { communicationStore: featureCommunicationStore });
 
 // ── Agent discovery + identity extracted to server/routes/agent-discovery.js ──
 // sessionApi is a mutable reference filled after session-helpers is created,

@@ -1,0 +1,52 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { FeatureCommunicationStore } from '../server/feature-communication-store.js';
+
+const target = { agentId: 'agent-a', sessionId: 'session-a', featureId: 'shell', channelId: 'task-1' };
+
+describe('FeatureCommunicationStore', () => {
+  it('stores a replaceable current snapshot per exact feature channel', () => {
+    const store = new FeatureCommunicationStore();
+    const first = store.publishSnapshot(target, { status: 'running' });
+    const second = store.publishSnapshot(target, { status: 'finished' });
+
+    assert.equal(first.revision, 1);
+    assert.equal(second.revision, 2);
+    assert.deepEqual(store.getSnapshot(target), { revision: 2, data: { status: 'finished' } });
+    assert.equal(store.getSnapshot({ ...target, sessionId: 'other-session' }), null);
+  });
+
+  it('assigns ordered event ids and resumes from a bounded event cursor', () => {
+    const store = new FeatureCommunicationStore({ eventLimit: 2 });
+    const first = store.publishEvent(target, 'output', { text: 'one' });
+    store.publishEvent(target, 'output', { text: 'two' });
+    store.publishEvent(target, 'output', { text: 'three' });
+
+    assert.equal(first.eventId, 1);
+    assert.deepEqual(store.readEvents(target, 1), {
+      resync: false,
+      events: [
+        { eventId: 2, type: 'output', data: { text: 'two' } },
+        { eventId: 3, type: 'output', data: { text: 'three' } },
+      ],
+    });
+    assert.deepEqual(store.readEvents(target, 0), { resync: true, events: [] });
+  });
+
+  it('closes channel state and rejects pending requests when a session runtime stops', async () => {
+    const store = new FeatureCommunicationStore();
+    store.publishSnapshot(target, { status: 'running' });
+    const pending = store.beginRequest(target, 'request-stop');
+    store.closeSession(target.agentId, target.sessionId);
+    assert.equal(store.getSnapshot(target), null);
+    assert.deepEqual(await pending, { ok: false, code: 'runtime_stopped', error: 'Session runtime stopped' });
+  });
+
+  it('keeps request/response waiters separate by exact runtime target and request id', async () => {
+    const store = new FeatureCommunicationStore();
+    const pending = store.beginRequest(target, 'request-1');
+    assert.equal(store.resolveRequest({ ...target, sessionId: 'other-session' }, 'request-1', { ok: true }), false);
+    assert.equal(store.resolveRequest(target, 'request-1', { ok: true, result: 42 }), true);
+    assert.deepEqual(await pending, { ok: true, result: 42 });
+  });
+});
