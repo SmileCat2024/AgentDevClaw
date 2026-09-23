@@ -913,6 +913,29 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 
 ---
 
+## 12b. 右侧面板注册表：面板清单的单一真相（2026-09-23）
+
+右侧 rail 面板曾有三份平行真相：`index.html` 静态按钮、`app-ui.js` 的 `featurePanels` 表、`rail-customize.js` 的自定义清单（`CUSTOMIZABLE_IDS`/`LABELS`/`DESCS`）。新增面板要改三处，且新注册的面板不会进入自定义弹窗。现在统一收敛到宿主注册表 `modules/right-panel-registry.js`（`window.ClawPanels`）。
+
+**注册**：面板经 `registerFeaturePanel(id, panel)`（`app-ui.js` 定义并挂 `window`）注册。注册项关键字段：
+
+- `when`：适用性声明，支持 `surfaces`（`'chat'` / `'workspace'`）与 `agentIds` 两个维度，**声明的条件全部满足才适用（AND）**；缺省 `when` = 全局适用。上下文值缺失（如尚未解析出 agent）时，带条件的面板判为不适用。
+- `label` / `description`：`{ zh, en }` i18n 元数据，面板显示名与自定义弹窗共用同一份。
+- `title` / `render`：面板头部标题与渲染入口（沿用既有契约）。
+- 同 ID 重复注册直接抛错（防止静默覆盖）；`render` 非函数抛错。
+
+**rail 可见性**：`renderCurrentMainView` 每次渲染时用 `getAvailable({ agentId, surface })` 计算可用面板集合，控制按钮显隐；当前打开的面板不再适用时，清空 `activeFeaturePanel` 并立即 `renderFeaturePanel()`，旧上下文内容不得残留。注意 work-group 的 surface 判定：它是群聊但不是 chat 调试面板的宿主，registry 上下文里强制传 `surface: 'workspace'`。
+
+**自定义面板（rail-customize）**：可自定义清单 = 已注册且 rail 上有按钮的面板（注册顺序 = 默认顺序）。没有 rail 按钮的程序化面板（如 preflight，从其他面板跳转打开）不进清单。用户偏好存 `localStorage`（用户级全局），加载时容忍旧配置：未知 ID 剔除、缺失面板按默认顺序追加、legacy ID 经 `LEGACY_ID_MAP` 映射。**用户隐藏偏好与面板适用性是两层独立过滤**：适用性决定"是否提供"，偏好决定"是否呈现"，隐藏始终全局生效。
+
+**加载顺序约束（易错）**：`rail-customize.js` 初始化时从注册表派生清单，必须在所有面板贡献方之后加载——当前顺序为 `right-panel-registry.js` → `app-ui.js` → `resources-viewer.js` → `rail-customize.js`。新面板贡献方若在 rail-customize 之后注册，需自行调用 `window.applyRailConfig()` 重应用偏好。测试以 index.html 真实脚本序断言此约束。
+
+**贡献边界**：注册表面向 Claw 内置模块；Feature 不直接注册右栏面板（未来经宿主 API 贡献，见右侧面板演进共识）。
+
+回归测试：`test/frontend-right-panel-registry.test.js`（注册、上下文筛选、宿主接线源码断言）、`test/frontend-rail-customize.test.js`（清单派生、legacy 容忍、隐藏清理、加载顺序）。
+
+---
+
 ## 13. 相关文件索引
 
 > 行号会随迭代漂移，定位时以 grep 为准，本表只给文件级归属（2026-08-23 复核）。
@@ -934,4 +957,5 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 | session 草稿（`_sessionInputCache`、`_storeVisibleSessionInputDraft`） | `modules/voice-input.js` |
 | `ensureIMWorkspaceLoaded`、IM 渠道 UI / 交互回调 | `modules/im-ui.js` / `modules/im-actions.js` |
 | `loadDispatchSchedules`、`refreshDispatchConsoleData`、调度控制台 UI | `modules/dispatch-actions.js` / `modules/dispatch-ui.js` |
+| 右侧面板注册表（`ClawPanels`）、面板适用性与自定义清单派生 | `modules/right-panel-registry.js` / `modules/rail-customize.js` |
 | session context、optimistic input mode、草稿恢复与 DOM key 的回归测试 | `test/session-ui-context.test.js` |

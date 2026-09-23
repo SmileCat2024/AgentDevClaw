@@ -1246,9 +1246,8 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
   if (activePanelBecameUnavailable && typeof renderFeaturePanel === 'function') {
     renderFeaturePanel();
   }
-  // 离开 group chat workspace 时清理状态
+  // 离开 group chat workspace 时清理状态（面板可见性已由注册表适用性处理）
   if (!isWorkGroup) {
-    if (activeFeaturePanel === 'resources' || activeFeaturePanel === 'viewer' || activeFeaturePanel === 'settings' || activeFeaturePanel === 'threads') activeFeaturePanel = null;
     if (window._wgActive && typeof window.WorkGroupUI?.deactivate === 'function') {
       window.WorkGroupUI.deactivate();
       window._wgActive = false;

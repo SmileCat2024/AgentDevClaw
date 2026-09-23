@@ -9,6 +9,7 @@ node_modules/
 !docs/
 docs/*
 !docs/adr/
+!docs/reference/
 !docs/tickets/
 !docs/plans/
 !docs/investigations/

@@ -106,7 +106,7 @@ feature 三类来源（严格区分，改错层 = 白改）：
 
 **服务端**（[server.js](server.js)）：托管 ViewerWorker、扫描 `prebuilt-agents/`、管理预制 agent runtime 与会话切换、代理前端到 ViewerWorker 的请求、提供 ProtoClaw API。路由按域分文件于 `server/routes/*.js`（会话与上下文连续性、IM 线路与渠道、调度、群聊、模型配置、capability、feature 配置、workspace 管理、ACP、git、feature 仓库等大类），具体接口以各路由文件的 `app.<method>` 注册为准。
 
-**前端壳层**：`public/index.html` 只是瘦壳。主逻辑在 `app-core.js`（常量 / i18n / 公共底座）、`app-ui.js`（workspace surface 渲染骨架与 block 分发）、`app-main.js`（agent 切换与轮询主循环），功能域在 `modules/` 下分模块。`renderCurrentMainView()` 是主视图状态机入口，多数 workspace 问题最终回到这里。
+**前端壳层**：`public/index.html` 只是瘦壳。主逻辑在 `app-core.js`（常量 / i18n / 公共底座）、`app-ui.js`（workspace surface 渲染骨架与 block 分发）、`app-main.js`（agent 切换与轮询主循环），功能域在 `modules/` 下分模块。`renderCurrentMainView()` 是主视图状态机入口，多数 workspace 问题最终回到这里。右侧 rail 面板统一经宿主注册表（`modules/right-panel-registry.js`，`window.ClawPanels`）声明适用上下文（surface / agentIds）与 i18n 元数据，rail 可见性与自定义清单都从注册表派生，不维护平行清单（详见 frontend-rendering-patterns.md §12b）。
 
 **预制 agent runtime**（[scripts/run-prebuilt-agent.js](scripts/run-prebuilt-agent.js)）：动态加载 `prebuilt-agents/*/*/agent.js`、挂到本地 ViewerWorker、管理会话恢复与附加启动逻辑（如 IM gateway）。会话数据落在用户目录 `~/.agentdev/AgentDevClaw/prebuilt-sessions/<agentId>`，不污染仓库。`metadata.json` 的 `ui` 声明（entry / tabs / home blocks）是首页 block 渲染的基础壳能力。
 
