@@ -18,13 +18,64 @@ function targetKey(target) {
   return JSON.stringify([value.agentId, value.sessionId, value.featureId, value.channelId]);
 }
 
+function sessionKey(agentId, sessionId) {
+  return JSON.stringify([String(agentId || '').trim(), String(sessionId || '').trim()]);
+}
+
 export class FeatureCommunicationStore {
   constructor({ eventLimit = DEFAULT_EVENT_LIMIT, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
     this.eventLimit = Math.max(1, Math.floor(eventLimit));
     this.requestTimeoutMs = requestTimeoutMs;
     this.channels = new Map();
+    this.declarations = new Map();
     this.pendingRequests = new Map();
     this.listeners = new Map();
+  }
+
+  // A channel must be declared by its feature before any publish or subscribe;
+  // the declaration is the host-managed authorization record for the channel.
+  declareChannel(target, meta = {}) {
+    const normalized = normalizeTarget(target);
+    const key = targetKey(normalized);
+    const declaration = {
+      featureId: normalized.featureId,
+      channelId: normalized.channelId,
+      title: typeof meta.title === 'string' ? meta.title.trim() : '',
+      description: typeof meta.description === 'string' ? meta.description.trim() : '',
+      declaredAt: new Date().toISOString(),
+    };
+    const session = this.declarations.get(sessionKey(normalized.agentId, normalized.sessionId));
+    if (session) session.set(key, declaration);
+    else this.declarations.set(sessionKey(normalized.agentId, normalized.sessionId), new Map([[key, declaration]]));
+    return { ...declaration };
+  }
+
+  isDeclared(target) {
+    const session = this.declarations.get(sessionKey(target?.agentId, target?.sessionId));
+    return session?.has(targetKey(target)) === true;
+  }
+
+  listChannels(agentId, sessionId) {
+    const session = this.declarations.get(sessionKey(agentId, sessionId));
+    if (!session) return [];
+    const channels = [];
+    for (const [key, declaration] of session) {
+      const channel = this.channels.get(key);
+      channels.push({
+        featureId: declaration.featureId,
+        channelId: declaration.channelId,
+        title: declaration.title,
+        description: declaration.description,
+        declaredAt: declaration.declaredAt,
+        hasSnapshot: Boolean(channel?.snapshot),
+        lastEventId: channel?.eventId ?? 0,
+      });
+    }
+    return channels;
+  }
+
+  _requireDeclared(target) {
+    if (!this.isDeclared(target)) throw new Error('channel_not_declared');
   }
 
   _channel(target) {
@@ -38,6 +89,7 @@ export class FeatureCommunicationStore {
   }
 
   publishSnapshot(target, data) {
+    this._requireDeclared(target);
     const channel = this._channel(target);
     channel.revision += 1;
     channel.snapshot = { revision: channel.revision, data };
@@ -55,6 +107,7 @@ export class FeatureCommunicationStore {
   }
 
   publishEvent(target, type, data) {
+    this._requireDeclared(target);
     if (typeof type !== 'string' || !type.trim()) throw new TypeError('event type is required');
     const channel = this._channel(target);
     const event = { eventId: ++channel.eventId, type: type.trim(), data };
@@ -96,6 +149,7 @@ export class FeatureCommunicationStore {
   }
 
   beginRequest(target, requestId, { timeoutMs = this.requestTimeoutMs } = {}) {
+    this._requireDeclared(target);
     const key = JSON.stringify([targetKey(target), requestId]);
     if (typeof requestId !== 'string' || !requestId) throw new TypeError('requestId is required');
     if (this.pendingRequests.has(key)) throw new Error('requestId is already pending');
@@ -123,10 +177,14 @@ export class FeatureCommunicationStore {
   closeSession(agentId, sessionId, error = 'Session runtime stopped') {
     for (const [key, channel] of this.channels) {
       if (channel.target.agentId === agentId && channel.target.sessionId === sessionId) {
+        // Terminal notification first: connected SSE subscribers learn that the
+        // channel (and its runtime) is gone instead of silent heartbeats.
+        this._notify(channel, { eventId: channel.eventId, type: 'closed', data: null });
         this.channels.delete(key);
         this.listeners.delete(key);
       }
     }
+    this.declarations.delete(sessionKey(agentId, sessionId));
     this.rejectRequestsForSession(agentId, sessionId, error);
   }
 

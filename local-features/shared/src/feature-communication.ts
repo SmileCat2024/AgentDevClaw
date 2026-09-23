@@ -24,6 +24,14 @@ export class FeatureCommunicationClient {
     return payload;
   }
 
+  /**
+   * Declare the channel before any publish: the declaration is the host-side
+   * authorization record that gates panel subscription and requests.
+   */
+  declareChannel(meta: { title?: string; description?: string } = {}): Promise<Record<string, any>> {
+    return this.post('/protoclaw/feature-comms/declare', { ...this.target, ...meta });
+  }
+
   publishSnapshot(data: unknown): Promise<Record<string, any>> {
     return this.post('/protoclaw/feature-comms/publish', { ...this.target, kind: 'snapshot', data });
   }

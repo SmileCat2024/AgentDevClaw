@@ -16,6 +16,33 @@ function res() {
 }
 
 describe('feature communication routes', () => {
+  it('declares channels from internal-authenticated requests on live runtimes only', async () => {
+    const app = makeApp();
+    const store = setupFeatureCommunicationRoutes(app, { json: () => (_req, _res, next) => next() }, { communicationStore: new FeatureCommunicationStore() });
+    const child = new EventEmitter();
+    child.exitCode = null;
+    child.send = () => true;
+    managedAgents.set('comms-agent::comms-session', { agentId: 'comms-agent', selectedSessionId: 'comms-session', process: child, stopped: false });
+    try {
+      const handler = app.routes['POST /protoclaw/feature-comms/declare'].at(-1);
+      const response = res();
+      await handler({ auth: { kind: 'internal' }, body: { agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1', title: 'Background tasks' } }, response);
+      assert.equal(response.body.ok, true);
+      assert.equal(response.body.declaration.title, 'Background tasks');
+      assert.equal(store.isDeclared({ agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1' }), true);
+
+      const denied = res();
+      await handler({ auth: { kind: 'session' }, body: { agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-2' } }, denied);
+      assert.equal(denied.statusCode, 403);
+
+      const missingRuntime = res();
+      await handler({ auth: { kind: 'internal' }, body: { agentId: 'comms-agent', sessionId: 'no-such-session', featureId: 'shell', channelId: 'task-3' } }, missingRuntime);
+      assert.equal(missingRuntime.statusCode, 404);
+    } finally {
+      managedAgents.delete('comms-agent::comms-session');
+    }
+  });
+
   it('accepts feature snapshots only from an internal authenticated request and publishes the exact runtime scope', async () => {
     const app = makeApp();
     const emitted = [];
@@ -25,6 +52,7 @@ describe('feature communication routes', () => {
     child.send = () => true;
     managedAgents.set('comms-agent::comms-session', { agentId: 'comms-agent', selectedSessionId: 'comms-session', process: child, stopped: false });
     try {
+      store.declareChannel({ agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1' });
       const handler = app.routes['POST /protoclaw/feature-comms/publish'].at(-1);
       const response = res();
       await handler({ auth: { kind: 'internal' }, body: { agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1', kind: 'snapshot', data: { status: 'running' } } }, response);
@@ -35,6 +63,11 @@ describe('feature communication routes', () => {
       const denied = res();
       await handler({ auth: { kind: 'session' }, body: { agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1', kind: 'snapshot', data: {} } }, denied);
       assert.equal(denied.statusCode, 403);
+
+      const undeclared = res();
+      await handler({ auth: { kind: 'internal' }, body: { agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'undeclared', kind: 'snapshot', data: {} } }, undeclared);
+      assert.equal(undeclared.statusCode, 404);
+      assert.equal(undeclared.body.code, 'channel_not_declared');
     } finally {
       managedAgents.delete('comms-agent::comms-session');
     }
@@ -49,6 +82,7 @@ describe('feature communication routes', () => {
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     t.after(() => { server.close(); server.closeAllConnections?.(); });
     const target = { agentId: 'stream-agent', sessionId: 'stream-session', featureId: 'shell', channelId: 'task-1' };
+    store.declareChannel(target);
     store.publishSnapshot(target, { state: 'running' });
     const controller = new AbortController();
     const response = await fetch(`http://127.0.0.1:${server.address().port}/protoclaw/feature-comms/stream?${new URLSearchParams(target)}`, { signal: controller.signal });
@@ -68,6 +102,8 @@ describe('feature communication routes', () => {
       store.publishEvent(target, 'output', { text: 'line-1' });
       await waitFor('"text":"line-1"');
       assert.equal(store.listeners.size, 1);
+      store.closeSession(target.agentId, target.sessionId);
+      await waitFor('event: closed');
     } finally {
       controller.abort();
       await pump;
@@ -85,7 +121,8 @@ describe('feature communication routes', () => {
     child.send = (message) => { child.sent.push(message); return true; };
     managedAgents.set('comms-agent::comms-session', { agentId: 'comms-agent', selectedSessionId: 'comms-session', process: child, stopped: false });
     try {
-      setupFeatureCommunicationRoutes(app, { json: () => (_req, _res, next) => next() }, { communicationStore: new FeatureCommunicationStore({ requestTimeoutMs: 100 }) });
+      const store = setupFeatureCommunicationRoutes(app, { json: () => (_req, _res, next) => next() }, { communicationStore: new FeatureCommunicationStore({ requestTimeoutMs: 100 }) });
+      store.declareChannel({ agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1' });
       const handler = app.routes['POST /protoclaw/feature-comms/request'].at(-1);
       const response = res();
       const request = handler({ auth: { kind: 'session' }, body: { agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1', requestType: 'stop', payload: {} } }, response);

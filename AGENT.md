@@ -28,6 +28,7 @@
    - 0015 内嵌浏览器 viewer：浏览器所有权翻转（Archived，调查完成暂不实施）
    - 0016 用户数据存储分区治理与 feature 持久资产收敛
    - 0017 Feature Manifest v2 与宿主侧 Feature Registry
+   - 0018 Feature-Panel 通信基座：feature-comms 通道
 
 实现层真实入口：
 
@@ -110,7 +111,7 @@ feature 三类来源（严格区分，改错层 = 白改）：
 
 **预制 agent runtime**（[scripts/run-prebuilt-agent.js](scripts/run-prebuilt-agent.js)）：动态加载 `prebuilt-agents/*/*/agent.js`、挂到本地 ViewerWorker、管理会话恢复与附加启动逻辑（如 IM gateway）。会话数据落在用户目录 `~/.agentdev/AgentDevClaw/prebuilt-sessions/<agentId>`，不污染仓库。`metadata.json` 的 `ui` 声明（entry / tabs / home blocks）是首页 block 渲染的基础壳能力。
 
-**本地 feature**（[local-features](local-features)）：顶层 `index.ts` barrel 聚合导出。活跃域：dispatch（调度）、group-admin（群聊管理）、checkpoint、context-compaction-mirror / context-guard（上下文精简与守卫）、continuity-participant（连续性参与方）、conversation-export（对话导出）、feature-wrappers（框架 feature 的 Claw 协议薄包装）、agent-studio、generative-ui、github、agent-dev。`flow` 与 `feature-dev` 已悬置。
+**本地 feature**（[local-features](local-features)）：顶层 `index.ts` barrel 聚合导出。活跃域：dispatch（调度）、group-admin（群聊管理）、checkpoint、context-compaction-mirror / context-guard（上下文精简与守卫）、continuity-participant（连续性参与方）、conversation-export（对话导出）、feature-wrappers（框架 feature 的 Claw 协议薄包装）、shell-bg-comms（后台任务实时面板镜像，ADR-0018 首个通道接入）、agent-studio、generative-ui、github、agent-dev。`flow` 与 `feature-dev` 已悬置。
 
 app-core.js 全局状态纪律：全局状态区只减不增。新增前端状态放所属 modules 文件的局部作用域；确需跨模块共享用 `window.ClawFW` 命名空间。
 
@@ -168,6 +169,8 @@ Studio 项目落盘布局与运行记录：项目目录 `agent-studio.json` + `.
 **IM 消息路由**：IM 平台消息 → qqbot 门户代理 → 接线员按通道配置路由到工作空间会话 → 目标 Agent 处理 → 回复经接线员传回 IM 平台。
 
 **会话管理**：分支 = 从指定消息节点创建新会话；精简 = 裁剪早期历史（Trim）或压缩为摘要（Compact）；checkpoint / rollback = 保存与恢复会话状态。
+
+**Feature-Panel 实时通信**（[ADR-0018](docs/adr/0018-feature-panel-communication-transport.md)）：运行时 Feature 声明通道（四元组 agentId/sessionId/featureId/channelId）→ 事件镜像到 server 内存 store → 面板经专用 SSE 订阅渲染；反向定向请求（list/status/kill 类）走 `/protoclaw/feature-comms/request` → runtime IPC → `onHostRequest`。首个接入：后台任务面板（`local-features/shell-bg-comms` + `modules/bg-panel.js`）。
 
 ## 会话连续性三层模型
 

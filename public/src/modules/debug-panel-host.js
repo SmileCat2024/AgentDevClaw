@@ -225,6 +225,9 @@ function toggleFeaturePanel(panelId) {
   if (previousPanel && previousPanel !== panelId && window.GenUIPanel && previousPanel === 'genui') {
     window.GenUIPanel.onClose();
   }
+  if (previousPanel && previousPanel !== panelId && previousPanel === 'bg' && window.BgPanel) {
+    window.BgPanel.onClose();
+  }
 
   activeFeaturePanel = wasOpen ? null : panelId;
   renderFeaturePanel({ deferBody: shouldDeferBody });
@@ -244,6 +247,9 @@ function toggleFeaturePanel(panelId) {
   if (wasOpen && panelId === 'genui' && window.GenUIPanel) {
     window.GenUIPanel.onClose();
   }
+  if (wasOpen && panelId === 'bg' && window.BgPanel) {
+    window.BgPanel.onClose();
+  }
 
   // 初始化钩子：settings 面板首次打开时加载异步数据
   if (!wasOpen && panelId === 'settings' && window._wgSettingsInit) {
@@ -256,6 +262,10 @@ function toggleFeaturePanel(panelId) {
   // 初始化钩子：git 面板每次打开时刷新当前会话目录的仓库状态
   if (!wasOpen && panelId === 'git' && window.GitPanel) {
     window.GitPanel.onOpen();
+  }
+  // 后台任务面板：打开即订阅当前会话的 feature-comms 通道
+  if (!wasOpen && panelId === 'bg' && window.BgPanel) {
+    window.BgPanel.onOpen();
   }
 
   // 面板 class 已切换（宽度变化写入样式），下一帧布局应用新宽度后恢复滚动位置。

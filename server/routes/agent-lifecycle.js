@@ -15,6 +15,7 @@ import { buildChildRuntimeAgent } from './session-helpers-pure.js';
 import { PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { createAgentStartupFns } from './agent-startup.js';
 import { releaseRuntimeState } from '../runtime-call-envelope.js';
+import { featureCommunicationStore } from './feature-communication.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
@@ -127,6 +128,9 @@ export function createAgentLifecycleModule(ctx) {
       runtime.stopped = true;
       runtime.stopping = false;
       releaseRuntimeState(runtime.key);
+      // The shared process stays alive for sibling sessions, so the process-exit
+      // handler never fires for this session: release its feature channels here.
+      featureCommunicationStore.closeSession(runtime.agentId || runtime.id, sessionId);
       removeOpenSession(runtime.agentId, sessionId).catch((error) => console.warn(error));
     };
     const onExit = () => {
