@@ -133,19 +133,19 @@
   function renderTaskCard(task) {
     const duration = taskDurationMs(task);
     const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
-    const meta = [statusText(task), duration !== null ? formatDuration(duration) : '']
-      .filter(Boolean).join(' · ');
     const clock = formatClock(task.startedAt);
+    // 结果行置于卡片末尾：状态（含 exit）· 用时 · 启动时刻
+    const meta = [statusText(task), duration !== null ? formatDuration(duration) : '', clock]
+      .filter(Boolean).join(' · ');
     return `
       <div class="bgp-card" data-bgp-task="${escapeHtml(task.id)}">
         <div class="bgp-head">
           <span class="bgp-dot bgp-dot-${escapeHtml(task.status)}"></span>
           <span class="bgp-id" title="${escapeHtml(task.id)}">${escapeHtml(task.id)}</span>
-          ${clock ? `<span class="bgp-time">${clock}</span>` : ''}
         </div>
         <pre class="bgp-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</pre>
-        <div class="bgp-meta">${escapeHtml(meta)}</div>
         ${tail ? `<pre class="bgp-tail" data-bgp-tail="${escapeHtml(task.id)}">${escapeHtml(tail)}</pre>` : ''}
+        <div class="bgp-meta">${escapeHtml(meta)}</div>
       </div>`;
   }
 
@@ -337,7 +337,6 @@
       flex: 1;
       min-width: 0;
     }
-    .bgp-time { font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); flex: none; }
     /* 命令行：裸文字，最多两行省略（title 悬浮看全文） */
     .bgp-cmd {
       margin: 0 0 0 14px;
