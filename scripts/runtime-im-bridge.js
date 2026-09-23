@@ -185,18 +185,18 @@ export function createIMBridge(ctx) {
             const text = WeixinApiClient.extractText(msg);
             if (!text) return;
 
-            // 设置 WeixinBot 的 turn context，使 @CallStart 和 upload_attachment 工具生效
-            feature._currentTurnCtx = {
-              fromUserId: msg.from_user_id,
-              contextToken: msg.context_token,
-            };
+            // CallStart 上下文由 turn metadata（buildTurnMetadata）派生，这里只重置待发送媒体
             feature._pendingMedia = [];
 
             try {
+              const turnMetadata = feature.buildTurnMetadata(msg);
               const entry = ctx.callArbiter.enqueue({
                 source: ch.id,
                 sourceRef: msg.from_user_id || '',
                 text,
+                ...(turnMetadata && typeof turnMetadata === 'object' && Object.keys(turnMetadata).length > 0
+                  ? { metadata: turnMetadata }
+                  : {}),
               });
               const finished = await ctx.callArbiter.waitForCompletion(entry.id);
               const resp = finished.status === 'failed' || finished.status === 'cancelled'
@@ -208,15 +208,23 @@ export function createIMBridge(ctx) {
               // flush 所有待发送的媒体附件
               await feature.flushPendingMedia();
             } finally {
-              feature._currentTurnCtx = null;
               feature._pendingMedia = [];
             }
           };
         } else {
-          // QQ/Feishu/Wecom: use agentRef.onCall
+          // QQ/Feishu/Wecom/Rokid: use agentRef.onCall。签名与框架
+          // Agent.onCall(input, images, activations, metadata) 对齐——feature
+          // 以第 4 参传 turn metadata，宿主闭包以第 4 形参接收。
           feature.agentRef = {
-            onCall: async (text) => {
-              const entry = ctx.callArbiter.enqueue({ source: ch.id, text });
+            onCall: async (text, _images, _activations, metadata) => {
+              const entry = ctx.callArbiter.enqueue({
+                source: ch.id,
+                sourceRef: metadata?.[ch.featureName]?.senderId || '',
+                text,
+                ...(metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0
+                  ? { metadata }
+                  : {}),
+              });
               const finished = await ctx.callArbiter.waitForCompletion(entry.id);
               if (finished.status === 'failed' || finished.status === 'cancelled') {
                 throw new Error(finished.error || 'unknown error');

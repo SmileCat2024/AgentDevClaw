@@ -513,9 +513,19 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     await this.qqbotFeature.startGateway(this);
     this._activeIMChannel = 'qq';
     if (this._callArbiter && this.qqbotFeature) {
+      // agentRef.onCall 签名须与框架 Agent.onCall(input, images, activations, metadata) 对齐：
+      // feature 侧统一以第 4 参传 turn metadata（兼容 agentRef 即 Agent 实例的直连路径），
+      // 宿主闭包以第 4 形参接收，忽略中间两个占位参数。
       this.qqbotFeature.agentRef = {
-        onCall: async (text) => {
-          const entry = this._callArbiter.enqueue({ source: 'qq', text });
+        onCall: async (text, _images, _activations, metadata) => {
+          const entry = this._callArbiter.enqueue({
+            source: 'qq',
+            sourceRef: metadata?.qqbot?.senderId || '',
+            text,
+            ...(metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0
+              ? { metadata }
+              : {}),
+          });
           const finished = await this._callArbiter.waitForCompletion(entry.id);
           if (finished.status === 'failed') {
             throw new Error(finished.error || 'unknown error');
@@ -545,18 +555,18 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
           return;
         }
 
-        // 设置 WeixinBot 的 turn context，使 CallStart 钩子和 upload_attachment 工具生效
-        weixinBot._currentTurnCtx = {
-          fromUserId: msg.from_user_id,
-          contextToken: msg.context_token,
-        };
+        // CallStart 上下文由 turn metadata（buildTurnMetadata）派生，这里只重置待发送媒体
         weixinBot._pendingMedia = [];
 
         try {
+          const turnMetadata = weixinBot.buildTurnMetadata(msg);
           const entry = this._callArbiter.enqueue({
             source: 'weixin',
             sourceRef: msg.from_user_id || '',
             text,
+            ...(turnMetadata && typeof turnMetadata === 'object' && Object.keys(turnMetadata).length > 0
+              ? { metadata: turnMetadata }
+              : {}),
           });
           const finished = await this._callArbiter.waitForCompletion(entry.id);
           const responseText = finished.status === 'failed'
@@ -575,7 +585,6 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
           // flush 所有待发送的媒体附件
           await weixinBot.flushPendingMedia();
         } finally {
-          weixinBot._currentTurnCtx = null;
           weixinBot._pendingMedia = [];
         }
       };
@@ -591,7 +600,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     this._activeIMChannel = 'feishu';
     if (this._callArbiter && feishuBot) {
       feishuBot.agentRef = {
-        onCall: async (text) => {
+        onCall: async (text, _images, _activations, metadata) => {
           // 捕获当前 IM 目标，供 sendIMMessage（调度结果投递）使用
           if (feishuBot._currentTurnCtx) {
             this._lastIMTarget = {
@@ -600,7 +609,14 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
               receiveIdType: feishuBot._currentTurnCtx.receiveIdType,
             };
           }
-          const entry = this._callArbiter.enqueue({ source: 'feishu', text });
+          const entry = this._callArbiter.enqueue({
+            source: 'feishu',
+            sourceRef: metadata?.['feishu-bot']?.senderId || '',
+            text,
+            ...(metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0
+              ? { metadata }
+              : {}),
+          });
           const finished = await this._callArbiter.waitForCompletion(entry.id);
           if (finished.status === 'failed') {
             throw new Error(finished.error || 'unknown error');
@@ -617,7 +633,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     this._activeIMChannel = 'wecom';
     if (this._callArbiter && wecomBot) {
       wecomBot.agentRef = {
-        onCall: async (text) => {
+        onCall: async (text, _images, _activations, metadata) => {
           // 捕获当前 IM 目标，供 sendIMMessage（调度结果投递）使用
           if (wecomBot._currentTurnCtx) {
             this._lastIMTarget = {
@@ -625,7 +641,14 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
               contextToken: '',
             };
           }
-          const entry = this._callArbiter.enqueue({ source: 'wecom', text });
+          const entry = this._callArbiter.enqueue({
+            source: 'wecom',
+            sourceRef: metadata?.['wecom-bot']?.senderId || '',
+            text,
+            ...(metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0
+              ? { metadata }
+              : {}),
+          });
           const finished = await this._callArbiter.waitForCompletion(entry.id);
           if (finished.status === 'failed') {
             throw new Error(finished.error || 'unknown error');
@@ -644,7 +667,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     this._activeIMChannel = 'rokid';
     if (this._callArbiter && rokidBot) {
       rokidBot.agentRef = {
-        onCall: async (text) => {
+        onCall: async (text, _images, _activations, metadata) => {
           // 捕获当前 turn 上下文，供 sendIMMessage（调度结果投递）使用
           if (rokidBot._currentTurnCtx) {
             this._lastIMTarget = {
@@ -652,7 +675,14 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
               contextToken: '',
             };
           }
-          const entry = this._callArbiter.enqueue({ source: 'rokid', text });
+          const entry = this._callArbiter.enqueue({
+            source: 'rokid',
+            sourceRef: metadata?.['rokid-bot']?.senderId || '',
+            text,
+            ...(metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0
+              ? { metadata }
+              : {}),
+          });
           const finished = await this._callArbiter.waitForCompletion(entry.id);
           if (finished.status === 'failed') {
             throw new Error(finished.error || 'unknown error');
