@@ -6,38 +6,9 @@
  * instead of calling agent.onCall() directly.
  *
  * Extracted from scripts/run-prebuilt-agent.js to enable direct unit testing.
- * The DebugHub dependency is injected via setDebugHubClass() so that the
- * module can be loaded and tested without the agentdev framework.
  */
-
-// ── DebugHub injection ──
-// run-prebuilt-agent.js calls setDebugHubClass(DebugHub) after import.
-// When null (e.g. in tests), DebugHub-related calls are silently skipped.
 
 import { CONTINUATION_BUDGET } from './shared/constants.js';
-
-let _debugHubClass = null;
-
-/**
- * Inject the DebugHub class (from agentdev) so CallArbiter can notify
- * the ViewerWorker about queued-input consumption.
- * @param {{ getInstance: () => any } | null} cls
- */
-export function setDebugHubClass(cls) {
-  _debugHubClass = cls;
-}
-
-/**
- * @returns {object|null} DebugHub singleton instance, or null if not configured.
- */
-function getDebugHubInstance() {
-  if (!_debugHubClass) return null;
-  try {
-    return _debugHubClass.getInstance();
-  } catch {
-    return null;
-  }
-}
 
 export class CallArbiter {
   /**
@@ -66,9 +37,11 @@ export class CallArbiter {
   /**
    * Enqueue a call envelope and kick the processing loop.
    *
-   * @param {{ id?: string, source: string, sourceRef?: string, text: string, images?: Array<{base64?:string,mediaType?:string,source?:string}>, capabilityActivations?: string[], metadata?: Record<string, unknown> }} envelope
+   * @param {{ id?: string, source: string, sourceRef?: string, text: string, kind?: 'user' | 'reminder', images?: Array<{base64?:string,mediaType?:string,source?:string}>, capabilityActivations?: string[], metadata?: Record<string, unknown> }} envelope
    *   metadata 为随消息流动的自由元数据（user-turn 契约），只随首段传给
    *   onCall 并最终到达 CallStartContext.metadata（框架只透传不解释）。
+   *   kind='reminder' 表示机器通报唤醒的 call，触发消息落为带 source 的
+   *   system 消息而非 user 消息。
    * @returns {object} The envelope with assigned id and status
    */
   enqueue(envelope) {
@@ -79,6 +52,7 @@ export class CallArbiter {
       source: envelope.source || 'unknown',
       sourceRef: envelope.sourceRef || '',
       text: envelope.text,
+      ...(envelope.kind === 'reminder' ? { kind: 'reminder' } : {}),
       status: 'queued',
       createdAt: Date.now(),
       result: null,
@@ -204,8 +178,11 @@ export class CallArbiter {
         if (!data.input) break;
 
         this.enqueue({
-          source: 'queued-input',
+          // source 透传原始来源（reminder 落地为 system 消息时它就是
+          // Message.source）；无 source 的项沿用邮箱兜底标识
+          source: typeof data.input.source === 'string' && data.input.source ? data.input.source : 'queued-input',
           text: data.input.text,
+          ...(data.input.kind === 'reminder' ? { kind: 'reminder' } : {}),
           ...(Array.isArray(data.input.images) && data.input.images.length > 0
             ? { images: data.input.images }
             : {}),
@@ -249,18 +226,6 @@ export class CallArbiter {
     envelope._segmentCount = 0;
     envelope._checkpointCount = 0;
     envelope._rollbackCount = 0;
-
-    // @deprecated (2026-07-25) — supplement mechanism removed; no new envelopes
-    // are created with source='queued-input'. This call is harmless dead code.
-    // Safe to remove in a future cleanup.
-    const hub = getDebugHubInstance();
-    if (envelope.source === 'queued-input' && envelope.sourceRef && hub && this._agent?.agentId) {
-      try {
-        hub.consumeQueuedInput(this._agent.agentId, envelope.sourceRef);
-      } catch (error) {
-        console.warn('[CallArbiter] consumeQueuedInput failed:', error);
-      }
-    }
 
     console.log(`[CallArbiter] executing ${envelope.id} (source=${envelope.source})`);
     this._emit('callStarted', envelope);
@@ -324,10 +289,15 @@ export class CallArbiter {
 
       // ── Execute one onCall segment ──
       // capabilityActivations / metadata 只随首段携带：续跑段（force-continuation
-      // 等）的输入不是新用户消息，激活与元数据已由首段消费完毕
+      // 等）的输入不是新用户消息，激活与元数据已由首段消费完毕。
+      // 输入身份（kind/source）同样只属于首段：续跑段是宿主合成的输入，
+      // 落地形态由框架缺省的 user 分支处理（system 上下文已在段前注入）。
       const activations = envelope._segmentCount === 1 ? envelope.capabilityActivations : undefined;
       const turnMetadata = envelope._segmentCount === 1 ? envelope.metadata : undefined;
-      const result = await this._agent.onCall(input, envelope.images, activations, turnMetadata);
+      const turnOptions = envelope._segmentCount === 1 && envelope.kind === 'reminder'
+        ? { kind: 'reminder', source: envelope.source }
+        : undefined;
+      const result = await this._agent.onCall(input, envelope.images, activations, turnMetadata, turnOptions);
       envelope.result = typeof result === 'string' ? result : '';
 
       // ── Observe the structured call outcome ──

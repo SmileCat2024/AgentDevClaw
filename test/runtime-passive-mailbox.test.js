@@ -114,6 +114,24 @@ describe('createPassiveMailboxLoop', () => {
     await running;
   });
 
+  it('forwards the reminder kind of mailbox items to the arbiter envelope', async () => {
+    const arbiter = createMockArbiter();
+    const harness = createHarness({
+      arbiter,
+      fetchImpl: async () => jsonResponse({
+        input: { text: '[后台任务 bg-1 已完成]', kind: 'reminder', source: 'shell', sourceRef: 'bg-1' },
+      }),
+    });
+    const running = harness.loop.run();
+
+    assert.ok(await until(() => arbiter.calls.enqueued.length === 1));
+    assert.equal(arbiter.calls.enqueued[0].kind, 'reminder');
+    assert.equal(arbiter.calls.enqueued[0].source, 'shell');
+
+    harness.dispose();
+    await running;
+  });
+
   it('does not dequeue while the arbiter is busy', async () => {
     const arbiter = createMockArbiter({ status: 'running' });
     const fetchCalls = [];

@@ -777,4 +777,71 @@ describe('CallArbiter', () => {
     server.close();
     delete process.env.AGENTDEV_VIEWER_PORT;
   });
+
+  it('passes reminder identity to onCall and drops it on continuation segments', async () => {
+    const onCallArgs = [];
+    const agent = {
+      onCall: async (text, images, activations, metadata, options) => {
+        onCallArgs.push({ text, options });
+        return 'ok';
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+
+    const reminder = arbiter.enqueue({ source: 'shell', text: '[后台任务 bg-1 已完成]', kind: 'reminder' });
+    await arbiter.waitForCompletion(reminder.id);
+    const plain = arbiter.enqueue({ source: 'viewer-input', text: 'hello' });
+    await arbiter.waitForCompletion(plain.id);
+
+    assert.equal(onCallArgs.length, 2);
+    // reminder envelope：身份只随首段传给 onCall（kind + source）
+    assert.deepEqual(onCallArgs[0].options, { kind: 'reminder', source: 'shell' });
+    // 普通 envelope：不传身份，框架走缺省 user 分支
+    assert.equal(onCallArgs[1].options, undefined);
+  });
+
+  it('drain preserves the reminder kind of leftover mailbox items', async () => {
+    const http = await import('node:http');
+    const queue = [
+      { text: '[后台任务 bg-3 已完成]', kind: 'reminder', source: 'shell', sourceRef: 'bg-3' },
+    ];
+    const server = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url?.includes('/dequeue-input')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        if (queue.length > 0) {
+          res.end(JSON.stringify({ input: queue.shift() }));
+        } else {
+          res.end(JSON.stringify({ input: null }));
+        }
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise(resolve => server.listen(0, resolve));
+    process.env.AGENTDEV_VIEWER_PORT = String(server.address().port);
+
+    const onCallArgs = [];
+    const agent = {
+      agentId: 'test-drain-reminder-agent',
+      onCall: async (text, images, activations, metadata, options) => {
+        onCallArgs.push({ text, options });
+        return 'ok';
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+
+    const e1 = arbiter.enqueue({ source: 'test', text: 'main-task' });
+    await arbiter.waitForCompletion(e1.id);
+    await new Promise(r => setTimeout(r, 100));
+
+    // busy 期间积压的 reminder 在 call 结束后被安全网捞起时必须保住身份，
+    // 不能退化成 user 消息落账
+    assert.equal(onCallArgs.length, 2);
+    assert.equal(onCallArgs[1].text, '[后台任务 bg-3 已完成]');
+    assert.deepEqual(onCallArgs[1].options, { kind: 'reminder', source: 'shell' });
+
+    server.close();
+    delete process.env.AGENTDEV_VIEWER_PORT;
+  });
 });

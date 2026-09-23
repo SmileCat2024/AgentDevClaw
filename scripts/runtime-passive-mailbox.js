@@ -77,6 +77,7 @@ export function createPassiveMailboxLoop(ctx) {
         source: typeof input.source === 'string' && input.source ? input.source : 'queued-input',
         ...(typeof input.sourceRef === 'string' && input.sourceRef ? { sourceRef: input.sourceRef } : {}),
         text: input.text,
+        ...(input.kind === 'reminder' ? { kind: 'reminder' } : {}),
         ...(Array.isArray(input.images) && input.images.length > 0 ? { images: input.images } : {}),
         ...(Array.isArray(input.capabilityActivations) && input.capabilityActivations.length > 0
           ? { capabilityActivations: input.capabilityActivations.filter((a) => typeof a === 'string') }

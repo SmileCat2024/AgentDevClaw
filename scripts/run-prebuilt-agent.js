@@ -20,7 +20,7 @@ import { mountUserConfiguredFeatures } from '../server/feature-runtime/user-moun
 import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { buildCallUsageEvents, reportUsageEvent } from './usage-report.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
-import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
+import { CallArbiter } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
 import { handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
@@ -28,9 +28,6 @@ import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
-
-// Inject DebugHub into the extracted CallArbiter module
-setDebugHubClass(DebugHub);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1044,23 +1041,27 @@ SessionLifecycle.prototype.start = async function () {
   const userInput = this.agent.features?.get?.('user-input');
   const hasUserInput = Boolean(userInput && typeof userInput.getUserInput === 'function');
 
+  // ── Idle mailbox consumption loop（两种模式都装配）──
+  // viewer 邮箱在 call 期间由 react-loop 步边界与 arbiter 安全网消费，
+  // 空闲时无人消费。被动模式（无 UserInputFeature）的 user-turn 只能落
+  // 邮箱，缺少此循环会投递成功但会话卡住；主动模式的 reminder 通报
+  // （kind='reminder'，不响应 input lease）同样只在空闲邮箱等待消费。
+  // 循环只在 arbiter idle 时 dequeue，与 lease 通道正交：真人输入走
+  // lease 应答（input loop），机器通报走邮箱，互不抢占。
+  this.passiveMailboxLoop = createPassiveMailboxLoop({
+    agent: this.agent,
+    callArbiter: this.callArbiter,
+    isDisposed: () => this.disposed,
+    viewerPort: VIEWER_PORT,
+  });
+  this.passiveMailboxLoop.run().catch(err => {
+    console.error(`[ProtoClaw Runtime] 邮箱消费循环异常退出 (session=${this.sessionId}):`, err);
+  });
+  console.log('[ProtoClaw Runtime] ✓ 已启动邮箱消费循环 (viewer mailbox → arbiter)');
+
   if (!hasUserInput) {
     console.log('');
     console.log('当前 Agent 不使用 UserInputFeature，运行在被动事件模式。');
-    // 被动模式永不开 input lease，外部 user-turn 只能进 viewer 邮箱；
-    // react-loop / arbiter 安全网仅在 call 期间消费邮箱，空闲时无人消费
-    // 会导致投递成功但会话卡住（thread 指令）。此循环把邮箱作为又一个
-    // 外部事件源接进 arbiter，与 dispatch / IM 桥接同构。
-    this.passiveMailboxLoop = createPassiveMailboxLoop({
-      agent: this.agent,
-      callArbiter: this.callArbiter,
-      isDisposed: () => this.disposed,
-      viewerPort: VIEWER_PORT,
-    });
-    this.passiveMailboxLoop.run().catch(err => {
-      console.error(`[ProtoClaw Runtime] 被动邮箱消费循环异常退出 (session=${this.sessionId}):`, err);
-    });
-    console.log('[ProtoClaw Runtime] ✓ 已启动被动邮箱消费循环 (viewer mailbox → arbiter)');
     // Keep the session alive without an input loop.
     // The process stays alive as long as pending IPC / DebugHub requests exist.
     return;
