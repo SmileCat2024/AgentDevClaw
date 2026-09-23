@@ -331,6 +331,41 @@ describe('buildStructuredModelPresets', () => {
   });
 });
 
+// ── Base URL echo / endpoint preservation regressions ──────────────
+
+describe('provider endpoint resolution', () => {
+  it('flatten echoes the endpoint from the same-name provider that carries this protocol', () => {
+    // Shape of the historical bug: provider name shared by an endpoint-less
+    // record and a real one; lookup by name alone picked the empty record.
+    const structured = {
+      providers: [
+        { name: 'Xiaomi', apiKey: 'k', endpoints: {} },
+        { name: 'Xiaomi', apiKey: 'k', endpoints: { openai: 'https://api.xiaomimimo.com/v1' } },
+      ],
+      presets: [
+        { name: 'Mimo', providerName: 'Xiaomi', protocol: 'openai', model: 'mimo-v2.6-pro' },
+      ],
+    };
+    const flat = flattenModelPresets(structured);
+    assert.strictEqual(flat[0].baseUrl, 'https://api.xiaomimimo.com/v1');
+  });
+
+  it('save with empty baseUrl inherits the endpoint stored under the same provider name and protocol', () => {
+    const existing = {
+      providers: [{ name: 'Xiaomi', apiKey: 'k', endpoints: { openai: 'https://api.xiaomimimo.com/v1' } }],
+      presets: [{ name: 'Mimo', providerName: 'Xiaomi', protocol: 'openai', model: 'm' }],
+    };
+    const rebuilt = buildStructuredModelPresets(
+      [{ name: 'Mimo', providerName: 'Xiaomi', provider: 'openai', baseUrl: '', apiKey: 'k', model: 'm' }],
+      existing
+    );
+    const provider = rebuilt.providers.find(p => p.name === 'Xiaomi');
+    assert.strictEqual(provider?.endpoints?.openai, 'https://api.xiaomimimo.com/v1');
+    // And the flattened preset still echoes it
+    assert.strictEqual(flattenModelPresets(rebuilt)[0].baseUrl, 'https://api.xiaomimimo.com/v1');
+  });
+});
+
 // ── normalizeSpeechModel ────────────────────────────────────────────
 
 describe('normalizeSpeechModel', () => {

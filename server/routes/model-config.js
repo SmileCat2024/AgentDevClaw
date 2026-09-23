@@ -58,25 +58,59 @@ function resolvePresetApiSurface(protocol, authType, apiSurface) {
   return cleanSessionText(apiSurface) || 'chat';
 }
 
+function providerSignature(protocol, provider) {
+  return JSON.stringify([
+    protocol,
+    cleanSessionText(provider?.endpoints?.[protocol]),
+    cleanSessionText(provider?.apiKey),
+    cleanSessionText(provider?.authType),
+  ]);
+}
+
+function resolveProviderForPreset(normalized, protocol, providerName, presetBaseUrl, presetApiKey, presetAuthType) {
+  const providers = normalized.providers;
+  const nameMatches = providers.filter(provider => cleanSessionText(provider?.name) === providerName);
+  if (nameMatches.length === 0) return null;
+
+  const presetSignature = JSON.stringify([
+    protocol,
+    cleanSessionText(presetBaseUrl),
+    cleanSessionText(presetApiKey),
+    cleanSessionText(presetAuthType),
+  ]);
+  const exact = nameMatches.find(provider => providerSignature(protocol, provider) === presetSignature);
+  if (exact) return exact;
+
+  // Provider names may be shared by records for different protocols or auth
+  // modes. Prefer a record that actually carries this protocol's endpoint so
+  // an empty endpoint on the first same-name record cannot hide the URL.
+  return nameMatches.find(provider => cleanSessionText(provider?.endpoints?.[protocol]))
+    || nameMatches[0];
+}
+
 function flattenModelPresets(data) {
   const normalized = normalizeModelPresetsData(data);
-  const providersByName = new Map();
-  normalized.providers.forEach((provider) => {
-    const name = cleanSessionText(provider?.name);
-    if (name) providersByName.set(name, provider);
-  });
   const mapped = normalized.presets.map((preset, index) => {
     const protocol = cleanSessionText(preset?.protocol || preset?.provider) || 'anthropic';
     const providerName = cleanSessionText(preset?.providerName);
-    const provider = providerName ? providersByName.get(providerName) : null;
+    const provider = resolveProviderForPreset(
+      normalized,
+      protocol,
+      providerName,
+      preset?.baseUrl,
+      preset?.apiKey,
+      preset?.authType,
+    );
     const authType = cleanSessionText(provider?.authType || preset?.authType) || '';
+    const apiKey = cleanSessionText(provider?.apiKey || preset?.apiKey);
+    const baseUrl = cleanSessionText(provider?.endpoints?.[protocol] || preset?.baseUrl);
     return {
       name: cleanSessionText(preset?.name) || cleanSessionText(preset?.model) || `Preset ${index + 1}`,
       provider: protocol,
       providerName,
       model: cleanSessionText(preset?.model),
-      baseUrl: cleanSessionText(provider?.endpoints?.[protocol] || preset?.baseUrl),
-      apiKey: cleanSessionText(provider?.apiKey || preset?.apiKey),
+      baseUrl,
+      apiKey,
       authType,
       clientId: cleanSessionText(provider?.clientId || preset?.clientId) || '',
       apiSurface: resolvePresetApiSurface(protocol, authType, preset?.apiSurface),
@@ -111,15 +145,17 @@ function makeUniqueProviderName(baseName, usedNames) {
 
 function buildStructuredModelPresets(flatPresets, existingData = null) {
   const normalizedExisting = normalizeModelPresetsData(existingData);
+  const existingProviderRecordsBySignature = new Map();
   const existingProvidersByName = new Map();
-  const existingProviderNameBySignature = new Map();
   normalizedExisting.providers.forEach((provider) => {
     const name = cleanSessionText(provider?.name);
     if (!name) return;
-    existingProvidersByName.set(name, provider);
+    if (!existingProvidersByName.has(name)) existingProvidersByName.set(name, []);
+    existingProvidersByName.get(name).push(provider);
     const endpoints = provider?.endpoints && typeof provider.endpoints === 'object' ? provider.endpoints : {};
     Object.entries(endpoints).forEach(([protocol, endpoint]) => {
-      existingProviderNameBySignature.set(JSON.stringify([cleanSessionText(protocol), cleanSessionText(endpoint), cleanSessionText(provider?.apiKey), cleanSessionText(provider?.authType)]), name);
+      const signature = JSON.stringify([cleanSessionText(protocol), cleanSessionText(endpoint), cleanSessionText(provider?.apiKey), cleanSessionText(provider?.authType)]);
+      if (!existingProviderRecordsBySignature.has(signature)) existingProviderRecordsBySignature.set(signature, name);
     });
   });
 
@@ -133,17 +169,27 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
     const protocol = cleanSessionText(rawPreset.provider) || 'anthropic';
     const name = cleanSessionText(rawPreset.name) || cleanSessionText(rawPreset.model) || `Preset ${index + 1}`;
     const model = cleanSessionText(rawPreset.model);
-    const baseUrl = cleanSessionText(rawPreset.baseUrl);
+    const requestedName = cleanSessionText(rawPreset.providerName);
+    let baseUrl = cleanSessionText(rawPreset.baseUrl);
     const apiKey = cleanSessionText(rawPreset.apiKey);
     const authType = cleanSessionText(rawPreset.authType) || '';
     const clientId = cleanSessionText(rawPreset.clientId) || '';
+    // A save arriving with an empty baseUrl must not erase the endpoint already
+    // stored under the same provider name + protocol (partial payloads from
+    // clients that echo a blank field). Inherit the stored endpoint so the
+    // rebuilt record keeps it.
+    if (!baseUrl && requestedName) {
+      const inheritSource = (existingProvidersByName.get(requestedName) || [])
+        .find(provider => cleanSessionText(provider?.endpoints?.[protocol]));
+      if (inheritSource) baseUrl = cleanSessionText(inheritSource.endpoints[protocol]);
+    }
     // Signature includes authType so OAuth providers (empty apiKey) don't collide with API-key providers
     const signature = JSON.stringify([protocol, baseUrl, apiKey, authType]);
 
     let providerName = providersBySignature.get(signature);
     if (!providerName) {
-      const requestedName = cleanSessionText(rawPreset.providerName);
-      const existingProvider = requestedName ? existingProvidersByName.get(requestedName) : null;
+      const namedProviders = requestedName ? (existingProvidersByName.get(requestedName) || []) : [];
+      const existingProvider = namedProviders.find(provider => providerSignature(protocol, provider) === signature);
       const existingSignature = existingProvider
         ? JSON.stringify([protocol, cleanSessionText(existingProvider?.endpoints?.[protocol]), cleanSessionText(existingProvider?.apiKey), cleanSessionText(existingProvider?.authType)])
         : '';
@@ -151,7 +197,7 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
         providerName = requestedName;
         usedNames.add(providerName);
       } else {
-        providerName = existingProviderNameBySignature.get(signature) || makeUniqueProviderName(requestedName || name, usedNames);
+        providerName = existingProviderRecordsBySignature.get(signature) || makeUniqueProviderName(requestedName || name, usedNames);
         usedNames.add(providerName);
       }
       providersBySignature.set(signature, providerName);

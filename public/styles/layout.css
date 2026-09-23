@@ -2115,6 +2115,97 @@ body[data-theme="light"] .settings-sub-config {
   color: var(--text-secondary);
 }
 
+.base-url-combo {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.base-url-combo:focus-within {
+  border-color: rgba(99, 145, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(99, 145, 255, 0.12);
+}
+
+.base-url-combo .base-url-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.base-url-combo .base-url-input:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.base-url-suffix {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  color: var(--text-secondary);
+  background: rgba(255,255,255,0.06);
+  border-left: 1px solid rgba(255,255,255,0.1);
+  font: 500 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+
+.base-url-plus {
+  opacity: 0.65;
+}
+
+.base-url-suffix-duplicate {
+  color: #e8a847;
+  background: rgba(232, 168, 71, 0.14);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.base-url-combo.base-url-duplicate {
+  border-color: rgba(232, 168, 71, 0.55);
+}
+
+.base-url-combo.base-url-duplicate:focus-within {
+  border-color: rgba(232, 168, 71, 0.75);
+  box-shadow: 0 0 0 3px rgba(232, 168, 71, 0.12);
+}
+
+body[data-theme="light"] .base-url-combo {
+  border-color: #d0d5dd;
+  background: #fff;
+}
+
+body[data-theme="light"] .base-url-combo:focus-within {
+  border-color: #6391ff;
+  box-shadow: 0 0 0 3px rgba(99, 145, 255, 0.1);
+}
+
+body[data-theme="light"] .base-url-suffix {
+  background: rgba(0,0,0,0.05);
+  border-left-color: #d0d5dd;
+}
+
+body[data-theme="light"] .base-url-suffix-duplicate {
+  color: #9a6700;
+  background: rgba(154, 103, 0, 0.12);
+}
+
+body[data-theme="light"] .base-url-combo.base-url-duplicate {
+  border-color: #c9962c;
+}
+
+body[data-theme="light"] .base-url-combo.base-url-duplicate:focus-within {
+  border-color: #a87d1f;
+  box-shadow: 0 0 0 3px rgba(154, 103, 0, 0.1);
+}
+
 .settings-input {
   width: 100%;
   padding: 10px 14px;

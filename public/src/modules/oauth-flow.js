@@ -91,6 +91,7 @@ window.onProtocolChange = function() {
       baseUrlInput.value = '';
     }
   }
+  if (typeof window.syncBaseEndpointBadge === 'function') window.syncBaseEndpointBadge();
 };
 
 function getEditingProviderName() {
@@ -120,6 +121,7 @@ window.onOpenCodeTierChange = function() {
   var tier = document.getElementById('settings-preset-opencode-tier')?.value;
   var baseUrlInput = document.getElementById('settings-preset-baseurl');
   if (baseUrlInput) baseUrlInput.value = tier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL;
+  if (typeof window.syncBaseEndpointBadge === 'function') window.syncBaseEndpointBadge();
   var select = document.getElementById('settings-preset-opencode-model');
   if (select) select.innerHTML = '<option value="">' + (currentLanguage === 'zh' ? '— 点击加载模型列表 —' : '— Click Load Models —') + '</option>';
 };
@@ -181,6 +183,7 @@ window.onOpenCodeModelSelect = function() {
   if (!modelId) return;
   var modelInput = document.getElementById('settings-preset-model');
   if (modelInput) modelInput.value = modelId;
+  if (typeof window.syncBaseEndpointBadge === 'function') window.syncBaseEndpointBadge();
   var nameInput = document.getElementById('settings-preset-name');
   if (nameInput && !nameInput.value.trim()) {
     var tier = document.getElementById('settings-preset-opencode-tier')?.value === 'go' ? 'Go' : 'Zen';

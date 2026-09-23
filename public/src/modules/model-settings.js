@@ -213,6 +213,17 @@ function renderSettingsOverlay() {
 
   if (typeof window.populateThinkingEffortOptions === 'function') window.populateThinkingEffortOptions();
 
+  if (tabText && editing !== null) {
+    const protocolSelect = document.getElementById('settings-preset-provider');
+    const baseUrlInput = document.getElementById('settings-preset-baseurl');
+    if (protocolSelect && baseUrlInput) {
+      protocolSelect.addEventListener('change', syncBaseEndpointBadge);
+      baseUrlInput.addEventListener('input', syncBaseEndpointBadge);
+      document.getElementById('settings-preset-model')?.addEventListener('input', syncBaseEndpointBadge);
+      syncBaseEndpointBadge();
+    }
+  }
+
   // Enhance native <select> elements with custom dropdown
   if (window.ClawSelect) window.ClawSelect.enhanceAll(host);
 
@@ -289,8 +300,85 @@ window.onProviderChangeUpdateThinking = function() {
   if (typeof window.populateThinkingEffortOptions === 'function') window.populateThinkingEffortOptions();
 };
 
+function syncBaseEndpointBadge() {
+  const protocolSelect = document.getElementById('settings-preset-provider');
+  const baseUrlInput = document.getElementById('settings-preset-baseurl');
+  const modelInput = document.getElementById('settings-preset-model');
+  const suffixBadge = document.querySelector('.base-url-combo .base-url-suffix');
+  const combo = document.querySelector('.base-url-combo');
+  if (!protocolSelect || !baseUrlInput || !suffixBadge || !combo) return;
+  const isZh = currentLanguage === 'zh';
+  const raw = baseUrlInput.value.trim();
+  const normalized = normalizeModelBaseUrl(raw);
+  const duplicate = !!raw && normalized !== raw.replace(/\/+$/, '');
+  const suffix = getModelEndpointSuffix(protocolSelect.value, modelInput?.value || '', normalized);
+  combo.classList.toggle('base-url-duplicate', duplicate);
+  suffixBadge.classList.toggle('base-url-suffix-duplicate', duplicate);
+  suffixBadge.title = duplicate
+    ? (isZh ? '该路径由服务自动拼接，保存时会移除重复部分' : 'This path is appended automatically and duplicated input is removed when saved')
+    : (isZh ? '服务自动追加' : 'Added automatically');
+  suffixBadge.innerHTML = '<span class="base-url-plus">+</span>' + escapeHtml(suffix);
+}
+// Exposed for oauth-flow.js: its protocol/tier/model handlers mutate the Base
+// URL and Model fields programmatically, which fires no input events.
+window.syncBaseEndpointBadge = syncBaseEndpointBadge;
+
+const MODEL_ENDPOINT_SUFFIXES = ['/chat/completions', '/responses', '/messages'];
+
+function stripModelEndpointSuffix(rawUrl) {
+  const url = String(rawUrl || '').trim().replace(/\/+$/, '');
+  if (!url) return '';
+  const lower = url.toLowerCase();
+  const suffix = MODEL_ENDPOINT_SUFFIXES.find(item => lower.endsWith(item));
+  if (!suffix) return url;
+  return url.slice(0, url.length - suffix.length).replace(/\/+$/, '');
+}
+
+function normalizeModelBaseUrl(rawUrl) {
+  return stripModelEndpointSuffix(rawUrl);
+}
+
 const OPENCODE_ZEN_BASE_URL = 'https://opencode.ai/zen/v1';
 const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1';
+
+function getModelEndpointSuffix(protocolValue, modelId, baseUrl) {
+  if (protocolValue === 'anthropic') {
+    return /\/v\d+$/i.test(String(baseUrl || '').replace(/\/+$/, '')) ? '/messages' : '/v1/messages';
+  }
+  if (protocolValue === 'openai-responses' || protocolValue === 'openai-oauth') {
+    return '/responses';
+  }
+  if (protocolValue === 'opencode') {
+    const model = String(modelId || '').trim().toLowerCase();
+    if (model.startsWith('claude-')) return '/v1/messages';
+    if (model.startsWith('gpt-') || model.startsWith('grok-')) return '/responses';
+    return '/chat/completions';
+  }
+  return '/chat/completions';
+}
+
+function renderBaseEndpointField(preset, protocolValue, baseUrl, isZh) {
+  const raw = String(baseUrl || '').trim();
+  const normalized = normalizeModelBaseUrl(raw);
+  const duplicate = !!raw && normalized !== raw.replace(/\/+$/, '');
+  const inputClass = 'settings-input base-url-input';
+  const suffixClass = duplicate ? 'base-url-suffix base-url-suffix-duplicate' : 'base-url-suffix';
+  const comboClass = duplicate ? 'base-url-combo base-url-duplicate' : 'base-url-combo';
+  const suffixTitle = duplicate
+    ? (isZh ? '该路径由服务自动拼接，保存时会移除重复部分' : 'This path is appended automatically and duplicated input is removed when saved')
+    : (isZh ? '服务自动追加' : 'Added automatically');
+  const suffix = getModelEndpointSuffix(protocolValue, preset.model || '', normalized);
+  const inputValue = escapeHtml(raw);
+  return [
+    '<div class="settings-field">',
+    '<label>Base URL</label>',
+    '<div class="' + comboClass + '" role="group" aria-label="Base URL">',
+    '<input class="' + inputClass + '" id="settings-preset-baseurl" type="text" value="' + inputValue + '" placeholder="' + escapeHtml(protocolValue === 'anthropic' ? 'https://open.bigmodel.cn/api/anthropic' : 'https://api.example.com/v1') + '"' + (protocolValue === 'opencode' ? ' readonly' : '') + '>',
+    '<span class="' + suffixClass + '" title="' + escapeHtml(suffixTitle) + '"><span class="base-url-plus">+</span>' + escapeHtml(suffix) + '</span>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
 
 function renderSettingsEditForm(editIdx, presets, isZh) {
   const preset = presets[editIdx] || {};
@@ -303,34 +391,32 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     : (preset.provider || 'anthropic')));
   let isOAuthMode = dropdownVal === 'openai-oauth';
   let isOpenCodeMode = dropdownVal === 'opencode';
+  const resolvedBaseUrl = preset.baseUrl || (isOAuthMode ? 'https://chatgpt.com/backend-api/codex' : (isOpenCodeMode ? (openCodeTier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL) : ''));
   return [
-    '<div class="settings-section">',
+    '<div class=\"settings-section\">',
 
     // ── 连接配置 ──
-    '<div class="settings-field">',
+    '<div class=\"settings-field\">',
     '<label>' + (isZh ? '名称' : 'Name') + '</label>',
-    '<input class="settings-input" id="settings-preset-name" type="text" value="' + escapeHtml(preset.name || '') + '" placeholder="' + (isZh ? '例如：智谱 GLM-5' : 'e.g. ZhiPu GLM-5') + '">',
+    '<input class=\"settings-input\" id=\"settings-preset-name\" type=\"text\" value=\"' + escapeHtml(preset.name || '') + '\" placeholder=\"' + (isZh ? '例如：智谱 GLM-5' : 'e.g. ZhiPu GLM-5') + '\">',
     '</div>',
-    '<div class="settings-row">',
-    '<div class="settings-field">',
+    '<div class=\"settings-row\">',
+    '<div class=\"settings-field\">',
     '<label>' + (isZh ? '接口协议' : 'Protocol') + '</label>',
-    '<select class="settings-input" data-claw-select id="settings-preset-provider" onchange="onProtocolChange()">',
-    '<option value="anthropic"' + (dropdownVal === 'anthropic' ? ' selected' : '') + '>Anthropic</option>',
-    '<option value="openai"' + (dropdownVal === 'openai' ? ' selected' : '') + '>OpenAI Chat</option>',
-    '<option value="openai-responses"' + (dropdownVal === 'openai-responses' ? ' selected' : '') + '>OpenAI Responses</option>',
-    '<option value="opencode"' + (dropdownVal === 'opencode' ? ' selected' : '') + '>OpenCode</option>',
-    '<option value="openai-oauth"' + (dropdownVal === 'openai-oauth' ? ' selected' : '') + '>' + (isZh ? 'OpenAI Auth (OAuth 设备码登录)' : 'OpenAI Auth (OAuth Device Login)') + '</option>',
+    '<select class=\"settings-input\" data-claw-select id=\"settings-preset-provider\" onchange=\"onProtocolChange()\">',
+    '<option value=\"anthropic\"' + (dropdownVal === 'anthropic' ? ' selected' : '') + '>Anthropic</option>',
+    '<option value=\"openai\"' + (dropdownVal === 'openai' ? ' selected' : '') + '>OpenAI Chat</option>',
+    '<option value=\"openai-responses\"' + (dropdownVal === 'openai-responses' ? ' selected' : '') + '>OpenAI Responses</option>',
+    '<option value=\"opencode\"' + (dropdownVal === 'opencode' ? ' selected' : '') + '>OpenCode</option>',
+    '<option value=\"openai-oauth\"' + (dropdownVal === 'openai-oauth' ? ' selected' : '') + '>' + (isZh ? 'OpenAI Auth (OAuth 设备码登录)' : 'OpenAI Auth (OAuth Device Login)') + '</option>',
     '</select>',
     '</div>',
-    '<div class="settings-field">',
+    '<div class=\"settings-field\">',
     '<label>Model</label>',
-    '<input class="settings-input" id="settings-preset-model" type="text" value="' + escapeHtml(preset.model || '') + '" placeholder="glm-5-turbo">',
+    '<input class=\"settings-input\" id=\"settings-preset-model\" type=\"text\" value=\"' + escapeHtml(preset.model || '') + '\" placeholder=\"glm-5-turbo\">',
     '</div>',
     '</div>',
-    '<div class="settings-field">',
-    '<label>Base URL</label>',
-    '<input class="settings-input" id="settings-preset-baseurl" type="text" value="' + escapeHtml(preset.baseUrl || (isOAuthMode ? 'https://chatgpt.com/backend-api/codex' : (isOpenCodeMode ? (openCodeTier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL) : ''))) + '" placeholder="https://open.bigmodel.cn/api/anthropic"' + (isOpenCodeMode ? ' readonly' : '') + '>',
-    '</div>',
+    renderBaseEndpointField(preset, dropdownVal, resolvedBaseUrl, isZh),
     /* API Key section (hidden in OAuth mode) */
     '<div id="api-key-section"' + (isOAuthMode ? ' style="display:none;"' : '') + '>',
     '<div class="settings-field">',
@@ -649,7 +735,7 @@ async function saveSettingsPreset(idx, opts) {
     model: modelVal,
     baseUrl: isOpenCode
       ? (openCodeTier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL)
-      : (el('settings-preset-baseurl')?.value || '').trim(),
+      : normalizeModelBaseUrl(el('settings-preset-baseurl')?.value || ''),
     apiKey: isOAuth ? '' : (el('settings-preset-apikey')?.value || '').trim(),
     thinkingEffort: thinkingEffort,
     thinkingBudgetTokens: thinkingBudgetTokens,
