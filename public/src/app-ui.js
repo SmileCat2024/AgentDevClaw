@@ -1480,57 +1480,78 @@ window.registerFeaturePanel = registerFeaturePanel;
 registerFeaturePanel('workspace', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_structure'),
+  label: { zh: '文件结构', en: 'Structure' },
+  description: { zh: '项目文件树', en: 'Project file tree' },
   render: () => renderStructurePanel(),
 });
 registerFeaturePanel('plan', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_plan'),
+  label: { zh: '计划', en: 'Plan' },
+  description: { zh: '任务与计划列表', en: 'Tasks and plan list' },
   render: () => renderPlanPanel(),
 });
 registerFeaturePanel('git', {
   when: { surfaces: ['chat'] },
   title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
+  label: { zh: '源代码管理', en: 'Source Control' },
+  description: { zh: 'Git 状态与操作', en: 'Git status and actions' },
   render: () => window.GitPanel ? window.GitPanel.render() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
 });
 registerFeaturePanel('monitor', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_monitor'),
+  label: { zh: '监控', en: 'Monitor' },
+  description: { zh: '运行状态监控', en: 'Runtime status monitor' },
   render: () => renderMonitorPanel(),
 });
 registerFeaturePanel('hooks', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_features'),
+  label: { zh: '功能', en: 'Features' },
+  description: { zh: 'Feature 功能面板', en: 'Feature panel' },
   render: () => renderFeaturesPanel(),
 });
 registerFeaturePanel('inspector', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_reverse_hooks'),
+  label: { zh: '反向钩子', en: 'Reverse Hooks' },
+  description: { zh: 'Hook 检查器', en: 'Hook inspector' },
   render: () => renderReverseHooksPanel(),
 });
 registerFeaturePanel('logs', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_logs'),
+  label: { zh: '日志', en: 'Logs' },
+  description: { zh: '运行日志', en: 'Runtime logs' },
   render: () => renderLogsPanel(),
 });
 registerFeaturePanel('preflight', {
   when: { surfaces: ['chat'] },
   title: () => '装配预检',
+  label: { zh: '装配预检', en: 'Preflight' },
   render: () => renderPreflightPanel(),
 });
 registerFeaturePanel('mcp', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_mcp'),
+  label: { zh: 'MCP', en: 'MCP' },
+  description: { zh: 'MCP 服务端', en: 'MCP servers' },
   render: () => renderMcpPanel(),
 });
 registerFeaturePanel('genui', {
   when: { surfaces: ['chat'] },
   title: () => '交互页面',
+  label: { zh: '交互页面', en: 'Interactive Pages' },
+  description: { zh: 'UI 交互页面', en: 'Interactive UI pages' },
   render: () => window.GenUIPanel ? window.GenUIPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
   preserveOnReRender: true,
 });
 registerFeaturePanel('session-controls', {
   when: { surfaces: ['chat'] },
   title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
+  label: { zh: '会话控制', en: 'Session Controls' },
+  description: { zh: '自动接续、上下文保护与模型轮转', en: 'Auto-resume, context protection and model rotation' },
   render: () => window.SessionControlsPanel
     ? window.SessionControlsPanel.render()
     : '<div class="feature-panel-empty"><div>加载中...</div></div>',
@@ -1538,11 +1559,13 @@ registerFeaturePanel('session-controls', {
 registerFeaturePanel('settings', {
   title: () => '群聊设置',
   when: { agentIds: ['work-group'] },
+  label: { zh: '群聊设置', en: 'Group Settings' },
   render: () => window._wgGetSettingsHtml ? window._wgGetSettingsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
 });
 registerFeaturePanel('threads', {
   title: () => '工作线程',
   when: { agentIds: ['work-group'] },
+  label: { zh: '工作线程', en: 'Work Threads' },
   render: () => window._wgGetThreadsHtml ? window._wgGetThreadsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
 });
 

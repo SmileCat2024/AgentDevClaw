@@ -45,6 +45,7 @@
   window.ClawPanels = {
     register,
     get: (id) => panels.get(String(id)),
+    getAll: () => Array.from(panels.values()),
     getAvailable,
     has: (id) => panels.has(String(id)),
   };

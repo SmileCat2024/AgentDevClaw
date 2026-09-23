@@ -372,11 +372,15 @@
     if (typeof window.registerFeaturePanel !== 'function') return;
     window.registerFeaturePanel('resources', {
       when: { agentIds: ['work-group'] },
+      label: { zh: '资料', en: 'Resources' },
+      description: { zh: '群聊共享资料文件', en: 'Shared resource files' },
       title: () => '资料',
       render: () => renderResourcesPanel(),
     });
     window.registerFeaturePanel('viewer', {
       when: { agentIds: ['work-group'] },
+      label: { zh: '文档', en: 'Documents' },
+      description: { zh: '群聊文档查看', en: 'Document viewer' },
       title: () => '文档',
       render: () => renderViewerPanel(),
     });

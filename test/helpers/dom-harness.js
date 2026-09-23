@@ -95,6 +95,14 @@ export function createDomHarness() {
       return child;
     }
 
+    insertBefore(child, reference) {
+      const index = reference ? this.children.indexOf(reference) : -1;
+      if (index >= 0) this.children.splice(index, 0, child);
+      else this.children.push(child);
+      child.parentNode = this;
+      return child;
+    }
+
     removeChild(child) {
       const index = this.children.indexOf(child);
       if (index >= 0) {
@@ -158,6 +166,16 @@ export function createDomHarness() {
       return [...this.body.querySelectorAll(selector), ...this.head.querySelectorAll(selector)];
     },
     addEventListener() {},
+    contains(node) {
+      const visit = (element) => {
+        if (element === node) return true;
+        for (const child of element.children) {
+          if (visit(child)) return true;
+        }
+        return false;
+      };
+      return visit(this.body) || visit(this.head) || visit(this.documentElement);
+    },
     body: new TestElement('body'),
     head: new TestElement('head'),
     documentElement: new TestElement('html'),

@@ -23,39 +23,19 @@
   var HIDDEN_CLASS = 'rail-custom-hidden';
   var MODAL_ID = 'rail-cust-overlay';
 
-  /** 可自定义的面板 ID（顺序 = 默认顺序） */
-  var CUSTOMIZABLE_IDS = [
-    'workspace', 'monitor', 'plan', 'git', 'hooks',
-    'inspector', 'session-controls', 'logs', 'mcp', 'genui',
-  ];
+  // ── 面板清单（单一真相：Claw 面板注册表） ─────────────
 
-  /** 面板名称（i18n） */
-  var LABELS = {
-    workspace: { zh: '文件结构',  en: 'Structure' },
-    monitor:   { zh: '监控',      en: 'Monitor' },
-    plan:      { zh: '计划',      en: 'Plan' },
-    git:       { zh: '源代码管理', en: 'Source Control' },
-    hooks:     { zh: '功能',      en: 'Features' },
-    inspector: { zh: '反向钩子',  en: 'Reverse Hooks' },
-    'session-controls': { zh: '会话控制', en: 'Session Controls' },
-    logs:      { zh: '日志',      en: 'Logs' },
-    mcp:       { zh: 'MCP',       en: 'MCP' },
-    genui:     { zh: '交互页面',  en: 'Interactive Pages' },
-  };
-
-  /** 面板描述（i18n） */
-  var DESCS = {
-    workspace: { zh: '项目文件树',       en: 'Project file tree' },
-    monitor:   { zh: '运行状态监控',     en: 'Runtime status monitor' },
-    plan:      { zh: '任务与计划列表',   en: 'Tasks and plan list' },
-    git:       { zh: 'Git 状态与操作',   en: 'Git status and actions' },
-    hooks:     { zh: 'Feature 功能面板', en: 'Feature panel' },
-    inspector: { zh: 'Hook 检查器',      en: 'Hook inspector' },
-    'session-controls': { zh: '自动接续、上下文保护与模型轮转', en: 'Auto-resume, context protection and model rotation' },
-    logs:      { zh: '运行日志',         en: 'Runtime logs' },
-    mcp:       { zh: 'MCP 服务端',       en: 'MCP servers' },
-    genui:     { zh: 'UI 交互页面',      en: 'Interactive UI pages' },
-  };
+  /** 可自定义面板 = 已注册且 rail 上有按钮的面板（注册顺序 = 默认顺序） */
+  function getCustomizableIds() {
+    var panels = (window.ClawPanels && typeof window.ClawPanels.getAll === 'function')
+      ? window.ClawPanels.getAll()
+      : [];
+    return panels
+      .filter(function (panel) {
+        return !!document.querySelector('.rail-button[data-panel="' + panel.id + '"]');
+      })
+      .map(function (panel) { return panel.id; });
+  }
 
   // ── 辅助函数 ──────────────────────────────────────────
 
@@ -63,18 +43,23 @@
     return (typeof currentLanguage !== 'undefined' && currentLanguage === 'en') ? 'en' : 'zh';
   }
 
+  function i18nMeta(id, field) {
+    var panel = window.ClawPanels ? window.ClawPanels.get(id) : null;
+    var meta = panel ? panel[field] : null;
+    if (!meta || typeof meta !== 'object') return field === 'label' ? id : '';
+    return meta[lang()] || meta.en || (field === 'label' ? id : '');
+  }
+
   function label(id) {
-    var e = LABELS[id];
-    return e ? (e[lang()] || e.en) : id;
+    return i18nMeta(id, 'label');
   }
 
   function desc(id) {
-    var e = DESCS[id];
-    return e ? (e[lang()] || e.en) : '';
+    return i18nMeta(id, 'description');
   }
 
   function getDefaultConfig() {
-    return CUSTOMIZABLE_IDS.map(function (id) { return { id: id, visible: true }; });
+    return getCustomizableIds().map(function (id) { return { id: id, visible: true }; });
   }
 
   /** 旧面板 ID → 新面板 ID（重命名时保留用户已有排序与可见性） */
@@ -94,8 +79,9 @@
         }
         return item;
       });
+      var customizable = getCustomizableIds();
       var known = {};
-      CUSTOMIZABLE_IDS.forEach(function (id) { known[id] = true; });
+      customizable.forEach(function (id) { known[id] = true; });
       var valid = [];
       var seen = {};
       parsed.forEach(function (item) {
@@ -103,7 +89,7 @@
         seen[item.id] = true;
         valid.push({ id: item.id, visible: item.visible !== false });
       });
-      CUSTOMIZABLE_IDS.forEach(function (id) {
+      customizable.forEach(function (id) {
         if (!seen[id]) valid.push({ id: id, visible: true });
       });
       return valid;
@@ -151,12 +137,13 @@
   }
 
   function findAnchor(rail) {
+    var customizable = getCustomizableIds();
     var children = Array.from(rail.children);
     for (var i = 0; i < children.length; i++) {
       var c = children[i];
       if (c.classList.contains('rail-button') &&
           c.dataset.panel &&
-          CUSTOMIZABLE_IDS.indexOf(c.dataset.panel) === -1) {
+          customizable.indexOf(c.dataset.panel) === -1) {
         return c;
       }
     }
@@ -438,4 +425,10 @@
   // Public API
   window.applyRailConfig = applyConfig;
   window.closeRailCustomizeModal = closeModal;
+  window.RailCustomize = {
+    getCustomizableIds: getCustomizableIds,
+    loadConfig: loadConfig,
+    label: label,
+    description: desc,
+  };
 })();

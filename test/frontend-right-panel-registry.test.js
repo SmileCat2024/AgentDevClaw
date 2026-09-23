@@ -49,6 +49,20 @@ describe('right panel registry', () => {
     assert.equal(ctx.run(`window.ClawPanels.get('stable-id').title`), 'First');
   });
 
+  it('getAll returns every registered panel in registration order', () => {
+    const ctx = createFrontendSandbox();
+    ctx.loadSource('public/src/modules/right-panel-registry.js');
+    ctx.run(`
+      window.ClawPanels.register('b-panel', { title: () => 'B', render: () => '' });
+      window.ClawPanels.register('a-panel', { title: () => 'A', render: () => '' });
+    `);
+
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(ctx.run('window.ClawPanels.getAll().map(({ id }) => id)'))),
+      ['b-panel', 'a-panel'],
+    );
+  });
+
   it('treats absent context values as non-matching for constrained panels', () => {
     const ctx = createFrontendSandbox();
     ctx.loadSource('public/src/modules/right-panel-registry.js');
