@@ -123,17 +123,27 @@
     return Number.isFinite(duration) && duration > 0 ? duration : null;
   }
 
+  function formatClock(ms) {
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return '';
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
   function renderTaskCard(task) {
     const duration = taskDurationMs(task);
     const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
     const meta = [statusText(task), duration !== null ? formatDuration(duration) : '']
       .filter(Boolean).join(' · ');
+    const clock = formatClock(task.startedAt);
     return `
       <div class="bgp-card" data-bgp-task="${escapeHtml(task.id)}">
-        <div class="bgp-cmd-row">
+        <div class="bgp-head">
           <span class="bgp-dot bgp-dot-${escapeHtml(task.status)}"></span>
-          <span class="bgp-cmd">${escapeHtml(task.command)}</span>
+          <span class="bgp-id" title="${escapeHtml(task.id)}">${escapeHtml(task.id)}</span>
+          ${clock ? `<span class="bgp-time">${clock}</span>` : ''}
         </div>
+        <pre class="bgp-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</pre>
         <div class="bgp-meta">${escapeHtml(meta)}</div>
         ${tail ? `<pre class="bgp-tail" data-bgp-tail="${escapeHtml(task.id)}">${escapeHtml(tail)}</pre>` : ''}
       </div>`;
@@ -312,22 +322,40 @@
       min-width: 0;
     }
     body[data-theme="light"] .bgp-card { background: #ffffff; border-color: #e0e0e0; }
-    .bgp-cmd-row { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
-    .bgp-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; margin-top: 5px; }
+    .bgp-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .bgp-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
     .bgp-dot-running { background: var(--success-color); animation: bgp-pulse 1.2s ease-in-out infinite; }
     .bgp-dot-done { background: var(--code-accent); }
     .bgp-dot-killed, .bgp-dot-terminated { background: var(--error-color); }
+    .bgp-id {
+      font-family: ${MONO};
+      font-size: 11px;
+      color: var(--text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .bgp-time { font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); flex: none; }
+    /* 命令块：最多两行，超长省略（title 悬浮看全文） */
     .bgp-cmd {
+      margin: 0 0 0 14px;
+      padding: 6px 8px;
       font-family: ${MONO};
       font-size: 12px;
       line-height: 1.5;
       color: var(--text-primary);
+      background: var(--hover-bg);
+      border-radius: 6px;
       white-space: pre-wrap;
       word-break: break-all;
-      min-width: 0;
-      flex: 1;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
     }
-    /* 状态 · 时长独立小字行，与命令文字起点对齐（dot 6px + gap 8px） */
+    /* 状态 · 时长小字行，与命令块文字起点对齐（dot 6px + gap 8px） */
     .bgp-meta { margin-left: 14px; font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); }
     .bgp-tail {
       margin: 0;
