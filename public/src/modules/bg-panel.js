@@ -94,15 +94,13 @@
 
   function statusText(task) {
     if (task.status === 'running') {
-      return task.readyFired ? t('运行 · 已就绪', 'running · ready') : t('运行', 'running');
+      return task.readyFired ? t('运行 · 已就绪', 'running · ready') : t('运行中', 'running');
     }
     if (task.status === 'done') return `${t('完成', 'done')} · exit ${task.exitCode ?? '?'}`;
     if (task.status === 'killed') return t('已终止', 'killed');
     if (task.status === 'terminated') return t('被打断', 'terminated');
     return String(task.status || '');
-  }
-
-  // 与 tool-progress.js 相同的紧凑时长格式（12s / 2m05s / 1h02m）
+  }  // 与 tool-progress.js 相同的紧凑时长格式（12s / 2m05s / 1h02m）
   function formatDuration(ms) {
     const totalSeconds = typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0;
     if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -128,38 +126,44 @@
   function renderTaskCard(task) {
     const duration = taskDurationMs(task);
     const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
+    const meta = [statusText(task), duration !== null ? formatDuration(duration) : '']
+      .filter(Boolean).join(' · ');
     return `
       <div class="bgp-card" data-bgp-task="${escapeHtml(task.id)}">
-        <div class="bgp-card-head">
+        <div class="bgp-cmd-row">
           <span class="bgp-dot bgp-dot-${escapeHtml(task.status)}"></span>
-          <span class="bgp-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</span>
-          <span class="bgp-meta">${escapeHtml(statusText(task))}${duration !== null ? ` · ${formatDuration(duration)}` : ''}</span>
+          <span class="bgp-cmd">${escapeHtml(task.command)}</span>
         </div>
+        <div class="bgp-meta">${escapeHtml(meta)}</div>
         ${tail ? `<pre class="bgp-tail" data-bgp-tail="${escapeHtml(task.id)}">${escapeHtml(tail)}</pre>` : ''}
       </div>`;
   }
 
-  function linkStatusHtml() {
-    switch (state.status) {
-      case 'live': return `<span class="bgp-link-dot"></span>${t('实时', 'live')}`;
-      case 'connecting': return t('连接中', 'connecting');
-      case 'closed': return t('通道已关闭', 'channel closed');
-      case 'unavailable': return t('当前会话无实时通道', 'no live channel');
-      default: return '';
-    }
+  // 空态卡：复刻 git-empty-card / gen-ui-empty 同款配方
+  // （虚线卡 + accent 图标块 + 标题 + 描述），保持右侧面板一致的空态语言。
+  const TERMINAL_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5"></path><path d="M12 19h8"></path></svg>';
+
+  function renderEmpty() {
+    const connected = state.status === 'live' || state.status === 'connecting';
+    return `
+      <div class="bgp-empty-card">
+        <div class="bgp-empty-icon">${TERMINAL_ICON}</div>
+        <div class="bgp-empty-title">${connected
+          ? t('暂无后台任务', 'No background tasks')
+          : t('面板未连接', 'Panel not connected')}</div>
+        <div class="bgp-empty-desc">${connected
+          ? t('bash_bg 启动的任务会实时出现在这里', 'Tasks started via bash_bg appear here in real time')
+          : t('当前会话没有活跃的后台任务通道', 'No live background-task channel for this session')}</div>
+      </div>`;
   }
 
   function getHtml() {
     const sorted = Array.from(tasks.values())
       .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
     const cards = sorted.map(renderTaskCard).join('');
-    const empty = sorted.length === 0 && state.status === 'live'
-      ? `<div class="feature-panel-empty"><div>${t('暂无后台任务（bash_bg 启动的任务会出现在这里）', 'No background tasks (bash_bg tasks appear here)')}</div></div>`
-      : '';
     return `
       <div id="bg-panel-root" class="bgp-root">
-        <div class="bgp-link">${linkStatusHtml()}</div>
-        ${cards || empty}
+        ${cards || renderEmpty()}
       </div>`;
   }
 
@@ -295,44 +299,43 @@
 
   const MONO = '"Fira Code", "Cascadia Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace';
   const STYLE = `
-    .bgp-root { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
-    .bgp-link { display: inline-flex; align-items: center; gap: 6px; font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); padding: 0 4px; }
-    .bgp-link-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success-color); flex: none; animation: bgp-pulse 1.2s ease-in-out infinite; }
-    @keyframes bgp-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+    /* 宿主 .feature-panel-body 已有 24px padding（genui 同款做法），根容器不再留边 */
+    .bgp-root { display: flex; flex-direction: column; gap: 8px; }
     .bgp-card {
-      padding: 12px 14px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 16px;
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.02);
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
       min-width: 0;
     }
     body[data-theme="light"] .bgp-card { background: #ffffff; border-color: #e0e0e0; }
-    .bgp-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-    .bgp-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+    .bgp-cmd-row { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+    .bgp-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; margin-top: 5px; }
     .bgp-dot-running { background: var(--success-color); animation: bgp-pulse 1.2s ease-in-out infinite; }
     .bgp-dot-done { background: var(--code-accent); }
     .bgp-dot-killed, .bgp-dot-terminated { background: var(--error-color); }
     .bgp-cmd {
       font-family: ${MONO};
       font-size: 12px;
+      line-height: 1.5;
       color: var(--text-primary);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      flex: 1;
+      white-space: pre-wrap;
+      word-break: break-all;
       min-width: 0;
+      flex: 1;
     }
-    .bgp-meta { font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+    /* 状态 · 时长独立小字行，与命令文字起点对齐（dot 6px + gap 8px） */
+    .bgp-meta { margin-left: 14px; font-family: ${MONO}; font-size: 11px; color: var(--text-secondary); }
     .bgp-tail {
       margin: 0;
       padding: 8px 10px;
       font-family: ${MONO};
       font-size: 11px;
       line-height: 1.5;
-      max-height: 220px;
+      max-height: 200px;
       overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-all;
@@ -340,6 +343,36 @@
       background: var(--hover-bg);
       border-radius: 8px;
     }
+    /* 空态卡：git-empty-card / gen-ui-empty 同款配方 */
+    .bgp-empty-card {
+      display: flex;
+      min-height: 176px;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      border: 1px dashed var(--border-color, rgba(128, 128, 128, 0.28));
+      border-radius: 12px;
+      background: linear-gradient(145deg, rgba(100, 130, 240, 0.045), transparent);
+      color: var(--text-secondary);
+      text-align: center;
+    }
+    .bgp-empty-icon {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      margin-bottom: 10px;
+      place-items: center;
+      border: 1px solid color-mix(in srgb, var(--accent, #6391ff) 24%, transparent);
+      border-radius: 11px;
+      background: color-mix(in srgb, var(--accent, #6391ff) 10%, transparent);
+      color: var(--accent, #6391ff);
+      font-size: 18px;
+      line-height: 1;
+    }
+    .bgp-empty-title { color: var(--text-primary); font-size: 14px; font-weight: 600; line-height: 20px; }
+    .bgp-empty-desc { max-width: 260px; margin-top: 4px; font-size: 12px; line-height: 19px; }
+    @keyframes bgp-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
   `;
   const styleElement = document.createElement('style');
   styleElement.textContent = STYLE;
