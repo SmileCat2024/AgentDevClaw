@@ -39,9 +39,10 @@ class FetchScript {
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-/** 构造观察事件（测试用部分任务对象，绕开 BgTask 全量类型）。 */
+/** 构造观察事件（测试用部分任务对象，绕开 BgTask 全量类型）。tail 需要
+ * 引擎内部任务对象（chunks），fake 一并携带。 */
 function fakeEvent(kind: string, task: { id: string; status: string }) {
-  return { kind, task } as unknown as Parameters<ShellBgCommsFeature['observer']>[0];
+  return { kind, task: { ...task, chunks: ['raw'] } } as unknown as Parameters<ShellBgCommsFeature['observer']>[0];
 }
 
 function makeRegistry(overrides: Partial<Record<string, unknown>> = {}) {
@@ -54,9 +55,22 @@ function makeRegistry(overrides: Partial<Record<string, unknown>> = {}) {
       return { id: t.id, status: t.status, projected: true };
     },
     list() { return [{ id: 't-list', status: 'running', projected: true }]; },
-    get(taskId: string) { return taskId === 't1' ? { id: 't1', status: 'running' } : undefined; },
-    tail(task: unknown, chars: number) { calls.tail.push([task, chars]); return `tail-of-${(task as { id: string }).id}:${chars}`; },
-    kill(taskId: string, opts?: { graceful?: boolean }) {
+    get(taskId: string) {
+      // t-list 同时给出引擎内部任务对象（带 chunks）：面板 list 分支必须经
+      // get 拿原始任务再取尾巴——把 list() 的快照当任务传给 tail 属于回归。
+      if (taskId === 't1') return { id: 't1', status: 'running', chunks: ['raw'] };
+      if (taskId === 't-list') return { id: 't-list', status: 'running', chunks: ['raw'] };
+      return undefined;
+    },
+    tail(task: unknown, chars: number) {
+      if (typeof task !== 'object' || task === null || !('chunks' in task)) {
+        throw new TypeError("Cannot read properties of undefined (reading 'join')");
+      }
+      calls.tail.push([task, chars]);
+      const id = (task as { id?: string }).id ?? 'unknown';
+      return `tail-of-${id}:${chars}`;
+    },
+    kill(taskId: string, opts?: { graceful?: boolean; manual?: boolean }) {
       calls.kill.push([taskId, opts]);
       return taskId === 't1';
     },
@@ -163,7 +177,7 @@ describe('observer 事件镜像', () => {
 });
 
 describe('onHostRequest 请求面', () => {
-  it('list：返回 registry.list()（快照 + 输出尾巴）', async () => {
+  it('list：快照 + 输出尾巴（尾巴经 get 拿原始任务，快照直接传 tail 会炸）', async () => {
     const feature = makeFeature();
     feature.attachShell({ getBgRegistry: () => makeRegistry() });
     const result = await feature.onHostRequest('list', {});
@@ -195,13 +209,13 @@ describe('onHostRequest 请求面', () => {
     assert.equal((await feature.onHostRequest('status', {})).code, 'task_not_found');
   });
 
-  it('kill：成功返回 killed，graceful 选项透传', async () => {
+  it('kill：成功返回 killed；面板 kill 是用户发起，manual: true 随行（触发打断通知）', async () => {
     const feature = makeFeature();
     const registry = makeRegistry();
     feature.attachShell({ getBgRegistry: () => registry });
     const result = await feature.onHostRequest('kill', { taskId: 't1', graceful: true });
     assert.deepEqual(result, { ok: true, killed: true });
-    assert.deepEqual(registry.calls.kill, [['t1', { graceful: true }]]);
+    assert.deepEqual(registry.calls.kill, [['t1', { graceful: true, manual: true }]]);
   });
 
   it('kill：任务不存在返回 task_not_found', async () => {

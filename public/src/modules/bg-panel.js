@@ -7,10 +7,12 @@
  *     → 本面板经 /protoclaw/feature-comms/stream（SSE）订阅渲染。
  *
  * 面板心智：终端式小卡片，全自动——打开即订阅，事件实时推送，输出
- * 尾巴随事件下发（feature 端镜像附带）。唯一交互是运行中卡片上的
- * "立即汇报"手动触发器：走请求面 report → BgRegistry.reportNow，与
- * 节拍/静默同款汇报（通知增量 + 双节奏互重置）。反馈走 ClawToast
- * （loading → success/error），按钮只承担在途/冷却展示并防连点风暴。
+ * 尾巴随事件下发（feature 端镜像附带）。交互两个，都在运行中卡片上：
+ * "立即汇报"手动触发器（请求面 report → BgRegistry.reportNow，与节拍/
+ * 静默同款汇报：通知增量 + 双节奏互重置）；"打断"手动终止（请求面
+ * kill → BgRegistry.kill manual，终止后 Agent 收到用户手动打断通知，
+ * 不会继续等待已死的任务）。反馈统一走 ClawToast（loading → success/
+ * error），按钮只承担在途/冷却展示并防连点风暴。
  * 任务状态真值仍是 bash_bg / bg_status。
  *
  * 视觉对齐右侧面板既有设计语言（feature-panel-section 卡片、
@@ -39,6 +41,16 @@
    * 防抖即防通知风暴。 */
   const reportStates = new Map();
 
+  /** 打断在途的 taskId 集合（模块作用域，重绘存活）。无 sent linger：kill
+   * 成功后任务变终态，finalized 事件重绘时按钮自然消失。 */
+  const killPending = new Set();
+
+  /** 折叠中的 taskId 集合（模块作用域，重绘存活）。终态自动收起也记在这，
+   * 用户可随时点卡片头行重新展开。 */
+  const collapsedTasks = new Set();
+  /** 用户手动点过折叠/展开的任务：面板打开时的终态默认收起不覆盖用户意图。 */
+  const userToggledTasks = new Set();
+
   /** taskId -> 任务快照（通道事件 + list 合并，含 outputTail） */
   const tasks = new Map();
   const state = {
@@ -50,6 +62,8 @@
   let sessionWatchTimer = null;
   let elapsedTimer = null;
   let lastHtml = '';
+  /** 卡片骨架（挖空时长/输出尾巴后的 HTML）：判断结构是否变化。 */
+  let lastSkeleton = '';
 
   function t(zh, en) {
     return (typeof currentLanguage === 'string' ? currentLanguage : 'zh') === 'zh' ? zh : en;
@@ -155,24 +169,40 @@
       </button>`;
   }
 
-  function renderTaskCard(task) {
+  /** 运行中卡片的"打断"按钮：终止任务并通知 Agent 这是用户手动打断。
+   * kill 成功后任务变终态，卡片重绘时按钮自然消失（无需 sent linger）。 */
+  function interruptButton(taskId) {
+    const pending = killPending.has(taskId);
+    return `
+      <button class="bgp-kill-btn" data-bgp-kill="${escapeHtml(taskId)}" ${pending ? 'disabled' : ''}
+        title="${t('终止该任务；Agent 会收到用户手动打断的通知', 'Terminate the task; the Agent is notified of the manual interrupt')}">
+        ${pending ? t('终止中…', 'stopping…') : t('打断', 'interrupt')}
+      </button>`;
+  }
+
+  /** 任务卡片。skeleton=true 时挖空易变文本（时长、输出尾巴）供骨架比对；
+   * 易变文本由 updateVolatileTexts 定点更新，不走 DOM 重建。 */
+  function renderTaskCard(task, skeleton = false) {
     const duration = taskDurationMs(task);
     const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
     const clock = formatClock(task.startedAt);
-    // 结果行贴卡片底部：左端状态（含 exit）· 用时，右端启动时刻
-    const result = [statusText(task), duration !== null ? formatDuration(duration) : '']
-      .filter(Boolean).join(' · ');
+    const collapsed = collapsedTasks.has(task.id);
+    // 结果行贴卡片底部：左端状态 · 用时（时长是走秒易变文本），右端启动时刻
+    const durHtml = duration !== null
+      ? ` · <span data-bgp-elapsed>${skeleton ? '' : escapeHtml(formatDuration(duration))}</span>`
+      : '';
     return `
-      <div class="bgp-card" data-bgp-task="${escapeHtml(task.id)}">
-        <div class="bgp-head">
+      <div class="bgp-card${collapsed ? ' bgp-collapsed' : ''}" data-bgp-task="${escapeHtml(task.id)}">
+        <div class="bgp-head" title="${t('点击折叠 / 展开', 'Click to collapse / expand')}">
           <span class="bgp-dot bgp-dot-${escapeHtml(task.status)}"></span>
           <span class="bgp-id" title="${escapeHtml(task.id)}">${escapeHtml(task.id)}</span>
-          ${task.status === 'running' ? reportButton(task.id) : ''}
+          ${task.status === 'running' ? reportButton(task.id) + interruptButton(task.id) : ''}
+          <span class="bgp-chevron${collapsed ? '' : ' bgp-chevron-open'}">${CHEVRON_SVG}</span>
         </div>
         <pre class="bgp-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</pre>
-        ${tail ? `<pre class="bgp-tail" data-bgp-tail="${escapeHtml(task.id)}">${escapeHtml(tail)}</pre>` : ''}
+        ${tail ? `<pre class="bgp-tail" data-bgp-tail="${escapeHtml(task.id)}">${skeleton ? '' : escapeHtml(tail)}</pre>` : ''}
         <div class="bgp-result">
-          <span class="bgp-result-main">${escapeHtml(result)}</span>
+          <span class="bgp-result-main">${escapeHtml(statusText(task))}${durHtml}</span>
           ${clock ? `<span class="bgp-result-time">${clock}</span>` : ''}
         </div>
       </div>`;
@@ -181,6 +211,8 @@
   // 空态卡：复刻 git-empty-card / gen-ui-empty 同款配方
   // （虚线卡 + accent 图标块 + 标题 + 描述），保持右侧面板一致的空态语言。
   const TERMINAL_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5"></path><path d="M12 19h8"></path></svg>';
+  /** 卡片折叠指示（右指 chevron；展开态由 CSS 转向下）。 */
+  const CHEVRON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
 
   function renderEmpty() {
     const connected = state.status === 'live' || state.status === 'connecting';
@@ -196,34 +228,71 @@
       </div>`;
   }
 
-  function getHtml() {
+  function getHtml(skeleton = false) {
     const sorted = Array.from(tasks.values())
       .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
-    const cards = sorted.map(renderTaskCard).join('');
+    const cards = sorted.map((t) => renderTaskCard(t, skeleton)).join('');
     return `
       <div id="bg-panel-root" class="bgp-root">
         ${cards || renderEmpty()}
       </div>`;
   }
 
-  /** 重绘：innerHTML 比对零变化零 DOM 写入；输出区贴近底部时保持跟随。 */
+  /**
+   * 重绘，两级更新（根治每秒重建的次生问题：按钮 hover 频闪、输出区滚动
+   * 位置被重置、指示灯动画从头重播）：
+   * 1. 骨架未变（只是时长走秒 / 输出尾巴增长）→ 定点更新易变文本，零
+   *    DOM 重建，CSS 状态（hover / 滚动 / 动画进度）全部自然保留；
+   * 2. 骨架变化（状态切换、按钮增减、卡片增删）→ 全量重建；输出区贴底
+   *    的继续跟底，上翻阅读的原位恢复。
+   */
   function repaint() {
     const root = document.getElementById('bg-panel-root');
     if (!root) return;
     const html = getHtml();
     if (html === lastHtml) return;
-    // 记录各输出区的跟随状态，重写后回贴。
-    const follow = new Map();
+    const skeleton = getHtml(true);
+    if (lastSkeleton !== '' && skeleton === lastSkeleton) {
+      updateVolatileTexts(root);
+      lastHtml = html;
+      return;
+    }
+    // 全量重建：记录各输出区的滚动位置与跟随状态，重建后回贴。
+    const positions = new Map();
     root.querySelectorAll('[data-bgp-tail]').forEach((el) => {
-      follow.set(el.getAttribute('data-bgp-tail'), el.scrollTop + el.clientHeight >= el.scrollHeight - FOLLOW_THRESHOLD_PX);
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - FOLLOW_THRESHOLD_PX;
+      positions.set(el.getAttribute('data-bgp-tail'), { top: el.scrollTop, atBottom });
     });
     const next = root.cloneNode(false);
     next.innerHTML = html;
     root.replaceWith(next);
-    lastHtml = html;
     next.querySelectorAll('[data-bgp-tail]').forEach((el) => {
-      if (follow.get(el.getAttribute('data-bgp-tail')) !== false) el.scrollTop = el.scrollHeight;
+      const p = positions.get(el.getAttribute('data-bgp-tail'));
+      el.scrollTop = p ? (p.atBottom ? el.scrollHeight : p.top) : el.scrollHeight;
     });
+    lastHtml = html;
+    lastSkeleton = skeleton;
+  }
+
+  /** 轻量路径：骨架未变，只更新每秒漂移的文本（时长走秒、输出尾巴）。 */
+  function updateVolatileTexts(root) {
+    for (const task of tasks.values()) {
+      const id = window.CSS?.escape ? CSS.escape(task.id) : task.id;
+      const card = root.querySelector(`[data-bgp-task="${id}"]`);
+      if (!card) continue;
+      const elapsedEl = card.querySelector('[data-bgp-elapsed]');
+      const duration = taskDurationMs(task);
+      const durText = duration !== null ? formatDuration(duration) : '';
+      if (elapsedEl && elapsedEl.textContent !== durText) elapsedEl.textContent = durText;
+      const tailEl = card.querySelector('[data-bgp-tail]');
+      const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
+      if (tailEl && tailEl.textContent !== tail) {
+        const atBottom = tailEl.scrollTop + tailEl.clientHeight >= tailEl.scrollHeight - FOLLOW_THRESHOLD_PX;
+        const prevTop = tailEl.scrollTop;
+        tailEl.textContent = tail;
+        tailEl.scrollTop = atBottom ? tailEl.scrollHeight : prevTop;
+      }
+    }
   }
 
   // ── 通道生命周期 ─────────────────────────────────────────────────
@@ -253,7 +322,19 @@
 
   function applyTask(data) {
     if (!data || typeof data.id !== 'string') return;
+    const prev = tasks.get(data.id);
+    // 面板眼皮底下跑完 / 被打断 → 自动收起（用户可点头行重新展开）。
+    if (prev && prev.status === 'running' && data.status && data.status !== 'running') {
+      collapsedTasks.add(data.id);
+    }
     tasks.set(data.id, data);
+  }
+
+  /** 面板打开（list 全量重建，无 prev）时：已终态的任务默认收起。 */
+  function foldTerminalByDefault(task) {
+    if (task.status && task.status !== 'running' && !userToggledTasks.has(task.id)) {
+      collapsedTasks.add(task.id);
+    }
   }
 
   function handleStreamEvent(data) {
@@ -269,7 +350,10 @@
     if (!source) return; // 等待期间通道已拆（会话切换），丢弃过期响应
     if (result.ok === true && Array.isArray(result.tasks)) {
       tasks.clear();
-      for (const task of result.tasks) applyTask(task);
+      for (const task of result.tasks) {
+        applyTask(task);
+        foldTerminalByDefault(task);
+      }
     } else if (result.code === 'channel_not_declared' || result.code === 'runtime_not_connected') {
       state.status = 'unavailable';
     }
@@ -281,7 +365,11 @@
     teardownChannel();
     tasks.clear();
     reportStates.clear();
+    killPending.clear();
+    collapsedTasks.clear();
+    userToggledTasks.clear();
     lastHtml = '';
+    lastSkeleton = '';
     const addressing = currentAddressing();
     if (!addressing) {
       state.status = 'unavailable';
@@ -387,6 +475,59 @@
     });
   });
 
+  // ── 手动打断（请求面 kill → BgRegistry.kill manual）────────────────
+  //
+  // 与手动汇报同款纪律：document 委托 + ClawToast 主反馈 + 在途防抖。
+  // kill 幂等（终态返回 false），防抖只为不叠多余请求；成功后 finalized
+  // 事件把卡片刷成"已终止"，按钮随状态自然消失。
+  document.addEventListener('click', (e) => {
+    const btn = e.target instanceof Element ? e.target.closest('.bgp-kill-btn') : null;
+    if (!btn) return;
+    const taskId = btn.getAttribute('data-bgp-kill');
+    if (!taskId || killPending.has(taskId)) return;
+    killPending.add(taskId);
+    repaint();
+    const toastId = `bgp-kill-${taskId}`;
+    window.ClawToast?.show?.({
+      id: toastId,
+      status: 'loading',
+      title: t('正在打断任务…', 'Interrupting task…'),
+      description: taskId,
+    });
+    void channelRequest('kill', { taskId }).then((result) => {
+      killPending.delete(taskId);
+      repaint();
+      if (result.ok === true) {
+        window.ClawToast?.update?.(toastId, {
+          status: 'success',
+          title: t('任务已打断', 'Task interrupted'),
+          description: taskId,
+        });
+      } else {
+        window.ClawToast?.update?.(toastId, { status: 'error', title: t('打断失败', 'Interrupt failed'), description: `${taskId} · ${result.code || ''}` });
+      }
+    }).catch(() => {
+      killPending.delete(taskId);
+      repaint();
+      window.ClawToast?.update?.(toastId, { status: 'error', title: t('打断失败', 'Interrupt failed'), description: `${taskId} · network error` });
+    });
+  });
+
+  // ── 卡片折叠（点头行切换；终态由 applyTask 跃迁自动收起）──────────
+
+  document.addEventListener('click', (e) => {
+    // 按钮有自己的委托（report / kill），不触发折叠
+    if (e.target instanceof Element && e.target.closest('.bgp-report-btn, .bgp-kill-btn')) return;
+    const head = e.target instanceof Element ? e.target.closest('.bgp-head') : null;
+    if (!head) return;
+    const taskId = head.closest('.bgp-card')?.getAttribute('data-bgp-task');
+    if (!taskId) return;
+    userToggledTasks.add(taskId);
+    if (collapsedTasks.has(taskId)) collapsedTasks.delete(taskId);
+    else collapsedTasks.add(taskId);
+    repaint();
+  });
+
   // ── 样式（模块自持；字体栈 / 颜色 / 卡片语言对齐项目设计体系）─────
 
   const MONO = '"Fira Code", "Cascadia Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace';
@@ -404,7 +545,18 @@
       min-width: 0;
     }
     body[data-theme="light"] .bgp-card { background: #ffffff; border-color: #e0e0e0; }
-    .bgp-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .bgp-head { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
+    /* 折叠态：只收起输出尾巴；命令行与底部状态行保留（一眼可辨任务是谁、结果如何） */
+    .bgp-card.bgp-collapsed > .bgp-tail { display: none; }
+    .bgp-chevron {
+      flex: none;
+      width: 13px;
+      height: 13px;
+      color: var(--text-secondary);
+      transition: transform 0.15s ease;
+    }
+    .bgp-chevron svg { width: 100%; height: 100%; display: block; }
+    .bgp-chevron-open { transform: rotate(90deg); }
     .bgp-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
     .bgp-dot-running { background: var(--success-color); animation: bgp-pulse 1.2s ease-in-out infinite; }
     .bgp-dot-done { background: var(--code-accent); }
@@ -419,28 +571,53 @@
       flex: 1;
       min-width: 0;
     }
-    /* 手动汇报按钮：头行右端的低调小按钮，与等宽字体栈一致 */
+    /* 头行操作按钮：对齐 layout.css .plan-task-action（"执行到此处"）的
+     * 基础配方——继承全局 UI 字体（中文渲染不发虚），不另设 font-family。
+     * 不带 transition：卡片每秒走秒重绘（innerHTML 重建），新元素会重播
+     * 过渡动画，hover 时表现为频闪。 */
     .bgp-report-btn {
       flex: none;
-      padding: 3px 8px;
-      font-family: ${MONO};
+      padding: 3px 10px;
       font-size: 11px;
-      line-height: 1.4;
+      line-height: 1.3;
       color: var(--text-secondary);
-      background: transparent;
-      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-color);
       border-radius: 6px;
       cursor: pointer;
+      white-space: nowrap;
     }
     .bgp-report-btn:hover:not(:disabled) {
       color: var(--text-primary);
-      background: var(--hover-bg);
-      border-color: rgba(255, 255, 255, 0.28);
+      background: rgba(255, 255, 255, 0.09);
+      border-color: rgba(255, 255, 255, 0.25);
     }
     .bgp-report-btn:disabled { opacity: 0.55; cursor: default; }
     .bgp-report-btn[data-state="sent"]:disabled { opacity: 0.9; color: var(--success-color); border-color: color-mix(in srgb, var(--success-color) 45%, transparent); }
-    body[data-theme="light"] .bgp-report-btn { border-color: #d5d5d5; }
-    body[data-theme="light"] .bgp-report-btn:hover:not(:disabled) { border-color: #b0b0b0; }
+    body[data-theme="light"] .bgp-report-btn { background: #ffffff; border-color: #d0d0d0; }
+    body[data-theme="light"] .bgp-report-btn:hover:not(:disabled) { background: #f0f0f0; border-color: #b0b0b0; }
+    /* 打断按钮：基础态与汇报按钮同配方，hover 转 danger 色调——动作不可逆，
+     * 悬停时显式示警。同样不带 transition（见上）。 */
+    .bgp-kill-btn {
+      flex: none;
+      padding: 3px 10px;
+      font-size: 11px;
+      line-height: 1.3;
+      color: var(--text-secondary);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .bgp-kill-btn:hover:not(:disabled) {
+      color: var(--error-color);
+      background: rgba(255, 255, 255, 0.09);
+      border-color: color-mix(in srgb, var(--error-color) 55%, transparent);
+    }
+    .bgp-kill-btn:disabled { opacity: 0.55; cursor: default; }
+    body[data-theme="light"] .bgp-kill-btn { background: #ffffff; border-color: #d0d0d0; }
+    body[data-theme="light"] .bgp-kill-btn:hover:not(:disabled) { background: #f0f0f0; border-color: color-mix(in srgb, #d54545 55%, transparent); }
     /* 命令行：裸文字，最多两行省略（title 悬浮看全文） */
     .bgp-cmd {
       margin: 0;

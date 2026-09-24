@@ -20,7 +20,7 @@ interface BgRegistryLike {
   list(): Array<Record<string, unknown>>;
   get(task: string): unknown;
   tail(task: unknown, chars: number): string;
-  kill(taskId: string, opts?: { graceful?: boolean }): boolean;
+  kill(taskId: string, opts?: { graceful?: boolean; manual?: boolean }): boolean;
   reportNow(taskId: string): boolean;
 }
 
@@ -94,10 +94,12 @@ export class ShellBgCommsFeature {
         return {
           ok: true,
           tasks: registry
-            ? registry.list().map((t) => ({
-                ...registry.snapshot(t),
-                outputTail: registry.tail(t, MIRROR_TAIL_CHARS),
-              }))
+            ? registry.list().map((snap) => {
+                // list() 返回快照（非引擎内部任务对象）；尾巴要经 get 拿回
+                // 原始任务再取，直接把快照传给 tail 会炸（快照没有 chunks）。
+                const task = registry.get(String(snap.id));
+                return { ...snap, outputTail: task ? registry.tail(task, MIRROR_TAIL_CHARS) : '' };
+              })
             : [],
         };
       case 'status': {
@@ -116,7 +118,9 @@ export class ShellBgCommsFeature {
       }
       case 'kill': {
         if (!registry || !taskId) return { ok: false, code: 'task_not_found', error: 'taskId is required' };
-        const killed = registry.kill(taskId, { graceful: body.graceful === true });
+        // 面板 kill 即用户发起：manual 让引擎补发"用户手动打断"通知
+        // （发起方不是模型，模型需要知情；工具路径 bg_control 不走此处）。
+        const killed = registry.kill(taskId, { graceful: body.graceful === true, manual: true });
         return killed
           ? { ok: true, killed: true }
           : { ok: false, code: 'task_not_found', error: `No such task: ${taskId}` };
