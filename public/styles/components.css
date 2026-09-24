@@ -105,6 +105,49 @@
   background: var(--hover-bg);
 }
 
+/* 消息 meta 行图标操作（复制 / 编辑此轮）。编辑按钮同时携带
+   .message-action（供 syncRollbackActionButtons 定位），此处抹平其胶囊外观。
+   图标默认隐藏：user 消息默认显示，其余（assistant 等）悬停消息行时才显示；
+   copied 对勾态保持可见。 */
+.message-icon-action {
+  background: transparent;
+  border: none;
+  color: color-mix(in srgb, var(--text-secondary) 65%, transparent);
+  border-radius: 4px;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+  font-family: inherit;
+}
+
+.message-row.user .message-icon-action,
+.message-row:hover .message-icon-action,
+.message-icon-action:focus-visible,
+.message-icon-action.copied {
+  opacity: 1;
+}
+
+.message-icon-action:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
+
+.message-icon-action svg { display: block; width: 11px; height: 11px; }
+
+.message-icon-action.copied { color: var(--success-color); }
+
+.message-action.message-icon-action {
+  border: none;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .message-content {
   padding: 12px 16px;
   border-radius: 8px;

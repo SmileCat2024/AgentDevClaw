@@ -73,12 +73,8 @@ function syncRollbackActionButtons() {
       return;
     }
 
-    const button = document.createElement('button');
-    button.className = 'message-action';
-    button.type = 'button';
-    button.textContent = '编辑此轮';
-    button.setAttribute('onclick', 'requestRollbackEdit(' + index + ')');
-    meta.appendChild(button);
+    // 图标按钮 HTML 由 chat-renderer.js 统一提供，与渲染路径保持同一形态
+    meta.insertAdjacentHTML('beforeend', getMessageRollbackEditActionHtml(index));
   });
 }
 

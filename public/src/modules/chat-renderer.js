@@ -29,6 +29,7 @@
  * HTML onclick 引用:
  *   onclick="toggleMessage(...)", onclick="toggleReasoning(...)"
  *   onclick="requestRollbackEdit(...)", onclick="switchAgent(...)"
+ *   onclick="copyMessageContent(...)"
  */
 
 /**
@@ -66,15 +67,41 @@ function renderChatEmptyState() {
   }, 180);
 }
 
+// ── 消息 meta 行图标操作（复制 / 编辑此轮）────────────────────────
+// 注意：复制按钮只带 .message-icon-action，不带 .message-action——
+// syncRollbackActionButtons（input-helpers.js）用 .message-action 定位
+// 编辑按钮，复制按钮混入该类会被误改 onclick。
+const MSG_ICON_COPY_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg>';
+const MSG_ICON_PENCIL_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a1.75 1.75 0 0 1-2.158-2.158l.93-3.251c.081-.286.235-.547.445-.756Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Zm-1.237 3.746L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Z"></path></svg>';
+const MSG_ICON_CHECK_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L1.72 8.78a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path></svg>';
+
+function getMessageCopyActionHtml(index) {
+  return `<button type="button" class="message-icon-action" title="复制" onclick="copyMessageContent(${index}, this)">${MSG_ICON_COPY_SVG}</button>`;
+}
+
+function getMessageRollbackEditActionHtml(index) {
+  return `<button type="button" class="message-action message-icon-action" title="编辑此轮" onclick="requestRollbackEdit(${index})">${MSG_ICON_PENCIL_SVG}</button>`;
+}
+
+// user / assistant 消息复制原始文本，tool 消息复制原始工具输出 JSON；
+// 可回滚消息（仅 user）另给编辑按钮
+function getMessageActionButtonsHtml(msg, index) {
+  let html = '';
+  if (msg.role === 'user' || msg.role === 'assistant' || msg.role === 'tool') {
+    html += getMessageCopyActionHtml(index);
+  }
+  if (canRollbackMessage(msg)) {
+    html += getMessageRollbackEditActionHtml(index);
+  }
+  return html;
+}
+
 // 生成单条消息的 HTML
 function renderMessage(msg, index) {
   const role = msg.role;
   const msgId = `msg-${index}`;
   let contentHtml = '';
-  let metaHtml = `<div class="role-badge">${role}</div>`;
-  if (canRollbackMessage(msg)) {
-    metaHtml += `<button class="message-action" onclick="requestRollbackEdit(${index})">编辑此轮</button>`;
-  }
+  let metaHtml = `<div class="role-badge">${role}</div>` + getMessageActionButtonsHtml(msg, index);
 
   if (role === 'user' || role === 'system') {
     let style = '';
@@ -270,6 +297,7 @@ function appendNewMessages(newMessages, startIndex) {
         <div class="message-row ${msg.role}" data-tool-success="${success ? 'true' : 'false'}">
           <div class="message-meta">
             <div class="role-badge">${msg.role}</div>
+            ${getMessageActionButtonsHtml(msg, index)}
           </div>
           <div class="message-content" id="${msgId}" style="padding:0; overflow:hidden;">
             <div class="tool-result-header">
@@ -631,10 +659,7 @@ function render(messages) {
     const msgId = `msg-${index}`;
     let contentHtml = '';
     let rowAttrs = '';
-    let metaHtml = `<div class="role-badge">${role}</div>`;
-    if (canRollbackMessage(msg)) {
-      metaHtml += `<button class="message-action" onclick="requestRollbackEdit(${index})">编辑此轮</button>`;
-    }
+    let metaHtml = `<div class="role-badge">${role}</div>` + getMessageActionButtonsHtml(msg, index);
 
     if (role === 'user' || role === 'system') {
       let style = '';
@@ -973,6 +998,53 @@ window.toggleReasoning = function(id) {
       allowChase: false,
       preferSmooth: false,
     });
+  }
+};
+
+// 复制一条消息的原始文本（复制模式对齐 chat-context-bar.js 的会话 ID 复制）
+window.copyMessageContent = async function(index, btn) {
+  const msg = currentMessages[index];
+  let text = msg ? String(msg.content || '') : '';
+  if (!text) return;
+  if (msg.role === 'tool') {
+    // 工具原始输出通常是单行 JSON 信封，解析成功则美化缩进后复制，失败保持原文
+    try {
+      text = JSON.stringify(JSON.parse(text), null, 2);
+    } catch (e) { /* 非 JSON 文本，保持原文 */ }
+  }
+  let ok = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    // Fallback for non-secure contexts (e.g. accessing the UI via a LAN IP)
+    try {
+      let ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    if (typeof ClawToast !== 'undefined') {
+      const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+      ClawToast.show({ id: 'chat-copy-msg', status: 'error', title: isZh ? '复制失败' : 'Failed to copy message' });
+    }
+    return;
+  }
+  if (btn) {
+    btn.innerHTML = MSG_ICON_CHECK_SVG;
+    btn.classList.add('copied');
+    if (btn._copyResetTimer) clearTimeout(btn._copyResetTimer);
+    btn._copyResetTimer = setTimeout(function() {
+      btn.innerHTML = MSG_ICON_COPY_SVG;
+      btn.classList.remove('copied');
+    }, 1200);
   }
 };
 
