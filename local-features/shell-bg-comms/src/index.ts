@@ -4,7 +4,7 @@
  * 职责（ADR-0018 feature-comms 通道的第一个真实接入）：
  * - 把 ShellFeature BgRegistry 的六类事件投影为通道事件（kind + 任务快照），
  *   面板经 /protoclaw/feature-comms/stream 订阅渲染；
- * - 以 onHostRequest 面向面板提供 list / status / kill 请求面（Host 请求
+ * - 以 onHostRequest 面向面板提供 list / status / kill / report 请求面（Host 请求
  *   经 server → runtime IPC → 本方法，见 run-prebuilt-agent.js）。
  *
  * 链路是尽力而为的镜像面：发布失败静默吞掉（bg_status 仍是任务状态真值），
@@ -18,9 +18,10 @@ import type { BgObserver, BgObserverEvent } from '@agentdevjs/shell-feature';
 interface BgRegistryLike {
   snapshot(task: unknown): Record<string, unknown>;
   list(): Array<Record<string, unknown>>;
-  get(taskId: string): unknown;
+  get(task: string): unknown;
   tail(task: unknown, chars: number): string;
   kill(taskId: string, opts?: { graceful?: boolean }): boolean;
+  reportNow(taskId: string): boolean;
 }
 
 /** ShellFeature 的结构子集（宿主装配后回填引用）。 */
@@ -104,6 +105,14 @@ export class ShellBgCommsFeature {
         const task = registry.get(taskId);
         if (!task) return { ok: false, code: 'task_not_found', error: `No such task: ${taskId}` };
         return { ok: true, task: registry.snapshot(task), outputTail: registry.tail(task, STATUS_TAIL_CHARS) };
+      }
+      case 'report': {
+        if (!registry || !taskId) return { ok: false, code: 'task_not_found', error: 'taskId is required' };
+        // 面板手动触发器：与节拍/静默同款汇报（通知增量 + 双节奏互重置）。
+        const reported = registry.reportNow(taskId);
+        return reported
+          ? { ok: true, reported: true }
+          : { ok: false, code: 'task_not_found', error: `No such task: ${taskId}` };
       }
       case 'kill': {
         if (!registry || !taskId) return { ok: false, code: 'task_not_found', error: 'taskId is required' };

@@ -6,7 +6,7 @@
  * - observer 事件镜像：publishEvent(kind, registry.snapshot(task))
  * - 声明失败的惰性补声明（首个观察事件触发）
  * - 发布失败静默吞掉（镜像面尽力而为）
- * - onHostRequest 请求面：list / status / kill / 未知类型
+ * - onHostRequest 请求面：list / status / kill / report / 未知类型
  * - 未 attachShell 的降级路径
  */
 
@@ -45,7 +45,7 @@ function fakeEvent(kind: string, task: { id: string; status: string }) {
 }
 
 function makeRegistry(overrides: Partial<Record<string, unknown>> = {}) {
-  const calls: Record<string, unknown[]> = { kill: [], tail: [], snapshot: [] };
+  const calls: Record<string, unknown[]> = { kill: [], tail: [], snapshot: [], reportNow: [] };
   const registry = {
     calls,
     snapshot(task: unknown) {
@@ -58,6 +58,10 @@ function makeRegistry(overrides: Partial<Record<string, unknown>> = {}) {
     tail(task: unknown, chars: number) { calls.tail.push([task, chars]); return `tail-of-${(task as { id: string }).id}:${chars}`; },
     kill(taskId: string, opts?: { graceful?: boolean }) {
       calls.kill.push([taskId, opts]);
+      return taskId === 't1';
+    },
+    reportNow(taskId: string) {
+      calls.reportNow.push([taskId]);
       return taskId === 't1';
     },
     ...overrides,
@@ -206,6 +210,22 @@ describe('onHostRequest 请求面', () => {
     const result = await feature.onHostRequest('kill', { taskId: 'nope' });
     assert.equal(result.ok, false);
     assert.equal(result.code, 'task_not_found');
+  });
+
+  it('report：触发 registry.reportNow（手动立即汇报）', async () => {
+    const feature = makeFeature();
+    const registry = makeRegistry();
+    feature.attachShell({ getBgRegistry: () => registry });
+    const result = await feature.onHostRequest('report', { taskId: 't1' });
+    assert.deepEqual(result, { ok: true, reported: true });
+    assert.deepEqual(registry.calls.reportNow, [['t1']]);
+  });
+
+  it('report：任务不存在或缺 taskId 返回 task_not_found', async () => {
+    const feature = makeFeature();
+    feature.attachShell({ getBgRegistry: () => makeRegistry() });
+    assert.equal((await feature.onHostRequest('report', { taskId: 'nope' })).code, 'task_not_found');
+    assert.equal((await feature.onHostRequest('report', {})).code, 'task_not_found');
   });
 
   it('未知 requestType 返回 operation_unavailable', async () => {

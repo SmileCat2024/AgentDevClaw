@@ -55,7 +55,7 @@
 端到端链路，作为通道能力的活体验证：
 
 - **框架侧**（`AgentDev/packages/shell-feature`）：`BgRegistry` 新增 `observer` 配置（六类事件：registered / output / report / ready / finalized / tuned；output 按 1s 节流，终态不节流）+ `ShellFeature.getBgRegistry()` 访问器。
-- **镜像 Feature**（`local-features/shell-bg-comms`）：构造即声明 `shell-bg` 通道；observer 事件投影为 `publishEvent(kind, BgTaskSnapshot)`；`onHostRequest` 提供 `list` / `status`（含输出尾部）/ `kill`（含 graceful 透传）。发布失败静默——`bg_status` 仍是任务状态真值。
+- **镜像 Feature**（`local-features/shell-bg-comms`）：构造即声明 `shell-bg` 通道；observer 事件投影为 `publishEvent(kind, BgTaskSnapshot)`；`onHostRequest` 提供 `list` / `status`（含输出尾部）/ `kill`（含 graceful 透传）/ `report`（手动触发 `BgRegistry.reportNow`——与节拍/静默同款汇报与双节奏重置）。发布失败静默——`bg_status` 仍是任务状态真值。
 - **消费面板**（`public/src/modules/bg-panel.js`）：右侧 rail "后台任务"面板，SSE 订阅渲染任务列表，输出查看与终止走请求面；会话切换守卫自动重订，面板取消激活自动拆订阅。
 - **装配**（`programming-helper/agent.js`）：`ShellBgCommsFeature` 持有 `runtimeIdentity`，`ShellFeature` 构造注入其 `observer`。
 

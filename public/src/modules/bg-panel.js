@@ -7,8 +7,11 @@
  *     → 本面板经 /protoclaw/feature-comms/stream（SSE）订阅渲染。
  *
  * 面板心智：终端式小卡片，全自动——打开即订阅，事件实时推送，输出
- * 尾巴随事件下发（feature 端镜像附带），无任何按钮。终止等交互待
- * 功能定稿后再上；任务状态真值仍是 bash_bg / bg_status。
+ * 尾巴随事件下发（feature 端镜像附带）。唯一交互是运行中卡片上的
+ * "立即汇报"手动触发器：走请求面 report → BgRegistry.reportNow，与
+ * 节拍/静默同款汇报（通知增量 + 双节奏互重置）。反馈走 ClawToast
+ * （loading → success/error），按钮只承担在途/冷却展示并防连点风暴。
+ * 任务状态真值仍是 bash_bg / bg_status。
  *
  * 视觉对齐右侧面板既有设计语言（feature-panel-section 卡片、
  * bash-progress 系列观感、项目等宽字体栈与状态色变量）。
@@ -26,6 +29,15 @@
   const ELAPSED_TICK_MS = 1_000;
   /** 输出区距底不超过该值视为「跟随底部」，重绘后继续贴底；上翻阅读时不打扰。 */
   const FOLLOW_THRESHOLD_PX = 28;
+  /** 手动汇报请求的兜底恢复窗（fetch 悬挂时按钮不永久卡死）。 */
+  const REPORT_PENDING_TIMEOUT_MS = 5_000;
+  /** 成功后的按钮冷却展示（ClawToast 已给主反馈，这里兼做连点防抖窗口）。 */
+  const REPORT_SENT_LINGER_MS = 3_000;
+
+  /** taskId -> 'pending'（请求在途）| 'sent'（已成功，冷却展示）。状态放模块
+   * 作用域，重绘存活；整个存续期忽略再次点击——每次触发都会打扰 agent，
+   * 防抖即防通知风暴。 */
+  const reportStates = new Map();
 
   /** taskId -> 任务快照（通道事件 + list 合并，含 outputTail） */
   const tasks = new Map();
@@ -130,6 +142,19 @@
     return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
 
+  /** 运行中卡片的"立即汇报"按钮（终态任务没有可推送的运行情况）。 */
+  function reportButton(taskId) {
+    const state = reportStates.get(taskId);
+    const label = state === 'pending'
+      ? t('发送中…', 'sending…')
+      : state === 'sent' ? t('已发送', 'sent') : t('立即汇报', 'report now');
+    return `
+      <button class="bgp-report-btn" data-bgp-report="${escapeHtml(taskId)}" data-state="${state || ''}" ${state ? 'disabled' : ''}
+        title="${t('立即把当前运行情况发送给 Agent', 'Send current status to the Agent now')}">
+        ${label}
+      </button>`;
+  }
+
   function renderTaskCard(task) {
     const duration = taskDurationMs(task);
     const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
@@ -142,6 +167,7 @@
         <div class="bgp-head">
           <span class="bgp-dot bgp-dot-${escapeHtml(task.status)}"></span>
           <span class="bgp-id" title="${escapeHtml(task.id)}">${escapeHtml(task.id)}</span>
+          ${task.status === 'running' ? reportButton(task.id) : ''}
         </div>
         <pre class="bgp-cmd" title="${escapeHtml(task.command)}">${escapeHtml(task.command)}</pre>
         ${tail ? `<pre class="bgp-tail" data-bgp-tail="${escapeHtml(task.id)}">${escapeHtml(tail)}</pre>` : ''}
@@ -254,6 +280,7 @@
   function startChannel() {
     teardownChannel();
     tasks.clear();
+    reportStates.clear();
     lastHtml = '';
     const addressing = currentAddressing();
     if (!addressing) {
@@ -308,6 +335,58 @@
     }, REFRESH_SESSION_WATCH_MS);
   }
 
+  // ── 手动汇报触发器（请求面 report → BgRegistry.reportNow）──────────
+
+  // 卡片每秒随时长走秒重绘（innerHTML 重建），点击监听挂 document 做委托，
+  // 不随重绘丢失；.bgp-* 类名空间归本面板，命中即本面板卡片。
+  // 反馈走 ClawToast（loading → success/error）；按钮只承担在途/冷却展示。
+  document.addEventListener('click', (e) => {
+    const btn = e.target instanceof Element ? e.target.closest('.bgp-report-btn') : null;
+    if (!btn) return;
+    const taskId = btn.getAttribute('data-bgp-report');
+    if (!taskId || reportStates.has(taskId)) return; // 冷却期防抖：防通知风暴
+    reportStates.set(taskId, 'pending');
+    repaint();
+    const toastId = `bgp-report-${taskId}`;
+    window.ClawToast?.show?.({
+      id: toastId,
+      status: 'loading',
+      title: t('正在推送运行情况…', 'Pushing status to Agent…'),
+      description: taskId,
+    });
+    // 兜底：fetch 悬挂（无超时的网络异常）时恢复按钮。
+    const fallback = setTimeout(() => {
+      if (reportStates.get(taskId) === 'pending') {
+        reportStates.delete(taskId);
+        repaint();
+        window.ClawToast?.update?.(toastId, { status: 'error', title: t('推送超时', 'Report timed out'), description: taskId });
+      }
+    }, REPORT_PENDING_TIMEOUT_MS);
+    void channelRequest('report', { taskId }).then((result) => {
+      clearTimeout(fallback);
+      if (result.ok === true) {
+        reportStates.set(taskId, 'sent');
+        window.ClawToast?.update?.(toastId, {
+          status: 'success',
+          title: t('运行情况已发送给 Agent', 'Current status sent to Agent'),
+          description: taskId,
+        });
+        setTimeout(() => {
+          if (reportStates.get(taskId) === 'sent') { reportStates.delete(taskId); repaint(); }
+        }, REPORT_SENT_LINGER_MS);
+      } else {
+        reportStates.delete(taskId);
+        window.ClawToast?.update?.(toastId, { status: 'error', title: t('推送失败', 'Report failed'), description: `${taskId} · ${result.code || ''}` });
+      }
+      repaint();
+    }).catch(() => {
+      clearTimeout(fallback);
+      reportStates.delete(taskId);
+      repaint();
+      window.ClawToast?.update?.(toastId, { status: 'error', title: t('推送失败', 'Report failed'), description: `${taskId} · network error` });
+    });
+  });
+
   // ── 样式（模块自持；字体栈 / 颜色 / 卡片语言对齐项目设计体系）─────
 
   const MONO = '"Fira Code", "Cascadia Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace';
@@ -340,6 +419,28 @@
       flex: 1;
       min-width: 0;
     }
+    /* 手动汇报按钮：头行右端的低调小按钮，与等宽字体栈一致 */
+    .bgp-report-btn {
+      flex: none;
+      padding: 3px 8px;
+      font-family: ${MONO};
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--text-secondary);
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .bgp-report-btn:hover:not(:disabled) {
+      color: var(--text-primary);
+      background: var(--hover-bg);
+      border-color: rgba(255, 255, 255, 0.28);
+    }
+    .bgp-report-btn:disabled { opacity: 0.55; cursor: default; }
+    .bgp-report-btn[data-state="sent"]:disabled { opacity: 0.9; color: var(--success-color); border-color: color-mix(in srgb, var(--success-color) 45%, transparent); }
+    body[data-theme="light"] .bgp-report-btn { border-color: #d5d5d5; }
+    body[data-theme="light"] .bgp-report-btn:hover:not(:disabled) { border-color: #b0b0b0; }
     /* 命令行：裸文字，最多两行省略（title 悬浮看全文） */
     .bgp-cmd {
       margin: 0;
