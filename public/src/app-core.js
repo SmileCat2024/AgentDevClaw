@@ -106,15 +106,13 @@ async function loadAgentDetail(agentId) {
 async function reloadFeatureTemplateMap() {
   console.log('[Viewer] Reloading feature templates...');
   const success = await loadFeatureTemplateMap();
-  if (success) {
-    // 重新加载当前页面的工具配置
-    if (currentRuntimeAgentId) {
-      await loadAgentTools(currentRuntimeAgentId);
-      // 重新渲染当前消息
-      if (currentMessages.length > 0) {
-        renderCurrentMainView();
-      }
-    }
+  if (success && currentRuntimeAgentId) {
+    // 映射到位后重预热当前工具的模板；完成后由 warmTemplatesInBackground
+    // 清渲染签名并触发重渲染，早先按 JSON 兜底的消息随之按真实模板重建。
+    warmTemplatesInBackground(
+      collectTemplateNames(Object.values(toolRenderConfigs || {})),
+      currentRuntimeAgentId,
+    );
   }
 }
 

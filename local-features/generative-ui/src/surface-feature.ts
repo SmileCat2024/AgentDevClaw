@@ -289,10 +289,6 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
             return this._transportError(err, 'upsert');
           }
         },
-        render: {
-          call: 'ui-surface-upsert',
-          result: 'ui-surface-result',
-        },
       }),
 
       // ── ui_surface_get ──
@@ -348,7 +344,6 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
             return this._transportError(err, 'get');
           }
         },
-        render: { call: 'ui-surface-get', result: 'ui-surface-result' },
       }),
 
       // ── ui_surface_list ──
@@ -382,7 +377,6 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
             return this._transportError(err, 'list');
           }
         },
-        render: { call: 'ui-surface-list', result: 'ui-surface-result' },
       }),
 
       // ── ui_surface_close ──
@@ -432,38 +426,8 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
             return this._transportError(err, 'close');
           }
         },
-        render: { call: 'ui-surface-close', result: 'ui-surface-result' },
       }),
     ];
-  }
-
-  // ── Render templates ──
-
-  getRenderTemplates(): Record<string, { call: (data: Record<string, any>) => string; result: (data: Record<string, any>, success?: boolean) => string }> {
-    return {
-      'ui-surface-upsert': {
-        call: (data) => `<div class="tool-call ui-surface-call"><span class="ui-surface-icon">🖥</span> Create/Update UI Surface${data?.surfaceId ? `: ${escapeHtml(data.surfaceId)}` : ''}</div>`,
-        result: (_data, success) => success
-          ? `<div class="tool-result ui-surface-result">Surface updated successfully.</div>`
-          : `<div class="tool-error">Surface operation failed.</div>`,
-      },
-      'ui-surface-get': {
-        call: (data) => `<div class="tool-call ui-surface-call"><span class="ui-surface-icon">📖</span> Get Surface${data?.surfaceId ? `: ${escapeHtml(data.surfaceId)}` : ''}</div>`,
-        result: (_data, success) => success ? `<div class="tool-result ui-surface-result">Surface retrieved.</div>` : `<div class="tool-error">Surface not found.</div>`,
-      },
-      'ui-surface-list': {
-        call: () => `<div class="tool-call ui-surface-call"><span class="ui-surface-icon">📋</span> List Surfaces</div>`,
-        result: (_data, success) => success ? `<div class="tool-result ui-surface-result">Surfaces listed.</div>` : `<div class="tool-error">List failed.</div>`,
-      },
-      'ui-surface-close': {
-        call: (data) => `<div class="tool-call ui-surface-call"><span class="ui-surface-icon">✕</span> Close Surface${data?.surfaceId ? `: ${escapeHtml(data.surfaceId)}` : ''}</div>`,
-        result: (_data, success) => success ? `<div class="tool-result ui-surface-result">Surface closed.</div>` : `<div class="tool-error">Close failed.</div>`,
-      },
-      'ui-surface-result': {
-        call: () => '',
-        result: (_data, success) => success ? '' : '<div class="tool-error">Surface operation failed.</div>',
-      },
-    };
   }
 
   // ── 错误归一化 ──
@@ -539,16 +503,4 @@ function _cloneSurfaceState(surface: PersistedSurfaceState): PersistedSurfaceSta
     presentation: { ...surface.presentation },
     status: surface.status,
   };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 工具
-// ═══════════════════════════════════════════════════════════════
-
-function escapeHtml(str: string): string {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }

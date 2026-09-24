@@ -11,7 +11,7 @@
  * 简化模型：同时只能存在一个 checkpoint（固定 ID "__active__"）。
  */
 
-import type { AgentFeature, FeatureStateSnapshot, InlineRenderTemplate } from '@agentdevjs/core';
+import type { AgentFeature, FeatureStateSnapshot } from '@agentdevjs/core';
 import { createTool } from '@agentdevjs/core';
 
 /** 固定 checkpoint ID（单 checkpoint 模型） */
@@ -68,7 +68,6 @@ export class CheckpointFeature implements AgentFeature {
             note: args?.note || '',
           };
         },
-        render: { call: 'set-checkpoint', result: 'set-checkpoint' },
         executionMode: 'exclusive',
       }),
 
@@ -132,7 +131,6 @@ export class CheckpointFeature implements AgentFeature {
             summaryPreview: summary.slice(0, 200),
           };
         },
-        render: { call: 'rollback-checkpoint', result: 'rollback-checkpoint' },
         executionMode: 'exclusive',
       }),
     ];
@@ -162,39 +160,4 @@ export class CheckpointFeature implements AgentFeature {
     const s = snapshot as { hasActiveCheckpoint?: boolean } | null;
     this._hasActiveCheckpoint = s?.hasActiveCheckpoint ?? false;
   }
-
-  // ── Render templates ──
-
-  getRenderTemplates(): Record<string, InlineRenderTemplate> {
-    return {
-      'set-checkpoint': {
-        call: (data: Record<string, any>) =>
-          `<div class="tool-call checkpoint-call"><span class="checkpoint-icon">📍</span> Set Checkpoint${data?.note ? `: ${escapeHtml(data.note)}` : ''}</div>`,
-        result: (_data: Record<string, any>, success?: boolean) =>
-          success
-            ? `<div class="tool-result checkpoint-result">Checkpoint established — safe to explore.</div>`
-            : `<div class="tool-error">Checkpoint failed.</div>`,
-      },
-      'rollback-checkpoint': {
-        call: (data: Record<string, any>) => {
-          const preview = data?.summary ? escapeHtml(String(data.summary).slice(0, 150)) : '';
-          return `<div class="tool-call rollback-call"><span class="rollback-icon">↩️</span> Rollback to Checkpoint${preview ? `: ${preview}…` : ''}</div>`;
-        },
-        result: (_data: Record<string, any>, success?: boolean) =>
-          success
-            ? `<div class="tool-result rollback-result">Restoring checkpoint — conversation will continue from the saved point.</div>`
-            : `<div class="tool-error">Rollback failed.</div>`,
-      },
-    };
-  }
-}
-
-// ── Utilities ──
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
