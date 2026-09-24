@@ -418,6 +418,13 @@ async function ctxArchiveAndStopRuntime(target) {
     finishSidebarOperation(archiveOperation.operationId, 'settled', {
       serverRevision: result?.revision ?? null,
     });
+    // 乐观退场：归档已提交，源 runtime 的侧栏条目立即消失，不再等导航与
+    // 关停链路走完。stop 仍按原有顺序执行（先导航后关停），轮询快照确认
+    // runtime 消失后抑制自动解除；关停失败时下方 catch 会解除并恢复呈现。
+    if (variant !== 'remote' && typeof markPendingRuntimeStop === 'function') {
+      markPendingRuntimeStop(agentId, sessionId, runtimeId);
+      if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+    }
     const targetSessionId = String(result?.targetSessionId || '').trim();
     if (targetSessionId) {
       await navigateToSessionMutationTarget(agentId, result, runtimeId);
@@ -469,6 +476,10 @@ async function ctxArchiveAndStopRuntime(target) {
   } catch (e) {
     // The archive itself is already committed. Runtime cleanup is independent
     // and must not retroactively mark that session mutation as failed.
+    if (variant !== 'remote' && typeof releasePendingRuntimeStop === 'function') {
+      releasePendingRuntimeStop(runtimeId, agentId, sessionId);
+      if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+    }
     refreshSidebarRuntimeAfterMutation(500).catch(e => console.warn(e));
     window.alert(t('close_failed') + (e && e.message ? e.message : e));
   }

@@ -546,6 +546,10 @@ async function loadAgents() {
         diagnoseEmptySnapshot('external-fallback-no-history', prevAgents.length);
       }
     } else {
+      // 先收敛乐观退场注册表：快照已不含的源 runtime（stop 已生效）解除抑制。
+      if (typeof reconcilePendingRuntimeStops === 'function') {
+        reconcilePendingRuntimeStops(connectedAgents);
+      }
       allAgents = connectedAgents.map((agent) => {
         const runtimeSessionId = getRuntimeId(agent);
         const runtimeAgent = runtimeSessionId ? runtimeById.get(runtimeSessionId) : runtimeById.get(agent.id);

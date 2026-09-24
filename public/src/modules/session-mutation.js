@@ -21,6 +21,9 @@
  *   renderAgentList, loadAgents
  * 依赖 external-runtime.js:
  *   clearAgentRuntimeCache, refreshSidebarRuntimeAfterMutation
+ * 依赖 sidebar-operations.js:
+ *   markPendingRuntimeStop, releasePendingRuntimeStop,
+ *   invalidateSidebarProjection（源 runtime 乐观退场）
  * 依赖 app-core.js:
  *   invoke
  */
@@ -78,14 +81,29 @@ function requestArchivedSourceRuntimeCleanup(agentId, sessionId, sourceRuntimeId
   if (sourceRuntimeId && typeof clearAgentRuntimeCache === 'function') {
     clearAgentRuntimeCache(sourceRuntimeId);
   }
+  // 归档已在服务端提交：源 runtime 只是待回收资源。注册乐观退场（侧栏条目
+  // 立即消失）并即刻发起 stop，与新会话导航并行——此前该调用停靠在导航之后，
+  // 老条目要等新会话页面完全加载完才开始关闭。
+  if (typeof markPendingRuntimeStop === 'function') {
+    markPendingRuntimeStop(agentId, sessionId, sourceRuntimeId);
+  }
+  if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
   void (async () => {
-    await invoke('stop_agent', { agentId, sessionId });
+    try {
+      await invoke('stop_agent', { agentId, sessionId });
+    } catch (error) {
+      console.warn('Failed to clean up archived session runtime:', error);
+      // stop 未被接受：解除隐藏让条目回到可见，由轮询快照恢复呈现。
+      if (typeof releasePendingRuntimeStop === 'function') {
+        releasePendingRuntimeStop(sourceRuntimeId, agentId, sessionId);
+      }
+      if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+      return;
+    }
     if (typeof refreshSidebarRuntimeAfterMutation === 'function') {
       await refreshSidebarRuntimeAfterMutation(500);
     }
-  })().catch((error) => {
-    console.warn('Failed to clean up archived session runtime:', error);
-  });
+  })();
 }
 
 async function navigateToSessionMutationTarget(agentId, result, sourceRuntimeId) {

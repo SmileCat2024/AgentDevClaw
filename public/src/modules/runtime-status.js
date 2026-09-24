@@ -253,6 +253,13 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     if (!entry?.runtimeId) return;
     if (seenRuntimeIds.has(entry.runtimeId)) return;
     seenRuntimeIds.add(entry.runtimeId);
+    // 乐观退场：归档已提交、stop_agent 进行中的源 runtime 不再作为侧栏叶子
+    // （operation 合成条目是操作反馈本身，不在此列）。
+    if (typeof isRuntimeStopPending === 'function'
+      && !String(entry.source || '').startsWith('operation-')
+      && isRuntimeStopPending(entry.ownerId || hostAgentId, entry.sessionId, entry.runtimeId)) {
+      return;
+    }
     const entryTodoColor = sessionTodoMap.get(String(entry.sessionId || '').trim());
     entry.todo = entryTodoColor !== undefined;
     entry.todoColor = entryTodoColor || '';

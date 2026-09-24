@@ -416,6 +416,12 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         _csArchiveRollback();
         _csArchiveRollback = null;
       }
+      const _csIsRemote = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.sessionId);
+      // 归档已提交：源 runtime 处置与新会话导航解耦，立即发起（内部含侧栏条目
+      // 的乐观退场）。停靠在导航之后会让老条目等新会话页面完全加载完才开始关闭。
+      if (action.archiveOriginal && archiveSucceeded && !_csIsRemote) {
+        requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
+      }
       if (result?.liveRuntime && result?.switched) {
         // Live-runtime shortcut path: session switch was already handled
         // inside createCompactedResumeSession — skip normal agent/runtime logic
@@ -425,9 +431,6 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           status: 'success',
           title: _csDoneTitle,
         });
-        if (action.archiveOriginal && archiveSucceeded) {
-          requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
-        }
         _csArchiveRollback = null;
         return;
       }
@@ -444,7 +447,6 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // completed summary merely because it is not present yet.
       // 远程目标（R2-02）：响应中的 agent 是远程端 runtime 形态（裸 id），不进
       // 入本地 allAgents——切换走远程目录轮询（与 R2-01 activate 同链路）。
-      const _csIsRemote = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.sessionId);
       const _csReadyAgent = (_csIsRemote ? null : result?.agent) || null;
       const _csTargetStopped = false;
       const _csConnectedTarget = _csReadyAgent ? (upsertConnectedAgent(_csReadyAgent) || _csReadyAgent) : null;
@@ -466,9 +468,6 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           status: 'success',
           title: _csDoneTitle,
         });
-        if (action.archiveOriginal && archiveSucceeded && !_csIsRemote) {
-          requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
-        }
         if (!action.archiveOriginal && nextRuntimeId) finishSidebarOperation(_csOperation?.operationId, 'settled');
         _csArchiveRollback = null;
         return;
@@ -497,10 +496,6 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         status: 'success',
         title: _csDoneTitle,
       });
-      if (action.archiveOriginal && archiveSucceeded) {
-        // 远程归档发生在远程端，本地不做 runtime 清理（无本地 runtime 可停）。
-        if (!_csIsRemote) requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
-      }
       loadAgents().catch(e => console.warn(e));
       if (action.archiveOriginal && !archiveSucceeded) {
         ClawToast.update(_csToastId, {

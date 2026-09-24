@@ -282,6 +282,12 @@ window.submitTrimCompact = async () => {
       archiveRollback();
       archiveRollback = null;
     }
+    const isRemoteTrim = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(sessionId);
+    // 归档已提交：源 runtime 处置与新会话导航解耦，立即发起（内部含侧栏条目
+    // 的乐观退场）。停靠在导航之后会让老条目等新会话页面完全加载完才开始关闭。
+    if (archiveAfter && archiveSucceeded && !isRemoteTrim) {
+      requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
+    }
     const targetSessionId = String(result?.session?.id || '').trim();
     trimSessionCommitted = Boolean(targetSessionId);
     updateSidebarOperation(trimOperation?.operationId, {
@@ -293,8 +299,7 @@ window.submitTrimCompact = async () => {
     // The server has already committed the trimmed session and observed startup.
     // Delayed Viewer registration must not block or downgrade this operation.
     // 远程目标：响应中的 agent 是远程端 runtime 形态（裸 id），不进入本地
-    // allAgents——切换走远程目录轮询（见下方 isRemoteSession 分支）。
-    const isRemoteTrim = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(sessionId);
+    // allAgents——切换走远程目录轮询（见下方 isRemoteTrim 分支）。
     const readyAgent = (isRemoteTrim ? null : result?.agent) || null;
     const targetStopped = false;
     const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
@@ -312,9 +317,6 @@ window.submitTrimCompact = async () => {
       finishSidebarOperation(trimOperation?.operationId, 'settled');
     }
     if (_navGuard !== _navigationGuardEpoch) {
-      if (archiveAfter && archiveSucceeded && !isRemoteTrim) {
-        requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
-      }
       if (!archiveAfter && nextRuntimeId) finishSidebarOperation(trimOperation?.operationId, 'settled');
       archiveRollback = null;
       return;
@@ -342,12 +344,6 @@ window.submitTrimCompact = async () => {
     } else {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
-    }
-    // The archive already committed. Resource cleanup must not alter the
-    // completed trim operation if this old runtime releases slowly.
-    // 远程归档发生在远程端，本地不做 runtime 清理（无本地 runtime 可停）。
-    if (archiveAfter && archiveSucceeded && !isRemoteTrim) {
-      requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
     }
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新会话已创建，但原会话归档失败：' : 'The new session was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
@@ -567,6 +563,11 @@ window.submitBranch = async () => {
       archiveRollback();
       archiveRollback = null;
     }
+    // 归档已提交：源 runtime 处置与新会话导航解耦，立即发起（内部含侧栏条目
+    // 的乐观退场）。停靠在导航之后会让老条目等新会话页面完全加载完才开始关闭。
+    if (archiveAfter && archiveSucceeded && !isRemoteSession) {
+      requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
+    }
 
     const targetSessionId = String(result?.newSessionId || '').trim();
     branchSessionCommitted = Boolean(targetSessionId);
@@ -599,9 +600,6 @@ window.submitBranch = async () => {
       finishSidebarOperation(branchOperation?.operationId, 'settled');
     }
     if (_navGuard !== _navigationGuardEpoch) {
-      if (archiveAfter && archiveSucceeded && !isRemoteSession) {
-        requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
-      }
       if (!archiveAfter && nextRuntimeId) finishSidebarOperation(branchOperation?.operationId, 'settled');
       archiveRollback = null;
       return;
@@ -661,10 +659,6 @@ window.submitBranch = async () => {
     } else {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
-    }
-    if (archiveAfter && archiveSucceeded) {
-      // 远程归档发生在远程端，本地不做 runtime 清理（无本地 runtime 可停）。
-      if (!isRemoteSession) requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
     }
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新分支已创建，但原会话归档失败：' : 'The branch was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
