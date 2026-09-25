@@ -14,7 +14,12 @@
  * - spawn 时注入 env：PLAYWRIGHT_BROWSERS_PATH（shell 自管资产目录，与宿主
  *   环境解耦）+ NO_UPDATE_NOTIFIER=1；
  * - 终止语义复用基座 runCollectedSpawn（detached 进程组、组 kill、中断即
- *   结果），本 adapter 不自实现终止。
+ *   结果），本 adapter 不自实现终止；
+ * - --profile（--user-data-dir）渲染路径：后端 playwright one-shot CLI（stable
+ *   正式版）在 --user-data-dir 路径存在收尾挂起（产物写出后 CLI 进程与
+ *   浏览器均不退出，复现稳定），adapter 以「产物落盘稳定 → 宽限 → kill
+ *   回收」补偿（spawnBackendWithSalvage），实测 kill 后浏览器 1s 内随
+ *   pipe 断开自退、档案锁释放。
  *
  * 动词绑定模式与 coder 相同：分派层传参不含动词，adapter key 形如
  * `playwright:<verb>`，工厂按 key 绑定路由；策略声明的 argPrefix 未用
@@ -66,6 +71,10 @@ export interface PlaywrightAdaptersDeps {
   workdir?: string;
   /** 注入 spawn 实现（测试替身）；缺省用基座 runCollectedSpawn */
   spawnImpl?: SpawnLike;
+  /** 产物落盘回收（--user-data-dir 渲染收尾挂起补偿）的采样间隔（毫秒）；测试注入用 */
+  salvagePollMs?: number;
+  /** 产物落盘稳定后给后端的完成宽限（毫秒）；测试注入用 */
+  salvageGraceMs?: number;
 }
 
 /** 产物动词所需的浏览器资产（headless 渲染）。 */
@@ -78,8 +87,18 @@ const MAX_STDERR_CHARS = 500;
 const MAX_PROFILE_SITES = 20;
 /** profile-list 报文里每个档案展示的站点数上限。 */
 const MAX_PROFILE_SITES_SHOW = 5;
+/** 产物动词带档案渲染失败时的占用提示（同一档案目录同时只能被一个浏览器使用）。 */
+const PROFILE_OCCUPIED_HINT =
+  'hint: 若该档案正被其他浏览器占用（例如未 close 的 open 会话），先 close 旧会话或换档案重试；同一档案同时只能被一个浏览器使用。';
 /** 会话级 cookie 翻转持久化时写入的过期时间（从现在起算）。 */
 const SALVAGE_EXPIRES_MILLISECONDS = 180 * 24 * 60 * 60 * 1000;
+/** 产物落盘回收：产物字节数稳定判定采样间隔（毫秒）。 */
+const ARTIFACT_SALVAGE_POLL_MS = 500;
+/** 产物落盘回收：稳定后给后端自然退出的宽限（毫秒），逾期 kill 回收。 */
+const ARTIFACT_SALVAGE_GRACE_MS = 15_000;
+/** 回收成功报文附注（--user-data-dir 渲染收尾挂起被回收时）。 */
+const ARTIFACT_SALVAGE_NOTE =
+  'note: 后端渲染完成后收尾未退出（上游 CLI 已知问题，仅 --profile 渲染出现），产物完好，进程已回收。';
 /** Chrome 时间纪元偏移（1601-01-01 → Unix 纪元，微秒），cookie 库 expires_utc 用。 */
 const CHROME_EPOCH_OFFSET_MICROSECONDS = 11644473600000000n;
 
@@ -430,6 +449,60 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
   }
 
   /**
+   * 带「产物落盘回收」的渲染等待（--user-data-dir 路径专用）。
+   *
+   * 后端 playwright one-shot CLI（stable 正式版）的
+   * launchPersistentContext（--user-data-dir）路径存在收尾挂起：产物写出后
+   * CLI 进程与浏览器均不退出（多次复现；用 stable core 直跑等价调用序列
+   * 无此问题，挂点在 CLI 自身流程）。实测单杀 CLI 进程后浏览器在 1s 内随
+   * pipe 断开自退，档案锁随之释放。产物动词的成功凭证是产物文件本身，
+   * 因此：并发盯产物字节数至稳定（连续两次采样一致）→ 给后端宽限窗口
+   * 自然退出（区分正常慢渲染与挂死）→ 逾期仍未退出则 kill 回收，由调用
+   * 方按产物存在报成功。外部中断（context.signal）优先于回收。
+   */
+  async function spawnBackendWithSalvage(
+    artifactPath: string,
+    argv: string[],
+    salvage: boolean,
+    context?: PlaywrightAdapterContext,
+  ): Promise<{ run: BackendRunResult; salvaged: boolean }> {
+    if (!salvage) {
+      return { run: await spawnBackend(argv, context?.signal), salvaged: false };
+    }
+    const controller = new AbortController();
+    const onOuterAbort = () => controller.abort();
+    // 已 aborted 的信号不会再触发 abort 事件，须先置位（与基座 runCollectedSpawn 同款防御）
+    if (context?.signal?.aborted) controller.abort();
+    context?.signal?.addEventListener('abort', onOuterAbort, { once: true });
+    let finished = false;
+    let salvaged = false;
+    const pollMs = deps.salvagePollMs ?? ARTIFACT_SALVAGE_POLL_MS;
+    const graceMs = deps.salvageGraceMs ?? ARTIFACT_SALVAGE_GRACE_MS;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    try {
+      const runP = spawnBackend(argv, controller.signal);
+      void (async () => {
+        let last = -1;
+        while (!controller.signal.aborted && !finished) {
+          const cur = await fileSize(artifactPath);
+          if (cur > 0 && cur === last) break;
+          last = cur;
+          await sleep(pollMs);
+        }
+        if (controller.signal.aborted || finished) return;
+        await sleep(graceMs);
+        if (controller.signal.aborted || finished) return;
+        salvaged = true;
+        controller.abort();
+      })();
+      return { run: await runP, salvaged };
+    } finally {
+      finished = true;
+      context?.signal?.removeEventListener('abort', onOuterAbort);
+    }
+  }
+
+  /**
    * URL scheme 白名单（安全关键，执行时校验，不依赖工具描述）：
    * 只放行 http/https。拒绝 file://（本地文件经渲染渗入产物，信息渗漏面）、
    * data:、ftp: 等其他 scheme——取证目标是可公开寻址的网页。
@@ -446,6 +519,59 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
 
   function invalidUrlReason(url: string): string {
     return `URL 仅支持 http:// 或 https://，拒绝 “${url.slice(0, 80)}”。本 shell 渲染网页取证，不接受本地文件或其他协议地址。`;
+  }
+
+  /**
+   * 产物动词渲染参数值校验（执行时校验，与 URL 白名单同模式）：
+   * - viewport-size："宽,高" 像素（如 1280,720；手机/宽屏取证）
+   * - color-scheme：light | dark（暗色页取证）
+   * - wait-for-timeout：毫秒（页面渲染等待——懒加载/动画场景截图空白；这是
+   *   渲染等待不是工具超时，上限 10s，更长等待应改用 open 会话确认后截取）
+   * - paper-format：纸型枚举（仅 pdf；CLI 缺省 Letter，国内场景常要 A4）
+   * - ignore-https-errors：布尔（自签证书内网站点），无需值校验
+   */
+  const RENDER_FLAG_SPECS: Array<{
+    prefix: string;
+    verbs: string[];
+    validate: (v: string) => string | null;
+  }> = [
+    {
+      prefix: '--viewport-size=',
+      verbs: ['screenshot', 'pdf', 'har'],
+      validate: (v) => (/^\d{2,5},\d{2,5}$/.test(v) ? null : `viewport-size 值应为 "宽,高" 像素（如 1280,720），拒绝 “${v.slice(0, 30)}”。`),
+    },
+    {
+      prefix: '--color-scheme=',
+      verbs: ['screenshot', 'pdf', 'har'],
+      validate: (v) => (v === 'light' || v === 'dark' ? null : `color-scheme 只接受 light 或 dark，拒绝 “${v.slice(0, 30)}”。`),
+    },
+    {
+      prefix: '--wait-for-timeout=',
+      verbs: ['screenshot', 'pdf', 'har'],
+      validate: (v) => (/^\d{1,5}$/.test(v) && Number(v) <= 10000
+        ? null
+        : `wait-for-timeout 值应为不超过 10000 的毫秒数（页面渲染等待；更长等待用 open 会话），拒绝 “${v.slice(0, 30)}”。`),
+    },
+    {
+      prefix: '--paper-format=',
+      verbs: ['pdf'],
+      validate: (v) => (/^(letter|legal|tabloid|ledger|a[0-6])$/i.test(v)
+        ? null
+        : `paper-format 只接受 Letter/Legal/Tabloid/Ledger/A0-A6，拒绝 “${v.slice(0, 30)}”。`),
+    },
+  ];
+
+  /** 校验产物动词尾参（返回 null = 通过；返回文案 = 拒绝原因）。 */
+  function validateRenderFlags(verb: string, tailFlags: string[]): string | null {
+    for (const f of tailFlags) {
+      for (const spec of RENDER_FLAG_SPECS) {
+        if (!f.startsWith(spec.prefix)) continue;
+        if (!spec.verbs.includes(verb)) return `${spec.prefix} 不适用于 ${verb} 动词。`;
+        const reason = spec.validate(f.slice(spec.prefix.length));
+        if (reason) return reason;
+      }
+    }
+    return null;
   }
 
   /** 失败分类改写（不透传裸错误；缺失资产附修复指引）。 */
@@ -501,42 +627,126 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
 
   // ------------------------------------------------------------ 产物动词
 
+  /**
+   * `--profile=<名称>` 尾参的统一解析（open 会话动词与 screenshot/pdf/har 产物
+   * 动词共用）：名称白名单校验 → 档案根下目录（缺即创建）→ 会话级 cookie 保活
+   * （产物动词同样需要：不翻转则本次启动就丢会话级登录票据）。保活失败不阻塞，
+   * 以警告随报文透出。
+   */
+  async function resolveProfileDir(verb: string, name: string): Promise<{ name: string; dir: string; warnings: string[] }> {
+    if (!validateProfileName(name)) {
+      throw new Error(failureReport(
+        verb,
+        `profile 名称不合法：“${name.slice(0, 40) || '(空)'}”。`
+        + '只允许字母或数字开头，随后是字母/数字/下划线/连字符，总长 1-64（名称即档案目录名）。',
+        '',
+      ));
+    }
+    const dir = join(profilesRoot(), name);
+    await mkdir(dir, { recursive: true });
+    const warnings: string[] = [];
+    const salvage = await salvageSessionCookies(dir);
+    if ('error' in salvage) {
+      warnings.push(`warn: 会话级 cookie 保活跳过（${salvage.error}）；依赖会话级 cookie 的登录态跨重启可能失效。`);
+    }
+    return { name, dir, warnings };
+  }
+
   async function renderVerb(sub: 'screenshot' | 'pdf', args: string[], context?: PlaywrightAdapterContext): Promise<string> {
-    const { positional, tailFlags } = stripTailFlags(args, ['--full-page']);
+    const { positional, tailFlags } = stripTailFlags(args, [
+      '--full-page', '--ignore-https-errors', '--profile=',
+      '--viewport-size=', '--color-scheme=', '--wait-for-timeout=', '--paper-format=',
+    ]);
     const [url, output] = positional;
     if (!validateUrl(url)) {
       throw new Error(failureReport(sub, invalidUrlReason(url), ''));
     }
+    const flagReason = validateRenderFlags(sub, tailFlags);
+    if (flagReason !== null) {
+      throw new Error(failureReport(sub, flagReason, ''));
+    }
     const absOut = await ensureOutputPath(output);
-    const run = await spawnBackend([sub, url, absOut, ...tailFlags], context?.signal);
-    if (run.terminated) return terminatedReport(sub, run);
-    if (!run.ok) throw new Error(failureReport(sub, classifyFailure(run.stderr), run.stderr));
-    return artifactReport(sub, url, absOut, output, tailFlags);
+    // --profile=<名称>：以持久化登录档案渲染。后端 one-shot CLI 的用户数据目录
+    // 语义与 open 的档案一致（同一档案空间），登录态跨渲染留存。
+    const profileArg = tailFlags.find((f) => f.startsWith('--profile='));
+    let profile: Awaited<ReturnType<typeof resolveProfileDir>> | null = null;
+    if (profileArg !== undefined) {
+      profile = await resolveProfileDir(sub, profileArg.slice('--profile='.length));
+    }
+    const backendFlags = tailFlags
+      .filter((f) => !f.startsWith('--profile='))
+      .concat(profile ? [`--user-data-dir=${profile.dir}`] : []);
+    const { run, salvaged } = await spawnBackendWithSalvage(
+      absOut, [sub, url, absOut, ...backendFlags], profile !== null, context,
+    );
+    const successReport = async (extra = ''): Promise<string> => {
+      if (profile) await recordProfileSite(profile.name, url);
+      return (await artifactReport(sub, url, absOut, output, backendFlags))
+        + (profile ? `\nprofile: ${profile.name}` : '')
+        + (profile && profile.warnings.length > 0 ? `\n${profile.warnings.join('\n')}` : '')
+        + extra;
+    };
+    if (run.terminated) {
+      // 回收触发且产物已落盘：按成功报文（附回收说明）；否则保持终止语义（外部中断）。
+      if (salvaged && (await fileSize(absOut)) >= 0) return successReport(`\n${ARTIFACT_SALVAGE_NOTE}`);
+      return terminatedReport(sub, run);
+    }
+    if (!run.ok) {
+      const report = failureReport(sub, classifyFailure(run.stderr), run.stderr);
+      throw new Error(profile ? `${report}\n${PROFILE_OCCUPIED_HINT}` : report);
+    }
+    return successReport();
   }
 
   async function harVerb(args: string[], context?: PlaywrightAdapterContext): Promise<string> {
-    const { positional } = stripTailFlags(args, []);
+    const { positional, tailFlags } = stripTailFlags(args, [
+      '--ignore-https-errors', '--profile=',
+      '--viewport-size=', '--color-scheme=', '--wait-for-timeout=',
+    ]);
     const [url, output] = positional;
     if (!validateUrl(url)) {
       throw new Error(failureReport('har', invalidUrlReason(url), ''));
     }
+    const flagReason = validateRenderFlags('har', tailFlags);
+    if (flagReason !== null) {
+      throw new Error(failureReport('har', flagReason, ''));
+    }
     const absHar = await ensureOutputPath(output);
     const sidePng = `${absHar}.png`;
     // 侧产物 PNG 与 HAR 同目录（workspace 内，参数道已保证边界）。
-    const argv = ['screenshot', '--save-har', absHar, url, sidePng];
-    const run = await spawnBackend(argv, context?.signal);
-    if (run.terminated) return terminatedReport('har', run);
-    if (!run.ok) throw new Error(failureReport('har', classifyFailure(run.stderr), run.stderr));
-    const harBytes = await fileSize(absHar);
-    if (harBytes < 0) throw new Error(failureReport('har', '产物文件未写出（后端异常退出）', run.stderr));
-    const pngBytes = await fileSize(sidePng);
-    return [
-      'har ok',
-      `url: ${url}`,
-      `saved: ${output}`,
-      `bytes: ${harBytes}`,
-      `side artifact: ${output}.png（${pngBytes < 0 ? '缺失' : `${pngBytes} bytes`}，viewport 截图）`,
-    ].join('\n');
+    const profileArg = tailFlags.find((f) => f.startsWith('--profile='));
+    let profile: Awaited<ReturnType<typeof resolveProfileDir>> | null = null;
+    if (profileArg !== undefined) {
+      profile = await resolveProfileDir('har', profileArg.slice('--profile='.length));
+    }
+    const argv = ['screenshot', '--save-har', absHar, url, sidePng]
+      .concat(profile ? [`--user-data-dir=${profile.dir}`] : []);
+    const { run, salvaged } = await spawnBackendWithSalvage(absHar, argv, profile !== null, context);
+    const successReport = async (): Promise<string> => {
+      if (profile) await recordProfileSite(profile.name, url);
+      const harBytes = await fileSize(absHar);
+      const pngBytes = await fileSize(sidePng);
+      return [
+        'har ok',
+        `url: ${url}`,
+        `saved: ${output}`,
+        `bytes: ${harBytes}`,
+        `side artifact: ${output}.png（${pngBytes < 0 ? '缺失' : `${pngBytes} bytes`}，viewport 截图）`,
+        ...(profile ? [`profile: ${profile.name}`, ...profile.warnings] : []),
+      ].join('\n');
+    };
+    if (run.terminated) {
+      // HAR 在 context 收尾阶段落盘：挂起若发生在其写出前则无产物，如实报终止。
+      if (salvaged && (await fileSize(absHar)) >= 0) return `${await successReport()}\n${ARTIFACT_SALVAGE_NOTE}`;
+      return terminatedReport('har', run);
+    }
+    if (!run.ok) {
+      const report = failureReport('har', classifyFailure(run.stderr), run.stderr);
+      throw new Error(profile ? `${report}\n${PROFILE_OCCUPIED_HINT}` : report);
+    }
+    const harReady = (await fileSize(absHar)) >= 0;
+    if (!harReady) throw new Error(failureReport('har', '产物文件未写出（后端异常退出）', run.stderr));
+    return successReport();
   }
 
   // ------------------------------------------------------- 会话后端（v2）
@@ -583,11 +793,20 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
     return line.slice(0, MAX_STDERR_CHARS);
   }
 
-  /** 会话动词转发：spawn 官方 CLI 子命令，输出直接回模型（### Page / ### Snapshot 结构化文本）。 */
-  async function forwardSessionVerb(verb: string, args: string[], context?: PlaywrightAdapterContext): Promise<string> {
+  /** 会话动词转发：spawn 官方 CLI 子命令，输出直接回模型（### Page / ### Snapshot 结构化文本）。
+   *  cliSub：动词名与 CLI 子命令不一致时显式指定（如 capture → screenshot）。 */
+  async function forwardSessionVerb(verb: string, args: string[], context?: PlaywrightAdapterContext, cliSub?: string): Promise<string> {
     if (verb === 'close') activeProfileName = null;
-    if (verb === 'goto' && !validateUrl(args[0])) {
-      throw new Error(failureReport('goto', invalidUrlReason(args[0] ?? ''), ''));
+    if (verb === 'goto' || verb === 'tab-new') {
+      if (!validateUrl(args[0])) {
+        throw new Error(failureReport(verb, invalidUrlReason(args[0] ?? ''), ''));
+      }
+    }
+    if (verb === 'resize' && (!/^\d{2,5}$/.test(args[0] ?? '') || !/^\d{2,5}$/.test(args[1] ?? ''))) {
+      throw new Error(failureReport(verb, `resize 参数应为两个 2-5 位像素数（如 resize 1280 720），拒绝 “${(args ?? []).join(' ').slice(0, 40)}”。`, ''));
+    }
+    if ((verb === 'tab-close' || verb === 'request') && !/^\d+$/.test(args[0] ?? '')) {
+      throw new Error(failureReport(verb, `${verb} 参数应为数字编号（来自 tab-list / requests 输出），拒绝 “${(args[0] ?? '').slice(0, 30)}”。`, ''));
     }
     const entry = resolveSessionCliEntry();
     if (!entry) {
@@ -596,7 +815,7 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
         '由人工在运行环境安装后重试（步骤见技能 playwright-shell「故障处置」）。',
       );
     }
-    const run = await spawnImpl(process.execPath, [entry, verb, ...args], {
+    const run = await spawnImpl(process.execPath, [entry, cliSub ?? verb, ...args], {
       signal: context?.signal,
       workdir,
       env: backendEnv(),
@@ -612,7 +831,7 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
       }
       throw new Error(`failed ${verb}\n${classifySessionFailure(run.stderr, run.stdout)}`);
     }
-    if (verb === 'goto' && activeProfileName) await recordProfileSite(activeProfileName, args[0]);
+    if ((verb === 'goto' || verb === 'tab-new') && activeProfileName) await recordProfileSite(activeProfileName, args[0]);
     return output || `${verb} ok`;
   }
 
@@ -640,32 +859,19 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
         'headless（默认）不受影响，绝大多数取证与会话任务无需 --headed。',
       ].join('\n');
     }
-    // --profile=<名称>：持久化登录档案。名称白名单校验后解析到统一档案根
-    // 目录（缺目录即创建），以绝对路径转发后端——登录态与站点数据跨会话
-    // 留存（Chromium 用户数据目录语义）。open 前先做会话级 cookie 保活
-    // （大量站点登录票据是会话级 cookie，不翻转则重启即丢登录）。
+    // --profile=<名称>：持久化登录档案，与产物动词共用同一解析（白名单校验 +
+    // 档案目录创建 + 会话级 cookie 保活，见 resolveProfileDir）。open 以绝对
+    // 目录转发会话后端的 --profile；产物动词侧转发为 one-shot CLI 的
+    // --user-data-dir（同一目录，同一登录态）。
     let profileFlag: string | null = null;
     let profileName: string | null = null;
     const openWarnings: string[] = [];
     const profileArg = tailFlags.find((f) => f.startsWith('--profile='));
     if (profileArg !== undefined) {
-      const name = profileArg.slice('--profile='.length);
-      if (!validateProfileName(name)) {
-        throw new Error(failureReport(
-          'open',
-          `profile 名称不合法：“${name.slice(0, 40) || '(空)'}”。`
-          + '只允许字母或数字开头，随后是字母/数字/下划线/连字符，总长 1-64（名称即档案目录名）。',
-          '',
-        ));
-      }
-      const profileDir = join(profilesRoot(), name);
-      await mkdir(profileDir, { recursive: true });
-      const salvage = await salvageSessionCookies(profileDir);
-      if ('error' in salvage) {
-        openWarnings.push(`warn: 会话级 cookie 保活跳过（${salvage.error}）；依赖会话级 cookie 的登录态跨重启可能失效。`);
-      }
-      profileName = name;
-      profileFlag = `--profile=${profileDir}`;
+      const resolved = await resolveProfileDir('open', profileArg.slice('--profile='.length));
+      openWarnings.push(...resolved.warnings);
+      profileName = resolved.name;
+      profileFlag = `--profile=${resolved.dir}`;
     }
     const passFlags = tailFlags.filter((f) => !f.startsWith('--profile='));
     const entry = resolveSessionCliEntry();
@@ -733,8 +939,23 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
     'playwright:fill': (args, context) => forwardSessionVerb('fill', args, context),
     'playwright:press': (args, context) => forwardSessionVerb('press', args, context),
     'playwright:click': (args, context) => forwardSessionVerb('click', args, context),
+    'playwright:hover': (args, context) => forwardSessionVerb('hover', args, context),
+    'playwright:select': (args, context) => forwardSessionVerb('select', args, context),
+    'playwright:go-back': (args, context) => forwardSessionVerb('go-back', args, context),
+    'playwright:go-forward': (args, context) => forwardSessionVerb('go-forward', args, context),
+    'playwright:reload': (args, context) => forwardSessionVerb('reload', args, context),
     'playwright:tab-list': (args, context) => forwardSessionVerb('tab-list', args, context),
     'playwright:tab-select': (args, context) => forwardSessionVerb('tab-select', args, context),
+    'playwright:tab-new': (args, context) => forwardSessionVerb('tab-new', args, context),
+    'playwright:tab-close': (args, context) => forwardSessionVerb('tab-close', args, context),
+    'playwright:resize': (args, context) => forwardSessionVerb('resize', args, context),
+    'playwright:capture': (args, context) => forwardSessionVerb('capture', args, context, 'screenshot'),
+    'playwright:requests': (args, context) => forwardSessionVerb('requests', args, context),
+    'playwright:request': (args, context) => forwardSessionVerb('request', args, context),
+    'playwright:console': (args, context) => forwardSessionVerb('console', args, context),
+    'playwright:dialog-accept': (args, context) => forwardSessionVerb('dialog-accept', args, context),
+    'playwright:dialog-dismiss': (args, context) => forwardSessionVerb('dialog-dismiss', args, context),
+    'playwright:cookie-list': (args, context) => forwardSessionVerb('cookie-list', args, context),
     'playwright:close': (args, context) => forwardSessionVerb('close', args, context),
   };
 }

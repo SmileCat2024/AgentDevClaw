@@ -80,8 +80,9 @@ export class PlaywrightShellFeature implements AgentFeature {
   readonly name = 'playwright-shell';
   readonly source = __filename.replace(/\\/g, '/');
   readonly description =
-    '浏览器页面取证与受控页面会话（playwright_shell 工具）：一次性产物（截图/PDF/HAR）' +
-    '与多步页面交互（导航/输入/点击/读取，refs 防注入），双模式 headless/headed。';
+    '浏览器页面取证与受控页面会话（playwright_shell 工具）：一次性产物（截图/PDF/HAR，' +
+    '支持 --profile 登录档案与 viewport/color-scheme/wait-for-timeout/paper-format 渲染参数）' +
+    '与多步页面交互（导航/输入/点击/悬停/下拉/标签页/网络抓包/控制台，refs 防注入），双模式 headless/headed。';
 
   private readonly config: PlaywrightShellFeatureConfig;
 

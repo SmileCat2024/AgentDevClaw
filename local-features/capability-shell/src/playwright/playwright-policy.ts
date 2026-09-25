@@ -3,18 +3,23 @@
  *
  * 领域定位：浏览器页面取证（v1 单次渲染产物）+ 受控页面会话交互（v2）。
  *
- * 动词表 v2 = one-shot 产物动词（screenshot / pdf / har / env，不变）
- * + 会话动词（open / goto / snapshot / find / fill / press / click /
- * tab-list / tab-select / close）+ profile-list（登录档案清单）：
+ * 动词表 v3 = one-shot 产物动词（screenshot / pdf / har / env；渲染参数面
+ * --viewport-size / --color-scheme / --wait-for-timeout / --paper-format /
+ * --ignore-https-errors）+ 会话动词（open / goto / go-back / go-forward /
+ * reload / snapshot / find / fill / press / click / hover / select /
+ * tab-list / tab-select / tab-new / tab-close / resize / capture（截当前页）/
+ * requests / request / console / dialog-accept / dialog-dismiss /
+ * cookie-list / close）+ profile-list（登录档案清单）：
  * 会话动词转发官方会话型 CLI（@playwright/cli）的 daemon 子命令，跨调用
- * 共享同一页面，refs 机制（click/fill 只接受 snapshot 输出里出现过的元素
- * 引用）是防注入核心。
+ * 共享同一页面，refs 机制（click/fill/hover/select 只接受 snapshot 输出里
+ * 出现过的元素引用）是防注入核心。
  *
  * 双模式：open 默认 headless；--headed 在 Windows/macOS 使用系统桌面，
  * Linux 需要 DISPLAY/WAYLAND_DISPLAY 或外部 xvfb-run，本 shell 不自动拉起 X server。
  * 登录态留存：open --profile=<名称> 使用持久化档案目录（用户数据目录语义，
- * 登录态跨会话有效），profile 名称走白名单校验；state/cookie 细粒度操作
- * 仍不入表。动词表从领域需求反推，不等于后端 CLI 子命令面：任意 JS 执行
+ * 登录态跨会话有效），profile 名称走白名单校验；产物动词（screenshot/pdf/har）
+ * 的 --profile=<名称> 桥接同一档案空间（one-shot CLI 的 --user-data-dir），
+ * 登录站点取证不必开会话；state/cookie 细粒度操作仍不入表。动词表从领域需求反推，不等于后端 CLI 子命令面：任意 JS 执行
  * （eval / run-code）、用例录制（codegen）、GUI 查看器等不入表
  * （unknownVerbHints 给结构化指引）。
  *
@@ -32,13 +37,18 @@ import type { CapabilityShellPolicy } from '../types.js';
 export const PLAYWRIGHT_SHELL_NAME = 'playwright_shell';
 
 export const PLAYWRIGHT_SHELL_DESCRIPTION = [
-  '浏览器页面取证与受控页面会话：两组动词——',
-  '(1) 一次性产物取证：screenshot / pdf / har 把 URL 渲染成可留存文件（渲染即退出，浏览器不驻留）；',
-  '(2) 受控会话交互：open / goto / snapshot / find / fill / press / click / tab-list / tab-select / close，',
+  '浏览器页面取证与受控会话：两组动词——',
+  '(1) 一次性产物取证：screenshot / pdf / har 把 URL 渲染成可留存文件（渲染即退出，浏览器不驻留），',
+  '可带 --profile=<名称> 以持久化登录档案渲染（登录站点取证）、--viewport-size=<宽,高>、',
+  '--color-scheme、--wait-for-timeout（懒加载等待）、--ignore-https-errors、pdf 另有 --paper-format；',
+  '(2) 受控会话交互：open / goto / go-back / go-forward / reload / snapshot / find / fill / press / click /',
+  'hover / select / tab-list / tab-select / tab-new / tab-close / resize / capture（截当前页）/',
+  'requests / request（网络抓包）/ console / dialog-accept / dialog-dismiss / cookie-list / close，',
   '跨调用共享同一页面会话（多步导航、输入、点击、读取页面内容），close 显式收尾。',
   '持久化登录档案：open --profile=<名称> 让登录态与站点数据跨会话留存',
-  '（首次可加 --headed 人工登录，之后 headless 复用）；profile-list 列出已有档案。',
-  '会话动词里的 click/fill 只接受 snapshot/find 输出里的元素 ref（如 e37、f3e949）——',
+  '（首次可加 --headed 人工登录，之后 headless 复用），产物动词的 --profile=<名称> 用同一档案空间；',
+  'profile-list 列出已有档案。',
+  '会话动词里的 click/fill/hover/select 只接受 snapshot/find 输出里的元素 ref（如 e37、f3e949）——',
   '不能凭空构造选择器；URL 参数必须整体加引号；含查询分隔符 & 的 URL 不支持（确定拒绝）。',
   '产物动词（v1）强制产物落在 workspace 内，成功报文 = 路径 + 字节数；会话动词直接回页面状态文本。',
   '首次使用或遇到拒绝报文时，先用 invoke_skill 激活 playwright-shell 技能——',
@@ -67,31 +77,33 @@ export function createPlaywrightShellPolicy(): CapabilityShellPolicy {
         adapter: { key: 'playwright:env' },
       },
       'screenshot': {
-        description: '渲染 URL 为 PNG 截图文件（headless 一次性取证；产物强制 workspace 内，成功报文 = 路径 + 字节数）',
+        description: '渲染 URL 为 PNG 截图文件（headless 一次性取证；产物强制 workspace 内，成功报文 = 路径 + 字节数）。--profile=<名称> 以持久化登录档案渲染（与 open 共用档案空间，登录站点取证用）；--viewport-size=<宽,高> 指定视口（手机/宽屏取证）；--wait-for-timeout=<ms> 等页面渲染再截（懒加载/动画，≤10000）；--color-scheme=<light|dark>；--ignore-https-errors 容忍自签证书站点',
         params: [
           { name: 'url', kind: 'literal' },
           { name: 'output', kind: 'path' },
         ],
-        flags: ['--full-page'],
-        usage: "screenshot '<url>' <output.png> [--full-page]",
+        flags: ['--full-page', '--ignore-https-errors', '--profile=', '--viewport-size=', '--color-scheme=', '--wait-for-timeout='],
+        usage: "screenshot '<url>' <output.png> [--full-page] [--profile=<名称>] [--viewport-size=<宽,高>] [--color-scheme=<light|dark>] [--wait-for-timeout=<ms>] [--ignore-https-errors]",
         adapter: { key: 'playwright:screenshot' },
       },
       'pdf': {
-        description: '渲染 URL 为 PDF 文档（仅 Chromium 后端；非 chromium 资产时返回结构化错误，不裸抛）',
+        description: '渲染 URL 为 PDF 文档（仅 Chromium 后端；非 chromium 资产时返回结构化错误，不裸抛）。--profile=<名称> 以持久化登录档案渲染；--paper-format=<纸型> 指定纸型（Letter/Legal/Tabloid/Ledger/A0-A6，缺省 Letter）；--viewport-size/--color-scheme/--wait-for-timeout/--ignore-https-errors 同 screenshot',
         params: [
           { name: 'url', kind: 'literal' },
           { name: 'output', kind: 'path' },
         ],
-        usage: "pdf '<url>' <output.pdf>",
+        flags: ['--ignore-https-errors', '--profile=', '--viewport-size=', '--color-scheme=', '--wait-for-timeout=', '--paper-format='],
+        usage: "pdf '<url>' <output.pdf> [--profile=<名称>] [--paper-format=<A4>] [--viewport-size=<宽,高>] [--color-scheme=<light|dark>] [--wait-for-timeout=<ms>] [--ignore-https-errors]",
         adapter: { key: 'playwright:pdf' },
       },
       'har': {
-        description: '访问 URL 并把网络活动录成 HAR 文件（同次渲染附一张 viewport PNG 侧产物，路径随报文给出）',
+        description: '访问 URL 并把网络活动录成 HAR 文件（同次渲染附一张 viewport PNG 侧产物，路径随报文给出）。--profile=<名称> 以持久化登录档案渲染；--viewport-size/--color-scheme/--wait-for-timeout/--ignore-https-errors 同 screenshot',
         params: [
           { name: 'url', kind: 'literal' },
           { name: 'output', kind: 'path' },
         ],
-        usage: "har '<url>' <output.har>",
+        flags: ['--ignore-https-errors', '--profile=', '--viewport-size=', '--color-scheme=', '--wait-for-timeout='],
+        usage: "har '<url>' <output.har> [--profile=<名称>] [--viewport-size=<宽,高>] [--color-scheme=<light|dark>] [--wait-for-timeout=<ms>] [--ignore-https-errors]",
         adapter: { key: 'playwright:har' },
       },
       // ===== v2 会话动词（转发官方会话型 CLI daemon；refs 防注入） =====
@@ -151,6 +163,94 @@ export function createPlaywrightShellPolicy(): CapabilityShellPolicy {
         usage: 'click <ref>',
         adapter: { key: 'playwright:click' },
       },
+      'hover': {
+        description: '悬停在 snapshot 输出里的元素上（触发悬停菜单、tooltip 等 hover 才出现的内容）',
+        params: [
+          { name: 'ref', kind: 'ref' },
+        ],
+        usage: 'hover <ref>',
+        adapter: { key: 'playwright:hover' },
+      },
+      'select': {
+        description: '在 ref 对应的下拉框里选择选项（值为选项文本或 value）',
+        params: [
+          { name: 'ref', kind: 'ref' },
+          { name: 'value', kind: 'literal' },
+        ],
+        usage: "select <ref> '<value>'",
+        adapter: { key: 'playwright:select' },
+      },
+      'go-back': {
+        description: '后退到上一页（浏览器历史）',
+        params: [],
+        usage: 'go-back',
+        adapter: { key: 'playwright:go-back' },
+      },
+      'go-forward': {
+        description: '前进到下一页（浏览器历史）',
+        params: [],
+        usage: 'go-forward',
+        adapter: { key: 'playwright:go-forward' },
+      },
+      'reload': {
+        description: '重新加载当前页面（refs 上下文随刷新失效，交互前重新 snapshot）',
+        params: [],
+        usage: 'reload',
+        adapter: { key: 'playwright:reload' },
+      },
+      'capture': {
+        description: '截取当前会话页面为 PNG（留存登录后/交互后的当前画面；CLI 自动落盘并在输出给出路径）',
+        params: [],
+        usage: 'capture',
+        adapter: { key: 'playwright:capture' },
+      },
+      'resize': {
+        description: '调整当前会话视口尺寸（会话中途切换手机/宽屏布局）',
+        params: [
+          { name: 'width', kind: 'literal' },
+          { name: 'height', kind: 'literal' },
+        ],
+        usage: 'resize <宽> <高>',
+        adapter: { key: 'playwright:resize' },
+      },
+      'requests': {
+        description: '列出当前页面自加载以来的全部网络请求（编号列表，API 抓包排查用）',
+        params: [],
+        usage: 'requests',
+        adapter: { key: 'playwright:requests' },
+      },
+      'request': {
+        description: '查看指定编号网络请求的完整详情（请求/响应头与正文；编号来自 requests 输出）',
+        params: [
+          { name: 'index', kind: 'literal' },
+        ],
+        usage: 'request <编号>',
+        adapter: { key: 'playwright:request' },
+      },
+      'console': {
+        description: '列出页面控制台消息（JS 报错、警告——页面白屏/异常排错第一现场）',
+        params: [],
+        usage: 'console',
+        adapter: { key: 'playwright:console' },
+      },
+      'dialog-accept': {
+        description: '接受页面弹窗（alert/confirm 阻塞交互时）',
+        params: [],
+        usage: 'dialog-accept',
+        adapter: { key: 'playwright:dialog-accept' },
+      },
+      'dialog-dismiss': {
+        description: '拒绝页面弹窗（alert/confirm 阻塞交互时）',
+        params: [],
+        usage: 'dialog-dismiss',
+        adapter: { key: 'playwright:dialog-dismiss' },
+      },
+      'cookie-list': {
+        description: '列出当前会话的全部 cookie（登录态排错：票据在不在、过期没有）',
+        params: [],
+        usage: 'cookie-list',
+        adapter: { key: 'playwright:cookie-list' },
+      },
       'tab-list': {
         description: '列出当前会话的所有标签页（点击 target=_blank 的链接会开新 tab，点完要用 tab-select 切过去）',
         params: [],
@@ -164,6 +264,22 @@ export function createPlaywrightShellPolicy(): CapabilityShellPolicy {
         ],
         usage: 'tab-select <编号>',
         adapter: { key: 'playwright:tab-select' },
+      },
+      'tab-new': {
+        description: '新开一个标签页并导航到 URL（打开后再 tab-select 切过去）',
+        params: [
+          { name: 'url', kind: 'literal' },
+        ],
+        usage: "tab-new '<url>'",
+        adapter: { key: 'playwright:tab-new' },
+      },
+      'tab-close': {
+        description: '关闭指定编号的标签页（编号来自 tab-list 输出；关错用 tab-new 重开）',
+        params: [
+          { name: 'index', kind: 'literal' },
+        ],
+        usage: 'tab-close <编号>',
+        adapter: { key: 'playwright:tab-close' },
       },
       'close': {
         description: '结束当前会话并回收浏览器进程（多步会话用完必须收尾；未开会话时幂等）。--profile 档案目录不受 close 影响，登录态留存',
@@ -180,20 +296,17 @@ export function createPlaywrightShellPolicy(): CapabilityShellPolicy {
     },
     // 双模式并行性：产物动词各自独立起浏览器（无共享态），会话动词共享
     // daemon 会话——都必须串行。未声明 parallelizable，串行由基座默认承担。
-    // 显式排除动词的结构化指引（v2：open/goto/click/fill/snapshot/find/press/
-    // tab-*/close/profile-list 已入表；其余官方会话命令面维持排除，模型可自我纠正）。
+    // 显式排除动词的结构化指引（v3：hover/select/go-back/go-forward/reload/
+    // tab-new/tab-close/resize/capture/requests/request/console/dialog-*/
+    // cookie-list 已入表；其余官方会话命令面维持排除，模型可自我纠正）。
     unknownVerbHints: {
-      'hover': 'hover 是会话型交互命令，不入本 shell 动词表（v2 会话动词不含 hover）；需要悬停触发的场景请人工在终端用官方会话 CLI。',
       'type': 'type 逐键输入不入本 shell；输入文本用 fill（配 press Enter 提交）。',
-      'dblclick': 'dblclick 不入本 shell 动词表；本 shell 的会话交互面为 snapshot/find/fill/press/click。',
-      'select': 'select 下拉选择不入本 shell 动词表；本 shell 会话交互面为 snapshot/find/fill/press/click。',
+      'dblclick': 'dblclick 不入本 shell 动词表；本 shell 的会话交互面为 snapshot/find/fill/press/click/hover/select。',
       'eval': 'eval 允许执行任意页面 JS，被本 shell 显式排除（注入面不可控）；读页面内容用 snapshot/find。',
       'codegen': 'codegen 是交互式用例录制器（打开录制窗），不入本 shell；需人工在终端执行。',
       'state-save': 'state-save 保存存储快照，不入本 shell；登录态留存用 open --profile=<名称>（持久化档案，跨会话有效），profile-list 可查已有档案。',
       'state-load': 'state-load 加载存储快照，不入本 shell；登录态留存用 open --profile=<名称>（持久化档案，跨会话有效）。',
-      'route': 'route 是请求 mock/拦截，不入本 shell 动词表（取证场景不做请求改写）。',
-      'console': 'console 是会话 DevTools 输出查看，不入本 shell；页面内容观察用 snapshot/find。',
-      'requests': 'requests 列网络请求，不入本 shell 动词表；网络活动留存用 har 动词（产物文件）。',
+      'route': 'route 是请求 mock/拦截，不入本 shell 动词表（取证场景不做请求改写）；网络活动查看用 requests/request。',
       'run-code': 'run-code 允许执行任意 Playwright 代码，被本 shell 显式排除（注入面不可控）；观察与交互用 snapshot/find/fill/click/press。',
       'tracing-start': 'tracing-start 不入本 shell：trace 调试属测试开发场景，人工在终端执行。',
       'video-start': 'video-start 不入本 shell：录屏属会话扩展能力，不入动词表。',

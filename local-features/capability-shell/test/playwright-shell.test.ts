@@ -106,19 +106,38 @@ async function run(command: string, opts: { adapters?: AdapterMap; signal?: Abor
 // ---------------------------------------------------------------- 动词表
 
 describe('playwright_shell 动词表（ticket 036）', () => {
-  it('动词表 = 4 产物动词 + 10 会话动词 + profile-list', () => {
+  it('动词表 = 4 产物动词 + 25 会话动词 + profile-list', () => {
     assert.deepEqual(Object.keys(POLICY.verbs).sort(), [
-      'click', 'close', 'env', 'fill', 'find', 'goto', 'har',
-      'open', 'pdf', 'press', 'profile-list', 'screenshot', 'snapshot', 'tab-list', 'tab-select',
+      'capture', 'click', 'close', 'console', 'cookie-list', 'dialog-accept', 'dialog-dismiss',
+      'env', 'fill', 'find', 'go-back', 'go-forward', 'goto', 'har', 'hover',
+      'open', 'pdf', 'press', 'profile-list', 'reload', 'request', 'requests',
+      'resize', 'screenshot', 'select', 'snapshot', 'tab-close', 'tab-list', 'tab-new', 'tab-select',
     ]);
   });
 
-  it('open 声明 --headed/--browser=/--profile= 三 flags；click/fill 参数为 ref 形态', () => {
+  it('open 声明 --headed/--browser=/--profile= 三 flags；click/fill/hover/select 参数为 ref 形态', () => {
     assert.deepEqual(POLICY.verbs['open'].flags, ['--headed', '--browser=', '--profile=']);
     assert.deepEqual(POLICY.verbs['click'].params.map((p) => p.kind), ['ref']);
     assert.equal(POLICY.verbs['fill'].params[0].kind, 'ref');
+    assert.deepEqual(POLICY.verbs['hover'].params.map((p) => p.kind), ['ref']);
+    assert.deepEqual(POLICY.verbs['select'].params.map((p) => p.kind), ['ref', 'literal']);
     assert.deepEqual(POLICY.verbs['press'].params[0].enum,
       ['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End']);
+  });
+
+  it('产物动词渲染参数 flags 声明（viewport/color-scheme/wait/paper-format/ignore-https-errors）', () => {
+    assert.deepEqual(POLICY.verbs['screenshot'].flags,
+      ['--full-page', '--ignore-https-errors', '--profile=', '--viewport-size=', '--color-scheme=', '--wait-for-timeout=']);
+    assert.deepEqual(POLICY.verbs['pdf'].flags,
+      ['--ignore-https-errors', '--profile=', '--viewport-size=', '--color-scheme=', '--wait-for-timeout=', '--paper-format=']);
+    assert.deepEqual(POLICY.verbs['har'].flags,
+      ['--ignore-https-errors', '--profile=', '--viewport-size=', '--color-scheme=', '--wait-for-timeout=']);
+  });
+
+  it('unknownVerbHints 不含已入表动词（避免自相矛盾的指引）', () => {
+    for (const v of ['hover', 'select', 'console', 'requests']) {
+      assert.ok(!(v in POLICY.unknownVerbHints), `${v} 已入表，hints 不应再排除它`);
+    }
   });
 
   it('help 不占动词表（管线级）', () => {
@@ -382,6 +401,290 @@ describe('playwright_shell pdf / har adapter（替身）', () => {
   });
 });
 
+// ------------------------------------------------- 产物动词 --profile（--user-data-dir 桥接）
+
+describe('playwright_shell 产物动词 --profile（--user-data-dir 桥接）', () => {
+  interface ArtifactProfileHarness {
+    fx: ReturnType<typeof makeFixture>;
+    profilesPath: string;
+    calls: RecordedCall[];
+    adapters: AdapterMap;
+  }
+
+  function makeArtifactProfileHarness(behavior: { exitCode?: number; stderr?: string } = {}): ArtifactProfileHarness {
+    const fx = makeFixture();
+    const profilesPath = join(fx.root, 'profiles');
+    const calls: RecordedCall[] = [];
+    const adapters = createPlaywrightAdapters({
+      packageRoot: fx.packageRoot,
+      browsersPath: fx.browsersDir,
+      workdir: fx.root,
+      profilesPath,
+      spawnImpl: (async (_c: string, args: string[], options: { env?: Record<string, string>; workdir?: string }) => {
+        calls.push({ argv: [_c, ...args], env: options.env ?? {}, workdir: options.workdir });
+        if (behavior.exitCode === undefined) {
+          const harIdx = args.indexOf('--save-har');
+          if (harIdx >= 0) writeFileSync(args[harIdx + 1], Buffer.alloc(1500, 1));
+          const out = [...args].reverse().find((a) => a.endsWith('.png') || a.endsWith('.pdf'));
+          if (out) writeFileSync(out, Buffer.alloc(100, 7));
+        }
+        const ok = (behavior.exitCode ?? 0) === 0;
+        return { ok, stdout: ok ? 'ok' : '', stderr: behavior.stderr ?? '', exitCode: ok ? 0 : 1, terminated: false };
+      }) as unknown as SpawnLike,
+    }) as AdapterMap;
+    return { fx, profilesPath, calls, adapters };
+  }
+
+  it('策略声明：三个产物动词都带 --profile= flag（完整 flags 列表见动词表测试）', () => {
+    assert.ok(POLICY.verbs['screenshot'].flags.includes('--full-page'));
+    assert.ok(POLICY.verbs['screenshot'].flags.includes('--profile='));
+    assert.ok(POLICY.verbs['pdf'].flags.includes('--profile='));
+    assert.ok(POLICY.verbs['har'].flags.includes('--profile='));
+  });
+
+  it('screenshot --profile：档案解析到根下目录并以 --user-data-dir 转发，站点入档，报文含 profile 行', async () => {
+    const h = makeArtifactProfileHarness();
+    try {
+      const r = await run("screenshot 'https://example.com' shots/a.png --profile=work", { adapters: h.adapters });
+      assert.equal(r.ok, true, r.output);
+      const argv = h.calls[0].argv;
+      assert.deepEqual(argv.slice(2, 5), ['screenshot', 'https://example.com', join(h.fx.root, 'shots/a.png')]);
+      assert.ok(argv.includes(`--user-data-dir=${join(h.profilesPath, 'work')}`), argv.join(' '));
+      assert.equal(argv.filter((a) => a.startsWith('--profile=')).length, 0, '档案名不得以 --profile= 形态透传后端');
+      assert.ok(existsSync(join(h.profilesPath, 'work')), '首次使用应创建档案目录');
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(h.profilesPath, 'work', 'agentdev-sites.json'), 'utf-8')),
+        ['example.com'],
+        '产物动词访问的域名应记入档案站点',
+      );
+      assert.ok(r.output.includes('profile: work'), r.output);
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('pdf / har --profile 同样桥接 --user-data-dir；--full-page 与 --profile 组合都到达后端', async () => {
+    const h = makeArtifactProfileHarness();
+    try {
+      const rPdf = await run("pdf 'https://example.com' docs/b.pdf --profile=work", { adapters: h.adapters });
+      assert.equal(rPdf.ok, true, rPdf.output);
+      assert.ok(h.calls[0].argv.includes(`--user-data-dir=${join(h.profilesPath, 'work')}`), h.calls[0].argv.join(' '));
+
+      const rHar = await run("har 'https://example.com' traces/net.har --profile=work", { adapters: h.adapters });
+      assert.equal(rHar.ok, true, rHar.output);
+      assert.ok(h.calls[1].argv.includes('--save-har'));
+      assert.ok(h.calls[1].argv.includes(`--user-data-dir=${join(h.profilesPath, 'work')}`));
+      assert.ok(rHar.output.includes('profile: work'), rHar.output);
+
+      const rFull = await run("screenshot 'https://example.com' x.png --full-page --profile=work", { adapters: h.adapters });
+      assert.equal(rFull.ok, true, rFull.output);
+      assert.ok(h.calls[2].argv.includes('--full-page') && h.calls[2].argv.includes(`--user-data-dir=${join(h.profilesPath, 'work')}`));
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('不带 --profile 的产物动词不注入 --user-data-dir（回归）', async () => {
+    const h = makeArtifactProfileHarness();
+    try {
+      const r = await run("screenshot 'https://example.com' x.png", { adapters: h.adapters });
+      assert.equal(r.ok, true, r.output);
+      assert.equal(h.calls[0].argv.filter((a) => a.startsWith('--user-data-dir')).length, 0);
+      assert.ok(!r.output.includes('profile:'), r.output);
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('profile 名称白名单对产物动词同样生效：拒绝且不 spawn、不建目录', async () => {
+    for (const bad of ['../evil', 'a/b']) {
+      const h = makeArtifactProfileHarness();
+      try {
+        const r = await run(`screenshot 'https://example.com' x.png --profile=${bad}`, { adapters: h.adapters });
+        assert.equal(r.ok, false, `${JSON.stringify(bad)} 应被拒: ${r.output}`);
+        assert.ok(r.output.includes('profile 名称不合法'), r.output);
+        assert.equal(h.calls.length, 0, '非法名称不应触达后端');
+        assert.equal(existsSync(h.profilesPath), false, '拒绝路径不应创建任何目录');
+      } finally {
+        rmSync(h.fx.root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('带档案渲染失败：报文附档案占用 hint（不带档案时不附）', async () => {
+    const fail = { exitCode: 1, stderr: 'Error: net::ERR_NAME_NOT_RESOLVED at https://bad.example/' } as const;
+    const withProfile = makeArtifactProfileHarness(fail);
+    const withoutProfile = makeArtifactProfileHarness(fail);
+    try {
+      const r1 = await run("screenshot 'https://bad.example' a.png --profile=work", { adapters: withProfile.adapters });
+      assert.equal(r1.ok, false);
+      assert.ok(r1.output.includes('hint:'), `带档案失败应附占用提示: ${r1.output}`);
+      assert.ok(r1.output.includes('档案'), r1.output);
+
+      const r2 = await run("screenshot 'https://bad.example' b.png", { adapters: withoutProfile.adapters });
+      assert.equal(r2.ok, false);
+      assert.ok(!r2.output.includes('hint:'), `不带档案不应附占用提示: ${r2.output}`);
+    } finally {
+      rmSync(withProfile.fx.root, { recursive: true, force: true });
+      rmSync(withoutProfile.fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('cookie 库损坏时产物动词不被阻塞，报文附保活 warn（登录态保活复用 open 的解析）', async (t) => {
+    const sqliteSpec = 'node:sqlite';
+    const sqlite = await import(sqliteSpec).catch(() => null) as object | null; // 变量形式绕开 @types/node v20 无 sqlite 声明
+    if (!sqlite) { t.skip('node:sqlite 不可用'); return; }
+    const h = makeArtifactProfileHarness();
+    try {
+      const profileDir = join(h.profilesPath, 'work');
+      mkdirSync(join(profileDir, 'Default', 'Network'), { recursive: true });
+      writeFileSync(join(profileDir, 'Default', 'Network', 'Cookies'), 'this is not a sqlite file');
+      const r = await run("screenshot 'https://example.com' x.png --profile=work", { adapters: h.adapters });
+      assert.equal(r.ok, true, r.output);
+      assert.equal(h.calls.length, 1, '保活失败不应阻塞渲染');
+      assert.ok(r.output.includes('warn: 会话级 cookie 保活跳过'), `应附保活跳过警告: ${r.output}`);
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+
+  // ------------------------------------------------- 产物动词渲染参数面（v3）
+
+  it('渲染参数透传：viewport-size/color-scheme/wait-for-timeout/ignore-https-errors 到达后端', async () => {
+    const h = makeArtifactProfileHarness();
+    try {
+      const r = await run(
+        "screenshot 'https://example.com' x.png --viewport-size=375,667 --color-scheme=dark --wait-for-timeout=1500 --ignore-https-errors",
+        { adapters: h.adapters },
+      );
+      assert.equal(r.ok, true, r.output);
+      const argv = h.calls[0].argv;
+      assert.ok(argv.includes('--viewport-size=375,667'), argv.join(' '));
+      assert.ok(argv.includes('--color-scheme=dark'), argv.join(' '));
+      assert.ok(argv.includes('--wait-for-timeout=1500'), argv.join(' '));
+      assert.ok(argv.includes('--ignore-https-errors'), argv.join(' '));
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('pdf --paper-format=a4 透传；screenshot 不声明 paper-format（参数道拒绝）', async () => {
+    const h = makeArtifactProfileHarness();
+    try {
+      const rPdf = await run("pdf 'https://example.com' d.pdf --paper-format=a4", { adapters: h.adapters });
+      assert.equal(rPdf.ok, true, rPdf.output);
+      assert.ok(h.calls[0].argv.includes('--paper-format=a4'), h.calls[0].argv.join(' '));
+      const rShot = await run("screenshot 'https://example.com' s.png --paper-format=a4", { adapters: h.adapters });
+      assert.equal(rShot.ok, false, 'screenshot 不支持 paper-format，应被拒');
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('渲染参数值校验：非法 viewport-size / 超限 wait-for-timeout / 非法 color-scheme 拒绝且不 spawn', async () => {
+    const h = makeArtifactProfileHarness();
+    try {
+      const cases: Array<[string, string]> = [
+        ["screenshot 'https://example.com' x.png --viewport-size=abc", 'viewport-size'],
+        ["screenshot 'https://example.com' x.png --wait-for-timeout=99999", 'wait-for-timeout'],
+        ["screenshot 'https://example.com' x.png --color-scheme=blue", 'color-scheme'],
+      ];
+      for (const [cmd, frag] of cases) {
+        const r = await run(cmd, { adapters: h.adapters });
+        assert.equal(r.ok, false, cmd);
+        assert.ok(r.output.includes(frag), `${cmd}: ${r.output}`);
+      }
+      assert.equal(h.calls.length, 0, '值校验拒绝不应 spawn 渲染后端');
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ------------------------------------------------- 产物落盘回收（--user-data-dir 收尾挂起补偿）
+
+describe('playwright_shell 产物落盘回收（上游 CLI 收尾挂起补偿）', () => {
+  interface SalvageHarness {
+    fx: ReturnType<typeof makeFixture>;
+    profilesPath: string;
+    aborted: boolean[];
+    adapters: AdapterMap;
+  }
+
+  /** 替身：先写产物再挂住（模拟产物已写出但 CLI 收尾不退出）；abort 到达后以 terminated 返回。 */
+  function makeSalvageHarness(): SalvageHarness {
+    const fx = makeFixture();
+    const profilesPath = join(fx.root, 'profiles');
+    const aborted: boolean[] = [];
+    const adapters = createPlaywrightAdapters({
+      packageRoot: fx.packageRoot,
+      browsersPath: fx.browsersDir,
+      workdir: fx.root,
+      profilesPath,
+      salvagePollMs: 5,
+      salvageGraceMs: 25,
+      spawnImpl: (async (_c: string, args: string[], options: { signal?: AbortSignal }) => {
+        const harIdx = args.indexOf('--save-har');
+        if (harIdx >= 0) writeFileSync(args[harIdx + 1], Buffer.alloc(1500, 1));
+        const out = [...args].reverse().find((a) => a.endsWith('.png') || a.endsWith('.pdf'));
+        if (out) writeFileSync(out, Buffer.alloc(100, 7));
+        const signal = options.signal;
+        if (!signal || signal.aborted) {
+          aborted.push(Boolean(signal?.aborted));
+          return { ok: false, stdout: '', stderr: '', exitCode: null, terminated: true };
+        }
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+        aborted.push(true);
+        return { ok: false, stdout: 'Navigating to ...\nCapturing screenshot into ...', stderr: '', exitCode: null, terminated: true };
+      }) as unknown as SpawnLike,
+    }) as AdapterMap;
+    return { fx, profilesPath, aborted, adapters };
+  }
+
+  it('screenshot --profile 挂起回收：产物落盘稳定 → 宽限逾期 kill，按产物报成功并附 note', async () => {
+    const h = makeSalvageHarness();
+    try {
+      const r = await run("screenshot 'https://example.com' shots/a.png --profile=work", { adapters: h.adapters });
+      assert.equal(r.ok, true, r.output);
+      assert.ok(r.output.includes('screenshot ok'), r.output);
+      assert.ok(r.output.includes('bytes: 100'), r.output);
+      assert.ok(r.output.includes('profile: work'), r.output);
+      assert.ok(r.output.includes('note:'), `回收成功应附回收说明: ${r.output}`);
+      assert.deepEqual(h.aborted, [true], '替身应收到 abort（kill 回收）');
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('har --profile 挂起回收：HAR 落盘即按产物报成功（HAR 在收尾阶段写出）', async () => {
+    const h = makeSalvageHarness();
+    try {
+      const r = await run("har 'https://example.com' traces/net.har --profile=work", { adapters: h.adapters });
+      assert.equal(r.ok, true, r.output);
+      assert.ok(r.output.includes('har ok'), r.output);
+      assert.ok(r.output.includes('bytes: 1500'), r.output);
+      assert.ok(r.output.includes('note:'), r.output);
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it('外部中断优先于回收：即使产物已写出，中断仍报 terminated（不借回收谎报成功）', async () => {
+    const h = makeSalvageHarness();
+    const outer = new AbortController();
+    try {
+      const p = run("screenshot 'https://example.com' x.png --profile=work", { adapters: h.adapters, signal: outer.signal });
+      queueMicrotask(() => outer.abort()); // 宽限（25ms）之前外部中断
+      const r = await p;
+      assert.ok(r.output.includes('terminated screenshot'), `外部中断应报终止: ${r.output}`);
+      assert.ok(!r.output.includes('screenshot ok'), r.output);
+      assert.ok(!r.output.includes('note:'), r.output);
+    } finally {
+      rmSync(h.fx.root, { recursive: true, force: true });
+    }
+  });
+});
+
 // ------------------------------------------------- helpers
 
 function makeAdapters(fx: ReturnType<typeof makeFixture>, opts: {
@@ -629,6 +932,78 @@ describe('playwright_shell v2 会话动词（daemon 转发）', () => {
     }
     assert.ok(thrown.includes('仅支持 “http://” 或 “https://”') || thrown.includes('仅支持 http:// 或 https:'), thrown);
     assert.equal(spawned, 0);
+  });
+
+  // ------------------------------------------------- v3 会话动词命令面扩展
+
+  it('v3 会话动词转发：hover/select/go-back/reload/tab-new/resize/requests/console/cookie-list/dialog-accept 到达官方 CLI', async () => {
+    const calls: string[][] = [];
+    const adapters = makeSessionAdapter((_c, argv) => {
+      calls.push([...argv]);
+      return { ok: true, stdout: 'ok', stderr: '', exitCode: 0, terminated: false };
+    });
+    const CTX = { stdin: '', termination: () => null };
+    await adapters['playwright:hover'](['e12'], CTX);
+    await adapters['playwright:select'](['e13', 'Shanghai'], CTX);
+    await adapters['playwright:go-back']([], CTX);
+    await adapters['playwright:reload']([], CTX);
+    await adapters['playwright:tab-new'](['https://example.com'], CTX);
+    await adapters['playwright:resize'](['375', '667'], CTX);
+    await adapters['playwright:requests']([], CTX);
+    await adapters['playwright:console']([], CTX);
+    await adapters['playwright:cookie-list']([], CTX);
+    await adapters['playwright:dialog-accept']([], CTX);
+    const expect = [
+      ['hover', 'e12'],
+      ['select', 'e13', 'Shanghai'],
+      ['go-back'],
+      ['reload'],
+      ['tab-new', 'https://example.com'],
+      ['resize', '375', '667'],
+      ['requests'],
+      ['console'],
+      ['cookie-list'],
+      ['dialog-accept'],
+    ];
+    for (let i = 0; i < expect.length; i++) {
+      assert.deepEqual(calls[i], ['/fake/pw-cli/bin.js', ...expect[i]], `第 ${i} 个调用`);
+    }
+  });
+
+  it('capture 动词名与 CLI 子命令解耦：转发 screenshot 子命令（避开产物动词重名）', async () => {
+    let sub = '';
+    const adapters = makeSessionAdapter((_c, argv) => {
+      sub = argv[1];
+      return { ok: true, stdout: 'saved to x.png', stderr: '', exitCode: 0, terminated: false };
+    });
+    const out = await adapters['playwright:capture']([], { stdin: '', termination: () => null });
+    assert.equal(sub, 'screenshot');
+    assert.ok(out.includes('saved to x.png'), out);
+  });
+
+  it('v3 参数校验：tab-new 拒绝非 HTTP URL；resize/tab-close/request 拒绝非数字；且不 spawn', async () => {
+    let spawned = 0;
+    const adapters = makeSessionAdapter(() => {
+      spawned += 1;
+      return { ok: true, stdout: '', stderr: '', exitCode: 0, terminated: false };
+    });
+    const CTX = { stdin: '', termination: () => null };
+    const cases: Array<[() => Promise<unknown>, string]> = [
+      [() => adapters['playwright:tab-new'](['ftp://x.com'], CTX), '仅支持'],
+      [() => adapters['playwright:resize'](['abc', '720'], CTX), 'resize 参数'],
+      [() => adapters['playwright:tab-close'](['x'], CTX), '数字编号'],
+      [() => adapters['playwright:request'](['x'], CTX), '数字编号'],
+    ];
+    for (const [call, frag] of cases) {
+      let thrown = '';
+      try {
+        await call();
+      } catch (e) {
+        thrown = (e as Error).message;
+      }
+      assert.ok(thrown.includes(frag), `${frag} 应被拒: ${thrown}`);
+    }
+    assert.equal(spawned, 0, '校验拒绝不应 spawn 会话后端');
   });
 });
 
