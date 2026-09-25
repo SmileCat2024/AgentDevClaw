@@ -382,14 +382,28 @@
 
 /* ── Markdown 表格：wrapper 滚动 + 表格完整展开 ───────────────
    table 以 width:max-content 完整展开（列不会被压扁），超宽由
-   .md-table-wrap 横向滚动；wrapper 同时承担圆角裁剪、外边距与
-   右缘渐隐。长列受 max-width 约束换行，避免单列占满整行宽。 */
+   .md-table-wrap 横向滚动；wrapper 同时承担圆角裁剪与渐隐。
+   block 是外层布局壳：底部留白 + 右下角动作条（复制/放大），
+   动作条不受 wrapper 的滚动与渐隐影响。长列受 max-width 约束换行，
+   避免单列占满整行宽。 */
+.md-table-block { margin: 0 0 1rem; }
 .md-table-wrap {
   max-width: 100%;
-  margin: 0 0 1rem;
+  margin: 0 0 6px;
   overflow-x: auto;
   border-radius: 12px;
 }
+/* 右下角动作条：按钮复用 .message-icon-action（hover/对勾态同款），
+   表格作用域常显——不依赖消息行 hover，保证可发现性；
+   按钮间距对齐 .message-meta（消息 meta 行复制/编辑按钮的 8px） */
+.md-table-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 0;
+}
+.md-table-actions .message-icon-action { opacity: 1; }
 /* 三态双缘渐隐：左端只隐右缘，滚动中途两端都隐，到最右只隐左缘 */
 .md-table-wrap.is-overflow {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 96px), transparent);
@@ -406,20 +420,23 @@
 /* 主对话：溢出表格左右双向突破正文列宽。
    --md-table-bleed 按 #chat-container 实时宽度维护，锚定容器内容区
    边缘，不会超出屏幕。结构（markdown-utils.js 的 upgradeWideTable）：
-   table 由原生 transform 驱动整体左移（初始左缘=正文左，滚动时 1x
-   左移利用左侧留白，溢出部分被 overflow:hidden 裁剪 + 渐隐）；
+   is-wide 挂在 block（承载双侧突破负 margin），wrap 占满 block 全宽、
+   overflow:hidden 裁剪；table 由原生 transform 驱动整体左移（初始左缘=
+   正文左，滚动时 1x 左移利用左侧留白，溢出部分被裁剪 + 渐隐）；
    .md-table-scrollbar 是 8px 高的独立滚动容器，margin-left 隔开左侧
    突破区——滚动条左端永远与正文文本对齐。
    其他管线（群聊气泡等）不消费该变量，保持 wrapper 自身滚动。 */
-.message-row .md-table-wrap.is-wide {
+.message-row .md-table-block.is-wide {
   /* 全局 border-box 下基础规则的 max-width:100% 会把总盒钳回 768，
      表格反而变窄——必须显式解除 */
   max-width: none;
   margin-left: calc(-1 * var(--md-table-bleed, 0px));
   margin-right: calc(-1 * var(--md-table-bleed, 0px));
+}
+.message-row .md-table-block.is-wide .md-table-wrap {
   overflow: hidden; /* 左移溢出裁剪；横向滚动已移交 .md-table-scrollbar */
 }
-.message-row .md-table-wrap.is-wide > table {
+.message-row .md-table-block.is-wide table {
   will-change: transform; /* scroll 事件逐帧改 transform，保持合成器路径 */
   /* 初始左缘 = 正文左（wrapper 左缘 + bleed）；滚动时 transform 1x 左移，
      滚动行程 maxScroll = W - (正文宽+bleed) 恰好等于"右端贴容器右"所需量。
@@ -429,13 +446,13 @@
      能走到 is-wide 的表格必然已超正文宽，min-width 不再有意义 */
   min-width: 0 !important;
 }
-.message-row .md-table-wrap.is-wide .md-table-scrollbar {
+.message-row .md-table-block.is-wide .md-table-scrollbar {
   margin-left: var(--md-table-bleed, 0px);
   height: 8px; /* 仅滚动条自身高度，表格行高由 table 正常流撑起 */
   overflow-x: auto;
   overflow-y: hidden;
 }
-.message-row .md-table-wrap.is-wide .md-table-scrollbar-ghost {
+.message-row .md-table-block.is-wide .md-table-scrollbar-ghost {
   /* 高度必须非 0：Chrome 对零高度内容不计入横向 scrollable overflow，
      滚动条会因"无溢出"而拖不动 */
   height: 1px;
@@ -447,28 +464,28 @@
    四角圆角 12px 与 wrapper 一致；行/表背景透明化下沉到单元格，
    避免直角底色从圆角处露出。滚动后左缘移出被 wrapper 裁剪，
    圆角随之不可见，两种状态自然衔接。 */
-.message-row .md-table-wrap.is-wide > table {
+.message-row .md-table-block.is-wide table {
   border-collapse: separate !important;
   border-spacing: 0 !important;
   background: transparent !important;
 }
-.message-row .md-table-wrap.is-wide > table tr {
+.message-row .md-table-block.is-wide table tr {
   background: transparent !important;
 }
-.message-row .md-table-wrap.is-wide > table > tbody > tr > td {
+.message-row .md-table-block.is-wide table > tbody > tr > td {
   background-color: #1a1a1a !important;
 }
-.message-row .md-table-wrap.is-wide > table > tbody > tr:nth-child(2n) > td {
+.message-row .md-table-block.is-wide table > tbody > tr:nth-child(2n) > td {
   background-color: #222 !important;
 }
-body[data-theme="light"] .message-row .md-table-wrap.is-wide > table > tbody > tr > td {
+body[data-theme="light"] .message-row .md-table-block.is-wide table > tbody > tr > td {
   background-color: #ffffff !important;
 }
-body[data-theme="light"] .message-row .md-table-wrap.is-wide > table > tbody > tr:nth-child(2n) > td {
+body[data-theme="light"] .message-row .md-table-block.is-wide table > tbody > tr:nth-child(2n) > td {
   background-color: #f7f7f7 !important;
 }
-.message-row .md-table-wrap.is-wide > table th,
-.message-row .md-table-wrap.is-wide > table td {
+.message-row .md-table-block.is-wide table th,
+.message-row .md-table-block.is-wide table td {
   border-top-width: 0 !important;
   border-left-width: 0 !important;
   border-right-width: 1px !important;
@@ -476,27 +493,27 @@ body[data-theme="light"] .message-row .md-table-wrap.is-wide > table > tbody > t
   border-bottom-width: 1px !important;
   border-bottom-style: solid !important;
 }
-.message-row .md-table-wrap.is-wide > table tr > :first-child {
+.message-row .md-table-block.is-wide table tr > :first-child {
   border-left-width: 1px !important;
   border-left-style: solid !important;
 }
-.message-row .md-table-wrap.is-wide > table > thead > tr:first-child > th,
-.message-row .md-table-wrap.is-wide > table > thead > tr:first-child > td {
+.message-row .md-table-block.is-wide table > thead > tr:first-child > th,
+.message-row .md-table-block.is-wide table > thead > tr:first-child > td {
   border-top-width: 1px !important;
   border-top-style: solid !important;
 }
 /* 四角圆角限定在真实外角：thead 首行（顶角）与 tbody 末行（底角）。
    tr:first-child 会相对各父级误伤 tbody 首行，造成中段圆角缺口 */
-.message-row .md-table-wrap.is-wide > table > thead > tr:first-child > :first-child {
+.message-row .md-table-block.is-wide table > thead > tr:first-child > :first-child {
   border-top-left-radius: 12px;
 }
-.message-row .md-table-wrap.is-wide > table > thead > tr:first-child > :last-child {
+.message-row .md-table-block.is-wide table > thead > tr:first-child > :last-child {
   border-top-right-radius: 12px;
 }
-.message-row .md-table-wrap.is-wide > table > tbody > tr:last-child > :first-child {
+.message-row .md-table-block.is-wide table > tbody > tr:last-child > :first-child {
   border-bottom-left-radius: 12px;
 }
-.message-row .md-table-wrap.is-wide > table > tbody > tr:last-child > :last-child {
+.message-row .md-table-block.is-wide table > tbody > tr:last-child > :last-child {
   border-bottom-right-radius: 12px;
 }
 .markdown-body table {
@@ -5330,6 +5347,41 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   border-radius: 8px;
   cursor: default;
   object-fit: contain;
+}
+
+/* ── Markdown table zoom（表格放大查看，markdown-utils.js openTableZoom）──
+   交互对齐 image-zoom-overlay：点背景/Esc 关闭。表格撑满面板宽自适应
+   换行（不允许横向滚动），超出面板高度上下滚动。 */
+.md-table-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.md-table-zoom-panel {
+  /* 显式宽度：panel 是 flex item（width auto），table 的 width:100%
+     在 auto 宽包含块下解析循环、退回内容宽——必须给定确定基准 */
+  width: 92vw;
+  max-width: 92vw;
+  max-height: 90vh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: 12px;
+  cursor: default;
+  padding: 0 !important; /* 抹平 markdown-body 的容器 padding，表格贴边滚动 */
+}
+.md-table-zoom-panel table {
+  /* 覆盖 .markdown-body table 的 max-content 展开策略：放大态撑满
+     面板宽。auto 布局列宽下限是 min-content 之和，列多时仍会溢出
+     面板——必须 fixed 布局强制列宽之和等于 100%，杜绝横向滚动 */
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
 }
 
 /* Voice button transcribing (ASR in flight) — spinner replaces mic icon */

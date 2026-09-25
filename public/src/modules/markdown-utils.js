@@ -132,12 +132,24 @@ function renderMarkdown(text) {
 }
 
 // marked 输出的表格不嵌套，非贪婪标签配对即可安全包裹。
-// 布局契约见 components.css 的 .md-table-wrap：表格完整展开（列不被压扁），
-// wrapper 负责横向滚动、圆角裁剪、外边距与右缘渐隐。
+// 布局契约见 components.css：block 承载 is-wide 突破与底部留白（含右下角
+// 动作条），wrap 负责横向滚动、圆角裁剪、外边距与右缘渐隐，
+// table 完整展开（列不被压扁）。动作条放 block 不放 wrap：
+// 渐隐 mask 与横向滚动都只作用于 wrap，按钮不参与滚动、不被渐隐。
+const MD_TABLE_ICON_COPY_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg>';
+const MD_TABLE_ICON_CHECK_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L1.72 8.78a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path></svg>';
+// 四角外扩（lucide maximize 同款 stroke 几何）：fill path 在小尺寸下
+// 易出现笔画粗细不均与裁切，stroke 绘制由 stroke-width 统一控制
+const MD_TABLE_ICON_EXPAND_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+
 function wrapMarkdownTables(html) {
   return html
-    .replace(/<table>/g, '<div class="md-table-wrap"><table>')
-    .replace(/<\/table>/g, '</table></div>');
+    .replace(/<table>/g, '<div class="md-table-block"><div class="md-table-wrap"><table>')
+    .replace(/<\/table>/g, '</table></div>'
+      + '<div class="md-table-actions">'
+      + '<button type="button" class="message-icon-action" title="复制表格" onclick="copyMarkdownTable(this)">' + MD_TABLE_ICON_COPY_SVG + '</button>'
+      + '<button type="button" class="message-icon-action" title="放大查看" onclick="openTableZoom(this)">' + MD_TABLE_ICON_EXPAND_SVG + '</button>'
+      + '</div></div>');
 }
 
 // ── 表格布局状态：双缘渐隐（左端隐右缘、中间两端、右端隐左缘）───
@@ -201,8 +213,10 @@ function enhanceMarkdownTables(root) {
   states.forEach(({ wrap, overflow }) => {
     wrap.dataset.tableEnhanced = 'true';
     if (overflow && wrap.closest('.message-row')) {
-      // 主对话宽表：升级为"transform 表格 + 独立滚动条"结构
-      wrap.classList.add('is-wide');
+      // 主对话宽表：升级为"transform 表格 + 独立滚动条"结构；
+      // is-wide 挂在 block（承载双侧突破与动作条），wrap 的渐隐状态类不变
+      const block = wrap.closest('.md-table-block');
+      if (block) block.classList.add('is-wide');
       upgradeWideTable(wrap);
       updateMarkdownTableFadeState(wrap, wrap.querySelector(':scope > .md-table-scrollbar'));
     } else {
@@ -215,6 +229,101 @@ function enhanceMarkdownTables(root) {
     }
   });
 }
+
+// ── 表格动作条：复制 / 放大 ──────────────────────────────────────
+
+// DOM 表格 → Markdown 文本（首行为表头，紧随分隔行；竖线转义、换行压平）
+function tableToMarkdown(table) {
+  const rows = Array.from(table?.rows || []);
+  const lines = [];
+  rows.forEach((row, i) => {
+    const cells = Array.from(row.cells).map((cell) => {
+      return (cell.textContent || '').trim().replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ');
+    });
+    if (cells.length === 0) return;
+    lines.push('| ' + cells.join(' | ') + ' |');
+    if (i === 0) lines.push('| ' + cells.map(() => '---').join(' | ') + ' |');
+  });
+  return lines.join('\n');
+}
+
+function findTableFromActionButton(btn) {
+  return btn?.closest('.md-table-block')?.querySelector('table') || null;
+}
+
+// 复制表格为 Markdown（剪贴板模式对齐 chat-renderer.js 的 copyMessageContent）
+window.copyMarkdownTable = async function(btn) {
+  const table = findTableFromActionButton(btn);
+  const text = table ? tableToMarkdown(table) : '';
+  if (!text) return;
+  let ok = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    // 非安全上下文回退（如局域网 IP 访问 UI）
+    try {
+      let ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    if (typeof ClawToast !== 'undefined') {
+      const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+      ClawToast.show({ id: 'md-table-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy table' });
+    }
+    return;
+  }
+  if (btn) {
+    btn.innerHTML = MD_TABLE_ICON_CHECK_SVG;
+    btn.classList.add('copied');
+    if (btn._copyResetTimer) clearTimeout(btn._copyResetTimer);
+    btn._copyResetTimer = setTimeout(function() {
+      btn.innerHTML = MD_TABLE_ICON_COPY_SVG;
+      btn.classList.remove('copied');
+    }, 1200);
+  }
+};
+
+// 表格放大查看（lightbox 交互对齐 chat-renderer.js 的 openImageZoom：
+// 点背景关闭、Esc 关闭；面板 overflow:auto 长表上下滚动，长列上限放宽）
+window.openTableZoom = function(btn) {
+  const table = findTableFromActionButton(btn);
+  if (!table) return;
+
+  let existing = document.getElementById('md-table-zoom-overlay');
+  if (existing) existing.remove();
+
+  let overlay = document.createElement('div');
+  overlay.id = 'md-table-zoom-overlay';
+  overlay.className = 'md-table-zoom-overlay';
+
+  // markdown-body 上下文让克隆表格直接继承表格样式（背景/斑马纹/主题自适应）
+  let panel = document.createElement('div');
+  panel.className = 'markdown-body md-table-zoom-panel';
+  panel.appendChild(table.cloneNode(true));
+  panel.onclick = function(e) { e.stopPropagation(); };
+  overlay.appendChild(panel);
+
+  let onKey = function(e) {
+    if (e.key === 'Escape') close();
+  };
+  let close = function() {
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+  };
+  overlay.onclick = close;
+  document.addEventListener('keydown', onKey);
+
+  document.body.appendChild(overlay);
+};
 
 // ── 主对话表格的右侧突破宽度（--md-table-bleed）────────────────
 // .message-row 有 max-width:800px 居中，两侧留白随窗口变化；溢出表格
