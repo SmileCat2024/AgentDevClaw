@@ -597,12 +597,16 @@ describe('agent-lifecycle', () => {
     });
 
     it('health endpoint returns ok', () => {
-      const mod = createAgentLifecycleModule(createMockCtx());
+      const serviceLifecycle = { getState: () => 'ready' };
+      const mod = createAgentLifecycleModule(createMockCtx({ serviceLifecycle }));
       let responseData = null;
+      let responseStatus = null;
       const app = {
         get: (path, handler) => {
           if (path === '/protoclaw/health') {
-            handler({}, { json: (data) => { responseData = data; } });
+            handler({}, {
+              status: (value) => { responseStatus = value; return { json: (data) => { responseData = data; } }; },
+            });
           }
         },
         post: () => {},
@@ -613,8 +617,31 @@ describe('agent-lifecycle', () => {
       mod.setupRoutes(app, { json: () => (req, res, next) => next() });
       assert.ok(responseData);
       assert.equal(responseData.ok, true);
+      assert.equal(responseData.state, 'ready');
+      assert.equal(responseStatus, 200);
       assert.ok(responseData.appPort);
       assert.ok(responseData.viewerPort);
+    });
+
+    it('health is unavailable until the service reaches ready', () => {
+      const mod = createAgentLifecycleModule(createMockCtx({ serviceLifecycle: { getState: () => 'starting' } }));
+      let responseData = null;
+      let responseStatus = null;
+      const app = {
+        get: (path, handler) => {
+          if (path === '/protoclaw/health') {
+            handler({}, {
+              status: (value) => { responseStatus = value; return { json: (data) => { responseData = data; } }; },
+            });
+          }
+        },
+        post: () => {},
+        put: () => {},
+        delete: () => {},
+      };
+      mod.setupRoutes(app, { json: () => (req, res, next) => next() });
+      assert.equal(responseStatus, 503);
+      assert.deepEqual(responseData, { ok: false, state: 'starting', appPort: responseData.appPort, viewerPort: responseData.viewerPort });
     });
 
     it('runtime_status returns only the requested ready runtime', async () => {

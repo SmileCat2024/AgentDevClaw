@@ -16,6 +16,7 @@ import {
 import { exportSummarizedHandoffPackage, writeSummarizedHandoffPackage } from './server/context-continuity/summarized-handoff.js';
 import { ClawMCPServer } from './server/claw-mcp.js';
 import { registerMCPGatewayRoutes } from './server/mcp-gateway/routes.js';
+import { getGatewayManager } from './server/mcp-gateway/manager.js';
 import {
   getRuntimeInboxSnapshot,
   getRuntimeExecutionState,
@@ -27,6 +28,7 @@ import { renderConversationHtml } from './server/conversation-renderer.js';
 import { setupUsageRoutes } from './server/usage-ledger.js';
 import { authMiddleware, registerAuthRoutes, getInternalAuthToken } from './server/auth.js';
 import { securityHeadersMiddleware } from './server/shared/security-headers.js';
+import { createServiceLifecycle } from './server/service-lifecycle.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
 import {
@@ -158,6 +160,9 @@ import { PH_STYLE_WORKSPACE_AGENT_IDS } from './server/shared/constants.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const serviceLifecycle = createServiceLifecycle();
+let httpServer = null;
+
 const app = express();
 // 不暴露 Express 指纹；所有响应统一携带安全头（含 CSP / 点击劫持防护）。
 app.disable('x-powered-by');
@@ -217,6 +222,7 @@ agentDiscoveryApi.setupRoutes(app);
 
 // ── Agent Lifecycle → server/routes/agent-lifecycle.js ──
 const agentLifecycle = createAgentLifecycleModule({
+  serviceLifecycle,
   sessionApi,
   getAgents, getAgentsLight, enrichAgent, requireAgentLight,
   resolveRuntimeDisplayName,
@@ -1447,26 +1453,39 @@ function pickMobileRelayUrl(relayUrl) {
 }
 
 async function shutdown(exitCode = 0) {
-  remoteClawConnector?.stop?.();
-  await tunnelManager.stopAll();
+  try {
+    await serviceLifecycle.shutdown(async () => {
+      remoteClawConnector?.stop?.();
+      connectionHealth.stop();
+      await Promise.all([
+        tunnelManager.stopAll(),
+        getGatewayManager().dispose(),
+      ]);
 
-  for (const runtime of managedAgents.values()) {
-    if (runtime.process && runtime.process.exitCode === null && !runtime.stopped) {
-      runtime.stopped = true;
-      runtime.process.kill('SIGTERM');
-    }
+      // Stop accepting requests and close long-lived streams before terminating runtimes.
+      sseEvents.closeAll();
+      if (httpServer?.listening) {
+        await new Promise((resolve) => httpServer.close(resolve));
+      }
+
+      const runtimes = [...managedAgents.values(), ...assemblyRuntimeProcesses.values()];
+      const children = runtimes.map((runtime) => runtime.process)
+        .filter((child, index, all) => child && child.exitCode === null && all.indexOf(child) === index);
+      for (const runtime of runtimes) {
+        if (runtime.process && runtime.process.exitCode === null) runtime.stopped = true;
+      }
+      for (const child of children) child.kill('SIGTERM');
+      await Promise.all(children.map(async (child) => {
+        await waitForProcessExit(child);
+        if (child.exitCode === null) child.kill('SIGKILL');
+      }));
+
+      await viewerWorker.stop();
+    });
+  } catch (error) {
+    console.error('[server] shutdown cleanup failed:', error);
+    exitCode ||= 1;
   }
-
-  for (const runtime of assemblyRuntimeProcesses.values()) {
-    if (runtime.process && runtime.process.exitCode === null && !runtime.stopped) {
-      runtime.stopped = true;
-      runtime.process.kill('SIGTERM');
-    }
-  }
-
-  // SSE 长连接先收口（发 shutdown 帧并断开），客户端尽快进入重连/降级路径
-  sseEvents.closeAll();
-  await viewerWorker.stop().catch(e => console.warn(e));
   process.exit(exitCode);
 }
 
@@ -1537,24 +1556,37 @@ async function main() {
   // Apply global proxy before listening (affects all fetch + child processes)
   applyProxy();
 
-  app.listen(APP_PORT, () => {
-    log('server', `product ui: http://127.0.0.1:${APP_PORT}`);
-    log('server', `viewer worker: ${VIEWER_ORIGIN}`);
-    remoteClawContext = {
-      getAgentsLight,
-      getConnectedAgents,
-      listPrebuiltSessions,
-      requireAgentLight,
-      activatePrebuiltSession,
-      startManagedAgent,
-      waitForManagedRuntimeReady,
+  httpServer = app.listen(APP_PORT);
+  await new Promise((resolve, reject) => {
+    const onError = (error) => {
+      httpServer.removeListener('listening', onListening);
+      reject(error);
     };
-    restartRemoteClawConnector();
-    fireBootSchedules();
+    const onListening = () => {
+      httpServer.removeListener('error', onError);
+      resolve();
+    };
+    httpServer.once('error', onError);
+    httpServer.once('listening', onListening);
   });
+  serviceLifecycle.markReady();
+  log('server', `product ui: http://127.0.0.1:${APP_PORT}`);
+  log('server', `viewer worker: ${VIEWER_ORIGIN}`);
+  remoteClawContext = {
+    getAgentsLight,
+    getConnectedAgents,
+    listPrebuiltSessions,
+    requireAgentLight,
+    activatePrebuiltSession,
+    startManagedAgent,
+    waitForManagedRuntimeReady,
+  };
+  restartRemoteClawConnector();
+  fireBootSchedules();
 }
 
 main().catch(async (error) => {
+  serviceLifecycle.markFailed();
   log('server', error.stack || error.message, 'error');
   // 启动失败同样要走资源清理：viewerWorker 可能已 bind 了 UDS（如 HTTP 端口
   // 冲突前），直接退出会在路径上留下无 listener 的死 sock，令既有实例与

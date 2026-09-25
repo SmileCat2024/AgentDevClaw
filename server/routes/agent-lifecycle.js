@@ -55,6 +55,7 @@ export function createAgentLifecycleModule(ctx) {
     readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
     readViewerJson, getPendingInputCount, resolveAgentModelPresets,
     readRemoteCatalog = null,
+    serviceLifecycle = null,
   } = ctx;
 
   const _exitCallbacks = [];
@@ -233,7 +234,14 @@ export function createAgentLifecycleModule(ctx) {
 
   function setupRoutes(app, express) {
     app.get('/protoclaw/health', (_req, res) => {
-      res.json({ ok: true, appPort: APP_PORT, viewerPort: VIEWER_PORT });
+      const state = serviceLifecycle?.getState?.() || 'ready';
+      const ready = state === 'ready';
+      res.status(ready ? 200 : 503).json({
+        ok: ready,
+        state,
+        appPort: APP_PORT,
+        viewerPort: VIEWER_PORT,
+      });
     });
 
     app.get('/protoclaw/app_info', async (_req, res) => {
