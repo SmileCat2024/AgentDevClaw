@@ -6654,7 +6654,8 @@ body[data-theme="light"] .project-docset-detail-empty {
   gap: 24px;
   scroll-behavior: auto;
   overflow-anchor: none;
-  background-color: var(--bg-color);
+  /* transparent so the ambient backdrop on <body> shows through the chat area */
+  background-color: transparent;
 }
 
 .follow-latest-btn {

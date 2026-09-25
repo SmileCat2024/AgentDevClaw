@@ -185,8 +185,11 @@
 }
 
 .expand-toggle-btn {
-  background: var(--tool-msg-bg);
-  border: 1px solid var(--border-color);
+  /* 玻璃质感：与输入卡片/表格同配方（--glass-bg + blur+saturate） */
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   color: var(--text-secondary);
   border-radius: 12px;
   padding: 4px 12px;
@@ -200,9 +203,17 @@
 }
 
 .expand-toggle-btn:hover {
-  background: var(--hover-bg);
+  background: linear-gradient(rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.07)), var(--glass-bg);
   color: var(--text-primary);
-  border-color: var(--text-secondary);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+body[data-theme="light"] .expand-toggle-btn {
+  border-color: rgba(15, 23, 42, 0.12);
+}
+body[data-theme="light"] .expand-toggle-btn:hover {
+  background: linear-gradient(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.5)), var(--glass-bg);
+  border-color: rgba(15, 23, 42, 0.24);
 }
 
 .expand-toggle-btn svg {
@@ -387,11 +398,17 @@
    动作条不受 wrapper 的滚动与渐隐影响。长列受 max-width 约束换行，
    避免单列占满整行宽。 */
 .md-table-block { margin: 0 0 1rem; }
+/* 玻璃质感：wrapper 承担 backdrop 模糊（与全局玻璃面板同款
+   blur(var(--glass-blur)) saturate(1.3)），表格底色为半透明白叠加，
+   让模糊后的动态环境光透出。表格本体只做半透明染色，见下方配色区。 */
 .md-table-wrap {
   max-width: 100%;
   margin: 0 0 6px;
   overflow-x: auto;
   border-radius: 12px;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
 }
 /* 右下角动作条：按钮复用 .message-icon-action（hover/对勾态同款），
    表格作用域常显——不依赖消息行 hover，保证可发现性；
@@ -460,7 +477,7 @@
 /* 表格左缘在正文左（wrapper 圆角裁剪范围之外），圆角需由表格自身
    提供；collapse 的外框由表格层绘制（直角，无法跟随圆角），故 is-wide
    作用域切 separate：边框归属单元格（每格 right/bottom + 首列 left +
-   首行 top，颜色沿用既有 border-color，暗 #333 / 亮 #ddd 主题自适应），
+   首行 top，颜色沿用既有 border-color（半透明玻璃边，暗/亮主题自适应），
    四角圆角 12px 与 wrapper 一致；行/表背景透明化下沉到单元格，
    避免直角底色从圆角处露出。滚动后左缘移出被 wrapper 裁剪，
    圆角随之不可见，两种状态自然衔接。 */
@@ -473,16 +490,16 @@
   background: transparent !important;
 }
 .message-row .md-table-block.is-wide table > tbody > tr > td {
-  background-color: #1a1a1a !important;
+  background-color: rgba(255, 255, 255, 0.04) !important;
 }
 .message-row .md-table-block.is-wide table > tbody > tr:nth-child(2n) > td {
-  background-color: #222 !important;
+  background-color: rgba(255, 255, 255, 0.075) !important;
 }
 body[data-theme="light"] .message-row .md-table-block.is-wide table > tbody > tr > td {
-  background-color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.55) !important;
 }
 body[data-theme="light"] .message-row .md-table-block.is-wide table > tbody > tr:nth-child(2n) > td {
-  background-color: #f7f7f7 !important;
+  background-color: rgba(148, 163, 184, 0.18) !important;
 }
 .message-row .md-table-block.is-wide table th,
 .message-row .md-table-block.is-wide table td {
@@ -523,39 +540,39 @@ body[data-theme="light"] .message-row .md-table-block.is-wide table > tbody > tr
   max-width: none !important;
   min-width: 100% !important;
   border-collapse: collapse !important;
-  background-color: #1a1a1a !important;
+  background-color: rgba(255, 255, 255, 0.04) !important;
   display: table !important;
   margin: 0 !important;
 }
 .markdown-body th, .markdown-body td {
   padding: 10px 14px !important;
-  border: 1px solid #333 !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
   vertical-align: top !important;
   max-width: 20em;
 }
 .markdown-body th {
-  background-color: #262626 !important;
+  background-color: rgba(255, 255, 255, 0.055) !important;
   font-weight: 600 !important;
   text-align: left !important;
   color: var(--text-primary) !important;
 }
-.markdown-body tr { background-color: #1a1a1a !important; }
-.markdown-body tr:nth-child(2n) { background-color: #222 !important; }
+.markdown-body tr { background-color: transparent !important; }
+.markdown-body tr:nth-child(2n) { background-color: rgba(255, 255, 255, 0.035) !important; }
 body[data-theme="light"] .markdown-body table {
-  background-color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.55) !important;
 }
 body[data-theme="light"] .markdown-body th,
 body[data-theme="light"] .markdown-body td {
-  border-color: #ddd !important;
+  border-color: rgba(15, 23, 42, 0.14) !important;
 }
 body[data-theme="light"] .markdown-body th {
-  background-color: #f0f0f0 !important;
+  background-color: rgba(255, 255, 255, 0.65) !important;
 }
 body[data-theme="light"] .markdown-body tr {
-  background-color: #ffffff !important;
+  background-color: transparent !important;
 }
 body[data-theme="light"] .markdown-body tr:nth-child(2n) {
-  background-color: #f7f7f7 !important;
+  background-color: rgba(148, 163, 184, 0.12) !important;
 }
 
 .tool-error {
@@ -4714,7 +4731,12 @@ body[data-theme="light"] .notification-metric {
   gap: 6px;
   padding: 4px 11px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.07);
+  /* 玻璃质感：与输入卡片同配方（--glass-bg + blur+saturate）。
+     胶囊悬浮于滚动内容之上，靠磨砂层把身后文字化开，既透光又不撞字 */
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary, #aaa);
@@ -4724,7 +4746,7 @@ body[data-theme="light"] .notification-metric {
 }
 
 body[data-theme="light"] .call-elapsed-capsule {
-  background: rgba(0, 0, 0, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.10);
 }
 
 .call-elapsed-capsule svg {
@@ -4732,8 +4754,13 @@ body[data-theme="light"] .call-elapsed-capsule {
 }
 
 .call-elapsed-capsule.is-running {
-  background: var(--accent-bg, rgba(99, 102, 241, 0.15));
+  /* accent 玻璃：靛蓝半透明叠在磨砂上，色相可辨且不透字 */
+  background: rgba(99, 102, 241, 0.35);
   color: var(--accent-text, #a5b4fc);
+}
+
+body[data-theme="light"] .call-elapsed-capsule.is-running {
+  background: rgba(79, 70, 229, 0.18);
 }
 
 .recap-hint {
@@ -4823,8 +4850,12 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 
 .user-input-card {
   pointer-events: auto;
-  background: var(--input-card-bg);
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  /* 玻璃质感：复用全局玻璃面配方（--glass-bg + blur+saturate），
+     让动态环境光透过输入框；compact 态叠加层见 .partial-compact-card */
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 16px;
   padding: 10px 12px;
   box-shadow: 0 8px 32px var(--shadow-strong), 0 0 0 1px rgba(255, 255, 255, 0.08);
@@ -4836,8 +4867,15 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 }
 
 .user-input-card:focus-within {
-  border-color: rgba(255, 255, 255, 0.4);
-  box-shadow: 0 8px 32px var(--shadow-strong), 0 0 0 1px rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.32);
+  box-shadow: 0 8px 32px var(--shadow-strong), 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+body[data-theme="light"] .user-input-card {
+  border-color: rgba(15, 23, 42, 0.12);
+}
+body[data-theme="light"] .user-input-card:focus-within {
+  border-color: rgba(15, 23, 42, 0.24);
 }
 
 .user-input-header {
@@ -4952,7 +4990,7 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   border-color: rgba(88, 166, 255, 0.34);
   background:
     linear-gradient(135deg, rgba(88, 166, 255, 0.12), rgba(255, 255, 255, 0.035)),
-    var(--input-card-bg);
+    var(--glass-bg);
 }
 
 .partial-compact-status {
@@ -5364,7 +5402,7 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 }
 .md-table-zoom-panel {
   /* 显式宽度：panel 是 flex item（width auto），table 的 width:100%
-     在 auto 宽包含块下解析循环、退回内容宽——必须给定确定基准 */
+      在 auto 宽包含块下解析循环、退回内容宽——必须给定确定基准 */
   width: 92vw;
   max-width: 92vw;
   max-height: 90vh;
@@ -5373,6 +5411,15 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   border-radius: 12px;
   cursor: default;
   padding: 0 !important; /* 抹平 markdown-body 的容器 padding，表格贴边滚动 */
+  /* 玻璃底：遮罩近乎全黑，表格只做半透明染色，放大态必须由面板
+     提供可读表面；模糊采样遮罩下的页面内容 */
+  background: rgba(18, 20, 28, 0.86);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  backdrop-filter: blur(24px) saturate(1.3);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+body[data-theme="light"] .md-table-zoom-panel {
+  background: rgba(255, 255, 255, 0.78);
 }
 .md-table-zoom-panel table {
   /* 覆盖 .markdown-body table 的 max-content 展开策略：放大态撑满
