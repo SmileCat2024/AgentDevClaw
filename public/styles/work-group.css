@@ -1240,15 +1240,15 @@
 .wg-msg-bubble.markdown-body h2 { font-size: 1.12rem; }
 .wg-msg-bubble.markdown-body h3 { font-size: 1rem; }
 .wg-msg-bubble.markdown-body h4 { font-size: 0.9rem; }
-/* 段落与块间距收窄 */
+/* 段落与块间距收窄（table 外边距由 .md-table-wrap 提供） */
 .wg-msg-bubble.markdown-body p,
 .wg-msg-bubble.markdown-body ul,
 .wg-msg-bubble.markdown-body ol,
 .wg-msg-bubble.markdown-body blockquote,
-.wg-msg-bubble.markdown-body table,
 .wg-msg-bubble.markdown-body hr {
   margin: 0 0 0.5rem !important;
 }
+.wg-msg-bubble .md-table-wrap { margin-bottom: 0.5rem; }
 .wg-msg-bubble.markdown-body h1,
 .wg-msg-bubble.markdown-body h2,
 .wg-msg-bubble.markdown-body h3,

@@ -8,7 +8,7 @@
  *   _userExpandedReasoning, _userExpandedMsgs, _userCollapsedMsgs,
  *   followLatestEnabled, container
  * 依赖全局函数:
- *   renderMarkdown (modules/markdown-utils.js)
+ *   renderMarkdown, enhanceMarkdownTables (modules/markdown-utils.js)
  *   parseToolResult, renderJsonHighlight, applyTemplate, enhanceMathInElement,
  *   clearTruncatedHighlightData (modules/template-engine.js)
  *   getToolDisplayName, getToolRenderTemplate (modules/markdown-utils.js)
@@ -323,6 +323,7 @@ function appendNewMessages(newMessages, startIndex) {
           pEls[pi].classList.add('process-hidden');
         }
         enhanceMathInElement(appendedRow);
+        enhanceMarkdownTables(appendedRow);
       }
     });
   });
@@ -368,6 +369,7 @@ function pushOptimisticUserEcho({ text, images, sessionReferences } = {}) {
     if (emptyState) emptyState.remove();
     container.appendChild(row);
     enhanceMathInElement(row);
+    enhanceMarkdownTables(row);
   });
   _optimisticEchoes.push({ text: echoText, el: row });
   updateFollowLatestButton();
@@ -469,6 +471,7 @@ function updateLastMessage(msg) {
       });
     }
     enhanceMathInElement(lastRow);
+    enhanceMarkdownTables(lastRow);
   } else {
     enhanceMathInElement(lastRow);
   }
@@ -839,6 +842,7 @@ function render(messages) {
       clearProcessDistance(container);
     }
     enhanceMathInElement(container);
+    enhanceMarkdownTables(container);
   }, 220);
 
   updateRollbackActionVisibility();

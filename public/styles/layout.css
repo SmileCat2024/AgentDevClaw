@@ -6645,6 +6645,7 @@ body[data-theme="light"] .project-docset-detail-empty {
 #chat-container {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden; /* 表格右侧突破由 .md-table-wrap 内滚承载，容器不横滚 */
   padding: 24px 24px 24px 44px;
   padding-bottom: 320px; /* 增加底部空间，避免输入框遮挡最新消息 */
   margin-right: 6px;

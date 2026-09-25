@@ -380,19 +380,141 @@
 .ls-icon { color: var(--text-secondary); display: flex; align-items: center; }
 .ls-name { font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
 
-.markdown-body table {
-  width: 100% !important;
-  border-collapse: collapse !important;
-  margin-bottom: 16px !important;
+/* ── Markdown 表格：wrapper 滚动 + 表格完整展开 ───────────────
+   table 以 width:max-content 完整展开（列不会被压扁），超宽由
+   .md-table-wrap 横向滚动；wrapper 同时承担圆角裁剪、外边距与
+   右缘渐隐。长列受 max-width 约束换行，避免单列占满整行宽。 */
+.md-table-wrap {
+  max-width: 100%;
+  margin: 0 0 1rem;
+  overflow-x: auto;
+  border-radius: 12px;
+}
+/* 三态双缘渐隐：左端只隐右缘，滚动中途两端都隐，到最右只隐左缘 */
+.md-table-wrap.is-overflow {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 96px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 96px), transparent);
+}
+.md-table-wrap.is-overflow:not(.at-scroll-start):not(.at-scroll-end) {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 96px, #000 calc(100% - 96px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 96px, #000 calc(100% - 96px), transparent);
+}
+.md-table-wrap.is-overflow.at-scroll-end:not(.at-scroll-start) {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 96px);
+  mask-image: linear-gradient(to right, transparent, #000 96px);
+}
+/* 主对话：溢出表格左右双向突破正文列宽。
+   --md-table-bleed 按 #chat-container 实时宽度维护，锚定容器内容区
+   边缘，不会超出屏幕。结构（markdown-utils.js 的 upgradeWideTable）：
+   table 由原生 transform 驱动整体左移（初始左缘=正文左，滚动时 1x
+   左移利用左侧留白，溢出部分被 overflow:hidden 裁剪 + 渐隐）；
+   .md-table-scrollbar 是 8px 高的独立滚动容器，margin-left 隔开左侧
+   突破区——滚动条左端永远与正文文本对齐。
+   其他管线（群聊气泡等）不消费该变量，保持 wrapper 自身滚动。 */
+.message-row .md-table-wrap.is-wide {
+  /* 全局 border-box 下基础规则的 max-width:100% 会把总盒钳回 768，
+     表格反而变窄——必须显式解除 */
+  max-width: none;
+  margin-left: calc(-1 * var(--md-table-bleed, 0px));
+  margin-right: calc(-1 * var(--md-table-bleed, 0px));
+  overflow: hidden; /* 左移溢出裁剪；横向滚动已移交 .md-table-scrollbar */
+}
+.message-row .md-table-wrap.is-wide > table {
+  will-change: transform; /* scroll 事件逐帧改 transform，保持合成器路径 */
+  /* 初始左缘 = 正文左（wrapper 左缘 + bleed）；滚动时 transform 1x 左移，
+     滚动行程 maxScroll = W - (正文宽+bleed) 恰好等于"右端贴容器右"所需量。
+     必须 !important 压过 .markdown-body table 的 margin:0 !important */
+  margin-left: var(--md-table-bleed, 0px) !important;
+  /* min-width 的基准随突破变为全宽，会把中等宽表格的列摊稀；
+     能走到 is-wide 的表格必然已超正文宽，min-width 不再有意义 */
+  min-width: 0 !important;
+}
+.message-row .md-table-wrap.is-wide .md-table-scrollbar {
+  margin-left: var(--md-table-bleed, 0px);
+  height: 8px; /* 仅滚动条自身高度，表格行高由 table 正常流撑起 */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.message-row .md-table-wrap.is-wide .md-table-scrollbar-ghost {
+  /* 高度必须非 0：Chrome 对零高度内容不计入横向 scrollable overflow，
+     滚动条会因"无溢出"而拖不动 */
+  height: 1px;
+}
+/* 表格左缘在正文左（wrapper 圆角裁剪范围之外），圆角需由表格自身
+   提供；collapse 的外框由表格层绘制（直角，无法跟随圆角），故 is-wide
+   作用域切 separate：边框归属单元格（每格 right/bottom + 首列 left +
+   首行 top，颜色沿用既有 border-color，暗 #333 / 亮 #ddd 主题自适应），
+   四角圆角 12px 与 wrapper 一致；行/表背景透明化下沉到单元格，
+   避免直角底色从圆角处露出。滚动后左缘移出被 wrapper 裁剪，
+   圆角随之不可见，两种状态自然衔接。 */
+.message-row .md-table-wrap.is-wide > table {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  background: transparent !important;
+}
+.message-row .md-table-wrap.is-wide > table tr {
+  background: transparent !important;
+}
+.message-row .md-table-wrap.is-wide > table > tbody > tr > td {
   background-color: #1a1a1a !important;
-  border-radius: 12px !important;
-  overflow: hidden !important;
+}
+.message-row .md-table-wrap.is-wide > table > tbody > tr:nth-child(2n) > td {
+  background-color: #222 !important;
+}
+body[data-theme="light"] .message-row .md-table-wrap.is-wide > table > tbody > tr > td {
+  background-color: #ffffff !important;
+}
+body[data-theme="light"] .message-row .md-table-wrap.is-wide > table > tbody > tr:nth-child(2n) > td {
+  background-color: #f7f7f7 !important;
+}
+.message-row .md-table-wrap.is-wide > table th,
+.message-row .md-table-wrap.is-wide > table td {
+  border-top-width: 0 !important;
+  border-left-width: 0 !important;
+  border-right-width: 1px !important;
+  border-right-style: solid !important;
+  border-bottom-width: 1px !important;
+  border-bottom-style: solid !important;
+}
+.message-row .md-table-wrap.is-wide > table tr > :first-child {
+  border-left-width: 1px !important;
+  border-left-style: solid !important;
+}
+.message-row .md-table-wrap.is-wide > table > thead > tr:first-child > th,
+.message-row .md-table-wrap.is-wide > table > thead > tr:first-child > td {
+  border-top-width: 1px !important;
+  border-top-style: solid !important;
+}
+/* 四角圆角限定在真实外角：thead 首行（顶角）与 tbody 末行（底角）。
+   tr:first-child 会相对各父级误伤 tbody 首行，造成中段圆角缺口 */
+.message-row .md-table-wrap.is-wide > table > thead > tr:first-child > :first-child {
+  border-top-left-radius: 12px;
+}
+.message-row .md-table-wrap.is-wide > table > thead > tr:first-child > :last-child {
+  border-top-right-radius: 12px;
+}
+.message-row .md-table-wrap.is-wide > table > tbody > tr:last-child > :first-child {
+  border-bottom-left-radius: 12px;
+}
+.message-row .md-table-wrap.is-wide > table > tbody > tr:last-child > :last-child {
+  border-bottom-right-radius: 12px;
+}
+.markdown-body table {
+  width: max-content !important;
+  /* 必须显式覆盖 CDN github-markdown-css 的 max-width:100%：
+     它会把 max-content 钳回容器宽，auto 布局随即把列压到逐字宽（竖排） */
+  max-width: none !important;
+  min-width: 100% !important;
+  border-collapse: collapse !important;
+  background-color: #1a1a1a !important;
   display: table !important;
+  margin: 0 !important;
 }
 .markdown-body th, .markdown-body td {
   padding: 10px 14px !important;
   border: 1px solid #333 !important;
   vertical-align: top !important;
+  max-width: 20em;
 }
 .markdown-body th {
   background-color: #262626 !important;
@@ -453,11 +575,11 @@ body[data-theme="light"] .markdown-body tr:nth-child(2n) {
 .markdown-body > :last-child {
   margin-bottom: 0 !important;
 }
+/* table 不在此组内：外边距由 .md-table-wrap 提供（table 自身 margin:0） */
 .markdown-body p,
 .markdown-body ul,
 .markdown-body ol,
 .markdown-body blockquote,
-.markdown-body table,
 .markdown-body hr {
   margin: 0 0 1rem !important;
 }
