@@ -1,23 +1,18 @@
 /**
  * Shared model preset resolver for prebuilt agent runtimes.
  *
- * Reads config/presets.json and agent metadata.json to resolve a preset name
+ * Reads the Claw user data presets.json and agent metadata.json to resolve a preset name
  * into an LLM instance via AgentDev's createLLM().
  */
 
-import { join, resolve, dirname } from 'path';
+import { join } from 'path';
 import { existsSync, readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
 import { createLLM } from '@agentdevjs/llm';
 import { buildCodexOAuthHeaders, resolveAccessTokenSync } from './oauth-codex.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PROTOCLAW_ROOT = resolve(__dirname, '..');
-const PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
+import { MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, AGENT_USER_CONFIG_PATH } from './shared/constants.js';
 
 /**
- * 全局默认模型的合成 preset 名。config/default.json 的内联 defaultModel 没有
+ * 全局默认模型的合成 preset 名。Claw user data default.json 的内联 defaultModel 没有
  * preset 身份；赋此名后，显示、切换、档位调整与普通 preset 走同一条链路，
  * 下游无需为"匿名模型"做任何特判。
  */
@@ -26,14 +21,14 @@ export const GLOBAL_DEFAULT_PRESET_NAME = '__default__';
 /**
  * Resolve a preset name to { llm, modelName }.
  * @param {string} presetName
- * @param {{ thinkingEffort?: string | null }} [overrides] - Runtime overrides for this resolution only; does not mutate config/presets.json.
+ * @param {{ thinkingEffort?: string | null }} [overrides] - Runtime overrides for this resolution only; does not mutate Claw user data presets.json.
  * @param {{ configPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
- *   Test seam — production callers omit. configPath overrides config/presets.json;
+ *   Test seam — production callers omit. configPath overrides Claw user data presets.json;
  *   resolveAccessToken replaces the OAuth token-store lookup.
  * @returns {{ llm: import('@agentdevjs/llm').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
  */
 export function resolveModelPresetLLM(presetName, overrides, options = {}) {
-  const configPath = options.configPath || PRESETS_PATH;
+  const configPath = options.configPath || MODEL_PRESETS_PATH;
   if (!presetName || !existsSync(configPath)) return null;
   try {
     const raw = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -41,7 +36,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
     const providers = Array.isArray(raw?.providers) ? raw.providers : [];
     const preset = presets.find((p) => p.name === presetName);
     if (!preset) {
-      console.warn(`[ModelPreset] Preset "${presetName}" not found in config/presets.json`);
+      console.warn(`[ModelPreset] Preset "${presetName}" not found in Claw user data presets.json`);
       return null;
     }
     const provider = providers.find((p) => p.name === preset.providerName);
@@ -141,7 +136,7 @@ export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
     
     // 读取用户配置文件（如果存在）
     const userConfigPath = options.userConfigPath
-      || join(PROTOCLAW_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
+      || AGENT_USER_CONFIG_PATH(agentId);
     let userConfig = {};
     if (existsSync(userConfigPath)) {
       try {
@@ -188,8 +183,8 @@ export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
 
 /**
  * Fallback chain when an agent has no model preset configured:
- *   1. config/default.json 的 defaultModel（内联完整配置）
- *   2. config/default.json 的 defaultModel.model 在 config/presets.json 中匹配同名 preset
+ *   1. Claw user data default.json 的 defaultModel（内联完整配置）
+ *   2. Claw user data default.json 的 defaultModel.model 在 Claw user data presets.json 中匹配同名 preset
  *
  * 新框架 BasicAgent 的 llm 为必传（票 009 纯基类化），无 preset 的 agent
  * （如 qqbot / agent-studio）依赖此兜底完成构造。
@@ -199,12 +194,12 @@ export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
  *
  * @param {{ thinkingEffort?: string | null }} [overrides] - 运行时档位覆盖；null 清除为厂商默认。
  * @param {{ configPath?: string, presetsPath?: string }} [options] - Test seam — production callers omit.
- *   configPath overrides config/default.json（inline 分支生效）；
- *   presetsPath overrides config/presets.json（窗口元数据补齐）。
+ *   configPath overrides Claw user data default.json（inline 分支生效）；
+ *   presetsPath overrides Claw user data presets.json（窗口元数据补齐）。
  * @returns {{ llm: import('@agentdevjs/llm').LLMClient, modelName: string, presetName: string, thinkingEffort: string | null, provider: string, protocol: string } | null}
  */
 export function resolveGlobalDefaultLLM(overrides, options = {}) {
-  const configPath = options.configPath || join(PROTOCLAW_ROOT, 'config', 'default.json');
+  const configPath = options.configPath || MODEL_CONFIG_PATH;
   try {
     const raw = JSON.parse(readFileSync(configPath, 'utf8'));
     const dm = raw?.defaultModel;
@@ -221,7 +216,7 @@ export function resolveGlobalDefaultLLM(overrides, options = {}) {
       let windowMeta = {};
       if (!(Number.isFinite(Number(dm.contextLength)) && Number(dm.contextLength) > 0)) {
         try {
-          const presetsPath = options.presetsPath || PRESETS_PATH;
+          const presetsPath = options.presetsPath || MODEL_PRESETS_PATH;
           const presetsRaw = JSON.parse(readFileSync(presetsPath, 'utf8'));
           const presets = Array.isArray(presetsRaw?.presets) ? presetsRaw.presets : [];
           const match = presets.find((p) => p.model === dm.model);
@@ -257,7 +252,7 @@ export function resolveGlobalDefaultLLM(overrides, options = {}) {
     const raw = JSON.parse(readFileSync(configPath, 'utf8'));
     const defaultModel = raw?.defaultModel;
     if (defaultModel?.model) {
-      const presetsRaw = JSON.parse(readFileSync(PRESETS_PATH, 'utf8'));
+      const presetsRaw = JSON.parse(readFileSync(MODEL_PRESETS_PATH, 'utf8'));
       const presets = Array.isArray(presetsRaw?.presets) ? presetsRaw.presets : [];
       const candidates = presets.filter((p) => p.model === defaultModel.model);
       const preset = candidates.find((p) => (p.protocol || 'anthropic') === (defaultModel.protocol || defaultModel.provider || 'anthropic'))

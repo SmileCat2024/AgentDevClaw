@@ -2,7 +2,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { spawn } from 'child_process';
 
-import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
+import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS, AGENT_CONFIGS_ROOT, AGENT_USER_CONFIG_PATH } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
 import { requestRuntimeAck } from '../shared/ipc.js';
@@ -260,7 +260,7 @@ async function resolveSessionModelInfo(agentId) {
   let presetName = null;
   if (agentId) {
     try {
-      const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
+      const userConfigPath = AGENT_USER_CONFIG_PATH(agentId);
       const userConfig = await readJson(userConfigPath) || {};
       const mp = userConfig?.modelPresets;
       if (mp && typeof mp === 'object') {
@@ -447,10 +447,11 @@ export function convertAudioToWav(inputBuffer) {
  *
  * @param {string} agentId
  * @param {string} rootDir - Test seam; defaults to the project root.
+ * @param {{ userConfigPath?: string }} [options] - Optional user config path for isolated tests.
  * @returns {Promise<object|null>} merged metadata/user presets, or null when
  *   the agent and its host identity are unknown.
  */
-export async function readAgentModelPresets(agentId, rootDir = PROJECT_ROOT) {
+export async function readAgentModelPresets(agentId, rootDir = PROJECT_ROOT, options = {}) {
   const metaPath = path.join(rootDir, 'prebuilt-agents', 'official', agentId, 'metadata.json');
   let meta = await readJsonSafe(metaPath, null);
   if (!meta) {
@@ -465,8 +466,8 @@ export async function readAgentModelPresets(agentId, rootDir = PROJECT_ROOT) {
     meta = identity;
   }
 
-  const userConfigPath = path.join(rootDir, '.agentdev', 'agent-configs', `${agentId}.json`);
-  const userConfig = await readJsonSafe(userConfigPath, {}) || {};
+  const resolvedUserConfigPath = options.userConfigPath || AGENT_USER_CONFIG_PATH(agentId);
+  const userConfig = await readJsonSafe(resolvedUserConfigPath, {}) || {};
   return {
     ...(meta.modelPresets || {}),
     ...(userConfig.modelPresets || {}),
@@ -642,7 +643,7 @@ export function setupModelConfigRoutes(app, express) {
         return res.status(400).json({ error: 'agentId is not supported for process mode config' });
       }
       const metaPath = path.join(PROJECT_ROOT, 'prebuilt-agents', 'official', agentId, 'metadata.json');
-      const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
+      const userConfigPath = AGENT_USER_CONFIG_PATH(agentId);
       const [meta, userConfig] = await Promise.all([
         readJsonSafe(metaPath, {}),
         readJsonSafe(userConfigPath, {}),
@@ -668,10 +669,11 @@ export function setupModelConfigRoutes(app, express) {
       if (!processMode) {
         return res.status(400).json({ error: 'processMode must be isolated, shared-by-project, or shared-global' });
       }
-      const userConfigDir = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs');
+      const userConfigDir = AGENT_CONFIGS_ROOT;
       await fs.mkdir(userConfigDir, { recursive: true });
       const userConfigPath = path.join(userConfigDir, `${agentId}.json`);
-      const userConfig = await readJsonSafe(userConfigPath, {}) || {};
+  const resolvedUserConfigPath = userConfigPath || AGENT_USER_CONFIG_PATH(agentId);
+  const userConfig = await readJsonSafe(resolvedUserConfigPath, {}) || {};
       userConfig.processMode = processMode;
       await fs.writeFile(userConfigPath, JSON.stringify(userConfig, null, 2), 'utf8');
       res.json({ ok: true, agentId, processMode });
@@ -706,7 +708,7 @@ export function setupModelConfigRoutes(app, express) {
       }
 
       // Write user-level agent config (independent of metadata.json)
-      const userConfigDir = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs');
+      const userConfigDir = AGENT_CONFIGS_ROOT;
       await fs.mkdir(userConfigDir, { recursive: true });
       const userConfigPath = path.join(userConfigDir, `${agentId}.json`);
 
@@ -794,7 +796,7 @@ export function setupModelConfigRoutes(app, express) {
 
   // ── Hot-swap: switch active model for one explicit runtime ──
   // Runtime-only: updates the in-memory LLM instance without touching the
-  // agent's startup preset (.agentdev/agent-configs). The preset file is the
+  // agent's startup preset (用户数据目录 agent-configs)。 The preset file is the
   // authoritative source for "what model to use at launch" and must not be
   // mutated by a mid-session model switch.
   // Per-session: when sessionId is provided, IPC is delivered only to that

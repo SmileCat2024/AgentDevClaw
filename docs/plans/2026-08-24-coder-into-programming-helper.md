@@ -1,6 +1,6 @@
 # coder 迁入编程小助手工作空间 — 设计共识与执行蓝图
 
-> 状态：历史设计记录；迁移结果与现行 Thread 生命周期以 [`docs/plans/work-thread-lifecycle.md`](./work-thread-lifecycle.md) 为准。
+> 状态：历史设计记录；配置文件现位于 Claw 用户数据目录，旧 checkout 路径会在启动时补迁。迁移结果与现行 Thread 生命周期以 [`docs/plans/work-thread-lifecycle.md`](./work-thread-lifecycle.md) 为准。
 > 日期：2026-08-24
 
 ## 1. 背景与目标
@@ -94,7 +94,7 @@
 
 ## 7. 配置
 
-- coder 配置保持独立：`.agentdev/agent-configs/coder.json` 按 `agentId=coder` 原键读取，不并入 programming-helper 域。
+- coder 配置保持独立：Claw 用户数据目录 `agent-configs/coder.json` 按 `agentId=coder` 原键读取，不并入 programming-helper 域。该路径后来由应用配置迁移收敛；启动时会从旧仓库位置补迁缺失文件。
 - 编辑入口：模型预设出现在现有全局模型配置面板（按 agentId 列出 coder）；其余配置第一版无 UI，文件即接口。
 
 ## 8. runtime / server 改造

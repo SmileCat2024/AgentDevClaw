@@ -37,7 +37,7 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 
-import { PROJECT_ROOT } from '../shared/constants.js';
+import { AGENT_USER_CONFIG_PATH, MODEL_PRESETS_PATH } from '../shared/constants.js';
 import { readJsonSafe } from '../shared/fs-helpers.js';
 import { VIEWER_ORIGIN } from '../shared/constants.js';
 import {
@@ -95,7 +95,7 @@ export function resolveSessionViewerAgentId(agentId, sessionId) {
 /**
  * 按 ACP session/new 的 model 参数解析模型预设（profile）。
  *
- * 对外字段名是 model，但真实索引是 config/presets.json 的预设：name
+ * 对外字段名是 model，但真实索引是 user data presets.json 的预设：name
  * （display name）与 model（模型名）两个候选字段。两层都不能假设唯一
  * ——系统不强制 preset name 去重，同一 model 名也允许挂多个预设（不同
  * 连接配置）。因此匹配规则是「唯一即用、歧义即报错」：
@@ -115,11 +115,11 @@ export async function resolveAcpModelPreset(rawModel, options = {}) {
   const requested = typeof rawModel === 'string' ? rawModel.trim() : '';
   if (!requested) return null;
 
-  const presetsPath = options.presetsPath || path.join(PROJECT_ROOT, 'config', 'presets.json');
+  const presetsPath = options.presetsPath || MODEL_PRESETS_PATH;
   const presetsRaw = await readJsonSafe(presetsPath, null);
   const presets = Array.isArray(presetsRaw?.presets) ? presetsRaw.presets : [];
   if (presets.length === 0) {
-    throw acpError(400, 'model_preset_unavailable', `no model presets configured (config/presets.json is empty or missing); cannot resolve model "${requested}"`);
+    throw acpError(400, 'model_preset_unavailable', `no model presets configured (user data presets.json is empty or missing); cannot resolve model "${requested}"`);
   }
 
   const requestedKey = requested.toLowerCase();
@@ -156,7 +156,7 @@ export async function resolveAcpModelPreset(rawModel, options = {}) {
 
 /**
  * 把解析出的预设 name 写入 coder 的启动配置
- * （.agentdev/agent-configs/coder.json 的 modelPresets.default）。
+ * （用户数据目录 agent-configs/coder.json 的 modelPresets.default）。
  *
  * 写盘而非本次启动参数：coder runtime 的 spawn 链路固定从该文件解析启动
  * 模型（run-prebuilt-agent.js 的 coder 分支），写盘后 spawn 自然读到新值，
@@ -167,7 +167,7 @@ export async function resolveAcpModelPreset(rawModel, options = {}) {
  * @param {{ configPath?: string }} [options] 测试缝——production callers omit
  */
 export async function applyAcpModelPreset(presetName, options = {}) {
-  const configPath = options.configPath || path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', 'coder.json');
+  const configPath = options.configPath || AGENT_USER_CONFIG_PATH('coder');
   const configDir = path.dirname(configPath);
   const existingConfig = await readJsonSafe(configPath, {}) || {};
   existingConfig.modelPresets = {

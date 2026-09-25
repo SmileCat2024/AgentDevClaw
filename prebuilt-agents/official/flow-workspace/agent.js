@@ -13,7 +13,7 @@ import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { createRequire } from 'module';
 import { FlowFeature } from '../../../local-features/dist/flow/src/index.js';
-import { resolveUserDataDir } from '../../../server/shared/constants.js';
+import { resolveUserDataDir, MODEL_PRESETS_PATH } from '../../../server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,7 +26,6 @@ const WORKSPACE_STATE_PATH = join(USER_DATA_ROOT, 'workspaces', 'flow-workspace'
 const SESSION_INDEX_PATH = join(USER_DATA_ROOT, 'workspaces', 'flow-workspace', 'sessions', 'index.json');
 const FLOWS_ROOT = join(USER_DATA_ROOT, 'flows');
 const AGENT_GRAPH_ID = 'agent-flow-graph';
-const MODEL_PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';

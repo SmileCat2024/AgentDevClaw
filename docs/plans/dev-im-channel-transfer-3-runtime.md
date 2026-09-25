@@ -1,5 +1,7 @@
 # 子任务 3：运行时动态 Feature 注入/移除
 
+> 历史实施方案。IM 配置当前存放于 Claw 用户数据目录；本文中的 `PROJECT_QQBOT_CONFIG_PATH` 属于当时设计，不代表当前路径常量名称。详细方案见本目录内其他历史计划。
+
 ## 目标
 
 在 `run-prebuilt-agent.js` 中处理来自 server.js 的 IPC 消息 `im:transfer` 和 `im:disconnect`，

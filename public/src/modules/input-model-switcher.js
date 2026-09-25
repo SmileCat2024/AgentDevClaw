@@ -36,7 +36,7 @@ let _inputModelDropdownLoading = false;
 function _getInputAgentId() {
   // Model swap is keyed on the HOST agent ID (e.g. 'programming-helper'),
   // not the ViewerWorker child UUID. The config file
-  // (.agentdev/agent-configs/{agentId}.json) and IPC delivery
+  // (user data agent-configs/{agentId}.json) and IPC delivery
   // (sendIPCToAllSessions → listAgentRuntimes) both use the host ID.
   // focusedAgentId is set to the host ID by switchAgent().
   if (typeof focusedAgentId !== 'undefined' && focusedAgentId) return focusedAgentId;

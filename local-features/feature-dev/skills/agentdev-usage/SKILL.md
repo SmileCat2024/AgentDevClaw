@@ -115,7 +115,7 @@ npx agentdev-server 2026 false
 
 ### 第一步：配置 API
 
-创建 `config/default.json`，填入 API 信息：
+如果此 Agent 通过 Claw 工作台运行，请在工作台设置中配置全局模型；Claw 将配置保存在用户数据目录（默认 `~/.agentdev/AgentDevClaw/default.json`），不要把 Claw 的 API 密钥复制进 Feature 项目。独立运行的 Agent 则由其宿主按自身约定提供模型配置。
 
 ```json
 {
@@ -219,25 +219,7 @@ agent.use(new ShellFeature()); // 添加 bash 命令执行
 
 ## 配置系统
 
-### API 配置
-
-`config/default.json`:
-
-```json
-{
-  "defaultModel": {
-    "provider": "你的 provider",
-    "baseUrl": "你的 API 地址",
-    "apiKey": "直接填 或 ${环境变量}",
-    "model": "你的模型名称"
-  }
-}
-```
-
-**说明**：
-- 文件位置：项目根目录 `config/default.json`
-- apiKey 可以直接填写，或用 `${变量名}` 引用环境变量
-- `BasicAgent` 默认自动加载此配置
+Claw 工作台中的模型设置保存在用户数据目录（默认 `~/.agentdev/AgentDevClaw/`），不是 Feature 项目的 `config/`。Feature 不应复制或提交 Claw 的模型凭据；由运行宿主解析模型并注入 Agent。独立运行的 Agent 请遵循其宿主提供的配置方式。
 
 ### .agentdev 目录配置（可选）
 
@@ -416,7 +398,7 @@ export class MyAgent extends BasicAgent {
 
 ## 开发工作流
 
-1. **配置 API** - 创建 `config/default.json`
+1. **配置 API** - 在运行宿主中配置模型（Claw 工作台使用用户数据目录中的模型配置）
 2. **创建交互式 Agent** - 使用 `UserInputFeature` 构建自循环
 3. **添加 Feature** - 按需添加功能
 4. **连接调试器** - 使用 `withViewer()` 观察
@@ -429,8 +411,8 @@ export class MyAgent extends BasicAgent {
 
 | 问题 | 解决方案 |
 |------|----------|
-| API 401/403 | 检查 `config/default.json` 和环境变量 |
-| 配置不生效 | 确保配置在项目根目录 `config/default.json` |
+| API 401/403（Claw 工作台） | 在工作台全局模型设置中检查 provider、endpoint、API key 和模型 |
+| 配置不生效（Claw 工作台） | 检查用户数据目录的 `default.json` 与 `presets.json`；默认根为 `~/.agentdev/AgentDevClaw/` |
 | 调试器看不到数据 | 使用交互循环模式，不要单次调用后退出 |
 | 调试器连接失败 | 确认 `npx agentdev-server` 已在独立终端启动 |
 | PowerShell 中 `agentdev-server` 无效 | 使用 `npx agentdev-server` 而不是直接 `agentdev-server` |
@@ -806,24 +788,9 @@ const agent = new BasicAgent({ systemMessage: systemPrompt });
 
 ---
 
-## 完整配置示例
+## Claw 工作台模型设置
 
-### config/default.json
-
-```json
-{
-  "defaultModel": {
-    "provider": "openai",
-    "baseUrl": "https://api.openai.com/v1",
-    "apiKey": "${OPENAI_API_KEY}",
-    "model": "gpt-4o"
-  },
-  "agent": {
-    "maxTurns": 20,
-    "temperature": 0.7
-  }
-}
-```
+在 Claw 工作台设置页面管理全局模型和预设。凭据存放在 Claw 用户数据目录，不应放入 Feature 项目或提交到源码仓库。
 
 ### .agentdev/prompts/system.md
 

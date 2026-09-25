@@ -48,7 +48,7 @@ export default class TicketAgent extends BasicAgent {
 硬性规则（违反即运行时失败）：
 
 - **不要在 constructor 里 `use()` metadata.features 声明的任何 Feature。** 消费端装载器按 metadata 动态挂载，遇到 Agent 已静态挂载的同名 Feature 会直接报错终止。入口只允许 `use()` 未声明进 metadata 的框架内置能力（如 `LspFeature`）。
-- **不要自行 createLLM。** 模型由运行宿主从 `metadata.modelPresets` 解析后经构造参数 `llm` 注入；本机可用 `.agentdev/agent-configs/<agentId>.json` 覆盖（不入库）。
+- **不要自行 createLLM。** 模型由运行宿主从 `metadata.modelPresets` 解析后经构造参数 `llm` 注入；本机 Claw 用户可用用户数据目录下的 `agent-configs/<agentId>.json` 覆盖（默认位于 `~/.agentdev/AgentDevClaw/`；不入库）。
 - Feature 的 config 写在 `metadata.features[].config`，由宿主注入，入口不处理。
 - 顶层 `import { BasicAgent } from 'agentdev'` 是合法且预期的：消费端会把 Agent 源码复制进隔离运行环境（agent-source/），依赖在该环境内解析，Agent 项目本身不需要 node_modules。
 - 导出形式用 `export default class`（宿主按 default 导出或唯一函数导出解析 Agent 类）。

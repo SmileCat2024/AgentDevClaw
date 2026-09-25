@@ -17,7 +17,7 @@
  *   getUsageContextTokens, findLine, resolveLineTransferConflict, resolvePortalChannelConflict
  */
 
-import { PROJECT_QQBOT_CONFIG_PATH, IM_IPC_MOUNT_RETRY_MS } from '../shared/constants.js';
+import { APP_QQBOT_CONFIG_PATH, IM_IPC_MOUNT_RETRY_MS } from '../shared/constants.js';
 import { getAgentRuntime, listAgentRuntimes, getManagedRuntimeKey } from '../shared/agent-access.js';
 import { readSessionIndex, readSessionIndexSync } from '../shared/session-access.js';
 import { sendIPCtoSession } from '../shared/ipc.js';
@@ -73,7 +73,7 @@ export function setupIMRoutes(app, express, ctx) {
       res.json({
         config,
         configured: !!(config.appId && config.clientSecret),
-        sourcePath: PROJECT_QQBOT_CONFIG_PATH,
+        sourcePath: APP_QQBOT_CONFIG_PATH,
       });
     } catch (error) {
       next(error);
@@ -86,7 +86,7 @@ export function setupIMRoutes(app, express, ctx) {
       res.json({
         config,
         configured: !!(config.appId && config.clientSecret),
-        sourcePath: PROJECT_QQBOT_CONFIG_PATH,
+        sourcePath: APP_QQBOT_CONFIG_PATH,
         savedAt: new Date().toISOString(),
       });
     } catch (error) {

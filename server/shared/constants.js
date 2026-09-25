@@ -46,15 +46,19 @@ export function resolveInstanceUdsPath(env = process.env) {
 
 export const USER_DATA_ROOT = resolveUserDataDir();
 export const REMOTE_CONNECTIONS_CONFIG_PATH = path.join(USER_DATA_ROOT, 'remote-connections.json');
+// Application-owned writable settings share the existing Claw user data root.
+export const APP_CONFIG_ROOT = USER_DATA_ROOT;
 export const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 export const PREBUILT_SESSIONS_ROOT = path.join(USER_DATA_ROOT, 'prebuilt-sessions');
 export const PREBUILT_WORKSPACES_ROOT = path.join(USER_DATA_ROOT, 'workspaces');
-export const PROJECT_QQBOT_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'qqbot.config.json');
-export const PROJECT_WEIXIN_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'weixin-bot.config.json');
-export const PROJECT_FEISHU_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'feishu-bot.config.json');
-export const PROJECT_WECOM_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'wecom-bot.config.json');
-export const PROJECT_ROKID_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'rokid.config.json');
-export const PROJECT_IM_WORKSPACE_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'im-workspace.config.json');
+export const AGENT_CONFIGS_ROOT = path.join(APP_CONFIG_ROOT, 'agent-configs');
+export const AGENT_USER_CONFIG_PATH = (agentId) => path.join(AGENT_CONFIGS_ROOT, `${agentId}.json`);
+export const APP_QQBOT_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'qqbot.config.json');
+export const APP_WEIXIN_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'weixin-bot.config.json');
+export const APP_FEISHU_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'feishu-bot.config.json');
+export const APP_WECOM_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'wecom-bot.config.json');
+export const APP_ROKID_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'rokid.config.json');
+export const APP_IM_WORKSPACE_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'im-workspace.config.json');
 export const FEATURE_REPOSITORY_ROOT = path.join(PROJECT_ROOT, 'resources', 'features');
 export const USER_FEATURE_REPOSITORY_ROOT = path.join(USER_DATA_ROOT, 'user-features');
 export const AGENT_RUNTIME_ENVS_ROOT = path.join(USER_DATA_ROOT, 'runtime-envs');
@@ -68,9 +72,11 @@ export const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper']);
 // Hidden workspaces remain discoverable by their stable ID for historical sessions and explicit routes.
 export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'feature-creator', 'flow-test', 'flow-workspace', 'dispatch-console', 'work-group']);
 export const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
-export const MODEL_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'default.json');
-export const MODEL_PRESETS_PATH = path.join(PROJECT_ROOT, 'config', 'presets.json');
-export const MCP_GATEWAY_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'mcp-gateway.json');
+export const DEFAULT_MODEL_CONFIG_TEMPLATE_PATH = path.join(PROJECT_ROOT, 'config', 'default.example.json');
+export const MODEL_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'default.json');
+export const MODEL_PRESETS_PATH = path.join(APP_CONFIG_ROOT, 'presets.json');
+export const MCP_GATEWAY_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'mcp-gateway.json');
+export const REMOTE_CLAW_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'remote-claw.json');
 export const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
 
 // ── Timeout / Wait (ms) ──────────────────────────────────────────

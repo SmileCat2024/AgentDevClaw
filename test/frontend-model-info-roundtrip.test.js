@@ -260,7 +260,7 @@ describe('model swap: agentId resolution', () => {
   it('focusedAgentId is the host agent ID, not the runtime child UUID', () => {
     // This test documents the invariant that swap_model must receive
     // the host agent ID (e.g. 'programming-helper'), because:
-    //   1. Config file: .agentdev/agent-configs/{hostId}.json
+    //   1. Config file: Claw user data agent-configs/{hostId}.json
     //   2. IPC delivery: listAgentRuntimes filters by runtime.agentId === hostId
     //   3. Runtime resolver: reads PROTOCLAW_PREBUILT_AGENT_ID === hostId
     //

@@ -49,7 +49,7 @@ import { SUMMARY_TUNE_MAX_TOKENS } from '../server/context-continuity/inprocess-
 import { executePlainCallWithRotation, newPlainSessionId } from './plain-agent-rotation.js';
 import { mountPlainAgentBase } from './plain-agent-base.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
-import { resolveUserDataDir } from '../server/shared/constants.js';
+import { resolveUserDataDir, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, AGENT_USER_CONFIG_PATH } from '../server/shared/constants.js';
 import { upsertSessionIndexAt } from '../server/shared/session-access.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -263,19 +263,19 @@ async function main() {
     threadId: sessionId,
   });
 
-  // 1. 解析模型（metadata.json 的 modelPresets，可被 .agentdev/agent-configs/<id>.json 覆盖；
+  // 1. 解析模型（metadata.json 的 modelPresets，可被 用户数据目录 agent-configs/<id>.json 覆盖；
   //    与摘要轮共用同一解析链——见下方 resolveMainModel）
   const modelPresetRole = cleanValue(process.env.PROTOCLAW_MODEL_PRESET_ROLE) || 'default';
   const resolveMainModel = () => resolveAgentModelLLM(agentDir, modelPresetRole, {
-    userConfigPath: join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${definition.id}.json`),
+    userConfigPath: AGENT_USER_CONFIG_PATH(definition.id),
   })
-    // 无 preset 兜底链（与 prebuilt agent 同源）：config/default.json 的
+    // 无 preset 兜底链（与 prebuilt agent 同源）：用户数据目录 default.json 的
     // defaultModel（内联完整配置），无 preset 的 plain agent 借此完成构造。
-    || resolveGlobalDefaultLLM();
+    || resolveGlobalDefaultLLM(undefined, { configPath: MODEL_CONFIG_PATH, presetsPath: MODEL_PRESETS_PATH });
   const resolved = resolveMainModel();
   if (!resolved) {
     console.error(`[PlainAgent] 未解析到模型 preset，且无全局默认模型兜底。请配置 ${definition.metadataPath} 的 modelPresets.default，`);
-    console.error(`[PlainAgent] 或 .agentdev/agent-configs/${definition.id}.json（推荐，不入库），或 config/default.json 的 defaultModel。`);
+    console.error(`[PlainAgent] 或用户数据目录 agent-configs/${definition.id}.json（推荐，不入库），或 用户数据目录 default.json 的 defaultModel。`);
     process.exit(1);
   }
   console.error(`[PlainAgent] model preset => ${resolved.modelName}`);
@@ -287,7 +287,7 @@ async function main() {
   // 每次接力新实例，OAuth 凭证不冻结在启动时刻。
   const summaryLLMFactory = () => {
     const resolved = resolveAgentModelLLM(agentDir, 'system', {
-      userConfigPath: join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${definition.id}.json`),
+      userConfigPath: AGENT_USER_CONFIG_PATH(definition.id),
     }) || resolveMainModel();
     if (!resolved) return null;
     tuneMirrorLLM(resolved.llm, SUMMARY_TUNE_MAX_TOKENS, { forceMaxTokens: true, protocol: resolved.protocol });

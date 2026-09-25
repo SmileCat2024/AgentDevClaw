@@ -43,18 +43,18 @@ describe('readAgentModelPresets', () => {
   it('reads a workspace identity override from its host metadata registry', async () => {
     const rootDir = join(tmpdir(), `model-config-agent-${Date.now()}`);
     const agentDir = join(rootDir, 'prebuilt-agents', 'official', 'programming-helper');
-    const configDir = join(rootDir, '.agentdev', 'agent-configs');
+    const configPath = join(rootDir, 'agent-configs', 'coder.json');
     mkdirSync(agentDir, { recursive: true });
-    mkdirSync(configDir, { recursive: true });
+    mkdirSync(join(rootDir, 'agent-configs'), { recursive: true });
     writeFileSync(join(agentDir, 'metadata.json'), JSON.stringify({
       identities: [{ id: 'coder', modelPresets: { default: 'host-default' } }],
     }));
-    writeFileSync(join(configDir, 'coder.json'), JSON.stringify({
+    writeFileSync(configPath, JSON.stringify({
       modelPresets: { default: 'user-coder' },
     }));
 
     try {
-      assert.deepEqual(await readAgentModelPresets('coder', rootDir), { default: 'user-coder' });
+      assert.deepEqual(await readAgentModelPresets('coder', rootDir, { userConfigPath: configPath }), { default: 'user-coder' });
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }

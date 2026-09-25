@@ -8,12 +8,12 @@
 import { WeixinApiClient } from '@agentdevjs/weixin-bot';
 
 import {
-  PROJECT_QQBOT_CONFIG_PATH,
-  PROJECT_WEIXIN_CONFIG_PATH,
-  PROJECT_FEISHU_CONFIG_PATH,
-  PROJECT_WECOM_CONFIG_PATH,
-  PROJECT_ROKID_CONFIG_PATH,
-  PROJECT_IM_WORKSPACE_CONFIG_PATH,
+  APP_QQBOT_CONFIG_PATH,
+  APP_WEIXIN_CONFIG_PATH,
+  APP_FEISHU_CONFIG_PATH,
+  APP_WECOM_CONFIG_PATH,
+  APP_ROKID_CONFIG_PATH,
+  APP_IM_WORKSPACE_CONFIG_PATH,
 } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { getAgentRuntime, listAgentRuntimes, getManagedRuntimeKey } from '../shared/agent-access.js';
@@ -48,7 +48,7 @@ function serializeWeixinBindingState(state = null) {
       error: '',
       issuedAt: null,
       confirmedAt: null,
-      sourcePath: PROJECT_WEIXIN_CONFIG_PATH,
+      sourcePath: APP_WEIXIN_CONFIG_PATH,
     };
   }
 
@@ -61,7 +61,7 @@ function serializeWeixinBindingState(state = null) {
     error: state.error || '',
     issuedAt: state.issuedAt || null,
     confirmedAt: state.confirmedAt || null,
-    sourcePath: PROJECT_WEIXIN_CONFIG_PATH,
+    sourcePath: APP_WEIXIN_CONFIG_PATH,
   };
 }
 
@@ -117,32 +117,32 @@ export async function buildIMWorkspaceBundle(agentId = 'qqbot') {
       configured: !!weixinConfig.botToken,
       baseUrl: weixinConfig.baseUrl || '',
       loginTime: weixinConfig.loginTime || null,
-      sourcePath: PROJECT_WEIXIN_CONFIG_PATH,
+      sourcePath: APP_WEIXIN_CONFIG_PATH,
     },
     feishuConfig: {
       configured: !!feishuConfig.appId && !!feishuConfig.appSecret,
       appId: feishuConfig.appId || '',
       appSecret: feishuConfig.appSecret || '',
-      sourcePath: PROJECT_FEISHU_CONFIG_PATH,
+      sourcePath: APP_FEISHU_CONFIG_PATH,
     },
     wecomConfig: {
       configured: !!wecomConfig.botId && !!wecomConfig.secret,
       botId: wecomConfig.botId || '',
       secret: wecomConfig.secret || '',
-      sourcePath: PROJECT_WECOM_CONFIG_PATH,
+      sourcePath: APP_WECOM_CONFIG_PATH,
     },
     rokidConfig: {
       configured: !!rokidConfig.linkCode && !!rokidConfig.linkSecret,
       linkCode: rokidConfig.linkCode || '',
       linkSecret: rokidConfig.linkSecret || '',
       wsUrl: rokidConfig.wsUrl || 'wss://rcs.rokid.com/claw/ws/link',
-      sourcePath: PROJECT_ROKID_CONFIG_PATH,
+      sourcePath: APP_ROKID_CONFIG_PATH,
     },
     binding,
     sessions,
     receptionistSession,
-    qqSourcePath: PROJECT_QQBOT_CONFIG_PATH,
-    workspaceSourcePath: PROJECT_IM_WORKSPACE_CONFIG_PATH,
+    qqSourcePath: APP_QQBOT_CONFIG_PATH,
+    workspaceSourcePath: APP_IM_WORKSPACE_CONFIG_PATH,
     connectableSessions: buildConnectableSessions(phIndex),
   };
 }
@@ -169,7 +169,7 @@ function buildConnectableSessions(phIndex) {
 }
 
 export async function startWeixinBinding(agentId = 'qqbot') {
-  const client = new WeixinApiClient(PROJECT_WEIXIN_CONFIG_PATH);
+  const client = new WeixinApiClient(APP_WEIXIN_CONFIG_PATH);
   const qrcodeResponse = await client.getBotQrcode();
   const qrcodeUrl = WeixinApiClient.resolveQrcodeUrl(qrcodeResponse);
   const qrcodeDataUrl = await WeixinApiClient.buildQrcodeDataUrl(qrcodeResponse, { width: 320, margin: 2 });
@@ -188,7 +188,7 @@ export async function startWeixinBinding(agentId = 'qqbot') {
 
 export async function refreshWeixinBinding(agentId = 'qqbot') {
   const current = weixinBindingSessions.get(agentId) || null;
-  const client = new WeixinApiClient(PROJECT_WEIXIN_CONFIG_PATH);
+  const client = new WeixinApiClient(APP_WEIXIN_CONFIG_PATH);
   const persisted = normalizeWeixinConfig(client.getPersistedConfig());
 
   if (!current || !current.qrcodeId) {
@@ -251,7 +251,7 @@ export async function refreshWeixinBinding(agentId = 'qqbot') {
 }
 
 export async function clearWeixinBinding(agentId = 'qqbot') {
-  const client = new WeixinApiClient(PROJECT_WEIXIN_CONFIG_PATH);
+  const client = new WeixinApiClient(APP_WEIXIN_CONFIG_PATH);
   client.clearToken();
   weixinBindingSessions.delete(agentId);
   return serializeWeixinBindingState(null);

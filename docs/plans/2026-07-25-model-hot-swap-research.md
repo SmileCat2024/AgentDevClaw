@@ -3,7 +3,8 @@
 > **状态**：调研完成（v2 — 下游风险全面摸排），待讨论确认  
 > **日期**：2026-07-25  
 > **涉及仓库**：AgentDev（框架侧）、AgentDevClaw（产品侧）  
-> **结论**：技术可行，建议直接在框架侧实现 `Agent.setLLM()` 原生能力  
+> **结论**：本文的 setLLM 建议为调研意见，不代表当前框架 API 决策
+> **路径说明**：本文记录的 checkout 配置路径为调研时快照；当前应用模型与身份配置位于 Claw 用户数据目录，见应用配置边界计划。
 > **v2 变更**：新增 §4.0 引用拓扑全表、§4.2.2 ContextGuard 自动恢复机制、§4.9/4.10 子代理与 config.llm 分析、§8.0 风险优先级矩阵、§8.3 patch 链修正、§8.7/8.8 边界条件
 
 ---
@@ -55,7 +56,7 @@
 spawn run-prebuilt-agent.js (新子进程)
     ↓
 resolveAgentModelLLM(agentPath, 'default')
-    → 同步读取 config/presets.json + .agentdev/agent-configs/<agentId>.json
+    → 同步读取用户数据 presets.json + agent-configs/<agentId>.json
     → 调用框架的 createLLM(config) 创建 LLMClient 实例
     ↓
 new AgentClass({ llm: resolved.llm })
@@ -491,13 +492,13 @@ window.phToggleModelSlot = async () => {
 };
 ```
 
-PUT 只写 `.agentdev/agent-configs/<agentId>.json` 配置文件（`model-config.js:532-560`），不通知运行时。
+PUT 只写用户数据目录 `agent-configs/<agentId>.json` 配置文件（`model-config.js:532-560`），不通知运行时。
 
 **热切换后需要**：PUT handler 在写盘成功后，向运行中的 agent 子进程发 IPC `swap-model` 消息。
 
 **PUT 写盘与 resolveAgentModelLLM 读盘的一致性**：
 
-PUT 写入 `.agentdev/agent-configs/<agentId>.json`（`model-config.js:550-556`）。
+PUT 写入用户数据目录 `agent-configs/<agentId>.json`（`model-config.js:550-556`）。
 `resolveAgentModelLLM` 读取同一文件（`model-preset-resolver.js:121-127`），且用户配置优先于 metadata.json 默认值。
 
 因此 IPC handler 中重新调用 `resolveAgentModelLLM(agentPath, 'default')` 会读到 PUT 写入的新配置，保证一致性。

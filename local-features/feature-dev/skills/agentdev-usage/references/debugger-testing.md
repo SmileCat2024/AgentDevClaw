@@ -10,20 +10,7 @@
 
 ### 1. 配置 API
 
-`config/default.json`:
-```json
-{
-  "defaultModel": {
-    "provider": "openai",
-    "apiKey": "${OPENAI_API_KEY}",
-    "model": "gpt-4o-mini"
-  }
-}
-```
-
-```bash
-export OPENAI_API_KEY=sk-xxx
-```
+通过 Claw 工作台测试时，在工作台设置中配置模型；模型凭据保存在 Claw 用户数据目录。独立 Agent 测试需按其宿主的模型注入方式配置，避免把工作台凭据复制到项目目录。
 
 ### 2. 启动调试服务器
 

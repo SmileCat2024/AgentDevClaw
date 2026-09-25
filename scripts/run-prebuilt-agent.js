@@ -25,7 +25,7 @@ import { createIMBridge } from './runtime-im-bridge.js';
 import { handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
-import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
+import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH } from '../server/shared/constants.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
 
@@ -705,7 +705,7 @@ SessionLifecycle.prototype.start = async function () {
   // coder sessions keep a standalone model config under agent-configs/coder.json
   // even though they now live inside the programming-helper workspace.
   const modelOptions = this.runtime.sessionType === 'coder'
-    ? { userConfigPath: join(PROTOCLAW_ROOT, '.agentdev', 'agent-configs', 'coder.json') }
+    ? { userConfigPath: AGENT_USER_CONFIG_PATH('coder') }
     : {};
   // 启动解析是构造期一次性注入（agent 尚未创建）；运行期切换统一走
   // agent.setModel / setThinkingEffort，消费注入的 modelPresetResolver。

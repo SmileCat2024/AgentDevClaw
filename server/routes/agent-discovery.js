@@ -1,7 +1,7 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 import {
-  AGENTS_ROOT, HIDDEN_PREBUILT_AGENT_IDS, VIEWER_ORIGIN, PROJECT_ROOT, PH_STYLE_WORKSPACE_AGENT_IDS,
+  AGENTS_ROOT, HIDDEN_PREBUILT_AGENT_IDS, VIEWER_ORIGIN, PROJECT_ROOT, PH_STYLE_WORKSPACE_AGENT_IDS, AGENT_USER_CONFIG_PATH,
 } from '../shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe } from '../shared/fs-helpers.js';
@@ -114,7 +114,7 @@ export function createAgentDiscoveryModule(ctx) {
   }
 
   async function readAgentUserConfig(agentId) {
-    const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
+    const userConfigPath = AGENT_USER_CONFIG_PATH(agentId);
     return await readJsonSafe(userConfigPath, null);
   }
 

@@ -84,7 +84,7 @@ function failReady(message, featureName, error) {
  * Model resolution chain:
  * 1. STUDIO_MODEL_PRESET env override (explicit preset name)
  * 2. agent-studio per-agent preset (metadata.json + user agent-config override)
- * 3. global default model: inline defaultModel in config/default.json, built
+ * 3. global default model: inline defaultModel in the Claw user data default.json, built
  *    via createLLM — the same path BasicAgent workspaces (programming-helper
  *    et al.) use when no preset is configured
  * 4. legacy: match a preset by model name (for defaultModel entries that only
@@ -360,7 +360,7 @@ async function main() {
     ? (resolveAgentModelLLM(dirname(runtimePlan.metadataPath), 'default') || resolveRuntimeLLM())
     : resolveRuntimeLLM();
   if (!resolvedLLM) {
-    failReady('没有可用的模型预设：请为 agent-studio 配置模型预设，或设置 config/default.json 的全局默认模型。');
+    failReady('没有可用的模型预设：请为 agent-studio 配置模型预设，或设置 Claw 用户数据目录 default.json 的全局默认模型。');
     return;
   }
 

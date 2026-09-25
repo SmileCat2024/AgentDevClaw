@@ -20,7 +20,7 @@ import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { ConversationExportFeature } from '../../../local-features/dist/conversation-export/src/index.js';
 import { getIMChannelLabel } from '../../../server/shared/im-channels.js';
-import { resolveUserDataDir } from '../../../server/shared/constants.js';
+import { resolveUserDataDir, APP_QQBOT_CONFIG_PATH, APP_WEIXIN_CONFIG_PATH, APP_ROKID_CONFIG_PATH, APP_IM_WORKSPACE_CONFIG_PATH } from '../../../server/shared/constants.js';
 import { internalAuthHeaders } from '../../../server/shared/internal-auth.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
@@ -29,7 +29,6 @@ const __dirname = dirname(__filename);
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
-const PROTOCLAW_ROOT = join(__dirname, '..', '..', '..');
 const SERVER_ORIGIN = `http://127.0.0.1:${process.env.PORT || 1420}`;
 
 // 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
@@ -48,26 +47,17 @@ function readSystemFeatureConfig() {
   }
 }
 
-const DEFAULT_QQBOT_CONFIG_CANDIDATES = [
-  join(PROTOCLAW_ROOT, '.agentdev', 'qqbot.config.json'),
-  join(PROTOCLAW_ROOT, '..', 'AgentDev', 'config', 'qqbot.config.json'),
-];
-const DEFAULT_WEIXIN_CONFIG_CANDIDATES = [
-  join(PROTOCLAW_ROOT, '.agentdev', 'weixin-bot.config.json'),
-];
-const DEFAULT_ROKID_CONFIG_CANDIDATES = [
-  join(PROTOCLAW_ROOT, '.agentdev', 'rokid.config.json'),
-];
-const DEFAULT_IM_WORKSPACE_CONFIG_CANDIDATES = [
-  join(PROTOCLAW_ROOT, '.agentdev', 'im-workspace.config.json'),
-];
+const DEFAULT_QQBOT_CONFIG_PATH = APP_QQBOT_CONFIG_PATH;
+const DEFAULT_WEIXIN_CONFIG_PATH = APP_WEIXIN_CONFIG_PATH;
+const DEFAULT_ROKID_CONFIG_PATH = APP_ROKID_CONFIG_PATH;
+const DEFAULT_IM_WORKSPACE_CONFIG_PATH = APP_IM_WORKSPACE_CONFIG_PATH;
 
 function resolveQQBotConfigPath(explicitPath) {
   if (explicitPath) {
     return explicitPath;
   }
 
-  return DEFAULT_QQBOT_CONFIG_CANDIDATES.find(path => existsSync(path));
+  return DEFAULT_QQBOT_CONFIG_PATH;
 }
 
 function resolveWeixinConfigPath(explicitPath) {
@@ -75,7 +65,7 @@ function resolveWeixinConfigPath(explicitPath) {
     return explicitPath;
   }
 
-  return DEFAULT_WEIXIN_CONFIG_CANDIDATES.find(path => existsSync(path)) || DEFAULT_WEIXIN_CONFIG_CANDIDATES[0];
+  return DEFAULT_WEIXIN_CONFIG_PATH;
 }
 
 function resolveRokidConfigPath(explicitPath) {
@@ -83,7 +73,7 @@ function resolveRokidConfigPath(explicitPath) {
     return explicitPath;
   }
 
-  return DEFAULT_ROKID_CONFIG_CANDIDATES.find(path => existsSync(path)) || DEFAULT_ROKID_CONFIG_CANDIDATES[0];
+  return DEFAULT_ROKID_CONFIG_PATH;
 }
 
 function resolveIMWorkspaceConfigPath(explicitPath) {
@@ -91,7 +81,7 @@ function resolveIMWorkspaceConfigPath(explicitPath) {
     return explicitPath;
   }
 
-  return DEFAULT_IM_WORKSPACE_CONFIG_CANDIDATES.find(path => existsSync(path)) || DEFAULT_IM_WORKSPACE_CONFIG_CANDIDATES[0];
+  return DEFAULT_IM_WORKSPACE_CONFIG_PATH;
 }
 
 function readIMWorkspaceConfig(configPath) {

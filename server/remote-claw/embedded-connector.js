@@ -1,9 +1,8 @@
 import { existsSync, readFileSync, promises as fs } from 'fs';
-import path from 'path';
 import { createHash } from 'crypto';
 import {
   APP_ORIGIN,
-  PROJECT_ROOT,
+  REMOTE_CLAW_CONFIG_PATH,
   VIEWER_ORIGIN,
 } from '../shared/constants.js';
 import {
@@ -14,7 +13,7 @@ import { submitUserTurn } from '../shared/user-turn.js';
 const DEFAULT_HEARTBEAT_MS = 15_000;
 const DEFAULT_SNAPSHOT_MS = 5_000;
 const DEFAULT_COMMAND_MS = 2_000;
-const PROJECT_REMOTE_CLAW_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'remote-claw.json');
+const REMOTE_CLAW_CONFIG_FILE = REMOTE_CLAW_CONFIG_PATH;
 
 export function startEmbeddedRemoteClawConnector(ctx) {
   const config = loadRemoteClawConfig();
@@ -493,7 +492,7 @@ function cleanUrl(value) {
 }
 
 function loadRemoteClawConfig() {
-  const fileConfig = readJsonIfExists(PROJECT_REMOTE_CLAW_CONFIG_PATH) || {};
+  const fileConfig = readJsonIfExists(REMOTE_CLAW_CONFIG_FILE) || {};
   const relayUrl = cleanUrl(process.env.REMOTE_CLAW_RELAY_URL) || cleanUrl(fileConfig.relayUrl);
   const token = cleanText(process.env.REMOTE_CLAW_CONNECTOR_TOKEN)
     || cleanText(fileConfig.connectorToken)
@@ -515,7 +514,7 @@ function loadRemoteClawConfig() {
     heartbeatMs: numberOption(process.env.REMOTE_CLAW_HEARTBEAT_MS, fileConfig.heartbeatMs, DEFAULT_HEARTBEAT_MS),
     snapshotMs: numberOption(process.env.REMOTE_CLAW_SNAPSHOT_MS, fileConfig.snapshotMs, DEFAULT_SNAPSHOT_MS),
     commandMs: numberOption(process.env.REMOTE_CLAW_COMMAND_MS, fileConfig.commandMs, DEFAULT_COMMAND_MS),
-    configPath: existsSync(PROJECT_REMOTE_CLAW_CONFIG_PATH) ? PROJECT_REMOTE_CLAW_CONFIG_PATH : null,
+    configPath: existsSync(REMOTE_CLAW_CONFIG_FILE) ? REMOTE_CLAW_CONFIG_FILE : null,
   };
 }
 

@@ -5,7 +5,7 @@
  * 任务精准、直接执行完」的自主场景裁剪。coder 不再是独立工作空间：
  * 由编程小助手 agent.js 的 resolveAgentClass 按 sessionType='coder' 分派
  * 到本类，会话数据、线程与配置仍与主身份分离（模型配置读
- * .agentdev/agent-configs/coder.json）。
+ * 用户数据目录 agent-configs/coder.json）。
  *
  * - 保留执行类工具链（todo / force-continuation / websearch /
  *   memory / shell / image-reader / lsp / context-rotation-trigger / github），

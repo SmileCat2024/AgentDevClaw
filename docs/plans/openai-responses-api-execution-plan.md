@@ -192,9 +192,9 @@ export function createOpenAIResponsesLLM(...): OpenAIResponsesLLM;
 
 ### 5.2 Claw 预设与 UI
 
-#### 5.2.1 `config/presets.json`
+#### 5.2.1 模型预设配置
 
-文件：[`config/presets.json`](D:/code/AgentDevClaw/config/presets.json)
+当前配置文件位于 Claw 用户数据目录 `presets.json`；历史实现曾使用仓库 `config/presets.json`。
 
 修改点：
 

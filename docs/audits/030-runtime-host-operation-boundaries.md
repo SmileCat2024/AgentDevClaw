@@ -61,8 +61,8 @@
 | Host | `GET/PUT /protoclaw/model_config` | 无 | 用户模型配置文件 + presets 文件 | 全局本地配置，不绑定焦点 |
 | Host | `GET/PUT /protoclaw/speech_model_config` | 无 | 用户模型配置文件 | 全局本地配置 |
 | Host | `POST /protoclaw/speech_to_text` | 无 | 用户配置 + 当前 Claw 到配置的 ASR provider | 本地宿主代理，非 Runtime |
-| Host | `GET/PUT /protoclaw/agent_process_mode` | `agentId` | 项目 `.agentdev/agent-configs/<agentId>.json` + metadata | 显式 Agent 配置，不是页面焦点 |
-| Host | `GET/PUT /protoclaw/agent_model_presets` | `agentId` | metadata + 项目 Agent config | 显式 Agent 配置 |
+| Host | `GET/PUT /protoclaw/agent_process_mode` | `agentId` | Claw 用户数据中的 `agent-configs/<agentId>.json`（默认根目录 `~/.agentdev/AgentDevClaw/`） + metadata | 显式 Agent 配置，不是页面焦点 |
+| Host | `GET/PUT /protoclaw/agent_model_presets` | `agentId` | metadata + Claw 用户数据 Agent config | 显式 Agent 配置 |
 | Host | `POST /protoclaw/dispatch/schedules` | schedule target fields | 用户 dispatch-schedules.json + 宿主调度器 | 保留已有 programming-helper 默认；不来自焦点 |
 | Global | `GET /protoclaw/dispatch/schedules` | 无 | 用户 dispatch-schedules.json | 全局调度注册表 |
 | Global | `DELETE /protoclaw/dispatch/schedules/:id` | schedule id | 用户 dispatch-schedules.json + 宿主调度器 | 全局 schedule owner |

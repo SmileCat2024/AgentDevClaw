@@ -23,7 +23,7 @@
 ## 查设计决策
 
 - [adr/](adr/) — 架构决策记录（编号递增；改动相关领域前先读对应篇）
-- [plans/](plans/) — 设计与执行计划（SSE 改造、group-chat 系列、compact/trim、IM 渠道转接、CLI 重设计、dsh 差异化战略等；含悬置域 Flow 系列与 ACP 适配器设计）
+- [plans/](plans/) — 设计与执行计划（[应用配置与用户数据边界收敛](plans/2026-09-25-app-config-and-data-boundaries.md)、SSE 改造、group-chat 系列、compact/trim、IM 渠道转接、CLI 重设计、dsh 差异化战略等；含悬置域 Flow 系列与 ACP 适配器设计）
 
 ## 排查问题
 

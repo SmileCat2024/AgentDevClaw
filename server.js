@@ -29,6 +29,7 @@ import { setupUsageRoutes } from './server/usage-ledger.js';
 import { authMiddleware, registerAuthRoutes, getInternalAuthToken } from './server/auth.js';
 import { securityHeadersMiddleware } from './server/shared/security-headers.js';
 import { createServiceLifecycle } from './server/service-lifecycle.js';
+import { migrateLegacyAppConfig } from './server/app-config-migration.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
 import {
@@ -37,13 +38,14 @@ import {
   VIEWER_ORIGIN,
   USER_DATA_ROOT,
   PREBUILT_SESSIONS_ROOT, PREBUILT_WORKSPACES_ROOT,
-  PROJECT_QQBOT_CONFIG_PATH, PROJECT_WEIXIN_CONFIG_PATH,
-  PROJECT_FEISHU_CONFIG_PATH, PROJECT_WECOM_CONFIG_PATH,
-  PROJECT_IM_WORKSPACE_CONFIG_PATH,
+  APP_QQBOT_CONFIG_PATH, APP_WEIXIN_CONFIG_PATH,
+  APP_FEISHU_CONFIG_PATH, APP_WECOM_CONFIG_PATH,
+  APP_IM_WORKSPACE_CONFIG_PATH,
   FEATURE_REPOSITORY_ROOT, USER_FEATURE_REPOSITORY_ROOT,
   FEATURE_MANIFEST_NAME, GROUP_CHATS_ROOT,
   WORKSPACE_SESSION_AGENT_IDS, HIDDEN_PREBUILT_AGENT_IDS,
-  PROJECT_DOCSET_SUBPATH, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH,
+  PROJECT_DOCSET_SUBPATH, APP_CONFIG_ROOT, DEFAULT_MODEL_CONFIG_TEMPLATE_PATH,
+  MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, REMOTE_CLAW_CONFIG_PATH,
   APP_ORIGIN, resolveInstanceUdsPath,
 } from './server/shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log, getAssemblyWorkspaceDir, normalizeClientAgentId, parseListField } from './server/shared/string-helpers.js';
@@ -179,7 +181,7 @@ const clawMcp = new ClawMCPServer();
 const tunnelManager = createTunnelManager();
 let remoteClawConnector = null;
 let remoteClawContext = null;
-const PROJECT_REMOTE_CLAW_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'remote-claw.json');
+const REMOTE_CLAW_CONFIG_FILE = REMOTE_CLAW_CONFIG_PATH;
 
 // Authentication routes are public only for status/login; every existing
 // API/control endpoint is protected by the middleware below. Internal runtime
@@ -1351,15 +1353,15 @@ app.use((error, req, res, _next) => {
 
 async function readRemoteClawConfig() {
   try {
-    return await readJsonSafe(PROJECT_REMOTE_CLAW_CONFIG_PATH, {});
+    return await readJsonSafe(REMOTE_CLAW_CONFIG_FILE, {});
   } catch {
     return {};
   }
 }
 
 async function writeRemoteClawConfig(config) {
-  await ensureDir(path.dirname(PROJECT_REMOTE_CLAW_CONFIG_PATH));
-  await fs.writeFile(PROJECT_REMOTE_CLAW_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  await ensureDir(path.dirname(REMOTE_CLAW_CONFIG_FILE));
+  await fs.writeFile(REMOTE_CLAW_CONFIG_FILE, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 }
 
 function sanitizeRemoteClawConfig(config = {}) {
@@ -1493,20 +1495,35 @@ process.on('SIGINT', () => void shutdown(0));
 process.on('SIGTERM', () => void shutdown(0));
 
 async function main() {
+  // Move legacy app settings before any runtime or route can read the new paths.
+  try {
+    const migration = await migrateLegacyAppConfig({ legacyRoot: PROJECT_ROOT, userDataRoot: USER_DATA_ROOT });
+    for (const label of migration.migrated) {
+      log('server', `Migrated legacy app config: ${label}`);
+    }
+    for (const label of migration.skipped) {
+      log('server', `Kept existing user app config: ${label}`);
+    }
+    for (const { label, error } of migration.errors) {
+      log('server', `Failed to migrate legacy app config ${label}: ${error.message}`, 'warn');
+    }
+  } catch (err) {
+    log('server', `Legacy app config migration failed: ${err.message}`, 'warn');
+  }
+
   await viewerWorker.start();
 
-  // Ensure config directory and essential files exist (config/ is gitignored)
+  // Initialize user-owned settings from the immutable application template.
   try {
-    await ensureDir(path.join(__dirname, 'config'));
-    const exampleConfigPath = path.join(__dirname, 'config', 'default.example.json');
+    await ensureDir(APP_CONFIG_ROOT);
     if (!existsSync(MODEL_CONFIG_PATH)) {
-      const example = await readJsonSafe(exampleConfigPath, null);
+      const example = await readJsonSafe(DEFAULT_MODEL_CONFIG_TEMPLATE_PATH, null);
       await writeModelConfig(example || { defaultModel: {}, agent: {} });
-      log('server', 'Created config/default.json from template');
+      log('server', `Created ${MODEL_CONFIG_PATH} from template`);
     }
     if (!existsSync(MODEL_PRESETS_PATH)) {
       await writeModelPresetsFile({ providers: [], presets: [] });
-      log('server', 'Created config/presets.json');
+      log('server', `Created ${MODEL_PRESETS_PATH}`);
     }
   } catch (err) {
     log('server', `config init failed: ${err.message}`, 'warn');

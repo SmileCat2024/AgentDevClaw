@@ -8,12 +8,12 @@ import path from 'path';
 import { promises as fs } from 'fs';
 
 import {
-  PROJECT_QQBOT_CONFIG_PATH,
-  PROJECT_WEIXIN_CONFIG_PATH,
-  PROJECT_FEISHU_CONFIG_PATH,
-  PROJECT_WECOM_CONFIG_PATH,
-  PROJECT_ROKID_CONFIG_PATH,
-  PROJECT_IM_WORKSPACE_CONFIG_PATH,
+  APP_QQBOT_CONFIG_PATH,
+  APP_WEIXIN_CONFIG_PATH,
+  APP_FEISHU_CONFIG_PATH,
+  APP_WECOM_CONFIG_PATH,
+  APP_ROKID_CONFIG_PATH,
+  APP_IM_WORKSPACE_CONFIG_PATH,
 } from '../shared/constants.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import { readJson, ensureDir } from '../shared/fs-helpers.js';
@@ -139,7 +139,7 @@ export function getPortalAgentDisplayName(channelId) {
 
 export async function readProjectQQBotConfig() {
   try {
-    const data = await readJson(PROJECT_QQBOT_CONFIG_PATH);
+    const data = await readJson(APP_QQBOT_CONFIG_PATH);
     return normalizeQQBotConfig(data);
   } catch {
     return normalizeQQBotConfig({});
@@ -148,14 +148,14 @@ export async function readProjectQQBotConfig() {
 
 export async function writeProjectQQBotConfig(rawConfig) {
   const config = normalizeQQBotConfig(rawConfig);
-  await ensureDir(path.dirname(PROJECT_QQBOT_CONFIG_PATH));
-  await fs.writeFile(PROJECT_QQBOT_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  await ensureDir(path.dirname(APP_QQBOT_CONFIG_PATH));
+  await fs.writeFile(APP_QQBOT_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
   return config;
 }
 
 export async function readProjectWeixinConfig() {
   try {
-    const data = await readJson(PROJECT_WEIXIN_CONFIG_PATH);
+    const data = await readJson(APP_WEIXIN_CONFIG_PATH);
     return normalizeWeixinConfig(data);
   } catch {
     return normalizeWeixinConfig({});
@@ -164,7 +164,7 @@ export async function readProjectWeixinConfig() {
 
 export async function readProjectFeishuConfig() {
   try {
-    const data = await readJson(PROJECT_FEISHU_CONFIG_PATH);
+    const data = await readJson(APP_FEISHU_CONFIG_PATH);
     return normalizeFeishuConfig(data);
   } catch {
     return normalizeFeishuConfig({});
@@ -173,14 +173,14 @@ export async function readProjectFeishuConfig() {
 
 export async function writeProjectFeishuConfig(rawConfig) {
   const config = normalizeFeishuConfig(rawConfig);
-  await ensureDir(path.dirname(PROJECT_FEISHU_CONFIG_PATH));
-  await fs.writeFile(PROJECT_FEISHU_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  await ensureDir(path.dirname(APP_FEISHU_CONFIG_PATH));
+  await fs.writeFile(APP_FEISHU_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
   return config;
 }
 
 export async function readProjectWecomConfig() {
   try {
-    const data = await readJson(PROJECT_WECOM_CONFIG_PATH);
+    const data = await readJson(APP_WECOM_CONFIG_PATH);
     return normalizeWecomConfig(data);
   } catch {
     return normalizeWecomConfig({});
@@ -189,14 +189,14 @@ export async function readProjectWecomConfig() {
 
 export async function writeProjectWecomConfig(rawConfig) {
   const config = normalizeWecomConfig(rawConfig);
-  await ensureDir(path.dirname(PROJECT_WECOM_CONFIG_PATH));
-  await fs.writeFile(PROJECT_WECOM_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  await ensureDir(path.dirname(APP_WECOM_CONFIG_PATH));
+  await fs.writeFile(APP_WECOM_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
   return config;
 }
 
 export async function readProjectRokidConfig() {
   try {
-    const data = await readJson(PROJECT_ROKID_CONFIG_PATH);
+    const data = await readJson(APP_ROKID_CONFIG_PATH);
     return normalizeRokidConfig(data);
   } catch {
     return normalizeRokidConfig({});
@@ -205,14 +205,14 @@ export async function readProjectRokidConfig() {
 
 export async function writeProjectRokidConfig(rawConfig) {
   const config = normalizeRokidConfig(rawConfig);
-  await ensureDir(path.dirname(PROJECT_ROKID_CONFIG_PATH));
-  await fs.writeFile(PROJECT_ROKID_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  await ensureDir(path.dirname(APP_ROKID_CONFIG_PATH));
+  await fs.writeFile(APP_ROKID_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
   return config;
 }
 
 export async function readProjectIMWorkspaceConfig() {
   try {
-    const data = await readJson(PROJECT_IM_WORKSPACE_CONFIG_PATH);
+    const data = await readJson(APP_IM_WORKSPACE_CONFIG_PATH);
     return normalizeIMWorkspaceConfig(data);
   } catch {
     return normalizeIMWorkspaceConfig({});
@@ -221,8 +221,8 @@ export async function readProjectIMWorkspaceConfig() {
 
 export async function writeProjectIMWorkspaceConfig(rawConfig) {
   const config = normalizeIMWorkspaceConfig(rawConfig);
-  await ensureDir(path.dirname(PROJECT_IM_WORKSPACE_CONFIG_PATH));
-  await fs.writeFile(PROJECT_IM_WORKSPACE_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  await ensureDir(path.dirname(APP_IM_WORKSPACE_CONFIG_PATH));
+  await fs.writeFile(APP_IM_WORKSPACE_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
   return config;
 }
 

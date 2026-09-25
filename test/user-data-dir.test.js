@@ -10,7 +10,18 @@ import assert from 'node:assert/strict';
 import os from 'os';
 import { join, resolve } from 'path';
 
-import { resolveUserDataDir, resolveInstanceUdsPath } from '../server/shared/constants.js';
+import {
+  APP_CONFIG_ROOT,
+  AGENT_CONFIGS_ROOT,
+  AGENT_USER_CONFIG_PATH,
+  MODEL_CONFIG_PATH,
+  MODEL_PRESETS_PATH,
+  MCP_GATEWAY_CONFIG_PATH,
+  REMOTE_CLAW_CONFIG_PATH,
+  APP_QQBOT_CONFIG_PATH,
+  resolveUserDataDir,
+  resolveInstanceUdsPath,
+} from '../server/shared/constants.js';
 
 describe('resolveUserDataDir', () => {
   it('falls back to the legacy home layout when the env var is unset', () => {
@@ -58,6 +69,19 @@ describe('resolveUserDataDir', () => {
  * 默认管道是全局固定名，两个实例的数据目录被 AGENTDEV_DATA_DIR 隔离后，
  * 运行时若仍连接同一条管道会注册进另一个实例的 ViewerWorker。
  */
+describe('application config paths', () => {
+  it('stores application-owned settings under the user data root', () => {
+    assert.equal(APP_CONFIG_ROOT, resolveUserDataDir());
+    assert.equal(AGENT_CONFIGS_ROOT, join(APP_CONFIG_ROOT, 'agent-configs'));
+    assert.equal(AGENT_USER_CONFIG_PATH('coder'), join(APP_CONFIG_ROOT, 'agent-configs', 'coder.json'));
+    assert.equal(MODEL_CONFIG_PATH, join(APP_CONFIG_ROOT, 'default.json'));
+    assert.equal(MODEL_PRESETS_PATH, join(APP_CONFIG_ROOT, 'presets.json'));
+    assert.equal(MCP_GATEWAY_CONFIG_PATH, join(APP_CONFIG_ROOT, 'mcp-gateway.json'));
+    assert.equal(REMOTE_CLAW_CONFIG_PATH, join(APP_CONFIG_ROOT, 'remote-claw.json'));
+    assert.equal(APP_QQBOT_CONFIG_PATH, join(APP_CONFIG_ROOT, 'qqbot.config.json'));
+  });
+});
+
 describe('resolveInstanceUdsPath', () => {
   const legacyPipe = process.platform === 'win32' ? '\\\\.\\pipe\\agentdev-viewer' : '/tmp/agentdev-viewer.sock';
 

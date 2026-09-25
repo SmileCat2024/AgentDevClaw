@@ -2,6 +2,8 @@
 
 > 本文档面向后续接手的 agent，目标是避免重复出现概念混淆。
 >
+> 模型配置路径现以 Claw 用户数据目录中的 `presets.json` 和 `agent-configs/<agentId>.json` 为准；本文中的 `config/presets.json` 路径均指配置角色，不代表当前文件位置。
+>
 > 读完本文后，应能回答：compact 有几种模式、走哪些路径、每条路径的完整数据流是什么、哪些概念容易搞混以及为什么。
 
 ---
@@ -239,7 +241,7 @@ resolveAgentModelLLM(agentDir, role)
 | `exploration` | 探索会话模型 | 探索子代理 |
 | `sub` | 子代理模型 | one-shot 子代理 |
 
-所有角色均可通过前端 UI 的模型预设面板修改（`PUT /protoclaw/agent_model_presets`），修改直接写入 `metadata.json`。因此 `modelPresets` 是**用户配置**而非代码常量。
+所有角色均可通过前端 UI 的模型预设面板修改（`PUT /protoclaw/agent_model_presets`），修改写入 Claw 用户数据目录的 `agent-configs/<agentId>.json`，覆盖 metadata 默认值。因此 `modelPresets` 是**用户配置**而非代码常量。
 
 #### 五条路径的具体解析方式
 

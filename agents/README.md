@@ -18,9 +18,9 @@ my-agent/
 
 模型配置优先级（与 prebuilt agent 一致）：
 
-1. `.agentdev/agent-configs/<name>.json` 的 `modelPresets`（推荐，不入库）
+1. 用户数据目录 `agent-configs/<name>.json`（默认根目录为 `~/.agentdev/AgentDevClaw/`） 的 `modelPresets`（推荐，不入库）
 2. `agents/<name>/metadata.json` 的 `modelPresets`
-3. 无 preset 时回退全局默认模型（`config/default.json` 的 `defaultModel`，与 prebuilt agent 同一兜底链）
+3. 无 preset 时回退全局默认模型（用户数据目录 `default.json`（默认根目录为 `~/.agentdev/AgentDevClaw/`） 的 `defaultModel`，与 prebuilt agent 同一兜底链）
 
 ## 使用
 
@@ -195,7 +195,7 @@ CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON
 ### 其他约定
 
 - `--keep-alive` 下会话已先落盘，Ctrl+C 优雅退出，之后可用 `--session <id>` 续接
-- 模型配置：`metadata.json` 的 `modelPresets`，推荐用 `.agentdev/agent-configs/<id>.json` 覆盖（不入库）；无 preset 时回退全局默认模型
+- 模型配置：`metadata.json` 的 `modelPresets`，推荐用 `~/.agentdev/AgentDevClaw/agent-configs/<id>.json` 覆盖（不入库）；无 preset 时回退全局默认模型
 - 现代独立 Agent 的 `metadata.json` 必须提供 `id`、相对 `entry`、`deployment.kind: "standalone"`；正式运行的 `features[]` 每项必须是精确版本的包名。
 - `claw run` 为现代 Agent 在 `~/.agentdev/AgentDevClaw/runtime-envs/<id>/<dependency-hash>/` 准备隔离依赖环境。Agent 源码不被修改；现代 metadata Agent 会复制到该生成环境，以便其 ESM import 与 Feature 包解析同一份 `node_modules`。
 - `--debug` 只接受与 Studio 项目关联的注册 Agent，且只将 Studio 中同包名的标准 Feature 项目覆盖为源码 `dist`；未覆盖依赖仍使用仓库 tgz。

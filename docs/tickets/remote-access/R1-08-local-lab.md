@@ -46,7 +46,7 @@ export const USER_DATA_ROOT = resolveUserDataDir();
 
 ### 有意共享、不随该变量迁移的路径（边界声明）
 
-- `PROJECT_ROOT/.agentdev/*.json`（qqbot / weixin / feishu / wecom / rokid / im-workspace / mcp-gateway / remote-claw 配置）与 `config/default.json` —— 项目级配置。同一 checkout 双实例共享即够用；需要彻底隔离时克隆第二个 checkout。
+- Claw 应用设置（模型、Agent 身份、IM、MCP Gateway、Remote Claw）当前均位于各自 `AGENTDEV_DATA_DIR` 对应的 Claw 用户数据根中，不随 `PROJECT_ROOT` 迁移。此条覆盖早期实验时“与 checkout 共享”的假设。
 - `.agentdev/agent-dev|feature-dev`（装配安装根，非 Claw 会话数据）。
 
 ## 2. 启动第二实例（实例 B）

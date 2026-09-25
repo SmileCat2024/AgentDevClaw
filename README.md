@@ -247,7 +247,13 @@ claw run <name> --goal "..." --format jsonl   # codex exec 风格会话事件流
 
 ```
 server.js                      Express 服务端入口
-config/default.json            模型配置（gitignored，首次通过 UI 或手动创建）
+~/.agentdev/AgentDevClaw/         默认用户数据与应用配置目录
+  default.json                  全局模型配置（首次启动从应用资源 config/default.example.json 初始化）
+  presets.json                  全局模型预设
+  agent-configs/                Agent 身份级模型与宿主设置
+  *-bot.config.json             IM 渠道凭据与线路配置
+  mcp-gateway.json              集中托管的 MCP 服务器配置
+  remote-claw.json              Embedded Remote Claw 设置
 bin/claw.mjs                   工作空间 CLI 工具
 bin/advclaw.mjs                全局启动器（advclaw 命令入口）
 bin/advclaw-update.mjs         自动更新模块（GitHub Releases）
