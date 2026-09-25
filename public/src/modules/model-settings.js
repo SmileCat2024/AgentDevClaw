@@ -112,7 +112,7 @@ function renderSettingsOverlay() {
   const tabBar = [
     '<div class="settings-tab-bar">',
     '<button class="settings-tab' + (tabText ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'text\')">',
-    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 2 0 0 1 2 2z"></path></svg>',
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"></path></svg>',
     (isZh ? '文本模型' : 'Text Model'),
     '</button>',
     '<button class="settings-tab' + (!tabText ? ' active' : '') + '" type="button" data-settings-tab="speech" onclick="switchSettingsTab(this.dataset.settingsTab)">',
