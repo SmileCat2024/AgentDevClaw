@@ -34,12 +34,12 @@ describe('feature-registry: loadFeatureRegistry', () => {
     assert.ok(registry.features.length > 0);
     assert.ok(registry.capabilities.some(c => c.id === 'tools'));
     assert.deepEqual(registry.provenances, ['ecosystem', 'local', 'builtin', 'inline', 'packaged']);
-    // 功能类型词表（面板主分组轴）：四类有序，system 默认折叠
+    // 功能类型词表（面板主分组轴）：四类有序，默认全展开
     assert.deepEqual(registry.types, [
       { id: 'ability', collapsed: false },
       { id: 'governance', collapsed: false },
       { id: 'interface', collapsed: false },
-      { id: 'system', collapsed: true },
+      { id: 'system', collapsed: false },
     ]);
     assert.ok(registry.features.every(f => registry.types.some(t => t.id === f.type)),
       'every entry carries a known type');

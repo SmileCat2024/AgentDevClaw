@@ -256,7 +256,7 @@ function renderFeaturesPanel() {
   const buildGroup = (group) => {
     const grid = '<div class="feature-grid">' + group.features.map(buildFeatureCard).join('') + '</div>';
     if (suppressHeaders) return grid;
-    // 用户操作过的组按偏好恢复；未操作过的按词表默认折叠态（system 折叠，其余展开）
+    // 用户操作过的组按偏好恢复；未操作过的按词表默认折叠态
     const isOpen = _featureGroupOpenPref.has(group.id)
       ? _featureGroupOpenPref.get(group.id)
       : !(fc && fc.typeCollapsedByDefault(group.id, catalog));

@@ -193,7 +193,7 @@ function enrichFeatureEntry(feature, catalog, runtime) {
 /**
  * 按功能类型分组（面板主分组轴，ADR 0017 决策 2 三次修订）：
  * ability（让 agent 会什么）/ governance（怎么管 agent）/
- * interface（怎么连 agent）/ system（宿主运转件，默认折叠）。
+ * interface（怎么连 agent）/ system（宿主运转件）。
  * 来源（bundled/installed）是过滤器不作分组轴。
  *
  * filter: 'all' 不过滤；'bundled' | 'installed' 按 entry.group 筛选。

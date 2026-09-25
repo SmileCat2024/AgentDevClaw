@@ -41,14 +41,14 @@ export const FEATURE_PROVENANCES = ['ecosystem', 'local', 'builtin', 'inline', '
  * 功能类型词表（面板主分组轴，ADR 0017 决策 2 三次修订）。
  * 轴 = 用户安装意图（"装它是为了什么"），单值；语义上回答三个问题：
  * 它让 agent 会了什么 / 它怎么管 agent / 它怎么连 agent。
- * system 是宿主运转件（给体系看的），默认折叠。
+ * system 是宿主运转件（给体系看的）。
  * 来源（默认内置 bundled / 已安装 installed）不作分组轴——是面板右上角的过滤器。
  */
 export const FEATURE_TYPES = [
   { id: 'ability', collapsed: false },
   { id: 'governance', collapsed: false },
   { id: 'interface', collapsed: false },
-  { id: 'system', collapsed: true },
+  { id: 'system', collapsed: false },
 ];
 
 /**
