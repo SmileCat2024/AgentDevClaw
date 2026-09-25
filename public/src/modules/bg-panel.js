@@ -17,9 +17,9 @@
  *
  * 图标徽标（rail-bg-badge，与「交互页面」徽标同款）：显示当前运行中的
  * 后台任务数。面板打开时由 SSE 事件流（tasks 真值）驱动；面板关闭时由
- * 独立的 3s 轮询驱动——读服务端事件镜像（/feature-comms/events，afterEventId
- * 增量游标重放，纯 server 内存读、无 runtime IPC），每任务取最后一条事件
- * 的 status 即当前状态。两条路径互斥不双写（source 存活时轮询让位）。
+ * 独立的 3s 轮询驱动——直接走权威的 list 请求面计数（不用事件镜像重放：
+ * 镜像环形缓冲仅 256 条，活动会话很快滚满，游标重放会永久 resync）。
+ * 两条路径互斥不双写（source 存活时轮询让位）。
  *
  * 视觉对齐右侧面板既有设计语言（feature-panel-section 卡片、
  * bash-progress 系列观感、项目等宽字体栈与状态色变量）。
@@ -73,9 +73,7 @@
   /** 卡片骨架（挖空时长/输出尾巴后的 HTML）：判断结构是否变化。 */
   let lastSkeleton = '';
 
-  /** 徽标轮询状态（面板关闭态）：镜像事件重放，只算运行数，不碰面板 tasks。 */
-  const badgeTasks = new Map(); // taskId -> status（最后一条事件胜出）
-  let badgeCursor = 0;
+  /** 徽标轮询状态（面板关闭态）：list 请求面计数，不碰面板 tasks。 */
   let badgeAddressKey = '';
   let badgePollInFlight = false;
   let badgeTimer = null;
@@ -466,10 +464,10 @@
   }
 
   /**
-   * 面板关闭态的徽标数据源：增量读服务端事件镜像并重放（每任务取最后
-   * 一条事件的 status）。面板打开（source 存活）时让位给 SSE 事件流。
-   * 寻址与面板同源（currentAddressing）：会话切换即重置游标并先隐藏，
-   * 避免旧会话数字滞留；404（通道未声明）= 会话无后台任务通道，归零。
+   * 面板关闭态的徽标数据源：权威 list 请求面计数运行中任务。面板打开
+   * （source 存活）时让位给 SSE 事件流。寻址与面板同源（currentAddressing）：
+   * 会话切换即先隐藏，避免旧会话数字滞留；通道未声明 / runtime 未连接
+   * （会话无后台任务通道或已停止）归零。
    */
   async function _pollBadge() {
     if (badgePollInFlight || source) return;
@@ -477,51 +475,24 @@
     const key = addressing ? `${addressing.agentId}::${addressing.sessionId}` : '';
     if (key !== badgeAddressKey) {
       badgeAddressKey = key;
-      badgeCursor = 0;
-      badgeTasks.clear();
       _setBadge(0);
       if (!key) return;
     }
     badgePollInFlight = true;
     try {
-      // 至多两轮：resync（游标滑出 256 条环形缓冲）后从 0 全量重放一次。
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const params = new URLSearchParams({
-          agentId: addressing.agentId,
-          sessionId: addressing.sessionId,
-          featureId: FEATURE_ID,
-          channelId: CHANNEL_ID,
-          afterEventId: String(badgeCursor),
-        });
-        const res = await fetch(`/protoclaw/feature-comms/events?${params.toString()}`);
-        if (!res.ok) {
-          if (res.status === 404) { badgeTasks.clear(); _setBadge(0); }
-          return; // 其他错误：保持现值，下轮再试
-        }
-        const body = await res.json().catch(() => null);
-        if (!body || body.ok !== true) return;
-        if (body.resync === true) {
-          badgeCursor = 0;
-          badgeTasks.clear();
-          continue;
-        }
-        for (const event of Array.isArray(body.events) ? body.events : []) {
-          if (Number.isFinite(event.eventId) && event.eventId > badgeCursor) {
-            badgeCursor = event.eventId;
-          }
-          const data = event.data;
-          // 与 applyTask 同款守卫：非任务快照（无 id/status）的事件不参与计数
-          if (data && typeof data.id === 'string' && typeof data.status === 'string') {
-            badgeTasks.set(data.id, data.status);
-          }
-        }
+      const result = await channelRequest('list', {});
+      if (result.ok === true && Array.isArray(result.tasks)) {
         let running = 0;
-        for (const status of badgeTasks.values()) {
-          if (status === 'running') running += 1;
+        for (const task of result.tasks) {
+          if (task && task.status === 'running') running += 1;
         }
         _setBadge(running);
-        return;
+      } else if (result.code === 'channel_not_declared'
+        || result.code === 'runtime_not_connected'
+        || result.code === 'runtime_stopped') {
+        _setBadge(0);
       }
+      // 其他错误（request_timeout 等）：保持现值，下轮再试
     } catch {
       // 瞬时网络错误：保持现值，下轮再试
     } finally {
