@@ -1,35 +1,23 @@
 /**
- * shell-bg-comms — 后台任务实时面板的 Feature 侧镜像。
+ * PanelShellFeature — 继承框架 ShellFeature，内建后台任务实时面板镜像
+ * （ADR-0018 feature-comms 通道的首个接入）。
  *
- * 职责（ADR-0018 feature-comms 通道的第一个真实接入）：
- * - 把 ShellFeature BgRegistry 的六类事件投影为通道事件（kind + 任务快照），
- *   面板经 /protoclaw/feature-comms/stream 订阅渲染；
- * - 以 onHostRequest 面向面板提供 list / status / kill / report 请求面（Host 请求
- *   经 server → runtime IPC → 本方法，见 run-prebuilt-agent.js）。
+ * 与框架包的关系同 ControlledTodoFeature：框架生态包不感知宿主协议，
+ * Claw 侧以继承增强并整体替换原版装配。本类不改任务引擎行为，只做两件事：
+ * - 把 BgRegistry 六类事件投影为 shell-bg 通道事件（面板经
+ *   /protoclaw/feature-comms/stream 订阅渲染）；
+ * - 以 onHostRequest 面向面板提供 list / status / kill / report 请求面
+ *   （Host 请求经 server → runtime IPC → 此处，见 run-prebuilt-agent.js）。
  *
  * 链路是尽力而为的镜像面：发布失败静默吞掉（bg_status 仍是任务状态真值），
  * 不影响后台任务引擎本身。
  */
 
+import { ShellFeature } from '@agentdevjs/shell-feature';
+import type { BgObserverEvent, ShellFeatureConfig } from '@agentdevjs/shell-feature';
 import { FeatureCommunicationClient } from '../../shared/src/feature-communication.js';
-import type { BgObserver, BgObserverEvent } from '@agentdevjs/shell-feature';
 
-/** BgRegistry 的结构子集（避免值级依赖框架包，仅类型导入）。 */
-interface BgRegistryLike {
-  snapshot(task: unknown): Record<string, unknown>;
-  list(): Array<Record<string, unknown>>;
-  get(task: string): unknown;
-  tail(task: unknown, chars: number): string;
-  kill(taskId: string, opts?: { graceful?: boolean; manual?: boolean }): boolean;
-  reportNow(taskId: string): boolean;
-}
-
-/** ShellFeature 的结构子集（宿主装配后回填引用）。 */
-export interface ShellFeatureLike {
-  getBgRegistry(): BgRegistryLike | null;
-}
-
-export interface ShellBgCommsConfig {
+export interface PanelShellFeatureConfig extends Omit<ShellFeatureConfig, 'bgObserver'> {
   agentId: string;
   sessionId: string;
   serverOrigin: string;
@@ -42,24 +30,28 @@ const STATUS_TAIL_CHARS = 4_000;
 /** 事件 / list 镜像附带的输出尾巴长度：面板纯事件驱动渲染，不另发请求。 */
 const MIRROR_TAIL_CHARS = 2_000;
 
-export class ShellBgCommsFeature {
-  readonly name = 'shell-bg-comms';
-  readonly description = '后台任务实时面板镜像（feature-comms 通道）';
-
+export class PanelShellFeature extends ShellFeature {
   private readonly client: FeatureCommunicationClient;
   private readonly channelId: string;
   private readonly channelTitle: string;
   private readonly channelDescription: string;
-  private shell: ShellFeatureLike | null = null;
   private declared = false;
 
-  constructor(config: ShellBgCommsConfig) {
+  constructor(config: PanelShellFeatureConfig) {
+    // bgObserver 由本类自持（箭头函数延迟解引用 this，super 时尚未初始化完），
+    // 不接受外部注入，因此 PanelShellFeatureConfig 用 Omit 排除该字段。
+    super({
+      ...config,
+      bgObserver: (event) => { void this.handleBgEvent(event); },
+    });
     this.channelId = config.channelId || 'shell-bg';
     this.channelTitle = config.title || '后台任务';
     this.channelDescription = config.description || 'bash_bg 后台任务实时状态镜像';
     this.client = new FeatureCommunicationClient(config.serverOrigin, {
       agentId: config.agentId,
       sessionId: config.sessionId,
+      // featureId 必须等于 feature name：IPC 分发按 agent.features.get(featureId)
+      // 查实例（run-prebuilt-agent.js），用 this.name 随继承自动对齐。
       featureId: this.name,
       channelId: this.channelId,
     });
@@ -69,24 +61,18 @@ export class ShellBgCommsFeature {
     this.declare().catch(() => {});
   }
 
-  /** 宿主装配点：agent.js 构造 ShellFeature 后回填引用（observer 之外，
-   * onHostRequest 也要经它拿 BgRegistry）。 */
-  attachShell(shell: ShellFeatureLike): void {
-    this.shell = shell;
-  }
-
   /**
-   * 传给 ShellFeature 构造配置的 bgObserver。事件投影为
+   * BgRegistry 观察事件入口（经构造注入的 bgObserver 触发）。事件投影为
    * { eventType: kind, data: BgTaskSnapshot } 通道事件；引擎已对 output
    * 做 1s 节流，这里不再叠加。
    */
-  readonly observer: BgObserver = (event: BgObserverEvent) => {
+  handleBgEvent(event: BgObserverEvent): void {
     void this.mirrorEvent(event);
-  };
+  }
 
   /** 面板请求面（server /request → runtime IPC → 此处）。 */
   async onHostRequest(requestType: string, payload: unknown): Promise<Record<string, unknown>> {
-    const registry = this.shell?.getBgRegistry() ?? null;
+    const registry = this.getBgRegistry();
     const body = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
     const taskId = String(body.taskId || '');
     switch (requestType) {
@@ -95,11 +81,11 @@ export class ShellBgCommsFeature {
           ok: true,
           tasks: registry
             ? registry.list().map((snap) => {
-                // list() 返回快照（非引擎内部任务对象）；尾巴要经 get 拿回
-                // 原始任务再取，直接把快照传给 tail 会炸（快照没有 chunks）。
-                const task = registry.get(String(snap.id));
-                return { ...snap, outputTail: task ? registry.tail(task, MIRROR_TAIL_CHARS) : '' };
-              })
+              // list() 返回快照（非引擎内部任务对象）；尾巴要经 get 拿回
+              // 原始任务再取，直接把快照传给 tail 会炸（快照没有 chunks）。
+              const task = registry.get(String(snap.id));
+              return { ...snap, outputTail: task ? registry.tail(task, MIRROR_TAIL_CHARS) : '' };
+            })
             : [],
         };
       case 'status': {
@@ -143,7 +129,7 @@ export class ShellBgCommsFeature {
   private async mirrorEvent(event: BgObserverEvent): Promise<void> {
     try {
       await this.ensureDeclared();
-      const registry = this.shell?.getBgRegistry() ?? null;
+      const registry = this.getBgRegistry();
       const data = registry && event.task
         ? { ...registry.snapshot(event.task), outputTail: registry.tail(event.task, MIRROR_TAIL_CHARS) }
         : { id: event.task?.id, kind: event.kind };

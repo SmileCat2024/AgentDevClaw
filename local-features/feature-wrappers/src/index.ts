@@ -8,3 +8,4 @@
  */
 export { ControlledTodoFeature } from './controlled-todo-feature.js';
 export { ContinuityAwareOpencodeBasic } from './continuity-aware-opencode-basic.js';
+export { PanelShellFeature } from './panel-shell-feature.js';

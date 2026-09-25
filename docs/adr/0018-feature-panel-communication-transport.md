@@ -55,9 +55,9 @@
 端到端链路，作为通道能力的活体验证：
 
 - **框架侧**（`AgentDev/packages/shell-feature`）：`BgRegistry` 新增 `observer` 配置（六类事件：registered / output / report / ready / finalized / tuned；output 按 1s 节流，终态不节流）+ `ShellFeature.getBgRegistry()` 访问器。
-- **镜像 Feature**（`local-features/shell-bg-comms`）：构造即声明 `shell-bg` 通道；observer 事件投影为 `publishEvent(kind, BgTaskSnapshot)`；`onHostRequest` 提供 `list` / `status`（含输出尾部）/ `kill`（graceful 透传，且恒为用户发起——`manual: true` 让引擎终止后补发"用户手动打断"通知：发起方不是模型，模型需要知情；工具路径 `bg_control` 的 kill 不通知，发起方已从工具结果收到回执）/ `report`（手动触发 `BgRegistry.reportNow`——与节拍/静默同款汇报与双节奏重置）。发布失败静默——`bg_status` 仍是任务状态真值。
+- **镜像 Feature**（`local-features/feature-wrappers/src/panel-shell-feature.ts` 的 `PanelShellFeature`，继承 `ShellFeature` 的增强子类，装配处整体替换原版——同 `ControlledTodoFeature` 模式）：构造即声明 `shell-bg` 通道（featureId=`shell`，即 feature name——IPC 分发按它在 runtime 内查实例）；观察事件投影为 `publishEvent(kind, BgTaskSnapshot)`；`onHostRequest` 提供 `list` / `status`（含输出尾部）/ `kill`（graceful 透传，且恒为用户发起——`manual: true` 让引擎终止后补发"用户手动打断"通知：发起方不是模型，模型需要知情；工具路径 `bg_control` 的 kill 不通知，发起方已从工具结果收到回执）/ `report`（手动触发 `BgRegistry.reportNow`——与节拍/静默同款汇报与双节奏重置）。发布失败静默——`bg_status` 仍是任务状态真值。
 - **消费面板**（`public/src/modules/bg-panel.js`）：右侧 rail "后台任务"面板，SSE 订阅渲染任务列表，输出查看与终止走请求面；会话切换守卫自动重订，面板取消激活自动拆订阅。
-- **装配**（`programming-helper/agent.js`）：`ShellBgCommsFeature` 持有 `runtimeIdentity`，`ShellFeature` 构造注入其 `observer`。
+- **装配**（`programming-helper/agent.js`）：单一挂载 `new PanelShellFeature({ workspaceDir, ...runtimeIdentity })`，`bgObserver` 由子类自持并经 `super()` 注入，不再旁挂第二个 feature。
 
 ## 备选方案（rejected）
 
@@ -93,6 +93,6 @@
 | Feature 侧 client | `local-features/shared/src/feature-communication.ts`（`FeatureCommunicationClient`） |
 | runtime IPC（onHostRequest 分发 + 进程退出清理） | `scripts/run-prebuilt-agent.js` |
 | 共享会话摘除清理 | `server/agent-lifecycle.js`（`removeSharedSession`） |
-| 首个接入 feature | `local-features/shell-bg-comms/` |
+| 首个接入 feature | `local-features/feature-wrappers/src/panel-shell-feature.ts`（`PanelShellFeature`） |
 | 首个消费面板 | `public/src/modules/bg-panel.js`（注册于 `app-ui.js`，接线于 `modules/debug-panel-host.js`） |
 | 框架观察面 | `AgentDev/packages/shell-feature/src/bg-core.ts`（observer）+ `src/index.ts`（`bgObserver` / `getBgRegistry`） |

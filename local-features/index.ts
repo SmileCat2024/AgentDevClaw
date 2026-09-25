@@ -11,7 +11,6 @@ export { GenerativeUISurfaceFeature } from './generative-ui/src/index.js';
 export { GitHubShellFeature } from './github/src/index.js';
 export { createGitHubShellPolicy, createGitHubShellAdapters, GITHUB_SHELL_NAME } from './github/src/github-shell.js';
 export { SessionReferenceFeature } from './session-reference/src/index.js';
-export { ShellBgCommsFeature } from './shell-bg-comms/src/index.js';
 export {
   createCapabilityShellTool,
   runCapabilityShellPipeline,

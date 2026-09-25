@@ -2,7 +2,7 @@
  * bg-panel.js — 后台任务实时面板（feature-comms 通道的消费端）。
  *
  * 数据链路（ADR-0018 首个真实接入）：
- *   BgRegistry 事件 → ShellBgCommsFeature（shell-bg-comms feature）
+ *   BgRegistry 事件 → PanelShellFeature（shell feature 内建镜像）
  *     → /protoclaw/feature-comms/publish（server store）
  *     → 本面板经 /protoclaw/feature-comms/stream（SSE）订阅渲染。
  *
@@ -31,7 +31,9 @@
 (function () {
   'use strict';
 
-  const FEATURE_ID = 'shell-bg-comms';
+  // 通道四元组的 featureId 必须等于 feature name（'shell'）：IPC 分发按它
+  // 在 runtime 内查 feature 实例（run-prebuilt-agent.js）。
+  const FEATURE_ID = 'shell';
   const CHANNEL_ID = 'shell-bg';
   const REFRESH_SESSION_WATCH_MS = 2_000;
   const ELAPSED_TICK_MS = 1_000;

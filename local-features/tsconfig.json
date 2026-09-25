@@ -42,8 +42,6 @@
     "./session-reference/src/**/*.ts",
     "./session-reference/test/**/*.ts",
     "./capability-shell/src/**/*.ts",
-    "./capability-shell/test/**/*.ts",
-    "./shell-bg-comms/src/**/*.ts",
-    "./shell-bg-comms/test/**/*.ts"
+    "./capability-shell/test/**/*.ts"
   ]
 }

@@ -7,12 +7,11 @@
 
 import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdevjs/core';
 import { MCPFeature } from '@agentdevjs/mcp';
-import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
+import { ControlledTodoFeature, ContinuityAwareOpencodeBasic, PanelShellFeature } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { StepRotatingModel } from '../../../features/step-rotating-model/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdevjs/audio-feedback-feature';
 import { MemoryFeature } from '@agentdevjs/memory-feature';
-import { ShellFeature } from '@agentdevjs/shell-feature';
 import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { ImageReaderFeature } from '@agentdevjs/image-reader-feature';
 import { fileURLToPath } from 'url';
@@ -25,7 +24,6 @@ import { ContextGuardFeature } from '../../../local-features/dist/context-guard/
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
 import { GitHubShellFeature } from '../../../local-features/dist/github/src/index.js';
 import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
-import { ShellBgCommsFeature } from '../../../local-features/dist/shell-bg-comms/src/index.js';
 import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import { PlaywrightShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import {
@@ -180,13 +178,10 @@ export class ProgrammingHelperAgent extends BasicAgent {
     this.use(new NonBlockingAudioFeedbackFeature());
     this.use(new WebSearchFeature());
     this.use(new MemoryFeature({ workspaceDir }));
-    // 后台任务实时面板（feature-comms 通道首个接入）：BgRegistry 事件镜像到
-    // shell-bg 通道，面板经 /protoclaw/feature-comms 订阅 + onHostRequest 请求。
-    const shellBgComms = new ShellBgCommsFeature(runtimeIdentity);
-    this.use(shellBgComms);
-    const shellFeature = new ShellFeature({ workspaceDir, bgObserver: shellBgComms.observer });
-    shellBgComms.attachShell(shellFeature);
-    this.use(shellFeature);
+    // 后台任务实时面板（feature-comms 通道首个接入）：PanelShellFeature
+    // 继承 ShellFeature 内建 shell-bg 通道镜像（继承替换，同 ControlledTodoFeature
+    // 模式），面板经 /protoclaw/feature-comms 订阅 + onHostRequest 请求。
+    this.use(new PanelShellFeature({ workspaceDir, ...runtimeIdentity }));
     this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
 
     this.use(new LspFeature({ workdir: workspaceDir, binDir: LSP_BIN_DIR }));
