@@ -18,6 +18,44 @@ import { provisionRuntimeEnvironment } from './provisioner.js';
 import { mountResolvedFeatures } from './loader.js';
 
 /**
+ * mounts（Map<runtimeName, {package, version}>）→ catalog 解析 + runtime plan。
+ * 启动挂载链、install-service（商店安装/环境重建/envReady 探测）三处共用，
+ * 保证 plan 构造（尤其 agent.id 格式与依赖集）严格同构——环境 hash 才一致。
+ * config 不参与 dependency hash，此函数不带配置值；挂载链在返回的 features
+ * 上按 agent 配置树补 config（见 mountUserConfiguredFeatures）。
+ */
+export async function buildUserMountPlan({ mounts, agentId, sessionType, catalogRoots }) {
+  const catalog = await scanFeatureCatalog(catalogRoots);
+  const features = [];
+  for (const [runtimeName, mount] of mounts) {
+    const archive = resolveCatalogPackage(catalog, {
+      packageName: mount.package,
+      version: mount.version,
+      allowLatest: false,
+    });
+    features.push({
+      package: mount.package,
+      version: archive.version,
+      runtimeName,
+      resolvedFrom: 'repository',
+      archivePath: archive.archivePath,
+      archiveDigest: archive.archiveDigest,
+      entry: archive.entry,
+      source: archive.source,
+    });
+  }
+  return {
+    catalog,
+    plan: {
+      schemaVersion: 1,
+      mode: 'release',
+      agent: { id: `${agentId}:${sessionType}:user-mounts` },
+      features,
+    },
+  };
+}
+
+/**
  * @param {object} agent 已构造完毕的 agent 实例（静态装配 + super 已完成）
  * @param {Map<string, {package: string, version: string, layerId: string}>} mounts
  * @param {{agentId: string, sessionType?: string, catalogRoots?: object, environmentRoot?: string}} options
@@ -36,36 +74,13 @@ export async function mountUserConfiguredFeatures(agent, mounts, {
   if (!(mounts instanceof Map) || mounts.size === 0) return [];
   if (!agentId) throw new Error('mountUserConfiguredFeatures requires agentId.');
 
-  const catalog = await scanFeatureCatalog(catalogRoots);
-  const features = [];
-  for (const [runtimeName, mount] of mounts) {
-    const archive = resolveCatalogPackage(catalog, {
-      packageName: mount.package,
-      version: mount.version,
-      allowLatest: false,
-    });
-    const configValue = agent.config?.features?.[runtimeName];
-    features.push({
-      package: mount.package,
-      version: archive.version,
-      runtimeName,
-      ...(configValue && typeof configValue === 'object' && Object.keys(configValue).length > 0
-        ? { config: configValue }
-        : {}),
-      resolvedFrom: 'repository',
-      archivePath: archive.archivePath,
-      archiveDigest: archive.archiveDigest,
-      entry: archive.entry,
-      source: archive.source,
-    });
+  const { plan } = await buildUserMountPlan({ mounts, agentId, sessionType, catalogRoots });
+  for (const feature of plan.features) {
+    const configValue = agent.config?.features?.[feature.runtimeName];
+    if (configValue && typeof configValue === 'object' && Object.keys(configValue).length > 0) {
+      feature.config = configValue;
+    }
   }
-
-  const plan = {
-    schemaVersion: 1,
-    mode: 'release',
-    agent: { id: `${agentId}:${sessionType}:user-mounts` },
-    features,
-  };
   const environment = await provisionRuntimeEnvironment({ plan, root: environmentRoot });
   const mounted = await mountResolvedFeatures(agent, plan, { environmentDir: environment.environmentDir });
   // $mount 的键是配置树里的 runtime name（配置值按它读取）。若包内 Feature 实例

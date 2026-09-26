@@ -572,7 +572,7 @@ setupOAuthCodexRoutes(app, express);
 setupProxyConfigRoutes(app, express);
 setupToolStateRoutes(app);
 setupFeatureCatalogRoutes(app);
-setupFeatureStoreRoutes(app);
+setupFeatureStoreRoutes(app, express);
 setupFeatureRepositoryRoutes(app, express);
 setupFlowRoutes(app, express, { readWorkspaceState, resolveAssemblyFeatureArchives });
 setupUsageRoutes(app, express);

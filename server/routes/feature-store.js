@@ -1,14 +1,17 @@
 /**
- * feature-store routes — 插件商店数据面（GET /api/feature-store/overview）
+ * feature-store routes — 插件商店数据面与安装执行面
  *
- * 聚合两端数据支撑"给 agent 加插件"面板：
+ * 数据面（GET /api/feature-store/overview）：聚合支撑"给 agent 加插件"面板：
  * - packages：Feature tgz 仓库中可安装的包（仅用户仓库源；官方仓库的包是
  *   官方 agent 静态装配的原料，不进入用户商店货架）
  * - mounts：两个身份（main / coder）配置层中已声明的 $mount 装配清单，
  *   并对照 catalog 标记 missing（包或版本已不在仓库）
+ * - envReady：身份级装配环境就绪（组合 hash → 环境目录 lock 存在性）
+ * - installing：进行中的安装任务（单飞；关弹窗后台继续的可见性）
  *
- * 写回不在此路由：安装/卸载直接复用 PUT /protoclaw/feature_config/layer
- * （$mount 与配置值同层同文件，整层写回），保证校验与合并语义单一权威。
+ * 执行面（POST install / rebuild）：安装前移——provision 发生在按钮时刻并
+ * 即时反馈成败，成功才写 $mount 声明（install-service）。移除/纯声明编辑
+ * 仍走 PUT /protoclaw/feature_config/layer（无服务端状态变更，前端直写）。
  */
 
 import { readHookDeclarations } from '@agentdevjs/core';
@@ -18,11 +21,29 @@ import { dirname, join } from 'path';
 import { scanFeatureCatalog } from '../feature-runtime/catalog.js';
 import { buildScopeLayers } from './feature-config.js';
 import { extractFeatureMounts } from '../shared/feature-mount.js';
+import {
+  IDENTITY_SCOPES,
+  installFeature,
+  rebuildEnvironment,
+  computeScopeEnvReadiness,
+  getInstallState,
+  classifyInstallError,
+} from '../feature-runtime/install-service.js';
 
-const STORE_SCOPES = [
-  { identity: 'main', agentId: 'programming-helper' },
-  { identity: 'coder', agentId: 'coder' },
-];
+// 与 install-service 共享身份定义（agentId/layerId/sessionType 单一权威）
+const STORE_SCOPES = Object.entries(IDENTITY_SCOPES).map(([identity, scope]) => ({
+  identity,
+  agentId: scope.agentId,
+}));
+
+// install/rebuild 错误 → HTTP 状态（前端按 body.code 分类呈现）
+const INSTALL_ERROR_STATUS = {
+  install_busy: 409,
+  package_missing: 404,
+  npm_unavailable: 503,
+  network: 503,
+  nothing_to_rebuild: 400,
+};
 
 /**
  * agent.js 模块缓存（装配权威的加载入口）。展示元数据不在此重复声明：
@@ -237,7 +258,7 @@ export async function collectScopeMountManifests(agentId, { catalogRoots, scopeI
   return { extras, manifests };
 }
 
-export function setupFeatureStoreRoutes(app) {
+export function setupFeatureStoreRoutes(app, express) {
   app.get('/api/feature-store/overview', async (_req, res) => {
     try {
       const catalog = await scanFeatureCatalog();
@@ -261,12 +282,39 @@ export function setupFeatureStoreRoutes(app) {
         }
       } catch { /* agent.js 加载失败时货架与底座置空，不阻断仓库包与已装配数据 */ }
       const mounts = {};
+      const envReady = {};
       for (const scope of STORE_SCOPES) {
         mounts[scope.identity] = await collectScopeMounts(scope.agentId, catalog);
+        envReady[scope.identity] = await computeScopeEnvReadiness(scope.identity);
       }
-      res.json({ builtin, base, packages: buildStorePackages(catalog), mounts });
+      res.json({ builtin, base, packages: buildStorePackages(catalog), mounts, envReady, installing: getInstallState() });
     } catch (error) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 安装（provision + 成功才写声明）。同步等待：provision 首次可能数十秒
+  // （联网拉传递依赖），桌面本地服务长连接可靠；进度流留待使用反馈再评估。
+  app.post('/api/feature-store/install', express.json(), async (req, res) => {
+    const { identity, packageName, version } = req.body || {};
+    try {
+      const result = await installFeature({ identity, packageName, version });
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      const { code, message } = classifyInstallError(error);
+      res.status(INSTALL_ERROR_STATUS[code] || 500).json({ error: message, code });
+    }
+  });
+
+  // 重建身份现有声明组合的环境（环境缺失/损坏的显式修复入口）
+  app.post('/api/feature-store/rebuild', express.json(), async (req, res) => {
+    const { identity } = req.body || {};
+    try {
+      const result = await rebuildEnvironment({ identity });
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      const { code, message } = classifyInstallError(error);
+      res.status(INSTALL_ERROR_STATUS[code] || 500).json({ error: message, code });
     }
   });
 }
