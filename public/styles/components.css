@@ -185,10 +185,9 @@
 }
 
 .expand-toggle-btn {
-  /* 玻璃质感：与输入卡片/表格同配方（--glass-bg + blur+saturate） */
+  /* 玻璃质感（--glass-bg 半透明底）。随流元素不挂 backdrop 模糊：
+     身后只有环境光渐变，模糊无视觉收益，徒增 GPU 合成开销 */
   background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
   border: 1px solid rgba(255, 255, 255, 0.14);
   color: var(--text-secondary);
   border-radius: 12px;
@@ -287,24 +286,29 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   100% { background-position: -50% 0; }
 }
 
-/* Tool Styles */
+/* Tool Styles — 玻璃基座：壳层（container/header/result）是全局默认外观，
+   feature 自定义渲染器只产出 .tool-content 内的内容模板。此处的玻璃配方
+   不带 !important、保持原选择器与特异性，feature 侧同名或更高优先级
+   规则可照常覆盖改回自己的样子 */
 .tool-call-container {
   margin-top: 12px;
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 6px;
   overflow: hidden;
-  background: var(--tool-msg-bg);
+  background: var(--glass-bg);
 }
 
 .tool-header {
-  background: var(--hover-bg);
+  /* 基线原则：标题浅于内容区。高不透明度浅灰（而非低alpha白染）——
+     层级靠亮度差，干爽靠不透底，两者分开满足 */
+  background: rgba(38, 40, 48, 0.92);
   padding: 6px 12px;
   font-size: 12px;
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
 }
 .tool-header-name { color: var(--text-primary); font-weight: 600; }
 .tool-content { padding: 12px; font-size: 13px; color: var(--text-primary); overflow-x: auto; }
@@ -314,11 +318,11 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: var(--hover-bg);
+  background: rgba(38, 40, 48, 0.92);
   border-radius: 6px 6px 0 0;
   font-size: 12px;
   color: var(--text-secondary);
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-bottom: none;
 }
 
@@ -332,8 +336,8 @@ body[data-theme="light"] .expand-toggle-btn:hover {
 .status-dot.error { background-color: var(--error-color); box-shadow: 0 0 4px rgba(220, 53, 69, 0.4); }
 
 .tool-result-body {
-  background: var(--tool-msg-bg);
-  border: 1px solid var(--border-color);
+  background: var(--glass-bg);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-top: none;
   border-radius: 0 0 6px 6px;
   padding: 12px;
@@ -341,6 +345,20 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   overflow-y: auto;
   max-height: 400px;
   font-size: 13px;
+}
+
+/* 玻璃基座 light 主题：描边换石板蓝，header 叠层换暗色 */
+body[data-theme="light"] .tool-call-container,
+body[data-theme="light"] .tool-result-header,
+body[data-theme="light"] .tool-result-body {
+  border-color: rgba(15, 23, 42, 0.12);
+}
+body[data-theme="light"] .tool-header {
+  background: rgba(15, 23, 42, 0.04);
+  border-bottom-color: rgba(15, 23, 42, 0.10);
+}
+body[data-theme="light"] .tool-result-header {
+  background: linear-gradient(rgba(15, 23, 42, 0.04), rgba(15, 23, 42, 0.04)), var(--glass-bg);
 }
 
 /* System Tool Rendering */
@@ -398,16 +416,14 @@ body[data-theme="light"] .expand-toggle-btn:hover {
    动作条不受 wrapper 的滚动与渐隐影响。长列受 max-width 约束换行，
    避免单列占满整行宽。 */
 .md-table-block { margin: 0 0 1rem; }
-/* 玻璃质感：wrapper 承担 backdrop 模糊（与全局玻璃面板同款
-   blur(var(--glass-blur)) saturate(1.3)），表格底色为半透明白叠加，
-   让模糊后的动态环境光透出。表格本体只做半透明染色，见下方配色区。 */
+/* 玻璃质感：半透明染色 + 描边 + 投影。随流元素不挂 backdrop 模糊——
+   身后只有缓慢漂移的环境光渐变，模糊无视觉收益；表格常批量出现，
+   每个模糊层都是一份 GPU 合成开销。表格本体只做半透明染色，见下方配色区。 */
 .md-table-wrap {
   max-width: 100%;
   margin: 0 0 6px;
   overflow-x: auto;
   border-radius: 12px;
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
 }
 /* 右下角动作条：按钮复用 .message-icon-action（hover/对勾态同款），
@@ -449,6 +465,11 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   max-width: none;
   margin-left: calc(-1 * var(--md-table-bleed, 0px));
   margin-right: calc(-1 * var(--md-table-bleed, 0px));
+  /* 块宽收缩（表格比正文列宽但比全突破区窄时贴合表格、消除空置玻璃区
+     与按钮漂移）由 markdown-utils.js 的 _tableScrollSync 用 JS 设定：
+     CSS 的 width:fit-content 受内在尺寸公式约束（fit-content 永远不小于
+     min-content，而表格 width:max-content 使 min-content 恒为表全宽），
+     在此场景结构性无效，已验证后回退 */
 }
 .message-row .md-table-block.is-wide .md-table-wrap {
   overflow: hidden; /* 左移溢出裁剪；横向滚动已移交 .md-table-scrollbar */
@@ -649,10 +670,26 @@ body[data-theme="light"] .markdown-body tr:nth-child(2n) {
 body[data-theme="light"] .markdown-body blockquote {
   border-left-color: rgba(0, 0, 0, 0.16);
 }
-.markdown-body pre { background-color: #111 !important; border-radius: 6px; }
+.markdown-body pre {
+  background-color: var(--glass-bg) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+}
 body[data-theme="light"] .markdown-body pre {
-  background-color: #eceef1 !important;
+  background-color: rgba(255, 255, 255, 0.6) !important;
   border: 1px solid rgba(31, 35, 40, 0.12);
+}
+/* hljs 主题（github-dark.min.css）给 code.hljs 上实心底，会盖住玻璃 pre */
+.markdown-body pre > code {
+  background: transparent !important;
+}
+/* 行内代码：半透明玻璃染色。微小元素不挂 backdrop 模糊（数量多、面积小，
+   模糊无视觉收益只有合成开销）；排除 inline-code-accent（其契约是无底色） */
+.markdown-body :not(pre) > code:not(.inline-code-accent) {
+  background-color: rgba(255, 255, 255, 0.07) !important;
+}
+body[data-theme="light"] .markdown-body :not(pre) > code:not(.inline-code-accent) {
+  background-color: rgba(15, 23, 42, 0.06) !important;
 }
 .markdown-body .katex {
   font-size: var(--md-inline-math-scale);

@@ -183,6 +183,16 @@ function upgradeWideTable(wrap) {
   const sync = () => {
     ghost.style.width = table.offsetWidth + 'px';
     table.style.transform = scrollbar.scrollLeft > 0 ? `translateX(${-scrollbar.scrollLeft}px)` : '';
+    // 块宽贴合表格实际宽度（不超过可用突破区宽）：block 恒定撑满可用宽
+    // 是空置玻璃区与按钮漂移的根源。不能用 CSS width:fit-content——
+    // 内在尺寸公式 fit-content ≥ min-content，而表格 width:max-content 使
+    // min-content 恒为表全宽，已实测失效；resize 由 bleed ResizeObserver
+    // 驱动本函数自动跟随
+    const block = wrap.parentElement;
+    if (block?.classList?.contains('md-table-block')) {
+      const avail = (block.parentElement?.clientWidth || 0) + _currentBleed * 2;
+      block.style.width = Math.min(_currentBleed + table.offsetWidth, avail) + 'px';
+    }
   };
   sync();
   wrap._tableScrollSync = sync;
