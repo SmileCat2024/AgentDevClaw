@@ -18,7 +18,15 @@
 
 ## Tauri 2a 渲染兼容性切片（已通过，2026-09-26）
 
-[desktop/](../../desktop/) 落地最小 Tauri 2 壳：窗口直接加载本机 Claw 服务（`http://127.0.0.1:1420`），无 sidecar、无打包、无系统集成。WebView2 对现有前端（玻璃质感、环境光、滚动、面板）渲染正常（用户实测验收）。壳的启动方式：先 `npm start` 起服务，再 `cd desktop && cargo run`。同批删除了 ProtoClaw 时代的孤儿 `public/src/tauri-bridge.js`（活代码零引用）。下一步：2b sidecar 生命周期切片（Tauri 主进程接管 supervisor 角色，复用 [run-supervised.js](../../scripts/run-supervised.js) 的宿主语义）。
+[desktop/](../../desktop/) 落地最小 Tauri 2 壳：窗口直接加载本机 Claw 服务（`http://127.0.0.1:1420`），无 sidecar、无打包、无系统集成。WebView2 对现有前端（玻璃质感、环境光、滚动、面板）渲染正常（用户实测验收）。壳的启动方式：先 `npm start` 起服务，再 `cd desktop && cargo run`。同批删除了 ProtoClaw 时代的孤儿 `public/src/tauri-bridge.js`（活代码零引用）。
+
+## Tauri 2b sidecar 生命周期切片（已通过，2026-09-26）
+
+Tauri 主进程接管宿主角色，裁决权结构与三层防线零改动沿用（契约见 [service-lifecycle.md](../protocols/service-lifecycle.md) 桌面宿主章节）：spawn `node scripts/run-supervised.js`，等服务端口可连接后建窗口；窗口关闭 → `POST /protoclaw/shutdown` → supervisor 善后退出，宽限后 `taskkill /T /F` 最终兜底。supervisor 侧新增 ppid watchdog（`CLAW_SUPERVISOR_HOST_PING_MS`，默认 3s）检测宿主死亡，检测到后先 POST 优雅请退再收割，Tauri 被强杀全树也能自清。
+
+E2E 实测（独立 `PORT`/`AGENTDEV_VIEWER_PORT`/`AGENTDEV_UDS_PATH`/`AGENTDEV_DATA_DIR` 隔离运行）：窗口关闭全树 454ms 退出；宿主 taskkill /F 单杀全树 1.1s 自清；并存实例不受影响。验证中实锤两个问题并修复：窗口创建必须在事件循环启动后经 AppHandle 代理投递（run() 前主线程直接 build 会因 WebView2 初始化挂死）；双实例并存因 ViewerWorker UDS 管道全局单例而失败（已记入契约"边界与非目标"，单实例语义属打包阶段）。
+
+当前形态仍为开发切片：node 取 PATH、仓库根取编译期路径。下一步：第 3 步组装链（D1/D2 vendor 化 + Node 随包分发）。
 
 ## 既定方向：框架包 vendor 化（tgz 快照）
 

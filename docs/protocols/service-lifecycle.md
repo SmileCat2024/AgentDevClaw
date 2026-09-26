@@ -17,7 +17,21 @@ npm start → supervisor（宿主，持有终端）→ node server.js（被托�
 3. **宿主 health watchdog**：宿主周期探测 `GET /protoclaw/health`（默认 2s，`CLAW_SUPERVISOR_HEALTH_MS` 可调）。server 自主关闭（`POST /protoclaw/shutdown`）或清理挂死时不给宿主任何信号，停机信号路径的 grace 收割不会启动——watchdog 补上"宿主主动询问"的感知通道：ready 之后的连续探测失败、或 503 且 `state=shutting_down`，均按停机信号同等启动 grace 窗口。ready 之前的探测失败属启动期正常现象，不计数。
 4. **启动自愈**（[server/boot/port-recovery.js](../boot/port-recovery.js)）：server 启动绑定端口前探测 `GET /protoclaw/health`——响应带 `state` 契约字段即本产品旧实例：先 `POST /protoclaw/shutdown` 优雅请退，宽限后仍存活则按响应中的 `pid` 收割其进程树；非 Claw 进程占用或不报告 pid 的过旧实例则报错退出，把决定权留给用户。
 
-桌面化时 Electron/Tauri 主进程即同一宿主角色，直接复用该裁决权结构与 server 侧语义。
+## 桌面宿主（Tauri）
+
+桌面形态不改变裁决权结构，只是把"终端宿主"换成"桌面主进程"，三层防线与 server 侧语义零改动沿用：
+
+```
+claw-desktop.exe（Tauri 主进程，最终宿主）
+  └─ node scripts/run-supervised.js（supervisor，仍是 server 的直接宿主）
+       └─ node server.js（三层防线原样生效）
+```
+
+- **启动**：Tauri 主进程 spawn supervisor（`CREATE_NO_WINDOW`、stdout/stderr 持续排空防管道写满），等待服务端口可连接后再创建窗口，避免 webview 停在连接错误页。
+- **退出**：窗口关闭 → Tauri `POST /protoclaw/shutdown` 请求 server 自主有序关闭 → supervisor 经 health watchdog（感知 `shutting_down`）或 child exit 善后退出；Tauri 等待其退出（同一 `CLAW_SUPERVISOR_GRACE_MS` + 2s 余量），超时则 `taskkill /T /F` 收割 supervisor 进程树。桌面主进程是最终兜底：supervisor 自身挂死也被收割。
+- **宿主死亡检测（对称防线）**：supervisor 以 ppid 存活轮询（默认 3s，`CLAW_SUPERVISOR_HOST_PING_MS` 可调）检测直接宿主存亡，宿主被单独强杀（不给任何信号）时先 `POST /protoclaw/shutdown` 请求 server 有序关闭、grace 窗口后收割，服务不孤儿化。宿主链每一级都有死亡检测：server 探测 supervisor，supervisor 探测 Tauri/npm。npm/终端场景下控制台关闭会先发整组信号，该检测为兜底而非主路径。
+
+当前实现为开发切片形态：node 取 PATH、仓库根取编译期路径、端口沿用 `PORT`/`AGENTDEV_VIEWER_PORT`（默认 1420/2026）。Node 随包分发、安装目录资源定位与动态端口分配属打包阶段，见"边界与非目标"。
 
 ## 状态
 
@@ -58,5 +72,6 @@ HTTP `POST /protoclaw/shutdown` 返回 `{ ok: true }` 后请求有序关闭；SI
 
 - 健康端点是服务进程健康探测，不是 readiness probe 的替代物；Agent runtime 仍用现有 runtime 状态接口确认。
 - HTTP 服务关闭等待当前连接结束；SSE 会先主动关闭，keep-alive 空闲连接会主动收口（`closeIdleConnections`），其余长请求可能拖慢但不会阻塞最终退出（宿主收割兜底）。
+- 双实例并存不被支持：ViewerWorker 的 UDS 命名管道（`\\.\pipe\agentdev-viewer`，`AGENTDEV_UDS_PATH` 可覆盖）与端口一样是全局单例地址，第二个实例启动时会因管道占用而启动失败。测试或并存需求须同时覆盖 `PORT`、`AGENTDEV_VIEWER_PORT`、`AGENTDEV_UDS_PATH`、`AGENTDEV_DATA_DIR`。桌面单实例语义（second-instance 引导到既有窗口）属打包阶段设计项。
 - 该契约没有承诺保存正在执行的模型调用结果，也不承诺跨崩溃的 graceful shutdown。
 - 当前端口配置与绑定行为保持既有约定；桌面版若需要动态端口、专用 loopback 绑定或 IPC 地址分配，应在独立改动中明确设计和测试，不可假设本契约已覆盖。
