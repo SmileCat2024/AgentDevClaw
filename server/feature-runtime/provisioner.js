@@ -10,8 +10,19 @@ function npmCommand() {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
+// 打包树自带 npm（pack:desktop 从 registry pinned 下载解开到 runtime/npm/）。
+// 优先用宿主 runtime 自带 npm（process.execPath 即 bundled node，保证用户机器
+// 无需系统 Node/npm）；开发态无此目录，回退 PATH。
+function bundledNpmCliPath() {
+  return path.join(PROJECT_ROOT, 'runtime', 'npm', 'bin', 'npm-cli.js');
+}
+
 function npmInstallSpawnSpec() {
   const args = ['install', '--no-fund', '--no-audit', '--ignore-scripts'];
+  const bundledCli = bundledNpmCliPath();
+  if (existsSync(bundledCli)) {
+    return { command: process.execPath, args: [bundledCli, ...args] };
+  }
   if (process.platform !== 'win32') return { command: npmCommand(), args };
   // npm.cmd cannot be directly spawned with shell:false on this Windows Node
   // runtime. The command line is fixed (no caller-provided tokens), so cmd is
@@ -29,18 +40,53 @@ function toFileDependencySpec(targetPath) {
  * - 发布态：相邻仓库不存在，file: 会指向失效路径，改从宿主根声明读取
  *   确切版本走 registry。锁步包 exact pin 保证任一时刻只有一个版本语义。
  */
-function frameworkDependencySpecs() {
-  const localCorePkg = path.join(AGENTDEV_ROOT, 'packages', 'core', 'package.json');
+const FRAMEWORK_PACKAGE_NAMES = ['@agentdevjs/core', '@agentdevjs/llm', '@agentdevjs/viewer', '@agentdevjs/mcp'];
+
+export function resolveFrameworkDependencySpecs(projectRoot = PROJECT_ROOT, agentdevRoot = AGENTDEV_ROOT) {
+  const localCorePkg = path.join(agentdevRoot, 'packages', 'core', 'package.json');
   if (existsSync(localCorePkg)) {
     return {
-      '@agentdevjs/core': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'core')),
-      '@agentdevjs/llm': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'llm')),
-      '@agentdevjs/viewer': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'viewer')),
-      '@agentdevjs/mcp': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'mcp')),
+      specs: {
+        '@agentdevjs/core': toFileDependencySpec(path.join(agentdevRoot, 'packages', 'core')),
+        '@agentdevjs/llm': toFileDependencySpec(path.join(agentdevRoot, 'packages', 'llm')),
+        '@agentdevjs/viewer': toFileDependencySpec(path.join(agentdevRoot, 'packages', 'viewer')),
+        '@agentdevjs/mcp': toFileDependencySpec(path.join(agentdevRoot, 'packages', 'mcp')),
+      },
+      vendorDigests: null,
     };
   }
-  const rootPkg = JSON.parse(readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
-  const spec = (name) => {
+  const rootPkg = JSON.parse(readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+
+  // vendor 声明形态：file:vendor/<file>.tgz（打包树，pack:desktop 产出）；
+  // 版本与 sha256 以 vendor/manifest.json 为准（pack 时与 tgz 同源生成）。
+  // 其余形态返回 null 走 registry 分支。
+  const vendorSpec = (name) => {
+    const declared = rootPkg.dependencies?.[name];
+    if (typeof declared !== 'string' || !/^file:vendor\/[\w.-]+\.tgz$/.test(declared)) return null;
+    const tgzRel = declared.slice('file:'.length);
+    const manifestPath = path.join(projectRoot, 'vendor', 'manifest.json');
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    } catch {
+      throw new Error(
+        `打包树 vendor 声明 ${name}: ${declared} 需要 vendor/manifest.json（pack:desktop 产出），` +
+        `缺失或不可读：${manifestPath}`,
+      );
+    }
+    const entry = manifest[name];
+    if (!entry || entry.tgz !== tgzRel || typeof entry.sha256 !== 'string') {
+      throw new Error(
+        `vendor/manifest.json 与声明不匹配（${name} 应为 ${tgzRel}）；` +
+        '请用 npm run pack:desktop 重新组装发布树。',
+      );
+    }
+    if (!existsSync(path.join(projectRoot, tgzRel))) {
+      throw new Error(`vendor tgz 实体缺失: ${tgzRel}；发布树损坏，请重新组装。`);
+    }
+    return { spec: toFileDependencySpec(path.join(projectRoot, tgzRel)), sha256: entry.sha256 };
+  };
+  const registrySpec = (name) => {
     const declared = rootPkg.dependencies?.[name];
     if (typeof declared !== 'string' || !isExactSemver(declared)) {
       throw new Error(
@@ -50,12 +96,28 @@ function frameworkDependencySpecs() {
     }
     return declared;
   };
-  return {
-    '@agentdevjs/core': spec('@agentdevjs/core'),
-    '@agentdevjs/llm': spec('@agentdevjs/llm'),
-    '@agentdevjs/viewer': spec('@agentdevjs/viewer'),
-    '@agentdevjs/mcp': spec('@agentdevjs/mcp'),
-  };
+  const specs = {};
+  const vendorDigests = {};
+  let vendorCount = 0;
+  for (const name of FRAMEWORK_PACKAGE_NAMES) {
+    const vendor = vendorSpec(name);
+    if (vendor) {
+      specs[name] = vendor.spec;
+      vendorDigests[name] = vendor.sha256;
+      vendorCount++;
+      continue;
+    }
+    specs[name] = registrySpec(name);
+  }
+  // 混合形态（部分 vendor 部分 registry）属于组装事故：pack:desktop 改写全部声明
+  if (vendorCount !== 0 && vendorCount !== FRAMEWORK_PACKAGE_NAMES.length) {
+    throw new Error(`宿主框架声明形态混合（${vendorCount}/${FRAMEWORK_PACKAGE_NAMES.length} 为 vendor）：发布树组装异常。`);
+  }
+  return { specs, vendorDigests: vendorCount ? vendorDigests : null };
+}
+
+function frameworkDependencySpecs() {
+  return resolveFrameworkDependencySpecs().specs;
 }
 
 function stableJson(value) {
@@ -77,11 +139,15 @@ function dependencyEntries(plan) {
 }
 
 export function computeRuntimeDependencyHash(plan) {
+  const resolved = resolveFrameworkDependencySpecs();
   const payload = {
     agentdevRoot: path.resolve(AGENTDEV_ROOT),
     // 框架依赖来源参与 hash：发布态下框架版本升级会改变该字段，触发环境重建，
     // 避免「升级了框架但旧环境继续跑旧快照」；开发态下 file: 路径固定，hash 稳定。
-    frameworkSpecs: frameworkDependencySpecs(),
+    frameworkSpecs: resolved.specs,
+    // vendor 分支（打包树）追加 tgz sha256：同版本重打包（字节变化）时
+    // file: 路径不变，靠 digest 保证环境缓存正确失效。
+    vendorDigests: resolved.vendorDigests,
     dependencies: dependencyEntries(plan),
   };
   return crypto.createHash('sha256').update(stableJson(payload)).digest('hex').slice(0, 24);

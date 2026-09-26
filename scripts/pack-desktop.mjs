@@ -20,7 +20,8 @@
 //   npm run pack:desktop                            # 完整组装（含框架仓库构建）
 //   npm run pack:desktop -- --skip-framework-build  # 复用相邻仓库现有 dist
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { createHash } from 'crypto';
+import { dirname, join, resolve } from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { FEATURE_DIRS } from './prebuilt-feature-dirs.mjs';
@@ -29,8 +30,14 @@ import { killProcessTree } from '../server/shared/process-tree.js';
 const root = resolve(fileURLToPath(import.meta.url), '..', '..');
 const frameworkRoot = resolve(process.env.AGENTDEV_LOCAL_PATH || join(root, '..', 'AgentDev'));
 const stagingDir = join(root, 'dist', 'desktop-staging');
+const cacheDir = join(root, 'dist', 'pack-cache');
 const IS_WIN = process.platform === 'win32';
 const SKIP_FRAMEWORK_BUILD = process.argv.includes('--skip-framework-build');
+
+// 运行时 pinned：产物可复现（不随打包机现场版本漂移）。升级时改这里，
+// 并同步验证 node 与 npm 的引擎兼容（npm 11.x 要求 node ^20.17 || >=22.9）。
+const PINNED_NODE_VERSION = '24.19.0';
+const PINNED_NPM_VERSION = '11.17.0';
 
 // 包名 ≠ 目录名的特例（与 use-agentdev-published.mjs 保持一致）
 const PACKAGE_DIR_OVERRIDES = { '@agentdevjs/rokid-bot': 'rokid-feature' };
@@ -98,6 +105,15 @@ async function main() {
     versions.set(name, { version, tgz: expected });
     log(`${name}@${version} -> vendor/${expected}`);
   }
+  // vendor digest 清单：provisioner 的 dependency hash 以此为框架来源输入，
+  // 同版本 tgz 重打包（字节变化）时环境缓存正确失效
+  const manifest = {};
+  for (const [name, info] of versions) {
+    const digest = createHash('sha256').update(readFileSync(join(vendorDir, info.tgz))).digest('hex');
+    manifest[name] = { version: info.version, tgz: `vendor/${info.tgz}`, sha256: digest };
+  }
+  writeFileSync(join(vendorDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  log(`vendor/manifest.json 已生成（${versions.size} 包 digest 清单）`);
 
   // 5. 根声明改写为 vendor tgz + 移除开发 lock
   for (const name of agentdevDeps) {
@@ -146,12 +162,13 @@ async function main() {
   runShell('npm prune --omit=dev --no-audit --no-fund', stagingDir, 'prune 构建期依赖');
   assertVendorEntities(stagingDir, agentdevDeps, versions);
 
-  // 10. Node 运行时随包分发（打包机当前 node；正式发布应改 pinned 下载）
+  // 10. 运行时 pinned 分发（node + npm，下载缓存在 dist/pack-cache，首次联网后离线可重跑）。
+  //     npm 落 runtime/npm/（registry tgz 原生结构，bin/npm-cli.js 为入口），
+  //     provisioner 以 process.execPath + npm-cli.js 调用，用户机器无需系统 npm。
   const runtimeDir = join(stagingDir, 'runtime');
   mkdirSync(runtimeDir, { recursive: true });
-  const nodeBin = join(runtimeDir, IS_WIN ? 'node.exe' : 'node');
-  copyFileSync(process.execPath, nodeBin);
-  log(`node runtime: ${process.version} -> runtime/`);
+  const nodeBin = await provisionPinnedNode(runtimeDir);
+  await provisionPinnedNpm(runtimeDir);
 
   // 11. 隔离端口冒烟：bundled node 直启 supervisor → health ready → shutdown → 退出
   await smoke(stagingDir, nodeBin);
@@ -180,6 +197,112 @@ function assertVendorEntities(stagingDir, agentdevDeps, versions) {
     process.exit(1);
   }
   log(`实体自检通过（${agentdevDeps.length} 包均为 vendor 实体）`);
+}
+
+// pinned 运行时下载（缓存在 dist/pack-cache；首次联网，之后离线可重跑）
+async function downloadToFile(url, dest, label) {
+  if (existsSync(dest)) {
+    log(`缓存命中: ${label}`);
+    return;
+  }
+  log(`下载 ${label}: ${url}`);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${label} 下载失败: HTTP ${res.status} ${url}`);
+  mkdirSync(dirname(dest), { recursive: true });
+  writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+}
+
+async function provisionPinnedNode(runtimeDir) {
+  if (!IS_WIN) {
+    console.error('[pack:desktop] 当前仅支持 Windows 打包目标（node dist 单 exe）；其他平台需扩展下载源');
+    process.exit(1);
+  }
+  const cached = join(cacheDir, `node-v${PINNED_NODE_VERSION}-win-x64.exe`);
+  await downloadToFile(
+    `https://nodejs.org/dist/v${PINNED_NODE_VERSION}/win-x64/node.exe`,
+    cached,
+    `node v${PINNED_NODE_VERSION}`,
+  );
+  const nodeBin = join(runtimeDir, 'node.exe');
+  copyFileSync(cached, nodeBin);
+  log(`node runtime: v${PINNED_NODE_VERSION} (pinned) -> runtime/node.exe`);
+  return nodeBin;
+}
+
+// 用 Node 内置 zlib 解 tgz（不用 tar CLI：MSYS tar 把 D:\ 的冒号当远程主机，
+// Windows bsdtar 又不支持 --force-local，跨 shell 环境不可靠）。npm 官方 tgz
+// 只含文件与目录（无 symlink/hardlink），遇到其他条目类型直接报错。
+import { createGunzip } from 'zlib';
+
+async function gunzipFileToBuffer(file) {
+  const { createReadStream } = await import('fs');
+  return await new Promise((resolve, reject) => {
+    const chunks = [];
+    createReadStream(file)
+      .pipe(createGunzip())
+      .on('data', (c) => chunks.push(c))
+      .on('end', () => resolve(Buffer.concat(chunks)))
+      .on('error', reject);
+  });
+}
+
+function untarBufferToDir(buffer, destDir, { strip = 0 } = {}) {
+  let offset = 0;
+  let longName = null;
+  let written = 0;
+  const destAbs = resolve(destDir);
+  while (offset + 512 <= buffer.length) {
+    const header = buffer.subarray(offset, offset + 512);
+    if (header.every((b) => b === 0)) break; // 结束块
+    let name = longName ?? header.subarray(0, 100).toString('utf8').replace(/\0.*$/s, '');
+    longName = null;
+    const sizeField = header.subarray(124, 136).toString('utf8').replace(/[\0 ]/g, '');
+    const size = parseInt(sizeField, 8) || 0;
+    const type = String.fromCharCode(header[156] || 0x30);
+    const dataStart = offset + 512;
+    offset = dataStart + Math.ceil(size / 512) * 512;
+    if (type === 'L') { // GNU 长名：内容是下一个条目的真实名字
+      longName = buffer.subarray(dataStart, dataStart + size).toString('utf8').replace(/\0.*$/s, '');
+      continue;
+    }
+    if (!name || name === '.' || name === './') continue;
+    if (strip > 0) name = name.split('/').slice(strip).join('/');
+    if (!name) continue;
+    const target = resolve(destDir, name);
+    if (target !== destAbs && !target.startsWith(destAbs + '\\') && !target.startsWith(destAbs + '/')) {
+      throw new Error(`tar 条目越界: ${name}`);
+    }
+    if (type === '5') {
+      mkdirSync(target, { recursive: true });
+      continue;
+    }
+    if (type === '0' || type === '\0') {
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, buffer.subarray(dataStart, dataStart + size));
+      written++;
+      continue;
+    }
+    throw new Error(`npm tgz 含不支持的条目类型 "${type}"（${name}）；需扩展解包器`);
+  }
+  if (written === 0) throw new Error('tar 解包结果为空');
+  return written;
+}
+
+async function provisionPinnedNpm(runtimeDir) {
+  const cached = join(cacheDir, `npm-${PINNED_NPM_VERSION}.tgz`);
+  await downloadToFile(
+    `https://registry.npmjs.org/npm/-/npm-${PINNED_NPM_VERSION}.tgz`,
+    cached,
+    `npm ${PINNED_NPM_VERSION}`,
+  );
+  const npmDir = join(runtimeDir, 'npm');
+  rmSync(npmDir, { recursive: true, force: true });
+  mkdirSync(npmDir, { recursive: true });
+  const files = untarBufferToDir(await gunzipFileToBuffer(cached), npmDir, { strip: 1 });
+  if (!existsSync(join(npmDir, 'bin', 'npm-cli.js'))) {
+    throw new Error('npm tgz 结构异常：解包后缺少 bin/npm-cli.js（tgz 内应为 package/ 前缀）');
+  }
+  log(`npm runtime: ${PINNED_NPM_VERSION} (pinned) -> runtime/npm/（${files} 个文件）`);
 }
 
 async function smoke(staging, nodeBin) {
