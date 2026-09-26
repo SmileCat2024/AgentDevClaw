@@ -26,6 +26,8 @@ function selectWorkspaceSurface(agentId, options = {}) {
     saveCurrentRuntimeToCache(previousRuntimeId, previousRuntimeContextKey);
   }
   focusedAgentId = agentId || null;
+  // 回工作空间首页 = 离开会话，熄灭其「刚刚完成」蓝灯（与 switchAgent 切走语义一致）
+  if (previousRuntimeId) _recentlyFinishedRuntimes.delete(previousRuntimeId);
   currentRuntimeAgentId = null;
   readOnlyMode = false;
   currentWorkspaceArtifactDetail = null;

@@ -98,6 +98,10 @@ function _markAgentCallStartedForNotify(runtimeId) {
   if (!normId) return;
   _foregroundObservedFinishMap.delete(normId);
   _notifiedFinishMap.delete(normId);
+  // 新一轮 call 开始 = 「刚刚完成」蓝灯熄灭：所有开始入口（SSE / 轮询 /
+  // 输入 / 语音 / 切换预热）都汇聚到此处。本轮结束后由
+  // applyAgentCallStateFromNotification 按原逻辑重新点亮。
+  _recentlyFinishedRuntimes.delete(normId);
 }
 
 function _markAgentFinishObserved(runtimeId, notifData = null) {

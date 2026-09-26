@@ -429,6 +429,8 @@ function createDesktopNotifySandbox() {
   const ctx = createFrontendSandbox({
     allAgents: [{ id: 'runtime-1', name: 'Runtime One' }],
     currentLanguage: 'en',
+    // 页面真实环境中 app-core.js 先加载声明该全局（侧栏「刚刚完成」蓝灯状态）
+    _recentlyFinishedRuntimes: new Set(),
     normalizeAgentIdentity(value) {
       return String(value || '').trim();
     },
@@ -482,6 +484,13 @@ describe('desktop-notify: finish visibility', () => {
     })`);
 
     assert.equal(notifications.length, 1);
+  });
+
+  it('新一轮 call 开始：清除「刚刚完成」蓝灯（_recentlyFinishedRuntimes）', () => {
+    const { ctx } = createDesktopNotifySandbox();
+    ctx.run('_recentlyFinishedRuntimes.add("runtime-1")');
+    ctx.run('_markAgentCallStartedForNotify("runtime-1")');
+    assert.equal(ctx.run('_recentlyFinishedRuntimes.has("runtime-1")'), false);
   });
 });
 

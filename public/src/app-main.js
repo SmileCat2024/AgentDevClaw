@@ -647,6 +647,12 @@ window.switchAgent = async (newAgentId) => {
         // 目录未含该条目时保持运行时引用原值，让请求显式失败，不静默换目标。
         ? (window.RemoteConnections?.getEntryHostNamespaceId?.(runtimeAgentId) || newAgentId)
         : runtimeAgentId);
+    // 离开会话时熄灭其「刚刚完成」蓝灯：灯在切回查看后保持，直到离开该
+    // 会话（此处 / selectWorkspaceSurface）或它开始新一轮运行
+    // （_markAgentCallStartedForNotify）才清除。
+    if (currentRuntimeAgentId && normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(runtimeAgentId)) {
+      _recentlyFinishedRuntimes.delete(currentRuntimeAgentId);
+    }
     currentRuntimeAgentId = runtimeAgentId;
     // 用户主动切换：立即冻结 viewer 侧会话身份。必须在此之前用 allAgents
     // 派生值（此时绑定尚未写入，读到的是用户点击时刻列表展示的会话），
@@ -655,7 +661,6 @@ window.switchAgent = async (newAgentId) => {
       runtimeAgentId,
       _deriveRuntimeSessionIdFromAgents(runtimeAgentId) || getActiveWorkspaceSessionId(targetAgent),
     );
-    _recentlyFinishedRuntimes.delete(runtimeAgentId);
     // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开；
     // 远程条目按握手 capability 门控（ADR-0011）：具备 capabilities.write 的
     // 连接与本地体验一致（runtimeAgentId 可能已被 resolveRuntimeRef 解析为裸
