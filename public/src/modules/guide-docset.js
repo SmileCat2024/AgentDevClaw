@@ -83,14 +83,22 @@ function guideReadDim(value) {
 }
 
 /**
- * 解析 md 图片括号内的修饰 token：'=600x400'、'=600x'、'=50%'、'center' 等。
+ * 解析 md 图片括号内的修饰 token：'=600x400'、'=600x'、'=50%'、'center' 等；
+ * 视频扩展名（.mp4/.webm）下还可写播放开关：autoplay / loop / muted / controls，
+ * 写了才生效，全部不写渲染为不带控件的裸播放器（停在首帧）。
  */
+const GUIDE_PLAY_FLAGS = ['autoplay', 'loop', 'muted', 'controls'];
+
 function parseGuideImageTokens(tokens) {
-  const spec = { width: '', height: '', align: '' };
+  const spec = { width: '', height: '', align: '', autoplay: false, loop: false, muted: false, controls: false };
   for (const token of tokens) {
     const lower = String(token || '').toLowerCase();
     if (lower === 'left' || lower === 'center' || lower === 'right') {
       spec.align = lower;
+      continue;
+    }
+    if (GUIDE_PLAY_FLAGS.includes(lower)) {
+      spec[lower] = true;
       continue;
     }
     if (!lower.startsWith('=')) continue;
@@ -363,6 +371,10 @@ function collectGuideImages(md) {
       height: spec.height,
       zoom: '',
       align: spec.align,
+      autoplay: spec.autoplay,
+      loop: spec.loop,
+      muted: spec.muted,
+      controls: spec.controls,
     });
     return `\n\n<claw-guide-img data-token="${token}"></claw-guide-img>\n\n`;
   };
@@ -423,10 +435,47 @@ function guideAssetUrl(agentId, path) {
   return `/protoclaw/guide_asset?agentId=${encodeURIComponent(agentId)}&path=${encodeURIComponent(path)}`;
 }
 
+/** 视频扩展名：md 图片语法指向这些文件时渲染为 <video> 而非 <img>。 */
+const GUIDE_VIDEO_EXT_RE = /\.(mp4|webm)$/i;
+
+function guideMissingHtml(image, alignClass) {
+  return `<span class="guide-image-block ${alignClass}"><span class="guide-image-missing" title="${escapeHtml(image.src || '')}">${escapeHtml(guideText('unresolved'))}：${escapeHtml(image.src || '')}</span></span>`;
+}
+
+/**
+ * 生成最终视频 HTML：播放行为由文档里的开关 token 决定（autoplay/loop/muted/
+ * controls），未声明的属性一律不加；playsinline 恒定携带，避免移动端自动播放
+ * 被劫持为全屏。
+ */
+function buildGuideVideoHtml(image, docPath, agentId) {
+  const styleAttr = guideImageStyleAttr(image);
+  const alignClass = guideAlignClass(image);
+  const flags = GUIDE_PLAY_FLAGS.filter((flag) => image[flag]).join(' ');
+  const flagAttr = flags ? ` ${flags}` : '';
+
+  let srcAttr = '';
+  if (guideIsExternalSrc(image.src)) {
+    srcAttr = escapeHtml(image.src);
+  } else {
+    const resolved = resolveGuideHref(image.src, docPath);
+    if (resolved && resolved.path) {
+      srcAttr = escapeHtml(guideAssetUrl(agentId, resolved.path));
+    }
+  }
+  if (!srcAttr) return guideMissingHtml(image, alignClass);
+
+  const label = escapeHtml(image.alt || '');
+  return `<span class="guide-image-block ${alignClass}"><video src="${srcAttr}"${flagAttr} playsinline aria-label="${label}"${styleAttr}></video></span>`;
+}
+
 /**
  * 生成最终图片 HTML：相对路径走资产接口；越界/外站路径渲染为占位提示。
+ * src 为视频扩展名时分流到视频渲染。
  */
 function buildGuideImageHtml(image, docPath, agentId) {
+  if (GUIDE_VIDEO_EXT_RE.test(String(image.src || ''))) {
+    return buildGuideVideoHtml(image, docPath, agentId);
+  }
   const styleAttr = guideImageStyleAttr(image);
   const alignClass = guideAlignClass(image);
   const escapedAlt = escapeHtml(image.alt || '');

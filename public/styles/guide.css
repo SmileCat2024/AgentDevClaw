@@ -367,6 +367,16 @@
   box-shadow: 0 2px 14px rgba(0, 0, 0, 0.22);
 }
 
+/* md 图片语法指向视频（.mp4/.webm）时由 guide-docset.js 渲染为 <video>，
+   播放行为由文档中的开关 token 决定 */
+.guide-image-block video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.22);
+}
+
 /* 同一行多图自动并排（行级分组由 guide-docset.js 的 imgrow token 承载） */
 .guide-image-row {
   display: flex;
