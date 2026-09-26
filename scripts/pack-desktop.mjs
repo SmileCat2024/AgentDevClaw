@@ -9,8 +9,8 @@
 //
 // 组装步骤：框架构建 → git archive 干净源码树 → 18 包 tgz + 声明改写
 // （根 dependencies 与 features/* 子包的 core devDep）→ 干净 install →
-// 构建 local-features / features → 拷贝 node.exe → 隔离端口冒烟
-// （health ready → POST shutdown → 进程退出）。
+// 构建 local-features / features → 无损瘦身（剥离构建期依赖）→ 拷贝
+// node.exe → 隔离端口冒烟（health ready → POST shutdown → 进程退出）。
 //
 // staging 必须位于本仓库内部深层目录：features 构建的 linkLocalCore 与
 // check-agentdev-local 都按 <root>/../AgentDev 探测相邻框架仓库，staging
@@ -123,6 +123,44 @@ async function main() {
 
   // 7. 干净安装 + 实体自检（无 junction、版本与 tgz 一致）
   runShell('npm install --no-audit --no-fund', stagingDir, 'staging 安装');
+  assertVendorEntities(stagingDir, agentdevDeps, versions);
+
+  // 8. Claw 本地构建（local-features + features）
+  runShell('npm run build:local-features', stagingDir, 'local-features 构建');
+  runShell('npm run build:features', stagingDir, 'features 构建');
+
+  // 9. 无损瘦身：剥离纯构建期依赖（dist 已产出，发布树只读永不重建）。
+  //    冒烟在 pruned 树上执行，剥离破坏运行时会被当场抓获。
+  for (const name of FEATURE_DIRS) {
+    rmSync(join(stagingDir, 'features', name, 'node_modules'), { recursive: true, force: true });
+  }
+  log('已删除 features/*/node_modules（构建期依赖，~200MB）');
+  // typescript 声明在 dependencies 但只服务于本地构建：从声明移除后经
+  // npm prune 一并清出（extraneous），devDependencies 同批清除。
+  const builtPkgPath = join(stagingDir, 'package.json');
+  const builtPkg = JSON.parse(readFileSync(builtPkgPath, 'utf8'));
+  if (builtPkg.dependencies?.typescript) {
+    delete builtPkg.dependencies.typescript;
+    writeFileSync(builtPkgPath, JSON.stringify(builtPkg, null, 2) + '\n');
+  }
+  runShell('npm prune --omit=dev --no-audit --no-fund', stagingDir, 'prune 构建期依赖');
+  assertVendorEntities(stagingDir, agentdevDeps, versions);
+
+  // 10. Node 运行时随包分发（打包机当前 node；正式发布应改 pinned 下载）
+  const runtimeDir = join(stagingDir, 'runtime');
+  mkdirSync(runtimeDir, { recursive: true });
+  const nodeBin = join(runtimeDir, IS_WIN ? 'node.exe' : 'node');
+  copyFileSync(process.execPath, nodeBin);
+  log(`node runtime: ${process.version} -> runtime/`);
+
+  // 11. 隔离端口冒烟：bundled node 直启 supervisor → health ready → shutdown → 退出
+  await smoke(stagingDir, nodeBin);
+
+  log('staging 组装完成');
+}
+
+// vendor 实体自检：@agentdevjs/* 必须是实体目录（非 junction）且版本与 tgz 一致
+function assertVendorEntities(stagingDir, agentdevDeps, versions) {
   const scopeDir = join(stagingDir, 'node_modules', '@agentdevjs');
   const problems = [];
   for (const name of agentdevDeps) {
@@ -142,22 +180,6 @@ async function main() {
     process.exit(1);
   }
   log(`实体自检通过（${agentdevDeps.length} 包均为 vendor 实体）`);
-
-  // 8. Claw 本地构建（local-features + features）
-  runShell('npm run build:local-features', stagingDir, 'local-features 构建');
-  runShell('npm run build:features', stagingDir, 'features 构建');
-
-  // 9. Node 运行时随包分发（打包机当前 node；正式发布应改 pinned 下载）
-  const runtimeDir = join(stagingDir, 'runtime');
-  mkdirSync(runtimeDir, { recursive: true });
-  const nodeBin = join(runtimeDir, IS_WIN ? 'node.exe' : 'node');
-  copyFileSync(process.execPath, nodeBin);
-  log(`node runtime: ${process.version} -> runtime/`);
-
-  // 10. 隔离端口冒烟：bundled node 直启 supervisor → health ready → shutdown → 退出
-  await smoke(stagingDir, nodeBin);
-
-  log('staging 组装完成');
 }
 
 async function smoke(staging, nodeBin) {
