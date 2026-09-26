@@ -13,7 +13,8 @@
  * 决定呈现。overview 经 getInstallState 暴露进行中状态。
  */
 
-import { existsSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { dirname } from 'path';
 import { join } from 'path';
 
 import { buildScopeLayers, validateLayerContent, resolveWriteTarget } from '../routes/feature-config.js';
@@ -87,6 +88,9 @@ function writeDeclaration(scope, sparse, key, packageName, version, resolvers) {
   }
   const targetPath = resolveWriteTarget({ agentId: scope.agentId, layerId: scope.layerId }, resolvers);
   if (!targetPath) throw new Error(`未知配置层：${scope.agentId}/${scope.layerId}`);
+  // 全新数据目录下层文件的父目录尚不存在（PUT /protoclaw/feature_config/layer
+  // 的写入链同样先建目录）；绕过路由直写时这里必须自建，否则首装 ENOENT
+  if (!existsSync(dirname(targetPath))) mkdirSync(dirname(targetPath), { recursive: true });
   writeFileSync(targetPath, JSON.stringify(sparse, null, 2) + '\n', 'utf8');
 }
 

@@ -245,3 +245,23 @@ test('classifyInstallError 分类表', () => {
     assert.equal(classifyInstallError(err).code, expected, String(err.message));
   }
 });
+
+test('installFeature：层文件与父目录均不存在的全新数据目录首装不 ENOENT', async () => {
+  // 打包形态真实场景：全新用户数据目录，feature-config/agent.json 从未被创建。
+  // 夹具不预建层文件（makeScope 会预建），regression：writeDeclaration 需自建父目录。
+  const root = mkdtempSync(join(tmpdir(), 'install-service-fresh-'));
+  const layerPath = join(root, 'workspaces', 'programming-helper', 'feature-config', 'agent.json');
+  const resolvers = new Map([
+    ['programming-helper', () => ({ layers: [{ id: 'agent', label: 'test', path: layerPath }] })],
+  ]);
+  const { provision } = okProvision();
+  try {
+    const result = await installFeature(
+      { identity: 'main', packageName: '@user/demo-feature', version: '1.0.0' },
+      { resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.declared, true);
+    const written = JSON.parse(readFileSync(layerPath, 'utf8'));
+    assert.deepEqual(written['demo-feature'].$mount, { package: '@user/demo-feature', version: '1.0.0' });
+  } finally { void provision; }
+});

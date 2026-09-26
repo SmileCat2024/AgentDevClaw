@@ -1,6 +1,6 @@
 # Feature 安装与激活分离：设计决策与实施记录
 
-状态：**切片 1–3 已完成并 E2E 验收（2026-09-26）**。本文记录"安装前移"重构的动机、分层承诺与既定决策，供后续维护对照。
+状态：**切片 1–4 已完成并 E2E 验收（2026-09-26）**。本文记录"安装前移"重构的动机、分层承诺与既定决策，供后续维护对照。
 
 ## 动机：执行点放错主客位置
 
@@ -37,7 +37,8 @@
 
 - **切片 1（`c680ddb`）**：provisioner 支持 vendor 声明（打包树 `file:vendor/*.tgz` → 读 tgz 实体版本参与依赖 hash，manifest sha256 digest 保证同版本重打包缓存失效）+ npm 内置解析（`runtime/npm-cli.js` 优先，PATH 兜底）。E2E：staging 树 PATH 仅 System32 下首装 16.3s、二次 0s 缓存命中。
 - **切片 2（`6ae0c95`）**：`POST /api/feature-store/install`（provision 成功才写声明，原子性）与 `/rebuild`；服务端单飞（进行中第二请求 `install_busy`）；overview 增 `envReady`（身份级组合 hash → 环境 lock 存在性）与 `installing`。
-- **切片 3（本轮）**：商店三态（`+ 添加` → `安装中… Ns` 禁用 → 已装配/失败横幅+重试）；builtin 卡片走瞬时声明路径（静态装配开关，无中间态，与 tgz 卡片交互刻意不同）；挂载页环境恢复横幅；文案区分"安装立即完成，对新会话生效"。
+- **切片 3（`8eb6a59`）**：商店三态（`+ 添加` → `安装中… Ns` 禁用 → 已装配/失败横幅+重试）；builtin 卡片走瞬时声明路径（静态装配开关，无中间态，与 tgz 卡片交互刻意不同）；挂载页环境恢复横幅；文案区分"安装立即完成，对新会话生效"。
+- **切片 4（本轮）**：双形态 E2E（staging 打包树实测）+ 断网场景验证；修复全新数据目录首装 ENOENT（声明写入前自建父目录）；npm fetch 重试收敛（断网失败 8min+ → ~70s）。
 
 ## E2E 验收（2026-09-26，隔离实例实测）
 
@@ -51,6 +52,17 @@
 - **invoke() 端口白名单**：`app-core.js` 的 HTTP 回退硬编码 `port === '1420'`，任何非默认端口实例（自定义 PORT/隔离/反代）`loadAgents` 全链失败。修复：判定改为 http(s) 协议（相对 fetch 自然同源）。
 - **tauri-bridge.js 残留 script 标签**：2a 删除文件时漏了 `index.html` 的引用（404 + MIME 报错刷屏）。教训：删除资产的"零引用"检查必须覆盖 HTML script/link 标签，不能只查 JS import。
 - **builtin 挂载徽标 `undefined@undefined`**：挂载页对 builtin 条目渲染 `package@version` 徽标。修复：builtin 只显示"扩展"来源徽标。
+- **全新数据目录首装 ENOENT**（切片 4，staging 实测）：install 声明写入绕过 PUT 路由的目录预建，`feature-config/` 父目录不存在时 `writeFileSync` 直接 ENOENT——打包形态首次安装必炸（开发态夹具预建了层文件，单测未覆盖）。修复：`writeDeclaration` 自建父目录（与 PUT 写入链同口径），含回归测试。
+- **断网下 npm 重试链过长**（切片 4 实测）：npm 默认 fetch 重试（retries=2, maxtimeout=60s）在 registry 不可达时多包重试超 8 分钟不放，同步等待的安装语义不可接受。修复：provisioner 注入 `--fetch-retries=1 --fetch-retry-mintimeout=5000 --fetch-retry-maxtimeout=15000`，断网失败 ~70s 暴露。
+
+## 切片 4 双形态 E2E（staging 打包树实测，2026-09-26）
+
+环境：`dist/desktop-staging`（vendor 声明 + pinned bundled node/npm）、PATH 仅 `C:\Windows\System32`、PowerShell 拉起隔离实例。结果：
+
+- **install 全链**：memory-feature 经 bundled npm 完成环境 provision（registry 传递依赖 zod/@hono 等真实拉取），声明原子落盘，`runtime-lock` hash 与 digest 一致；二次调用 416ms 缓存命中。
+- **overview**：mounts（repository 声明、missing=false）+ packages（用户货架）+ envReady（main ready/hasEnv、coder 无声明 ready）+ installing 单飞状态，全部正确。
+- **断网**（registry 指死端口 + 空 npm cache，等价新机器真实断网）：安装失败返回真实 npm 错误（ECONNREFUSED，`network` 分类正则命中）、声明不落盘、已装配包 envReady 不受影响（离线可复用）；失败时长收敛后 ~70s。
+- 测试脚注：npm 用户级 cache 会在断网时回退命中（开发机上"断网"模拟必须同时清 cache 才真实）；`HTTPS_PROXY` 环境变量对 npm 11 的 registry 请求不生效，模拟网络故障用 `npm_config_registry` 指死端口最可靠。
 
 ## 剩余待办
 

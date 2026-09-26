@@ -18,7 +18,13 @@ function bundledNpmCliPath() {
 }
 
 function npmInstallSpawnSpec() {
-  const args = ['install', '--no-fund', '--no-audit', '--ignore-scripts'];
+  // fetch 重试收敛：npm 默认（retries=2, maxtimeout=60s）在断网下多包
+  // 重试链可达 8 分钟以上（E2E 实测），同步等待的安装语义不可接受；
+  // 收敛为 1 次重试、单次上限 15s，断网失败整体 <1 分钟暴露。
+  const args = [
+    'install', '--no-fund', '--no-audit', '--ignore-scripts',
+    '--fetch-retries=1', '--fetch-retry-mintimeout=5000', '--fetch-retry-maxtimeout=15000',
+  ];
   const bundledCli = bundledNpmCliPath();
   if (existsSync(bundledCli)) {
     return { command: process.execPath, args: [bundledCli, ...args] };
