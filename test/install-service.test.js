@@ -116,6 +116,28 @@ test('installFeature：已声明同版本 → 幂等重装、不重复写声明'
   } finally { scope.dispose(); }
 });
 
+test('installFeature：已有 builtin 声明共存 → builtin 不进 plan、安装成功', async () => {
+  const scope = makeScope();
+  scope.writeLayer({
+    'some-static-plugin': { $mount: { kind: 'builtin' } },
+    'demo-feature': { myConfig: 2 },
+  });
+  const catalogRoots = CATALOG_ROOTS;
+  const { calls, provision } = okProvision();
+  try {
+    const result = await installFeature(
+      { identity: 'main', packageName: '@user/demo-feature', version: '1.0.0' },
+      { resolvers: scope.resolvers, catalogRoots, provision },
+    );
+    assert.equal(result.declared, true);
+    const planFeatures = calls[0].plan.features;
+    assert.ok(!planFeatures.some((f) => f.runtimeName === 'some-static-plugin'), 'builtin 声明不进仓库装配 plan');
+    assert.ok(planFeatures.some((f) => f.runtimeName === 'demo-feature'), '目标仓库包在 plan 内');
+    const layer = scope.readLayer();
+    assert.equal(layer['some-static-plugin'].$mount.kind, 'builtin', 'builtin 声明原样保留');
+  } finally { scope.dispose(); }
+});
+
 test('installFeature：仓库无此包 → package_missing、不动层文件', async () => {
   const scope = makeScope();
   const catalogRoots = CATALOG_ROOTS;

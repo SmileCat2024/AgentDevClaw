@@ -298,17 +298,22 @@ window._showWebPicker = function (mode) {
   });
 };
 
+// HTTP 回退的适用判定：页面由 Claw 服务（或其代理）经 http(s) 提供，相对路径
+// fetch 自然落在同源服务上。不能按端口白名单判断——自定义 PORT、隔离实例、
+// 反向代理场景都会偏离 1420，端口检查会让 loadAgents 全链失败。
+const isServerServedPage = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+
 async function invoke(command, payload = {}) {
   if (window.__PROTOCLAW_TAURI_BRIDGE__ && typeof window.__PROTOCLAW_TAURI_BRIDGE__.invoke === 'function') {
     try {
       return await window.__PROTOCLAW_TAURI_BRIDGE__.invoke(command, payload);
     } catch (error) {
-      if (!(window.location.protocol === 'http:' && window.location.port === '1420')) {
+      if (!isServerServedPage) {
         throw error;
       }
     }
   }
-  if (window.location.protocol === 'http:' && window.location.port === '1420') {
+  if (isServerServedPage) {
     if (command === 'get_connected_agents') {
       const res = await fetch('/protoclaw/get_connected_agents');
       if (!res.ok) {

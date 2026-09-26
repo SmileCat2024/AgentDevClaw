@@ -117,7 +117,9 @@ export async function installFeature({ identity, packageName, version }, {
     const existing = mounts.get(key);
     const alreadyDeclared = existing?.package === packageName && existing?.version === version;
 
-    const target = new Map(mounts);
+    // builtin 挂载是静态装配开关，不参与仓库装配 plan（与 rebuild/readiness 同口径）；
+    // 不过滤会让 plan 解析器拿到无 package 字段的条目，报"包不存在：undefined"
+    const target = new Map([...mounts].filter(([, mount]) => mount.kind !== 'builtin'));
     target.set(key, { package: packageName, version });
 
     const started = Date.now();
