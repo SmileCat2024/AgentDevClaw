@@ -39,6 +39,7 @@
 - IM 门户代理：[prebuilt-agents/official/qqbot/agent.js](prebuilt-agents/official/qqbot/agent.js)
 - 群聊管理员工具集：[local-features/group-admin](local-features/group-admin)
 - 运行时信封：[server/runtime-call-envelope.js](server/runtime-call-envelope.js)
+- 桌面壳（Tauri，2a 渲染切片已验收）：[desktop/](desktop)
 
 ## 项目定位
 
