@@ -13,7 +13,7 @@
     "predev": "node scripts/preflight.mjs",
     "dev": "node server.js",
     "prestart": "node scripts/preflight.mjs",
-    "start": "node server.js",
+    "start": "node scripts/run-supervised.js",
     "agentdev:local": "node scripts/use-agentdev-local.mjs",
     "agentdev:published": "node scripts/use-agentdev-published.mjs",
     "test": "npm run test:core && npm run test:features",

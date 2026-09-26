@@ -29,6 +29,7 @@ import { setupUsageRoutes } from './server/usage-ledger.js';
 import { authMiddleware, registerAuthRoutes, getInternalAuthToken } from './server/auth.js';
 import { securityHeadersMiddleware } from './server/shared/security-headers.js';
 import { createServiceLifecycle } from './server/service-lifecycle.js';
+import { ensureAppPortRecoverable } from './server/boot/port-recovery.js';
 import { migrateLegacyAppConfig } from './server/app-config-migration.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
@@ -1472,6 +1473,8 @@ async function shutdown(exitCode = 0) {
       // Stop accepting requests and close long-lived streams before terminating runtimes.
       sseEvents.closeAll();
       if (httpServer?.listening) {
+        // keep-alive 空闲连接不主动收口会把 close() 回调拖到连接自然超时
+        httpServer.closeIdleConnections?.();
         await new Promise((resolve) => httpServer.close(resolve));
       }
 
@@ -1499,7 +1502,32 @@ async function shutdown(exitCode = 0) {
 process.on('SIGINT', () => void shutdown(0));
 process.on('SIGTERM', () => void shutdown(0));
 
+// 宿主死亡检测：被 supervisor 托管时（CLAW_SUPERVISED=1）定期探测宿主存活性。
+// Windows 上父进程消亡既不给子进程发信号、也不关闭子进程可见的任何通道
+// （匿名管道不产生 EOF，已实测证伪），只能主动探测 ppid。裁决权在宿主：本
+// 进程清理进度只影响清理质量，不影响"必死"底线——挂住时由宿主收割进程树
+// （scripts/run-supervised.js），启动自愈（server/boot/port-recovery.js）兜底。
+if (process.env.CLAW_SUPERVISED === '1') {
+  const hostWatchdog = setInterval(() => {
+    try {
+      process.kill(process.ppid, 0);
+    } catch {
+      clearInterval(hostWatchdog);
+      log('server', 'supervisor vanished, shutting down');
+      void shutdown(0);
+    }
+  }, 3000);
+  hostWatchdog.unref();
+}
+
 async function main() {
+  // 启动自愈：上个实例未退干净时在此识别并接管端口（优雅请退 → 强杀进程
+  // 树），而不是以 EADDRINUSE 失败把清理责任推给用户。
+  const recovery = await ensureAppPortRecoverable({ port: APP_PORT });
+  if (recovery.action !== 'clear') {
+    log('server', `port ${APP_PORT} recovered: ${recovery.action} (previous pid ${recovery.pid})`);
+  }
+
   // Move legacy app settings before any runtime or route can read the new paths.
   try {
     const migration = await migrateLegacyAppConfig({ legacyRoot: PROJECT_ROOT, userDataRoot: USER_DATA_ROOT });

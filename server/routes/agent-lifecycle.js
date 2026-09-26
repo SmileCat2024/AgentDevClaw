@@ -239,6 +239,8 @@ export function createAgentLifecycleModule(ctx) {
       res.status(ready ? 200 : 503).json({
         ok: ready,
         state,
+        // pid 供启动预检（server/boot/port-recovery.js）识别并接管残留实例
+        pid: process.pid,
         appPort: APP_PORT,
         viewerPort: VIEWER_PORT,
       });

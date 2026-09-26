@@ -55,7 +55,7 @@
 
 ## 启动与依赖模式
 
-`npm install` → `npm run build` → `npm start` 三段式。build 与 prestart 都按 package.json 中 `@agentdevjs/*` 依赖声明形态自动分流：
+`npm install` → `npm run build` → `npm start` 三段式。`npm start` 经宿主 [scripts/run-supervised.js](scripts/run-supervised.js) 托管 server.js：宿主持有进程裁决权（优雅窗口后收割整棵进程树，杜绝 Ctrl+C 后端口残留），server 侧配套 stdin watchdog 与启动端口自愈，契约见 [docs/protocols/service-lifecycle.md](docs/protocols/service-lifecycle.md)。build 与 prestart 都按 package.json 中 `@agentdevjs/*` 依赖声明形态自动分流：
 
 | 形态 | package.json 声明 | node_modules | build 行为 |
 |---|---|---|---|

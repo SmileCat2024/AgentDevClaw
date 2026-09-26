@@ -641,7 +641,7 @@ describe('agent-lifecycle', () => {
       };
       mod.setupRoutes(app, { json: () => (req, res, next) => next() });
       assert.equal(responseStatus, 503);
-      assert.deepEqual(responseData, { ok: false, state: 'starting', appPort: responseData.appPort, viewerPort: responseData.viewerPort });
+      assert.deepEqual(responseData, { ok: false, state: 'starting', pid: responseData.pid, appPort: responseData.appPort, viewerPort: responseData.viewerPort });
     });
 
     it('runtime_status returns only the requested ready runtime', async () => {
