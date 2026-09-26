@@ -1,0 +1,14 @@
+[package]
+name = "agentdev-claw-desktop"
+version = "0.1.0"
+description = "AgentDevClaw 桌面壳（Tauri）"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+# 桌面壳是独立 crate，不与任何上层 Rust workspace 关联
+[workspace]

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AgentDevClaw",
+  "version": "0.1.0",
+  "identifier": "dev.agentdev.claw",
+  "build": {},
+  "app": {
+    "windows": [
+      {
+        "title": "AgentDevClaw",
+        "url": "http://127.0.0.1:1420",
+        "width": 1600,
+        "height": 1000,
+        "minWidth": 1100,
+        "minHeight": 700
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

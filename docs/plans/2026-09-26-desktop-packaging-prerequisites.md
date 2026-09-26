@@ -14,7 +14,11 @@
 
 **D2 · Claw HEAD 依赖未发布框架 API**。`local-features` 源码使用 registry 0.1.1 尚不存在的 `bgObserver` 系列、`CallStartContext.metadata`（shell-feature 后台面板镜像工作引入）。纯 registry 组装不了当前 HEAD。短期以相邻源码 junction 绕过（`agentdev:local` 语义），根治走下方 vendor 化或框架发版。
 
-**D3 · 仓库携带用户配置与凭据**。仓库 `.agentdev/` 下存有历史运行时写入的模型配置（`default.json`）、全套 IM 渠道配置与 `agent-configs/`。复制仓库或打包都会带上它们——**安装包不得携带用户凭据**。处置：打包清单显式排除；仓库内这批历史文件应择机清理（迁移已完成，程序不再读取旧位置）。
+**D3 · 仓库携带用户配置与凭据（已处置，2026-09-26）**。仓库 `.agentdev/` 与 `config/` 整体在 `.gitignore` 内，凭据本就不会进 git/git archive，风险面为"整目录复制式打包"与本地磁盘卫生。处置已完成：迁移清单内的死副本（八个 IM/模型/gateway/remote 配置、`agent-configs/`、`config/default.json`、`config/presets.json`）与遗留运行数据（旧 sessions、audit.db、GROUP.md、trace/日志、dispatch 票据、visual-cache/tts/mcps/images/resources）共 23 项移入回收站；活数据此前已核对全部存在于用户数据目录。保留：`.agentdev/temp`（会话 shell 输出落盘，项目级设计）、`.agentdev/claw-workspace`（本仓库自身作为工作项目的 docset）、`.agentdev/skills`（SkillFeature 扫描 `workspaceDir/.agentdev/skills`，活数据）、`.agentdev/tickets/acceptance-report-T007.md`（git 追踪的验收记录，内容无凭据）。清理中顺带发现并修复：`/protoclaw/render_conversation` 写 `process.cwd()/.agentdev/temp`，打包后 cwd 为只读安装目录会写入失败，已改落 `USER_DATA_ROOT/temp`（server 侧唯一一处 cwd 写入）。
+
+## Tauri 2a 渲染兼容性切片（已通过，2026-09-26）
+
+[desktop/](../../desktop/) 落地最小 Tauri 2 壳：窗口直接加载本机 Claw 服务（`http://127.0.0.1:1420`），无 sidecar、无打包、无系统集成。WebView2 对现有前端（玻璃质感、环境光、滚动、面板）渲染正常（用户实测验收）。壳的启动方式：先 `npm start` 起服务，再 `cd desktop && cargo run`。同批删除了 ProtoClaw 时代的孤儿 `public/src/tauri-bridge.js`（活代码零引用）。下一步：2b sidecar 生命周期切片（Tauri 主进程接管 supervisor 角色，复用 [run-supervised.js](../../scripts/run-supervised.js) 的宿主语义）。
 
 ## 既定方向：框架包 vendor 化（tgz 快照）
 
