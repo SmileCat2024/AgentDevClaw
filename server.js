@@ -183,6 +183,9 @@ const tunnelManager = createTunnelManager();
 let remoteClawConnector = null;
 let remoteClawContext = null;
 const REMOTE_CLAW_CONFIG_FILE = REMOTE_CLAW_CONFIG_PATH;
+// 停机时 httpServer.close 对在途请求的收尾窗口：SSE 与 runtime 已先行收口，
+// 超过此窗口的活跃连接由 closeAllConnections 强断，close() 的完成不依赖外部连接。
+const HTTP_CLOSE_GRACE_MS = 2000;
 
 // Authentication routes are public only for status/login; every existing
 // API/control endpoint is protected by the middleware below. Internal runtime
@@ -1472,12 +1475,11 @@ async function shutdown(exitCode = 0) {
 
       // Stop accepting requests and close long-lived streams before terminating runtimes.
       sseEvents.closeAll();
-      if (httpServer?.listening) {
-        // keep-alive 空闲连接不主动收口会把 close() 回调拖到连接自然超时
-        httpServer.closeIdleConnections?.();
-        await new Promise((resolve) => httpServer.close(resolve));
-      }
 
+      // 先送走自己人，再关外门：runtime 的轮询/桥接连接是活跃长连接，若排在
+      // httpServer.close 之后清理，close 会死等这些连接自然断开，而断开又依赖
+      // runtime 被 kill——循环等待（实测复现：POST /protoclaw/shutdown 后主端口
+      // 停听但进程不死，ViewerWorker 端口持续占用）。
       const runtimes = [...managedAgents.values(), ...assemblyRuntimeProcesses.values()];
       const children = runtimes.map((runtime) => runtime.process)
         .filter((child, index, all) => child && child.exitCode === null && all.indexOf(child) === index);
@@ -1489,6 +1491,20 @@ async function shutdown(exitCode = 0) {
         await waitForProcessExit(child);
         if (child.exitCode === null) child.kill('SIGKILL');
       }));
+
+      if (httpServer?.listening) {
+        // SSE 已收口、runtime 已终结，剩余活跃连接只剩外部客户端的挂起请求与
+        // keep-alive：空闲者即刻收口，在途请求给短收尾窗口，超时强断——close()
+        // 的完成不再依赖任何外部连接的自觉。
+        httpServer.closeIdleConnections?.();
+        await new Promise((resolve) => {
+          const forceTimer = setTimeout(() => httpServer.closeAllConnections?.(), HTTP_CLOSE_GRACE_MS);
+          httpServer.close(() => {
+            clearTimeout(forceTimer);
+            resolve();
+          });
+        });
+      }
 
       await viewerWorker.stop();
     });

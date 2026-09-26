@@ -62,7 +62,44 @@ process.on('SIGINT', () => (stopping ? void forceKill('second interrupt') : requ
 process.on('SIGTERM', () => requestStop('terminate received'));
 process.on('SIGHUP', () => requestStop('hangup received'));
 
+// health watchdog：server 自主关闭（POST /protoclaw/shutdown）或挂死时不给本进程
+// 任何信号，只靠停机信号的 grace 收割永远不会启动——这里补充"宿主主动询问"
+// 的感知通道，对应桌面宿主对服务进程的标准监督姿势。ready 之前的探测失败属
+// 启动期正常现象，不计数。
+const HEALTH_PORT = Number.parseInt(process.env.PORT || '1420', 10);
+// 测试可经 CLAW_SUPERVISOR_HEALTH_MS 缩短探测周期
+const HEALTH_INTERVAL_MS = Number.parseInt(process.env.CLAW_SUPERVISOR_HEALTH_MS || '', 10) || 2000;
+const HEALTH_FAILURE_LIMIT = 2;
+let healthReadySeen = false;
+let healthFailures = 0;
+
+async function probeHealth() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const res = await fetch(`http://127.0.0.1:${HEALTH_PORT}/protoclaw/health`, { signal: controller.signal });
+    if (res.ok) { healthReadySeen = true; healthFailures = 0; return; }
+    let state = '';
+    try { state = (await res.json())?.state || ''; } catch { /* body 不可解析按未知 503 处理 */ }
+    // starting 等其他过渡态不视为死亡；shutting_down 表示 server 已开始自主关闭，
+    // 若其清理挂死，grace 窗口到期由本进程收割。
+    if (state === 'shutting_down') requestStop('health reports shutting_down');
+  } catch {
+    if (!healthReadySeen) return;
+    healthFailures += 1;
+    if (healthFailures >= HEALTH_FAILURE_LIMIT) {
+      requestStop(`health probe failed ${healthFailures} times after ready`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const healthWatchdog = setInterval(() => void probeHealth(), HEALTH_INTERVAL_MS);
+healthWatchdog.unref();
+
 child.on('exit', (code) => {
+  clearInterval(healthWatchdog);
   if (graceTimer) clearTimeout(graceTimer);
   // 主动停机路径（含强杀收割）视为正常结束；仅 server 自身异常退出时透传退出码。
   process.exit(stopping ? 0 : (code ?? 0));

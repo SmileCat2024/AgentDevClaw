@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { killProcessTree } from '../server/shared/process-tree.js';
@@ -70,4 +71,46 @@ test('killProcessTree terminates a stuck child', async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(await killProcessTree(child.pid), true);
   assert.equal(await pollProcessGone(child.pid), true); // taskkill/SIGKILL 不会留下存活进程
+});
+
+// server 自主关闭（POST /protoclaw/shutdown）不给 supervisor 任何信号——health
+// watchdog 是唯一的感知通道：假 server 先 ready、后转 503 shutting_down 且清理
+// 挂死（不退出），断言 supervisor 启动 grace 并收割，进程树无残留。
+test('health watchdog reaps a server stuck in self-shutdown', async (t) => {
+  const port = 18000 + Math.floor(Math.random() * 2000);
+  // 假 server：health 先 200，1 秒后转 503 shutting_down，之后永久挂住不退出。
+  // CLAW_SUPERVISED_CMD 按空格切分、不支持带引号参数，故落成临时脚本文件。
+  const fakeScript = path.join(__dirname, `.tmp-fake-shutdown-server-${process.pid}.mjs`);
+  const fakeSource = [
+    "import http from 'node:http';",
+    "let phase = 'ready';",
+    "setTimeout(() => { phase = 'shutting_down'; }, 400);",
+    "http.createServer((req, res) => {",
+    "  if (phase === 'shutting_down') {",
+    "    res.writeHead(503, { 'Content-Type': 'application/json' });",
+    "    res.end(JSON.stringify({ state: 'shutting_down' }));",
+    "  } else {",
+    "    res.writeHead(200, { 'Content-Type': 'application/json' });",
+    "    res.end(JSON.stringify({ state: 'ready' }));",
+    "  }",
+    `}).listen(${port}, '127.0.0.1');`,
+    'setInterval(() => {}, 1e9);',
+  ].join('\n');
+  fs.writeFileSync(fakeScript, fakeSource);
+  t.after(() => fs.rmSync(fakeScript, { force: true }));
+
+  const sup = spawnSupervised({
+    CLAW_SUPERVISED_CMD: `node ${fakeScript}`,
+    PORT: String(port),
+    CLAW_SUPERVISOR_HEALTH_MS: '120',
+    CLAW_SUPERVISOR_GRACE_MS: '250',
+  });
+  let out = '';
+  sup.stdout.on('data', (c) => { out += c; });
+  sup.stderr.on('data', (c) => { out += c; });
+
+  const { code } = await waitExit(sup, 10000);
+  assert.equal(code, 0); // 收割路径视为正常结束
+  assert.match(out, /health reports shutting_down/);
+  assert.match(out, /force-killing/);
 });

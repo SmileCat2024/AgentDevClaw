@@ -14,7 +14,8 @@ npm start → supervisor（宿主，持有终端）→ node server.js（被托�
 
 1. **宿主收割（主路径）**：宿主收到停机信号（Ctrl+C 等）后给 server 优雅窗口（`CLAW_SUPERVISOR_GRACE_MS`，默认 10s），窗口过后或再次收到信号时，无条件收割整棵进程树（Windows `taskkill /T /F`，见 [server/shared/process-tree.js](../shared/process-tree.js)）——server 自身与其 runtime 子进程一并终结。server 的清理挂住最多损失清理质量，不会造成端口残留。
 2. **宿主死亡检测**：server 以 `CLAW_SUPERVISED=1` 被托管时，每 3 秒探测宿主进程存活（`process.kill(ppid, 0)`）。Windows 上父进程消亡既不发信号也不关闭子进程可见通道（匿名管道不产生 EOF，已实测证伪），只能主动探测；宿主无论以何种方式消亡，探测失败即触发自身有序关闭。
-3. **启动自愈**（[server/boot/port-recovery.js](../boot/port-recovery.js)）：server 启动绑定端口前探测 `GET /protoclaw/health`——响应带 `state` 契约字段即本产品旧实例：先 `POST /protoclaw/shutdown` 优雅请退，宽限后仍存活则按响应中的 `pid` 收割其进程树；非 Claw 进程占用或不报告 pid 的过旧实例则报错退出，把决定权留给用户。
+3. **宿主 health watchdog**：宿主周期探测 `GET /protoclaw/health`（默认 2s，`CLAW_SUPERVISOR_HEALTH_MS` 可调）。server 自主关闭（`POST /protoclaw/shutdown`）或清理挂死时不给宿主任何信号，停机信号路径的 grace 收割不会启动——watchdog 补上"宿主主动询问"的感知通道：ready 之后的连续探测失败、或 503 且 `state=shutting_down`，均按停机信号同等启动 grace 窗口。ready 之前的探测失败属启动期正常现象，不计数。
+4. **启动自愈**（[server/boot/port-recovery.js](../boot/port-recovery.js)）：server 启动绑定端口前探测 `GET /protoclaw/health`——响应带 `state` 契约字段即本产品旧实例：先 `POST /protoclaw/shutdown` 优雅请退，宽限后仍存活则按响应中的 `pid` 收割其进程树；非 Claw 进程占用或不报告 pid 的过旧实例则报错退出，把决定权留给用户。
 
 桌面化时 Electron/Tauri 主进程即同一宿主角色，直接复用该裁决权结构与 server 侧语义。
 
@@ -47,8 +48,9 @@ HTTP `POST /protoclaw/shutdown` 返回 `{ ok: true }` 后请求有序关闭；SI
 1. 停止远程 Claw connector、连接健康轮询和隧道管理。
 2. 关闭 SSE 长连接并停止接收新的 HTTP 请求。
 3. 向仍存活的 Agent/assembly 子进程发送 SIGTERM；等待最多 `PROCESS_EXIT_WAIT_MS`，超时则发送 SIGKILL。
-4. 停止 ViewerWorker。
-5. 清理结束后退出服务进程。
+4. 等待 HTTP server 关闭：keep-alive 空闲连接主动收口（`closeIdleConnections`）；在途请求有 `HTTP_CLOSE_GRACE_MS`（2s）收尾窗口，超时后 `closeAllConnections` 强断。步骤 3 先于本步骤执行——runtime 的轮询/桥接连接是活跃长连接，若 close 先行会死等这些连接自然断开，而断开又依赖 runtime 被 kill，形成循环等待（实测复现过：`POST /protoclaw/shutdown` 后主端口停听但进程不死）。close 的完成不依赖任何外部连接的自觉。
+5. 停止 ViewerWorker。
+6. 清理结束后退出服务进程。
 
 子进程按进程对象去重，以支持共享 runtime；关闭期间标记对应 runtime 为 stopped。若清理发生错误，服务以非零退出码结束。
 
