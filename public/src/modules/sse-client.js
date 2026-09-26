@@ -35,9 +35,9 @@ let _lastFrameAt = 0;          // 最近一次事件帧到达时间（心跳注�
 let _watchdogTimer = null;
 let _retryTimer = null;
 
-// 焦点 runtime 最近一次 queued-inputs 快照（供 _syncPersistentInputUi 的
-// SSE 分支即时消费，避免事件到达前的过渡期拉取）
-let _lastQueuedSnapshot = null; // { runtimeId, items, at }
+// 各 runtime 最近一次 queued-inputs 快照。非焦点期间队列变化也要缓存，
+// 否则切回该 runtime 时只能复用旧快照，已消费的排队消息会继续显示。
+const _lastQueuedSnapshots = new Map(); // runtimeId -> { runtimeId, items, at }
 
 // 排队气泡乐观锚点：服务端排队 id -> { text, ts }
 const _optimisticQueued = new Map();
@@ -144,12 +144,15 @@ function handleInputRequestsEvent(frame) {
 }
 
 function handleQueuedInputsEvent(frame) {
-  if (!isSameRuntime(frame.agentId, currentRuntimeAgentId)) return;
+  const runtimeId = String(frame?.agentId || '').trim();
+  if (!runtimeId) return;
   const items = Array.isArray(frame?.data) ? frame.data : [];
-  _lastQueuedSnapshot = { runtimeId: String(frame.agentId || '').trim(), items, at: Date.now() };
+  const snapshot = { runtimeId, items, at: Date.now() };
+  _lastQueuedSnapshots.set(runtimeId, snapshot);
+  if (!isSameRuntime(runtimeId, currentRuntimeAgentId)) return;
   const texts = reconcileQueuedTexts(items);
   if (typeof applyQueuedInputsTexts === 'function') {
-    applyQueuedInputsTexts(frame.agentId, texts, items.filter(isUserQueuedItem).length);
+    applyQueuedInputsTexts(runtimeId, texts, items.filter(isUserQueuedItem).length);
   }
 }
 
@@ -255,9 +258,8 @@ function noteQueuedOptimistic(id, text) {
 }
 
 function getLastQueuedSnapshot(runtimeId) {
-  if (!_lastQueuedSnapshot) return null;
-  if (runtimeId && !isSameRuntime(_lastQueuedSnapshot.runtimeId, runtimeId)) return null;
-  return _lastQueuedSnapshot;
+  if (runtimeId) return _lastQueuedSnapshots.get(String(runtimeId).trim()) || null;
+  return _lastQueuedSnapshots.get(String(currentRuntimeAgentId || '').trim()) || null;
 }
 
 // ── 连接生命周期 ───────────────────────────────────────────────────

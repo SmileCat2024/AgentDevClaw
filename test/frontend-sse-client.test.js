@@ -321,6 +321,28 @@ describe('sse-client: 事件分发焦点路由', () => {
     assert.equal(ctx.run('window.ClawFW.SseClient.getLastQueuedSnapshot("rt-other")'), null);
   });
 
+  it('非焦点 runtime 的队列消费事件更新缓存，切回时不复用过期气泡', () => {
+    const { ctx, calls } = loadSseClient();
+    ctx.run('bootSseClient()');
+    latestSource().emit('hello', { hello: true });
+
+    latestSource().emit('queued-inputs', {
+      kind: 'queued-inputs', agentId: 'rt-focus',
+      data: [{ id: 'q-1', text: '已送达的消息' }],
+    });
+    ctx.currentRuntimeAgentId = 'rt-other';
+    latestSource().emit('queued-inputs', {
+      kind: 'queued-inputs', agentId: 'rt-focus', data: [],
+    });
+
+    assert.equal(calls.applyQueuedInputsTexts.length, 1,
+      '非焦点队列快照不能直接改当前输入框');
+    ctx.currentRuntimeAgentId = 'rt-focus';
+    const snapshot = ctx.run('window.ClawFW.SseClient.getLastQueuedSnapshot("rt-focus")');
+    assert.deepEqual(snapshot.items, [],
+      '切回 runtime 时应取得离开期间最新的空队列，而不是旧的排队消息');
+  });
+
   it('queued-inputs 事件按身份过滤：reminder 不进气泡文本与待发送计数', () => {
     const { ctx, calls } = loadSseClient();
     ctx.run('bootSseClient()');
