@@ -218,7 +218,7 @@ async function _phRenderMountsView(identityKey) {
         mount: m,
       });
     }
-    _phMountData = { identityKey, entries };
+    _phMountData = { identityKey, entries, envReady: data.envReady?.[identityKey] || null };
     _phRenderMountsBody(host);
   } catch (err) {
     _phMountData = null;
@@ -306,6 +306,10 @@ function _phRenderMountsBody(host) {
         + ' onclick="window._fsRemoveFor(\'' + escapeHtml(_phMountData.identityKey) + '\', \'' + escapeHtml(f.name) + '\')">&#215;</button>';
       if (e.mount.missing) {
         badgesHtml = '<span class="feature-badge status-removed">' + escapeHtml(isZh ? '包已不在仓库' : 'missing') + '</span>' + removeBtn;
+      } else if (e.mount.kind === 'builtin') {
+        // builtin 是静态装配开关，无 package@version，徽标只表来源
+        provHtml = '<span class="feature-prov-badge">' + escapeHtml(isZh ? '扩展' : 'extension') + '</span>';
+        badgesHtml = removeBtn;
       } else {
         provHtml = '<span class="feature-prov-badge" title="' + escapeHtml(e.mount.package + '@' + e.mount.version) + '">'
           + escapeHtml(isZh ? '扩展' : 'extension') + '</span>';
@@ -361,6 +365,7 @@ function _phRenderMountsBody(host) {
   const groupsHtml = groups.map(buildGroup).join('') || emptyHtml;
 
   host.innerHTML = '<div class="ph-mounts-body">'
+    + _phEnvNoticeHtml()
     + '<div class="hooks-section-header feature-panel-head">'
     + seg + capSelect + addButton
     + '</div>'
@@ -369,6 +374,53 @@ function _phRenderMountsBody(host) {
   // select 是 innerHTML 异步渲染后插入的，手动做 ClawSelect 增强
   if (window.ClawSelect) window.ClawSelect.enhanceAll(host);
 }
+
+let _phRebuildBusy = false;
+
+/** 环境缺失轻警告（Q3=C：可点击立即恢复；下次启动自愈兜底保留）。 */
+function _phEnvNoticeHtml() {
+  const isZh = currentLanguage === 'zh';
+  const env = _phMountData?.envReady;
+  if (!env || !env.hasEnv || env.ready) return '';
+  if (_phRebuildBusy) {
+    return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:10px;'
+      + 'border:1px solid var(--border,#ddd);border-radius:8px;font-size:12px;color:var(--text-secondary);">'
+      + escapeHtml(isZh ? '正在恢复插件环境…' : 'Restoring plugin environment…') + '</div>';
+  }
+  return '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:10px;'
+    + 'border:1px solid #e8c35a;background:rgba(232,195,90,0.08);border-radius:8px;font-size:12px;">'
+    + '<span style="color:#c79420;">&#9888;</span>'
+    + '<span style="flex:1;color:var(--text-secondary);">' + escapeHtml(isZh
+      ? '插件环境需要恢复：下次启动时自动完成，不影响已装配声明。'
+      : 'Plugin environment needs restoring: it will be rebuilt automatically on next launch.') + '</span>'
+    + '<button type="button" class="fs-list-add" onclick="window._phRebuildEnv()">'
+    + escapeHtml(isZh ? '立即恢复' : 'Restore now') + '</button>'
+    + '</div>';
+}
+
+window._phRebuildEnv = async function() {
+  if (_phRebuildBusy || !_phMountData) return;
+  _phRebuildBusy = true;
+  const host = document.getElementById('ph-feature-mounts-host');
+  if (host && _phMountData) _phRenderMountsBody(host);
+  try {
+    const res = await fetch('/api/feature-store/rebuild', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identity: _phMountData.identityKey }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || (res.status + ' ' + res.statusText));
+    await _phRenderMountsView(_phMountData.identityKey);
+  } catch (err) {
+    if (host && _phMountData) {
+      host.innerHTML = '<div class="ph-settings-empty" style="padding:32px 0;color:var(--danger,#e5484d);">'
+        + escapeHtml(String(err && err.message ? err.message : err)) + '</div>';
+    }
+  } finally {
+    _phRebuildBusy = false;
+  }
+};
 
 window._phSetMountSrcFilter = function(f) {
   if (['all', 'bundled', 'installed'].indexOf(f) === -1 || f === _phMountSrcFilter) return;

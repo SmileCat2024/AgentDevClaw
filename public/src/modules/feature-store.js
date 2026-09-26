@@ -2,12 +2,16 @@
  * feature-store.js — Feature 仓库选择面板（通用组件，类似系统相册 API）
  *
  * 身份由打开上下文决定（phOpenFeatureStore('main' | 'coder')），面板内不切换身份。
- * 选择/移除后写回对应身份配置层的 $mount 声明；新会话生效（runtime 创建时挂载）。
  *
  * 数据面：
- *   GET /api/feature-store/overview —— 包列表 + 两身份已装配清单（含 missing）
- * 写回复用配置层通道（$mount 与配置值同层同文件）：
- *   GET /protoclaw/feature_config/resolved → 定位层 sparse → diff → PUT layer
+ *   GET /api/feature-store/overview —— 包列表 + 两身份已装配清单（含 missing）+
+ *   envReady（身份级环境就绪）+ installing（服务端进行中的安装，关弹窗后台
+ *   继续时的可见性来源）
+ * 安装（repository 包）：
+ *   POST /api/feature-store/install —— provision + 成功才写声明；同步等待并
+ *   即时反馈（按钮三态：添加 → 安装中…Ns → 成功/失败原因）。builtin 扩展
+ *   是静态装配开关、无环境概念，走纯声明瞬时写回（PUT layer）。
+ * 移除：纯声明操作，前端直写配置层（PUT layer，无服务端状态变更）。
  *
  * 外部依赖（通过全局作用域）：
  *   - escapeHtml (app-ui.js)
@@ -25,11 +29,29 @@ let _fsState = {
   identity: 'main',
   overview: null,
   error: '',
-  busy: false, // 单飞：安装/卸载进行中禁用操作按钮
+  busy: false,          // 单飞：安装/卸载进行中禁用其他写操作
+  installingPkg: null,  // 本地发起安装中的包（卡片安装中态）
+  installingSince: 0,   // 安装开始时间戳（秒计时显示）
+  lastFailed: null,     // 最近一次安装失败的包（错误横幅重试入口）
 };
+
+let _fsTickTimer = null;
 
 function _fsT(zh, en) {
   return (typeof currentLanguage !== 'undefined' && currentLanguage === 'zh') ? zh : en;
+}
+
+// install/rebuild 错误分类 → 用户文案（服务端 code 见 install-service.js）
+function _fsInstallErrorText(err) {
+  const code = err && err.code;
+  const mapped = {
+    network: _fsT('网络不可用：首次安装需要联网拉取依赖', 'Network unavailable: first-time install needs internet to fetch dependencies'),
+    package_missing: _fsT('包或版本不在仓库', 'Package or version not found in repository'),
+    install_busy: _fsT('另一安装正在进行中，请稍候', 'Another install is in progress, please wait'),
+    npm_unavailable: _fsT('npm 不可用：安装环境异常', 'npm unavailable: broken install environment'),
+    nothing_to_rebuild: _fsT('没有需要恢复的环境', 'Nothing to rebuild'),
+  };
+  return mapped[code] || String((err && err.message) || err);
 }
 
 function _fsRuntimeKey(packageName) {
@@ -49,7 +71,11 @@ function _fsHost() {
 async function _fsFetchJson(url, options) {
   const res = await fetch(url, options);
   const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload.error || `${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const error = new Error(payload.error || `${res.status} ${res.statusText}`);
+    if (payload.code) error.code = payload.code;
+    throw error;
+  }
   return payload;
 }
 
@@ -99,24 +125,50 @@ async function _fsAfterChange(identity) {
   if (fc && typeof fc.refreshMountFacts === 'function') fc.refreshMountFacts();
 }
 
-// 写操作共用单飞 + 完成后一次重渲染：busy 只防重入/并发写竞态，
-// 不做中途渲染（按钮不闪烁、无"处理中"浮层）。
+// 安装计时：秒数展示（安装期间每秒重渲染，给"在动"的感知）
+function _fsStartTick() {
+  _fsStopTick();
+  _fsTickTimer = setInterval(() => { if (_fsState.open) _fsRender(); }, 1000);
+}
+
+function _fsStopTick() {
+  if (_fsTickTimer) { clearInterval(_fsTickTimer); _fsTickTimer = null; }
+}
+
+function _fsInstallSeconds() {
+  return Math.max(0, Math.floor((Date.now() - _fsState.installingSince) / 1000));
+}
+
+/** 服务端进行中的安装（可能是本会话关弹窗前发起的），当前身份匹配才显示 */
+function _fsServerInstalling() {
+  const info = _fsState.overview?.installing;
+  return (info && info.identity === _fsState.identity && info.kind === 'install')
+    ? info.packageName
+    : null;
+}
+
 window._fsInstall = async function(packageName, version) {
   if (_fsState.busy) return;
   _fsState.busy = true;
+  _fsState.error = '';
+  _fsState.installingPkg = packageName;
+  _fsState.installingSince = Date.now();
+  _fsStartTick();
+  _fsRender();
   try {
-    await _fsMutateLayer(_fsState.identity, (sparse) => {
-      const runtimeKey = _fsRuntimeKey(packageName);
-      sparse[runtimeKey] = {
-        ...(sparse[runtimeKey] && typeof sparse[runtimeKey] === 'object' ? sparse[runtimeKey] : {}),
-        $mount: { package: packageName, version },
-      };
+    await _fsFetchJson('/api/feature-store/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identity: _fsState.identity, packageName, version }),
     });
     await _fsAfterChange();
   } catch (err) {
-    _fsState.error = String(err?.message || err);
+    _fsState.error = _fsInstallErrorText(err);
+    _fsState.lastFailed = { packageName, version };
   } finally {
     _fsState.busy = false;
+    _fsState.installingPkg = null;
+    _fsStopTick();
     _fsRender();
   }
 };
@@ -257,10 +309,19 @@ function _fsRenderInstallSections(mountedMap, mountedByPackage) {
       '<option value="' + escapeHtml(v.version) + '">' + escapeHtml(v.version) + '</option>'
     ).join('');
     const latest = pkg.versions?.[0]?.version || '';
+    // 安装中卡片（本地发起或服务端后台进行）：按钮进计时态，版本选择禁用
+    const busyPkg = _fsState.installingPkg || _fsServerInstalling();
+    const isInstalling = busyPkg === pkg.package;
+    const addButton = isInstalling
+      ? '<button type="button" class="fs-list-add" disabled style="opacity:0.7;">'
+        + escapeHtml(_fsT('安装中… ' + _fsInstallSeconds() + 's', 'Installing… ' + _fsInstallSeconds() + 's')) + '</button>'
+      : '<button type="button" class="fs-list-add"' + (busyPkg ? ' disabled style="opacity:0.7;"' : '')
+        + ' onclick="window._fsInstall(\'' + escapeHtml(pkg.package) + '\', (this.closest(\'[data-fs-package]\')?.dataset.fsVersion || \'' + escapeHtml(latest) + '\'))">'
+        + escapeHtml(_fsT('+ 添加', '+ Add')) + '</button>';
     const control = (pkg.versions?.length > 1
-      ? '<select class="fs-select" onchange="window._fsSelectVersion(\'' + escapeHtml(pkg.package) + '\', this)">' + versionOptions + '</select>'
+      ? '<select class="fs-select"' + (busyPkg ? ' disabled' : '') + ' onchange="window._fsSelectVersion(\'' + escapeHtml(pkg.package) + '\', this)">' + versionOptions + '</select>'
       : '<span style="font-size:12px;color:var(--text-secondary);">' + escapeHtml(latest) + '</span>')
-      + '<button type="button" class="fs-list-add" onclick="window._fsInstall(\'' + escapeHtml(pkg.package) + '\', (this.closest(\'[data-fs-package]\')?.dataset.fsVersion || \'' + escapeHtml(latest) + '\'))">' + escapeHtml(_fsT('+ 添加', '+ Add')) + '</button>';
+      + addButton;
     items.push({
       name: runtimeKey,
       displayName: pkg.displayName || runtimeKey,
@@ -339,7 +400,13 @@ function _fsRender() {
   }
 
   const errorBanner = (_fsState.error && _fsState.overview)
-    ? '<div class="fs-error-banner">' + escapeHtml(_fsState.error) + '</div>'
+    ? '<div class="fs-error-banner">' + escapeHtml(_fsState.error)
+      + (_fsState.lastFailed
+        ? ' <button type="button" class="fs-list-add" style="margin-left:8px;" onclick="window._fsInstall(\''
+          + escapeHtml(_fsState.lastFailed.packageName) + '\', \'' + escapeHtml(_fsState.lastFailed.version) + '\')">'
+          + escapeHtml(_fsT('重试', 'Retry')) + '</button>'
+        : '')
+      + '</div>'
     : '';
 
   host.innerHTML = [
@@ -349,11 +416,11 @@ function _fsRender() {
     '<div style="display:flex;align-items:center;gap:4px;">',
     '<button class="feature-detail-close" type="button" title="' + _fsT('返回', 'Back') + '" onclick="window.phCloseFeatureStore()" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>',
     '<div>',
-    '<div class="feature-detail-title">' + escapeHtml(_fsT('添加 Feature', 'Add Feature')) + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(_fsT(
-      '从 Feature 仓库为 ' + _fsT(scope.labelZh, scope.labelEn) + ' 装配插件；对新会话生效',
-      'Install plugins for ' + _fsT(scope.labelZh, scope.labelEn) + ' from the feature repository; takes effect on new sessions',
-    )) + '</div>',
+      '<div class="feature-detail-title">' + escapeHtml(_fsT('添加 Feature', 'Add Feature')) + '</div>',
+      '<div class="feature-detail-subtitle">' + escapeHtml(_fsT(
+        '从 Feature 仓库为 ' + _fsT(scope.labelZh, scope.labelEn) + ' 安装插件（首次需联网），对新会话生效',
+        'Install plugins for ' + _fsT(scope.labelZh, scope.labelEn) + ' from the feature repository (first install needs internet); takes effect on new sessions'
+      )) + '</div>',
     '</div>',
     '</div>',
     '<button class="feature-detail-close" type="button" onclick="window.phCloseFeatureStore()">&times;</button>',
@@ -375,6 +442,9 @@ window.phOpenFeatureStore = async function(identity) {
   _fsState.overview = null;
   _fsState.error = '';
   _fsState.busy = false;
+  _fsState.installingPkg = null;
+  _fsState.lastFailed = null;
+  _fsStopTick();
   _fsRender();
   // catalog 与 overview 并行预载；catalog 失败不阻断（分组落待归类兜底组）
   await Promise.all([
@@ -389,5 +459,9 @@ window.phOpenFeatureStore = async function(identity) {
 window.phCloseFeatureStore = function() {
   _fsState.open = false;
   _fsState.busy = false;
+  _fsState.installingPkg = null;
+  _fsStopTick();
+  // 本地发起的安装不中断：服务端单飞队列继续跑完，重开面板时经
+  // overview.installing 显示进行中状态，完成结果由 overview 自然呈现
   _fsRender();
 };
