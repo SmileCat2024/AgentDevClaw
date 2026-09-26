@@ -36,9 +36,19 @@ E2E 实测（独立 `PORT`/`AGENTDEV_VIEWER_PORT`/`AGENTDEV_UDS_PATH`/`AGENTDEV_
 - **组装自检**：实体校验（无 junction、版本与 tgz 一致）+ 隔离端口冒烟（bundled node 直启 supervisor → health ready → POST shutdown → 退出码 0）内建于脚本，当前全程 2m35s。
 - **Node 随包分发**：拷贝打包机 node 至 `runtime/node.exe`；桌面壳（`CLAW_DESKTOP_ROOT` 指向发布树）解析顺序为托管树 `runtime/node` 优先、缺失回退 PATH。实测 PATH 剥离 node 后整条服务链（supervisor/server/agent runtime）全部跑在 bundled node 上。
 - **E2E 实锤并修复**：Tauri 默认"最后一个窗口关闭才退出"被 Windows 挂靠进程的辅助顶层窗口（ConPTY 的 PseudoConsoleWindow，隐藏 conhost 派生）挂住——WM_CLOSE 后主窗销毁、进程不退。修复：退出由主窗口 CloseRequested 显式裁决（`app.exit(0)` 走既有 Exit 清理链），不依赖窗口数归零。
+- **无损瘦身**（构建完成后内建于 pack:desktop，冒烟在 pruned 树上执行）：删 `features/*/node_modules`（构建期工具链，3×67MB）；staging 声明移除 typescript 后 `npm prune --omit=dev` 清 devDependencies 与 extraneous。600MB → **343MB**，无功能损失（playwright 家族 38MB 是浏览器工具链能力，保留；其浏览器本就不在树内，装在用户目录按需下载）。
 - E2E 结果：staging + bundled node + 无 node PATH 下，窗口关闭全树 446ms 退出、端口释放、并存实例无恙。
 
-已知待办（bundler 阶段）：staging 600MB 需瘦身（devDependencies、playwright 浏览器等）；node 版本应改 pinned 下载而非打包机现场拷贝；provisioner 运行时 `npm install` 离线化（用户无 npm 场景）仍未解。
+剩余待办：node 版本应改 pinned 下载而非打包机现场拷贝；provisioner 运行时 `npm install` 离线化（用户无 npm 场景）仍未解。
+
+## 第 4 步：tauri bundler 安装包（已通过，2026-09-26）
+
+`cd desktop && npx @tauri-apps/cli@2 build` 产出 NSIS 安装包 `desktop/target/release/bundle/nsis/AgentDevClaw_0.1.0_x64-setup.exe`：
+
+- 布局：安装目录 = `agentdev-claw-desktop.exe` + `app/`（pruned staging，经 `bundle.resources` 映射）+ `uninstall.exe`。桌面壳托管树解析链：`CLAW_DESKTOP_ROOT` → exe 同级 `app/`（以 `server.js` 存在性识别，打包形态）→ 编译期仓库根（开发态）。
+- 体积：343MB 树 → **57MB 安装包**（LZMA solid 压缩，约 6:1）；安装后落盘 351MB。
+- E2E（静默安装 `/S /D=<dir>` → 启动已安装 exe，无 CLAW_DESKTOP_ROOT、PATH 剥离 node）：exe 自发现 `app/` 布局，bundled node 承载全链路，health ready，窗口关闭全树 **451ms** 退出、端口释放、并存实例无恙；正规卸载器清注册表。
+- 首次构建 11 分钟（release 编译 3m47s + NSIS 下载与 LZMA 压缩）；增量构建会快得多。
 
 ## 既定方向：框架包 vendor 化（tgz 快照）——已落地，见"第 3 步组装链"
 
