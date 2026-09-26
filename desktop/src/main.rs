@@ -9,8 +9,9 @@
 //         内未退出则 taskkill /T /F 收割整棵树（最终兜底）
 // supervisor 侧另有 ppid watchdog：本进程被强杀时 supervisor 自行停机，服务不孤儿化。
 //
-// 当前为开发切片形态：node 取 PATH，仓库根取编译期 CARGO_MANIFEST_DIR；
-// Node 随包分发与资源定位属打包切片。
+// 当前为开发切片形态：仓库根取编译期 CARGO_MANIFEST_DIR（CLAW_DESKTOP_ROOT
+// 可指向 pack:desktop 产出的发布树）；Node 优先用发布树 runtime/ 内的随包
+// 副本，缺失时回退 PATH。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -21,6 +22,29 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+
+/// 托管目标树：打包形态经 CLAW_DESKTOP_ROOT 指向 pack:desktop 产出的发布树；
+/// 缺省（开发态）取编译期仓库根。
+fn repo_root() -> PathBuf {
+    if let Ok(p) = std::env::var("CLAW_DESKTOP_ROOT") {
+        return PathBuf::from(p);
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("desktop/ 的上级即仓库根")
+        .to_path_buf()
+}
+
+/// Node 解释器：发布树 runtime/ 随包副本优先，开发态回退 PATH。
+fn node_command() -> Command {
+    let bundled = repo_root()
+        .join("runtime")
+        .join(if cfg!(windows) { "node.exe" } else { "node" });
+    if bundled.exists() {
+        return Command::new(bundled);
+    }
+    Command::new("node")
+}
 
 fn service_port() -> u16 {
     std::env::var("PORT")
@@ -39,11 +63,8 @@ fn supervisor_grace() -> Duration {
 }
 
 fn spawn_supervisor() -> std::io::Result<Child> {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("desktop/ 的上级即仓库根")
-        .to_path_buf();
-    let mut cmd = Command::new("node");
+    let repo_root = repo_root();
+    let mut cmd = node_command();
     cmd.args(["scripts/run-supervised.js"])
         .current_dir(&repo_root)
         .stdin(Stdio::null())
@@ -105,6 +126,18 @@ fn request_server_shutdown(port: u16) {
 
 fn main() {
     let app = tauri::Builder::default()
+        .on_window_event(|window, event| {
+            // 退出由主窗口的关闭意图显式裁决，不依赖"最后一个窗口关闭"——
+            // Windows 会向本进程挂靠辅助顶层窗口（IME、ConPTY 的
+            // PseudoConsoleWindow 等），后者存活时 last-window 语义永不触发
+            // （实测：WM_CLOSE 后主窗销毁、进程不退）。exit(0) 走既有
+            // ExitRequested → Exit 清理链。
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if window.label() == "main" {
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let port = service_port();
