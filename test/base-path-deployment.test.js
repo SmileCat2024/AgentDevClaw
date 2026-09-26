@@ -73,8 +73,8 @@ describe('gateway base path bootstrap', () => {
   }
 
   it('loads boot-critical vendor scripts without breaking under an injected base', () => {
+    // ./ 相对引用经注入的 <base> 解析，base path 部署下仍指向本服务的 /vendor 挂载
     assert.match(indexHtml, /src="\.\/vendor\/marked\/lib\/marked\.umd\.js"/);
-    // highlight.js 自 210a667 起改为 CDN 绝对地址加载（原 vendor 路径 404），绝对 URL 不受注入的 <base> 影响
-    assert.match(indexHtml, /src="https:\/\/[^"]+\/highlight\.min\.js"/);
+    assert.match(indexHtml, /src="\.\/vendor\/hljs\/highlight\.min\.js"/);
   });
 });

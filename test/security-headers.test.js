@@ -28,12 +28,13 @@ describe('security headers middleware', () => {
     assert.ok(nextCalled);
   });
 
-  it('locks down CSP sinks while allowing the static CDNs', () => {
+  it('locks down CSP sinks to same-origin sources', () => {
     const { headers } = runMiddleware();
     const csp = headers['Content-Security-Policy'];
     assert.ok(csp.startsWith("default-src 'self'"));
-    assert.ok(csp.includes('https://cdn.jsdelivr.net'));
-    assert.ok(csp.includes('https://cdnjs.cloudflare.com'));
+    // 前端脚本/样式/字体全部经 /vendor 同源挂载，CSP 不再放行外部 CDN
+    assert.ok(!csp.includes('cdn.jsdelivr.net'));
+    assert.ok(!csp.includes('cdnjs.cloudflare.com'));
     assert.ok(csp.includes("frame-ancestors 'none'"));
     assert.ok(csp.includes("object-src 'none'"));
     assert.ok(csp.includes("connect-src 'self'"));

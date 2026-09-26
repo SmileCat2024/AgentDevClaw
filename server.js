@@ -1335,9 +1335,14 @@ const staticCacheHeaders = {
 };
 // /vendor 白名单：仅暴露前端实际引用的包目录（精确到子目录，避免整包
 // 的 README/bin/package.json 一并可读），防止整个 node_modules 未登录可读。
-// 前端新增 vendor 引用时在此同步登记。
+// 例外：cdn-assets 与 github-markdown-css 本身是纯前端资产包（根目录即
+// css/js 资产），挂包根。前端新增 vendor 引用时在此同步登记。
 const vendorMounts = {
   '/vendor/marked/lib': 'marked/lib',
+  '/vendor/hljs': '@highlightjs/cdn-assets',
+  '/vendor/github-markdown-css': 'github-markdown-css',
+  '/vendor/katex/dist': 'katex/dist',
+  '/vendor/diff2html/bundles': 'diff2html/bundles',
 };
 for (const [urlPath, packagePath] of Object.entries(vendorMounts)) {
   app.use(urlPath, express.static(path.join(__dirname, 'node_modules', packagePath), staticCacheHeaders));
