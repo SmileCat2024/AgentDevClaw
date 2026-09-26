@@ -10,6 +10,11 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "../dist/desktop-staging/": "app/"
+    }
   }
 }

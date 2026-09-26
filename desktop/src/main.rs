@@ -23,11 +23,20 @@ use std::time::{Duration, Instant};
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
-/// 托管目标树：打包形态经 CLAW_DESKTOP_ROOT 指向 pack:desktop 产出的发布树；
-/// 缺省（开发态）取编译期仓库根。
+/// 托管目标树：CLAW_DESKTOP_ROOT 显式指定（pack:desktop 产出的发布树）；
+/// 打包布局取 exe 同级 app/（bundle.resources 映射，以 server.js 存在性
+/// 识别）；缺省（开发态）取编译期仓库根。
 fn repo_root() -> PathBuf {
     if let Ok(p) = std::env::var("CLAW_DESKTOP_ROOT") {
         return PathBuf::from(p);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let bundled = dir.join("app");
+            if bundled.join("server.js").is_file() {
+                return bundled;
+            }
+        }
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
