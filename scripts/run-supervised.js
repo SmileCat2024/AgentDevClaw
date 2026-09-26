@@ -47,6 +47,14 @@ function requestStop(reason) {
     try { child.kill('SIGTERM'); } catch { /* already dead */ }
   }
 
+  // 通知 server 自主有序关闭：Ctrl+C 路径冗余但幂等；宿主死亡检测触发时
+  // （Windows 无法向子进程转发信号）这是 server 收到优雅关闭请求的唯一通道。
+  // 尽力而为，失败由 grace 窗口后的收割兜底。
+  fetch(`http://127.0.0.1:${HEALTH_PORT}/protoclaw/shutdown`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(1500),
+  }).catch(() => {});
+
   graceTimer = setTimeout(() => void forceKill('grace window elapsed'), GRACE_MS);
   graceTimer.unref?.();
 }
@@ -61,6 +69,21 @@ async function forceKill(reason) {
 process.on('SIGINT', () => (stopping ? void forceKill('second interrupt') : requestStop('interrupt received')));
 process.on('SIGTERM', () => requestStop('terminate received'));
 process.on('SIGHUP', () => requestStop('hangup received'));
+
+// 宿主死亡检测：桌面宿主（Tauri 主进程）被单独强杀时不给本进程任何信号，
+// 这里主动轮询父进程存活（与 server 侧 CLAW_SUPERVISED watchdog 对称），宿主
+// 消失即进入停机流程，服务不孤儿化。npm/终端场景下控制台关闭会先发整组信号，
+// 与本检测互为兜底；正常停机时 requestStop 幂等早退，无冲突。
+const HOST_PING_MS = Number.parseInt(process.env.CLAW_SUPERVISOR_HOST_PING_MS || '', 10) || 3000;
+const hostWatchdog = setInterval(() => {
+  try {
+    process.kill(process.ppid, 0);
+  } catch {
+    clearInterval(hostWatchdog);
+    requestStop('host process gone');
+  }
+}, HOST_PING_MS);
+hostWatchdog.unref();
 
 // health watchdog：server 自主关闭（POST /protoclaw/shutdown）或挂死时不给本进程
 // 任何信号，只靠停机信号的 grace 收割永远不会启动——这里补充"宿主主动询问"

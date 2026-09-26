@@ -114,3 +114,35 @@ test('health watchdog reaps a server stuck in self-shutdown', async (t) => {
   assert.match(out, /health reports shutting_down/);
   assert.match(out, /force-killing/);
 });
+
+// 宿主死亡检测（ppid watchdog）：wrapper 作为宿主 spawn supervisor 后自行退出
+// （模拟桌面宿主被单独强杀——不给任何信号），supervisor 应检测到宿主消失并
+// 驱动完整停机链（grace 收割子进程）后自行退出，不孤儿化。
+test('supervisor stops itself when host process dies', async (t) => {
+  const wrapper = spawn(process.execPath, ['-e', [
+    "const { spawn } = require('node:child_process');",
+    'const child = spawn(process.execPath, [process.env.SUP_PATH], { stdio: \'ignore\' });',
+    'console.log(child.pid);',
+    'setTimeout(() => process.exit(0), 100);',
+  ].join('\n')], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env: {
+      ...process.env,
+      SUP_PATH: SUPERVISOR,
+      CLAW_SUPERVISED_CMD: 'node -e setInterval(()=>{},1e9)',
+      CLAW_SUPERVISOR_HOST_PING_MS: '200',
+      CLAW_SUPERVISOR_GRACE_MS: '250',
+    },
+  });
+  const supPid = await new Promise((resolve, reject) => {
+    let out = '';
+    const timer = setTimeout(() => reject(new Error('wrapper did not report supervisor pid')), 4000);
+    wrapper.stdout.on('data', (c) => {
+      out += c;
+      const pid = Number.parseInt(out, 10);
+      if (Number.isInteger(pid)) { clearTimeout(timer); resolve(pid); }
+    });
+  });
+  t.after(() => { void killProcessTree(supPid); }); // watchdog 失效时的兜底清理
+  assert.equal(await pollProcessGone(supPid), true, 'supervisor should exit after host death');
+});
