@@ -10,6 +10,7 @@ import {
   MIRROR_SCRIPT_TIMEOUT_MS,
   SESSION_TRANSFORMATION_TIMEOUT_MS,
   PH_STYLE_WORKSPACE_AGENT_IDS,
+  USER_DATA_ROOT,
 } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { consumeRecoverySession } from '../shared/open-sessions-tracker.js';
@@ -401,7 +402,9 @@ app.post('/protoclaw/render_conversation', express.json(), async (req, res, next
       lastNCalls: typeof lastNCalls === 'number' && lastNCalls > 0 ? lastNCalls : null,
     });
 
-    const tempDir = path.join(process.cwd(), '.agentdev', 'temp');
+    // 对话导出属应用侧产物，落用户数据目录 temp（打包后进程 cwd 为只读安装目录，
+    // 不可写 cwd/.agentdev/temp）。
+    const tempDir = path.join(USER_DATA_ROOT, 'temp');
     await fs.mkdir(tempDir, { recursive: true });
     const filename = `conversation-${sessionId.slice(-12)}-${Date.now()}.html`;
     const filePath = path.join(tempDir, filename);
