@@ -7,8 +7,7 @@ AgentDevClaw 充分发挥 AgentDev 框架的 **Feature 机制**：每个 Agent �
 ### 与 Agent 交互
 
 - **浏览器对话** —— 在 Web UI 中直接与 Agent 对话，支持精美的 Markdown 渲染和实时的工具调用可视化，提供接近原生 IDE 的交互体验
-- **IM 渠道** —— 已适配微信、QQ、企业微信、飞书四种渠道。在 IM 渠道工作空间中配置好线路后，IM 消息会被路由到内部 Agent 会话，Agent 的回复也会传回 IM
-- **工作群（Beta）** —— 一种探索性的协作模式。创建多个群聊（每个群聊相当于一个话题空间），将多个 Agent 加入其中，在管理员 Agent 的协调下指挥多 Agent 协作。
+- **IM 渠道** —— 已适配微信、QQ、企业微信、飞书、Rokid 眼镜等渠道。在 IM 渠道工作空间中配置好线路后，IM 消息会被路由到内部 Agent 会话，Agent 的回复也会传回 IM
 - **CLI 直接调用** —— 通过全局命令 `claw run <name> --goal "..."` 单次调用轻量 agent（无需 server 运行），过程日志与结果严格分流、可安全管道化，默认可被 Web UI 实时监视。详见 [agents/README.md](agents/README.md)
 
 AgentDevClaw 是一个以 Agent 为中心的，可扩展的工作台架构，整合配置、会话、调度、协作等多重职责，目标是让agent搭建与管理更加灵活，构建完全透明与可信任的运行过程。它本身也是一个持续迭代的项目，我们会充分发挥其架构优势，不断测试、推出新的 Agent 交互范式。
@@ -136,8 +135,8 @@ AgentDevClaw 的核心工作空间——一个对标 Claude Code 的 AI 编程 A
 
 - **会话分支** —— 从任意对话节点分叉出新会话，探索不同方向而不丢失原始上下文
 - **上下文精简** —— 对话过长时，可裁剪早期历史（Trim）或压缩为摘要（Compact），保持上下文聚焦
+- **跨对话记忆** —— 在输入框中引用历史会话（支持从列表直接拖拽），Agent 按需读取其内容，把之前的上下文带进当前任务
 - **Checkpoint / Rollback** —— 随时保存检查点，出错了可以回退到之前的状态
-- **探索会话与子代理** —— 派生只读的探索会话进行代码分析和知识收集，不修改任何文件
 - **待办与归档** —— 将会话标记为待办，方便跟踪需要继续处理的任务；将已完成的会话归档，历史记录完整保留，需要继续时随时恢复
 
 这些能力让长任务的上下文管理变得从容——不必担心对话太长，随时可以裁剪、分叉、回溯。以上操作均可在左侧会话列表或历史会话列表中右键触发。
@@ -146,15 +145,16 @@ AgentDevClaw 的核心工作空间——一个对标 Claude Code 的 AI 编程 A
 
 **能力清单：**
 
-- 完整工具链：Shell（命令执行）、LSP（符号跳转 / 类型查看 / 引用查找）、Web 搜索、GitHub 集成（32 个工具，覆盖 PR / Issue / Actions / 代码搜索）、图片读取
+- 完整工具链：Shell（命令执行）、LSP（符号跳转 / 类型查看 / 引用查找）、Web 搜索、GitHub 集成（PR / Issue / Actions / 代码搜索）、图片读取
 - 会话分支、上下文精简（trim / compact / summary）、checkpoint / rollback
+- **后台任务** —— 长时间运行的命令可转入后台，对话不被阻塞，完成或出错会主动汇报
 - AI 生成会话标题
 - **交互页面** —— Agent 可在对话旁侧创建持久交互表面（表单、表格、选择卡片等），用户直接操作，无需在对话中反复来回
 - 支持语音输入与声音反馈（需在全局设置中配置语音模型）
 
 ### IM 渠道 
 
-整个 IM 渠道由一个门户代理和两个可指定通道组成，每个都需要配置其连接的IM 平台（需要在渠道配置中填写平台的连接凭证，如AppID、Token、Secret 等）当前支持 QQ、微信、企业微信、飞书四个平台。
+整个 IM 渠道由一个门户代理和若干条通道组成，每个都需要配置其连接的 IM 平台（需要在渠道配置中填写平台的连接凭证，如 AppID、Token、Secret 等）。当前支持 QQ、微信、企业微信、飞书、Rokid 眼镜。
 
 - **门户代理**：IM 门户代理是一个"接线员"Agent，把外部 IM 消息接入到内部工作空间会话。门户代理同时只能连一个平台
 - **通道**：每条通道也要选择一个 IM 平台，并绑定到一个运行中的工作空间会话（比如编程小助手的某个对话）。门户代理和各通道之间不能使用同一个平台——每个平台同时只能被一方占用
@@ -163,27 +163,11 @@ AgentDevClaw 的核心工作空间——一个对标 Claude Code 的 AI 编程 A
 
 启动门户代理后，接线员开始监听主渠道的消息。IM 消息到达时，接线员根据通道配置路由到对应的会话，等待 Agent 回复后传回 IM。接线员能看到平台内部所有工作空间和运行中会话的状态。你还可以让它把某个会话渲染成 HTML 发到 IM 里，方便在手机上浏览。Agent 也支持向 IM 单向发送文件。
 
-### 工作群— Beta
+### Agent Studio
 
-> **注意：** 工作群目前处于开发阶段，部分功能尚未完成或可能存在已知问题。仅供学习参考。
+Agent 的能力来自 Feature 组合，而 Agent Studio 是制造这些能力的工作空间：在对话中开发新的 Feature、装配新的 Agent。开发中的 Feature 会挂载到隔离的 Test Runtime 中真实运行；验证通过后，以版本包的形式存入本地 Feature 仓库，供各工作空间的 Agent 安装、挂载。
 
-工作群用群聊的形式来指挥和协调多个 Agent——当同时运行多个会话时，在多个 tab 间切换和监控的成本会迅速失控，群聊提供了一种更自然的指挥方式。工作群有**被动响应**、**交互确认**、**自主执行**三种模式，其中对于后两种模式管理员将持续监视群聊内容，对于前者，只有@管理员时才会将其激活
-
-群聊中呈现的是高信息密度的工作调度对话，主要包括人的指令、Agent 的回复与进展报告。但每个 Agent 实际上在各自的独立会话中执行任务，群聊是它们对外交流的窗口。这种设计的出发点在于：不同任务的上下文特点差异很大，高信息密度的编码任务和零散的日程管理混在同一个上下文窗口中很难兼顾，因此需要拥有独立的上下文。而繁杂的工具调用和调试细节留在各自的会话里，群聊中始终是干净、有意义的交流内容。
-
-管理员是一个特殊的群成员，会话创建时从群聊中拉取最近一段范围内的消息来建立上下文，并持续跟进追踪新状态，协助查看全局状态、分配任务、生成摘要。上下文达到上限或用户手动指定时管理员会话自动重建，群聊消息始终完整保留可供管理员回看。
-
-在群聊中 `@` 不同 Agent 身份来派发任务，Agent 执行后在群中报告结果。
-
-> 基础闭环（建群 -> @mention -> Agent 执行 -> 状态可见 -> 管理员协调）已初步可用，深度功能仍在开发中。
-
-### Runtime 配置
-
-AgentDev 框架支持通过 Feature 的 manifest 声明自身的可配置项——Shell 可以配置可执行路径、LSP 可以配置语言服务器、声音反馈可以配置音量和音频文件。这让 Agent 不仅能灵活组装 Feature，还能高度自定义每个 Feature 的行为。
-
-Runtime 配置工作空间把这个能力上升到了 Claw 项目整体的层面，是 AgentDevClaw 向 "Agent OS" 方向的探索。它是一个全局配置面板，自动发现所有 Feature 暴露的 manifest 配置项，以统一的 UI 呈现给用户。用户在此处的配置会被持久化，并在下游 Agent 启动时注入到对应 Feature 的参数中——相当于操作系统的"系统设置"面板，统一管理这些运行时环境参数的入口。
-
-> 该工作空间为纯 UI 配置面板（无 Agent 进程），配置写入后对所有工作空间生效。目前实际消费这些配置的是编程小助手——它的 Shell 路径、语言服务器、声音反馈等参数均来自此处。
+由此形成 AgentDevClaw 的一条核心链路：Agent Studio 制造能力，Feature 仓库分发，智能编码空间等工作空间消费。工作空间如同一个个应用，Feature 是它们共享的能力生态——扩展平台的能力这件事，本身就发生在平台的对话里。
 
 ## 架构
 
@@ -192,7 +176,7 @@ server.js 主进程
 ├── Express (port 1420)
 │   ├── 静态前端 (public/)
 │   ├── ProtoClaw REST API
-│   └── IM / Flow / Dispatch / GroupChat 路由
+│   └── 会话 / IM / 模型配置 / ACP / Git 等域路由
 ├── ViewerWorker (port 2026)
 │   └── DebugHub 调试协议与数据
 └── Agent 子进程 (per-runtime)
@@ -220,15 +204,14 @@ advclaw update --check        # 仅检查是否有新版本
 advclaw --version             # 查看当前版本
 ```
 
-**`claw`** — 工作空间 CLI，用于在终端中操作探索记录、子代理等：
+**`claw`** — 工作空间 CLI，用于会话操作、Coder 线程管理与外部协议接入：
 
 ```bash
 claw                          # 查看工作空间概览
-claw explorations             # 列出探索记录
-claw show <sessionId>         # 查看会话详情
-claw spawn "分析X模块"         # 创建探索会话
-claw compact <sessionId>      # 精简会话上下文
-claw resume <sessionId> "继续分析"  # 恢复子代理对话
+claw ws                       # 工作空间操作（查看会话、精简、分支等）
+claw threads list             # 列出 Coder 工作线程
+claw threads send <threadId> "..."  # 向线程投递指令
+claw acp coder                # 启动 ACP 适配器（外部 ACP 客户端接入 Coder）
 ```
 
 **`claw run`** — 直接调用 plain agent（无工作空间、不依赖 server 运行的轻量 agent，定义在 [`agents/`](agents/) 目录，默认可被 Web UI 实时监视）：
@@ -267,17 +250,15 @@ server/                        服务端模块
 
 prebuilt-agents/official/      预制 Agent
   programming-helper/          编程小助手 ★
+  agent-studio/                Agent Studio（Feature / Agent 开发）★
   qqbot/                       IM 渠道门户代理 ★
-  work-group/                  群聊指挥台 (Beta)
-  feature-setup/               Runtime 配置 (系统级 Feature 设置)
+  feature-repository/          Feature 仓库（包安装与挂载管理）
   flow-workspace/              Flow 工作空间 (悬置)
   feature-creator/             Feature 开发工具 (悬置)
   agent-creator/               Agent 装配工具 (悬置)
-  dispatch-console/            调度台 (悬置)
 
 local-features/                本地 Feature 源码（TypeScript）
-  dispatch/                    调度系统
-  group-admin/                 群聊管理员工具集
+  dispatch/                    Coder 线程调度与派发
   agent-studio/                Agent Studio 控制面（Feature/Agent 开发）
   checkpoint/                  会话检查点
   context-compaction-mirror/   上下文精简
@@ -302,7 +283,7 @@ AgentDevClaw 的 Agent 能力建立在 [AgentDev](https://github.com/SmileCat202
 - **生态 Feature 包**：`@agentdevjs/shell-feature`、`@agentdevjs/websearch-feature`、`@agentdevjs/qqbot-feature`、`@agentdevjs/weixin-bot` 等独立 npm 包，按需引入
 - **本地 Feature**：项目自身的 TypeScript Feature（Dispatch、GroupAdmin、Checkpoint 等），位于 `local-features/`，编译后经 `prestart` 钩子自动构建
 
-预制 Agent 通过组合不同 Feature 获得不同能力。例如编程小助手集成了 Shell + LSP + WebSearch + GitHub + Memory + Audit，而 IM 渠道则集成 QQBot + WeixinBot + IMOperator。
+预制 Agent 通过组合不同 Feature 获得不同能力。例如编程小助手集成了 Shell + LSP + WebSearch + GitHub + Memory，而 IM 渠道则集成 QQBot、WeixinBot、RokidBot 与 IMOperator。每个 Feature 都可以通过 manifest 声明可配置项，参数按全局 → 工作空间 → 目录三个层级继承覆盖，在设置菜单中统一管理。
 
 ## 依赖形态：发布态与开发态
 
