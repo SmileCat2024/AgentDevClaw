@@ -50,7 +50,7 @@
 - **IM 渠道**（`qqbot`）★ — 多渠道消息门户代理与路由（QQ / 微信 / 企业微信 / 飞书等）
 - **工作群**（`work-group`，Beta）— 群聊形式指挥与协调多 Agent
 
-预制 agent 完整清单以 `prebuilt-agents/official/*/metadata.json` 为准。`flow-workspace`、`feature-creator`、`agent-creator`、`dispatch-console`、`flow-test` 等代码保留但已悬置，不再积极迭代；涉及悬置区域时以"读懂现有代码、不引入新复杂度"为原则。
+预制 agent 完整清单以 `prebuilt-agents/official/*/metadata.json` 为准；已下线（隐藏但按 ID 可寻址，清单在 `HIDDEN_PREBUILT_AGENT_IDS`）的工作空间：`flow-workspace`、`feature-creator`、`agent-creator`、`feature-repository`、`dispatch-console`、`flow-test`，代码保留但不再积极迭代；涉及这些区域时以"读懂现有代码、不引入新复杂度"为原则。
 
 全局 Feature 参数配置已并入前端设置菜单（多作用域三态编辑器），不再是独立工作空间。
 
