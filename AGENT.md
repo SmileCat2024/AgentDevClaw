@@ -68,6 +68,8 @@
 - `npm run agentdev:published` — 改写依赖声明（`file:` → semver），目标版本取 npm registry 各包最新发布版（离线/未发布时回退读相邻仓库并明示日志，`--version` 可显式指定），并同步 features/ 子包的 core devDependency 到框架版本，随后摘除 `@agentdevjs/*` 残留链接、install + build、自检安装形态。版本更新后跑一次即可整体对齐。
 - `npm run agentdev:local` — **不改声明**，只把相邻 AgentDev 仓库的包以 junction 链接进 `node_modules/@agentdevjs/`，并自动补建缺失的框架 dist。用于发布态下临时调试本地框架源码。注意：npm install **不会**替换"恰好满足声明"的链接（链接目标版本匹配 exact pin 即视为已安装），调试完必须经 `agentdev:published` 脱链（它会先摘链接再装 registry）。
 
+与两形态平行的第三条路：`npm run pack:desktop` 组装桌面发布树 `dist/desktop-staging/`（框架包 vendor tgz 实体安装 + bundled node，自带实体自检与隔离端口冒烟），是 tauri bundler 的输入，不影响本机开发形态。
+
 开发态硬约束：`node_modules/@agentdevjs/*` 必须是链接而非实体拷贝。发布态硬约束：反向成立，必须是 registry 实体目录。`check-agentdev-local`（prestart / build / `check:agentdev` 共用）按声明形态校验安装形态——开发态校验链接（含失效与错向目标），相邻框架仓库可用时自动重建；发布态发现本地链接 / 缺失 / dist 过期只报错并给出修复命令，**绝不自动改链**。形态不一致若不拦截，服务会静默跑在与声明脱节的框架版本上，只在运行期以 "framework too old" 一类错误暴露（历史事故：模型热切换、陈旧本地链接）。
 
 features/ 下被预制 agent 源码引用的子包（清单在 `scripts/prebuilt-feature-dirs.mjs`，build:features 与 prestart 过时检测共用）对 core 的声明固定为 semver；构建时若相邻框架 core 可用（`dist/index.d.ts` 存在，缺失会自动编译）则按版本守卫分流——根声明为开发态时直接替换为本地 junction（使用未发布框架 API 的子包因此可构建）；发布态下仅当相邻 core 版本高于子包声明版本时才替换（本地落后或持平则保持 registry，避免陈旧本地副本劫持子包的 core 解析、与根安装分叉成两份副本）。不要手动改子包声明来切换形态。

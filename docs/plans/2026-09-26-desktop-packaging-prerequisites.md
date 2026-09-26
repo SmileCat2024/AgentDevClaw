@@ -28,7 +28,19 @@ E2E 实测（独立 `PORT`/`AGENTDEV_VIEWER_PORT`/`AGENTDEV_UDS_PATH`/`AGENTDEV_
 
 当前形态仍为开发切片：node 取 PATH、仓库根取编译期路径。下一步：第 3 步组装链（D1/D2 vendor 化 + Node 随包分发）。
 
-## 既定方向：框架包 vendor 化（tgz 快照）
+## 第 3 步组装链：vendor tgz + Node 随包分发（已通过，2026-09-26）
+
+[scripts/pack-desktop.mjs](../../scripts/pack-desktop.mjs)（`npm run pack:desktop`）产出可独立运行的发布树 `dist/desktop-staging/`（gitignore），即 tauri bundler 的输入：
+
+- **D1/D2 消解**：相邻 AgentDev 构建后 18 个 `@agentdevjs/*` 各自 `npm pack` 进 `vendor/`，staging 根声明改 `file:vendor/*.tgz` 实体安装（npm 对 tgz 无 junction 语义）；不带开发 package-lock，现场干净解析。features/* 子包的 core devDep 同步改指 vendor tgz——子包独立 install，semver 声明会从 registry 解析回已发布旧版（D2 在子包层复现）。staging 必须位于仓库内部深层目录（`dist/` 下），否则 features 构建的相邻仓库探测会以 junction 劫持 vendor 副本。
+- **组装自检**：实体校验（无 junction、版本与 tgz 一致）+ 隔离端口冒烟（bundled node 直启 supervisor → health ready → POST shutdown → 退出码 0）内建于脚本，当前全程 2m35s。
+- **Node 随包分发**：拷贝打包机 node 至 `runtime/node.exe`；桌面壳（`CLAW_DESKTOP_ROOT` 指向发布树）解析顺序为托管树 `runtime/node` 优先、缺失回退 PATH。实测 PATH 剥离 node 后整条服务链（supervisor/server/agent runtime）全部跑在 bundled node 上。
+- **E2E 实锤并修复**：Tauri 默认"最后一个窗口关闭才退出"被 Windows 挂靠进程的辅助顶层窗口（ConPTY 的 PseudoConsoleWindow，隐藏 conhost 派生）挂住——WM_CLOSE 后主窗销毁、进程不退。修复：退出由主窗口 CloseRequested 显式裁决（`app.exit(0)` 走既有 Exit 清理链），不依赖窗口数归零。
+- E2E 结果：staging + bundled node + 无 node PATH 下，窗口关闭全树 446ms 退出、端口释放、并存实例无恙。
+
+已知待办（bundler 阶段）：staging 600MB 需瘦身（devDependencies、playwright 浏览器等）；node 版本应改 pinned 下载而非打包机现场拷贝；provisioner 运行时 `npm install` 离线化（用户无 npm 场景）仍未解。
+
+## 既定方向：框架包 vendor 化（tgz 快照）——已落地，见"第 3 步组装链"
 
 打包输入从"registry 已发布版本"解耦为"相邻框架源码构建即可"：打包时对相邻 AgentDev 仓库构建 → 各包 `npm pack` 产出 tgz → 安装包内按 `file:*.tgz` 安装（npm 对 tgz 是实体安装，无 junction 语义，lock 天然为实体 resolved）。与 `resources/features/*.tgz` 的 feature 仓库模式同构——框架包纳入同一套 tgz 资产管理。
 
