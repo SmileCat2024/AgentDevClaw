@@ -289,9 +289,12 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   align-self: flex-end;
   max-width: 85%;
   border-bottom-right-radius: 2px;
+  padding-top: 4px;
 }
 
-.message-row.user { align-items: flex-end; }
+/* 标签到内容的视觉距离与 assistant 行对齐（assistant：gap 6px + 无内边距）。
+   user 气泡自带顶部内边距，收紧行 gap 并减小顶距补平差值：2px + 4px = 6px */
+.message-row.user { align-items: flex-end; gap: 2px; }
 .message-row.user .message-meta { justify-content: flex-end; }
 
 /* 乐观回显（提交成功、真实消息尚未回流 transcript 的过渡气泡） */
