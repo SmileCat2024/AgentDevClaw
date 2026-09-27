@@ -51,6 +51,32 @@ function projectViewIdentity(agent, project) {
   return String(agent?.id || '').trim();
 }
 
+/**
+ * 智能编码空间页面会话记录条目的拖拽源（→ 侧栏会话条目 / 输入框引用）：
+ * dragstart 把会话身份写入 session-reference-picker 的专用 MIME。远程
+ * 历史会话（remoteHostNsId，ADR-0012）渲染时不带 draggable；身份从条目
+ * dataset 读取，sessionType 用 data-ref-session-type——data-session-type
+ * 在归档 tab 存的是分区语义（'archived'），不是会话真实身份。
+ */
+window.onPhSessionDragStart = function(event, el) {
+  const ref = window.SessionReference;
+  if (!ref || !event.dataTransfer) return;
+  const sessionId = String(el?.dataset?.ctxId || '').trim();
+  const agentId = String(el?.dataset?.ctxNs || '').trim();
+  if (!sessionId || !agentId) { event.preventDefault(); return; }
+  const titleEl = el?.querySelector?.('.workspace-history-title');
+  const payload = {
+    agentId,
+    sessionId,
+    sessionType: String(el?.dataset?.refSessionType || 'main').trim() || 'main',
+    title: (titleEl?.textContent || '').trim(),
+  };
+  event.dataTransfer.setData(ref.MIME, JSON.stringify(payload));
+  event.dataTransfer.effectAllowed = 'copy';
+  // 登记源身份：dragover 据此禁止把会话拖回它自己的侧栏条目
+  if (ref.setDragSource) ref.setDragSource(payload);
+};
+
 function renderWorkspaceSessionList(agent, block) {
   const sessionFilters = block?.sessionList || {};
   const allowedFormIds = Array.isArray(sessionFilters.formIds)
@@ -468,8 +494,12 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     let indicatorHtml = shortTime
       ? '<span class="session-time-indicator ' + recencyCls + '"><span class="session-time-dot"></span><span class="session-time-label">' + escapeHtml(shortTime) + '</span></span>'
       : '';
+    // 会话记录可拖拽（引用源）：远程历史会话禁拖（引用寻址不到远程数据）
+    const dragAttrs = session.remoteHostNsId
+      ? ''
+      : ' draggable="true" ondragstart="onPhSessionDragStart(event, this)" data-ref-session-type="' + escapeHtml(session.sessionType || 'main') + '"';
     return [
-      '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(sessionNsId) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(sessionNsId) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '">',
+      '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(sessionNsId) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(sessionNsId) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '"' + dragAttrs + '>',
       '<div class="workspace-history-main">',
       '<div class="workspace-history-title-row">',
       indicatorHtml,

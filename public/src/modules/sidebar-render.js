@@ -50,11 +50,12 @@ window.onSidebarItemPointerLeave = function(el) {
 };
 
 /**
- * 侧栏运行中会话的拖拽源（→ 输入框会话引用）：dragstart 把会话身份写入
- * 专用 MIME，投放判定与状态管理都在 session-reference-picker 模块。
- * agentId 取模板写入的 data-ctx-ns（本地条目 = 宿主 agentId，与 session_record
- * 寻址同源）；不查 allAgents——其字面量字段对 child 会话并不可靠，且远程
- * 条目不在其中（远程禁拖，见 renderItem 的 draggable 条件）。
+ * 侧栏运行中会话的拖拽源（→ 输入框会话引用 / 跨会话左栏 → 左栏）：
+ * dragstart 把会话身份写入专用 MIME，投放判定与状态管理都在
+ * session-reference-picker 模块。agentId 取模板写入的 data-ctx-ns（本地
+ * 条目 = 宿主 agentId，与 session_record 寻址同源）；不查 allAgents——
+ * 其字面量字段对 child 会话并不可靠，且远程条目不在其中（远程禁拖，
+ * 见 renderItem 的 draggable 条件）。
  */
 window.onSidebarSessionDragStart = function(event, el) {
   const ref = window.SessionReference;
@@ -72,6 +73,9 @@ window.onSidebarSessionDragStart = function(event, el) {
     title: (titleNode?.textContent || '').trim(),
   };
   event.dataTransfer.setData(ref.MIME, JSON.stringify(payload));
+  // 登记拖拽源身份：dragover 据此禁止「拖到自己身上」（跨会话投放不受
+  // 影响）。dragend 由 session-reference-picker 自动清除。
+  if (ref.setDragSource) ref.setDragSource(payload);
   event.dataTransfer.effectAllowed = 'copy';
 };
 

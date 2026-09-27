@@ -7,7 +7,7 @@
  * consume/restore 模式同构）。
  *
  * window 命名空间导出（window.SessionReference）：
- *   add(entry) / remove(index) / clear()
+ *   add(entry) / addToTarget(entry, target) / remove(index) / clear()
  *   consume() / restore(refs) / peek()
  *   chipsHtml() — 引用 pill 的 HTML（_renderAttachmentPreview 拼接）
  *   openPicker() — + 菜单「会话」入口打开选择弹窗
@@ -66,6 +66,18 @@ function _refKey(ref) {
   return `${ref.agentId}/${ref.sessionId}`;
 }
 
+/** 幂等追加到指定 key 的引用桶；返回是否新增（已存在返回 false）。 */
+function _appendRefToKey(key, ref) {
+  let refs = _sessionReferences.get(key);
+  if (!Array.isArray(refs)) {
+    refs = [];
+    _sessionReferences.set(key, refs);
+  }
+  if (refs.some(r => _refKey(r) === _refKey(ref))) return false;
+  refs.push(ref);
+  return true;
+}
+
 /** 当前活跃会话的 (agentId, sessionId) 判定：同步读取 viewer 绑定，仅用于禁自引用提示。 */
 function _currentSessionIdentity() {
   const runtimeId = typeof currentRuntimeAgentId !== 'undefined'
@@ -100,7 +112,7 @@ function addSessionReference(entry) {
     if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
       ClawToast.show({
         id: 'session-ref-self',
-        status: 'info',
+        status: 'warning',
         title: typeof currentLanguage !== 'undefined' && currentLanguage === 'zh'
           ? '当前会话不能引用自身' : 'Cannot reference the current session',
         autoDismiss: 3200,
@@ -108,9 +120,44 @@ function addSessionReference(entry) {
     }
     return false;
   }
-  if (_refs().some(r => _refKey(r) === _refKey(ref))) return true; // 已挂载：幂等
-  _refs().push(ref);
-  _notifyPreviewChanged();
+  if (_appendRefToKey(_activeRefKey(), ref)) _notifyPreviewChanged();
+  return true;
+}
+
+/**
+ * 「会话拖到会话」的投放入口（侧栏条目 / 工作空间会话记录两类源共用）：
+ * 把被拖会话的引用挂到「目标会话」的输入框。目标不一定是当前活跃会话
+ * ——引用写入目标会话自己的桶（key 与 _activeRefKey 的组合格式一致），
+ * 切换过去后 pill 自然显示。自引用按目标会话身份判定：被拖会话恰好是
+ * 目标条目自身时拦截（dragover 悬停期已先行禁止，这里是兜底）。
+ */
+function addSessionReferenceToTarget(entry, target) {
+  if (!entry || typeof entry.sessionId !== 'string' || !entry.sessionId.trim()) return false;
+  const runtimeId = String(target?.runtimeId || '').trim();
+  const targetAgentId = String(target?.agentId || '').trim();
+  const targetSessionId = String(target?.sessionId || '').trim();
+  if (!runtimeId || !targetAgentId || !targetSessionId) return false;
+  const ref = {
+    agentId: String(entry.agentId || '').trim() || 'programming-helper',
+    sessionId: entry.sessionId.trim(),
+    sessionType: String(entry.sessionType || 'main').trim() || 'main',
+    title: String(entry.title || '').trim(),
+  };
+  const zh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  const toast = (status, title) => {
+    if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+      ClawToast.show({ id: 'session-ref-drop', status, title, autoDismiss: 3200 });
+    }
+  };
+  if (ref.agentId === targetAgentId && ref.sessionId === targetSessionId) {
+    toast('warning', zh ? '会话不能引用自身' : 'Cannot reference the session itself');
+    return false;
+  }
+  if (_appendRefToKey(`${runtimeId}::${targetSessionId}`, ref)) {
+    _notifyPreviewChanged(); // 目标恰为活跃会话时 pill 立即出现
+    const label = String(target?.title || '').trim() || targetSessionId;
+    toast('success', zh ? `已把会话引用挂到「${label}」的输入框` : `Reference attached to "${label}"`);
+  }
   return true;
 }
 
@@ -311,9 +358,24 @@ function openSessionReferencePicker() {
     });
 }
 
-// ── Composer 拖拽投放（侧栏 dragstart 写入引用 MIME） ────────────
+// ── Composer / 侧栏条目拖拽投放（dragstart 写入引用 MIME 的两类源共用）──
 
 const SESSION_REF_MIME = 'application/x-claw-session-ref';
+
+// 拖拽中的源会话身份（dragstart 写入，dragend 清除）。dragover 只能读
+// dataTransfer.types 读不了数据，「拖到自己身上」的悬停期判定靠它：
+// 目标条目身份与源一致 → 不 preventDefault（禁止光标，drop 不触发）；
+// 拖到其他会话（跨会话左栏 → 左栏、工作空间 → 左栏）不受影响。
+let _dragSourceEntry = null;
+
+function setDragSource(entry) {
+  _dragSourceEntry = (entry && typeof entry.sessionId === 'string' && entry.sessionId.trim())
+    ? {
+        agentId: String(entry.agentId || '').trim(),
+        sessionId: entry.sessionId.trim(),
+      }
+    : null;
+}
 
 function _composerCardFromEvent(event) {
   const target = event.target;
@@ -321,31 +383,95 @@ function _composerCardFromEvent(event) {
   return target.closest && target.closest('.user-input-card');
 }
 
+/**
+ * 侧栏运行中会话条目（投放目标）。远程条目（ctx-variant=remote）与
+ * 禁用/过渡态条目（data-agent-disabled=true，含正在关闭、交接、删除）
+ * 不接收投放。
+ */
+function _sidebarItemFromEvent(event) {
+  const target = event.target;
+  if (!(target instanceof Node) || !target.closest) return null;
+  const item = target.closest('.agent-runtime-item');
+  if (!item) return null;
+  if (item.dataset.ctxVariant === 'remote') return null;
+  if (item.dataset.agentDisabled === 'true') return null;
+  return item;
+}
+
+/** 侧栏条目的会话身份（条目 data-agent-id 是 runtimeId，寻址用二元组）。 */
+function _sidebarItemIdentity(item) {
+  return {
+    runtimeId: String(item?.dataset?.agentId || '').trim(),
+    agentId: String(item?.dataset?.ctxNs || '').trim(),
+    sessionId: String(item?.dataset?.ctxSessionId || '').trim(),
+  };
+}
+
+/** 侧栏条目标题（首文本节点，避开「正在关闭」等过渡标签），与 dragstart 读法一致。 */
+function _sidebarItemTitle(item) {
+  const nameEl = item?.querySelector?.('.agent-name');
+  return (nameEl?.childNodes?.[0]?.textContent || '').trim();
+}
+
+function _clearDropTargetHighlights() {
+  document.querySelectorAll('.session-ref-drop-target').forEach(el => el.classList.remove('session-ref-drop-target'));
+}
+
 function bindSessionReferenceDrop() {
   document.addEventListener('dragover', (event) => {
     if (!event.dataTransfer || !Array.from(event.dataTransfer.types || []).includes(SESSION_REF_MIME)) return;
     const card = _composerCardFromEvent(event);
-    if (!card) return;
+    if (card) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      card.classList.add('session-ref-drop-target');
+      return;
+    }
+    const item = _sidebarItemFromEvent(event);
+    if (!item) return;
+    // 拖到自己身上：悬停期即禁止（不高亮、禁止光标，drop 不触发）；
+    // 跨会话（左栏 A → 左栏 B）正常投放
+    const identity = _sidebarItemIdentity(item);
+    if (_dragSourceEntry
+      && _dragSourceEntry.agentId === identity.agentId
+      && _dragSourceEntry.sessionId === identity.sessionId) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
-    card.classList.add('session-ref-drop-target');
+    item.classList.add('session-ref-drop-target');
   });
   document.addEventListener('dragleave', (event) => {
     const card = _composerCardFromEvent(event);
     if (card) card.classList.remove('session-ref-drop-target');
+    const item = _sidebarItemFromEvent(event);
+    if (item) item.classList.remove('session-ref-drop-target');
+  });
+  // 拖拽收尾（drop 之后 / 取消）统一清高亮与源身份记忆
+  document.addEventListener('dragend', () => {
+    _dragSourceEntry = null;
+    _clearDropTargetHighlights();
   });
   document.addEventListener('drop', (event) => {
     const card = _composerCardFromEvent(event);
-    document.querySelectorAll('.session-ref-drop-target').forEach(el => el.classList.remove('session-ref-drop-target'));
-    if (!card || !event.dataTransfer) return;
+    const item = _sidebarItemFromEvent(event);
+    _clearDropTargetHighlights();
+    if (!event.dataTransfer) return;
     const raw = event.dataTransfer.getData(SESSION_REF_MIME);
     if (!raw) return;
     event.preventDefault();
     let entry;
     try { entry = JSON.parse(raw); } catch { return; }
-    if (addSessionReference(entry)) {
-      const textarea = card.querySelector('.user-input-textarea');
-      if (textarea) textarea.focus();
+    if (card) {
+      if (addSessionReference(entry)) {
+        const textarea = card.querySelector('.user-input-textarea');
+        if (textarea) textarea.focus();
+      }
+      return;
+    }
+    if (item) {
+      addSessionReferenceToTarget(entry, {
+        ..._sidebarItemIdentity(item),
+        title: _sidebarItemTitle(item),
+      });
     }
   });
 }
@@ -356,6 +482,7 @@ bindSessionReferenceDrop();
 
 window.SessionReference = {
   add: addSessionReference,
+  addToTarget: addSessionReferenceToTarget,
   remove: removeSessionReference,
   clear: clearSessionReferences,
   consume: consumeSessionReferences,
@@ -370,4 +497,7 @@ window.SessionReference = {
   // _imageBucketKey）复用同一 key 源，"哪个会话"的判定只此一份
   activeKey: _activeRefKey,
   MIME: SESSION_REF_MIME,
+  // 拖拽源身份登记（侧栏 / 工作空间两类 dragstart 调用，dragend 自动清除）：
+  // dragover 据此在悬停期禁止「拖到自己身上」
+  setDragSource,
 };

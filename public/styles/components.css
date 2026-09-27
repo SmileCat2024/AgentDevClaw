@@ -12081,6 +12081,12 @@ body[data-theme="light"] .session-ref-chip {
   outline-offset: -2px;
 }
 
+/* 拖拽悬停高亮（会话拖入侧栏运行中会话条目） */
+.agent-runtime-item.session-ref-drop-target {
+  outline: 2px dashed var(--accent-color, #4f8cff);
+  outline-offset: -2px;
+}
+
 /* 乐观气泡上的引用 chips（无 × 按钮，右侧 padding 与左侧对称） */
 .message-session-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .session-ref-chip.is-echo { padding-right: 11px; }
