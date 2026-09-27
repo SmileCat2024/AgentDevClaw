@@ -730,8 +730,17 @@ function applyAgentCallStateFromNotification(runtimeId, notifData) {
   if (effectiveCalling) {
     _markAgentCallStartedForNotify(runtimeId);
     _agentCallActive.set(runtimeId, true);
+    _agentSuspended.delete(runtimeId);
   } else {
     _agentCallActive.delete(runtimeId);
+    // ADR-0019：挂起聚合的唯一事件消费点——SSE 非焦点事件、poll 全量、
+    // includeSseLocals 对账（刷新/回归恢复）三条路径都经此函数，统一按
+    // payload 落定挂起态（lastOutcome 跨 poll 持久，唤醒轮 call.start 时清）
+    if (isSuspendedNotificationPayload(payload)) {
+      _agentSuspended.set(runtimeId, true);
+    } else {
+      _agentSuspended.delete(runtimeId);
+    }
   }
   if (!backendCalling) {
     clearInterruptSuppression(runtimeId);
@@ -780,6 +789,15 @@ function cleanupOrphanCallStates(activeRuntimeIds) {
       _agentCallActive.delete(key);
       _interruptSuppression.delete(key);
       _recentlyFinishedRuntimes.delete(key);
+      _agentSuspended.delete(key);
+      changed = true;
+    }
+  }
+  // 挂起键可能独立于 calling 键存活（calling 边沿已清、挂起续期），
+  // 单独扫一遍剩余孤儿
+  for (const key of Array.from(_agentSuspended.keys())) {
+    if (!activeRuntimeIds.has(key)) {
+      _agentSuspended.delete(key);
       changed = true;
     }
   }
@@ -837,6 +855,11 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
       for (const key of Array.from(_agentCallActive.keys())) {
         _agentCallActive.delete(key);
         _interruptSuppression.delete(key);
+        _agentSuspended.delete(key);
+        changed = true;
+      }
+      for (const key of Array.from(_agentSuspended.keys())) {
+        _agentSuspended.delete(key);
         changed = true;
       }
       if (changed) {
@@ -879,19 +902,13 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
     // false，防止 connected 恢复后残留的 callActive 立即显形（侧栏渲染的
     // connected 条件掩盖断连期间的残留，重连即暴露）。SSE 跳过形态下本地
     // 存活条目由 notification 事件维护，豁免覆写（缺席≠空闲，§5.3）。
-    // ADR-0019：挂起聚合与 calling 同源同步——polled 条目按 payload 落定
-    // _agentSuspended（isSuspendedNotificationPayload 在 runtime-status.js），
-    // 缺席条目不覆写（与 calling 豁免同语义）。
+    // ADR-0019 挂起聚合不在此维护：polledIds 循环统一经
+    // applyAgentCallStateFromNotification（事件消费点）落定。
     const callingByPolled = new Map();
     for (const runtimeId of polledIds) {
       const payload = nextNotificationPayloads.get(runtimeId) || null;
       callingByPolled.set(runtimeId, resolveNotificationCallingState(payload) === true
         && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(payload)));
-      if (isSuspendedNotificationPayload(payload)) {
-        _agentSuspended.set(runtimeId, true);
-      } else {
-        _agentSuspended.delete(runtimeId);
-      }
     }
     const activeRuntimeIds = new Set(runtimeIds);
     for (const agent of Array.isArray(agents) ? agents : []) {

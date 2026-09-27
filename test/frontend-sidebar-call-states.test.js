@@ -33,12 +33,15 @@ function sourceBetween(source, startMarker, endMarker) {
 
 /**
  * 构建加载了提取函数的沙箱。sseActive 由用例即时翻转（模块闭包读全局）。
+ * suspendedPayload 模拟"该 payload 判定为挂起"——真实判定在 runtime-status.js
+ * 的 isSuspendedNotificationPayload，本套件只验证事件路径对聚合的维护。
  */
 function loadCallStates() {
   const fetched = [];
   const finishedNotified = [];
   const renders = [];
   let sseActive = false;
+  let suspendedPayload = false;
   const ctx = createFrontendSandbox({
     fetch: async (url) => {
       fetched.push(String(url));
@@ -52,9 +55,7 @@ function loadCallStates() {
     getAgentRuntimeId: (agent) => agent?.runtime_session_id || agent?.runtimeSessionId || null,
     normalizeAgentIdentity: (v) => String(v || '').trim(),
     resolveNotificationCallingState: (payload) => payload?.callActive === true,
-    // ADR-0019 挂起聚合：本套件不验证挂起语义，mock 恒 false（真实判定由
-    // runtime-status.js 的 isSuspendedNotificationPayload 承担）
-    isSuspendedNotificationPayload: () => false,
+    isSuspendedNotificationPayload: () => suspendedPayload,
     getNotificationCallStartedAt: (payload) => payload?.callStartedAt || 0,
     isInterruptSuppressed: () => false,
     clearInterruptSuppression: () => {},
@@ -81,6 +82,7 @@ function loadCallStates() {
     finishedNotified,
     renders,
     setSseActive: (v) => { sseActive = v; },
+    setSuspendedPayload: (v) => { suspendedPayload = v; },
     run: (code) => ctx.run(code),
   };
 }
@@ -196,6 +198,58 @@ describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）'
   it('false→false 幂等：不触发完成通知', () => {
     env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
     assert.equal(env.finishedNotified.length, 0);
+  });
+
+  it('ADR-0019 非焦点挂起落定：_agentSuspended 置位（recentlyFinished 同步记录但由渲染优先级掩盖）', () => {
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.setSuspendedPayload(true);
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
+    const suspended = env.run('Array.from(_agentSuspended.keys())');
+    assert.deepEqual(JSON.parse(JSON.stringify(suspended)), ['rt-other'], '挂起聚合置位（侧栏静止绿灯数据源）');
+    // recentlyFinished 也记录（挂起也是 call 结束边沿），渲染端 suspended 优先级掩盖
+    const finished = env.run('Array.from(_recentlyFinishedRuntimes)');
+    assert.deepEqual(JSON.parse(JSON.stringify(finished)), ['rt-other']);
+  });
+
+  it('ADR-0019 唤醒轮 call.start：挂起聚合清除（calling 转圈接管）', () => {
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.setSuspendedPayload(true);
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
+    env.setSuspendedPayload(false);
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    const suspended = env.run('Array.from(_agentSuspended.keys())');
+    assert.deepEqual(JSON.parse(JSON.stringify(suspended)), [], '新 call 开始即清挂起');
+  });
+
+  it('ADR-0019 非挂起落定：聚合清除', () => {
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.setSuspendedPayload(true);
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
+    env.setSuspendedPayload(false);
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
+    const suspended = env.run('Array.from(_agentSuspended.keys())');
+    assert.deepEqual(JSON.parse(JSON.stringify(suspended)), []);
+  });
+
+  it('ADR-0019 poll 全清分支：_agentSuspended 随 _agentCallActive 对称清空', async () => {
+    env.run('applyAgentCallStateFromNotification("rt-lone", { callActive: true })');
+    env.setSuspendedPayload(true);
+    env.run('applyAgentCallStateFromNotification("rt-lone", { callActive: false })');
+    // 无任何存活条目（polledIds 空 + 非 SSE）→ 全清
+    await env.run('refreshAgentCallStates([])');
+    const suspended = env.run('Array.from(_agentSuspended.keys())');
+    assert.deepEqual(JSON.parse(JSON.stringify(suspended)), []);
+  });
+
+  it('ADR-0019 断连孤儿回收：挂起键随存活集回收（SSE 激活提前返回分支）', async () => {
+    env.setSseActive(true);
+    env.run('applyAgentCallStateFromNotification("rt-dead", { callActive: true })');
+    env.setSuspendedPayload(true);
+    env.run('applyAgentCallStateFromNotification("rt-dead", { callActive: false })');
+    // rt-dead 已断连（不在存活集），孤儿清理应回收挂起键
+    await env.run('refreshAgentCallStates([{ connected: true, runtime_session_id: "rt-alive" }])');
+    const suspended = env.run('Array.from(_agentSuspended.keys())');
+    assert.deepEqual(JSON.parse(JSON.stringify(suspended)), []);
   });
 });
 

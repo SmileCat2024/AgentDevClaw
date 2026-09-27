@@ -1138,6 +1138,12 @@ function updateNotificationStatus(notifData) {
     } else if (stateType === 'call.finish') {
       if (isRuntimeCalling(currentRuntimeAgentId)) {
         _agentCallActive.delete(currentRuntimeAgentId);
+        // ADR-0019：聚焦 call.finish（state 形态）按 payload 落定挂起态
+        if (isSuspendedNotificationPayload(payload)) {
+          _agentSuspended.set(currentRuntimeAgentId, true);
+        } else {
+          _agentSuspended.delete(currentRuntimeAgentId);
+        }
         callingStateChanged = true;
         renderAgentList();
         _tryNotifyAgentFinished(currentRuntimeAgentId, payload);
@@ -1188,6 +1194,12 @@ function updateNotificationStatus(notifData) {
   if (type === 'call.finish') {
     if (currentRuntimeAgentId) {
       _agentCallActive.delete(currentRuntimeAgentId);
+      // ADR-0019：聚焦 call.finish（UI 收尾段）按 payload 落定挂起态
+      if (isSuspendedNotificationPayload(payload)) {
+        _agentSuspended.set(currentRuntimeAgentId, true);
+      } else {
+        _agentSuspended.delete(currentRuntimeAgentId);
+      }
       clearInterruptSuppression(currentRuntimeAgentId);
       renderAgentList();
       _tryNotifyAgentFinished(currentRuntimeAgentId, payload);
