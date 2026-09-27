@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
 
 /**
- * 终止整棵进程树（宿主裁决的最后手段）。
+ * 终止由调用方明确拥有的进程树。
  *
- * Windows 上子进程不会随父进程消亡，必须经 taskkill /T 沿进程树递归收割；
- * 其他平台的进程组语义下对主进程 SIGKILL 即可，孙进程由各服务自身的
- * shutdown 收敛。本函数承诺"尽力"，不承诺孙进程清零——裁决权的兜底在
- * 调用方（supervisor / 启动预检），不在这里叠加重试。
+ * 仅用于显式退出后的宿主自有子进程清理，以及测试/打包脚本清理自己启动的
+ * 进程。服务健康探测、启动端口检查和 supervisor 生命周期不得调用本函数。
+ * Windows 上使用 taskkill /T 清理调用方创建的树；其他平台向主进程发送
+ * SIGKILL。本函数承诺"尽力"，不承诺孙进程清零。
  *
  * @param {number} pid
  * @returns {Promise<boolean>} 是否成功发起终止

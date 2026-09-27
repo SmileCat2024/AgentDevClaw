@@ -268,7 +268,10 @@ function isProtectedPath(pathname) {
 }
 
 function isAuthPublicPath(pathname) {
-  return pathname === '/protoclaw/auth/status' || pathname === '/protoclaw/auth/login';
+  return pathname === '/protoclaw/auth/status'
+    || pathname === '/protoclaw/auth/login'
+    // Shutdown performs its own same-origin and caller-capability checks.
+    || pathname === '/protoclaw/shutdown';
 }
 
 // AGENTDEV_TRUSTED_ORIGINS：反向代理改写 Host 且无法透传时的显式受信来源
@@ -292,7 +295,7 @@ function normalizedHost(host, protocol) {
   return value;
 }
 
-function requestHasSameOrigin(req) {
+export function requestHasSameOrigin(req) {
   const candidate = cleanText(req.headers.origin) || cleanText(req.headers.referer);
   if (!candidate) return false;
   let url;

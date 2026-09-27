@@ -1,28 +1,39 @@
 #!/usr/bin/env node
-// Claw 服务宿主（supervisor）。
-//
-// 进程裁决权契约：本进程持有终端与 server 进程的生杀权；server.js 只拥有
-// "尽力清理"的执行权，其清理进度不构成本进程退出的前提。停机信号先给
-// server 优雅窗口，窗口过后（或再次收到停机信号）无条件收割整棵进程树
-// （server 的 runtime 子进程在树内，一并终结）。
-//
-// 本进程若被单独强杀（server 收不到任何通知），server 侧以 ppid 存活探测
-// 轮询自灭（CLAW_SUPERVISED watchdog），启动自愈（port-recovery）是最后防线。
-//
-// 桌面化路径：Electron/Tauri 主进程即同一宿主角色，本文件建立的裁决权
-// 结构可直接移植，server.js 的生命周期语义无需再改。
+// Starts the service and records health/lifecycle events. This process is
+// deliberately observational: health failures and elapsed time never grant it
+// authority to stop or kill the server or any descendant process.
 
 import { spawn } from 'node:child_process';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { killProcessTree } from '../server/shared/process-tree.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SERVER_ENTRY = path.join(__dirname, '..', 'server.js');
-
 const GRACE_MS = Number.parseInt(process.env.CLAW_SUPERVISOR_GRACE_MS || '', 10) || 10_000;
 
-// 测试/替代宿主可注入任意子命令（空格分隔）；缺省托管本仓库 server.js。
+// Lifecycle events survive terminal output loss; failures to write diagnostics
+// must never affect the service.
+const LOG_FILE = (() => {
+  const override = (process.env.CLAW_SUPERVISOR_LOG || '').trim();
+  if (override.toLowerCase() === 'off') return null;
+  if (override) return override;
+  const dataDir = (process.env.AGENTDEV_DATA_DIR || '').trim();
+  const dataRoot = dataDir
+    ? path.resolve(dataDir)
+    : path.join(os.homedir(), '.agentdev', 'AgentDevClaw');
+  return path.join(dataRoot, 'logs', 'supervisor.log');
+})();
+
+function persistEvent(event) {
+  if (!LOG_FILE) return;
+  try {
+    mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    appendFileSync(LOG_FILE, `${new Date().toISOString()} [pid ${process.pid}] ${event}\n`, 'utf8');
+  } catch { /* diagnostics are best-effort */ }
+}
+
 const childCommand = process.env.CLAW_SUPERVISED_CMD
   ? process.env.CLAW_SUPERVISED_CMD.split(' ').filter(Boolean)
   : [process.execPath, DEFAULT_SERVER_ENTRY];
@@ -31,104 +42,87 @@ const child = spawn(childCommand[0], childCommand.slice(1), {
   stdio: ['ignore', 'inherit', 'inherit'],
   env: { ...process.env, CLAW_SUPERVISED: '1' },
 });
+persistEvent(`supervisor started: pid ${process.pid}, child pid ${child.pid}, cmd ${childCommand.join(' ')}`);
 
-let stopping = false;
-let graceTimer = null;
+let stopRequested = false;
+let reportTimer = null;
 
-function requestStop(reason) {
-  if (stopping || child.exitCode !== null) return;
-  stopping = true;
-  console.log(`[supervisor] ${reason}; grace window ${GRACE_MS}ms, Ctrl+C again to force`);
+function requestGracefulStop(reason) {
+  if (stopRequested || child.exitCode !== null) return;
+  stopRequested = true;
+  console.log(`[supervisor] ${reason}; requesting graceful service shutdown`);
+  persistEvent(`graceful shutdown requested: ${reason}`);
 
-  // Ctrl+C 经控制台已直达 server（同 console 进程组，server 自行走有序关闭）。
-  // 仅 Unix 定向信号（只命中本进程）需要显式转发；Windows 下 kill('SIGTERM')
-  // 是无条件终止而非通知，不走这条——宽限窗口后的进程树收割保证最终语义。
-  if (process.platform !== 'win32') {
-    try { child.kill('SIGTERM'); } catch { /* already dead */ }
-  }
-
-  // 通知 server 自主有序关闭：Ctrl+C 路径冗余但幂等；宿主死亡检测触发时
-  // （Windows 无法向子进程转发信号）这是 server 收到优雅关闭请求的唯一通道。
-  // 尽力而为，失败由 grace 窗口后的收割兜底。
-  fetch(`http://127.0.0.1:${HEALTH_PORT}/protoclaw/shutdown`, {
+  // This is only reached after an explicit process signal. No probe result or
+  // timeout calls it. The service owns its own orderly shutdown; this host does
+  // not send OS kill signals and does not reap process trees.
+  const port = Number.parseInt(process.env.PORT || '1420', 10);
+  fetch(`http://127.0.0.1:${port}/protoclaw/shutdown`, {
     method: 'POST',
+    headers: { Origin: `http://127.0.0.1:${port}` },
     signal: AbortSignal.timeout(1500),
   }).catch(() => {});
 
-  graceTimer = setTimeout(() => void forceKill('grace window elapsed'), GRACE_MS);
-  graceTimer.unref?.();
+  reportTimer = setTimeout(() => {
+    if (child.exitCode === null) {
+      const message = `service has not exited ${GRACE_MS}ms after explicit shutdown request; leaving it untouched`;
+      console.warn(`[supervisor] ${message}`);
+      persistEvent(message);
+    }
+  }, GRACE_MS);
+  reportTimer.unref?.();
 }
 
-async function forceKill(reason) {
-  if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
-  if (child.exitCode !== null) return;
-  console.log(`[supervisor] force-killing server process tree (${reason})`);
-  await killProcessTree(child.pid);
-}
+process.on('SIGINT', () => requestGracefulStop('interrupt received'));
+process.on('SIGTERM', () => requestGracefulStop('terminate received'));
+process.on('SIGHUP', () => requestGracefulStop('hangup received'));
 
-process.on('SIGINT', () => (stopping ? void forceKill('second interrupt') : requestStop('interrupt received')));
-process.on('SIGTERM', () => requestStop('terminate received'));
-process.on('SIGHUP', () => requestStop('hangup received'));
-
-// 宿主死亡检测：桌面宿主（Tauri 主进程）被单独强杀时不给本进程任何信号，
-// 这里主动轮询父进程存活（与 server 侧 CLAW_SUPERVISED watchdog 对称），宿主
-// 消失即进入停机流程，服务不孤儿化。npm/终端场景下控制台关闭会先发整组信号，
-// 与本检测互为兜底；正常停机时 requestStop 幂等早退，无冲突。
-const HOST_PING_MS = Number.parseInt(process.env.CLAW_SUPERVISOR_HOST_PING_MS || '', 10) || 3000;
-const hostWatchdog = setInterval(() => {
-  try {
-    process.kill(process.ppid, 0);
-  } catch {
-    clearInterval(hostWatchdog);
-    requestStop('host process gone');
-  }
-}, HOST_PING_MS);
-hostWatchdog.unref();
-
-// health watchdog：server 自主关闭（POST /protoclaw/shutdown）或挂死时不给本进程
-// 任何信号，只靠停机信号的 grace 收割永远不会启动——这里补充"宿主主动询问"
-// 的感知通道，对应桌面宿主对服务进程的标准监督姿势。ready 之前的探测失败属
-// 启动期正常现象，不计数。
-const HEALTH_PORT = Number.parseInt(process.env.PORT || '1420', 10);
-// 测试可经 CLAW_SUPERVISOR_HEALTH_MS 缩短探测周期
-const HEALTH_INTERVAL_MS = Number.parseInt(process.env.CLAW_SUPERVISOR_HEALTH_MS || '', 10) || 2000;
-const HEALTH_FAILURE_LIMIT = 2;
+// Read-only health observation for diagnostics. A slow, unreachable, or
+// shutting-down server is never a reason for the supervisor to stop it.
+const healthPort = Number.parseInt(process.env.PORT || '1420', 10);
+const healthIntervalMs = Number.parseInt(process.env.CLAW_SUPERVISOR_HEALTH_MS || '', 10) || 2000;
+const healthProbeTimeoutMs = Number.parseInt(process.env.CLAW_SUPERVISOR_PROBE_MS || '', 10) || 3000;
 let healthReadySeen = false;
-let healthFailures = 0;
+let unreachableSince = null;
 
 async function probeHealth() {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 1500);
+  const timer = setTimeout(() => controller.abort(), healthProbeTimeoutMs);
   try {
-    const res = await fetch(`http://127.0.0.1:${HEALTH_PORT}/protoclaw/health`, { signal: controller.signal });
-    if (res.ok) { healthReadySeen = true; healthFailures = 0; return; }
-    let state = '';
-    try { state = (await res.json())?.state || ''; } catch { /* body 不可解析按未知 503 处理 */ }
-    // starting 等其他过渡态不视为死亡；shutting_down 表示 server 已开始自主关闭，
-    // 若其清理挂死，grace 窗口到期由本进程收割。
-    if (state === 'shutting_down') requestStop('health reports shutting_down');
-  } catch {
-    if (!healthReadySeen) return;
-    healthFailures += 1;
-    if (healthFailures >= HEALTH_FAILURE_LIMIT) {
-      requestStop(`health probe failed ${healthFailures} times after ready`);
+    const response = await fetch(`http://127.0.0.1:${healthPort}/protoclaw/health`, { signal: controller.signal });
+    if (unreachableSince !== null) {
+      persistEvent(`health reachable again after ${Date.now() - unreachableSince}ms`);
+      unreachableSince = null;
     }
+    if (response.ok) {
+      healthReadySeen = true;
+      return;
+    }
+    let state = '';
+    try { state = (await response.json())?.state || ''; } catch { /* log unknown response */ }
+    if (state === 'shutting_down') persistEvent('health reports shutting_down');
+  } catch {
+    if (!healthReadySeen || unreachableSince !== null) return;
+    unreachableSince = Date.now();
+    persistEvent('health unreachable after ready (observation only)');
   } finally {
     clearTimeout(timer);
   }
 }
 
-const healthWatchdog = setInterval(() => void probeHealth(), HEALTH_INTERVAL_MS);
-healthWatchdog.unref();
+const healthWatcher = setInterval(() => void probeHealth(), healthIntervalMs);
+healthWatcher.unref?.();
 
-child.on('exit', (code) => {
-  clearInterval(healthWatchdog);
-  if (graceTimer) clearTimeout(graceTimer);
-  // 主动停机路径（含强杀收割）视为正常结束；仅 server 自身异常退出时透传退出码。
-  process.exit(stopping ? 0 : (code ?? 0));
+child.on('exit', (code, signal) => {
+  clearInterval(healthWatcher);
+  if (reportTimer) clearTimeout(reportTimer);
+  persistEvent(`child exited: code ${code ?? 'null'} signal ${signal || 'none'}`);
+  process.exit(stopRequested ? 0 : (code ?? 0));
 });
 
-child.on('error', (err) => {
-  console.error(`[supervisor] failed to start server: ${err.message}`);
+child.on('error', (error) => {
+  clearInterval(healthWatcher);
+  console.error(`[supervisor] failed to start server: ${error.message}`);
+  persistEvent(`failed to start server: ${error.message}`);
   process.exit(1);
 });

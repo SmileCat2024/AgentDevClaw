@@ -341,6 +341,7 @@ async function smoke(staging, nodeBin) {
 
     await fetch('http://127.0.0.1:1421/protoclaw/shutdown', {
       method: 'POST',
+      headers: { Origin: 'http://127.0.0.1:1421' },
       signal: AbortSignal.timeout(3000),
     }).catch(() => {});
     const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r(null), 15_000))]);

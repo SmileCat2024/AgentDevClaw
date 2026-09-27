@@ -1,13 +1,10 @@
 // Claw 桌面壳（Tauri）。
 //
-// 宿主职责与 npm start 下的 scripts/run-supervised.js 同构（进程裁决权契约，
-// 见 docs/protocols/service-lifecycle.md）：
-//   启动：spawn supervisor（supervisor 再托管 server.js，三层防线原样沿用）
+// 桌面进程启动并观察服务（见 docs/protocols/service-lifecycle.md）：
+//   启动：spawn supervisor，supervisor 只做日志和只读健康探测
 //   就绪：等服务端口可连接后再建窗口，避免 webview 停在连接错误页
 //   退出：窗口关闭 → POST /protoclaw/shutdown 让 server 自主有序关闭；
-//         supervisor 经 health watchdog / child exit 感知后善后退出，宽限期
-//         内未退出则 taskkill /T /F 收割整棵树（最终兜底）
-// supervisor 侧另有 ppid watchdog：本进程被强杀时 supervisor 自行停机，服务不孤儿化。
+//         显式退出等待超时后仅由本桌面宿主清理自己创建的服务子树
 //
 // 当前为开发切片形态：仓库根取编译期 CARGO_MANIFEST_DIR（CLAW_DESKTOP_ROOT
 // 可指向 pack:desktop 产出的发布树）；Node 优先用发布树 runtime/ 内的随包
@@ -117,14 +114,14 @@ fn wait_service_ready(port: u16, timeout: Duration) -> bool {
 }
 
 /// 请求 server 自主有序关闭（SSE 通知、runtime 停机、端口释放在 server 侧完成）。
-/// 请求失败不阻塞：supervisor 善后链与最终收割保证语义。
+/// 请求失败不阻塞；显式退出期限后的子进程清理由本桌面宿主负责。
 fn request_server_shutdown(port: u16) {
     let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{port}")) else {
         return;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let request = format!(
-        "POST /protoclaw/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+        "POST /protoclaw/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\n\
          Content-Length: 0\r\nConnection: close\r\n\r\n"
     );
     if stream.write_all(request.as_bytes()).is_ok() {
