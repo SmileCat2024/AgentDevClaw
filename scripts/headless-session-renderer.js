@@ -113,10 +113,18 @@ export function renderSessionEventHuman(event) {
     case 'turn.started':
       return [];
     case 'turn.completed': {
+      // ADR-0019：suspended 标志 = 回合挂起等待后台任务唤醒（不是完成），
+      // 无头/ACP 判段视角渲染一行提示；JSONL 模式事件原样透传，无需处理
+      const lines = [];
+      if (event.suspended) {
+        const count = Array.isArray(event.pendingWakeups) ? event.pendingWakeups.length : 0;
+        lines.push(`suspended: waiting for background tasks${count > 1 ? ` (${count})` : ''}`);
+      }
       const usage = event.usage;
-      return usage
-        ? [`tokens: input=${usage.inputTokens} output=${usage.outputTokens}`]
-        : [];
+      if (usage) {
+        lines.push(`tokens: input=${usage.inputTokens} output=${usage.outputTokens}`);
+      }
+      return lines;
     }
     case 'turn.cancelled': {
       // 生命周期信号（guard 轮换 / 宿主中断），非执行失败

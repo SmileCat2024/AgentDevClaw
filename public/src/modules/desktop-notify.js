@@ -77,6 +77,23 @@ function _getNotificationAction(notifData) {
   return state;
 }
 
+/* ── ADR-0019：挂起（suspended）不是完成 ──────────────────────────────────
+ * status=continued + reason=suspended = 回合挂起，等待后台任务唤醒。
+ * call.finish 载荷（data 即 CallOutcome）与 runtime.lastOutcome 都携带
+ * status/reason，任一命中即视为挂起：不弹"已完成"通知。标记已观察防止
+ * 延迟路径补发（新一轮 call.start 会清观察标记，唤醒后的真完成照常通知）。
+ */
+function _isSuspendedFinish(notifData) {
+  const isSuspended = (data) => !!(data && typeof data === 'object'
+    && String(data.status || '').trim() === 'continued'
+    && String(data.reason || '').trim() === 'suspended');
+  const action = _getNotificationAction(notifData);
+  if (String(action?.type || '').trim() === 'call.finish' && isSuspended(action.data)) {
+    return true;
+  }
+  return isSuspended(notifData?.runtime?.lastOutcome);
+}
+
 function _getFinishObservedTimestamp(notifData) {
   const action = _getNotificationAction(notifData);
   if (String(action?.type || '').trim() === 'call.finish') {
@@ -147,6 +164,12 @@ async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
   if (Notification.permission !== 'granted') return;
 
   const normId = normalizeAgentIdentity(runtimeId);
+
+  // 挂起不是完成（ADR-0019）：完成通知留给唤醒后的真终态
+  if (_isSuspendedFinish(notifData)) {
+    _markAgentFinishObserved(normId, notifData);
+    return;
+  }
 
   // 前台时不需要通知——用户已经看到了。
   if (_isNotifyForeground()) {

@@ -4,13 +4,14 @@ import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../src/inde
 import { TodoFeature, OpencodeBasicFeature, Decision } from '@agentdevjs/core';
 import { CONTINUITY_FIELD_KEY } from '../../continuity-participant/src/index.js';
 
-function makeStepCtx(toolCallsCount: number) {
+function makeStepCtx(toolCallsCount: number, hasPendingWakeups = false) {
   const injected: Array<{ role: string; content: string }> = [];
   return {
     ctx: {
       toolCallsCount,
       callIndex: 0,
       llmResponse: { toolCalls: [] },
+      hasPendingWakeups,
       context: {
         add: (msg: { role: string; content: string }) => injected.push(msg),
         addSystemMessage: () => {},
@@ -144,6 +145,30 @@ describe('ControlledTodoFeature 执行到此处', () => {
     feature.setInterruptTarget('2');
     const step = makeStepCtx(0);
     assert.equal(await feature.recordToolUsage(step.ctx), Decision.Approve);
+  });
+
+  it('hasPendingWakeups 非空 → 不强续，走默认决策让回合挂起（ADR-0019）', async () => {
+    const feature = new ControlledTodoFeature();
+    feature.createTask('task-a', 'desc');
+    feature.setInterruptTarget('1');
+    const { ctx, injected } = makeStepCtx(0, true);
+    assert.equal(await feature.recordToolUsage(ctx), Decision.Continue);
+    assert.equal(injected.length, 0);
+    // 让位不清断点：唤醒后的回合仍受"执行到此处"控制
+    assert.equal(feature.getInterruptTarget(), '1');
+  });
+
+  it('挂起让位不消耗强续预算：让位后的普通收尾仍 Approve', async () => {
+    const feature = new ControlledTodoFeature();
+    feature.createTask('task-a', 'desc');
+    feature.setInterruptTarget('1');
+    for (let i = 0; i < 3; i++) {
+      const suspendedStep = makeStepCtx(0, true);
+      assert.equal(await feature.recordToolUsage(suspendedStep.ctx), Decision.Continue);
+    }
+    const wakeStep = makeStepCtx(0);
+    assert.equal(await feature.recordToolUsage(wakeStep.ctx), Decision.Approve);
+    assert.equal(wakeStep.injected.length, 1);
   });
 
   it('断点目标随 captureState/restoreState 往返', () => {

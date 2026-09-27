@@ -136,6 +136,14 @@ class ControlledTodoFeatureInner extends TodoFeature {
     if (this._interruptTargetId) {
       const target = this.getTask(this._interruptTargetId);
       if (target) {
+        // ADR-0019：存在待唤醒后台任务时数据驱动让位——强续 Approve 会把
+        // 挂起改写成立即续跑。不注入提醒、不消耗强续预算，走默认决策让回合
+        // 按 pendingWakeups 判 suspended。旧框架不提供该字段（undefined）
+        // 时保持强续，行为不变。
+        if (ctx.hasPendingWakeups) {
+          console.log(`[ControlledTodoFeature] Pending wakeups present, suspending instead of force-continue (target #${this._interruptTargetId})`);
+          return parentResult;
+        }
         if (this._forceContinueCount >= FORCE_CONTINUE_MAX_CONSECUTIVE) {
           console.warn(`[ControlledTodoFeature] Force continue limit reached (${this._forceContinueCount}), letting call end`);
           return parentResult;

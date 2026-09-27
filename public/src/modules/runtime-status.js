@@ -511,6 +511,10 @@ function normalizeNotificationRuntimeSnapshot(runtime) {
 }
 
 function getRuntimeStageLabel(runtime) {
+  // ADR-0019：挂起的 stage 归一化为 completed，按 suspended 标志区分文案
+  if (runtime.suspended && runtime.stage === 'completed') {
+    return currentLanguage === 'zh' ? '等待后台任务' : 'Waiting for Background Tasks';
+  }
   switch (runtime.stage) {
     case 'llm_thinking':
       return t('phase_thinking');
@@ -576,6 +580,9 @@ function getCompactRuntimeLabel(runtime, isConnected = true) {
   }
   if (runtime.stage === 'cancelled') {
     return currentLanguage === 'zh' ? '已停止' : 'Stopped';
+  }
+  if (runtime.suspended && runtime.stage === 'completed') {
+    return currentLanguage === 'zh' ? '等待后台任务' : 'Waiting for Background Tasks';
   }
   if (runtime.stage === 'completed') {
     return currentLanguage === 'zh' ? '已完成' : 'Done';
@@ -684,6 +691,12 @@ function getPendingToolCallsFromMessages(messages = currentMessages) {
   return [];
 }
 
+function isSuspendedCallOutcome(data) {
+  return !!(data && typeof data === 'object'
+    && String(data.status || '').trim() === 'continued'
+    && String(data.reason || '').trim() === 'suspended');
+}
+
 function getDerivedStageFromState(stateType = '', stateData = null, currentStage = 'idle') {
   if (stateType === 'call.start') return 'awaiting_runtime';
   if (stateType === 'call.finish') {
@@ -756,6 +769,12 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
   }
 
   const derivedStage = getDerivedStageFromState(stateType, stateData, runtime.stage);
+  // ADR-0019：status=continued + reason=suspended = 回合挂起（等待后台任务唤醒），
+  // 与 checkpoint 段切分的 continued 区分。call.finish 载荷（data 即 CallOutcome）
+  // 与 runtime.lastOutcome 任一命中即置位；stage 归一化不变（默认落 completed），
+  // 由 label 层据此显示"等待后台任务"而非"已完成"。
+  runtime.suspended = (stateType === 'call.finish' && isSuspendedCallOutcome(stateData))
+    || isSuspendedCallOutcome(runtime.lastOutcome);
   const runtimeAlreadyExpressive = runtime.stage !== 'idle'
     && runtime.stage !== 'completed'
     && runtime.stage !== 'failed'
@@ -880,6 +899,9 @@ function getRuntimeSummary(runtime, isConnected = true) {
   if (runtime.stage === 'cancelled') {
     return t('runtime_status_cancelled');
   }
+  if (runtime.suspended && runtime.stage === 'completed') {
+    return currentLanguage === 'zh' ? '等待后台任务，任务完成后将继续' : 'Waiting for background tasks to continue';
+  }
   if (runtime.stage === 'completed') {
     return t('runtime_status_completed');
   }
@@ -942,7 +964,8 @@ function shouldShowRuntimeStatus(runtime, stateType = '') {
   if (runtime.callActive && runtime.stage !== 'idle' && runtime.stage !== 'completed' && runtime.stage !== 'failed' && runtime.stage !== 'cancelled') {
     return true;
   }
-  const settledRecently = runtime.updatedAt > 0 && (Date.now() - runtime.updatedAt) < (runtime.stage === 'failed' || runtime.stage === 'cancelled' ? 8000 : 800);
+  const settledRecently = runtime.updatedAt > 0
+    && (Date.now() - runtime.updatedAt) < (runtime.stage === 'failed' || runtime.stage === 'cancelled' || runtime.suspended ? 8000 : 800);
   return ((runtime.stage === 'completed' || runtime.stage === 'failed' || runtime.stage === 'cancelled') && settledRecently)
     || stateType === 'llm.char_count';
 }
