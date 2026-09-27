@@ -105,7 +105,7 @@ export class PanelShellFeature extends ShellFeature {
       case 'kill': {
         if (!registry || !taskId) return { ok: false, code: 'task_not_found', error: 'taskId is required' };
         // 面板 kill 即用户发起：manual 让引擎补发"用户手动打断"通知
-        // （发起方不是模型，模型需要知情；工具路径 bg_control 不走此处）。
+        // （发起方不是模型，模型需要知情；工具路径 bg_kill 不走此处）。
         const killed = registry.kill(taskId, { graceful: body.graceful === true, manual: true });
         return killed
           ? { ok: true, killed: true }
