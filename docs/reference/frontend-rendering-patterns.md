@@ -943,6 +943,7 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 - `content-visibility` 和折叠的 `max-height` 都不等于释放 DOM。离屏占位也不能持续做背景位置动画。Read 长结果在默认折叠时仅构建 8 行预览，明确展开才生成全文，收起释放全文，原消息保留。
 - 内置模板与动态 Feature 模板必须一起验收。Read 行号使用明确 `data-line`，保留源码 offset，避免 CSS counter 和旧行号 span 双重绘制。模板归一化发生在 Claw 的模板边界，不改 `node_modules` 中的发布产物。
 - 性能验收覆盖跟随与阅读、原生滚轮与程序滚动、窗口门槛两侧；确认消息、行数、实际位移与模板加载状态。测 renderer 原生内存时明确其与 JS heap/GPU 内存的区别，不能只凭某一轮平均 FPS 或 DOM 节点数宣布修复。
+- 差异表行号的 sticky 只用于展开后的横向阅读。折叠预览仍吸附会让被裁剪的单元格生成大量合成层；本次在 DOM 数不变时，取消折叠状态的吸附将末段图层从 399 降至 114。判断滚动热点要关联 LayerTree 与具体元素并做恢复对照，不能只看首次 render 或布局耗时。
 
 详见 [显示过程滚动调查与修复](../investigations/2026-09-27-chat-process-scroll-performance.md)。
 

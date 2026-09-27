@@ -4801,6 +4801,14 @@ body[data-theme="light"] .notification-metric {
   z-index: 1 !important;
 }
 
+/* 折叠预览不吸附差异表行号：每个 sticky 单元格都可能生成合成层，
+   被 160px 预览裁掉的代码行仍让长会话的滚动承担数百层合成成本。
+   展开后沿用上面的 sticky 规则，保留横向阅读时固定行号的行为。 */
+.message-content.collapsed .d2h-code-side-linenumber,
+.message-content.collapsed .d2h-code-linenumber {
+  position: static !important;
+}
+
 /* 用户输入容器（默认隐藏） */
 #user-input-container {
   display: none;
