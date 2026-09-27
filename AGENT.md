@@ -29,6 +29,7 @@
    - 0016 用户数据存储分区治理与 feature 持久资产收敛
    - 0017 Feature Manifest v2 与宿主侧 Feature Registry
    - 0018 Feature-Panel 通信基座：feature-comms 通道
+   - 0019 轮次挂起语义：suspended 与 pending-work 事实层（实施计划见 [docs/plans/2026-09-27-turn-suspension-semantics.md](docs/plans/2026-09-27-turn-suspension-semantics.md)）
 
 实现层真实入口：
 
