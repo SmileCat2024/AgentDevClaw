@@ -329,6 +329,16 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   contain-intrinsic-size: auto 150px;
 }
 
+/* A measured row keeps its exact outer height in the flex transcript. The
+   minimum and shrink guard prevent size containment from collapsing its box. */
+.message-row.chat-row-distant {
+  content-visibility: hidden;
+  contain-intrinsic-block-size: var(--chat-row-height);
+  height: var(--chat-row-height);
+  min-height: var(--chat-row-height);
+  flex-shrink: 0;
+}
+
 /* Static placeholder: animating hidden rows still invalidates style/paint.
    Compound selector overrides element backgrounds without animating offscreen. */
 .message-row.tool.process-cv-hidden,

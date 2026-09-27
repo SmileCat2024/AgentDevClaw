@@ -944,6 +944,8 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 - 内置模板与动态 Feature 模板必须一起验收。Read 行号使用明确 `data-line`，保留源码 offset，避免 CSS counter 和旧行号 span 双重绘制。模板归一化发生在 Claw 的模板边界，不改 `node_modules` 中的发布产物。
 - 性能验收覆盖跟随与阅读、原生滚轮与程序滚动、窗口门槛两侧；确认消息、行数、实际位移与模板加载状态。测 renderer 原生内存时明确其与 JS heap/GPU 内存的区别，不能只凭某一轮平均 FPS 或 DOM 节点数宣布修复。
 - 差异表行号的 sticky 只用于展开后的横向阅读。折叠预览仍吸附会让被裁剪的单元格生成大量合成层；本次在 DOM 数不变时，取消折叠状态的吸附将末段图层从 399 降至 114。判断滚动热点要关联 LayerTree 与具体元素并做恢复对照，不能只看首次 render 或布局耗时。
+- 旧过程窗口被禁用时，长过程会话由 `chat-row-visibility.js` 先读取真实行高，再隐藏远处整行，限制绘制和可访问性更新。必须保持 height/min-height 与 flex-shrink 占位保护；普通滚动使用缓存位置和像素缓冲，不全树测量、不边滚边折叠。末条补丁、显式展开、图片加载和宽度释放需刷新真实高度；退出过程模式/切换窗口机制时解除高度锁。
+- 不把“没有 DOM 写入”或“元素低于 70,000”当成滚动流畅保证：浏览器仍有 native 工作。屏外隐藏不等于卸载 DOM；浏览器查找/连续选择/可访问性遍历存在隐藏内容边界，完整搜索应基于消息数据。一次隔离跑分不能替代实际客户端的前台滚动和最长停顿验收。
 
 详见 [显示过程滚动调查与修复](../investigations/2026-09-27-chat-process-scroll-performance.md)。
 

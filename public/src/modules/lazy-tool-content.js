@@ -10,8 +10,9 @@
  *   但元素自身保留高度（首次 150px 估算，之后 auto 记住实际高度）。
  *
  * 节点预算分级（setProcessWindowingDisabled）：
- *   预算内的会话（日常量级）禁用窗口切换，全部行真实布局 —— 滚动时
- *   没有任何 reveal 成本（实测真实 5 万节点会话：长任务 48→17）。
+ *   预算内的会话禁用本文件的估算窗口，先完成真实布局与折叠。
+ *   长会话随后由 chat-row-visibility.js 保留实测行高、隐藏远处整行，
+ *   限制绘制和可访问性更新范围，滚动中不重新估算高度或折叠内容。
  *   预算外的会话保留本文件的全部虚拟化逻辑：历史上有 13 万节点级会话
  *   在首布局时整页冻结，虚拟化是那个量级的保险。全渲染的实测代价
  *   （5 万节点）：渲染器内存 +122~131MB、render 时一次性布局 ~800ms。
@@ -582,6 +583,7 @@ function unfreezeProcessWindowing() {
   _lastScrollTop = container.scrollTop;
   _largeDeltaPending = true; // 复用滚动大跳释放语义收敛布局
   _onScrollStop();
+  if (typeof refreshMeasuredChatRows === 'function') refreshMeasuredChatRows('width-settled');
 }
 
 // Landing collapse scan with settle powers (spanning rows may fold and
@@ -676,6 +678,7 @@ function applyProcessDistance(root) {
 }
 
 function clearProcessDistance(root) {
+  if (typeof clearMeasuredChatRows === 'function') clearMeasuredChatRows();
   root = root || container;
   _cachedRows = null;
   _rowCache = null;
@@ -716,7 +719,8 @@ function clearProcessDistance(root) {
 }
 
 /* 全渲染分级开关。render() 在每次全量渲染时按节点预算重估：预算内 true
- * （跳过预隐藏、无窗口切换），预算外 false（本文件全部虚拟化逻辑照常）。
+ * （跳过本文件的估算窗口，由实测高度窗口管理整行），预算外 false
+ * （本文件全部虚拟化逻辑照常）。
  * 流式追加不重估，沿用当前模式直到下一次全量渲染。 */
 function setProcessWindowingDisabled(disabled) {
   _windowingDisabled = !!disabled;

@@ -902,9 +902,9 @@ function render(messages) {
     if (container.dataset && chatContextKey) {
       container.dataset.chatRenderContext = chatContextKey;
     }
-    // Node-budget tiering: within budget (daily sessions) disable the cv
-    // windowing entirely — every row lays out for real, scrolling has zero
-    // reveal cost (measured on a real 50K-node session: long tasks 48→17).
+    // Within budget, disable the estimated process window and first lay out
+    // real rows. chat-row-visibility.js then limits browser work to nearby
+    // rows while preserving those measured heights, without scroll folding.
     // Above budget keep pre-hide + windowing: the 134K-node-class sessions
     // that motivated virtualization (historical full-layout freeze) stay
     // protected. Full-render cost at 50K nodes (measured): +122~131MB
@@ -1017,6 +1017,7 @@ function buildChatRenderSignature(messages) {
 window.toggleMessage = function(id) {
   const el = document.getElementById(id);
   if (el) {
+    if (typeof revealMeasuredChatRow === 'function') revealMeasuredChatRow(el.closest('.message-row'));
     const chatViewportTopBefore = container.scrollTop;
     el.classList.toggle('collapsed');
     const row = el.closest('.message-row');

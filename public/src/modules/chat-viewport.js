@@ -515,6 +515,7 @@ container.addEventListener('scroll', () => {
 }, { passive: true });
 
 function notifyChatViewportMutation(options = {}) {
+  if (typeof refreshMeasuredChatRows === 'function') refreshMeasuredChatRows(options.reason);
   ensureChatViewportObservers();
 
   if (shouldRenderWorkspaceSurface()) {
