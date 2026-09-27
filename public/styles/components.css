@@ -136,7 +136,54 @@
   background: var(--hover-bg);
 }
 
-.message-icon-action svg { display: block; width: 11px; height: 11px; }
+/* 图标零 DOM 节点绘制：按钮为空元素，::before 以 mask 呈现图标、
+   background-color: currentColor 取色——hover/copied 的换色自动生效，
+   hover 底色仍由按钮自身的 background 承载。尺寸 = 旧内联 svg 的
+   11px 图标 + 2px padding。 */
+.message-icon-action {
+  position: relative;
+  width: 15px;
+  height: 15px;
+}
+
+.message-icon-action::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 11px;
+  height: 11px;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+}
+
+.message-icon-action.is-icon-copy::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z'/%3E%3Cpath d='M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z'/%3E%3Cpath d='M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z'/%3E%3C/svg%3E");
+}
+
+.message-icon-action.is-icon-expand::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 3H5a2 2 0 0 0-2 2v3'/%3E%3Cpath d='M21 8V5a2 2 0 0 0-2-2h-3'/%3E%3Cpath d='M3 16v3a2 2 0 0 0 2 2h3'/%3E%3Cpath d='M16 21h3a2 2 0 0 0 2-2v-3'/%3E%3C/g%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 3H5a2 2 0 0 0-2 2v3'/%3E%3Cpath d='M21 8V5a2 2 0 0 0-2-2h-3'/%3E%3Cpath d='M3 16v3a2 2 0 0 0 2 2h3'/%3E%3Cpath d='M16 21h3a2 2 0 0 0 2-2v-3'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* 编辑此轮（同时携带 .message-action） */
+.message-action.message-icon-action::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a1.75 1.75 0 0 1-2.158-2.158l.93-3.251c.081-.286.235-.547.445-.756Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Zm-1.237 3.746L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Z'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a1.75 1.75 0 0 1-2.158-2.158l.93-3.251c.081-.286.235-.547.445-.756Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Zm-1.237 3.746L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Z'/%3E%3C/svg%3E");
+}
+
+/* 复制成功的对勾态（覆盖任意基础图标） */
+.message-icon-action.copied::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L1.72 8.78a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L1.72 8.78a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z'/%3E%3C/svg%3E");
+}
 
 .message-icon-action.copied { color: var(--success-color); }
 
@@ -215,10 +262,25 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   border-color: rgba(15, 23, 42, 0.24);
 }
 
-.expand-toggle-btn svg {
+.expand-toggle-btn::before {
+  content: '';
   width: 12px;
   height: 12px;
-  fill: currentColor;
+  flex-shrink: 0;
+  background-color: currentColor;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z'/%3E%3C/svg%3E");
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+/* 折叠态 chevron 朝下（提示可展开），展开态旋转 180° 朝上（提示可收起） */
+.expand-toggle-btn.is-expanded::before {
+  transform: rotate(180deg);
 }
 
 .message-row.user .message-content {
@@ -267,7 +329,8 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   contain-intrinsic-size: auto 150px;
 }
 
-/* Shimmer placeholder — compound selector to override element backgrounds */
+/* Static placeholder: animating hidden rows still invalidates style/paint.
+   Compound selector overrides element backgrounds without animating offscreen. */
 .message-row.tool.process-cv-hidden,
 .reasoning-block.process-cv-hidden,
 .tool-call-container.process-cv-hidden {
@@ -277,13 +340,6 @@ body[data-theme="light"] .expand-toggle-btn:hover {
     rgba(128, 128, 128, 0.22) 50%,
     rgba(128, 128, 128, 0.06) 85%
   );
-  background-size: 250% 100%;
-  animation: cv-shimmer 1.2s linear infinite;
-}
-
-@keyframes cv-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -50% 0; }
 }
 
 /* Tool Styles — 玻璃基座：壳层（container/header/result）是全局默认外观，
@@ -4646,8 +4702,19 @@ body[data-theme="light"] .notification-metric {
 }
 .reasoning-content { display: none; padding-bottom: 8px; font-size: 13px; color: var(--text-secondary); }
 .reasoning-block.expanded .reasoning-content { display: block; animation: fadeIn 0.2s; }
-.reasoning-icon { transition: transform 0.2s; }
-.reasoning-block.expanded .reasoning-icon { transform: rotate(90deg); }
+/* chevron 图标由 header 的 ::before mask 绘制（零 DOM 节点），
+   展开旋转与过渡沿用旧 svg 的 transform 语义 */
+.reasoning-header::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  background-color: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z'/%3E%3C/svg%3E") center/contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z'/%3E%3C/svg%3E") center/contain no-repeat;
+  transition: transform 0.2s;
+}
+.reasoning-block.expanded .reasoning-header::before { transform: rotate(90deg); }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
@@ -4658,20 +4725,20 @@ body[data-theme="light"] .notification-metric {
   line-height: 20px;
 }
 .code-read-line {
-  display: flex;
   white-space: pre;
 }
-.code-read-line-num {
+/* 行号由固定 data-line 伪元素绘制（template-engine.js 每行只产出一个节点）。
+   ::before 为 inline-block，几何与旧版 flex 行号 span 等价：min-width 右对齐
+   数字列 + padding-right 与内容隔开；伪元素内容不可被选中，复制语义与
+   旧版 user-select:none 一致。 */
+.code-read-line::before {
+  content: attr(data-line);
+  display: inline-block;
+  min-width: 40px;
   padding-right: 16px;
   text-align: right;
   color: #6e7681;
   user-select: none;
-  min-width: 40px;
-  flex-shrink: 0;
-}
-.code-read-content {
-  flex: 1;
-  white-space: pre;
 }
 .code-read-truncated {
   padding: 6px 16px;
@@ -5156,6 +5223,23 @@ body[data-theme="light"] .user-input-card:focus-within {
 @keyframes interrupt-pulse {
   from { opacity: 0.35; transform: scale(0.78); }
   to { opacity: 1; transform: scale(1); }
+}
+
+/* Send in flight（点击 → user-turn 落定）：spinner 替代图标，
+   动效与录音按钮转写态同款（复用 voice-spin，定义见后） */
+.persistent-action-btn.is-sending {
+  cursor: wait;
+  pointer-events: none;
+  opacity: 1;
+}
+.persistent-action-btn.is-sending::after {
+  content: '';
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: voice-spin 0.8s linear infinite;
 }
 
 /* ── Voice Input Button ────────────────────────────────────────────── */

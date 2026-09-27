@@ -25,7 +25,13 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
  */
 function loadChatScroll(opts = {}) {
   const containerStub = {
-    addEventListener() {},
+    listeners: new Map(),
+    addEventListener(type, listener, options) {
+      const listeners = this.listeners.get(type) || new Map();
+      listeners.set(listener, options);
+      this.listeners.set(type, listeners);
+    },
+    removeEventListener(type, listener) { this.listeners.get(type)?.delete(listener); },
     clientHeight: opts.containerHeight ?? 600,
     scrollHeight: opts.containerScrollHeight ?? 1000,
     scrollTop: 0,
@@ -44,13 +50,65 @@ function loadChatScroll(opts = {}) {
     navigator: { userAgent: opts.userAgent ?? '' },
     Element: function Element() {},
     isChatSurfaceActive: opts.isChatSurfaceActive ?? (() => false),
+    shouldRenderWorkspaceSurface: () => false,
+    registerManualScrollIntent: opts.registerManualScrollIntent ?? (() => {}),
     getComputedStyle: () => ({ overflowY: opts.overflowY ?? 'auto' }),
   });
   // window.getComputedStyle is used inside canElementScrollVertically
   ctx.window.getComputedStyle = () => ({ overflowY: opts.overflowY ?? 'auto' });
+  ctx.window.closeCtxMenu = () => {};
   ctx.loadSource('public/src/modules/chat-scroll.js');
   return ctx;
 }
+
+function dispatchWheel(ctx, overrides = {}) {
+  const event = {
+    deltaY: 80, deltaX: 0, deltaMode: 0, target: ctx.container,
+    prevented: false,
+    preventDefault() { this.prevented = true; },
+    ...overrides,
+  };
+  for (const listener of [...ctx.container.listeners.get('wheel').keys()]) listener(event);
+  return event;
+}
+
+describe('chat-scroll: native wheel and resume recovery', () => {
+  it('ordinary wheel stays passive and interrupts follow without reading target geometry', () => {
+    const intents = [];
+    const ctx = loadChatScroll({
+      userAgent: 'Chrome/140.0', isChatSurfaceActive: () => true,
+      registerManualScrollIntent: options => intents.push(options),
+    });
+    ctx.window.getComputedStyle = () => { throw new Error('Unexpected target layout read'); };
+    assert.ok([...ctx.container.listeners.get('wheel').values()].every(o => o.passive));
+    const event = dispatchWheel(ctx, { deltaY: -80, target: new ctx.Element() });
+    assert.equal(event.prevented, false);
+    assert.equal(intents[0].interrupt, true);
+  });
+
+  it('Chrome recovery leaves nested scrolling and zoom alone, then compensates only once', () => {
+    const ctx = loadChatScroll({ userAgent: 'Chrome/140.0', isChatSurfaceActive: () => true });
+    const nested = Object.assign(new ctx.Element(), {
+      parentElement: ctx.container, scrollHeight: 500, clientHeight: 100, scrollTop: 20,
+    });
+    ctx.run('markChatPageResumed()');
+    assert.equal(dispatchWheel(ctx, { target: nested }).prevented, false);
+    assert.equal(ctx.container.scrollTop, 0);
+    assert.equal(dispatchWheel(ctx, { ctrlKey: true }).prevented, false);
+    nested.scrollTop = 400; // Nested scroller is at its lower boundary; chat owns the wheel.
+    assert.equal(dispatchWheel(ctx, { target: nested }).prevented, true);
+    assert.equal(ctx.container.scrollTop, 80);
+    assert.ok([...ctx.container.listeners.get('wheel').values()].every(o => o.passive));
+    assert.equal(dispatchWheel(ctx).prevented, false);
+    assert.equal(ctx.container.scrollTop, 80, 'subsequent movement belongs to the browser');
+  });
+
+  it('Edge resume never installs a blocking wheel listener', () => {
+    const ctx = loadChatScroll({ userAgent: 'Chrome/140.0 Edg/140.0', isChatSurfaceActive: () => true });
+    ctx.run('markChatPageResumed()');
+    assert.ok([...ctx.container.listeners.get('wheel').values()].every(o => o.passive));
+  });
+});
 
 // ── normalizeWheelDeltaY ───────────────────────────────────────────
 

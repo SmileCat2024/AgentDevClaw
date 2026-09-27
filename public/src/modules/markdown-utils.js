@@ -136,19 +136,15 @@ function renderMarkdown(text) {
 // 动作条），wrap 负责横向滚动、圆角裁剪、外边距与右缘渐隐，
 // table 完整展开（列不被压扁）。动作条放 block 不放 wrap：
 // 渐隐 mask 与横向滚动都只作用于 wrap，按钮不参与滚动、不被渐隐。
-const MD_TABLE_ICON_COPY_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg>';
-const MD_TABLE_ICON_CHECK_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L1.72 8.78a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path></svg>';
-// 四角外扩（lucide maximize 同款 stroke 几何）：fill path 在小尺寸下
-// 易出现笔画粗细不均与裁切，stroke 绘制由 stroke-width 统一控制
-const MD_TABLE_ICON_EXPAND_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
-
+// 表格动作条图标与消息 meta 行同源：空按钮 + CSS mask 伪元素绘制
+// （见 components.css 的 .message-icon-action::before），零图标 DOM 节点。
 function wrapMarkdownTables(html) {
   return html
     .replace(/<table>/g, '<div class="md-table-block"><div class="md-table-wrap"><table>')
     .replace(/<\/table>/g, '</table></div>'
       + '<div class="md-table-actions">'
-      + '<button type="button" class="message-icon-action" title="复制表格" onclick="copyMarkdownTable(this)">' + MD_TABLE_ICON_COPY_SVG + '</button>'
-      + '<button type="button" class="message-icon-action" title="放大查看" onclick="openTableZoom(this)">' + MD_TABLE_ICON_EXPAND_SVG + '</button>'
+      + '<button type="button" class="message-icon-action is-icon-copy" title="复制表格" onclick="copyMarkdownTable(this)"></button>'
+      + '<button type="button" class="message-icon-action is-icon-expand" title="放大查看" onclick="openTableZoom(this)"></button>'
       + '</div></div>');
 }
 
@@ -292,11 +288,9 @@ window.copyMarkdownTable = async function(btn) {
     return;
   }
   if (btn) {
-    btn.innerHTML = MD_TABLE_ICON_CHECK_SVG;
     btn.classList.add('copied');
     if (btn._copyResetTimer) clearTimeout(btn._copyResetTimer);
     btn._copyResetTimer = setTimeout(function() {
-      btn.innerHTML = MD_TABLE_ICON_COPY_SVG;
       btn.classList.remove('copied');
     }, 1200);
   }

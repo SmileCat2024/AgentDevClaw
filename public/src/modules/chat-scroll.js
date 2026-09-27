@@ -72,27 +72,29 @@ function shouldUseManualWheelScroll() {
   if (!chatScrollNeedsWheelRecovery) return false;
 
   chatScrollNeedsWheelRecovery = false;
+  container.removeEventListener('wheel', recoverChatWheelScroll);
   return true;
 }
 
-container.addEventListener('wheel', (e) => {
-  const beforeTop = container.scrollTop;
+// Only the first eligible wheel after Chrome resumes needs cancellation.
+// Keep this blocking listener detached during ordinary compositor scrolling.
+function recoverChatWheelScroll(e) {
+  if (!chatScrollNeedsWheelRecovery || !isChatSurfaceActive()
+    || shouldRenderWorkspaceSurface() || e.ctrlKey || e.metaKey) return;
   const rawDeltaY = normalizeWheelDeltaY(e);
-  const canManualScroll = isChatSurfaceActive()
-    && !shouldRenderWorkspaceSurface()
-    && !e.ctrlKey
-    && !e.metaKey
-    && Math.abs(rawDeltaY) > Math.abs(e.deltaX || 0)
-    && !hasScrollableWheelTarget(e.target, rawDeltaY);
-  const manualWheelScroll = canManualScroll && shouldUseManualWheelScroll();
-  if (manualWheelScroll) {
-    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
-    const nextTop = Math.max(0, Math.min(maxTop, beforeTop + rawDeltaY));
-    e.preventDefault();
-    if (Math.abs(nextTop - beforeTop) > 0.5) {
-      container.scrollTop = nextTop;
-    }
+  if (Math.abs(rawDeltaY) <= Math.abs(e.deltaX || 0)
+    || hasScrollableWheelTarget(e.target, rawDeltaY)
+    || !shouldUseManualWheelScroll()) return;
+  const beforeTop = container.scrollTop;
+  const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+  const nextTop = Math.max(0, Math.min(maxTop, beforeTop + rawDeltaY));
+  e.preventDefault();
+  if (Math.abs(nextTop - beforeTop) > 0.5) {
+    container.scrollTop = nextTop;
   }
+}
+
+container.addEventListener('wheel', (e) => {
   if (e.deltaY < 0) {
     // Scrolling up — always cancel follow
     registerManualScrollIntent({ interrupt: true });
@@ -102,7 +104,7 @@ container.addEventListener('wheel', (e) => {
     // downward scroll shouldn't cancel follow mode.
     registerManualScrollIntent();
   }
-}, { passive: false });
+}, { passive: true });
 container.addEventListener('wheel', () => window.closeCtxMenu(), { passive: true });
 container.addEventListener('touchmove', () => registerManualScrollIntent({ interrupt: true }), { passive: true });
 container.addEventListener('pointerdown', (event) => {
@@ -134,6 +136,7 @@ container.addEventListener('scroll', () => {
 // Sticky bar: detect pin/unpin and toggle .is-pinned for expand animation
 let _stickyPadTop = null;
 container.addEventListener('scroll', () => {
+  if (!shouldRenderWorkspaceSurface()) return;
   const bar = container.querySelector('.ph-project-bar');
   if (!bar) return;
   if (_stickyPadTop === null) {
@@ -151,6 +154,7 @@ followLatestButton.addEventListener('click', () => {
 function markChatPageResumed() {
   if (isChromeWithoutEdge() && isChatSurfaceActive()) {
     chatScrollNeedsWheelRecovery = true;
+    container.addEventListener('wheel', recoverChatWheelScroll, { passive: false });
   }
 }
 

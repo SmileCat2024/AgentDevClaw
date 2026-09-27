@@ -277,6 +277,7 @@ function createRenderHarness({ contextKey = 'ctx:rt-1', domContextKey = contextK
   sandbox.getChatScrollContextKey = () => contextKey;
   sandbox.getRememberedChatScrollForContext = () => null;
   sandbox.enhanceMathInElement = () => {};
+  sandbox.enhanceMarkdownTables = () => {};
   sandbox.updateRollbackActionVisibility = () => {};
   sandbox.applyConversationProcessState = () => {};
   sandbox.restoreUserCollapseState = () => {};

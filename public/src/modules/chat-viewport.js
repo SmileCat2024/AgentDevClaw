@@ -47,6 +47,7 @@
  */
 
 function updateAssemblySideRailPosition() {
+  if (!shouldRenderWorkspaceSurface()) return;
   const rail = container.querySelector('.assembly-side-rail');
   const flow = container.querySelector('.assembly-flow');
   if (!rail || !flow) {
@@ -87,9 +88,9 @@ function updateAssemblySideRailPosition() {
 }
 
 function getToggleButtonLabel(collapsed) {
-  return collapsed
-    ? '<svg viewBox="0 0 24 24"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg> ' + escapeHtml(t('expand'))
-    : '<svg viewBox="0 0 24 24"><path d="M12 8l-6 6 1.41 1.41L12 10.83l4.59 4.58L18 14z"/></svg> ' + escapeHtml(t('collapse'));
+  // chevron 由 .expand-toggle-btn::before mask 绘制（见 components.css），
+  // 方向用 is-collapsed / is-expanded class 切换，零图标 DOM 节点。
+  return collapsed ? escapeHtml(t('expand')) : escapeHtml(t('collapse'));
 }
 
 function isNearBottom() {
@@ -490,14 +491,27 @@ function getRememberedChatViewportAnchorForContext(contextKey = getChatViewportC
   return chatViewportAnchorByContext.get(contextKey) || null;
 }
 
-// The existing chat-scroll module already owns scroll behavior. This listener
-// only keeps the semantic anchor current for tab/session switches.
+// Session/tab switches also capture synchronously at the cache boundary.
+// During scrolling, wait for a pause before scanning rows and reading geometry.
+let chatViewportAnchorSaveTimer = null;
 container.addEventListener('scroll', () => {
+  if (chatViewportAnchorSaveTimer !== null) {
+    clearTimeout(chatViewportAnchorSaveTimer);
+    chatViewportAnchorSaveTimer = null;
+  }
   if (typeof isChatSurfaceActive !== 'function' || !isChatSurfaceActive()
-    || (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface())) {
+    || (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface())
+    || followLatestEnabled) {
     return;
   }
-  rememberChatViewportAnchorForContext();
+  const contextKey = getChatViewportContextKey();
+  if (!contextKey) return;
+  chatViewportAnchorSaveTimer = setTimeout(() => {
+    chatViewportAnchorSaveTimer = null;
+    if (getChatViewportContextKey() !== contextKey || !isChatSurfaceActive()
+      || shouldRenderWorkspaceSurface() || followLatestEnabled) return;
+    rememberChatViewportAnchorForContext(contextKey);
+  }, 150);
 }, { passive: true });
 
 function notifyChatViewportMutation(options = {}) {

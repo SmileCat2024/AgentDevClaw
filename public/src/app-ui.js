@@ -205,9 +205,9 @@ function getWorkspaceSurfaceScrollKey(agent = getCurrentAgentRecord(), mode = cu
 }
 
 function saveCurrentWorkspaceSurfaceScroll() {
-  if (!container || !container.querySelector('.workspace-surface')) return;
   const agent = getCurrentAgentRecord();
   if (!agent || !shouldRenderWorkspaceSurface(agent)) return;
+  if (!container || !container.querySelector('.workspace-surface')) return;
   const key = getWorkspaceSurfaceScrollKey(agent);
   if (!key) return;
   workspaceSurfaceScrollCache.set(key, container.scrollTop || 0);
@@ -215,7 +215,8 @@ function saveCurrentWorkspaceSurfaceScroll() {
 }
 
 container.addEventListener('scroll', () => {
-  if (workspaceSurfaceScrollSaveRaf || !container.querySelector('.workspace-surface')) return;
+  if (workspaceSurfaceScrollSaveRaf || !shouldRenderWorkspaceSurface()
+    || !container.querySelector('.workspace-surface')) return;
   workspaceSurfaceScrollSaveRaf = requestAnimationFrame(() => {
     workspaceSurfaceScrollSaveRaf = 0;
     saveCurrentWorkspaceSurfaceScroll();

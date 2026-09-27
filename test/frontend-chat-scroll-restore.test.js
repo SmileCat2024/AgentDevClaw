@@ -51,9 +51,10 @@ function createFakeContainer() {
   const container = {
     _scrollTop: 0,
     _rows: [],
+    _listeners: new Map(),
     clientHeight: 400,
     scrollHeight: 400,
-    addEventListener() {},
+    addEventListener(type, listener) { container._listeners.set(type, listener); },
     removeEventListener() {},
     querySelector() { return null; },
     querySelectorAll(selector) {
@@ -299,8 +300,46 @@ function createHandoffHarness({ cache = {} } = {}) {
     for (let frame = 0; frame < 6; frame += 1) pumpFrame();
   };
 
-  return { sandbox, container, calls, settleViewport };
+  return { sandbox, container, calls, settleViewport, flushTimers };
 }
+
+test('reading anchor waits for a scroll pause and captures the latest position', () => {
+  const h = createHandoffHarness();
+  h.container.scrollHeight = 2000;
+  h.container._rows = Array.from({ length: 5 }, (_, i) => ({
+    offsetTop: i * 300, offsetHeight: 300,
+    classList: { contains: () => false },
+  }));
+  let scans = 0;
+  const query = h.container.querySelectorAll;
+  h.container.querySelectorAll = selector => { scans++; return query(selector); };
+  const onScroll = h.container._listeners.get('scroll');
+  h.container.scrollTop = 320;
+  onScroll();
+  h.container.scrollTop = 620;
+  onScroll();
+  assert.equal(scans, 0, 'continuous scroll must not scan historical rows');
+  h.flushTimers();
+  assert.equal(scans, 1);
+  const anchor = h.sandbox.getRememberedChatViewportAnchorForContext('ctx:A');
+  assert.equal(anchor.rowIdx, 2);
+  assert.equal(anchor.offset, 20);
+});
+
+test('switch boundary can capture immediately; an outgoing idle save cannot overwrite the new context', () => {
+  const h = createHandoffHarness();
+  h.container.scrollHeight = 2000;
+  h.container._rows = [{ offsetTop: 0, offsetHeight: 1600, classList: { contains: () => false } }];
+  h.container.scrollTop = 400;
+  h.container._listeners.get('scroll')();
+  const saved = h.sandbox.rememberChatViewportAnchorForContext();
+  assert.equal(saved.offset, 400, 'switch boundary does not have to await the idle timer');
+  h.sandbox.currentRuntimeAgentId = 'B';
+  h.container.scrollTop = 900;
+  h.flushTimers();
+  assert.equal(h.sandbox.getRememberedChatViewportAnchorForContext('ctx:A').offset, 400);
+  assert.equal(h.sandbox.getRememberedChatViewportAnchorForContext('ctx:B'), null);
+});
 
 test('switching back to a longer session preserves the cached reading position', async () => {
   const harness = createHandoffHarness({

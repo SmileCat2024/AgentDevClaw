@@ -936,6 +936,16 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 
 ---
 
+## 12b. 长会话的滚动与折叠内容（2026-09-27）
+
+- 原生 wheel 的通常路径保持 passive；需要 `preventDefault()` 的 Chrome 恢复补偿只在恢复时临时附加，消费后移除。不可为了未启用的补偿在每次 wheel 中走祖先样式/高度检测。
+- 聊天滚动时先按页面状态排除 workspace/sticky/assembly 监听器，不在历史 DOM 中反复查询不存在的控件。阅读锚点自动保存等待停顿，切换缓存边界仍同步捕获并按 context key 隔离。
+- `content-visibility` 和折叠的 `max-height` 都不等于释放 DOM。离屏占位也不能持续做背景位置动画。Read 长结果在默认折叠时仅构建 8 行预览，明确展开才生成全文，收起释放全文，原消息保留。
+- 内置模板与动态 Feature 模板必须一起验收。Read 行号使用明确 `data-line`，保留源码 offset，避免 CSS counter 和旧行号 span 双重绘制。模板归一化发生在 Claw 的模板边界，不改 `node_modules` 中的发布产物。
+- 性能验收覆盖跟随与阅读、原生滚轮与程序滚动、窗口门槛两侧；确认消息、行数、实际位移与模板加载状态。测 renderer 原生内存时明确其与 JS heap/GPU 内存的区别，不能只凭某一轮平均 FPS 或 DOM 节点数宣布修复。
+
+详见 [显示过程滚动调查与修复](../investigations/2026-09-27-chat-process-scroll-performance.md)。
+
 ## 13. 相关文件索引
 
 > 行号会随迭代漂移，定位时以 grep 为准，本表只给文件级归属（2026-08-23 复核）。

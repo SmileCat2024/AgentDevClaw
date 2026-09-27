@@ -27,6 +27,36 @@ function loadTemplateEngine(toolNames = {}) {
   return ctx;
 }
 
+describe('template-engine: code line numbers', () => {
+  it('feature Read markup keeps source offsets and nested highlighting without duplicate number spans', () => {
+    const ctx = loadTemplateEngine();
+    ctx.html = '<div class="code-read-container">'
+      + '<div class="code-read-line"><span class="code-read-line-num">201</span><span class="code-read-content"><span class="hljs-keyword">const</span> x<span class="hljs-punctuation">;</span></span></div>'
+      + '<div class="code-read-line"><span class="code-read-line-num">202</span><span class="code-read-content">&lt;tag&gt;</span></div></div>';
+    ctx.template = data => data;
+    const html = ctx.run('applyTemplate(template, html)');
+    assert.ok(html.includes('data-line="201"><span class="hljs-keyword">const</span> x;</div>'));
+    assert.ok(html.includes('data-line="202">&lt;tag&gt;</div>'));
+    assert.ok(!html.includes('code-read-line-num'));
+    assert.ok(!html.includes('code-read-content'));
+  });
+
+  it('fallback lines and truncated expansion retain fixed, continuous numbers', () => {
+    const ctx = loadTemplateEngine();
+    ctx.data = Array.from({ length: 262 }, (_, i) => 'line ' + i).join('\n');
+    const html = ctx.run('renderJsonHighlight(data)');
+    assert.ok(html.includes('data-line="200"'));
+    assert.ok(!html.includes('data-line="201"'));
+    const id = html.match(/data-expand-id="([^"]+)"/)[1];
+    const container = { innerHTML: '' };
+    ctx.el = { getAttribute: () => id, closest: () => container };
+    ctx.run('expandTruncatedResult(el)');
+    assert.ok(container.innerHTML.includes('data-line="201"'));
+    assert.ok(container.innerHTML.includes('data-line="262"'));
+    assert.equal((container.innerHTML.match(/code-read-line"/g) || []).length, 262);
+  });
+});
+
 // ── parseToolResult ────────────────────────────────────────────────
 
 describe('template-engine: parseToolResult', () => {

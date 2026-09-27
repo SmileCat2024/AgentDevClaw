@@ -9,13 +9,21 @@
  *   cv-hidden 的子树不参与 layout/paint（浏览器原生跳过），
  *   但元素自身保留高度（首次 150px 估算，之后 auto 记住实际高度）。
  *
+ * 节点预算分级（setProcessWindowingDisabled）：
+ *   预算内的会话（日常量级）禁用窗口切换，全部行真实布局 —— 滚动时
+ *   没有任何 reveal 成本（实测真实 5 万节点会话：长任务 48→17）。
+ *   预算外的会话保留本文件的全部虚拟化逻辑：历史上有 13 万节点级会话
+ *   在首布局时整页冻结，虚拟化是那个量级的保险。全渲染的实测代价
+ *   （5 万节点）：渲染器内存 +122~131MB、render 时一次性布局 ~800ms。
+ *
  * 前提条件（已满足）：
  *   show 模式下不调用 syncCollapseStates（读 scrollHeight 会强制
  *   计算 cv-hidden 子树布局，触发 Chromium 性能警告）。
  *
  * 依赖全局变量: container, showChatProcess
  * 依赖全局函数: runWithSuppressedChatViewportObservers, syncRowCollapseState
- * 导出: applyProcessDistance, clearProcessDistance, precomputeViewportIdx
+ * 导出: applyProcessDistance, clearProcessDistance, precomputeViewportIdx,
+ *       setProcessWindowingDisabled
  */
 
 /* ── config ── */
@@ -41,6 +49,7 @@ var _scrollStopTimer = null;
 var _lastScrollTop = 0;
 var _largeDeltaPending = false;
 var _windowingFrozen = false;
+var _windowingDisabled = false;
 
 /* ── cache ── */
 
@@ -159,6 +168,13 @@ function _findViewportTopRowIdx(rows) {
 // write mid-drag would shift the scrollbar thumb under the user's hand.
 function _runCollapseScan(settleContext, focusScrollTop) {
   if (!showChatProcess || !container) return;
+  // Full-render tier: the landing settle (settleAllRowCollapseStates) fixed
+  // every row's state when the session rendered. Post-landing scans only
+  // "correct" borderline rows whose measured height drifted (font swap and
+  // similar late layout effects) — each correction writes to a fully
+  // laid-out 50K-node tree and forces a 100ms+ synchronous reflow. Skip the
+  // scans entirely; new streaming rows settle via the append path.
+  if (_windowingDisabled) return;
   if (typeof syncRowCollapseState !== 'function') return;
   var rows = _cachedRows;
   if (!rows || rows.length === 0) return;
@@ -294,7 +310,7 @@ function _foldRowIfOutside(row, settleContext, focusScrollTop) {
 /* ── scroll handler ── */
 
 function _onScrollForWindowing() {
-  if (!showChatProcess || !container) return;
+  if (!showChatProcess || !container || _windowingDisabled) return;
 
   var currentScrollTop = container.scrollTop;
   var delta = Math.abs(currentScrollTop - _lastScrollTop);
@@ -334,6 +350,10 @@ function _onScrollForWindowing() {
 
 function _onScrollStop() {
   _scrollStopTimer = null;
+  if (_windowingDisabled) {
+    _largeDeltaPending = false;
+    return;
+  }
 
   if (_largeDeltaPending) {
     // Scrollbar drag / large jump release — one full precise window update,
@@ -367,8 +387,10 @@ function _onScrollStop() {
         }
       }
     }
-    _lastWindowStart = -1; // force fresh windowing
-    _applyWindow();
+    if (!_windowingDisabled) {
+      _lastWindowStart = -1; // force fresh windowing
+      _applyWindow();
+    }
     _runCollapseScan(true);
     // A render between the last scroll event and this timer rebuilds the DOM;
     // only pin when the captured row is still the live row at the same index
@@ -395,6 +417,8 @@ function _onScrollStop() {
 
 function _applyWindow() {
   if (!showChatProcess || !container) return;
+  // 全渲染分级：无窗口切换，滚动中唯一的几何变化来自折叠扫描的补偿。
+  if (_windowingDisabled) return;
 
   // Pixel fast-path: skip all work if scrollTop is safely within window.
   // Must not fire when fresh windowing was forced (_lastWindowStart === -1):
@@ -595,20 +619,23 @@ function applyProcessDistance(root) {
   var windowStart = viewportIdx - WINDOW_ABOVE;
   var windowEnd = viewportIdx + WINDOW_BELOW;
 
-  // Initial windowing: near rows visible, far rows cv-hidden
+  // Initial windowing: near rows visible, far rows cv-hidden.
+  // Full-render tiering: everything visible, window = full row range (the
+  // pixel fast-path then never fires and _applyWindow early-returns anyway).
   for (var idx = 0; idx < rows.length; idx++) {
     // Remove any leftover process-hidden from hide mode
     if (rows[idx].classList.contains('tool') || rows[idx].classList.contains('system')) {
       rows[idx].classList.remove('process-hidden');
     }
-    _setRowCvVisible(rows[idx], idx >= windowStart && idx <= windowEnd);
+    _setRowCvVisible(rows[idx], _windowingDisabled
+      || (idx >= windowStart && idx <= windowEnd));
   }
   // Also remove process-hidden from assistant row children
   root.querySelectorAll('.reasoning-block.process-hidden, .tool-call-container.process-hidden')
     .forEach(function(el) { el.classList.remove('process-hidden'); });
 
-  _lastWindowStart = Math.max(0, windowStart);
-  _lastWindowEnd = Math.min(rows.length - 1, windowEnd);
+  _lastWindowStart = _windowingDisabled ? 0 : Math.max(0, windowStart);
+  _lastWindowEnd = _windowingDisabled ? rows.length - 1 : Math.min(rows.length - 1, windowEnd);
   // Repopulate the row cache BEFORE the scheduled collapse check below —
   // otherwise it reads null and every post-render check silently no-ops
   // until the first _applyWindow bypasses its pixel fast-path.
@@ -629,11 +656,20 @@ function applyProcessDistance(root) {
   // Background patches run the conservative scan only — see the collapse
   // timing contract above.
   if (isLanding) {
-    var focusTop = -1;
-    if (followLatestEnabled) {
-      focusTop = Math.max(0, container.scrollHeight - (container.clientHeight || 1));
+    if (_windowingDisabled && typeof settleAllRowCollapseStates === 'function') {
+      // Full-render landing: settle the WHOLE session once (batched read
+      // pass then write pass). Any row the scroll-time scans later touch is
+      // already settled, so those scans stay pure reads — under the
+      // full-render tier a single scroll-time DOM write forces a 100ms+
+      // synchronous reflow of the fully laid-out tree.
+      settleAllRowCollapseStates(root);
+    } else {
+      var focusTop = -1;
+      if (followLatestEnabled) {
+        focusTop = Math.max(0, container.scrollHeight - (container.clientHeight || 1));
+      }
+      _runCollapseScan(true, focusTop);
     }
-    _runCollapseScan(true, focusTop);
   } else {
     _runCollapseScan(false);
   }
@@ -653,19 +689,37 @@ function clearProcessDistance(root) {
   _largeDeltaPending = false;
   if (_scrollStopTimer) { clearTimeout(_scrollStopTimer); _scrollStopTimer = null; }
 
-  // Switch from cv-hidden to display:none (hide mode)
-  root.querySelectorAll(
-    '.message-row.system, .reasoning-block, ' +
-    '.message-row.assistant .tool-call-container, .message-row.tool'
-  ).forEach(function(el) {
-    el.classList.remove('process-cv-hidden');
-    el.classList.add('process-hidden');
-  });
+  // Switch from cv-hidden to display:none (hide mode). Full-render tiering
+  // (show mode, within node budget): no pre-hide at all — rows must stay
+  // laid out; only strip stale cv marks so the landing starts clean.
+  if (_windowingDisabled && showChatProcess) {
+    root.querySelectorAll(
+      '.message-row.system, .reasoning-block, ' +
+      '.message-row.assistant .tool-call-container, .message-row.tool'
+    ).forEach(function(el) {
+      el.classList.remove('process-cv-hidden');
+    });
+  } else {
+    root.querySelectorAll(
+      '.message-row.system, .reasoning-block, ' +
+      '.message-row.assistant .tool-call-container, .message-row.tool'
+    ).forEach(function(el) {
+      el.classList.remove('process-cv-hidden');
+      el.classList.add('process-hidden');
+    });
+  }
 
   if (_scrollListenerAttached && container) {
     container.removeEventListener('scroll', _onScrollForWindowing);
     _scrollListenerAttached = false;
   }
+}
+
+/* 全渲染分级开关。render() 在每次全量渲染时按节点预算重估：预算内 true
+ * （跳过预隐藏、无窗口切换），预算外 false（本文件全部虚拟化逻辑照常）。
+ * 流式追加不重估，沿用当前模式直到下一次全量渲染。 */
+function setProcessWindowingDisabled(disabled) {
+  _windowingDisabled = !!disabled;
 }
 
 function precomputeViewportIdx() {

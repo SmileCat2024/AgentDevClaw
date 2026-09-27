@@ -219,7 +219,19 @@ function createHarness({ messages } = {}) {
       getElementById: () => null,
       querySelector: () => null,
       querySelectorAll: () => [],
-      createElement: () => ({ style: {}, classList: makeClassList(), setAttribute() {} }),
+      createElement: () => ({
+        style: {},
+        classList: makeClassList(),
+        dataset: {},
+        setAttribute() {},
+        // The collapse sync diff-guards its innerHTML write by reading the
+        // rendered label back; mirror it off the written innerHTML string.
+        querySelector(sel) {
+          if (sel !== '.expand-toggle-btn' || this.innerHTML === undefined) return null;
+          const m = /<button[^>]*>([^<]*)<\/button>/.exec(this.innerHTML || '');
+          return m ? { textContent: m[1] } : null;
+        },
+      }),
       body: { contains: () => true },
     },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
@@ -758,4 +770,74 @@ test('panel drag: freezeProcessWindowing silences the scroll chain during the dr
   h.flushTimers(); // scroll-stop settle: fresh window + reveal + collapse
   assert.ok(!farRow.classList.contains('process-cv-hidden'),
     'post-unfreeze jump settle must reveal the arrival viewport (chain recovered)');
+});
+
+test('tiering: full-render mode (setProcessWindowingDisabled) lays out every row and folds visible tools without reveal writes', () => {
+  const h = createHarness();
+  h.sandbox.showChatProcess = true;
+  h.sandbox.followLatestEnabled = true;
+
+  // 600 tall Read rows: far beyond the window, well within a node budget.
+  for (let i = 0; i < 600; i++) {
+    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-${i}` }));
+  }
+
+  // render()'s landing sequence with the full-render tier active: the budget
+  // check in render() calls setProcessWindowingDisabled BEFORE
+  // clearProcessDistance, so the pre-hide must be skipped entirely.
+  vm.runInContext(`
+    setProcessWindowingDisabled(true);
+    clearProcessDistance(container);
+    applyConversationProcessState(container);
+    if (typeof lockChatViewportToBottomNow === 'function') lockChatViewportToBottomNow();
+    if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
+  `, h.sandbox);
+
+  // Full-render contract: every row stays laid out — no cv-hidden, no
+  // process-hidden, anywhere.
+  for (const e of h.container._entries) {
+    assert.equal(e.row.classList.contains('process-cv-hidden'), false,
+      'full-render tier must not cv-hide rows');
+    assert.equal(e.row.classList.contains('process-hidden'), false,
+      'full-render tier must not pre-hide rows');
+  }
+
+  // Landing fold still collapses the visible tool rows before first paint.
+  const visibleEntries = h.container._entries.filter((e) => {
+    const rec = h.layout().tops.get(e.row);
+    return rec && !e.row.classList.contains('process-hidden')
+      && rec.top < h.container.scrollTop + VIEW_H && rec.top + rec.h > h.container.scrollTop;
+  });
+  assert.ok(visibleEntries.length > 0, 'viewport should have visible rows');
+  const expandedTools = visibleEntries.filter((e) =>
+    e.row.role === 'tool' && !e.content.classList.contains('collapsed'));
+  assert.equal(expandedTools.length, 0, 'no expanded tool row may be visible at first paint');
+
+  // Far-jump upward (large delta). Nothing may reveal and nothing may
+  // compensate scrollTop: with every row already laid out there is no
+  // placeholder-to-real snap, so the wheel position must survive the settle.
+  h.container.scrollTop = 0;
+  vm.runInContext('_onScrollForWindowing()', h.sandbox);
+  h.pumpFrame(); // rAF stays silent (large-delta deferral)
+  h.flushTimers(); // scroll-stop settle
+  assert.equal(h.container.scrollTop, 0,
+    'full-render settle must not move scrollTop (nothing to reveal or compensate)');
+  let hiddenCount = 0;
+  for (const e of h.container._entries) {
+    if (e.row.classList.contains('process-cv-hidden')) hiddenCount++;
+  }
+  assert.equal(hiddenCount, 0, 'no row may become cv-hidden while the tier is active');
+
+  // Re-enabling the virtualization tier (next render above budget) must
+  // re-grade: far rows go back to cv-hidden.
+  vm.runInContext(`
+    setProcessWindowingDisabled(false);
+    _lastWindowStart = -1;
+    applyProcessDistance(container);
+  `, h.sandbox);
+  let rehidden = 0;
+  for (const e of h.container._entries) {
+    if (e.row.classList.contains('process-cv-hidden')) rehidden++;
+  }
+  assert.ok(rehidden > 0, 're-enabling windowing must cv-hide far rows again');
 });

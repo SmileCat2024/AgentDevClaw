@@ -44,9 +44,12 @@ function clearFeatureTemplateCache() {
   templateCache.clear();
 }
 
-// DOM node budget: each line generates 3 nodes (div + 2 spans). For 500-line tool
-// results that's 1500 nodes, most invisible (collapsed to 160px). Cap at 200 lines
-// and offer "click to expand" to keep the DOM lean while preserving data access.
+// DOM node budget: each line is ONE node — the line number is drawn by a CSS
+// fixed data-line pseudo-element (components.css), and JSON punctuation spans are
+// stripped below because github-dark leaves them the base color (invisible
+// weight). For 500-line tool results that's 500 nodes, most invisible
+// (collapsed to 160px). Cap at 200 lines and offer "click to expand" to keep
+// the DOM lean while preserving data access.
 const MAX_HIGHLIGHT_LINES = 200;
 const _fullHighlightData = new Map();
 let _highlightIdCounter = 0;
@@ -55,17 +58,35 @@ function clearTruncatedHighlightData() {
   _fullHighlightData.clear();
 }
 
+// github-dark defines no color for .hljs-punctuation: it inherits the base
+// text color, so these spans render identically to bare text while being the
+// single largest node class in tool rows. Unwrap them (keep the inner text).
+function stripHljsPunctuationSpans(html) {
+  return html.replace(/<span class="hljs-punctuation">([^<]*)<\/span>/g, '$1');
+}
+
+// Feature Read templates still emit their own line-number/content spans.
+// Normalize at the template boundary too, preserving explicit source offsets.
+// Fixed line numbers avoid CSS counters traversing hidden historical content.
+function compactCodeReadMarkup(html) {
+  if (typeof html !== 'string' || !html.includes('code-read-line')) return html;
+  return stripHljsPunctuationSpans(html).replace(
+    /<div class="code-read-line"><span class="code-read-line-num">(\d+|\s*)<\/span><span class="code-read-content">([\s\S]*?)<\/span><\/div>/g,
+    (_, line, content) => '<div class="code-read-line" data-line="' + line.trim() + '">' + content + '</div>',
+  );
+}
+
 function renderJsonHighlight(data) {
   const displayData = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
   const lines = displayData.split('\n');
   const isTruncated = lines.length > MAX_HIGHLIGHT_LINES;
   const effectiveLines = isTruncated ? lines.slice(0, MAX_HIGHLIGHT_LINES) : lines;
 
-  let html = '<div class="code-read-container">' + effectiveLines.map((line, i) => {
+  let html = '<div class="code-read-container">' + effectiveLines.map((line, index) => {
     let highlighted;
-    try { highlighted = hljs.highlight(line, { language: 'json' }).value; }
+    try { highlighted = stripHljsPunctuationSpans(hljs.highlight(line, { language: 'json' }).value); }
     catch (e) { highlighted = escapeHtml(line); }
-    return '<div class="code-read-line"><span class="code-read-line-num">' + (i + 1) + '</span><span class="code-read-content">' + highlighted + '</span></div>';
+    return '<div class="code-read-line" data-line="' + (index + 1) + '">' + highlighted + '</div>';
   }).join('');
 
   if (isTruncated) {
@@ -90,11 +111,11 @@ function expandTruncatedResult(el) {
 
   const displayData = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
   const lines = displayData.split('\n');
-  container.innerHTML = lines.map((line, i) => {
+  container.innerHTML = lines.map((line, index) => {
     let highlighted;
-    try { highlighted = hljs.highlight(line, { language: 'json' }).value; }
+    try { highlighted = stripHljsPunctuationSpans(hljs.highlight(line, { language: 'json' }).value); }
     catch (e) { highlighted = escapeHtml(line); }
-    return '<div class="code-read-line"><span class="code-read-line-num">' + (i + 1) + '</span><span class="code-read-content">' + highlighted + '</span></div>';
+    return '<div class="code-read-line" data-line="' + (index + 1) + '">' + highlighted + '</div>';
   }).join('');
 
   _fullHighlightData.delete(id);
@@ -121,19 +142,19 @@ function interpolateTemplate(template, data) {
 
 function applyTemplate(template, data, success = true, args = {}) {
   if (typeof template === 'function') {
-    return template(data, success, args);
+    return compactCodeReadMarkup(template(data, success, args));
   }
   // 处理内联模板对象 { call: ..., result: ... }
   if (typeof template === 'object' && template !== null) {
     const fn = template.result || template.call;
     if (typeof fn === 'function') {
-      return fn(data, success, args);
+      return compactCodeReadMarkup(fn(data, success, args));
     }
     if (typeof fn === 'string') {
-      return interpolateTemplate(fn, data);
+      return compactCodeReadMarkup(interpolateTemplate(fn, data));
     }
   }
-  return interpolateTemplate(template, data);
+  return compactCodeReadMarkup(interpolateTemplate(template, data));
 }
 
 function parseToolResult(content, display) {

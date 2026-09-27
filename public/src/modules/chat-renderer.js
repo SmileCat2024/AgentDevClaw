@@ -68,19 +68,18 @@ function renderChatEmptyState() {
 }
 
 // ── 消息 meta 行图标操作（复制 / 编辑此轮）────────────────────────
+// 图标本体零 DOM 节点：按钮为空元素，图标由 components.css 的
+// .message-icon-action::before mask 绘制（is-icon-copy / .message-action
+// / .copied 三种形态），节点预算从每按钮 4 节点降到 1 节点。
 // 注意：复制按钮只带 .message-icon-action，不带 .message-action——
 // syncRollbackActionButtons（input-helpers.js）用 .message-action 定位
 // 编辑按钮，复制按钮混入该类会被误改 onclick。
-const MSG_ICON_COPY_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg>';
-const MSG_ICON_PENCIL_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a1.75 1.75 0 0 1-2.158-2.158l.93-3.251c.081-.286.235-.547.445-.756Zm1.414 1.06a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Zm-1.237 3.746L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Z"></path></svg>';
-const MSG_ICON_CHECK_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L1.72 8.78a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path></svg>';
-
 function getMessageCopyActionHtml(index) {
-  return `<button type="button" class="message-icon-action" title="复制" onclick="copyMessageContent(${index}, this)">${MSG_ICON_COPY_SVG}</button>`;
+  return `<button type="button" class="message-icon-action is-icon-copy" title="复制" onclick="copyMessageContent(${index}, this)"></button>`;
 }
 
 function getMessageRollbackEditActionHtml(index) {
-  return `<button type="button" class="message-action message-icon-action" title="编辑此轮" onclick="requestRollbackEdit(${index})">${MSG_ICON_PENCIL_SVG}</button>`;
+  return `<button type="button" class="message-action message-icon-action" title="编辑此轮" onclick="requestRollbackEdit(${index})"></button>`;
 }
 
 // user / assistant 消息复制原始文本，tool 消息复制原始工具输出 JSON；
@@ -94,6 +93,48 @@ function getMessageActionButtonsHtml(msg, index) {
     html += getMessageRollbackEditActionHtml(index);
   }
   return html;
+}
+
+// Read results are collapsed to 160px by default. Build only the first eight
+// lines until the user expands the message, instead of highlighting/mounting
+// every hidden line in every historical read. The original message stays intact.
+function renderToolResultBody(toolName, template, data, success, toolArgs, index) {
+  const previewRead = success && toolName === 'read'
+    && data && typeof data === 'object' && data.type !== 'directory'
+    && typeof data.content === 'string' && !_userExpandedMsgs.has(index);
+  let renderData = data;
+  let deferred = false;
+  if (previewRead) {
+    const lines = data.content.split('\n');
+    if (lines.length > 8) {
+      renderData = { ...data, content: lines.slice(0, 8).join('\n') };
+      deferred = true;
+    }
+  }
+  const html = template.result
+    ? applyTemplate(template.result, renderData, success, toolArgs)
+    : renderJsonHighlight(renderData);
+  return deferred ? '<div class="tool-read-preview">' + html + '</div>' : html;
+}
+
+function refreshReadResultForMessage(row, index) {
+  const msg = currentMessages[index];
+  if (!msg || msg.role !== 'tool') return;
+  let call = null;
+  for (const message of currentMessages) {
+    call = message.toolCalls?.find(item => item.id === msg.toolCallId);
+    if (call) break;
+  }
+  if (call?.name !== 'read') return;
+  const body = row.querySelector('.tool-result-body');
+  if (!body) return;
+  const { success, data } = parseToolResult(msg.content, msg.display);
+  runWithSuppressedChatViewportObservers(() => {
+    body.innerHTML = renderToolResultBody(call.name, getToolRenderTemplate(call.name),
+      data, success, call.arguments || {}, index);
+    enhanceMathInElement(body);
+    enhanceMarkdownTables(body);
+  });
 }
 
 // 生成单条消息的 HTML
@@ -143,7 +184,6 @@ function renderMessage(msg, index) {
       innerContent += `
         <div class="reasoning-block" id="reasoning-${msgId}">
             <div class="reasoning-header" onclick="toggleReasoning('reasoning-${msgId}')">
-              <svg class="reasoning-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg>
             <span>${escapeHtml(t('thinking_process'))}</span>
           </div>
           <div class="reasoning-content markdown-body">
@@ -286,12 +326,7 @@ function appendNewMessages(newMessages, startIndex) {
       const displayName = getToolDisplayName(toolName);
       const template = getToolRenderTemplate(toolName);
 
-      let bodyHtml;
-      if (template.result) {
-         bodyHtml = applyTemplate(template.result, data, success, toolArgs);
-      } else {
-         bodyHtml = renderJsonHighlight(data);
-      }
+      const bodyHtml = renderToolResultBody(toolName, template, data, success, toolArgs, index);
 
       html = `
         <div class="message-row ${msg.role}" data-tool-success="${success ? 'true' : 'false'}">
@@ -447,12 +482,7 @@ function updateLastMessage(msg) {
     const displayName = getToolDisplayName(toolName);
     const template = getToolRenderTemplate(toolName);
 
-    let bodyHtml;
-    if (template.result) {
-       bodyHtml = applyTemplate(template.result, data, success, toolArgs);
-    } else {
-       bodyHtml = renderJsonHighlight(data);
-    }
+    const bodyHtml = renderToolResultBody(toolName, template, data, success, toolArgs, lastIndex);
 
     const toolResultBody = lastRow.querySelector('.tool-result-body');
     if (toolResultBody) {
@@ -498,26 +528,30 @@ function getCollapseThresholdForRow(row) {
   return 160;
 }
 
-function syncRowCollapseState(row) {
+// Phase 1 of the collapse sync: all READS (geometry + state) needed to know
+// what a row's collapse state should be. Returns null when the row must be
+// left alone (windowing far rows), or a plan for applyRowCollapsePlan.
+// Splitting reads from writes lets settleAllRowCollapseStates batch a whole
+// session (read pass then write pass): under the full-render tier any
+// read-write interleaving on a 50K-node laid-out tree forces a 100ms+
+// synchronous reflow per write.
+function computeRowCollapsePlan(row) {
   const el = row.querySelector('.message-content');
-  if (!el) return;
+  if (!el) return null;
 
-  const btnBar = row.querySelector('.expand-toggle-bar');
   if (row.classList.contains('process-hidden') || row.classList.contains('process-hidden-empty')) {
-    el.classList.remove('collapsed');
-    if (btnBar) btnBar.remove();
-    return;
+    return { kind: 'reveal' };
   }
 
   // Skip rows with process-hidden children (far from viewport in windowing mode)
   // scrollHeight is unreliable for these rows
-  if (row.querySelector('.process-hidden') && 
-      (row.classList.contains('tool') || row.classList.contains('system'))) return;
+  if (row.querySelector('.process-hidden') &&
+      (row.classList.contains('tool') || row.classList.contains('system'))) return null;
 
   // Skip cv-hidden rows — reading scrollHeight forces layout of the
   // content-visibility:hidden subtree, triggering Chromium perf warnings
-  if (row.classList.contains('process-cv-hidden')) return;
-  if (row.querySelector('.process-cv-hidden')) return;
+  if (row.classList.contains('process-cv-hidden')) return null;
+  if (row.querySelector('.process-cv-hidden')) return null;
 
   const collapseThreshold = getCollapseThresholdForRow(row);
   const isCollapsible = el.scrollHeight > collapseThreshold;
@@ -526,19 +560,35 @@ function syncRowCollapseState(row) {
   const isReadOrEdit = toolName === 'Read' || toolName === 'Edit';
   const shouldCollapse = isCollapsible && (isSystem || isReadOrEdit);
 
-  if (!isCollapsible) {
-    el.classList.remove('collapsed');
-    if (btnBar) btnBar.remove();
-    const toggle = row.querySelector('.collapse-toggle');
-    if (toggle) toggle.style.display = 'none';
-    return;
-  }
-
   // Check if user has manually toggled this row — respect their choice
   var msgId = el.id || '';
   var msgIndex = parseInt(msgId.replace('msg-', ''), 10);
   var userExpanded = !isNaN(msgIndex) && _userExpandedMsgs.has(msgIndex);
   var userCollapsed = !isNaN(msgIndex) && _userCollapsedMsgs.has(msgIndex);
+
+  return { kind: 'apply', isCollapsible, userExpanded, userCollapsed, shouldCollapse };
+}
+
+// Phase 2 of the collapse sync: all WRITES. Every write is diff-guarded —
+// re-syncing an already-settled row performs zero mutations, so scanning it
+// again during scrolling cannot dirty the layout tree.
+function applyRowCollapsePlan(row, plan) {
+  const el = row.querySelector('.message-content');
+  if (!el) return;
+
+  if (plan.kind === 'reveal') {
+    el.classList.remove('collapsed');
+    const bar = row.querySelector('.expand-toggle-bar');
+    if (bar) bar.remove();
+    return;
+  }
+
+  if (!plan.isCollapsible) {
+    el.classList.remove('collapsed');
+    const bar = row.querySelector('.expand-toggle-bar');
+    if (bar) bar.remove();
+    return;
+  }
 
   // Apply collapse state: user preference takes priority over auto-collapse.
   // All four branches fall through to the button creation code below — the
@@ -546,33 +596,54 @@ function syncRowCollapseState(row) {
   // reverse their choice. Previously the userExpanded/userCollapsed branches
   // removed the button and returned early, causing the button to vanish on
   // the next poll cycle.
-  if (userExpanded) {
+  if (plan.userExpanded) {
     el.classList.remove('collapsed');
-    const meta = row.querySelector('.message-meta .collapse-toggle svg');
-    if (meta) meta.style.transform = 'rotate(0deg)';
-  } else if (userCollapsed) {
+  } else if (plan.userCollapsed) {
     el.classList.add('collapsed');
-    const meta = row.querySelector('.message-meta .collapse-toggle svg');
-    if (meta) meta.style.transform = 'rotate(-90deg)';
-  } else if (shouldCollapse) {
+  } else if (plan.shouldCollapse) {
     el.classList.add('collapsed');
-    const meta = row.querySelector('.message-meta .collapse-toggle svg');
-    if (meta) meta.style.transform = 'rotate(-90deg)';
   } else {
     el.classList.remove('collapsed');
-    const meta = row.querySelector('.message-meta .collapse-toggle svg');
-    if (meta) meta.style.transform = 'rotate(0deg)';
   }
 
-  let nextBtnBar = btnBar;
+  let nextBtnBar = row.querySelector('.expand-toggle-bar');
   if (!nextBtnBar) {
     nextBtnBar = document.createElement('div');
     nextBtnBar.className = 'expand-toggle-bar';
     row.appendChild(nextBtnBar);
   }
 
+  // innerHTML is the one write that always reparses even when identical —
+  // guard it by comparing the rendered label and state class, or every settle
+  // scan re-dirties the layout tree for every collapsible row it touches.
   const isCollapsed = el.classList.contains('collapsed');
-  nextBtnBar.innerHTML = '<button class="expand-toggle-btn" onclick="toggleMessage(&quot;' + el.id + '&quot;)">' + getToggleButtonLabel(isCollapsed) + '</button>';
+  const desiredLabel = getToggleButtonLabel(isCollapsed);
+  const desiredCls = isCollapsed ? 'is-collapsed' : 'is-expanded';
+  const btn = nextBtnBar.querySelector('.expand-toggle-btn');
+  if (!btn || btn.textContent !== desiredLabel || !btn.classList.contains(desiredCls)) {
+    nextBtnBar.innerHTML = '<button class="expand-toggle-btn ' + desiredCls + '" onclick="toggleMessage(&quot;' + el.id + '&quot;)">' + desiredLabel + '</button>';
+  }
+}
+
+function syncRowCollapseState(row) {
+  const plan = computeRowCollapsePlan(row);
+  if (plan) applyRowCollapsePlan(row, plan);
+}
+
+// Whole-session landing settle for the full-render tier: compute every row's
+// plan first (reads only, one layout flush total), then apply all writes in
+// one batch. After this, scrolling never finds unsettled rows, so the
+// scroll-time settle scans are pure reads on a clean layout tree.
+function settleAllRowCollapseStates(root) {
+  const rows = root.querySelectorAll('.message-row');
+  const pending = [];
+  rows.forEach(function (row) {
+    const plan = computeRowCollapsePlan(row);
+    if (plan) pending.push([row, plan]);
+  });
+  pending.forEach(function (entry) {
+    applyRowCollapsePlan(entry[0], entry[1]);
+  });
 }
 
 function syncCollapseStates(containerElement, startIndex = 0) {
@@ -605,10 +676,11 @@ function restoreUserCollapseState(root) {
     let row = el.closest('.message-row');
     if (row && (row.classList.contains('process-hidden') || row.classList.contains('process-hidden-empty'))) return;
     el.classList.remove('collapsed');
-    let meta = row && row.querySelector('.message-meta .collapse-toggle svg');
-    if (meta) meta.style.transform = 'rotate(0deg)';
     let btn = row && row.querySelector('.expand-toggle-btn');
-    if (btn) btn.innerHTML = getToggleButtonLabel(false);
+    if (btn) {
+      btn.innerHTML = getToggleButtonLabel(false);
+      btn.className = 'expand-toggle-btn is-expanded';
+    }
   });
 
   // Messages the user explicitly collapsed
@@ -618,10 +690,11 @@ function restoreUserCollapseState(root) {
     let row = el.closest('.message-row');
     if (row && (row.classList.contains('process-hidden') || row.classList.contains('process-hidden-empty'))) return;
     el.classList.add('collapsed');
-    let meta = row && row.querySelector('.message-meta .collapse-toggle svg');
-    if (meta) meta.style.transform = 'rotate(-90deg)';
     let btn = row && row.querySelector('.expand-toggle-btn');
-    if (btn) btn.innerHTML = getToggleButtonLabel(true);
+    if (btn) {
+      btn.innerHTML = getToggleButtonLabel(true);
+      btn.className = 'expand-toggle-btn is-collapsed';
+    }
   });
 }
 
@@ -695,7 +768,6 @@ function render(messages) {
         innerContent += `
           <div class="reasoning-block" id="reasoning-${msgId}">
             <div class="reasoning-header" onclick="toggleReasoning('reasoning-${msgId}')">
-              <svg class="reasoning-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg>
               <span>${escapeHtml(t('thinking_process'))}</span>
             </div>
             <div class="reasoning-content markdown-body">
@@ -785,12 +857,7 @@ function render(messages) {
       const displayName = getToolDisplayName(toolName);
       const template = getToolRenderTemplate(toolName);
       
-      let bodyHtml;
-      if (template.result) {
-         bodyHtml = applyTemplate(template.result, data, success, toolArgs);
-      } else {
-         bodyHtml = renderJsonHighlight(data);
-      }
+      const bodyHtml = renderToolResultBody(toolName, template, data, success, toolArgs, index);
 
       rowAttrs = ` data-tool-success="${success ? 'true' : 'false'}"`;
       contentHtml = `
@@ -835,7 +902,20 @@ function render(messages) {
     if (container.dataset && chatContextKey) {
       container.dataset.chatRenderContext = chatContextKey;
     }
-    // Pre-hide ALL process elements before any layout read.
+    // Node-budget tiering: within budget (daily sessions) disable the cv
+    // windowing entirely — every row lays out for real, scrolling has zero
+    // reveal cost (measured on a real 50K-node session: long tasks 48→17).
+    // Above budget keep pre-hide + windowing: the 134K-node-class sessions
+    // that motivated virtualization (historical full-layout freeze) stay
+    // protected. Full-render cost at 50K nodes (measured): +122~131MB
+    // renderer RSS, one-time ~800ms landing layout. Re-evaluated on every
+    // full render; streaming appends keep the current mode until then.
+    if (typeof setProcessWindowingDisabled === 'function') {
+      setProcessWindowingDisabled(
+        container.getElementsByTagName('*').length <= 70000);
+    }
+    // Pre-hide ALL process elements before any layout read (full-render
+    // tiering above makes clearProcessDistance itself skip the pre-hide).
     // Without this, the browser sees 134K visible nodes and freezes on layout.
     // applyProcessDistance (called next) will reveal ~70 near-viewport rows.
     if (typeof clearProcessDistance === 'function') {
@@ -952,19 +1032,14 @@ window.toggleMessage = function(id) {
         _userExpandedMsgs.add(msgIndex);
         _userCollapsedMsgs.delete(msgIndex);
       }
+      refreshReadResultForMessage(row, msgIndex);
     }
 
-    // Update meta icon
-    const meta = row.querySelector('.message-meta .collapse-toggle svg');
-    if (meta) {
-       meta.style.transform = isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'; // meta uses transform
-       // Fix: meta.transform in previous code was wrong, it's meta.style.transform
-    }
-    
     // Update bottom button
     const btn = row.querySelector('.expand-toggle-btn');
     if (btn) {
       btn.innerHTML = getToggleButtonLabel(isCollapsed);
+      btn.className = 'expand-toggle-btn ' + (isCollapsed ? 'is-collapsed' : 'is-expanded');
     }
 
     notifyChatViewportMutation({
@@ -1042,11 +1117,9 @@ window.copyMessageContent = async function(index, btn) {
     return;
   }
   if (btn) {
-    btn.innerHTML = MSG_ICON_CHECK_SVG;
     btn.classList.add('copied');
     if (btn._copyResetTimer) clearTimeout(btn._copyResetTimer);
     btn._copyResetTimer = setTimeout(function() {
-      btn.innerHTML = MSG_ICON_COPY_SVG;
       btn.classList.remove('copied');
     }, 1200);
   }
