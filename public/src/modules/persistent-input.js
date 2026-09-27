@@ -36,6 +36,8 @@ let _persistentUiSyncInFlight = false;
 let _localQueuedInputPending = false;
 let _lastQueueBubbleSignature = '';
 let _submitInFlight = false;       // 发送重入保护：fetch 期间阻止二次提交/中断
+let _sendingStartedAt = 0;         // 发送反馈窗口起点（最短可见时长的计时基准）
+let _sendingHoldTimer = null;      // 最短可见保持定时器：hold 期间轮询同步不得清 spinner
 
 // 待发送的图片附件：按会话隔离存储（与 SessionReference 的会话引用同套路）。
 // Map<key, entries[]>，key 复用 window.SessionReference.activeKey()——附件类
@@ -473,9 +475,10 @@ function onPersistentBtnClick() {
 }
 
 function _setActionBtnStop() {
+  if (_submitInFlight || _sendingHoldTimer) return; // 提交/保持窗口内维持 sending 态，轮询同步不得覆盖
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
-  btn.classList.remove('is-interrupting');
+  btn.classList.remove('is-interrupting', 'is-sending');
   btn.classList.add('is-stop');
   btn.removeAttribute('aria-busy');
   btn.title = currentLanguage === 'zh' ? '停止当前任务' : 'Stop current task';
@@ -486,8 +489,10 @@ function _setActionBtnStop() {
 }
 
 function _setActionBtnInterrupting() {
+  if (_submitInFlight || _sendingHoldTimer) return;
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
+  btn.classList.remove('is-sending');
   btn.classList.add('is-stop', 'is-interrupting');
   btn.setAttribute('aria-busy', 'true');
   btn.title = currentLanguage === 'zh' ? '正在停止当前任务…' : 'Stopping current task…';
@@ -498,15 +503,95 @@ function _setActionBtnInterrupting() {
 }
 
 function _setActionBtnSend() {
+  if (_submitInFlight || _sendingHoldTimer) return;
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
-  btn.classList.remove('is-stop', 'is-interrupting');
+  btn.classList.remove('is-stop', 'is-interrupting', 'is-sending');
   btn.removeAttribute('aria-busy');
   btn.title = currentLanguage === 'zh' ? '发送' : 'Send';
   const iconSend = btn.querySelector('.icon-send');
   const iconStop = btn.querySelector('.icon-stop');
   if (iconSend) iconSend.style.display = '';
   if (iconStop) iconStop.style.display = 'none';
+}
+
+// 发送进行中（点击/Enter → user-turn 落定）：spinner 替代图标，覆盖
+// 图片转存 + fetch 的整个提交窗口，消除"点了没反应"的空窗手感。
+// requests 端点（请求卡模式）下按钮无 id，回落类名定位——composer 卡
+// 内只有一个 .persistent-action-btn 按钮。图标用 inline style 隐藏（与
+// 三个 setter 同款），恢复由 _restoreActionBtnAfterSubmit 完成。
+function _setActionBtnSending() {
+  const btn = document.getElementById('persistent-action-btn')
+    || document.querySelector('.persistent-action-btn');
+  if (!btn) return;
+  btn.classList.remove('is-stop', 'is-interrupting');
+  btn.classList.add('is-sending');
+  btn.setAttribute('aria-busy', 'true');
+  btn.title = currentLanguage === 'zh' ? '发送中…' : 'Sending…';
+  const iconSend = btn.querySelector('.icon-send');
+  const iconStop = btn.querySelector('.icon-stop');
+  if (iconSend) iconSend.style.display = 'none';
+  if (iconStop) iconStop.style.display = 'none';
+}
+
+// 提交窗口结束的统一恢复：persistent 端点（按钮持有 id）交还三态同步；
+// requests 端点按钮无 id、无三态，复位为纯 send 图标（applyComposerMode
+// requests 分支的同款复位）。
+function _restoreActionBtnAfterSubmit() {
+  const btn = document.getElementById('persistent-action-btn')
+    || document.querySelector('.persistent-action-btn');
+  if (!btn) return;
+  if (btn.id === 'persistent-action-btn') {
+    _syncPersistentActionButton();
+  } else {
+    btn.classList.remove('is-sending');
+    btn.removeAttribute('aria-busy');
+    btn.title = 'Send';
+    const iconSend = btn.querySelector('.icon-send');
+    const iconStop = btn.querySelector('.icon-stop');
+    if (iconSend) iconSend.style.display = '';
+    if (iconStop) iconStop.style.display = 'none';
+  }
+}
+
+// ── 发送反馈窗口（persistent 与 requests 两端点共用）──────────────────
+//
+// 间歇性"点了没转圈、消息直接蹦出去"的根因是渲染时机：spinner 类设置后、
+// 浏览器绘制前，本地直投的 fetch 可能已落定并移除类（或点击后主线程被
+// 轮询渲染短暂阻塞挤掉了 paint 机会）——spinner 从未被画出来。双保险：
+//   1. paint 门槛：设置 spinner 后等双 rAF 再发请求，保证至少绘制一次；
+//      此后即使主线程阻塞，transform 旋转由 compositor 驱动继续转动。
+//   2. 最短可见保持：fetch 快于阈值时恢复延迟到阈值，反馈不被一闪带过。
+
+const _SENDING_MIN_VISIBLE_MS = 300;
+
+function _nextPaint() {
+  return new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+}
+
+function _beginSubmitFeedbackWindow() {
+  if (_sendingHoldTimer) {
+    clearTimeout(_sendingHoldTimer);
+    _sendingHoldTimer = null;
+  }
+  _sendingStartedAt = Date.now();
+  _setActionBtnSending();
+}
+
+function _endSubmitFeedbackWindow() {
+  const remain = _SENDING_MIN_VISIBLE_MS - (Date.now() - _sendingStartedAt);
+  if (remain > 0) {
+    _sendingHoldTimer = setTimeout(() => {
+      _sendingHoldTimer = null;
+      // hold 到期前新提交已开启新窗口（其 begin 会清掉本 timer），此处
+      // 只在窗口确已空闲时恢复
+      if (!_submitInFlight) _restoreActionBtnAfterSubmit();
+    }, remain);
+  } else {
+    _restoreActionBtnAfterSubmit();
+  }
 }
 
 function _syncPersistentActionButton() {
@@ -607,15 +692,19 @@ async function submitQueuedInput() {
   const targetImageKey = _imageBucketKey();
 
   _submitInFlight = true;
-  // 乐观 UI：立即切换为 stop 按钮提供即时视觉反馈，消除"点击没反应"的手感。
-  // _submitInFlight 守卫确保此期间点击不会触发 interruptAgent。
-  _setActionBtnStop();
+  // 乐观 UI：立即进入 sending 态（spinner），覆盖点击 → user-turn 落定的
+  // 整个提交窗口（含图片转存等待）。_submitInFlight 守卫确保此期间点击与
+  // 轮询同步都不会把按钮切走或触发 interruptAgent。
+  _beginSubmitFeedbackWindow();
 
   let capabilityActivations = null;
   // 会话引用快照：try 外声明（catch 归还路径可见；try 内 const 会让 catch
   // 拿到 ReferenceError 而不是空数组——B1 审查修复）
   let sessionRefs = [];
   try {
+    // paint 门槛：spinner 画出来之后再发请求，杜绝"类设置了但从未绘制"
+    // 导致点击无反馈、消息直接蹦出的间歇性空窗
+    await _nextPaint();
     // 图片就绪：等待后台上传，并把宿主与发送目标不一致的附件转存过去。
     // 任何附件失败都显式中止（输入与预览保留，供用户重试），绝不静默丢弃。
     const resolved = await _resolvePendingImagesForTarget(targetRuntimeId, targetImageKey);
@@ -805,7 +894,7 @@ async function submitQueuedInput() {
     });
   } finally {
     _submitInFlight = false;
-    _syncPersistentActionButton();
+    _endSubmitFeedbackWindow();
   }
 }
 

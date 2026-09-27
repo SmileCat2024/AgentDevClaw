@@ -111,6 +111,20 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   }
   const targetRuntimeId = String(boundRuntimeId || '').trim();
   if (!targetRuntimeId) return;
+  // 发送反馈窗口与重入守卫（与 persistent 端点共用一套状态，persistent-input.js）：
+  // spinner 覆盖图片转存 + 投递全程，所有出口（成功/失败/兜底/归还）统一恢复
+  if (_submitInFlight) return;
+  _submitInFlight = true;
+  _beginSubmitFeedbackWindow();
+  try {
+    await _submitInputInner(requestId, targetRuntimeId);
+  } finally {
+    _submitInFlight = false;
+    _endSubmitFeedbackWindow();
+  }
+}
+
+async function _submitInputInner(requestId, targetRuntimeId) {
   const textarea = document.getElementById(`input-${requestId}`);
   const input = textarea ? textarea.value : '';
   const targetCacheKey = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
@@ -121,6 +135,8 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   // 图片桶 key 同步捕获（与 targetCacheKey 同款防漂移）：await 期间切换会话后，
   // resolve 与成功清空只作用于发起会话挂载的图片桶
   const targetImageKey = typeof _imageBucketKey === 'function' ? _imageBucketKey() : undefined;
+  // paint 门槛：spinner 画出来之后再进入首个 await（与 persistent 端点同款）
+  await _nextPaint();
   if (typeof _resolvePendingImagesForTarget === 'function') {
     const resolved = await _resolvePendingImagesForTarget(targetRuntimeId, targetImageKey);
     if (resolved.failedCount > 0) {

@@ -360,7 +360,7 @@ function applyComposerMode(card, mode, lease = null) {
     // 请求卡的发送按钮只是 send：移除 persistent 三态标识，避免 calling
     // 状态误把请求卡发送按钮切为 stop（现状请求卡按钮无此 id，行为等价）。
     sendBtn.removeAttribute('id');
-    sendBtn.classList.remove('is-stop', 'is-interrupting');
+    sendBtn.classList.remove('is-stop', 'is-interrupting', 'is-sending');
     sendBtn.removeAttribute('aria-busy');
     sendBtn.title = 'Send';
     const iconSend = sendBtn.querySelector('.icon-send');
