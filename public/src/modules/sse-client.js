@@ -74,8 +74,12 @@ function handleNotificationEvent(frame) {
     // 通知、状态条渲染；payload 与 GET /notification 同构）
     updateNotificationStatus(payload);
   } else if (typeof applyAgentCallStateFromNotification === 'function') {
-    // 非焦点：只更新侧栏级 call 状态（转圈、true→false 完成通知）
-    applyAgentCallStateFromNotification(frame.agentId, payload);
+    // 非焦点：只更新侧栏级 call 状态（转圈、true→false 完成通知）。
+    // 边沿变化（calling / suspended）必须即时渲染——否则唤醒轮的转圈
+    // 与挂起绿灯依赖"恰好有别的渲染事件"才显形（历史 bug：唤醒轮转圈
+    // 从未显示，直接从绿灯跳到完成蓝灯）
+    const changed = applyAgentCallStateFromNotification(frame.agentId, payload);
+    if (changed && typeof renderAgentList === 'function') renderAgentList();
   }
 }
 

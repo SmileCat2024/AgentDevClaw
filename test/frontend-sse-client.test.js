@@ -77,8 +77,10 @@ function loadSseClient(overrides = {}) {
     toasts: [],
     foregroundSyncs: 0,
     tryNotifyInputRequest: [],
+    renders: [],
   };
   let switchEpoch = 1;
+  let applyResult = false;
   const ctx = createFrontendSandbox({
     EventSource: MockEventSource,
     // 沙箱 base 缺 URLSearchParams（浏览器有）；sseModeFromUrl 依赖它解析 ?sse=
@@ -90,7 +92,11 @@ function loadSseClient(overrides = {}) {
     ClawToast: { show: (t) => calls.toasts.push(t) },
     _syncForegroundState: () => { calls.foregroundSyncs += 1; },
     updateNotificationStatus: (p) => calls.updateNotificationStatus.push(p),
-    applyAgentCallStateFromNotification: (id, p) => calls.applyAgentCallStateFromNotification.push({ id, p }),
+    applyAgentCallStateFromNotification: (id, p) => {
+      calls.applyAgentCallStateFromNotification.push({ id, p });
+      return applyResult;
+    },
+    renderAgentList: () => { calls.renders.push(1); },
     commitMetadataUpdate: (token, parts) => calls.commitMetadataUpdate.push({ token, parts }),
     runMessagesProbeCycle: async (token, probe) => {
       calls.runMessagesProbeCycle.push({ token, probe });
@@ -110,7 +116,12 @@ function loadSseClient(overrides = {}) {
   // MockEventSource.instances 是跨测试的模块级静态——每个沙箱重置
   MockEventSource.instances.length = 0;
   ctx.loadSource('public/src/modules/sse-client.js');
-  return { ctx, calls, bumpEpoch: () => { switchEpoch += 1; } };
+  return {
+    ctx,
+    calls,
+    bumpEpoch: () => { switchEpoch += 1; },
+    setApplyResult: (v) => { applyResult = v; },
+  };
 }
 
 function latestSource() {
@@ -190,6 +201,21 @@ describe('sse-client: 事件分发焦点路由', () => {
     assert.equal(calls.updateNotificationStatus.length, 1);
     assert.equal(calls.applyAgentCallStateFromNotification.length, 1);
     assert.equal(calls.applyAgentCallStateFromNotification[0].id, 'rt-other');
+  });
+
+  it('ADR-0019 非焦点边沿变化 → apply 返回 true → 即时 renderAgentList（唤醒轮转圈/挂起绿灯显形）', () => {
+    const { calls, setApplyResult } = activeClient();
+    const payload = { callActive: true, state: null };
+    // 边沿变化（calling true / suspended 置位）：apply 返回 true → 渲染
+    setApplyResult(true);
+    latestSource().emit('notification', { kind: 'notification', agentId: 'rt-other', data: payload });
+    assert.equal(calls.applyAgentCallStateFromNotification.length, 1);
+    assert.equal(calls.renders.length, 1, '边沿变化即时渲染，不依赖其他渲染事件');
+    // 无边沿变化（幂等 apply）：不渲染
+    setApplyResult(false);
+    latestSource().emit('notification', { kind: 'notification', agentId: 'rt-other', data: payload });
+    assert.equal(calls.applyAgentCallStateFromNotification.length, 2);
+    assert.equal(calls.renders.length, 1, '幂等事件不重复渲染');
   });
 
   it('todo / overview 事件只消费焦点，走 commitMetadataUpdate', () => {

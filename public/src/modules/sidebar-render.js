@@ -725,12 +725,15 @@ function applyAgentCallStateFromNotification(runtimeId, notifData) {
   const payload = notifData && typeof notifData === 'object' ? notifData : null;
   const backendCalling = resolveNotificationCallingState(payload) === true;
   const prevCalling = _agentCallActive.get(runtimeId) === true;
+  const prevSuspended = _agentSuspended.get(runtimeId) === true;
   const effectiveCalling = backendCalling
     && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(payload));
+  let nextSuspended = prevSuspended;
   if (effectiveCalling) {
     _markAgentCallStartedForNotify(runtimeId);
     _agentCallActive.set(runtimeId, true);
     _agentSuspended.delete(runtimeId);
+    nextSuspended = false;
   } else {
     _agentCallActive.delete(runtimeId);
     // ADR-0019：挂起聚合的唯一事件消费点——SSE 非焦点事件、poll 全量、
@@ -738,8 +741,10 @@ function applyAgentCallStateFromNotification(runtimeId, notifData) {
     // payload 落定挂起态（lastOutcome 跨 poll 持久，唤醒轮 call.start 时清）
     if (isSuspendedNotificationPayload(payload)) {
       _agentSuspended.set(runtimeId, true);
+      nextSuspended = true;
     } else {
       _agentSuspended.delete(runtimeId);
+      nextSuspended = false;
     }
   }
   if (!backendCalling) {
@@ -751,7 +756,9 @@ function applyAgentCallStateFromNotification(runtimeId, notifData) {
     }
     _tryNotifyAgentFinished(runtimeId, payload);
   }
-  return prevCalling !== effectiveCalling;
+  // 返回值语义：calling 边沿或挂起边沿任一变化即侧栏视觉态变化，
+  // 调用方（SSE 事件路径 / refreshAgentCallStates）据此触发 renderAgentList
+  return prevCalling !== effectiveCalling || prevSuspended !== nextSuspended;
 }
 
 /**
