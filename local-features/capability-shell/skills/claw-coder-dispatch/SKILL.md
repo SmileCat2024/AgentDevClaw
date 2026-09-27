@@ -225,8 +225,8 @@ coder_shell command="result wt-xxx --turn=4"
 
 watch / send 的落定摘要行为一致：
 
-- `done reason=...`：`turn.completed` 本轮落定（链式多轮自动跟随）；`idle-no-pending` 线程空闲无 pending；`thread archived` / `thread closed` 线程已归档/已关闭（确定终态，勿续挂——继续工作开新线程）；`thread not found` 线程已删除（确定终态，勿续挂）；`stalled` 线程卡在 executing/pending-commands 且事件长期停滞且 head runtime 进程已不在（孤儿执行，按故障表介入；进程存活的事件停滞不触发——长工具调用期间没有新事件属正常）；`failed` failed=true（按故障表介入）；`timeout` 工具超时（正常续挂信号，续挂 `watch` 即可）；`unreachable` server 连续不可达
-- 摘要附事件尾（`turn.started` / `turn.completed` / `item.*` 等）供快速取证
+- `done reason=...`：`turn.completed` 本轮落定（链式多轮自动跟随；ADR-0019 挂起落定——turn.completed 事件带 `suspended` 标志——不算落定，watch 继续挂等后台任务唤醒轮）；`idle-no-pending` 线程空闲无 pending 且不在挂起等待；`thread archived` / `thread closed` 线程已归档/已关闭（确定终态，勿续挂——继续工作开新线程）；`thread not found` 线程已删除（确定终态，勿续挂）；`stalled` 两种形态：卡在 executing/pending-commands 且事件长期停滞且 head runtime 进程已不在（孤儿执行），或挂起等待中 head runtime 进程已不在（挂起任务随之死亡、唤醒不会到来）；`failed` failed=true（按故障表介入）；`timeout` 工具超时（正常续挂信号，续挂 `watch` 即可，挂起等待中的超时摘要会注明）；`unreachable` server 连续不可达
+- 摘要附事件尾（`turn.started` / `turn.completed` / `item.*` 等）供快速取证；挂起落定的 turn.completed 显示 `suspended (pending=N)`
 
 超时不需要做别的——`watch` 续挂之间不需要 sleep、不需要查 git status；事件流停滞或摘要异常时才取证。
 

@@ -593,6 +593,16 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   animation: just-finished-pulse 2s ease-in-out infinite;
 }
 
+/* ADR-0019 挂起等待（suspended）：静止绿灯——同运行中绿色系但不旋转，
+   表达"会话活着、在等后台任务唤醒"（对比 calling 的旋转绿灯） */
+.agent-session-pin-suspended {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success-color);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--success-color) 45%, transparent);
+}
+
 .agent-session-pin {
   display: inline-flex;
   align-items: center;

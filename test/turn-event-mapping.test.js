@@ -22,6 +22,30 @@ describe('mapEnvelopeToTurnEvent', () => {
     assert.equal(event.turn, 3);
     assert.deepEqual(event.usage, { inputTokens: 10, outputTokens: 5 });
     assert.equal(event.error, undefined);
+    // 非 suspended 完成不带挂起标志（老消费方兼容形状）
+    assert.equal(event.suspended, undefined);
+    assert.equal(event.pendingWakeups, undefined);
+  });
+
+  it('marks suspended completion with pendingWakeups (ADR-0019)', () => {
+    const wakeups = [{ source: 'shell', id: 'bg-1', summary: 'npm test' }];
+    const event = mapEnvelopeToTurnEvent(
+      { status: 'completed', outcome: { status: 'continued', reason: 'suspended', pendingWakeups: wakeups } },
+      { turn: 2 },
+    );
+    assert.equal(event.type, 'turn.completed');
+    assert.equal(event.suspended, true);
+    assert.deepEqual(event.pendingWakeups, wakeups);
+  });
+
+  it('suspended completion without wakeups carries flag only', () => {
+    const event = mapEnvelopeToTurnEvent(
+      { status: 'completed', outcome: { status: 'continued', reason: 'suspended' } },
+      { turn: 0 },
+    );
+    assert.equal(event.type, 'turn.completed');
+    assert.equal(event.suspended, true);
+    assert.equal(event.pendingWakeups, undefined);
   });
 
   it('treats content_filter completion as non-retryable failure', () => {

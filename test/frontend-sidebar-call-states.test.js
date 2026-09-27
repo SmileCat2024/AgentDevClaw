@@ -52,6 +52,9 @@ function loadCallStates() {
     getAgentRuntimeId: (agent) => agent?.runtime_session_id || agent?.runtimeSessionId || null,
     normalizeAgentIdentity: (v) => String(v || '').trim(),
     resolveNotificationCallingState: (payload) => payload?.callActive === true,
+    // ADR-0019 挂起聚合：本套件不验证挂起语义，mock 恒 false（真实判定由
+    // runtime-status.js 的 isSuspendedNotificationPayload 承担）
+    isSuspendedNotificationPayload: () => false,
     getNotificationCallStartedAt: (payload) => payload?.callStartedAt || 0,
     isInterruptSuppressed: () => false,
     clearInterruptSuppression: () => {},
@@ -63,6 +66,7 @@ function loadCallStates() {
   // 函数内部状态（提取片段中直接引用）
   ctx.run(`
     const _agentCallActive = new Map();
+    const _agentSuspended = new Map();
     const _interruptSuppression = new Map();
     const _recentlyFinishedRuntimes = new Set();
     let lastCallStateRefreshAt = 0;

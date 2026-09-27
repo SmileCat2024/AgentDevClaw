@@ -591,6 +591,10 @@ async function watchThread(threadId, { interval, timeout, jsonl, quiet }) {
   let idleRounds = 0;
   let errors = 0;
   let turnSettled = false; // 跨轮记忆：turn.completed 与 lifeState 离开 executing 常在不同轮次到达
+  // ADR-0019 挂起记忆：最近一次 turn.completed 是否为 suspended 落定（等待
+  // 后台任务唤醒）。挂起等待期间不提前返回——唤醒轮 turn.started 接棒后
+  // 正常跟随到非挂起落定。
+  let settledSuspended = false;
   // 基线：只取游标不回放历史事件，watch 期间的新事件才透传。
   try {
     const base = await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/events`);
@@ -628,7 +632,10 @@ async function watchThread(threadId, { interval, timeout, jsonl, quiet }) {
       if (jsonl) console.log(JSON.stringify(event));
       else {
         const itemType = event.item?.type ? ` item=${event.item.type}` : '';
-        console.log(`  event: ${event.type || 'event'}${event.turn !== undefined ? ` turn=${event.turn}` : ''}${itemType}`);
+        const suspendedMark = event.type === 'turn.completed' && event.suspended === true
+          ? ` suspended${Array.isArray(event.pendingWakeups) ? ` (pending=${event.pendingWakeups.length})` : ''}`
+          : '';
+        console.log(`  event: ${event.type || 'event'}${event.turn !== undefined ? ` turn=${event.turn}` : ''}${itemType}${suspendedMark}`);
       }
     }
     if (failed) {
@@ -655,12 +662,38 @@ async function watchThread(threadId, { interval, timeout, jsonl, quiet }) {
         : `lifeState=${lifeState} 事件停滞 ${staleSec}s——runtime 可能已死亡，查 agent 日志后再决定介入方式`;
       return { reason: 'stalled', detail, lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 3 };
     }
-    if (events.some((event) => event.type === 'turn.completed')) turnSettled = true;
-    if (events.some((event) => event.type === 'turn.started')) turnSettled = false; // 链式多轮：新一轮已接棒
-    if (turnSettled && lifeState !== 'executing') {
-      return { reason: 'turn.completed', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 0 };
+    for (const event of events) {
+      if (event.type === 'turn.completed') {
+        turnSettled = true;
+        settledSuspended = event.suspended === true;
+      }
+      if (event.type === 'turn.started') {
+        turnSettled = false;
+        settledSuspended = false; // 链式多轮：新一轮已接棒
+      }
     }
-    if (lifeState !== 'executing' && pending === 0) {
+    if (turnSettled && lifeState !== 'executing') {
+      // ADR-0019：suspended 落定 = 回合挂起等后台任务唤醒，不是交付完成，
+      // 不在此返回。唤醒来源存活边界 = runtime 进程：headRuntimeRunning 明确
+      // false 时挂起任务已死亡、唤醒永不来，按停滞终态退出；字段缺失（老
+      // server）保守继续等（deadline 兜底）。
+      if (!settledSuspended) {
+        return { reason: 'turn.completed', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 0 };
+      }
+      if (thread?.headRuntimeRunning === false) {
+        return {
+          reason: 'stalled',
+          detail: `上个回合挂起等待后台任务唤醒，但 head runtime 进程已不在——挂起任务随之死亡，唤醒不会到来，查 agent 日志后走恢复路径`,
+          lifeState,
+          failed,
+          newEvents,
+          suspended: true,
+          elapsed: Math.round((Date.now() - startedAt) / 1000),
+          exitCode: 3,
+        };
+      }
+    }
+    if (lifeState !== 'executing' && pending === 0 && !settledSuspended) {
       idleRounds += 1;
       if (idleRounds >= 2) {
         return { reason: 'idle-no-pending', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 0 };
@@ -669,7 +702,7 @@ async function watchThread(threadId, { interval, timeout, jsonl, quiet }) {
       idleRounds = 0;
     }
   }
-  return { reason: 'timeout', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 2 };
+  return { reason: 'timeout', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 2, suspended: settledSuspended || undefined };
 }
 
 // 末轮回复（--with-result）：事件流里最后一个 agent_message item 的全文，

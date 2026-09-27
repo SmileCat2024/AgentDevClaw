@@ -404,6 +404,65 @@ describe('coder_shell watch 状态矩阵（生命周期终态与停滞）', () =
     assert.ok(r.output.includes('done reason=stalled'), r.output);
     assert.ok(r.output.includes('runtime 可能已死亡'), r.output);
   });
+
+  it('ADR-0019 挂起落定：不提前返回也不报 idle-no-pending，跟随唤醒轮到非挂起落定', async () => {
+    let detailFetches = 0;
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: (async (url: string) => {
+        if (url.includes('/events') && !url.includes('after=')) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, events: [], cursor: 10 }) };
+        }
+        if (url.includes('/events?after=10')) {
+          // 轮 1：suspended 落定（挂起等待后台任务）
+          return { ok: true, status: 200, json: async () => ({ ok: true, events: [{ type: 'turn.completed', turn: 1, suspended: true, pendingWakeups: [{ source: 'shell', id: 'bg-1' }] }], cursor: 11 }) };
+        }
+        if (url.includes('/events?after=11')) {
+          // 轮 2+：唤醒轮完整落定（非挂起）
+          return { ok: true, status: 200, json: async () => ({ ok: true, events: [{ type: 'turn.started', turn: 2 }, { type: 'turn.completed', turn: 2 }], cursor: 12 }) };
+        }
+        if (url.endsWith('/threads/wt-susp')) {
+          detailFetches += 1;
+          // 挂起等待期 lifeState=idle、runtime 存活（唤醒来源在）
+          return { ok: true, status: 200, json: async () => ({ ok: true, thread: { threadId: 'wt-susp', lifeState: 'idle', status: 'open', failed: false, commands: [], headRuntimeRunning: true } }) };
+        }
+        return { ok: false, status: 404, json: async () => ({ ok: false, error: `no route: ${url}` }) };
+      }) as unknown as FetchLike,
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'watch wt-susp', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    // suspended 落定不应提前收敛：旧实现会在轮 1（detailFetches=1）直接
+    // 返回 turn.completed；新实现跨过挂起期，至少第 2 次 detail 后才落定
+    assert.ok(detailFetches >= 2, `挂起等待应跨多轮 poll（实际 ${detailFetches} 次）: ${r.output}`);
+    assert.ok(r.output.includes('done reason=turn.completed'), r.output);
+    assert.ok(!r.output.includes('done reason=idle-no-pending'), r.output);
+    // 事件尾里挂起落定带标记
+    assert.ok(r.output.includes('suspended (pending=1)'), r.output);
+  });
+
+  it('ADR-0019 挂起等待中 runtime 死亡：唤醒来源消失 → done reason=stalled（区别于孤儿 executing）', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: (async (url: string) => {
+        if (url.includes('/events') && !url.includes('after=')) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, events: [], cursor: 10 }) };
+        }
+        if (url.includes('/events?after=')) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, events: [{ type: 'turn.completed', turn: 0, suspended: true }], cursor: 11 }) };
+        }
+        if (url.endsWith('/threads/wt-susp-dead')) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, thread: { threadId: 'wt-susp-dead', lifeState: 'idle', status: 'open', failed: false, commands: [], headRuntimeRunning: false } }) };
+        }
+        return { ok: false, status: 404, json: async () => ({ ok: false, error: `no route: ${url}` }) };
+      }) as unknown as FetchLike,
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'watch wt-susp-dead', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('done reason=stalled'), r.output);
+    assert.ok(r.output.includes('挂起任务随之死亡'), r.output);
+  });
 });
 
 describe('coder_shell result 末轮回复', () => {

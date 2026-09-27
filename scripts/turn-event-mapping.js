@@ -10,6 +10,9 @@
  *    turn.failed（不可重试）：输出被供应商内容过滤拦截，不是正常结束。
  * 2. status=cancelled 是生命周期信号（guard 轮换 / 宿主中断），不是执行失败。
  * 3. 其余非 completed 状态为真实执行失败，带结构化 reason/category。
+ * 4. status=completed 且 outcome.reason=suspended（ADR-0019）：回合挂起
+ *    （等待后台任务唤醒）而非交付完成，事件携带 suspended 标志与
+ *    pendingWakeups 快照；消费方可读可不读，向后兼容。
  *
  * ── turn 号契约（0-based，与 runtime 上报方 run-prebuilt-agent.js 对齐）──
  *
@@ -32,6 +35,7 @@ const FILTER_STOP_REASONS = new Set(['content_filter', 'refusal']);
  *   status?: string, reason?: string,
  *   error?: { message?: string, category?: string, retryable?: boolean },
  *   model?: { providerStopReason?: string | null },
+ *   pendingWakeups?: Array<{ source?: string, id?: string, summary?: string }>,
  * } }} envelope CallArbiter 终态 envelope
  * @param {{ turn?: number | null, usage?: object | null }} [extra]
  * @returns {{ type: string, turn: number | null, usage?: object,
@@ -59,6 +63,12 @@ export function mapEnvelopeToTurnEvent(envelope, { turn = null, usage = null } =
       type: 'turn.completed',
       turn: turnNumber,
       ...(usage ? { usage } : {}),
+      ...(outcome?.reason === 'suspended' ? {
+        suspended: true,
+        ...(Array.isArray(outcome?.pendingWakeups) && outcome.pendingWakeups.length > 0
+          ? { pendingWakeups: outcome.pendingWakeups }
+          : {}),
+      } : {}),
     };
   }
 

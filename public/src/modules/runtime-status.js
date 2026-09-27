@@ -460,6 +460,24 @@ function isRuntimeCalling(runtimeId) {
   return normalizeAgentIdentity(runtimeId) !== '' && _agentCallActive.get(runtimeId) === true;
 }
 
+// ADR-0019：回合挂起（等待后台任务唤醒）聚合，与 _agentCallActive 同构
+// （poll 聚合 + 聚焦 runtime notification 即时维护），供侧栏指示灯消费。
+// 挂起事实源是 server runtime.lastOutcome（挂起 outcome 跨 poll 持久），
+// 下一个 call 开始后 calling 优先覆盖显示。
+const _agentSuspended = new Map();
+
+function isSuspendedNotificationPayload(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  const stateType = String(payload.state?.type || '').trim();
+  if (stateType === 'call.finish' && isSuspendedCallOutcome(payload.state?.data)) return true;
+  if (stateType === 'call.start') return false;
+  return isSuspendedCallOutcome(payload.runtime?.lastOutcome);
+}
+
+function isRuntimeSuspended(runtimeId) {
+  return normalizeAgentIdentity(runtimeId) !== '' && _agentSuspended.get(runtimeId) === true;
+}
+
 function isSidebarRuntimeDisconnected(entry) {
   // A degraded sidebar operation can describe cleanup of a different runtime
   // (for example, the archived source of a ready replacement). Transport state
@@ -1054,11 +1072,18 @@ function updateNotificationStatus(notifData) {
         if (!isInterruptSuppressed(runtimeId, observedCallStartedAt)) {
           _markAgentCallStartedForNotify(runtimeId);
           _agentCallActive.set(runtimeId, true);
+          _agentSuspended.delete(runtimeId);
         } else {
           nextCalling = false;
         }
       } else {
         _agentCallActive.delete(runtimeId);
+        // ADR-0019：call 结束时按 payload 落定挂起态（lastOutcome 持久事实）
+        if (isSuspendedNotificationPayload(payload)) {
+          _agentSuspended.set(runtimeId, true);
+        } else {
+          _agentSuspended.delete(runtimeId);
+        }
         clearInterruptSuppression(runtimeId);
         if (prev === true) _tryNotifyAgentFinished(runtimeId, payload);
       }
@@ -1106,6 +1131,7 @@ function updateNotificationStatus(notifData) {
         && !isInterruptSuppressed(currentRuntimeAgentId, observedCallStartedAt)) {
         _markAgentCallStartedForNotify(currentRuntimeAgentId);
         _agentCallActive.set(currentRuntimeAgentId, true);
+        _agentSuspended.delete(currentRuntimeAgentId);
         callingStateChanged = true;
         renderAgentList();
       }

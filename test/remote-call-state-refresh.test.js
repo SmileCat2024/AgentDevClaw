@@ -131,11 +131,19 @@ function createCallStateSandbox({ catalogResponses, notifications = {}, agents =
   // sidebar-render.js 的函数声明会覆盖 sandbox 预注入的同名 stub：加载完成后
   // 重新注入 renderAgentList 测试替身（只关心渲染是否被触发，不关心渲染产物）。
   ctx.renderAgentList = () => { renderCalls.push(agentCallActive.size); };
-  // 注入真实 isRuntimeCalling（runtime-status.js 依赖过多无法整体加载）
+  // 注入真实 isRuntimeCalling（runtime-status.js 依赖过多无法整体加载）；
+  // 其提取区间顺带含 ADR-0019 挂起聚合（_agentSuspended / isSuspendedNotificationPayload /
+  // isRuntimeSuspended），其中 isSuspendedNotificationPayload 依赖 isSuspendedCallOutcome，
+  // 一并注入。
   ctx.run(extractFunction(
     runtimeStatusSource,
     'function isRuntimeCalling(',
     '\nfunction isSidebarRuntimeDisconnected(',
+  ));
+  ctx.run(extractFunction(
+    runtimeStatusSource,
+    'function isSuspendedCallOutcome(',
+    '\nfunction getDerivedStageFromState(',
   ));
 
   return {

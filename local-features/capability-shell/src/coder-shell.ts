@@ -106,6 +106,10 @@ interface SettleOutcome {
   newEvents: number;
   /** 连续不可达时的诊断 */
   detail?: string;
+  /** ADR-0019：落定时刻线程处于挂起等待（上个 turn.completed 带 suspended） */
+  suspended?: boolean;
+  /** 挂起等待中的后台任务数（事件携带的 pendingWakeups 长度） */
+  pendingWakeupCount?: number;
   /** 落定时刻的事件尾摘要（取证用） */
   tailEvents: Array<Record<string, any>>;
 }
@@ -316,7 +320,11 @@ export function createThreadsAdapter(deps: {
   function eventLine(event: Record<string, any>): string {
     const itemType = event?.item?.type ? ` item=${event.item.type}` : '';
     const turn = event?.turn !== undefined ? ` turn=${event.turn}` : '';
-    return `  event: ${event?.type || 'event'}${turn}${itemType}`;
+    // ADR-0019：挂起落定的 turn.completed 标记 suspended 与任务数
+    const suspendedMark = event?.type === 'turn.completed' && event?.suspended === true
+      ? ` suspended${Array.isArray(event?.pendingWakeups) ? ` (pending=${event.pendingWakeups.length})` : ''}`
+      : '';
+    return `  event: ${event?.type || 'event'}${turn}${itemType}${suspendedMark}`;
   }
 
   /**
@@ -339,6 +347,11 @@ export function createThreadsAdapter(deps: {
     } catch { /* 事件端点瞬时不可用不阻断等待 */ }
 
     let turnSettled = false;
+    // ADR-0019 挂起记忆：最近一次 turn.completed 是否为 suspended 落定
+    // （等待后台任务唤醒）。挂起等待期间 watch 不提前返回——唤醒轮的
+    // turn.started 会接棒重置记忆，正常跟随到非挂起落定。
+    let settledSuspended = false;
+    let settledPendingWakeups = 0;
     let idleRounds = 0;
     let consecutiveFetchErrors = 0;
     let lifeState = 'unknown';
@@ -350,7 +363,15 @@ export function createThreadsAdapter(deps: {
       // 终止即结果（ADR-0005）：结构化 done（reason=timeout / interrupted，非错误）
       if (options.signal?.aborted) {
         const reason = options.termination?.() === 'timeout' ? 'timeout' : 'interrupted';
-        return { reason, lifeState, failed, newEvents, tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT) };
+        return {
+          reason,
+          lifeState,
+          failed,
+          newEvents,
+          suspended: settledSuspended || undefined,
+          pendingWakeupCount: settledSuspended ? settledPendingWakeups : undefined,
+          tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
+        };
       }
       await sleepMs(pollIntervalMs);
 
@@ -399,8 +420,18 @@ export function createThreadsAdapter(deps: {
         tailEvents.push(event);
         // 跨轮记忆：turn.completed 与 lifeState 离开 executing 常在不同轮次到达；
         // 链式多轮时新一轮 turn.started 已接棒（bin/claw.mjs watchThread 同款语义）
-        if (event?.type === 'turn.completed') turnSettled = true;
-        if (event?.type === 'turn.started') turnSettled = false;
+        if (event?.type === 'turn.completed') {
+          turnSettled = true;
+          settledSuspended = event?.suspended === true;
+          settledPendingWakeups = settledSuspended && Array.isArray(event?.pendingWakeups)
+            ? event.pendingWakeups.length
+            : 0;
+        }
+        if (event?.type === 'turn.started') {
+          turnSettled = false;
+          settledSuspended = false;
+          settledPendingWakeups = 0;
+        }
       }
 
       if (failed) {
@@ -442,12 +473,32 @@ export function createThreadsAdapter(deps: {
         };
       }
       if (turnSettled && lifeState !== 'executing') {
-        return { reason: 'turn.completed', lifeState, failed, newEvents, tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT) };
+        // ADR-0019：suspended 落定 = 回合挂起等后台任务唤醒，不是交付完成。
+        // 不在此返回：继续等唤醒轮（turn.started 接棒后正常跟随落定）。
+        // 唤醒来源存活边界 = runtime 进程：headRuntimeRunning 明确 false 时
+        // 挂起任务已随之死亡、唤醒永不来，按停滞终态退出；老版本 server
+        // 字段缺失时保守继续等（Tool.timeout 兜底）。
+        if (!settledSuspended) {
+          return { reason: 'turn.completed', lifeState, failed, newEvents, tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT) };
+        }
+        if (thread?.headRuntimeRunning === false) {
+          return {
+            reason: 'stalled',
+            lifeState,
+            failed,
+            newEvents,
+            suspended: true,
+            pendingWakeupCount: settledPendingWakeups,
+            detail: `上个回合挂起等待后台任务（${settledPendingWakeups || '?'} 个），但 head runtime 进程已不在——挂起任务随之死亡，唤醒不会到来，查 Debugger 日志后走恢复路径`,
+            tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
+          };
+        }
       }
       const pending = Array.isArray(thread?.commands)
         ? thread.commands.filter((command: any) => command?.status === 'pending').length
         : 0;
-      if (lifeState !== 'executing' && pending === 0) {
+      // 挂起等待期间线程 idle 是常态（模型已让出回合），豁免 idle 提前返回
+      if (lifeState !== 'executing' && pending === 0 && !settledSuspended) {
         idleRounds += 1;
         if (idleRounds >= 2) {
           return {
@@ -482,9 +533,12 @@ export function createThreadsAdapter(deps: {
 
   /** 工具超时终态（结构化 done，非错误；模型据此续挂 watch）。 */
   function formatTimeoutDone(threadId: string, outcome: SettleOutcome): string {
+    const suspendedNote = outcome.suspended === true
+      ? `线程当前挂起等待后台任务唤醒（${outcome.pendingWakeupCount || '?'} 个）——唤醒轮到达时 watch 会自动跟随，续挂即可。`
+      : `工具调用超时（Tool.timeout 契约），指令仍在执行：用 watch ${threadId} 续挂监视，不要重复派发同键指令。`;
     return [
       `done reason=timeout  threadId=${threadId}  life=${outcome.lifeState}  failed=${outcome.failed}  newEvents=${outcome.newEvents}`,
-      `工具调用超时（Tool.timeout 契约），指令仍在执行：用 watch ${threadId} 续挂监视，不要重复派发同键指令。`,
+      suspendedNote,
       ...(outcome.tailEvents.length > 0 ? ['事件尾：', ...outcome.tailEvents.map(eventLine)] : []),
     ].join('\n');
   }

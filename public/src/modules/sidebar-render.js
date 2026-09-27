@@ -157,13 +157,17 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
     const remoteDisabled = entry.source === 'remote' && disconnected;
     const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
     const restarting = restartingRuntimeIds.has(entry.runtimeId);
+    // ADR-0019：挂起等待（idle + 上次 outcome 为 suspended），显示静止绿灯；
+    // calling / restarting 优先于挂起显示
+    const suspended = !calling && !disconnected && !restarting && isRuntimeSuspended(entry.runtimeId);
     const retiring = !!entry.replacementMutation || entry.sidebarOperation?.type === 'archive-close';
     const replacementPending = entry.pendingReplacement === true;
     const operationPending = entry.pendingOperation === true;
     const deleting = entry.deleting === true;
     const operationDegraded = entry.sidebarOperation?.phase === 'degraded';
     const targetStartDegraded = operationDegraded && entry.sidebarOperation?.errorCode === 'target_runtime_stopped';
-    const justFinished = !calling && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
+    // 挂起优先于"刚刚完成"：挂起是持续等待态，不是终态收尾
+    const justFinished = !calling && !suspended && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
     // 线程宿主会话（coder）的 replacement：源会话不是「正在关闭」，而是
     // 「正在交接」给接力会话；archive-close / delete 仍是真实关闭，保持原文案。
     const isThreadRelay = retiring
@@ -184,6 +188,7 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
       disconnected ? 'disconnected' : '',
       remoteDisabled ? 'remote-entry-disabled' : '',
       calling ? 'calling' : '',
+      suspended ? 'suspended' : '',
       restarting ? 'restarting' : '',
       retiring ? 'retiring' : '',
       replacementPending ? 'replacement-pending' : '',
@@ -204,11 +209,13 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
       >
         ${entry.source !== 'remote' ? `<span class="agent-session-pin-slot">${calling
           ? '<span class="agent-session-pin-spinner" title="' + escapeHtml(zh ? '会话运行中' : 'Session is running') + '"></span>'
-          : (justFinished
-            ? '<span class="agent-session-pin-finished" title="' + escapeHtml(zh ? '刚刚完成' : 'Just finished') + '"></span>'
-            : (entry.todo === true
-              ? `<button class="agent-session-pin is-set pin-color-${escapeHtml(entry.todoColor || 'white')}" type="button" data-todo-color="${escapeHtml(entry.todoColor || 'white')}" title="${escapeHtml(zh ? '点击取消待办，长按上拖换色' : 'Click to remove TODO, drag up for color')}" onpointerdown="onSidebarPinPointerDown(event, this)">${SIDEBAR_PIN_SVG}</button>`
-              : `<button class="agent-session-pin is-slanted" type="button" title="${escapeHtml(zh ? '点击设为待办，长按上拖选色' : 'Click to set TODO, drag up for color')}" onpointerdown="onSidebarPinPointerDown(event, this)">${SIDEBAR_PIN_SVG}</button>`))}</span>`
+          : (suspended
+            ? '<span class="agent-session-pin-suspended" title="' + escapeHtml(zh ? '挂起中：等待后台任务唤醒' : 'Suspended: waiting for background tasks') + '"></span>'
+            : (justFinished
+              ? '<span class="agent-session-pin-finished" title="' + escapeHtml(zh ? '刚刚完成' : 'Just finished') + '"></span>'
+              : (entry.todo === true
+                ? `<button class="agent-session-pin is-set pin-color-${escapeHtml(entry.todoColor || 'white')}" type="button" data-todo-color="${escapeHtml(entry.todoColor || 'white')}" title="${escapeHtml(zh ? '点击取消待办，长按上拖换色' : 'Click to remove TODO, drag up for color')}" onpointerdown="onSidebarPinPointerDown(event, this)">${SIDEBAR_PIN_SVG}</button>`
+                : `<button class="agent-session-pin is-slanted" type="button" title="${escapeHtml(zh ? '点击设为待办，长按上拖选色' : 'Click to set TODO, drag up for color')}" onpointerdown="onSidebarPinPointerDown(event, this)">${SIDEBAR_PIN_SVG}</button>`)))}</span>`
         : ''}
         <div class="agent-line">
           <div class="agent-name${SIDEBAR_HANGING_PUNCT_RE.test(entry.name || entry.runtimeId) ? ' hanging-punct' : ''}">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(retiringLabel)}</span>` : deleting ? `<span class="agent-runtime-transition-label">${escapeHtml(operationDegraded ? (currentLanguage === 'zh' ? '删除未完成' : 'Delete incomplete') : (currentLanguage === 'zh' ? '正在删除' : 'Deleting'))}</span>` : ''}</div>
@@ -872,11 +879,19 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
     // false，防止 connected 恢复后残留的 callActive 立即显形（侧栏渲染的
     // connected 条件掩盖断连期间的残留，重连即暴露）。SSE 跳过形态下本地
     // 存活条目由 notification 事件维护，豁免覆写（缺席≠空闲，§5.3）。
+    // ADR-0019：挂起聚合与 calling 同源同步——polled 条目按 payload 落定
+    // _agentSuspended（isSuspendedNotificationPayload 在 runtime-status.js），
+    // 缺席条目不覆写（与 calling 豁免同语义）。
     const callingByPolled = new Map();
     for (const runtimeId of polledIds) {
       const payload = nextNotificationPayloads.get(runtimeId) || null;
       callingByPolled.set(runtimeId, resolveNotificationCallingState(payload) === true
         && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(payload)));
+      if (isSuspendedNotificationPayload(payload)) {
+        _agentSuspended.set(runtimeId, true);
+      } else {
+        _agentSuspended.delete(runtimeId);
+      }
     }
     const activeRuntimeIds = new Set(runtimeIds);
     for (const agent of Array.isArray(agents) ? agents : []) {
@@ -924,6 +939,7 @@ function getAgentListRenderSignature() {
     ).map((entry) => ({
       runtimeId: entry.runtimeId,
       calling: _agentCallActive.get(entry.runtimeId) === true,
+      suspended: typeof isRuntimeSuspended === 'function' && isRuntimeSuspended(entry.runtimeId) === true,
     })),
     agents: (Array.isArray(allAgents) ? allAgents : []).map((agent) => {
       const rid = normalizeAgentIdentity(getAgentRuntimeId(agent));
@@ -936,6 +952,7 @@ function getAgentListRenderSignature() {
         status: agent?.status || '',
         callActive: agent?.callActive === true,
         calling: rid !== '' && _agentCallActive.get(rid) === true,
+        suspended: rid !== '' && isRuntimeSuspended(rid) === true,
         activeSessionId: normalizeAgentIdentity(getActiveSessionId(agent)),
         workspaceRevision: Number(agent?.workspace_sessions?.revision) || 0,
         displayName: agent?.active_workspace_display_name || '',
