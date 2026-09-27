@@ -195,6 +195,40 @@
   font-size: 14px;
 }
 
+/* 文档加载态：spinner 与对话界面同款（.chat-loading-spinner，components.css） */
+.guide-article-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+}
+
+/* 空分页器不画顶部分界线（文档加载中 pager 尚无内容） */
+.guide-pager:empty {
+  display: none;
+}
+
+/* ── 媒体加载骨架（图片/视频未就绪时的 shimmer 占位） ───────── */
+
+/* 与对话界面的占位光效同款技法：渐变底 + 背景位流动 */
+.guide-image-block[data-media-pending] {
+  min-height: 140px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(90deg, var(--hover-bg), var(--active-bg), var(--hover-bg));
+  background-size: 200% 100%;
+  animation: guide-media-shimmer 1.4s linear infinite;
+}
+
+.guide-image-block[data-media-pending] img,
+.guide-image-block[data-media-pending] video {
+  opacity: 0;
+}
+
+@keyframes guide-media-shimmer {
+  to { background-position: -200% 0; }
+}
+
 .guide-error-detail {
   display: block;
   margin-top: 8px;

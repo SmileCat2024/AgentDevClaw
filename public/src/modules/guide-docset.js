@@ -45,6 +45,7 @@ function guideText(key) {
     noDocs: '指南目录里还没有 md 文档。把手册文件放进指南文件夹即可自动出现在目录里。',
     noRoot: '还没有找到指南目录。',
     unresolved: '图片无法解析',
+    mediaFailed: '媒体加载失败',
     emptyDoc: '这份文档还没有内容。',
     prev: '上一篇',
     next: '下一篇',
@@ -55,6 +56,7 @@ function guideText(key) {
     noDocs: 'No markdown documents in the guide folder yet.',
     noRoot: 'Guide root not found.',
     unresolved: 'Unresolved image',
+    mediaFailed: 'Failed to load media',
     emptyDoc: 'This document is empty.',
     prev: 'Previous',
     next: 'Next',
@@ -465,7 +467,7 @@ function buildGuideVideoHtml(image, docPath, agentId) {
   if (!srcAttr) return guideMissingHtml(image, alignClass);
 
   const label = escapeHtml(image.alt || '');
-  return `<span class="guide-image-block ${alignClass}"><video src="${srcAttr}"${flagAttr} playsinline aria-label="${label}"${styleAttr}></video></span>`;
+  return `<span class="guide-image-block ${alignClass}" data-media-pending><video src="${srcAttr}"${flagAttr} playsinline aria-label="${label}"${styleAttr}></video></span>`;
 }
 
 /**
@@ -493,7 +495,7 @@ function buildGuideImageHtml(image, docPath, agentId) {
       inner = `<span class="guide-image-missing" title="${escapeHtml(image.src || '')}">${escapeHtml(guideText('unresolved'))}：${escapeHtml(image.src || '')}</span>`;
     }
   }
-  return `<span class="guide-image-block ${alignClass}">${inner}</span>`;
+  return `<span class="guide-image-block ${alignClass}"${inner.startsWith('<img') ? ' data-media-pending' : ''}>${inner}</span>`;
 }
 
 function guideIsExternalSrc(src) {
@@ -604,6 +606,35 @@ function guideSaveLastDoc(agentId, docPath) {
   }
 }
 
+/**
+ * 上次浏览文档的持久缓存（SWR 语义）：冷启动时先用持久化的渲染结果立即显示，
+ * 再由常规加载链路后台刷新。只存每个 agent 最近一篇，容量天然有界。
+ */
+function guideLoadStoredDoc(agentId, docPath) {
+  try {
+    const raw = localStorage.getItem(GUIDE_LAST_DOC_PREFIX + agentId + '.docCache');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.path !== docPath || typeof parsed.html !== 'string') return null;
+    return {
+      path: parsed.path,
+      title: typeof parsed.title === 'string' ? parsed.title : parsed.path,
+      html: parsed.html,
+      fetchedAt: Number(parsed.fetchedAt) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function guideSaveStoredDoc(agentId, entry) {
+  try {
+    localStorage.setItem(GUIDE_LAST_DOC_PREFIX + agentId + '.docCache', JSON.stringify(entry));
+  } catch {
+    // 超出配额等写入失败静默降级，内存缓存仍然有效
+  }
+}
+
 function renderGuideTreeNodes(nodes, ancestors) {
   return (nodes || []).map((node) => {
     if (node.type === 'dir') {
@@ -673,6 +704,12 @@ function renderGuideDocsetBlock(agent, block) {
     guideSaveLastDoc(agent.id, guideState.currentDoc);
   }
 
+  if (!guideState.cache.get(guideState.currentDoc)) {
+    // 冷启动回填持久缓存：先显旧内容（后台刷新），避免无谓的空白等待
+    const stored = guideLoadStoredDoc(agent.id, guideState.currentDoc);
+    if (stored) guideState.cache.set(stored.path, stored);
+  }
+
   const cached = guideState.cache.get(guideState.currentDoc);
   if (!cached || Date.now() - cached.fetchedAt > GUIDE_DOC_CACHE_TTL_MS) {
     guideScheduleDocLoad(agent.id, guideState.currentDoc);
@@ -704,7 +741,7 @@ function renderGuideArticleInner(entry) {
 }
 
 function renderGuideLoadingInner() {
-  return `<div class="guide-article-loading">${escapeHtml(guideText('loading'))}</div>`;
+  return `<div class="guide-article-loading"><span class="chat-loading-spinner"></span>${escapeHtml(guideText('loading'))}</div>`;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -733,12 +770,14 @@ async function guideLoadDoc(agentId, docPath) {
       title: payload.doc?.title || docPath,
       content: String(payload.doc?.content || ''),
     };
-    guideState.cache.set(docPath, {
+    const entry = {
       path: docPath,
       title: doc.title,
       html: buildGuideArticleHtml(doc, agentId),
       fetchedAt: Date.now(),
-    });
+    };
+    guideState.cache.set(docPath, entry);
+    guideSaveStoredDoc(agentId, entry);
   } catch (error) {
     console.error('[guide] failed to load doc', docPath, error);
     guideState.cache.set(docPath, {
@@ -943,6 +982,39 @@ function guideDecorateArticle(article, docPath) {
     link.setAttribute('href', guideAssetUrl(guideState.agentId, resolved.path));
     link.setAttribute('target', '_blank');
     link.setAttribute('rel', 'noopener noreferrer');
+  });
+  guideDecorateMedia(article);
+}
+
+/**
+ * 媒体骨架装饰：渲染期给图片/视频外层块标记 data-media-pending（CSS 显示
+ * shimmer 占位），此处监听加载事件摘除标记；失败则替换为缺图提示。
+ * 幂等：已在加载/已就绪的媒体不会被重复绑定。
+ */
+function guideDecorateMedia(article) {
+  article.querySelectorAll('[data-media-pending]').forEach((wrap) => {
+    const media = wrap.querySelector('img, video');
+    if (!media) {
+      wrap.removeAttribute('data-media-pending');
+      return;
+    }
+    if (media.dataset.mediaWatched === '1') return;
+    media.dataset.mediaWatched = '1';
+
+    const settle = (failed) => {
+      wrap.removeAttribute('data-media-pending');
+      if (failed) {
+        const missing = document.createElement('span');
+        missing.className = 'guide-image-missing';
+        missing.textContent = `${guideText('mediaFailed')}`;
+        media.replaceWith(missing);
+      }
+    };
+    if (media.tagName === 'IMG' && media.complete && media.naturalWidth > 0) return settle(false);
+    if (media.tagName === 'VIDEO' && media.readyState >= 2) return settle(false);
+    media.addEventListener('load', () => settle(false), { once: true });
+    media.addEventListener('loadeddata', () => settle(false), { once: true });
+    media.addEventListener('error', () => settle(true), { once: true });
   });
 }
 
