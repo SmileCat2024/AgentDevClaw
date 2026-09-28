@@ -789,10 +789,14 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
   const derivedStage = getDerivedStageFromState(stateType, stateData, runtime.stage);
   // ADR-0019：status=continued + reason=suspended = 回合挂起（等待后台任务唤醒），
   // 与 checkpoint 段切分的 continued 区分。call.finish 载荷（data 即 CallOutcome）
-  // 与 runtime.lastOutcome 任一命中即置位；stage 归一化不变（默认落 completed），
-  // 由 label 层据此显示"等待后台任务"而非"已完成"。
-  runtime.suspended = (stateType === 'call.finish' && isSuspendedCallOutcome(stateData))
-    || isSuspendedCallOutcome(runtime.lastOutcome);
+  // 与 runtime.lastOutcome 任一命中即置位；展示 stage 统一映射为 completed，
+  // 由 label 层据此显示"等待后台任务"而非"已完成"。calling 中强制非挂起：
+  // lastOutcome 跨 call 持久（worker 在 call.start 不清理），唤醒轮运行全程
+  // 快照里仍是旧挂起值，不豁免的话收尾窗口（stage=completed + callActive）
+  // 会误报挂起。
+  runtime.suspended = !runtime.callActive
+    && ((stateType === 'call.finish' && isSuspendedCallOutcome(stateData))
+      || isSuspendedCallOutcome(runtime.lastOutcome));
   const runtimeAlreadyExpressive = runtime.stage !== 'idle'
     && runtime.stage !== 'completed'
     && runtime.stage !== 'failed'
@@ -862,6 +866,9 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
     const status = String(stateData?.status || '').trim();
     runtime.stage = status === 'failed' || status === 'cancelled' ? status : 'completed';
   }
+  // 静默轮询可能只有 lastOutcome，没有 call.finish 事件；worker 对 continued
+  // 仍保留 cancelled stage。挂起是等待而非取消，统一映射为等待态的展示阶段。
+  if (runtime.suspended) runtime.stage = 'completed';
 
   if (runtime.callActive) {
     _runtimeStatusMemory.set(runtimeId, {
@@ -979,11 +986,12 @@ function getRuntimeStageClass(runtime) {
 }
 
 function shouldShowRuntimeStatus(runtime, stateType = '') {
+  if (runtime.suspended) return true;
   if (runtime.callActive && runtime.stage !== 'idle' && runtime.stage !== 'completed' && runtime.stage !== 'failed' && runtime.stage !== 'cancelled') {
     return true;
   }
   const settledRecently = runtime.updatedAt > 0
-    && (Date.now() - runtime.updatedAt) < (runtime.stage === 'failed' || runtime.stage === 'cancelled' || runtime.suspended ? 8000 : 800);
+    && (Date.now() - runtime.updatedAt) < (runtime.stage === 'failed' || runtime.stage === 'cancelled' ? 8000 : 800);
   return ((runtime.stage === 'completed' || runtime.stage === 'failed' || runtime.stage === 'cancelled') && settledRecently)
     || stateType === 'llm.char_count';
 }
@@ -1187,6 +1195,9 @@ function updateNotificationStatus(notifData) {
 
   if (type === 'call.start') {
     _syncPersistentActionButton();
+    // 唤醒轮开始：挂起等待指示块的残留数据源到此为止，运行态由后续表达性
+    // 帧（llm.char_count 等）重建，避免"等待后台任务"文案跨入新一轮运行
+    _lastRenderedNotificationRuntime = null;
     ensureChatRuntimeIndicator();
     return;
   }
@@ -1212,7 +1223,10 @@ function updateNotificationStatus(notifData) {
       phaseEl.textContent = '';
       summaryEl.textContent = '';
       metricsEl.innerHTML = '';
-      _lastRenderedNotificationRuntime = null;
+      // 挂起等待保留对话区指示块的数据源：等待中与已等待时长持续显示
+      if (!runtime.suspended) {
+        _lastRenderedNotificationRuntime = null;
+      }
     }
     ensureChatRuntimeIndicator();
     return;
@@ -1248,7 +1262,7 @@ function updateNotificationStatus(notifData) {
     // 队列显示由 _syncQueueFromBackend() 在每轮 step_start 时统一管理
     _pendingQueuedCount = 0;
     _syncPersistentInputUi();
-  } else if (!runtime.callActive) {
+  } else if (!runtime.callActive && !runtime.suspended) {
     statusEl.style.display = 'none';
     statusEl.className = 'notification-status';
     phaseEl.textContent = '';
@@ -1387,6 +1401,21 @@ function buildRuntimeIndicatorContent(runtime) {
     mainText = isZh ? '等待重试…' : 'Waiting to retry…';
   } else if (stage === 'retry_requesting') {
     mainText = isZh ? '正在重新请求…' : 'Retrying…';
+  } else if (runtime.suspended && stage === 'completed') {
+    // ADR-0019 挂起等待：call 以 continue 结束、工具 step 等待后台任务唤醒，
+    // 持续显示等待态与已等待时长（stageStartedAt ≈ 挂起时刻），唤醒轮开始
+    // 后由 calling 阶段分支接管。
+    const pending = getPendingToolCallsFromMessages();
+    if (pending.length > 0) {
+      mainText = isZh ? `等待 ${pending.length} 个后台任务` : `Waiting for ${pending.length} background task${pending.length > 1 ? 's' : ''}`;
+      pending.forEach(function(call) {
+        const summary = summarizeToolCall(call);
+        const display = getToolDisplayName(call.name) || call.name;
+        details.push(summary ? `${display}: ${summary}` : display);
+      });
+    } else {
+      mainText = isZh ? '等待后台任务…' : 'Waiting for background tasks…';
+    }
   } else if (stage === 'failed') {
     mainText = isZh ? '请求失败' : 'Failed';
   } else if (stage === 'cancelled') {
@@ -1420,12 +1449,16 @@ function ensureChatRuntimeIndicator() {
 
   // 判断是否应该显示
   // 断连时上栏显示"已断开连接"，此处同步隐藏，避免继续展示过时的阶段文案
+  // ADR-0019 挂起等待：call 已结束但工具 step 等待后台任务唤醒，指示块
+  // 持续显示等待态，直到唤醒轮开始（callActive 分支接管）。
+  const rt = _lastRenderedNotificationRuntime;
   const shouldShow = currentRuntimeConnected
-    && _lastRenderedNotificationRuntime
-    && _lastRenderedNotificationRuntime.callActive
-    && _lastRenderedNotificationRuntime.stage !== 'idle'
-    && _lastRenderedNotificationRuntime.stage !== 'completed'
-    && _lastRenderedNotificationRuntime.stage !== 'failed';
+    && rt
+    && (rt.suspended === true
+      || (rt.callActive
+        && rt.stage !== 'idle'
+        && rt.stage !== 'completed'
+        && rt.stage !== 'failed'));
 
   if (!shouldShow) {
     if (existing) {
@@ -1450,11 +1483,12 @@ function ensureChatRuntimeIndicator() {
   if (!existing) {
     existing = document.createElement('div');
     existing.id = INDICATOR_ID;
-    existing.className = 'runtime-indicator-row';
     runWithSuppressedChatViewportObservers(function() {
       chatContainer.appendChild(existing);
     });
   }
+  // 挂起等待用静止视觉（is-suspended 停用脉冲与 shimmer），区别于运行中的活动态
+  existing.className = 'runtime-indicator-row' + (rt.suspended ? ' is-suspended' : '');
 
   // 更新主行（textContent 而非 innerHTML，保持 CSS 动画连续）
   // 所有子元素的创建和文本更新都包裹在 runWithSuppressedChatViewportObservers 中，

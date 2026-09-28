@@ -6,6 +6,7 @@
  *   - 在线远程条目在 SSE 激活时仍走轮询（SSE 不覆盖远程）
  *   - includeSseLocals（visibilitychange 全量对账）恢复本地条目轮询参与
  *   - applyAgentCallStateFromNotification（事件路径共用）true→false 完成语义
+ *   - 聚焦会话 calling 边沿触发发送按钮三态同步（远程轮询路径补齐）
  *   - applyCallStateToAgentRecords 的 prebuilt 跳过与幂等
  *   - prebuilt 宿主行 callActive 清理不随 SSE 本地跳过而消失
  */
@@ -223,6 +224,32 @@ describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）'
     env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
     const suspended = env.run('Array.from(_agentSuspended.keys())');
     assert.deepEqual(JSON.parse(JSON.stringify(suspended)), [], '新 call 开始即清挂起');
+  });
+
+  it('聚焦会话 calling 边沿：触发发送按钮三态同步（远程轮询路径补齐）', () => {
+    const syncs = [];
+    env.ctx._syncPersistentActionButton = () => { syncs.push(1); };
+    env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: true })');
+    assert.equal(syncs.length, 1, 'false→true 边沿触发按钮同步（call 开始 → stop 态）');
+    env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: true })');
+    assert.equal(syncs.length, 1, '无 calling 边沿不重复触发');
+    env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: false })');
+    assert.equal(syncs.length, 2, 'true→false 边沿触发按钮同步（call 结束 → send 态）');
+  });
+
+  it('非聚焦会话 calling 边沿：不触发发送按钮同步', () => {
+    const syncs = [];
+    env.ctx._syncPersistentActionButton = () => { syncs.push(1); };
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
+    assert.equal(syncs.length, 0, '非聚焦 runtime 的边沿不碰聚焦会话的按钮');
+  });
+
+  it('挂起边沿（calling 无变化）不触发按钮同步', () => {
+    const syncs = [];
+    env.ctx._syncPersistentActionButton = () => { syncs.push(1); };
+    env.run('applyAgentCallStateFromNotification("rt-focus", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    assert.equal(syncs.length, 0, 'idle→挂起的落定不触发按钮（按钮只读 calling）');
   });
 
   it('ADR-0019 非挂起落定：聚合清除', () => {

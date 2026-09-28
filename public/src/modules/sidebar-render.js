@@ -756,6 +756,16 @@ function applyAgentCallStateFromNotification(runtimeId, notifData) {
     }
     _tryNotifyAgentFinished(runtimeId, payload);
   }
+  // 发送按钮三态与 _agentCallActive 同源（isRuntimeCalling），但它的同步点
+  // 全部挂在 updateNotificationStatus（本地 SSE / 焦点 fetch 路径）；远程
+  // 条目轮询与 includeSseLocals 对账的 call 边沿只经本函数，没有这处补
+  // 触发的话，非用户输入发起的 call（唤醒轮 / 调度 / IM）运行期间聚焦
+  // 会话的按钮保持可发送态，运行时长胶囊（每秒 tick 直读 calling）却正常。
+  if (prevCalling !== effectiveCalling
+    && normalizeAgentIdentity(runtimeId) === normalizeAgentIdentity(currentRuntimeAgentId)
+    && typeof _syncPersistentActionButton === 'function') {
+    _syncPersistentActionButton();
+  }
   // 返回值语义：calling 边沿或挂起边沿任一变化即侧栏视觉态变化，
   // 调用方（SSE 事件路径 / refreshAgentCallStates）据此触发 renderAgentList
   return prevCalling !== effectiveCalling || prevSuspended !== nextSuspended;
