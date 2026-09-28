@@ -17,6 +17,7 @@
 - [输入区行为契约](protocols/input-area-behavioral-contract.md)
 - [CLI 调用 Schema](protocols/cli-calling-schema.md)
 - [Claw 服务生命周期契约](protocols/service-lifecycle.md)
+- [工具调用与结果的渲染约定](protocols/tool-rendering.md) — Feature 模板的推荐结构、宿主分工和官方样例
 - [Feature-Panel 通信基座接入指引](protocols/feature-communication.md) — feature-comms 通道：声明 / 发布 / 订阅 / onHostRequest（ADR-0018）
 - [Feature 元数据（v1，已被 ADR-0017 取代）](protocols/feature-metadata.md)
 

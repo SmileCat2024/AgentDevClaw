@@ -777,6 +777,8 @@ let _phSearchTimer = null;           // debounce timer for search input
 let _userExpandedReasoning = new Set();  // reasoning blocks the user expanded
 let _userCollapsedMsgs = new Set();       // messages the user explicitly collapsed
 let _userExpandedMsgs = new Set();        // messages the user explicitly expanded (un-collapsed)
+let _userCollapsedToolCalls = new Set();  // tool call cards the user explicitly collapsed ("<msgIdx>:<callIdx>")
+let _userExpandedToolCalls = new Set();   // tool call cards the user explicitly expanded
 
 // ── Per-session runtime data cache (P0: optimistic render on switch) ────────
 // Caches messages, toolRenderConfigs, TOOL_NAMES, hookInspector + signature,
@@ -799,6 +801,8 @@ function getUserCollapseStateForContext(contextKey = getUserCollapseStateContext
       expandedReasoning: new Set(),
       collapsedMsgs: new Set(),
       expandedMsgs: new Set(),
+      collapsedToolCalls: new Set(),
+      expandedToolCalls: new Set(),
     };
     _userCollapseStateByContext.set(key, state);
   }
@@ -810,6 +814,8 @@ function activateUserCollapseStateForContext(contextKey = getUserCollapseStateCo
   _userExpandedReasoning = state.expandedReasoning;
   _userCollapsedMsgs = state.collapsedMsgs;
   _userExpandedMsgs = state.expandedMsgs;
+  _userCollapsedToolCalls = state.collapsedToolCalls;
+  _userExpandedToolCalls = state.expandedToolCalls;
 }
 
 function resetUserCollapseStateForContext(contextKey = getUserCollapseStateContextKey()) {

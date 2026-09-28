@@ -228,7 +228,7 @@ function renderMessage(msg, index) {
     }
 
     if (msg.toolCalls && msg.toolCalls.length > 0) {
-      const toolsHtml = msg.toolCalls.map(call => {
+      const toolsHtml = msg.toolCalls.map((call, ci) => {
         const displayName = getToolDisplayName(call.name);
         const template = getToolRenderTemplate(call.name);
         // 工具执行中进度（ticket 025）：callId 配对 + 进度数据经模板第三参传入
@@ -249,7 +249,7 @@ function renderMessage(msg, index) {
             <div class="tool-header">
               <span class="tool-header-name">${displayName}</span>
             </div>
-            <div class="tool-content">${innerHtml}</div>
+            <div class="tool-content" id="tcallc-${msgId}-${ci}">${innerHtml}</div>
           </div>
         `;
       }).join('');
@@ -334,7 +334,7 @@ function appendNewMessages(newMessages, startIndex) {
             <div class="role-badge">${msg.role}</div>
             ${getMessageActionButtonsHtml(msg, index)}
           </div>
-          <div class="message-content" id="${msgId}" style="padding:0; overflow:hidden;">
+          <div class="message-content" id="${msgId}">
             <div class="tool-result-header">
               <span class="status-dot ${success ? 'success' : 'error'}"></span>
               <span>${displayName}</span>
@@ -528,6 +528,17 @@ function getCollapseThresholdForRow(row) {
   return 160;
 }
 
+// 工具调用卡（assistant 行内的 .tool-call-container）独立折叠阈值：与
+// assistant 行一致。调用参数过长（如无模板工具的大 JSON、长命令）时按卡折叠，
+// 不与所在行的折叠状态耦合。
+var TOOL_CALL_COLLAPSE_THRESHOLD = 220;
+
+// id 形如 tcallc-msg-<msgIndex>-<callIdx> → 用户偏好键 "<msgIndex>:<callIdx>"
+function toolCallKeyFromContentId(id) {
+  var m = /^tcallc-msg-(\d+)-(\d+)$/.exec(String(id || ''));
+  return m ? (parseInt(m[1], 10) + ':' + parseInt(m[2], 10)) : null;
+}
+
 // Phase 1 of the collapse sync: all READS (geometry + state) needed to know
 // what a row's collapse state should be. Returns null when the row must be
 // left alone (windowing far rows), or a plan for applyRowCollapsePlan.
@@ -556,9 +567,32 @@ function computeRowCollapsePlan(row) {
   const collapseThreshold = getCollapseThresholdForRow(row);
   const isCollapsible = el.scrollHeight > collapseThreshold;
   const isSystem = row.classList.contains('system');
-  const toolName = row.querySelector('.tool-result-header span:last-child')?.textContent || '';
-  const isReadOrEdit = toolName === 'Read' || toolName === 'Edit';
-  const shouldCollapse = isCollapsible && (isSystem || isReadOrEdit);
+  // 长工具结果一律默认折叠（用户可展开并记忆偏好）；assistant 文本行保持
+  // 仅提供手动折叠按钮、不自动折叠的既有行为。
+  const isToolRow = row.classList.contains('tool');
+  const shouldCollapse = isCollapsible && (isSystem || isToolRow);
+
+  // 同行内的工具调用卡：长参数按卡折叠。卡片与行共用同一 compute/apply 批次，
+  // 保持「读测量 → 写状态」分离（settleAllRowCollapseStates 的批处理契约）。
+  var callPlans = [];
+  if (!isToolRow) {
+    var cards = row.querySelectorAll('.tool-call-container');
+    for (var ci = 0; ci < cards.length; ci++) {
+      var card = cards[ci];
+      if (card.classList.contains('process-hidden') || card.classList.contains('process-cv-hidden')) continue;
+      var callContent = card.querySelector('.tool-content');
+      if (!callContent || !callContent.id) continue;
+      var callKey = toolCallKeyFromContentId(callContent.id);
+      if (callKey === null) continue;
+      callPlans.push({
+        card: card,
+        content: callContent,
+        isCollapsible: callContent.scrollHeight > TOOL_CALL_COLLAPSE_THRESHOLD,
+        userExpanded: _userExpandedToolCalls.has(callKey),
+        userCollapsed: _userCollapsedToolCalls.has(callKey),
+      });
+    }
+  }
 
   // Check if user has manually toggled this row — respect their choice
   var msgId = el.id || '';
@@ -566,7 +600,7 @@ function computeRowCollapsePlan(row) {
   var userExpanded = !isNaN(msgIndex) && _userExpandedMsgs.has(msgIndex);
   var userCollapsed = !isNaN(msgIndex) && _userCollapsedMsgs.has(msgIndex);
 
-  return { kind: 'apply', isCollapsible, userExpanded, userCollapsed, shouldCollapse };
+  return { kind: 'apply', isCollapsible, userExpanded, userCollapsed, shouldCollapse, callPlans };
 }
 
 // Phase 2 of the collapse sync: all WRITES. Every write is diff-guarded —
@@ -581,6 +615,13 @@ function applyRowCollapsePlan(row, plan) {
     const bar = row.querySelector('.expand-toggle-bar');
     if (bar) bar.remove();
     return;
+  }
+
+  // 工具调用卡独立于所在行折叠：行本身不高（早退分支）时也要应用卡状态。
+  if (plan.callPlans) {
+    for (var cpi = 0; cpi < plan.callPlans.length; cpi++) {
+      applyToolCallCollapsePlan(plan.callPlans[cpi]);
+    }
   }
 
   if (!plan.isCollapsible) {
@@ -622,6 +663,36 @@ function applyRowCollapsePlan(row, plan) {
   const btn = nextBtnBar.querySelector('.expand-toggle-btn');
   if (!btn || btn.textContent !== desiredLabel || !btn.classList.contains(desiredCls)) {
     nextBtnBar.innerHTML = '<button class="expand-toggle-btn ' + desiredCls + '" onclick="toggleMessage(&quot;' + el.id + '&quot;)">' + desiredLabel + '</button>';
+  }
+}
+
+// 工具调用卡折叠的写阶段：与行折叠同样的 diff-guard——已定态卡片零写入，
+// 滚动期反复扫描不弄脏布局树。
+function applyToolCallCollapsePlan(cp) {
+  var el = cp.content;
+  if (!cp.isCollapsible) {
+    el.classList.remove('collapsed');
+    var deadBar = cp.card.querySelector('.tool-call-toggle-bar');
+    if (deadBar) deadBar.remove();
+    return;
+  }
+
+  // 用户偏好优先；无偏好时长调用默认折叠。
+  if (cp.userExpanded) el.classList.remove('collapsed');
+  else el.classList.add('collapsed');
+
+  var bar = cp.card.querySelector('.tool-call-toggle-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.className = 'tool-call-toggle-bar';
+    cp.card.appendChild(bar);
+  }
+  var collapsed = el.classList.contains('collapsed');
+  var label = getToggleButtonLabel(collapsed);
+  var cls = collapsed ? 'is-collapsed' : 'is-expanded';
+  var callBtn = bar.querySelector('.expand-toggle-btn');
+  if (!callBtn || callBtn.textContent !== label || !callBtn.classList.contains(cls)) {
+    bar.innerHTML = '<button class="expand-toggle-btn ' + cls + '" onclick="toggleToolCall(&quot;' + el.id + '&quot;)">' + label + '</button>';
   }
 }
 
@@ -806,7 +877,7 @@ function render(messages) {
       }
 
       if (msg.toolCalls && msg.toolCalls.length > 0) {
-        const toolsHtml = msg.toolCalls.map(call => {
+        const toolsHtml = msg.toolCalls.map((call, ci) => {
           const displayName = getToolDisplayName(call.name);
           const template = getToolRenderTemplate(call.name);
           // 工具执行中进度（ticket 025）：callId 配对 + 进度数据经模板第三参传入
@@ -827,7 +898,7 @@ function render(messages) {
               <div class="tool-header">
                 <span class="tool-header-name">${displayName}</span>
               </div>
-              <div class="tool-content">${innerHtml}</div>
+              <div class="tool-content" id="tcallc-${msgId}-${ci}">${innerHtml}</div>
             </div>
           `;
         }).join('');
@@ -861,7 +932,7 @@ function render(messages) {
 
       rowAttrs = ` data-tool-success="${success ? 'true' : 'false'}"`;
       contentHtml = `
-        <div class="message-content" id="${msgId}" style="padding:0; overflow:hidden;">
+        <div class="message-content" id="${msgId}">
           <div class="tool-result-header">
             <span class="status-dot ${success ? 'success' : 'error'}"></span>
             <span>${displayName}</span>
@@ -1052,6 +1123,43 @@ window.toggleMessage = function(id) {
       preferSmooth: false,
     });
   }
+};
+
+window.toggleToolCall = function(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (typeof revealMeasuredChatRow === 'function') revealMeasuredChatRow(el.closest('.message-row'));
+  const chatViewportTopBefore = container.scrollTop;
+  el.classList.toggle('collapsed');
+  const isCollapsed = el.classList.contains('collapsed');
+
+  // 记录用户对这张调用卡的显式选择，重渲染后由 computeRowCollapsePlan 恢复
+  const callKey = toolCallKeyFromContentId(id);
+  if (callKey !== null) {
+    if (isCollapsed) {
+      _userCollapsedToolCalls.add(callKey);
+      _userExpandedToolCalls.delete(callKey);
+    } else {
+      _userExpandedToolCalls.add(callKey);
+      _userCollapsedToolCalls.delete(callKey);
+    }
+  }
+
+  const card = el.closest('.tool-call-container');
+  const btn = card ? card.querySelector('.expand-toggle-btn') : null;
+  if (btn) {
+    btn.innerHTML = getToggleButtonLabel(isCollapsed);
+    btn.className = 'expand-toggle-btn ' + (isCollapsed ? 'is-collapsed' : 'is-expanded');
+  }
+
+  notifyChatViewportMutation({
+    reason: 'message-toggle',
+    shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+    preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+    forceSnap: false,
+    allowChase: false,
+    preferSmooth: false,
+  });
 };
 
 window.toggleReasoning = function(id) {

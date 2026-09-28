@@ -246,6 +246,8 @@ function createHarness({ messages } = {}) {
     _userExpandedReasoning: new Set(),
     _userExpandedMsgs: new Set(),
     _userCollapsedMsgs: new Set(),
+    _userExpandedToolCalls: new Set(),
+    _userCollapsedToolCalls: new Set(),
     currentInputRequests: [],
     currentRuntimeAgentId: 'rt-1',
     _agentCallActive: new Map(),
@@ -459,6 +461,10 @@ test('windowing: revealing above-viewport rows compensates scrollTop so the cont
   for (let i = 0; i < 600; i++) {
     h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
   }
+  // 工具结果默认折叠后 Bash 行也会折叠。本用例隔离验证 reveal 占位→实测的
+  // scrollTop 补偿，将行固定为用户展开（不参与折叠）；折叠+补偿的组合语义由
+  // clamp-safe 用例（Read 行）与 scrollbar-drag 用例覆盖。
+  for (let i = 0; i < 600; i++) h.sandbox._userExpandedMsgs.add(i);
   vm.runInContext('applyProcessDistance(container)', h.sandbox);
   h.flushTimers();
 
