@@ -600,7 +600,12 @@ function computeRowCollapsePlan(row) {
   var userExpanded = !isNaN(msgIndex) && _userExpandedMsgs.has(msgIndex);
   var userCollapsed = !isNaN(msgIndex) && _userCollapsedMsgs.has(msgIndex);
 
-  return { kind: 'apply', isCollapsible, userExpanded, userCollapsed, shouldCollapse, callPlans };
+  // 行内已有按卡折叠的调用卡时，行级切换让位给卡片，避免内外两个
+  // 展开/收起按钮嵌套叠加。用户显式操作过行折叠时仍保留行控件。
+  var hasCollapsibleCall = callPlans.some(function (cp) { return cp.isCollapsible; });
+  var suppressRowToggle = hasCollapsibleCall && !userExpanded && !userCollapsed;
+
+  return { kind: 'apply', isCollapsible, userExpanded, userCollapsed, shouldCollapse, callPlans, suppressRowToggle };
 }
 
 // Phase 2 of the collapse sync: all WRITES. Every write is diff-guarded —
@@ -622,6 +627,14 @@ function applyRowCollapsePlan(row, plan) {
     for (var cpi = 0; cpi < plan.callPlans.length; cpi++) {
       applyToolCallCollapsePlan(plan.callPlans[cpi]);
     }
+  }
+
+  // 卡片已接管折叠：行保持展开且不出行级按钮（单一控件原则）。
+  if (plan.suppressRowToggle) {
+    el.classList.remove('collapsed');
+    const ownedBar = row.querySelector('.expand-toggle-bar');
+    if (ownedBar) ownedBar.remove();
+    return;
   }
 
   if (!plan.isCollapsible) {

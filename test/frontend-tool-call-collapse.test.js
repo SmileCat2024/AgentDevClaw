@@ -8,6 +8,10 @@
  *    toggle, independent of the row's own collapse state. Short cards stay
  *    as-is; the user's explicit expand is remembered via the
  *    _userExpandedToolCalls override set.
+ * 3. Single-control rule: when a row contains a collapsible call card, the
+ *    row-level manual toggle yields to the card's own toggle — no nested
+ *    expand/collapse buttons stacked inside and below the same card.
+ *    Explicit user row preferences keep the row toggle reversible.
  *
  * Loads the real collapse functions (computeRowCollapsePlan /
  * applyRowCollapsePlan / applyToolCallCollapsePlan) extracted from
@@ -176,6 +180,32 @@ test('user-expanded call card overrides the auto-collapse default', () => {
   assert.equal(long.content.classList.contains('collapsed'), false,
     'explicitly expanded card must stay expanded');
   assert.ok(long.card._bar, 'toggle bar persists so the choice is reversible');
+});
+
+test('row toggle yields to per-card collapse (single control, no nesting)', () => {
+  const sandbox = createCollapseSandbox();
+  const long = makeCallCard({ contentH: 600, id: 'tcallc-msg-2-0' });
+  const { row, content } = makeRow({
+    role: 'assistant', contentH: 600, callCards: [long], msgIndex: 2,
+  });
+
+  const plan = runSync(sandbox, row);
+  assert.equal(plan.suppressRowToggle, true, 'card owns the collapse for this row');
+  assert.equal(long.content.classList.contains('collapsed'), true, 'card still auto-collapses');
+  assert.ok(long.card._bar, 'in-card toggle remains as the single control');
+  assert.equal(row._rowBar, null, 'row-level toggle must not stack on the card toggle');
+  assert.equal(content.classList.contains('collapsed'), false, 'row itself stays expanded');
+});
+
+test('explicit row preference keeps the row toggle alongside card collapse', () => {
+  const sandbox = createCollapseSandbox();
+  sandbox._userCollapsedMsgs.add(2);
+  const long = makeCallCard({ contentH: 600, id: 'tcallc-msg-2-0' });
+  const { row } = makeRow({ role: 'assistant', contentH: 600, callCards: [long], msgIndex: 2 });
+
+  const plan = runSync(sandbox, row);
+  assert.equal(plan.suppressRowToggle, false, 'user row preference wins over the yield');
+  assert.ok(row._rowBar, 'row toggle persists so the preference stays reversible');
 });
 
 test('process-hidden call cards are skipped (scrollHeight unreliable)', () => {
