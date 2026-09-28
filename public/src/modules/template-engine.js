@@ -300,14 +300,18 @@ function warmTemplatesInBackground(templateNames, agentId) {
   }
 
   const warmupToken = ++templateWarmupToken;
-  Promise.all(templateNames.map(name => loadTemplate(name)))
+  const missing = templateNames.filter(name => !templateCache.has(name));
+  if (missing.length === 0) return;
+  Promise.all(missing.map(name => loadTemplate(name)))
     .then(() => {
-      if (warmupToken !== templateWarmupToken || currentRuntimeAgentId !== agentId) {
+      if (warmupToken !== templateWarmupToken || currentRuntimeAgentId !== agentId
+          || !Array.isArray(currentMessages)
+          || !currentMessages.some(msg => msg.role === 'tool' || msg.toolCalls?.length > 0)
+          || !missing.some(name => templateCache.has(name))) {
         return;
       }
-      // Force a full re-render: messages rendered before templates were
-      // loaded may have fallen back to JSON. Clearing the dedup signature
-      // ensures render() rebuilds all rows with the correct templates.
+      // Messages rendered before the templates loaded may have used JSON.
+      // Rebuild only when a real template became available for this runtime.
       if (typeof _lastRenderedChatSig !== 'undefined') {
         _lastRenderedChatSig = '';
       }

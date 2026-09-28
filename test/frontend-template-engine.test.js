@@ -27,6 +27,73 @@ function loadTemplateEngine(toolNames = {}) {
   return ctx;
 }
 
+describe('template-engine: background warmup', () => {
+  function createWarmupHarness() {
+    const ctx = loadTemplateEngine();
+    const renders = [];
+    ctx.currentRuntimeAgentId = 'runtime-a';
+    ctx.currentMessages = [{ role: 'tool', content: 'result' }];
+    ctx._lastRenderedChatSig = 'rendered';
+    ctx.renderCurrentMainView = () => renders.push('render');
+    return { ctx, renders };
+  }
+
+  it('skips a full rebuild when templates are already cached', async () => {
+    const { ctx, renders } = createWarmupHarness();
+    ctx.run("templateCache.set('cached', { call: () => 'ok' })");
+    ctx.run("warmTemplatesInBackground(['cached'], 'runtime-a')");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(renders, []);
+    assert.equal(ctx._lastRenderedChatSig, 'rendered');
+  });
+
+  it('does not rebuild an empty conversation after a template loads', async () => {
+    const { ctx, renders } = createWarmupHarness();
+    ctx.currentMessages = [];
+    ctx.run("warmTemplatesInBackground(['json'], 'runtime-a')");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(renders, []);
+    assert.equal(ctx._lastRenderedChatSig, 'rendered');
+    assert.equal(ctx.run("templateCache.has('json')"), true);
+  });
+
+  it('does not rebuild a conversation without tool messages', async () => {
+    const { ctx, renders } = createWarmupHarness();
+    ctx.currentMessages = [{ role: 'user', content: 'hello' }];
+    ctx.run("warmTemplatesInBackground(['json'], 'runtime-a')");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(renders, []);
+    assert.equal(ctx._lastRenderedChatSig, 'rendered');
+  });
+
+  it('rebuilds history once when a new template replaces the JSON fallback', async () => {
+    const { ctx, renders } = createWarmupHarness();
+    ctx.run("templateCache.set('cached', { call: () => 'ok' })");
+    ctx.run("warmTemplatesInBackground(['cached', 'json'], 'runtime-a')");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(renders, ['render']);
+    assert.equal(ctx._lastRenderedChatSig, '');
+  });
+
+  it('does not rebuild after a missing template falls back to JSON', async () => {
+    const { ctx, renders } = createWarmupHarness();
+    ctx.run("loadTemplate = async () => getTemplateFallback('missing')");
+    ctx.run("warmTemplatesInBackground(['missing'], 'runtime-a')");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(renders, []);
+    assert.equal(ctx._lastRenderedChatSig, 'rendered');
+  });
+
+  it('discards a warmup after switching runtimes', async () => {
+    const { ctx, renders } = createWarmupHarness();
+    ctx.run("warmTemplatesInBackground(['json'], 'runtime-a')");
+    ctx.currentRuntimeAgentId = 'runtime-b';
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(renders, []);
+    assert.equal(ctx._lastRenderedChatSig, 'rendered');
+  });
+});
+
 describe('template-engine: code line numbers', () => {
   it('feature Read markup keeps source offsets and nested highlighting without duplicate number spans', () => {
     const ctx = loadTemplateEngine();
