@@ -26,9 +26,9 @@ claw-desktop.exe（Tauri 主进程）
        └─ node server.js（服务）
 ```
 
-- **启动**：Tauri 主进程 spawn supervisor（`CREATE_NO_WINDOW`、stdout/stderr 持续排空防管道写满），等待服务端口可连接后再创建窗口，避免 webview 停在连接错误页。
+- **启动**：Tauri 主进程先请求 `GET /protoclaw/health`。本机已有 ready Claw 服务时只打开前台并连接该服务，不再启动第二个服务实例；否则 spawn supervisor（`CREATE_NO_WINDOW`、stdout/stderr 持续排空防管道写满），等待 Claw health ready 后创建窗口。若启动的 supervisor 退出但端口上已有 ready Claw 服务，桌面壳保留并连接该服务，避免前台随启动冲突闪退。
 - **关窗与恢复**：主窗口关闭请求只隐藏窗口；supervisor 和服务继续运行。托盘左键或“打开工作台”恢复原窗口与会话。
-- **退出**：设置里的“退出程序”请求 server 自主有序关闭；托盘“退出程序”由宿主发同样请求。server 退出后 supervisor 自然退出，宿主随之退出。若宿主显式退出后等待超时，只对自己创建的 supervisor 子树执行最终清理；健康探测、端口冲突和父进程状态不会触发收割。
+- **退出**：设置里的“退出程序”请求 server 自主有序关闭；托盘“退出程序”由宿主发同样请求。即使当前桌面壳没有自己启动的 supervisor，用户明确选择退出时也可向已确认 ready 的本机 Claw 服务发送该请求。server 退出后桌面壳随之退出。等待超时后只对自己创建的 supervisor 子树执行最终清理；连接到已有服务时不会按 PID 或进程树强杀它。健康探测、端口冲突和父进程状态不会触发关停。
 - **异常宿主退出**：不根据 ppid 消失自动关停或收割服务。若桌面主进程被强制结束，server 可能继续运行；用户可通过正常的 UI 退出流程关闭它。
 
 发布形态从安装目录 `app/` 加载服务资源，优先使用随包 Node；开发形态从仓库加载，Node 缺失时取 PATH。端口沿用 `PORT`/`AGENTDEV_VIEWER_PORT`（默认 1420/2026）；动态端口分配尚未实现，见“边界与非目标”。
@@ -72,6 +72,6 @@ HTTP `POST /protoclaw/shutdown` 返回 `{ ok: true }` 后请求有序关闭；SI
 
 - 健康端点是服务进程健康探测，不是 readiness probe 的替代物；Agent runtime 仍用现有 runtime 状态接口确认。探测结果只用于观察与诊断。
 - HTTP 服务关闭等待当前连接结束；SSE 会先主动关闭，keep-alive 空闲连接会主动收口（`closeIdleConnections`），其余长请求可能拖慢关闭。超时由调用方记录，不转化为进程终止授权。
-- 双实例并存不被支持：ViewerWorker 的 UDS 命名管道（`\\.\pipe\agentdev-viewer`，`AGENTDEV_UDS_PATH` 可覆盖）与端口一样是全局单例地址，第二个实例启动时会因管道占用而启动失败。测试或并存需求须同时覆盖 `PORT`、`AGENTDEV_VIEWER_PORT`、`AGENTDEV_UDS_PATH`、`AGENTDEV_DATA_DIR`。桌面单实例语义（second-instance 引导到既有窗口）属打包阶段设计项。
+- **双服务实例并存不支持**：ViewerWorker 的 UDS 命名管道（`\\.\pipe\agentdev-viewer`，`AGENTDEV_UDS_PATH` 可覆盖）与端口一样是全局单例地址，第二个服务实例会启动失败。桌面启动会先探测 ready 服务并复用其前台入口；这不代表第二个服务实例，也不代表桌面单实例窗口聚焦语义已实现。测试或并存需求须同时覆盖 `PORT`、`AGENTDEV_VIEWER_PORT`、`AGENTDEV_UDS_PATH`、`AGENTDEV_DATA_DIR`。
 - 该契约没有承诺保存正在执行的模型调用结果，也不承诺跨崩溃的 graceful shutdown。
 - 当前端口配置与绑定行为保持既有约定；桌面版若需要动态端口、专用 loopback 绑定或 IPC 地址分配，应在独立改动中明确设计和测试，不可假设本契约已覆盖。
