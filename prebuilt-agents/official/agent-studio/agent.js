@@ -66,7 +66,7 @@ export class AgentStudioAgent extends BasicAgent {
         ? config.contextGuard : {}),
     }));
     this.use(new WebSearchFeature({ workspaceDir }));
-    this.use(new ShellFeature({ workspaceDir, resourceRoot: projectRoot }));
+    this.use(new ShellFeature({ workspaceDir, resourceRoot: workspaceDir }));
     this.use(new AgentStudioFeature({ workspaceDir }));
     // SkillFeature：dev agent 的权威技能（agent-studio-workflow / agentdev-agent-assembly /
     // agentdev-feature-guide / agentdev-feature-packaging）随 AgentStudioFeature 构建产物携带，

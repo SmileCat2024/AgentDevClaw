@@ -379,6 +379,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     });
 
     const isExploration = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
+    const workspaceDir = config.workspaceDir || process.cwd();
     this.imWorkspaceConfigPath = resolveIMWorkspaceConfigPath(config.imWorkspaceConfigPath);
 
     // BasicAgent 已纯基类化（a5fe117 / ticket 009），不再自动挂载 SubAgentFeature，
@@ -389,8 +390,8 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
 
     if (isExploration) {
       this.use(new WebSearchFeature());
-      this.use(new ShellFeature());
-      this.use(new ImageReaderFeature({ workspaceDir: process.cwd(), storageDir: IMAGE_STORAGE_DIR }));
+      this.use(new ShellFeature({ workspaceDir }));
+      this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
     } else {
       // 主模式：IM 门户代理能力
       this.qqbotFeature = new QQBotFeature({
@@ -425,8 +426,8 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       }));
 
       this.use(new WebSearchFeature());
-      this.use(new ShellFeature());
-      this.use(new ImageReaderFeature({ workspaceDir: process.cwd(), storageDir: IMAGE_STORAGE_DIR }));
+      this.use(new ShellFeature({ workspaceDir }));
+      this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
       this.use(new IMOperatorFeature());
       this.use(new ConversationExportFeature());
     }

@@ -24,7 +24,7 @@ export class WorkGroupAgent extends BasicAgent {
 
     this.use(new GroupAdminFeature());
     this.use(new GroupChatBridgeFeature());
-    this.use(new ShellFeature());
+    this.use(new ShellFeature({ workspaceDir: config.workspaceDir }));
   }
 
   async onInitiate(ctx) {

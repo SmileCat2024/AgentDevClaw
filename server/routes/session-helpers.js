@@ -886,9 +886,18 @@ async function createPrebuiltSession(agentId, options = {}) {
         : (
           cleanSessionText(options.openDirectory)
           || cleanSessionText(sourceSession?.openDirectory)
-          || cleanSessionText(currentState?.openDirectory)
+          || (normalizedAgentId === 'agent-studio' ? '' : cleanSessionText(currentState?.openDirectory))
         )
     );
+  if (normalizedAgentId === 'agent-studio') {
+    if (!nextOpenDirectory || !path.isAbsolute(nextOpenDirectory)) {
+      throw new Error('Agent Studio 需要先选择项目目录。');
+    }
+    const directory = await fs.stat(nextOpenDirectory).catch(() => null);
+    if (!directory?.isDirectory()) {
+      throw new Error(`Agent Studio 项目目录不存在或不是文件夹：${nextOpenDirectory}`);
+    }
+  }
   const nextTaskTitle =
     cleanSessionText(options.taskTitle)
     || cleanSessionText(sourceSession?.taskTitle)

@@ -62,6 +62,19 @@ function newIdempotencyKey() {
 }
 
 
+async function resolveStudioSessionDirectory(agent, action) {
+  if (agent?.id !== 'agent-studio' || action.type !== 'create_session'
+    || String(action.openDirectory || '').trim()) return action;
+  try {
+    const selected = await invoke('select_directory');
+    const directory = String(selected?.path || selected?.paths?.[0] || '').trim();
+    return directory ? { ...action, openDirectory: directory } : null;
+  } catch (error) {
+    window.alert((currentLanguage === 'zh' ? '选择项目目录失败：' : 'Failed to select project directory: ') + (error?.message || error));
+    return null;
+  }
+}
+
 window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   bumpNavigationGuard();
   let action = rawAction || {};
@@ -102,6 +115,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   }
 
   const activeAgent = getCurrentAgentRecord();
+  action = await resolveStudioSessionDirectory(activeAgent, action);
+  if (!action) return;
   if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
     saveCurrentWorkspaceSurfaceScroll();
   }

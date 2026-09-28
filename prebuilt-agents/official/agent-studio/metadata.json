@@ -50,8 +50,8 @@
                 "en": "Start a Conversation"
               },
               "body": {
-                "zh": "直接说要做的东西：一个 Feature、一个目标 Agent，或两者一起。目录和名称在对话中确认。",
-                "en": "Say what to build: a feature, a target agent, or both. Directory and naming are confirmed in conversation."
+                "zh": "新建对话时选择项目目录，然后在对话中开发 Feature、目标 Agent，或两者一起。",
+                "en": "Choose a project folder when starting a new conversation, then build a feature, a target agent, or both."
               },
               "actionLabel": {
                 "zh": "新对话",

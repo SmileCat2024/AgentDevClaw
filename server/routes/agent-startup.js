@@ -23,6 +23,8 @@ import {
   readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex,
 } from '../shared/session-access.js';
 import { notifyRuntimeReady } from '../shared/runtime-hooks.js';
+import { resolveDesktopWorkspace } from '../shared/desktop-workspace.js';
+import { WORKSPACE_SESSION_AGENT_IDS } from '../shared/constants.js';
 import { getInternalAuthToken } from '../auth.js';
 import {
   PROCESS_MODE_ISOLATED,
@@ -357,8 +359,11 @@ export function createAgentStartupFns(deps) {
           return buildStatus(agent.id, resolvedSessionId);
       }
     }
+    const runtimeCwd = agent.id === 'agent-studio' && projectDir
+      ? projectDir
+      : (WORKSPACE_SESSION_AGENT_IDS.has(agent.id) ? PROJECT_ROOT : resolveDesktopWorkspace());
     const child = spawn(process.execPath, [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN], {
-      cwd: PROJECT_ROOT,
+      cwd: runtimeCwd,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: sanitizeSpawnEnv({
         ...childProcessEnv(),

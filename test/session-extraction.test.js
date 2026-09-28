@@ -141,6 +141,20 @@ describe('createSessionHelpers', () => {
     assert.ok(wsRead === 'flow-workspace',
       'readWorkspaceState should have been called with flow-workspace');
   });
+
+  it('requires an existing project directory before creating a Studio session', async () => {
+    const helpers = createSessionHelpers({
+      ...makeMockHelpersCtx(),
+      readWorkspaceState: async () => ({ forms: {}, openDirectory: '' }),
+    });
+    await assert.rejects(helpers.createPrebuiltSession('agent-studio', {}), /先选择项目目录/);
+    await assert.rejects(helpers.createPrebuiltSession('agent-studio', { openDirectory: '/missing-studio-project-123456' }), /不存在或不是文件夹/);
+    const withLastProject = createSessionHelpers({
+      ...makeMockHelpersCtx(),
+      readWorkspaceState: async () => ({ forms: {}, openDirectory: process.cwd() }),
+    });
+    await assert.rejects(withLastProject.createPrebuiltSession('agent-studio', {}), /先选择项目目录/);
+  });
 });
 
 describe('compacted resume identity continuity', () => {

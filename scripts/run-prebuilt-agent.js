@@ -26,6 +26,7 @@ import { handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH } from '../server/shared/constants.js';
+import { resolveDesktopWorkspace } from '../server/shared/desktop-workspace.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
 
@@ -684,11 +685,16 @@ process.on('SIGTERM', () => {
 //  after postJson and all helpers are available in module scope.)
 
 SessionLifecycle.prototype.start = async function () {
-  const workspaceCwd = agentId === 'programming-helper' && this.sessionId
-    ? this.workspaceCwd
-    : (this.workspaceCwd || resolveWorkspaceCwd(agentId, this.sessionId));
+  const workspaceCwd = WORKSPACE_BOUND_AGENT_IDS.has(agentId)
+    ? (agentId === 'programming-helper' && this.sessionId
+      ? this.workspaceCwd
+      : (this.workspaceCwd || resolveWorkspaceCwd(agentId, this.sessionId)))
+    : resolveDesktopWorkspace();
   if (agentId === 'programming-helper' && this.sessionId && !workspaceCwd) {
     throw new Error(`Programming Helper session ${this.sessionId} requires an explicit workspace directory`);
+  }
+  if (agentId === 'agent-studio' && !workspaceCwd) {
+    throw new Error('Agent Studio 需要先选择项目目录。');
   }
 
   const agentModule = await import(pathToFileURL(agentJsPath).href);
@@ -1243,9 +1249,11 @@ function loadRuntimeHandoffFromPath(handoffPath) {
 
 // ── Main: process host ────────────────────────────────────────
 async function main() {
-  const workspaceCwd = agentId === 'programming-helper' && sessionId
-    ? cleanValue(process.env.PROTOCLAW_SESSION_WORKSPACE_CWD)
-    : resolveWorkspaceCwd(agentId, sessionId);
+  const workspaceCwd = WORKSPACE_BOUND_AGENT_IDS.has(agentId)
+    ? (agentId === 'programming-helper' && sessionId
+      ? cleanValue(process.env.PROTOCLAW_SESSION_WORKSPACE_CWD)
+      : resolveWorkspaceCwd(agentId, sessionId))
+    : resolveDesktopWorkspace();
   const runtimeHandoff = loadRuntimeHandoff();
 
   const initialSession = new SessionLifecycle({
