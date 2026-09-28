@@ -7,6 +7,7 @@
  *   - 每个面板项含拖拽手柄、图标、名称、描述、开关
  *   - 支持拖拽排序
  *   - 配置持久化到 localStorage
+ *   - 清单外面板彻底屏蔽：不进自定义弹窗，边栏按钮强制隐藏
  *
  * 依赖（全局变量，声明于 app-core.js）：
  *   - currentLanguage
@@ -25,16 +26,12 @@
 
   // ── 面板清单（单一真相：Claw 面板注册表） ─────────────
 
+  // 产品定义的可配置面板清单（顺序即默认相对顺序）。
+  // 清单外面板（workspace / monitor / mcp / settings / threads / resources /
+  // viewer 等）被彻底屏蔽：既不出现在自定义弹窗，也不出现在边栏。
   var CUSTOMIZABLE_PANEL_ORDER = [
-    'workspace', 'plan', 'session-controls', 'git', 'bg', 'genui', 'hooks',
-    'inspector', 'logs', 'monitor', 'mcp', 'settings', 'threads', 'resources', 'viewer',
+    'plan', 'session-controls', 'git', 'bg', 'genui', 'hooks', 'inspector', 'logs',
   ];
-
-  var DEFAULT_HIDDEN_PANEL_IDS = ['workspace', 'monitor', 'mcp', 'settings', 'threads', 'resources', 'viewer'];
-
-  function isDefaultVisible(id) {
-    return DEFAULT_HIDDEN_PANEL_IDS.indexOf(id) === -1;
-  }
 
   /** 可自定义面板仅限右侧栏主面板清单，并按默认顺序排列。 */
   function getCustomizableIds() {
@@ -70,7 +67,7 @@
   }
 
   function getDefaultConfig() {
-    return getCustomizableIds().map(function (id) { return { id: id, visible: isDefaultVisible(id) }; });
+    return getCustomizableIds().map(function (id) { return { id: id, visible: true }; });
   }
 
   /** 旧面板 ID → 新面板 ID（重命名时保留用户已有排序与可见性） */
@@ -101,7 +98,7 @@
         valid.push({ id: item.id, visible: item.visible !== false });
       });
       customizable.forEach(function (id) {
-        if (!seen[id]) valid.push({ id: id, visible: isDefaultVisible(id) });
+        if (!seen[id]) valid.push({ id: id, visible: true });
       });
       return valid;
     } catch (e) {
@@ -185,6 +182,8 @@
     var config = loadConfig();
     var anchor = findAnchor(rail);
     var activeCleared = false;
+    var allowed = {};
+    config.forEach(function (entry) { allowed[entry.id] = true; });
 
     for (var i = 0; i < config.length; i++) {
       var entry = config[i];
@@ -202,6 +201,22 @@
 
       if (anchor) {
         rail.insertBefore(btn, anchor);
+      }
+    }
+
+    // 清单外面板直接屏蔽：边栏按钮强制隐藏（rail-custom-hidden 带
+    // !important，压过 renderCurrentMainView 的 inline display），若正
+    // 处于激活态则一并清掉。
+    var panelButtons = rail.querySelectorAll('.rail-button[data-panel]');
+    for (var j = 0; j < panelButtons.length; j++) {
+      var blockedBtn = panelButtons[j];
+      var blockedId = blockedBtn.dataset.panel;
+      if (allowed[blockedId]) continue;
+      blockedBtn.classList.add(HIDDEN_CLASS);
+      if (typeof activeFeaturePanel !== 'undefined' &&
+          activeFeaturePanel === blockedId) {
+        activeFeaturePanel = null;
+        activeCleared = true;
       }
     }
 

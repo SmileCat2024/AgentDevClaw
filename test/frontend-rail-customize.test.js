@@ -7,6 +7,7 @@ import { createDomHarness } from './helpers/dom-harness.js';
 /**
  * rail-customize 自定义面板清单必须从 ClawPanels 注册表派生，
  * 不再维护第二份硬编码面板真相（CUSTOMIZABLE_IDS/LABELS/DESCS）。
+ * 清单外面板被彻底屏蔽：不进自定义弹窗，边栏按钮强制隐藏。
  */
 
 function buildRailDom(panelIds) {
@@ -70,31 +71,30 @@ function createRailSandbox(harness, overrides = {}) {
 
 describe('rail customize derives its panel list from the registry', () => {
   it('lists only allowed registered panels in the defined default order', () => {
-    const harness = buildRailDom(['monitor', 'genui', 'workspace', 'unlisted', null]);
+    const harness = buildRailDom(['genui', 'session-controls', 'workspace', 'unlisted', null]);
     const ctx = createRailSandbox(harness);
 
     assert.deepEqual(
       JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.getCustomizableIds()'))),
-      ['workspace', 'genui', 'monitor'],
+      ['session-controls', 'genui'],
     );
   });
 
-  it('uses the requested initial visibility defaults', () => {
-    const harness = buildRailDom(['workspace', 'monitor', 'genui', 'unlisted']);
+  it('defaults every customizable panel to visible', () => {
+    const harness = buildRailDom(['workspace', 'session-controls', 'genui', 'unlisted']);
     const ctx = createRailSandbox(harness);
 
     assert.deepEqual(
       JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
       [
-        { id: 'workspace', visible: false },
+        { id: 'session-controls', visible: true },
         { id: 'genui', visible: true },
-        { id: 'monitor', visible: false },
       ],
     );
   });
 
-  it('keeps unknown ids out and appends missing panels when loading a legacy config', () => {
-    const harness = buildRailDom(['workspace', 'monitor', 'genui']);
+  it('keeps blocked and unknown ids out when loading a legacy config', () => {
+    const harness = buildRailDom(['workspace', 'monitor', 'genui', 'session-controls']);
     const ctx = createRailSandbox(harness);
     ctx.run(`localStorage.setItem('agentdev-rail-config', JSON.stringify([
       { id: 'monitor', visible: false },
@@ -104,8 +104,7 @@ describe('rail customize derives its panel list from the registry', () => {
     assert.deepEqual(
       JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
       [
-        { id: 'monitor', visible: false },
-        { id: 'workspace', visible: false },
+        { id: 'session-controls', visible: true },
         { id: 'genui', visible: true },
       ],
     );
@@ -122,29 +121,49 @@ describe('rail customize derives its panel list from the registry', () => {
       JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
       [
         { id: 'session-controls', visible: false },
-        { id: 'workspace', visible: false },
       ],
     );
   });
 
   it('hides a hidden panel button and clears the active panel through the host renderer', () => {
-    const harness = buildRailDom(['workspace', 'monitor']);
+    const harness = buildRailDom(['genui', 'monitor']);
     const ctx = createRailSandbox(harness);
     ctx.run(`localStorage.setItem('agentdev-rail-config', JSON.stringify([
-      { id: 'monitor', visible: false },
+      { id: 'genui', visible: false },
     ]))`);
     ctx.run(`
-      activeFeaturePanel = 'monitor';
+      activeFeaturePanel = 'genui';
       var _renderCalls = 0;
       renderFeaturePanel = function () { _renderCalls += 1; };
     `);
 
     ctx.run('window.applyRailConfig()');
 
-    const monitorBtn = harness.document.querySelector('.rail-button[data-panel="monitor"]');
-    assert.ok(monitorBtn.classList.contains('rail-custom-hidden'));
+    const genuiBtn = harness.document.querySelector('.rail-button[data-panel="genui"]');
+    assert.ok(genuiBtn.classList.contains('rail-custom-hidden'));
     assert.equal(ctx.run('activeFeaturePanel'), null);
     assert.equal(ctx.run('_renderCalls'), 1);
+  });
+
+  it('force-hides blocked panel buttons and clears their active panel', () => {
+    const harness = buildRailDom(['workspace', 'genui', 'monitor']);
+    const ctx = createRailSandbox(harness);
+    ctx.run(`
+      activeFeaturePanel = 'workspace';
+      var _renderCalls = 0;
+      renderFeaturePanel = function () { _renderCalls += 1; };
+    `);
+
+    ctx.run('window.applyRailConfig()');
+
+    const workspaceBtn = harness.document.querySelector('.rail-button[data-panel="workspace"]');
+    const monitorBtn = harness.document.querySelector('.rail-button[data-panel="monitor"]');
+    const genuiBtn = harness.document.querySelector('.rail-button[data-panel="genui"]');
+    assert.ok(workspaceBtn.classList.contains('rail-custom-hidden'), 'workspace（清单外）被强制隐藏');
+    assert.ok(monitorBtn.classList.contains('rail-custom-hidden'), 'monitor（清单外）被强制隐藏');
+    assert.ok(!genuiBtn.classList.contains('rail-custom-hidden'), '清单内默认可见面板不受影响');
+    assert.equal(ctx.run('activeFeaturePanel'), null, '屏蔽面板处于激活态时被清空');
+    assert.equal(ctx.run('_renderCalls'), 1, '激活面板被清空后触发宿主重渲染');
   });
 
   it('reads labels and descriptions from registered panel metadata', () => {
