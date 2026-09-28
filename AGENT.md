@@ -214,7 +214,7 @@ stdio 分流（CLI 审计接口）：所有日志必须带等级；`AGENTDEV_LOG
 - **端口 1420：Claw 主前端**（用户日常看到）— `public/src/*`，静态文件不需编译，改后重启 Claw 服务生效
 - **端口 2026：DebugHub Viewer**（框架侧）— `AgentDev/src/core/viewer-html.ts` + `viewer-worker.ts`，改后需框架 build + 重启
 
-改错管线 = 白改。渲染契约、去重策略与自检清单见 [docs/reference/frontend-rendering-patterns.md](docs/reference/frontend-rendering-patterns.md)。
+改错管线 = 白改。渲染契约、去重策略与自检清单见 [docs/reference/frontend-rendering-patterns.md](docs/reference/frontend-rendering-patterns.md)。工具调用/结果卡片的宿主壳层（分层标题/正文、玻璃底色、长内容折叠）与 Feature 模板的内容层契约见 [docs/protocols/tool-rendering.md](docs/protocols/tool-rendering.md)。
 
 Inspector 数据流：Agent `buildHookInspectorSnapshot()` → IPC → ViewerWorker → API → Claw 前端 `normalizeHookInspector()`（[modules/overview-data.js](public/src/modules/overview-data.js)）→ `renderFeaturesPanel()`。陷阱：`normalizeHookInspector` 存在于两处（Claw 前端 + 框架 `viewer-html.ts`），新增 inspector snapshot 字段必须同时更新两处，否则字段在重构时被丢弃（历史上踩过）。
 
