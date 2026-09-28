@@ -19,6 +19,7 @@ import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { ConversationExportFeature } from '../../../local-features/dist/conversation-export/src/index.js';
+import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
 import { getIMChannelLabel } from '../../../server/shared/im-channels.js';
 import { resolveUserDataDir, APP_QQBOT_CONFIG_PATH, APP_WEIXIN_CONFIG_PATH, APP_ROKID_CONFIG_PATH, APP_IM_WORKSPACE_CONFIG_PATH } from '../../../server/shared/constants.js';
 import { internalAuthHeaders } from '../../../server/shared/internal-auth.js';
@@ -387,6 +388,11 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
 
     // ClawDispatchFeature 始终挂载，主模式与探索模式都需要接收调度消息
     this.use(new ClawDispatchFeature());
+
+    // 时间感知：CallStart 按节奏注入系统时间（>4h 未汇报才汇报），距上一轮
+    // call >24h 时额外提示长间隔。主/探索模式都需要，状态经框架会话快照
+    // （captureState）持久化。
+    this.use(new TimeAwarenessFeature());
 
     if (isExploration) {
       this.use(new WebSearchFeature());

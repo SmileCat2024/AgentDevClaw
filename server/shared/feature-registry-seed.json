@@ -34,6 +34,7 @@
     { "name": "wecom-bot", "displayName": { "zh": "企微渠道", "en": "WeCom Channel" }, "type": "interface", "capabilities": [], "provenance": "ecosystem" },
     { "name": "feishu-bot", "displayName": { "zh": "飞书渠道", "en": "Feishu Channel" }, "type": "interface", "capabilities": [], "provenance": "ecosystem" },
     { "name": "rokid-bot", "displayName": { "zh": "Rokid 渠道", "en": "Rokid Channel" }, "type": "interface", "capabilities": [], "provenance": "ecosystem" },
-    { "name": "im-operator", "displayName": { "zh": "IM 接线员", "en": "IM Operator" }, "type": "interface", "capabilities": ["tools"], "provenance": "inline" }
+    { "name": "im-operator", "displayName": { "zh": "IM 接线员", "en": "IM Operator" }, "type": "interface", "capabilities": ["tools"], "provenance": "inline" },
+    { "name": "time-awareness", "displayName": { "zh": "时间感知", "en": "Time Awareness" }, "type": "system", "capabilities": [], "provenance": "local" }
   ]
 }

@@ -115,7 +115,7 @@ feature 三类来源（严格区分，改错层 = 白改）：
 
 **预制 agent runtime**（[scripts/run-prebuilt-agent.js](scripts/run-prebuilt-agent.js)）：动态加载 `prebuilt-agents/*/*/agent.js`、挂到本地 ViewerWorker、管理会话恢复与附加启动逻辑（如 IM gateway）。会话数据落在用户目录 `~/.agentdev/AgentDevClaw/prebuilt-sessions/<agentId>`，不污染仓库。`metadata.json` 的 `ui` 声明（entry / tabs / home blocks）是首页 block 渲染的基础壳能力。
 
-**本地 feature**（[local-features](local-features)）：顶层 `index.ts` barrel 聚合导出。活跃域：dispatch（调度）、group-admin（群聊管理）、checkpoint、context-compaction-mirror / context-guard（上下文精简与守卫）、continuity-participant（连续性参与方）、conversation-export（对话导出）、feature-wrappers（框架 feature 的 Claw 协议薄包装，含后台任务实时面板镜像 PanelShellFeature，ADR-0018 首个通道接入）、agent-studio、generative-ui、github、agent-dev。`flow` 与 `feature-dev` 已悬置。
+**本地 feature**（[local-features](local-features)）：顶层 `index.ts` barrel 聚合导出。活跃域：dispatch（调度）、group-admin（群聊管理）、checkpoint、context-compaction-mirror / context-guard（上下文精简与守卫）、continuity-participant（连续性参与方）、conversation-export（对话导出）、time-awareness（时间感知：按节奏注入系统时间与长间隔提示，状态经框架会话快照持久化）、feature-wrappers（框架 feature 的 Claw 协议薄包装，含后台任务实时面板镜像 PanelShellFeature，ADR-0018 首个通道接入）、agent-studio、generative-ui、github、agent-dev。`flow` 与 `feature-dev` 已悬置。
 
 app-core.js 全局状态纪律：全局状态区只减不增。新增前端状态放所属 modules 文件的局部作用域；确需跨模块共享用 `window.ClawFW` 命名空间。
 

@@ -12,6 +12,15 @@ export { GitHubShellFeature } from './github/src/index.js';
 export { createGitHubShellPolicy, createGitHubShellAdapters, GITHUB_SHELL_NAME } from './github/src/github-shell.js';
 export { SessionReferenceFeature } from './session-reference/src/index.js';
 export {
+  TimeAwarenessFeature,
+  evaluateTimeAwareness,
+  renderTimeReminder,
+  formatTimezone,
+  formatLocalDateTime,
+  REPORT_INTERVAL_MS,
+  LONG_GAP_MS,
+} from './time-awareness/src/index.js';
+export {
   createCapabilityShellTool,
   runCapabilityShellPipeline,
 } from './capability-shell/src/index.js';

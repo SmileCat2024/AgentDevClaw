@@ -24,6 +24,7 @@ import { ContextGuardFeature } from '../../../local-features/dist/context-guard/
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
 import { GitHubShellFeature } from '../../../local-features/dist/github/src/index.js';
 import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
+import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
 import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import { PlaywrightShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import {
@@ -143,6 +144,9 @@ export class ProgrammingHelperAgent extends BasicAgent {
     };
     this.use(new ClawDispatchFeature(runtimeIdentity));
     this.use(new GroupChatBridgeFeature(runtimeIdentity));
+    // 时间感知：CallStart 按节奏注入系统时间（>4h 未汇报才汇报），距上一轮
+    // call >24h 时额外提示长间隔。状态经框架会话快照（captureState）持久化。
+    this.use(new TimeAwarenessFeature());
     // 一次性过界拦截：manifest（Runtime 配置面板）决定会话启动初值，
     // 会话控制面板可实时装填/卸下。触发一次即消耗，之后输入完全放行。
     this.use(new ContextGuardFeature({
