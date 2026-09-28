@@ -33,6 +33,9 @@
   --glass-bg: rgba(20, 20, 23, 0.72);
   --glass-blur: 20px;
   --glass-border: rgba(255, 255, 255, 0.06);
+  /* diff 行号栏（sticky 遮罩用）：玻璃卡面的不透明近似值，
+     横向滑动的内容必须被它盖住，半透明底遮不住 */
+  --diff-gutter-bg: #14151a;
   /* ── ambient backdrop (dynamic) ──
      Three oversized soft glows drift independently (body + body::before carry
      separate animations with co-prime durations, so they never move as one
@@ -73,6 +76,7 @@ body[data-theme="light"] {
   --glass-bg: rgba(240, 240, 242, 0.72);
   --glass-blur: 20px;
   --glass-border: rgba(0, 0, 0, 0.06);
+  --diff-gutter-bg: #f1f1f3;
   /* ── ambient backdrop (dynamic, light) ── */
   --ambient-glow-1: rgba(90, 125, 245, 0.05);
   --ambient-glow-2: rgba(150, 110, 235, 0.045);

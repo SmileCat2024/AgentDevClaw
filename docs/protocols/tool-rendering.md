@@ -16,4 +16,6 @@
 
 文件差异示例见 `edit.render.ts` / `write.render.ts`：Diff2Html 负责生成差异行和文件元信息，Claw 的工具结果区样式让文件内容嵌入现有宿主表面而非再套一个文件卡片。模板里不必复制 Diff2Html 的外框。
 
+工具需要给人看结构化信息、给模型看紧凑文本时，用框架的 `withDisplay(text, display)` 分离双通道：文本一字不动进 LLM 上下文，display 对象经消息的 display 字段到达前端并与模板数据合并。示例见 `../AgentDev/packages/shell-feature/src/templates/bg-list.render.ts` 与 `bg-status.render.ts`（对应工具在 `bg-tools.ts` 中的 withDisplay 装配）；模板必须为没有 display 的历史会话保留纯文本回退分支。`bash.render.ts` 演示了同一模板按数据形态分流（后台启动卡 / 前台输出文本）。
+
 验收时至少检查：短结果、长结果及默认折叠/展开、超长路径/代码行、错误与空结果、深浅主题；同时确认纵向只有聊天滚动轨道、横向滚动不截断内容。主前端的模板入口在 `public/src/modules/template-engine.js`，结果行在 `public/src/modules/chat-renderer.js`；DebugHub Viewer 是独立渲染管线，不要把它的 CSS 当作主前端样式。
