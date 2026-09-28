@@ -15,11 +15,11 @@
 // 开发态还覆盖相邻框架仓库：node_modules/@agentdevjs/* 链接解析到
 // AgentDev/packages/*/dist，git pull 框架仓库不会触发任何重建，服务会
 // 静默跑在陈旧框架代码上（历史事故：模型热切换、超时语义更新不生效）。
-// 检测到任一被消费的框架包过时，即在框架仓库执行 npm run build；
+// 检测到被消费的框架包过时，只构建该包及依赖它的包；
 // 发布态 dist 由 npm registry 安装，跳过检查。
 //
 // 由 preflight.mjs（prestart/predev）调用；也可独立运行。
-import { existsSync, readdirSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
 import { pathToFileURL } from 'url';
@@ -65,18 +65,53 @@ function isStale(srcDir, distDir) {
 // check-agentdev-local 的链接/安装校验同源）：Claw 运行时不消费的包
 // （如 deprecated 的 audit-feature）不参与判定——它们的 dist 陈旧与否
 // 与启动正确性无关，纳入只会带来与消费面无关的启动期全量构建。
-function frameworkBuildNeeded(frameworkRoot) {
-  if (!existsSync(join(frameworkRoot, 'package.json'))) return false;
-  return Object.entries(PACKAGE_MAP).some(([name, dir]) => {
+function frameworkBuildPlan(frameworkRoot) {
+  if (!existsSync(join(frameworkRoot, 'package.json'))) return [];
+  const packages = new Map();
+  const stale = new Set();
+  for (const [name, dir] of Object.entries(PACKAGE_MAP)) {
     const packageDir = join(frameworkRoot, 'packages', dir);
-    // 缺少包目录由 check-agentdev-local 报告；这里不因未消费/未检出的包
-    // 触发一轮不会修复它的全量构建。
-    if (!existsSync(packageDir)) return false;
-    // 时间比较只能发现源码更新；probe 还会捕获 dist/index.js、dist/index.d.ts
-    // 缺失，以及框架四包 d.ts 缺少 Claw 所依赖的导出。
-    return probe(packageDir, name).status !== 'ok' ||
-      isStale(packageDir, join(packageDir, 'dist'));
-  });
+    // 缺少包目录由 check-agentdev-local 报告，构建计划无法修复。
+    if (!existsSync(packageDir)) continue;
+    const manifestPath = join(packageDir, 'package.json');
+    const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : {};
+    const deps = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })
+      .filter(dep => dep.startsWith('@agentdevjs/'))
+      .map(dep => dep.slice('@agentdevjs/'.length));
+    packages.set(name, { deps });
+    // probe 捕获入口或声明缺失；mtime 捕获源码更新。
+    if (probe(packageDir, name).status !== 'ok' || isStale(packageDir, join(packageDir, 'dist'))) {
+      stale.add(name);
+    }
+  }
+
+  // 上游接口变化后，下游构建产物也要更新。只扩展到真正声明了依赖的包。
+  const needed = new Set(stale);
+  let changed;
+  do {
+    changed = false;
+    for (const [name, { deps }] of packages) {
+      if (!needed.has(name) && deps.some(dep => needed.has(dep))) {
+        needed.add(name);
+        changed = true;
+      }
+    }
+  } while (changed);
+
+  const ordered = [];
+  const visited = new Set();
+  function visit(name) {
+    if (visited.has(name) || !needed.has(name)) return;
+    visited.add(name);
+    for (const dep of packages.get(name)?.deps ?? []) visit(dep);
+    ordered.push(`@agentdevjs/${name}`);
+  }
+  for (const name of packages.keys()) visit(name);
+  return ordered;
+}
+
+function frameworkBuildNeeded(frameworkRoot) {
+  return frameworkBuildPlan(frameworkRoot).length > 0;
 }
 
 function ensure(desc, check, buildScript, cwd = root) {
@@ -100,12 +135,16 @@ function ensureFrameworkBuild() {
   if (!isDevForm()) return false;
   const sibling = siblingAgentdevPath();
   if (!existsSync(join(sibling, 'package.json'))) return false;
-  return ensure(
-    'AgentDev 框架 dist',
-    () => frameworkBuildNeeded(sibling),
-    'build',
-    sibling
-  );
+  const plan = frameworkBuildPlan(sibling);
+  if (!plan.length) return false;
+  console.log(`[ensure-builds] AgentDev 需要构建：${plan.join(', ')}`);
+  const args = ['run', 'build', ...plan.flatMap(name => ['-w', name])];
+  const r = runNpm(args, sibling);
+  if (r.error || r.status !== 0) {
+    console.error(`[ensure-builds] 框架增量构建失败，请进入 ${sibling} 排查。`);
+    process.exit(r.status ?? 1);
+  }
+  return true;
 }
 
 function ensureClawBuilds() {
@@ -114,13 +153,19 @@ function ensureClawBuilds() {
     () => isStale(join(root, 'local-features'), join(root, 'local-features', 'dist')),
     'build:local-features'
   );
-  const builtFeat = ensure(
-    'features/*/dist',
-    () => FEATURE_DIRS.some((n) =>
-      isStale(join(root, 'features', n), join(root, 'features', n, 'dist'))
-    ),
-    'build:features'
+  const staleFeatures = FEATURE_DIRS.filter((n) =>
+    isStale(join(root, 'features', n), join(root, 'features', n, 'dist'))
   );
+  let builtFeat = false;
+  if (staleFeatures.length) {
+    console.log(`[ensure-builds] 需要构建的 feature：${staleFeatures.join(', ')}`);
+    const r = runNpm(['run', 'build:features', '--', `--only=${staleFeatures.join(',')}`]);
+    if (r.error || r.status !== 0) {
+      console.error('[ensure-builds] build:features 失败，请手动执行排查。');
+      process.exit(r.status ?? 1);
+    }
+    builtFeat = true;
+  }
   return { builtLf, builtFeat };
 }
 
@@ -147,4 +192,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   main();
 }
 
-export { newestMtime, isStale, frameworkBuildNeeded };
+export { newestMtime, isStale, frameworkBuildNeeded, frameworkBuildPlan };

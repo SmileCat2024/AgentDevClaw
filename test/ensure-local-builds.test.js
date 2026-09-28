@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { isStale, frameworkBuildNeeded } from '../scripts/ensure-local-builds.mjs';
+import { isStale, frameworkBuildNeeded, frameworkBuildPlan } from '../scripts/ensure-local-builds.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'ensure-builds-'));
 after(() => {
@@ -93,6 +93,22 @@ describe('frameworkBuildNeeded（相邻框架仓库 dist 过时检测）', () =>
     utimesSync(llm.dist, PAST, PAST);
     utimesSync(llm.dts, PAST, PAST);
     assert.equal(frameworkBuildNeeded(dir), true);
+  });
+
+  it('只选择过时包及声明依赖它的下游包，按依赖顺序构建', () => {
+    const dir = fakeFramework();
+    const core = freshPackage(join(dir, 'packages', 'core'));
+    freshPackage(join(dir, 'packages', 'llm'));
+    freshPackage(join(dir, 'packages', 'viewer'));
+    freshPackage(join(dir, 'packages', 'websearch-feature'));
+    writeFileSync(join(dir, 'packages', 'llm', 'package.json'), JSON.stringify({ dependencies: { '@agentdevjs/core': '0.1.0' } }));
+    writeFileSync(join(dir, 'packages', 'websearch-feature', 'package.json'), JSON.stringify({ dependencies: { '@agentdevjs/llm': '0.1.0' } }));
+    utimesSync(join(dir, 'packages', 'llm', 'package.json'), PAST, PAST);
+    utimesSync(join(dir, 'packages', 'websearch-feature', 'package.json'), PAST, PAST);
+    utimesSync(core.src, FRESH + 120, FRESH + 120);
+    assert.deepEqual(frameworkBuildPlan(dir), [
+      '@agentdevjs/core', '@agentdevjs/llm', '@agentdevjs/websearch-feature',
+    ]);
   });
 
   it('dist 缺失的包触发重建（老仓库从未构建）', () => {

@@ -5,7 +5,7 @@
 // npm install 会惰性跳过不重装）时，删链接并自动补跑 npm install，
 // 保证 git pull && npm start 开箱即用。
 import { execSync } from 'child_process';
-import { existsSync, lstatSync, readFileSync, rmSync, statSync } from 'fs';
+import { existsSync, lstatSync, readFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 
 const root = resolve(import.meta.dirname, '..');
@@ -16,13 +16,15 @@ const brokenLinks = [];
 const missing = [];
 for (const name of wanted) {
   const dir = join(root, 'node_modules', name);
-  const linkStat = existsSync(dir) && lstatSync(dir);
+  // existsSync 会跟随符号链接：死链会返回 false，必须先 lstat 才能清理。
+  let linkStat;
+  try { linkStat = lstatSync(dir); } catch { /* 依赖未安装 */ }
   if (!linkStat) {
     missing.push(name);
     continue;
   }
   // 符号链接但目标不存在 = 死链；npm 对现存链接惰性跳过，必须先删
-  if (linkStat.isSymbolicLink() && !statSync(dir)) {
+  if (linkStat.isSymbolicLink() && !existsSync(dir)) {
     brokenLinks.push(name);
     rmSync(dir);
   }

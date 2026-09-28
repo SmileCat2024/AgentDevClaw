@@ -16,6 +16,7 @@
 import { existsSync, lstatSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'fs';
 import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
+import { pathToFileURL } from 'url';
 import { FEATURE_DIRS } from './prebuilt-feature-dirs.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -36,6 +37,33 @@ function runStep(name, dir, label, args) {
     console.error(`[build:features] features/${name} ${label} 失败${r.error ? `: ${r.error.message}` : ''}`);
     process.exit(r.status ?? 1);
   }
+}
+
+// npm install 在依赖完整且声明未变化时没有必要重复运行。
+function installNeeded(dir) {
+  const manifestPath = join(dir, 'package.json');
+  const lockPath = join(dir, 'package-lock.json');
+  const installedLockPath = join(dir, 'node_modules', '.package-lock.json');
+  if (!existsSync(installedLockPath) || !existsSync(lockPath)) return true;
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const lockedPackages = JSON.parse(readFileSync(lockPath, 'utf8')).packages;
+  const installedPackages = JSON.parse(readFileSync(installedLockPath, 'utf8')).packages;
+  const lockedRoot = lockedPackages?.[''];
+  const sameDeps = (a = {}, b = {}) =>
+    Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([name, spec]) => b[name] === spec);
+  if (!lockedRoot || !installedPackages || !sameDeps(manifest.dependencies, lockedRoot.dependencies) ||
+      !sameDeps(manifest.devDependencies, lockedRoot.devDependencies)) return true;
+  for (const [path, wanted] of Object.entries(lockedPackages)) {
+    if (!path) continue;
+    const installed = installedPackages[path];
+    if (!installed) {
+      if (!wanted.optional) return true; // 平台不兼容的 optional 包无需安装
+    } else if (wanted.version !== installed.version || wanted.resolved !== installed.resolved ||
+               wanted.integrity !== installed.integrity) return true;
+  }
+  if (Object.keys(installedPackages).some(path => !(path in lockedPackages))) return true;
+  return Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })
+    .some(name => !existsSync(join(dir, 'node_modules', name)));
 }
 
 // 相邻框架 core 的可用性分流（与声明形态无关，覆盖 file: 开发态与 agentdev:local 调试态）：
@@ -97,14 +125,38 @@ function linkLocalCore(name, featureDir) {
   console.log(`[build:features] features/${name}: @agentdevjs/core -> 本地框架仓库`);
 }
 
-for (const name of FEATURE_DIRS) {
-  const dir = join(root, 'features', name);
-  if (!existsSync(join(dir, 'package.json'))) {
-    console.error(`[build:features] 未找到 features/${name}/package.json`);
-    process.exit(1);
+function selectedFeatureNames(args) {
+  if (args.length > 1 || (args.length && !args[0].startsWith('--only='))) {
+    throw new Error('仅支持 --only=目录名[,目录名...]。');
   }
-  runStep(name, dir, 'npm install', ['install', '--no-audit', '--no-fund']);
-  linkLocalCore(name, dir);
-  runStep(name, dir, 'npm run build', ['run', 'build']);
+  const selected = args.length ? args[0].slice('--only='.length).split(',') : FEATURE_DIRS;
+  if (!selected.length || selected.some(name => !FEATURE_DIRS.includes(name)) ||
+      new Set(selected).size !== selected.length) {
+    throw new Error(`未知或重复的 feature 目录：${selected.join(', ')}`);
+  }
+  return selected;
 }
-console.log('[build:features] 完成');
+
+function main(args) {
+  for (const name of selectedFeatureNames(args)) {
+    const dir = join(root, 'features', name);
+    if (!existsSync(join(dir, 'package.json'))) {
+      throw new Error(`未找到 features/${name}/package.json`);
+    }
+    if (installNeeded(dir)) {
+      runStep(name, dir, 'npm install', ['install', '--no-audit', '--no-fund']);
+    } else {
+      console.log(`[build:features] features/${name}: 依赖完整，跳过 npm install`);
+    }
+    linkLocalCore(name, dir);
+    runStep(name, dir, 'npm run build', ['run', 'build']);
+  }
+  console.log('[build:features] 完成');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  try { main(process.argv.slice(2)); }
+  catch (error) { console.error(`[build:features] ${error.message}`); process.exitCode = 1; }
+}
+
+export { installNeeded, selectedFeatureNames };
