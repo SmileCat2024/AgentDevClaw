@@ -226,10 +226,15 @@ test('supervisor persists lifecycle events to the log file', async (t) => {
 });
 
 // launcher 消失不授予 supervisor 终止服务进程树的权限。
+// wrapper 以 detached 启动 supervisor，建模桌面宿主（Rust CreateProcess，
+// 无 libuv Job Object）：Node ≥ 24 的 libuv 在 Windows 为非 detached 子进程
+// 建 KILL_ON_JOB_CLOSE Job，launcher 退出时 OS 会连坐收割整棵树——那样测的
+// 是进程树策略而非 supervisor 语义，断言永远过不去。
 test('supervisor leaves its child untouched when its launcher exits', async (t) => {
   const wrapper = spawn(process.execPath, ['-e', [
     "const { spawn } = require('node:child_process');",
-    'const child = spawn(process.execPath, [process.env.SUP_PATH], { stdio: \'ignore\' });',
+    "const child = spawn(process.execPath, [process.env.SUP_PATH], { stdio: 'ignore', detached: true });",
+    'child.unref();',
     'console.log(child.pid);',
     'setTimeout(() => process.exit(0), 100);',
   ].join('\n')], {
@@ -237,7 +242,6 @@ test('supervisor leaves its child untouched when its launcher exits', async (t) 
     env: isolatedTestEnv({
       SUP_PATH: SUPERVISOR,
       CLAW_SUPERVISED_CMD: 'node -e setInterval(()=>{},1e9)',
-      CLAW_SUPERVISOR_HOST_PING_MS: '200',
       CLAW_SUPERVISOR_GRACE_MS: '250',
     }),
   });

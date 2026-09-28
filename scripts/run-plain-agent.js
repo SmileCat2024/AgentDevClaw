@@ -255,6 +255,13 @@ async function main() {
     console.error(`[PlainAgent] config-group => ${args.configGroup}`);
   }
 
+  // --debug 用法守卫：只支持 Studio 注册且带 studioProjectDir 的 Agent。
+  // 与配置组守卫同为用法校验，必须先于模型解析触发——无模型配置的环境里
+  // 模型解析会先行退出，把真正的用法错误淹没掉。
+  if (args.debug && definition.metadata?.features && !definition.registered?.studioProjectDir) {
+    throw new Error('--debug 只支持通过 Studio 注册、且带 studioProjectDir 的 Agent。');
+  }
+
   // 会话事件流输出：jsonl 模式写 stdout（codex exec --json 形态），
   // 其余模式渲染 human 可读行到 stderr（codex exec 默认形态）。
   // 轮换推进 head 会话后经 setThreadId 更新标注（见下方 upsertIndex）。
@@ -300,7 +307,7 @@ async function main() {
   let runtimeAgentPath = definition.agentPath;
   if (definition.metadata?.features) {
     const sourceOverrides = args.debug
-      ? (definition.registered?.studioProjectDir ? getStudioSourceOverrides(definition.registered.studioProjectDir) : (() => { throw new Error('--debug 只支持通过 Studio 注册、且带 studioProjectDir 的 Agent。'); })())
+      ? getStudioSourceOverrides(definition.registered.studioProjectDir)
       : [];
     const catalog = await scanFeatureCatalog();
     runtimePlan = resolveAgentRuntimePlan({
