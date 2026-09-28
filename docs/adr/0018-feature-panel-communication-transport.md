@@ -22,7 +22,7 @@
 
 ### 2. 快照 + 有界增量，不承诺可靠投递
 
-每通道维护一个快照（带 revision）与一条有界事件缓冲（默认 256 条）。订阅经 SSE `Last-Event-ID` 续接；游标越界（缓冲已丢弃）时下发 `resync` + 全量快照。**状态真相始终在 Feature**：通道是尽力而为的投影面，消费端以请求面（见决策 5）兜底对齐。这排除了把通道当持久队列用的可能——需要可靠投递的场景走轮询或请求面。
+每通道维护一个快照（带 revision）与一条有界事件缓冲（默认至多 256 条、256 KiB）。订阅经 SSE `Last-Event-ID` 续接；游标越界（缓冲已丢弃）时下发 `resync` + 全量快照。新打开只需权威请求面现状的面板可用 `latest=1` 跳过历史回放；断线后浏览器携带 `Last-Event-ID` 时仍以游标为准。**状态真相始终在 Feature**：通道是尽力而为的投影面，消费端以请求面（见决策 5）兜底对齐。这排除了把通道当持久队列用的可能——需要可靠投递的场景走轮询或请求面。
 
 ### 3. 上行/下行信任边界分离
 
@@ -44,7 +44,7 @@
 
 - `onHostRequest` 是 **Claw 宿主层钩子约定**（duck-typing：`typeof feature.onHostRequest === 'function'`），不在框架 `AgentFeature` 接口中；生态包实现它没有框架类型可依——这是已知的跨仓契约缺口，待沉淀进框架。
 - 无跨会话 fallback：runtime 不在（退出/摘除）直接 `runtime_not_connected`，不猜目标。
-- 请求是低频控制面（list / status / kill 这类），不是数据面；高频状态消费走事件流。
+- 请求面用于状态对账和低频控制：面板开启读一次 `list`；关闭态徽标的周期 `count` 仅返回标量，不传任务输出。高频状态消费走事件流。
 
 ### 6. 独立端点，不混入全局事件流
 
@@ -54,9 +54,9 @@
 
 端到端链路，作为通道能力的活体验证：
 
-- **框架侧**（`AgentDev/packages/shell-feature`）：`BgRegistry` 新增 `observer` 配置（六类事件：registered / output / report / ready / finalized / tuned；output 按 1s 节流，终态不节流）+ `ShellFeature.getBgRegistry()` 访问器。
-- **镜像 Feature**（`local-features/feature-wrappers/src/panel-shell-feature.ts` 的 `PanelShellFeature`，继承 `ShellFeature` 的增强子类，装配处整体替换原版——同 `ControlledTodoFeature` 模式）：构造即声明 `shell-bg` 通道（featureId=`shell`，即 feature name——IPC 分发按它在 runtime 内查实例）；观察事件投影为 `publishEvent(kind, BgTaskSnapshot)`；`onHostRequest` 提供 `list` / `status`（含输出尾部）/ `kill`（graceful 透传，且恒为用户发起——`manual: true` 让引擎终止后补发"用户手动打断"通知：发起方不是模型，模型需要知情；工具路径 `bg_kill` 的 kill 不通知，发起方已从工具结果收到回执）/ `report`（手动触发 `BgRegistry.reportNow`——与节拍/静默同款汇报与双节奏重置）。发布失败静默——`bg_status` 仍是任务状态真值。
-- **消费面板**（`public/src/modules/bg-panel.js`）：右侧 rail "后台任务"面板，SSE 订阅渲染任务列表，输出查看与终止走请求面；会话切换守卫自动重订，面板取消激活自动拆订阅。
+- **框架侧**（`AgentDev/packages/shell-feature`）：`BgRegistry` 的观察者发送六类事件（registered / output / report / ready / finalized / tuned；output 按 1s 节流，终态不节流）；共享登记表的观察者在会话 `onDestroy` 时摘除，避免继续向已退出会话镜像输出；`ShellFeature.getBgRegistry()` 提供访问器。
+- **镜像 Feature**（`local-features/feature-wrappers/src/panel-shell-feature.ts` 的 `PanelShellFeature`，继承 `ShellFeature` 的增强子类，装配处整体替换原版——同 `ControlledTodoFeature` 模式）：构造即声明 `shell-bg` 通道（featureId=`shell`，即 feature name——IPC 分发按它在 runtime 内查实例）；观察事件投影为 `publishEvent(kind, BgTaskSnapshot)`；`onHostRequest` 提供 `count`（仅运行中数量）/ `list` / `status`（含输出尾部）/ `kill`（graceful 透传，且恒为用户发起——`manual: true` 让引擎终止后补发"用户手动打断"通知：发起方不是模型，模型需要知情；工具路径 `bg_kill` 的 kill 不通知，发起方已从工具结果收到回执）/ `report`（手动触发 `BgRegistry.reportNow`——与节拍/静默同款汇报与双节奏重置）。发布失败静默——`bg_status` 仍是任务状态真值。
+- **消费面板**（`public/src/modules/bg-panel.js`）：右侧 rail "后台任务"面板，首次订阅只接新事件并从 `list` 取现状，迟到的列表不得覆盖更新的事件，任务结束后以列表对账移除被引擎淘汰的旧卡片；关闭态徽标只走 `count`；终止走请求面；会话切换守卫自动重订，面板取消激活自动拆订阅。
 - **装配**（`programming-helper/agent.js`）：单一挂载 `new PanelShellFeature({ workspaceDir, ...runtimeIdentity })`，`bgObserver` 由子类自持并经 `super()` 注入，不再旁挂第二个 feature。
 
 ## 备选方案（rejected）
@@ -72,7 +72,7 @@
 - 上行端点永不接受用户会话认证；下行端点永不接受 internal-only 混用。
 - 无跨会话 fallback：寻址不命中（runtime 不在、通道未声明）一律显式失败。
 - 通道随 runtime 生命周期开合：进程退出、会话摘除 → `closeSession` → `closed` 终态送达订阅者。
-- 有界缓冲：事件缓冲超限丢最旧并触发消费端 resync，不做无限积压。
+- 有界缓冲：事件缓冲超限丢最旧；单条事件超过字节预算时只推给在线订阅者，不进入历史，旧游标收到 resync。
 
 ## 后果
 
@@ -80,7 +80,7 @@
 
 代价与已知缺口：
 
-- 通道数据是 server 进程内存态，无 TTL / 总量上限——慢泄漏面记账在案（生产观察项）。
+- 通道数据是 server 进程内存态；单通道事件缓冲有条数和字节预算，但所有存活通道的总量仍随运行会话数增长，无全局 TTL / 总量上限（生产观察项）。
 - `onHostRequest` 尚未进框架 `AgentFeature` 接口，生态 feature 包实现它缺类型与文档（见决策 5）。
 - 消费端目前仅 `bg-panel`；generative-ui 等既有面板仍走原链路，迁移按需逐个进行（本 ADR 不强制）。
 

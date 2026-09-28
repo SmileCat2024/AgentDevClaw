@@ -17,8 +17,8 @@
  *
  * 图标徽标（rail-bg-badge，与「交互页面」徽标同款）：显示当前运行中的
  * 后台任务数。面板打开时由 SSE 事件流（tasks 真值）驱动；面板关闭时由
- * 独立的 3s 轮询驱动——直接走权威的 list 请求面计数（不用事件镜像重放：
- * 镜像环形缓冲仅 256 条，活动会话很快滚满，游标重放会永久 resync）。
+ * 独立的 3s 轮询驱动——直接走权威的 count 请求面（不拉输出或重放：
+ * 活动会话的事件缓冲会频繁滚动，徽标只需要运行中数量）。
  * 两条路径互斥不双写（source 存活时轮询让位）。
  *
  * 视觉对齐右侧面板既有设计语言（feature-panel-section 卡片、
@@ -69,13 +69,17 @@
     sessionId: '',
   };
   let source = null;
+  let channelGeneration = 0;
+  let eventRevision = 0;
+  let listRevision = 0;
+  const taskRevisions = new Map();
   let sessionWatchTimer = null;
   let elapsedTimer = null;
   let lastHtml = '';
   /** 卡片骨架（挖空时长/输出尾巴后的 HTML）：判断结构是否变化。 */
   let lastSkeleton = '';
 
-  /** 徽标轮询状态（面板关闭态）：list 请求面计数，不碰面板 tasks。 */
+  /** 徽标轮询状态（面板关闭态）：count 请求面计数，不碰面板 tasks。 */
   let badgeAddressKey = '';
   let badgePollInFlight = false;
   let badgeTimer = null;
@@ -258,7 +262,7 @@
   /**
    * 重绘，两级更新（根治每秒重建的次生问题：按钮 hover 频闪、输出区滚动
    * 位置被重置、指示灯动画从头重播）：
-   * 1. 骨架未变（只是时长走秒 / 输出尾巴增长）→ 定点更新易变文本，零
+   * 1. 骨架未变（输出尾巴增长）→ 定点更新易变文本，零
    *    DOM 重建，CSS 状态（hover / 滚动 / 动画进度）全部自然保留；
    * 2. 骨架变化（状态切换、按钮增减、卡片增删）→ 全量重建；输出区贴底
    *    的继续跟底，上翻阅读的原位恢复。
@@ -298,8 +302,8 @@
     lastSkeleton = skeleton;
   }
 
-  /** 轻量路径：骨架未变，只更新每秒漂移的文本（时长走秒、输出尾巴）。 */
-  function updateVolatileTexts(root) {
+  /** 轻量路径：只更新漂移的文本（时长走秒、输出尾巴）。 */
+  function updateVolatileTexts(root, elapsedOnly = false) {
     for (const task of tasks.values()) {
       const id = window.CSS?.escape ? CSS.escape(task.id) : task.id;
       const card = root.querySelector(`[data-bgp-task="${id}"]`);
@@ -308,6 +312,7 @@
       const duration = taskDurationMs(task);
       const durText = duration !== null ? formatDuration(duration) : '';
       if (elapsedEl && elapsedEl.textContent !== durText) elapsedEl.textContent = durText;
+      if (elapsedOnly) continue;
       const tailEl = card.querySelector('[data-bgp-tail]');
       const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
       if (tailEl && tailEl.textContent !== tail) {
@@ -331,7 +336,10 @@
   function syncElapsedTimer() {
     // 运行中任务的时长行本地插值（事件之间平滑走秒）；无运行任务时停表。
     if (hasRunningTask() && elapsedTimer === null) {
-      elapsedTimer = setInterval(repaint, ELAPSED_TICK_MS);
+      elapsedTimer = setInterval(() => {
+        const root = document.getElementById('bg-panel-root');
+        if (root) updateVolatileTexts(root, true);
+      }, ELAPSED_TICK_MS);
     } else if (!hasRunningTask() && elapsedTimer !== null) {
       clearInterval(elapsedTimer);
       elapsedTimer = null;
@@ -339,6 +347,7 @@
   }
 
   function teardownChannel() {
+    channelGeneration += 1;
     if (source) { source.close(); source = null; }
     if (sessionWatchTimer) { clearInterval(sessionWatchTimer); sessionWatchTimer = null; }
     if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
@@ -364,19 +373,52 @@
   function handleStreamEvent(data) {
     let payload;
     try { payload = JSON.parse(data); } catch { return; }
-    if (payload?.type && payload?.data) applyTask(payload.data);
+    if (payload?.type && payload?.data && typeof payload.data.id === 'string') {
+      eventRevision += 1;
+      taskRevisions.set(payload.data.id, eventRevision);
+      applyTask(payload.data);
+      // The registry retires old terminal tasks; events only carry the task
+      // that changed, so reconcile membership after finalization.
+      if (payload.type === 'finalized') void refreshList();
+    }
     syncElapsedTimer();
     repaint();
   }
 
   async function refreshList() {
+    const generation = channelGeneration;
+    const revision = eventRevision;
+    const requestRevision = ++listRevision;
     const result = await channelRequest('list', {});
-    if (!source) return; // 等待期间通道已拆（会话切换），丢弃过期响应
+    if (!source || generation !== channelGeneration || requestRevision !== listRevision) return;
+    const current = currentAddressing();
+    if (!current || current.agentId !== state.agentId || current.sessionId !== state.sessionId) return;
     if (result.ok === true && Array.isArray(result.tasks)) {
-      tasks.clear();
+      const listedIds = new Set(result.tasks.map(task => task.id));
+      // Keep events received since the request started; an older list snapshot
+      // must not roll back output or a finalized task.
       for (const task of result.tasks) {
+        if ((taskRevisions.get(task.id) || 0) > revision) continue;
         applyTask(task);
         foldTerminalByDefault(task);
+      }
+      for (const id of tasks.keys()) {
+        if ((taskRevisions.get(id) || 0) <= revision && !listedIds.has(id)) tasks.delete(id);
+      }
+      for (const id of taskRevisions.keys()) {
+        if (!tasks.has(id)) taskRevisions.delete(id);
+      }
+      for (const id of collapsedTasks) {
+        if (!tasks.has(id)) collapsedTasks.delete(id);
+      }
+      for (const id of userToggledTasks) {
+        if (!tasks.has(id)) userToggledTasks.delete(id);
+      }
+      for (const id of reportStates.keys()) {
+        if (!tasks.has(id)) reportStates.delete(id);
+      }
+      for (const id of killPending) {
+        if (!tasks.has(id)) killPending.delete(id);
       }
     } else if (result.code === 'channel_not_declared' || result.code === 'runtime_not_connected') {
       state.status = 'unavailable';
@@ -387,6 +429,9 @@
 
   function startChannel() {
     teardownChannel();
+    eventRevision = 0;
+    listRevision = 0;
+    taskRevisions.clear();
     tasks.clear();
     reportStates.clear();
     killPending.clear();
@@ -411,6 +456,7 @@
       featureId: FEATURE_ID,
       channelId: CHANNEL_ID,
     });
+    params.set('latest', '1');
     source = new EventSource(`/protoclaw/feature-comms/stream?${params.toString()}`);
     source.addEventListener('open', () => {
       state.status = 'live';
@@ -466,7 +512,7 @@
   }
 
   /**
-   * 面板关闭态的徽标数据源：权威 list 请求面计数运行中任务。面板打开
+   * 面板关闭态的徽标数据源：权威 count 请求面计数运行中任务。面板打开
    * （source 存活）时让位给 SSE 事件流。寻址与面板同源（currentAddressing）：
    * 会话切换即先隐藏，避免旧会话数字滞留；通道未声明 / runtime 未连接
    * （会话无后台任务通道或已停止）归零。
@@ -482,13 +528,11 @@
     }
     badgePollInFlight = true;
     try {
-      const result = await channelRequest('list', {});
-      if (result.ok === true && Array.isArray(result.tasks)) {
-        let running = 0;
-        for (const task of result.tasks) {
-          if (task && task.status === 'running') running += 1;
-        }
-        _setBadge(running);
+      const result = await channelRequest('count', {});
+      const latest = currentAddressing();
+      if (source || key !== (latest ? `${latest.agentId}::${latest.sessionId}` : '')) return;
+      if (result.ok === true && Number.isFinite(result.running)) {
+        _setBadge(result.running);
       } else if (result.code === 'channel_not_declared'
         || result.code === 'runtime_not_connected'
         || result.code === 'runtime_stopped') {

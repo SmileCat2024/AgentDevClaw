@@ -87,10 +87,16 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });
     res.flushHeaders?.();
     const frame = (event) => `id: ${event.eventId}\nevent: ${event.type === 'snapshot' ? 'snapshot' : 'event'}\ndata: ${JSON.stringify(event)}\n\n`;
-    const cursor = Number(req.headers['last-event-id'] ?? req.query?.afterEventId ?? 0);
+    // Live-only subscribers fetch authoritative state via /request list. Avoid
+    // replaying the output ring on every panel open while preserving explicit
+    // cursor-based reconnects (Last-Event-ID takes priority).
+    const latest = req.headers['last-event-id'] === undefined && req.query?.latest === '1';
+    const cursor = latest
+      ? communicationStore.getLastEventId(target)
+      : Number(req.headers['last-event-id'] ?? req.query?.afterEventId ?? 0);
     const snapshot = communicationStore.getSnapshot(target);
     const replay = communicationStore.readEvents(target, cursor);
-    if (snapshot && replay.resync) res.write(`event: resync\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    if (replay.resync) res.write(`event: resync\ndata: ${JSON.stringify(snapshot)}\n\n`);
     else for (const event of replay.events) res.write(frame(event));
     let closed = false;
     const unsubscribe = communicationStore.subscribe(target, (event) => {

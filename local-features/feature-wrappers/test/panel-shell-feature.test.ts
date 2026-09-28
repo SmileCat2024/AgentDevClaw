@@ -56,6 +56,7 @@ function makeRegistry(overrides: Partial<Record<string, unknown>> = {}) {
       return { id: t.id, status: t.status, projected: true };
     },
     list() { return [{ id: 't-list', status: 'running', projected: true }]; },
+    runningCount() { return 2; },
     get(taskId: string) {
       // t-list 同时给出引擎内部任务对象（带 chunks）：面板 list 分支必须经
       // get 拿原始任务再取尾巴——把 list() 的快照当任务传给 tail 属于回归。
@@ -191,6 +192,14 @@ describe('观察事件镜像', () => {
 });
 
 describe('onHostRequest 请求面', () => {
+  it('count：徽标仅拉运行中任务数，不构造输出尾巴', async () => {
+    const feature = makeFeature();
+    const registry = makeRegistry();
+    injectRegistry(feature, registry);
+    assert.deepEqual(await feature.onHostRequest('count', {}), { ok: true, running: 2 });
+    assert.deepEqual(registry.calls.tail, []);
+  });
+
   it('list：快照 + 输出尾巴（尾巴经 get 拿原始任务，快照直接传 tail 会炸）', async () => {
     const feature = makeFeature();
     injectRegistry(feature, makeRegistry());

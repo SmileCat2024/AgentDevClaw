@@ -35,6 +35,48 @@ describe('FeatureCommunicationStore', () => {
     assert.deepEqual(store.readEvents(target, 0), { resync: true, events: [] });
   });
 
+  it('bounds retained event payload bytes as well as event count', () => {
+    const store = new FeatureCommunicationStore({ eventLimit: 256, eventBytesLimit: 250 });
+    store.declareChannel(target);
+    for (let i = 0; i < 10; i++) store.publishEvent(target, 'output', { text: 'x'.repeat(100), i });
+    assert.ok(store.channels.get(JSON.stringify(Object.values(target))).eventBytes <= 250);
+    assert.deepEqual(store.readEvents(target, 0), { resync: true, events: [] });
+    const recent = store.readEvents(target, 9);
+    assert.equal(recent.events.length, 1);
+    assert.equal(recent.events[0].data.i, 9);
+    assert.equal(store.getLastEventId(target), 10);
+  });
+
+  it('drops an oversized event from history but delivers it live and requests resync', () => {
+    const store = new FeatureCommunicationStore({ eventBytesLimit: 100 });
+    store.declareChannel(target);
+    const delivered = [];
+    store.subscribe(target, event => delivered.push(event));
+    const event = store.publishEvent(target, 'output', { text: 'x'.repeat(200) });
+    assert.deepEqual(delivered, [event]);
+    assert.equal(store.channels.get(JSON.stringify(Object.values(target))).eventBytes, 0);
+    assert.deepEqual(store.readEvents(target, 0), { resync: true, events: [] });
+    assert.deepEqual(store.readEvents(target, event.eventId), { resync: false, events: [] });
+  });
+
+  it('keeps busy-session output mirrors bounded across many live channels', () => {
+    const store = new FeatureCommunicationStore();
+    const tail = 'x'.repeat(2_000);
+    for (let session = 0; session < 32; session++) {
+      const address = { ...target, sessionId: `session-${session}` };
+      store.declareChannel(address);
+      for (let event = 0; event < 256; event++) {
+        store.publishEvent(address, 'output', { id: 'bg-1', outputTail: tail });
+      }
+    }
+    assert.equal(store.channels.size, 32);
+    for (const channel of store.channels.values()) {
+      assert.ok(channel.eventBytes <= 256 * 1024);
+      assert.ok(channel.events.length < 256);
+      assert.equal(channel.eventId, 256);
+    }
+  });
+
   it('closes channel state and rejects pending requests when a session runtime stops', async () => {
     const store = new FeatureCommunicationStore();
     store.declareChannel(target);

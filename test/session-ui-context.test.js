@@ -75,7 +75,7 @@ function createCoreContext() {
   vm.createContext(context);
   const cacheBlock = sourceBetween(
     coreSource,
-    'const _agentRuntimeCache = new Map();',
+    'const MAX_CACHED_RUNTIME_VIEWS = 4;',
     '\nfunction getFeatureStatus',
   );
   vm.runInContext(
@@ -89,6 +89,7 @@ globalThis.__uiContext = {
   setViewerSessionBinding,
   saveCurrentRuntimeToCache,
   restoreRuntimeFromCache,
+  cacheKeys: () => [..._agentRuntimeCache.keys()],
 };`,
     context,
   );
@@ -178,6 +179,27 @@ test('optimistic runtime cache restores data by session context', () => {
   assert.equal(api.restoreRuntimeFromCache('runtime-1'), true);
   assert.equal(context.currentMessages[0].content, 'session A');
   assert.equal(context.currentInputRequests[0].requestId, 'request-a');
+});
+
+test('runtime cache retains the most recently visited views without holding every transcript', () => {
+  const context = createCoreContext();
+  const api = context.__uiContext;
+  for (let index = 0; index < 4; index++) {
+    context.currentAgent.workspace_sessions.activeSessionId = `session-${index}`;
+    context.currentMessages = [{ role: 'assistant', content: `message-${index}` }];
+    api.saveCurrentRuntimeToCache('runtime-1');
+  }
+  context.currentAgent.workspace_sessions.activeSessionId = 'session-0';
+  assert.equal(api.restoreRuntimeFromCache('runtime-1'), true);
+  api.saveCurrentRuntimeToCache('runtime-1');
+  context.currentAgent.workspace_sessions.activeSessionId = 'session-4';
+  context.currentMessages = [{ role: 'assistant', content: 'message-4' }];
+  api.saveCurrentRuntimeToCache('runtime-1');
+  assert.equal(api.cacheKeys().length, 4);
+  assert.ok(api.cacheKeys().some(key => key.endsWith('session:session-0')));
+  assert.ok(!api.cacheKeys().some(key => key.endsWith('session:session-1')));
+  context.currentAgent.workspace_sessions.activeSessionId = 'session-1';
+  assert.equal(api.restoreRuntimeFromCache('runtime-1'), false);
 });
 
 test('persistent input render signature changes with session context', () => {

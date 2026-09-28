@@ -1,4 +1,5 @@
 const DEFAULT_EVENT_LIMIT = 256;
+const DEFAULT_EVENT_BYTES_LIMIT = 256 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
 function normalizeTarget(target = {}) {
@@ -23,8 +24,9 @@ function sessionKey(agentId, sessionId) {
 }
 
 export class FeatureCommunicationStore {
-  constructor({ eventLimit = DEFAULT_EVENT_LIMIT, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
+  constructor({ eventLimit = DEFAULT_EVENT_LIMIT, eventBytesLimit = DEFAULT_EVENT_BYTES_LIMIT, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
     this.eventLimit = Math.max(1, Math.floor(eventLimit));
+    this.eventBytesLimit = Math.max(1, Math.floor(eventBytesLimit));
     this.requestTimeoutMs = requestTimeoutMs;
     this.channels = new Map();
     this.declarations = new Map();
@@ -82,7 +84,7 @@ export class FeatureCommunicationStore {
     const key = targetKey(target);
     let channel = this.channels.get(key);
     if (!channel) {
-      channel = { target: normalizeTarget(target), revision: 0, snapshot: null, eventId: 0, events: [] };
+      channel = { target: normalizeTarget(target), revision: 0, snapshot: null, eventId: 0, events: [], eventBytes: 0 };
       this.channels.set(key, channel);
     }
     return channel;
@@ -95,8 +97,7 @@ export class FeatureCommunicationStore {
     channel.snapshot = { revision: channel.revision, data };
     const snapshot = { revision: channel.revision, data };
     const event = { eventId: ++channel.eventId, type: 'snapshot', data: snapshot };
-    channel.events.push(event);
-    if (channel.events.length > this.eventLimit) channel.events.splice(0, channel.events.length - this.eventLimit);
+    this._appendEvent(channel, event);
     this._notify(channel, event);
     return { ...snapshot };
   }
@@ -106,15 +107,28 @@ export class FeatureCommunicationStore {
     return channel?.snapshot ? { ...channel.snapshot } : null;
   }
 
+  getLastEventId(target) {
+    return this.channels.get(targetKey(target))?.eventId ?? 0;
+  }
+
   publishEvent(target, type, data) {
     this._requireDeclared(target);
     if (typeof type !== 'string' || !type.trim()) throw new TypeError('event type is required');
     const channel = this._channel(target);
     const event = { eventId: ++channel.eventId, type: type.trim(), data };
-    channel.events.push(event);
-    if (channel.events.length > this.eventLimit) channel.events.splice(0, channel.events.length - this.eventLimit);
+    this._appendEvent(channel, event);
     this._notify(channel, event);
     return { ...event };
+  }
+
+  _appendEvent(channel, event) {
+    // Live subscribers still receive oversized events, but history stays
+    // within budget; dropped cursors must resync from the feature's state.
+    channel.events.push(event);
+    channel.eventBytes += Buffer.byteLength(JSON.stringify(event), 'utf8');
+    while (channel.events.length > this.eventLimit || channel.eventBytes > this.eventBytesLimit) {
+      channel.eventBytes -= Buffer.byteLength(JSON.stringify(channel.events.shift()), 'utf8');
+    }
   }
 
   readEvents(target, afterEventId = 0) {
@@ -124,8 +138,8 @@ export class FeatureCommunicationStore {
     if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > channel.eventId) {
       return { resync: true, events: [] };
     }
-    const first = channel.events[0]?.eventId;
-    if (first !== undefined && cursor < first - 1) return { resync: true, events: [] };
+    const first = channel.events[0]?.eventId ?? channel.eventId + 1;
+    if (cursor < first - 1) return { resync: true, events: [] };
     return { resync: false, events: channel.events.filter((event) => event.eventId > cursor).map((event) => ({ ...event })) };
   }
 

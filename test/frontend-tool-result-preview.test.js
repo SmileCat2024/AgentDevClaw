@@ -33,6 +33,22 @@ test('long Read shows a bounded preview, expands fully and releases the full bod
   assert.equal(ctx.run('renderToolResultBody("read", template, data, true, args, 3)'), preview);
 });
 
+test('tool-call lookup indexes a long transcript once and retains first matching call', () => {
+  const ctx = createFrontendSandbox();
+  const source = fs.readFileSync(new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
+  vm.runInContext(sourceBetween(source, 'function indexToolCalls(', '// 追加新消息'), ctx);
+  let reads = 0;
+  const messages = Array.from({ length: 400 }, (_, i) => ({
+    get toolCalls() { reads++; return [{ id: `call-${i}`, name: 'read', arguments: { index: i } }]; },
+  }));
+  messages.push({ toolCalls: [{ id: 'call-0', name: 'bash', arguments: {} }] });
+  ctx.messages = messages;
+  const calls = ctx.run('indexToolCalls(messages)');
+  for (let i = 0; i < 400; i++) assert.equal(calls.get(`call-${i}`).arguments.index, i);
+  assert.equal(calls.get('call-0').name, 'read');
+  assert.equal(reads, 400);
+});
+
 test('short Read, directories, errors and other tools retain their complete result', () => {
   const ctx = harness();
   assert.equal(ctx.run('renderToolResultBody("bash", template, data, true, args, 3)'), ctx.data.content);

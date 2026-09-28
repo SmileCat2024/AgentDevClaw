@@ -126,6 +126,59 @@ describe('feature communication routes', () => {
     assert.equal(store.listeners.size, 0);
   });
 
+  it('skips old output on a fresh live-only subscription but replays from an explicit cursor', async (t) => {
+    const app = express();
+    const store = new FeatureCommunicationStore();
+    setupFeatureCommunicationRoutes(app, express, { communicationStore: store });
+    const server = http.createServer(app);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => { server.close(); server.closeAllConnections?.(); });
+    const target = { agentId: 'stream-agent', sessionId: 'stream-session', featureId: 'shell', channelId: 'shell-bg' };
+    store.declareChannel(target);
+    for (let i = 0; i < 256; i++) store.publishEvent(target, 'output', { text: `old-${i}` });
+    const base = `http://127.0.0.1:${server.address().port}/protoclaw/feature-comms/stream?${new URLSearchParams(target)}`;
+    const controller = new AbortController();
+    const response = await fetch(`${base}&latest=1`, { signal: controller.signal });
+    const reader = response.body.getReader();
+    try {
+      const read = reader.read();
+      store.publishEvent(target, 'output', { text: 'new-output' });
+      const frame = new TextDecoder().decode((await read).value);
+      assert.ok(frame.includes('new-output'));
+      assert.ok(!frame.includes('old-255'));
+    } finally {
+      controller.abort();
+      await reader.cancel().catch(() => {});
+    }
+    const replayController = new AbortController();
+    const replay = await fetch(`${base}&latest=1`, { signal: replayController.signal, headers: { 'Last-Event-ID': '255' } });
+    try {
+      const frame = new TextDecoder().decode((await replay.body.getReader().read()).value);
+      assert.ok(frame.includes('old-255'));
+      assert.ok(frame.includes('new-output'));
+    } finally {
+      replayController.abort();
+    }
+  });
+
+  it('requests resync after byte eviction even when no snapshot was published', async (t) => {
+    const app = express();
+    const store = new FeatureCommunicationStore({ eventBytesLimit: 150 });
+    setupFeatureCommunicationRoutes(app, express, { communicationStore: store });
+    const server = http.createServer(app);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => { server.close(); server.closeAllConnections?.(); });
+    const target = { agentId: 'stream-agent', sessionId: 'stream-session', featureId: 'shell', channelId: 'shell-bg' };
+    store.declareChannel(target);
+    for (let i = 0; i < 5; i++) store.publishEvent(target, 'output', { text: 'x'.repeat(100), i });
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/protoclaw/feature-comms/stream?${new URLSearchParams(target)}`, { signal: controller.signal });
+    try {
+      const frame = new TextDecoder().decode((await response.body.getReader().read()).value);
+      assert.ok(frame.includes('event: resync'));
+    } finally { controller.abort(); }
+  });
+
   it('routes panel requests only to the exact session runtime', async () => {
     const app = makeApp();
     const child = new EventEmitter();

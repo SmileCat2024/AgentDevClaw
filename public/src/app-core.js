@@ -783,6 +783,8 @@ let _userExpandedToolCalls = new Set();   // tool call cards the user explicitly
 // ── Per-session runtime data cache (P0: optimistic render on switch) ────────
 // Caches messages, toolRenderConfigs, TOOL_NAMES, hookInspector + signature,
 // overviewSnapshot + signature, and connection status per runtime context.
+// Full transcripts can be large; keep only recently visited views for instant return.
+const MAX_CACHED_RUNTIME_VIEWS = 4;
 const _agentRuntimeCache = new Map();
 const _userCollapseStateByContext = new Map();
 
@@ -1021,6 +1023,8 @@ function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(ag
   const cachedTodoPlan = viewState.todoPlan
     ? viewState.todoPlan
     : getRuntimeCacheTodoPlanFallback();
+  // Map insertion order is the eviction order; refresh it on every write.
+  _agentRuntimeCache.delete(contextKey);
   _agentRuntimeCache.set(contextKey, {
     runtimeId: agentId,
     messages: viewState.messages,
@@ -1049,6 +1053,9 @@ function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(ag
     // the semantic anchor above.
     scrollTop: container ? container.scrollTop : 0,
   });
+  if (_agentRuntimeCache.size > MAX_CACHED_RUNTIME_VIEWS) {
+    _agentRuntimeCache.delete(_agentRuntimeCache.keys().next().value);
+  }
 }
 
 function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agentId)) {

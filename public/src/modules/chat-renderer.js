@@ -278,6 +278,16 @@ function renderMessage(msg, index) {
   `;
 }
 
+function indexToolCalls(messages) {
+  const calls = new Map();
+  for (const message of messages) {
+    for (const call of message.toolCalls || []) {
+      if (!calls.has(call.id)) calls.set(call.id, call);
+    }
+  }
+  return calls;
+}
+
 // 追加新消息（保持现有 DOM 状态）
 function appendNewMessages(newMessages, startIndex) {
   // If the welcome page should be showing (process hidden + no user messages),
@@ -296,6 +306,8 @@ function appendNewMessages(newMessages, startIndex) {
 
   // 获取当前消息数量
   const currentCount = container.querySelectorAll('.message-row').length;
+  const toolCallsById = newMessages.some(msg => msg.role === 'tool')
+    ? indexToolCalls(currentMessages) : null;
 
   newMessages.forEach((msg, i) => {
     const index = startIndex + i;
@@ -308,18 +320,10 @@ function appendNewMessages(newMessages, startIndex) {
       // tool 需要特殊处理，查找对应的 toolCall
       let toolName = null;
       let toolArgs = {};
-      const messages = currentMessages;
-      const toolCallId = msg.toolCallId;
-
-      for (const m of messages) {
-        if (m.toolCalls) {
-          const found = m.toolCalls.find(c => c.id === toolCallId);
-          if (found) {
-            toolName = found.name;
-            toolArgs = found.arguments;
-            break;
-          }
-        }
+      const call = toolCallsById.get(msg.toolCallId);
+      if (call) {
+        toolName = call.name;
+        toolArgs = call.arguments;
       }
 
       const { success, data } = parseToolResult(msg.content, msg.display);
@@ -814,6 +818,8 @@ function render(messages) {
       }
     }
   } catch { /* 分隔条是增强显示，任何失败都不影响消息渲染 */ }
+  const toolCallsById = messages.some(msg => msg.role === 'tool')
+    ? indexToolCalls(messages) : null;
   const html = relaySeparatorHtml + messages.map((msg, index) => {
     const role = msg.role;
     const msgId = `msg-${index}`;
@@ -925,15 +931,10 @@ function render(messages) {
       let toolName = null;
       let toolArgs = {};
       
-      for (const m of messages) {
-        if (m.toolCalls) {
-          const found = m.toolCalls.find(c => c.id === toolCallId);
-          if (found) { 
-            toolName = found.name;
-            toolArgs = found.arguments;
-            break; 
-          }
-        }
+      const call = toolCallsById.get(toolCallId);
+      if (call) {
+        toolName = call.name;
+        toolArgs = call.arguments;
       }
 
       const { success, data } = parseToolResult(msg.content, msg.display);

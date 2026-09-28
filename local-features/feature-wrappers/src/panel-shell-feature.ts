@@ -6,7 +6,7 @@
  * Claw 侧以继承增强并整体替换原版装配。本类不改任务引擎行为，只做两件事：
  * - 把 BgRegistry 六类事件投影为 shell-bg 通道事件（面板经
  *   /protoclaw/feature-comms/stream 订阅渲染）；
- * - 以 onHostRequest 面向面板提供 list / status / kill / report 请求面
+ * - 以 onHostRequest 面向面板提供 count / list / status / kill / report 请求面
  *   （Host 请求经 server → runtime IPC → 此处，见 run-prebuilt-agent.js）。
  *
  * 链路是尽力而为的镜像面：发布失败静默吞掉（bg_status 仍是任务状态真值），
@@ -76,6 +76,8 @@ export class PanelShellFeature extends ShellFeature {
     const body = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
     const taskId = String(body.taskId || '');
     switch (requestType) {
+      case 'count':
+        return { ok: true, running: registry?.runningCount() ?? 0 };
       case 'list':
         return {
           ok: true,
