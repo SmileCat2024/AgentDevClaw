@@ -5925,6 +5925,9 @@ body[data-theme="light"] .plan-task.is-interrupt-target .plan-task-action:hover 
 .settings-flyout-menu.open {
   display: block;
 }
+.settings-flyout-menu .context-menu-item[hidden] {
+  display: none;
+}
 
 header {
   background: var(--glass-bg);

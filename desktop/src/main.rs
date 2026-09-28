@@ -3,8 +3,9 @@
 // 桌面进程启动并观察服务（见 docs/protocols/service-lifecycle.md）：
 //   启动：spawn supervisor，supervisor 只做日志和只读健康探测
 //   就绪：等服务端口可连接后再建窗口，避免 webview 停在连接错误页
-//   退出：窗口关闭 → POST /protoclaw/shutdown 让 server 自主有序关闭；
-//         显式退出等待超时后仅由本桌面宿主清理自己创建的服务子树
+//   关窗：隐藏界面，服务和宿主继续运行，可从系统托盘恢复
+//   退出：用户在设置或托盘选择退出 → server 自主有序关闭；
+//         宿主随 supervisor 退出，显式退出等待超时后清理自己的服务子树
 //
 // 当前为开发切片形态：仓库根取编译期 CARGO_MANIFEST_DIR（CLAW_DESKTOP_ROOT
 // 可指向 pack:desktop 产出的发布树）；Node 优先用发布树 runtime/ 内的随包
@@ -18,6 +19,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 /// 托管目标树：CLAW_DESKTOP_ROOT 显式指定（pack:desktop 产出的发布树）；
@@ -130,22 +133,45 @@ fn request_server_shutdown(port: u16) {
     }
 }
 
+fn show_main_window(handle: &tauri::AppHandle) {
+    if let Some(window) = handle.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .on_window_event(|window, event| {
-            // 退出由主窗口的关闭意图显式裁决，不依赖"最后一个窗口关闭"——
-            // Windows 会向本进程挂靠辅助顶层窗口（IME、ConPTY 的
-            // PseudoConsoleWindow 等），后者存活时 last-window 语义永不触发
-            // （实测：WM_CLOSE 后主窗销毁、进程不退）。exit(0) 走既有
-            // ExitRequested → Exit 清理链。
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if window.label() == "main" {
-                    window.app_handle().exit(0);
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
             }
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            let open = MenuItem::with_id(app, "open", "打开工作台", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出程序", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let icon = app.default_window_icon().expect("desktop icon").clone();
+            TrayIconBuilder::new()
+                .icon(icon)
+                .tooltip("Agent 工作台")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|handle, event| match event.id().as_ref() {
+                    "open" => show_main_window(handle),
+                    "quit" => handle.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
             let port = service_port();
             let supervisor: Mutex<Option<Child>> = Mutex::new(match spawn_supervisor() {
                 Ok(child) => Some(child),
@@ -155,6 +181,22 @@ fn main() {
                 }
             });
             app.manage(supervisor);
+            let watcher = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_millis(500));
+                let state = watcher.state::<Mutex<Option<Child>>>();
+                let finished = {
+                    let mut guard = state.lock().unwrap();
+                    match guard.as_mut() {
+                        Some(child) => matches!(child.try_wait(), Ok(Some(_))),
+                        None => true,
+                    }
+                };
+                if finished {
+                    watcher.exit(0);
+                    break;
+                }
+            });
 
             // 窗口创建必须经事件循环（AppHandle 代理）投递；在 run() 启动前的
             // 主线程上直接 build 会因 WebView2 初始化等不到循环分发而挂死（实测）。
@@ -162,6 +204,15 @@ fn main() {
                 if !wait_service_ready(port, Duration::from_secs(15)) {
                     eprintln!("[claw-desktop] service not ready on port {port} after 15s, opening window anyway");
                 }
+                let state = handle.state::<Mutex<Option<Child>>>();
+                let finished = {
+                    let mut guard = state.lock().unwrap();
+                    match guard.as_mut() {
+                        Some(child) => matches!(child.try_wait(), Ok(Some(_))),
+                        None => true,
+                    }
+                };
+                if finished { return; }
                 let url: tauri::Url = format!("http://127.0.0.1:{port}/")
                     .parse()
                     .expect("service url");
@@ -188,6 +239,9 @@ fn main() {
             let Some(mut child) = guard.lock().unwrap().take() else {
                 return;
             };
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return; // 服务已退出，不向可能占用该端口的其他实例发停机请求
+            }
             request_server_shutdown(port);
             let deadline = Instant::now() + supervisor_grace();
             while Instant::now() < deadline {
