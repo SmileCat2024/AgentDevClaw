@@ -12,6 +12,12 @@ AgentDevClaw 充分发挥 AgentDev 框架的 **Feature 机制**：每个 Agent �
 
 AgentDevClaw 是一个以 Agent 为中心的，可扩展的工作台架构，整合配置、会话、调度、协作等多重职责，目标是让agent搭建与管理更加灵活，构建完全透明与可信任的运行过程。它本身也是一个持续迭代的项目，我们会充分发挥其架构优势，不断测试、推出新的 Agent 交互范式。
 
+## 桌面安装包（Windows）
+
+仓库根目录双击 `构建桌面安装包.cmd`：先组装并冒烟验证随包服务，再编译桌面 exe、生成 NSIS 安装器。构建机需要 Node.js/npm、Rust/Cargo、Tauri CLI，以及相邻的 AgentDev 框架源码仓库；首次运行会下载 pinned Node/npm 和构建工具。构建入口会打包当前工作区内容，包括未提交改动。完成后窗口会打印安装器路径（`desktop/target/release/bundle/nsis/*-setup.exe`）。如果只在最后的安装器生成阶段失败，可运行 `构建桌面安装包.cmd --bundle-only`，复用已完成的 staging 和桌面 exe；若固定名称的安装器被占用，脚本会把新安装器另存为带时间戳的文件。
+
+安装器双击后进入安装向导；已安装的桌面版和 `npm start` 共用用户数据与默认端口，使用前须退出另一实例。
+
 ## 快速开始
 
 **前置要求：** Node.js >= 20

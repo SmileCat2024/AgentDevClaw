@@ -166,9 +166,11 @@ fn main() {
                     .parse()
                     .expect("service url");
                 if let Err(err) = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(url))
-                    .title("AgentDevClaw")
+                    .title("Agent 工作台")
                     .inner_size(1600.0, 1000.0)
                     .min_inner_size(1100.0, 700.0)
+                    .maximized(true)
+                    .disable_drag_drop_handler()
                     .build()
                 {
                     eprintln!("[claw-desktop] failed to create main window: {err}");

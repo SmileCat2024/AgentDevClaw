@@ -7,7 +7,7 @@
 //     仓库构建后各包 npm pack 出 tgz，staging 以 file:vendor/*.tgz 实体安装
 //     （npm 对 tgz 无 junction 语义，与 registry 实体等价）。
 //
-// 组装步骤：框架构建 → git archive 干净源码树 → 18 包 tgz + 声明改写
+// 组装步骤：框架构建 → 工作区现状导出 → 18 包 tgz + 声明改写
 // （根 dependencies 与 features/* 子包的 core devDep）→ 干净 install →
 // 构建 local-features / features → 无损瘦身（剥离构建期依赖）→ 拷贝
 // node.exe → 隔离端口冒烟（health ready → POST shutdown → 进程退出）。
@@ -23,6 +23,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync,
 import { createHash } from 'crypto';
 import { dirname, join, resolve } from 'path';
 import { spawn, spawnSync } from 'child_process';
+import { createServer } from 'net';
 import { fileURLToPath } from 'url';
 import { FEATURE_DIRS } from './prebuilt-feature-dirs.mjs';
 import { killProcessTree } from '../server/shared/process-tree.js';
@@ -56,6 +57,35 @@ function tgzFileName(name, version) {
   return `agentdevjs-${name.slice('@agentdevjs/'.length)}-${version}.tgz`;
 }
 
+// 工作区现状导出（替代 git archive）：清单 = 已跟踪文件（以工作区内容为准，
+// 已删除的跳过）+ 未被 .gitignore 排除的未跟踪文件。node_modules / 开发
+// lock / dist 等 ignore 内容天然不进包（staging 自身在 dist/ 下，无自拷风险）。
+function exportWorkingTree(destDir) {
+  const res = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+    cwd: root,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (res.status !== 0) {
+    console.error(`[pack:desktop] git ls-files 失败: ${res.stderr}`);
+    process.exit(1);
+  }
+  const files = res.stdout.toString('utf8').split('\0').filter(Boolean);
+  let copied = 0;
+  for (const rel of files) {
+    const src = join(root, rel);
+    if (!existsSync(src)) continue;
+    const dest = join(destDir, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    copyFileSync(src, dest);
+    copied += 1;
+  }
+  if (copied === 0) {
+    console.error('[pack:desktop] 工作区导出结果为空，疑似不在仓库根执行');
+    process.exit(1);
+  }
+  log(`源码树导出: ${copied} 个文件（工作区现状，含未提交改动）`);
+}
+
 async function main() {
   if (!existsSync(join(frameworkRoot, 'package.json'))) {
     console.error(`[pack:desktop] 未找到框架仓库: ${frameworkRoot}（可用 AGENTDEV_LOCAL_PATH 指定）`);
@@ -70,11 +100,11 @@ async function main() {
     log('跳过框架仓库构建（--skip-framework-build）');
   }
 
-  // 2. 干净 staging：git archive 只带已提交内容（开发 lock 与未提交改动天然排除）
+  // 2. staging：导出工作区现状（未提交改动与未跟踪新文件直接进包，不与 git 较劲）
   rmSync(stagingDir, { recursive: true, force: true });
   mkdirSync(stagingDir, { recursive: true });
   log(`staging: ${stagingDir}`);
-  runShell(`git archive HEAD | tar -x -C dist/desktop-staging`, root, '源码树导出');
+  exportWorkingTree(stagingDir);
 
   // 3. 依赖清单（来自 staging 的根声明，与开发树同源）
   const stagingPkgPath = join(stagingDir, 'package.json');
@@ -305,17 +335,30 @@ async function provisionPinnedNpm(runtimeDir) {
   log(`npm runtime: ${PINNED_NPM_VERSION} (pinned) -> runtime/npm/（${files} 个文件）`);
 }
 
+async function findFreePort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address();
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return port;
+}
+
 async function smoke(staging, nodeBin) {
-  log('冒烟启动（隔离端口 1421/2027）');
+  const port = await findFreePort();
+  const viewerPort = await findFreePort();
+  log(`冒烟启动（隔离端口 ${port}/${viewerPort}）`);
   const smokeData = join(staging, '.smoke-data');
   rmSync(smokeData, { recursive: true, force: true });
   const child = spawn(nodeBin, ['scripts/run-supervised.js'], {
     cwd: staging,
     env: {
       ...process.env,
-      PORT: '1421',
-      AGENTDEV_VIEWER_PORT: '2027',
-      AGENTDEV_UDS_PATH: '\\\\.\\pipe\\agentdev-viewer-smoke',
+      PORT: String(port),
+      AGENTDEV_VIEWER_PORT: String(viewerPort),
+      AGENTDEV_UDS_PATH: `\\\\.\\pipe\\agentdev-viewer-smoke-${process.pid}`,
       AGENTDEV_DATA_DIR: smokeData,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -330,7 +373,7 @@ async function smoke(staging, nodeBin) {
     let ready = false;
     while (Date.now() < deadline) {
       try {
-        const res = await fetch('http://127.0.0.1:1421/protoclaw/health', { signal: AbortSignal.timeout(1500) });
+        const res = await fetch(`http://127.0.0.1:${port}/protoclaw/health`, { signal: AbortSignal.timeout(1500) });
         if (res.ok) { ready = true; break; }
       } catch { /* 启动期未就绪，继续等 */ }
       if (child.exitCode !== null) break;
@@ -339,9 +382,9 @@ async function smoke(staging, nodeBin) {
     if (!ready) throw new Error(`health 未就绪\n--- supervisor 输出（尾 2000 字）---\n${out.slice(-2000)}`);
     log('health ready');
 
-    await fetch('http://127.0.0.1:1421/protoclaw/shutdown', {
+    await fetch(`http://127.0.0.1:${port}/protoclaw/shutdown`, {
       method: 'POST',
-      headers: { Origin: 'http://127.0.0.1:1421' },
+      headers: { Origin: `http://127.0.0.1:${port}` },
       signal: AbortSignal.timeout(3000),
     }).catch(() => {});
     const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r(null), 15_000))]);
