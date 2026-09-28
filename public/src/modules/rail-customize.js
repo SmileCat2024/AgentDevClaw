@@ -25,16 +25,27 @@
 
   // ── 面板清单（单一真相：Claw 面板注册表） ─────────────
 
-  /** 可自定义面板 = 已注册且 rail 上有按钮的面板（注册顺序 = 默认顺序） */
+  var CUSTOMIZABLE_PANEL_ORDER = [
+    'workspace', 'plan', 'session-controls', 'git', 'bg', 'genui', 'hooks',
+    'inspector', 'logs', 'monitor', 'mcp', 'settings', 'threads', 'resources', 'viewer',
+  ];
+
+  var DEFAULT_HIDDEN_PANEL_IDS = ['workspace', 'monitor', 'mcp', 'settings', 'threads', 'resources', 'viewer'];
+
+  function isDefaultVisible(id) {
+    return DEFAULT_HIDDEN_PANEL_IDS.indexOf(id) === -1;
+  }
+
+  /** 可自定义面板仅限右侧栏主面板清单，并按默认顺序排列。 */
   function getCustomizableIds() {
     var panels = (window.ClawPanels && typeof window.ClawPanels.getAll === 'function')
       ? window.ClawPanels.getAll()
       : [];
-    return panels
-      .filter(function (panel) {
-        return !!document.querySelector('.rail-button[data-panel="' + panel.id + '"]');
-      })
-      .map(function (panel) { return panel.id; });
+    var registered = {};
+    panels.forEach(function (panel) { registered[panel.id] = true; });
+    return CUSTOMIZABLE_PANEL_ORDER.filter(function (id) {
+      return registered[id] && !!document.querySelector('.rail-button[data-panel="' + id + '"]');
+    });
   }
 
   // ── 辅助函数 ──────────────────────────────────────────
@@ -59,7 +70,7 @@
   }
 
   function getDefaultConfig() {
-    return getCustomizableIds().map(function (id) { return { id: id, visible: true }; });
+    return getCustomizableIds().map(function (id) { return { id: id, visible: isDefaultVisible(id) }; });
   }
 
   /** 旧面板 ID → 新面板 ID（重命名时保留用户已有排序与可见性） */
@@ -90,7 +101,7 @@
         valid.push({ id: item.id, visible: item.visible !== false });
       });
       customizable.forEach(function (id) {
-        if (!seen[id]) valid.push({ id: id, visible: true });
+        if (!seen[id]) valid.push({ id: id, visible: isDefaultVisible(id) });
       });
       return valid;
     } catch (e) {

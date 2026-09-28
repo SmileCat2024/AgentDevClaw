@@ -59,19 +59,37 @@ function createRailSandbox(harness, overrides = {}) {
       label: { zh: '会话控制', en: 'Session Controls' },
       render: () => '',
     });
+    window.ClawPanels.register('unlisted', {
+      label: { zh: '不进入自定义清单', en: 'Not customizable' },
+      render: () => '',
+    });
   `);
   ctx.loadSource('public/src/modules/rail-customize.js');
   return ctx;
 }
 
 describe('rail customize derives its panel list from the registry', () => {
-  it('lists registered panels that have a rail button, in registration order', () => {
-    const harness = buildRailDom(['workspace', 'monitor', 'genui', null]);
+  it('lists only allowed registered panels in the defined default order', () => {
+    const harness = buildRailDom(['monitor', 'genui', 'workspace', 'unlisted', null]);
     const ctx = createRailSandbox(harness);
 
     assert.deepEqual(
       JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.getCustomizableIds()'))),
-      ['workspace', 'monitor', 'genui'],
+      ['workspace', 'genui', 'monitor'],
+    );
+  });
+
+  it('uses the requested initial visibility defaults', () => {
+    const harness = buildRailDom(['workspace', 'monitor', 'genui', 'unlisted']);
+    const ctx = createRailSandbox(harness);
+
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
+      [
+        { id: 'workspace', visible: false },
+        { id: 'genui', visible: true },
+        { id: 'monitor', visible: false },
+      ],
     );
   });
 
@@ -87,7 +105,7 @@ describe('rail customize derives its panel list from the registry', () => {
       JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
       [
         { id: 'monitor', visible: false },
-        { id: 'workspace', visible: true },
+        { id: 'workspace', visible: false },
         { id: 'genui', visible: true },
       ],
     );
@@ -104,7 +122,7 @@ describe('rail customize derives its panel list from the registry', () => {
       JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
       [
         { id: 'session-controls', visible: false },
-        { id: 'workspace', visible: true },
+        { id: 'workspace', visible: false },
       ],
     );
   });
