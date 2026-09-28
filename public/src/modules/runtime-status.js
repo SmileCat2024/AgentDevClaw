@@ -1195,9 +1195,13 @@ function updateNotificationStatus(notifData) {
 
   if (type === 'call.start') {
     _syncPersistentActionButton();
-    // 唤醒轮开始：挂起等待指示块的残留数据源到此为止，运行态由后续表达性
-    // 帧（llm.char_count 等）重建，避免"等待后台任务"文案跨入新一轮运行
-    _lastRenderedNotificationRuntime = null;
+    // 唤醒轮开始：挂起等待指示块的残留数据源到此为止，等待文案不跨入运行轮。
+    // 只清挂起残留——正常运行轮首轮的 awaiting_runtime 快照已在上方
+    // shouldShowStatus 分支写入，无条件清空会让指示块在 call.start 到首个
+    // 表达性帧之间消失，用户输入后的"等待响应…"不再立即显示。
+    if (_lastRenderedNotificationRuntime?.suspended) {
+      _lastRenderedNotificationRuntime = null;
+    }
     ensureChatRuntimeIndicator();
     return;
   }

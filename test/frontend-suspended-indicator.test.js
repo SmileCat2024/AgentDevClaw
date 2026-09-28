@@ -101,6 +101,35 @@ function wakeLlmCompletePayload() {
   };
 }
 
+// 正常运行轮首轮：用户输入触发的 call.start，无挂起残留
+function normalStartPayload() {
+  const startAt = Date.now() - 500;
+  return {
+    state: { type: 'call.start', timestamp: startAt, data: {} },
+    event: null,
+    runtime: {
+      callActive: true, stage: 'awaiting_runtime', updatedAt: startAt, callStartedAt: startAt,
+      lastOutcome: null,
+    },
+    callActive: true,
+  };
+}
+
+// 唤醒轮聚合边沿：state 已是 call.start，但 runtime 快照尚未翻转 calling
+//（callActive=false），lastOutcome 残留挂起值
+function wakeStartCoalescedPayload() {
+  const startAt = Date.now() - 500;
+  return {
+    state: { type: 'call.start', timestamp: startAt, data: {} },
+    event: null,
+    runtime: {
+      callActive: false, stage: 'cancelled', updatedAt: startAt, callStartedAt: startAt,
+      lastOutcome: { status: 'continued', reason: 'suspended' },
+    },
+    callActive: false,
+  };
+}
+
 function completedFinishPayload() {
   const finishAt = Date.now() - 100;
   return {
@@ -197,11 +226,49 @@ describe('挂起等待：对话区指示块（ADR-0019）', () => {
     assert.equal(ctx.run('_lastRenderedNotificationRuntime'), null, '摘要窗口外清空');
   });
 
-  it('唤醒轮 call.start：挂起指示块数据源立即终止，等待文案不跨入运行轮', () => {
+  it('唤醒轮 call.start：挂起等待立即终止，指示块切换为运行态', () => {
     ctx.run(`updateNotificationStatus(${JSON.stringify(suspendedFinishPayload())})`);
     assert.ok(ctx.run('_lastRenderedNotificationRuntime'), '先处于挂起等待态');
     ctx.run(`updateNotificationStatus(${JSON.stringify(wakeStartPayload())})`);
-    assert.equal(ctx.run('_lastRenderedNotificationRuntime'), null, 'call.start 清空数据源');
+    const rt = ctx.run('_lastRenderedNotificationRuntime');
+    assert.ok(rt, 'call.start 后运行态数据源存在（首轮等待指示随 call.start 显示）');
+    assert.equal(rt.suspended, false, '挂起标志终止');
+    assert.equal(rt.stage, 'awaiting_runtime');
+    const content = ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)');
+    assert.ok(content.main.includes('等待响应'), `显示运行等待态: ${content.main}`);
+    assert.ok(!content.main.includes('等待后台任务'), '等待后台任务文案不跨入运行轮');
+  });
+
+  it('唤醒轮聚合边沿（call.start + 快照 callActive=false + 挂起残留）：数据源清空', () => {
+    ctx.run(`updateNotificationStatus(${JSON.stringify(suspendedFinishPayload())})`);
+    assert.ok(ctx.run('_lastRenderedNotificationRuntime'), '先处于挂起等待态');
+    ctx.run(`updateNotificationStatus(${JSON.stringify(wakeStartCoalescedPayload())})`);
+    assert.equal(ctx.run('_lastRenderedNotificationRuntime'), null,
+      '挂起残留数据源终止，等待后台任务文案不跨入运行轮');
+  });
+
+  it('正常运行轮首轮：call.start 后等待指示立即可见（回归）', () => {
+    // 用户输入触发的第一个事件就是 call.start：此前实现无条件清空数据源，
+    // 指示块要等首个 llm.char_count 才恢复，首轮"等待响应…"消失
+    ctx.run(`updateNotificationStatus(${JSON.stringify(normalStartPayload())})`);
+    const rt = ctx.run('_lastRenderedNotificationRuntime');
+    assert.ok(rt, '首轮数据源存在');
+    assert.equal(rt.stage, 'awaiting_runtime');
+    assert.equal(rt.suspended, false);
+    const content = ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)');
+    assert.ok(content.main.includes('等待响应'), `首轮显示等待响应: ${content.main}`);
+  });
+
+  it('上一 call 真完成后新 call.start：等待指示随新一轮立即显示', () => {
+    const staleFinish = completedFinishPayload();
+    staleFinish.runtime.updatedAt = Date.now() - 2000;
+    ctx.run(`updateNotificationStatus(${JSON.stringify(staleFinish)})`);
+    assert.equal(ctx.run('_lastRenderedNotificationRuntime'), null, '上一轮数据源已清空');
+    ctx.run(`updateNotificationStatus(${JSON.stringify(normalStartPayload())})`);
+    const rt = ctx.run('_lastRenderedNotificationRuntime');
+    assert.ok(rt, '新 call 首轮数据源立即建立');
+    assert.equal(rt.stage, 'awaiting_runtime');
+    assert.ok(ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)').main.includes('等待响应'));
   });
 
   it('唤醒轮表达性帧（lastOutcome 残留旧挂起值）：suspended 不误置位', () => {
