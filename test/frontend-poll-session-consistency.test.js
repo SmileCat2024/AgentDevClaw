@@ -180,6 +180,16 @@ function createPollSandbox({ blockStatus = true } = {}) {
         requests: sandbox.currentInputRequests.map((item) => item.requestId),
       });
     },
+    updateInputModelSwitcher: () => events.push({
+      kind: 'model-render',
+      runtime: sandbox.currentRuntimeAgentId,
+      model: sandbox.currentOverviewSnapshot?.modelName,
+    }),
+    updateThinkingEffortSwitcher: () => events.push({
+      kind: 'thinking-render',
+      runtime: sandbox.currentRuntimeAgentId,
+      effort: sandbox.currentOverviewSnapshot?.thinkingEffort,
+    }),
     normalizeTodoPlan: (value) => value,
     getTodoPlanSignature: (value) => JSON.stringify(value),
     setCurrentTodoPlan: (value) => {
@@ -431,6 +441,37 @@ test('poll metadata render observes one overview and input generation', async ()
   });
 });
 
+test('overview updates refresh the composer in the same committed view', () => {
+  const harness = createPollSandbox({ blockStatus: false });
+  const overview = {
+    modelName: 'new-model',
+    thinkingEffort: 'high',
+    usageStats: { lastRequestUsage: { inputTokens: 42 } },
+  };
+  assert.equal(harness.sandbox.commitMetadataUpdate(
+    harness.sandbox.captureSessionViewToken('A'), { overviewJson: overview },
+  ), true);
+  assert.deepEqual(harness.events.map(({ kind }) => kind), [
+    'usage-render', 'model-render', 'thinking-render',
+  ]);
+  assert.equal(harness.events[1].model, 'new-model');
+  assert.equal(harness.events[2].effort, 'high');
+
+  harness.events.length = 0;
+  harness.sandbox.commitMetadataUpdate(
+    harness.sandbox.captureSessionViewToken('A'), { overviewJson: overview },
+  );
+  assert.deepEqual(harness.events, [], 'unchanged overview should not repaint the composer');
+
+  harness.sandbox.currentRuntimeAgentId = 'B';
+  harness.sandbox._switchEpoch += 1;
+  harness.events.length = 0;
+  assert.equal(harness.sandbox.commitMetadataUpdate(
+    { runtimeId: 'A', switchEpoch: 1 }, { overviewJson: { modelName: 'stale' } },
+  ), false);
+  assert.deepEqual(harness.events, [], 'stale overview cannot update the new session');
+});
+
 test('loadAgentData discards response bodies that finish after a newer switch', async () => {
   const toolsBarrier = createDeferred();
   const renders = [];
@@ -528,6 +569,64 @@ test('loadAgentData discards response bodies that finish after a newer switch', 
   assert.equal(sandbox.currentMessages[0].content, 'B');
   assert.deepEqual(sandbox.currentInputRequests.map((item) => item.requestId), ['choice-b']);
   assert.deepEqual(renders, []);
+});
+
+test('loadAgentData refreshes composer metadata after committing the initial overview', async () => {
+  const renders = [];
+  const sandbox = {
+    console,
+    Promise,
+    focusedAgentId: 'programming-helper',
+    currentRuntimeAgentId: 'A',
+    currentRuntimeConnected: true,
+    currentMessages: [],
+    currentInputRequests: [],
+    currentOverviewSnapshot: {},
+    currentTodoPlan: {},
+    currentHookInspector: {},
+    toolRenderConfigs: {},
+    TOOL_NAMES: {},
+    activeFeaturePanel: null,
+    _switchEpoch: 1,
+    _lastTemplateRuntimeId: 'A',
+    _lastCallFinishTime: 0,
+    _runCapsuleStartAt: 0,
+    _runCapsuleStartConfirmed: false,
+    _currentRecapText: '',
+    _recapPendingTrigger: false,
+    window: { lastInputRequests: [] },
+    isUiOnlyAgentId: () => false,
+    resetRuntimeStatusForSwitch: () => {},
+    activateUserCollapseStateForContext: () => {},
+    getRuntimeContextKey: (id) => `runtime:${id}`,
+    loadFeatureTemplateMap: async () => {},
+    clearFeatureTemplateCache: () => {},
+    loadAgentDetail: async () => {},
+    fetch: async (url) => ({
+      ok: true,
+      json: async () => String(url).endsWith('/overview')
+        ? { modelName: 'initial-model', thinkingEffort: 'high' }
+        : String(url).endsWith('/messages') ? { messages: [] } : [],
+    }),
+    getEmptyTodoPlan: () => ({}),
+    setCurrentHookInspector: (value) => { sandbox.currentHookInspector = value; },
+    setCurrentOverviewSnapshot: (value) => { sandbox.currentOverviewSnapshot = value; },
+    setCurrentTodoPlan: (value) => { sandbox.currentTodoPlan = value; },
+    recheckAutoTitleCandidate: () => {},
+    notifyInputSurfaceChanged: () => {},
+    updateRollbackActionVisibility: () => {},
+    renderCurrentMainView: () => renders.push('main'),
+    updateInputModelSwitcher: () => renders.push(sandbox.currentOverviewSnapshot.modelName),
+    updateThinkingEffortSwitcher: () => renders.push(sandbox.currentOverviewSnapshot.thinkingEffort),
+    refreshCurrentRuntimeStatus: async () => {},
+    renderFeaturePanel: () => {},
+    collectTemplateNames: () => [],
+    warmTemplatesInBackground: () => {},
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(`${sessionViewStateSource}\n${extractLoadAgentDataSource()}\nglobalThis.__load = loadAgentData;`, sandbox);
+  await sandbox.__load('A');
+  assert.deepEqual(renders, ['main', 'initial-model', 'high']);
 });
 
 test('runtime-aware session projection uses the selected runtime session over stale host active metadata', () => {

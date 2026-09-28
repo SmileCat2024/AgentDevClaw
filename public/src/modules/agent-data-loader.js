@@ -142,6 +142,8 @@ async function loadAgentData(agentId) {
       notifyInputSurfaceChanged(current.inputRequests);
       updateRollbackActionVisibility();
       renderCurrentMainView(current);
+      if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
+      if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
     });
     if (!committed) {
       return;

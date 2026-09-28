@@ -1201,6 +1201,8 @@ function commitMetadataUpdate(pollToken, { todoRaw, overviewJson, inputRequestsR
       if (typeof updateChatContextBar === 'function') {
         updateChatContextBar(current);
       }
+      if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
+      if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
     }
     if (todoChanged) {
       if (activeFeaturePanel === 'plan') {
