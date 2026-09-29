@@ -1054,7 +1054,18 @@ function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(ag
     scrollTop: container ? container.scrollTop : 0,
   });
   if (_agentRuntimeCache.size > MAX_CACHED_RUNTIME_VIEWS) {
-    _agentRuntimeCache.delete(_agentRuntimeCache.keys().next().value);
+    const evictedContextKey = _agentRuntimeCache.keys().next().value;
+    _agentRuntimeCache.delete(evictedContextKey);
+    // 同 key 的旁路 per-context 状态联动淘汰：runtime 视图缓存被 LRU 淘汰的
+    // context 不再有恢复入口，其折叠偏好与视口锚点若不一起释放，会随会话
+    // 创建（context key 含 sessionId）无界累积。当前活跃 context 例外——
+    // 它的折叠状态正被全局 Set 引用、锚点随时会被读取恢复。
+    if (evictedContextKey && evictedContextKey !== getUserCollapseStateContextKey()) {
+      _userCollapseStateByContext.delete(evictedContextKey);
+      if (typeof forgetChatViewportAnchorForContext === 'function') {
+        forgetChatViewportAnchorForContext(evictedContextKey);
+      }
+    }
   }
 }
 

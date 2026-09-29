@@ -491,6 +491,13 @@ function getRememberedChatViewportAnchorForContext(contextKey = getChatViewportC
   return chatViewportAnchorByContext.get(contextKey) || null;
 }
 
+// runtime 视图缓存 LRU 淘汰时联动释放对应 context 的锚点（app-core.js
+// saveCurrentRuntimeToCache 调用；活跃 context 由调用方排除）。
+function forgetChatViewportAnchorForContext(contextKey) {
+  if (!contextKey) return;
+  chatViewportAnchorByContext.delete(contextKey);
+}
+
 // Session/tab switches also capture synchronously at the cache boundary.
 // During scrolling, wait for a pause before scanning rows and reading geometry.
 let chatViewportAnchorSaveTimer = null;

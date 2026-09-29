@@ -1312,6 +1312,15 @@ function _renderChart(def) {
   // 沙箱/老环境缺 API 时保留首版 400 兜底绘制。
   if (typeof ResizeObserver === 'function') {
     const observer = new ResizeObserver((entries) => {
+      // 面板侧（generative-ui-panel）每次重建都整体替换 mount 内容，旧图表
+      // DOM 一旦脱离文档就永远不会挂回；而 observer 对 target 持强引用，
+      // 不自断会把整棵 SVG 子树一起钉在内存里线性累积。脱离文档即释放。
+      // 严格比较 false：浏览器中 isConnected 恒为 boolean；undefined 出现在
+      // 简化 DOM stub（旧测试沙箱）里，此时保持旧行为不误断。
+      if (el.isConnected === false) {
+        observer.disconnect();
+        return;
+      }
       const rect = entries && entries[0] && entries[0].contentRect;
       const w = rect && rect.width > 0 ? rect.width : 0;
       if (w > 0 && Math.abs(w - state.width) > 1) {
