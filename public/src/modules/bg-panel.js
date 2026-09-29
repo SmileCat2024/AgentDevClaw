@@ -17,8 +17,11 @@
  *
  * 图标徽标（rail-bg-badge，与「交互页面」徽标同款）：显示当前运行中的
  * 后台任务数。面板打开时由 SSE 事件流（tasks 真值）驱动；面板关闭时由
- * 独立的 3s 轮询驱动——直接走权威的 count 请求面（不拉输出或重放：
- * 活动会话的事件缓冲会频繁滚动，徽标只需要运行中数量）。
+ * 独立的 3s 轮询驱动——先查 channels 列表（恒 200）确认会话声明了
+ * shell-bg 通道，有才走权威的 count 请求面（不拉输出或重放：活动会话
+ * 的事件缓冲会频繁滚动，徽标只需要运行中数量）。无通道会话（coder /
+ * 其他工作空间 / 已停止）不发 count——空态 RPC 必 404，浏览器对非 2xx
+ * 的网络层日志无法从 JS 抑制（对齐 genui 徽标打列表端点的先例）。
  * 两条路径互斥不双写（source 存活时轮询让位）。
  *
  * 视觉对齐右侧面板既有设计语言（feature-panel-section 卡片、
@@ -450,35 +453,6 @@
     state.status = 'connecting';
     repaint();
 
-    const params = new URLSearchParams({
-      agentId: state.agentId,
-      sessionId: state.sessionId,
-      featureId: FEATURE_ID,
-      channelId: CHANNEL_ID,
-    });
-    params.set('latest', '1');
-    source = new EventSource(`/protoclaw/feature-comms/stream?${params.toString()}`);
-    source.addEventListener('open', () => {
-      state.status = 'live';
-      void refreshList();
-      repaint();
-    });
-    source.addEventListener('event', (e) => handleStreamEvent(e.data));
-    source.addEventListener('resync', () => { void refreshList(); });
-    source.addEventListener('closed', () => {
-      state.status = 'closed';
-      teardownChannel();
-      repaint();
-    });
-    source.addEventListener('error', () => {
-      // 连接失败（如 404 channel_not_declared）：降级提示，等待会话切换重试。
-      if (state.status !== 'live') {
-        state.status = 'unavailable';
-        teardownChannel();
-        repaint();
-      }
-    });
-
     // 会话切换守卫：面板常开时，焦点会话变了就重订通道（对齐面板寻址纪律）；
     // 面板被取消激活（如切出 chat 表面）时自动拆通道，不留隐藏订阅。
     sessionWatchTimer = setInterval(() => {
@@ -491,6 +465,54 @@
         startChannel();
       }
     }, REFRESH_SESSION_WATCH_MS);
+
+    // 能力发现先行：无 shell-bg 通道的会话（coder / 其他工作空间 / 已停止）
+    // 不建 EventSource——空态 stream 必 404，浏览器网络层日志无法从 JS 抑制。
+    // channels 列表恒 200；发现期间面板被关 / 会话切换由 generation 守卫兜住。
+    // 查询本身失败（网络异常）时按已声明处理，让订阅走既有的错误降级路径。
+    const generation = channelGeneration;
+    void (async () => {
+      let declared = true;
+      try {
+        const channels = await window.ClawFeatureCommunication.listChannels(addressing.agentId, addressing.sessionId);
+        declared = channels.some((channel) => channel?.featureId === FEATURE_ID && channel?.channelId === CHANNEL_ID);
+      } catch { /* keep declared */ }
+      if (generation !== channelGeneration) return;
+      if (!declared) {
+        state.status = 'unavailable';
+        repaint();
+        return;
+      }
+      const params = new URLSearchParams({
+        agentId: state.agentId,
+        sessionId: state.sessionId,
+        featureId: FEATURE_ID,
+        channelId: CHANNEL_ID,
+      });
+      params.set('latest', '1');
+      source = new EventSource(`/protoclaw/feature-comms/stream?${params.toString()}`);
+      source.addEventListener('open', () => {
+        state.status = 'live';
+        void refreshList();
+        repaint();
+      });
+      source.addEventListener('event', (e) => handleStreamEvent(e.data));
+      source.addEventListener('resync', () => { void refreshList(); });
+      source.addEventListener('closed', () => {
+        state.status = 'closed';
+        teardownChannel();
+        repaint();
+      });
+      source.addEventListener('error', () => {
+        // 连接失败（网络层异常 / 订阅中途服务不可达）：降级提示，等待会话
+        // 切换重试。channel_not_declared 已由发现步前置过滤，不再走此分支。
+        if (state.status !== 'live') {
+          state.status = 'unavailable';
+          teardownChannel();
+          repaint();
+        }
+      });
+    })();
   }
 
   // ── 图标徽标（运行中任务数）──────────────────────────────────────
@@ -512,10 +534,11 @@
   }
 
   /**
-   * 面板关闭态的徽标数据源：权威 count 请求面计数运行中任务。面板打开
-   * （source 存活）时让位给 SSE 事件流。寻址与面板同源（currentAddressing）：
-   * 会话切换即先隐藏，避免旧会话数字滞留；通道未声明 / runtime 未连接
-   * （会话无后台任务通道或已停止）归零。
+   * 面板关闭态的徽标数据源：channels 列表确认 shell-bg 已声明后，权威
+   * count 请求面计数运行中任务。面板打开（source 存活）时让位给 SSE
+   * 事件流。寻址与面板同源（currentAddressing）：会话切换即先隐藏，
+   * 避免旧会话数字滞留；通道未声明 / runtime 未连接（会话无后台任务
+   * 通道或已停止）归零。
    */
   async function _pollBadge() {
     if (badgePollInFlight || source) return;
@@ -528,13 +551,23 @@
     }
     badgePollInFlight = true;
     try {
-      const result = await channelRequest('count', {});
+      // 能力发现先行：无 shell-bg 通道的会话（coder / 其他工作空间 / 已
+      // 停止）不发 count——空态 count 必 404，而浏览器对非 2xx 的网络层
+      // 日志无法从 JS 抑制。channels 列表恒 200（对齐 genui 徽标先例）。
+      const channels = await window.ClawFeatureCommunication.listChannels(addressing.agentId, addressing.sessionId);
       const latest = currentAddressing();
       if (source || key !== (latest ? `${latest.agentId}::${latest.sessionId}` : '')) return;
+      const declared = channels.some((channel) => channel?.featureId === FEATURE_ID && channel?.channelId === CHANNEL_ID);
+      if (!declared) {
+        _setBadge(0);
+        return;
+      }
+      const result = await channelRequest('count', {});
+      const after = currentAddressing();
+      if (source || key !== (after ? `${after.agentId}::${after.sessionId}` : '')) return;
       if (result.ok === true && Number.isFinite(result.running)) {
         _setBadge(result.running);
-      } else if (result.code === 'channel_not_declared'
-        || result.code === 'runtime_not_connected'
+      } else if (result.code === 'runtime_not_connected'
         || result.code === 'runtime_stopped') {
         _setBadge(0);
       }
