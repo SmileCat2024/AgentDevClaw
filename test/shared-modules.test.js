@@ -141,11 +141,13 @@ describe('normalizeSessionMetadata', () => {
       resumeMode: '  one-shot  ',
       sourceAgentId: 'qqbot',
       sourceSessionId: '  sess-123  ',
+      studioProjectId: '  studio-123  ',
       unknownField: 'ignored',
     });
     assert.strictEqual(result.resumeMode, 'one-shot');
     assert.strictEqual(result.sourceAgentId, 'qqbot');
     assert.strictEqual(result.sourceSessionId, 'sess-123');
+    assert.strictEqual(result.studioProjectId, 'studio-123');
     assert.strictEqual(result.unknownField, undefined);
   });
 

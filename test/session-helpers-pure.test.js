@@ -362,6 +362,14 @@ describe('extractLastMessagePreview', () => {
 // ── buildLightPrebuiltSessionRecord ───────────────────────────────
 
 describe('buildLightPrebuiltSessionRecord', () => {
+  it('projects Studio project identity from session metadata', () => {
+    const result = buildLightPrebuiltSessionRecord('agent-studio', {
+      id: 'session-studio',
+      metadata: { studioProjectId: 'studio-project-1' },
+    });
+    assert.equal(result.studioProjectId, 'studio-project-1');
+  });
+
   it('builds a complete record from a well-formed index entry', () => {
     const record = {
       id: 'session-abc',
@@ -535,9 +543,26 @@ describe('wire session projection', () => {
     assert.equal(original.metadata.source, 'legacy');
   });
 
-  it('drops metadata entirely when resumeMode is absent', () => {
+  it('preserves Studio project association while trimming unrelated metadata', () => {
+    const trimmed = trimSessionRecordForWire(record('s2', {
+      metadata: { studioProjectId: 'studio-project-1', source: 'x' },
+    }));
+    assert.deepEqual(trimmed.metadata, { studioProjectId: 'studio-project-1' });
+  });
+
+  it('drops metadata entirely when no retained fields are present', () => {
     const trimmed = trimSessionRecordForWire(record('s2', { metadata: { source: 'x' } }));
     assert.deepEqual(trimmed.metadata, {});
+  });
+
+  it('filters Studio conversations by explicit project identity', () => {
+    const sessions = [
+      record('project-session', { studioProjectId: 'studio-a', openDirectory: '/shared' }),
+      record('other-project-session', { studioProjectId: 'studio-b', openDirectory: '/shared' }),
+      record('unlinked-session', { openDirectory: '/shared' }),
+    ];
+    const page = sliceSessionsForWire(sessions, { studioProjectId: 'studio-a' });
+    assert.deepEqual(page.slice.map((session) => session.id), ['project-session']);
   });
 
   it('filters by project directory with separator and case normalization', () => {

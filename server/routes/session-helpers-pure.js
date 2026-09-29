@@ -335,6 +335,7 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
     archived: record?.archived === true,
     todo: record?.todo === true,
     metadata,
+    studioProjectId: cleanSessionText(metadata.studioProjectId),
     formId: cleanSessionText(record?.formId) || '',
     openDirectory: cleanSessionText(record?.openDirectory),
     createdAt: cleanSessionText(record?.createdAt) || new Date().toISOString(),
@@ -405,9 +406,13 @@ function normalizeProjectDirForCompare(dir) {
 export function trimSessionRecordForWire(record) {
   if (!record || typeof record !== 'object') return record;
   const resumeMode = String(record?.metadata?.resumeMode || '').trim();
+  const studioProjectId = String(record?.studioProjectId || record?.metadata?.studioProjectId || '').trim();
   const next = { ...record };
   delete next.path;
-  next.metadata = resumeMode ? { resumeMode } : {};
+  next.metadata = {
+    ...(resumeMode ? { resumeMode } : {}),
+    ...(studioProjectId ? { studioProjectId } : {}),
+  };
   return next;
 }
 
@@ -442,6 +447,8 @@ export function sliceSessionsForWire(sessions, options = {}) {
   const filtered = [];
   for (const session of source) {
     if (excludeSessionTypes && excludeSessionTypes.has(String(session?.sessionType || 'main'))) continue;
+    if (options.studioProjectId !== undefined
+      && cleanSessionText(session?.studioProjectId) !== cleanSessionText(options.studioProjectId)) continue;
     if (normalizedProject
       && normalizeProjectDirForCompare(session?.openDirectory) !== normalizedProject) continue;
     // 徽标计数：当前项目内 main/archived 真实总数，不受 tab/query 过滤影响

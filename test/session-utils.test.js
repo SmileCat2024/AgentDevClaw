@@ -145,10 +145,12 @@ describe('normalizeSessionMetadata', () => {
       resumeMode: 'compacted',
       sourceAgentId: '',
       sourceSessionId: '   ',
+      studioProjectId: '',
       handoffId: undefined,
     });
     assert.ok(!('sourceAgentId' in result));
     assert.ok(!('sourceSessionId' in result));
+    assert.ok(!('studioProjectId' in result));
     assert.ok(!('handoffId' in result));
     assert.equal(result.resumeMode, 'compacted');
   });

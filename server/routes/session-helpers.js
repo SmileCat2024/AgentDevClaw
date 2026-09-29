@@ -967,7 +967,12 @@ async function createPrebuiltSession(agentId, options = {}) {
     formId: requestedFormId,
     openDirectory: nextOpenDirectory,
     sessionType,
-    metadata: sessionMetadata,
+    metadata: {
+      ...sessionMetadata,
+      ...(normalizedAgentId === 'agent-studio'
+        ? { studioProjectId: cleanSessionText(options.studioProjectId) || cleanSessionText(sourceSession?.metadata?.studioProjectId) }
+        : {}),
+    },
     modelName: currentModelInfo.modelName || '',
     contextLength: currentModelInfo.contextLength || null,
     compressRatio: currentModelInfo.compressRatio || 80,

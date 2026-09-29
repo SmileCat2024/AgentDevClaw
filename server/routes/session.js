@@ -951,6 +951,7 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       agentName: req.body.agentName,
       projectName: req.body.projectName,
       openDirectory: req.body.openDirectory,
+      studioProjectId: req.body.studioProjectId,
       targetDir: req.body.targetDir,
     });
     // createPrebuiltSession 透传 commit 后的 index revision，免去紧随其后的
