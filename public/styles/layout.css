@@ -4490,6 +4490,9 @@ body[data-theme="light"] .feature-upload-overlay {
 
 .feature-upload-window {
   position: relative;
+  /* 遮罩与本窗口是平级兄弟节点，遮罩 z-index:1000；不加 z-index 窗口会被
+     86% 不透明的遮罩盖住，只剩黑遮罩不见内容（同款弹窗均经父子层叠规避此问题） */
+  z-index: 1001;
   width: min(100%, 500px);
   max-height: min(100%, 400px);
   overflow: auto;
