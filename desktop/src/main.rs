@@ -2,6 +2,8 @@
 //
 // 桌面进程启动并观察服务（见 docs/protocols/service-lifecycle.md）：
 //   启动：先检查本机是否已有 ready 服务；有则只恢复前台，无则 spawn supervisor
+//   单实例：重复运行 exe 只激活已有实例（聚焦主窗口），第二实例随即退出
+//   权限：WebView 权限对 Claw 服务源自动放行（通知等），不弹用户询问
 //   就绪：等 Claw health 确认 ready 后建窗口，避免误连任意端口占用者
 //   关窗：隐藏界面，服务和宿主继续运行，可从系统托盘恢复
 //   退出：用户在设置或托盘选择退出 → server 自主有序关闭；
@@ -21,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::webview::PermissionResponse;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 /// 托管目标树：CLAW_DESKTOP_ROOT 显式指定（pack:desktop 产出的发布树）；
@@ -233,8 +236,32 @@ fn show_main_window(handle: &tauri::AppHandle) {
     }
 }
 
+/// WebView 权限只对本壳托管的 Claw 服务源自动放行；窗口内一旦导航到
+/// 外部站点，回落 WebView2 默认行为，不替外部源背书权限。
+fn is_service_origin(url: &tauri::Url) -> bool {
+    url.host_str() == Some("127.0.0.1") && url.port() == Some(service_port())
+}
+
 fn main() {
     let app = tauri::Builder::default()
+        // 单实例：须最先注册。第二实例把激活转交给已运行实例后自行退出，
+        // 不进入 setup（不重复探测服务 / spawn supervisor）。
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main_window(app);
+        }))
+        // 服务源内的全部 WebView 权限（通知 / 麦克风 / 剪贴板等）自动授予，
+        // 不向用户弹询问；前端 Notification.requestPermission 因此直接得 granted。
+        .on_permission_request(|webview, _kind| {
+            let on_service_origin = webview
+                .url()
+                .map(|url| is_service_origin(&url))
+                .unwrap_or(false);
+            if on_service_origin {
+                PermissionResponse::Allow
+            } else {
+                PermissionResponse::Default
+            }
+        })
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {

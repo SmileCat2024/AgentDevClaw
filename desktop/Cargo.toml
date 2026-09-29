@@ -9,6 +9,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
 
 # 桌面壳是独立 crate，不与任何上层 Rust workspace 关联
 [workspace]
