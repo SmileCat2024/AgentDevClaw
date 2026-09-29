@@ -127,8 +127,8 @@ describe('feature continuity protocol (descriptor-driven)', () => {
     assert.equal(restored.metadata.sourceSessionId, 'session-source');
   });
 
-  it('end-to-end: opencode-basic preserves write authorization but resets read deduplication on resume', async () => {
-    // 模拟真实 OpencodeBasic 快照：readFiles 是修改授权，readDedupState 则依赖旧工具结果。
+  it('end-to-end: opencode-basic carries readFiles and readDedupState across continuity', async () => {
+    // 模拟真实 OpencodeBasic 快照：readFiles 是修改授权，readDedupState 是 edit/write 的 mtime 基线。
     const ContinuityAwareMock = declareContinuity(
       createMockBase({ featureName: 'opencode-basic', initialState: { readFiles: [] } }),
       { protocol: OPENCODE_BASIC_CONTINUITY_PROTOCOL, importMode: 'replace' },
@@ -152,8 +152,12 @@ describe('feature continuity protocol (descriptor-driven)', () => {
     assert.equal(continuity.states.length, 1);
     assert.equal(continuity.states[0].featureName, 'opencode-basic');
     assert.equal(continuity.states[0].protocol, OPENCODE_BASIC_CONTINUITY_PROTOCOL);
+    // 通用透传完整携带 readDedupState（JSON 克隆丢弃 undefined 值的键，limit 不落盘）
     assert.deepEqual(continuity.states[0].state, {
       readFiles: ['D:/repo/a.ts', 'D:/repo/b.ts'],
+      readDedupState: {
+        'D:/repo/a.ts': { mtimeMs: 123, offset: 1 },
+      },
     });
 
     const targetFeature = new ContinuityAwareMock();
@@ -163,6 +167,9 @@ describe('feature continuity protocol (descriptor-driven)', () => {
     assert.deepEqual(imported, ['opencode-basic']);
     assert.deepEqual(targetFeature._state, {
       readFiles: ['D:/repo/a.ts', 'D:/repo/b.ts'],
+      readDedupState: {
+        'D:/repo/a.ts': { mtimeMs: 123, offset: 1 },
+      },
     });
   });
 

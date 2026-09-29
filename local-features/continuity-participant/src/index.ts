@@ -32,8 +32,9 @@ export const GENERIC_CONTINUITY_PROTOCOL = 'claw.feature-continuity.v1';
 /**
  * OpencodeBasic 的专用 continuity 协议。
  *
- * 接续时保留“先读后写”校验需要的 readFiles，
- * 但不继承依赖旧上下文内容的 readDedupState。
+ * 接续状态走通用透传：readFiles（先读后写授权）与 readDedupState
+ * （edit/write 的 mtime 基线）都随快照迁移。mtime 是文件系统事实，
+ * 不依赖旧上下文是否保留了 Read 工具结果。
  */
 export const OPENCODE_BASIC_CONTINUITY_PROTOCOL = 'claw.opencode-basic-continuity.v1';
 
