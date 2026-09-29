@@ -440,10 +440,17 @@ function updateChatProcessToggle(messages = readCurrentSessionViewState().messag
   chatProcessToggle.textContent = showChatProcess ? t('hide_process') : t('show_process');
 }
 
-function syncAssistantProcessOnlyRows(root = container) {
-  root.querySelectorAll('.message-row.assistant').forEach((row) => {
+function syncAssistantProcessOnlyRows(root = container, fromIndex = 0) {
+  // fromIndex 之后才可能是新插入 / 被 patch 的行，旧行的空行判定不随
+  // 尾部追加变化；child 探测里的 offsetParent 读取在布局脏时会强制
+  // flush，遍历必须限定在尾部范围。fromIndex 是全局消息索引，因此按
+  // 全行列表索引截断而非 .assistant 子集。
+  const rows = root.querySelectorAll('.message-row');
+  for (let i = Math.max(0, fromIndex | 0); i < rows.length; i++) {
+    const row = rows[i];
+    if (!row.classList.contains('assistant')) continue;
     const content = row.querySelector('.message-content');
-    if (!content) return;
+    if (!content) continue;
 
     const hasProcessChild = Array.from(content.children).some((child) =>
       child.classList.contains('reasoning-block')
@@ -472,21 +479,20 @@ function syncAssistantProcessOnlyRows(root = container) {
       ? !hasProcessChild && !visibleContent
       : !visibleContent;
     row.classList.toggle('process-hidden-empty', shouldHideEmptyRow);
-  });
+  }
 }
 
-function applyConversationProcessState(root = container) {
+function applyConversationProcessState(root = container, fromIndex = 0) {
   if (showChatProcess) {
-    // Show mode: only un-hide near-viewport process elements.
-    // applyProcessDistance handles the windowing — far elements stay
-    // display:none, avoiding the 27-second full-layout bottleneck.
-    applyProcessDistance(root);
+    // Show mode: applyProcessDistance handles the windowing. Incremental
+    // calls (append/patch with fromIndex > 0) only touch tail rows.
+    applyProcessDistance(root, fromIndex);
   } else {
     // Hide mode: hide ALL process elements
     clearProcessDistance(root);
   }
 
-  syncAssistantProcessOnlyRows(root);
+  syncAssistantProcessOnlyRows(root, fromIndex);
   if (!showChatProcess) {
     // Hide mode: safe to sync all (most rows are display:none, early-return)
     syncCollapseStates(root);

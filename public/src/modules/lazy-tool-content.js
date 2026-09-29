@@ -594,7 +594,53 @@ function runLandingCollapseScan() {
   _runCollapseScan(true);
 }
 
-function applyProcessDistance(root) {
+/* ── 增量处理 append/patch 的尾部行 ──────────────────────────────
+   流式期间 appendNewMessages / updateLastMessage 每条消息都要同步过程
+   可见性；全量路径对每个 assistant 行做子树查询并整体重建 rowCache，
+   长会话下每次消息事件都是一次 O(N) 扫描 + Map 重建。增量路径只处理
+   [fromIndex, end)：尾部追加不改前文位置与状态，旧行的 cache entry 与
+   cv 状态原样复用。仅全渲染分级启用（虚拟化分级的估算窗口与 landing
+   语义保持全量）；缓存与 DOM 不同源（全量重建被误判为增量）时退回
+   全量。 */
+function _applyIncrementalProcessRows(root, fromIndex) {
+  var rows = root.querySelectorAll('.message-row');
+  if (rows.length <= fromIndex) return;
+  if (!_cachedRows || !_cachedRows.length
+      || _cachedRows[0] !== rows[0] || _cachedRows.length > rows.length) {
+    applyProcessDistance(root);
+    return;
+  }
+  for (var i = fromIndex; i < rows.length; i++) {
+    var row = rows[i];
+    if (row.classList.contains('tool') || row.classList.contains('system')) {
+      row.classList.remove('process-hidden');
+    }
+    // patch 场景末行内容被整体替换，旧 entry 的 els 引用已过期；
+    // append 场景新行尚无 entry —— 两者都按 delete + 重建处理。
+    if (_rowCache) _rowCache.delete(row);
+    if (row.classList.contains('assistant')) {
+      var els = row.querySelectorAll('.reasoning-block, .tool-call-container');
+      // 对齐全量路径：append 预隐藏把调用卡标为 process-hidden
+      // （display:none），必须在这里移除，否则出生折叠在不可测行上空转。
+      for (var j = 0; j < els.length; j++) {
+        els[j].classList.remove('process-hidden');
+      }
+      if (els.length > 0) {
+        _rowCache.set(row, {
+          els: els,
+          content: row.querySelector('.message-content')
+        });
+      }
+    }
+    _setRowCvVisible(row, true);
+  }
+  _cachedRows = rows;
+  _lastWindowEnd = rows.length - 1;
+  // pixBounds 属于虚拟化分级的 pixel fast-path，全渲染分级下
+  // _applyWindow 直接早退，无需为增量刷新它。
+}
+
+function applyProcessDistance(root, fromIndex) {
   root = root || container;
   if (!showChatProcess) return;
 
@@ -603,6 +649,12 @@ function applyProcessDistance(root) {
   // _lastWindowStart to -1); streaming patches (append / updateLastMessage)
   // arrive with the previous window intact → background patch semantics.
   var isLanding = _lastWindowStart < 0;
+
+  if (typeof fromIndex === 'number' && fromIndex > 0 && !isLanding
+      && _windowingDisabled && _rowCache) {
+    _applyIncrementalProcessRows(root, fromIndex);
+    return;
+  }
 
   _cachedRows = null;
   _lastTopIdx = 0;

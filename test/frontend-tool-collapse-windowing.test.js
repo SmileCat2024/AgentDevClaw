@@ -67,6 +67,10 @@ function makeRow({ role, realH, toolName = '', msgId = '' }) {
     scrollHeight: realH,
     classList: makeClassList(),
     style: {},
+    // Real DOM: .message-content always has children (the process children
+    // live inside it). Map to this harness's row._processChildren convention
+    // so syncAssistantProcessOnlyRows sees the same shape as a browser.
+    get children() { return row._processChildren || []; },
   };
 
   const toggleSvg = { style: {} };

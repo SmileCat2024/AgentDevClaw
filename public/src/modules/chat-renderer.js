@@ -373,7 +373,8 @@ function appendNewMessages(newMessages, startIndex) {
   // 扫描必须等 applyConversationProcessState 揭示之后才有效。顺序颠倒时
   // 长工具行/调用卡在全渲染分级（窗口化已禁用、后续扫描全部跳过）下
   // 永不折叠，直到用户切换隐藏/显示过程触发落地 settle。
-  applyConversationProcessState(container);
+  // fromIndex 让过程可见性同步走增量路径（只处理尾部新行）。
+  applyConversationProcessState(container, startIndex);
   applyCollapseLogic(container, startIndex);
   restoreUserCollapseState(container);
   updateFollowLatestButton();
@@ -515,7 +516,9 @@ function updateLastMessage(msg) {
   }
 
   updateRollbackActionVisibility();
-  applyConversationProcessState(container);
+  // 末行内容被整体替换（innerHTML 级 patch），rowCache 中该行的 els
+  // 引用已过期；fromIndex=lastIndex 让增量路径按 delete + 重建处理末行。
+  applyConversationProcessState(container, lastIndex);
   // 工具结果体重建后高度可能首次越过折叠阈值，重测末行折叠态（全渲染
   // 分级下没有后续扫描兜底）；cv-hidden / 隐藏态行由 computeRowCollapsePlan
   // 早退守卫，不会强制布局。

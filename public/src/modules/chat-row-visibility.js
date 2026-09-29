@@ -72,7 +72,47 @@
     if (rows.length < 200) { clear(); return; }
     const nextWidth = container.clientWidth;
     const resized = width && width !== nextWidth;
-    const rebuilt = !entries.length || entries[0].row !== rows[0];
+    const rebuilt = !entries.length || entries[0].row !== rows[0]
+      || rows.length < entries.length;
+
+    // Incremental paths for streaming events: an append only appends rows
+    // after the existing tail (prior offsetTop values are unaffected by a
+    // tail insert), a patch-last only rewrites the last row's content. Both
+    // reuse the old entries and skip the full measure pass + entries/byRow
+    // rebuild — that full pass on every message event is the dominant JS
+    // cost of long conversations in show-process mode.
+    if (!resized && !rebuilt) {
+      if (reason === 'append' && rows.length > entries.length) {
+        for (let i = entries.length; i < rows.length; i++) {
+          const row = rows[i];
+          let entry = byRow.get(row);
+          if (!entry) {
+            entry = { row, hidden: false, top: 0, height: 0 };
+            byRow.set(row, entry);
+          }
+          entry.top = row.offsetTop;
+          entry.height = row.getBoundingClientRect().height;
+          entries.push(entry);
+        }
+        width = nextWidth;
+        first = 0; last = -1;
+        apply(true);
+        return;
+      }
+      if (reason === 'patch-last' && rows.length === entries.length) {
+        const tail = entries[entries.length - 1];
+        // Same contract as the full path: reveal before measuring, and never
+        // realize the whole history for one patched row.
+        reveal(tail);
+        tail.top = tail.row.offsetTop;
+        if (!tail.hidden) tail.height = tail.row.getBoundingClientRect().height;
+        width = nextWidth;
+        first = 0; last = -1;
+        apply(true);
+        return;
+      }
+    }
+
     let anchor = null;
     if (resized && !followLatestEnabled) anchor = captureChatViewportAnchor();
     if (rebuilt || resized) clear();
