@@ -7,7 +7,7 @@ description: Use when developing a Feature, defining its tests, or running Test 
 
 ## Start from conversation
 
-The injected "Agent Studio 项目状态" block shows the current project each turn. When a project is already active, continue with it; do not re-ask for directory or name. When there is none, confirm in conversation what to build, which directory it lives in, and whether a target Agent is involved. Call `studio_initialize_project` once clear, then keep working.
+The injected "Agent Studio 项目状态" block shows the current project each turn. When a project is already active, continue with it; do not re-ask for directory or name. When there is none, confirm in conversation what to build, which directory it lives in, and whether a target Agent is involved. Call `studio_initialize_project` once clear, then keep working. Before using Node/npm for development, call `studio_detect_environment`, show the available bundled/system combinations to the user, and record their choice with `studio_select_toolchain`. If none fits, ask for the user's existing Node/npm paths or let them install a toolchain and detect again. If the chosen pair becomes unavailable, ask again rather than silently switching. For framework or host source work, inspect the current project, installed packages and existing local repositories first; when additional source is actually needed, agree on a location with the user before using Git/Shell to clone it. Never assume a neighboring source checkout or require one for ordinary Feature development.
 
 ## Choose the verification level first
 
@@ -28,6 +28,8 @@ Standard order:
 
 ```text
 studio_initialize_project   create/update agent-studio.json
+studio_detect_environment   detect usable Node/npm combinations
+studio_select_toolchain    save the user's choice for this project
 studio_create_feature       create, install, and register a standard npm Feature project
 (write src/ implementation)
 studio_define_test          save a test: input + session policy + executable assertions

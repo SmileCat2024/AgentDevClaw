@@ -162,6 +162,30 @@ export function normalizeGitDefaultReposKey(dir) {
 
 const _wsCache = new Map();
 
+// 用户 Feature 仓库摘要缓存：loadAgents 低频段每 3s 打一次 /api/agents，而
+// summarizeFeatureRepository 要对每个 tgz 起 tar 进程读元数据。tgz 落盘后不再
+// 改写，按「文件名+大小+mtime」签名判变更，签名不变直接复用上次摘要，稳态
+// 成本退化为一次 readdir。
+const _userRepoSummaryCache = { signature: null, data: null };
+
+async function summarizeUserFeatureRepositoryCached() {
+  const entries = await fs.readdir(USER_FEATURE_REPOSITORY_ROOT, { withFileTypes: true }).catch(() => []);
+  const stats = await Promise.all(entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.tgz'))
+    .map(async (entry) => {
+      const stat = await fs.stat(path.join(USER_FEATURE_REPOSITORY_ROOT, entry.name)).catch(() => null);
+      return stat ? `${entry.name}:${stat.size}:${stat.mtimeMs}` : null;
+    }));
+  const signature = stats.filter(Boolean).sort().join('|');
+  if (_userRepoSummaryCache.signature === signature && _userRepoSummaryCache.data) {
+    return _userRepoSummaryCache.data;
+  }
+  const data = await summarizeFeatureRepository(USER_FEATURE_REPOSITORY_ROOT, 'custom');
+  _userRepoSummaryCache.signature = signature;
+  _userRepoSummaryCache.data = data;
+  return data;
+}
+
 export async function readWorkspaceState(agentId) {
   const key = sanitizeSessionFragment(agentId);
   const cached = _wsCache.get(key);
@@ -342,6 +366,21 @@ export async function resolveWorkspaceData(agent) {
         customCount: customData.packages ? customData.packages.length : 0,
         updatedAt: [officialData.updatedAt, customData.updatedAt].filter(Boolean).sort().pop() || null,
         packages: allPackages,
+      });
+    } else if (block.featureRepository?.userOnly) {
+      // 仅用户仓库视图（Agent Studio 的仓库板块）：快照与导入 tgz 的同一数据源，
+      // 下游工作空间的 Feature 商店扫描的也是这里
+      const customData = await summarizeUserFeatureRepositoryCached();
+      Object.assign(data, {
+        path: customData.path,
+        exists: customData.exists,
+        type: 'feature-repository',
+        packageCount: customData.packageCount,
+        archiveCount: customData.archiveCount,
+        missingManifestCount: customData.missingManifestCount,
+        customCount: customData.packageCount,
+        updatedAt: customData.updatedAt,
+        packages: customData.packages,
       });
     }
 

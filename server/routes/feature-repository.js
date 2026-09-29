@@ -177,7 +177,16 @@ export async function ensureFeatureProjectManifest(projectDir) {
 /* ── archive & repository summarization ───────────────────────────── */
 
 async function readArchiveJson(archivePath, archiveEntryPath) {
-  const { stdout } = await runCommand('tar', ['-xOf', archivePath, archiveEntryPath], { cwd: PROJECT_ROOT });
+  // Windows 下 GNU tar 把 "C:\..." 的盘符冒号当作远程主机分隔符（与 catalog.js
+  // 同源的历史问题）：仓库内归档改传 POSIX 风格相对路径绕开；仓库外归档
+  // （用户仓库 / 上传临时目录）在 win32 追加 --force-local 禁用远程主机解释。
+  const relative = path.relative(PROJECT_ROOT, archivePath).replace(/\\/g, '/');
+  const insideRepo = !relative.startsWith('..') && !path.isAbsolute(relative);
+  const target = insideRepo ? relative : archivePath.replace(/\\/g, '/');
+  const tarArgs = !insideRepo && process.platform === 'win32'
+    ? ['--force-local', '-xOf', target, archiveEntryPath]
+    : ['-xOf', target, archiveEntryPath];
+  const { stdout } = await runCommand('tar', tarArgs, { cwd: PROJECT_ROOT });
   const raw = stdout.trim();
   if (!raw) {
     throw new Error(`Archive entry is empty: ${archiveEntryPath}`);

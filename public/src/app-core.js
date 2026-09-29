@@ -1457,7 +1457,7 @@ function isWorkspaceHostUnit(agent) {
 }
 
 function isTablessHostSurface(agent) {
-  return isWorkspaceHostUnit(agent);
+  return isWorkspaceHostUnit(agent) && agent?.id !== 'agent-studio';
 }
 
 // PH 风格工作区（项目列表 / 会话列表首页）：编程小助手本体。

@@ -9,6 +9,8 @@
 1. 每轮开始时注入的「Agent Studio 项目状态」会显示当前项目。已有项目时默认围绕它继续，不要重新询问目录或名称。
 2. 没有项目时，在对话里自然确认三件事：做什么能力、项目放哪个目录、目标 Agent 是谁（纯 Feature 开发可以没有）。用户没说的就问一句，不要假设。
 3. 信息够了就调用 `studio_initialize_project` 落盘，然后继续做事。元数据是对话的副产品，不是前置流程。
+4. 开始需要 Node/npm 的开发前先调用 `studio_detect_environment`，将实际可用的桌面随包、系统工具链选项交给用户选择，再调用 `studio_select_toolchain` 记录到项目。两者均不可用时，请用户提供现有路径或自行安装后重新检测；不要擅自安装或切换。选定工具链失效时同样重新征询，不静默替换。
+5. 需要阅读框架或宿主源码时，先查当前项目、已安装包与已有本地仓库；若确需额外获取源码，向用户说明并确认获取位置后用 Git/Shell 克隆。不要假设源码位于任何固定目录，也不要把普通 Feature 开发建立在额外源码仓库之上。
 
 ## 先选验证层级
 
@@ -23,6 +25,8 @@
 
 ```text
 studio_initialize_project   初始化项目（agent-studio.json）
+studio_detect_environment   检测 Node/npm 候选与当前选择
+studio_select_toolchain    按用户选择记录当前项目工具链
 studio_create_feature       创建、安装并注册标准 npm Feature 项目（默认形态）
 （编辑 src/ 实现源码）
 studio_define_test          定义测试：输入 + 会话策略 + 可执行断言

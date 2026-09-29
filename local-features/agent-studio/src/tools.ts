@@ -5,7 +5,7 @@
 // 工具名、参数 schema、行为与迁出前保持一致。
 
 import { promises as fs } from 'fs';
-import { join, resolve } from 'path';
+import { isAbsolute, join, resolve } from 'path';
 import { existsSync } from 'fs';
 import { createTool } from '@agentdevjs/core';
 import type { Tool } from '@agentdevjs/core';
@@ -28,6 +28,7 @@ import {
 import type { StudioFeatureEntry } from './project-store.js';
 import {
   normalizeProject,
+  type StudioToolchain,
   getProjectPath,
   readRuns,
   appendRun,
@@ -38,6 +39,10 @@ import {
   SYNC_TIMEOUT_MS,
   RUN_TEST_TIMEOUT_MS,
   findCreateFeatureCliPath,
+  detectStudioToolchains,
+  probeStudioToolchain,
+  requireStudioToolchain,
+  assertStandardBuildCommand,
   normalizeStandaloneAgentMetadata,
   getRuntimeHandle,
   fingerprintModule,
@@ -76,6 +81,44 @@ export const assertionParameterSchema = {
 export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
   return [
     createTool({
+      name: 'studio_detect_environment',
+      description: '检查可用于 Feature 项目的 Node/npm：列出桌面随包与系统环境中经实际命令验证的组合，以及当前项目的选择。',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => {
+        const projectDir = await feature.resolveProjectDirectory();
+        const project = await feature.readProject(projectDir);
+        return { projectDir, available: await detectStudioToolchains(), selected: project?.toolchain || null };
+      },
+    }),
+    createTool({
+      name: 'studio_select_toolchain',
+      description: '为当前 Studio 项目选择 Node/npm 组合。可以选择检测到的方案，也可以提供用户指定的可执行路径；保存前会实际运行版本检测。',
+      parameters: {
+        type: 'object',
+        properties: {
+          source: { type: 'string', enum: ['bundled', 'system', 'custom'] },
+          nodePath: { type: 'string', description: 'Node 可执行文件绝对路径。' },
+          npmPath: { type: 'string', description: 'npm 可执行入口绝对路径（可为 npm-cli.js、npm.cmd 或 npm）。' },
+        },
+        required: ['source', 'nodePath', 'npmPath'],
+      },
+      execute: async (args: Record<string, unknown>) => {
+        const { projectDir, project } = await feature.requireProject();
+        const source = cleanValue(args.source);
+        const nodePath = cleanValue(args.nodePath);
+        const npmPath = cleanValue(args.npmPath);
+        if ((source !== 'bundled' && source !== 'system' && source !== 'custom') || !nodePath || !npmPath
+          || !isAbsolute(nodePath) || !isAbsolute(npmPath)) {
+          throw new Error('请选择有效的 Node/npm 绝对路径。');
+        }
+        const toolchain = { source, nodePath, npmPath } as StudioToolchain;
+        const verified = await probeStudioToolchain(toolchain);
+        if (!verified) throw new Error('这组 Node/npm 不可用。请检查路径后重新检测。');
+        await feature.writeProject(projectDir, { ...project, toolchain, updatedAt: new Date().toISOString() });
+        return { projectDir, toolchain: verified };
+      },
+    }),
+    createTool({
       name: 'studio_get_project',
       description: '读取当前 Agent Studio 项目的配置、开发中 Feature（含验证证据）、Test Runtime 实时状态和最近运行记录。',
       parameters: { type: 'object', properties: {} },
@@ -95,14 +138,17 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
     }),
     createTool({
       name: 'studio_initialize_project',
-      description: '初始化或更新当前目录的 Agent Studio 项目（agent-studio.json）。已有测试和 Feature 注册保持不变。',
+      description: '初始化或更新当前 Agent Studio 项目。项目具有稳定 ID，并可关联一个工作环境；已有测试和 Feature 注册保持不变。',
       parameters: {
         type: 'object',
         properties: {
-          projectDir: { type: 'string', description: '项目根目录；默认使用当前工作空间目录。' },
+          projectDir: { type: 'string', description: '本地环境中的项目根目录；默认使用当前工作目录。' },
           name: { type: 'string', description: '项目名称。' },
           goal: { type: 'string', description: '要开发或装配的能力目标。' },
           targetAgent: { type: 'string', description: '待测目标 Agent 名称；纯 Feature 开发可传空字符串。' },
+          projectId: { type: 'string', description: '稳定项目 ID；更新已有项目时沿用，创建项目时由系统生成。' },
+          environmentKind: { type: 'string', description: '工作环境类型。当前本地目录使用 local-directory。' },
+          environmentAddress: { type: 'string', description: '环境地址，例如当前关联的本地工作目录。' },
         },
         required: ['name'],
       },
@@ -114,6 +160,13 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(args, key);
         const project = normalizeProject({
           ...(existing || {}),
+          id: existing?.id || cleanValue(args.projectId),
+          projectDir: resolvedProjectDir,
+          ...(hasOwn('environmentKind') && hasOwn('environmentAddress')
+            ? { environment: { kind: cleanValue(args.environmentKind), address: cleanValue(args.environmentAddress) } }
+            : (!existing && resolvedProjectDir
+              ? { environment: { kind: 'local-directory', address: resolvedProjectDir } }
+              : {})),
           name: hasOwn('name') ? cleanValue(args.name) : existing?.name,
           goal: hasOwn('goal') ? cleanValue(args.goal) : existing?.goal,
           targetAgent: hasOwn('targetAgent') ? cleanValue(args.targetAgent) : existing?.targetAgent,
@@ -149,12 +202,13 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) {
           throw new Error('Feature 名称仅允许小写字母、数字和连字符，且必须以字母开头。');
         }
+        const toolchain = await requireStudioToolchain(project);
         const parentDir = resolve(projectDir, cleanValue(args.parentDir) || 'features');
         const cliPath = findCreateFeatureCliPath();
         await fs.mkdir(parentDir, { recursive: true });
-        await runProjectCommand(parentDir, process.execPath, [cliPath, name]);
+        await runProjectCommand(parentDir, toolchain.nodePath, [cliPath, name]);
         const featureProjectDir = join(parentDir, name);
-        await runProjectCommand(featureProjectDir, 'npm', ['install', '--no-fund', '--no-audit']);
+        await runProjectCommand(featureProjectDir, 'npm', ['install', '--no-fund', '--no-audit'], toolchain);
         const entry = await readFeatureProjectEntry(featureProjectDir);
         const timestamp = new Date().toISOString();
         const features = [...project.features.filter((item) => item.name !== entry.name), entry];
@@ -292,10 +346,12 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         }
         const mode = cleanValue(args.mode) || (project.agent ? 'agent-debug' : 'feature-harness');
         if (mode !== 'feature-harness' && mode !== 'agent-debug') throw new Error('mode 只能是 feature-harness 或 agent-debug。');
+        for (const f of project.features) assertStandardBuildCommand(f);
         if (mode === 'feature-harness' && project.features.length === 0) {
           throw new Error('feature-harness 至少需要注册一个开发中 Feature。');
         }
-        for (const f of project.features) await runFeatureBuild(f);
+        if (project.features.some((f) => f.source)) await requireStudioToolchain(project);
+        for (const f of project.features) await runFeatureBuild(f, project.toolchain);
         const missing = project.features.filter((f) => !existsSync(f.modulePath));
         if (missing.length > 0) {
           throw new Error(`以下 Feature 模块文件不存在：${missing.map((f) => `${f.name} (${f.modulePath})`).join('；')}`);
@@ -513,6 +569,8 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         const startedAt = new Date().toISOString();
 
         // 1) 同步 Feature 源码到 runtime（ensure 按拓扑序 + reload），runId 透传打日志标签
+        for (const f of project.features) assertStandardBuildCommand(f);
+        if (project.features.some((f) => f.source)) await requireStudioToolchain(project);
         const reloadSummary = await syncFeaturesToRuntime(projectDir, handle, project, runId);
         const failedReload = reloadSummary.filter((item) => !item.ok);
         const featureRevisions: Record<string, string> = {};
@@ -658,12 +716,14 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         if (studioFeature.status !== 'verified' || !studioFeature.verification?.sourceDigest) {
           throw new Error(`Feature ${name} 尚未通过当前源码的验证。请先运行带可执行断言且覆盖该 Feature 的 studio_run_test。`);
         }
-        await runFeatureBuild(studioFeature);
+        assertStandardBuildCommand(studioFeature);
+        const toolchain = await requireStudioToolchain(project);
+        await runFeatureBuild(studioFeature, toolchain);
         const currentDigest = await fingerprintFeatureSource(studioFeature);
         if (currentDigest !== studioFeature.verification.sourceDigest) {
           throw new Error(`Feature ${name} 的构建产物已变化，之前验证已失效。请重新运行测试后再创建 Snapshot。`);
         }
-        const snapshot = await runSnapshotScript(studioFeature.source.projectDir);
+        const snapshot = await runSnapshotScript(studioFeature.source.projectDir, toolchain);
         const timestamp = new Date().toISOString();
         const features = project.features.map((item) => item.name === name
           ? { ...item, status: 'snapshotted' as const, snapshot }

@@ -7,13 +7,16 @@ import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
-import { dirname, join, relative, resolve } from 'path';
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'path';
+import os from 'os';
+import { createRequire } from 'module';
 import { existsSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import type {
   StudioFeatureEntry,
   StudioFeatureSnapshot,
   AgentStudioProject,
+  StudioToolchain,
 } from './project-store.js';
 import type { StudioRunRecord } from './assertions.js';
 import {
@@ -90,16 +93,8 @@ export function findAgentRegistryModuleUrl(): string {
 
 export function findCreateFeatureCliPath(): string {
   const clawRoot = dirname(dirname(findRuntimeScriptPath()));
-  const agentDevRoot = dirname(clawRoot);
-  const candidate = join(agentDevRoot, 'AgentDev', 'dist', 'create-feature-cli.js');
-  if (!existsSync(candidate)) {
-    throw new Error(
-      `AgentDev 框架构建产物缺失，无法创建 Feature 脚手架：${candidate}。`
-      + ` 请先在框架仓库完成构建（${join(agentDevRoot, 'AgentDev')} 目录下执行 npm install && npm run build），`
-      + ` 构建完成后重试本工具；不要手工补建该文件。`,
-    );
-  }
-  return candidate;
+  const require = createRequire(join(clawRoot, 'package.json'));
+  return require.resolve('@agentdevjs/create-feature/cli');
 }
 
 function findPrepareRuntimeScriptPath(): string {
@@ -201,41 +196,92 @@ export async function fingerprintFeatureSource(feature: StudioFeatureEntry): Pro
   }
 }
 
-export async function runProjectCommand(projectDir: string, command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((promiseResolve, promiseReject) => {
-    // Node on this Windows runtime cannot spawn npm.cmd with shell:false. The
-    // only npm operations Studio issues are fixed lifecycle commands; reject
-    // every other token sequence before using cmd.exe as a compatibility shim.
-    const isNpm = command === 'npm';
-    const allowedNpmArgs = args.join(' ') === 'run build' || args.join(' ') === 'install --no-fund --no-audit';
-    if (isNpm && !allowedNpmArgs) {
-      promiseReject(new Error(`Studio 不允许执行未声明的 npm 命令：npm ${args.join(' ')}`));
-      return;
-    }
-    const executable = process.platform === 'win32' && isNpm ? (process.env.ComSpec || 'cmd.exe') : command;
-    const executableArgs = process.platform === 'win32' && isNpm
-      ? ['/d', '/s', '/c', `npm.cmd ${args.join(' ')}`]
-      : args;
-    const child = spawn(executable, executableArgs, { cwd: projectDir, shell: false, windowsHide: true });
+function runDirect(command: string, args: string[], cwd: string, env = process.env): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolveResult, rejectResult) => {
+    const child = spawn(command, args, { cwd, shell: false, windowsHide: true, env });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += String(chunk); });
     child.stderr.on('data', (chunk) => { stderr += String(chunk); });
-    child.on('error', promiseReject);
-    child.on('exit', (code) => {
-      if (code === 0) promiseResolve({ stdout, stderr });
-      else promiseReject(new Error(stderr.trim() || stdout.trim() || `${command} exited with code ${code}`));
+    child.once('error', rejectResult);
+    child.once('close', (code) => {
+      if (code === 0) resolveResult({ stdout, stderr });
+      else rejectResult(new Error(stderr.trim() || stdout.trim() || `${command} exited with code ${code}`));
     });
   });
 }
 
-export async function runFeatureBuild(feature: StudioFeatureEntry): Promise<void> {
+function pathCandidates(name: string): string[] {
+  const dirs = (process.env.PATH || process.env.Path || '').split(delimiter).map((dir) => dir.replace(/^"|"$/g, ''));
+  return dirs.filter(Boolean).map((dir) => join(dir, name)).filter(existsSync);
+}
+
+async function runNpm(toolchain: StudioToolchain, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+  const pathValue = [dirname(toolchain.nodePath), dirname(toolchain.npmPath), process.env.PATH || process.env.Path || ''].join(delimiter);
+  const env = { ...process.env, PATH: pathValue, Path: pathValue, npm_node_execpath: toolchain.nodePath };
+  if (toolchain.npmPath.endsWith('.js')) return runDirect(toolchain.nodePath, [toolchain.npmPath, ...args], cwd, env);
+  if (process.platform !== 'win32') return runDirect(toolchain.npmPath, args, cwd, env);
+  // cmd.exe only receives the checked executable path and fixed npm args.
+  if (!/^(?:--version|run build|install --no-fund --no-audit|pack --json)$/.test(args.join(' '))) {
+    throw new Error('Studio npm 操作不支持这组参数。');
+  }
+  return runDirect(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${toolchain.npmPath}" ${args.join(' ')}`], cwd, env);
+}
+
+export async function probeStudioToolchain(toolchain: StudioToolchain): Promise<(StudioToolchain & { nodeVersion: string; npmVersion: string }) | null> {
+  const cwd = os.tmpdir();
+  try {
+    const nodeVersion = (await runDirect(toolchain.nodePath, ['--version'], cwd)).stdout.trim();
+    const npmVersion = (await runNpm(toolchain, ['--version'], cwd)).stdout.trim();
+    return nodeVersion.startsWith('v') && npmVersion ? { ...toolchain, nodeVersion, npmVersion } : null;
+  } catch { return null; }
+}
+
+export async function detectStudioToolchains(): Promise<Array<StudioToolchain & { nodeVersion: string; npmVersion: string }>> {
+  const candidates: StudioToolchain[] = [];
+  const bundledNode = process.env.AGENTDEV_STUDIO_NODE_PATH?.trim();
+  const bundledNpm = process.env.AGENTDEV_STUDIO_NPM_PATH?.trim();
+  if (bundledNode && bundledNpm && isAbsolute(bundledNode) && isAbsolute(bundledNpm)) {
+    candidates.push({ source: 'bundled', nodePath: bundledNode, npmPath: bundledNpm });
+  }
+  const nodes = pathCandidates(process.platform === 'win32' ? 'node.exe' : 'node');
+  const npms = pathCandidates(process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  for (const nodePath of nodes) {
+    for (const npmPath of npms) candidates.push({ source: 'system', nodePath, npmPath });
+  }
+  const available = await Promise.all(candidates.map(probeStudioToolchain));
+  return available.filter((item): item is NonNullable<typeof item> => item !== null);
+}
+
+export async function requireStudioToolchain(project: AgentStudioProject): Promise<StudioToolchain> {
+  const chosen = project.toolchain;
+  if (!chosen) throw new Error('请先调用 studio_detect_environment，选择可用的 Node/npm 并调用 studio_select_toolchain。');
+  if (!await probeStudioToolchain(chosen)) {
+    throw new Error('当前项目选择的 Node/npm 已不可用。请重新调用 studio_detect_environment 并让用户选择。');
+  }
+  return chosen;
+}
+
+export async function runProjectCommand(projectDir: string, command: string, args: string[], toolchain?: StudioToolchain): Promise<{ stdout: string; stderr: string }> {
+  if (command !== 'npm') return runDirect(command, args, projectDir);
+  if (!toolchain) throw new Error('尚未选择 Node/npm 工具链。请先检查环境并选择。');
+  return runNpm(toolchain, args, projectDir);
+}
+
+/** 持久化 buildCommand 的白名单校验（纯数据检查，不依赖工具链，先于环境校验执行）。 */
+export function assertStandardBuildCommand(feature: StudioFeatureEntry): void {
   if (!feature.source) return;
   const [command, ...args] = feature.source.buildCommand;
   if (command !== 'npm' || args.join(' ') !== 'run build') {
     throw new Error(`标准 Feature 项目仅支持 buildCommand=["npm","run","build"]：${feature.name}`);
   }
-  await runProjectCommand(feature.source.projectDir, command, args);
+}
+
+export async function runFeatureBuild(feature: StudioFeatureEntry, toolchain?: StudioToolchain): Promise<void> {
+  if (!feature.source) return;
+  assertStandardBuildCommand(feature);
+  const [command, ...args] = feature.source.buildCommand;
+  await runProjectCommand(feature.source.projectDir, command, args, toolchain);
 }
 
 export async function readFeatureProjectEntry(projectDir: string): Promise<StudioFeatureEntry> {
@@ -259,9 +305,13 @@ export async function readFeatureProjectEntry(projectDir: string): Promise<Studi
   };
 }
 
-export async function runSnapshotScript(projectDir: string): Promise<StudioFeatureSnapshot> {
+export async function runSnapshotScript(projectDir: string, toolchain: StudioToolchain): Promise<StudioFeatureSnapshot> {
   const scriptPath = findProjectScript(join('scripts', 'package-feature-project.js'));
-  const { stdout } = await runProjectCommand(dirname(scriptPath), process.execPath, [scriptPath, '--project-dir', projectDir]);
+  const { stdout } = await runDirect(process.execPath, [scriptPath, '--project-dir', projectDir], dirname(scriptPath), {
+    ...process.env,
+    STUDIO_NODE_PATH: toolchain.nodePath,
+    STUDIO_NPM_PATH: toolchain.npmPath,
+  });
   const line = stdout.trim().split(/\r?\n/).find((item) => item.startsWith('{')) || '';
   const result = JSON.parse(line) as { ok?: boolean; snapshot?: StudioFeatureSnapshot; error?: string };
   if (!result.ok || !result.snapshot) throw new Error(result.error || '创建本地 Snapshot 失败。');
@@ -469,7 +519,7 @@ export async function syncFeaturesToRuntime(
   const reload: Array<{ name: string; modulePath: string }> = [];
   const unchanged: string[] = [];
   for (const feature of project.features) {
-    await runFeatureBuild(feature);
+    await runFeatureBuild(feature, project.toolchain);
     const currentFingerprint = await fingerprintModule(feature.modulePath);
     if (!mountedFeatures.has(feature.name)) {
       ensure.push({ name: feature.name, modulePath: feature.modulePath });

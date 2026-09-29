@@ -77,9 +77,9 @@ describe('AgentStudioFeature', () => {
   });
 
   describe('Tool registration', () => {
-    it('should expose exactly 14 tools', () => {
+    it('should expose exactly 16 tools', () => {
       const feature = new AgentStudioFeature({ workspaceDir, statePath: join(workspaceDir, 'state.json') });
-      assert.equal(feature.getTools().length, 14);
+      assert.equal(feature.getTools().length, 16);
     });
 
     it('should have expected tool names', () => {
@@ -90,6 +90,7 @@ describe('AgentStudioFeature', () => {
         'studio_create_feature',
         'studio_create_snapshot',
         'studio_define_test',
+        'studio_detect_environment',
         'studio_get_project',
         'studio_get_run',
         'studio_initialize_project',
@@ -98,6 +99,7 @@ describe('AgentStudioFeature', () => {
         'studio_remove_feature',
         'studio_run_test',
         'studio_save_checkpoint',
+        'studio_select_toolchain',
         'studio_start_runtime',
         'studio_stop_runtime',
       ]);
@@ -411,6 +413,11 @@ describe('AgentStudioFeature', () => {
   describe('studio_initialize_project / studio_define_test', () => {
     it('writes project, defines a test with assertions, round-trips via list', async () => {
       await exec('studio_initialize_project', { projectDir, name: 'demo', goal: '演示' });
+      const projectFile = join(projectDir, 'agent-studio.json');
+      const persistedProject = JSON.parse(await fs.readFile(projectFile, 'utf8')) as Record<string, unknown>;
+      persistedProject.toolchain = { source: 'custom', nodePath: '/tools/node', npmPath: '/tools/npm' };
+      await fs.writeFile(projectFile, JSON.stringify(persistedProject));
+      await exec('studio_initialize_project', { projectDir, name: 'demo', goal: '演示' });
       const defined = await exec('studio_define_test', {
         id: 'allow-create',
         title: '创建工单',
@@ -430,7 +437,8 @@ describe('AgentStudioFeature', () => {
       assert.equal(tests[0].assertions.length, 2);
 
       const project = await exec('studio_get_project');
-      assert.equal((project as { project: { schemaVersion: number } }).project.schemaVersion, 3);
+      assert.equal((project as { project: { schemaVersion: number } }).project.schemaVersion, 4);
+      assert.deepEqual((project as { project: { toolchain?: unknown } }).project.toolchain, { source: 'custom', nodePath: '/tools/node', npmPath: '/tools/npm' });
     });
 
     it('re-initialize keeps tests and features', async () => {
@@ -439,7 +447,7 @@ describe('AgentStudioFeature', () => {
       assert.equal((listed as { tests: unknown[] }).tests.length, 1);
     });
 
-    it('normalizes legacy schema as schema 3 without losing module registration', async () => {
+    it('normalizes legacy schema as schema 4 without losing module registration', async () => {
       const legacyDir = join(workspaceDir, 'legacy-project');
       await fs.mkdir(legacyDir, { recursive: true });
       await fs.writeFile(join(legacyDir, 'legacy.mjs'), 'export default class { name = "legacy"; getTools() { return []; } }\n');
@@ -456,10 +464,12 @@ describe('AgentStudioFeature', () => {
       }));
       await exec('studio_initialize_project', { projectDir: legacyDir, name: 'legacy' });
       const loaded = await exec('studio_get_project');
-      const project = (loaded as { project: { schemaVersion: number; features: Array<{ name: string; modulePath: string }> } }).project;
-      assert.equal(project.schemaVersion, 3);
+      const project = (loaded as { project: { schemaVersion: number; id: string; environment?: { kind: string; address: string }; features: Array<{ name: string; modulePath: string }> } }).project;
+      assert.equal(project.schemaVersion, 4);
       assert.equal(project.features[0].name, 'legacy');
       assert.equal(project.features[0].modulePath, join(legacyDir, 'legacy.mjs'));
+      assert.ok(project.id.startsWith('studio-'));
+      assert.deepEqual(project.environment, { kind: 'local-directory', address: legacyDir });
     });
 
     it('rejects a nonstandard persisted build command before it reaches a shell', async () => {

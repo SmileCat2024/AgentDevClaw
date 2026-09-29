@@ -62,6 +62,7 @@ export {
   markRuntimeStopped,
   type TestRuntimeStatus,
   type StudioFeatureSource,
+  type StudioToolchain,
   type StudioFeatureSnapshot,
   type StudioFeatureStatus,
   type StudioFeatureEntry,
@@ -80,6 +81,9 @@ export {
   findProjectScript,
   findAgentRegistryModuleUrl,
   findCreateFeatureCliPath,
+  detectStudioToolchains,
+  probeStudioToolchain,
+  requireStudioToolchain,
   normalizeStandaloneAgentMetadata,
   getRuntimePlanPath,
   getRuntimeOverridesPath,
@@ -236,13 +240,15 @@ export class AgentStudioFeature implements AgentFeature {
 
   async updateRegistry(projectDir: string, project: AgentStudioProject): Promise<void> {
     const entry: StudioProjectEntry = {
+      id: project.id,
       projectDir,
+      environment: project.environment || { kind: 'local-directory', address: projectDir },
       name: project.name,
       goal: project.goal,
       targetAgent: project.targetAgent,
       updatedAt: project.updatedAt,
     };
-    const rest = (await this.readRegistry()).filter((item) => item.projectDir !== projectDir);
+    const rest = (await this.readRegistry()).filter((item) => item.id !== project.id && item.projectDir !== projectDir);
     const next = [...rest, entry].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     await fs.mkdir(dirname(this.getRegistryPath()), { recursive: true });
     await fs.writeFile(this.getRegistryPath(), `${JSON.stringify(next, null, 2)}\n`, 'utf8');

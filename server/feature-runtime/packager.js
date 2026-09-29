@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
+import { delimiter } from 'path';
 import { promises as fs } from 'fs';
 
 import {
@@ -10,8 +11,14 @@ import {
 import { ensureFeatureProjectManifest } from '../routes/feature-repository.js';
 import { runCommand } from '../routes/fs-operations.js';
 
-function npmCommand() {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+function packNpmCommand() {
+  const nodePath = process.env.STUDIO_NODE_PATH;
+  const npmPath = process.env.STUDIO_NPM_PATH;
+  if (!nodePath || !npmPath) return { command: process.platform === 'win32' ? 'npm.cmd' : 'npm', prefix: [] };
+  if (!path.isAbsolute(nodePath) || !path.isAbsolute(npmPath)) throw new Error('Studio Node/npm 路径必须是绝对路径。');
+  return npmPath.endsWith('.js')
+    ? { command: nodePath, prefix: [npmPath] }
+    : { command: npmPath, prefix: [] };
 }
 
 async function sha256(filePath) {
@@ -53,8 +60,11 @@ export async function packageFeatureProject({
   if (typeof pkg.version !== 'string' || !pkg.version.trim()) throw new Error('Feature package.json 缺少 version。');
 
   await ensureFeatureProjectManifest(root);
-  await runCommand(npmCommand(), ['run', 'build'], { cwd: root });
-  const { stdout } = await runCommand(npmCommand(), ['pack', '--json'], { cwd: root });
+  const npm = packNpmCommand();
+  const pathValue = [path.dirname(process.env.STUDIO_NODE_PATH || ''), path.dirname(process.env.STUDIO_NPM_PATH || ''), process.env.PATH || process.env.Path || ''].join(delimiter);
+  const env = process.env.STUDIO_NODE_PATH ? { ...process.env, PATH: pathValue, Path: pathValue, npm_node_execpath: process.env.STUDIO_NODE_PATH } : process.env;
+  await runCommand(npm.command, [...npm.prefix, 'run', 'build'], { cwd: root, env });
+  const { stdout } = await runCommand(npm.command, [...npm.prefix, 'pack', '--json'], { cwd: root, env });
   const packed = parsePackOutput(stdout);
   const sourceArchivePath = path.join(root, packed.filename);
   const targetRoot = path.resolve(repositoryDir);

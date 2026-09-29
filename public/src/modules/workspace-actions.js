@@ -192,6 +192,11 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     return;
   }
 
+  if (action.type === 'open_feature_upload') {
+    window.openFeatureUploadDialog();
+    return;
+  }
+
   if (action.type === 'open_artifact_preview') {
     currentWorkspaceArtifactDetail = {
       agentId: activeAgent?.id || '',
@@ -751,6 +756,12 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     ctxArchiveSession({ ns: activeAgent.id, id: action.sessionId });
     return;
   }
+
+  if (action.type === 'open_studio_project' && action.projectId) {
+    window.openStudioProject(action.projectId);
+    return;
+  }
+
 
   if ((action.type === 'show_chat' || action.type === 'resume_session') && !hasSessions) {
     return;

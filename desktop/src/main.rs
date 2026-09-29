@@ -136,12 +136,19 @@ fn service_is_ready(port: u16) -> bool {
 
 fn spawn_supervisor() -> std::io::Result<Child> {
     let repo_root = repo_root();
+    let node_path = repo_root
+        .join("runtime")
+        .join(if cfg!(windows) { "node.exe" } else { "node" });
     let mut cmd = node_command();
     cmd.args(["scripts/run-supervised.js"])
         .current_dir(&repo_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if node_path.is_file() {
+        cmd.env("AGENTDEV_STUDIO_NODE_PATH", &node_path)
+            .env("AGENTDEV_STUDIO_NPM_PATH", repo_root.join("runtime").join("npm").join("bin").join("npm-cli.js"));
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

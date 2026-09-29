@@ -4,6 +4,7 @@
 // （agent-studio.json / projects.json / runs.json）的读写都收敛在本模块。
 
 import os from 'os';
+import { createHash, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { join, resolve } from 'path';
 import type { StudioFeatureVerification, StudioTestCase, StudioRunRecord } from './assertions.js';
@@ -11,6 +12,7 @@ import { normalizeTestCase, type StudioFeatureCoverage } from './assertions.js';
 import { cleanValue } from './clean-value.js';
 
 export type TestRuntimeStatus = 'not-provisioned' | 'running' | 'stopped';
+export interface StudioToolchain { source: 'bundled' | 'system' | 'custom'; nodePath: string; npmPath: string };
 
 export interface StudioFeatureSource {
   kind: 'project';
@@ -47,8 +49,12 @@ export interface StudioAgentDefinition {
 }
 
 export interface AgentStudioProject {
-  schemaVersion: 3;
+  schemaVersion: 4;
+  id: string;
+  projectDir?: string;
   name: string;
+  environment?: { kind: string; address: string };
+  toolchain?: StudioToolchain;
   goal: string;
   targetAgent: string;
   agent?: StudioAgentDefinition;
@@ -67,7 +73,9 @@ export interface WorkspaceState {
 }
 
 export interface StudioProjectEntry {
+  id: string;
   projectDir: string;
+  environment?: { kind: string; address: string };
   name: string;
   goal: string;
   targetAgent: string;
@@ -179,9 +187,25 @@ export function normalizeProject(raw: Partial<AgentStudioProject>): AgentStudioP
   const agent = agentProjectDir && agentMetadataPath
     ? { projectDir: agentProjectDir, metadataPath: agentMetadataPath }
     : undefined;
+  const rawId = cleanValue((raw as Partial<AgentStudioProject> & { id?: string }).id);
+  const legacyDirectory = cleanValue((raw as Partial<AgentStudioProject> & { projectDir?: string }).projectDir);
+  const id = rawId || (legacyDirectory
+    ? `studio-${createHash('sha256').update(legacyDirectory).digest('hex').slice(0, 20)}`
+    : `studio-${randomUUID()}`);
+  const rawEnvironment = (raw as Partial<AgentStudioProject> & { environment?: { kind?: string; address?: string } }).environment;
+  const environment = cleanValue(rawEnvironment?.kind) && cleanValue(rawEnvironment?.address)
+    ? { kind: cleanValue(rawEnvironment?.kind), address: cleanValue(rawEnvironment?.address) }
+    : undefined;
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
+    id,
     name,
+    ...(environment ? { environment } : (legacyDirectory ? { environment: { kind: 'local-directory', address: legacyDirectory } } : {})),
+    ...(legacyDirectory ? { projectDir: legacyDirectory } : {}),
+    ...(raw.toolchain && (raw.toolchain.source === 'bundled' || raw.toolchain.source === 'system' || raw.toolchain.source === 'custom')
+      && cleanValue(raw.toolchain.nodePath) && cleanValue(raw.toolchain.npmPath)
+      ? { toolchain: { source: raw.toolchain.source, nodePath: cleanValue(raw.toolchain.nodePath), npmPath: cleanValue(raw.toolchain.npmPath) } }
+      : {}),
     goal: cleanValue(raw.goal),
     targetAgent: cleanValue(raw.targetAgent),
     ...(agent ? { agent } : {}),
@@ -245,6 +269,7 @@ export function buildProjectMarkdown(
     '## Agent Studio 项目状态',
     '',
     `- 项目：${project.name}`,
+    `- 开发工具链：${project.toolchain ? `${project.toolchain.source}（Node: ${project.toolchain.nodePath}；npm: ${project.toolchain.npmPath}）` : '未选择；开发前先检测环境并请用户选择'}`,
     `- 目标 Agent：${project.targetAgent || '未指定（最小被测 Agent）'}`,
     `- 目标：${project.goal || '未指定'}`,
     `- Test Runtime 状态：${liveStatus}`,

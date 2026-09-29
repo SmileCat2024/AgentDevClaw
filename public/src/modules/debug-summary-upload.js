@@ -398,10 +398,19 @@ async function submitFeatureUpload() {
 
     status.textContent = getRepoLocaleText('上传成功!', 'Upload successful!');
     status.className = 'feature-upload-status success';
-    
+
     setTimeout(() => {
       closeFeatureUploadDialog();
-      renderCurrentMainView();
+      // 仓库列表数据经 agent_detail 一次性载入（loadedAgentDetailIds 去重），
+      // 上传后失效当前焦点 agent 的 detail 缓存并重拉，列表才会出现新包
+      if (focusedAgentId && typeof loadedAgentDetailIds !== 'undefined') {
+        loadedAgentDetailIds.delete(focusedAgentId);
+        loadAgentDetail(focusedAgentId)
+          .then(() => renderCurrentMainView())
+          .catch(e => console.warn(e));
+      } else {
+        renderCurrentMainView();
+      }
     }, 1000);
   } catch (e) {
     status.textContent = getRepoLocaleText('上传失败: ', 'Upload failed: ') + (e && e.message ? e.message : e);

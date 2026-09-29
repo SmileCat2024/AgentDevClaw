@@ -25,6 +25,7 @@ export function runCommand(command, args, options = {}) {
         ], {
           windowsHide: false,
           cwd: options.cwd || PROJECT_ROOT,
+          env: options.env || process.env,
           // 命令行的引号转义已由 quoteCmdArg 完成，必须原样透传给 cmd.exe：
           // 关闭 Node 对参数的自动加引号，否则双层转义互相冲突，含空格/引号
           // 的参数到达子进程时被拆碎（git commit -m "a b" 变成多个 pathspec）
@@ -33,6 +34,7 @@ export function runCommand(command, args, options = {}) {
       : spawn(command, args, {
           windowsHide: false,
           cwd: options.cwd || PROJECT_ROOT,
+          env: options.env || process.env,
         });
     let stdout = '';
     let stderr = '';

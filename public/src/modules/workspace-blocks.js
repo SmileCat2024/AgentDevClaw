@@ -19,6 +19,8 @@
  *     - formatRepoFileSize, normalizeRepoUrl, renderRepoLink
  *     - getFeatureTypeLabel, getCompatibilityTagLabel
  *     - renderFeatureRepositoryBlock
+ *   Agent Studio Blocks：
+ *     - renderStudioProjectsBlock, renderStudioRepositoryBlock
  *   Assembly Workbench 入口：
  *     - renderAssemblyWorkbenchBlock
  *
@@ -52,6 +54,9 @@ function shouldRenderBlock(block) {
   if (visibility === 'chat-header-only') {
     return false;
   }
+  if (typeof visibility === 'string' && visibility.startsWith('block:')) {
+    return currentWorkspaceTab === visibility;
+  }
   if (visibility !== 'focus') return true;
   return currentWorkspaceTab === `block:${block.id}`;
 }
@@ -59,7 +64,8 @@ function shouldRenderBlock(block) {
 function renderActionButton(action, options = {}) {
   const label = localizeWorkspaceValue(action?.label, '');
   const encoded = escapeHtml(JSON.stringify(action?.action || {}));
-  return '<button class="workspace-action" type="button" data-workspace-action="' + encoded + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (options.disabled ? ' disabled' : '') + '>' + escapeHtml(label) + '</button>';
+  const btnClass = options.className || 'workspace-action';
+  return '<button class="' + escapeHtml(btnClass) + '" type="button" data-workspace-action="' + encoded + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (options.disabled ? ' disabled' : '') + '>' + escapeHtml(label) + '</button>';
 }
 
 function renderWorkspaceHero(agent, block) {
@@ -69,9 +75,13 @@ function renderWorkspaceHero(agent, block) {
   const isIM = agent?.id === 'qqbot';
   const actionsHtml = isIM
     ? '<div class="workspace-hero-actions"><button class="ph-banner-btn secondary im-channel-config-btn" type="button" onclick="window.openIMChannelConfig()">' + (currentLanguage === 'zh' ? '配置渠道' : 'Channel Config') + '</button></div>'
-    : '';
+    : (Array.isArray(block?.actions) && block.actions.length > 0
+      ? '<div class="workspace-hero-actions">' + block.actions.map((action) => renderActionButton(action, {
+        className: agent?.id === 'agent-studio' ? 'ph-banner-btn ph-new-chat-btn' : undefined,
+      })).join('') + '</div>'
+      : '');
   return [
-    '<section class="' + heroClass + (isIM ? ' has-actions' : '') + '">',
+    '<section class="' + heroClass + (actionsHtml ? ' has-actions' : '') + '">',
     '<div class="workspace-hero-main">',
     '<div class="workspace-kicker">' + escapeHtml(localizeWorkspaceValue(block.kicker, t('workspace_kicker'))) + '</div>',
     '<div class="workspace-title">' + escapeHtml(title) + '</div>',
@@ -137,55 +147,159 @@ function renderWorkspaceLauncherGrid(agent, block) {
 }
 
 
+function getStudioViewState() {
+  try { return JSON.parse(localStorage.getItem('agent-studio-view') || '{}'); }
+  catch { return {}; }
+}
+
+function setStudioViewState(next) {
+  localStorage.setItem('agent-studio-view', JSON.stringify(next));
+}
+
+function openStudioProject(projectId) {
+  setStudioViewState({ ...getStudioViewState(), projectId });
+  setPreferredUnitMode('studio-project-detail');
+  currentWorkspaceTab = 'block:studio-project-detail';
+  renderCurrentMainView();
+}
+
+window.openStudioProject = openStudioProject;
+
+// Studio 空态：复用挂载管理页 .ph-mount-empty-cta 视觉配方（虚线卡片 + 图标 + 标题 + 描述）
+function renderStudioEmptyCta(title, desc) {
+  return '<div class="ph-mount-empty-cta">'
+    + '<div class="ph-mount-empty-icon" aria-hidden="true">'
+    + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">'
+    + '<rect x="3" y="3" width="18" height="18" rx="2"></rect>'
+    + '<path d="M12 8v8"></path>'
+    + '<path d="M8 12h8"></path>'
+    + '</svg></div>'
+    + '<div class="ph-mount-empty-title">' + escapeHtml(title) + '</div>'
+    + '<div class="ph-mount-empty-desc">' + escapeHtml(desc) + '</div>'
+    + '</div>';
+}
+
+// Studio 视图分页栏：banner 下方的 surface 内元素，只在项目/仓库两个
+// Studio 视图间切换（show_home / show_workspace_tab 均为既有通用动作），
+// 不使用全局 workspace-tabs-bar（那会插手工作空间模式状态）。
+function renderStudioTabBar(active) {
+  const tabs = [
+    { id: 'home', label: currentLanguage === 'zh' ? '项目' : 'Projects', action: { type: 'show_home' } },
+    { id: 'repository', label: currentLanguage === 'zh' ? 'Feature 仓库' : 'Feature Repository', action: { type: 'show_workspace_tab', tab: 'repository' } },
+  ];
+  return '<div class="ph-session-tab-bar studio-view-tab-bar"><div class="ph-session-tabs-row">'
+    + tabs.map((tab) => '<button class="ph-session-tab studio-view-tab' + (tab.id === active ? ' active' : '') + '" type="button" data-workspace-action="' + escapeHtml(JSON.stringify(tab.action)) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(tab.label) + '</button>').join('')
+    + '</div></div>';
+}
+
 function renderStudioProjectsBlock(agent, block) {
   const workspaceState = getAgentWorkspaceState(agent);
   const projects = Array.isArray(workspaceState?.studioProjects) ? workspaceState.studioProjects : [];
-  const title = localizeWorkspaceValue(block.title, '');
-  const desc = localizeWorkspaceValue(block.description, '');
-  const emptyHtml = [
-    '<div class="workspace-history-list">',
-    '<div class="workspace-history-item"><div>' + escapeHtml(currentLanguage === 'zh' ? '还没有沉淀的项目。在对话中初始化的项目会出现在这里。' : 'No projects yet. Projects initialized in conversation will appear here.') + '</div></div>',
-    '</div>',
-  ].join('');
+  const isZh = currentLanguage === 'zh';
+  const cards = projects.map((project) => {
+    const id = String(project.id || project.projectDir || '');
+    const openAction = escapeHtml(JSON.stringify({ type: 'open_studio_project', projectId: id }));
+    const address = project.environment?.address || project.projectDir || '';
+    const detailParts = [project.updatedAt ? formatWorkspaceDate(project.updatedAt) : ''].filter(Boolean);
+    return '<div class="feature-card" style="cursor:pointer;" title="' + escapeHtml(project.name || '') + '"'
+      + ' data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">'
+      + '<div class="feature-card-top"><div class="feature-card-main"><span class="feature-card-dot"></span>'
+      + '<div style="min-width:0;"><div class="feature-card-name">' + escapeHtml(project.name || 'Untitled project') + '</div>'
+      + (project.goal ? '<div class="feature-card-file">' + escapeHtml(project.goal) + '</div>' : '')
+      + '</div></div></div>'
+      + (detailParts.length > 0 ? '<div class="feature-card-detail"><span>' + detailParts.map(escapeHtml).join('</span><span>') + '</span></div>' : '')
+      + '</div>';
+  }).join('');
+  const bodyHtml = cards
+    ? '<div class="feature-grid">' + cards + '</div>'
+    : renderStudioEmptyCta(
+      isZh ? '还没有项目' : 'No projects yet',
+      isZh ? '点击右上角「新建项目」选择工作目录开始开发。' : 'Click "New project" in the top-right corner to pick a working directory and start.',
+    );
+  return '<section class="workspace-section">'
+    + renderStudioTabBar('home')
+    + bodyHtml
+    + '</section>';
+}
 
-  const bodyHtml = projects.length > 0
-    ? '<div class="feature-project-list">' + projects.map((project) => {
-        const continueAction = escapeHtml(JSON.stringify({
-          type: 'create_session',
-          projectName: String(project.name || ''),
-          openDirectory: String(project.projectDir || ''),
-        }));
-        const projectPreview = String(project.goal || '');
-        return [
-          '<div class="feature-project-card">',
-          '<div class="feature-project-row">',
-          '<div class="feature-project-summary">',
-          '<div class="feature-project-titlebar">',
-          '<div class="workspace-history-title">' + escapeHtml(String(project.name || project.projectDir || '')) + '</div>',
-          '</div>',
-          project.updatedAt ? '<div class="feature-project-meta-line"><span>' + escapeHtml(formatWorkspaceDate(project.updatedAt)) + '</span></div>' : '',
-          projectPreview ? '<div class="workspace-history-preview">' + escapeHtml(projectPreview) + '</div>' : '',
-          project.projectDir ? '<div class="workspace-history-meta">' + escapeHtml(project.projectDir) + '</div>' : '',
-          '</div>',
-          '<div class="feature-project-side">',
-          '<div class="feature-project-head-actions">',
-          '<button class="workspace-action" type="button" data-workspace-action="' + continueAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(currentLanguage === 'zh' ? '继续开发' : 'Continue') + '</button>',
-          '</div>',
-          '</div>',
-          '</div>',
-          '</div>',
-        ].join('');
+function renderStudioProjectDetailBlock(agent) {
+  const projects = getAgentWorkspaceState(agent)?.studioProjects || [];
+  const state = getStudioViewState();
+  const project = projects.find((entry) => String(entry.id || entry.projectDir) === String(state.projectId)) || null;
+  const isZh = currentLanguage === 'zh';
+  if (!project) {
+    return '<section class="workspace-section">' + renderStudioTabBar('home')
+      + renderStudioEmptyCta(isZh ? '项目暂不可用' : 'Project unavailable', isZh ? '返回项目列表重新选择。' : 'Go back and pick a project from the list.')
+      + '</section>';
+  }
+  const address = project.environment?.address || project.projectDir || '';
+  const createAction = escapeHtml(JSON.stringify({ type: 'create_session', studioProjectId: project.id, projectName: project.name || '', openDirectory: address }));
+  const sessions = getWorkspaceSessions(agent).filter((session) => String(session.studioProjectId || session.metadata?.studioProjectId || '') === String(project.id));
+  const sessionsHtml = sessions.length
+    ? '<div class="workspace-history-list">' + sessions.map((session) => {
+        const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
+        return '<div class="workspace-history-item"><div class="workspace-history-main"><div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>'
+          + '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div></div>'
+          + '<div class="workspace-history-side"><button class="workspace-action secondary" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(isZh ? '打开会话' : 'Open session') + '</button></div></div>';
       }).join('') + '</div>'
-    : emptyHtml;
+    : renderStudioEmptyCta(isZh ? '还没有开发会话' : 'No development sessions yet', isZh ? '新建对话，在本项目上继续开发。' : 'Start a conversation to keep working on this project.');
+  return '<section class="workspace-section studio-project-detail">' + renderStudioTabBar('home')
+    + '<div class="workspace-section-header"><div><div class="workspace-section-title">' + escapeHtml(project.name || 'Untitled project') + '</div>'
+    + (project.goal ? '<div class="workspace-section-desc">' + escapeHtml(project.goal) + '</div>' : '') + '</div>'
+    + '<button class="workspace-action" type="button" data-workspace-action="' + createAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(isZh ? '新建对话' : 'New conversation') + '</button></div>'
+    + (address
+      ? '<div class="feature-project-meta-line"><span>' + escapeHtml(isZh ? '工作环境' : 'Working environment') + '</span>'
+        + '<span>' + escapeHtml(address) + '</span></div>'
+      : '')
+    + '<div class="workspace-section-header"><div><div class="workspace-section-title">' + escapeHtml(isZh ? '对话' : 'Conversations') + '</div></div></div>'
+    + sessionsHtml + '</section>';
+}
+
+function renderStudioRepositoryBlock(agent, block) {
+  const isZh = currentLanguage === 'zh';
+  const repository = getFeatureRepositoryData(agent, block);
+  const packages = Array.isArray(repository?.packages) ? repository.packages : [];
+  let bodyHtml;
+  if (!repository || repository.error) {
+    bodyHtml = renderStudioEmptyCta(
+      isZh ? '仓库数据暂不可用' : 'Repository data is unavailable',
+      String(repository?.error || ''),
+    );
+  } else if (packages.length === 0) {
+    bodyHtml = renderStudioEmptyCta(
+      isZh ? '仓库还是空的' : 'The repository is empty',
+      isZh ? '对话中创建快照或导入 tgz 包后，会收录到这里。' : 'Snapshots created in conversations and imported tgz packages will be collected here.',
+    );
+  } else {
+    bodyHtml = '<div class="feature-grid">' + packages.map((item) => {
+      const versions = Array.isArray(item.versions) ? item.versions : [];
+      const warnings = Array.isArray(item.warnings) ? item.warnings : [];
+      const detailParts = [
+        item.packageName && item.packageName !== item.name ? item.packageName : '',
+        (item.archiveCount || versions.length) > 1
+          ? getRepoLocaleText(`${item.archiveCount || versions.length} 个版本`, `${item.archiveCount || versions.length} versions`)
+          : '',
+        item.updatedAt ? formatWorkspaceDate(item.updatedAt) : '',
+      ].filter(Boolean);
+      return '<div class="feature-card" style="cursor:default;" title="' + escapeHtml(String(item.name || item.id || '')) + '">'
+        + '<div class="feature-card-top"><div class="feature-card-main"><span class="feature-card-dot"></span>'
+        + '<div style="min-width:0;"><div class="feature-card-name">' + escapeHtml(String(item.name || item.id || '')) + '</div>'
+        + (item.description ? '<div class="feature-card-file">' + escapeHtml(String(item.description)) + '</div>' : '')
+        + '</div></div>'
+        + '<div class="feature-card-badges">'
+        + '<span class="workspace-repo-badge ready">v' + escapeHtml(String(item.latestVersion || '-')) + '</span>'
+        + (warnings.length > 0
+          ? '<span class="workspace-repo-badge warn" title="' + escapeHtml(warnings.join('\n')) + '">' + escapeHtml(getRepoLocaleText('元数据不完整', 'Incomplete metadata')) + '</span>'
+          : '')
+        + '</div></div>'
+        + (detailParts.length > 0 ? '<div class="feature-card-detail"><span>' + detailParts.map(escapeHtml).join('</span><span>') + '</span></div>' : '')
+        + '</div>';
+    }).join('') + '</div>';
+  }
 
   return [
     '<section class="workspace-section">',
-    '<div class="workspace-section-header">',
-    '<div>',
-    '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
-    '<div class="workspace-section-desc">' + escapeHtml(desc) + '</div>',
-    '</div>',
-    '</div>',
+    renderStudioTabBar('repository'),
     bodyHtml,
     '</section>',
   ].join('');

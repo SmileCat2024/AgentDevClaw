@@ -31,7 +31,7 @@ async function readArchiveJson(archivePath, archiveEntryPath) {
   return JSON.parse(raw);
 }
 
-async function summarizeArchive(archivePath, source) {
+export async function summarizeArchive(archivePath, source) {
   const [pkg, manifest] = await Promise.all([
     readArchiveJson(archivePath, 'package/package.json'),
     readArchiveJson(archivePath, `package/${FEATURE_MANIFEST_NAME}`).catch(() => null),
