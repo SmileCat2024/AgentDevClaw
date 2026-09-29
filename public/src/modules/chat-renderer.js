@@ -367,10 +367,14 @@ function appendNewMessages(newMessages, startIndex) {
     });
   });
 
-  // 对新消息应用折叠逻辑
-  applyCollapseLogic(container, startIndex);
   updateRollbackActionVisibility();
+  // 先恢复过程可见性，再对新行做出生折叠：新行此刻仍带着插入时的
+  // process-hidden 预隐藏（display:none，scrollHeight=0 不可测量），折叠
+  // 扫描必须等 applyConversationProcessState 揭示之后才有效。顺序颠倒时
+  // 长工具行/调用卡在全渲染分级（窗口化已禁用、后续扫描全部跳过）下
+  // 永不折叠，直到用户切换隐藏/显示过程触发落地 settle。
   applyConversationProcessState(container);
+  applyCollapseLogic(container, startIndex);
   restoreUserCollapseState(container);
   updateFollowLatestButton();
   if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
@@ -512,6 +516,10 @@ function updateLastMessage(msg) {
 
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
+  // 工具结果体重建后高度可能首次越过折叠阈值，重测末行折叠态（全渲染
+  // 分级下没有后续扫描兜底）；cv-hidden / 隐藏态行由 computeRowCollapsePlan
+  // 早退守卫，不会强制布局。
+  if (msg.role === 'tool') syncRowCollapseState(lastRow);
   restoreUserCollapseState(container);
   updateFollowLatestButton();
   if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();

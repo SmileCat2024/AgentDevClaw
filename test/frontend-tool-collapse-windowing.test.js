@@ -847,3 +847,144 @@ test('tiering: full-render mode (setProcessWindowingDisabled) lays out every row
   }
   assert.ok(rehidden > 0, 're-enabling windowing must cv-hide far rows again');
 });
+
+// Streaming append contract: new tail rows arrive pre-hid (process-hidden,
+// display:none — scrollHeight unreadable), so the fold-at-birth scan can only
+// measure them AFTER applyConversationProcessState has revealed them. In the
+// full-render tier every post-landing collapse scan is skipped by design
+// ("new streaming rows settle via the append path"), so appends that run the
+// collapse scan while the rows are still hidden leave long tool blocks
+// expanded forever — until the user toggles hide/show process, whose landing
+// settle folds them. The pair of tests below pins the fixed append sequence.
+function makeCallCard({ contentH, id }) {
+  const card = { classList: makeClassList(), _bar: null };
+  const content = { id, scrollHeight: contentH, classList: makeClassList() };
+  card.querySelector = (sel) => {
+    if (sel === '.tool-content') return content;
+    if (sel === '.tool-call-toggle-bar') return card._bar;
+    return null;
+  };
+  card.appendChild = (child) => {
+    if (child && child._isToggleBar) card._bar = child;
+    return child;
+  };
+  return { card, content };
+}
+
+test('streaming append: new tool rows and call cards fold at birth in the full-render tier', () => {
+  const h = createHarness();
+  h.sandbox.showChatProcess = true;
+  h.sandbox.followLatestEnabled = true;
+
+  // Landing on a settled transcript in the full-render tier (windowing
+  // disabled — the tier regular sessions run in).
+  for (let i = 0; i < 10; i++) {
+    h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
+    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-t${i}` }));
+  }
+  vm.runInContext(`
+    setProcessWindowingDisabled(true);
+    clearProcessDistance(container);
+    applyConversationProcessState(container);
+    if (typeof lockChatViewportToBottomNow === 'function') lockChatViewportToBottomNow();
+    if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
+  `, h.sandbox);
+  assert.ok(
+    h.container._entries.some((e) => e.content.classList.contains('collapsed')),
+    'landing must fold the long tool rows');
+
+  // A tool call arrives mid-stream: an assistant row carrying a long call
+  // card, then a long tool result row. appendNewMessages pre-hides both
+  // process elements before any layout.
+  const startIndex = h.container._entries.length;
+  const callCard = makeCallCard({ contentH: 600, id: `tcallc-msg-${startIndex}-0` });
+  const assistantEntry = h.addRow(makeRow({ role: 'assistant', realH: 60, msgId: `msg-${startIndex}` }));
+  assistantEntry.row._processChildren = [callCard.card];
+  const origRowQsa = assistantEntry.row.querySelectorAll;
+  assistantEntry.row.querySelectorAll = (sel) =>
+    sel === '.tool-call-container'
+      ? assistantEntry.row._processChildren
+      : origRowQsa(sel);
+  const toolEntry = h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Grep', msgId: `msg-${startIndex + 1}` }));
+
+  // The exact pre-hide appendNewMessages applies to freshly inserted rows.
+  assistantEntry.row._processChildren.forEach((c) => c.classList.add('process-hidden'));
+  toolEntry.row.classList.add('process-hidden');
+
+  // applyProcessDistance reveals assistant process children through this
+  // combined selector; route it to the real children so the reveal behaves
+  // like the browser DOM.
+  const origContainerQsa = h.container.querySelectorAll;
+  h.container.querySelectorAll = (sel) => {
+    if (sel === '.reasoning-block.process-hidden, .tool-call-container.process-hidden') {
+      const out = [];
+      for (const e of h.container._entries) {
+        for (const c of (e.row._processChildren || [])) {
+          if (c.classList.contains('process-hidden')) out.push(c);
+        }
+      }
+      return out;
+    }
+    return origContainerQsa(sel);
+  };
+
+  // appendNewMessages' post-fix sequence: reveal first, fold at birth second.
+  vm.runInContext(`
+    applyConversationProcessState(container);
+    applyCollapseLogic(container, ${startIndex});
+  `, h.sandbox);
+
+  assert.equal(toolEntry.content.classList.contains('collapsed'), true,
+    'new long tool result row must fold at birth');
+  assert.equal(callCard.content.classList.contains('collapsed'), true,
+    'new long call card must fold at birth');
+  assert.equal(toolEntry.row.classList.contains('process-hidden'), false,
+    'the fold must have happened on revealed (measurable) rows');
+});
+
+test('appendNewMessages runs the process-state reveal before the fold-at-birth scan', () => {
+  const h = createHarness();
+  h.sandbox.showChatProcess = true;
+  h.sandbox.followLatestEnabled = false;
+  h.addRow(makeRow({ role: 'user', realH: 80, msgId: 'msg-0' }));
+
+  // Minimal append bridge: appendNewMessages inserts HTML via
+  // insertAdjacentHTML and pre-hides via lastElementChild. Back both with a
+  // pre-made row stub (order recording only — semantics live in the test above).
+  const stubQueue = [];
+  const inserted = [];
+  h.container.insertAdjacentHTML = () => { inserted.push(stubQueue.shift() || null); };
+  Object.defineProperty(h.container, 'lastElementChild', {
+    configurable: true,
+    get: () => inserted[inserted.length - 1] || null,
+  });
+  const toolStub = makeRow({ role: 'tool', realH: 600, toolName: 'Grep', msgId: 'msg-2' });
+  toolStub.row.matches = () => true; // '.message-row.tool, .message-row.system'
+  stubQueue.push(toolStub.row);
+
+  h.sandbox.currentMessages = [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'Grep', arguments: { q: 'x' } }] },
+    { role: 'tool', toolCallId: 'c1', content: '{"ok":true}' },
+  ];
+
+  vm.runInContext(`
+    var __order = [];
+    applyConversationProcessState = function () { __order.push('process-state'); };
+    applyCollapseLogic = function (root, start) { __order.push('collapse:' + start); };
+    updateRollbackActionVisibility = function () {};
+    updateFollowLatestButton = function () {};
+    enhanceMarkdownTables = function () {};
+  `, h.sandbox);
+  vm.runInContext('appendNewMessages([currentMessages[2]], 2)', h.sandbox);
+
+  // Copy out of the vm realm: cross-realm arrays fail deepStrictEqual on
+  // prototype identity even with identical contents.
+  const order = [...vm.runInContext('__order', h.sandbox)];
+  assert.deepEqual(
+    order,
+    ['process-state', 'collapse:2'],
+    'fold-at-birth must run after the reveal (hidden rows cannot be measured)');
+  assert.equal(toolStub.row.classList.contains('process-hidden'), true,
+    'the append pre-hide itself must stay (display:none before any layout)');
+});
