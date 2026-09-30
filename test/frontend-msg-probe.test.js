@@ -36,6 +36,10 @@ const overviewDataSource = fs.readFileSync(
   new URL('../public/src/modules/overview-data.js', import.meta.url),
   'utf8',
 );
+const autoTitleSource = fs.readFileSync(
+  new URL('../public/src/modules/auto-title.js', import.meta.url),
+  'utf8',
+);
 
 function extractPollSource() {
   const start = mainSource.indexOf('// ── Runtime poll coordinator');
@@ -201,6 +205,26 @@ function createSandbox({
 
   return { sandbox, fetchCalls, consoleRecords, renders, scheduledDelays };
 }
+
+test('message change detection treats tool image attachments as message changes', () => {
+  const previous = { role: 'tool', toolCallId: 'call-1', content: '{"success":true}' };
+  const next = {
+    ...previous,
+    images: [{ path: 'C:/managed-images/image.png', mediaType: 'image/png' }],
+  };
+  const comparatorSandbox = { __next: next, __previous: previous };
+  vm.createContext(comparatorSandbox);
+  vm.runInContext(autoTitleSource, comparatorSandbox);
+  const changedIndex = vm.runInContext(
+    'findFirstChangedMessageIndex([__next], [__previous])',
+    comparatorSandbox,
+  );
+  assert.equal(changedIndex, 0);
+  assert.equal(
+    vm.runInContext('_messagesEqual(__next, __previous)', comparatorSandbox),
+    false,
+  );
+});
 
 function messageCalls(fetchCalls) {
   return fetchCalls.filter((url) => url.includes('/messages'));

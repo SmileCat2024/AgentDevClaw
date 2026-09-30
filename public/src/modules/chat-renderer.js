@@ -345,6 +345,7 @@ function appendNewMessages(newMessages, startIndex) {
             </div>
             <div class="tool-result-body">${bodyHtml}</div>
           </div>
+          ${renderUserImages(msg.images)}
         </div>
       `;
     }
@@ -454,6 +455,21 @@ function reconcileOptimisticUserEchoes(messages) {
 }
 
 // 更新最后一条消息
+function syncMessageImages(row, images) {
+  const hasImages = Array.isArray(images) && images.length > 0;
+  const existingImages = row.querySelector('.message-images');
+  if (!hasImages) {
+    existingImages?.remove();
+    return;
+  }
+  const imagesHtml = renderUserImages(images);
+  if (existingImages) {
+    existingImages.outerHTML = imagesHtml;
+    return;
+  }
+  row.querySelector('.message-content')?.insertAdjacentHTML('afterend', imagesHtml);
+}
+
 function updateLastMessage(msg) {
   // If the welcome page should be showing, do a full render instead of
   // patching a DOM row that doesn't exist.
@@ -539,6 +555,7 @@ function updateLastMessage(msg) {
     enhanceMathInElement(lastRow);
   }
 
+  syncMessageImages(lastRow, msg.images);
   updateRollbackActionVisibility();
   // 末行内容被整体替换（innerHTML 级 patch），rowCache 中该行的 els
   // 引用已过期；fromIndex=lastIndex 让增量路径按 delete + 重建处理末行。
@@ -1227,7 +1244,7 @@ function renderUserImages(images) {
     let url = imageUrlFromImage(img);
     if (!url) return '';
     return '<div class="message-img-thumb" onclick="openImageZoom(\'' + url.replace(/'/g, "\\'") + '\')">' +
-      '<img src="' + url + '" alt="' + escapeHtml(img.source || '') + '">' +
+      '<img src="' + url + '" alt="' + escapeHtml(img.source || '') + '" loading="lazy" decoding="async">' +
       '</div>';
   }).join('');
   return '<div class="message-images">' + thumbs + '</div>';

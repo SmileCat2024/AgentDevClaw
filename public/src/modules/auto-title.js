@@ -158,6 +158,7 @@ function _messagesEqual(a, b) {
   if ((a.content || '') !== (b.content || '')) return false;
   if ((a.reasoning || '') !== (b.reasoning || '')) return false;
   if ((a.toolCallId || '') !== (b.toolCallId || '')) return false;
+  if (JSON.stringify(a.images || []) !== JSON.stringify(b.images || [])) return false;
   const ac = a.toolCalls, bc = b.toolCalls;
   const acLen = ac ? ac.length : 0;
   const bcLen = bc ? bc.length : 0;
