@@ -566,7 +566,7 @@ let currentWorkspaceDocsetDetail = null;
 let currentProjectDocsetOpen = false;
 let currentProjectRequirementEdit = null;
 let currentProjectDocsetPage = 'requirement';
-let featurePanelWidth = 500;
+let featurePanelWidth = 460;
 let currentTheme = localStorage.getItem('agentdev-theme') || 'dark';
 let currentLanguage = localStorage.getItem('agentdev-language') || 'zh';
 /**

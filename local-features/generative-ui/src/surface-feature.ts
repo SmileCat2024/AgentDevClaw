@@ -12,7 +12,8 @@
  */
 
 import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot } from '@agentdevjs/core';
-import { createTool } from '@agentdevjs/core';
+import type { PackageInfo } from '@agentdevjs/core';
+import { createTool, getPackageInfoFromSource } from '@agentdevjs/core';
 import { fileURLToPath } from 'node:url';
 import type {
   GenerativeUISpecV1,
@@ -66,6 +67,19 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
   // AgentDev discovers Feature-owned skills from the source file's sibling skills/ directory.
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
   readonly description = 'Create and manage persistent interactive UI surfaces in the AgentDevClaw browser client’s right-side “交互页面” (Interaction Pages) panel, independently from the chat.';
+
+  private _packageInfo: PackageInfo | null = null;
+
+  getPackageInfo(): PackageInfo | null {
+    if (!this._packageInfo) {
+      this._packageInfo = getPackageInfoFromSource(this.source);
+    }
+    return this._packageInfo;
+  }
+
+  getTemplateNames(): string[] {
+    return ['ui-surface'];
+  }
 
   private _transport: SurfaceTransport | null = null;
   private _config: Required<GenerativeUISurfaceFeatureConfig>;
@@ -198,6 +212,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       // ── ui_surface_upsert ──
       createTool({
         name: 'ui_surface_upsert',
+        render: { call: 'ui-surface', result: 'ui-surface' },
         description: [
           'Deliver an interactive UI panel to the user — AgentDevClaw\'s built-in visualization area beside the chat.',
           '',
@@ -295,6 +310,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       createTool({
         name: 'ui_surface_get',
         parallelizable: true,
+        render: { call: 'ui-surface', result: 'ui-surface' },
         description: [
           'Fetch the full Spec of an existing UI panel.',
           'Use after context compaction or when resuming a session to recover what panels exist and their current state.',
@@ -350,6 +366,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       createTool({
         name: 'ui_surface_list',
         parallelizable: true,
+        render: { call: 'ui-surface', result: 'ui-surface' },
         description: [
           `List all active UI panels published to ${BROWSER_SURFACE_LOCATION}.`,
           'Returns summaries (surfaceId, title, revision, status) without full Specs.',
@@ -382,6 +399,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       // ── ui_surface_close ──
       createTool({
         name: 'ui_surface_close',
+        render: { call: 'ui-surface', result: 'ui-surface' },
         description: [
           `Close a UI panel. The panel becomes inactive and is removed from ${BROWSER_SURFACE_LOCATION}.`,
           'Idempotent: closing an already-closed panel returns ok. Chat history is not affected.',

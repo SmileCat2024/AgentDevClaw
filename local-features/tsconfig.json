@@ -12,6 +12,7 @@
   },
   "include": [
     "./index.ts",
+    "./templates/**/*.ts",
     "./shared/src/**/*.ts",
     "./shared/test/**/*.ts",
     "./context-guard/src/**/*.ts",

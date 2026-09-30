@@ -32,6 +32,10 @@ const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const SERVER_ORIGIN = `http://127.0.0.1:${process.env.PORT || 1420}`;
 
+// IM 接线员工具的渲染模板资产随 local-features 构建（dist/templates/im-*.render.js），
+// 经 IMOperatorFeature.getTemplateNames() 声明后由 ViewerWorker 以 /tpl/ URL 提供。
+const LOCAL_FEATURES_ROOT = join(dirname(dirname(dirname(__dirname))), 'local-features');
+
 // 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
 const USER_DATA_ROOT = resolveUserDataDir();
 const SYSTEM_FEATURE_CONFIG_PATH = join(USER_DATA_ROOT, 'feature-setup.json');
@@ -115,6 +119,20 @@ class IMOperatorFeature {
     this.name = 'im-operator';
   }
 
+  getPackageInfo() {
+    // 模板资产的包根与版本随 local-features/package.json（读真实文件，避免版本漂移）
+    try {
+      const pkg = JSON.parse(readFileSync(join(LOCAL_FEATURES_ROOT, 'package.json'), 'utf8'));
+      return { name: pkg.name || 'agentdevclaw-local-features', version: pkg.version, root: LOCAL_FEATURES_ROOT };
+    } catch {
+      return { name: 'agentdevclaw-local-features', version: '0.0.0', root: LOCAL_FEATURES_ROOT };
+    }
+  }
+
+  getTemplateNames() {
+    return ['im-overview', 'im-browse', 'im-line', 'upload-attachment'];
+  }
+
   static nowStr() {
     const d = new Date();
     const pad = (n) => String(n).padStart(2, '0');
@@ -127,6 +145,7 @@ class IMOperatorFeature {
       {
         name: 'im_overview',
         parallelizable: true,
+        render: { call: 'im-overview', result: 'im-overview' },
         description: '查看所有 IM 线路的当前状态。返回每条线路的载体（QQ/微信）和绑定会话信息。',
         parameters: {
           type: 'object',
@@ -193,6 +212,7 @@ class IMOperatorFeature {
       {
         name: 'im_browse',
         parallelizable: true,
+        render: { call: 'im-browse', result: 'im-browse' },
         description: '列出所有可连接的工作空间会话。返回每个工作空间下的项目和在线会话，包含模型名称、上下文用量、压缩阈值等运行时状态，以及 im_connect_line 所需的 agentId 和 sessionId。',
         parameters: {
           type: 'object',
@@ -279,6 +299,7 @@ class IMOperatorFeature {
       },
       {
         name: 'im_connect_line',
+        render: { call: 'im-line', result: 'im-line' },
         description: '将指定线路连接到目标会话。连接后该线路的 IM 消息将由目标会话处理。先用 im_overview 获取 lineId，用 im_browse 获取 agentId 和 sessionId。',
         parameters: {
           type: 'object',
@@ -319,6 +340,7 @@ class IMOperatorFeature {
       },
       {
         name: 'im_disconnect_line',
+        render: { call: 'im-line', result: 'im-line' },
         description: '断开指定线路的当前连接。',
         parameters: {
           type: 'object',
@@ -754,6 +776,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     const wcUploadTool = this.wecomBotFeature?.getTools().find(t => t.name === 'upload_attachment');
     this.tools.register({
       name: 'upload_attachment',
+      render: { call: 'upload-attachment', result: 'upload-attachment' },
       description:
         '上传一个文件/图片/语音/视频作为附件。上传成功后，附件会在当前回复结束后自动发送给对方。' +
         '支持本地文件绝对路径和公网 URL。文件大小限制 20MB。',

@@ -4,6 +4,10 @@ Claw 仓库自有的 feature 与包装层源码（TypeScript，编译产物在 `
 
 构建：`npm run build:local-features`；测试：`npm run test:features`。
 
+## 渲染模板
+
+工具调用/结果卡的自定义渲染模板位于顶层 `templates/*.render.ts`，编译到 `dist/templates/{name}.render.js`，由各 feature 的 `getTemplateNames()` 声明、`getPackageInfo()` 锚定包根（`local-features/package.json`），经 ViewerWorker 以 `/tpl/` URL 提供给前端。模板名全局唯一，新增模板后在对应 feature 的 `getTemplateNames()` 登记，并给工具挂 `render: { call, result }` 配置。编写契约见 [docs/protocols/tool-rendering.md](../docs/protocols/tool-rendering.md)。
+
 ## 分层结构
 
 ### 基础层（通用能力与协议）

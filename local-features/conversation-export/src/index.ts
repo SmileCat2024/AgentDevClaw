@@ -9,16 +9,34 @@
  */
 
 import type { AgentFeature, Tool } from '@agentdevjs/core';
+import { getPackageInfoFromSource } from '@agentdevjs/core';
+import type { PackageInfo } from '@agentdevjs/core';
+import { fileURLToPath } from 'url';
 import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
 export class ConversationExportFeature implements AgentFeature {
   readonly name = 'conversation-export';
+  readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
+
+  private _packageInfo: PackageInfo | null = null;
+
+  getPackageInfo(): PackageInfo | null {
+    if (!this._packageInfo) {
+      this._packageInfo = getPackageInfoFromSource(this.source);
+    }
+    return this._packageInfo;
+  }
+
+  getTemplateNames(): string[] {
+    return ['export-conversation'];
+  }
 
   getTools(): Tool[] {
     return [
       {
         name: 'export_conversation',
         parallelizable: true,
+        render: { call: 'export-conversation', result: 'export-conversation' },
         description:
           '将指定会话的完整对话记录渲染为精美的 HTML 文件（包含用户消息、AI 回复、工具调用过程、思考过程等），保存到本地并返回文件路径。' +
           '生成的 HTML 文件可直接用浏览器打开，也可通过 upload_attachment 发送给 IM 用户。' +

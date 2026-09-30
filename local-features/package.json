@@ -1,0 +1,7 @@
+{
+  "name": "agentdevclaw-local-features",
+  "version": "0.2.2",
+  "private": true,
+  "type": "module",
+  "description": "Claw 本地 feature 包。渲染模板资产（dist/templates/*.render.js）经各 feature 的 getTemplateNames() 声明后由 ViewerWorker 以 /tpl/ URL 提供。"
+}

@@ -19,9 +19,10 @@
 
 import type { AgentFeature, Tool } from '@agentdevjs/core';
 import type { CallStartContext, Context } from '@agentdevjs/core';
-import { CoreLifecycle } from '@agentdevjs/core';
-import type { HookDeclarations } from '@agentdevjs/core';
+import { CoreLifecycle, getPackageInfoFromSource } from '@agentdevjs/core';
+import type { HookDeclarations, PackageInfo } from '@agentdevjs/core';
 import { buildTrimmedSeedMessages, normalizeExportPolicy } from '@agentdevjs/core';
+import { fileURLToPath } from 'url';
 import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
 const OVERVIEW_MAX_CHARS = 30_000;
@@ -372,6 +373,20 @@ function formatDirectoryEntryText(entry: Record<string, unknown>): string[] {
 
 export class SessionReferenceFeature implements AgentFeature {
   readonly name = 'session-reference';
+  readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
+
+  private _packageInfo: PackageInfo | null = null;
+
+  getPackageInfo(): PackageInfo | null {
+    if (!this._packageInfo) {
+      this._packageInfo = getPackageInfoFromSource(this.source);
+    }
+    return this._packageInfo;
+  }
+
+  getTemplateNames(): string[] {
+    return ['session-list', 'session-read'];
+  }
 
   /**
    * 输入框引用联动的消费入口：CallStart 读 metadata['session-reference']
@@ -467,6 +482,7 @@ export class SessionReferenceFeature implements AgentFeature {
       {
         name: 'session_list',
         parallelizable: true,
+        render: { call: 'session-list', result: 'session-list' },
         description:
           '列出可参考的历史会话目录（跨 agent 聚合）。返回每个会话的 agentId、sessionId、标题、摘要、工作目录与更新时间。' +
           '先找到目标会话的 agentId 与 sessionId（会话按二元组寻址），再用 session_read_overview 查看其 trim 概览。',
@@ -513,6 +529,7 @@ export class SessionReferenceFeature implements AgentFeature {
       {
         name: 'session_read_overview',
         parallelizable: true,
+        render: { call: 'session-read', result: 'session-read' },
         description:
           '读取指定会话的 trim 视图概览：头部附任务事件时间线（todo 语义锚点），正文为按 call 分组的对话骨架' +
           '（用户/AI 消息保留，工具活动折叠为单行摘要），每行标注轮次号 T<N>；轮次过多时未入正文的轮次' +
@@ -560,6 +577,7 @@ export class SessionReferenceFeature implements AgentFeature {
       {
         name: 'session_read_turn',
         parallelizable: true,
+        render: { call: 'session-read', result: 'session-read' },
         description:
           '读取指定会话某一轮的完整原始内容（不裁剪，含完整的工具调用与工具结果）。' +
           '轮次号来自 session_read_overview 概览中的 T<N> 标注。',
