@@ -49,7 +49,7 @@ function harness() {
   const stream = () => ctx.window.BgPanel.__testSource();
   const ids = () => [...ctx.window.BgPanel.__testTasks().keys()];
   const task = id => ctx.window.BgPanel.__testTasks().get(id);
-  return { ctx, requests, pending, source: stream, ids, task, timers };
+  return { ctx, requests, pending, source: stream, ids, task, timers, badge };
 }
 
 const output = (id, status, tail) => ({ type: 'output', data: { id, status, startedAt: 1, command: 'bash', outputTail: tail } });
@@ -147,15 +147,51 @@ describe('background task panel', () => {
     h.ctx.window.BgPanel.onClose();
   });
 
-  it('polls only a count for the closed-panel badge', async () => {
+  it('drives the closed-panel badge from the event stream (list baseline + live deltas)', async () => {
     const h = harness();
     h.ctx.window.BgPanel.refreshBadge();
-    // count 前置了 channels 能力发现（异步），让发现先落定。
+    // 通道发现（channels）先落定，随后建立徽标专用订阅。
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(h.requests[0].requestType, 'count');
-    h.pending.shift()({ ok: true, running: 3 });
+    const badgeStream = h.ctx.window.BgPanel.__testBadgeStream();
+    assert.ok(badgeStream);
+    assert.ok(badgeStream.url.includes('latest=1'));
+    badgeStream.emit('open');
+    assert.equal(h.requests[0].requestType, 'list');
+    h.pending.shift()({ ok: true, tasks: [
+      { id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' },
+      { id: 'bg-2', status: 'running', startedAt: 2, command: 'bash' },
+    ] });
     await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.badge.textContent, '2');
+    // 事件帧即时增减：任务终结减一，新任务开始加一。
+    badgeStream.emit('event', output('bg-1', 'done', 'finished'));
+    assert.equal(h.badge.textContent, '1');
+    badgeStream.emit('event', { type: 'started', data: { id: 'bg-3', status: 'running', startedAt: 3, command: 'bash' } });
+    assert.equal(h.badge.textContent, '2');
+    // 徽标订阅不碰面板 tasks。
     assert.deepEqual(h.ids(), []);
+    // resync 对账：以 list 全量重建基线。
+    badgeStream.emit('resync');
+    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-3', status: 'running', startedAt: 3, command: 'bash' }] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.badge.textContent, '1');
+    // 通道关闭：拆除订阅并归零。
+    badgeStream.emit('closed');
+    assert.equal(h.badge.textContent, '');
+    assert.equal(h.ctx.window.BgPanel.__testBadgeStream(), null);
+  });
+
+  it('panel open takes over the badge and tears down its stream', async () => {
+    const h = harness();
+    h.ctx.window.BgPanel.refreshBadge();
+    await new Promise(resolve => setImmediate(resolve));
+    const badgeStream = h.ctx.window.BgPanel.__testBadgeStream();
+    assert.ok(badgeStream);
+    h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(badgeStream.closed, true);
+    assert.equal(h.ctx.window.BgPanel.__testBadgeStream(), null);
+    h.ctx.window.BgPanel.onClose();
   });
 
   it('discards a list response from a previous channel after switching sessions', async () => {

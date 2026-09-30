@@ -16,13 +16,14 @@
  * 任务状态真值仍是 bash_bg / bg_status。
  *
  * 图标徽标（rail-bg-badge，与「交互页面」徽标同款）：显示当前运行中的
- * 后台任务数。面板打开时由 SSE 事件流（tasks 真值）驱动；面板关闭时由
- * 独立的 3s 轮询驱动——先查 channels 列表（恒 200）确认会话声明了
- * shell-bg 通道，有才走权威的 count 请求面（不拉输出或重放：活动会话
- * 的事件缓冲会频繁滚动，徽标只需要运行中数量）。无通道会话（coder /
- * 其他工作空间 / 已停止）不发 count——空态 RPC 必 404，浏览器对非 2xx
- * 的网络层日志无法从 JS 抑制（对齐 genui 徽标打列表端点的先例）。
- * 两条路径互斥不双写（source 存活时轮询让位）。
+ * 后台任务数。两条路径互斥不双写（source 存活时轮询与徽标订阅让位）：
+ * 面板打开时由 SSE 事件流（tasks 真值）驱动；面板关闭时由徽标专用的
+ * SSE 订阅驱动——事件帧即时增减 running 集合，连接建立 / resync 时拉一
+ * 次 list（带 id）重建基线。订阅的建立与通道发现走 30s 周期轮询（恒 200
+ * 的 channels 列表）兼 runtime 切换后的再声明重试；无通道会话（coder /
+ * 其他工作空间 / 已停止）不建订阅。事件断线由 EventSource 自动带
+ * Last-Event-ID 续传，数字漂移在下次基线重建时对齐（徽标是概览提示，
+ * 真值在面板与 bg_status）。
  *
  * 视觉对齐右侧面板既有设计语言（feature-panel-section 卡片、
  * bash-progress 系列观感、项目等宽字体栈与状态色变量）。
@@ -40,8 +41,8 @@
   const CHANNEL_ID = 'shell-bg';
   const REFRESH_SESSION_WATCH_MS = 2_000;
   const ELAPSED_TICK_MS = 1_000;
-  /** 面板关闭态的徽标轮询间隔（对齐交互页面徽标的 3s 节奏）。 */
-  const BADGE_POLL_MS = 3_000;
+  /** 面板关闭态的通道发现与徽标订阅保障周期（发现走恒 200 的 channels 列表）。 */
+  const BADGE_POLL_MS = 30_000;
   /** 输出区距底不超过该值视为「跟随底部」，重绘后继续贴底；上翻阅读时不打扰。 */
   const FOLLOW_THRESHOLD_PX = 28;
   /** 手动汇报请求的兜底恢复窗（fetch 悬挂时按钮不永久卡死）。 */
@@ -82,10 +83,13 @@
   /** 卡片骨架（挖空时长/输出尾巴后的 HTML）：判断结构是否变化。 */
   let lastSkeleton = '';
 
-  /** 徽标轮询状态（面板关闭态）：count 请求面计数，不碰面板 tasks。 */
+  /** 徽标状态（面板关闭态）：事件订阅驱动 running 集合，不碰面板 tasks。 */
   let badgeAddressKey = '';
   let badgePollInFlight = false;
   let badgeTimer = null;
+  let badgeSource = null;
+  let badgeStreamKey = '';
+  const badgeRunningIds = new Set();
   /** 上次写入徽标的值（-1 = 隐藏）：repaint 每秒都会调，值未变不碰 DOM。 */
   let lastBadgeValue = null;
 
@@ -432,6 +436,9 @@
 
   function startChannel() {
     teardownChannel();
+    // 面板订阅接管徽标（repaint 每次以面板 tasks 汇写）：拆徽标订阅，避免
+    // 同通道双订阅双写。
+    _teardownBadgeStream();
     eventRevision = 0;
     listRevision = 0;
     taskRevisions.clear();
@@ -533,12 +540,75 @@
     }
   }
 
+  /** 拆除徽标订阅并清空 running 集合（面板接管 / 会话切换 / 通道消失）。 */
+  function _teardownBadgeStream() {
+    if (badgeSource) { badgeSource.close(); badgeSource = null; }
+    badgeStreamKey = '';
+    badgeRunningIds.clear();
+  }
+
+  /** 拉一次 list（带 id）重建徽标基线：连接建立与 resync 对账共用。 */
+  async function _rebuildBadgeBaseline(stream) {
+    const result = await channelRequest('list', {});
+    if (badgeSource !== stream) return;
+    if (result.ok === true && Array.isArray(result.tasks)) {
+      badgeRunningIds.clear();
+      for (const task of result.tasks) {
+        if (task?.id && task.status === 'running') badgeRunningIds.add(task.id);
+      }
+      _setBadge(badgeRunningIds.size);
+    }
+  }
+
   /**
-   * 面板关闭态的徽标数据源：channels 列表确认 shell-bg 已声明后，权威
-   * count 请求面计数运行中任务。面板打开（source 存活）时让位给 SSE
-   * 事件流。寻址与面板同源（currentAddressing）：会话切换即先隐藏，
-   * 避免旧会话数字滞留；通道未声明 / runtime 未连接（会话无后台任务
-   * 通道或已停止）归零。
+   * 徽标专用 SSE 订阅（面板关闭态）：latest=1 不重放事件环，事件帧即时
+   * 增减 running 集合；断线由 EventSource 自动带 Last-Event-ID 续传，
+   * 重连成功 / resync 时重建基线。面板订阅存活时让位（互斥不双写）。
+   */
+  function _ensureBadgeStream(agentId, sessionId) {
+    if (source) return; // 面板已订阅同通道：徽标由面板事件流驱动
+    const key = `${agentId}::${sessionId}`;
+    if (badgeSource && badgeStreamKey === key) return;
+    _teardownBadgeStream();
+    badgeStreamKey = key;
+    const params = new URLSearchParams({
+      agentId,
+      sessionId,
+      featureId: FEATURE_ID,
+      channelId: CHANNEL_ID,
+      latest: '1',
+    });
+    const stream = new EventSource(`/protoclaw/feature-comms/stream?${params.toString()}`);
+    badgeSource = stream;
+    stream.addEventListener('open', () => {
+      if (badgeSource === stream) void _rebuildBadgeBaseline(stream);
+    });
+    stream.addEventListener('event', (e) => {
+      if (badgeSource !== stream) return;
+      let task;
+      try { task = JSON.parse(e.data)?.data; } catch { return; }
+      if (!task || typeof task.id !== 'string') return;
+      if (task.status === 'running') badgeRunningIds.add(task.id);
+      else badgeRunningIds.delete(task.id);
+      _setBadge(badgeRunningIds.size);
+    });
+    stream.addEventListener('resync', () => {
+      if (badgeSource === stream) void _rebuildBadgeBaseline(stream);
+    });
+    stream.addEventListener('closed', () => {
+      if (badgeSource !== stream) return;
+      _teardownBadgeStream();
+      _setBadge(0);
+    });
+    // error：EventSource 自动重连（重连成功走 open 重建基线）；通道已消失
+    // 时由 30s 发现轮询兜底拆除。
+  }
+
+  /**
+   * 面板关闭态的徽标数据源保障：channels 列表（恒 200）确认会话声明了
+   * shell-bg 通道后建立事件订阅；未声明 / 寻址消失则拆除并归零（旧会话
+   * 数字滞留防护）。寻址与面板同源（currentAddressing）：会话切换即先
+   * 隐藏，避免旧会话计数串台。
    */
   async function _pollBadge() {
     if (badgePollInFlight || source) return;
@@ -546,32 +616,25 @@
     const key = addressing ? `${addressing.agentId}::${addressing.sessionId}` : '';
     if (key !== badgeAddressKey) {
       badgeAddressKey = key;
+      _teardownBadgeStream();
       _setBadge(0);
       if (!key) return;
     }
     badgePollInFlight = true;
     try {
       // 能力发现先行：无 shell-bg 通道的会话（coder / 其他工作空间 / 已
-      // 停止）不发 count——空态 count 必 404，而浏览器对非 2xx 的网络层
+      // 停止）不建订阅——空态 stream 必 404，而浏览器对非 2xx 的网络层
       // 日志无法从 JS 抑制。channels 列表恒 200（对齐 genui 徽标先例）。
       const channels = await window.ClawFeatureCommunication.listChannels(addressing.agentId, addressing.sessionId);
       const latest = currentAddressing();
       if (source || key !== (latest ? `${latest.agentId}::${latest.sessionId}` : '')) return;
       const declared = channels.some((channel) => channel?.featureId === FEATURE_ID && channel?.channelId === CHANNEL_ID);
       if (!declared) {
+        _teardownBadgeStream();
         _setBadge(0);
         return;
       }
-      const result = await channelRequest('count', {});
-      const after = currentAddressing();
-      if (source || key !== (after ? `${after.agentId}::${after.sessionId}` : '')) return;
-      if (result.ok === true && Number.isFinite(result.running)) {
-        _setBadge(result.running);
-      } else if (result.code === 'runtime_not_connected'
-        || result.code === 'runtime_stopped') {
-        _setBadge(0);
-      }
-      // 其他错误（request_timeout 等）：保持现值，下轮再试
+      _ensureBadgeStream(addressing.agentId, addressing.sessionId);
     } catch {
       // 瞬时网络错误：保持现值，下轮再试
     } finally {
@@ -580,7 +643,7 @@
   }
 
   function _ensureBadgePolling() {
-    // 轮询常驻（对齐 genui 徽标）：徽标需要在面板未打开时也持续更新。
+    // 周期轮询常驻：徽标需要在面板未打开时也持续更新（发现 + 订阅保障）。
     if (badgeTimer !== null) return;
     badgeTimer = setInterval(() => { void _pollBadge(); }, BADGE_POLL_MS);
   }
@@ -847,11 +910,16 @@
   document.head.appendChild(styleElement);
 
   window.BgPanel = {
+    __testBadgeStream: () => badgeSource,
     getHtml,
     onOpen: startChannel,
-    onClose: teardownChannel,
+    onClose: () => {
+      teardownChannel();
+      // 面板关闭后徽标订阅即时接管（不等 30s 发现轮询）。
+      void _pollBadge();
+    },
     refresh: refreshList,
-    /** 立即触发一次徽标轮询（runtime 切换时让红点及时出现，与 GenUI 同款）。 */
+    /** 立即触发一次徽标发现（runtime 切换时让红点及时出现，与 GenUI 同款）。 */
     refreshBadge: () => { void _pollBadge(); },
   };
 
