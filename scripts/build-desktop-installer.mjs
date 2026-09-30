@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { closeSync, constants, copyFileSync, existsSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import { closeSync, constants, copyFileSync, existsSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -9,10 +9,11 @@ const desktopDir = join(root, 'desktop');
 const releaseDir = join(desktopDir, 'target', 'release');
 const installerDir = join(releaseDir, 'bundle', 'nsis');
 const nsisOutput = join(releaseDir, 'nsis', 'x64', 'nsis-output.exe');
-const config = JSON.parse(readFileSync(join(desktopDir, 'tauri.conf.json'), 'utf8'));
-const installerName = `${config.productName}_${config.version}_x64-setup.exe`;
-const installerPath = join(installerDir, installerName);
 const bundleOnly = process.argv.includes('--bundle-only');
+
+// 安装包文件名要等版本同步后才能确定，在 main() 里赋值
+let installerName = '';
+let installerPath = '';
 
 function run(command, args, cwd, capture = false) {
   return new Promise((resolve, reject) => {
@@ -73,6 +74,31 @@ async function recoverInstaller(startedAt, { source = nsisOutput, directory = in
   return null;
 }
 
+// 安装包版本唯一来源是根 package.json：构建前同步进 tauri.conf.json 与
+// Cargo.toml（安装包文件名与 NSIS 卸载信息里的版本取自这两处），发版只需
+// 改 package.json 一处，桌面侧声明不再单独维护。
+function syncInstallerVersion() {
+  const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+
+  const configPath = join(desktopDir, 'tauri.conf.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8'));
+  if (config.version !== version) {
+    console.log(`tauri.conf.json 版本已同步：${config.version} -> ${version}`);
+    config.version = version;
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  }
+
+  const cargoPath = join(desktopDir, 'Cargo.toml');
+  const cargo = readFileSync(cargoPath, 'utf8');
+  // 只替换 [package] 的首行 version 声明；依赖行是内联表（`tauri = { version = ... }`），不会被 ^version 命中
+  const current = cargo.match(/^version = ".*"$/m)?.[0];
+  if (current !== `version = "${version}"`) {
+    if (!current) throw new Error('Cargo.toml 中未找到 package version，无法同步版本');
+    writeFileSync(cargoPath, cargo.replace(/^version = ".*"$/m, `version = "${version}"`));
+    console.log(`Cargo.toml 版本已同步：${current} -> ${version}`);
+  }
+}
+
 async function main() {
   if (process.platform !== 'win32' || process.arch !== 'x64') {
     throw new Error('桌面安装包目前仅支持在 Windows x64 上构建。');
@@ -80,6 +106,11 @@ async function main() {
   if (process.argv.slice(2).some(arg => arg !== '--bundle-only')) {
     throw new Error('仅支持可选参数 --bundle-only。');
   }
+
+  syncInstallerVersion();
+  const config = JSON.parse(readFileSync(join(desktopDir, 'tauri.conf.json'), 'utf8'));
+  installerName = `${config.productName}_${config.version}_x64-setup.exe`;
+  installerPath = join(installerDir, installerName);
 
   if (bundleOnly) {
     if (!existsSync(join(releaseDir, 'agentdev-claw-desktop.exe')) || !existsSync(join(root, 'dist', 'desktop-staging'))) {
