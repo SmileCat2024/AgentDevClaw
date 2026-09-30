@@ -4,7 +4,8 @@
  *
  * 包含：
  * - 常驻输入框渲染与交互（renderPersistentInput, onPersistentBtnClick, handlePersistentInputKey）
- * - 队列气泡管理与后端同步（_renderQueueBubbles, _syncQueueFromBackend, _syncPersistentInputUi）
+ * - 队列气泡管理与后端同步（_renderQueueBubbles, _syncQueueFromBackend,
+ *   _syncPersistentInputUi；投影经 rebindQueueProjectionForRuntime 按会话归属）
  * - 中断操作（interruptAgent）
  * - 上次对话结束时间显示（_renderLastCallElapsed + setInterval）
  *
@@ -35,6 +36,12 @@ let _queuedTexts = []; // 仅用于气泡展示
 let _persistentUiSyncInFlight = false;
 let _localQueuedInputPending = false;
 let _lastQueueBubbleSignature = '';
+// 排队气泡投影的归属（会话隔离）：_queuedTexts / _pendingQueuedCount /
+// _localQueuedInputPending 始终属于一个 runtime，与图片桶、草稿同属输入面
+// 会话态家族。会话切换经 rebindQueueProjectionForRuntime 重绑，写入路径
+// （applyQueuedInputsTexts / submitQueuedInput 乐观态）一律带归属校验，
+// 旧会话的排队气泡不进入新会话的输入面。
+let _queuedProjectionRuntimeId = null;
 let _submitInFlight = false;       // 发送重入保护：fetch 期间阻止二次提交/中断
 let _sendingStartedAt = 0;         // 发送反馈窗口起点（最短可见时长的计时基准）
 let _sendingHoldTimer = null;      // 最短可见保持定时器：hold 期间轮询同步不得清 spinner
@@ -844,7 +851,11 @@ async function submitQueuedInput() {
           && window.ClawFW?.SseClient?.getLastQueuedSnapshot
           && (window.ClawFW.SseClient.getLastQueuedSnapshot(targetRuntimeId)?.items || [])
             .some((item) => item?.id === delivery.id);
-        if (!snapshotAlreadyHasIt) {
+        if (!snapshotAlreadyHasIt
+          && String(targetRuntimeId || '').trim() === String(currentRuntimeAgentId || '').trim()) {
+          // 乐观气泡只写入提交目标的投影：await 期间用户可能已切走，新会话
+          // 的输入面不冒出本会话的排队文本（服务端队列与 SSE 乐观锚点仍
+          // 完整记录，切回时经快照恢复）。
           _localQueuedInputPending = true;
           _pendingQueuedCount++;
           _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
@@ -852,7 +863,8 @@ async function submitQueuedInput() {
         // 乐观锚点（SSE §5.5）：响应携带服务端排队 id，供 queued-inputs 事件
         // 快照按 id 对账（无 SSE 时为 no-op，气泡由轮询快照自然覆盖）
         if (window.ClawFW?.SseClient?.noteQueuedOptimistic && delivery.id) {
-          window.ClawFW.SseClient.noteQueuedOptimistic(delivery.id, text || (images && images.length ? '🖼' : '') || ' ');
+          window.ClawFW.SseClient.noteQueuedOptimistic(
+            delivery.id, text || (images && images.length ? '🖼' : '') || ' ', targetRuntimeId);
         }
         updateQueueIndicator();
       } else if (targetRuntimeId) {
@@ -899,8 +911,36 @@ async function submitQueuedInput() {
 }
 
 function updateQueueIndicator() {
+  // 渲染入口守卫：投影先与当前查看的 runtime 对齐（幂等重绑），旧会话
+  // 残留的排队文本不得渲染进新会话的输入面。
+  rebindQueueProjectionForRuntime(currentRuntimeAgentId);
   const container = document.getElementById('user-input-container');
   if (container) _renderQueueBubbles(container);
+}
+
+/**
+ * 排队气泡投影的会话重绑（幂等）：runtime 变化时旧投影立即失效。新会话
+ * 的队列优先从 SSE 快照缓存恢复（_lastQueuedSnapshots 本就按 runtime
+ * 缓存非焦点期间的队列变化）；缓存缺席时置空，由轮询 / SSE 事件在下个
+ * 周期补齐。
+ */
+function rebindQueueProjectionForRuntime(runtimeId) {
+  const next = String(runtimeId || '').trim();
+  if (String(_queuedProjectionRuntimeId || '').trim() === next) return;
+  _queuedProjectionRuntimeId = next || null;
+  _queuedTexts = [];
+  _pendingQueuedCount = 0;
+  _localQueuedInputPending = false;
+  if (_queuedProjectionRuntimeId) {
+    const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(_queuedProjectionRuntimeId);
+    if (cached && Array.isArray(cached.items)) {
+      const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(
+        cached.items, Date.now(), _queuedProjectionRuntimeId) || [];
+      _queuedTexts = texts.slice();
+      _pendingQueuedCount = cached.items.filter((item) => item?.kind !== 'reminder').length;
+    }
+  }
+  _lastQueueBubbleSignature = '';
 }
 
 /**
@@ -909,6 +949,10 @@ function updateQueueIndicator() {
  * 对账（SSE 路径经 SseClient.reconcileQueuedTexts）。
  */
 function applyQueuedInputsTexts(runtimeId, texts, snapshotCount) {
+  // 写入口归属守卫：投影只承载当前查看的 runtime；轮询 / SSE 异步竞态下
+  // 过期快照的写入直接丢弃，不污染新会话的排队气泡。
+  if (String(runtimeId || '').trim() !== String(currentRuntimeAgentId || '').trim()) return;
+  _queuedProjectionRuntimeId = String(runtimeId || '').trim() || null;
   _queuedTexts = Array.isArray(texts) ? texts.slice() : [];
   _pendingQueuedCount = Number.isFinite(snapshotCount) ? snapshotCount : _queuedTexts.length;
   if (_queuedTexts.length === 0 && !isRuntimeCalling(runtimeId)) {
@@ -929,6 +973,7 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
     if (!runtimeId) {
       _queuedTexts = [];
       _pendingQueuedCount = 0;
+      _queuedProjectionRuntimeId = null;
       updateQueueIndicator();
       _syncPersistentActionButton();
       return;
@@ -942,7 +987,7 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
     if (typeof isSseActive === 'function' && isSseActive()) {
       const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(expectedRuntimeId);
       if (cached && Array.isArray(cached.items)) {
-        const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(cached.items) || [];
+        const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(cached.items, Date.now(), expectedRuntimeId) || [];
         // 待发送气泡/计数只认用户输入：reminder（机器通报）同队存放但不展示
         applyQueuedInputsTexts(expectedRuntimeId, texts, cached.items.filter((item) => item?.kind !== 'reminder').length);
         return;
@@ -987,6 +1032,7 @@ async function interruptAgent() {
   _localQueuedInputPending = false;
   _pendingQueuedCount = 0;
   _queuedTexts = [];
+  _queuedProjectionRuntimeId = String(targetRuntimeId || '').trim() || null;
   _lastQueueBubbleSignature = '';
   updateQueueIndicator();
   _setActionBtnInterrupting();

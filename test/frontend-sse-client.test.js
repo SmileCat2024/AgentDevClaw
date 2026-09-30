@@ -558,4 +558,28 @@ describe('sse-client: 排队气泡乐观对账（reconcileQueuedTexts）', () =>
     ])`);
     assert.deepEqual(out, ['用户消息']);
   });
+
+  it('跨会话隔离：其他 runtime 的乐观锚点不拼入本会话快照', () => {
+    const ctx = fresh();
+    // 会话 A 提交排队后切走：锚点归属 rt-a
+    ctx.run('window.ClawFW.SseClient.noteQueuedOptimistic("q-a", "会话A的排队", "rt-a")');
+
+    // 会话 B 的快照对账：A 的乐观文本不冒进 B 的排队气泡
+    const forB = runJson(ctx, 'window.ClawFW.SseClient.reconcileQueuedTexts([], Date.now(), "rt-b")');
+    assert.deepEqual(forB, []);
+
+    // 会话 A 的快照对账：乐观文本保留
+    const forA = runJson(ctx, 'window.ClawFW.SseClient.reconcileQueuedTexts([], Date.now(), "rt-a")');
+    assert.deepEqual(forA, ['会话A的排队']);
+
+    // A 的排队项出现在自己的快照里 → 确认清除；B 的对账不受影响
+    const confirmed = runJson(ctx,
+      'window.ClawFW.SseClient.reconcileQueuedTexts([{ id: "q-a", text: "会话A的排队" }], Date.now(), "rt-a")');
+    assert.deepEqual(confirmed, ['会话A的排队']);
+    assert.deepEqual(
+      runJson(ctx, 'window.ClawFW.SseClient.reconcileQueuedTexts([], Date.now(), "rt-a")'),
+      [],
+      '确认后的锚点不再保留',
+    );
+  });
 });

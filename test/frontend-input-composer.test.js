@@ -265,6 +265,7 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
     _reattachVoiceInputUi: () => {},
     _renderQueueBubbles: () => {},
     _syncPersistentInputUi: () => {},
+    rebindQueueProjectionForRuntime: () => {},
     _lastQueueBubbleSignature: '',
     _pendingQueuedCount: 0,
     _queuedTexts: [],
@@ -761,24 +762,27 @@ describe('pending image session isolation (attachment buckets per session)', () 
   });
 });
 
-// ── 队列气泡按输入身份过滤（user-turn kind='reminder' 适配）────────────────
+// ── 队列气泡：输入身份过滤 + 会话隔离投影（user-turn kind 适配）──────────
+
+// 切片加载 persistent-input.js 的队列同步实现（updateQueueIndicator →
+// rebindQueueProjectionForRuntime → applyQueuedInputsTexts →
+// _syncPersistentInputUi），伴生 stub 补齐切片引用的同模块全局；
+// SSE 路径的过滤由 frontend-sse-client.test.js 覆盖。
+function loadQueueSyncSlice(ctx) {
+  const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+  const start = persistentSource.indexOf('function updateQueueIndicator');
+  const end = persistentSource.indexOf('async function interruptAgent', start);
+  ctx.run(`
+    let _persistentUiSyncInFlight = false;
+    let _lastQueueBubbleSignature = "";
+    let _queuedProjectionRuntimeId = null;
+    function isRuntimeCalling() { return false; }
+    function notifyInputSurfaceChanged() {}
+  `);
+  ctx.run(persistentSource.slice(start, end));
+}
 
 describe('queued-input bubble identity filter (user-turn kind)', () => {
-  // 切片加载 persistent-input.js 的队列同步实现（updateQueueIndicator →
-  // applyQueuedInputsTexts → _syncPersistentInputUi），伴生 stub 补齐切片
-  // 引用的同模块全局；SSE 路径的过滤由 frontend-sse-client.test.js 覆盖。
-  function loadQueueSyncSlice(ctx) {
-    const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-    const start = persistentSource.indexOf('function updateQueueIndicator');
-    const end = persistentSource.indexOf('async function interruptAgent', start);
-    ctx.run(`
-      let _persistentUiSyncInFlight = false;
-      let _lastQueueBubbleSignature = "";
-      function isRuntimeCalling() { return false; }
-      function notifyInputSurfaceChanged() {}
-    `);
-    ctx.run(persistentSource.slice(start, end));
-  }
 
   it('polling snapshot filters reminder items out of bubble texts and count', async () => {
     const ctx = createInputSandbox();
@@ -818,5 +822,68 @@ describe('queued-input bubble identity filter (user-turn kind)', () => {
     assert.equal(ctx.run('_queuedTexts.length'), 0, '仅 reminder 排队时不显示气泡');
     assert.equal(ctx.run('_pendingQueuedCount'), 0);
     assert.equal(ctx.run('_localQueuedInputPending'), false, 'reminder 不顶起输入面乐观态');
+  });
+});
+
+// ── 排队气泡投影的会话隔离（会话态家族：图片桶 / 草稿同款语义）────────────
+
+describe('queue bubble projection session isolation', () => {
+  it('write guard drops stale snapshots from another runtime', () => {
+    const ctx = createInputSandbox();
+    loadQueueSyncSlice(ctx);
+    ctx.run(`
+      _queuedTexts = ["当前会话的排队"];
+      _queuedProjectionRuntimeId = "agent-1";
+      applyQueuedInputsTexts("agent-9", ["过期快照"], 1);
+    `);
+
+    assert.deepEqual([...ctx.run('_queuedTexts')], ['当前会话的排队'],
+      '非当前 runtime 的快照写入直接丢弃');
+    assert.equal(ctx.run('String(_queuedProjectionRuntimeId)'), 'agent-1', '归属不被过期写入改写');
+  });
+
+  it('runtime switch rebinds the projection instead of leaking old bubbles', () => {
+    const ctx = createInputSandbox();
+    loadQueueSyncSlice(ctx);
+    ctx.run(`
+      _queuedTexts = ["A 会话的排队文本"];
+      _pendingQueuedCount = 1;
+      _localQueuedInputPending = true;
+      _queuedProjectionRuntimeId = "agent-1";
+    `);
+
+    // 切到会话 B：渲染入口先重绑投影，旧会话气泡不进入新会话输入面
+    ctx.currentRuntimeAgentId = 'agent-2';
+    ctx.run('updateQueueIndicator()');
+
+    assert.equal(ctx.run('_queuedTexts.length'), 0, '旧会话排队文本被重绑清空');
+    assert.equal(ctx.run('_pendingQueuedCount'), 0);
+    assert.equal(ctx.run('_localQueuedInputPending'), false);
+    assert.equal(ctx.run('String(_queuedProjectionRuntimeId)'), 'agent-2');
+  });
+
+  it('rebind restores the new session queue from the SSE snapshot cache', () => {
+    const ctx = createInputSandbox();
+    loadQueueSyncSlice(ctx);
+    ctx.run(`
+      _queuedTexts = ["A 会话的排队文本"];
+      _queuedProjectionRuntimeId = "agent-1";
+      window.ClawFW = { SseClient: {
+        getLastQueuedSnapshot: (id) => (id === "agent-2"
+          ? { runtimeId: id, items: [{ id: "q-b", text: "B 会话的排队" }] }
+          : null),
+        reconcileQueuedTexts: (items) => items
+          .filter((item) => item?.kind !== "reminder")
+          .map((item) => item.text),
+      } };
+    `);
+
+    ctx.currentRuntimeAgentId = 'agent-2';
+    ctx.run('updateQueueIndicator()');
+
+    assert.deepEqual([...ctx.run('_queuedTexts')], ['B 会话的排队'],
+      '切换后从 SSE 快照缓存恢复新会话队列，无需等轮询');
+    assert.equal(ctx.run('_pendingQueuedCount'), 1);
+    assert.equal(ctx.run('String(_queuedProjectionRuntimeId)'), 'agent-2');
   });
 });

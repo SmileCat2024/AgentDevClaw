@@ -26,8 +26,8 @@
  *   detachTransientInputContent, syncPersistentComposerSessionCard, applyComposerMode,
  *   insertTransientInputCard, _restoreSessionInputDraft, _sessionInputCache
  *   (input-composer.js)
- *   renderPersistentInput, _renderLastCallElapsed, _cleanupInputMetaBar
- *   (persistent-input.js)
+ *   renderPersistentInput, rebindQueueProjectionForRuntime, _renderLastCallElapsed,
+ *   _cleanupInputMetaBar (persistent-input.js)
  *   renderChoiceInputRequest, collapsePrimaryChoiceRequest,
  *   isChoiceInputRequest, isChoiceInputConsumed (choice-input.js)
  *   runWithSuppressedChatViewportObservers, notifyChatViewportMutation (chat-viewport.js)
@@ -79,6 +79,9 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
 
   const chatViewportTopBefore = inputContainer.scrollTop;
   const chatActive = isChatSurfaceActive();
+  // 会话隔离重绑（契约 §7 同款）：§3 级 6 的模式判定读排队气泡投影，必须
+  // 先与当前 runtime 对齐，旧会话的排队乐观态不得劫持新会话的输入面模式。
+  rebindQueueProjectionForRuntime(currentRuntimeAgentId);
   const renderMode = getInputSurfaceMode(requests);
   const signature = getInputRenderSignature(requests, renderMode);
   // Runtime contract: one Agent instance owns at most one input lease.  Keep

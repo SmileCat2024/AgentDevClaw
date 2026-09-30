@@ -39,7 +39,9 @@ let _retryTimer = null;
 // 否则切回该 runtime 时只能复用旧快照，已消费的排队消息会继续显示。
 const _lastQueuedSnapshots = new Map(); // runtimeId -> { runtimeId, items, at }
 
-// 排队气泡乐观锚点：服务端排队 id -> { text, ts }
+// 排队气泡乐观锚点：服务端排队 id -> { text, ts, runtimeId }。锚点归属
+// 提交目标 runtime，对账只作用于同 runtime 的快照——提交后切走的乐观
+// 文本不得拼进其他会话的排队气泡（TTL 兜底回收）。
 const _optimisticQueued = new Map();
 const OPTIMISTIC_QUEUED_TTL_MS = 10000;
 
@@ -154,7 +156,7 @@ function handleQueuedInputsEvent(frame) {
   const snapshot = { runtimeId, items, at: Date.now() };
   _lastQueuedSnapshots.set(runtimeId, snapshot);
   if (!isSameRuntime(runtimeId, currentRuntimeAgentId)) return;
-  const texts = reconcileQueuedTexts(items);
+  const texts = reconcileQueuedTexts(items, Date.now(), runtimeId);
   if (typeof applyQueuedInputsTexts === 'function') {
     applyQueuedInputsTexts(runtimeId, texts, items.filter(isUserQueuedItem).length);
   }
@@ -230,7 +232,8 @@ function isUserQueuedItem(item) {
   return item?.kind !== 'reminder';
 }
 
-function reconcileQueuedTexts(items, nowMs = Date.now()) {
+function reconcileQueuedTexts(items, nowMs = Date.now(), runtimeId = currentRuntimeAgentId) {
+  const scopedRuntimeId = String(runtimeId || '').trim();
   const snapshotIds = new Set();
   const snapshotTexts = [];
   for (const item of Array.isArray(items) ? items : []) {
@@ -242,6 +245,9 @@ function reconcileQueuedTexts(items, nowMs = Date.now()) {
   }
   const preservedTexts = [];
   for (const [id, entry] of Array.from(_optimisticQueued.entries())) {
+    // 归属过滤：其他 runtime 的乐观锚点（提交后切走）不属于本快照，不
+    // 确认也不拼入，仅由 TTL 统一回收。
+    if (scopedRuntimeId && entry.runtimeId && entry.runtimeId !== scopedRuntimeId) continue;
     if (snapshotIds.has(id)) {
       // 服务端快照已含该排队项：确认，乐观标记清除
       _optimisticQueued.delete(id);
@@ -256,9 +262,13 @@ function reconcileQueuedTexts(items, nowMs = Date.now()) {
   return [...snapshotTexts, ...preservedTexts];
 }
 
-function noteQueuedOptimistic(id, text) {
+function noteQueuedOptimistic(id, text, runtimeId) {
   if (!id) return;
-  _optimisticQueued.set(id, { text: text || ' ', ts: Date.now() });
+  _optimisticQueued.set(id, {
+    text: text || ' ',
+    ts: Date.now(),
+    runtimeId: String(runtimeId ?? currentRuntimeAgentId ?? '').trim(),
+  });
 }
 
 function getLastQueuedSnapshot(runtimeId) {

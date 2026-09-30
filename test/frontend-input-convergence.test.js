@@ -277,10 +277,11 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
     var currentTodoPlan = {};
     var currentTodoPlanSignature = '';
     var currentRuntimeConnected = true;
-    // 队列乐观态（persistent-input 域全局；§3 级 6 输入）
+    // 队列乐观态（persistent-input 域全局；§3 级 6 输入）+ 投影归属
     var _queuedTexts = [];
     var _pendingQueuedCount = 0;
     var _localQueuedInputPending = false;
+    var _queuedProjectionRuntimeId = null;
     var _lastQueueBubbleSignature = '';
     var _switchEpoch = 0;
     // choice 域替身（choice-input.js 未加载时的中性实现）；
@@ -315,6 +316,10 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
   const rpStart = persistentSource.indexOf('function renderPersistentInput(container) {');
   const rpEnd = persistentSource.indexOf('function syncContextPressureChip', rpStart);
   ctx.run(persistentSource.slice(rpStart, rpEnd));
+  // 排队气泡投影的会话重绑真实现（renderInputRequests 的模式判定依赖）
+  const rebindStart = persistentSource.indexOf('function rebindQueueProjectionForRuntime');
+  const rebindEnd = persistentSource.indexOf('function applyQueuedInputsTexts', rebindStart);
+  ctx.run(persistentSource.slice(rebindStart, rebindEnd));
   ctx.loadSource('public/src/modules/input-render.js');
 
   ctx.state = state;
@@ -620,6 +625,32 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
       notifyInputSurfaceChanged(currentInputRequests || []);
     `);
     assert.equal(composerMode(ctx), 'requests', 'drained queue reveals the request card again');
+  });
+
+  it('§6 会话隔离：切换 runtime 后旧会话的排队乐观态不劫持新会话输入面', () => {
+    const ctx = createConvergenceSandbox();
+    // 会话 A：请求卡在场，但排队乐观态按级 6 压住 → persistent
+    ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'q-1' }] })`);
+    ctx.run(`
+      _queuedTexts = ['A 会话的排队文本'];
+      _pendingQueuedCount = 1;
+      _localQueuedInputPending = true;
+      _queuedProjectionRuntimeId = 'agent-1';
+      notifyInputSurfaceChanged(currentInputRequests || []);
+    `);
+    assert.equal(composerMode(ctx), 'persistent', '会话 A 内排队乐观态压住请求卡（级 6）');
+
+    // 切到会话 B（runtime 变化）：渲染入口先重绑投影，B 的请求卡不被
+    // A 的排队乐观态劫持，排队气泡也不在新会话输入面冒出
+    ctx.currentRuntimeAgentId = 'agent-2';
+    ctx.state.liveKey = 'session-b';
+    ctx.run('renderInputRequests(currentInputRequests || [])');
+
+    assert.equal(ctx.run('_queuedTexts.length'), 0, '旧会话排队文本被重绑清空');
+    assert.equal(ctx.run('_localQueuedInputPending'), false);
+    assert.equal(ctx.run('String(_queuedProjectionRuntimeId)'), 'agent-2');
+    assert.equal(composerMode(ctx), 'requests',
+      '投影重绑后级 6 失效，新会话的请求卡正常浮现');
   });
 });
 
