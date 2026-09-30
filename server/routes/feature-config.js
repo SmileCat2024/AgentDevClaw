@@ -25,6 +25,10 @@ import {
   readLayerFile,
 } from '../shared/feature-config-layers.js';
 import { MOUNT_KEY, validateMountEntry } from '../shared/feature-mount.js';
+import {
+  ACCUMULATED_FIELD_PATHS,
+  collapseAccumulatedFields,
+} from '../shared/feature-config-accumulate.js';
 
 // ── scope → queue 解析注册表（server 进程内存态，不做热更新） ──────────
 
@@ -123,13 +127,17 @@ export function buildScopeLayers({ agentId, dir }, resolvers = scopeResolvers) {
 /** resolved 端点主体：layers + merged + provenance 三者同源一致。 */
 export function resolveScopeConfig(params, resolvers = scopeResolvers) {
   const { layers, queue } = buildScopeLayers(params, resolvers);
-  const { merged, provenance, warnings } = resolveFeatureConfig(queue);
+  // 累加型多值字段跨层叠加后进 merge——与 agent 侧构造期行为同源，
+  // 保证 UI 预览（merged）与运行时实际生效配置一致。
+  const { merged, provenance, warnings } = resolveFeatureConfig(collapseAccumulatedFields(queue));
   return {
     layers: layers.map(({ id, label, sparse }) => ({ id, label, sparse })),
     merged,
     provenance,
     warnings,
     sensitiveFields: collectSensitiveFields(merged),
+    // 累加字段清单：前端据此把这些字段渲染为"上游只读 + 本层追加"
+    accumulatedFields: [...ACCUMULATED_FIELD_PATHS],
   };
 }
 

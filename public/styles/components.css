@@ -8732,6 +8732,27 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   transition: border-color 0.15s, color 0.15s;
 }
 
+/* 累加字段的上游层条目：只读展示（不可删改），来源层以徽标标注 */
+.fs-acc-note {
+  font-size: 12px;
+  color: var(--text-tertiary, rgba(255,255,255,0.35));
+}
+
+.fs-list-item-locked .fs-input {
+  cursor: default;
+  color: var(--text-secondary, #9aa3b2);
+}
+
+.fs-list-origin {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+  border-radius: 999px;
+  color: var(--text-tertiary, rgba(255,255,255,0.35));
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .fs-list-add:not(:disabled):hover {
   border-color: var(--accent, #5b8def);
   color: var(--accent, #5b8def);

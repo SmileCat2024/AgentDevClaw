@@ -117,6 +117,29 @@ describe('buildScopeLayers / resolveScopeConfig', () => {
     assert.deepEqual(result.sensitiveFields, []);
   });
 
+  it('unions accumulated fields across layers and reports them (skill.extraDirs)', () => {
+    const dir = join(tempDir, 'proj-acc');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(tempDir, 'global.json'), JSON.stringify({
+      skill: { extraDirs: ['/etc/codex/skills'] },
+    }), 'utf8');
+    writeFileSync(join(featureConfigDir, encodeDirConfigFile(dir)), JSON.stringify({
+      skill: { extraDirs: ['/proj/skills', '/etc/codex/skills'] },
+    }), 'utf8');
+
+    const result = resolveScopeConfig({ agentId: 'test-scope', dir }, localTable());
+
+    // 目录层条目追加而非顶掉全局层；跨层精确去重
+    assert.deepEqual(result.merged.skill.extraDirs, ['/etc/codex/skills', '/proj/skills']);
+    assert.deepEqual(result.accumulatedFields, ['skill.extraDirs']);
+    // 各层 sparse 保持各自条目（前端按层渲染"上游只读 + 本层追加"）
+    assert.deepEqual(result.layers[0].sparse.skill.extraDirs, ['/etc/codex/skills']);
+    assert.deepEqual(result.layers[1].sparse.skill.extraDirs, ['/proj/skills', '/etc/codex/skills']);
+    // provenance 指向并集写回的最后一个提及层，该层 sparse 持有该字段
+    assert.equal(result.provenance['skill.extraDirs'].sourceIndex, 1);
+    assert.ok('extraDirs' in result.layers[1].sparse.skill);
+  });
+
   it('declares agent layer between global and dir (real programming-helper resolver)', () => {
     // 真实注册表：只断言声明的层结构与顺序（id/label/path 文件名），
     // sparse 读取无写入副作用，与用户目录实际内容无关。

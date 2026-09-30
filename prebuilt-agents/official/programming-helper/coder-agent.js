@@ -45,6 +45,7 @@ import {
   coderLayerPath,
 } from '../../../server/shared/feature-config-layers.js';
 import { extractFeatureMounts } from '../../../server/shared/feature-mount.js';
+import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -74,7 +75,8 @@ export class CoderAgent extends BasicAgent {
       { id: 'global', config: readGlobalLayer() },
       { id: 'coder', config: readLayerFile(coderLayerPath()) },
     ]);
-    const { merged: systemConfig } = resolveFeatureConfig(configLayers);
+    // 累加型多值字段（skill.extraDirs 等）在进 merge 前跨层叠加（同主身份 agent.js）
+    const { merged: systemConfig } = resolveFeatureConfig(collapseAccumulatedFields(configLayers));
 
     // 不挂载 MCP feature：mcp_* 工具会占据 tools 数组头部，把 read/ls 等
     // 核心工具挤到 14 位之后——Lite 级小模型对此敏感，实测会退化为只输出计划

@@ -33,6 +33,7 @@ import {
   readDirLayer,
 } from '../../../server/shared/feature-config-layers.js';
 import { extractFeatureMounts } from '../../../server/shared/feature-mount.js';
+import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 import { CoderAgent } from './coder-agent.js';
 
@@ -100,7 +101,9 @@ export class ProgrammingHelperAgent extends BasicAgent {
       { id: 'dir', config: readDirLayer(workspaceDir) },
       { id: 'session', config: runtime.config && typeof runtime.config === 'object' ? (runtime.config.featureOverrides || {}) : {} },
     ]);
-    const { merged } = resolveFeatureConfig(configLayers);
+    // 累加型多值字段（skill.extraDirs 等）在进 merge 前跨层叠加：
+    // 下层条目是追加而非顶掉上游（server/shared/feature-config-accumulate.js）
+    const { merged } = resolveFeatureConfig(collapseAccumulatedFields(configLayers));
 
     const excludeMcpServers = Array.from(new Set([
       ...(config.excludeMcpServers ?? []),

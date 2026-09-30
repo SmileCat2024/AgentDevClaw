@@ -165,6 +165,36 @@ function createFeatureConfigEditor(options = {}) {
     return fsFieldStates(state.sections, layers(), scopeId);
   }
 
+  // ── 累加型多值字段（上游只读 + 本层追加）──────────────────────
+
+  // 叠加字段清单来自 resolved API（server/shared/feature-config-accumulate.js
+  // 的策略表），前端不维护平行清单
+  function isAccumulatedField(fullKey) {
+    const list = state.resolved?.accumulatedFields;
+    return Array.isArray(list) && list.includes(fullKey);
+  }
+
+  // 上游层（早于本层）对累加字段的贡献：按层序收集数组条目、精确去重，
+  // 附来源层标签；本层为第一层（global）时无上游。
+  function accumulatedUpstream(fullKey) {
+    const all = layers();
+    const idx = all.findIndex((l) => l.id === scopeId);
+    if (idx <= 0) return [];
+    const segs = fullKey.split('.');
+    const seen = new Set();
+    const entries = [];
+    for (let i = 0; i < idx; i++) {
+      const value = fsGetPathValue(all[i]?.sparse, segs);
+      if (!Array.isArray(value)) continue;
+      for (const entry of value) {
+        if (seen.has(entry)) continue;
+        seen.add(entry);
+        entries.push({ value: String(entry), label: all[i].label || `#${i + 1}` });
+      }
+    }
+    return entries;
+  }
+
   // ── 渲染（复用工作空间设置页 ph-settings 布局类）────────────
 
   function renderShell() {
@@ -274,7 +304,11 @@ function createFeatureConfigEditor(options = {}) {
   function renderRow(prop, fullKey, rowState, disabled) {
     const sw = prop.showWhen ? ` style="display:none;" data-showwhen='${JSON.stringify(prop.showWhen)}'` : '';
     const status = rowState?.status === 'takeover' ? 'takeover' : 'follow';
-    const value = fsControlValue(rowState, prop);
+    // 累加字段的可编辑输入只承载本层条目：跟随态不把上游值放进输入框
+    //（否则直接编辑会把上游条目抄进本层），上游以只读块单独展示
+    const value = isAccumulatedField(fullKey)
+      ? (rowState?.status === 'takeover' ? rowState.layerValue : [])
+      : fsControlValue(rowState, prop);
     const showReset = fsShowReset(scopeId, rowState, prop);
 
     return `
@@ -312,7 +346,7 @@ function createFeatureConfigEditor(options = {}) {
       || (prop.type === 'file' && (Array.isArray(prop.default) || prop.maxItems != null));
   }
 
-  function renderListInput(fullKey, prop, value, dis) {
+  function renderListInput(fullKey, prop, value, dis, lockedHtml = '', reservedCount = 0) {
     const items = Array.isArray(value) ? value.filter(v => v != null && String(v).trim() !== '') : [];
     const maxItems = prop.maxItems || 99;
     const placeholder = prop.placeholder || _fceT('输入路径...', 'Enter path...');
@@ -328,8 +362,9 @@ function createFeatureConfigEditor(options = {}) {
 
     return `
       <div class="fs-list" data-list-key="${escapeHtml(fullKey)}" data-list-max="${maxItems}">
+        ${lockedHtml}
         ${items.map(itemHtml).join('')}
-        <button type="button" class="fs-list-add" ${items.length >= maxItems ? 'disabled' : ''} data-fce-action="list-add">+ ${_fceT('添加', 'Add')}</button>
+        <button type="button" class="fs-list-add" ${items.length + reservedCount >= maxItems ? 'disabled' : ''} data-fce-action="list-add">+ ${_fceT('添加', 'Add')}</button>
       </div>
     `;
   }
@@ -352,7 +387,27 @@ function createFeatureConfigEditor(options = {}) {
 
   function renderInput(fullKey, prop, value, disabled) {
     const dis = disabled ? ' disabled' : '';
-    if (isListType(prop)) return renderListInput(fullKey, prop, value, dis);
+    if (isListType(prop)) {
+      // 累加字段：上游层条目只读展示（不可删改，运行时恒叠加），本层条目正常
+      // 增删。只读条目计入 maxItems——总量上限作用在合并结果上（如
+      // skill.extraDirs 运行时 slice(0,5)）。只读项不带 data-config-key，
+      // 不会被 collectListValue 收进本层保存值。
+      let lockedHtml = '';
+      let reservedCount = 0;
+      if (isAccumulatedField(fullKey)) {
+        const upstream = accumulatedUpstream(fullKey);
+        reservedCount = upstream.length;
+        if (upstream.length) {
+          lockedHtml = `<div class="fs-acc-note">${_fceT('上层配置的以下条目自动生效（叠加，不可在此修改）：', 'Entries from upstream layers are always in effect (accumulated, read-only here):')}</div>`
+            + upstream.map((u) => `
+              <div class="fs-list-item fs-list-item-locked">
+                <input type="text" class="fs-input" value="${escapeHtml(u.value)}" disabled />
+                <span class="fs-list-origin" title="${escapeHtml(u.label)}">${escapeHtml(u.label)}</span>
+              </div>`).join('');
+        }
+      }
+      return renderListInput(fullKey, prop, value, dis, lockedHtml, reservedCount);
+    }
 
     const val = value != null ? String(value) : '';
     switch (prop.type) {
