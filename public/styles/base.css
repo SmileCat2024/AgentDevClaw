@@ -36,12 +36,8 @@
   /* diff 行号栏（sticky 遮罩用）：玻璃卡面的不透明近似值，
      横向滑动的内容必须被它盖住，半透明底遮不住 */
   --diff-gutter-bg: #14151a;
-  /* ── ambient backdrop (dynamic) ──
-     Three oversized soft glows drift independently (body + body::before carry
-     separate animations with co-prime durations, so they never move as one
-     rigid sheet). The base gradient must stay close to --bg-color — raising
-     it washes the whole page out. Color and depth come from the low-alpha
-     glows, not from a brighter base. */
+  /* 静态柔光与暗角保留背景纵深；低透明度光晕不抬高页面基色。
+     背景不持续移动，避免上方玻璃面在空闲时仍需重新合成。 */
   --ambient-glow-1: rgba(88, 118, 255, 0.07);
   --ambient-glow-2: rgba(135, 100, 235, 0.06);
   --ambient-glow-3: rgba(60, 180, 200, 0.05);
@@ -77,7 +73,7 @@ body[data-theme="light"] {
   --glass-blur: 20px;
   --glass-border: rgba(0, 0, 0, 0.06);
   --diff-gutter-bg: #f1f1f3;
-  /* ── ambient backdrop (dynamic, light) ── */
+  /* ── ambient backdrop (light) ── */
   --ambient-glow-1: rgba(90, 125, 245, 0.05);
   --ambient-glow-2: rgba(150, 110, 235, 0.045);
   --ambient-glow-3: rgba(80, 175, 205, 0.04);
@@ -276,70 +272,24 @@ body[data-theme="light"] .workspace-repo-warning {
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-  /* 静态底：基色 + 基底纵深 + 噪点 + 边缘压暗。body 背景传播到画布，
-     全部静态、零逐帧成本（噪点/vignette 原挂在 ::after，迁移到这里后
-     发光层绘制在其上方而非下方——颗粒 0.03、vignette 只压边缘，差异可忽略） */
+  /* 光晕合并到画布背景，不为全屏装饰常驻额外的合成层。
+     160% 背景尺寸与负偏移保留柔光的范围和中心位置。 */
   background-color: var(--bg-color);
   background-image:
+    radial-gradient(ellipse 30% 30% at 61% 53%, var(--ambient-glow-2), transparent 62%),
+    radial-gradient(ellipse 34% 24% at 48% 75%, var(--ambient-glow-3), transparent 64%),
+    radial-gradient(ellipse 26% 24% at 35.5% 35%, var(--ambient-glow-1), transparent 62%),
     url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.03'/%3E%3C/svg%3E"),
     var(--ambient-vignette),
     var(--ambient-base);
-  background-size: 180px 180px, 100% 100%, 100% 100%;
-  background-repeat: repeat, no-repeat, no-repeat;
+  background-size: 160% 160%, 160% 160%, 160% 160%, 180px 180px, 100% 100%, 100% 100%;
+  background-position: 50% 50%, 50% 50%, 50% 50%, 0 0, 0 0, 0 0;
+  background-repeat: no-repeat, no-repeat, no-repeat, repeat, no-repeat, no-repeat;
   color: var(--text-primary);
   height: 100vh;
   display: flex;
   font-size: 14px;
   overflow: hidden;
-}
-
-/* Ambient glow carriers. Negative z-index pseudo-elements paint above the
-   canvas background but below normal-flow children. Each carrier is an
-   oversized (inset -30% => 160% viewport) fixed layer holding its glows at
-   fixed element-relative positions; the drift animates transform only —
-   compositor path, zero repaint (background-position animation repainted
-   the full viewport every frame and was the single biggest paint cost on
-   this page). Carriers keep independent periods (54s/46s) and directions so
-   the glows never read as one sliding sheet. Gradient centers are expressed
-   in element coordinates: x_e = (x_viewport + 30) / 1.6. */
-body::before {
-  content: "";
-  position: fixed;
-  inset: -30%;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    radial-gradient(ellipse 26% 24% at 35.5% 35%, var(--ambient-glow-1), transparent 62%);
-  animation: ambientGlowA 54s ease-in-out infinite alternate;
-  will-change: transform;
-}
-
-body::after {
-  content: "";
-  position: fixed;
-  inset: -30%;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    radial-gradient(ellipse 30% 30% at 61% 53%, var(--ambient-glow-2), transparent 62%),
-    radial-gradient(ellipse 34% 24% at 48% 75%, var(--ambient-glow-3), transparent 64%);
-  animation: ambientGlowB 46s ease-in-out infinite alternate;
-  will-change: transform;
-}
-
-@keyframes ambientGlowA {
-  from { transform: translate3d(0, 0, 0); }
-  to   { transform: translate3d(-2.5%, -2.2%, 0); }
-}
-
-@keyframes ambientGlowB {
-  from { transform: translate3d(0, 0, 0); }
-  to   { transform: translate3d(3%, 3%, 0); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  body::before,
-  body::after { animation: none; }
 }
 
 #claw-auth-overlay {
