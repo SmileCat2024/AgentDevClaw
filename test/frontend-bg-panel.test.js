@@ -35,6 +35,11 @@ function harness() {
     },
   });
   ctx.document.getElementById = id => id === 'bg-panel-root' ? root : badge;
+  // 能力发现桩（7a63bbd 起 refreshBadge / 面板订阅先查 channels 列表再发
+  // RPC）：声明 shell-bg 通道，让徽标与面板路径走到真实的 count/list 请求。
+  ctx.window.ClawFeatureCommunication = {
+    listChannels: async () => [{ featureId: 'shell', channelId: 'shell-bg' }],
+  };
   const timers = new Set();
   ctx.setInterval = (callback, delay) => { const id = { callback, delay }; timers.add(id); return id; };
   ctx.clearInterval = id => timers.delete(id);
@@ -53,6 +58,7 @@ describe('background task panel', () => {
   it('opens live-only, merges a delayed list without rolling back newer events', async () => {
     const h = harness();
     h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
     const stream = h.source();
     assert.ok(stream.url.includes('latest=1'));
     stream.emit('open');
@@ -74,6 +80,7 @@ describe('background task panel', () => {
   it('reconciles a resync list without discarding events received while it is pending', async () => {
     const h = harness();
     h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
     const stream = h.source();
     stream.emit('open');
     h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
@@ -91,6 +98,7 @@ describe('background task panel', () => {
   it('ignores an older list that returns after a newer finalized-task reconciliation', async () => {
     const h = harness();
     h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
     const stream = h.source();
     stream.emit('open');
     stream.emit('event', { type: 'finalized', data: { id: 'new', status: 'done', startedAt: 2, command: 'bash' } });
@@ -105,6 +113,7 @@ describe('background task panel', () => {
   it('prunes retired terminal tasks after the registry trims its list', async () => {
     const h = harness();
     h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
     const stream = h.source();
     stream.emit('open');
     h.pending.shift()({ ok: true, tasks: [
@@ -123,6 +132,7 @@ describe('background task panel', () => {
   it('updates elapsed time without rebuilding cards on every second', async () => {
     const h = harness();
     h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
     h.source().emit('open');
     h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
     await new Promise(resolve => setImmediate(resolve));
@@ -140,6 +150,8 @@ describe('background task panel', () => {
   it('polls only a count for the closed-panel badge', async () => {
     const h = harness();
     h.ctx.window.BgPanel.refreshBadge();
+    // count 前置了 channels 能力发现（异步），让发现先落定。
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(h.requests[0].requestType, 'count');
     h.pending.shift()({ ok: true, running: 3 });
     await new Promise(resolve => setImmediate(resolve));
@@ -149,8 +161,10 @@ describe('background task panel', () => {
   it('discards a list response from a previous channel after switching sessions', async () => {
     const h = harness();
     h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
     h.source().emit('open');
     h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve));
     const stream = h.source();
     stream.emit('open');
     h.pending.shift()({ ok: true, tasks: [{ id: 'old', status: 'running' }] });

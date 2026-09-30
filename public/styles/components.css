@@ -234,6 +234,20 @@
   cursor: default;
 }
 
+.message-row.assistant:has(.tool-call-container) .message-content.collapsed {
+  max-height: none;
+  mask-image: none;
+  -webkit-mask-image: none;
+  overflow: visible;
+}
+
+.message-row.assistant:has(.tool-call-container) .message-content.collapsed .tool-call-container {
+  max-height: 160px;
+  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+  overflow: hidden;
+}
+
 .expand-toggle-bar {
   display: flex;
   justify-content: center;
@@ -397,13 +411,6 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   min-width: 0;
   overflow-x: auto;
 }
-.tool-content.collapsed {
-  max-height: 200px;
-  overflow: hidden;
-  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
-}
-.tool-call-toggle-bar { display: flex; justify-content: center; padding: 2px 0 8px; }
 
 .tool-result-header {
   display: flex;

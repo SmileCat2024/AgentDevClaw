@@ -1,20 +1,20 @@
 /**
- * Tests for tool-card collapse semantics in chat-renderer.js:
+ * Tests for collapse semantics in chat-renderer.js:
  *
  * 1. Every long tool RESULT row auto-collapses regardless of tool name
  *    (previously only Read/Edit folded — Grep/Bash/LS results stayed fully
  *    expanded, the "long tools never fold" complaint).
- * 2. Long tool CALL cards (assistant rows) collapse per-card with an in-card
- *    toggle, independent of the row's own collapse state. Short cards stay
- *    as-is; the user's explicit expand is remembered via the
- *    _userExpandedToolCalls override set.
- * 3. Single-control rule: when a row contains a collapsible call card, the
- *    row-level manual toggle yields to the card's own toggle — no nested
- *    expand/collapse buttons stacked inside and below the same card.
- *    Explicit user row preferences keep the row toggle reversible.
+ * 2. Assistant rows containing tool-call cards auto-collapse at the ROW level
+ *    when tall — the collapse control lives outside the block (the row-level
+ *    expand-toggle bar), exactly like tool result rows. There is no per-card
+ *    in-block collapse anymore (the removed "块内折叠" design).
+ * 3. Pure-text assistant rows keep manual-only collapse (no auto-fold).
+ * 4. markAssistantBirthProcessState: freshly inserted / rebuilt assistant rows
+ *    in hide-process mode are born hidden (process-hidden-empty) when they
+ *    have no visible content, independent of the tail-scan sync that follows.
  *
  * Loads the real collapse functions (computeRowCollapsePlan /
- * applyRowCollapsePlan / applyToolCallCollapsePlan) extracted from
+ * applyRowCollapsePlan / markAssistantBirthProcessState) extracted from
  * chat-renderer.js into a vm sandbox with classList-style DOM stubs.
  */
 
@@ -25,6 +25,8 @@ import vm from 'node:vm';
 
 const chatRendererSource = fs.readFileSync(
   new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
+const componentsCss = fs.readFileSync(
+  new URL('../public/styles/components.css', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -34,8 +36,8 @@ function sourceBetween(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
-function makeClassList() {
-  const set = new Set();
+function makeClassList(initial = []) {
+  const set = new Set(initial);
   return {
     add: (...names) => names.forEach((n) => set.add(n)),
     remove: (...names) => names.forEach((n) => set.delete(n)),
@@ -71,21 +73,6 @@ function makeToggleBarStub() {
   };
 }
 
-function makeCallCard({ contentH, id }) {
-  const card = { classList: makeClassList(), _bar: null };
-  const content = { id, scrollHeight: contentH, classList: makeClassList() };
-  card.querySelector = (sel) => {
-    if (sel === '.tool-content') return content;
-    if (sel === '.tool-call-toggle-bar') return card._bar;
-    return null;
-  };
-  card.appendChild = (child) => {
-    if (child && child._isToggleBar) card._bar = child;
-    return child;
-  };
-  return { card, content };
-}
-
 function makeRow({ role, contentH, callCards = [], msgIndex = 0 }) {
   const row = { classList: makeClassList(), _rowBar: null };
   row.classList.add(role);
@@ -95,10 +82,11 @@ function makeRow({ role, contentH, callCards = [], msgIndex = 0 }) {
     if (sel === '.message-content') return content;
     if (sel === '.expand-toggle-bar') return row._rowBar;
     if (sel === '.tool-result-header span:last-child') return toolHeaderSpan;
+    if (sel === '.tool-call-container') return callCards[0] || null;
     return null;
   };
   row.querySelectorAll = (sel) =>
-    sel === '.tool-call-container' ? callCards.map((c) => c.card) : [];
+    sel === '.tool-call-container' ? callCards : [];
   row.appendChild = (child) => {
     if (child && child._isToggleBar) row._rowBar = child;
     return child;
@@ -114,8 +102,7 @@ function createCollapseSandbox() {
     getToggleButtonLabel: (collapsed) => (collapsed ? '展开' : '收起'),
     _userExpandedMsgs: new Set(),
     _userCollapsedMsgs: new Set(),
-    _userExpandedToolCalls: new Set(),
-    _userCollapsedToolCalls: new Set(),
+    showChatProcess: false,
   };
   vm.createContext(sandbox);
   const block = sourceBetween(
@@ -153,78 +140,143 @@ test('assistant text rows keep manual-only collapse (no auto-fold)', () => {
   assert.ok(row._rowBar, 'long assistant row still gets a manual toggle');
 });
 
-test('long tool call cards collapse per-card; short cards stay open', () => {
+test('tall assistant rows with call cards auto-collapse at row level (toggle outside the block)', () => {
   const sandbox = createCollapseSandbox();
-  const long = makeCallCard({ contentH: 600, id: 'tcallc-msg-2-0' });
-  const short = makeCallCard({ contentH: 40, id: 'tcallc-msg-2-1' });
-  const { row, content } = makeRow({
-    role: 'assistant', contentH: 40, callCards: [long, short], msgIndex: 2,
-  });
+  const card = { classList: makeClassList() };
+  const { row, content } = makeRow({ role: 'assistant', contentH: 600, callCards: [card], msgIndex: 2 });
 
   const plan = runSync(sandbox, row);
-  assert.equal(plan.callPlans.length, 2);
-  assert.equal(long.content.classList.contains('collapsed'), true, 'long call content collapses');
-  assert.ok(long.card._bar, 'long call card gets an in-card toggle bar');
-  assert.equal(short.content.classList.contains('collapsed'), false, 'short call content stays open');
-  assert.equal(short.card._bar, null, 'short call card gets no toggle bar');
-  assert.equal(content.classList.contains('collapsed'), false, 'row itself stays open');
+  assert.equal(plan.shouldCollapse, true, 'card-bearing assistant row auto-collapses');
+  assert.equal(content.classList.contains('collapsed'), true, 'row content collapses as a whole');
+  assert.ok(row._rowBar, 'the single toggle bar is the row-level (outside) one');
+  assert.equal(card.classList.contains('collapsed'), false,
+    'call cards no longer carry their own collapsed state');
 });
 
-test('user-expanded call card overrides the auto-collapse default', () => {
+test('collapsed call cards show the same 160px viewport as tool-result rows without nesting a toggle', () => {
+  assert.match(componentsCss,
+    /\.message-row\.assistant:has\(\.tool-call-container\) \.message-content\.collapsed\s*\{[^}]*max-height:\s*none;[^}]*overflow:\s*visible;/,
+    'the row remains unclipped so preceding reasoning/text cannot consume the call-card viewport');
+  assert.match(componentsCss,
+    /\.message-row\.assistant:has\(\.tool-call-container\) \.message-content\.collapsed \.tool-call-container\s*\{\s*max-height:\s*160px;[^}]*mask-image:\s*linear-gradient\(to bottom, black 60%, transparent 100%\);[^}]*overflow:\s*hidden;/,
+    'each call card gets the same 160px clipped viewport and fade-out as a tool-result row');
+  assert.match(componentsCss,
+    /\.message-content\.collapsed\s*\{\s*max-height:\s*160px;/,
+    'tool-result rows retain their existing 160px row-level viewport');
+  assert.doesNotMatch(componentsCss, /tool-call-toggle-bar/,
+    'call cards have no nested expand/collapse controls');
+});
+
+test('card-bearing rows compensate for each card shell while keeping the 160px content budget', () => {
   const sandbox = createCollapseSandbox();
-  sandbox._userExpandedToolCalls.add('2:0');
-  const long = makeCallCard({ contentH: 600, id: 'tcallc-msg-2-0' });
-  const { row } = makeRow({ role: 'assistant', contentH: 40, callCards: [long], msgIndex: 2 });
+  // 每张卡约 68px shell：总高阈值 = 160px 内容 + 卡数 × 68px
+  const oneCardBelow = makeRow({ role: 'assistant', contentH: 228, callCards: [{ classList: makeClassList() }], msgIndex: 4 });
+  assert.equal(runSync(sandbox, oneCardBelow.row).shouldCollapse, false,
+    'one card at its 228px compensated threshold stays open');
+
+  const oneCardOver = makeRow({ role: 'assistant', contentH: 229, callCards: [{ classList: makeClassList() }], msgIndex: 5 });
+  assert.equal(runSync(sandbox, oneCardOver.row).shouldCollapse, true,
+    'one card collapses only after 160px usable content plus its shell');
+
+  const twoCardsBelow = makeRow({ role: 'assistant', contentH: 296, callCards: [{}, {}].map(() => ({ classList: makeClassList() })), msgIndex: 6 });
+  assert.equal(runSync(sandbox, twoCardsBelow.row).shouldCollapse, false,
+    'two cards get two shell compensations');
+
+  const twoCardsOver = makeRow({ role: 'assistant', contentH: 297, callCards: [{}, {}].map(() => ({ classList: makeClassList() })), msgIndex: 7 });
+  assert.equal(runSync(sandbox, twoCardsOver.row).shouldCollapse, true,
+    'two cards collapse only after their combined 296px compensated threshold');
+
+  const textOnly = makeRow({ role: 'assistant', contentH: 161, msgIndex: 8 });
+  assert.equal(runSync(sandbox, textOnly.row).shouldCollapse, false,
+    'plain text rows retain manual-only behavior');
+});
+
+test('user-expanded row preference overrides the auto-collapse default', () => {
+  const sandbox = createCollapseSandbox();
+  sandbox._userExpandedMsgs.add(2);
+  const card = { classList: makeClassList() };
+  const { row, content } = makeRow({ role: 'assistant', contentH: 600, callCards: [card], msgIndex: 2 });
 
   runSync(sandbox, row);
-  assert.equal(long.content.classList.contains('collapsed'), false,
-    'explicitly expanded card must stay expanded');
-  assert.ok(long.card._bar, 'toggle bar persists so the choice is reversible');
+  assert.equal(content.classList.contains('collapsed'), false,
+    'explicitly expanded row must stay expanded');
+  assert.ok(row._rowBar, 'toggle bar persists so the choice is reversible');
 });
 
-test('row toggle yields to per-card collapse (single control, no nesting)', () => {
+// ── markAssistantBirthProcessState ─────────────────────────────────────────
+
+function makeBirthRow({ role = 'assistant', children = [] }) {
+  const row = { classList: makeClassList() };
+  row.classList.add(role);
+  const content = { children, classList: makeClassList() };
+  row.querySelector = (sel) => (sel === '.message-content' ? content : null);
+  return { row, content };
+}
+
+function childWithClasses(classes, textContent = '') {
+  return { classList: makeClassList(classes), textContent };
+}
+
+function runBirth(sandbox, row) {
+  return vm.runInContext('markAssistantBirthProcessState', sandbox)(row);
+}
+
+test('hide mode: empty assistant row is born hidden', () => {
   const sandbox = createCollapseSandbox();
-  const long = makeCallCard({ contentH: 600, id: 'tcallc-msg-2-0' });
-  const { row, content } = makeRow({
-    role: 'assistant', contentH: 600, callCards: [long], msgIndex: 2,
+  sandbox.showChatProcess = false;
+  const { row } = makeBirthRow({
+    children: [childWithClasses(['markdown-body'], '')],
   });
-
-  const plan = runSync(sandbox, row);
-  assert.equal(plan.suppressRowToggle, true, 'card owns the collapse for this row');
-  assert.equal(long.content.classList.contains('collapsed'), true, 'card still auto-collapses');
-  assert.ok(long.card._bar, 'in-card toggle remains as the single control');
-  assert.equal(row._rowBar, null, 'row-level toggle must not stack on the card toggle');
-  assert.equal(content.classList.contains('collapsed'), false, 'row itself stays expanded');
+  runBirth(sandbox, row);
+  assert.equal(row.classList.contains('process-hidden-empty'), true);
 });
 
-test('explicit row preference keeps the row toggle alongside card collapse', () => {
+test('hide mode: assistant row whose visible content is only process children is born hidden', () => {
   const sandbox = createCollapseSandbox();
-  sandbox._userCollapsedMsgs.add(2);
-  const long = makeCallCard({ contentH: 600, id: 'tcallc-msg-2-0' });
-  const { row } = makeRow({ role: 'assistant', contentH: 600, callCards: [long], msgIndex: 2 });
-
-  const plan = runSync(sandbox, row);
-  assert.equal(plan.suppressRowToggle, false, 'user row preference wins over the yield');
-  assert.ok(row._rowBar, 'row toggle persists so the preference stays reversible');
+  sandbox.showChatProcess = false;
+  const { row } = makeBirthRow({
+    children: [
+      childWithClasses(['markdown-body'], ''),
+      childWithClasses(['reasoning-block'], 'thinking…'),
+      childWithClasses(['tool-call-container'], 'args'),
+    ],
+  });
+  runBirth(sandbox, row);
+  assert.equal(row.classList.contains('process-hidden-empty'), true);
 });
 
-test('process-hidden call cards are skipped (scrollHeight unreliable)', () => {
+test('hide mode: assistant row with visible text is born visible', () => {
   const sandbox = createCollapseSandbox();
-  const hidden = makeCallCard({ contentH: 600, id: 'tcallc-msg-2-0' });
-  hidden.card.classList.add('process-cv-hidden');
-  const { row } = makeRow({ role: 'assistant', contentH: 40, callCards: [hidden], msgIndex: 2 });
-
-  const plan = runSync(sandbox, row);
-  assert.equal(plan.callPlans.length, 0, 'cv-hidden card must not be measured');
+  sandbox.showChatProcess = false;
+  const { row } = makeBirthRow({
+    children: [
+      childWithClasses(['markdown-body'], '分析中'),
+      childWithClasses(['tool-call-container'], 'args'),
+    ],
+  });
+  runBirth(sandbox, row);
+  assert.equal(row.classList.contains('process-hidden-empty'), false);
 });
 
-test('toolCallKeyFromContentId parses indexes and rejects foreign ids', () => {
+test('hide mode: non-process children like tool-error keep the row visible', () => {
   const sandbox = createCollapseSandbox();
-  const parse = vm.runInContext('toolCallKeyFromContentId', sandbox);
-  assert.equal(parse('tcallc-msg-12-3'), '12:3');
-  assert.equal(parse('tcallc-msg-0-0'), '0:0');
-  assert.equal(parse('msg-12'), null);
-  assert.equal(parse('tcallc-msg-12'), null);
-  assert.equal(parse(''), null);
-  assert.equal(parse(null), null);
+  sandbox.showChatProcess = false;
+  const { row } = makeBirthRow({
+    children: [
+      childWithClasses(['markdown-body'], ''),
+      childWithClasses(['tool-error'], ''),
+    ],
+  });
+  runBirth(sandbox, row);
+  assert.equal(row.classList.contains('process-hidden-empty'), false);
+});
+
+test('show mode: birth state stays untouched (windowing owns visibility)', () => {
+  const sandbox = createCollapseSandbox();
+  sandbox.showChatProcess = true;
+  const { row } = makeBirthRow({
+    children: [childWithClasses(['markdown-body'], '')],
+  });
+  runBirth(sandbox, row);
+  assert.equal(row.classList.contains('process-hidden-empty'), false);
 });

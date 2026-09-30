@@ -206,8 +206,6 @@ function createHarness({ messages } = {}) {
     _userExpandedReasoning: new Set(),
     _userExpandedMsgs: new Set(),
     _userCollapsedMsgs: new Set(),
-    _userExpandedToolCalls: new Set(),
-    _userCollapsedToolCalls: new Set(),
     currentInputRequests: [],
     currentRuntimeAgentId: 'rt-1',
     _agentCallActive: new Map(),

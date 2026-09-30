@@ -250,8 +250,6 @@ function createHarness({ messages } = {}) {
     _userExpandedReasoning: new Set(),
     _userExpandedMsgs: new Set(),
     _userCollapsedMsgs: new Set(),
-    _userExpandedToolCalls: new Set(),
-    _userCollapsedToolCalls: new Set(),
     currentInputRequests: [],
     currentRuntimeAgentId: 'rt-1',
     _agentCallActive: new Map(),
@@ -875,7 +873,7 @@ function makeCallCard({ contentH, id }) {
   return { card, content };
 }
 
-test('streaming append: new tool rows and call cards fold at birth in the full-render tier', () => {
+test('streaming append: new tool rows and card-bearing assistant rows fold at birth in the full-render tier', () => {
   const h = createHarness();
   h.sandbox.showChatProcess = true;
   h.sandbox.followLatestEnabled = true;
@@ -899,16 +897,22 @@ test('streaming append: new tool rows and call cards fold at birth in the full-r
 
   // A tool call arrives mid-stream: an assistant row carrying a long call
   // card, then a long tool result row. appendNewMessages pre-hides both
-  // process elements before any layout.
+  // process elements before any layout. The row height includes the card —
+  // folding is row-level (toggle outside the block), cards never fold alone.
   const startIndex = h.container._entries.length;
   const callCard = makeCallCard({ contentH: 600, id: `tcallc-msg-${startIndex}-0` });
-  const assistantEntry = h.addRow(makeRow({ role: 'assistant', realH: 60, msgId: `msg-${startIndex}` }));
+  const assistantEntry = h.addRow(makeRow({ role: 'assistant', realH: 660, msgId: `msg-${startIndex}` }));
   assistantEntry.row._processChildren = [callCard.card];
   const origRowQsa = assistantEntry.row.querySelectorAll;
   assistantEntry.row.querySelectorAll = (sel) =>
     sel === '.tool-call-container'
       ? assistantEntry.row._processChildren
       : origRowQsa(sel);
+  const origRowQs = assistantEntry.row.querySelector;
+  assistantEntry.row.querySelector = (sel) =>
+    sel === '.tool-call-container'
+      ? assistantEntry.row._processChildren[0] || null
+      : origRowQs(sel);
   const toolEntry = h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Grep', msgId: `msg-${startIndex + 1}` }));
 
   // The exact pre-hide appendNewMessages applies to freshly inserted rows.
@@ -933,6 +937,14 @@ test('streaming append: new tool rows and call cards fold at birth in the full-r
   };
 
   // appendNewMessages' post-fix sequence: reveal first, fold at birth second.
+  // The harness createElement stub does not flag toggle bars, so record the
+  // row-level bar via appendChild to assert the single outside control.
+  const appendedBars = [];
+  const origRowAppend = assistantEntry.row.appendChild;
+  assistantEntry.row.appendChild = (child) => {
+    if (child && String(child.className || '').includes('expand-toggle-bar')) appendedBars.push(child);
+    return origRowAppend(child);
+  };
   vm.runInContext(`
     applyConversationProcessState(container);
     applyCollapseLogic(container, ${startIndex});
@@ -940,8 +952,12 @@ test('streaming append: new tool rows and call cards fold at birth in the full-r
 
   assert.equal(toolEntry.content.classList.contains('collapsed'), true,
     'new long tool result row must fold at birth');
-  assert.equal(callCard.content.classList.contains('collapsed'), true,
-    'new long call card must fold at birth');
+  assert.equal(assistantEntry.content.classList.contains('collapsed'), true,
+    'tall card-bearing assistant row must fold at birth (row-level control)');
+  assert.equal(callCard.content.classList.contains('collapsed'), false,
+    'call cards no longer carry their own collapsed state');
+  assert.ok(appendedBars.length > 0,
+    'the single toggle is the row-level bar outside the block');
   assert.equal(toolEntry.row.classList.contains('process-hidden'), false,
     'the fold must have happened on revealed (measurable) rows');
 });

@@ -249,7 +249,7 @@ function renderMessage(msg, index) {
             <div class="tool-header">
               <span class="tool-header-name">${displayName}</span>
             </div>
-            <div class="tool-content" id="tcallc-${msgId}-${ci}">${innerHtml}</div>
+            <div class="tool-content">${innerHtml}</div>
           </div>
         `;
       }).join('');
@@ -361,6 +361,8 @@ function appendNewMessages(newMessages, startIndex) {
         for (var pi = 0; pi < pEls.length; pi++) {
           pEls[pi].classList.add('process-hidden');
         }
+        // 隐藏过程模式下空 assistant 行直接出生隐藏，不依赖后续尾部扫描
+        markAssistantBirthProcessState(appendedRow);
         enhanceMathInElement(appendedRow);
         enhanceMarkdownTables(appendedRow);
       }
@@ -502,15 +504,37 @@ function updateLastMessage(msg) {
     lastRow.dataset.toolSuccess = success ? 'true' : 'false';
     enhanceMathInElement(lastRow);
   } else if (msg.role === 'assistant') {
-    // 流式更新：重建 assistant 消息的正文内容
-    const contentEl = lastRow.querySelector('.markdown-body:not(.reasoning-content)');
-    if (contentEl) {
+    // 流式更新：默认只重建正文 markdown；消息在行出生后才长出的结构
+    // （toolCalls / reasoning）需要整行重建，否则调用卡与思考块永远
+    // 不进 DOM —— 显示过程模式下丢过程内容，隐藏过程模式下空行状态
+    // 与消息实态脱节。
+    const callCountInRow = lastRow.querySelectorAll('.tool-call-container').length;
+    const needsStructuralRebuild =
+      (Array.isArray(msg.toolCalls) ? msg.toolCalls.length : 0) !== callCountInRow
+      || (!!msg.reasoning && !lastRow.querySelector('.reasoning-block'));
+    if (needsStructuralRebuild) {
       runWithSuppressedChatViewportObservers(() => {
-        contentEl.innerHTML = renderMarkdown(msg.content || '');
+        lastRow.insertAdjacentHTML('beforebegin', renderMessage(msg, lastIndex));
+        lastRow.remove();
       });
+      const rebuiltRow = container.querySelectorAll('.message-row')[lastIndex];
+      if (rebuiltRow) {
+        const pEls = rebuiltRow.querySelectorAll('.reasoning-block, .tool-call-container');
+        for (let pi = 0; pi < pEls.length; pi++) pEls[pi].classList.add('process-hidden');
+        markAssistantBirthProcessState(rebuiltRow);
+        enhanceMathInElement(rebuiltRow);
+        enhanceMarkdownTables(rebuiltRow);
+      }
+    } else {
+      const contentEl = lastRow.querySelector('.markdown-body:not(.reasoning-content)');
+      if (contentEl) {
+        runWithSuppressedChatViewportObservers(() => {
+          contentEl.innerHTML = renderMarkdown(msg.content || '');
+        });
+      }
+      enhanceMathInElement(lastRow);
+      enhanceMarkdownTables(lastRow);
     }
-    enhanceMathInElement(lastRow);
-    enhanceMarkdownTables(lastRow);
   } else {
     enhanceMathInElement(lastRow);
   }
@@ -538,20 +562,41 @@ function updateLastMessage(msg) {
 
 function getCollapseThresholdForRow(row) {
   if (row.classList.contains('assistant')) {
+    const callCardCount = row.querySelectorAll('.tool-call-container').length;
+    if (callCardCount > 0) {
+      // 与工具结果的 160px 内容基准对齐，并补偿每张调用卡自身约 68px
+      // 的 header、padding、margin 与边框，避免卡片外壳挤占可见内容额度。
+      return 160 + callCardCount * 68;
+    }
+    // 纯文本 assistant 行只用此阈值决定手动折叠按钮，不自动折叠。
     return 220;
   }
   return 160;
 }
 
-// 工具调用卡（assistant 行内的 .tool-call-container）独立折叠阈值：与
-// assistant 行一致。调用参数过长（如无模板工具的大 JSON、长命令）时按卡折叠，
-// 不与所在行的折叠状态耦合。
-var TOOL_CALL_COLLAPSE_THRESHOLD = 220;
-
-// id 形如 tcallc-msg-<msgIndex>-<callIdx> → 用户偏好键 "<msgIndex>:<callIdx>"
-function toolCallKeyFromContentId(id) {
-  var m = /^tcallc-msg-(\d+)-(\d+)$/.exec(String(id || ''));
-  return m ? (parseInt(m[1], 10) + ':' + parseInt(m[2], 10)) : null;
+// 新插入 / 重建的 assistant 行在隐藏过程模式下的出生态：过程子元素已由
+// 调用方预隐藏（process-hidden），正文为空时行直接出生隐藏（process-
+// hidden-empty）。空行隐藏此前只依赖 syncAssistantProcessOnlyRows 的尾部
+// 扫描补判，任何一次行索引错位都会让空行以「只剩 assistant 徽标」的形态
+// 泄漏到界面上；出生态直接定死，尾部扫描只负责流式补文后的反向揭示。
+// 判定口径与 syncAssistantProcessOnlyRows 一致：markdown 正文有字才算
+// 可见，reasoning / 调用卡是过程元素不算，其余子元素（如 .tool-error）
+// 按可见处理。
+function markAssistantBirthProcessState(row) {
+  if (!row || !row.classList.contains('assistant') || showChatProcess) return;
+  const content = row.querySelector('.message-content');
+  if (!content) return;
+  const hasVisibleChild = Array.from(content.children).some((child) => {
+    if (child.classList.contains('markdown-body')) {
+      return String(child.textContent || '').trim().length > 0;
+    }
+    if (child.classList.contains('reasoning-block')
+      || child.classList.contains('tool-call-container')) {
+      return false;
+    }
+    return true;
+  });
+  row.classList.toggle('process-hidden-empty', !hasVisibleChild);
 }
 
 // Phase 1 of the collapse sync: all READS (geometry + state) needed to know
@@ -582,32 +627,12 @@ function computeRowCollapsePlan(row) {
   const collapseThreshold = getCollapseThresholdForRow(row);
   const isCollapsible = el.scrollHeight > collapseThreshold;
   const isSystem = row.classList.contains('system');
-  // 长工具结果一律默认折叠（用户可展开并记忆偏好）；assistant 文本行保持
-  // 仅提供手动折叠按钮、不自动折叠的既有行为。
+  // 长工具结果与含调用卡的 assistant 行一律默认折叠（用户可展开并记忆
+  // 偏好）；纯文本 assistant 行保持仅提供手动折叠按钮、不自动折叠的既有
+  // 行为。调用卡不单独折叠——折叠控件只在行级（块外），与工具结果一致。
   const isToolRow = row.classList.contains('tool');
-  const shouldCollapse = isCollapsible && (isSystem || isToolRow);
-
-  // 同行内的工具调用卡：长参数按卡折叠。卡片与行共用同一 compute/apply 批次，
-  // 保持「读测量 → 写状态」分离（settleAllRowCollapseStates 的批处理契约）。
-  var callPlans = [];
-  if (!isToolRow) {
-    var cards = row.querySelectorAll('.tool-call-container');
-    for (var ci = 0; ci < cards.length; ci++) {
-      var card = cards[ci];
-      if (card.classList.contains('process-hidden') || card.classList.contains('process-cv-hidden')) continue;
-      var callContent = card.querySelector('.tool-content');
-      if (!callContent || !callContent.id) continue;
-      var callKey = toolCallKeyFromContentId(callContent.id);
-      if (callKey === null) continue;
-      callPlans.push({
-        card: card,
-        content: callContent,
-        isCollapsible: callContent.scrollHeight > TOOL_CALL_COLLAPSE_THRESHOLD,
-        userExpanded: _userExpandedToolCalls.has(callKey),
-        userCollapsed: _userCollapsedToolCalls.has(callKey),
-      });
-    }
-  }
+  const hasCallCards = !isToolRow && !!row.querySelector('.tool-call-container');
+  const shouldCollapse = isCollapsible && (isSystem || isToolRow || hasCallCards);
 
   // Check if user has manually toggled this row — respect their choice
   var msgId = el.id || '';
@@ -615,12 +640,7 @@ function computeRowCollapsePlan(row) {
   var userExpanded = !isNaN(msgIndex) && _userExpandedMsgs.has(msgIndex);
   var userCollapsed = !isNaN(msgIndex) && _userCollapsedMsgs.has(msgIndex);
 
-  // 行内已有按卡折叠的调用卡时，行级切换让位给卡片，避免内外两个
-  // 展开/收起按钮嵌套叠加。用户显式操作过行折叠时仍保留行控件。
-  var hasCollapsibleCall = callPlans.some(function (cp) { return cp.isCollapsible; });
-  var suppressRowToggle = hasCollapsibleCall && !userExpanded && !userCollapsed;
-
-  return { kind: 'apply', isCollapsible, userExpanded, userCollapsed, shouldCollapse, callPlans, suppressRowToggle };
+  return { kind: 'apply', isCollapsible, userExpanded, userCollapsed, shouldCollapse };
 }
 
 // Phase 2 of the collapse sync: all WRITES. Every write is diff-guarded —
@@ -634,21 +654,6 @@ function applyRowCollapsePlan(row, plan) {
     el.classList.remove('collapsed');
     const bar = row.querySelector('.expand-toggle-bar');
     if (bar) bar.remove();
-    return;
-  }
-
-  // 工具调用卡独立于所在行折叠：行本身不高（早退分支）时也要应用卡状态。
-  if (plan.callPlans) {
-    for (var cpi = 0; cpi < plan.callPlans.length; cpi++) {
-      applyToolCallCollapsePlan(plan.callPlans[cpi]);
-    }
-  }
-
-  // 卡片已接管折叠：行保持展开且不出行级按钮（单一控件原则）。
-  if (plan.suppressRowToggle) {
-    el.classList.remove('collapsed');
-    const ownedBar = row.querySelector('.expand-toggle-bar');
-    if (ownedBar) ownedBar.remove();
     return;
   }
 
@@ -691,36 +696,6 @@ function applyRowCollapsePlan(row, plan) {
   const btn = nextBtnBar.querySelector('.expand-toggle-btn');
   if (!btn || btn.textContent !== desiredLabel || !btn.classList.contains(desiredCls)) {
     nextBtnBar.innerHTML = '<button class="expand-toggle-btn ' + desiredCls + '" onclick="toggleMessage(&quot;' + el.id + '&quot;)">' + desiredLabel + '</button>';
-  }
-}
-
-// 工具调用卡折叠的写阶段：与行折叠同样的 diff-guard——已定态卡片零写入，
-// 滚动期反复扫描不弄脏布局树。
-function applyToolCallCollapsePlan(cp) {
-  var el = cp.content;
-  if (!cp.isCollapsible) {
-    el.classList.remove('collapsed');
-    var deadBar = cp.card.querySelector('.tool-call-toggle-bar');
-    if (deadBar) deadBar.remove();
-    return;
-  }
-
-  // 用户偏好优先；无偏好时长调用默认折叠。
-  if (cp.userExpanded) el.classList.remove('collapsed');
-  else el.classList.add('collapsed');
-
-  var bar = cp.card.querySelector('.tool-call-toggle-bar');
-  if (!bar) {
-    bar = document.createElement('div');
-    bar.className = 'tool-call-toggle-bar';
-    cp.card.appendChild(bar);
-  }
-  var collapsed = el.classList.contains('collapsed');
-  var label = getToggleButtonLabel(collapsed);
-  var cls = collapsed ? 'is-collapsed' : 'is-expanded';
-  var callBtn = bar.querySelector('.expand-toggle-btn');
-  if (!callBtn || callBtn.textContent !== label || !callBtn.classList.contains(cls)) {
-    bar.innerHTML = '<button class="expand-toggle-btn ' + cls + '" onclick="toggleToolCall(&quot;' + el.id + '&quot;)">' + label + '</button>';
   }
 }
 
@@ -928,7 +903,7 @@ function render(messages) {
               <div class="tool-header">
                 <span class="tool-header-name">${displayName}</span>
               </div>
-              <div class="tool-content" id="tcallc-${msgId}-${ci}">${innerHtml}</div>
+              <div class="tool-content">${innerHtml}</div>
             </div>
           `;
         }).join('');
@@ -1148,43 +1123,6 @@ window.toggleMessage = function(id) {
       preferSmooth: false,
     });
   }
-};
-
-window.toggleToolCall = function(id) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (typeof revealMeasuredChatRow === 'function') revealMeasuredChatRow(el.closest('.message-row'));
-  const chatViewportTopBefore = container.scrollTop;
-  el.classList.toggle('collapsed');
-  const isCollapsed = el.classList.contains('collapsed');
-
-  // 记录用户对这张调用卡的显式选择，重渲染后由 computeRowCollapsePlan 恢复
-  const callKey = toolCallKeyFromContentId(id);
-  if (callKey !== null) {
-    if (isCollapsed) {
-      _userCollapsedToolCalls.add(callKey);
-      _userExpandedToolCalls.delete(callKey);
-    } else {
-      _userExpandedToolCalls.add(callKey);
-      _userCollapsedToolCalls.delete(callKey);
-    }
-  }
-
-  const card = el.closest('.tool-call-container');
-  const btn = card ? card.querySelector('.expand-toggle-btn') : null;
-  if (btn) {
-    btn.innerHTML = getToggleButtonLabel(isCollapsed);
-    btn.className = 'expand-toggle-btn ' + (isCollapsed ? 'is-collapsed' : 'is-expanded');
-  }
-
-  notifyChatViewportMutation({
-    reason: 'message-toggle',
-    shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-    preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
-    forceSnap: false,
-    allowChase: false,
-    preferSmooth: false,
-  });
 };
 
 window.toggleReasoning = function(id) {
