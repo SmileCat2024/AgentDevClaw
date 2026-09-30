@@ -1402,7 +1402,15 @@ async function runPollCycle() {
     if (!currentRuntimeAgentId) {
       applySessionViewPatch({ connected: true });
       updateNotificationStatus(null);
-      await loadAgents();
+      // agent 列表与聚焦态尾段同款节流：SSE 激活时增删由 connection 事件
+      // 即时触发 loadAgents，此处只做 30s 兜底；无 SSE 时 3s。此前本分支
+      // 每秒全量拉 get_connected_agents（payload 随会话数增长，百 KB 级），
+      // 是无焦点标签页的主要负载源。
+      const agentListIntervalMs = (typeof isSseActive === 'function' && isSseActive()) ? 30000 : 3000;
+      if (Date.now() - lastAgentListRefreshAt > agentListIntervalMs) {
+        lastAgentListRefreshAt = Date.now();
+        await loadAgents();
+      }
       await refreshAgentCallStates(allAgents);
       // Incrementally refresh workspace session data when viewing workspace surface.
       if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {

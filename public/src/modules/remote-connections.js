@@ -23,6 +23,8 @@ const REMOTE_NS = 'remote:';
 // Catalog 轮询节流：跟随既有 poll 循环调度（maybeRefreshRemoteCatalog 由
 // runPollCycle 调用），独立于各 poll 周期做时间窗去重。
 const RC_CATALOG_REFRESH_MS = 4000;
+// 空目录无东西可跟踪：降为发现心跳（远程实例上线半分钟内可见即可）。
+const RC_CATALOG_IDLE_REFRESH_MS = 30000;
 const REMOTE_CONN_STATUS_CLASSES = new Set([
   'configured', 'connecting', 'connected', 'reconnecting', 'disconnected', 'degraded',
 ]);
@@ -192,6 +194,7 @@ async function refreshRemoteCatalog() {
   if (_rcCatalogInFlight) return;
   _rcCatalogInFlight = true;
   try {
+    const beforeSig = JSON.stringify([..._rcVisibleSections]);
     let renderedSomething = false;
     try {
       const res = await fetch('/protoclaw/remote_catalog');
@@ -206,8 +209,12 @@ async function refreshRemoteCatalog() {
       // transport failure behaves like a 404: no remote UI this cycle
       ingestRemoteCatalog(null);
     }
-    _rcSidebarProjectionVersion += 1;
-    if (typeof renderAgentList === 'function') renderAgentList();
+    if (JSON.stringify([..._rcVisibleSections]) !== beforeSig) {
+      // 目录状态未变不重渲染侧栏（与 maybeRefreshRemoteHistory 的签名
+      // 对比同款）：空目录常态下不再每 4s 全量重建 agent list。
+      _rcSidebarProjectionVersion += 1;
+      if (typeof renderAgentList === 'function') renderAgentList();
+    }
     if (renderedSomething) tryRestoreRemoteFocus();
   } finally {
     _rcCatalogInFlight = false;
@@ -217,7 +224,10 @@ async function refreshRemoteCatalog() {
 
 function maybeRefreshRemoteCatalog() {
   const now = Date.now();
-  if (_rcCatalogInFlight || now - _rcLastCatalogFetchAt < RC_CATALOG_REFRESH_MS) return;
+  // 有连接时保持 4s 状态跟踪；空目录降为 30s 发现心跳
+  // （maybeRefreshRemoteHistory 的零连接守卫同款思路）。
+  const intervalMs = _rcVisibleSections.size > 0 ? RC_CATALOG_REFRESH_MS : RC_CATALOG_IDLE_REFRESH_MS;
+  if (_rcCatalogInFlight || now - _rcLastCatalogFetchAt < intervalMs) return;
   void refreshRemoteCatalog();
 }
 
