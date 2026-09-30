@@ -11,6 +11,7 @@
  * 已归档线程收新指令 → 409 thread_archived；运行中归档 → 409 thread_busy。
  */
 
+import { createHash } from 'node:crypto';
 import { synthesizeThreadLifeState } from './thread-life-state.js';
 
 /**
@@ -154,7 +155,16 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
           return { ...withState, headViewerAgentId, headProjectDir };
         }),
       );
-      res.json({ ok: true, threads: withLife });
+      // 条件刷新（20s 轮询路径）：threads 无天然整数 revision——数据源是线程
+      // 文件 + 看板 + 归档索引 + 派生字段（headViewerAgentId / headProjectDir 随
+      // runtime 上下线变），故以聚合结果的内容哈希为门：调用方带相同
+      // sinceContentHash 即返回 unchanged 短路，跳过 ~100KB 传输与前端重建
+      // （先例：session.js 的 sinceRevision 短路）。内容驱动，无失效风险。
+      const contentHash = createHash('sha1').update(JSON.stringify(withLife)).digest('hex');
+      if (typeof req.query.sinceContentHash === 'string' && req.query.sinceContentHash === contentHash) {
+        return res.json({ ok: true, unchanged: true, contentHash });
+      }
+      res.json({ ok: true, threads: withLife, contentHash });
     } catch (err) {
       _errorResponse(res, err);
     }

@@ -29,6 +29,9 @@ window.ClawThreads = {
   initialLoadDone: false,
   refreshInFlight: null,
   lastThreadsSig: '',
+  // 服务端列表聚合的内容哈希（条件刷新凭证）：带上它请求，内容未变时
+  // 服务端返回 unchanged 短路，跳过全量传输与重建（先例：会话列表 sinceRevision）。
+  lastContentHash: '',
   // 当前激活会话是否为「历史成员只读挂载」事实（activate 响应 browseOnly）。
   // 由 workspace-actions 在 activate 落地时写入；只读横幅/输入守卫消费，
   // 与成员关系（sessionIndex / headSessionId）一致：历史成员必然 browseOnly。
@@ -82,11 +85,19 @@ window.refreshThreads = async (force = false) => {
   }
   state.refreshInFlight = (async () => {
     try {
-      const res = await fetch('/protoclaw/threads');
+      const query = state.lastContentHash
+        ? `?sinceContentHash=${encodeURIComponent(state.lastContentHash)}`
+        : '';
+      const res = await fetch(`/protoclaw/threads${query}`);
       if (!res.ok) return;
       const data = await res.json();
+      // 内容未变（unchanged 短路）或旧服务端忽略参数外的异常形态：保持现状
+      if (data?.unchanged) return;
       if (Array.isArray(data?.threads)) {
         state.threads = data.threads;
+        if (typeof data.contentHash === 'string' && data.contentHash) {
+          state.lastContentHash = data.contentHash;
+        }
         _rebuildIndexes();
         // 线程签名变化（新建/推进）时失效 workspace HTML 缓存，
         // 使会话列表在下次渲染时带上最新徽标（不主动触发渲染）。
