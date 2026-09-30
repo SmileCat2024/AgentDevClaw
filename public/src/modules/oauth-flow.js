@@ -16,8 +16,8 @@ function checkOAuthProxy(isZh) {
         if (display) {
           display.innerHTML = '<div style="color:#e8a847;font-size:12px;padding:4px 0;">'
             + (isZh
-              ? '⚠ 未检测到代理 (HTTPS_PROXY)。OpenAI 设备码请求可能被地区限制拦截，请确保已设置环境变量并重启服务'
-              : '⚠ No proxy (HTTPS_PROXY) detected. OpenAI device-code requests may be blocked by region restrictions. Ensure the env var is set and restart the server')
+              ? '⚠ 未检测到代理 (HTTPS_PROXY)。OpenAI 登录请求可能被地区限制拦截，请确保已设置环境变量并重启服务'
+              : '⚠ No proxy (HTTPS_PROXY) detected. OpenAI login requests may be blocked by region restrictions. Ensure the env var is set and restart the server')
             + '</div>';
         }
       }
@@ -30,8 +30,10 @@ function renderOAuthLoginArea(preset, isZh) {
   return [
     '<div id="oauth-status-display" class="oauth-status-text" style="padding:2px 0;"></div>',
     '<div class="oauth-action-row">',
-    '<button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin()">'
-      + (isZh ? '登录 OpenAI' : 'Login with OpenAI') + '</button>',
+    '<button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin(\'browser\')">'
+      + (isZh ? '浏览器授权登录' : 'Login in Browser') + '</button>',
+    '<button class="settings-btn settings-btn-secondary" type="button" onclick="startOAuthLogin(\'device\')">'
+      + (isZh ? '设备码登录' : 'Device Code Login') + '</button>',
     providerName
       ? '<button class="settings-btn settings-btn-secondary" type="button" onclick="logoutOAuth()">'
         + (isZh ? '登出' : 'Logout') + '</button>'
@@ -207,8 +209,9 @@ function oauthProviderNeedsSave() {
   return false;
 }
 
-window.startOAuthLogin = async function() {
+window.startOAuthLogin = async function(mode) {
   let isZh = currentLanguage === 'zh';
+  let loginMode = mode === 'device' ? 'device' : 'browser';
   let idx = window.ClawFW.settingsEditing;
   if (idx === null) return;
   let providerName = getEditingProviderName();
@@ -226,12 +229,21 @@ window.startOAuthLogin = async function() {
   let clientId = cidInput ? cidInput.value.trim() : '';
 
   let display = document.getElementById('oauth-status-display');
-  if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
+
+  // window.open must run inside the user-gesture call stack or popup blockers
+  // kill it — open a placeholder tab now and navigate it once authUrl arrives.
+  let popup = null;
+  if (loginMode === 'browser') {
+    try { popup = window.open('about:blank', '_blank'); } catch (e) { popup = null; }
+    if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在准备浏览器授权...' : 'Preparing browser authorization...') + '</span>';
+  } else {
+    if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
+  }
 
   fetch('/protoclaw/oauth/codex/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ providerName: providerName, clientId: clientId }),
+    body: JSON.stringify({ providerName: providerName, clientId: clientId, mode: loginMode }),
   })
     .then(async function(r) {
       let data = await r.json().catch(function() { return {}; });
@@ -240,9 +252,13 @@ window.startOAuthLogin = async function() {
     })
     .then(function(data) {
       if (data.error) throw new Error(data.error);
+      if (loginMode === 'browser' && data.authUrl) {
+        if (popup && !popup.closed) popup.location.href = data.authUrl;
+      }
       pollOAuthLogin(data.sessionId);
     })
     .catch(function(err) {
+      if (popup && !popup.closed) popup.close();
       if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + escapeHtml(err.message) + '</span>';
     });
 };
@@ -255,13 +271,24 @@ function pollOAuthLogin(sessionId) {
   let display = document.getElementById('oauth-status-display');
 
   let renderPending = function(sess) {
-    let html = sess.userCode
-      ? '<div class="oauth-code-row">'
-        + '<div class="oauth-user-code">' + escapeHtml(sess.userCode) + '</div>'
-        + '<button class="settings-btn settings-btn-secondary oauth-copy-btn" type="button" data-copy-code="' + escapeHtml(sess.userCode) + '" onclick="copyOAuthUserCode(this)" title="' + (isZh ? '复制设备码' : 'Copy device code') + '">' + (isZh ? '复制' : 'Copy') + '</button>'
-        + '</div>'
-        + '<div class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '在浏览器打开 ' : 'Open ') + '<a href="' + escapeHtml(sess.verificationUrl) + '" target="_blank">' + escapeHtml(sess.verificationUrl) + '</a>' + (isZh ? ' 并输入上方代码，完成授权后自动继续' : ' and enter the code; login continues automatically after approval') + '</div>'
-      : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
+    let html;
+    if (sess.mode === 'browser') {
+      html = sess.authUrl
+        ? '<div class="oauth-status-text" style="color:var(--text-secondary);">'
+          + (isZh ? '等待浏览器完成授权…若未自动打开，' : 'Waiting for browser authorization… if it did not open, ')
+          + '<a href="' + escapeHtml(sess.authUrl) + '" target="_blank">' + (isZh ? '点击此处打开' : 'open it here') + '</a>'
+          + (isZh ? '（需在运行本服务的电脑上打开）' : ' (must be opened on the machine running this server)')
+          + '</div>'
+        : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在准备浏览器授权...' : 'Preparing browser authorization...') + '</span>';
+    } else {
+      html = sess.userCode
+        ? '<div class="oauth-code-row">'
+          + '<div class="oauth-user-code">' + escapeHtml(sess.userCode) + '</div>'
+          + '<button class="settings-btn settings-btn-secondary oauth-copy-btn" type="button" data-copy-code="' + escapeHtml(sess.userCode) + '" onclick="copyOAuthUserCode(this)" title="' + (isZh ? '复制设备码' : 'Copy device code') + '">' + (isZh ? '复制' : 'Copy') + '</button>'
+          + '</div>'
+          + '<div class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '在任意设备的浏览器打开 ' : 'Open ') + '<a href="' + escapeHtml(sess.verificationUrl) + '" target="_blank">' + escapeHtml(sess.verificationUrl) + '</a>' + (isZh ? ' 并输入上方代码，完成授权后自动继续（本机无需打开浏览器）' : ' on any device and enter the code; login continues automatically after approval') + '</div>'
+        : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
+    }
     // Skip unchanged renders so the copy button keeps its "copied" feedback
     if (display && display.innerHTML !== html) display.innerHTML = html;
   };
@@ -280,7 +307,7 @@ function pollOAuthLogin(sessionId) {
           if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存' : 'Login successful! Token saved.') + '</span>';
         } else if (sess.status === 'expired') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
-          if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + (isZh ? '设备码已过期，请重试' : 'Device code expired. Please try again.') + '</span>';
+          if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + (isZh ? '登录已过期，请重试' : 'Login expired. Please try again.') + '</span>';
         } else if (sess.status === 'error') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
           if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + escapeHtml(sess.errorMessage || 'Login failed') + '</span>';

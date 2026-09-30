@@ -1,18 +1,25 @@
 /**
- * OpenAI Codex OAuth Device Code Flow
+ * OpenAI Codex OAuth login — two flows, one token store.
  *
- * Ported from hermes-agent/hermes_cli/auth.py — implements the full
- * device-code authorization grant used by OpenAI Codex (ChatGPT backend).
- *
- * Flow:
+ * Device-code flow (ported from hermes-agent/hermes_cli/auth.py):
  *   1. POST {issuer}/api/accounts/deviceauth/usercode  → { user_code, device_auth_id }
  *   2. User visits {issuer}/codex/device and enters user_code
  *   3. Poll  {issuer}/api/accounts/deviceauth/token     → { authorization_code, code_verifier }
  *   4. POST  {token_url} grant_type=authorization_code  → { access_token, refresh_token }
- *   5. Refresh: POST {token_url} grant_type=refresh_token → new access_token
+ *
+ * Browser PKCE flow (mirrors `codex login`, the Codex CLI default):
+ *   1. Start one-shot callback server on 127.0.0.1:1455 (fallback 1457 — both are
+ *      in the redirect-URI allow-list registered for the Codex client_id)
+ *   2. User authorizes at {issuer}/oauth/authorize (code_challenge S256 + state)
+ *   3. Browser redirects to the callback server with ?code&state
+ *   4. POST {token_url} grant_type=authorization_code  → tokens
+ *
+ * Token refresh (both flows): POST {token_url} grant_type=refresh_token.
  */
 
 import path from 'path';
+import crypto from 'crypto';
+import http from 'http';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
 import { USER_DATA_ROOT } from './shared/constants.js';
 
@@ -26,6 +33,13 @@ const DEVICE_CODE_URL = `${OPENAI_ISSUER}/api/accounts/deviceauth/usercode`;
 const DEVICE_POLL_URL = `${OPENAI_ISSUER}/api/accounts/deviceauth/token`;
 const VERIFICATION_URL = `${OPENAI_ISSUER}/codex/device`;
 const REDIRECT_URI = `${OPENAI_ISSUER}/deviceauth/callback`;
+const OAUTH_AUTHORIZE_URL = `${OPENAI_ISSUER}/oauth/authorize`;
+// Scope + extras copied from the Codex CLI browser login so the authorize page
+// treats this client identically to the official CLI (same public client_id).
+const BROWSER_LOGIN_SCOPE = 'openid profile email offline_access api.connectors.read api.connectors.invoke';
+const CODEX_ORIGINATOR = 'codex_cli_rs';
+const BROWSER_CALLBACK_PORT = 1455;          // registered in OpenAI's redirect URI allow-list
+const BROWSER_CALLBACK_FALLBACK_PORT = 1457; // keep in sync with the Codex CLI allow-list
 const REFRESH_SKEW_SECONDS = 120;   // refresh 2 min before expiry
 const DEFAULT_POLL_INTERVAL = 5;    // seconds
 const MAX_LOGIN_WAIT_MS = 15 * 60 * 1000; // 15 minutes
@@ -466,8 +480,11 @@ export async function pollDeviceAuthorization(deviceAuthId, userCode, intervalMs
 
 /**
  * Step 4: Exchange authorization code for access/refresh tokens.
+ * `redirectUri` must match the one used when the code was issued — the
+ * device-code flow uses the issuer's callback page, the browser flow uses the
+ * local callback server.
  */
-export async function exchangeCodeForTokens(authorizationCode, codeVerifier, clientId) {
+export async function exchangeCodeForTokens(authorizationCode, codeVerifier, clientId, redirectUri = REDIRECT_URI) {
   const cid = clientId || DEFAULT_CLIENT_ID;
 
   const resp = await fetchOAuth(OAUTH_TOKEN_URL, {
@@ -476,7 +493,7 @@ export async function exchangeCodeForTokens(authorizationCode, codeVerifier, cli
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code: authorizationCode,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: redirectUri,
       client_id: cid,
       code_verifier: codeVerifier,
     }),
@@ -561,6 +578,220 @@ export async function runDeviceCodeLogin(sessionId, providerName, clientId) {
   }
 }
 
+// ── Browser PKCE login flow ────────────────────────────────────────
+
+function generatePkce() {
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const codeChallenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  return { verifier, codeChallenge };
+}
+
+function generateState() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+/**
+ * Build the /oauth/authorize URL (PKCE S256 + state), mirroring the Codex CLI
+ * browser login parameters so the authorize page matches the official client.
+ */
+export function buildBrowserAuthorizeUrl({ clientId, redirectUri, codeChallenge, state }) {
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256',
+    state,
+    scope: BROWSER_LOGIN_SCOPE,
+    id_token_add_organizations: 'true',
+    codex_cli_simplified_flow: 'true',
+    originator: CODEX_ORIGINATOR,
+  });
+  // URLSearchParams encodes spaces as '+'; percent-encode them to the safer
+  // RFC 3986 form.
+  return `${OAUTH_AUTHORIZE_URL}?${params.toString().replace(/\+/g, '%20')}`;
+}
+
+function listenServer(server, port) {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve());
+  });
+}
+
+/**
+ * Start the one-shot localhost callback server. Tries the Codex-registered
+ * port 1455 first, then the registered fallback 1457; both are required
+ * because OpenAI validates redirect_uri against the client's allow-list.
+ */
+export async function startBrowserCallbackServer() {
+  let lastError = null;
+  for (const port of [BROWSER_CALLBACK_PORT, BROWSER_CALLBACK_FALLBACK_PORT]) {
+    const server = http.createServer();
+    try {
+      await listenServer(server, port);
+      return { server, port };
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== 'EADDRINUSE') throw error;
+    }
+  }
+  throw new Error(
+    `Browser login callback ports ${BROWSER_CALLBACK_PORT}/${BROWSER_CALLBACK_FALLBACK_PORT} are both in use`
+    + (lastError?.message ? `: ${lastError.message}` : ''),
+  );
+}
+
+/**
+ * Validate callback query parameters against the expected state.
+ * Pure function — the HTTP layer owns session lookups.
+ */
+export function handleBrowserCallback(query, expectedState) {
+  const state = query.get('state') || '';
+  if (state !== expectedState) return { outcome: 'state-mismatch' };
+
+  const providerError = query.get('error');
+  if (providerError) {
+    return {
+      outcome: 'provider-error',
+      error: providerError,
+      description: query.get('error_description') || '',
+    };
+  }
+
+  const code = query.get('code') || '';
+  if (!code) return { outcome: 'missing-code' };
+
+  return { outcome: 'code', code };
+}
+
+// The callback page reflects provider-returned error/description from the
+// request query — escape before interpolating into HTML.
+function escapeHtmlText(text) {
+  return String(text)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function callbackPageHtml(title, bodyText) {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtmlText(title)}</title></head>`
+    + `<body style="font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#1e1f24;color:#e6e6e6;">`
+    + `<div style="text-align:center;"><h2>${escapeHtmlText(title)}</h2><p>${escapeHtmlText(bodyText)}</p></div></body></html>`;
+}
+
+function wireBrowserCallback(server, sessionId) {
+  server.on('request', (req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    if (url.pathname !== '/auth/callback') {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not found');
+      return;
+    }
+    const session = loginSessions.get(sessionId);
+    const result = handleBrowserCallback(url.searchParams, session?.state || '');
+
+    if (result.outcome === 'code') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(callbackPageHtml('Authorized', 'Login approved — you can close this tab and return to AgentDevClaw.'));
+      session?.callbackResolve?.(result.code);
+    } else if (result.outcome === 'provider-error') {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(callbackPageHtml('Authorization failed', `${result.error}${result.description ? ' — ' + result.description : ''}`));
+      session?.callbackReject?.(new Error(
+        `Authorization denied: ${result.error}${result.description ? ` — ${result.description}` : ''}`,
+      ));
+    } else if (result.outcome === 'state-mismatch') {
+      // Stray request (e.g. a second browser tab): answer it, keep waiting.
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(callbackPageHtml('Invalid request', 'This login request does not match the active session. Close this tab and retry from the original one.'));
+    } else {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(callbackPageHtml('Authorization failed', 'The callback was missing an authorization code.'));
+      session?.callbackReject?.(new Error('Authorization callback missing code'));
+    }
+  });
+}
+
+/**
+ * Wait for the browser callback, exchange the code for tokens, then shut the
+ * callback server down. Runs in the background once beginBrowserLogin resolves.
+ */
+async function finishBrowserLogin(server, sessionId, providerName, clientId) {
+  const session = loginSessions.get(sessionId);
+  if (!session) {
+    server.close();
+    return;
+  }
+
+  const timeoutId = setTimeout(() => {
+    session.callbackReject?.(Object.assign(
+      new Error('Browser login timed out before authorization'),
+      { timedOut: true },
+    ));
+  }, MAX_LOGIN_WAIT_MS);
+
+  let code;
+  try {
+    code = await new Promise((resolve, reject) => {
+      session.callbackResolve = resolve;
+      session.callbackReject = reject;
+    });
+
+    const tokens = await exchangeCodeForTokens(code, session.pkce.verifier, clientId, session.redirectUri);
+    writeTokens(providerName, tokens);
+    session.status = 'approved';
+    console.log(`[OAuth/Codex] Browser login completed for provider "${providerName}" (session=${sessionId})`);
+  } catch (error) {
+    if (error?.timedOut) {
+      session.status = 'expired';
+      session.errorMessage = 'Browser login timed out before authorization';
+    } else {
+      session.status = 'error';
+      session.errorMessage = error.message || String(error);
+    }
+    console.warn(`[OAuth/Codex] Browser login failed (session=${sessionId}):`, session.errorMessage);
+  } finally {
+    clearTimeout(timeoutId);
+    session.callbackResolve = null;
+    session.callbackReject = null;
+    server.close();
+  }
+}
+
+/**
+ * Start the browser PKCE login: spins up the local callback server and
+ * resolves with the authorize URL once everything is ready. The background
+ * wait for the callback (and the token exchange) continues on its own.
+ */
+export async function beginBrowserLogin(sessionId, providerName, clientId) {
+  const session = loginSessions.get(sessionId);
+  if (!session) throw new Error('Login session not found');
+
+  const cid = clientId || session.clientId;
+  const { server, port } = await startBrowserCallbackServer();
+  const pkce = generatePkce();
+  const state = generateState();
+  const redirectUri = `http://localhost:${port}/auth/callback`;
+  const authUrl = buildBrowserAuthorizeUrl({ clientId: cid, redirectUri, codeChallenge: pkce.codeChallenge, state });
+
+  session.mode = 'browser';
+  session.authUrl = authUrl;
+  session.state = state;
+  session.pkce = pkce;
+  session.redirectUri = redirectUri;
+  session.status = 'pending';
+  session.expiresAt = Date.now() + MAX_LOGIN_WAIT_MS;
+
+  wireBrowserCallback(server, sessionId);
+  finishBrowserLogin(server, sessionId, providerName, cid).catch((err) => {
+    console.warn(`[OAuth/Codex] Browser login worker error (session=${sessionId}):`, err?.message || err);
+  });
+  return { authUrl, port };
+}
+
 // ── Session management ─────────────────────────────────────────────
 
 /**
@@ -580,9 +811,11 @@ export function createLoginSession(providerName, clientId) {
     sessionId,
     providerName,
     clientId: clientId || DEFAULT_CLIENT_ID,
+    mode: 'device', // 'device' | 'browser'
     status: 'initiating', // initiating → pending → approved | expired | error
     userCode: null,
     verificationUrl: null,
+    authUrl: null,
     deviceAuthId: null,
     interval: DEFAULT_POLL_INTERVAL,
     expiresAt: null,
@@ -600,9 +833,11 @@ export function getLoginSession(sessionId) {
   if (!sess) return null;
   return {
     sessionId: sess.sessionId,
+    mode: sess.mode || 'device',
     status: sess.status,
     userCode: sess.userCode,
     verificationUrl: sess.verificationUrl,
+    authUrl: sess.authUrl || null,
     expiresAt: sess.expiresAt,
     errorMessage: sess.errorMessage,
   };

@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import os from 'os';
+import net from 'net';
 
 import {
   isTokenExpiring,
@@ -33,6 +34,10 @@ import {
   pollDeviceAuthorization,
   exchangeCodeForTokens,
   refreshTokens,
+  buildBrowserAuthorizeUrl,
+  handleBrowserCallback,
+  startBrowserCallbackServer,
+  beginBrowserLogin,
   DEFAULT_CLIENT_ID,
   DEFAULT_CODEX_BASE_URL,
 } from '../server/oauth-codex.js';
@@ -920,6 +925,184 @@ describe('refreshTokens', () => {
       );
     } finally {
       mocked.restore();
+    }
+  });
+});
+
+// ── Browser PKCE login flow ────────────────────────────────────────
+
+describe('buildBrowserAuthorizeUrl', () => {
+  it('builds a Codex-CLI-compatible authorize URL with PKCE S256', () => {
+    const urlStr = buildBrowserAuthorizeUrl({
+      clientId: DEFAULT_CLIENT_ID,
+      redirectUri: 'http://localhost:1455/auth/callback',
+      codeChallenge: 'challenge-abc',
+      state: 'state-xyz',
+    });
+    const url = new URL(urlStr);
+    assert.equal(url.origin + url.pathname, 'https://auth.openai.com/oauth/authorize');
+    const q = url.searchParams;
+    assert.equal(q.get('response_type'), 'code');
+    assert.equal(q.get('client_id'), DEFAULT_CLIENT_ID);
+    assert.equal(q.get('redirect_uri'), 'http://localhost:1455/auth/callback');
+    assert.equal(q.get('code_challenge'), 'challenge-abc');
+    assert.equal(q.get('code_challenge_method'), 'S256');
+    assert.equal(q.get('state'), 'state-xyz');
+    assert.equal(q.get('scope'), 'openid profile email offline_access api.connectors.read api.connectors.invoke');
+    assert.equal(q.get('originator'), 'codex_cli_rs');
+    assert.equal(q.get('codex_cli_simplified_flow'), 'true');
+    assert.equal(q.get('id_token_add_organizations'), 'true');
+    // Spaces must be percent-encoded, not '+'
+    assert.ok(!url.search.includes('+'), 'scope spaces should be percent-encoded');
+  });
+});
+
+describe('handleBrowserCallback', () => {
+  it('accepts a matching state with a code', () => {
+    const result = handleBrowserCallback(
+      new URLSearchParams('code=abc&state=st-1'),
+      'st-1',
+    );
+    assert.equal(result.outcome, 'code');
+    assert.equal(result.code, 'abc');
+  });
+
+  it('rejects a state mismatch', () => {
+    const result = handleBrowserCallback(
+      new URLSearchParams('code=abc&state=other'),
+      'st-1',
+    );
+    assert.equal(result.outcome, 'state-mismatch');
+  });
+
+  it('surfaces provider errors with descriptions', () => {
+    const result = handleBrowserCallback(
+      new URLSearchParams('error=access_denied&error_description=user+cancelled&state=st-1'),
+      'st-1',
+    );
+    assert.equal(result.outcome, 'provider-error');
+    assert.equal(result.error, 'access_denied');
+    assert.equal(result.description, 'user cancelled');
+  });
+
+  it('rejects a callback without a code', () => {
+    const result = handleBrowserCallback(new URLSearchParams('state=st-1'), 'st-1');
+    assert.equal(result.outcome, 'missing-code');
+  });
+});
+
+describe('startBrowserCallbackServer', () => {
+  it('falls back to port 1457 when 1455 is in use', async () => {
+    const blocker = net.createServer();
+    await new Promise((resolve) => blocker.listen(1455, '127.0.0.1', resolve));
+    try {
+      const { server, port } = await startBrowserCallbackServer();
+      assert.equal(port, 1457);
+      await new Promise((resolve) => server.close(resolve));
+    } finally {
+      await new Promise((resolve) => blocker.close(resolve));
+    }
+  });
+});
+
+describe('beginBrowserLogin', () => {
+  const BROWSER_PROVIDER = '__test_oauth_provider_browser';
+
+  async function waitForStatus(sessionId, status, timeoutMs = 2000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const sess = getLoginSession(sessionId);
+      if (sess && sess.status === status) return sess;
+      if (sess && (sess.status === 'error' || sess.status === 'expired')) {
+        throw new Error(`login ended as ${sess.status}: ${sess.errorMessage}`);
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error(`timed out waiting for status "${status}"`);
+  }
+
+  it('completes login after a real callback hits the local server', async () => {
+    const realFetch = globalThis.fetch;
+    let exchangedRedirectUri = null;
+    const mocked = mockFetch([
+      {
+        match: '/oauth/token',
+        respond: (opts) => {
+          exchangedRedirectUri = new URLSearchParams(String(opts.body)).get('redirect_uri');
+          return {
+            status: 200,
+            body: {
+              access_token: makeJwt({ exp: nowSec() + 3600 }),
+              refresh_token: 'browser-refresh',
+            },
+          };
+        },
+      },
+    ]);
+
+    try {
+      const sessionId = createLoginSession(BROWSER_PROVIDER, DEFAULT_CLIENT_ID);
+      const { authUrl, port } = await beginBrowserLogin(sessionId, BROWSER_PROVIDER, DEFAULT_CLIENT_ID);
+
+      assert.ok([1455, 1457].includes(port), `unexpected callback port ${port}`);
+      assert.ok(authUrl.startsWith('https://auth.openai.com/oauth/authorize?'), 'authorize URL malformed');
+
+      const sess = getLoginSession(sessionId);
+      assert.equal(sess.mode, 'browser');
+      assert.equal(sess.status, 'pending');
+      assert.equal(sess.authUrl, authUrl);
+
+      // Simulate the browser redirect with the real fetch — the mocked global
+      // would not reach the local callback server.
+      const state = new URL(authUrl).searchParams.get('state');
+      const resp = await realFetch(`http://127.0.0.1:${port}/auth/callback?code=browser-code&state=${encodeURIComponent(state)}`);
+      assert.equal(resp.status, 200);
+
+      await waitForStatus(sessionId, 'approved');
+      assert.equal(exchangedRedirectUri, `http://localhost:${port}/auth/callback`);
+
+      const stored = readTokensSync(BROWSER_PROVIDER);
+      assert.ok(stored);
+      assert.equal(stored.refresh_token, 'browser-refresh');
+    } finally {
+      mocked.restore();
+      cleanupProvider(BROWSER_PROVIDER);
+    }
+  });
+
+  it('answers a wrong-state callback with 400 and keeps the session pending', async () => {
+    const realFetch = globalThis.fetch;
+    const mocked = mockFetch([
+      {
+        match: '/oauth/token',
+        respond: () => ({
+          status: 200,
+          body: {
+            access_token: makeJwt({ exp: nowSec() + 3600 }),
+            refresh_token: 'browser-refresh-2',
+          },
+        }),
+      },
+    ]);
+
+    try {
+      const sessionId = createLoginSession(BROWSER_PROVIDER, DEFAULT_CLIENT_ID);
+      const { port } = await beginBrowserLogin(sessionId, BROWSER_PROVIDER, DEFAULT_CLIENT_ID);
+
+      const bad = await realFetch(`http://127.0.0.1:${port}/auth/callback?code=x&state=wrong`);
+      assert.equal(bad.status, 400);
+      assert.equal(getLoginSession(sessionId).status, 'pending');
+
+      // Close out the session with a valid callback so the callback server and
+      // its timers shut down.
+      const sess = getLoginSession(sessionId);
+      const state = new URL(sess.authUrl).searchParams.get('state');
+      const good = await realFetch(`http://127.0.0.1:${port}/auth/callback?code=ok&state=${encodeURIComponent(state)}`);
+      assert.equal(good.status, 200);
+      await waitForStatus(sessionId, 'approved');
+    } finally {
+      mocked.restore();
+      cleanupProvider(BROWSER_PROVIDER);
     }
   });
 });

@@ -1,8 +1,8 @@
 /**
- * OAuth Codex routes — REST API for OpenAI device-code login flow.
+ * OAuth Codex routes — REST API for OpenAI Codex login flows.
  *
  * Endpoints:
- *   POST   /protoclaw/oauth/codex/start              Start device-code login
+ *   POST   /protoclaw/oauth/codex/start              Start login (mode: browser | device)
  *   GET    /protoclaw/oauth/codex/status/:sessionId   Poll login session status
  *   GET    /protoclaw/oauth/codex/tokens/:providerName  Get token status
  *   DELETE /protoclaw/oauth/codex/tokens/:providerName  Clear tokens (logout)
@@ -11,6 +11,7 @@
 import {
   createLoginSession,
   runDeviceCodeLogin,
+  beginBrowserLogin,
   getLoginSession,
   getTokenStatus,
   deleteTokens,
@@ -23,19 +24,34 @@ import { getActiveProxyUrl } from '../shared/proxy-manager.js';
 
 export function setupOAuthCodexRoutes(app, express) {
 
-  // ── Start device-code login ──
+  // ── Start login (browser PKCE or device code) ──
 
   app.post('/protoclaw/oauth/codex/start', express.json(), async (req, res, next) => {
     try {
-      const { providerName, clientId } = req.body || {};
+      const { providerName, clientId, mode } = req.body || {};
       if (!providerName || typeof providerName !== 'string') {
         return res.status(400).json({ error: 'providerName is required' });
       }
       const cid = (typeof clientId === 'string' && clientId.trim()) || DEFAULT_CLIENT_ID;
+      const loginMode = mode === 'device' ? 'device' : 'browser';
 
       const sessionId = createLoginSession(providerName, cid);
 
-      // Kick off background login flow
+      if (loginMode === 'browser') {
+        // Local callback server + authorize URL are ready in milliseconds; the
+        // response carries authUrl so the frontend can open the browser tab
+        // inside the user-gesture call stack.
+        const { authUrl } = await beginBrowserLogin(sessionId, providerName, cid);
+        return res.json({
+          sessionId,
+          providerName,
+          mode: 'browser',
+          status: 'pending',
+          authUrl,
+          message: 'Browser authorization URL ready. Open authUrl and poll /protoclaw/oauth/codex/status/' + sessionId,
+        });
+      }
+
       runDeviceCodeLogin(sessionId, providerName, cid).catch((err) => {
         console.warn(`[OAuth/Codex] Background login error (session=${sessionId}):`, err);
       });
@@ -43,6 +59,7 @@ export function setupOAuthCodexRoutes(app, express) {
       res.json({
         sessionId,
         providerName,
+        mode: 'device',
         status: 'initiating',
         message: 'Device code request sent. Poll /protoclaw/oauth/codex/status/' + sessionId,
       });
