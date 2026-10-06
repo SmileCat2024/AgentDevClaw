@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "stylized-output",
+  "name": "stylized-output",
+  "version": "0.1.2",
+  "description": "stylized-output feature for AgentDev",
+  "tags": [
+    "agentdev",
+    "feature",
+    "stylized-output"
+  ],
+  "entry": "dist/index.js",
+  "homepage": "",
+  "repository": "",
+  "agentdev": {
+    "compatible": ""
+  },
+  "featureTypes": [],
+  "compatibility": {
+    "rollback": false,
+    "tags": [
+      "no-rollback"
+    ]
+  },
+  "requirements": {
+    "platforms": [],
+    "node": "",
+    "external": [],
+    "services": []
+  }
+}

@@ -1,12 +1,13 @@
 /**
  * session-controls-panel.js — 会话控制面板（session-local control plane）
  *
- * 三个 section 对应三个可能挂载的 Feature，均以 runtime 内 Feature 为权威
+ * 四个 section 对应四个可能挂载的 Feature，均以 runtime 内 Feature 为权威
  * 状态持有者，浏览器只是乐观 UI 缓存（请求-应答式 IPC，经 /protoclaw/*_status
  * / *_control 或 capability_invoke 路由）：
  *   - 保持任务继续：ForceContinuation 的开关 / 触发条件 / 上限
  *   - 上下文保护：ContextGuardFeature 的超阈值打断开关
  *   - 模型轮转：StepRotatingModel 的强/省模型配置
+ *   - 输出风格：StylizedOutput 的风格选择与签名门禁状态
  *
  * 显示条件 = 当前会话 runtime 实际挂载的 Feature 名单（inspector 快照，
  * 与 Features 面板同源）；未挂载的 section 不渲染。
@@ -42,6 +43,7 @@
     fc: 'force-continuation',
     guard: 'context-guard',
     rot: 'step-rotating-model',
+    style: 'stylized-output',
   };
 
   function namesToCaps(names) {
@@ -50,6 +52,7 @@
       fc: set.has(CONTROLLED_FEATURE_NAMES.fc),
       guard: set.has(CONTROLLED_FEATURE_NAMES.guard),
       rot: set.has(CONTROLLED_FEATURE_NAMES.rot),
+      style: set.has(CONTROLLED_FEATURE_NAMES.style),
     };
   }
 
@@ -65,7 +68,7 @@
     const cached = getState(key).caps;
     if (cached) return cached;
     const caps = capsFromInspector();
-    if (caps.fc || caps.guard || caps.rot) return caps;
+    if (caps.fc || caps.guard || caps.rot || caps.style) return caps;
     return null;
   }
 
@@ -408,7 +411,7 @@
         zh,
       );
     }
-    if (!caps.fc && !caps.guard && !caps.rot) {
+    if (!caps.fc && !caps.guard && !caps.rot && !caps.style) {
       return renderEmpty(
         zh ? '此控制在当前工作空间不可用。' : 'This control is not available in the current workspace.',
         zh,
@@ -434,6 +437,7 @@
     if (caps.fc) sections.push(renderAutoResumeSection({ item, zh, writeEnabled: writeEnabled }));
     if (caps.guard) sections.push(renderGuardSection({ item, zh, writeEnabled }));
     if (caps.rot) sections.push(renderRotationSection({ zh, writeEnabled }));
+    if (caps.style) sections.push(renderStyleSection({ zh, writeEnabled }));
 
     const notes = [];
     if (caps.fc) notes.push(zh
@@ -442,6 +446,9 @@
     if (caps.guard) notes.push(zh
       ? '超阈值打断触发后自动关闭。'
       : 'The threshold intercept disarms after one trip.');
+    if (caps.style) notes.push(zh
+      ? '风格切换在下一次模型调用前生效；清空选择即关闭签名门禁。'
+      : 'Style changes apply before the next model call; clearing the selection disarms the signature gate.');
 
     return [
       '<div class="force-continuation-panel session-controls-panel">',
@@ -653,10 +660,12 @@
   });
 
   // 轮转模型/档位下拉：触发按钮打开 body 级浮层（ccb-model-dropdown 同款），
-  // 选中项在浮层内直接提交，见 openRotationMenu。
+  // 选中项在浮层内直接提交，见 openRotationMenu。输出风格下拉同配方（openStyleMenu）。
   featurePanelBody.addEventListener('click', (event) => {
     const menuBtn = event.target?.closest?.('[data-rotation-menu]');
     if (menuBtn && !menuBtn.disabled) openRotationMenu(menuBtn);
+    const styleMenuBtn = event.target?.closest?.('[data-style-menu]');
+    if (styleMenuBtn && !styleMenuBtn.disabled) openStyleMenu(styleMenuBtn);
   });
 
   // 外部入口（如 slash 菜单经 capability_invoke）修改了本面板对应的
@@ -666,6 +675,12 @@
     if (detail.ref === 'step-rotating-model.configure') {
       if (resolveCaps()?.rot && detail.agentId === focusedAgentId && detail.sessionId === currentSessionId()) {
         void refreshRotationStatus({ renderWhenDone: true });
+      }
+      return;
+    }
+    if (detail.ref === 'stylized-output.configure') {
+      if (resolveCaps()?.style && detail.agentId === focusedAgentId && detail.sessionId === currentSessionId()) {
+        void refreshStyleStatus({ renderWhenDone: true });
       }
       return;
     }
@@ -991,6 +1006,200 @@
     ].join('');
   }
 
+  // == 输出风格（stylized-output）=====================================
+  // 风格清单/门禁状态读取与选择切换全部走 capability_invoke 通用通道
+  // （stylized-output.configure，slash 入口契约）。风格 md 由用户自行放入
+  // 工作区 .agentdev/output-style/ 目录，面板只做选择，不提供编写/上传入口。
+  // 切换写入 .current-style 选择文件，下一次模型调用前由 Feature 注入生效。
+
+  const STYLE_REF = 'stylized-output.configure';
+
+  const styleStateByRuntime = new Map();
+  function getStyleState(key = runtimeKey()) {
+    if (!styleStateByRuntime.has(key)) {
+      styleStateByRuntime.set(key, {
+        status: null, pending: false, refreshing: false, error: '', initialized: false,
+      });
+    }
+    return styleStateByRuntime.get(key);
+  }
+
+  async function invokeStyle(args) {
+    const sessionId = currentSessionId();
+    if (!sessionId || !focusedAgentId) throw new Error('session not connected');
+    const resp = await fetch('/protoclaw/capability_invoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+      body: JSON.stringify({
+        agentId: panelAgentId(),
+        sessionId,
+        runtimeId: currentRuntimeAgentId || undefined,
+        ref: STYLE_REF,
+        args: args || {},
+      }),
+    });
+    const payload = await resp.json().catch(function () { return {}; });
+    if (!resp.ok || payload.ok !== true) throw new Error(payload.error || ('HTTP ' + resp.status));
+    return payload.result;
+  }
+
+  async function refreshStyleStatus({ renderWhenDone = true, silent = false } = {}) {
+    if (!resolveCaps()?.style || !currentRuntimeAgentId || !currentSessionId()) return null;
+    const st = getStyleState();
+    if (st.refreshing) return null;
+    if (!silent && st.pending) return null;
+    st.refreshing = true;
+    if (!silent && activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    try {
+      const status = normalizeStatus(await invokeStyle({}));
+      st.status = status;
+      st.error = '';
+      st.initialized = true;
+    } catch (error) {
+      st.error = String(error?.message || error);
+    } finally {
+      st.refreshing = false;
+      if (renderWhenDone && activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    }
+    return null;
+  }
+
+  async function updateStyleSelection(styleName) {
+    if (!resolveCaps()?.style || !panelWriteEnabled()) return;
+    const sessionId = currentSessionId();
+    if (!sessionId || !focusedAgentId) return;
+    const st = getStyleState();
+    st.pending = true;
+    st.error = '';
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    try {
+      const status = normalizeStatus(await invokeStyle({ styleName: styleName || null }));
+      st.status = status;
+      st.initialized = true;
+    } catch (error) {
+      st.error = String(error?.message || error);
+    } finally {
+      st.pending = false;
+      if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    }
+  }
+
+  // 门禁状态（signed/blocked/...）随每轮回复变化，面板打开期间低频轮询。
+  let _stylePollTimer = null;
+  function ensureStylePolling() {
+    if (_stylePollTimer || typeof setInterval !== 'function') return;
+    const timer = setInterval(function () {
+      if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'session-controls') return;
+      if (!currentRuntimeAgentId || !currentSessionId()) return;
+      if (!resolveCaps()?.style) return;
+      void refreshStyleStatus({ renderWhenDone: true, silent: true });
+    }, 3000);
+    if (typeof timer?.unref === 'function') timer.unref();
+    _stylePollTimer = timer;
+  }
+
+  // 风格下拉与轮转模型下拉同配方（openRotationMenu）：触发按钮 + body 级
+  // .ccb-model-dropdown 浮层，条目复用 _rotationMenuItemHtml 的 ccb-md 结构。
+  let _styleMenuEl = null;
+
+  function _closeStyleMenu() {
+    if (!_styleMenuEl) return;
+    const el = _styleMenuEl;
+    _styleMenuEl = null;
+    el.classList.remove('visible');
+    setTimeout(function () { el.remove(); }, 150);
+  }
+
+  function _styleMenuOutsideClick(event) {
+    if (!_styleMenuEl) return;
+    if (!_styleMenuEl.contains(event.target) && !event.target.closest?.('[data-style-menu]')) {
+      _closeStyleMenu();
+    } else {
+      document.addEventListener('click', _styleMenuOutsideClick, { once: true });
+    }
+  }
+
+  function openStyleMenu(btn) {
+    _closeStyleMenu();
+    const st = getStyleState();
+    const status = normalizeStatus(st.status);
+    const styles = Array.isArray(status.styles) ? status.styles : [];
+    const active = typeof status.activeStyle === 'string' ? status.activeStyle : '';
+    const zh = currentLanguage !== 'en';
+
+    let html = _rotationMenuItemHtml('', zh ? '未选择（不启用）' : '(none)', !active, false, '');
+    styles.forEach(function (item) {
+      const name = String(item && item.name || '');
+      if (!name) return;
+      html += _rotationMenuItemHtml(name, name, name === active, false, '');
+    });
+
+    const el = document.createElement('div');
+    el.className = 'ccb-model-dropdown';
+    el.innerHTML = '<div class="ccb-model-dropdown-list">' + html + '</div>';
+    el.addEventListener('click', function (event) {
+      const itemEl = event.target.closest && event.target.closest('.ccb-md-item');
+      if (!itemEl) return;
+      _closeStyleMenu();
+      void updateStyleSelection(itemEl.dataset.value || null);
+    });
+
+    _styleMenuEl = el;
+    _placeRotationMenu(el, btn.getBoundingClientRect());
+    setTimeout(function () {
+      document.addEventListener('click', _styleMenuOutsideClick, { once: true });
+    }, 0);
+  }
+
+  function renderStyleSection({ zh, writeEnabled = true }) {
+    const st = getStyleState();
+    if (!st.initialized && !st.refreshing && !st.pending) {
+      void refreshStyleStatus({ renderWhenDone: true });
+    }
+    ensureStylePolling();
+    const status = normalizeStatus(st.status);
+    const styles = Array.isArray(status.styles) ? status.styles : [];
+    const active = typeof status.activeStyle === 'string' ? status.activeStyle : '';
+    const disabled = st.pending || !writeEnabled;
+
+    const facts = [];
+    if (styles.length) facts.push((zh ? '已发现 ' : 'found ') + String(styles.length));
+    facts.push(active
+      ? (zh ? '门禁已启用，每轮回复须签名' : 'gate on: every reply must sign')
+      : (zh ? '门禁未启用（未选择风格）' : 'gate off (no style selected)'));
+    if (status.lastAction && status.lastAction !== 'idle') {
+      facts.push((zh ? '最近动作 ' : 'last ') + String(status.lastAction));
+    }
+
+    const rows = [];
+    if (st.error) rows.push('<div class="session-controls-guard-error">' + esc(st.error) + '</div>');
+    else if (!styles.length && st.initialized) rows.push('<div class="session-controls-guard-fact">' + esc(zh
+      ? '尚未发现风格：把风格 md 放入工作区 .agentdev/output-style/'
+      : 'No styles found: drop style md files into .agentdev/output-style/ in the workspace') + '</div>');
+
+    return [
+      '<section class="force-continuation-candidates session-controls-style">',
+      '<div class="force-continuation-group-label">', zh ? '输出风格' : 'OUTPUT STYLE', '</div>',
+      '<div class="force-continuation-candidate">',
+      '<div class="force-continuation-candidate-main">',
+      '<div class="force-continuation-candidate-label">', zh ? '风格选择' : 'Style', '</div>',
+      '<div class="force-continuation-candidate-desc">', zh
+        ? '选中后下一次模型调用起按该风格输出，且每次最终回复须通过确认签名门禁。风格文件由你放入 .agentdev/output-style/。'
+        : 'Once selected, replies follow the style and each final reply must pass the confirmation-signature gate. Style files live in .agentdev/output-style/.', '</div>',
+      '<div class="session-controls-rotation-controls">',
+      '<button type="button" class="session-controls-rotation-trigger" data-style-menu="1"'
+      + ' title="', esc(zh ? '选择输出风格' : 'Pick output style'), '"', disabled ? ' disabled' : '', '>',
+      '<span class="scr-trigger-label">', esc(active || (zh ? '未选择（不启用）' : '(none)')), '</span>',
+      ROTATION_CHEVRON_SVG,
+      '</button>',
+      '</div>',
+      '</div>',
+    ].concat(rows)
+      .concat(facts.length ? ['<div class="session-controls-guard-fact">' + esc(facts.join(' · ')) + '</div>'] : [])
+      .concat(['</div>', '</section>'])
+      .join('');
+  }
+
   window.SessionControlsPanel = {
     render,
     updateEnabled,
@@ -1000,13 +1209,16 @@
     refreshGuardStatus,
     refreshRotationStatus,
     updateRotationConfig,
+    refreshStyleStatus,
+    updateStyleSelection,
     updateGuardArmed,
     // 消费方（如 runtime-status 前置 guard 状态拉取）按已探明的挂载集决定
     // 是否发请求；探测未决时返回 false，避免对不支持的 runtime 打出 503。
     isAvailable: () => {
       const caps = resolveCaps();
-      return !!(caps && (caps.fc || caps.guard || caps.rot));
+      return !!(caps && (caps.fc || caps.guard || caps.rot || caps.style));
     },
     isGuardAvailable: () => resolveCaps()?.guard === true,
+    isStyleAvailable: () => resolveCaps()?.style === true,
   };
 }());

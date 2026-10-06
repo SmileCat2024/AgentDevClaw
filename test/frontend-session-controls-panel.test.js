@@ -351,3 +351,93 @@ describe('SessionControlsPanel: context guard fuse', () => {
     assert.doesNotMatch(html, /最近一次触发/);
   });
 });
+
+describe('SessionControlsPanel output style (stylized-output)', () => {
+  function stylePanelSandbox() {
+    const invokeCalls = [];
+    const statusPayload = {
+      ok: true,
+      result: {
+        styleCount: 2,
+        styles: [
+          { name: '简洁汇报', description: '短句汇报', signature: 'sig-a' },
+          { name: '正式汇报', description: '正式行文', signature: 'sig-b' },
+        ],
+        activeStyle: '简洁汇报',
+        signedForReply: false,
+        blockedCount: 0,
+        maxSignatureBlocks: 5,
+        lastAction: 'idle',
+      },
+    };
+    const ctx = createFrontendSandbox({
+      focusedAgentId: 'programming-helper',
+      currentRuntimeAgentId: 'runtime-a',
+      currentLanguage: 'zh',
+      URLSearchParams,
+      featurePanelBody: { addEventListener() {} },
+      activeFeaturePanel: null,
+      getRuntimeWorkspaceSessionId: () => 'session-a',
+      getActiveWorkspaceSessionId: () => 'session-a',
+      renderFeaturePanel() {},
+      currentHookInspector: {
+        lifecycleOrder: [],
+        features: [{ name: 'stylized-output' }],
+        hooks: [],
+      },
+      fetch: async (url, options = {}) => {
+        invokeCalls.push({ url, options });
+        return { ok: true, status: 200, json: async () => statusPayload };
+      },
+    });
+    ctx.window.setInterval = () => 0;
+    ctx.loadSource('public/src/modules/session-controls-panel.js');
+    return { ctx, invokeCalls };
+  }
+
+  it('renders the style trigger from stylized-output.configure status', async () => {
+    const { ctx, invokeCalls } = stylePanelSandbox();
+
+    await ctx.run('window.SessionControlsPanel.refreshStyleStatus({ renderWhenDone: false })');
+    const html = ctx.run('window.SessionControlsPanel.render()');
+
+    assert.match(html, /data-style-menu/);
+    assert.match(html, /简洁汇报/);
+    assert.match(html, /门禁已启用/);
+
+    const invoke = invokeCalls.find((c) => String(c.url).includes('capability_invoke'));
+    assert.ok(invoke, 'capability_invoke was called');
+    const body = JSON.parse(invoke.options.body);
+    assert.equal(body.ref, 'stylized-output.configure');
+    assert.equal(body.agentId, 'programming-helper');
+    assert.equal(body.sessionId, 'session-a');
+    assert.deepEqual(body.args, {});
+  });
+
+  it('switches the active style through capability_invoke', async () => {
+    const { ctx, invokeCalls } = stylePanelSandbox();
+
+    await ctx.run('window.SessionControlsPanel.updateStyleSelection("正式汇报")');
+
+    const writes = invokeCalls.filter(
+      (c) => String(c.url).includes('capability_invoke') && c.options && c.options.method === 'POST',
+    );
+    assert.ok(writes.length >= 1, 'a style write was posted');
+    const body = JSON.parse(writes[writes.length - 1].options.body);
+    assert.equal(body.ref, 'stylized-output.configure');
+    assert.deepEqual(body.args, { styleName: '正式汇报' });
+  });
+
+  it('clearing the selection posts styleName null', async () => {
+    const { ctx, invokeCalls } = stylePanelSandbox();
+
+    await ctx.run('window.SessionControlsPanel.updateStyleSelection("")');
+
+    const writes = invokeCalls.filter(
+      (c) => String(c.url).includes('capability_invoke') && c.options && c.options.method === 'POST',
+    );
+    assert.ok(writes.length >= 1, 'a style write was posted');
+    const body = JSON.parse(writes[writes.length - 1].options.body);
+    assert.deepEqual(body.args, { styleName: null });
+  });
+});

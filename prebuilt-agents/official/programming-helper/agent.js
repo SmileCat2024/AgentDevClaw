@@ -10,6 +10,7 @@ import { MCPFeature } from '@agentdevjs/mcp';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic, PanelShellFeature } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { StepRotatingModel } from '../../../features/step-rotating-model/dist/index.js';
+import { StylizedOutput } from '../../../features/stylized-output/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdevjs/audio-feedback-feature';
 import { MemoryFeature } from '@agentdevjs/memory-feature';
 import { WebSearchFeature } from '@agentdevjs/websearch-feature';
@@ -181,6 +182,16 @@ export class ProgrammingHelperAgent extends BasicAgent {
         ? merged['step-rotating-model'] : {}),
       ...(config.features?.['step-rotating-model'] && typeof config.features['step-rotating-model'] === 'object'
         ? config.features['step-rotating-model'] : {}),
+    }));
+    // 输出风格（stylized-output）：风格 md 由用户放入工作区 .agentdev/output-style/，
+    // Claw 会话控制面板经 stylized-output.configure capability 选择；选中后每次最终
+    // 回复须通过确认签名门禁（StepFinish guard），未选择时完全旁路。
+    this.use(new StylizedOutput({
+      workspaceDir,
+      ...(merged['stylized-output'] && typeof merged['stylized-output'] === 'object'
+        ? merged['stylized-output'] : {}),
+      ...(config.features?.['stylized-output'] && typeof config.features['stylized-output'] === 'object'
+        ? config.features['stylized-output'] : {}),
     }));
     this.use(new NonBlockingAudioFeedbackFeature());
     this.use(new WebSearchFeature());

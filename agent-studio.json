@@ -1,6 +1,12 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
+  "id": "studio-330015c6-7c20-48c7-80e1-f0dba9f5dd23",
   "name": "force-continuation",
+  "toolchain": {
+    "source": "custom",
+    "nodePath": "C:\\nvm4w\\nodejs\\node.exe",
+    "npmPath": "C:\\nvm4w\\nodejs\\node_modules\\npm\\bin\\npm-cli.js"
+  },
   "goal": "为编程小助手开发可通过 stop reason 感知异常中断并在启用时请求持续执行的强制继续 Feature，同时扩展 Claw 右侧控制面进行会话级开关与状态展示。",
   "targetAgent": "编程小助手（prebuilt-agents/official/programming-helper）",
   "features": [
@@ -20,8 +26,8 @@
         ]
       },
       "verification": {
-        "lastVerifiedRunId": "run-1787755453066-gl0j",
-        "verifiedAt": "2026-08-26T14:44:22.563Z",
+        "lastVerifiedRunId": "run-1791298942554-dhjd",
+        "verifiedAt": "2026-10-06T15:02:38.769Z",
         "coverage": {
           "tools": [],
           "hooks": [
@@ -30,7 +36,7 @@
           ],
           "deniedTools": []
         },
-        "sourceDigest": "sha256:c2f52681efd469ba2fed3d6e5f9a47876a962a886ba17bcb4b668eb88f06e6b1"
+        "sourceDigest": "sha256:d7057dfcafdaf3fbe2c8a222a0a667c7b61e8024d8f522e0d2e2d7b6bbe8ef4d"
       }
     },
     {
@@ -77,8 +83,8 @@
         ]
       },
       "verification": {
-        "lastVerifiedRunId": "run-1787755453066-gl0j",
-        "verifiedAt": "2026-08-26T14:44:22.563Z",
+        "lastVerifiedRunId": "run-1791298942554-dhjd",
+        "verifiedAt": "2026-10-06T15:02:38.769Z",
         "coverage": {
           "tools": [],
           "hooks": [
@@ -87,7 +93,37 @@
           ],
           "deniedTools": []
         },
-        "sourceDigest": "sha256:259ed926af7452d8c90378ad0ed54c27a873a3270c0deceb9d2583fdf7734620"
+        "sourceDigest": "sha256:dac7d2c2f188e3e12318c7e665ead0d37922201ec6c31c032e7ea6e24893efbc"
+      }
+    },
+    {
+      "name": "stylized-output",
+      "modulePath": "D:\\code\\AgentDevClaw\\features\\stylized-output\\dist\\index.js",
+      "status": "snapshotted",
+      "package": "@agentdevjs/stylized-output",
+      "source": {
+        "kind": "project",
+        "projectDir": "D:\\code\\AgentDevClaw\\features\\stylized-output",
+        "entry": "D:\\code\\AgentDevClaw\\features\\stylized-output\\dist\\index.js",
+        "buildCommand": [
+          "npm",
+          "run",
+          "build"
+        ]
+      },
+      "verification": {
+        "lastVerifiedRunId": "run-1791298942554-dhjd",
+        "verifiedAt": "2026-10-06T15:02:38.769Z",
+        "coverage": {
+          "tools": [],
+          "hooks": [
+            "CallStart:syncStyleState",
+            "StepFinish:decideSignatureGate",
+            "StepStart:ensureStyleInjection"
+          ],
+          "deniedTools": []
+        },
+        "sourceDigest": "sha256:afe0acb72771cccf997298894ae3c7558aae1694e0cb60265bf567f99c3ddf67"
       }
     }
   ],
@@ -228,8 +264,88 @@
       "createdAt": "2026-08-26T13:05:22.982Z",
       "updatedAt": "2026-08-26T13:07:17.813Z",
       "description": "验证轮转 Feature 挂载与相位逻辑执行：CallStart 观察钩子触发；StepStart 至少 2 次（工具 step + 总结 step，多步场景相位推进）；tickets_flow_skill 真实执行构造多 step 前提。零工具 Feature：切换真实性由 ADR-0009 框架回归测试背书，本断言锁定钩子证据归属。"
+    },
+    {
+      "id": "style-gate-signed-finish",
+      "title": "签名门禁：模型正确默写确认签名后回复放行",
+      "input": "请先用一句话介绍输出风格签名门禁是什么，然后遵守当前启用的输出风格，完成签名流程后结束。",
+      "sessionPolicy": "fresh",
+      "assertions": [
+        {
+          "kind": "tool-executed",
+          "tool": "sign_output_style",
+          "count": 1
+        },
+        {
+          "kind": "tool-result-path",
+          "tool": "sign_output_style",
+          "path": "$.signed",
+          "equals": true
+        },
+        {
+          "kind": "tool-result-path",
+          "tool": "sign_output_style",
+          "path": "$.style",
+          "equals": "简洁汇报"
+        },
+        {
+          "kind": "hook-observed",
+          "lifecycle": "StepFinish",
+          "feature": "stylized-output",
+          "method": "decideSignatureGate"
+        }
+      ],
+      "enabled": true,
+      "createdAt": "2026-10-06T14:10:07.021Z",
+      "updatedAt": "2026-10-06T14:10:07.021Z",
+      "description": "前置：.agentdev/output-style/.current-style 内容为「简洁汇报」。模型给出最终回复时被门禁要求签名，正确默写后放行结束。"
+    },
+    {
+      "id": "style-gate-forces-sign",
+      "title": "签名门禁：用户禁止调用工具时仍强制补签",
+      "input": "1+1 等于几？只回答数字，不要调用任何工具。",
+      "sessionPolicy": "fresh",
+      "assertions": [
+        {
+          "kind": "tool-executed",
+          "tool": "sign_output_style",
+          "count": 1
+        },
+        {
+          "kind": "tool-result-path",
+          "tool": "sign_output_style",
+          "path": "$.signed",
+          "equals": true
+        },
+        {
+          "kind": "reply-includes",
+          "text": "2"
+        }
+      ],
+      "enabled": true,
+      "createdAt": "2026-10-06T14:10:07.032Z",
+      "updatedAt": "2026-10-06T14:10:07.032Z",
+      "description": "范式核心验证：即使输入明令不调用工具，门禁依然拦截未签名结束，强制签名通过后才放行。前置同上（.current-style=简洁汇报）。"
+    },
+    {
+      "id": "style-gate-bypass-when-unset",
+      "title": "签名门禁：未选择风格时旁路放行",
+      "input": "用一句话打个招呼。",
+      "sessionPolicy": "fresh",
+      "assertions": [
+        {
+          "kind": "hook-observed",
+          "lifecycle": "StepFinish",
+          "feature": "stylized-output",
+          "method": "decideSignatureGate"
+        }
+      ],
+      "enabled": true,
+      "createdAt": "2026-10-06T14:10:07.039Z",
+      "updatedAt": "2026-10-06T14:10:07.039Z",
+      "description": "前置：.current-style 清空（空文件）。门禁旁路、无死锁、回复正常交付；断言仅能证明钩子存活（无「未执行」断言可用）。"
     }
   ],
   "createdAt": "2026-08-19T04:22:48.571Z",
-  "updatedAt": "2026-08-26T14:44:22.563Z"
+  "updatedAt": "2026-10-06T15:02:57.604Z"
 }
