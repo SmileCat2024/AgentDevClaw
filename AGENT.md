@@ -29,8 +29,9 @@
    - 0016 用户数据存储分区治理与 feature 持久资产收敛
    - 0017 Feature Manifest v2 与宿主侧 Feature Registry
    - 0018 Feature-Panel 通信基座：feature-comms 通道
-    - 0019 轮次挂起语义：suspended 与 pending-work 事实层（实施计划见 [docs/plans/2026-09-27-turn-suspension-semantics.md](docs/plans/2026-09-27-turn-suspension-semantics.md)）
-    - 0020 Feature 配置累加型多值字段的跨层叠加
+   - 0019 轮次挂起语义：suspended 与 pending-work 事实层（实施计划见 [docs/plans/2026-09-27-turn-suspension-semantics.md](docs/plans/2026-09-27-turn-suspension-semantics.md)）
+   - 0020 Feature 配置累加型多值字段的跨层叠加
+   - 0021 状态机统一内核 state-kernel（框架 core 纯函数转换求值器，WorkThread / CallArbiter 先行迁移；实施计划见 [docs/plans/2026-10-06-state-kernel-implementation.md](docs/plans/2026-10-06-state-kernel-implementation.md)）
 
 实现层真实入口：
 
