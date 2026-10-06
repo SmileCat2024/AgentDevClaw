@@ -1113,3 +1113,93 @@ describe('CallArbiter', () => {
     assert.deepEqual(calls, ['first'], 'cleared envelope must never execute');
   });
 });
+
+// ── C3 增量特征：中断事件队列 + _drainInterrupts（阶段 2 收敛）──
+// interruptActive 不再写 envelope 任何字段：中断事件进 arbiter 级队列，
+// 由 _runEnvelope 的三个 drain 点（段首 / onCall settle 后 / barrier settle 后）
+// 收口。以下用例只锁增量语义；既有 36 用例是更全面的对照基线。
+
+describe('CallArbiter interrupt event queue (C3)', () => {
+  function makeGate() {
+    let open;
+    const closed = new Promise((resolve) => { open = resolve; });
+    return { closed, open };
+  }
+
+  it('takes the last reason when multiple interrupt events queue for the same envelope', async () => {
+    // 末值语义：旧机制下每次 interruptActive 都覆盖 envelope.error，最后
+    // 一次的 reason 胜出；事件队列等价映射为取末条事件的 reason。
+    const onCallEntered = makeGate();
+    const releaseOnCall = makeGate();
+    const agent = {
+      onCall: async () => {
+        onCallEntered.open();
+        await releaseOnCall.closed; // onCall 悬挂期间排队多条中断事件
+        return 'segment result';
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'main' });
+    await onCallEntered.closed;
+
+    arbiter.interruptActive('first stop');
+    arbiter.interruptActive('second stop');
+    releaseOnCall.open(); // onCall 返回 → drain 点 1 裁决
+
+    const finished = await arbiter.waitForCompletion(entry.id);
+    assert.equal(finished.status, 'cancelled');
+    assert.equal(finished.error, 'second stop', 'the last queued reason wins');
+    assert.equal(finished._segmentCount, 1);
+    assert.equal(arbiter.getStatus().status, 'idle');
+  });
+
+  it('silently drops interrupt events whose target envelope has already closed', async () => {
+    // D6 宽容分支：E1 已终态、_activeEnvelope 尚未置 null 的 finally 窗口内
+    // 到达的中断事件，目标已收口——后续 envelope 的 drain 必须静默丢弃，
+    // 不得影响后续 envelope 的裁决，也不得对已收口 envelope 补写任何字段。
+    const calls = [];
+    const agent = {
+      onCall: async (text) => { calls.push(text); return `done:${text}`; },
+    };
+    const arbiter = new CallArbiter(agent);
+    let lateInterruptResult = null;
+    arbiter.on('callFinished', (env) => {
+      if (env.text === 'E1' && lateInterruptResult === null) {
+        // 此刻 env 已 completed（终态），_activeEnvelope 仍指向它
+        lateInterruptResult = arbiter.interruptActive('late for E1');
+      }
+    });
+
+    const e1 = arbiter.enqueue({ source: 'test', text: 'E1' });
+    const f1 = await arbiter.waitForCompletion(e1.id);
+    assert.equal(f1.status, 'completed');
+    assert.equal(f1.error, null, 'a closed envelope must not be mutated by a late interrupt event');
+    assert.deepEqual(lateInterruptResult, { active: true, cleared: 0 });
+    assert.equal(arbiter._interruptEvents.length, 1, 'late event sits in the queue until the next drain');
+
+    // E2 正常执行：drain 在队列中找不到指向自己的事件，迟到条目被静默丢弃
+    const e2 = arbiter.enqueue({ source: 'test', text: 'E2' });
+    const f2 = await arbiter.waitForCompletion(e2.id);
+    assert.equal(f2.status, 'completed');
+    assert.equal(f2.result, 'done:E2');
+    assert.equal(f2.error, null);
+    assert.deepEqual(calls, ['E1', 'E2'], 'the late event must not affect the next envelope');
+    assert.equal(arbiter._interruptEvents.length, 0, 'unmatched late entries are dropped by the drain');
+  });
+
+  it('does not enqueue interrupt events when there is no active envelope', async () => {
+    const agent = { onCall: async () => 'ok' };
+    const arbiter = new CallArbiter(agent);
+
+    // 完全空闲：无 active、无积压
+    assert.deepEqual(arbiter.interruptActive('idle interrupt'), { active: false, cleared: 0 });
+    assert.equal(arbiter._interruptEvents.length, 0, 'idle interrupt must not leave residue in the event queue');
+
+    // 跑完一个 envelope 回到 idle 后再中断：同样不入队
+    const e1 = arbiter.enqueue({ source: 'test', text: 'main' });
+    await arbiter.waitForCompletion(e1.id);
+    await new Promise((resolve) => setTimeout(resolve, 5)); // 等 finally 链落定（_activeEnvelope 置 null）
+    assert.deepEqual(arbiter.interruptActive('idle again'), { active: false, cleared: 0 });
+    assert.equal(arbiter._interruptEvents.length, 0, 'no residual garbage after a completed envelope');
+  });
+});

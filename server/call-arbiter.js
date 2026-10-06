@@ -67,6 +67,10 @@ export class CallArbiter {
     this._queue = [];
     this._active = false;
     this._activeEnvelope = null;
+    // Interrupt events targeting the active envelope (C3): arbiter-owned
+    // queue — interruptActive() never mutates the envelope; _runEnvelope
+    // closes it via _drainInterrupts() at the checkpoint positions.
+    this._interruptEvents = [];
     this._status = 'idle'; // idle | queued | running
     this._listeners = { callStarted: [], callFinished: [] };
     // Completion trackers: envelopeId → resolve callback
@@ -184,18 +188,20 @@ export class CallArbiter {
   }
 
   /**
-   * Mark the active logical envelope as interrupted in addition to clearing
-   * AgentDev's current step. This closes the gap where agent.interrupt() ends
-   * one onCall segment but the arbiter immediately launches its continuation.
+   * Interrupt the active logical envelope in addition to clearing AgentDev's
+   * current step. This closes the gap where agent.interrupt() ends one onCall
+   * segment but the arbiter immediately launches its continuation.
+   *
+   * C3: the interrupt is recorded as an arbiter-level event — the envelope
+   * itself is not mutated here (single-writer: all envelope mutations live in
+   * the _runEnvelope loop, which drains the queue via _drainInterrupts() at
+   * its checkpoint positions). clearQueued() keeps its synchronous sweep
+   * semantics. Returns { active, cleared } synchronously as before.
    */
   interruptActive(reason = 'cancelled by interrupt', { clearQueue = true } = {}) {
     const envelope = this._activeEnvelope;
     if (envelope) {
-      envelope._interruptRequested = true;
-      // @deprecated (2026-07-25) — set but never read; clearQueued() is called
-      // immediately below instead. Pre-existing dead field; safe to remove.
-      envelope._discardQueuedOnInterrupt = clearQueue === true;
-      envelope.error = reason;
+      this._interruptEvents.push({ target: envelope, reason });
     }
     const cleared = clearQueue ? this.clearQueued(reason) : 0;
     return { active: Boolean(envelope), cleared };
@@ -327,7 +333,7 @@ export class CallArbiter {
     let input = envelope.text;
 
     while (true) {
-      if (this._finishInterruptedEnvelope(envelope)) return;
+      if (this._drainInterrupts(envelope)) return;
 
       // ── Budget enforcement ──
       envelope._segmentCount += 1;
@@ -369,12 +375,12 @@ export class CallArbiter {
 
       // AgentDev's abort and onCall completion are intentionally asynchronous.
       // Re-check the logical envelope before observing/starting continuation.
-      if (this._finishInterruptedEnvelope(envelope)) return;
+      if (this._drainInterrupts(envelope)) return;
 
       if (outcome && (outcome.status === 'failed' || outcome.status === 'cancelled')) {
         // Terminal segment state that did not throw: discard any continuation
         // registered just before termination so it cannot leak into a later
-        // envelope (mirrors the guard in _finishInterruptedEnvelope).
+        // envelope (mirrors the guard in _drainInterrupts).
         if (typeof this._agent.consumeContinuationRequest === 'function') {
           try { this._agent.consumeContinuationRequest(); } catch {}
         }
@@ -419,7 +425,7 @@ export class CallArbiter {
         }
 
         await this._checkpointBarrier(continuation, envelope);
-        if (this._finishInterruptedEnvelope(envelope)) return;
+        if (this._drainInterrupts(envelope)) return;
         this._injectContinuationSystemMessage('checkpoint', continuation);
         input = this._buildCheckpointContinuationInput(continuation);
 
@@ -430,7 +436,7 @@ export class CallArbiter {
         }
 
         await this._rollbackBarrier(continuation, envelope);
-        if (this._finishInterruptedEnvelope(envelope)) return;
+        if (this._drainInterrupts(envelope)) return;
         this._injectContinuationSystemMessage('rollback', continuation);
         input = this._buildRollbackContinuationInput(continuation);
       }
@@ -459,15 +465,36 @@ export class CallArbiter {
     return null;
   }
 
-  _finishInterruptedEnvelope(envelope) {
-    if (!envelope?._interruptRequested) return false;
+  /**
+   * Drain the arbiter-level interrupt queue for one envelope (C3).
+   *
+   * Only events targeting `envelope` are honored; unmatched entries are
+   * late interrupts whose target envelope already closed (or was replaced)
+   * — silently dropped, not thrown at the state machine. Multiple events
+   * for the same envelope resolve to the LAST reason (equivalent to the
+   * old flag semantics where each interruptActive() call overwrote
+   * envelope.error). The whole queue is emptied on every drain: a target
+   * that didn't match can never become active again.
+   */
+  _drainInterrupts(envelope) {
+    if (this._interruptEvents.length === 0) return false;
+    let reason;
+    let matched = false;
+    for (const event of this._interruptEvents) {
+      if (event.target === envelope) {
+        matched = true;
+        reason = event.reason;
+      }
+    }
+    this._interruptEvents.length = 0;
+    if (!matched) return false;
     // A continuation may have been registered just before abort completed.
     // Consume and discard it so it cannot leak into a later envelope.
     if (typeof this._agent.consumeContinuationRequest === 'function') {
       try { this._agent.consumeContinuationRequest(); } catch {}
     }
     applyEnvelopeEvent(envelope, 'cancelled');
-    envelope.error = envelope.error || 'cancelled by interrupt';
+    envelope.error = reason || envelope.error || 'cancelled by interrupt';
     return true;
   }
 
