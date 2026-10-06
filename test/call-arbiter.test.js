@@ -844,4 +844,272 @@ describe('CallArbiter', () => {
     server.close();
     delete process.env.AGENTDEV_VIEWER_PORT;
   });
+
+  // ── Interrupt timing matrix (state-kernel 迁移基线，计划 §1.4 清单 8) ──
+  // 特征测试：锁死 _interruptRequested 布尔 + 3 处检查点（段首 / onCall 返回后 /
+  // 障碍后）+ 无 active envelope 的现状裁决。只记录现状、不判断对错；
+  // 阶段 2 中断检查点收敛时以本矩阵为对照基线。
+  // 落点全部用受控 Promise / fake agent 钩子精确编排，不依赖 sleep 竞态。
+
+  function makeGate() {
+    let open;
+    const closed = new Promise((resolve) => { open = resolve; });
+    return { closed, open };
+  }
+
+  it('interrupt before the segment-start check cancels without starting the next onCall segment', async () => {
+    // 落点：多段 envelope 的"障碍后检查"已放行、下一段"段首检查"尚未执行
+    // （下一段 onCall 尚未开始）。编排：continuation 系统消息注入发生在两个
+    // 检查点之间（同步、无 await），在其 ctx.add 钩子里置位中断即可精确落点。
+    const calls = [];
+    let _continuation = null;
+    let arbiter;
+    const ctxMessages = [];
+    const checkpoints = [];
+    const agent = {
+      onCall: async (text) => {
+        calls.push(text);
+        if (calls.length === 1) {
+          _continuation = { kind: 'checkpoint', checkpointId: 'cp-seg-start' };
+          return 'checkpoint registered';
+        }
+        return 'segment 2 (must never run)';
+      },
+      consumeContinuationRequest: () => {
+        const req = _continuation;
+        _continuation = null;
+        return req;
+      },
+      createNamedCheckpoint: async (id) => { checkpoints.push(id); },
+      getContext: () => ({
+        add: (msg) => {
+          ctxMessages.push(msg);
+          // 此刻障碍后检查已通过、段首检查未到——中断恰好落在段首检查前
+          arbiter.interruptActive('interrupt before segment start');
+        },
+      }),
+    };
+    arbiter = new CallArbiter(agent);
+    const started = [];
+    const finishedEvents = [];
+    arbiter.on('callStarted', (env) => started.push(env));
+    arbiter.on('callFinished', (env) => finishedEvents.push(env));
+
+    const entry = arbiter.enqueue({ source: 'test', text: 'task' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'cancelled');
+    assert.equal(finished.error, 'interrupt before segment start');
+    assert.deepEqual(calls, ['task'], 'second segment must never start');
+    assert.equal(finished._segmentCount, 1);
+    assert.deepEqual(checkpoints, ['cp-seg-start'], 'barrier fully completed before the interrupt landed');
+    assert.equal(ctxMessages.length, 1, 'interrupt landed during the continuation system-message injection');
+    assert.equal(started.length, 1, 'callStarted fires exactly once per envelope');
+    assert.equal(finishedEvents.length, 1, 'callFinished fires exactly once per envelope');
+    assert.equal(finishedEvents[0].status, 'cancelled');
+  });
+
+  it('interrupt while onCall is pending cancels after onCall returns without starting any continuation', async () => {
+    const calls = [];
+    let _continuation = null;
+    const onCallEntered = makeGate();
+    const releaseOnCall = makeGate();
+    const agent = {
+      onCall: async (text) => {
+        calls.push(text);
+        onCallEntered.open();
+        await releaseOnCall.closed; // onCall 悬挂期间置位中断
+        _continuation = { kind: 'checkpoint', checkpointId: 'late-registration' };
+        return 'segment result';
+      },
+      consumeContinuationRequest: () => {
+        const req = _continuation;
+        _continuation = null;
+        return req;
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'main' });
+    await onCallEntered.closed; // 确认 onCall 已开始并悬挂，此刻置位中断
+
+    arbiter.interruptActive('interrupt mid-call');
+    releaseOnCall.open(); // onCall 返回 → "onCall 返回后"检查点裁决
+
+    const finished = await arbiter.waitForCompletion(entry.id);
+    assert.equal(finished.status, 'cancelled');
+    assert.equal(finished.error, 'interrupt mid-call');
+    assert.deepEqual(calls, ['main'], 'no continuation segment may start');
+    assert.equal(finished._segmentCount, 1);
+    assert.equal(agent.consumeContinuationRequest(), null, 'late-registered continuation must be consumed and discarded');
+    assert.equal(arbiter.getStatus().status, 'idle');
+  });
+
+  it('interrupt between onCall return and the outcome branch outranks the outcome terminal state', async () => {
+    // 落点：onCall 已返回、结构化 outcome 正在观察（第二个检查点之前）。
+    // 编排：getLastCallOutcome 在 onCall 的 await 恢复后同步调用——在其内部
+    // 置位中断，使中断标志与 outcome=cancelled 同时在场，锁定裁决优先级：
+    // 中断检查点先于 outcome 终态分支生效。
+    const calls = [];
+    let _continuation = null;
+    let arbiter;
+    const agent = {
+      onCall: async (text) => {
+        calls.push(text);
+        _continuation = { kind: 'checkpoint', checkpointId: 'pre-outcome' };
+        return 'segment result';
+      },
+      consumeContinuationRequest: () => {
+        const req = _continuation;
+        _continuation = null;
+        return req;
+      },
+      getLastCallOutcome: () => {
+        arbiter.interruptActive('interrupt at outcome observation');
+        return {
+          status: 'cancelled',
+          reason: 'cancelled',
+          steps: 2,
+          error: { message: 'cancelled by user stop' },
+        };
+      },
+    };
+    arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'main' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'cancelled');
+    // 关键裁决：error 是中断理由而非 outcome.error.message——
+    // 若 outcome 终态分支胜出，这里会是 'cancelled by user stop'
+    assert.equal(finished.error, 'interrupt at outcome observation');
+    // outcome 仍被完整记录（观察先于检查点），证明中断介入点在其后
+    assert.equal(finished.outcome.status, 'cancelled');
+    assert.equal(finished.outcome.error.message, 'cancelled by user stop');
+    assert.equal(finished._segmentCount, 1);
+    assert.equal(agent.consumeContinuationRequest(), null, 'continuation must not leak past the interrupt checkpoint');
+  });
+
+  it('interrupt inside the checkpoint barrier await cancels after the barrier without entering the next segment', async () => {
+    const calls = [];
+    let _continuation = null;
+    const barrierEntered = makeGate();
+    const releaseBarrier = makeGate();
+    const agent = {
+      onCall: async (text) => {
+        calls.push(text);
+        _continuation = { kind: 'checkpoint', checkpointId: 'cp-barrier' };
+        return 'checkpoint registered';
+      },
+      consumeContinuationRequest: () => {
+        const req = _continuation;
+        _continuation = null;
+        return req;
+      },
+      createNamedCheckpoint: async () => {
+        barrierEntered.open();
+        await releaseBarrier.closed; // 障碍悬挂期间置位中断
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'main' });
+    await barrierEntered.closed; // 确认障碍已进入并悬挂，此刻置位中断
+
+    arbiter.interruptActive('interrupt during barrier');
+    releaseBarrier.open(); // 障碍完成 → 障碍后检查点裁决
+
+    const finished = await arbiter.waitForCompletion(entry.id);
+    assert.equal(finished.status, 'cancelled');
+    assert.equal(finished.error, 'interrupt during barrier');
+    assert.deepEqual(calls, ['main'], 'must not enter the next segment');
+    assert.equal(finished._segmentCount, 1);
+    assert.equal(finished._checkpointCount, 1, 'the barrier itself completed (checkpoint committed)');
+    assert.equal(arbiter.getStatus().status, 'idle');
+  });
+
+  it('interruptActive with no active envelope reports inactive and cancels the entire queue', async () => {
+    const calls = [];
+    const agent = {
+      onCall: async (text) => { calls.push(text); return `done:${text}`; },
+    };
+    const arbiter = new CallArbiter(agent);
+
+    // 完全空闲：无 active、无积压
+    assert.deepEqual(arbiter.interruptActive('idle interrupt'), { active: false, cleared: 0 });
+
+    // 构造"无 active envelope 但队列非空"的唯一窗口：E1 收口的 finally 里
+    // _activeEnvelope 已置 null，而 drain → _kick 的微任务尚未运行；
+    // waitForCompletion(E1) 的 await 恰好恢复在该窗口内（微任务 FIFO 保证）。
+    const e1 = arbiter.enqueue({ source: 'test', text: 'first' });
+    const e2 = arbiter.enqueue({ source: 'test', text: 'second' });
+    const e3 = arbiter.enqueue({ source: 'test', text: 'third' });
+    const e2Promise = arbiter.waitForCompletion(e2.id);
+    const e3Promise = arbiter.waitForCompletion(e3.id);
+
+    const f1 = await arbiter.waitForCompletion(e1.id);
+    assert.equal(f1.status, 'completed');
+
+    // 窗口内：E1 已收口，E2/E3 仍在队列等待被推迟的 _kick 拾起
+    assert.equal(arbiter.getStatus().activeEnvelopeId, null);
+    assert.equal(arbiter.getStatus().queueLength, 2);
+
+    const result = arbiter.interruptActive('no active interrupt');
+    assert.deepEqual(result, { active: false, cleared: 2 });
+
+    const [f2, f3] = await Promise.all([e2Promise, e3Promise]);
+    assert.equal(f2.status, 'cancelled');
+    assert.equal(f2.error, 'no active interrupt');
+    assert.equal(f3.status, 'cancelled');
+    assert.equal(f3.error, 'no active interrupt');
+    assert.deepEqual(calls, ['first'], 'queued envelopes must never execute');
+
+    // 被推迟的 _kick 在空队列上空转
+    await new Promise(r => setTimeout(r, 5));
+    assert.equal(arbiter.getStatus().status, 'idle');
+  });
+
+  // ── _status 三态观察（计划 §1.4 清单 9）──
+  // 特征测试：只锁现状。注意现状与计划措辞有出入——
+  // 空闲 enqueue 后 getStatus() 观察到的是 running（enqueue 内先置 queued，
+  // _kick 同步接管即改写为 running，'queued' 不可从空闲态外部观察）；
+  // 运行中再 enqueue 反而落到 queued（enqueue 无条件置 queued，_kick 因
+  // active 直接返回）——queued 在此的语义是"有积压"，与"是否已启动"正交。
+
+  it('_status transitions: idle->running takeover, queued backlog while running, clearQueued fallback', async () => {
+    const calls = [];
+    const firstCallGate = makeGate();
+    const agent = {
+      onCall: async (text) => {
+        calls.push(text);
+        if (calls.length === 1) await firstCallGate.closed; // E1 悬挂以观察运行中状态
+        return `done:${text}`;
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+
+    // 空闲态
+    assert.equal(arbiter.getStatus().status, 'idle');
+
+    // 空闲时 enqueue：_kick 同步接管，观察值直接是 running
+    const e1 = arbiter.enqueue({ source: 'test', text: 'first' });
+    assert.equal(arbiter.getStatus().status, 'running');
+    assert.equal(arbiter.getStatus().activeEnvelopeId, e1.id);
+    assert.equal(arbiter.getStatus().queueLength, 0);
+
+    // 运行中再 enqueue：状态变为 queued（积压标志），active 不变
+    arbiter.enqueue({ source: 'test', text: 'second' });
+    assert.equal(arbiter.getStatus().status, 'queued');
+    assert.equal(arbiter.getStatus().activeEnvelopeId, e1.id, 'E1 remains the active envelope');
+    assert.equal(arbiter.getStatus().queueLength, 1);
+
+    // clearQueued 回落：active 存在 → running
+    //（active 不存在 → idle 的分支由上方"无 active envelope"用例覆盖）
+    assert.equal(arbiter.clearQueued('status probe'), 1);
+    assert.equal(arbiter.getStatus().status, 'running');
+    assert.equal(arbiter.getStatus().queueLength, 0);
+
+    // E1 完成、队列已空 → finally 回落 idle
+    firstCallGate.open();
+    await arbiter.waitForCompletion(e1.id);
+    assert.equal(arbiter.getStatus().status, 'idle');
+    assert.deepEqual(calls, ['first'], 'cleared envelope must never execute');
+  });
 });
