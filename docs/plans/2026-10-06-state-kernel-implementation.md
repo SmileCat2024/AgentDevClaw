@@ -199,7 +199,7 @@ export function reduce<R>(def, record, event, ctx?): ReduceResult<R>;
 | — ⏭️ 跳过 | 发版 | 按用户决定不做 npm 发版：开发态 `agentdev:local` junction 常态化（18/18 包链接，`reduce` 导出已验证解析）；发布态切换时需先发版再摘链 | `agentdev:published` 流程自检 | — |
 | C1 ✅ `a775e6a` | AgentDevClaw | CallArbiter 特征测试补齐（§1.4 清单 8–9），不改实现 | 新测试全绿；`npm run test:file -- test/call-arbiter.test.js` 无回归 | 直接 revert |
 | C2 ✅ `0981d7f` | AgentDevClaw | envelope 转换表收敛（§1.2 赋值点 → `envelopeMachine`，实际收敛 7 处含 `_kick().catch` 的 failed 收口）；console.log 零变化；dead field 不动 | 36 个特征测试全绿；`npm run test:core` 无新增失败（存量 12 个失败为本机 bsdtar 环境问题，依赖图与根因双重证据排除关联） | revert |
-| C3（占位，另行评审） | AgentDevClaw | 阶段 2：中断检查点收敛。前置产出 = 时序差异清单（C1 用例 1/4 为天然对照行） | 差异清单评审通过 | — |
+| C3（占位，另行评审） | AgentDevClaw | 阶段 2：中断检查点收敛。前置产出 = 时序差异清单（C1 用例 1/4 为天然对照行）；评审材料见 [C3 差异清单](2026-10-06-c3-interrupt-checkpoint-review.md)（推荐方案：事件队列 + 原位 drain，零行为差异） | 差异清单评审通过 | — |
 
 执行纪律：
 
