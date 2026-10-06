@@ -8,7 +8,55 @@
  * Extracted from scripts/run-prebuilt-agent.js to enable direct unit testing.
  */
 
+import { defineStateMachine, reduce } from '@agentdevjs/core';
+
 import { CONTINUATION_BUDGET } from './shared/constants.js';
+
+/**
+ * Envelope 状态转换表（ADR-0021 阶段 1）：envelope.status 的唯一求值来源。
+ *
+ * 词汇 queued / running / completed / failed / cancelled，后三者为终态。
+ * `enqueued` 不设转换行——envelope 在构造前不存在，entry 字面量
+ * `status: 'queued'` 是初始状态而非转换。
+ *
+ * 外壳策略（与 WorkThread 的 no-op 外壳不同，ADR-0021 决策 3）：reduce
+ * 返回 unhandled / rejected 即 throw——未知事件或非法 from 是 bug，显式
+ * 暴露。transitioned 携带的 lifecycleEvent 本期不消费（CallArbiter 无
+ * 落盘事件日志，后续 inspection 通道再接）。
+ */
+const envelopeMachine = defineStateMachine({
+  id: 'call-arbiter-envelope',
+  statusField: 'status',
+  states: {
+    queued: {},
+    running: {},
+    completed: { terminal: true },
+    failed: { terminal: true },
+    cancelled: { terminal: true },
+  },
+  transitions: [
+    { event: 'started', from: ['queued'], to: 'running' },
+    { event: 'completed', from: ['running'], to: 'completed' },
+    { event: 'failed', from: ['running'], to: 'failed' },
+    // from '*' = 全部非终态（queued | running）；终态由内核先行拦截
+    { event: 'cancelled', from: '*', to: 'cancelled' },
+  ],
+});
+
+/**
+ * 对 envelope 求值一次状态转换；非 transitioned 即 throw（显式暴露 bug）。
+ * event 名与终态词汇对齐：outcome 观察分支直接以 outcome.status 作为事件名。
+ */
+function applyEnvelopeEvent(envelope, event) {
+  const result = reduce(envelopeMachine, envelope, { type: event });
+  if (result.type !== 'transitioned') {
+    const detail = result.type === 'rejected' ? ` (reason=${result.reason})` : '';
+    throw new Error(
+      `[CallArbiter] envelope ${envelope.id} state machine ${result.type}${detail}: ` +
+      `event "${event}" not applicable from status "${envelope.status}"`,
+    );
+  }
+}
 
 export class CallArbiter {
   /**
@@ -123,7 +171,7 @@ export class CallArbiter {
   clearQueued(reason = 'cancelled by interrupt') {
     const removed = this._queue.splice(0, this._queue.length);
     for (const envelope of removed) {
-      envelope.status = 'cancelled';
+      applyEnvelopeEvent(envelope, 'cancelled');
       envelope.error = reason;
       const cb = this._completionCallbacks.get(envelope.id);
       if (cb) {
@@ -220,7 +268,7 @@ export class CallArbiter {
     this._status = 'running';
 
     const envelope = this._activeEnvelope;
-    envelope.status = 'running';
+    applyEnvelopeEvent(envelope, 'started');
 
     // Track continuation counters for this envelope
     envelope._segmentCount = 0;
@@ -233,14 +281,14 @@ export class CallArbiter {
     // Run asynchronously so enqueue() returns immediately
     this._runEnvelope(envelope)
       .catch((err) => {
-        envelope.status = 'failed';
+        applyEnvelopeEvent(envelope, 'failed');
         envelope.error = err instanceof Error ? err.message : String(err);
         console.error(`[CallArbiter] envelope ${envelope.id} failed:`, err);
       })
       .finally(() => {
         if (envelope.status === 'running') {
           // _runEnvelope completed without setting status (normal completion)
-          envelope.status = 'completed';
+          applyEnvelopeEvent(envelope, 'completed');
         }
         this._active = false;
 
@@ -345,7 +393,7 @@ export class CallArbiter {
             continue;
           }
         }
-        envelope.status = outcome.status;
+        applyEnvelopeEvent(envelope, outcome.status);
         envelope.error = outcome.error?.message || envelope.error || `call terminated: ${outcome.reason}`;
         return;
       }
@@ -357,7 +405,7 @@ export class CallArbiter {
 
       if (!continuation) {
         // Normal completion — no continuation requested
-        envelope.status = 'completed';
+        applyEnvelopeEvent(envelope, 'completed');
         return;
       }
 
@@ -418,7 +466,7 @@ export class CallArbiter {
     if (typeof this._agent.consumeContinuationRequest === 'function') {
       try { this._agent.consumeContinuationRequest(); } catch {}
     }
-    envelope.status = 'cancelled';
+    applyEnvelopeEvent(envelope, 'cancelled');
     envelope.error = envelope.error || 'cancelled by interrupt';
     return true;
   }
