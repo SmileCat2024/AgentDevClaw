@@ -163,7 +163,7 @@ export function reduce<R>(def, record, event, ctx?): ReduceResult<R>;
 ## 4. 发现清单（不改，仅记录）
 
 1. `failSessionHandoff` 构造态 `open`+挡板会落 `rotation_failed`：正常流不可达（挡板存在则 status ∈ {rotating, rotation_failed}），但 stale 清除与 fail 的竞态窗口理论存在。转换表按精确等价实现，行为不变；是否收紧为显式 from 集合，独立决策。
-2. `clearStaleHandoff` 对 `closed`+挡板构造态：清挡板、发事件、status 保持 closed——投递路径进入前已有 closed 门禁，正常不可达。等价保留。
+2. `clearStaleHandoff` 对 `closed`+挡板构造态：清挡板、发事件、status 保持 closed——投递路径进入前已有 closed 门禁，正常不可达。**勘误（F3 合入后审核核实）**：终态保护优先于转换匹配，迁移实现中该构造态 reduce 直接 rejected → no-op（不清挡板、不发事件）；与旧实现的差异仅存在于这条不可达路径（唯一调用点 `deliverPendingCommands` 前置 isTerminal 门禁），按收紧接受，非等价保留。
 3. CallArbiter `_discardQueuedOnInterrupt` 为已标注的 dead field（2026-07-25 deprecated 注释），阶段 1 原样保留，PR-C2 不顺手删除（删除属独立清理）。
 
 特征测试补齐（F2/C1）追加发现：
