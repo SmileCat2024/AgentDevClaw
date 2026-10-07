@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
-import { promises as fs } from 'fs';
+import { appendFileSync, mkdirSync, promises as fs } from 'fs';
+import path from 'path';
 import {
   RUNTIME_SCRIPT,
   VIEWER_PORT, APP_ORIGIN, PROJECT_ROOT,
@@ -7,6 +8,7 @@ import {
   PROCESS_EXIT_WAIT_MS, RUNTIME_READY_WAIT_MS,
   CALL_EXECUTION_TIMEOUT_MS,
   resolveInstanceUdsPath,
+  resolveUserDataDir,
 } from '../shared/constants.js';
 import {
   sanitizeSessionFragment, cleanSessionText, sanitizeSpawnEnv, childProcessEnv,
@@ -40,6 +42,22 @@ import {
 import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { addOpenSession } from '../shared/open-sessions-tracker.js';
+
+const RUNTIME_DIAGNOSTIC_TAIL_CHARS = 8000;
+
+export function persistRuntimeDiagnostic({ agentId, sessionId, event, details = '' }) {
+  const logPath = path.join(resolveUserDataDir(), 'logs', 'runtime.log');
+  const header = `${new Date().toISOString()} [${event}] agent=${agentId} session=${sessionId || 'none'}`;
+  const line = details ? `${header}\n${details}\n` : `${header}\n`;
+  try {
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    appendFileSync(logPath, line, 'utf8');
+  } catch { /* diagnostics must not affect runtime lifecycle */ }
+}
+
+function appendProcessOutputTail(child, text) {
+  child.__runtimeOutputTail = `${child.__runtimeOutputTail || ''}${text}`.slice(-RUNTIME_DIAGNOSTIC_TAIL_CHARS);
+}
 
 /**
  * Resolve process placement without deriving a session workspace from the
@@ -316,7 +334,14 @@ export function createAgentStartupFns(deps) {
           const readyResult = await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
               existingShared.process.removeListener('message', handler);
-              reject(new Error(`add-session timeout after ${RUNTIME_READY_WAIT_MS}ms`));
+              const error = new Error(`add-session timeout after ${RUNTIME_READY_WAIT_MS}ms`);
+              persistRuntimeDiagnostic({
+                agentId: agent.id,
+                sessionId: resolvedSessionId,
+                event: 'shared-session-timeout',
+                details: `${error.message}\nruntimePid=${existingShared.process.pid || 'unknown'}\nruntimeOutputTail:\n${existingShared.process.__runtimeOutputTail || '(no output captured)'}`,
+              });
+              reject(error);
             }, RUNTIME_READY_WAIT_MS);
 
             const handler = (msg) => {
@@ -329,6 +354,12 @@ export function createAgentStartupFns(deps) {
               } else if (msg.type === 'session-error') {
                 clearTimeout(timeout);
                 existingShared.process.removeListener('message', handler);
+                persistRuntimeDiagnostic({
+                  agentId: agent.id,
+                  sessionId: resolvedSessionId,
+                  event: 'shared-session-error',
+                  details: `runtimePid=${existingShared.process.pid || 'unknown'}\n${msg.error || 'session-error'}\nruntimeOutputTail:\n${existingShared.process.__runtimeOutputTail || '(no output captured)'}`,
+                });
                 reject(new Error(msg.error || 'session-error'));
               }
             };
@@ -400,6 +431,7 @@ export function createAgentStartupFns(deps) {
 
     child.stdout.on('data', (chunk) => {
       const text = String(chunk);
+      appendProcessOutputTail(child, text);
       const match = text.match(/Viewer Agent ID:\s*([^\s]+)/);
       if (match) {
         runtime.viewerAgentId = match[1];
@@ -417,7 +449,9 @@ export function createAgentStartupFns(deps) {
     });
 
     child.stderr.on('data', (chunk) => {
-      log(agent.id, String(chunk).trim(), 'error');
+      const text = String(chunk);
+      appendProcessOutputTail(child, text);
+      log(agent.id, text.trim(), 'error');
     });
 
     child.on('exit', (code, signal) => {
@@ -430,7 +464,16 @@ export function createAgentStartupFns(deps) {
         releaseRuntimeState(rt.key);
         if (rt.selectedSessionId) featureCommunicationStore.closeSession(rt.agentId || agent.id, rt.selectedSessionId);
       }
-      log(agent.id, `process exited with code ${code ?? 'null'} signal ${signal || child.signalCode || 'none'}`);
+      const exitSummary = `process exited with code ${code ?? 'null'} signal ${signal || child.signalCode || 'none'}`;
+      log(agent.id, exitSummary);
+      if (code !== 0 || signal || child.signalCode) {
+        persistRuntimeDiagnostic({
+          agentId: agent.id,
+          sessionId: resolvedSessionId,
+          event: 'runtime-process-exit',
+          details: `${exitSummary}\npid=${child.pid || 'unknown'}\nruntimeOutputTail:\n${child.__runtimeOutputTail || '(no output captured)'}`,
+        });
+      }
 
       // 通知外部回调（如群聊模块需要在 agent 死亡时闭环）
       // Notify for every session that was sharing this process
@@ -446,6 +489,12 @@ export function createAgentStartupFns(deps) {
     });
 
     child.on('error', (error) => {
+      persistRuntimeDiagnostic({
+        agentId: agent.id,
+        sessionId: resolvedSessionId,
+        event: 'runtime-process-error',
+        details: `pid=${child.pid || 'unknown'}\n${error.stack || error.message}`,
+      });
       const current = managedAgents.get(runtime.key);
       if (current) {
         current.exitCode = 1;
