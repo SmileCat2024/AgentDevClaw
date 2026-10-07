@@ -78,6 +78,8 @@
 
 features/ 下被预制 agent 源码引用的子包（清单在 `scripts/prebuilt-feature-dirs.mjs`，build:features 与 prestart 过时检测共用）对 core 的声明固定为 semver；构建时若相邻框架 core 可用（`dist/index.d.ts` 存在，缺失会自动编译）则按版本守卫分流——根声明为开发态时直接替换为本地 junction（使用未发布框架 API 的子包因此可构建）；发布态下仅当相邻 core 版本高于子包声明版本时才替换（本地落后或持平则保持 registry，避免陈旧本地副本劫持子包的 core 解析、与根安装分叉成两份副本）。不要手动改子包声明来切换形态。
 
+预制 agent 一旦以源码路径静态导入 `features/<name>/dist/index.js`，必须同步把 `<name>` 登记进 [scripts/prebuilt-feature-dirs.mjs](scripts/prebuilt-feature-dirs.mjs)——该清单同时驱动 build:features、prestart 过时检测、`pack:desktop` 与 `agentdev:published`，桌面包只构建清单内的包。漏登记在开发机无感（本地已构建过 dist），打出的桌面包里 runtime 加载 agent.js 即崩、新旧会话全灭（历史事故：stylized-output）。`local-features/` 整树构建、生态包走 vendor/registry 链路，均无需登记。
+
 默认端口：Web UI `1420`，ViewerWorker `2026`（`PORT` / `AGENTDEV_VIEWER_PORT` 可覆盖）。
 
 框架改动的生效路径：AgentDev 仓库 `npm run build` 产出全部包 dist → 重启 Claw 服务。junction 链接下重启即生效；发布态下先用 `agentdev:local` 链接调试，正式生效走发版。
