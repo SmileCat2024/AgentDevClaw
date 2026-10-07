@@ -843,11 +843,15 @@
 
   function _rotationMenuOutsideClick(event) {
     if (!_rotationMenuEl) return;
-    if (!_rotationMenuEl.contains(event.target) && !event.target.closest?.('[data-rotation-menu]')) {
-      _closeRotationMenu();
-    } else {
+    if (_rotationMenuEl.contains(event.target)) {
+      // 点击浮层内部（未命中列表项）：续命，等下一次外部点击。
       document.addEventListener('click', _rotationMenuOutsideClick, { once: true });
+      return;
     }
+    // 触发按钮的开关交给 openRotationMenu（toggle 收起 / 换源重建），此处重复
+    // 注册监听会与 openRotationMenu 自己的 setTimeout 注册叠加。
+    if (event.target.closest?.('[data-rotation-menu]')) return;
+    _closeRotationMenu();
   }
 
   function _placeRotationMenu(el, rect) {
@@ -866,8 +870,14 @@
   }
 
   function openRotationMenu(btn) {
-    _closeRotationMenu();
     const fieldKey = btn.dataset.rotationMenu;
+    // 浮层已打开时再点同一触发按钮 = 收起。按钮元素会随面板 3s 轮询重渲染被
+    // 替换，故用 fieldKey 比对而非元素引用；点其他触发按钮则关闭旧的换源重建。
+    if (_rotationMenuEl && _rotationMenuEl._scrFieldKey === fieldKey) {
+      _closeRotationMenu();
+      return;
+    }
+    _closeRotationMenu();
     const isPreset = fieldKey === 'strongPreset' || fieldKey === 'cheapPreset';
     const slot = fieldKey === 'strongPreset' || fieldKey === 'strongEffort' ? 'strong' : 'cheap';
     const r = getRotation();
@@ -905,6 +915,7 @@
     });
 
     _rotationMenuEl = el;
+    el._scrFieldKey = fieldKey;
     _placeRotationMenu(el, btn.getBoundingClientRect());
     setTimeout(function () {
       document.addEventListener('click', _rotationMenuOutsideClick, { once: true });
@@ -1112,15 +1123,20 @@
 
   function _styleMenuOutsideClick(event) {
     if (!_styleMenuEl) return;
-    if (!_styleMenuEl.contains(event.target) && !event.target.closest?.('[data-style-menu]')) {
-      _closeStyleMenu();
-    } else {
+    if (_styleMenuEl.contains(event.target)) {
       document.addEventListener('click', _styleMenuOutsideClick, { once: true });
+      return;
     }
+    if (event.target.closest?.('[data-style-menu]')) return; // 触发按钮交给 openStyleMenu toggle
+    _closeStyleMenu();
   }
 
   function openStyleMenu(btn) {
-    _closeStyleMenu();
+    // 唯一触发按钮：浮层已打开时再点 = 收起。
+    if (_styleMenuEl) {
+      _closeStyleMenu();
+      return;
+    }
     const st = getStyleState();
     const status = normalizeStatus(st.status);
     const styles = Array.isArray(status.styles) ? status.styles : [];
