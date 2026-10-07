@@ -256,6 +256,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main_window(app);
         }))
+        .plugin(tauri_plugin_notification::init())
         // 服务源内的全部 WebView 权限（通知 / 麦克风 / 剪贴板等）自动授予，
         // 不向用户弹询问；前端 Notification.requestPermission 因此直接得 granted。
         .on_permission_request(|webview, _kind| {

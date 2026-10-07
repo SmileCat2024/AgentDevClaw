@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Permissions for the main Claw window.",
+  "windows": ["main"],
+  "permissions": ["core:default", "notification:default"]
+}
