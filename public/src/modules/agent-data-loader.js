@@ -249,7 +249,6 @@ async function refreshCurrentRuntimeStatus(
       if (runtimeRecord) {
         runtimeRecord.connected = current.connected;
       }
-      setConnectionStatus(current.connected);
       if (typeof applyContextGuardStatus === 'function') {
         applyContextGuardStatus(guardData, expectedRuntimeId);
       }

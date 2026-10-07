@@ -71,7 +71,6 @@ function loadSseClient(overrides = {}) {
     commitMetadataUpdate: [],
     runMessagesProbeCycle: [],
     applyQueuedInputsTexts: [],
-    setConnectionStatus: [],
     loadAgents: [],
     forceFullPoll: 0,
     toasts: [],
@@ -103,7 +102,6 @@ function loadSseClient(overrides = {}) {
       return 'committed';
     },
     applyQueuedInputsTexts: (id, texts, count) => calls.applyQueuedInputsTexts.push({ id, texts, count }),
-    setConnectionStatus: (c) => calls.setConnectionStatus.push(c),
     loadAgents: async () => { calls.loadAgents.push(1); },
     getRuntimeRecord: () => null,
     captureSessionViewToken: (runtimeId) => ({ runtimeId: String(runtimeId || '').trim(), switchEpoch }),
@@ -403,10 +401,9 @@ describe('sse-client: 事件分发焦点路由', () => {
     assert.equal(calls.runMessagesProbeCycle[0].token.runtimeId, 'rt-focus');
   });
 
-  it('connection 事件 → setConnectionStatus + loadAgents；reconnected → 全量对账', () => {
+  it('connection 事件 → loadAgents；reconnected → 全量对账', () => {
     const { calls } = activeClient();
     latestSource().emit('connection', { kind: 'connection', agentId: 'rt-focus', connected: false });
-    assert.deepEqual(calls.setConnectionStatus, [false]);
     assert.equal(calls.loadAgents.length, 1);
     latestSource().emit('connection', { kind: 'connection', agentId: 'rt-1', connected: true, reconnected: true });
     assert.equal(calls.forceFullPoll, 1);

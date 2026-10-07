@@ -109,7 +109,6 @@ function createHeaderSandbox() {
     ctx,
     bar: getEl('chat-context-bar'),
     titleEl: getEl('current-agent-name'),
-    badge: getEl('connection-status'),
   };
 }
 
@@ -128,7 +127,7 @@ const REMOTE_OVERVIEW = JSON.stringify({
 
 describe('frontend session header: remote form', () => {
   it('renders all three header items from the catalog stub with no agent record', () => {
-    const { ctx, bar, titleEl, badge } = createHeaderSandbox();
+    const { ctx, bar, titleEl } = createHeaderSandbox();
     ctx.run(`
       currentRuntimeAgentId = 'remote:server-a:rt-1';
       focusedAgentId = 'remote:server-a:programming-helper';
@@ -147,9 +146,6 @@ describe('frontend session header: remote form', () => {
 
     // 顶部标题：本地 record 链落空 → 目录 sessionTitle 回退链
     assert.equal(titleEl.textContent, '远程主会话');
-    // 断线徽章：条目在目录中且 resolveRuntimeRef 命中 → connected
-    assert.equal(badge.textContent, '已连接');
-    assert.equal(badge.classList.contains('disconnected'), false);
 
     // 模型名 + 用量进度条照常渲染（record 缺失不清空整条 bar）
     assert.ok(bar.innerHTML.includes('ccb-model'), 'model name should render');
@@ -166,21 +162,6 @@ describe('frontend session header: remote form', () => {
     assert.equal(meta.session.createdAt, '2026-08-30T01:00:00Z');
     assert.equal(meta.session.openDirectory, '/srv/project-c');
     assert.equal(meta.session.messageCount, 7);
-  });
-
-  it('shows the disconnected badge when the catalog no longer resolves the runtime', () => {
-    const { ctx, badge } = createHeaderSandbox();
-    ctx.run(`
-      currentRuntimeAgentId = 'remote:server-a:rt-1';
-      focusedAgentId = 'remote:server-a:programming-helper';
-      window.RemoteConnections = {
-        getEntryHostNamespaceId: (ref) => (ref === 'remote:server-a:rt-1' ? 'remote:server-a:programming-helper' : null),
-        resolveRuntimeRef: () => null,
-      };
-      updateCurrentAgentChrome();
-    `);
-    assert.equal(badge.textContent, '已断开');
-    assert.equal(badge.classList.contains('disconnected'), true);
   });
 });
 

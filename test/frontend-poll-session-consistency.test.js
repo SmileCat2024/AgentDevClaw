@@ -349,7 +349,6 @@ test('runtime status cannot commit after the same runtime is re-entered', async 
           ? { connected: false }
           : { blocked: true },
     }),
-    setConnectionStatus: () => effects.push('connection'),
     applyContextGuardStatus: () => effects.push('guard'),
     updateNotificationStatus: () => effects.push('notification'),
   };

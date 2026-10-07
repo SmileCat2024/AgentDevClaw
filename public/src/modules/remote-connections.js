@@ -152,7 +152,7 @@ function ingestRemoteCatalog(payload) {
       disconnectedAt,
     });
 
-    // 主视图正停在该连接的远程会话上时，把健康变化明示到顶栏状态徽章
+    // 主视图正停在该连接的远程会话上时，断线用 toast 明示
     // （远程会话无 /connection 本地刷新路径，由 catalog 周期代为同步）。
     if (typeof currentRuntimeAgentId === 'string'
       && splitRemoteNamespaceId(currentRuntimeAgentId)?.connectionId === connId) {
@@ -163,9 +163,6 @@ function ingestRemoteCatalog(payload) {
           title: t('rcon_state_disconnected'),
           description: t('rcon_banner_disconnected'),
         });
-      }
-      if (typeof setConnectionStatus === 'function') {
-        setConnectionStatus(connected);
       }
     }
   }

@@ -1,16 +1,9 @@
 // theme-lang.js
-// Phase 2d-3: 主题 / 语言 / 连接状态（Domain O-c）
-// 从 app-ui.js 提取的主题切换、语言切换和连接状态函数
-
-function setConnectionStatus(connected) {
-  statusBadge.textContent = connected ? t('status_connected') : t('status_disconnected');
-  statusBadge.classList.toggle('disconnected', !connected);
-}
+// Phase 2d-3: 主题 / 语言（Domain O-c）
+// 从 app-ui.js 提取的主题切换、语言切换函数
 
 function showAgentStartError(error) {
   const message = error && error.message ? error.message : String(error || '');
-  statusBadge.textContent = t('status_start_failed');
-  statusBadge.classList.add('disconnected');
   window.alert(`${t('status_start_failed')}: ${message}`);
 }
 
@@ -89,7 +82,6 @@ function applyLanguage() {
     updateCurrentAgentChrome();
   } else if (!focusedAgentId) {
     currentAgentTitle.textContent = t('page_title');
-    statusBadge.textContent = t('status_no_agent');
   }
 
   renderCurrentMainView();

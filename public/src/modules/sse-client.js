@@ -18,7 +18,7 @@
  *
  * 依赖（全局，运行时解析）：EventSource、currentRuntimeAgentId、
  * updateNotificationStatus、applyAgentCallStateFromNotification、
- * setConnectionStatus、getRuntimeRecord、commitMetadataUpdate、
+ * getRuntimeRecord、commitMetadataUpdate、
  * runMessagesProbeCycle、applyQueuedInputsTexts、loadAgents、
  * captureSessionViewToken、_syncForegroundState、_tryNotifyInputRequest、
  * _seenChoiceAlertIds、ClawToast、window.ClawFW.requestImmediatePoll
@@ -88,7 +88,6 @@ function handleNotificationEvent(frame) {
 function handleConnectionEvent(frame) {
   const connected = frame?.connected !== false;
   if (isSameRuntime(frame.agentId, currentRuntimeAgentId)) {
-    if (typeof setConnectionStatus === 'function') setConnectionStatus(connected);
     const record = typeof getRuntimeRecord === 'function' ? getRuntimeRecord(frame.agentId) : null;
     if (record) record.connected = connected;
   }

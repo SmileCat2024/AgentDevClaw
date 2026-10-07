@@ -412,7 +412,6 @@ async function invoke(command, payload = {}) {
 }
 
 const container = document.getElementById('chat-container');
-const statusBadge = document.getElementById('connection-status');
 const agentList = document.getElementById('agent-list');
 const prebuiltAgentList = document.getElementById('prebuilt-agent-list');
 const toolAgentList = document.getElementById('tool-agent-list');

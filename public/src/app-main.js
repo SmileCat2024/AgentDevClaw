@@ -58,40 +58,13 @@ function getCurrentVisualAgentTitle() {
 }
 
 function updateCurrentAgentChrome() {
-  if (!currentAgentTitle || !statusBadge) return;
+  if (!currentAgentTitle) return;
   const hasSelection = normalizeAgentIdentity(focusedAgentId) || normalizeAgentIdentity(currentRuntimeAgentId);
   if (!hasSelection) {
     currentAgentTitle.textContent = t('page_title');
-    statusBadge.textContent = t('status_no_agent');
-    statusBadge.classList.add('disconnected');
     return;
   }
   currentAgentTitle.textContent = getCurrentVisualAgentTitle();
-  if (!normalizeAgentIdentity(currentRuntimeAgentId)) {
-    statusBadge.textContent = currentLanguage === 'zh' ? '系统空间' : 'System';
-    statusBadge.classList.remove('disconnected');
-    return;
-  }
-  const runtimeRecord = getCurrentRuntimeRecord();
-  let connected = runtimeRecord ? runtimeRecord.connected !== false : true;
-  // 远程焦点（T21-E）：远程会话不在 allAgents，runtimeRecord 恒为 null，
-  // 上面默认 true 的兜底会掩盖断线，且 catalog 轮询的代同步
-  // （ingestRemoteCatalog → setConnectionStatus）会被本函数随后覆盖，两边打架。
-  // 此处从目录推导连接态：条目在目录中（任意连接态）时以 resolveRuntimeRef
-  // （仅遍历 connected section）判定；目录未命中（未轮询到/条目消失）时保持现状。
-  if (!runtimeRecord
-    && typeof isRemoteNamespaceAgentId === 'function'
-    && (isRemoteNamespaceAgentId(normalizeAgentIdentity(focusedAgentId))
-      || isRemoteNamespaceAgentId(normalizeAgentIdentity(currentRuntimeAgentId)))) {
-    const rc = typeof window !== 'undefined' ? window.RemoteConnections : null;
-    const runtimeRef = normalizeAgentIdentity(currentRuntimeAgentId);
-    if (rc?.getEntryHostNamespaceId && rc?.resolveRuntimeRef && runtimeRef
-      && rc.getEntryHostNamespaceId(runtimeRef) !== null) {
-      connected = rc.resolveRuntimeRef(runtimeRef) !== null;
-    }
-  }
-  statusBadge.textContent = connected ? t('status_connected') : t('status_disconnected');
-  statusBadge.classList.toggle('disconnected', !connected);
 }
 
 function isAgentActive(agent) {
@@ -226,8 +199,6 @@ window.handlePrebuiltAgentClick = async (agentId) => {
   }
 
   pendingPrebuiltAgentIds.add(agentId);
-  statusBadge.textContent = t('status_starting');
-  statusBadge.classList.remove('disconnected');
   renderAgentList();
 
   const _startNavGuard = _navigationGuardEpoch;
