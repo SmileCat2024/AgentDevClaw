@@ -70,7 +70,7 @@ async function resolveStudioSessionDirectory(agent, action) {
     const directory = String(selected?.path || selected?.paths?.[0] || '').trim();
     return directory ? { ...action, openDirectory: directory } : null;
   } catch (error) {
-    window.alert((currentLanguage === 'zh' ? '选择项目目录失败：' : 'Failed to select project directory: ') + (error?.message || error));
+    window.alert((currentLanguage === 'zh' ? '选择工作目录失败：' : 'Failed to select working directory: ') + (error?.message || error));
     return null;
   }
 }
@@ -757,8 +757,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     return;
   }
 
-  if (action.type === 'open_studio_project' && action.projectId) {
-    window.openStudioProject(action.projectId);
+  if (action.type === 'open_studio_feature' && action.featureId) {
+    window.openStudioFeature(action.featureId);
+    return;
+  }
+
+  if (action.type === 'close_studio_feature') {
+    window.closeStudioFeature();
     return;
   }
 

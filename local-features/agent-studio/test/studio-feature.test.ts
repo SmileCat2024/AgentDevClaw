@@ -2,15 +2,17 @@
  * AgentStudioFeature test (node:test format)
  *
  * Validates:
- * 1. Tool registration (14 tools, names)
+ * 1. Tool registration (15 tools, names)
  * 2. evaluateAssertions: five assertion kinds, pass/fail semantics
  * 3. computeFeatureCoverage: evidence attribution to features
  * 4. advanceFeatureStatuses: per-feature verified ledger, reload resets verification
  * 5. normalizeAssertion / normalizeTestCase: schema validation with precise errors
- * 6. studio_initialize_project / studio_define_test round trip (assertions schema v2)
- * 7. injectProjectState skips empty-input pre-inject
- * 8. captureState/restoreState preserves active project directory
- * 9. studio_run_test without a running runtime throws
+ * 6. Directory manifest (schema 5) + global feature registry round trips
+ * 7. Legacy schema ≤ 4 lazy migration: features go to the registry, manifest upgrades in place
+ * 8. Session binding backoff: skipped without session identity, error surfaced on unreachable server
+ * 9. injectProjectState skips empty-input pre-inject
+ * 10. captureState/restoreState preserves active directory
+ * 11. studio_run_test without a running runtime throws
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -25,6 +27,7 @@ import {
   advanceFeatureStatuses,
   normalizeAssertion,
   normalizeTestCase,
+  readFeatureRegistry,
   type StudioToolCallEvidence,
   type StudioHookEvidence,
   type StudioFeatureEntry,
@@ -32,9 +35,14 @@ import {
 } from '../src/index.js';
 import type { Tool } from '@agentdevjs/core';
 
-async function makeTempWorkspace(): Promise<{ workspaceDir: string; projectDir: string }> {
+async function makeTempWorkspace(): Promise<{ workspaceDir: string; statePath: string; studioDir: string; agentRegistryPath: string }> {
   const base = await fs.mkdtemp(join(tmpdir(), 'agent-studio-test-'));
-  return { workspaceDir: base, projectDir: join(base, 'project') };
+  return {
+    workspaceDir: base,
+    statePath: join(base, 'state.json'),
+    studioDir: join(base, 'studio'),
+    agentRegistryPath: join(base, 'agent-registry.json'),
+  };
 }
 
 type ExecFn = (name: string, args?: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -45,6 +53,30 @@ function bindTools(feature: AgentStudioFeature): ExecFn {
     assert.ok(tool, `tool ${name} not found`);
     return (tool.execute as (a: Record<string, unknown>) => Promise<Record<string, unknown>>)(args);
   };
+}
+
+/** 在指定目录上构造 feature（共享同一 statePath → 同一全局注册表），返回工具执行器。 */
+function execAt(env: { workspaceDir: string; statePath: string; agentRegistryPath: string }, dir: string): ExecFn {
+  return bindTools(new AgentStudioFeature({
+    workspaceDir: dir,
+    statePath: env.statePath,
+    agentRegistryPath: env.agentRegistryPath,
+  }));
+}
+
+/** 直接落盘一份 schema 5 目录清单（工具路径之外的测试基线）。 */
+async function writeManifest(dir: string, patch: Record<string, unknown> = {}): Promise<void> {
+  const manifest = {
+    schemaVersion: 5,
+    targetAgent: '',
+    testRuntime: { status: 'not-provisioned' },
+    tests: [],
+    createdAt: 't0',
+    updatedAt: 't0',
+    ...patch,
+  };
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(join(dir, 'agent-studio.json'), JSON.stringify(manifest));
 }
 
 const EVIDENCE_TOOL_CALLS: StudioToolCallEvidence[] = [
@@ -61,15 +93,16 @@ const EVIDENCE_HOOKS: StudioHookEvidence[] = [
 
 describe('AgentStudioFeature', () => {
   let workspaceDir: string;
-  let projectDir: string;
-  let exec: ExecFn;
+  let statePath: string;
+  let studioDir: string;
+  let agentRegistryPath: string;
 
   before(async () => {
     const temp = await makeTempWorkspace();
     workspaceDir = temp.workspaceDir;
-    projectDir = temp.projectDir;
-    const feature = new AgentStudioFeature({ workspaceDir, statePath: join(workspaceDir, 'state.json'), agentRegistryPath: join(workspaceDir, 'agent-registry.json') });
-    exec = bindTools(feature);
+    statePath = temp.statePath;
+    studioDir = temp.studioDir;
+    agentRegistryPath = temp.agentRegistryPath;
   });
 
   after(async () => {
@@ -77,13 +110,25 @@ describe('AgentStudioFeature', () => {
   });
 
   describe('Tool registration', () => {
-    it('should expose exactly 16 tools', () => {
-      const feature = new AgentStudioFeature({ workspaceDir, statePath: join(workspaceDir, 'state.json') });
-      assert.equal(feature.getTools().length, 16);
+    it('should expose exactly 15 tools', () => {
+      const feature = new AgentStudioFeature({ workspaceDir: studioDir, statePath });
+      assert.equal(feature.getTools().length, 15);
+    });
+
+    it('requires Feature metadata parameters for the Claw Manifest v2', () => {
+      const feature = new AgentStudioFeature({ workspaceDir: studioDir, statePath });
+      const createTool = feature.getTools().find((tool: Tool) => tool.name === 'studio_create_feature') as Tool & {
+        parameters: { required?: string[] };
+      };
+      assert.ok(createTool.parameters.required?.includes('displayNameZh'));
+      assert.ok(createTool.parameters.required?.includes('capabilities'));
+      assert.ok(createTool.parameters.required?.includes('provides'));
+      assert.ok(createTool.parameters.required?.includes('requirements'));
+      assert.ok(createTool.parameters.required?.includes('rollback'));
     });
 
     it('should have expected tool names', () => {
-      const feature = new AgentStudioFeature({ workspaceDir, statePath: join(workspaceDir, 'state.json') });
+      const feature = new AgentStudioFeature({ workspaceDir: studioDir, statePath });
       const names = feature.getTools().map((tool: Tool) => tool.name);
       assert.deepEqual(names.sort(), [
         'studio_add_feature',
@@ -91,9 +136,8 @@ describe('AgentStudioFeature', () => {
         'studio_create_snapshot',
         'studio_define_test',
         'studio_detect_environment',
-        'studio_get_project',
+        'studio_get_directory',
         'studio_get_run',
-        'studio_initialize_project',
         'studio_list_tests',
         'studio_register_agent',
         'studio_remove_feature',
@@ -410,14 +454,12 @@ describe('AgentStudioFeature', () => {
     });
   });
 
-  describe('studio_initialize_project / studio_define_test', () => {
-    it('writes project, defines a test with assertions, round-trips via list', async () => {
-      await exec('studio_initialize_project', { projectDir, name: 'demo', goal: '演示' });
-      const projectFile = join(projectDir, 'agent-studio.json');
-      const persistedProject = JSON.parse(await fs.readFile(projectFile, 'utf8')) as Record<string, unknown>;
-      persistedProject.toolchain = { source: 'custom', nodePath: '/tools/node', npmPath: '/tools/npm' };
-      await fs.writeFile(projectFile, JSON.stringify(persistedProject));
-      await exec('studio_initialize_project', { projectDir, name: 'demo', goal: '演示' });
+  describe('directory manifest and feature registry', () => {
+    it('studio_define_test writes into the directory manifest and round-trips via list', async () => {
+      await writeManifest(studioDir, {
+        toolchain: { source: 'custom', nodePath: '/tools/node', npmPath: '/tools/npm' },
+      });
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, studioDir);
       const defined = await exec('studio_define_test', {
         id: 'allow-create',
         title: '创建工单',
@@ -436,19 +478,21 @@ describe('AgentStudioFeature', () => {
       assert.equal(tests[0].sessionPolicy, 'stateful');
       assert.equal(tests[0].assertions.length, 2);
 
-      const project = await exec('studio_get_project');
-      assert.equal((project as { project: { schemaVersion: number } }).project.schemaVersion, 4);
-      assert.deepEqual((project as { project: { toolchain?: unknown } }).project.toolchain, { source: 'custom', nodePath: '/tools/node', npmPath: '/tools/npm' });
+      const loaded = await exec('studio_get_directory');
+      const manifest = (loaded as { manifest: { schemaVersion: number; toolchain?: unknown } }).manifest;
+      assert.equal(manifest.schemaVersion, 5);
+      assert.deepEqual(manifest.toolchain, { source: 'custom', nodePath: '/tools/node', npmPath: '/tools/npm' });
     });
 
-    it('re-initialize keeps tests and features', async () => {
-      await exec('studio_initialize_project', { projectDir, name: 'demo-2' });
+    it('defining another test grows the manifest without losing existing ones', async () => {
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, studioDir);
+      await exec('studio_define_test', { id: 'list-open', title: '列出工单', input: '列出工单' });
       const listed = await exec('studio_list_tests');
-      assert.equal((listed as { tests: unknown[] }).tests.length, 1);
+      assert.equal((listed as { tests: unknown[] }).tests.length, 2);
     });
 
-    it('normalizes legacy schema as schema 4 without losing module registration', async () => {
-      const legacyDir = join(workspaceDir, 'legacy-project');
+    it('lazily migrates a legacy manifest: features go to the global registry, manifest upgrades to schema 5 in place', async () => {
+      const legacyDir = join(workspaceDir, 'legacy-dir');
       await fs.mkdir(legacyDir, { recursive: true });
       await fs.writeFile(join(legacyDir, 'legacy.mjs'), 'export default class { name = "legacy"; getTools() { return []; } }\n');
       await fs.writeFile(join(legacyDir, 'agent-studio.json'), JSON.stringify({
@@ -462,69 +506,114 @@ describe('AgentStudioFeature', () => {
         createdAt: 't',
         updatedAt: 't',
       }));
-      await exec('studio_initialize_project', { projectDir: legacyDir, name: 'legacy' });
-      const loaded = await exec('studio_get_project');
-      const project = (loaded as { project: { schemaVersion: number; id: string; environment?: { kind: string; address: string }; features: Array<{ name: string; modulePath: string }> } }).project;
-      assert.equal(project.schemaVersion, 4);
-      assert.equal(project.features[0].name, 'legacy');
-      assert.equal(project.features[0].modulePath, join(legacyDir, 'legacy.mjs'));
-      assert.ok(project.id.startsWith('studio-'));
-      assert.deepEqual(project.environment, { kind: 'local-directory', address: legacyDir });
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, legacyDir);
+      const loaded = await exec('studio_get_directory');
+      const manifest = (loaded as { manifest: { schemaVersion: number } }).manifest;
+      assert.equal(manifest.schemaVersion, 5);
+      const features = (loaded as { features: Array<{ name: string; modulePath: string }> }).features;
+      assert.equal(features[0].name, 'legacy');
+      assert.equal(features[0].modulePath, join(legacyDir, 'legacy.mjs'));
+      // 档案就地升级：磁盘上不再有 features[]/name/goal
+      const onDisk = JSON.parse(await fs.readFile(join(legacyDir, 'agent-studio.json'), 'utf8')) as Record<string, unknown>;
+      assert.equal(onDisk.schemaVersion, 5);
+      assert.equal('features' in onDisk, false);
+      assert.equal('name' in onDisk, false);
+      assert.equal('goal' in onDisk, false);
+      // feature 记账进入全局注册表（id = 无包名时用 feature 名）
+      const records = await readFeatureRegistry(statePath);
+      const record = records.find((item) => item.id === 'legacy');
+      assert.ok(record, 'global registry contains legacy feature');
+      assert.equal(record.directory, legacyDir);
     });
 
     it('rejects a nonstandard persisted build command before it reaches a shell', async () => {
-      const invalidDir = join(workspaceDir, 'invalid-build-project');
+      const invalidDir = join(workspaceDir, 'invalid-build-dir');
       await fs.mkdir(invalidDir, { recursive: true });
       await fs.writeFile(join(invalidDir, 'agent-studio.json'), JSON.stringify({
         schemaVersion: 3, name: 'invalid', goal: '', targetAgent: '',
         features: [{ name: 'bad', modulePath: join(invalidDir, 'bad.mjs'), source: { kind: 'project', projectDir: invalidDir, entry: join(invalidDir, 'bad.mjs'), buildCommand: ['npm', 'run', 'build; malicious'] }, status: 'implemented' }],
         testRuntime: { status: 'stopped' }, tests: [], createdAt: 't', updatedAt: 't',
       }));
-      await fs.writeFile(join(invalidDir, 'bad.mjs'), 'export default class { name = "bad"; }\\n');
-      await exec('studio_initialize_project', { projectDir: invalidDir, name: 'invalid' });
+      await fs.writeFile(join(invalidDir, 'bad.mjs'), 'export default class { name = "bad"; }\n');
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, invalidDir);
+      await exec('studio_get_directory'); // 触发懒迁移：bad 进注册表
       await assert.rejects(() => exec('studio_start_runtime'), /仅支持 buildCommand/);
     });
 
-    it('registers a standard Feature project through projectDir', async () => {
-      const featureDir = join(projectDir, 'features', 'ticket-feature');
+    it('registers a standard Feature project via featureProjectDir and records it in the global registry', async () => {
+      const featureDir = join(studioDir, 'features', 'ticket-feature');
       await fs.mkdir(join(featureDir, 'dist'), { recursive: true });
       await fs.writeFile(join(featureDir, 'package.json'), JSON.stringify({
         name: '@agentdevjs/ticket-feature',
         main: 'dist/index.js',
+        description: '工单看板演示 Feature',
       }));
       await fs.writeFile(join(featureDir, 'dist', 'index.js'), 'export default class { name = "ticket-feature"; getTools() { return []; } }\n');
-      await exec('studio_initialize_project', { projectDir, name: 'standard-project' });
-      const registered = await exec('studio_add_feature', { projectDir: './features/ticket-feature' });
-      const feature = (registered as { feature: { name: string; package?: string; modulePath: string; source?: { kind: string } } }).feature;
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, studioDir);
+      const registered = await exec('studio_add_feature', { featureProjectDir: './features/ticket-feature' });
+      const feature = (registered as { feature: { name: string; package?: string; modulePath: string; description: string; source?: { kind: string } } }).feature;
       assert.equal(feature.name, 'ticket-feature');
       assert.equal(feature.package, '@agentdevjs/ticket-feature');
+      assert.equal(feature.description, '工单看板演示 Feature');
       assert.equal(feature.modulePath, join(featureDir, 'dist', 'index.js'));
       assert.equal(feature.source?.kind, 'project');
+      // 全局注册表按包名记账
+      const records = await readFeatureRegistry(statePath);
+      const record = records.find((item) => item.id === '@agentdevjs/ticket-feature');
+      assert.ok(record, 'registry keyed by package name');
+      assert.equal(record.directory, studioDir);
+      // 测试环境没有会话身份：绑定回写显式 skipped，不静默吞掉
+      const sessionBinding = (registered as { sessionBinding: { ok: boolean; skipped?: boolean } }).sessionBinding;
+      assert.equal(sessionBinding.ok, false);
+      assert.equal(sessionBinding.skipped, true);
+    });
+
+    it('re-registering the same package at a new directory moves it and preserves the ledger', async () => {
+      const featureDir = join(studioDir, 'features', 'ticket-feature');
+      // 预置账本：verified + 验证证据
+      const records = await readFeatureRegistry(statePath);
+      const seeded = records.map((record) => record.id === '@agentdevjs/ticket-feature'
+        ? {
+            ...record,
+            status: 'verified' as const,
+            verification: { lastVerifiedRunId: 'run-x', verifiedAt: 'tx', coverage: { tools: ['ticket_list'], hooks: [], deniedTools: [] } },
+          }
+        : record);
+      const { writeFeatureRegistry } = await import('../src/index.js');
+      await writeFeatureRegistry(statePath, seeded);
+
+      const movedDir = join(workspaceDir, 'moved-dir');
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, movedDir);
+      const registered = await exec('studio_add_feature', { featureProjectDir: featureDir });
+      const feature = (registered as { feature: { directory: string; status: string; verification?: { lastVerifiedRunId: string } } }).feature;
+      assert.equal(feature.directory, movedDir);
+      assert.equal(feature.status, 'verified');
+      assert.equal(feature.verification?.lastVerifiedRunId, 'run-x');
     });
 
     it('registers a standalone Agent definition without changing its source', async () => {
-      const agentDir = join(projectDir, 'agent-under-test');
+      const agentDir = join(studioDir, 'agent-under-test');
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({
         id: 'debug-agent', entry: './agent.js', deployment: { kind: 'standalone' }, features: [],
       }));
-      await fs.writeFile(join(agentDir, 'agent.js'), 'export default class DebugAgent {}\\n');
-      await exec('studio_initialize_project', { projectDir, name: 'debug-project' });
+      await fs.writeFile(join(agentDir, 'agent.js'), 'export default class DebugAgent {}\n');
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, studioDir);
       const result = await exec('studio_register_agent', { agentDir: './agent-under-test' });
       assert.equal((result as { agentId: string }).agentId, 'debug-agent');
       // 全局注册收口：claw run 消费的注册表同步生成记录
       const globalRegistration = (result as { globalRegistration?: { ok: boolean; id?: string } }).globalRegistration;
       assert.equal(globalRegistration?.ok, true);
       assert.equal(globalRegistration?.id, 'debug-agent');
-      const registryRaw = JSON.parse(await fs.readFile(join(workspaceDir, 'agent-registry.json'), 'utf8')) as { agents: Array<{ id: string; studioProjectDir?: string }> };
+      const registryRaw = JSON.parse(await fs.readFile(agentRegistryPath, 'utf8')) as { agents: Array<{ id: string; studioProjectDir?: string }> };
       const record = registryRaw.agents.find((entry) => entry.id === 'debug-agent');
       assert.ok(record, 'global registry contains debug-agent');
-      assert.equal(record?.studioProjectDir, projectDir);
-      const loaded = await exec('studio_get_project');
-      assert.equal((loaded as { project: { agent?: { metadataPath: string } } }).project.agent?.metadataPath, join(agentDir, 'metadata.json'));
+      assert.equal(record?.studioProjectDir, studioDir);
+      const loaded = await exec('studio_get_directory');
+      assert.equal((loaded as { manifest: { agent?: { metadataPath: string } } }).manifest.agent?.metadataPath, join(agentDir, 'metadata.json'));
     });
 
-    it('reports global registration failure without blocking project-level registration', async () => {
+    it('reports global registration failure without blocking directory-level registration', async () => {
       // 内建 plain Agent 冲突判定 = PROJECT_ROOT/agents/<id>/agent.js 存在（server/feature-runtime/agent-registry.js）。
       // 与 test/feature-runtime.test.js 同一规范：用临时内建目录验证，不依赖任何具体内建 agent 存在。
       // 用 process.cwd() 定位仓库根：test:features 与 node --test 均在仓库根运行，绕开 src/dist 编译深度的差异。
@@ -534,15 +623,15 @@ describe('AgentStudioFeature', () => {
       try {
         await fs.writeFile(join(builtinDir, 'agent.js'), 'export default class BuiltinConflict {}\n');
 
-        const agentDir = join(projectDir, 'builtin-id-agent');
+        const agentDir = join(studioDir, 'builtin-id-agent');
         await fs.mkdir(agentDir, { recursive: true });
         await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({
           id: builtinId, entry: './agent.js', deployment: { kind: 'standalone' }, features: [],
         }));
         await fs.writeFile(join(agentDir, 'agent.js'), 'export default class Coder {}\n');
-        await exec('studio_initialize_project', { projectDir, name: 'builtin-id-project' });
+        const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, studioDir);
         const result = await exec('studio_register_agent', { agentDir: './builtin-id-agent' });
-        // 项目内登记不受影响
+        // 目录内登记不受影响
         assert.equal((result as { agentId: string }).agentId, builtinId);
         // 全局注册显式失败并给出指引（ID 与内建 plain Agent 冲突）
         const globalRegistration = (result as { globalRegistration?: { ok: boolean; error?: string; hint?: string } }).globalRegistration;
@@ -555,13 +644,13 @@ describe('AgentStudioFeature', () => {
     });
 
     it('rejects built-in metadata before attempting an agent-debug runtime', async () => {
-      const agentDir = join(projectDir, 'built-in-agent');
+      const agentDir = join(studioDir, 'built-in-agent');
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({
         id: 'built-in-agent', entry: './agent.js', features: ['todo'],
       }));
-      await fs.writeFile(join(agentDir, 'agent.js'), 'export default class BuiltInAgent {}\\n');
-      await exec('studio_initialize_project', { projectDir, name: 'built-in-project' });
+      await fs.writeFile(join(agentDir, 'agent.js'), 'export default class BuiltInAgent {}\n');
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, studioDir);
 
       await assert.rejects(
         () => exec('studio_register_agent', { agentDir: './built-in-agent' }),
@@ -570,6 +659,7 @@ describe('AgentStudioFeature', () => {
     });
 
     it('rejects invalid assertion definitions with precise errors', async () => {
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, studioDir);
       await assert.rejects(
         () => exec('studio_define_test', {
           id: 'bad', title: 't', input: 'i',
@@ -580,6 +670,7 @@ describe('AgentStudioFeature', () => {
     });
 
     it('studio_run_test without a running runtime throws', async () => {
+      const exec = execAt({ workspaceDir, statePath, agentRegistryPath }, studioDir);
       await assert.rejects(
         () => exec('studio_run_test', { testId: 'allow-create' }),
         /studio_start_runtime/,
@@ -587,27 +678,47 @@ describe('AgentStudioFeature', () => {
     });
   });
 
+  describe('session feature binding', () => {
+    it('skips explicitly when the host injects no session identity', async () => {
+      const feature = new AgentStudioFeature({ workspaceDir: studioDir, statePath });
+      const result = await feature.appendSessionFeatureBinding(['some-feature']);
+      assert.equal(result.ok, false);
+      assert.equal(result.skipped, true);
+    });
+
+    it('surfaces the error when the binding endpoint is unreachable', async () => {
+      const feature = new AgentStudioFeature({
+        workspaceDir: studioDir,
+        statePath,
+        sessionId: 'session-1',
+        agentId: 'agent-studio',
+        serverOrigin: 'http://127.0.0.1:9',
+      });
+      const result = await feature.appendSessionFeatureBinding(['some-feature']);
+      assert.equal(result.ok, false);
+      assert.ok(result.error, 'error message present');
+    });
+  });
+
   describe('state and injection', () => {
-    it('captureState/restoreState preserves active project directory', async () => {
-      const feature = new AgentStudioFeature({ workspaceDir, statePath: join(workspaceDir, 'state.json') });
-      await exec('studio_initialize_project', { projectDir, name: 'demo' });
-      // simulate the feature having an active project
-      const captured = { activeProjectDir: projectDir };
-      feature.restoreState(captured);
-      const project = await exec('studio_get_project');
-      assert.equal((project as { projectDir: string }).projectDir, projectDir);
-      assert.deepEqual(feature.captureState(), captured);
+    it('captureState/restoreState preserves the active directory', async () => {
+      const feature = new AgentStudioFeature({ workspaceDir, statePath });
+      feature.restoreState({ activeProjectDir: studioDir });
+      const exec = bindTools(feature);
+      const loaded = await exec('studio_get_directory');
+      assert.equal((loaded as { directory: string }).directory, studioDir);
+      assert.deepEqual(feature.captureState(), { activeProjectDir: studioDir });
     });
 
     it('injectProjectState skips empty-input pre-inject to avoid double injection', async () => {
-      const feature = new AgentStudioFeature({ workspaceDir, statePath: join(workspaceDir, 'state.json') });
+      const feature = new AgentStudioFeature({ workspaceDir: studioDir, statePath });
       const added: Array<{ role: string; content: string }> = [];
       const fakeContext = { add: (entry: { role: string; content: string }) => { added.push(entry); } };
       await feature.injectProjectState({ input: '', context: fakeContext } as never);
       assert.equal(added.length, 0);
       await feature.injectProjectState({ input: '创建工单', context: fakeContext } as never);
       assert.equal(added.length, 1);
-      assert.ok(added[0].content.includes('Agent Studio 项目状态'));
+      assert.ok(added[0].content.includes('当前目录与 Feature 状态'));
     });
   });
 });

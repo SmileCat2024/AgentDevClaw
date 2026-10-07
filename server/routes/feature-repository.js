@@ -26,7 +26,7 @@ function normalizeFeatureRequirements(raw = {}) {
 }
 
 function normalizeFeatureTypes(values) {
-  const allowed = new Set(['tools', 'mcp', 'hooks', 'control', 'rollback']);
+  const allowed = new Set(['tools', 'mcp', 'hooks', 'control', 'rollback', 'ability', 'governance', 'interface', 'system']);
   return uniqueStrings(values).filter((value) => allowed.has(value));
 }
 
@@ -62,6 +62,34 @@ function inferFeatureTypes(pkg, baseId) {
     return ['hooks', 'control'];
   }
   return [];
+}
+
+export function normalizeClawManifestV2(pkg) {
+  const raw = pkg?.agentdev;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.schemaVersion !== 2) return null;
+  if (typeof raw.id !== 'string' || !raw.id.trim()) return null;
+  const displayName = raw.displayName && typeof raw.displayName === 'object'
+    ? raw.displayName
+    : null;
+  return {
+    id: typeof raw.id === 'string' ? raw.id.trim() : '',
+    name: typeof displayName?.zh === 'string' ? displayName.zh.trim() : (typeof raw.id === 'string' ? raw.id.trim() : ''),
+    displayName, 
+    type: typeof raw.type === 'string' ? raw.type.trim() : '',
+    capabilities: uniqueStrings(raw.capabilities),
+    provides: raw.provides && typeof raw.provides === 'object' && !Array.isArray(raw.provides) ? raw.provides : null,
+    depends: Array.isArray(raw.depends) ? raw.depends : [],
+    version: typeof pkg.version === 'string' ? pkg.version.trim() : '',
+    description: typeof pkg.description === 'string' ? pkg.description.trim() : '',
+    tags: uniqueStrings(pkg.keywords),
+    entry: typeof pkg.main === 'string' ? pkg.main.trim() : '',
+    homepage: typeof pkg.homepage === 'string' ? pkg.homepage.trim() : '',
+    repository: typeof pkg.repository === 'string' ? pkg.repository.trim() : (typeof pkg.repository?.url === 'string' ? pkg.repository.url.trim() : ''),
+    agentdev: { compatible: typeof pkg.engines?.agentdev === 'string' ? pkg.engines.agentdev.trim() : '' },
+    featureTypes: typeof raw.type === 'string' ? [raw.type.trim()] : [],
+    compatibility: normalizeFeatureCompatibility(raw.compatibility, []),
+    requirements: normalizeFeatureRequirements(raw.requirements),
+  };
 }
 
 function inferFeatureManifest(pkg, archiveName) {
@@ -235,16 +263,18 @@ async function summarizeFeatureArchive(archivePath, archiveName, source = 'custo
     manifest = null;
   }
 
-  const normalizedManifest = manifest || inferFeatureManifest(pkg, archiveName);
+  const v2Manifest = normalizeClawManifestV2(pkg);
+  const normalizedManifest = v2Manifest || manifest || inferFeatureManifest(pkg, archiveName);
   const inferredFeatureTypes = inferFeatureTypes(pkg, normalizedManifest.id || pkg.name || archiveName);
   const featureTypes = normalizeFeatureTypes(normalizedManifest.featureTypes || inferredFeatureTypes);
-  if (!manifest) {
-    warnings.push(`缺少 ${FEATURE_MANIFEST_NAME}，当前仅展示 package.json 推断信息。`);
+  if (!v2Manifest && !manifest) {
+    warnings.push(`缺少 Claw Manifest v2（package.json.agentdev）；当前仅展示有限推断信息。`);
   }
 
   return {
     id: String(normalizedManifest.id || pkg.name || archiveName.replace(/\.tgz$/i, '')).trim(),
-    name: String(normalizedManifest.name || normalizedManifest.id || pkg.name || archiveName.replace(/\.tgz$/i, '')).trim(),
+    name: String(normalizedManifest.name || normalizedManifest.id || pkg.name || archiveName.replace(/\\.tgz$/i, '')).trim(),
+    displayName: v2Manifest?.displayName || null,
     packageName: String(pkg.name || '').trim(),
     description: String(normalizedManifest.description || pkg.description || '').trim(),
     latestVersion: String(normalizedManifest.version || pkg.version || '').trim(),
@@ -254,6 +284,10 @@ async function summarizeFeatureArchive(archivePath, archiveName, source = 'custo
     size: stat.size,
     tags: uniqueStrings([...(normalizedManifest.tags || []), ...(pkg.keywords || [])]),
     featureTypes,
+    type: v2Manifest?.type || '',
+    capabilities: v2Manifest?.capabilities || [],
+    provides: v2Manifest?.provides || null,
+    depends: v2Manifest?.depends || [],
     compatibility: normalizeFeatureCompatibility(normalizedManifest.compatibility, featureTypes),
     requirements: normalizeFeatureRequirements(normalizedManifest.requirements),
     homepage: typeof normalizedManifest.homepage === 'string' ? normalizedManifest.homepage.trim() : '',
@@ -318,17 +352,19 @@ export async function summarizeFeatureRepository(rawPath, source) {
         manifest = null;
       }
 
-      const normalizedManifest = manifest || inferFeatureManifest(pkg, entry.name);
-      const inferredFeatureTypes = inferFeatureTypes(pkg, normalizedManifest.id || pkg.name || entry.name);
-      const featureTypes = normalizeFeatureTypes(normalizedManifest.featureTypes || inferredFeatureTypes);
-      const warnings = [];
-      if (!manifest) {
-        warnings.push(`缺少 ${FEATURE_MANIFEST_NAME}，当前仅展示 package.json 推断信息。`);
-      }
+        const v2Manifest = normalizeClawManifestV2(pkg);
+        const normalizedManifest = v2Manifest || manifest || inferFeatureManifest(pkg, entry.name);
+        const inferredFeatureTypes = inferFeatureTypes(pkg, normalizedManifest.id || pkg.name || entry.name);
+        const featureTypes = normalizeFeatureTypes(normalizedManifest.featureTypes || inferredFeatureTypes);
+        const warnings = [];
+        if (!v2Manifest && !manifest) {
+          warnings.push('缺少 Claw Manifest v2（package.json.agentdev）；当前仅展示有限推断信息。');
+        }
 
       return {
-        id: String(normalizedManifest.id || pkg.name || entry.name.replace(/\.tgz$/i, '')).trim(),
-        name: String(normalizedManifest.name || normalizedManifest.id || pkg.name || entry.name.replace(/\.tgz$/i, '')).trim(),
+        id: String(normalizedManifest.id || pkg.name || entry.name.replace(/\\.tgz$/i, '')).trim(),
+        name: String(normalizedManifest.name || normalizedManifest.id || pkg.name || entry.name.replace(/\\.tgz$/i, '')).trim(),
+        displayName: v2Manifest?.displayName || null,
         packageName: String(pkg.name || '').trim(),
         description: String(normalizedManifest.description || pkg.description || '').trim(),
         version: String(normalizedManifest.version || pkg.version || '').trim(),
@@ -336,6 +372,10 @@ export async function summarizeFeatureRepository(rawPath, source) {
         size: stat.size,
         tags: uniqueStrings([...(normalizedManifest.tags || []), ...(pkg.keywords || [])]),
         featureTypes,
+        type: v2Manifest?.type || '',
+        capabilities: v2Manifest?.capabilities || [],
+        provides: v2Manifest?.provides || null,
+        depends: v2Manifest?.depends || [],
         compatibility: normalizeFeatureCompatibility(normalizedManifest.compatibility, featureTypes),
         requirements: normalizeFeatureRequirements(normalizedManifest.requirements),
         homepage: typeof normalizedManifest.homepage === 'string' ? normalizedManifest.homepage.trim() : '',
@@ -382,6 +422,11 @@ export async function summarizeFeatureRepository(rawPath, source) {
         size: latest.size,
         tags: uniqueStrings(versions.flatMap((item) => item.tags || [])),
         featureTypes: latest.featureTypes || [],
+        displayName: latest.displayName || null,
+        type: latest.type || '',
+        capabilities: latest.capabilities || [],
+        provides: latest.provides || null,
+        depends: latest.depends || [],
         compatibility: latest.compatibility || normalizeFeatureCompatibility({}, latest.featureTypes || []),
         requirements: latest.requirements || normalizeFeatureRequirements(),
         homepage: latest.homepage,

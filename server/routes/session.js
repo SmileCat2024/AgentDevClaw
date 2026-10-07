@@ -30,6 +30,7 @@ import {
 import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
 import { renderConversationHtml } from '../conversation-renderer.js';
 import { readWorkspaceState } from './workspace.js';
+import { cleanStudioFeatureIds } from './session-helpers-pure.js';
 import { runInProcessSummary } from '../context-continuity/inprocess-summary.js';
 import { createOperationTrace } from '../shared/operation-trace.js';
 import { resolveAgentTarget, resolveSessionTarget } from '../shared/operation-target.js';
@@ -951,7 +952,7 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       agentName: req.body.agentName,
       projectName: req.body.projectName,
       openDirectory: req.body.openDirectory,
-      studioProjectId: req.body.studioProjectId,
+      studioFeatureIds: req.body.studioFeatureIds,
       targetDir: req.body.targetDir,
     });
     // createPrebuiltSession 透传 commit 后的 index revision，免去紧随其后的
@@ -1054,6 +1055,52 @@ app.put('/protoclaw/prebuilt_sessions/:sessionId/title', express.json(), async (
         upsert: updatedSession ? [updatedSession] : [],
         remove: [],
       },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// 会话 ↔ feature 绑定追加（ADR-0022）：agent-studio 运行时 feature 在
+// studio_create_feature / studio_add_feature 落地后，把 feature id 追加到
+// 当前会话记录。窄口径端点——只允许 append studioFeatureIds，不接受任意
+// 元数据写入。调用方是本机 runtime 子进程（PROTOCLAW_SERVER_ORIGIN），
+// 不走远程转发路径。
+app.post('/protoclaw/prebuilt_sessions/:sessionId/studio_feature_binding', express.json(), async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.body?.agentId);
+    const featureIds = Array.isArray(req.body?.featureIds) ? req.body.featureIds : null;
+    const sessionId = cleanSessionText(req.params.sessionId);
+    if (!agentId) {
+      return res.status(400).json({ error: 'agentId is required' });
+    }
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId is required' });
+    }
+    const ids = cleanStudioFeatureIds(featureIds);
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'featureIds must be a non-empty array of non-empty strings' });
+    }
+    const updatedIndex = await updateSessionIndex(agentId, (index) => {
+      const record = index.sessions.find(s => s.id === sessionId);
+      if (!record) {
+        throw Object.assign(new Error('Session not found'), { statusCode: 404 });
+      }
+      const existing = Array.isArray(record.metadata?.studioFeatureIds) ? record.metadata.studioFeatureIds : [];
+      record.metadata = {
+        ...(record.metadata || {}),
+        studioFeatureIds: cleanStudioFeatureIds([...existing, ...ids]),
+      };
+      record.updatedAt = new Date().toISOString();
+      return index;
+    });
+    const updatedSession = updatedIndex.sessions.find(s => s.id === sessionId) || null;
+    res.json({
+      protocolVersion: 2,
+      ok: true,
+      sessionId,
+      studioFeatureIds: updatedSession?.metadata?.studioFeatureIds || [],
+      revision: Number(updatedIndex.revision) || 0,
     });
   } catch (error) {
     next(error);

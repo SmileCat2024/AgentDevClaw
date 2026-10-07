@@ -342,6 +342,13 @@ export function normalizeSessionMetadata(raw = {}) {
     return {};
   }
 
+  // studioFeatureIds（会话 ↔ feature 绑定，ADR-0022）：数组形态的例外字段。
+  // 就地清洗（trim/去重）而非引 session-helpers-pure 的 cleanStudioFeatureIds，
+  // 后者 import 本模块，反向引会成环。
+  const studioFeatureIds = Array.isArray(raw.studioFeatureIds)
+    ? [...new Set(raw.studioFeatureIds.map(id => cleanSessionText(id)).filter(Boolean))]
+    : [];
+
   const metadata = {
     resumeMode: cleanSessionText(raw.resumeMode),
     sourceAgentId: cleanSessionText(raw.sourceAgentId),
@@ -350,11 +357,15 @@ export function normalizeSessionMetadata(raw = {}) {
     handoffPath: cleanSessionText(raw.handoffPath),
     handoffCreatedAt: cleanSessionText(raw.handoffCreatedAt),
     handoffSummaryKind: cleanSessionText(raw.handoffSummaryKind),
+    studioFeatureIds,
+    // legacy 透传（ADR-0022）：存量索引的 studioProjectId 由启动迁移
+    // （studio-feature-migration.js）换算为 studioFeatureIds 后删除；透传保证
+    // 迁移能看到落盘的旧字段。新代码不再写入此字段，迁移完成后自然消亡。
     studioProjectId: cleanSessionText(raw.studioProjectId),
   };
 
   return Object.fromEntries(
-    Object.entries(metadata).filter(([, value]) => value),
+    Object.entries(metadata).filter(([, value]) => (Array.isArray(value) ? value.length > 0 : value)),
   );
 }
 

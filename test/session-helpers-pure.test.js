@@ -362,12 +362,12 @@ describe('extractLastMessagePreview', () => {
 // ── buildLightPrebuiltSessionRecord ───────────────────────────────
 
 describe('buildLightPrebuiltSessionRecord', () => {
-  it('projects Studio project identity from session metadata', () => {
+  it('projects Studio feature bindings from session metadata', () => {
     const result = buildLightPrebuiltSessionRecord('agent-studio', {
       id: 'session-studio',
-      metadata: { studioProjectId: 'studio-project-1' },
+      metadata: { studioFeatureIds: ['my-feature', 'other-feature'] },
     });
-    assert.equal(result.studioProjectId, 'studio-project-1');
+    assert.deepEqual(result.studioFeatureIds, ['my-feature', 'other-feature']);
   });
 
   it('builds a complete record from a well-formed index entry', () => {
@@ -543,11 +543,11 @@ describe('wire session projection', () => {
     assert.equal(original.metadata.source, 'legacy');
   });
 
-  it('preserves Studio project association while trimming unrelated metadata', () => {
+  it('preserves Studio feature bindings while trimming unrelated metadata', () => {
     const trimmed = trimSessionRecordForWire(record('s2', {
-      metadata: { studioProjectId: 'studio-project-1', source: 'x' },
+      metadata: { studioFeatureIds: ['my-feature'], source: 'x' },
     }));
-    assert.deepEqual(trimmed.metadata, { studioProjectId: 'studio-project-1' });
+    assert.deepEqual(trimmed.metadata, { studioFeatureIds: ['my-feature'] });
   });
 
   it('drops metadata entirely when no retained fields are present', () => {
@@ -555,14 +555,14 @@ describe('wire session projection', () => {
     assert.deepEqual(trimmed.metadata, {});
   });
 
-  it('filters Studio conversations by explicit project identity', () => {
+  it('filters Studio conversations by feature binding', () => {
     const sessions = [
-      record('project-session', { studioProjectId: 'studio-a', openDirectory: '/shared' }),
-      record('other-project-session', { studioProjectId: 'studio-b', openDirectory: '/shared' }),
+      record('feature-session', { studioFeatureIds: ['feature-a', 'feature-b'], openDirectory: '/shared' }),
+      record('other-feature-session', { studioFeatureIds: ['feature-c'], openDirectory: '/shared' }),
       record('unlinked-session', { openDirectory: '/shared' }),
     ];
-    const page = sliceSessionsForWire(sessions, { studioProjectId: 'studio-a' });
-    assert.deepEqual(page.slice.map((session) => session.id), ['project-session']);
+    const page = sliceSessionsForWire(sessions, { studioFeatureId: 'feature-a' });
+    assert.deepEqual(page.slice.map((session) => session.id), ['feature-session']);
   });
 
   it('filters by project directory with separator and case normalization', () => {

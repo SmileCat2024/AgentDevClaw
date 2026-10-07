@@ -721,6 +721,10 @@ SessionLifecycle.prototype.start = async function () {
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
     runtime: this.runtime,
+    // 会话身份由宿主一次性注入（ADR-0022）：feature 据此向 server 回写会话级绑定
+    agentId,
+    sessionId: this.sessionId || undefined,
+    serverOrigin: SERVER_ORIGIN,
     // contextGuard 只是首轮调用前的兜底种子（启动预设的窗口期快照）；
     // 阈值真相是会话当前模型的 live meta，feature 每轮 CallStart /
     // onLLMSwap 都会重算，不依赖这里的快照。

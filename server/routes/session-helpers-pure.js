@@ -19,6 +19,24 @@ import {
 export const META_VERSION = 1;
 
 /**
+ * Clean a list of studio feature ids (session ↔ feature binding, ADR-0022).
+ * Trims, drops empties, dedupes while preserving first-seen order.
+ */
+export function cleanStudioFeatureIds(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const ids = [];
+  for (const item of raw) {
+    const id = cleanSessionText(item);
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/**
  * Extract token usage from a parsed session file object.
  *
  * @param {object} parsed - parsed session JSON (may have runtime.usageStats)
@@ -335,7 +353,7 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
     archived: record?.archived === true,
     todo: record?.todo === true,
     metadata,
-    studioProjectId: cleanSessionText(metadata.studioProjectId),
+    studioFeatureIds: cleanStudioFeatureIds(metadata.studioFeatureIds),
     formId: cleanSessionText(record?.formId) || '',
     openDirectory: cleanSessionText(record?.openDirectory),
     createdAt: cleanSessionText(record?.createdAt) || new Date().toISOString(),
@@ -406,12 +424,14 @@ function normalizeProjectDirForCompare(dir) {
 export function trimSessionRecordForWire(record) {
   if (!record || typeof record !== 'object') return record;
   const resumeMode = String(record?.metadata?.resumeMode || '').trim();
-  const studioProjectId = String(record?.studioProjectId || record?.metadata?.studioProjectId || '').trim();
+  const studioFeatureIds = cleanStudioFeatureIds(
+    Array.isArray(record?.studioFeatureIds) ? record.studioFeatureIds : record?.metadata?.studioFeatureIds,
+  );
   const next = { ...record };
   delete next.path;
   next.metadata = {
     ...(resumeMode ? { resumeMode } : {}),
-    ...(studioProjectId ? { studioProjectId } : {}),
+    ...(studioFeatureIds.length > 0 ? { studioFeatureIds } : {}),
   };
   return next;
 }
@@ -422,6 +442,7 @@ export function trimSessionRecordForWire(record) {
  * 过滤顺序与语义：
  *   - projectDir: 归一化目录相等（反斜杠→斜杠、忽略大小写、去尾斜杠），
  *     与前端项目桶 id 的归一化规则一致
+ *   - studioFeatureId: 会话绑定数组包含该 feature id（feature 详情页会话列表）
  *   - archived: 'main'（archived !== true）| 'archived'（=== true）| 缺省全部
  *   - query: title / openDirectory 子串（大小写不敏感）
  *
@@ -447,8 +468,8 @@ export function sliceSessionsForWire(sessions, options = {}) {
   const filtered = [];
   for (const session of source) {
     if (excludeSessionTypes && excludeSessionTypes.has(String(session?.sessionType || 'main'))) continue;
-    if (options.studioProjectId !== undefined
-      && cleanSessionText(session?.studioProjectId) !== cleanSessionText(options.studioProjectId)) continue;
+    if (options.studioFeatureId !== undefined
+      && !cleanStudioFeatureIds(session?.studioFeatureIds).includes(cleanSessionText(options.studioFeatureId))) continue;
     if (normalizedProject
       && normalizeProjectDirForCompare(session?.openDirectory) !== normalizedProject) continue;
     // 徽标计数：当前项目内 main/archived 真实总数，不受 tab/query 过滤影响

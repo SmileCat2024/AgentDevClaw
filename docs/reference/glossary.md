@@ -22,7 +22,8 @@
 - **prebuilt agent** — 预制 agent（`prebuilt-agents/*/*/agent.js`），由 Claw server 托管为子进程，有工作空间。
 - **plain agent** — `claw` CLI 直调的轻量装配，无工作空间、不依赖 Claw server，`agents/` 注册制。
   _Avoid_: 说"Claw 里的 agent"时不区分这两种形态——归属判定完全不同。
-- **studio runtime**（`studio-sandbox:<项目名>`）— agent-studio 的 Test Runtime 子进程，跑被测 Feature，出现在左侧 Agent 列表但可看不可输入。
+- **studio runtime**（`studio-sandbox:<目录名>`）— agent-studio 的 Test Runtime 子进程，跑被测 Feature，出现在左侧 Agent 列表但可看不可输入。
+  _Avoid_: 说「Studio 项目」——没有这个概念；feature 是一级实体，目录只是运行环境（ADR-0022）。
 - **child runtime** — 被托管的运行实例，侧栏叶子的唯一来源。
   _Avoid_: 把 prebuilt 历史会话索引当侧栏叶子。
 

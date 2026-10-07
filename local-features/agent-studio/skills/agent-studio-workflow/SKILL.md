@@ -1,13 +1,17 @@
 ---
 name: agent-studio-workflow
-description: Use when developing a Feature, defining its tests, or running Test Runtime verification in an Agent Studio project.
+description: Use when developing a Feature, defining its tests, or running Test Runtime verification in an Agent Studio workspace.
 ---
 
 # Agent Studio Workflow
 
 ## Start from conversation
 
-The injected "Agent Studio 项目状态" block shows the current project each turn. When a project is already active, continue with it; do not re-ask for directory or name. When there is none, confirm in conversation what to build, which directory it lives in, and whether a target Agent is involved. Call `studio_initialize_project` once clear, then keep working. Before using Node/npm for development, call `studio_detect_environment`, show the available bundled/system combinations to the user, and record their choice with `studio_select_toolchain`. If none fits, ask for the user's existing Node/npm paths or let them install a toolchain and detect again. If the chosen pair becomes unavailable, ask again rather than silently switching. For framework or host source work, inspect the current project, installed packages and existing local repositories first; when additional source is actually needed, agree on a location with the user before using Git/Shell to clone it. Never assume a neighboring source checkout or require one for ordinary Feature development.
+The injected "当前目录与 Feature 状态" block shows the session working directory and its features each turn. When the directory already has features in development, continue with them; do not re-ask for the directory. When no goal is clear, confirm in conversation what capability to build and whether a target Agent is involved. The directory manifest (agent-studio.json) is created lazily by the first `studio_select_toolchain`, `studio_start_runtime`, or `studio_create_feature` call — there is no initialization step in conversation. Before using Node/npm for development, call `studio_detect_environment`, show the available bundled/system combinations to the user, and record their choice with `studio_select_toolchain`. If none fits, ask for the user's existing Node/npm paths or let them install a toolchain and detect again. If the chosen pair becomes unavailable, ask again rather than silently switching. For framework or host source work, inspect the current directory, installed packages and existing local repositories first; when additional source is actually needed, agree on a location with the user before using Git/Shell to clone it. Never assume a neighboring source checkout or require one for ordinary Feature development.
+
+Before implementing a distributable Feature, follow [the Claw Feature package metadata contract](references/feature-package-metadata.md). The Claw repository owns that metadata contract; keep its tooling, templates and docs in Claw rather than changing the AgentDev framework. Fill `package.json.agentdev` from observed implementation before packaging; never rely on packager inference from the package name.
+
+Features are first-class entities across directories: their status, verification evidence and snapshots live in a global registry. `studio_create_feature` / `studio_add_feature` automatically bind the feature to the current session, and conversations started from a feature card are pre-bound; never maintain this relation by hand.
 
 ## Choose the verification level first
 
@@ -27,9 +31,8 @@ Neither mode validates HTTP routes, front-end panels, session IPC, or a prebuilt
 Standard order:
 
 ```text
-studio_initialize_project   create/update agent-studio.json
 studio_detect_environment   detect usable Node/npm combinations
-studio_select_toolchain    save the user's choice for this project
+studio_select_toolchain    save the user's choice; first call lazily creates the directory manifest
 studio_create_feature       create, install, and register a standard npm Feature project
 (write src/ implementation)
 studio_define_test          save a test: input + session policy + executable assertions
@@ -47,7 +50,7 @@ For a standalone assembly check, call `studio_register_agent`, then `studio_star
 
 Only an implementation-only Feature edit is eligible for `studio_run_test` hot reload. If package name, `package.json.main`, export, `static inject`, Agent metadata, or Agent source changes, call `studio_stop_runtime` and start `agent-debug` again to rebuild the Runtime plan. Do not treat an assembly-shape change as a normal reload.
 
-`studio_add_feature { projectDir }` registers an existing standard Feature project. `studio_add_feature { name, modulePath }` remains for legacy ESM modules only; legacy modules can be tested but cannot create a Snapshot. Auxiliary: `studio_get_project`, `studio_remove_feature`, `studio_list_tests`.
+`studio_add_feature { projectDir }` registers an existing standard Feature project; re-registering the same package name at a new path moves it — status and verification ledgers survive when the source digest is unchanged. `studio_add_feature { name, modulePath }` remains for legacy ESM modules only; legacy modules can be tested but cannot create a Snapshot. Auxiliary: `studio_get_directory`, `studio_remove_feature`, `studio_list_tests`.
 
 ### Feature project requirements
 
@@ -57,6 +60,7 @@ Default development form is a standard npm Feature project created by `studio_cr
 - Never edit files under `dist/`, `node_modules/`, or any other build output. Hand-patching build output never affects an already-running Runtime (module cache) and is silently wiped by the next build; always fix `src/` and let `npm run build` produce the output.
 - `studio_run_test` synchronously runs `npm run build` before comparing the built entry digest and hot-reloading. Do not run `npm pack` for ordinary edit/test iterations.
 - The class instance's `name` is the kebab-case Feature name generated by the scaffold.
+- `studio_create_feature` requires Claw Manifest v2 metadata and writes it to `package.json.agentdev`. Follow [the package metadata contract](references/feature-package-metadata.md); this is Claw-owned metadata, and its producer / docs remain in the Claw repository.
 - Runtime dependencies belong in `dependencies`; tooling belongs in `devDependencies`. `tsup` externalizes declared runtime dependencies, so an import placed only in `devDependencies` may be bundled unexpectedly.
 - Registration order is free: the Runtime assembles in `static inject` dependency order automatically. Cycles or missing dependencies fail at start/sync with the full dependency graph in the error.
 
@@ -159,7 +163,7 @@ Notes:
 - The Runtime runs in the project directory environment; file, shell, and network effects are real.
 - Sessions and checkpoints live under the project's `.agent-studio/` directory; the stateful session survives stop/start.
 - Each `studio_run_test` first syncs source: new Features are mounted, changed modules hot-reload. A reload or init failure rolls back to the last working revision automatically; the Runtime stays testable.
-- The Runtime appears in the left-side agent list as `studio-sandbox:<project>`; users can view its session but cannot type into it — test input comes only from `studio_run_test`. Its logs join the debug stream tagged `studio-run:<runId>`, so debugging tools can filter records for a single test run.
+- The Runtime appears in the left-side agent list as `studio-sandbox:<directory>`; users can view its session but cannot type into it — test input comes only from `studio_run_test`. Its logs join the debug stream tagged `studio-run:<runId>`, so debugging tools can filter records for a single test run.
 
 ## Reading run results
 

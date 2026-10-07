@@ -12245,6 +12245,9 @@ body[data-theme="light"] .rcm-tunnel-diag summary { color: var(--text-secondary)
   font-size: 16px;
   border-bottom-width: 3px;
 }
+.studio-feature-detail-back {
+  margin: -8px 0 12px;
+}
 
 /* ── Session reference（会话引用：+ 菜单 / pill / 弹窗 / 拖拽） ────── */
 

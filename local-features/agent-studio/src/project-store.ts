@@ -1,18 +1,23 @@
-// ── 项目档案 / registry / runs 持久化 + normalize 层 ──────────
+// ── 目录环境清单（agent-studio.json，schema 5）持久化 + normalize 层 ──
 //
-// 从 index.ts 原样迁出。项目模型（AgentStudioProject）与磁盘形态
-// （agent-studio.json / projects.json / runs.json）的读写都收敛在本模块。
+// feature-first 模型（ADR-0022）下的分工：
+//   - 本模块：目录级环境——工具链、测试定义、Test Runtime 状态、agent-debug
+//     登记。清单文件落在 Studio 目录内，只描述"这个目录的环境"。
+//   - feature-store.ts：feature 级记账——状态机、验证账本、快照，跨目录
+//     收敛在全局 features.json。
+//
+// schema 4（旧"项目"档案）的读取兼容在 normalize 层完成：features[] 交还
+// 调用方迁移进全局注册表，name/goal/environment/projectDir 直接丢弃。
 
-import os from 'os';
-import { createHash, randomUUID } from 'crypto';
+import { homedir } from 'os';
 import { promises as fs } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve as resolvePath } from 'path';
 import type { StudioFeatureVerification, StudioTestCase, StudioRunRecord } from './assertions.js';
 import { normalizeTestCase, type StudioFeatureCoverage } from './assertions.js';
 import { cleanValue } from './clean-value.js';
 
 export type TestRuntimeStatus = 'not-provisioned' | 'running' | 'stopped';
-export interface StudioToolchain { source: 'bundled' | 'system' | 'custom'; nodePath: string; npmPath: string };
+export interface StudioToolchain { source: 'bundled' | 'system' | 'custom'; nodePath: string; npmPath: string }
 
 export interface StudioFeatureSource {
   kind: 'project';
@@ -48,17 +53,12 @@ export interface StudioAgentDefinition {
   metadataPath: string;
 }
 
-export interface AgentStudioProject {
-  schemaVersion: 4;
-  id: string;
-  projectDir?: string;
-  name: string;
-  environment?: { kind: string; address: string };
+/** schema 5：目录环境清单 */
+export interface StudioEnvironmentManifest {
+  schemaVersion: 5;
   toolchain?: StudioToolchain;
-  goal: string;
-  targetAgent: string;
   agent?: StudioAgentDefinition;
-  features: StudioFeatureEntry[];
+  targetAgent: string;
   testRuntime: {
     status: TestRuntimeStatus;
   };
@@ -67,31 +67,29 @@ export interface AgentStudioProject {
   updatedAt: string;
 }
 
+/** 磁盘上可能的旧形态（schema ≤ 4）：多出的字段在读取时剥离 */
+export interface StudioManifestFile {
+  raw?: Record<string, unknown>;
+  manifest: StudioEnvironmentManifest;
+  /** schema ≤ 4 档案里的 features[]，交还调用方迁移进全局注册表 */
+  legacyFeatures: StudioFeatureEntry[];
+}
+
 export interface WorkspaceState {
   forms?: Record<string, Record<string, string>>;
   openDirectory?: string;
 }
 
-export interface StudioProjectEntry {
-  id: string;
-  projectDir: string;
-  environment?: { kind: string; address: string };
-  name: string;
-  goal: string;
-  targetAgent: string;
-  updatedAt: string;
-}
-
 // ── 常量 ──────────────────────────────────────────────────────
 
-export const PROJECT_FILE_NAME = 'agent-studio.json';
-export const REGISTRY_FILE_NAME = 'projects.json';
+export const MANIFEST_FILE_NAME = 'agent-studio.json';
+export const LEGACY_REGISTRY_FILE_NAME = 'projects.json';
 export const RUNS_DIR_NAME = '.agent-studio';
 export const RUNS_FILE_NAME = 'runs.json';
 export const RUNS_KEEP_COUNT = 30;
 export const RUNS_RESULT_TRUNCATE = 2000;
 
-// ── 项目文件读写 ──────────────────────────────────────────────
+// ── 清单读写 ──────────────────────────────────────────────────
 
 export function normalizeFeatureStatus(value: unknown): StudioFeatureStatus {
   return value === 'mounted' || value === 'verified' || value === 'snapshotted' ? value : 'implemented';
@@ -161,62 +159,70 @@ export function normalizeTestRuntimeStatus(value: unknown): TestRuntimeStatus {
 // 直接复用）：AGENTDEV_DATA_DIR 仅用于多实例/测试场景，未设置时保持默认布局。
 export function resolveUserDataDir(): string {
   const override = process.env.AGENTDEV_DATA_DIR?.trim();
-  return override ? resolve(override) : join(os.homedir(), '.agentdev', 'AgentDevClaw');
+  return override ? resolvePath(override) : join(homedir(), '.agentdev', 'AgentDevClaw');
 }
 
 export function getDefaultStatePath(): string {
   return join(resolveUserDataDir(), 'workspaces', 'agent-studio', 'state.json');
 }
 
-export function getProjectPath(projectDir: string): string {
-  return join(projectDir, PROJECT_FILE_NAME);
+export function getManifestPath(directory: string): string {
+  return join(directory, MANIFEST_FILE_NAME);
 }
 
-export function normalizeProject(raw: Partial<AgentStudioProject>): AgentStudioProject | null {
-  const name = cleanValue(raw.name);
-  if (!name) return null;
-  const tests = Array.isArray(raw.tests)
-    ? raw.tests.map((item) => normalizeTestCase(item || {})).filter(Boolean) as StudioTestCase[]
+/**
+ * 解析清单文件内容。schema ≤ 4 的旧档案返回 schema 5 清单 + legacyFeatures
+ * （由调用方迁移进全局注册表）；schema 5 正常解析；内容不合法返回 null。
+ */
+export function parseManifestFile(raw: unknown): StudioManifestFile | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const record = raw as Record<string, unknown>;
+  const schemaVersion = Number(record.schemaVersion);
+  const legacyFeatures = (schemaVersion >= 5 ? [] : Array.isArray(record.features)
+    ? record.features.map((item) => normalizeFeatureEntry(item as Partial<StudioFeatureEntry>)).filter(Boolean) as StudioFeatureEntry[]
+    : []);
+  const tests = Array.isArray(record.tests)
+    ? record.tests.map((item) => normalizeTestCase(item || {})).filter(Boolean) as StudioTestCase[]
     : [];
-  const features = Array.isArray(raw.features)
-    ? raw.features.map((item) => normalizeFeatureEntry(item || {})).filter(Boolean) as StudioFeatureEntry[]
-    : [];
-  const rawAgent = raw.agent as unknown as Record<string, unknown> | undefined;
+  const rawToolchain = record.toolchain as Record<string, unknown> | undefined;
+  const toolchain = rawToolchain && (rawToolchain.source === 'bundled' || rawToolchain.source === 'system' || rawToolchain.source === 'custom')
+    && cleanValue(rawToolchain.nodePath) && cleanValue(rawToolchain.npmPath)
+    ? { source: rawToolchain.source as StudioToolchain['source'], nodePath: cleanValue(rawToolchain.nodePath), npmPath: cleanValue(rawToolchain.npmPath) }
+    : undefined;
+  const rawAgent = record.agent as Record<string, unknown> | undefined;
   const agentProjectDir = cleanValue(rawAgent?.projectDir);
   const agentMetadataPath = cleanValue(rawAgent?.metadataPath);
   const agent = agentProjectDir && agentMetadataPath
     ? { projectDir: agentProjectDir, metadataPath: agentMetadataPath }
     : undefined;
-  const rawId = cleanValue((raw as Partial<AgentStudioProject> & { id?: string }).id);
-  const legacyDirectory = cleanValue((raw as Partial<AgentStudioProject> & { projectDir?: string }).projectDir);
-  const id = rawId || (legacyDirectory
-    ? `studio-${createHash('sha256').update(legacyDirectory).digest('hex').slice(0, 20)}`
-    : `studio-${randomUUID()}`);
-  const rawEnvironment = (raw as Partial<AgentStudioProject> & { environment?: { kind?: string; address?: string } }).environment;
-  const environment = cleanValue(rawEnvironment?.kind) && cleanValue(rawEnvironment?.address)
-    ? { kind: cleanValue(rawEnvironment?.kind), address: cleanValue(rawEnvironment?.address) }
-    : undefined;
-  return {
-    schemaVersion: 4,
-    id,
-    name,
-    ...(environment ? { environment } : (legacyDirectory ? { environment: { kind: 'local-directory', address: legacyDirectory } } : {})),
-    ...(legacyDirectory ? { projectDir: legacyDirectory } : {}),
-    ...(raw.toolchain && (raw.toolchain.source === 'bundled' || raw.toolchain.source === 'system' || raw.toolchain.source === 'custom')
-      && cleanValue(raw.toolchain.nodePath) && cleanValue(raw.toolchain.npmPath)
-      ? { toolchain: { source: raw.toolchain.source, nodePath: cleanValue(raw.toolchain.nodePath), npmPath: cleanValue(raw.toolchain.npmPath) } }
-      : {}),
-    goal: cleanValue(raw.goal),
-    targetAgent: cleanValue(raw.targetAgent),
-    ...(agent ? { agent } : {}),
-    features,
+  const createdAt = cleanValue(record.createdAt) || new Date().toISOString();
+  const manifest: StudioEnvironmentManifest = {
+    schemaVersion: 5,
+    ...(toolchain ? { toolchain } : {}),
+    targetAgent: cleanValue(record.targetAgent),
     testRuntime: {
-      status: normalizeTestRuntimeStatus(raw.testRuntime?.status),
+      status: normalizeTestRuntimeStatus((record.testRuntime as Record<string, unknown> | undefined)?.status),
     },
     tests,
-    createdAt: cleanValue(raw.createdAt),
-    updatedAt: cleanValue(raw.updatedAt),
+    ...(agent ? { agent } : {}),
+    createdAt,
+    updatedAt: cleanValue(record.updatedAt) || createdAt,
   };
+  return { raw: record, manifest, legacyFeatures };
+}
+
+export async function readManifestFile(directory: string): Promise<StudioManifestFile | null> {
+  if (!directory) return null;
+  try {
+    return parseManifestFile(JSON.parse(await fs.readFile(getManifestPath(directory), 'utf8')));
+  } catch {
+    return null;
+  }
+}
+
+export async function writeManifest(directory: string, manifest: StudioEnvironmentManifest): Promise<void> {
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(getManifestPath(directory), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
 
 export function describeCoverage(coverage: StudioFeatureCoverage): string {
@@ -227,32 +233,33 @@ export function describeCoverage(coverage: StudioFeatureCoverage): string {
   return parts.join('，');
 }
 
-export function buildProjectMarkdown(
-  projectDir: string,
-  project: AgentStudioProject | null,
+export function buildDirectoryStatusMarkdown(
+  directory: string,
+  manifest: StudioEnvironmentManifest | null,
+  features: StudioFeatureEntry[],
   liveStatus: TestRuntimeStatus | 'not-initialized',
   lastRun: StudioRunRecord | null,
 ): string {
-  if (!project) {
+  if (!manifest) {
     return [
-      '## Agent Studio 项目状态',
+      '## 当前目录与 Feature 状态',
       '',
-      `- 项目目录：${projectDir || '未设置'}`,
-      '- 当前还没有 `agent-studio.json`。先确认目标 Agent、要开发的能力和第一个可观察测试，再初始化项目。',
+      `- 目录：${directory || '未设置'}`,
+      '- 本目录还没有 agent-studio.json。开发需要 Node/npm 的 Feature 前会先确认三件事：做什么能力、用什么工具链；目录即当前会话的工作目录。',
     ].join('\n');
   }
 
-  const featureLines = project.features.length > 0
-    ? project.features.flatMap((feature) => {
+  const featureLines = features.length > 0
+    ? features.flatMap((feature) => {
         const line = `  - ${feature.name}：${feature.status}（${feature.modulePath}）`;
         if (feature.status === 'verified' && feature.verification) {
           return [line, `    验证证据：${describeCoverage(feature.verification.coverage)}（${feature.verification.lastVerifiedRunId}）`];
         }
         return [line];
       })
-    : ['  （尚未注册开发中的 Feature）'];
-  const testLines = project.tests.length > 0
-    ? project.tests.map((test) => `  - ${test.id}${test.enabled ? '' : '（已停用）'}：${test.title}，策略 ${test.sessionPolicy}${test.checkpoint ? `（${test.checkpoint}）` : ''}，断言 ${test.assertions.length} 条`)
+    : ['  （本目录尚未注册开发中的 Feature）'];
+  const testLines = manifest.tests.length > 0
+    ? manifest.tests.map((test) => `  - ${test.id}${test.enabled ? '' : '（已停用）'}：${test.title}，策略 ${test.sessionPolicy}${test.checkpoint ? `（${test.checkpoint}）` : ''}，断言 ${test.assertions.length} 条`)
     : ['  （尚未定义测试）'];
   const runLine = lastRun
     ? (() => {
@@ -266,14 +273,13 @@ export function buildProjectMarkdown(
     : '- 尚无运行记录';
 
   return [
-    '## Agent Studio 项目状态',
+    '## 当前目录与 Feature 状态',
     '',
-    `- 项目：${project.name}`,
-    `- 开发工具链：${project.toolchain ? `${project.toolchain.source}（Node: ${project.toolchain.nodePath}；npm: ${project.toolchain.npmPath}）` : '未选择；开发前先检测环境并请用户选择'}`,
-    `- 目标 Agent：${project.targetAgent || '未指定（最小被测 Agent）'}`,
-    `- 目标：${project.goal || '未指定'}`,
+    `- 目录：${directory}`,
+    `- 开发工具链：${manifest.toolchain ? `${manifest.toolchain.source}（Node: ${manifest.toolchain.nodePath}；npm: ${manifest.toolchain.npmPath}）` : '未选择；开发前先检测环境并请用户选择'}`,
+    `- 目标 Agent：${manifest.targetAgent || '未指定（最小被测 Agent）'}`,
     `- Test Runtime 状态：${liveStatus}`,
-    '- 开发中 Feature：',
+    '- 本目录开发中的 Feature：',
     ...featureLines,
     '- 测试：',
     ...testLines,
@@ -285,13 +291,13 @@ export function buildProjectMarkdown(
 
 // ── run 记录 ─────────────────────────────────────────────────
 
-export function getRunsPath(projectDir: string): string {
-  return join(projectDir, RUNS_DIR_NAME, RUNS_FILE_NAME);
+export function getRunsPath(directory: string): string {
+  return join(directory, RUNS_DIR_NAME, RUNS_FILE_NAME);
 }
 
-export async function readRuns(projectDir: string): Promise<StudioRunRecord[]> {
+export async function readRuns(directory: string): Promise<StudioRunRecord[]> {
   try {
-    const parsed = JSON.parse(await fs.readFile(getRunsPath(projectDir), 'utf8')) as unknown;
+    const parsed = JSON.parse(await fs.readFile(getRunsPath(directory), 'utf8')) as unknown;
     return Array.isArray(parsed) ? parsed as StudioRunRecord[] : [];
   } catch {
     return [];
@@ -308,23 +314,24 @@ function truncateRunEvidence(record: StudioRunRecord): StudioRunRecord {
   return { ...record, toolCalls };
 }
 
-export async function appendRun(projectDir: string, record: StudioRunRecord): Promise<void> {
-  const existing = await readRuns(projectDir);
+export async function appendRun(directory: string, record: StudioRunRecord): Promise<void> {
+  const existing = await readRuns(directory);
   const next = [truncateRunEvidence(record), ...existing].slice(0, RUNS_KEEP_COUNT);
-  await fs.mkdir(join(projectDir, RUNS_DIR_NAME), { recursive: true });
-  await fs.writeFile(getRunsPath(projectDir), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  await fs.mkdir(join(directory, RUNS_DIR_NAME), { recursive: true });
+  await fs.writeFile(getRunsPath(directory), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
 }
 
-export async function markRuntimeStopped(projectDir: string): Promise<void> {
+export async function markRuntimeStopped(directory: string): Promise<void> {
   try {
-    const raw = JSON.parse(await fs.readFile(getProjectPath(projectDir), 'utf8')) as Partial<AgentStudioProject>;
-    const project = normalizeProject(raw);
-    if (project && project.testRuntime.status === 'running') {
-      project.testRuntime.status = 'stopped';
-      await fs.writeFile(getProjectPath(projectDir), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+    const parsed = await readManifestFile(directory);
+    if (parsed && parsed.manifest.testRuntime.status === 'running') {
+      await writeManifest(directory, {
+        ...parsed.manifest,
+        testRuntime: { status: 'stopped' },
+        updatedAt: new Date().toISOString(),
+      });
     }
   } catch {
-    // 项目文件缺失/损坏时不强行写入
+    // 清单缺失/损坏时不强行写入
   }
 }
-

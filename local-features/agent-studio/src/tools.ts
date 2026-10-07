@@ -1,8 +1,8 @@
 // ── studio_* 工具定义 ─────────────────────────────────────────
 //
-// 从 index.ts 的 AgentStudioFeature.getTools() 工厂化迁出：
-// execute 内原 this.xxx 实例调用全部改为 feature.xxx。
-// 工具名、参数 schema、行为与迁出前保持一致。
+// feature-first 模型（ADR-0022）：工具面围绕"目录环境 + 全局 feature 注册表"
+// 组织。目录清单（agent-studio.json）懒创建——select_toolchain /
+// create_feature 首次落盘，没有独立的初始化步骤。
 
 import { promises as fs } from 'fs';
 import { isAbsolute, join, resolve } from 'path';
@@ -25,14 +25,13 @@ import {
   normalizeTestCase,
   normalizeSessionPolicy,
 } from './assertions.js';
-import type { StudioFeatureEntry } from './project-store.js';
+import type { StudioFeatureEntry, StudioToolchain } from './project-store.js';
 import {
-  normalizeProject,
-  type StudioToolchain,
-  getProjectPath,
+  getManifestPath,
   readRuns,
   appendRun,
 } from './project-store.js';
+import type { StudioFeatureRecord } from './feature-store.js';
 import { cleanValue } from './clean-value.js';
 import type { AgentStudioFeature } from './index.js';
 import {
@@ -78,21 +77,45 @@ export const assertionParameterSchema = {
   required: ['kind'],
 };
 
+async function readPackageDescription(featureProjectDir: string): Promise<string> {
+  try {
+    const pkg = JSON.parse(await fs.readFile(join(featureProjectDir, 'package.json'), 'utf8')) as Record<string, unknown>;
+    return cleanValue(pkg.description);
+  } catch {
+    return '';
+  }
+}
+
+/** 注册 feature 并回写会话绑定；返回给工具结果的标准片段。 */
+async function registerAndBind(
+  feature: AgentStudioFeature,
+  entry: StudioFeatureEntry,
+  directory: string,
+  description: string,
+): Promise<{ record: StudioFeatureRecord; sessionBinding: Record<string, unknown> }> {
+  const record = await feature.registerFeature(entry, directory, description);
+  const binding = await feature.appendSessionFeatureBinding([record.id]);
+  const sessionBinding = binding.ok
+    ? { ok: true, featureId: record.id }
+    : { ok: false, ...(binding.skipped ? { skipped: true } : {}), ...(binding.error ? { error: binding.error } : {}) };
+  return { record, sessionBinding };
+}
+
 export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
   return [
     createTool({
       name: 'studio_detect_environment',
-      description: '检查可用于 Feature 项目的 Node/npm：列出桌面随包与系统环境中经实际命令验证的组合，以及当前项目的选择。',
+      description: '检查可用于 Feature 项目的 Node/npm：列出桌面随包与系统环境中经实际命令验证的组合，以及当前目录的选择。',
       parameters: { type: 'object', properties: {} },
       execute: async () => {
-        const projectDir = await feature.resolveProjectDirectory();
-        const project = await feature.readProject(projectDir);
-        return { projectDir, available: await detectStudioToolchains(), selected: project?.toolchain || null };
+        const directory = await feature.resolveDirectory();
+        const manifest = await feature.readManifest(directory);
+        return { directory, available: await detectStudioToolchains(), selected: manifest?.toolchain || null };
       },
     }),
     createTool({
       name: 'studio_select_toolchain',
-      description: '为当前 Studio 项目选择 Node/npm 组合。可以选择检测到的方案，也可以提供用户指定的可执行路径；保存前会实际运行版本检测。',
+      description: '为当前目录选择 Node/npm 组合（目录清单不存在时自动创建）。可以选择检测到的方案，也可以提供用户指定的可执行路径；保存前会实际运行版本检测。',
       parameters: {
         type: 'object',
         properties: {
@@ -103,7 +126,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         required: ['source', 'nodePath', 'npmPath'],
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir, project } = await feature.requireProject();
+        const { dir, manifest } = await feature.ensureDirectory();
         const source = cleanValue(args.source);
         const nodePath = cleanValue(args.nodePath);
         const npmPath = cleanValue(args.npmPath);
@@ -114,143 +137,171 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         const toolchain = { source, nodePath, npmPath } as StudioToolchain;
         const verified = await probeStudioToolchain(toolchain);
         if (!verified) throw new Error('这组 Node/npm 不可用。请检查路径后重新检测。');
-        await feature.writeProject(projectDir, { ...project, toolchain, updatedAt: new Date().toISOString() });
-        return { projectDir, toolchain: verified };
+        await feature.writeManifestUpdate(dir, { ...manifest, toolchain });
+        return { directory: dir, toolchain: verified };
       },
     }),
     createTool({
-      name: 'studio_get_project',
-      description: '读取当前 Agent Studio 项目的配置、开发中 Feature（含验证证据）、Test Runtime 实时状态和最近运行记录。',
+      name: 'studio_get_directory',
+      description: '读取当前目录的环境清单（工具链、测试、Test Runtime 状态）、本目录开发中的 Feature（含验证证据）和最近运行记录。',
       parameters: { type: 'object', properties: {} },
       execute: async () => {
-        const projectDir = await feature.resolveProjectDirectory();
-        const project = await feature.readProject(projectDir);
-        const runs = await readRuns(projectDir);
+        const directory = await feature.resolveDirectory();
+        const loaded = await feature.loadDirectory(directory);
+        const runs = await readRuns(directory);
         return {
-          projectDir,
-          projectFile: getProjectPath(projectDir),
-          project,
-          runtimeStatus: feature.liveRuntimeStatus(projectDir, project),
+          directory,
+          manifestFile: getManifestPath(directory),
+          manifest: loaded?.manifest || null,
+          features: loaded?.features || [],
+          runtimeStatus: feature.liveRuntimeStatus(directory, loaded?.manifest || null),
           lastRun: runs[0] || null,
           runCount: runs.length,
         };
       },
     }),
     createTool({
-      name: 'studio_initialize_project',
-      description: '初始化或更新当前 Agent Studio 项目。项目具有稳定 ID，并可关联一个工作环境；已有测试和 Feature 注册保持不变。',
-      parameters: {
-        type: 'object',
-        properties: {
-          projectDir: { type: 'string', description: '本地环境中的项目根目录；默认使用当前工作目录。' },
-          name: { type: 'string', description: '项目名称。' },
-          goal: { type: 'string', description: '要开发或装配的能力目标。' },
-          targetAgent: { type: 'string', description: '待测目标 Agent 名称；纯 Feature 开发可传空字符串。' },
-          projectId: { type: 'string', description: '稳定项目 ID；更新已有项目时沿用，创建项目时由系统生成。' },
-          environmentKind: { type: 'string', description: '工作环境类型。当前本地目录使用 local-directory。' },
-          environmentAddress: { type: 'string', description: '环境地址，例如当前关联的本地工作目录。' },
-        },
-        required: ['name'],
-      },
-      execute: async (args: Record<string, unknown>) => {
-        const resolvedProjectDir = cleanValue(args.projectDir) || await feature.resolveProjectDirectory();
-        if (!resolvedProjectDir) throw new Error('项目目录不能为空。请先在工作空间选择项目目录，或显式传入 projectDir。');
-        const existing = await feature.readProject(resolvedProjectDir);
-        const timestamp = new Date().toISOString();
-        const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(args, key);
-        const project = normalizeProject({
-          ...(existing || {}),
-          id: existing?.id || cleanValue(args.projectId),
-          projectDir: resolvedProjectDir,
-          ...(hasOwn('environmentKind') && hasOwn('environmentAddress')
-            ? { environment: { kind: cleanValue(args.environmentKind), address: cleanValue(args.environmentAddress) } }
-            : (!existing && resolvedProjectDir
-              ? { environment: { kind: 'local-directory', address: resolvedProjectDir } }
-              : {})),
-          name: hasOwn('name') ? cleanValue(args.name) : existing?.name,
-          goal: hasOwn('goal') ? cleanValue(args.goal) : existing?.goal,
-          targetAgent: hasOwn('targetAgent') ? cleanValue(args.targetAgent) : existing?.targetAgent,
-          features: existing?.features || [],
-          testRuntime: {
-            status: existing?.testRuntime?.status || 'not-provisioned',
-          },
-          tests: existing?.tests || [],
-          createdAt: existing?.createdAt || timestamp,
-          updatedAt: timestamp,
-        });
-        if (!project) throw new Error('项目名称不能为空。');
-        await feature.writeProject(resolvedProjectDir, project);
-        await feature.updateRegistry(resolvedProjectDir, project);
-        feature.activeProjectDir = resolvedProjectDir;
-        return { projectDir: resolvedProjectDir, projectFile: getProjectPath(resolvedProjectDir), project };
-      },
-    }),
-    createTool({
       name: 'studio_create_feature',
-      description: '在当前 Studio 项目下创建、安装并注册一个标准 AgentDev Feature npm 项目。传入小写 kebab-case 名称；之后直接编辑 src 并运行测试。',
+      description: '在当前目录下创建、安装并注册标准 AgentDev Feature npm 项目，并绑定到当前会话。必须依据已确认的功能范围填写 Claw Manifest v2 元数据；不要留用脚手架默认描述，也不要按包名猜 capabilities / type / requirements。',
       parameters: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Feature 名称，仅允许小写字母、数字和连字符，例如 ticket-feature。' },
-          parentDir: { type: 'string', description: '父目录，相对 Studio 项目根目录；默认 features。' },
+          parentDir: { type: 'string', description: '父目录，相对当前目录；默认 features。' },
+          displayNameZh: { type: 'string', description: 'Claw Feature 元数据必填：中文展示名。' },
+          displayNameEn: { type: 'string', description: 'Claw Feature 元数据必填：英文展示名。' },
+          description: { type: 'string', description: 'Claw Feature 元数据必填：面向用户说明用途与使用时机；同时写入 package.json.description。' },
+          type: { type: 'string', enum: ['ability', 'governance', 'interface', 'system'], description: 'Claw Manifest v2 单值功能类型。' },
+          capabilities: { type: 'array', items: { type: 'string', enum: ['tools', 'policy', 'commands', 'skills', 'mcp'] }, description: '按真实实现选择的零个或多个能力。' },
+          provides: { type: 'object', description: '如实声明 tools / skills / commands 名称数组，以及 hooks / mcp 布尔值。' },
+          depends: { type: 'array', items: { type: 'object' }, description: 'Feature 的 static inject 依赖，使用 { id, range }。' },
+          requirements: { type: 'object', description: '实际 requirements：platforms、node、external、services。' },
+          rollback: { type: 'boolean', description: '是否支持回滚；依据实际状态/副作用语义填写。' },
         },
-        required: ['name'],
+        required: ['name', 'displayNameZh', 'displayNameEn', 'description', 'type', 'capabilities', 'provides', 'depends', 'requirements', 'rollback'],
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir, project } = await feature.requireProject();
+        const { dir, manifest } = await feature.ensureDirectory();
         const name = cleanValue(args.name);
         if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) {
           throw new Error('Feature 名称仅允许小写字母、数字和连字符，且必须以字母开头。');
         }
-        const toolchain = await requireStudioToolchain(project);
-        const parentDir = resolve(projectDir, cleanValue(args.parentDir) || 'features');
+        const description = cleanValue(args.description);
+        const displayNameZh = cleanValue(args.displayNameZh);
+        const displayNameEn = cleanValue(args.displayNameEn);
+        const type = cleanValue(args.type);
+        const capabilities = Array.isArray(args.capabilities) ? args.capabilities.map(cleanValue) : [];
+        const validCapabilities = new Set(['tools', 'policy', 'commands', 'skills', 'mcp']);
+        if (!description || !displayNameZh || !displayNameEn || !['ability', 'governance', 'interface', 'system'].includes(type)) {
+          throw new Error('创建 Feature 前必须提供完整 Claw 元数据：description、中文/英文展示名和有效 type。');
+        }
+        if (capabilities.some((item) => !validCapabilities.has(item))) {
+          throw new Error('capabilities 只能包含 tools、policy、commands、skills、mcp。');
+        }
+        const providesRaw = args.provides && typeof args.provides === 'object' && !Array.isArray(args.provides)
+          ? args.provides as Record<string, unknown>
+          : null;
+        const requirementsRaw = args.requirements && typeof args.requirements === 'object' && !Array.isArray(args.requirements)
+          ? args.requirements as Record<string, unknown>
+          : null;
+        const dependsRaw = Array.isArray(args.depends) ? args.depends : null;
+        if (!providesRaw || !requirementsRaw || !dependsRaw || typeof args.rollback !== 'boolean') {
+          throw new Error('Claw 元数据必须包含 provides、depends、requirements 对象/数组及 rollback 布尔值。');
+        }
+        const toolchain = await requireStudioToolchain(manifest);
+        const registry = await feature.listAllFeatureRecords();
+        const existing = registry.find((record) => record.name === name || record.package === name);
+        if (existing) {
+          throw new Error(`Feature 包名 ${name} 已注册（目录：${existing.directory}）。包名是全局唯一身份：请换一个名称，或先 studio_remove_feature 移除旧记录。`);
+        }
+        const provides = {
+          tools: Array.isArray(providesRaw.tools) ? providesRaw.tools.map(cleanValue).filter(Boolean) : [],
+          skills: Array.isArray(providesRaw.skills) ? providesRaw.skills.map(cleanValue).filter(Boolean) : [],
+          commands: Array.isArray(providesRaw.commands) ? providesRaw.commands.map(cleanValue).filter(Boolean) : [],
+          hooks: providesRaw.hooks === true,
+          mcp: providesRaw.mcp === true,
+        };
+        const requirements = {
+          platforms: Array.isArray(requirementsRaw.platforms) ? requirementsRaw.platforms.map(cleanValue).filter(Boolean) : [],
+          node: cleanValue(requirementsRaw.node),
+          external: Array.isArray(requirementsRaw.external) ? requirementsRaw.external.map(cleanValue).filter(Boolean) : [],
+          services: Array.isArray(requirementsRaw.services) ? requirementsRaw.services.map(cleanValue).filter(Boolean) : [],
+        };
+        const depends = dependsRaw.map((item) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('depends 中每项必须是 { id, range } 对象。');
+          const dependency = item as Record<string, unknown>;
+          const id = cleanValue(dependency.id);
+          const range = cleanValue(dependency.range);
+          if (!id || !range) throw new Error('depends 每项都必须提供 id 与 range。');
+          return { id, range };
+        });
+        const agentdev = {
+          schemaVersion: 2,
+          id: name,
+          displayName: { zh: displayNameZh, en: displayNameEn },
+          type,
+          capabilities,
+          provides,
+          depends,
+          requirements,
+          compatibility: { rollback: args.rollback },
+        };
+        const parentDir = resolve(dir, cleanValue(args.parentDir) || 'features');
         const cliPath = findCreateFeatureCliPath();
         await fs.mkdir(parentDir, { recursive: true });
         await runProjectCommand(parentDir, toolchain.nodePath, [cliPath, name]);
         const featureProjectDir = join(parentDir, name);
+        const packagePath = join(featureProjectDir, 'package.json');
+        const pkg = JSON.parse(await fs.readFile(packagePath, 'utf8')) as Record<string, unknown>;
+        const keywords = Array.isArray(pkg.keywords) ? pkg.keywords.map(cleanValue).filter(Boolean) : [];
+        await fs.writeFile(packagePath, `${JSON.stringify({
+          ...pkg,
+          description,
+          keywords: [...new Set([...keywords, ...capabilities])],
+          engines: { ...(pkg.engines && typeof pkg.engines === 'object' ? pkg.engines : {}), agentdev: '^0.1.0' },
+          agentdev,
+        }, null, 2)}\\n`, 'utf8');
         await runProjectCommand(featureProjectDir, 'npm', ['install', '--no-fund', '--no-audit'], toolchain);
         const entry = await readFeatureProjectEntry(featureProjectDir);
-        const timestamp = new Date().toISOString();
-        const features = [...project.features.filter((item) => item.name !== entry.name), entry];
-        await feature.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
-        return { projectDir, featureProjectDir, feature: entry, featureCount: features.length };
+        const { record, sessionBinding } = await registerAndBind(feature, entry, dir, description);
+        return { directory: dir, featureProjectDir, feature: record, sessionBinding };
       },
     }),
     createTool({
       name: 'studio_add_feature',
-      description: '注册一个开发中的 Feature。推荐传 projectDir（标准 npm Feature 项目）；legacy 模块可继续传 name + modulePath。',
+      description: '注册一个开发中的 Feature 并绑定到当前会话。推荐传 featureProjectDir（标准 npm Feature 项目，同名重注册视为移动目录、保留验证账本）；legacy 模块可继续传 name + modulePath。',
       parameters: {
         type: 'object',
         properties: {
-          projectDir: { type: 'string', description: '标准 Feature npm 项目目录；自动读取 package.json 和 dist 入口。' },
+          featureProjectDir: { type: 'string', description: '标准 Feature npm 项目目录；自动读取 package.json 和 dist 入口。' },
           name: { type: 'string', description: 'legacy 模块的 feature 名（与实例 name 属性一致）。' },
           modulePath: { type: 'string', description: 'legacy ESM 模块路径。' },
         },
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir, project } = await feature.requireProject();
-        const sourceProjectDir = cleanValue(args.projectDir);
+        const { dir } = await feature.ensureDirectory();
+        const sourceDir = cleanValue(args.featureProjectDir);
         let entry: StudioFeatureEntry;
-        if (sourceProjectDir) {
-          entry = await readFeatureProjectEntry(resolve(projectDir, sourceProjectDir));
+        let description = '';
+        if (sourceDir) {
+          const featureProjectDir = resolve(dir, sourceDir);
+          entry = await readFeatureProjectEntry(featureProjectDir);
+          description = await readPackageDescription(featureProjectDir);
         } else {
           const name = cleanValue(args.name);
           const rawModulePath = cleanValue(args.modulePath);
-          if (!name || !rawModulePath) throw new Error('请传 projectDir，或同时传 name 和 modulePath。');
-          const modulePath = resolve(projectDir, rawModulePath);
+          if (!name || !rawModulePath) throw new Error('请传 featureProjectDir，或同时传 name 和 modulePath。');
+          const modulePath = resolve(dir, rawModulePath);
           if (!existsSync(modulePath)) throw new Error(`模块文件不存在：${modulePath}。请先创建模块文件再注册。`);
           entry = { name, modulePath, status: 'implemented' };
         }
-        const timestamp = new Date().toISOString();
-        const rest = project.features.filter((item) => item.name !== entry.name);
-        const features = [...rest, entry];
-        await feature.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
-        return { projectDir, feature: entry, featureCount: features.length };
+        const { record, sessionBinding } = await registerAndBind(feature, entry, dir, description);
+        return { directory: dir, feature: record, sessionBinding };
       },
     }),
     createTool({
       name: 'studio_remove_feature',
-      description: '从项目中移除一个 Feature 注册。若 Test Runtime 正在运行，同时从运行时卸载。',
+      description: '移除一个 Feature 的注册（全局注册表 + 当前目录）。若 Test Runtime 正在运行，同时从运行时卸载。',
       parameters: {
         type: 'object',
         properties: {
@@ -259,15 +310,15 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         required: ['name'],
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir, project } = await feature.requireProject();
+        const { dir, features } = await feature.requireDirectory();
         const name = cleanValue(args.name);
         if (!name) throw new Error('name 不能为空。');
-        const existing = project.features.find((item) => item.name === name);
-        if (!existing) throw new Error(`Feature ${name} 不在项目注册表中。`);
-        const handle = getRuntimeHandle(projectDir);
+        const existing = features.find((item) => item.name === name);
+        if (!existing) throw new Error(`Feature ${name} 不在本目录的注册表中。`);
+        const handle = getRuntimeHandle(dir);
         let runtimeUpdated = false;
         if (handle) {
-          const removed = await runtimeRequest(projectDir, handle, {
+          const removed = await runtimeRequest(dir, handle, {
             type: 'studio-remove-feature',
             featureName: name,
           }, SYNC_TIMEOUT_MS);
@@ -278,29 +329,27 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
           handle.fingerprints.delete(name);
           runtimeUpdated = true;
         }
-        const timestamp = new Date().toISOString();
-        const features = project.features.filter((item) => item.name !== name);
-        await feature.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
-        return { projectDir, removed: name, runtimeUpdated, featureCount: features.length };
+        await feature.removeFeature(existing.id);
+        return { directory: dir, removed: existing.id, runtimeUpdated };
       },
     }),
     createTool({
       name: 'studio_register_agent',
-      description: '登记当前 Studio 项目要在真实装配条件下调试的 Agent，并同步写入全局注册表（claw run 的消费入口）。Agent metadata 负责声明精确 Feature 包版本；Studio 的开发中标准 Feature 会以源码覆盖这些声明。全局注册失败时返回 globalRegistration 说明原因与修复指引，不影响项目内登记与 agent-debug。',
+      description: '登记当前目录要在真实装配条件下调试的 Agent，并同步写入全局注册表（claw run 的消费入口）。Agent metadata 负责声明精确 Feature 包版本；Studio 的开发中标准 Feature 会以源码覆盖这些声明。全局注册失败时返回 globalRegistration 说明原因与修复指引，不影响目录内登记与 agent-debug。',
       parameters: {
         type: 'object',
         properties: {
-          agentDir: { type: 'string', description: 'Agent 项目目录，相对 Studio 项目根目录或绝对路径。' },
+          agentDir: { type: 'string', description: 'Agent 项目目录，相对当前目录或绝对路径。' },
           metadataPath: { type: 'string', description: 'metadata.json 路径；缺省为 <agentDir>/metadata.json。' },
         },
         required: ['agentDir'],
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir, project } = await feature.requireProject();
-        const agentDir = resolve(projectDir, cleanValue(args.agentDir));
+        const { dir, manifest } = await feature.requireDirectory();
+        const agentDir = resolve(dir, cleanValue(args.agentDir));
         if (!existsSync(agentDir)) throw new Error(`Agent 项目目录不存在：${agentDir}`);
         const metadataPath = cleanValue(args.metadataPath)
-          ? resolve(projectDir, cleanValue(args.metadataPath))
+          ? resolve(dir, cleanValue(args.metadataPath))
           : join(agentDir, 'metadata.json');
         if (!existsSync(metadataPath)) throw new Error(`Agent metadata 不存在：${metadataPath}`);
         let rawMetadata: unknown;
@@ -321,52 +370,49 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         }
         const entryPath = resolve(agentDir, metadata.entry);
         if (!existsSync(entryPath)) throw new Error(`Agent entry 不存在：${entryPath}`);
-        const timestamp = new Date().toISOString();
         const agent = { projectDir: agentDir, metadataPath };
-        await feature.writeProject(projectDir, { ...project, agent, targetAgent: metadata.id, updatedAt: timestamp });
-        const globalRegistration = await feature.syncGlobalAgentRegistration(agentDir, metadataPath, projectDir);
-        return { projectDir, agent, agentId: metadata.id, globalRegistration };
+        await feature.writeManifestUpdate(dir, { ...manifest, agent, targetAgent: metadata.id });
+        const globalRegistration = await feature.syncGlobalAgentRegistration(agentDir, metadataPath, dir);
+        return { directory: dir, agent, agentId: metadata.id, globalRegistration };
       },
     }),
     createTool({
       name: 'studio_start_runtime',
-      description: '启动隔离 Test Runtime。feature-harness 使用最小 Agent；agent-debug 加载 studio_register_agent 登记的真实 Agent，并混装开发源码 Feature 与仓库 Snapshot Feature。会话目录为项目内 .agent-studio/runtime-sessions。',
+      description: '启动隔离 Test Runtime（按当前目录起进程）。feature-harness 使用最小 Agent；agent-debug 加载 studio_register_agent 登记的真实 Agent，并混装开发源码 Feature 与仓库 Snapshot Feature。会话目录为目录内 .agent-studio/runtime-sessions。',
       parameters: {
         type: 'object',
         properties: {
           modelPreset: { type: 'string', description: '指定模型预设名；缺省依次使用 agent-studio 配置与全局默认模型。' },
-          mode: { type: 'string', enum: ['feature-harness', 'agent-debug'], description: 'feature-harness=最小 Agent；agent-debug=真实 Agent。已注册真实 Agent 时默认 agent-debug。' },
+          mode: { type: 'string', enum: ['feature-harness', 'agent-debug'], description: 'feature-harness=最小 Agent；agent-debug=真实 Agent。已登记真实 Agent 时默认 agent-debug。' },
         },
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir, project } = await feature.requireProject();
-        const existingHandle = getRuntimeHandle(projectDir);
+        const { dir, manifest, features } = await feature.requireDirectory();
+        const existingHandle = getRuntimeHandle(dir);
         if (existingHandle) {
-          return { projectDir, alreadyRunning: true, model: existingHandle.model };
+          return { directory: dir, alreadyRunning: true, model: existingHandle.model };
         }
-        const mode = cleanValue(args.mode) || (project.agent ? 'agent-debug' : 'feature-harness');
+        const mode = cleanValue(args.mode) || (manifest.agent ? 'agent-debug' : 'feature-harness');
         if (mode !== 'feature-harness' && mode !== 'agent-debug') throw new Error('mode 只能是 feature-harness 或 agent-debug。');
-        for (const f of project.features) assertStandardBuildCommand(f);
-        if (mode === 'feature-harness' && project.features.length === 0) {
+        for (const f of features) assertStandardBuildCommand(f);
+        if (mode === 'feature-harness' && features.length === 0) {
           throw new Error('feature-harness 至少需要注册一个开发中 Feature。');
         }
-        if (project.features.some((f) => f.source)) await requireStudioToolchain(project);
-        for (const f of project.features) await runFeatureBuild(f, project.toolchain);
-        const missing = project.features.filter((f) => !existsSync(f.modulePath));
+        if (features.some((f) => f.source)) await requireStudioToolchain(manifest);
+        for (const f of features) await runFeatureBuild(f, manifest.toolchain);
+        const missing = features.filter((f) => !existsSync(f.modulePath));
         if (missing.length > 0) {
           throw new Error(`以下 Feature 模块文件不存在：${missing.map((f) => `${f.name} (${f.modulePath})`).join('；')}`);
         }
-        const runtimePlanPath = mode === 'agent-debug' ? await prepareAgentDebugPlan(projectDir, project) : '';
-        const { ready, handle } = await startRuntimeProcess(projectDir, cleanValue(args.modelPreset), mode, runtimePlanPath);
-        for (const f of project.features) {
+        const runtimePlanPath = mode === 'agent-debug' ? await prepareAgentDebugPlan(dir, manifest, features) : '';
+        const { ready, handle } = await startRuntimeProcess(dir, cleanValue(args.modelPreset), mode, runtimePlanPath, features);
+        for (const f of features) {
           handle.fingerprints.set(f.name, await fingerprintModule(f.modulePath));
         }
-        if (mode === 'agent-debug') handle.agentFingerprint = await fingerprintAgentDefinition(project);
-        const timestamp = new Date().toISOString();
-        const nextProject = { ...project, testRuntime: { status: 'running' as const }, updatedAt: timestamp };
-        await feature.writeProject(projectDir, nextProject);
+        if (mode === 'agent-debug') handle.agentFingerprint = await fingerprintAgentDefinition(manifest.agent);
+        await feature.writeManifestUpdate(dir, { ...manifest, testRuntime: { status: 'running' } });
         return {
-          projectDir,
+          directory: dir,
           model: ready.model,
           sessionRestored: ready.sessionRestored === true,
           observability: ready.observability || 'local-only',
@@ -379,20 +425,18 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
     }),
     createTool({
       name: 'studio_stop_runtime',
-      description: '停止当前项目的 Test Runtime。stateful 测试会话已持久化，下次启动自动恢复。',
+      description: '停止当前目录的 Test Runtime。stateful 测试会话已持久化，下次启动自动恢复。',
       parameters: { type: 'object', properties: {} },
       execute: async () => {
-        const { projectDir, project } = await feature.requireProject();
-        const result = await stopRuntimeProcess(projectDir);
-        const timestamp = new Date().toISOString();
-        const nextProject = { ...project, testRuntime: { status: 'stopped' as const }, updatedAt: timestamp };
-        await feature.writeProject(projectDir, nextProject);
-        return { projectDir, ...result };
+        const { dir, manifest } = await feature.requireDirectory();
+        const result = await stopRuntimeProcess(dir);
+        await feature.writeManifestUpdate(dir, { ...manifest, testRuntime: { status: 'stopped' } });
+        return { directory: dir, ...result };
       },
     }),
     createTool({
       name: 'studio_define_test',
-      description: '定义测试用例并保存到 agent-studio.json：输入 + 会话策略 + 可执行断言（由运行证据机器判定）。之后用 studio_run_test { testId } 运行。',
+      description: '定义测试用例并保存到当前目录清单：输入 + 会话策略 + 可执行断言（由运行证据机器判定）。之后用 studio_run_test { testId } 运行。',
       parameters: {
         type: 'object',
         properties: {
@@ -415,7 +459,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         required: ['id', 'title', 'input'],
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir, project } = await feature.requireProject();
+        const { dir, manifest } = await feature.requireDirectory();
         const testId = cleanValue(args.id);
         const timestamp = new Date().toISOString();
         let assertions: StudioAssertion[];
@@ -444,24 +488,23 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
           updatedAt: timestamp,
         });
         if (!nextTest) throw new Error('测试 id、title 和 input 均不能为空。');
-        const existingIndex = project.tests.findIndex((item) => item.id === testId);
-        const previous = existingIndex >= 0 ? project.tests[existingIndex] : null;
-        const tests = [...project.tests];
+        const existingIndex = manifest.tests.findIndex((item) => item.id === testId);
+        const previous = existingIndex >= 0 ? manifest.tests[existingIndex] : null;
+        const tests = [...manifest.tests];
         const savedTest = { ...nextTest, createdAt: previous?.createdAt || timestamp };
         if (existingIndex >= 0) tests.splice(existingIndex, 1, savedTest);
         else tests.push(savedTest);
-        const nextProject = { ...project, tests, updatedAt: timestamp };
-        await feature.writeProject(projectDir, nextProject);
-        return { projectDir, test: savedTest, testCount: tests.length };
+        await feature.writeManifestUpdate(dir, { ...manifest, tests });
+        return { directory: dir, test: savedTest, testCount: tests.length };
       },
     }),
     createTool({
       name: 'studio_list_tests',
-      description: '列出当前项目已定义的测试用例（含会话策略与断言）。',
+      description: '列出当前目录已定义的测试用例（含会话策略与断言）。',
       parameters: { type: 'object', properties: {} },
       execute: async () => {
-        const { projectDir, project } = await feature.requireProject();
-        return { projectDir, tests: project.tests, runtimeStatus: feature.liveRuntimeStatus(projectDir, project) };
+        const { dir, manifest } = await feature.requireDirectory();
+        return { directory: dir, tests: manifest.tests, runtimeStatus: feature.liveRuntimeStatus(dir, manifest) };
       },
     }),
     createTool({
@@ -475,14 +518,14 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         required: ['name'],
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir } = await feature.requireProject();
-        const handle = getRuntimeHandle(projectDir);
+        const { dir } = await feature.requireDirectory();
+        const handle = getRuntimeHandle(dir);
         if (!handle) {
           throw new Error('Test Runtime 未运行。请先调用 studio_start_runtime，并以 stateful 策略至少运行一次建立 default 会话。');
         }
         const name = cleanValue(args.name);
         if (!name) throw new Error('检查点名称不能为空。');
-        const saved = await runtimeRequest(projectDir, handle, {
+        const saved = await runtimeRequest(dir, handle, {
           type: 'studio-save-checkpoint',
           name,
         }, SYNC_TIMEOUT_MS);
@@ -491,7 +534,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
           throw new Error(error?.message || '保存检查点失败。');
         }
         return {
-          projectDir,
+          directory: dir,
           checkpoint: String(saved.checkpoint || `cp-${name}`),
           checkpoints: Array.isArray(saved.checkpoints) ? saved.checkpoints : [],
         };
@@ -509,7 +552,8 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
           assertions: {
             type: 'array',
             items: assertionParameterSchema,
-            description: '临时断言（仅本次运行生效，不写回测试定义）。' },
+            description: '临时断言（仅本次运行生效，不写回测试定义）。',
+          },
           sessionPolicy: {
             type: 'string',
             enum: ['fresh', 'stateful', 'checkpointed'],
@@ -519,20 +563,20 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         },
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir, project } = await feature.requireProject();
-        let handle = getRuntimeHandle(projectDir);
+        const { dir, manifest, features } = await feature.requireDirectory();
+        let handle = getRuntimeHandle(dir);
         if (!handle) {
           throw new Error('Test Runtime 未运行。请先调用 studio_start_runtime。');
         }
         if (handle.mode === 'agent-debug') {
-          const currentAgentFingerprint = await fingerprintAgentDefinition(project);
+          const currentAgentFingerprint = await fingerprintAgentDefinition(manifest.agent);
           if (currentAgentFingerprint !== handle.agentFingerprint) {
-            await stopRuntimeProcess(projectDir);
-            const runtimePlanPath = await prepareAgentDebugPlan(projectDir, project);
-            const restarted = await startRuntimeProcess(projectDir, '', 'agent-debug', runtimePlanPath);
+            await stopRuntimeProcess(dir);
+            const runtimePlanPath = await prepareAgentDebugPlan(dir, manifest, features);
+            const restarted = await startRuntimeProcess(dir, '', 'agent-debug', runtimePlanPath, features);
             handle = restarted.handle;
             handle.agentFingerprint = currentAgentFingerprint;
-            for (const f of project.features) handle.fingerprints.set(f.name, await fingerprintModule(f.modulePath));
+            for (const f of features) handle.fingerprints.set(f.name, await fingerprintModule(f.modulePath));
           }
         }
 
@@ -544,7 +588,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         let checkpoint: string;
         let recordedTestId = testId;
         if (testId) {
-          const defined = project.tests.find((item) => item.id === testId);
+          const defined = manifest.tests.find((item) => item.id === testId);
           if (!defined) throw new Error(`测试 ${testId} 不存在。请先调用 studio_define_test 定义。`);
           testInput = defined.input;
           assertions = Array.isArray(args.assertions)
@@ -569,12 +613,12 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         const startedAt = new Date().toISOString();
 
         // 1) 同步 Feature 源码到 runtime（ensure 按拓扑序 + reload），runId 透传打日志标签
-        for (const f of project.features) assertStandardBuildCommand(f);
-        if (project.features.some((f) => f.source)) await requireStudioToolchain(project);
-        const reloadSummary = await syncFeaturesToRuntime(projectDir, handle, project, runId);
+        for (const f of features) assertStandardBuildCommand(f);
+        if (features.some((f) => f.source)) await requireStudioToolchain(manifest);
+        const reloadSummary = await syncFeaturesToRuntime(dir, handle, features, manifest.toolchain, runId);
         const failedReload = reloadSummary.filter((item) => !item.ok);
         const featureRevisions: Record<string, string> = {};
-        for (const f of project.features) {
+        for (const f of features) {
           featureRevisions[f.name] = await fingerprintFeatureSource(f);
         }
         const sessionBase = {
@@ -598,12 +642,12 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
             hooks: [],
             reloadSummary,
           };
-          await appendRun(projectDir, record);
+          await appendRun(dir, record);
           return { run: record, guidance: 'Feature 热载失败，运行未执行；runtime 已回退到上一可用版本，修复源码后重试。' };
         }
 
         // 2) 发送测试输入（含会话策略）
-        const result = await runtimeRequest(projectDir, handle, {
+        const result = await runtimeRequest(dir, handle, {
           type: 'studio-run-test',
           testId: recordedTestId,
           input: testInput,
@@ -639,7 +683,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
             reloadSummary,
             ...(error ? { error: { name: error.name || 'Error', message: error.message || '', stack: error.stack } } : {}),
           };
-          await appendRun(projectDir, record);
+          await appendRun(dir, record);
           return { run: record };
         }
 
@@ -671,17 +715,17 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
           reloadSummary,
           ...(error ? { error: { name: error.name || 'Error', message: error.message || '', stack: error.stack } } : {}),
         };
-        await appendRun(projectDir, record);
+        await appendRun(dir, record);
 
         // 4) Feature 状态推进：按 reloadSummary 与覆盖证据独立推进每个 Feature；
-        //    依赖图（static inject）随本次同步回写进项目档案，供传递覆盖判定
+        //    依赖图（static inject）随本次同步回写进注册表记录，供传递覆盖判定
         const timestamp = new Date().toISOString();
-        const featuresWithInject = project.features.map((f) => ({
+        const featuresWithInject = features.map((f) => ({
           ...f,
           staticInject: handle.featureInject.get(f.name) ?? f.staticInject,
         }));
-        const features = advanceFeatureStatuses(featuresWithInject, reloadSummary, featureCoverage, passed, runId, timestamp, featureRevisions);
-        await feature.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
+        const advanced = advanceFeatureStatuses(featuresWithInject, reloadSummary, featureCoverage, passed, runId, timestamp, featureRevisions) as StudioFeatureRecord[];
+        await feature.saveFeatures(advanced);
 
         const deniedTools = [...new Set(toolCalls.filter((entry) => entry.denied).map((entry) => entry.tool))];
         const deniedMissing = assertionResults
@@ -692,7 +736,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
           : undefined;
         return {
           run: record,
-          featureStatuses: features.map((f) => ({ name: f.name, status: f.status })),
+          featureStatuses: advanced.map((f) => ({ name: f.name, status: f.status })),
           ...(guidance ? { guidance } : {}),
         };
       },
@@ -703,21 +747,21 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
       parameters: {
         type: 'object',
         properties: {
-          name: { type: 'string', description: '要创建快照的 Studio Feature 名。' },
+          name: { type: 'string', description: '要创建快照的 Feature 名。' },
         },
         required: ['name'],
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir, project } = await feature.requireProject();
+        const { dir, manifest, features } = await feature.requireDirectory();
         const name = cleanValue(args.name);
-        const studioFeature = project.features.find((item) => item.name === name);
-        if (!studioFeature) throw new Error(`Feature ${name} 不在项目注册表中。`);
+        const studioFeature = features.find((item) => item.name === name);
+        if (!studioFeature) throw new Error(`Feature ${name} 不在本目录的注册表中。`);
         if (!studioFeature.source) throw new Error(`Feature ${name} 是 legacy 模块；请先升级为标准 npm Feature 项目后再创建 Snapshot。`);
         if (studioFeature.status !== 'verified' || !studioFeature.verification?.sourceDigest) {
           throw new Error(`Feature ${name} 尚未通过当前源码的验证。请先运行带可执行断言且覆盖该 Feature 的 studio_run_test。`);
         }
         assertStandardBuildCommand(studioFeature);
-        const toolchain = await requireStudioToolchain(project);
+        const toolchain = await requireStudioToolchain(manifest);
         await runFeatureBuild(studioFeature, toolchain);
         const currentDigest = await fingerprintFeatureSource(studioFeature);
         if (currentDigest !== studioFeature.verification.sourceDigest) {
@@ -725,11 +769,13 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         }
         const snapshot = await runSnapshotScript(studioFeature.source.projectDir, toolchain);
         const timestamp = new Date().toISOString();
-        const features = project.features.map((item) => item.name === name
-          ? { ...item, status: 'snapshotted' as const, snapshot }
-          : item);
-        await feature.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
-        return { projectDir, feature: name, snapshot };
+        await feature.saveFeatures([{
+          ...studioFeature,
+          status: 'snapshotted',
+          snapshot,
+          updatedAt: timestamp,
+        }]);
+        return { directory: dir, feature: name, snapshot };
       },
     }),
     createTool({
@@ -742,17 +788,16 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         },
       },
       execute: async (args: Record<string, unknown>) => {
-        const { projectDir } = await feature.requireProject();
-        const runs = await readRuns(projectDir);
+        const { dir } = await feature.requireDirectory();
+        const runs = await readRuns(dir);
         const runId = cleanValue(args.runId);
         if (runId) {
           const record = runs.find((item) => item.runId === runId) || null;
           if (!record) throw new Error(`运行记录 ${runId} 不存在。`);
-          return { projectDir, run: record };
+          return { directory: dir, run: record };
         }
-        return { projectDir, runs: runs.map(({ runId: id, testId, phase, ok, passed, startedAt }) => ({ runId: id, testId, phase, ok, passed, startedAt })) };
+        return { directory: dir, runs: runs.map(({ runId: id, testId, phase, ok, passed, startedAt }) => ({ runId: id, testId, phase, ok, passed, startedAt })) };
       },
     }),
   ];
 }
-

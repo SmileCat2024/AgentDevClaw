@@ -1,16 +1,21 @@
-import { promises as fs } from 'fs';
-import { dirname, join } from 'path';
 import type { AgentFeature, CallStartContext, FeatureInitContext, FeatureStateSnapshot, HookDeclarations, PackageInfo } from '@agentdevjs/core';
 import { CoreLifecycle } from '@agentdevjs/core';
-import type { AgentStudioProject, WorkspaceState, StudioProjectEntry, TestRuntimeStatus } from './project-store.js';
+import type { StudioEnvironmentManifest, TestRuntimeStatus, StudioFeatureEntry } from './project-store.js';
 import {
   getDefaultStatePath,
-  getProjectPath,
-  normalizeProject,
+  buildDirectoryStatusMarkdown,
+  readManifestFile,
   readRuns,
-  buildProjectMarkdown,
-  REGISTRY_FILE_NAME,
+  writeManifest,
 } from './project-store.js';
+import type { StudioFeatureRecord } from './feature-store.js';
+import {
+  featuresInDirectory,
+  readFeatureRegistry,
+  registerFeatureRecord,
+  upsertFeatureRecords,
+  removeFeatureRecord,
+} from './feature-store.js';
 import { cleanValue } from './clean-value.js';
 import { findAgentRegistryModuleUrl, getRuntimeHandle } from './runtime-process.js';
 import { buildStudioTools } from './tools.js';
@@ -42,8 +47,8 @@ export {
 export { cleanValue } from './clean-value.js';
 
 export {
-  PROJECT_FILE_NAME,
-  REGISTRY_FILE_NAME,
+  MANIFEST_FILE_NAME,
+  LEGACY_REGISTRY_FILE_NAME,
   RUNS_DIR_NAME,
   RUNS_FILE_NAME,
   RUNS_KEEP_COUNT,
@@ -52,10 +57,10 @@ export {
   normalizeFeatureEntry,
   normalizeTestRuntimeStatus,
   getDefaultStatePath,
-  getProjectPath,
-  normalizeProject,
+  getManifestPath,
+  parseManifestFile,
   describeCoverage,
-  buildProjectMarkdown,
+  buildDirectoryStatusMarkdown,
   getRunsPath,
   readRuns,
   appendRun,
@@ -67,10 +72,27 @@ export {
   type StudioFeatureStatus,
   type StudioFeatureEntry,
   type StudioAgentDefinition,
-  type AgentStudioProject,
+  type StudioEnvironmentManifest,
+  type StudioManifestFile,
   type WorkspaceState,
-  type StudioProjectEntry,
 } from './project-store.js';
+
+export {
+  FEATURE_REGISTRY_FILE_NAME,
+  getFeatureRegistryPaths,
+  featureRecordId,
+  normalizeFeatureRecord,
+  readFeatureRegistry,
+  writeFeatureRegistry,
+  featuresInDirectory,
+  registerFeatureRecord,
+  upsertFeatureRecords,
+  removeFeatureRecord,
+  migrateLegacyRegistry,
+  deleteLegacyProjectsRegistry,
+  type StudioFeatureRecord,
+  type LegacyMigrationResult,
+} from './feature-store.js';
 
 export {
   READY_TIMEOUT_MS,
@@ -111,6 +133,18 @@ export interface AgentStudioFeatureConfig {
   statePath?: string;
   /** 覆盖全局 Agent 注册表路径（默认用户目录 agent-registry.json；测试用） */
   agentRegistryPath?: string;
+  /** 宿主注入：当前会话 id（studio_create_feature 回写会话绑定用；缺省跳过绑定） */
+  sessionId?: string;
+  /** 宿主注入：宿主 agent id（会话绑定请求寻址用） */
+  agentId?: string;
+  /** 宿主注入：Claw server origin（缺省 http://127.0.0.1:1420） */
+  serverOrigin?: string;
+}
+
+export interface StudioDirectoryContext {
+  dir: string;
+  manifest: StudioEnvironmentManifest;
+  features: StudioFeatureRecord[];
 }
 
 export class AgentStudioFeature implements AgentFeature {
@@ -120,11 +154,14 @@ export class AgentStudioFeature implements AgentFeature {
 
   readonly name = 'agent-studio';
   readonly source = import.meta.url;
-  readonly description = 'Agent Studio 控制面：统一项目模型、Test Runtime 生命周期、装配拓扑、结构化断言测试与 Feature 级验证账本。';
+  readonly description = 'Agent Studio 控制面：feature 一级注册表、目录环境清单、Test Runtime 生命周期、装配拓扑、结构化断言测试与 Feature 级验证账本。';
 
   private readonly workspaceDir: string;
   private readonly statePath: string;
   private readonly agentRegistryPath?: string;
+  private readonly sessionId: string;
+  private readonly agentId: string;
+  private readonly serverOrigin: string;
   private packageInfo: PackageInfo | null = null;
   activeProjectDir: string | null = null;
 
@@ -132,6 +169,9 @@ export class AgentStudioFeature implements AgentFeature {
     this.workspaceDir = config.workspaceDir || process.cwd();
     this.statePath = config.statePath || getDefaultStatePath();
     this.agentRegistryPath = config.agentRegistryPath;
+    this.sessionId = cleanValue(config.sessionId);
+    this.agentId = cleanValue(config.agentId);
+    this.serverOrigin = cleanValue(config.serverOrigin) || 'http://127.0.0.1:1420';
   }
 
   getPackageInfo(): PackageInfo | null {
@@ -140,13 +180,13 @@ export class AgentStudioFeature implements AgentFeature {
 
   /**
    * 把 Studio 登记的 Agent 同步进全局注册表（claw run 的消费入口）。
-   * 注册失败不阻塞项目内登记（agent-debug 只依赖项目档案），但显式返回原因与修复指引，
+   * 注册失败不阻塞目录内登记（agent-debug 只依赖目录清单），但显式返回原因与修复指引，
    * 保证"消费端收口"始终可见而非静默丢失。
    */
   async syncGlobalAgentRegistration(
     agentDir: string,
     metadataPath: string,
-    projectDir: string,
+    studioDir: string,
   ): Promise<{ ok: true; id: string } | { ok: false; error: string; hint: string }> {
     type AgentRegistryModule = {
       registerAgentProject: (input: {
@@ -161,7 +201,7 @@ export class AgentStudioFeature implements AgentFeature {
       const record = await module.registerAgentProject({
         projectDir: agentDir,
         metadataPath,
-        studioProjectDir: projectDir,
+        studioProjectDir: studioDir,
         ...(this.agentRegistryPath ? { registryPath: this.agentRegistryPath } : {}),
       });
       return { ok: true, id: record.id };
@@ -169,7 +209,7 @@ export class AgentStudioFeature implements AgentFeature {
       return {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
-        hint: '全局注册未完成，claw run 暂不能消费该 Agent；项目内登记与 agent-debug 不受影响。按 error 修复后重新执行 studio_register_agent 即可补齐。',
+        hint: '全局注册未完成，claw run 暂不能消费该 Agent；目录内登记与 agent-debug 不受影响。按 error 修复后重新执行 studio_register_agent 即可补齐。',
       };
     }
   }
@@ -189,75 +229,120 @@ export class AgentStudioFeature implements AgentFeature {
     this.activeProjectDir = restored || this.activeProjectDir;
   }
 
-  private async readWorkspaceState(): Promise<WorkspaceState> {
-    try {
-      return JSON.parse(await fs.readFile(this.statePath, 'utf8')) as WorkspaceState;
-    } catch {
-      return {};
+  /**
+   * 会话工作目录解析：会话内显式指定（activeProjectDir）优先，否则用运行时
+   * 宿主传入的 workspaceDir（= 本会话创建时的 openDirectory）。不读 workspace
+   * 级共享状态——那是跨会话漂移的根源（ADR-0022）。
+   */
+  resolveDirectory(): Promise<string> {
+    return Promise.resolve(this.activeProjectDir || this.workspaceDir);
+  }
+
+  async readManifest(directory: string): Promise<StudioEnvironmentManifest | null> {
+    const parsed = await readManifestFile(directory);
+    return parsed ? parsed.manifest : null;
+  }
+
+  /**
+   * 读取目录上下文（清单 + 该目录的 feature 记录）。schema ≤ 4 的旧档案在此
+   * 懒迁移：features[] 进全局注册表（已有记录优先），档案就地升级 schema 5。
+   */
+  async loadDirectory(directory: string): Promise<StudioDirectoryContext | null> {
+    const parsed = await readManifestFile(directory);
+    if (!parsed) return null;
+    if (parsed.legacyFeatures.length > 0) {
+      for (const entry of parsed.legacyFeatures) {
+        await registerFeatureRecord(this.statePath, entry, directory);
+      }
+      await writeManifest(directory, { ...parsed.manifest, updatedAt: new Date().toISOString() });
     }
+    const features = featuresInDirectory(await readFeatureRegistry(this.statePath), directory);
+    return { dir: directory, manifest: parsed.manifest, features };
   }
 
-  resolveProjectDirectory(): Promise<string> {
-    if (this.activeProjectDir) return Promise.resolve(this.activeProjectDir);
-    return this.readWorkspaceState().then((state) => cleanValue(state.openDirectory) || this.workspaceDir);
-  }
-
-  async readProject(projectDir: string): Promise<AgentStudioProject | null> {
-    if (!projectDir) return null;
-    try {
-      return normalizeProject(JSON.parse(await fs.readFile(getProjectPath(projectDir), 'utf8')) as AgentStudioProject);
-    } catch {
-      return null;
+  /** 工具面的标准入口：目录必须有清单；schema ≤ 4 懒迁移同 loadDirectory。 */
+  async requireDirectory(): Promise<StudioDirectoryContext> {
+    const directory = await this.resolveDirectory();
+    const loaded = await this.loadDirectory(directory);
+    if (!loaded) {
+      throw new Error(`目录 ${directory} 尚未初始化。请先调用 studio_select_toolchain 选择工具链，或直接描述需求后调用 studio_create_feature（两者都会自动创建目录清单）。`);
     }
+    return loaded;
   }
 
-  async requireProject(): Promise<{ projectDir: string; project: AgentStudioProject }> {
-    const projectDir = await this.resolveProjectDirectory();
-    const project = await this.readProject(projectDir);
-    if (!project) {
-      throw new Error('当前目录尚未初始化 Agent Studio 项目。请先调用 studio_initialize_project。');
-    }
-    return { projectDir, project };
-  }
-
-  async writeProject(projectDir: string, project: AgentStudioProject): Promise<void> {
-    await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(getProjectPath(projectDir), `${JSON.stringify(project, null, 2)}\n`, 'utf8');
-  }
-
-  private getRegistryPath(): string {
-    return join(dirname(this.statePath), REGISTRY_FILE_NAME);
-  }
-
-  private async readRegistry(): Promise<StudioProjectEntry[]> {
-    try {
-      const parsed = JSON.parse(await fs.readFile(this.getRegistryPath(), 'utf8')) as unknown;
-      return Array.isArray(parsed) ? (parsed as StudioProjectEntry[]) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  async updateRegistry(projectDir: string, project: AgentStudioProject): Promise<void> {
-    const entry: StudioProjectEntry = {
-      id: project.id,
-      projectDir,
-      environment: project.environment || { kind: 'local-directory', address: projectDir },
-      name: project.name,
-      goal: project.goal,
-      targetAgent: project.targetAgent,
-      updatedAt: project.updatedAt,
+  /** 懒初始化：清单不存在时创建空清单（schema 5）。 */
+  async ensureDirectory(): Promise<StudioDirectoryContext> {
+    const directory = await this.resolveDirectory();
+    const loaded = await this.loadDirectory(directory);
+    if (loaded) return loaded;
+    const timestamp = new Date().toISOString();
+    const manifest: StudioEnvironmentManifest = {
+      schemaVersion: 5,
+      targetAgent: '',
+      testRuntime: { status: 'not-provisioned' },
+      tests: [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
     };
-    const rest = (await this.readRegistry()).filter((item) => item.id !== project.id && item.projectDir !== projectDir);
-    const next = [...rest, entry].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    await fs.mkdir(dirname(this.getRegistryPath()), { recursive: true });
-    await fs.writeFile(this.getRegistryPath(), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    await writeManifest(directory, manifest);
+    return { dir: directory, manifest, features: [] };
   }
 
-  liveRuntimeStatus(projectDir: string, project: AgentStudioProject | null): TestRuntimeStatus | 'not-initialized' {
-    if (!project) return 'not-initialized';
-    if (getRuntimeHandle(projectDir)) return 'running';
-    return project.testRuntime.status === 'running' ? 'stopped' : project.testRuntime.status;
+  async writeManifestUpdate(directory: string, manifest: StudioEnvironmentManifest): Promise<void> {
+    await writeManifest(directory, { ...manifest, updatedAt: new Date().toISOString() });
+  }
+
+  listFeatureRecords(directory: string): Promise<StudioFeatureRecord[]> {
+    return readFeatureRegistry(this.statePath).then((records) => featuresInDirectory(records, directory));
+  }
+
+  /** 全量注册表（create_feature 的包名唯一性检查用）。 */
+  listAllFeatureRecords(): Promise<StudioFeatureRecord[]> {
+    return readFeatureRegistry(this.statePath);
+  }
+
+  registerFeature(entry: StudioFeatureEntry, directory: string, description = ''): Promise<StudioFeatureRecord> {
+    return registerFeatureRecord(this.statePath, entry, directory, description);
+  }
+
+  /** 全值写回（状态推进/快照落账）。 */
+  async saveFeatures(records: StudioFeatureRecord[]): Promise<void> {
+    await upsertFeatureRecords(this.statePath, records);
+  }
+
+  async removeFeature(id: string): Promise<void> {
+    await removeFeatureRecord(this.statePath, id);
+  }
+
+  /**
+   * 会话 ↔ feature 绑定回写：studio_create_feature / studio_add_feature 后把
+   * feature id 追加到当前会话记录（server 持有会话索引，经 HTTP 追加）。
+   * 宿主未注入 sessionId（如测试环境）时显式返回 skipped，不静默吞掉。
+   */
+  async appendSessionFeatureBinding(featureIds: string[]): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+    const ids = featureIds.map((id) => cleanValue(id)).filter(Boolean);
+    if (ids.length === 0 || !this.sessionId || !this.agentId) {
+      return { ok: false, skipped: true, error: '会话身份不可用（宿主未注入 sessionId/agentId），本次未回写会话绑定。' };
+    }
+    try {
+      const response = await fetch(`${this.serverOrigin}/protoclaw/prebuilt_sessions/${encodeURIComponent(this.sessionId)}/studio_feature_binding`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: this.agentId, featureIds: ids }),
+      });
+      if (!response.ok) {
+        return { ok: false, error: `绑定请求失败（HTTP ${response.status}）：${await response.text().catch(() => '')}` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  liveRuntimeStatus(directory: string, manifest: StudioEnvironmentManifest | null): TestRuntimeStatus | 'not-initialized' {
+    if (!manifest) return 'not-initialized';
+    if (getRuntimeHandle(directory)) return 'running';
+    return manifest.testRuntime.status === 'running' ? 'stopped' : manifest.testRuntime.status;
   }
 
   getTools() {
@@ -268,18 +353,24 @@ export class AgentStudioFeature implements AgentFeature {
     // 会话创建时 run-prebuilt-agent 会以空输入调用 preInjectCallStart 预注入；
     // 首轮真实调用会再次触发 CallStart，跳过空输入避免同一轮注入两次。
     if (!ctx.input || !ctx.input.trim()) return;
-    const projectDir = await this.resolveProjectDirectory();
-    const project = await this.readProject(projectDir);
-    const runs = await readRuns(projectDir);
+    const directory = await this.resolveDirectory();
+    const loaded = await this.loadDirectory(directory);
+    const runs = await readRuns(directory);
     ctx.context.add({
       role: 'system',
-      content: buildProjectMarkdown(projectDir, project, this.liveRuntimeStatus(projectDir, project), runs[0] || null),
+      content: buildDirectoryStatusMarkdown(
+        directory,
+        loaded?.manifest || null,
+        loaded?.features || [],
+        this.liveRuntimeStatus(directory, loaded?.manifest || null),
+        runs[0] || null,
+      ),
     });
   }
 
   getHookDescription(lifecycle: string, methodName: string): string | undefined {
     if (lifecycle === 'CallStart' && methodName === 'injectProjectState') {
-      return '每轮开始时注入当前 Agent Studio 项目的真实状态（Feature、Test Runtime、最近运行）。';
+      return '每轮开始时注入当前目录环境与本目录 Feature 的真实状态（清单、Test Runtime、最近运行）。';
     }
     return undefined;
   }

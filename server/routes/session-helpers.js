@@ -43,6 +43,7 @@ import {
   sortSidebarSessions,
   trimSessionRecordForWire,
   sliceSessionsForWire,
+  cleanStudioFeatureIds,
 } from './session-helpers-pure.js';
 
 import {
@@ -76,6 +77,7 @@ export {
   sortSidebarSessions,
   trimSessionRecordForWire,
   sliceSessionsForWire,
+  cleanStudioFeatureIds,
 };
 
 // 归档/删除 active 会话后的后继选择。无 ctx 依赖，提为模块级纯函数以便单测。
@@ -969,8 +971,15 @@ async function createPrebuiltSession(agentId, options = {}) {
     sessionType,
     metadata: {
       ...sessionMetadata,
+      // 会话 ↔ feature 绑定（ADR-0022）：创建参数直传 + 派生会话继承来源绑定。
       ...(normalizedAgentId === 'agent-studio'
-        ? { studioProjectId: cleanSessionText(options.studioProjectId) || cleanSessionText(sourceSession?.metadata?.studioProjectId) }
+        ? {
+          studioFeatureIds: cleanStudioFeatureIds([
+            ...(Array.isArray(options.studioFeatureIds) ? options.studioFeatureIds : []),
+            ...(Array.isArray(sourceSession?.metadata?.studioFeatureIds) ? sourceSession.metadata.studioFeatureIds : []),
+            ...(Array.isArray(sourceSession?.studioFeatureIds) ? sourceSession.studioFeatureIds : []),
+          ]),
+        }
         : {}),
     },
     modelName: currentModelInfo.modelName || '',
@@ -1058,11 +1067,9 @@ async function createPrebuiltSession(agentId, options = {}) {
       openDirectory,
     });
   } else if (normalizedAgentId === 'agent-studio') {
-    const openDirectory = nextOpenDirectory || cleanSessionText(currentState.openDirectory);
-    await writeWorkspaceState(agentId, {
-      forms: currentState.forms,
-      openDirectory,
-    });
+    // ADR-0022：不再把 openDirectory 写进 workspace state——那是跨会话共享的
+    // 最近目录，任何一次会话创建都会改写它，制造目录漂移。会话目录以会话
+    // 自身 openDirectory 为唯一权威（创建时显式指定或继承来源会话）。
   } else if (normalizedAgentId === 'programming-helper') {
     const openDirectory = nextOpenDirectory || cleanSessionText(currentState.openDirectory);
     const cleanedForms = { ...currentState.forms };

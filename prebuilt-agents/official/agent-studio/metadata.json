@@ -2,7 +2,7 @@
   "id": "agent-studio",
   "kind": "agent",
   "name": "Agent Studio",
-  "description": "以项目为中心开发和验证 Feature，并整理本机 Feature 仓库",
+  "description": "开发与验证 Feature，产物统一收进本机 Feature 仓库",
   "version": "0.1.0",
   "icon": "bot",
   "category": "development",
@@ -29,12 +29,12 @@
           "title": { "zh": "Agent Studio", "en": "Agent Studio" },
           "kicker": { "zh": "Agent 工作空间", "en": "Agent Workspace" },
           "body": {
-            "zh": "以项目为中心开发与验证 Feature，产物统一收进本机 Feature 仓库。",
-            "en": "Develop and verify features per project; artifacts are collected into the local feature repository."
+            "zh": "一个个 Feature 就是一条条开发线：对话里开发、验证、快照，产物统一收进本机 Feature 仓库。",
+            "en": "Each feature is a development thread: develop, verify and snapshot in conversation; artifacts are collected into the local feature repository."
           },
           "actions": [
             {
-              "label": { "zh": "新建项目", "en": "New project" },
+              "label": { "zh": "新建对话", "en": "New conversation" },
               "action": { "type": "create_session" }
             },
             {
@@ -44,14 +44,9 @@
           ]
         },
         {
-          "id": "studio-projects",
-          "type": "studio-projects",
+          "id": "studio-features",
+          "type": "studio-features",
           "visibility": "home-default"
-        },
-        {
-          "id": "studio-project-detail",
-          "type": "studio-project-detail",
-          "visibility": "block:studio-project-detail"
         },
         {
           "id": "studio-repository",

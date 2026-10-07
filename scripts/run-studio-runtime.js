@@ -22,7 +22,7 @@
  */
 
 import { fileURLToPath, pathToFileURL } from 'url';
-import { dirname, join, resolve } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { Agent, FileSessionStore, runWithLogScope } from '@agentdevjs/core';
 import { resolveAgentModelLLM, resolveModelPresetLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
@@ -128,11 +128,10 @@ function resolveFeatureClass(moduleExports) {
   throw new Error(`no feature class export found (available exports: ${available.join(', ') || '(none)'})`);
 }
 
-function buildSystemMessage(project) {
+function buildSystemMessage(project, projectDir) {
   return [
     '你是 Agent Studio Test Runtime 中的被测 Agent。',
-    `项目：${project?.name || '未命名'}`,
-    `目标：${project?.goal || '未指定'}`,
+    `工作目录：${projectDir}`,
     project?.targetAgent ? `目标 Agent：${project.targetAgent}` : '',
     '根据输入正常完成任务；环境中挂载了正在开发中的 Feature，请正常使用它们暴露的工具。',
   ].filter(Boolean).join('\n');
@@ -352,9 +351,21 @@ async function main() {
     try { runtimePlan = JSON.parse(readFileSync(runtimePlanPath, 'utf8')); }
     catch (error) { failReady(`无法读取 runtime plan: ${error?.message || error}`); return; }
   }
+  // feature-first（ADR-0022）：feature 记账在全局注册表，子进程不再读档案 features[]；
+  // 父进程把启动挂载清单（name + modulePath）经 env 下发。
+  const startupFeatures = (() => {
+    try {
+      const parsed = JSON.parse(process.env.STUDIO_FEATURES_JSON || '[]');
+      return Array.isArray(parsed)
+        ? parsed.map((entry) => ({ name: clean(entry?.name), modulePath: clean(entry?.modulePath) })).filter((entry) => entry.name && entry.modulePath)
+        : [];
+    } catch {
+      return [];
+    }
+  })();
   const featureEntries = mode === 'agent-debug'
     ? (runtimePlan?.features || []).filter((entry) => entry.resolvedFrom === 'source').map((entry) => ({ name: clean(entry.runtimeName), modulePath: clean(entry.entry) })).filter((entry) => entry.name && entry.modulePath)
-    : (Array.isArray(project.features) ? project.features : []).map((entry) => ({ name: clean(entry?.name), modulePath: clean(entry?.modulePath) })).filter((entry) => entry.name && entry.modulePath);
+    : startupFeatures;
 
   const resolvedLLM = runtimePlan?.metadataPath
     ? (resolveAgentModelLLM(dirname(runtimePlan.metadataPath), 'default') || resolveRuntimeLLM())
@@ -387,7 +398,7 @@ async function main() {
     agent = new Agent({
       llm: resolvedLLM.llm,
       name: 'studio-test-runtime',
-      systemMessage: buildSystemMessage(project),
+      systemMessage: buildSystemMessage(project, projectDir),
       workspaceDir: projectDir,
       projectRoot: PROTOCLAW_ROOT,
       // 被测 Feature 的运行时模型切换（agent.setModel）走注入的 resolver；
@@ -424,7 +435,7 @@ async function main() {
   if (viewerPort > 0) {
     try {
       await agent.withViewer(
-        `studio-sandbox:${clean(project?.name) || 'project'}`,
+        `studio-sandbox:${basename(projectDir) || 'studio'}`,
         viewerPort,
         false,
         { projectRoot: projectDir, inputPolicy: 'none' },

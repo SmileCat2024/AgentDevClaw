@@ -32,6 +32,7 @@
    - 0019 轮次挂起语义：suspended 与 pending-work 事实层（实施计划见 [docs/plans/2026-09-27-turn-suspension-semantics.md](docs/plans/2026-09-27-turn-suspension-semantics.md)）
    - 0020 Feature 配置累加型多值字段的跨层叠加
    - 0021 状态机统一内核 state-kernel（框架 core 纯函数转换求值器，WorkThread / CallArbiter 先行迁移；实施计划见 [docs/plans/2026-10-06-state-kernel-implementation.md](docs/plans/2026-10-06-state-kernel-implementation.md)）
+   - 0022 Agent Studio Feature-First 模型：feature 一级实体、目录降级为运行环境、会话多对多绑定（实施记录见 [docs/plans/2026-10-07-agent-studio-feature-first-refactor.md](docs/plans/2026-10-07-agent-studio-feature-first-refactor.md)）
 
 实现层真实入口：
 
@@ -132,7 +133,11 @@ app-core.js 全局状态纪律：全局状态区只减不增。新增前端状�
 
 ### Agent Studio（agent-studio）★
 
-dev agent 只做控制面（`studio_*` 工具集），被测 Feature 跑在隔离的 Test Runtime 子进程（[scripts/run-studio-runtime.js](scripts/run-studio-runtime.js)），以 `studio-sandbox:<项目名>` 出现在左侧 Agent 列表（可看不可输入）。两种模式：`feature-harness`（最小 Agent + 开发中 Feature）与 `agent-debug`（真实 Agent + 仓库 tgz 底座 + 开发源码覆盖）。Feature 状态机由运行证据推进（`implemented → mounted → verified → snapshotted`）；验证通过经快照打成不可变 tgz 写入用户 Feature 仓库（同版本不同字节会被拒绝）。
+feature-first 工作空间（[ADR-0022](docs/adr/0022-agent-studio-feature-first-model.md)）：feature 是唯一一级实体，会话绑定 feature（`studioFeatureIds` 多对多，`studio_create_feature` / `studio_add_feature` 自动回写），目录只是会话运行环境（一个目录可开发多个 feature）。feature 状态与验证账本在全局注册表 `~/.agentdev/AgentDevClaw/workspaces/agent-studio/features.json`；目录内 `agent-studio.json`（schema 5）只是环境清单（工具链 / 测试 / agent 登记），懒创建，无「初始化」步骤。
+
+Feature 包元数据契约（Claw 所有，勿回流框架仓库）：`studio_create_feature` 强制填写 `package.json.agentdev`（Manifest v2：id / displayName / type / capabilities / provides / depends / requirements / rollback），仓库浏览与详情展示按此渲染；缺 v2 时才回退按包名推断（`server/routes/feature-repository.js`）。权威说明见 `agent-studio-workflow` 技能 `references/feature-package-metadata.md`。首页 Feature 详情是弹窗（overlay 内嵌 home 视图），不是独立页面。
+
+dev agent 只做控制面（`studio_*` 工具集），被测 Feature 跑在隔离的 Test Runtime 子进程（[scripts/run-studio-runtime.js](scripts/run-studio-runtime.js)，feature 清单经 env `STUDIO_FEATURES_JSON` 由父进程下发），以 `studio-sandbox:<目录名>` 出现在左侧 Agent 列表（可看不可输入）。两种模式：`feature-harness`（最小 Agent + 开发中 Feature）与 `agent-debug`（真实 Agent + 仓库 tgz 底座 + 开发源码覆盖）。Feature 状态机由运行证据推进（`implemented → mounted → verified → snapshotted`）；验证通过经快照打成不可变 tgz 写入用户 Feature 仓库（同版本不同字节会被拒绝）。
 
 dev agent 注入技能：`agent-studio-workflow`（权威工作流）+ `agentdev-feature-guide` / `agentdev-feature-packaging`（权威源在框架仓库，经 `npm run adv-docs:sync` 同步，勿直接改 Claw 副本）+ `agentdev-agent-assembly`（本地维护）。
 
@@ -166,7 +171,7 @@ dev agent 注入技能：`agent-studio-workflow`（权威工作流）+ `agentdev
 
 `server/feature-runtime/`：`schemas.js`（校验，release 与注册时强制精确版本）→ `catalog.js`（扫描官方 `resources/features/` 与用户 `user-features/` 两个 tgz 仓库，同版本用户优先）→ `resolver.js`（release 全解析为 tgz；debug 允许 Studio 同名包源码覆盖）→ `provisioner.js`（内容寻址环境，依赖不变复用）→ `loader.js`（拓扑排序 mountFeature，重名 / 环 / 缺依赖直接报错）。
 
-Studio 项目落盘布局与运行记录：项目目录 `agent-studio.json` + `.agent-studio/`（runs / runtime-sessions / runtime-plan），工作空间状态在 `~/.agentdev/AgentDevClaw/workspaces/agent-studio/`。
+Studio 落盘布局与运行记录：目录环境清单 `agent-studio.json` + `.agent-studio/`（runs / runtime-sessions / runtime-plan），feature 注册表与工作空间状态在 `~/.agentdev/AgentDevClaw/workspaces/agent-studio/`。旧「项目」数据（projects.json + schema ≤ 4 档案）由服务启动迁移一次性换算（[server/routes/studio-feature-migration.js](server/routes/studio-feature-migration.js)，幂等）。
 
 ## 关键数据流
 

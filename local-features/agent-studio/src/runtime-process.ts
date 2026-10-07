@@ -13,9 +13,9 @@ import { createRequire } from 'module';
 import { existsSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import type {
+  StudioAgentDefinition,
   StudioFeatureEntry,
   StudioFeatureSnapshot,
-  AgentStudioProject,
   StudioToolchain,
 } from './project-store.js';
 import type { StudioRunRecord } from './assertions.js';
@@ -154,10 +154,10 @@ export async function fingerprintModule(modulePath: string): Promise<string> {
   }
 }
 
-export async function fingerprintAgentDefinition(project: AgentStudioProject): Promise<string> {
-  if (!project.agent) return 'none';
+export async function fingerprintAgentDefinition(agent: StudioAgentDefinition | undefined): Promise<string> {
+  if (!agent) return 'none';
   const hash = crypto.createHash('sha256');
-  for (const filePath of [project.agent.metadataPath, join(project.agent.projectDir, 'agent.js')]) {
+  for (const filePath of [agent.metadataPath, join(agent.projectDir, 'agent.js')]) {
     hash.update(filePath);
     hash.update('\0');
     try { hash.update(await fs.readFile(filePath)); } catch { hash.update('missing'); }
@@ -253,11 +253,11 @@ export async function detectStudioToolchains(): Promise<Array<StudioToolchain & 
   return available.filter((item): item is NonNullable<typeof item> => item !== null);
 }
 
-export async function requireStudioToolchain(project: AgentStudioProject): Promise<StudioToolchain> {
-  const chosen = project.toolchain;
+export async function requireStudioToolchain(manifest: { toolchain?: StudioToolchain }): Promise<StudioToolchain> {
+  const chosen = manifest.toolchain;
   if (!chosen) throw new Error('请先调用 studio_detect_environment，选择可用的 Node/npm 并调用 studio_select_toolchain。');
   if (!await probeStudioToolchain(chosen)) {
-    throw new Error('当前项目选择的 Node/npm 已不可用。请重新调用 studio_detect_environment 并让用户选择。');
+    throw new Error('当前目录选择的 Node/npm 已不可用。请重新调用 studio_detect_environment 并让用户选择。');
   }
   return chosen;
 }
@@ -318,12 +318,16 @@ export async function runSnapshotScript(projectDir: string, toolchain: StudioToo
   return result.snapshot;
 }
 
-export async function prepareAgentDebugPlan(projectDir: string, project: AgentStudioProject): Promise<string> {
-  if (!project.agent) throw new Error('当前项目没有注册真实 Agent。请先调用 studio_register_agent，或以 feature-harness 模式启动。');
-  const agentRoot = resolve(projectDir, project.agent.projectDir);
-  const metadataPath = resolve(projectDir, project.agent.metadataPath);
+export async function prepareAgentDebugPlan(
+  projectDir: string,
+  manifest: { agent?: StudioAgentDefinition },
+  features: StudioFeatureEntry[],
+): Promise<string> {
+  if (!manifest.agent) throw new Error('当前目录没有登记真实 Agent。请先调用 studio_register_agent，或以 feature-harness 模式启动。');
+  const agentRoot = resolve(projectDir, manifest.agent.projectDir);
+  const metadataPath = resolve(projectDir, manifest.agent.metadataPath);
   if (!existsSync(metadataPath)) throw new Error(`Agent metadata 不存在：${metadataPath}`);
-  const overrides = project.features.map((feature) => {
+  const overrides = features.map((feature) => {
     if (!feature.package || !feature.source) {
       throw new Error(`Agent Debug 只支持标准 Feature 项目；${feature.name} 仍是 legacy 模块。`);
     }
@@ -394,6 +398,7 @@ export async function startRuntimeProcess(
   modelPreset: string,
   mode: 'feature-harness' | 'agent-debug' = 'feature-harness',
   runtimePlanPath = '',
+  features: Array<Pick<StudioFeatureEntry, 'name' | 'modulePath'>> = [],
 ): Promise<{ ready: StudioReadyPayload; handle: RuntimeHandle }> {
   const scriptPath = findRuntimeScriptPath();
   const viewerPort = Number(process.env.AGENTDEV_VIEWER_PORT || 2026);
@@ -402,7 +407,13 @@ export async function startRuntimeProcess(
   const child = spawn(process.execPath, childArgs, {
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     cwd: projectDir,
-    env: { ...process.env, STUDIO_MODEL_PRESET: modelPreset, STUDIO_VIEWER_PORT: String(viewerPort) },
+    env: {
+      ...process.env,
+      STUDIO_MODEL_PRESET: modelPreset,
+      STUDIO_VIEWER_PORT: String(viewerPort),
+      // feature 记账在全局注册表；子进程的启动挂载清单由这里下发（ADR-0022）
+      STUDIO_FEATURES_JSON: JSON.stringify(features.map((feature) => ({ name: feature.name, modulePath: feature.modulePath }))),
+    },
   });
   const handle: RuntimeHandle = { child, pending: new Map(), fingerprints: new Map(), mode, agentFingerprint: null, model: null, viewerAgentId: null, featureInject: new Map() };
   runtimeHandles.set(projectDir, handle);
@@ -493,13 +504,14 @@ export async function stopRuntimeProcess(projectDir: string): Promise<{ stopped:
 }
 
 /**
- * run-test 前把项目 features 同步进 runtime：一次 sync 请求完成
+ * run-test 前把目录 features 同步进 runtime：一次 sync 请求完成
  * ensure（按 static inject 拓扑序自动挂载）与 reload（状态迁移/失败回退）。
  */
 export async function syncFeaturesToRuntime(
   projectDir: string,
   handle: RuntimeHandle,
-  project: AgentStudioProject,
+  features: StudioFeatureEntry[],
+  toolchain: StudioToolchain | undefined,
   runTag = 'startup',
 ): Promise<StudioRunRecord['reloadSummary']> {
   const inspectResult = await runtimeRequest(projectDir, handle, {
@@ -518,8 +530,8 @@ export async function syncFeaturesToRuntime(
   const ensure: Array<{ name: string; modulePath: string }> = [];
   const reload: Array<{ name: string; modulePath: string }> = [];
   const unchanged: string[] = [];
-  for (const feature of project.features) {
-    await runFeatureBuild(feature, project.toolchain);
+  for (const feature of features) {
+    await runFeatureBuild(feature, toolchain);
     const currentFingerprint = await fingerprintModule(feature.modulePath);
     if (!mountedFeatures.has(feature.name)) {
       ensure.push({ name: feature.name, modulePath: feature.modulePath });
@@ -540,7 +552,7 @@ export async function syncFeaturesToRuntime(
     }, SYNC_TIMEOUT_MS);
     const perFeature = Array.isArray(synced.perFeature) ? synced.perFeature as Array<Record<string, unknown>> : [];
     const byName = new Map(perFeature.map((entry) => [String(entry.featureName || ''), entry]));
-    for (const feature of project.features) {
+    for (const feature of features) {
       const entry = byName.get(feature.name);
       if (entry) {
         const action = entry.action === 'reloaded' || entry.action === 'ensure-mounted' || entry.action === 'failed'
@@ -564,7 +576,7 @@ export async function syncFeaturesToRuntime(
       }
     }
   } else {
-    for (const feature of project.features) {
+    for (const feature of features) {
       summary.push({ featureName: feature.name, action: 'unchanged', ok: true });
     }
   }

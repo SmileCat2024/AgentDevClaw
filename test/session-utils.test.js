@@ -140,19 +140,26 @@ describe('normalizeSessionMetadata', () => {
     assert.equal(result.resumeMode, 'compacted');
   });
 
-  it('filters out empty string values', () => {
+  it('filters out empty string values and empty arrays', () => {
     const result = normalizeSessionMetadata({
       resumeMode: 'compacted',
       sourceAgentId: '',
       sourceSessionId: '   ',
-      studioProjectId: '',
+      studioFeatureIds: ['  ', ''],
       handoffId: undefined,
     });
     assert.ok(!('sourceAgentId' in result));
     assert.ok(!('sourceSessionId' in result));
-    assert.ok(!('studioProjectId' in result));
+    assert.ok(!('studioFeatureIds' in result));
     assert.ok(!('handoffId' in result));
     assert.equal(result.resumeMode, 'compacted');
+  });
+
+  it('keeps studio feature bindings as a cleaned id array', () => {
+    const result = normalizeSessionMetadata({
+      studioFeatureIds: ['  my-feature ', 'my-feature', 'other-feature'],
+    });
+    assert.deepEqual(result.studioFeatureIds, ['my-feature', 'other-feature']);
   });
 
   it('returns empty object when all fields are empty', () => {

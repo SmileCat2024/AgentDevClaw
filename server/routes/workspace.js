@@ -4,7 +4,7 @@ import path from 'path';
 
 import { PROJECT_ROOT, USER_FEATURE_REPOSITORY_ROOT, WORKSPACE_CACHE_TTL_MS } from '../shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, parseListField } from '../shared/string-helpers.js';
-import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
+import { readJson, ensureDir } from '../shared/fs-helpers.js';
 import {
   getPrebuiltWorkspaceDir,
   getPrebuiltWorkspaceStatePath,
@@ -12,6 +12,7 @@ import {
 } from '../shared/session-access.js';
 import { syncWorkspaceProjectDocset, summarizeProjectDocset } from './project-docset.js';
 import { summarizeFeatureRepository, mergeFeatureRepositoryPackages } from './feature-repository.js';
+import { readFeatureRegistry } from '../../local-features/dist/agent-studio/src/feature-store.js';
 import { summarizeGuideDocset } from './guide.js';
 
 import {
@@ -232,11 +233,17 @@ export async function readWorkspaceState(agentId) {
   } catch {
     data = normalizeWorkspaceState({});
   }
-  // Agent Studio: surface the project registry (written by the runtime feature) for the home view.
-  // Read even when state.json is missing, so a fresh install still serves an empty list.
+  // Agent Studio: feature 一级实体注册表（features.json，ADR-0022）投影给首页。
+  // 读注册表以 feature-store 为权威（路径 = getDefaultStatePath 同目录，
+  // AGENTDEV_DATA_DIR 隔离场景两侧同源）；registry 文件不存在时返回空列表。
+  // directoryExists：目录已删的 feature 记录保留（状态账本不丢），前端据此
+  // 标记目录缺失。
   if (key === 'agent-studio') {
-    const registry = await readJsonSafe(path.join(path.dirname(getPrebuiltWorkspaceStatePath(key)), 'projects.json'), []);
-    data.studioProjects = Array.isArray(registry) ? registry : [];
+    const features = await readFeatureRegistry();
+    data.studioFeatures = await Promise.all(features.map(async (feature) => ({
+      ...feature,
+      directoryExists: await fs.stat(String(feature.directory || '')).then((stat) => stat.isDirectory()).catch(() => false),
+    })));
   }
   _wsCache.set(key, { data, ts: Date.now() });
   return data;

@@ -34,6 +34,7 @@ import { securityHeadersMiddleware } from './server/shared/security-headers.js';
 import { createServiceLifecycle } from './server/service-lifecycle.js';
 import { ensureAppPortAvailable } from './server/boot/port-recovery.js';
 import { migrateLegacyAppConfig } from './server/app-config-migration.js';
+import { runStudioFeatureMigration } from './server/routes/studio-feature-migration.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
 import {
@@ -1567,6 +1568,14 @@ async function main() {
     }
   } catch (err) {
     log('server', `config init failed: ${err.message}`, 'warn');
+  }
+
+  // Agent Studio「项目 → feature」模型迁移（ADR-0022，幂等）：注册表 + 会话
+  // 重绑定 + 删 projects.json。失败只告警，不阻断启动。
+  try {
+    await runStudioFeatureMigration();
+  } catch (err) {
+    console.warn('[studio-migration] startup migration failed:', err.message);
   }
 
   // One-time cleanup of stale empty sessions from previous runs.

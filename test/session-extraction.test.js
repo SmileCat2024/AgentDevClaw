@@ -224,6 +224,7 @@ const EXPECTED_ROUTES = [
   'POST /protoclaw/refresh_session_token_count',
   'POST /protoclaw/prebuilt_sessions',
   'PUT /protoclaw/prebuilt_sessions/:sessionId/title',
+  'POST /protoclaw/prebuilt_sessions/:sessionId/studio_feature_binding',
   'POST /protoclaw/generate_session_title',
   'POST /protoclaw/generate_recap',
   'POST /protoclaw/context_handoffs/export',

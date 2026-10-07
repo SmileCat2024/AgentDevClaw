@@ -1181,8 +1181,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'launcher-grid') return renderWorkspaceLauncherGrid(agent, block);
   if (block.type === 'action-group') return renderWorkspaceActionGroup(block);
   if (block.type === 'session-list') return renderWorkspaceSessionList(agent, block);
-  if (block.type === 'studio-projects') return renderStudioProjectsBlock(agent, block);
-  if (block.type === 'studio-project-detail') return renderStudioProjectDetailBlock(agent, block);
+  if (block.type === 'studio-features') return renderStudioFeaturesBlock(agent, block);
   if (block.type === 'studio-repository') return renderStudioRepositoryBlock(agent, block);
   if (block.type === 'coder-threads') return window.CoderThreadsUI?.render?.() || '';
   if (block.type === 'form') return renderWorkspaceForm(agent, block);

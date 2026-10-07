@@ -67,7 +67,13 @@ export class AgentStudioAgent extends BasicAgent {
     }));
     this.use(new WebSearchFeature({ workspaceDir }));
     this.use(new ShellFeature({ workspaceDir, resourceRoot: workspaceDir }));
-    this.use(new AgentStudioFeature({ workspaceDir }));
+    this.use(new AgentStudioFeature({
+      workspaceDir,
+      // 宿主注入的会话身份：studio_create_feature / studio_add_feature 据此回写会话绑定（ADR-0022）
+      ...(config.agentId ? { agentId: config.agentId } : {}),
+      ...(config.sessionId ? { sessionId: config.sessionId } : {}),
+      ...(config.serverOrigin ? { serverOrigin: config.serverOrigin } : {}),
+    }));
     // SkillFeature：dev agent 的权威技能（agent-studio-workflow / agentdev-agent-assembly /
     // agentdev-feature-guide / agentdev-feature-packaging）随 AgentStudioFeature 构建产物携带，
     // 由框架按"feature source 同级 skills/ 目录"约定经 collectFeatureSkills 自动投递；
