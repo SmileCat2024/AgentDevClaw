@@ -240,6 +240,27 @@ describe('SessionControlsPanel', () => {
     assert.doesNotMatch(html, /超阈值打断触发后自动关闭/);
   });
 
+  it('never renders the rotation section even when step-rotating-model is mounted', () => {
+    // step-rotating-model 已从编程小助手卸载，面板经 ROTATION_SECTION_DISABLED
+    // 显式屏蔽：即使 runtime 挂载名单中重新出现该 feature 也不渲染。
+    const { ctx } = panelSandbox({
+      currentHookInspector: {
+        lifecycleOrder: [],
+        features: [
+          { name: 'force-continuation' },
+          { name: 'step-rotating-model' },
+        ],
+        hooks: [],
+      },
+    });
+    const html = ctx.run('window.SessionControlsPanel.render()');
+
+    assert.match(html, /data-force-continuation-toggle/);
+    assert.doesNotMatch(html, /data-rotation-enabled/);
+    assert.doesNotMatch(html, /data-rotation-menu/);
+    assert.doesNotMatch(html, /模型轮转/);
+  });
+
   it('probes the inspector snapshot once when no capability is known yet', async () => {
     let probeCount = 0;
     const { ctx } = panelSandbox({

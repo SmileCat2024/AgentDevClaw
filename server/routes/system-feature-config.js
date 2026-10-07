@@ -280,18 +280,20 @@ export function setupSystemFeatureConfigRoutes(app, express) {
 
       // StepRotatingModel：类名不满足上面的 /Feature$/ 过滤，且属于 Claw 本地
       // features/ 包（不在固定 importPaths 内），显式加载取其 manifest 单一权威。
-      if (!seen.has('step-rotating-model')) {
-        try {
-          const mod = await import('../../features/step-rotating-model/dist/index.js');
-          const instance = new mod.StepRotatingModel();
-          const manifest = typeof instance.getFeatureManifest === 'function'
-            ? instance.getFeatureManifest()
-            : null;
-          if (manifest?.settings?.properties) {
-            features.push({ featureName: instance.name, manifest });
-          }
-        } catch {}
-      }
+      // 已从编程小助手卸载（装配注释保留在 prebuilt-agents/official/
+      // programming-helper/agent.js），配置面同步屏蔽，代码保留待恢复。
+      // if (!seen.has('step-rotating-model')) {
+      //   try {
+      //     const mod = await import('../../features/step-rotating-model/dist/index.js');
+      //     const instance = new mod.StepRotatingModel();
+      //     const manifest = typeof instance.getFeatureManifest === 'function'
+      //       ? instance.getFeatureManifest()
+      //       : null;
+      //     if (manifest?.settings?.properties) {
+      //       features.push({ featureName: instance.name, manifest });
+      //     }
+      //   } catch {}
+      // }
 
       // 已装配项合并（$mount 装配的 feature，配置面与官方清单同一视图）：
       // 带 agentId 时合并该身份已装配 feature 的 settings manifest，并返回

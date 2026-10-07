@@ -6,7 +6,8 @@
  * / *_control 或 capability_invoke 路由）：
  *   - 保持任务继续：ForceContinuation 的开关 / 触发条件 / 上限
  *   - 上下文保护：ContextGuardFeature 的超阈值打断开关
- *   - 模型轮转：StepRotatingModel 的强/省模型配置
+ *   - 模型轮转：StepRotatingModel 的强/省模型配置（已屏蔽，见
+ *     ROTATION_SECTION_DISABLED）
  *   - 输出风格：StylizedOutput 的风格选择与签名门禁状态
  *
  * 显示条件 = 当前会话 runtime 实际挂载的 Feature 名单（inspector 快照，
@@ -46,12 +47,18 @@
     style: 'stylized-output',
   };
 
+  // 模型轮转 section 已屏蔽：step-rotating-model 已从编程小助手卸载
+  // （装配注释保留在 prebuilt-agents/official/programming-helper/agent.js）。
+  // 屏蔽在 UI 层显式生效，即使 runtime 名单中重新出现该 feature 也不渲染；
+  // 恢复时改回 false 并同步恢复 agent.js 装配。
+  const ROTATION_SECTION_DISABLED = true;
+
   function namesToCaps(names) {
     const set = new Set(names.map((name) => String(name || '').trim()).filter(Boolean));
     return {
       fc: set.has(CONTROLLED_FEATURE_NAMES.fc),
       guard: set.has(CONTROLLED_FEATURE_NAMES.guard),
-      rot: set.has(CONTROLLED_FEATURE_NAMES.rot),
+      rot: !ROTATION_SECTION_DISABLED && set.has(CONTROLLED_FEATURE_NAMES.rot),
       style: set.has(CONTROLLED_FEATURE_NAMES.style),
     };
   }

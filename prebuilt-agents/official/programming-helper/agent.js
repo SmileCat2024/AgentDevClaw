@@ -9,7 +9,10 @@ import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuard
 import { MCPFeature } from '@agentdevjs/mcp';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic, PanelShellFeature } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
-import { StepRotatingModel } from '../../../features/step-rotating-model/dist/index.js';
+// 模型轮转（step-rotating-model）已从编程小助手卸载：导入与装配注释保留，
+// 恢复时取消本行与构造函数中的装配注释即可（会话控制面板的轮转 section
+// 屏蔽开关在 public/src/modules/session-controls-panel.js）。
+// import { StepRotatingModel } from '../../../features/step-rotating-model/dist/index.js';
 import { StylizedOutput } from '../../../features/stylized-output/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdevjs/audio-feedback-feature';
 import { MemoryFeature } from '@agentdevjs/memory-feature';
@@ -177,12 +180,13 @@ export class ProgrammingHelperAgent extends BasicAgent {
         ? config.features['force-continuation'] : {}),
     }));
 
-    this.use(new StepRotatingModel({
-      ...(merged['step-rotating-model'] && typeof merged['step-rotating-model'] === 'object'
-        ? merged['step-rotating-model'] : {}),
-      ...(config.features?.['step-rotating-model'] && typeof config.features['step-rotating-model'] === 'object'
-        ? config.features['step-rotating-model'] : {}),
-    }));
+    // 模型轮转（step-rotating-model）已卸载，装配注释保留待恢复（见文件头部说明）。
+    // this.use(new StepRotatingModel({
+    //   ...(merged['step-rotating-model'] && typeof merged['step-rotating-model'] === 'object'
+    //     ? merged['step-rotating-model'] : {}),
+    //   ...(config.features?.['step-rotating-model'] && typeof config.features['step-rotating-model'] === 'object'
+    //     ? config.features['step-rotating-model'] : {}),
+    // }));
     // 输出风格（stylized-output）：风格 md 由用户放入工作区 .agentdev/output-style/，
     // Claw 会话控制面板经 stylized-output.configure capability 选择；选中后每次最终
     // 回复须通过确认签名门禁（StepFinish guard），未选择时完全旁路。

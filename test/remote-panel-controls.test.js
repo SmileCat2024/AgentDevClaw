@@ -558,7 +558,7 @@ async function panelSandbox({ catalog = REMOTE_CATALOG, currentRuntimeAgentId = 
     currentRuntimeAgentId,
     focusedAgentId,
     currentHookInspector: {
-      features: [{ name: 'force-continuation' }, { name: 'context-guard' }, { name: 'step-rotating-model' }],
+      features: [{ name: 'force-continuation' }, { name: 'context-guard' }, { name: 'stylized-output' }],
     },
     featurePanelBody: { addEventListener() {} },
     activeFeaturePanel: '',
@@ -608,7 +608,8 @@ describe('frontend session-controls-panel identity (R2-04)', () => {
     const { ctx, calls } = await panelSandbox();
     await ctx.window.SessionControlsPanel.updateEnabled(true);
     await ctx.window.SessionControlsPanel.updateGuardArmed(true);
-    await ctx.window.SessionControlsPanel.updateRotationConfig({ enabled: true });
+    // 第三条写路径走 capability_invoke 通用路由（模型轮转已卸载，由输出风格承接）
+    await ctx.window.SessionControlsPanel.updateStyleSelection('正式汇报');
 
     const writes = calls.filter((c) => c.init.method === 'POST');
     assert.equal(writes.length, 3, 'fc control + guard control + capability invoke');
@@ -620,7 +621,7 @@ describe('frontend session-controls-panel identity (R2-04)', () => {
     }
     const invoke = writes.find((c) => c.url === '/protoclaw/capability_invoke');
     assert.equal(JSON.parse(invoke.init.body).runtimeId, 'remote:server-a:rt-1', 'invoke forwards the runtime ref for bare-id rewrite');
-    assert.equal(JSON.parse(invoke.init.body).ref, 'step-rotating-model.configure');
+    assert.equal(JSON.parse(invoke.init.body).ref, 'stylized-output.configure');
   });
 });
 
