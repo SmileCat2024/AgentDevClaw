@@ -181,11 +181,16 @@ function parseToolResult(content, display) {
   } catch (e) {
     result = { success: true, data: content };
   }
-  // Merge display-only data (e.g. write tool's diff) that bypassed LLM injection
+  // Merge display-only data (e.g. write tool's diff) that bypassed LLM injection.
+  // rewrittenCall 是改写标注元数据（ADR-0023），单独走工具卡片头部渲染，不并入结果数据
   if (display && typeof display === 'object') {
-    result.data = typeof result.data === 'object' && result.data !== null
-      ? { ...result.data, ...display }
-      : { ...display };
+    const displayData = { ...display };
+    delete displayData.rewrittenCall;
+    if (Object.keys(displayData).length > 0) {
+      result.data = typeof result.data === 'object' && result.data !== null
+        ? { ...result.data, ...displayData }
+        : displayData;
+    }
   }
   return result;
 }

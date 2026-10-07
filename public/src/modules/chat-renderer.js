@@ -25,11 +25,11 @@
  *   getCollapseThresholdForRow, syncRowCollapseState, syncCollapseStates,
  *   applyCollapseLogic, restoreUserCollapseState, render
  * 导出全局 window 函数:
- *   toggleMessage, toggleReasoning
+ *   toggleMessage, toggleReasoning, toggleRewriteDetail
  * HTML onclick 引用:
  *   onclick="toggleMessage(...)", onclick="toggleReasoning(...)"
  *   onclick="requestRollbackEdit(...)", onclick="switchAgent(...)"
- *   onclick="copyMessageContent(...)"
+ *   onclick="copyMessageContent(...)", onclick="toggleRewriteDetail(...)"
  */
 
 /**
@@ -288,6 +288,36 @@ function indexToolCalls(messages) {
   return calls;
 }
 
+// 工具调用改写标注（ADR-0023）：display.rewrittenCall 携带原始调用快照。
+// 卡片主体显示生效调用（历史即改写后），徽章提示"已修改"，点击展开原始调用。
+function getRewrittenCall(display) {
+  if (display && typeof display === 'object' && display.rewrittenCall
+      && typeof display.rewrittenCall === 'object'
+      && typeof display.rewrittenCall.name === 'string') {
+    return display.rewrittenCall;
+  }
+  return null;
+}
+
+function renderRewriteBadge(detailId, rewritten) {
+  if (!rewritten) return '';
+  return `<span class="tool-rewrite-badge" onclick="toggleRewriteDetail('${detailId}')" title="${escapeHtml(t('tool_rewrite_original'))}">${escapeHtml(t('tool_rewritten'))}</span>`;
+}
+
+function renderRewriteDetail(detailId, rewritten) {
+  if (!rewritten) return '';
+  return `
+    <div class="tool-rewrite-detail" id="${detailId}">
+      <div class="tool-rewrite-detail-title">${escapeHtml(t('tool_rewrite_original'))}</div>
+      <pre class="tool-rewrite-detail-args">${escapeHtml(rewritten.name)} ${escapeHtml(JSON.stringify(rewritten.arguments ?? {}, null, 2))}</pre>
+    </div>`;
+}
+
+window.toggleRewriteDetail = function(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('expanded');
+};
+
 // 追加新消息（保持现有 DOM 状态）
 function appendNewMessages(newMessages, startIndex) {
   // If the welcome page should be showing (process hidden + no user messages),
@@ -342,7 +372,9 @@ function appendNewMessages(newMessages, startIndex) {
             <div class="tool-result-header">
               <span class="status-dot ${success ? 'success' : 'error'}"></span>
               <span>${displayName}</span>
+              ${renderRewriteBadge('rw-' + msgId, getRewrittenCall(msg.display))}
             </div>
+            ${renderRewriteDetail('rw-' + msgId, getRewrittenCall(msg.display))}
             <div class="tool-result-body">${bodyHtml}</div>
           </div>
           ${renderUserImages(msg.images)}
@@ -953,7 +985,9 @@ function render(messages) {
           <div class="tool-result-header">
             <span class="status-dot ${success ? 'success' : 'error'}"></span>
             <span>${displayName}</span>
+            ${renderRewriteBadge('rw-' + msgId, getRewrittenCall(msg.display))}
           </div>
+          ${renderRewriteDetail('rw-' + msgId, getRewrittenCall(msg.display))}
           <div class="tool-result-body">${bodyHtml}</div>
         </div>`;
     }
