@@ -32,7 +32,8 @@
    - 0019 轮次挂起语义：suspended 与 pending-work 事实层（实施计划见 [docs/plans/2026-09-27-turn-suspension-semantics.md](docs/plans/2026-09-27-turn-suspension-semantics.md)）
    - 0020 Feature 配置累加型多值字段的跨层叠加
    - 0021 状态机统一内核 state-kernel（框架 core 纯函数转换求值器，WorkThread / CallArbiter 先行迁移；实施计划见 [docs/plans/2026-10-06-state-kernel-implementation.md](docs/plans/2026-10-06-state-kernel-implementation.md)）
-   - 0022 Agent Studio Feature-First 模型：feature 一级实体、目录降级为运行环境、会话多对多绑定（实施记录见 [docs/plans/2026-10-07-agent-studio-feature-first-refactor.md](docs/plans/2026-10-07-agent-studio-feature-first-refactor.md)）
+   - 0022 Agent Studio Feature-First 模式：feature 一级实体、目录降级为运行环境、会话多对多绑定（实施记录见 [docs/plans/2026-10-07-agent-studio-feature-first-refactor.md](docs/plans/2026-10-07-agent-studio-feature-first-refactor.md)）
+   - 0023 工具调用历史改写：工具自声明生效调用、框架零语义判断、双视图与单轨快照（实施计划见 [docs/plans/2026-10-07-tool-call-history-rewrite.md](docs/plans/2026-10-07-tool-call-history-rewrite.md)）
 
 实现层真实入口：
 
