@@ -469,6 +469,63 @@ describe('composer session draft isolation (ticket 036)', () => {
     assert.equal(taRestore.value, 'hello session a');
   });
 
+  it('routes send-button submits through pending prompt activation in both composer modes', () => {
+    const ctx = createInputSandbox();
+    loadInputModules(ctx);
+    const calls = [];
+    ctx.window.ClawSlash = {
+      submitWithPendingPrompts: (textarea, submit) => {
+        calls.push({ textarea, submit });
+      },
+    };
+    ctx.run('renderInputRequests([])');
+    const textarea = ctx.run("document.getElementById('input-persistent')");
+    const persistentButton = ctx.run("document.getElementById('persistent-action-btn')");
+    persistentButton.onclick();
+    assert.equal(calls.length, 1, 'persistent send button delegates through prompt activation');
+    assert.equal(calls[0].textarea, textarea);
+    assert.equal(typeof calls[0].submit, 'function');
+
+    flipToRequests(ctx, { requestId: 'r1' });
+    const requestButton = ctx.run("document.querySelector('.persistent-action-btn')");
+    requestButton.onclick();
+    assert.equal(calls.length, 2, 'request send button delegates through the same prompt activation');
+    assert.equal(calls[1].textarea, textarea);
+    assert.equal(typeof calls[1].submit, 'function');
+  });
+
+  it('activates pending prompts before invoking the supplied submit path and hands refs to the payload consumer', async () => {
+    const ctx = createFrontendSandbox({
+      document: createMiniDocument(),
+      currentLanguage: 'zh',
+      currentRuntimeAgentId: 'agent-1',
+      autoResize: () => {},
+      t: (key) => key,
+    });
+    ctx.loadSource('public/src/modules/slash-menu.js');
+    ctx.run(`
+      _postCapabilityInvoke = async (cmd) => ({ ok: true, result: cmd.name });
+      _pendingPrompts = [{ name: 'skill.grill-me', ref: 'skill.grill-me' }];
+    `);
+    const result = await ctx.run(`
+      (async () => {
+        const textarea = { value: '请审查方案' };
+        let submittedText = null;
+        await window.ClawSlash.submitWithPendingPrompts(textarea, async () => {
+          submittedText = textarea.value;
+        });
+        return {
+          submittedText,
+          activations: window.ClawSlash.consumeActivations(),
+          pendingCount: _pendingPrompts.length,
+        };
+      })()
+    `);
+    assert.equal(result.submittedText, '/grill-me 请审查方案');
+    assert.deepEqual([...result.activations], ['skill.grill-me']);
+    assert.equal(result.pendingCount, 0);
+  });
+
   it('clears slash prompt pills on session switch only', () => {
     const ctx = createInputSandbox();
     loadInputModules(ctx);

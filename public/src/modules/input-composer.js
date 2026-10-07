@@ -280,7 +280,14 @@ function buildComposerCard() {
   const sendBtn = document.createElement('button');
   sendBtn.className = 'persistent-action-btn';
   sendBtn.id = 'persistent-action-btn';
-  sendBtn.onclick = function() { onPersistentBtnClick(); };
+  sendBtn.onclick = function() {
+    const textarea = document.getElementById('input-persistent');
+    if (window.ClawSlash?.submitWithPendingPrompts && textarea) {
+      void window.ClawSlash.submitWithPendingPrompts(textarea, onPersistentBtnClick);
+    } else {
+      onPersistentBtnClick();
+    }
+  };
   sendBtn.innerHTML = _COMPOSER_SEND_SVG + _COMPOSER_STOP_SVG;
 
   right.appendChild(modelBtn);
@@ -353,7 +360,14 @@ function applyComposerMode(card, mode, lease = null) {
   if (mode === 'persistent') {
     sendBtn.id = 'persistent-action-btn';
     sendBtn.title = currentLanguage === 'zh' ? '发送' : 'Send';
-    sendBtn.onclick = function() { onPersistentBtnClick(); };
+    sendBtn.onclick = function() {
+      const textarea = document.getElementById('input-persistent');
+      if (window.ClawSlash?.submitWithPendingPrompts && textarea) {
+        void window.ClawSlash.submitWithPendingPrompts(textarea, onPersistentBtnClick);
+      } else {
+        onPersistentBtnClick();
+      }
+    };
     // 三态（send/stop/interrupting）交还 _syncPersistentActionButton 决定
     _syncPersistentActionButton();
   } else {
@@ -367,7 +381,15 @@ function applyComposerMode(card, mode, lease = null) {
     const iconStop = sendBtn.querySelector('.icon-stop');
     if (iconSend) iconSend.style.display = '';
     if (iconStop) iconStop.style.display = 'none';
-    sendBtn.onclick = function() { submitInput(requestId, boundRuntimeId); };
+    sendBtn.onclick = function() {
+      const textarea = card.querySelector('.user-input-textarea');
+      const submit = function() { submitInput(requestId, boundRuntimeId); };
+      if (window.ClawSlash?.submitWithPendingPrompts && textarea) {
+        void window.ClawSlash.submitWithPendingPrompts(textarea, submit);
+      } else {
+        submit();
+      }
+    };
   }
 
   // footer 动作（requests 模式）：过滤内部回退/压缩动作（动作过滤契约）

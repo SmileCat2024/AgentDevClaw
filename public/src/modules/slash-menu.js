@@ -439,6 +439,7 @@ function _renderPillBar() {
 // 发送管线（consumeActivations），消息文本仍写短名前缀保持会话流可读。
 // 消息真正触发技能注入的是随 user-turn 流动的结构化通知，不是文本解析
 let _handoffActivations = null;
+let _promptSubmitInFlight = false;
 
 window.ClawSlash = {
   /** 发送管线取走并清空本次发送携带的激活 refs（无则返回 null） */
@@ -460,33 +461,48 @@ window.ClawSlash = {
    * 不再覆盖此场景，必须由会话切换点显式触发。
    */
   clearSessionPrompts: _clearPrompts,
+  /** 先激活待发技能，再调用当前输入框对应的提交入口。 */
+  async submitWithPendingPrompts(ta, submit) {
+    if (_promptSubmitInFlight) return false;
+    if (_pendingPrompts.length === 0) {
+      await submit();
+      return true;
+    }
+    _promptSubmitInFlight = true;
+    try {
+      const pills = _pendingPrompts.slice();
+      for (const cmd of pills) {
+        const r = await _postCapabilityInvoke(cmd, {});
+        if (!r.ok) {
+          window.ClawToast?.show?.({
+            id: 'slash-prompt-failed',
+            status: 'error',
+            title: currentLanguage === 'zh' ? '技能激活失败，消息未发送' : 'Skill activation failed, message not sent',
+            description: r.error + ' — ' + cmd.name,
+            autoDismiss: 6000,
+          });
+          return false;
+        }
+      }
+      const rest = (typeof ta.value === 'string' ? ta.value : '').trim();
+      const prefix = pills.map(function (c) { return '/' + _shortName(c); }).join(' ');
+      _handoffActivations = pills.map(function (c) { return c.ref || c.name; }).filter(Boolean);
+      ta.value = prefix + (rest ? ' ' + rest : '');
+      autoResize(ta);
+      _clearPrompts();
+      await submit();
+      return true;
+    } finally {
+      _promptSubmitInFlight = false;
+    }
+  },
 };
 
 async function _dispatchPrompts(ta) {
-  const pills = _pendingPrompts.slice();
-  const rest = (typeof ta.value === 'string' ? ta.value : '').trim();
-  for (const cmd of pills) {
-    const r = await _postCapabilityInvoke(cmd, {});
-    if (!r.ok) {
-      window.ClawToast?.show?.({
-        id: 'slash-prompt-failed',
-        status: 'error',
-        title: currentLanguage === 'zh' ? '技能激活失败，消息未发送' : 'Skill activation failed, message not sent',
-        description: r.error + ' — ' + cmd.name,
-        autoDismiss: 6000,
-      });
-      return;
-    }
-  }
-  const prefix = pills.map(function (c) { return '/' + _shortName(c); }).join(' ');
-  const refs = pills.map(function (c) { return c.ref || c.name; }).filter(Boolean);
-  _handoffActivations = refs.length > 0 ? refs : null;
-  ta.value = prefix + (rest ? ' ' + rest : '');
-  autoResize(ta);
-  _clearPrompts();
-  // 合成 Enter 走原生发送路径（此刻 pill 已清、菜单已关，capture 放行）；
-  // 发送函数经 ClawSlash.consumeActivations() 取走 refs 附加到 user-turn
-  ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  await window.ClawSlash.submitWithPendingPrompts(ta, function () {
+    // 原生 Enter 保持输入框原有的提交端点与键盘行为。
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  });
 }
 
 // ── 参数表单（FeatureManifestSettingProperty 渲染）───────────────
