@@ -119,9 +119,11 @@ function _renderModelConfigContent(agent, presets) {
 // Feature 仓库选择面板是全局通用弹窗（feature-store.js），由打开处传入身份。
 //
 // coder 白名单与 coder-agent.js 的挂载清单对齐（有配置 manifest 的部分）：
-// shell / memory / skill / lsp / github。coder 不挂 mcp、audio-feedback、
+// shell / memory / skill / github。coder 不挂 mcp、audio-feedback、
 // context-guard（其上下文接力 ContextRotationTriggerFeature 为零配置装配）。
-const PH_CODER_INCLUDE_FEATURES = ['shell', 'memory', 'skill', 'lsp', 'github'];
+// lsp 等官方可选插件不在白名单内——装配后由 mountedExtras 放行（见
+// feature-config-editor.js buildSections）。
+const PH_CODER_INCLUDE_FEATURES = ['shell', 'memory', 'skill', 'github'];
 
 const PH_FEATURE_PAGES = {
   'feature-main': {

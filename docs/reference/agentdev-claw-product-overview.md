@@ -21,7 +21,7 @@ Claw 不是单聊天窗口，而是托管多个预制 Agent 的工作台。每�
 
 | 工作空间 | 定位 |
 |---|---|
-| **编程小助手**（programming-helper） | 对标 Claude Code 的 AI 编程 Agent：Shell / LSP / Web / MCP 工具链，会话分支、精简、checkpoint，浏览器可视化交互层；另含 coder 身份（无人值守自主编码，经线程调度） |
+| **编程小助手**（programming-helper） | 对标 Claude Code 的 AI 编程 Agent：Shell / Web / MCP 工具链（LSP、Playwright 浏览器为官方可选插件，在设置里按身份装配），会话分支、精简、checkpoint，浏览器可视化交互层；另含 coder 身份（无人值守自主编码，经线程调度） |
 | **Agent Studio**（agent-studio） | 上游制造端：对话中开发 Feature、装配 Agent，经隔离 Test Runtime 验证后打成不可变包进入 Feature 仓库 |
 | **IM 渠道**（qqbot） | 多渠道消息门户代理与路由（QQ / 微信 / 企业微信 / 飞书等），线路到工作空间会话的动态转接 |
 | **工作群**（work-group，Beta） | 群聊形式指挥与协调多 Agent |

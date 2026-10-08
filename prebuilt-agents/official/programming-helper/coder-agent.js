@@ -8,8 +8,9 @@
  * 用户数据目录 agent-configs/coder.json）。
  *
  * - 保留执行类工具链（todo / force-continuation / websearch /
- *   memory / shell / image-reader / lsp / context-rotation-trigger / github），
- *   与线程接力（context-rotation-trigger）机制协同。
+ *   memory / shell / image-reader / context-rotation-trigger / github，
+ *   与线程接力（context-rotation-trigger）机制协同；lsp / playwright-shell
+ *   为官方可选插件，经 agent.js 的 builtinOptionalFeatures 按需挂载）。
  * - 增挂 tickets-build-flow（拿到指令之后的 implement / tdd / code-review
  *   构建流程规范），与线程看板衔接（thread-board）。
  * - 相对编程小助手主身份的裁剪：
@@ -26,7 +27,7 @@
  *   完成，runtime 只按普通会话运行。
  */
 
-import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdevjs/core';
+import { BasicAgent, TemplateComposer, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdevjs/core';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { TicketsBuildFlow } from '../../../features/tickets-build-flow/dist/index.js';
@@ -55,9 +56,6 @@ const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 // 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
 const IMAGE_STORAGE_DIR = join(resolveUserDataDir(), 'images');
-// LSP 二进制缓存收敛进数据根（框架默认值在 ~/.agentdev/lsp-bin，绕过数据根）。
-// feature 持久资产统一归数据根 assets/<feature>/ 分区（见 ADR-0015）。
-const LSP_BIN_DIR = join(resolveUserDataDir(), 'assets', 'lsp', 'bin');
 
 /**
  * 自动化编码智能体（coder）Agent
@@ -144,8 +142,6 @@ export class CoderAgent extends BasicAgent {
     this.use(new MemoryFeature({ workspaceDir }));
     this.use(new ShellFeature({ workspaceDir }));
     this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
-
-    this.use(new LspFeature({ workdir: workspaceDir, binDir: LSP_BIN_DIR }));
 
     this.use(new GitHubShellFeature());
 

@@ -196,12 +196,17 @@ export function buildStorePackages(catalog) {
   return packages;
 }
 
-/** 单身份的 $mount 清单：{ [runtimeName]: { package, version, layerId, missing } } */
-export async function collectScopeMounts(agentId, catalog) {
+/** 单身份的 $mount 提取（层文件 → mounts Map），装配清单与可选插件过滤共用。 */
+async function extractScopeMounts(agentId) {
   const { layers } = buildScopeLayers({ agentId });
-  const { mounts } = extractFeatureMounts(
+  return extractFeatureMounts(
     layers.map(({ id, sparse }) => ({ id, config: sparse })),
   );
+}
+
+/** 单身份的 $mount 清单：{ [runtimeName]: { package, version, layerId, missing } } */
+export async function collectScopeMounts(agentId, catalog) {
+  const { mounts } = await extractScopeMounts(agentId);
   const result = {};
   for (const [runtimeName, mount] of mounts) {
     // builtin（官方可选插件）不走 tgz 仓库，无 missing 概念
@@ -216,6 +221,21 @@ export async function collectScopeMounts(agentId, catalog) {
     };
   }
   return result;
+}
+
+/**
+ * 某身份未装配的官方可选插件名清单（身份配置页过滤官方 manifest 清单用）。
+ * 可选面由 agent.js 的 builtinOptionalFeatures 声明；装配事实在配置层
+ * $mount。未注册的身份（非 main/coder 的 agentId）返回空——不过滤。
+ */
+export async function collectUnmountedOptionalNames(agentId) {
+  const scope = STORE_SCOPES.find((s) => s.agentId === agentId);
+  if (!scope) return [];
+  const tables = await loadBuiltinTables();
+  const builtinNames = Object.keys(tables?.[scope.identity] || {});
+  if (!builtinNames.length) return [];
+  const { mounts } = await extractScopeMounts(agentId);
+  return builtinNames.filter((name) => !mounts.has(name));
 }
 
 /**

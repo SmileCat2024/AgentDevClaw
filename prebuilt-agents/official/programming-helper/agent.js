@@ -210,8 +210,6 @@ export class ProgrammingHelperAgent extends BasicAgent {
     this.use(new PanelShellFeature({ workspaceDir, ...runtimeIdentity }));
     this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
 
-    this.use(new LspFeature({ workdir: workspaceDir, binDir: LSP_BIN_DIR }));
-
     this.use(new UserInputFeature());
     this.use(new GenerativeUISurfaceFeature());
     this.use(new GitHubShellFeature());
@@ -262,6 +260,17 @@ export function resolveAgentClass({ runtime } = {}) {
   return runtime?.sessionType === 'coder' ? CoderAgent : ProgrammingHelperAgent;
 }
 
+/** LSP 插件工厂：main / coder 共用（二进制缓存按数据根分区，见 LSP_BIN_DIR）。 */
+function createLspPlugin() {
+  return {
+    create: (config = {}, context = {}) => new LspFeature({
+      workdir: context.workspaceDir || config.workspaceDir || process.cwd(),
+      binDir: LSP_BIN_DIR,
+      ...config,
+    }),
+  };
+}
+
 /** playwright-shell 插件工厂：main / coder 共用（资产与档案路径按数据根分区）。 */
 function createPlaywrightShellPlugin() {
   return {
@@ -283,6 +292,12 @@ function createPlaywrightShellPlugin() {
  * 表按会话身份（main / coder）分键：插件只对声明了的身份开放挂载。
  */
 export const builtinOptionalFeatures = {
-  main: { 'playwright-shell': createPlaywrightShellPlugin() },
-  coder: { 'playwright-shell': createPlaywrightShellPlugin() },
+  main: {
+    'playwright-shell': createPlaywrightShellPlugin(),
+    'lsp': createLspPlugin(),
+  },
+  coder: {
+    'playwright-shell': createPlaywrightShellPlugin(),
+    'lsp': createLspPlugin(),
+  },
 };

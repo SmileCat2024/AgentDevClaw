@@ -298,11 +298,13 @@ export function setupSystemFeatureConfigRoutes(app, express) {
       // 已装配项合并（$mount 装配的 feature，配置面与官方清单同一视图）：
       // 带 agentId 时合并该身份已装配 feature 的 settings manifest，并返回
       // extras 全集供前端放行白名单过滤（装了它 = 可配它）。
+      // 官方可选插件（builtinOptionalFeatures）在该身份未装配时从配置面
+      // 隐藏——官方清单扫描（框架导出面）不知道装配事实，按身份过滤。
       let mountedExtras = [];
       const agentIdParam = typeof req.query.agentId === 'string' ? req.query.agentId.trim() : '';
       if (agentIdParam) {
         try {
-          const { collectScopeMountManifests } = await import('./feature-store.js');
+          const { collectScopeMountManifests, collectUnmountedOptionalNames } = await import('./feature-store.js');
           const result = await collectScopeMountManifests(agentIdParam);
           mountedExtras = result.extras;
           for (const item of result.manifests) {
@@ -310,6 +312,10 @@ export function setupSystemFeatureConfigRoutes(app, express) {
               seen.add(item.featureName);
               features.push(item);
             }
+          }
+          const hidden = new Set(await collectUnmountedOptionalNames(agentIdParam));
+          for (let i = features.length - 1; i >= 0; i--) {
+            if (hidden.has(features[i].featureName)) features.splice(i, 1);
           }
         } catch {}
       }
