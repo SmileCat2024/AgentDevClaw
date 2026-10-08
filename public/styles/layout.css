@@ -6004,6 +6004,7 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); white-space:
   padding: 6px 14px;
   font-size: 12px;
   font-weight: 600;
+  font-family: inherit;
   letter-spacing: 0.03em;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -6694,6 +6695,7 @@ body[data-theme="light"] .project-docset-detail-empty {
   font-size: 12px;
   font-weight: 600;
   font-family: inherit;
+  letter-spacing: 0.03em;
   cursor: pointer;
   box-shadow: 0 8px 24px var(--shadow-color);
   transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);

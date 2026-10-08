@@ -5018,7 +5018,7 @@ body[data-theme="light"] .tool-result-body .d2h-code-line-ctn { color: var(--tex
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary, #aaa);
+  color: var(--text-primary, #ededed);
   user-select: none;
   white-space: nowrap;
   pointer-events: none;
@@ -5035,11 +5035,12 @@ body[data-theme="light"] .call-elapsed-capsule {
 .call-elapsed-capsule.is-running {
   /* accent 玻璃：靛蓝半透明叠在磨砂上，色相可辨且不透字 */
   background: rgba(99, 102, 241, 0.35);
-  color: var(--accent-text, #a5b4fc);
+  color: #e0e7ff;
 }
 
 body[data-theme="light"] .call-elapsed-capsule.is-running {
   background: rgba(79, 70, 229, 0.18);
+  color: var(--accent-text, #4f46e5);
 }
 
 .recap-hint {
