@@ -14,7 +14,6 @@
     { "name": "todo", "displayName": { "zh": "任务清单", "en": "Todo" }, "type": "ability", "capabilities": ["tools"], "provenance": "local" },
     { "name": "opencode-basic", "displayName": { "zh": "文件读写", "en": "File I/O" }, "type": "system", "capabilities": [], "provenance": "local" },
     { "name": "force-continuation", "displayName": { "zh": "强制续跑", "en": "Force Continuation" }, "type": "governance", "capabilities": ["policy"], "provenance": "local" },
-    { "name": "step-rotating-model", "displayName": { "zh": "轮换模型", "en": "Step Rotating Model" }, "type": "governance", "capabilities": ["policy"], "provenance": "local" },
     { "name": "context-guard", "displayName": { "zh": "上下文守卫", "en": "Context Guard" }, "type": "governance", "capabilities": ["policy"], "provenance": "local" },
     { "name": "context-rotation-trigger", "displayName": { "zh": "上下文轮换触发器", "en": "Context Rotation Trigger" }, "type": "governance", "capabilities": ["policy"], "provenance": "local" },
     { "name": "claw-dispatch", "displayName": { "zh": "Claw 调度桥接", "en": "Claw Dispatch" }, "type": "system", "capabilities": [], "provenance": "local" },

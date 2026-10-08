@@ -55,15 +55,15 @@
 | 4 | feature | `src/tools.ts` | 删 `studio_initialize_project`、`studio_get_project` → `studio_get_directory`、`featureProjectDir` 参数、包名唯一性、注册即绑定 | 完成 |
 | 5 | feature | `src/runtime-process.ts` | 消费面签名从 `AgentStudioProject` 改为清单 + features | 完成 |
 | 6 | feature | `test/studio-feature.test.ts`、`test/feature-store.test.ts` | 重写 + 新增（迁移幂等 / 绑定回写 / 账本保留） | 完成 |
-| 7 | 宿主 | `scripts/run-prebuilt-agent.js` | agent 构造 config 注入 agentId/sessionId/serverOrigin | 待做 |
-| 8 | 装配 | `prebuilt-agents/official/agent-studio/agent.js` | AgentStudioFeature 构造传入会话身份 | 待做 |
-| 9 | runtime | `scripts/run-studio-runtime.js` | sandbox 标签 `studio-sandbox:目录名` | 待做 |
-| 10 | server | `server/routes/session.js` + `session-helpers*.js` + `shared/session-access.js` | `studioProjectId` → `studioFeatureIds` 全链路；新增绑定端点；启动迁移编排（迁移 → 会话重绑定 → 删 projects.json）；删 state.openDirectory 写入 | 待做 |
-| 11 | 前端 | `modules/workspace-blocks.js`、`workspace-actions.js`、`app-main.js`、`app-ui.js` | 首页 = feature 卡片 + 最近对话条；详情页 feature 维度；payload 字段 | 待做 |
-| 12 | 装配 | `metadata.json`（hero/按钮文案） | 「新建项目」→「新建对话」 | 待做 |
-| 13 | 同步 | `skills/agent-studio-workflow/SKILL.md` + `.agentdev/prompts/system.md` | 工作流重写（两处同步规则不变） | 待做 |
-| 14 | 测试 | `test/session-helpers-pure.test.js`、`test/session-utils.test.js`、`test/shared-modules.test.js` | 字段更替 | 待做 |
-| 15 | 文档 | `AGENT.md`、glossary | Agent Studio 段重写 + ADR-0022 入列 | 待做 |
+| 7 | 宿主 | `scripts/run-prebuilt-agent.js` | agent 构造 config 注入 agentId/sessionId/serverOrigin | 完成 |
+| 8 | 装配 | `prebuilt-agents/official/agent-studio/agent.js` | AgentStudioFeature 构造传入会话身份 | 完成 |
+| 9 | runtime | `scripts/run-studio-runtime.js` | sandbox 标签 `studio-sandbox:目录名` | 完成 |
+| 10 | server | `server/routes/session.js` + `session-helpers*.js` + `shared/session-access.js` | `studioProjectId` → `studioFeatureIds` 全链路；新增绑定端点；启动迁移编排（迁移 → 会话重绑定 → 删 projects.json）；删 state.openDirectory 写入 | 完成 |
+| 11 | 前端 | `modules/workspace-blocks.js`、`workspace-actions.js`、`app-main.js`、`app-ui.js` | 首页 = feature 卡片 + 最近对话条；详情页 feature 维度；payload 字段 | 完成 |
+| 12 | 装配 | `metadata.json`（hero/按钮文案） | 「新建项目」→「新建对话」 | 完成 |
+| 13 | 同步 | `skills/agent-studio-workflow/SKILL.md` + `.agentdev/prompts/system.md` | 工作流重写（两处同步规则不变） | 完成 |
+| 14 | 测试 | `test/session-helpers-pure.test.js`、`test/session-utils.test.js`、`test/shared-modules.test.js` | 字段更替 | 完成 |
+| 15 | 文档 | `AGENT.md`、glossary | Agent Studio 段重写 + ADR-0022 入列 | 完成 |
 
 ## 迁移设计（服务启动时，幂等）
 

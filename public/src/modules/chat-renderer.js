@@ -228,34 +228,7 @@ function renderMessage(msg, index) {
     }
 
     if (msg.toolCalls && msg.toolCalls.length > 0) {
-      const toolsHtml = msg.toolCalls.map((call, ci) => {
-        const displayName = getToolDisplayName(call.name);
-        const template = getToolRenderTemplate(call.name);
-        // 工具执行中进度（ticket 025）：callId 配对 + 进度数据经模板第三参传入
-        const callIdAttr = call.id ? ` data-tool-call-id="${escapeHtml(String(call.id))}"` : '';
-        const progressCtx = typeof resolveToolProgressForCall === 'function'
-          ? resolveToolProgressForCall(call)
-          : null;
-        const rewritten = rewrittenByCallId.get(call.id) || null;
-        let innerHtml;
-
-        if (template.call) {
-          innerHtml = applyTemplate(template.call, call.arguments, true, progressCtx);
-        } else {
-          innerHtml = renderJsonHighlight(call.arguments);
-        }
-
-        return `
-          <div class="tool-call-container"${callIdAttr}>
-            <div class="tool-header">
-              <span class="tool-header-name">${displayName}</span>
-              ${renderRewriteBadge(rewriteDetailId(call.id), rewritten)}
-            </div>
-            ${renderRewriteDetail(rewriteDetailId(call.id), rewritten)}
-            <div class="tool-content">${innerHtml}</div>
-          </div>
-        `;
-      }).join('');
+      const toolsHtml = msg.toolCalls.map(renderToolCallCardHtml).join('');
       innerContent += toolsHtml;
     }
 
@@ -319,6 +292,34 @@ function refreshRewriteIndex(messages) {
 
 function rewriteDetailId(callId) {
   return 'rw-call-' + String(callId).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+// 工具调用卡（单条 call）的完整 HTML。两处 assistant 行渲染分支共用同一实现，
+// 避免卡片结构与改写标注的展开逻辑各写一份而漂移。
+function renderToolCallCardHtml(call) {
+  const displayName = getToolDisplayName(call.name);
+  const template = getToolRenderTemplate(call.name);
+  // 工具执行中进度（ticket 025）：callId 配对 + 进度数据经模板第三参传入
+  const callIdAttr = call.id ? ` data-tool-call-id="${escapeHtml(String(call.id))}"` : '';
+  const progressCtx = typeof resolveToolProgressForCall === 'function'
+    ? resolveToolProgressForCall(call)
+    : null;
+  const rewritten = rewrittenByCallId.get(call.id) || null;
+  const detailId = rewriteDetailId(call.id);
+  const innerHtml = template.call
+    ? applyTemplate(template.call, call.arguments, true, progressCtx)
+    : renderJsonHighlight(call.arguments);
+
+  return `
+    <div class="tool-call-container"${callIdAttr}>
+      <div class="tool-header">
+        <span class="tool-header-name">${displayName}</span>
+        ${renderRewriteBadge(detailId, rewritten)}
+      </div>
+      ${renderRewriteDetail(detailId, rewritten)}
+      <div class="tool-content">${innerHtml}</div>
+    </div>
+  `;
 }
 
 // 结果消息晚于调用块到达（分批投递）时，向已渲染的调用卡补装徽章与明细（幂等）。
@@ -405,7 +406,7 @@ function appendNewMessages(newMessages, startIndex) {
           <div class="message-content" id="${msgId}">
             <div class="tool-result-header">
               <span class="status-dot ${success ? 'success' : 'error'}"></span>
-              <span>${displayName}</span>
+              <span class="tool-result-name">${displayName}</span>
             </div>
             <div class="tool-result-body">${bodyHtml}</div>
           </div>
@@ -974,34 +975,7 @@ function render(messages) {
       }
 
       if (msg.toolCalls && msg.toolCalls.length > 0) {
-        const toolsHtml = msg.toolCalls.map((call, ci) => {
-          const displayName = getToolDisplayName(call.name);
-          const template = getToolRenderTemplate(call.name);
-          // 工具执行中进度（ticket 025）：callId 配对 + 进度数据经模板第三参传入
-          const callIdAttr = call.id ? ` data-tool-call-id="${escapeHtml(String(call.id))}"` : '';
-            const progressCtx = typeof resolveToolProgressForCall === 'function'
-              ? resolveToolProgressForCall(call)
-              : null;
-            const rewritten = rewrittenByCallId.get(call.id) || null;
-            let innerHtml;
-
-            if (template.call) {
-              innerHtml = applyTemplate(template.call, call.arguments, true, progressCtx);
-            } else {
-              innerHtml = renderJsonHighlight(call.arguments);
-            }
-
-            return `
-              <div class="tool-call-container"${callIdAttr}>
-                <div class="tool-header">
-                  <span class="tool-header-name">${displayName}</span>
-                  ${renderRewriteBadge(rewriteDetailId(call.id), rewritten)}
-                </div>
-                ${renderRewriteDetail(rewriteDetailId(call.id), rewritten)}
-                <div class="tool-content">${innerHtml}</div>
-              </div>
-            `;
-        }).join('');
+        const toolsHtml = msg.toolCalls.map(renderToolCallCardHtml).join('');
         innerContent += toolsHtml;
       }
 
@@ -1030,7 +1004,7 @@ function render(messages) {
           <div class="message-content" id="${msgId}">
             <div class="tool-result-header">
               <span class="status-dot ${success ? 'success' : 'error'}"></span>
-              <span>${displayName}</span>
+              <span class="tool-result-name">${displayName}</span>
             </div>
             <div class="tool-result-body">${bodyHtml}</div>
           </div>`;

@@ -1,7 +1,7 @@
 # 实施计划：工具调用历史改写（ADR-0023）
 
 日期：2026-10-07
-状态：已实施（PR-1～PR-4 于 2026-10-08 完成编码与自动化测试；1420/2026 双管线界面标注的实机验证待做）
+状态：已实施（PR-1～PR-5 于 2026-10-08 完成编码、自动化测试与双管线实机核验）
 关联：[ADR-0023](../adr/0023-tool-call-history-rewrite.md)（状态：已接受）
 范围：场景 1（参数自修正）与场景 2（A→B 改名）。场景 3（跨 feature sub-call）不在本计划。
 
@@ -126,6 +126,18 @@ execResult.effectiveCall 存在且校验通过
 - `docs/README.md` 文档地图（如有 ADR 清单段落）；
 - ADR-0023 状态链接到本计划；
 - 不涉及 glossary 新词（"改写/生效调用"为普通词义）。
+
+## 3.1 验收状态（2026-10-08）
+
+| PR | 状态 | 证据 |
+|---|---|---|
+| PR-1 apply() 修复 | 完成 | core 测试 |
+| PR-2 协议与校验 | 完成 | `tool-call-rewrite.test.ts` / `context-rewrite.test.ts`（15 用例） |
+| PR-3 viewer 标注 | 完成 | `packages/viewer/test/viewer-html-tool-rewrite.test.ts`（8 用例） |
+| PR-4 Claw 标注 | 完成 | `test/frontend-tool-rewrite-badge.test.js`（7 用例） |
+| PR-5 文档同步 | 完成 | AGENT.md ADR 索引、`docs/README.md` plans 段落、ADR-0023 关联 |
+
+双管线实机核验：`npm start` 起服务后，1420 端口 `chat-renderer.js` 已携带 `.tool-result-name` 与 `renderToolCallCardHtml`（改写徽章挂载点）；2026 端口 DebugHub 页面已包含 `tool-rewrite-badge` 与 `tool-rewrite-detail` 样式与渲染函数。真实改写路径（工具执行体经 `withRewrite` 声明生效调用）在框架层由 PR-2 用例覆盖；界面标注的 DOM 契约由两管线各自的用例锁定（真实会话样本中尚无触发改写的记录，未做真人操作级复现）。
 
 ## 4. 明确不做（对齐 ADR-0023 不做清单）
 

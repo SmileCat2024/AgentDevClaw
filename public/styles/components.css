@@ -423,7 +423,9 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   border-bottom: 1px solid var(--glass-border);
 }
 
-/* 工具调用改写标注（ADR-0023）：徽章靠右，点击展开原始调用 */
+/* 工具调用改写标注（ADR-0023）：徽章靠右，点击展开原始调用。
+   视觉配方与框架 Viewer（viewer-html/css.ts）保持一致，全部由
+   --warning-color 派生——勿在任一侧写死颜色值。 */
 .tool-rewrite-badge {
   margin-left: auto;
   padding: 1px 8px;
@@ -431,17 +433,17 @@ body[data-theme="light"] .expand-toggle-btn:hover {
   font-size: 11px;
   font-weight: 400;
   cursor: pointer;
-  color: var(--warning-color, #e6a700);
-  background: rgba(230, 167, 0, 0.12);
-  border: 1px solid rgba(230, 167, 0, 0.35);
+  color: var(--warning-color);
+  background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning-color) 35%, transparent);
   user-select: none;
 }
-.tool-rewrite-badge:hover { background: rgba(230, 167, 0, 0.22); }
+.tool-rewrite-badge:hover { background: color-mix(in srgb, var(--warning-color) 22%, transparent); }
 
 .tool-rewrite-detail {
   display: none;
   padding: 8px 14px;
-  border-left: 2px solid var(--warning-color, #e6a700);
+  border-left: 2px solid var(--warning-color);
   border-bottom: 1px solid var(--glass-border);
   font-size: 12px;
   color: var(--text-secondary);

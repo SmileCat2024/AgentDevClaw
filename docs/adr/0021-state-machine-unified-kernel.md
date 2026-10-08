@@ -45,7 +45,8 @@ const threadAnchorMachine = defineStateMachine({
   transitions: [
     {
       event: 'handoff_failed',
-      from: ['rotating', 'rotation_failed'],
+      from: '*',   // 勘误（2026-10-08）：原写 ['rotating', 'rotation_failed']，取证发现现状守卫不查 status，
+                   // 构造态 open+挡板同样落 rotation_failed，精确等价须覆盖全部非终态。详见实施计划 §4。
       guard: (record) => Boolean(record.pendingSuccession), // 挡板仍在
       to: 'rotation_failed',
       effect: (record, event) => { /* 更新 stage、push 附带数据 */ },
