@@ -10,7 +10,7 @@
  * generateSilentWav and isFfmpegAvailable are test-only utilities (not production code).
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'child_process';
 import { join } from 'path';
@@ -23,6 +23,8 @@ import {
   convertAudioToWav,
   encodeWav,
   DEFAULT_SPEECH_MODEL,
+  requestAsrViaChatCompletions,
+  requestAsrViaAudioTranscriptions,
 } from '../server/routes/model-config.js';
 
 // ── Test-only helpers (not production code) ──
@@ -164,6 +166,33 @@ describe('Speech Model Config', () => {
     });
   });
 
+  describe('normalizeSpeechModel apiType', () => {
+
+    it("defaults to 'chat' when missing", () => {
+      const result = normalizeSpeechModel({ baseUrl: 'https://example.com', apiKey: 'key' });
+      assert.equal(result.apiType, 'chat');
+    });
+
+    it("preserves 'audio'", () => {
+      const result = normalizeSpeechModel({ baseUrl: 'https://example.com', apiKey: 'key', apiType: 'audio' });
+      assert.equal(result.apiType, 'audio');
+    });
+
+    it("preserves 'audio-stream'", () => {
+      const result = normalizeSpeechModel({ baseUrl: 'https://example.com', apiKey: 'key', apiType: 'audio-stream' });
+      assert.equal(result.apiType, 'audio-stream');
+    });
+
+    it("falls back to 'chat' for unknown values", () => {
+      const result = normalizeSpeechModel({ baseUrl: 'https://example.com', apiKey: 'key', apiType: 'websocket' });
+      assert.equal(result.apiType, 'chat');
+    });
+
+    it("defaults to 'chat' in DEFAULT_SPEECH_MODEL spread", () => {
+      assert.equal({ ...DEFAULT_SPEECH_MODEL }.apiType, 'chat');
+    });
+  });
+
   describe('Config persistence round-trip', () => {
     let tempDir;
 
@@ -257,6 +286,133 @@ describe('Speech Model Config', () => {
       assert.equal(updated.speechModel.apiKey, 'new-key');
       assert.equal(updated.speechModel.model, 'mimo-v2.5-asr');
       assert.equal(updated.speechModel.language, 'auto');
+    });
+  });
+});
+
+describe('ASR upstream request functions (mocked fetch)', () => {
+  let fetchMock;
+
+  afterEach(() => {
+    if (fetchMock) {
+      fetchMock.mock.restore();
+      fetchMock = null;
+    }
+  });
+
+  function mockFetch(impl) {
+    fetchMock = mock.method(globalThis, 'fetch', impl);
+    return fetchMock;
+  }
+
+  const jsonResponse = (payload, status = 200) =>
+    new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+
+  describe('requestAsrViaChatCompletions', () => {
+
+    it('posts input_audio JSON to /chat/completions and parses assistant content', async () => {
+      const mocked = mockFetch(async () => jsonResponse({ choices: [{ message: { content: '  你好  ' } }] }));
+      const config = { baseUrl: 'https://asr.example.com/v1/', apiKey: 'sk-test', model: 'mimo-v2.5-asr', language: 'zh', apiType: 'chat' };
+
+      const result = await requestAsrViaChatCompletions(config, Buffer.from('abc'), 'audio/wav');
+
+      assert.equal(result.ok, true);
+      assert.equal(result.text, '你好');
+
+      assert.equal(mocked.mock.calls.length, 1);
+      const [url, init] = mocked.mock.calls[0].arguments;
+      assert.equal(url, 'https://asr.example.com/v1/chat/completions');
+      assert.equal(init.method, 'POST');
+      assert.equal(init.headers.Authorization, 'Bearer sk-test');
+
+      const body = JSON.parse(init.body);
+      assert.equal(body.model, 'mimo-v2.5-asr');
+      assert.equal(body.asr_options.language, 'zh');
+      const dataUri = body.messages[0].content[0].input_audio.data;
+      assert.ok(dataUri.startsWith('data:audio/wav;base64,'), 'input_audio payload should be a wav data URI');
+    });
+
+    it('returns { ok:false, status, detail } on HTTP error', async () => {
+      mockFetch(async () => new Response('boom', { status: 500 }));
+      const config = { baseUrl: 'https://asr.example.com/v1', apiKey: 'sk-test', model: 'm', language: 'auto', apiType: 'chat' };
+
+      const result = await requestAsrViaChatCompletions(config, Buffer.from('abc'), 'audio/wav');
+
+      assert.equal(result.ok, false);
+      assert.equal(result.status, 500);
+      assert.equal(result.detail, 'boom');
+    });
+
+    it('returns 502 on network failure', async () => {
+      mockFetch(async () => { throw new Error('ECONNREFUSED'); });
+      const config = { baseUrl: 'https://asr.example.com/v1', apiKey: 'sk-test', model: 'm', language: 'auto', apiType: 'chat' };
+
+      const result = await requestAsrViaChatCompletions(config, Buffer.from('abc'), 'audio/wav');
+
+      assert.equal(result.ok, false);
+      assert.equal(result.status, 502);
+      assert.equal(result.detail, 'network error');
+    });
+  });
+
+  describe('requestAsrViaAudioTranscriptions', () => {
+
+    it('posts multipart form to /audio/transcriptions and parses text', async () => {
+      const mocked = mockFetch(async () => jsonResponse({ text: '  hello world  ' }));
+      const config = { baseUrl: 'https://asr.example.com/v1', apiKey: 'sk-test', model: 'whisper-1', language: 'zh', apiType: 'audio' };
+      const audio = Buffer.from('fake-wav-bytes');
+
+      const result = await requestAsrViaAudioTranscriptions(config, audio, 'audio/wav');
+
+      assert.equal(result.ok, true);
+      assert.equal(result.text, 'hello world');
+
+      assert.equal(mocked.mock.calls.length, 1);
+      const [url, init] = mocked.mock.calls[0].arguments;
+      assert.equal(url, 'https://asr.example.com/v1/audio/transcriptions');
+      assert.equal(init.method, 'POST');
+      assert.equal(init.headers.Authorization, 'Bearer sk-test');
+      assert.ok(!('Content-Type' in init.headers), 'Content-Type must come from the FormData boundary');
+
+      assert.ok(init.body instanceof FormData);
+      assert.equal(init.body.get('model'), 'whisper-1');
+      assert.equal(init.body.get('language'), 'zh');
+      const file = init.body.get('file');
+      assert.equal(file.name, 'audio.wav');
+      assert.equal(file.type, 'audio/wav');
+      assert.equal(file.size, audio.length);
+    });
+
+    it("omits the language field when language is 'auto'", async () => {
+      const mocked = mockFetch(async () => jsonResponse({ text: 'ok' }));
+      const config = { baseUrl: 'https://asr.example.com/v1', apiKey: 'sk-test', model: 'whisper-1', language: 'auto', apiType: 'audio' };
+
+      await requestAsrViaAudioTranscriptions(config, Buffer.from('abc'), 'audio/wav');
+
+      const [, init] = mocked.mock.calls[0].arguments;
+      assert.equal(init.body.get('language'), null);
+    });
+
+    it('maps the multipart filename extension from the mime type', async () => {
+      const mocked = mockFetch(async () => jsonResponse({ text: 'ok' }));
+      const config = { baseUrl: 'https://asr.example.com/v1', apiKey: 'sk-test', model: 'whisper-1', language: 'auto', apiType: 'audio' };
+
+      await requestAsrViaAudioTranscriptions(config, Buffer.from('abc'), 'audio/webm');
+
+      const [, init] = mocked.mock.calls[0].arguments;
+      assert.equal(init.body.get('file').name, 'audio.webm');
+      assert.equal(init.body.get('file').type, 'audio/webm');
+    });
+
+    it('returns { ok:false, status, detail } on HTTP error', async () => {
+      mockFetch(async () => new Response('quota exceeded', { status: 429 }));
+      const config = { baseUrl: 'https://asr.example.com/v1', apiKey: 'sk-test', model: 'whisper-1', language: 'auto', apiType: 'audio' };
+
+      const result = await requestAsrViaAudioTranscriptions(config, Buffer.from('abc'), 'audio/wav');
+
+      assert.equal(result.ok, false);
+      assert.equal(result.status, 429);
+      assert.equal(result.detail, 'quota exceeded');
     });
   });
 });

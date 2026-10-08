@@ -323,7 +323,17 @@ export const DEFAULT_SPEECH_MODEL = {
   apiKey: '',
   model: '',
   language: 'auto',
+  // ASR upstream surface: 'chat' = chat/completions with input_audio payload
+  // (chat-surface ASR extension), 'audio' = OpenAI Audio transcriptions
+  // (non-streaming), 'audio-stream' = streaming WS transcriptions channel.
+  apiType: 'chat',
 };
+
+const SPEECH_MODEL_API_TYPES = new Set(['chat', 'audio', 'audio-stream']);
+
+function normalizeSpeechApiType(raw) {
+  return SPEECH_MODEL_API_TYPES.has(raw) ? raw : 'chat';
+}
 
 export function normalizeSpeechModel(raw) {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_SPEECH_MODEL };
@@ -332,6 +342,7 @@ export function normalizeSpeechModel(raw) {
     apiKey: cleanSessionText(raw.apiKey) || '',
     model: cleanSessionText(raw.model) || DEFAULT_SPEECH_MODEL.model,
     language: cleanSessionText(raw.language) || DEFAULT_SPEECH_MODEL.language,
+    apiType: normalizeSpeechApiType(cleanSessionText(raw.apiType)),
   };
 }
 
@@ -343,6 +354,7 @@ function normalizeSpeechPreset(raw) {
     apiKey: cleanSessionText(raw.apiKey) || '',
     model: cleanSessionText(raw.model) || DEFAULT_SPEECH_MODEL.model,
     language: cleanSessionText(raw.language) || DEFAULT_SPEECH_MODEL.language,
+    apiType: normalizeSpeechApiType(cleanSessionText(raw.apiType)),
   };
 }
 
@@ -429,6 +441,107 @@ export function convertAudioToWav(inputBuffer) {
     child.stdin.write(inputBuffer);
     child.stdin.end();
   });
+}
+
+// ── ASR upstream request functions ────────────────────────────────
+// Shared by the /protoclaw/speech_to_text proxy; exported for tests.
+// Both are non-streaming. Audio preprocessing (ffmpeg → 16kHz mono WAV)
+// happens in the proxy before these are called, so `audioMimeType` always
+// describes `audioBuffer` truthfully.
+
+function audioFileExtension(mimeType) {
+  if (mimeType.includes('webm')) return 'webm';
+  if (mimeType.includes('mpeg')) return 'mp3';
+  if (mimeType.includes('ogg')) return 'ogg';
+  return 'wav';
+}
+
+/**
+ * ASR via chat/completions with a base64 `input_audio` user message
+ * (chat-surface ASR extension). Transcript is read from the standard
+ * assistant message content.
+ */
+export async function requestAsrViaChatCompletions(speechConfig, audioBuffer, audioMimeType) {
+  const dataUri = `data:${audioMimeType};base64,${audioBuffer.toString('base64')}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+
+  const asrResp = await fetch(speechConfig.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${speechConfig.apiKey}`,
+      'api-key': speechConfig.apiKey,
+    },
+    body: JSON.stringify({
+      model: speechConfig.model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'input_audio',
+              input_audio: { data: dataUri },
+            },
+          ],
+        },
+      ],
+      asr_options: { language: speechConfig.language || 'auto' },
+    }),
+    signal: controller.signal,
+  }).catch(() => null);
+
+  clearTimeout(timeout);
+
+  if (!asrResp || !asrResp.ok) {
+    const status = asrResp ? asrResp.status : 502;
+    const detail = asrResp ? await asrResp.text().catch(() => '') : 'network error';
+    return { ok: false, status, detail };
+  }
+
+  const data = await asrResp.json();
+  return { ok: true, text: data?.choices?.[0]?.message?.content?.trim() || '' };
+}
+
+/**
+ * ASR via the OpenAI Audio Transcriptions surface
+ * (POST {baseUrl}/audio/transcriptions, multipart/form-data). The upstream
+ * auto-detects the language when the parameter is omitted, so 'auto' is
+ * simply not sent. Default response_format=json carries the transcript in
+ * the top-level `text` field.
+ */
+export async function requestAsrViaAudioTranscriptions(speechConfig, audioBuffer, audioMimeType) {
+  const form = new FormData();
+  form.append('file', new Blob([audioBuffer], { type: audioMimeType }), `audio.${audioFileExtension(audioMimeType)}`);
+  form.append('model', speechConfig.model);
+  if (speechConfig.language && speechConfig.language !== 'auto') {
+    form.append('language', speechConfig.language);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+
+  const asrResp = await fetch(speechConfig.baseUrl.replace(/\/+$/, '') + '/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${speechConfig.apiKey}`,
+      'api-key': speechConfig.apiKey,
+    },
+    body: form,
+    signal: controller.signal,
+  }).catch(() => null);
+
+  clearTimeout(timeout);
+
+  if (!asrResp || !asrResp.ok) {
+    const status = asrResp ? asrResp.status : 502;
+    const detail = asrResp ? await asrResp.text().catch(() => '') : 'network error';
+    return { ok: false, status, detail };
+  }
+
+  const data = await asrResp.json();
+  return { ok: true, text: data?.text?.trim() || '' };
 }
 
 // ── Routes ────────────────────────────────────────────────────────
@@ -585,50 +698,15 @@ export function setupModelConfigRoutes(app, express) {
         }
       }
 
-      const audioBase64 = audioBuffer.toString('base64');
-      const dataUri = `data:${audioMimeType};base64,${audioBase64}`;
+      const asrResult = speechConfig.apiType === 'audio'
+        ? await requestAsrViaAudioTranscriptions(speechConfig, audioBuffer, audioMimeType)
+        : await requestAsrViaChatCompletions(speechConfig, audioBuffer, audioMimeType);
 
-      const asrUrl = speechConfig.baseUrl.replace(/\/+$/, '') + '/chat/completions';
-
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30_000);
-
-      const asrResp = await fetch(asrUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${speechConfig.apiKey}`,
-          'api-key': speechConfig.apiKey,
-        },
-        body: JSON.stringify({
-          model: speechConfig.model,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'input_audio',
-                  input_audio: { data: dataUri },
-                },
-              ],
-            },
-          ],
-          asr_options: { language: speechConfig.language || 'auto' },
-        }),
-        signal: controller.signal,
-      }).catch(() => null);
-
-      clearTimeout(timeout);
-
-      if (!asrResp || !asrResp.ok) {
-        const status = asrResp ? asrResp.status : 502;
-        const errText = asrResp ? await asrResp.text().catch(() => '') : 'network error';
-        return res.status(status).json({ error: `ASR request failed: ${status}`, detail: errText });
+      if (!asrResult.ok) {
+        return res.status(asrResult.status).json({ error: `ASR request failed: ${asrResult.status}`, detail: asrResult.detail });
       }
 
-      const data = await asrResp.json();
-      const text = data?.choices?.[0]?.message?.content?.trim() || '';
-      res.json({ text });
+      res.json({ text: asrResult.text });
     } catch (error) {
       next(error);
     }
@@ -910,4 +988,5 @@ export {
   buildStructuredModelPresets,
   resolvePresetApiSurface,
   normalizeSpeechPreset,
+  readSpeechModelConfig,
 };

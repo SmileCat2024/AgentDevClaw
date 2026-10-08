@@ -5,15 +5,28 @@
  * 依赖（全局）：escapeHtml, currentLanguage, renderSettingsOverlay
  */
 
+function speechApiTypeLabel(apiType) {
+  if (apiType === 'audio') return 'Audio';
+  if (apiType === 'audio-stream') return 'Stream';
+  return 'Chat';
+}
+
+// 归一化 apiType：未知值一律回退 chat（与服务端 normalizeSpeechModel 同语义）
+function normalizeSpeechApiTypeValue(value) {
+  return value === 'audio' || value === 'audio-stream' ? value : 'chat';
+}
+
 function renderSpeechModelSection(isZh) {
   const sc = getClawSpeechModelConfig() || {};
   const presets = getClawSpeechPresets();
   const speechEditing = window.ClawFW._speechEditing; // null = not editing, 'new' = new preset, number = edit existing
   const configured = !!(sc.baseUrl && sc.apiKey);
 
-  // Find active preset
+  // Find active preset (apiType participates: presets differing only in
+  // upstream format must not collapse onto the same active card)
   const activePreset = presets.find(function(p) {
-    return p.baseUrl === sc.baseUrl && p.apiKey === sc.apiKey && p.model === sc.model;
+    return p.baseUrl === sc.baseUrl && p.apiKey === sc.apiKey && p.model === sc.model
+      && (p.apiType || 'chat') === (sc.apiType || 'chat');
   });
   const activePresetName = activePreset ? (activePreset.name || activePreset.model || '') : '';
 
@@ -27,7 +40,7 @@ function renderSpeechModelSection(isZh) {
     '<div class="settings-active-label">' + (isZh ? '当前激活' : 'ACTIVE') + '</div>',
     configured
       ? '<div class="settings-active-name">' + escapeHtml(activePresetName || sc.model || (isZh ? '自定义配置' : 'Custom Config')) + '</div>' +
-        '<div class="settings-active-detail">' + escapeHtml((sc.model || '—') + (sc.language ? ' · ' + sc.language : '') + (sc.baseUrl ? ' · ' + sc.baseUrl : '')) + '</div>'
+        '<div class="settings-active-detail">' + escapeHtml(speechApiTypeLabel(sc.apiType) + ' · ' + (sc.model || '—') + (sc.language ? ' · ' + sc.language : '') + (sc.baseUrl ? ' · ' + sc.baseUrl : '')) + '</div>'
       : '<div class="settings-active-name">' + (isZh ? '未配置' : 'Not Configured') + '</div>' +
         '<div class="settings-active-detail">' + (isZh ? '请添加并激活一个语音模型预设' : 'Add and activate a speech model preset') + '</div>',
     '</div>',
@@ -38,7 +51,7 @@ function renderSpeechModelSection(isZh) {
   // If editing a preset, show edit form (without active banner for focus)
   if (speechEditing != null) {
     const editPreset = speechEditing === 'new'
-      ? { name: '', baseUrl: '', apiKey: '', model: '', language: 'auto' }
+      ? { name: '', baseUrl: '', apiKey: '', model: '', language: 'auto', apiType: 'chat' }
       : (presets[speechEditing] || {});
     return { banner: '', content: renderSpeechPresetEditForm(editPreset, speechEditing, isZh) };
   }
@@ -46,13 +59,14 @@ function renderSpeechModelSection(isZh) {
   // Preset list
   const presetCards = presets.length
     ? presets.map(function(p, idx) {
-        const isActive = p.baseUrl === sc.baseUrl && p.apiKey === sc.apiKey && p.model === sc.model;
+        const isActive = p.baseUrl === sc.baseUrl && p.apiKey === sc.apiKey && p.model === sc.model
+          && (p.apiType || 'chat') === (sc.apiType || 'chat');
         return [
           '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" onclick="applySpeechPreset(' + idx + ')">',
           '<div class="settings-preset-dot"></div>',
           '<div class="settings-preset-info">',
           '<div class="settings-preset-name">' + escapeHtml(p.name || p.model || ('Preset ' + (idx + 1))) + '</div>',
-          '<div class="settings-preset-detail">' + escapeHtml((p.model || '—') + (p.language ? ' · ' + p.language : '')) + '</div>',
+          '<div class="settings-preset-detail">' + escapeHtml(speechApiTypeLabel(p.apiType) + ' · ' + (p.model || '—') + (p.language ? ' · ' + p.language : '')) + '</div>',
           '</div>',
           '<div class="settings-preset-actions">',
           '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSpeechPreset(' + idx + ')">',
@@ -85,6 +99,14 @@ function renderSpeechPresetEditForm(preset, editIdx, isZh) {
     '<div class="settings-field">',
     '<label>Base URL</label>',
     '<input class="settings-input" id="speech-preset-baseurl" type="text" value="' + escapeHtml(preset.baseUrl || '') + '" placeholder="https://api.xiaomimimo.com/v1">',
+    '</div>',
+    '<div class="settings-field">',
+    '<label>' + (isZh ? '接口格式' : 'API Format') + '</label>',
+    '<select class="settings-input" data-claw-select id="speech-preset-apitype">',
+    '<option value="chat"' + ((preset.apiType || 'chat') === 'chat' ? ' selected' : '') + '>' + (isZh ? 'Chat Completions（音频输入扩展）' : 'Chat Completions (audio input)') + '</option>',
+    '<option value="audio"' + (preset.apiType === 'audio' ? ' selected' : '') + '>' + (isZh ? 'Audio Transcriptions（语音转写）' : 'Audio Transcriptions') + '</option>',
+    '<option value="audio-stream"' + (preset.apiType === 'audio-stream' ? ' selected' : '') + '>' + (isZh ? 'Audio Transcriptions（流式，边说边出字）' : 'Audio Transcriptions (streaming)') + '</option>',
+    '</select>',
     '</div>',
     '<div class="settings-field">',
     '<label>API Key</label>',
@@ -173,6 +195,7 @@ window.applySpeechPreset = async function(idx) {
     apiKey: preset.apiKey || '',
     model: preset.model || '',
     language: preset.language || 'auto',
+    apiType: normalizeSpeechApiTypeValue(preset.apiType),
   });
   await saveSpeechFullConfig();
 };
@@ -185,6 +208,7 @@ window.saveSpeechPreset = async function(editIdx) {
     apiKey: (el('speech-preset-apikey')?.value || '').trim(),
     model: (el('speech-preset-model')?.value || '').trim(),
     language: el('speech-preset-language')?.value || 'auto',
+    apiType: normalizeSpeechApiTypeValue(el('speech-preset-apitype')?.value),
   };
   const presets = getClawSpeechPresets();
   // Check if there's currently an active speech model
@@ -205,7 +229,7 @@ window.saveSpeechPreset = async function(editIdx) {
 };
 
 async function saveSpeechFullConfig() {
-  const speechModel = getClawSpeechModelConfig() || { baseUrl: '', apiKey: '', model: '', language: 'auto' };
+  const speechModel = getClawSpeechModelConfig() || { baseUrl: '', apiKey: '', model: '', language: 'auto', apiType: 'chat' };
   const speechPresets = getClawSpeechPresets();
   try {
     const resp = await fetch('/protoclaw/speech_model_config', {

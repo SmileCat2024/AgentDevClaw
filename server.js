@@ -153,6 +153,7 @@ import {
   upsertWorkspacePhProject,
 } from './server/routes/workspace.js';
 import { setupGuideRoutes } from './server/routes/guide.js';
+import { setupSpeechStreamProxy } from './server/routes/speech-stream.js';
 import { setupWorkspaceCreatorRoutes } from './server/routes/workspace-creators.js';
 import { createAgentDiscoveryModule } from './server/routes/agent-discovery.js';
 import { createAgentLifecycleModule } from './server/routes/agent-lifecycle.js';
@@ -1623,6 +1624,8 @@ async function main() {
   applyProxy();
 
   httpServer = app.listen(APP_PORT);
+  // 流式语音识别 WS 代理：接管 /protoclaw/speech_stream 的 HTTP upgrade
+  setupSpeechStreamProxy(httpServer);
   await new Promise((resolve, reject) => {
     const onError = (error) => {
       httpServer.removeListener('listening', onListening);

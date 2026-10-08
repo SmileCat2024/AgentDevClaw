@@ -41,6 +41,28 @@ let _voicePendingSend = false;      // 录音期间点了发送：停止录音�
 let _voiceAgentId = null;           // 录音发起时的 runtime agent ID（用于 API 调用）
 let _voiceCacheKey = null;          // 录音发起时的 session cache key（用于检测会话切换）
 let _pendingVoiceResults = {};      // { agentId: text } — ASR 结果在会话切换后暂存，待切回时注入
+
+// ── Streaming voice input (apiType=audio-stream) ─────────────────────────────
+// 状态全部流式路径私有；非流式（chat / audio）路径不触碰这些变量。
+let _voiceStreamWs = null;          // WebSocket → /protoclaw/speech_stream
+let _voiceStreamCtx = null;         // AudioContext（16kHz，或降采样源）
+let _voiceStreamSource = null;      // MediaStreamAudioSourceNode
+let _voiceStreamProcessor = null;   // ScriptProcessorNode（deprecated 但各浏览器均支持；AudioWorklet 需独立模块，复杂度不值）
+let _voiceStreamTrack = null;       // 麦克风 track（停止释放）
+let _voiceStreamPcmQueue = [];      // server ready 前的本地 PCM 缓冲
+let _voiceStreamCommitted = '';     // 已固化段文本（committed 事件按段全文累积）
+let _voiceStreamActiveText = '';    // 活跃段文本（ASR 当前拥有改写权的尾部段，见 stream-draft-logic.js）
+let _voiceStreamComposing = false;  // 录音目标框正在输入法组字：暂停一切写框操作
+
+// 输入法组字（拼音等）期间 textarea 的 value/selection 处于组字串中间态，
+// 任何程序化写入都会毁掉组字。composition 事件冒泡，document 级一次性监听；
+// 仅当组字发生在录音目标框时置位。
+document.addEventListener('compositionstart', (e) => {
+  if (e.target && e.target.id && e.target.id === _voiceTargetId) _voiceStreamComposing = true;
+});
+document.addEventListener('compositionend', (e) => {
+  if (e.target && e.target.id && e.target.id === _voiceTargetId) _voiceStreamComposing = false;
+});
 // 会话草稿缓存（_sessionInputCache）已迁至 input-composer.js（工单 036）：
 // 纯 composer 状态归还 composer 域；本模块只按原全局符号继续消费。
 
@@ -265,6 +287,13 @@ async function startVoiceRecording(btn) {
   _voiceStopping = false;
   _voiceCancelled = false;
 
+  // 流式分支：apiType=audio-stream 时走 PCM 直采 + WS 实时通道，
+  // 不经过 MediaRecorder / blob / /speech_to_text 非流式链路
+  if (speechConfig.apiType === 'audio-stream') {
+    _startStreamedRecording(stream, btn, recordingTargetId, recordingCacheKey, recordingAgentId);
+    return;
+  }
+
   // Determine best supported MIME type
   const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', ''];
   let selectedMime = '';
@@ -335,74 +364,7 @@ async function startVoiceRecording(btn) {
     // Auto-send if user pressed send while recording
     if (_voicePendingSend) {
       _voicePendingSend = false;
-      const targetId = _voiceTargetId || recordingTargetId;
-      if (targetId === 'input-persistent') {
-        const _currentCacheKey = _getSessionInputCacheKey();
-        if (_currentCacheKey === _voiceCacheKey) {
-          // Same session — text already in textarea, submit normally
-          submitQueuedInput();
-        } else {
-          // Session switched — auto-submit directly to original agent
-          const originalCacheKey = _voiceCacheKey;
-          const originalAgentId = _voiceAgentId;
-          let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
-          delete _pendingVoiceResults[_voiceCacheKey];
-          // Also include any cached typed text from the original session
-          const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
-          delete _sessionInputCache[_voiceCacheKey];
-          fullText = cachedInput + fullText;
-          if (fullText.trim()) {
-            fetch(`/api/agents/${originalAgentId}/user-turn`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: fullText, source: 'voice-input' })
-            }).then(async res => {
-              if (!res.ok) {
-                const error = await res.json().catch(() => ({}));
-                _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
-              } else {
-                _markVoiceAutoSendAccepted(originalAgentId);
-              }
-            }).catch(e => {
-              _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
-            });
-          }
-        }
-      } else if (targetId.startsWith('input-')) {
-        const requestId = targetId.slice('input-'.length);
-        if (_getSessionInputCacheKey() === _voiceCacheKey) {
-          submitInput(requestId, _voiceAgentId || currentRuntimeAgentId);
-        } else {
-          // Session switched — auto-submit to original agent's input request
-          const originalCacheKey = _voiceCacheKey;
-          const originalAgentId = _voiceAgentId;
-          let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
-          delete _pendingVoiceResults[_voiceCacheKey];
-          const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
-          delete _sessionInputCache[_voiceCacheKey];
-          fullText = cachedInput + fullText;
-          if (fullText.trim()) {
-            fetch(`/api/agents/${originalAgentId}/input`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                requestId,
-                input: fullText,
-                response: { kind: 'text', text: fullText },
-              })
-            }).then(async res => {
-              if (!res.ok) {
-                const error = await res.json().catch(() => ({}));
-                _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
-              } else {
-                _markVoiceAutoSendAccepted(originalAgentId);
-              }
-            }).catch(e => {
-              _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
-            });
-          }
-        }
-      }
+      _dispatchVoiceAutoSend(_voiceTargetId || recordingTargetId);
     }
     _voiceTargetBtn = null;
     _voiceTargetId = null;
@@ -426,7 +388,83 @@ function _restoreCrossSessionVoiceInput(cacheKey, text, agentId, errorMessage) {
   });
 }
 
+// 录音期间点了发送后的自动提交（流式与非流式共用）：同会话正常提交；
+// 会话已切换则向原 agent 定向提交，失败回写草稿并提示。
+function _dispatchVoiceAutoSend(targetId) {
+  if (targetId === 'input-persistent') {
+    const _currentCacheKey = _getSessionInputCacheKey();
+    if (_currentCacheKey === _voiceCacheKey) {
+      // Same session — text already in textarea, submit normally
+      submitQueuedInput();
+    } else {
+      // Session switched — auto-submit directly to original agent
+      const originalCacheKey = _voiceCacheKey;
+      const originalAgentId = _voiceAgentId;
+      let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
+      delete _pendingVoiceResults[_voiceCacheKey];
+      // Also include any cached typed text from the original session
+      const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
+      delete _sessionInputCache[_voiceCacheKey];
+      fullText = cachedInput + fullText;
+      if (fullText.trim()) {
+        fetch(`/api/agents/${originalAgentId}/user-turn`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: fullText, source: 'voice-input' })
+        }).then(async res => {
+          if (!res.ok) {
+            const error = await res.json().catch(() => ({}));
+            _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
+          } else {
+            _markVoiceAutoSendAccepted(originalAgentId);
+          }
+        }).catch(e => {
+          _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
+        });
+      }
+    }
+  } else if (targetId && targetId.startsWith('input-')) {
+    const requestId = targetId.slice('input-'.length);
+    if (_getSessionInputCacheKey() === _voiceCacheKey) {
+      submitInput(requestId, _voiceAgentId || currentRuntimeAgentId);
+    } else {
+      // Session switched — auto-submit to original agent's input request
+      const originalCacheKey = _voiceCacheKey;
+      const originalAgentId = _voiceAgentId;
+      let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
+      delete _pendingVoiceResults[_voiceCacheKey];
+      const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
+      delete _sessionInputCache[_voiceCacheKey];
+      fullText = cachedInput + fullText;
+      if (fullText.trim()) {
+        fetch(`/api/agents/${originalAgentId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requestId,
+            input: fullText,
+            response: { kind: 'text', text: fullText },
+          })
+        }).then(async res => {
+          if (!res.ok) {
+            const error = await res.json().catch(() => ({}));
+            _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
+          } else {
+            _markVoiceAutoSendAccepted(originalAgentId);
+          }
+        }).catch(e => {
+          _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
+        });
+      }
+    }
+  }
+}
+
 function stopVoiceRecording() {
+  if (_voiceStreamWs) {
+    _stopStreamedRecording();
+    return;
+  }
   if (_voiceMediaRecorder && _voiceMediaRecorder.state === 'recording') {
     _voiceStopping = true;
     _voiceMediaRecorder.stop();
@@ -443,7 +481,271 @@ function stopVoiceRecording() {
 function _cancelVoiceRecording() {
   _voiceCancelled = true;
   _voicePendingSend = false;
+  if (_voiceStreamWs) {
+    _cancelStreamedRecording();
+    return;
+  }
   stopVoiceRecording();
+}
+
+// ── Streaming voice input (apiType=audio-stream) ─────────────────────────────
+// 采集：AudioContext 直采 16kHz int16 mono PCM（AudioContext 不支持指定采样率
+// 时线性插值降采样），经 /protoclaw/speech_stream WS 推送；
+// 呈现：committed 段全文累积 + partial 当前段覆盖，实时写入输入框；
+// 收尾：stop → final（全文 = Σcommitted + final 段）固化，取消则恢复原文。
+
+function _resampleTo16k(input, inputRate) {
+  if (inputRate === 16000) return input;
+  const ratio = inputRate / 16000;
+  const outLen = Math.floor(input.length / ratio);
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const srcPos = i * ratio;
+    const i0 = Math.floor(srcPos);
+    const frac = srcPos - i0;
+    const a = input[i0] || 0;
+    const b = i0 + 1 < input.length ? input[i0 + 1] : a;
+    out[i] = a + (b - a) * frac;
+  }
+  return out;
+}
+
+function _float32ToInt16Pcm(samples) {
+  const pcm = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return pcm;
+}
+
+// 增量合成：把一次识别事件的新段文本合入输入框（规则见 stream-draft-logic.js）。
+// 组字中 / 会话切走 / 框不存在时不写框、也不推进 activeText —— 下一帧事件
+// 会基于旧 activeText 的 diff 自然收敛，跳过期间的内容不丢失。
+function _applyStreamTextToDraft(newText) {
+  const textarea = document.getElementById(_voiceTargetId);
+  if (!textarea || _voiceStreamComposing) return;
+  if (_voiceCacheKey && _getSessionInputCacheKey() !== _voiceCacheKey) return;
+  const selStart = typeof textarea.selectionStart === 'number' ? textarea.selectionStart : textarea.value.length;
+  const selEnd = typeof textarea.selectionEnd === 'number' ? textarea.selectionEnd : selStart;
+  const plan = planStreamDraftMutation(textarea.value, selStart, selEnd, _voiceStreamActiveText, newText);
+  if (plan.kind === 'replace-tail') {
+    textarea.value = plan.value;
+    textarea.setSelectionRange(plan.caret, plan.caret);
+  } else if (plan.kind === 'insert') {
+    // 在用户当前光标/选区处插入增量（选区内容被替换，光标落在增量后）
+    textarea.setRangeText(plan.delta, plan.start, plan.end, 'end');
+  }
+  _voiceStreamActiveText = newText;
+  if (plan.kind !== 'noop') {
+    autoResize(textarea);
+    _cacheSessionInput(textarea);
+  }
+}
+
+function _haltStreamCapture() {
+  if (_voiceStreamProcessor) {
+    try { _voiceStreamProcessor.onaudioprocess = null; _voiceStreamProcessor.disconnect(); } catch (e) { /* already disconnected */ }
+    _voiceStreamProcessor = null;
+  }
+  if (_voiceStreamSource) {
+    try { _voiceStreamSource.disconnect(); } catch (e) { /* already disconnected */ }
+    _voiceStreamSource = null;
+  }
+  if (_voiceStreamCtx) {
+    try { _voiceStreamCtx.close(); } catch (e) { /* already closed */ }
+    _voiceStreamCtx = null;
+  }
+  if (_voiceStreamTrack) {
+    try { _voiceStreamTrack.stop(); } catch (e) { /* already stopped */ }
+    _voiceStreamTrack = null;
+  }
+}
+
+function _teardownStream() {
+  const ws = _voiceStreamWs;
+  const btn = _voiceTargetBtn;
+  _voiceStreamWs = null;
+  _haltStreamCapture();
+  _voiceStreamPcmQueue = [];
+  if (ws) {
+    try { ws.close(); } catch (e) { /* already closed */ }
+  }
+  _voiceRecording = false;
+  _voiceStopping = false;
+  _voiceTranscribing = false;
+  _voiceStreamCommitted = '';
+  _voiceStreamActiveText = '';
+  if (btn) btn.classList.remove('recording');
+  _updateVoiceUI();
+  _voiceTargetBtn = null;
+  _voiceTargetId = null;
+}
+
+function _handleStreamFinal(finalSegText) {
+  const targetId = _voiceTargetId;
+  if (_voiceCacheKey && _getSessionInputCacheKey() === _voiceCacheKey) {
+    // 最后一段收敛：replace-tail 路径下用 final 全文刷新活跃段，保证最终准确
+    _applyStreamTextToDraft(finalSegText);
+  } else {
+    const fullText = _voiceStreamCommitted + finalSegText;
+    if (fullText) {
+      // Session switched while transcribing — store for later injection
+      _pendingVoiceResults[_voiceCacheKey] = (_pendingVoiceResults[_voiceCacheKey] || '') + fullText;
+    }
+  }
+  _teardownStream();
+  // Auto-send if user pressed send while recording
+  if (_voicePendingSend) {
+    _voicePendingSend = false;
+    _dispatchVoiceAutoSend(targetId);
+  }
+}
+
+function _startStreamedRecording(stream, btn, recordingTargetId, recordingCacheKey, recordingAgentId) {
+  _voiceStreamCommitted = '';
+  _voiceStreamActiveText = '';
+  _voiceStreamPcmQueue = [];
+
+  const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/protoclaw/speech_stream';
+  let ws = null;
+  try {
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+  } catch (err) {
+    stream.getTracks().forEach(t => t.stop());
+    _playVoiceSound('stop');
+    alert(currentLanguage === 'zh' ? '无法建立流式识别连接：' + err.message : 'Cannot open streaming ASR connection: ' + err.message);
+    return;
+  }
+  _voiceStreamWs = ws;
+  let serverReady = false;
+
+  ws.onopen = () => {
+    if (_voiceStreamWs !== ws) return;
+    try { ws.send(JSON.stringify({ op: 'start' })); } catch (e) { /* onclose 兜底 */ }
+  };
+
+  ws.onmessage = (ev) => {
+    if (_voiceStreamWs !== ws) return;
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.type === 'ready') {
+      serverReady = true;
+      const queued = _voiceStreamPcmQueue;
+      _voiceStreamPcmQueue = [];
+      for (const frame of queued) {
+        if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+      }
+    } else if (msg.type === 'partial') {
+      _applyStreamTextToDraft(msg.text || '');
+    } else if (msg.type === 'committed') {
+      _applyStreamTextToDraft(msg.text || '');
+      _voiceStreamCommitted += msg.text || '';
+      // 段固化转正：ASR 放弃该段改写权，下个 partial 从新段零文本开始
+      _voiceStreamActiveText = '';
+    } else if (msg.type === 'final') {
+      _handleStreamFinal(msg.text || '');
+    } else if (msg.type === 'error') {
+      console.error('[VoiceInput] streaming ASR error:', msg.message);
+      _teardownStream();
+      alert(currentLanguage === 'zh' ? '流式语音识别错误：' + msg.message : 'Streaming ASR error: ' + msg.message);
+    }
+  };
+
+  ws.onclose = (event) => {
+    if (_voiceStreamWs !== ws) return; // 正常 teardown 已接管
+    if (_voiceCancelled) {
+      _teardownStream();
+      return;
+    }
+    const reason = event.reason || ('code ' + event.code);
+    console.error('[VoiceInput] streaming ASR connection closed:', reason);
+    // 已识别的文本保留在输入框中（committed 可信），仅提示连接中断
+    _teardownStream();
+    alert(currentLanguage === 'zh' ? '流式语音识别连接中断（' + reason + '），已保留已识别文本' : 'Streaming ASR connection lost (' + reason + '); recognized text kept');
+  };
+
+  // PCM 采集：优先 16kHz AudioContext；不支持的浏览器回退默认采样率 + 降采样
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  let ctx = null;
+  try {
+    ctx = new Ctor({ sampleRate: 16000 });
+  } catch (e1) {
+    try { ctx = new Ctor(); } catch (e2) { ctx = null; }
+  }
+  if (!ctx) {
+    ws.close();
+    stream.getTracks().forEach(t => t.stop());
+    _voiceStreamWs = null;
+    _playVoiceSound('stop');
+    alert(currentLanguage === 'zh' ? '当前浏览器不支持音频采集（AudioContext）' : 'Audio capture not supported (AudioContext unavailable)');
+    return;
+  }
+  _voiceStreamCtx = ctx;
+  _voiceStreamTrack = stream.getTracks()[0];
+
+  const source = ctx.createMediaStreamSource(stream);
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+  // ScriptProcessor 必须连到 destination 才会在部分浏览器触发回调；零增益防外放
+  const silentGain = ctx.createGain();
+  silentGain.gain.value = 0;
+  source.connect(processor);
+  processor.connect(silentGain);
+  silentGain.connect(ctx.destination);
+  _voiceStreamSource = source;
+  _voiceStreamProcessor = processor;
+
+  processor.onaudioprocess = (e) => {
+    if (_voiceStreamWs !== ws) return;
+    const pcm = _float32ToInt16Pcm(_resampleTo16k(e.inputBuffer.getChannelData(0), ctx.sampleRate));
+    if (serverReady) {
+      // 背压保护：上行积压超过 1MB（约 30s PCM）时丢帧，避免内存膨胀
+      if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < 1_000_000) ws.send(pcm.buffer);
+    } else if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
+      if (_voiceStreamPcmQueue.length < 64) _voiceStreamPcmQueue.push(pcm.buffer);
+    }
+  };
+
+  _voiceRecording = true;
+  btn.classList.add('recording');
+  _updateVoiceUI();
+}
+
+function _stopStreamedRecording() {
+  const ws = _voiceStreamWs;
+  if (!ws) return;
+  _voiceStopping = true;
+  // 与非流式相同理由：立即置 false，避免 stop 到 final 之间 render 重入触发取消
+  _voiceRecording = false;
+  if (_voiceTargetBtn) _voiceTargetBtn.classList.remove('recording');
+  _playVoiceSound('stop');
+  _haltStreamCapture(); // stop 之后的音频帧没有意义
+  if (ws.readyState === WebSocket.OPEN) {
+    _voiceTranscribing = true;
+    _updateVoiceUI();
+    try { ws.send(JSON.stringify({ op: 'stop' })); } catch (e) { /* onclose 兜底 */ }
+  } else {
+    // 连接尚未建立或已断开，无 final 可等
+    _teardownStream();
+  }
+}
+
+function _cancelStreamedRecording() {
+  // 尽力精确移除本次语音写入的文本；用户已深度编辑、无法精确定位时
+  // 保留现状（宁可少删，不可误删用户内容）
+  const textarea = document.getElementById(_voiceTargetId);
+  if (textarea && !_voiceStreamComposing
+    && (!_voiceCacheKey || _getSessionInputCacheKey() === _voiceCacheKey)) {
+    const restored = planStreamDraftCancel(textarea.value, _voiceStreamCommitted, _voiceStreamActiveText);
+    if (restored !== null) {
+      textarea.value = restored;
+      textarea.setSelectionRange(restored.length, restored.length);
+      autoResize(textarea);
+      _cacheSessionInput(textarea);
+    }
+  }
+  _teardownStream();
 }
 
 async function sendAudioToASR(blob, target) {
