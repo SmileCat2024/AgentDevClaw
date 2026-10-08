@@ -562,10 +562,10 @@ export function compareSidebarSessionReadModels(lightSessions = [], authoritativ
  *
  * 只消费各 agent 的 session index 元数据（readSessionIndex 的输出），
  * 不读会话文件本体。供 session-reference feature 的发现工具消费。
- * 纯函数：过滤 archived、按 updatedAt 倒序、limit 截断。
+ * 纯函数：过滤 archived、按 updatedAt 倒序、offset 跳过、limit 截断。
  *
  * @param {Array<{agentId: string, agentName?: string, sessions: Array<object>}>} agentIndexEntries
- * @param {{limit?: number, includeArchived?: boolean}} [options]
+ * @param {{limit?: number, offset?: number, includeArchived?: boolean}} [options]
  */
 export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
   const includeArchived = options?.includeArchived === true;
@@ -594,7 +594,11 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
   }
   entries.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   const limit = Number(options?.limit);
-  return Number.isFinite(limit) && limit > 0 ? entries.slice(0, limit) : entries;
+  const offset = Number(options?.offset);
+  const bounded = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+  return Number.isFinite(limit) && limit > 0
+    ? entries.slice(bounded, bounded + Math.floor(limit))
+    : entries.slice(bounded);
 }
 
 /**

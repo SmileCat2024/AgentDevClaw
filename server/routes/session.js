@@ -315,9 +315,11 @@ app.get('/protoclaw/session_directory', async (req, res, next) => {
     }));
     const includeArchived = req.query.includeArchived === '1' || req.query.includeArchived === 'true';
     const limit = Number(req.query.limit);
+    const offset = Number(req.query.offset);
     const sessions = buildSessionDirectoryEntries(entries, {
       includeArchived,
       limit: Number.isFinite(limit) && limit > 0 ? limit : 50,
+      offset: Number.isFinite(offset) && offset > 0 ? offset : 0,
     });
     res.json({ sessions, total: sessions.length });
   } catch (error) {
@@ -333,6 +335,12 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
       res.status(400).json({ error: 'agentId and sessionId are required' });
       return;
     }
+    // turn 查询参数：非负整数时只返回该轮消息（session-reference 的 read_turn
+    // 按轮取回，免去大体积会话的全量传输）。非法值忽略，保持全量语义。
+    const turnParam = req.query.turn;
+    const turnFilter = Number(turnParam);
+    const applyTurnFilter = turnParam !== undefined && turnParam !== ''
+      && Number.isInteger(turnFilter) && turnFilter >= 0;
     // ADR-0011：远程命名空间身份 → 转发远程同名会话记录路由（裸 id）；本地
     // 身份走下方既有文件读取路径，行为字节级不动。
     try {
@@ -342,6 +350,7 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
           agentId: bareId(agentId),
           sessionId: bareId(sessionId),
         });
+        if (applyTurnFilter) params.set('turn', String(turnFilter));
         return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/session_record?${params.toString()}`);
       }
     } catch (error) {
@@ -361,7 +370,10 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
       throw error;
     }
     const parsed = JSON.parse(raw);
-    const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
+    const allMessages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
+    const messages = applyTurnFilter
+      ? allMessages.filter((m) => Number.isInteger(m?.turn) && m.turn === turnFilter)
+      : allMessages;
     const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);
     res.json({
       sessionId,

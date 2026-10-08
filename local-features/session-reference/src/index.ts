@@ -28,6 +28,9 @@ import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 const OVERVIEW_MAX_CHARS = 30_000;
 // 概览正文档的单条消息内容上限：概览是定位用视图，超长正文由 read_turn 全量展开。
 const OVERVIEW_LINE_CHAR_LIMIT = 1_200;
+// 单轮全量正文的字符预算：超预算时首尾各半保留、中段省略并明示。
+// 单轮内可能夹带巨型工具结果（实测单轮正文 45K+），无预算会直灌上下文。
+const TURN_DETAIL_MAX_CHARS = 40_000;
 // 会话目录里单条 preview 的展示上限。
 const LIST_PREVIEW_CHAR_LIMIT = 120;
 // todo 语义锚点里单条任务标题的展示上限。
@@ -286,14 +289,16 @@ function renderToolCallsInline(toolCalls: Array<Record<string, unknown>>): strin
 }
 
 /**
- * 某轮全量展开：按 turn 过滤原始消息，内容不裁剪（含完整工具调用与结果）。
+ * 某轮全量展开：按 turn 过滤原始消息（含完整工具调用与结果）。单轮正文
+ * 超出 TURN_DETAIL_MAX_CHARS 预算时首尾各半保留、中段省略并明示——首部
+ * 是用户意图，尾部是本轮结论，中段通常是巨型工具结果。
  * 返回 null 表示该轮不存在（或消息未标注 turn）。
  */
 export function renderTurnDetail(
   messages: SessionMessage[],
   turn: number,
   meta: { agentId: string; sessionId: string },
-): string | null {
+): { text: string; truncated: boolean; omittedChars: number } | null {
   const selected = (Array.isArray(messages) ? messages : [])
     .filter((message) => message?.turn === turn);
   if (selected.length === 0) return null;
@@ -311,7 +316,18 @@ export function renderTurnDetail(
       lines.push(callLine);
     }
   }
-  return lines.join('\n');
+  const full = lines.join('\n');
+  if (full.length <= TURN_DETAIL_MAX_CHARS) {
+    return { text: full, truncated: false, omittedChars: 0 };
+  }
+  const keep = Math.floor(TURN_DETAIL_MAX_CHARS / 2);
+  const omittedChars = full.length - keep * 2;
+  const marker = `……（中段省略 ${omittedChars} 字符：单轮正文超出 ${TURN_DETAIL_MAX_CHARS} 预算，首尾各保留一半，被省略的通常是巨型工具结果中段）`;
+  return {
+    text: `${full.slice(0, keep)}\n${marker}\n${full.slice(full.length - keep)}`,
+    truncated: true,
+    omittedChars,
+  };
 }
 
 function truncateText(text: string, maxChars: number): string {
@@ -493,6 +509,10 @@ export class SessionReferenceFeature implements AgentFeature {
               type: 'number',
               description: '最多返回的会话条数（可选，默认 50，按更新时间倒序）',
             },
+            offset: {
+              type: 'number',
+              description: '跳过前 N 条，与 limit 配合翻页（可选，默认 0）',
+            },
             includeArchived: {
               type: 'boolean',
               description: '是否包含已归档会话（可选，默认不包含）',
@@ -501,7 +521,9 @@ export class SessionReferenceFeature implements AgentFeature {
         },
         execute: async (args: any) => {
           const limit = typeof args?.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : 50;
+          const offset = typeof args?.offset === 'number' && args.offset > 0 ? Math.floor(args.offset) : 0;
           const params = new URLSearchParams({ limit: String(limit) });
+          if (offset > 0) params.set('offset', String(offset));
           if (args?.includeArchived === true) params.set('includeArchived', '1');
           try {
             const resp = await fetch(`${this.serverOrigin}/protoclaw/session_directory?${params}`, {
@@ -516,8 +538,9 @@ export class SessionReferenceFeature implements AgentFeature {
               return { text: '没有可参考的会话。', total: 0 };
             }
             const lines = sessions.flatMap(formatDirectoryEntryText);
+            const rangeNote = offset > 0 ? `，第 ${offset + 1} 条起` : '';
             return {
-              text: `共 ${sessions.length} 个会话（按更新时间倒序）：\n${lines.join('\n')}`,
+              text: `共 ${sessions.length} 个会话（按更新时间倒序${rangeNote}）：\n${lines.join('\n')}`,
               total: sessions.length,
               sessions,
             };
@@ -534,8 +557,8 @@ export class SessionReferenceFeature implements AgentFeature {
           '读取指定会话的 trim 视图概览：头部附任务事件时间线（todo 语义锚点），正文为按 call 分组的对话骨架' +
           '（用户/AI 消息保留，工具活动折叠为单行摘要），每行标注轮次号 T<N>；轮次过多时未入正文的轮次' +
           '以单行速览收录（概览覆盖全部轮次）。' +
-          '阅读策略：先复述概览中与当前任务相关的脉络并与用户确认关注点，仅对相关轮次调用 session_read_turn 深入，' +
-          '不要逐轮通读——概览是索引不是全文。',
+          '阅读策略：仅对与当前任务相关的轮次调用 session_read_turn 深入，不要逐轮通读——概览是索引不是全文；' +
+          '用户意图不明确时，先复述概览脉络与用户确认关注点再下钻。',
         parameters: {
           type: 'object',
           properties: {
@@ -579,7 +602,7 @@ export class SessionReferenceFeature implements AgentFeature {
         parallelizable: true,
         render: { call: 'session-read', result: 'session-read' },
         description:
-          '读取指定会话某一轮的完整原始内容（不裁剪，含完整的工具调用与工具结果）。' +
+          '读取指定会话某一轮的完整原始内容（含完整的工具调用与工具结果；单轮正文超出预算时保留首尾、中段省略并明示）。' +
           '轮次号来自 session_read_overview 概览中的 T<N> 标注。',
         parameters: {
           type: 'object',
@@ -613,8 +636,14 @@ export class SessionReferenceFeature implements AgentFeature {
             return { error: 'turn 必须是非负整数（来自概览中的 T<N> 标注）' };
           }
           try {
-            const record = await fetchSessionRecord(this.serverOrigin, agentId, sessionId);
-            const messages = Array.isArray(record?.messages) ? record.messages : [];
+            const record = await fetchSessionRecord(this.serverOrigin, agentId, sessionId, turn);
+            let messages = Array.isArray(record?.messages) ? record.messages : [];
+            if (messages.length === 0) {
+              // 按轮取回为空：轮次不存在，或远端旧版忽略 turn 参数后该轮确实无消息。
+              // 回退全量取回一次，保证「轮次不存在」错误里 availableTurns 提示可用。
+              const full = await fetchSessionRecord(this.serverOrigin, agentId, sessionId);
+              messages = Array.isArray(full?.messages) ? full.messages : [];
+            }
             const detail = renderTurnDetail(messages, turn, { agentId, sessionId });
             if (detail === null) {
               const availableTurns = collectTurns(messages);
@@ -624,7 +653,13 @@ export class SessionReferenceFeature implements AgentFeature {
                 hint: '可先用 session_read_overview 获取有效的轮次标注',
               };
             }
-            return { text: detail, turn, messageCount: messages.filter((m) => m?.turn === turn).length };
+            return {
+              text: detail.text,
+              turn,
+              truncated: detail.truncated,
+              omittedChars: detail.omittedChars,
+              messageCount: messages.filter((m) => m?.turn === turn).length,
+            };
           } catch (err: any) {
             return { error: `会话轮次读取失败: ${err?.message || err}` };
           }
@@ -634,8 +669,14 @@ export class SessionReferenceFeature implements AgentFeature {
   }
 }
 
-async function fetchSessionRecord(serverOrigin: string, agentId: string, sessionId: string) {
+/**
+ * 取回会话记录。带 turn 时请求按轮过滤（server 只回该轮消息，省去大体积
+ * 全量传输）；远端旧版不认识 turn 参数会回全量，由调用方按 turn 自行过滤，
+ * 行为兼容。
+ */
+async function fetchSessionRecord(serverOrigin: string, agentId: string, sessionId: string, turn?: number) {
   const params = new URLSearchParams({ agentId, sessionId });
+  if (Number.isInteger(turn)) params.set('turn', String(turn));
   const resp = await fetch(`${serverOrigin}/protoclaw/session_record?${params}`, {
     headers: internalAuthHeaders(),
   });

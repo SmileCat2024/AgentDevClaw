@@ -155,22 +155,36 @@ describe('renderTurnDetail', () => {
     { role: 'assistant', content: '第二轮回复', turn: 2 },
   ];
 
-  it('returns all messages of the requested turn unclipped', () => {
-    const text = renderTurnDetail(messages as any, 1, { agentId: 'ph', sessionId: 's' });
-    assert.match(text, /全量，共 2 条消息/);
-    assert.match(text, /\[T1\] assistant: 第一轮回复/);
-    assert.match(text, /→ 调用 read\({"filePath":"\/x"}\)/);
-    assert.match(text, /\[T1\] tool 结果\(c1\): 文件内容/);
+  it('returns all messages of the requested turn unclipped within budget', () => {
+    const detail = renderTurnDetail(messages as any, 1, { agentId: 'ph', sessionId: 's' });
+    assert.equal(detail!.truncated, false);
+    assert.match(detail!.text, /全量，共 2 条消息/);
+    assert.match(detail!.text, /\[T1\] assistant: 第一轮回复/);
+    assert.match(detail!.text, /→ 调用 read\(\{"filePath":"\/x"\}\)/);
+    assert.match(detail!.text, /\[T1\] tool 结果\(c1\): 文件内容/);
   });
 
-  it('renders long tool results in full (no truncation)', () => {
-    const long = 'x'.repeat(50_000);
-    const text = renderTurnDetail(
+  it('keeps head and tail with an explicit marker when a turn exceeds the budget', () => {
+    // 单轮正文超出预算：首尾各半保留、中段省略并明示，避免巨型工具结果直灌上下文。
+    const head = '意图'.padEnd(200, '前');
+    const tail = '结论'.padStart(200, '后');
+    const long = `${head}${'x'.repeat(80_000)}${tail}`;
+    const detail = renderTurnDetail(
       [{ role: 'tool', content: long, turn: 0, toolCallId: 'c1' }] as any,
       0,
       { agentId: 'a', sessionId: 's' },
     );
-    assert.ok(text.includes('x'.repeat(50_000)));
+    assert.equal(detail!.truncated, true);
+    assert.ok(detail!.omittedChars > 0);
+    assert.match(detail!.text, /中段省略 \d+ 字符/);
+    // 首部（用户意图侧）与尾部（结论侧）都在，中段巨型内容被省略：
+    // 原文 80_000 个 x，保留的首尾合计不超过预算
+    assert.ok(detail!.text.includes(head));
+    assert.ok(detail!.text.includes(tail));
+    const keptX = detail!.text.split('x').length - 1;
+    assert.ok(keptX < 45_000, `保留的 x 数量应收敛到预算内，实际 ${keptX}`);
+    // 正文体量收敛到预算附近，而不是原始 80K+
+    assert.ok(detail!.text.length < 45_000);
   });
 
   it('returns null for an unknown turn', () => {
@@ -371,6 +385,98 @@ describe('read tools address sessions by the (agentId, sessionId) pair', () => {
       const turn = await (tools.get('session_read_turn')!.execute as any)({ sessionId: 's-1', turn: 1 });
       assert.match(String(turn?.error), /agentId is required/);
       assert.equal(fetched, 0);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+// ── 读取工具执行层：按轮取回、空结果回退、翻页 ─────────────────────
+
+describe('read tools transport and paging', () => {
+  const realFetch = globalThis.fetch;
+
+  function makeTools() {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    return new Map(feature.getTools().map((tool) => [tool.name, tool]));
+  }
+
+  it('read_turn requests the turn-scoped endpoint and returns that turn only', async () => {
+    const tools = makeTools();
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ messages: [{ role: 'assistant', content: 'T2 回复', turn: 2 }] }),
+      } as any;
+    }) as any;
+    try {
+      const result = await (tools.get('session_read_turn')!.execute as any)({
+        agentId: 'ph', sessionId: 's-1', turn: 2,
+      });
+      assert.equal(urls.length, 1);
+      assert.match(urls[0], /session_record\?agentId=ph&sessionId=s-1&turn=2/);
+      assert.match(result.text, /T2 回复/);
+      assert.equal(result.messageCount, 1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('read_turn falls back to a full fetch once when the turn is missing (keeps availableTurns)', async () => {
+    const tools = makeTools();
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      // 首次（按轮取回）为空 → 回退全量；全量里也没有 T9
+      if (String(url).includes('turn=9')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [] }) } as any;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          messages: [
+            { role: 'user', content: 'q', turn: 0 },
+            { role: 'assistant', content: 'a', turn: 1 },
+          ],
+        }),
+      } as any;
+    }) as any;
+    try {
+      const result = await (tools.get('session_read_turn')!.execute as any)({
+        agentId: 'ph', sessionId: 's-1', turn: 9,
+      });
+      assert.equal(urls.length, 2);
+      assert.match(urls[0], /turn=9/);
+      assert.ok(!urls[1].includes('turn='));
+      assert.match(String(result.error), /轮次 9 不存在/);
+      assert.deepEqual(result.availableTurns, [0, 1]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('session_list passes offset through and marks the range in the text', async () => {
+    const tools = makeTools();
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          sessions: [{ agentId: 'ph', sessionId: 's-9', title: 't', updatedAt: '2026-10-08T00:00:00Z', messageCount: 1 }],
+        }),
+      } as any;
+    }) as any;
+    try {
+      const result = await (tools.get('session_list')!.execute as any)({ limit: 5, offset: 10 });
+      assert.equal(urls.length, 1);
+      assert.match(urls[0], /session_directory\?limit=5&offset=10/);
+      assert.match(result.text, /第 11 条起/);
     } finally {
       globalThis.fetch = realFetch;
     }

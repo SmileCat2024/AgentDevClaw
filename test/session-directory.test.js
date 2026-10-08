@@ -81,6 +81,30 @@ describe('buildSessionDirectoryEntries', () => {
     assert.deepEqual(entries.map((entry) => entry.sessionId), ['s1', 's2']);
   });
 
+  it('applies offset before limit for paging (offset=0 keeps legacy behavior)', () => {
+    const input = [{
+      agentId: 'a',
+      sessions: [
+        { id: 's1', updatedAt: '2026-03-01T00:00:00Z' },
+        { id: 's2', updatedAt: '2026-02-01T00:00:00Z' },
+        { id: 's3', updatedAt: '2026-01-01T00:00:00Z' },
+      ],
+    }];
+    assert.deepEqual(
+      buildSessionDirectoryEntries(input, { limit: 2, offset: 1 }).map((entry) => entry.sessionId),
+      ['s2', 's3'],
+    );
+    // 不带 limit 时 offset 仍然生效（翻到末页）
+    assert.deepEqual(
+      buildSessionDirectoryEntries(input, { offset: 2 }).map((entry) => entry.sessionId),
+      ['s3'],
+    );
+    assert.deepEqual(
+      buildSessionDirectoryEntries(input, { offset: 0, limit: 2 }).map((entry) => entry.sessionId),
+      ['s1', 's2'],
+    );
+  });
+
   it('skips agents without id and entries without session id', () => {
     const entries = buildSessionDirectoryEntries([
       { agentId: '', sessions: [{ id: 'x', updatedAt: '2026-01-01' }] },
