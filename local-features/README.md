@@ -34,6 +34,7 @@ Claw 仓库自有的 feature 与包装层源码（TypeScript，编译产物在 `
 | `generative-ui/` | 可视化交互面板 feature | 活跃 |
 | `github/` | GitHub 工具集 | 活跃 |
 | `time-awareness/` | 时间感知（CallStart 按节奏注入系统时间与长间隔提示，状态经框架会话快照持久化） | 活跃 |
+| `craft-awareness/` | 工程素养提醒（条目化的动态写法知识库：首个条目在首次写出成规模文档 write/edit markdown/txt 后注入读者视角写法标准，每会话一次。注入文案外置于 `knowledge/<条目id>.md`，改文案只需改 md 并重启 agent） | 活跃 |
 | `flow/` | Flow 运行时核心 | 悬置 |
 | `feature-dev/` | Feature Creator 后端 | 悬置 |
 | `agent-dev/`、`agent-studio/` | Agent 装配/调试工具 | 悬置 |

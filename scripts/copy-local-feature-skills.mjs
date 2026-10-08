@@ -16,10 +16,12 @@ function copyDir(src, dist) {
 }
 
 /**
- * 复制 feature 的 skills 到 dist 下与 feature source 相对的同名位置：
+ * 复制 feature 的非代码资产到 dist 下与 feature source 相对的一致位置：
  *
  * 1) 根级 skills/（source 在 src 根的 feature 扫 <dist>/<feature>/src/skills）；
- * 2) 内嵌 skills/（ticket 036 v2 修复）：feature 源码子目录（如 src/playwright/）
+ * 2) 根级 knowledge/（craft-awareness 等知识库型 feature 的注入文案 md，
+ *    运行时按 dirname(source)/knowledge 读取，路径约定与 skills 相同）；
+ * 3) 内嵌 skills/（ticket 036 v2 修复）：feature 源码子目录（如 src/playwright/）
  *    自带 skills/ —— 框架按 dirname(source)/skills 逐 feature 发现，同一包内
  *    多个 feature 若共享 src 根会导致同一批 skill 被重复注册（duplicate
  *    capability ref）。子目录 feature 的 skills 必须随源码相对位置复制。
@@ -29,13 +31,15 @@ function copyFeatureSkills(featureName) {
   const featureRoot = path.join(localFeaturesDir, featureName);
   const featureDistRoot = path.join(distDir, featureName);
 
-  const srcSkillsDir = path.join(featureName === 'dist' ? '' : localFeaturesDir, featureName, 'skills');
-  if (existsSync(srcSkillsDir)) {
-    const distSkillsDir = path.join(featureDistRoot, 'src', 'skills');
-    rmSync(distSkillsDir, { recursive: true, force: true });
-    cpSync(srcSkillsDir, distSkillsDir, { recursive: true, dereference: true, force: true });
-    console.log(`[copy-local-feature-skills] ${srcSkillsDir} -> ${distSkillsDir}`);
-    copied = true;
+  for (const assetDirName of ['skills', 'knowledge']) {
+    const srcAssetDir = path.join(localFeaturesDir, featureName, assetDirName);
+    if (existsSync(srcAssetDir)) {
+      const distAssetDir = path.join(featureDistRoot, 'src', assetDirName);
+      rmSync(distAssetDir, { recursive: true, force: true });
+      cpSync(srcAssetDir, distAssetDir, { recursive: true, dereference: true, force: true });
+      console.log(`[copy-local-feature-skills] ${srcAssetDir} -> ${distAssetDir}`);
+      copied = true;
+    }
   }
 
   const featureSrcDir = path.join(localFeaturesDir, featureName, 'src');

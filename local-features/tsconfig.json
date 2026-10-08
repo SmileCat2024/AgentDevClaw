@@ -45,6 +45,8 @@
     "./capability-shell/src/**/*.ts",
     "./capability-shell/test/**/*.ts",
     "./time-awareness/src/**/*.ts",
-    "./time-awareness/test/**/*.ts"
+    "./time-awareness/test/**/*.ts",
+    "./craft-awareness/src/**/*.ts",
+    "./craft-awareness/test/**/*.ts"
   ]
 }

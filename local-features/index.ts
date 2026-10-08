@@ -21,6 +21,12 @@ export {
   LONG_GAP_MS,
 } from './time-awareness/src/index.js';
 export {
+  CraftAwarenessFeature,
+  shouldRemindDocCraft,
+  loadKnowledgeDir,
+  DOC_CRAFT_MIN_WRITE_LINES,
+} from './craft-awareness/src/index.js';
+export {
   createCapabilityShellTool,
   runCapabilityShellPipeline,
 } from './capability-shell/src/index.js';
