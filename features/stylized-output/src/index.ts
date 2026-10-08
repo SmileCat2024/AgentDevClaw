@@ -3,8 +3,11 @@
  *
  * 约定（与 SkillFeature 的 skills 发现同族，但布局不同）：
  *   <workspaceDir>/.agentdev/output-style/*.md   每个平铺 md 文件 = 一种风格
- *   <workspaceDir>/.agentdev/output-style/.current-style   当前选中的风格名；空/缺省 = 未选择
  *
+ * 风格选择是会话作用域的内存状态（activeStyleName）：不落盘、不跨会话共享。
+ * 同一会话内随 Feature 状态快照（captureState/restoreState）持久；新会话一律
+ * 从未选择开始，必须人工经面板 capability（configure）重新选择——工作区里
+ * 的任何遗留状态都不会让新对话“先入为主”地继承某个风格。
  * 每个风格 md 必须带 YAML frontmatter，必填字段：
  *   name        风格名（选择文件引用它，需全局唯一）
  *   description 一句话描述
@@ -24,12 +27,12 @@
  *      风格清单、查看风格说明原文（frontmatter + 正文 + signature）；上下文中
  *      的风格说明被精简或遗失时，凭这两个工具即可重新核对，无需用户介入。
  *
- * 对外控制链路（面板 / capability / slash）本期不设计；风格选择的存储即
- * .current-style 文件，未来控制面只需写这个文件或调用 setActiveStyle 公共 API。
+ * 对外控制链路是 configure capability（面板 / slash）：人工选择/清除风格，
+ * 即时写入内存。风格选择不做任何磁盘持久化；会话恢复由 Feature 状态快照负责。
  */
 
 import { createHash } from 'crypto';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -50,7 +53,6 @@ import type {
 } from '@agentdevjs/core';
 
 const STYLE_DIR_SEGMENTS = ['.agentdev', 'output-style'];
-const SELECTION_FILE = '.current-style';
 const STYLE_FILE_EXT = '.md';
 const DEFAULT_MAX_SIGNATURE_BLOCKS = 5;
 
@@ -192,21 +194,6 @@ function scanStyles(dir: string): { styles: OutputStyleMeta[]; warnings: string[
   return { styles, warnings };
 }
 
-/** 读取风格选择文件：不存在/空/none|off → null（未选择） */
-function readSelectionFile(dir: string): string | null {
-  try {
-    const selectionPath = join(dir, SELECTION_FILE);
-    if (!existsSync(selectionPath)) return null;
-    const value = readFileSync(selectionPath, 'utf-8').trim();
-    if (!value) return null;
-    const firstLine = value.split(/\r?\n/)[0].trim();
-    if (!firstLine || ['none', 'off'].includes(firstLine.toLowerCase())) return null;
-    return firstLine;
-  } catch {
-    return null;
-  }
-}
-
 const VALID_ACTIONS = ['idle', 'blocked', 'signed', 'released'] as const;
 
 export class StylizedOutput implements AgentFeature {
@@ -220,7 +207,7 @@ export class StylizedOutput implements AgentFeature {
   readonly dependencies: string[] = [];
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
   readonly description =
-    '输出风格库与确认签名门禁：从 .agentdev/output-style/ 发现风格 md；启用风格后，每次最终回复必须调用签名工具逐字默写该风格的确认签名，验证通过才允许结束。';
+    '输出风格库与确认签名门禁：从 .agentdev/output-style/ 发现风格 md；风格选择是会话内存态（不落盘、跨会话重置，经面板 configure 人工选择）；启用风格后，每次最终回复必须调用签名工具逐字默写该风格的确认签名，验证通过才允许结束。';
 
   private workspaceDir = process.cwd();
   private stylesDir = '';
@@ -306,7 +293,7 @@ export class StylizedOutput implements AgentFeature {
       {
         name: 'configure',
         title: '输出风格',
-        description: '查看与选择当前会话的输出风格（发现自 .agentdev/output-style/）；选中后模型每次最终回复须通过确认签名门禁。',
+        description: '查看与选择本会话的输出风格（发现自 .agentdev/output-style/）。选择是会话内存态：不落盘、不跨会话继承，新会话需重新选择；选中后模型每次最终回复须通过确认签名门禁。',
         parameters: {
           styleName: {
             type: 'string',
@@ -475,7 +462,7 @@ export class StylizedOutput implements AgentFeature {
     },
   };
 
-  /** CallStart：重扫风格目录 + 重读选择文件（支持用户随时增删风格/切换选择），并重置本轮签名状态 */
+  /** CallStart：重扫风格目录（支持用户随时增删风格文件），并重置本轮签名状态 */
   async syncStyleState(_ctx: CallStartContext): Promise<void> {
     this.rescan('call');
     this.signedForReply = false;
@@ -621,20 +608,22 @@ export class StylizedOutput implements AgentFeature {
   }
 
   /**
-   * 设置当前风格（写入 .current-style 选择文件并即时生效）；传 null 清空选择。
-   * 这是风格选择的存储入口，不是模型可见的控制面。
+   * 设置当前风格（会话内存态，立即生效，不落盘）；传 null 清空选择。
+   * 面板 configure capability 与未来控制面共用的写入入口；模型不可见。
+   * 选择只随 Feature 状态快照在会话恢复时还原，新会话一律从 null 开始。
    */
   setActiveStyle(name: string | null): StylizedOutputStatus {
     const value = cleanText(name);
-    try {
-      writeFileSync(join(this.stylesDir, SELECTION_FILE), value ? value + '\n' : '', 'utf-8');
-    } catch (error) {
-      this.logger?.warn('写入风格选择文件失败', {
-        path: join(this.stylesDir, SELECTION_FILE),
-        error: error instanceof Error ? error.message : String(error),
-      });
+    if (value) {
+      this.rescan('set');
+      if (!this.styles.some((style) => style.name === value)) {
+        this.logger?.warn('[stylized-output] 拒绝设置未知风格 "' + value + '"');
+        return this.getStatus();
+      }
+      this.activeStyleName = value;
+    } else {
+      this.activeStyleName = null;
     }
-    this.rescan('set');
     this.signedForReply = false;
     this.blockedCount = 0;
     return this.getStatus();
@@ -642,25 +631,19 @@ export class StylizedOutput implements AgentFeature {
 
   // ---------- 内部 ----------
 
-  /** 重扫风格目录并解析选择文件；reason 只影响日志语境 */
+  /** 重扫风格目录；reason 只影响日志语境。风格选择是内存态，此处不读写任何选择文件 */
   private rescan(reason: 'init' | 'call' | 'set' | 'tool'): void {
     const { styles, warnings } = scanStyles(this.stylesDir);
     for (const warning of warnings) this.logger?.warn('[stylized-output] ' + warning);
     this.styles = styles;
-    const previous = this.activeStyleName;
-    const selected = readSelectionFile(this.stylesDir);
-    if (selected && !styles.some((style) => style.name === selected)) {
-      this.logger?.warn('[stylized-output] 选择文件指向未知风格 "' + selected + '"（' + reason + '），按未选择处理');
+    // 内存中选中的风格文件被删除/改名时主动失效，保持状态自洽（门禁旁路）。
+    if (this.activeStyleName && !styles.some((style) => style.name === this.activeStyleName)) {
+      this.logger?.warn(
+        '[stylized-output] 已选风格 "' + this.activeStyleName + '" 不在最新扫描结果中（' + reason + '），按未选择处理',
+      );
       this.activeStyleName = null;
-    } else {
-      this.activeStyleName = selected;
-    }
-    if (previous !== this.activeStyleName) {
-      this.logger?.info('[stylized-output] 风格选择变更', {
-        from: previous,
-        to: this.activeStyleName,
-        reason,
-      });
+      this.signedForReply = false;
+      this.blockedCount = 0;
     }
   }
 }

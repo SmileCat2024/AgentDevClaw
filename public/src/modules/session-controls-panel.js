@@ -1028,7 +1028,7 @@
   // 风格清单/门禁状态读取与选择切换全部走 capability_invoke 通用通道
   // （stylized-output.configure，slash 入口契约）。风格 md 由用户自行放入
   // 工作区 .agentdev/output-style/ 目录，面板只做选择，不提供编写/上传入口。
-  // 切换写入 .current-style 选择文件，下一次模型调用前由 Feature 注入生效。
+  // 切换直接写 Feature 会话内存态（不落盘、跨会话不继承），下一次模型调用前由 Feature 注入生效。
 
   const STYLE_REF = 'stylized-output.configure';
 
