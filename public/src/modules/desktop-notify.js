@@ -231,13 +231,13 @@ async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
   _notifiedFinishMap.set(normId, Date.now());
 
   try {
-    const n = new Notification(
+    const notification = new Notification(
       isZh ? `${agentName} 已完成` : `${agentName} finished`,
       { body, tag: 'claw-agent-finished-' + normId }
     );
-    n.onclick = () => {
+    notification.onclick = () => {
       window.focus();
-      n.close();
+      notification.close();
       if (agent?.source === 'prebuilt') {
         window.handlePrebuiltAgentClick(agent.id);
       } else if (agent) {
@@ -318,13 +318,13 @@ async function _tryNotifyInputRequest(runtimeId, requestId, alertData = null, op
   _notifiedInputRequestMap.set(normId, { requestId, ts: now });
 
   try {
-    const n = new Notification(
+    const notification = new Notification(
       isZh ? `${agentName} 需要你的选择` : `${agentName} needs your decision`,
       { body, tag: 'claw-agent-input-' + normId }
     );
-    n.onclick = () => {
+    notification.onclick = () => {
       window.focus();
-      n.close();
+      notification.close();
       if (agent?.source === 'prebuilt') {
         window.handlePrebuiltAgentClick(agent.id);
       } else if (agent) {
