@@ -712,6 +712,60 @@ describe('manual poke protocol is retired (ticket 037)', () => {
   });
 });
 
+// ── 回归：输入面翻转的视口 preserveTop 来源（非跟随回合结束跳顶 bug） ────────
+
+describe('input surface flips preserve the chat viewport top (scroll-reset regression)', () => {
+  // 回归场景：回合结束（或开始）输入面 persistent ↔ requests 翻转时，
+  // renderInputRequests 向视口结算声明的 preserveTop 必须是聊天容器的
+  // scrollTop；历史上误读输入容器的 scrollTop（恒 0），非跟随模式下结算
+  // 将其回写导致聊天视口跳回顶部。
+  function mountChatViewport(ctx, scrollTop) {
+    const chatViewport = createMiniElement('div', ctx.state.doc);
+    chatViewport.id = 'chat-container';
+    chatViewport.scrollTop = scrollTop;
+    ctx.state.doc.body.appendChild(chatViewport);
+    return chatViewport;
+  }
+
+  it('finish-time input request (persistent → requests) carries the chat scrollTop, not the input container\'s', () => {
+    const ctx = createConvergenceSandbox();
+    mountChatViewport(ctx, 2200);
+    ctx.run('renderInputRequests([])');
+
+    const calls = [];
+    ctx.notifyChatViewportMutation = (opts) => { calls.push(opts); };
+
+    // 真实触发路径：回合结束 agent 发出输入请求 → 状态写入 → 输入面翻转
+    ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'fin-1', placeholder: '请输入' }] })`);
+    assert.equal(composerMode(ctx), 'requests', 'flip reached the requests endpoint');
+
+    const inputRenders = calls.filter((c) => c.reason === 'input-render');
+    assert.ok(inputRenders.length > 0, 'flip must notify a viewport mutation');
+    for (const call of inputRenders) {
+      assert.equal(call.shouldFollow, false, 'non-follow must be declared');
+      assert.equal(call.preserveTop, 2200,
+        'preserveTop must be the chat container scrollTop (0 = input container value → jump to top)');
+    }
+  });
+
+  it('turn-start dismiss (requests → persistent) also preserves the chat scrollTop', () => {
+    const ctx = createConvergenceSandbox();
+    mountChatViewport(ctx, 1800);
+    ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'fin-1', placeholder: '请输入' }] })`);
+
+    const calls = [];
+    ctx.notifyChatViewportMutation = (opts) => { calls.push(opts); };
+    ctx.run('applySessionViewPatch({ inputRequests: [] })');
+    assert.equal(composerMode(ctx), 'persistent', 'flip restored the persistent endpoint');
+
+    const inputRenders = calls.filter((c) => c.reason === 'input-render');
+    assert.ok(inputRenders.length > 0);
+    for (const call of inputRenders) {
+      assert.equal(call.preserveTop, 1800);
+    }
+  });
+});
+
 function composerMode(ctx) {
   return ctx.run(
     "document.getElementById('user-input-container').querySelector('[data-persistent-composer]').dataset.composerMode",

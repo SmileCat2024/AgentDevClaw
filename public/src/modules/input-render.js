@@ -77,7 +77,10 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   const inputContainer = document.getElementById('user-input-container');
   if (!inputContainer) return;
 
-  const chatViewportTopBefore = inputContainer.scrollTop;
+  // preserveTop 必须取聊天容器的滚动位置：非跟随模式下视口结算会把它回写。
+  // 历史上误读输入容器的 scrollTop（恒 0），导致输入面翻转时聊天视口跳回顶部。
+  const chatViewport = document.getElementById('chat-container');
+  const chatViewportTopBefore = chatViewport ? chatViewport.scrollTop : null;
   const chatActive = isChatSurfaceActive();
   // 会话隔离重绑（契约 §7 同款）：§3 级 6 的模式判定读排队气泡投影，必须
   // 先与当前 runtime 对齐，旧会话的排队乐观态不得劫持新会话的输入面模式。
