@@ -113,13 +113,18 @@ describe('loadKnowledgeDir（知识库目录加载）', () => {
     const knowledge = loadKnowledgeDir(REAL_KNOWLEDGE_DIR);
     const content = knowledge.get('doc-reader-awareness');
     assert.ok(content, '内置条目 md 应存在');
-    assert.ok(content.includes('对话结束之后独立存在'), '成品视角立论在场');
-    assert.ok(content.includes('忽略这条提醒'), '无关场景的出口在场');
-    assert.ok(content.includes('按定下来的样子写'), '定稿视角在场');
-    assert.ok(content.includes('被放弃的方案'), '对话与文档的边界在场');
-    assert.ok(content.includes('把新要求当作重新完成这份文档'), '后续编辑触发全文重写判断');
-    assert.ok(content.includes('只有独立成段确实更利于读者理解时才新增段落'), '新增段落需由读者理解决定');
-    assert.ok(content.includes('像一开始就是这么写'), '成品标准自查在场');
+    assert.ok(content.includes('准备交付、发布或独立留存'), '范围锚定为交付文本');
+    assert.ok(content.includes('回复用户、编辑代码'), '排除对话与代码');
+    assert.ok(content.includes('完整、清楚、像一开始就这么写成'), '成品视角立论在场');
+    assert.ok(content.includes('文档本身就是记录过程'), '保留过程记录作为文档的情形');
+    assert.ok(content.includes('先判断新增要求与全文的关系'), '后续编辑先审视全文关系');
+    assert.ok(content.includes('不要为了“整体重写”而强行重组'), '不强制重写');
+    assert.ok(content.includes('原结构仍然清楚时，局部修改即可'), '允许必要的局部修改');
+    assert.ok(content.includes('保留原文中准确、清楚且仍适用的措辞'), '整体调整时保护有效表达');
+    assert.ok(content.includes('以免反复编辑造成意思漂移'), '避免反复编辑导致语义漂移');
+    assert.ok(content.includes('改动对读者的影响'), '保留读者需要的事实');
+    assert.ok(content.includes('句子直接承载信息'), '补充自然表达建议');
+    assert.ok(content.includes('不是……而是……'), '避免无真实对比的模板句式，同时允许有用对比');
     assert.ok(!content.startsWith('[工程素养]'), 'md 只存正文，前缀由代码加');
   });
 
@@ -201,7 +206,7 @@ describe('CraftAwarenessFeature（注入与冷却契约）', () => {
     assert.equal(h.injected[0].tag, 'reminder');
     assert.equal(h.injected[0].turn, 3, 'turn 取自最近一条（刚写入的工具结果）');
     assert.ok(h.injected[0].text.startsWith('[工程素养] '), '统一前缀由代码添加');
-    assert.ok(h.injected[0].text.includes('对话结束之后独立存在'), '正文来自 knowledge md');
+    assert.ok(h.injected[0].text.includes('准备交付、发布或独立留存'), '正文来自 knowledge md');
   });
 
   it('注入内容跟随 knowledge md：换一份 md 即换一套文案', async () => {
