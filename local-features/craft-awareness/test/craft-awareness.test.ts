@@ -117,6 +117,8 @@ describe('loadKnowledgeDir（知识库目录加载）', () => {
     assert.ok(content.includes('忽略这条提醒'), '无关场景的出口在场');
     assert.ok(content.includes('按定下来的样子写'), '定稿视角在场');
     assert.ok(content.includes('被放弃的方案'), '对话与文档的边界在场');
+    assert.ok(content.includes('把新要求当作重新完成这份文档'), '后续编辑触发全文重写判断');
+    assert.ok(content.includes('只有独立成段确实更利于读者理解时才新增段落'), '新增段落需由读者理解决定');
     assert.ok(content.includes('像一开始就是这么写'), '成品标准自查在场');
     assert.ok(!content.startsWith('[工程素养]'), 'md 只存正文，前缀由代码加');
   });
