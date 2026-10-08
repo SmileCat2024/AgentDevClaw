@@ -236,6 +236,7 @@ function renderMessage(msg, index) {
         const progressCtx = typeof resolveToolProgressForCall === 'function'
           ? resolveToolProgressForCall(call)
           : null;
+        const rewritten = rewrittenByCallId.get(call.id) || null;
         let innerHtml;
 
         if (template.call) {
@@ -248,7 +249,9 @@ function renderMessage(msg, index) {
           <div class="tool-call-container"${callIdAttr}>
             <div class="tool-header">
               <span class="tool-header-name">${displayName}</span>
+              ${renderRewriteBadge(rewriteDetailId(call.id), rewritten)}
             </div>
+            ${renderRewriteDetail(rewriteDetailId(call.id), rewritten)}
             <div class="tool-content">${innerHtml}</div>
           </div>
         `;
@@ -289,7 +292,8 @@ function indexToolCalls(messages) {
 }
 
 // 工具调用改写标注（ADR-0023）：display.rewrittenCall 携带原始调用快照。
-// 卡片主体显示生效调用（历史即改写后），徽章提示"已修改"，点击展开原始调用。
+// 改写发生在调用上——徽章挂在 assistant 调用块头部，卡片主体显示生效调用
+// （历史即改写后），点击徽章展开原始请求。
 function getRewrittenCall(display) {
   if (display && typeof display === 'object' && display.rewrittenCall
       && typeof display.rewrittenCall === 'object'
@@ -297,6 +301,35 @@ function getRewrittenCall(display) {
     return display.rewrittenCall;
   }
   return null;
+}
+
+// 渲染期改写索引：callId → 原始调用快照。改写元数据随 tool 消息的 display 抵达，
+// 而徽章挂在 assistant 调用块上——渲染入口先建索引供调用块反查。
+let rewrittenByCallId = new Map();
+
+function refreshRewriteIndex(messages) {
+  rewrittenByCallId = new Map();
+  for (const m of messages) {
+    if (m && m.role === 'tool' && m.toolCallId) {
+      const rw = getRewrittenCall(m.display);
+      if (rw) rewrittenByCallId.set(m.toolCallId, rw);
+    }
+  }
+}
+
+function rewriteDetailId(callId) {
+  return 'rw-call-' + String(callId).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+// 结果消息晚于调用块到达（分批投递）时，向已渲染的调用卡补装徽章与明细（幂等）。
+function retrofitRewriteBadgeOnCallBlock(toolCallId, rewritten) {
+  const block = document.querySelector('.tool-call-container[data-tool-call-id="' + String(toolCallId) + '"]');
+  if (!block || block.querySelector('.tool-rewrite-badge')) return;
+  const header = block.querySelector('.tool-header');
+  if (!header) return;
+  const detailId = rewriteDetailId(toolCallId);
+  header.insertAdjacentHTML('beforeend', renderRewriteBadge(detailId, rewritten));
+  header.insertAdjacentHTML('afterend', renderRewriteDetail(detailId, rewritten));
 }
 
 function renderRewriteBadge(detailId, rewritten) {
@@ -338,6 +371,7 @@ function appendNewMessages(newMessages, startIndex) {
   const currentCount = container.querySelectorAll('.message-row').length;
   const toolCallsById = newMessages.some(msg => msg.role === 'tool')
     ? indexToolCalls(currentMessages) : null;
+  if (toolCallsById) refreshRewriteIndex(currentMessages);
 
   newMessages.forEach((msg, i) => {
     const index = startIndex + i;
@@ -372,9 +406,7 @@ function appendNewMessages(newMessages, startIndex) {
             <div class="tool-result-header">
               <span class="status-dot ${success ? 'success' : 'error'}"></span>
               <span>${displayName}</span>
-              ${renderRewriteBadge('rw-' + msgId, getRewrittenCall(msg.display))}
             </div>
-            ${renderRewriteDetail('rw-' + msgId, getRewrittenCall(msg.display))}
             <div class="tool-result-body">${bodyHtml}</div>
           </div>
           ${renderUserImages(msg.images)}
@@ -400,6 +432,11 @@ function appendNewMessages(newMessages, startIndex) {
         enhanceMarkdownTables(appendedRow);
       }
     });
+    // 改写快照随 tool 消息抵达：若对应调用块已在早前批次渲染，补装徽章（幂等）
+    if (msg.role === 'tool' && msg.toolCallId) {
+      const rw = getRewrittenCall(msg.display);
+      if (rw) retrofitRewriteBadgeOnCallBlock(msg.toolCallId, rw);
+    }
   });
 
   updateRollbackActionVisibility();
@@ -551,6 +588,11 @@ function updateLastMessage(msg) {
     }
     lastRow.dataset.toolSuccess = success ? 'true' : 'false';
     enhanceMathInElement(lastRow);
+    // 结果在位更新时同样确保调用块徽章已装（幂等）
+    if (msg.toolCallId) {
+      const rw = getRewrittenCall(msg.display);
+      if (rw) retrofitRewriteBadgeOnCallBlock(msg.toolCallId, rw);
+    }
   } else if (msg.role === 'assistant') {
     // 流式更新：默认只重建正文 markdown；消息在行出生后才长出的结构
     // （toolCalls / reasoning）需要整行重建，否则调用卡与思考块永远
@@ -855,6 +897,7 @@ function render(messages) {
   } catch { /* 分隔条是增强显示，任何失败都不影响消息渲染 */ }
   const toolCallsById = messages.some(msg => msg.role === 'tool')
     ? indexToolCalls(messages) : null;
+  refreshRewriteIndex(messages);
   const html = relaySeparatorHtml + messages.map((msg, index) => {
     const role = msg.role;
     const msgId = `msg-${index}`;
@@ -936,25 +979,28 @@ function render(messages) {
           const template = getToolRenderTemplate(call.name);
           // 工具执行中进度（ticket 025）：callId 配对 + 进度数据经模板第三参传入
           const callIdAttr = call.id ? ` data-tool-call-id="${escapeHtml(String(call.id))}"` : '';
-          const progressCtx = typeof resolveToolProgressForCall === 'function'
-            ? resolveToolProgressForCall(call)
-            : null;
-          let innerHtml;
+            const progressCtx = typeof resolveToolProgressForCall === 'function'
+              ? resolveToolProgressForCall(call)
+              : null;
+            const rewritten = rewrittenByCallId.get(call.id) || null;
+            let innerHtml;
 
-          if (template.call) {
-            innerHtml = applyTemplate(template.call, call.arguments, true, progressCtx);
-          } else {
-            innerHtml = renderJsonHighlight(call.arguments);
-          }
+            if (template.call) {
+              innerHtml = applyTemplate(template.call, call.arguments, true, progressCtx);
+            } else {
+              innerHtml = renderJsonHighlight(call.arguments);
+            }
 
-          return `
-            <div class="tool-call-container"${callIdAttr}>
-              <div class="tool-header">
-                <span class="tool-header-name">${displayName}</span>
+            return `
+              <div class="tool-call-container"${callIdAttr}>
+                <div class="tool-header">
+                  <span class="tool-header-name">${displayName}</span>
+                  ${renderRewriteBadge(rewriteDetailId(call.id), rewritten)}
+                </div>
+                ${renderRewriteDetail(rewriteDetailId(call.id), rewritten)}
+                <div class="tool-content">${innerHtml}</div>
               </div>
-              <div class="tool-content">${innerHtml}</div>
-            </div>
-          `;
+            `;
         }).join('');
         innerContent += toolsHtml;
       }
@@ -981,15 +1027,13 @@ function render(messages) {
 
       rowAttrs = ` data-tool-success="${success ? 'true' : 'false'}"`;
       contentHtml = `
-        <div class="message-content" id="${msgId}">
-          <div class="tool-result-header">
-            <span class="status-dot ${success ? 'success' : 'error'}"></span>
-            <span>${displayName}</span>
-            ${renderRewriteBadge('rw-' + msgId, getRewrittenCall(msg.display))}
-          </div>
-          ${renderRewriteDetail('rw-' + msgId, getRewrittenCall(msg.display))}
-          <div class="tool-result-body">${bodyHtml}</div>
-        </div>`;
+          <div class="message-content" id="${msgId}">
+            <div class="tool-result-header">
+              <span class="status-dot ${success ? 'success' : 'error'}"></span>
+              <span>${displayName}</span>
+            </div>
+            <div class="tool-result-body">${bodyHtml}</div>
+          </div>`;
     }
 
     return `
