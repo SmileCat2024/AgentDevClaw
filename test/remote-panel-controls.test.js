@@ -606,8 +606,12 @@ describe('frontend session-controls-panel identity (R2-04)', () => {
 
   it('carries the idempotency key on all three panel write paths with namespaced ids', async () => {
     const { ctx, calls } = await panelSandbox();
+    // guard 写路径随开关迁至上边栏 badge（context-guard-toggle），与面板
+    // 剩余两条写路径共用同一身份纪律
+    ctx.newIdempotencyKey = () => 'test-idem-key';
+    ctx.loadSource('public/src/modules/context-guard-toggle.js');
     await ctx.window.SessionControlsPanel.updateEnabled(true);
-    await ctx.window.SessionControlsPanel.updateGuardArmed(true);
+    await ctx.window.ContextGuardToggle.toggleGuard();
     // 第三条写路径走 capability_invoke 通用路由（模型轮转已卸载，由输出风格承接）
     await ctx.window.SessionControlsPanel.updateStyleSelection('正式汇报');
 
@@ -622,6 +626,8 @@ describe('frontend session-controls-panel identity (R2-04)', () => {
     const invoke = writes.find((c) => c.url === '/protoclaw/capability_invoke');
     assert.equal(JSON.parse(invoke.init.body).runtimeId, 'remote:server-a:rt-1', 'invoke forwards the runtime ref for bare-id rewrite');
     assert.equal(JSON.parse(invoke.init.body).ref, 'stylized-output.configure');
+    const guardWrite = writes.find((c) => c.url === '/protoclaw/context_guard_control');
+    assert.equal(JSON.parse(guardWrite.init.body).armed, true, 'badge toggle posts the next armed value');
   });
 });
 
@@ -630,7 +636,9 @@ describe('frontend session-controls-panel capability gating (ADR-0011 #5)', () =
     const legacyCatalog = JSON.parse(JSON.stringify(REMOTE_CATALOG));
     delete legacyCatalog.connections[0].capabilities;
     const { ctx, calls } = await panelSandbox({ catalog: legacyCatalog });
-    await ctx.window.SessionControlsPanel.updateGuardArmed(true);
+    ctx.newIdempotencyKey = () => 'test-idem-key';
+    ctx.loadSource('public/src/modules/context-guard-toggle.js');
+    await ctx.window.ContextGuardToggle.toggleGuard();
     assert.equal(calls.filter((c) => c.url === '/protoclaw/context_guard_control').length, 0,
       'no-write remote must not dispatch panel writes');
     const html = ctx.window.SessionControlsPanel.render();
@@ -650,7 +658,9 @@ describe('frontend session-controls-panel capability gating (ADR-0011 #5)', () =
     });
     const localHtml = local.ctx.window.SessionControlsPanel.render();
     assert.ok(!localHtml.includes(' disabled'), 'local sessions always stay writable');
-    await local.ctx.window.SessionControlsPanel.updateGuardArmed(true);
+    local.ctx.newIdempotencyKey = () => 'test-idem-key';
+    local.ctx.loadSource('public/src/modules/context-guard-toggle.js');
+    await local.ctx.window.ContextGuardToggle.toggleGuard();
     assert.ok(local.calls.filter((c) => c.url === '/protoclaw/context_guard_control').length === 1,
       'local writes go through the local path (no gate)');
   });

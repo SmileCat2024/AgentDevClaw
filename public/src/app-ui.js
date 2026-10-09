@@ -1560,7 +1560,7 @@ registerFeaturePanel('session-controls', {
   when: { surfaces: ['chat'] },
   title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
   label: { zh: '会话控制', en: 'Session Controls' },
-  description: { zh: '自动接续、上下文保护与输出风格', en: 'Auto-resume, context protection and output styles' },
+  description: { zh: '自动接续与输出风格', en: 'Auto-resume and output styles' },
   render: () => window.SessionControlsPanel
     ? window.SessionControlsPanel.render()
     : '<div class="feature-panel-empty"><div>加载中...</div></div>',

@@ -41,6 +41,9 @@ const _contextGuardPageLoadedAt = Date.now();
 function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
   const normalizedRuntimeId = normalizeAgentIdentity(runtimeId);
   if (!normalizedRuntimeId || normalizedRuntimeId !== normalizeAgentIdentity(currentRuntimeAgentId)) return;
+  // 状态缓存转发：上边栏 badge（ContextGuardToggle）从此处获得 armed/阈值/
+  // trip 数据（poll 主循环拉取的唯一收口）；toast 逻辑继续走下方 trip 分支。
+  window.ContextGuardToggle?.applyStatus?.(payload, normalizedRuntimeId);
   const trip = payload && typeof payload === 'object' && payload.status && typeof payload.status === 'object'
     ? payload.status.trip : null;
   if (!trip || typeof trip !== 'object') return;

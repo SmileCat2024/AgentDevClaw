@@ -178,7 +178,7 @@ async function refreshContextGuardStatus(
 ) {
   const expectedRuntimeId = normalizeAgentIdentity(runtimeId);
   if (!expectedRuntimeId) return null;
-  const guardSupported = window.SessionControlsPanel?.isGuardAvailable?.() === true;
+  const guardSupported = window.ContextGuardToggle?.isAvailable?.() === true;
   if (!guardSupported) return null;
   const guardOwnerRecord = getCurrentRuntimeRecord() || getCurrentAgentRecord();
   const guardAgentId = String(getLogicalAgentId(guardOwnerRecord) || '').trim();
@@ -212,7 +212,7 @@ async function refreshCurrentRuntimeStatus(
   try {
     // 上下文拦截状态拉取（session IPC）：仅在挂载了 ContextGuard 的工作空间
     // 进行，否则每个 poll 都会对不支持的 runtime 产生 503 噪音。
-    const guardSupported = window.SessionControlsPanel?.isGuardAvailable?.() === true;
+    const guardSupported = window.ContextGuardToggle?.isAvailable?.() === true;
     const guardOwnerRecord = getCurrentRuntimeRecord() || getCurrentAgentRecord();
     const guardAgentId = String(getLogicalAgentId(guardOwnerRecord) || '').trim();
     const guardSessionId = String(getActiveSessionId(guardOwnerRecord) || '').trim();

@@ -1,14 +1,16 @@
 /**
  * session-controls-panel.js — 会话控制面板（session-local control plane）
  *
- * 四个 section 对应四个可能挂载的 Feature，均以 runtime 内 Feature 为权威
+ * 三个 section 对应三个可能挂载的 Feature，均以 runtime 内 Feature 为权威
  * 状态持有者，浏览器只是乐观 UI 缓存（请求-应答式 IPC，经 /protoclaw/*_status
  * / *_control 或 capability_invoke 路由）：
  *   - 保持任务继续：ForceContinuation 的开关 / 触发条件 / 上限
- *   - 上下文保护：ContextGuardFeature 的超阈值打断开关
  *   - 模型轮转：StepRotatingModel 的强/省模型配置（已屏蔽，见
  *     ROTATION_SECTION_DISABLED）
  *   - 输出风格：StylizedOutput 的风格选择与签名门禁状态
+ *
+ * （ContextGuardFeature 的超阈值打断开关原在此面板，已迁至上边栏
+ * chat-context-bar 的进度条组内嵌 badge，见 modules/context-guard-toggle.js。）
  *
  * 显示条件 = 当前会话 runtime 实际挂载的 Feature 名单（inspector 快照，
  * 与 Features 面板同源）；未挂载的 section 不渲染。
@@ -17,9 +19,6 @@
  * 执行（feature 状态真值在远程 runtime 内）；agentId 用焦点收敛的宿主级命名
  * 空间 id（panelAgentId），sessionId 用目录条目的命名空间值；写操作统一携带
  * 幂等键，连接能力矩阵 write 缺位时面板降级为只读（无远程标识）。
- *
- * 开关的实时性：它会被 runtime 内真实的超阈值事件消耗，面板打开期间
- * 每 3s 静默刷新一次，保证「用掉了立刻显示为关闭」。
  *
  * Visual language follows the Todo Plan panel: flat sections separated by
  * hairlines (no hero header, no card stack), a strong/label summary line,
@@ -42,7 +41,6 @@
   // 探测，区分「快照还没到」与「确实没挂载」，结果按 runtime 缓存。
   const CONTROLLED_FEATURE_NAMES = {
     fc: 'force-continuation',
-    guard: 'context-guard',
     rot: 'step-rotating-model',
     style: 'stylized-output',
   };
@@ -57,7 +55,6 @@
     const set = new Set(names.map((name) => String(name || '').trim()).filter(Boolean));
     return {
       fc: set.has(CONTROLLED_FEATURE_NAMES.fc),
-      guard: set.has(CONTROLLED_FEATURE_NAMES.guard),
       rot: !ROTATION_SECTION_DISABLED && set.has(CONTROLLED_FEATURE_NAMES.rot),
       style: set.has(CONTROLLED_FEATURE_NAMES.style),
     };
@@ -75,7 +72,7 @@
     const cached = getState(key).caps;
     if (cached) return cached;
     const caps = capsFromInspector();
-    if (caps.fc || caps.guard || caps.rot || caps.style) return caps;
+    if (caps.fc || caps.rot || caps.style) return caps;
     return null;
   }
 
@@ -177,13 +174,6 @@
       refreshing: false,
       error: '',
       initialized: false,
-      guardArmed: false,
-      guardTrip: null,
-      guardThresholdTokens: null,
-      guardRefreshing: false,
-      guardPending: false,
-      guardInitialized: false,
-      guardError: '',
       caps: null,
       capsProbing: false,
       capsFailedAt: 0,
@@ -212,19 +202,6 @@
       outputTruncation: raw.providerMaxTokens !== false && raw.providerLength !== false,
       frameworkLimitReached: raw.frameworkLimitReached !== false,
       apiErrorRetry: raw.apiErrorRetry !== false,
-    };
-  }
-
-  function normalizeGuardTrip(trip) {
-    if (!trip || typeof trip !== 'object') return null;
-    const at = Number(trip.at);
-    const inputTokens = Number(trip.inputTokens);
-    const thresholdTokens = Number(trip.thresholdTokens);
-    return {
-      at: Number.isFinite(at) && at > 0 ? Math.round(at) : null,
-      inputTokens: Number.isFinite(inputTokens) && inputTokens > 0 ? Math.round(inputTokens) : null,
-      thresholdTokens: Number.isFinite(thresholdTokens) && thresholdTokens > 0 ? Math.round(thresholdTokens) : null,
-      reason: typeof trip.reason === 'string' ? trip.reason : '',
     };
   }
 
@@ -280,56 +257,6 @@
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
     if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
     return String(Math.round(n));
-  }
-
-  function renderGuardSection({ item, zh, writeEnabled = true }) {
-    const disabled = item.guardPending || !writeEnabled;
-    const armed = item.guardArmed === true;
-    const trip = item.guardTrip;
-    const threshold = item.guardThresholdTokens;
-
-    const rows = [];
-    if (item.guardError) {
-      rows.push('<div class="session-controls-guard-error">' + esc(item.guardError) + '</div>');
-    }
-    if (trip) {
-      const fact = trip.inputTokens && trip.thresholdTokens
-        ? `${formatTokens(trip.inputTokens)} / ${formatTokens(trip.thresholdTokens)} tokens`
-        : '';
-      rows.push([
-        '<div class="session-controls-guard-fact">',
-        esc(zh ? '最近一次触发' : 'Last trigger'),
-        fact ? ` · ${esc(fact)}` : '',
-        '</div>',
-      ].join(''));
-    } else if (threshold) {
-      rows.push([
-        '<div class="session-controls-guard-fact">',
-        esc(zh ? `当前阈值约 ${formatTokens(threshold)} tokens` : `Threshold ≈ ${formatTokens(threshold)} tokens`),
-        '</div>',
-      ].join(''));
-    }
-
-    return [
-      '<section class="force-continuation-candidates session-controls-guard">',
-      '<div class="force-continuation-group-label">', zh ? '上下文保护' : 'CONTEXT PROTECTION', '</div>',
-      '<div class="force-continuation-candidate">',
-      '<div class="force-continuation-candidate-main">',
-      '<div class="force-continuation-candidate-label">', zh ? '超阈值自动打断' : 'Auto-interrupt at threshold', '</div>',
-      '<div class="force-continuation-candidate-desc">', zh
-        ? '开启后，上下文超过阈值时自动打断当前会话并提醒精简；触发后自动关闭，可重新开启。仅当前会话生效。'
-        : 'When armed, exceeding the threshold interrupts the session and suggests trimming; it disarms after one trip and can be re-armed. Applies to this session only.', '</div>',
-      '</div>',
-      renderSwitch({
-        checked: armed,
-        disabled,
-        title: zh ? '切换超阈值自动打断' : 'Toggle auto-interrupt at threshold',
-        attribute: 'data-guard-armed',
-      }),
-      '</div>',
-      ...rows,
-      '</section>',
-    ].join('');
   }
 
   function renderEmpty(message, zh) {
@@ -397,10 +324,6 @@
     const zh = currentLanguage !== 'en';
     const sessionId = currentSessionId();
 
-    // 心跳承担 guard 实时刷新与挂载探测的重试兜底；自身对所有
-    // 未就绪状态（面板关闭、会话断开、feature 未挂载）均 no-op。
-    ensureGuardPolling();
-
     if (!currentRuntimeAgentId || !sessionId) {
       return renderEmpty(
         zh ? '请先打开并连接一个会话。' : 'Open and connect a session first.',
@@ -418,7 +341,7 @@
         zh,
       );
     }
-    if (!caps.fc && !caps.guard && !caps.rot && !caps.style) {
+    if (!caps.fc && !caps.rot && !caps.style) {
       return renderEmpty(
         zh ? '此控制在当前工作空间不可用。' : 'This control is not available in the current workspace.',
         zh,
@@ -436,13 +359,9 @@
       // browser cache as a source of truth (important after reopen/reload).
       void refreshStatus({ renderWhenDone: true });
     }
-    if (caps.guard && !item.guardInitialized && !item.guardRefreshing && !item.guardPending) {
-      void refreshGuardStatus({ renderWhenDone: true });
-    }
 
     const sections = [];
     if (caps.fc) sections.push(renderAutoResumeSection({ item, zh, writeEnabled: writeEnabled }));
-    if (caps.guard) sections.push(renderGuardSection({ item, zh, writeEnabled }));
     if (caps.rot) sections.push(renderRotationSection({ zh, writeEnabled }));
     if (caps.style) sections.push(renderStyleSection({ zh, writeEnabled }));
 
@@ -450,9 +369,6 @@
     if (caps.fc) notes.push(zh
       ? '手动停止与不可重试的错误（如认证失败）不会触发自动接续；自动接续次数受上限约束。'
       : 'Manual stops and non-retryable errors (e.g. auth failures) never trigger auto-resume; auto-resume is capped.');
-    if (caps.guard) notes.push(zh
-      ? '超阈值打断触发后自动关闭。'
-      : 'The threshold intercept disarms after one trip.');
     if (caps.style) notes.push(zh
       ? '风格切换在下一次模型调用前生效；清空选择即关闭签名门禁。'
       : 'Style changes apply before the next model call; clearing the selection disarms the signature gate.');
@@ -542,105 +458,6 @@
     return updateControl({ maxConsecutiveContinuations: next });
   }
 
-  // ── 上下文保护（超阈值打断开关）────────────────────────────────
-
-  async function refreshGuardStatus({ renderWhenDone = true, silent = false } = {}) {
-    if (!resolveCaps()?.guard) return null;
-    const sessionId = currentSessionId();
-    const key = runtimeKey();
-    if (!sessionId || !focusedAgentId || !key) return null;
-    const current = getState(key);
-    if (current.guardRefreshing || current.guardPending) return null;
-
-    setState({ guardRefreshing: true, guardError: '' }, key);
-    try {
-      const params = new URLSearchParams({ agentId: panelAgentId(), sessionId });
-      const response = await fetch(`/protoclaw/context_guard_status?${params.toString()}`);
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
-      const status = normalizeStatus(payload.status);
-      setState({
-        guardArmed: status.armed === true,
-        guardTrip: normalizeGuardTrip(status.trip),
-        guardThresholdTokens: Number.isFinite(Number(status.thresholdTokens)) && Number(status.thresholdTokens) > 0
-          ? Math.round(Number(status.thresholdTokens)) : null,
-        guardRefreshing: false,
-        guardInitialized: true,
-        guardError: '',
-        guardPollFails: 0,
-      }, key);
-      return status;
-    } catch (error) {
-      if (!silent) {
-        setState({ guardRefreshing: false, guardInitialized: true, guardError: String(error?.message || error) }, key);
-      } else {
-        // 静默轮询失败：容忍一次瞬时抖动，连续失败则明确提示数据可能过期，
-        // 不再无限期展示旧值（否则面板会显示早已失效的阈值/开关状态）。
-        const fails = (current.guardPollFails || 0) + 1;
-        const patch = { guardRefreshing: false, guardPollFails: fails };
-        if (fails >= 2) patch.guardError = currentLanguage !== 'en' ? '状态获取失败，显示的可能不是最新值' : 'Failed to refresh — data may be stale';
-        setState(patch, key);
-      }
-      return null;
-    } finally {
-      if (renderWhenDone && activeFeaturePanel === 'session-controls') renderFeaturePanel();
-    }
-  }
-
-  async function updateGuardArmed(armed) {
-    if (!resolveCaps()?.guard || !panelWriteEnabled()) return;
-    const sessionId = currentSessionId();
-    const key = runtimeKey();
-    if (!sessionId || !focusedAgentId || !key) return;
-    setState({ guardPending: true, guardError: '' }, key);
-    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
-    try {
-      const response = await fetch('/protoclaw/context_guard_control', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
-        body: JSON.stringify({ agentId: panelAgentId(), sessionId, armed: armed === true }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
-      const status = normalizeStatus(payload.status);
-      setState({
-        guardArmed: status.armed === true,
-        guardTrip: normalizeGuardTrip(status.trip),
-        guardThresholdTokens: Number.isFinite(Number(status.thresholdTokens)) && Number(status.thresholdTokens) > 0
-          ? Math.round(Number(status.thresholdTokens)) : null,
-        guardPending: false,
-        guardInitialized: true,
-        guardError: '',
-      }, key);
-    } catch (error) {
-      setState({ guardPending: false, guardError: String(error?.message || error) }, key);
-    }
-    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
-  }
-
-  // 面板打开期间的开关实时刷新：开关会被 runtime 内真实的超阈值事件
-  // 消耗，轮询保证「用掉了立刻显示为关闭」。tick 在面板关闭时 no-op；
-  // 挂载探测失败时也由它兜底重试（session-controls 打开期间主轮询不
-  // 刷新本面板，停留状态下没有其他重渲染驱动）。
-  let _guardPollTimer = null;
-
-  function ensureGuardPolling() {
-    if (_guardPollTimer || typeof setInterval !== 'function') return;
-    const timer = setInterval(() => {
-      if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'session-controls') return;
-      if (!currentRuntimeAgentId || !currentSessionId()) return;
-      const caps = resolveCaps();
-      if (!caps) {
-        void probeCapabilities();
-        return;
-      }
-      if (!caps.guard) return;
-      void refreshGuardStatus({ renderWhenDone: true, silent: true });
-    }, 3000);
-    if (typeof timer?.unref === 'function') timer.unref();
-    _guardPollTimer = timer;
-  }
-
   featurePanelBody.addEventListener('change', (event) => {
     const toggle = event.target?.closest?.('[data-force-continuation-toggle]');
     if (toggle) {
@@ -654,8 +471,6 @@
     }
     const limit = event.target?.closest?.('[data-force-continuation-limit]');
     if (limit) updateLimit(limit.value);
-    const guardToggle = event.target?.closest?.('[data-guard-armed]');
-    if (guardToggle) updateGuardArmed(guardToggle.checked);
 
     // 模型轮转（capability_invoke 通用通路）
     const rotEnabled = event.target?.closest?.('[data-rotation-enabled]');
@@ -1229,19 +1044,16 @@
     updateTrigger,
     updateLimit,
     refreshStatus,
-    refreshGuardStatus,
     refreshRotationStatus,
     updateRotationConfig,
     refreshStyleStatus,
     updateStyleSelection,
-    updateGuardArmed,
-    // 消费方（如 runtime-status 前置 guard 状态拉取）按已探明的挂载集决定
-    // 是否发请求；探测未决时返回 false，避免对不支持的 runtime 打出 503。
+    // 消费方按已探明的挂载集决定是否发请求；探测未决时返回 false，避免对
+    // 不支持的 runtime 打出 503。
     isAvailable: () => {
       const caps = resolveCaps();
-      return !!(caps && (caps.fc || caps.guard || caps.rot || caps.style));
+      return !!(caps && (caps.fc || caps.rot || caps.style));
     },
-    isGuardAvailable: () => resolveCaps()?.guard === true,
     isStyleAvailable: () => resolveCaps()?.style === true,
   };
 }());

@@ -15,12 +15,12 @@ function panelSandbox(overrides = {}) {
     getActiveWorkspaceSessionId: () => 'session-a',
     renderFeaturePanel() {},
     // 面板的显隐判据是当前会话 runtime 实际挂载的 Feature 名单
-    // （inspector 快照）；缺省给全量三件套。
+    // （inspector 快照）；缺省给全量两件套（context-guard 的开关已迁至
+    // 上边栏 badge，见 frontend-context-guard-toggle.test.js）。
     currentHookInspector: {
       lifecycleOrder: [],
       features: [
         { name: 'force-continuation' },
-        { name: 'context-guard' },
         { name: 'step-rotating-model' },
       ],
       hooks: [],
@@ -30,27 +30,19 @@ function panelSandbox(overrides = {}) {
       return {
         ok: true,
         status: 200,
-        json: async () => {
-          if (String(url).startsWith('/protoclaw/context_guard')) {
-            return {
-              ok: true,
-              status: { armed: true, trip: null, thresholdTokens: 160000 },
-            };
-          }
-          return {
-            ok: true,
-            status: {
-              enabled: false,
-              triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
-              maxConsecutiveContinuations: 3,
-              consecutiveContinuations: 0,
-              lastProviderStopReason: 'end_turn',
-              lastFinishReason: 'completed',
-              lastOutcomeStatus: 'completed',
-              lastAction: 'completed',
-            },
-          };
-        },
+        json: async () => ({
+          ok: true,
+          status: {
+            enabled: false,
+            triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
+            maxConsecutiveContinuations: 3,
+            consecutiveContinuations: 0,
+            lastProviderStopReason: 'end_turn',
+            lastFinishReason: 'completed',
+            lastOutcomeStatus: 'completed',
+            lastAction: 'completed',
+          },
+        }),
       };
     },
     ...overrides,
@@ -86,20 +78,15 @@ describe('SessionControlsPanel', () => {
         return {
           ok: true,
           status: 200,
-          json: async () => {
-            if (String(url).startsWith('/protoclaw/context_guard')) {
-              return { ok: true, status: { armed: true, trip: null, thresholdTokens: 160000 } };
-            }
-            return {
-              ok: true,
-              status: {
-                enabled: true,
-                triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
-                maxConsecutiveContinuations: 3,
-                lastAction: 'idle',
-              },
-            };
-          },
+          json: async () => ({
+            ok: true,
+            status: {
+              enabled: true,
+              triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
+              maxConsecutiveContinuations: 3,
+              lastAction: 'idle',
+            },
+          }),
         };
       },
     });
@@ -129,18 +116,13 @@ describe('SessionControlsPanel', () => {
         return {
           ok: true,
           status: 200,
-          json: async () => {
-            if (String(url).startsWith('/protoclaw/context_guard')) {
-              return { ok: true, status: { armed: true, trip: null, thresholdTokens: 160000 } };
-            }
-            return {
-              ok: true,
-              status: {
-                enabled: true,
-                triggers: { providerMaxTokens: true, providerLength: false, frameworkLimitReached: true },
-              },
-            };
-          },
+          json: async () => ({
+            ok: true,
+            status: {
+              enabled: true,
+              triggers: { providerMaxTokens: true, providerLength: false, frameworkLimitReached: true },
+            },
+          }),
         };
       },
     });
@@ -165,16 +147,14 @@ describe('SessionControlsPanel', () => {
         calls.push({ url, options });
         return {
           ok: true, status: 200,
-          json: async () => {
-            if (String(url).startsWith('/protoclaw/context_guard')) {
-              return { ok: true, status: { armed: true, trip: null, thresholdTokens: 160000 } };
-            }
-            return { ok: true, status: {
+          json: async () => ({
+            ok: true,
+            status: {
               enabled: true,
               triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
               maxConsecutiveContinuations: 8,
-            } };
-          },
+            },
+          }),
         };
       },
     });
@@ -221,9 +201,9 @@ describe('SessionControlsPanel', () => {
     assert.doesNotMatch(html, /data-guard-armed/);
   });
 
-  it('hides guard and rotation sections when the runtime only mounts force-continuation', () => {
+  it('hides the rotation section when the runtime only mounts force-continuation', () => {
     const { ctx } = panelSandbox({
-      // coder 会话形态：只有 ForceContinuation，没有 guard / rotation
+      // coder 会话形态：只有 ForceContinuation，没有 rotation
       currentHookInspector: {
         lifecycleOrder: [],
         features: [{ name: 'force-continuation' }],
@@ -233,6 +213,7 @@ describe('SessionControlsPanel', () => {
     const html = ctx.run('window.SessionControlsPanel.render()');
 
     assert.match(html, /data-force-continuation-toggle/);
+    // 迁移回归：context-guard 的开关已迁至上边栏 badge，面板不再渲染任何 guard 控件
     assert.doesNotMatch(html, /data-guard-armed/);
     assert.doesNotMatch(html, /data-rotation-enabled/);
     // 底部说明只覆盖已显示的 section
@@ -305,71 +286,6 @@ describe('SessionControlsPanel', () => {
 
     assert.match(fetchCalls[0].url, /agentId=agent-studio/);
     assert.match(html, /data-force-continuation-toggle/);
-  });
-});
-
-describe('SessionControlsPanel: context guard fuse', () => {
-  it('shows the consumed fuse as off with the trip fact, and re-arms through session-targeted control', async () => {
-    const calls = [];
-    let armed = false;
-    const { ctx } = panelSandbox({
-      fetch: async (url, options = {}) => {
-        calls.push({ url, options });
-        const body = options.body ? JSON.parse(options.body) : null;
-        if (String(url) === '/protoclaw/context_guard_control') armed = body.armed === true;
-        return {
-          ok: true,
-          status: 200,
-          json: async () => {
-            if (String(url).startsWith('/protoclaw/context_guard')) {
-              return {
-                ok: true,
-                status: {
-                  armed,
-                  trip: { at: 1750000000000, thresholdTokens: 8000, inputTokens: 8300, reason: 'Context threshold reached.' },
-                  thresholdTokens: 8000,
-                },
-              };
-            }
-            return {
-              ok: true,
-              status: {
-                enabled: false,
-                triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
-              },
-            };
-          },
-        };
-      },
-    });
-
-    await ctx.run('window.SessionControlsPanel.refreshGuardStatus({ renderWhenDone: false })');
-    let html = ctx.run('window.SessionControlsPanel.render()');
-    // 开关已触发关闭：开关为关，同时展示最近一次触发事实
-    assert.doesNotMatch(html, /data-guard-armed checked/);
-    assert.match(html, /超阈值自动打断/);
-    assert.match(html, /最近一次触发/);
-    assert.match(html, /8\.3K \/ 8\.0K/);
-
-    await ctx.run('window.SessionControlsPanel.updateGuardArmed(true)');
-    const guardCall = calls.find((c) => c.url === '/protoclaw/context_guard_control');
-    assert.ok(guardCall);
-    assert.deepEqual(JSON.parse(guardCall.options.body), {
-      agentId: 'programming-helper',
-      sessionId: 'session-a',
-      armed: true,
-    });
-    html = ctx.run('window.SessionControlsPanel.render()');
-    assert.match(html, /data-guard-armed checked/);
-  });
-
-  it('shows the threshold hint while the fuse is armed and untouched', async () => {
-    const { ctx } = panelSandbox();
-    await ctx.run('window.SessionControlsPanel.refreshGuardStatus({ renderWhenDone: false })');
-    const html = ctx.run('window.SessionControlsPanel.render()');
-    assert.match(html, /data-guard-armed checked/);
-    assert.match(html, /当前阈值约 160\.0K tokens/);
-    assert.doesNotMatch(html, /最近一次触发/);
   });
 });
 

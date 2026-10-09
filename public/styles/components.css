@@ -6785,6 +6785,75 @@ body[data-theme="light"] .user-choice-card:focus-within {
   opacity: 0.5;
 }
 
+/* 超阈值自动打断 badge：token 进度条组内嵌的会话级守卫开关（Lucide 盾）。
+ * off / armed 同构胶囊（图标 + 文字恒渲染：off「开启打断」动作邀请、
+ * armed「自动打断」状态描述，同字数宽度恒定，切换时 bar 布局零跳动。
+ * off = 灰淡无底；armed = 淡琥珀 tint
+ * （color-mix 派生，与进度条 tone-mid #ff9800 同色系，明暗主题自适应，
+ * 派生模式对齐 tool-rewrite-badge 先例，克制不告警）。
+ * .ccb-guard-zone 是外层 hover/click 缓冲带：负 margin 抵消 padding，
+ * 视觉零占位，命中区外扩——点歪时不弹详情弹窗。 */
+.ccb-guard-zone {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 5px;
+  margin: -4px -5px;
+}
+.ccb-guard {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  margin-left: 4px;
+  border: none;
+  background: none;
+  border-radius: 10px;
+  color: var(--text-secondary);
+  opacity: 0.55;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+.ccb-guard .ccb-guard-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.ccb-guard .ccb-guard-text {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.ccb-guard:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.ccb-guard:focus-visible {
+  outline: 1px solid var(--accent-color, #4f8cff);
+  opacity: 0.9;
+}
+.ccb-guard.is-armed {
+  opacity: 1;
+  background: color-mix(in srgb, #ff9800 14%, transparent);
+  color: color-mix(in srgb, #ff9800 70%, var(--text-secondary));
+}
+.ccb-guard.is-armed:hover:not(:disabled) {
+  background: color-mix(in srgb, #ff9800 22%, transparent);
+}
+.ccb-guard.is-pending,
+.ccb-guard.is-readonly {
+  opacity: 0.35;
+  cursor: default;
+}
+.ccb-guard.is-pending.is-armed,
+.ccb-guard.is-readonly.is-armed {
+  background: color-mix(in srgb, #ff9800 10%, transparent);
+}
+.ccb-guard:disabled {
+  cursor: default;
+}
+
 /* ── Context bar hover popup ── */
 .ccb-popup {
   position: fixed;
@@ -6879,7 +6948,8 @@ body[data-theme="light"] .ccb-popup-inner {
 .ccb-popup-copy-btn.ccb-popup-copy-done { color: #4caf50; }
 
 /* ── Model preset dropdown (click on context bar) ── */
-#chat-context-bar { cursor: pointer; }
+/* #chat-context-bar 不可整体点击（模型切换入口已删，模型下拉在输入框工具栏）；
+ * 守卫 badge 的可点击性由 .ccb-guard 自身的 cursor 表达 */
 .ccb-model-dropdown {
   position: fixed;
   z-index: 9100;

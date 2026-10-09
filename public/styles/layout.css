@@ -7106,8 +7106,10 @@ body[data-theme="light"] .preset-tag-opencode {
   }
   h1 { font-size: 14px; }
 
-  /* Hide chat context bar tokens to save space */
-  .chat-context-bar .ccb-token { display: none; }
+  /* Hide chat context bar tokens to save space; keep the guard badge reachable */
+  .chat-context-bar .ccb-token .ccb-bar,
+  .chat-context-bar .ccb-token .ccb-label { display: none; }
+  .chat-context-bar .ccb-guard .ccb-guard-text { display: none; }
 
   /* Chat container: reduce padding */
   #chat-container {

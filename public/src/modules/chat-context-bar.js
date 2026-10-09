@@ -15,7 +15,6 @@
  *   - formatRelativeTime, formatWorkspaceDate (app-core.js)
  *   - readCurrentSessionViewState (session-view-state.js)
  *   - followLatestEnabled, currentLanguage, container (app-core.js 全局状态)
- *   - loadAgents (sidebar-render.js), updateInputModelSwitcher (persistent-input.js)
  */
 
 function updateChatContextBar(viewState = readCurrentSessionViewState()) {
@@ -105,6 +104,10 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   // 过界提示 chip（压力驱动：≥100% 出现，回落消失），与下方进度条同源。
   if (typeof syncContextPressureChip === 'function') syncContextPressureChip(thresholdPct);
 
+  // 超阈值自动打断 badge（ContextGuardToggle，进度条组内嵌）：同一阈值的
+  // 读数与守卫放在一起。未挂载 / 状态未到位返回空串，占位不影响布局。
+  let guardBadge = window.ContextGuardToggle?.renderBadge?.() || '';
+
   let html = '';
   if (modelName) {
     html += '<span class="ccb-model">' + escapeHtml(modelName) + '</span>';
@@ -119,6 +122,7 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
     html += '<span class="ccb-token tone-' + tone + '">'
       + '<span class="ccb-bar"><span class="ccb-compress-zone" style="left:' + compressRatio + '%"></span><span class="ccb-fill" style="width:' + pct + '%"></span></span>'
       + '<span class="ccb-label">' + label + '</span>'
+      + guardBadge
       + '</span>';
   } else {
     // 常驻空态：数据未到位（加载中 / runtime 未上报 contextLength）时占位，
@@ -126,11 +130,13 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
     html += '<span class="ccb-token ccb-token-empty">'
       + '<span class="ccb-bar"></span>'
       + '<span class="ccb-label">—</span>'
+      + guardBadge
       + '</span>';
   }
 
   // 存储详细数据供 hover popup 使用
   let detailData = { modelName: modelName || '', used: used, contextLength: contextLength, compressRatio: compressRatio, isLastRequest: isLastRequest };
+  detailData.guard = window.ContextGuardToggle?.getDetail?.() || null;
   let totalUsage = (overview.usageStats && overview.usageStats.totalUsage) || {};
   let lastReq = overview.usageStats && overview.usageStats.lastRequestUsage || null;
   if (!lastReq && activeSession && activeSession.tokenUsage) {
@@ -247,6 +253,13 @@ function _buildCcbPopupHtml(d) {
       ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '阈限进度' : 'Threshold Usage') + '</span><span class="ccb-popup-value ccb-popup-tone-' + thresholdTone + '">' + Math.min(999, thresholdPct) + '%</span></div>');
     }
   }
+  // 超阈值自动打断：badge 的只读详情（开关在进度条组末端的盾牌图标）
+  if (d.guard) {
+    ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '超阈值自动打断' : 'Auto-interrupt') + '</span><span class="ccb-popup-value">' + (d.guard.armed ? (isZh ? '开' : 'On') : (isZh ? '关' : 'Off')) + '</span></div>');
+    if (d.guard.trip && d.guard.trip.inputTokens && d.guard.trip.thresholdTokens) {
+      ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '最近触发' : 'Last trigger') + '</span><span class="ccb-popup-value ccb-popup-mono">' + _formatTokens(d.guard.trip.inputTokens) + ' / ' + _formatTokens(d.guard.trip.thresholdTokens) + '</span></div>');
+    }
+  }
   if (ctxRows.length) {
     sections.push('<div class="ccb-popup-section">' + ctxRows.join('') + '</div>');
   }
@@ -331,206 +344,43 @@ function _initCcbPopup() {
   let bar = document.getElementById('chat-context-bar');
   if (!bar || bar.dataset.popupBound) return;
   bar.dataset.popupBound = '1';
-  bar.addEventListener('mouseenter', function() { _scheduleShowCcbPopup(); });
+  bar.addEventListener('mouseenter', function(e) {
+    // badge（含缓冲带）上不弹模型详情：点歪在按钮周围也不触发
+    if (e.target && e.target.closest && e.target.closest('[data-guard-zone]')) {
+      if (_ccbPopupShowTimer) { clearTimeout(_ccbPopupShowTimer); _ccbPopupShowTimer = null; }
+      _hideCcbPopup();
+      return;
+    }
+    _scheduleShowCcbPopup();
+  });
   bar.addEventListener('mouseleave', function() { _scheduleHideCcbPopup(); });
+  // badge 每轮 innerHTML 重建，进出缓冲带用冒泡事件委托：在缓冲带内时压制详情弹窗
+  bar.addEventListener('mouseover', function(e) {
+    if (e.target && e.target.closest && e.target.closest('[data-guard-zone]')) {
+      if (_ccbPopupShowTimer) { clearTimeout(_ccbPopupShowTimer); _ccbPopupShowTimer = null; }
+      _hideCcbPopup();
+    }
+  });
+  bar.addEventListener('mouseout', function(e) {
+    let fromZone = e.target && e.target.closest ? e.target.closest('[data-guard-zone]') : null;
+    if (!fromZone) return;
+    let to = e.relatedTarget;
+    if (to && to.closest && to.closest('[data-guard-zone]')) return; // 缓冲带内部移动
+    if (to && bar.contains(to)) _scheduleShowCcbPopup(); // 回到 bar 普通区域恢复详情
+  });
   bar.addEventListener('click', function(e) {
-    // Click on context bar → open model preset dropdown instead of hover popup
+    // 守卫 badge（含缓冲带）消费点击：命中按钮切换开关；点在缓冲带空白处静默
+    let guardZone = e.target && e.target.closest ? e.target.closest('[data-guard-zone]') : null;
+    if (!guardZone) return;
+    let guardBtn = e.target.closest('[data-guard-toggle]');
+    if (guardBtn && !guardBtn.disabled) window.ContextGuardToggle?.toggleGuard?.();
     e.preventDefault();
     e.stopPropagation();
-    // Cancel hover popup
-    if (_ccbPopupShowTimer) { clearTimeout(_ccbPopupShowTimer); _ccbPopupShowTimer = null; }
-    _hideCcbPopup();
-    _toggleModelDropdown();
   });
 }
 
 window.addEventListener('DOMContentLoaded', _initCcbPopup);
 setTimeout(_initCcbPopup, 0);
-
-
-// ── Model preset dropdown (click to swap) ────────────────────────
-let _modelDropdown = null;
-
-function _closeModelDropdown() {
-  if (_modelDropdown) {
-    _modelDropdown.classList.remove('visible');
-    setTimeout(function() {
-      if (_modelDropdown) { _modelDropdown.remove(); _modelDropdown = null; }
-    }, 150);
-  }
-}
-
-function _getCurrentAgentIdForSwap() {
-  // Model swap is keyed on the HOST agent ID (e.g. 'programming-helper'),
-  // not the ViewerWorker child UUID. Config file and IPC delivery both
-  // use the host ID. See _getInputAgentId() for full rationale.
-  if (typeof focusedAgentId !== 'undefined' && focusedAgentId) return focusedAgentId;
-  if (typeof getCurrentHostAgentRecord === 'function') {
-    let host = getCurrentHostAgentRecord();
-    if (host && host.id) return host.id;
-  }
-  if (typeof getCurrentAgentRecord === 'function') {
-    let agent = getCurrentAgentRecord();
-    if (agent && agent.id) return agent.id;
-  }
-  return null;
-}
-
-function _getCurrentDefaultPresetName() {
-  let agent = typeof getRuntimeAwareAgentRecord === 'function'
-    ? getRuntimeAwareAgentRecord()
-    : null;
-  if (!agent) return '';
-  let modelPresets = agent.modelPresets || {};
-  let defaultCfg = modelPresets.default || {};
-  if (typeof defaultCfg === 'string') return defaultCfg;
-  return (defaultCfg && defaultCfg.primary) || '';
-}
-
-// preset 列表的缓存与回源统一走 owner 模块（model-preset-cache.js，ADR-0011
-// 会话命名空间语义）：agentId 始终携带当前会话身份，远程会话返回远程自己的
-// preset 列表；缓存按会话身份失效，防切换串列表。
-
-async function _toggleModelDropdown() {
-  // If already open, close
-  if (_modelDropdown) {
-    _closeModelDropdown();
-    return;
-  }
-
-  let bar = document.getElementById('chat-context-bar');
-  if (!bar) return;
-
-  let agentId = _getCurrentAgentIdForSwap();
-  if (!agentId) return;
-
-  // Fetch presets
-  let presets;
-  try {
-    presets = await ensureClawModelPresetsForSession(
-      (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '');
-  } catch (e) {
-    console.error('[ModelDropdown] Failed to load presets:', e);
-    return;
-  }
-  if (!presets.length) return;
-
-  let currentPreset = _getCurrentDefaultPresetName();
-  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-
-  // Build dropdown
-  _modelDropdown = document.createElement('div');
-  _modelDropdown.className = 'ccb-model-dropdown';
-
-  let html = '<div class="ccb-model-dropdown-list">';
-  presets.forEach(function(p) {
-    let name = p.name || p.model || '';
-    let isActive = name === currentPreset;
-    let visionIcon = p.vision === true
-      ? '<svg class="ccb-md-vision" title="' + (isZh ? '支持视觉' : 'Vision') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'
-      : '';
-    let ctxText = p.contextLength && p.contextLength > 0
-      ? Math.round(p.contextLength / 1000) + 'K'
-      : '';
-    html += '<div class="ccb-md-item' + (isActive ? ' active' : '') + '" data-preset="' + escapeHtml(name) + '">'
-      + '<span class="ccb-md-left">'
-      + '<span class="ccb-md-name">' + escapeHtml(name) + '</span>'
-      + visionIcon
-      + '</span>'
-      + '<span class="ccb-md-right">'
-      + (ctxText ? '<span class="ccb-md-ctx">' + ctxText + '</span>' : '')
-      + '</span>'
-      + '</div>';
-  });
-  html += '</div>';
-  _modelDropdown.innerHTML = html;
-
-  // Position
-  let rect = bar.getBoundingClientRect();
-  _modelDropdown.style.left = rect.left + 'px';
-  _modelDropdown.style.top = (rect.bottom + 8) + 'px';
-
-  // Item click
-  _modelDropdown.addEventListener('click', function(e) {
-    let item = e.target.closest('.ccb-md-item');
-    if (!item) return;
-    let presetName = item.dataset.preset;
-    _closeModelDropdown();
-    _performModelSwap(agentId, presetName);
-  });
-
-  document.body.appendChild(_modelDropdown);
-  // Trigger transition
-  requestAnimationFrame(function() { _modelDropdown.classList.add('visible'); });
-
-  // Close on outside click
-  setTimeout(function() {
-    document.addEventListener('click', _modelDropdownOutsideClick, { once: true });
-  }, 0);
-}
-
-function _modelDropdownOutsideClick(e) {
-  if (_modelDropdown && !_modelDropdown.contains(e.target)) {
-    let bar = document.getElementById('chat-context-bar');
-    if (!bar || !bar.contains(e.target)) {
-      _closeModelDropdown();
-    }
-  } else if (_modelDropdown) {
-    // Clicked inside dropdown but not on an item — re-register
-    document.addEventListener('click', _modelDropdownOutsideClick, { once: true });
-  }
-}
-
-async function _performModelSwap(agentId, presetName) {
-  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-  let toastId = 'model-hot-swap';
-
-  ClawToast.show({
-    id: toastId,
-    title: isZh ? '正在切换模型...' : 'Switching model...',
-    status: 'loading',
-    closable: false,
-  });
-
-  try {
-    let sessionId = typeof getActiveWorkspaceSessionId === 'function'
-      ? getActiveWorkspaceSessionId()
-      : '';
-    let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
-    const resp = await fetch('/protoclaw/swap_model', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, presetName, sessionId: sessionId || undefined, runtimeId: runtimeId || undefined }),
-    });
-    const result = await resp.json();
-    if (result.ok) {
-      let swapDesc = presetName;
-      if (presetName === '__default__' && result?.meta?.modelName) swapDesc = result.meta.modelName;
-      else if (typeof formatPresetDisplayName === 'function') swapDesc = formatPresetDisplayName(presetName);
-      ClawToast.update(toastId, {
-        status: 'success',
-        title: isZh ? '模型已切换' : 'Model switched',
-        description: swapDesc,
-        autoDismiss: 3000,
-      });
-      // Context bar model name comes from overview poll — just refresh.
-      // Input box needs immediate update too.
-      if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
-      if (typeof updateChatContextBar === 'function') updateChatContextBar();
-    } else {
-      throw new Error(result.error || 'Unknown error');
-    }
-  } catch (e) {
-    console.error('[ModelDropdown] Swap failed:', e);
-    ClawToast.update(toastId, {
-      status: 'error',
-      title: isZh ? '切换失败' : 'Switch failed',
-      description: e?.message || String(e),
-      closable: true,
-      autoDismiss: 8000,
-    });
-  }
-}
 
 
 // ── Title hover popup: session metadata ───────────────────────────
