@@ -44,7 +44,7 @@
 - IM 门户代理：[prebuilt-agents/official/qqbot/agent.js](prebuilt-agents/official/qqbot/agent.js)
 - 群聊管理员工具集：[local-features/group-admin](local-features/group-admin)
 - 运行时信封：[server/runtime-call-envelope.js](server/runtime-call-envelope.js)
-- 桌面壳（Tauri，2a 渲染 + 2b sidecar 生命周期切片已验收）：[desktop/](desktop)，宿主契约见 [docs/protocols/service-lifecycle.md](docs/protocols/service-lifecycle.md)
+- 桌面壳（Tauri，2a 渲染 + 2b sidecar 生命周期切片已验收）：[desktop/](desktop)，宿主契约见 [docs/protocols/service-lifecycle.md](docs/protocols/service-lifecycle.md)。Windows 右键目录空白处「在编程小助手中打开/创建会话」：注册表项由 [desktop/installer-hooks.nsh](desktop/installer-hooks.nsh) 安装时写入 HKCU，参数链路 exe argv（`--claw-open`/`--claw-new-chat`）→ 冷启动窗口 URL query / 已运行实例 webview eval → 前端 [public/src/modules/desktop-open.js](public/src/modules/desktop-open.js) 统一消费，三处参数键名需同步修改。钩子里 exe 必须引用 NSIS 模板变量 `${MAINBINARYNAME}`（实际二进制名来自 Cargo package name，与 productName 不同；硬编码 productName 会指向不存在的文件、点击菜单静默无反应），菜单图标直接引用 exe 内嵌 logo，无需分发独立 ico
 
 ## 项目定位
 

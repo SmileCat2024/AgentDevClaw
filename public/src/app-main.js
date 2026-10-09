@@ -1622,6 +1622,9 @@ document.addEventListener('visibilitychange', () => {
   await waitForViewerReady();
   const success = await loadFeatureTemplateMap();
   await loadAgents();
+  // 桌面右键唤起（冷启动 URL query，modules/desktop-open.js）：覆盖初始
+  // 焦点恢复，切到编程小助手并执行定位目录 / 新建对话。
+  if (window.ClawDesktopOpen) await window.ClawDesktopOpen.consumeBootOpenRequest();
   if (!success) {
     console.log('[Viewer] Retrying to load feature templates after agent loaded...');
     await reloadFeatureTemplateMap();

@@ -18,7 +18,7 @@
  *   phSearchQuery, phSearchResults, phSearchLoading, _phSearchTimer (app-main.js)
  * window 函数:
  *   phOpenModelConfig, phCloseModelConfig, phAutoSaveModelConfig,
- *   phOpenProject, phSwitchProject, phToggleProjectDropdown,
+ *   phOpenProject, phOpenProjectDirectory, phSwitchProject, phToggleProjectDropdown,
  *   phOpenInExplorer, phToggleModelSlot
  * HTML onclick 引用:
  *   onclick="phOpenModelConfig()"
@@ -169,7 +169,26 @@ window.phOpenProject = async () => {
     if (!chosenPath) {
       return;
     }
+    await window.phOpenProjectDirectory(chosenPath);
+  } catch (error) {
+    console.error('Failed to open project:', error);
+    window.alert((currentLanguage === 'zh' ? '打开项目失败：' : 'Failed to open project: ') + (error?.message || error));
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+  }
+};
 
+// 以给定目录打开项目（加入目录列表并设为当前项目，ph_project/open 一次完成），
+// 随后按项目切片拉取会话首屏。目录来源由调用方决定：工具栏「打开项目」按钮
+// 先弹目录选择器；桌面右键「在编程小助手中打开」由壳直接给定
+// （modules/desktop-open.js）。
+window.phOpenProjectDirectory = async (chosenPath) => {
+  const currentAgent = getCurrentAgentRecord();
+  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent) || !chosenPath) {
+    return;
+  }
+
+  try {
     // Open project: add + set as active in one call
     const openRes = await fetch('/protoclaw/ph_project/open', {
       method: 'POST',

@@ -27,7 +27,7 @@ claw-desktop.exe（Tauri 主进程）
 ```
 
 - **启动**：Tauri 主进程先请求 `GET /protoclaw/health`。本机已有 ready Claw 服务时只打开前台并连接该服务，不再启动第二个服务实例；否则 spawn supervisor（`CREATE_NO_WINDOW`、stdout/stderr 持续排空防管道写满），等待 Claw health ready 后创建窗口。若启动的 supervisor 退出但端口上已有 ready Claw 服务，桌面壳保留并连接该服务，避免前台随启动冲突闪退。
-- **单实例**：重复运行桌面 exe 不产生第二实例。新进程不进入启动流程（不探测服务、不 spawn supervisor），把激活转交给已运行实例后退出；已运行实例将主窗口带回前台（托盘隐藏状态同样恢复）。首实例窗口尚未创建（仍在等待服务就绪）时忽略激活，窗口随后续就绪流程创建。
+- **单实例**：重复运行桌面 exe 不产生第二实例。新进程不进入启动流程（不探测服务、不 spawn supervisor），把激活转交给已运行实例后退出；已运行实例将主窗口带回前台（托盘隐藏状态同样恢复）。首实例窗口尚未创建（仍在等待服务就绪）时忽略激活，窗口随后续就绪流程创建。第二实例携带右键菜单唤起参数（`--claw-open=<dir>` / `--claw-new-chat=<dir>`，[installer-hooks.nsh](../../desktop/installer-hooks.nsh) 注册的资源管理器菜单）时，激活同时把请求经 webview eval 转发给前端的统一消费入口（`public/src/modules/desktop-open.js`）；冷启动路径则由首实例把参数拼进窗口 URL query，两条路径在前端汇合。
 - **WebView 权限**：桌面壳对本壳托管的 Claw 服务源（`127.0.0.1:PORT`）自动授予全部 WebView 权限（通知、麦克风、剪贴板等），不弹权限询问——前端 `Notification.requestPermission()`（首次发送时请求）直接得到 granted，会话完成通知在桌面端与浏览器端行为一致。窗口内导航到其他来源时回落 WebView2 默认行为；已保存的授权/拒绝偏好（WebView2 profile 内）优先于该处理器。
 - **关窗与恢复**：主窗口关闭请求只隐藏窗口；supervisor 和服务继续运行。托盘左键或“打开工作台”恢复原窗口与会话。
 - **退出**：设置里的“退出程序”请求 server 自主有序关闭；托盘“退出程序”由宿主发同样请求。即使当前桌面壳没有自己启动的 supervisor，用户明确选择退出时也可向已确认 ready 的本机 Claw 服务发送该请求。server 退出后桌面壳随之退出。等待超时后只对自己创建的 supervisor 子树执行最终清理；连接到已有服务时不会按 PID 或进程树强杀它。健康探测、端口冲突和父进程状态不会触发关停。

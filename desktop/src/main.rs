@@ -2,7 +2,13 @@
 //
 // 桌面进程启动并观察服务（见 docs/protocols/service-lifecycle.md）：
 //   启动：先检查本机是否已有 ready 服务；有则只恢复前台，无则 spawn supervisor
-//   单实例：重复运行 exe 只激活已有实例（聚焦主窗口），第二实例随即退出
+//   单实例：重复运行 exe 只激活已有实例（聚焦主窗口），第二实例随即退出；
+//           第二实例携带右键唤起参数（--claw-open/--claw-new-chat）时同时
+//           把请求转发给已运行实例的 webview（见 deliver_open_request）
+//   右键唤起：installer-hooks.nsh 注册 HKCU Directory\Background 菜单
+//           「在编程小助手中打开 / 创建会话」。冷启动把参数拼进窗口 URL
+//           query，已运行则经 single-instance argv 转发；前端统一在
+//           public/src/modules/desktop-open.js 消费
 //   权限：WebView 权限对 Claw 服务源自动放行（通知等），不弹用户询问
 //   就绪：等 Claw health 确认 ready 后建窗口，避免误连任意端口占用者
 //   关窗：隐藏界面，服务和宿主继续运行，可从系统托盘恢复
@@ -238,8 +244,113 @@ fn request_server_shutdown(port: u16, expected_pid: u32) {
 
 fn show_main_window(handle: &tauri::AppHandle) {
     if let Some(window) = handle.get_webview_window("main") {
+        // Windows 前台锁定策略会拒绝后台进程的 set_focus（只闪任务栏图标），
+        // 最小化窗口 show() 也不会还原。托盘隐藏 / 最小化 / 可见但失焦三种
+        // 状态都要能带到前台：先 unminimize + show，再用置顶翻转
+        // （topmost → focus → 取消 topmost）绕过前台锁定。
+        let _ = window.unminimize();
         let _ = window.show();
+        let _ = window.set_always_on_top(true);
         let _ = window.set_focus();
+        let _ = window.set_always_on_top(false);
+    }
+}
+
+/// 右键菜单唤起请求（installer-hooks.nsh 注册的注册表命令携带，%V 展开为
+/// 右键时所在目录）。action 与前端 modules/desktop-open.js 的约定保持一致。
+#[derive(Clone, Debug)]
+struct OpenRequest {
+    /// "open"（切工作空间并定位目录）| "new-chat"（切工作空间并新建对话）
+    action: &'static str,
+    dir: String,
+}
+
+impl OpenRequest {
+    /// 冷启动传递路径的窗口 URL query 键。
+    fn query_key(&self) -> &'static str {
+        match self.action {
+            "new-chat" => "claw-new-chat",
+            _ => "claw-open",
+        }
+    }
+}
+
+/// 解析命令行参数中的右键唤起请求：--claw-open=<dir> / --claw-new-chat=<dir>。
+/// 多次出现以最后一次为准；空目录值忽略（视为无请求）。
+fn parse_open_request<I, S>(args: I) -> Option<OpenRequest>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut request = None;
+    for arg in args {
+        let arg = arg.as_ref();
+        if let Some(dir) = arg.strip_prefix("--claw-new-chat=") {
+            if !dir.is_empty() {
+                request = Some(OpenRequest { action: "new-chat", dir: dir.to_string() });
+            }
+        } else if let Some(dir) = arg.strip_prefix("--claw-open=") {
+            if !dir.is_empty() {
+                request = Some(OpenRequest { action: "open", dir: dir.to_string() });
+            }
+        }
+    }
+    request
+}
+
+/// 最小 percent-encoding：非 unreserved（A-Za-z0-9-_.~）字节全部 %XX。
+/// 仅用于把目录路径嵌入窗口 URL query，前端 URLSearchParams 自动解码。
+fn percent_encode(input: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(input.len());
+    for &byte in input.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => {
+                out.push('%');
+                out.push(HEX[(byte >> 4) as usize] as char);
+                out.push(HEX[(byte & 0x0F) as usize] as char);
+            }
+        }
+    }
+    out
+}
+
+/// 转义为 JS 字符串字面量内容（不含外层引号），webview eval 传参用。
+/// 覆盖 Windows 路径的 `\`、`"` 与控制字符，其余字符按原样（UTF-8）。
+fn js_string_literal(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// 已运行实例收到第二实例的右键唤起参数：经 webview eval 交给前端
+/// modules/desktop-open.js 的统一消费入口。窗口尚未创建（服务启动中）时
+/// 忽略本次请求——与既有激活语义一致；冷启动场景本就不依赖该转发
+/// （参数由首实例自己的 argv 走窗口 URL query）。
+fn deliver_open_request(handle: &tauri::AppHandle, request: &OpenRequest) {
+    let Some(window) = handle.get_webview_window("main") else {
+        return;
+    };
+    let script = format!(
+        "window.__clawConsumeOpenRequest && window.__clawConsumeOpenRequest({{ action: '{}', cwd: \"{}\" }})",
+        request.action,
+        js_string_literal(&request.dir)
+    );
+    if let Err(err) = window.eval(&script) {
+        eprintln!("[claw-desktop] failed to deliver open request: {err}");
     }
 }
 
@@ -250,10 +361,16 @@ fn is_service_origin(url: &tauri::Url) -> bool {
 }
 
 fn main() {
+    // 右键唤起参数（首实例冷启动路径）：随窗口 URL query 交给前端。
+    let open_request = parse_open_request(std::env::args());
     let app = tauri::Builder::default()
         // 单实例：须最先注册。第二实例把激活转交给已运行实例后自行退出，
-        // 不进入 setup（不重复探测服务 / spawn supervisor）。
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        // 不进入 setup（不重复探测服务 / spawn supervisor）。携带右键唤起
+        // 参数时，激活同时把请求转发给已运行实例的 webview。
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(request) = parse_open_request(argv) {
+                deliver_open_request(app, &request);
+            }
             show_main_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
@@ -278,7 +395,7 @@ fn main() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             let open = MenuItem::with_id(app, "open", "打开工作台", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出程序", true, None::<&str>)?;
@@ -379,14 +496,21 @@ fn main() {
 
             // 窗口创建必须经事件循环（AppHandle 代理）投递；在 run() 启动前的
             // 主线程上直接 build 会因 WebView2 初始化等不到循环分发而挂死（实测）。
+            let open_request = open_request.clone();
             std::thread::spawn(move || {
                 let service_ready = wait_service_ready(port, Duration::from_secs(15));
                 if !service_ready {
                     eprintln!("[claw-desktop] Claw service not ready on port {port} after 15s; opening the window so the startup problem remains visible");
                 }
-                let url: tauri::Url = format!("http://127.0.0.1:{port}/")
-                    .parse()
-                    .expect("service url");
+                // 冷启动右键唤起：参数拼进首屏 URL query，前端 boot 序列消费。
+                let mut url_string = format!("http://127.0.0.1:{port}/");
+                if let Some(request) = &open_request {
+                    url_string.push('?');
+                    url_string.push_str(request.query_key());
+                    url_string.push('=');
+                    url_string.push_str(&percent_encode(&request.dir));
+                }
+                let url: tauri::Url = url_string.parse().expect("service url");
                 let result = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(url))
                     .title("Agent 工作台")
                     .inner_size(1600.0, 1000.0)
@@ -471,4 +595,51 @@ fn main() {
             let _ = child.wait();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_open_and_new_chat_requests() {
+        let request = parse_open_request([
+            "C:\\Apps\\AgentDevClaw.exe",
+            "--claw-open=D:\\code\\my project",
+        ]);
+        assert_eq!(request.as_ref().map(|r| r.action), Some("open"));
+        assert_eq!(request.map(|r| r.dir), Some("D:\\code\\my project".to_string()));
+
+        let request = parse_open_request(["--claw-new-chat=D:\\dev"]);
+        assert_eq!(request.as_ref().map(|r| r.action), Some("new-chat"));
+        assert_eq!(request.map(|r| r.dir), Some("D:\\dev".to_string()));
+    }
+
+    #[test]
+    fn last_occurrence_wins_and_empty_values_ignored() {
+        let none = parse_open_request(["AgentDevClaw.exe", "--claw-open="]);
+        assert!(none.is_none());
+        let request = parse_open_request(["--claw-open=D:\\a", "--claw-new-chat=D:\\b"]);
+        assert_eq!(request.as_ref().map(|r| (r.action, r.dir.as_str())), Some(("new-chat", "D:\\b")));
+    }
+
+    #[test]
+    fn query_key_matches_frontend_contract() {
+        let open = OpenRequest { action: "open", dir: String::new() };
+        let new_chat = OpenRequest { action: "new-chat", dir: String::new() };
+        assert_eq!(open.query_key(), "claw-open");
+        assert_eq!(new_chat.query_key(), "claw-new-chat");
+    }
+
+    #[test]
+    fn percent_encode_keeps_unreserved_and_encodes_path_bytes() {
+        assert_eq!(percent_encode("D:\\code my-project_1.~z"), "D%3A%5Ccode%20my-project_1.~z");
+        assert_eq!(percent_encode("中文"), "%E4%B8%AD%E6%96%87");
+    }
+
+    #[test]
+    fn js_literal_escapes_backslash_quote_and_controls() {
+        assert_eq!(js_string_literal("D:\\a\"b"), "D:\\\\a\\\"b");
+        assert_eq!(js_string_literal("a\nb\u{1}"), "a\\nb\\u0001");
+    }
 }
