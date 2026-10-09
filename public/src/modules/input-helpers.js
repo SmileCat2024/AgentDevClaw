@@ -10,7 +10,7 @@
  *   - getPrimaryInputRequest / requestSupportsAction / getRollbackInputRequest:
  *     输入请求查询（纯函数）
  *   - getAvailableCallIndices / canRollbackMessage: rollback 可用性判断（纯函数）
- *   - saveChatProcessVisibility / hasConversationProcessContent / updateChatProcessToggle:
+ *   - saveChatProcessVisibility / updateChatProcessToggle:
  *     对话过程显隐
  *   - syncAssistantProcessOnlyRows / applyConversationProcessState: 过程内容 DOM 同步
  *   - window.toggleChatProcessVisibility: 全局切换函数
@@ -422,20 +422,13 @@ function saveChatProcessVisibility() {
   }
 }
 
-function hasConversationProcessContent(messages = []) {
-  return messages.some((msg) =>
-    msg?.role === 'system'
-    || msg?.role === 'tool'
-    || (msg?.role === 'assistant' && !!msg.reasoning)
-    || (Array.isArray(msg?.toolCalls) && msg.toolCalls.length > 0)
-  );
-}
-
-function updateChatProcessToggle(messages = readCurrentSessionViewState().messages) {
+function updateChatProcessToggle() {
   if (!chatProcessToggle) return;
-  const hasProcess = hasConversationProcessContent(messages) && !shouldRenderWorkspaceSurface();
-  chatProcessToggle.classList.toggle('hidden', !hasProcess);
-  if (!hasProcess) return;
+  // 聊天界面常驻显示：数据未到位也不隐藏，与 chat-context-bar 同一显隐
+  // 逻辑（非聊天界面时隐藏），避免加载期间按钮出现/消失的布局跳动。
+  const show = !shouldRenderWorkspaceSurface();
+  chatProcessToggle.classList.toggle('hidden', !show);
+  if (!show) return;
   chatProcessToggle.classList.toggle('active', showChatProcess);
   chatProcessToggle.textContent = showChatProcess ? t('hide_process') : t('show_process');
 }

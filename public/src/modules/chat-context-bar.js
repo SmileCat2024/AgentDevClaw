@@ -42,8 +42,8 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
 
   // Gate 与数据源解耦（T21-E）：agent record 缺失（远程会话不在 allAgents）
   // 不再清空整条 bar——overview 活源数据已进 viewState，模型名/用量应照常
-  // 渲染。是否真无数据的判定推迟到渲染前：仅当模型名、用量全空且
-  // contextLength 为 0 时才维持空态呈现。
+  // 渲染。用量读数在聊天界面常驻：数据未到位时以空态占位呈现，避免加载
+  // 期间顶栏元素出现/消失的布局跳动。
   let agent = getRuntimeAwareAgentRecord();
 
   // 找到当前活跃会话（agent 可能为 null——远程会话不在 allAgents，读取需 null 安全）
@@ -90,7 +90,7 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
 
   // contextLength / compressRatio 只走 overview 实时链路（模型热切换后立即反映）。
   // 不回退到 session 元数据——该旁路读取的是会话创建时写入的旧值，热切换后不更新，
-  // 是历史上 context bar 显示不匹配的根源。overview 无 contextLength 时进度条不渲染。
+  // 是历史上 context bar 显示不匹配的根源。overview 无 contextLength 时渲染空态占位。
   let contextLength = (overview.contextLength != null && overview.contextLength > 0)
     ? overview.contextLength
     : 0;
@@ -120,6 +120,13 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
       + '<span class="ccb-bar"><span class="ccb-compress-zone" style="left:' + compressRatio + '%"></span><span class="ccb-fill" style="width:' + pct + '%"></span></span>'
       + '<span class="ccb-label">' + label + '</span>'
       + '</span>';
+  } else {
+    // 常驻空态：数据未到位（加载中 / runtime 未上报 contextLength）时占位，
+    // 与左侧模型名的呈现保持稳定，不隐藏。
+    html += '<span class="ccb-token ccb-token-empty">'
+      + '<span class="ccb-bar"></span>'
+      + '<span class="ccb-label">—</span>'
+      + '</span>';
   }
 
   // 存储详细数据供 hover popup 使用
@@ -141,23 +148,6 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   // 检查阈限压力等级，在等级跨越时触发 Toast 提醒
   if (activeId) {
     _checkContextPressureToast(activeId, thresholdPct);
-  }
-
-  // 真·空数据 gate（T21-E）：模型名与用量全空且 contextLength 为 0 才清空
-  // bar（与既有空态呈现一致）；否则 overview 活源已足够渲染。
-  if (!modelName && !used && contextLength === 0) {
-    bar.innerHTML = '';
-    if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
-        notifyChatViewportMutation({
-          reason: 'context-bar',
-          shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-          preserveTop: followLatestEnabled ? null : container.scrollTop,
-          forceSnap: false,
-          allowChase: false,
-          preferSmooth: false,
-        });
-    }
-    return;
   }
 
   bar.innerHTML = html;

@@ -1353,7 +1353,7 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
     updateProjectDocsetChrome(agent);
     updateChatContextBar(viewState);
     if (typeof updateChatProcessToggle === 'function') {
-      updateChatProcessToggle(viewState.messages);
+      updateChatProcessToggle();
     }
     updateFollowLatestButton();
     requestAnimationFrame(updateAssemblySideRailPosition);
@@ -1367,7 +1367,7 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
     updateProjectDocsetChrome(agent);
     updateChatContextBar(viewState);
     if (typeof updateChatProcessToggle === 'function') {
-      updateChatProcessToggle(viewState.messages);
+      updateChatProcessToggle();
     }
     updateFollowLatestButton();
     return;
@@ -1377,7 +1377,7 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
   updateChatContextBar(viewState);
   updateProjectDocsetChrome(agent);
   if (typeof updateChatProcessToggle === 'function') {
-    updateChatProcessToggle(viewState.messages);
+    updateChatProcessToggle();
   }
   requestAnimationFrame(updateAssemblySideRailPosition);
 }

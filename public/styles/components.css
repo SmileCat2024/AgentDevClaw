@@ -6780,6 +6780,10 @@ body[data-theme="light"] .user-choice-card:focus-within {
 .ccb-label {
   font-size: 13px;
 }
+/* 常驻空态占位：数据未到位时降低存在感，但不从布局中移除 */
+.ccb-token.ccb-token-empty {
+  opacity: 0.5;
+}
 
 /* ── Context bar hover popup ── */
 .ccb-popup {

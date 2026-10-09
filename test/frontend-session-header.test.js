@@ -9,7 +9,8 @@
  *   2. 切换隔离：session-view-state 的 token 绑定 runtimeId + _switchEpoch，
  *      旧 token 在切换推进后提交返回 false，bar 反映新 runtime 的数据。
  *   3. 本地回归：record 存在时输出与当前实现关键子串一致（golden，锚定现状）。
- *   4. 空态：真·空数据（模型名空 + 用量 0 + contextLength 0）→ bar 清空。
+ *   4. 空态：真·空数据（模型名空 + 用量 0 + contextLength 0）→ 用量条以
+ *      空态占位常驻（不再清空整条 bar）。
  *
  * 沙箱模式同 test/frontend-core-helpers.test.js：模块内 `let` 声明的全局
  * （currentRuntimeAgentId / focusedAgentId / _switchEpoch 等）不落 context
@@ -244,10 +245,11 @@ describe('frontend session header: local regression', () => {
     `);
 
     // golden：模型名来自 overview 活源（此处为空 → 回退 session 元数据），
-    // 用量回退 session.tokenUsage，contextLength 只走 overview（无则不出进度条）
+    // 用量回退 session.tokenUsage，contextLength 只走 overview（无则常驻空态占位）
     assert.equal(
       bar.innerHTML,
-      '<span class="ccb-model">glm-5.3-flash</span>',
+      '<span class="ccb-model">glm-5.3-flash</span>'
+      + '<span class="ccb-token ccb-token-empty"><span class="ccb-bar"></span><span class="ccb-label">—</span></span>',
     );
     const detail = ctx.run('window._ccbDetailData');
     assert.equal(detail.modelName, 'glm-5.3-flash');
@@ -267,7 +269,7 @@ describe('frontend session header: local regression', () => {
 // ── 场景 4：空态 ─────────────────────────────────────────────
 
 describe('frontend session header: empty state', () => {
-  it('clears the bar when there is no record, no overview content, and no sessionMeta', () => {
+  it('keeps an empty-state usage placeholder when there is no record, no overview content, and no sessionMeta', () => {
     const { ctx, bar } = createHeaderSandbox();
     ctx.run(`
       isRemoteNamespaceAgentId = (value) => typeof value === 'string' && value.startsWith('remote:');
@@ -281,7 +283,8 @@ describe('frontend session header: empty state', () => {
       updateChatContextBar();
     `);
 
-    assert.equal(bar.innerHTML, '', '真·空数据 gate 应清空 bar');
+    assert.ok(bar.innerHTML.includes('ccb-token-empty'), '真·空数据时用量条以空态占位常驻');
+    assert.ok(!bar.innerHTML.includes('ccb-model'), '模型名槽位无数据时不渲染');
     const view = ctx.run('({ sessionMeta: readCurrentSessionViewState().sessionMeta })');
     assert.equal(view.sessionMeta.sessionId, '');
     assert.equal(view.sessionMeta.messageCount, 0);
