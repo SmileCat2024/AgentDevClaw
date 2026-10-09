@@ -192,9 +192,16 @@ async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
 
   // dedup: 30s 内同一 agent 的完成事件不重复通知。
   // 仅在确认需要通知（后台 + 权限已授）时才检查和标记。
+  // 标记必须在任何 await 之前同步写入：同一 call.finish payload 会经
+  // updateNotificationStatus 的多个分支同步调用本函数两次，SSE 事件与
+  // 轮询路径也可能并发进入；若标记写在下方 fetch 之后，两次并发调用都能
+  // 通过检查、各发一条通知。浏览器原生 Notification 的同 tag 替换语义
+  // 掩盖了这种重复，Tauri 通知插件忽略 tag（每次构造都弹独立 toast）
+  // 后暴露为「通知弹两遍」。
   const now = Date.now();
   const lastNotified = _notifiedFinishMap.get(normId);
   if (lastNotified && (now - lastNotified) < 30000) return;
+  _notifiedFinishMap.set(normId, now);
 
   const agent = (Array.isArray(allAgents) ? allAgents : []).find(
     (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
@@ -226,9 +233,6 @@ async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
   const body = bodyParts.length > 0
     ? bodyParts.join('\n')
     : (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.');
-
-  // 标记已通知（在实际发送通知之前，防止 fetch 期间重复触发）
-  _notifiedFinishMap.set(normId, Date.now());
 
   try {
     const notification = new Notification(
