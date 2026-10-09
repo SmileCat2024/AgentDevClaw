@@ -248,8 +248,8 @@ describe('frontend session header: local regression', () => {
     // 用量回退 session.tokenUsage，contextLength 只走 overview（无则常驻空态占位）
     assert.equal(
       bar.innerHTML,
-      '<span class="ccb-model">glm-5.3-flash</span>'
-      + '<span class="ccb-token ccb-token-empty"><span class="ccb-bar"></span><span class="ccb-label">—</span></span>',
+      '<span class="ccb-model" data-ccb-trigger="1">glm-5.3-flash</span>'
+      + '<span class="ccb-token ccb-token-empty"><span class="ccb-bar" data-ccb-trigger="1"></span><span class="ccb-label" data-ccb-trigger="1">—</span></span>',
     );
     const detail = ctx.run('window._ccbDetailData');
     assert.equal(detail.modelName, 'glm-5.3-flash');

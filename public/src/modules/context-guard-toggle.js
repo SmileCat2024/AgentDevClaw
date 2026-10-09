@@ -165,19 +165,18 @@
     if (pending) cls.push('is-pending');
     if (readonly) cls.push('is-readonly');
 
-    // 外层 zone 是 hover/click 缓冲带（data-guard-zone）：点歪在按钮周围
-    // 时不弹详情、不误触模型操作；负 margin 抵消 padding，视觉零占位。
+    // 弹窗触发区是白名单（ccb-model / ccb-bar / ccb-label，data-ccb-trigger，
+    // 见 chat-context-bar）：badge 不在触发区内，hover 与点击互不干扰。
     // off / armed 同构胶囊（图标 + 文字恒渲染，仅颜色区分）——宽度恒定，
     // 切换时 bar 布局零跳动
-    return '<span class="ccb-guard-zone" data-guard-zone="1">'
-      + '<button type="button" class="' + cls.join(' ') + '" data-guard-toggle="1"'
+    return '<button type="button" class="' + cls.join(' ') + '" data-guard-toggle="1"'
       + (pending || readonly ? ' disabled' : '')
       + ' aria-pressed="' + (armed ? 'true' : 'false') + '">'
       + SHIELD_SVG
       + '<span class="ccb-guard-text">'
       + (armed ? (zh ? '自动打断' : 'Enabled') : (zh ? '开启打断' : 'Enable'))
       + '</span>'
-      + '</button></span>';
+      + '</button>';
   }
 
   // ── 写操作 ────────────────────────────────────────────────────────
@@ -222,17 +221,16 @@
         id: 'context-guard-toggle',
         status: 'success',
         title: zh ? '已开启超阈值自动打断' : 'Auto-interrupt armed',
-        description: zh
-          ? `超过阈值（约 ${thresholdText} tokens）时自动打断并提醒精简；触发一次后自动关闭。仅当前会话生效。`
-          : `When usage exceeds the threshold (≈ ${thresholdText} tokens), the turn is interrupted with a trimming hint; it disarms after one trip. Applies to this session only.`,
-        autoDismiss: 5000,
+        description: zh ? `阈值 ≈ ${thresholdText} tokens` : `Threshold ≈ ${thresholdText} tokens`,
       });
     } else {
       window.ClawToast?.show?.({
         id: 'context-guard-toggle',
-        status: 'success',
+        status: 'warning',
         title: zh ? '已关闭超阈值自动打断' : 'Auto-interrupt disarmed',
-        autoDismiss: 3000,
+        description: zh
+          ? '上下文超阈值时将不再自动打断，token 开销可能大幅增加'
+          : 'Usage above the threshold will no longer be interrupted; token costs may increase sharply',
       });
     }
   }

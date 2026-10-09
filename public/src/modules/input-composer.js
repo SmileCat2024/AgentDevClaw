@@ -343,8 +343,8 @@ function applyComposerMode(card, mode, lease = null) {
   card.dataset.composerMode = mode;
   _composerMode = mode;
   _composerRequestId = requestId;
-  // persistent-input 类是压力 chip（syncContextPressureChip）与三态按钮域的
-  // 选择器契约：只在 persistent 模式持有，请求卡模式下保持与原请求卡等价。
+  // persistent-input 类是三态按钮域的选择器契约：只在 persistent 模式
+  // 持有，请求卡模式下保持与原请求卡等价。
   card.classList.toggle('persistent-input', mode === 'persistent');
 
   ta.id = textareaId;

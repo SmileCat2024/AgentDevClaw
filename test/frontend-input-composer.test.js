@@ -296,7 +296,7 @@ function loadInputModules(ctx) {
   `);
   const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
   const start = persistentSource.indexOf('function renderPersistentInput(container) {');
-  const end = persistentSource.indexOf('function syncContextPressureChip', start);
+  const end = persistentSource.indexOf('function onPersistentBtnClick', start);
   ctx.run(persistentSource.slice(start, end));
   ctx.loadSource('public/src/modules/input-render.js');
 }

@@ -314,7 +314,7 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
   // renderPersistentInput 真实片段（persistent 分支的属性级更新依赖它）
   const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
   const rpStart = persistentSource.indexOf('function renderPersistentInput(container) {');
-  const rpEnd = persistentSource.indexOf('function syncContextPressureChip', rpStart);
+  const rpEnd = persistentSource.indexOf('function onPersistentBtnClick', rpStart);
   ctx.run(persistentSource.slice(rpStart, rpEnd));
   // 排队气泡投影的会话重绑真实现（renderInputRequests 的模式判定依赖）
   const rebindStart = persistentSource.indexOf('function rebindQueueProjectionForRuntime');

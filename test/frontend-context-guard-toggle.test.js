@@ -83,14 +83,14 @@ describe('ContextGuardToggle: mount probe & badge rendering', () => {
     assert.doesNotMatch(html, /title=/);
   });
 
-  it('wraps the badge in a hover/click buffer zone', () => {
+  it('renders the badge outside the popup trigger region', () => {
     const { ctx } = guardSandbox();
     ctx.run('window.ContextGuardToggle.applyStatus({ status: { armed: false, trip: null, thresholdTokens: 160000 } }, "runtime-a")');
     const html = ctx.run('window.ContextGuardToggle.renderBadge()');
-    // 缓冲带在外层（chat-context-bar 的事件委托按 data-guard-zone 判定）
-    const zoneAt = html.indexOf('data-guard-zone="1"');
-    const btnAt = html.indexOf('data-guard-toggle="1"');
-    assert.ok(zoneAt !== -1 && btnAt !== -1 && zoneAt < btnAt, 'zone wraps the button');
+    // 弹窗触发区是白名单（chat-context-bar 按 data-ccb-trigger 判定）：
+    // badge 不携带触发标记，hover 它不会弹详情
+    assert.ok(html.includes('data-guard-toggle="1"'), 'toggle button rendered');
+    assert.ok(!html.includes('data-ccb-trigger'), 'badge carries no popup trigger marker');
   });
 
   it('re-renders the context bar only when armed or threshold actually changes', () => {
@@ -146,11 +146,10 @@ describe('ContextGuardToggle: session-targeted toggle with toast feedback', () =
     assert.equal(toasts.length, 1);
     assert.equal(toasts[0].status, 'success');
     assert.match(toasts[0].title, /已开启超阈值自动打断/);
-    assert.match(toasts[0].description, /160\.0K/);
-    assert.match(toasts[0].description, /触发一次后自动关闭/);
+    assert.equal(toasts[0].description, '阈值 ≈ 160.0K tokens');
   });
 
-  it('disarms with a short confirmation toast', async () => {
+  it('disarms with a warning toast stating the risk', async () => {
     const { ctx, calls, toasts } = guardSandbox({
       fetch: async (url, options = {}) => {
         calls.push({ url, options });
@@ -169,7 +168,10 @@ describe('ContextGuardToggle: session-targeted toggle with toast feedback', () =
     assert.equal(JSON.parse(call.options.body).armed, false);
     assert.doesNotMatch(ctx.run('window.ContextGuardToggle.renderBadge()'), /is-armed/);
     assert.equal(toasts.length, 1);
+    assert.equal(toasts[0].status, 'warning');
     assert.match(toasts[0].title, /已关闭超阈值自动打断/);
+    assert.match(toasts[0].description, /不再自动打断/);
+    assert.match(toasts[0].description, /大幅增加/);
   });
 
   it('keeps the pre-click armed state while a write is pending (poll backfill cannot flip it)', async () => {

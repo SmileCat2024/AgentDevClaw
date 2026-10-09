@@ -101,16 +101,13 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   let thresholdTokens = contextLength > 0 ? Math.round(contextLength * compressRatio / 100) : 0;
   let thresholdPct = thresholdTokens > 0 ? Math.round((used / thresholdTokens) * 100) : 0;
 
-  // 过界提示 chip（压力驱动：≥100% 出现，回落消失），与下方进度条同源。
-  if (typeof syncContextPressureChip === 'function') syncContextPressureChip(thresholdPct);
-
   // 超阈值自动打断 badge（ContextGuardToggle，进度条组内嵌）：同一阈值的
   // 读数与守卫放在一起。未挂载 / 状态未到位返回空串，占位不影响布局。
   let guardBadge = window.ContextGuardToggle?.renderBadge?.() || '';
 
   let html = '';
   if (modelName) {
-    html += '<span class="ccb-model">' + escapeHtml(modelName) + '</span>';
+    html += '<span class="ccb-model" data-ccb-trigger="1">' + escapeHtml(modelName) + '</span>';
   }
   if (contextLength > 0) {
     let pct = used > 0 ? Math.min(100, Math.round((used / contextLength) * 100)) : 0;
@@ -120,16 +117,16 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
       ? pct + '% (\u7d2f\u79ef)'
       : pct + '%';
     html += '<span class="ccb-token tone-' + tone + '">'
-      + '<span class="ccb-bar"><span class="ccb-compress-zone" style="left:' + compressRatio + '%"></span><span class="ccb-fill" style="width:' + pct + '%"></span></span>'
-      + '<span class="ccb-label">' + label + '</span>'
+      + '<span class="ccb-bar" data-ccb-trigger="1"><span class="ccb-compress-zone" style="left:' + compressRatio + '%"></span><span class="ccb-fill" style="width:' + pct + '%"></span></span>'
+      + '<span class="ccb-label" data-ccb-trigger="1">' + label + '</span>'
       + guardBadge
       + '</span>';
   } else {
     // 常驻空态：数据未到位（加载中 / runtime 未上报 contextLength）时占位，
     // 与左侧模型名的呈现保持稳定，不隐藏。
     html += '<span class="ccb-token ccb-token-empty">'
-      + '<span class="ccb-bar"></span>'
-      + '<span class="ccb-label">—</span>'
+      + '<span class="ccb-bar" data-ccb-trigger="1"></span>'
+      + '<span class="ccb-label" data-ccb-trigger="1">—</span>'
       + guardBadge
       + '</span>';
   }
@@ -151,11 +148,6 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   detailData.totalRequests = (overview.usageStats && overview.usageStats.totalRequests) || 0;
   window._ccbDetailData = detailData;
 
-  // 检查阈限压力等级，在等级跨越时触发 Toast 提醒
-  if (activeId) {
-    _checkContextPressureToast(activeId, thresholdPct);
-  }
-
   bar.innerHTML = html;
   if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
     notifyChatViewportMutation({
@@ -166,48 +158,6 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
       allowChase: false,
       preferSmooth: false,
     });
-  }
-}
-
-// ── Context pressure toast trigger ──
-// Per-session 压力等级：0 (安全), 1 (警告 ≥70%), 2 (超限 ≥100%)
-let _ctxPressureLevel = {};
-
-function _checkContextPressureToast(sessionId, thresholdPct) {
-  // [临时屏蔽] 用量压力 Toast 通知 — 需要恢复时改为 true
-  var _ctxPressureToastEnabled = false;
-  if (!_ctxPressureToastEnabled) return;
-  if (!sessionId || typeof ClawToast === 'undefined') return;
-  let newLevel = thresholdPct >= 100 ? 2 : thresholdPct >= 70 ? 1 : 0;
-  let prevLevel = _ctxPressureLevel[sessionId] || 0;
-  if (newLevel === prevLevel) return;
-
-  _ctxPressureLevel[sessionId] = newLevel;
-
-  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-  let toastId = 'ctx-pressure-' + sessionId;
-
-  if (newLevel === 1) {
-    ClawToast.show({
-      id: toastId,
-      status: 'warning',
-      title: isZh ? '上下文即将达到压缩阈值' : 'Context Approaching Compression Threshold',
-      description: isZh
-        ? '当前用量已达压缩阈值的 ' + thresholdPct + '%。可考虑使用 trim、summary 或 branch 接续新会话，以节省上下文开销。'
-        : 'Usage at ' + thresholdPct + '% of compression threshold. Consider trim, summary, or branch to save context.',
-    });
-  } else if (newLevel === 2) {
-    ClawToast.show({
-      id: toastId,
-      status: 'error',
-      title: isZh ? '已超过压缩阈值' : 'Compression Threshold Exceeded',
-      description: isZh
-        ? '当前用量已达压缩阈值的 ' + thresholdPct + '%。强烈建议立即执行 trim、summary 或 branch，否则上下文开销将大幅增加。'
-        : 'Usage at ' + thresholdPct + '% of compression threshold. Strongly recommended to trim, summary, or branch immediately.',
-    });
-  } else {
-    // 用量回落到安全区，静默清除
-    ClawToast.dismiss(toastId);
   }
 }
 
@@ -319,7 +269,9 @@ function _showCcbPopup() {
   }
   _ccbPopup.innerHTML = html;
   let rect = bar.getBoundingClientRect();
-  _ccbPopup.style.left = rect.left + 'px';
+  // 左缘左偏 12px：badge 使 bar 右端有内容后，弹窗与触发区整体更协调
+  // （bar 位于 header 右侧，左偏不会触到视口左缘）
+  _ccbPopup.style.left = (rect.left - 12) + 'px';
   _ccbPopup.style.top = (rect.bottom + 8) + 'px';
   _ccbPopup.classList.add('visible');
 }
@@ -344,38 +296,23 @@ function _initCcbPopup() {
   let bar = document.getElementById('chat-context-bar');
   if (!bar || bar.dataset.popupBound) return;
   bar.dataset.popupBound = '1';
-  bar.addEventListener('mouseenter', function(e) {
-    // badge（含缓冲带）上不弹模型详情：点歪在按钮周围也不触发
-    if (e.target && e.target.closest && e.target.closest('[data-guard-zone]')) {
-      if (_ccbPopupShowTimer) { clearTimeout(_ccbPopupShowTimer); _ccbPopupShowTimer = null; }
-      _hideCcbPopup();
-      return;
-    }
-    _scheduleShowCcbPopup();
-  });
-  bar.addEventListener('mouseleave', function() { _scheduleHideCcbPopup(); });
-  // badge 每轮 innerHTML 重建，进出缓冲带用冒泡事件委托：在缓冲带内时压制详情弹窗
+  // 白名单正向触发：只有模型名 / 进度条 / 百分比（data-ccb-trigger）是
+  // 详情弹窗的触发区。badge 与 bar 其余区域（含缝隙）一律按离开处理——
+  // 清掉待显示定时器并调度隐藏。不存在"触发后再压制"的补丁分支。
   bar.addEventListener('mouseover', function(e) {
-    if (e.target && e.target.closest && e.target.closest('[data-guard-zone]')) {
-      if (_ccbPopupShowTimer) { clearTimeout(_ccbPopupShowTimer); _ccbPopupShowTimer = null; }
-      _hideCcbPopup();
+    if (e.target && e.target.closest && e.target.closest('[data-ccb-trigger]')) {
+      _scheduleShowCcbPopup();
+    } else {
+      _scheduleHideCcbPopup();
     }
   });
   bar.addEventListener('mouseout', function(e) {
-    let fromZone = e.target && e.target.closest ? e.target.closest('[data-guard-zone]') : null;
-    if (!fromZone) return;
     let to = e.relatedTarget;
-    if (to && to.closest && to.closest('[data-guard-zone]')) return; // 缓冲带内部移动
-    if (to && bar.contains(to)) _scheduleShowCcbPopup(); // 回到 bar 普通区域恢复详情
+    if (!to || !bar.contains(to)) _scheduleHideCcbPopup();
   });
   bar.addEventListener('click', function(e) {
-    // 守卫 badge（含缓冲带）消费点击：命中按钮切换开关；点在缓冲带空白处静默
-    let guardZone = e.target && e.target.closest ? e.target.closest('[data-guard-zone]') : null;
-    if (!guardZone) return;
-    let guardBtn = e.target.closest('[data-guard-toggle]');
-    if (guardBtn && !guardBtn.disabled) window.ContextGuardToggle?.toggleGuard?.();
-    e.preventDefault();
-    e.stopPropagation();
+    let btn = e.target && e.target.closest ? e.target.closest('[data-guard-toggle]') : null;
+    if (btn && !btn.disabled) window.ContextGuardToggle?.toggleGuard?.();
   });
 }
 
