@@ -125,11 +125,29 @@ describe('loadKnowledgeDir（知识库目录加载）', () => {
     assert.ok(content.includes('改动对读者的影响'), '保留读者需要的事实');
     assert.ok(content.includes('句子直接承载信息'), '补充自然表达建议');
     assert.ok(content.includes('不是……而是……'), '避免无真实对比的模板句式，同时允许有用对比');
+    assert.ok(content.includes('论证姿态上的自我说明'), '深层过程痕迹：自解释姿态');
+    assert.ok(content.includes('删掉后，论证链受损吗'), '自解释判据可操作：删掉后论证链是否受损');
+    assert.ok(content.includes('合上这次对话的记忆'), '收尾工序：陌生人通读而非重读找毛病');
+    assert.ok(content.includes('层与层之间的行文腔调是否统一'), '多轮追加的全文腔调统一警示');
+    assert.ok(content.includes('反馈针对的是局部事实还是整体姿态'), '反馈定位范围不等于影响范围');
+    assert.ok(content.includes('归一成最终需求'), '多轮补丁后的需求归一化重写选项');
     assert.ok(!content.startsWith('[工程素养]'), 'md 只存正文，前缀由代码加');
   });
 
   it('目录不存在 → 空知识库不抛错', () => {
     assert.equal(loadKnowledgeDir(join(tmpdir(), 'craft-awareness-nonexistent')).size, 0);
+  });
+
+  it('读取真实 knowledge 目录：doc-delivery-mode.md 内容完整载入', () => {
+    const knowledge = loadKnowledgeDir(REAL_KNOWLEDGE_DIR);
+    const content = knowledge.get('doc-delivery-mode');
+    assert.ok(content, '条目 md 应存在');
+    assert.ok(content.includes('哪种工作方式'), '阶段判断开场');
+    assert.ok(content.includes('逐轮协作'), '两种工作方式对照在场');
+    assert.ok(content.includes('交付定稿'), '交付态命名在场');
+    assert.ok(content.includes('旧稿降为素材'), '归一化重写操作');
+    assert.ok(content.includes('不是所有多轮修改都需要重写'), '防过度工程安全阀');
+    assert.ok(!content.startsWith('[工程素养]'), 'md 只存正文，前缀由代码加');
   });
 
   it('忽略非 md 文件，正文去尾部空白', () => {
@@ -305,5 +323,142 @@ describe('CraftAwarenessFeature（注入与冷却契约）', () => {
     const h = makeHarness({ success: false });
     await h.fire();
     assert.equal(h.injected.length, 0);
+  });
+});
+
+describe('doc-delivery-mode（交付模式判断条目触发契约）', () => {
+  /** 模拟 context 消息尾部：一条 user 消息（sequence 即边界标识）+ 刚写入的工具结果。 */
+  function userBoundary(sequence: number, turn = 1): Array<Record<string, unknown>> {
+    return [
+      { role: 'user', content: '反馈', sequence, turn },
+      { role: 'tool', content: 'result', sequence: sequence + 1, turn },
+    ];
+  }
+
+  /**
+   * 同一 feature 实例上可多次 fire 的会话模型：boundary 可在 fire 之间切换，
+   * 模拟"用户有新输入（新 call 或 busy 排队插话）后模型再次编辑文档"。
+   */
+  function makeSession() {
+    const feature = new CraftAwarenessFeature({ knowledgeDir: REAL_KNOWLEDGE_DIR });
+    const injected: string[] = [];
+    let recent: Array<Record<string, unknown>> = userBoundary(10);
+    const fire = (toolName: 'write' | 'edit', filePath = 'guide.md') => {
+      const ctx = {
+        toolName,
+        call: {
+          id: 'c1',
+          name: toolName,
+          arguments: toolName === 'write'
+            ? { filePath, content: lines(DOC_CRAFT_MIN_WRITE_LINES + 5) }
+            : { filePath, oldString: 'a', newString: 'b' },
+        },
+        success: true,
+        context: {
+          addSystemMessage(text: string) { injected.push(text); },
+          getRecent() { return recent; },
+        },
+      };
+      return feature.injectCraftReminder(ctx as never);
+    };
+    return {
+      feature,
+      injected,
+      fire,
+      /** 切换边界：数值 = context 中最近一条 user 消息的 sequence；null = 无 user 消息。 */
+      setBoundary(sequence: number | null) {
+        recent = sequence === null
+          ? [{ role: 'tool', content: 'x', sequence: 99, turn: 1 }]
+          : userBoundary(sequence);
+      },
+    };
+  }
+
+  const isDelivery = (text: string) => text.includes('哪种工作方式');
+
+  it('同一用户输入边界内的多次 edit（模型自我更正）不触发 delivery 条目', async () => {
+    const s = makeSession();
+    s.setBoundary(10);
+    await s.fire('edit');
+    await s.fire('edit');
+    await s.fire('edit');
+    assert.equal(s.injected.length, 1, '只有 reader 条目注入一次');
+    assert.ok(!isDelivery(s.injected[0]));
+  });
+
+  it('跨越第二个用户输入边界的 edit 触发 delivery 条目，带统一前缀', async () => {
+    const s = makeSession();
+    s.setBoundary(10);
+    await s.fire('edit'); // reader 注入，guide.md 记账边界数 1
+    s.setBoundary(20);
+    await s.fire('edit'); // 跨到第二个边界 → delivery 注入
+    assert.equal(s.injected.length, 2);
+    assert.ok(isDelivery(s.injected[1]));
+    assert.ok(s.injected[1].startsWith('[工程素养] '), '前缀由代码添加');
+  });
+
+  it('write 跨边界不触发 delivery（触发限定 edit 动作）', async () => {
+    const s = makeSession();
+    s.setBoundary(10);
+    await s.fire('write'); // reader 注入
+    s.setBoundary(20);
+    await s.fire('write'); // 记账跨边界，但动作是 write
+    assert.equal(s.injected.length, 1, '只有 reader，delivery 不触发');
+  });
+
+  it('delivery 注入后冷却：跨第三个边界不再注入', async () => {
+    const s = makeSession();
+    s.setBoundary(10);
+    await s.fire('edit');
+    s.setBoundary(20);
+    await s.fire('edit'); // delivery 注入
+    s.setBoundary(30);
+    await s.fire('edit');
+    assert.equal(s.injected.length, 2, '每会话每条目一次');
+  });
+
+  it('路径大小写与分隔符漂移计入同一份文档', async () => {
+    const s = makeSession();
+    s.setBoundary(10);
+    await s.fire('edit', 'docs/guide.md');
+    s.setBoundary(20);
+    await s.fire('edit', 'docs\\GUIDE.MD');
+    assert.equal(s.injected.filter(isDelivery).length, 1, '归一化后同一记账触发');
+  });
+
+  it('不同文档的边界记账互不累计', async () => {
+    const s = makeSession();
+    s.setBoundary(10);
+    await s.fire('edit', 'a.md'); // reader 注入，a.md 边界数 1
+    s.setBoundary(20);
+    await s.fire('edit', 'b.md'); // b.md 首次记账边界数 1，不触发
+    assert.equal(s.injected.length, 1, 'b.md 未跨自己的两个边界');
+  });
+
+  it('context 无 user 消息（边界 null）不抛错，null 与数值边界互异', async () => {
+    const s = makeSession();
+    s.setBoundary(null);
+    await s.fire('edit'); // 边界 null，reader 注入，记账 1
+    s.setBoundary(10);
+    await s.fire('edit'); // null → 10 视为跨边界 → delivery 注入
+    assert.equal(s.injected.filter(isDelivery).length, 1);
+  });
+
+  it('会话恢复（新实例 restoreState）后边界记账从零开始', async () => {
+    const s1 = makeSession();
+    s1.setBoundary(10);
+    await s1.fire('edit');
+    s1.setBoundary(20);
+    await s1.fire('edit');
+    assert.equal(s1.injected.filter(isDelivery).length, 1);
+
+    const s2 = makeSession();
+    s2.feature.restoreState({ injected: { 'doc-reader-awareness': true } } as never);
+    s2.setBoundary(10);
+    await s2.fire('edit'); // 恢复后重新记账，边界数 1
+    assert.equal(s2.injected.length, 0, 'reader 已注入、delivery 未达条件');
+    s2.setBoundary(20);
+    await s2.fire('edit');
+    assert.equal(s2.injected.filter(isDelivery).length, 1, '重新跨两边界才触发');
   });
 });
