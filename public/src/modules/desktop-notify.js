@@ -17,8 +17,15 @@
  */
 
 /* ── Dedup: 防止同一 agent 短时间内重复通知 ──
- * 用 Map 存储 normId → 完成时的时间戳。实际通知和前台已观察完成
- * 分开记录，新一轮 call.start 会清空对应 runtime 的旧记录。
+ * Map 存储 normId → { at, finishTs }（at=标记写入时刻，finishTs=完成的
+ * 事件时间戳，0=payload 未携带）。事件级幂等：同一 finish 事件（时间戳
+ * 相同）只通知一次——snapshot 的 state 在完成后持久保持 call.finish，
+ * 看门狗对账（SSE 静默 30s 全量 poll）、resync、切换 agent 重载都会携带
+ * 同一 payload 重放，仅靠 30s 时间窗口挡不住窗口过期后的重放（后台 tab
+ * 节流下表现为每 30s~1min 重弹一条相同通知）。新一轮 call.start 清空旧
+ * 记录，新 finish（时间戳不同）照常通知；30s 窗口保留为并发防护与无
+ * 时间戳 payload 的 fallback。前台已观察完成分开记录
+ * （_foregroundObservedFinishMap）。
  */
 const _notifiedFinishMap = new Map();
 const _foregroundObservedFinishMap = new Map();
@@ -186,22 +193,26 @@ async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
   const sinceForeground = _lastForegroundTs > 0 ? Date.now() - _lastForegroundTs : Infinity;
   if (sinceForeground < FOREGROUND_GRACE_MS) {
     _markAgentFinishObserved(normId, notifData);
-    _notifiedFinishMap.set(normId, Date.now());
+    _notifiedFinishMap.set(normId, { at: Date.now(), finishTs: _getFinishObservedTimestamp(notifData) });
     return;
   }
 
-  // dedup: 30s 内同一 agent 的完成事件不重复通知。
-  // 仅在确认需要通知（后台 + 权限已授）时才检查和标记。
-  // 标记必须在任何 await 之前同步写入：同一 call.finish payload 会经
-  // updateNotificationStatus 的多个分支同步调用本函数两次，SSE 事件与
-  // 轮询路径也可能并发进入；若标记写在下方 fetch 之后，两次并发调用都能
-  // 通过检查、各发一条通知。浏览器原生 Notification 的同 tag 替换语义
-  // 掩盖了这种重复，Tauri 通知插件忽略 tag（每次构造都弹独立 toast）
-  // 后暴露为「通知弹两遍」。
+  // dedup（双层）：事件级幂等 + 30s 时间窗口。标记必须在任何 await 之前
+  // 同步写入：同一 call.finish payload 会经 updateNotificationStatus 的多
+  // 个分支同步调用本函数两次，SSE 事件与轮询路径也可能并发进入；若标记
+  // 写在下方 fetch 之后，两次并发调用都能通过检查、各发一条通知。浏览器
+  // 原生 Notification 的同 tag 替换语义掩盖了这种重复，Tauri 通知插件
+  // 忽略 tag（每次构造都弹独立 toast）后暴露为「通知弹两遍」。
+  // 事件级幂等（finishTs 相同即 return）挡住的是另一类重放：完成的
+  // snapshot 是持久的，SSE 静默 30s 看门狗对账、resync、切换 agent 重载
+  // 会隔 30s+ 反复携带同一 call.finish 重新进入本函数——时间窗口过期后
+  // 若无事件级比较，每个对账周期都会再弹一条相同通知。
   const now = Date.now();
+  const finishTs = _getFinishObservedTimestamp(notifData);
   const lastNotified = _notifiedFinishMap.get(normId);
-  if (lastNotified && (now - lastNotified) < 30000) return;
-  _notifiedFinishMap.set(normId, now);
+  if (lastNotified && finishTs > 0 && lastNotified.finishTs === finishTs) return;
+  if (lastNotified && (now - lastNotified.at) < 30000) return;
+  _notifiedFinishMap.set(normId, { at: now, finishTs });
 
   const agent = (Array.isArray(allAgents) ? allAgents : []).find(
     (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId

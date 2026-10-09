@@ -12,6 +12,14 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
  * 都会通过 30s 检查、各发一条通知——浏览器原生 Notification 的同 tag 替换
  * 语义掩盖了这种重复，Tauri 通知插件忽略 tag（每次构造都弹独立 toast）后
  * 暴露为「通知弹两遍」。这里锁住：标记在任何 await 之前同步写入。
+ *
+ * 另一类重放：完成的 snapshot 是持久的（state.type 完成后保持 call.finish），
+ * SSE 静默 30s 看门狗的全量对账轮（forceFullPollOnce → refreshCurrentRuntime
+ * Status → GET /notification → updateNotificationStatus UI 收尾段，该分支无
+ * 边沿守卫）会隔 30s+ 反复携带同一 payload 重新触发通知——30s 时间窗口过期
+ * 后若无事件级幂等（finishTs 相同即跳过），每个对账周期都会再弹一条相同
+ * 通知（后台 tab 节流下表现为 30s~1min 周期重弹）。这里锁住：同一 finish
+ * 事件只通知一次。
  */
 
 function loadNotifyModule({ notifications }) {
@@ -91,6 +99,46 @@ describe('finish notification dedup (frontend sandbox)', () => {
     await ctx.run(`(async () => { await _tryNotifyAgentFinished('agent-1', ${payloadExpr}) })()`);
     ctx.run(`_markAgentCallStartedForNotify('agent-1')`);
     await ctx.run(`(async () => { await _tryNotifyAgentFinished('agent-1', ${payloadExpr}) })()`);
+
+    assert.equal(notifications.length, 2);
+  });
+
+  it('30s 窗口过期后同一 finish 事件重放不再弹（看门狗对账回归锁）', async () => {
+    const notifications = [];
+    const ctx = loadNotifyModule({ notifications });
+
+    const finishTs = FINISH_PAYLOAD.state.timestamp;
+    const payloadExpr = JSON.stringify(FINISH_PAYLOAD);
+    // 冻结时钟：页面加载于完成前 60s（资格检查通过），首条通知后推进 31s
+    // （30s 窗口恰好过期），模拟看门狗对账轮携带同一持久 snapshot 重放。
+    await ctx.run(`(async () => {
+      let now = ${finishTs - 60000};
+      Date.now = () => now;
+      await _tryNotifyAgentFinished('agent-1', ${payloadExpr});
+      now = ${finishTs + 31000};
+      await _tryNotifyAgentFinished('agent-1', ${payloadExpr});
+    })()`);
+
+    assert.equal(notifications.length, 1);
+  });
+
+  it('30s 过期后不同 finish 时间戳（新一轮完成，call.start 被错过）照常通知', async () => {
+    const notifications = [];
+    const ctx = loadNotifyModule({ notifications });
+
+    const finishTs = FINISH_PAYLOAD.state.timestamp;
+    const payloadExpr = JSON.stringify(FINISH_PAYLOAD);
+    const nextFinishTs = finishTs + 90000;
+    await ctx.run(`(async () => {
+      let now = ${finishTs - 60000};
+      Date.now = () => now;
+      await _tryNotifyAgentFinished('agent-1', ${payloadExpr});
+      const nextPayload = JSON.parse(${JSON.stringify(payloadExpr)});
+      nextPayload.state = { ...nextPayload.state, timestamp: ${nextFinishTs} };
+      nextPayload.runtime = { ...nextPayload.runtime, updatedAt: ${nextFinishTs} };
+      now = ${nextFinishTs + 1000};
+      await _tryNotifyAgentFinished('agent-1', nextPayload);
+    })()`);
 
     assert.equal(notifications.length, 2);
   });
