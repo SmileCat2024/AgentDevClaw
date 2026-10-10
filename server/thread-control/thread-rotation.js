@@ -5,7 +5,7 @@
  * 由被触发的会话定位其所属线程并执行 trim+摘要接力：
  *   1. beginSessionSuccession：原子写入交接挡板并播种接续恢复指令（R3，
  *      框架 beginSessionHandoff 同笔事务，幂等键绑移交易）；接力期间
- *      新指令保持 pending；挡板落定发布 thread.rotation-begun 事件；
+ *      新指令保持 pending；
  *   2. 退役旧 head runtime：remove-session 会让 runtime 把最新会话状态
  *      flush 落盘——摘要 mirror 读的是 session 文件，若不先 flush，
  *      会基于过期快照生成「没有实质性工作」的失真摘要；
@@ -39,7 +39,6 @@
 
 import { isSuccessionGateFailure } from './thread-integration.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
-import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
 
 export function createThreadRotationService({
   sessionApi,
@@ -47,7 +46,6 @@ export function createThreadRotationService({
   threadIntegration,
   threadControl,
   threadSuccession,
-  publishThreadEvent = publishThreadEventDefault,
 } = {}) {
   if (!sessionApi || typeof sessionApi.updateSessionIndex !== 'function'
     || typeof sessionApi.compactAndResumeCurrentSession !== 'function'
@@ -87,18 +85,6 @@ export function createThreadRotationService({
         error: begun?.error || null,
       };
     }
-
-    // 挡板落定即发布接续开始事实（sidebar-thread-anchor §4.3）：让前端在
-    // 旧 runtime 退役的同一时刻获得「这是接续」的显式信号，侧栏条目转入
-    // 接续中态，而不是等 runtime 消失后靠 sessionIndex 推断（推断法无法
-    // 区分接续与失联）。事件只携带事务事实；无订阅者 no-op，发布失败不
-    // 打断接力（sse-events 侧内部兜底）。
-    publishThreadEvent(thread.threadId, {
-      kind: 'thread.rotation-begun',
-      agentId,
-      fromSessionId: sessionId,
-      reason: 'trim',
-    });
 
     try {
       await stopManagedAgent(agentId, sessionId).catch((error) => {

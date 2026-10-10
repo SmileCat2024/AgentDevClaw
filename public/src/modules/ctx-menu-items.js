@@ -72,35 +72,6 @@ function ctxSessionOpsAllowed(ns) {
 
 function getCtxMenuItems(role, ns, variant, id, sessionId = '') {
   if (role === 'runtime' && ctxSessionOpsAllowed(ns)) {
-    if (variant === 'thread-record') {
-      // 线程锚条目（head runtime 缺位：接续空窗 / 接续失败 / 休眠）：
-      // 无 runtime 可寻址，只保留会话事实动作（全部按 sessionId 落地）；
-      // restart / stop 无对象，summary / trim / branch 是对退役上下文的
-      // 变换派发、接续窗口内有害，均不提供。线程级动作（归档 / 删除线程）
-      // 的既有入口在 CoderThreadsUI。
-      const isZh = currentLanguage === 'zh';
-      const agent = allAgents.find((item) => item.id === ns) || null;
-      const targetSession = sessionId ? getWorkspaceSessionById(agent, sessionId) : null;
-      const isArchived = targetSession?.archived === true;
-      const isTodo = targetSession?.todo === true;
-      const items = [
-        { label: isZh ? '重命名' : 'Rename', action: 'rename' },
-        { label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
-        { type: 'separator' },
-        { label: isZh ? '复制 Session ID' : 'Copy Session ID', action: 'copy-session-id' },
-      ];
-      if (!isArchived) {
-        items.push({ label: isTodo ? (isZh ? '取消待办' : 'Remove TODO') : (isZh ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
-        items.push({ label: isZh ? '归档会话' : 'Archive', action: 'archive-and-stop' });
-      } else {
-        items.push({ label: isZh ? '取消归档' : 'Unarchive', action: 'archive-and-stop' });
-      }
-      items.push(
-        { type: 'separator' },
-        { label: isZh ? '删除会话' : 'Delete Session', action: 'delete-session-runtime', danger: true },
-      );
-      return items;
-    }
     // 侧栏 runtime 叶子：优先按条目携带的 sessionId 解析目标会话（多个
     // runtime 并存时 activeSessionId 未必指向被右键的会话）。
     const isZh = currentLanguage === 'zh';
@@ -477,11 +448,6 @@ async function ctxArchiveAndStopRuntime(target) {
   }
 
   // 2. Stop the agent runtime (same logic as ctxStopAgent)
-  // 线程锚缺位条目（variant='thread-record'）无 runtime 可停——这正是条目
-  // 的定义状态；归档事务已在上方完成，导航兜底也不适用（该条目不可聚焦）。
-  if (variant === 'thread-record') {
-    return;
-  }
   const serverAgentId = (variant === 'managed-runtime') ? agentId : runtimeId;
   const externalAgent = getExternalRuntimeAgent(serverAgentId);
   const affectedRuntimeId = runtimeId || getRuntimeId(externalAgent) || null;

@@ -127,23 +127,6 @@ function buildChildRuntimeEntry(runtimeAgent) {
   };
 }
 
-// ── 线程锚渲染（sidebar-thread-anchor 方案 A）────────────────────────
-// coder 投影的条目主源是线程记录（非终态），head runtime 降为属性源（运行态
-// + 控制寻址）：条目身份 threadId 常驻，接续空窗（旧 head 退役 → 新 head
-// READY）期间不消失，状态转入「接续中」。runtime 快照领先线程快照时（新
-// 会话已起、线程记录未过 20s 轮询）退回 runtime 锚条目，新会话仍即时可见。
-
-/** 交接意图陈旧线的共享读取（thread-store.js 导出；缺省回退同值 5min）。 */
-function threadHandoffStaleMs() {
-  const shared = window.ClawFW ? Number(window.ClawFW.THREAD_HANDOFF_STALE_MS) : NaN;
-  return Number.isFinite(shared) && shared > 0 ? shared : 5 * 60 * 1000;
-}
-
-/** 线程锚条目在 head runtime 缺位时的占位 runtimeId：不可用于控制 IPC。 */
-function threadAnchorRuntimeId(threadId) {
-  return `thread:${threadId}`;
-}
-
 function getSidebarOperationPendingName(operation) {
   // 线程宿主会话（coder）：trim / summary 是线程内上下文接力，不是「创建新会话」
   const isThreadHost = typeof window.isThreadHostAgentId === 'function'
@@ -191,9 +174,6 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // We also cross-reference phProjects to pick up the correct-cased directory
   // path (sessions may store a lowercased path on Windows).
   const sessionDirMap = new Map();
-  // head 会话已归档标记（sidebar-thread-anchor）：线程锚条目以 head 会话
-  // 归档为侧栏终态（会话归档 + 线程未归档的中间态不再显示休眠条目）。
-  const sessionArchivedMap = new Map();
   const hostAgentId = String(prebuiltAgent?.agentId || prebuiltAgent?.id || '').trim();
   // 会话级身份路由（原定义于子项收集前，供 todo 关联与子项过滤共用）：
   // 投影条目（agentId ≠ id，如 programming-helper:coder）只收集
@@ -249,10 +229,6 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       if (!sid || !rawDir) continue;
       const projectId = 'dir:' + rawDir.replace(/\\/g, '/').toLowerCase();
       sessionDirMap.set(sid, projectIdToDir.get(projectId) || rawDir);
-    }
-    for (const session of sessions) {
-      const sid = String(session?.id || '').trim();
-      if (sid && session?.archived === true) sessionArchivedMap.set(sid, true);
     }
   }
 
@@ -344,106 +320,25 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // child entry in place instead of rendering a second placeholder.
   const childCoveredSessionIds = new Set();
   const expectedSidebarEntryId = String(prebuiltAgent?.id || '').trim();
-  const childAgents = agents.filter((agent) => {
-    if (agent.source === 'prebuilt') return false;
-    if (String(agent.parent_id || '').trim() !== hostAgentId) return false;
-    // sidebar_entry_id is the explicit presentation owner. Keep the
-    // sessionType fallback for older runtime snapshots during a refresh.
-    const sidebarEntryId = String(agent.sidebar_entry_id || '').trim();
-    if (sidebarEntryId && sidebarEntryId !== expectedSidebarEntryId) return false;
-    if (childSessionType && String(agent.sessionType || 'main') !== childSessionType) return false;
-    if (!childSessionType && String(agent.sessionType || '') === 'coder') return false;
-    return true;
-  });
-  for (const agent of childAgents) {
-    const runtimeId = String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
-    if (runtimeId) childRuntimeIds.add(runtimeId);
-    const coveredSessionId = String(agent.active_workspace_session_id || '').trim();
-    if (coveredSessionId) childCoveredSessionIds.add(coveredSessionId);
-  }
-
-  if (isProjectionEntry && childSessionType === 'coder') {
-    // 线程锚双源合并：主源线程记录（身份/标题/目录/状态），属性源 head
-    // runtime（运行态字段原样继承，控制 IPC 寻址仍按 runtimeId）。
-    const threads = (window.ClawThreads && Array.isArray(window.ClawThreads.threads)
-      ? window.ClawThreads.threads : [])
-      .filter((thread) => String(thread?.agentId || '').trim() === hostAgentId
-        && String(thread?.identity || '').trim() === 'coder');
-    const childBySessionId = new Map();
-    for (const agent of childAgents) {
-      const sid = String(agent.active_workspace_session_id || '').trim();
-      if (sid && !childBySessionId.has(sid)) childBySessionId.set(sid, agent);
-    }
-    const consumedRuntimeIds = new Set();
-    for (const thread of threads) {
-      const lifeState = String(thread.lifeState || '').trim();
-      if (lifeState === 'closed' || lifeState === 'archived') continue; // 终态移除（现行为）
-      const headSessionId = String(thread.headSessionId || '').trim();
-      if (headSessionId && sessionArchivedMap.has(headSessionId)) continue; // head 会话已归档
-      const headRuntime = headSessionId ? childBySessionId.get(headSessionId) || null : null;
-      const headRuntimeId = headRuntime
-        ? String(headRuntime.runtime_session_id || headRuntime.runtimeSessionId || headRuntime.id || '').trim()
-        : '';
-      if (headRuntime && headRuntimeId) consumedRuntimeIds.add(headRuntimeId);
-      // 接续事实（框架挡板）：status=rotating 于 begin 原子写入，advance /
-      // fail 清除；handoffStartedAt 陈旧线兜底进程崩溃残留的 rotating 态。
-      const rotating = String(thread.status || '') === 'rotating';
-      const handoffFresh = Number(thread.handoffStartedAt) > 0
-        && Date.now() - Number(thread.handoffStartedAt) < threadHandoffStaleMs();
-      const failed = thread.failed === true || String(thread.status || '') === 'rotation_failed';
-      if (headRuntime && headRuntimeId) {
-        const runtimeEntry = buildChildRuntimeEntry(headRuntime);
-        addEntry({
-          ...runtimeEntry,
-          // 身份换锚 threadId；runtime 字段（运行态 / mutation / source）
-          // 全部保留，交互寻址按 runtimeId 不变。
-          id: thread.threadId,
-          threadId: thread.threadId,
-          createdAt: toEpochMs(thread.createdAt) || runtimeEntry.createdAt || null,
-          openDirectory: runtimeEntry.openDirectory
-            || String(thread.headProjectDir || '').trim(),
-          threadFailed: failed || undefined,
-          threadHasRuntime: true,
-        });
-        continue;
-      }
-      // head runtime 缺位：接续空窗（接续中）/ 接续失败 / 休眠（重启后 /
-      // runtime 崩溃，S5 要求与接续中区分）。条目常驻，点击与输入类操作
-      // 禁用（占位 runtimeId 不可寻址）。
-      const name = String(thread.title || '').trim() || threadAnchorRuntimeId(thread.threadId);
-      const continuing = rotating && handoffFresh;
-      addEntry({
-        id: thread.threadId,
-        threadId: thread.threadId,
-        ownerId: hostAgentId,
-        runtimeId: threadAnchorRuntimeId(thread.threadId),
-        sessionId: headSessionId,
-        sessionType: 'coder',
-        sidebarEntryId: expectedSidebarEntryId,
-        name,
-        metaLabel: name,
-        status: continuing || failed ? 'connected' : 'disconnected',
-        source: 'thread-record',
-        contextMenuEnabled: true,
-        createdAt: toEpochMs(thread.createdAt) || null,
-        openDirectory: String(thread.headProjectDir || '').trim(),
-        threadContinuing: continuing || undefined,
-        threadFailed: failed || undefined,
-        threadDormant: (!continuing && !failed) || undefined,
-      });
-    }
-    // runtime 快照领先线程快照（新线程未过 20s 轮询 / 提交前 successor）：
-    // 未被任何线程吸收的 coder runtime 保持 runtime 锚条目，新会话即时可见。
-    for (const agent of childAgents) {
+  agents
+    .filter((agent) => {
+      if (agent.source === 'prebuilt') return false;
+      if (String(agent.parent_id || '').trim() !== hostAgentId) return false;
+      // sidebar_entry_id is the explicit presentation owner. Keep the
+      // sessionType fallback for older runtime snapshots during a refresh.
+      const sidebarEntryId = String(agent.sidebar_entry_id || '').trim();
+      if (sidebarEntryId && sidebarEntryId !== expectedSidebarEntryId) return false;
+      if (childSessionType && String(agent.sessionType || 'main') !== childSessionType) return false;
+      if (!childSessionType && String(agent.sessionType || '') === 'coder') return false;
+      return true;
+    })
+    .forEach((agent) => {
       const runtimeId = String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
-      if (runtimeId && consumedRuntimeIds.has(runtimeId)) continue;
+      if (runtimeId) childRuntimeIds.add(runtimeId);
+      const coveredSessionId = String(agent.active_workspace_session_id || '').trim();
+      if (coveredSessionId) childCoveredSessionIds.add(coveredSessionId);
       addEntry(buildChildRuntimeEntry(agent));
-    }
-  } else {
-    for (const agent of childAgents) {
-      addEntry(buildChildRuntimeEntry(agent));
-    }
-  }
+    });
 
   // The host snapshot may point at whichever session was most recently started.
   // If that runtime is already represented by a child entry, do not synthesize it

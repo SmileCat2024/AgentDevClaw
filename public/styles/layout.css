@@ -781,28 +781,6 @@ body[data-theme="light"] .agent-icon {
   animation: restart-pulse 1.2s ease-in-out infinite;
 }
 
-/* 线程锚条目缺位态（sidebar-thread-anchor）：接续空窗（旧 head 已退役、
-   新 head 未 READY）条目常驻并显示「接续中」；接续失败提示人工介入。
-   呈现语义参照 replacement-pending（常驻 + 状态点脉冲）。 */
-.agent-runtime-item.thread-continuing,
-.agent-runtime-item.thread-failed {
-  cursor: default;
-}
-
-.agent-runtime-item.thread-continuing .agent-status-dot {
-  background: var(--accent-color);
-  animation: restart-pulse 1.2s ease-in-out infinite;
-}
-
-.agent-runtime-item.thread-failed .agent-status-dot {
-  background: var(--error-color);
-}
-
-.agent-runtime-item.thread-continuing .agent-runtime-transition-label,
-.agent-runtime-item.thread-failed .agent-runtime-transition-label {
-  color: var(--warning-color);
-}
-
 .agent-runtime-transition-label {
   margin-left: 6px;
   color: var(--text-muted);
