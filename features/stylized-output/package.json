@@ -1,6 +1,6 @@
 {
   "name": "@agentdevjs/stylized-output",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "stylized-output feature for AgentDev",
   "type": "module",
   "main": "dist/index.js",

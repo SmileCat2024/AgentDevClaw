@@ -17,13 +17,19 @@
  *
  * 行为：
  *   1. 启用风格时，风格全文以 system 消息注入上下文（风格或其文件内容变化时注入一次）。
- *   2. Feature 暴露 sign_output_style 签名工具：模型逐字默写当前风格的确认签名，
- *      规范化空白后全等比对；匹配才记为“本轮已签名”。
+ *   2. Feature 暴露 sign_output_style 签名工具：模型逐字默写当前风格的确认签名，并必填
+ *      interrupt（打断）字段；规范化空白后全等比对，匹配才记为“本轮已签名”。interrupt
+ *      缺失时按 false 生效，并经 effectiveCall 调用改写（ADR-0023）把历史调用修正为显式
+ *      interrupt=false；填了但非布尔值仍直接拒绝。
  *   3. StepFinish guard 门禁：风格启用期间，模型的自然结束（无工具调用的收尾步）
  *      必须已经签名通过；否则拦截本次结束并注入 system 消息勒令补签，强制再跑一轮。
  *      连续拦截达到 maxSignatureBlocks 上限后放行结束并记录警告（防死循环）。
  *      子代理、wait、后台唤醒等机制活跃时不干预。
- *   4. 只读管理工具 list_output_styles / show_output_style：模型可主动列出
+ *   4. 打断（interrupt=true 的签名）：签名通过的本步（带工具调用）guard 返回 Deny 直接
+ *      结束本轮——随签名工具调用一并给出的正文即最终回复，省去签名后的又一次模型调用
+ *      （框架语义：带工具调用的步上 Deny = 以本步正文收尾）。机制活跃时同样不干预，
+ *      请求保持挂起，待机制收敛后的下一个 StepFinish 再生效。
+ *   5. 只读管理工具 list_output_styles / show_output_style：模型可主动列出
  *      风格清单、查看风格说明原文（frontmatter + 正文 + signature）；上下文中
  *      的风格说明被精简或遗失时，凭这两个工具即可重新核对，无需用户介入。
  *
@@ -36,9 +42,11 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import {
+  createTool,
   Decision,
   getPackageInfoFromSource,
   splitFrontmatter,
+  withRewrite,
 } from '@agentdevjs/core';
 import type {
   AgentFeature,
@@ -73,10 +81,12 @@ export interface StylizedOutputStatus {
   activeStyle: string | null;
   /** 本轮回复是否已签名通过 */
   signedForReply: boolean;
+  /** 本轮是否有待生效的打断请求（interrupt=true 的签名，尚未被 StepFinish 消费） */
+  interruptRequested: boolean;
   /** 本轮回复因未签名被拦截的连续次数 */
   blockedCount: number;
   maxSignatureBlocks: number;
-  lastAction: 'idle' | 'blocked' | 'signed' | 'released';
+  lastAction: 'idle' | 'blocked' | 'signed' | 'released' | 'interrupted';
 }
 
 export interface StylizedOutputOptions {
@@ -194,7 +204,7 @@ function scanStyles(dir: string): { styles: OutputStyleMeta[]; warnings: string[
   return { styles, warnings };
 }
 
-const VALID_ACTIONS = ['idle', 'blocked', 'signed', 'released'] as const;
+const VALID_ACTIONS = ['idle', 'blocked', 'signed', 'released', 'interrupted'] as const;
 
 export class StylizedOutput implements AgentFeature {
   static hooks = {
@@ -214,6 +224,8 @@ export class StylizedOutput implements AgentFeature {
   private styles: OutputStyleMeta[] = [];
   private activeStyleName: string | null = null;
   private signedForReply = false;
+  /** 本轮待生效的打断请求：interrupt=true 的签名通过后置位，StepFinish 消费（Deny 收尾）时清零 */
+  private interruptRequested = false;
   private blockedCount = 0;
   /** 已注入风格的内容指纹键：name@hash，风格或文件内容变化时重新注入 */
   private injectedStyleKey: string | null = null;
@@ -333,10 +345,10 @@ export class StylizedOutput implements AgentFeature {
   }
 
   /** 签名工具：模型逐字默写当前风格的确认签名，是本轮回复被允许结束的准入凭证 */
-  private readonly signTool: Tool = {
+  private readonly signTool: Tool = createTool({
     name: 'sign_output_style',
     description:
-      '输出风格签名确认工具。当前会话启用输出风格后，每一轮对话收尾时都必须调用本工具完成签名——签名按轮刷新，上一轮的签名对本轮无效，每轮都要重新调用：参数 signature 需逐字默写该风格 frontmatter 中 signature 字段的确认签名原文（上下文中已注入的风格说明里可以查到）。验证通过后本轮回复才被允许结束；未签名就结束会被系统拦截。把签名写进正文不算签名，必须调用本工具。',
+      '输出风格签名确认工具。当前会话启用输出风格后，每一轮对话收尾时都必须调用本工具完成签名——签名按轮刷新，上一轮的签名对本轮无效，每轮都要重新调用：参数 signature 需逐字默写该风格 frontmatter 中 signature 字段的确认签名原文（上下文中已注入的风格说明里可以查到）；必填参数 interrupt（打断）填 true 表示验证通过后本轮回复在本次工具调用后直接结束，随本工具调用一并输出的正文即最终回复，不再进行下一次模型调用；填 false 表示继续常规流程。验证通过后本轮回复才被允许结束；未签名就结束会被系统拦截。把签名写进正文不算签名，必须调用本工具。',
     parameters: {
       type: 'object',
       properties: {
@@ -344,17 +356,41 @@ export class StylizedOutput implements AgentFeature {
           type: 'string',
           description: '当前风格确认签名的原文：逐字默写，不要改写、缩写或附加解释',
         },
+        interrupt: {
+          type: 'boolean',
+          description:
+            '打断：必填。true = 签名验证通过后本轮在本次工具调用后直接结束，随本调用一并输出的正文就是最终回复；false = 不打断，继续常规流程（本轮仍以无工具调用的收尾步自然结束）',
+        },
       },
-      required: ['signature'],
+      required: ['signature', 'interrupt'],
       additionalProperties: false,
     },
     executionMode: 'exclusive',
-    execute: async (args: { signature?: string }) => {
+    // ADR-0023：interrupt 缺失时经 effectiveCall 把历史调用改写为显式 interrupt=false，
+    // 工具须声明 rewritable 才能通过执行器校验链。
+    rewritable: true,
+    execute: async (args = {}, context) => {
+      const input = args as { signature?: unknown; interrupt?: unknown };
       const active = this.getActiveStyle();
       if (!active) {
         return { ok: false, error: '当前未启用任何输出风格，无需签名；本次调用不产生任何效果。' };
       }
-      const provided = normalizeSignature(typeof args?.signature === 'string' ? args.signature : '');
+      let interrupt: boolean;
+      /** interrupt 缺失时的确定性纠正（ADR-0023）：按 false 生效，并经 effectiveCall 把历史调用改写为显式 interrupt=false */
+      let corrected = false;
+      if (typeof input.interrupt === 'boolean') {
+        interrupt = input.interrupt;
+      } else if (input.interrupt === undefined) {
+        interrupt = false;
+        corrected = true;
+      } else {
+        return {
+          ok: false,
+          error:
+            'interrupt（打断）参数不是布尔值：true 表示签名通过后本轮在本次工具调用后直接结束；false 表示继续常规流程。请以布尔值重新调用。',
+        };
+      }
+      const provided = normalizeSignature(typeof input.signature === 'string' ? input.signature : '');
       if (!provided) {
         return {
           ok: false,
@@ -370,16 +406,41 @@ export class StylizedOutput implements AgentFeature {
         };
       }
       this.signedForReply = true;
+      this.interruptRequested = interrupt;
       this.lastAction = 'signed';
-      this.logger?.info('输出风格签名验证通过', { style: active.name });
-      return {
+      this.logger?.info('输出风格签名验证通过', {
+        style: active.name,
+        interrupt,
+        ...(corrected ? { correctedInterrupt: true } : {}),
+      });
+      const payload = {
         ok: true,
         signed: true,
         style: active.name,
-        note: '签名验证通过，本轮回复现在可以正常结束。签名属于内部流程：不要在给用户的回复正文里提及签名或本工具调用，直接输出面向用户的最终回复即可。',
+        interrupt,
+        note: (interrupt
+          ? '签名验证通过，interrupt=true 已生效：本轮回复将在本次工具调用后直接结束，以随本调用一并输出的正文为最终回复，无需也不应再产生任何后续内容。'
+          : '签名验证通过，本轮回复现在可以正常结束。')
+          + (corrected
+            ? '本次调用未携带必填的 interrupt 参数，已按 false 处理并在调用历史中补记为 interrupt=false；下次调用请显式填写该字段。'
+            : '')
+          + '签名属于内部流程：不要在给用户的回复正文里提及签名或本工具调用。',
       };
+      if (corrected) {
+        // ADR-0023：修正后的调用写入 assistant 历史，下一轮模型看到的就是已显式填
+        // interrupt=false 的调用；context 未携带 callId（非运行时直接调用）时不改写。
+        const callId = context?.callId;
+        if (callId) {
+          return withRewrite(JSON.stringify(payload), {
+            id: callId,
+            name: 'sign_output_style',
+            arguments: { ...args, interrupt: false },
+          });
+        }
+      }
+      return payload;
     },
-  };
+  });
 
   /** 管理工具：列出全部已发现的输出风格（只读，以磁盘为准） */
   private readonly listTool: Tool = {
@@ -471,6 +532,7 @@ export class StylizedOutput implements AgentFeature {
   async syncStyleState(_ctx: CallStartContext): Promise<void> {
     this.rescan('call');
     this.signedForReply = false;
+    this.interruptRequested = false;
     this.blockedCount = 0;
   }
 
@@ -502,7 +564,7 @@ export class StylizedOutput implements AgentFeature {
       body,
       '---',
       '[签名要求] 本风格启用期间，每一轮对话收尾时都必须调用签名工具：',
-      '在你给出本轮最终回复的同时，调用 sign_output_style 工具，参数 signature 逐字默写上面 frontmatter 中 signature 字段的原文。',
+      '在你给出本轮最终回复的同时，调用 sign_output_style 工具：参数 signature 逐字默写上面 frontmatter 中 signature 字段的原文；必填参数 interrupt（打断）填 true——验证通过后本轮在本次工具调用后直接结束，你随本调用一并输出的正文就是最终回复，不再进行下一次模型调用。',
       '签名状态按轮刷新：每一轮用户输入都会清空上一轮的签名记录，上一轮签过名对本轮无效，本轮必须重新调用一次。',
       '工具验证通过后，本轮回复才会被允许结束。未签名就试图结束会被系统拦截并要求补签。',
       '把签名写进正文不算签名，必须调用工具。',
@@ -519,14 +581,31 @@ export class StylizedOutput implements AgentFeature {
 
   /**
    * StepFinish guard：签名门禁。
-   * - 未启用风格 / 该步仍有工具调用 / 子代理与 wait 等机制活跃 / 已签名 → 不干预（Continue）。
+   * - 打断：本步带工具调用、本轮已签名且签名时 interrupt=true → 返回 Deny 结束本轮
+   *   （框架语义：带工具调用的步上 Deny = 以本步正文收尾），随签名工具调用一并给出的
+   *   正文即最终回复；子代理、wait 等机制活跃时不干预，请求保持挂起，待机制收敛后的
+   *   下一个 StepFinish 再生效。
+   * - 未启用风格 / 该步仍有工具调用（且无打断请求）/ 子代理与 wait 等机制活跃 / 已签名 → 不干预（Continue）。
    * - 自然结束但未签名 → 注入勒令补签的 system 消息并 Approve 强制再跑一轮；
    *   连续拦截达到上限后放行并告警（防死循环）。
    */
   async decideSignatureGate(ctx: StepFinishDecisionContext) {
     const active = this.getActiveStyle();
     if (!active) return Decision.Continue;
-    if (ctx.toolCallsCount !== 0) return Decision.Continue;
+    if (ctx.toolCallsCount !== 0) {
+      if (this.signedForReply && this.interruptRequested) {
+        if (ctx.hasActiveSubAgents || ctx.hasPendingMessages || ctx.waitCalled) {
+          return Decision.Continue;
+        }
+        this.interruptRequested = false;
+        this.lastAction = 'interrupted';
+        this.logger?.info('输出风格签名门禁：interrupt=true，本轮在签名工具调用后直接结束', {
+          style: active.name,
+        });
+        return Decision.Deny;
+      }
+      return Decision.Continue;
+    }
     if (ctx.hasActiveSubAgents || ctx.hasPendingMessages || ctx.waitCalled) {
       return Decision.Continue;
     }
@@ -546,8 +625,8 @@ export class StylizedOutput implements AgentFeature {
       '[输出风格签名门禁]',
       '当前已启用输出风格「' + active.name + '」，但你的回复尚未完成签名确认，不能就此结束。',
       '请立即检查本回复是否符合该风格的输出要求；若有不符合之处，请更正后重新输出。',
-      '自检无误后，调用 sign_output_style 工具完成签名确认：参数 signature 逐字默写该风格说明中 signature 字段的确认签名原文。',
-      '签名验证通过后，本轮回复才会被放行结束；直接在正文里书写签名无效。',
+      '自检无误后，调用 sign_output_style 工具完成签名确认：参数 signature 逐字默写该风格说明中 signature 字段的确认签名原文，必填参数 interrupt 填 true。',
+      '签名验证通过且 interrupt=true 时，本轮回复会在该工具调用后直接结束，以你随该调用一并给出的正文为最终回复；直接在正文里书写签名无效。',
     ].join('\n');
     ctx.context.add({ role: 'system', content: demand });
     this.logger?.info('输出风格签名门禁：拦截未签名结束', {
@@ -561,6 +640,7 @@ export class StylizedOutput implements AgentFeature {
     return {
       activeStyleName: this.activeStyleName,
       signedForReply: this.signedForReply,
+      interruptRequested: this.interruptRequested,
       blockedCount: this.blockedCount,
       injectedStyleKey: this.injectedStyleKey,
       lastAction: this.lastAction,
@@ -571,6 +651,7 @@ export class StylizedOutput implements AgentFeature {
     const state = snapshot && typeof snapshot === 'object' ? snapshot as Record<string, unknown> : {};
     this.activeStyleName = cleanText(state.activeStyleName) || null;
     this.signedForReply = state.signedForReply === true;
+    this.interruptRequested = state.interruptRequested === true;
     this.blockedCount = typeof state.blockedCount === 'number' && Number.isFinite(state.blockedCount)
       ? Math.max(0, Math.floor(state.blockedCount))
       : 0;
@@ -601,6 +682,7 @@ export class StylizedOutput implements AgentFeature {
       })),
       activeStyle: this.activeStyleName,
       signedForReply: this.signedForReply,
+      interruptRequested: this.interruptRequested,
       blockedCount: this.blockedCount,
       maxSignatureBlocks: this.maxSignatureBlocks,
       lastAction: this.lastAction,
@@ -631,6 +713,7 @@ export class StylizedOutput implements AgentFeature {
       this.activeStyleName = null;
     }
     this.signedForReply = false;
+    this.interruptRequested = false;
     this.blockedCount = 0;
     return this.getStatus();
   }
@@ -649,6 +732,7 @@ export class StylizedOutput implements AgentFeature {
       );
       this.activeStyleName = null;
       this.signedForReply = false;
+      this.interruptRequested = false;
       this.blockedCount = 0;
     }
   }
