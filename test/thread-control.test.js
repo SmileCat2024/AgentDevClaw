@@ -846,6 +846,36 @@ describe('WorkThreadRuntimeBridge (enabled) + user-turn integration', () => {
     assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
   });
 
+  // ADR-0024 决策 3：command kind 'reminder'（turn 身份槽位）经生产适配器
+  // 原样进入 user-turn body——"reminder 落地为带 source 的 system 消息"的
+  // Claw 侧边界即在此（system 消息渲染属 viewer 契约侧）。词汇表不同名
+  //（user_message vs user），映射缺失会静默丢身份——回归锁。
+  test('bridge adapter forwards the reminder turn identity into the user-turn body', async () => {
+    const seen = [];
+    const fetchImpl = async (_url, init) => {
+      seen.push({ body: JSON.parse(init.body) });
+      return { ok: true, status: 200, json: async () => ({ success: true, delivery: 'queued' }) };
+    };
+    const { core } = makeControl(root, {
+      enabled: true,
+      resolveRuntimeViewerId: () => 'viewer-reminder',
+      submitTurn: (params) => submitUserTurn(bridgeParamsToSubmitTurnArgs(params), { fetchImpl }),
+    });
+    const thread = await core.start({ sessionRef: { agentId: 'agent-r', sessionId: 'rs-1' } });
+    await core.appendCommand({ threadId: thread.threadId, text: '到点提醒', kind: 'reminder' });
+
+    const result = await core.deliverPendingCommands(thread.threadId);
+    assert.equal(result.delivered, 1);
+    assert.equal(seen[0].body.kind, 'reminder');
+    assert.equal(seen[0].body.source, 'thread');
+
+    // 存量 / 缺省指令（user_message、system_continuation 等）不携带 kind
+    // 字段：user-turn 契约缺省即普通用户消息（行为与身份槽位引入前一致）
+    await core.appendCommand({ threadId: thread.threadId, text: '普通指令' });
+    await core.deliverPendingCommands(thread.threadId);
+    assert.equal(seen[1].body.kind, undefined);
+  });
+
   // H1 回归锁：appendCommand 允许 metadata-only 的空文本指令（' ' 占位），
   // 适配层必须把它规范化为 viewer 契约可接受的形态——入箱必可投。
   test('bridge adapter normalizes metadata-only empty-text commands to a deliverable form', async () => {
@@ -1260,6 +1290,78 @@ describe('InputGateway (unified user input routing)', () => {
     const imageCommand = record.commands.find((c) => Array.isArray(c.images) && c.images.length > 0);
     assert.ok(imageCommand);
     assert.deepEqual(imageCommand.images, ['/tmp/a.png']);
+  });
+
+  test('reminder identity survives the inbox and lands via bridge submitTurn (no-handoff path)', async () => {
+    // ADR-0024 决策 3：reminder（机器通报）与用户消息同享线程行政检查。
+    // 线程域无交接窗口时入箱 + 即时投递——身份经 gateway 归一 → command
+    // kind → bridge → user-turn body 全链不丢（落地为带 source 的 system
+    // 消息，Claw 侧边界到 body 为止）。
+    const seen = [];
+    const fetchImpl = async (_url, init) => {
+      seen.push(JSON.parse(init.body));
+      return { ok: true, status: 200, json: async () => ({ success: true, delivery: 'delivered' }) };
+    };
+    const { core, integration } = makeFixture({
+      enabled: true,
+      resolveRuntimeViewerId: () => 'viewer-ig-1',
+      submitTurn: (params) => submitUserTurn(bridgeParamsToSubmitTurnArgs(params), { fetchImpl }),
+    });
+    const thread = await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
+
+    const result = await deliverUserInput(
+      { viewerAgentId: 'viewer-ig-1', text: '到点提醒', kind: 'reminder', source: 'schedule-app' },
+      { integration },
+    );
+
+    assert.equal(result.delivery, 'thread_queued');
+    const record = await core.getThread(thread.threadId);
+    const reminderCommand = record.commands.find((c) => c.text === '到点提醒');
+    assert.equal(reminderCommand.kind, 'reminder');
+    assert.equal(reminderCommand.status, ThreadCommandStatus.DELIVERED);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].kind, 'reminder');
+    assert.equal(seen[0].source, 'thread');
+  });
+
+  test('reminder staged during handoff is delivered to the new head after advance (identity intact)', async () => {
+    // 交接窗口内输入暂存、advance 后补投（既有用例扩展）：reminder 身份在
+    // 暂存与补投两条 hop 上都不被改写，最终落到新 head 的 user-turn body。
+    const seen = [];
+    const fetchImpl = async (_url, init) => {
+      seen.push(JSON.parse(init.body));
+      return { ok: true, status: 200, json: async () => ({ success: true, delivery: 'delivered' }) };
+    };
+    const { core, integration } = makeFixture({
+      enabled: true,
+      resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'ig-s2' ? 'viewer-ig-2' : null),
+      submitTurn: (params) => submitUserTurn(bridgeParamsToSubmitTurnArgs(params), { fetchImpl }),
+    });
+    const thread = await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
+    await integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 'ig-s1', reason: 'trim' });
+
+    const result = await deliverUserInput(
+      { viewerAgentId: 'viewer-ig-1', text: '交接窗口内的提醒', kind: 'reminder' },
+      { integration },
+    );
+    assert.equal(result.delivery, 'thread_queued');
+    let record = await core.getThread(thread.threadId);
+    let reminderCommand = record.commands.find((c) => c.text === '交接窗口内的提醒');
+    assert.equal(reminderCommand.kind, 'reminder');
+    assert.equal(reminderCommand.status, ThreadCommandStatus.PENDING);
+    assert.equal(seen.length, 0, '交接挡板期间不投递');
+
+    const outcome = await integration.applySessionSuccession({
+      agentId: 'programming-helper', fromSessionId: 'ig-s1', toSessionId: 'ig-s2', reason: 'trim',
+    });
+    assert.equal(outcome.applied, true);
+    record = await core.getThread(thread.threadId);
+    reminderCommand = record.commands.find((c) => c.text === '交接窗口内的提醒');
+    assert.equal(reminderCommand.status, ThreadCommandStatus.DELIVERED);
+    const reminderBody = seen.find((b) => b.text === '交接窗口内的提醒');
+    assert.ok(reminderBody, 'reminder 经 bridge 补投到新 head');
+    assert.equal(reminderBody.kind, 'reminder');
+    assert.equal(reminderBody.source, 'thread');
   });
 
   test('race closure: delivers immediately when succession lands between route resolution and append', async () => {

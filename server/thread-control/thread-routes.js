@@ -4,6 +4,10 @@
  * 提供线程的创建 / 查询 / 指令追加 / head 推进 / 投递尝试 / 取消，
  * 以及归档（收纳语义：线程层标记，成员会话不动，拒绝新投递）。
  *
+ * 线程寻址输入（POST /:threadId/input）：threadId → head runtime 的服务端
+ * 解析 + 统一输入网关（ADR-0024 决策 3）；调用方不计算目标 session /
+ * viewer id，发送竞态在服务端收敛。
+ *
  * 宿主判定是会话级的（host-agents.js：agent + sessionType 组合）；
  * 生命状态为推导值（thread-life-state.js 四态合成），随列表/详情响应附带。
  *
@@ -13,6 +17,7 @@
 
 import { createHash } from 'node:crypto';
 import { synthesizeThreadLifeState } from './thread-life-state.js';
+import { deliverUserInput } from './input-gateway.js';
 
 /**
  * @param {import('express').Express} app
@@ -24,9 +29,12 @@ import { synthesizeThreadLifeState } from './thread-life-state.js';
  * @param {Function} [options.ensureHeadRuntime] head runtime 就绪闸：head runtime 不在时
  *   由宿主唤起（startManagedAgent + ready 等待）；返回 { ok: true } 或 { ok: false, code, message }。
  *   就绪闸失败时指令仍入箱（等下一次触发点），但响应带 runtimeWake 失败事实。
+ * @param {Function} [options.deliverInput] 线程寻址输入端点的投递入口（默认统一
+ *   网关 deliverUserInput；测试注入替身）。生产语义：全部路由判定（head 健康 →
+ *   直投；交接窗口 / 非 head → Inbox 暂存；终态 → 拒绝）由网关复用。
  * @param {{ deleteThread: Function }} [options.threadDelete] - T005 删除级联服务
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, tryDeliver, ensureHeadRuntime } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -310,6 +318,79 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
         ...result,
         delivery,
         ...(runtimeWake ? { runtimeWake } : {}),
+      });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  // ── 线程寻址输入（ADR-0024 决策 3：threadId → head → 统一网关）──────
+
+  app.post('/protoclaw/threads/:threadId/input', jsonMiddleware, async (req, res) => {
+    try {
+      const { text, images, source, sourceRef, kind, capabilityActivations, metadata } = req.body || {};
+      const thread = await core.getThread(req.params.threadId);
+      if (!thread) {
+        return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
+      }
+      // head runtime 解析与列表 / 详情的 headViewerAgentId 同源：运行中且当前
+      // 绑定 head 会话。未运行时先经就绪闸唤起（与 commands 端点同语义）——
+      // 网关以 viewer id 反查路由，无 runtime 即无投递承接点。
+      const _resolveHeadViewerId = () => (typeof control.resolveSessionViewerId === 'function'
+        ? control.resolveSessionViewerId(thread.agentId, thread.headSessionId)
+        : null);
+      let headViewerAgentId = _resolveHeadViewerId();
+      let runtimeWake = null;
+      if (!headViewerAgentId && typeof ensureHeadRuntime === 'function' && thread.headSessionId) {
+        const wake = await ensureHeadRuntime(thread.agentId, thread.headSessionId).catch((error) => ({
+          ok: false,
+          code: 'runtime_wake_failed',
+          message: String(error?.message || error),
+        }));
+        if (wake?.ok) {
+          headViewerAgentId = _resolveHeadViewerId();
+        } else {
+          runtimeWake = { ok: false, code: wake?.code || 'runtime_wake_failed', message: wake?.message || 'head runtime not available' };
+        }
+      }
+      // 唤起失败 / 未注入就绪闸且 runtime 不在：commands 端点此时仍入箱
+      // （appendCommand 不依赖 runtime，runtime-ready 触发点后续补投），本
+      // 端点不能伪装暂存——thread_queued 只在网关能判定线程域事实时出现，
+      // 这里显式失败并把唤起事实交还调用方（可重试 / 可修复）。
+      if (!headViewerAgentId) {
+        return res.status(503).json({
+          ok: false,
+          code: runtimeWake?.code || 'head_runtime_unavailable',
+          message: runtimeWake?.message || 'head runtime is not running and could not be woken',
+          ...(runtimeWake ? { runtimeWake } : {}),
+        });
+      }
+      // 投递的全部路由判定（head 健康 → 直投；交接窗口 → Inbox 暂存；终态 /
+      // 归档 / 非 head → 拒绝）复用统一网关；输入身份（user / reminder）由
+      // 网关归一映射为 command turn 身份槽位。
+      const result = await deliverInput({
+        viewerAgentId: headViewerAgentId,
+        text: typeof text === 'string' ? text : '',
+        ...(Array.isArray(images) ? { images } : {}),
+        ...(typeof source === 'string' ? { source } : {}),
+        ...(typeof sourceRef === 'string' ? { sourceRef } : {}),
+        ...(kind !== undefined ? { kind } : {}),
+        ...(Array.isArray(capabilityActivations)
+          ? { capabilityActivations: capabilityActivations.filter((a) => typeof a === 'string') }
+          : {}),
+        ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+          ? { turnMetadata: metadata }
+          : {}),
+      });
+      res.json({
+        ok: true,
+        ...result,
+        // head 事实：本次服务端解析的投递目标基础，供调用方对账（成功响应
+        // 里网关结果自带 threadId / commandId 等线程域事实）
+        threadId: thread.threadId,
+        agentId: thread.agentId,
+        headSessionId: thread.headSessionId,
+        headViewerAgentId,
       });
     } catch (err) {
       _errorResponse(res, err);

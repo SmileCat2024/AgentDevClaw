@@ -253,38 +253,56 @@ describe('input gateway thread-domain queueing (R6)', () => {
     assert.equal(submitted[0].body.kind, 'reminder');
   });
 
-  it('rejects reminder turns on thread routes instead of silently downgrading identity', async () => {
-    // WorkThread command 契约没有输入身份槽位：reminder 入箱会在 bridge
-    // 投递时退化为用户消息。显式拒绝保留事实，等契约补齐后再放行。
+  it('stages reminder turns on thread routes with the command identity preserved', async () => {
+    // ADR-0024 决策 3：WorkThread command 契约已有 turn 身份槽位，reminder
+    // 与用户消息同享线程行政检查——入箱身份不丢失，投递时经 bridge 原样转发
+    //（落地为带 source 的 system 消息，见 thread-control.test.js 链路用例）。
     registerRuntime();
     const integration = buildIntegration({
       thread: { threadId: 'wt-1', status: 'open', headSessionId: 'session-1', hold: false, pendingSuccession: null },
     });
 
-    await assert.rejects(
-      deliverUserInput(
-        { viewerAgentId: 'viewer-1', text: '机器通报', kind: 'reminder', source: 'generative-ui' },
-        { integration, fetchImpl: async () => { throw new Error('direct submit must not happen'); } },
-      ),
-      (error) => error instanceof UserTurnDeliveryError
-        && error.code === 'turn_kind_unsupported'
-        && error.status === 400
-        && error.retryable === false,
+    const result = await deliverUserInput(
+      { viewerAgentId: 'viewer-1', text: '机器通报', kind: 'reminder', source: 'generative-ui' },
+      { integration, fetchImpl: async () => { throw new Error('direct submit must not happen'); } },
     );
-    assert.equal(integration.calls.append.length, 0);
+
+    assert.equal(result.delivery, 'thread_queued');
+    assert.equal(integration.calls.append.length, 1);
+    assert.equal(integration.calls.append[0].kind, 'reminder');
   });
 
-  it('rejects unknown input identities before any route decision', async () => {
-    registerRuntime({ sessionType: 'main' });
-    const integration = buildIntegration({ thread: null });
+  it('normalizes unknown input identities to plain user turns instead of rejecting', async () => {
+    // 词汇归一在网关单点完成：缺失 / 'user' / 未知值一律归一为 user_message
+    //（appendCommand 对未知 command kind 显式拒绝，归一必须发生在入箱前）。
+    registerRuntime();
+    const integration = buildIntegration({
+      thread: { threadId: 'wt-1', status: 'open', headSessionId: 'session-1', hold: false, pendingSuccession: null },
+    });
 
-    await assert.rejects(
-      deliverUserInput(
-        { viewerAgentId: 'viewer-1', text: 'x', kind: 'bot' },
-        { integration, fetchImpl: async () => { throw new Error('direct submit must not happen'); } },
-      ),
-      (error) => error instanceof UserTurnDeliveryError && error.code === 'invalid_input',
+    const result = await deliverUserInput(
+      { viewerAgentId: 'viewer-1', text: 'x', kind: 'bot' },
+      { integration, fetchImpl: async () => { throw new Error('direct submit must not happen'); } },
     );
+
+    assert.equal(result.delivery, 'thread_queued');
+    assert.equal(integration.calls.append[0].kind, 'user_message');
+
+    // 直投域同源归一：未知身份省略 kind 字段（user-turn 契约缺省即 user）
+    registerRuntime({ sessionType: 'main' });
+    const direct = buildIntegration({ thread: null });
+    const directResult = await deliverUserInput(
+      { viewerAgentId: 'viewer-1', text: 'x', kind: 'bot' },
+      {
+        integration: direct,
+        fetchImpl: async (_url, init) => {
+          submitted.push(JSON.parse(init.body));
+          return { ok: true, json: async () => ({ success: true, delivery: 'delivered' }) };
+        },
+      },
+    );
+    assert.equal(directResult.delivery, 'delivered');
+    assert.equal(submitted[0].kind, undefined);
   });
 
   it('falls back to direct submit when the runtime entry is gone (A12 known window)', async () => {
