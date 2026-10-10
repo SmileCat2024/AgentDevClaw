@@ -95,7 +95,7 @@ APP 的“只有一个接线员对话”属于产品规则。APP 自己持久化
 ## 关联
 
 - [ADR-0002](0002-session-continuity-as-transformation.md)：接续协议与变换概念的权威；APP 新写接续变换在该协议之内，硬切换呈现忠实于变换语义。
-- [ADR-0010](0010-sidebar-unified-projection.md)：侧栏三层投影不变；APP 的稳定对话叶子由其工作空间投影提供身份。
+- [ADR-0010](0010-sidebar-unified-projection.md)：侧栏三层投影不变；APP 的稳定对话叶子由其工作空间投影提供身份。线程宿主的 coder 子树另按 [侧栏线程锚计划](../plans/2026-10-10-sidebar-thread-anchor.md) 以 threadId 锚定叶子，接续时由 head runtime 补充运行属性，消除 runtime 退役至新 head 出现间的侧栏空窗。
 - [ADR-0013](0013-message-poll-probe-tail.md)：消息通道契约；换头重建基线复用其 rewrite 分支。
 - [ADR-0014](0014-session-navigation-transaction.md)（Proposed）：导航事务；本 ADR 显式不与之重叠（换头是数据源重绑，非导航）。
 - [ADR-0019](0019-turn-suspension-semantics.md)：挂起语义是 APP 会话的常态；唤醒投递按会话路由的纪律由本 ADR 的线程入口延续。

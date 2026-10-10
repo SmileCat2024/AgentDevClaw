@@ -47,9 +47,9 @@ let _threadPublisher = null;
 
 /**
  * 发布线程事实事件：payload.kind 为 SSE 事件名（最小集 thread.created /
- * thread.head-advanced / thread.archived / thread.deleted），threadId 由
- * 参数提供并合入帧 data。只投递到经 ?threads= 订阅该 threadId 的连接；
- * 无订阅者时 no-op。
+ * thread.rotation-begun / thread.head-advanced / thread.archived /
+ * thread.deleted），threadId 由参数提供并合入帧 data。只投递到经
+ * ?threads= 订阅该 threadId 的连接；无订阅者时 no-op。
  */
 export function publishThreadEvent(threadId, payload) {
   if (typeof _threadPublisher === 'function') _threadPublisher(threadId, payload);

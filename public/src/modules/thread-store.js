@@ -101,12 +101,27 @@ window.refreshThreads = async (force = false) => {
         _rebuildIndexes();
         // 线程签名变化（新建/推进）时失效 workspace HTML 缓存，
         // 使会话列表在下次渲染时带上最新徽标（不主动触发渲染）。
-        const sig = data.threads.map((t) => `${t.threadId}:${t.headSessionId}:${t.status}`).sort().join('|');
+        const sig = data.threads.map((t) => [
+          t.threadId,
+          t.headSessionId,
+          t.status,
+          t.lifeState,
+          t.failed === true,
+          t.title,
+          t.headProjectDir,
+          t.createdAt,
+          t.handoffStartedAt,
+        ].map((part) => String(part ?? '')).join(':')).sort().join('|');
         if (sig !== state.lastThreadsSig) {
           state.lastThreadsSig = sig;
           if (typeof lastRenderedWorkspaceHtml !== 'undefined') {
             lastRenderedWorkspaceHtml = '';
           }
+          // 侧栏 coder 条目以线程记录为主源（sidebar-thread-anchor）：线程
+          // 事实变化必须触发侧栏重渲（渲染签名含 threadSidebar 分量，去重
+          // 交给渲染层），并同步 SSE 订阅集。
+          if (typeof renderAgentList === 'function') renderAgentList();
+          _syncThreadSseSubscription();
         }
       }
     } catch {
@@ -311,6 +326,11 @@ window.updateThreadHeaderIndicator = () => {
  * handoffStartedAt 超过该时长视为无交接。两侧派生规则必须同步维护。
  */
 const THREAD_HANDOFF_STALE_MS = 5 * 60 * 1000;
+
+// 共享给线程锚侧栏渲染（runtime-status.js 的 threadHandoffStaleMs）：
+// 两侧派生规则必须同步维护（与服务端 thread-controller 同值）。
+window.ClawFW = window.ClawFW || {};
+window.ClawFW.THREAD_HANDOFF_STALE_MS = THREAD_HANDOFF_STALE_MS;
 
 /**
  * 本地即时信号：当前 agent 是否有进行中的「创建接续会话」侧栏操作
@@ -539,6 +559,80 @@ window.threadAdvanceHead = async (threadId, toSessionId, options = {}) => {
   await window.refreshThreads(true);
   return data;
 };
+
+// ── SSE 线程事件：空窗起点与换头时刻的即时感知（sidebar-thread-anchor S3/§6）──
+
+let _threadSseUnsubscribe = null;
+
+/**
+ * thread.* 事件到达 → 强制刷新线程快照（20s 轮询的即时补充；rotation-begun
+ * 让「接续中」态在旧 runtime 退役的同一时刻可见，head-advanced 让换头后的
+ * 条目立即回锚新 head runtime）。侧栏条目与顶栏指示都从快照派生，refreshThreads
+ * 的签名变化负责触发重渲。head-advanced 额外判定是否需要视图硬切换（§6）。
+ */
+function _handleThreadSseEvent(evt) {
+  const type = String(evt?.type || '');
+  if (!type.startsWith('thread.')) return;
+  const refresh = window.refreshThreads(true);
+  if (type === 'thread.head-advanced') {
+    _rebindViewToAdvancedHead(evt, refresh);
+  }
+}
+
+/**
+ * §6 视图硬切换：head-advanced 到达且用户正开着该线程的旧 head 视图 →
+ * 数据源重绑到新 head（复用 open_session 既有切换机制：导航守卫 / 加载
+ * 态 / ADR-0013 消息基线全部现成）。换头后视图直接显示新会话自己的记录
+ * （开头为变换产物，ADR-0002 变换语义），页面身份不动。用户不在该线程的
+ * 旧 head 视图上时绝不静默跳转。
+ */
+function _rebindViewToAdvancedHead(evt, refreshPromise) {
+  try {
+    const payload = evt?.payload || {};
+    const fromSessionId = String(payload.fromSessionId || '').trim();
+    const toSessionId = String(payload.toSessionId || '').trim();
+    const threadId = String(evt?.threadId || '').trim();
+    if (!fromSessionId || !toSessionId || !threadId) return;
+    const active = _currentActiveSession();
+    if (!active || !active.agentId || active.sessionId !== fromSessionId) return;
+    const eventAgentId = String(payload.agentId || '').trim();
+    if (eventAgentId && eventAgentId !== active.agentId) return;
+    // 等刷新完成避免与当前线程快照争用；但导航目标以事件里的提交事实
+    // 为准，不依赖刷新是否被既有 in-flight 请求合并。用户若在等待期间
+    // 主动离开旧 head，则不再静默切回。
+    Promise.resolve(refreshPromise)
+      .then(() => {
+        const latest = _currentActiveSession();
+        if (!latest || latest.agentId !== active.agentId || latest.sessionId !== fromSessionId) return;
+        if (typeof window.runWorkspaceAction === 'function') {
+          return window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId: toSessionId }));
+        }
+        return window.jumpToThreadHead(threadId);
+      })
+      .catch(() => {});
+  } catch { /* 视图增强，失败不打断事件链 */ }
+}
+
+/**
+ * 订阅集随线程列表重建（服务端按连接 ?threads= 过滤，集合在连接存续期
+ * 固定——sse-client 契约：参数变化重建连接，重建窗口丢帧由轮询兜底）。
+ * 新建线程的 created 事件不在既有订阅集内（id 未知），发现仍走轮询 /
+ * runtime 出现路径，不构成接续空窗。
+ */
+function _syncThreadSseSubscription() {
+  const client = window.ClawFW?.SseClient;
+  if (!client || typeof client.subscribeThreadEvents !== 'function') return;
+  const ids = (window.ClawThreads?.threads || [])
+    .map((thread) => String(thread?.threadId || '').trim())
+    .filter(Boolean);
+  if (_threadSseUnsubscribe) {
+    _threadSseUnsubscribe();
+    _threadSseUnsubscribe = null;
+  }
+  if (ids.length > 0) {
+    _threadSseUnsubscribe = client.subscribeThreadEvents(ids, _handleThreadSseEvent);
+  }
+}
 
 // ── 启动（周期刷新；非线程宿主的服务端列表恒空，开销可忽略）──────
 

@@ -34,9 +34,11 @@ Workspace（工作空间入口）
 
 远程模块（`remote-connections.js`）的职责收缩为：维护远程 catalog 数据 + 提供按工作空间筛选的投影（`getRemoteSidebarProjection(workspaceAgentId, ownerAgentId)`）。不再拥有 DOM。
 
-### 2. 叶子 = 运行中的 runtime
+### 2. 叶子 = 运行中的 runtime（线程宿主例外）
 
-叶子条目唯一来源是远程 `get_connected_agents` 中存活的 child runtime。prebuilt 会话索引、workspace_sessions 历史不再是叶子来源——"左侧叶子 = 正在运行的会话"，与本地列表语义完全一致。
+通常叶子条目唯一来源是远程 `get_connected_agents` 中存活的 child runtime。prebuilt 会话索引、workspace_sessions 历史不再是叶子来源——"左侧叶子 = 正在运行的会话"，与本地列表语义完全一致。
+
+**线程宿主工作空间例外（programming-helper 的 coder 子树）**：线程宿主接续期间 head runtime 会先退役、后继 runtime 在接续事务完成后才出现。coder 子树叶子因此以非终态线程记录为稳定锚（threadId），head runtime 仅补充运行状态与控制寻址属性；接续空窗仍保留线程条目。其余侧栏统一投影与运行时叶子规则不变，主身份及其他工作空间仍以存活 runtime 为叶子来源。
 
 ### 3. 连接的可见痕迹只剩项目组标签
 

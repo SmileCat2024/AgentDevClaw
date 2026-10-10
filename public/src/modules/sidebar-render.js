@@ -69,7 +69,7 @@ window.onSidebarSessionDragStart = function(event, el) {
   const payload = {
     agentId,
     sessionId,
-    sessionType: 'main',
+    sessionType: el?.dataset?.ctxSessionType || 'main',
     title: (titleNode?.textContent || '').trim(),
   };
   event.dataTransfer.setData(ref.MIME, JSON.stringify(payload));
@@ -138,6 +138,38 @@ window.onSidebarSessionPinClick = function(event, el) {
 // Keyed by the .agent-group element id so state persists across re-renders.
 const _collapsedCategoryGroups = new Set();
 
+// ── 线程锚条目选中态（sidebar-thread-anchor §4.6：选中键 runtimeId → threadId）──
+// 接续空窗中 currentRuntimeAgentId 仍指向已退役 runtime，sessionId 解析暂落空；
+// 缓存最近一次可解析的焦点会话，选中判定改看焦点会话的线程归属，跨空窗稳定。
+let _threadFocusSessionId = '';
+
+function isThreadSidebarEntryActive(entry) {
+  if (!entry?.threadId) return false;
+  const rid = typeof normalizeAgentIdentity === 'function'
+    ? normalizeAgentIdentity(currentRuntimeAgentId)
+    : String(currentRuntimeAgentId || '').trim();
+  // 无选中运行时（workspace surface）：高亮谓词直接判非（ADR-0010 §12a）
+  if (!rid) {
+    _threadFocusSessionId = '';
+    return false;
+  }
+  if (typeof getRuntimeWorkspaceSessionId === 'function') {
+    const sid = String(getRuntimeWorkspaceSessionId(rid) || '').trim();
+    if (sid) _threadFocusSessionId = sid;
+  }
+  if (!_threadFocusSessionId) return false;
+  const owner = String(entry.ownerId || '').trim();
+  if (!owner) return false;
+  const thread = typeof window.getThreadForSession === 'function'
+    ? window.getThreadForSession(owner, _threadFocusSessionId)
+    : null;
+  return !!thread && thread.threadId === entry.threadId;
+}
+
+function isSidebarEntryActive(entry) {
+  return isRuntimeItemActive(entry.runtimeId) || isThreadSidebarEntryActive(entry);
+}
+
 function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = ownerAgentId) {
   const visibleEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
   const remoteEntries = typeof getRemoteSidebarProjection === 'function'
@@ -152,7 +184,7 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
 
 
   const renderItem = (entry) => {
-    const active = isRuntimeItemActive(entry.runtimeId);
+    const active = isSidebarEntryActive(entry);
     const disconnected = isSidebarRuntimeDisconnected(entry);
     const remoteDisabled = entry.source === 'remote' && disconnected;
     const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
@@ -164,6 +196,10 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
     const replacementPending = entry.pendingReplacement === true;
     const operationPending = entry.pendingOperation === true;
     const deleting = entry.deleting === true;
+    // 线程锚缺位态（sidebar-thread-anchor §4.2）：接续空窗 / 接续失败 / 休眠
+    const threadContinuing = entry.threadContinuing === true;
+    const threadFailed = entry.threadFailed === true;
+    const threadDormant = entry.threadDormant === true;
     const operationDegraded = entry.sidebarOperation?.phase === 'degraded';
     const targetStartDegraded = operationDegraded && entry.sidebarOperation?.errorCode === 'target_runtime_stopped';
     // 挂起优先于"刚刚完成"：挂起是持续等待态，不是终态收尾
@@ -194,18 +230,21 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
       replacementPending ? 'replacement-pending' : '',
       operationPending ? 'operation-pending' : '',
       deleting ? 'retiring' : '',
+      threadContinuing ? 'thread-continuing' : '',
+      threadFailed ? 'thread-failed' : '',
       justFinished ? 'just-finished' : '',
     ].filter(Boolean).join(' ');
     return `
       <div
         class="${itemClass}"
         data-agent-id="${escapeHtml(entry.runtimeId)}"
-        data-agent-disabled="${replacementPending || operationPending || deleting || remoteDisabled ? 'true' : 'false'}"
+        data-agent-disabled="${replacementPending || operationPending || deleting || remoteDisabled || threadContinuing || (threadFailed && entry.threadHasRuntime !== true) || threadDormant ? 'true' : 'false'}"
         data-agent-prebuilt="false"
         data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
-        data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.hostNamespaceId || entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
+        data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.hostNamespaceId || entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}" data-ctx-session-type="${escapeHtml(entry.sessionType || 'main')}"
         ${entry.source === 'remote' ? '' : 'draggable="true" ondragstart="onSidebarSessionDragStart(event, this)"'}
         onpointermove="onSidebarItemPointerMove(event, this)" onpointerleave="onSidebarItemPointerLeave(this)"
+        ${threadDormant ? `title="${escapeHtml(zh ? '线程休眠：无运行中的承接会话' : 'Thread dormant: no live head runtime')}"` : ''}
       >
         ${entry.source !== 'remote' ? `<span class="agent-session-pin-slot">${calling
           ? '<span class="agent-session-pin-spinner" title="' + escapeHtml(zh ? '会话运行中' : 'Session is running') + '"></span>'
@@ -218,7 +257,7 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
                 : `<button class="agent-session-pin is-slanted" type="button" title="${escapeHtml(zh ? '点击设为待办，长按上拖选色' : 'Click to set TODO, drag up for color')}" onpointerdown="onSidebarPinPointerDown(event, this)">${SIDEBAR_PIN_SVG}</button>`)))}</span>`
         : ''}
         <div class="agent-line">
-          <div class="agent-name${SIDEBAR_HANGING_PUNCT_RE.test(entry.name || entry.runtimeId) ? ' hanging-punct' : ''}">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(retiringLabel)}</span>` : deleting ? `<span class="agent-runtime-transition-label">${escapeHtml(operationDegraded ? (currentLanguage === 'zh' ? '删除未完成' : 'Delete incomplete') : (currentLanguage === 'zh' ? '正在删除' : 'Deleting'))}</span>` : ''}</div>
+          <div class="agent-name${SIDEBAR_HANGING_PUNCT_RE.test(entry.name || entry.runtimeId) ? ' hanging-punct' : ''}">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(retiringLabel)}</span>` : deleting ? `<span class="agent-runtime-transition-label">${escapeHtml(operationDegraded ? (currentLanguage === 'zh' ? '删除未完成' : 'Delete incomplete') : (currentLanguage === 'zh' ? '正在删除' : 'Deleting'))}</span>` : threadContinuing ? `<span class="agent-runtime-transition-label">${escapeHtml(zh ? '接续中' : 'Continuing…')}</span>` : threadFailed ? `<span class="agent-runtime-transition-label">${escapeHtml(zh ? '接续失败' : 'Relay failed')}</span>` : ''}</div>
           ${entry.contextMenuEnabled ? `<button class="agent-runtime-more" type="button" title="${escapeHtml(zh ? '更多操作' : 'More actions')}" onclick="onSidebarSessionCtxMenu(event, this)"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>` : ''}
         </div>
       </div>
@@ -341,7 +380,7 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
       : !!runtimeId;
     const childEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
     const workspaceAgentId = String(agent.agentId || agent.id || '').trim();
-    const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
+    const hasActiveRuntime = prebuilt && childEntries.some((entry) => isSidebarEntryActive(entry));
     if (prebuilt) {
       const childrenHtml = renderSidebarChildItems(childEntries, agent.id, workspaceAgentId);
       const entryClass = ['agent-entry', hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ');
@@ -958,6 +997,12 @@ function getAgentListRenderSignature() {
     restarting: Array.from(restartingRuntimeIds || []).sort(),
     recentlyFinished: Array.from(_recentlyFinishedRuntimes).sort(),
     sidebarOperationVersion: typeof getSidebarOperationVersion === 'function' ? getSidebarOperationVersion() : 0,
+    // 线程锚条目（coder）主源是 ClawThreads 快照：线程事实变化（status /
+    // headSessionId / failed / 列表增删）必须进签名，否则 renderAgentList
+    // 因签名不变提前返回，接续空窗态与换头后的条目不会刷新。
+    threadSidebar: (window.ClawThreads && Array.isArray(window.ClawThreads.threads)
+      ? window.ClawThreads.threads.map((thread) => `${thread?.threadId}:${thread?.status}:${thread?.lifeState}:${thread?.headSessionId}:${thread?.failed === true ? 1 : 0}:${thread?.title}:${thread?.headProjectDir}:${thread?.createdAt}:${thread?.handoffStartedAt}`)
+      : []).sort(),
     remoteSidebarProjectionVersion: typeof getRemoteSidebarProjectionVersion === 'function'
       ? getRemoteSidebarProjectionVersion()
       : 0,

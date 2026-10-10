@@ -10,7 +10,7 @@ function buildDeps({
   beginResult = null,
   applyResult = null,
 } = {}) {
-  const calls = { stop: [], begin: [], apply: [], fail: [], command: [], deliver: [], updateIndex: [] };
+  const calls = { stop: [], begin: [], apply: [], fail: [], command: [], deliver: [], updateIndex: [], publish: [] };
 
   const threadControl = {
     core: {
@@ -49,6 +49,7 @@ function buildDeps({
     stopManagedAgent: async (agentId, sessionId) => { calls.stop.push({ agentId, sessionId }); },
     threadIntegration,
     threadControl,
+    publishThreadEvent: (threadId, payload) => { calls.publish.push({ threadId, payload }); },
   });
 
   return { service, calls };
@@ -93,6 +94,11 @@ describe('thread rotation (context guard relay)', () => {
 
     assert.deepEqual(result, { applied: true, threadId: 'wt-1', headSessionId: 'session-next' });
     assert.deepEqual(calls.begin, [{ agentId: 'coder', sessionId: 'session-1', reason: 'trim' }]);
+    // 挡板落定即发布接续开始事实（§4.3）：与旧 runtime 退役同步到达前端
+    assert.deepEqual(calls.publish, [{
+      threadId: 'wt-1',
+      payload: { kind: 'thread.rotation-begun', agentId: 'coder', fromSessionId: 'session-1', reason: 'trim' },
+    }]);
     // pre-rotation retire happens exactly once on success
     assert.equal(calls.stop.length, 1);
     assert.deepEqual(calls.apply, [{
@@ -123,6 +129,8 @@ describe('thread rotation (context guard relay)', () => {
     assert.equal(calls.fail.length, 0);
     assert.equal(calls.command.length, 0);
     assert.equal(calls.deliver.length, 0);
+    // 挡板未立不发布接续事件：前端不该把 gate 拒绝误判为接续开始
+    assert.equal(calls.publish.length, 0);
   });
 
   it('retires the runtime and reports failure when apply reports failure', async () => {
