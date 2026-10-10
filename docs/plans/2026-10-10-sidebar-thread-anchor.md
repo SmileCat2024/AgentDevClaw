@@ -57,7 +57,7 @@ coder 线程自动接续（上下文满触发 rotation）时，左侧列表条�
 | --- | --- | --- |
 | status=open/executing | 在且 running | 现有 calling 语义 |
 | status=open | 在且 idle | 现有 idle / suspended 语义 |
-| 接续空窗（head runtime 不在，thread 非终态） | 不在 | "接续中"（新样式，词表复用 thread-stream 状态条） |
+| 接续空窗（head runtime 不在，thread 非终态） | 不在 | "接续中"（新样式，自建；呈现语义参照手动交接的"正在交接"） |
 | status=rotation_failed | — | 失败态（显式标记，提示人工介入） |
 | lifeState=closed/archived | — | 条目移除（现行为） |
 
