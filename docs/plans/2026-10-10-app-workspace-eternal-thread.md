@@ -26,7 +26,7 @@
 
 - 接力事务：`thread-rotation.js`（context guard 事件入口）→ `beginSessionSuccession`（挡板）→ `compactAndResumeCurrentSession`（policy 固定 `strategy: 'trim-transcript'` + `appendSummary: true`）→ `thread-succession.commitSuccession`（READY 门禁 + advanceHead + 补投递）。
 - 摘要/变换装配：`server/context-continuity/trim-appended-summary.js` 裸 `new` 框架变换，调用链 `compactAndResumeCurrentSession → exportHandoff(appendSummary) → runTrimTranscriptWithSummary` 全链无参数。APP 新写接续变换与装配点参数化属 APP 工单，本计划不改。
-- 输入网关：`input-gateway.deliverUserInput` 按 viewerAgentId 反查 runtime → `isThreadHostSession` 闸门 → head 直投 / Inbox 暂存 / 终态拒绝。`kind: 'reminder'` 在线程域显式拒绝（`turn_kind_unsupported`）：`appendCommand` 的 `kind` 是指令分类，turn 身份（user / reminder）未入契约，bridge 投递只能以用户消息落地。
+- 输入网关：`input-gateway.deliverUserInput` 按 viewerAgentId 反查 runtime → `isThreadHostSession` 闸门 → head 直投 / Inbox 暂存 / 终态拒绝。`kind: 'reminder'` 在线程域显式拒绝：`appendCommand` 的 `kind` 是指令分类，turn 身份（user / reminder）未入契约，bridge 投递只能以用户消息落地。
 - 线程 API：`/protoclaw/threads`（列表 + contentHash 条件刷新）、`/:id/commands`、`/:id/head`、`/:id/deliver`、归档 / 删除 / 关闭。
 
 ### 1.3 前端投影与数据通道
@@ -47,11 +47,11 @@
 
 Claw 仓库：
 
-- `input-gateway.js`：删除 `turn_kind_unsupported` 拒绝分支，`kind` 透传进 `appendCommand`。词汇映射在网关处显式归一：gateway 输入 `kind`（`'user' | 'reminder'`）映射为 command `kind`（`'user_message' | 'reminder'`），缺失/未知值归一为 `user_message`；`appendCommand` 调用点（`input-gateway.js` 现硬编码 `'user_message'` 处）即为适配点。
+- `input-gateway.js`：删除 reminder 在线程域的拒绝分支，`kind` 透传进 `appendCommand`。词汇映射在网关处显式归一：gateway 输入 `kind`（`'user' | 'reminder'`）映射为 command `kind`（`'user_message' | 'reminder'`），缺失/未知值归一为 `user_message`；`appendCommand` 调用点（`input-gateway.js` 现硬编码 `'user_message'` 处）即为适配点。
 - 新入口 `POST /protoclaw/threads/:threadId/input`（`thread-routes.js` 或 input-gateway 路由挂载处）：threadId → head runtime（`resolveSessionViewerId`）→ `deliverUserInput`。返回形状沿用 gateway（`delivery: 'delivered' | 'queued' | 'input' | 'thread_queued'` + head 事实）。head runtime 未运行时先经 `ensureHeadRuntime` 唤起（与 commands 端点同语义）。
 - 测试：gateway 线程域 reminder 入箱 → bridge 投递落地 system 消息（stub）；交接窗口内输入暂存、advance 后补投（既有用例扩展）。
 
-验收：`kind: 'reminder'` 经线程入口在直投 / 暂存两条路径下身份不丢失；`turn_kind_unsupported` 错误码删除（grep 零残留）。
+验收：`kind: 'reminder'` 经线程入口在直投 / 暂存两条路径下身份不丢失；reminder 线程域拒绝的错误码删除（grep 零残留）。
 
 ### PR-2 thread 事件源（SSE）
 
@@ -67,8 +67,9 @@ Claw 仓库：
 
 改动：
 
-- **开工首步 spike**：以现有官方变换（trim+summary）的真实 handoff 产物为样本，验证协议持久事实（handoff 包、seed 落盘结构）足以切分源消息与 seed 边界。若现有产物缺少落盘事实（如 seed 边界 marker 缺失），将边界事实落盘升级为接续协议层的落盘要求（对 APP 新写变换同样约束），不回退为消息内容启发式切分。
-- 服务端新增线程流读取接口：按 threadId 读取一次一致的 `sessionChain` 快照，为每棒返回稳定棒次、session 标识、原始消息基线与 handoff/seed 关联事实；读取期间 head 变化时返回一致快照版本或显式冲突，不能混合新旧链。契约锚定接续协议持久事实，不绑定任何具体变换的产物形态；不依赖摘要文本相似度去重。契约定稿必须包含两点：其一，successor 创建时在 successor metadata / handoff 包落盘显式 seed 边界 marker（seed 消息数与注入位置），流读取按持久 marker 切分，不按数组位置推导；其二，head 棒快照基线与既有 probe 全量数组（含 seed 重放）的对齐规则——probe 增量以快照消息游标续接，seed 段不重复计入基线。
+- **spike 结论（2026-10-10 已完成，真实 5 棒线程产物验证）**：会话级切分可行——thread record `sessionChain` 给出棒次，successor 索引 metadata 的 `handoffId/handoffPath` 给出每棒到 handoff 包的权威关联。消息级切分不可行——user/assistant seed 经 `addUserMessage/addAssistantMessage` 注入、无来源标记；`source:'handoff-seed'` 仅覆盖 system 类 seed 且与 importantFiles 等注入块共用（过度计数）；turn 与时间戳均非边界。据此 seed 边界 marker 升级为接续协议层落盘要求，不回退为消息内容启发式切分。
+- **marker 双落盘（含框架仓库改动）**：其一，协议层——变换产物在 handoff 包内声明 `seedBoundary`（seedMessageCount 与注入项 messageIndex），官方变换先行实现，APP 新写变换一视同仁；其二，注入侧——框架 HandoffSeedFeature 的 `captureState()` 从 `{injected:true}` 扩展为回写实际注入事实（handoffId、seedCount、firstMessageSeq / lastMessageSeq）到会话快照 featureStates，与消息数组同盘同源、重启经快照恢复、全宿主路径自动覆盖。流读取交叉校验两侧一致（handoff 声明数 = featureStates 记录数 = head 数组 seq 区间长度），缺失或校验失败该棒标记 `incomplete` 并带原因码。
+- 服务端新增线程流读取接口：按 threadId 读取一次一致的 `sessionChain` 快照，为每棒返回稳定棒次、session 标识、原始消息基线与 handoff/seed 关联事实；读取期间 head 变化时返回一致快照版本或显式冲突，不能混合新旧链。契约锚定接续协议持久事实，不绑定任何具体变换的产物形态；不依赖摘要文本相似度去重。契约定稿：其一，seed 边界按上述 marker 双落盘取值并交叉校验，流读取按持久 marker 切分，不按数组位置推导；其二，probe 对齐采用双坐标——probe 通道为 count 制全量数组（含 seed 段、无消息 id），渲染边界用 featureStates 的 seq 区间，仅边界后的新增段并入单流增量，seed 段按 handoff 的 mode / appendedSummary / stats 投影规则呈现；不用 turn 或时间戳做对齐键。消息基线锚 enrichedMessages 持久化的 `sequence/id`。
 - 新模块 `public/src/modules/thread-stream.js`：流视图状态与渲染。
   - 视图状态（滚动、草稿、焦点）挂 APP 对话键下（模块局部作用域，遵守 app-core 全局状态纪律）；
   - 数据源绑定：以线程流接口的有序快照建立基线；当前 head 的新增内容仍经既有 probe/tail 增量通道接入，head 变化则获取新一致快照后 rewrite。
@@ -87,11 +88,11 @@ Claw 仓库：
 ## 3. 依赖与顺序
 
 ```text
-PR-1 输入入口 + 框架契约 ──┬──→ PR-3 线程流契约 + 流视图（首步真实产物 spike）
+PR-1 输入入口 + 框架契约 ──┬──→ PR-3 线程流契约 + 流视图（含框架 marker 落盘）
 PR-2 thread 事件源 ────────┘
 ```
 
-PR-1（框架契约部分）与 PR-2 相互独立，可并行；PR-3 的首步 spike（真实产物切分验证）亦可并行先行，实现依赖 PR-1 / PR-2。PR-1 框架改动需 AgentDev build + Claw 服务重启生效。
+PR-1（框架契约部分）与 PR-2 相互独立，可并行；PR-3 首步 spike 已完成（结论已并入 PR-3 契约），实现依赖 PR-1 / PR-2。PR-1 与 PR-3 均含 AgentDev 框架仓库改动，需 AgentDev build + Claw 服务重启生效。
 
 ## 4. 测试策略
 

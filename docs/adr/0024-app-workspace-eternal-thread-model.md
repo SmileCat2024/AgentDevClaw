@@ -19,7 +19,7 @@
 1. **单一活动对话没有通用安放点**。"当前展示哪条对话"是 APP 的业务状态，不能寄生于通用线程列表（"查唯一线程再创建"有并发窗口，也无法表达"清空重来"）；qqbot 的 receptionistSessionId 是既有先例（workspace 配置选定 session、启动按配置恢复、门户重启收敛），APP 型工作空间需要各自以业务状态实现同构机制。
 2. **前端只有"多棒并列 + 显式跳转"投影**。coder 的线程投影（coder-threads-ui：行 = 线程、打开 head 每次动态解析、绝不静默跳转）与"一条对话 = 一条连续消息流、接续对投影不可见"是相反的设计纪律；且打开 head 走 `open_session` 完整导航事务（缓存交接、乐观绑定、状态轮换、runtime 切换）——这正是要消灭的"切换感"。
 3. **换头发现只有 20s 轮询**。SSE 事件（sse-events.js）全部按 viewerAgentId 寻址、kind 固定七种，无线程维度；接续完成（advanceHead）对前端是盲的。
-4. **唤醒无法进入线程域**。APP 的常态输入形态是定时唤醒（feature 定时器到点 → 唤醒 head 会话），但 input-gateway 对 `kind: 'reminder'` 在线程路由上显式拒绝（`turn_kind_unsupported`：WorkThread command 契约无输入身份槽位，入箱后只能以用户消息落地——身份被静默改写比拒绝更糟）。唤醒若绕过网关直投 runtime，交接窗口内会投给即将退役的旧 head。
+4. **唤醒无法进入线程域**。APP 的常态输入形态是定时唤醒（feature 定时器到点 → 唤醒 head 会话），但 input-gateway 对 `kind: 'reminder'` 在线程路由上显式拒绝（WorkThread command 契约无输入身份槽位，入箱后只能以用户消息落地——身份被静默改写比拒绝更糟）。唤醒若绕过网关直投 runtime，交接窗口内会投给即将退役的旧 head。
 
 ## 决策
 
