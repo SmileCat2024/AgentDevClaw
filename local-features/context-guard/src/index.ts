@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import type { AgentFeature, FeatureInitContext, FeatureManifestDefinition, PackageInfo } from '@agentdevjs/core';
-import { CoreLifecycle, getPackageInfoFromSource } from '@agentdevjs/core';
+import { CoreLifecycle, Decision, getPackageInfoFromSource } from '@agentdevjs/core';
 import type { HookDeclarations } from '@agentdevjs/core';
 import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
@@ -106,15 +106,19 @@ function tripReason(crossing: ThresholdCrossing): string {
 /**
  * 交互式工作空间的一次性过界拦截。
  *
- * 过界（inputTokens ≥ 压缩阈值）时打断当前轮并退回排队消息，保险丝随之消耗；
- * 之后输入完全放行（继续对话的上下文开销由用户自负）。触发一次后可在
- * 会话控制面板重新装填。状态只存 feature 内存：会话精简/分支产生的
- * successor runtime 天然回到 manifest 初值，不参与 continuity 转移。
+ * 过界（inputTokens ≥ 压缩阈值）时退回排队消息并挂起打断，保险丝随之消耗；
+ * 已发出的工具调用先执行完、结果写入上下文（StepFinish guard），此时才中断
+ * 本轮——打断时机不再落在工具执行中途（终态语义与立即打断一致：cancelled，
+ * 以最后一条 assistant 正文收尾）。之后输入完全放行（继续对话的上下文开销由
+ * 用户自负）。触发一次后可在会话控制面板重新装填。状态只存 feature 内存：
+ * 会话精简/分支产生的 successor runtime 天然回到 manifest 初值，不参与
+ * continuity 转移。
  */
 export class ContextGuardFeature implements AgentFeature {
 
   static hooks: HookDeclarations = {
     installUsageGuard: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+    tripAtStepFinish: { lifecycle: CoreLifecycle.StepFinish, kind: 'guard' as const, role: 'advisor' as const },
   };
   readonly name = 'context-guard';
   readonly dependencies: string[] = [];
@@ -124,6 +128,8 @@ export class ContextGuardFeature implements AgentFeature {
   private readonly core: ContextGuardCore;
   private armed: boolean;
   private trip: ContextGuardTrip | null = null;
+  /** 过界已挂起、待 StepFinish（本轮已发出的工具结果落地后）触发的打断 */
+  private pendingTripInterrupt = false;
   private logger?: FeatureInitContext['logger'];
   private packageInfo: PackageInfo | null = null;
   private callArbiter: any = null;
@@ -204,6 +210,7 @@ export class ContextGuardFeature implements AgentFeature {
     const agent = ctx?.agent;
     if (!agent) return;
     if (!this._agent) this._agent = agent;
+    this.pendingTripInterrupt = false;
     this.syncThresholdFromLiveMeta(agent);
     if (!this.armed) return;
     installChatObserver(agent, (usage) => this.observeUsage(usage, agent));
@@ -213,6 +220,9 @@ export class ContextGuardFeature implements AgentFeature {
   }
 
   observeUsage(usage: any, agent?: any): boolean {
+    // 兜底捕获：真实链路 agent 总是在场（CallStart 已存），直接调用 observeUsage
+    // 的路径也能让稍后的 StepFinish 打断拿到 agent 引用。
+    if (!this._agent && agent) this._agent = agent;
     if (!this.armed) return false;
     const crossing = this.core.evaluate(usage);
     if (!crossing) return false;
@@ -224,15 +234,31 @@ export class ContextGuardFeature implements AgentFeature {
       inputTokens: crossing.inputTokens,
       reason: tripReason(crossing),
     };
-    this.logger?.warn?.('Context guard tripped — interrupting the call and returning queued inputs', {
+    this.logger?.warn?.('Context guard tripped — deferring interrupt until in-flight tool results land', {
       inputTokens: crossing.inputTokens,
       thresholdTokens: crossing.thresholdTokens,
     });
+    // 排队消息立即退回；打断延后到 StepFinish，避免把本轮已发出的工具调用
+    // 中途 abort 成无结果调用。
     this.callArbiter?.interruptActive?.(this.trip.reason);
-    if (typeof agent?.interrupt === 'function') {
-      agent.interrupt();
-    }
+    this.pendingTripInterrupt = true;
     return true;
+  }
+
+  /**
+   * StepFinish guard：过界打断的触发点。此刻本轮 step 已发出的工具调用均已
+   * 执行完毕、结果已写入上下文。触发 interrupt 后由下一个 step 头部的信号
+   * 检查收尾（终态 cancelled）；若本步本就是无工具调用的自然收尾步，信号
+   * 不被消费、本轮照常自然结束（与既有过界竞态行为一致）。
+   */
+  async tripAtStepFinish(_ctx: any): Promise<Decision> {
+    if (!this.pendingTripInterrupt) return Decision.Continue;
+    this.pendingTripInterrupt = false;
+    this.logger?.info?.('Context guard: interrupting the call after tool results landed');
+    if (typeof this._agent?.interrupt === 'function') {
+      this._agent.interrupt();
+    }
+    return Decision.Continue;
   }
 
   /**
@@ -257,9 +283,12 @@ export class ContextGuardFeature implements AgentFeature {
 /**
  * 线程宿主（coder）的自动接力触发器。
  *
- * 过界时打断当前轮并上报 /protoclaw/context_guard_event，由服务端
- * thread-rotation 执行 trim+摘要接力。装配即确定，无配置——它的存在本身
- * 就是「该工作空间的上下文管理方式是自动接力」这一装配决策的表达。
+ * 过界时退回排队消息并挂起打断；本轮已发出的工具调用执行完、结果写入上下文
+ * （StepFinish guard）后再中断本轮，本轮完全结束（CallFinish）时上报
+ * /protoclaw/context_guard_event，由服务端 thread-rotation 执行 trim+摘要接力。
+ * 上报时机会话上下文已是完整快照——服务端退役 runtime 触发的 flush 不会截走
+ * 工具结果，摘要不会基于失真的中间状态生成。装配即确定，无配置——它的存在
+ * 本身就是「该工作空间的上下文管理方式是自动接力」这一装配决策的表达。
  *
  * triggered 一次性锁定是设计语义而非缺陷，逐场景论证（不要当 bug「修」成
  * 自动重武装）：
@@ -278,6 +307,8 @@ export class ContextRotationTriggerFeature implements AgentFeature {
 
   static hooks: HookDeclarations = {
     installUsageObserver: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+    tripAtStepFinish: { lifecycle: CoreLifecycle.StepFinish, kind: 'guard' as const, role: 'advisor' as const },
+    reportRotationOnCallFinish: { lifecycle: CoreLifecycle.CallFinish, kind: 'observe' as const },
   };
   readonly name = 'context-rotation-trigger';
   readonly dependencies: string[] = [];
@@ -290,6 +321,10 @@ export class ContextRotationTriggerFeature implements AgentFeature {
   private readonly serverOrigin: string;
   private readonly onTrip: ContextRotationTriggerConfig['onTrip'];
   private triggered = false;
+  /** 过界已挂起、待 StepFinish（本轮已发出的工具结果落地后）触发的打断 */
+  private pendingTripInterrupt = false;
+  /** 待 CallFinish（本轮完全结束）上报的过界事实；null 表示无需上报 */
+  private pendingReport: { crossing: ThresholdCrossing; reason: string } | null = null;
   private logger?: FeatureInitContext['logger'];
   private packageInfo: PackageInfo | null = null;
   private callArbiter: any = null;
@@ -350,32 +385,69 @@ export class ContextRotationTriggerFeature implements AgentFeature {
   }
 
   observeUsage(usage: any, agent?: any): boolean {
+    // 兜底捕获，语义同交互壳 ContextGuardFeature.observeUsage。
+    if (!this._agent && agent) this._agent = agent;
     if (this.triggered) return false;
     const crossing = this.core.evaluate(usage);
     if (!crossing) return false;
 
     this.triggered = true;
     const reason = tripReason(crossing);
-    this.logger?.warn?.('Context rotation trigger fired — interrupting and reporting for rotation', {
+    this.logger?.warn?.('Context rotation trigger fired — deferring interrupt until in-flight tool results land', {
       inputTokens: crossing.inputTokens,
       thresholdTokens: crossing.thresholdTokens,
       agentId: this.agentId || null,
       sessionId: this.sessionId || null,
     });
+    // 排队消息立即退回；打断延后到 StepFinish（工具结果落地后），上报延后到
+    // CallFinish（本轮完全结束）——服务端接力退役 runtime 时的 flush 读到的
+    // 是完整上下文快照。
     this.callArbiter?.interruptActive?.(reason);
-    if (typeof agent?.interrupt === 'function') {
-      agent.interrupt();
+    this.pendingTripInterrupt = true;
+    this.pendingReport = { crossing, reason };
+    return true;
+  }
+
+  /**
+   * StepFinish guard：过界打断的触发点（语义同交互壳 ContextGuardFeature）。
+   * 此刻本轮 step 已发出的工具调用均已执行完毕、结果已写入上下文。
+   */
+  async tripAtStepFinish(_ctx: any): Promise<Decision> {
+    if (!this.pendingTripInterrupt) return Decision.Continue;
+    this.pendingTripInterrupt = false;
+    this.logger?.info?.('Context rotation trigger: interrupting the call after tool results landed', {
+      agentId: this.agentId || null,
+      sessionId: this.sessionId || null,
+    });
+    if (typeof this._agent?.interrupt === 'function') {
+      this._agent.interrupt();
     }
+    return Decision.Continue;
+  }
+
+  /**
+   * CallFinish：本轮完全结束后上报接力事件（onTrip 回调 + HTTP）。此时会话
+   * 上下文已定稿，服务端 thread-rotation 退役 runtime 触发的 flush 不会
+   * 截走工具结果。
+   */
+  async reportRotationOnCallFinish(_ctx: any): Promise<void> {
+    const pending = this.pendingReport;
+    if (!pending) return;
+    this.pendingReport = null;
     // 进程内承接（plain agent 宿主模式）：回调失败不吞掉 HTTP 上报。
     try {
-      this.onTrip?.({ at: Date.now(), thresholdTokens: crossing.thresholdTokens, inputTokens: crossing.inputTokens, reason });
+      this.onTrip?.({
+        at: Date.now(),
+        thresholdTokens: pending.crossing.thresholdTokens,
+        inputTokens: pending.crossing.inputTokens,
+        reason: pending.reason,
+      });
     } catch (error) {
       this.logger?.warn?.('Context rotation onTrip callback failed', {
         message: error instanceof Error ? error.message : String(error),
       });
     }
-    this.reportRotationEvent(crossing, reason);
-    return true;
+    this.reportRotationEvent(pending.crossing, pending.reason);
   }
 
   private reportRotationEvent(crossing: ThresholdCrossing, reason: string): void {

@@ -20,7 +20,7 @@ function makeArbiter() {
 }
 
 describe('ContextGuardFeature (interactive shell)', () => {
-  it('trips once when input tokens cross the threshold', () => {
+  it('trips once when input tokens cross the threshold, interrupting at step finish (after tool results land)', async () => {
     const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
     const agent = makeAgent();
     const arbiter = makeArbiter();
@@ -34,24 +34,42 @@ describe('ContextGuardFeature (interactive shell)', () => {
     assert.equal(status.armed, false);
     assert.equal(status.trip?.inputTokens, 800);
     assert.equal(status.trip?.thresholdTokens, 800);
-    assert.deepEqual(agent.calls, ['interrupt']);
+    // 过界瞬间不打断：排队消息立即退回，interrupt 等到 StepFinish（本轮已发出的
+    // 工具调用执行完、结果落地后）才触发。
+    assert.deepEqual(agent.calls, []);
     assert.equal(arbiter.calls.length, 1);
+
+    assert.equal(await feature.tripAtStepFinish({ toolCallsCount: 1 }), 'continue');
+    assert.deepEqual(agent.calls, ['interrupt']);
 
     // fuse consumed: crossing again does nothing
     assert.equal(feature.observeUsage({ inputTokens: 900 }, agent), false);
+    assert.equal(await feature.tripAtStepFinish({ toolCallsCount: 1 }), 'continue');
     assert.deepEqual(agent.calls, ['interrupt']);
   });
 
-  it('re-arms via setArmed and trips again', () => {
+  it('re-arms via setArmed and trips again', async () => {
     const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
     const agent = makeAgent();
     feature.observeUsage({ inputTokens: 800 }, agent);
+    await feature.tripAtStepFinish({});
     assert.equal(feature.getStatus().armed, false);
 
     feature.setArmed(true);
     assert.equal(feature.getStatus().armed, true);
     assert.equal(feature.observeUsage({ inputTokens: 850 }, agent), true);
+    assert.equal(await feature.tripAtStepFinish({}), 'continue');
     assert.deepEqual(agent.calls, ['interrupt', 'interrupt']);
+  });
+
+  it('resets a stale pending interrupt on the next CallStart', async () => {
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = makeAgent();
+    feature.observeUsage({ inputTokens: 800 }, agent);
+    // 未走到 StepFinish 本轮就异常终结：下一次 CallStart 不应补发过期打断
+    await feature.installUsageGuard({ agent });
+    assert.equal(await feature.tripAtStepFinish({}), 'continue');
+    assert.deepEqual(agent.calls, []);
   });
 
   it('enabled:false starts disarmed', () => {
@@ -61,7 +79,7 @@ describe('ContextGuardFeature (interactive shell)', () => {
     assert.equal(feature.observeUsage({ inputTokens: 900 }, agent), false);
   });
 
-  it('recomputes the threshold when the model changes', () => {
+  it('recomputes the threshold when the model changes', async () => {
     const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
     const agent = makeAgent();
     assert.equal(feature.observeUsage({ inputTokens: 800 }, agent), true);
@@ -127,7 +145,7 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('fires once and reports the rotation event', async () => {
+  it('fires once: interrupt deferred to step finish, report deferred to call finish', async () => {
     const feature = new ContextRotationTriggerFeature({
       contextLength: 1000,
       compressRatio: 80,
@@ -140,17 +158,29 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     feature.setCallArbiter(arbiter);
 
     assert.equal(feature.observeUsage({ inputTokens: 900 }, agent), true);
-    assert.deepEqual(agent.calls, ['interrupt']);
+    // 过界瞬间：只退回排队消息，不打断、不上报
+    assert.deepEqual(agent.calls, []);
     assert.equal(arbiter.calls.length, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(posted.length, 0);
 
+    // 工具结果落地（StepFinish）→ 打断本轮
+    assert.equal(await feature.tripAtStepFinish({ toolCallsCount: 1 }), 'continue');
+    assert.deepEqual(agent.calls, ['interrupt']);
+
+    // 本轮完全结束（CallFinish）→ 上报接力事件
+    await feature.reportRotationOnCallFinish({});
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(posted.length, 1);
     assert.equal(posted[0].url, 'http://127.0.0.1:1420/protoclaw/context_guard_event');
     assert.equal(posted[0].body.agentId, 'coder');
     assert.equal(posted[0].body.contextGuard.blocked, true);
 
-    // one-shot lock: no further triggers or reports
+    // one-shot lock: no further triggers, interrupts, or reports
     assert.equal(feature.observeUsage({ inputTokens: 950 }, agent), false);
+    assert.equal(await feature.tripAtStepFinish({}), 'continue');
+    assert.deepEqual(agent.calls, ['interrupt']);
+    await feature.reportRotationOnCallFinish({});
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(posted.length, 1);
   });
@@ -162,7 +192,7 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     assert.equal(feature.observeUsage({ inputTokens: 300 }, agent), true);
   });
 
-  it('invokes the local onTrip callback without breaking the HTTP report', async () => {
+  it('invokes the local onTrip callback at call finish without breaking the HTTP report', async () => {
     const trips: Array<{ inputTokens: number, reason: string }> = [];
     const feature = new ContextRotationTriggerFeature({
       contextLength: 1000,
@@ -178,6 +208,8 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     feature.setCallArbiter(makeArbiter());
 
     assert.equal(feature.observeUsage({ inputTokens: 900 }, agent), true);
+    assert.equal(trips.length, 0);
+    await feature.reportRotationOnCallFinish({});
     assert.equal(trips.length, 1);
     assert.equal(trips[0].inputTokens, 900);
     assert.match(trips[0].reason, /Context threshold reached/);
@@ -198,6 +230,7 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     });
     const agent2 = makeAgent();
     assert.equal(throwing.observeUsage({ inputTokens: 900 }, agent2), true);
+    await throwing.reportRotationOnCallFinish({});
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(posted.length, 2);
   });
