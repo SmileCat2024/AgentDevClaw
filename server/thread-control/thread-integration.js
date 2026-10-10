@@ -27,6 +27,7 @@ import { ThreadNotFoundError } from './thread-store.js';
 import { isThreadHostSession } from './host-agents.js';
 import { createDeliveryConsumer } from './delivery-consumer.js';
 import { abortPendingSuccession } from './thread-succession.js';
+import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
 
 // 判定的唯一定义在 ./host-agents.js（无副作用轻量模块，供 agent 子进程同源
 // 引用）；此处 re-export 维持 server 侧既有消费方（input-gateway 等）不变。
@@ -43,7 +44,7 @@ export function isSuccessionGateFailure(result) {
     && result.reason === 'error';
 }
 
-export function createThreadIntegration({ control = null } = {}) {
+export function createThreadIntegration({ control = null, publishThreadEvent = publishThreadEventDefault } = {}) {
   const { core, board, archive } = control || getThreadControl();
 
   // T001：成员查询的权威实现在框架 WorkThread.findThreadBySession——
@@ -84,6 +85,16 @@ export function createThreadIntegration({ control = null } = {}) {
           identity: session?.sessionType,
         });
         console.log(`[thread-integration] thread created: ${thread.threadId} head=${sessionId}`);
+        // 创建事务落定后发布事实事件（无订阅者时 no-op）。重启恢复不经过
+        // 此钩子（会话是恢复不是创建，线程已在 store），不会把既有线程
+        // 重复发布为新建事件。
+        publishThreadEvent(thread.threadId, {
+          kind: 'thread.created',
+          agentId: thread.agentId,
+          rootSessionId: thread.rootSessionId,
+          headSessionId: thread.headSessionId,
+          status: thread.status,
+        });
         return thread;
       } catch (error) {
         console.error(`[thread-integration] failed to create thread for session=${sessionId}:`, error?.message || error);
@@ -171,6 +182,16 @@ export function createThreadIntegration({ control = null } = {}) {
         // 统一经 delivery-consumer 消费面（force：advance 换代是新权威事实，
         // 不受线程级退避约束）
         const delivery = await deliveryConsumer.consume(thread.threadId, { force: true });
+        // head 推进事务落定（advanceHead + 补投递完成后）发布事实事件：
+        // 前端流视图据此发现换头并重绑数据源（ADR-0024），事件只携带
+        // 事务事实，不承载派生视图数据。
+        publishThreadEvent(thread.threadId, {
+          kind: 'thread.head-advanced',
+          agentId: normalizedAgentId,
+          fromSessionId: from,
+          toSessionId: to,
+          reason: String(reason || 'manual').trim() || 'manual',
+        });
         return { applied: true, thread: advanced, delivery };
       } catch (error) {
         if (error instanceof ThreadNotFoundError) {

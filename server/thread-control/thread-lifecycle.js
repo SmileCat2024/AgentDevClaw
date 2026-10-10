@@ -25,6 +25,8 @@
  * 不启动 runtime。
  */
 
+import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
+
 const LIFECYCLE_EVENT_CAP = 200;
 
 function cleanId(value) {
@@ -50,6 +52,7 @@ function pushLifecycleEvent(record, event) {
 export function createThreadLifecycleService({
   control,
   stopSession = null,
+  publishThreadEvent = publishThreadEventDefault,
 } = {}) {
   const { core, board, archive } = control || {};
   if (!core || !board || !archive) {
@@ -174,6 +177,15 @@ export function createThreadLifecycleService({
     cleanup.completedAt = Date.now();
     cleanup.status = cleanup.failures.length > 0 ? 'partial' : 'complete';
     await archive.archive(normalizedThreadId, { cleanup });
+    // 归档事务落定（标记 + seal + 清理结果均已落盘）后发布事实事件：
+    // complete / partial 都是权威落定状态，如实携带；无订阅者时 no-op。
+    publishThreadEvent(normalizedThreadId, {
+      kind: 'thread.archived',
+      agentId: thread.agentId,
+      headSessionId: sealed.headSessionId || null,
+      archivedAt: archiveEntry.archivedAt,
+      cleanupStatus: cleanup.status,
+    });
     return { threadId: normalizedThreadId, archivedAt: archiveEntry.archivedAt, cleanup };
   }
 

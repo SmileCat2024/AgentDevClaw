@@ -37,6 +37,24 @@ export function createSseCompressionFilter(baseFilter) {
   };
 }
 
+// ── thread 事件发布（模块级入口，ADR-0024 PR-2）──────────────────────
+// 线程事件的事实源在 server 侧线程事务（创建 / head 推进 / 归档 / 删除），
+// 不在 ViewerWorker 会话事件总线——发布入口因此是模块级函数：线程事务
+// 模块直接 import 调用，不经 worker 转发。实际投递由 createSseEventsModule
+// 实例注册（生产单实例）；未创建实例（服务未启动 / 纯单测装配）时发布
+// 为 no-op，不报错。
+let _threadPublisher = null;
+
+/**
+ * 发布线程事实事件：payload.kind 为 SSE 事件名（最小集 thread.created /
+ * thread.head-advanced / thread.archived / thread.deleted），threadId 由
+ * 参数提供并合入帧 data。只投递到经 ?threads= 订阅该 threadId 的连接；
+ * 无订阅者时 no-op。
+ */
+export function publishThreadEvent(threadId, payload) {
+  if (typeof _threadPublisher === 'function') _threadPublisher(threadId, payload);
+}
+
 export function createSseEventsModule(deps = {}) {
   const {
     viewerWorker,
@@ -86,6 +104,32 @@ export function createSseEventsModule(deps = {}) {
       if (conn.live) writeConn(conn, frame);
     }
     return eid;
+  }
+
+  /**
+   * thread 事件发布（模块级 publishThreadEvent 的实例侧实现）：
+   * - 事件名取 payload.kind；帧 data 合入 threadId；
+   * - 只投递到 ?threads= 订阅该 threadId 的连接，无订阅者 = no-op；
+   * - 帧进环形缓冲并携带 threadId（非 thread 帧无该字段），Last-Event-ID
+   *   重放同样按连接的订阅集过滤——重放与 live 路由一致，不会把别的
+   *   thread 的事件补投给未订阅的重连客户端。
+   */
+  function publishThreadEventInternal(threadId, payload) {
+    try {
+      const id = String(threadId || '').trim();
+      const kind = String(payload?.kind || '').trim();
+      if (!id || !kind) return;
+      const eid = ++eidSeq;
+      const frame = formatFrame(eid, kind, { ...(payload || {}), threadId: id });
+      ring.push({ eid, frame, threadId: id });
+      if (ring.length > ringSize) ring.splice(0, ring.length - ringSize);
+      for (const conn of clients) {
+        if (conn.live && conn.threadFilter && conn.threadFilter.has(id)) writeConn(conn, frame);
+      }
+    } catch (err) {
+      // 发布永不打断线程事务：帧组装失败只丢这一帧并留痕
+      console.warn('[sse-events] publishThreadEvent failed:', err?.message || err);
+    }
   }
 
   function flushPending(entry) {
@@ -231,11 +275,20 @@ export function createSseEventsModule(deps = {}) {
     if (typeof res.flushHeaders === 'function') res.flushHeaders();
     res.write(': connected\n\n');
 
-    const conn = { req, res, live: false, closed: false, hbTimer: null };
+    // thread 事件订阅过滤（opt-in）：?threads=id1,id2；缺省 = 不订阅任何
+    // thread 事件。订阅集在连接存续期间固定，live 投递与重放共用。
+    const rawThreads = req.query?.threads;
+    const threadsParam = Array.isArray(rawThreads) ? rawThreads.join(',') : rawThreads;
+    const threadFilter = typeof threadsParam === 'string' && threadsParam.trim() !== ''
+      ? new Set(threadsParam.split(',').map((s) => s.trim()).filter(Boolean))
+      : null;
+
+    const conn = { req, res, live: false, closed: false, hbTimer: null, threadFilter };
     clients.add(conn);
 
     // 重放决策。与 publish 同线程同步执行：注册后到 live 放行之间，任何
     // publish 只会进环形缓冲（live=false 不直写），由下方重放统一补齐。
+    // thread 帧按本连接订阅集过滤（未订阅该 threadId 的帧不补投）。
     let replay = [];
     let resync = false;
     const rawHeader = req.headers['last-event-id'];
@@ -248,7 +301,8 @@ export function createSseEventsModule(deps = {}) {
           || ring.length === 0 || ring[0].eid > lastEventId + 1) {
           resync = true;
         } else {
-          replay = ring.filter((f) => f.eid > lastEventId);
+          replay = ring.filter((f) => f.eid > lastEventId
+            && (!f.threadId || (threadFilter ? threadFilter.has(f.threadId) : false)));
         }
       }
     }
@@ -285,6 +339,10 @@ export function createSseEventsModule(deps = {}) {
 
   const unsubscribe = supported ? viewerWorker.onSessionEvent(onWorkerEvent) : null;
 
+  // 模块级 thread 发布入口注册：后创建的实例接管（生产单实例；测试逐
+  // 实例注册 / closeAll 反注册，互不串扰）。
+  _threadPublisher = publishThreadEventInternal;
+
   return {
     setupRoutes(app) {
       app.get('/protoclaw/events', handleEvents);
@@ -298,6 +356,7 @@ export function createSseEventsModule(deps = {}) {
         closeConn(conn);
       }
       if (typeof unsubscribe === 'function') unsubscribe();
+      if (_threadPublisher === publishThreadEventInternal) _threadPublisher = null;
     },
     stats() {
       return {

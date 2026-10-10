@@ -45,6 +45,73 @@ const _lastQueuedSnapshots = new Map(); // runtimeId -> { runtimeId, items, at }
 const _optimisticQueued = new Map();
 const OPTIMISTIC_QUEUED_TTL_MS = 10000;
 
+// ── thread 事件订阅（ADR-0024 PR-2：仅订阅层，流视图后续工单消费）──
+// 服务端按连接的 ?threads= 参数过滤投递，订阅集在连接存续期间固定——
+// 订阅集变化时按新参数重建连接。重建窗口内丢帧可接受：thread 事件只是
+// 换头/归档/删除的发现信号，contentHash 轮询是断连兜底，不是数据通道。
+const THREAD_EVENT_NAMES = [
+  'thread.created', 'thread.head-advanced', 'thread.archived', 'thread.deleted',
+];
+const _threadHandlers = new Map(); // threadId -> Set<(evt) => void>
+let _threadsParamOnConnect = null;  // 本次连接使用的 ?threads= 值（null = 未带）
+
+function threadsQueryParam() {
+  const ids = Array.from(_threadHandlers.keys());
+  return ids.length > 0 ? ids.map(encodeURIComponent).join(',') : null;
+}
+
+function handleThreadEvent(type, event) {
+  _lastFrameAt = Date.now();
+  let frame;
+  try { frame = JSON.parse(event.data); } catch { return; }
+  const threadId = String(frame?.threadId || '').trim();
+  if (!threadId) return;
+  const handlers = _threadHandlers.get(threadId);
+  if (!handlers) return;
+  for (const handler of handlers) {
+    try { handler({ type, threadId, payload: frame }); }
+    catch (e) { console.warn('[sse] thread event handler failed:', e); }
+  }
+}
+
+/**
+ * 订阅 thread 事件（thread.created / thread.head-advanced /
+ * thread.archived / thread.deleted，服务端 ?threads= 过滤）。
+ * @param {string|string[]} threadIds - 订阅的 threadId 集合
+ * @param {(evt: {type: string, threadId: string, payload: object}) => void} handler
+ * @returns {() => void} 取消订阅函数（移除该 handler 的全部订阅 id）
+ */
+function subscribeThreadEvents(threadIds, handler) {
+  const ids = Array.from(new Set((Array.isArray(threadIds) ? threadIds : [threadIds])
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean)));
+  if (typeof handler !== 'function' || ids.length === 0) return () => {};
+  for (const id of ids) {
+    if (!_threadHandlers.has(id)) _threadHandlers.set(id, new Set());
+    _threadHandlers.get(id).add(handler);
+  }
+  refreshThreadSubscription();
+  return () => {
+    for (const id of ids) {
+      const handlers = _threadHandlers.get(id);
+      if (!handlers) continue;
+      handlers.delete(handler);
+      if (handlers.size === 0) _threadHandlers.delete(id);
+    }
+    refreshThreadSubscription();
+  };
+}
+
+/** 订阅集变化 → 按新 ?threads= 参数重建连接；参数未变或未连接则不动。 */
+function refreshThreadSubscription() {
+  const param = threadsQueryParam();
+  if (param === _threadsParamOnConnect) return;
+  if (!_source) return; // 未连接：下次 connect() 自然携带新参数
+  _source.close();
+  _source = null;
+  connect();
+}
+
 function isSseActive() {
   return _active;
 }
@@ -356,7 +423,9 @@ function connect() {
     scheduleRetry(_cooldownUntil - now);
     return;
   }
-  const source = new EventSource('/protoclaw/events');
+  const threadsParam = threadsQueryParam();
+  const source = new EventSource(`/protoclaw/events${threadsParam ? `?threads=${threadsParam}` : ''}`);
+  _threadsParamOnConnect = threadsParam;
   _source = source;
   source.addEventListener('hello', onHello);
   source.addEventListener('resync', onResync);
@@ -368,6 +437,9 @@ function connect() {
   source.addEventListener('input-requests', (e) => dispatch('input-requests', e));
   source.addEventListener('queued-inputs', (e) => dispatch('queued-inputs', e));
   source.addEventListener('messages', (e) => dispatch('messages', e));
+  for (const name of THREAD_EVENT_NAMES) {
+    source.addEventListener(name, (e) => handleThreadEvent(name, e));
+  }
   source.onerror = onSourceError;
 }
 
@@ -438,6 +510,7 @@ window.ClawFW.SseClient = {
   noteQueuedOptimistic,
   getLastQueuedSnapshot,
   reconcileQueuedTexts,
+  subscribeThreadEvents,
 };
 
 // 鉴权就绪后再连接（EventSource 同源自动携带 Cookie，但连接早于登录

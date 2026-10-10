@@ -57,6 +57,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
+import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
 
 const DELETING_CANCEL_REASON = 'thread_deleted';
 const LIFECYCLE_EVENT_CAP = 200;
@@ -113,6 +114,8 @@ function memberSessionIds(thread) {
  * @param {Function} [deps.clearRuntimes] - (agentId, sessionIds[]) => void|Promise，
  *   释放成员 session 的 runtime envelope 状态
  * @param {object} [deps.timers] - 测试注入：{ setTimeout }
+ * @param {Function} [deps.publishThreadEvent] - thread 事件发布（缺省模块级
+ *   实发布器，测试注入 spy）
  */
 export function createThreadDeleteService({
   control,
@@ -122,6 +125,7 @@ export function createThreadDeleteService({
   removeHandoffs = null,
   clearRuntimes = null,
   timers = null,
+  publishThreadEvent = publishThreadEventDefault,
 } = {}) {
   if (!control || !control.core || !control.board || !control.archive) {
     throw new Error('createThreadDeleteService requires thread control ({core, board, archive})');
@@ -445,6 +449,17 @@ export function createThreadDeleteService({
       cleanup.completedAt = Date.now();
       cleanup.status = failures.length > 0 ? 'partial' : 'complete';
       cleanup.failures = failures;
+      // 删除事务落定（record 已删，读路径开始返回 not found）后发布事实
+      // 事件。partial 时 record 保留为重试寻址对象，未到达「已删除」权威
+      // 事实，不发布——重试收敛到 complete 时自然补发；幂等早退（record
+      // 本就不存在）无事务运行，同样不发布。
+      if (failures.length === 0) {
+        publishThreadEvent(normalizedThreadId, {
+          kind: 'thread.deleted',
+          agentId: thread.agentId,
+          status: cleanup.status,
+        });
+      }
       return {
         threadId: normalizedThreadId,
         deleted: failures.length === 0,
