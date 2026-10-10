@@ -18,6 +18,8 @@
 import { createHash } from 'node:crypto';
 import { synthesizeThreadLifeState } from './thread-life-state.js';
 import { deliverUserInput } from './input-gateway.js';
+import { createThreadStreamReader } from './thread-stream.js';
+import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
 
 /**
  * @param {import('express').Express} app
@@ -32,13 +34,25 @@ import { deliverUserInput } from './input-gateway.js';
  * @param {Function} [options.deliverInput] 线程寻址输入端点的投递入口（默认统一
  *   网关 deliverUserInput；测试注入替身）。生产语义：全部路由判定（head 健康 →
  *   直投；交接窗口 / 非 head → Inbox 暂存；终态 → 拒绝）由网关复用。
+ * @param {object} [options.streamReader] 单流投影读取器（ADR-0024 决策 4；缺省
+ *   以 control.core 装配 createThreadStreamReader，session index / 会话文件 /
+ *   handoff 包读取走生产数据目录；测试注入 fixture 替身）
+ * @param {Function} [options.publishThreadEvent] thread 事件发布（DI；缺省模块级
+ *   publishThreadEvent，无订阅者时 no-op）
  * @param {{ deleteThread: Function }} [options.threadDelete] - T005 删除级联服务
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, streamReader = null, publishThreadEvent = publishThreadEventDefault } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
   const { core, board, archive } = control;
+  // 惰性装配：stream 路由首次被请求时才构建读取器（部分测试的 mock core
+  // 只有端点所需方法子集，setup 阶段不强制要求 getThread）
+  let _threadStreamReader = streamReader;
+  const getStreamReader = () => {
+    if (!_threadStreamReader) _threadStreamReader = createThreadStreamReader({ core });
+    return _threadStreamReader;
+  };
   const lifecycleService = lifecycle || {
     archiveThread: async (threadId) => {
       const thread = await core.getThread(threadId);
@@ -138,6 +152,11 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
     if (err?.code === 'thread_not_found' || err?.code === 'workthread_not_found') {
       return res.status(404).json(body);
     }
+    // 流快照冲突（ADR-0024 决策 4）：附读取期间推进到的当前 head 事实，
+    // 调用方据此直接重取新一致快照
+    if (err?.code === 'thread_stream_conflict' && err?.currentHeadSessionId != null) {
+      body.currentHeadSessionId = err.currentHeadSessionId;
+    }
     return res.status(status).json(body);
   };
 
@@ -193,6 +212,16 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
       if (mode) {
         await board.setMode(thread.threadId, mode);
       }
+      // 创建事务落定后发布事实事件（PR-3 补挂：PR-2 时因与 SSE 线程并行
+      // 回避；模式与 thread-integration.onSessionCreated 一致——DI
+      // publishThreadEvent，无订阅者时 no-op）
+      publishThreadEvent(thread.threadId, {
+        kind: 'thread.created',
+        agentId: thread.agentId,
+        rootSessionId: thread.rootSessionId,
+        headSessionId: thread.headSessionId,
+        status: thread.status,
+      });
       res.status(201).json({ ok: true, thread });
     } catch (err) {
       _errorResponse(res, err);
@@ -208,6 +237,22 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
         return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
       }
       res.json({ ok: true, thread: await _attachLifeState(thread, await _getArchiveEntries()) });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  // ── 单流投影快照（ADR-0024 决策 4）──────────────────────────────
+  // 一次一致 sessionChain 快照 + 每棒基线与接缝事实；读取期间 head 变化
+  // 抛显式冲突（409 thread_stream_conflict）。条件刷新（contentHash 轮询
+  // 兜底路径）：相同 sinceContentHash 返回 unchanged 短路。
+  app.get('/protoclaw/threads/:threadId/stream', async (req, res) => {
+    try {
+      const result = await getStreamReader().readThreadStream(req.params.threadId);
+      if (typeof req.query.sinceContentHash === 'string' && req.query.sinceContentHash === result.contentHash) {
+        return res.json({ ok: true, unchanged: true, contentHash: result.contentHash });
+      }
+      res.json({ ok: true, ...result });
     } catch (err) {
       _errorResponse(res, err);
     }

@@ -69,6 +69,30 @@ export function getContextHandoffFilePath(userDataRoot, agentId, handoffId) {
   return path.join(getContextHandoffDir(userDataRoot, agentId), `${sanitizeFragment(handoffId)}.json`);
 }
 
+/**
+ * seedBoundary 形状规整（ADR-0024 PR-3 marker 双落盘之协议层）。
+ *
+ * 变换产物（SuccessorSeed）顶层声明的透传校验：形状不合法按缺失处理
+ * （返回 null），由消费方（线程流读取）按 incomplete 报告，落盘侧不
+ * 捏造、不拒写。旧产物无该字段不是错误（框架 SuccessorSeed 契约：可选）。
+ */
+export function normalizeSeedBoundary(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const seedMessageCount = Number(raw.seedMessageCount);
+  if (!Number.isInteger(seedMessageCount) || seedMessageCount < 0) return null;
+  const rawInjections = Array.isArray(raw.appendedInjection) ? raw.appendedInjection : [];
+  const appendedInjection = [];
+  for (const item of rawInjections) {
+    const messageIndex = Number(item?.messageIndex);
+    if (typeof item?.kind !== 'string' || !item.kind.trim()
+      || !Number.isInteger(messageIndex) || messageIndex < 0) {
+      return null;
+    }
+    appendedInjection.push({ kind: item.kind, messageIndex });
+  }
+  return { seedMessageCount, appendedInjection };
+}
+
 async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
@@ -169,6 +193,15 @@ export async function exportHistoryOnlyHandoffPackage({
     featureContinuity,
     sourceSummary,
     seedMessages,
+    // seed 边界声明（ADR-0024 PR-3 marker 双落盘之协议层）：本入口的产物
+    // 在 Claw 侧本地构建，账目自洽——总量即 seedMessages.length，trim
+    // 注解是唯一追加注入项（尾部，见上方 push）。
+    seedBoundary: {
+      seedMessageCount: seedMessages.length,
+      appendedInjection: seedMessages.length > 0
+        ? [{ kind: 'trim-notice', messageIndex: seedMessages.length - 1 }]
+        : [],
+    },
   };
 
   const handoffPath = getContextHandoffFilePath(userDataRoot, agentId, handoffId);
@@ -219,6 +252,10 @@ export async function writeTrimWithSummaryHandoffPackage({
 }) {
   const seedFields = buildTrimWithSummarySeedFields(seed);
   const meta = seed?.meta ?? {};
+  // 变换产物顶层的 seedBoundary 声明（框架 TrimTranscriptWithSummary /
+  // TrimTranscript 已实现，ADR-0024 PR-3）：形状规整后透传落盘。旧框架
+  // 产物无该字段时保持缺省不写（schemaVersion 不动，旧包兼容）。
+  const seedBoundary = normalizeSeedBoundary(seed?.seedBoundary);
   const handoffId = `handoff-${Date.now()}-${randomUUID().slice(0, 8)}`;
 
   const handoff = {
@@ -237,6 +274,7 @@ export async function writeTrimWithSummaryHandoffPackage({
     featureContinuity: exportFeatureContinuity(sessionSnapshot, { mode: 'trim-transcript' }),
     sourceSummary: buildCompactOverview(sourceRecord),
     seedMessages: seedFields.seedMessages,
+    ...(seedBoundary ? { seedBoundary } : {}),
     appendedSummary: {
       summaryText: seedFields.summaryText,
       importantFiles: seedFields.importantFiles,

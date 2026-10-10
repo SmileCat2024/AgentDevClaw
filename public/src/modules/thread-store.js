@@ -540,6 +540,29 @@ window.threadAdvanceHead = async (threadId, toSessionId, options = {}) => {
   return data;
 };
 
+// ── 流视图映射（ADR-0024 决策 4 / thread-stream.js 消费）──────────
+// 线程链数据到流视图的最小事实投影：head 变化判定（shouldRewrite 的
+// facts 来源）与 rotation_failed 状态条的事实源。APP 业务对话引用 →
+// threadId 的映射属 APP 工单接入，不在此处。
+
+/**
+ * 从轮询到的线程记录提取流视图事实。
+ * @param {string} threadId
+ * @returns {{ threadId: string, headSessionId: string, status: string, chainLength: number, rotationFailed: boolean } | null}
+ */
+window.threadToStreamFacts = (threadId) => {
+  const thread = window.ClawThreads.byId[String(threadId || '')];
+  if (!thread) return null;
+  const chain = Array.isArray(thread.sessionChain) ? thread.sessionChain : [];
+  return {
+    threadId: thread.threadId,
+    headSessionId: String(thread.headSessionId || ''),
+    status: String(thread.status || ''),
+    chainLength: chain.length,
+    rotationFailed: thread.status === 'rotation_failed',
+  };
+};
+
 // ── 启动（周期刷新；非线程宿主的服务端列表恒空，开销可忽略）──────
 
 setTimeout(() => {

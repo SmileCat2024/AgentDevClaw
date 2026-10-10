@@ -1184,6 +1184,9 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'studio-features') return renderStudioFeaturesBlock(agent, block);
   if (block.type === 'studio-repository') return renderStudioRepositoryBlock(agent, block);
   if (block.type === 'coder-threads') return window.CoderThreadsUI?.render?.() || '';
+  // thread-stream（ADR-0024 决策 4）：APP 型工作空间的单流视图（骨架由
+  // 模块提供，未声明 threadId 时空串——未知/缺参 block 的空输出行为不变）
+  if (block.type === 'thread-stream') return window.ThreadStream?.renderThreadStreamBlock?.(block) || '';
   if (block.type === 'form') return renderWorkspaceForm(agent, block);
   if (block.type === 'status-grid') return renderWorkspaceStatusGrid(agent, block);
   if (block.type === 'assembly-library') return renderAssemblyLibraryBlock(agent, block);
