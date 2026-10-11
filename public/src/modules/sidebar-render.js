@@ -152,7 +152,7 @@ function renderSidebarChildItems(entries, ownerAgentId) {
 
 
   const renderItem = (entry) => {
-    const active = isRuntimeItemActive(entry.runtimeId);
+    const active = isRuntimeItemActive(entry.runtimeId, entry);
     const disconnected = isSidebarRuntimeDisconnected(entry);
     const remoteDisabled = entry.source === 'remote' && disconnected;
     const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
@@ -344,7 +344,7 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
       ? (!workspaceSurface && hasRuntime)
       : !!runtimeId;
     const childEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
-    const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
+    const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId, entry));
     if (prebuilt) {
       const childrenHtml = renderSidebarChildItems(childEntries, agent.id);
       const entryClass = ['agent-entry', hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ');

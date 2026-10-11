@@ -40,6 +40,27 @@
 // ── 幂等键（ADR-0011）──────────────────────────────────────────────
 // 所有写类提交统一携带（本地忽略、远程强制）：服务端代理闸要求远程写请求
 // 必须带幂等键，无键直接 400。只有一条提交路径，不存在 if(remote) 分支。
+function captureInputViewToken(runtimeId) {
+  return typeof captureSessionViewToken === 'function'
+    ? captureSessionViewToken(runtimeId)
+    : null;
+}
+
+function isInputViewTokenCurrent(token, runtimeId) {
+  return token && typeof isSessionViewTokenCurrent === 'function'
+    ? isSessionViewTokenCurrent(token)
+    : currentRuntimeAgentId === runtimeId;
+}
+
+function commitInputViewPatch(token, patch, runtimeId) {
+  if (token && typeof commitSessionViewState === 'function') {
+    return commitSessionViewState(token, () => applySessionViewPatch(patch));
+  }
+  if (currentRuntimeAgentId !== runtimeId) return false;
+  applySessionViewPatch(patch);
+  return true;
+}
+
 function newIdempotencyKey() {
   const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
   if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
@@ -111,20 +132,21 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   }
   const targetRuntimeId = String(boundRuntimeId || '').trim();
   if (!targetRuntimeId) return;
+  const viewToken = captureInputViewToken(targetRuntimeId);
   // 发送反馈窗口与重入守卫（与 persistent 端点共用一套状态，persistent-input.js）：
   // spinner 覆盖图片转存 + 投递全程，所有出口（成功/失败/兜底/归还）统一恢复
   if (_submitInFlight) return;
   _submitInFlight = true;
   _beginSubmitFeedbackWindow();
   try {
-    await _submitInputInner(requestId, targetRuntimeId);
+    await _submitInputInner(requestId, targetRuntimeId, viewToken);
   } finally {
     _submitInFlight = false;
     _endSubmitFeedbackWindow();
   }
 }
 
-async function _submitInputInner(requestId, targetRuntimeId) {
+async function _submitInputInner(requestId, targetRuntimeId, viewToken) {
   const textarea = document.getElementById(`input-${requestId}`);
   const input = textarea ? textarea.value : '';
   const targetCacheKey = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
@@ -243,6 +265,7 @@ async function _submitInputInner(requestId, targetRuntimeId) {
         targetCacheKey,
         capabilityActivations,
         turnMetadata,
+        viewToken,
       });
     } catch (threadError) {
       // Thread Inbox 不可用：归还激活与引用（输入保留供重试），不让异常
@@ -302,15 +325,15 @@ async function _submitInputInner(requestId, targetRuntimeId) {
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       // 输入卡绑定其渲染时的 runtime；若提交过程中切换了会话，绝不能
       // 把旧 session 的成功结果写进新 session 的输入视图。
-      if (currentRuntimeAgentId === targetRuntimeId) {
+      if (isInputViewTokenCurrent(viewToken, targetRuntimeId)) {
         beginFollowLatestEntryWindow();
         requestFollowLatest({ forceEnable: true, behavior: 'auto' });
         // patch 写入即声明（工单 037）：乐观清空 inputRequests 自动触发
         // 输入面恢复渲染，无需手动 reset 签名 + 调 render。
-        applySessionViewPatch({ inputRequests: [] });
+        commitInputViewPatch(viewToken, { inputRequests: [] }, targetRuntimeId);
       }
       // 乐观标记 agent 进入 calling 状态，使 action button 立即切换为 stop
-      if (currentRuntimeAgentId === targetRuntimeId) {
+      if (isInputViewTokenCurrent(viewToken, targetRuntimeId)) {
         clearInterruptSuppression(targetRuntimeId);
         _markAgentCallStartedForNotify(targetRuntimeId);
         _agentCallActive.set(targetRuntimeId, true);
@@ -332,6 +355,7 @@ async function _submitInputInner(requestId, targetRuntimeId) {
         capabilityActivations,
         turnMetadata,
         imageKey: targetImageKey,
+        viewToken,
       });
     } else {
       // 无兜底路径：归还激活与引用，输入保留供重试
@@ -385,19 +409,20 @@ function _notifyThreadImageUnsupported() {
  * 经 Thread Inbox 提交：消息持久化到线程，由服务端投递给当前承接会话。
  * 成功后清空输入（与槽位路径一致），并给出明确反馈，避免「发出去没反应」。
  */
-async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, capabilityActivations, turnMetadata, imageKey }) {
+async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, capabilityActivations, turnMetadata, imageKey, viewToken }) {
   const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
   const result = await window.submitThreadCommand(thread.threadId, input, {
     ...(capabilityActivations?.length ? { capabilityActivations } : {}),
     ...(turnMetadata ? { metadata: turnMetadata } : {}),
   });
   const delivered = result?.delivery?.delivered > 0;
+  const stillOwnsView = !viewToken || isInputViewTokenCurrent(viewToken, viewToken.runtimeId);
   // 清空输入（复用槽位路径的清理语义）：composer 常驻后 await 期间可能切换
   // 会话/端点，校验仍属同一会话再清空，防止清掉新会话的草稿。
   const liveTextarea = (textarea && textarea.isConnected)
     ? textarea
     : document.querySelector('.user-input-textarea:not([disabled])');
-  if (liveTextarea
+  if (stillOwnsView && liveTextarea
     && (liveTextarea.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
     liveTextarea.value = '';
     autoResize(liveTextarea);
@@ -406,6 +431,7 @@ async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, 
     clearPendingInputImages(imageKey);
   }
   if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
+  if (!stillOwnsView) return;
   if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
     ClawToast.show({
       id: `thread-cmd-${Date.now()}`,
@@ -641,10 +667,32 @@ function _notifyActionSubmitFailed(actionId) {
   });
 }
 
-async function submitInputAction(requestId, actionId, payload = {}, boundRuntimeId = currentRuntimeAgentId) {
+function captureInputViewToken(runtimeId) {
+  return typeof captureSessionViewToken === 'function'
+    ? captureSessionViewToken(runtimeId)
+    : null;
+}
+
+function isInputViewTokenCurrent(token, runtimeId) {
+  return token && typeof isSessionViewTokenCurrent === 'function'
+    ? isSessionViewTokenCurrent(token)
+    : currentRuntimeAgentId === runtimeId;
+}
+
+function commitInputViewPatch(token, patch, runtimeId) {
+  if (token && typeof commitSessionViewState === 'function') {
+    return commitSessionViewState(token, () => applySessionViewPatch(patch));
+  }
+  if (currentRuntimeAgentId !== runtimeId) return false;
+  applySessionViewPatch(patch);
+  return true;
+}
+
+async function submitInputAction(requestId, actionId, payload = {}, boundRuntimeId = currentRuntimeAgentId, boundViewToken = null) {
   try {
     const targetRuntimeId = String(boundRuntimeId || '').trim();
     if (!targetRuntimeId) return;
+    const viewToken = boundViewToken || captureInputViewToken(targetRuntimeId);
     const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
@@ -659,11 +707,11 @@ async function submitInputAction(requestId, actionId, payload = {}, boundRuntime
       }),
     });
     if (res.ok) {
-      if (currentRuntimeAgentId === targetRuntimeId) {
+      if (isInputViewTokenCurrent(viewToken, targetRuntimeId)) {
         beginFollowLatestEntryWindow();
         requestFollowLatest({ forceEnable: true, behavior: 'auto' });
         // 乐观清空即声明（工单 037）：渲染由 patch hook 同步触发，不等 poll。
-        applySessionViewPatch({ inputRequests: [] });
+        commitInputViewPatch(viewToken, { inputRequests: [] }, targetRuntimeId);
         clearInterruptSuppression(targetRuntimeId);
         // rollback_to_call 只做本地回退 + 草稿回填 + 重弹输入框，不触发模型
         // 调用；乐观 calling 会造成最长一个 poll 周期的假"处理中"。compact_

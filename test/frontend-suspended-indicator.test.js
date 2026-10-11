@@ -19,12 +19,16 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 function loadRuntimeStatus() {
   const ctx = createFrontendSandbox({
     currentRuntimeAgentId: 'rt-focus',
+    _switchEpoch: 1,
     currentMessages: [],
     _agentCallActive: new Map(),
     normalizeAgentIdentity: (v) => String(v || '').trim(),
     isInterruptSuppressed: () => false,
     clearInterruptSuppression: () => {},
     getNotificationCallStartedAt: (p) => p?.runtime?.callStartedAt || 0,
+    captureSessionViewToken: () => ({ switchEpoch: 1 }),
+    isSessionViewTokenCurrent: () => true,
+    commitSessionViewState: (_token, apply) => { apply(); return true; },
     _markAgentCallStartedForNotify: () => {},
     _tryNotifyAgentFinished: () => {},
     renderAgentList: () => {},

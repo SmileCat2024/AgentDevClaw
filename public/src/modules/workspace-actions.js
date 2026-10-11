@@ -564,7 +564,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       if (recordNavigationEpoch !== _navigationGuardEpoch) return;
+      // 历史记录浏览同样绑定视图身份（ADR-0026）：只读挂载的会话数据必须
+      // 让后续迟到生产者（轮询 / SSE）按身份被拒，不能覆盖历史视图。
       applySessionViewPatch({
+        identity: { agentId, sessionId },
         messages: (data.messages || []).map(m => ({
           role: m.role,
           content: m.content,
@@ -903,7 +906,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           const bindRuntimeId = String(
             nextAgent?.runtime_session_id || nextAgent?.runtimeSessionId || previousRuntimeId || '',
           ).trim();
-          if (bindRuntimeId) setViewerSessionBinding(bindRuntimeId, targetSessionId);
+          if (bindRuntimeId) {
+            setViewerSessionBinding(bindRuntimeId, targetSessionId);
+            const ownerAgentId = String(nextAgent?.parent_id || activeAgent?.id || '').trim();
+            if (ownerAgentId) {
+              applySessionViewPatch({ identity: { agentId: ownerAgentId, sessionId: targetSessionId } });
+            }
+          }
         }
         if (isAssemblyLaunch) {
           finishSidebarOperation(sidebarOperation.operationId, 'settled');

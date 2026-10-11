@@ -42,6 +42,10 @@ function createSandbox({ threadForSession, refreshImpl } = {}) {
     getRuntimeRecord: () => null,
     resolveWorkspaceFallbackAgentId: () => 'fallback-ws',
     commitSessionViewPatch: () => { calls.commit += 1; return true; },
+    // ADR-0026 迁移后 handleCoreResponsesNotFound 以会话视图令牌守卫入口；
+    // 令牌新鲜度语义由 frontend-poll-session-consistency.test.js 覆盖，
+    // 本文件只考察 404 豁免的线程刷新决策，守卫恒放行。
+    isSessionViewTokenCurrent: () => true,
     selectWorkspaceSurface() { calls.selectSurface += 1; },
     renderCurrentMainView() { calls.renderMainView += 1; },
     loadAgents: async () => {},

@@ -168,6 +168,10 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   // 常驻输入框的显示条件一直是"当前正在查看某个 runtime 聊天面板"，
   // 而不是"runtime 此刻一定处于执行中"。
   const hasRuntimeSelected = !!currentRuntimeAgentId && chatActive;
+  // 接续等待表面：无 runtime 态，但视图挂在等待会话上（矩阵级 8 放行项）。
+  const hasThreadAwaitTarget = () => !currentRuntimeAgentId && chatActive
+    && typeof window.getActiveThreadInputTarget === 'function'
+    && !!window.getActiveThreadInputTarget()?.threadId;
 
   // ── 级 4：会话内压缩 in-flight（仅对发起 runtime 生效，不污染其他 runtime）
   if (renderMode === 'compacting' && hasRuntimeSelected) {
@@ -235,11 +239,12 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
 
   if (renderMode === 'requests' && hasRequests) {
     renderRequestComposer(inputContainer, inputLease);
-  } else if (renderMode === 'persistent' && hasRuntimeSelected) {
-    // 常驻输入框：当前正在查看 runtime 聊天，但没有 pending input request
+  } else if (renderMode === 'persistent' && (hasRuntimeSelected || hasThreadAwaitTarget())) {
+    // 常驻输入框：当前正在查看 runtime 聊天（无 pending input request），
+    // 或挂在接续等待会话（发送经 Thread Inbox 暂存，新 head 上线后投递）
     renderPersistentInput(inputContainer);
   } else {
-    // 理论不可达（九级矩阵已保证 requests/persistent 有 runtime/请求）：
+    // 理论不可达（九级矩阵已保证 requests/persistent 有 runtime/请求/等待会话）：
     // 兜底隐藏，保持容器空态可观察行为
     hidePersistentComposerCard();
   }

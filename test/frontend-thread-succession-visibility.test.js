@@ -37,6 +37,9 @@ function baseCtx(overrides = {}) {
     setInterval: (fn, ms) => unrefTimer(globalThis.setInterval(fn, ms)),
     ...overrides,
   });
+  // ADR-0026：thread-store 的等待表面直接调用会话视图提交原语，先装载真
+  // session-view-state 模块（身份语义单一来源，不 inline 复刻）。
+  ctx.loadSource('public/src/modules/session-view-state.js');
   ctx.loadSource('public/src/modules/thread-store.js');
   return ctx;
 }

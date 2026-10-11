@@ -401,6 +401,28 @@ test('a poll response that becomes stale after its first guard cannot overwrite 
   assert.deepEqual(harness.events, [], 'stale A must not render or write B cache');
 });
 
+test('poll response for an old Session is rejected when the runtime id stays the same', async () => {
+  const harness = createPollSandbox();
+  harness.sandbox.applySessionViewPatch({ identity: { agentId: 'programming-helper', sessionId: 'session-a' } });
+  const oldPoll = harness.sandbox.__poll();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  harness.sandbox.applySessionViewPatch({ identity: { agentId: 'programming-helper', sessionId: 'session-b' } });
+  harness.sandbox.currentMessages = [{ role: 'assistant', content: 'Session B' }];
+  harness.sandbox.currentInputRequests = [{ requestId: 'choice-b' }];
+  harness.sandbox.window.lastInputRequests = harness.sandbox.currentInputRequests;
+  harness.sandbox.currentOverviewSnapshot = { modelName: 'model-b' };
+  harness.sandbox.currentOverviewSignature = JSON.stringify(harness.sandbox.currentOverviewSnapshot);
+
+  harness.releaseStatus();
+  await oldPoll;
+
+  assert.deepEqual(harness.sandbox.currentMessages, [{ role: 'assistant', content: 'Session B' }]);
+  assert.deepEqual(harness.sandbox.currentInputRequests.map((item) => item.requestId), ['choice-b']);
+  assert.equal(harness.sandbox.currentOverviewSnapshot.modelName, 'model-b');
+  assert.deepEqual(harness.events, [], 'stale same-runtime response must not render or write cache');
+});
+
 test('concurrent poll calls share one in-flight cycle', async () => {
   const harness = createPollSandbox();
   const first = harness.sandbox.__poll();

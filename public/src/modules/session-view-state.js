@@ -19,6 +19,13 @@
  * paths and is read-only for consumers.
  */
 
+function normalizeSessionViewIdentity(value) {
+  if (!value || typeof value !== 'object') return null;
+  const agentId = String(value.agentId || '').trim();
+  const sessionId = String(value.sessionId || '').trim();
+  return agentId ? Object.freeze({ agentId, sessionId }) : null;
+}
+
 function normalizeSessionViewRuntimeId(value) {
   return String(value || '').trim();
 }
@@ -55,19 +62,47 @@ function normalizeSessionMeta(value) {
 }
 
 let _sessionMeta = EMPTY_SESSION_META;
+let _sessionViewIdentity = null;
+// 身份代次：每次生效身份变化（显式 identity 或 sessionMeta 推导）推进。
+// 仅比较 runtimeId + epoch 无法拒绝「同 runtime 离开又回到同一 Session」
+// 时残留的旧 token（A→B→A 回访，epoch 未变）：旧生产者携带过期数据仍能
+// 通过校验。代次让任何身份变化作废全部在途 token。
+let _sessionViewGeneration = 0;
 
-function captureSessionViewToken(runtimeId = currentRuntimeAgentId) {
+function getCurrentSessionViewIdentity() {
+  const explicit = normalizeSessionViewIdentity(_sessionViewIdentity);
+  if (explicit) return explicit;
+  const host = typeof getCurrentHostAgentRecord === 'function'
+    ? getCurrentHostAgentRecord()
+    : null;
+  const agentId = String(host?.id || (typeof focusedAgentId !== 'undefined' ? focusedAgentId : '') || '').trim();
+  return normalizeSessionViewIdentity({ agentId, sessionId: _sessionMeta.sessionId });
+}
+
+function captureSessionViewToken(runtimeId = currentRuntimeAgentId, identity = getCurrentSessionViewIdentity()) {
   return Object.freeze({
     runtimeId: normalizeSessionViewRuntimeId(runtimeId),
+    identity: normalizeSessionViewIdentity(identity),
     switchEpoch: _switchEpoch,
+    generation: _sessionViewGeneration,
   });
 }
 
 function isSessionViewTokenCurrent(token) {
-  return !!token
-    && token.runtimeId !== ''
-    && normalizeSessionViewRuntimeId(currentRuntimeAgentId) === token.runtimeId
-    && _switchEpoch === token.switchEpoch;
+  if (!token || _switchEpoch !== token.switchEpoch) return false;
+  // 身份代次守卫：代次不匹配 = 捕获后发生过任何身份变化（含离开又回到
+  // 相同身份的回访），token 一律过期。
+  if (token.generation !== _sessionViewGeneration) return false;
+  const currentIdentity = getCurrentSessionViewIdentity();
+  if (token.identity) {
+    return !!currentIdentity
+      && currentIdentity.agentId === token.identity.agentId
+      && currentIdentity.sessionId === token.identity.sessionId
+      && (token.runtimeId === ''
+        || normalizeSessionViewRuntimeId(currentRuntimeAgentId) === token.runtimeId);
+  }
+  return token.runtimeId !== ''
+    && normalizeSessionViewRuntimeId(currentRuntimeAgentId) === token.runtimeId;
 }
 
 /**
@@ -99,6 +134,7 @@ function commitSessionViewState(token, apply) {
 function readCurrentSessionViewState() {
   return Object.freeze({
     runtimeId: normalizeSessionViewRuntimeId(currentRuntimeAgentId),
+    identity: getCurrentSessionViewIdentity(),
     switchEpoch: _switchEpoch,
     messages: currentMessages,
     inputRequests: currentInputRequests,
@@ -116,7 +152,32 @@ function applySessionViewPatch(patch) {
   if (!patch || typeof patch !== 'object') {
     throw new TypeError('session view patch must be an object');
   }
+  const identityBefore = getCurrentSessionViewIdentity();
   const has = (key) => Object.prototype.hasOwnProperty.call(patch, key);
+  const nextIdentity = has('identity')
+    ? normalizeSessionViewIdentity(patch.identity)
+    : null;
+  const identityChanged = has('identity') && (() => {
+    const current = getCurrentSessionViewIdentity();
+    return current?.agentId !== nextIdentity?.agentId || current?.sessionId !== nextIdentity?.sessionId;
+  })();
+  if (identityChanged) {
+    patch = {
+      ...patch,
+      messages: [],
+      inputRequests: [],
+      toolRenderConfigs: {},
+      toolNames: {},
+      hookInspector: { lifecycleOrder: [], features: [], hooks: [] },
+      overview: typeof getEmptyOverviewSnapshot === 'function' ? getEmptyOverviewSnapshot() : {},
+      todoPlan: typeof getEmptyTodoPlan === 'function' ? getEmptyTodoPlan() : {},
+      sessionMeta: null,
+      connected: false,
+    };
+  }
+  if (has('identity')) {
+    _sessionViewIdentity = normalizeSessionViewIdentity(patch.identity);
+  }
   if (has('messages')) {
     currentMessages = Array.isArray(patch.messages) ? patch.messages : [];
   }
@@ -152,8 +213,28 @@ function applySessionViewPatch(patch) {
   if (has('sessionMeta')) {
     _sessionMeta = normalizeSessionMeta(patch.sessionMeta);
   }
+  // 未显式携带 identity 的写入路径（数据加载 / 缓存恢复）由 sessionMeta 推导
+  // 会话身份：sessionId 是元数据的一部分，身份与数据必须同源落地，避免
+  // loadAgentData 先后两次 patch 之间身份与内容错位。
+  if (!has('identity') && has('sessionMeta')) {
+    const sessionId = String(_sessionMeta.sessionId || '').trim();
+    const host = typeof getCurrentHostAgentRecord === 'function'
+      ? getCurrentHostAgentRecord()
+      : null;
+    const agentId = String(host?.id
+      || (typeof focusedAgentId !== 'undefined' ? focusedAgentId : '')
+      || '').trim();
+    _sessionViewIdentity = normalizeSessionViewIdentity({ agentId, sessionId });
+  }
   if (has('connected')) {
     currentRuntimeConnected = patch.connected !== false;
+  }
+  // 生效身份发生变化（含 null→有值）→ 推进代次，作废全部在途 token。
+  const identityAfter = getCurrentSessionViewIdentity();
+  const identityFieldsChanged = identityBefore?.agentId !== identityAfter?.agentId
+    || identityBefore?.sessionId !== identityAfter?.sessionId;
+  if (identityFieldsChanged || (!identityBefore && identityAfter)) {
+    _sessionViewGeneration += 1;
   }
 }
 

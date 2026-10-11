@@ -825,12 +825,14 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
   const runtime = normalizeNotificationRuntimeSnapshot(notifData?.runtime);
   const nextCalling = suppressCalling ? false : resolveNotificationCallingState(notifData);
   const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId) || 'none';
+  const identity = typeof getCurrentSessionViewIdentity === 'function' ? getCurrentSessionViewIdentity() : null;
+  const runtimeStatusKey = JSON.stringify([runtimeId, identity?.agentId || '', identity?.sessionId || '']);
   const actionSource = getNotificationActionSource(notifData);
   const stateType = String(actionSource?.type || '').trim();
   const stateData = actionSource?.data && typeof actionSource.data === 'object'
     ? actionSource.data
     : null;
-  const remembered = _runtimeStatusMemory.get(runtimeId) || null;
+  const remembered = _runtimeStatusMemory.get(runtimeStatusKey) || null;
 
   if (suppressCalling) {
     runtime.callActive = false;
@@ -944,21 +946,21 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
   if (runtime.suspended) runtime.stage = 'completed';
 
   if (runtime.callActive) {
-    _runtimeStatusMemory.set(runtimeId, {
+    _runtimeStatusMemory.set(runtimeStatusKey, {
       callStartedAt: runtime.callStartedAt,
       stage: runtime.stage,
       stageStartedAt: runtime.stageStartedAt,
       toolCallCount: runtime.toolCallCount,
     });
   } else if (runtime.stage === 'completed' || runtime.stage === 'failed' || runtime.stage === 'cancelled') {
-    _runtimeStatusMemory.set(runtimeId, {
+    _runtimeStatusMemory.set(runtimeStatusKey, {
       callStartedAt: runtime.callStartedAt || remembered?.callStartedAt || Date.now(),
       stage: runtime.stage,
       stageStartedAt: runtime.stageStartedAt || remembered?.stageStartedAt || Date.now(),
       toolCallCount: runtime.toolCallCount,
     });
   } else {
-    _runtimeStatusMemory.delete(runtimeId);
+    _runtimeStatusMemory.delete(runtimeStatusKey);
   }
   return runtime;
 }
@@ -1111,8 +1113,21 @@ function resetRuntimeStatusForSwitch() {
   if (typeof clearToolProgressState === 'function') clearToolProgressState();
 }
 
-// 通知状态更新
-function updateNotificationStatus(notifData) {
+// 通知状态更新必须归属于触发它的 SessionView；同步 SSE / 重绘调用也经同一提交边界。
+function updateNotificationStatus(notifData, runtimeId = currentRuntimeAgentId, viewToken = null) {
+  const token = viewToken || (typeof captureSessionViewToken === 'function'
+    ? captureSessionViewToken(runtimeId)
+    : null);
+  if (!token || typeof commitSessionViewState !== 'function' || typeof isSessionViewTokenCurrent !== 'function') {
+    if (typeof captureSessionViewToken !== 'function') return applyNotificationStatus(notifData, runtimeId);
+    return false;
+  }
+  if (!isSessionViewTokenCurrent(token)) return false;
+  return commitSessionViewState(token, () => applyNotificationStatus(notifData, runtimeId));
+}
+
+function applyNotificationStatus(notifData, runtimeId) {
+  if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) return;
   const payload = (notifData && typeof notifData === 'object') ? notifData : {};
   if (!notifData) _lastCallFinishTime = 0;
   // 工具执行中进度（ticket 025）：tool.progress 入表 / 终态信号清除

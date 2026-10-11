@@ -90,7 +90,7 @@ function loadSseClient(overrides = {}) {
     _seenChoiceAlertIds: new Set(),
     ClawToast: { show: (t) => calls.toasts.push(t) },
     _syncForegroundState: () => { calls.foregroundSyncs += 1; },
-    updateNotificationStatus: (p) => calls.updateNotificationStatus.push(p),
+    updateNotificationStatus: (p, runtimeId, token) => calls.updateNotificationStatus.push({ p, runtimeId, token }),
     applyAgentCallStateFromNotification: (id, p) => {
       calls.applyAgentCallStateFromNotification.push({ id, p });
       return applyResult;
@@ -104,6 +104,7 @@ function loadSseClient(overrides = {}) {
     applyQueuedInputsTexts: (id, texts, count) => calls.applyQueuedInputsTexts.push({ id, texts, count }),
     loadAgents: async () => { calls.loadAgents.push(1); },
     getRuntimeRecord: () => null,
+    commitSessionViewPatch: (token, patch, apply) => { if (token?.switchEpoch === switchEpoch) apply?.(); },
     captureSessionViewToken: (runtimeId) => ({ runtimeId: String(runtimeId || '').trim(), switchEpoch }),
     isSessionViewTokenCurrent: (t) => t && t.switchEpoch === switchEpoch,
     ...overrides,
@@ -190,7 +191,9 @@ describe('sse-client: 事件分发焦点路由', () => {
     latestSource().emit('notification', { kind: 'notification', agentId: 'rt-focus', data: payload });
     assert.equal(calls.updateNotificationStatus.length, 1);
     // dispatch 经 JSON 往返（事件帧 data），断言内容而非引用
-    assert.deepEqual(calls.updateNotificationStatus[0], payload);
+    assert.deepEqual(calls.updateNotificationStatus[0].p, payload);
+    assert.equal(calls.updateNotificationStatus[0].runtimeId, 'rt-focus');
+    assert.equal(calls.updateNotificationStatus[0].token.runtimeId, 'rt-focus');
     assert.equal(calls.applyAgentCallStateFromNotification.length, 0);
     // 事件到达顺带刷新前台时钟（§5.4 时钟源钩子）
     assert.ok(calls.foregroundSyncs >= 1);

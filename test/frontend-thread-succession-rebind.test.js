@@ -70,6 +70,7 @@ function makeRebindSandbox({
     eventHandler = handler;
     return () => {};
   } } };
+  ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
   ctx.loadSource('public/src/modules/thread-store.js');
   // refreshThreads 桩：第一次调用（订阅建立前）呈旧 head；此后 head 已推进。
   const installFacts = (headSessionId, sessionIds) => {

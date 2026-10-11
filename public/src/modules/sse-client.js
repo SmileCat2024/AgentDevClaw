@@ -141,9 +141,9 @@ function handleNotificationEvent(frame) {
   const payload = frame?.data;
   if (!payload || typeof payload !== 'object') return;
   if (isSameRuntime(frame.agentId, currentRuntimeAgentId)) {
-    // 焦点：与 fetch 路径同一条消费链（内部维护 _agentCallActive、完成
-    // 通知、状态条渲染；payload 与 GET /notification 同构）
-    updateNotificationStatus(payload);
+    // 焦点：捕获当前 SessionView，确保通知按事件抵达时的身份提交。
+    const token = captureSessionViewToken(frame.agentId);
+    updateNotificationStatus(payload, frame.agentId, token);
   } else if (typeof applyAgentCallStateFromNotification === 'function') {
     // 非焦点：只更新侧栏级 call 状态（转圈、true→false 完成通知）。
     // 边沿变化（calling / suspended）必须即时渲染——否则唤醒轮的转圈
@@ -157,8 +157,11 @@ function handleNotificationEvent(frame) {
 function handleConnectionEvent(frame) {
   const connected = frame?.connected !== false;
   if (isSameRuntime(frame.agentId, currentRuntimeAgentId)) {
-    const record = typeof getRuntimeRecord === 'function' ? getRuntimeRecord(frame.agentId) : null;
-    if (record) record.connected = connected;
+    const token = captureSessionViewToken(frame.agentId);
+    commitSessionViewPatch(token, { connected }, () => {
+      const record = typeof getRuntimeRecord === 'function' ? getRuntimeRecord(frame.agentId) : null;
+      if (record) record.connected = connected;
+    });
   }
   // connection 事件触发即时 agent 列表刷新（§5.2：替代 3s 轮询的即时路径）
   if (typeof loadAgents === 'function') {

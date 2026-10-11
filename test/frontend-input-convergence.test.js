@@ -753,6 +753,34 @@ const FILES_OUTSIDE_RENDERER = [
   'public/src/modules/session-view-state.js',
 ];
 
+// ── 接续等待表面（ADR-0026）：无 runtime 态下 composer 在场 ──────────────
+
+describe('thread await surface keeps the composer mounted (ADR-0026)', () => {
+  it('await target mounts persistent composer; losing the target hides it again', () => {
+    const ctx = createConvergenceSandbox();
+    ctx.run(`currentRuntimeAgentId = null`);
+    ctx.run(`window.getActiveThreadInputTarget = () => ({ threadId: 'wt-1', agentId: 'coder', sessionId: 's-await' })`);
+    ctx.run('renderInputRequests([])');
+    assert.ok(ctx.run("document.getElementById('input-persistent')"),
+      'composer mounts on the await surface (挂起≠消失)');
+    // 等待会话之间切换：签名变化触发会话卡重绑（草稿按会话迁移）
+    ctx.run(`window.getActiveThreadInputTarget = () => ({ threadId: 'wt-2', agentId: 'coder', sessionId: 's-await-2' })`);
+    ctx.run('renderInputRequests([])');
+    assert.ok(ctx.run("document.getElementById('input-persistent')"),
+      'composer stays mounted across await-session switches');
+    // 一致性校验失效（用户切走 / 残留清理）→ 回到 hidden（常驻 composer
+    // 隐藏但节点保留，与既有 hidden 语义同款）
+    ctx.run(`window.getActiveThreadInputTarget = () => null`);
+    ctx.run('renderInputRequests([])');
+    const hiddenCard = ctx.run(
+      "document.getElementById('user-input-container').querySelector('[data-persistent-composer]')",
+    );
+    assert.ok(hiddenCard, 'composer singleton stays mounted');
+    assert.equal(hiddenCard.style.display, 'none',
+      'losing the await target hides the composer');
+  });
+});
+
 describe('manual poke protocol is retired (ticket 037)', () => {
   it('no module outside the renderer pokes the dedup signature or calls the renderer', () => {
     for (const file of FILES_OUTSIDE_RENDERER) {

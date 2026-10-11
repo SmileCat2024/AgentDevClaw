@@ -103,9 +103,9 @@ describe('submitInput thread-branch failure restores consumed pills (frontend sa
   function loadSubmitInput(ctx) {
     const source = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
     // 覆盖 submitInput + _notifyThreadImageUnsupported + _submitInputViaThread 三个函数
-    ctx.run(sourceBetween(source, 'async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {', 'function getPrimaryInputRequest'));
+    ctx.run(sourceBetween(source, 'function captureInputViewToken(runtimeId) {', 'function getPrimaryInputRequest'));
     ctx.run('var _submitInFlight = false; var _voiceTranscribing = false; var _voiceRecording = false;');
-    ctx.run('function _beginSubmitFeedbackWindow() {} function _endSubmitFeedbackWindow() {} async function _nextPaint() {}');
+    ctx.run('function _beginSubmitFeedbackWindow() {} function _endSubmitFeedbackWindow() {} async function _nextPaint() {} function autoResize() {}');
   }
 
   it('restores session references and activations when the thread command fails', async () => {

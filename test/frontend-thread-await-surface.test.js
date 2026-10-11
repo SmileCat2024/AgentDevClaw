@@ -15,13 +15,26 @@ const threadStoreSource = fs.readFileSync(new URL('../public/src/modules/thread-
 
 function loadThreadStore({ threads = [], fetchImpl = async () => ({ ok: false }) } = {}) {
   const calls = { clearChatLoading: 0, reRender: 0, toasts: [] };
-  const ctx = createFrontendSandbox({
+  let ctx;
+  ctx = createFrontendSandbox({
     setTimeout: () => 0,
     setInterval: () => 0,
     clearInterval: () => {},
     clearTimeout: () => {},
     fetch: fetchImpl,
     getCurrentHostAgentRecord: () => ({ id: 'coder', source: 'prebuilt' }),
+    applySessionViewPatch: (patch) => {
+      if (patch?.identity) ctx.run(`globalThis.__viewIdentity = ${JSON.stringify(patch.identity)};`);
+    },
+    captureSessionViewToken: (_runtimeId, identity) => ({ identity }),
+    commitSessionViewPatch: (token, patch, afterCommit) => {
+      const current = ctx.run('globalThis.__viewIdentity');
+      if (!current || current.agentId !== token.identity?.agentId || current.sessionId !== token.identity?.sessionId) return false;
+      ctx.__pendingMessages = patch.messages;
+      ctx.run('currentMessages = globalThis.__pendingMessages;');
+      afterCommit?.();
+      return true;
+    },
     getRuntimeWorkspaceSessionId: () => '',
     setViewerSessionBinding: () => {},
     findSidebarOperation: () => null,
@@ -78,6 +91,7 @@ test('等待分支：挂 awaitSurface 身份并拉上一棒消息渲染（与 vi
   const injected = ctx.run('currentMessages');
   assert.equal(injected.length, 2, '上一棒消息注入 currentMessages');
   assert.equal(injected[1].content, '上一棒指令');
+  assert.equal(ctx.run('globalThis.__viewIdentity.sessionId'), 'sess-head');
   assert.ok(ctx.__calls.clearChatLoading >= 1, '有消息时解除加载 spinner');
   assert.ok(ctx.__calls.reRender >= 1, '触发重渲');
 });
@@ -100,6 +114,25 @@ test('竞态守卫：fetch 回来时等待表面已换目标 → 不注入', asy
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(ctx.run('currentMessages.length'), 0, '过期响应不得注入');
+});
+
+test('SessionView 身份已切换时拒绝旧等待会话的迟到消息', async () => {
+  let resolveFetch;
+  const thread = {
+    threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
+    handoffStartedAt: Date.now(), sessionIds: ['sess-head'],
+  };
+  const ctx = loadThreadStore({
+    threads: [thread],
+    fetchImpl: () => new Promise((resolve) => { resolveFetch = resolve; }),
+  });
+
+  await ctx.run('window.openConversationTarget({ threadId: "wt-1" })');
+  ctx.run('globalThis.__viewIdentity = { agentId: "coder", sessionId: "sess-other" };');
+  resolveFetch(okJson({ ok: true, messages: HANDOFF_MSGS }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(ctx.run('currentMessages.length'), 0, '身份已变更后不得提交旧 Session 的内容');
 });
 
 test('挡板死收敛：等待表面 + head 未推进 + 挡板过窗 + 无 runtime → 终结等待 + 失败提示', async () => {

@@ -680,8 +680,27 @@ describe('input surface mode matrix (contract §3, ticket 036)', () => {
     assert.equal(resolve({ ...baseState, hasRequests: true, hasRuntimeSelected: true }), 'requests');
     // 级 8：选中 runtime（calling / idle 同为 persistent）
     assert.equal(resolve({ ...baseState, hasRuntimeSelected: true }), 'persistent');
+    // 级 8：接续等待表面（无 runtime 态，视图挂在等待会话）→ persistent
+    //（发送经 Thread Inbox 暂存，composer 必须在场——挂起≠消失）
+    assert.equal(resolve({ ...baseState, hasThreadAwaitTarget: true }), 'persistent');
     // 级 9：都不满足 → hidden
     assert.equal(resolve({ ...baseState }), 'hidden');
+  });
+
+  it('readInputSurfaceModeState derives hasThreadAwaitTarget from the consistency-checked thread target', () => {
+    // runtime 态在场：等待目标不参与（矩阵级 8 由 runtime 放行）
+    ctx.run(`currentRuntimeAgentId = 'rt-1'`);
+    ctx.run(`window.getActiveThreadInputTarget = () => ({ threadId: 'wt-1', sessionId: 's1' })`);
+    assert.equal(ctx.run(`readInputSurfaceModeState([], true).hasRuntimeSelected`), true);
+    assert.equal(ctx.run(`readInputSurfaceModeState([], true).hasThreadAwaitTarget`), false);
+    // runtime 态为空 + 一致性校验命中的等待会话：等待目标成立
+    ctx.run(`currentRuntimeAgentId = null`);
+    assert.equal(ctx.run(`readInputSurfaceModeState([], true).hasThreadAwaitTarget`), true);
+    assert.equal(ctx.run(`resolveInputSurfaceMode(readInputSurfaceModeState([], true))`), 'persistent');
+    // 校验未命中（用户切走 / 残留清理）→ 回到 hidden
+    ctx.run(`window.getActiveThreadInputTarget = () => null`);
+    assert.equal(ctx.run(`readInputSurfaceModeState([], true).hasThreadAwaitTarget`), false);
+    assert.equal(ctx.run(`resolveInputSurfaceMode(readInputSurfaceModeState([], true))`), 'hidden');
   });
 });
 

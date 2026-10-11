@@ -14,6 +14,7 @@ function loadThreadStore({ refreshThreadsImpl = async () => null } = {}) {
     setTimeout: (fn, ms) => unrefTimer(globalThis.setTimeout(fn, ms)),
     setInterval: (fn, ms) => unrefTimer(globalThis.setInterval(fn, ms)),
   });
+  ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
   ctx.loadSource('public/src/modules/thread-store.js');
   // 模块在加载时自注册 window.refreshThreads / updateThreadHeaderIndicator；
   // 加载完成后用桩覆盖，隔离网络与 DOM 渲染（断言只针对状态机逻辑）。
@@ -61,7 +62,8 @@ describe('thread-store: successor view rebind', () => {
       eventHandler = handler;
       return () => {};
     } } };
-    ctx.loadSource('public/src/modules/thread-store.js');
+    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
+  ctx.loadSource('public/src/modules/thread-store.js');
     ctx.window.refreshThreads = async () => {
       const thread = {
         threadId: 'wt-viewed', agentId: 'coder',
@@ -124,7 +126,8 @@ describe('thread-store: handoff-started visibility', () => {
       eventHandler = handler;
       return () => {};
     } } };
-    ctx.loadSource('public/src/modules/thread-store.js');
+    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
+  ctx.loadSource('public/src/modules/thread-store.js');
     const thread = {
       threadId: 'wt-viewed', agentId: 'coder',
       headSessionId: 'session-old', sessionIds: ['session-old'], lifeState: 'executing',
@@ -167,7 +170,8 @@ describe('thread-store: stable thread conversation input', () => {
     });
     ctx.bindings = [];
     ctx.window.switchAgent = async (runtimeId) => { ctx.currentRuntimeAgentId = runtimeId; };
-    ctx.loadSource('public/src/modules/thread-store.js');
+    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
+  ctx.loadSource('public/src/modules/thread-store.js');
     const thread = {
       threadId: 'wt-open', agentId: 'coder', headSessionId: 'session-new',
       sessionIds: ['session-old', 'session-new'],
@@ -192,7 +196,8 @@ describe('thread-store: stable thread conversation input', () => {
       setTimeout: (fn, ms) => unrefTimer(globalThis.setTimeout(fn, ms)),
       setInterval: (fn, ms) => unrefTimer(globalThis.setInterval(fn, ms)),
     });
-    ctx.loadSource('public/src/modules/thread-store.js');
+    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
+  ctx.loadSource('public/src/modules/thread-store.js');
     const result = await ctx.window.submitThreadInput('wt-input', {
       text: 'continue', images: [{ id: 'img-1' }], source: 'chat-composer',
       capabilityActivations: ['skill-x'], metadata: { note: 1 },
@@ -258,7 +263,8 @@ describe('T014b thread-store: wasHead 冻结事实写入', () => {
       setInterval: (fn, ms) => unrefTimer(globalThis.setInterval(fn, ms)),
       ...overrides,
     });
-    ctx.loadSource('public/src/modules/thread-store.js');
+    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
+  ctx.loadSource('public/src/modules/thread-store.js');
     ctx.window.refreshThreads = async () => {};
     ctx.window.updateThreadHeaderIndicator = () => {};
     return ctx;
@@ -333,7 +339,8 @@ describe('T014b thread-store: wasHead 冻结事实写入', () => {
       eventHandler = handler;
       return () => {};
     } } };
-    ctx.loadSource('public/src/modules/thread-store.js');
+    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
+  ctx.loadSource('public/src/modules/thread-store.js');
     ctx.window.refreshThreads = async () => {
       const thread = {
         threadId: 'wt-was', agentId: 'coder',
@@ -404,7 +411,8 @@ describe('T014c thread-store: 事实对账重绑（SSE 丢帧自愈）', () => {
       id: 'runtime-new', source: 'child', parent_id: 'coder',
       active_workspace_session_id: 'session-new', runtime_session_id: 'runtime-new',
     }];
-    ctx.loadSource('public/src/modules/thread-store.js');
+    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
+  ctx.loadSource('public/src/modules/thread-store.js');
     ctx.window.updateThreadHeaderIndicator = () => {};
 
     // 第一拍：稳态快照，视图冻结在旧 head（wasHead=true）
@@ -453,7 +461,8 @@ describe('T014c thread-store: 事实对账重绑（SSE 丢帧自愈）', () => {
         return { ok: true, json: async () => ({ threads: [thread], contentHash: `h${threadsFetchCount}` }) };
       },
     });
-    ctx.loadSource('public/src/modules/thread-store.js');
+    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
+  ctx.loadSource('public/src/modules/thread-store.js');
     ctx.window.updateThreadHeaderIndicator = () => {};
 
     // 注意：_syncActiveThreadSubscription 的既有行为会把挂在本线程的记账

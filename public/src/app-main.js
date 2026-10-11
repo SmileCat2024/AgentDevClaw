@@ -2,6 +2,10 @@ function normalizeAgentIdentity(value) {
   return String(value || '').trim();
 }
 
+function getCurrentSessionHostAgentId() {
+  return normalizeAgentIdentity(getCurrentHostAgentRecord()?.id || focusedAgentId);
+}
+
 function getCurrentHostAgentRecord() {
   const hostId = normalizeAgentIdentity(focusedAgentId);
   if (!hostId) return null;
@@ -110,6 +114,15 @@ function isAgentActive(agent) {
     }
     return agentId === runtimeId && agentId === hostId;
   }
+  // 接续等待表面：视图挂在具体等待会话（占位条目高亮），宿主 APP 节点
+  // 让位——与 runtime 态下 prebuilt 宿主让位给会话条目同构。
+  const awaitTarget = typeof window.getActiveThreadInputTarget === 'function'
+    ? window.getActiveThreadInputTarget()
+    : null;
+  if (awaitTarget && agent?.source === 'prebuilt'
+    && agentId === normalizeAgentIdentity(awaitTarget.agentId)) {
+    return false;
+  }
   return agentId === hostId;
 }
 
@@ -209,14 +222,30 @@ function groupConnectedAgents(agents) {
   };
 }
 
-function isRuntimeItemActive(runtimeId) {
+function isRuntimeItemActive(runtimeId, entry = null) {
   const normalizedRuntimeId = normalizeAgentIdentity(runtimeId);
   if (normalizedRuntimeId === '') return false;
   const normalizedCurrent = normalizeAgentIdentity(currentRuntimeAgentId);
   // 停在 workspace surface 时无选中运行时。此时不做兜底比较：本地条目
   // resolveRuntimeRef 未命中返回 undefined，归一化后的空串会与空
   // currentRuntimeAgentId 对称相等，导致所有运行中会话被误判为选中态。
-  if (normalizedCurrent === '') return false;
+  if (normalizedCurrent === '') {
+    // 接续等待表面例外（视图身份挂在等待会话，无 runtime 态可比较）：
+    // 点击接续占位条目 / 接续退役窗口 404 清空 runtime 态时，高亮按
+    // 会话身份对齐——getActiveThreadInputTarget 的一致性校验（宿主匹配
+    // + 视图仍挂在该会话）保证只有当前等待会话的条目命中，用户切走后
+    // 立即失效，不残留。
+    const awaitTarget = typeof window.getActiveThreadInputTarget === 'function'
+      ? window.getActiveThreadInputTarget()
+      : null;
+    const awaitSessionId = String(awaitTarget?.sessionId || '').trim();
+    const entrySessionId = String(entry?.sessionId || '').trim();
+    // 归属对齐：等待会话的宿主必须就是条目的呈现宿主（ownerId /
+    // sidebarEntryId），远程或旁路条目即使 sessionId 巧合相同也不高亮。
+    const entryOwnedByAwaitHost = String(entry?.ownerId || '').trim() === String(awaitTarget?.agentId || '').trim()
+      || String(entry?.sidebarEntryId || '').trim() === String(awaitTarget?.agentId || '').trim();
+    return awaitSessionId !== '' && entryOwnedByAwaitHost && entrySessionId === awaitSessionId;
+  }
   if (normalizedCurrent === normalizedRuntimeId) return true;
   // 远程分组条目以命名空间运行时引用渲染，而 currentRuntimeAgentId 持有同一
   // 引用的解析结果（switchAgent 解析后是裸运行时 id）。两者归一化后比较；
@@ -508,6 +537,7 @@ window.navigateToWorkspaceSession = async (agentId, sessionId, options = {}) => 
 
   focusedAgentId = agentId;
   currentRuntimeAgentId = null;
+  applySessionViewPatch({ identity: { agentId, sessionId: '' } });
   readOnlyMode = false;
   currentWorkspaceArtifactDetail = null;
   currentWorkspaceDocsetDetail = null;
@@ -750,10 +780,9 @@ window.switchAgent = async (newAgentId, options = {}) => {
     // 毒化常驻视图的会话解析（线程徽标 / 输入路由失联直到再次手动切换）；
     // 绑定缺席时 getRuntimeWorkspaceSessionId 每次按最新 allAgents 现值派
     // 生，allAgents 就绪后自愈。
-    setViewerSessionBinding(
-      runtimeAgentId,
-      _deriveRuntimeSessionIdFromAgents(runtimeAgentId),
-    );
+    const selectedSessionId = _deriveRuntimeSessionIdFromAgents(runtimeAgentId);
+    const selectedHostAgentId = String(targetAgent?.parent_id || targetAgent?.id || focusedAgentId || runtimeAgentId).trim();
+    setViewerSessionBinding(runtimeAgentId, selectedSessionId);
     if (typeof _syncActiveThreadSubscription === 'function') _syncActiveThreadSubscription();
     // 视图切换即重估线程徽标与暂存气泡（与模型名/用量同级的跟随性）：
     // 否则接力中徽标滞留到下一次线程刷新（≤20s）才消失/出现。
@@ -813,6 +842,7 @@ window.switchAgent = async (newAgentId, options = {}) => {
     } else {
       // No cache: clear stale messages to prevent poll race mixing old/new agent content
       applySessionViewPatch({
+        identity: { agentId: selectedHostAgentId, sessionId: selectedSessionId },
         messages: [],
         overview: getEmptyOverviewSnapshot(),
         todoPlan: getEmptyTodoPlan(),
@@ -1041,6 +1071,7 @@ window._scheduleInspectorRefresh = function (delayMs) {
  * @returns {Promise<boolean>} true 表示已处理（调用方应结束本轮）
  */
 async function handleCoreResponsesNotFound(pollToken) {
+  if (!isSessionViewTokenCurrent(pollToken)) return true;
   const pollRuntimeId = pollToken.runtimeId;
   // In-session partial compact doesn't create a new session, so if we get 404
   // while compact is in flight, just clear the flag and fall through to normal handling
@@ -1073,6 +1104,7 @@ async function handleCoreResponsesNotFound(pollToken) {
     if (handoffThread && !isFreshBarrier(handoffThread)
       && typeof window.refreshThreads === 'function') {
       await window.refreshThreads(true).catch(() => {});
+      if (!isSessionViewTokenCurrent(pollToken)) return true;
       handoffThread = lookupThread();
     }
     if (isFreshBarrier(handoffThread)) {
@@ -1168,7 +1200,10 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
   //   count > prevKnown                  → 有新消息（append 路径）
   //   count 相等 + seq 前进              → 内容有变（tail/rewrite 路径）
   //   count 相等 + seq 未前进            → 真正未变化，零请求
-  const appliedSeq = _appliedMessagesSeq.get(pollRuntimeId) || 0;
+  const sessionViewKey = pollToken.identity
+    ? `${pollToken.identity.agentId}::${pollToken.identity.sessionId}`
+    : pollRuntimeId;
+  const appliedSeq = _appliedMessagesSeq.get(sessionViewKey) || 0;
   const seqAdvanced = msgProbe ? msgProbe.seq > appliedSeq : true;
   if (!msgProbe || msgProbe.count < prevKnownCount || (msgProbe.count > 0 && prevKnownCount === 0)) {
     // 探测不可用（probe 缺省 / 首次加载 / 拼接基线缺失），或 probe.count 回退
@@ -1241,7 +1276,10 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
   // 取数成功（含降级）→ 记录已应用的 seq。放 commit 之后会让"commit 被
   // stale check 拒绝"的周期丢失 seq 进度，但那些周期本来就已放弃本次
   // 渲染，下周期 count 对账仍会兜底；这里先记，避免同 seq 被重复取数。
-  _appliedMessagesSeq.set(pollRuntimeId, msgProbe ? msgProbe.seq : 0);
+  if (!isSessionViewTokenCurrent(pollToken)) {
+    return 'stale';
+  }
+  _appliedMessagesSeq.set(sessionViewKey, msgProbe ? msgProbe.seq : 0);
   const messagesCommitted = commitSessionViewPatch(pollToken, { messages }, ({ previous, current }) => {
     // Clear session loading indicator once messages are available
     if (current.messages.length > 0) clearChatLoadingSession();
@@ -1306,7 +1344,7 @@ function commitMetadataUpdate(pollToken, { todoRaw, overviewJson, inputRequestsR
   const inputRequests = hasInput ? (Array.isArray(inputRequestsRaw) ? inputRequestsRaw : []) : null;
   const overviewChanged = hasOverview && nextOverviewSignature !== currentOverviewSignature;
   const todoChanged = nextTodoPlan !== null && nextTodoSignature !== currentTodoPlanSignature;
-  const inputChanged = inputRequests !== null && JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || []);
+  const inputChanged = inputRequests !== null && JSON.stringify(inputRequests) !== JSON.stringify(currentInputRequests || []);
   const metadataPatch = {};
   if (overviewChanged) metadataPatch.overview = nextOverview;
   if (todoChanged) metadataPatch.todoPlan = nextTodoPlan;

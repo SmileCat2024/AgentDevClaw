@@ -13,6 +13,9 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const storeSource = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
+// ADR-0026：thread-store 的等待表面调用会话视图提交原语——装载真模块，
+// 身份语义单一来源，不 inline 复刻。
+const sessionViewStateSource = fs.readFileSync(new URL('../public/src/modules/session-view-state.js', import.meta.url), 'utf8');
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 const mainSourceTop = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 
@@ -60,6 +63,14 @@ function createHarness() {
     allAgents: [],
     lastRenderedWorkspaceHtml: '',
     currentLanguage: 'zh',
+    // session-view-state.js 模块级依赖（生产中由 app-core.js 声明）：
+    // 最小可写占位，令牌与提交语义由真模块提供。
+    _switchEpoch: 0,
+    currentMessages: [],
+    currentInputRequests: [],
+    setCurrentHookInspector(value) { sandbox.currentHookInspector = value || {}; },
+    setCurrentOverviewSnapshot(value) { sandbox.currentOverviewSnapshot = value || {}; },
+    setCurrentTodoPlan(value) { sandbox.currentTodoPlan = value || {}; },
     // 工作空间动作 / agent 切换探针
     runWorkspaceAction: (payload) => { actionLog.push(JSON.parse(payload)); return Promise.resolve({ ok: true }); },
     switchAgent: (id) => { switchLog.push(String(id)); return Promise.resolve(); },
@@ -76,7 +87,7 @@ function createHarness() {
 }
 
 function loadStore(sandbox) {
-  vm.runInContext(extractHostResolverSource() + '\n' + extractBindingSource() + '\n' + storeSource, sandbox);
+  vm.runInContext(extractHostResolverSource() + '\n' + extractBindingSource() + '\n' + sessionViewStateSource + '\n' + storeSource, sandbox);
 }
 
 test('T018-A1: 有 runtime 态但绑定缺席时——不得回退残留 activeConversation（main 输入串到 coder 会话的根因）', async () => {

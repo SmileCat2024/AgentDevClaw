@@ -214,6 +214,8 @@ describe('session mutation target boundary', () => {
 
 const EXPECTED_ROUTES = [
   'GET /protoclaw/prebuilt_sessions',
+  // ADR-0026：接续等待表面按 Session 读取持久消息（runtime 退役窗口的唯一消息源）
+  'GET /protoclaw/prebuilt_sessions/session_messages',
   'GET /protoclaw/search_sessions',
   'GET /protoclaw/session_directory',
   'GET /protoclaw/session_record',

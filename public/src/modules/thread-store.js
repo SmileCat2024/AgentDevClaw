@@ -182,6 +182,7 @@ async function enterThreadAwaitSurface(agentId, thread, sessionId) {
     wasHead: true,
     awaitSurface: true,
   };
+  applySessionViewPatch({ identity: { agentId, sessionId } });
   window.updateThreadHeaderIndicator();
   _syncActiveThreadSubscription();
   _loadAwaitSurfaceMessages(agentId, sessionId);
@@ -189,18 +190,20 @@ async function enterThreadAwaitSurface(agentId, thread, sessionId) {
 }
 
 function _loadAwaitSurfaceMessages(agentId, sessionId) {
+  // This read is Session-owned and remains valid while no runtime is bound during rotation.
+  const viewToken = captureSessionViewToken('', { agentId, sessionId });
   fetch(`/protoclaw/prebuilt_sessions/session_messages?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`)
     .then((response) => (response.ok ? response.json() : null))
     .then((data) => {
-      // 竞态守卫：仅当等待表面仍挂在该会话上才注入——重绑（head-advanced）
-      // 或用户切走后，本响应作废。
+      // 竞态守卫：只允许仍属于该 SessionView 的响应提交。
       const selected = window.ClawThreads.activeConversation;
       if (!selected?.awaitSurface || selected.agentId !== agentId || selected.sessionId !== sessionId) return;
-      if (!Array.isArray(data?.messages) || data.messages.length === 0) return;
-      currentMessages = data.messages;
-      _lastRenderedChatSig = '';
-      clearChatLoadingSession();
-      if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+      if (!Array.isArray(data?.messages)) return;
+      commitSessionViewPatch(viewToken, { messages: data.messages }, () => {
+        _lastRenderedChatSig = '';
+        clearChatLoadingSession();
+        if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+      });
     })
     .catch(() => {});
 }
@@ -732,6 +735,7 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
       saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId));
     }
     setViewerSessionBinding(nextRuntimeId, toSessionId);
+    applySessionViewPatch({ identity: { agentId: ownerAgentId, sessionId: toSessionId } });
     const openedConversation = window.ClawThreads.activeConversation;
     if (openedConversation?.threadId === threadId && openedConversation.agentId === ownerAgentId) {
       openedConversation.sessionId = toSessionId;

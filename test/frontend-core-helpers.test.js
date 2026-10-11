@@ -339,7 +339,11 @@ function createRuntimeStatusSandbox() {
   const ctx = createFrontendSandbox({
     document,
     currentRuntimeAgentId: 'runtime-1',
+    _switchEpoch: 1,
     currentRuntimeConnected: true,
+    captureSessionViewToken: (runtimeId) => ({ runtimeId, switchEpoch: 1 }),
+    isSessionViewTokenCurrent: () => true,
+    commitSessionViewState: (_token, apply) => { apply(); return true; },
     currentInputRequests: [],
     lastRenderedInputMode: 'persistent',
     currentLanguage: 'zh',
@@ -357,11 +361,22 @@ function createRuntimeStatusSandbox() {
     },
     getInputSurfaceMode() { return 'persistent'; },
     renderInputRequests() {},
+    setCurrentHookInspector() {},
+    setCurrentOverviewSnapshot() {},
+    setCurrentTodoPlan() {},
+    getEmptyOverviewSnapshot: () => ({}),
+    getEmptyTodoPlan: () => ({}),
+    notifyInputSurfaceChanged() {},
   });
   ctx.loadSource('public/src/app-core.js');
+  ctx.loadSource('public/src/modules/session-view-state.js');
   ctx.run(`
     currentRuntimeAgentId = "runtime-1";
     currentRuntimeConnected = true;
+    currentHookInspector = null;
+    currentOverviewSnapshot = {};
+    currentTodoPlan = {};
+    applySessionViewPatch({ identity: { agentId: 'runtime-1', sessionId: 'session-1' } });
     currentInputRequests = [];
     lastRenderedInputMode = "persistent";
   `);

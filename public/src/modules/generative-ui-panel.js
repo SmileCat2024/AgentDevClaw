@@ -546,6 +546,10 @@
       console.error('[GenUI] No currentRuntimeAgentId');
       return;
     }
+    const viewToken = typeof captureSessionViewToken === 'function'
+      ? captureSessionViewToken(agentId)
+      : null;
+    const submissionKey = `${surfaceId}:${actionId}`;
 
     // 写门控（R2-03）：远程会话且无 write 能力位时拒绝提交（远程 server 有
     // 同款幂等闸兜底，这里先行禁用以免发出注定被闸的请求）。本地身份恒可写。
@@ -560,9 +564,9 @@
       return;
     }
 
-    const submissionKey = `${surfaceId}:${actionId}`;
     if (_submissionsInFlight.has(submissionKey)) return;
     _submissionsInFlight.add(submissionKey);
+    const submissionToken = viewToken;
 
     const eventId = `ui-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const actionUrl = [
@@ -602,10 +606,18 @@
       // Direct delivery consumes the idle loop's pending input request. Clear
       // the stale request optimistically so it cannot be submitted a second time.
       // patch 写入即声明（工单 037）：输入面渲染由 hook 自动触发。
-      if (result.delivery === 'input' && typeof applySessionViewPatch === 'function') {
-        applySessionViewPatch({ inputRequests: [] });
+      const stillOwnsView = submissionToken && typeof isSessionViewTokenCurrent === 'function'
+        ? isSessionViewTokenCurrent(submissionToken)
+        : getCurrentAgentId() === agentId;
+      if (result.delivery === 'input' && stillOwnsView && typeof applySessionViewPatch === 'function') {
+        if (submissionToken && typeof commitSessionViewState === 'function') {
+          commitSessionViewState(submissionToken, () => applySessionViewPatch({ inputRequests: [] }));
+        } else {
+          applySessionViewPatch({ inputRequests: [] });
+        }
       }
 
+      if (!stillOwnsView) return;
       if (typeof clearInterruptSuppression === 'function') clearInterruptSuppression(agentId);
       if (typeof _markAgentCallStartedForNotify === 'function') _markAgentCallStartedForNotify(agentId);
       if (typeof _agentCallActive !== 'undefined') _agentCallActive.set(agentId, true);

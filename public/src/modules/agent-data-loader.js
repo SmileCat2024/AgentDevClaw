@@ -252,7 +252,7 @@ async function refreshCurrentRuntimeStatus(
       if (typeof applyContextGuardStatus === 'function') {
         applyContextGuardStatus(guardData, expectedRuntimeId);
       }
-      updateNotificationStatus(notifData);
+      updateNotificationStatus(notifData, expectedRuntimeId, viewToken);
     });
     return committed ? { notifData, connectionData } : null;
   } catch (error) {

@@ -16,8 +16,31 @@
  *   resolveToolProgressForCall, syncToolProgressDom
  */
 
-// callId -> { callId, toolName, startedAt, timeoutMs, outputTail }
+// callId -> { callId, toolName, startedAt, timeoutMs, outputTail } for one SessionView identity.
 const _toolProgressByCallId = new Map();
+let _toolProgressOwner = null;
+
+function getToolProgressOwner() {
+  const view = typeof readCurrentSessionViewState === 'function' ? readCurrentSessionViewState() : null;
+  if (!view?.identity) return null;
+  return {
+    ...view.identity,
+    runtimeId: String(view.runtimeId || '').trim(),
+  };
+}
+
+function ensureToolProgressOwner() {
+  const owner = getToolProgressOwner();
+  if (_toolProgressOwner?.agentId !== owner?.agentId
+    || _toolProgressOwner?.sessionId !== owner?.sessionId
+    || _toolProgressOwner?.runtimeId !== owner?.runtimeId) {
+    const hadProgress = _toolProgressByCallId.size > 0 || _toolProgressDomCount > 0;
+    _toolProgressByCallId.clear();
+    _toolProgressOwner = owner ? { agentId: owner.agentId, sessionId: owner.sessionId, runtimeId: owner.runtimeId } : null;
+    if (hadProgress) syncToolProgressDom();
+  }
+  return _toolProgressOwner;
+}
 // 当前 DOM 中存在的进度块数量（0 时跳过查询，关闭进度场景零开销）
 let _toolProgressDomCount = 0;
 
@@ -39,6 +62,7 @@ function normalizeToolProgressEntry(data) {
 
 /** 由 notification 快照推进进度状态：tool.progress 入表；终态信号清除。 */
 function applyToolProgressNotification(payload) {
+  ensureToolProgressOwner();
   const state = payload && typeof payload === 'object' ? payload.state : null;
   const landed = new Set(
     (currentMessages || [])
@@ -83,6 +107,7 @@ function applyToolProgressNotification(payload) {
 
 /** 切换 runtime / 会话时整体复位。 */
 function clearToolProgressState() {
+  _toolProgressOwner = getToolProgressOwner();
   if (_toolProgressByCallId.size === 0 && _toolProgressDomCount === 0) return;
   _toolProgressByCallId.clear();
   syncToolProgressDom();
@@ -90,6 +115,7 @@ function clearToolProgressState() {
 
 /** 渲染 call 卡片时取该调用的插值后进度数据；无则返回 null（模板走既有行为）。 */
 function resolveToolProgressForCall(call) {
+  ensureToolProgressOwner();
   if (!call || !call.id) return null;
   const entry = _toolProgressByCallId.get(String(call.id));
   if (!entry) return null;

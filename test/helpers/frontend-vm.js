@@ -126,7 +126,20 @@ export function createFrontendSandbox(overrides = {}) {
     focusedAgentId: null,
     currentRuntimeAgentId: null,
     currentMessages: [],
+    // session-view-state.js 模块级依赖（生产中由 app-core.js 声明）：
+    // 最小可写占位，真实提交语义由下方加载的真模块提供。
+    currentInputRequests: [],
+    toolRenderConfigs: {},
+    TOOL_NAMES: {},
+    currentHookInspector: { lifecycleOrder: [], features: [], hooks: [] },
+    currentOverviewSnapshot: {},
+    currentTodoPlan: {},
+    currentRuntimeConnected: false,
+    _switchEpoch: 0,
     allAgents: [],
+    setCurrentHookInspector(value) { context.currentHookInspector = value || {}; },
+    setCurrentOverviewSnapshot(value) { context.currentOverviewSnapshot = value || {}; },
+    setCurrentTodoPlan(value) { context.currentTodoPlan = value || {}; },
     ...overrides,
   };
 
