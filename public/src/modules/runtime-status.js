@@ -363,35 +363,60 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     addEntry(childEntry);
   });
   if (isThreadHostApp) {
-    for (const [threadId, cached] of _coderThreadLiveEntries) {
-      const thread = hostThreadsById.get(threadId);
-      if (!thread || thread.archivedAt) {
+    // 以线程为锚（而非页面内存缓存）：缓存只提供条目形状记忆（createdAt /
+    // 项目归属的稳定锚），缓存缺席（接续中途刷新页面）时占位由线程 wire
+    // 事实合成——侧栏连续性不依赖页面存活时间。
+    for (const [threadId, thread] of hostThreadsById) {
+      if (thread.archivedAt) {
         _coderThreadLiveEntries.delete(threadId);
         continue;
       }
       // head runtime 已在上面渲染为本线程条目，无需补位。
       if (renderedThreadIds.has(threadId)) continue;
-      if (seenRuntimeIds.has(cached.runtimeId)) continue;
+      const cached = _coderThreadLiveEntries.get(threadId);
+      if (cached && seenRuntimeIds.has(cached.runtimeId)) continue;
       const handoffInProgress = Number(thread.handoffStartedAt) > 0
         && Date.now() - Number(thread.handoffStartedAt) < 5 * 60 * 1000;
       const replacementPending = typeof findSidebarOperation === 'function'
         && Boolean(findSidebarOperation((operation) => operation?.agentId === hostAgentId
           && operation?.type === 'create'
           && operation?.phase !== 'settled'
-          && (operation?.sourceSessionId === cached.entry.sessionId
+          && ((cached?.entry && operation?.sourceSessionId === cached.entry.sessionId)
             || operation?.targetSessionId === thread.headSessionId)));
       const threadActive = thread.lifeState === 'executing' || thread.lifeState === 'pending-commands';
-      if (!handoffInProgress && !replacementPending && !threadActive) {
+      // 门4（快照错位占位）：服务端权威事实 headRuntimeRunning 说 head 进程
+      // 活着，但本帧 allAgents 没有覆盖 head 会话的叶子——threads 快照与
+      // agents 快照错位（换代落定后的下一次 loadAgents 之前）。READY 门禁
+      // 保证 advanceHead 时 successor 必已注册 viewer，故该门与闲置线程
+      // （headRunning=false）天然互斥，不产生幽灵条目。
+      const headUncoveredRunning = thread.headRuntimeRunning === true
+        && String(thread.headSessionId || '') !== ''
+        && !childCoveredSessionIds.has(String(thread.headSessionId));
+      if (!handoffInProgress && !replacementPending && !threadActive && !headUncoveredRunning) {
         _coderThreadLiveEntries.delete(threadId);
         continue;
       }
       // 交接占位：head runtime 尚未上线（退役窗口 / successor 启动中），
       // 线程条目保持原位呈现为断连过渡态，不闪失、不重复。
-      addEntry({
-        ...cached.entry,
-        status: 'disconnected',
-        transitionPending: true,
-      });
+      addEntry(cached?.entry
+        ? {
+          ...cached.entry,
+          status: 'disconnected',
+          transitionPending: true,
+        }
+        : {
+          id: `thread:${threadId}`,
+          ownerId: hostAgentId,
+          runtimeId: `thread:${threadId}`,
+          sessionId: String(thread.headSessionId || ''),
+          name: String(thread.headSessionTitle || thread.title || '').trim()
+            || (currentLanguage === 'zh' ? '上下文接力中…' : 'Relaying context…'),
+          status: 'disconnected',
+          source: 'thread-relay',
+          contextMenuEnabled: false,
+          threadId,
+          transitionPending: true,
+        });
     }
   }
   // The host snapshot may point at whichever session was most recently started.

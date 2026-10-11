@@ -92,7 +92,8 @@ window.onSidebarSessionCtxMenu = function(event, button) {
   const id = ctxEl.dataset.ctxId;
   const variant = ctxEl.dataset.ctxVariant || 'default';
   const sessionId = ctxEl.dataset.ctxSessionId || '';
-  const items = getCtxMenuItems(role, ns, variant, id, sessionId);
+  const threadId = ctxEl.dataset.ctxThreadId || '';
+  const items = getCtxMenuItems(role, ns, variant, id, sessionId, threadId);
   if (items.length === 0) return;
   const rect = button.getBoundingClientRect();
   window.closeCtxMenu();
@@ -100,7 +101,7 @@ window.onSidebarSessionCtxMenu = function(event, button) {
   closeSessionContextMenu();
   closeCompactMenu();
   closeProjectContextMenu();
-  window.showCtxMenu(rect.right, rect.bottom, items, { role, ns, id, variant, sessionId });
+  window.showCtxMenu(rect.right, rect.bottom, items, { role, ns, id, variant, sessionId, threadId });
 };
 
 /**
@@ -206,7 +207,7 @@ function renderSidebarChildItems(entries, ownerAgentId) {
         data-agent-disabled="${replacementPending || operationPending || deleting || remoteDisabled ? 'true' : 'false'}"
         data-agent-prebuilt="false"
         data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
-        data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.hostNamespaceId || entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
+        data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.hostNamespaceId || entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}" ${entry.threadId ? `data-ctx-thread-id="${escapeHtml(entry.threadId)}"` : ''}
         ${entry.source === 'remote' ? '' : 'draggable="true" ondragstart="onSidebarSessionDragStart(event, this)"'}
         onpointermove="onSidebarItemPointerMove(event, this)" onpointerleave="onSidebarItemPointerLeave(this)"
       >
@@ -965,6 +966,10 @@ function getAgentListRenderSignature() {
       headSessionId: thread.headSessionId,
       title: thread.title,
       lifeState: thread.lifeState,
+      // 接续窗口的侧栏事实：挡板立/清与 head runtime 存活翻转必须进签名，
+      // 否则交接占位条目的出现/退场不触发重渲（SSE 丢失时靠 20s 轮询驱动）。
+      handoffStartedAt: Number(thread.handoffStartedAt) || 0,
+      headRuntimeRunning: thread.headRuntimeRunning === true,
     })),
     remoteSidebarProjectionVersion: typeof getRemoteSidebarProjectionVersion === 'function'
       ? getRemoteSidebarProjectionVersion()
@@ -992,6 +997,9 @@ function getAgentListRenderSignature() {
         parentId: normalizeAgentIdentity(getParentAgentId(agent)),
         connected: agent?.connected !== false,
         status: agent?.status || '',
+        // on-demand APP 的存在性（服务端合流事实）：工作空间设置覆盖或线程
+        // 生灭翻转时必须触发重渲，否则条目出现/消失滞后到下一次状态变化。
+        sidebarVisible: agent?.visibility === 'on-demand' ? agent?.sidebarVisible === true : undefined,
         callActive: agent?.callActive === true,
         calling: rid !== '' && _agentCallActive.get(rid) === true,
         suspended: rid !== '' && isRuntimeSuspended(rid) === true,
@@ -1120,7 +1128,8 @@ agentList.addEventListener('contextmenu', (event) => {
     const id = ctxEl.dataset.ctxId;
     const variant = ctxEl.dataset.ctxVariant || 'default';
     const sessionId = ctxEl.dataset.ctxSessionId || '';
-    const items = getCtxMenuItems(role, ns, variant, id, sessionId);
+    const threadId = ctxEl.dataset.ctxThreadId || '';
+    const items = getCtxMenuItems(role, ns, variant, id, sessionId, threadId);
     if (items.length > 0) {
       event.preventDefault();
       window.closeCtxMenu();
@@ -1128,7 +1137,7 @@ agentList.addEventListener('contextmenu', (event) => {
       closeSessionContextMenu();
       closeCompactMenu();
       closeProjectContextMenu();
-      window.showCtxMenu(event.clientX, event.clientY, items, { role, ns, id, variant, sessionId });
+      window.showCtxMenu(event.clientX, event.clientY, items, { role, ns, id, variant, sessionId, threadId });
       return;
     }
   }

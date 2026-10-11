@@ -33,23 +33,23 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
     description: CODER_SHELL_DESCRIPTION,
     verbs: {
       'new-session': {
-        description: '创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId）；目标工作目录必填（服务端禁止目录回退默认）',
+        description: '创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId）；目标工作目录必填（服务端禁止目录回退默认）。agentId 恒为 coder——coder 是独立 APP（ADR-0025），直接以 agentId=coder 寻址，不接受其它值',
         params: [
           { name: 'agentId', kind: 'literal' },
           { name: 'directory', kind: 'literal' },
           { name: 'title', kind: 'literal', required: false },
         ],
-        usage: "new-session <agentId> <目标工作目录> ['标题']",
+        usage: "new-session coder <目标工作目录> ['标题']",
         adapter: { key: 'threads:new-session' },
       },
       'create': {
-        description: '为已存在的 Coder 会话创建工作线程（返回 threadId；无可用会话时先用 new-session）',
+        description: '为已存在的 Coder 会话创建工作线程（返回 threadId；无可用会话时先用 new-session）。agentId 恒为 coder（ADR-0025 独立 APP 寻址）',
         params: [
           { name: 'agentId', kind: 'literal' },
           { name: 'sessionId', kind: 'literal' },
           { name: 'title', kind: 'literal', required: false },
         ],
-        usage: "create <agentId> <sessionId> ['标题']",
+        usage: "create coder <sessionId> ['标题']",
         adapter: { key: 'threads:create' },
       },
       'send': {

@@ -49,6 +49,8 @@ function createMockCtx(overrides = {}) {
     readViewerJson: async () => ({ agents: [], currentAgentId: null }),
     getPendingInputCount: async () => 0,
     resolveAgentModelPresets: async () => null,
+    // 测试隔离：不读真实用户数据目录的 workspace-settings.json
+    readVisibilityOverrides: async () => ({}),
     ...overrides,
   };
 }
@@ -514,7 +516,8 @@ describe('agent-lifecycle', () => {
       // 条目存在性来自清单声明，不依赖 runtime 存活（判定源禁令）
       assert.equal(coderApp.visibility, 'on-demand');
       assert.equal(coderApp.host, 'programming-helper');
-      assert.equal(typeof coderApp.hasThreadDomain, 'boolean');
+      assert.equal(typeof coderApp.sidebarVisible, 'boolean');
+      assert.equal(coderApp.visibilityPolicy, 'auto');
     });
 
     it('routes coder APP children to their own entry (no sessionType routing)', async () => {

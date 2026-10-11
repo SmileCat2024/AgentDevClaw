@@ -109,6 +109,7 @@ import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnosti
 import { setupCapabilityRoutes } from './server/routes/capability.js';
 import { setupOAuthCodexRoutes } from './server/routes/oauth-codex.js';
 import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
+import { setupWorkspaceSettingsRoutes } from './server/routes/workspace-settings.js';
 import { setupToolStateRoutes } from './server/routes/tool-state.js';
 import { setupFeatureCatalogRoutes } from './server/routes/feature-catalog.js';
 import { setupFeatureStoreRoutes } from './server/routes/feature-store.js';
@@ -581,6 +582,7 @@ app.post('/protoclaw/shutdown', async (req, res) => {
 setupModelConfigRoutes(app, express);
 setupOAuthCodexRoutes(app, express);
 setupProxyConfigRoutes(app, express);
+setupWorkspaceSettingsRoutes(app, express);
 setupToolStateRoutes(app);
 setupFeatureCatalogRoutes(app);
 setupFeatureStoreRoutes(app, express);

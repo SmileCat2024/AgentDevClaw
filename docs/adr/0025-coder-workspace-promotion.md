@@ -20,14 +20,14 @@
 - **APP 是 OS 的应用单元**：侧栏条目、可寻址（HTTP/CLI/ACP）、可拔插（验收约束沿用 ADR-0024 §5）、可声明呈现策略。
 - **agent 是 APP 内对话实体**：持有装配（提示词、工具集、运行时类）与名字。本 ADR 落地后所有 APP 均为单 agent；APP 内多 agent 是模型允许、本 ADR 不实现的未来工程。agent 不产生侧栏入口、不参与会话寻址分支——身份投影不会借这层还魂。
 - **智能编码空间**（主 APP，`programming-helper`）：内含编程小助手 agent。APP 名与 agent 名两层保留，各司其职。
-- **Coder**（后台型 APP，新建 `prebuilt-agents/official/coder/`）：内含 coder agent（`coder-agent.js` 迁回）。与主 APP 在侧栏**平行**；声明 `host: programming-helper` 关联——表达同域绑定，落点为侧栏排序相邻 + 宿主首页入口 block。host 是 APP 级元数据与呈现属性，不是身份机制，不产生嵌套层级。
+- **Coder**（后台型 APP，新建 `prebuilt-agents/official/coder/`）：内含 coder agent（`coder-agent.js` 迁回）。与主 APP 在侧栏**平行**；声明 `host: programming-helper` 关联——表达同域绑定，落点为侧栏排序相邻（hosted APP 跟随宿主分组，如 Coder 紧随智能编码空间同在工具与效率组）。host 是 APP 级元数据与呈现属性，不是身份机制，不产生嵌套层级。
 - 本 ADR 是 2026-08-24 合并的定向回摆：保留其产品面决策，替换其建模面决策。
 
 ### 2. 侧栏呈现：可见性声明 + 判定源禁令
 
-- APP metadata 声明呈现策略：`persistent`（常驻）或 `on-demand`（有内容才显示）。智能编码空间、Agent Studio、IM 渠道、工作群为 persistent；Coder 为 on-demand。
-- on-demand 的**判定源只能是持久内容事实**：Coder 的条件是线程域非空（存在至少一条线程，含已归档）。首次派遣创建线程后条目出现，此后**粘性**——线程域再次清空条目也不消失（归档区入口不能随归档动作消失），直至用户清空数据或修改声明。
-- **判定源禁令（本 ADR 的核心护栏）**：侧栏条目的存在性，判定源只能是指定声明或持久数据事实；**禁止以 runtime 存活、运行中等易变运行态为判定源**。8 月方案的全部灾难源于违反此条；禁令直接封死撑存条目一类的生存空间。
+- APP metadata 声明呈现策略默认值：`persistent`（常驻）或 `on-demand`（有会话运行才显示）。智能编码空间、Agent Studio、IM 渠道、工作群为 persistent；Coder 为 on-demand。工作空间作者经 metadata 声明自己工作空间的默认策略，代码不写死任何 APP 专属判断。
+- on-demand 的生效策略由服务端合流（工作空间设置）：作者默认（auto / always）+ 用户覆盖（设置 → 工作空间，服务端存储跨浏览器一致）。`auto` 的**判定源只能是"有运行中的会话"**——该 APP 名下存在非终态（status !== 'closed'）且未归档的线程即显示；已结束、已归档、历史会话一律不撑显示。与"该 APP 名下有哪些会话"无关。入口消失后的找回路径是设置的「始终显示」（类比手机的应用管理），前端不保留任何粘性记忆。
+- **判定源禁令（本 ADR 的核心护栏）**：侧栏条目的存在性，判定源只能是指定声明或持久数据事实；**禁止以 runtime 存活、运行中等易变运行态为判定源**。8 月方案的全部灾难源于违反此条；禁令直接封死撑存条目一类的生存空间。合流后的 `sidebarVisible` 由 wire 下发，前端纯消费。
 - Coder 条目下完全遵循 ADR-0010 统一投影（工作空间 → 目录组 → 存活 runtime 叶子，叶子 = 运行中线程 head 会话），零特例。Coder APP 首页为全量线程列表（行 = 线程，含归档 tab），沿用现 coder-threads 视图：侧栏答"现在活着什么"，首页答"我有哪些线程"。
 
 ### 3. sessionType 身份投影语义退役
@@ -47,7 +47,7 @@
 ### 5. 数据处置：遗弃搬移，零兼容
 
 - **coder 侧全部现存数据一次性物理搬移**至带日期的遗弃目录：threads 全局库中的 coder 线程记录（2026-08 遗留的 `workspaceId=coder` 条目、合并期的 `programming-helper + identity=coder` 及无 identity 早期条目）及 boards / 归档索引连带、programming-helper 会话存储中的全部 coder 会话记录、open-sessions 相关条目。不格式转换、不删除（遗弃目录留在用户数据区，可考古、可整体还原回滚）。
-- **逻辑层零兼容分支、零老数据识别**。新 Coder 线程域从零开始：切换上线后 Coder 条目不出现，首次派遣后出现并从此粘性。
+- **逻辑层零兼容分支、零老数据识别**。新 Coder 线程域从零开始：切换上线后 Coder 条目不出现，首次派遣（线程创建）后出现。
 - **main 会话数据完全不动**，照常可用。
 - 切换时刻正在执行的 coder 派遣中断失联，需重新派遣（已接受的产品代价）。
 - 新库纪律：身份不明即报错，不猜。

@@ -95,6 +95,9 @@ window.refreshThreads = async (force = false) => {
         }
         _rebuildIndexes();
         _syncActiveThreadSubscription();
+        // 新线程事实落地后对账：视图冻结在旧 head 而线程 head 已推进（SSE
+        // 事件丢失 / 与 404 清理竞态）时原地重绑。unchanged 短路不经过这里。
+        _reconcileConversationWithThreadHead();
         // 线程签名变化（新建/推进）时失效 workspace HTML 缓存，
         // 使会话列表在下次渲染时带上最新徽标（不主动触发渲染）。
         const sig = data.threads.map((t) => `${t.threadId}:${t.headSessionId}:${t.status}`).sort().join('|');
@@ -157,6 +160,7 @@ window.openConversationTarget = async (target) => {
       threadId: thread.threadId,
       sessionId,
       runtimeId: '',
+      wasHead: true,
     };
     window.updateThreadHeaderIndicator();
     _syncActiveThreadSubscription();
@@ -195,6 +199,9 @@ window.openConversationTarget = async (target) => {
     threadId: thread?.threadId || '',
     sessionId,
     runtimeId: resolvedRuntimeId,
+    // 冻结事实：视图身份挂在 head 上才有资格进入「等待重绑」豁免（app-main
+    // 404 处理）；历史成员浏览冻结时即非 head，不占用接续窗口语义。
+    wasHead: sessionId === thread?.headSessionId,
   };
   _syncActiveThreadSubscription();
   return { ok: true, target: window.ClawThreads.activeConversation };
@@ -540,17 +547,21 @@ function _syncActiveThreadSubscription() {
     } else if (selectedThread?.agentId === selected.agentId && currentSessionBelongsToThread) {
       selected.sessionId = selectedThread.headSessionId || selected.sessionId;
       selected.runtimeId = String(currentRuntimeAgentId || selected.runtimeId || '');
+      // wasHead 是「冻结时是否 head」的事实，记账对齐不改变它——历史成员
+      // 被对齐 head 后仍不得获得接续重绑资格（对账入口以 wasHead 为锚）。
     } else {
       window.ClawThreads.activeConversation = thread ? {
         agentId: active.agentId,
         threadId: thread.threadId,
         sessionId: active.sessionId,
         runtimeId: String(currentRuntimeAgentId || ''),
+        wasHead: active.sessionId === thread.headSessionId,
       } : (active ? {
         agentId: active.agentId,
         threadId: '',
         sessionId: active.sessionId,
         runtimeId: String(currentRuntimeAgentId || ''),
+        wasHead: false,
       } : null);
     }
   } else {
@@ -559,11 +570,13 @@ function _syncActiveThreadSubscription() {
       threadId: thread.threadId,
       sessionId: active.sessionId,
       runtimeId: String(currentRuntimeAgentId || ''),
+      wasHead: active.sessionId === thread.headSessionId,
     } : (active ? {
       agentId: active.agentId,
       threadId: '',
       sessionId: active.sessionId,
       runtimeId: String(currentRuntimeAgentId || ''),
+      wasHead: false,
     } : null);
   }
   const selectedThreadId = String(window.ClawThreads.activeConversation?.threadId || '').trim();
@@ -590,6 +603,27 @@ function _syncActiveThreadSubscription() {
     const fromSessionId = String(event.payload?.fromSessionId || '').trim();
     const toSessionId = String(event.payload?.toSessionId || '').trim();
     if (!fromSessionId || !toSessionId) return;
+    // 事件只是加速信号：重绑的成立条件一律以调用时点的 threads / allAgents
+    // 权威事实为准（_rebindConversationToThreadHead 内部守卫），与轮询事实
+    // 对账共用同一实现，不存在第二条重绑路径。
+    if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
+    renderAgentList();
+    await _rebindConversationToThreadHead(threadId, fromSessionId, toSessionId);
+  });
+  _activeThreadSubscription = subscription;
+}
+
+/**
+ * 接续重绑（唯一实现）：把视图身份从 fromSessionId 原地换到 toSessionId 的
+ * head runtime。调用方（SSE head-advanced 处理器 / threads 事实对账）各自
+ * 先刷新线程事实再进入；守卫全部建立在权威数据上——线程匹配、head 对账、
+ * runtime 对账、宿主一致，任一失配静默退出（幂等，重复调用安全）。
+ */
+let _rebindInFlight = false;
+async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessionId) {
+  if (_rebindInFlight) return;
+  _rebindInFlight = true;
+  try {
     const current = _currentActiveSession();
     const selectedConversation = window.ClawThreads.activeConversation;
     const ownerAgentId = String(selectedConversation?.agentId || '').trim();
@@ -603,10 +637,6 @@ function _syncActiveThreadSubscription() {
     const userStillOnThread = selectedConversation?.threadId === threadId
       && (!ownerAgentId || current?.agentId === ownerAgentId)
       && (!runtimeStateHeld || current?.sessionId === fromSessionId);
-    // 线程事实先刷新并重渲侧栏：successor 锚定收敛与交接虚条目回收依赖
-    // threads 快照推进，与用户选中状态无关。
-    if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
-    renderAgentList();
     const nextThread = window.getThreadById(threadId);
     if (!userStillOnThread || nextThread?.headSessionId !== toSessionId) {
       return;
@@ -643,6 +673,7 @@ function _syncActiveThreadSubscription() {
       threadId,
       sessionId: toSessionId,
       runtimeId: nextRuntimeId,
+      wasHead: true,
     };
     // 线程会话归属线程宿主 APP（如 coder）：侧栏高亮同步切到该 APP。
     focusedAgentId = ownerAgentId;
@@ -656,8 +687,39 @@ function _syncActiveThreadSubscription() {
     loadAgentData(nextRuntimeId).catch((error) => console.warn('[threads] successor view rebind failed:', error));
     if (typeof window.refreshThreads === 'function') window.refreshThreads(true).catch(() => {});
     _syncActiveThreadSubscription();
-  });
-  _activeThreadSubscription = subscription;
+  } finally {
+    _rebindInFlight = false;
+  }
+}
+
+/**
+ * 事实对账（ADR-0024 接续零感知）：SSE head-advanced 只是加速信号，事件
+ * 丢失（断连 / 后台标签）时 threads 轮询拉到 head 已推进的快照即是重绑的
+ * 正当时刻。视图冻结在本线程旧 head（wasHead）且线程 head 已换代 → 经
+ * _rebindConversationToThreadHead 唯一实现原地换绑。挂在 refreshThreads
+ * 收尾：404 豁免块的强刷、20s 周期轮询、事件处理器的事实刷新都会经过
+ * 这里，无需独立触发器。
+ *
+ * 差值锚点：runtime viewer 绑定是「视图正在显示的会话」真相（记账
+ * sessionId 会被 _syncActiveThreadSubscription 的跟随分支对齐 head，不能
+ * 作信号）；runtime 态被 404 清空的退役窗口用冻结值（此时无人改写它）。
+ */
+function _reconcileConversationWithThreadHead() {
+  const selected = window.ClawThreads.activeConversation;
+  if (!selected?.threadId || selected.wasHead !== true) return;
+  const thread = window.getThreadById(selected.threadId);
+  if (!thread || thread.status === 'closed') return;
+  const headSessionId = String(thread.headSessionId || '').trim();
+  if (!headSessionId) return;
+  const runtimeId = String(currentRuntimeAgentId || '').trim();
+  const boundSessionId = runtimeId && typeof getRuntimeWorkspaceSessionId === 'function'
+    ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
+    : '';
+  const viewedSessionId = boundSessionId || String(selected.sessionId || '').trim();
+  if (!viewedSessionId || headSessionId === viewedSessionId) return;
+  if (!(thread.sessionIds || []).includes(viewedSessionId)) return;
+  void _rebindConversationToThreadHead(selected.threadId, viewedSessionId, headSessionId)
+    .catch((error) => console.warn('[threads] head reconciliation rebind failed:', error));
 }
 
 // ── 启动（周期刷新；非线程宿主的服务端列表恒空，开销可忽略）──────

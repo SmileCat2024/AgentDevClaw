@@ -112,6 +112,182 @@ describe('runtime-status: coder live session projection', () => {
   });
 });
 
+/**
+ * 侧栏接续占位状态矩阵（ADR-0024 零感知北极星 / ADR-0025 线程域）。
+ *
+ * 帧输入 = (threads 快照: headSessionId / handoffStartedAt / headRuntimeRunning,
+ * allAgents 快照, 页面缓存 _coderThreadLiveEntries)。输出 = 该线程的侧栏呈现。
+ * 服务端接续时序保证（rotation 链）：
+ *   S0 稳态 → S1 挡板立起（旧 runtime 仍在）→ S2 退役窗口（旧死、无 successor）
+ *   → S3 successor READY 未 commit（viewer 已绑 to，sessionChain 未含 to）
+ *   → S4 advanceHead（挡板清、head=to、successor 进 getConnectedAgents）
+ *   → S4' 快照错位（threads 已新、allAgents 尚旧）→ S5 稳态新代。
+ * READY 门禁保证 advanceHead 时 successor 必已注册 viewer，故 headRuntimeRunning
+ * 是区分「快照错位」（true）与「闲置」（false）的服务端权威事实。
+ *
+ * 占位四道续命门（命中任一即渲染，全 false 即退场）：
+ *   门1 挡板新鲜（5min TTL）｜门2 手动 sidebar operation｜门3 看板活跃
+ *   （executing / pending-commands）｜门4 head 无叶子且 headRuntimeRunning=true。
+ * 无空窗：S2/S3 走门1，S4' 走门4，S4/S5 有 head 叶子。
+ * 无幽灵：闲置与「successor READY 后死亡」四门全 false，正确退场。
+ */
+describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar continuity)', () => {
+  const initThreads = (ctx) => { ctx.window.ClawThreads = { threads: [], sessionIndex: {} }; };
+  const HOST = `{ id: 'coder', agentId: 'coder', source: 'prebuilt', workspace_sessions: { sessions: [] } }`;
+  const child = (sessionId, runtimeId) => `({
+    id: '${runtimeId}', source: 'child', parent_id: 'coder', sidebar_entry_id: 'coder',
+    runtime_session_id: '${runtimeId}', active_workspace_session_id: '${sessionId}',
+    active_workspace_display_name: '${sessionId}-title', connected: true,
+    created_at: '2026-10-10T09:00:00.000Z',
+  })`;
+
+  it('keeps exactly one thread entry across the full auto-rotation frame sequence S0→S5 (no flicker, no gap, no duplicate)', () => {
+    const ctx = loadRuntimeStatus();
+    initThreads(ctx);
+    const frames = ctx.run(`(() => {
+      const host = ${HOST};
+      const fresh = Date.now();
+      const setThread = (head, barrier, running, sessionIds) => {
+        window.ClawThreads.threads = [{
+          threadId: 'wt-1', agentId: 'coder', title: '工作对话',
+          headSessionId: head, headSessionTitle: head + '标题', sessionIds,
+          status: 'open', lifeState: 'idle',
+          handoffStartedAt: barrier, headRuntimeRunning: running,
+        }];
+      };
+      const collect = (agents) => collectRuntimeEntriesForPrebuilt(host, agents)
+        .filter((entry) => entry.threadId === 'wt-1');
+      const out = {};
+      // S0 稳态：from 叶子
+      setThread('from', 0, true, ['from']);
+      out.S0 = collect([${child('from', 'old-runtime')}]);
+      // S1 挡板立起：head 判定不变，仍是 from 叶子
+      setThread('from', fresh, true, ['from']);
+      out.S1 = collect([${child('from', 'old-runtime')}]);
+      // S2 退役窗口：旧 runtime 死、无 successor——缓存条目占位（门1）
+      setThread('from', fresh, false, ['from']);
+      out.S2 = collect([]);
+      // S3 successor READY 未 commit：to runtime 锚定失败归并、非 head 过滤
+      // ——同线程不得双条目，占位兜底（门1）
+      setThread('from', fresh, false, ['from']);
+      out.S3 = collect([${child('to', 'new-runtime')}]);
+      // S4 advanceHead 落定：to 进 sessionChain，successor 成为 head 叶子
+      setThread('to', 0, true, ['from', 'to']);
+      out.S4 = collect([${child('to', 'new-runtime')}]);
+      // S4' 快照错位：threads 已新、allAgents 尚旧——门4 占位
+      setThread('to', 0, true, ['from', 'to']);
+      out.S4x = collect([]);
+      // S5 稳态新代：to 叶子
+      setThread('to', 0, true, ['from', 'to']);
+      out.S5 = collect([${child('to', 'new-runtime')}]);
+      return out;
+    })()`);
+    for (const key of ['S0', 'S1', 'S2', 'S3', 'S4', 'S4x', 'S5']) {
+      assert.equal(frames[key].length, 1, `frame ${key} must present exactly one wt-1 entry`);
+      assert.equal(frames[key][0].threadId, 'wt-1');
+    }
+    assert.equal(frames.S0[0].runtimeId, 'old-runtime');
+    assert.equal(frames.S1[0].runtimeId, 'old-runtime');
+    assert.equal(frames.S2[0].status, 'disconnected');
+    assert.equal(frames.S2[0].transitionPending, true);
+    assert.equal(frames.S3[0].status, 'disconnected');
+    assert.equal(frames.S4[0].runtimeId, 'new-runtime');
+    assert.equal(frames.S4x[0].status, 'disconnected');
+    assert.equal(frames.S5[0].runtimeId, 'new-runtime');
+  });
+
+  it('synthesizes a relay placeholder from thread wire facts when the page cache is empty (mid-relay refresh)', () => {
+    const ctx = loadRuntimeStatus();
+    initThreads(ctx);
+    const frames = ctx.run(`(() => {
+      const host = ${HOST};
+      const fresh = Date.now();
+      const setThread = (head, barrier, running, sessionIds) => {
+        window.ClawThreads.threads = [{
+          threadId: 'wt-1', agentId: 'coder', title: '工作对话',
+          headSessionId: head, headSessionTitle: head + '标题', sessionIds,
+          status: 'open', lifeState: 'idle',
+          handoffStartedAt: barrier, headRuntimeRunning: running,
+        }];
+      };
+      const collect = () => collectRuntimeEntriesForPrebuilt(host, [])
+        .filter((entry) => entry.threadId === 'wt-1');
+      const out = {};
+      // 接续中途刷新：缓存空（无页面记忆），S2 退役窗口仅凭挡板事实合成。
+      _coderThreadLiveEntries.clear();
+      setThread('from', fresh, false, ['from']);
+      out.refreshedS2 = collect();
+      // 刷新落在快照错位窗口：缓存空，门4（headRunning=true 且 head 无叶子）合成。
+      _coderThreadLiveEntries.clear();
+      setThread('to', 0, true, ['from', 'to']);
+      out.refreshedS4x = collect();
+      return out;
+    })()`);
+    assert.equal(frames.refreshedS2.length, 1);
+    assert.equal(frames.refreshedS2[0].runtimeId, 'thread:wt-1');
+    assert.equal(frames.refreshedS2[0].sessionId, 'from');
+    assert.equal(frames.refreshedS2[0].name, 'from标题');
+    assert.equal(frames.refreshedS2[0].contextMenuEnabled, false);
+    assert.equal(frames.refreshedS4x.length, 1);
+    assert.equal(frames.refreshedS4x[0].runtimeId, 'thread:wt-1');
+    assert.equal(frames.refreshedS4x[0].sessionId, 'to');
+  });
+
+  it('retires the entry when the successor dies after commit (no ghost) and stays hidden for idle threads', () => {
+    const ctx = loadRuntimeStatus();
+    initThreads(ctx);
+    const frames = ctx.run(`(() => {
+      const host = ${HOST};
+      const fresh = Date.now();
+      const setThread = (head, barrier, running) => {
+        window.ClawThreads.threads = [{
+          threadId: 'wt-1', agentId: 'coder', title: '工作对话',
+          headSessionId: head, headSessionTitle: head + '标题', sessionIds: ['from', 'to'],
+          status: 'open', lifeState: 'idle',
+          handoffStartedAt: barrier, headRuntimeRunning: running,
+        }];
+      };
+      const collect = () => collectRuntimeEntriesForPrebuilt(host, [])
+        .filter((entry) => entry.threadId === 'wt-1');
+      const out = {};
+      // 先经 S2 建立缓存（条目停在 from），再模拟 successor READY 后死亡：
+      // 挡板已清、head=to、headRuntimeRunning=false、看板 idle——四门全 false。
+      setThread('from', fresh, false);
+      collect();
+      setThread('to', 0, false);
+      out.successorDead = collect();
+      // 后续帧持续为空（缓存已回收，无幽灵滞留）。
+      out.stillEmpty = collect();
+      // 闲置线程（head 未换代、无挡板、runtime 不在）同样不渲染。
+      setThread('from', 0, false);
+      out.idle = collect();
+      return out;
+    })()`);
+    assert.equal(frames.successorDead.length, 0);
+    assert.equal(frames.stillEmpty.length, 0);
+    assert.equal(frames.idle.length, 0);
+  });
+
+  it('keeps the placeholder while the thread board reports executing even without barrier or head runtime', () => {
+    const ctx = loadRuntimeStatus();
+    initThreads(ctx);
+    const frames = ctx.run(`(() => {
+      const host = ${HOST};
+      window.ClawThreads.threads = [{
+        threadId: 'wt-1', agentId: 'coder', title: '工作对话',
+        headSessionId: 'from', headSessionTitle: 'from标题', sessionIds: ['from'],
+        status: 'open', lifeState: 'executing',
+        handoffStartedAt: 0, headRuntimeRunning: false,
+      }];
+      _coderThreadLiveEntries.clear();
+      return collectRuntimeEntriesForPrebuilt(host, []).filter((entry) => entry.threadId === 'wt-1');
+    })()`);
+    // 门3：看板 executing 的线程 head 无叶子，占位兜底（无缓存则合成）。
+    assert.equal(frames.length, 1);
+    assert.equal(frames[0].status, 'disconnected');
+  });
+});
+
 describe('runtime-status: sidebar identity ownership', () => {
   it('routes a coder child runtime to the coder APP row via sidebar_entry_id, not the PH host row', () => {
     const ctx = loadRuntimeStatus();

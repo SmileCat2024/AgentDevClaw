@@ -13,6 +13,7 @@ import {
   sliceSessionsForWire,
 } from './session-helpers-pure.js';
 import { getThreadControl } from '../thread-control/thread-controller.js';
+import { readWorkspaceVisibilityOverrides } from './workspace-settings.js';
 
 // ── Connected Agents Query ───────────────────────────────────────
 // Pure query logic: assembles the full connected-agents list from
@@ -26,8 +27,9 @@ import { getThreadControl } from '../thread-control/thread-controller.js';
 //
 // 身份模型（ADR-0025）：条目 = APP（工作空间），无并列身份投影。prebuilt
 // 条目携带 metadata 声明的 visibility（persistent / on-demand）与 host
-// 关联；on-demand 的存在性判定源是持久事实（线程域非空），运行态只产生
-// 徽标，绝不产生条目出现/消失。
+// 关联；on-demand 的存在性由服务端合流（作者默认 + 用户覆盖 + 有无运行中
+// 的会话）以 sidebarVisible 下发，前端纯消费，运行态只产生徽标，绝不产生
+// 条目出现/消失。
 const CONNECTED_PAGE_LIMIT = 60;
 
 export function buildWireSessionsSnapshot(agentId, workspaceSessions) {
@@ -83,17 +85,29 @@ export function createConnectedAgentsQuery(deps) {
     readViewerJson,
     getPendingInputCount,
     resolveAgentModelPresets,
+    // 测试缝：用户覆盖读取器（默认读用户数据根 workspace-settings.json）
+    readVisibilityOverrides = readWorkspaceVisibilityOverrides,
+    // 测试缝：线程控制面（默认单例）
+    resolveThreadControl = getThreadControl,
   } = deps;
 
-  // on-demand APP 的存在性判定源（ADR-0025 判定源禁令）：线程域非空 =
-  // 线程索引中存在该 APP 的存活线程记录（含 closed 未归档；归档后的
-  // 持续显示由前端粘性记忆承担）。只读持久事实，不看 runtime 存活。
-  let _threadControl = null;
-  async function hasThreadDomain(agentId) {
+  // on-demand APP 的存在性判定源（ADR-0025 判定源禁令）：有运行中的会话 =
+  // 线程索引中存在该 APP 的非终态（status !== 'closed'）且未归档的线程。
+  // 与该 APP 名下有哪些历史/已结束/已归档会话完全无关；已结束会话不撑
+  // 显示（入口消失后的找回路径是工作空间设置的「始终显示」覆盖）。只读
+  // 持久事实，不看 runtime 存活。
+  async function hasRunningSessions(agentId) {
     try {
-      _threadControl = _threadControl || getThreadControl();
-      const summaries = await _threadControl.core.listThreads();
-      return summaries.some((summary) => String(summary?.workspaceId || '').trim() === agentId);
+      const control = resolveThreadControl();
+      const [summaries, archiveEntries] = await Promise.all([
+        control.core.listThreads(),
+        control.archive.list().catch(() => ({})),
+      ]);
+      return summaries.some((summary) => (
+        String(summary?.workspaceId || '').trim() === agentId
+        && summary?.status !== 'closed'
+        && !archiveEntries[summary?.threadId]
+      ));
     } catch {
       return false;
     }
@@ -141,8 +155,19 @@ export function createConnectedAgentsQuery(deps) {
         // host 是与宿主 APP 的关联绑定（排序相邻 / 宿主首页入口）。
         visibility,
         host: agent.host || null,
-        // on-demand 判定事实：线程域非空（持久事实，非运行态）。
-        ...(visibility === 'on-demand' ? { hasThreadDomain: await hasThreadDomain(agent.id) } : {}),
+        // on-demand 存在性（服务端合流，前端纯消费）：作者声明默认 +
+        // 用户覆盖（workspace-settings）合流出 visibilityPolicy；auto =
+        // 有运行中的会话才显示。sidebarVisible 是最终判定结果。
+        ...(visibility === 'on-demand' ? await (async () => {
+          const overrides = await readVisibilityOverrides();
+          const visibilityPolicy = overrides[agent.id] === 'always' ? 'always' : 'auto';
+          const running = await hasRunningSessions(agent.id);
+          return {
+            visibilityPolicy,
+            hasRunningSessions: running,
+            sidebarVisible: visibilityPolicy === 'always' || running,
+          };
+        })() : {}),
         workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agent.id))
           ? await buildPhProjectScopedSnapshot(agent.id, workspaceSessions)
           : buildWireSessionsSnapshot(agent.id, workspaceSessions),

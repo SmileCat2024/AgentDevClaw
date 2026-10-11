@@ -69,7 +69,25 @@ function ctxSessionOpsAllowed(ns) {
   return true;
 }
 
-function getCtxMenuItems(role, ns, variant, id, sessionId = '') {
+function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
+  // 线程宿主（coder 等）的侧栏线程叶子：线程语义菜单（与线程视图行动作
+  // 同源——coder-threads-ui）。生命周期动作按 lifeState 置灰：中断只在
+  // 执行/待投递时可用，归档与之互斥（服务端 thread_busy 拒绝）。
+  if (role === 'runtime' && threadId) {
+    const thread = typeof window.getThreadById === 'function' ? window.getThreadById(threadId) : null;
+    if (thread) {
+      const isZh = currentLanguage === 'zh';
+      const busy = thread.lifeState === 'executing' || thread.lifeState === 'pending-commands';
+      return [
+        { label: isZh ? '复制 Thread ID' : 'Copy Thread ID', action: 'copy-thread-id' },
+        { type: 'separator' },
+        { label: isZh ? '中断线程' : 'Interrupt Thread', action: 'thread-interrupt', disabled: !busy },
+        { label: isZh ? '归档线程' : 'Archive Thread', action: 'thread-archive', disabled: busy },
+        { type: 'separator' },
+        { label: isZh ? '删除线程' : 'Delete Thread', action: 'thread-delete', danger: true },
+      ];
+    }
+  }
   if (role === 'runtime' && ctxSessionOpsAllowed(ns)) {
     // 侧栏 runtime 叶子：优先按条目携带的 sessionId 解析目标会话（多个
     // runtime 并存时 activeSessionId 未必指向被右键的会话）。
@@ -544,15 +562,24 @@ async function ctxCopySessionId(target) {
   const sid = String(sessionId || id || '').trim();
   if (!sid) return;
   const isZh = currentLanguage === 'zh';
+  await _copyTextWithToast(sid, {
+    okTitle: isZh ? '会话 ID 已复制' : 'Session ID copied',
+    failTitle: isZh ? '复制会话 ID 失败' : 'Failed to copy session ID',
+  });
+}
+
+/** 剪贴板写入 + 结果 toast（secure clipboard 优先，非安全上下文降级 execCommand） */
+async function _copyTextWithToast(text, { okTitle, failTitle }) {
+  const isZh = currentLanguage === 'zh';
   let ok = false;
   if (typeof navigator !== 'undefined' && navigator.clipboard && window.isSecureContext) {
-    try { await navigator.clipboard.writeText(sid); ok = true; } catch { ok = false; }
+    try { await navigator.clipboard.writeText(text); ok = true; } catch { ok = false; }
   }
   if (!ok) {
     // Fallback for non-secure contexts (e.g. accessing the UI via a LAN IP)
     try {
       const ta = document.createElement('textarea');
-      ta.value = sid;
+      ta.value = text;
       ta.setAttribute('readonly', '');
       ta.style.position = 'fixed';
       ta.style.opacity = '0';
@@ -563,11 +590,30 @@ async function ctxCopySessionId(target) {
     } catch { ok = false; }
   }
   ClawToast.show({
-    id: 'ctx-copy-session-id',
+    id: 'ctx-copy-id',
     status: ok ? 'success' : 'error',
-    title: ok ? (isZh ? '会话 ID 已复制' : 'Session ID copied') : (isZh ? '复制会话 ID 失败' : 'Failed to copy session ID'),
-    description: ok ? sid : undefined,
+    title: ok ? okTitle : failTitle,
+    description: ok ? text : undefined,
   });
+}
+
+/** 线程生命周期动作（侧栏右键 → 与 coder-threads-ui 行动作同一组端点） */
+async function ctxThreadRequest(threadId, path) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.message || payload.error || `Request failed (${response.status})`);
+  }
+  return payload;
+}
+
+async function afterThreadMutation() {
+  if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
+  if (typeof renderAgentList === 'function') renderAgentList();
 }
 
 function ctxRenameSession(target) {
@@ -812,7 +858,7 @@ async function ctxTodoSession(target, explicit = {}) {
 
 function dispatchCtxAction(action, target) {
   if (!action || !target) return;
-  const { ns, id, sessionId, variant } = target;
+  const { ns, id, sessionId, variant, threadId } = target;
   // For session role, sessionId may not be set — fall back to id
   const sid = sessionId || id;
 
@@ -914,6 +960,79 @@ function dispatchCtxAction(action, target) {
       window.closeCtxMenu();
       ctxCopySessionId(target);
       break;
+
+    // ── 线程宿主叶子（coder 等）：线程语义动作 ──
+    case 'copy-thread-id': {
+      window.closeCtxMenu();
+      const tid = String(threadId || '').trim();
+      if (!tid) break;
+      const isZh = currentLanguage === 'zh';
+      _copyTextWithToast(tid, {
+        okTitle: isZh ? 'Thread ID 已复制' : 'Thread ID copied',
+        failTitle: isZh ? '复制 Thread ID 失败' : 'Failed to copy Thread ID',
+      });
+      break;
+    }
+
+    case 'thread-interrupt': {
+      window.closeCtxMenu();
+      const isZh = currentLanguage === 'zh';
+      (async () => {
+        try {
+          const thread = typeof window.getThreadById === 'function' ? window.getThreadById(threadId) : null;
+          if (!thread?.headViewerAgentId) {
+            throw new Error(isZh ? 'head 会话 runtime 未运行' : 'head runtime is not running');
+          }
+          const response = await fetch('/api/agents/' + encodeURIComponent(thread.headViewerAgentId) + '/interrupt', {
+            method: 'POST',
+            headers: { 'x-idempotency-key': newIdempotencyKey() },
+          });
+          if (!response.ok) throw new Error(isZh ? `中断请求失败 (${response.status})` : `interrupt failed (${response.status})`);
+          await afterThreadMutation();
+        } catch (error) {
+          ClawToast.error(error?.message || 'Thread interrupt failed');
+        }
+      })();
+      break;
+    }
+
+    case 'thread-archive': {
+      window.closeCtxMenu();
+      const isZh = currentLanguage === 'zh';
+      (async () => {
+        try {
+          await ctxThreadRequest(threadId, '/protoclaw/threads/' + encodeURIComponent(threadId) + '/archive');
+          ClawToast.show({
+            id: 'ctx-thread-archive-' + threadId,
+            status: 'success',
+            title: isZh ? '已归档' : 'Archived',
+            description: isZh ? '恢复（取消归档）不复活已取消的指令。' : 'Unarchive will not revive cancelled commands.',
+          });
+          await afterThreadMutation();
+        } catch (error) {
+          ClawToast.error(error?.message || 'Thread archive failed');
+        }
+      })();
+      break;
+    }
+
+    case 'thread-delete': {
+      window.closeCtxMenu();
+      const isZh = currentLanguage === 'zh';
+      const confirmed = window.confirm(isZh
+        ? '确定要删除该线程吗？其全部成员会话、交接记录与执行记录将一并删除，不可撤销。'
+        : 'Delete this thread? All member sessions, handoff and execution records will be removed. This cannot be undone.');
+      if (!confirmed) break;
+      (async () => {
+        try {
+          await ctxThreadRequest(threadId, '/protoclaw/threads/' + encodeURIComponent(threadId) + '/delete');
+          await afterThreadMutation();
+        } catch (error) {
+          ClawToast.error(error?.message || 'Thread delete failed');
+        }
+      })();
+      break;
+    }
 
     default:
       console.warn('Unknown ctx-menu action:', action, target);

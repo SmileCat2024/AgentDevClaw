@@ -117,47 +117,47 @@ function getCurrentAgentRecord() {
   return getCurrentHostAgentRecord();
 }
 
-// on-demand APP 的粘性记忆（ADR-0025）：条目因线程域非空首次出现后，
-// 线程域再次清空也不消失（归档区入口不能随归档动作消失）。记忆按
-// 浏览器持久化，用户清空数据或改声明是唯一重置途径。
-const _onDemandSeenApps = (() => {
-  try { return new Set(JSON.parse(localStorage.getItem('claw:onDemandAppsSeen') || '[]')); } catch { return new Set(); }
-})();
-
 /**
- * APP 侧栏存在性判定（ADR-0025 判定源禁令）：persistent 直显；
- * on-demand 的判定源只能是持久事实——服务端 hasThreadDomain（线程域
- * 非空）或本机粘性记忆。runtime 存活等易变运行态永不参与存在性判定。
+ * APP 侧栏存在性判定（ADR-0025 判定源禁令）：判定在服务端合流完成
+ * （作者声明默认 + 用户覆盖（工作空间设置）+ 有无运行中的会话），wire 以
+ * sidebarVisible 下发，前端纯消费。persistent 直显。本机不保留任何粘性
+ * 记忆：入口消失后的找回路径是设置 → 工作空间的「始终显示」。
  */
 function isPrebuiltAppVisible(agent) {
   if (agent.visibility !== 'on-demand') return true;
-  if (agent.hasThreadDomain === true) {
-    if (!_onDemandSeenApps.has(agent.id)) {
-      _onDemandSeenApps.add(agent.id);
-      try { localStorage.setItem('claw:onDemandAppsSeen', JSON.stringify([..._onDemandSeenApps])); } catch { /* ignore */ }
-    }
-    return true;
-  }
-  return _onDemandSeenApps.has(agent.id);
+  return agent.sidebarVisible === true;
 }
 
 /**
  * host 相邻排序（ADR-0025）：声明 host 的 APP 紧随其宿主之后（如 Coder
  * 紧随智能编码空间），表达同域绑定。宿主缺席或自身已隐藏时保持原序。
+ * hosted 先于宿主出现在列表时（如字母序 coder < programming-helper 的
+ * wire 顺序）必须等宿主落位再挂，不得按输入顺序直出。
  */
 function orderPrebuiltByHost(list) {
   const result = [];
   const taken = new Set();
+  const idsInList = new Set(list.map((agent) => String(agent.id || '').trim()).filter(Boolean));
   for (const agent of list) {
     if (taken.has(agent.id)) continue;
+    const hostId = String(agent.host || '').trim();
+    // 宿主在本列表且尚未处理：让宿主先落位（本条随后由宿主的内层挂载）
+    if (hostId && hostId !== String(agent.id || '').trim() && idsInList.has(hostId) && !taken.has(hostId)) continue;
     result.push(agent);
     taken.add(agent.id);
     for (const hosted of list) {
       if (taken.has(hosted.id)) continue;
-      if (String(hosted.host || '').trim() !== agent.id) continue;
+      if (String(hosted.host || '').trim() !== String(agent.id || '').trim()) continue;
       result.push(hosted);
       taken.add(hosted.id);
     }
+  }
+  // 兜底回补：host 链成环（互为宿主）或宿主自身被隐藏时，跳过的条目按
+  // 原序直出，绝不丢弃。
+  for (const agent of list) {
+    if (taken.has(agent.id)) continue;
+    result.push(agent);
+    taken.add(agent.id);
   }
   return result;
 }
@@ -180,18 +180,31 @@ function groupConnectedAgents(agents) {
   const allPrebuilt = orderPrebuiltByHost(
     agents.filter((agent) => agent.source === 'prebuilt' && isPrebuiltAppVisible(agent))
   );
-  const groupKeyOf = (agent) => String(agent.sidebarGroup || '').trim();
-  const idKeyOf = (agent) => String(agent.id || '').trim();
+  const prebuiltById = new Map(allPrebuilt.map((agent) => [String(agent.id || '').trim(), agent]));
+  // 分组解析：自身声明优先，hosted APP（ADR-0025）跟随宿主分组——「紧随
+  // 宿主」的相邻排序必须落在同一分组内才有意义（如 coder 紧随智能编码
+  // 空间，同在工具与效率组）；host 链沿 parent 追溯并防环。
+  const groupKeyOf = (agent, seen = null) => {
+    const group = String(agent.sidebarGroup || '').trim();
+    if (group) return group;
+    const idKey = String(agent.id || '').trim();
+    if (TOOL_AGENT_IDS.has(idKey)) return 'tool';
+    if (WORK_GROUP_IDS.has(idKey)) return 'work-group';
+    const hostId = String(agent.host || '').trim();
+    const host = hostId && prebuiltById.has(hostId) ? prebuiltById.get(hostId) : null;
+    if (!host || host === agent) return '';
+    const nextSeen = seen || new Set([idKey]);
+    if (nextSeen.has(hostId)) return '';
+    nextSeen.add(hostId);
+    return groupKeyOf(host, nextSeen);
+  };
   return {
     prebuilt: allPrebuilt.filter((agent) => {
       const group = groupKeyOf(agent);
-      const idKey = idKeyOf(agent);
-      return !['tool', 'work-group'].includes(group)
-        && !TOOL_AGENT_IDS.has(idKey)
-        && !WORK_GROUP_IDS.has(idKey);
+      return group !== 'tool' && group !== 'work-group';
     }),
-    workGroup: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'work-group' || WORK_GROUP_IDS.has(idKeyOf(agent))),
-    tool: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'tool' || TOOL_AGENT_IDS.has(idKeyOf(agent))),
+    workGroup: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'work-group'),
+    tool: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'tool'),
     external: orphanRuntimeAgents,
   };
 }
@@ -667,12 +680,17 @@ window.switchAgent = async (newAgentId) => {
         // 只认运行时 ID。无运行时（未启动/降级）保持原 ID，让请求显式失败。
         ? (window.RemoteConnections?.resolveRuntimeRef?.(newAgentId) || newAgentId)
         : newAgentId));
-  if (!runtimeAgentId) return;
+  // workspace surface 宿主分支必须先于 runtimeAgentId 守卫：on-demand 宿主
+  // （如 coder）无 runtime 是常态而非异常，switchAgent('coder') 应进入其
+  // 工作空间首页（线程视图），而不是在守卫处静默返回（历史 bug：接续窗口
+  // 点击侧栏虚线条目 → openConversationTarget 等待分支调 switchAgent(host)
+  // 被吞，切出去后点不回来）。
   if (isWorkspaceSurfaceUnit(targetAgent) && !requestedRuntimeOfWorkspaceHost) {
     if (targetAgent?.id === focusedAgentId && !currentRuntimeAgentId) return;
     selectWorkspaceSurface(targetAgent.id);
     return;
   }
+  if (!runtimeAgentId) return;
   if (targetAgent?.id === focusedAgentId && runtimeAgentId === currentRuntimeAgentId) return;
   _storeVisibleSessionInputDraft();
   if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
@@ -1033,6 +1051,25 @@ async function handleCoreResponsesNotFound(pollToken) {
       handoffThread = lookupThread();
     }
     if (isFreshBarrier(handoffThread)) {
+      schedulePoll(POLL_FAST_INTERVAL_MS);
+      return true;
+    }
+    // 等待重绑窗口（ADR-0024 接续零感知）：advanceHead 原子清挡板，但视图
+    // 重绑要等 threads 事实对账 / head-advanced 事件处理器完成网络往返才
+    // 落定。此间隙的 poll 404 若落回原生清理，会把 currentRuntimeAgentId /
+    // focusedAgentId 清空，重绑守卫的 host 解析随之失败，重绑静默中断——
+    // 视图「断掉」直到用户手点新会话（历史事故：接续直接断掉、啥也没有）。
+    // 事实锚：视图身份冻结在本线程且冻结时是 head（wasHead），此后 head 被
+    // successor 接管——精确覆盖接续用户；历史成员浏览（wasHead=false）、
+    // 终态线程、head 未换代均不在此列，保持原 404 语义。此处纯保持不动：
+    // 重绑由上方强刷的 threads 事实对账驱动（thread-store 唯一实现）。
+    const frozen = window.ClawThreads?.activeConversation || null;
+    if (handoffThread && frozen && handoffThread.status !== 'closed' && runtimeSessionId
+      && String(handoffThread.threadId || '') !== ''
+      && String(handoffThread.headSessionId || '') !== runtimeSessionId
+      && frozen.threadId === handoffThread.threadId
+      && String(frozen.sessionId || '') === runtimeSessionId
+      && frozen.wasHead === true) {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return true;
     }

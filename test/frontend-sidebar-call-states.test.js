@@ -328,3 +328,70 @@ describe('applyCallStateToAgentRecords: 记录写入', () => {
     assert.equal(second, false, '值不变返回 false');
   });
 });
+
+/**
+ * 侧栏接续占位的重渲触发（ADR-0024 侧栏连续性的签名半边）：
+ * 交接占位条目的出现/退场依赖 renderAgentList 的签名比较放行。接续窗口的
+ * 关键翻转——挡板立/清（handoffStartedAt）与 head runtime 存活
+ * （headRuntimeRunning）——必须进签名，否则 SSE 丢失时 20s 轮询拉到新
+ * threads 快照也因签名不变提前返回，占位该出现不出现、该退场不退场。
+ */
+describe('getAgentListRenderSignature: 接续窗口事实进签名', () => {
+  function loadSignature() {
+    const ctx = createFrontendSandbox({
+      normalizeAgentIdentity: (v) => String(v || '').trim(),
+      focusedAgentId: 'coder',
+      currentRuntimeAgentId: '',
+      getAgentRuntimeId: (agent) => agent?.runtime_session_id || agent?.runtimeSessionId || null,
+      getParentAgentId: (agent) => agent?.parent_id || null,
+      getActiveSessionId: (agent) => agent?.active_workspace_session_id || null,
+      getSidebarOperationVersion: () => 0,
+      getRemoteSidebarProjectionVersion: () => 0,
+      listSidebarOperations: () => [],
+      getVisibleRemoteEntries: () => [],
+      isRuntimeSuspended: () => false,
+      isSseActive: () => false,
+    });
+    ctx.allAgents = [];
+    ctx.window.ClawThreads = {
+      threads: [{
+        threadId: 'wt-1', headSessionId: 'from', title: '工作对话',
+        lifeState: 'idle', handoffStartedAt: 0, headRuntimeRunning: false,
+      }],
+    };
+    ctx.run(`
+      const pendingPrebuiltAgentIds = new Set();
+      const restartingRuntimeIds = new Set();
+      const _recentlyFinishedRuntimes = new Set();
+      const _agentCallActive = new Map();
+      const _agentSuspended = new Map();
+      const _interruptSuppression = new Map();
+      let lastCallStateRefreshAt = 0;
+      let _callStatesRefreshInProgress = false;
+    `);
+    ctx.run(sourceBetween(SIDEBAR_SOURCE, 'function getAgentListRenderSignature', 'function renderAgentList'));
+    return ctx;
+  }
+
+  it('threads 事实不变时签名幂等', () => {
+    const ctx = loadSignature();
+    const first = ctx.run('getAgentListRenderSignature()');
+    const second = ctx.run('getAgentListRenderSignature()');
+    assert.equal(second, first);
+  });
+
+  it('挡板立起 / head 存活翻转改变签名（占位出现与退场都能触发重渲）', () => {
+    const ctx = loadSignature();
+    const base = ctx.run('getAgentListRenderSignature()');
+    ctx.window.ClawThreads.threads[0].handoffStartedAt = Date.now();
+    const barrierUp = ctx.run('getAgentListRenderSignature()');
+    assert.notEqual(barrierUp, base, '挡板立起必须改变签名');
+    ctx.window.ClawThreads.threads[0].headRuntimeRunning = true;
+    const headRunning = ctx.run('getAgentListRenderSignature()');
+    assert.notEqual(headRunning, barrierUp, 'head 存活翻转必须改变签名');
+    ctx.window.ClawThreads.threads[0].handoffStartedAt = 0;
+    ctx.window.ClawThreads.threads[0].headRuntimeRunning = false;
+    const backToBase = ctx.run('getAgentListRenderSignature()');
+    assert.equal(backToBase, base, '事实复原后签名复原（退场同样被感知）');
+  });
+});

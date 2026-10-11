@@ -19,7 +19,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 
 ## coder_shell 用法
 
-全部调度经 `coder_shell({ command })` 完成，command 是一条管道命令字符串。可用动词（10 个）：
+全部调度经 `coder_shell({ command })` 完成，command 是一条管道命令字符串。可用动词（10 个）。`new-session` / `create` 的 agentId 参数**恒为 `coder`**——coder 是独立 APP（ADR-0025），Coder 会话直接以 `agentId=coder` 寻址创建，传其它值会被结构化拒绝：
 
 | 动词 | 语义 |
 |---|---|
@@ -42,7 +42,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 默认行为：按**最近活动倒序**取 **10 条**非终态线程（已归档/已关闭不出现，隐藏量在尾部附提示行）；每行含 threadId / lifeState / failed（异常才打印）/ status≠open（异常才打印）/ pending 指令数 / title / dir（head 会话项目目录）/ created / upd。检索语法（valued flag 一律 `=` 赋值形态，可出现在参数任意位置）：
 
 ```text
-list programming-helper                                  # 某 agent 的线程
+list coder                                  # 某 agent 的线程
 list --status=executing,pending-commands                 # 只看执行中 / 有待投递指令的
 list --dir=/home/dev/AgentDevClaw                        # 按项目目录检索（含子目录归属）
 list --title=工单025                                     # 按标题关键字检索
@@ -74,7 +74,7 @@ list -n=0                                                # 不限条数；-n=50 
 调度前先确认线程面可达：
 
 ```text
-coder_shell: list programming-helper
+coder_shell: list coder
 ```
 
 同时用文件工具确认目标仓库和工作区状态（git status / branch）。如果已有未提交改动，先按文件和时间线判断归属，不要直接清理。目标项目目录在这里一并确认（创建 coder 会话时必须显式指定该目录）。
@@ -119,10 +119,10 @@ planned
 ### 2. 创建 coder 会话并建线（标准第一步）
 
 ```text
-coder_shell command="new-session programming-helper /home/dev/AgentDevClaw '工单025 工具进度UI'"
+coder_shell command="new-session coder /home/dev/AgentDevClaw '工单025 工具进度UI'"
 ```
 
-输出两行：`sessionId=...` 与 `threadId=...`，threadId 直接用于 `send` 派发。线程列表用 `list programming-helper` 核对。
+输出两行：`sessionId=...` 与 `threadId=...`，threadId 直接用于 `send` 派发。线程列表用 `list coder` 核对。
 
 `new-session` 是标准第一步：创建会话时线程宿主工作空间会自动建线，不需要再单独 create。threadId 为 null（未自动建线）时，按报文提示用 `create` 手动建线。
 
@@ -131,10 +131,10 @@ coder_shell command="new-session programming-helper /home/dev/AgentDevClaw '工�
 `create` 仅用于给**已存在**的 Coder 会话加挂线程（例如会话已存在但线程丢失的补建场景）。给不存在的 sessionId 调 `create` 会被拒绝——先用 `new-session` 创建会话再派发。
 
 ```text
-coder_shell command="create programming-helper <session-id> '工单025 工具进度UI'"
+coder_shell command="create coder <session-id> '工单025 工具进度UI'"
 ```
 
-返回单行 `threadId=... lifeState=... status=... head=...`。标题在创建/建线时一次写入，线程标题自动跟随会话标题。线程列表用 `list programming-helper` 核对。
+返回单行 `threadId=... lifeState=... status=... head=...`。标题在创建/建线时一次写入，线程标题自动跟随会话标题。线程列表用 `list coder` 核对。
 
 ### 3. 依赖满足后发送开工指令（send 阻塞等落定）
 

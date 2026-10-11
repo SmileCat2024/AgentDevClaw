@@ -541,9 +541,11 @@ document.addEventListener('click', (event) => {
   // ── Generic ctx-menu action handling ──
   const ctxBtn = event.target.closest('#ctx-menu button.ctx-menu-item[data-ctx-action]');
   if (ctxBtn && ctxMenu.classList.contains('open')) {
-    const action = ctxBtn.dataset.ctxAction;
-    if (action && window._ctxTarget) {
-      dispatchCtxAction(action, window._ctxTarget);
+    if (!ctxBtn.classList.contains('disabled')) {
+      const action = ctxBtn.dataset.ctxAction;
+      if (action && window._ctxTarget) {
+        dispatchCtxAction(action, window._ctxTarget);
+      }
     }
     window.closeCtxMenu();
     return;

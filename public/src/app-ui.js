@@ -1180,7 +1180,6 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'hero') return renderWorkspaceHero(agent, block);
   if (block.type === 'launcher-grid') return renderWorkspaceLauncherGrid(agent, block);
   if (block.type === 'action-group') return renderWorkspaceActionGroup(block);
-  if (block.type === 'coder-entry') return renderCoderEntryBlock(agent, block);
   if (block.type === 'session-list') return renderWorkspaceSessionList(agent, block);
   if (block.type === 'studio-features') return renderStudioFeaturesBlock(agent, block);
   if (block.type === 'studio-repository') return renderStudioRepositoryBlock(agent, block);
@@ -1921,6 +1920,14 @@ document.getElementById('settings-flyout-feature-config')?.addEventListener('cli
   settingsFlyout.classList.remove('open');
   if (typeof window.phOpenGlobalFeatureConfig === 'function') {
     window.phOpenGlobalFeatureConfig();
+  }
+});
+
+document.getElementById('settings-flyout-workspace')?.addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (typeof window.closeSettings === 'function' && window.ClawFW?.settingsOpen) window.closeSettings();
+  if (typeof window.openWorkspaceSettings === 'function') {
+    window.openWorkspaceSettings();
   }
 });
 

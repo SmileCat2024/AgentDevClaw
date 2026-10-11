@@ -562,6 +562,16 @@ export function createThreadsAdapter(deps: {
       // coder APP 响应带 threadId）。
       case 'new-session': {
         const [agentId, directory, title] = rest;
+        // ADR-0025：coder 是独立 APP（agentId=coder 直接寻址）。本工具是
+        // Coder 调度域，写动词锁定 coder 域——传宿主 APP id 会把会话建进
+        // 编程小助手名下（绕过目录闸门且不自动建线），结构化拒绝。
+        if (agentId !== 'coder') {
+          throw new Error(
+            `new-session 拒绝：agentId 必须是 coder（收到 “${agentId}”）。`
+            + ' coder 是独立 APP（ADR-0025），Coder 会话直接以 agentId=coder 创建，'
+            + '不存在其它可派遣的目标 agent。用法：new-session coder <目标工作目录> [标题]',
+          );
+        }
         if (!directory) {
           throw new Error(
             `new-session 拒绝：必须显式指定目标工作目录（coder 会话不接受目录回退默认，缺省时服务端会绑定到 workspace 最近目录）。`
@@ -603,6 +613,13 @@ export function createThreadsAdapter(deps: {
       // 目标会话不在列表 = 不存在或不属于该 agent，同样拒绝。
       case 'create': {
         const [agentId, sessionId, title] = rest;
+        // 域校验同 new-session：Coder 调度域内不存在其它目标 agent。
+        if (agentId !== 'coder') {
+          throw new Error(
+            `create 拒绝：agentId 必须是 coder（收到 “${agentId}”）。`
+            + ' 用法：create coder <sessionId> [标题]',
+          );
+        }
         let sessionNote = '';
         try {
           const sessionsPayload = await clawFetch(

@@ -69,6 +69,8 @@ function createQuery({ viewerAgents = [] } = {}) {
       : {}),
     getPendingInputCount: async () => 0,
     resolveAgentModelPresets: async () => ({}),
+    // 测试隔离：不读真实用户数据目录的 workspace-settings.json
+    readVisibilityOverrides: async () => ({}),
   });
 }
 
@@ -144,8 +146,9 @@ describe('coder APP 条目在接续窗口的存续', () => {
     setManaged();
     const list = await createQuery({ viewerAgents: [] }).getConnectedAgents();
     const entry = coderAppEntry(list);
-    assert.ok(entry, 'APP 条目恒在：显示与否由前端 visibility 策略决定，服务端不下发存在性摇摆');
-    assert.ok('hasThreadDomain' in entry, 'on-demand 条目携带线程域判定事实字段');
+    assert.ok(entry, 'APP 条目恒在：显示与否由服务端合流的 sidebarVisible 决定，服务端不下发存在性摇摆');
+    assert.ok('sidebarVisible' in entry, 'on-demand 条目携带服务端合流的显示判定字段');
+    assert.equal(entry.visibilityPolicy, 'auto');
     assert.equal(coderChildEntries(list).length, 0);
   });
 

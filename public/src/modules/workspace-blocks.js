@@ -103,31 +103,10 @@ function renderWorkspaceActionGroup(block) {
 }
 
 /**
- * 宿主首页的 Coder 入口 block（ADR-0025 host 绑定的呈现落点）：卡片式
- * 入口，点击切换到 coder APP。存在性与 coder 侧栏条目同一判定源
- * （on-demand：线程域非空或粘性记忆），未出现时不渲染。
+ * 宿主首页的 Coder 入口 block 已随 coder 升格独立工作空间移除
+ * （ADR-0025 收尾）：coder 的呈现归侧栏 on-demand 条目与设置面板，
+ * 宿主首页不再重复入口。
  */
-function renderCoderEntryBlock(agent, block) {
-  const isZh = currentLanguage === 'zh';
-  const coderEntry = (typeof allAgents !== 'undefined' && Array.isArray(allAgents))
-    ? allAgents.find((item) => item?.source === 'prebuilt' && item?.id === 'coder')
-    : null;
-  if (!coderEntry) return '';
-  if (typeof isPrebuiltAppVisible === 'function' && !isPrebuiltAppVisible(coderEntry)) return '';
-  const title = localizeWorkspaceValue(block.title, 'Coder');
-  const body = localizeWorkspaceValue(block.description, '');
-  return [
-    '<section class="workspace-section coder-entry-block">',
-    '<div class="workspace-section-header">',
-    '<div>',
-    '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
-    '<div class="workspace-section-desc">' + escapeHtml(body) + '</div>',
-    '</div>',
-    '</div>',
-    '<div class="workspace-actions"><button class="workspace-action" type="button" onclick="window.handlePrebuiltAgentClick(\'coder\')">' + (isZh ? '进入 Coder' : 'Open Coder') + '</button></div>',
-    '</section>',
-  ].join('');
-}
 
 function renderWorkspaceLauncherGrid(agent, block) {
   const cards = Array.isArray(block?.cards) ? block.cards : [];

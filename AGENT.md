@@ -132,11 +132,11 @@ app-core.js 全局状态纪律：全局状态区只减不增。新增前端状�
 
 ### 编程小助手（programming-helper）★
 
-入口 `prebuilt-agents/official/programming-helper/`。用户交互式编程 Agent：Shell / Web 搜索 / MCP 完整工具链（LSP 与 Playwright 浏览器为官方可选插件，在设置里装配），会话分支、trim / compact / summary 精简、checkpoint / rollback、AI 标题、语音输入。首页提供 Coder 入口 block（跳转 coder APP 的线程视图）。
+入口 `prebuilt-agents/official/programming-helper/`。用户交互式编程 Agent：Shell / Web 搜索 / MCP 完整工具链（LSP 与 Playwright 浏览器为官方可选插件，在设置里装配），会话分支、trim / compact / summary 精简、checkpoint / rollback、AI 标题、语音输入。
 
 ### Coder（coder）★
 
-入口 `prebuilt-agents/official/coder/`（`agent.js` + `metadata.json`，`host: programming-helper` / `visibility: on-demand`）。无人值守自主编码 APP（[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)，升格自原编程小助手的 coder 身份，旧数据经服务端启动搬移模块 [server/routes/coder-identity-retirement.js](server/routes/coder-identity-retirement.js) 迁入 `workspaces/coder/`）。配置层 `workspaces/coder/feature-config/agent.json`（`readAgentLayer('coder')`）。关键行为：线程宿主（自动建 WorkThread，`workspaceId=coder`，trim / 摘要后自动接力）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），用户不能在 UI 直接创建；Web UI 左侧 coder 入口是其线程列表投影；线程归档是生命周期事务（先中断再归档，已归档拒绝新指令）。会话身份投影机制（sessionType 寻址、sidebar_entry_id 会话级身份）已退役：coder 会话直接以 `agentId=coder` 寻址。
+入口 `prebuilt-agents/official/coder/`（`agent.js` + `metadata.json`，`host: programming-helper` / `visibility: on-demand`）。无人值守自主编码 APP（[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)，升格自原编程小助手的 coder 身份，旧数据经服务端启动搬移模块 [server/routes/coder-identity-retirement.js](server/routes/coder-identity-retirement.js) 迁入 `workspaces/coder/`）。配置层 `workspaces/coder/feature-config/agent.json`（`readAgentLayer('coder')`）。关键行为：线程宿主（自动建 WorkThread，`workspaceId=coder`，trim / 摘要后自动接力）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），用户不能在 UI 直接创建；Web UI 左侧 coder 入口（紧随智能编码空间，同在工具与效率组）是其线程列表投影，on-demand 可见性由服务端合流（有运行中的会话 + 用户覆盖，设置 → 工作空间，见 [server/routes/workspace-settings.js](server/routes/workspace-settings.js)）；线程归档是生命周期事务（先中断再归档，已归档拒绝新指令）。会话身份投影机制（sessionType 寻址、sidebar_entry_id 会话级身份）已退役：coder 会话直接以 `agentId=coder` 寻址。
 
 ### Agent Studio（agent-studio）★
 

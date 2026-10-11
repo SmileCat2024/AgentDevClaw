@@ -70,7 +70,7 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
         },
       ]),
     });
-    for (const cmd of ['list', 'list programming-helper']) {
+    for (const cmd of ['list', 'list coder']) {
       const r = await runCapabilityShellPipeline(POLICY, cmd, { adapters, bashPath: null });
       assert.equal(r.ok, true, `应放行: ${cmd} → ${r.output}`);
     }
@@ -645,7 +645,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     return { fetchImpl, requests };
   }
 
-  it('契约映射：POST /protoclaw/prebuilt_sessions，body 含 sessionType=coder、openDirectory 与 title', async () => {
+  it('契约映射：POST /protoclaw/prebuilt_sessions，body 含 agentId=coder、openDirectory 与 title，无 sessionType', async () => {
     const { fetchImpl, requests } = recordingFetch([
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
@@ -655,14 +655,16 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const targetDir = tmpdir();
-    const r = await runCapabilityShellPipeline(POLICY, `new-session programming-helper ${targetDir} '工单035 标题'`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${targetDir} '工单035 标题'`, {
       adapters, bashPath: null,
     });
     assert.equal(r.ok, true, r.output);
     assert.equal(requests.length, 1, '应恰好发出一次 POST');
     const body = JSON.parse(String(requests[0].init?.body));
-    assert.equal(body.agentId, 'programming-helper');
-    assert.equal(body.sessionType, 'coder', 'body 必含 sessionType=coder（线程宿主自动建线）');
+    assert.equal(body.agentId, 'coder');
+    // ADR-0025：coder 直接以 agentId=coder 寻址，不经 sessionType 投影
+    //（服务端对 sessionType≠main 直接 400，误发即失败）
+    assert.equal(body.sessionType, undefined, 'body 不得携带 sessionType（ADR-0025 后无此字段）');
     assert.equal(body.openDirectory, targetDir, 'body 必透传显式目录（服务端禁止目录回退默认）');
     assert.equal(body.title, '工单035 标题');
     // 响应解析：threadId 在 session 对象之前，输出两行
@@ -670,22 +672,36 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     assert.ok(r.output.includes('threadId=wt-new'), r.output);
   });
 
+  it('域校验：new-session 传非 coder 的 agentId → 结构化拒绝，不发出任何请求（ADR-0025 防呆）', async () => {
+    // 旧技能示例残留形态：宿主 APP id 当派遣目标（会把会话建进编程小助手
+    // 名下，绕过目录闸门且不自动建线）——必须在本地即拒绝
+    const { fetchImpl, requests } = recordingFetch([]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const r = await runCapabilityShellPipeline(POLICY, `new-session programming-helper ${tmpdir()}`, {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, false, r.output);
+    assert.ok(r.output.includes('new-session 拒绝'), r.output);
+    assert.ok(r.output.includes('agentId 必须是 coder'), r.output);
+    assert.equal(requests.length, 0, '域校验拒绝不得发出任何 HTTP 请求');
+  });
+
   it('目录缺失 / 不存在 / 相对路径 → 本地结构化拒绝，不发出任何请求', async () => {
     const { fetchImpl, requests } = recordingFetch([]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     // 缺目录参数
-    const rMissing = await runCapabilityShellPipeline(POLICY, 'new-session programming-helper', {
+    const rMissing = await runCapabilityShellPipeline(POLICY, 'new-session coder', {
       adapters, bashPath: null,
     });
     assert.equal(rMissing.ok, false, rMissing.output);
     assert.ok(rMissing.output.includes('目标工作目录'), rMissing.output);
     // 目录不存在
-    const rGhost = await runCapabilityShellPipeline(POLICY, 'new-session programming-helper /nonexistent/dir-xyz', {
+    const rGhost = await runCapabilityShellPipeline(POLICY, 'new-session coder /nonexistent/dir-xyz', {
       adapters, bashPath: null,
     });
     assert.equal(rGhost.ok, false, rGhost.output);
     // 相对路径（存在目录但非绝对路径）
-    const rRelative = await runCapabilityShellPipeline(POLICY, `new-session programming-helper ${basename(tmpdir())}`, {
+    const rRelative = await runCapabilityShellPipeline(POLICY, `new-session coder ${basename(tmpdir())}`, {
       adapters, bashPath: null,
     });
     assert.equal(rRelative.ok, false, rRelative.output);
@@ -703,7 +719,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, `new-session programming-helper ${tmpdir()}`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
       adapters, bashPath: null,
     });
     assert.equal(r.ok, true, r.output);
@@ -717,7 +733,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     const r0 = await runCapabilityShellPipeline(POLICY, 'new-session', { adapters: {}, bashPath: null });
     assert.equal(r0.ok, false);
     assert.equal(r0.rejection?.code, 'arg_rejected');
-    assert.ok(r0.output.includes('new-session <agentId>'), r0.output);
+    assert.ok(r0.output.includes('new-session coder'), r0.output);
     // 4 个参数（超限）同样拒绝
     const r4 = await runCapabilityShellPipeline(POLICY, 'new-session a b c d', { adapters: {}, bashPath: null });
     assert.equal(r4.ok, false);
@@ -746,7 +762,7 @@ describe('coder_shell create 会话预校验（ticket 035B）', () => {
       // 会话列表：目标 sessionId 不在列表
       { match: (u) => u.includes('/protoclaw/prebuilt_sessions?agentId='), body: { sessions: [{ id: 'session-other' }] } },
     ]);
-    const r = await runCapabilityShellPipeline(POLICY, "create programming-helper session-missing '工单'", {
+    const r = await runCapabilityShellPipeline(POLICY, "create coder session-missing '工单'", {
       adapters, bashPath: null,
     });
     assert.equal(r.ok, false, r.output);
@@ -759,12 +775,23 @@ describe('coder_shell create 会话预校验（ticket 035B）', () => {
     );
   });
 
+  it('域校验：create 传非 coder 的 agentId → 结构化拒绝，不发出任何请求（ADR-0025 防呆）', async () => {
+    const { adapters, requests } = makeAdapters([]);
+    const r = await runCapabilityShellPipeline(POLICY, 'create programming-helper session-ok', {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, false, r.output);
+    assert.ok(r.output.includes('create 拒绝'), r.output);
+    assert.ok(r.output.includes('agentId 必须是 coder'), r.output);
+    assert.equal(requests.length, 0, '域校验拒绝不得发出任何 HTTP 请求');
+  });
+
   it('会话存在 → 预校验通过，正常建线', async () => {
     const { adapters, requests } = makeAdapters([
-      { match: (u) => u.includes('/protoclaw/prebuilt_sessions?agentId=programming-helper'), body: { sessions: [{ id: 'session-ok', agentId: 'programming-helper' }] } },
+      { match: (u) => u.includes('/protoclaw/prebuilt_sessions?agentId=coder'), body: { sessions: [{ id: 'session-ok', agentId: 'coder' }] } },
       { match: (u, init) => u.endsWith('/protoclaw/threads') && init?.method === 'POST', body: { thread: { threadId: 'wt-1', lifeState: 'idle', status: 'open', failed: false } } },
     ]);
-    const r = await runCapabilityShellPipeline(POLICY, 'create programming-helper session-ok', {
+    const r = await runCapabilityShellPipeline(POLICY, 'create coder session-ok', {
       adapters, bashPath: null,
     });
     assert.equal(r.ok, true, r.output);
@@ -778,7 +805,7 @@ describe('coder_shell create 会话预校验（ticket 035B）', () => {
       { match: (u) => u.includes('/protoclaw/prebuilt_sessions?'), body: { ok: false, error: 'internal error' } },
       { match: (u, init) => u.endsWith('/protoclaw/threads') && init?.method === 'POST', body: { thread: { threadId: 'wt-2', lifeState: 'idle', status: 'open', failed: false } } },
     ]);
-    const r = await runCapabilityShellPipeline(POLICY, 'create programming-helper session-ok', {
+    const r = await runCapabilityShellPipeline(POLICY, 'create coder session-ok', {
       adapters, bashPath: null,
     });
     assert.ok(r.output.includes('threadId=wt-2'), '查询失败不阻塞建线');
@@ -1028,10 +1055,10 @@ describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () =>
     const adaptersWithAgent = createThreadsAdapters({
       serverOrigin: 'http://test',
       fetchImpl: stubFetch([
-        { match: (u) => u.includes('agentId=programming-helper'), body: { threads: [thread({ threadId: 'wt-ph' })] } },
+        { match: (u) => u.includes('agentId=coder'), body: { threads: [thread({ threadId: 'wt-ph' })] } },
       ]),
     });
-    const anywhere = await runCapabilityShellPipeline(POLICY, 'list --all programming-helper', { adapters: adaptersWithAgent, bashPath: null });
+    const anywhere = await runCapabilityShellPipeline(POLICY, 'list --all coder', { adapters: adaptersWithAgent, bashPath: null });
     assert.equal(anywhere.ok, true, anywhere.output);
     assert.ok(anywhere.output.includes('wt-ph'), anywhere.output);
   });

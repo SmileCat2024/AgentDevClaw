@@ -60,19 +60,6 @@
     "home": {
       "blocks": [
         {
-          "id": "coder-entry",
-          "type": "coder-entry",
-          "visibility": "tab:sessions",
-          "title": {
-            "zh": "Coder 工作线程",
-            "en": "Coder Threads"
-          },
-          "description": {
-            "zh": "无人值守自主编码智能体：线程由调度面创建（ACP / claw threads / dispatch），在独立工作空间执行。",
-            "en": "Unattended autonomous coding agent: threads are created by the dispatch plane (ACP / claw threads / dispatch) and run in their own workspace."
-          }
-        },
-        {
           "id": "session-list",
           "type": "session-list",
           "visibility": "tab:sessions",
