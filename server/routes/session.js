@@ -100,6 +100,7 @@ export function setupSessionRoutes(app, express, ctx) {
     resolvePrebuiltSessionOwner,
     searchSessionsContent,
     setSessionHasSummary,
+    readSessionSnapshotForContinuity,
     tagPrebuiltSessionTodo,
     requireAgentLight,
     discoverAgents,
@@ -1892,6 +1893,30 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
   } catch (error) {
     attachOperationMetadata(error, requestMetadata);
     trace.mark('failed', { errorCode: error?.code || 'activate_failed' });
+    next(error);
+  }
+});
+
+// 会话消息只读出口（挡板窗口消费主场景）：activate 挡板（thread_handoff_
+// in_progress）期间两代 runtime 都不可用，前端接续等待表面从本端点读取
+// 上一棒会话文件的消息（runtime.context.messages 与 viewer /messages 同源
+// 同形——框架 Context 的活消息数组，rollback 尾部在独立 tombstones 归档，
+// 不在 messages 内），挡板期间可见上一棒完整对话。纯文件读取：不启动
+// runtime、不改 head、不写任何状态。
+app.get('/protoclaw/prebuilt_sessions/session_messages', async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.query?.agentId);
+    const sessionId = cleanSessionText(req.query?.sessionId);
+    if (!agentId || !sessionId) {
+      return res.status(400).json({ ok: false, error: 'agentId and sessionId are required' });
+    }
+    const agent = await requireAgentLight(agentId);
+    const snapshot = await readSessionSnapshotForContinuity(agent.id, sessionId);
+    const messages = Array.isArray(snapshot?.runtime?.context?.messages)
+      ? snapshot.runtime.context.messages
+      : [];
+    res.json({ ok: true, agentId: agent.id, sessionId, messages, messageCount: messages.length });
+  } catch (error) {
     next(error);
   }
 });

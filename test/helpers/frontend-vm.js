@@ -112,6 +112,8 @@ export function createFrontendSandbox(overrides = {}) {
     Promise,
     encodeURIComponent,
     decodeURIComponent,
+    // 浏览器全局 fetch（与 windowStub.fetch 同款默认，可被 overrides 覆盖）
+    fetch: windowStub.fetch,
     // escapeHtml stub — real definition is in modules/markdown-utils.js
     escapeHtml(text) {
       if (text == null) return '';

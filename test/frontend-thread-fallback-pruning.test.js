@@ -49,7 +49,10 @@ function createHarness() {
       createElement: () => ({ id: '', className: '', textContent: '', title: '', onclick: null, remove() {}, parentElement: { insertBefore() {} } }),
       addEventListener: () => {},
     },
-    fetch: async () => ({ ok: true, json: async () => ({ ok: true, contentHash: 'h', threads: [] }) }),
+    // unchanged：周期刷新（harness 的 setTimeout 同步执行回调）不产生新
+    // 线程事实——否则挂起的 refreshThreads 会把测试内联 threads 清空并
+    // 重建 activeConversation，与断言竞态（时序脆弱，非生产行为）。
+    fetch: async () => ({ ok: true, json: async () => ({ unchanged: true }) }),
     renderAgentList: () => {},
     updateQueueIndicator: () => {},
     focusedAgentId: 'programming-helper',

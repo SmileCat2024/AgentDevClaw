@@ -160,8 +160,52 @@ window.getActiveThreadInputTarget = () => {
   return null;
 };
 
-window.openConversationTarget = async (target) => {
-  const threadId = String(target?.threadId || '').trim();
+/**
+ * 接续等待表面（挡板窗口唯一入口）：视图身份挂线程 + 聊天表面挂等待
+ * 会话 + 拉取上一棒消息渲染。消息源是服务端会话文件只读出口
+ * （/protoclaw/prebuilt_sessions/session_messages：runtime.context.messages
+ * 与 viewer /messages 同源同形），挡板期间两代 runtime 都不可用也不影响
+ * 上一棒对话可见。挡板结束由 head-advanced 重绑接管（loadAgentData 拉新
+ * head，消息自然切换）；挡板失败收敛由 _reconcileConversationWithThreadHead
+ * 的挡板死分支终结等待态。输入走线程 inbox 暂存（等待重绑态是
+ * getActiveThreadInputTarget 的合法形态），新 head 上线后投递。
+ */
+async function enterThreadAwaitSurface(agentId, thread, sessionId) {
+  if (typeof window.switchAgent === 'function') {
+    await window.switchAgent(agentId, { awaitSessionId: sessionId });
+  }
+  window.ClawThreads.activeConversation = {
+    agentId,
+    threadId: thread.threadId,
+    sessionId,
+    runtimeId: '',
+    wasHead: true,
+    awaitSurface: true,
+  };
+  window.updateThreadHeaderIndicator();
+  _syncActiveThreadSubscription();
+  _loadAwaitSurfaceMessages(agentId, sessionId);
+  return { ok: true, target: window.ClawThreads.activeConversation };
+}
+
+function _loadAwaitSurfaceMessages(agentId, sessionId) {
+  fetch(`/protoclaw/prebuilt_sessions/session_messages?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`)
+    .then((response) => (response.ok ? response.json() : null))
+    .then((data) => {
+      // 竞态守卫：仅当等待表面仍挂在该会话上才注入——重绑（head-advanced）
+      // 或用户切走后，本响应作废。
+      const selected = window.ClawThreads.activeConversation;
+      if (!selected?.awaitSurface || selected.agentId !== agentId || selected.sessionId !== sessionId) return;
+      if (!Array.isArray(data?.messages) || data.messages.length === 0) return;
+      currentMessages = data.messages;
+      _lastRenderedChatSig = '';
+      clearChatLoadingSession();
+      if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+    })
+    .catch(() => {});
+}
+
+window.openConversationTarget = async (target) => {  const threadId = String(target?.threadId || '').trim();
   const thread = threadId ? window.getThreadById(threadId) : null;
   // threadId 已足自解析宿主：接续退役窗口的占位条目点击时 runtimeId 已不在
   // allAgents，调用方只能提供 threadId——宿主从线程事实回退，点击不得静默
@@ -175,24 +219,12 @@ window.openConversationTarget = async (target) => {
   // 接力挡板窗口：head runtime 的生命周期由接续流程管理（退役 → compact
   // → successor），open_session 会无条件 startManagedAgent 给退役中的 head
   // 启动 runtime，与 rotation 直接打架（历史事故：点击接力条目触发 runtime
-  // 竞态、视图混乱闪烁）。本地挂线程等待视图：视图身份挂到线程，接力徽标
+  // 竞态、视图混乱闪烁）。本地挂线程等待表面：视图身份挂到线程，接力徽标
   // 即时可见，head-advanced 事件原地重绑后自动接上。awaitSessionId 让
   // 切换落在该会话的聊天加载表面（等待视图）而不是工作空间首页——用户
   // 点的导航目标是这条线程，不是首页。
   if (thread && _handoffFresh(thread)) {
-    if (typeof window.switchAgent === 'function') {
-      await window.switchAgent(agentId, { awaitSessionId: sessionId });
-    }
-    window.ClawThreads.activeConversation = {
-      agentId,
-      threadId: thread.threadId,
-      sessionId,
-      runtimeId: '',
-      wasHead: true,
-    };
-    window.updateThreadHeaderIndicator();
-    _syncActiveThreadSubscription();
-    return { ok: true, target: window.ClawThreads.activeConversation };
+    return enterThreadAwaitSurface(agentId, thread, sessionId);
   }
 
   // Leave the previous conversation selected while navigation saves its draft.
@@ -753,7 +785,29 @@ function _reconcileConversationWithThreadHead() {
     ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
     : '';
   const viewedSessionId = boundSessionId || String(selected.sessionId || '').trim();
-  if (!viewedSessionId || headSessionId === viewedSessionId) return;
+  if (!viewedSessionId) return;
+  // 挡板死收敛：等待表面挂着、挡板已过新鲜窗、head 未推进、无 runtime——
+  // rotation 失败收敛后的形态（旧 head 已退役、successor 未起来、线程回
+  // open），没有任何可以等待的对象。终结等待态：已渲染的上一棒消息保留
+  // 可读，提示接续失败。恢复路径：再点线程条目 → open_session → activate
+  // 拉起旧 head（挡板已收敛，无竞态）。
+  if (selected.awaitSurface === true
+    && headSessionId === viewedSessionId
+    && !runtimeId
+    && !_handoffFresh(thread)) {
+    window.ClawThreads.activeConversation = null;
+    window.updateThreadHeaderIndicator();
+    window.ClawToast?.show?.({
+      id: `thread-handoff-failed-${selected.threadId}`,
+      status: 'error',
+      title: currentLanguage === 'zh' ? '线程接续失败' : 'Thread handoff failed',
+      description: currentLanguage === 'zh'
+        ? '接续未完成，当前显示上一棒的对话记录；重新点击线程条目可恢复。'
+        : 'Handoff did not complete. Showing the previous run; click the thread again to resume.',
+    });
+    return;
+  }
+  if (headSessionId === viewedSessionId) return;
   if (!(thread.sessionIds || []).includes(viewedSessionId)) return;
   void _rebindConversationToThreadHead(selected.threadId, viewedSessionId, headSessionId)
     .catch((error) => console.warn('[threads] head reconciliation rebind failed:', error));

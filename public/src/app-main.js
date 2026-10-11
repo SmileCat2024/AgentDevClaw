@@ -330,6 +330,19 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
+    // 接续挡板 409 结构化透传：open_session 消费方据此转入线程等待表面
+    //（挂上一棒消息 + 接力指示器），不得作为普通失败弹 alert。
+    if (response.status === 409) {
+      const payload = await response.json().catch(() => null);
+      if (payload?.code === 'thread_handoff_in_progress') {
+        const error = new Error(payload.message || 'thread handoff in progress');
+        error.handoff = {
+          threadId: String(payload.threadId || payload.target?.threadId || '').trim(),
+          sessionId: String(payload.headSessionId || payload.target?.headSessionId || action.sessionId || '').trim(),
+        };
+        throw error;
+      }
+    }
     throw new Error(await response.text().catch(() => 'session operation failed'));
   }
   return response.json();

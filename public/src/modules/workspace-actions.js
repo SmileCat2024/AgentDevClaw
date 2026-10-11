@@ -1008,6 +1008,22 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         await runSessionOpen();
       }
     } catch (error) {
+      // 接续挡板 409（activate 竞态：点击时挡板已立但 threads wire 尚未
+      // 刷新）：不是失败——转入线程等待表面（挂上一棒消息 + 接力指示），
+      // 由 head-advanced 重绑接管。服务端 409 响应设计即为此（携带目标
+      // thread 与 head 会话）。
+      if (error?.handoff?.threadId) {
+        try {
+          if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
+          await window.openConversationTarget?.({
+            threadId: error.handoff.threadId,
+            sessionId: error.handoff.sessionId,
+          });
+          return;
+        } catch (fallbackError) {
+          console.error('[workspace-actions] await surface fallback failed:', fallbackError);
+        }
+      }
       console.error('Failed to open prebuilt session:', error);
       if (managedNavigationEpoch === _navigationGuardEpoch) {
         clearPendingSessionNavigation();
