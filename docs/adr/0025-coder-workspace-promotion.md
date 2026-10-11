@@ -40,7 +40,7 @@
 
 - 会话归属 = 所属 APP，创建时写定，任何层不再推导。编程小助手 agent 会话与 coder agent 会话分属两个 APP。
 - 线程记录 `workspaceId = coder`；线程宿主判定从 (agentId, sessionType) 组合恢复为 APP 级（coder APP 的会话即线程宿主）。
-- 输入路由目标 = 当前视图所属 APP + 会话，无跨身份兜底——把"砍 fallback"的既有方向结构性地完成。
+- 输入路由目标 = 当前视图所属 APP + 会话，无跨身份兜底——把"砍 fallback"的既有方向结构性地完成。输入隔离不变量：前端全局线程指向（`ClawThreads.activeConversation`）是缓存而非真相，其消费点（输入提交、草稿缓存键）必须经宿主 + 当前视图一致性校验；等待重绑豁免以宿主焦点为界，切走即清残留。点击接续中的线程条目进入接续等待表面（pending chat surface，`awaitSessionId`）聚焦线程本身，不落工作空间首页。
 - 创建纪律不变：coder 会话仅由调度面创建（ACP / `claw threads` CLI / dispatch 技能）。ACP 与 CLI **外部契约不变**，内部寻址改为 coder APP。
 - feature 安装作用域与配置层对齐到 coder APP（`agent-configs/coder.json` 与 install-service 的 coder 作用域现已按 `agentId=coder` 存放，改动为收敛而非迁移）。
 

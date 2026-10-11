@@ -178,7 +178,10 @@ async function _submitInputInner(requestId, targetRuntimeId) {
     ? { 'session-reference': sessionRefs }
     : null;
 
-  const activeConversation = window.getActiveConversationTarget?.();
+  // 一致性校验后的线程输入目标（getActiveThreadInputTarget）：全局指向与
+  // 当前视图不符（用户已切走、残留未清）时为 null——消息走当前视图常规
+  // 路径，绝不串到别的线程（会话绝对隔离）。
+  const activeConversation = window.getActiveThreadInputTarget?.();
   if (activeConversation?.threadId && typeof window.submitThreadInput === 'function'
     && (input.trim() || turnMetadata)) {
     try {

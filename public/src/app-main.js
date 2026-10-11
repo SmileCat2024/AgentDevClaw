@@ -651,7 +651,7 @@ function requestSwitch(runtimeId, source) {
   });
 }
 
-window.switchAgent = async (newAgentId) => {
+window.switchAgent = async (newAgentId, options = {}) => {
   // A-class (direct) calls cancel any pending deferred switch. The pending
   // session navigation ends with this runtime binding; its chat loading
   // surface stays mounted until loadAgentData lands below, so an empty
@@ -684,10 +684,22 @@ window.switchAgent = async (newAgentId) => {
   // （如 coder）无 runtime 是常态而非异常，switchAgent('coder') 应进入其
   // 工作空间首页（线程视图），而不是在守卫处静默返回（历史 bug：接续窗口
   // 点击侧栏虚线条目 → openConversationTarget 等待分支调 switchAgent(host)
-  // 被吞，切出去后点不回来）。
+  // 被吞，切出去后点不回来）。options.awaitSessionId（接续等待：点击接续
+  // 占位条目）不落首页——selectWorkspaceSurface 挂聊天加载表面等待
+  // head-advanced 重绑。
   if (isWorkspaceSurfaceUnit(targetAgent) && !requestedRuntimeOfWorkspaceHost) {
-    if (targetAgent?.id === focusedAgentId && !currentRuntimeAgentId) return;
-    selectWorkspaceSurface(targetAgent.id);
+    // awaitSessionId（接续等待表面）例外：焦点已在宿主且等待表面已挂
+    // （重复点击同一条目）时不再重置；无等待意图的首页直达保持原早退。
+    const awaitingSameSurface = options.awaitSessionId
+      && targetAgent?.id === focusedAgentId
+      && !currentRuntimeAgentId
+      && typeof hasPendingSessionNavigation === 'function'
+      && hasPendingSessionNavigation(targetAgent);
+    if (awaitingSameSurface) return;
+    if (targetAgent?.id === focusedAgentId && !currentRuntimeAgentId && !options.awaitSessionId) return;
+    selectWorkspaceSurface(targetAgent.id, options.awaitSessionId
+      ? { awaitSession: options.awaitSessionId }
+      : undefined);
     return;
   }
   if (!runtimeAgentId) return;
@@ -1745,7 +1757,9 @@ async function runPollCycle() {
 // _getSessionInputCacheKey retained here — shared by many domains (poll, input-render, etc.)
 // Use the same immutable runtime-context identity as rendering and optimistic data.
 function _getSessionInputCacheKey() {
-  const threadId = String(window.getActiveConversationTarget?.()?.threadId || '').trim();
+  // 一致性校验（getActiveThreadInputTarget）：线程键只在当前视图确属该
+  // 线程时使用——残留指向不得把别的会话的草稿写进线程键（会话隔离）。
+  const threadId = String(window.getActiveThreadInputTarget?.()?.threadId || '').trim();
   return threadId ? `thread:${threadId}` : getRuntimeContextKey();
 }
 

@@ -38,7 +38,7 @@ function sourceBetween(source, startMarker, endMarker) {
 function extractSwitchAgentSource() {
   return sourceBetween(
     mainSource,
-    'window.switchAgent = async (newAgentId) => {',
+    'window.switchAgent = async (newAgentId, options = {}) => {',
     '\n// ── Context menu action handlers',
   );
 }

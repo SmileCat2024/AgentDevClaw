@@ -134,6 +134,32 @@ window.getThreadForSession = (agentId, sessionId) => {
 
 window.getActiveConversationTarget = () => window.ClawThreads.activeConversation;
 
+/**
+ * 输入目标一致性校验（会话绝对隔离）：全局线程指向（activeConversation）
+ * 只在与当前视图一致时才可作为输入目标。不一致（用户已切到别的会话 /
+ * 别的工作空间，全局残留未清）返回 null——消息走当前视图的常规路径，
+ * 绝不允许"在 A 会话输入、发到 B 线程"的串线。
+ * 一致 = 宿主一致（getCurrentHostAgentRecord）且当前激活会话与指向会话
+ * 相同；等待重绑态（runtime 态被 404 清空，_currentActiveSession 回退为
+ * activeConversation 自身）天然满足同宿主校验。
+ */
+window.getActiveThreadInputTarget = () => {
+  const selected = window.ClawThreads.activeConversation;
+  if (!selected?.threadId) return null;
+  const hostRecord = typeof getCurrentHostAgentRecord === 'function'
+    ? getCurrentHostAgentRecord()
+    : null;
+  if (!hostRecord || String(hostRecord.id || '') !== String(selected.agentId || '')) {
+    return null;
+  }
+  const active = _currentActiveSession();
+  if (active && active.agentId === String(selected.agentId || '')
+    && active.sessionId === String(selected.sessionId || '')) {
+    return selected;
+  }
+  return null;
+};
+
 window.openConversationTarget = async (target) => {
   const threadId = String(target?.threadId || '').trim();
   const thread = threadId ? window.getThreadById(threadId) : null;
@@ -150,10 +176,12 @@ window.openConversationTarget = async (target) => {
   // → successor），open_session 会无条件 startManagedAgent 给退役中的 head
   // 启动 runtime，与 rotation 直接打架（历史事故：点击接力条目触发 runtime
   // 竞态、视图混乱闪烁）。本地挂线程等待视图：视图身份挂到线程，接力徽标
-  // 即时可见，head-advanced 事件原地重绑后自动接上。
+  // 即时可见，head-advanced 事件原地重绑后自动接上。awaitSessionId 让
+  // 切换落在该会话的聊天加载表面（等待视图）而不是工作空间首页——用户
+  // 点的导航目标是这条线程，不是首页。
   if (thread && _handoffFresh(thread)) {
-    if (_currentActiveSession()?.agentId !== agentId && typeof window.switchAgent === 'function') {
-      await window.switchAgent(agentId);
+    if (typeof window.switchAgent === 'function') {
+      await window.switchAgent(agentId, { awaitSessionId: sessionId });
     }
     window.ClawThreads.activeConversation = {
       agentId,
@@ -537,9 +565,18 @@ function _syncActiveThreadSubscription() {
     // 接续退役窗口：runtime 态被 /responses 404 清理清空，_currentActiveSession
     // 落到宿主 main 会话——这不是用户离开，是「视图身份仍在、等待重绑」态。
     // 保留线程指向与订阅，否则 handoff-started 指示器延迟、head-advanced
-    // 重绑失效。
+    // 重绑失效。豁免以宿主焦点为界：用户已切到别的工作空间（宿主不再是
+    // 本线程宿主）时豁免失效，落入下方重建分支清除残留——全局线程指向
+    // 不跨工作空间存续（会话隔离；历史事故：main 会话输入经残留指向串到
+    // coder 线程）。
     const runtimeStateCleared = String(currentRuntimeAgentId || '').trim() === '';
-    if (selectedThread?.agentId === selected.agentId && (!selected.runtimeId || runtimeStateCleared)) {
+    const hostRecord = typeof getCurrentHostAgentRecord === 'function'
+      ? getCurrentHostAgentRecord()
+      : null;
+    const hostOwnsThread = !!hostRecord
+      && String(hostRecord.id || '') === String(selected.agentId || '');
+    if (selectedThread?.agentId === selected.agentId && hostOwnsThread
+      && (!selected.runtimeId || runtimeStateCleared)) {
       // A user navigation has selected this stable thread target but the
       // session runtime has not mounted yet. Do not replace it with whatever
       // conversation was visible before the navigation began. Same for the

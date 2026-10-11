@@ -15,7 +15,7 @@ const source = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.
 
 const switchAgentSource = sourceBetween(
   source,
-  'window.switchAgent = async (newAgentId) => {',
+  'window.switchAgent = async (newAgentId, options = {}) => {',
   '// ── Context menu action handlers',
 );
 
@@ -85,4 +85,35 @@ test('宿主有 runtime 时：请求宿主 id 仍进入 workspace surface，请�
   await ctx.run('window.switchAgent("coder")');
   assert.deepEqual(calls.selectSurface, ['coder'],
     '按宿主 id 切换 = 进入工作空间首页（与无 runtime 形态一致）');
+});
+
+test('awaitSessionId（接续等待表面）：透传给 selectWorkspaceSurface，焦点已在宿主也不短路', async () => {
+  const calls = { selectSurface: [] };
+  const ctx = createFrontendSandbox({
+    // 接续等待的典型现场：焦点已在 coder 宿主（等待表面挂着），重复点击虚线条目
+    focusedAgentId: 'coder',
+    currentRuntimeAgentId: '',
+    hasPendingSessionNavigation: () => false,
+    bumpNavigationGuard: () => {},
+    closeAgentContextMenu: () => {},
+    isWorkspaceHostUnit: (agent) => agent?.source === 'prebuilt' && agent?.id === 'coder',
+    isWorkspaceSurfaceUnit: (agent) => agent?.source === 'prebuilt' && agent?.id === 'coder',
+    isRemoteNamespaceAgentId: () => false,
+    findAgentByIdentity: (agentId) => (
+      agentId === 'coder' ? coderHostWithoutRuntime : null
+    ),
+    getRuntimeId: (agent) => agent?.runtime_session_id || null,
+    getAgentRuntimeId: (agent) => agent?.runtime_session_id || '',
+    selectWorkspaceSurface: (agentId, options) => {
+      calls.selectSurface.push({ agentId, options: { ...options } });
+    },
+    loadAgentData: async () => { throw new Error('等待表面下 loadAgentData 不应触发'); },
+  });
+  ctx.run('let pendingSwitchTarget = null; let _switchEpoch = 0;');
+  ctx.run(switchAgentSource);
+
+  await ctx.run('window.switchAgent("coder", { awaitSessionId: "session-42" })');
+
+  assert.deepEqual(calls.selectSurface, [{ agentId: 'coder', options: { awaitSession: 'session-42' } }],
+    '接续等待点击必须透传 awaitSession，且焦点已在宿主时不得走幂等短路');
 });

@@ -40,7 +40,17 @@ function selectWorkspaceSurface(agentId, options = {}) {
   shouldAnimateWorkspaceSurface = (prevAgentId !== agentId);
   setFollowLatest(true);
   resetRuntimeBackedSurfaceState();
-  clearPendingSessionNavigation();
+  if (options.awaitSession) {
+    // 接续等待（点击侧栏接续占位条目）：视图身份冻结在等待会话——立即
+    // 挂聊天加载表面（线程接力指示器随 _currentActiveSession 回退可见），
+    // head 上线后由 head-advanced 重绑接管（thread-store），不落工作空间
+    // 首页——用户点的目标是该线程会话，不是首页。
+    beginPendingSessionNavigation(agentId, options.awaitSession, 'committing');
+    currentWorkspaceTab = 'chat';
+    beginChatLoadingSession();
+  } else {
+    clearPendingSessionNavigation();
+  }
   renderAgentList();
   renderCurrentMainView();
   if (!options.skipFeaturePanel) {

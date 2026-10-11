@@ -667,7 +667,10 @@ async function submitQueuedInput() {
   const sessionReferenceCount = (window.SessionReference?.peek?.() || []).length;
   if (!text && _imageBucket().length === 0 && sessionReferenceCount === 0) return;
   const targetRuntimeId = currentRuntimeAgentId;
-  const activeConversation = window.getActiveConversationTarget?.();
+  // 一致性校验后的线程输入目标（getActiveThreadInputTarget）：全局指向与
+  // 当前视图不符（用户已切走、残留未清）时为 null——消息走当前视图常规
+  // 路径，绝不串到别的线程（会话绝对隔离）。
+  const activeConversation = window.getActiveThreadInputTarget?.();
   const targetCacheKey = textarea.dataset.sessionKey || _getSessionInputCacheKey();
   // 图片桶 key 同步捕获（与 targetCacheKey 同款防漂移语义）：await 期间切换
   // 会话后，resolve / 成功清空只作用于发起会话的桶。
