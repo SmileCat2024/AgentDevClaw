@@ -43,14 +43,13 @@ describe('T007 S16: server 重启后线程现场完整恢复（跨 control 实�
     const a = makeEnv('a-full');
     try {
       const thread = await startCoderThread(a, 's1');
-      // head 推进：s1 → s2（s2 身份 coder，经 advanceHead 门禁）
-      a.identity.register('s2', 'coder');
+      // head 推进：s1 → s2（同 APP 会话，结构守卫放行）
       await a.core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's1', endKind: 'trim' });
       // Inbox：一条 pending（重启期间积累）+ 一条 delivered（经 bridge 投递过）
       await a.core.appendCommand({ threadId: thread.threadId, text: '重启前积累', idempotencyKey: 'ik-1' });
       // board 事件：turn 开始（running 态）
       await a.board.recordRuntimeEvent({
-        agentId: 'programming-helper', sessionId: 's2', runtimeInstanceId: 'rt-a',
+        agentId: 'coder', sessionId: 's2', runtimeInstanceId: 'rt-a',
         event: { type: 'turn.started', turn: 1 },
       });
 
@@ -59,7 +58,8 @@ describe('T007 S16: server 重启后线程现场完整恢复（跨 control 实�
       try {
         const record = await b.core.getThread(thread.threadId);
         assert.equal(record.headSessionId, 's2', 'head 恢复');
-        assert.equal(record.identity, 'coder', '身份事实恢复（T001 落盘字段）');
+        assert.equal(record.agentId, 'coder', '归属事实恢复（APP 结构字段）');
+        assert.equal(record.workspaceId, 'coder');
         assert.equal(record.status, 'open');
         assert.deepEqual(
           record.sessionChain.map((e) => e.sessionId),
@@ -70,7 +70,7 @@ describe('T007 S16: server 重启后线程现场完整恢复（跨 control 实�
         assert.equal(record.sessionChain[1].role, 'head');
 
         // 成员查询恢复（生命周期所有权不丢）
-        const byMember = await b.core.findThreadBySession('programming-helper', 's1');
+        const byMember = await b.core.findThreadBySession('coder', 's1');
         assert.equal(byMember.threadId, thread.threadId);
 
         // Inbox 恢复：pending 保留且可继续投递
@@ -89,7 +89,7 @@ describe('T007 S16: server 重启后线程现场完整恢复（跨 control 实�
         const after = await b.core.getThread(thread.threadId);
         assert.equal(after.commands.length, 2);
         assert.equal(after.commands[1].status, ThreadCommandStatus.PENDING);
-        const stillMember = await b.core.findThreadBySession('programming-helper', 's2');
+        const stillMember = await b.core.findThreadBySession('coder', 's2');
         assert.equal(stillMember.threadId, thread.threadId);
       } finally {
         b.cleanup();
@@ -152,7 +152,7 @@ describe('T007 S16: server 重启后线程现场完整恢复（跨 control 实�
       assert.equal(record.pendingSuccession?.fromSessionId, 's1', '挡板跨重启保留');
 
       // 恢复服务按落盘状态收敛（确定性：状态驱动，非 TTL）
-      const recovery = createThreadRecoveryService({ threadControl: b.control, identitySource: b.identity.identitySource });
+      const recovery = createThreadRecoveryService({ threadControl: b.control });
       const report = await recovery.convergeInterruptedSuccessions();
       assert.equal(report.converged.length, 1);
       const after = await b.core.getThread(thread.threadId);
