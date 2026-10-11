@@ -40,7 +40,6 @@ import {
 import { extractFeatureMounts } from '../../../server/shared/feature-mount.js';
 import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
-import { CoderAgent } from './coder-agent.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -89,7 +88,7 @@ function readProgrammingWorkspaceState() {
  * 专业的编程助手，擅长代码编写、调试和优化
  * 继承 BasicAgent 获得所有基础设施能力
  */
-export class ProgrammingHelperAgent extends BasicAgent {
+export default class ProgrammingHelperAgent extends BasicAgent {
   constructor(config = {}) {
     const workspaceDir = config.workspaceDir || process.cwd();
     const runtime = config.runtime && typeof config.runtime === 'object' ? config.runtime : {};
@@ -252,15 +251,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
   }
 }
 
-/**
- * 按会话类型分派 Agent 类。run-prebuilt-agent.js 优先调用本函数；
- * sessionType='coder' 的会话装配为自主编码身份（线程宿主），其余为主身份。
- */
-export function resolveAgentClass({ runtime } = {}) {
-  return runtime?.sessionType === 'coder' ? CoderAgent : ProgrammingHelperAgent;
-}
-
-/** LSP 插件工厂：main / coder 共用（二进制缓存按数据根分区，见 LSP_BIN_DIR）。 */
+/** LSP 插件工厂（二进制缓存按数据根分区，见 LSP_BIN_DIR）。 */
 function createLspPlugin() {
   return {
     create: (config = {}, context = {}) => new LspFeature({
@@ -271,7 +262,7 @@ function createLspPlugin() {
   };
 }
 
-/** playwright-shell 插件工厂：main / coder 共用（资产与档案路径按数据根分区）。 */
+/** playwright-shell 插件工厂（资产与档案路径按数据根分区；coder APP 自带同名工厂）。 */
 function createPlaywrightShellPlugin() {
   return {
     create: (config = {}, context = {}) => new PlaywrightShellFeature({
@@ -289,15 +280,8 @@ function createPlaywrightShellPlugin() {
  * context）构造 feature 实例。宿主钩子（run-prebuilt-agent.js）在静态装配
  * 完成后按此表挂载；商店货架（server/routes/feature-store.js）import 本表
  * 后由工厂实例的 name / description 自加载展示元数据，无需另处维护。
- * 表按会话身份（main / coder）分键：插件只对声明了的身份开放挂载。
  */
 export const builtinOptionalFeatures = {
-  main: {
-    'playwright-shell': createPlaywrightShellPlugin(),
-    'lsp': createLspPlugin(),
-  },
-  coder: {
-    'playwright-shell': createPlaywrightShellPlugin(),
-    'lsp': createLspPlugin(),
-  },
+  'playwright-shell': createPlaywrightShellPlugin(),
+  'lsp': createLspPlugin(),
 };

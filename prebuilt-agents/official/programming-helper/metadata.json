@@ -37,50 +37,6 @@
         "create",
         "overview"
       ]
-    },
-    {
-      "id": "coder",
-      "displayName": "Coder",
-      "description": "自主编码智能体：线程化无人值守执行，会话由调度面（ACP / threads CLI / dispatch）创建，不接受用户直接创建",
-      "sessionModel": "persistent",
-      "sessionType": "coder",
-      "qualifierLabel": "项目",
-      "sidebarEntry": true,
-      "sidebarGroup": "tool",
-      "operations": [
-        "status",
-        "sessions",
-        "interrupt",
-        "overview"
-      ],
-      "ui": {
-        "entry": "sessions",
-        "tabs": [
-          {
-            "id": "sessions",
-            "label": {
-              "zh": "线程",
-              "en": "Threads"
-            }
-          },
-          {
-            "id": "chat",
-            "label": {
-              "zh": "对话",
-              "en": "Chat"
-            }
-          }
-        ],
-        "home": {
-          "blocks": [
-            {
-              "id": "coder-threads",
-              "type": "coder-threads",
-              "visibility": "tab:sessions"
-            }
-          ]
-        }
-      }
     }
   ],
   "ui": {
@@ -103,6 +59,19 @@
     ],
     "home": {
       "blocks": [
+        {
+          "id": "coder-entry",
+          "type": "coder-entry",
+          "visibility": "tab:sessions",
+          "title": {
+            "zh": "Coder 工作线程",
+            "en": "Coder Threads"
+          },
+          "description": {
+            "zh": "无人值守自主编码智能体：线程由调度面创建（ACP / claw threads / dispatch），在独立工作空间执行。",
+            "en": "Unattended autonomous coding agent: threads are created by the dispatch plane (ACP / claw threads / dispatch) and run in their own workspace."
+          }
+        },
         {
           "id": "session-list",
           "type": "session-list",

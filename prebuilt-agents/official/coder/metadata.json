@@ -1,0 +1,68 @@
+{
+  "id": "coder",
+  "kind": "agent",
+  "name": "Coder",
+  "description": "无人值守自主编码智能体：线程化执行，会话由调度面（ACP / threads CLI / dispatch）创建，不接受用户直接创建",
+  "version": "1.0.0",
+  "icon": "code",
+  "category": "development",
+  "processMode": "shared-by-project",
+  "enabled": true,
+  "host": "programming-helper",
+  "visibility": "on-demand",
+  "features": [
+    "todo",
+    "force-continuation",
+    "tickets-build-flow",
+    "websearch",
+    "memory",
+    "shell",
+    "image-reader",
+    "github",
+    "context-guard",
+    "skill"
+  ],
+  "identities": [
+    {
+      "id": "main",
+      "displayName": "coder",
+      "description": "自主编码智能体：线程化无人值守执行",
+      "sessionModel": "persistent",
+      "qualifierLabel": "项目",
+      "operations": [
+        "status",
+        "sessions",
+        "interrupt",
+        "overview"
+      ]
+    }
+  ],
+  "ui": {
+    "entry": "sessions",
+    "tabs": [
+      {
+        "id": "sessions",
+        "label": {
+          "zh": "线程",
+          "en": "Threads"
+        }
+      },
+      {
+        "id": "chat",
+        "label": {
+          "zh": "执行明细",
+          "en": "Run Details"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "coder-threads",
+          "type": "coder-threads",
+          "visibility": "tab:sessions"
+        }
+      ]
+    }
+  }
+}

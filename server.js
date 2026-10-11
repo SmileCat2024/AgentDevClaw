@@ -35,6 +35,7 @@ import { createServiceLifecycle } from './server/service-lifecycle.js';
 import { ensureAppPortAvailable } from './server/boot/port-recovery.js';
 import { migrateLegacyAppConfig } from './server/app-config-migration.js';
 import { runStudioFeatureMigration } from './server/routes/studio-feature-migration.js';
+import { runCoderIdentityRetirement } from './server/routes/coder-identity-retirement.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
 import {
@@ -127,7 +128,6 @@ import {
   createThreadSuccessionService,
   createThreadRecoveryService,
 } from './server/thread-control/thread-succession.js';
-import { resolveSessionIdentity } from './server/thread-control/thread-identity.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
   setupFeatureRepositoryRoutes,
@@ -239,9 +239,6 @@ const agentLifecycle = createAgentLifecycleModule({
   resolveRuntimeDisplayName,
   readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
   readViewerJson, getPendingInputCount, resolveAgentModelPresets,
-  // 惰性引用：remoteCatalogAggregator 在模块尾部装配，此处只传闭包，
-  // 首次调用发生在请求期（届时早已初始化）。读取失败按无远程数据降级。
-  readRemoteCatalog: () => remoteCatalogAggregator.aggregate().catch(() => null),
 });
 const {
   getConnectedAgents, waitForProcessExit,
@@ -319,6 +316,7 @@ const {
   cleanupEmptySessions, listPrebuiltSessions, buildSessionModelInfoMap,
   createPrebuiltSession, activatePrebuiltSession, deletePrebuiltSession,
   archivePrebuiltSession, tagPrebuiltSessionTodo, requirePrebuiltSessionRecord,
+  findPrebuiltSessionRecordShared,
   readSessionSnapshotForContinuity,
   resolvePrebuiltSessionOwner, requirePrebuiltAgentForRuntime,
   exportContextHandoffForSession, createCompactedResumeFromHandoff,
@@ -345,7 +343,6 @@ const threadSuccession = createThreadSuccessionService({
 });
 const threadRecovery = createThreadRecoveryService({
   threadControl,
-  identitySource: resolveSessionIdentity,
 });
 const threadLifecycle = createThreadLifecycleService({
   control: threadControl,
@@ -627,10 +624,18 @@ setupThreadRoutes(app, express, {
     return { ok: true };
   },
   threadDelete,
-  // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null
+  // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null。
+  // 线程列表逐线程调用（~百线程 × 5s/20s 轮询）：走共享只读索引查询，
+  // 避免 structuredClone 数 MB 索引 × 线程数打满事件循环。
   resolveSessionOpenDirectory: async (agentId, sessionId) => {
-    const record = await requirePrebuiltSessionRecord(agentId, sessionId);
+    const record = await findPrebuiltSessionRecordShared(agentId, sessionId);
     return cleanSessionText(record?.openDirectory) || null;
+  },
+  // head 会话标题（侧栏线程条目跟随换代的真相源）：与目录解析同源的
+  // 共享只读索引查询。
+  resolveSessionTitle: async (agentId, sessionId) => {
+    const record = await findPrebuiltSessionRecordShared(agentId, sessionId);
+    return cleanSessionText(record?.title) || null;
   },
 });
 
@@ -1570,6 +1575,11 @@ async function main() {
   } catch (err) {
     log('server', `config init failed: ${err.message}`, 'warn');
   }
+
+  // coder 身份投影退役搬移（ADR-0025，幂等 + fail-hard）：coder 侧全部
+  // 现存数据一次性遗弃搬移，任何一步失败拒绝启动（回滚以遗弃目录为基础
+  // 人工整体还原）。
+  await runCoderIdentityRetirement();
 
   // Agent Studio「项目 → feature」模型迁移（ADR-0022，幂等）：注册表 + 会话
   // 重绑定 + 删 projects.json。失败只告警，不阻断启动。
