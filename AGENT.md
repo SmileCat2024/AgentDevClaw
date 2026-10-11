@@ -35,6 +35,7 @@
    - 0022 Agent Studio Feature-First 模式：feature 一级实体、目录降级为运行环境、会话多对多绑定（实施记录见 [docs/plans/2026-10-07-agent-studio-feature-first-refactor.md](docs/plans/2026-10-07-agent-studio-feature-first-refactor.md)）
    - 0023 工具调用历史改写：工具自声明生效调用、框架零语义判断、双视图与单轨快照（实施计划见 [docs/plans/2026-10-07-tool-call-history-rewrite.md](docs/plans/2026-10-07-tool-call-history-rewrite.md)）
    - 0024 APP 型工作空间：业务单对话、WorkThread 可选连续性与接续硬切换视图（实施计划见 [docs/plans/2026-10-10-app-workspace-eternal-thread.md](docs/plans/2026-10-10-app-workspace-eternal-thread.md)）
+   - 0025 coder 升格独立工作空间：会话身份投影机制退役（实施计划见 [docs/plans/2026-10-11-coder-workspace-promotion.md](docs/plans/2026-10-11-coder-workspace-promotion.md)）
 
 实现层真实入口：
 
@@ -52,6 +53,7 @@
 `AgentDevClaw` 是以 Agent 为中心的可扩展工作台，整合配置、会话、调度、协作。当前活跃维护的工作空间：
 
 - **编程小助手**（`programming-helper`）★ — 对标 Claude Code 的 AI 编程 Agent，浏览器可视化交互层
+- **Coder**（`coder`）★ — 无人值守自主编码 APP：线程化执行，仅调度面创建（[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)）
 - **Agent Studio**（`agent-studio`）★ — 上游制造端：对话中开发 Feature、装配 Agent，经 Test Runtime 验证闭环
 - **IM 渠道**（`qqbot`）★ — 多渠道消息门户代理与路由（QQ / 微信 / 企业微信 / 飞书等）
 - **工作群**（`work-group`，Beta）— 群聊形式指挥与协调多 Agent
@@ -130,10 +132,11 @@ app-core.js 全局状态纪律：全局状态区只减不增。新增前端状�
 
 ### 编程小助手（programming-helper）★
 
-入口 `prebuilt-agents/official/programming-helper/`。一个工作空间、两个会话身份，runtime 按 `sessionType` 分派：
+入口 `prebuilt-agents/official/programming-helper/`。用户交互式编程 Agent：Shell / Web 搜索 / MCP 完整工具链（LSP 与 Playwright 浏览器为官方可选插件，在设置里装配），会话分支、trim / compact / summary 精简、checkpoint / rollback、AI 标题、语音输入。首页提供 Coder 入口 block（跳转 coder APP 的线程视图）。
 
-- **main（缺省）**：用户交互式编程 Agent。Shell / Web 搜索 / MCP 完整工具链（LSP 与 Playwright 浏览器为官方可选插件，在设置里按身份装配），会话分支、trim / compact / summary 精简、checkpoint / rollback、AI 标题、语音输入。
-- **coder（`sessionType=coder`）**：无人值守自主编码身份，装配 [coder-agent.js](prebuilt-agents/official/programming-helper/coder-agent.js)，配置独立于主身份（用户数据目录 `agent-configs/coder.json`（默认根目录为 `~/.agentdev/AgentDevClaw/`））。关键行为：线程宿主（自动建 WorkThread，trim / 摘要后自动接力）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），用户不能在 UI 创建；Web UI 左侧 coder 入口是同一工作空间的线程列表投影；线程归档是生命周期事务（先中断再归档，已归档拒绝新指令）。
+### Coder（coder）★
+
+入口 `prebuilt-agents/official/coder/`（`agent.js` + `metadata.json`，`host: programming-helper` / `visibility: on-demand`）。无人值守自主编码 APP（[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)，升格自原编程小助手的 coder 身份，旧数据经服务端启动搬移模块 [server/routes/coder-identity-retirement.js](server/routes/coder-identity-retirement.js) 迁入 `workspaces/coder/`）。配置层 `workspaces/coder/feature-config/agent.json`（`readAgentLayer('coder')`）。关键行为：线程宿主（自动建 WorkThread，`workspaceId=coder`，trim / 摘要后自动接力）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），用户不能在 UI 直接创建；Web UI 左侧 coder 入口是其线程列表投影；线程归档是生命周期事务（先中断再归档，已归档拒绝新指令）。会话身份投影机制（sessionType 寻址、sidebar_entry_id 会话级身份）已退役：coder 会话直接以 `agentId=coder` 寻址。
 
 ### Agent Studio（agent-studio）★
 
@@ -197,7 +200,7 @@ Claw 不自带连续性引擎，全部消费 `@agentdevjs/core`。权威设计�
 - **Transformation**：官方变换（Trim / Summary / 组合），LLM 经 `TransformContext.llm` 进程内注入
 - **WorkThread**：线程状态机与看板，替代 Claw 原线程控制
 
-Claw 装配点索引：trim 引擎与落盘在 `server/context-continuity/`（handoff-package / trim-appended-summary / inprocess-summary，`resolveSummaryLLM` 供各装配层共用）；seed feature 由 `scripts/run-prebuilt-agent.js` 与 `run-one-shot-agent.js` 装配；连续性字段经 [local-features/continuity-participant](local-features/continuity-participant)（读旧写新，协议保留 `claw.*` 命名空间）；线程控制在 `server/thread-control/` 模块族，数据目录全局 `~/.agentdev/AgentDevClaw/threads/`；线程宿主判定为会话级（programming-helper + `sessionType=coder`）。
+Claw 装配点索引：trim 引擎与落盘在 `server/context-continuity/`（handoff-package / trim-appended-summary / inprocess-summary，`resolveSummaryLLM` 供各装配层共用）；seed feature 由 `scripts/run-prebuilt-agent.js` 与 `run-one-shot-agent.js` 装配；连续性字段经 [local-features/continuity-participant](local-features/continuity-participant)（读旧写新，协议保留 `claw.*` 命名空间）；线程控制在 `server/thread-control/` 模块族，数据目录全局 `~/.agentdev/AgentDevClaw/threads/`；线程宿主判定为 APP 级（`agentId=coder`，判定入口 `thread-integration.js` 的 `isThreadHostApp()`）。
 
 易错：
 
@@ -244,7 +247,7 @@ Inspector 数据流：Agent `buildHookInspectorSnapshot()` → IPC → ViewerWor
 易错：
 
 - 叶子 = 存活的 child runtime；prebuilt 历史会话索引不是叶子来源
-- 身份归属由 `sidebar_entry_id` / `sessionType` 元数据推导（main → 宿主，其余 → `parent_id:sessionType`），禁止 Agent 类型硬编码
+- 身份归属是结构事实：prebuilt child 条目带 `sidebar_entry_id`（呈现归属 APP，缺席即父 APP），不再经 sessionType 推导（ADR-0025 退役会话身份投影）
 - 数据源优先级：connected child 是主源；远程 `/api/agents` viewer 条目只补充不存在的 runtime，禁止覆盖身份/目录字段
 - 组身份与折叠状态用 `projectKey`，`projectName` 只是呈现（远程为 `主机名：目录名`）
 - 无选中运行时（停在 workspace surface）时高亮谓词直接判非；"解析归一化再比较"的兜底两侧都可能为空，空对空对称相等会全量误高亮（历史 bug，见 frontend-rendering-patterns.md §12a）

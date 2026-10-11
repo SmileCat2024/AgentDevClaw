@@ -1,6 +1,7 @@
 # 工作线程（Work Thread）设计与输入链路统一
 
 > 状态：现行产品语义与实现约束；具体生命周期接线见 [`work-thread-lifecycle.md`](work-thread-lifecycle.md)
+> 身份模型修订：coder 已升格独立 APP（ADR-0025），本文 §2 中"coder 是 programming-helper 工作空间内的身份投影""identitySource / sessionType 解析"等会话身份投影表述已退役——线程宿主判定现为 APP 级（`agentId=coder`，`server/thread-control/thread-integration.js` 的 `isThreadHostApp()`），线程记录不再携带 identity 字段。
 > 前置：`docs/plans/` 无相关计划文档；本文保留线程接入、输入链路与对象边界的设计背景。
 > 关联实现：`server/thread-control/`、AgentDev `packages/core/src/core/workthread/`。
 >

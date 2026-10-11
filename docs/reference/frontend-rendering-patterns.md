@@ -966,6 +966,23 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 
 ---
 
+## 12e. coder 线程条目：threadId 键控的单叶子投影（2026-10-10）
+
+coder 投影（`runtime-status.js collectRuntimeEntriesForPrebuilt`，`sessionType='coder'` 分支）把侧栏叶子从「每个存活 runtime 一条」升级为「每条线程一条」（[ADR-0024](../adr/0024-app-workspace-eternal-thread-model.md) 决策 4：稳定条目不随 successor 闪烁）：
+
+- **只由当前 head 会话的 runtime 呈现**：非 head 成员 runtime（换代已推进后的退役滞留 / 历史棒次）一律不渲染。否则换代窗口新旧 runtime 并存时同线程双条目并列，点击旧条目被解析到新 head，成为生硬跳转（历史 bug，2026-10-10）。
+- **身份锚定**：`_coderThreadLiveEntries` 缓存线程首见条目的 `createdAt` / `projectDir` / `projectName` / `projectKey`，head 换锚时沿用，条目不换位。
+- **head 空窗补位**：head runtime 未上线（退役窗口 / successor 启动中）且线程活跃（handoff 进行 / 置换 operation / executing）时，以缓存条目 + `disconnected + transitionPending` 占位，不闪失；线程闭合 / 归档 / 不活跃则清缓存。
+- **点击 = 打开线程 head 会话**：条目带 `data-thread-id`，点击经 `openConversationTarget`（thread-store.js）解析到 head，不直连 runtime。
+- **状态发现（SSE 优先，轮询兜底）**：活动会话订阅 SSE thread 事件——`thread.handoff-started` 即时拉取线程事实并重渲（顶栏「接力中」指示器与侧栏过渡占位即时点亮，不等轮询）；`thread.head-advanced` 原地重绑（数据源换绑，非导航）。非活动线程靠 `/protoclaw/threads` contentHash 轮询（20s）兜底——轮询间隙内新 runtime 可能以「无 threadId 普通条目」短暂并列，属已知自愈瞬态。
+- **渲染签名**：`getAgentListRenderSignature` 必须含 `threadHeads`（threadId / headSessionId / title / lifeState），否则 head 推进后侧栏停留旧 DOM。
+- **投影条目自身的存续是服务端职责（宿主层，2026-10-10 断点）**：coder 面板整体消失的根因不在叶子投影——`/api/agents` 的投影条目（`agent-connected.js` `hasLiveSession`）原本只认「存活 runtime」（child / managed 进程 / 远程 catalog）三个来源；thread-rotation 的顺序是「退役旧 head → compact 摘要（LLM，数十秒）→ spawn successor」，窗口内三来源全空，投影条目从响应里消失，前端 5s 轮询采样到即整树清空——叶子层（本节其余条目）修什么都没用。修复：`hasLiveSession` 第四来源 = 接续挡板身份镜像（`thread-integration.js` 进程内 Map，begin 立挡板登记、apply/fail/终态收敛摘除，与真实挡板对称，不读线程文件）。回归测试 `test/sidebar-projection-succession.test.js` 按接续时序逐帧断言投影条目存续。
+- **`handoffStartedAt` 是 wire 字段（服务端投影，勿在前端另造）**：顶栏「接力中」指示器、输入路由守卫（交接窗口内输入改走 Thread Inbox 暂存）、侧栏交接占位共用 `thread.handoffStartedAt`（>0 且 <5min 视为交接中）。权威值 = `/protoclaw/threads` 对 `status='rotating'` 线程补读的 `pendingSuccession.startedAt`（`thread-routes.js` `_attachLifeState`）。历史事故（2026-10-10）：前端三处消费一个服务端从未下发的字段名，指示器永不亮、自动轮换窗口内输入被判 direct 直投已退役 runtime。
+
+回归测试：`test/frontend-runtime-status.test.js`（coder live session projection：head 推进 / zombie 并存 / head 空窗全时间线）；`test/frontend-thread-store-t006.test.js`（thread 事件消费：handoff-started 状态刷新 / head-advanced 原地重绑）；`test/sidebar-projection-succession.test.js`（宿主层：接续窗口投影条目逐帧存续）；`test/thread-routes-command-fields.test.js`（wire：handoffStartedAt 挡板投影与收敛）；`test/thread-control.test.js`（挡板身份镜像的立/清对称）。
+
+---
+
 ## 13. 相关文件索引
 
 > 行号会随迭代漂移，定位时以 grep 为准，本表只给文件级归属（2026-08-23 复核）。

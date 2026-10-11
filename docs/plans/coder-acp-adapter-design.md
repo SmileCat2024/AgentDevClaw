@@ -64,7 +64,7 @@ coder runtime（CallArbiter → CoderAgent；事件经 turn-event-mapping 写入
 | 概念 | 归属 | 生命周期 | 说明 |
 |------|------|---------|------|
 | ACP session | adapter 内存 | client 会话期间 | 协议层标识；**ID 即 Claw sessionId**（resume/list 要求跨进程可恢复，见 Q28）|
-| Claw session (`clawSessionId`) | Claw server 持久化 | 持久 | coder 会话，`agentId: programming-helper` + `sessionType: coder` |
+| Claw session (`clawSessionId`) | Claw server 持久化 | 持久 | coder APP 会话，`agentId: coder`（ADR-0025；旧 `programming-helper + sessionType=coder` 形态已退役） |
 | WorkThread (`threadId`) | Claw server 持久化 | 持久 | 连续性锚点；session/new 时由 thread-integration 自动创建；**不外泄为协议标识**（仅出现在 list 响应元数据中，不作为投递/续接的协议键） |
 | runtime (`viewerAgentId`) | ViewerWorker | 进程级 | 精确中断定位用；adapter 不直接使用，经 018 interrupt 路由间接生效 |
 
@@ -266,7 +266,7 @@ ACP 响应后 client 照常 `session/prompt`（落在 head 上）。
 
 ```text
 1. 校验 cwd（绝对路径规范化、存在、是目录）
-2. 创建 coder session（复用 session-helpers；sessionType: main）
+2. 创建 coder session（`agentId: coder`，见 ADR-0025）
 3. 启动精确 session runtime（复用 agent 启动链路）
 4. 等待 READY（默认 30s 超时）
 5. 从 thread store 按 headSessionId === clawSessionId 解析 threadId

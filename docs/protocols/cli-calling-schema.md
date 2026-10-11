@@ -1,8 +1,8 @@
 # AgentDevClaw CLI 调用 Schema
 
-本文档梳理 AgentDevClaw 的 `claw` CLI 的完整调用方式、stdio 流（stdout / stderr）契约、输出消息格式，以及**编程小助手工作空间中的 `coder` 身份**（sessionType 会话身份）的线程调用面（`claw threads`）。
+本文档梳理 AgentDevClaw 的 `claw` CLI 的完整调用方式、stdio 流（stdout / stderr）契约、输出消息格式，以及 **Coder APP**（无人值守自主编码工作空间）的线程调用面（`claw threads`）。
 
-> **工作空间 coder**：编程小助手工作空间内的会话身份（`agentId=programming-helper` + `sessionType=coder`），以 **线程（thread）** 为执行承接单位，经 `claw threads` 命令族调用/审计（见 §10）。
+> **Coder APP**：独立后台型 APP（`agentId=coder`，`host: programming-helper`），以 **线程（thread）** 为执行承接单位，经 `claw threads` 命令族调用/审计（见 §10）。
 >
 > 权威补充文档：[`agents/README.md`](../../agents/README.md)。修改 CLI 行为时必须同步更新该文档与本文档。
 
@@ -294,11 +294,11 @@ claw run my-agent --goal "..." --debug
 
 ---
 
-## 10. 编程小助手工作空间中的 coder 身份与线程调用
+## 10. Coder APP 与线程调用
 
 ### 10.1 什么是 coder
 
-**coder** 是**编程小助手工作空间**（`prebuilt-agents/official/programming-helper/`）内的一个会话身份：`agentId=programming-helper` + `sessionType=coder` 的会话由独立的 `CoderAgent` 类装配（`coder-agent.js`，runtime 按 `sessionType` 分派），定位为 **24 小时自主编码智能体**：
+**coder** 是独立的后台型 APP（`prebuilt-agents/official/coder/`，`host: programming-helper` / `visibility: on-demand`，见 ADR-0025），定位为 **24 小时自主编码智能体**，会话直接以 `agentId=coder` 寻址：
 
 - 会话在线程内接续（trim / 摘要后自动接力，无人值守）；
 - 指令经线程收件箱（inbox）投递；
@@ -306,18 +306,18 @@ claw run my-agent --goal "..." --debug
 
 | 项 | 值 |
 |---|---|
-| 位置 | `prebuilt-agents/official/programming-helper/coder-agent.js`（工作空间内身份，非独立工作空间） |
-| 会话创建 | `POST /protoclaw/prebuilt_sessions`，`{"agentId":"programming-helper","sessionType":"coder",...}` |
-| UI 入口 | Web UI 左侧「coder」独立入口（同一工作空间的投影条目）；coder 会话由调度方创建，用户不能创建 |
-| 进程模式 | `shared-by-project`（进程组键含 sessionType，coder 与 main 会话不同组） |
+| 位置 | `prebuilt-agents/official/coder/agent.js`（独立 APP；`host: programming-helper` 声明呈现归属） |
+| 会话创建 | `POST /protoclaw/prebuilt_sessions`，`{"agentId":"coder",...}`；旧 `agentId=programming-helper + sessionType=coder` 形态直接报错 |
+| UI 入口 | Web UI 左侧 coder 条目（线程列表投影，线程域非空时出现并粘性记忆）；coder 会话由调度方创建，用户不能创建 |
+| 进程模式 | `shared-by-project`（进程组键 = agentId 分段，无 sessionType 段） |
 | 会话模型 | `persistent` |
 | 依赖 server | **是**（经 Claw server 托管，CLI 需通过 HTTP 访问） |
 
-feature 集：`todo` / `force-continuation` / `tickets-build-flow` / `audit` / `websearch` / `memory` / `shell` / `lsp` / `context-rotation-trigger`（自动接力，替代交互式 context-guard）/ `image-reader` / `github` / `skill`。配置独立：`.agentdev/agent-configs/coder.json`。
+feature 集（`agent.js` 装配）：`skill` / `force-continuation` / `context-rotation-trigger`（自动接力，替代交互式 context-guard）/ `output-guard` / `todo` / `tickets-build-flow` / `websearch` / `memory` / `shell` / `image-reader` / `github` / `session-reference`，LSP 按需装配。配置层：`workspaces/coder/feature-config/agent.json`。
 
-> agent 本身**不感知线程**：会话创建/trim/摘要的线程接线由 Claw server 侧（`server/thread-control/thread-integration.js`）在会话生命周期钩子上完成（判定维度是 sessionType，不是 agentId），runtime 只按普通会话运行。
+> agent 本身**不感知线程**：会话创建/trim/摘要的线程接线由 Claw server 侧（`server/thread-control/thread-integration.js`）在会话生命周期钩子上完成（判定是 APP 级 `isThreadHostApp()`，即 `agentId=coder`），runtime 只按普通会话运行。
 >
-> 历史数据：旧 `prebuilt-agents/official/coder/` 工作空间已移除；旧会话留在 `workspaces/coder/`、旧线程留在全局 `threads/` 索引（`agentId=coder` 记录），**均未迁移原地废弃**——`list --agent programming-helper` 天然过滤掉它们。
+> 历史数据：ADR-0025 前的 `programming-helper + sessionType=coder` 会话与 ph 名下线程由服务端启动搬移模块（`server/routes/coder-identity-retirement.js`）一次性迁入 `~/.agentdev/AgentDevClaw/retired/coder-identity-20261011/`（整目录可还原），旧形态数据不再原地保留。
 
 ### 10.2 线程（Thread）模型
 
@@ -348,7 +348,7 @@ feature 集：`todo` / `force-continuation` / `tickets-build-flow` / `audit` / `
 
 `claw threads` 是线程的 **CLI 控制面**，通过 HTTP 调用运行中的 Claw server（默认 `http://127.0.0.1:1420`，可用 `PORT` 覆盖）。这些命令对应 `server/thread-control/thread-routes.js` 提供的 `/protoclaw/threads*` 接口。
 
-> 线程由编程小助手工作空间的 coder 会话消费（sessionType 级判定）；其他会话不创建线程。`claw threads` 也是审计线程状态、投递指令、推进 head 的主要 CLI 手段。
+> 线程由 coder APP 的会话消费（APP 级判定，`agentId=coder`）；其他会话不创建线程。`claw threads` 也是审计线程状态、投递指令、推进 head 的主要 CLI 手段。
 
 #### 列表
 
@@ -356,7 +356,7 @@ feature 集：`todo` / `force-continuation` / `tickets-build-flow` / `audit` / `
 claw threads list [--agent ID] [--format text|json]
 ```
 
-- `--agent programming-helper`：只列该工作空间的线程（coder 线程归属 `agentId=programming-helper`）。
+- `--agent coder`：只列 coder APP 的线程（coder 线程归属 `agentId=coder`）。
 - `text` 格式输出：`Threads (N):  <threadId>  [status|lifeState]  agent=...  head=...  "标题"`——`lifeState` 与标题直接可见，便于调度方定位与判活。
 - `json` 格式输出完整线程索引 JSON（含 `lifeState` / `failed` / `archived`）。
 
@@ -483,7 +483,7 @@ claw threads unarchive wt-xxxx-...
 POST /protoclaw/prebuilt_sessions
 Content-Type: application/json
 
-{ "agentId": "programming-helper", "sessionType": "coder", "targetDir": "D:/code/AgentDevClaw" }
+{ "agentId": "coder", "targetDir": "D:/code/AgentDevClaw" }
 ```
 
 ### 10.5 线程数据落盘

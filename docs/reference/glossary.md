@@ -14,8 +14,8 @@
   _Avoid_: 持久化 runtimeId 或当稳定缓存 key 用。
 - **sessionId** — 工作会话的标识。前端从 `allAgents` 缓存派生的 sessionId 会暂态错位，只能 fallback；server 禁止跨 session fallback 投递。
 - **投递三元组** — agentId / runtimeId / sessionId，capability 跨进程投递的寻址组合，runtimeId 优先。
-- **sessionType** — 同一工作空间内分派会话身份的键（programming-helper：`main` / `coder`）。身份归属：main → 宿主；其余 → `parent_id:sessionType`。
-  _Avoid_: 用 Agent 类型硬编码推导身份归属。
+- **sessionType** — 会话类型标签（`main` 缺省 / `exploration` 探索 / `archived`），qqbot 渠道等按需使用。会话身份不再由它分派：coder 已升格独立 APP（ADR-0025），会话归属是 agentId 结构事实。
+  _Avoid_: 用 sessionType 推导身份归属或合成侧栏条目——身份投影机制已退役。
 
 ## Agent 形态
 
