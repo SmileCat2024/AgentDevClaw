@@ -37,9 +37,8 @@ function composeSuccessionInstruction(initialGoal) {
   // R3 段落逐字对齐框架（core/workthread/core.ts join('') 连接）；plain
   // 场景无指令 Inbox，原目标以独立段落显式随行。
   const instruction = [
-    '上下文已精简接力。先检查当前工作树、已有变更、测试结果和上一棒摘要，',
-    '确认哪些步骤已经完成；不要重复可能已有副作用的操作，然后继续当前任务。',
-    '需要人工决策或无法安全判断时，明确说明原因。',
+    '上下文已精简接续。继续工作前，请先审视当前任务状态：重新阅读仍然涉及的关键文件以确认其最新内容，',
+    '回顾上文中的关键结论、约定与未完成事项，核对进度后再决定下一步动作。',
   ].join('');
   return initialGoal ? `${instruction}\n\n本次运行的原始任务：${initialGoal}` : instruction;
 }
@@ -104,6 +103,10 @@ export async function executePlainCallWithRotation({
 }) {
   let sessionId = initialSessionId;
   let prompt = initialGoal;
+  // prompt 的身份：首轮 initialGoal 是用户目标（user）；接力轮换上的恢复
+  // 指令是机器通报（reminder——落地为带 source 的 system 消息，与 thread
+  // 接力的恢复指令投递形态一致，不冒充用户发言）。
+  let promptIsMachine = false;
   let handoff = null;
   let successions = 0;
   let persistedHead = initialSessionId; // 最后一个已落盘的会话（所有收敛路径都报它，不指向未落盘的 successor）
@@ -137,9 +140,16 @@ export async function executePlainCallWithRotation({
     callError = null;
     try {
       // onCallDetailed 是框架标准（CallOutcome 终态元数据）；非 BasicAgent
-      // 子类的兼容实现只有 onCall（response-only），按 completed 归一。
+      // 子类的兼容实现只有 onCall（response-only），按 completed 归一
+      //（兼容路径无身份参数，恢复指令退回 user 形态落地）。
       if (typeof currentAgent.onCallDetailed === 'function') {
-        outcome = await currentAgent.onCallDetailed(prompt);
+        outcome = await currentAgent.onCallDetailed(
+          prompt,
+          undefined,
+          undefined,
+          undefined,
+          promptIsMachine ? { kind: 'reminder', source: 'plain-rotation' } : undefined,
+        );
       } else {
         outcome = { status: 'completed', response: await currentAgent.onCall(prompt) };
       }
@@ -294,5 +304,6 @@ export async function executePlainCallWithRotation({
 
     sessionId = successorId;
     prompt = composeSuccessionInstruction(initialGoal);
+    promptIsMachine = true;
   }
 }

@@ -860,11 +860,17 @@ describe('WorkThreadRuntimeBridge (enabled) + user-turn integration', () => {
     assert.equal(seen[0].body.kind, 'reminder');
     assert.equal(seen[0].body.source, 'thread');
 
-    // 存量 / 缺省指令（user_message、system_continuation 等）不携带 kind
-    // 字段：user-turn 契约缺省即普通用户消息（行为与身份槽位引入前一致）
+    // 接续恢复指令（system_continuation）同为机器通报：经适配器映射为
+    // reminder 身份——落地为带 source 的 system 消息而非冒充用户发言
+    await core.appendCommand({ threadId: thread.threadId, text: '上下文已精简接续……', kind: 'system_continuation' });
+    await core.deliverPendingCommands(thread.threadId);
+    assert.equal(seen[1].body.kind, 'reminder');
+
+    // 存量 / 缺省指令（user_message、external 等）不携带 kind 字段：
+    // user-turn 契约缺省即普通用户消息（行为与身份槽位引入前一致）
     await core.appendCommand({ threadId: thread.threadId, text: '普通指令' });
     await core.deliverPendingCommands(thread.threadId);
-    assert.equal(seen[1].body.kind, undefined);
+    assert.equal(seen[2].body.kind, undefined);
   });
 
   // H1 回归锁：appendCommand 允许 metadata-only 的空文本指令（' ' 占位），

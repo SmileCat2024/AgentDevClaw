@@ -336,7 +336,7 @@ feature 集（`agent.js` 装配）：`skill` / `force-continuation` / `context-r
 | `lifeState` | **合成生命状态**（推导值，非存储字段）：`executing` / `pending-commands` / `idle` / `archived` / `closed`；另有 `failed` 布尔（注意力信号，不占生命位置）。优先级 archived > executing > pending-commands > idle |
 | `mode` | `interactive`（交互） / `autonomous`（自主） |
 
-**指令（command）** 状态机：`pending` → `in_flight` → `delivered` / `failed` / `cancelled`。指令类型 `kind`：`user_message` / `system_continuation` / `external`。
+**指令（command）** 状态机：`pending` → `in_flight` → `delivered` / `failed` / `cancelled`。指令类型 `kind`：`user_message` / `reminder` / `system_continuation` / `external`；投递形态按身份分流（见下方 `threads send --kind`）。
 
 **线程关键工程不变量**（见 `thread-controller.js`）：
 
@@ -394,7 +394,7 @@ claw threads events <thread-id> [--after N] [--format text|json|jsonl]
 claw threads send <thread-id> --text TEXT [--kind K] [--source S] [--idempotency-key K]
 ```
 
-- `--kind`：`user_message`（默认）/ `system_continuation` / `external`。
+- `--kind`：`user_message`（默认）/ `system_continuation` / `external`。投递形态按身份分流：`user_message` / `external` 落地为普通用户消息；`system_continuation` 与 `reminder`（定时唤醒，feature 侧产生）以 reminder 身份投递——落地为带 source 的 system 消息，不冒充用户发言、不响应输入租约。
 - `--source`：指令来源（默认 `ui`，CLI 调用常用 `cli`）。
 - `--idempotency-key`：幂等键（重复提交返回 `duplicate:true`，不产生副作用）。
 - **已归档线程拒绝新指令**（`thread_archived` 错误）；要继续工作就开新线程。

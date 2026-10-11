@@ -51,10 +51,13 @@ export function bridgeParamsToSubmitTurnArgs(params) {
     sourceRef: params.sourceRef,
     // turn 身份透传（ADR-0024 决策 3）：command kind（WorkThreadCommandKind
     // 词表，bridge 读时缺省 user_message）→ user-turn kind（'reminder' 落地为
-    // 带 source 的 system 消息）。词汇表不同名，显式映射防静默丢身份；
-    // 其余 kind（user_message / system_continuation / external）与缺失均以
-    // 普通用户消息投递（user-turn 契约缺省）。
-    ...(params.kind === 'reminder' ? { kind: 'reminder' } : {}),
+    // 带 source 的 system 消息，不响应输入租约、不冒充用户发言）。词汇表
+    // 不同名，显式映射防静默丢身份。映射集：'reminder'（turn 身份槽位）与
+    // 'system_continuation'（接续恢复指令，同为机器通报）；其余 kind
+    // （user_message / external）与缺失以普通用户消息投递（user-turn 契约缺省）。
+    ...((params.kind === 'reminder' || params.kind === 'system_continuation')
+      ? { kind: 'reminder' }
+      : {}),
     ...(Array.isArray(params.capabilityActivations) && params.capabilityActivations.length > 0
       ? { capabilityActivations: params.capabilityActivations }
       : {}),
