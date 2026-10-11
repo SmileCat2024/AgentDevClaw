@@ -616,19 +616,17 @@ describe('wire session projection', () => {
     assert.equal(all.slice.length, 5);
   });
 
-  it('excludes session types and scopes badge totals to the project', () => {
+  it('scopes badge totals to the project', () => {
     const sessions = [
       record('a', { openDirectory: 'D:\\code\\Alpha' }),
-      record('b', { openDirectory: 'D:\\code\\Alpha', sessionType: 'coder' }),
-      record('c', { openDirectory: 'D:\\code\\Alpha', archived: true }),
-      record('d', { openDirectory: 'D:\\code\\Beta' }),
+      record('b', { openDirectory: 'D:\\code\\Alpha', archived: true }),
+      record('c', { openDirectory: 'D:\\code\\Beta' }),
     ];
     const page = sliceSessionsForWire(sessions, {
       projectDir: 'D:/code/alpha',
-      excludeSessionTypes: ['coder'],
     });
-    // coder 不进切片；其他项目不计入徽标
-    assert.deepEqual(page.slice.map((s) => s.id), ['a', 'c']);
+    // 其他项目不计入徽标
+    assert.deepEqual(page.slice.map((s) => s.id), ['a', 'b']);
     assert.equal(page.total, 2);
     assert.deepEqual([page.mainTotal, page.archivedTotal], [1, 1]);
   });
@@ -693,7 +691,6 @@ describe('buildChildRuntimeAgent', () => {
     const projected = buildChildRuntimeAgent(viewerAgent, {
       agentId: 'programming-helper',
       sessionId: 'session-1',
-      sessionType: 'main',
       sessionMeta: {
         active_workspace_session_id: 'session-1',
         active_workspace_session_form_id: null,
@@ -706,8 +703,9 @@ describe('buildChildRuntimeAgent', () => {
     assert.equal(projected.source, 'child');
     assert.equal(projected.parent_id, 'programming-helper');
     assert.equal(projected.runtime_session_id, 'agent-vw-7f3');
+    // 条目归属 = 所属 APP（ADR-0025）：sidebar_entry_id 即宿主 agent id，无身份合成
     assert.equal(projected.sidebar_entry_id, 'programming-helper');
-    assert.equal(projected.sessionType, 'main');
+    assert.equal(projected.sessionType, undefined);
     assert.equal(projected.active_workspace_session_id, 'session-1');
     assert.equal(projected.open_directory, 'D:\\code\\AgentDevClaw');
     // 名称解析链：display → agent → title → viewer 注册名
@@ -719,17 +717,15 @@ describe('buildChildRuntimeAgent', () => {
     assert.equal(projected.connected, true);
   });
 
-  it('routes coder sessions to the projected sidebar entry id', () => {
+  it('routes coder APP runtimes to their own sidebar entry id', () => {
     const projected = buildChildRuntimeAgent(viewerAgent, {
-      agentId: 'programming-helper',
+      agentId: 'coder',
       sessionId: 'session-c1',
-      sessionType: 'coder',
     });
-    assert.equal(projected.sidebar_entry_id, 'programming-helper:coder');
-    assert.equal(projected.sessionType, 'coder');
+    assert.equal(projected.sidebar_entry_id, 'coder');
+    assert.equal(projected.parent_id, 'coder');
     // 无 meta 时名称退化为 viewer 注册名，身份字段仍齐全
     assert.equal(projected.name, '智能编码空间');
-    assert.equal(projected.parent_id, 'programming-helper');
     assert.equal(projected.runtime_session_id, 'agent-vw-7f3');
   });
 

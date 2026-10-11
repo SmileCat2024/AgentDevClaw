@@ -6,14 +6,13 @@ import {
   sanitizeSessionFragment, cleanSessionText,
 } from '../shared/string-helpers.js';
 import { PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
-import { parseRemoteNamespace } from '../shared/request-target.js';
 import { getGroupChatsForSidebar } from './group-chat.js';
-import { collectSidebarIdentityEntries } from './agent-discovery.js';
 import { readWorkspaceState } from './workspace.js';
 import {
   trimSessionRecordForWire,
   sliceSessionsForWire,
 } from './session-helpers-pure.js';
+import { getThreadControl } from '../thread-control/thread-controller.js';
 
 // ── Connected Agents Query ───────────────────────────────────────
 // Pure query logic: assembles the full connected-agents list from
@@ -22,8 +21,13 @@ import {
 //
 // workspace_sessions 响应投影：PH 类工作空间只内嵌当前项目的首屏切片
 // （会话规模可达千级，全量内嵌曾使该 3s poll 响应膨胀至 MB 级）；其余
-// agent 全量但走 wire 字段裁剪。服务端内部消费（sessionType 索引、active
-// 会话解析）在组装前使用完整快照，不受裁剪影响。
+// agent 全量但走 wire 字段裁剪。服务端内部消费（active 会话解析）在组装
+// 前使用完整快照，不受裁剪影响。
+//
+// 身份模型（ADR-0025）：条目 = APP（工作空间），无并列身份投影。prebuilt
+// 条目携带 metadata 声明的 visibility（persistent / on-demand）与 host
+// 关联；on-demand 的存在性判定源是持久事实（线程域非空），运行态只产生
+// 徽标，绝不产生条目出现/消失。
 const CONNECTED_PAGE_LIMIT = 60;
 
 export function buildWireSessionsSnapshot(agentId, workspaceSessions) {
@@ -34,8 +38,7 @@ export function buildWireSessionsSnapshot(agentId, workspaceSessions) {
   }
   // PH 回退（workspace_state 不可读）：仍带分页元信息（全量已加载），
   // 前端据 sessionTotal 字段存在性判定分页语义，不因缺字段回退混乱。
-  // coder 排除口径与正常路径（buildPhProjectScopedSnapshot）一致。
-  const counts = sliceSessionsForWire(sessions, { excludeSessionTypes: ['coder'] });
+  const counts = sliceSessionsForWire(sessions);
   return {
     ...workspaceSessions,
     sessionProjectDir: null,
@@ -59,7 +62,6 @@ export async function buildPhProjectScopedSnapshot(agentId, workspaceSessions) {
   const page = sliceSessionsForWire(sessions, {
     projectDir,
     limit: CONNECTED_PAGE_LIMIT,
-    excludeSessionTypes: ['coder'],
   });
   return {
     ...workspaceSessions,
@@ -81,32 +83,20 @@ export function createConnectedAgentsQuery(deps) {
     readViewerJson,
     getPendingInputCount,
     resolveAgentModelPresets,
-    readRemoteCatalog = null,
   } = deps;
 
-  // 在线远程连接中属于本地宿主的存活身份（"宿主Id sessionType"集合）。
-  // coder 等投影身份只在远程主机运行时，投影条目由此获得存在依据；
-  // 身份判定与本地路径同构（宿主归属 + sessionType），不引入新概念。
-  async function collectRemoteLiveIdentities() {
-    if (typeof readRemoteCatalog !== 'function') return new Set();
-    const catalog = await readRemoteCatalog().catch(() => null);
-    const identities = new Set();
-    const sections = Array.isArray(catalog?.connections) ? catalog.connections : [];
-    for (const section of sections) {
-      if (section?.status !== 'connected') continue;
-      const workspaces = Array.isArray(section.workspaces) ? section.workspaces : [];
-      for (const workspace of workspaces) {
-        const entries = Array.isArray(workspace?.entries) ? workspace.entries : [];
-        for (const entry of entries) {
-          const owner = entry?.agentId
-            ? parseRemoteNamespace(String(entry.agentId))?.agentId || ''
-            : '';
-          const sessionType = String(entry?.sessionType || '').trim();
-          if (owner && sessionType) identities.add(`${owner} ${sessionType}`);
-        }
-      }
+  // on-demand APP 的存在性判定源（ADR-0025 判定源禁令）：线程域非空 =
+  // 线程索引中存在该 APP 的存活线程记录（含 closed 未归档；归档后的
+  // 持续显示由前端粘性记忆承担）。只读持久事实，不看 runtime 存活。
+  let _threadControl = null;
+  async function hasThreadDomain(agentId) {
+    try {
+      _threadControl = _threadControl || getThreadControl();
+      const summaries = await _threadControl.core.listThreads();
+      return summaries.some((summary) => String(summary?.workspaceId || '').trim() === agentId);
+    } catch {
+      return false;
     }
-    return identities;
   }
 
   async function getConnectedAgents() {
@@ -133,16 +123,10 @@ export function createConnectedAgentsQuery(deps) {
     const hasWorkGroup = prebuiltAgents.some((agent) => sanitizeSessionFragment(agent.id) === 'work-group');
     const gcChats = hasWorkGroup ? await getGroupChatsForSidebar() : [];
 
-    // 会话级身份索引：managed child runtime 条目按 sessionId 解析 sessionType，
-    // 前端据此把 coder 会话 runtime 归到 coder 投影条目（而非宿主 main 条目）下。
-    const sessionTypeByAgentAndId = new Map();
     const connectedAgents = await Promise.all(prebuiltAgents.map(async (agent) => {
       const { workspaceSessions, sessionMeta } = await readActiveWorkspaceSessionMeta(agent);
       const isWorkGroup = sanitizeSessionFragment(agent.id) === 'work-group';
-      for (const session of Array.isArray(workspaceSessions?.sessions) ? workspaceSessions.sessions : []) {
-        const sid = String(session?.id || '').trim();
-        if (sid) sessionTypeByAgentAndId.set(`${agent.id} ${sid}`, session.sessionType || 'main');
-      }
+      const visibility = agent.visibility === 'on-demand' ? 'on-demand' : 'persistent';
       return {
         id: agent.id,
         name: agent.name,
@@ -153,6 +137,12 @@ export function createConnectedAgentsQuery(deps) {
         processMode: agent.processMode || 'isolated',
         ui: agent.ui || null,
         workspace: agent.workspace || null,
+        // APP 级呈现声明（ADR-0025）：visibility 决定侧栏存在性策略，
+        // host 是与宿主 APP 的关联绑定（排序相邻 / 宿主首页入口）。
+        visibility,
+        host: agent.host || null,
+        // on-demand 判定事实：线程域非空（持久事实，非运行态）。
+        ...(visibility === 'on-demand' ? { hasThreadDomain: await hasThreadDomain(agent.id) } : {}),
         workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agent.id))
           ? await buildPhProjectScopedSnapshot(agent.id, workspaceSessions)
           : buildWireSessionsSnapshot(agent.id, workspaceSessions),
@@ -185,19 +175,9 @@ export function createConnectedAgentsQuery(deps) {
       const managedRuntime = managedRuntimeByViewerId.get(String(runtimeAgent.id || '')) || null;
       if (managedRuntime) {
         const runtimeMeta = await readWorkspaceSessionMeta(managedRuntime.agentId, managedRuntime.selectedSessionId);
-        // sessionType fallback: the runtime record carries the authoritative
-        // snapshot resolved at spawn time. The session index read can miss
-        // during successor-commit / index-write races; falling straight back
-        // to 'main' misroutes a coder session onto the host row.
-        const sessionType = sessionTypeByAgentAndId.get(`${managedRuntime.agentId} ${managedRuntime.selectedSessionId}`)
-          || managedRuntime.sessionType
-          || 'main';
         connectedAgents.push({
           id: runtimeAgent.id,
-          sessionType,
-          sidebar_entry_id: sessionType === 'main'
-            ? managedRuntime.agentId
-            : `${managedRuntime.agentId}:${sessionType}`,
+          sidebar_entry_id: managedRuntime.agentId,
           name: runtimeMeta.active_workspace_display_name
             || runtimeMeta.active_workspace_agent_name
             || runtimeMeta.active_workspace_session_title
@@ -282,11 +262,7 @@ export function createConnectedAgentsQuery(deps) {
         parent_id: exposeAsSeparateAssemblyRuntime ? matched.id : (runtimeAgent.parentAgentId || null),
         sidebar_entry_id: exposeAsSeparateAssemblyRuntime
           ? matched.id
-          : (runtimeAgent.parentAgentId
-            ? (String(runtimeAgent.sessionType || 'main') === 'main'
-              ? runtimeAgent.parentAgentId
-              : `${runtimeAgent.parentAgentId}:${String(runtimeAgent.sessionType || 'main')}`)
-            : ''),
+          : (runtimeAgent.parentAgentId || ''),
         active_workspace_session_id: exposeAsSeparateAssemblyRuntime
           ? (matched.active_workspace_session_id || null)
           : (childWorkspaceMeta?.active_workspace_session_id || null),
@@ -317,26 +293,7 @@ export function createConnectedAgentsQuery(deps) {
     }
 
     for (const managed of connectedAgents) {
-      let status = buildStatus(managed.id);
-      // The workspace row represents the main identity. A coder session shares
-      // the workspace host but belongs to the separate sidebar projection; do
-      // not let primary-runtime selection attach that child to the PH row.
-      if (managed.source === 'prebuilt'
-        && status.status === 'running'
-        && sessionTypeByAgentAndId.get(`${managed.id} ${status.selectedSessionId}`) === 'coder') {
-        const mainRuntime = Array.from(managedRuntimeByViewerId.values())
-          .find((runtime) => runtime.agentId === managed.id
-            && sessionTypeByAgentAndId.get(`${managed.id} ${runtime.selectedSessionId}`) !== 'coder');
-        status = mainRuntime
-          ? buildStatus(managed.id, mainRuntime.selectedSessionId)
-          : {
-            ...status,
-            status: 'stopped',
-            pid: null,
-            viewerAgentId: null,
-            selectedSessionId: null,
-          };
-      }
+      const status = buildStatus(managed.id);
       if (status.status === 'running') {
         managed.status = 'running';
         managed.pid = status.pid;
@@ -368,90 +325,7 @@ export function createConnectedAgentsQuery(deps) {
       })
     );
 
-    // Sidebar 投影：identities[].sidebarEntry=true 的身份展开为独立侧栏条目。
-    // 必须在状态/callActive 全部落定后拷贝宿主字段（共享 runtime 状态），
-    // 并紧邻宿主插入以保持侧栏分组顺序。runtime 匹配循环不会看到投影条目
-    //（id 含 ':'，且 name 匹配时宿主条目在前），不会误绑外部 runtime。
-    //
-    // 投影条目仅在该身份存在存活 runtime 会话时出现（coder 会话进程在线）；
-    // 身份闲置时左侧不出现面板，浏览入口在工作空间内部的项目卡片 coder tab。
-    //
-    // 会话级字段（runtime_session_id / active_workspace_* / workspace_sessions /
-    // message_count 等）不继承：那是宿主 main 会话的内容，继承会在投影条目
-    // 下合成出 main 会话的镜像。coder 的运行信号来自线程 lifeState，
-    // coder 会话 runtime 由 sessionType 路由到投影条目下。
-    const remoteLiveIdentities = await collectRemoteLiveIdentities();
-    const projectionsByHostId = new Map();
-    for (const light of prebuiltAgents) {
-      const identities = collectSidebarIdentityEntries(light);
-      if (!identities.length) continue;
-      const host = connectedAgents.find((a) => a.source === 'prebuilt' && a.id === light.id);
-      if (!host) continue;
-      const projected = (await Promise.all(identities.map(async (identity) => {
-        const identitySessionType = identity.sessionType || identity.id;
-        // Live-session detection keeps the projection visible across the
-        // relay window (old runtime exiting → new runtime spawning): a
-        // spawned-but-not-yet-registered runtime is still a live process in
-        // managedAgents, so the projection does not vanish for the whole
-        // startup stretch. The spawn-time sessionType snapshot is
-        // authoritative here — coder runtimes always carry it.
-        // 第三来源：远程主机上存活的同身份会话。coder 只在远程运行时，本地无
-        // runtime 也无 managed 进程，投影条目由远程 catalog 快照支撑。
-        const hasLiveSession = connectedAgents.some((a) => a.source === 'child'
-          && a.parent_id === host.id
-          && a.sessionType === identitySessionType)
-          || Array.from(managedAgents.values()).some((runtime) => (
-            runtime.agentId === host.id
-            && runtime.process
-            && runtime.process.exitCode === null
-            && !runtime.stopped
-            && !runtime.stopping
-            && (runtime.sessionType || 'main') === identitySessionType
-          ))
-          || remoteLiveIdentities.has(`${host.id} ${identitySessionType}`);
-        if (!hasLiveSession) return null;
-        const {
-          workspace_sessions: _ws,
-          workspace_state: _wstate,
-          active_workspace_session_id: _awsid,
-          active_workspace_session_form_id: _awsfid,
-          active_workspace_session_title: _awst,
-          active_workspace_agent_name: _awgn,
-          active_workspace_display_name: _awdn,
-          runtime_session_id: _rsid,
-          message_count: _mc,
-          pending_input_count: _pic,
-          callActive: _ca,
-          pid: _pid,
-          created_at: _cat,
-          ...hostBase
-        } = host;
-        return {
-          ...hostBase,
-          id: `${host.id}:${identity.id}`,
-          agentId: host.id,
-          sessionType: identitySessionType,
-          name: identity.displayName || identity.id,
-          base_name: identity.displayName || identity.id,
-          description: identity.description || host.description,
-          icon: identity.icon || host.icon || null,
-          ui: identity.ui || null,
-          sidebarGroup: identity.sidebarGroup || null,
-          modelPresets: await resolveAgentModelPresets(identity.id, identity.modelPresets),
-        };
-      }))).filter(Boolean);
-      if (projected.length) projectionsByHostId.set(light.id, projected);
-    }
-    if (projectionsByHostId.size === 0) {
-      return connectedAgents;
-    }
-    const withProjections = [];
-    for (const entry of connectedAgents) {
-      withProjections.push(entry);
-      const projections = entry.source === 'prebuilt' ? projectionsByHostId.get(entry.id) : null;
-      if (projections) withProjections.push(...projections);
-    }
-    return withProjections;
+    return connectedAgents;
   }
 
   return { getConnectedAgents };

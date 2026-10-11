@@ -37,6 +37,8 @@
  *   - 其余阶段值透传落盘 pendingSuccession.stage
  */
 
+import { readSessionIndex } from '../shared/session-access.js';
+
 const LIFECYCLE_EVENT_CAP = 200;
 
 /**
@@ -294,14 +296,25 @@ export function createThreadSuccessionService({
  *
  * @param {object} deps
  * @param {{ core: import('@agentdevjs/core').WorkThread }} deps.threadControl
- * @param {Function} [deps.identitySource] - 会话身份真相源（与 control 装配同源）；
- *   缺省时所有 head 视为不可承接（保守收敛）
  */
-export function createThreadRecoveryService({ threadControl, identitySource = null } = {}) {
+export function createThreadRecoveryService({ threadControl } = {}) {
   if (!threadControl?.core) {
     throw new Error('createThreadRecoveryService requires threadControl');
   }
   const core = threadControl.core;
+
+  /**
+   * head 会话存在性检查：崩溃残留收敛只关心「旧 head 会话是否仍可承接」，
+   * 直查会话索引（ADR-0025：会话身份不再是判定维度）。
+   */
+  async function headSessionResolvable(agentId, sessionId) {
+    try {
+      const index = await readSessionIndex(agentId);
+      return (index.sessions || []).some((s) => String(s?.id || '').trim() === sessionId);
+    } catch {
+      return false;
+    }
+  }
 
   /**
    * 扫描全部线程记录，收敛「交接进行中」的崩溃残留。
@@ -324,10 +337,7 @@ export function createThreadRecoveryService({ threadControl, identitySource = nu
       const interruptedStage = (pending.stage && pending.stage !== 'started')
         ? pending.stage
         : 'commit_not_reached';
-      const headIdentity = identitySource
-        ? await identitySource(record.agentId, record.headSessionId).catch(() => null)
-        : null;
-      const headUsable = Boolean(headIdentity);
+      const headUsable = await headSessionResolvable(record.agentId, record.headSessionId);
       const reason = headUsable ? 'restart_convergence' : 'head_session_missing';
 
       const detail = headUsable

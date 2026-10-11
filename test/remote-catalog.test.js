@@ -217,8 +217,8 @@ describe('身份字段往返', () => {
     const coder = childRuntime({
       id: 'runtime-coder',
       runtime_session_id: 'runtime-coder',
-      sessionType: 'coder',
-      sidebar_entry_id: 'programming-helper:coder',
+      parent_id: 'coder',
+      sidebar_entry_id: 'coder',
       active_workspace_session_id: 'coder-session',
       active_workspace_session_title: '自动修复',
       updated_at: '2026-08-27T11:00:00.000Z',
@@ -237,23 +237,26 @@ describe('身份字段往返', () => {
     });
 
     const section = sectionOf(await aggregator.aggregate(), 'server-a');
-    const project = workspaceOf(section, 'project-c');
-    const byType = new Map(project.entries.map((entry) => [entry.sessionType, entry]));
+    // main 与 coder 是两个 APP：同目录的项目组分属各自 APP（ADR-0010 投影语义）
+    const projectGroups = section.workspaces.filter((item) => item.projectName.endsWith('：project-c'));
+    assert.equal(projectGroups.length, 2, '两个 APP 各自的项目组');
+    const entriesByRuntimeId = new Map(projectGroups.flatMap((group) => group.entries).map((entry) => [entry.runtimeId, entry]));
 
-    assert.equal(byType.get('main').runtimeId, 'remote:server-a:runtime-main');
-    assert.equal(byType.get('main').agentId, 'remote:server-a:programming-helper');
-    assert.equal(byType.get('main').sidebarEntryId, 'programming-helper');
-    assert.equal(byType.get('main').sessionId, 'remote:server-a:sess-c1');
-    assert.equal(byType.get('main').openDirectory, String.raw`D:\code\project-c`);
+    const mainEntry = entriesByRuntimeId.get('remote:server-a:runtime-main');
+    assert.equal(mainEntry.agentId, 'remote:server-a:programming-helper');
+    assert.equal(mainEntry.sidebarEntryId, 'programming-helper');
+    assert.equal(mainEntry.sessionId, 'remote:server-a:sess-c1');
+    assert.equal(mainEntry.openDirectory, String.raw`D:\code\project-c`);
 
-    assert.equal(byType.get('coder').runtimeId, 'remote:server-a:runtime-coder');
-    assert.equal(byType.get('coder').agentId, 'remote:server-a:programming-helper');
-    assert.equal(byType.get('coder').sidebarEntryId, 'programming-helper:coder');
-    assert.equal(byType.get('coder').sessionId, 'remote:server-a:coder-session');
-    assert.equal(byType.get('coder').sessionTitle, '自动修复');
+    // coder APP 的远程条目归属自己的 entry（ADR-0025：无并列身份合成）
+    const coderEntry = entriesByRuntimeId.get('remote:server-a:runtime-coder');
+    assert.equal(coderEntry.agentId, 'remote:server-a:coder');
+    assert.equal(coderEntry.sidebarEntryId, 'coder');
+    assert.equal(coderEntry.sessionId, 'remote:server-a:coder-session');
+    assert.equal(coderEntry.sessionTitle, '自动修复');
   });
 
-  it('在缺少显式 sidebar_entry_id 时按 sessionType 推导并列身份入口', async () => {
+  it('在缺少显式 sidebar_entry_id 时归属宿主 APP（无身份合成，ADR-0025）', async () => {
     const { aggregator } = createHarness({
       routes: remoteRoutes({
         port: 22101,
@@ -266,17 +269,18 @@ describe('身份字段往返', () => {
           childRuntime({
             id: 'runtime-coder-no-explicit-entry',
             runtime_session_id: 'runtime-coder-no-explicit-entry',
-            sessionType: 'coder',
+            parent_id: 'coder',
             sidebar_entry_id: '',
           }),
         ],
       }),
     });
 
-    const project = workspaceOf(sectionOf(await aggregator.aggregate(), 'server-a'), 'project-c');
-    const byType = new Map(project.entries.map((entry) => [entry.sessionType, entry]));
-    assert.equal(byType.get('main').sidebarEntryId, 'programming-helper');
-    assert.equal(byType.get('coder').sidebarEntryId, 'programming-helper:coder');
+    const section = sectionOf(await aggregator.aggregate(), 'server-a');
+    const projectGroups = section.workspaces.filter((item) => item.projectName.endsWith('：project-c'));
+    const entriesByRuntimeId = new Map(projectGroups.flatMap((group) => group.entries).map((entry) => [entry.runtimeId, entry]));
+    assert.equal(entriesByRuntimeId.get('remote:server-a:runtime-main-no-explicit-entry').sidebarEntryId, 'programming-helper');
+    assert.equal(entriesByRuntimeId.get('remote:server-a:runtime-coder-no-explicit-entry').sidebarEntryId, 'coder');
   });
 });
 

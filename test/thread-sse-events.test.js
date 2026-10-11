@@ -33,7 +33,7 @@ import { createThreadIntegration } from '../server/thread-control/thread-integra
 import { createThreadLifecycleService } from '../server/thread-control/thread-lifecycle.js';
 import { createThreadDeleteService } from '../server/thread-control/thread-delete.js';
 
-const AGENT = 'programming-helper';
+const AGENT = 'coder';
 
 // ── SSE harness（与 test/sse-events.test.js 同源模式）────────────────
 
@@ -142,25 +142,12 @@ const threadFrames = (text) => events(text).filter((f) => f.event?.startsWith('t
 let base = null;
 let counter = 0;
 
-function makeIdentitySource() {
-  const sessions = new Map();
-  return {
-    register(sessionId, identity) { sessions.set(sessionId, identity); },
-    identitySource: async (_agentId, sessionId) => {
-      const identity = sessions.get(String(sessionId || '').trim());
-      return identity === undefined ? null : identity;
-    },
-  };
-}
-
 function makeControl() {
-  const identity = makeIdentitySource();
   const control = createThreadControl({
     rootDir: path.join(base, `tsse-${++counter}`),
     bridge: new WorkThreadRuntimeBridge(),
-    identitySource: identity.identitySource,
   });
-  return { identity, control };
+  return { control };
 }
 
 function makePublishSpy() {
@@ -264,12 +251,12 @@ describe('thread SSE: subscription routing', () => {
 // ── 2. 事务发布点 ──────────────────────────────────────────────────
 
 describe('thread SSE: transaction publish points', () => {
-  it('onSessionCreated publishes thread.created after start; non-host sessions publish nothing', async () => {
-    const { identity, control } = makeControl();
+  it('onSessionCreated publishes thread.created after start; non-host app sessions publish nothing', async () => {
+    const { control } = makeControl();
     const spy = makePublishSpy();
     const integration = createThreadIntegration({ control, publishThreadEvent: spy.publishThreadEvent });
 
-    const thread = await integration.onSessionCreated(AGENT, { id: 'c-s1', sessionType: 'coder', title: 'T' });
+    const thread = await integration.onSessionCreated(AGENT, { id: 'c-s1', title: 'T' });
     assert.ok(thread);
     assert.equal(spy.calls.length, 1);
     assert.equal(spy.calls[0].threadId, thread.threadId);
@@ -281,18 +268,17 @@ describe('thread SSE: transaction publish points', () => {
       status: 'open',
     });
 
-    // 非线程宿主会话（main）：不建线程、不发布
-    const none = await integration.onSessionCreated(AGENT, { id: 'c-main', sessionType: 'main' });
+    // 非线程宿主 APP 会话：不建线程、不发布
+    const none = await integration.onSessionCreated('programming-helper', { id: 'c-main' });
     assert.equal(none, null);
     assert.equal(spy.calls.length, 1);
 
     // 重启恢复语义的对照：既有线程不经过 onSessionCreated（恢复不是创建），
     // 此处固定钩子语义——只有新建会话才可能发布 created。
-    identity.register('c-s2', 'coder');
   });
 
   it('applySessionSuccession publishes head-advanced after advanceHead and pending delivery', async () => {
-    const { identity, control } = makeControl();
+    const { control } = makeControl();
     const order = [];
     const proxyCore = new Proxy(control.core, {
       get(target, prop, receiver) {
@@ -322,8 +308,7 @@ describe('thread SSE: transaction publish points', () => {
       },
     });
 
-    const thread = await integration.onSessionCreated(AGENT, { id: 'a-s1', sessionType: 'coder' });
-    identity.register('a-s2', 'coder');
+    const thread = await integration.onSessionCreated(AGENT, { id: 'a-s1' });
 
     const outcome = await integration.applySessionSuccession({
       agentId: AGENT, fromSessionId: 'a-s1', toSessionId: 'a-s2', reason: 'trim',
@@ -362,7 +347,7 @@ describe('thread SSE: transaction publish points', () => {
       publishThreadEvent: spy.publishThreadEvent,
     });
 
-    const thread = await control.core.start({ sessionRef: { agentId: AGENT, sessionId: 'ar-s1' }, identity: 'coder' });
+    const thread = await control.core.start({ sessionRef: { agentId: AGENT, sessionId: 'ar-s1' } });
     const result = await service.archiveThread(thread.threadId, { reason: 'user_archive' });
 
     assert.equal(result.cleanup.status, 'complete');
@@ -377,7 +362,7 @@ describe('thread SSE: transaction publish points', () => {
     // partial（stop 失败）同样是权威落定状态：发布 cleanupStatus=partial
     const partialSpy = makePublishSpy();
     const control2 = makeControl();
-    const thread2 = await control2.control.core.start({ sessionRef: { agentId: AGENT, sessionId: 'ap-s1' }, identity: 'coder' });
+    const thread2 = await control2.control.core.start({ sessionRef: { agentId: AGENT, sessionId: 'ap-s1' } });
     const service2 = createThreadLifecycleService({
       control: control2.control,
       stopSession: async () => { throw new Error('stop timeout'); },
@@ -402,7 +387,7 @@ describe('thread SSE: transaction publish points', () => {
       publishThreadEvent: spy.publishThreadEvent,
     });
 
-    const thread = await control.core.start({ sessionRef: { agentId: AGENT, sessionId: 'd-s1' }, identity: 'coder' });
+    const thread = await control.core.start({ sessionRef: { agentId: AGENT, sessionId: 'd-s1' } });
     const threadId = thread.threadId;
 
     const partial = await makeService().deleteThread(threadId);
@@ -433,10 +418,9 @@ describe('thread SSE: end-to-end wiring', () => {
     const h = makeSseHarness(t, { coalesceMs: 5000 });
     await h.start();
 
-    const { identity, control } = makeControl();
+    const { control } = makeControl();
     const integration = createThreadIntegration({ control }); // 缺省发布器 = 模块级入口
-    const thread = await integration.onSessionCreated(AGENT, { id: 'e-s1', sessionType: 'coder' });
-    identity.register('e-s2', 'coder');
+    const thread = await integration.onSessionCreated(AGENT, { id: 'e-s1' });
 
     const s = await h.openStream(`/protoclaw/events?threads=${encodeURIComponent(thread.threadId)}`);
     assert.ok(await s.readUntil(hasHello));

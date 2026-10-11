@@ -29,9 +29,8 @@
  *     精确停止该会话的 coder runtime（session/close 的数据面）。
  *     runtime 未运行时幂等成功；thread / session 数据不动，归档不经此层。
  *
- * 外部契约仍以 agentId="coder" 调用（编辑器集成零感知）；coder 已并入
- * programming-helper 工作空间，内部实现落在该工作空间的 coder 会话身份
- * 上（sessionType='coder'，线程宿主）。
+ * 外部契约以 agentId="coder" 调用（编辑器集成零感知）；coder 是独立后台
+ * 型 APP（ADR-0025），该 id 即真实寻址目标，无内部映射。
  */
 
 import path from 'path';
@@ -48,12 +47,8 @@ import {
 } from '../shared/agent-access.js';
 import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
 
-/** 对外契约 ID：ACP adapter 请求体仍传 agentId="coder"。 */
+/** 对外契约 ID：ACP adapter 请求体传 agentId="coder"，即 coder APP 真实 id。 */
 export const ACP_AGENT_ID = 'coder';
-/** 内部实现：coder 会话宿主在 programming-helper 工作空间。 */
-export const ACP_WORKSPACE_AGENT_ID = 'programming-helper';
-/** coder 身份会话类型（线程宿主判定与 CoderAgent 分派键）。 */
-export const ACP_SESSION_TYPE = 'coder';
 export const ACP_READY_TIMEOUT_DEFAULT_MS = 30_000;
 export function resolveAcpReadyTimeoutMs() {
   const raw = Number(process.env.CLAW_ACP_READY_TIMEOUT_MS);
@@ -325,7 +320,7 @@ export function setupAcpRoutes(app, express, ctx) {
 
       let agent;
       try {
-        agent = await requireAgentLight(ACP_WORKSPACE_AGENT_ID);
+        agent = await requireAgentLight(ACP_AGENT_ID);
       } catch (error) {
         res.status(Number(error?.statusCode) || 500).json({
           ok: false,
@@ -338,7 +333,6 @@ export function setupAcpRoutes(app, express, ctx) {
       const state = { session: null, runtimeStartAttempted: false };
       try {
         const session = await createPrebuiltSession(agent.id, {
-          sessionType: ACP_SESSION_TYPE,
           openDirectory: cwd,
           returnSummary: false,
         });
@@ -406,7 +400,7 @@ export function setupAcpRoutes(app, express, ctx) {
       }
 
       const threads = await threadControl.core.listThreads({
-        agentId: ACP_WORKSPACE_AGENT_ID,
+        agentId: ACP_AGENT_ID,
       });
       const archiveEntries = await threadControl.archive.list().catch(() => ({}));
 
@@ -422,7 +416,7 @@ export function setupAcpRoutes(app, express, ctx) {
         // 对协议客户端不可用——直接跳过（不发送违反 schema 的 cwd:null 条目）。
         let record = null;
         try {
-          record = await requirePrebuiltSessionRecord(ACP_WORKSPACE_AGENT_ID, headSessionId);
+          record = await requirePrebuiltSessionRecord(ACP_AGENT_ID, headSessionId);
         } catch (error) {
           if (error?.statusCode !== 404) throw error;
         }
@@ -466,7 +460,7 @@ export function setupAcpRoutes(app, express, ctx) {
       if (req.body?.cwd !== undefined) {
         requestCwd = await validateAcpCwd(req.body.cwd);
       }
-      const sessionRecord = await requirePrebuiltSessionRecord(ACP_WORKSPACE_AGENT_ID, requestedSessionId);
+      const sessionRecord = await requirePrebuiltSessionRecord(ACP_AGENT_ID, requestedSessionId);
       if (
         requestCwd
         && (!sessionRecord?.openDirectory || acpPathKey(sessionRecord.openDirectory) !== acpPathKey(requestCwd))
@@ -478,12 +472,12 @@ export function setupAcpRoutes(app, express, ctx) {
       // 先按 head 命中（快路径）；未命中再经 thread-integration 的成员链扫描
       // （sessionChain 全成员匹配，与 input-gateway 非 head 投递路由同源语义）。
       let threadRecord = await threadControl.core.findThreadByHeadSession(
-        ACP_WORKSPACE_AGENT_ID,
+        ACP_AGENT_ID,
         requestedSessionId,
       );
       if (!threadRecord && typeof threadIntegration?.findThreadBySession === 'function') {
         threadRecord = await threadIntegration.findThreadBySession(
-          ACP_WORKSPACE_AGENT_ID,
+          ACP_AGENT_ID,
           requestedSessionId,
         );
       }
@@ -512,17 +506,17 @@ export function setupAcpRoutes(app, express, ctx) {
       // 不把失败拖到第一次 prompt）
       let agent;
       try {
-        agent = await requireAgentLight(ACP_WORKSPACE_AGENT_ID);
+        agent = await requireAgentLight(ACP_AGENT_ID);
       } catch (error) {
         throw Object.assign(error, { statusCode: Number(error?.statusCode) || 500 });
       }
       await startManagedAgent(agent, headSessionId);
       const readyTimeoutMs = resolveAcpReadyTimeoutMs();
-      const ready = await waitForManagedRuntimeReady(ACP_WORKSPACE_AGENT_ID, readyTimeoutMs, headSessionId);
+      const ready = await waitForManagedRuntimeReady(ACP_AGENT_ID, readyTimeoutMs, headSessionId);
       if (!ready) {
         throw acpError(504, 'runtime_ready_timeout', `coder runtime not READY within ${readyTimeoutMs}ms (session=${headSessionId})`);
       }
-      const viewerAgentId = resolveSessionViewerAgentId(ACP_WORKSPACE_AGENT_ID, headSessionId);
+      const viewerAgentId = resolveSessionViewerAgentId(ACP_AGENT_ID, headSessionId);
       if (!viewerAgentId) {
         throw acpError(500, 'viewer_agent_missing', `READY runtime has no viewerAgentId (session=${headSessionId})`);
       }
@@ -586,8 +580,8 @@ export function setupAcpRoutes(app, express, ctx) {
       if (!clawSessionId) {
         throw acpError(400, 'invalid_params', 'clawSessionId is required');
       }
-      await requirePrebuiltSessionRecord(ACP_WORKSPACE_AGENT_ID, clawSessionId);
-      const snapshot = await readSessionSnapshotForContinuity(ACP_WORKSPACE_AGENT_ID, clawSessionId);
+      await requirePrebuiltSessionRecord(ACP_AGENT_ID, clawSessionId);
+      const snapshot = await readSessionSnapshotForContinuity(ACP_AGENT_ID, clawSessionId);
       if (!snapshot) {
         throw acpError(404, 'session_snapshot_missing', `session file for ${clawSessionId} is missing or unreadable`);
       }
@@ -607,7 +601,7 @@ export function setupAcpRoutes(app, express, ctx) {
   app.post('/protoclaw/acp/coder/sessions/:clawSessionId/interrupt', express.json(), async (req, res) => {
     const clawSessionId = sanitizeSessionFragment(req.params.clawSessionId);
     try {
-      const viewerAgentId = resolveSessionViewerAgentId(ACP_WORKSPACE_AGENT_ID, clawSessionId);
+      const viewerAgentId = resolveSessionViewerAgentId(ACP_AGENT_ID, clawSessionId);
       if (!viewerAgentId) {
         res.status(404).json({
           ok: false,
@@ -672,12 +666,12 @@ export function setupAcpRoutes(app, express, ctx) {
       // agentId::selectedSessionId，getAgentRuntime 只按注册键查找，与
       // shared 模式 remove-session 依赖条目自身状态一致）。thread / session
       // 持久数据不动——归档是 Claw 管理面的动作，不经此层。
-      const viewerAgentId = resolveSessionViewerAgentId(ACP_WORKSPACE_AGENT_ID, clawSessionId);
+      const viewerAgentId = resolveSessionViewerAgentId(ACP_AGENT_ID, clawSessionId);
       if (viewerAgentId) {
         const runtimeEntry = getRuntimeByViewerAgentId(viewerAgentId);
         const entryKey = String(runtimeEntry?.key || '');
         const entrySessionId = entryKey.includes('::') ? entryKey.split('::').slice(1).join('::') : '';
-        await stopManagedAgent(ACP_WORKSPACE_AGENT_ID, entrySessionId || clawSessionId);
+        await stopManagedAgent(ACP_AGENT_ID, entrySessionId || clawSessionId);
       }
       res.json({ ok: true, clawSessionId });
     } catch (error) {

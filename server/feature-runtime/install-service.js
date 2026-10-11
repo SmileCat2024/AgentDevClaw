@@ -23,8 +23,8 @@ import { buildUserMountPlan } from './user-mount.js';
 import { computeRuntimeDependencyHash, getRuntimeEnvironmentRoot, provisionRuntimeEnvironment } from './provisioner.js';
 
 export const IDENTITY_SCOPES = {
-  main: { agentId: 'programming-helper', layerId: 'agent', sessionType: 'main' },
-  coder: { agentId: 'coder', layerId: 'coder', sessionType: 'coder' },
+  main: { agentId: 'programming-helper', layerId: 'agent' },
+  coder: { agentId: 'coder', layerId: 'agent' },
 };
 
 /** $mount 声明键 = 包 basename（与前端商店 _fsRuntimeKey 同规则） */
@@ -127,7 +127,7 @@ export async function installFeature({ identity, packageName, version }, {
     target.set(key, { package: packageName, version });
 
     const started = Date.now();
-    const { plan } = await buildUserMountPlan({ mounts: target, agentId: scope.agentId, sessionType: scope.sessionType, catalogRoots });
+    const { plan } = await buildUserMountPlan({ mounts: target, agentId: scope.agentId, catalogRoots });
     const environment = await provision({ plan, root: environmentRoot });
 
     if (!alreadyDeclared) {
@@ -167,7 +167,7 @@ export async function rebuildEnvironment({ identity }, {
       throw error;
     }
     const started = Date.now();
-    const { plan } = await buildUserMountPlan({ mounts: repository, agentId: scope.agentId, sessionType: scope.sessionType, catalogRoots });
+    const { plan } = await buildUserMountPlan({ mounts: repository, agentId: scope.agentId, catalogRoots });
     const environment = await provision({ plan, root: environmentRoot });
     return {
       installed: environment.installed,
@@ -190,7 +190,7 @@ export async function computeScopeEnvReadiness(identity, { catalogRoots, resolve
   const { mounts } = readDeclaredMounts(scope, resolvers);
   const repository = new Map([...mounts].filter(([, mount]) => mount.kind !== 'builtin'));
   if (repository.size === 0) return { ready: true, hasEnv: false };
-  const { plan } = await buildUserMountPlan({ mounts: repository, agentId: scope.agentId, sessionType: scope.sessionType, catalogRoots });
+  const { plan } = await buildUserMountPlan({ mounts: repository, agentId: scope.agentId, catalogRoots });
   const hash = computeRuntimeDependencyHash(plan);
   const envDir = getRuntimeEnvironmentRoot(plan.agent.id, hash, environmentRoot);
   return { ready: existsSync(join(envDir, 'runtime-lock.json')), hasEnv: true };

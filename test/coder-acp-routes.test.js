@@ -3,8 +3,8 @@
  *
  * Covers:
  * 1. POST /protoclaw/acp/coder/sessions
- *    - agentId guard: the external contract still only accepts "coder"; the internal
- *      implementation now targets programming-helper sessions with sessionType=coder
+ *    - agentId guard: the external contract only accepts "coder" (the standalone
+ *      coder APP, ADR-0025); sessions are created directly under agentId=coder
  *    - cwd validation: non-absolute / nonexistent / file → 400, zero side effects
  *    - happy path returns { clawSessionId, threadId, viewerAgentId, cwd }
  *    - CLAW_ACP_READY_TIMEOUT_MS is honoured
@@ -76,12 +76,12 @@ function makeMockCtx(overrides = {}) {
   };
   const ctx = {
     requireAgentLight: async (agentId) => {
-      if (agentId !== 'programming-helper') {
+      if (agentId !== 'coder') {
         const error = new Error(`Unknown agent: ${agentId}`);
         error.statusCode = 404;
         throw error;
       }
-      return { id: 'programming-helper' };
+      return { id: 'coder' };
     },
     // 会话索引记录（resume 的 cwd 校验与 list 的标题来源）；键为 sessionId
     sessionRecords: overrides.sessionRecords || {},
@@ -98,7 +98,7 @@ function makeMockCtx(overrides = {}) {
     createPrebuiltSession: async (agentId, opts) => {
       record('createPrebuiltSession', { agentId, opts });
       if (overrides.createPrebuiltSession) return overrides.createPrebuiltSession(agentId, opts);
-      return { id: 'sess-acp-1', sessionType: opts?.sessionType, openDirectory: opts?.openDirectory };
+      return { id: 'sess-acp-1', openDirectory: opts?.openDirectory };
     },
     deletePrebuiltSession: async (agentId, sessionId, opts) => {
       record('deletePrebuiltSession', { agentId, sessionId, opts });
@@ -232,7 +232,7 @@ async function callResume(app, clawSessionId, body) {
   return res;
 }
 
-function seedRuntime({ agentId = 'programming-helper', sessionId, viewerAgentId, running = true }) {
+function seedRuntime({ agentId = 'coder', sessionId, viewerAgentId, running = true }) {
   const runtime = {
     key: `${agentId}::${sessionId}`,
     agentId,
@@ -378,17 +378,16 @@ describe('ACP create — happy path', () => {
       { ok: true, clawSessionId: 'sess-acp-1', threadId: 'thread-acp-1', viewerAgentId: 'viewer-acp-1', cwd: validCwd() },
     );
 
-    // session 以 main 类型 + 校验后的 cwd 创建
+    // session 以 coder APP + 校验后的 cwd 创建
     const created = ctx._calls.createPrebuiltSession[0];
-    assert.equal(created.agentId, 'programming-helper');
-    assert.equal(created.opts.sessionType, 'coder');
+    assert.equal(created.agentId, 'coder');
     assert.equal(created.opts.openDirectory, validCwd());
 
     // runtime 以精确 session 启动并等待 READY（默认超时）
     assert.equal(ctx._calls.startManagedAgent[0].sessionId, 'sess-acp-1');
     assert.deepEqual(
       ctx._calls.waitForManagedRuntimeReady[0],
-      { agentId: 'programming-helper', timeoutMs: ACP_READY_TIMEOUT_DEFAULT_MS, sessionId: 'sess-acp-1' },
+      { agentId: 'coder', timeoutMs: ACP_READY_TIMEOUT_DEFAULT_MS, sessionId: 'sess-acp-1' },
     );
 
     // thread 经宿主钩子建立，并按 headSessionId 从 store 解析
@@ -449,7 +448,7 @@ describe('ACP create — rollback ladder', () => {
     assert.deepEqual(res.body.rollback.leftover, {});
 
     // runtime 精确 stop（agentId + sessionId，不扩大范围）
-    assert.deepEqual(ctx._calls.stopManagedAgent[0], { agentId: 'programming-helper', sessionId: 'sess-acp-1' });
+    assert.deepEqual(ctx._calls.stopManagedAgent[0], { agentId: 'coder', sessionId: 'sess-acp-1' });
     // thread 按 headSessionId 重新解析后关闭（兜底中间态），带回滚原因
     assert.equal(ctx._calls.closeThread[0].threadId, 'thread-acp-1');
     assert.equal(ctx._calls.closeThread[0].opts.reason, 'acp_session_creation_rollback');
@@ -593,14 +592,14 @@ describe('ACP interrupt', () => {
   it('resolveSessionViewerAgentId falls back to selectedSessionId scan (shared-process key drift)', () => {
     // 注册键与请求键不同（shared-by-project 漂移），但 selectedSessionId 是绑定事实
     managedAgents.set('coder::other-key', {
-      agentId: 'programming-helper',
-      id: 'programming-helper',
+      agentId: 'coder',
+      id: 'coder',
       process: { exitCode: null, signalCode: null },
       stopped: false,
       viewerAgentId: 'viewer-drifted',
       selectedSessionId: 'sess-a',
     });
-    assert.equal(resolveSessionViewerAgentId('programming-helper', 'sess-a'), 'viewer-drifted');
+    assert.equal(resolveSessionViewerAgentId('coder', 'sess-a'), 'viewer-drifted');
   });
 });
 
@@ -613,7 +612,7 @@ describe('ACP stop', () => {
     const res = await callStop(app, 'sess-a');
     assert.equal(res.statusCode, 200);
     assert.deepEqual(res.body, { ok: true, clawSessionId: 'sess-a' });
-    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'programming-helper', sessionId: 'sess-a' }]);
+    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'coder', sessionId: 'sess-a' }]);
     // stop 不归档：归档是管理面动作，不经此层
     assert.equal(ctx._calls.closeThread, undefined);
   });
@@ -624,11 +623,11 @@ describe('ACP stop', () => {
     // 停（getAgentRuntime 只按注册键查找；即便 key≠selectedSessionId 的
     // 防御态出现也仍闭环）。
     seedRuntime({ sessionId: 'sess-old', viewerAgentId: 'viewer-A' });
-    managedAgents.get('programming-helper::sess-old').selectedSessionId = 'sess-new';
+    managedAgents.get('coder::sess-old').selectedSessionId = 'sess-new';
     const { ctx, app } = setupAcpHarness();
     const res = await callStop(app, 'sess-new');
     assert.equal(res.statusCode, 200);
-    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'programming-helper', sessionId: 'sess-old' }]);
+    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'coder', sessionId: 'sess-old' }]);
   });
 
   it('is idempotent when no runtime is bound to the session (no stop call)', async () => {
@@ -667,9 +666,9 @@ describe('ACP list — GET /protoclaw/acp/coder/sessions', () => {
   let projCDir;
 
   const buildThreads = () => [
-    { threadId: 'thread-A', agentId: 'programming-helper', headSessionId: 'sess-a', title: '工作 A', updatedAt: 1000, status: 'open' },
-    { threadId: 'thread-B', agentId: 'programming-helper', headSessionId: 'sess-b', title: '已归档', updatedAt: 2000, status: 'open' },
-    { threadId: 'thread-C', agentId: 'programming-helper', headSessionId: 'sess-c', title: '缺记录', updatedAt: 3000, status: 'open' },
+    { threadId: 'thread-A', agentId: 'coder', headSessionId: 'sess-a', title: '工作 A', updatedAt: 1000, status: 'open' },
+    { threadId: 'thread-B', agentId: 'coder', headSessionId: 'sess-b', title: '已归档', updatedAt: 2000, status: 'open' },
+    { threadId: 'thread-C', agentId: 'coder', headSessionId: 'sess-c', title: '缺记录', updatedAt: 3000, status: 'open' },
   ];
 
   beforeEach(() => {
@@ -756,7 +755,7 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
   it('resolves to the thread head and eagerly ensures READY', async () => {
     seedRuntime({ sessionId: 'sess-head', viewerAgentId: 'viewer-head' });
     const { ctx, app } = setupAcpHarness({
-      findThreadResult: { threadId: 'thread-R', agentId: 'programming-helper', headSessionId: 'sess-head', status: 'open' },
+      findThreadResult: { threadId: 'thread-R', agentId: 'coder', headSessionId: 'sess-head', status: 'open' },
       sessionRecords: { 'sess-old': { id: 'sess-old', openDirectory: validCwd() } },
     });
     const res = await callResume(app, 'sess-old');
@@ -780,7 +779,7 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
     const { ctx, app } = setupAcpHarness({
       // head 命中失败（请求的是成员旧会话），sessionChain 扫描命中
       findThreadResult: null,
-      threadBySessionResult: { threadId: 'thread-MEM', agentId: 'programming-helper', headSessionId: 'sess-head', status: 'open' },
+      threadBySessionResult: { threadId: 'thread-MEM', agentId: 'coder', headSessionId: 'sess-head', status: 'open' },
       sessionRecords: {
         'sess-old': { id: 'sess-old', openDirectory: validCwd() },
         'sess-head': { id: 'sess-head', openDirectory: validCwd() },
@@ -810,7 +809,7 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
 
   it('rejects an archived thread (409) without touching runtimes', async () => {
     const { app } = setupAcpHarness({
-      findThreadResult: { threadId: 'thread-ARC', agentId: 'programming-helper', headSessionId: 'sess-h', status: 'open' },
+      findThreadResult: { threadId: 'thread-ARC', agentId: 'coder', headSessionId: 'sess-h', status: 'open' },
       archiveEntries: { 'thread-ARC': { archivedAt: 1 } },
       sessionRecords: { 'sess-m': { id: 'sess-m', openDirectory: validCwd() } },
     });
@@ -822,7 +821,7 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
 
   it('rejects a closed thread (409, hard terminal) without touching runtimes', async () => {
     const { ctx, app } = setupAcpHarness({
-      findThreadResult: { threadId: 'thread-CLS', agentId: 'programming-helper', headSessionId: 'sess-h', status: 'closed' },
+      findThreadResult: { threadId: 'thread-CLS', agentId: 'coder', headSessionId: 'sess-h', status: 'closed' },
       sessionRecords: { 'sess-c': { id: 'sess-c', openDirectory: validCwd() } },
     });
     const res = await callResume(app, 'sess-c');
@@ -835,7 +834,7 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
 
   it('rejects a cwd mismatch against the persisted session record (403)', async () => {
     const { app } = setupAcpHarness({
-      findThreadResult: { threadId: 'thread-M', agentId: 'programming-helper', headSessionId: 'sess-h', status: 'open' },
+      findThreadResult: { threadId: 'thread-M', agentId: 'coder', headSessionId: 'sess-h', status: 'open' },
       sessionRecords: { 'sess-x': { id: 'sess-x', openDirectory: join('D:', 'other-project') } },
     });
     const res = await callResume(app, 'sess-x', { cwd: validCwd() });
@@ -849,7 +848,7 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
     // 比较（不依赖文件系统大小写不敏感）。
     seedRuntime({ sessionId: 'sess-h', viewerAgentId: 'viewer-h' });
     const { app } = setupAcpHarness({
-      findThreadResult: { threadId: 'thread-K', agentId: 'programming-helper', headSessionId: 'sess-h', status: 'open' },
+      findThreadResult: { threadId: 'thread-K', agentId: 'coder', headSessionId: 'sess-h', status: 'open' },
       // 持久化记录与请求 cwd 仅大小写不同：应命中
       sessionRecords: { 'sess-y': { id: 'sess-y', openDirectory: validCwd().toUpperCase() } },
     });
@@ -861,7 +860,7 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
   it('propagates READY timeout as 504 runtime_ready_timeout', async () => {
     const { app } = setupAcpHarness({
       readyResult: null,
-      findThreadResult: { threadId: 'thread-T', agentId: 'programming-helper', headSessionId: 'sess-h', status: 'open' },
+      findThreadResult: { threadId: 'thread-T', agentId: 'coder', headSessionId: 'sess-h', status: 'open' },
       sessionRecords: { 'sess-z': { id: 'sess-z', openDirectory: validCwd() } },
     });
     const res = await callResume(app, 'sess-z');
@@ -874,7 +873,7 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
   it('rejects non-empty mcpServers guard at the adapter layer only (server accepts absence)', async () => {
     seedRuntime({ sessionId: 'sess-h', viewerAgentId: 'viewer-h' });
     const { app } = setupAcpHarness({
-      findThreadResult: { threadId: 'thread-G', agentId: 'programming-helper', headSessionId: 'sess-h', status: 'open' },
+      findThreadResult: { threadId: 'thread-G', agentId: 'coder', headSessionId: 'sess-h', status: 'open' },
       sessionRecords: { 'sess-g': { id: 'sess-g', openDirectory: validCwd() } },
     });
     // server 层不感知 mcpServers；该字段由 adapter 校验（见 protocol 测试）
@@ -934,7 +933,7 @@ describe('ACP history — GET /protoclaw/acp/coder/sessions/:clawSessionId/histo
       { role: 'tool', toolCallId: 'call-1', content: 'file content here' },
       { role: 'assistant', content: 'done' },
     ]);
-    assert.equal(ctx._calls.readSessionSnapshotForContinuity[0].agentId, 'programming-helper');
+    assert.equal(ctx._calls.readSessionSnapshotForContinuity[0].agentId, 'coder');
   });
 
   it('404 for an unknown session id', async () => {

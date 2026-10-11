@@ -176,24 +176,24 @@ test('claw sessions create maps to prebuilt session API and prints thread handle
   const fake = await startFakeClawServer();
 
   const result = await runCli(fake.port, [
-    'sessions', 'create', '--agent', 'programming-helper', '--session-type', 'coder',
+    'sessions', 'create', '--agent', 'coder',
     '--title', '工单025', '--dir', 'D:/code/AgentDevClaw', '--format', 'json',
   ]);
   assert.equal(result.code, 0, result.stderr);
   const createRequest = fake.requests.find((request) => request.url === '/protoclaw/prebuilt_sessions');
   assert.deepEqual(createRequest.body, {
-    agentId: 'programming-helper', sessionType: 'coder', title: '工单025', openDirectory: 'D:/code/AgentDevClaw',
+    agentId: 'coder', title: '工单025', openDirectory: 'D:/code/AgentDevClaw',
   });
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.threadId, 'wt-new-thread');
   assert.equal(parsed.session.id, 'session-new');
 });
 
-test('claw sessions create sessionType=coder 无 --dir → 本地拒绝，不触网（目录必填）', async () => {
+test('claw sessions create --agent coder 无 --dir → 本地拒绝，不触网（目录必填）', async () => {
   const fake = await startFakeClawServer();
 
   const rejected = await runCli(fake.port, [
-    'sessions', 'create', '--agent', 'programming-helper', '--session-type', 'coder',
+    'sessions', 'create', '--agent', 'coder',
   ]);
   assert.equal(rejected.code, 1, rejected.stdout);
   assert.ok(rejected.stderr.includes('--dir 必填'), rejected.stderr);
@@ -204,7 +204,7 @@ test('claw sessions create sessionType=coder 无 --dir → 本地拒绝，不触
 
   // 显式 --dir 时正常放行
   const ok = await runCli(fake.port, [
-    'sessions', 'create', '--agent', 'programming-helper', '--session-type', 'coder',
+    'sessions', 'create', '--agent', 'coder',
     '--dir', 'D:/code/AgentDevClaw', '--format', 'json',
   ]);
   assert.equal(ok.code, 0, ok.stderr);

@@ -354,24 +354,28 @@ describe('feature-store 数据面', () => {
     }]);
   });
 
-  it('builtinOptionalFeatures：官方可选插件对 main 与 coder 双身份开放，工厂实例 name 与键一致', async (t) => {
+  it('builtinOptionalFeatures：两个 APP 各自的平表声明官方可选插件，工厂实例 name 与键一致', async (t) => {
     // agent.js 依赖根级 features/*/dist 与 local-features/dist（均不入库）；
     // 未构建的环境显式跳过（服务本身也无法在这样的环境运行）
-    let mod;
-    try {
-      mod = await import('../prebuilt-agents/official/programming-helper/agent.js');
-    } catch (error) {
-      t.skip(`agent.js 模块图未构建（features/*/dist 或 local-features/dist 缺失）：${error.message}`);
-      return;
-    }
-    const tables = mod.builtinOptionalFeatures;
-    for (const identity of ['main', 'coder']) {
+    const modules = {
+      main: '../prebuilt-agents/official/programming-helper/agent.js',
+      coder: '../prebuilt-agents/official/coder/agent.js',
+    };
+    for (const [appId, modulePath] of Object.entries(modules)) {
+      let mod;
+      try {
+        mod = await import(modulePath);
+      } catch (error) {
+        t.skip(`${modulePath} 模块图未构建（features/*/dist 或 local-features/dist 缺失）：${error.message}`);
+        return;
+      }
+      const table = mod.builtinOptionalFeatures;
       for (const pluginName of ['playwright-shell', 'lsp']) {
-        const spec = tables?.[identity]?.[pluginName];
-        assert.ok(spec, `builtinOptionalFeatures.${identity} 应声明 ${pluginName} 工厂`);
+        const spec = table?.[pluginName];
+        assert.ok(spec, `builtinOptionalFeatures(${appId}) 应声明 ${pluginName} 工厂`);
         const instance = spec.create();
         assert.equal(instance?.name, pluginName,
-          `${identity} 工厂产出 name 必须与 $mount 键一致（宿主钩子按此 fail fast）`);
+          `${appId} 工厂产出 name 必须与 $mount 键一致（宿主钩子按此 fail fast）`);
       }
     }
   });

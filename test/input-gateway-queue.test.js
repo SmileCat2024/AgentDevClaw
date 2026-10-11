@@ -14,13 +14,12 @@ import assert from 'node:assert/strict';
 const { deliverUserInput, UserTurnDeliveryError } = await import('../server/thread-control/input-gateway.js');
 const { managedAgents } = await import('../server/shared/agent-access.js');
 
-function registerRuntime({ viewerAgentId = 'viewer-1', agentId = 'programming-helper', sessionId = 'session-1', sessionType = 'coder' } = {}) {
+function registerRuntime({ viewerAgentId = 'viewer-1', agentId = 'coder', sessionId = 'session-1' } = {}) {
   const runtime = {
     id: `${agentId}::${sessionId}`,
     agentId,
     viewerAgentId,
     selectedSessionId: sessionId,
-    sessionType,
     stopped: false,
     stopping: false,
     process: { exitCode: null, signalCode: null },
@@ -201,7 +200,7 @@ describe('input gateway thread-domain queueing (R6)', () => {
   });
 
   it('direct-routes pure session input unchanged (no thread found)', async () => {
-    registerRuntime({ sessionType: 'main' });
+    registerRuntime({ agentId: 'programming-helper' });
     const integration = buildIntegration({ thread: null });
 
     const result = await deliverUserInput(
@@ -235,7 +234,7 @@ describe('input gateway thread-domain queueing (R6)', () => {
   });
 
   it('forwards the reminder identity on direct routes (machine notifications never impersonate users)', async () => {
-    registerRuntime({ sessionType: 'main' });
+    registerRuntime({ agentId: 'programming-helper' });
     const integration = buildIntegration({ thread: null });
 
     const result = await deliverUserInput(
@@ -289,7 +288,7 @@ describe('input gateway thread-domain queueing (R6)', () => {
     assert.equal(integration.calls.append[0].kind, 'user_message');
 
     // 直投域同源归一：未知身份省略 kind 字段（user-turn 契约缺省即 user）
-    registerRuntime({ sessionType: 'main' });
+    registerRuntime({ agentId: 'programming-helper' });
     const direct = buildIntegration({ thread: null });
     const directResult = await deliverUserInput(
       { viewerAgentId: 'viewer-1', text: 'x', kind: 'bot' },

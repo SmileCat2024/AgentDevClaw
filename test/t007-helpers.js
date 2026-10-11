@@ -23,7 +23,6 @@ import { createThreadIntegration } from '../server/thread-control/thread-integra
  * @param {object} [options.bridgeOptions] WorkThreadRuntimeBridge 选项
  * @returns {{
  *   root: string,
- *   identity: { register: Function, identitySource: Function },
  *   control: object,
  *   core: object,
  *   board: object,
@@ -34,26 +33,13 @@ import { createThreadIntegration } from '../server/thread-control/thread-integra
  */
 export function makeThreadEnv({ baseDir, suffix, bridgeOptions } = {}) {
   const root = path.join(baseDir, suffix);
-  const sessions = new Map();
-  const identity = {
-    register(sessionId, identityValue) { sessions.set(String(sessionId), identityValue); },
-    unregister(sessionId) { sessions.delete(String(sessionId)); },
-    identitySource: async (_agentId, sessionId) => {
-      const id = String(sessionId || '').trim();
-      if (!id) return null;
-      const value = sessions.get(id);
-      return value === undefined ? null : value;
-    },
-  };
   const control = createThreadControl({
     rootDir: root,
     bridge: new WorkThreadRuntimeBridge(bridgeOptions || { enabled: false }),
-    identitySource: identity.identitySource,
   });
   const integration = createThreadIntegration({ control });
   return {
     root,
-    identity,
     control,
     core: control.core,
     board: control.board,
@@ -63,10 +49,9 @@ export function makeThreadEnv({ baseDir, suffix, bridgeOptions } = {}) {
   };
 }
 
-/** 启动一个 coder 根线程（身份注册 + core.start）。 */
+/** 启动一个 coder 根线程（coder APP 会话，归属即身份）。 */
 export async function startCoderThread(env, rootSessionId = 's1') {
-  env.identity.register(rootSessionId, 'coder');
-  return env.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: rootSessionId } });
+  return env.core.start({ sessionRef: { agentId: 'coder', sessionId: rootSessionId } });
 }
 
 export function makeBaseDir(prefix) {

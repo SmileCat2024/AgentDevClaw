@@ -115,10 +115,7 @@ export function resolveManagedProcessPlacement(agent, sessionRecord) {
   return {
     processMode,
     projectDir,
-    processGroupKey: computeProcessGroupKey(
-      agentId, projectDir, processMode,
-      sessionRecord?.sessionType && sessionRecord.sessionType !== 'main' ? sessionRecord.sessionType : null,
-    ),
+    processGroupKey: computeProcessGroupKey(agentId, projectDir, processMode),
   };
 }
 
@@ -296,10 +293,11 @@ export function createAgentStartupFns(deps) {
         // Session index unreadable — retain the agent-level default.
       }
     }
-    // Runtime startup is session-type aware (coder sessions dispatch to the
-    // coder assembly). When the caller does not pass an explicit type, fall
-    // back to the session index record so every path (restart, activate,
-    // resume) carries it consistently.
+    // Runtime startup carries the session record's run-form tag (e.g.
+    // 'exploration') for agents that branch on it. When the caller does not
+    // pass an explicit type, fall back to the session index record so every
+    // path (restart, activate, resume) carries it consistently. The tag is
+    // not an identity (ADR-0025).
     if (sessionRecordType && !runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE) {
       runtimeOptions = {
         ...runtimeOptions,

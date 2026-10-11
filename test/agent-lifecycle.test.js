@@ -477,32 +477,30 @@ describe('agent-lifecycle', () => {
       assert.ok(agents.length > 0);
     });
 
-    // ── coder projection visibility & identity routing ──────
+    // ── coder APP 呈现声明与条目路由（ADR-0025）──────────────
 
-    const PH_LIGHT_WITH_CODER = {
-      id: 'programming-helper',
-      name: 'Programming Helper',
+    const CODER_APP_LIGHT = {
+      id: 'coder',
+      name: 'Coder',
       description: '',
       kind: 'agent',
       status: { pid: null, viewerAgentId: null },
-      identities: [{
-        id: 'coder',
-        sessionType: 'coder',
-        sidebarEntry: true,
-        displayName: 'coder',
-        sidebarGroup: 'tool',
-      }],
+      visibility: 'on-demand',
+      host: 'programming-helper',
     };
 
-    it('keeps the coder projection visible while its runtime is spawned but not yet registered with the viewer', async () => {
-      const child = createMockChild();
-      const runtime = injectRuntime('programming-helper', 'coder-session', child);
-      runtime.sessionType = 'coder';
-      runtime.ready = false;
-      runtime.viewerAgentId = null; // viewer registration pending
-
+    it('exposes an on-demand APP entry with visibility and host facts (ADR-0025)', async () => {
       const mod = createAgentLifecycleModule(createMockCtx({
-        getAgentsLight: async () => [PH_LIGHT_WITH_CODER],
+        getAgentsLight: async () => [
+          {
+            id: 'programming-helper',
+            name: 'Programming Helper',
+            description: '',
+            kind: 'agent',
+            status: { pid: null, viewerAgentId: null },
+          },
+          CODER_APP_LIGHT,
+        ],
         readActiveWorkspaceSessionMeta: async () => ({
           workspaceSessions: { sessions: [] },
           sessionMeta: { ...EMPTY_SESSION_META },
@@ -511,40 +509,22 @@ describe('agent-lifecycle', () => {
       }));
 
       const agents = await mod.getConnectedAgents();
-      const projection = agents.find((a) => a.id === 'programming-helper:coder');
-      assert.ok(projection, 'projection entry should survive the startup window');
-      assert.equal(projection.sessionType, 'coder');
-      assert.equal(projection.agentId, 'programming-helper');
-      // No session-level fields inherited from the host
-      assert.equal(projection.runtime_session_id, undefined);
-      assert.equal(projection.workspace_sessions, undefined);
+      const coderApp = agents.find((a) => a.id === 'coder');
+      assert.ok(coderApp, 'coder APP entry comes from the prebuilt manifest');
+      // 条目存在性来自清单声明，不依赖 runtime 存活（判定源禁令）
+      assert.equal(coderApp.visibility, 'on-demand');
+      assert.equal(coderApp.host, 'programming-helper');
+      assert.equal(typeof coderApp.hasThreadDomain, 'boolean');
     });
 
-    it('drops the coder projection once no live process of that identity remains', async () => {
+    it('routes coder APP children to their own entry (no sessionType routing)', async () => {
       const child = createMockChild();
-      const runtime = injectRuntime('programming-helper', 'coder-session', child);
-      runtime.sessionType = 'coder';
-      runtime.stopping = true;
-
-      const mod = createAgentLifecycleModule(createMockCtx({
-        getAgentsLight: async () => [PH_LIGHT_WITH_CODER],
-        readViewerJson: async () => ({ agents: [], currentAgentId: null }),
-      }));
-
-      const agents = await mod.getConnectedAgents();
-      assert.equal(agents.some((a) => a.id === 'programming-helper:coder'), false);
-    });
-
-    it('routes a coder child by the spawn-time sessionType snapshot when the session index misses', async () => {
-      const child = createMockChild();
-      const runtime = injectRuntime('programming-helper', 'coder-session', child);
-      runtime.sessionType = 'coder';
+      const runtime = injectRuntime('coder', 'coder-session', child);
       runtime.ready = true;
       runtime.viewerAgentId = 'viewer-coder';
 
       const mod = createAgentLifecycleModule(createMockCtx({
-        getAgentsLight: async () => [PH_LIGHT_WITH_CODER],
-        // Session index returns no sessions → sessionTypeByAgentAndId is empty
+        getAgentsLight: async () => [CODER_APP_LIGHT],
         readActiveWorkspaceSessionMeta: async () => ({
           workspaceSessions: { sessions: [] },
           sessionMeta: { ...EMPTY_SESSION_META },
@@ -564,9 +544,8 @@ describe('agent-lifecycle', () => {
       const agents = await mod.getConnectedAgents();
       const coderChild = agents.find((a) => a.id === 'viewer-coder');
       assert.ok(coderChild, 'coder runtime should be listed as a child');
-      assert.equal(coderChild.sessionType, 'coder');
-      assert.equal(coderChild.sidebar_entry_id, 'programming-helper:coder');
-      assert.equal(coderChild.parent_id, 'programming-helper');
+      assert.equal(coderChild.sidebar_entry_id, 'coder');
+      assert.equal(coderChild.parent_id, 'coder');
     });
   });
 

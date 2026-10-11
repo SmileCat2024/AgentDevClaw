@@ -7,14 +7,19 @@
  * 2. 接力成功时原子完成：旧 head 退历史 / successor 成 head /
  *    pendingSuccession 清除 / 接力期间 command 补投递；
  * 3. 成功接力不重复投递 Inbox command（terminal 状态不再入投递集）；
- * 4. 身份不一致（消费 T001 身份门）、handoff 损坏、Runtime 超时
- *    （= READY 门禁失败）、进程重启 四类失败均有可断言结果；
+ * 4. APP 归属边界（ADR-0025：线程按 agentId 寻址，会话身份门已退役）、
+ *    handoff 损坏、Runtime 超时（= READY 门禁失败）、进程重启 四类
+ *    失败均有可断言结果；
  * 5. 失败时 Thread 不推进、记录失败阶段（stage）与原因、
  *    pending 工作归属不丢失（旧 head 保持有效，挡板显式收敛而非 TTL）、
  *    不把 pending 指令投向未知目标；
  * 6. compact / summary / trim 共享 successor 创建入口
  *    （createCompactedResumeFromHandoff）与共享提交点（commitSuccession）——
  *    源码级契约断言，防止各路径各自实现继承逻辑。
+ *
+ * 数据隔离：AGENTDEV_DATA_DIR 指向临时根（恢复服务直查会话索引判定
+ * 旧 head 可承接性，禁止读真实用户数据目录；env 在 server 模块链
+ * import 前设置）。
  */
 
 import { test, describe, before, after } from 'node:test';
@@ -24,45 +29,54 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { WorkThreadRuntimeBridge, HANDOFF_SCHEMA_VERSION } from '@agentdevjs/core';
-import { createThreadControl } from '../server/thread-control/thread-controller.js';
-import { createThreadIntegration } from '../server/thread-control/thread-integration.js';
-import {
+
+const DATA_ROOT = mkdtempSync(path.join(os.tmpdir(), 'claw-t002-recovery-'));
+process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
+
+const { createThreadControl } = await import('../server/thread-control/thread-controller.js');
+const { createThreadIntegration } = await import('../server/thread-control/thread-integration.js');
+const {
   createThreadSuccessionService,
   createThreadRecoveryService,
   abortPendingSuccession,
-} from '../server/thread-control/thread-succession.js';
-import { createThreadRotationService } from '../server/thread-control/thread-rotation.js';
-import { readHandoffPackage } from '../server/context-continuity/handoff-package.js';
+} = await import('../server/thread-control/thread-succession.js');
+const { createThreadRotationService } = await import('../server/thread-control/thread-rotation.js');
+const { readHandoffPackage } = await import('../server/context-continuity/handoff-package.js');
+const { getPrebuiltSessionIndexPath } = await import('../server/shared/session-access.js');
+
+after(async () => {
+  // DATA_ROOT 含恢复服务读取的隔离会话索引；进程退出前清理
+  await fs.rm(DATA_ROOT, { recursive: true, force: true });
+});
+
+/**
+ * 播种 coder 会话索引（恢复服务的 head 承接性判定输入）：
+ * 只有登记在案的会话可作为崩溃残留收敛的承接 head。
+ */
+async function seedCoderSessionIndex(sessionIds) {
+  const indexPath = getPrebuiltSessionIndexPath('coder');
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await fs.writeFile(indexPath, JSON.stringify({
+    revision: 1,
+    activeSessionId: null,
+    sessions: sessionIds.map((id) => ({ id, title: `T-${id}` })),
+  }), 'utf8');
+}
 
 // ─── 夹具 ─────────────────────────────────────────────────────────
-
-function makeIdentitySource() {
-  const sessions = new Map();
-  return {
-    register(sessionId, identity) { sessions.set(sessionId, identity); },
-    identitySource: async (_agentId, sessionId) => {
-      const id = String(sessionId || '').trim();
-      if (!id) return null;
-      const identity = sessions.get(id);
-      return identity === undefined ? null : identity;
-    },
-  };
-}
 
 let counter = 0;
 
 /**
- * 一套 hermetic 环境：独立数据目录 + 注入 identitySource + 可投递 bridge。
+ * 一套 hermetic 环境：独立数据目录 + 可投递 bridge。
  * stopped 记录 stopManagedAgent 调用（失败 successor 的 runtime 退役证据）。
  */
 function makeEnvironment(bridgeOptions = {}) {
-  const identity = makeIdentitySource();
   const stopped = [];
   const root = mkdtempSync(path.join(os.tmpdir(), 'claw-succession-base-'));
   const control = createThreadControl({
     rootDir: path.join(root, `sc-${++counter}`),
     bridge: new WorkThreadRuntimeBridge(bridgeOptions),
-    identitySource: identity.identitySource,
   });
   const integration = createThreadIntegration({ control });
   const succession = createThreadSuccessionService({
@@ -70,17 +84,13 @@ function makeEnvironment(bridgeOptions = {}) {
     threadIntegration: integration,
     stopManagedAgent: async (agentId, sessionId) => { stopped.push({ agentId, sessionId }); },
   });
-  const recovery = createThreadRecoveryService({
-    threadControl: control,
-    identitySource: identity.identitySource,
-  });
-  return { root, identity, control, core: control.core, integration, succession, recovery, stopped };
+  const recovery = createThreadRecoveryService({ threadControl: control });
+  return { root, control, core: control.core, integration, succession, recovery, stopped };
 }
 
-/** 建一个 coder 线程：root 会话 s1（身份经 identitySource 解析）。 */
+/** 建一个 coder 线程：root 会话即 coder APP 会话（归属即身份）。 */
 async function startCoderThread(env, rootSessionId = 's1') {
-  env.identity.register(rootSessionId, 'coder');
-  return env.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: rootSessionId } });
+  return env.core.start({ sessionRef: { agentId: 'coder', sessionId: rootSessionId } });
 }
 
 // ─── 1. 接力成功：原子完成四件事 ─────────────────────────────────
@@ -95,7 +105,7 @@ describe('T002: 接力成功（提交点原子完成）', () => {
     });
     try {
       const thread = await startCoderThread(env, 's1');
-      await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'trim' });
+      await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'trim' });
       await env.core.appendCommand({ threadId: thread.threadId, text: '接力期间积累的指令' });
 
       // 交接窗口内不投递（旧 head 即将退役）
@@ -104,10 +114,8 @@ describe('T002: 接力成功（提交点原子完成）', () => {
       assert.equal(turns.length, 0);
 
       // 提交点：successor READY（compact 流程内的 ready 证据）
-      const env2Identity = env.identity;
-      env2Identity.register('s2', 'coder');
       const outcome = await env.succession.commitSuccession({
-        agentId: 'programming-helper',
+        agentId: 'coder',
         fromSessionId: 's1',
         toSessionId: 's2',
         reason: 'trim',
@@ -147,12 +155,11 @@ describe('T002: 接力成功（提交点原子完成）', () => {
     });
     try {
       const thread = await startCoderThread(env, 's1');
-      await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'summary' });
+      await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'summary' });
       await env.core.appendCommand({ threadId: thread.threadId, text: '只投一次' });
-      env.identity.register('s2', 'coder');
 
       await env.succession.commitSuccession({
-        agentId: 'programming-helper',
+        agentId: 'coder',
         fromSessionId: 's1',
         toSessionId: 's2',
         reason: 'summary',
@@ -179,12 +186,11 @@ describe('T002: 接力成功（提交点原子完成）', () => {
     const env = makeEnvironment();
     try {
       const thread = await startCoderThread(env, 's1');
-      env.identity.register('s2', 'coder');
       // 另一并发操作已把 head 推进到 s2（本操作再提交 → head_mismatch）
       await env.core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's1', endKind: 'trim' });
 
       const outcome = await env.succession.commitSuccession({
-        agentId: 'programming-helper',
+        agentId: 'coder',
         fromSessionId: 's1',
         toSessionId: 's2',
         reason: 'trim',
@@ -211,12 +217,12 @@ describe('T002: 提交点 READY 门禁（successor 未 READY 不得成为 head�
     const env = makeEnvironment();
     try {
       const thread = await startCoderThread(env, 's1');
-      await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'trim' });
+      await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'trim' });
       await env.core.appendCommand({ threadId: thread.threadId, text: 'pending 工作' });
 
       // compact 流程里 waitForManagedRuntimeReady 超时（result.agent=null）
       const outcome = await env.succession.commitSuccession({
-        agentId: 'programming-helper',
+        agentId: 'coder',
         fromSessionId: 's1',
         toSessionId: 's2',
         reason: 'trim',
@@ -240,7 +246,7 @@ describe('T002: 提交点 READY 门禁（successor 未 READY 不得成为 head�
       const aborted = record.lifecycleEvents.find((e) => e.type === 'handoff_aborted');
       assert.ok(aborted, 'handoff_aborted 事件留痕');
       assert.deepEqual(env.stopped, [
-        { agentId: 'programming-helper', sessionId: 's2' },
+        { agentId: 'coder', sessionId: 's2' },
       ], '失败 successor 的半启动 runtime 退役（session 文件保留供审计）');
     } finally {
       await fs.rm(env.root, { recursive: true, force: true });
@@ -256,11 +262,11 @@ describe('T002: 提交点 READY 门禁（successor 未 READY 不得成为 head�
     });
     try {
       const thread = await startCoderThread(env, 's1');
-      await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'trim' });
+      await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'trim' });
       await env.core.appendCommand({ threadId: thread.threadId, text: '回到旧 head' });
 
       await env.succession.commitSuccession({
-        agentId: 'programming-helper',
+        agentId: 'coder',
         fromSessionId: 's1',
         toSessionId: 's2',
         reason: 'trim',
@@ -281,70 +287,61 @@ describe('T002: 提交点 READY 门禁（successor 未 READY 不得成为 head�
   });
 });
 
-// ─── 3. 身份一致性（消费 T001 身份门）────────────────────────────
+// ─── 3. APP 归属边界（ADR-0025：线程按 agentId 寻址）──────────────
 
-describe('T002: 身份一致性（T001 身份门经提交点消费）', () => {
-  test('identity mismatch rejects the commit, records stage, leaves the thread untouched', async () => {
+describe('T002: APP 归属边界（线程按 agentId 寻址，无会话身份门）', () => {
+  test('commit addressed to another app finds no thread and leaves the record untouched', async () => {
     const env = makeEnvironment();
     try {
       const thread = await startCoderThread(env, 's1');
-      // successor 被错误装配为 main（本轮事故场景）
-      env.identity.register('s2-main', 'main');
-      await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'trim' });
-      const before = await env.core.getThread(thread.threadId);
+      await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'trim' });
 
+      // 线程属于 coder APP：以编程小助手寻址同一 head 会话 → 找不到线程，
+      // 幂等作废（不再有跨身份合成/兜底）
       const outcome = await env.succession.commitSuccession({
         agentId: 'programming-helper',
         fromSessionId: 's1',
-        toSessionId: 's2-main',
+        toSessionId: 's2',
         reason: 'trim',
         successorReady: true,
       });
-
       assert.equal(outcome.applied, false);
-      assert.equal(outcome.reason, 'handoff_failed');
-      assert.equal(outcome.stage, 'thread_identity_mismatch', 'T001 稳定 code 作为失败阶段透传');
+      assert.equal(outcome.reason, 'no_thread_for_session');
 
+      // 记录零变更：head 不推进、挡板保留（未进入失败收敛，仍处交接中）
       const record = await env.core.getThread(thread.threadId);
-      assert.equal(record.headSessionId, 's1', 'Thread 不推进 head');
-      assert.equal(record.sessionChain.length, 1, '线程记录零变更（successor 不入链）');
-      assert.equal(record.identity, 'coder');
-      assert.equal(record.status, 'rotation_failed');
-      assert.equal(record.pendingSuccession, null, '挡板显式收敛');
-      assert.deepEqual(
-        record.lifecycleEvents.filter((e) => e.type === 'handoff_failed').map((e) => e.stage),
-        ['thread_identity_mismatch'],
-        '失败阶段与原因落盘',
-      );
-      // 失败收敛两次写盘：failSessionHandoff（失败事实）+ abortPendingSuccession
-      // （挡板清除），各推进一次 revision；head 推进零变更。
-      assert.equal(record.revision - before.revision, 2);
+      assert.equal(record.headSessionId, 's1');
+      assert.equal(record.sessionChain.length, 1);
+      assert.equal(record.status, 'rotating');
+      assert.equal(record.pendingSuccession.fromSessionId, 's1');
     } finally {
       await fs.rm(env.root, { recursive: true, force: true });
     }
   });
 
-  test('successor outside the workspace host is rejected with session_workspace_mismatch', async () => {
-    const env = makeEnvironment();
+  test('same-app successor commits without any identity vocabulary on the record', async () => {
+    const env = makeEnvironment({
+      enabled: true,
+      resolveRuntimeViewerId: (_a, s) => (s === 's2' ? 'viewer-s2' : null),
+      submitTurn: async () => ({ success: true }),
+    });
     try {
       const thread = await startCoderThread(env, 's1');
-      // 'foreign' 未登记：identitySource 解析不到 = 不属于该宿主
-      await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'trim' });
+      await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'trim' });
 
       const outcome = await env.succession.commitSuccession({
-        agentId: 'programming-helper',
+        agentId: 'coder',
         fromSessionId: 's1',
-        toSessionId: 'foreign',
+        toSessionId: 's2',
         reason: 'trim',
         successorReady: true,
       });
+      assert.equal(outcome.applied, true);
 
-      assert.equal(outcome.applied, false);
-      assert.equal(outcome.stage, 'session_workspace_mismatch');
       const record = await env.core.getThread(thread.threadId);
-      assert.equal(record.headSessionId, 's1');
-      assert.equal(record.status, 'rotation_failed');
-      assert.equal(record.pendingSuccession, null);
+      assert.equal(record.agentId, 'coder', '归属即结构事实');
+      assert.equal(record.workspaceId, 'coder');
+      assert.equal(record.identity, null, '记录不再携带会话身份词汇');
     } finally {
       await fs.rm(env.root, { recursive: true, force: true });
     }
@@ -374,12 +371,12 @@ describe('T002: handoff 损坏（材料校验失败阶段可断言）', () => {
     const env = makeEnvironment();
     try {
       const thread = await startCoderThread(env, 's1');
-      await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'summary' });
+      await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'summary' });
       await env.core.appendCommand({ threadId: thread.threadId, text: '待投递' });
 
       // 路由 / rotation 生成阶段抛出 error.code='handoff_invalid' 后的收敛
       const failure = await env.succession.failSuccession({
-        agentId: 'programming-helper',
+        agentId: 'coder',
         fromSessionId: 's1',
         reason: 'compact_failed',
         stage: 'handoff_invalid',
@@ -420,6 +417,8 @@ describe('T002: 进程重启按落盘状态收敛', () => {
 
   test('fresh (non-stale) interrupted handoff is converged at restart — state, not TTL', async () => {
     const turns = [];
+    // 旧 head s1 在会话索引内（可承接）；ADR-0025 后承接性判定 = 会话存在性
+    await seedCoderSessionIndex(['s1']);
     const env = makeEnvironment({
       enabled: true,
       resolveRuntimeViewerId: (_a, s) => (s === 's1' ? 'viewer-s1' : null),
@@ -455,28 +454,19 @@ describe('T002: 进程重启按落盘状态收敛', () => {
 
   test('interrupted handoff with an unusable old head fails its pending commands instead of delivering to an unknown target', async () => {
     const turns = [];
+    // 旧 head 会话不在会话索引内（会话被删 / 从未落盘）→ 无法承接
+    await seedCoderSessionIndex(['another-session']);
     const env = makeEnvironment({
       enabled: true,
-      resolveRuntimeViewerId: (_a, s) => (s === 'ghost' ? 'viewer-ghost' : null),
+      resolveRuntimeViewerId: (_a, s) => (s === 'ghost-head' ? 'viewer-ghost' : null),
       submitTurn: async (params) => { turns.push(params); return { success: true }; },
     });
     try {
-      const thread = await startCoderThread(env, 's1');
+      const thread = await startCoderThread(env, 'ghost-head');
       await env.core.appendCommand({ threadId: thread.threadId, text: '无人承接的工作' });
       await seedInterruptedHandoff(env, thread);
-      // 旧 head 会话被删 / 身份事实丢失（identitySource 解析不到）
-      env.identity.sessions?.delete?.('s1');
-      const identity = env.identity;
-      // 重新用「查不到 s1」的 identitySource 重建恢复服务
-      const strictRecovery = createThreadRecoveryService({
-        threadControl: env.control,
-        identitySource: async (_agentId, sessionId) => {
-          if (sessionId === 's1') return null;
-          return identity.identitySource(_agentId, sessionId);
-        },
-      });
 
-      const report = await strictRecovery.convergeInterruptedSuccessions();
+      const report = await env.recovery.convergeInterruptedSuccessions();
       assert.equal(report.converged.length, 1);
       assert.equal(report.converged[0].reason, 'head_session_missing');
 
@@ -589,13 +579,10 @@ describe('T002: compact / summary / trim 共享入口（不各自实现继承逻
   test('thread rotation consumes the shared commit point and records ready-gate failures', async () => {
     // 端到端（stub sessionApi）：compact 产出 agent=null（READY 等待超时）
     const calls = { stop: [], begin: [], commit: [], fail: [], command: [] };
-    const identity = makeIdentitySource();
-    identity.register('session-1', 'coder');
     const root = mkdtempSync(path.join(os.tmpdir(), 'claw-succession-rot-'));
     const control = createThreadControl({
       rootDir: path.join(root, 'rot'),
       bridge: new WorkThreadRuntimeBridge({ enabled: false }),
-      identitySource: identity.identitySource,
     });
     const integration = createThreadIntegration({ control });
     const succession = createThreadSuccessionService({
@@ -615,9 +602,9 @@ describe('T002: compact / summary / trim 共享入口（不各自实现继承逻
         threadSuccession: succession,
       });
 
-      const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'session-1' } });
+      const thread = await control.core.start({ sessionRef: { agentId: 'coder', sessionId: 'session-1' } });
       await control.core.appendCommand({ threadId: thread.threadId, text: '轮换期间指令' });
-      const result = await service.handleContextGuard('programming-helper', 'session-1');
+      const result = await service.handleContextGuard('coder', 'session-1');
 
       assert.equal(result.applied, false);
       assert.equal(result.stage, 'successor_runtime_not_ready');

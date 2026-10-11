@@ -1,13 +1,13 @@
 /**
- * T007 真实运行链 probe：驱动 prebuilt-agents/official/programming-helper
- * 的生产装配链（resolveAgentClass → new AgentClass → ensureFeatureTools
- * strict → onInitiate → 提示词渲染 + 工具表），输出 JSON 供测试断言。
+ * T007 真实运行链 probe：驱动两个 APP 的生产装配链（各自 agent.js 的
+ * default export → new AgentClass → ensureFeatureTools strict →
+ * onInitiate → 提示词渲染 + 工具表），输出 JSON 供测试断言。
  *
  * 在独立子进程运行（HOME/USERPROFILE 指向临时目录），不读真实用户数据；
  * 测试文件 spawn 本脚本并解析 stdout 的最后一行 JSON。
  *
- * 证明目标：coder successor 会话（sessionType=coder）经 resolveAgentClass
- * 分派到 CoderAgent，提示词与工具集是 coder 身份而非退回 main。
+ * 证明目标（ADR-0025）：coder 是独立 APP，直接加载 coder/agent.js 装配
+ * CoderAgent；提示词与工具集是 coder 形态而非退回 main。
  */
 
 import os from 'node:os';
@@ -16,7 +16,10 @@ import fs from 'node:fs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const AGENT_MODULE = path.join(REPO_ROOT, 'prebuilt-agents', 'official', 'programming-helper', 'agent.js');
+const AGENT_MODULES = {
+  coder: path.join(REPO_ROOT, 'prebuilt-agents', 'official', 'coder', 'agent.js'),
+  main: path.join(REPO_ROOT, 'prebuilt-agents', 'official', 'programming-helper', 'agent.js'),
+};
 
 // HOME 隔离必须发生在 import agent.js 之前：server/shared/constants.js 的
 // USER_DATA_ROOT 在模块加载期取 os.homedir()（动态 import 保证求值顺序）。
@@ -27,14 +30,14 @@ const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claw-t007-probe-ws-'
 
 const fakeLlm = { modelName: 't007-probe', chat: async () => { throw new Error('no llm in probe'); } };
 
-async function probeIdentity(sessionType) {
-  const agentModule = await import(pathToFileURL(AGENT_MODULE).href);
-  const AgentClass = agentModule.resolveAgentClass({ runtime: { sessionType } });
+async function probeIdentity(appId) {
+  const agentModule = await import(pathToFileURL(AGENT_MODULES[appId]).href);
+  const AgentClass = agentModule.default;
   const agent = new AgentClass({
-    name: sessionType,
+    name: appId,
     workspaceDir,
     llm: fakeLlm,
-    runtime: { agentId: 'programming-helper', sessionId: `t007-probe-${sessionType}` },
+    runtime: { agentId: appId, sessionId: `t007-probe-${appId}` },
   });
   await agent.ensureFeatureTools({ strict: true });
   await agent.onInitiate({});

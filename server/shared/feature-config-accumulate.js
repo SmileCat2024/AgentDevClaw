@@ -13,7 +13,7 @@
  *   resolveFeatureConfig 的既有"数组整体替换"得出最终 merged——merge 规范
  *   本身不变，叠加只发生在层组装阶段（层语义归 Claw，框架不认识层）。
  *
- * agent 侧（agent.js / coder-agent.js 构造期）与 server 侧（resolved API）
+ * agent 侧（programming-helper 与 coder 两个 APP 的 agent.js 构造期）与 server 侧（resolved API）
  * 共用本折叠，保证运行时行为与 UI 预览一致。
  */
 

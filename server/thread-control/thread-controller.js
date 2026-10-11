@@ -28,7 +28,6 @@ import {
 } from '@agentdevjs/core';
 import { ThreadStore } from './thread-store.js';
 import { ThreadArchiveIndex } from './thread-archive.js';
-import { resolveSessionIdentity } from './thread-identity.js';
 import { THREADS_ROOT } from '../shared/constants.js';
 import { submitUserTurn } from '../shared/user-turn.js';
 import { listAgentRuntimes, isManagedRuntimeRunning } from '../shared/agent-access.js';
@@ -72,14 +71,11 @@ export function bridgeParamsToSubmitTurnArgs(params) {
  * @param {object} [options]
  * @param {string} [options.rootDir] - 数据根目录（默认 THREADS_ROOT，测试注入临时目录）
  * @param {object} [options.bridge] - 桥实例（测试 stub）；缺省按生产装配构建
- * @param {Function} [options.identitySource] - T001 会话身份真相源（测试注入）；
- *   缺省用 resolveSessionIdentity（session index / 会话文件解析）
  * @returns {{ core: WorkThread, board: WorkThreadBoard, store: ThreadStore, archive: ThreadArchiveIndex }}
  */
 export function createThreadControl({
   rootDir = THREADS_ROOT,
   bridge,
-  identitySource,
 } = {}) {
   const store = new ThreadStore({ rootDir });
   const archive = new ThreadArchiveIndex({ rootDir });
@@ -96,11 +92,8 @@ export function createThreadControl({
   };
   const core = new WorkThread({
     store,
-    // T001：线程身份归属与成员不变量的会话身份真相源。新建线程从 root
-    // Session 解析身份；successor 加入 head 前校验宿主/身份/成员独占。
-    // 生产装配指向 session index / 会话文件（thread-identity.js）；
-    // 测试可注入 stub，不依赖真实 Runtime。
-    identitySource: identitySource || resolveSessionIdentity,
+    // 会话身份归属不再需要真相源（ADR-0025）：归属即身份（coder APP 会话
+    // → workspaceId=coder），框架成员不变量由 sessionChain 链记录保证。
     bridge: bridge
       || new WorkThreadRuntimeBridge({
         enabled: true,

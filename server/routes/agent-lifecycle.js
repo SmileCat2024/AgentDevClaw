@@ -54,7 +54,6 @@ export function createAgentLifecycleModule(ctx) {
     resolveRuntimeDisplayName,
     readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
     readViewerJson, getPendingInputCount, resolveAgentModelPresets,
-    readRemoteCatalog = null,
     serviceLifecycle = null,
   } = ctx;
 
@@ -164,7 +163,6 @@ export function createAgentLifecycleModule(ctx) {
     readViewerJson,
     getPendingInputCount,
     resolveAgentModelPresets,
-    readRemoteCatalog,
   });
 
   // ── Startup & wait functions (delegated to agent-startup.js) ──

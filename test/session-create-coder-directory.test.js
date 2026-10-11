@@ -74,7 +74,7 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
   test('coder 裸创建（无 openDirectory 无 sourceSessionId）→ 400，未触发 createPrebuiltSession', async () => {
     const res = makeRes();
     let nextError = null;
-    await handler({ body: { agentId: 'programming-helper', sessionType: 'coder' } }, res, (e) => { nextError = e; });
+    await handler({ body: { agentId: 'coder' } }, res, (e) => { nextError = e; });
     assert.equal(res.statusCode, 400);
     assert.match(res.jsonPayload.error, /openDirectory/);
     assert.match(res.jsonPayload.error, /回退默认/);
@@ -84,7 +84,7 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
 
   test('coder 相对路径 → 400', async () => {
     const res = makeRes();
-    await handler({ body: { agentId: 'programming-helper', sessionType: 'coder', openDirectory: './relative/dir' } }, res, (e) => { throw e; });
+    await handler({ body: { agentId: 'coder', openDirectory: './relative/dir' } }, res, (e) => { throw e; });
     assert.equal(res.statusCode, 400);
     assert.match(res.jsonPayload.error, /绝对路径/);
   });
@@ -92,7 +92,7 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
   test('coder 不存在的目录 → 400', async () => {
     const res = makeRes();
     const missingDir = join(DATA_ROOT, 'missing', 'subdir');
-    await handler({ body: { agentId: 'programming-helper', sessionType: 'coder', openDirectory: missingDir } }, res, (e) => { throw e; });
+    await handler({ body: { agentId: 'coder', openDirectory: missingDir } }, res, (e) => { throw e; });
     assert.equal(res.statusCode, 400);
     assert.match(res.jsonPayload.error, /不存在或不是目录/);
   });
@@ -104,16 +104,15 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
     // 可观测事实 = stub 被调用且收到目录，错误经 next(error) 到达
     const stopError = await new Promise((resolve) => {
       handler(
-        { body: { agentId: 'programming-helper', sessionType: 'coder', openDirectory: existingDir } },
+        { body: { agentId: 'coder', openDirectory: existingDir } },
         res,
         (e) => resolve(e),
       );
     });
     assert.match(String(stopError?.message), /STOP_AFTER_GATE/);
     assert.equal(createCalls.length, 1);
-    assert.equal(createCalls[0].agentId, 'programming-helper');
+    assert.equal(createCalls[0].agentId, 'coder');
     assert.equal(createCalls[0].opts.openDirectory, existingDir);
-    assert.equal(createCalls[0].opts.sessionType, 'coder');
   });
 
   test('coder 带 sourceSessionId 无目录（successor 继承路径）→ 闸门放行', async () => {
@@ -121,7 +120,7 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
     const res = makeRes();
     await new Promise((resolve) => {
       handler(
-        { body: { agentId: 'programming-helper', sessionType: 'coder', sourceSessionId: 'session-src' } },
+        { body: { agentId: 'coder', sourceSessionId: 'session-src' } },
         res,
         (e) => resolve(e),
       );

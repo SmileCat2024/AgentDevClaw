@@ -2,9 +2,8 @@
  * Thread Integration — 工作线程与 Claw 会话生命周期的接线层
  *
  * 把 thread-control 控制面挂到既有会话生命周期的钩子上：
- *   1. onSessionCreated：线程宿主会话（如 programming-helper 工作空间的
- *      coder 类型会话，含 branch 产生的新会话）自动创建线程（会话成为
- *      线程 root 与初始 head）；
+ *   1. onSessionCreated：线程宿主 APP（coder）的新会话（含 branch 产生的
+ *      新会话）自动创建线程（会话成为线程 root 与初始 head）；
  *   2. beginSessionSuccession：compact / summary 接力开始时写入交接意图
  *      （pendingSuccession 挡板）；
  *   3. applySessionSuccession：successor 会话就绪后推进线程 head 并投递
@@ -14,12 +13,12 @@
  *   6. handleRuntimeReady：head runtime 就绪时补投 pending 指令（经
  *      shared/runtime-hooks 的 onRuntimeReady 订阅接入）。
  *
- * 判定基准：isThreadHostSession 只回答「哪个 (工作空间, 会话类型) 组合的
- * 新会话自动建立线程环境」（环境的存在性开关，消费点：onSessionCreated
- * 与 input-gateway 的指令路由闸）。其余事件响应钩子（succession / 删除
- * 清理 / runtime 就绪补投 / guard 触发的 rotation）一律以「该会话是否为
- * 某活跃线程的 head」为唯一判定——处于线程环境（thread）则生效，纯
- * session 会话天然 no-op，与 agent 归属哪个工作空间无关。
+ * 判定基准：isThreadHostSession 只回答「哪个 APP 的新会话自动建立线程
+ * 环境」（环境的存在性开关，消费点：onSessionCreated 与 input-gateway 的
+ * 指令路由闸）。其余事件响应钩子（succession / 删除清理 / runtime 就绪
+ * 补投 / guard 触发的 rotation）一律以「该会话是否为某活跃线程的 head」
+ * 为唯一判定——处于线程环境（thread）则生效，纯 session 会话天然 no-op，
+ * 与会话所属 APP 无关。
  */
 
 import { getThreadControl } from './thread-controller.js';
@@ -68,21 +67,17 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
     findThreadBySession,
 
     /**
-     * 会话创建钩子：线程宿主工作空间的新会话自动成为一条新线程。
+     * 会话创建钩子：线程宿主 APP 的新会话自动成为一条新线程。
      * 失败不阻断会话创建（线程是承接增强，不是会话存在的前提）。
      */
     async onSessionCreated(agentId, session) {
-      if (!isThreadHostSession(agentId, session?.sessionType)) return null;
+      if (!isThreadHostSession(agentId)) return null;
       const sessionId = String(session?.id || '').trim();
       if (!sessionId) return null;
       try {
         const thread = await core.start({
           sessionRef: { agentId, sessionId },
           title: String(session?.title || '').trim(),
-          // T001：身份归属取自 root Session 记录自身（sessionType 即产品身份
-          // 事实）。字段缺失（undefined / 空串）时框架回退 identitySource
-          // （session index）解析；解析不到记为 null（未知），绝不默认 main。
-          identity: session?.sessionType,
         });
         console.log(`[thread-integration] thread created: ${thread.threadId} head=${sessionId}`);
         // 创建事务落定后发布事实事件（无订阅者时 no-op）。重启恢复不经过
@@ -135,6 +130,15 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
           fromSessionId: from,
           reason,
         });
+        // 交接开始的事实事件：前端活动线程订阅据此即时点亮「接力中」状态
+        // （顶栏指示器 / 侧栏过渡占位），不等 20s contentHash 轮询。事件只
+        // 携带事务事实（与 head-advanced 同纪律），状态以 /threads 数据为准。
+        publishThreadEvent(thread.threadId, {
+          kind: 'thread.handoff-started',
+          agentId: normalizedAgentId,
+          fromSessionId: from,
+          reason,
+        });
         return { applied: true, threadId: thread.threadId };
       } catch (error) {
         console.error(`[thread-integration] beginSessionSuccession failed for session=${from}:`, error?.message || error);
@@ -151,10 +155,8 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
      * T002：applied=false 分两类——
      *   - void（并发/幂等场景，线程状态已是权威，不记失败）：
      *     head_mismatch / already_head / duplicate_session / thread_closed；
-     *   - 失败（T001 身份门：session_workspace_mismatch /
-     *     thread_identity_mismatch / thread_identity_missing /
-     *     session_already_in_thread，及其它异常）：记 rotation_failed +
-     *     错误 code 作 stage，并显式收敛挡板（不靠 stale TTL）。
+     *   - 失败（advance 异常等）：记 rotation_failed + 错误 code 作
+     *     stage，并显式收敛挡板（不靠 stale TTL）。
      */
     async applySessionSuccession({ agentId, fromSessionId, toSessionId, reason = 'manual' }) {
       const normalizedAgentId = String(agentId || '').trim();
@@ -257,6 +259,7 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
         }
         const failed = await core.failSessionHandoff(thread.threadId, { reason, stage, error });
         await abortPendingSuccession(core, thread.threadId, { stage, reason, error });
+
         return { applied: true, thread: failed, threadId: thread.threadId };
       } catch (failure) {
         console.error(`[thread-integration] failSessionSuccession failed for session=${from}:`, failure?.message || failure);

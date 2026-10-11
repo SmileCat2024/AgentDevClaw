@@ -10,7 +10,7 @@
  * `bin/claw.mjs` threads / sessions 子命令；serverOrigin 解析参照
  * local-features/dispatch 的 runtimeIdentity 模式（默认 http://127.0.0.1:1420）。
  *
- * new-session 直调 POST /protoclaw/prebuilt_sessions（sessionType=coder，
+ * new-session 直调 POST /protoclaw/prebuilt_sessions（agentId=coder，ADR-0025，
  * 契约参照 bin/claw.mjs handleSessions：--dir 映射 openDirectory；目录必填，
  * 服务端拒绝目录回退默认——coder 绑错项目的代价是在错误仓库施工）；
  * 响应 threadId 在 session
@@ -553,13 +553,13 @@ export function createThreadsAdapter(deps: {
   const adapter: ThreadAdapter = async (args, context) => {
     const [verb, ...rest] = args;
     switch (verb) {
-      // new-session <agentId> <目录> [title]：创建 Coder 会话（sessionType=coder），
-      // 线程宿主工作空间自动建线（标准路径；create 仅用于已存在会话加挂线程）。
+      // new-session <agentId> <目录> [title]：创建 Coder APP 会话（agentId=coder，
+      // ADR-0025），线程宿主 APP 自动建线（标准路径；create 仅用于已存在会话加挂线程）。
       // 目录必填（服务端已禁止目录回退默认——workspace 最近目录随上次切换
       // 漂移，裸创建几乎必然绑错项目），本地先校验绝对路径与存在性，
       // 错误在派发侧即出，不等 server 400。
       // 契约参照 bin/claw.mjs handleSessions（--dir 映射 openDirectory；
-      // sessionType=coder 响应带 threadId）。
+      // coder APP 响应带 threadId）。
       case 'new-session': {
         const [agentId, directory, title] = rest;
         if (!directory) {
@@ -578,7 +578,6 @@ export function createThreadsAdapter(deps: {
         }
         const body: Record<string, unknown> = {
           agentId,
-          sessionType: 'coder',
           openDirectory: normalizedDirectory,
         };
         if (title) body.title = title;

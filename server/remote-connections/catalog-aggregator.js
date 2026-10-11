@@ -87,12 +87,10 @@ function classifyCatalogFailure(error, timeoutMs) {
 // viewer（/api/agents 在线 runtime）在 connected 不可用时兜底（无目录信息）。
 // 两者都不提供可用的运行中 runtime 时返回空——不伪造条目。prebuilt 历史会话索引
 // 不进入目录（叶子必须是当前可进入的运行中会话）。
-function resolveSidebarEntryId(raw, parentId, sessionType) {
-  const explicit = cleanText(raw?.sidebar_entry_id) || cleanText(raw?.sidebarEntryId);
-  if (explicit) return explicit;
-  const owner = cleanText(parentId);
-  if (!owner) return '';
-  return sessionType === 'main' ? owner : `${owner}:${sessionType}`;
+// 条目归属 = 所属 APP（ADR-0025）：sidebar_entry_id 取显式声明，否则即宿主
+// agent id，无并列身份合成。
+function resolveSidebarEntryId(raw, parentId) {
+  return cleanText(raw?.sidebar_entry_id) || cleanText(raw?.sidebarEntryId) || cleanText(parentId);
 }
 
 function collectRuntimes({ connected, viewer }) {
@@ -116,7 +114,7 @@ function collectRuntimes({ connected, viewer }) {
     upsert(raw.runtime_session_id || raw.id, {
       id: cleanText(raw.runtime_session_id) || cleanText(raw.id),
       agentId: parentId,
-      sidebarEntryId: resolveSidebarEntryId(raw, parentId, sessionType),
+      sidebarEntryId: resolveSidebarEntryId(raw, parentId),
       sidebarEntryName: cleanText(raw.sidebar_entry_name) || cleanText(raw.sidebarEntryName),
       sidebarEntryGroup: cleanText(raw.sidebar_entry_group) || cleanText(raw.sidebarEntryGroup),
       name: cleanText(raw.name) || cleanText(raw.active_workspace_session_title)
@@ -153,7 +151,7 @@ function collectRuntimes({ connected, viewer }) {
         updatedAt: '',
         messageCount: null,
         connected: true,
-        sidebarEntryId: resolveSidebarEntryId(raw, parentId, sessionType),
+        sidebarEntryId: resolveSidebarEntryId(raw, parentId),
       });
     }
   }

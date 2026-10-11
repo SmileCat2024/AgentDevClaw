@@ -46,7 +46,7 @@ import { META_VERSION, buildSessionDirectoryEntries } from './session-helpers.js
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
 import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
 import { getInternalAuthToken } from '../auth.js';
-import { resolveLifecycleTarget, resolveTransformationTarget, isBrowseOnlyMount } from '../thread-control/target-resolution.js';
+import { resolveLifecycleTarget, resolveTransformationTarget, isBrowseOnlyMount, isHandoffBarrierActive } from '../thread-control/target-resolution.js';
 
 // server.js lives at project root; this module is at server/routes/session.js
 const __filename = fileURLToPath(import.meta.url);
@@ -228,7 +228,6 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
         } catch { /* workspace state read failure falls back to unpaged */ }
       }
       if (projectDir) listOptions.sessionProjectDir = projectDir;
-      listOptions.sessionExcludeSessionTypes = ['coder'];
       if (typeof req.query.query === 'string' && req.query.query.trim()) listOptions.sessionQuery = req.query.query.trim();
       if (req.query.archived === 'main' || req.query.archived === 'archived') listOptions.sessionArchived = req.query.archived;
       const offset = Number(req.query.offset);
@@ -915,25 +914,25 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
     const agent = await requireAgentLight(agentId);
-    // sessionType 限定已知值：main 是用户会话缺省形态；coder 是线程宿主
-    // 会话，仅由调度面（ACP / dispatch / CLI）显式创建，前端不传此字段。
+    // sessionType 限定已知值：main 是用户会话缺省形态。coder 身份已升格为
+    // 独立 APP（ADR-0025），不再经 sessionType 寻址，直接以 agentId=coder 创建。
     const requestedSessionType = cleanSessionText(req.body?.sessionType);
-    if (requestedSessionType && !['main', 'coder'].includes(requestedSessionType)) {
+    if (requestedSessionType && requestedSessionType !== 'main') {
       res.status(400).json({ error: `unsupported sessionType: ${requestedSessionType}` });
       return;
     }
-    // coder 是无人值守身份，目录绑定错的代价是在错误的项目里施工：禁止裸
+    // coder 是无人值守 APP，目录绑定错的代价是在错误的项目里施工：禁止裸
     // 创建——缺目录时 createPrebuiltSession 会回退到 workspace state 的最近
     // 目录（随上次目录切换/会话创建漂移，几乎必然绑错）。调度面（coder_shell
     // / claw CLI）必须显式指定已存在的绝对路径；successor 派生路径
     // （sourceSessionId 继承来源身份与目录）不受此闸门约束。
-    if (requestedSessionType === 'coder' && !req.body?.sourceSessionId) {
+    if (agentId === 'coder' && !req.body?.sourceSessionId) {
       const rawDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
       if (!rawDirectory) {
         res.status(400).json({
           error: 'coder 会话必须显式指定 openDirectory（目标工作目录），不接受目录回退默认'
             + '（缺省时会绑定到 workspace 最近目录，几乎必然绑错项目）。'
-            + '调度面请用 coder_shell new-session <agentId> <目录> 或 claw sessions create --session-type coder --dir <目录> 显式指定。',
+            + '调度面请用 coder_shell new-session <agentId> <目录> 或 claw sessions create --agent coder --dir <目录> 显式指定。',
         });
         return;
       }
@@ -1848,6 +1847,17 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
       sessionId,
       memberLookup: _memberLookup,
     });
+    // 接续挡板窗口：head runtime 生命周期由接续流程独占管理，activate
+    //（挂载入口）不得给退役中的 head 启动 runtime（与 rotation 竞态）。
+    // 拒绝并携带当前 head——前端据此挂线程等待视图，接续完成后接上。
+    if (isHandoffBarrierActive(activateTarget)) {
+      return res.status(409).json({
+        ok: false,
+        code: 'thread_handoff_in_progress',
+        message: `Thread ${activateTarget.threadId} 正在接续（head 将换到 successor），挂载已拒绝`,
+        ..._targetShape(activateTarget),
+      });
+    }
     const browseOnly = activateTarget.ok && isBrowseOnlyMount(activateTarget);
     const session = await activatePrebuiltSession(agent.id, sessionId, { returnSummary: false });
     // activatePrebuiltSession 透传 commit 后的 index revision（无实际变更时为

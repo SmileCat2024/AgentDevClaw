@@ -457,17 +457,11 @@ export function sliceSessionsForWire(sessions, options = {}) {
   const archivedFilter = options.archived === 'main' || options.archived === 'archived'
     ? options.archived
     : null;
-  // 前端项目桶按身份分流（coder 会话归线程视图，不进主列表）；服务端切片
-  // 必须同口径排除，否则 total 与已加载数永不相等，加载更多无法收敛。
-  const excludeSessionTypes = Array.isArray(options.excludeSessionTypes)
-    ? new Set(options.excludeSessionTypes.map((type) => String(type || '').trim()))
-    : null;
 
   let mainTotal = 0;
   let archivedTotal = 0;
   const filtered = [];
   for (const session of source) {
-    if (excludeSessionTypes && excludeSessionTypes.has(String(session?.sessionType || 'main'))) continue;
     if (options.studioFeatureId !== undefined
       && !cleanStudioFeatureIds(session?.studioFeatureIds).includes(cleanSessionText(options.studioFeatureId))) continue;
     if (normalizedProject
@@ -640,22 +634,23 @@ export function sessionRecordToWorkspaceMeta(record) {
  * 的响应边界都必须经本投影补齐身份，形状对齐 get_connected_agents 的
  * child 条目与 /protoclaw/runtime_status 的 agent 块。
  *
+ * 条目归属 = 所属 APP（ADR-0025）：sidebar_entry_id 即宿主 agent id，
+ * 无并列身份合成。
+ *
  * @param {object|null} viewerAgent - ViewerWorker 原始条目（非对象时返回 null）
  * @param {object} identity
  * @param {string} identity.agentId 宿主 prebuilt agent id
  * @param {string} [identity.sessionId] 会话 id
- * @param {string} [identity.sessionType] 会话身份（缺省 main）
  * @param {object} [identity.sessionMeta] readWorkspaceSessionMeta /
  *   sessionRecordToWorkspaceMeta 形状；缺省时身份字段仍补齐、名称退化为
  *   viewer 注册名
  * @returns {object|null}
  */
-export function buildChildRuntimeAgent(viewerAgent, { agentId, sessionId = '', sessionType = '', sessionMeta = null } = {}) {
+export function buildChildRuntimeAgent(viewerAgent, { agentId, sessionId = '', sessionMeta = null } = {}) {
   if (!viewerAgent || typeof viewerAgent !== 'object') return null;
   const owner = cleanSessionText(agentId);
   if (!owner) return null;
   const meta = sessionMeta && typeof sessionMeta === 'object' ? sessionMeta : {};
-  const type = cleanSessionText(sessionType) || 'main';
   const displayName = cleanSessionText(meta.active_workspace_display_name);
   const agentName = cleanSessionText(meta.active_workspace_agent_name);
   const title = cleanSessionText(meta.active_workspace_session_title);
@@ -666,8 +661,7 @@ export function buildChildRuntimeAgent(viewerAgent, { agentId, sessionId = '', s
     status: viewerAgent.connected ? 'running' : 'stopped',
     source: 'child',
     parent_id: owner,
-    sessionType: type,
-    sidebar_entry_id: type === 'main' ? owner : `${owner}:${type}`,
+    sidebar_entry_id: owner,
     runtime_session_id: String(viewerAgent.id || '').trim(),
     active_workspace_session_id: cleanSessionText(meta.active_workspace_session_id)
       || cleanSessionText(sessionId) || null,

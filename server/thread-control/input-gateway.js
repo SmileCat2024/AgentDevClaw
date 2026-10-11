@@ -164,7 +164,7 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
   const runtime = getRuntimeByViewerAgentId(viewerAgentId);
   const agentId = String(runtime?.agentId || '').trim();
   const sessionId = String(runtime?.selectedSessionId || '').trim();
-  if (!agentId || !sessionId || !isThreadHostSession(agentId, runtime?.sessionType)) {
+  if (!agentId || !sessionId || !isThreadHostSession(agentId)) {
     return { route: 'direct' };
   }
 

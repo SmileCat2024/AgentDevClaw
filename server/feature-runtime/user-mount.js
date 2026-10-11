@@ -24,7 +24,7 @@ import { mountResolvedFeatures } from './loader.js';
  * config 不参与 dependency hash，此函数不带配置值；挂载链在返回的 features
  * 上按 agent 配置树补 config（见 mountUserConfiguredFeatures）。
  */
-export async function buildUserMountPlan({ mounts, agentId, sessionType, catalogRoots }) {
+export async function buildUserMountPlan({ mounts, agentId, catalogRoots }) {
   const catalog = await scanFeatureCatalog(catalogRoots);
   const features = [];
   for (const [runtimeName, mount] of mounts) {
@@ -49,7 +49,7 @@ export async function buildUserMountPlan({ mounts, agentId, sessionType, catalog
     plan: {
       schemaVersion: 1,
       mode: 'release',
-      agent: { id: `${agentId}:${sessionType}:user-mounts` },
+      agent: { id: `${agentId}:user-mounts` },
       features,
     },
   };
@@ -58,7 +58,7 @@ export async function buildUserMountPlan({ mounts, agentId, sessionType, catalog
 /**
  * @param {object} agent 已构造完毕的 agent 实例（静态装配 + super 已完成）
  * @param {Map<string, {package: string, version: string, layerId: string}>} mounts
- * @param {{agentId: string, sessionType?: string, catalogRoots?: object, environmentRoot?: string}} options
+ * @param {{agentId: string, catalogRoots?: object, environmentRoot?: string}} options
  *   catalogRoots / environmentRoot 是测试隔离注入口（透传 scanFeatureCatalog /
  *   provisionRuntimeEnvironment 的同名参数），生产调用不传。
  * @returns {Promise<Array<{package: string, name: string, resolvedFrom: string, entry: string}>>}
@@ -67,14 +67,13 @@ export async function buildUserMountPlan({ mounts, agentId, sessionType, catalog
  */
 export async function mountUserConfiguredFeatures(agent, mounts, {
   agentId,
-  sessionType = 'main',
   catalogRoots,
   environmentRoot,
 } = {}) {
   if (!(mounts instanceof Map) || mounts.size === 0) return [];
   if (!agentId) throw new Error('mountUserConfiguredFeatures requires agentId.');
 
-  const { plan } = await buildUserMountPlan({ mounts, agentId, sessionType, catalogRoots });
+  const { plan } = await buildUserMountPlan({ mounts, agentId, catalogRoots });
   for (const feature of plan.features) {
     const configValue = agent.config?.features?.[feature.runtimeName];
     if (configValue && typeof configValue === 'object' && Object.keys(configValue).length > 0) {

@@ -357,26 +357,25 @@ describe('feature-catalog: resolveMountedNames', () => {
   const ctx = loadModule();
   const fn = ctx.run;
 
-  it('selects the identity set by sessionType within the programming-helper domain', () => {
+  it('selects the identity set by host APP (ADR-0025: coder is a standalone APP)', () => {
     const facts = `({ main: new Set(['playwright-shell']), coder: new Set(['github']) })`;
-    const call = (host, sessionType) => fn(
-      `String(window.ClawFW.featureCatalog.resolveMountedNames(${facts}, '${host}', '${sessionType}') === null
+    const call = (host) => fn(
+      `String(window.ClawFW.featureCatalog.resolveMountedNames(${facts}, '${host}') === null
         ? 'null'
-        : [...window.ClawFW.featureCatalog.resolveMountedNames(${facts}, '${host}', '${sessionType}')].sort().join(','))`
+        : [...window.ClawFW.featureCatalog.resolveMountedNames(${facts}, '${host}')].sort().join(','))`
     );
-    assert.equal(call('programming-helper', ''), 'playwright-shell');
-    assert.equal(call('programming-helper', 'main'), 'playwright-shell');
-    assert.equal(call('programming-helper', 'coder'), 'github');
+    assert.equal(call('programming-helper'), 'playwright-shell');
+    assert.equal(call('coder'), 'github');
   });
 
   it('returns null outside the mount domain or before facts are ready', () => {
     const facts = `({ main: new Set(['playwright-shell']) })`;
-    // 其他宿主不在双身份装配域（挂载管理/商店是编程小助手专属）
-    assert.equal(fn(`window.ClawFW.featureCatalog.resolveMountedNames(${facts}, 'agent-studio', '')`), null);
+    // 其他宿主不在装配域（挂载管理/商店是编程小助手与 coder 两 APP 专属）
+    assert.equal(fn(`window.ClawFW.featureCatalog.resolveMountedNames(${facts}, 'agent-studio')`), null);
     // 装配事实未就绪
-    assert.equal(fn(`window.ClawFW.featureCatalog.resolveMountedNames(null, 'programming-helper', '')`), null);
+    assert.equal(fn(`window.ClawFW.featureCatalog.resolveMountedNames(null, 'programming-helper')`), null);
     // 身份清单缺失（响应不含该身份键）
-    assert.equal(fn(`window.ClawFW.featureCatalog.resolveMountedNames({}, 'programming-helper', 'coder')`), null);
+    assert.equal(fn(`window.ClawFW.featureCatalog.resolveMountedNames({}, 'coder')`), null);
   });
 });
 

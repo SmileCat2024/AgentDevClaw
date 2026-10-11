@@ -4,7 +4,7 @@
  * 数据面（GET /api/feature-store/overview）：聚合支撑"给 agent 加插件"面板：
  * - packages：Feature tgz 仓库中可安装的包（仅用户仓库源；官方仓库的包是
  *   官方 agent 静态装配的原料，不进入用户商店货架）
- * - mounts：两个身份（main / coder）配置层中已声明的 $mount 装配清单，
+ * - mounts：两个商店身份（main / coder，各对应独立 APP 的 agent.js）配置层
  *   并对照 catalog 标记 missing（包或版本已不在仓库）
  * - envReady：身份级装配环境就绪（组合 hash → 环境目录 lock 存在性）
  * - installing：进行中的安装任务（单飞；关弹窗后台继续的可见性）
@@ -48,25 +48,36 @@ const INSTALL_ERROR_STATUS = {
 /**
  * agent.js 模块缓存（装配权威的加载入口）。展示元数据不在此重复声明：
  * 工厂实例自身的 name / description 提供（feature 定义即唯一权威）。
+ * ADR-0025 后每个商店身份对应独立 APP 的 agent.js（main → 编程小助手、
+ * coder → coder APP）。
  */
-let agentModulePromise = null;
-function loadAgentModule() {
-  if (!agentModulePromise) {
-    agentModulePromise = import('../../prebuilt-agents/official/programming-helper/agent.js')
-      .catch((error) => {
-        agentModulePromise = null; // 允许下次重试（agent.js 构建损坏时货架置空而非永久卡死）
-        throw error;
-      });
+const AGENT_MODULE_SOURCES = {
+  main: () => import('../../prebuilt-agents/official/programming-helper/agent.js'),
+  coder: () => import('../../prebuilt-agents/official/coder/agent.js'),
+};
+const agentModulePromises = new Map();
+function loadAgentModule(identity) {
+  const load = AGENT_MODULE_SOURCES[identity];
+  if (!load) throw new Error(`未知商店身份：${identity}`);
+  if (!agentModulePromises.has(identity)) {
+    agentModulePromises.set(identity, load().catch((error) => {
+      agentModulePromises.delete(identity); // 允许下次重试（agent.js 构建损坏时货架置空而非永久卡死）
+      throw error;
+    }));
   }
-  return agentModulePromise;
+  return agentModulePromises.get(identity);
 }
 
 /**
- * 官方可选插件表（$mount kind:'builtin' 的装配权威）。
+ * 官方可选插件表（$mount kind:'builtin' 的装配权威），按商店身份组装：
+ * 各 agent.js 的 builtinOptionalFeatures 平表导出。
  */
 async function loadBuiltinTables() {
-  const mod = await loadAgentModule();
-  return mod.builtinOptionalFeatures || {};
+  const [main, coder] = await Promise.all([loadAgentModule('main'), loadAgentModule('coder')]);
+  return {
+    main: main.builtinOptionalFeatures || {},
+    coder: coder.builtinOptionalFeatures || {},
+  };
 }
 
 /**
@@ -129,10 +140,8 @@ export function summarizeInstanceSurface(instance) {
  * surface 为声明面计数（见 summarizeInstanceSurface）。
  */
 export async function collectBaseFeatures(identity) {
-  const mod = await loadAgentModule();
-  const AgentClass = mod.resolveAgentClass(
-    identity === 'coder' ? { runtime: { sessionType: 'coder' } } : {},
-  );
+  const mod = await loadAgentModule(identity);
+  const AgentClass = mod.default;
   // BasicAgent 构造要求 llm 必传；总览只读静态装配的 features Map，
   // 不跑会话，占位模型名即可。
   const agent = new AgentClass({ llm: { modelName: 'overview' } });

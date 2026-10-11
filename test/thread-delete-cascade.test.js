@@ -44,12 +44,9 @@ let counter = 0;
 
 function makeControl() {
   const root = path.join(base, `del-${++counter}`);
-  // 身份真相源：测试会话统一 coder（线程宿主身份）
-  const identitySource = async () => 'coder';
   const control = createThreadControl({
     rootDir: root,
     bridge: new WorkThreadRuntimeBridge(),
-    identitySource,
   });
   return control;
 }
@@ -109,7 +106,7 @@ function makeDeleteEnvironment({ failRemoveSessions = false, failRemoveSessionsM
 
 /** 建线程 s1 → 接力 s2（s1 成为历史成员）。 */
 async function startTwoLinkThread(core) {
-  const thread = await core.start({ sessionRef: { agentId: AGENT, sessionId: 's1' }, identity: 'coder' });
+  const thread = await core.start({ sessionRef: { agentId: AGENT, sessionId: 's1' } });
   await core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's1', endKind: 'trim' });
   return thread.threadId;
 }

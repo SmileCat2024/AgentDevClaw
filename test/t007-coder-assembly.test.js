@@ -2,14 +2,14 @@
  * T007 真实本地运行链：coder successor 的提示词、工具没有退回 main。
  *
  * 既有测试（agent-lifecycle.test.js）覆盖的是「投影」层——coder 会话的
- * 侧栏投影条目与子进程路由；本文件覆盖「装配」层：真实 import 生产
- * agent 模块、经 resolveAgentClass 按 sessionType 分派、真实实例化
+ * 侧栏投影条目与子进程路由；本文件覆盖「装配」层：真实 import 两个 APP
+ * 的生产 agent 模块（coder APP 直载 coder/agent.js，ADR-0025）、真实实例化
  * Agent 类、strict 初始化全部 feature、渲染真实系统提示词、读回真实
  * 工具表。子进程 probe（fixtures/t007-coder-assembly-probe.mjs）HOME
  * 隔离，不触碰真实用户数据目录。
  *
  * 断言三层：
- * 1. 身份分派：sessionType=coder → CoderAgent；main → ProgrammingHelperAgent；
+ * 1. APP 装配：coder APP → CoderAgent；编程小助手 APP → ProgrammingHelperAgent；
  * 2. 提示词：coder 提示词含 coder 身份标记、不含 main 身份标记（互斥，
  *    防止装配退回 main 时两个标记同时出现或互换）；
  * 3. 工具：coder 工具集不含 main 独有的交互工具（ask_user_choice /
@@ -65,7 +65,7 @@ describe('T007 真实运行链：coder 身份装配（提示词 + 工具未退�
   let assembly;
 
   describe('probe 结果（真实 import + 真实实例化 + strict 装配）', { timeout: 130_000 }, () => {
-    it('resolveAgentClass 按 sessionType 分派到不同 Agent 类', async () => {
+    it('两个 APP 各自装配自己的 Agent 类（无 sessionType 分派）', async () => {
       assembly = await runProbe();
       assert.equal(assembly.coder.className, 'CoderAgent', 'coder 会话装配 CoderAgent');
       assert.equal(assembly.main.className, 'ProgrammingHelperAgent', 'main 会话装配 ProgrammingHelperAgent');

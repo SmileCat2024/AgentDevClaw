@@ -698,19 +698,14 @@ SessionLifecycle.prototype.start = async function () {
   }
 
   const agentModule = await import(pathToFileURL(agentJsPath).href);
-  // Agent module can export a session-type-aware dispatcher; fall back to the
-  // default-export heuristic for single-class agents.
-  const AgentClass = typeof agentModule.resolveAgentClass === 'function'
-    ? agentModule.resolveAgentClass({ runtime: this.runtime })
-    : resolveAgentClass(agentModule);
+  const AgentClass = resolveAgentClass(agentModule);
 
   if (!AgentClass) {
     throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
   }
 
-  // coder sessions keep a standalone model config under agent-configs/coder.json
-  // even though they now live inside the programming-helper workspace.
-  const modelOptions = this.runtime.sessionType === 'coder'
+  // coder 是独立 APP（ADR-0025）：模型配置走自己的 agent-configs/coder.json。
+  const modelOptions = agentId === 'coder'
     ? { userConfigPath: AGENT_USER_CONFIG_PATH('coder') }
     : {};
   // 启动解析是构造期一次性注入（agent 尚未创建）；运行期切换统一走
@@ -778,8 +773,9 @@ SessionLifecycle.prototype.start = async function () {
   // agent.js 的 builtinOptionalFeatures 工厂（官方可选插件），repository 形态
   // 走 tgz 装配链。
   if (this.agent.pendingFeatureMounts instanceof Map && this.agent.pendingFeatureMounts.size > 0) {
-    const sessionIdentity = this.runtime.sessionType || 'main';
-    const builtinFactories = agentModule.builtinOptionalFeatures?.[sessionIdentity] || {};
+    // builtin 工厂表是 agent.js 的平表导出（键 = runtimeName），装配适用面
+    // 由各 agent 自己声明——宿主不做任何身份推导（ADR-0025）。
+    const builtinFactories = agentModule.builtinOptionalFeatures || {};
     const repositoryMounts = new Map();
     for (const [name, mount] of this.agent.pendingFeatureMounts) {
       if (mount.kind !== 'builtin') {
@@ -788,7 +784,7 @@ SessionLifecycle.prototype.start = async function () {
       }
       const plugin = builtinFactories[name];
       if (!plugin) {
-        throw new Error(`官方可选插件 '${name}' 不适用于身份 '${sessionIdentity}'（builtinOptionalFeatures 无此声明）`);
+        throw new Error(`官方可选插件 '${name}' 未在本 agent 的 builtinOptionalFeatures 声明，无法挂载`);
       }
       if (this.agent.features?.has(name)) {
         throw new Error(`动态装配 Feature 名称冲突：${name}（Agent 已静态挂载同名 Feature）`);
@@ -805,10 +801,7 @@ SessionLifecycle.prototype.start = async function () {
       console.log(`[ProtoClaw Runtime] ✓ 官方可选 feature 已挂载: ${name}`);
     }
     if (repositoryMounts.size > 0) {
-      const mounted = await mountUserConfiguredFeatures(this.agent, repositoryMounts, {
-        agentId,
-        sessionType: sessionIdentity,
-      });
+      const mounted = await mountUserConfiguredFeatures(this.agent, repositoryMounts, { agentId });
       console.log(`[ProtoClaw Runtime] ✓ 用户装配 feature 已挂载 (${mounted.length}): ${mounted.map((item) => `${item.name}@${item.package}`).join(', ')}`);
     }
   }

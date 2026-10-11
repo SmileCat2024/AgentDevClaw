@@ -45,12 +45,9 @@ let counter = 0;
 
 function makeControl(bridgeOptions = {}) {
   const root = path.join(base, `arc-${++counter}`);
-  const identitySource = async (_agentId, sessionId) =>
-    String(sessionId || '').trim() ? 'coder' : null;
   const control = createThreadControl({
     rootDir: root,
     bridge: new WorkThreadRuntimeBridge(bridgeOptions),
-    identitySource,
   });
   return control;
 }
@@ -75,7 +72,7 @@ function makeEnvironment(bridgeOptions = {}) {
 }
 
 async function startThread(env, rootSessionId = 's1') {
-  return env.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: rootSessionId } });
+  return env.core.start({ sessionRef: { agentId: 'coder', sessionId: rootSessionId } });
 }
 
 function commandsById(record) {
@@ -137,7 +134,7 @@ describe('T004: 归档立即拒绝新派发', () => {
     assert.equal(delRes.body.code, 'thread_archived');
 
     // 归档线程不再接受上下文变换派发（接力入口同样被拒）
-    const begin = await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'trim' });
+    const begin = await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'trim' });
     assert.equal(begin.applied, false);
     assert.equal(begin.reason, 'thread_archived');
 
@@ -152,11 +149,10 @@ describe('T004: 归档立即拒绝新派发', () => {
     const thread = await startThread(env, 'ig-s1');
     await env.lifecycle.archiveThread(thread.threadId);
 
-    const viewerKey = 'programming-helper::ig-s1';
+    const viewerKey = 'coder::ig-s1';
     managedAgents.set(viewerKey, {
-      agentId: 'programming-helper',
+      agentId: 'coder',
       selectedSessionId: 'ig-s1',
-      sessionType: 'coder',
       viewerAgentId: 'viewer-arc-1',
       process: null,
     });
@@ -269,7 +265,7 @@ describe('T004: 运行中调用收尾', () => {
     assert.equal(byId['cmd-started'].status, 'in_flight');
 
     // 开始调用完成后（runtime 回到就绪）的补投触发点不再消费下一条
-    const readyDelivery = await env.integration.handleRuntimeReady('programming-helper', 's1');
+    const readyDelivery = await env.integration.handleRuntimeReady('coder', 's1');
     assert.equal(readyDelivery.delivery.delivered, 0);
     assert.equal(readyDelivery.delivery.reason, 'thread_held');
     const explicit = await env.integration.tryDeliver(thread.threadId);
@@ -313,10 +309,10 @@ describe('T004: 归档与接力并发的冲突响应', () => {
     await env.core.appendCommand({ threadId: thread.threadId, text: 'old inbox work', source: 'ui' });
 
     // 接力开始（挡板写入），随后归档 seal，最后 commit 到达
-    await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'trim' });
+    await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'trim' });
     const archiveResult = await env.lifecycle.archiveThread(thread.threadId);
     const commit = await env.succession.commitSuccession({
-      agentId: 'programming-helper', fromSessionId: 's1', toSessionId: 's2',
+      agentId: 'coder', fromSessionId: 's1', toSessionId: 's2',
       reason: 'trim', successorReady: true,
     });
 
@@ -362,7 +358,7 @@ describe('T004: 归档与接力并发的冲突响应', () => {
       onStop: () => { if (!stopFired) { stopFired = true; stoppedOnce(); } },
     });
 
-    const rotPromise = rotation.handleContextGuard('programming-helper', 's1');
+    const rotPromise = rotation.handleContextGuard('coder', 's1');
     await stoppedOncePromise;
     // rotation 已写入交接挡板并停在 compact 中——此刻归档
     const archiveResult = await env.lifecycle.archiveThread(thread.threadId);
@@ -402,9 +398,9 @@ describe('T004: 归档与接力并发的冲突响应', () => {
     // commit 先到：head 推进 s1→s2，投递循环送出第一条后停在未就绪，
     // 第二条保持 pending（归属仍在旧 Inbox）。投递顺序不依赖 createdAt
     // 微秒差（同毫秒时框架按 commandId 字典序排），故按计数断言。
-    await env.integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 's1', reason: 'trim' });
+    await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'trim' });
     const commit = await env.succession.commitSuccession({
-      agentId: 'programming-helper', fromSessionId: 's1', toSessionId: 's2',
+      agentId: 'coder', fromSessionId: 's1', toSessionId: 's2',
       reason: 'trim', successorReady: true,
     });
     assert.equal(commit.applied, true);
@@ -427,7 +423,7 @@ describe('T004: 归档与接力并发的冲突响应', () => {
     assert.ok(archiveResult.cleanup.inflightDrain.commandIds.includes(delivered[0].commandId));
 
     // 归档后 successor 无法继续消费旧 Inbox：完成回调 / 显式投递全部被 hold 挡住
-    const readyDelivery = await env.integration.handleRuntimeReady('programming-helper', 's2');
+    const readyDelivery = await env.integration.handleRuntimeReady('coder', 's2');
     assert.equal(readyDelivery.delivery.delivered, 0);
     assert.equal(readyDelivery.delivery.reason, 'thread_held');
     const explicit = await env.integration.tryDeliver(thread.threadId);
@@ -458,7 +454,7 @@ describe('T004: 清理结果 complete / partial 区分', () => {
         return { status: 'stopped' };
       },
     });
-    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 's1' } });
+    const thread = await control.core.start({ sessionRef: { agentId: 'coder', sessionId: 's1' } });
 
     const result = await lifecycle.archiveThread(thread.threadId);
 
@@ -498,7 +494,7 @@ describe('T004: main Session 独立归档语义', () => {
   it('non-member sessions never enter thread archive', async () => {
     const env = makeEnvironment();
     await startThread(env);
-    const found = await env.lifecycle.findThreadBySession('programming-helper', 'main-session-x');
+    const found = await env.lifecycle.findThreadBySession('coder', 'main-session-x');
     assert.equal(found, null);
     assert.equal(await env.archive.isArchived('main-session-x'), false);
   });

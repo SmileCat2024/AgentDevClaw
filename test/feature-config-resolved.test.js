@@ -158,17 +158,18 @@ describe('buildScopeLayers / resolveScopeConfig', () => {
     assert.ok(target.endsWith(join('workspaces', 'programming-helper', 'feature-config', 'agent.json')));
   });
 
-  it('declares coder identity queue as [global, coder] with no dir layer', () => {
-    // coder 是编程小助手工作空间内的平行身份：队列只有全局层 + coder 层。
+  it('declares coder APP queue as [global, agent] with no dir layer', () => {
+    // coder 是独立 APP（ADR-0025）：配置队列与 programming-helper 同构，
+    // 层文件在 workspaces/coder/feature-config/agent.json。
     const { layers } = buildScopeLayers({ agentId: 'coder', dir: join(tempDir, 'proj') });
-    assert.deepEqual(layers.map((layer) => layer.id), ['global', 'coder']);
+    assert.deepEqual(layers.map((layer) => layer.id), ['global', 'agent']);
     assert.equal(layers[1].label, 'coder');
-    assert.ok(layers[1].path.endsWith(join('workspaces', 'programming-helper', 'feature-config', 'coder.json')));
+    assert.ok(layers[1].path.endsWith(join('workspaces', 'coder', 'feature-config', 'agent.json')));
   });
 
   it('resolves coder layer as a write target', () => {
-    const target = resolveWriteTarget({ agentId: 'coder', layerId: 'coder' });
-    assert.ok(target.endsWith(join('workspaces', 'programming-helper', 'feature-config', 'coder.json')));
+    const target = resolveWriteTarget({ agentId: 'coder', layerId: 'agent' });
+    assert.ok(target.endsWith(join('workspaces', 'coder', 'feature-config', 'agent.json')));
   });
 
   it('surfaces null warnings from layer files', () => {

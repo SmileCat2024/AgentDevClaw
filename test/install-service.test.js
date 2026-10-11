@@ -77,8 +77,8 @@ test('installFeature：成功写声明、plan 与启动链同构', async () => {
     // 声明落盘：键 = 包 basename，$mount 形态
     const layer = scope.readLayer();
     assert.deepEqual(layer['demo-feature'], { $mount: { package: '@user/demo-feature', version: '1.0.0' } });
-    // plan 同构：agent.id 与启动链一致（agentId:sessionType:user-mounts）
-    assert.equal(calls[0].plan.agent.id, 'programming-helper:main:user-mounts');
+    // plan 同构：agent.id 与启动链一致（agentId:user-mounts，ADR-0025 后无身份段）
+    assert.equal(calls[0].plan.agent.id, 'programming-helper:user-mounts');
     assert.equal(calls[0].plan.features[0].package, '@user/demo-feature');
   } finally { scope.dispose(); }
 });
