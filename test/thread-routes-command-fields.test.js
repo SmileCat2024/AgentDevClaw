@@ -59,8 +59,97 @@ async function callRoute(app, pattern, { params, body } = {}) {
   return res;
 }
 
+// GET /protoclaw/threads：列表端点的挡板开始时间投影断言用。
+async function callListRoute(app) {
+  const handlers = app.routes['GET /protoclaw/threads'];
+  assert.ok(handlers, 'route not registered: GET /protoclaw/threads');
+  const handler = handlers[handlers.length - 1];
+  const res = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(data) { this.body = data; return this; },
+  };
+  await handler({ query: {} }, res);
+  return res;
+}
+
 before(async () => { base = mkdtempSync(path.join(os.tmpdir(), 'claw-thread-routes-')); });
 after(async () => { if (base) await fs.rm(base, { recursive: true, force: true }); });
+
+describe('GET /protoclaw/threads handoffStartedAt wire projection', () => {
+  it('projects the pendingSuccession barrier start time; zero when no barrier', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, { control });
+
+    const thread = await control.core.start({
+      sessionRef: { agentId: 'programming-helper', sessionId: 'hs-w1' },
+      identity: 'coder',
+    });
+
+    // 无挡板：0（前端三处消费——顶栏指示器 / 输入路由守卫 / 侧栏占位——
+    // 以 >0 判定交接窗口；字段缺失会被误判为永无交接）
+    const idle = await callListRoute(app);
+    assert.equal(idle.body.threads[0].handoffStartedAt, 0);
+
+    // 立挡板：投影框架 pendingSuccession.startedAt
+    const { createThreadIntegration } = await import('../server/thread-control/thread-integration.js');
+    const integration = createThreadIntegration({ control });
+    const begun = await integration.beginSessionSuccession({
+      agentId: 'programming-helper', sessionId: 'hs-w1', reason: 'trim',
+    });
+    assert.equal(begun.applied, true);
+    const relaying = await callListRoute(app);
+    assert.ok(relaying.body.threads[0].handoffStartedAt > 0, '挡板立起后 handoffStartedAt 应为正时间戳');
+
+    // 挡板收敛（fail 路径）：归零
+    await integration.failSessionSuccession({
+      agentId: 'programming-helper', sessionId: 'hs-w1', reason: 'handoff_failed', stage: 'compact_or_successor',
+    });
+    const converged = await callListRoute(app);
+    assert.equal(converged.body.threads[0].handoffStartedAt, 0);
+  });
+});
+
+describe('GET /protoclaw/threads headSessionTitle wire projection', () => {
+  it('projects the head session title so sidebar entries follow head rotation', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, {
+      control,
+      // head 会话标题解析（生产装配：findPrebuiltSessionRecordShared 取
+      // 会话索引 title）。侧栏线程条目以此跟随换代（(精简)A），否则停在
+      // 创建时的线程标题。
+      resolveSessionTitle: async (agentId, sessionId) => (
+        sessionId === 'hs-t1' ? '（精简）A' : null
+      ),
+    });
+
+    await control.core.start({
+      sessionRef: { agentId: 'programming-helper', sessionId: 'hs-t1' },
+      identity: 'coder',
+    });
+
+    const res = await callListRoute(app);
+    assert.equal(res.body.threads[0].headSessionTitle, '（精简）A',
+      '线程响应应携带 head 会话标题（侧栏跟随换代的真相源）');
+
+    // 解析缺席（会话索引无该会话）：null，前端回退线程标题
+    const control2 = makeControl(async () => ({ success: true }));
+    const app2 = makeMockApp();
+    setupThreadRoutes(app2, { json: () => () => {} }, {
+      control: control2,
+      resolveSessionTitle: async () => null,
+    });
+    await control2.core.start({
+      sessionRef: { agentId: 'programming-helper', sessionId: 'hs-t2' },
+      identity: 'coder',
+    });
+    const res2 = await callListRoute(app2);
+    assert.equal(res2.body.threads[0].headSessionTitle, null);
+  });
+});
 
 describe('threads/:id/commands route field passthrough', () => {
   it('carries capabilityActivations and metadata from the route body into the command and delivery', async () => {

@@ -163,3 +163,17 @@ export async function resolveTransformationTarget({ agentId, sessionId, memberLo
 export function isBrowseOnlyMount(cls) {
   return Boolean(cls) && cls.type === 'thread' && cls.membership === 'thread-historical';
 }
+
+/**
+ * 接续挡板窗口判定：Thread 正在交接（status='rotating'，挡板立起至
+ * commit/fail 收敛）。窗口内 head runtime 的生命周期由接续流程独占管理
+ * （退役 → compact → successor spawn）——activate 等挂载入口不得在此期间
+ * 给 head 启动 runtime（与 rotation 竞态：历史事故「点击接力条目触发
+ * runtime 竞态、视图混乱闪烁」）。
+ *
+ * @param {object} cls - classifyTarget 的返回（threadStatus 字段）
+ * @returns {boolean}  - true = 接续进行中，挂载类入口应拒绝
+ */
+export function isHandoffBarrierActive(cls) {
+  return Boolean(cls) && cls.type === 'thread' && cls.threadStatus === 'rotating';
+}

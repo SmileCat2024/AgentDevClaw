@@ -484,7 +484,7 @@ test('context bar renders one supplied session view snapshot', () => {
   const renderBlock = sourceBetween(
     chatContextBarSource,
     'function updateChatContextBar',
-    '\n// ── Context pressure toast trigger',
+    '\n// ── Context bar hover popup',
   );
   vm.runInContext(
     `${renderBlock}\nglobalThis.__updateChatContextBar = updateChatContextBar;`,

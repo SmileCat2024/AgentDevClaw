@@ -22,6 +22,7 @@ import {
   resolveLifecycleTarget,
   resolveTransformationTarget,
   isBrowseOnlyMount,
+  isHandoffBarrierActive,
 } from '../server/thread-control/target-resolution.js';
 
 /** 构造成员归属记录（对齐 WorkThreadRecord 的归属相关字段）。 */
@@ -198,5 +199,29 @@ describe('T003: 历史 Session activate 只允许浏览 / 挂载视角', () => {
     assert.equal(isBrowseOnlyMount(hist), true);
     assert.equal(isBrowseOnlyMount(head), false);
     assert.equal(isBrowseOnlyMount(standalone), false);
+  });
+});
+
+describe('T018: 接续挡板窗口的挂载拒绝判定', () => {
+  test('rotating thread is barrier-active; open thread / standalone are not', async () => {
+    const rotating = classifyTarget(
+      threadRecord({ threadId: 'wt-1', headSessionId: 'head-1', sessionChain: ['head-1'], status: 'rotating' }),
+      'head-1',
+    );
+    const open = classifyTarget(
+      threadRecord({ threadId: 'wt-2', headSessionId: 'head-2', sessionChain: ['head-2'] }),
+      'head-2',
+    );
+    const standalone = classifyTarget(null, 'main-1');
+
+    assert.equal(isHandoffBarrierActive(rotating), true, '挡板中线程：挂载入口必须拒绝');
+    assert.equal(isHandoffBarrierActive(open), false, '正常线程：不受影响');
+    assert.equal(isHandoffBarrierActive(standalone), false, '独立会话：不受影响');
+    // 历史成员视角同样受挡板保护（挡板是线程级事实，不是会话级）
+    const rotatingHist = classifyTarget(
+      threadRecord({ threadId: 'wt-3', headSessionId: 'head-3', sessionChain: ['root-3', 'head-3'], status: 'rotating' }),
+      'root-3',
+    );
+    assert.equal(isHandoffBarrierActive(rotatingHist), true);
   });
 });

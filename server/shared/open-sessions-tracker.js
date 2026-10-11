@@ -63,7 +63,13 @@ export async function getRecoverySessions(agentId) {
   const indexMap = new Map(indexRecords.map((s) => [s.id, s]));
   let changed = false;
 
-  const valid = cached.filter((s) => indexMap.has(s.sessionId));
+  // 读取侧过滤：修复前落盘的脏条目（coder successor 无 sessionType 字段）
+  // 以会话索引为权威事实丢弃——coder 等非 main 会话不进恢复卡片。
+  const existing = cached.filter((s) => indexMap.has(s.sessionId));
+  const valid = existing.filter((s) => {
+    const record = indexMap.get(s.sessionId);
+    return String(record?.sessionType || 'main').trim() === 'main';
+  });
   if (valid.length !== cached.length) changed = true;
 
   // Refresh title and openDirectory from live session index
@@ -123,6 +129,10 @@ export async function addOpenSession(agentId, sessionId) {
     const index = await readSessionIndex(agentId);
     const record = (index.sessions || []).find((s) => s.id === sessionId);
     if (record) {
+      // 恢复卡片只服务 main 会话：coder 等线程身份会话归属线程视图
+      // （coder 投影入口），登记进恢复卡片会以「可恢复会话」身份乱入
+      // 宿主工作空间首页，点开后按 main 语义激活、落到错误上下文。
+      if (String(record.sessionType || 'main').trim() !== 'main') return;
       title = record.title || null;
       openDirectory = record.openDirectory || null;
     }

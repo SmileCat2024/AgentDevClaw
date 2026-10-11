@@ -38,18 +38,18 @@ export function createSseCompressionFilter(baseFilter) {
 }
 
 // ── thread 事件发布（模块级入口，ADR-0024 PR-2）──────────────────────
-// 线程事件的事实源在 server 侧线程事务（创建 / head 推进 / 归档 / 删除），
-// 不在 ViewerWorker 会话事件总线——发布入口因此是模块级函数：线程事务
-// 模块直接 import 调用，不经 worker 转发。实际投递由 createSseEventsModule
-// 实例注册（生产单实例）；未创建实例（服务未启动 / 纯单测装配）时发布
-// 为 no-op，不报错。
+// 线程事件的事实源在 server 侧线程事务（创建 / 交接开始 / head 推进 /
+// 归档 / 删除），不在 ViewerWorker 会话事件总线——发布入口因此是模块级
+// 函数：线程事务模块直接 import 调用，不经 worker 转发。实际投递由
+// createSseEventsModule 实例注册（生产单实例）；未创建实例（服务未启动 /
+// 纯单测装配）时发布为 no-op，不报错。
 let _threadPublisher = null;
 
 /**
  * 发布线程事实事件：payload.kind 为 SSE 事件名（最小集 thread.created /
- * thread.head-advanced / thread.archived / thread.deleted），threadId 由
- * 参数提供并合入帧 data。只投递到经 ?threads= 订阅该 threadId 的连接；
- * 无订阅者时 no-op。
+ * thread.handoff-started / thread.head-advanced / thread.archived /
+ * thread.deleted），threadId 由参数提供并合入帧 data。只投递到经
+ * ?threads= 订阅该 threadId 的连接；无订阅者时 no-op。
  */
 export function publishThreadEvent(threadId, payload) {
   if (typeof _threadPublisher === 'function') _threadPublisher(threadId, payload);

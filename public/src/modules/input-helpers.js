@@ -178,6 +178,54 @@ async function _submitInputInner(requestId, targetRuntimeId) {
     ? { 'session-reference': sessionRefs }
     : null;
 
+  const activeConversation = window.getActiveConversationTarget?.();
+  if (activeConversation?.threadId && typeof window.submitThreadInput === 'function'
+    && (input.trim() || turnMetadata)) {
+    try {
+      const threadResult = await window.submitThreadInput(activeConversation.threadId, {
+        text: input || ' ',
+        images,
+        source: 'chat-slot',
+        ...(capabilityActivations?.length ? { capabilityActivations } : {}),
+        ...(turnMetadata ? { metadata: turnMetadata } : {}),
+      });
+      const liveTextarea = document.getElementById(`input-${requestId}`);
+      if (liveTextarea && (liveTextarea.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
+        liveTextarea.value = '';
+        autoResize(liveTextarea);
+      }
+      if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
+      poll();
+      // 交接窗口内消息暂存 Thread Inbox：对话区不出现新消息，无提示即
+      // 「发不出去」假象（重发连击的事故场景）。仅真滞留（入箱且未即时
+      // 送达）才提示，正常投递保持静默；文案与 persistent-input 线程路径
+      // 同款。
+      if (String(threadResult?.delivery) === 'thread_queued'
+        && !(Number(threadResult?.deliveryAttempt?.delivered) > 0)
+        && typeof ClawToast !== 'undefined' && ClawToast?.show) {
+        ClawToast.show({
+          id: `thread-staged-${activeConversation.threadId}`,
+          status: 'info',
+          title: currentLanguage === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
+          autoDismiss: 5000,
+        });
+      }
+    } catch (threadError) {
+      window.ClawSlash?.restoreActivations?.(capabilityActivations);
+      window.SessionReference?.restore?.(sessionRefs);
+      if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+        ClawToast.show({
+          id: `thread-cmd-failed-${requestId}`,
+          status: 'error',
+          title: currentLanguage === 'zh' ? '消息暂未发出：请稍后重试' : 'Message not sent: please retry',
+          description: threadError instanceof Error ? threadError.message : String(threadError),
+          autoDismiss: 6000,
+        });
+      }
+    }
+    return;
+  }
+
   if (threadRoute.route === 'thread' && (input.trim() || turnMetadata)) {
     if (hasImages) {
       _notifyThreadImageUnsupported();

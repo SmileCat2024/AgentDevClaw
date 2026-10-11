@@ -48,9 +48,11 @@ const OPTIMISTIC_QUEUED_TTL_MS = 10000;
 // ── thread 事件订阅（ADR-0024 PR-2：仅订阅层，流视图后续工单消费）──
 // 服务端按连接的 ?threads= 参数过滤投递，订阅集在连接存续期间固定——
 // 订阅集变化时按新参数重建连接。重建窗口内丢帧可接受：thread 事件只是
-// 换头/归档/删除的发现信号，contentHash 轮询是断连兜底，不是数据通道。
+// 交接开始 / 换头 / 归档 / 删除的发现信号，contentHash 轮询是断连兜底，
+// 不是数据通道。
 const THREAD_EVENT_NAMES = [
-  'thread.created', 'thread.head-advanced', 'thread.archived', 'thread.deleted',
+  'thread.created', 'thread.handoff-started', 'thread.head-advanced',
+  'thread.archived', 'thread.deleted',
 ];
 const _threadHandlers = new Map(); // threadId -> Set<(evt) => void>
 let _threadsParamOnConnect = null;  // 本次连接使用的 ?threads= 值（null = 未带）
@@ -75,8 +77,8 @@ function handleThreadEvent(type, event) {
 }
 
 /**
- * 订阅 thread 事件（thread.created / thread.head-advanced /
- * thread.archived / thread.deleted，服务端 ?threads= 过滤）。
+ * 订阅 thread 事件（thread.created / thread.handoff-started /
+ * thread.head-advanced / thread.archived / thread.deleted，服务端 ?threads= 过滤）。
  * @param {string|string[]} threadIds - 订阅的 threadId 集合
  * @param {(evt: {type: string, threadId: string, payload: object}) => void} handler
  * @returns {() => void} 取消订阅函数（移除该 handler 的全部订阅 id）

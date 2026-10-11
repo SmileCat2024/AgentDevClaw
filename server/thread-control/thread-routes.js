@@ -37,7 +37,7 @@ import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-e
  *   publishThreadEvent，无订阅者时 no-op）
  * @param {{ deleteThread: Function }} [options.threadDelete] - T005 删除级联服务
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, publishThreadEvent = publishThreadEventDefault } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, publishThreadEvent = publishThreadEventDefault } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -77,7 +77,22 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
     const headRuntimeRunning = typeof control.resolveSessionViewerId === 'function'
       ? control.resolveSessionViewerId(thread.agentId, thread.headSessionId) !== null
       : undefined;
-    return { ...thread, ...life, headRuntimeRunning };
+    // 交接挡板开始时间（前端顶栏「接力中」指示器 / 输入路由守卫 / 侧栏
+    // 交接占位共用，5min 陈旧线与框架 stale TTL 同口径；无挡板为 0）。
+    // listThreads 返回 index 摘要（不含 pendingSuccession）——只有
+    // status='rotating' 的线程（接续窗口内，通常 0-1 条）需要一次 getThread
+    // 补读 startedAt，不把全量线程的记录读放上 20s 轮询热路径。
+    let handoffStartedAt = 0;
+    if (thread.status === 'rotating') {
+      const full = await core.getThread(thread.threadId).catch(() => null);
+      handoffStartedAt = Number(full?.pendingSuccession?.startedAt) || 0;
+    }
+    return {
+      ...thread,
+      ...life,
+      headRuntimeRunning,
+      handoffStartedAt,
+    };
   };
 
   const _getArchiveEntries = () => archive.list().catch(() => ({}));
@@ -168,7 +183,12 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
           const headProjectDir = typeof resolveSessionOpenDirectory === 'function'
             ? (await resolveSessionOpenDirectory(withState.agentId, withState.headSessionId).catch(() => null)) || null
             : null;
-          return { ...withState, headViewerAgentId, headProjectDir };
+          // head 会话标题（会话索引事实）：侧栏线程条目跟随换代（如「(精简)A」），
+          // 不停在创建时的线程标题。解析缺席为 null，前端回退线程标题。
+          const headSessionTitle = typeof resolveSessionTitle === 'function'
+            ? (await resolveSessionTitle(withState.agentId, withState.headSessionId).catch(() => null)) || null
+            : null;
+          return { ...withState, headViewerAgentId, headProjectDir, headSessionTitle };
         }),
       );
       // 条件刷新（20s 轮询路径）：threads 无天然整数 revision——数据源是线程

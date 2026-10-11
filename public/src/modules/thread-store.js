@@ -2,17 +2,18 @@
  * thread-store.js — 工作线程前端承接层
  *
  * 职责：让「AI 对话」具备感知与承接工作线程的能力，而不改变其他
- * 工作空间的默认行为：
+ * 工作空间的默认行为；线程宿主 APP（coder）的侧栏保持为稳定的
+ * 线程入口：
  *   - 周期拉取 /protoclaw/threads，维护 threadId / sessionId 双向索引；
  *   - 会话列表项渲染线程徽标（无数据时输出空串，零视觉影响）；
  *   - 顶栏指示器：当前会话属于线程时显示承接状态；非 head 会话
- *     提供显式「前往当前承接会话」入口（绝不静默跳转）；
+ *     提供显式「前往当前承接会话」入口（浏览历史时不自动跳转）；
  *   - 输入路由守卫：当前会话不是线程 head 时，输入改走 Thread Inbox
  *     （防止消息被旧 runtime 消费而丢失在线程外）；
  *   - 提供线程模式提交（submitThreadCommand → Thread Inbox）与
  *     head 推进（threadAdvanceHead）入口。
  *
- * 当前消费方：coder（自动化编码智能体）工作空间。其他工作空间无线程
+ * 当前消费方：coder APP（后台自主编码工作空间）。其他工作空间无线程
  * 数据，本模块所有入口均为 no-op / 空输出。
  *
  * 依赖全局（均在运行时调用，加载顺序无关）：
@@ -37,27 +38,15 @@ window.ClawThreads = {
   // 与成员关系（sessionIndex / headSessionId）一致：历史成员必然 browseOnly。
   browseOnly: false,
   browseOnlyThreadId: '',
+  activeConversation: null,
 };
 
 const THREADS_REFRESH_INTERVAL_MS = 20000;
 
 // ── 内部工具 ──────────────────────────────────────────────────────
 
-function _shortThreadId(threadId) {
-  const id = String(threadId || '');
-  // 'wt-1a2b3c4d-…' → 'wt-1a2b'
-  return id.length > 8 ? id.slice(0, 8) : id;
-}
-
 function _isZh() {
   return (typeof currentLanguage !== 'undefined' && currentLanguage === 'zh');
-}
-
-function _esc(value) {
-  if (typeof escapeHtml === 'function') return escapeHtml(value);
-  return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
 }
 
 function _rebuildIndexes() {
@@ -79,7 +68,13 @@ function _rebuildIndexes() {
 
 window.refreshThreads = async (force = false) => {
   const state = window.ClawThreads;
-  if (state.refreshInFlight) return state.refreshInFlight;
+  if (state.refreshInFlight) {
+    if (!force) return state.refreshInFlight;
+    // SSE handoff-started 触发的强制刷新不得被慢的周期请求短路：in-flight
+    // 拿到的还是旧数据（请求早于挡板立起发出），等它结束后必须再拉一次，
+    // 否则挡板新事实延迟到下个 20s 轮询周期（指示器/暂存气泡晚亮几十秒）。
+    await state.refreshInFlight.catch(() => {});
+  }
   if (!force && state.initialLoadDone && Date.now() - state.lastRefreshAt < 5000) {
     return;
   }
@@ -99,6 +94,7 @@ window.refreshThreads = async (force = false) => {
           state.lastContentHash = data.contentHash;
         }
         _rebuildIndexes();
+        _syncActiveThreadSubscription();
         // 线程签名变化（新建/推进）时失效 workspace HTML 缓存，
         // 使会话列表在下次渲染时带上最新徽标（不主动触发渲染）。
         const sig = data.threads.map((t) => `${t.threadId}:${t.headSessionId}:${t.status}`).sort().join('|');
@@ -116,10 +112,9 @@ window.refreshThreads = async (force = false) => {
       state.initialLoadDone = true;
       state.refreshInFlight = null;
       window.updateThreadHeaderIndicator();
-      // 线程数据更新可能影响暂存气泡（pending 指令增减）与接力分隔条；
-      // 聊天渲染有签名去重，这里直接同步，不依赖下一轮 poll。
+      // 线程数据更新可能影响暂存气泡（pending 指令增减）；聊天渲染有签名
+      // 去重，这里直接同步，不依赖下一轮 poll。
       if (typeof updateQueueIndicator === 'function') updateQueueIndicator();
-      try { _syncThreadRelaySeparator(); } catch { /* 显示增强，失败即跳过 */ }
     }
   })();
   return state.refreshInFlight;
@@ -132,6 +127,77 @@ window.getThreadById = (threadId) => window.ClawThreads.byId[threadId] || null;
 window.getThreadForSession = (agentId, sessionId) => {
   if (!agentId || !sessionId) return null;
   return window.ClawThreads.sessionIndex[`${agentId}::${sessionId}`] || null;
+};
+
+window.getActiveConversationTarget = () => window.ClawThreads.activeConversation;
+
+window.openConversationTarget = async (target) => {
+  const threadId = String(target?.threadId || '').trim();
+  const thread = threadId ? window.getThreadById(threadId) : null;
+  // threadId 已足自解析宿主：接续退役窗口的占位条目点击时 runtimeId 已不在
+  // allAgents，调用方只能提供 threadId——宿主从线程事实回退，点击不得静默
+  // agent_missing（否则接续中切走后切不回来）。
+  const agentId = String(target?.agentId || thread?.agentId || '').trim();
+  if (!agentId) return { ok: false, reason: 'agent_missing' };
+  if (threadId && !thread) return { ok: false, reason: 'thread_missing' };
+  const sessionId = String(thread?.headSessionId || target?.sessionId || '').trim();
+  if (!sessionId) return { ok: false, reason: 'session_missing' };
+
+  // 接力挡板窗口：head runtime 的生命周期由接续流程管理（退役 → compact
+  // → successor），open_session 会无条件 startManagedAgent 给退役中的 head
+  // 启动 runtime，与 rotation 直接打架（历史事故：点击接力条目触发 runtime
+  // 竞态、视图混乱闪烁）。本地挂线程等待视图：视图身份挂到线程，接力徽标
+  // 即时可见，head-advanced 事件原地重绑后自动接上。
+  if (thread && _handoffFresh(thread)) {
+    if (_currentActiveSession()?.agentId !== agentId && typeof window.switchAgent === 'function') {
+      await window.switchAgent(agentId);
+    }
+    window.ClawThreads.activeConversation = {
+      agentId,
+      threadId: thread.threadId,
+      sessionId,
+      runtimeId: '',
+    };
+    window.updateThreadHeaderIndicator();
+    _syncActiveThreadSubscription();
+    return { ok: true, target: window.ClawThreads.activeConversation };
+  }
+
+  // Leave the previous conversation selected while navigation saves its draft.
+  if (_currentActiveSession()?.agentId !== agentId && typeof window.switchAgent === 'function') {
+    await window.switchAgent(agentId);
+  }
+
+  const runtime = (Array.isArray(allAgents) ? allAgents : []).find((entry) => (
+    entry?.source === 'child'
+    && entry?.parent_id === agentId
+    && String(entry?.active_workspace_session_id || '') === sessionId
+  ));
+  const runtimeId = String(runtime?.runtime_session_id || runtime?.runtimeSessionId || runtime?.id || '').trim();
+  if (runtimeId && typeof setViewerSessionBinding === 'function') {
+    setViewerSessionBinding(runtimeId, sessionId);
+  }
+  if (runtimeId && typeof window.switchAgent === 'function') {
+    await window.switchAgent(runtimeId);
+  } else if (typeof window.runWorkspaceAction === 'function') {
+    await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }));
+  } else {
+    return { ok: false, reason: 'runtime_missing' };
+  }
+
+  const active = _currentActiveSession();
+  const resolvedRuntimeId = String(currentRuntimeAgentId || runtimeId || '').trim();
+  if (active?.agentId !== agentId || active?.sessionId !== sessionId || !resolvedRuntimeId) {
+    return { ok: false, reason: 'navigation_failed' };
+  }
+  window.ClawThreads.activeConversation = {
+    agentId,
+    threadId: thread?.threadId || '',
+    sessionId,
+    runtimeId: resolvedRuntimeId,
+  };
+  _syncActiveThreadSubscription();
+  return { ok: true, target: window.ClawThreads.activeConversation };
 };
 
 /**
@@ -153,12 +219,22 @@ function _currentActiveSession() {
     if (host?.id && sessionId) {
       return { agentId: host.id, sessionId };
     }
-    if (host) {
-      return {
-        agentId: host.id || '',
-        sessionId: host.active_workspace_session_id || host.workspace_sessions?.activeSessionId || '',
-      };
+    // 接续退役窗口（且仅此窗口）：runtime 态被 /responses 404 清空，但视图
+    // 身份（activeConversation）仍指向线程会话——这不是用户离开，是「等待
+    // 重绑」，线程指向保留。有 runtime 态时绝不回退：绑定缺席 + 条目字段
+    // 缺失不是「等待重绑」，回退残留 activeConversation 会把输入串到与当前
+    // 视图无关的会话（历史事故：main 会话输入串到残留 coder 会话并经
+    // ensureHeadRuntime 唤醒其 head runtime）。
+    if (!runtimeId) {
+      const selected = window.ClawThreads?.activeConversation;
+      if (selected?.threadId && selected?.sessionId
+        && String(selected.agentId || '').trim() === String(host.id || '').trim()) {
+        return { agentId: host.id, sessionId: String(selected.sessionId || '').trim() };
+      }
     }
+    // 宿主 active 回退已删除：宿主 active_workspace_session_id 会被 IM、CLI、
+    // coder 接力等入口改写（跨会话共享可变状态），作为输入目标是串扰源——
+    // 解析失败宁可为 null（输入降级 direct），不得猜测。
   } catch {
     // 输入路由在 app-main 身份尚未完成初始化时退化为 direct。
   }
@@ -167,11 +243,13 @@ function _currentActiveSession() {
 
 // ── 会话列表徽标（渲染点由 session-list-render.js 调用）──────────
 
+// 会话列表位的线程徽标（第 N 棒 / 承接中 / 已接续 / 接力中）已按产品要求
+// 全部移除：接续过程提示仅保留顶栏交接窗口的「上下文接力中…」一个。
+// session-list-render 的调用点经 typeof 守卫，函数缺席时零渲染。
+
 /**
- * 线程宿主判定（会话级）：给定会话属于某条线程（即 coder 会话）时为真。
- * 线程宿主已从独立工作空间并入编程小助手（sessionType=coder），宿主级
- * 判定无法区分 main 会话与 coder 会话，调用方必须传 sessionId。
- * 线程索引未就绪（首拉前）时保守返回 false。
+ * 线程宿主判定（APP 级，ADR-0025）：给定会话属于某条线程（即线程宿主
+ * APP 的会话）时为真。线程索引未就绪（首拉前）时保守返回 false。
  */
 window.isThreadHostAgentId = (agentId, sessionId) => {
   const id = String(agentId || '').trim();
@@ -185,41 +263,6 @@ function _handoffFresh(thread) {
   return Number(thread?.handoffStartedAt) > 0
     && Date.now() - Number(thread.handoffStartedAt) < THREAD_HANDOFF_STALE_MS;
 }
-
-window.renderSessionThreadBadge = (agentId, session) => {
-  const thread = window.getThreadForSession(agentId, session?.id);
-  if (!thread) return '';
-
-  const isZh = _isZh();
-  if (session.id === thread.headSessionId) {
-    // 交接窗口内 head 即将退役：显示进行中状态，而非静态归属
-    if (_handoffFresh(thread)) {
-      const title = `${thread.threadId} · ${isZh ? '正在交接到后续会话' : 'handing off to successor'}`;
-      return (
-        '<span class="workspace-history-thread handoffing" title="' + _esc(title) + '">' +
-        (isZh ? '接力中…' : 'Relaying…') +
-        '</span>'
-      );
-    }
-    const chainLen = (thread.sessionIds || []).length;
-    const label = chainLen > 1
-      ? (isZh ? `线程·第${chainLen}棒` : `Thread·leg ${chainLen}`)
-      : (isZh ? '线程·承接中' : 'Thread·head');
-    const title = `${thread.threadId} · ${isZh ? '当前承接会话' : 'current head session'}`;
-    return (
-      '<span class="workspace-history-thread" title="' + _esc(title) + '">' +
-      _esc(label) +
-      '</span>'
-    );
-  }
-
-  const title = `${thread.threadId} · ${isZh ? '已由后续会话接续' : 'continued by a successor session'}`;
-  return (
-    '<span class="workspace-history-thread continued" title="' + _esc(title) + '">' +
-    (isZh ? '已接续' : 'Continued') +
-    '</span>'
-  );
-};
 
 /**
  * 登记 activate 响应中的目标事实（T006 / T003 响应 shape）。
@@ -248,6 +291,7 @@ window.registerSessionActivateTarget = (activateResult) => {
     void window.refreshThreads(true);
   }
   window.updateThreadHeaderIndicator();
+  _syncActiveThreadSubscription();
 };
 
 // ── 顶栏指示器 ────────────────────────────────────────────────────
@@ -266,8 +310,14 @@ window.updateThreadHeaderIndicator = () => {
   }
 
   const isZh = _isZh();
-  const shortId = _shortThreadId(thread.threadId);
   const isHead = active && active.sessionId === thread.headSessionId;
+
+  // 接续对用户不可感知：正常工作态（非交接窗口）不显示任何线程指示器；
+  // 顶栏只保留交接窗口内的「上下文接力中…」一个提示。
+  if (isHead && !_handoffFresh(thread)) {
+    if (el) el.remove();
+    return;
+  }
 
   if (!el) {
     el = document.createElement('span');
@@ -276,17 +326,10 @@ window.updateThreadHeaderIndicator = () => {
   }
 
   if (isHead) {
-    if (_handoffFresh(thread)) {
-      el.className = 'thread-header-indicator relaying';
-      el.onclick = null;
-      el.title = `${thread.threadId} · ${isZh ? '正在交接到后续会话，期间输入将暂存到线程' : 'handing off; input will be staged in the thread'}`;
-      el.textContent = isZh ? '上下文接力中…' : 'Relaying context…';
-    } else {
-      el.className = 'thread-header-indicator';
-      el.onclick = null;
-      el.title = `${thread.threadId} · ${isZh ? '当前承接会话' : 'current head session'}`;
-      el.textContent = isZh ? `线程 ${shortId} · 承接中` : `Thread ${shortId} · head`;
-    }
+    el.className = 'thread-header-indicator relaying';
+    el.onclick = null;
+    el.title = `${thread.threadId} · ${isZh ? '正在交接到后续会话，期间输入将暂存到线程' : 'handing off; input will be staged in the thread'}`;
+    el.textContent = isZh ? '上下文接力中…' : 'Relaying context…';
   } else {
     // 历史成员：只读查看（T006 / ADR-001）。成员关系（sessionIndex）是事实源，
     // 不依赖 browseOnly 时序：非 head 即只读。明示「只读 + 前往当前 head」，
@@ -295,9 +338,9 @@ window.updateThreadHeaderIndicator = () => {
       && (window.ClawThreads.browseOnlyThreadId === '' || window.ClawThreads.browseOnlyThreadId === thread.threadId);
     el.className = 'thread-header-indicator historical' + (browseOnly ? ' readonly' : '');
     el.title = isZh
-      ? `该会话已由工作线程接续至 ${thread.headSessionId}，当前为只读查看；点击前往当前承接会话`
-      : `Continued to ${thread.headSessionId}. Read-only view; click to open the current head session.`;
-    el.textContent = isZh ? '已接续 · 只读 · 前往当前会话' : 'Continued · read-only · open head';
+      ? `当前为只读查看；点击前往当前承接会话`
+      : `Read-only view; click to open the current head session.`;
+    el.textContent = isZh ? '只读 · 前往当前会话' : 'Read-only · open head';
     el.onclick = () => {
       window.jumpToThreadHead(thread.threadId);
     };
@@ -376,101 +419,6 @@ window.getThreadPendingTexts = () => {
  * 查询会话的接力边信息（它从哪个会话、以何种方式接续而来）。
  * 返回 { threadId, fromSessionId, relayKind } 或 null。
  */
-window.getThreadRelayEdge = (agentId, sessionId) => {
-  const thread = window.getThreadForSession(agentId, sessionId);
-  if (!thread) return null;
-  const edges = Array.isArray(thread.chainEdges) ? thread.chainEdges : [];
-  const edge = edges.find((e) => e?.sessionId === sessionId);
-  if (!edge || !edge.fromSessionId) return null;
-  return { threadId: thread.threadId, fromSessionId: edge.fromSessionId, relayKind: edge.relayKind || '' };
-};
-
-/**
- * 接力分隔条 HTML（聊天区首条消息前渲染；无线程 / root 棒返回空串）。
- * fromTitle 从工作区会话记录解析；找不到时退化为短 id。
- */
-window.renderThreadRelaySeparatorHtml = (agentId, sessionId) => {
-  const edge = window.getThreadRelayEdge(agentId, sessionId);
-  if (!edge) return '';
-
-  const isZh = _isZh();
-  const kindLabel = edge.relayKind === 'trim'
-    ? (isZh ? '精简' : 'trim')
-    : (isZh ? '摘要' : 'summary');
-
-  const fromTitle = _resolveSessionTitle(agentId, edge.fromSessionId);
-  const shortFrom = _shortSessionId(edge.fromSessionId);
-
-  const title = isZh
-    ? `${edge.threadId} · 由会话 ${shortFrom} 经${kindLabel}交接接续`
-    : `${edge.threadId} · relayed from ${shortFrom} via ${kindLabel} handoff`;
-  const label = isZh
-    ? `已从「${fromTitle}」接续 · ${kindLabel}交接`
-    : `Continued from "${fromTitle}" · ${kindLabel} handoff`;
-
-  return (
-    '<div class="thread-relay-separator" data-thread-relay="' + _esc(edge.threadId) + '" title="' + _esc(title) + '">' +
-    '<div class="thread-relay-line"></div>' +
-    '<div class="thread-relay-label"><svg width="11" height="11" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1a6 6 0 0 1 6 6 6 6 0 0 1-6 6H2.5a1.5 1.5 0 0 1 0-3H7a3 3 0 1 0-3-3 1.5 1.5 0 0 1-3 0A6 6 0 0 1 7 1z"/></svg>' +
-    _esc(label) + '</div>' +
-    '<div class="thread-relay-line"></div>' +
-    '</div>'
-  );
-};
-
-/** 从 allAgents 工作区会话记录解析标题；无记录时返回短 id */
-function _resolveSessionTitle(agentId, sessionId) {
-  try {
-    if (typeof allAgents !== 'undefined' && Array.isArray(allAgents)) {
-      const agent = allAgents.find((a) => a?.id === agentId);
-      const sessions = agent?.workspace_sessions?.sessions;
-      const session = Array.isArray(sessions) ? sessions.find((s) => s?.id === sessionId) : null;
-      const title = String(session?.title || '').trim();
-      if (title) return title;
-    }
-  } catch { /* allAgents 不可用时退化为短 id */ }
-  return _shortSessionId(sessionId);
-}
-
-function _shortSessionId(sessionId) {
-  const id = String(sessionId || '');
-  // 'session-1787188474941-c5e1de' → 保留尾部哈希段
-  const tail = id.split('-').filter(Boolean).pop();
-  return tail ? `…${tail}` : id.slice(-8);
-}
-
-/**
- * 分隔条 DOM 同步：期望存在但缺失 → 插入；期望缺失但存在 → 移除；
- * threadId 变化 → 原位替换。只动分隔条节点，不触碰消息区。
- */
-function _syncThreadRelaySeparator() {
-  if (typeof container === 'undefined' || !container) return;
-  const active = _currentActiveSession();
-  const expectedHtml = active && typeof window.renderThreadRelaySeparatorHtml === 'function'
-    ? window.renderThreadRelaySeparatorHtml(active.agentId, active.sessionId)
-    : '';
-  const existing = container.querySelector(':scope > .thread-relay-separator');
-  if (!expectedHtml) {
-    if (existing) existing.remove();
-    return;
-  }
-  if (existing) {
-    const nextThread = _extractRelayThreadId(expectedHtml);
-    if (existing.dataset.threadRelay !== nextThread) existing.remove();
-    else return;
-  }
-  // 消息区存在时插到最前；空态（welcome）时不插（render 会重新处理）
-  if (container.querySelector('.message-row')) {
-    container.insertAdjacentHTML('afterbegin', expectedHtml);
-  }
-}
-
-/** 从分隔条 HTML 提取 threadId（data-thread-relay 属性值） */
-function _extractRelayThreadId(html) {
-  const match = String(html || '').match(/data-thread-relay="([^"]*)"/);
-  return match ? match[1] : '';
-}
-
 // ── 线程动作 ──────────────────────────────────────────────────────
 
 window.jumpToThreadHead = async (threadId) => {
@@ -492,6 +440,33 @@ window.jumpToThreadHead = async (threadId) => {
   }
   window.updateThreadHeaderIndicator();
   return { ok: true };
+};
+
+window.submitThreadInput = async (threadId, payload = {}) => {
+  const res = await fetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/input`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: typeof payload.text === 'string' ? payload.text : '',
+      ...(Array.isArray(payload.images) ? { images: payload.images } : {}),
+      ...(typeof payload.source === 'string' ? { source: payload.source } : {}),
+      ...(typeof payload.sourceRef === 'string' ? { sourceRef: payload.sourceRef } : {}),
+      ...(payload.kind ? { kind: payload.kind } : {}),
+      ...(Array.isArray(payload.capabilityActivations)
+        ? { capabilityActivations: payload.capabilityActivations } : {}),
+      ...(payload.metadata && typeof payload.metadata === 'object' && !Array.isArray(payload.metadata)
+        ? { metadata: payload.metadata } : {}),
+    }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok !== true) {
+    throw Object.assign(new Error(data?.message || `thread input failed (${res.status})`), {
+      code: data?.code || 'thread_input_failed',
+      status: res.status,
+    });
+  }
+  void window.refreshThreads?.(true);
+  return data;
 };
 
 window.submitThreadCommand = async (threadId, text, options = {}) => {
@@ -539,6 +514,151 @@ window.threadAdvanceHead = async (threadId, toSessionId, options = {}) => {
   await window.refreshThreads(true);
   return data;
 };
+
+// ── 接续换头：保持同一会话视图身份，只更换 runtime 绑定与消息数据源 ──
+
+let _activeThreadSubscription = null;
+
+function _syncActiveThreadSubscription() {
+  const active = _currentActiveSession();
+  const thread = active ? window.getThreadForSession(active.agentId, active.sessionId) : null;
+  const selected = window.ClawThreads.activeConversation;
+  if (selected?.threadId) {
+    const selectedThread = window.getThreadById(selected.threadId);
+    const currentSessionBelongsToThread = selectedThread?.agentId === active?.agentId
+      && (selectedThread.sessionIds || []).includes(active?.sessionId);
+    // 接续退役窗口：runtime 态被 /responses 404 清理清空，_currentActiveSession
+    // 落到宿主 main 会话——这不是用户离开，是「视图身份仍在、等待重绑」态。
+    // 保留线程指向与订阅，否则 handoff-started 指示器延迟、head-advanced
+    // 重绑失效。
+    const runtimeStateCleared = String(currentRuntimeAgentId || '').trim() === '';
+    if (selectedThread?.agentId === selected.agentId && (!selected.runtimeId || runtimeStateCleared)) {
+      // A user navigation has selected this stable thread target but the
+      // session runtime has not mounted yet. Do not replace it with whatever
+      // conversation was visible before the navigation began. Same for the
+      // succession gap after the 404 cleanup cleared the runtime binding.
+    } else if (selectedThread?.agentId === selected.agentId && currentSessionBelongsToThread) {
+      selected.sessionId = selectedThread.headSessionId || selected.sessionId;
+      selected.runtimeId = String(currentRuntimeAgentId || selected.runtimeId || '');
+    } else {
+      window.ClawThreads.activeConversation = thread ? {
+        agentId: active.agentId,
+        threadId: thread.threadId,
+        sessionId: active.sessionId,
+        runtimeId: String(currentRuntimeAgentId || ''),
+      } : (active ? {
+        agentId: active.agentId,
+        threadId: '',
+        sessionId: active.sessionId,
+        runtimeId: String(currentRuntimeAgentId || ''),
+      } : null);
+    }
+  } else {
+    window.ClawThreads.activeConversation = thread ? {
+      agentId: active.agentId,
+      threadId: thread.threadId,
+      sessionId: active.sessionId,
+      runtimeId: String(currentRuntimeAgentId || ''),
+    } : (active ? {
+      agentId: active.agentId,
+      threadId: '',
+      sessionId: active.sessionId,
+      runtimeId: String(currentRuntimeAgentId || ''),
+    } : null);
+  }
+  const selectedThreadId = String(window.ClawThreads.activeConversation?.threadId || '').trim();
+  const threadId = selectedThreadId || String(thread?.threadId || '').trim();
+  if (_activeThreadSubscription && _activeThreadSubscription.threadId === threadId) return;
+  const client = window.ClawFW?.SseClient;
+  if (!threadId || typeof client?.subscribeThreadEvents !== 'function') {
+    _activeThreadSubscription?.unsubscribe?.();
+    _activeThreadSubscription = null;
+    return;
+  }
+  _activeThreadSubscription?.unsubscribe?.();
+  const subscription = { threadId, unsubscribe: null };
+  subscription.unsubscribe = client.subscribeThreadEvents(threadId, async (event) => {
+    if (event?.type === 'thread.handoff-started') {
+      // 交接开始即时可见：事件只是发现信号，状态事实仍以 /threads 数据
+      // 为准——立即拉取（内部顺带刷新顶栏指示器为「接力中」）并重渲侧栏
+      // 过渡占位，不等 20s contentHash 轮询。
+      if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
+      renderAgentList();
+      return;
+    }
+    if (event?.type !== 'thread.head-advanced') return;
+    const fromSessionId = String(event.payload?.fromSessionId || '').trim();
+    const toSessionId = String(event.payload?.toSessionId || '').trim();
+    if (!fromSessionId || !toSessionId) return;
+    const current = _currentActiveSession();
+    const selectedConversation = window.ClawThreads.activeConversation;
+    const ownerAgentId = String(selectedConversation?.agentId || '').trim();
+    // 重绑守卫：用户仍挂在本线程的视图（threadId 匹配）即可。不再要求
+    // current.sessionId === fromSessionId——接续退役旧 head 时 /responses 404
+    // 清理会清空 runtime 态，_currentActiveSession 落到宿主 main 会话，原
+    // 前置在被打断后必不满足（历史事故：重绑静默跳过，successor 需手动
+    // 点击）。runtime 态仍在时仍要求指向 from 会话，防止迟到事件把已切到
+    // 同线程历史分支的用户拉走。
+    const runtimeStateHeld = String(currentRuntimeAgentId || '').trim() !== '';
+    const userStillOnThread = selectedConversation?.threadId === threadId
+      && (!ownerAgentId || current?.agentId === ownerAgentId)
+      && (!runtimeStateHeld || current?.sessionId === fromSessionId);
+    // 线程事实先刷新并重渲侧栏：successor 锚定收敛与交接虚条目回收依赖
+    // threads 快照推进，与用户选中状态无关。
+    if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
+    renderAgentList();
+    const nextThread = window.getThreadById(threadId);
+    if (!userStillOnThread || nextThread?.headSessionId !== toSessionId) {
+      return;
+    }
+    if (typeof loadAgents === 'function') await loadAgents().catch(() => {});
+    const latest = _currentActiveSession();
+    const latestConversation = window.ClawThreads.activeConversation;
+    if (latestConversation?.threadId !== threadId
+      || latestConversation.agentId !== ownerAgentId
+      || latest?.agentId !== ownerAgentId) return;
+    const runtime = (Array.isArray(allAgents) ? allAgents : []).find((agent) => (
+      agent?.source === 'child'
+      && agent?.parent_id === ownerAgentId
+      && String(agent?.active_workspace_session_id || '') === toSessionId
+    ));
+    if (!runtime) return;
+    const previousRuntimeId = String(currentRuntimeAgentId || '').trim();
+    if (previousRuntimeId && typeof getRuntimeWorkspaceSessionId === 'function'
+      && getRuntimeWorkspaceSessionId(previousRuntimeId) !== fromSessionId) return;
+    _storeVisibleSessionInputDraft();
+    const nextRuntimeId = String(runtime.runtime_session_id || runtime.runtimeSessionId || runtime.id || '').trim();
+    if (!nextRuntimeId) return;
+    if (previousRuntimeId && typeof saveCurrentRuntimeToCache === 'function') {
+      saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId));
+    }
+    setViewerSessionBinding(nextRuntimeId, toSessionId);
+    const openedConversation = window.ClawThreads.activeConversation;
+    if (openedConversation?.threadId === threadId && openedConversation.agentId === ownerAgentId) {
+      openedConversation.sessionId = toSessionId;
+      openedConversation.runtimeId = nextRuntimeId;
+    }
+    window.ClawThreads.activeConversation = {
+      agentId: ownerAgentId,
+      threadId,
+      sessionId: toSessionId,
+      runtimeId: nextRuntimeId,
+    };
+    // 线程会话归属线程宿主 APP（如 coder）：侧栏高亮同步切到该 APP。
+    focusedAgentId = ownerAgentId;
+    currentRuntimeAgentId = nextRuntimeId;
+    readOnlyMode = false;
+    _lastRenderedChatSig = '';
+    setPendingChatScrollRestore(null);
+    if (typeof setPendingChatViewportAnchor === 'function') setPendingChatViewportAnchor(null);
+    resetRuntimeStatusForSwitch();
+    renderAgentList();
+    loadAgentData(nextRuntimeId).catch((error) => console.warn('[threads] successor view rebind failed:', error));
+    if (typeof window.refreshThreads === 'function') window.refreshThreads(true).catch(() => {});
+    _syncActiveThreadSubscription();
+  });
+  _activeThreadSubscription = subscription;
+}
 
 // ── 启动（周期刷新；非线程宿主的服务端列表恒空，开销可忽略）──────
 

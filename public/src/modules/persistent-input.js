@@ -667,6 +667,7 @@ async function submitQueuedInput() {
   const sessionReferenceCount = (window.SessionReference?.peek?.() || []).length;
   if (!text && _imageBucket().length === 0 && sessionReferenceCount === 0) return;
   const targetRuntimeId = currentRuntimeAgentId;
+  const activeConversation = window.getActiveConversationTarget?.();
   const targetCacheKey = textarea.dataset.sessionKey || _getSessionInputCacheKey();
   // 图片桶 key 同步捕获（与 targetCacheKey 同款防漂移语义）：await 期间切换
   // 会话后，resolve / 成功清空只作用于发起会话的桶。
@@ -695,6 +696,38 @@ async function submitQueuedInput() {
         : 'Some image uploads failed: retry or remove the failed attachments');
     }
     const images = resolved.images;
+
+    if (activeConversation?.threadId && typeof window.submitThreadInput === 'function') {
+      sessionRefs = window.SessionReference?.consume?.() || [];
+      capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
+      const result = await window.submitThreadInput(activeConversation.threadId, {
+        text: text || ' ',
+        images,
+        source: 'chat-composer',
+        ...(capabilityActivations?.length ? { capabilityActivations } : {}),
+        ...(sessionRefs.length ? { metadata: { 'session-reference': sessionRefs } } : {}),
+      });
+      const liveTextarea = document.getElementById('input-persistent')
+        || document.querySelector('.user-input-textarea:not([disabled])');
+      if (liveTextarea && (liveTextarea.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
+        liveTextarea.value = '';
+        autoResize(liveTextarea);
+      }
+      if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
+      _clearRecapForNewMessage();
+      window.refreshThreads?.(true);
+      updateQueueIndicator();
+      const delivered = Number(result?.delivery?.delivered) > 0;
+      window.ClawToast?.show?.({
+        id: `thread-input-${activeConversation.threadId}`,
+        status: delivered ? 'success' : 'info',
+        title: currentLanguage === 'zh'
+          ? (delivered ? '已发送' : '已发送，等待接续')
+          : (delivered ? 'Sent' : 'Sent, waiting for continuation'),
+        autoDismiss: 4000,
+      });
+      return;
+    }
 
     // 线程路由快路径（coder 宿主）：交接窗口 / 非 head 会话时输入改走
     // Thread Inbox（服务端 input-gateway 是兜底真相，此处拦截只为即时
