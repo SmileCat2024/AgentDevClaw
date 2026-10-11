@@ -5045,27 +5045,34 @@ body[data-theme="light"] .call-elapsed-capsule.is-running {
   to { opacity: 1; transform: translateY(0); }
 }
 
-#user-input-container.choice-input-active {
-  top: 56px;
-  bottom: 0;
+#choice-input-container {
+  display: none;
+  position: absolute;
+  inset: 56px 0 0;
+  z-index: 1001;
   padding: 24px;
   align-items: center;
   justify-content: center;
   background: rgba(5, 7, 12, 0.64);
+  -webkit-backdrop-filter: blur(5px);
   backdrop-filter: blur(5px);
   pointer-events: auto;
 }
 
-body[data-theme="light"] #user-input-container.choice-input-active {
+#choice-input-container:not(:empty) {
+  display: flex;
+}
+
+body[data-theme="light"] #choice-input-container {
   background: rgba(18, 20, 26, 0.32);
 }
 
-#user-input-container.choice-input-active.choice-collapsed {
-  top: auto;
-  bottom: 22px;
+#choice-input-container.choice-collapsed {
+  inset: auto 0 22px;
   padding: 0 24px;
   align-items: flex-end;
   background: transparent;
+  -webkit-backdrop-filter: none;
   backdrop-filter: none;
   pointer-events: none;
 }

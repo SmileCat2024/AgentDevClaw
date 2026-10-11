@@ -116,8 +116,9 @@ function renderChoiceInputRequest(container, req) {
   // happens to be selected when its asynchronous submit finishes.
   state.runtimeId = String(currentRuntimeAgentId || '');
   const questions = Array.isArray(req.questions) ? req.questions : [];
+  container.classList.toggle('choice-collapsed', !!state.collapsed);
+  container.parentNode?.classList.toggle('choice-collapsed', !!state.collapsed);
   if (state.collapsed) {
-    container.classList.add('choice-collapsed');
     const mini = document.createElement('button');
     mini.className = 'user-choice-mini';
     mini.type = 'button';
@@ -218,6 +219,9 @@ function renderChoiceInputRequest(container, req) {
   `;
 
   container.appendChild(card);
+  container.onclick = function(event) {
+    if (event.target === container) collapsePrimaryChoiceRequest();
+  };
   setTimeout(() => {
     const customInput = customActive ? document.getElementById(`choice-custom-${req.requestId}`) : null;
     const target = customInput || card;

@@ -5,9 +5,8 @@
  *
  * Extracted from app-main.js. Reworked by ticket 036: the input slot is now a
  * persistent composer (mounted once, updated in place; input-composer.js) plus
- * transient mutually-exclusive cards. persistent ↔ requests flips only update
- * attributes; session switches rebind dataset.sessionKey + draft. The composer
- * itself is never destroyed by this renderer anymore.
+ * transient status cards. persistent ↔ requests flips only update attributes;
+ * Ask User cards render in their own surface so they never take over the composer.
  *
  * Exported global functions:
  *   getInputRenderSignature, notifyInputSurfaceChanged, renderInputRequests
@@ -28,7 +27,7 @@
  *   (input-composer.js)
  *   renderPersistentInput, rebindQueueProjectionForRuntime, _renderLastCallElapsed,
  *   _cleanupInputMetaBar (persistent-input.js)
- *   renderChoiceInputRequest, collapsePrimaryChoiceRequest,
+ *   renderChoiceInputRequest (choice-input.js)
  *   isChoiceInputRequest, isChoiceInputConsumed (choice-input.js)
  *   runWithSuppressedChatViewportObservers, notifyChatViewportMutation (chat-viewport.js)
  */
@@ -75,7 +74,8 @@ function notifyInputSurfaceChanged(requests = readCurrentSessionViewState().inpu
 
 function renderInputRequests(requests = readCurrentSessionViewState().inputRequests) {
   const inputContainer = document.getElementById('user-input-container');
-  if (!inputContainer) return;
+  const choiceContainer = document.getElementById('choice-input-container');
+  if (!inputContainer || !choiceContainer) return;
 
   // preserveTop 必须取聊天容器的滚动位置：非跟随模式下视口结算会把它回写。
   // 历史上误读输入容器的 scrollTop（恒 0），导致输入面翻转时聊天视口跳回顶部。
@@ -99,6 +99,11 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   lastRenderedInputSignature = signature;
   lastRenderedInputMode = renderMode;
   if (unchanged || _rollbackDialogOpen) return;
+
+  for (const child of Array.from(choiceContainer.children)) child.remove();
+  choiceContainer.classList.remove('choice-collapsed');
+  choiceContainer.onclick = null;
+  inputContainer.classList.remove('choice-input-active');
 
   // 会话切换草稿迁移（契约 §7）：composer 常驻后不再有"销毁前抢救"，
   // key 变化时在此保存旧会话草稿并恢复新会话草稿；同 key 幂等 no-op。
@@ -127,7 +132,6 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
     runSuppressed(() => {
       detachTransientInputContent(inputContainer);
       hidePersistentComposerCard();
-      inputContainer.classList.remove('choice-input-active', 'choice-collapsed');
       inputContainer.onclick = null;
     });
     notifyInputViewportMutation(chatViewportTopBefore, chatActive);
@@ -207,27 +211,12 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   // ── interactive 模式：常驻 composer 显示 ──────────────────────────────
   const hasRequests = !!inputLease;
 
-  // 级 5：choice 选择卡（键问答卡）——与常驻 composer 互斥显示，
-  // 选择卡内部实现保持现状（choice-input.js），这里只负责互斥调度。
+  // 级 5：choice 卡使用独立容器；显示时隐藏常驻 composer。
   if (renderMode === 'choice' && inputLease && isChoiceInputRequest(inputLease)) {
     runSuppressed(() => {
       detachTransientInputContent(inputContainer);
       hidePersistentComposerCard();
-      inputContainer.classList.add('choice-input-active');
-      inputContainer.classList.remove('choice-collapsed');
-      // 运行时长胶囊不适用于选择卡：渲染前先清一次避免切换瞬间残留；
-      // 后续每秒 tick 由 _renderLastCallElapsed 的 choice-active 拦截抑制。
-      const staleCapsule = inputContainer.querySelector('.call-elapsed-capsule');
-      if (staleCapsule) {
-        staleCapsule.remove();
-        _cleanupInputMetaBar(inputContainer);
-      }
-      inputContainer.onclick = function(event) {
-        if (event.target === inputContainer) {
-          collapsePrimaryChoiceRequest();
-        }
-      };
-      renderChoiceInputRequest(inputContainer, inputLease);
+      renderChoiceInputRequest(choiceContainer, inputLease);
     });
     notifyInputViewportMutation(chatViewportTopBefore, chatActive);
     return;
@@ -237,7 +226,6 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   // 翻转只更新提交端点与 footer 动作（applyComposerMode），不销毁元素。
   runSuppressed(() => detachTransientInputContent(inputContainer));
   showPersistentComposerCard(inputContainer);
-  inputContainer.classList.remove('choice-input-active', 'choice-collapsed');
   inputContainer.onclick = null;
 
   if (renderMode === 'requests' && hasRequests) {

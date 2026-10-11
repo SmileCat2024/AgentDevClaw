@@ -200,8 +200,11 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
   const container = createMiniElement('div', doc);
   container.id = 'user-input-container';
   doc.body.appendChild(container);
+  const choiceContainer = createMiniElement('div', doc);
+  choiceContainer.id = 'choice-input-container';
+  doc.body.appendChild(choiceContainer);
 
-  const state = { doc, container, liveKey: contextKey };
+  const state = { doc, container, choiceContainer, liveKey: contextKey };
 
   const ctx = createFrontendSandbox({
     document: doc,
@@ -490,6 +493,34 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     assert.equal(ctx.run(
       "document.getElementById('user-input-container').querySelector('[data-persistent-composer]').dataset.composerMode",
     ), 'persistent');
+  });
+
+  it('keeps the Ask User card isolated and hides the persistent composer until dismissal', () => {
+    const ctx = createConvergenceSandbox();
+    ctx.run('renderInputRequests([])');
+    const composer = ctx.run("document.getElementById('input-persistent')");
+    ctx.renderChoiceInputRequest = (container) => {
+      const card = ctx.document.createElement('div');
+      card.className = 'user-choice-card';
+      container.appendChild(card);
+    };
+    ctx.run(`applySessionViewPatch({ inputRequests: [{
+      requestId: 'choice-separate', mode: 'choices',
+      questions: [{ id: 'q1', question: 'How?', options: [{ id: 'a' }, { id: 'b' }] }],
+    }] })`);
+
+    assert.equal(ctx.run("document.getElementById('input-persistent')"), composer,
+      'Ask User must not replace the persistent composer node');
+    assert.equal(ctx.run("document.getElementById('input-persistent').closest('[data-persistent-composer]').style.display"), 'none',
+      'persistent composer must be hidden while Ask User is active');
+    assert.equal(ctx.run("document.getElementById('user-input-container').querySelector('.user-choice-card')"), null,
+      'choice card must not be rendered into the composer container');
+    assert.equal(ctx.run("document.getElementById('choice-input-container').children.length"), 1,
+      'choice card must render in its dedicated container');
+
+    ctx.run('applySessionViewPatch({ inputRequests: [] });' );
+    assert.equal(ctx.run("document.getElementById('input-persistent').closest('[data-persistent-composer]').style.display"), '',
+      'persistent composer returns after the choice lease is consumed');
   });
 
   it('§8 选择卡交互（选项/收起/展开/拒绝）：state write + notify rebuilds the card', async () => {

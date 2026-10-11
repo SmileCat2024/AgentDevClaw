@@ -4,7 +4,7 @@
  * 职责：
  * - 常驻 composer 卡（textarea + 工具栏 + 请求 footer）：首次挂载后常驻 DOM，
  *   persistent ↔ requests 模式翻转只做属性级更新（提交端点 / textarea id /
- *   keydown 绑定 / placeholder / footer 动作），不再整块销毁重建。
+ *   keydown 绑定 / placeholder / footer 动作），Ask User 卡片则处于独立渲染面。
  *   焦点、IME 组合态、光标、选中态因此自然保留（行为契约 §7）。
  * - 会话草稿缓存（迁自 voice-input.js，工单 036 改动项 C）：语音模块不再
  *   拥有 composer 草稿状态；_pendingVoiceResults 留在 voice-input.js。

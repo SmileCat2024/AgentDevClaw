@@ -97,6 +97,31 @@ describe('persistent input interrupt precedence', () => {
 });
 
 describe('voice input render lifecycle', () => {
+  it('prevents Enter newline and queues a send while streaming ASR is finalizing', () => {
+    let prevented = 0;
+    let submits = 0;
+    const ctx = createFrontendSandbox({
+      document: { getElementById: () => null },
+      _voiceTranscribing: true,
+      _voiceRecording: false,
+      _voiceStopping: false,
+      _voicePendingSend: false,
+      submitQueuedInput: () => { submits += 1; },
+    });
+    const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+    ctx.run(sourceBetween(source, 'function handlePersistentInputKey(event)', 'async function submitQueuedInput()'));
+    ctx.handlePersistentInputKey({
+      key: 'Enter',
+      ctrlKey: false,
+      shiftKey: false,
+      preventDefault() { prevented += 1; },
+    });
+
+    assert.equal(prevented, 1, 'plain Enter must not insert a newline while final ASR is pending');
+    assert.equal(ctx._voicePendingSend, true, 'Enter queues the send until the final transcript is applied');
+    assert.equal(submits, 0, 'do not send before the final streamed transcript arrives');
+  });
+
   it('preserves recording/stopping/transcribing across same-session input redraws only', () => {
     const ctx = createFrontendSandbox({
       _voiceRecording: true,

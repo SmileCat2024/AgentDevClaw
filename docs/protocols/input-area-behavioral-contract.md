@@ -59,7 +59,7 @@
 | 2 | `readOnlyMode`（远程只读/workspace 只读） | `readonly` | 禁用 textarea，opacity 0.5、not-allowed 光标；远程会话用专属只读 placeholder |
 | 3 | 回退对话框打开 | 冻结 | 输入面整体被对话框接管，重渲染 no-op |
 | 4 | 会话内压缩 in-flight（且为发起 runtime） | 压缩状态卡 | spinner + "压缩中/已用时 Xs" 计时，禁输入；仅对发起 runtime 生效 |
-| 5 | choice 请求未 reject | 选择卡 | 键盘问答卡，容器加 `choice-input-active` |
+| 5 | choice 请求未 reject | 选择卡 | 专用 `#choice-input-container` 显示键盘问答卡；常驻 composer 隐藏但保留节点 |
 | 6 | 有本地排队输入（乐观态） | `persistent` | 即使有请求也显示常驻条（排队中不弹请求卡） |
 | 7 | 有非 choice 请求 | 请求卡 | 单 lease 渲染 |
 | 8 | 选中 runtime（calling 或 idle） | `persistent` | 常驻条 |
@@ -118,6 +118,7 @@
 
 ### 5.3 选择卡（choice）
 
+- 使用独立于 `#user-input-container` 的 `#choice-input-container` 渲染；显示期间隐藏常驻 composer，关闭后恢复。
 - 逐题问答：题号进度、≤4 选项 + 可选自定义输入、上下文背景侧栏（收起/展开）、进度提示。
 - 键盘：↑↓ 选选项、←→ 切题、Enter 确认、Esc 跳过并打断；textarea 内光标不处边缘时方向键归文本编辑（智能边界）。
 - 临时收起为 mini 按钮（显示进度 n/m），点击展开；点击容器空白处也折叠。

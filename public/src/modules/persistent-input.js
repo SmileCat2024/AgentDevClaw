@@ -646,13 +646,16 @@ function handlePersistentInputKey(event) {
     if (event.ctrlKey || event.shiftKey) {
       return;
     }
-    if (_voiceTranscribing) return;
+    event.preventDefault();
+    if (_voiceTranscribing) {
+      _voicePendingSend = true;
+      return;
+    }
     if (_voiceRecording) {
       _voicePendingSend = true;
       stopVoiceRecording();
       return;
     }
-    event.preventDefault();
     submitQueuedInput();
   }
 }
