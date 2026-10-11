@@ -131,8 +131,8 @@ function getCurrentAgentRecord() {
 }
 
 /**
- * APP 侧栏存在性判定（ADR-0025 判定源禁令）：判定在服务端合流完成
- * （作者声明默认 + 用户覆盖（工作空间设置）+ 有无运行中的会话），wire 以
+ * APP 侧栏可见性（ADR-0025）：服务端合流作者默认、用户覆盖与有无存活且
+ * 绑定 Session 的 Runtime，wire 以
  * sidebarVisible 下发，前端纯消费。persistent 直显。本机不保留任何粘性
  * 记忆：入口消失后的找回路径是设置 → 工作空间的「始终显示」。
  */

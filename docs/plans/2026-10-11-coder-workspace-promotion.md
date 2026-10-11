@@ -42,7 +42,7 @@ P3 退役清除、文档与验收      依赖 P1/P2
 
 ### P2 前端
 
-- 侧栏：工作空间清单消费 visibility（persistent 直显；on-demand = 线程域非空 + 出现后粘性记忆）；host 相邻排序；Coder 条目下统一投影叶子（运行中 head 会话，零特例）。
+- 侧栏：工作空间清单消费 visibility（persistent 直显；on-demand = 当前存活且绑定 Session 的 Runtime，用户可覆盖为始终显示）；host 相邻排序；Coder 条目下统一投影叶子（运行中 head 会话，零特例）。
 - Coder APP 视图：现 coder-threads-ui 迁为 coder APP 首页 block（行 = 线程、生命状态徽标、打开 head / 中断 / 归档 / 取消归档）。
 - 宿主首页保留 Coder 入口 block（host 绑定的呈现落点）。
 - 标题链单真相源（会话记录自身）；输入路由按当前视图所属 APP；删除投影 id 归一、撑存条目识别、focusedAgentId 投影写入路径；open-sessions 恢复卡片身份过滤补丁删除。
@@ -57,14 +57,14 @@ P3 退役清除、文档与验收      依赖 P1/P2
 1. 全量回归（4000+ 基线）零失败；eslint 零新增。
 2. 结构性检查（grep 全库）：无 sessionType 身份分支消费（`plain` / `studio-debug` 标签用法除外）、无 `programming-helper:coder` 字面量、无 sidebar_entry_id 合成。
 3. 可拔插：删除 `prebuilt-agents/official/coder/` 并重启，其余工作空间的服务启动、发现、路由、配置与 UI 全部正常。
-4. 端到端手测：首次派遣 → Coder 条目出现 → 原地连续两轮接续（无踢出、无乱入、徽标与标题正常）→ main 会话输入不串 → 归档线程后条目仍在 → 重启服务条目仍在（粘性）。
+4. 端到端手测：首次派遣 → Coder 条目出现 → 原地连续两轮接续（无踢出、无乱入、徽标与标题正常）→ main 会话输入不串 → 归档线程后条目仍在 → 重启服务后按 Runtime 存活事实显示。
 5. 遗弃搬移：首次启动搬移成功、二次启动幂等跳过；编程小助手会话列表、checkpoint、历史完整无损。
 
 ## 收尾修订（2026-10-11，主链路验收后）
 
-验收 4 的粘性语义与侧栏呈现模型按用户裁定修订，**粘性记忆已退役**：
+验收 4 的侧栏呈现模型按用户裁定修订，**粘性记忆已退役**：
 
-- on-demand 可见性改为服务端合流：作者声明默认（metadata `visibility`）+ 用户覆盖（设置 → 工作空间，`server/routes/workspace-settings.js`，服务端存储）+ 判定事实"有运行中的会话"（非终态且未归档的线程；已结束/已归档一律不撑显示），wire 以 `sidebarVisible` 下发，前端纯消费（`localStorage` 粘性键 `claw:onDemandAppsSeen` 删除）。入口消失后的找回路径是设置的「始终显示」。
+- on-demand 可见性改为服务端合流：作者声明默认（metadata `visibility`）+ 用户覆盖（设置 → 工作空间，`server/routes/workspace-settings.js`，服务端存储）+ 判定事实「有存活且绑定 Session 的 managed Runtime，或接续挡板在途（线程 `status=rotating`）」。未归档线程记录不代表 Runtime 正在运行；Runtime 停止且无接续挡板时，默认 auto 隐藏入口，线程仍保留在 APP 首页。接续挡板例外保证接续空窗（旧 head 已退役、successor 未上线）期间入口不闪失，前端接续占位保持可见。wire 以 `sidebarVisible` 下发，前端纯消费（`localStorage` 粘性键 `claw:onDemandAppsSeen` 删除）。入口消失后的找回路径是设置的「始终显示」。
 - hosted APP 跟随宿主分组：Coder 紧随智能编码空间，同在工具与效率组（此前"紧随"排序被分组拆断）。
 - 宿主首页的 Coder 入口 block 移除（coder 呈现归侧栏条目与设置面板，不在宿主首页重复入口）。
 - 侧栏 coder 线程条目右键恢复线程语义菜单：复制 Thread ID / 中断（busy 时可用）/ 归档（idle 时可用，即正常关闭；服务端 thread_busy 拒绝 busy 归档）/ 删除（危险区）。与线程视图行动作同一组端点。

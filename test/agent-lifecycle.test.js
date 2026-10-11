@@ -543,7 +543,7 @@ describe('agent-lifecycle', () => {
       const agents = await mod.getConnectedAgents();
       const coderApp = agents.find((a) => a.id === 'coder');
       assert.ok(coderApp, 'coder APP entry comes from the prebuilt manifest');
-      // 条目存在性来自清单声明，不依赖 runtime 存活（判定源禁令）
+      // APP 身份来自清单；on-demand 可见性按服务端合流的 Runtime 事实判定
       assert.equal(coderApp.visibility, 'on-demand');
       assert.equal(coderApp.host, 'programming-helper');
       assert.equal(typeof coderApp.sidebarVisible, 'boolean');

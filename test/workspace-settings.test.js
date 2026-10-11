@@ -1,8 +1,6 @@
-// 工作空间设置（ADR-0025 收尾）：用户覆盖层存储 + on-demand 存在性合流。
-//
-// 语义锚（用户拍板）："自动" = 有运行中的会话（非终态且未归档的线程）才
-// 显示；与该工作空间名下有哪些历史/已结束/已归档会话完全无关。closed 或
-// 已归档的线程不撑显示；入口消失后的找回路径是「始终显示」覆盖。
+// 工作空间设置（ADR-0025）：用户覆盖层存储 + on-demand Runtime 存活合流。
+// 自动显示由实际存活的 managed Runtime 决定；持久线程历史本身不让左侧
+// 运行态入口常驻。
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -14,6 +12,7 @@ import {
   writeWorkspaceVisibilityOverride,
 } from '../server/routes/workspace-settings.js';
 import { createConnectedAgentsQuery } from '../server/routes/agent-connected.js';
+import { managedAgents } from '../server/shared/agent-access.js';
 
 const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-ws-settings-'));
 const settingsPath = path.join(tmpRoot, 'workspace-settings.json');
@@ -38,8 +37,7 @@ describe('workspace-settings: 用户覆盖层存储', () => {
 });
 
 // ── 合流判定（wire 组装）─────────────────────────────────────────
-// 线程事实经注入缝构造：open（运行中）/ closed（终态）/ archived（归档标记）
-// 三类摘要驱动「有运行中的会话」判定。
+// 自动显示取 managed runtime 的存活事实，不从持久线程状态推断运行态。
 
 function lightAgents() {
   return [
@@ -64,8 +62,8 @@ function createQuery(overrides, threadSummaries = [], archiveEntries = {}) {
   });
 }
 
-describe('workspace-settings: on-demand 存在性合流（服务端）', () => {
-  it('无覆盖（作者默认 auto）且无线程 → sidebarVisible=false', async () => {
+describe('workspace-settings: on-demand Runtime 存活合流（服务端）', () => {
+  it('无覆盖且没有存活 Runtime → sidebarVisible=false', async () => {
     const agents = await createQuery({}).getConnectedAgents();
     const coder = agents.find((a) => a.id === 'coder');
     assert.equal(coder.visibilityPolicy, 'auto');
@@ -84,34 +82,47 @@ describe('workspace-settings: on-demand 存在性合流（服务端）', () => {
     assert.equal(coder.sidebarVisible, true);
   });
 
-  it('open 线程 → 有运行中的会话；closed 与已归档不撑显示', async () => {
-    const running = await createQuery({}, [
-      { threadId: 'wt-open', workspaceId: 'coder', status: 'open' },
-    ]).getConnectedAgents();
-    assert.equal(running.find((a) => a.id === 'coder').sidebarVisible, true, 'open 线程 = 运行中');
+  it('存活且绑定会话的 Runtime 显示入口；停止 Runtime 后普通线程不撑入口', async () => {
+    const runtime = (sessionId, overrides = {}) => ({
+      agentId: 'coder',
+      selectedSessionId: sessionId,
+      stopped: false,
+      stopping: false,
+      process: { exitCode: null, signalCode: null },
+      ...overrides,
+    });
+    managedAgents.clear();
+    try {
+      const ordinaryThread = [{ threadId: 'wt-idle', agentId: 'coder', status: 'open' }];
+      const noRuntime = await createQuery({}, ordinaryThread).getConnectedAgents();
+      assert.equal(noRuntime.find((a) => a.id === 'coder').sidebarVisible, false,
+        '普通可调度线程不代表 Runtime 正在运行');
 
-    const closedOnly = await createQuery({}, [
-      { threadId: 'wt-closed', workspaceId: 'coder', status: 'closed' },
-    ]).getConnectedAgents();
-    assert.equal(closedOnly.find((a) => a.id === 'coder').sidebarVisible, false, 'closed 线程不撑显示');
+      managedAgents.set('coder::live', runtime('session-live'));
+      assert.equal((await createQuery({}).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, true);
 
-    const archivedOnly = await createQuery({}, [
-      { threadId: 'wt-archived', workspaceId: 'coder', status: 'open' },
-    ], { 'wt-archived': { archivedAt: 1 } }).getConnectedAgents();
-    assert.equal(archivedOnly.find((a) => a.id === 'coder').sidebarVisible, false, '已归档线程不撑显示');
+      managedAgents.set('coder::stopping', runtime('session-stopping', { stopping: true }));
+      assert.equal((await createQuery({}).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, true,
+        '另一个仍存活的 Runtime 仍使入口显示');
+      managedAgents.delete('coder::live');
+      assert.equal((await createQuery({}, ordinaryThread).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, false,
+        '仅剩 stopping Runtime 且无接续时不显示');
 
-    const mixed = await createQuery({}, [
-      { threadId: 'wt-closed-2', workspaceId: 'coder', status: 'closed' },
-      { threadId: 'wt-archived-2', workspaceId: 'coder', status: 'open' },
-      { threadId: 'wt-open-2', workspaceId: 'coder', status: 'open' },
-    ], { 'wt-archived-2': { archivedAt: 1 } }).getConnectedAgents();
-    assert.equal(mixed.find((a) => a.id === 'coder').sidebarVisible, true, '混集中有一条 open 未归档即运行中');
+      managedAgents.set('coder::no-session', runtime(null));
+      assert.equal((await createQuery({}).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, false,
+        '未绑定 Session 的进程不构成运行会话');
+    } finally {
+      managedAgents.clear();
+    }
   });
 
-  it('别的 workspace 的线程不算本 workspace 的运行中会话', async () => {
-    const agents = await createQuery({}, [
-      { threadId: 'wt-other', workspaceId: 'other-app', status: 'open' },
-    ]).getConnectedAgents();
-    assert.equal(agents.find((a) => a.id === 'coder').sidebarVisible, false);
+  it('真实 rotating 接续挡板在 Runtime 空窗期间保留入口；归档线程不保留', async () => {
+    managedAgents.clear();
+    const rotating = [{ threadId: 'wt-rotating', agentId: 'coder', status: 'rotating' }];
+    const visible = await createQuery({}, rotating).getConnectedAgents();
+    assert.equal(visible.find((a) => a.id === 'coder').sidebarVisible, true);
+
+    const archived = await createQuery({}, rotating, { 'wt-rotating': { archivedAt: 1 } }).getConnectedAgents();
+    assert.equal(archived.find((a) => a.id === 'coder').sidebarVisible, false);
   });
 });

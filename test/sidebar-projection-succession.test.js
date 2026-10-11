@@ -13,11 +13,15 @@ import { managedAgents } from '../server/shared/agent-access.js';
 // 退役到 successor 上线之间，runtime 层的三个存活来源（viewer child /
 // managedAgents 进程 / 远程 catalog）全部落空。ADR-0025 之前 coder 面板
 // 是「身份投影条目」，跟着存活来源消失——轮询采样到空窗帧时整树蒸发。
-// 升格后该风险结构消解：coder 条目 = APP 条目（metadata 驱动，恒在），
-// runtime 只产生 APP 之下的叶子；接续窗口消失的只是叶子，不是面板。
+// APP 入口由 metadata 与 on-demand 策略控制；实际存活的 Runtime 决定
+// 自动显示，Runtime 只产生 APP 之下的会话叶子。接续窗口（rotating 挡板
+// 在途）是无感连续的一部分：挡板是持久化事务事实，空窗帧期间撑住入口，
+// 让前端接续占位（disconnected 过渡条目）保持可见；普通未归档线程
+// （无挡板、无 Runtime）不代表运行态，不撑入口。
 //
-// 本测试按接续时序逐帧驱动 getConnectedAgents，断言 APP 条目全程存续、
-// 全库不再出现任何合成身份条目（'programming-helper:coder' 词汇退役）。
+// 本测试按接续时序逐帧驱动 getConnectedAgents，断言入口可见性跟随
+// 「Runtime 存活或接续挡板在途」，且全库不再出现任何合成身份条目
+// （'programming-helper:coder' 词汇退役）。
 
 function phAgentLight() {
   return {
@@ -56,7 +60,7 @@ function viewerAgent(id) {
   return { id, connected: true, name: 'coder-runtime' };
 }
 
-function createQuery({ viewerAgents = [] } = {}) {
+function createQuery({ viewerAgents = [], visibilityOverrides = {}, threadSummaries = [], archiveEntries = {} } = {}) {
   return createConnectedAgentsQuery({
     getAgentsLight: async () => [phAgentLight(), coderAgentLight()],
     readActiveWorkspaceSessionMeta: async () => ({
@@ -70,7 +74,12 @@ function createQuery({ viewerAgents = [] } = {}) {
     getPendingInputCount: async () => 0,
     resolveAgentModelPresets: async () => ({}),
     // 测试隔离：不读真实用户数据目录的 workspace-settings.json
-    readVisibilityOverrides: async () => ({}),
+    readVisibilityOverrides: async () => visibilityOverrides,
+    // 测试隔离：线程控制面注入（listThreads 摘要 + 归档索引）
+    resolveThreadControl: () => ({
+      core: { listThreads: async () => threadSummaries },
+      archive: { list: async () => archiveEntries },
+    }),
   });
 }
 
@@ -91,65 +100,85 @@ afterEach(() => {
   managedAgents.clear();
 });
 
-// ── 接续时序：APP 条目全程存续，叶子随生命周期涨落 ────────────────────────
+// ── 接续时序：默认 auto 下入口 = Runtime 存活 ∨ 接续挡板在途 ─────────────
 
 describe('coder APP 条目在接续窗口的存续', () => {
-  it('稳态 → 旧 head 退役 → successor 生成 → ready，APP 条目每帧都在', async () => {
+  it('稳态 → 旧 head 退役 → successor 生成 → ready，接续空窗不隐藏入口', async () => {
+    const rotatingBarrier = [{ threadId: 'wt-a', agentId: 'coder', status: 'rotating' }];
     // F0 稳态：旧 head runtime 在线（viewer child + managed 记录）。
     setManaged(coderRuntimeRecord({ key: 'old', viewerAgentId: 'agent-old' }));
     const f0 = await createQuery({
       viewerAgents: [viewerAgent('agent-old')],
     }).getConnectedAgents();
-    assert.ok(coderAppEntry(f0), 'F0 稳态：APP 条目应在');
+    assert.ok(coderAppEntry(f0), 'F0 稳态：存活 Runtime 对应入口应在');
+    assert.equal(coderAppEntry(f0).sidebarVisible, true);
     assert.equal(coderAppEntry(f0).visibility, 'on-demand');
     assert.equal(coderAppEntry(f0).host, 'programming-helper');
     assert.equal(coderChildEntries(f0).length, 1, 'F0 稳态：旧 head 是 coder 名下叶子');
     assert.equal(coderChildEntries(f0)[0].sidebar_entry_id, 'coder');
 
-    // F1 旧 head 退役中：stopManagedAgent 已置 stopping，viewer 列表剔除该
-    // runtime；接续挡板已立（rotate 先 begin 后 stop）。叶子消失，面板在。
+    // F1 旧 head 退役中：rotate 先 begin（挡板立，status=rotating）后 stop
+    // （stopping=true，viewer 列表剔除该 runtime）。runtime 叶子消失，但
+    // 接续挡板是持久化事务事实——入口保持，无感连续不被打破。
     setManaged(coderRuntimeRecord({ key: 'old', viewerAgentId: 'agent-old', stopping: true }));
     const f1 = await createQuery({
       viewerAgents: [viewerAgent('agent-old')],
+      threadSummaries: rotatingBarrier,
     }).getConnectedAgents();
-    assert.ok(coderAppEntry(f1), 'F1 退役中：APP 条目不应消失');
+    assert.equal(coderAppEntry(f1).sidebarVisible, true, 'F1 退役中：接续挡板在途撑住入口');
     assert.equal(coderChildEntries(f1).length, 0, 'F1 退役中：runtime 叶子已剔除');
 
     // F2 空窗：旧 runtime 已停，successor 尚在 compact/摘要中未进
-    // managedAgents——旧模型下用户看到「啪一下就没了」的帧。
+    // managedAgents——三个存活来源全部落空。挡板仍在途，入口不闪失，
+    // 前端接续占位（disconnected 过渡条目）保持可见。
     setManaged();
-    const f2 = await createQuery({ viewerAgents: [] }).getConnectedAgents();
-    assert.ok(coderAppEntry(f2), 'F2 空窗：APP 条目由 metadata 驱动，不随 runtime 消失');
+    const f2 = await createQuery({ viewerAgents: [], threadSummaries: rotatingBarrier }).getConnectedAgents();
+    assert.equal(coderAppEntry(f2).sidebarVisible, true, 'F2 空窗：接续挡板在途，入口不隐藏');
     assert.equal(coderChildEntries(f2).length, 0);
 
     // F3 successor 已 spawn 未注册 viewer：managedAgents 新记录（第二来源）。
     setManaged(coderRuntimeRecord({ key: 'new', viewerAgentId: 'agent-new' }));
     const f3 = await createQuery({ viewerAgents: [] }).getConnectedAgents();
-    assert.ok(coderAppEntry(f3), 'F3 successor spawn：APP 条目应在');
+    assert.equal(coderAppEntry(f3).sidebarVisible, true, 'F3 successor 已存活且绑定 Session，入口显示');
 
-    // F4 successor ready：viewer child 上线，回到稳态形态。
+    // F4 successor ready：viewer child 上线，回到稳态形态（挡板已清，
+    // thread status 离开 rotating，入口由 successor Runtime 撑住）。
+    const settledThread = [{ threadId: 'wt-a', agentId: 'coder', status: 'executing' }];
+    setManaged(coderRuntimeRecord({ key: 'new', viewerAgentId: 'agent-new' }));
     const f4 = await createQuery({
       viewerAgents: [viewerAgent('agent-new')],
+      threadSummaries: settledThread,
     }).getConnectedAgents();
-    assert.ok(coderAppEntry(f4), 'F4 ready：APP 条目应在');
+    assert.equal(coderAppEntry(f4).sidebarVisible, true, 'F4 ready：入口显示');
     assert.equal(coderChildEntries(f4).length, 1, 'F4 ready：successor 成为 coder 名下叶子');
     assert.equal(coderChildEntries(f4)[0].sidebar_entry_id, 'coder');
 
+    // F5 终态对照：runtime 全停且挡板已清——普通未归档线程不撑入口。
+    setManaged();
+    const f5 = await createQuery({ viewerAgents: [], threadSummaries: settledThread }).getConnectedAgents();
+    assert.equal(coderAppEntry(f5).sidebarVisible, false, 'F5：无线程无挡板，auto 入口隐藏');
+
     // 全程不出现任何合成身份条目（ADR-0025 词汇退役）
-    for (const frame of [f0, f1, f2, f3, f4]) {
+    for (const frame of [f0, f1, f2, f3, f4, f5]) {
       assert.ok(!frame.some((e) => e.id === 'programming-helper:coder'),
         '不得出现 programming-helper:coder 合成条目');
     }
   });
 
-  it('闲置（无线程挡板且无存活 runtime）时 APP 条目仍在（存在性不再依赖运行态）', async () => {
+  it('无 Runtime 且无接续挡板时 auto 隐藏入口；always 覆盖仍可找回 APP', async () => {
     setManaged();
-    const list = await createQuery({ viewerAgents: [] }).getConnectedAgents();
-    const entry = coderAppEntry(list);
-    assert.ok(entry, 'APP 条目恒在：显示与否由服务端合流的 sidebarVisible 决定，服务端不下发存在性摇摆');
-    assert.ok('sidebarVisible' in entry, 'on-demand 条目携带服务端合流的显示判定字段');
-    assert.equal(entry.visibilityPolicy, 'auto');
-    assert.equal(coderChildEntries(list).length, 0);
+    const autoList = await createQuery({
+      viewerAgents: [],
+      threadSummaries: [{ threadId: 'wt-idle', agentId: 'coder', status: 'open' }],
+    }).getConnectedAgents();
+    const autoEntry = coderAppEntry(autoList);
+    assert.ok(autoEntry);
+    assert.equal(autoEntry.sidebarVisible, false);
+    assert.equal(coderChildEntries(autoList).length, 0);
+
+    const alwaysList = await createQuery({ viewerAgents: [], visibilityOverrides: { coder: 'always' } }).getConnectedAgents();
+    assert.equal(coderAppEntry(alwaysList).sidebarVisible, true);
+    assert.equal(coderChildEntries(alwaysList).length, 0, '显示 APP 不会凭空创建运行会话叶子');
   });
 
   it('宿主（编程小助手）条目不再携带并列身份投影', async () => {
