@@ -42,7 +42,13 @@ function getInputRenderSignature(requests, renderMode) {
   const runtimeId = currentRuntimeAgentId || 'none';
   if (renderMode === 'persistent') {
     const contextKey = getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
-    return `persistent|${contextKey}|${readOnlyMode ? 'ro' : 'rw'}`;
+    // 接续等待表面（无 runtime 态）：签名携带等待会话身份，等待会话之间
+    // 切换时触发 composer 会话卡重绑（草稿按会话迁移），不残留上一条
+    // 等待会话的草稿。
+    const awaitSessionKey = currentRuntimeAgentId
+      ? ''
+      : `await:${String(window.getActiveThreadInputTarget?.()?.sessionId || '')}`;
+    return `persistent|${contextKey}|${awaitSessionKey}|${readOnlyMode ? 'ro' : 'rw'}`;
   }
   if (renderMode === 'requests') {
     const contextKey = getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
@@ -103,7 +109,6 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   for (const child of Array.from(choiceContainer.children)) child.remove();
   choiceContainer.classList.remove('choice-collapsed');
   choiceContainer.onclick = null;
-  inputContainer.classList.remove('choice-input-active');
 
   // 会话切换草稿迁移（契约 §7）：composer 常驻后不再有"销毁前抢救"，
   // key 变化时在此保存旧会话草稿并恢复新会话草稿；同 key 幂等 no-op。

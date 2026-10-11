@@ -162,13 +162,19 @@ function resolveInputSurfaceMode(state) {
   if (state.hasChoiceRequest) return 'choice';                                     // 5 choice 请求
   if (state.hasLocalQueuedInput) return 'persistent';                              // 6 本地排队乐观态
   if (state.hasRequests) return 'requests';                                        // 7 非 choice 请求卡
-  if (state.hasRuntimeSelected) return 'persistent';                               // 8 选中 runtime
+  if (state.hasRuntimeSelected || state.hasThreadAwaitTarget) return 'persistent'; // 8 选中 runtime / 接续等待会话
   return 'hidden';                                                                 // 9 都不满足
 }
 
 // 组装模式判定所需的当前全局状态（非纯；读输入区各域的全局状态）。
 function readInputSurfaceModeState(requests, chatActive) {
   const hasRuntimeSelected = !!currentRuntimeAgentId;
+  // 接续等待表面（线程接续挡板 / 退役窗口，runtime 态为空）：输入经
+  // getActiveThreadInputTarget 的一致性校验走 Thread Inbox 暂存，新 head
+  // 上线后投递——composer 必须在场（挂起≠消失），与 runtime 态同级放行。
+  const hasThreadAwaitTarget = !hasRuntimeSelected
+    && typeof window.getActiveThreadInputTarget === 'function'
+    && !!window.getActiveThreadInputTarget()?.threadId;
   return {
     chatActive,
     readOnlyMode,
@@ -177,6 +183,7 @@ function readInputSurfaceModeState(requests, chatActive) {
     compactRuntimeMatches: hasRuntimeSelected
       && currentRuntimeAgentId === _partialCompactRuntimeId,
     hasRuntimeSelected,
+    hasThreadAwaitTarget,
     hasRequests: Array.isArray(requests)
       && requests.some(req => req && !isChoiceInputConsumed(req.requestId)),
     hasChoiceRequest: Array.isArray(requests)
@@ -307,8 +314,9 @@ function buildComposerCard() {
 }
 
 function ensurePersistentComposerCard(container) {
-  // 优先复用模块级单例：回退对话框等场景会把容器 innerHTML 清空，元素
-  // detach 但对象存活——重新插入同一节点，DOM 节点身份保持不变。
+  // 优先复用模块级单例：元素被外部 detach（容器遭清空的异常路径）后对象
+  // 仍存活——重新插入同一节点，DOM 节点身份保持不变。交互弹窗（选择卡/
+  // 回退对话框）已解耦到独立渲染面，正常路径不会再销毁 composer。
   if (!container.querySelector('[data-persistent-composer]')) {
     if (!_composerCard) _composerCard = buildComposerCard();
     runWithSuppressedChatViewportObservers(() => {
@@ -452,10 +460,9 @@ function getPersistentComposerCard() {
 
 /**
  * 向容器安全插入互斥卡（readonly / 压缩状态卡），语义为"插在常驻 composer
- * 之前"。composer 单例可能正被回退对话框接管（rollback-dialog.js 的
- * container.innerHTML 清空容器，模块单例仍持有引用但 parentNode 已断），
- * 此时直接 insertBefore(node, ref) 会抛 NotFoundError——引用节点不在容器内
- * 时回落为 null（等同 appendChild）。
+ * 之前"。引用节点不在容器内时 insertBefore 会抛 NotFoundError——composer
+ * 单例引用存在但 parentNode 已断（容器遭外部清空的异常路径）时回落为
+ * null（等同 appendChild）。
  */
 function insertTransientInputCard(container, card) {
   const ref = getPersistentComposerCard();
@@ -463,8 +470,9 @@ function insertTransientInputCard(container, card) {
   container.insertBefore(card, refInContainer);
 }
 
-// 清理互斥临时内容（readonly 卡 / 压缩卡 / choice 卡 / 回退对话框卡 / 气泡 / 胶囊）。
-// 常驻 composer 是容器内唯一保留的子元素；气泡栈与 meta bar 由各自模块按需重建。
+// 清理互斥临时内容（readonly 卡 / 压缩卡 / 气泡 / 胶囊）。交互弹窗（选择
+// 卡 / 回退对话框卡）在独立渲染面，不经此函数。常驻 composer 是容器内唯一
+// 保留的子元素；气泡栈与 meta bar 由各自模块按需重建。
 function detachTransientInputContent(container) {
   if (typeof _compactTimerInterval !== 'undefined' && _compactTimerInterval) {
     clearInterval(_compactTimerInterval);

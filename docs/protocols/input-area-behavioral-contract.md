@@ -57,7 +57,7 @@
 |---|---|---|---|
 | 1 | 非 chat surface（workspace/IM 等） | `hidden` | 无 |
 | 2 | `readOnlyMode`（远程只读/workspace 只读） | `readonly` | 禁用 textarea，opacity 0.5、not-allowed 光标；远程会话用专属只读 placeholder |
-| 3 | 回退对话框打开 | 冻结 | 输入面整体被对话框接管，重渲染 no-op |
+| 3 | 回退对话框打开 | 冻结 | 对话框渲染于 `#choice-input-container`（与选择卡同一交互面），常驻 composer 隐藏但保留节点，重渲染 no-op |
 | 4 | 会话内压缩 in-flight（且为发起 runtime） | 压缩状态卡 | spinner + "压缩中/已用时 Xs" 计时，禁输入；仅对发起 runtime 生效 |
 | 5 | choice 请求未 reject | 选择卡 | 专用 `#choice-input-container` 显示键盘问答卡；常驻 composer 隐藏但保留节点 |
 | 6 | 有本地排队输入（乐观态） | `persistent` | 即使有请求也显示常驻条（排队中不弹请求卡） |
@@ -250,7 +250,7 @@
 ### 6.12 回退对话框与压缩
 
 - 消息行"编辑此轮"按钮显隐 = 存在 rollback 请求 + 该轮可回退（runtime 提供 availableCallIndices 时按其过滤；handoff seed 消息永不可回退）。
-- 对话框打开期间输入面渲染冻结（`_rollbackDialogOpen`）。
+- 对话框渲染于 `#choice-input-container` 独立交互面（与选择卡同款），打开时常驻 composer 隐藏但保留节点、输入面渲染冻结（`_rollbackDialogOpen`），关闭后恢复。
 - "回退到此轮" → 动作提交（携带原消息草稿）；"从此处压缩" → 进入会话内压缩状态（压缩状态卡 + 计时，禁输入，仅对发起 runtime 生效），完成后自动恢复输入。
 
 ## 7. 状态保持与恢复契约

@@ -140,16 +140,25 @@ function _cleanupInputMetaBar(container) {
   }
 }
 
+// 交互面（#choice-input-container：Ask User 选择卡 / 回退压缩对话框）是否
+// 正在占用输入区。读交互面容器的 DOM 事实（非空即接管），不依赖类标记——
+// 历史 choice-input-active 类写在 user-input-container 上，交互面解耦后
+// 已无写入方，类协议随之退役。
+function _interactiveSurfaceOccupiesInput() {
+  const surface = document.getElementById('choice-input-container');
+  return !!surface && surface.children.length > 0;
+}
+
 function _renderLastCallElapsed() {
   const container = document.getElementById('user-input-container');
   if (!container) return;
 
   let el = container.querySelector('.call-elapsed-capsule');
 
-  // 选择卡接管输入面期间不显示运行时长胶囊（否则悬在选择卡上方）。
-  // 本函数由每秒 tick 驱动，必须在这里统一拦截，否则胶囊会被重新插回。
-  // 不重置 _runCapsuleStartAt：选择卡结束后回到运行态时计时应继续。
-  if (container.classList.contains('choice-input-active')) {
+  // 交互面（选择卡/回退对话框）占用输入面期间不显示运行时长胶囊（否则悬在
+  // 交互卡上方）。本函数由每秒 tick 驱动，必须在这里统一拦截，否则胶囊会被
+  // 重新插回。不重置 _runCapsuleStartAt：交互卡结束后回到运行态时计时应继续。
+  if (_interactiveSurfaceOccupiesInput()) {
     if (el) {
       el.remove();
       _cleanupInputMetaBar(container);
@@ -586,10 +595,10 @@ function _syncPersistentActionButton() {
 }
 
 function _renderQueueBubbles(container) {
-  // 选择卡接管输入面期间，暂存/排队气泡不能出现在选择卡上方。
-  // updateQueueIndicator() 可能与选择卡状态变更交错调用，因此这里也要做
-  // 最后一道 DOM 侧守卫，而不能只依赖 input-render 的互斥清理。
-  if (container.classList.contains('choice-input-active')) {
+  // 交互面（选择卡/回退对话框）占用输入面期间，暂存/排队气泡不能出现在
+  // 交互卡上方。updateQueueIndicator() 可能与交互面状态变更交错调用，因此
+  // 这里也要做最后一道 DOM 侧守卫，而不能只依赖 input-render 的互斥清理。
+  if (_interactiveSurfaceOccupiesInput()) {
     container.querySelectorAll('.queue-bubbles-stack').forEach(el => el.remove());
     _lastQueueBubbleSignature = '';
     return;

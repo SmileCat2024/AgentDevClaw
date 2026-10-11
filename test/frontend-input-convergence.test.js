@@ -469,7 +469,7 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     // 真实 submitInputAction 路径（input-helpers.js）
     const helpersSource = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
     const block = helpersSource.slice(
-      helpersSource.indexOf('async function submitInputAction'),
+      helpersSource.indexOf('function captureInputViewToken'),
     );
     ctx.run(block);
     ctx.run(`
@@ -612,7 +612,7 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     ), null, 'stale consumed lease must not rebuild the choice card');
   });
 
-  it('choice takeover removes staged queue bubbles', () => {
+  it('interactive surface takeover removes staged queue bubbles', () => {
     const ctx = createConvergenceSandbox();
     ctx.run(`
       var _queuedTexts = ['queued text'];
@@ -623,16 +623,67 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     const queueStart = persistentSource.indexOf('function _renderQueueBubbles(container) {');
     const queueEnd = persistentSource.indexOf('\n// 查询后端真实队列余量', queueStart);
     ctx.run(persistentSource.slice(queueStart, queueEnd));
+    // 守卫读取交互面占用事实（选择卡/回退对话框共用交互面容器）
+    const guardStart = persistentSource.indexOf('function _interactiveSurfaceOccupiesInput() {');
+    const guardEnd = persistentSource.indexOf('\n}', guardStart) + 2;
+    ctx.run(persistentSource.slice(guardStart, guardEnd));
     ctx.run(`
       const stack = document.createElement('div');
       stack.className = 'queue-bubbles-stack';
       document.getElementById('user-input-container').appendChild(stack);
-      document.getElementById('user-input-container').classList.add('choice-input-active');
+      const card = document.createElement('div');
+      card.className = 'user-choice-card';
+      document.getElementById('choice-input-container').appendChild(card);
       _renderQueueBubbles(document.getElementById('user-input-container'));
     `);
     assert.equal(ctx.run(
       `document.getElementById('user-input-container').querySelector('.queue-bubbles-stack')`,
-    ), null, 'choice takeover removes both queued and thread-staged bubbles');
+    ), null, 'interactive surface takeover removes both queued and thread-staged bubbles');
+  });
+
+  it('rollback dialog renders on the interactive surface without destroying the composer (source-locked)', () => {
+    const source = fs.readFileSync('public/src/modules/rollback-dialog.js', 'utf8');
+    const dialogBlock = source.slice(
+      source.indexOf('function showRollbackActionDialog'),
+      source.indexOf("card.querySelector('[data-mode=\"rollback\"]')"),
+    );
+    // 渲染目标：独立交互面容器（与选择卡同款），输入槽不被占据、不清空
+    assert.match(dialogBlock, /getElementById\('choice-input-container'\)/,
+      'dialog must target the interactive surface container');
+    assert.match(dialogBlock, /choiceContainer\.appendChild\(card\)/,
+      'dialog card is appended to the interactive surface');
+    assert.doesNotMatch(dialogBlock, /\.innerHTML = ''/,
+      'dialog must never wipe the composer container');
+    // composer 隐藏而非销毁：输入槽只清 transient、composer 走 display 隐藏
+    assert.match(dialogBlock, /detachTransientInputContent\(inputContainer\)/);
+    assert.match(dialogBlock, /hidePersistentComposerCard\(\)/);
+    // 打开与关闭都经唯一声明入口（打开声明记录 frozen 签名，关闭声明恢复）
+    const notifyCount = (dialogBlock.match(/notifyInputSurfaceChanged\(\)/g) || []).length;
+    assert.ok(notifyCount >= 2,
+      'open and close must each declare through notifyInputSurfaceChanged');
+  });
+
+  it('dialog open declaration keeps close restorable with no state change while frozen', () => {
+    const ctx = createConvergenceSandbox();
+    ctx.run('renderInputRequests([])');
+    // 输入槽塞一张 transient 卡作"恢复渲染执行了"的探针；打开序列等价
+    // showRollbackActionDialog：置冻结标志 + 声明一次（记录 frozen 签名）。
+    ctx.run(`
+      const probe = document.createElement('div');
+      probe.className = 'queue-bubbles-stack';
+      document.getElementById('user-input-container').appendChild(probe);
+      _rollbackDialogOpen = true;
+      notifyInputSurfaceChanged();
+    `);
+    assert.ok(ctx.run("document.getElementById('user-input-container').querySelector('.queue-bubbles-stack')"),
+      'frozen declaration must not touch the DOM');
+    // 关闭序列等价 close()：仅解除冻结（冻结期间无任何状态变化）
+    ctx.run(`
+      _rollbackDialogOpen = false;
+      notifyInputSurfaceChanged();
+    `);
+    assert.equal(ctx.run("document.getElementById('user-input-container').querySelector('.queue-bubbles-stack')"), null,
+      'close declaration must re-render even without state changes while frozen');
   });
 
   it('§8 排队同步：level-6 optimistic queue pins persistent over a pending lease', () => {
@@ -735,11 +786,59 @@ describe('manual poke protocol is retired (ticket 037)', () => {
       helpersSource.indexOf('async function submitInputAction'),
     );
     // 乐观即时性：patch 写入（同步触发渲染）先于 poll()
-    const patchAt = submitBlock.indexOf('applySessionViewPatch({ inputRequests: [] })');
+    const patchAt = submitBlock.indexOf('inputRequests: []');
     const pollAt = submitBlock.indexOf('poll()');
     assert.notEqual(patchAt, -1, 'submitInputAction still patches inputRequests');
     assert.ok(pollAt > patchAt, 'poll() must come after the synchronous optimistic restore');
     assert.doesNotMatch(submitBlock, /lastRenderedInputSignature/);
+  });
+
+  it('delayed action lease from session A cannot clear or rerender session B', async () => {
+    const ctx = createConvergenceSandbox();
+    ctx.run(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'A' }, inputRequests: [{ requestId: 'A-request' }] })`);
+    const source = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
+    ctx.run(source.slice(source.indexOf('function captureInputViewToken')));
+    ctx.run(`
+      function clearInterruptSuppression() {}
+      function _markAgentCallStartedForNotify() {}
+      function renderAgentList() {}
+      function beginFollowLatestEntryWindow() { globalThis.followCalls = (globalThis.followCalls || 0) + 1; }
+      function requestFollowLatest() {}
+      function newIdempotencyKey() { return 'k'; }
+      function _syncPersistentActionButton() {}
+      function poll() {}
+    `);
+    let finish;
+    ctx.fetch = () => new Promise((resolve) => { finish = resolve; });
+    const pending = ctx.run(`submitInputAction('A-request', 'proceed', {}, 'agent-1')`);
+    ctx.run(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'B' } });
+    applySessionViewPatch({ inputRequests: [{ requestId: 'B-request' }] });`);
+    const rendersBeforeResponse = ctx.run('globalThis.inputSurfaceRenderCount || 0');
+    finish({ ok: true, status: 200, json: async () => ({}) });
+    await pending;
+    assert.equal(ctx.run('currentInputRequests[0].requestId'), 'B-request');
+    assert.equal(ctx.run('globalThis.inputSurfaceRenderCount || 0'), rendersBeforeResponse);
+    assert.equal(ctx.run('globalThis.followCalls || 0'), 0);
+  });
+
+  it('same-session action lease still clears input requests optimistically', async () => {
+    const ctx = createConvergenceSandbox();
+    ctx.run(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'A' }, inputRequests: [{ requestId: 'A-request' }] })`);
+    const source = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
+    ctx.run(source.slice(source.indexOf('function captureInputViewToken')));
+    ctx.run(`
+      function clearInterruptSuppression() {}
+      function _markAgentCallStartedForNotify() {}
+      function renderAgentList() {}
+      function beginFollowLatestEntryWindow() {}
+      function requestFollowLatest() {}
+      function newIdempotencyKey() { return 'k'; }
+      function _syncPersistentActionButton() {}
+      function poll() {}
+    `);
+    ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
+    await ctx.run(`submitInputAction('A-request', 'proceed', {}, 'agent-1')`);
+    assert.deepEqual(Array.from(ctx.run('currentInputRequests')), []);
   });
 });
 

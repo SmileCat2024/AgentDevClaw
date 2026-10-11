@@ -198,6 +198,11 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
   const container = createMiniElement('div', doc);
   container.id = 'user-input-container';
   doc.body.appendChild(container);
+  // 交互面容器（选择卡/回退对话框的独立渲染面）：renderInputRequests 对两个
+  // 容器做存在性检查，缺失会整体 no-op
+  const choiceContainer = createMiniElement('div', doc);
+  choiceContainer.id = 'choice-input-container';
+  doc.body.appendChild(choiceContainer);
 
   const state = { doc, container, liveKey: contextKey, requests };
 
@@ -372,13 +377,14 @@ describe('persistent composer DOM identity (ticket 036)', () => {
   });
 });
 
-// ── 回归：回退对话框接管期间 composer 单例被 detach（rollback-dialog.js 的
-//    container.innerHTML 清空容器，模块单例仍持有引用），此后 renderInputRequests
-//    转入 readonly / compacting 分支时，安全插入 helper 必须回落为 appendChild，
-//    不得抛 NotFoundError（旧实现为 appendChild，天然无此问题）。
+// ── 回归：容器遭外部清空的异常路径下 composer 单例被 detach（模块单例仍
+//    持有引用，parentNode 已断），此后 renderInputRequests 转入 readonly /
+//    compacting 分支时，安全插入 helper 必须回落为 appendChild，不得抛
+//    NotFoundError。历史上该路径由回退对话框的 container.innerHTML 清空触
+//    发；交互弹窗解耦后正常路径不再清空容器，防御保留为通用安全。
 
 describe('transient card insertion vs detached composer singleton (ticket 036 regression)', () => {
-  function detachComposerSimulatingRollbackDialog(ctx) {
+  function detachComposerSimulatingContainerWipe(ctx) {
     ctx.run(`
       const c = document.getElementById('user-input-container');
       const composer = c.querySelector('[data-persistent-composer]');
@@ -386,7 +392,7 @@ describe('transient card insertion vs detached composer singleton (ticket 036 re
     `);
   }
 
-  it('renders the readonly card without throwing after a rollback dialog detaches the composer', () => {
+  it('renders the readonly card without throwing after the composer is detached', () => {
     const ctx = createInputSandbox();
     loadInputModules(ctx);
 
@@ -394,11 +400,11 @@ describe('transient card insertion vs detached composer singleton (ticket 036 re
     assert.ok(ctx.run(
       "document.getElementById('user-input-container').querySelector('[data-persistent-composer]')",
     ));
-    // 回退对话框接管期间清空容器（composer detach，模块单例仍持有引用）
-    detachComposerSimulatingRollbackDialog(ctx);
+    // 异常路径：容器被清空（composer detach，模块单例仍持有引用）
+    detachComposerSimulatingContainerWipe(ctx);
 
-    // 关闭对话框后转入远程只读会话：close() 后 renderInputRequests
-    // 以 readonly 模式运行（触发路径：dialog open → detach → readonly）
+    // 此后转入远程只读会话：renderInputRequests 以 readonly 模式运行
+    // （触发路径：detach → readonly）
     ctx.readOnlyMode = true;
     ctx.run('lastRenderedInputSignature = ""; renderInputRequests([])');
     const readonlyCard = ctx.run(
@@ -412,14 +418,14 @@ describe('transient card insertion vs detached composer singleton (ticket 036 re
     ), null);
   });
 
-  it('renders the compacting card without throwing after a rollback dialog detaches the composer', () => {
+  it('renders the compacting card without throwing after the composer is detached', () => {
     const ctx = createInputSandbox();
     loadInputModules(ctx);
 
     ctx.run('renderInputRequests([])');
-    detachComposerSimulatingRollbackDialog(ctx);
+    detachComposerSimulatingContainerWipe(ctx);
 
-    // 关闭对话框 + 会话内压缩 in-flight（发起 runtime 匹配）→ compacting 分支
+    // 会话内压缩 in-flight（发起 runtime 匹配）→ compacting 分支
     ctx._partialCompactInFlight = true;
     ctx._partialCompactRuntimeId = 'agent-1';
     ctx.run('lastRenderedInputSignature = ""; renderInputRequests([])');

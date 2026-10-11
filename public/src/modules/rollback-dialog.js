@@ -9,6 +9,7 @@
  *   _getSessionInputCacheKey (app-main.js)
  *   getRollbackInputRequest (app-main.js)
  *   notifyInputSurfaceChanged (input-render.js，工单 037 唯一渲染声明入口)
+ *   detachTransientInputContent, hidePersistentComposerCard (input-composer.js)
  *   submitInputAction (app-main.js)
  *   applySessionViewPatch (session-view-state.js)
  *   escapeHtml (app-core.js)
@@ -67,6 +68,9 @@ function clearPartialCompactStartedAt(contextKey = _partialCompactContextKey || 
 }
 
 function clearPartialCompactState(contextKey = _partialCompactContextKey || _getSessionInputCacheKey()) {
+  if (_partialCompactContextKey && contextKey !== _partialCompactContextKey) return;
+  const ownsCurrentView = !_partialCompactContextKey
+    || _partialCompactContextKey === _getSessionInputCacheKey();
   _partialCompactInFlight = false;
   _partialCompactRuntimeId = null;
   _partialCompactContextKey = null;
@@ -75,9 +79,8 @@ function clearPartialCompactState(contextKey = _partialCompactContextKey || _get
     _compactTimerInterval = null;
   }
   clearPartialCompactStartedAt(contextKey);
-  // 压缩状态清除即声明输入面变更（工单 037）：模式由 compacting 翻回，
-  // 渲染器按签名差异自动恢复输入面。
-  notifyInputSurfaceChanged();
+  // 清理属于发起压缩的 SessionView；旧 lease 的结束不能重渲染新会话输入面。
+  if (ownsCurrentView) notifyInputSurfaceChanged();
 }
 
 window.requestRollbackEdit = async function(messageIndex) {
@@ -102,9 +105,11 @@ window.requestRollbackEdit = async function(messageIndex) {
 };
 
 function showRollbackActionDialog(request, callIndex, msg) {
-  const container = document.getElementById('user-input-container');
-  if (!container) return;
+  const inputContainer = document.getElementById('user-input-container');
+  const choiceContainer = document.getElementById('choice-input-container');
+  if (!inputContainer || !choiceContainer) return;
   const boundRuntimeId = currentRuntimeAgentId;
+  const viewToken = captureSessionViewToken(boundRuntimeId);
   const boundContextKey = _getSessionInputCacheKey();
 
   _rollbackDialogOpen = true;
@@ -141,43 +146,51 @@ function showRollbackActionDialog(request, callIndex, msg) {
     </div>
   `;
 
+  // 交互弹窗与常驻输入框解耦：对话框渲染到 #choice-input-container（与
+  // Ask User 选择卡同一交互面），输入槽只做 transient 清理 + composer 隐藏，
+  // 节点保留（焦点/草稿/IME 不因弹窗销毁重建）。
   runWithSuppressedChatViewportObservers(() => {
-    container.innerHTML = '';
-    container.classList.add('choice-input-active');
-    container.classList.remove('choice-collapsed');
-    container.onclick = null;
-    container.appendChild(card);
+    detachTransientInputContent(inputContainer);
+    hidePersistentComposerCard();
+    for (const child of Array.from(choiceContainer.children)) child.remove();
+    choiceContainer.appendChild(card);
   });
 
   setTimeout(() => card.focus(), 30);
 
   const close = () => {
+    if (!isSessionViewTokenCurrent(viewToken)) return;
     _rollbackDialogOpen = false;
-    container.classList.remove('choice-input-active', 'choice-collapsed');
     // 工单 037：接管标志写入即声明——签名在冻结期间已被记录为 frozen，
-    // 关闭后的声明因模式差异自然恢复输入面。
+    // 关闭后的声明因模式差异自然恢复输入面（交互面容器随之清空、composer
+    // 恢复显示）。
     notifyInputSurfaceChanged();
   };
 
   card.querySelector('[data-mode="cancel"]').addEventListener('click', close);
 
-  container.addEventListener('click', function backdropHandler(e) {
-    if (e.target === container) {
-      container.removeEventListener('click', backdropHandler);
-      close();
-    }
-  });
+  // 点击交互面空白处关闭；onclick 属性与 choice 卡同款，恢复渲染时由
+  // renderInputRequests 统一置空。
+  choiceContainer.onclick = function(event) {
+    if (event.target === choiceContainer) close();
+  };
+
+  // 打开即声明一次：让渲染器把 frozen 签名记录在案。若跳过这步且冻结期间
+  // 无任何状态变化，close 的声明会因签名相同被去重跳过，composer 将停留
+  // 在隐藏态（原实现表现为关闭后输入区空置，同一疏漏）。
+  notifyInputSurfaceChanged();
 
   card.querySelector('[data-mode="rollback"]').addEventListener('click', async () => {
     close();
     await submitInputAction(request.requestId, 'rollback_to_call', {
       callIndex,
       draftInput: msg.content,
-    }, boundRuntimeId);
+    }, boundRuntimeId, viewToken);
   });
 
   card.querySelector('[data-mode="compact"]').addEventListener('click', async () => {
     close();
+    if (!isSessionViewTokenCurrent(viewToken)) return;
     _partialCompactInFlight = true;
     _partialCompactRuntimeId = boundRuntimeId;
     _partialCompactContextKey = boundContextKey;
@@ -186,6 +199,6 @@ function showRollbackActionDialog(request, callIndex, msg) {
     applySessionViewPatch({ inputRequests: [] });
     await submitInputAction(request.requestId, 'compact_from_call', {
       callIndex,
-    }, boundRuntimeId);
+    }, boundRuntimeId, viewToken);
   });
 }
