@@ -14,7 +14,7 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 const threadStoreSource = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
 
 function loadThreadStore({ threads = [], fetchImpl = async () => ({ ok: false }) } = {}) {
-  const calls = { clearChatLoading: 0, reRender: 0, toasts: [] };
+  const calls = { clearChatLoading: 0, reRender: 0, renderAgentList: 0, toasts: [] };
   let ctx;
   ctx = createFrontendSandbox({
     setTimeout: () => 0,
@@ -38,7 +38,7 @@ function loadThreadStore({ threads = [], fetchImpl = async () => ({ ok: false })
     getRuntimeWorkspaceSessionId: () => '',
     setViewerSessionBinding: () => {},
     findSidebarOperation: () => null,
-    renderAgentList: () => {},
+    renderAgentList: () => { calls.renderAgentList += 1; },
     updateQueueIndicator: () => {},
     clearChatLoadingSession: () => { calls.clearChatLoading += 1; },
     renderCurrentMainView: () => { calls.reRender += 1; },
@@ -94,6 +94,27 @@ test('等待分支：挂 awaitSurface 身份并拉上一棒消息渲染（与 vi
   assert.equal(ctx.run('globalThis.__viewIdentity.sessionId'), 'sess-head');
   assert.ok(ctx.__calls.clearChatLoading >= 1, '有消息时解除加载 spinner');
   assert.ok(ctx.__calls.reRender >= 1, '触发重渲');
+});
+
+test('等待分支：挂 awaitSurface 身份后立即重渲侧栏（选中态收口）', async () => {
+  // switchAgent 内部的侧栏渲染发生在 activeConversation 落定之前——那一刻
+  // 宿主节点被判选中、占位条目判非（isAgentActive / isRuntimeItemActive 的
+  // 等待分支都依赖 getActiveThreadInputTarget）。等待身份挂载后必须重渲
+  // 侧栏纠正高亮，否则选中态永久停在宿主工作空间节点（历史 bug：接续条
+  // 目点不选中）。
+  const thread = {
+    threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
+    handoffStartedAt: Date.now(), sessionIds: ['sess-head'],
+  };
+  const ctx = loadThreadStore({
+    threads: [thread],
+    fetchImpl: async () => okJson({ ok: true, messages: [], messageCount: 0 }),
+  });
+
+  const before = ctx.__calls.renderAgentList;
+  await ctx.run('window.openConversationTarget({ threadId: "wt-1" })');
+  assert.ok(ctx.__calls.renderAgentList > before,
+    'enterThreadAwaitSurface 落定 activeConversation 后必须触发侧栏重渲');
 });
 
 test('竞态守卫：fetch 回来时等待表面已换目标 → 不注入', async () => {

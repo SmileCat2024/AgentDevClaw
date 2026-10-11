@@ -12,7 +12,10 @@
  * 生命状态为推导值（thread-life-state.js 四态合成），随列表/详情响应附带。
  *
  * 错误约定：not_found → 404；revision/head 冲突 → 409；参数问题 → 400；
- * 已归档线程收新指令 → 409 thread_archived；运行中归档 → 409 thread_busy。
+ * 已归档线程收新指令 → 409 thread_archived。运行中归档：生产装配注入
+ * thread-lifecycle.js（archiveThread 归档即打断收纳，不做 busy 拒绝）；
+ * 本文件的无 lifecycle 兜底实现拒绝 409 thread_busy（缺 seal 事务，busy
+ * 拒绝是兜底安全闸，不是生产行为——前端不得据此置灰归档入口）。
  */
 
 import { createHash } from 'node:crypto';

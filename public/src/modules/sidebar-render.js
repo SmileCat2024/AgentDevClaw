@@ -954,7 +954,22 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
 let lastAgentListRenderSignature = '';
 
 function getAgentListRenderSignature() {
+  // 等待表面高亮事实：无 runtime 态的条目高亮与宿主让位按等待会话身份
+  // 判定（isRuntimeItemActive / isAgentActive 的等待分支，依赖
+  // getActiveThreadInputTarget）。等待目标出现 / 切换会话 / 消失必须改变
+  // 签名——enterThreadAwaitSurface 在 switchAgent 渲染之后才落
+  // activeConversation，靠这里放行其后的重渲，否则选中态停在宿主节点。
+  const awaitTarget = typeof window.getActiveThreadInputTarget === 'function'
+    ? window.getActiveThreadInputTarget()
+    : null;
+  const awaitHighlight = awaitTarget
+    ? {
+      agentId: normalizeAgentIdentity(awaitTarget.agentId),
+      sessionId: String(awaitTarget.sessionId || '').trim(),
+    }
+    : null;
   return JSON.stringify({
+    awaitHighlight,
     focusedAgentId: normalizeAgentIdentity(focusedAgentId),
     currentRuntimeAgentId: normalizeAgentIdentity(currentRuntimeAgentId),
     pending: Array.from(pendingPrebuiltAgentIds || []).sort(),

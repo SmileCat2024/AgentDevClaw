@@ -7,8 +7,9 @@
  * - 生命状态四态（thread-life-state.js 合成，随 /protoclaw/threads 附带）：
  *   executing / pending-commands / idle / archived，failed 为独立注意力信号；
  * - 行动作：打开 head（整卡可点）、中断（路由到 head runtime 的 turn
- *   中断通道）、归档（executing / pending-commands 置灰——先中断再归档）、
- *   取消归档（已归档 tab）；
+ *   中断通道）、归档（任何非归档状态可用——生产 lifecycle 归档即打断
+ *   收纳：seal 取消 pending + 停全链 runtime，不做 busy 拒绝）、取消归档
+ *   （已归档 tab）；
  * - 归档宾语是线程：成员会话不动，视图按线程归档态折叠；
  * - 空态是教育点：线程由调度面创建（ACP / claw threads CLI / dispatch
  *   技能），本视图不提供任何创建动作；

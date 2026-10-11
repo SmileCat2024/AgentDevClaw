@@ -13,7 +13,7 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 const threadStoreSource = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
 
-function loadThreadStore({ hostAgentId = 'programming-helper', runtimeId = 'rt-ph', runtimeSessionId = 'sess-A', threads = [] } = {}) {
+function loadThreadStore({ hostAgentId = 'programming-helper', runtimeId = 'rt-ph', runtimeSessionId = 'sess-A', threads = [], viewIdentity = null } = {}) {
   const ctx = createFrontendSandbox({
     // 顶层启动的周期刷新在测试进程中不执行（VM timer stub）
     setTimeout: () => 0,
@@ -24,6 +24,7 @@ function loadThreadStore({ hostAgentId = 'programming-helper', runtimeId = 'rt-p
     applySessionViewPatch: () => {},
     captureSessionViewToken: () => ({}),
     commitSessionViewPatch: () => false,
+    readCurrentSessionViewState: () => ({ identity: viewIdentity }),
     getRuntimeWorkspaceSessionId: (rid) => (rid === runtimeId ? runtimeSessionId : ''),
     setViewerSessionBinding: () => {},
     findSidebarOperation: () => null,
@@ -57,19 +58,38 @@ test('getActiveThreadInputTarget：宿主已切走（残留指向他空间线程
 });
 
 test('getActiveThreadInputTarget：视图确属该线程（head 健康 / 等待重绑）→ 返回指向', () => {
-  // head 健康：宿主 coder，runtime 绑定 head 会话
-  const healthy = loadThreadStore({ hostAgentId: 'coder', runtimeId: 'rt-coder', runtimeSessionId: 'sess-head', threads: [WT] });
+  // head 健康：宿主 coder，runtime 绑定 head 会话，SessionView identity 挂该会话
+  const healthy = loadThreadStore({ hostAgentId: 'coder', runtimeId: 'rt-coder', runtimeSessionId: 'sess-head', threads: [WT], viewIdentity: { agentId: 'coder', sessionId: 'sess-head' } });
   healthy.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: 'rt-coder', wasHead: true })};`);
   healthy.run('currentRuntimeAgentId = "rt-coder"; focusedAgentId = "coder";');
   const r1 = healthy.run('window.getActiveThreadInputTarget()');
   assert.ok(r1 && r1.threadId === 'wt-1', '视图一致：正常返回');
 
   // 等待重绑：runtime 态被 404 清空，宿主焦点仍在 coder（_currentActiveSession 回退为指向自身）
-  const awaiting = loadThreadStore({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '', threads: [WT] });
+  const awaiting = loadThreadStore({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '', threads: [WT], viewIdentity: { agentId: 'coder', sessionId: 'sess-head' } });
   awaiting.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true })};`);
   awaiting.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
   const r2 = awaiting.run('window.getActiveThreadInputTarget()');
   assert.ok(r2 && r2.threadId === 'wt-1', '等待重绑态：宿主一致 + 回退一致，返回指向');
+});
+
+test('getActiveThreadInputTarget：视图已回工作空间首页（identity 无会话）→ null，残留不占高亮', () => {
+  // 用户从 coder 会话切回 coder 工作空间首页：runtime 态与 SessionView 会话
+  // 身份被清空，但 activeConversation 残留（同宿主，_currentActiveSession 回
+  // 退仍指向旧会话）。残留不得作为目标——宿主节点照常高亮，旧会话条目不
+  // 残留选中（历史 bug：首页上旧会话条目常亮、宿主节点让位）。
+  const home = loadThreadStore({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '', threads: [WT], viewIdentity: null });
+  home.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true })};`);
+  home.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
+  assert.equal(home.run('window.getActiveThreadInputTarget()'), null,
+    '视图不在该会话上（首页）：残留指向不得作为输入/高亮目标');
+
+  // identity 挂在别的会话（用户已切到另一会话）同样拒绝
+  const elsewhere = loadThreadStore({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '', threads: [WT], viewIdentity: { agentId: 'coder', sessionId: 'sess-other' } });
+  elsewhere.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true })};`);
+  elsewhere.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
+  assert.equal(elsewhere.run('window.getActiveThreadInputTarget()'), null,
+    '视图已挂到别的会话：残留指向不得作为目标');
 });
 
 test('_syncActiveThreadSubscription：等待重绑豁免以宿主焦点为界——切走即清残留', () => {

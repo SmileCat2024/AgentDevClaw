@@ -139,9 +139,12 @@ window.getActiveConversationTarget = () => window.ClawThreads.activeConversation
  * 只在与当前视图一致时才可作为输入目标。不一致（用户已切到别的会话 /
  * 别的工作空间，全局残留未清）返回 null——消息走当前视图的常规路径，
  * 绝不允许"在 A 会话输入、发到 B 线程"的串线。
- * 一致 = 宿主一致（getCurrentHostAgentRecord）且当前激活会话与指向会话
- * 相同；等待重绑态（runtime 态被 404 清空，_currentActiveSession 回退为
- * activeConversation 自身）天然满足同宿主校验。
+ * 一致 = 宿主一致（getCurrentHostAgentRecord）+ 视图挂载在该会话
+ * （SessionView identity：等待表面经 enterThreadAwaitSurface 落 identity、
+ * 正常会话经数据加载落 identity、回工作空间首页时 sessionId 清空——宿主
+ * 一致但视图已不在该会话的残留同样拒绝，否则首页上旧会话条目常亮、宿主
+ * 节点让位）+ 当前激活会话与指向会话相同；等待重绑态（runtime 态被 404
+ * 清空，_currentActiveSession 回退为 activeConversation 自身）天然满足。
  */
 window.getActiveThreadInputTarget = () => {
   const selected = window.ClawThreads.activeConversation;
@@ -150,6 +153,14 @@ window.getActiveThreadInputTarget = () => {
     ? getCurrentHostAgentRecord()
     : null;
   if (!hostRecord || String(hostRecord.id || '') !== String(selected.agentId || '')) {
+    return null;
+  }
+  const viewIdentity = typeof readCurrentSessionViewState === 'function'
+    ? (readCurrentSessionViewState()?.identity || null)
+    : null;
+  if (!viewIdentity
+    || String(viewIdentity.agentId || '').trim() !== String(selected.agentId || '').trim()
+    || String(viewIdentity.sessionId || '').trim() !== String(selected.sessionId || '').trim()) {
     return null;
   }
   const active = _currentActiveSession();
@@ -183,6 +194,10 @@ async function enterThreadAwaitSurface(agentId, thread, sessionId) {
     awaitSurface: true,
   };
   applySessionViewPatch({ identity: { agentId, sessionId } });
+  // 选中态收口：switchAgent 内部的侧栏渲染发生在 activeConversation 落定
+  // 之前——那一刻宿主节点被判选中、占位条目判非。等待身份挂载后立即重渲
+  // 侧栏纠正高亮（签名含等待目标事实，见 getAgentListRenderSignature）。
+  if (typeof renderAgentList === 'function') renderAgentList();
   window.updateThreadHeaderIndicator();
   _syncActiveThreadSubscription();
   _loadAwaitSurfaceMessages(agentId, sessionId);

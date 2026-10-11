@@ -394,4 +394,22 @@ describe('getAgentListRenderSignature: 接续窗口事实进签名', () => {
     const backToBase = ctx.run('getAgentListRenderSignature()');
     assert.equal(backToBase, base, '事实复原后签名复原（退场同样被感知）');
   });
+
+  it('等待表面目标（高亮事实）进签名：出现 / 切换会话 / 消失都改变签名', () => {
+    // 无 runtime 态的条目高亮与宿主让位按等待会话身份判定
+    // （isRuntimeItemActive / isAgentActive 的等待分支，依赖
+    // getActiveThreadInputTarget）。等待目标不进签名时，进入等待表面后的
+    // renderAgentList 被签名守卫挡掉，选中态停在宿主节点。
+    const ctx = loadSignature();
+    const base = ctx.run('getAgentListRenderSignature()');
+    ctx.window.getActiveThreadInputTarget = () => ({ threadId: 'wt-1', agentId: 'coder', sessionId: 'sess-a' });
+    const awaitA = ctx.run('getAgentListRenderSignature()');
+    assert.notEqual(awaitA, base, '等待目标出现必须改变签名');
+    ctx.window.getActiveThreadInputTarget = () => ({ threadId: 'wt-1', agentId: 'coder', sessionId: 'sess-b' });
+    const awaitB = ctx.run('getAgentListRenderSignature()');
+    assert.notEqual(awaitB, awaitA, '等待目标切换会话必须改变签名');
+    ctx.window.getActiveThreadInputTarget = () => null;
+    const cleared = ctx.run('getAgentListRenderSignature()');
+    assert.equal(cleared, base, '等待目标消失后签名复原');
+  });
 });

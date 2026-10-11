@@ -71,8 +71,11 @@ function ctxSessionOpsAllowed(ns) {
 
 function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
   // 线程宿主（coder 等）的侧栏线程叶子：线程语义菜单（与线程视图行动作
-  // 同源——coder-threads-ui）。生命周期动作按 lifeState 置灰：中断只在
-  // 执行/待投递时可用，归档与之互斥（服务端 thread_busy 拒绝）。
+  // 同源——coder-threads-ui）。中断只在执行/待投递时有对象；归档任何状态
+  // 都可用——生产 lifecycle（thread-lifecycle.js）归档即打断收纳（seal
+  // 取消 pending + 收敛接续挡板 + 停全链 runtime），不做 busy 拒绝
+  // （thread_busy 仅 thread-routes.js 测试兜底 lifecycle 的行为，前端
+  // 不得据此置灰，否则接续中的线程无法归档）。
   if (role === 'runtime' && threadId) {
     const thread = typeof window.getThreadById === 'function' ? window.getThreadById(threadId) : null;
     if (thread) {
@@ -82,7 +85,7 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
         { label: isZh ? '复制 Thread ID' : 'Copy Thread ID', action: 'copy-thread-id' },
         { type: 'separator' },
         { label: isZh ? '中断线程' : 'Interrupt Thread', action: 'thread-interrupt', disabled: !busy },
-        { label: isZh ? '归档线程' : 'Archive Thread', action: 'thread-archive', disabled: busy },
+        { label: isZh ? '归档线程' : 'Archive Thread', action: 'thread-archive' },
         { type: 'separator' },
         { label: isZh ? '删除线程' : 'Delete Thread', action: 'thread-delete', danger: true },
       ];
