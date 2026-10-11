@@ -5866,7 +5866,7 @@ body[data-theme="light"] .plan-task.is-interrupt-target .plan-task-action:hover 
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s, scale 0.2s ease;
 }
 
 .rail-button svg {
@@ -5906,6 +5906,53 @@ body[data-theme="light"] .plan-task.is-interrupt-target .plan-task-action:hover 
   background: var(--active-bg);
   border-color: var(--border-color);
   color: var(--text-primary);
+}
+
+/* 长按拖动排序（rail-customize.js）：四段动效提示手势状态 */
+/* 1. 按压蓄力：缓慢放大 + 轻微点亮，提示"继续按住可拖动" */
+.rail-button.rail-pressing {
+  scale: 1.06;
+  border-color: var(--border-color);
+  background: var(--hover-bg);
+  transition: scale 0.45s cubic-bezier(0.25, 1, 0.4, 1),
+    background-color 0.2s, border-color 0.2s;
+}
+
+/* 2. 激活抬升：过冲脉冲后停在放大态，宣告进入拖动 */
+@keyframes rail-drag-lift {
+  0% { scale: 1.06; }
+  45% { scale: 1.18; }
+  100% { scale: 1.1; }
+}
+
+.rail-button.rail-dragging {
+  background: var(--active-bg);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  cursor: grabbing;
+  z-index: 5;
+  scale: 1.1;
+  animation: rail-drag-lift 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: box-shadow 0.2s ease; /* 位移不走过渡，保证 1:1 跟手 */
+  will-change: transform;
+}
+
+/* 3. 拖拽期间其余图标压暗、让位时平滑滑动 */
+body.rail-drag-active .rail-button:not(.rail-dragging) {
+  opacity: 0.5;
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s,
+    transform 0.15s ease, opacity 0.15s ease;
+}
+
+body.rail-drag-active {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+body.rail-drag-active .rail-button {
+  cursor: grabbing;
 }
 
 .settings-menu-wrapper {

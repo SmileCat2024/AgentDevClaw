@@ -180,6 +180,59 @@ describe('rail customize derives its panel list from the registry', () => {
   });
 });
 
+describe('rail long-press drag reorder', () => {
+  it('persists a new order through the shared rail config, keeping visibility', () => {
+    const harness = buildRailDom(['workspace', 'genui', 'session-controls', 'unlisted']);
+    const ctx = createRailSandbox(harness);
+    ctx.run(`localStorage.setItem('agentdev-rail-config', JSON.stringify([
+      { id: 'session-controls', visible: true },
+      { id: 'genui', visible: false },
+    ]))`);
+
+    ctx.run(`window.RailCustomize.commitRailOrder(['genui', 'session-controls'])`);
+
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
+      [
+        { id: 'genui', visible: false },
+        { id: 'session-controls', visible: true },
+      ],
+    );
+  });
+
+  it('reorders rail buttons to the committed order, blocked panels stay after the group', () => {
+    const harness = buildRailDom(['workspace', 'genui', 'session-controls', 'unlisted']);
+    const ctx = createRailSandbox(harness);
+
+    ctx.run(`window.RailCustomize.commitRailOrder(['session-controls', 'genui'])`);
+
+    const panels = harness.document
+      .querySelectorAll('.rail-button[data-panel]')
+      .filter((btn) => btn.dataset.panel)
+      .map((btn) => btn.dataset.panel);
+    assert.deepEqual(panels, ['session-controls', 'genui', 'workspace', 'unlisted']);
+  });
+
+  it('keeps entries missing from the submitted order at the tail in their prior order', () => {
+    const harness = buildRailDom(['workspace', 'genui', 'session-controls']);
+    const ctx = createRailSandbox(harness);
+    ctx.run(`localStorage.setItem('agentdev-rail-config', JSON.stringify([
+      { id: 'session-controls', visible: false },
+      { id: 'genui', visible: true },
+    ]))`);
+
+    ctx.run(`window.RailCustomize.commitRailOrder(['genui'])`);
+
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
+      [
+        { id: 'genui', visible: true },
+        { id: 'session-controls', visible: false },
+      ],
+    );
+  });
+});
+
 describe('rail customize keeps a single source of panel truth', () => {
   it('no longer hardcodes panel ids, labels, or descriptions', () => {
     const source = fs.readFileSync(new URL('../public/src/modules/rail-customize.js', import.meta.url), 'utf8');

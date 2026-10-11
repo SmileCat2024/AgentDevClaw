@@ -96,6 +96,11 @@ export function createDomHarness() {
     }
 
     insertBefore(child, reference) {
+      // 与真实 DOM 一致的移动语义：先从旧位置摘除，再插入 reference 之前
+      if (child.parentNode) {
+        const oldIndex = child.parentNode.children.indexOf(child);
+        if (oldIndex >= 0) child.parentNode.children.splice(oldIndex, 1);
+      }
       const index = reference ? this.children.indexOf(reference) : -1;
       if (index >= 0) this.children.splice(index, 0, child);
       else this.children.push(child);
