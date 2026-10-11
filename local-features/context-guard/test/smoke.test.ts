@@ -119,6 +119,20 @@ describe('ContextGuardFeature (interactive shell)', () => {
     assert.equal(feature.getStatus().thresholdTokens, 800);
   });
 
+  it('re-installs the usage observer on mid-turn LLM swap (no CallStart until the call ends)', async () => {
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = { ...makeAgent(), getLLMMeta: () => ({ contextLength: 1000, compressRatio: 80 }) };
+    await feature.installUsageGuard({ agent });
+    // mid-term swap：框架 setLLM 替换整个 llm 引用后同步触发 onLLMSwap
+    const oldLLM = agent.llm;
+    agent.llm = { chat: async () => ({ content: 'ok', usage: { inputTokens: 900 } }) };
+    feature.onLLMSwap(agent.llm, oldLLM);
+    // swap 后没有新的 CallStart（单轮 ReAct 会话），新 llm 的过界响应仍要被观察到
+    await agent.llm.chat();
+    assert.equal(feature.getStatus().armed, false);
+    assert.equal(feature.getStatus().trip?.inputTokens, 900);
+  });
+
   it('exposes the manifest for the runtime config panel', () => {
     const feature = new ContextGuardFeature({});
     const manifest = feature.getFeatureManifest();
@@ -190,6 +204,23 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     const agent = { ...makeAgent(), getLLMMeta: () => ({ contextLength: 512, compressRatio: 50 }) };
     await feature.installUsageObserver({ agent });
     assert.equal(feature.observeUsage({ inputTokens: 300 }, agent), true);
+  });
+
+  it('re-installs the usage observer on mid-turn LLM swap (single-call ReAct sessions)', async () => {
+    const feature = new ContextRotationTriggerFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = { ...makeAgent(), getLLMMeta: () => ({ contextLength: 1000, compressRatio: 80 }) };
+    const arbiter = makeArbiter();
+    feature.setCallArbiter(arbiter);
+    await feature.installUsageObserver({ agent });
+    // mid-turn swap：替换整个 llm 引用后同步触发 onLLMSwap，observer 必须重装
+    const oldLLM = agent.llm;
+    agent.llm = { chat: async () => ({ content: 'ok', usage: { inputTokens: 900 } }) };
+    feature.onLLMSwap(agent.llm, oldLLM);
+    await agent.llm.chat();
+    // 过界被观察到：排队消息立即退回，打断延后到 StepFinish
+    assert.equal(arbiter.calls.length, 1);
+    assert.equal(await feature.tripAtStepFinish({ toolCallsCount: 1 }), 'continue');
+    assert.deepEqual(agent.calls, ['interrupt']);
   });
 
   it('invokes the local onTrip callback at call finish without breaking the HTTP report', async () => {

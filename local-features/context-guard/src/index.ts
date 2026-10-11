@@ -83,7 +83,8 @@ class ContextGuardCore {
 
 /**
  * 包装 agent.llm.chat，在每个响应返回后观察 usage。幂等：同一 llm 只包装一次，
- * 热切换模型后由下一次 CallStart 重新安装。
+ * 热切换模型（setLLM 替换整个 llm 引用）后由 onLLMSwap 立即重装——不能等
+ * 下一次 CallStart：单轮 ReAct 会话（coder 工单）中途没有 CallStart。
  */
 function installChatObserver(agent: any, observer: (usage: any) => void): void {
   const llm = agent?.llm;
@@ -269,6 +270,12 @@ export class ContextGuardFeature implements AgentFeature {
     this.logger?.info('Context guard threshold updated', { thresholdTokens: this.core.getThresholdTokens() });
   }
 
+  /**
+   * 换模型（热切换）后按新模型元数据重算阈值，并把 usage observer 重装到
+   * 新 llm 上：setLLM 替换整个 agent.llm 引用，旧对象上的 chat 包装随之
+   * 作废；单轮 ReAct 会话中途不会再有 CallStart 重装窗口，不在此刻重装
+   * 触发器将对 swap 之后的全部用量失明。
+   */
   onLLMSwap(_newLLM: any, _oldLLM: any): void {
     const meta = this._agent?.getLLMMeta?.();
     if (meta) {
@@ -276,6 +283,9 @@ export class ContextGuardFeature implements AgentFeature {
         typeof meta.contextLength === 'number' ? meta.contextLength : null,
         typeof meta.compressRatio === 'number' ? meta.compressRatio : null,
       );
+    }
+    if (this.armed) {
+      installChatObserver(this._agent, (usage) => this.observeUsage(usage, this._agent));
     }
   }
 }
@@ -478,6 +488,11 @@ export class ContextRotationTriggerFeature implements AgentFeature {
     this.logger?.info('Context rotation threshold updated', { thresholdTokens: this.core.getThresholdTokens() });
   }
 
+  /**
+   * 换模型（热切换）后按新模型元数据重算阈值，并重装 usage observer
+   * （语义同交互壳 ContextGuardFeature.onLLMSwap：单轮 ReAct 会话中途
+   * 没有 CallStart 重装窗口，swap 后不重装即失明）。
+   */
   onLLMSwap(_newLLM: any, _oldLLM: any): void {
     const meta = this._agent?.getLLMMeta?.();
     if (meta) {
@@ -485,6 +500,9 @@ export class ContextRotationTriggerFeature implements AgentFeature {
         typeof meta.contextLength === 'number' ? meta.contextLength : null,
         typeof meta.compressRatio === 'number' ? meta.compressRatio : null,
       );
+    }
+    if (!this.triggered) {
+      installChatObserver(this._agent, (usage) => this.observeUsage(usage, this._agent));
     }
   }
 }
