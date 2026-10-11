@@ -110,6 +110,19 @@ function normalizeSessionIndexData(data) {
 }
 
 export async function readSessionIndex(agentId) {
+  return structuredClone(await readSessionIndexShared(agentId));
+}
+
+/**
+ * readSessionIndex 的共享只读变体：命中缓存时直接返回缓存对象，不做
+ * structuredClone。面向高频批量只读路径（如线程列表逐线程解析 head 会话
+ * 字段）——索引体积可达数 MB，逐调用 clone 整份索引的同步成本随线程数
+ * 线性放大，会持续占据事件循环（server 周期性 health unreachable 的根因）。
+ *
+ * 契约：调用方只读返回值，不得修改（会污染缓存）；需要可变副本时用
+ * readSessionIndex。缓存装载 / mtime+size 失效语义与 readSessionIndex 一致。
+ */
+export async function readSessionIndexShared(agentId) {
   const dirPath = getPrebuiltAgentSessionDir(agentId);
   const indexPath = getPrebuiltSessionIndexPath(agentId);
   await ensureDir(dirPath);
@@ -123,12 +136,12 @@ export async function readSessionIndex(agentId) {
   }
   const cached = _indexCache.get(indexPath);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    return structuredClone(cached.value);
+    return cached.value;
   }
   try {
     const value = normalizeSessionIndexData(await readJson(indexPath));
     _indexCache.set(indexPath, { mtimeMs: stat.mtimeMs, size: stat.size, value });
-    return structuredClone(value);
+    return value;
   } catch {
     // 索引损坏：与无缓存时的行为一致返回空索引，并清掉旧缓存避免下次命中陈旧值
     _indexCache.delete(indexPath);

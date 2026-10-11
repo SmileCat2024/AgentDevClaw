@@ -20,6 +20,7 @@ process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
 const {
   getPrebuiltSessionIndexPath,
   readSessionIndex,
+  readSessionIndexShared,
   writeSessionIndex,
   upsertSessionIndexAt,
 } = await import('../server/shared/session-access.js');
@@ -129,6 +130,21 @@ describe('readSessionIndex 缓存', () => {
     writeFileSync(indexPath, JSON.stringify(makeIndex(8)), 'utf8');
     const idx = await readSessionIndex(AGENT_ID);
     assert.equal(idx.revision, 8);
+  });
+
+  test('readSessionIndexShared 共享只读：命中缓存返回同一引用，readSessionIndex 仍返回克隆', async () => {
+    // 线程列表（/protoclaw/threads）逐线程解析 head 会话字段的高频只读路径：
+    // clone 数 MB 索引 × 线程数曾把主进程事件循环打满（周期性 health unreachable）。
+    const sharedA = await readSessionIndexShared(AGENT_ID);
+    const sharedB = await readSessionIndexShared(AGENT_ID);
+    assert.equal(sharedA, sharedB); // 命中缓存：同一对象，零拷贝
+    const cloned = await readSessionIndex(AGENT_ID);
+    assert.notEqual(cloned, sharedA);
+    assert.notEqual(cloned.sessions[0], sharedA.sessions[0]); // 可变副本深度独立
+    cloned.sessions[0].title = '已被突变';
+    const sharedC = await readSessionIndexShared(AGENT_ID);
+    assert.equal(sharedC, sharedA); // 缓存对象未变
+    assert.equal(sharedC.sessions[0].title, '对话一'); // 克隆侧突变不污染共享缓存
   });
 });
 

@@ -14,7 +14,7 @@ import {
   getAssemblyWorkspaceDir, normalizeClientAgentId, log,
 } from '../shared/string-helpers.js';
 import {
-  readSessionIndex, updateSessionIndex,
+  readSessionIndex, readSessionIndexShared, updateSessionIndex,
   getPrebuiltSessionFilePath,
   normalizeSessionMetadata, buildSessionTitle, computeNextSessionNumber,
 } from '../shared/session-access.js';
@@ -582,14 +582,13 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
     archived: options.sessionArchived,
     offset: options.sessionOffset,
     limit: options.sessionLimit,
-    excludeSessionTypes: options.sessionExcludeSessionTypes,
   };
   const richPageActive = options.sessionProjectDir !== undefined
     || options.sessionQuery !== undefined
     || options.sessionArchived !== undefined
     || options.sessionOffset !== undefined
     || options.sessionLimit !== undefined
-    || options.sessionExcludeSessionTypes !== undefined;
+    ;
   let wireSessions = sessions;
   let richPageMeta = {};
   if (richPageActive) {
@@ -607,7 +606,7 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
   if (options.wireTrim === true) {
     wireSessions = wireSessions.map(trimSessionRecordForWire);
     if (!richPageActive) {
-      const counts = sliceSessionsForWire(sessions, { excludeSessionTypes: options.sessionExcludeSessionTypes });
+      const counts = sliceSessionsForWire(sessions);
       richPageMeta = { mainTotal: counts.mainTotal, archivedTotal: counts.archivedTotal };
     }
   }
@@ -757,14 +756,13 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
     archived: options.sessionArchived,
     offset: options.sessionOffset,
     limit: options.sessionLimit,
-    excludeSessionTypes: options.sessionExcludeSessionTypes,
   };
   const pageActive = options.sessionProjectDir !== undefined
     || options.sessionQuery !== undefined
     || options.sessionArchived !== undefined
     || options.sessionOffset !== undefined
     || options.sessionLimit !== undefined
-    || options.sessionExcludeSessionTypes !== undefined;
+    ;
   let wireSessions = sessions;
   let pageMeta = {};
   if (pageActive) {
@@ -782,7 +780,7 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
   if (options.wireTrim === true) {
     wireSessions = wireSessions.map(trimSessionRecordForWire);
     if (!pageActive) {
-      const counts = sliceSessionsForWire(sessions, { excludeSessionTypes: options.sessionExcludeSessionTypes });
+      const counts = sliceSessionsForWire(sessions);
       pageMeta = { mainTotal: counts.mainTotal, archivedTotal: counts.archivedTotal };
     }
   }
@@ -1330,6 +1328,17 @@ async function requirePrebuiltSessionRecord(agentId, sessionId) {
   return existing;
 }
 
+/**
+ * requirePrebuiltSessionRecord 的共享只读变体：找不到返回 null（不抛 404），
+ * 且经 readSessionIndexShared 不 clone 索引。面向高频只读字段解析（如线程
+ * 列表逐线程解析 head 会话目录——每次 clone 数 MB 索引 × 线程数会打满事件循环）。
+ * 契约：返回的 record 只读，不得修改。
+ */
+async function findPrebuiltSessionRecordShared(agentId, sessionId) {
+  const index = await readSessionIndexShared(agentId);
+  return index.sessions.find((session) => session.id === cleanSessionText(sessionId)) || null;
+}
+
 async function resolvePrebuiltSessionOwner(sessionId, preferredAgentId = '') {
   const cleanSessionId = cleanSessionText(sessionId);
   if (!cleanSessionId) return null;
@@ -1506,6 +1515,7 @@ async function resolveContextLength(agentId) {
     archivePrebuiltSession,
     tagPrebuiltSessionTodo,
     requirePrebuiltSessionRecord,
+    findPrebuiltSessionRecordShared,
     readSessionSnapshotForContinuity,
     resolvePrebuiltSessionOwner,
     requirePrebuiltAgentForRuntime,
