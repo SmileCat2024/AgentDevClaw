@@ -9,6 +9,19 @@ function loadCoderThreadsUI() {
 }
 
 describe('T006 coder-threads-ui: 归档取消结果与删除确认文案', () => {
+  it('opening a thread targets its current head through the unified conversation entry', async () => {
+    const ctx = loadCoderThreadsUI();
+    let openedTarget = null;
+    ctx.run(`window.ClawThreads = { byId: { 'wt-1': {
+      threadId: 'wt-1', agentId: 'programming-helper', headSessionId: 'head-1',
+    } } }`);
+    ctx.window.getThreadById = (id) => ctx.window.ClawThreads.byId[id];
+    ctx.window.openConversationTarget = async (target) => { openedTarget = target; };
+    await ctx.run(`window.CoderThreadsUI.openHead('wt-1')`);
+    assert.equal(openedTarget?.agentId, 'programming-helper');
+    assert.equal(openedTarget?.threadId, 'wt-1');
+  });
+
   it('归档文案以 cleanup 事实为准，明确「恢复不复活已取消指令」', () => {
     const ctx = loadCoderThreadsUI();
     const text = ctx.run(`window.CoderThreadsUI.archiveResultText({

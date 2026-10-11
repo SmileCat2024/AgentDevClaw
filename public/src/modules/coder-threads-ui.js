@@ -1,5 +1,5 @@
 /**
- * coder-threads-ui.js — coder 入口的线程列表视图
+ * coder-threads-ui.js — coder APP 首页的线程列表视图
  *
  * 心智：行 = 线程（不是会话）。会话是实体层，线程是把链条成员折叠成
  * 一行的连接结构；行入口每次动态解析当前 head（不自动跳转）。
@@ -57,12 +57,11 @@ window.CoderThreadsUI = (() => {
     return isZh() ? `${days} 天前` : `${days}d ago`;
   }
 
-  /** 当前渲染宿主：投影条目记录的 agentId（coder 入口 → programming-helper） */
+  /** 当前渲染宿主：coder APP 自身（焦点即条目记录） */
   function currentHostAgentId() {
     try {
       if (typeof allAgents !== 'undefined' && Array.isArray(allAgents) && typeof focusedAgentId !== 'undefined') {
         const entry = allAgents.find((a) => a?.id === focusedAgentId);
-        if (entry?.agentId) return entry.agentId;
         if (entry) return entry.id;
       }
     } catch { /* 全局不可用时退化为空（渲染空态） */ }
@@ -96,20 +95,6 @@ window.CoderThreadsUI = (() => {
   }
 
   const LIFE_ORDER = ['executing', 'pending-commands', 'idle'];
-
-  function chainSummary(thread) {
-    const legs = (thread.sessionIds || []).length;
-    if (!legs || legs < 2) return '';
-    const zh = isZh();
-    const counts = { trim: 0, summary: 0 };
-    for (const edge of thread.chainEdges || []) {
-      if (counts[edge.relayKind] != null) counts[edge.relayKind] += 1;
-    }
-    const parts = [zh ? `第 ${legs} 棒` : `leg ${legs}`];
-    if (counts.trim) parts.push(`trim ×${counts.trim}`);
-    if (counts.summary) parts.push(zh ? `摘要 ×${counts.summary}` : `summary ×${counts.summary}`);
-    return parts.join(' · ');
-  }
 
   // ── 行渲染 ──────────────────────────────────────────────────────
 
@@ -169,7 +154,7 @@ window.CoderThreadsUI = (() => {
       + ' title="' + esc(thread.threadId) + '">',
       '<div class="coder-thread-card-head">',
       '<span class="' + statusClasses.join(' ') + '">' + esc(lifeLabel(lifeState)) + '</span>',
-      chainSummary(thread) ? '<span class="coder-thread-chain">' + esc(chainSummary(thread)) + '</span>' : '',
+      '',
       '</div>',
       '<div class="coder-thread-title">' + esc(title) + '</div>',
       '<div class="coder-thread-meta">',
@@ -186,14 +171,7 @@ window.CoderThreadsUI = (() => {
 
   // ── 面板渲染 ────────────────────────────────────────────────────
 
-  /** 目录归一化：项目归属比较统一小写正斜杠 */
-  function normalizeDir(dir) {
-    return String(dir || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-  }
-
-  function render(options = {}) {
-    const projectDir = options.projectDir ? normalizeDir(options.projectDir) : '';
-    const embedded = !!projectDir; // 项目卡片内嵌模式：无二级 tab、无标题栏
+  function render() {
     scheduleAutoRefresh();
     // thread-store 首拉（2s 延迟）可能尚未发生：主动补一次，异步返回后由
     // 下一次渲染呈现（refreshThreads(true) 恒返回 Promise，节流路径仅出现在 force=false）
@@ -205,11 +183,9 @@ window.CoderThreadsUI = (() => {
     const all = (typeof window.ClawThreads !== 'undefined' && Array.isArray(window.ClawThreads.threads))
       ? window.ClawThreads.threads
       : [];
-    // 生命状态 closed = 系统清理残迹，不出列表；旧宿主（agentId 不匹配）不展示；
-    // 项目内嵌模式按 head 会话的项目目录归属过滤
+    // 生命状态 closed = 系统清理残迹，不出列表；旧宿主（agentId 不匹配）不展示。
     const threads = all
       .filter((thread) => thread?.agentId === hostAgentId && thread.lifeState !== 'closed')
-      .filter((thread) => !projectDir || normalizeDir(thread.headProjectDir) === projectDir)
       .slice()
       .sort((left, right) => {
         const lifeLeft = LIFE_ORDER.indexOf(left.lifeState);
@@ -232,15 +208,6 @@ window.CoderThreadsUI = (() => {
         + ' onclick="window.CoderThreadsUI.switchTab(\'' + tab.id + '\')">' + esc(tab.label) + '</button>'
       )).join('')
       + '</div>';
-
-    if (embedded) {
-      // 项目卡片内嵌：合并展示（活跃在前，已归档弱化在后），无二级 tab 与标题栏
-      const merged = [...active, ...archived];
-      const mergedHtml = merged.length
-        ? merged.map(renderThread).join('')
-        : '<div class="coder-thread-empty">' + (zh ? '本项目暂无 Coder 线程。' : 'No Coder threads in this project yet.') + '</div>';
-      return '<div class="coder-threads embedded">' + mergedHtml + '</div>';
-    }
 
     const rows = activeTab === 'archived' ? archived : active;
     let listHtml;
@@ -277,9 +244,6 @@ window.CoderThreadsUI = (() => {
       // 只在 coder 线程视图实际可见时轮询重渲染，避免全局后台空转
       const visible = document.querySelector('.coder-threads');
       if (!visible) return;
-      // 项目卡片内嵌模式：面板未激活（停留在主会话/已归档 tab）时不轮询
-      const hostPanel = visible.closest('.ph-session-tab-panel');
-      if (hostPanel && !hostPanel.classList.contains('active')) return;
       if (typeof window.refreshThreads !== 'function') return;
       Promise.resolve(window.refreshThreads(true))
         .then(() => {
@@ -318,8 +282,10 @@ window.CoderThreadsUI = (() => {
   }
 
   async function openHead(threadId) {
-    if (typeof window.jumpToThreadHead === 'function') {
-      await window.jumpToThreadHead(threadId);
+    const thread = getThread(threadId);
+    if (!thread) return;
+    if (typeof window.openConversationTarget === 'function') {
+      await window.openConversationTarget({ agentId: thread.agentId, threadId: thread.threadId });
     }
   }
 
@@ -459,24 +425,10 @@ window.CoderThreadsUI = (() => {
     }
   }
 
-  /** 项目内嵌视图的 tab 计数：归属该项目且未归档的线程数 */
-  function countFor(projectDir) {
-    const dir = normalizeDir(projectDir);
-    if (!dir) return 0;
-    const hostAgentId = currentHostAgentId();
-    const all = (typeof window.ClawThreads !== 'undefined' && Array.isArray(window.ClawThreads.threads))
-      ? window.ClawThreads.threads
-      : [];
-    return all.filter((thread) => thread?.agentId === hostAgentId
-      && thread.lifeState !== 'closed'
-      && thread.lifeState !== 'archived'
-      && normalizeDir(thread.headProjectDir) === dir).length;
-  }
-
   function switchTab(tab) {
     activeTab = tab === 'archived' ? 'archived' : 'threads';
     if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
   }
 
-  return { render, refresh, openHead, interrupt, archive, unarchive, resume, remove, switchTab, countFor, archiveResultText, deleteConfirmText };
+  return { render, refresh, openHead, interrupt, archive, unarchive, resume, remove, switchTab, archiveResultText, deleteConfirmText };
 })();

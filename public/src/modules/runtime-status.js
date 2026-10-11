@@ -27,6 +27,7 @@
 let currentRuntimeConnected = true;
 let lastNotificationStatusPayload = null;
 const _runtimeStatusMemory = new Map();
+const _coderThreadLiveEntries = new Map();
 let _lastRenderedNotificationRuntime = null;
 let _notificationClockTimer = null;
 let _contextGuardToastKey = '';
@@ -105,11 +106,8 @@ function buildChildRuntimeEntry(runtimeAgent) {
     ownerId,
     runtimeId,
     sessionId: runtimeAgent.active_workspace_session_id || '',
-    sessionType: String(runtimeAgent.sessionType || 'main'),
-    sidebarEntryId: String(runtimeAgent.sidebar_entry_id || '').trim()
-      || (String(runtimeAgent.sessionType || 'main').trim() === 'main'
-        ? ownerId
-        : `${ownerId}:${String(runtimeAgent.sessionType || 'main').trim()}`),
+    // 呈现归属 = 所属 APP（wire 的 sidebar_entry_id；缺席时即父 APP）。
+    sidebarEntryId: String(runtimeAgent.sidebar_entry_id || '').trim() || ownerId,
     name: runtimeAgent.active_workspace_display_name
       || runtimeAgent.active_workspace_agent_name
       || runtimeAgent.active_workspace_session_title
@@ -121,25 +119,22 @@ function buildChildRuntimeEntry(runtimeAgent) {
     contextMenuEnabled: true,
     createdAt: runtimeAgent.created_at || null,
     replacementMutation: mutation,
-    // 会话绑定的项目目录（server 从 session index 附带）。投影条目（coder）
-    // 不继承宿主 workspace_sessions，靠此字段参与目录分组。
+    // 会话绑定的项目目录（server 从 session index 附带），参与目录分组。
     openDirectory: String(runtimeAgent.open_directory || '').trim(),
   };
 }
 
 function getSidebarOperationPendingName(operation) {
-  // 线程宿主会话（coder）：trim / summary 是线程内上下文接力，不是「创建新会话」
-  const isThreadHost = typeof window.isThreadHostAgentId === 'function'
-    && window.isThreadHostAgentId(operation?.agentId, operation?.sessionId);
+  // 线程宿主（coder）的 trim / summary 是线程内上下文接力，接续过程提示
+  // 由顶栏「上下文接力中…」统一承载（用户要求：接续 UI 只留这一个），
+  // 侧栏操作文案回归通用形态，不再特化。
   if (operation?.kind === 'branch') {
     return currentLanguage === 'zh' ? '正在创建分支…' : 'Creating branch…';
   }
   if (operation?.kind === 'trim') {
-    if (isThreadHost) return currentLanguage === 'zh' ? '上下文接力中 · 精简…' : 'Relaying context · trim…';
     return currentLanguage === 'zh' ? '正在生成精简会话…' : 'Creating trimmed session…';
   }
   if (operation?.kind === 'summary') {
-    if (isThreadHost) return currentLanguage === 'zh' ? '上下文接力中 · 摘要…' : 'Relaying context · summary…';
     return currentLanguage === 'zh' ? '正在生成摘要会话…' : 'Creating summarized session…';
   }
   return currentLanguage === 'zh' ? '正在启动新会话…' : 'Starting new session…';
@@ -148,17 +143,13 @@ function getSidebarOperationPendingName(operation) {
 function getSidebarOperationFailureName(operation) {
   // A degraded target operation is reached only after the session mutation has
   // committed. Its failure describes the runtime startup, never session creation.
-  const isThreadHost = typeof window.isThreadHostAgentId === 'function'
-    && window.isThreadHostAgentId(operation?.agentId, operation?.sessionId);
   if (operation?.kind === 'branch') {
     return currentLanguage === 'zh' ? '分支会话启动失败' : 'Branch session failed to start';
   }
   if (operation?.kind === 'trim') {
-    if (isThreadHost) return currentLanguage === 'zh' ? '接力会话启动失败' : 'Relay session failed to start';
     return currentLanguage === 'zh' ? '精简会话启动失败' : 'Trimmed session failed to start';
   }
   if (operation?.kind === 'summary') {
-    if (isThreadHost) return currentLanguage === 'zh' ? '接力会话启动失败' : 'Relay session failed to start';
     return currentLanguage === 'zh' ? '摘要会话启动失败' : 'Summarized session failed to start';
   }
   return currentLanguage === 'zh' ? '新会话启动失败' : 'New session failed to start';
@@ -174,28 +165,13 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // We also cross-reference phProjects to pick up the correct-cased directory
   // path (sessions may store a lowercased path on Windows).
   const sessionDirMap = new Map();
-  const hostAgentId = String(prebuiltAgent?.agentId || prebuiltAgent?.id || '').trim();
-  // 会话级身份路由（原定义于子项收集前，供 todo 关联与子项过滤共用）：
-  // 投影条目（agentId ≠ id，如 programming-helper:coder）只收集
-  // sessionType='coder' 的子项，且不合成镜像条目（宿主 runtime 是 main 会话的）；
-  // 宿主条目排除 coder 会话子项（它们归投影条目）。
-  const isProjectionEntry = String(prebuiltAgent?.agentId || '').trim()
-    && String(prebuiltAgent.agentId).trim() !== String(prebuiltAgent.id || '').trim();
-  const childSessionType = isProjectionEntry
-    ? String(prebuiltAgent.sessionType || '').trim() || 'main'
-    : null;
+  const hostAgentId = String(prebuiltAgent?.id || '').trim();
 
   // 待办标记：运行中会话条目按 sessionId 关联宿主会话索引的 todo 字段，
-  // 侧栏据此渲染 pin。投影条目（coder）被服务端剥离会话级字段，与上面
-  // sessionDirMap 同理改从全局列表中的宿主记录读取。
+  // 侧栏据此渲染 pin。
   const sessionTodoMap = new Map();
-  const todoSourceRecord = isProjectionEntry
-    ? ((typeof allAgents !== 'undefined' && Array.isArray(allAgents))
-      ? allAgents.find((item) => item?.id === hostAgentId) || null
-      : null)
-    : prebuiltAgent;
-  for (const session of Array.isArray(todoSourceRecord?.workspace_sessions?.sessions)
-    ? todoSourceRecord.workspace_sessions.sessions : []) {
+  for (const session of Array.isArray(prebuiltAgent?.workspace_sessions?.sessions)
+    ? prebuiltAgent.workspace_sessions.sessions : []) {
     if (session?.todo === true) {
       const todoSid = String(session?.id || '').trim();
       if (todoSid) sessionTodoMap.set(todoSid, window.SIDEBAR_TODO_COLORS.has(session.todoColor) ? session.todoColor : 'white');
@@ -203,16 +179,9 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   }
 
   if (hostAgentId === 'programming-helper') {
-    // 投影条目（coder）被服务端剥离会话级字段，目录映射改从全局列表中的
-    // 宿主记录读取——宿主的 workspace_sessions 覆盖工作空间全部会话身份。
-    // 无宿主记录可用时（极端时序/测试沙箱）映射为空，退回 open_directory 兜底。
-    const hostRecord = String(prebuiltAgent?.id || '').trim() === hostAgentId
-      ? prebuiltAgent
-      : (typeof allAgents !== 'undefined' && Array.isArray(allAgents)
-        ? allAgents.find((item) => item?.id === hostAgentId) || null
-        : null);
-    const phProjects = Array.isArray(hostRecord?.workspace_state?.phProjects)
-      ? hostRecord.workspace_state.phProjects
+    // PH 宿主：项目卡片目录大小写校正（sessions 可能存小写路径）。
+    const phProjects = Array.isArray(prebuiltAgent?.workspace_state?.phProjects)
+      ? prebuiltAgent.workspace_state.phProjects
       : [];
     const projectIdToDir = new Map();
     for (const project of phProjects) {
@@ -220,8 +189,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       const pdir = String(project?.openDirectory || '').trim();
       if (pid && pdir) projectIdToDir.set(pid, pdir);
     }
-    const sessions = Array.isArray(hostRecord?.workspace_sessions?.sessions)
-      ? hostRecord.workspace_sessions.sessions
+    const sessions = Array.isArray(prebuiltAgent?.workspace_sessions?.sessions)
+      ? prebuiltAgent.workspace_sessions.sessions
       : [];
     for (const session of sessions) {
       const sid = String(session?.id || '').trim();
@@ -267,8 +236,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     entry.todo = entryTodoColor !== undefined;
     entry.todoColor = entryTodoColor || '';
     if (!entry.projectDir) {
-      // PH 宿主走 workspace_sessions 映射（大小写已校正）；其余条目
-      // （coder 投影等）用 server 附带的 open_directory 兜底。
+      // PH 宿主走 workspace_sessions 映射（大小写已校正）；其余 APP
+      // （coder 等）用 server 附带的 open_directory 兜底。
       let dir = entry.openDirectory || '';
       if (sessionDirMap.size > 0 && entry.sessionId) {
         dir = sessionDirMap.get(entry.sessionId) || dir;
@@ -312,55 +281,132 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // a child entry (which happens when pickPrimaryAgentRuntime selects the same
   // runtime as the prebuilt's primary), the child entry wins and its createdAt
   // is preserved instead of being shadowed by the synthetic's null createdAt.
-  //
-  // 会话身份路由的子项过滤见函数前部 isProjectionEntry / childSessionType。
   const childRuntimeIds = new Set();
+  // 线程宿主 APP（ADR-0025：coder）的线程域：归属 = 线程记录 agentId。
+  // 非线程宿主的 APP 此 Map 恒空，线程条目逻辑整体短路。
+  const hostThreadsById = new Map((window.ClawThreads?.threads || [])
+    .filter((thread) => thread?.agentId === hostAgentId && thread.status !== 'closed')
+    .map((thread) => [thread.threadId, thread]));
+  const isThreadHostApp = hostThreadsById.size > 0;
+  const threadBySessionId = new Map();
+  for (const thread of hostThreadsById.values()) {
+    for (const sessionId of thread.sessionIds || []) {
+      threadBySessionId.set(String(sessionId), thread);
+    }
+    if (thread.headSessionId) threadBySessionId.set(String(thread.headSessionId), thread);
+  }
   // Session ids already presented by a live child runtime. A pending
   // sidebar operation for the same target session hands over to that
   // child entry in place instead of rendering a second placeholder.
   const childCoveredSessionIds = new Set();
   const expectedSidebarEntryId = String(prebuiltAgent?.id || '').trim();
-  agents
-    .filter((agent) => {
-      if (agent.source === 'prebuilt') return false;
-      if (String(agent.parent_id || '').trim() !== hostAgentId) return false;
-      // sidebar_entry_id is the explicit presentation owner. Keep the
-      // sessionType fallback for older runtime snapshots during a refresh.
-      const sidebarEntryId = String(agent.sidebar_entry_id || '').trim();
-      if (sidebarEntryId && sidebarEntryId !== expectedSidebarEntryId) return false;
-      if (childSessionType && String(agent.sessionType || 'main') !== childSessionType) return false;
-      if (!childSessionType && String(agent.sessionType || '') === 'coder') return false;
-      return true;
-    })
-    .forEach((agent) => {
-      const runtimeId = String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
-      if (runtimeId) childRuntimeIds.add(runtimeId);
-      const coveredSessionId = String(agent.active_workspace_session_id || '').trim();
-      if (coveredSessionId) childCoveredSessionIds.add(coveredSessionId);
-      addEntry(buildChildRuntimeEntry(agent));
-    });
-
-  // The host snapshot may point at whichever session was most recently started.
-  // If that runtime is already represented by a child entry, do not synthesize it
-  // again under the host row; otherwise a coder runtime appears as a PH mirror.
-  if (!isProjectionEntry) {
-    const syntheticRuntimeId = String(
-      prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId || ''
-    ).trim();
-    if (!syntheticRuntimeId || !childRuntimeIds.has(syntheticRuntimeId)) {
-      addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+  const childAgents = agents.filter((agent) => {
+    if (agent.source === 'prebuilt') return false;
+    if (String(agent.parent_id || '').trim() !== hostAgentId) return false;
+    // sidebar_entry_id is the explicit presentation owner.
+    const sidebarEntryId = String(agent.sidebar_entry_id || '').trim();
+    if (sidebarEntryId && sidebarEntryId !== expectedSidebarEntryId) return false;
+    return true;
+  });
+  // 线程条目按 threadId 键控（ADR-0024：稳定条目不随 successor 闪烁）：
+  // 一条线程只呈现一个侧栏叶子，且只由当前 head 会话的 runtime 呈现。
+  // 换代窗口内新旧 runtime 并存（旧 head 退役滞留 + successor 已上线）时，
+  // 非 head 成员不渲染——否则同线程双条目并列，点击旧条目被解析到新
+  // head，成为用户看到的生硬跳转。
+  const renderedThreadIds = new Set();
+  childAgents.forEach((agent) => {
+    const runtimeId = String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
+    if (runtimeId) childRuntimeIds.add(runtimeId);
+    const coveredSessionId = String(agent.active_workspace_session_id || '').trim();
+    if (coveredSessionId) childCoveredSessionIds.add(coveredSessionId);
+    const childEntry = buildChildRuntimeEntry(agent);
+    if (isThreadHostApp && childEntry && coveredSessionId) {
+      let thread = threadBySessionId.get(coveredSessionId);
+      if (!thread) {
+        // 换代窗口归并：successor 上线早于 commit（框架 advanceHead 才把
+        // successor session 写进 sessionChain），锚定未命中。存在 fresh
+        // 接续挡板的存活线程时，该 runtime 是换代 successor——归到线程
+        // 走下方非 head 过滤（不渲染普通条目），由占位条目兜底；否则才
+        // 是真正的新会话，照常独立渲染。
+        thread = [...hostThreadsById.values()].find((candidate) => (
+          candidate
+          && !candidate.archivedAt
+          && Number(candidate.handoffStartedAt) > 0
+          && Date.now() - Number(candidate.handoffStartedAt) < 5 * 60 * 1000
+        )) || null;
+      }
+      const threadAlive = thread && !thread.archivedAt;
+      if (threadAlive && String(thread.headSessionId || '') !== coveredSessionId) {
+        // 非 head 成员 runtime（head 已推进、本体待退役，或换代 successor
+        // 尚未 commit）：不是侧栏叶子。
+        return;
+      }
+      if (threadAlive) {
+        childEntry.threadId = thread.threadId;
+        // 条目名跟随 head 会话（换代后如「(精简)A」），线程标题仅作索引
+        // 缺席时的回退——侧栏不得停在创建时的标题。
+        const headTitle = String(thread.headSessionTitle || '').trim();
+        childEntry.name = headTitle || String(thread.title || childEntry.name || '').trim();
+        childEntry.metaLabel = headTitle || String(thread.title || childEntry.metaLabel || '').trim();
+        // 稳定身份锚：createdAt / 项目归属沿用首次见到的条目，换头不换位。
+        const cached = _coderThreadLiveEntries.get(thread.threadId);
+        if (cached?.entry) {
+          childEntry.createdAt = cached.entry.createdAt ?? childEntry.createdAt;
+          childEntry.projectDir = cached.entry.projectDir || childEntry.projectDir;
+          childEntry.projectName = cached.entry.projectName || childEntry.projectName;
+          childEntry.projectKey = cached.entry.projectKey || childEntry.projectKey;
+        }
+        _coderThreadLiveEntries.set(thread.threadId, { runtimeId, entry: childEntry });
+        renderedThreadIds.add(thread.threadId);
+      }
+    }
+    addEntry(childEntry);
+  });
+  if (isThreadHostApp) {
+    for (const [threadId, cached] of _coderThreadLiveEntries) {
+      const thread = hostThreadsById.get(threadId);
+      if (!thread || thread.archivedAt) {
+        _coderThreadLiveEntries.delete(threadId);
+        continue;
+      }
+      // head runtime 已在上面渲染为本线程条目，无需补位。
+      if (renderedThreadIds.has(threadId)) continue;
+      if (seenRuntimeIds.has(cached.runtimeId)) continue;
+      const handoffInProgress = Number(thread.handoffStartedAt) > 0
+        && Date.now() - Number(thread.handoffStartedAt) < 5 * 60 * 1000;
+      const replacementPending = typeof findSidebarOperation === 'function'
+        && Boolean(findSidebarOperation((operation) => operation?.agentId === hostAgentId
+          && operation?.type === 'create'
+          && operation?.phase !== 'settled'
+          && (operation?.sourceSessionId === cached.entry.sessionId
+            || operation?.targetSessionId === thread.headSessionId)));
+      const threadActive = thread.lifeState === 'executing' || thread.lifeState === 'pending-commands';
+      if (!handoffInProgress && !replacementPending && !threadActive) {
+        _coderThreadLiveEntries.delete(threadId);
+        continue;
+      }
+      // 交接占位：head runtime 尚未上线（退役窗口 / successor 启动中），
+      // 线程条目保持原位呈现为断连过渡态，不闪失、不重复。
+      addEntry({
+        ...cached.entry,
+        status: 'disconnected',
+        transitionPending: true,
+      });
     }
   }
+  // The host snapshot may point at whichever session was most recently started.
+  // If that runtime is already represented by a child entry, do not synthesize it
+  // again under the host row.
+  const syntheticRuntimeId = String(
+    prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId || ''
+  ).trim();
+  if (!syntheticRuntimeId || !childRuntimeIds.has(syntheticRuntimeId)) {
+    addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+  }
 
-  // 会话身份路由：宿主与投影条目共享 hostAgentId，operation 必须再按
-  // sessionType 分流——宿主条目只收 main 会话的 operation，投影条目只收
-  // 自身份（coder）的。否则同一占位会在两个条目下镜像。
-  const expectedOperationSessionType = isProjectionEntry ? (childSessionType || 'main') : 'main';
+  // operation 按 agentId 归属（APP 级）——无并列身份后无需二次分流。
   const operations = typeof listSidebarOperations === 'function'
-    ? listSidebarOperations((operation) => (
-      operation.agentId === hostAgentId
-      && String(operation.sessionType || 'main') === expectedOperationSessionType
-    ))
+    ? listSidebarOperations((operation) => operation.agentId === hostAgentId)
     : [];
   for (const operation of operations) {
     if (['settled', 'failed'].includes(operation.phase)) continue;
@@ -405,7 +451,6 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     // Programming-helper groups every runtime by project. Its operation creator
     // must provide this identity explicitly; never infer it from a current or
     // historical session, because either can belong to another project.
-    // Guard by hostAgentId so the coder projection entry is covered too.
     if (hostAgentId === 'programming-helper' && !operation.projectDir) continue;
 
     if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {

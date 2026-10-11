@@ -1180,6 +1180,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'hero') return renderWorkspaceHero(agent, block);
   if (block.type === 'launcher-grid') return renderWorkspaceLauncherGrid(agent, block);
   if (block.type === 'action-group') return renderWorkspaceActionGroup(block);
+  if (block.type === 'coder-entry') return renderCoderEntryBlock(agent, block);
   if (block.type === 'session-list') return renderWorkspaceSessionList(agent, block);
   if (block.type === 'studio-features') return renderStudioFeaturesBlock(agent, block);
   if (block.type === 'studio-repository') return renderStudioRepositoryBlock(agent, block);

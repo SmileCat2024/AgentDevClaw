@@ -45,34 +45,99 @@ function loadRuntimeStatus(overrides = {}) {
   return ctx;
 }
 
+describe('runtime-status: coder live session projection', () => {
+  it('renders one stable thread entry across head advance, zombie overlap and head-runtime gap, without surfacing idle threads', () => {
+    const ctx = loadRuntimeStatus();
+    ctx.window.ClawThreads = { threads: [], sessionIndex: {} };
+    const entries = ctx.run(`(() => {
+      // coder 是独立 APP（ADR-0025）：host 即 coder APP 本体，线程按 agentId 归属。
+      const host = {
+        id: 'coder', agentId: 'coder', source: 'prebuilt', workspace_sessions: { sessions: [] },
+      };
+      const child = (sessionId, runtimeId, name) => ({
+        id: runtimeId, source: 'child', parent_id: 'coder',
+        sidebar_entry_id: 'coder',
+        runtime_session_id: runtimeId, active_workspace_session_id: sessionId,
+        active_workspace_display_name: name, connected: true,
+        created_at: runtimeId === 'old-runtime' ? '2026-10-10T09:00:00.000Z' : '2026-10-10T09:05:00.000Z',
+      });
+      const activeThread = {
+        threadId: 'wt-1', agentId: 'coder',
+        title: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head', 'new-head'],
+        status: 'open', lifeState: 'executing', handoffStartedAt: Date.now(),
+      };
+      window.ClawThreads.threads = [activeThread, {
+        threadId: 'wt-sleeping', agentId: 'coder',
+        title: '休眠的不应展示', headSessionId: 'sleeping-head', sessionIds: ['sleeping-head'],
+        status: 'open', lifeState: 'idle',
+      }];
+      window.ClawThreads.sessionIndex['coder::old-head'] = activeThread;
+      window.ClawThreads.sessionIndex['coder::new-head'] = activeThread;
+      // 换代前：head 仍是旧会话，旧 runtime 即线程条目。
+      const beforeRotation = collectRuntimeEntriesForPrebuilt(host, [
+        child('old-head', 'old-runtime', '旧会话标题'),
+      ]);
+      // head 已推进：旧 runtime 退役滞留（zombie）与 successor runtime 并存，
+      // 线程条目只呈现 head——同线程不得出现并列双条目。
+      activeThread.headSessionId = 'new-head';
+      const zombieOverlap = collectRuntimeEntriesForPrebuilt(host, [
+        child('old-head', 'old-runtime', '旧会话标题'),
+        child('new-head', 'new-runtime', '新会话标题'),
+      ]);
+      const afterZombieGone = collectRuntimeEntriesForPrebuilt(host, [
+        child('new-head', 'new-runtime', '新会话标题'),
+      ]);
+      const headRuntimeGap = collectRuntimeEntriesForPrebuilt(host, []);
+      return { beforeRotation, zombieOverlap, afterZombieGone, headRuntimeGap };
+    })()`);
+    assert.equal(entries.beforeRotation.length, 1);
+    assert.equal(entries.beforeRotation[0].runtimeId, 'old-runtime');
+    assert.equal(entries.beforeRotation[0].threadId, 'wt-1');
+    assert.equal(entries.zombieOverlap.length, 1);
+    assert.equal(entries.zombieOverlap[0].runtimeId, 'new-runtime');
+    assert.equal(entries.zombieOverlap[0].threadId, 'wt-1');
+    assert.equal(entries.zombieOverlap[0].name, '工作对话');
+    // 稳定身份锚：换头后条目沿用线程首见 runtime 的 createdAt，不换位。
+    assert.equal(entries.zombieOverlap[0].createdAt, '2026-10-10T09:00:00.000Z');
+    assert.equal(entries.afterZombieGone.length, 1);
+    assert.equal(entries.afterZombieGone[0].runtimeId, 'new-runtime');
+    assert.equal(entries.headRuntimeGap.length, 1);
+    assert.equal(entries.headRuntimeGap[0].status, 'disconnected');
+    assert.equal(entries.headRuntimeGap[0].transitionPending, true);
+    assert.equal(
+      [...entries.beforeRotation, ...entries.zombieOverlap, ...entries.afterZombieGone, ...entries.headRuntimeGap]
+        .some((entry) => entry.name === '休眠的不应展示'),
+      false,
+    );
+  });
+});
+
 describe('runtime-status: sidebar identity ownership', () => {
-  it('routes a coder child runtime to the coder sidebar projection, not the PH host row', () => {
+  it('routes a coder child runtime to the coder APP row via sidebar_entry_id, not the PH host row', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run(`(() => {
       const host = {
         id: 'programming-helper', source: 'prebuilt',
         workspace_sessions: { sessions: [] }
       };
-      const projection = {
-        id: 'programming-helper:coder', agentId: 'programming-helper',
-        sessionType: 'coder', source: 'prebuilt',
+      const coderApp = {
+        id: 'coder', agentId: 'coder', source: 'prebuilt',
         workspace_sessions: { sessions: [] }
       };
       const child = {
-        id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
-        sessionType: 'coder', sidebar_entry_id: 'programming-helper:coder',
+        id: 'coder-runtime', source: 'child', parent_id: 'coder',
+        sidebar_entry_id: 'coder',
         runtime_session_id: 'coder-runtime', active_workspace_session_id: 'coder-session',
         connected: true
       };
       return {
         host: collectRuntimeEntriesForPrebuilt(host, [child]),
-        coder: collectRuntimeEntriesForPrebuilt(projection, [child])
+        coder: collectRuntimeEntriesForPrebuilt(coderApp, [child])
       };
     })()`);
     assert.equal(result.host.length, 0);
     assert.equal(result.coder.length, 1);
-    assert.equal(result.coder[0].sessionType, 'coder');
-    assert.equal(result.coder[0].sidebarEntryId, 'programming-helper:coder');
+    assert.equal(result.coder[0].sidebarEntryId, 'coder');
   });
 });
 
@@ -170,7 +235,7 @@ describe('runtime-status: sidebar operation projection', () => {
   });
 });
 
-// ── sidebar operation identity routing（宿主/投影条目归属） ────
+// ── sidebar operation identity routing（operation 按 APP agentId 归属） ────
 
 describe('runtime-status: sidebar operation identity routing', () => {
   const PH_HOST = `
@@ -178,14 +243,13 @@ describe('runtime-status: sidebar operation identity routing', () => {
       id: 'programming-helper', source: 'prebuilt',
       workspace_sessions: { sessions: [] }
     };
-    const projection = {
-      id: 'programming-helper:coder', agentId: 'programming-helper',
-      sessionType: 'coder', source: 'prebuilt',
+    const coderApp = {
+      id: 'coder', agentId: 'coder', source: 'prebuilt',
       workspace_sessions: { sessions: [] }
     };
   `;
 
-  it('renders a main-session pending placeholder on the host row only, never on the coder projection', () => {
+  it('renders a main-session pending placeholder on the PH row only, never on the coder APP row', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run(`(() => {
       ${PH_HOST}
@@ -196,7 +260,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
       });
       return {
         host: collectRuntimeEntriesForPrebuilt(host, []),
-        coder: collectRuntimeEntriesForPrebuilt(projection, [])
+        coder: collectRuntimeEntriesForPrebuilt(coderApp, [])
       };
     })()`);
     assert.equal(result.host.length, 1);
@@ -204,121 +268,72 @@ describe('runtime-status: sidebar operation identity routing', () => {
     assert.equal(result.coder.length, 0);
   });
 
-  it('routes a coder-session operation placeholder to the projection row only', () => {
+  it('routes a coder-session operation placeholder to the coder APP row only', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run(`(() => {
       ${PH_HOST}
       beginSidebarOperation({
         operationId: 'summary:coder-1', type: 'create', kind: 'summary', phase: 'generating',
-        agentId: 'programming-helper', sourceSessionId: 'coder-session-1', sessionType: 'coder',
+        agentId: 'coder', sourceSessionId: 'coder-session-1',
         projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a'
       });
       return {
         host: collectRuntimeEntriesForPrebuilt(host, []),
-        coder: collectRuntimeEntriesForPrebuilt(projection, [])
+        coder: collectRuntimeEntriesForPrebuilt(coderApp, [])
       };
     })()`);
     assert.equal(result.host.length, 0);
     assert.equal(result.coder.length, 1);
     assert.equal(result.coder[0].source, 'operation-pending');
-    assert.equal(result.coder[0].sidebarOperation.sessionType, 'coder');
   });
 
-  it('marks a coder delete operation on its own child entry and never tombstones it on the host row', () => {
+  it('marks a coder delete operation on its own child entry and never tombstones it on the PH row', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run(`(() => {
       ${PH_HOST}
       const child = {
-        id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
-        sessionType: 'coder', sidebar_entry_id: 'programming-helper:coder',
+        id: 'coder-runtime', source: 'child', parent_id: 'coder',
+        sidebar_entry_id: 'coder',
         runtime_session_id: 'coder-runtime', active_workspace_session_id: 'coder-session-1',
         connected: true
       };
       beginSidebarOperation({
         operationId: 'delete:coder-1', type: 'delete', kind: 'delete', phase: 'committing',
-        agentId: 'programming-helper', sourceSessionId: 'coder-session-1',
-        sourceRuntimeId: 'coder-runtime', sessionType: 'coder'
+        agentId: 'coder', sourceSessionId: 'coder-session-1',
+        sourceRuntimeId: 'coder-runtime'
       });
       return {
         host: collectRuntimeEntriesForPrebuilt(host, [child]),
-        coder: collectRuntimeEntriesForPrebuilt(projection, [child])
+        coder: collectRuntimeEntriesForPrebuilt(coderApp, [child])
       };
     })()`);
-    // 宿主条目：child 被身份排除，operation 也被过滤 → 无 tombstone 镜像
+    // PH 行：child 归属 coder APP，operation 也按 agentId 路由到 coder → 无镜像
     assert.equal(result.host.length, 0);
-    // 投影条目：child entry 保留并挂上删除标记
+    // coder APP 行：child entry 保留并挂上删除标记
     assert.equal(result.coder.length, 1);
     assert.equal(result.coder[0].deleting, true);
   });
 
-  it('applies the programming-helper projectDir guard to the projection row as well', () => {
+  it('keeps the PH projectDir guard PH-specific: coder APP renders dir-less placeholders', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run(`(() => {
       ${PH_HOST}
       beginSidebarOperation({
         operationId: 'summary:coder-no-dir', type: 'create', kind: 'summary', phase: 'generating',
-        agentId: 'programming-helper', sourceSessionId: 'coder-session-1', sessionType: 'coder'
+        agentId: 'coder', sourceSessionId: 'coder-session-1'
+      });
+      beginSidebarOperation({
+        operationId: 'summary:ph-no-dir', type: 'create', kind: 'summary', phase: 'generating',
+        agentId: 'programming-helper', sourceSessionId: 'main-session-1'
       });
       return {
         host: collectRuntimeEntriesForPrebuilt(host, []),
-        coder: collectRuntimeEntriesForPrebuilt(projection, [])
+        coder: collectRuntimeEntriesForPrebuilt(coderApp, [])
       };
     })()`);
+    // PH 的项目分组要求显式目录；coder APP 条目归属由线程/会话锚定，不设此 gate。
     assert.equal(result.host.length, 0);
-    assert.equal(result.coder.length, 0);
-  });
-
-  it('resolves operation sessionType from the child runtime snapshot, thread index, or default main', () => {
-    const ctx = loadRuntimeStatus();
-    const result = ctx.run(`(() => {
-      allAgents = [{
-        id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
-        sessionType: 'coder',
-        active_workspace_session_id: 'coder-session-live'
-      }];
-      window.isThreadHostAgentId = (agentId, sessionId) => sessionId === 'coder-session-threaded';
-      return {
-        runtime: beginSidebarOperation({
-          operationId: 'resolve:runtime', type: 'create', kind: 'summary',
-          agentId: 'programming-helper', sourceSessionId: 'coder-session-live'
-        }).sessionType,
-        thread: beginSidebarOperation({
-          operationId: 'resolve:thread', type: 'create', kind: 'summary',
-          agentId: 'programming-helper', sourceSessionId: 'coder-session-threaded'
-        }).sessionType,
-        main: beginSidebarOperation({
-          operationId: 'resolve:main', type: 'create', kind: 'summary',
-          agentId: 'programming-helper', sourceSessionId: 'main-session-x'
-        }).sessionType,
-        explicit: beginSidebarOperation({
-          operationId: 'resolve:explicit', type: 'create', kind: 'summary',
-          agentId: 'programming-helper', sourceSessionId: 'coder-session-live',
-          sessionType: 'main'
-        }).sessionType
-      };
-    })()`);
-    assert.equal(result.runtime, 'coder');
-    assert.equal(result.thread, 'coder');
-    assert.equal(result.main, 'main');
-    assert.equal(result.explicit, 'main');
-  });
-
-  it('keeps sessionType stable across updateSidebarOperation re-normalization', () => {
-    const ctx = loadRuntimeStatus();
-    const sessionType = ctx.run(`(() => {
-      allAgents = [{
-        id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
-        sessionType: 'coder', active_workspace_session_id: 'coder-session-live'
-      }];
-      const operation = beginSidebarOperation({
-        operationId: 'update:keep-type', type: 'create', kind: 'summary', phase: 'generating',
-        agentId: 'programming-helper', sourceSessionId: 'coder-session-live'
-      });
-      allAgents = [];
-      updateSidebarOperation('update:keep-type', { phase: 'target-starting', targetSessionId: 'next' });
-      return getSidebarOperation('update:keep-type').sessionType;
-    })()`);
-    assert.equal(sessionType, 'coder');
+    assert.equal(result.coder.length, 1);
   });
 
   it('keeps the placeholder while no live child runtime presents the target session', () => {
@@ -384,58 +399,45 @@ describe('runtime-status: sidebar operation identity routing', () => {
   });
 });
 
-// ── coder projection project directory fallback ────────────────
+// ── coder APP project directory fallback ────────────────────────
 
 describe('runtime-status: coder projection project directory fallback', () => {
-  const PROJECTION = `
-    const projection = {
-      id: 'programming-helper:coder', agentId: 'programming-helper',
-      sessionType: 'coder', source: 'prebuilt',
+  const CODER_APP = `
+    const coderApp = {
+      id: 'coder', agentId: 'coder', source: 'prebuilt',
       workspace_sessions: { sessions: [] }
     };
     const child = {
-      id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
-      sessionType: 'coder', sidebar_entry_id: 'programming-helper:coder',
+      id: 'coder-runtime', source: 'child', parent_id: 'coder',
+      sidebar_entry_id: 'coder',
       runtime_session_id: 'coder-runtime', active_workspace_session_id: 'coder-session-1',
       connected: true
     };
   `;
 
-  it('resolves a coder child project directory from the host session map when open_directory is missing', () => {
+  it('does not read the PH host session map (PH-specific grouping) — no directory when open_directory is missing', () => {
     const ctx = loadRuntimeStatus();
     const entry = ctx.run(`(() => {
       allAgents = [{
         id: 'programming-helper', source: 'prebuilt',
         workspace_state: { phProjects: [] },
-        workspace_sessions: { sessions: [{ id: 'coder-session-1', openDirectory: 'D:\\\\code\\\\project-a' }] }
+        workspace_sessions: { sessions: [{ id: 'coder-session-1', openDirectory: 'D:\\code\\project-a' }] }
       }];
-      ${PROJECTION}
-      return collectRuntimeEntriesForPrebuilt(projection, [child])[0];
+      ${CODER_APP}
+      return collectRuntimeEntriesForPrebuilt(coderApp, [child])[0];
     })()`);
-    assert.equal(entry.projectDir, 'D:\\code\\project-a');
-    assert.equal(entry.projectName, 'project-a');
+    // sessionDirMap / phProjects 大小写校正都是 PH 宿主专属；coder APP 的
+    // 目录来源只有 server 附带的 open_directory（或线程缓存）。
+    assert.equal(entry.projectDir, undefined);
+    assert.equal(entry.projectName, undefined);
   });
 
-  it('prefers the case-corrected directory from the host phProjects map', () => {
+  it('falls back to the runtime open_directory when the server attaches it', () => {
     const ctx = loadRuntimeStatus();
     const entry = ctx.run(`(() => {
-      allAgents = [{
-        id: 'programming-helper', source: 'prebuilt',
-        workspace_state: { phProjects: [{ id: 'dir:d:/code/projecta', openDirectory: 'D:\\\\Code\\\\ProjectA' }] },
-        workspace_sessions: { sessions: [{ id: 'coder-session-1', openDirectory: 'd:\\\\code\\\\projecta' }] }
-      }];
-      ${PROJECTION}
-      return collectRuntimeEntriesForPrebuilt(projection, [child])[0];
-    })()`);
-    assert.equal(entry.projectDir, 'D:\\Code\\ProjectA');
-  });
-
-  it('falls back to the runtime open_directory when no host record is available', () => {
-    const ctx = loadRuntimeStatus();
-    const entry = ctx.run(`(() => {
-      ${PROJECTION}
+      ${CODER_APP}
       child.open_directory = 'D:\\\\code\\\\project-b';
-      return collectRuntimeEntriesForPrebuilt(projection, [child])[0];
+      return collectRuntimeEntriesForPrebuilt(coderApp, [child])[0];
     })()`);
     assert.equal(entry.projectDir, 'D:\\code\\project-b');
     assert.equal(entry.projectName, 'project-b');

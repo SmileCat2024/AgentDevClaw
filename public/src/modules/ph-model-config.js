@@ -43,8 +43,8 @@ function ensurePhModelConfigHost() {
 function _renderModelConfigContent(agent, presets) {
   const isZh = currentLanguage === 'zh';
   const current = agent.modelPresets || {};
-  // coder 身份（编程小助手工作空间内 sessionType=coder）的模型配置存
-  // agent-configs/coder.json，与主身份分文件；打开面板时单独 fetch 缓存。
+  // coder APP（独立工作空间，ADR-0025）的模型配置存 agent-configs/coder.json，
+  // 与主 APP 分文件；编程小助手面板代管展示，打开时单独 fetch 缓存。
   const showCoderRow = window.phModelConfigAgentId === 'programming-helper';
   const coderCurrent = (window.ClawFW && window.ClawFW._coderModelPresets) || {};
   const roles = [
@@ -134,11 +134,11 @@ const PH_FEATURE_PAGES = {
   },
   'feature-coder': {
     identityKey: 'coder',
-    scopeId: 'coder',
+    scopeId: 'agent',
     scopeAgentId: 'coder',
     includeFeatures: PH_CODER_INCLUDE_FEATURES,
-    subtitleZh: 'Coder 自主编码身份的 Feature 配置，仅含其实际挂载的 Feature',
-    subtitleEn: 'Feature config for the Coder identity, limited to its mounted features',
+    subtitleZh: 'Coder APP 的 Feature 配置，仅含其实际挂载的 Feature',
+    subtitleEn: 'Feature config for the Coder APP, limited to its mounted features',
   },
 };
 

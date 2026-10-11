@@ -1439,13 +1439,10 @@ function isUiOnlyUnit(agent) {
   return !!(agent && agent.source === 'prebuilt' && agent.launchMode === 'ui-only');
 }
 
-const WORKSPACE_HOST_UNIT_IDS = new Set(['agent-creator', 'feature-creator', 'agent-studio', 'qqbot', 'programming-helper', 'flow-workspace', 'work-group']);
+const WORKSPACE_HOST_UNIT_IDS = new Set(['agent-creator', 'feature-creator', 'agent-studio', 'qqbot', 'programming-helper', 'coder', 'flow-workspace', 'work-group']);
 
 function isWorkspaceHostUnit(agent) {
   if (!agent || agent.source !== 'prebuilt') return false;
-  // 投影条目（identities[].sidebarEntry 展开的独立入口，id 形如
-  // 'programming-helper:coder'）按其宿主 agentId 归入 host 语义。
-  if (agent.agentId) return WORKSPACE_HOST_UNIT_IDS.has(agent.agentId);
   return WORKSPACE_HOST_UNIT_IDS.has(agent.id);
 }
 
@@ -1453,8 +1450,8 @@ function isTablessHostSurface(agent) {
   return isWorkspaceHostUnit(agent) && agent?.id !== 'agent-studio';
 }
 
-// PH 风格工作区（项目列表 / 会话列表首页）：编程小助手本体。
-// 投影身份（coder）不在此列——其首页是线程视图（coder-threads-ui.js）。
+// PH 风格工作区（项目列表 / 会话列表首页）：编程小助手本体。Coder APP
+// 不在此列——其首页是线程视图（coder-threads-ui.js，经 ui.home blocks 渲染）。
 const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper']);
 
 function isPhStyleWorkspaceAgent(agent = getCurrentAgentRecord()) {

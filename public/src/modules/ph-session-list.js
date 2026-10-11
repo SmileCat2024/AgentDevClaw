@@ -39,8 +39,7 @@ window.switchPhSessionTab = (btn) => {
   }
   // If currently searching, update tab filter and re-render search panel
   if (phSearchQuery.trim()) {
-    // coder 线程不参与会话搜索：搜索态下点击 coder tab 按主会话过滤
-    phSearchTab = targetTab === 'coder' ? 'main' : targetTab;
+    phSearchTab = targetTab;
     const activeAgent = getCurrentAgentRecord();
     _updatePhSearchPanelDom(activeAgent?.id || 'programming-helper');
     return;
@@ -152,13 +151,7 @@ window.phOnSearchInput = (value) => {
       const data = await resp.json();
       // Guard against stale results
       if (phSearchQuery.trim() !== trimmed) return;
-      // coder 会话不进入编程小助手入口的搜索结果（线程视图承接它们）
-      const coderSessionIds = new Set(
-        (activeAgent?.workspace_sessions?.sessions || [])
-          .filter((s) => String(s?.sessionType || '').trim() === 'coder')
-          .map((s) => String(s?.id || '')),
-      );
-      phSearchResults = (data.results || []).filter((r) => !coderSessionIds.has(String(r?.sessionId || '')));
+      phSearchResults = data.results || [];
       phSearchLoading = false;
       _updatePhSearchPanelDom(agentId);
     } catch (err) {

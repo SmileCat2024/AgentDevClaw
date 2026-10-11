@@ -27,6 +27,37 @@ function getCurrentRuntimeRecord() {
   return null;
 }
 
+// 视图绑定会话自身的标题（会话列表事实，不随 runtime 生命周期漂移）：
+// 顶栏标题兜底链优先于此，避免落到宿主 active（跨会话共享可变状态，
+// 接续退役窗口会串成另一个会话的标题）。
+function _titleForBoundSession() {
+  try {
+    const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId);
+    const hostRecord = getCurrentHostAgentRecord();
+    // 绑定会话解析：viewer 绑定优先；接续退役窗口 runtime 态被清时回退
+    // activeConversation（视图身份仍指向线程会话，这是「等待重绑」不是离开）。
+    const fallbackSessionId = normalizeAgentIdentity(window.ClawThreads?.activeConversation?.sessionId);
+    const sessionId = (runtimeId && typeof getRuntimeWorkspaceSessionId === 'function'
+      ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim() : '')
+      || (hostRecord && fallbackSessionId && normalizeAgentIdentity(window.ClawThreads?.activeConversation?.agentId) === normalizeAgentIdentity(hostRecord.id)
+        ? fallbackSessionId
+        : '');
+    if (!hostRecord || !sessionId) return '';
+    const sessions = Array.isArray(hostRecord.workspace_sessions?.sessions)
+      ? hostRecord.workspace_sessions.sessions : [];
+    const record = sessions.find((s) => normalizeAgentIdentity(s?.id) === sessionId);
+    if (record?.title) return String(record.title).trim();
+    // 线程宿主 APP（coder）的会话可能不在轻量会话切片（如接续退役窗口
+    // 内索引尚未更新）：线程事实兜底——head 会话标题（threads wire 字段），
+    // 不落宿主名（历史症状：顶栏串成 'coder'）。
+    const thread = typeof window.getThreadForSession === 'function'
+      ? window.getThreadForSession(hostRecord.id, sessionId) : null;
+    return String(thread?.headSessionTitle || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 function getCurrentVisualAgentTitle() {
   const runtimeRecord = getCurrentRuntimeRecord();
   const hostRecord = getCurrentHostAgentRecord();
@@ -35,6 +66,7 @@ function getCurrentVisualAgentTitle() {
       || runtimeRecord.active_workspace_agent_name
       || runtimeRecord.active_workspace_session_title
       || runtimeRecord.name
+      || _titleForBoundSession()
       || hostRecord?.active_workspace_display_name
       || hostRecord?.active_workspace_session_title
       || hostRecord?.name
@@ -54,7 +86,7 @@ function getCurrentVisualAgentTitle() {
       : '';
     if (runtimeTitle) return runtimeTitle;
   }
-  return hostRecord?.name || t('page_title');
+  return _titleForBoundSession() || hostRecord?.name || t('page_title');
 }
 
 function updateCurrentAgentChrome() {
@@ -85,8 +117,53 @@ function getCurrentAgentRecord() {
   return getCurrentHostAgentRecord();
 }
 
+// on-demand APP 的粘性记忆（ADR-0025）：条目因线程域非空首次出现后，
+// 线程域再次清空也不消失（归档区入口不能随归档动作消失）。记忆按
+// 浏览器持久化，用户清空数据或改声明是唯一重置途径。
+const _onDemandSeenApps = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem('claw:onDemandAppsSeen') || '[]')); } catch { return new Set(); }
+})();
+
+/**
+ * APP 侧栏存在性判定（ADR-0025 判定源禁令）：persistent 直显；
+ * on-demand 的判定源只能是持久事实——服务端 hasThreadDomain（线程域
+ * 非空）或本机粘性记忆。runtime 存活等易变运行态永不参与存在性判定。
+ */
+function isPrebuiltAppVisible(agent) {
+  if (agent.visibility !== 'on-demand') return true;
+  if (agent.hasThreadDomain === true) {
+    if (!_onDemandSeenApps.has(agent.id)) {
+      _onDemandSeenApps.add(agent.id);
+      try { localStorage.setItem('claw:onDemandAppsSeen', JSON.stringify([..._onDemandSeenApps])); } catch { /* ignore */ }
+    }
+    return true;
+  }
+  return _onDemandSeenApps.has(agent.id);
+}
+
+/**
+ * host 相邻排序（ADR-0025）：声明 host 的 APP 紧随其宿主之后（如 Coder
+ * 紧随智能编码空间），表达同域绑定。宿主缺席或自身已隐藏时保持原序。
+ */
+function orderPrebuiltByHost(list) {
+  const result = [];
+  const taken = new Set();
+  for (const agent of list) {
+    if (taken.has(agent.id)) continue;
+    result.push(agent);
+    taken.add(agent.id);
+    for (const hosted of list) {
+      if (taken.has(hosted.id)) continue;
+      if (String(hosted.host || '').trim() !== agent.id) continue;
+      result.push(hosted);
+      taken.add(hosted.id);
+    }
+  }
+  return result;
+}
+
 function groupConnectedAgents(agents) {
-  // 左侧分类使用 sidebarGroup；agentId 只描述真实运行宿主。
+  // 左侧分类使用 sidebarGroup。
   const TOOL_AGENT_IDS = new Set(['programming-helper']);
   const WORK_GROUP_IDS = new Set(['work-group']);
   const prebuiltIds = new Set(
@@ -100,20 +177,21 @@ function groupConnectedAgents(agents) {
     const parentId = String(getParentAgentId(agent) || '').trim();
     return !parentId || !prebuiltIds.has(parentId);
   });
-  const allPrebuilt = agents.filter((agent) => agent.source === 'prebuilt');
-  // 投影条目（id 形如 'programming-helper:coder'）按宿主 agentId 归组
+  const allPrebuilt = orderPrebuiltByHost(
+    agents.filter((agent) => agent.source === 'prebuilt' && isPrebuiltAppVisible(agent))
+  );
   const groupKeyOf = (agent) => String(agent.sidebarGroup || '').trim();
-  const legacyGroupKeyOf = (agent) => String(agent.agentId || agent.id || '').trim();
+  const idKeyOf = (agent) => String(agent.id || '').trim();
   return {
     prebuilt: allPrebuilt.filter((agent) => {
       const group = groupKeyOf(agent);
-      const legacyGroup = legacyGroupKeyOf(agent);
+      const idKey = idKeyOf(agent);
       return !['tool', 'work-group'].includes(group)
-        && !TOOL_AGENT_IDS.has(legacyGroup)
-        && !WORK_GROUP_IDS.has(legacyGroup);
+        && !TOOL_AGENT_IDS.has(idKey)
+        && !WORK_GROUP_IDS.has(idKey);
     }),
-    workGroup: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'work-group' || WORK_GROUP_IDS.has(legacyGroupKeyOf(agent))),
-    tool: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'tool' || TOOL_AGENT_IDS.has(legacyGroupKeyOf(agent))),
+    workGroup: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'work-group' || WORK_GROUP_IDS.has(idKeyOf(agent))),
+    tool: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'tool' || TOOL_AGENT_IDS.has(idKeyOf(agent))),
     external: orphanRuntimeAgents,
   };
 }
@@ -160,19 +238,14 @@ window.handlePrebuiltAgentClick = async (agentId) => {
   }
 
   if (isWorkspaceHostUnit(prebuiltAgent)) {
-    // 投影条目（如 programming-helper:coder）：详情数据挂宿主命名空间，
-    // surface 键挂条目自身（entry id），侧栏高亮与记忆也按条目记录。
-    const hostAgentId = prebuiltAgent.agentId || prebuiltAgent.id;
     focusedAgentId = agentId;
     renderAgentList();
-    if (!loadedAgentDetailIds.has(hostAgentId)) {
+    if (!loadedAgentDetailIds.has(agentId)) {
       container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
     }
-    await loadAgentDetail(hostAgentId);
+    await loadAgentDetail(agentId);
     loadedAgentDetailIds.add(agentId);
-    if (prebuiltAgent.agentId) {
-      try { localStorage.setItem('claw:lastFocusedEntryId', agentId); } catch { /* ignore */ }
-    }
+    try { localStorage.setItem('claw:lastFocusedEntryId', agentId); } catch { /* ignore */ }
     selectWorkspaceSurface(prebuiltAgent.id, { skipFeaturePanel: true });
     return;
   }
@@ -629,10 +702,20 @@ window.switchAgent = async (newAgentId) => {
     // 用户主动切换：立即冻结 viewer 侧会话身份。必须在此之前用 allAgents
     // 派生值（此时绑定尚未写入，读到的是用户点击时刻列表展示的会话），
     // 之后 getRuntimeContextKey 不再随外部入口抢占的 host activeSessionId 漂移。
+    // 派生为空（点击时刻 allAgents 尚无该 runtime 的会话事实）时绑定必须
+    // 缺席而非落宿主 active 兜底：冻结语义下绑定永不重写，宿主 active 会
+    // 毒化常驻视图的会话解析（线程徽标 / 输入路由失联直到再次手动切换）；
+    // 绑定缺席时 getRuntimeWorkspaceSessionId 每次按最新 allAgents 现值派
+    // 生，allAgents 就绪后自愈。
     setViewerSessionBinding(
       runtimeAgentId,
-      _deriveRuntimeSessionIdFromAgents(runtimeAgentId) || getActiveWorkspaceSessionId(targetAgent),
+      _deriveRuntimeSessionIdFromAgents(runtimeAgentId),
     );
+    if (typeof _syncActiveThreadSubscription === 'function') _syncActiveThreadSubscription();
+    // 视图切换即重估线程徽标与暂存气泡（与模型名/用量同级的跟随性）：
+    // 否则接力中徽标滞留到下一次线程刷新（≤20s）才消失/出现。
+    if (typeof window.updateThreadHeaderIndicator === 'function') window.updateThreadHeaderIndicator();
+    if (typeof window.updateQueueIndicator === 'function') window.updateQueueIndicator();
     // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开；
     // 远程条目按握手 capability 门控（ADR-0011）：具备 capabilities.write 的
     // 连接与本地体验一致（runtimeAgentId 可能已被 resolveRuntimeRef 解析为裸
@@ -925,6 +1008,35 @@ async function handleCoreResponsesNotFound(pollToken) {
     schedulePoll(POLL_FAST_INTERVAL_MS);
     return true;
   }
+  // 接续窗口豁免：旧 head 退役是预期事实（挡板已立、successor 尚未
+  // ready），此间的 /responses 404 不是会话消失——保持视图与选中不动，
+  // 等待 head-advanced 事件原地重绑到 successor（thread-store）。窗口判
+  // 定以 threads 挡板事实为准（5 分钟过期规则与 THREAD_HANDOFF_STALE_MS
+  // 同步维护）；挡板超时或无线程时落回原 404 处理。
+  {
+    const isFreshBarrier = (thread) => !!thread && Number(thread.handoffStartedAt) > 0
+      && Date.now() - Number(thread.handoffStartedAt) < 5 * 60 * 1000;
+    const runtimeSessionId = typeof getRuntimeWorkspaceSessionId === 'function'
+      ? String(getRuntimeWorkspaceSessionId(pollRuntimeId) || '').trim() : '';
+    const hostRecord = typeof getCurrentHostAgentRecord === 'function' ? getCurrentHostAgentRecord() : null;
+    const lookupThread = () => (runtimeSessionId && hostRecord?.id
+      && typeof window.getThreadForSession === 'function'
+      ? window.getThreadForSession(hostRecord.id, runtimeSessionId) : null);
+    let handoffThread = lookupThread();
+    // 豁免判定不得建立在可能过期的线程缓存上（SSE 丢失 / 刷新竞态会把
+    // 预期退役误判成会话消失）：会话映射到线程但挡板不新鲜时，先强制
+    // 刷新线程事实再重判。刷新后的线程事实同时驱动接力指示器与暂存气
+    // 泡渲染（refreshThreads 收尾统一刷新），404 本身即接续信号。
+    if (handoffThread && !isFreshBarrier(handoffThread)
+      && typeof window.refreshThreads === 'function') {
+      await window.refreshThreads(true).catch(() => {});
+      handoffThread = lookupThread();
+    }
+    if (isFreshBarrier(handoffThread)) {
+      schedulePoll(POLL_FAST_INTERVAL_MS);
+      return true;
+    }
+  }
   const failedRuntimeRecord = getRuntimeRecord(pollRuntimeId);
   const fallbackId = resolveWorkspaceFallbackAgentId(failedRuntimeRecord);
   const failureCommitted = commitSessionViewPatch(
@@ -1068,7 +1180,6 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
   // stale check 拒绝"的周期丢失 seq 进度，但那些周期本来就已放弃本次
   // 渲染，下周期 count 对账仍会兜底；这里先记，避免同 seq 被重复取数。
   _appliedMessagesSeq.set(pollRuntimeId, msgProbe ? msgProbe.seq : 0);
-
   const messagesCommitted = commitSessionViewPatch(pollToken, { messages }, ({ previous, current }) => {
     // Clear session loading indicator once messages are available
     if (current.messages.length > 0) clearChatLoadingSession();
@@ -1597,7 +1708,8 @@ async function runPollCycle() {
 // _getSessionInputCacheKey retained here — shared by many domains (poll, input-render, etc.)
 // Use the same immutable runtime-context identity as rendering and optimistic data.
 function _getSessionInputCacheKey() {
-  return getRuntimeContextKey();
+  const threadId = String(window.getActiveConversationTarget?.()?.threadId || '').trim();
+  return threadId ? `thread:${threadId}` : getRuntimeContextKey();
 }
 
 applyTheme(currentTheme);

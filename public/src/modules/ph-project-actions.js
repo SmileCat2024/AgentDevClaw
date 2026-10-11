@@ -49,8 +49,8 @@ window.phOpenModelConfig = async () => {
     }
     if (presets.length && stillOpen()) renderPhModelConfigOverlay(agent, presets);
   }
-  // coder 身份的模型配置存 agent-configs/coder.json（运行时同源读取），
-  // 与主身份分开拉取；面板渲染与保存共用这份缓存。
+  // coder APP 的模型配置存 agent-configs/coder.json（agentId=coder 寻址），
+  // 与主 APP 分开拉取；面板渲染与保存共用这份缓存。
   if (window.phModelConfigAgentId === 'programming-helper'
     && !(window.ClawFW && window.ClawFW._coderModelPresets)) {
     try {
@@ -109,8 +109,8 @@ window.phAutoSaveModelConfig = async () => {
     }
   }
 
-  // coder 行单独保存到 agent-configs/coder.json 的 default 角色
-  // （运行时按 sessionType=coder 读取该文件）；面板无 coder 行时跳过
+  // coder 行单独保存到 agent-configs/coder.json 的 default 角色（coder APP
+  // 运行时按 agentId=coder 读取该文件）；面板无 coder 行时跳过
   const hasCoderRow = Object.prototype.hasOwnProperty.call(collected, 'coder');
 
   try {

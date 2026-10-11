@@ -136,15 +136,13 @@ function _runtimeSignals() {
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   let mountedNames = null;
   if (fc && typeof getCurrentControlAgentId === 'function') {
-    // 只对本地编程小助手会话应用 $mount 装配事实：远程会话（record 不在
-    // allAgents）的装配声明不在本机 overview 里；其他宿主不在装配域。
-    // 挂载事实未就绪时为 null，enrich 回退 seed 静态 group。
+    // 只对本地装配域 APP（编程小助手 / coder）应用 $mount 装配事实：
+    // 远程会话（record 不在 allAgents）的装配声明不在本机 overview 里；
+    // 其他宿主不在装配域。挂载事实未就绪时为 null，enrich 回退 seed 静态 group。
     const record = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
     if (record) {
-      const sessionType = (typeof readCurrentSessionViewState === 'function')
-        ? readCurrentSessionViewState().sessionMeta.sessionType : '';
       mountedNames = fc.resolveMountedNames(
-        fc.getMountFactsSnapshot(), getCurrentControlAgentId(), sessionType);
+        fc.getMountFactsSnapshot(), getCurrentControlAgentId());
     }
   }
   return { commandFeatures: _commandFeatures, mountedNames };

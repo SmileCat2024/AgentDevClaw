@@ -21,7 +21,7 @@
 
 const _FS_IDENTITY_SCOPES = {
   main: { agentId: 'programming-helper', layerId: 'agent', labelZh: '编程小助手', labelEn: 'Programming Helper' },
-  coder: { agentId: 'coder', layerId: 'coder', labelZh: 'Coder', labelEn: 'Coder' },
+  coder: { agentId: 'coder', layerId: 'agent', labelZh: 'Coder', labelEn: 'Coder' },
 };
 
 let _fsState = {

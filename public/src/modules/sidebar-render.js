@@ -69,7 +69,6 @@ window.onSidebarSessionDragStart = function(event, el) {
   const payload = {
     agentId,
     sessionId,
-    sessionType: 'main',
     title: (titleNode?.textContent || '').trim(),
   };
   event.dataTransfer.setData(ref.MIME, JSON.stringify(payload));
@@ -138,10 +137,10 @@ window.onSidebarSessionPinClick = function(event, el) {
 // Keyed by the .agent-group element id so state persists across re-renders.
 const _collapsedCategoryGroups = new Set();
 
-function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = ownerAgentId) {
+function renderSidebarChildItems(entries, ownerAgentId) {
   const visibleEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
   const remoteEntries = typeof getRemoteSidebarProjection === 'function'
-    ? getRemoteSidebarProjection(workspaceAgentId, ownerAgentId)
+    ? getRemoteSidebarProjection(ownerAgentId)
     : [];
   const projectedEntries = [...visibleEntries, ...remoteEntries];
   if (projectedEntries.length === 0) return '';
@@ -168,19 +167,22 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
     const targetStartDegraded = operationDegraded && entry.sidebarOperation?.errorCode === 'target_runtime_stopped';
     // 挂起优先于"刚刚完成"：挂起是持续等待态，不是终态收尾
     const justFinished = !calling && !suspended && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
-    // 线程宿主会话（coder）的 replacement：源会话不是「正在关闭」，而是
-    // 「正在交接」给接力会话；archive-close / delete 仍是真实关闭，保持原文案。
+    // 线程宿主会话（coder）的 replacement 是线程内上下文接力（archive-close
+    // / delete 仍是真实关闭）；isThreadRelay 用于区分失败文案与关闭过程文案。
     const isThreadRelay = retiring
       && !deleting
       && !!entry.replacementMutation
       && typeof window.isThreadHostAgentId === 'function'
       && window.isThreadHostAgentId(ownerAgentId, entry.sessionId);
     const zh = currentLanguage === 'zh';
+    // 接续过程提示统一由顶栏「上下文接力中…」承载：线程宿主的 replacement
+    // 不再叠加条目内文字标签（占位条目的断连视觉已足够）；失败场景的异常
+    // 反馈不属于过程提示，保留。
     const retiringLabel = targetStartDegraded
       ? (isThreadRelay ? (zh ? '接力会话启动未完成' : 'Relay session start incomplete') : (zh ? '新会话启动未完成' : 'New session start incomplete'))
       : operationDegraded
         ? (isThreadRelay ? (zh ? '交接收尾未完成' : 'Relay close incomplete') : (zh ? '关闭未完成' : 'Close incomplete'))
-        : (isThreadRelay ? (zh ? '正在交接' : 'Relaying') : (zh ? '正在关闭' : 'Closing'));
+        : (isThreadRelay ? '' : (zh ? '正在关闭' : 'Closing'));
     const itemClass = [
       'agent-item',
       'agent-runtime-item',
@@ -200,6 +202,7 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
       <div
         class="${itemClass}"
         data-agent-id="${escapeHtml(entry.runtimeId)}"
+        ${entry.threadId ? `data-thread-id="${escapeHtml(entry.threadId)}"` : ''}
         data-agent-disabled="${replacementPending || operationPending || deleting || remoteDisabled ? 'true' : 'false'}"
         data-agent-prebuilt="false"
         data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
@@ -299,7 +302,7 @@ const AGENT_ICONS = {
   'qqbot': 'qqbot.svg',
   'dispatch-console': 'dispatch-console.svg',
   'programming-helper': 'programming-helper.svg',
-  'programming-helper:coder': 'programming-helper.svg',
+  'coder': 'programming-helper.svg',
   'work-group': 'work-group.svg',
 };
 
@@ -340,10 +343,9 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
       ? (!workspaceSurface && hasRuntime)
       : !!runtimeId;
     const childEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
-    const workspaceAgentId = String(agent.agentId || agent.id || '').trim();
     const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
     if (prebuilt) {
-      const childrenHtml = renderSidebarChildItems(childEntries, agent.id, workspaceAgentId);
+      const childrenHtml = renderSidebarChildItems(childEntries, agent.id);
       const entryClass = ['agent-entry', hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ');
       return `
         <div class="${entryClass}">
@@ -445,7 +447,7 @@ function resolveFocusedAgentAfterRefresh(agents = allAgents) {
   const hasPendingInput = (agent) =>
     (agent.pending_input_count ?? agent.pendingInputCount ?? 0) > 0;
   const pendingAgent = list.find((agent) => isConnected(agent) && hasPendingInput(agent));
-  // 投影入口（如 programming-helper:coder）停留在入口首页时按条目记忆恢复；
+  // 工作空间首页（如 coder APP）停留在入口首页时按条目记忆恢复；
   // 进入过会话浏览则该键已被清除，回落到 runtime 记忆（既有行为）。
   let rememberedEntryId = null;
   try { rememberedEntryId = localStorage.getItem('claw:lastFocusedEntryId'); } catch { /* ignore */ }
@@ -958,6 +960,12 @@ function getAgentListRenderSignature() {
     restarting: Array.from(restartingRuntimeIds || []).sort(),
     recentlyFinished: Array.from(_recentlyFinishedRuntimes).sort(),
     sidebarOperationVersion: typeof getSidebarOperationVersion === 'function' ? getSidebarOperationVersion() : 0,
+    threadHeads: (window.ClawThreads?.threads || []).map((thread) => ({
+      threadId: thread.threadId,
+      headSessionId: thread.headSessionId,
+      title: thread.title,
+      lifeState: thread.lifeState,
+    })),
     remoteSidebarProjectionVersion: typeof getRemoteSidebarProjectionVersion === 'function'
       ? getRemoteSidebarProjectionVersion()
       : 0,
@@ -1083,6 +1091,18 @@ agentList.addEventListener('click', async (event) => {
     return;
   }
 
+  const threadId = String(item.dataset.threadId || '').trim();
+  if (threadId && typeof window.openConversationTarget === 'function') {
+    const entry = (Array.isArray(allAgents) ? allAgents : []).find((agent) => (
+      String(agent?.runtime_session_id || agent?.runtimeSessionId || agent?.id || '') === agentId
+    ));
+    await window.openConversationTarget({
+      agentId: entry?.parent_id || entry?.agentId,
+      threadId,
+      sessionId: entry?.active_workspace_session_id,
+    });
+    return;
+  }
   await window.switchAgent(agentId);
 });
 

@@ -542,9 +542,8 @@ function getRemoteSidebarProjection(workspaceAgentId, sidebarEntryId = workspace
       for (const rawEntry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
         const remoteOwnerId = splitRemoteNamespaceId(rawEntry.agentId)?.innerId || '';
         if (remoteOwnerId !== localAgentId) continue;
-        const runtimeSessionType = String(rawEntry.sessionType || 'main').trim() || 'main';
-        const entrySidebarId = String(rawEntry.sidebarEntryId || '').trim()
-          || (runtimeSessionType === 'main' ? localAgentId : `${localAgentId}:${runtimeSessionType}`);
+        // 呈现归属 = 所属 APP（wire 的 sidebarEntryId；缺席时即该 APP）。
+        const entrySidebarId = String(rawEntry.sidebarEntryId || '').trim() || localAgentId;
         if (entrySidebarId !== expectedSidebarEntryId) continue;
 
         const projectName = String(workspace.displayName || workspace.projectName || '').trim();

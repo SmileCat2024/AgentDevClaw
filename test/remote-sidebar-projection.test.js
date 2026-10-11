@@ -105,13 +105,12 @@ describe('remote sidebar catalog round-trip', () => {
         source: 'child',
         status: 'running',
         connected: true,
-        parent_id: 'programming-helper',
-        sessionType: 'coder',
+        parent_id: 'coder',
         runtime_session_id: 'runtime-coder',
         open_directory: '/srv/project-c',
         active_workspace_session_id: 'session-coder',
         active_workspace_session_title: 'Coder 会话',
-        active_workspace_display_name: '编程小助手',
+        active_workspace_display_name: 'Coder',
         updated_at: '2026-08-27T11:00:00.000Z',
       },
     ]);
@@ -119,17 +118,19 @@ describe('remote sidebar catalog round-trip', () => {
     const { ctx } = loadRemoteModule(catalog);
     await ctx.window.RemoteConnections.refresh();
 
+    // 两个 APP 各自投影（ADR-0025：coder 是独立 APP，无并列身份入口）
     const main = ctx.run('getRemoteSidebarProjection("programming-helper", "programming-helper")');
-    const coder = ctx.run('getRemoteSidebarProjection("programming-helper", "programming-helper:coder")');
+    const coder = ctx.run('getRemoteSidebarProjection("coder", "coder")');
     assert.equal(main.length, 1);
     assert.equal(coder.length, 1);
     assert.equal(main[0].runtimeId, 'remote:server-a:runtime-main');
     assert.equal(main[0].sessionId, 'remote:server-a:session-main');
     assert.equal(coder[0].runtimeId, 'remote:server-a:runtime-coder');
     assert.equal(coder[0].sessionId, 'remote:server-a:session-coder');
-    assert.equal(coder[0].sidebarEntryId, 'programming-helper:coder');
+    assert.equal(coder[0].sidebarEntryId, 'coder');
     assert.equal(coder[0].projectName, 'Lab-B：project-c');
-    assert.equal(coder[0].projectKey, main[0].projectKey);
+    // projectKey 含 agentId：同目录下两个 APP 的项目组互不串组
+    assert.notEqual(coder[0].projectKey, main[0].projectKey);
   });
 
   it('keeps project, identity, session, and runtime ownership through the real frontend projection', async () => {

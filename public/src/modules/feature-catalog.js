@@ -128,14 +128,16 @@ function deriveRuntimeCapabilities(feature) {
 }
 
 /**
- * 按当前会话身份解析 $mount 装配名集（来源过滤器的运行时真值）。
- * mountFacts 未就绪、宿主不在编程小助手双身份装配域（挂载管理与商店
- * 是编程小助手专属）时返回 null，调用方回退 seed 静态 group。
- * sessionType：'coder' → coder 身份；其余（''/main）→ main 身份。
+ * 按当前视图所属 APP 解析 $mount 装配名集（来源过滤器的运行时真值）。
+ * mountFacts 未就绪、宿主不在装配域（挂载管理与商店是编程小助手与
+ * coder 两 APP 专属，键 = IDENTITY_SCOPES 的 identity）时返回 null，
+ * 调用方回退 seed 静态 group。
  */
-function resolveMountedNames(mountFacts, hostAgentId, sessionType) {
-  if (!mountFacts || hostAgentId !== 'programming-helper') return null;
-  const identity = String(sessionType || '').trim() === 'coder' ? 'coder' : 'main';
+function resolveMountedNames(mountFacts, hostAgentId) {
+  if (!mountFacts) return null;
+  const identity = hostAgentId === 'coder' ? 'coder'
+    : (hostAgentId === 'programming-helper' ? 'main' : '');
+  if (!identity) return null;
   return mountFacts[identity] || null;
 }
 
