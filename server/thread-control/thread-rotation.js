@@ -6,9 +6,8 @@
  *   1. beginSessionSuccession：原子写入交接挡板并播种接续恢复指令（R3，
  *      框架 beginSessionHandoff 同笔事务，幂等键绑移交易）；接力期间
  *      新指令保持 pending；
- *   2. 退役旧 head runtime：remove-session 会让 runtime 把最新会话状态
- *      flush 落盘——摘要 mirror 读的是 session 文件，若不先 flush，
- *      会基于过期快照生成「没有实质性工作」的失真摘要；
+ *   2. 退役旧 head runtime：等待包含持久化结果的 session-exited 确认；成功保存后
+ *      才允许读取 Session 快照，保存失败则接续失败；
  *   3. compactAndResumeCurrentSession：trim-transcript + 摘要 + 启动 successor
  *      （compact / summary / trim 共享的 successor 创建入口）；
  *   4. commitSuccession：接力提交点（thread-succession.js）——successor
@@ -87,9 +86,7 @@ export function createThreadRotationService({
     }
 
     try {
-      await stopManagedAgent(agentId, sessionId).catch((error) => {
-        console.warn(`[thread-rotation] failed to retire pre-rotation runtime for session=${sessionId}:`, error?.message || error);
-      });
+      await stopManagedAgent(agentId, sessionId, { waitForPersistence: true });
       const result = await sessionApi.compactAndResumeCurrentSession({
         preferredAgentId: agentId,
         sessionId,

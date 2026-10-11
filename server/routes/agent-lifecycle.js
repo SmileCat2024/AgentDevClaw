@@ -109,47 +109,54 @@ export function createAgentLifecycleModule(ctx) {
     });
   }
 
-  async function removeSharedSession(runtime) {
+  async function removeSharedSession(runtime, { waitForExit = false } = {}) {
     const sessionId = runtime?.selectedSessionId;
     const child = runtime?.process;
     if (!sessionId || !child || typeof child.send !== 'function' || typeof child.on !== 'function') {
       return false;
     }
-    if (runtime.stopping) return true;
+    if (runtime.stopping) {
+      return waitForExit ? (runtime.stoppingPromise || false) : true;
+    }
 
     runtime.stopping = true;
+    let resolveRemoval;
+    const removalPromise = new Promise((resolve) => { resolveRemoval = resolve; });
+    runtime.stoppingPromise = removalPromise;
     const clearAcknowledgementListeners = () => {
       child.removeListener?.('message', onMessage);
       child.removeListener?.('exit', onExit);
     };
-    const onMessage = (message) => {
-      if (message?.type !== 'session-exited' || message.sessionId !== sessionId) return;
+    const settleRemoval = (removed) => {
       clearAcknowledgementListeners();
       runtime.stopped = true;
       runtime.stopping = false;
+      runtime.stoppingPromise = null;
+      resolveRemoval(removed);
+    };
+    const onMessage = (message) => {
+      if (message?.type !== 'session-exited' || message.sessionId !== sessionId) return;
+      // The runtime reports persistence explicitly; callers that require a
+      // snapshot barrier must reject an acknowledgement after a save failure.
+      const persisted = message.persisted === true;
       releaseRuntimeState(runtime.key);
       // The shared process stays alive for sibling sessions, so the process-exit
       // handler never fires for this session: release its feature channels here.
       featureCommunicationStore.closeSession(runtime.agentId || runtime.id, sessionId);
       removeOpenSession(runtime.agentId, sessionId).catch((error) => console.warn(error));
+      settleRemoval(persisted);
     };
-    const onExit = () => {
-      clearAcknowledgementListeners();
-      runtime.stopped = true;
-      runtime.stopping = false;
-    };
+    const onExit = () => settleRemoval(false);
     child.on('message', onMessage);
     child.once?.('exit', onExit);
     try {
       child.send({ type: 'remove-session', sessionId });
-      // `session-exited` is the authoritative acknowledgement. Do not detach
-      // its listener after an arbitrary wait: a long-running save/dispose may
-      // legitimately complete later, and the runtime must still be recorded as
-      // stopped when that acknowledgement arrives.
-      return true;
+      return await removalPromise;
     } catch {
       clearAcknowledgementListeners();
       runtime.stopping = false;
+      runtime.stoppingPromise = null;
+      resolveRemoval(false);
       return false;
     }
   }
@@ -183,9 +190,12 @@ export function createAgentLifecycleModule(ctx) {
 
   // ── Stop managed agent ────────────────────────────────────────
 
-  async function stopManagedAgent(agentId, sessionId = undefined) {
+  async function stopManagedAgent(agentId, sessionId = undefined, { waitForPersistence = false } = {}) {
     const runtimes = sessionId === undefined ? listAgentRuntimes(agentId) : [getAgentRuntime(agentId, sessionId)].filter(Boolean);
     if (runtimes.length === 0) {
+      if (waitForPersistence && sessionId) {
+        throw new Error(`Session runtime is unavailable before persistence confirmation: ${agentId}::${sessionId}`);
+      }
       // No runtime found — still clean up the tracker in case the process
       // already exited and was removed from managedAgents
       if (sessionId) {
@@ -196,6 +206,14 @@ export function createAgentLifecycleModule(ctx) {
 
     for (const runtime of runtimes) {
       if (!isChildProcessRunning(runtime?.process) || runtime.stopped) {
+        if (waitForPersistence && runtime?.stoppingPromise) {
+          const persisted = await runtime.stoppingPromise;
+          if (!persisted) {
+            throw new Error(`Failed to confirm session persistence before stopping: ${agentId}::${runtime.selectedSessionId}`);
+          }
+        } else if (waitForPersistence && runtime?.selectedSessionId) {
+          throw new Error(`Session runtime is unavailable before persistence confirmation: ${agentId}::${runtime.selectedSessionId}`);
+        }
         // Process already exited — still need to clean up the tracker
         if (runtime?.selectedSessionId) {
           removeOpenSession(agentId, runtime.selectedSessionId).catch(e => console.warn(e));
@@ -203,11 +221,15 @@ export function createAgentLifecycleModule(ctx) {
         continue;
       }
 
-      // Shared-process mode: send IPC remove-session instead of killing the process.
-      // Only mark stopped after the host confirms that this session released
-      // its Agent and background resources. Killing on a failed acknowledgement
-      // would terminate unrelated sibling sessions.
-      if (runtime.processGroupKey && runtime.selectedSessionId) {
+      // A succession persistence barrier needs a session-scoped acknowledgement
+      // for both shared and isolated processes. remove-session saves and disposes
+      // the target session before reporting whether persistence succeeded.
+      if (waitForPersistence && runtime.selectedSessionId) {
+        const persisted = await removeSharedSession(runtime, { waitForExit: true });
+        if (!persisted) {
+          throw new Error(`Failed to confirm session persistence before stopping: ${agentId}::${runtime.selectedSessionId}`);
+        }
+      } else if (runtime.processGroupKey && runtime.selectedSessionId) {
         const accepted = await removeSharedSession(runtime);
         if (!accepted) {
           console.warn(`[agent-lifecycle] failed to request shared-session stop: ${agentId}::${runtime.selectedSessionId}`);

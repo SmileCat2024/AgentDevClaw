@@ -290,7 +290,7 @@ describe('agent-lifecycle', () => {
       assert.equal(killCalled, false);
     });
 
-    it('keeps the shared-session acknowledgement listener until a slow disposal finishes', async () => {
+    it('waits for shared-session persistence acknowledgement when requested', async () => {
       const mod = createAgentLifecycleModule(createMockCtx());
       const child = createMockChild();
       const runtime = injectRuntime('shared-agent', 'slow-session', child);
@@ -299,27 +299,57 @@ describe('agent-lifecycle', () => {
         assert.deepEqual(message, { type: 'remove-session', sessionId: 'slow-session' });
       };
 
-      const status = await mod.stopManagedAgent('shared-agent', 'slow-session');
-      assert.equal(status.status, 'stopped');
+      let settled = false;
+      const stopping = mod.stopManagedAgent('shared-agent', 'slow-session', { waitForPersistence: true })
+        .then((status) => {
+          settled = true;
+          return status;
+        });
+      await Promise.resolve();
+      assert.equal(settled, false);
       assert.equal(runtime.stopped, false);
       assert.equal(runtime.stopping, true);
 
-      child.emit('message', { type: 'session-exited', sessionId: 'slow-session' });
+      child.emit('message', { type: 'session-exited', sessionId: 'slow-session', persisted: true });
+      const status = await stopping;
+      assert.equal(status.status, 'stopped');
       assert.equal(runtime.stopped, true);
       assert.equal(runtime.stopping, false);
     });
 
-    it('settles a disposing shared session if the host process exits first', async () => {
+    it('fails a persistence wait when no runtime can confirm the session save', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      await assert.rejects(
+        mod.stopManagedAgent('missing-agent', 'missing-session', { waitForPersistence: true }),
+        /unavailable before persistence confirmation/,
+      );
+    });
+
+    it('fails a persistence wait when the runtime reports a save failure', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const child = createMockChild();
+      const runtime = injectRuntime('shared-agent', 'unsaved-session', child);
+      runtime.processGroupKey = 'shared-agent::/project';
+      child.send = () => {};
+
+      const stopping = mod.stopManagedAgent('shared-agent', 'unsaved-session', { waitForPersistence: true });
+      child.emit('message', { type: 'session-exited', sessionId: 'unsaved-session', persisted: false });
+
+      await assert.rejects(stopping, /Failed to confirm session persistence/);
+    });
+
+    it('fails a persistence wait when the host process exits before acknowledgement', async () => {
       const mod = createAgentLifecycleModule(createMockCtx());
       const child = createMockChild();
       const runtime = injectRuntime('shared-agent', 'exiting-session', child);
       runtime.processGroupKey = 'shared-agent::/project';
       child.send = () => {};
 
-      await mod.stopManagedAgent('shared-agent', 'exiting-session');
+      const stopping = mod.stopManagedAgent('shared-agent', 'exiting-session', { waitForPersistence: true });
       child.exitCode = 1;
       child.emit('exit', 1);
 
+      await assert.rejects(stopping, /Failed to confirm session persistence/);
       assert.equal(runtime.stopped, true);
       assert.equal(runtime.stopping, false);
     });

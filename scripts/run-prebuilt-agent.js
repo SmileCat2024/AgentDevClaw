@@ -613,9 +613,10 @@ class SessionLifecycle {
 
   // ── Dispose this session (does NOT exit the process) ────────
   async remove() {
-    if (this.disposed) return;
+    if (this.disposed) return false;
     this.disposed = true;
     this.inputLoopRunning = false;
+    let persisted = true;
 
     if (this.agent) {
       if (this.sessionId) {
@@ -625,6 +626,7 @@ class SessionLifecycle {
         try {
           await this.agent.saveSession(this.sessionId, sessionStore);
         } catch (error) {
+          persisted = false;
           console.error(`[ProtoClaw Runtime] 保存会话失败 (session=${this.sessionId}):`, error);
         }
       }
@@ -632,29 +634,48 @@ class SessionLifecycle {
       try {
         await this.agent.dispose();
       } catch (error) {
+        persisted = false;
         console.error(`[ProtoClaw Runtime] 释放资源失败 (session=${this.sessionId}):`, error);
       }
     }
+    return persisted;
   }
 }
+
+// 会话关闭单飞：remove-session、输入循环结束、退役等路径可能并发关闭同一
+// 会话。若无单飞，第二次调用里 remove() 因 disposed 立即返回 false，会在
+// 首次保存仍在途时提前发出 persisted:false 的 session-exited，让服务端把
+// 正在成功的保存误判为失败（ADR-0026 保存屏障被伪失败击穿）。并发调用复用
+// 同一关闭 Promise 与同一次通知。
+const closingSessions = new Map();
 
 async function closeHostedSession(sessionId, { notify = true } = {}) {
   const session = sessions.get(sessionId);
   if (!session) return false;
-  await session.remove();
-  sessions.delete(sessionId);
-  if (notify && process.connected) {
+  const inFlight = closingSessions.get(sessionId);
+  if (inFlight) return inFlight;
+  const closePromise = (async () => {
     try {
-      process.send({ type: 'session-exited', sessionId });
-    } catch (error) {
-      console.warn(`[ProtoClaw Runtime] session-exited 通知失败 (session=${sessionId}):`, error?.message || error);
+      const persisted = await session.remove();
+      sessions.delete(sessionId);
+      if (notify && process.connected) {
+        try {
+          process.send({ type: 'session-exited', sessionId, persisted });
+        } catch (error) {
+          console.warn(`[ProtoClaw Runtime] session-exited 通知失败 (session=${sessionId}):`, error?.message || error);
+        }
+      }
+      if (sessions.size === 0) {
+        console.log('[ProtoClaw Runtime] 最后一个 session 已退出，关闭进程');
+        process.exit(0);
+      }
+      return true;
+    } finally {
+      closingSessions.delete(sessionId);
     }
-  }
-  if (sessions.size === 0) {
-    console.log('[ProtoClaw Runtime] 最后一个 session 已退出，关闭进程');
-    process.exit(0);
-  }
-  return true;
+  })();
+  closingSessions.set(sessionId, closePromise);
+  return closePromise;
 }
 
 // ── Process-level signal handlers ─────────────────────────────
