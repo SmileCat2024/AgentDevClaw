@@ -8,14 +8,14 @@
  *      （pendingSuccession 挡板）；
  *   3. applySessionSuccession：successor 会话就绪后推进线程 head 并投递
  *      接力期间暂存的指令；
- *   4. onSessionDeleted：被删会话是线程 head 时取消该线程；
+ *   4. assertSessionDeletable：拒绝单独删除线程 head 会话；
  *   5. tryDeliver：appendCommand 后的即时投递尝试（head runtime 已就绪时）；
  *   6. handleRuntimeReady：head runtime 就绪时补投 pending 指令（经
  *      shared/runtime-hooks 的 onRuntimeReady 订阅接入）。
  *
  * 判定基准：isThreadHostSession 只回答「哪个 APP 的新会话自动建立线程
  * 环境」（环境的存在性开关，消费点：onSessionCreated 与 input-gateway 的
- * 指令路由闸）。其余事件响应钩子（succession / 删除清理 / runtime 就绪
+ * 指令路由闸）。其余钩子（succession / 删除前置守卫 / runtime 就绪
  * 补投 / guard 触发的 rotation）一律以「该会话是否为某活跃线程的 head」
  * 为唯一判定——处于线程环境（thread）则生效，纯 session 会话天然 no-op，
  * 与会话所属 APP 无关。
@@ -252,7 +252,7 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
       try {
         const thread = await core.findThreadByHeadSession(normalizedAgentId, from);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
-        // 已关闭线程不再写失败事实（closeThread 已取消 pending 指令，
+        // 已关闭线程不再写失败事实（关闭语义只由删除事务封存，
         // 翻回 rotation_failed 会「复活」终态线程）：直接 no-op。
         if (thread.status === 'closed') {
           return { applied: false, reason: 'thread_closed', threadId: thread.threadId };
@@ -268,29 +268,20 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
     },
 
     /**
-     * 会话删除钩子：被删会话是某线程当前 head 时取消该线程——工作已无
-     * 承接点，pending 指令一并取消（继续保留只会形成永远投不出去的
-     * 悬空线程）。删除非 head 会话 / 无线程（纯 session）：no-op（线程
-     * 历史链对已删棒次的引用由前端标题解析退化为短 id，无需清理）。
+     * 会话删除前置守卫：线程成员必须通过删除线程事务级联删除；head 会话
+     * 不能单独删除，以免线程失去承接点而留下悬空记录。非 head 会话 / 无
+     * 线程（纯 session）由上游按独立会话语义处理。
      */
-    async onSessionDeleted(agentId, sessionId) {
+    async assertSessionDeletable(agentId, sessionId) {
       const normalizedAgentId = String(agentId || '').trim();
       const deleted = String(sessionId || '').trim();
       if (!deleted) return { applied: false, reason: 'invalid_session' };
-      try {
-        const thread = await core.findThreadByHeadSession(normalizedAgentId, deleted);
-        if (!thread) return { applied: false, reason: 'no_thread_for_session' };
-        await core.closeThread(thread.threadId, { reason: 'head_session_deleted' });
-        await board.closeBoard(thread.threadId, { reason: 'head_session_deleted' }).catch(() => {});
-        await archive?.unarchive(thread.threadId).catch(() => {});
-        console.log(`[thread-integration] thread closed (head session deleted): ${thread.threadId}`);
-        return { applied: true, threadId: thread.threadId };
-      } catch (error) {
-        // 善后失败不阻断删除主流程：最坏情况是线程悬空 active，后续删除
-        // 该 head 或显式 cancel 仍可收敛。
-        console.error(`[thread-integration] onSessionDeleted failed for session=${deleted}:`, error?.message || error);
-        return { applied: false, reason: 'error', error: error?.message || String(error) };
-      }
+      const thread = await core.findThreadByHeadSession(normalizedAgentId, deleted);
+      if (!thread) return { applied: false, reason: 'no_thread_for_session' };
+      const error = new Error(`Session ${deleted} is the head of thread ${thread.threadId} and cannot be deleted individually; delete the thread instead`);
+      error.code = 'thread_head_session_cannot_be_deleted';
+      error.status = 409;
+      throw error;
     },
 
     /**

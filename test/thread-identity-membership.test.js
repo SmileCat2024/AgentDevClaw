@@ -241,7 +241,7 @@ describe('T001: 非线程宿主 APP 会话保持原 Session 语义', () => {
     assert.equal(noThread.applied, false);
     assert.equal(noThread.reason, 'no_thread_for_session');
 
-    const noDelete = await integration.onSessionDeleted('programming-helper', 'ph-free-1');
+    const noDelete = await integration.assertSessionDeletable('programming-helper', 'ph-free-1');
     assert.equal(noDelete.applied, false);
     assert.equal(noDelete.reason, 'no_thread_for_session');
 
@@ -249,7 +249,7 @@ describe('T001: 非线程宿主 APP 会话保持原 Session 语义', () => {
     assert.equal(await core.findThreadBySession('programming-helper', 'ph-free-1'), null);
   });
 
-  test('coder thread sessions keep thread semantics end to end (create → advance → close)', async () => {
+  test('coder head session cannot be deleted individually', async () => {
     const { core, integration } = makeControl();
     const thread = await integration.onSessionCreated('coder', { id: 'coder-s1', title: 'T' });
     assert.ok(thread);
@@ -262,9 +262,14 @@ describe('T001: 非线程宿主 APP 会话保持原 Session 语义', () => {
     });
     assert.equal(applied.applied, true, '线程 head 会话的 succession 正常推进');
 
-    const deleted = await integration.onSessionDeleted('coder', 'coder-s2');
-    assert.equal(deleted.applied, true, 'head 删除关闭线程');
-    const closed = await core.getThread(thread.threadId);
-    assert.equal(closed.status, 'closed');
+    await assert.rejects(
+      integration.assertSessionDeletable('coder', 'coder-s2'),
+      (error) => error.code === 'thread_head_session_cannot_be_deleted'
+        && error.status === 409
+        && error.message.includes(thread.threadId),
+    );
+    const unchanged = await core.getThread(thread.threadId);
+    assert.equal(unchanged.status, 'open');
+    assert.equal(unchanged.headSessionId, 'coder-s2');
   });
 });

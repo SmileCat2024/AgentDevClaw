@@ -332,14 +332,14 @@ describe('deliver 端点 — runtime_not_accepting 恢复闸', () => {
 });
 
 describe('cleanupEmptySessions — 线程收口钩子', () => {
-  // cleanupEmptySessions 直接 fs.rm 删文件，历史上绕过 onSessionDeleted，
+  // cleanupEmptySessions 直接 fs.rm 删文件，历史上绕过删除前置守卫，
   // 制造过孤儿线程（head 已删、线程 open、pending 指令永久滞留）。
-  // 这里验证 ctx.onSessionDeleted 在每个被删会话上被调用。
+  // 这里验证 ctx.assertSessionDeletable 在每个被删会话上被调用。
   test('每个被清理的空会话都触发线程收口钩子', async () => {
-    // 直接验证依赖注入契约：ctx.onSessionDeleted 存在时按会话调用
+    // 直接验证依赖注入契约：ctx.assertSessionDeletable 存在时按会话调用
     const { createSessionHelpers } = await import('../server/routes/session-helpers.js');
     assert.ok(createSessionHelpers, 'createSessionHelpers exportable');
-    // 模块级单测：ctx 不传 onSessionDeleted 时不炸（向后兼容）
+    // 模块级单测：ctx 不传 assertSessionDeletable 时不炸（向后兼容）
     const harness = createSessionHelpers({
       readWorkspaceState: async () => ({}),
       writeWorkspaceState: async () => ({}),

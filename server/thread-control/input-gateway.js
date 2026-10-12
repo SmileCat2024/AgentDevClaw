@@ -208,7 +208,7 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
     };
   }
 
-  // 终态线程禁入：closeThread 后 head 不变，历史链仍可查看，但工作已无
+  // 终态线程禁入：删除事务封存后 head 不变，历史链仍可查看，但工作已无
   // 承接点——指令入箱只会在无投递触发的状态下永久滞留。
   if (thread.status === 'closed') {
     return {

@@ -416,9 +416,9 @@ describe('T005: 删除后旧 ID 的读路径', () => {
     assert.match(deliver.body.code, /not_found/);
   });
 
-  it('rejects new command writes and delivery against a closed thread in the partial residual window', async () => {
-    // partial 失败（record 保留、closed 终态）= 删除 seal 后 / record 删除前
-    // 的窗口：新 command 写入与自动投递必须被拒（thread_closed）。
+  it('rejects new command writes and delivery against a deletion-sealed thread in the partial residual window', async () => {
+    // partial 失败（record 保留、删除封锁状态）= 删除 seal 后 / record 删除前
+    // 的窗口：新 command 写入与自动投递必须被拒。
     // failRemoveSessions 持续失败（always）确保 partial 窗口不收敛。
     const env = makeDeleteEnvironment({ failRemoveSessions: true, failRemoveSessionsMode: 'always' });
     const threadId = await startTwoLinkThread(env.core);

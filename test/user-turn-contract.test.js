@@ -124,6 +124,39 @@ describe('Claw user-turn contract', () => {
     assert.equal(calls, 0);
   });
 
+  it('accepts kind=resume with empty text (empty-message restart) and forwards it verbatim', async () => {
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+      calls.push({ url, options });
+      return jsonResponse({ success: true, delivery: 'queued', id: 'q-r', queueLength: 1 });
+    };
+
+    await submitUserTurn({
+      agentId: 'agent-a',
+      text: '',
+      kind: 'resume',
+      source: 'thread-recovery',
+      sourceRef: 'wt-resume-1',
+    }, { viewerOrigin: 'http://viewer.test', fetchImpl });
+
+    const body = JSON.parse(calls[0].options.body);
+    assert.equal(body.kind, 'resume');
+    assert.equal(body.text, '');
+    assert.equal(body.source, 'thread-recovery');
+  });
+
+  it('still rejects empty text for non-resume kinds before fetch', async () => {
+    let calls = 0;
+    await assert.rejects(
+      submitUserTurn({ agentId: 'agent-a', text: '', kind: 'reminder' }, {
+        viewerOrigin: 'http://viewer.test',
+        fetchImpl: async () => { calls += 1; return jsonResponse({ success: true }); },
+      }),
+      (error) => error instanceof UserTurnDeliveryError && error.code === 'invalid_input',
+    );
+    assert.equal(calls, 0);
+  });
+
   it('rejects malformed or missing runtime targets before fetch', async () => {
     let calls = 0;
     await assert.rejects(

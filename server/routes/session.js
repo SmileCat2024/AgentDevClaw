@@ -2005,12 +2005,12 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
       trace.mark('response_sent');
       return;
     }
+    // 在删除数据前做 head 守卫；Thread 成员正常已在上方重定向到级联删除。
+    await getThreadIntegration().assertSessionDeletable(agent.id, sessionId);
     const deletedRuntime = getAgentRuntime(agent.id, sessionId);
     const deleted = await deletePrebuiltSession(agent.id, sessionId, {
       includeSessions: req.body.responseMode !== 'delta',
     });
-    // 线程宿主：被删会话是线程 head 时收口该线程；非宿主 / 非 head / 无线程：no-op。
-    await getThreadIntegration().onSessionDeleted(agent.id, sessionId);
     if (deletedRuntime?.viewerAgentId && clearUISurfaces) {
       clearUISurfaces(deletedRuntime.viewerAgentId);
     }

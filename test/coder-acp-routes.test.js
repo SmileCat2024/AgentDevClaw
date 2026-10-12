@@ -8,8 +8,7 @@
  *    - cwd validation: non-absolute / nonexistent / file → 400, zero side effects
  *    - happy path returns { clawSessionId, threadId, viewerAgentId, cwd }
  *    - CLAW_ACP_READY_TIMEOUT_MS is honoured
- *    - rollback ladder on three injection points (READY timeout / runtime start
- *      failure / thread missing): full ladder executes, no orphan objects
+ *    - rollback ladder uses cascading thread deletion when a thread exists
  *    - rollback failures are not masked: step statuses + leftover IDs reported
  * 2. POST /protoclaw/acp/coder/sessions/:clawSessionId/interrupt
  *    - resolves the session's exact runtime viewerAgentId (never other sessions)
@@ -133,17 +132,19 @@ function makeMockCtx(overrides = {}) {
         return null;
       },
     },
+    threadDelete: {
+      deleteThread: async (threadId, opts) => {
+        record('deleteThread', { threadId, opts });
+        if (overrides.deleteThreadThrow) throw new Error(overrides.deleteThreadThrow);
+        return overrides.deleteThreadResult || { threadId, status: 'complete' };
+      },
+    },
     threadControl: {
       core: {
         findThreadByHeadSession: async (agentId, sessionId) => {
           record('findThreadByHeadSession', { agentId, sessionId });
           if ('findThreadResult' in overrides) return overrides.findThreadResult;
           return { threadId: 'thread-acp-1', headSessionId: sessionId, status: 'open' };
-        },
-        closeThread: async (threadId, opts) => {
-          record('closeThread', { threadId, opts });
-          if (overrides.closeThreadThrow) throw new Error(overrides.closeThreadThrow);
-          return { threadId, status: 'closed' };
         },
         listThreads: async () => {
           record('listThreads', {});
@@ -170,6 +171,7 @@ function setupAcpHarness(overrides = {}) {
   const app = makeMockApp();
   setupAcpRoutes(app, makeMockExpress(), {
     ...ctx,
+    threadDelete: ctx.threadDelete,
     acpPresetsPath: overrides.acpPresetsPath,
     acpModelConfigPath: overrides.acpModelConfigPath,
     threadControl: {
@@ -287,11 +289,15 @@ afterEach(() => {
 // ── Route registration ────────────────────────────────────────────
 
 describe('ACP routes — registration', () => {
-  it('registers the create + interrupt + stop endpoints', () => {
+  it('registers the create + interrupt + stop endpoints and requires thread deletion wiring', () => {
     const { app } = setupAcpHarness();
     assert.ok(app._routes['POST /protoclaw/acp/coder/sessions']);
     assert.ok(app._routes['POST /protoclaw/acp/coder/sessions/:clawSessionId/interrupt']);
     assert.ok(app._routes['POST /protoclaw/acp/coder/sessions/:clawSessionId/stop']);
+    assert.throws(() => setupAcpRoutes(makeMockApp(), makeMockExpress(), {
+      ...makeMockCtx(),
+      threadDelete: null,
+    }), /threadDelete\.deleteThread/);
   });
 });
 
@@ -308,7 +314,7 @@ describe('ACP create — agentId guard', () => {
     assert.equal(ctx._calls.startManagedAgent, undefined);
     assert.equal(ctx._calls.onSessionCreated, undefined);
     assert.equal(ctx._calls.stopManagedAgent, undefined);
-    assert.equal(ctx._calls.closeThread, undefined);
+    assert.equal(ctx._calls.deleteThread, undefined);
     assert.equal(ctx._calls.deletePrebuiltSession, undefined);
   });
 
@@ -346,7 +352,7 @@ describe('ACP create — cwd validation', () => {
       assert.equal(ctx._calls.startManagedAgent, undefined);
       assert.equal(ctx._calls.onSessionCreated, undefined);
       assert.equal(ctx._calls.stopManagedAgent, undefined);
-      assert.equal(ctx._calls.closeThread, undefined);
+      assert.equal(ctx._calls.deleteThread, undefined);
       assert.equal(ctx._calls.deletePrebuiltSession, undefined);
     });
   }
@@ -396,7 +402,7 @@ describe('ACP create — happy path', () => {
 
     // 成功路径不触发任何回滚动作
     assert.equal(ctx._calls.stopManagedAgent, undefined);
-    assert.equal(ctx._calls.closeThread, undefined);
+    assert.equal(ctx._calls.deleteThread, undefined);
     assert.equal(ctx._calls.deletePrebuiltSession, undefined);
   });
 
@@ -435,7 +441,7 @@ function stepStatuses(rollback) {
 }
 
 describe('ACP create — rollback ladder', () => {
-  it('READY timeout → full ladder: stop runtime, close thread, delete session', async () => {
+  it('READY timeout → stop runtime, cascade-delete thread and sessions', async () => {
     seedRuntime({ sessionId: 'sess-acp-1', viewerAgentId: 'viewer-acp-1' });
     const { ctx, app } = setupAcpHarness({ readyResult: null });
     const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
@@ -444,19 +450,19 @@ describe('ACP create — rollback ladder', () => {
     assert.equal(res.body.code, 'runtime_ready_timeout');
 
     // 回滚阶梯完整执行且全部成功（无孤儿对象）
-    assert.deepEqual(stepStatuses(res.body.rollback), ['close_thread:ok', 'delete_session:ok', 'stop_runtime:ok']);
+    assert.deepEqual(stepStatuses(res.body.rollback), ['delete_session:skipped', 'delete_thread:ok', 'stop_runtime:ok']);
+    assert.equal(res.body.rollback.steps.find((step) => step.step === 'delete_session').reason, 'deleted_with_thread');
     assert.deepEqual(res.body.rollback.leftover, {});
 
     // runtime 精确 stop（agentId + sessionId，不扩大范围）
     assert.deepEqual(ctx._calls.stopManagedAgent[0], { agentId: 'coder', sessionId: 'sess-acp-1' });
-    // thread 按 headSessionId 重新解析后关闭（兜底中间态），带回滚原因
-    assert.equal(ctx._calls.closeThread[0].threadId, 'thread-acp-1');
-    assert.equal(ctx._calls.closeThread[0].opts.reason, 'acp_session_creation_rollback');
-    // session 从 index 删除
-    assert.equal(ctx._calls.deletePrebuiltSession[0].sessionId, 'sess-acp-1');
+    // thread 按 headSessionId 重新解析后级联删除（兜底中间态），带回滚原因
+    assert.equal(ctx._calls.deleteThread[0].threadId, 'thread-acp-1');
+    assert.equal(ctx._calls.deleteThread[0].opts.reason, 'acp_session_creation_rollback');
+    assert.equal(ctx._calls.deletePrebuiltSession, undefined, '线程级联删除已清理该 Session');
   });
 
-  it('runtime start failure → ladder skips thread close (hook never ran, no thread exists)', async () => {
+  it('runtime start failure → ladder skips thread deletion (hook never ran, no thread exists)', async () => {
     const { ctx, app } = setupAcpHarness({
       startManagedAgentThrow: 'spawn exploded',
       findThreadResult: null, // 现实：thread 钩子未执行，store 中无线程
@@ -467,9 +473,9 @@ describe('ACP create — rollback ladder', () => {
     assert.equal(res.body.code, 'acp_session_creation_failed');
 
     // start 已尝试 → 仍精确 stop（进程可能已 spawn）；无 thread → skipped；session 删除
-    assert.deepEqual(stepStatuses(res.body.rollback), ['close_thread:skipped', 'delete_session:ok', 'stop_runtime:ok']);
+    assert.deepEqual(stepStatuses(res.body.rollback), ['delete_session:ok', 'delete_thread:skipped', 'stop_runtime:ok']);
     assert.equal(ctx._calls.onSessionCreated, undefined);
-    assert.equal(ctx._calls.closeThread, undefined);
+    assert.equal(ctx._calls.deleteThread, undefined);
     assert.equal(ctx._calls.deletePrebuiltSession[0].sessionId, 'sess-acp-1');
     assert.deepEqual(res.body.rollback.leftover, {});
   });
@@ -484,7 +490,7 @@ describe('ACP create — rollback ladder', () => {
 
     assert.equal(res.statusCode, 500);
     assert.equal(res.body.code, 'thread_missing');
-    assert.deepEqual(stepStatuses(res.body.rollback), ['close_thread:skipped', 'delete_session:ok', 'stop_runtime:ok']);
+    assert.deepEqual(stepStatuses(res.body.rollback), ['delete_session:ok', 'delete_thread:skipped', 'stop_runtime:ok']);
     assert.equal(ctx._calls.stopManagedAgent[0].sessionId, 'sess-acp-1');
     assert.equal(ctx._calls.deletePrebuiltSession[0].sessionId, 'sess-acp-1');
     assert.deepEqual(res.body.rollback.leftover, {});
@@ -495,14 +501,15 @@ describe('ACP create — rollback ladder', () => {
     const { app } = setupAcpHarness({
       readyResult: null,
       stopManagedAgentThrow: 'stop refused',
-      closeThreadThrow: 'close refused',
+      deleteThreadThrow: 'close refused',
       deletePrebuiltSessionThrow: 'delete refused',
     });
     const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
 
     assert.equal(res.statusCode, 504);
     const rollback = res.body.rollback;
-    assert.deepEqual(stepStatuses(rollback), ['close_thread:failed', 'delete_session:failed', 'stop_runtime:failed']);
+    assert.deepEqual(stepStatuses(rollback), ['delete_session:skipped', 'delete_thread:failed', 'stop_runtime:failed']);
+    assert.equal(rollback.steps.find((step) => step.step === 'delete_session').reason, 'thread_delete_incomplete');
     // 遗留对象 ID 全部如实上报，供手动清理
     assert.equal(rollback.leftover.viewerAgentId, 'viewer-acp-1');
     assert.equal(rollback.leftover.threadId, 'thread-acp-1');
@@ -614,7 +621,7 @@ describe('ACP stop', () => {
     assert.deepEqual(res.body, { ok: true, clawSessionId: 'sess-a' });
     assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'coder', sessionId: 'sess-a' }]);
     // stop 不归档：归档是管理面动作，不经此层
-    assert.equal(ctx._calls.closeThread, undefined);
+    assert.equal(ctx._calls.deleteThread, undefined);
   });
 
   it('resolves drifted registration keys via selectedSessionId scan and stops by the entry key', async () => {
@@ -1059,10 +1066,11 @@ describe('server wiring contract for ACP routes', () => {
     assert.equal(typeof helpers.readSessionSnapshotForContinuity, 'function');
   });
 
-  it('setupAcpRoutes 对缺失的无条件依赖启动即报错', () => {
+  it('setupAcpRoutes requires the thread deletion service', () => {
+    const ctx = makeMockCtx();
     assert.throws(
-      () => setupAcpRoutes(makeMockApp(), makeMockExpress(), {}),
-      /missing required ctx dependency "requirePrebuiltSessionRecord"/,
+      () => setupAcpRoutes(makeMockApp(), makeMockExpress(), { ...ctx, threadDelete: null }),
+      /missing required ctx dependency "threadDelete\.deleteThread"/,
     );
   });
 });

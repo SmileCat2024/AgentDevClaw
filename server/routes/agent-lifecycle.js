@@ -20,6 +20,7 @@ import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
 import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
+import { convergeThreadBoardOnDeliberateStop } from '../thread-control/deliberate-stop-convergence.js';
 
 // ADR-0011：远程写幂等闸。远程目标 + 无 idempotencyKey → 400 且请求不过隧道；
 // 本地路径保持现状不强制（session.js 同族契约）。
@@ -145,6 +146,11 @@ export function createAgentLifecycleModule(ctx) {
       featureCommunicationStore.closeSession(runtime.agentId || runtime.id, sessionId);
       removeOpenSession(runtime.agentId, sessionId).catch((error) => console.warn(error));
       settleRemoval(persisted);
+      // 人为停止确认（会话已从共享进程移除，事件流终止）→ 所属线程看板
+      // 收敛空闲（C1：崩溃路径不经过此处，running 事实留给重启恢复判定）。
+      // managed runtime 恒有 agentId；runtime.id 是注册键，混入只会静默 no-op
+      convergeThreadBoardOnDeliberateStop(runtime.agentId, sessionId)
+        .catch(() => { /* 收敛失败不阻断停止善后 */ });
     };
     const onExit = () => settleRemoval(false);
     child.on('message', onMessage);

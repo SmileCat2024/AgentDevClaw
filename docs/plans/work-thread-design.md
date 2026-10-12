@@ -544,7 +544,6 @@ claw threads deliver <threadId> [--format text|json]
 claw threads advance <threadId> --to-session <sessionId> [--from-session ID] [--expected-revision N] [--end-kind K]
 claw threads handoff-failed <threadId> [--reason R] [--stage S] [--error E]
 claw threads resume <threadId> [--source S]
-claw threads close <threadId> [--reason R]
 claw threads archive <threadId>
 claw threads unarchive <threadId>
 ```

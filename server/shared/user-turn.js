@@ -61,7 +61,8 @@ export async function submitUserTurn({
   source,
   sourceRef,
   // 输入身份（user-turn 契约的 kind 字段）：'reminder' = 机器通报唤醒，
-  // 落地为带 source 的 system 消息且不响应输入租约；省略即 'user'。
+  // 落地为带 source 的 system 消息且不响应输入租约；'resume' = 空消息续跑
+  // （text 允许为空，agent 层启动前补齐尾部工作现场）；省略即 'user'。
   kind,
   capabilityActivations,
   // 随消息流动的自由元数据（user-turn 契约的 metadata 字段，框架只透传
@@ -94,7 +95,7 @@ export async function submitUserTurn({
     }
     throw error;
   }
-  if (typeof text !== 'string' || text.length === 0) {
+  if (typeof text !== 'string' || (text.length === 0 && kind !== 'resume')) {
     throw new UserTurnDeliveryError('text must be a non-empty string', {
       code: 'invalid_input',
       status: 400,
@@ -102,8 +103,8 @@ export async function submitUserTurn({
       ...metadata,
     });
   }
-  if (kind !== undefined && kind !== 'user' && kind !== 'reminder') {
-    throw new UserTurnDeliveryError("kind must be 'user' or 'reminder' when provided", {
+  if (kind !== undefined && kind !== 'user' && kind !== 'reminder' && kind !== 'resume') {
+    throw new UserTurnDeliveryError("kind must be 'user', 'reminder' or 'resume' when provided", {
       code: 'invalid_input',
       status: 400,
       retryable: false,

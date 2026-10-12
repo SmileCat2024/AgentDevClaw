@@ -426,7 +426,6 @@ claw threads advance <thread-id> --to-session ID [--from-session ID] [--expected
 ```bash
 claw threads handoff-failed <thread-id> [--reason R] [--stage S] [--error E]   # 交接失败 → rotation_failed
 claw threads resume <thread-id> [--source S]    # 恢复 failed / waiting_input 看板状态
-claw threads close <thread-id> [--reason R]     # 系统硬关闭（终态），pending 指令一并取消
 ```
 
 `resume` 只恢复 Board 的执行观察状态，不创建 successor、不启动 Runtime、不推进 Thread head。
@@ -470,7 +469,6 @@ claw threads advance wt-xxxx-... --to-session <new-session> --from-session <old-
 # 交接失败标记 / 恢复 / 关闭
 claw threads handoff-failed wt-xxxx-... --reason "compact 失败" --stage advance_head
 claw threads resume wt-xxxx-...
-claw threads close wt-xxxx-... --reason operator_closed
 
 # 工作收口：归档线程（自动中断并清理整条 Session 链路）
 claw threads archive wt-xxxx-...

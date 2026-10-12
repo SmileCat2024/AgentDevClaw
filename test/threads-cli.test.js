@@ -95,8 +95,6 @@ function startFakeClawServer() {
       payload = { ok: true, threadId: 'wt-1', cleanup: { status: 'complete', commandsCancelled: 1, inflightDrain: { count: 0, commandIds: [] }, handoffConverged: false } };
     } else if (req.url === '/protoclaw/threads/wt-1/unarchive') {
       payload = { ok: true, threadId: 'wt-1' };
-    } else if (req.url === '/protoclaw/threads/wt-1/close') {
-      payload = { ok: true, thread: { threadId: 'wt-1', status: 'closed', closeReason: 'cli' } };
     } else if (req.url === '/protoclaw/threads/wt-1/resume') {
       payload = { ok: true, board: { status: 'idle' } };
     }
@@ -231,7 +229,7 @@ test('threads send --wait-started reports turn start and timeout via lifeState p
   assert.equal(timedOutPayload.started, false);
 });
 
-test('claw threads maps lifecycle subcommands (archive/unarchive/close/resume) to Thread HTTP routes', async () => {
+test('claw threads maps archive/unarchive/resume to Thread HTTP routes', async () => {
   const fake = await startFakeClawServer();
 
   const archived = await runCli(fake.port, ['threads', 'archive', 'wt-1', '--format', 'json']);
@@ -251,9 +249,8 @@ test('claw threads maps lifecycle subcommands (archive/unarchive/close/resume) t
   assert.deepEqual(resumeRequest.body, { source: 't007' });
 
   const closed = await runCli(fake.port, ['threads', 'close', 'wt-1', '--reason', 't007', '--format', 'json']);
-  assert.equal(closed.code, 0, closed.stderr);
-  const closeRequest = fake.requests.find((r) => r.url === '/protoclaw/threads/wt-1/close');
-  assert.deepEqual(closeRequest.body, { reason: 't007' });
+  assert.notEqual(closed.code, 0, 'closed is not a user-facing lifecycle operation');
+  assert.ok(!fake.requests.some((r) => r.url === '/protoclaw/threads/wt-1/close'));
 });
 
 test('claw threads validates required options without contacting the server', async () => {
@@ -278,7 +275,7 @@ test('claw threads help is available without a server', async () => {
   const result = await runCli('1', ['threads', 'help']);
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /claw threads list/);
-  assert.match(result.stdout, /claw threads close/);
+  assert.doesNotMatch(result.stdout, /claw threads close/);
 });
 
 test('threads text output is compact and exposes dispatch-critical fields', async () => {

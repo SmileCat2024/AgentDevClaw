@@ -28,6 +28,7 @@
 - APP metadata 声明呈现策略默认值：`persistent`（常驻）或 `on-demand`（有存活 Runtime 承载会话才显示）。智能编码空间、Agent Studio、IM 渠道、工作群为 persistent；Coder 为 on-demand。工作空间作者经 metadata 声明自己工作空间的默认策略，代码不写死任何 APP 专属判断。
 - on-demand 的生效策略由服务端合流（工作空间设置）：作者默认（auto / always）+ 用户覆盖（设置 → 工作空间，服务端存储跨浏览器一致）。`auto` 的判定源是**当前存活且绑定 Session 的 managed Runtime**；有未归档、非终态线程但其 Runtime 已停止，不得撑住左侧入口。左侧投影表达实际运行态；线程记录与历史仍保留在 APP 首页，不等同于正在运行。用户选择「始终显示」时可保留 APP 入口，但无存活 Runtime 时仍不产生运行会话叶子。入口消失后的找回路径是设置的「始终显示」（类比手机的应用管理），前端不保留任何粘性记忆。
 - **接续挡板例外（无感连续）**：接续窗口（线程 `status=rotating`，pendingSuccession 挡板在途）内三个 runtime 存活来源可能全部落空，但接续是已立挡板的持久化事务事实，不是运行态中断。挡板在途期间入口保持显示，使前端接续占位（disconnected 过渡条目）可见，无感连续不被打破；挡板清除（接续提交或失败收敛）后回到 Runtime 事实裁决。归档线程不适用此例外。
+- **演进注记（2026-10 线程生命周期定案）**：可见性事实由「存活 Runtime + rotating 挡板」扩展为**资产驱动**——存在未归档线程资产（含 hold 等非终态；删除事务窗口内除外）即保留入口，上文「未归档线程不得撑住入口」的限制不再成立。判定实现见 `server/routes/agent-connected.js` 的 `hasRunningSessions`。APP 首页仍是全量线程列表，侧栏叶子仍只表达运行态，两者分工不变。
 - **APP 身份与可见性判定分离**：侧栏中的 APP 身份来自 metadata 声明，不由 runtime 或线程临时合成；`sidebarVisible` 是 APP 的呈现策略结果。`persistent` 常驻；`on-demand` 按作者默认与用户覆盖合流，自动策略可明确选择当前存活 Runtime 作为可见性事实。runtime 仅影响 APP 是否显示及其下运行会话叶子，不改变 APP 身份。`sidebarVisible` 由 wire 下发，前端纯消费。
 - Coder 条目下完全遵循 ADR-0010 统一投影（工作空间 → 目录组 → 存活 runtime 叶子，叶子 = 运行中线程 head 会话），零特例。Coder APP 首页为全量线程列表（行 = 线程，含归档 tab），沿用现 coder-threads 视图：侧栏答"现在活着什么"，首页答"我有哪些线程"。
 

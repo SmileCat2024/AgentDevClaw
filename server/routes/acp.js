@@ -207,6 +207,7 @@ export async function validateAcpCwd(rawCwd) {
  * @param {object} ctx
  * @param {object} ctx.threadIntegration - getThreadIntegration()（onSessionCreated 宿主钩子）
  * @param {object} ctx.threadControl - getThreadControl()（{core, archive}；list/resume 需要）
+ * @param {{ deleteThread: Function }} ctx.threadDelete - thread 删除级联服务（ACP 创建失败回滚）
  * @param {Function} [ctx.requirePrebuiltSessionRecord] - 会话索引记录读取（resume cwd 校验 / list 标题来源）
  * @param {Function} [ctx.readSessionSnapshotForContinuity] - 完整会话快照读取（history 端点消息来源）
  */
@@ -220,6 +221,7 @@ export function setupAcpRoutes(app, express, ctx) {
     waitForManagedRuntimeReady,
     threadIntegration,
     threadControl,
+    threadDelete,
     requirePrebuiltSessionRecord,
     readSessionSnapshotForContinuity,
   } = ctx;
@@ -230,6 +232,9 @@ export function setupAcpRoutes(app, express, ctx) {
     if (typeof ctx[dep] !== 'function') {
       throw new Error(`setupAcpRoutes: missing required ctx dependency "${dep}"`);
     }
+  }
+  if (typeof threadDelete?.deleteThread !== 'function') {
+    throw new Error('setupAcpRoutes: missing required ctx dependency "threadDelete.deleteThread"');
   }
 
   /**
@@ -256,34 +261,49 @@ export function setupAcpRoutes(app, express, ctx) {
       }
     }
 
-    // 2. thread 已创建 → 关闭。不信编排期的 hook 返回值，重新按
-    //    headSessionId 解析——兜底「runtime 未 READY 但 thread 已创建」
-    //    的中间态；无线程（hook 未执行 / 非 head）时 skipped。
+    // 2. thread 已创建 → 走统一删除事务，级联清理线程及其全部会话。
+    //    不信编排期 hook 返回值，重新按 headSessionId 解析；无线程时跳过。
     let threadRecord = null;
     try {
       threadRecord = await threadControl.core.findThreadByHeadSession(agentId, sessionId);
     } catch (error) {
-      steps.push({ step: 'close_thread', status: 'failed', error: String(error?.message || error), phase: 'resolve' });
+      steps.push({ step: 'delete_thread', status: 'failed', error: String(error?.message || error), phase: 'resolve' });
     }
     if (threadRecord) {
       try {
-        await threadControl.core.closeThread(threadRecord.threadId, { reason: 'acp_session_creation_rollback' });
-        steps.push({ step: 'close_thread', status: 'ok', threadId: threadRecord.threadId });
+        const result = await threadDelete.deleteThread(threadRecord.threadId, { reason: 'acp_session_creation_rollback' });
+        if (result.status === 'complete') {
+          steps.push({ step: 'delete_thread', status: 'ok', threadId: threadRecord.threadId });
+        } else {
+          leftover.threadId = threadRecord.threadId;
+          steps.push({ step: 'delete_thread', status: 'failed', threadId: threadRecord.threadId, error: 'thread deletion was partial' });
+        }
       } catch (error) {
         leftover.threadId = threadRecord.threadId;
-        steps.push({ step: 'close_thread', status: 'failed', threadId: threadRecord.threadId, error: String(error?.message || error) });
+        steps.push({ step: 'delete_thread', status: 'failed', threadId: threadRecord.threadId, error: String(error?.message || error) });
       }
-    } else if (!steps.some((step) => step.step === 'close_thread')) {
-      steps.push({ step: 'close_thread', status: 'skipped', reason: 'no_thread_for_session' });
+    } else if (!steps.some((step) => step.step === 'delete_thread')) {
+      steps.push({ step: 'delete_thread', status: 'skipped', reason: 'no_thread_for_session' });
     }
 
-    // 3. session 已写入 → 从 index 删除
-    try {
-      await deletePrebuiltSession(agentId, sessionId, { includeSessions: false });
-      steps.push({ step: 'delete_session', status: 'ok' });
-    } catch (error) {
-      leftover.clawSessionId = sessionId;
-      steps.push({ step: 'delete_session', status: 'failed', error: String(error?.message || error) });
+    // 3. 线程删除事务已级联删除 Session；无线程时按原路径删除。
+    const threadWasFound = Boolean(threadRecord);
+    if (threadWasFound) {
+      const deletionStep = steps.find((step) => step.step === 'delete_thread');
+      steps.push({
+        step: 'delete_session',
+        status: 'skipped',
+        reason: deletionStep?.status === 'ok' ? 'deleted_with_thread' : 'thread_delete_incomplete',
+      });
+      if (deletionStep?.status !== 'ok') leftover.clawSessionId = sessionId;
+    } else {
+      try {
+        await deletePrebuiltSession(agentId, sessionId, { includeSessions: false });
+        steps.push({ step: 'delete_session', status: 'ok' });
+      } catch (error) {
+        leftover.clawSessionId = sessionId;
+        steps.push({ step: 'delete_session', status: 'failed', error: String(error?.message || error) });
+      }
     }
 
     if (Object.keys(leftover).length > 0) leftover.clawSessionId = leftover.clawSessionId || sessionId;

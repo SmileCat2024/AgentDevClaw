@@ -129,6 +129,8 @@ import {
   createThreadSuccessionService,
   createThreadRecoveryService,
 } from './server/thread-control/thread-succession.js';
+import { createThreadRestartResume } from './server/thread-control/thread-restart-resume.js';
+import { submitUserTurn } from './server/shared/user-turn.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
   setupFeatureRepositoryRoutes,
@@ -592,39 +594,50 @@ setupUsageRoutes(app, express);
 setupUISurfaceRoutes(app, express);
 
 // ── Work Threads → server/thread-control/（coder 宿主已启用线程承接）──
+// head runtime 就绪闸：head runtime 消失（进程退出 / server 重启清表）后，
+// 既有投递触发点（append / succession / runtime-ready）全部依赖"runtime
+// 会 ready"的事件，而进程死亡后不会再有该事件——指令只会永久滞留。
+// commands 入箱前经此唤起 head runtime（复用 startManagedAgent 链路），
+// runtime-ready 钩子随后自动补投；调用方无需知道"要先激活会话"。
+// C2 重启自动恢复共用同一闸（commands 唤起与恢复拉起是同一条链路）。
+const ensureHeadRuntime = async (agentId, sessionId) => {
+  if (isManagedRuntimeRunning(getAgentRuntime(agentId, sessionId))) {
+    return { ok: true };
+  }
+  const record = await requirePrebuiltSessionRecord(agentId, sessionId).catch(() => null);
+  if (!record) {
+    return {
+      ok: false,
+      code: 'head_session_missing',
+      message: `head session ${sessionId} not found in session index`,
+    };
+  }
+  await startManagedAgent(await requireAgentLight(agentId), sessionId);
+  const ready = await waitForManagedRuntimeReady(agentId, 20000, sessionId);
+  if (!ready) {
+    return {
+      ok: false,
+      code: 'runtime_ready_timeout',
+      message: `head runtime not READY after wake (session=${sessionId})`,
+    };
+  }
+  return { ok: true };
+};
+
+// C2 重启自动恢复：未完成事实判定（pending 指令 / 看板 running 残留）
+// → 拉起 +（后者）kind='resume' 空消息续跑。启动时挂接续收敛之后执行。
+const threadRestartResume = createThreadRestartResume({
+  control: threadControl,
+  ensureHeadRuntime,
+  submitUserTurn,
+});
+
 setupThreadRoutes(app, express, {
   control: threadControl,
   lifecycle: threadLifecycle,
   // commands 端点的即时投递走 integration 的 consumer 消费面（退避 / 水位同源）
   tryDeliver: (threadId) => threadIntegration.tryDeliver(threadId),
-  // head runtime 就绪闸：head runtime 消失（进程退出 / server 重启清表）后，
-  // 既有投递触发点（append / succession / runtime-ready）全部依赖"runtime
-  // 会 ready"的事件，而进程死亡后不会再有该事件——指令只会永久滞留。
-  // commands 入箱前经此唤起 head runtime（复用 startManagedAgent 链路），
-  // runtime-ready 钩子随后自动补投；调用方无需知道"要先激活会话"。
-  ensureHeadRuntime: async (agentId, sessionId) => {
-    if (isManagedRuntimeRunning(getAgentRuntime(agentId, sessionId))) {
-      return { ok: true };
-    }
-    const record = await requirePrebuiltSessionRecord(agentId, sessionId).catch(() => null);
-    if (!record) {
-      return {
-        ok: false,
-        code: 'head_session_missing',
-        message: `head session ${sessionId} not found in session index`,
-      };
-    }
-    await startManagedAgent(await requireAgentLight(agentId), sessionId);
-    const ready = await waitForManagedRuntimeReady(agentId, 20000, sessionId);
-    if (!ready) {
-      return {
-        ok: false,
-        code: 'runtime_ready_timeout',
-        message: `head runtime not READY after wake (session=${sessionId})`,
-      };
-    }
-    return { ok: true };
-  },
+  ensureHeadRuntime,
   threadDelete,
   // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null。
   // 线程列表逐线程调用（~百线程 × 5s/20s 轮询）：走共享只读索引查询，
@@ -651,6 +664,7 @@ setupAcpRoutes(app, express, {
   waitForManagedRuntimeReady,
   threadIntegration,
   threadControl,
+  threadDelete,
   requirePrebuiltSessionRecord,
   readSessionSnapshotForContinuity,
 });
@@ -1630,6 +1644,21 @@ async function main() {
     }
   } catch (err) {
     console.warn('[thread-recovery] startup convergence failed:', err.message);
+  }
+
+  // C2 未完成事实恢复：pending 指令 → 拉起补投；看板 running 残留（干到
+  // 一半进程没了）→ 拉起 + kind='resume' 空消息续跑。挂在接续收敛之后：
+  // 先清交接挡板，再按收敛后的盘上事实判定。
+  try {
+    const report = await threadRestartResume.resumeInterruptedThreads();
+    if (report.resumed.length > 0) {
+      console.log(`[thread-recovery] resumed ${report.resumed.length} thread(s):`, report.resumed);
+    }
+    if (report.failed.length > 0) {
+      console.warn(`[thread-recovery] ${report.failed.length} thread(s) failed to resume:`, report.failed);
+    }
+  } catch (err) {
+    console.warn('[thread-recovery] startup resume scan failed:', err.message);
   }
 
   // Apply global proxy before listening (affects all fetch + child processes)

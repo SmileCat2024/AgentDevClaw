@@ -76,7 +76,7 @@
 - 生命状态合成（推导值非存储字段）：`thread-life-state.js` — `archived > executing > pending-commands > idle`，另含 `closed` 系统终态；`executing` = 看板 running 或锚点 rotating；`pending-commands` = commands 含 pending/in_flight；`failed` 单独布尔。`lastEventAt` = max(锚点 updatedAt, 看板 updatedAt)。
 - 归档记录：`thread-archive.js` — `threads 根/archive-index.json` 保存 `archivedAt` 与 `archiveCleanup.status=running|complete|partial`。归档是 Thread 级清理事务，原子写 + 串行锁，幂等。
 - 路由（thread-routes.js）：list/detail 附带 lifeState 与 cleanup；`POST .../archive` 自动 hold、interrupt head、取消 pending、停止链上 Runtime、关闭 Board；`POST .../unarchive` 解除 hold 并 reopen Board，但不自动启动 Runtime；commands/deliver 对已归档线程拒 409 `thread_archived`。
-- ACP `session/close` 语义重定义：adapter 转发 Thread archive；归档事务统一负责中断 head、取消 pending、停止链上 Runtime、关闭 Board，并返回 cleanup 结果。锚点 closeThread 保留给系统硬清理（ACP 创建回滚 / head 会话删除），HTTP close 路由不作为普通用户归档的替代。
+- ACP `session/close` 语义重定义：adapter 转发 Thread archive；归档事务统一负责中断 head、取消 pending、停止链上 Runtime、关闭 Board，并返回 cleanup 结果。线程 closed 仅作为删除事务内部的封锁/封存状态；ACP 创建回滚走级联删除，head 会话不允许单独删除；HTTP close 路由已退役。
 - CLI：`claw threads archive|unarchive` 子命令；legacy 探索别名（exp/subs/spawn/compact/resume/show）全部移除，仅保留 new-session。
 - 已知边界：succession 交接窗口内归档（board 瞬时非 running）可能放行，pending 命令仍会投递到新 head——HTTP 与 ACP 主路径均有闸，极端竞态可接受。
 

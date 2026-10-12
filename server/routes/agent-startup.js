@@ -28,6 +28,7 @@ import { notifyRuntimeReady } from '../shared/runtime-hooks.js';
 import { resolveDesktopWorkspace } from '../shared/desktop-workspace.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../shared/constants.js';
 import { getInternalAuthToken } from '../auth.js';
+import { convergeThreadBoardOnDeliberateStop } from '../thread-control/deliberate-stop-convergence.js';
 import {
   PROCESS_MODE_ISOLATED,
   PROCESS_MODE_SHARED_BY_PROJECT,
@@ -456,11 +457,20 @@ export function createAgentStartupFns(deps) {
       // Mark ALL runtimes sharing this process as stopped
       const sharedRuntimes = listRuntimesByProcess(child);
       for (const rt of sharedRuntimes) {
+        // 人为/意外区分（C1）：宿主人为停止会先行标记 stopped=true；
+        // 崩溃 / 宿主被收割到达这里时尚为 false——保留看板 running 事实，
+        // 供重启恢复判定"未完成"。
+        const deliberate = rt.stopped === true;
         rt.exitCode = code;
         rt.signalCode = signal || child.signalCode || null;
         rt.stopped = true;
         releaseRuntimeState(rt.key);
         if (rt.selectedSessionId) featureCommunicationStore.closeSession(rt.agentId || agent.id, rt.selectedSessionId);
+        if (deliberate && rt.selectedSessionId) {
+          // 进程退出确认后收敛：事件流已终止，无迟到事件反转窗口
+          convergeThreadBoardOnDeliberateStop(rt.agentId || agent.id, rt.selectedSessionId)
+            .catch(() => { /* 收敛失败不阻断 exit 善后 */ });
+        }
       }
       const exitSummary = `process exited with code ${code ?? 'null'} signal ${signal || child.signalCode || 'none'}`;
       log(agent.id, exitSummary);

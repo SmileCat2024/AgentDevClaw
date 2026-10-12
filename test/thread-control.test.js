@@ -471,7 +471,7 @@ describe('board (WorkThreadBoard 执行看板)', () => {
     assert.equal((await board.getState(thread.threadId)).status, 'failed');
   });
 
-  test('turn.cancelled is a lifecycle signal: event recorded, board status unchanged', async () => {
+  test('turn.cancelled converges board to idle (deliberate stop semantics), never failed', async () => {
     const { core, board } = makeControl(root);
     const cancelThread = await core.start({ sessionRef: { agentId: 'cancel-agent', sessionId: 'cancel-session' } });
     await board.recordRuntimeEvent({
@@ -481,7 +481,8 @@ describe('board (WorkThreadBoard 执行看板)', () => {
       event: { type: 'turn.started', turn: 1 },
     });
 
-    // guard 轮换打断：cancelled 不得把看板打成 failed（轮换由 context_guard_event 驱动）
+    // guard 轮换打断：cancelled 不得把看板打成 failed（轮换由 context_guard_event 驱动）；
+    // F1 语义：手动中断/生命周期打断把看板收敛为 idle，与意外中断（running 残留）区分。
     const cancelled = await board.recordRuntimeEvent({
       agentId: 'cancel-agent',
       sessionId: 'cancel-session',
@@ -489,7 +490,7 @@ describe('board (WorkThreadBoard 执行看板)', () => {
       event: { type: 'turn.cancelled', turn: 1, error: { message: 'Session blocked by the context guard', reason: 'cancelled' } },
     });
     assert.equal(cancelled.applied, true);
-    assert.equal(cancelled.state.status, 'running');
+    assert.equal(cancelled.state.status, 'idle');
 
     const { events: storedEvents } = await board.getExecutionEvents(cancelThread.threadId);
     const recorded = storedEvents.some((event) => event.type === 'turn.cancelled');
@@ -1044,30 +1045,34 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal(thread.headSessionId, 'c1');
   });
 
-  test('onSessionDeleted cancels the thread when its head is deleted; no-op otherwise', async () => {
+  test('assertSessionDeletable rejects deleting a thread head session; no-op otherwise', async () => {
     const { core, integration } = makeIntegration();
     const thread = await integration.onSessionCreated('coder', { id: 'del-1', title: 'A' });
     await core.appendCommand({ threadId: thread.threadId, text: 'staged' });
     await core.advanceHead({ threadId: thread.threadId, toSessionId: 'del-2', fromSessionId: 'del-1', endKind: 'trim' });
 
     // 删除非 head 棒次：不动线程
-    const nonHead = await integration.onSessionDeleted('coder', 'del-1');
+    const nonHead = await integration.assertSessionDeletable('coder', 'del-1');
     assert.equal(nonHead.applied, false);
     assert.equal(nonHead.reason, 'no_thread_for_session');
 
     // 纯 session 会话（无线程，含非宿主 APP）：no-op
-    const nonHost = await integration.onSessionDeleted('programming-helper', 'not-in-any-thread');
+    const nonHost = await integration.assertSessionDeletable('programming-helper', 'not-in-any-thread');
     assert.equal(nonHost.applied, false);
     assert.equal(nonHost.reason, 'no_thread_for_session');
 
-    // 删除 head：线程取消，pending 指令一并取消
-    const outcome = await integration.onSessionDeleted('coder', 'del-2');
-    assert.equal(outcome.applied, true);
-    assert.equal(outcome.threadId, thread.threadId);
+    // 删除 head 会明确失败，不改动线程或 pending 指令
+    await assert.rejects(
+      integration.assertSessionDeletable('coder', 'del-2'),
+      (error) => error.code === 'thread_head_session_cannot_be_deleted'
+        && error.status === 409
+        && error.message.includes(thread.threadId)
+        && error.message.includes('head'),
+    );
     const record = await core.getThread(thread.threadId);
-    assert.equal(record.status, 'closed');
-    assert.equal(record.closeReason, 'head_session_deleted');
-    assert.equal(record.commands[0].status, ThreadCommandStatus.CANCELLED);
+    assert.equal(record.status, 'open');
+    assert.equal(record.headSessionId, 'del-2');
+    assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
   });
 });
 

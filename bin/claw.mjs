@@ -292,11 +292,10 @@ function printThreadsHelp() {
   console.log('  claw threads advance <thread-id> --to-session ID --from-session ID [--expected-revision N] [--end-kind K]');
   console.log('  claw threads handoff-failed <thread-id> [--reason R] [--stage S] [--error E]');
   console.log('  claw threads resume <thread-id> [--source S]        # 恢复 failed 线程的调度');
-  console.log('  claw threads close <thread-id> [--reason R]         # 关闭线程（清理残迹）');
   console.log('  claw threads archive <thread-id>                     # 归档=取消性操作：取消未开始指令');
   console.log('  claw threads unarchive <thread-id>                  # 恢复可调度资格；不复活已取消指令');
   console.log('');
-  console.log('目标对象说明：archive/unarchive/close/resume 都作用于整个 Thread（其全部成员会话），');
+  console.log('目标对象说明：archive/unarchive/resume 都作用于整个 Thread（其全部成员会话），');
   console.log('不是单个 Session。归档响应携带 cleanup（commandsCancelled / inflightDrain / handoffConverged），');
   console.log('足以让调用者从响应知道实际对象与取消结果。delete 不在 CLI 暴露：删除是带确认的破坏性');
   console.log('操作（级联清理全部会话，见 threads delete 的 UI 面），脚本化 CLI 不绕过确认。');
@@ -365,7 +364,7 @@ async function handleThreads(args = []) {
   }
 
   if (!threadId) {
-    throw new Error('用法: claw threads <list|create|show|events|send|watch|deliver|advance|handoff-failed|resume|close> ...');
+    throw new Error('用法: claw threads <list|create|show|events|send|watch|deliver|advance|handoff-failed|resume|archive|unarchive> ...');
   }
 
   if (subcommand === 'show') {
@@ -536,21 +535,19 @@ async function handleThreads(args = []) {
     return;
   }
 
-  if (subcommand === 'resume' || subcommand === 'close' || subcommand === 'archive' || subcommand === 'unarchive') {
+  if (subcommand === 'resume' || subcommand === 'archive' || subcommand === 'unarchive') {
     const payload = await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/${subcommand}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(subcommand === 'resume'
         ? { source: optionValue(args, '--source', 'cli') }
-        : subcommand === 'close'
-          ? { reason: optionValue(args, '--reason', 'cli') }
-          : {}),
+        : {}),
     });
     writeThreadPayload(payload, format);
     return;
   }
 
-  throw new Error(`未知 threads 子命令: ${subcommand || '(空)'}（可用: list / create / show / events / send / watch / deliver / advance / handoff-failed / resume / close / archive / unarchive）`);
+  throw new Error(`未知 threads 子命令: ${subcommand || '(空)'}（可用: list / create / show / events / send / watch / deliver / advance / handoff-failed / resume / archive / unarchive）`);
 }
 
 // 轮询线程 lifeState 直到 executing（head runtime 开始处理投递指令）或超时。
@@ -879,7 +876,6 @@ function printHelp() {
   console.log('  claw threads advance <thread-id> --to-session ID --from-session ID');
   console.log('  claw threads handoff-failed <thread-id> [--reason R] [--stage S]');
   console.log('  claw threads resume <thread-id> [--source S]');
-  console.log('  claw threads close <thread-id> [--reason R]');
   console.log('  claw threads archive <thread-id>');
   console.log('  claw threads unarchive <thread-id>');
   console.log('  claw sessions create --agent coder --dir D [--title T]');

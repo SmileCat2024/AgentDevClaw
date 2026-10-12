@@ -555,16 +555,4 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
       _errorResponse(res, err);
     }
   });
-
-  // ── 关闭（锚点终态：调度侧清理，如 ACP 创建回滚 / head 会话删除）──
-
-  app.post('/protoclaw/threads/:threadId/close', jsonMiddleware, async (req, res) => {
-    try {
-      const { reason } = req.body || {};
-      const thread = await core.closeThread(req.params.threadId, { reason });
-      res.json({ ok: true, thread });
-    } catch (err) {
-      _errorResponse(res, err);
-    }
-  });
 }

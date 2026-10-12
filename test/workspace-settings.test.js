@@ -1,6 +1,5 @@
-// 工作空间设置（ADR-0025）：用户覆盖层存储 + on-demand Runtime 存活合流。
-// 自动显示由实际存活的 managed Runtime 决定；持久线程历史本身不让左侧
-// 运行态入口常驻。
+// 工作空间设置（ADR-0025）：用户覆盖层存储 + on-demand 入口可见性合流。
+// Coder 未归档线程资产与存活 Runtime 都能支撑入口显示。
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -37,7 +36,7 @@ describe('workspace-settings: 用户覆盖层存储', () => {
 });
 
 // ── 合流判定（wire 组装）─────────────────────────────────────────
-// 自动显示取 managed runtime 的存活事实，不从持久线程状态推断运行态。
+// 自动显示由 managed runtime 存活事实或未归档线程资产支撑。
 
 function lightAgents() {
   return [
@@ -46,7 +45,7 @@ function lightAgents() {
   ];
 }
 
-function createQuery(overrides, threadSummaries = [], archiveEntries = {}) {
+function createQuery(overrides, threadSummaries = [], archiveEntries = {}, threadRecords = {}) {
   return createConnectedAgentsQuery({
     getAgentsLight: async () => lightAgents(),
     readActiveWorkspaceSessionMeta: async () => ({ workspaceSessions: { sessions: [] }, sessionMeta: {} }),
@@ -56,7 +55,13 @@ function createQuery(overrides, threadSummaries = [], archiveEntries = {}) {
     resolveAgentModelPresets: async () => ({}),
     readVisibilityOverrides: async () => overrides,
     resolveThreadControl: () => ({
-      core: { listThreads: async () => threadSummaries },
+      // 生产形状：listThreads 返回 index 摘要（不含 deleting），deleting 只在全量记录上
+      core: {
+        listThreads: async () => threadSummaries,
+        getThread: async (threadId) => threadRecords[threadId]
+          ?? threadSummaries.find((thread) => thread.threadId === threadId)
+          ?? null,
+      },
       archive: { list: async () => archiveEntries },
     }),
   });
@@ -82,7 +87,7 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
     assert.equal(coder.sidebarVisible, true);
   });
 
-  it('存活且绑定会话的 Runtime 显示入口；停止 Runtime 后普通线程不撑入口', async () => {
+  it('存活且绑定会话的 Runtime 或未归档线程资产显示入口', async () => {
     const runtime = (sessionId, overrides = {}) => ({
       agentId: 'coder',
       selectedSessionId: sessionId,
@@ -94,9 +99,9 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
     managedAgents.clear();
     try {
       const ordinaryThread = [{ threadId: 'wt-idle', agentId: 'coder', status: 'open' }];
-      const noRuntime = await createQuery({}, ordinaryThread).getConnectedAgents();
-      assert.equal(noRuntime.find((a) => a.id === 'coder').sidebarVisible, false,
-        '普通可调度线程不代表 Runtime 正在运行');
+      const threadAsset = await createQuery({}, ordinaryThread).getConnectedAgents();
+      assert.equal(threadAsset.find((a) => a.id === 'coder').sidebarVisible, true,
+        '未归档的 open 线程资产在 Runtime 停止后仍显示入口');
 
       managedAgents.set('coder::live', runtime('session-live'));
       assert.equal((await createQuery({}).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, true);
@@ -105,8 +110,8 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
       assert.equal((await createQuery({}).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, true,
         '另一个仍存活的 Runtime 仍使入口显示');
       managedAgents.delete('coder::live');
-      assert.equal((await createQuery({}, ordinaryThread).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, false,
-        '仅剩 stopping Runtime 且无接续时不显示');
+      assert.equal((await createQuery({}, []).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, false,
+        '仅剩 stopping Runtime 且无线程资产时不显示');
 
       managedAgents.set('coder::no-session', runtime(null));
       assert.equal((await createQuery({}).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, false,
@@ -116,13 +121,33 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
     }
   });
 
-  it('真实 rotating 接续挡板在 Runtime 空窗期间保留入口；归档线程不保留', async () => {
+  it('未归档非 closed 且非 deleting 线程显示入口；归档、deleting、closed 线程不显示，hold 仍算资产', async () => {
     managedAgents.clear();
-    const rotating = [{ threadId: 'wt-rotating', agentId: 'coder', status: 'rotating' }];
-    const visible = await createQuery({}, rotating).getConnectedAgents();
-    assert.equal(visible.find((a) => a.id === 'coder').sidebarVisible, true);
+    const thread = (threadId, overrides = {}) => ({ threadId, agentId: 'coder', status: 'open', ...overrides });
 
-    const archived = await createQuery({}, rotating, { 'wt-rotating': { archivedAt: 1 } }).getConnectedAgents();
-    assert.equal(archived.find((a) => a.id === 'coder').sidebarVisible, false);
+    for (const candidate of [
+      thread('wt-open'),
+      thread('wt-rotating', { status: 'rotating' }),
+      thread('wt-hold', { hold: true }),
+    ]) {
+      const visible = await createQuery({}, [candidate]).getConnectedAgents();
+      assert.equal(visible.find((a) => a.id === 'coder').sidebarVisible, true, `${candidate.threadId} 显示入口`);
+    }
+
+    // deleting 只写在全量记录（index 摘要与普通 open 线程无异），经 getThread 排除
+    const deletingRecords = { 'wt-deleting': thread('wt-deleting', { deleting: true }) };
+    const hiddenCases = [
+      { threads: [thread('wt-archived')], archives: { 'wt-archived': { archivedAt: 1 } } },
+      { threads: [thread('wt-deleting')], records: deletingRecords },
+      { threads: [thread('wt-closed', { status: 'closed' })] },
+    ];
+    for (const { threads, archives = {}, records = {} } of hiddenCases) {
+      const result = await createQuery({}, threads, archives, records).getConnectedAgents();
+      assert.equal(result.find((a) => a.id === 'coder').sidebarVisible, false);
+    }
+
+    const rotating = [thread('wt-barrier', { status: 'rotating' })];
+    const visible = await createQuery({}, rotating).getConnectedAgents();
+    assert.equal(visible.find((a) => a.id === 'coder').sidebarVisible, true, 'rotating 接续挡板保留入口');
   });
 });

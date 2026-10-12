@@ -77,6 +77,15 @@ async function callListRoute(app) {
 before(async () => { base = mkdtempSync(path.join(os.tmpdir(), 'claw-thread-routes-')); });
 after(async () => { if (base) await fs.rm(base, { recursive: true, force: true }); });
 
+describe('thread routes', () => {
+  it('does not register a closed-state endpoint', () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, { control });
+    assert.equal(app.routes['POST /protoclaw/threads/:threadId/close'], undefined);
+  });
+});
+
 describe('GET /protoclaw/threads handoffStartedAt wire projection', () => {
   it('projects the pendingSuccession barrier start time; zero when no barrier', async () => {
     const control = makeControl(async () => ({ success: true }));

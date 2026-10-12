@@ -113,10 +113,10 @@ export function createSessionHelpers(ctx) {
     enrichAgent,
     startManagedAgent,
     waitForManagedRuntimeReady,
-    // 启动期空会话清理的线程收口钩子：cleanup 直接删文件，不经 delete
-    // 路由——head 会话属于某活跃线程时必须走同一收口（closeThread），
-    // 否则线程变孤儿，pending 指令永久滞留。
-    onSessionDeleted = null,
+    // 启动期空会话清理的线程守卫：cleanup 直接删文件，不经 delete
+    // 路由——head 会话属于某活跃线程时不能单独删除；删除服务会明确拒绝，
+    // 避免线程失去 head 后成为孤儿。
+    assertSessionDeletable = null,
   } = ctx;
   const sidebarReadModelRetryAfter = new Map();
 
@@ -460,7 +460,21 @@ async function cleanupEmptySessions(agentId) {
     }
   }
 
-  const toDelete = selectEmptySessions(index.sessions, sessionMessageCounts);
+  const candidates = selectEmptySessions(index.sessions, sessionMessageCounts);
+  if (candidates.length === 0) return 0;
+  const toDelete = [];
+  for (const id of candidates) {
+    if (!assertSessionDeletable) {
+      toDelete.push(id);
+      continue;
+    }
+    try {
+      await assertSessionDeletable(agentId, id);
+      toDelete.push(id);
+    } catch (error) {
+      console.warn(`[sessions] session deletion guard failed for ${id}:`, error?.message || error);
+    }
+  }
   if (toDelete.length === 0) return 0;
 
   await updateSessionIndex(agentId, (current) => {
@@ -471,15 +485,6 @@ async function cleanupEmptySessions(agentId) {
 
   for (const id of toDelete) {
     await fs.rm(getPrebuiltSessionFilePath(agentId, id), { force: true }).catch(e => console.warn(e));
-    // 线程收口与 delete 路由同源：被删会话是线程 head 时关闭线程，防止
-    // 启动清理制造孤儿线程（pending 指令永久滞留，runtime 又无从唤起）。
-    if (onSessionDeleted) {
-      try {
-        await onSessionDeleted(agentId, id);
-      } catch (error) {
-        console.warn(`[sessions] thread closure after cleanup failed for ${id}:`, error?.message || error);
-      }
-    }
   }
 
   console.log(`[sessions] cleaned up ${toDelete.length} empty session(s) for ${agentId}: ${toDelete.join(', ')}`);

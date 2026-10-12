@@ -363,43 +363,46 @@ export function createThreadDeleteService({
         failures.push({ stage: 'drain', error: message });
       }
 
-      // ── seal 事务（status=closed + 取消 + 清除 deleting，同一 store 落盘）
-      // 运行中调用已收敛（自然完成或强停），此刻才进入 closed 终态：
-      //   - closed 是框架 terminal 判定：advanceHead / beginSessionHandoff
-      //     拒绝，deliver 返回 thread_closed——deleting 窗口内不会提交新
-      //     successor（入口已拒），不会留下成员集合之外的孤儿会话；
-      //   - 取消剩余 pending / in_flight，保留取消原因与时间；
-      //   - 清除 deleting 标记（终态后由 closed 取代，避免「删除中」事实
-      //     残留在已删 / 待删记录上误导审计）。
+      // ── seal 事务（closeThread 封锁锚点、取消指令；随后清除 deleting）──
+      // 运行中调用已收敛（自然完成或强停），此刻才进入 closed 中间态；
+      // deleting 窗口内不会提交 successor，closed 保证后续入口拒绝写入。
       // seal 失败不影响清理推进（清理各步幂等、可重试）；seal 失败时线程
       // 仍 held（自动投递被阻）+ deleting 标记仍在（入口拒绝仍在），
       // 残留状态是安全的：重复执行 deleteThread 会重新走 begin（幂等）
       // 并在 seal 处再次尝试。
-      let sealed = null;
       try {
-        const outcome = await core.store.update(normalizedThreadId, (draft) => {
+        const closed = await core.closeThread(normalizedThreadId, { reason });
+        // 计数取 seal 时点 draft 上实际发生的取消，不用事务入口快照——
+        // drain 期间指令可能自然完成，快照口径会虚报。pending 由
+        // closeThread 取消（thread_closed 原因，此处重标记）；in_flight 是
+        // K8 前的遗留盘上词表（无生产写入方），closeThread 不认——在记录
+        // 删除前的最后一次写人机会里显式收敛，避免 closed 记录残留
+        // "活着"的指令。
+        let cancelledAtSeal = 0;
+        await core.store.update(normalizedThreadId, (draft) => {
           const now = Date.now();
-          draft.status = 'closed';
-          draft.closeReason = reason;
-          draft.closedAt = now;
           draft.deleting = false;
           for (const command of draft.commands || []) {
-            if (command.status === 'pending' || command.status === 'in_flight') {
+            if (command.status === 'cancelled' && command.lastReason === 'thread_closed') {
+              command.lastReason = DELETING_CANCEL_REASON;
+              command.updatedAt = now;
+              cancelledAtSeal += 1;
+            } else if (command.status === 'in_flight') {
               command.status = 'cancelled';
               command.lastReason = DELETING_CANCEL_REASON;
               command.updatedAt = now;
-              cleanup.commandsCancelled += 1;
+              cancelledAtSeal += 1;
             }
           }
           pushLifecycleEvent(draft, {
             type: 'deleting',
-            status: 'closed',
+            status: closed.status,
             at: now,
             reason,
           });
           return draft;
         });
-        sealed = outcome.record;
+        cleanup.commandsCancelled = cancelledAtSeal;
         cleanup.steps.seal = { ok: true };
       } catch (error) {
         const message = String(error?.message || error);
