@@ -20,7 +20,11 @@
  *   2. Feature 暴露 sign_output_style 签名工具：模型逐字默写当前风格的确认签名，并必填
  *      interrupt（打断）字段；规范化空白后全等比对，匹配才记为“本轮已签名”。interrupt
  *      缺失时按 false 生效，并经 effectiveCall 调用改写（ADR-0023）把历史调用修正为显式
- *      interrupt=false；填了但非布尔值仍直接拒绝。
+ *      interrupt=false；填了但非布尔值仍直接拒绝。interrupt=true 的打断仅在随本调用
+ *      一并输出了非空正文时生效：ToolUse 钩子（captureSignStepContent）在工具执行前
+ *      从 context 捕获本步 assistant 正文，空白正文的打断会被强制降级为 false 并同样经
+ *      effectiveCall 改写调用历史——本轮继续，工具结果勒令模型在下一步直接产出最终
+ *      回复正文（防“假签名提早打断”导致最终回复残缺/为空）。
  *   3. StepFinish guard 门禁：风格启用期间，模型的自然结束（无工具调用的收尾步）
  *      必须已经签名通过；否则拦截本次结束并注入 system 消息勒令补签，强制再跑一轮。
  *      连续拦截达到 maxSignatureBlocks 上限后放行结束并记录警告（防死循环）。
@@ -58,6 +62,7 @@ import type {
   StepFinishDecisionContext,
   StepStartContext,
   Tool,
+  ToolContext,
 } from '@agentdevjs/core';
 
 const STYLE_DIR_SEGMENTS = ['.agentdev', 'output-style'];
@@ -210,6 +215,7 @@ export class StylizedOutput implements AgentFeature {
   static hooks = {
     syncStyleState: { lifecycle: 'CallStart' as any, kind: 'observe' as const },
     ensureStyleInjection: { lifecycle: 'StepStart' as any, kind: 'observe' as const },
+    captureSignStepContent: { lifecycle: 'ToolUse' as any, kind: 'observe' as const },
     decideSignatureGate: { lifecycle: 'StepFinish' as any, kind: 'guard' as const, role: 'advisor' as const },
   };
 
@@ -226,6 +232,12 @@ export class StylizedOutput implements AgentFeature {
   private signedForReply = false;
   /** 本轮待生效的打断请求：interrupt=true 的签名通过后置位，StepFinish 消费（Deny 收尾）时清零 */
   private interruptRequested = false;
+  /**
+   * 签名工具所在 assistant 步的正文（随本调用一并输出的内容）。
+   * ToolUse 钩子在工具执行前捕获（react-loop 保证本步 assistant 消息先于工具执行写入
+   * context）；null = 未捕获（本轮尚未经标准执行链调用签名工具），空串 = 捕获到空白正文。
+   */
+  private signStepContent: string | null = null;
   private blockedCount = 0;
   /** 已注入风格的内容指纹键：name@hash，风格或文件内容变化时重新注入 */
   private injectedStyleKey: string | null = null;
@@ -348,7 +360,7 @@ export class StylizedOutput implements AgentFeature {
   private readonly signTool: Tool = createTool({
     name: 'sign_output_style',
     description:
-      '输出风格签名确认工具。当前会话启用输出风格后，每一轮对话收尾时都必须调用本工具完成签名——签名按轮刷新，上一轮的签名对本轮无效，每轮都要重新调用：参数 signature 需逐字默写该风格 frontmatter 中 signature 字段的确认签名原文（上下文中已注入的风格说明里可以查到）；必填参数 interrupt（打断）填 true 表示验证通过后本轮回复在本次工具调用后直接结束，随本工具调用一并输出的正文即最终回复，不再进行下一次模型调用；填 false 表示继续常规流程。验证通过后本轮回复才被允许结束；未签名就结束会被系统拦截。把签名写进正文不算签名，必须调用本工具。',
+      '输出风格签名确认工具。当前会话启用输出风格后，每一轮对话收尾时都必须调用本工具完成签名——签名按轮刷新，上一轮的签名对本轮无效，每轮都要重新调用：参数 signature 需逐字默写该风格 frontmatter 中 signature 字段的确认签名原文（上下文中已注入的风格说明里可以查到）；必填参数 interrupt（打断）填 true 表示验证通过后本轮回复在本次工具调用后直接结束，随本工具调用一并输出的正文即最终回复，不再进行下一次模型调用——注意 interrupt=true 仅当本次调用随附了非空回复正文时才生效，空正文时会被强制降级为 false（调用历史同步改写），届时须在下一步直接输出最终回复正文；填 false 表示继续常规流程，本轮仍以无工具调用的收尾步自然结束。验证通过后本轮回复才被允许结束；未签名就结束会被系统拦截。把签名写进正文不算签名，必须调用本工具。',
     parameters: {
       type: 'object',
       properties: {
@@ -405,6 +417,18 @@ export class StylizedOutput implements AgentFeature {
           error: '确认签名与当前风格不匹配。请在上下文中已注入的风格说明里核对 signature 字段原文，逐字默写后重试；不要编造或改写。',
         };
       }
+      /**
+       * 空正文打断降级（防"假签名提早打断"）：interrupt=true 只在随本调用一并
+       * 输出了非空回复正文时才生效。捕获到空白正文时强制按 false 生效并经
+       * effectiveCall 改写调用历史——本轮继续，模型须在下一步实际写出最终回复。
+       * signStepContent 为 null 表示未经 ToolUse 钩子捕获（非标准执行链直调），
+       * 无事实则不判断，保持现状行为。
+       */
+      let demoted = false;
+      if (interrupt && this.signStepContent !== null && !this.signStepContent.trim()) {
+        interrupt = false;
+        demoted = true;
+      }
       this.signedForReply = true;
       this.interruptRequested = interrupt;
       this.lastAction = 'signed';
@@ -412,22 +436,38 @@ export class StylizedOutput implements AgentFeature {
         style: active.name,
         interrupt,
         ...(corrected ? { correctedInterrupt: true } : {}),
+        ...(demoted ? { demotedInterrupt: true } : {}),
       });
+      let note: string;
+      if (demoted) {
+        note =
+          '签名验证通过，本轮签名已记录。但本次调用未随附任何回复正文（assistant 正文为空），'
+          + 'interrupt=true 不能生效：已强制按 false 处理，并在调用历史中改写为 interrupt=false。'
+          + '请立即产出本轮最终回复：在下一步直接输出完整的回复正文，不要再调用任何工具，'
+          + '以无工具调用的收尾步自然结束本轮——签名已记录，输出正文后本轮即可正常结束。';
+      } else if (interrupt) {
+        note =
+          '签名验证通过，interrupt=true 已生效：本轮回复将在本次工具调用后直接结束，'
+          + '以随本调用一并输出的正文为最终回复，无需也不应再产生任何后续内容。';
+      } else {
+        note =
+          '签名验证通过，本轮签名已记录。interrupt=false：本轮尚未结束，'
+          + '请立即产出最终回复正文——在下一步直接输出完整内容，不要再调用任何工具，'
+          + '以无工具调用的收尾步自然结束本轮。';
+      }
       const payload = {
         ok: true,
         signed: true,
         style: active.name,
         interrupt,
-        note: (interrupt
-          ? '签名验证通过，interrupt=true 已生效：本轮回复将在本次工具调用后直接结束，以随本调用一并输出的正文为最终回复，无需也不应再产生任何后续内容。'
-          : '签名验证通过，本轮回复现在可以正常结束。')
+        note: note
           + (corrected
             ? '本次调用未携带必填的 interrupt 参数，已按 false 处理并在调用历史中补记为 interrupt=false；下次调用请显式填写该字段。'
             : '')
           + '签名属于内部流程：不要在给用户的回复正文里提及签名或本工具调用。',
       };
-      if (corrected) {
-        // ADR-0023：修正后的调用写入 assistant 历史，下一轮模型看到的就是已显式填
+      if (corrected || demoted) {
+        // ADR-0023：修正/降级后的调用写入 assistant 历史，下一轮模型看到的就是已显式填
         // interrupt=false 的调用；context 未携带 callId（非运行时直接调用）时不改写。
         const callId = context?.callId;
         if (callId) {
@@ -533,7 +573,27 @@ export class StylizedOutput implements AgentFeature {
     this.rescan('call');
     this.signedForReply = false;
     this.interruptRequested = false;
+    this.signStepContent = null;
     this.blockedCount = 0;
+  }
+
+  /**
+   * ToolUse：签名工具执行前捕获本步 assistant 正文（随本次调用一并输出的内容）。
+   * react-loop 保证本步 assistant 消息先于工具执行写入 context，从尾部取最近的
+   * assistant 消息即得；签名工具为 exclusive（批次唯一），尾部定位不受其他调用干扰。
+   * 捕获结果供 signTool 判断 interrupt=true 的空正文降级；未捕获（null）则不判断。
+   */
+  async captureSignStepContent(ctx: ToolContext): Promise<void> {
+    if (ctx.call?.name !== 'sign_output_style') return;
+    const messages = ctx.context?.getAll?.() ?? [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message && message.role === 'assistant') {
+        this.signStepContent = typeof message.content === 'string' ? message.content : '';
+        return;
+      }
+    }
+    this.signStepContent = '';
   }
 
   /** StepStart：确保当前风格说明已注入上下文（风格或其文件内容变化时注入一次，不逐 step 重复） */
@@ -565,6 +625,7 @@ export class StylizedOutput implements AgentFeature {
       '---',
       '[签名要求] 本风格启用期间，每一轮对话收尾时都必须调用签名工具：',
       '在你给出本轮最终回复的同时，调用 sign_output_style 工具：参数 signature 逐字默写上面 frontmatter 中 signature 字段的原文；必填参数 interrupt（打断）填 true——验证通过后本轮在本次工具调用后直接结束，你随本调用一并输出的正文就是最终回复，不再进行下一次模型调用。',
+      'interrupt=true 只在随本调用一并写出了最终回复正文时才生效：若本次调用没有随附正文，interrupt 会被强制按 false 处理（调用历史同步改写），届时请在下一步直接输出最终回复正文，不要再调用任何工具。',
       '签名状态按轮刷新：每一轮用户输入都会清空上一轮的签名记录，上一轮签过名对本轮无效，本轮必须重新调用一次。',
       '工具验证通过后，本轮回复才会被允许结束。未签名就试图结束会被系统拦截并要求补签。',
       '把签名写进正文不算签名，必须调用工具。',
