@@ -263,9 +263,12 @@ function _syncFromInput(ta) {
   }
   // 命令名 = 首个空白前的部分；/ 后直接空格视为浏览全部
   const query = value.slice(1).split(/\s+/)[0].toLowerCase();
-  // 前缀命中排前、局部命中排后；同级保持注册顺序（sort 稳定）
+  // 前缀命中排前、局部命中排后；同级保持注册顺序（sort 稳定）。
+  // applies 谓词：按输入框上下文裁剪命令可见性（如线程宿主会话不提供
+  // 手动会话操作，ADR-0024 决策 4——由注册方声明，菜单机制保持通用）。
   const ranked = [];
   _allCommands().forEach(function (c) {
+    if (typeof c.applies === 'function' && !c.applies()) return;
     const r = _matchRank(c, query);
     if (r > 0) ranked.push({ c: c, r: r });
   });

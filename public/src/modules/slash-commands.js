@@ -19,11 +19,13 @@
  * getActiveWorkspaceSessionId (app-core.js)、runWorkspaceAction (workspace-actions.js)
  */
 
-function _currentSessionContext() {
+function _resolveSessionContext() {
   // 输入框属于当前 runtime 视图：agent record 从 runtime 反查（焦点派生的
   // getCurrentAgentRecord 仅兜底），sessionId 用 viewer 绑定（用户正在查看
   // 的会话），server 派生的 active 值仅在无绑定时兜底——与 slash-menu.js
   // _currentTarget 同一不变量：命令作用于输入框所属的那个会话。
+  // 纯解析（无副作用）：applies 谓词每次击键都会调用，失败提示由
+  // _currentSessionContext 包装层负责。
   const runtimeId = getRuntimeId(currentRuntimeAgentId)
     || (typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '');
   const record = (typeof getCurrentRuntimeRecord === 'function' && getCurrentRuntimeRecord())
@@ -33,7 +35,8 @@ function _currentSessionContext() {
     || (record ? getActiveWorkspaceSessionId(record) : null);
   // 远程会话（R2-02，ADR-0012）：远程条目不在 allAgents，record 链落空。
   // 身份从远程目录解析：sessionId 用目录条目值（命名空间化），agentId 收敛
-  // 宿主级命名空间 id（数据层身份纪律，ADR-0012）。目录未含条目时显式失败。
+  // 宿主级命名空间 id（数据层身份纪律，ADR-0012）。目录未含条目时返回
+  // remote-unavailable 语义（区别于无会话）。
   if ((!agentId || !sessionId)
     && typeof isRemoteNamespaceAgentId === 'function'
     && (isRemoteNamespaceAgentId(runtimeId)
@@ -48,7 +51,17 @@ function _currentSessionContext() {
     if (dirSessionId && hostNsId) {
       return { agentId: hostNsId, sessionId: dirSessionId };
     }
-    // 目录条目已消失（连接断开）：显式失败，不猜测目标。
+    return { agentId: '', sessionId: '', reason: 'remote_unavailable' };
+  }
+  if (!agentId || !sessionId) return { agentId: '', sessionId: '', reason: 'no_session' };
+  return { agentId, sessionId };
+}
+
+function _currentSessionContext() {
+  const ctx = _resolveSessionContext();
+  if (ctx.agentId && ctx.sessionId) return ctx;
+  // 目录未含条目（连接断开/条目消失）：显式失败，不猜测宿主。
+  if (ctx.reason === 'remote_unavailable') {
     window.ClawToast?.show?.({
       id: 'slash-no-session',
       status: 'error',
@@ -57,20 +70,48 @@ function _currentSessionContext() {
     });
     return null;
   }
-  if (!agentId || !sessionId) {
+  window.ClawToast?.show?.({
+    id: 'slash-no-session',
+    status: 'error',
+    title: currentLanguage === 'zh' ? '当前没有可操作的会话' : 'No active session to operate on',
+    autoDismiss: 5000,
+  });
+  return null;
+}
+
+// 线程宿主会话（coder / memo 等，线程事实驱动判定）不提供手动精简/摘要：
+// 连续性由线程接力持有（自动触发 + 接续事务），手动入口与 APP 对话模型
+// 矛盾（ADR-0024 决策 4「不出现手动 trim / compact 等通用会话操作」）。
+// 线程索引未就绪时保守放行（显示），执行侧守卫兜底。
+function _isThreadCarriedSession(ctx) {
+  return !!(ctx && ctx.agentId && ctx.sessionId
+    && typeof window.isThreadHostAgentId === 'function'
+    && window.isThreadHostAgentId(ctx.agentId, ctx.sessionId));
+}
+
+function _manualSessionOpsApplicable() {
+  return !_isThreadCarriedSession(_resolveSessionContext());
+}
+
+function _manualSessionOpsContext() {
+  const ctx = _currentSessionContext();
+  if (!ctx) return null;
+  if (_isThreadCarriedSession(ctx)) {
     window.ClawToast?.show?.({
-      id: 'slash-no-session',
-      status: 'error',
-      title: currentLanguage === 'zh' ? '当前没有可操作的会话' : 'No active session to operate on',
-      autoDismiss: 5000,
+      id: 'slash-session-ops-unavailable',
+      status: 'info',
+      title: currentLanguage === 'zh'
+        ? '该会话的连续性由线程承接，不支持手动精简/摘要'
+        : 'This session is carried by a thread; manual trim/summary is unavailable',
+      autoDismiss: 4000,
     });
     return null;
   }
-  return { agentId, sessionId };
+  return ctx;
 }
 
 async function _handleSummary() {
-  const ctx = _currentSessionContext();
+  const ctx = _manualSessionOpsContext();
   if (!ctx) return;
   runWorkspaceAction({
     type: 'compact_session_menu',
@@ -81,7 +122,7 @@ async function _handleSummary() {
 }
 
 async function _handleTrim() {
-  const ctx = _currentSessionContext();
+  const ctx = _manualSessionOpsContext();
   if (!ctx) return;
   const isZh = currentLanguage === 'zh';
 
@@ -120,18 +161,21 @@ async function _handleTrim() {
   });
 }
 
-// P0 静态注册（P1 起由 GET /protoclaw/commands 动态清单合并取代）
+// P0 静态注册（P1 起由 GET /protoclaw/commands 动态清单合并取代）。
+// applies：线程宿主会话不显示（裁剪声明住命令注册方，菜单机制通用）。
 SlashMenu.registerCommands([
   {
     name: 'trim',
     description: currentLanguage === 'zh' ? '全量精简当前会话（不生成摘要）' : 'Trim all rounds of current session (no summary)',
     destination: 'host',
+    applies: _manualSessionOpsApplicable,
     handler: _handleTrim,
   },
   {
     name: 'summary',
     description: currentLanguage === 'zh' ? '总结当前会话并创建新会话' : 'Summarize current session into a new session',
     destination: 'host',
+    applies: _manualSessionOpsApplicable,
     handler: _handleSummary,
   },
 ]);
