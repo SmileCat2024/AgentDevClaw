@@ -228,6 +228,22 @@ describe('model-preset-resolver', () => {
         assert.equal(result.modelName, 'fixture-model-b', 'primary slot must win over secondary');
       });
 
+      it('applies the primary slot thinking effort without changing the model preset', () => {
+        const agentDir = writeAgentMetadata('object-preset-effort', {
+          default: {
+            primary: 'fixture-thinking',
+            secondary: 'fixture-anthropic',
+            thinkingEffort: { primary: 'high', secondary: 'low' },
+          },
+        });
+        const result = resolveAgentModelLLM(agentDir, 'default', { configPath });
+        assert.ok(result);
+        assert.equal(result.thinkingEffort, 'high');
+        const secondary = resolveModelPresetLLM('fixture-thinking', { thinkingEffort: 'low' }, { configPath });
+        assert.ok(secondary);
+        assert.equal(secondary.thinkingEffort, 'low');
+      });
+
       it('falls back to the default role when the requested role has no preset', () => {
         const agentDir = writeAgentMetadata('fallback', { default: 'fixture-anthropic' });
         const result = resolveAgentModelLLM(agentDir, 'exploration', { configPath });

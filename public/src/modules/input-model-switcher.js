@@ -294,6 +294,11 @@ const ANTHROPIC_EFFORT_LABELS = {
   'max': 'max',
 };
 
+window.ClawFW = window.ClawFW || {};
+window.ClawFW.getThinkingEffortOptions = function(protocol) {
+  return Object.keys(protocol === 'openai' ? OPENAI_EFFORT_LABELS : ANTHROPIC_EFFORT_LABELS);
+};
+
 let _inputThinkingDropdown = null;
 
 function _getCurrentPreset() {
@@ -316,9 +321,7 @@ function _getCurrentPresetProtocol() {
 }
 
 function _getEffortList(protocol) {
-  return protocol === 'openai'
-    ? Object.keys(OPENAI_EFFORT_LABELS)
-    : Object.keys(ANTHROPIC_EFFORT_LABELS);
+  return window.ClawFW.getThinkingEffortOptions(protocol);
 }
 
 function _getEffortLabel(effort) {

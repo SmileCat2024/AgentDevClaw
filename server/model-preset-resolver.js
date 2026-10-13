@@ -154,12 +154,14 @@ export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
     
     const roleConfig = presets[role];
     let presetName = null;
+    let thinkingEffort;
     
-    // 支持双槽位格式：{ primary: 'model1', secondary: 'model2' } 或旧格式字符串
+    // 支持双槽位格式及旧格式字符串；启动使用 primary 槽位配置。
     if (typeof roleConfig === 'string') {
       presetName = roleConfig;
     } else if (roleConfig && typeof roleConfig === 'object') {
       presetName = roleConfig.primary || null;
+      thinkingEffort = roleConfig.thinkingEffort?.primary;
     }
     
     // 回退到 default
@@ -173,7 +175,7 @@ export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
     }
     
     if (!presetName) return null;
-    const resolved = resolveModelPresetLLM(presetName, undefined, options);
+    const resolved = resolveModelPresetLLM(presetName, thinkingEffort ? { thinkingEffort } : undefined, options);
     return resolved ? { ...resolved, presetRole: role } : null;
   } catch (error) {
     console.warn(`[ModelPreset] Failed to read agent metadata from ${metaPath}:`, error.message);

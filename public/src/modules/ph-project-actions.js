@@ -75,13 +75,32 @@ window.phCloseModelConfig = () => {
   if (host) host.innerHTML = '';
 };
 
+window.phModelSlotChanged = (select) => {
+  if (!select) return;
+  const effortSelect = document.querySelector('#ph-model-config-host .ph-mc-effort[data-preset-role="' + select.dataset.presetRole + '"][data-slot="' + select.dataset.slot + '"]');
+  if (effortSelect) {
+    const preset = getClawModelPresets().find(function(item) { return item.name === select.value; });
+    const options = preset && window.ClawFW?.getThinkingEffortOptions?.(preset.provider || preset.protocol) || [];
+    const selectedEffort = preset?.thinkingEffort || '';
+    effortSelect.innerHTML = '<option value="">' + (currentLanguage === 'zh' ? '默认' : 'Default') + '</option>'
+      + options.map(function(effort) {
+        return '<option value="' + escapeHtml(effort) + '"' + (effort === selectedEffort ? ' selected' : '') + '>' + escapeHtml(effort) + '</option>';
+      }).join('');
+    effortSelect.value = selectedEffort;
+    effortSelect.disabled = !preset || options.length === 0;
+    if (window.ClawSelect) window.ClawSelect.enhance(effortSelect);
+  }
+  window.phAutoSaveModelConfig();
+};
+
 window.phAutoSaveModelConfig = async () => {
   const agentId = window.phModelConfigAgentId;
   if (!agentId) return;
   const selects = document.querySelectorAll('#ph-model-config-host .ph-mc-select');
+  const effortSelects = document.querySelectorAll('#ph-model-config-host .ph-mc-effort');
   const modelPresets = { default: null, system: null };
 
-  // 收集所有select的值
+  // 收集所有模型和思考强度槽位值。
   const collected = {};
   selects.forEach(function(sel) {
     const role = sel.dataset.presetRole;
@@ -90,22 +109,29 @@ window.phAutoSaveModelConfig = async () => {
     if (!collected[role]) collected[role] = {};
     collected[role][slot || 'primary'] = sel.value || null;
   });
+  effortSelects.forEach(function(sel) {
+    const role = sel.dataset.presetRole;
+    const slot = sel.dataset.slot;
+    if (!role || !slot) return;
+    if (!collected[role]) collected[role] = {};
+    if (!collected[role].thinkingEffort) collected[role].thinkingEffort = {};
+    collected[role].thinkingEffort[slot] = sel.value || null;
+  });
 
-  // 构建最终格式：default用双槽位，其他角色用单值
+  // 每个角色保存模型槽位及其独立思考强度。
   for (const role of Object.keys(modelPresets)) {
     const data = collected[role] || {};
+    const primary = data.primary || null;
+    const secondary = data.secondary || null;
+    const thinkingEffort = data.thinkingEffort || {};
     if (role === 'default') {
-      // 主代理：双槽位格式
-      const primary = data.primary || null;
-      const secondary = data.secondary || null;
-      if (primary || secondary) {
-        modelPresets[role] = { primary, secondary };
-      } else {
-        modelPresets[role] = null;
-      }
+      modelPresets[role] = primary || secondary || thinkingEffort.primary || thinkingEffort.secondary
+        ? { primary, secondary, thinkingEffort }
+        : null;
     } else {
-      // 其他角色：单值格式
-      modelPresets[role] = data.primary || null;
+      modelPresets[role] = primary || thinkingEffort.primary
+        ? { primary, thinkingEffort: { primary: thinkingEffort.primary || null } }
+        : null;
     }
   }
 
@@ -136,14 +162,17 @@ window.phAutoSaveModelConfig = async () => {
     }
     if (hasCoderRow) {
       const coderPreset = collected.coder.primary || null;
+      const coderConfig = coderPreset || collected.coder.thinkingEffort?.primary
+        ? { primary: coderPreset, thinkingEffort: { primary: collected.coder.thinkingEffort?.primary || null } }
+        : null;
       const coderResp = await fetch('/protoclaw/agent_model_presets', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: 'coder', modelPresets: { default: coderPreset } }),
+        body: JSON.stringify({ agentId: 'coder', modelPresets: { default: coderConfig } }),
       });
       const coderResult = await coderResp.json();
       if (coderResult.ok && window.ClawFW) {
-        window.ClawFW._coderModelPresets = { default: coderPreset };
+        window.ClawFW._coderModelPresets = { default: coderConfig };
       }
     }
     // 刷新覆层以更新 info 文本
@@ -461,10 +490,16 @@ window.phToggleModelSlot = async () => {
     closable: false,
   });
   
-  // 切换主模型和备选模型
+  // 主备模型互换后，两个槽位都加载新模型预设的思考强度。
+  const presets = getClawModelPresets();
+  const presetEffort = (name) => presets.find(function(preset) { return preset.name === name; })?.thinkingEffort || null;
   const newDefaultPreset = {
     primary: secondaryModel || null,
     secondary: primaryModel || null,
+    thinkingEffort: {
+      primary: presetEffort(secondaryModel),
+      secondary: presetEffort(primaryModel),
+    },
   };
   
   const newModelPresets = {

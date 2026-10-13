@@ -36,6 +36,7 @@
     var trigger = document.createElement('button');
     trigger.type = 'button';
     trigger.className = 'claw-select-trigger';
+    if (select.disabled) trigger.classList.add('disabled');
     trigger.innerHTML =
       '<span class="claw-select-label">' + escapeHtml(_getSelectedLabel(select)) + '</span>' +
       CHEVRON_SVG;
@@ -116,6 +117,7 @@
   // ── 开关逻辑 ──
 
   function _toggle(select) {
+    if (select.disabled) return;
     var wrapper = select.closest('.claw-select');
     if (!wrapper) return;
     if (wrapper.classList.contains('open')) {
@@ -226,16 +228,18 @@
     select.classList.add('claw-select-native');
     wrapper.appendChild(select);
 
-    // 监听 options 变更 & value 变化（外部程序修改）
+    // 监听 options 变更 & value/disabled 变化（外部程序修改）
     if (window.MutationObserver) {
       var observer = new MutationObserver(function () {
         _updateLabel(wrapper, select);
+        var trigger = wrapper.querySelector('.claw-select-trigger');
+        if (trigger) trigger.classList.toggle('disabled', select.disabled);
       });
       observer.observe(select, {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ['selected'],
+        attributeFilter: ['selected', 'disabled'],
       });
       // 存储 observer 引用，防止 GC（select 存活期间 observer 存活）
       select._clawObserver = observer;

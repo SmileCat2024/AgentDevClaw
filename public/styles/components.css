@@ -6548,10 +6548,14 @@ body[data-theme="light"] .user-choice-card:focus-within {
 .ph-mc-role { min-width: 160px; flex-shrink: 0; padding-top: 7px; }
 .ph-mc-role-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .ph-mc-role-desc { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
-.ph-mc-control { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0; width: 200px; }
+.ph-mc-control { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0; width: 340px; }
 .ph-mc-slot { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; width: 100%; }
-.ph-mc-single { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; width: 200px; padding-top: 7px; }
+.ph-mc-single { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; width: 340px; padding-top: 7px; }
 .ph-mc-slot-label { font-size: 11px; color: var(--text-secondary); font-weight: 500; }
+/* 模型下拉 + 思考强度下拉同一行：模型占弹性宽，强度固定窄宽 */
+.ph-mc-pickers { display: flex; align-items: center; gap: 8px; width: 100%; }
+.ph-mc-pickers > .claw-select { flex: 1; min-width: 0; }
+.ph-mc-pickers > .claw-select:has(> .ph-mc-effort) { flex: 0 0 112px; }
 .ph-mc-select {
   font-size: 13px; padding: 7px 10px; width: 100%; box-sizing: border-box;
   border: 1px solid var(--border-color); border-radius: 8px;

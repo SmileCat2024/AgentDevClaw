@@ -74,35 +74,59 @@ function _renderModelConfigContent(agent, presets) {
       : '<span class="ph-mc-info">' + (isZh ? '跟随全局默认' : 'Follows global default') + '</span>';
   };
 
+  const buildThinkingSelect = (roleKey, slot, presetName, roleConfig) => {
+    const preset = presets.find(function(p) { return p.name === presetName; });
+    const protocol = preset && (preset.provider || preset.protocol);
+    const options = window.ClawFW && window.ClawFW.getThinkingEffortOptions
+      ? window.ClawFW.getThinkingEffortOptions(protocol)
+      : [];
+    const configured = roleConfig?.thinkingEffort && roleConfig.thinkingEffort[slot];
+    const selected = configured || preset?.thinkingEffort || '';
+    const disabled = !preset || options.length === 0;
+    const optionHtml = options.map(function(effort) {
+      return '<option value="' + escapeHtml(effort) + '"' + (effort === selected ? ' selected' : '') + '>' + escapeHtml(effort) + '</option>';
+    }).join('');
+    return '<select class="ph-mc-effort" data-claw-select data-preset-role="' + roleKey + '" data-slot="' + slot + '"'
+      + ' onchange="window.phAutoSaveModelConfig()"' + (disabled ? ' disabled' : '') + '>'
+      + '<option value="">' + escapeHtml(isZh ? '默认' : 'Default') + '</option>'
+      + optionHtml
+      + '</select>';
+  };
+
   const rows = roles.map(function(role) {
     const roleConfig = role.roleConfig !== undefined ? role.roleConfig : (current[role.key] || {});
+    const roleModelConfig = roleConfig && typeof roleConfig === 'object' ? roleConfig : {};
     const primaryVal = typeof roleConfig === 'string' ? roleConfig : (roleConfig.primary || '');
     const secondaryVal = typeof roleConfig === 'string' ? '' : (roleConfig.secondary || '');
     const isDefaultRole = role.key === 'default';
 
-    const primarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="primary" onchange="window.phAutoSaveModelConfig()">'
+    const primarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="primary" onchange="window.phModelSlotChanged(this)">'
       + '<option value=""' + (!primaryVal ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
       + buildOptions(primaryVal)
       + '</select>';
+    const primaryEffort = buildThinkingSelect(role.key, 'primary', primaryVal, roleModelConfig);
 
     const labelCol = '<div class="ph-mc-role"><div class="ph-mc-role-name">' + escapeHtml(role.label) + '</div><div class="ph-mc-role-desc">' + escapeHtml(role.desc) + '</div></div>';
 
     if (isDefaultRole) {
-      const secondarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="secondary" onchange="window.phAutoSaveModelConfig()">'
+      const secondarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="secondary" onchange="window.phModelSlotChanged(this)">'
         + '<option value=""' + (!secondaryVal ? ' selected' : '') + '>' + (isZh ? '(不设置)' : '(Not set)') + '</option>'
         + buildOptions(secondaryVal)
         + '</select>';
+      const secondaryEffort = buildThinkingSelect(role.key, 'secondary', secondaryVal, roleModelConfig);
 
       return '<div class="ph-mc-row ph-mc-row-primary">'
         + labelCol
-        + '<div class="ph-mc-control"><div class="ph-mc-slot"><div class="ph-mc-slot-label">' + (isZh ? '主模型' : 'Primary') + '</div>' + primarySelect + buildInfoHtml(primaryVal) + '</div>'
-        + '<div class="ph-mc-slot"><div class="ph-mc-slot-label">' + (isZh ? '备选' : 'Secondary') + '</div>' + secondarySelect + buildInfoHtml(secondaryVal) + '</div></div>'
+        + '<div class="ph-mc-control"><div class="ph-mc-slot"><div class="ph-mc-slot-label">' + (isZh ? '主模型' : 'Primary') + '</div>'
+        + '<div class="ph-mc-pickers">' + primarySelect + primaryEffort + '</div>' + buildInfoHtml(primaryVal) + '</div>'
+        + '<div class="ph-mc-slot"><div class="ph-mc-slot-label">' + (isZh ? '备选' : 'Secondary') + '</div>'
+        + '<div class="ph-mc-pickers">' + secondarySelect + secondaryEffort + '</div>' + buildInfoHtml(secondaryVal) + '</div></div>'
         + '</div>';
     } else {
       return '<div class="ph-mc-row">'
         + labelCol
         + '<div class="ph-mc-single">'
-        + primarySelect
+        + '<div class="ph-mc-pickers">' + primarySelect + primaryEffort + '</div>'
         + buildInfoHtml(primaryVal)
         + '</div>'
         + '</div>';
