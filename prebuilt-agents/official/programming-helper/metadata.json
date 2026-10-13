@@ -1,6 +1,6 @@
 {
   "id": "programming-helper",
-  "kind": "agent",
+  "kind": "workspace",
   "name": "智能编码空间",
   "description": "面向真实编码任务的编程工作空间，支持理解代码、实现功能、排障和重构",
   "version": "2.0.0",

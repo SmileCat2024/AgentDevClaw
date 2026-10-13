@@ -36,7 +36,12 @@ import { createThreadRotationService } from '../server/thread-control/thread-rot
 import { setupThreadRoutes } from '../server/thread-control/thread-routes.js';
 import { deliverUserInput, UserTurnDeliveryError } from '../server/thread-control/input-gateway.js';
 import { managedAgents } from '../server/shared/agent-access.js';
+import { registerThreadHostAgents } from '../server/thread-control/host-agents.js';
 import { WorkThreadCommandStatus as ThreadCommandStatus } from '@agentdevjs/core';
+
+// 宿主判定声明化（ADR-0024 可拔插）：本文件经网关 / integration 走宿主闸
+// （coder 会话），注册构造场景后断言语义与硬编码时代一致。
+registerThreadHostAgents(['coder']);
 
 // ─── 夹具 ─────────────────────────────────────────────────────────
 

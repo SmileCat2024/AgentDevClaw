@@ -119,6 +119,7 @@ import { getThreadControl } from './server/thread-control/thread-controller.js';
 import { getThreadIntegration } from './server/thread-control/thread-integration.js';
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
+import { registerThreadHostAgents } from './server/thread-control/host-agents.js';
 import { createThreadLifecycleService } from './server/thread-control/thread-lifecycle.js';
 import { createThreadDeleteService } from './server/thread-control/thread-delete.js';
 import { createThreadDeleteResources } from './server/thread-control/thread-delete-resources.js';
@@ -1603,6 +1604,19 @@ async function main() {
     await runStudioFeatureMigration();
   } catch (err) {
     console.warn('[studio-migration] startup migration failed:', err.message);
+  }
+
+  // 线程宿主集合按 metadata 声明派生注册（ADR-0024 可拔插约束：公共代码
+  // 不按 APP ID 硬编码；coder / memo 等宿主在各自 metadata 声明 threadHost）。
+  // 注册先于任何会话创建 / 线程恢复，保证 onSessionCreated 与 input-gateway
+  // 的宿主闸门从首个请求起即按声明集合判定。
+  try {
+    const declaredAgents = await discoverAgents(AGENTS_ROOT);
+    registerThreadHostAgents(declaredAgents
+      .filter((agent) => agent?.threadHost === true && agent?.enabled !== false)
+      .map((agent) => agent.id));
+  } catch (err) {
+    console.warn('[thread-host] register from metadata failed:', err.message);
   }
 
   // One-time cleanup of stale empty sessions from previous runs.

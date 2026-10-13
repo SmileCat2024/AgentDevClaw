@@ -1,6 +1,6 @@
 {
   "id": "flow-workspace",
-  "kind": "agent",
+  "kind": "workspace",
   "name": "Flow 工作空间",
   "description": "为 Agent 编辑唯一配套编排图，并将图中的连通分量作为工作流运行",
   "version": "1.0.0",

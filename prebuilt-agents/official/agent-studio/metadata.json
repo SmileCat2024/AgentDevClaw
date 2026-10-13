@@ -1,6 +1,6 @@
 {
   "id": "agent-studio",
-  "kind": "agent",
+  "kind": "workspace",
   "name": "Agent Studio",
   "description": "开发与验证 Feature，产物统一收进本机 Feature 仓库",
   "version": "0.1.0",

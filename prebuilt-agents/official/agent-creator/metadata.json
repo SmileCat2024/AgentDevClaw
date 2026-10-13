@@ -1,6 +1,6 @@
 {
   "id": "agent-creator",
-  "kind": "agent",
+  "kind": "workspace",
   "name": "Agent 创建者",
   "description": "以快速装配 Agent 为主入口、并支持升级到项目开发的官方工作台",
   "version": "1.2.0",

@@ -1439,11 +1439,12 @@ function isUiOnlyUnit(agent) {
   return !!(agent && agent.source === 'prebuilt' && agent.launchMode === 'ui-only');
 }
 
-const WORKSPACE_HOST_UNIT_IDS = new Set(['agent-creator', 'feature-creator', 'agent-studio', 'qqbot', 'programming-helper', 'coder', 'flow-workspace', 'work-group']);
-
 function isWorkspaceHostUnit(agent) {
   if (!agent || agent.source !== 'prebuilt') return false;
-  return WORKSPACE_HOST_UNIT_IDS.has(agent.id);
+  // 声明驱动：metadata `kind: "workspace"` 即工作空间（点开进首页，不经
+  // start_agent 拉起 runtime）。kind 的语义是「是否有首页的工作空间」，
+  // runtime 形态由 launchMode（ui-only）与各 APP 自己的事务另行表达。
+  return agent.kind === 'workspace';
 }
 
 function isTablessHostSurface(agent) {

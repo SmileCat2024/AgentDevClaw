@@ -13,6 +13,11 @@ import assert from 'node:assert/strict';
 
 const { deliverUserInput, UserTurnDeliveryError } = await import('../server/thread-control/input-gateway.js');
 const { managedAgents } = await import('../server/shared/agent-access.js');
+const { registerThreadHostAgents } = await import('../server/thread-control/host-agents.js');
+
+// 宿主判定声明化（ADR-0024 可拔插）：网关路由闸按宿主集合分流线程域 /
+// session 域，注册构造场景后断言语义与硬编码时代一致。
+registerThreadHostAgents(['coder']);
 
 function registerRuntime({ viewerAgentId = 'viewer-1', agentId = 'coder', sessionId = 'session-1' } = {}) {
   const runtime = {

@@ -237,12 +237,12 @@ describe('app-core: isUiOnlyAgentId', () => {
     assert.equal(ctx.run('isUiOnlyAgentId("feature-setup")'), true);
   });
 
-  it('returns true for workspace host agents (programming-helper, qqbot)', () => {
+  it('returns true for workspace host agents (kind: workspace)', () => {
     // isUiOnlyAgentId checks isWorkspaceSurfaceUnit which includes both
-    // ui-only units and workspace host units (programming-helper, qqbot, etc.)
+    // ui-only units and workspace host units (kind: "workspace" in metadata)
     const ctx = createCoreSandbox({
       allAgents: [
-        { id: 'programming-helper', source: 'prebuilt' },
+        { id: 'programming-helper', source: 'prebuilt', kind: 'workspace' },
       ],
     });
     assert.equal(ctx.run('isUiOnlyAgentId("programming-helper")'), true);

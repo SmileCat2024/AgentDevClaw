@@ -1,6 +1,7 @@
 {
   "id": "coder",
-  "kind": "agent",
+  "kind": "workspace",
+  "threadHost": true,
   "name": "Coder",
   "description": "无人值守自主编码智能体：线程化执行，会话由调度面（ACP / threads CLI / dispatch）创建，不接受用户直接创建",
   "version": "1.0.0",

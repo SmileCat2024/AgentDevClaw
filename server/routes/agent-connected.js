@@ -164,6 +164,10 @@ export function createConnectedAgentsQuery(deps) {
         // host 是与宿主 APP 的关联绑定（排序相邻 / 宿主首页入口）。
         visibility,
         host: agent.host || null,
+        // 侧栏分组声明（通用呈现通道）：作者在 metadata 声明 sidebarGroup
+        // （如 'tool' / 'work-group'），前端 groupConnectedAgents 优先消费；
+        // 缺省时回退宿主跟随与既有归类。
+        sidebarGroup: agent.sidebarGroup || null,
         // on-demand 存在性（服务端合流，前端纯消费）：作者声明默认 +
         // 用户覆盖（workspace-settings）合流出 visibilityPolicy；auto =
         // 有存活且绑定 Session 的 Runtime，或未归档线程资产 / 接续挡板时显示。sidebarVisible 是最终判定结果。

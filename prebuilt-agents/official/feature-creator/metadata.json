@@ -1,6 +1,6 @@
 {
   "id": "feature-creator",
-  "kind": "agent",
+  "kind": "workspace",
   "name": "Feature 创建者",
   "description": "用于创建、修改和打包 AgentDev Feature 的工作台",
   "version": "1.0.0",

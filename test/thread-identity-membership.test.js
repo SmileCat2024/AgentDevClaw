@@ -29,6 +29,10 @@ import { WorkThreadRuntimeBridge } from '@agentdevjs/core';
 import { ThreadStore } from '../server/thread-control/thread-store.js';
 import { createThreadControl } from '../server/thread-control/thread-controller.js';
 import { createThreadIntegration, isThreadHostSession } from '../server/thread-control/thread-integration.js';
+import { registerThreadHostAgents } from '../server/thread-control/host-agents.js';
+// 宿主集合声明化（ADR-0024 可拔插）：生产由 server 启动时按 metadata
+// threadHost 声明注册；测试注册 ['coder'] 模拟该事实。
+registerThreadHostAgents(['coder']);
 
 function makeTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'claw-thread-identity-test-'));

@@ -13,8 +13,8 @@
  *   - 提供线程模式提交（submitThreadCommand → Thread Inbox）与
  *     head 推进（threadAdvanceHead）入口。
  *
- * 当前消费方：coder APP（后台自主编码工作空间）。其他工作空间无线程
- * 数据，本模块所有入口均为 no-op / 空输出。
+ * 当前消费方：声明 threadHost 的 APP（coder、memo，宿主判定由服务端发现
+ * 派生）。其他工作空间无线程数据，本模块所有入口均为 no-op / 空输出。
  *
  * 依赖全局（均在运行时调用，加载顺序无关）：
  *   - escapeHtml, currentLanguage (app-core.js)

@@ -32,8 +32,13 @@ import { createThreadControl } from '../server/thread-control/thread-controller.
 import { createThreadIntegration } from '../server/thread-control/thread-integration.js';
 import { createThreadLifecycleService } from '../server/thread-control/thread-lifecycle.js';
 import { createThreadDeleteService } from '../server/thread-control/thread-delete.js';
+import { registerThreadHostAgents } from '../server/thread-control/host-agents.js';
 
 const AGENT = 'coder';
+
+// 宿主判定声明化（ADR-0024 可拔插）：本文件调用真实 integration 的
+// onSessionCreated（宿主闸），注册构造场景后断言语义与硬编码时代一致。
+registerThreadHostAgents([AGENT]);
 
 // ── SSE harness（与 test/sse-events.test.js 同源模式）────────────────
 
