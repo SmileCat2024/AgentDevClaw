@@ -77,7 +77,8 @@ function renderWorkspaceHero(agent, block) {
     ? '<div class="workspace-hero-actions"><button class="ph-banner-btn secondary im-channel-config-btn" type="button" onclick="window.openIMChannelConfig()">' + (currentLanguage === 'zh' ? '配置渠道' : 'Channel Config') + '</button></div>'
     : (Array.isArray(block?.actions) && block.actions.length > 0
       ? '<div class="workspace-hero-actions">' + block.actions.map((action) => renderActionButton(action, {
-        className: agent?.id === 'agent-studio' ? 'ph-banner-btn ph-new-chat-btn' : undefined,
+        className: action?.className
+          || (agent?.id === 'agent-studio' ? 'ph-banner-btn ph-new-chat-btn' : undefined),
       })).join('') + '</div>'
       : '');
   return [

@@ -15,6 +15,7 @@
  *                 open_project_docset_preview, close_project_docset_preview
  *   视图切换: show_chat, resume_session, show_home,
  *            show_workspace_tab, show_block
+ *   APP 对话事务: start_app_conversation（ADR-0024，端点由 APP block action 声明）
  *
  * 依赖全局状态（定义在 app-core.js）:
  *   currentLanguage, allAgents, currentRuntimeAgentId,
@@ -60,6 +61,12 @@ function newIdempotencyKey() {
   }
   return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
+
+
+// ── APP 对话事务入口防重入（ADR-0024）────────────────────────────────────
+// start_app_conversation 的服务端事务含 runtime ready 等待（20s 级），前端
+// in-flight 守卫挡双击（服务端另有业务状态串行锁，双保险）。
+let _appConversationActionInFlight = false;
 
 
 async function resolveStudioSessionDirectory(agent, action) {
@@ -120,6 +127,64 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
     saveCurrentWorkspaceSurfaceScroll();
   }
+
+  // ── APP 对话事务入口（ADR-0024 决策 1/2 + 首开入口）────────────────────
+  // APP 型工作空间首页的「开始/新建对话」：block action 只声明宿主端点（公共
+  // 代码不按 APP ID 分支，可拔插约束），服务端事务负责「恢复活动线程 head 或
+  // 新建会话+线程+runtime」（并发防重在业务状态权威写入处），前端拿 threadId
+  // 以线程锚进入对话（openConversationTarget：接力窗口挂等待表面、正常路径
+  // 绑 runtime 导航——发送竞态全部在服务端收敛）。
+  if (action.type === 'start_app_conversation') {
+    const endpoint = String(action.endpoint || '').trim();
+    if (!endpoint.startsWith('/protoclaw/')) {
+      window.alert(currentLanguage === 'zh'
+        ? '对话入口配置非法（缺少服务端端点）'
+        : 'Conversation action is misconfigured (missing server endpoint)');
+      return;
+    }
+    if (_appConversationActionInFlight) return;
+    _appConversationActionInFlight = true;
+    if (triggerButton) markActionLoading(triggerButton);
+    const actionNavEpoch = _navigationGuardEpoch;
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.ok || !result?.threadId) {
+        throw new Error(result?.message || result?.code || `HTTP ${response.status}`);
+      }
+      if (actionNavEpoch !== _navigationGuardEpoch) return; // 并发导航已接管
+      // 线程事实与 agent 投影先行刷新：openConversationTarget 从 allAgents
+      // 解析 runtime 绑定（child 条目按 parent_id + head session 匹配），
+      // 新建会话的条目此刻往往尚未被轮询拉到——不刷新会走 open_session
+      // 兜底并因投影滞后在校验处误报 navigation_failed（业务实际已成功）。
+      if (typeof window.refreshThreads === 'function') {
+        await window.refreshThreads(true).catch(() => {});
+      }
+      if (typeof loadAgents === 'function') {
+        await loadAgents().catch(() => {});
+      }
+      if (actionNavEpoch !== _navigationGuardEpoch) return;
+      const opened = await window.openConversationTarget({
+        agentId: String(result.thread?.agentId || activeAgent?.id || '').trim(),
+        threadId: result.threadId,
+      });
+      if (!opened?.ok) {
+        throw new Error(opened?.reason || 'navigation_failed');
+      }
+    } catch (error) {
+      window.alert((currentLanguage === 'zh' ? '对话启动失败：' : 'Failed to start conversation: ')
+        + (error?.message || error));
+    } finally {
+      _appConversationActionInFlight = false;
+      if (triggerButton) triggerButton.classList.remove('action-loading');
+    }
+    return;
+  }
+
   const hasSessions = hasWorkspaceSessions(activeAgent);
   const shouldMarkLoading = !!(
     activeAgent?.id
