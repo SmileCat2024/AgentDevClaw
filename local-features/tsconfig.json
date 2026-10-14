@@ -47,6 +47,8 @@
     "./time-awareness/src/**/*.ts",
     "./time-awareness/test/**/*.ts",
     "./craft-awareness/src/**/*.ts",
-    "./craft-awareness/test/**/*.ts"
+    "./craft-awareness/test/**/*.ts",
+    "./memo-notes/src/**/*.ts",
+    "./memo-notes/test/**/*.ts"
   ]
 }

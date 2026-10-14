@@ -30,3 +30,10 @@ export {
   createCapabilityShellTool,
   runCapabilityShellPipeline,
 } from './capability-shell/src/index.js';
+export {
+  MemoNotesFeature,
+  sanitizeNoteFilename,
+  extractNoteTitle,
+  extractNotePreview,
+  resolveDefaultNotesDir,
+} from './memo-notes/src/index.js';
