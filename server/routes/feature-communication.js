@@ -86,7 +86,11 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
     if (!requireDeclaredTarget(communicationStore, target, res)) return;
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });
     res.flushHeaders?.();
-    const frame = (event) => `id: ${event.eventId}\nevent: ${event.type === 'snapshot' ? 'snapshot' : 'event'}\ndata: ${JSON.stringify(event)}\n\n`;
+    // Send a comment frame immediately so buffering proxies forward the SSE
+    // response without waiting for the first event or the 15s heartbeat.
+    const lineBreak = String.fromCharCode(10);
+    res.write(':' + ' connected' + lineBreak + lineBreak);
+    const frame = (event) => ['id: ' + event.eventId, 'event: ' + (event.type === 'snapshot' ? 'snapshot' : 'event'), 'data: ' + JSON.stringify(event), '', ''].join(lineBreak);
     // Live-only subscribers fetch authoritative state via /request list. Avoid
     // replaying the output ring on every panel open while preserving explicit
     // cursor-based reconnects (Last-Event-ID takes priority).
@@ -96,14 +100,14 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
       : Number(req.headers['last-event-id'] ?? req.query?.afterEventId ?? 0);
     const snapshot = communicationStore.getSnapshot(target);
     const replay = communicationStore.readEvents(target, cursor);
-    if (replay.resync) res.write(`event: resync\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    if (replay.resync) res.write(['event: resync', 'data: ' + JSON.stringify(snapshot), '', ''].join(lineBreak));
     else for (const event of replay.events) res.write(frame(event));
     let closed = false;
     const unsubscribe = communicationStore.subscribe(target, (event) => {
       if (closed) return;
       if (event.type === 'closed') {
         closed = true;
-        res.write(`event: closed\ndata: {}\n\n`);
+        res.write(['event: closed', 'data: {}', '', ''].join(lineBreak));
         res.end();
         return;
       }
@@ -111,13 +115,12 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
     });
     let heartbeat;
     const cleanup = () => { if (heartbeat) clearInterval(heartbeat); unsubscribe(); };
-    heartbeat = setInterval(() => { try { res.write(': hb\n\n'); } catch { cleanup(); } }, 15_000);
+    heartbeat = setInterval(() => { try { res.write(':' + ' hb' + lineBreak + lineBreak); } catch { cleanup(); } }, 15_000);
     heartbeat.unref?.();
     req.on('close', cleanup);
     res.on('close', cleanup);
     res.on('error', cleanup);
   });
-
   app.get('/protoclaw/feature-comms/snapshot', (req, res) => {
     let target;
     try { target = normalizeFeatureCommunicationTarget(req.query || {}); }

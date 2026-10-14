@@ -102,8 +102,9 @@ describe('feature communication routes', () => {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let text = '';
+    let firstChunk = '';
     const pump = (async () => {
-      try { while (true) { const { value, done } = await reader.read(); if (value) text += decoder.decode(value, { stream: true }); if (done) break; } } catch {}
+      try { while (true) { const { value, done } = await reader.read(); if (value) { const chunk = decoder.decode(value, { stream: true }); if (!firstChunk) firstChunk = chunk; text += chunk; } if (done) break; } } catch {}
     })();
     const waitFor = async (needle) => {
       const until = Date.now() + 1000;
@@ -111,6 +112,8 @@ describe('feature communication routes', () => {
       assert.ok(text.includes(needle), `expected SSE frame containing ${needle}`);
     };
     try {
+      await waitFor(': connected');
+      assert.ok(firstChunk.startsWith(': connected'), 'the first SSE bytes should be an immediate comment frame');
       await waitFor('"state":"running"');
       store.publishEvent(target, 'output', { text: 'line-1' });
       await waitFor('"text":"line-1"');
@@ -138,22 +141,29 @@ describe('feature communication routes', () => {
     for (let i = 0; i < 256; i++) store.publishEvent(target, 'output', { text: `old-${i}` });
     const base = `http://127.0.0.1:${server.address().port}/protoclaw/feature-comms/stream?${new URLSearchParams(target)}`;
     const controller = new AbortController();
-    const response = await fetch(`${base}&latest=1`, { signal: controller.signal });
-    const reader = response.body.getReader();
+    const firstResponse = await fetch(`${base}&latest=1`, { signal: controller.signal });
+    assert.equal(firstResponse.status, 200);
+    const firstReader = firstResponse.body.getReader();
     try {
-      const read = reader.read();
+      const firstFrame = new TextDecoder().decode((await firstReader.read()).value);
+      assert.ok(firstFrame.startsWith(': connected'));
       store.publishEvent(target, 'output', { text: 'new-output' });
-      const frame = new TextDecoder().decode((await read).value);
-      assert.ok(frame.includes('new-output'));
-      assert.ok(!frame.includes('old-255'));
-    } finally {
-      controller.abort();
-      await reader.cancel().catch(() => {});
-    }
+      const eventFrame = new TextDecoder().decode((await firstReader.read()).value);
+      assert.ok(eventFrame.includes('new-output'));
+      assert.ok(!eventFrame.includes('old-255'));
+    } finally { controller.abort(); }
     const replayController = new AbortController();
     const replay = await fetch(`${base}&latest=1`, { signal: replayController.signal, headers: { 'Last-Event-ID': '255' } });
+    const replayReader = replay.body.getReader();
     try {
-      const frame = new TextDecoder().decode((await replay.body.getReader().read()).value);
+      const firstFrame = new TextDecoder().decode((await replayReader.read()).value);
+      assert.ok(firstFrame.startsWith(': connected'));
+      let frame = firstFrame;
+      const deadline = Date.now() + 1000;
+      while (!frame.includes('new-output') && Date.now() < deadline) {
+        const { value } = await replayReader.read();
+        if (value) frame += new TextDecoder().decode(value);
+      }
       assert.ok(frame.includes('old-255'));
       assert.ok(frame.includes('new-output'));
     } finally {
@@ -174,8 +184,10 @@ describe('feature communication routes', () => {
     const controller = new AbortController();
     const response = await fetch(`http://127.0.0.1:${server.address().port}/protoclaw/feature-comms/stream?${new URLSearchParams(target)}`, { signal: controller.signal });
     try {
-      const frame = new TextDecoder().decode((await response.body.getReader().read()).value);
-      assert.ok(frame.includes('event: resync'));
+      const reader = response.body.getReader();
+      const firstFrame = new TextDecoder().decode((await reader.read()).value);
+      assert.ok(firstFrame.startsWith(': connected'));
+      assert.ok(firstFrame.includes('event: resync'));
     } finally { controller.abort(); }
   });
 
