@@ -13,6 +13,27 @@ renderer.codespan = function(code) {
   return '<code class="inline-code-accent">' + escapeHtml(text) + '</code>';
 };
 
+// 块级代码：包裹 md-code-block 壳并挂右下角复制动作条（布局契约对齐
+// md-table-block，见 components.css）。只对 fenced block 显式声明且 hljs
+// 支持的语言做高亮；无语言标注的普通文本不做 highlightAuto 猜测。
+renderer.code = function(code, langArg) {
+  const obj = (code && typeof code === 'object' && 'text' in code) ? code : null;
+  const text = obj ? String(obj.text ?? '') : String(code ?? '');
+  const lang = String((obj ? obj.lang : langArg) ?? '').match(/\S+/)?.[0] || '';
+  const codeText = text.replace(/\n$/, '') + '\n';
+  let codeHtml = escapeHtml(codeText);
+  if (lang && hljs.getLanguage(lang)) {
+    try { codeHtml = hljs.highlight(codeText, { language: lang }).value; } catch (e) {}
+  }
+  const classAttr = lang ? ' class="language-' + escapeHtml(lang) + '"' : '';
+  return '<div class="md-code-block"><pre><code' + classAttr + '>'
+    + codeHtml
+    + '</code></pre>'
+    + '<div class="md-code-actions">'
+    + '<button type="button" class="message-icon-action is-icon-copy" title="复制代码" onclick="copyMarkdownCode(this)"></button>'
+    + '</div></div>\n';
+};
+
 function escapeHtml(text) {
   const str = String(text);
   const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -42,12 +63,7 @@ renderer.html = function(token) {
 
 marked.setOptions({
   renderer,
-  highlight: function(code, lang) {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value;
-    }
-    return hljs.highlightAuto(code).value;
-  },
+  // 代码高亮在 renderer.code 内完成——marked v18 已移除 highlight 选项
   breaks: true
 });
 
@@ -327,6 +343,49 @@ window.openTableZoom = function(btn) {
   document.addEventListener('keydown', onKey);
 
   document.body.appendChild(overlay);
+};
+
+// ── 代码块动作条：复制 ────────────────────────────────────────────
+
+// 复制代码块原文（hljs 高亮 span 不改变 textContent，读出的即源码原文；
+// 剪贴板模式对齐 copyMarkdownTable）
+window.copyMarkdownCode = async function(btn) {
+  const code = btn?.closest('.md-code-block')?.querySelector('code');
+  // 去掉 renderer 统一补的尾部换行，复制内容与源码一致
+  const text = code ? code.textContent.replace(/\n+$/, '') : '';
+  if (!text) return;
+  let ok = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    // 非安全上下文回退（如局域网 IP 访问 UI）
+    try {
+      let ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    if (typeof ClawToast !== 'undefined') {
+      const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+      ClawToast.show({ id: 'md-code-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy code' });
+    }
+    return;
+  }
+  if (btn) {
+    btn.classList.add('copied');
+    if (btn._copyResetTimer) clearTimeout(btn._copyResetTimer);
+    btn._copyResetTimer = setTimeout(function() {
+      btn.classList.remove('copied');
+    }, 1200);
+  }
 };
 
 // ── 主对话表格的右侧突破宽度（--md-table-bleed）────────────────
