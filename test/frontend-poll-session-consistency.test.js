@@ -120,6 +120,8 @@ function createPollSandbox({ blockStatus = true } = {}) {
     suppressSidebarRerender: false,
     _localQueuedInputPending: false,
     normalizeAgentIdentity: (value) => String(value || '').trim(),
+    // message-timeline.js：/messages 响应 timestamps 合并（时间分隔线数据层）
+    attachMessagesTimestamps: (messages) => messages,
     checkGlobalChoiceAlerts: async () => {},
     reloadFeatureTemplateMap: async () => {},
     updateNotificationStatus: () => {},
@@ -528,6 +530,8 @@ test('loadAgentData discards response bodies that finish after a newer switch', 
     getActiveSessionId: () => 'session-a',
     _lastTemplateRuntimeId: null,
     loadFeatureTemplateMap: async () => {},
+    // message-timeline.js：/messages 响应 timestamps 合并（时间分隔线数据层）
+    attachMessagesTimestamps: (messages) => messages,
     // loadAgentData calls this early (agent-data-loader.js); without the stub
     // a ReferenceError aborts the function inside its try/catch and the test
     // silently stops exercising the load path it claims to cover.
@@ -623,6 +627,7 @@ test('loadAgentData refreshes composer metadata after committing the initial ove
     loadFeatureTemplateMap: async () => {},
     clearFeatureTemplateCache: () => {},
     loadAgentDetail: async () => {},
+    attachMessagesTimestamps: (messages) => messages,
     fetch: async (url) => ({
       ok: true,
       json: async () => String(url).endsWith('/overview')

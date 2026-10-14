@@ -127,6 +127,8 @@ function createSandbox({
     _localQueuedInputPending: false,
     loadedAgentDetailIds: new Set(),
     normalizeAgentIdentity: (value) => String(value || '').trim(),
+    // message-timeline.js：/messages 响应 timestamps 合并（时间分隔线数据层）
+    attachMessagesTimestamps: (messages) => messages,
     checkGlobalChoiceAlerts: async () => {},
     reloadFeatureTemplateMap: async () => {},
     updateNotificationStatus: () => {},

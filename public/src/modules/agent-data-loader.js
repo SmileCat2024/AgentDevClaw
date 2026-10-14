@@ -126,7 +126,7 @@ async function loadAgentData(agentId) {
       hookInspector,
       overview: overviewSnapshot,
       todoPlan,
-      messages: msgsData.messages || [],
+      messages: attachMessagesTimestamps(msgsData.messages || [], msgsData.timestamps),
       inputRequests: inputRequestList,
       toolRenderConfigs: nextToolRenderConfigs,
       toolNames: nextToolNames,

@@ -176,6 +176,8 @@ function createHarness({ messages } = {}) {
     shouldRenderWorkspaceSurface: () => false,
     shouldShowChatWelcome: () => false,
     escapeHtml: (v) => String(v ?? ''),
+    // message-timeline.js：时间分隔线包装（无时间锚场景透传行 html）
+    prependTimeSeparatorHtml: (_messages, _index, rowHtml) => rowHtml,
     t: (k) => k,
     renderMarkdown: (s) => String(s ?? ''),
     parseToolResult: (content) => ({ success: true, data: content }),

@@ -1214,7 +1214,7 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
     if (!isSessionViewTokenCurrent(pollToken)) {
       return 'stale';
     }
-    messages = result.data.messages || [];
+    messages = attachMessagesTimestamps(result.data.messages || [], result.data.timestamps);
     msgMetrics.actualBytes += computeSerializedBytes(result.data);
   } else if (!seqAdvanced) {
     // 未变化：跳过 /messages 请求，复用现有消息数组（本周期零消息请求）
@@ -1228,7 +1228,7 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
     }
     const delta = Array.isArray(result.data.messages) ? result.data.messages : [];
     if (delta.length === msgProbe.count - since) {
-      messages = [...prevKnownMessages.slice(0, since), ...delta];
+      messages = [...prevKnownMessages.slice(0, since), ...attachMessagesTimestamps(delta, result.data.timestamps)];
     } else {
       // 校验失败（让服务端分类 bug 显形并保正确性）→ 降级全量重建基线
       msgMetrics.downgraded = true;
@@ -1237,7 +1237,7 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
       if (!isSessionViewTokenCurrent(pollToken)) {
         return 'stale';
       }
-      messages = full.data.messages || [];
+      messages = attachMessagesTimestamps(full.data.messages || [], full.data.timestamps);
       msgMetrics.actualBytes += computeSerializedBytes(full.data);
     }
     msgMetrics.actualBytes += computeSerializedBytes(result.data);
@@ -1249,7 +1249,7 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
     }
     const tail = Array.isArray(result.data.messages) ? result.data.messages : [];
     if (tail.length === 1 && msgProbe.count === prevKnownCount && prevKnownCount > 0) {
-      messages = [...prevKnownMessages.slice(0, -1), tail[0]];
+      messages = [...prevKnownMessages.slice(0, -1), attachMessagesTimestamps(tail, result.data.timestamps)[0]];
     } else {
       // 校验失败 → 降级全量重建基线
       msgMetrics.downgraded = true;
@@ -1258,7 +1258,7 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
       if (!isSessionViewTokenCurrent(pollToken)) {
         return 'stale';
       }
-      messages = full.data.messages || [];
+      messages = attachMessagesTimestamps(full.data.messages || [], full.data.timestamps);
       msgMetrics.actualBytes += computeSerializedBytes(full.data);
     }
     msgMetrics.actualBytes += computeSerializedBytes(result.data);
@@ -1269,7 +1269,7 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
     if (!isSessionViewTokenCurrent(pollToken)) {
       return 'stale';
     }
-    messages = result.data.messages || [];
+    messages = attachMessagesTimestamps(result.data.messages || [], result.data.timestamps);
     msgMetrics.actualBytes += computeSerializedBytes(result.data);
   }
 

@@ -87,6 +87,30 @@
   contain: layout style;
 }
 
+/* 用户消息时间分隔线（message-timeline.js）：低对比度文字 + 两侧细线，
+   与消息列同宽居中。负 margin 收紧与紧随用户消息的间距（吃掉容器 gap
+   的一部分），保持分隔线"贴着用户消息上方"的轻量观感。 */
+.time-separator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 800px;
+  width: 100%;
+  margin: 0 auto -16px;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+  user-select: none;
+  pointer-events: none;
+}
+.time-separator::before,
+.time-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+}
+
 .message-meta {
   display: flex;
   align-items: center;

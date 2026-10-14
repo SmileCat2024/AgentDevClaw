@@ -905,8 +905,14 @@ SessionLifecycle.prototype.start = async function () {
 
   // Push restored state to Viewer
   try {
-    const messages = typeof this.agent.getContext === 'function' ? this.agent.getContext().getAll() : [];
-    this.agent['pushToDebug']?.(messages);
+    const context = typeof this.agent.getContext === 'function' ? this.agent.getContext() : null;
+    const messages = context ? context.getAll() : [];
+    // enriched 侧时间戳随基线一并下发：恢复推送不带时间表时，debug-hub 会按
+    // "无时间锚"填全 null，会话历史的时间分隔线将整体丢失。
+    const timestamps = context && typeof context.getTimestamps === 'function'
+      ? context.getTimestamps()
+      : undefined;
+    this.agent['pushToDebug']?.(messages, timestamps);
     this.agent['syncRegisteredToolsToDebug']?.();
     this.agent['pushInspectorSnapshot']?.();
     this.agent['pushOverviewSnapshot']?.();

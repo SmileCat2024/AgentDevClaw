@@ -381,6 +381,8 @@ function appendNewMessages(newMessages, startIndex) {
 
     if (msg.role === 'user' || msg.role === 'system' || msg.role === 'assistant') {
       html = renderMessage(msg, index);
+      // 用户消息时间分隔线（message-timeline.js）：绝对索引对齐 currentMessages
+      html = prependTimeSeparatorHtml(currentMessages, index, html);
     } else if (msg.role === 'tool') {
       // tool 需要特殊处理，查找对应的 toolCall
       let toolName = null;
@@ -1014,6 +1016,9 @@ function render(messages) {
         ${renderUserImages(msg.images)}
       </div>
     `;
+  }).map(function (rowHtml, index) {
+    // 用户消息时间分隔线（message-timeline.js）：无时间锚时透传原行
+    return prependTimeSeparatorHtml(messages, index, rowHtml);
   }).join('');
 
   const chatContextKey = typeof getChatScrollContextKey === 'function'

@@ -94,6 +94,8 @@ function createRendererSandbox() {
     // 依赖全局函数（no-op 桩；渲染输出只统计 .message-row 行数）
     renderMarkdown: (s) => String(s ?? ''),
     escapeHtml: (s) => String(s ?? ''),
+    // message-timeline.js：透传行 html（默认 no-op 桩返回 undefined 会拼进 DOM）
+    prependTimeSeparatorHtml: (_messages, _index, rowHtml) => rowHtml,
     t: (s) => String(s ?? ''),
     getEmptyStateHtml: () => '<div class="empty-state"></div>',
     runWithSuppressedChatViewportObservers: (fn) => fn(),

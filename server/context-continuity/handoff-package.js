@@ -165,8 +165,16 @@ export async function exportHistoryOnlyHandoffPackage({
   const rawMessages = Array.isArray(sessionSnapshot?.runtime?.context?.messages)
     ? sessionSnapshot.runtime.context.messages
     : [];
+  // 源消息时间投影（enriched 侧 timestamp）：透传进 trim 产物，接续会话保留
+  // 历史时间线；长度失配的结构异常快照按无时间锚降级。
+  const enrichedMessages = Array.isArray(sessionSnapshot?.runtime?.context?.enrichedMessages)
+    ? sessionSnapshot.runtime.context.enrichedMessages
+    : null;
+  const msgTimestamps = enrichedMessages && enrichedMessages.length === rawMessages.length
+    ? enrichedMessages.map(e => (typeof e?.timestamp === 'number' && Number.isFinite(e.timestamp) ? e.timestamp : null))
+    : undefined;
 
-  const { seedMessages, stats } = buildTrimmedSeedMessages(rawMessages, policy);
+  const { seedMessages, stats } = buildTrimmedSeedMessages(rawMessages, policy, msgTimestamps);
   const createdAt = new Date().toISOString();
   // 不带摘要的精简也在上下文末尾注入一条注解（与带摘要版本的摘要消息同位），
   // 让续接 agent 明确感知会话 id 已变更并重新审视任务状态。
