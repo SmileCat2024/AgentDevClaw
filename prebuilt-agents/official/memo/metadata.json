@@ -1,0 +1,73 @@
+{
+  "id": "memo",
+  "kind": "workspace",
+  "threadHost": true,
+  "name": "Memo 智能备忘录",
+  "description": "随聊随记的备忘与提醒应用（对话已就绪，提醒能力建设中）",
+  "version": "0.2.0",
+  "icon": "note",
+  "category": "productivity",
+  "enabled": true,
+  "visibility": "persistent",
+  "sidebarGroup": "tool",
+  "features": [],
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "首页",
+          "en": "Home"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "hero",
+          "type": "hero",
+          "kicker": {
+            "zh": "工具与效率",
+            "en": "Tools & Efficiency"
+          },
+          "title": {
+            "zh": "Memo",
+            "en": "Memo"
+          },
+          "body": {
+            "zh": "随时说一句就记下，到点它会主动找你。从首页开始一段对话，对话会由一条长期线程承接；新建对话时旧对话自动归档收起。",
+            "en": "Jot things down by chatting, and it will reach out when it's time. Start a conversation from here; it is carried by one long-lived thread, and starting a new one archives the old automatically."
+          },
+          "actions": [
+            {
+              "label": {
+                "zh": "开始对话",
+                "en": "Start Chatting"
+              },
+              "action": {
+                "type": "start_app_conversation",
+                "endpoint": "/protoclaw/memo-app/conversation/start"
+              }
+            },
+            {
+              "label": {
+                "zh": "新建对话",
+                "en": "New Conversation"
+              },
+              "className": "workspace-action secondary",
+              "action": {
+                "type": "start_app_conversation",
+                "endpoint": "/protoclaw/memo-app/conversation/new"
+              }
+            }
+          ]
+        },
+        {
+          "id": "memo-notes",
+          "type": "memo-notes"
+        }
+      ]
+    }
+  }
+}

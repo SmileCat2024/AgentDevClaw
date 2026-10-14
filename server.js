@@ -120,6 +120,7 @@ import { getThreadIntegration } from './server/thread-control/thread-integration
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { registerThreadHostAgents } from './server/thread-control/host-agents.js';
+import { setupMemoAppRoutes } from './server/routes/memo-app.js';
 import { createThreadLifecycleService } from './server/thread-control/thread-lifecycle.js';
 import { createThreadDeleteService } from './server/thread-control/thread-delete.js';
 import { createThreadDeleteResources } from './server/thread-control/thread-delete-resources.js';
@@ -668,6 +669,20 @@ setupAcpRoutes(app, express, {
   threadDelete,
   requirePrebuiltSessionRecord,
   readSessionSnapshotForContinuity,
+});
+
+// ── Memo APP 对话事务（单活动线程 + 新建换代归档，ADR-0024 APP 业务状态）──
+setupMemoAppRoutes(app, express, {
+  requireAgentLight,
+  createPrebuiltSession,
+  deletePrebuiltSession,
+  startManagedAgent,
+  stopManagedAgent,
+  waitForManagedRuntimeReady,
+  threadControl,
+  threadIntegration,
+  threadLifecycle,
+  threadDelete,
 });
 // runtime 就绪补投：succession 时刻 runtime 未就绪而保持 pending 的指令，
 // 在 head runtime 真正 ready 时重试（设计 §5 的最后一个投递触发点）。
