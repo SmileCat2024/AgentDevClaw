@@ -56,7 +56,7 @@
 
 - **框架侧**（`AgentDev/packages/shell-feature`）：`BgRegistry` 的观察者发送六类事件（registered / output / report / ready / finalized / tuned；output 按 1s 节流，终态不节流）；共享登记表的观察者在会话 `onDestroy` 时摘除，避免继续向已退出会话镜像输出；`ShellFeature.getBgRegistry()` 提供访问器。
 - **镜像 Feature**（`local-features/feature-wrappers/src/panel-shell-feature.ts` 的 `PanelShellFeature`，继承 `ShellFeature` 的增强子类，装配处整体替换原版——同 `ControlledTodoFeature` 模式）：构造即声明 `shell-bg` 通道（featureId=`shell`，即 feature name——IPC 分发按它在 runtime 内查实例）；观察事件投影为 `publishEvent(kind, BgTaskSnapshot)`；`onHostRequest` 提供 `count`（仅运行中数量）/ `list` / `status`（含输出尾部）/ `kill`（graceful 透传，且恒为用户发起——`manual: true` 让引擎终止后补发"用户手动打断"通知：发起方不是模型，模型需要知情；工具路径 `bg_kill` 的 kill 不通知，发起方已从工具结果收到回执）/ `report`（手动触发 `BgRegistry.reportNow`——与节拍/静默同款汇报与双节奏重置）。发布失败静默——`bg_status` 仍是任务状态真值。
-- **消费面板**（`public/src/modules/bg-panel.js`）：右侧 rail "后台任务"面板，首次订阅只接新事件并从 `list` 取现状，迟到的列表不得覆盖更新的事件，任务结束后以列表对账移除被引擎淘汰的旧卡片；关闭态徽标只走 `count`；终止走请求面；会话切换守卫自动重订，面板取消激活自动拆订阅。
+- **消费面板**（`public/src/modules/bg-panel.js`）：右侧 rail "后台任务"面板，订阅只接新事件并从 `list` 取现状，迟到的列表不得覆盖更新的事件，任务结束后以列表对账移除被引擎淘汰的旧卡片；关闭态由徽标专用订阅驱动（事件帧 + 基线 `list`），其事件与基线同时镜像进任务缓存——重开面板先渲染缓存再经 `list` 对账（stale-while-revalidate：远程高延迟链路下重开不必等待"发现→订阅→拉取"的串行往返），寻址变化或通道确证消失（runtime 退出 / 未声明）时缓存整体作废；终止走请求面；会话切换守卫自动重订，面板取消激活自动拆订阅。
 - **装配**（`programming-helper/agent.js`）：单一挂载 `new PanelShellFeature({ workspaceDir, ...runtimeIdentity })`，`bgObserver` 由子类自持并经 `super()` 注入，不再旁挂第二个 feature。
 
 ## 备选方案（rejected）

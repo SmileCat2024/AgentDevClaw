@@ -15,7 +15,7 @@ class MockEventSource {
   close() { this.closed = true; }
 }
 
-function harness() {
+function harness({ listChannels } = {}) {
   const requests = [];
   const pending = [];
   const root = { querySelectorAll: () => [], querySelector: () => null, cloneNode: () => ({ innerHTML: '', querySelectorAll: () => [] }), replaceWith() {} };
@@ -38,7 +38,7 @@ function harness() {
   // 能力发现桩（7a63bbd 起 refreshBadge / 面板订阅先查 channels 列表再发
   // RPC）：声明 shell-bg 通道，让徽标与面板路径走到真实的 count/list 请求。
   ctx.window.ClawFeatureCommunication = {
-    listChannels: async () => [{ featureId: 'shell', channelId: 'shell-bg' }],
+    listChannels: listChannels ?? (async () => [{ featureId: 'shell', channelId: 'shell-bg' }]),
   };
   const timers = new Set();
   ctx.setInterval = (callback, delay) => { const id = { callback, delay }; timers.add(id); return id; };
@@ -168,17 +168,20 @@ describe('background task panel', () => {
     assert.equal(h.badge.textContent, '1');
     badgeStream.emit('event', { type: 'started', data: { id: 'bg-3', status: 'running', startedAt: 3, command: 'bash' } });
     assert.equal(h.badge.textContent, '2');
-    // 徽标订阅不碰面板 tasks。
-    assert.deepEqual(h.ids(), []);
-    // resync 对账：以 list 全量重建基线。
+    // 事件随手镜像进任务缓存：面板重开即最新状态，无需等 list 返回。
+    assert.deepEqual(h.ids(), ['bg-1', 'bg-2', 'bg-3']);
+    assert.equal(h.task('bg-1').status, 'done');
+    // resync 对账：以 list 全量重建基线（缓存成员同步对账）。
     badgeStream.emit('resync');
     h.pending.shift()({ ok: true, tasks: [{ id: 'bg-3', status: 'running', startedAt: 3, command: 'bash' }] });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(h.badge.textContent, '1');
-    // 通道关闭：拆除订阅并归零。
+    assert.deepEqual(h.ids(), ['bg-3']);
+    // 通道关闭：拆除订阅并归零，任务缓存随之作废（不留陈旧卡片）。
     badgeStream.emit('closed');
     assert.equal(h.badge.textContent, '');
     assert.equal(h.ctx.window.BgPanel.__testBadgeStream(), null);
+    assert.deepEqual(h.ids(), []);
   });
 
   it('panel open takes over the badge and tears down its stream', async () => {
@@ -209,6 +212,83 @@ describe('background task panel', () => {
     h.pending.shift()({ ok: true, tasks: [{ id: 'new', status: 'running', startedAt: 1, command: 'bash' }] });
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(h.ids(), ['new']);
+    h.ctx.window.BgPanel.onClose();
+  });
+
+  it('reopens with the retained snapshot, then reconciles membership from list', async () => {
+    const h = harness();
+    h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+    h.source().emit('open');
+    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.ids(), ['bg-1']);
+    h.ctx.window.BgPanel.onClose();
+    // 同一会话重开：不经任何网络往返，缓存先上屏（getHtml 即宿主 render 的数据源）。
+    h.ctx.window.BgPanel.onOpen();
+    assert.ok(h.ctx.window.BgPanel.getHtml().includes('bg-1'));
+    await new Promise(resolve => setImmediate(resolve)); // 发现（channels）先落定
+    assert.deepEqual(h.ids(), ['bg-1']);
+    h.source().emit('open');
+    h.pending.shift()({ ok: true, tasks: [] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.ids(), []); // 权威 list 对账：任务已被淘汰则移除
+    h.ctx.window.BgPanel.onClose();
+  });
+
+  it('drops the retained snapshot when the focused session changes', async () => {
+    const h = harness();
+    h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+    h.source().emit('open');
+    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.ids(), ['bg-1']);
+    h.ctx.window.BgPanel.onClose();
+    await new Promise(resolve => setImmediate(resolve)); // 关闭态徽标发现落定
+    h.ctx.getRuntimeWorkspaceSessionId = () => 'session-b';
+    h.ctx.window.BgPanel.onOpen();
+    assert.deepEqual(h.ids(), []); // 跨会话缓存不得串台
+    h.ctx.window.BgPanel.onClose();
+  });
+
+  it('invalidates the cache when discovery finds no channel', async () => {
+    let declared = true;
+    const h = harness({ listChannels: async () => (declared ? [{ featureId: 'shell', channelId: 'shell-bg' }] : []) });
+    h.ctx.window.BgPanel.onOpen();
+    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+    h.source().emit('open');
+    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.ids(), ['bg-1']);
+    h.ctx.window.BgPanel.onClose();
+    await new Promise(resolve => setImmediate(resolve)); // 关闭态徽标发现落定（通道仍声明）
+    declared = false;
+    // 下一轮徽标发现轮询确证无通道：拆订阅 + 缓存作废。
+    const badgePoll = [...h.timers].find(timer => timer.delay === 30_000);
+    badgePoll.callback();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.ids(), []);
+    assert.equal(h.ctx.window.BgPanel.__testBadgeStream(), null);
+  });
+
+  it('serves the badge-fed snapshot instantly on the first panel open', async () => {
+    const h = harness();
+    h.ctx.window.BgPanel.refreshBadge();
+    await new Promise(resolve => setImmediate(resolve)); // 通道发现落定，建立徽标订阅
+    const badgeStream = h.ctx.window.BgPanel.__testBadgeStream();
+    badgeStream.emit('open');
+    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.ids(), ['bg-1']);
+    // 首次打开面板：徽标流已把缓存喂热，不经 list 返回即渲染。
+    h.ctx.window.BgPanel.onOpen();
+    assert.ok(h.ctx.window.BgPanel.getHtml().includes('bg-1'));
+    await new Promise(resolve => setImmediate(resolve)); // 发现（channels）先落定
+    h.source().emit('open');
+    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(h.ids(), ['bg-1']);
     h.ctx.window.BgPanel.onClose();
   });
 });

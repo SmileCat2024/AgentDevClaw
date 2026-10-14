@@ -25,6 +25,12 @@
  * Last-Event-ID 续传，数字漂移在下次基线重建时对齐（徽标是概览提示，
  * 真值在面板与 bg_status）。
  *
+ * 重开保暖（stale-while-revalidate）：面板关闭不丢任务快照——徽标流的
+ * 事件与基线在关闭期间持续镜像进缓存，重开面板先渲染缓存再经 list 对账
+ * （发现→订阅→list 是三次串行网络往返，本地无感，远程高延迟链路上就是
+ * "每次切进去都等半天"）；寻址变化或通道确证消失（runtime 退出 / 会话
+ * 摘除 / 未声明）时缓存整体作废，不留陈旧卡片。
+ *
  * 视觉对齐右侧面板既有设计语言（feature-panel-section 卡片、
  * bash-progress 系列观感、项目等宽字体栈与状态色变量）。
  *
@@ -83,13 +89,16 @@
   /** 卡片骨架（挖空时长/输出尾巴后的 HTML）：判断结构是否变化。 */
   let lastSkeleton = '';
 
-  /** 徽标状态（面板关闭态）：事件订阅驱动 running 集合，不碰面板 tasks。 */
+  /** 徽标状态（面板关闭态）：事件订阅驱动 running 集合，并镜像进任务缓存。 */
   let badgeAddressKey = '';
   let badgePollInFlight = false;
   let badgeTimer = null;
   let badgeSource = null;
   let badgeStreamKey = '';
   const badgeRunningIds = new Set();
+  /** 任务快照缓存归属的会话寻址（`${agentId}::${sessionId}`）：面板流与
+   * 徽标流两个写入源共用，重开保暖时按它判定保留还是丢弃。 */
+  let cacheAddressKey = '';
   /** 上次写入徽标的值（-1 = 隐藏）：repaint 每秒都会调，值未变不碰 DOM。 */
   let lastBadgeValue = null;
 
@@ -353,6 +362,17 @@
     }
   }
 
+  /** 丢弃任务快照缓存（寻址变化，或通道确证消失：runtime 退出 / 会话摘除
+   * / 未声明）。终态缓存常驻会让重开面板显示早已消亡的陈旧卡片。 */
+  function _resetTaskCache() {
+    tasks.clear();
+    taskRevisions.clear();
+    reportStates.clear();
+    killPending.clear();
+    collapsedTasks.clear();
+    userToggledTasks.clear();
+  }
+
   function teardownChannel() {
     channelGeneration += 1;
     if (source) { source.close(); source = null; }
@@ -396,7 +416,12 @@
     const generation = channelGeneration;
     const revision = eventRevision;
     const requestRevision = ++listRevision;
-    const result = await channelRequest('list', {});
+    let result;
+    try {
+      result = await channelRequest('list', {});
+    } catch {
+      return; // 网络层异常：保持当前渲染，由重订 / 下一轮事件对账
+    }
     if (!source || generation !== channelGeneration || requestRevision !== listRevision) return;
     const current = currentAddressing();
     if (!current || current.agentId !== state.agentId || current.sessionId !== state.sessionId) return;
@@ -442,14 +467,18 @@
     eventRevision = 0;
     listRevision = 0;
     taskRevisions.clear();
-    tasks.clear();
-    reportStates.clear();
-    killPending.clear();
-    collapsedTasks.clear();
-    userToggledTasks.clear();
+    const addressing = currentAddressing();
+    // 重开保暖（stale-while-revalidate）：同一会话重开面板保留任务快照，
+    // 打开即渲染卡片——快照新鲜度由关闭期间徽标流的事件镜像保障（见
+    // _ensureBadgeStream）；寻址（agentId/sessionId）变化才整体丢弃，防跨
+    // 会话串台。
+    const nextCacheKey = addressing ? `${addressing.agentId}::${addressing.sessionId}` : '';
+    if (nextCacheKey !== cacheAddressKey) {
+      _resetTaskCache();
+      cacheAddressKey = nextCacheKey;
+    }
     lastHtml = '';
     lastSkeleton = '';
-    const addressing = currentAddressing();
     if (!addressing) {
       state.status = 'unavailable';
       repaint();
@@ -458,6 +487,7 @@
     state.agentId = addressing.agentId;
     state.sessionId = addressing.sessionId;
     state.status = 'connecting';
+    syncElapsedTimer();
     repaint();
 
     // 会话切换守卫：面板常开时，焦点会话变了就重订通道（对齐面板寻址纪律）；
@@ -507,6 +537,8 @@
       source.addEventListener('resync', () => { void refreshList(); });
       source.addEventListener('closed', () => {
         state.status = 'closed';
+        // 通道终态：任务已随会话消亡，缓存作废，防陈旧卡片常驻。
+        _resetTaskCache();
         teardownChannel();
         repaint();
       });
@@ -547,9 +579,17 @@
     badgeRunningIds.clear();
   }
 
-  /** 拉一次 list（带 id）重建徽标基线：连接建立与 resync 对账共用。 */
+  /** 拉一次 list（带 id）重建徽标基线：连接建立与 resync 对账共用。基线
+   * 快照同时镜像进任务缓存（含成员对账与终态默认收起）——徽标流先于面板
+   * 建立的场景（切换 runtime 即触发 refreshBadge）下，首次打开面板也无需
+   * 冷启动。 */
   async function _rebuildBadgeBaseline(stream) {
-    const result = await channelRequest('list', {});
+    let result;
+    try {
+      result = await channelRequest('list', {});
+    } catch {
+      return; // 网络层异常：徽标数值与缓存留待重连 / resync 对账
+    }
     if (badgeSource !== stream) return;
     if (result.ok === true && Array.isArray(result.tasks)) {
       badgeRunningIds.clear();
@@ -557,6 +597,16 @@
         if (task?.id && task.status === 'running') badgeRunningIds.add(task.id);
       }
       _setBadge(badgeRunningIds.size);
+      const listedIds = new Set();
+      for (const task of result.tasks) {
+        if (!task?.id) continue;
+        listedIds.add(task.id);
+        applyTask(task);
+        foldTerminalByDefault(task);
+      }
+      for (const id of tasks.keys()) {
+        if (!listedIds.has(id)) tasks.delete(id);
+      }
     }
   }
 
@@ -570,6 +620,11 @@
     const key = `${agentId}::${sessionId}`;
     if (badgeSource && badgeStreamKey === key) return;
     _teardownBadgeStream();
+    // 缓存归属会话变化：丢弃旧会话快照，防徽标流把新会话事件混进旧缓存。
+    if (cacheAddressKey !== key) {
+      _resetTaskCache();
+      cacheAddressKey = key;
+    }
     badgeStreamKey = key;
     const params = new URLSearchParams({
       agentId,
@@ -591,6 +646,10 @@
       if (task.status === 'running') badgeRunningIds.add(task.id);
       else badgeRunningIds.delete(task.id);
       _setBadge(badgeRunningIds.size);
+      // 免费保鲜：徽标流与面板同通道同会话，事件随手镜像进任务缓存——
+      // 面板重开即时呈现最新状态。只更新数据不重绘（面板关闭时无渲染
+      // 目标，徽标由上方 _setBadge 单独驱动）。
+      applyTask(task);
     });
     stream.addEventListener('resync', () => {
       if (badgeSource === stream) void _rebuildBadgeBaseline(stream);
@@ -599,6 +658,8 @@
       if (badgeSource !== stream) return;
       _teardownBadgeStream();
       _setBadge(0);
+      // 通道终态（runtime 退出 / 会话摘除）：任务缓存随之作废，防陈旧卡片。
+      _resetTaskCache();
     });
     // error：EventSource 自动重连（重连成功走 open 重建基线）；通道已消失
     // 时由 30s 发现轮询兜底拆除。
@@ -632,6 +693,8 @@
       if (!declared) {
         _teardownBadgeStream();
         _setBadge(0);
+        // 会话确证无通道（runtime 未起 / 已退出）：缓存作废，防陈旧卡片。
+        _resetTaskCache();
         return;
       }
       _ensureBadgeStream(addressing.agentId, addressing.sessionId);
