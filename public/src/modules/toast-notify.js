@@ -150,6 +150,19 @@
       content.appendChild(detailBtn);
     }
 
+    // 可选动作按钮（一次性，如快记条的「查看回复」）：点击不关闭 toast，
+    // 交由动作自行决定（autoDismiss 计时照常）
+    if (opts.action && opts.action.label) {
+      let actionBtn = document.createElement('button');
+      actionBtn.className = 'toast-action-btn';
+      actionBtn.type = 'button';
+      actionBtn.textContent = opts.action.label;
+      actionBtn.addEventListener('click', function () {
+        if (typeof opts.action.onClick === 'function') opts.action.onClick();
+      });
+      content.appendChild(actionBtn);
+    }
+
     let closeBtn = document.createElement('button');
     closeBtn.className = 'toast-close';
     closeBtn.type = 'button';
@@ -373,6 +386,7 @@
    * @param {string} [opts.description] - Optional description text.
    * @param {number} [opts.autoDismiss] - Auto-dismiss after N ms (success only by default).
    * @param {boolean} [opts.closable] - Show close button. Default: true.
+   * @param {object} [opts.action] - Optional one-shot action button: { label, onClick }.
    */
   function show(opts) {
     if (!opts || !opts.id) return;

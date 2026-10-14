@@ -946,6 +946,7 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 - 差异表行号的 sticky 只用于展开后的横向阅读。折叠预览仍吸附会让被裁剪的单元格生成大量合成层；本次在 DOM 数不变时，取消折叠状态的吸附将末段图层从 399 降至 114。判断滚动热点要关联 LayerTree 与具体元素并做恢复对照，不能只看首次 render 或布局耗时。
 - 旧过程窗口被禁用时，长过程会话由 `chat-row-visibility.js` 先读取真实行高，再隐藏远处整行，限制绘制和可访问性更新。必须保持 height/min-height 与 flex-shrink 占位保护；普通滚动使用缓存位置和像素缓冲，不全树测量、不边滚边折叠。末条补丁、显式展开、图片加载和宽度释放需刷新真实高度；退出过程模式/切换窗口机制时解除高度锁。
 - 不把“没有 DOM 写入”或“元素低于 70,000”当成滚动流畅保证：浏览器仍有 native 工作。屏外隐藏不等于卸载 DOM；浏览器查找/连续选择/可访问性遍历存在隐藏内容边界，完整搜索应基于消息数据。一次隔离跑分不能替代实际客户端的前台滚动和最长停顿验收。
+- 流式背景补丁（append / updateLastMessage 的 `fromIndex` 路径）在两种分级下都必须保持 background patch 语义：窗口锚定用户真实视口。虚拟化分级没有增量路径可走、落全量路径时曾把 viewportIdx 硬编码为末行——用户上翻阅读中的行被 cv 隐藏，工具-only 的 assistant 行成片退化为徽标 + 灰色占位（“空 assistant 消息”，长会话专属），直到刷新/显隐切换才恢复。回归测试：`test/frontend-process-windowing-background-patch.test.js`。
 
 详见 [显示过程滚动调查与修复](../investigations/2026-09-27-chat-process-scroll-performance.md)。
 
@@ -983,6 +984,20 @@ coder 投影（`runtime-status.js collectRuntimeEntriesForPrebuilt`，`sessionTy
 
 ---
 
+## 12f. APP 型工作空间首页快记输入框：app-chat-input block（2026-10-14）
+
+宿主通用能力，APP 纯声明接入（首个消费者：memo 首页）。模块 `modules/app-chat-input.js`，样式 `styles/app-chat-input.css`，完整契约见模块头注。核心边界：
+
+- **声明与分发分离**：APP 在 `metadata.json` `ui.home.blocks` 声明 `{ type: "app-chat-input", resolveEndpoint, ensureEndpoint, placeholder }`；`app-ui.js renderWorkspaceBlock` 按通用 type 分发，公共代码零 APP ID 分支。配置不完整渲染空串（与未知 block 同为可拔插基线，不报错不占位）。
+- **双端点契约**：`resolveEndpoint`（GET，返回 `{ ok, threadId }` 或 `{ ok, activeThread: { threadId } }`）+ `ensureEndpoint`（POST，空态创建事务）。发送编排：resolve 有 threadId → 直接 `POST /protoclaw/threads/:threadId/input`（宿主通用：head runtime 唤起 + 投递 + 交接窗口 Inbox 暂存，直投与 `thread_queued` 同为成功）；无 → ensure 创建后再投递。常态一跳轻查询，重事务只在真需要创建时发生。
+- **「唯一活动对话是 APP 业务状态」边界不动**（[ADR-0024](../adr/0024-app-workspace-eternal-thread-model.md) 决策 1）：宿主通用的是渲染与投递，对话选择逻辑（resolve/ensure 语义）留在 APP 端点。toast「查看回复」动作复用 `start_app_conversation` 导航链（endpoint 即 ensureEndpoint）。
+- **语音复用主链路**：voice 按钮 `data-target` 指向 block textarea，录音/转写/声效/pendingSend 全部走 `voice-input.js` 既有逻辑；自动发送经 `_dispatchVoiceAutoSend` 的 `'app-chat-input-textarea-'` 前缀分支交回本模块 `submit`。新增同类输入面时优先扩前缀委托，不复制语音实现。
+- **易错点**：`render()` 在 `innerHTML` 赋值前组串，DOM 修正（autoResize、录音态按钮重绑）必须 `setTimeout` 下一拍执行且 `getElementById` 落空安全 no-op（视图可能已切走）；草稿 key 为 `app-chat-input:<agentId>`（复用 `_sessionInputCache` 但独立命名空间，不污染对话视图会话草稿）；发送全程 in-flight 防重入；成功后清输入须按 id 重查 live 元素（await 期间重渲染会换节点）。
+
+配套通用扩展：`ClawToast.show` 支持 `action: { label, onClick }`（`modules/toast-notify.js` + `styles/toast.css`）。
+
+---
+
 ## 13. 相关文件索引
 
 > 行号会随迭代漂移，定位时以 grep 为准，本表只给文件级归属（2026-08-23 复核）。
@@ -996,6 +1011,7 @@ coder 投影（`runtime-status.js collectRuntimeEntriesForPrebuilt`，`sessionTy
 | 远程 catalog 数据、`getRemoteSidebarProjection`、`resolveRuntimeRef` | `modules/remote-connections.js` |
 | `render`、`renderMessage`、`appendNewMessages`、`updateLastMessage` | `modules/chat-renderer.js` |
 | `runWorkspaceAction`（workspace action 分发器）、`reloadRuntimeForSessionSwitch` | `modules/workspace-actions.js` |
+| APP 型工作空间首页快记输入框（`app-chat-input` block：渲染、resolve/ensure 发送编排、语音接线） | `modules/app-chat-input.js` |
 | `renderInputRequests`、`getInputRenderSignature` | `modules/input-render.js` |
 | 持久输入 / 队列 / `interruptAgent` / `_syncPersistentInputUi` | `modules/persistent-input.js` |
 | `updateNotificationStatus`、`isRuntimeCalling`、运行状态栏 | `modules/runtime-status.js` |

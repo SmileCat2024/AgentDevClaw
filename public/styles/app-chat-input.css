@@ -1,0 +1,119 @@
+/**
+ * app-chat-input.css — APP 型工作空间首页快记输入框（宿主通用能力）
+ *
+ * block 契约与交互见 public/src/modules/app-chat-input.js 头注。
+ * 布局：水平居中、sticky 底部对齐；surface 内容不足一屏时也贴视口底
+ * （min-height 100% + margin-top auto），内容长于视口时随滚动钉底。
+ * 视觉：低默认高度 + 大圆角胶囊（单行时上下圆角近半圆拼合）；
+ * 发送按钮复用 .persistent-action-btn 圆形三态基型（is-sending spinner、
+ * voice-disabled 与 voice-input 的 _updateVoiceUI 联动）。
+ */
+
+/* 滚动容器：快记条在场时收敛 chat 模式遗留的 320px 底 padding
+   （对话视图 composer 不在工作空间表面，该余量只为对话模式服务） */
+#chat-container:has(.app-chat-input-dock) {
+  padding-bottom: 20px;
+}
+
+/* 内容不足一屏时快记条仍贴视口底：surface 拉满滚动区 */
+.workspace-surface:has(.app-chat-input-dock) {
+  min-height: 100%;
+}
+
+.app-chat-input-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  justify-content: center;
+  margin-top: auto; /* flex 列内推底；与 sticky 协作：长内容时 auto 余量为 0 */
+  padding: 22px 0 4px;
+  /* 滚动内容穿行下方的柔和过渡 */
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--bg-color) 60%, transparent) 40%,
+    var(--bg-color)
+  );
+}
+
+.app-chat-input-capsule {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: min(680px, 100%);
+  padding: 6px 6px 6px 22px;
+  border: 1px solid var(--border-color);
+  border-radius: 27px; /* 总高 ~54px：单行时上下圆角近半圆拼合 */
+  background: var(--panel-bg);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.app-chat-input-capsule:focus-within {
+  border-color: color-mix(in srgb, var(--accent-text) 55%, var(--border-color));
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.28),
+    0 0 0 3px color-mix(in srgb, var(--accent-text) 16%, transparent);
+}
+
+.app-chat-input-textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  max-height: 180px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14.5px;
+  font-family: inherit;
+  line-height: 40px;
+  resize: none;
+  outline: none;
+  overflow-y: auto;
+}
+
+.app-chat-input-textarea::placeholder {
+  color: var(--text-secondary);
+}
+
+.app-chat-input-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* 语音按钮：复用全局 .voice-input-btn 的录音 / 转写态样式，仅对齐胶囊尺寸 */
+.app-chat-input-capsule .app-chat-voice-btn {
+  width: 38px;
+  height: 38px;
+}
+
+/* 发送按钮：复用 .persistent-action-btn 圆形基型；激活态镜像 composer 的
+   「有内容才可点」语义（:placeholder-shown 判空） */
+.app-chat-input-capsule .persistent-action-btn {
+  width: 38px;
+  height: 38px;
+}
+
+.app-chat-input-capsule:has(.app-chat-input-textarea:not(:placeholder-shown)) .persistent-action-btn {
+  opacity: 1;
+  cursor: pointer;
+}
+
+.app-chat-input-capsule:has(.app-chat-input-textarea:not(:placeholder-shown)) .persistent-action-btn:hover {
+  transform: scale(1.06);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+@container main-content (max-width: 700px) {
+  .app-chat-input-dock {
+    padding: 14px 0 2px;
+  }
+}

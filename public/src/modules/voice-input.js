@@ -457,6 +457,10 @@ function _dispatchVoiceAutoSend(targetId) {
         });
       }
     }
+  } else if (targetId && targetId.startsWith('app-chat-input-textarea-')) {
+    // 首页快记条（app-chat-input 宿主能力）：录音中点发送后的自动提交交回
+    // 能力模块——它持有发送编排与目标 APP 的 block 配置
+    window.AppChatInput?.submit?.(targetId.slice('app-chat-input-textarea-'.length));
   }
 }
 

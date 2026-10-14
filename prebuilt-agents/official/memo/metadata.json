@@ -42,8 +42,8 @@
           "actions": [
             {
               "label": {
-                "zh": "开始对话",
-                "en": "Start Chatting"
+                "zh": "打开对话",
+                "en": "Open Conversation"
               },
               "action": {
                 "type": "start_app_conversation",
@@ -66,6 +66,16 @@
         {
           "id": "memo-notes",
           "type": "memo-notes"
+        },
+        {
+          "id": "chat-input",
+          "type": "app-chat-input",
+          "resolveEndpoint": "/protoclaw/memo-app/state",
+          "ensureEndpoint": "/protoclaw/memo-app/conversation/start",
+          "placeholder": {
+            "zh": "跟 Memo 说一句，随手记下…",
+            "en": "Tell Memo something to jot down…"
+          }
         }
       ]
     }
