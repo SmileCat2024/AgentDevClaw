@@ -488,7 +488,16 @@ function canRollbackMessage(msg) {
   const available = getAvailableCallIndices();
   // If runtime didn't send availableCallIndices, fall back to allowing all
   if (available === null) return true;
-  return available.includes(msg.turn);
+  if (available.includes(msg.turn)) return true;
+  // 防御（低概率竞态）：lease 广播的 availableCallIndices 偶发缺最新轮的
+  // checkpoint（广播早于 checkpoint 提交）。最新一条用户消息正是「回退到
+  // 刚说的话」的目标：宁可放行（执行时 runtime 按实际 checkpoints 校验，
+  // 真不存在会明确失败并 toast），也不静默禁用按钮。
+  for (let i = currentMessages.length - 1; i >= 0; i--) {
+    if (currentMessages[i]?.role !== 'user') continue;
+    return currentMessages[i] === msg;
+  }
+  return false;
 }
 
 function saveChatProcessVisibility() {

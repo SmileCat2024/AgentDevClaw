@@ -5938,6 +5938,18 @@ body[data-theme="light"] .user-choice-card:focus-within {
   font-weight: 600;
 }
 
+/* 回退/压缩对话框：轮次运行期提示（确认操作将自动打断当前轮次） */
+.user-choice-running-hint {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--hover-bg);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .user-choice-close {
   width: 28px;
   height: 28px;

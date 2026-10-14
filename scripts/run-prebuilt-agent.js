@@ -280,6 +280,9 @@ class SessionLifecycle {
     this.inputLoopRunning = false;
     this.passiveMailboxLoop = null;
     this.lastReportedMessageCount = 0;
+    // 上一个输入动作（回退/压缩）的失败原因：随下一次 lease actions 一次性
+    // 广播给前端（toast 呈现），不再只进输入框 placeholder（几乎不可见）。
+    this._lastActionError = null;
 
     // Per-session bridge contexts (shared by reference with extracted modules)
     this.imBridgeCtx = {
@@ -305,9 +308,20 @@ class SessionLifecycle {
     const checkpoints = Array.isArray(this.agent?._callCheckpoints) ? this.agent._callCheckpoints : [];
     if (checkpoints.length === 0) return undefined;
     const availableCallIndices = checkpoints.map(cp => cp.callIndex);
+    // 观测防御：lease 广播发生在轮次终态之后，checkpoint 应已含最新轮；
+    // 落后于 _callIndex 说明广播早于 checkpoint 提交（低概率竞态，历史观测
+    // 过一次），留 warn 痕迹便于复现时定位。前端对最新用户消息另有放宽。
+    const agentCallIndex = typeof this.agent?._callIndex === 'number' ? this.agent._callIndex : null;
+    if (agentCallIndex !== null && Math.max(...availableCallIndices) < agentCallIndex) {
+      console.warn(`[ProtoClaw Runtime] lease actions 落后于当前轮: checkpoints=[${availableCallIndices.join(',')}] _callIndex=${agentCallIndex}`);
+    }
+    // 上一个输入动作的失败原因随 actions 一次性携带（读后即清），前端以
+    // toast 呈现；输入框 placeholder 提示保留作兜底。
+    const lastActionError = this._lastActionError;
+    this._lastActionError = null;
     return NEXT_TURN_ACTIONS.map(action => ({
       ...action,
-      data: { availableCallIndices },
+      data: { availableCallIndices, ...(lastActionError ? { lastActionError } : {}) },
     }));
   }
 
@@ -1152,6 +1166,9 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
         && typeof response?.payload?.draftInput === 'string') {
         userInput.setNextDraftInput(response.payload.draftInput);
       }
+      // 失败原因记录后随下一次 lease actions 广播（getNextTurnActions 一次性
+      // 携带，前端 toast 呈现）——只有 placeholder 时用户几乎不可见。
+      this._lastActionError = String(error?.message || error).slice(0, 200);
       inputPrompt = `上次操作失败: ${String(error?.message || error).slice(0, 160)}。可直接重试或继续输入: `;
       continue;
     }

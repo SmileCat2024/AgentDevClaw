@@ -1041,10 +1041,14 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
   }
 }
 
+// 返回 { ok } 供编排方（如运行期回退 rollback-dialog.js）判断结果：
+//   { ok: true }                    — 打断请求已被服务端接受
+//   { ok: false, reason }           — 未发出或失败（'no-runtime' / 'suppressed'
+//                                     / 'request-failed'，失败原因已自行 toast）
 async function interruptAgent() {
-  if (!currentRuntimeAgentId) return;
+  if (!currentRuntimeAgentId) return { ok: false, reason: 'no-runtime' };
   const targetRuntimeId = currentRuntimeAgentId;
-  if (isInterruptSuppressed(targetRuntimeId)) return;
+  if (isInterruptSuppressed(targetRuntimeId)) return { ok: false, reason: 'suppressed' };
   const wasCalling = isRuntimeCalling(targetRuntimeId);
 
   // 立即进入粘性的 interrupting 状态；中间阶段仍然是“正在停止”，绝不伪装成
@@ -1086,6 +1090,7 @@ async function interruptAgent() {
     if (!res.ok || data?.success === false || data?.error) {
       throw new Error(data?.error || `HTTP ${res.status}`);
     }
+    return { ok: true };
   } catch (e) {
     console.error('[Interrupt] request failed:', e);
     // 请求没有被接受时才回滚 interrupting。成功请求没有任何超时回滚；它必须
@@ -1103,6 +1108,7 @@ async function interruptAgent() {
       title: currentLanguage === 'zh' ? '停止请求失败' : 'Stop request failed',
       description: e instanceof Error ? e.message : String(e),
     });
+    return { ok: false, reason: 'request-failed', error: e };
   }
 }
 

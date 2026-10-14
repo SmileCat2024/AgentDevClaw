@@ -37,6 +37,31 @@
 let lastRenderedInputSignature = '';
 let lastRenderedInputMode = null;
 
+// 已 toast 过动作失败的 lease（runtime 侧回退/压缩失败原因随 lease actions
+// 一次性携带；签名去重之外按 requestId 再去重，防止重复提示）。
+let _lastLeaseActionErrorToastedId = null;
+
+// runtime 侧输入动作（回退/压缩）执行失败的一次性 toast：失败原因由下一
+// 次 lease 的 actions data 携带（run-prebuilt-agent.js getNextTurnActions
+// 读后即清），此前只进输入框 placeholder（几乎不可见）。
+function _notifyLeaseActionError(lease) {
+  const actionError = Array.isArray(lease?.actions)
+    ? (lease.actions.find(action => typeof action?.data?.lastActionError === 'string'
+      && action.data.lastActionError)?.data?.lastActionError || null)
+    : null;
+  if (!actionError || _lastLeaseActionErrorToastedId === lease.requestId) return;
+  _lastLeaseActionErrorToastedId = lease.requestId;
+  if (typeof ClawToast === 'undefined' || !ClawToast?.show) return;
+  const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  ClawToast.show({
+    id: `lease-action-error-${lease.requestId}`,
+    status: 'error',
+    title: isZh ? '上一次回退/压缩操作失败' : 'Previous rollback/compact action failed',
+    description: actionError,
+    autoDismiss: 8000,
+  });
+}
+
 // 渲染输入请求
 function getInputRenderSignature(requests, renderMode) {
   const runtimeId = currentRuntimeAgentId || 'none';
@@ -269,6 +294,8 @@ function renderRequestComposer(inputContainer, lease) {
   const composer = showPersistentComposerCard(inputContainer);
   const boundRuntimeId = String(currentRuntimeAgentId || '');
   applyComposerMode(composer, 'requests', lease);
+  // 失败原因随 lease 到达（一次性）：placeholder 之外给出明确 toast。
+  _notifyLeaseActionError(lease);
 
   const requestTextarea = document.getElementById(`input-${lease.requestId}`);
   const requestCacheKey = _getSessionInputCacheKey();
