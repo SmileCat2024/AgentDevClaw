@@ -346,7 +346,9 @@ class SessionLifecycle {
       : [];
     const pending = messages.slice(this.lastReportedMessageCount);
     for (const message of pending) {
-      const turn = Number.isInteger(message?.turn) ? message.turn : null;
+      // 插话锚点的 turn 是分数（N.5/N.75…，见 captureInterjectionCheckpoint），
+      // 按数值透传；thread 事件消费方（无头 JSONL / 看板）只作标识不去重语义。
+      const turn = typeof message?.turn === 'number' && Number.isFinite(message.turn) ? message.turn : null;
       if (message?.role === 'assistant') {
         if (typeof message.reasoning === 'string' && message.reasoning.trim()) {
           await this.reportThreadEvent({

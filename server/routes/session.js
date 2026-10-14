@@ -79,6 +79,15 @@ function requireRemoteIdempotencyKey(req, res, metadata = {}) {
  * @param {object} express Express module
  * @param {object} ctx     Context with session helpers + agent lifecycle functions
  */
+/**
+ * read_turn 的 turn 归属判定。插话锚点产生分数 turn（N.5/N.75…，见框架
+ * captureInterjectionCheckpoint），消息仍属于其整数轮的会话时间线；按整数
+ * 轮取回时必须包含它们。
+ */
+export function turnBelongsTo(turn, turnFilter) {
+  return typeof turn === 'number' && Number.isFinite(turn) && Math.floor(turn) === turnFilter;
+}
+
 export function setupSessionRoutes(app, express, ctx) {
   const {
     activatePrebuiltSession,
@@ -372,7 +381,7 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
     const parsed = JSON.parse(raw);
     const allMessages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
     const messages = applyTurnFilter
-      ? allMessages.filter((m) => Number.isInteger(m?.turn) && m.turn === turnFilter)
+      ? allMessages.filter((m) => turnBelongsTo(m?.turn, turnFilter))
       : allMessages;
     const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);
     res.json({
@@ -381,7 +390,7 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
       goal: parsed.goal || null,
       messages: messages.map(m => ({
         role: m.role,
-        turn: Number.isInteger(m.turn) ? m.turn : null,
+        turn: Number.isFinite(m.turn) ? m.turn : null,
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
         ...(Array.isArray(m.toolCalls) ? { toolCalls: m.toolCalls } : {}),
         ...(typeof m.reasoning === 'string' && m.reasoning ? { reasoning: m.reasoning } : {}),
