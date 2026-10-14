@@ -356,6 +356,11 @@ function createChatMutationContext() {
     renderMarkdown(value) {
       return value;
     },
+    // 增量渲染尾部同步 _lastRenderedChatSig 时调用（完整签名函数不在本
+    // 片段内）；行为断言不关心签名内容，给恒定桩即可。
+    buildChatRenderSignature() {
+      return 'test-sig';
+    },
   };
   vm.createContext(context);
   const mutationBlock = sourceBetween(

@@ -460,6 +460,10 @@ function appendNewMessages(newMessages, startIndex) {
     preferSmooth: false,
     forceSnap: false,
   });
+  // 增量 DOM 变更完成后同步渲染签名：签名必须始终描述容器实际呈现的消息
+  // 列表，否则「append 后回退到旧指纹」时 render() 的去重会误判"DOM 已是该
+  // 状态"而跳过重建，回退后 UI 停留在幽灵消息（只有硬刷新才恢复）。
+  _lastRenderedChatSig = buildChatRenderSignature(currentMessages);
 }
 
 // ── Optimistic user echo（空闲直投路径的本地回显）─────────────────
@@ -650,6 +654,9 @@ function updateLastMessage(msg) {
     preferSmooth: false,
     forceSnap: false,
   });
+  // 同 appendNewMessages：末行在位 patch 后同步渲染签名，保持签名与 DOM
+  // 实态一致（防回退指纹碰撞导致 render() 去重误跳过重建）。
+  _lastRenderedChatSig = buildChatRenderSignature(currentMessages);
 }
 
 function getCollapseThresholdForRow(row) {
