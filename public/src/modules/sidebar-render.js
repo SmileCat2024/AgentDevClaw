@@ -305,6 +305,7 @@ const AGENT_ICONS = {
   'programming-helper': 'programming-helper.svg',
   'coder': 'programming-helper.svg',
   'work-group': 'work-group.svg',
+  'memo': 'memo.svg',
 };
 
 function getAgentIconHtml(agentId) {

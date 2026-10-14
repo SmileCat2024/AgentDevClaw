@@ -1,0 +1,161 @@
+/* memo-notes.css — memo 首页便签墙（卡片自带容器、外层无面板包裹）与页内阅读视图 */
+
+/* 无界：section 本身不画面板（去掉 workspace-section 的边框/底色/圆角/内衬），
+   便签卡片直接落在页面背景上，每张卡片自带容器 */
+.memo-notes-wall {
+  margin-top: 18px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+}
+
+/* 标题作为悬浮文字，不带分节底部分界线 */
+.memo-notes-wall .workspace-section-header {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* 每行最多 5 个，随视口宽度降列；minmax(0,1fr) 防长内容撑破网格 */
+.memo-notes-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1500px) {
+  .memo-notes-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@media (max-width: 1200px) {
+  .memo-notes-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .memo-notes-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .memo-notes-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 卡片：自带容器（背景 / 边框 / 圆角），高度上限维持网格行对齐，
+   hover 边框着色 + 轻微上浮表达可点 */
+.memo-note-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  height: 176px;
+  padding: 14px 16px;
+  text-align: left;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  color: var(--text-primary);
+  font-family: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.memo-note-card:hover {
+  border-color: var(--text-muted);
+  transform: translateY(-1px);
+}
+
+.memo-note-title {
+  flex: none;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memo-note-preview {
+  flex: 1;
+  min-height: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.memo-note-meta {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.memo-notes-state {
+  padding: 26px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* ── 页内阅读视图：与 guide-article 同款 880px 居中阅读排版 ──── */
+
+.memo-note-reader {
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+.memo-note-reader-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 2px 0 12px;
+  min-width: 0;
+}
+
+/* 返回按钮：指南目录条目同款幽灵按钮（透明底 + hover-bg） */
+.memo-note-back {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  padding: 6px 10px;
+  margin-left: -10px; /* 与正文光学对齐 */
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.memo-note-back:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.memo-note-reader-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memo-note-reader-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 48px 0;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* 正文：排版由 markdown-body 承担（对话页渲染管线），此处只收束留白 */
+.memo-note-reader-body {
+  padding-top: 6px;
+}

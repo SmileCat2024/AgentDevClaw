@@ -1195,6 +1195,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'studio-features') return renderStudioFeaturesBlock(agent, block);
   if (block.type === 'studio-repository') return renderStudioRepositoryBlock(agent, block);
   if (block.type === 'coder-threads') return window.CoderThreadsUI?.render?.() || '';
+  if (block.type === 'memo-notes') return window.MemoNotesUI?.render?.() || '';
   if (block.type === 'form') return renderWorkspaceForm(agent, block);
   if (block.type === 'status-grid') return renderWorkspaceStatusGrid(agent, block);
   if (block.type === 'assembly-library') return renderAssemblyLibraryBlock(agent, block);
