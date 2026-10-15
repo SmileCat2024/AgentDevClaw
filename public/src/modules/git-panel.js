@@ -485,9 +485,15 @@
     if (wantGraph) jobs.push(autoOk(api('graph', { dir: view, limit: state.graphLimit, branch: state.branch })));
     const [status, branches, graph] = await Promise.all(jobs);
     if (state.dir !== dir || state.loading || activeDir() !== view) return;
+    // refs 配色键（泳道配色 + 分支标签的数据源）应用前快照：变化需全量重绘
+    const prevCurrent = state.status?.current || '';
+    const prevTracking = state.status?.tracking || '';
+    let structural = false;   // isRepo 翻转等结构性视图变化
+    let graphApplied = false; // 本轮拉取并应用了新图形数据
     if (status && status.ok) {
       if (status.isRepo === false) {
         handleRepoMiss();
+        structural = true;
       } else {
         state.repoMiss = 0;
         state.isRepo = true;
@@ -511,6 +517,7 @@
             state.graph = Array.isArray(g.commits) ? g.commits : [];
             state.aheadHashes = Array.isArray(g.aheadHashes) ? g.aheadHashes : [];
             delete state.errors.graph;
+            graphApplied = true;
           }
         }
       }
@@ -523,8 +530,17 @@
       state.graph = Array.isArray(graph.commits) ? graph.commits : [];
       state.aheadHashes = Array.isArray(graph.aheadHashes) ? graph.aheadHashes : [];
       delete state.errors.graph;
+      graphApplied = true;
     }
-    repaint();
+    // 收尾分诊：图形数据 / 结构 / refs 配色变化 → 全量重绘；仅 status 内容
+    // 变化（agent 干活的常态）→ 定向替换上区，跳过 ~600KB 图形区重解析
+    const refsChanged = (state.status?.current || '') !== prevCurrent
+      || (state.status?.tracking || '') !== prevTracking;
+    if (structural || graphApplied || refsChanged) {
+      repaint();
+    } else {
+      patchChangesZone();
+    }
   }
   function stopAutoRefresh() {
     if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
@@ -1049,6 +1065,54 @@
 
   // ── 渲染：双区骨架 ────────────────────────────────────────────────
 
+  /**
+   * 上区（更改与暂存）body 内容：消息条 + 两个子分区。buildHtml 与
+   * patchChangesZone 共用单一来源，保证定向替换与全量渲染字节一致。
+   */
+  function renderChangesBody() {
+    const status = state.status || { files: [] };
+    const { staged, changes } = splitGroups(status.files || []);
+    // 能力门控（ADR-0011）：无写能力时组级写动作一并禁用（照能力矩阵既有
+    // 形态），只读查看不受影响
+    const writable = canWriteGit();
+    return [
+      renderMessage(),
+      subSection('staged', zh('暂存的更改', 'Staged Changes'), staged.length,
+        renderFilesList(staged, 'staged'),
+        staged.length ? '<button class="git-group-action" data-gp-action="unstage-all"' + (writable ? '' : ' disabled') + '>' + esc(zh('全部取消', 'Unstage All')) + '</button>' : '',
+        state.subFold.staged),
+      subSection('changes', zh('更改', 'Changes'), changes.length,
+        renderFilesList(changes, 'changes'),
+        changes.length ? '<button class="git-group-action" data-gp-action="stage-all"' + (writable ? '' : ' disabled') + '>' + esc(zh('全部暂存', 'Stage All')) + '</button>' : '',
+        state.subFold.changes),
+    ].join('');
+  }
+
+  /**
+   * 静默刷新的定向更新：仅 status 内容变化（agent 干活改文件，每几秒一次）
+   * 时不做全量 body 替换——大历史上全量替换要重新解析整个图形区
+   * （~600KB HTML / 上万节点），是"偶尔卡一下"的来源。只替换上区 body
+   * （小 DOM，滚动容器自身保留），并同步宿主签名缓存，使后续轮询
+   * renderFeaturePanel 的签名对比视为未变而跳过替换（patchGraphZone 同款
+   * 模式）。结构性变化（isRepo 翻转、图形数据/refs 配色变化）仍走全量。
+   */
+  function patchChangesZone() {
+    if (typeof document === 'undefined') return;
+    // 面板未挂载或正处于回退视图（非双区布局）：定向替换无从谈起，
+    // 全量渲染呈现当前状态
+    if (!document.querySelector('.git-panel')) { repaint(); return; }
+    // 上区折叠时 body 不在 DOM，无内容可换；同步缓存避免之后的一次
+    // 多余全量替换
+    if (state.zoneFold.changes) {
+      if (typeof syncPanelBodyHtmlCache === 'function') syncPanelBodyHtmlCache();
+      return;
+    }
+    const zone = document.querySelector('.git-zone-body[data-zone-body="changes"]');
+    if (!zone) { repaint(); return; }
+    zone.innerHTML = renderChangesBody();
+    if (typeof syncPanelBodyHtmlCache === 'function') syncPanelBodyHtmlCache();
+  }
+
   function zoneBar(zone, titleHtml, toolsHtml, folded) {
     return [
       '<div class="git-zone-bar" data-gp-zone-bar="' + zone + '">',
@@ -1128,11 +1192,8 @@
       return renderEmpty(zh('正在读取 Git 状态', 'Loading Git status'), null, { loading: true });
     }
 
-    const status = state.status || { files: [] };
-    const { staged, changes } = splitGroups(status.files || []);
     // 能力门控（ADR-0011）：无写能力时组级写动作一并禁用（照能力矩阵既有
-    // 形态），只读查看不受影响
-    const writable = canWriteGit();
+    // 形态），只读查看不受影响——上区内容经 renderChangesBody() 内部门控
 
     // ── 上区：更改与暂存 ──
     // 查看子仓库时，标题后跟仓库切换下拉（多仓库场景的位置指示与切换入口）
@@ -1141,17 +1202,7 @@
     const changesTools = renderRepoTrigger() + refreshBtn;
     const changesTitle = esc(zh('更改与暂存', 'Changes'));
 
-    const changesBodyHtml = [
-      renderMessage(),
-      subSection('staged', zh('暂存的更改', 'Staged Changes'), staged.length,
-        renderFilesList(staged, 'staged'),
-        staged.length ? '<button class="git-group-action" data-gp-action="unstage-all"' + (writable ? '' : ' disabled') + '>' + esc(zh('全部取消', 'Unstage All')) + '</button>' : '',
-        state.subFold.staged),
-      subSection('changes', zh('更改', 'Changes'), changes.length,
-        renderFilesList(changes, 'changes'),
-        changes.length ? '<button class="git-group-action" data-gp-action="stage-all"' + (writable ? '' : ' disabled') + '>' + esc(zh('全部暂存', 'Stage All')) + '</button>' : '',
-        state.subFold.changes),
-    ].join('');
+    const changesBodyHtml = renderChangesBody();
 
     // ── 下区：图形 ──
     const graphTools = renderBranchTrigger()

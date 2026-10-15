@@ -8361,6 +8361,12 @@ body[data-theme="light"] .git-file-action:hover {
   border-radius: 5px;
   cursor: pointer;
   white-space: nowrap;
+  /* 大历史上行数以千计：视口外行跳过内部布局与绘制，全量替换/滚动/
+     拖拽分隔条的重排成本从 O(全部行) 降到 O(可见行)。行高恒定 26px，
+     占位尺寸精确，泳道 SVG 的 offsetTop 度量不受影响；不支持的内核
+     自动忽略本属性（退回全量布局）。 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 26px;
 }
 
 .git-history-row:hover {

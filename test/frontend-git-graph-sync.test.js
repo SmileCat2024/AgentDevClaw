@@ -11,18 +11,22 @@
  *  2. 泳道模型按 commits 数组身份 + 分支配色键 memo，未变数据不重算
  *  3. 行几何变化（offsetTop 漂移）恰好触发一次度量重绘替换
  *  4. 数据变化（新 commits 数组）恰好触发一次泳道重算 + 一次替换
+ *  5. status 变化的静默刷新走定向 patch：上区恰好替换一次、图形区零 churn
+ *  6. HEAD 变化的静默刷新仍走全量重绘路径（图形区恰好替换一次）
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
-function makeCommits(n) {
+function makeCommits(n, salt) {
+  const tag = salt ? salt : '';
   const commits = [];
   for (let i = 0; i < n; i++) {
-    const hash = 'h' + String(i).padStart(6, '0');
+    const hash = 'h' + tag + String(i).padStart(6, '0');
     commits.push({
       hash,
-      parents: i + 1 < n ? ['h' + String(i + 1).padStart(6, '0')] : [],
+      fullHash: hash,
+      parents: i + 1 < n ? ['h' + tag + String(i + 1).padStart(6, '0')] : [],
       author: 'dev' + (i % 7),
       relTime: '2 hours ago',
       subject: 'commit ' + i,
@@ -36,15 +40,25 @@ function makeHarness() {
   const ROWS = 300;
   const rows = [];
   for (let i = 0; i < ROWS; i++) rows.push({ offsetTop: 26 * i });
-  const counts = { canvasWrites: 0 };
+  const counts = { canvasWrites: 0, changesWrites: 0, changesBytes: 0 };
   let lastSvg = '';
   const canvas = {
     set innerHTML(v) { counts.canvasWrites++; lastSvg = v; },
     get innerHTML() { return lastSvg; },
   };
   const history = { querySelector: (sel) => (sel === '.git-history-canvas' ? canvas : null) };
+  const panelEl = { classList: { add() {}, remove() {} } };
+  const changesZone = {
+    set innerHTML(v) { counts.changesWrites++; counts.changesBytes += String(v).length; },
+    get innerHTML() { return ''; },
+  };
   const doc = {
-    querySelector(sel) { return sel === '.git-history' ? history : null; },
+    querySelector(sel) {
+      if (sel === '.git-history') return history;
+      if (sel === '.git-panel') return panelEl;
+      if (sel === '.git-zone-body[data-zone-body="changes"]') return changesZone;
+      return null;
+    },
     querySelectorAll(sel) { return sel === '.git-history-row' ? rows : []; },
     getElementById: () => null,
     createElement: () => ({ style: {}, classList: { add() {}, remove() {} }, appendChild() {}, remove() {}, addEventListener() {}, innerHTML: '' }),
@@ -54,10 +68,11 @@ function makeHarness() {
   };
 
   let graphCommits = makeCommits(ROWS);
+  let statusFiles = [];
   const fetchImpl = async (url) => {
     const op = url.split('/').pop();
     if (op === 'status') {
-      return { ok: true, json: async () => ({ ok: true, isRepo: true, root: '/repo', head: graphCommits[0].hash, status: { current: 'main', files: [], ahead: 0, behind: 0, tracking: 'origin/main' } }) };
+      return { ok: true, json: async () => ({ ok: true, isRepo: true, root: '/repo', head: graphCommits[0].hash, status: { current: 'main', files: statusFiles, ahead: 0, behind: 0, tracking: 'origin/main' } }) };
     }
     if (op === 'graph') {
       return { ok: true, json: async () => ({ ok: true, commits: graphCommits, aheadHashes: [] }) };
@@ -69,7 +84,8 @@ function makeHarness() {
   };
 
   const timers = new Set();
-  const trackedSetInterval = (fn, ms) => { const t = setInterval(fn, ms); timers.add(t); return t; };
+  let autoTickFn = null;
+  const trackedSetInterval = (fn, ms) => { autoTickFn = fn; const t = setInterval(fn, ms); timers.add(t); return t; };
   const trackedClear = (t) => { clearTimeout(t); clearInterval(t); timers.delete(t); };
   const record = { workspace_sessions: { sessions: [{ id: 'sess-1', openDirectory: '/repo' }] } };
 
@@ -103,6 +119,8 @@ function makeHarness() {
   ctx.__counts = counts;
   ctx.__rows = rows;
   ctx.__setGraphCommits = (c) => { graphCommits = c; };
+  ctx.__setStatusFiles = (f) => { statusFiles = f; };
+  ctx.__autoTick = () => { if (autoTickFn) autoTickFn(); };
   return ctx;
 }
 
@@ -165,6 +183,51 @@ describe('git 面板图形区渲染 churn 守卫', () => {
 
       ctx.window.GitPanel.render();
       assert.equal(ctx.__counts.canvasWrites, 2, '数据稳定后 render 不再写画布');
+    } finally {
+      ctx.__dispose();
+    }
+  });
+
+  it('status 变化的静默刷新走定向 patch：上区恰好替换一次、图形区零 churn', async () => {
+    const ctx = makeHarness();
+    try {
+      ctx.window.GitPanel.onOpen();
+      await tick(); await tick();
+      assert.equal(ctx.__counts.canvasWrites, 1);
+
+      // agent 干活改文件：HEAD 不变，仅 status.files 变化
+      ctx.__setStatusFiles([
+        { path: 'src/a.ts', index: ' ', working_dir: 'M' },
+        { path: 'src/new.ts', index: '?', working_dir: '?' },
+      ]);
+      ctx.__autoTick();
+      await tick(); await tick();
+      assert.equal(ctx.__counts.changesWrites, 1, '上区定向替换恰好一次');
+      assert.equal(ctx.__counts.canvasWrites, 1, '图形区零 churn（不做全量 body 替换）');
+
+      // 数据稳定后的下一轮静默刷新：上区内容未变，但仍会定向替换（小 DOM
+      // 可接受），关键是图形区持续零 churn
+      ctx.__autoTick();
+      await tick(); await tick();
+      assert.equal(ctx.__counts.canvasWrites, 1);
+    } finally {
+      ctx.__dispose();
+    }
+  });
+
+  it('HEAD 变化的静默刷新仍走全量重绘：图形区恰好替换一次', async () => {
+    const ctx = makeHarness();
+    try {
+      ctx.window.GitPanel.onOpen();
+      await tick(); await tick();
+      assert.equal(ctx.__counts.canvasWrites, 1);
+
+      ctx.__setGraphCommits(makeCommits(301, 'n')); // 新提交 → HEAD 哈希变化
+      ctx.__autoTick();
+      await tick(); await tick();
+      const c = counters(ctx);
+      assert.equal(c.lanes, 2, 'HEAD 变化触发一次泳道重算');
+      assert.equal(ctx.__counts.canvasWrites, 2, '图形区恰好替换一次');
     } finally {
       ctx.__dispose();
     }
