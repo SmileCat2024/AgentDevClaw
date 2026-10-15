@@ -666,6 +666,13 @@ function applyProcessDistance(root, fromIndex) {
   if (_preToggleViewportIdx >= 0) {
     viewportIdx = _preToggleViewportIdx;
     _preToggleViewportIdx = -1;
+  } else if (typeof fromIndex === 'number' && fromIndex > 0 && !isLanding) {
+    // Background patch（流式 append / updateLastMessage）。虚拟化分级没有
+    // 增量路径可走，会落到这里：窗口必须跟随用户真实视口（与 _applyWindow
+    // 同源的 _findViewportTopRowIdx），不能锚定末行——锚定末行会把用户上翻
+    // 阅读中的行 cv 隐藏，工具-only 的 assistant 行只剩徽标与灰色占位
+    // （"空 assistant 消息"成片泄漏），直到下一次滚动/刷新/显隐切换。
+    viewportIdx = _findViewportTopRowIdx(rows);
   } else {
     viewportIdx = Math.max(0, rows.length - 1);
   }
