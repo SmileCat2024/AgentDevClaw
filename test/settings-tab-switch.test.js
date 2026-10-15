@@ -14,6 +14,7 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 function createSettingsSandbox() {
   const ctx = createFrontendSandbox({
     renderSettingsOverlay: () => {},
+    refreshOAuthStatus: () => {},
   });
   ctx.loadSource('public/src/modules/model-settings.js');
   return ctx;
@@ -32,7 +33,14 @@ describe('settings tab 切换', () => {
     // 可安全执行），此处锁定状态切换语义。
     ctx.run('window.switchSettingsTab("speech")');
     assert.equal(ctx.run('window.ClawFW.settingsTab'), 'speech');
+    ctx.run('window.switchSettingsTab("codex")');
+    assert.equal(ctx.run('window.ClawFW.settingsTab'), 'codex');
+  });
+
+  it('非法 tab 回落到 overview', () => {
+    const ctx = createSettingsSandbox();
+    ctx.run('window.ClawFW = window.ClawFW || {}');
     ctx.run('window.switchSettingsTab("text")');
-    assert.equal(ctx.run('window.ClawFW.settingsTab'), 'text');
+    assert.equal(ctx.run('window.ClawFW.settingsTab'), 'overview');
   });
 });

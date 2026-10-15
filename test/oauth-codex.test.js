@@ -45,6 +45,9 @@ import {
   DEFAULT_CODEX_BASE_URL,
 } from '../server/oauth-codex.js';
 
+// Backoff delays are zeroed so simulated-failure retry loops stay instant.
+process.env.AGENTDEV_FETCH_RETRY_BASE_DELAY_MS = '0';
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 /**
@@ -626,6 +629,28 @@ describe('requestDeviceCode', () => {
         () => requestDeviceCode(DEFAULT_CLIENT_ID),
         /500/,
       );
+    } finally {
+      mocked.restore();
+    }
+  });
+
+  it('retries a 5xx and succeeds on a later attempt', async () => {
+    const mocked = mockFetch([
+      {
+        match: 'deviceauth/usercode',
+        respond: (_opts, callIndex) => (
+          callIndex === 1
+            ? { status: 503, body: 'upstream unavailable' }
+            : { status: 200, body: { user_code: 'ABCD', device_auth_id: 'dae', interval: 5 } }
+        ),
+      },
+    ]);
+
+    try {
+      const result = await requestDeviceCode(DEFAULT_CLIENT_ID);
+      assert.equal(result.userCode, 'ABCD');
+      assert.equal(result.deviceAuthId, 'dae');
+      assert.equal(mocked.calls.length, 2);
     } finally {
       mocked.restore();
     }

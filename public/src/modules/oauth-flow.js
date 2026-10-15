@@ -98,8 +98,10 @@ window.onProtocolChange = function() {
 
 function getEditingProviderName() {
   let editing = window.ClawFW.settingsEditing;
-  if (editing === null) return '';
   let presets = window.ClawFW.settingsData?.presets || [];
+  if (editing === null) {
+    return presets.find((preset) => preset.authType === 'oauth-codex' && preset.providerName)?.providerName || 'OpenAI Auth';
+  }
   return presets[editing]?.providerName || '';
 }
 
@@ -213,8 +215,30 @@ window.startOAuthLogin = async function(mode) {
   let isZh = currentLanguage === 'zh';
   let loginMode = mode === 'device' ? 'device' : 'browser';
   let idx = window.ClawFW.settingsEditing;
-  if (idx === null) return;
   let providerName = getEditingProviderName();
+
+  if (idx === null) {
+    fetch('/protoclaw/oauth/codex/defaults').then((response) => response.json()).then((defaults) => {
+      const launchLogin = () => fetch('/protoclaw/oauth/codex/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerName, clientId: defaults.defaultClientId, mode: loginMode }),
+      }).then((response) => response.json()).then((data) => {
+        if (loginMode === 'browser' && data.authUrl) {
+          const popup = window.open('about:blank', '_blank');
+          if (popup) popup.location.href = data.authUrl;
+        }
+        pollOAuthLogin(data.sessionId);
+      }).catch((error) => {
+        const display = document.getElementById('oauth-status-display');
+        if (display) display.textContent = error.message || String(error);
+      });
+      launchLogin();
+    }).catch((error) => {
+      const display = document.getElementById('oauth-status-display');
+      if (display) display.textContent = error.message || String(error);
+    });
+    return;
+  }
 
   if (oauthProviderNeedsSave()) {
     let display = document.getElementById('oauth-status-display');
@@ -305,6 +329,7 @@ function pollOAuthLogin(sessionId) {
         } else if (sess.status === 'approved') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
           if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存' : 'Login successful! Token saved.') + '</span>';
+          refreshModelCatalog('codex');
         } else if (sess.status === 'expired') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
           if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + (isZh ? '登录已过期，请重试' : 'Login expired. Please try again.') + '</span>';
@@ -371,10 +396,12 @@ function refreshOAuthStatus() {
   let display = document.getElementById('oauth-status-display');
   if (!display) return;
   let isZh = currentLanguage === 'zh';
+  let statusProviderName = window.ClawFW.settingsEditing === null ? providerName : providerName;
 
-  fetch('/protoclaw/oauth/codex/tokens/' + encodeURIComponent(providerName))
+  fetch('/protoclaw/oauth/codex/tokens/' + encodeURIComponent(statusProviderName))
     .then(function(r) { return r.json(); })
     .then(function(status) {
+      window.ClawFW.oauthConnectionStatus = status.loggedIn ? 'connected' : 'disconnected';
       if (status.loggedIn) {
         let expiryStr = status.expiresAt ? new Date(status.expiresAt).toLocaleString() : '';
         let color = status.isExpiring ? '#ffb74d' : '#81c784';
@@ -387,6 +414,7 @@ function refreshOAuthStatus() {
       }
     })
     .catch(function() {
+      window.ClawFW.oauthConnectionStatus = 'disconnected';
       display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '未登录' : 'Not logged in') + '</span>';
     });
 }

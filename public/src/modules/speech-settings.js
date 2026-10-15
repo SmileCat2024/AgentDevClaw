@@ -83,7 +83,7 @@ function renderSpeechModelSection(isZh) {
 
   return {
     banner: '<div class="settings-section">' + activeBanner + '</div>',
-    content: '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '语音预设列表' : 'Speech Presets') + '</div><div class="settings-presets-compact">' + presetCards + '</div></div>'
+    content: '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '语音预设列表' : 'Speech Presets') + '</div><div class="settings-presets-grid settings-presets-compact">' + presetCards + '</div></div>'
   };
 }
 

@@ -2,7 +2,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { spawn } from 'child_process';
 
-import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS, AGENT_CONFIGS_ROOT, AGENT_USER_CONFIG_PATH } from '../shared/constants.js';
+import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, MODEL_CONNECTIONS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS, AGENT_CONFIGS_ROOT, AGENT_USER_CONFIG_PATH } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
 import { requestRuntimeAck } from '../shared/ipc.js';
@@ -12,6 +12,8 @@ import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTar
 import { buildLocalFailureResponse } from '../shared/operation-contract.js';
 import { normalizeProgrammingHelperProcessMode, GLOBAL_SHARED_AGENT_ID } from '../shared/process-mode.js';
 import { resolveOpenCodeBaseUrl, parseZenModelsResponse } from '../zen-helpers.js';
+import { fetchWithRetry } from '../shared/fetch-retry.js';
+import { resolveAccessTokenSync, buildCodexOAuthHeaders, DEFAULT_CLIENT_ID, DEFAULT_CODEX_BASE_URL } from '../oauth-codex.js';
 
 export { normalizeProgrammingHelperProcessMode } from '../shared/process-mode.js';
 
@@ -93,7 +95,8 @@ function flattenModelPresets(data) {
   const mapped = normalized.presets.map((preset, index) => {
     const protocol = cleanSessionText(preset?.protocol || preset?.provider) || 'anthropic';
     const providerName = cleanSessionText(preset?.providerName);
-    const provider = resolveProviderForPreset(
+    const catalogProvider = cleanSessionText(preset?.catalogProvider);
+    const provider = catalogProvider ? null : resolveProviderForPreset(
       normalized,
       protocol,
       providerName,
@@ -101,13 +104,18 @@ function flattenModelPresets(data) {
       preset?.apiKey,
       preset?.authType,
     );
-    const authType = cleanSessionText(provider?.authType || preset?.authType) || '';
-    const apiKey = cleanSessionText(provider?.apiKey || preset?.apiKey);
-    const baseUrl = cleanSessionText(provider?.endpoints?.[protocol] || preset?.baseUrl);
+    const authType = catalogProvider === 'codex' ? 'oauth-codex' : (cleanSessionText(provider?.authType || preset?.authType) || '');
+    const apiKey = catalogProvider ? '' : cleanSessionText(provider?.apiKey || preset?.apiKey);
+    const baseUrl = catalogProvider === 'codex'
+      ? 'https://chatgpt.com/backend-api/codex'
+      : catalogProvider === 'opencode'
+        ? 'https://opencode.ai/zen/v1'
+        : cleanSessionText(provider?.endpoints?.[protocol] || preset?.baseUrl);
     return {
       name: cleanSessionText(preset?.name) || cleanSessionText(preset?.model) || `Preset ${index + 1}`,
       provider: protocol,
       providerName,
+      catalogProvider: cleanSessionText(preset?.catalogProvider) || '',
       model: cleanSessionText(preset?.model),
       baseUrl,
       apiKey,
@@ -215,6 +223,8 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
     const presetRecord = {
       name,
       providerName,
+      ...(cleanSessionText(rawPreset.catalogProvider) ? { catalogProvider: cleanSessionText(rawPreset.catalogProvider) } : {}),
+      ...(cleanSessionText(rawPreset.catalogProvider) ? { baseUrl, apiKey, authType, clientId } : {}),
       protocol,
       apiSurface: resolvePresetApiSurface(protocol, authType, rawPreset.apiSurface),
       vision: rawPreset?.vision === true,
@@ -244,6 +254,34 @@ async function writeModelPresetsFile(presetsOrFile) {
   await ensureDir(path.dirname(MODEL_PRESETS_PATH));
   await fs.writeFile(MODEL_PRESETS_PATH, JSON.stringify(presetsOrFile, null, 2), 'utf8');
   return presetsOrFile;
+}
+
+async function readModelConnections() {
+  const data = await readJsonSafe(MODEL_CONNECTIONS_PATH, {});
+  const storedOpenCode = data?.opencode && typeof data.opencode === 'object' ? data.opencode : {};
+  const presets = flattenModelPresets(await readModelPresets());
+  const legacyPreset = presets.find((preset) => ['OpenCode Zen', 'OpenCode Go'].includes(preset.providerName) && preset.apiKey);
+  return {
+    opencode: {
+      ...storedOpenCode,
+      ...(storedOpenCode.apiKey || !legacyPreset ? {} : {
+        apiKey: legacyPreset.apiKey,
+        tier: legacyPreset.providerName === 'OpenCode Go' ? 'go' : 'zen',
+      }),
+    },
+  };
+}
+
+async function writeModelConnections(data) {
+  const next = {
+    opencode: {
+      apiKey: cleanSessionText(data?.opencode?.apiKey),
+      tier: data?.opencode?.tier === 'go' ? 'go' : 'zen',
+    },
+  };
+  await ensureDir(path.dirname(MODEL_CONNECTIONS_PATH));
+  await fs.writeFile(MODEL_CONNECTIONS_PATH, JSON.stringify(next, null, 2), 'utf8');
+  return next;
 }
 
 async function writeModelPresets(flatPresets) {
@@ -593,7 +631,132 @@ export async function readAgentModelPresets(agentId, rootDir = PROJECT_ROOT, opt
 // 本地分支不经过转发函数，保持既有 IPC / 文件读取路径字节级不动。
 // forwardProtoclawRoute / readForwardTargetError 提升于 shared/remote-forward.js。
 
+/**
+ * Codex /models 目录请求的 client_version 查询参数。后端要求该参数（缺失即 400
+ * "Field required"），并按 ModelInfo.minimal_client_version 过滤可见模型。Claw 的
+ * Responses 传输层不携带客户端版本相关能力，版本门槛对它不适用，取高版本避免
+ * 新模型被隐藏；格式必须为纯 semver（"rust-v0.50.0" 会被拒收）。
+ */
+const CODEX_MODELS_CLIENT_VERSION = '99.0.0';
+
+/**
+ * 用 OAuth token 拉取 Codex 模型目录并解析为目录条目。model_catalog 与
+ * openai-auth/models 两条路由共用同一请求形态与解析口径。
+ * @returns {Promise<{models: Array<{id: string, displayName: string, contextLength: number|null,
+ *   thinkingEffort: string|null, supportedThinkingEfforts: string[]}>}
+ *   | {error: string, status: number}>}
+ */
+export async function fetchCodexModelCatalog(accessToken, fetchImpl = globalThis.fetch) {
+  let response;
+  try {
+    response = await fetchWithRetry(
+      `${DEFAULT_CODEX_BASE_URL}/models?client_version=${CODEX_MODELS_CLIENT_VERSION}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          ...Object.fromEntries(buildCodexOAuthHeaders(accessToken).map((header) => [header.key, header.value])),
+        },
+      },
+      { operation: 'Codex model catalog request', fetchImpl },
+    );
+  } catch (error) {
+    return { error: error?.message || 'Codex model catalog request failed: network error', status: 502 };
+  }
+  if (!response.ok) {
+    return {
+      error: `Codex model catalog request failed: ${response.status}`,
+      status: response.status,
+    };
+  }
+  const raw = await response.json().catch(() => null);
+  const seen = new Set();
+  const models = (Array.isArray(raw?.models) ? raw.models : [])
+    // visibility=hide 是 OpenAI 明确不向选择器展示的内部模型（如 gpt-reserve），
+    // 与 codex CLI 选择器同口径剔除；字段缺省视为 list。
+    .filter((model) => cleanSessionText(model?.visibility) !== 'hide')
+    .map((model) => {
+      const id = cleanSessionText(model?.slug);
+      if (!id || seen.has(id)) return null;
+      seen.add(id);
+      return {
+        id,
+        displayName: cleanSessionText(model?.display_name) || id,
+        contextLength: Number.isFinite(Number(model?.context_window)) ? Number(model.context_window) : null,
+        thinkingEffort: cleanSessionText(model?.default_reasoning_level) || null,
+        supportedThinkingEfforts: Array.isArray(model?.supported_reasoning_levels)
+          ? model.supported_reasoning_levels.map((item) => cleanSessionText(item?.effort)).filter(Boolean)
+          : [],
+      };
+    })
+    .filter(Boolean);
+  return { models };
+}
+
 export function setupModelConfigRoutes(app, express) {
+  app.get('/protoclaw/model_connections', async (_req, res, next) => {
+    try {
+      const connections = await readModelConnections();
+      const opencode = connections.opencode || {};
+      res.json({ opencode: { hasApiKey: !!opencode.apiKey, tier: opencode.tier === 'go' ? 'go' : 'zen', apiKey: opencode.apiKey || '' } });
+    } catch (error) { next(error); }
+  });
+
+  app.put('/protoclaw/model_connections', express.json(), async (req, res, next) => {
+    try {
+      const current = await readModelConnections();
+      const nextOpenCode = req.body?.opencode || {};
+      const saved = await writeModelConnections({
+        opencode: {
+          apiKey: typeof nextOpenCode.apiKey === 'string' && nextOpenCode.apiKey.trim() ? nextOpenCode.apiKey : current.opencode.apiKey,
+          tier: nextOpenCode.tier,
+        },
+      });
+      res.json({ opencode: { hasApiKey: !!saved.opencode.apiKey, tier: saved.opencode.tier, apiKey: saved.opencode.apiKey || '' } });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/protoclaw/model_catalog/:provider', express.json(), async (req, res, next) => {
+    try {
+      const provider = req.params.provider;
+      if (provider === 'codex') {
+        const oauthPresets = flattenModelPresets(await readModelPresets())
+          .filter((preset) => preset.authType === 'oauth-codex' && preset.providerName);
+        const tokenProviders = [...new Set(['OpenAI Auth', ...oauthPresets.map((preset) => preset.providerName)])];
+        let accessToken = null;
+        for (const providerName of tokenProviders) {
+          accessToken = resolveAccessTokenSync(providerName, DEFAULT_CLIENT_ID);
+          if (accessToken) break;
+        }
+        if (!accessToken) return res.status(401).json({ error: 'OpenAI Auth is not logged in' });
+        const result = await fetchCodexModelCatalog(accessToken);
+        if (result.error) return res.status(result.status).json({ error: result.error });
+        return res.json({ models: result.models });
+      }
+
+      if (provider === 'opencode') {
+        const connections = await readModelConnections();
+        const connection = connections.opencode;
+        if (!connection?.apiKey) return res.status(400).json({ error: 'OpenCode API key is not configured' });
+        const tier = connection.tier === 'go' ? 'go' : 'zen';
+        let response;
+        try {
+          response = await fetchWithRetry(`${resolveOpenCodeBaseUrl(tier)}/models`, {
+            headers: { Authorization: `Bearer ${connection.apiKey}` },
+          }, { operation: `OpenCode ${tier} model catalog` });
+        } catch (error) {
+          return res.status(502).json({ error: error?.message || `OpenCode ${tier} model catalog request failed: network error` });
+        }
+        if (!response.ok) {
+          return res.status(response.status).json({ error: `OpenCode ${tier} model catalog request failed: ${response.status}` });
+        }
+        const raw = await response.json().catch(() => ({ data: [] }));
+        return res.json({ models: parseZenModelsResponse(raw) });
+      }
+
+      return res.status(400).json({ error: 'Unsupported model catalog provider' });
+    } catch (error) { next(error); }
+  });
+
   app.get('/protoclaw/model_config', async (req, res, next) => {
     try {
       // ADR-0011：host 域默认本地；调用方携带会话命名空间（remote:<connId>:…）
@@ -610,7 +773,8 @@ export function setupModelConfigRoutes(app, express) {
       }
       const config = await readModelConfig();
       const presets = flattenModelPresets(await readModelPresets());
-      res.json({ config, presets, configPath: MODEL_CONFIG_PATH });
+      const connections = await readModelConnections();
+      res.json({ config, presets, connections: { opencode: { hasApiKey: !!connections.opencode.apiKey, tier: connections.opencode.tier } }, configPath: MODEL_CONFIG_PATH });
     } catch (error) {
       next(error);
     }
@@ -631,6 +795,7 @@ export function setupModelConfigRoutes(app, express) {
       res.json({
         config: savedConfig ?? await readModelConfig(),
         presets: savedPresets ?? flattenModelPresets(await readModelPresets()),
+        connections: { opencode: { hasApiKey: !!(await readModelConnections()).opencode.apiKey, tier: (await readModelConnections()).opencode.tier } },
         configPath: MODEL_CONFIG_PATH,
         savedAt: new Date().toISOString(),
       });
@@ -940,6 +1105,20 @@ export function setupModelConfigRoutes(app, express) {
     } catch (error) { next(error); }
   });
 
+  // ── OpenAI Auth: list models from the Codex catalog using the stored OAuth token ──
+  app.post('/protoclaw/openai-auth/models', express.json(), async (req, res, next) => {
+    try {
+      const providerName = cleanSessionText(req.body?.providerName);
+      if (!providerName) return res.status(400).json({ error: 'providerName is required' });
+      const accessToken = resolveAccessTokenSync(providerName, DEFAULT_CLIENT_ID);
+      if (!accessToken) return res.status(401).json({ error: 'OpenAI Auth is not logged in' });
+
+      const result = await fetchCodexModelCatalog(accessToken);
+      if (result.error) return res.status(result.status).json({ error: result.error });
+      res.json({ models: result.models });
+    } catch (error) { next(error); }
+  });
+
   // ── OpenCode: list models from the selected official gateway ──
   // The user manages their API key and any Go subscription in OpenCode.
   // This route only proxies the fixed Zen or Go model catalogue.
@@ -951,20 +1130,20 @@ export function setupModelConfigRoutes(app, express) {
         return res.status(400).json({ error: 'apiKey is required' });
       }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15_000);
       const baseUrl = resolveOpenCodeBaseUrl(tier);
-      const gatewayResp = await fetch(`${baseUrl}/models`, {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${apiKey}` },
-        signal: controller.signal,
-      }).catch(() => null);
+      let gatewayResp;
+      try {
+        gatewayResp = await fetchWithRetry(`${baseUrl}/models`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        }, { operation: `OpenCode ${tier} models` });
+      } catch (error) {
+        return res.status(502).json({ error: `OpenCode ${tier} API request failed: 502`, detail: error?.message || 'network error' });
+      }
 
-      clearTimeout(timeout);
-
-      if (!gatewayResp || !gatewayResp.ok) {
-        const status = gatewayResp ? gatewayResp.status : 502;
-        const errText = gatewayResp ? await gatewayResp.text().catch(() => '') : 'network error';
+      if (!gatewayResp.ok) {
+        const status = gatewayResp.status;
+        const errText = await gatewayResp.text().catch(() => '');
         return res.status(status).json({ error: `OpenCode ${tier} API request failed: ${status}`, detail: errText });
       }
 

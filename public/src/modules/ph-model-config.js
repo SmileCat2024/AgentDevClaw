@@ -577,11 +577,75 @@ function _renderProcessModeContent(agent) {
   ].join('');
 }
 
+// ── Coder 策略：关联工作空间配置面 ────────────────────────────
+
+async function _phLoadCoderPolicy() {
+  const host = document.getElementById('ph-coder-policy-host');
+  if (!host) return;
+  const isZh = currentLanguage === 'zh';
+  try {
+    const response = await fetch('/protoclaw/workspace_settings');
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    if (!document.getElementById('ph-coder-policy-host') || _phSettingsTab !== 'coder-policy') return;
+    const limit = data?.resourcePolicy?.coder?.maxLiveRuntimes;
+    const value = Number.isInteger(limit) && limit > 0 ? String(limit) : '';
+    const live = Number.isInteger(data?.liveRuntimes?.coder) ? data.liveRuntimes.coder : 0;
+    host.innerHTML = [
+      '<div class="proxy-toggle-row" style="align-items:center;flex-wrap:wrap;gap:8px;">',
+      '<div class="proxy-toggle-label"><div>' + (isZh ? 'runtime 并发上限' : 'Runtime concurrency limit') + '</div>',
+      '<div style="font-size:12px;color:var(--text-secondary);">' + (isZh ? '当前 ' + live + ' 个运行中 · 留空不限制' : live + ' running · empty for unlimited') + '</div></div>',
+      '<input id="ph-coder-runtime-limit" type="number" min="1" step="1" class="settings-input" style="min-width:110px;" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" onchange="window.phSaveCoderRuntimeLimit(this.value)">',
+      '</div>',
+      '<div class="ph-pm-intro">' + escapeHtml(isZh
+        ? '此策略属于 Coder 工作空间；全局“工作空间设置”和这里编辑的是同一项配置。已运行的 runtime 不会因调低上限而停止。'
+        : 'This policy belongs to the Coder workspace. Global Workspace Settings and this page edit the same value. Lowering the limit does not stop existing runtimes.') + '</div>',
+      '<div id="ph-coder-policy-status"></div>',
+    ].join('');
+  } catch (error) {
+    host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml((isZh ? '读取 Coder 策略失败：' : 'Could not load Coder policy: ') + (error?.message || error)) + '</div>';
+  }
+}
+
+window.phSaveCoderRuntimeLimit = async function(rawValue) {
+  const isZh = currentLanguage === 'zh';
+  const status = document.getElementById('ph-coder-policy-status');
+  const setStatus = (message) => { if (status) status.textContent = message; };
+  const trimmed = String(rawValue || '').trim();
+  let maxLiveRuntimes = null;
+  if (trimmed !== '') {
+    maxLiveRuntimes = Number(trimmed);
+    if (!Number.isInteger(maxLiveRuntimes) || maxLiveRuntimes <= 0) {
+      setStatus(isZh ? '并发上限须为正整数，未保存。' : 'Limit must be a positive integer; not saved.');
+      return;
+    }
+  }
+  setStatus(isZh ? '正在保存…' : 'Saving…');
+  try {
+    const response = await fetch('/protoclaw/workspace_settings/resource_policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: 'coder', permissionId: 'maxLiveRuntimes', value: maxLiveRuntimes }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error || 'HTTP ' + response.status);
+    }
+    setStatus(isZh ? '已保存' : 'Saved');
+    await _phLoadCoderPolicy();
+  } catch (error) {
+    setStatus((isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error));
+  }
+};
+
 // ── Main panel render ─────────────────────────────────────────
 
 function renderPhModelConfigOverlay(agent, presets) {
   const host = ensurePhModelConfigHost();
   if (!agent) { host.innerHTML = ''; _closePhFeatureEditor(); return; }
+  if (_phSettingsTab === 'coder-policy' && window.phModelConfigAgentId !== 'programming-helper') {
+    _phSettingsTab = 'model';
+  }
   const isZh = currentLanguage === 'zh';
 
   // Store current project for process mode key
@@ -668,6 +732,11 @@ function renderPhModelConfigOverlay(agent, presets) {
     { key: 'model', label: isZh ? '模型配置' : 'Model Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
     { key: 'process', label: isZh ? '进程模式' : 'Process Mode', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>' },
     { key: 'feature', label: isZh ? 'Feature 设置' : 'Feature Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M2 14h4"/><path d="M10 8h4"/><path d="M18 16h4"/></svg>' },
+    ...(window.phModelConfigAgentId === 'programming-helper' ? [{
+      key: 'coder-policy',
+      label: isZh ? 'Coder 策略' : 'Coder Policy',
+      icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>',
+    }] : []),
   ];
 
   const tabItems = tabs.map(t => {
@@ -683,6 +752,10 @@ function renderPhModelConfigOverlay(agent, presets) {
     contentHtml = _renderModelConfigContent(agent, presets);
   } else if (_phSettingsTab === 'feature') {
     contentHtml = _renderFeatureEntryList();
+  } else if (_phSettingsTab === 'coder-policy') {
+    contentHtml = '<div class="ph-pm-body" id="ph-coder-policy-host">'
+      + '<div class="ph-settings-empty">' + escapeHtml(isZh ? '正在读取 Coder 策略…' : 'Loading Coder policy…') + '</div>'
+      + '</div>';
   } else {
     contentHtml = _renderProcessModeContent(agent);
   }
@@ -691,7 +764,9 @@ function renderPhModelConfigOverlay(agent, presets) {
     ? (isZh ? '为主代理设置主模型和备选模型，其他角色设置单个模型' : 'Set primary and secondary models for main agent, single model for other roles')
     : _phSettingsTab === 'feature'
       ? (isZh ? '选择身份的 Feature 配置层' : 'Choose the feature config layer for an identity')
-      : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
+      : _phSettingsTab === 'coder-policy'
+        ? (isZh ? '配置关联工作空间 Coder 的 runtime 并发策略' : 'Configure runtime concurrency for the linked Coder workspace')
+        : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
@@ -714,6 +789,8 @@ function renderPhModelConfigOverlay(agent, presets) {
     '</div>',
     '</div>',
   ].join('');
+
+  if (_phSettingsTab === 'coder-policy') _phLoadCoderPolicy();
 
   // Enhance native selects with custom dropdown
   if (window.ClawSelect) {

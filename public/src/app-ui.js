@@ -1913,7 +1913,7 @@ settingsToggle.addEventListener('click', (e) => {
 document.getElementById('settings-flyout-config').addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
   if (typeof window.closeAuthSettings === 'function') window.closeAuthSettings();
-  window.ClawFW.settingsTab = 'text';
+  window.ClawFW.settingsTab = 'overview';
   if (window.ClawFW.settingsOpen) {
     renderSettingsOverlay();
   } else {

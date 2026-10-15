@@ -9,7 +9,7 @@ import { join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { createLLM } from '@agentdevjs/llm';
 import { buildCodexOAuthHeaders, resolveAccessTokenSync } from './oauth-codex.js';
-import { MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, AGENT_USER_CONFIG_PATH } from './shared/constants.js';
+import { MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, MODEL_CONNECTIONS_PATH, AGENT_USER_CONFIG_PATH } from './shared/constants.js';
 
 /**
  * 全局默认模型的合成 preset 名。Claw user data default.json 的内联 defaultModel 没有
@@ -22,7 +22,7 @@ export const GLOBAL_DEFAULT_PRESET_NAME = '__default__';
  * Resolve a preset name to { llm, modelName }.
  * @param {string} presetName
  * @param {{ thinkingEffort?: string | null }} [overrides] - Runtime overrides for this resolution only; does not mutate Claw user data presets.json.
- * @param {{ configPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
+ * @param {{   configPath?: string, connectionsPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
  *   Test seam — production callers omit. configPath overrides Claw user data presets.json;
  *   resolveAccessToken replaces the OAuth token-store lookup.
  * @returns {{ llm: import('@agentdevjs/llm').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
@@ -40,12 +40,20 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       return null;
     }
     const provider = providers.find((p) => p.name === preset.providerName);
-    if (!provider) {
+    const isCatalogProvider = preset.catalogProvider === 'codex' || preset.catalogProvider === 'opencode';
+    const connectionsPath = options.connectionsPath || MODEL_CONNECTIONS_PATH;
+    let connection = {};
+    if (isCatalogProvider && existsSync(connectionsPath)) {
+      try { connection = JSON.parse(readFileSync(connectionsPath, 'utf8'))?.[preset.catalogProvider] || {}; } catch {}
+    }
+    if (!provider && !isCatalogProvider) {
       console.warn(`[ModelPreset] Provider "${preset.providerName}" not found for preset "${presetName}"`);
       return null;
     }
     const protocol = preset.protocol || 'anthropic';
-    const baseUrl = provider.endpoints?.[protocol] || '';
+    const baseUrl = isCatalogProvider
+      ? (preset.catalogProvider === 'codex' ? 'https://chatgpt.com/backend-api/codex' : (connection.tier === 'go' ? 'https://opencode.ai/zen/go/v1' : 'https://opencode.ai/zen/v1'))
+      : (provider.endpoints?.[protocol] || '');
 
     // thinkingEffort: runtime override takes priority, then preset default.
     const effectiveThinkingEffort = (overrides && typeof overrides === 'object' && 'thinkingEffort' in overrides)
@@ -53,16 +61,29 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       : (preset.thinkingEffort || undefined);
 
     // OAuth provider: resolve access_token from token store
-    const isOAuth = provider.authType === 'oauth-codex';
+    const isOAuth = isCatalogProvider ? preset.catalogProvider === 'codex' : provider.authType === 'oauth-codex';
     let apiKey;
     if (isOAuth) {
-      apiKey = (options.resolveAccessToken || resolveAccessTokenSync)(provider.name, provider.clientId) || '';
+      const clientId = isCatalogProvider ? 'app_EMoamEEZ73f0CkXaXp7hrann' : provider.clientId;
+      const resolveToken = options.resolveAccessToken || resolveAccessTokenSync;
+      const tokenProviderNames = isCatalogProvider
+        ? [...new Set([
+          preset.providerName,
+          'OpenAI Auth',
+          ...providers.filter((item) => item.authType === 'oauth-codex').map((item) => item.name),
+        ].filter(Boolean))]
+        : [provider.name];
+      for (const providerName of tokenProviderNames) {
+        apiKey = resolveToken(providerName, clientId);
+        if (apiKey) break;
+      }
+      apiKey = apiKey || '';
       if (!apiKey) {
-        console.warn(`[ModelPreset] OAuth provider "${provider.name}" has no stored token — login required`);
+        console.warn(`[ModelPreset] OAuth provider "${isCatalogProvider ? 'OpenAI Auth' : provider.name}" has no stored token — login required`);
         return null;
       }
     } else {
-      apiKey = provider.apiKey || '';
+      apiKey = isCatalogProvider ? (connection.apiKey || '') : (provider.apiKey || '');
     }
 
     if (!baseUrl || !apiKey || !preset.model) {
@@ -98,7 +119,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       modelName: preset.model,
       presetName: preset.name || presetName,
       thinkingEffort: effectiveThinkingEffort || null,
-      providerName: provider.name || preset.providerName || '',
+      providerName: (isCatalogProvider ? (preset.catalogProvider === 'codex' ? 'OpenAI Auth' : 'OpenCode') : provider.name) || preset.providerName || '',
       provider: protocol,
       protocol,
       authType: isOAuth ? 'oauth-codex' : '',

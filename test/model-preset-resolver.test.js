@@ -112,6 +112,7 @@ describe('model-preset-resolver', () => {
           { name: 'fixture-openai-default-surface', providerName: 'Fixture OpenAI', protocol: 'openai', model: 'fixture-model-b2' },
           { name: 'fixture-thinking', providerName: 'Fixture Anthropic', protocol: 'anthropic', model: 'fixture-model-t', thinkingEffort: 'medium' },
           { name: 'fixture-oauth', providerName: 'Fixture OAuth', protocol: 'openai', model: 'fixture-model-o' },
+          { name: 'fixture-codex-catalog', providerName: 'Fixture OAuth', catalogProvider: 'codex', protocol: 'openai', model: 'fixture-model-codex' },
           { name: 'fixture-orphan', providerName: 'No Such Provider', protocol: 'anthropic', model: 'fixture-model-x' },
           { name: 'fixture-incomplete', providerName: 'Fixture Anthropic', protocol: 'anthropic' },
         ],
@@ -157,6 +158,27 @@ describe('model-preset-resolver', () => {
         assert.equal(result.authType, 'oauth-codex');
         assert.equal(result.apiSurface, 'responses');
         assert.equal(result.llm.constructor.name, 'OpenAIResponsesLLM');
+      });
+
+      it('uses the catalog preset provider token before the shared Codex connection token', () => {
+        const seen = [];
+        const result = resolveModelPresetLLM('fixture-codex-catalog', undefined, {
+          configPath,
+          resolveAccessToken: (providerName) => { seen.push(providerName); return providerName === 'Fixture OAuth' ? 'fixture-access-token' : null; },
+        });
+        assert.ok(result);
+        assert.deepEqual(seen, ['Fixture OAuth']);
+      });
+
+      it('resolves a Codex catalog preset through the legacy OAuth provider token name', () => {
+        const result = resolveModelPresetLLM('fixture-codex-catalog', undefined, {
+          configPath,
+          resolveAccessToken: (providerName) => providerName === 'Fixture OAuth' ? 'legacy-token' : null,
+        });
+        assert.ok(result);
+        assert.equal(result.modelName, 'fixture-model-codex');
+        assert.equal(result.baseUrl, 'https://chatgpt.com/backend-api/codex');
+        assert.equal(result.apiSurface, 'responses');
       });
 
       it('returns null for an oauth provider without a stored token', () => {

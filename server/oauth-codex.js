@@ -22,6 +22,7 @@ import crypto from 'crypto';
 import http from 'http';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, openSync, closeSync, writeSync } from 'fs';
 import { USER_DATA_ROOT } from './shared/constants.js';
+import { fetchWithRetry } from './shared/fetch-retry.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -47,7 +48,6 @@ const NO_EXP_REFRESH_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL = 5;    // seconds
 const MAX_LOGIN_WAIT_MS = 15 * 60 * 1000; // 15 minutes
 const OAUTH_FETCH_ATTEMPTS = 3;
-const OAUTH_RETRY_BASE_DELAY_MS = 300;
 const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 
 const OAUTH_TOKENS_DIR = path.join(USER_DATA_ROOT, 'oauth-tokens');
@@ -59,70 +59,19 @@ const OAUTH_TOKENS_DIR = path.join(USER_DATA_ROOT, 'oauth-tokens');
 // and sets process.env.HTTPS_PROXY for child processes. No per-module
 // proxy code needed here — all fetch() calls automatically use the proxy.
 
-/**
- * No-op passthrough. Proxy is configured globally via proxy-manager.
- * Kept for backward compat — existing call sites don't need changes.
- */
-function fetchOptions(extra = {}) {
-  return extra;
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getNetworkErrorCode(error) {
-  return error?.cause?.code || error?.code || '';
-}
-
-function isTransientNetworkError(error) {
-  const code = getNetworkErrorCode(error);
-  if ([
-    'UND_ERR_CONNECT_TIMEOUT',
-    'UND_ERR_HEADERS_TIMEOUT',
-    'UND_ERR_BODY_TIMEOUT',
-    'UND_ERR_SOCKET',
-    'ECONNRESET',
-    'ECONNREFUSED',
-    'ETIMEDOUT',
-    'EAI_AGAIN',
-    'ENETUNREACH',
-    'EHOSTUNREACH',
-  ].includes(code)) {
-    return true;
-  }
-  return error instanceof TypeError && /fetch failed/i.test(error.message || '');
-}
-
-function wrapOAuthNetworkError(operation, error) {
-  const code = getNetworkErrorCode(error);
-  const causeMessage = error?.cause?.message || error?.message || String(error);
-  const detail = code ? `${code}: ${causeMessage}` : causeMessage;
-  const wrapped = new Error(`${operation} failed: ${detail}`);
-  wrapped.code = code || 'OAUTH_NETWORK_ERROR';
-  wrapped.transient = isTransientNetworkError(error);
-  wrapped.cause = error;
-  return wrapped;
 }
 
 /**
  * OAuth is commonly reached through a local HTTP proxy. A single CONNECT
  * timeout must not invalidate an otherwise-completed browser authorization.
+ * Retry policy (transient network errors + retryable upstream statuses,
+ * including 5xx) is owned by shared/fetch-retry; no per-attempt timeout
+ * here — the poll loop owns its own budget.
  */
 async function fetchOAuth(url, options, operation, attempts = OAUTH_FETCH_ATTEMPTS) {
-  let lastError = null;
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      return await fetch(url, fetchOptions(options));
-    } catch (error) {
-      lastError = error;
-      if (!isTransientNetworkError(error) || attempt >= attempts) {
-        throw wrapOAuthNetworkError(operation, error);
-      }
-      await sleep(OAUTH_RETRY_BASE_DELAY_MS * attempt);
-    }
-  }
-  throw wrapOAuthNetworkError(operation, lastError);
+  return fetchWithRetry(url, options, { attempts, timeoutMs: 0, operation });
 }
 
 // In-memory login sessions (not persisted)
