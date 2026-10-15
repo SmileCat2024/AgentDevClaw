@@ -20,7 +20,7 @@
 import path from 'path';
 import crypto from 'crypto';
 import http from 'http';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, openSync, closeSync, writeSync } from 'fs';
 import { USER_DATA_ROOT } from './shared/constants.js';
 
 // ── Constants ───────────────────────────────────────────────────────
@@ -40,7 +40,10 @@ const BROWSER_LOGIN_SCOPE = 'openid profile email offline_access api.connectors.
 const CODEX_ORIGINATOR = 'codex_cli_rs';
 const BROWSER_CALLBACK_PORT = 1455;          // registered in OpenAI's redirect URI allow-list
 const BROWSER_CALLBACK_FALLBACK_PORT = 1457; // keep in sync with the Codex CLI allow-list
-const REFRESH_SKEW_SECONDS = 120;   // refresh 2 min before expiry
+const REFRESH_SKEW_SECONDS = 300;   // refresh 5 min before expiry (aligned with codex-rs proactive window)
+// JWT 解不出 exp 时的兜底：距上次刷新超过 7 天视为必须刷新（对齐 codex-rs
+// 的 stale-token 兜底），否则无 exp 的 token 会永不刷新。
+const NO_EXP_REFRESH_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL = 5;    // seconds
 const MAX_LOGIN_WAIT_MS = 15 * 60 * 1000; // 15 minutes
 const OAUTH_FETCH_ATTEMPTS = 3;
@@ -159,6 +162,25 @@ export function isTokenExpiring(accessToken, skewSeconds = REFRESH_SKEW_SECONDS)
 }
 
 /**
+ * Decide whether a stored tokens object is due for refresh.
+ *
+ * Unlike isTokenExpiring this takes the full tokens object: when the
+ * access_token carries no usable exp claim (opaque or non-JWT), fall back to
+ * the age of last_refresh (7 days) instead of never refreshing.
+ * Display semantics (getTokenStatus) keep using isTokenExpiring directly.
+ */
+export function isTokenRefreshDue(tokens, skewSeconds = REFRESH_SKEW_SECONDS) {
+  const accessToken = tokens?.access_token;
+  if (!accessToken) return false;
+  const claims = decodeJwtClaims(accessToken);
+  if (typeof claims.exp === 'number' && Number.isFinite(claims.exp)) {
+    return isTokenExpiring(accessToken, skewSeconds);
+  }
+  const last = Date.parse(tokens.last_refresh || '');
+  return !Number.isFinite(last) || Date.now() - last > NO_EXP_REFRESH_AGE_MS;
+}
+
+/**
  * Get expiry timestamp (ms) from a JWT access token, or null.
  */
 export function getTokenExpiryMs(accessToken) {
@@ -266,7 +288,8 @@ export function deleteTokens(providerName) {
 
 /**
  * Resolve the current access_token for an OAuth provider.
- * If the token is expiring, triggers a background refresh.
+ * If the token is due for refresh (exp window or last_refresh fallback),
+ * triggers a background refresh.
  * Returns the access_token string or null.
  *
  * This is designed to be called synchronously from resolveModelPresetLLM.
@@ -275,25 +298,173 @@ export function resolveAccessTokenSync(providerName, clientId) {
   const tokens = readTokensSync(providerName);
   if (!tokens) return null;
 
-  // If expiring, fire background refresh (non-blocking)
-  if (isTokenExpiring(tokens.access_token)) {
+  // If due, fire background refresh (non-blocking)
+  if (isTokenRefreshDue(tokens)) {
     refreshTokensInBackground(providerName, tokens.refresh_token, clientId || tokens.clientId);
   }
 
   return tokens.access_token;
 }
 
+// ── Cross-process refresh lock ─────────────────────────────────────
+// OAuth refresh_token 是一次性的：轮换后旧值立即作废，两个进程并发拿同一旧值
+// POST 会触发 OpenAI 判 refresh_token_reused 并吊销整个 token family。进程内
+// refreshInFlight 挡不住跨进程（server 与 plain agent / one-shot / mirror 等
+// 宿主都会走 resolveAccessTokenSync），用 O_EXCL 独占创建锁文件把网络刷新
+// 串行化：等锁者拿到锁后重读 token 文件，refresh_token 已被轮换就直接采用，
+// 不再发网络请求。
+
+const TOKEN_LOCK_STALE_MS = 30_000;      // holder 崩溃残留锁的回收阈值（正常刷新秒级完成）
+const TOKEN_LOCK_WAIT_TIMEOUT_MS = 10_000;
+const TOKEN_LOCK_POLL_MS = 100;
+
+function tokenLockFilePath(providerName) {
+  return `${tokenFilePath(providerName)}.lock`;
+}
+
+function acquireTokenLock(providerName) {
+  mkdirSync(OAUTH_TOKENS_DIR, { recursive: true });
+  try {
+    // Exclusive create is atomic on all platforms ('wx' fails when the file exists).
+    const fd = openSync(tokenLockFilePath(providerName), 'wx');
+    // Ownership token: release only deletes the lock we still own, so a
+    // stale-lock steal by another process can't be clobbered by a late holder.
+    const ownership = JSON.stringify({ pid: process.pid, acquiredAt: Date.now() });
+    try {
+      writeSync(fd, ownership);
+    } finally {
+      closeSync(fd);
+    }
+    return ownership;
+  } catch (error) {
+    if (error?.code === 'EEXIST') return null;
+    throw error;
+  }
+}
+
+function isTokenLockStale(providerName) {
+  try {
+    const acquiredAt = JSON.parse(readFileSync(tokenLockFilePath(providerName), 'utf8'))?.acquiredAt;
+    return typeof acquiredAt !== 'number' || Date.now() - acquiredAt > TOKEN_LOCK_STALE_MS;
+  } catch {
+    // 锁文件已消失（持有者刚释放）或内容残缺（写入中途崩溃）——都可安全重抢
+    return true;
+  }
+}
+
+function releaseTokenLock(providerName, ownership) {
+  if (!ownership) return;
+  try {
+    if (readFileSync(tokenLockFilePath(providerName), 'utf8') === ownership) {
+      unlinkSync(tokenLockFilePath(providerName));
+    }
+  } catch {}
+}
+
+async function withTokenLock(providerName, waitTimeoutMs, fn) {
+  const deadline = Date.now() + waitTimeoutMs;
+  for (;;) {
+    let ownership = acquireTokenLock(providerName);
+    if (!ownership && isTokenLockStale(providerName)) {
+      // 持有者已死或异常滞留——回收残锁后重试独占创建
+      try { unlinkSync(tokenLockFilePath(providerName)); } catch {}
+      ownership = acquireTokenLock(providerName);
+    }
+    if (ownership) {
+      try {
+        return await fn();
+      } finally {
+        releaseTokenLock(providerName, ownership);
+      }
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for the OAuth refresh lock of "${providerName}" — another process is refreshing`);
+    }
+    await sleep(TOKEN_LOCK_POLL_MS);
+  }
+}
+
 // ── Token refresh ──────────────────────────────────────────────────
+
+// refresh_token 永久失效错误码（对齐 codex-rs login/src/auth/manager.rs
+// classify_refresh_token_failure）：OpenAI 对已作废 refresh_token 实际返回
+// 400 + invalid_grant（嵌套 envelope 里 error.code 才带具体原因），只认
+// 401/403 会漏掉"必须重登"的情形。
+const PERMANENT_REFRESH_ERROR_CODES = [
+  'refresh_token_reused',
+  'refresh_token_expired',
+  'refresh_token_invalidated',
+];
+
+/**
+ * Parse a failed refresh response body into the fields used for
+ * classification, mirroring codex-rs TokenErrorDetail::parse: standard OAuth
+ * `error` string, nested `error.code`, or top-level `code`, plus
+ * `error_description` for diagnostics.
+ */
+function parseTokenErrorBody(text) {
+  let parsed = {};
+  try {
+    const body = JSON.parse(text);
+    if (body && typeof body === 'object') parsed = body;
+  } catch {}
+  const error = parsed.error;
+  return {
+    error: typeof error === 'string' ? error : '',
+    errorCode: typeof error?.code === 'string' ? error.code : (typeof parsed.code === 'string' ? parsed.code : ''),
+    errorDescription: typeof parsed.error_description === 'string' ? parsed.error_description : '',
+    errorMessage: typeof parsed.message === 'string' ? parsed.message : (typeof error?.message === 'string' ? error.message : ''),
+  };
+}
+
+/**
+ * Permanent (re-login required) refresh rejection:
+ *   - 401/403 as before;
+ *   - 400 + invalid_grant (the shape OpenAI actually returns for a dead
+ *     refresh_token);
+ *   - 400 + refresh_token_reused / expired / invalidated in the unified error
+ *     code or the error_description.
+ */
+function isPermanentRefreshRejection(status, body) {
+  if (status === 401 || status === 403) return true;
+  if (status !== 400) return false;
+  const code = [body.error, body.errorCode].find((value) => value) || '';
+  if (code.toLowerCase() === 'invalid_grant') return true;
+  const haystack = `${code} ${body.errorDescription}`.toLowerCase();
+  return PERMANENT_REFRESH_ERROR_CODES.some((marker) => haystack.includes(marker));
+}
 
 /**
  * Refresh OAuth tokens via refresh_token grant.
+ * Serialized across processes by the provider-granularity file lock; a caller
+ * that waited while another process rotated the refresh_token adopts the
+ * stored tokens instead of re-using its stale copy over the network.
  * Pure HTTP — returns updated token pair.
  */
-export async function refreshTokens(providerName, refreshToken, clientId) {
+export async function refreshTokens(providerName, refreshToken, clientId, { lockWaitTimeoutMs = TOKEN_LOCK_WAIT_TIMEOUT_MS } = {}) {
   if (!refreshToken) {
     throw new Error('Missing refresh_token — re-login required');
   }
 
+  return withTokenLock(providerName, lockWaitTimeoutMs, async () => {
+    // Re-read under the lock: another process may have rotated the
+    // refresh_token while we waited. A missing file is not ours to judge —
+    // callers pre-check the store and the HTTP round-trip re-classifies.
+    const current = readTokensSync(providerName);
+    if (current?.refresh_token && current.refresh_token !== refreshToken) {
+      // Already rotated by another process — adopting the stored copy is the
+      // only safe move; re-sending our stale one would revoke the token family.
+      console.log(`[OAuth/Codex] Refresh token for "${providerName}" already rotated by another process — adopting stored tokens`);
+      return current;
+    }
+    return performTokenRefresh(providerName, current?.refresh_token || refreshToken, clientId);
+  });
+}
+
+/**
+ * The network round-trip, must run under the provider lock.
+ */
+async function performTokenRefresh(providerName, refreshToken, clientId) {
   const cid = clientId || DEFAULT_CLIENT_ID;
 
   const resp = await fetchOAuth(OAUTH_TOKEN_URL, {
@@ -316,16 +487,10 @@ export async function refreshTokens(providerName, refreshToken, clientId) {
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
-    let detail = '';
-    try {
-      const err = JSON.parse(text);
-      detail = err?.error_description || err?.error || err?.message || text;
-    } catch {
-      detail = text;
-    }
-    const relogin = resp.status === 401 || resp.status === 403;
+    const body = parseTokenErrorBody(text);
+    const detail = body.errorDescription || body.error || body.errorMessage || text;
     const error = new Error(`Token refresh failed (${resp.status}): ${detail}`);
-    error.reloginRequired = relogin;
+    error.reloginRequired = isPermanentRefreshRejection(resp.status, body);
     throw error;
   }
 
@@ -368,6 +533,21 @@ function refreshTokensInBackground(providerName, refreshToken, clientId) {
 
   refreshInFlight.set(providerName, promise);
   return promise;
+}
+
+/**
+ * Startup pre-refresh for one OAuth provider: await a due refresh to
+ * completion so a subsequent synchronous resolve reads a fresh token file.
+ * Reuses the background path (in-process dedup + lock + relogin cleanup);
+ * failures are swallowed by that path — startup proceeds with the current
+ * token either way. Returns true when a refresh was actually awaited.
+ */
+export async function preflightRefreshTokens(providerName, clientId) {
+  const tokens = readTokensSync(providerName);
+  if (!tokens) return false;
+  if (!isTokenRefreshDue(tokens)) return false;
+  await refreshTokensInBackground(providerName, tokens.refresh_token, clientId || tokens.clientId);
+  return true;
 }
 
 // ── Device code login flow ─────────────────────────────────────────

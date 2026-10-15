@@ -3,10 +3,12 @@
  *
  * Covers:
  *   - JWT decoding & expiry detection (pure functions)
+ *   - Refresh-due decision incl. the no-exp / last_refresh 7-day fallback
  *   - Token file read/write/delete (temp files)
  *   - Token status queries
  *   - Device-code login flow (mocked fetch)
- *   - Token refresh (mocked fetch)
+ *   - Token refresh (mocked fetch) + permanent-failure (relogin) classification
+ *   - Cross-process refresh lock (adopt / serialize / stale steal / timeout)
  *   - Session management
  */
 
@@ -20,6 +22,7 @@ import net from 'net';
 
 import {
   isTokenExpiring,
+  isTokenRefreshDue,
   getTokenExpiryMs,
   getCodexAccountId,
   buildCodexOAuthHeaders,
@@ -111,14 +114,29 @@ function makeTransientFetchError(code = 'UND_ERR_CONNECT_TIMEOUT') {
   return error;
 }
 
+/**
+ * Poll a synchronous condition until it holds or the deadline passes.
+ * Replaces fixed sleeps so fire-and-forget background paths are observed
+ * as fast as they actually complete.
+ */
+async function waitFor(condition, timeoutMs = 1000, intervalMs = 20) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return condition();
+}
+
 // ── Cleanup ────────────────────────────────────────────────────────
 
 let createdFiles = [];
 
 function cleanupProvider(name) {
-  const fp = tokenFilePath(name);
-  if (existsSync(fp)) {
-    try { rmSync(fp); } catch {}
+  for (const fp of [tokenFilePath(name), `${tokenFilePath(name)}.lock`]) {
+    if (existsSync(fp)) {
+      try { rmSync(fp); } catch {}
+    }
   }
 }
 
@@ -168,6 +186,45 @@ describe('isTokenExpiring', () => {
     assert.equal(isTokenExpiring(null), false);
     assert.equal(isTokenExpiring(undefined), false);
     assert.equal(isTokenExpiring(12345), false);
+  });
+
+  it('defaults to a 300s refresh window', () => {
+    // 200s out would be fresh under the old 120s skew — proves the constant moved.
+    assert.equal(isTokenExpiring(makeJwt({ exp: nowSec() + 200 })), true);
+    assert.equal(isTokenExpiring(makeJwt({ exp: nowSec() + 400 })), false);
+  });
+});
+
+describe('isTokenRefreshDue', () => {
+  it('falls back to last_refresh age when the access token has no exp claim', () => {
+    const noExp = makeJwt({ sub: 'opaque' });
+    const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
+    assert.equal(isTokenRefreshDue({ access_token: noExp, last_refresh: daysAgo(8) }), true);
+    assert.equal(isTokenRefreshDue({ access_token: noExp, last_refresh: daysAgo(1) }), false);
+    assert.equal(isTokenRefreshDue({ access_token: noExp, last_refresh: daysAgo(7) }), false);
+  });
+
+  it('treats a missing or unparseable last_refresh as due', () => {
+    const noExp = makeJwt({ sub: 'opaque' });
+    assert.equal(isTokenRefreshDue({ access_token: noExp }), true);
+    assert.equal(isTokenRefreshDue({ access_token: noExp, last_refresh: 'not-a-date' }), true);
+  });
+
+  it('uses the exp claim when present, regardless of last_refresh', () => {
+    const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
+    assert.equal(isTokenRefreshDue({
+      access_token: makeJwt({ exp: nowSec() + 86400 }),
+      last_refresh: daysAgo(30),
+    }), false);
+    assert.equal(isTokenRefreshDue({
+      access_token: makeJwt({ exp: nowSec() + 60 }),
+      last_refresh: new Date().toISOString(),
+    }), true);
+  });
+
+  it('returns false for missing tokens', () => {
+    assert.equal(isTokenRefreshDue(null), false);
+    assert.equal(isTokenRefreshDue({}), false);
   });
 });
 
@@ -388,6 +445,52 @@ describe('resolveAccessTokenSync', () => {
 
       // Verify fetch was called
       assert.ok(mocked.calls.length >= 1, 'fetch should have been called for refresh');
+    } finally {
+      mocked.restore();
+    }
+  });
+
+  it('triggers background refresh when a no-exp token passes the 7-day last_refresh fallback', async () => {
+    const opaque = makeJwt({ sub: 'opaque' });
+    writeTestTokens(TEST_PROVIDER, {
+      access_token: opaque,
+      refresh_token: 'stale-rt',
+      last_refresh: new Date(Date.now() - 8 * 86400000).toISOString(),
+    });
+
+    const mocked = mockFetch([
+      {
+        match: '/oauth/token',
+        respond: () => ({ status: 200, body: { access_token: 'fresh-opaque', refresh_token: 'rotated-rt' } }),
+      },
+    ]);
+
+    try {
+      // Sync contract: returns the current snapshot immediately…
+      assert.equal(resolveAccessTokenSync(TEST_PROVIDER, DEFAULT_CLIENT_ID), opaque);
+      // …while the background refresh (7-day fallback) updates the file.
+      const refreshed = await waitFor(() => readTokensSync(TEST_PROVIDER)?.access_token === 'fresh-opaque');
+      assert.ok(refreshed, 'background refresh should have been triggered by the no-exp fallback');
+    } finally {
+      mocked.restore();
+    }
+  });
+
+  it('does not refresh a no-exp token whose last_refresh is recent', async () => {
+    writeTestTokens(TEST_PROVIDER, {
+      access_token: makeJwt({ sub: 'opaque' }),
+      refresh_token: 'rt',
+      last_refresh: new Date().toISOString(),
+    });
+
+    const mocked = mockFetch([
+      { match: '/oauth/token', respond: () => ({ status: 200, body: { access_token: 'unused' } }) },
+    ]);
+
+    try {
+      resolveAccessTokenSync(TEST_PROVIDER, DEFAULT_CLIENT_ID);
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(mocked.calls.length, 0, 'recent last_refresh must not trigger a refresh');
     } finally {
       mocked.restore();
     }
@@ -923,6 +1026,233 @@ describe('refreshTokens', () => {
         () => refreshTokens(TEST_PROVIDER, 'rt', DEFAULT_CLIENT_ID),
         /429.*30/,
       );
+    } finally {
+      mocked.restore();
+    }
+  });
+});
+
+// ── Permanent refresh failure classification (reloginRequired) ─────
+
+describe('refreshTokens permanent failure classification', () => {
+  // 落盘 token 文件让调用走真实的锁内重读路径（文件在、refresh_token 一致
+  // → 进 HTTP），错误分类在 HTTP 响应上发生。
+  function seedTokensForRefresh() {
+    writeTestTokens(TEST_PROVIDER, {
+      access_token: makeJwt({ exp: nowSec() + 60 }),
+      refresh_token: 'rt',
+      last_refresh: new Date().toISOString(),
+    });
+  }
+
+  async function expectRelogin(status, body) {
+    seedTokensForRefresh();
+    const mocked = mockFetch([{ match: '/oauth/token', respond: () => ({ status, body }) }]);
+    try {
+      await assert.rejects(
+        () => refreshTokens(TEST_PROVIDER, 'rt', DEFAULT_CLIENT_ID),
+        (err) => {
+          assert.equal(err.reloginRequired, true, `expected reloginRequired for ${status} ${JSON.stringify(body)}`);
+          return true;
+        },
+      );
+    } finally {
+      mocked.restore();
+    }
+  }
+
+  it('marks 400 + invalid_grant as reloginRequired (OpenAI\'s actual dead-refresh-token shape)', async () => {
+    await expectRelogin(400, { error: 'invalid_grant', error_description: 'Token has been revoked' });
+  });
+
+  it('marks 400 + nested error.code refresh_token_reused as reloginRequired', async () => {
+    await expectRelogin(400, {
+      error: {
+        message: 'Your refresh token has already been used to generate a new access token.',
+        code: 'refresh_token_reused',
+      },
+    });
+  });
+
+  it('marks 400 with refresh_token_expired / invalidated in the unified code or description as reloginRequired', async () => {
+    await expectRelogin(400, { error: 'invalid_grant', error_description: 'refresh_token_expired' });
+    await expectRelogin(400, { code: 'refresh_token_invalidated' });
+  });
+
+  it('does not mark a 500 as reloginRequired', async () => {
+    seedTokensForRefresh();
+    const mocked = mockFetch([{ match: '/oauth/token', respond: () => ({ status: 500, body: 'server error' }) }]);
+    try {
+      await assert.rejects(
+        () => refreshTokens(TEST_PROVIDER, 'rt', DEFAULT_CLIENT_ID),
+        (err) => {
+          assert.equal(err.reloginRequired, false);
+          return true;
+        },
+      );
+    } finally {
+      mocked.restore();
+    }
+  });
+
+  it('does not mark 400 + invalid_request (no dead-token marker) as reloginRequired', async () => {
+    seedTokensForRefresh();
+    const mocked = mockFetch([{ match: '/oauth/token', respond: () => ({ status: 400, body: { error: 'invalid_request' } }) }]);
+    try {
+      await assert.rejects(
+        () => refreshTokens(TEST_PROVIDER, 'rt', DEFAULT_CLIENT_ID),
+        (err) => {
+          assert.equal(err.reloginRequired, false);
+          return true;
+        },
+      );
+    } finally {
+      mocked.restore();
+    }
+  });
+
+  it('clears stored tokens when the background refresh hits a permanent rejection', async () => {
+    writeTestTokens(TEST_PROVIDER, {
+      access_token: makeJwt({ exp: nowSec() + 10 }), // within the 300s window → due
+      refresh_token: 'dead-rt',
+      last_refresh: new Date().toISOString(),
+    });
+    const mocked = mockFetch([{ match: '/oauth/token', respond: () => ({ status: 400, body: { error: 'invalid_grant' } }) }]);
+    try {
+      resolveAccessTokenSync(TEST_PROVIDER, DEFAULT_CLIENT_ID);
+      const cleared = await waitFor(() => !existsSync(tokenFilePath(TEST_PROVIDER)));
+      assert.ok(cleared, 'permanent refresh failure should delete the stored tokens');
+    } finally {
+      mocked.restore();
+    }
+  });
+});
+
+// ── Cross-process refresh lock ─────────────────────────────────────
+
+describe('cross-process refresh lock', () => {
+  function lockPath(providerName) {
+    return `${tokenFilePath(providerName)}.lock`;
+  }
+
+  it('adopts the rotated token file instead of re-POSTing a stale refresh_token', async () => {
+    writeTestTokens(TEST_PROVIDER, {
+      access_token: makeJwt({ exp: nowSec() + 60 }),
+      refresh_token: 'old-rt',
+      last_refresh: new Date().toISOString(),
+    });
+    let postCount = 0;
+    const mocked = mockFetch([
+      {
+        match: '/oauth/token',
+        respond: () => {
+          postCount += 1;
+          return { status: 200, body: { access_token: 'tok-2', refresh_token: 'rotated-rt' } };
+        },
+      },
+    ]);
+
+    try {
+      const first = await refreshTokens(TEST_PROVIDER, 'old-rt', DEFAULT_CLIENT_ID);
+      assert.equal(first.refresh_token, 'rotated-rt');
+
+      // Second process scenario: it read 'old-rt' before the rotation and only
+      // now acts — it must adopt the rotated copy, never POST the dead token.
+      const second = await refreshTokens(TEST_PROVIDER, 'old-rt', DEFAULT_CLIENT_ID);
+      assert.equal(second.access_token, 'tok-2');
+      assert.equal(second.refresh_token, 'rotated-rt');
+      assert.equal(postCount, 1, 'the rotated (dead) refresh_token must never be POSTed again');
+    } finally {
+      mocked.restore();
+    }
+  });
+
+  it('serializes concurrent refreshes so the same old refresh_token is POSTed once', async () => {
+    writeTestTokens(TEST_PROVIDER, {
+      access_token: makeJwt({ exp: nowSec() + 60 }),
+      refresh_token: 'old-rt',
+      last_refresh: new Date().toISOString(),
+    });
+    let postCount = 0;
+    const mocked = mockFetch([
+      {
+        match: '/oauth/token',
+        respond: () => {
+          postCount += 1;
+          return { status: 200, body: { access_token: 'tok-2', refresh_token: 'rotated-rt' } };
+        },
+      },
+    ]);
+
+    try {
+      const [a, b] = await Promise.all([
+        refreshTokens(TEST_PROVIDER, 'old-rt', DEFAULT_CLIENT_ID),
+        refreshTokens(TEST_PROVIDER, 'old-rt', DEFAULT_CLIENT_ID),
+      ]);
+      assert.equal(postCount, 1, 'lock must prevent a concurrent POST with the same refresh_token');
+      assert.equal(a.access_token, 'tok-2');
+      assert.equal(b.access_token, 'tok-2', 'the loser of the lock race adopts the winner\'s tokens');
+      assert.equal(existsSync(lockPath(TEST_PROVIDER)), false, 'lock is released after refresh');
+    } finally {
+      mocked.restore();
+    }
+  });
+
+  it('steals a stale lock left behind by a crashed holder', async () => {
+    writeTestTokens(TEST_PROVIDER, {
+      access_token: makeJwt({ exp: nowSec() + 60 }),
+      refresh_token: 'old-rt',
+      last_refresh: new Date().toISOString(),
+    });
+    writeFileSync(lockPath(TEST_PROVIDER), JSON.stringify({ pid: 999999, acquiredAt: Date.now() - 60_000 }));
+
+    let postCount = 0;
+    const mocked = mockFetch([
+      {
+        match: '/oauth/token',
+        respond: () => {
+          postCount += 1;
+          return { status: 200, body: { access_token: 'tok-2', refresh_token: 'rotated-rt' } };
+        },
+      },
+    ]);
+
+    try {
+      const result = await refreshTokens(TEST_PROVIDER, 'old-rt', DEFAULT_CLIENT_ID);
+      assert.equal(result.access_token, 'tok-2');
+      assert.equal(postCount, 1);
+      assert.equal(existsSync(lockPath(TEST_PROVIDER)), false);
+    } finally {
+      mocked.restore();
+    }
+  });
+
+  it('gives up after the wait timeout while another holder is active', async () => {
+    writeTestTokens(TEST_PROVIDER, {
+      access_token: makeJwt({ exp: nowSec() + 60 }),
+      refresh_token: 'old-rt',
+      last_refresh: new Date().toISOString(),
+    });
+    // Fresh lock: not stale, so the wait must time out instead of stealing.
+    writeFileSync(lockPath(TEST_PROVIDER), JSON.stringify({ pid: process.pid, acquiredAt: Date.now() }));
+
+    let postCount = 0;
+    const mocked = mockFetch([
+      {
+        match: '/oauth/token',
+        respond: () => {
+          postCount += 1;
+          return { status: 200, body: { access_token: 'unused' } };
+        },
+      },
+    ]);
+
+    try {
+      await assert.rejects(
+        () => refreshTokens(TEST_PROVIDER, 'old-rt', DEFAULT_CLIENT_ID, { lockWaitTimeoutMs: 200 }),
+        /Timed out waiting for the OAuth refresh lock/,
+      );
+      assert.equal(postCount, 0, 'no network refresh may happen without the lock');
     } finally {
       mocked.restore();
     }

@@ -17,6 +17,7 @@ import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { mountUserConfiguredFeatures } from '../server/feature-runtime/user-mount.js';
+import { preflightRefreshTokens } from '../server/oauth-codex.js';
 import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { buildCallUsageEvents, reportUsageEvent } from './usage-report.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
@@ -25,7 +26,7 @@ import { createIMBridge } from './runtime-im-bridge.js';
 import { handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
-import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH } from '../server/shared/constants.js';
+import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH, MODEL_PRESETS_PATH } from '../server/shared/constants.js';
 import { resolveDesktopWorkspace } from '../server/shared/desktop-workspace.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
@@ -745,6 +746,9 @@ SessionLifecycle.prototype.start = async function () {
   const modelOptions = agentId === 'coder'
     ? { userConfigPath: AGENT_USER_CONFIG_PATH('coder') }
     : {};
+  // OAuth 启动预刷新：在 async 上下文先把将过期的 token 刷新落盘，再进入同步
+  // resolve（见 preflightAgentOAuthRefresh 注释）。
+  await preflightAgentOAuthRefresh(agentPath, modelOptions.userConfigPath);
   // 启动解析是构造期一次性注入（agent 尚未创建）；运行期切换统一走
   // agent.setModel / setThinkingEffort，消费注入的 modelPresetResolver。
   const resolved = resolveAgentModelLLM(agentPath, 'default', modelOptions) || resolveGlobalDefaultLLM();
@@ -1287,6 +1291,41 @@ function loadRuntimeHandoffFromPath(handoffPath) {
   } catch (err) {
     console.warn(`[ProtoClaw Runtime] 加载 handoff 失败 (${handoffPath}):`, err.message);
     return null;
+  }
+}
+
+/**
+ * OAuth 启动预刷新（票 0028A-5）：resolveAgentModelLLM 是同步契约，拿到的是
+ * token 文件当下快照；进入同步 resolve 前先把将过期的 access_token 刷新落盘，
+ * 启动 LLM 实例持有的才是新鲜 token。这里镜像 resolveAgentModelLLM 的 default
+ * 槽位选择找到 OAuth provider（仅覆盖 agent preset 主路径，全局默认兜底不在
+ * 预刷新范围）；刷新失败不阻断启动——回退旧快照，与既有 fire-and-forget 行为
+ * 一致，relogin 清理由 oauth-codex 的后台路径完成。
+ */
+async function preflightAgentOAuthRefresh(agentDir, userConfigPath) {
+  try {
+    const metaPath = join(agentDir, 'metadata.json');
+    if (!existsSync(metaPath)) return;
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+    const agentId = agentDir.split(/[\\/]/).pop();
+    const configPath = userConfigPath || AGENT_USER_CONFIG_PATH(agentId);
+    let userConfig = {};
+    if (existsSync(configPath)) {
+      try { userConfig = JSON.parse(readFileSync(configPath, 'utf8')) || {}; } catch {}
+    }
+    const roleConfig = { ...(meta?.modelPresets || {}), ...(userConfig?.modelPresets || {}) }['default'];
+    const presetName = typeof roleConfig === 'string' ? roleConfig : roleConfig?.primary || null;
+    if (!presetName) return;
+    const raw = JSON.parse(readFileSync(MODEL_PRESETS_PATH, 'utf8'));
+    const preset = (Array.isArray(raw?.presets) ? raw.presets : []).find((p) => p.name === presetName);
+    const provider = (Array.isArray(raw?.providers) ? raw.providers : []).find((p) => p.name === preset?.providerName);
+    if (provider?.authType !== 'oauth-codex') return;
+    const refreshed = await preflightRefreshTokens(provider.name, provider.clientId);
+    if (refreshed) {
+      console.log(`[ProtoClaw Runtime] OAuth token pre-refreshed for provider "${provider.name}"`);
+    }
+  } catch (error) {
+    console.warn('[ProtoClaw Runtime] OAuth 启动预刷新跳过:', error?.message || error);
   }
 }
 

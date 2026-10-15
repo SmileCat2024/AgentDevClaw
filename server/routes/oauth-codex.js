@@ -110,8 +110,8 @@ export function setupOAuthCodexRoutes(app, express) {
   // ── Force token refresh ──
 
   app.post('/protoclaw/oauth/codex/refresh/:providerName', express.json(), async (req, res, next) => {
+    const { providerName } = req.params;
     try {
-      const { providerName } = req.params;
       const { clientId } = req.body || {};
       const tokens = readTokensSync(providerName);
       if (!tokens) {
@@ -124,6 +124,13 @@ export function setupOAuthCodexRoutes(app, express) {
         lastRefresh: updated.access_token ? new Date().toISOString() : null,
       });
     } catch (error) {
+      // 与 refreshTokensInBackground 的 relogin 清理保持同口径：
+      // refresh_token 永久失效（400 + invalid_grant / refresh_token_*）后
+      // 留着死 token 只会让后续 resolve 反复触发注定失败的刷新。
+      if (error?.reloginRequired) {
+        deleteTokens(providerName);
+        console.warn(`[OAuth/Codex] Tokens cleared for "${providerName}" — re-login required`);
+      }
       res.status(400).json({ error: error.message || 'Token refresh failed' });
     }
   });
