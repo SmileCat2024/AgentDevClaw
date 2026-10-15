@@ -431,11 +431,11 @@ function syncPersistentComposerSessionCard(container) {
   if (oldKey === newKey) return false;
   if (oldKey) _sessionInputCache[oldKey] = ta.value || '';
   ta.dataset.sessionKey = newKey || '';
-  // 附件类会话态（会话引用 pill、图片缩略图）按会话 key 隔离存储：切换后
-  // 重渲染附件预览，否则上一会话的附件残留显示。slash prompt pill 无跨会话
-  // 保留语义（invoke 目标是输入框所属会话），切换即清。
+  // 附件类会话态（会话引用 pill、图片缩略图、slash prompt pill）按会话 key
+  // 隔离存储：切换后按新 key 重渲染附件预览与 pill bar，上一会话的附件不
+  // 残留显示，切回时自然恢复。
   window.SessionReference?.notify?.();
-  window.ClawSlash?.clearSessionPrompts?.();
+  window.ClawSlash?.rebindSession?.();
   if (!_restoreSessionInputDraft(ta, newKey)) {
     ta.value = '';
     autoResize(ta);

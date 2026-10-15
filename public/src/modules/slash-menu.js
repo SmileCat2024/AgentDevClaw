@@ -53,8 +53,32 @@ let _dirtyKeys = new Set();
 let _lastFetchKey = null;
 // prompt 型命令的待发 pill（激活暂存）：选中不执行，发送 Enter 时统一
 // invoke（成功后命令短名并入消息文本原样发出，注入由 feature 在 CallStart 完成）。
-// 触发由该状态驱动，不做字符串解析；输入框切换/会话切换时清空（防跨会话误投）
-let _pendingPrompts = [];
+// 触发由该状态驱动，不做字符串解析；pill 按会话分桶（key 复用附件类会话态的
+// 权威判定 SessionReference.activeKey，与图片桶 / 会话引用同源）：会话 A 挂的
+// pill 不被会话 B 的发送消费，切回 A 后 pill 恢复显示；Esc / 删除按钮只清当前桶
+const _pendingPromptBuckets = new Map(); // key → [cmd]
+let _lastPromptKey = null;
+
+// 当前会话的 pill 桶 key：挂载 / 切换 / 提交三时刻读同一值（key 短暂读空的
+// 加载窗口期回退最近已知 key，不误落 default 桶）
+function _activePromptKey() {
+  const key = window.SessionReference?.activeKey?.();
+  if (typeof key === 'string' && key) {
+    _lastPromptKey = key;
+    return key;
+  }
+  return _lastPromptKey || 'default';
+}
+
+function _currentPrompts() {
+  const key = _activePromptKey();
+  let pills = _pendingPromptBuckets.get(key);
+  if (!Array.isArray(pills)) {
+    pills = [];
+    _pendingPromptBuckets.set(key, pills);
+  }
+  return pills;
+}
 
 function _isInputTextarea(el) {
   return !!(el && el.tagName === 'TEXTAREA' && el.classList.contains('user-input-textarea'));
@@ -252,9 +276,9 @@ function _syncFromInput(ta) {
     if (_visible) _hide();
     return;
   }
-  // 输入框归属变化（idle↔常驻条切换 / 会话重建）：prompt pill 不跨输入框
-  // 迁移——invoke 目标是"输入框所属会话"，换了框旧 pill 语义失效
-  if (_activeTa && _activeTa !== ta) _clearPrompts();
+  // 输入框归属变化（idle↔常驻条切换 / 会话重建）：pill bar 跟随当前输入框
+  // 重渲染；pill 数据按会话分桶，不因换框丢失（桶归属由 key 权威判定）
+  if (_activeTa && _activeTa !== ta) _renderPillBar();
   _activeTa = ta;
   const value = ta.value;
   if (typeof value !== 'string' || !value.startsWith('/')) {
@@ -295,8 +319,8 @@ async function _execute(cmd, ta) {
       autoResize(ta);
       _cacheSessionInput(ta);
     }
-    if (!_pendingPrompts.some(function (p) { return p.name === cmd.name; })) {
-      _pendingPrompts.push(cmd);
+    if (!_currentPrompts().some(function (p) { return p.name === cmd.name; })) {
+      _currentPrompts().push(cmd);
     }
     _hide();
     _renderPillBar();
@@ -404,16 +428,22 @@ function _shortName(cmd) {
   return full.slice(full.lastIndexOf('.') + 1);
 }
 
+// 用户意图清空（Esc）：只清当前会话的 pill 桶
 function _clearPrompts() {
-  _pendingPrompts = [];
+  _pendingPromptBuckets.set(_activePromptKey(), []);
+  _removePillBar();
+}
+
+function _removePillBar() {
   const bar = document.getElementById('slash-prompt-bar');
   if (bar) bar.remove();
 }
 
 function _renderPillBar() {
   const ta = _currentTa();
-  if (!ta || _pendingPrompts.length === 0) {
-    _clearPrompts();
+  const pills = _currentPrompts();
+  if (!ta || pills.length === 0) {
+    _removePillBar();
     return;
   }
   let bar = document.getElementById('slash-prompt-bar');
@@ -427,7 +457,7 @@ function _renderPillBar() {
   } else if (bar.parentNode !== ta.parentNode) {
     ta.parentNode.insertBefore(bar, ta);
   }
-  bar.innerHTML = _pendingPrompts.map(function (cmd, i) {
+  bar.innerHTML = pills.map(function (cmd, i) {
     const nm = escapeHtml(_shortName(cmd));
     const desc = cmd.description ? ' title="' + escapeHtml(cmd.description) + '"' : '';
     return '<span class="slash-prompt-pill"' + desc + '>'
@@ -458,23 +488,27 @@ window.ClawSlash = {
     }
   },
   /**
-   * 会话切换时清空 prompt pill（input-composer 的会话重绑调用）。
-   * invoke 目标是"输入框所属会话"，切走后旧 pill 语义失效；composer
-   * 常驻后切会话不换 textarea 元素，_syncFromInput 的元素归属检测
-   * 不再覆盖此场景，必须由会话切换点显式触发。
+   * 会话切换后重绑 pill bar（input-composer 的会话重绑调用）：按新会话桶
+   * 渲染——新会话无 pill 则收起 bar，切回旧会话自动恢复其 pill。invoke
+   * 目标是提交时刻的当前会话（_currentTarget），与 pill 展示会话天然一致。
    */
-  clearSessionPrompts: _clearPrompts,
+  rebindSession: _renderPillBar,
   /** 先激活待发技能，再调用当前输入框对应的提交入口。 */
   async submitWithPendingPrompts(ta, submit) {
     if (_promptSubmitInFlight) return false;
-    if (_pendingPrompts.length === 0) {
+    // 提交会话在触发时刻定格：invoke / 移桶 / 前缀拼接都锚定该 key，
+    // await 期间切会话不得把 A 的激活与文本投进 B
+    const submitKey = _activePromptKey();
+    const pills = (_pendingPromptBuckets.get(submitKey) || []).slice();
+    if (pills.length === 0) {
       await submit();
       return true;
     }
     _promptSubmitInFlight = true;
     try {
-      const pills = _pendingPrompts.slice();
+      const rest = (typeof ta.value === 'string' ? ta.value : '').trim();
       for (const cmd of pills) {
+        if (_activePromptKey() !== submitKey) return false; // 桶未动，切回后仍可发送
         const r = await _postCapabilityInvoke(cmd, {});
         if (!r.ok) {
           window.ClawToast?.show?.({
@@ -487,12 +521,18 @@ window.ClawSlash = {
           return false;
         }
       }
-      const rest = (typeof ta.value === 'string' ? ta.value : '').trim();
-      const prefix = pills.map(function (c) { return '/' + _shortName(c); }).join(' ');
+      if (_activePromptKey() !== submitKey) return false;
+      // 激活成功：refs 移交发送管线；已消费 pill 从提交会话的桶移除
+      //（非"当前桶"——invoke await 期间会话可能已切换）
       _handoffActivations = pills.map(function (c) { return c.ref || c.name; }).filter(Boolean);
+      const bucket = _pendingPromptBuckets.get(submitKey);
+      if (Array.isArray(bucket)) {
+        _pendingPromptBuckets.set(submitKey, bucket.filter(function (p) { return !pills.includes(p); }));
+      }
+      const prefix = pills.map(function (c) { return '/' + _shortName(c); }).join(' ');
       ta.value = prefix + (rest ? ' ' + rest : '');
       autoResize(ta);
-      _clearPrompts();
+      _renderPillBar();
       await submit();
       return true;
     } finally {
@@ -668,8 +708,8 @@ document.addEventListener('input', function (e) {
 
 document.addEventListener('keydown', function (e) {
   if (!_visible) {
-    // 菜单关闭但存在 prompt pill：Enter = 统一触发后发送；Esc = 清空 pill
-    if (_pendingPrompts.length > 0 && _isInputTextarea(e.target)) {
+    // 菜单关闭但当前会话存在 prompt pill：Enter = 统一触发后发送；Esc = 清空 pill
+    if (_currentPrompts().length > 0 && _isInputTextarea(e.target)) {
       if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -706,7 +746,7 @@ document.addEventListener('keydown', function (e) {
   // 空态时键盘归输入框：/ 开头文本回车即普通消息发送（但有 prompt pill
   // 时 Enter 归 pill 派发——命令前缀需并入消息，且 pill 触发先于发送）
   if (!_formCmd && _filtered.length === 0) {
-    if (_pendingPrompts.length > 0 && e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+    if (_currentPrompts().length > 0 && e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
       e.preventDefault();
       e.stopPropagation();
       void _dispatchPrompts(e.target);
@@ -754,7 +794,7 @@ document.addEventListener('mousedown', function (e) {
   if (x) {
     e.preventDefault();
     e.stopPropagation();
-    _pendingPrompts.splice(parseInt(x.dataset.idx, 10) || 0, 1);
+    _currentPrompts().splice(parseInt(x.dataset.idx, 10) || 0, 1);
     _renderPillBar();
     return;
   }

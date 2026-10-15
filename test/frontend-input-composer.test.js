@@ -511,7 +511,7 @@ describe('composer session draft isolation (ticket 036)', () => {
     ctx.loadSource('public/src/modules/slash-menu.js');
     ctx.run(`
       _postCapabilityInvoke = async (cmd) => ({ ok: true, result: cmd.name });
-      _pendingPrompts = [{ name: 'skill.grill-me', ref: 'skill.grill-me' }];
+      _currentPrompts().push({ name: 'skill.grill-me', ref: 'skill.grill-me' });
     `);
     const result = await ctx.run(`
       (async () => {
@@ -523,7 +523,7 @@ describe('composer session draft isolation (ticket 036)', () => {
         return {
           submittedText,
           activations: window.ClawSlash.consumeActivations(),
-          pendingCount: _pendingPrompts.length,
+          pendingCount: _currentPrompts().length,
         };
       })()
     `);
@@ -532,26 +532,26 @@ describe('composer session draft isolation (ticket 036)', () => {
     assert.equal(result.pendingCount, 0);
   });
 
-  it('clears slash prompt pills on session switch only', () => {
+  it('rebinds the slash prompt pill bar on session switch only', () => {
     const ctx = createInputSandbox();
     loadInputModules(ctx);
-    let cleared = 0;
-    ctx.window.ClawSlash = { clearSessionPrompts: () => { cleared += 1; } };
+    let rebound = 0;
+    ctx.window.ClawSlash = { rebindSession: () => { rebound += 1; } };
 
-    // 先以会话 A 挂载 composer（pill 挂在 A 的输入框上）
+    // 先以会话 A 挂载 composer（首次挂载无会话切换）
     ctx.run('renderInputRequests([])');
-    assert.equal(cleared, 0);
+    assert.equal(rebound, 0);
 
-    // 会话 A → B：sessionKey 变化触发附件态收敛（slash pill 无跨会话保留语义）
+    // 会话 A → B：sessionKey 变化触发附件态收敛（pill bar 按新会话桶重渲染）
     ctx.state.liveKey = 'session-b';
     ctx.currentRuntimeAgentId = 'agent-2';
     flipToPersistent(ctx);
-    assert.equal(cleared, 1, '会话切换必须清理上一会话的 slash prompt pill');
+    assert.equal(rebound, 1, '会话切换必须重绑 slash prompt pill bar');
 
-    // 同会话的模式翻转不重复清理
+    // 同会话的模式翻转不重复重绑
     flipToRequests(ctx, { requestId: 'r1', placeholder: 'Answer me' });
     flipToPersistent(ctx);
-    assert.equal(cleared, 1, '同会话的模式翻转不得触发 slash pill 清理');
+    assert.equal(rebound, 1, '同会话的模式翻转不得触发 pill bar 重绑');
   });
 
   it('deletes the draft key after a successful persistent submit', async () => {
@@ -611,6 +611,146 @@ describe('composer session draft isolation (ticket 036)', () => {
     assert.equal(JSON.parse(ctx.fetchCalls[0].opts.body).text, 'send me');
     // 提交成功：草稿键删除（已发送文本不得经草稿写回"复活"）
     assert.equal(ctx.run(`Object.prototype.hasOwnProperty.call(_sessionInputCache, 'session-a')`), false);
+  });
+});
+
+// ── slash prompt pill 会话隔离：pill 按会话 key 分桶（附件类会话态同链路）──
+// pill 挂载 / 切换 / 提交三时刻读同一 key 源（window.SessionReference.activeKey，
+// 测试中与 composer 会话 key 同源对齐）。会话 A 挂的 pill 不被会话 B 的发送
+// 消费，切回 A 恢复显示；提交锚定提交时刻的会话，await 期间切会话不误投。
+
+describe('slash prompt pill session isolation (attachment buckets per session)', () => {
+  function loadPillSandbox() {
+    const ctx = createInputSandbox();
+    loadInputModules(ctx);
+    // pill 桶 key 与 composer 会话 key 同源（生产中 activeKey 是附件类
+    // 会话态的权威判定，测试里对齐 liveKey 使两条链路同帧驱动）
+    ctx.run('window.SessionReference = { activeKey: () => state.liveKey };');
+    ctx.loadSource('public/src/modules/slash-menu.js');
+    return ctx;
+  }
+
+  function mountComposer(ctx) {
+    ctx.run('renderInputRequests([])');
+    return ctx.run("document.getElementById('input-persistent')");
+  }
+
+  async function mountPill(ctx, cmd) {
+    await ctx.run(`
+      (async () => {
+        await _execute(${JSON.stringify(cmd)}, document.getElementById('input-persistent'));
+      })()
+    `);
+  }
+
+  function switchSession(ctx, liveKey, runtimeId) {
+    ctx.state.liveKey = liveKey;
+    ctx.currentRuntimeAgentId = runtimeId;
+    flipToPersistent(ctx);
+  }
+
+  it('keeps pills per session: no carry-over on switch, restored on switch back', async () => {
+    const ctx = loadPillSandbox();
+    const ta = mountComposer(ctx);
+    assert.equal(ta.dataset.sessionKey, 'session-a');
+
+    // 会话 A：经菜单执行入口挂 prompt pill
+    await mountPill(ctx, { name: 'skill.grill-me', ref: 'skill.grill-me', destination: 'session', kind: 'prompt' });
+    const barInA = ctx.run("document.getElementById('slash-prompt-bar')");
+    assert.ok(barInA, '会话 A 挂 pill 后 pill bar 渲染');
+    assert.match(String(barInA.innerHTML), /grill-me/);
+
+    // 会话 B：bar 移除（B 无 pill），A 的 pill 不残留、不参与 B 的发送
+    switchSession(ctx, 'session-b', 'agent-2');
+    assert.equal(ctx.run("document.getElementById('slash-prompt-bar')"), null, '会话 B 不得残留 A 的 pill');
+    ctx.run(`
+      window.__invokeCalls = [];
+      _postCapabilityInvoke = async (cmd) => {
+        window.__invokeCalls.push(String(cmd.name));
+        return { ok: true };
+      };
+    `);
+    const sentFromB = await ctx.run(`
+      (async () => {
+        const taB = document.getElementById('input-persistent');
+        taB.value = 'hello from b';
+        let submitted = false;
+        await window.ClawSlash.submitWithPendingPrompts(taB, async () => { submitted = true; });
+        return {
+          submitted,
+          text: String(taB.value),
+          activations: window.ClawSlash.consumeActivations(),
+        };
+      })()
+    `);
+    assert.equal(sentFromB.submitted, true, 'B 无 pill：发送照常');
+    assert.equal(sentFromB.text, 'hello from b', 'B 的消息文本不加命令前缀');
+    assert.equal(ctx.run('window.__invokeCalls.length'), 0, 'B 的发送不得 invoke A 的 pill');
+    assert.equal(sentFromB.activations, null, 'B 的发送不携带激活 refs');
+
+    // 切回会话 A：pill 恢复显示（回归点：切会话即清空的旧行为导致丢失）
+    switchSession(ctx, 'session-a', 'agent-1');
+    const barRestored = ctx.run("document.getElementById('slash-prompt-bar')");
+    assert.ok(barRestored, '切回会话 A 后 pill 必须恢复显示');
+    assert.match(String(barRestored.innerHTML), /grill-me/);
+
+    // A 内提交：invoke 只针对 A 的 pill，refs 移交，A 桶消费清空
+    const sentFromA = await ctx.run(`
+      (async () => {
+        const taA = document.getElementById('input-persistent');
+        taA.value = '请审查方案';
+        let submittedText = null;
+        await window.ClawSlash.submitWithPendingPrompts(taA, async () => {
+          submittedText = String(taA.value);
+        });
+        return {
+          submittedText,
+          activations: window.ClawSlash.consumeActivations(),
+          bucketLeft: _currentPrompts().length,
+          barAfter: !!document.getElementById('slash-prompt-bar'),
+        };
+      })()
+    `);
+    assert.equal(sentFromA.submittedText, '/grill-me 请审查方案');
+    assert.deepEqual([...sentFromA.activations], ['skill.grill-me']);
+    assert.deepEqual([...ctx.run('window.__invokeCalls')], ['skill.grill-me'], 'A 的提交只 invoke A 的 pill');
+    assert.equal(sentFromA.bucketLeft, 0, '提交成功后 A 桶清空');
+    assert.equal(sentFromA.barAfter, false, 'pill 消费后 bar 移除');
+  });
+
+  it('submit is pinned to its session: mid-flight switch keeps pills in the original bucket and never submits', async () => {
+    const ctx = loadPillSandbox();
+    mountComposer(ctx);
+    await mountPill(ctx, { name: 'skill.grill-me', ref: 'skill.grill-me', destination: 'session', kind: 'prompt' });
+    await mountPill(ctx, { name: 'skill.some-other', ref: 'skill.some-other', destination: 'session', kind: 'prompt' });
+
+    ctx.run(`
+      window.__invokeCalls = [];
+      // 第一次 invoke 期间切走会话：模拟 await 窗口内的会话切换
+      _postCapabilityInvoke = async (cmd) => {
+        window.__invokeCalls.push(String(cmd.name));
+        state.liveKey = 'session-b';
+        return { ok: true };
+      };
+    `);
+    const result = await ctx.run(`
+      (async () => {
+        const ta = document.getElementById('input-persistent');
+        ta.value = 'A 的消息';
+        let submitted = false;
+        await window.ClawSlash.submitWithPendingPrompts(ta, async () => { submitted = true; });
+        return {
+          submitted,
+          activations: window.ClawSlash.consumeActivations(),
+          aBucket: (_pendingPromptBuckets.get('session-a') || []).length,
+        };
+      })()
+    `);
+    assert.deepEqual([...ctx.run('window.__invokeCalls')], ['skill.grill-me'],
+      '切走前的第一次 invoke 已发出，后续 invoke 阻断');
+    assert.equal(result.submitted, false, '会话已切走：A 的消息文本不得投进 B');
+    assert.equal(result.activations, null, '激活 refs 不移交发送管线');
+    assert.equal(result.aBucket, 2, 'pill 留在原会话桶，切回后仍可发送');
   });
 });
 
