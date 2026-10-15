@@ -38,6 +38,7 @@
    - 0025 coder 升格独立工作空间：会话身份投影机制退役（实施计划见 [docs/plans/2026-10-11-coder-workspace-promotion.md](docs/plans/2026-10-11-coder-workspace-promotion.md)）
    - 0026 Session 视图统一：Session 身份为锚，Runtime 为运行态数据源，Thread 为连续性与输入控制投影
    - 0027 Agent OS 治理面：同意模型与 per-workspace runtime 配额（强制点在 startManagedAgent 内核漏斗；权限模型独立后行）
+   - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换
 
 实现层真实入口：
 
@@ -110,6 +111,8 @@ feature 三类来源（严格区分，改错层 = 白改）：
 - "feature 本身的行为、协议、网关循环" → feature 源码包
 - "通知、DebugHub、ViewerWorker、Agent 生命周期、框架级 call 状态" → AgentDev 框架本体
 - 装配关系以各 agent.js 的 import 为准，勿凭本文档或记忆判断；预制 agent 可能对生态包做项目层包装，"Claw 表现出的行为"不一定等于生态包原生行为。
+
+分层判据（ADR-0028）：契约/语义/生命周期编排归框架；资产保管与 IO 实现归应用层；宿主/装配层够不着是下沉信号（普通代码复用不算）；其余先留应用层。LLM 实例=参数快照，凭证轮换=实例轮换——认证策略的复杂度收敛在 resolver 实现与 token 管理，框架不感知凭证形态。
 
 禁止的做法：
 
