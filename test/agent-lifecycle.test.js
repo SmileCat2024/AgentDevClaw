@@ -1,9 +1,21 @@
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'events';
-import { createAgentLifecycleModule } from '../server/routes/agent-lifecycle.js';
-import { buildSessionWorkspaceEnv, buildSharedSessionStartMessage, resolveManagedProcessPlacement } from '../server/routes/agent-startup.js';
-import { managedAgents } from '../server/shared/agent-access.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+// 测试隔离：startManagedAgent 的配额检查（ADR-0027）读默认路径下的
+// workspace-settings.json，USER_DATA_ROOT 在模块加载时固化——必须先设
+// env 再动态 import（ESM 静态 import 会提升），否则读真实用户数据目录。
+const DATA_DIR = mkdtempSync(path.join(tmpdir(), 'claw-agent-lifecycle-test-'));
+process.env.AGENTDEV_DATA_DIR = DATA_DIR;
+
+const { createAgentLifecycleModule } = await import('../server/routes/agent-lifecycle.js');
+const { buildSessionWorkspaceEnv, buildSharedSessionStartMessage, resolveManagedProcessPlacement } = await import('../server/routes/agent-startup.js');
+const { managedAgents } = await import('../server/shared/agent-access.js');
+
+after(() => rmSync(DATA_DIR, { recursive: true, force: true }));
 
 // ── Helpers ────────────────────────────────────────────────
 

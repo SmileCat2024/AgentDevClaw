@@ -125,6 +125,11 @@ export function buildLocalFailureResponse(error, metadata = {}) {
     ...(cleanId(error?.code) && !STABLE_CODES.has(cleanId(error.code))
       ? { legacyCode: cleanId(error.code) }
       : {}),
+    // Structured quota payload (ADR-0027): dispatchers parse this to act
+    // (archive a thread / ask the user / abandon) instead of string-matching.
+    ...(error?.runtimeQuota && typeof error.runtimeQuota === 'object'
+      ? { runtimeQuota: error.runtimeQuota }
+      : {}),
     ...Object.fromEntries(Object.entries(normalizedMetadata).filter(([key]) => key !== 'operationId')),
   };
 }

@@ -26,6 +26,7 @@ import {
 import { runTrimTranscriptWithSummary } from '../context-continuity/trim-appended-summary.js';
 import { applyContinuityToolPolicy } from '../context-continuity/feature-continuity.js';
 import { buildChildRuntimeAgent, sessionRecordToWorkspaceMeta } from './session-helpers-pure.js';
+import { RUNTIME_SPAWN_INTENTS } from './runtime-quota.js';
 
 export function createSessionHandoffHelpers(deps) {
   const {
@@ -204,6 +205,9 @@ export function createSessionHandoffHelpers(deps) {
     if (startRuntime) {
       trace?.mark('target_runtime_start_requested', { targetSessionId: session.id });
       status = await startManagedAgent(agent, session.id, {
+        // 接续 spawn（ADR-0027 §5 rotation 豁免）：successor 接替旧 head 的
+        // 生命周期接续，不是扩编；满配额时不经配额判定。
+        spawnIntent: RUNTIME_SPAWN_INTENTS.ROTATION,
         extraEnv: {
           PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath,
         },
