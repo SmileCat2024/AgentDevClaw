@@ -16,6 +16,7 @@
  *   视图切换: show_chat, resume_session, show_home,
  *            show_workspace_tab, show_block
  *   APP 对话事务: start_app_conversation（ADR-0024，端点由 APP block action 声明）
+ *   APP 设置面板: open_app_settings（settings 键经 ClawFW.appSettingsPanels 查表）
  *
  * 依赖全局状态（定义在 app-core.js）:
  *   currentLanguage, allAgents, currentRuntimeAgentId,
@@ -126,6 +127,21 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   if (!action) return;
   if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
     saveCurrentWorkspaceSurfaceScroll();
+  }
+
+  // ── APP 设置面板入口（注册表查表，公共代码不按 APP ID 分支）──────────
+  // 首页 block action 只声明通用 type + settings 键；面板实现由各 APP 的
+  // 前端模块经 window.ClawFW.appSettingsPanels 注册（如 memo-settings.js），
+  // 可拔插约束与 start_app_conversation 的端点声明同构。
+  if (action.type === 'open_app_settings') {
+    const key = String(action.settings || '').trim();
+    const panel = window.ClawFW?.appSettingsPanels?.[key];
+    if (panel && typeof panel.open === 'function') {
+      panel.open();
+    } else {
+      console.error('[workspace-actions] no settings panel registered for:', key);
+    }
+    return;
   }
 
   // ── APP 对话事务入口（ADR-0024 决策 1/2 + 首开入口）────────────────────

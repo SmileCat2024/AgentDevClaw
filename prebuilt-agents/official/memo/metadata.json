@@ -60,6 +60,17 @@
                 "type": "start_app_conversation",
                 "endpoint": "/protoclaw/memo-app/conversation/new"
               }
+            },
+            {
+              "label": {
+                "zh": "设置",
+                "en": "Settings"
+              },
+              "className": "workspace-action secondary",
+              "action": {
+                "type": "open_app_settings",
+                "settings": "memo"
+              }
             }
           ]
         },
