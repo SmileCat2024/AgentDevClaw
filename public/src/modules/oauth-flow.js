@@ -325,7 +325,7 @@ function pollOAuthLogin(sessionId) {
         } else if (sess.status === 'approved') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
           window.ClawFW.oauthConnectionStatus = 'connected';
-          updateCodexConnectionPill(true);
+          updateCodexConnectionUI(true);
           let el = display();
           if (el) el.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存' : 'Login successful! Token saved.') + '</span>';
           refreshModelCatalog('codex');
@@ -390,13 +390,10 @@ window.logoutOAuth = function() {
     .then(function() { refreshOAuthStatus(); });
 };
 
-function updateCodexConnectionPill(connected) {
-  // Codex 分页连接徽标（入口卡片 / 配置页共用），不存在时静默跳过
-  let pill = document.querySelector('.codex-connection-pill');
-  if (!pill) return;
-  let isZh = currentLanguage === 'zh';
-  pill.classList.toggle('connected', connected);
-  pill.textContent = connected ? (isZh ? '已连接' : 'Connected') : (isZh ? '未连接' : 'Not connected');
+function updateCodexConnectionUI(connected) {
+  // 状态徽章已随连接卡片改版取消；配置页登出按钮随登录状态显隐（未登录时登出无意义）
+  let logoutBtn = document.getElementById('codex-auth-logout');
+  if (logoutBtn) logoutBtn.style.display = connected ? '' : 'none';
 }
 
 function refreshOAuthStatus() {
@@ -410,7 +407,7 @@ function refreshOAuthStatus() {
     .then(function(r) { return r.json(); })
     .then(function(status) {
       window.ClawFW.oauthConnectionStatus = status.loggedIn ? 'connected' : 'disconnected';
-      updateCodexConnectionPill(!!status.loggedIn);
+      updateCodexConnectionUI(!!status.loggedIn);
       let display = document.getElementById('oauth-status-display');
       if (!display) return;
       if (status.loggedIn) {
@@ -426,7 +423,7 @@ function refreshOAuthStatus() {
     })
     .catch(function() {
       window.ClawFW.oauthConnectionStatus = 'disconnected';
-      updateCodexConnectionPill(false);
+      updateCodexConnectionUI(false);
       let display = document.getElementById('oauth-status-display');
       if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '未登录' : 'Not logged in') + '</span>';
     });

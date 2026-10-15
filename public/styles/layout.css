@@ -1890,7 +1890,8 @@ body[data-theme="light"] .feature-detail-overlay {
   z-index: 0;
 }
 
-.feature-detail-window > *:not(.settings-footer) {
+/* 窗口级绝对定位元素（settings-footer / settings-fab）豁免：:not 组合特异度高于单类选择器，会把 absolute 覆盖成 relative */
+.feature-detail-window > *:not(.settings-footer):not(.settings-fab) {
   position: relative;
   z-index: 1;
 }

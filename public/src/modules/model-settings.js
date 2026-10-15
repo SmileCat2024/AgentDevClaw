@@ -21,6 +21,7 @@ async function openSettings() {
   window.ClawFW.settingsOpen = true;
   if (!['overview', 'custom', 'codex', 'opencode', 'speech'].includes(window.ClawFW.settingsTab)) window.ClawFW.settingsTab = 'overview';
   window.ClawFW.settingsEditing = null;
+  window.ClawFW.codexConnectionView = false;
   window.ClawFW.settingsData = null;
   setClawSpeechModelConfig(null);
   setClawSpeechPresets([]);
@@ -53,8 +54,11 @@ async function openSettings() {
 
 function closeSettings() {
   if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
+  // 输入中的 API Key 立即落盘（DOM 拆除前同步捕获值），不随面板关闭丢弃
+  flushOpenCodeKeySave();
   window.ClawFW.settingsOpen = false;
   window.ClawFW.settingsEditing = null;
+  window.ClawFW.codexConnectionView = false;
   window.ClawFW.settingsData = null;
   window.ClawFW._speechEditing = null;
   setClawSpeechPresets([]);
@@ -69,25 +73,30 @@ function presetSourceLabel(preset) {
   return preset.provider || 'Custom';
 }
 
+// 空态设计：对齐右侧面板 feature-panel-empty 的「标题 + 说明」形态
+function renderCatalogEmptyState(title, detail) {
+  return '<div class="settings-catalog-empty"><strong>' + escapeHtml(title) + '</strong>'
+    + (detail ? '<span>' + escapeHtml(detail) + '</span>' : '') + '</div>';
+}
+
 function renderActiveModelBanner(isZh, name, detail) {
   return '<div class="settings-section"><div class="settings-active-banner"><div class="settings-active-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 1 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 1-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 1-.33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 1-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 1 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0 .33 1.82V9a1.65 1.65 0 0 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div><div class="settings-active-info"><div class="settings-active-label">' + (isZh ? '当前选中' : 'CURRENTLY SELECTED') + '</div><div class="settings-active-name">' + escapeHtml(name) + '</div><div class="settings-active-detail">' + escapeHtml(detail) + '</div></div><span class="settings-active-badge">' + (isZh ? '生效中' : 'Active') + '</span></div></div>';
 }
 
-function renderOverviewContent(presets, dm, currentPreset, isZh) {
+function renderOverviewContent(presets, dm, isZh) {
   const navIcons = {
-    custom: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
-    codex: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
-    opencode: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>',
-    speech: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>',
+    custom: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
+    codex: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    opencode: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>',
+    speech: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>',
   };
+  // 排序与文案：订阅型供应商在前（开箱即用），自定义兜底在后；文案面向用户收益而非工程动作
   const navItems = [
-    { key: 'custom', title: isZh ? '自定义模型' : 'Custom Models', desc: isZh ? '添加和管理自定义 API 模型' : 'Add and manage custom API models' },
-    { key: 'codex', title: 'Codex', desc: isZh ? '连接 OpenAI 账户，添加 Codex 模型' : 'Connect your OpenAI account to add Codex models' },
-    { key: 'opencode', title: 'OpenCode', desc: isZh ? '配置 Zen / Go 连接，添加 OpenCode 模型' : 'Configure Zen / Go to add OpenCode models' },
-    { key: 'speech', title: isZh ? '语音模型' : 'Speech Model', desc: isZh ? '配置语音输入使用的模型' : 'Configure the model used for speech input' },
+    { key: 'codex', title: isZh ? '使用 Codex 模型' : 'Use Codex models', desc: isZh ? '连接 OpenAI 账户，使用 Codex 订阅支持的模型' : 'Sign in with your OpenAI account and use the models in your Codex plan' },
+    { key: 'opencode', title: isZh ? '使用 OpenCode 模型' : 'Use OpenCode models', desc: isZh ? '配置 OpenCode API Key，选择全球多家精选AI模型' : 'Add an OpenCode API key and pick from curated models worldwide' },
+    { key: 'custom', title: isZh ? '添加自定义模型' : 'Add a custom model', desc: isZh ? '支持 OpenAI Chat Completions、Responses 和 Anthropic Messages API' : 'Works with OpenAI Chat Completions, Responses and Anthropic Messages APIs' },
+    { key: 'speech', title: isZh ? '配置语音输入' : 'Set up voice input', desc: isZh ? '选择语音识别ASR模型，将语音转换为文字' : 'Pick an ASR model to turn speech into text' },
   ];
-  const bannerName = currentPreset ? (currentPreset.name || currentPreset.model) : (dm.model || (isZh ? '未选择模型' : 'No model selected'));
-  const bannerDetail = (currentPreset ? presetSourceLabel(currentPreset) : (dm.provider || '—')) + ' · ' + (dm.model || '—');
   const cards = presets.map((p, idx) => {
     const isActive = dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl;
     return [
@@ -115,15 +124,16 @@ function renderOverviewContent(presets, dm, currentPreset, isZh) {
       '</div>',
     ].join('');
   }).join('');
-  return renderActiveModelBanner(isZh, bannerName, bannerDetail)
-    + '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '快速配置' : 'Quick setup') + '</div>'
+  return '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '快速配置' : 'Quick setup') + '</div>'
       + '<div class="settings-overview-nav">' + navItems.map((item) =>
         '<button type="button" class="settings-overview-nav-item" onclick="switchSettingsTab(\'' + item.key + '\')">'
         + '<span class="settings-overview-nav-icon">' + navIcons[item.key] + '</span>'
         + '<span><span class="settings-overview-nav-title">' + item.title + '</span><div class="settings-overview-nav-desc">' + item.desc + '</div></span>'
         + '</button>').join('') + '</div></div>'
     + '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '模型列表' : 'Models') + '<span class="settings-section-hint">' + (isZh ? '点击卡片将其设为当前选择' : 'Click a card to make it the current selection') + '</span></div>'
-      + '<div class="settings-presets-grid">' + (cards || '<div class="ph-settings-empty">' + (isZh ? '暂无模型，先从上方添加' : 'No models yet — add one above') + '</div>') + '</div></div>';
+      + (cards
+        ? '<div class="settings-presets-grid">' + cards + '</div>'
+        : renderCatalogEmptyState(isZh ? '暂无模型' : 'No models yet', isZh ? '从上方快速配置中选择一类开始添加' : 'Pick a category in Quick setup above to add one')) + '</div>';
 }
 
 function renderModelCatalogSettingsOverlay(host, data) {
@@ -132,13 +142,15 @@ function renderModelCatalogSettingsOverlay(host, data) {
   const presets = Array.isArray(data.presets) ? data.presets : [];
   const connections = data.connections || { opencode: { hasApiKey: false, tier: 'zen' } };
   const catalog = window.ClawFW.modelCatalogs?.[tab] || { models: [], loaded: false, loading: false, error: '' };
-  const labels = { overview: isZh ? '总览' : 'Overview', custom: isZh ? '自定义' : 'Custom', codex: 'Codex', opencode: 'OpenCode', speech: isZh ? '语音模型' : 'Speech Model' };
-  const nav = ['overview', 'custom', 'codex', 'opencode', 'speech'].map((key) =>
+  const labels = { overview: isZh ? '总览' : 'Overview', custom: isZh ? '自定义模型' : 'Custom', codex: 'Codex', opencode: 'OpenCode', speech: isZh ? '语音识别' : 'Speech' };
+  // 侧栏分组：核心四项直排，「其他」之下放语音识别，与总览快速配置同序
+  const tabButton = (key) =>
     '<button class="ph-settings-tab' + (tab === key ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'' + key + '\')">'
-      + '<span class="ph-settings-tab-label">' + labels[key] + '</span></button>'
-  ).join('');
+    + '<span class="ph-settings-tab-label">' + labels[key] + '</span></button>';
+  const nav = ['overview', 'codex', 'opencode', 'custom'].map(tabButton).join('')
+    + '<div class="ph-settings-tab-group">' + (isZh ? '其他' : 'Other') + '</div>'
+    + tabButton('speech');
   const dm = data.config?.defaultModel || {};
-  const currentPreset = presets.find((preset) => dm.model === preset.model && dm.provider === preset.provider && dm.baseUrl === preset.baseUrl);
   const speechConfig = getClawSpeechModelConfig() || {};
   const speechPreset = getClawSpeechPresets().find((preset) => preset.baseUrl === speechConfig.baseUrl && preset.apiKey === speechConfig.apiKey && preset.model === speechConfig.model && (preset.apiType || 'chat') === (speechConfig.apiType || 'chat'));
   const editing = Number.isInteger(window.ClawFW.settingsEditing) ? window.ClawFW.settingsEditing : null;
@@ -146,16 +158,18 @@ function renderModelCatalogSettingsOverlay(host, data) {
 
   let content = '';
   if (tab === 'overview') {
-    content = renderOverviewContent(presets, dm, currentPreset, isZh);
+    content = renderOverviewContent(presets, dm, isZh);
   } else if (tab === 'speech') {
     const banner = speechPreset ? renderActiveModelBanner(isZh, speechPreset.name || speechPreset.model, speechApiTypeLabel(speechPreset.apiType) + ' · ' + (speechPreset.model || '—')) : '';
     const speechParts = renderSpeechModelSection(isZh);
-    content = banner + speechParts.content + (speechEditing === null ? '<div class="settings-actions settings-speech-add"><button class="settings-btn settings-btn-primary" type="button" onclick="addSpeechPreset()">+ ' + (isZh ? '添加预设' : 'Add preset') + '</button></div>' : '');
+    content = banner + speechParts.content;
   } else if (tab === 'custom') {
     const customPresets = presets.map((p, idx) => ({ p, idx })).filter(({ p }) => !p.catalogProvider && p.authType !== 'oauth-codex' && !['OpenCode Zen', 'OpenCode Go'].includes(p.providerName));
     content = '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '自定义模型' : 'Custom models') + '</div>'
-      + '<div class="settings-presets-grid">' + (customPresets.length ? customPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, false)).join('') : '<div class="ph-settings-empty">' + (isZh ? '尚无自定义模型' : 'No custom models yet') + '</div>') + '</div>'
-      + '<div class="settings-actions"><button class="settings-btn settings-btn-primary" type="button" onclick="addSettingsPreset()">+ ' + (isZh ? '添加自定义模型' : 'Add custom model') + '</button></div></div>';
+      + (customPresets.length
+        ? '<div class="settings-presets-grid">' + customPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, false, dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl)).join('') + '</div>'
+        : renderCatalogEmptyState(isZh ? '尚无自定义模型' : 'No custom models', isZh ? '点击右下角「添加模型」，接入任意 OpenAI 兼容端点' : 'Hit "Add model" in the corner to connect any OpenAI-compatible endpoint'))
+      + '</div>';
   } else {
     const isCodex = tab === 'codex';
     const selected = window.ClawFW.modelCatalogSelection || {};
@@ -168,26 +182,50 @@ function renderModelCatalogSettingsOverlay(host, data) {
       : catalog.loading ? '<div class="settings-catalog-status">' + (isZh ? '正在刷新模型目录…' : 'Refreshing model catalog…') + '</div>'
       : catalog.loaded ? '<div class="settings-catalog-status">' + (isZh ? '目录已更新' : 'Catalog refreshed') + '</div>' : '';
     const connectionStatus = window.ClawFW.oauthConnectionStatus || 'unknown';
-    const connectionCard = isCodex
-      ? '<div class="settings-section settings-connection-card"><div class="settings-connection-head"><div><div class="settings-connection-title">OpenAI Auth</div><div class="settings-connection-description">' + (isZh ? '通过 OpenAI 账户连接 Codex 模型目录' : 'Connect your OpenAI account to discover Codex models') + '</div></div><span class="settings-connection-status ' + (connectionStatus === 'connected' ? 'connected' : '') + '">' + (connectionStatus === 'connected' ? (isZh ? '已连接' : 'Connected') : (isZh ? '连接状态' : 'Connection')) + '</span></div><div id="oauth-status-display" class="oauth-status-text"></div><div class="oauth-action-row"><button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin(\'browser\')">' + (isZh ? '浏览器授权登录' : 'Login in Browser') + '</button><button class="settings-btn settings-btn-secondary" type="button" onclick="startOAuthLogin(\'device\')">' + (isZh ? '设备码登录' : 'Device Code Login') + '</button><button class="settings-btn settings-btn-secondary settings-btn-quiet" type="button" onclick="logoutOAuth()">' + (isZh ? '登出' : 'Logout') + '</button></div></div>'
-      : '<div class="settings-section settings-connection-card"><div class="settings-connection-head"><div><div class="settings-connection-title">OpenCode</div><div class="settings-connection-description">' + (isZh ? '配置 API Key 连接以发现可用模型' : 'Configure an API key to discover models') + '</div></div><span class="settings-connection-status ' + (connections.opencode?.hasApiKey ? 'connected' : '') + '">' + (connections.opencode?.hasApiKey ? (isZh ? '已配置' : 'Configured') : (isZh ? '未配置' : 'Not configured')) + '</span></div><div class="settings-connection-fields"><div class="settings-field"><label>API Key</label><div class="settings-key-field"><input class="settings-input" id="settings-opencode-key" type="password" autocomplete="new-password" value="' + escapeHtml(connections.opencode?.apiKey || '') + '" placeholder="' + (connections.opencode?.hasApiKey ? (isZh ? '已保存，留空保持不变' : 'Saved; leave blank to keep') : 'sk-…') + '"><button class="settings-key-visibility" type="button" aria-label="' + (isZh ? '显示或隐藏 API Key' : 'Show or hide API key') + '" title="' + (isZh ? '显示或隐藏' : 'Show or hide') + '" onclick="toggleOpenCodeKeyVisibility()"><svg id="opencode-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg id="opencode-eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button></div></div><button class="settings-btn settings-btn-primary" type="button" onclick="saveModelConnection()">' + (isZh ? '保存连接' : 'Save connection') + '</button></div></div>';
-    const addedGrid = providerPresets.length ? providerPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, catalog.loaded && !catalog.models.some((m) => m.id === p.model))).join('') : '<div class="ph-settings-empty">' + (isZh ? '尚未添加模型' : 'No models added') + '</div>';
+    let connectionCard;
+    if (isCodex) {
+      // Codex 连接：列表页只保留入口卡片，登录/鉴权等复杂操作进入专门配置页；不做状态徽章提升
+      const cardIntro = '<div><div class="settings-connection-title">OpenAI Auth</div><div class="settings-connection-description">' + (isZh ? '通过 OpenAI 账户连接 Codex 模型目录' : 'Connect your OpenAI account to discover Codex models') + '</div></div>';
+      if (window.ClawFW.codexConnectionView) {
+        // 专门配置页：标题与登录操作同行，状态面板承载登录流程反馈，登出仅在已连接时出现
+        connectionCard = '<div class="settings-section settings-connection-card settings-codex-auth">'
+          + '<div class="settings-connection-row">' + cardIntro
+          + '<div class="oauth-action-row"><button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin(\'browser\')">' + (isZh ? '浏览器授权登录' : 'Login in Browser') + '</button><button class="settings-btn settings-btn-secondary" type="button" onclick="startOAuthLogin(\'device\')">' + (isZh ? '设备码登录' : 'Device Code Login') + '</button><button class="settings-btn settings-btn-secondary settings-btn-quiet" id="codex-auth-logout" type="button" style="' + (connectionStatus === 'connected' ? '' : 'display:none;') + '" onclick="logoutOAuth()">' + (isZh ? '登出' : 'Logout') + '</button></div></div>'
+          + '<div id="oauth-status-display" class="oauth-status-text settings-codex-auth-status"></div></div>';
+      } else {
+        connectionCard = '<div class="settings-section settings-connection-card settings-connection-entry" role="button" tabindex="0" onclick="openCodexConnectionView()" onkeydown="if(event.key===\'Enter\'&&event.target===this)openCodexConnectionView()">'
+          + '<div class="settings-connection-row">' + cardIntro
+          + '<button class="settings-btn settings-btn-secondary" type="button" onclick="event.stopPropagation();openCodexConnectionView()">' + (isZh ? '配置登录' : 'Configure Login') + '</button>'
+          + '</div></div>';
+      }
+    } else {
+      // OpenCode 连接：标题与 API Key 输入同行，输入即自动保存；不做状态徽章提升，保存失败反馈走目录状态区
+      connectionCard = '<div class="settings-section settings-connection-card"><div class="settings-connection-row"><div><div class="settings-connection-title">OpenCode</div><div class="settings-connection-description">' + (isZh ? '配置 API Key 连接以发现可用模型，输入后自动保存' : 'Configure an API key to discover models; it saves as you type') + '</div></div><div class="settings-field settings-connection-inline"><label>API Key</label><div class="settings-key-field"><input class="settings-input" id="settings-opencode-key" type="password" autocomplete="new-password" value="' + escapeHtml(connections.opencode?.apiKey || '') + '" placeholder="' + (connections.opencode?.hasApiKey ? (isZh ? '已保存，留空保持不变' : 'Saved; leave blank to keep') : 'sk-…') + '" oninput="onOpenCodeKeyInput()" onblur="flushOpenCodeKeySave()"><button class="settings-key-visibility" type="button" aria-label="' + (isZh ? '显示或隐藏 API Key' : 'Show or hide API key') + '" title="' + (isZh ? '显示或隐藏' : 'Show or hide') + '" onclick="toggleOpenCodeKeyVisibility()"><svg id="opencode-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg id="opencode-eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button></div></div></div></div>';
+    }
+    const addedGrid = providerPresets.length
+      ? '<div class="settings-presets-grid">' + providerPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, catalog.loaded && !catalog.models.some((m) => m.id === p.model), dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl)).join('') + '</div>'
+      : renderCatalogEmptyState(isZh ? '尚未添加模型' : 'No models added', isZh ? '从下方可添加列表中选择模型加入' : 'Pick models from the available list below');
     // 可添加行索引寻址（inline onclick 传索引而非模型 id，避免注入与转义问题）
     window.ClawFW.modelCatalogAvailable = available.map((m) => m.id);
     const selectedCount = available.filter((m) => selected[m.id]).length;
-    const modelInfoSpan = (m) => '<span class="settings-catalog-info"><strong>' + escapeHtml(m.displayName || m.id) + '</strong><small>' + escapeHtml(m.id) + '</small></span>';
-    const availableHtml = available.length ? available.map((m, i) => multi
+    const modelInfoSpan = (m) => '<span class="settings-catalog-info"><strong>' + escapeHtml(m.displayName || m.id) + '</strong></span>';
+    const availableHtml = available.length ? '<div class="settings-catalog-list">' + available.map((m, i) => multi
       ? '<label class="settings-catalog-model"><input type="checkbox" value="' + escapeHtml(m.id) + '" onchange="setCatalogModelSelection(this)" ' + (selected[m.id] ? 'checked' : '') + '>' + modelInfoSpan(m) + '</label>'
-      : '<div class="settings-catalog-model" onclick="addCatalogModel(\'' + tab + '\', ' + i + ')">' + modelInfoSpan(m) + '<span class="settings-catalog-add">+</span></div>'
-    ).join('') : '<div class="ph-settings-empty">' + (catalog.loaded ? (isZh ? '没有可添加的模型' : 'No models available to add') : (isZh ? '刷新目录以查找模型' : 'Refresh the catalog to discover models')) + '</div>';
+      : '<div class="settings-catalog-model" onclick="addCatalogModel(\'' + tab + '\', ' + i + ')">' + modelInfoSpan(m) + '<span class="settings-catalog-add"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span></div>'
+    ).join('') + '</div>'
+      : renderCatalogEmptyState(
+          catalog.loading ? (isZh ? '正在刷新模型目录…' : 'Refreshing catalog…') : catalog.loaded ? (isZh ? '没有可添加的模型' : 'Nothing to add') : (isZh ? '目录尚未加载' : 'Catalog not loaded'),
+          catalog.loading ? '' : catalog.loaded ? (isZh ? '目录中的模型均已添加' : 'All catalog models are already added') : (isZh ? '点击上方刷新获取可添加的模型' : 'Use Refresh above to discover models'));
     const tierSelect = '<select class="settings-input settings-catalog-tier" id="settings-opencode-tier" data-claw-select data-claw-compact="true" onchange="onOpenCodeServiceChange()"><option value="zen"' + (connections.opencode?.tier !== 'go' ? ' selected' : '') + '>Zen</option><option value="go"' + (connections.opencode?.tier === 'go' ? ' selected' : '') + '>Go</option></select>';
     const toolbarActions = (!isCodex ? tierSelect : '')
       + '<button class="settings-btn settings-btn-secondary" type="button" onclick="toggleCatalogMultiSelect()">' + (multi ? (isZh ? '退出多选' : 'Exit multi-select') : (isZh ? '多选' : 'Multi-select')) + '</button>'
       + (multi ? '<button class="settings-btn settings-btn-primary" type="button" id="settings-catalog-add-selected" onclick="addSelectedCatalogModels(\'' + tab + '\')">' + (isZh ? '添加所选' + (selectedCount ? '（' + selectedCount + '）' : '') : 'Add selected' + (selectedCount ? ' (' + selectedCount + ')' : '')) + '</button>' : '')
       + '<button class="settings-btn settings-btn-secondary" type="button" onclick="refreshModelCatalog(\'' + tab + '\')">' + (isZh ? '刷新' : 'Refresh') + '</button>';
+    // 间距节奏由 .settings-catalog-page 统一控制：区块间 16px，标题到内容 12px
     content = connectionCard
-      + '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '已添加' : 'Added') + '</div><div class="settings-presets-grid">' + addedGrid + '</div></div>'
-      + '<div class="settings-section"><div class="settings-catalog-toolbar"><div class="settings-section-title">' + (isZh ? '可添加' : 'Available') + '</div><div class="settings-catalog-status">' + statusHtml + '</div><div class="settings-actions">' + toolbarActions + '</div></div><div class="settings-catalog-list">' + availableHtml + '</div></div>';
+      + (isCodex && window.ClawFW.codexConnectionView ? '' : ''
+        + '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '已添加' : 'Added') + '</div>' + addedGrid + '</div>'
+        + '<div class="settings-section"><div class="settings-catalog-toolbar"><div class="settings-section-title">' + (isZh ? '可添加' : 'Available') + '</div><div class="settings-catalog-status">' + statusHtml + '</div><div class="settings-actions">' + toolbarActions + '</div></div>' + availableHtml + '</div>');
   }
 
   const body = editing !== null ? renderSettingsEditForm(editing, presets, isZh) : content;
@@ -197,13 +235,33 @@ function renderModelCatalogSettingsOverlay(host, data) {
   } else if (tab === 'speech' && speechEditing !== null) {
     footer = '<div class="settings-footer"><div class="settings-actions"><button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSpeechPresetEdit()">' + (isZh ? '取消' : 'Cancel') + '</button><button class="settings-btn settings-btn-primary" type="button" data-edit="' + speechEditing + '" onclick="saveSpeechPreset(this.dataset.edit)">' + (isZh ? '保存' : 'Save') + '</button></div></div>';
   }
-  // 连接卡片输入状态跨渲染保留：目录刷新等重渲染不清空正在编辑的 API Key 与显隐状态
+  // 右下角悬浮按钮：自定义模型页「添加模型」、语音识别页「配置模型」（编辑态由 settings-footer 接管，互斥不叠加）
+  const fabAction = tab === 'custom' ? { fn: 'addSettingsPreset()', label: isZh ? '添加模型' : 'Add model' }
+    : tab === 'speech' ? { fn: 'addSpeechPreset()', label: isZh ? '配置模型' : 'Configure model' } : null;
+  const fab = editing === null && speechEditing === null && fabAction
+    ? '<button class="settings-fab" type="button" onclick="' + fabAction.fn + '"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>' + fabAction.label + '</button>'
+    : '';
+  // 连接卡片输入状态跨渲染保留：自动保存/目录刷新等重渲染不打断正在输入的 API Key
   const opencodeKeyEl = document.getElementById('settings-opencode-key');
-  const opencodeKeySnapshot = opencodeKeyEl ? { value: opencodeKeyEl.value, visible: opencodeKeyEl.type === 'text' } : null;
+  const opencodeKeySnapshot = opencodeKeyEl ? {
+    value: opencodeKeyEl.value,
+    visible: opencodeKeyEl.type === 'text',
+    focused: document.activeElement === opencodeKeyEl,
+    selStart: opencodeKeyEl.selectionStart,
+    selEnd: opencodeKeyEl.selectionEnd,
+  } : null;
+  // 配置子页：head 左侧返回按钮（项目既有形态：feature-detail-close + 左箭头，同 ph-model-config / feature-store）
+  const isCodexAuthPage = tab === 'codex' && window.ClawFW.codexConnectionView;
+  const headLeftHtml = isCodexAuthPage
+    ? '<div style="display:flex;align-items:center;gap:4px;">'
+      + '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" onclick="closeCodexConnectionView()" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>'
+      + '<div><div class="feature-detail-title">' + (isZh ? '设置 · Codex 登录' : 'Settings · Codex Login') + '</div><div class="feature-detail-subtitle">' + (isZh ? '连接 OpenAI 账户以使用 Codex 模型' : 'Connect your OpenAI account to use Codex models') + '</div></div></div>'
+    : '<div><div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div><div class="feature-detail-subtitle">' + (isZh ? '管理模型连接与模型' : 'Manage model connections and models') + '</div></div>';
   host.innerHTML = '<div class="feature-detail-overlay"><div class="feature-detail-window ph-settings-window">'
-    + '<div class="feature-detail-head"><div><div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div><div class="feature-detail-subtitle">' + (isZh ? '管理模型连接与模型' : 'Manage model connections and models') + '</div></div><button class="feature-detail-close" type="button" onclick="closeSettings()">×</button></div>'
-    + '<div class="ph-settings-layout"><div class="ph-settings-sidebar">' + nav + '</div><div class="ph-settings-content settings-catalog-page">' + body + '</div></div>'
+    + '<div class="feature-detail-head">' + headLeftHtml + '<button class="feature-detail-close" type="button" onclick="closeSettings()">×</button></div>'
+    + '<div class="ph-settings-layout"><div class="ph-settings-sidebar">' + nav + '</div><div class="ph-settings-content settings-catalog-page' + (tab === 'codex' || tab === 'opencode' ? ' settings-scroll-quiet' : '') + '">' + body + '</div></div>'
     + footer
+    + fab
     + '</div></div>';
   if (opencodeKeySnapshot) {
     const restoredKey = document.getElementById('settings-opencode-key');
@@ -215,6 +273,10 @@ function renderModelCatalogSettingsOverlay(host, data) {
         const eyeOff = document.getElementById('opencode-eye-off-icon');
         if (eyeOn) eyeOn.style.display = 'none';
         if (eyeOff) eyeOff.style.display = 'block';
+      }
+      if (opencodeKeySnapshot.focused) {
+        restoredKey.focus();
+        try { restoredKey.setSelectionRange(opencodeKeySnapshot.selStart, opencodeKeySnapshot.selEnd); } catch (e) { /* type=password may reject on some browsers */ }
       }
     }
   }
@@ -303,7 +365,10 @@ async function addCatalogModels(provider, ids) {
       authType: isCodex ? 'oauth-codex' : '', clientId: isCodex ? 'app_EMoamEEZ73f0CkXaXp7hrann' : '',
       model: model.id, baseUrl: isCodex ? 'https://chatgpt.com/backend-api/codex' : (data.connections?.opencode?.tier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL),
       apiKey: '', thinkingEffort: isCodex ? (model.thinkingEffort || null) : null,
-      thinkingBudgetTokens: null, maxTokens: null, temperature: null, vision: false, starred: false,
+      // codex 目录模型创建默认值：总输出预算 0（不限）、温度 0、思考预算留空（用厂商默认）；
+      // 上下文保留目录真实窗口（上游 context_window），压缩阈值与全局一致。
+      thinkingBudgetTokens: null, maxTokens: isCodex ? 0 : null, temperature: isCodex ? 0 : null,
+      vision: isCodex, starred: false,
       contextLength: model.contextLength || (isCodex ? null : 200000), compressRatio: 80, customHeaders: [],
     });
   }
@@ -322,23 +387,85 @@ async function addSelectedCatalogModels(provider) {
   await addCatalogModels(provider, Array.from(checks, (input) => input.value));
 }
 
-async function saveModelConnection() {
+let _opencodeKeySaveTimer = null;
+
+function onOpenCodeKeyInput() {
+  if (_opencodeKeySaveTimer) clearTimeout(_opencodeKeySaveTimer);
+  _opencodeKeySaveTimer = setTimeout(() => {
+    _opencodeKeySaveTimer = null;
+    saveModelConnection({ quiet: true });
+  }, 700);
+}
+
+async function flushOpenCodeKeySave() {
+  if (!_opencodeKeySaveTimer) return;
+  clearTimeout(_opencodeKeySaveTimer);
+  _opencodeKeySaveTimer = null;
+  await saveModelConnection({ quiet: true });
+}
+
+function updateOpenCodeSaveFeedback(failed, message) {
+  // 状态徽章已取消：自动保存失败就地写入目录状态区（成功不打扰，下次目录刷新自然覆盖）
+  if (!failed) return;
+  const status = document.querySelector('.settings-catalog-status');
+  if (status) { status.classList.add('error'); status.textContent = message; }
+}
+
+async function saveModelConnection(opts) {
+  const quiet = opts?.quiet === true;
   const key = document.getElementById('settings-opencode-key')?.value || '';
   const tier = document.getElementById('settings-opencode-tier')?.value === 'go' ? 'go' : 'zen';
+  const prev = window.ClawFW.settingsData?.connections?.opencode;
   const response = await fetch('/protoclaw/model_connections', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ opencode: { apiKey: key, tier } }),
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) { alert(result.error || 'Failed to save connection'); return; }
+  }).catch(() => null);
+  const result = response ? await response.json().catch(() => ({})) : {};
+  if (!response || !response.ok) {
+    if (!quiet) alert(result.error || 'Failed to save connection');
+    updateOpenCodeSaveFeedback(true, currentLanguage === 'zh' ? 'API Key 自动保存失败' : 'Auto-save failed');
+    return;
+  }
+  // 面板可能已在请求飞行中关闭（settingsData 置空），此时无需再更新本地状态
+  if (!window.ClawFW.settingsOpen) return;
   window.ClawFW.settingsData.connections = { opencode: result.opencode };
-  renderSettingsOverlay();
-  if (result.opencode?.hasApiKey) refreshModelCatalog('opencode');
+  // 自动保存成功不打扰（不重渲染，避免打断输入焦点）；显式保存走整体重渲染
+  if (!quiet) renderSettingsOverlay();
+  // 凭证或服务发生变化才刷新目录；输入过程中的重复保存不重复拉取
+  const changed = (result.opencode?.apiKey || '') !== (prev?.apiKey || '')
+    || (result.opencode?.tier === 'go') !== (prev?.tier === 'go');
+  if (result.opencode?.hasApiKey && changed) refreshModelCatalog('opencode');
 }
 
-function modelCatalogPresetCard(preset, idx, isZh, missing) {
+function openCodexConnectionView() {
+  window.ClawFW.codexConnectionView = true;
+  renderSettingsOverlay();
+  refreshOAuthStatus();
+  // 进入配置页时检查代理环境（未配置代理时 OpenAI 登录请求可能被地区限制拦截）
+  checkOAuthProxy(currentLanguage === 'zh');
+}
+
+function closeCodexConnectionView() {
+  // 返回列表页时终止未完成的登录轮询（服务端流程继续，状态以再次进入时的刷新为准）
+  if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
+  window.ClawFW.codexConnectionView = false;
+  renderSettingsOverlay();
+  refreshOAuthStatus();
+}
+
+function modelCatalogPresetCard(preset, idx, isZh, missing, isActive) {
   const providerLabel = preset.catalogProvider === 'codex' || preset.authType === 'oauth-codex' ? 'Codex' : (preset.catalogProvider === 'opencode' || ['OpenCode Zen', 'OpenCode Go'].includes(preset.providerName) ? 'OpenCode' : (preset.provider || 'Custom'));
-  return '<div class="settings-preset-card"><div class="settings-preset-info" onclick="editSettingsPreset(' + idx + ')"><div class="settings-preset-name">' + escapeHtml(preset.name || preset.model) + '</div><div class="settings-preset-detail">' + escapeHtml(providerLabel + ' · ' + preset.model) + (missing ? ' <span class="preset-tag">' + (isZh ? '目录中不存在' : 'Not in catalog') + '</span>' : '') + '</div></div><div class="settings-preset-actions"><button class="settings-icon-btn" type="button" title="' + (isZh ? '详情' : 'Details') + '" onclick="editSettingsPreset(' + idx + ')">›</button><button class="settings-icon-btn danger" type="button" title="' + (isZh ? '移除' : 'Remove') + '" onclick="deleteSettingsPreset(' + idx + ')">×</button></div></div>';
+  // 与总览/语音预设卡同构：圆点 + 名称/详情 + 编辑/删除图标按钮，整卡点击应用
+  return '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" onclick="applySettingsPreset(' + idx + ')">'
+    + '<div class="settings-preset-dot"></div>'
+    + '<div class="settings-preset-info">'
+    + '<div class="settings-preset-name">' + escapeHtml(preset.name || preset.model) + '</div>'
+    + '<div class="settings-preset-detail">' + escapeHtml(providerLabel + ' · ' + preset.model) + (missing ? ' <span class="preset-tag">' + (isZh ? '目录中不存在' : 'Not in catalog') + '</span>' : '') + '</div>'
+    + '</div>'
+    + '<div class="settings-preset-actions">'
+    + '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSettingsPreset(' + idx + ')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>'
+    + '<button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" onclick="event.stopPropagation();deleteSettingsPreset(' + idx + ')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>'
+    + '</div></div>';
 }
 
 function renderSettingsOverlay() {
@@ -745,13 +872,14 @@ function addSettingsPreset() {
     model: '',
     baseUrl: '',
     apiKey: '',
+    // 新增模型默认值：思考/视觉默认开启，预算与上下文给常用经验值，用户可改
     thinkingEffort: 'medium',
-    thinkingBudgetTokens: null,
-    maxTokens: null,
+    thinkingBudgetTokens: 32000,
+    maxTokens: 96000,
     temperature: null,
-    vision: false,
+    vision: true,
     starred: false,
-    contextLength: 200000,
+    contextLength: 1000000,
     compressRatio: 80,
     customHeaders: [],
   });
@@ -869,8 +997,8 @@ async function saveSettingsPreset(idx, opts) {
     name: (el('settings-preset-name')?.value || '').trim(),
     thinkingEffort: thinkingEffort,
     thinkingBudgetTokens: thinkingBudgetTokens,
-    maxTokens: maxTokensRaw !== '' ? parseInt(maxTokensRaw, 10) || null : null,
-    temperature: tempRaw !== '' ? parseFloat(tempRaw) || null : null,
+    maxTokens: maxTokensRaw !== '' ? (Number.isFinite(parseInt(maxTokensRaw, 10)) ? parseInt(maxTokensRaw, 10) : null) : null,
+    temperature: tempRaw !== '' ? (Number.isFinite(parseFloat(tempRaw)) ? parseFloat(tempRaw) : null) : null,
     vision: el('settings-preset-vision')?.checked === true,
     starred: existing.starred === true,
     contextLength: contextLengthRaw !== '' ? parseInt(contextLengthRaw, 10) || null : null,
@@ -1036,8 +1164,11 @@ async function saveSettingsConfig() {
 window.openSettings = openSettings;
 window.closeSettings = closeSettings;
 window.switchSettingsTab = function(tab) {
+  // 重渲染前先落盘输入中的 OpenCode API Key（同步捕获 DOM 值后再替换）
+  flushOpenCodeKeySave();
   window.ClawFW.settingsTab = ['overview', 'custom', 'codex', 'opencode', 'speech'].includes(tab) ? tab : 'overview';
   window.ClawFW.settingsEditing = null;
+  window.ClawFW.codexConnectionView = false;
   if (tab === 'speech') window.ClawFW._speechEditing = null;
   renderSettingsOverlay();
   if (tab === 'codex') {
@@ -1053,7 +1184,11 @@ window.addCatalogModel = addCatalogModel;
 window.toggleCatalogMultiSelect = toggleCatalogMultiSelect;
 window.onOpenCodeServiceChange = onOpenCodeServiceChange;
 window.toggleOpenCodeKeyVisibility = toggleOpenCodeKeyVisibility;
+window.onOpenCodeKeyInput = onOpenCodeKeyInput;
+window.flushOpenCodeKeySave = flushOpenCodeKeySave;
 window.saveModelConnection = saveModelConnection;
+window.openCodexConnectionView = openCodexConnectionView;
+window.closeCodexConnectionView = closeCodexConnectionView;
 window.addSettingsPreset = addSettingsPreset;
 window.editSettingsPreset = editSettingsPreset;
 window.deleteSettingsPreset = deleteSettingsPreset;

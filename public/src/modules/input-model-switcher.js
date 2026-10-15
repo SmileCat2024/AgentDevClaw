@@ -204,8 +204,19 @@ window.toggleInputModelDropdown = function(event) {
     _inputModelDropdown = dropdown;
     dropdown.className = 'ccb-model-dropdown';
 
-    let html = '<div class="ccb-model-dropdown-list">';
-    presets.forEach(function(p) {
+     let selectedSource = 'all';
+     const sourceLabel = function(p) {
+       if (p.catalogProvider === 'codex' || p.authType === 'oauth-codex') return 'codex';
+       if (p.catalogProvider === 'opencode' || ['OpenCode Zen', 'OpenCode Go'].includes(p.providerName)) return 'opencode';
+       return 'custom';
+     };
+     const sourceTabs = '<div class="ccb-model-source-tabs">'
+       + ['all', 'custom', 'codex', 'opencode'].map(function(source) {
+         const label = source === 'all' ? (isZh ? '全部' : 'All') : source === 'custom' ? (isZh ? '自定义' : 'Custom') : source === 'codex' ? 'Codex' : 'OpenCode';
+         return '<button type="button" class="ccb-model-source-tab' + (source === 'all' ? ' active' : '') + '" data-source="' + source + '">' + label + '</button>';
+       }).join('') + '</div>';
+      let html = '<div class="ccb-model-dropdown-card">' + sourceTabs + '<div class="ccb-model-dropdown-list">';
+     presets.forEach(function(p) {
       let name = p.name || p.model || '';
       let isActive = name === currentPreset;
       let visionIcon = p.vision === true
@@ -214,7 +225,7 @@ window.toggleInputModelDropdown = function(event) {
       let ctxText = p.contextLength && p.contextLength > 0
         ? Math.round(p.contextLength / 1000) + 'K'
         : '';
-      html += '<div class="ccb-md-item' + (isActive ? ' active' : '') + '" data-preset="' + escapeHtml(name) + '">'
+      html += '<div class="ccb-md-item' + (isActive ? ' active' : '') + '" data-source="' + sourceLabel(p) + '" data-preset="' + escapeHtml(name) + '">'
         + '<span class="ccb-md-left">'
         + '<span class="ccb-md-name">' + escapeHtml(name) + '</span>'
         + visionIcon
@@ -224,15 +235,22 @@ window.toggleInputModelDropdown = function(event) {
         + '</span>'
         + '</div>';
     });
-    html += '</div>';
+      html += '</div></div>';
     dropdown.innerHTML = html;
 
     // Position relative to the button — open upward
     let rect = btn.getBoundingClientRect();
     dropdown.style.left = rect.left + 'px';
 
-    dropdown.addEventListener('click', function(e) {
-      let item = e.target.closest('.ccb-md-item');
+     dropdown.addEventListener('click', function(e) {
+       const sourceTab = e.target.closest('.ccb-model-source-tab');
+       if (sourceTab) {
+         selectedSource = sourceTab.dataset.source || 'all';
+         dropdown.querySelectorAll('.ccb-model-source-tab').forEach(function(button) { button.classList.toggle('active', button === sourceTab); });
+         dropdown.querySelectorAll('.ccb-md-item').forEach(function(item) { item.style.display = selectedSource === 'all' || item.dataset.source === selectedSource ? '' : 'none'; });
+         return;
+       }
+       let item = e.target.closest('.ccb-md-item');
       if (!item) return;
       let presetName = item.dataset.preset;
       _closeInputModelDropdown();

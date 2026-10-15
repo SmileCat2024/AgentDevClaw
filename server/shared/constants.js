@@ -75,6 +75,7 @@ export const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
 export const DEFAULT_MODEL_CONFIG_TEMPLATE_PATH = path.join(PROJECT_ROOT, 'config', 'default.example.json');
 export const MODEL_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'default.json');
 export const MODEL_PRESETS_PATH = path.join(APP_CONFIG_ROOT, 'presets.json');
+export const MODEL_CONNECTIONS_PATH = path.join(APP_CONFIG_ROOT, 'model-connections.json');
 export const MCP_GATEWAY_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'mcp-gateway.json');
 export const REMOTE_CLAW_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'remote-claw.json');
 export const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
