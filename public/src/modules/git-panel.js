@@ -770,6 +770,19 @@
   // 泳道点整体错位（历史缺陷：展开详情后图形中间断裂）。挂载后实测每行
   // offsetTop 重绘 SVG（单一真相 = 真实 DOM），任何流式内容变化都自愈。
   let graphModel = null; // 最近一次成功计算的泳道模型（度量重绘复用）
+  // 度量重绘的 no-op 守卫：画布元素身份 + 泳道模型身份 + 行几何 + outgoing
+  // 标记全部未变时跳过 SVG 重建与 canvas 替换。历史上每个 render 周期（静默
+  // 刷新 / 轮询 repaint）都会全量重建并替换数千个 SVG 节点，大历史上这是
+  // 面板拖垮页面的主因。画布随 body/zone innerHTML 替换而重建（元素身份
+  // 变化），自然触发一次真实重绘，守卫不影响正确性。
+  const graphSyncState = { canvas: null, lanes: null, outgoing: null, tops: [] };
+  function sameRowTops(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  }
   function scheduleGraphSync() {
     if (typeof requestAnimationFrame !== 'function') return;
     requestAnimationFrame(() => {
@@ -783,11 +796,45 @@
     const root = document.querySelector('.git-history');
     const rowEls = document.querySelectorAll('.git-history-row');
     if (!root || !rowEls.length) return;
+    const canvas = root.querySelector('.git-history-canvas');
+    if (!canvas) return;
     const tops = [];
     for (let i = 0; i < rowEls.length; i++) tops.push(rowEls[i].offsetTop);
+    const outgoing = graphModel.marks ? Boolean(graphModel.marks.outgoing) : false;
+    if (graphSyncState.canvas === canvas && graphSyncState.lanes === graphModel.lanes
+      && graphSyncState.outgoing === outgoing && sameRowTops(tops, graphSyncState.tops)) {
+      return;
+    }
     const svg = window.GitGraph.buildGraphSvg(graphModel.lanes, tops, graphModel.marks);
-    const canvas = root.querySelector('.git-history-canvas');
-    if (canvas) canvas.innerHTML = svg.svg;
+    graphSyncState.canvas = canvas;
+    graphSyncState.lanes = graphModel.lanes;
+    graphSyncState.outgoing = outgoing;
+    graphSyncState.tops = tops;
+    canvas.innerHTML = svg.svg;
+  }
+
+  // 泳道模型 memo：commits 数组身份 + 分支配色键不变时直接复用。state.graph
+  // 只在真实数据变化时整体替换（loadAll / HEAD 探测补拉 / 加载更多 / 分支
+  // 切换），数组身份可靠；renderFeaturePanel 的签名求值每周期都会走
+  // renderGraphBody，大历史上重复 computeLanes 是纯浪费。
+  let lanesMemo = { commits: null, current: '', tracking: '', lanes: null };
+  function getLanes(commits) {
+    const current = state.status?.current || '';
+    const tracking = state.status?.tracking || '';
+    if (lanesMemo.commits !== commits || lanesMemo.current !== current
+      || lanesMemo.tracking !== tracking) {
+      lanesMemo = {
+        commits,
+        current,
+        tracking,
+        // refs 配色表：当前分支=主色、上游跟踪分支=副色（VS Code 同款叙事）
+        lanes: window.GitGraph.computeLanes(commits, {
+          currentBranch: current,
+          trackingBranch: tracking,
+        }),
+      };
+    }
+    return lanesMemo.lanes;
   }
 
   function renderGraphBody() {
@@ -811,11 +858,7 @@
     let lanes;
     let svg;
     try {
-      // refs 配色表：当前分支=主色、上游跟踪分支=副色（VS Code 同款叙事）
-      lanes = window.GitGraph.computeLanes(commits, {
-        currentBranch: state.status?.current || '',
-        trackingBranch: state.status?.tracking || '',
-      });
+      lanes = getLanes(commits);
       const rowTops = computeRowTops(commits, showOutgoing);
       svg = window.GitGraph.buildGraphSvg(lanes, rowTops, { outgoing: showOutgoing });
       graphModel = { lanes: lanes, marks: { outgoing: showOutgoing } };
