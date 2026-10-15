@@ -21,6 +21,7 @@ import {
   DEFAULT_CODEX_BASE_URL,
 } from '../oauth-codex.js';
 import { getActiveProxyUrl } from '../shared/proxy-manager.js';
+import { openUrlInSystem } from '../shared/system-opener.js';
 
 export function setupOAuthCodexRoutes(app, express) {
 
@@ -38,17 +39,28 @@ export function setupOAuthCodexRoutes(app, express) {
       const sessionId = createLoginSession(providerName, cid);
 
       if (loginMode === 'browser') {
-        // Local callback server + authorize URL are ready in milliseconds; the
-        // response carries authUrl so the frontend can open the browser tab
-        // inside the user-gesture call stack.
+        // Local callback server + authorize URL are ready in milliseconds;
+        // the response carries authUrl as a manual fallback.
         const { authUrl } = await beginBrowserLogin(sessionId, providerName, cid);
+        // The loopback callback only completes when the authorize URL is
+        // opened on the machine running this server, so the server itself
+        // opens the system default browser. The webview of the desktop
+        // shell cannot pop system browser windows, and a browser-side
+        // window.open fights popup blockers. Failure is non-fatal: the UI
+        // falls back to the authUrl link.
+        const openResult = await openUrlInSystem(authUrl);
+        if (!openResult.opened) {
+          console.warn(`[OAuth/Codex] Could not open the system default browser (${openResult.reason}) for session=${sessionId}; share authUrl manually`);
+        }
         return res.json({
           sessionId,
           providerName,
           mode: 'browser',
           status: 'pending',
           authUrl,
-          message: 'Browser authorization URL ready. Open authUrl and poll /protoclaw/oauth/codex/status/' + sessionId,
+          browserOpened: openResult.opened,
+          ...(openResult.opened ? {} : { browserOpenReason: openResult.reason }),
+          message: 'Browser authorization URL ready. Poll /protoclaw/oauth/codex/status/' + sessionId,
         });
       }
 

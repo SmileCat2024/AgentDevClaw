@@ -223,10 +223,8 @@ window.startOAuthLogin = async function(mode) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ providerName, clientId: defaults.defaultClientId, mode: loginMode }),
       }).then((response) => response.json()).then((data) => {
-        if (loginMode === 'browser' && data.authUrl) {
-          const popup = window.open('about:blank', '_blank');
-          if (popup) popup.location.href = data.authUrl;
-        }
+        // Browser mode: the server opens the system default browser itself
+        // (the desktop webview cannot pop one); just poll for completion.
         pollOAuthLogin(data.sessionId);
       }).catch((error) => {
         const display = document.getElementById('oauth-status-display');
@@ -254,12 +252,11 @@ window.startOAuthLogin = async function(mode) {
 
   let display = document.getElementById('oauth-status-display');
 
-  // window.open must run inside the user-gesture call stack or popup blockers
-  // kill it — open a placeholder tab now and navigate it once authUrl arrives.
-  let popup = null;
+  // Browser mode is opened by the server in the system default browser —
+  // no client-side window.open (blocked inside the desktop webview, and
+  // popup blockers complicate the plain browser case).
   if (loginMode === 'browser') {
-    try { popup = window.open('about:blank', '_blank'); } catch (e) { popup = null; }
-    if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在准备浏览器授权...' : 'Preparing browser authorization...') + '</span>';
+    if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在打开系统默认浏览器...' : 'Opening the system default browser...') + '</span>';
   } else {
     if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
   }
@@ -276,13 +273,9 @@ window.startOAuthLogin = async function(mode) {
     })
     .then(function(data) {
       if (data.error) throw new Error(data.error);
-      if (loginMode === 'browser' && data.authUrl) {
-        if (popup && !popup.closed) popup.location.href = data.authUrl;
-      }
       pollOAuthLogin(data.sessionId);
     })
     .catch(function(err) {
-      if (popup && !popup.closed) popup.close();
       if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + escapeHtml(err.message) + '</span>';
     });
 };
@@ -292,9 +285,12 @@ var _oauthPollTimer = null;
 function pollOAuthLogin(sessionId) {
   if (_oauthPollTimer) clearInterval(_oauthPollTimer);
   let isZh = currentLanguage === 'zh';
-  let display = document.getElementById('oauth-status-display');
+  // 状态区每次渲染时重新查找：期间的整体重渲染（目录刷新等）不会让轮询写入失联节点
+  let display = function() { return document.getElementById('oauth-status-display'); };
 
   let renderPending = function(sess) {
+    let el = display();
+    if (!el) return;
     let html;
     if (sess.mode === 'browser') {
       html = sess.authUrl
@@ -303,7 +299,7 @@ function pollOAuthLogin(sessionId) {
           + '<a href="' + escapeHtml(sess.authUrl) + '" target="_blank">' + (isZh ? '点击此处打开' : 'open it here') + '</a>'
           + (isZh ? '（需在运行本服务的电脑上打开）' : ' (must be opened on the machine running this server)')
           + '</div>'
-        : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在准备浏览器授权...' : 'Preparing browser authorization...') + '</span>';
+        : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在打开系统默认浏览器...' : 'Opening the system default browser...') + '</span>';
     } else {
       html = sess.userCode
         ? '<div class="oauth-code-row">'
@@ -314,7 +310,7 @@ function pollOAuthLogin(sessionId) {
         : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
     }
     // Skip unchanged renders so the copy button keeps its "copied" feedback
-    if (display && display.innerHTML !== html) display.innerHTML = html;
+    if (el && el.innerHTML !== html) el.innerHTML = html;
   };
 
   let poll = function() {
@@ -328,21 +324,27 @@ function pollOAuthLogin(sessionId) {
           renderPending(sess);
         } else if (sess.status === 'approved') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
-          if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存' : 'Login successful! Token saved.') + '</span>';
+          window.ClawFW.oauthConnectionStatus = 'connected';
+          updateCodexConnectionPill(true);
+          let el = display();
+          if (el) el.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存' : 'Login successful! Token saved.') + '</span>';
           refreshModelCatalog('codex');
         } else if (sess.status === 'expired') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
-          if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + (isZh ? '登录已过期，请重试' : 'Login expired. Please try again.') + '</span>';
+          let el = display();
+          if (el) el.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + (isZh ? '登录已过期，请重试' : 'Login expired. Please try again.') + '</span>';
         } else if (sess.status === 'error') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
-          if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + escapeHtml(sess.errorMessage || 'Login failed') + '</span>';
+          let el = display();
+          if (el) el.innerHTML = '<span class="oauth-status-text" style="color:#e57373;">' + escapeHtml(sess.errorMessage || 'Login failed') + '</span>';
         }
       })
       .catch(function(err) {
         // A status read can fail transiently while the background OAuth flow is
         // still healthy. Keep polling instead of abandoning an approved login.
-        if (display) {
-          display.innerHTML = '<span class="oauth-status-text" style="color:#ffb74d;">'
+        let el = display();
+        if (el) {
+          el.innerHTML = '<span class="oauth-status-text" style="color:#ffb74d;">'
             + escapeHtml(isZh ? '状态读取失败，正在重试…' : 'Status check failed, retrying…')
             + '<br><small>' + escapeHtml(err && err.message ? err.message : String(err)) + '</small></span>';
         }
@@ -388,20 +390,29 @@ window.logoutOAuth = function() {
     .then(function() { refreshOAuthStatus(); });
 };
 
+function updateCodexConnectionPill(connected) {
+  // Codex 分页连接徽标（入口卡片 / 配置页共用），不存在时静默跳过
+  let pill = document.querySelector('.codex-connection-pill');
+  if (!pill) return;
+  let isZh = currentLanguage === 'zh';
+  pill.classList.toggle('connected', connected);
+  pill.textContent = connected ? (isZh ? '已连接' : 'Connected') : (isZh ? '未连接' : 'Not connected');
+}
+
 function refreshOAuthStatus() {
   // While a device-code login poll is running, it owns the status display
   if (_oauthPollTimer) return;
   let providerName = getEditingProviderName();
   if (!providerName) return;
-  let display = document.getElementById('oauth-status-display');
-  if (!display) return;
   let isZh = currentLanguage === 'zh';
-  let statusProviderName = window.ClawFW.settingsEditing === null ? providerName : providerName;
 
-  fetch('/protoclaw/oauth/codex/tokens/' + encodeURIComponent(statusProviderName))
+  fetch('/protoclaw/oauth/codex/tokens/' + encodeURIComponent(providerName))
     .then(function(r) { return r.json(); })
     .then(function(status) {
       window.ClawFW.oauthConnectionStatus = status.loggedIn ? 'connected' : 'disconnected';
+      updateCodexConnectionPill(!!status.loggedIn);
+      let display = document.getElementById('oauth-status-display');
+      if (!display) return;
       if (status.loggedIn) {
         let expiryStr = status.expiresAt ? new Date(status.expiresAt).toLocaleString() : '';
         let color = status.isExpiring ? '#ffb74d' : '#81c784';
@@ -415,6 +426,8 @@ function refreshOAuthStatus() {
     })
     .catch(function() {
       window.ClawFW.oauthConnectionStatus = 'disconnected';
-      display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '未登录' : 'Not logged in') + '</span>';
+      updateCodexConnectionPill(false);
+      let display = document.getElementById('oauth-status-display');
+      if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '未登录' : 'Not logged in') + '</span>';
     });
 }
