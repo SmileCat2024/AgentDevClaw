@@ -33,7 +33,17 @@ describe('feature runtime schemas', () => {
       features: [{ package: '@agentdevjs/demo', version: '1.0.0', config: { enabled: true } }],
     }, { requireFeatureVersions: true });
     assert.equal(metadata.deployment.kind, 'standalone');
+    assert.deepEqual(metadata.permissions, []);
     assert.deepEqual(metadata.features[0], { package: '@agentdevjs/demo', version: '1.0.0', config: { enabled: true } });
+    assert.deepEqual(normalizeAgentMetadata({
+      id: 'quota-agent', entry: './agent.js', permissions: ['maxLiveRuntimes'],
+    }).permissions, ['maxLiveRuntimes']);
+    assert.throws(() => normalizeAgentMetadata({
+      id: 'bad-agent', entry: './agent.js', permissions: ['unknown-permission'],
+    }), /未知权限项/);
+    assert.throws(() => normalizeAgentMetadata({
+      id: 'duplicate-agent', entry: './agent.js', permissions: ['maxLiveRuntimes', 'maxLiveRuntimes'],
+    }), /重复声明/);
     assert.throws(() => normalizeAgentMetadata({
       id: 'demo-agent', entry: './agent.js',
       features: [{ package: '@agentdevjs/demo', version: '1.0.0' }, { package: '@agentdevjs/demo', version: '1.0.0' }],

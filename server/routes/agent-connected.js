@@ -160,6 +160,7 @@ export function createConnectedAgentsQuery(deps) {
         processMode: agent.processMode || 'isolated',
         ui: agent.ui || null,
         workspace: agent.workspace || null,
+        permissions: Array.isArray(agent.permissions) ? agent.permissions : [],
         // APP 级呈现声明（ADR-0025）：visibility 决定侧栏存在性策略，
         // host 是与宿主 APP 的关联绑定（排序相邻 / 宿主首页入口）。
         visibility,

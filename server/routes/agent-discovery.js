@@ -11,6 +11,7 @@ import { resolveWorkspaceData, readWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './im.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { resolveAgentProcessMode } from '../shared/process-mode.js';
+import { normalizePermissionDeclarations } from '../shared/permission-registry.js';
 import { sessionRecordToWorkspaceMeta } from './session-helpers-pure.js';
 
 export { resolveAgentProcessMode } from '../shared/process-mode.js';
@@ -96,6 +97,7 @@ export function createAgentDiscoveryModule(ctx) {
         const agentDir = path.dirname(entryPath);
         results.push({
           ...metadata,
+          permissions: normalizePermissionDeclarations(metadata.permissions),
           id: metadata.id ?? path.basename(agentDir),
           relativeDir: path.relative(PROJECT_ROOT, agentDir).replace(/\\/g, '/'),
           agentPath: agentDir,

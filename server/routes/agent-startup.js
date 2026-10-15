@@ -398,6 +398,7 @@ export function createAgentStartupFns(deps) {
     // 身份升级缝（ADR-0027 §6），本期无身份基建恒为 undefined。
     await assertRuntimeSpawnAllowed({
       agentId: agent.id,
+      permissions: agent.permissions,
       intent: runtimeOptions?.spawnIntent,
       caller: runtimeOptions?.spawnCaller,
     });

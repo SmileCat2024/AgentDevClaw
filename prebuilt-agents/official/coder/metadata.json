@@ -11,6 +11,7 @@
   "enabled": true,
   "host": "programming-helper",
   "visibility": "on-demand",
+  "permissions": ["maxLiveRuntimes"],
   "features": [
     "todo",
     "force-continuation",

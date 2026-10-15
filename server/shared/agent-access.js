@@ -31,6 +31,32 @@ export function listAgentRuntimes(agentId) {
     .filter((runtime) => sanitizeSessionFragment(runtime.agentId || runtime.id) === normalizedAgentId);
 }
 
+// ── Live runtime process counts（ADR-0027 配额的计数基础）──────────
+// 共享进程模式下多条 runtime 条目共享同一子进程，按进程去重计数。
+export function countLiveRuntimeProcesses(agentId) {
+  const processes = new Set();
+  for (const runtime of listAgentRuntimes(agentId)) {
+    if (isManagedRuntimeRunning(runtime) && runtime.process) {
+      processes.add(runtime.process);
+    }
+  }
+  return processes.size;
+}
+
+/** 全部 workspace 的存活 runtime 进程数投影（{ <agentId>: n }）。 */
+export function countLiveRuntimeProcessesByAgent() {
+  const counts = {};
+  const seen = new Set();
+  for (const runtime of managedAgents.values()) {
+    if (!isManagedRuntimeRunning(runtime) || !runtime.process) continue;
+    if (seen.has(runtime.process)) continue;
+    seen.add(runtime.process);
+    const agentId = sanitizeSessionFragment(runtime.agentId || runtime.id);
+    counts[agentId] = (counts[agentId] || 0) + 1;
+  }
+  return counts;
+}
+
 export function pickPrimaryAgentRuntime(agentId) {
   const runtimes = listAgentRuntimes(agentId);
   if (runtimes.length === 0) return null;

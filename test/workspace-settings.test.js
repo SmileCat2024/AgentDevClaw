@@ -9,6 +9,7 @@ import { after, describe, it } from 'node:test';
 import {
   readWorkspaceVisibilityOverrides,
   writeWorkspaceVisibilityOverride,
+  writeWorkspacePermissionValue,
 } from '../server/routes/workspace-settings.js';
 import { createConnectedAgentsQuery } from '../server/routes/agent-connected.js';
 import { managedAgents } from '../server/shared/agent-access.js';
@@ -18,6 +19,26 @@ const settingsPath = path.join(tmpRoot, 'workspace-settings.json');
 after(async () => { await fs.rm(tmpRoot, { recursive: true, force: true }); });
 
 describe('workspace-settings: 用户覆盖层存储', () => {
+  it('permission-item writer updates and clears the shared Coder policy value', async () => {
+    const { readWorkspaceResourcePolicies } = await import('../server/routes/workspace-settings.js');
+    await writeWorkspacePermissionValue('coder', 'maxLiveRuntimes', 5, { settingsPath });
+    assert.deepEqual(await readWorkspaceResourcePolicies({ settingsPath }), {
+      coder: { maxLiveRuntimes: 5 },
+    });
+    await writeWorkspacePermissionValue('coder', 'maxLiveRuntimes', null, { settingsPath });
+    assert.deepEqual(await readWorkspaceResourcePolicies({ settingsPath }), {});
+  });
+
+  it('rejects unknown permission items and invalid typed values', async () => {
+    await assert.rejects(
+      writeWorkspacePermissionValue('coder', 'unknown', true, { settingsPath }),
+      (error) => error.status === 400,
+    );
+    await assert.rejects(
+      writeWorkspacePermissionValue('coder', 'maxLiveRuntimes', '5', { settingsPath }),
+      (error) => error.status === 400,
+    );
+  });
   it('缺省为空表（ENOENT 不抛错）；写入 always 后可读回；回 auto 即删除覆盖', async () => {
     assert.deepEqual(await readWorkspaceVisibilityOverrides({ settingsPath }), {});
 
@@ -41,7 +62,7 @@ describe('workspace-settings: 用户覆盖层存储', () => {
 function lightAgents() {
   return [
     { id: 'programming-helper', name: '智能编码空间', kind: 'agent', status: { pid: null, viewerAgentId: null } },
-    { id: 'coder', name: 'coder', kind: 'agent', host: 'programming-helper', visibility: 'on-demand', status: { pid: null, viewerAgentId: null } },
+    { id: 'coder', name: 'coder', kind: 'agent', host: 'programming-helper', visibility: 'on-demand', permissions: ['maxLiveRuntimes'], status: { pid: null, viewerAgentId: null } },
   ];
 }
 
@@ -71,6 +92,7 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
   it('无覆盖且没有存活 Runtime → sidebarVisible=false', async () => {
     const agents = await createQuery({}).getConnectedAgents();
     const coder = agents.find((a) => a.id === 'coder');
+    assert.deepEqual(coder.permissions, ['maxLiveRuntimes']);
     assert.equal(coder.visibilityPolicy, 'auto');
     assert.equal(typeof coder.hasRunningSessions, 'boolean');
     assert.equal(coder.sidebarVisible, coder.hasRunningSessions);

@@ -20,30 +20,25 @@
  * 令牌下三面不可分），per-child credential 落地后实填，签名不变。
  */
 
-import { listAgentRuntimes, isManagedRuntimeRunning } from '../shared/agent-access.js';
+import { countLiveRuntimeProcesses } from '../shared/agent-access.js';
+import { PERMISSION_ITEMS } from '../shared/permission-registry.js';
 import { readWorkspaceResourcePolicies } from './workspace-settings.js';
 import { LocalOperationError } from '../shared/operation-contract.js';
+
+// 计数原语的家在 agent-access（managedAgents 持有方）；此处 re-export
+// 供配额判定与既有测试消费，避免 runtime-quota ↔ workspace-settings
+// 循环依赖（GET 路由也要数存活 runtime）。
+export { countLiveRuntimeProcesses };
 
 export const RUNTIME_SPAWN_INTENTS = Object.freeze({
   NEW: 'new',
   ROTATION: 'rotation',
 });
 
-/** 数某工作空间当前存活的 runtime 子进程数（按进程去重）。 */
-export function countLiveRuntimeProcesses(agentId) {
-  const processes = new Set();
-  for (const runtime of listAgentRuntimes(agentId)) {
-    if (isManagedRuntimeRunning(runtime) && runtime.process) {
-      processes.add(runtime.process);
-    }
-  }
-  return processes.size;
-}
-
 /** resourcePolicy 条目 → 配额上限（正整数），非法/缺省返回 null（不限）。 */
 export function resolveRuntimeQuotaLimit(policy) {
-  const limit = policy?.maxLiveRuntimes;
-  return Number.isInteger(limit) && limit > 0 ? limit : null;
+  const limit = policy?.[PERMISSION_ITEMS.maxLiveRuntimes.id];
+  return PERMISSION_ITEMS.maxLiveRuntimes.validate(limit) ? limit : null;
 }
 
 /** 满配额拒绝错误：结构化负载经 buildLocalFailureResponse 透传（HTTP 429）。 */
@@ -70,12 +65,16 @@ export function createRuntimeQuotaExceededError({ agentId, limit, liveRuntimes }
  */
 export async function assertRuntimeSpawnAllowed({
   agentId,
+  permissions = [],
   intent = RUNTIME_SPAWN_INTENTS.NEW,
-  caller = undefined,
+  // 身份升级缝（ADR-0027 §6）：本期恒为 undefined（per-child credential
+  // 未建，三面不可分），落地后实填、签名不变——预留参数位，非未用变量。
+  caller = undefined, // eslint-disable-line no-unused-vars
   settingsPath = undefined,
 } = {}) {
   const normalizedAgentId = String(agentId || '').trim();
-  if (!normalizedAgentId) return;
+  if (!normalizedAgentId || !Array.isArray(permissions)
+    || !permissions.includes(PERMISSION_ITEMS.maxLiveRuntimes.id)) return;
 
   const policies = await readWorkspaceResourcePolicies({ settingsPath });
   const limit = resolveRuntimeQuotaLimit(policies[normalizedAgentId]);

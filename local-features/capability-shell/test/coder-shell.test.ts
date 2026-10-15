@@ -647,6 +647,11 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
 
   it('契约映射：POST /protoclaw/prebuilt_sessions，body 含 agentId=coder、openDirectory 与 title，无 sessionType', async () => {
     const { fetchImpl, requests } = recordingFetch([
+      // 配额预检 GET（ADR-0027）：无配额 → 放行
+      {
+        match: (u) => u.endsWith('/protoclaw/workspace_settings'),
+        body: { workspaceVisibility: {}, resourcePolicy: {}, liveRuntimes: {} },
+      },
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
         // threadId 在 session 对象之前（服务端为截断安全特意如此排列）
@@ -659,8 +664,9 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       adapters, bashPath: null,
     });
     assert.equal(r.ok, true, r.output);
-    assert.equal(requests.length, 1, '应恰好发出一次 POST');
-    const body = JSON.parse(String(requests[0].init?.body));
+    const posts = requests.filter((req) => req.url.endsWith('/protoclaw/prebuilt_sessions') && req.init?.method === 'POST');
+    assert.equal(posts.length, 1, '应恰好发出一次 POST（预检 GET 不影响创建契约）');
+    const body = JSON.parse(String(posts[0].init?.body));
     assert.equal(body.agentId, 'coder');
     // ADR-0025：coder 直接以 agentId=coder 寻址，不经 sessionType 投影
     //（服务端对 sessionType≠main 直接 400，误发即失败）
@@ -726,6 +732,70 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     assert.ok(r.output.includes('sessionId=session-null'), r.output);
     assert.ok(r.output.includes('threadId=null'), r.output);
     assert.ok(r.output.includes('create'), '提示应含手动建线指引');
+  });
+
+  it('配额预检（ADR-0027）：满额 → 预检拒绝，不发出创建 POST', async () => {
+    const { fetchImpl, requests } = recordingFetch([
+      {
+        match: (u) => u.endsWith('/protoclaw/workspace_settings'),
+        body: { resourcePolicy: { coder: { maxLiveRuntimes: 2 } }, liveRuntimes: { coder: 2 } },
+      },
+      {
+        match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
+        body: { threadId: 'wt-should-not-exist', session: { id: 'session-x' } },
+      },
+    ]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, false, r.output);
+    assert.ok(r.output.includes('预检拒绝'), r.output);
+    assert.ok(r.output.includes('2/2'), r.output);
+    assert.ok(r.output.includes('归档'), '拒绝文案应含可行动建议');
+    assert.ok(
+      !requests.some((req) => req.url.endsWith('/protoclaw/prebuilt_sessions') && req.init?.method === 'POST'),
+      '满额预检拒绝不得发出创建 POST',
+    );
+  });
+
+  it('配额预检：未满额 → 放行，POST 正常发出', async () => {
+    const { fetchImpl, requests } = recordingFetch([
+      {
+        match: (u) => u.endsWith('/protoclaw/workspace_settings'),
+        body: { resourcePolicy: { coder: { maxLiveRuntimes: 3 } }, liveRuntimes: { coder: 2 } },
+      },
+      {
+        match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
+        body: { threadId: 'wt-ok', session: { id: 'session-ok' }, targetSessionId: 'session-ok' },
+      },
+    ]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('threadId=wt-ok'), r.output);
+    assert.ok(
+      requests.some((req) => req.url.endsWith('/protoclaw/prebuilt_sessions') && req.init?.method === 'POST'),
+      '未满额应发出创建 POST',
+    );
+  });
+
+  it('配额预检：查询失败不阻塞派发（内核漏斗兜底，UX 层不承担强制）', async () => {
+    const { fetchImpl, requests } = recordingFetch([
+      // workspace_settings 未命中 → 404 → 预检吞掉继续派发
+      {
+        match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
+        body: { threadId: 'wt-fallback', session: { id: 'session-fb' }, targetSessionId: 'session-fb' },
+      },
+    ]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('threadId=wt-fallback'), r.output);
   });
 
   it('new-session 缺 agentId → 参数校验道拒绝（title 可选，2 参可过个数道）', async () => {

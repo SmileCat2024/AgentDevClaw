@@ -3,7 +3,7 @@
  *
  *   GET  /protoclaw/workspace_settings                    — 读覆盖表（两节）
  *   PUT  /protoclaw/workspace_settings                    — 写呈现策略覆盖（{ agentId, policy }）
- *   PUT  /protoclaw/workspace_settings/resource_policy    — 写资源策略（{ agentId, maxLiveRuntimes }）
+ *   PUT  /protoclaw/workspace_settings/resource_policy    — 写权限项用户值（{ agentId, permissionId, value }）
  *
  * 概念层级：工作空间是用户资产（用户可安装任意工作空间集，甚至不装智能
  * 编码空间），本设置随用户工作空间集走，不属于随 Claw 的系统设置。
@@ -22,6 +22,8 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { USER_DATA_ROOT } from '../shared/constants.js';
+import { countLiveRuntimeProcessesByAgent } from '../shared/agent-access.js';
+import { PERMISSION_ITEMS, projectPermissionValues } from '../shared/permission-registry.js';
 
 const DEFAULT_WORKSPACE_SETTINGS_PATH = path.join(USER_DATA_ROOT, 'workspace-settings.json');
 const VALID_POLICIES = new Set(['auto', 'always']);
@@ -87,17 +89,14 @@ function projectWorkspaceVisibility(node) {
   return overrides;
 }
 
-/** resourcePolicy 节 → 合法策略投影（{ <agentId>: { maxLiveRuntimes } }）。 */
+/** resourcePolicy 节 → 合法策略投影（{ <agentId>: { <permissionId>: value }）。 */
 function projectResourcePolicies(node) {
   const policies = {};
-  if (!node || typeof node !== 'object') return policies;
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return policies;
   for (const [agentId, policy] of Object.entries(node)) {
-    if (typeof agentId === 'string' && agentId.trim() && policy && typeof policy === 'object') {
-      const limit = policy.maxLiveRuntimes;
-      if (Number.isInteger(limit) && limit > 0) {
-        policies[agentId.trim()] = { maxLiveRuntimes: limit };
-      }
-    }
+    if (typeof agentId !== 'string' || !agentId.trim()) continue;
+    const permissions = projectPermissionValues(policy);
+    if (Object.keys(permissions).length > 0) policies[agentId.trim()] = permissions;
   }
   return policies;
 }
@@ -153,31 +152,43 @@ export async function readWorkspaceResourcePolicies({ settingsPath = DEFAULT_WOR
 }
 
 /**
- * 写单条资源策略。maxLiveRuntimes=null 即清除该工作空间的 runtime 配额
- * （回到缺省不限）。整文件读改写，保留 workspaceVisibility 等兄弟节。
- * @returns {Promise<{ ok: true, agentId: string, maxLiveRuntimes: number|null, resourcePolicy: Record<string, { maxLiveRuntimes: number }> }>}
+ * 写单个权限项用户值。value=null 即清除该工作空间对此权限项的覆盖，回到缺省状态。
+ * 整文件读改写，保留 workspaceVisibility 等兄弟节。
+ * @returns {Promise<{ ok: true, agentId: string, permissionId: string, value: unknown, resourcePolicy: Record<string, Record<string, unknown>> }>}
  */
-export async function writeWorkspaceResourcePolicy(agentId, maxLiveRuntimes, { settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH } = {}) {
+export async function writeWorkspacePermissionValue(agentId, permissionId, value, { settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH } = {}) {
   const normalizedAgentId = String(agentId || '').trim();
   if (!normalizedAgentId) {
     throw Object.assign(new Error('agentId is required'), { status: 400 });
   }
-  if (maxLiveRuntimes !== null && !(Number.isInteger(maxLiveRuntimes) && maxLiveRuntimes > 0)) {
-    throw Object.assign(new Error('maxLiveRuntimes must be a positive integer, or null to clear'), { status: 400 });
+  const permission = PERMISSION_ITEMS[permissionId];
+  if (!permission || (value !== null && !permission.validate(value))) {
+    throw Object.assign(new Error(`Invalid value for permission item: ${permissionId}`), { status: 400 });
   }
   const policies = await withSettingsWriteLock(settingsPath, async () => {
     const current = await readWorkspaceSettingsFile(settingsPath);
     const next = projectResourcePolicies(current.resourcePolicy);
-    if (maxLiveRuntimes === null) {
-      delete next[normalizedAgentId];
-    } else {
-      next[normalizedAgentId] = { maxLiveRuntimes };
-    }
+    const workspacePolicy = { ...(next[normalizedAgentId] || {}) };
+    if (value === null) delete workspacePolicy[permissionId];
+    else workspacePolicy[permissionId] = value;
+    if (Object.keys(workspacePolicy).length > 0) next[normalizedAgentId] = workspacePolicy;
+    else delete next[normalizedAgentId];
     await writeWorkspaceSettingsFile(settingsPath, { ...current, version: 1, resourcePolicy: next });
     _resourcePolicyCaches.set(settingsPath, next);
     return next;
   });
-  return { ok: true, agentId: normalizedAgentId, maxLiveRuntimes, resourcePolicy: { ...policies } };
+  return {
+    ok: true,
+    agentId: normalizedAgentId,
+    permissionId,
+    value,
+    resourcePolicy: { ...policies },
+  };
+}
+
+export async function writeWorkspaceResourcePolicy(agentId, maxLiveRuntimes, options = {}) {
+  const result = await writeWorkspacePermissionValue(agentId, PERMISSION_ITEMS.maxLiveRuntimes.id, maxLiveRuntimes, options);
+  return { ...result, maxLiveRuntimes: maxLiveRuntimes };
 }
 
 export function setupWorkspaceSettingsRoutes(app, express) {
@@ -185,6 +196,9 @@ export function setupWorkspaceSettingsRoutes(app, express) {
     res.json({
       workspaceVisibility: await readWorkspaceVisibilityOverrides(),
       resourcePolicy: await readWorkspaceResourcePolicies(),
+      // 存活 runtime 现状投影（ADR-0027）：设置面板展示「当前 N」与
+      // coder_shell 预检共用本端点，配额策略与现状一次读齐。
+      liveRuntimes: countLiveRuntimeProcessesByAgent(),
     });
   });
 
@@ -200,10 +214,11 @@ export function setupWorkspaceSettingsRoutes(app, express) {
 
   app.put('/protoclaw/workspace_settings/resource_policy', express.json(), async (req, res, next) => {
     try {
-      if (req.body?.maxLiveRuntimes === undefined) {
-        return res.status(400).json({ error: 'maxLiveRuntimes is required (positive integer, or null to clear)' });
+      const { agentId, permissionId, value } = req.body || {};
+      if (typeof permissionId !== 'string' || value === undefined) {
+        return res.status(400).json({ error: 'permissionId and value are required (null clears the value)' });
       }
-      const result = await writeWorkspaceResourcePolicy(req.body?.agentId, req.body?.maxLiveRuntimes);
+      const result = await writeWorkspacePermissionValue(agentId, permissionId, value);
       res.json(result);
     } catch (error) {
       if (error?.status) return res.status(error.status).json({ error: error.message });

@@ -164,6 +164,9 @@ export function createThreadsAdapter(deps: {
       // 确定终态）」与「server 不可达（连续错误才终态）」
       (error as any).status = response.status;
       (error as any).code = (payload as any)?.code;
+      // 完整响应体一并挂上（ADR-0027）：内核结构化拒绝（如 runtimeQuota
+      // 负载）经此可被调用方按结构消费，不依赖 message 字符串匹配。
+      (error as any).payload = payload;
       throw error;
     }
     return payload;
@@ -585,6 +588,27 @@ export function createThreadsAdapter(deps: {
         const directoryStat = await stat(normalizedDirectory).catch(() => null);
         if (!directoryStat?.isDirectory()) {
           throw new Error(`new-session 拒绝：目标工作目录不存在或不是目录: ${directory}`);
+        }
+        // ── 配额预检（ADR-0027 调度方 UX 层，不承担强制）─────────────
+        // 读配额与存活计数（同一 GET 一次拿齐），满额时提前给可读提示，
+        // 不发起注定被拒的创建请求。查询失败不阻塞派发：强制点在 server
+        // 内核漏斗，竞态与失败由 429 结构化拒绝兜底（message 已含可行动
+        // 建议，error.payload.runtimeQuota 可按结构消费）。
+        try {
+          const settings = await clawFetch('/protoclaw/workspace_settings');
+          const limit = (settings as any)?.resourcePolicy?.coder?.maxLiveRuntimes;
+          if (Number.isInteger(limit) && limit > 0) {
+            const live = (settings as any)?.liveRuntimes?.coder;
+            if (Number.isInteger(live) && live >= limit) {
+              throw new Error(
+                `new-session 预检拒绝：coder runtime 并发上限已满（存活 ${live}/${limit}），未发起创建。`
+                + ' 可行动：归档已完成线程腾出名额（archive），或请用户在 设置 → 工作空间 调整并发上限，或放弃本次派发。',
+              );
+            }
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message.startsWith('new-session 预检拒绝')) throw error;
+          // 预检查询失败（server 瞬时不可达等）：继续派发，内核漏斗兜底。
         }
         const body: Record<string, unknown> = {
           agentId,

@@ -1,4 +1,5 @@
 import path from 'path';
+import { normalizePermissionDeclarations } from '../shared/permission-registry.js';
 
 const PACKAGE_NAME_RE = /^(?:@[-a-z0-9~][a-z0-9~._-]*\/)?[a-z0-9~][a-z0-9~._-]*$/;
 const EXACT_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -74,12 +75,14 @@ export function normalizeAgentMetadata(raw, { requireFeatureVersions = false } =
     seen.add(requirement.package);
     return requirement;
   });
+  const permissions = normalizePermissionDeclarations(record.permissions);
   return {
     ...record,
     id,
     entry,
     deployment: { ...deploymentRaw, kind: deploymentKind },
     features,
+    permissions,
   };
 }
 

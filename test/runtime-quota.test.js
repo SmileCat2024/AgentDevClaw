@@ -12,7 +12,7 @@ import path from 'node:path';
 const DATA_DIR = mkdtempSync(path.join(tmpdir(), 'claw-runtime-quota-test-'));
 process.env.AGENTDEV_DATA_DIR = DATA_DIR;
 
-const { managedAgents } = await import('../server/shared/agent-access.js');
+const { managedAgents, countLiveRuntimeProcessesByAgent } = await import('../server/shared/agent-access.js');
 const {
   RUNTIME_SPAWN_INTENTS,
   countLiveRuntimeProcesses,
@@ -110,6 +110,18 @@ describe('countLiveRuntimeProcesses', () => {
     assert.equal(countLiveRuntimeProcesses('count-agent'), 1);
     assert.equal(countLiveRuntimeProcesses('other-agent'), 0);
   });
+
+  it('countLiveRuntimeProcessesByAgent projects per-agent deduped counts', () => {
+    // 共享进程只发生在同 agent 内（processGroupKey 含 agentId），跨 agent
+    // 各计各的独立进程
+    injectTrackedRuntime('count-agent', 's5', createMockChild());
+    injectTrackedRuntime('count-b', 's1', createMockChild());
+    injectTrackedRuntime('count-b', 's2', createMockChild());
+
+    const counts = countLiveRuntimeProcessesByAgent();
+    assert.equal(counts['count-agent'], 2); // s1+s2 共享进程计 1 + s5 独立计 1
+    assert.equal(counts['count-b'], 2);
+  });
 });
 
 // ── assertRuntimeSpawnAllowed ─────────────────────────────────
@@ -120,21 +132,35 @@ describe('assertRuntimeSpawnAllowed', () => {
     await assert.doesNotReject(assertRuntimeSpawnAllowed({ agentId: 'memo' }));
   });
 
-  it('allows when below the limit', async () => {
+  it('does not constrain programming-helper by the linked coder policy', async () => {
+    await writeWorkspaceResourcePolicy('programming-helper', 1);
+    injectTrackedRuntime('programming-helper', 'ph-1', createMockChild());
+    injectTrackedRuntime('programming-helper', 'ph-2', createMockChild());
+    await assert.doesNotReject(assertRuntimeSpawnAllowed({ agentId: 'programming-helper' }));
+  });
+
+  it('allows when below the declared limit', async () => {
+    await assert.doesNotReject(assertRuntimeSpawnAllowed({ agentId: 'coder', permissions: ['maxLiveRuntimes'] }));
+  });
+
+  it('does not apply a stored limit when the workspace has not declared that permission', async () => {
+    injectTrackedRuntime('coder', 'undeclared-q1', createMockChild());
+    injectTrackedRuntime('coder', 'undeclared-q2', createMockChild());
     await assert.doesNotReject(assertRuntimeSpawnAllowed({ agentId: 'coder' }));
   });
 
   it('rejects with a structured quota payload when the limit is reached', async () => {
-    injectTrackedRuntime('coder', 'q1', createMockChild());
-    injectTrackedRuntime('coder', 'q2', createMockChild()); // 2/2 满
+    await writeWorkspaceResourcePolicy('quota-reject-agent', 2);
+    injectTrackedRuntime('quota-reject-agent', 'q1', createMockChild());
+    injectTrackedRuntime('quota-reject-agent', 'q2', createMockChild()); // 2/2 满
 
     await assert.rejects(
-      assertRuntimeSpawnAllowed({ agentId: 'coder' }),
+      assertRuntimeSpawnAllowed({ agentId: 'quota-reject-agent', permissions: ['maxLiveRuntimes'] }),
       (error) => {
         assert.equal(error.status, 429);
         assert.equal(error.code, 'runtime_quota_exceeded');
         assert.deepEqual(error.runtimeQuota, {
-          agentId: 'coder',
+          agentId: 'quota-reject-agent',
           limit: 2,
           liveRuntimes: 2,
           actions: ['archive_thread', 'raise_quota', 'abandon'],
@@ -149,7 +175,7 @@ describe('assertRuntimeSpawnAllowed', () => {
     injectTrackedRuntime('coder', 'r2', createMockChild()); // 2/2 满
 
     await assert.doesNotReject(
-      assertRuntimeSpawnAllowed({ agentId: 'coder', intent: RUNTIME_SPAWN_INTENTS.ROTATION }),
+      assertRuntimeSpawnAllowed({ agentId: 'coder', permissions: ['maxLiveRuntimes'], intent: RUNTIME_SPAWN_INTENTS.ROTATION }),
     );
   });
 
@@ -165,7 +191,7 @@ describe('assertRuntimeSpawnAllowed', () => {
 
     // 新 spawn 按新值判定：拒绝并报新配额
     await assert.rejects(
-      assertRuntimeSpawnAllowed({ agentId: 'legacy-agent' }),
+      assertRuntimeSpawnAllowed({ agentId: 'legacy-agent', permissions: ['maxLiveRuntimes'] }),
       (error) => error.runtimeQuota.limit === 1 && error.runtimeQuota.liveRuntimes === 2,
     );
   });
@@ -200,7 +226,7 @@ describe('buildLocalFailureResponse runtimeQuota passthrough', () => {
 describe('workspace-settings resourcePolicy', () => {
   const settingsPath = path.join(DATA_DIR, 'nested', 'settings-mixed.json');
 
-  it('writes, reads and clears resource policies', async () => {
+  it('writes, reads and clears resource policies through the permission item', async () => {
     await writeWorkspaceResourcePolicy('coder', 4, { settingsPath });
     assert.deepEqual(await readWorkspaceResourcePolicies({ settingsPath }), {
       coder: { maxLiveRuntimes: 4 },
@@ -255,6 +281,7 @@ describe('startManagedAgent quota gate', () => {
     const agent = {
       id: 'gate-agent',
       name: 'Gate Agent',
+      permissions: ['maxLiveRuntimes'],
       relativeDir: 'prebuilt-agents/__nonexistent__',
       workspace_sessions: { activeSessionId: null },
     };
@@ -286,6 +313,7 @@ describe('startManagedAgent quota gate', () => {
     const agent = {
       id: 'gate-agent',
       name: 'Gate Agent',
+      permissions: ['maxLiveRuntimes'],
       relativeDir: 'prebuilt-agents/__nonexistent__', // 放行后 spawn 立即失败
       workspace_sessions: { activeSessionId: null },
     };
