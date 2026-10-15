@@ -27,6 +27,16 @@
 - **child runtime** — 被托管的运行实例，侧栏叶子的唯一来源。
   _Avoid_: 把 prebuilt 历史会话索引当侧栏叶子。
 
+## 治理面（Agent OS）
+
+- **同意模型（consent）** — 治理面的价值定位：用户确认与有序扩展；配额 = 一次性策略同意，权限提示 = 逐次行动同意。
+  _Avoid_: 把权限系统当遏制手段设计——满 bash 权限下对 agent 的绝对技术防御不存在（ADR-0027）。
+- **三面（宿主面 / 用户面 / 应用面）** — 调用 server API 的三类主体：宿主面（server 内部路由，恒可信）、用户面（CLI / ACP / UI，代表用户本人）、应用面（runtime 内 feature 的 HTTP 调用，唯一需要管束的面）。
+- **runtime 配额（resourcePolicy）** — per-workspace（agentId 键）的存活 runtime 数上限，强制点在 startManagedAgent 内核漏斗；缺省不限；存量豁免、rotation 豁免（经意图标记）。
+  _Avoid_: 在 feature 层做强制（CLI / ACP 绕过）；只在 session create 路由拦（恢复 / 接续 / activate 击穿）。
+- **OS 词汇对照** — 程序 = agent 装配（agent.js + features + metadata.json）；进程 = runtime 子进程；syscall 边界 = server HTTP/IPC API；内核 = Claw server。
+  _Avoid_: 引入"子代理"新分类做治理单位——治理单位是 workspace（agentId），与 ADR-0025 身份收敛方向一致。
+
 ## 会话连续性（消费 @agentdevjs/core）
 
 - **Session（快照）** — 会话快照 + SuccessorSeed（变换产物），落盘为 handoff 包。

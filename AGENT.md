@@ -37,6 +37,7 @@
    - 0024 APP 型工作空间：业务单对话、WorkThread 可选连续性与接续硬切换视图（实施计划见 [docs/plans/2026-10-10-app-workspace-eternal-thread.md](docs/plans/2026-10-10-app-workspace-eternal-thread.md)）
    - 0025 coder 升格独立工作空间：会话身份投影机制退役（实施计划见 [docs/plans/2026-10-11-coder-workspace-promotion.md](docs/plans/2026-10-11-coder-workspace-promotion.md)）
    - 0026 Session 视图统一：Session 身份为锚，Runtime 为运行态数据源，Thread 为连续性与输入控制投影
+   - 0027 Agent OS 治理面：同意模型与 per-workspace runtime 配额（强制点在 startManagedAgent 内核漏斗；权限模型独立后行）
 
 实现层真实入口：
 
