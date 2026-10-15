@@ -141,22 +141,24 @@ describe('git 面板图形区渲染 churn 守卫', () => {
       assert.equal(ctx.__counts.canvasWrites, 1, '未变数据重复 render 不得替换画布 DOM');
       c = counters(ctx);
       assert.equal(c.lanes, 1, '未变数据重复 render 不得重算泳道（memo）');
-      assert.equal(c.builds, 7, '估算构建 = 加载 2 次（估算+度量）+ 每 render 1 次签名求值，不得退回度量重建');
+      assert.equal(c.builds, 2, '全量 HTML memo 命中：重复 render 零 SVG 重建（仅首次加载 2 次）');
     } finally {
       ctx.__dispose();
     }
   });
 
-  it('行几何漂移恰好触发一次度量重绘，随后恢复零 churn', async () => {
+  it('行几何与数据同时变化恰好触发一次度量重绘，随后恢复零 churn', async () => {
     const ctx = makeHarness();
     try {
       ctx.window.GitPanel.onOpen();
       await tick(); await tick();
       assert.equal(ctx.__counts.canvasWrites, 1);
 
-      // 模拟布局后行位置漂移（如展开详情撑高后续行）
+      // 模拟布局后行位置漂移 + 图形数据变化（真实场景：body 替换后重新度量）
       for (let i = 10; i < ctx.__rows.length; i++) ctx.__rows[i].offsetTop += 37;
-      ctx.window.GitPanel.render();
+      ctx.__setGraphCommits(makeCommits(301, 'm'));
+      ctx.window.GitPanel.refresh();
+      await tick(); await tick();
       assert.equal(ctx.__counts.canvasWrites, 2, '几何变化恰好一次替换');
 
       ctx.window.GitPanel.render();
@@ -205,10 +207,11 @@ describe('git 面板图形区渲染 churn 守卫', () => {
       assert.equal(ctx.__counts.changesWrites, 1, '上区定向替换恰好一次');
       assert.equal(ctx.__counts.canvasWrites, 1, '图形区零 churn（不做全量 body 替换）');
 
-      // 数据稳定后的下一轮静默刷新：上区内容未变，但仍会定向替换（小 DOM
-      // 可接受），关键是图形区持续零 churn
+      // 数据稳定后的下一轮静默刷新：内容未变 → no-op 跳过（历史缺陷：
+      // status 未变仍每 5s 重解析整个文件列表）
       ctx.__autoTick();
       await tick(); await tick();
+      assert.equal(ctx.__counts.changesWrites, 1, '内容未变的静默刷新不重写上区');
       assert.equal(ctx.__counts.canvasWrites, 1);
     } finally {
       ctx.__dispose();

@@ -853,7 +853,25 @@
     return lanesMemo.lanes;
   }
 
+  // 图形区 memo：轮询驱动的重复 render（git 数据未变）直接复用整段 HTML
+  // （含 ~345KB SVG 字符串），跳过 computeLanes/buildGraphSvg/行构建。
+  let graphMemo = { key: '', html: '' };
   function renderGraphBody() {
+    const expandedFiles = state.expandedCommit ? state.commitFiles[state.expandedCommit] : null;
+    const key = [
+      objToken(state.graph), objToken(state.aheadHashes), state.expandedCommit,
+      objToken(expandedFiles || null), state.branch,
+      state.status?.current || '', state.status?.tracking || '',
+      state.errors.graph || '', currentLanguage,
+    ].join('\u0001');
+    if (graphMemo.key === key) return graphMemo.html;
+    const html = buildGraphBodyHtml();
+    graphMemo.key = key;
+    graphMemo.html = html;
+    return html;
+  }
+
+  function buildGraphBodyHtml() {
     const commits = state.graph;
     if (state.errors.graph) {
       graphModel = null;
@@ -1065,17 +1083,43 @@
 
   // ── 渲染：双区骨架 ────────────────────────────────────────────────
 
+  // ── 渲染缓存（三层：全量 → 分区）─────────────────────────────────
+  // 轮询驱动的 renderFeaturePanel（agent 活动期 hooks 签名变化，最高
+  // ~3 次/秒）在 git 状态未变时只需返回同一 HTML 串供宿主签名对比——
+  // 重复构建 MB 级字符串（2000 文件 + 1000 提交时 ~1.7MB/次）是纯浪费。
+  // 分区 memo 让 status 变化轮只重建上区、图形区字符串直接复用。
+  //
+  // 键策略：大对象（status/graph/branches/repos/展开文件缓存）用 WeakMap
+  // 身份 token——它们只在真实数据变化时整体替换；静默刷新每轮都会更换
+  // status/branches 身份，因此任何遗漏依赖的陈旧窗口最多一个刷新周期
+  // （~5s）自愈。
+  const objTokenMap = new WeakMap();
+  let objTokenSeq = 0;
+  function objToken(v) {
+    if (!v || typeof v !== 'object') return String(v);
+    let t = objTokenMap.get(v);
+    if (t === undefined) { t = ++objTokenSeq; objTokenMap.set(v, t); }
+    return String(t);
+  }
+
   /**
    * 上区（更改与暂存）body 内容：消息条 + 两个子分区。buildHtml 与
    * patchChangesZone 共用单一来源，保证定向替换与全量渲染字节一致。
    */
+  let changesMemo = { key: '', html: '' };
   function renderChangesBody() {
+    const key = [
+      objToken(state.status), state.error,
+      state.subFold.staged, state.subFold.changes,
+      canWriteGit(), currentLanguage,
+    ].join('\u0001');
+    if (changesMemo.key === key) return changesMemo.html;
     const status = state.status || { files: [] };
     const { staged, changes } = splitGroups(status.files || []);
     // 能力门控（ADR-0011）：无写能力时组级写动作一并禁用（照能力矩阵既有
     // 形态），只读查看不受影响
     const writable = canWriteGit();
-    return [
+    const html = [
       renderMessage(),
       subSection('staged', zh('暂存的更改', 'Staged Changes'), staged.length,
         renderFilesList(staged, 'staged'),
@@ -1086,6 +1130,9 @@
         changes.length ? '<button class="git-group-action" data-gp-action="stage-all"' + (writable ? '' : ' disabled') + '>' + esc(zh('全部暂存', 'Stage All')) + '</button>' : '',
         state.subFold.changes),
     ].join('');
+    changesMemo.key = key;
+    changesMemo.html = html;
+    return html;
   }
 
   /**
@@ -1109,7 +1156,16 @@
     }
     const zone = document.querySelector('.git-zone-body[data-zone-body="changes"]');
     if (!zone) { repaint(); return; }
-    zone.innerHTML = renderChangesBody();
+    // 内容未变跳过 DOM 写入：上区文件行可达数千行（~1MB HTML），无条件
+    // 替换会让每轮静默刷新都白付一次全量解析（历史缺陷：status 未变时
+    // 仍每 5s 重解析整个文件列表）
+    const html = renderChangesBody();
+    if (zone.__gpHtml === html) {
+      if (typeof syncPanelBodyHtmlCache === 'function') syncPanelBodyHtmlCache();
+      return;
+    }
+    zone.__gpHtml = html;
+    zone.innerHTML = html;
     if (typeof syncPanelBodyHtmlCache === 'function') syncPanelBodyHtmlCache();
   }
 
@@ -1245,6 +1301,30 @@
     });
   }
 
+  // 全量 HTML memo：命中时零构建零分配地返回同一字符串，宿主签名对比
+  // 视为未变而跳过 DOM 替换。键覆盖 buildHtml 的全部输入（骨架字段 +
+  // 大对象身份 token）；分区 memo 未覆盖的骨架字段在此兜底。
+  let htmlMemo = { key: '', html: '' };
+  function buildHtmlCached() {
+    const expandedFiles = state.expandedCommit ? state.commitFiles[state.expandedCommit] : null;
+    const key = [
+      state.dir, state.agentId, state.isRepo, state.activeRepoRoot,
+      state.loading, state.busy, state.error,
+      state.errors.status || '', state.errors.graph || '', state.errors.branches || '',
+      state.zoneFold.changes, state.zoneFold.graph, state.subFold.staged, state.subFold.changes,
+      state.topH, state.branch, state.expandedCommit,
+      objToken(state.status), objToken(state.graph), objToken(state.aheadHashes),
+      objToken(state.branches), objToken(state.repos), objToken(expandedFiles || null),
+      state.reposLoading, state.reposError, state.rejectedRoots.size,
+      currentLanguage, canWriteGit(),
+    ].join('\u0001');
+    if (htmlMemo.key === key) return htmlMemo.html;
+    const html = buildHtml();
+    htmlMemo.key = key;
+    htmlMemo.html = html;
+    return html;
+  }
+
   function render() {
     captureScroll();
     watchDir();
@@ -1252,7 +1332,7 @@
     if (!state.dir || (!state.status && !state.loading && !state.error)) {
       ensureLoaded(0);
     }
-    const html = buildHtml();
+    const html = buildHtmlCached();
     restoreScroll();
     return html;
   }

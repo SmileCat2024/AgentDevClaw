@@ -8022,6 +8022,10 @@ body[data-theme="light"] .git-sub-count {
   padding: 0 6px 0 4px;
   border-radius: 7px;
   white-space: nowrap;
+  /* 未提交文件可达数千行：视口外行跳过内部布局与绘制（行高恒定 28px，
+     占位精确）；不支持的内核自动忽略本属性。 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 28px;
 }
 
 .git-file:hover {
