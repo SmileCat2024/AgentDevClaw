@@ -661,10 +661,10 @@ function getCompactRuntimeLabel(runtime, isConnected = true) {
       : (currentLanguage === 'zh' ? '执行工具' : 'Running Tools');
   }
   if (runtime.stage === 'retry_waiting') {
-    return currentLanguage === 'zh' ? '重试等待' : 'Retry Waiting';
+    return formatRetryStatusLabel(runtime) || (currentLanguage === 'zh' ? '重试等待' : 'Retry Waiting');
   }
   if (runtime.stage === 'retry_requesting') {
-    return currentLanguage === 'zh' ? '重新请求' : 'Retrying';
+    return formatRetryStatusLabel(runtime) || (currentLanguage === 'zh' ? '重新请求' : 'Retrying');
   }
   if (runtime.stage === 'failed') {
     return currentLanguage === 'zh' ? '请求失败' : 'Failed';
@@ -700,6 +700,21 @@ function getCompactRuntimeLabel(runtime, isConnected = true) {
 function formatRuntimeCompactNumber(value) {
   if (!Number.isFinite(value)) return '0';
   return Number(value).toLocaleString();
+}
+
+// 重试期间状态文案：等待响应 · 第 n/m 次重试中（llm.retry 通知经 overview
+// 镜像到 runtime snapshot，normalize 层已保留 retryAttempt/maxRetries）。
+// attempt 数据缺失（旧 runtime 未推送）返回空串，由调用方回退既有文案。
+function formatRetryStatusLabel(runtime) {
+  const attempt = typeof runtime?.retryAttempt === 'number' ? runtime.retryAttempt : undefined;
+  if (attempt === undefined) return '';
+  const max = typeof runtime?.maxRetries === 'number' ? runtime.maxRetries : undefined;
+  const attemptPart = max !== undefined
+    ? `${attempt}/${max}`
+    : String(attempt);
+  return currentLanguage === 'zh'
+    ? `等待响应 · 第 ${attemptPart} 次重试中`
+    : `Waiting · Retry ${attemptPart}`;
 }
 
 function formatRuntimeDuration(ms) {

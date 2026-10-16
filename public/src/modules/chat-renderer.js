@@ -137,6 +137,151 @@ function refreshReadResultForMessage(row, index) {
   });
 }
 
+// ── 错误终态判定与渲染（单一事实源）────────────────────────────
+// 三条渲染路径（render 全量 / renderMessage 增量 append / updateLastMessage
+// 尾部 patch）共用同一判定：execution 结构化字段优先；文本前缀匹配仅作为
+// 旧会话（框架 24de652 之前落盘、无 execution 字段）的兼容回退。历史上
+// render() 全量路径没有错误判定，错误消息刷新页面后降级为普通文本——
+// 单入口后三条路径行为一致，重渲染稳定。
+function getAssistantErrorMeta(msg) {
+  if (!msg || msg.role !== 'assistant') return null;
+  if (msg.execution?.status === 'failed') {
+    const err = msg.execution.error || {};
+    return {
+      category: typeof err.category === 'string' ? err.category : 'runtime_error',
+      statusCode: typeof err.statusCode === 'number' ? err.statusCode : null,
+      retryable: err.retryable === true,
+      message: msg.content,
+    };
+  }
+  if (msg.content && (msg.content.startsWith('[Error:') || msg.content.startsWith('[API Error:'))) {
+    return { category: null, statusCode: null, retryable: false, message: msg.content };
+  }
+  return null;
+}
+
+// 红框本体：正文 userMessage 原文（文案已自含类别与状态码语义），机器事实
+// （category / HTTP 码 / 可重试）收进 hover title 不占画面。auth_required
+// 是凭证恢复失败的终态（ADR-0028），内嵌"重新配置凭证"直达设置面板。
+function renderAssistantErrorBlock(msg) {
+  const meta = getAssistantErrorMeta(msg);
+  if (!meta) return `<div class="markdown-body">${renderMarkdown(msg.content)}</div>`;
+  const facts = [];
+  if (meta.category) facts.push(meta.category);
+  if (meta.statusCode) facts.push('HTTP ' + meta.statusCode);
+  if (meta.retryable) facts.push(t('error_fact_retryable'));
+  const titleAttr = facts.length > 0 ? ` title="${escapeHtml(facts.join(' · '))}"` : '';
+  const authAction = meta.category === 'auth_required'
+    ? `<span class="tool-error-action" onclick="openSettings()">${escapeHtml(t('error_action_reconfigure'))}</span>`
+    : '';
+  return `<div class="tool-error"${titleAttr}>${escapeHtml(meta.message)}${authAction}</div>`;
+}
+
+// ── 连续错误聚合（渲染层投影）────────────────────────────────
+// 连续同 category 的失败消息（中间无 user 消息与其他内容）合并为一组，
+// 避免 N 个红框堆叠污染画面。数据不动：每条错误消息照常独立存在（导出/
+// 接续/trim 不受影响），收敛只发生在渲染投影。前缀回退的旧会话错误（无
+// category）不参与聚合，保持单条红框。
+function computeAssistantErrorGroups(messages) {
+  const plan = new Array(messages.length).fill(null);
+  const groups = [];
+  let i = 0;
+  while (i < messages.length) {
+    if (messages[i].role !== 'assistant' || !messages[i].execution
+      || messages[i].execution.status !== 'failed') {
+      i += 1;
+      continue;
+    }
+    const category = getAssistantErrorMeta(messages[i]).category;
+    if (!category) { i += 1; continue; }
+    let j = i;
+    while (j + 1 < messages.length && messages[j + 1].role === 'assistant'
+      && messages[j + 1].execution?.status === 'failed'
+      && getAssistantErrorMeta(messages[j + 1]).category === category) {
+      j += 1;
+    }
+    if (j > i) {
+      const group = { startIndex: i, endIndex: j, category, count: j - i + 1 };
+      groups.push(group);
+      for (let k = i; k <= j; k += 1) plan[k] = { group, isFirst: k === i };
+    }
+    i = j + 1;
+  }
+  return { groups, plan };
+}
+
+// index 处的失败消息是否参与成组（相邻同 category 失败）。append / 尾部
+// patch 路径据此升级为全量渲染——组结构无法增量 patch。
+function isErrorGroupAffected(messages, index) {
+  if (index < 0 || index >= messages.length) return false;
+  const msg = messages[index];
+  if (msg.role !== 'assistant' || msg.execution?.status !== 'failed') return false;
+  const category = getAssistantErrorMeta(msg).category;
+  if (!category) return false;
+  const prev = index > 0 ? messages[index - 1] : null;
+  if (prev && prev.role === 'assistant' && prev.execution?.status === 'failed'
+    && getAssistantErrorMeta(prev).category === category) return true;
+  const next = index + 1 < messages.length ? messages[index + 1] : null;
+  if (next && next.role === 'assistant' && next.execution?.status === 'failed'
+    && getAssistantErrorMeta(next).category === category) return true;
+  return false;
+}
+
+// 类别短名（i18n，7 档）：框架只出 category 机器值，展示语言归前端。
+function getErrorCategoryLabel(category) {
+  switch (category) {
+    case 'rate_limit': return t('error_cat_rate_limit');
+    case 'connection_error':
+    case 'connection_timeout':
+    case 'ssl_cert_error': return t('error_cat_network');
+    case 'auth_error':
+    case 'invalid_api_key':
+    case 'auth_required': return t('error_cat_auth');
+    case 'server_overload':
+    case 'server_error': return t('error_cat_server');
+    case 'prompt_too_long': return t('error_cat_context');
+    default: return t('error_cat_request');
+  }
+}
+
+// 组展开状态：用户手动态持久于内存（跨全量渲染恢复）；新错误并入组时
+// 自动展开一次（reveal 消费后不再强制）。
+const _errorGroupUserState = new Map();
+const _pendingErrorGroupReveal = new Set();
+
+function errorGroupId(firstIndex) {
+  return 'eg-' + firstIndex;
+}
+
+function renderErrorGroupBlock(messages, group) {
+  const items = [];
+  for (let k = group.startIndex; k <= group.endIndex; k += 1) {
+    const m = messages[k];
+    const timeHtml = typeof m._ts === 'number' && formatChatTimestamp
+      ? `<span class="error-group-time">${escapeHtml(formatChatTimestamp(m._ts))}</span>`
+      : '';
+    items.push(`<div class="error-group-item">${timeHtml}<span class="error-group-text">${escapeHtml(m.content || '')}</span></div>`);
+  }
+  const gid = errorGroupId(group.startIndex);
+  const userState = _errorGroupUserState.get(group.startIndex);
+  const expanded = _pendingErrorGroupReveal.has(group.startIndex)
+    ? true
+    : (userState !== undefined ? userState : false);
+  const headLabel = escapeHtml(t('error_group_title')) + ' · ' + escapeHtml(getErrorCategoryLabel(group.category))
+    + ' · ' + escapeHtml(t('error_group_count').replace('{n}', String(group.count)));
+  return `
+    <div class="message-content">
+      <div class="tool-error error-group-head${expanded ? ' expanded' : ''}" id="${gid}" onclick="toggleErrorGroup('${gid}')">
+        <span class="error-group-head-text">${headLabel}</span>
+        <span class="error-group-toggle">${escapeHtml(t(expanded ? 'error_group_collapse' : 'error_group_expand'))}</span>
+      </div>
+      <div class="error-group-body${expanded ? ' expanded' : ''}">
+        ${items.join('')}
+      </div>
+    </div>
+  `;
+}
+
 // 生成单条消息的 HTML
 function renderMessage(msg, index) {
   const role = msg.role;
@@ -217,12 +362,8 @@ function renderMessage(msg, index) {
             </div>
           </div>
       `;
-    } else if (msg.execution?.status === 'failed'
-      || (msg.content && (msg.content.startsWith('[Error:') || msg.content.startsWith('[API Error:')))) {
-      // 错误消息使用红色样式。
-      // 优先读结构化 execution 元数据（随会话持久化，重渲染后仍在）；
-      // 文本前缀匹配仅作为旧会话（无 execution 字段）的回退。
-      innerContent += `<div class="tool-error">${escapeHtml(msg.content)}</div>`;
+    } else if (getAssistantErrorMeta(msg)) {
+      innerContent += renderAssistantErrorBlock(msg);
     } else {
       innerContent += `<div class="markdown-body">${renderMarkdown(msg.content)}</div>`;
     }
@@ -352,11 +493,37 @@ window.toggleRewriteDetail = function(id) {
   if (el) el.classList.toggle('expanded');
 };
 
+// 聚合组展开/收起：head 与 body 同步 class，用户态记录到内存（跨全量渲染恢复）
+window.toggleErrorGroup = function(gid) {
+  const head = document.getElementById(gid);
+  if (!head) return;
+  const body = head.parentElement && head.parentElement.querySelector('.error-group-body');
+  const expanded = !head.classList.contains('expanded');
+  head.classList.toggle('expanded', expanded);
+  if (body) body.classList.toggle('expanded', expanded);
+  const toggleLabel = head.querySelector('.error-group-toggle');
+  if (toggleLabel) toggleLabel.textContent = t(expanded ? 'error_group_collapse' : 'error_group_expand');
+  const firstIndex = parseInt(String(gid).replace('eg-', ''), 10);
+  if (!isNaN(firstIndex)) _errorGroupUserState.set(firstIndex, expanded);
+};
+
 // 追加新消息（保持现有 DOM 状态）
 function appendNewMessages(newMessages, startIndex) {
   // If the welcome page should be showing (process hidden + no user messages),
   // do a full render instead of appending rows that would all be hidden.
   if (shouldShowChatWelcome(currentMessages)) {
+    render(currentMessages);
+    return;
+  }
+  // 聚合组影响：新增失败消息与相邻失败同 category（成组/入组）时，组结构
+  // 无法增量 patch，升级全量渲染（签名去重 + 渲染分级兜底成本），并入组
+  // 记 reveal 让该组当次渲染自动展开。
+  if (newMessages.some((m, i) => m.role === 'assistant'
+    && isErrorGroupAffected(currentMessages, startIndex + i))) {
+    const { groups } = computeAssistantErrorGroups(currentMessages);
+    for (const g of groups) {
+      if (g.endIndex >= startIndex) _pendingErrorGroupReveal.add(g.startIndex);
+    }
     render(currentMessages);
     return;
   }
@@ -556,6 +723,20 @@ function updateLastMessage(msg) {
   const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
   const chatViewportTopBefore = container.scrollTop;
   const lastIndex = currentMessages.length - 1;
+
+  // 失败终态落入聚合组时，单行 patch 会破坏组视图，升级全量渲染
+  if (msg.role === 'assistant' && getAssistantErrorMeta(msg)
+    && isErrorGroupAffected(currentMessages, lastIndex)) {
+    const { groups } = computeAssistantErrorGroups(currentMessages);
+    for (const g of groups) {
+      if (lastIndex >= g.startIndex && lastIndex <= g.endIndex) {
+        _pendingErrorGroupReveal.add(g.startIndex);
+      }
+    }
+    render(currentMessages);
+    return;
+  }
+
   const lastRow = container.querySelectorAll('.message-row')[lastIndex];
   if (!lastRow) {
     renderCurrentMainView();
@@ -606,9 +787,13 @@ function updateLastMessage(msg) {
     // 不进 DOM —— 显示过程模式下丢过程内容，隐藏过程模式下空行状态
     // 与消息实态脱节。
     const callCountInRow = lastRow.querySelectorAll('.tool-call-container').length;
+    // 错误终态变化（流式正文 → execution 盖戳抵达）也走整行重建：重建经
+    // renderMessage 单入口，红框判定不会因 patch 路径绕过。
+    const errorStateMismatch = !!lastRow.querySelector('.tool-error') !== !!getAssistantErrorMeta(msg);
     const needsStructuralRebuild =
       (Array.isArray(msg.toolCalls) ? msg.toolCalls.length : 0) !== callCountInRow
-      || (!!msg.reasoning && !lastRow.querySelector('.reasoning-block'));
+      || (!!msg.reasoning && !lastRow.querySelector('.reasoning-block'))
+      || errorStateMismatch;
     if (needsStructuralRebuild) {
       runWithSuppressedChatViewportObservers(() => {
         lastRow.insertAdjacentHTML('beforebegin', renderMessage(msg, lastIndex));
@@ -892,6 +1077,9 @@ function render(messages) {
   }
   _lastRenderedChatSig = _sig;
 
+  // 连续错误聚合投影（渲染层）：组内非首消息由组首行统一渲染。
+  const errorGroupPlan = computeAssistantErrorGroups(messages).plan;
+
   const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
   const toolCallsById = messages.some(msg => msg.role === 'tool')
     ? indexToolCalls(messages) : null;
@@ -928,6 +1116,21 @@ function render(messages) {
         `;
       }
     } else if (role === 'assistant') {
+      // 聚合组：组内非首消息由组首行统一渲染，直接跳过
+      const groupEntry = errorGroupPlan[index];
+      if (groupEntry) {
+        if (!groupEntry.isFirst) {
+          return '';
+        }
+        return `
+          <div class="message-row ${role} error-group-row">
+            <div class="message-meta">
+              ${metaHtml}
+            </div>
+            ${renderErrorGroupBlock(messages, groupEntry.group)}
+          </div>
+        `;
+      }
       let innerContent = '';
 
       if (msg.reasoning) {
@@ -967,6 +1170,8 @@ function render(messages) {
             </div>
           </div>
         `;
+      } else if (getAssistantErrorMeta(msg)) {
+        innerContent += renderAssistantErrorBlock(msg);
       } else {
         innerContent += `<div class="markdown-body">${renderMarkdown(msg.content)}</div>`;
       }
@@ -1064,6 +1269,9 @@ function render(messages) {
     enhanceMathInElement(container);
     enhanceMarkdownTables(container);
   }, 220);
+
+  // 全量渲染落地后消费 reveal 标记：自动展开只在新错误并入组的当次渲染生效
+  _pendingErrorGroupReveal.clear();
 
   updateRollbackActionVisibility();
   applyConversationProcessState(container);

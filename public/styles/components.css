@@ -851,6 +851,38 @@ body[data-theme="light"] .markdown-body tr:nth-child(2n) {
   line-height: 1.5;
 }
 .tool-error svg { flex-shrink: 0; margin-top: 2px; }
+/* 错误终态内嵌动作（auth_required 的"重新配置凭证"直达入口） */
+.tool-error-action {
+  margin-left: auto;
+  padding-left: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.tool-error-action:hover { opacity: 0.8; }
+/* 连续错误聚合组：组头可点击展开，明细行默认收起 */
+.error-group-head { cursor: pointer; user-select: none; }
+.error-group-head .error-group-head-text { flex: 1; }
+.error-group-toggle {
+  white-space: nowrap;
+  font-size: 12px;
+  opacity: 0.75;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.error-group-body { display: none; margin-top: 6px; }
+.error-group-body.expanded { display: block; }
+.error-group-item {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+  opacity: 0.85;
+  word-break: break-word;
+}
+.error-group-time { flex-shrink: 0; opacity: 0.7; }
 .tool-result-body .tool-error {
   background: transparent;
   border: 0;

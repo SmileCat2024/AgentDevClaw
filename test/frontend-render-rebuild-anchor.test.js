@@ -101,6 +101,9 @@ function createBaseSandbox({ container }) {
     shouldRenderWorkspaceSurface: () => false,
     escapeHtml: (v) => String(v ?? ''),
     t: (k) => k,
+    // chat-renderer.js 模块级状态（render 尾段 snippet 引用）：错误聚合组
+    // reveal 消费，纯 no-op stub
+    _pendingErrorGroupReveal: new Set(),
 
     // chat-viewport.js module state (app-core.js declarations)
     followLatestEnabled: false,
