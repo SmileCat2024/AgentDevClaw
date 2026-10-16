@@ -19,6 +19,20 @@ import { MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, MODEL_CONNECTIONS_PATH, AGENT_US
 export const GLOBAL_DEFAULT_PRESET_NAME = '__default__';
 
 /**
+ * presets.json preset 条目上的可选调用策略字段（timeoutMs 空闲时限 / maxRetries
+ * 重试上限）→ ModelConfig 字段，作为框架默认（对话 60s idle / 5 次重试）之外的
+ * per-preset 逃生门。非法值不透传：落回框架默认，而不是把非法值放大成无超时保护。
+ */
+function pickPresetCallPolicy(preset) {
+  const fields = {};
+  const timeoutMs = Number(preset?.timeoutMs);
+  if (Number.isFinite(timeoutMs) && timeoutMs > 0) fields.timeoutMs = timeoutMs;
+  const maxRetries = Number(preset?.maxRetries);
+  if (Number.isFinite(maxRetries) && maxRetries >= 0) fields.maxRetries = Math.floor(maxRetries);
+  return fields;
+}
+
+/**
  * Resolve a preset name to { llm, modelName }.
  * @param {string} presetName
  * @param {{ thinkingEffort?: string | null }} [overrides] - Runtime overrides for this resolution only; does not mutate Claw user data presets.json.
@@ -112,6 +126,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       ...(Array.isArray(customHeaders) && customHeaders.length > 0
         ? { customHeaders }
         : {}),
+      ...pickPresetCallPolicy(preset),
     });
     console.log(`[ModelPreset] Resolved preset "${presetName}" => ${preset.model} (${protocol}${isOAuth ? ' / OAuth' : ''})`);
     return {

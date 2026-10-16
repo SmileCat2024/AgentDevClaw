@@ -11,9 +11,23 @@
  * 支持形态不一：anthropic 协议有原生的 thinking.disabled 字段，可显式关闭
  * （大上下文摘要对思考型模型可省去数分钟的隐性思考）；openai 系端点对
  * effort:'none' 的接受度因网关/模型而异，维持不传参交由厂商默认。
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.forceMaxTokens]
+ * @param {string} [opts.protocol]
+ * @param {number} [opts.deadlineMs] - 空闲时限覆盖（毫秒）。仅需要长预算的
+ *   调用方传（summary / trim 的非流式生成走 TRANSFORM_MODEL_TIMEOUT_MS）；
+ *   标题 / recap 等小任务不传，沿用框架默认。
  */
-export function tuneMirrorLLM(llm, maxTokens, { forceMaxTokens = false, protocol } = {}) {
+export function tuneMirrorLLM(llm, maxTokens, { forceMaxTokens = false, protocol, deadlineMs } = {}) {
   if (!llm || typeof llm !== 'object') return;
+
+  try {
+    if (Number.isFinite(deadlineMs) && deadlineMs > 0
+      && Object.prototype.hasOwnProperty.call(llm, 'deadlineMs')) {
+      llm.deadlineMs = deadlineMs;
+    }
+  } catch {}
 
   try {
     if (Object.prototype.hasOwnProperty.call(llm, 'thinkingEffort')) {

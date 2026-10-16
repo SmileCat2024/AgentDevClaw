@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { DEFAULT_MODEL_TIMEOUT_MS } from '@agentdevjs/core';
+import { TRANSFORM_MODEL_TIMEOUT_MS } from '@agentdevjs/core';
 import {
   buildNoProxyValue,
   buildProxyDispatcherOptions,
@@ -16,11 +16,14 @@ afterEach(() => {
 });
 
 describe('proxy dispatcher timeout policy', () => {
-  it('aligns headersTimeout with the framework model-call idle deadline', () => {
-    // 非流式请求的响应头要等服务端生成完整个结果才发出，headersTimeout 事实上
-    // 是"非流式总等待预算"，必须与框架 idle deadline 相等，否则较短一侧先掐断。
+  it('aligns headersTimeout with the framework transform-scenario idle deadline', () => {
+    // 非流式请求（transform 摘要走 noStream）的响应头要等服务端生成完整个结果
+    // 才发出，headersTimeout 事实上是"非流式总等待预算"，必须 ≥ 场景最大 idle
+    // deadline（TRANSFORM_MODEL_TIMEOUT_MS），否则较短一侧先掐断、另一侧语义
+    // 形同虚设。对话默认 idle（60s）必先于该值触发。
     const options = buildProxyDispatcherOptions();
-    assert.equal(options.headersTimeout, DEFAULT_MODEL_TIMEOUT_MS);
+    assert.equal(options.headersTimeout, TRANSFORM_MODEL_TIMEOUT_MS);
+    assert.equal(options.headersTimeout, 600_000);
     // 流式 chunk 间 60s 无数据即判定断流，与框架侧非代理 Agent 一致。
     assert.equal(options.bodyTimeout, 60_000);
     assert.equal(options.connect.timeout, 10_000);

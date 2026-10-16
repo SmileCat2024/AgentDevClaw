@@ -39,6 +39,7 @@
    - 0026 Session 视图统一：Session 身份为锚，Runtime 为运行态数据源，Thread 为连续性与输入控制投影
    - 0027 Agent OS 治理面：同意模型与 per-workspace runtime 配额（强制点在 startManagedAgent 内核漏斗；权限模型独立后行）
    - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换
+   - 0029 模型调用超时治理：对话默认 60s idle / 5 次重试，transform 预算 600s 经装配层实例分离，undici headersTimeout 锚 TRANSFORM_MODEL_TIMEOUT_MS，preset 级 timeoutMs/maxRetries 逃生门
 
 实现层真实入口：
 

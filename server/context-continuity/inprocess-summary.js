@@ -16,6 +16,7 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 import {
+  TRANSFORM_MODEL_TIMEOUT_MS,
   buildSummaryPrompt,
   generateSummaryText,
   scanFilesAndSkills,
@@ -29,6 +30,12 @@ const SUMMARY_MAX_TOKENS = 16000;
 
 /** 摘要类调用的 maxTokens 装配约定（与 inprocess-summary / trim 装配层共用）。 */
 export const SUMMARY_TUNE_MAX_TOKENS = SUMMARY_MAX_TOKENS;
+
+/**
+ * 摘要类实例的空闲时限装配约定：非流式摘要在整个结果生成完之前收不到响应头，
+ * 必须拿远宽于对话默认（60s）的 transform 预算，锚定框架常量。
+ */
+export const SUMMARY_TUNED_IDLE_MS = TRANSFORM_MODEL_TIMEOUT_MS;
 
 export function buildSummaryPromptForSession({ trimAppended, additionalInstructions }) {
   return buildSummaryPrompt({
@@ -79,7 +86,11 @@ export function resolveSummaryLLM({
     throw new Error(`No model preset resolved for in-process summary (agentDir=${agentRelativeDir}, role=${modelPresetRole}) — configure model presets for this agent`);
   }
   console.log(`[inprocess_summary] using model preset role=${modelPresetRole} model=${resolvedModel.modelName} agent=${agentId} session=${sessionId}`);
-  tuneMirrorLLM(resolvedModel.llm, SUMMARY_MAX_TOKENS, { forceMaxTokens: true, protocol: resolvedModel.protocol });
+  tuneMirrorLLM(resolvedModel.llm, SUMMARY_MAX_TOKENS, {
+    forceMaxTokens: true,
+    protocol: resolvedModel.protocol,
+    deadlineMs: SUMMARY_TUNED_IDLE_MS,
+  });
   return { llm: resolvedModel.llm, modelName: resolvedModel.modelName };
 }
 

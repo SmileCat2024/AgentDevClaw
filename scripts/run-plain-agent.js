@@ -45,7 +45,7 @@ import { provisionRuntimeEnvironment } from '../server/feature-runtime/provision
 import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
 import { getRegisteredAgent } from '../server/feature-runtime/agent-registry.js';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
-import { SUMMARY_TUNE_MAX_TOKENS } from '../server/context-continuity/inprocess-summary.js';
+import { SUMMARY_TUNE_MAX_TOKENS, SUMMARY_TUNED_IDLE_MS } from '../server/context-continuity/inprocess-summary.js';
 import { executePlainCallWithRotation, newPlainSessionId } from './plain-agent-rotation.js';
 import { mountPlainAgentBase } from './plain-agent-base.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
@@ -297,7 +297,11 @@ async function main() {
       userConfigPath: AGENT_USER_CONFIG_PATH(definition.id),
     }) || resolveMainModel();
     if (!resolved) return null;
-    tuneMirrorLLM(resolved.llm, SUMMARY_TUNE_MAX_TOKENS, { forceMaxTokens: true, protocol: resolved.protocol });
+    tuneMirrorLLM(resolved.llm, SUMMARY_TUNE_MAX_TOKENS, {
+      forceMaxTokens: true,
+      protocol: resolved.protocol,
+      deadlineMs: SUMMARY_TUNED_IDLE_MS,
+    });
     return resolved.llm;
   };
 
