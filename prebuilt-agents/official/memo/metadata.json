@@ -27,6 +27,7 @@
         {
           "id": "hero",
           "type": "hero",
+          "variant": "bar",
           "kicker": {
             "zh": "工具与效率",
             "en": "Tools & Efficiency"
@@ -36,8 +37,8 @@
             "en": "Memo"
           },
           "body": {
-            "zh": "随时说一句就记下，到点它会主动找你。从首页开始一段对话，对话会由一条长期线程承接；新建对话时旧对话自动归档收起。",
-            "en": "Jot things down by chatting, and it will reach out when it's time. Start a conversation from here; it is carried by one long-lived thread, and starting a new one archives the old automatically."
+            "zh": "随时说一句就记下，到点它会主动找你。",
+            "en": "Jot by chatting; it reaches out when it's time."
           },
           "actions": [
             {

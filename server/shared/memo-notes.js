@@ -79,6 +79,34 @@ export async function listMemoNotes(notesDir) {
   return entries;
 }
 
+/**
+ * 覆盖写入整篇便签（阅读视图块级就地编辑的保存语义）：只覆盖已有便签，
+ * 不创建新文件——新建仍归 runtime 侧 memo_note_write（新建拒绝覆盖是
+ * 「记下的东西不能丢」的产品约束，编辑覆盖是既存便签的合法改写）。
+ * content 允许为空串（用户把便签清空是合法编辑终态）。文件名无效或
+ * 便签不存在返回 null。
+ */
+export async function writeMemoNote(notesDir, rawFilename, content) {
+  const filename = sanitizeMemoFilename(rawFilename);
+  if (!filename) return null;
+  const filePath = path.join(notesDir, filename);
+  try {
+    await fs.access(filePath);
+  } catch {
+    return null;
+  }
+  const text = String(content ?? '');
+  await fs.writeFile(filePath, text, 'utf8');
+  const stat = await fs.stat(filePath);
+  return {
+    filename,
+    title: extractNoteTitle(text),
+    content: text,
+    updatedAt: stat.mtimeMs,
+    createdAt: stat.birthtimeMs,
+  };
+}
+
 /** 读取单篇便签全文（便签墙查看 overlay 用）。不存在或文件名无效返回 null。 */
 export async function readMemoNote(notesDir, rawFilename) {
   const filename = sanitizeMemoFilename(rawFilename);

@@ -71,7 +71,11 @@ function renderActionButton(action, options = {}) {
 function renderWorkspaceHero(agent, block) {
   const title = localizeWorkspaceValue(block.title, agent.name || agent.id);
   const body = localizeWorkspaceValue(block.body, agent.description || '');
-  const heroClass = agent?.id === 'home' ? 'workspace-hero home-shell' : 'workspace-hero';
+  // bar 变体：codex 登录卡片同款紧凑横排（左标题说明 / 右按钮组），
+  // 由 CSS .workspace-hero.bar 定形；声明驱动，不按 agent id 分支
+  const heroClass = agent?.id === 'home'
+    ? 'workspace-hero home-shell'
+    : 'workspace-hero' + (block?.variant === 'bar' ? ' bar' : '');
   const isIM = agent?.id === 'qqbot';
   const actionsHtml = isIM
     ? '<div class="workspace-hero-actions"><button class="ph-banner-btn secondary im-channel-config-btn" type="button" onclick="window.openIMChannelConfig()">' + (currentLanguage === 'zh' ? '配置渠道' : 'Channel Config') + '</button></div>'

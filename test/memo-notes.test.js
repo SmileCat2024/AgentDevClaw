@@ -14,6 +14,7 @@ import path from 'path';
 import {
   listMemoNotes,
   readMemoNote,
+  writeMemoNote,
   sanitizeMemoFilename,
   extractNoteTitle,
   extractNotePreview,
@@ -65,6 +66,46 @@ describe('listMemoNotes', () => {
     const notes = await listMemoNotes(dir);
     assert.deepEqual(notes, []);
     assert.equal((await fs.stat(dir)).isDirectory(), true);
+  });
+});
+
+describe('writeMemoNote（阅读视图就地编辑的覆盖写）', () => {
+  it('覆盖已有便签并返回最新字段', async () => {
+    const dir = path.join(tmpRoot, 'write');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'note.md'), '# 旧标题\n旧正文', 'utf8');
+    const note = await writeMemoNote(dir, 'note.md', '# 新标题\n新正文');
+    assert.equal(note.filename, 'note.md');
+    assert.equal(note.title, '新标题');
+    assert.equal(note.content, '# 新标题\n新正文');
+    assert.equal((await fs.readFile(path.join(dir, 'note.md'), 'utf8')), '# 新标题\n新正文');
+  });
+
+  it('content 允许为空串（清空便签是合法编辑终态）', async () => {
+    const dir = path.join(tmpRoot, 'write');
+    const note = await writeMemoNote(dir, 'note.md', '');
+    assert.equal(note.content, '');
+    assert.equal((await fs.readFile(path.join(dir, 'note.md'), 'utf8')), '');
+  });
+
+  it('不存在时不创建新文件（新建仍归 runtime 工具面）', async () => {
+    const dir = path.join(tmpRoot, 'write');
+    assert.equal(await writeMemoNote(dir, 'ghost.md', '# 新建'), null);
+    await assert.rejects(fs.access(path.join(dir, 'ghost.md')));
+  });
+
+  it('无效文件名返回 null 且不落盘', async () => {
+    const dir = path.join(tmpRoot, 'write');
+    assert.equal(await writeMemoNote(dir, '', '# x'), null);
+    assert.equal(await writeMemoNote(dir, 'con', '# x'), null);
+    assert.equal(await writeMemoNote(dir, null, '# x'), null);
+  });
+
+  it('覆盖不影响相邻便签', async () => {
+    const dir = path.join(tmpRoot, 'write');
+    await fs.writeFile(path.join(dir, 'other.md'), '# 不动', 'utf8');
+    await writeMemoNote(dir, 'note.md', '# 只改我');
+    assert.equal((await fs.readFile(path.join(dir, 'other.md'), 'utf8')), '# 不动');
   });
 });
 

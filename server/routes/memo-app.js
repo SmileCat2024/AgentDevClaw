@@ -24,7 +24,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { getPrebuiltWorkspaceDir } from '../shared/session-access.js';
 import { readJson, ensureDir } from '../shared/fs-helpers.js';
-import { listMemoNotes, readMemoNote } from '../shared/memo-notes.js';
+import { listMemoNotes, readMemoNote, writeMemoNote, sanitizeMemoFilename } from '../shared/memo-notes.js';
 import { resolveSessionViewerAgentId } from './acp.js';
 
 const MEMO_AGENT_ID = 'memo';
@@ -202,6 +202,26 @@ export function setupMemoAppRoutes(app, express, {
       }
       const notes = await listMemoNotes(NOTES_DIR);
       return res.json({ ok: true, notes });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  /** 便签写数据面：阅读视图块级就地编辑的整篇覆盖写（只覆盖已有便签）。 */
+  app.post('/protoclaw/memo-app/notes', express.json(), async (req, res, next) => {
+    try {
+      const raw = typeof req.body?.filename === 'string' ? req.body.filename : '';
+      if (typeof req.body?.content !== 'string') {
+        return res.status(400).json({ ok: false, error: 'content 必须是字符串' });
+      }
+      if (!sanitizeMemoFilename(raw)) {
+        return res.status(400).json({ ok: false, error: 'filename 无效' });
+      }
+      const note = await writeMemoNote(NOTES_DIR, raw, req.body.content);
+      if (!note) {
+        return res.status(404).json({ ok: false, error: `便签不存在: ${raw}` });
+      }
+      return res.json({ ok: true, note });
     } catch (err) {
       return next(err);
     }

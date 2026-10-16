@@ -134,6 +134,54 @@ function renderDisplayMathLatex(latex) {
   return `<span class="math-render-fallback">${escapeHtml(latex)}</span>`;
 }
 
+// ── Markdown 块级切分与重组（memo 便签就地编辑）──────────────────
+// marked.lexer 的顶层 token.raw 即原文切片，拼接无损（保真性由
+// test/frontend-markdown-blocks.test.js 用真实 marked 锚定）。space
+// token（块间空行）不是可编辑块：渲染时跳过，重组时原样保留。
+
+/** 整篇 markdown → 顶层块数组 [{ raw, type }]。raw 是该块的原文切片。 */
+function splitMarkdownBlocks(text) {
+  return marked.lexer(String(text ?? '')).map((token) => ({
+    raw: token.raw,
+    type: token.type,
+  }));
+}
+
+/** space token（块间空行）不是可编辑块，其余（标题/段落/列表/代码块/表格/引用/分隔线…）都是。 */
+function isEditableMarkdownBlock(block) {
+  return Boolean(block) && block.type !== 'space';
+}
+
+/** 块数组 → 整篇源码。与 splitMarkdownBlocks 互逆。 */
+function joinMarkdownBlocks(blocks) {
+  return (Array.isArray(blocks) ? blocks : []).map((block) => block.raw).join('');
+}
+
+/**
+ * 把整篇源码中第 blockIndex 个 token（splitMarkdownBlocks 返回数组的
+ * 下标，含 space 段）的原文切片替换为 newRaw，返回新整篇源码。
+ * newRaw 为空白时表示删除该块：同时吞并相邻一个 space 段，防止反复
+ * 清块让空行在文件里累积。越界下标原样返回。
+ */
+function replaceMarkdownBlock(text, blockIndex, newRaw) {
+  const source = String(text ?? '');
+  const blocks = splitMarkdownBlocks(source);
+  if (!Number.isInteger(blockIndex) || blockIndex < 0 || blockIndex >= blocks.length) {
+    return source;
+  }
+  const next = String(newRaw ?? '');
+  if (next.trim()) {
+    blocks[blockIndex] = { ...blocks[blockIndex], raw: next };
+    return joinMarkdownBlocks(blocks);
+  }
+  blocks.splice(blockIndex, 1);
+  const following = blocks[blockIndex];
+  const preceding = blocks[blockIndex - 1];
+  if (following && following.type === 'space') blocks.splice(blockIndex, 1);
+  else if (preceding && preceding.type === 'space') blocks.splice(blockIndex - 1, 1);
+  return joinMarkdownBlocks(blocks);
+}
+
 function renderMarkdown(text) {
   const { markdown, blocks } = extractDisplayMathBlocks(text);
   let html = marked.parse(markdown);
