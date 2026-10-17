@@ -10,7 +10,8 @@
 4. [docs/reference/glossary.md](docs/reference/glossary.md) — 领域词汇表：术语 + Avoid 负面清单，改代码前先对齐用词
 5. [docs/reference/dev-context-index.md](docs/reference/dev-context-index.md) — AgentDev 框架与 Claw 的跨仓库连接关系速查
 6. 涉及前端 UI 渲染、workspace 切换、数据加载时序 → 必读 [docs/reference/frontend-rendering-patterns.md](docs/reference/frontend-rendering-patterns.md)
-7. 架构决策记录（ADR），改动相关领域前先读对应篇（[docs/adr/](docs/adr/)）：
+7. 修改前端样式、新增 UI 控件 → 必读 [docs/reference/design-system.md](docs/reference/design-system.md)：视觉配方清单与节奏表，先复用既有配方，禁止自造同类控件
+8. 架构决策记录（ADR），改动相关领域前先读对应篇（[docs/adr/](docs/adr/)）：
    - 0001 导出面治理：Runtime 双类型拆分与按引用导出
    - 0002 Session Continuity as Transformation：会话接续的框架化原则
    - 0003 AgentDev 包结构破坏性拆分：无伞包、core 零重依赖
