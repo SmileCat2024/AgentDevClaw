@@ -41,6 +41,7 @@
    - 0027 Agent OS 治理面：同意模型与 per-workspace runtime 配额（强制点在 startManagedAgent 内核漏斗；权限模型独立后行）
    - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换
    - 0029 模型调用超时治理：对话默认 60s idle / 5 次重试，transform 预算 600s 经装配层实例分离，undici headersTimeout 锚 TRANSFORM_MODEL_TIMEOUT_MS，preset 级 timeoutMs/maxRetries 逃生门
+   - 0030 OS 通知投递面：统一出口、通知权限项与应用承接（notifications.* 权限族往 PERMISSION_ITEMS 加项；editingSurface 挂账落地、全局设置通知项只读审计；server 投递闸 + SSE app-notification + 前端哑呈现器；不建 OS 定时器服务）
 
 实现层真实入口：
 

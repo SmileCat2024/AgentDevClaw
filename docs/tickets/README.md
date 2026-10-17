@@ -626,3 +626,49 @@ coder 子代理散装 bash 调度的收编需求。定位裁决：**非沙箱**�
 
 - 改动全在 public/src 静态文件 → 整服重启生效。
 - vm 沙箱测试照既有 frontend-* 模式；浏览器手工冒烟在合入后执行。
+
+---
+
+## 批次 12：OS 通知投递面与 memo 定时提醒（038–039）（2026-10-17）
+
+来源：2026-10-17 grill 会话（通知理解两轮校准 + 定时器归属裁决 + 产品切片收口）。
+原则性决策已固化为 [ADR-0030](../adr/0030-os-notification-delivery-and-app-adoption.md)。
+
+### 已确认决策
+
+| # | 决策 | 结论 |
+|---|------|------|
+| 定时器归属 | 业务在 feature | **模型 A（APP 自治）**：提醒业务（循环规则、文案、完成态）住 memo feature，自持持久定时器；OS 不建定时器服务，只担保通知投递与权限 |
+| 到点投递 | LLM 在环位置 | 登记时 agent 打标 `direct \| agent`：direct 到点直弹登记文案零 LLM 成本；agent 到点唤醒活动线程生成后弹。走不走 LLM 是每次登记的 APP 决策，不是架构固定 |
+| 提醒归属 | APP 级资产 | 提醒对线程零绑定，投递时解析 APP 当前唯一活动线程（activeThreadId）；换代后打到新线程，提醒生死只由用户显式操作决定 |
+| 常驻深度 | IM 同款上限 | boot 自启 + 过期即发补偿；crash respawn 挂账为进程治理独立立项（全仓库无先例，不随本批新建） |
+| 权限粒度 | 按类型加项 | `notifications.finish / reminder / input` 布尔项族进 PERMISSION_ITEMS；三层判定链（覆盖 > metadata permissionDefaults > false）；编程小助手 finish 默认开、coder 默认关（升级期收紧，发布说明告知） |
+| 完成语义 | call.finish | 每轮结束即完成，与线程归档等看板域事实无关 |
+| 设置承接 | editingSurface 首落地 | 智能编码空间设置面板新增"通知"页签集中配置自身与 coder；全局工作空间面板通知项只读审计；APP 设置页由各 APP 声明渲染 |
+
+### 本批 tickets
+
+执行顺序：**038 → 039 严格串行**（039 依赖 038 的投递端点与权限闸；038 的完成通知迁移即通道验收用例）。
+
+| 票 | 仓库 | 内容 |
+|----|------|------|
+| [038](038-claw-notification-foundation.md) | AgentDevClaw | 通知基座：权限项族 + 统一投递出口（SSE app-notification 帧 + 主动投递端点）+ 完成/choice 通知迁移 + 设置承接面（已合入；server 重启后待冒烟） |
+| [039](039-claw-memo-reminders.md) | AgentDevClaw | memo 定时提醒：scheduled-trigger 机制件 + memo-reminders feature（APP 资产 + activeThreadId 投递解析 + 悬空降级）+ 装配与 boot 自启 + 首页提醒列表（待派发；038 的权限项生效依赖 server 重启） |
+
+### 明确暂缓项
+
+| 项 | 暂缓理由 | 重开条件 |
+|----|---------|---------|
+| crash respawn / 进程监督 | 全仓库无先例的新机制，唯一消费者是产品姿态而非功能（提醒刚性由 server 出口 + 过期补偿担保） | coder 长任务等场景立项进程治理课题 |
+| qqbot on-boot 迁移到通用自启机制 | 避免本批范围膨胀 | 通用机制第二次消费者出现 |
+| IM 渠道推送路由 | 通道形态未定，数据面留扩展缝 | memo 提醒稳定后按需立项 |
+| 通知中心 / 全局历史 / 离线补投 | ADR-0030 不做清单钉死 | 真实需求出现（在线投递语义是显式接受） |
+| snooze / 首页登记表单 | MVP 管理面收窄到对话内 + 列表 | 用户反馈诉求 |
+| scheduled-trigger 上提 AgentDev 框架 | 无跨仓库消费者（分层判据 ADR-0028） | 框架级契约诉求出现 |
+
+### 验收与发布注意
+
+- 038 全部 + 039 的 server / 前端改动 → **整服重启**验证；039 的 local-features 改动重启 memo runtime 生效。
+- 发布说明必须告知：coder 完成通知默认收紧为关（用户可在设置 → 通知改回）。
+- 手工冒烟清单（调度方补验）：设置面板"通知"页签与开关读写；编程小助手完成弹 / coder 默认不弹；memo 对话登记提醒 → direct 到点弹、agent 到点唤醒、首页列表完成/删除、boot 后过期补发。
+

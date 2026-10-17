@@ -36,6 +36,10 @@
   _Avoid_: 在 feature 层做强制（CLI / ACP 绕过）；只在 session create 路由拦（恢复 / 接续 / activate 击穿）。
 - **OS 词汇对照** — 程序 = agent 装配（agent.js + features + metadata.json）；进程 = runtime 子进程；syscall 边界 = server HTTP/IPC API；内核 = Claw server。
   _Avoid_: 引入"子代理"新分类做治理单位——治理单位是 workspace（agentId），与 ADR-0025 身份收敛方向一致。
+- **用户通知（app-notification）** — 面向用户的桌面 toast，经 server 统一出口（权限闸 → SSE `app-notification` 帧 → 前端呈现器）；权限项族 `notifications.finish / reminder / input`，三层判定链：用户覆盖 > metadata `permissionDefaults` > false（ADR-0030）。
+  _Avoid_: 与框架 `core/notification.ts`（DebugHub 的 call 状态 UI 信号，SSE `notification` 快照帧）混淆——两者语义不同；前端在 runtime 状态感知路径上直接弹通知（触发判定已上移 server）。
+- **editingSurface（设置承接）** — APP 设置面按 metadata 权限声明渲染编辑控件的通用机制；宿主可集中承接所管理子工作空间的项；全局工作空间面板只读审计。
+  _Avoid_: 在全局 Claw 设置里编辑 APP 通知项——"编辑位置迁就业务语义，知情权不迁就"（ADR-0027/0030）。
 
 ## 会话连续性（消费 @agentdevjs/core）
 
