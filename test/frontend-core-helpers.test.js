@@ -516,6 +516,36 @@ describe('desktop-notify: finish visibility', () => {
     assert.equal(notifications.length, 1);
   });
 
+  it('Tauri 壳：持久通知走原生 command，不再触发 Web Notification（避免双弹）', async () => {
+    const { ctx, notifications } = createDesktopNotifySandbox();
+    const invokes = [];
+    ctx.window.__TAURI_INTERNALS__ = {
+      invoke: async (cmd, args) => { invokes.push({ cmd, args }); },
+    };
+    ctx.run('currentRuntimeAgentId = "runtime-2"'); // 完成的是非焦点会话
+
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(invokes.length, 1);
+    assert.equal(invokes[0].cmd, 'persistent_notification');
+    assert.equal(notifications.length, 0); // 原生已发，Web API 不再发
+  });
+
+  it('Tauri 壳 invoke 失败：回退 Web Notification（保留 requireInteraction 语义）', async () => {
+    const { ctx, notifications } = createDesktopNotifySandbox();
+    ctx.window.__TAURI_INTERNALS__ = {
+      invoke: async () => { throw new Error('denied'); },
+    };
+    ctx.run('currentRuntimeAgentId = "runtime-2"');
+
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].options.requireInteraction, true);
+  });
+
   it('新一轮 call 开始：清除「刚刚完成」蓝灯（_recentlyFinishedRuntimes）', () => {
     const { ctx } = createDesktopNotifySandbox();
     ctx.run('_recentlyFinishedRuntimes.add("runtime-1")');

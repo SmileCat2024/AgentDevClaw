@@ -176,20 +176,16 @@ async function _presentAgentFinishedNotification(payload) {
     ? bodyParts.join('\n')
     : (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.');
 
-  try {
-    // 完成通知与主动投递类（提醒等）均持久显示（requireInteraction）：
-    // 停留至用户查看/关闭，
-    // 不随超时自动消失——完成的会话可能需要用户回来处理。
-    const notification = new Notification(
-      isZh ? `${agentName} 已完成` : `${agentName} finished`,
-      { body, tag: 'claw-agent-finished-' + normId, requireInteraction: true }
-    );
-    notification.onclick = () => {
+  // 持久显示（requireInteraction / 壳内原生 reminder toast）：停留至用户
+  // 查看/关闭，不随超时自动消失——完成的会话可能需要用户回来处理。
+  _showPersistentNotification(
+    isZh ? `${agentName} 已完成` : `${agentName} finished`,
+    { body, tag: 'claw-agent-finished-' + normId, requireInteraction: true },
+    () => {
       window.focus();
-      notification.close();
       _navigateToAgent(agent);
-    };
-  } catch (e) { /* ignore */ }
+    }
+  );
 }
 
 /* ── Input request（choice）通知呈现（type=input）─────────────────────────
@@ -240,6 +236,31 @@ function _presentInputRequestNotification(payload) {
   } catch (e) { /* ignore */ }
 }
 
+/* ── Tauri 壳原生持久通知 ──────────────────────────────────────────────
+ * WebView2 的 Web Notification 不兑现 requireInteraction（toast 默认 5
+ * 秒收进通知中心）。壳内持久类通知优先走自定义 command
+ * persistent_notification（Windows toast Scenario::Reminder：常驻屏幕
+ * 直到用户处理）；invoke 不可用 / 失败时回退 Web API（浏览器语义不变，
+ * requireInteraction 由浏览器自行解释）。原生 toast 成功后不再走 Web
+ * API（避免双弹）；系统 toast 点击激活由 AUMID 唤起应用窗口，会话级
+ * 精确导航仅 Web API 路径提供。
+ */
+function _showPersistentNotification(title, options, onClick) {
+  const internals = window.__TAURI_INTERNALS__;
+  if (internals && typeof internals.invoke === 'function') {
+    internals
+      .invoke('persistent_notification', { title, body: String(options.body || '') })
+      .catch(() => { try { _webNotification(title, options, onClick); } catch (e) { /* ignore */ } });
+    return;
+  }
+  try { _webNotification(title, options, onClick); } catch (e) { /* ignore */ }
+}
+
+function _webNotification(title, options, onClick) {
+  const notification = new Notification(title, options);
+  notification.onclick = onClick || null;
+}
+
 /* ── 主动投递类通知呈现（type=reminder 等 APP 侧发起）─────────────────────
  * 文案由 APP 经投递端点提供（title/body 透传）；threadId 存在时点击落点
  * 优先会话导航。
@@ -256,23 +277,24 @@ function _presentGenericAppNotification(payload) {
   const body = String(payload?.body || '').trim();
   const threadId = String(payload?.threadId || '').trim();
 
-  try {
-    const notification = new Notification(title, {
+  // 主动投递类（提醒等）持久显示：停留至用户查看/关闭（壳内走原生
+  // reminder toast，见 _showPersistentNotification）。
+  _showPersistentNotification(
+    title,
+    {
       body,
       tag: 'claw-app-notification-' + normId,
-      // 主动投递类（提醒等）持久显示：停留至用户查看/关闭
       requireInteraction: true,
-    });
-    notification.onclick = () => {
+    },
+    () => {
       window.focus();
-      notification.close();
       if (threadId && typeof window.openConversationTarget === 'function') {
         window.openConversationTarget({ threadId, agentId: agent?.id || normId });
         return;
       }
       _navigateToAgent(agent);
-    };
-  } catch (e) { /* ignore */ }
+    }
+  );
 }
 
 /* ── app-notification 帧呈现入口（sse-client 分发）── */

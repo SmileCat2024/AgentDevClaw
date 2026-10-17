@@ -360,6 +360,20 @@ fn is_service_origin(url: &tauri::Url) -> bool {
     url.host_str() == Some("127.0.0.1") && url.port() == Some(service_port())
 }
 
+/// 持久通知走 Windows 原生 toast（Scenario::Reminder：常驻屏幕直到用户
+/// 处理）。WebView2 的 Web Notification 不兑现 requireInteraction（toast
+/// 默认 5 秒收进通知中心），壳内持久类通知经此 command 转系统通知。
+/// AUMID 与通知插件一致（app identifier），toast 归属与点击激活指向本应用。
+#[tauri::command]
+fn persistent_notification(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    tauri_winrt_notification::Toast::new(&app.config().identifier)
+        .title(&title)
+        .text2(&body)
+        .scenario(tauri_winrt_notification::Scenario::Reminder)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 fn main() {
     // 右键唤起参数（首实例冷启动路径）：随窗口 URL query 交给前端。
     let open_request = parse_open_request(std::env::args());
@@ -374,6 +388,7 @@ fn main() {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
+        .invoke_handler(tauri::generate_handler![persistent_notification])
         // 服务源内的全部 WebView 权限（通知 / 麦克风 / 剪贴板等）自动授予，
         // 不向用户弹询问；前端 Notification.requestPermission 因此直接得 granted。
         .on_permission_request(|webview, _kind| {

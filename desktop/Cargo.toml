@@ -11,6 +11,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-notification = "2.3.2"
 tauri-plugin-single-instance = "2"
+# Windows 原生持久 toast（Scenario::Reminder）：Web Notification 的
+# requireInteraction 在 WebView2 不生效，持久通知经自定义 command 走系统 toast
+tauri-winrt-notification = "0.8"
 
 # 桌面壳是独立 crate，不与任何上层 Rust workspace 关联
 [workspace]
