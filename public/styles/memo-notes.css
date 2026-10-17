@@ -2,8 +2,11 @@
 
 /* 无界：section 本身不画面板（去掉 workspace-section 的边框/底色/圆角/内衬），
    便签卡片直接落在页面背景上，每张卡片自带容器；
-   与 banner 的间距由 workspace-surface 的 gap 统一承担 */
-.memo-notes-wall {
+   与 banner 的间距由 workspace-surface 的 gap 统一承担。
+   浅色主题伴生选择器：base.css 的 body[data-theme="light"] .workspace-section
+   优先级（0,2,1）高于单类，需同优先级后加载覆盖，否则浅色下出现白底板 */
+.memo-notes-wall,
+body[data-theme="light"] .memo-notes-wall {
   background: none;
   border: none;
   box-shadow: none;
@@ -18,7 +21,7 @@
 }
 
 /* 阅读态（点进便签）：视觉上「进入」了便签，hero 横幅让位；快记输入框
-   （app-chat-input-dock）常驻不隐藏。:has() 向前选兄弟，项目 CSS 已有先例 */
+   挂主内容列底部槽位（不在 surface 内），天然常驻。:has() 向前选兄弟，项目 CSS 已有先例 */
 .workspace-surface:has(.memo-notes-wall.is-reading) > .workspace-hero {
   display: none;
 }

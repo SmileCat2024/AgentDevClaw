@@ -2,77 +2,102 @@
  * app-chat-input.css — APP 型工作空间首页快记输入框（宿主通用能力）
  *
  * block 契约与交互见 public/src/modules/app-chat-input.js 头注。
- * 布局：水平居中、sticky 底部对齐；surface 内容不足一屏时也贴视口底
- * （min-height 100% + margin-top auto），内容长于视口时随滚动钉底。
- * 视觉：低默认高度 + 大圆角胶囊（单行时上下圆角近半圆拼合）；
+ * 布局：镜像对话视图 composer 的悬浮几何（#user-input-container 先例）——
+ * absolute 钉主内容列 bottom 50px，胶囊实底自带投影直接悬浮在内容之上
+ * （无渐变过渡带，避免被感知成包裹容器；滚动容器按胶囊高度留底 padding 让位）；
+ * 位置恒定，不随 surface 内容高度变化。
+ * 视觉：低默认高度 + 999px 胶囊半径（钳制到半高，任何高度下两端拼出半圆），
+ * 质感与排版均对齐对话视图 user-input-card（全局玻璃面配方 --glass-bg +
+ * blur/saturate；textarea 同 .user-input-textarea 的 16px/1.6）；
  * 发送按钮复用 .persistent-action-btn 圆形三态基型（is-sending spinner、
  * voice-disabled 与 voice-input 的 _updateVoiceUI 联动）。
  */
 
-/* 滚动容器：快记条在场时收敛 chat 模式遗留的 320px 底 padding
-   （对话视图 composer 不在工作空间表面，该余量只为对话模式服务） */
-#chat-container:has(.app-chat-input-dock) {
-  padding-bottom: 20px;
+/* 滚动容器：快记槽位悬浮在场时，底部留出胶囊（最大 180px 多行态）+ 悬浮位
+   （50px）的滚动让位——同 chat 模式为 composer 留 320px 的语义 */
+.main-content:has(.app-chat-input-slot:not(.hidden)) #chat-container {
+  padding-bottom: 240px;
 }
 
-/* 内容不足一屏时快记条仍贴视口底：surface 拉满滚动区 */
-.workspace-surface:has(.app-chat-input-dock) {
-  min-height: 100%;
-}
-
-.app-chat-input-dock {
-  position: sticky;
-  bottom: 0;
-  z-index: 6;
+/* 槽位：镜像对话视图 composer 的悬浮几何（#user-input-container 先例：
+   absolute + bottom 50px）。胶囊实底自带投影，直接悬浮在内容之上，
+   不做渐变过渡带（避免被感知成包裹容器）；空白带不挡内容点击 */
+.app-chat-input-slot {
+  position: absolute;
+  bottom: 50px;
+  left: 0;
+  right: 0;
+  z-index: 1000;
   display: flex;
   justify-content: center;
-  margin-top: auto; /* flex 列内推底；与 sticky 协作：长内容时 auto 余量为 0 */
-  padding: 22px 0 4px;
-  /* 滚动内容穿行下方的柔和过渡 */
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    color-mix(in srgb, var(--bg-color) 60%, transparent) 40%,
-    var(--bg-color)
-  );
+  pointer-events: none; /* 空白带不挡内容点击，胶囊自身恢复交互 */
+}
+
+/* 项目无通用 .hidden 工具类：显隐成对声明（同 workspace-tabs-bar.hidden 先例） */
+.app-chat-input-slot.hidden {
+  display: none;
+}
+
+/* dock 是行布局槽位的 flex item（主轴不再自动拉满）：显式宽度基准，
+   胶囊的 width:min(680px,100%) 才能回落到 680px 上限 */
+.app-chat-input-dock {
+  display: flex;
+  justify-content: center;
+  width: 100%;
 }
 
 .app-chat-input-capsule {
+  pointer-events: auto; /* 槽位带 pointer-events:none，胶囊恢复交互 */
   display: flex;
   align-items: center;
   gap: 6px;
   width: min(680px, 100%);
+  /* 排版回归内容本身（同 composer 的 16px/1.6），高度由内容与按钮自然决定 */
   padding: 6px 6px 6px 22px;
-  border: 1px solid var(--border-color);
-  border-radius: 27px; /* 总高 ~54px：单行时上下圆角近半圆拼合 */
-  background: var(--panel-bg);
-  box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  /* 玻璃质感：复用全局玻璃面配方（--glass-bg + blur+saturate），对齐对话视图
+     user-input-card 的输入框质感；胶囊形态（27px 大圆角）保留快记条身份 */
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  /* 999px 胶囊半径：浏览器钳制到半高——任何高度（单行/多行生长）下，
+     两端恒为 90° 四分之一圆、上下拼出标准半圆，不随高度失形 */
+  border-radius: 999px;
+  box-shadow: 0 8px 32px var(--shadow-strong), 0 0 0 1px rgba(255, 255, 255, 0.08);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .app-chat-input-capsule:focus-within {
-  border-color: color-mix(in srgb, var(--accent-text) 55%, var(--border-color));
-  box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.28),
-    0 0 0 3px color-mix(in srgb, var(--accent-text) 16%, transparent);
+  border-color: rgba(255, 255, 255, 0.32);
+  box-shadow: 0 8px 32px var(--shadow-strong), 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+body[data-theme="light"] .app-chat-input-capsule {
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+body[data-theme="light"] .app-chat-input-capsule:focus-within {
+  border-color: rgba(15, 23, 42, 0.24);
 }
 
 .app-chat-input-textarea {
   flex: 1;
   min-width: 0;
-  min-height: 40px;
+  /* 高度与 38px 按钮取齐 + 字段自带 6px 垂直呼吸：盒高不再恰好贴住行框
+     （26 ≈ 25.6px 时 overflow 下亚像素余量为零，首位光标上下贴边即被裁） */
+  min-height: 38px;
   max-height: 180px;
   margin: 0;
-  padding: 0;
+  padding: 6px 0;
+  box-sizing: border-box;
   border: none;
-  border-radius: 20px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-primary);
-  font-size: 14.5px;
-  font-family: inherit;
-  line-height: 40px;
+  /* 排版对齐对话视图 .user-input-textarea：16px / 1.6——行距紧凑 */
+  font-size: 16px;
+  font-family: inherit; /* 跟随 body 字体，即用户消息的字体 */
+  line-height: 1.6;
   resize: none;
   outline: none;
   overflow-y: auto;
@@ -112,8 +137,4 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
 
-@container main-content (max-width: 700px) {
-  .app-chat-input-dock {
-    padding: 14px 0 2px;
-  }
-}
+/* 胶囊宽度上限内的窄容器无需特殊处理（composer 各宽度恒为 bottom 50px） */

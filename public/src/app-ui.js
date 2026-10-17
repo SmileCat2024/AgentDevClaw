@@ -1196,7 +1196,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'studio-repository') return renderStudioRepositoryBlock(agent, block);
   if (block.type === 'coder-threads') return window.CoderThreadsUI?.render?.() || '';
   if (block.type === 'memo-notes') return window.MemoNotesUI?.render?.() || '';
-  if (block.type === 'app-chat-input') return window.AppChatInput?.render?.(agent, block) || '';
+  if (block.type === 'app-chat-input') return ''; // 快记输入框改挂主内容列底部槽位（syncAppChatInputSlot），不进 surface 内容流
   if (block.type === 'form') return renderWorkspaceForm(agent, block);
   if (block.type === 'status-grid') return renderWorkspaceStatusGrid(agent, block);
   if (block.type === 'assembly-library') return renderAssemblyLibraryBlock(agent, block);
@@ -1238,6 +1238,31 @@ function isEditingWorkspaceForm() {
     return false;
   }
   return Boolean(active.closest('.workspace-form') || active.closest('.project-docset-requirement-form'));
+}
+
+/** 快记输入框（app-chat-input block）挂主内容列底部槽位（#app-chat-input-slot，
+ *  与对话视图 composer 同层）：不参与 surface 内容流，位置不随内容高度变化
+ *  （历史问题：dock 在 surface 内底部对齐，点开便签内容长高后输入框被推下移）。
+ *  按配置签名比对（agent + 端点 + 语言），语义不变不动 DOM——轮询重渲染期间
+ *  正在输入的 textarea 不被重建（草稿本身经 render 内嵌缓存还原，无需签名）。 */
+function syncAppChatInputSlot(agent) {
+  const slot = document.getElementById('app-chat-input-slot');
+  if (!slot) return;
+  let key = '';
+  let block = null;
+  if (agent && shouldRenderWorkspaceSurface(agent)) {
+    const ui = getCurrentUnitUi(agent);
+    const blocks = Array.isArray(ui?.home?.blocks) ? ui.home.blocks : [];
+    block = blocks.find((b) => b?.type === 'app-chat-input' && shouldRenderBlock(b)) || null;
+    if (block) {
+      key = [agent.id, block.resolveEndpoint, block.ensureEndpoint, currentLanguage].join('|');
+    }
+  }
+  if (slot.dataset.mountKey !== key) {
+    slot.dataset.mountKey = key;
+    slot.innerHTML = block ? (window.AppChatInput?.render?.(agent, block) || '') : '';
+  }
+  slot.classList.toggle('hidden', !block);
 }
 
 function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
@@ -1288,6 +1313,7 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
   renderWorkspaceTabs(agent);
   // 结构性时机（主视图渲染）：保留显式调用，但必须走唯一声明入口（工单 037）。
   notifyInputSurfaceChanged(viewState.inputRequests);
+  syncAppChatInputSlot(agent); // 全路径（含各早退分支）统一维护快记输入框槽位
   if (shouldRenderWorkspaceSurface(agent)) {
     cancelChatScrollSettlement();
     // Capture before renderWorkspaceSurface consumes and resets it

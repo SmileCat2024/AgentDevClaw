@@ -40,7 +40,8 @@
  *   loadAgents (app-main.js)
  *   runWorkspaceAction (workspace-actions.js)
  * 消费方：
- *   app-ui.js renderWorkspaceBlock（block.type === 'app-chat-input'）
+ *   app-ui.js syncAppChatInputSlot（block.type === 'app-chat-input'，挂
+ *   #app-chat-input-slot 主内容列底部槽位，不进 surface 内容流）
  *   voice-input.js _dispatchVoiceAutoSend（'app-chat-input-textarea-' 前缀分支）
  */
 
