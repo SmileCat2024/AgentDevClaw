@@ -19,13 +19,14 @@ function ensureSettingsHost() {
 
 async function openSettings() {
   window.ClawFW.settingsOpen = true;
-  if (!['overview', 'custom', 'codex', 'opencode', 'speech'].includes(window.ClawFW.settingsTab)) window.ClawFW.settingsTab = 'overview';
+  if (!['overview', 'custom', 'codex', 'opencode', 'speech', 'notification'].includes(window.ClawFW.settingsTab)) window.ClawFW.settingsTab = 'overview';
   window.ClawFW.settingsEditing = null;
   window.ClawFW.codexConnectionView = false;
   window.ClawFW.settingsData = null;
   setClawSpeechModelConfig(null);
   setClawSpeechPresets([]);
   renderSettingsOverlay();
+  loadNotificationSettings();
   try {
     const [modelResp, speechResp] = await Promise.all([
       fetch('/protoclaw/model_config'),
@@ -89,6 +90,7 @@ function renderOverviewContent(presets, dm, isZh) {
     codex: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
     opencode: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>',
     speech: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>',
+    notification: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
   };
   // 排序与文案：订阅型供应商在前（开箱即用），自定义兜底在后；文案面向用户收益而非工程动作
   const navItems = [
@@ -96,6 +98,7 @@ function renderOverviewContent(presets, dm, isZh) {
     { key: 'opencode', title: isZh ? '使用 OpenCode 模型' : 'Use OpenCode models', desc: isZh ? '配置 OpenCode API Key，选择全球多家精选AI模型' : 'Add an OpenCode API key and pick from curated models worldwide' },
     { key: 'custom', title: isZh ? '添加自定义模型' : 'Add a custom model', desc: isZh ? '支持 OpenAI Chat Completions、Responses 和 Anthropic Messages API' : 'Works with OpenAI Chat Completions, Responses and Anthropic Messages APIs' },
     { key: 'speech', title: isZh ? '配置语音输入' : 'Set up voice input', desc: isZh ? '选择语音识别ASR模型，将语音转换为文字' : 'Pick an ASR model to turn speech into text' },
+    { key: 'notification', title: isZh ? '配置运行通知' : 'Set up run notifications', desc: isZh ? '控制编程小助手与 Coder 完成运行时是否弹出系统通知' : 'Choose whether finished runs pop a desktop toast for the assistant and Coder' },
   ];
   const cards = presets.map((p, idx) => {
     const isActive = dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl;
@@ -136,20 +139,134 @@ function renderOverviewContent(presets, dm, isZh) {
         : renderCatalogEmptyState(isZh ? '暂无模型' : 'No models yet', isZh ? '从上方快速配置中选择一类开始添加' : 'Pick a category in Quick setup above to add one')) + '</div>';
 }
 
+// ── 通知设置（ADR-0030 editingSurface：宿主集中承接）──────────────────
+// 声明制渲染：只显示 metadata 声明了 notifications.finish 的工作空间开关
+// （首个形态：宿主集中配置自身与 coder）。生效值判定链：resourcePolicy
+// 用户覆盖 > permissionDefaults 作者默认 > false；写入 PUT
+// /protoclaw/workspace_settings/resource_policy。渲染函数只读缓存
+// （window.ClawFW.notificationSettings），数据加载在 openSettings 与
+// switchSettingsTab 入口触发。
+
+async function loadNotificationSettings() {
+  try {
+    const res = await fetch('/protoclaw/workspace_settings');
+    const data = res.ok ? await res.json().catch(() => ({})) : {};
+    window.ClawFW.notificationSettings = {
+      loaded: true,
+      resourcePolicy: data?.resourcePolicy && typeof data.resourcePolicy === 'object' ? data.resourcePolicy : {},
+    };
+  } catch {
+    window.ClawFW.notificationSettings = { loaded: true, resourcePolicy: {} };
+  }
+  if (window.ClawFW.settingsOpen && window.ClawFW.settingsTab === 'notification') renderSettingsOverlay();
+}
+
+function getNotificationFinishTargets() {
+  const agents = Array.isArray(allAgents) ? allAgents : [];
+  return ['programming-helper', 'coder']
+    .map((agentId) => agents.find((a) => a.id === agentId && a.source === 'prebuilt'))
+    .filter((agent) => agent && Array.isArray(agent.permissions)
+      && agent.permissions.includes('notifications.finish'));
+}
+
+function resolveNotificationFinishState(agent, resourcePolicy) {
+  const userValue = resourcePolicy?.[agent.id]?.['notifications.finish'];
+  const defaults = agent.permissionDefaults && typeof agent.permissionDefaults === 'object'
+    ? agent.permissionDefaults : {};
+  const authorDefault = typeof defaults['notifications.finish'] === 'boolean'
+    ? defaults['notifications.finish'] : false;
+  return {
+    effective: typeof userValue === 'boolean' ? userValue : authorDefault,
+    customized: typeof userValue === 'boolean',
+    authorDefault,
+  };
+}
+
+function renderNotificationSettingsContent(isZh) {
+  const cached = window.ClawFW.notificationSettings;
+  if (!cached?.loaded) {
+    return '<div class="settings-section"><div class="proxy-info-text">' + (isZh ? '加载中...' : 'Loading...') + '</div></div>';
+  }
+  const resourcePolicy = cached.resourcePolicy || {};
+  const targets = getNotificationFinishTargets();
+  const rows = targets.length > 0
+    ? targets.map((agent) => {
+        const state = resolveNotificationFinishState(agent, resourcePolicy);
+        const sourceHint = state.customized
+          ? (isZh ? '已自定义 · 作者默认：' + (state.authorDefault ? '开' : '关') : 'Customized · author default: ' + (state.authorDefault ? 'on' : 'off'))
+          : (isZh ? '跟随作者默认' : 'Following the author default');
+        return [
+          '<div class="proxy-toggle-row">',
+          '<div class="proxy-toggle-label">',
+          '<div>' + escapeHtml((agent.name || agent.id) + (isZh ? ' 运行完成通知' : ' run-finished notifications')) + '</div>',
+          '<div style="font-size:12px;color:var(--text-secondary);">' + escapeHtml(sourceHint) + '</div>',
+          '</div>',
+          '<label class="proxy-switch">',
+          '<input type="checkbox" ' + (state.effective ? 'checked' : '') + ' onchange="onNotificationFinishToggle(\'' + escapeHtml(agent.id) + '\', this.checked)" />',
+          '<span class="proxy-switch-slider"></span>',
+          '</label>',
+          '</div>',
+        ].join('');
+      }).join('<div style="height:6px;"></div>')
+    : '<div class="proxy-info-text">' + (isZh ? '没有声明完成通知权限的工作空间。' : 'No workspace declares the finish-notification permission.') + '</div>';
+  return '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '运行完成通知' : 'Run-finished notifications') + '</div>'
+    + '<div class="proxy-info-text">'
+    + (isZh
+      ? '运行完成时在系统层弹出通知；页面在前台时不会打扰。通知只在页面存活期间送达。'
+      : 'Pop a desktop toast when a run finishes; foreground pages are never interrupted. Notifications reach this device only while it is alive.')
+    + '</div>'
+    + rows
+    + '<div id="notification-settings-status"></div></div>';
+}
+
+window.onNotificationFinishToggle = async function(agentId, checked) {
+  const isZh = currentLanguage === 'zh';
+  const statusEl = document.getElementById('notification-settings-status');
+  const setStatus = (text) => {
+    if (statusEl) statusEl.innerHTML = '<div class="proxy-status-row proxy-status-loading"><span class="proxy-status-text">' + escapeHtml(text) + '</span></div>';
+  };
+  try {
+    const res = await fetch('/protoclaw/workspace_settings/resource_policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, permissionId: 'notifications.finish', value: checked === true }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error || ('HTTP ' + res.status));
+    }
+    // 本地缓存同步后再重渲染（渲染纯函数不回读服务端）
+    const cached = window.ClawFW.notificationSettings;
+    if (cached?.loaded) {
+      cached.resourcePolicy = cached.resourcePolicy || {};
+      cached.resourcePolicy[agentId] = {
+        ...(cached.resourcePolicy[agentId] || {}),
+        'notifications.finish': checked === true,
+      };
+    }
+    if (statusEl) statusEl.innerHTML = '';
+    renderSettingsOverlay();
+  } catch (error) {
+    console.error('[model-settings] notification save failed:', error);
+    setStatus((isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error));
+    renderSettingsOverlay(); // 开关回滚到缓存态
+  }
+};
+
 function renderModelCatalogSettingsOverlay(host, data) {
   const isZh = currentLanguage === 'zh';
   const tab = window.ClawFW.settingsTab || 'overview';
   const presets = Array.isArray(data.presets) ? data.presets : [];
   const connections = data.connections || { opencode: { hasApiKey: false, tier: 'zen' } };
   const catalog = window.ClawFW.modelCatalogs?.[tab] || { models: [], loaded: false, loading: false, error: '' };
-  const labels = { overview: isZh ? '总览' : 'Overview', custom: isZh ? '自定义模型' : 'Custom', codex: 'Codex', opencode: 'OpenCode', speech: isZh ? '语音识别' : 'Speech' };
-  // 侧栏分组：核心四项直排，「其他」之下放语音识别，与总览快速配置同序
+  const labels = { overview: isZh ? '总览' : 'Overview', custom: isZh ? '自定义模型' : 'Custom', codex: 'Codex', opencode: 'OpenCode', speech: isZh ? '语音识别' : 'Speech', notification: isZh ? '通知' : 'Notifications' };
+  // 侧栏分组：核心四项直排，「其他」之下放语音识别与通知，与总览快速配置同序
   const tabButton = (key) =>
     '<button class="ph-settings-tab' + (tab === key ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'' + key + '\')">'
     + '<span class="ph-settings-tab-label">' + labels[key] + '</span></button>';
   const nav = ['overview', 'codex', 'opencode', 'custom'].map(tabButton).join('')
     + '<div class="ph-settings-tab-group">' + (isZh ? '其他' : 'Other') + '</div>'
-    + tabButton('speech');
+    + tabButton('speech') + tabButton('notification');
   const dm = data.config?.defaultModel || {};
   const speechConfig = getClawSpeechModelConfig() || {};
   const speechPreset = getClawSpeechPresets().find((preset) => preset.baseUrl === speechConfig.baseUrl && preset.apiKey === speechConfig.apiKey && preset.model === speechConfig.model && (preset.apiType || 'chat') === (speechConfig.apiType || 'chat'));
@@ -159,6 +276,8 @@ function renderModelCatalogSettingsOverlay(host, data) {
   let content = '';
   if (tab === 'overview') {
     content = renderOverviewContent(presets, dm, isZh);
+  } else if (tab === 'notification') {
+    content = renderNotificationSettingsContent(isZh);
   } else if (tab === 'speech') {
     const banner = speechPreset ? renderActiveModelBanner(isZh, speechPreset.name || speechPreset.model, speechApiTypeLabel(speechPreset.apiType) + ' · ' + (speechPreset.model || '—')) : '';
     const speechParts = renderSpeechModelSection(isZh);
@@ -1166,11 +1285,12 @@ window.closeSettings = closeSettings;
 window.switchSettingsTab = function(tab) {
   // 重渲染前先落盘输入中的 OpenCode API Key（同步捕获 DOM 值后再替换）
   flushOpenCodeKeySave();
-  window.ClawFW.settingsTab = ['overview', 'custom', 'codex', 'opencode', 'speech'].includes(tab) ? tab : 'overview';
+  window.ClawFW.settingsTab = ['overview', 'custom', 'codex', 'opencode', 'speech', 'notification'].includes(tab) ? tab : 'overview';
   window.ClawFW.settingsEditing = null;
   window.ClawFW.codexConnectionView = false;
   if (tab === 'speech') window.ClawFW._speechEditing = null;
   renderSettingsOverlay();
+  if (tab === 'notification') loadNotificationSettings();
   if (tab === 'codex') {
     refreshOAuthStatus();
     refreshModelCatalog('codex');

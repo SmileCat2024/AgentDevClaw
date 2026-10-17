@@ -245,9 +245,9 @@ describe('sse-client: 事件分发焦点路由', () => {
     assert.equal(calls.toasts[0].id, 'choice-alert-req-x');
   });
 
-  it('焦点 input-requests 非 choices 租约不弹选择桌面通知（文本输入请求不误报"需要你的选择"）', () => {
+  it('input-requests 帧不触发桌面通知（ADR-0030：通知由 server app-notification 帧驱动）', () => {
     const notified = [];
-    const { ctx } = loadSseClient({ _tryNotifyInputRequest: () => { notified.push('hit'); } });
+    const { ctx } = loadSseClient({ _presentAppNotification: (frame) => notified.push(frame) });
     ctx.run('bootSseClient()');
     latestSource().emit('hello', { hello: true });
     latestSource().emit('input-requests', {
@@ -256,26 +256,28 @@ describe('sse-client: 事件分发焦点路由', () => {
     });
     latestSource().emit('input-requests', {
       kind: 'input-requests', agentId: 'rt-focus',
-      data: [{ requestId: 'req-empty-q', mode: 'choices', questions: [] }],
+      data: [{ requestId: 'req-real', mode: 'choices', questions: ['继续吗'] }],
     });
     assert.equal(notified.length, 0);
   });
 
-  it('焦点 input-requests 真 choice 租约触发桌面通知', () => {
+  it('app-notification 帧分发给 _presentAppNotification（全局帧，不按焦点分流）', () => {
     const notified = [];
-    const { ctx } = loadSseClient({
-      _tryNotifyInputRequest: (runtimeId, reqId, data, opts) => notified.push([runtimeId, reqId, opts]),
-    });
+    const { ctx } = loadSseClient({ _presentAppNotification: (frame) => notified.push(frame) });
     ctx.run('bootSseClient()');
     latestSource().emit('hello', { hello: true });
-    latestSource().emit('input-requests', {
-      kind: 'input-requests', agentId: 'rt-focus',
-      data: [{ requestId: 'req-c', mode: 'choices', questions: ['继续吗'] }],
+    latestSource().emit('app-notification', {
+      type: 'reminder', agentId: 'memo', title: '到点了', body: '该开会了', threadId: 'wt-1',
     });
-    assert.equal(notified.length, 1);
-    assert.equal(notified[0][0], 'rt-focus');
-    assert.equal(notified[0][1], 'req-c');
-    assert.equal(notified[0][2]?.markObserved, false); // 焦点分支同样不写观察标记
+    latestSource().emit('app-notification', {
+      type: 'finish', agentId: 'rt-focus', finishTs: 1791509161407,
+    });
+    assert.equal(notified.length, 2);
+    assert.equal(notified[0].type, 'reminder');
+    assert.equal(notified[1].agentId, 'rt-focus');
+    // 非法帧（缺 agentId / 非 JSON）静默丢弃不炸
+    latestSource().emit('app-notification', { title: 'no-agent' });
+    assert.equal(notified.length, 2);
   });
 
   it('非焦点 input-requests 非 choices 租约不 toast（F1：文本输入请求不误报等待选择）', () => {
@@ -290,10 +292,10 @@ describe('sse-client: 事件分发焦点路由', () => {
     assert.equal(calls.toasts.length, 0);
   });
 
-  it('非焦点 choice 帧触发桌面通知并按 requestId 去重（P3：接替心跳通知职责）', () => {
+  it('非焦点 choice 帧 toast 照常，桌面通知不经此路径（ADR-0030）', () => {
     const notified = [];
     const { ctx, calls } = loadSseClient({
-      _tryNotifyInputRequest: (runtimeId, reqId, data, opts) => notified.push([runtimeId, reqId, opts]),
+      _presentAppNotification: (frame) => notified.push(frame),
     });
     ctx.run('bootSseClient()');
     latestSource().emit('hello', { hello: true });
@@ -301,20 +303,16 @@ describe('sse-client: 事件分发焦点路由', () => {
       kind: 'input-requests', agentId: 'rt-other',
       data: [{ requestId: 'req-nf', mode: 'choices', questions: ['继续吗'] }],
     });
-    // toast 与桌面通知同帧触发（toast 回前台可见，系统通知后台直达）；
-    // markObserved:false：前台到达不写观察标记，离场后由心跳重扫补发
+    // toast 保留（回前台可见）；桌面通知由 server 统一出口的
+    // app-notification 帧驱动，input-requests 帧不触发
     assert.equal(calls.toasts.length, 1);
-    assert.equal(notified.length, 1);
-    assert.equal(notified[0][0], 'rt-other');
-    assert.equal(notified[0][1], 'req-nf');
-    assert.equal(notified[0][2]?.markObserved, false);
-    // 同 requestId 重复帧：_seenChoiceAlertIds 去重，双路径均不重触发
+    assert.equal(notified.length, 0);
+    // 同 requestId 重复帧：_seenChoiceAlertIds 去重，toast 不重触发
     latestSource().emit('input-requests', {
       kind: 'input-requests', agentId: 'rt-other',
       data: [{ requestId: 'req-nf', mode: 'choices', questions: ['继续吗'] }],
     });
     assert.equal(calls.toasts.length, 1);
-    assert.equal(notified.length, 1);
   });
 
   it('messages probe 返回 handled404 → 触发 runtime 消失处理（F3）', async () => {

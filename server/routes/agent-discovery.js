@@ -11,7 +11,7 @@ import { resolveWorkspaceData, readWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './im.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { resolveAgentProcessMode } from '../shared/process-mode.js';
-import { normalizePermissionDeclarations } from '../shared/permission-registry.js';
+import { normalizePermissionDeclarations, normalizePermissionDefaults } from '../shared/permission-registry.js';
 import { sessionRecordToWorkspaceMeta } from './session-helpers-pure.js';
 
 export { resolveAgentProcessMode } from '../shared/process-mode.js';
@@ -95,9 +95,13 @@ export function createAgentDiscoveryModule(ctx) {
       if (entry.isFile() && entry.name === 'metadata.json') {
         const metadata = await readJson(entryPath);
         const agentDir = path.dirname(entryPath);
+        const permissions = normalizePermissionDeclarations(metadata.permissions);
         results.push({
           ...metadata,
-          permissions: normalizePermissionDeclarations(metadata.permissions),
+          permissions,
+          // 作者默认值（ADR-0030）：键必须 ∈ permissions 声明集且值合法，
+          // 否则启动扫描报错（与 permissions 声明同等级校验）。
+          permissionDefaults: normalizePermissionDefaults(metadata.permissionDefaults, permissions),
           id: metadata.id ?? path.basename(agentDir),
           relativeDir: path.relative(PROJECT_ROOT, agentDir).replace(/\\/g, '/'),
           agentPath: agentDir,

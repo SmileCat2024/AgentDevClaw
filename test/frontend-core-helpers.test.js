@@ -352,7 +352,6 @@ function createRuntimeStatusSandbox() {
     _syncPersistentInputUi() {},
     _syncQueueFromBackend() {},
     _markAgentCallStartedForNotify() {},
-    _tryNotifyAgentFinished() {},
     _renderLastCallElapsed() {},
     _recapPendingTrigger: false,
     _maybeFetchRecap() {},
@@ -476,10 +475,12 @@ describe('desktop-notify: finish visibility', () => {
     ctx.document.hidden = true;
     ctx.document.hasFocus = () => false;
 
-    await ctx.run(`_tryNotifyAgentFinished("runtime-1", {
-      state: { type: "call.finish", timestamp: ${foregroundTs - 1000} },
-      callActive: false
+    await ctx.run(`_presentAppNotification({
+      type: "finish",
+      agentId: "runtime-1",
+      finishTs: ${foregroundTs - 1000}
     })`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(notifications.length, 0);
   });
@@ -493,10 +494,12 @@ describe('desktop-notify: finish visibility', () => {
     ctx.document.hasFocus = () => false;
     ctx.run(`_markAgentCallStartedForNotify("runtime-1")`);
 
-    await ctx.run(`_tryNotifyAgentFinished("runtime-1", {
-      state: { type: "call.finish", timestamp: ${foregroundTs} },
-      callActive: false
+    await ctx.run(`_presentAppNotification({
+      type: "finish",
+      agentId: "runtime-1",
+      finishTs: ${foregroundTs}
     })`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(notifications.length, 1);
   });
@@ -509,13 +512,12 @@ describe('desktop-notify: finish visibility', () => {
   });
 });
 
-// ── desktop-notify: Worker 心跳按 SSE 状态分流（P3）─────────────────
+// ── desktop-notify: Worker 心跳（ADR-0030：仅前台时钟同步）─────────────
 // 心跳 IIFE 闭包不可直接触达：Worker stub 捕获 onmessage，测试手动发 tick。
-// refreshChoiceAlertStates 走真实函数体，以 fetch 记录器观测其是否被触发。
+// 通知本体由 app-notification 帧实时驱动，心跳不再承担任何轮询/重扫职责。
 
-function createHeartbeatSandbox({ sseActive = false } = {}) {
+function createHeartbeatSandbox() {
   const fetches = [];
-  const callRefreshes = [];
   class CapturingWorker {
     constructor() { CapturingWorker.last = this; }
     set onmessage(fn) { this._onmessage = fn; }
@@ -525,8 +527,7 @@ function createHeartbeatSandbox({ sseActive = false } = {}) {
     allAgents: [{ id: 'runtime-1', name: 'Runtime One' }],
     currentLanguage: 'en',
     normalizeAgentIdentity(value) { return String(value || '').trim(); },
-    isSseActive() { return sseActive; },
-    refreshAgentCallStates(agents, options) { callRefreshes.push({ agents, options }); },
+    isSseActive() { return false; },
     fetch: async (url) => {
       fetches.push(String(url));
       return { ok: true, json: async () => ({ alerts: [] }) };
@@ -538,80 +539,62 @@ function createHeartbeatSandbox({ sseActive = false } = {}) {
   });
   ctx.Notification.permission = 'granted';
   ctx.window.focus = () => {};
-  ctx.document.hasFocus = () => false;
-  ctx.document.hidden = true;
+  ctx.document.hasFocus = () => true;
+  ctx.document.hidden = false;
   ctx.loadSource('public/src/modules/desktop-notify.js');
   const tick = () => CapturingWorker.last._onmessage({ data: 'tick' });
-  return { ctx, tick, fetches, callRefreshes };
+  return { ctx, tick, fetches };
 }
 
-describe('desktop-notify: Worker 心跳按 SSE 状态分流（P3）', () => {
-  it('SSE 激活时后台 tick：进入后台即刻重扫一次 pending choice，窗口内不重复', () => {
-    const { tick, fetches, callRefreshes } = createHeartbeatSandbox({ sseActive: true });
+describe('desktop-notify: Worker 心跳（ADR-0030：仅前台时钟同步）', () => {
+  it('后台 tick：只刷新前台时钟，不触发任何轮询或 fetch', () => {
+    const { ctx, tick, fetches } = createHeartbeatSandbox();
+    ctx.document.hidden = true;
+    ctx.document.hasFocus = () => false;
+    const before = ctx.run('_lastForegroundTs');
     tick();
-    // 时间戳 0 视为过期：首个 tick 即刻扫一次（补住前台期间到达的挂起 choice）
-    assert.equal(fetches.length, 1);
-    tick();
-    assert.equal(fetches.length, 1); // 30s 窗口内不重复
-    assert.equal(callRefreshes.length, 2); // 远程 call 轮询每 tick 保留
-    assert.equal(callRefreshes[0].options?.force, true);
+    assert.equal(fetches.length, 0); // 通知职责已由 app-notification 帧驱动
+    assert.equal(ctx.run('_lastForegroundTs'), before); // 后台不推进时钟
   });
 
-  it('SSE 激活 30s 节流：5s 前扫过不再扫；降级后 2s 节流立即恢复', () => {
-    const { ctx, tick, fetches } = createHeartbeatSandbox({ sseActive: true });
-    ctx.run(`_lastChoiceNotifyCheckAt = Date.now() - 5000`);
+  it('前台 tick：刷新前台时钟（宽限期判定的时间源）', () => {
+    const { ctx, tick } = createHeartbeatSandbox();
+    ctx.run('_lastForegroundTs = 0');
     tick();
-    assert.equal(fetches.length, 0); // 5s < 30s（SSE 激活态节流）
-    ctx.isSseActive = () => false; // 断连/降级：isSseActive 翻 false
-    tick();
-    assert.equal(fetches.length, 1); // 5s > 2s（降级态节流）→ 立即恢复
-    assert.ok(fetches[0].includes('/protoclaw/choice_alerts'));
-  });
-
-  it('SSE 未激活（传统轮询形态）后台 tick：全量职责执行', () => {
-    const { tick, fetches, callRefreshes } = createHeartbeatSandbox({ sseActive: false });
-    tick();
-    assert.equal(callRefreshes.length, 1);
-    assert.equal(fetches.length, 1);
-  });
-
-  it('前台 tick：心跳不介入（poll 循环负责）', () => {
-    const { ctx, tick, fetches, callRefreshes } = createHeartbeatSandbox({ sseActive: false });
-    ctx.document.hidden = false;
-    ctx.document.hasFocus = () => true;
-    tick();
-    assert.equal(fetches.length, 0);
-    assert.equal(callRefreshes.length, 0);
+    assert.ok(ctx.run('_lastForegroundTs') > 0);
   });
 });
 
-describe('desktop-notify: markObserved 选项（SSE 事件路径的观察标记语义）', () => {
-  it('markObserved:false 前台到达不写观察标记，离场后重扫可补发', async () => {
+describe('desktop-notify: input 帧呈现（choice 通知，ADR-0030）', () => {
+  it('前台到达 input 帧不弹（用户已看到 choice 卡片）；后台到达照常弹', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
     ctx.run('_syncForegroundState()'); // 前台：hidden=false + hasFocus=true
-    await ctx.run('_tryNotifyInputRequest("runtime-1", "req-a", null, { markObserved: false })');
+    ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-a" })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(notifications.length, 0);
-    assert.equal(ctx.run('_foregroundObservedInputMap.has("runtime-1")'), false); // 未标记
 
-    // 用户离场（超宽限期），心跳重扫路径（默认 opts）补发
+    // 用户离场（超宽限期），同帧后台到达照常弹
     ctx.document.hidden = true;
     ctx.document.hasFocus = () => false;
     ctx.run(`_lastForegroundTs = ${Date.now() - 60000}`);
-    await ctx.run('_tryNotifyInputRequest("runtime-1", "req-a")');
-    assert.equal(notifications.length, 1); // 补发成功
+    ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-a" })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(notifications.length, 1);
   });
 
-  it('默认（markObserved）前台到达写观察标记，离场后仍抑制', async () => {
+  it('后台同 requestId 30s 内重放不重复弹；新 requestId（新一轮 choice）照常弹', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
-    ctx.run('_syncForegroundState()');
-    await ctx.run('_tryNotifyInputRequest("runtime-1", "req-b")');
-    assert.equal(notifications.length, 0);
-    assert.equal(ctx.run('_foregroundObservedInputMap.has("runtime-1")'), true);
-
     ctx.document.hidden = true;
     ctx.document.hasFocus = () => false;
     ctx.run(`_lastForegroundTs = ${Date.now() - 60000}`);
-    await ctx.run('_tryNotifyInputRequest("runtime-1", "req-b")');
-    assert.equal(notifications.length, 0); // 观察标记持续抑制
+    ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-b" })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-b" })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(notifications.length, 1); // requestId 去重挡住重放
+
+    ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-c" })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(notifications.length, 2); // 新 requestId 照常弹
   });
 });

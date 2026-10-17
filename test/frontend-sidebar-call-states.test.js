@@ -69,7 +69,7 @@ function loadCallStates() {
     isInterruptSuppressed: () => false,
     clearInterruptSuppression: () => {},
     _markAgentCallStartedForNotify: () => {},
-    _tryNotifyAgentFinished: (runtimeId, payload) => finishedNotified.push({ runtimeId, payload }),
+    _presentAppNotification: (frame) => finishedNotified.push(frame),
     renderAgentList: () => renders.push(1),
     currentRuntimeAgentId: 'rt-focus',
   });
@@ -186,11 +186,10 @@ describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）'
   let env;
   beforeEach(() => { env = loadCallStates(); });
 
-  it('非焦点 true→false：记录完成并触发完成通知', () => {
+  it('非焦点 true→false：记录完成蓝灯；桌面通知不在此路径触发（ADR-0030 上移 server）', () => {
     env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
     env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
-    assert.equal(env.finishedNotified.length, 1);
-    assert.equal(env.finishedNotified[0].runtimeId, 'rt-other');
+    assert.equal(env.finishedNotified.length, 0);
     const finished = env.run('Array.from(_recentlyFinishedRuntimes)');
     assert.deepEqual(JSON.parse(JSON.stringify(finished)), ['rt-other']);
   });
@@ -198,7 +197,7 @@ describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）'
   it('焦点 true→false：不进 recentlyFinished（避免自我标记）', () => {
     env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: true })');
     env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: false })');
-    assert.equal(env.finishedNotified.length, 1); // 完成通知仍触发
+    assert.equal(env.finishedNotified.length, 0);
     const finished = env.run('Array.from(_recentlyFinishedRuntimes)');
     assert.deepEqual(JSON.parse(JSON.stringify(finished)), []);
   });

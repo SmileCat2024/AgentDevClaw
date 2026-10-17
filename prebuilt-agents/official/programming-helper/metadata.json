@@ -8,6 +8,11 @@
   "category": "development",
   "processMode": "shared-by-project",
   "enabled": true,
+  "permissions": ["notifications.finish", "notifications.input"],
+  "permissionDefaults": {
+    "notifications.finish": true,
+    "notifications.input": true
+  },
   "features": [
     "todo",
     "force-continuation",

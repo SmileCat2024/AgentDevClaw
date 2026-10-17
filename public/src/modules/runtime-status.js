@@ -16,7 +16,6 @@
  *   工单 037：calling 翻转不再手动戳输入面——calling 不进入显示模式矩阵，
  *   模式翻转由真正的状态写入（patch / 队列同步）声明，此前的三处
  *   reset+render 配对为死路径，已删除。
- * - _tryNotifyAgentFinished (desktop-notify.js)
  * - _recapPendingTrigger, _maybeFetchRecap (recap-hint.js)
  * - _syncPersistentActionButton, _syncQueueFromBackend, _syncPersistentInputUi,
  *   _renderLastCallElapsed, _lastCallFinishTime, _pendingQueuedCount (persistent-input.js / app-main.js)
@@ -1196,7 +1195,6 @@ function applyNotificationStatus(notifData, runtimeId) {
           _agentSuspended.delete(runtimeId);
         }
         clearInterruptSuppression(runtimeId);
-        if (prev === true) _tryNotifyAgentFinished(runtimeId, payload);
       }
       callingStateChanged = (prev === true) !== nextCalling;
       if (callingStateChanged) {
@@ -1257,7 +1255,6 @@ function applyNotificationStatus(notifData, runtimeId) {
         }
         callingStateChanged = true;
         renderAgentList();
-        _tryNotifyAgentFinished(currentRuntimeAgentId, payload);
       }
       clearInterruptSuppression(currentRuntimeAgentId);
     }
@@ -1320,7 +1317,6 @@ function applyNotificationStatus(notifData, runtimeId) {
       }
       clearInterruptSuppression(currentRuntimeAgentId);
       renderAgentList();
-      _tryNotifyAgentFinished(currentRuntimeAgentId, payload);
     }
     _syncPersistentActionButton();
     _syncPersistentInputUi();

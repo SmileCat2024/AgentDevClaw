@@ -402,10 +402,9 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
  * Shows a ClawToast warning for each newly discovered request so the user
  * is alerted even when viewing a different conversation.
  *
- * Note: Desktop notifications for choice requests are handled independently
- * by refreshChoiceAlertStates() in desktop-notify.js (called from the worker
- * heartbeat when backgrounded). This separation is intentional — see the
- * comment on refreshChoiceAlertStates for details.
+ * Note: Desktop notifications for choice requests are driven by the server's
+ * app-notification SSE frame (unified notification outlet, ADR-0030;
+ * presented by desktop-notify.js). This separation is intentional.
  */
 async function checkGlobalChoiceAlerts() {
   try {

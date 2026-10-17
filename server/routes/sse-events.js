@@ -55,6 +55,19 @@ export function publishThreadEvent(threadId, payload) {
   if (typeof _threadPublisher === 'function') _threadPublisher(threadId, payload);
 }
 
+// ── app-notification 帧发布（模块级入口，ADR-0030）────────────────────
+// 面向用户的桌面通知统一出口的 SSE 载体。事实源在 server 侧通知出口
+// （app-notification.js：权限判定 + 事件级去重），不在 ViewerWorker 会话
+// 事件总线——发布入口因此是模块级函数（照 thread 事件先例）。全局帧：
+// 不按 thread 过滤，进环形缓冲、参与 Last-Event-ID 重放。严禁与既有
+// notification 快照帧（call 状态感知）混淆——两者语义不同。
+let _appNotificationPublisher = null;
+
+/** 发布 app-notification 帧：payload 由通知出口组装（agentId/type/素材）。 */
+export function publishAppNotification(payload) {
+  if (typeof _appNotificationPublisher === 'function') _appNotificationPublisher(payload);
+}
+
 export function createSseEventsModule(deps = {}) {
   const {
     viewerWorker,
@@ -69,6 +82,10 @@ export function createSseEventsModule(deps = {}) {
     // 跨入口（事件帧 / hello / 轮询降级）去重不重响。
     playSound = null,
     seenChoiceRequestIds = null,
+    // ADR-0030：runtime 状态类通知感知钩子（server.js 装配为通知出口的
+    // observeCallStatusSnapshot）。notification / input-requests 快照组装
+    // 后异步调用（不 await、自捕获错误），判定权限并发布 app-notification 帧。
+    onCallStatusSnapshot = null,
   } = deps;
 
   const supported = !!viewerWorker && typeof viewerWorker.onSessionEvent === 'function';
@@ -132,6 +149,27 @@ export function createSseEventsModule(deps = {}) {
     }
   }
 
+  /**
+   * app-notification 帧发布（模块级 publishAppNotification 的实例侧实现）：
+   * 全局帧——无 threadId，投递到全部 live 连接，Last-Event-ID 重放自然覆盖
+   * （重放过滤只对带 threadId 的帧按订阅集收窄）。发布永不抛错：通知帧
+   * 组装失败只丢这一帧并留痕。
+   */
+  function publishAppNotificationInternal(payload) {
+    try {
+      const data = payload && typeof payload === 'object' ? payload : {};
+      const eid = ++eidSeq;
+      const frame = formatFrame(eid, 'app-notification', data);
+      ring.push({ eid, frame });
+      if (ring.length > ringSize) ring.splice(0, ring.length - ringSize);
+      for (const conn of clients) {
+        if (conn.live) writeConn(conn, frame);
+      }
+    } catch (err) {
+      console.warn('[sse-events] publishAppNotification failed:', err?.message || err);
+    }
+  }
+
   function flushPending(entry) {
     pendingByAgent.delete(entry.key);
     try {
@@ -157,6 +195,13 @@ export function createSseEventsModule(deps = {}) {
           .map((lease) => ({ requestId: lease.requestId })));
       }
       publish(entry.kind, { kind: entry.kind, agentId: entry.agentId, data: snapshot });
+      // 通知出口的 runtime 状态感知（ADR-0030）：异步判定权限并发布
+      // app-notification 帧；不 await、自捕获错误，绝不阻断 SSE 管线。
+      if ((entry.kind === 'notification' || entry.kind === 'input-requests')
+        && typeof onCallStatusSnapshot === 'function') {
+        Promise.resolve(onCallStatusSnapshot(entry.kind, entry.agentId, snapshot))
+          .catch((err) => console.warn(`[sse-events] onCallStatusSnapshot ${entry.kind}:${entry.agentId} failed:`, err?.message || err));
+      }
     } catch (err) {
       // 组装失败只丢这一帧：快照方法不应抛错，真抛了也不该断掉整条管线
       console.warn(`[sse-events] flush ${entry.kind}:${entry.agentId} failed:`, err?.message || err);
@@ -339,9 +384,10 @@ export function createSseEventsModule(deps = {}) {
 
   const unsubscribe = supported ? viewerWorker.onSessionEvent(onWorkerEvent) : null;
 
-  // 模块级 thread 发布入口注册：后创建的实例接管（生产单实例；测试逐
-  // 实例注册 / closeAll 反注册，互不串扰）。
+  // 模块级发布入口注册：后创建的实例接管（生产单实例；测试逐实例注册 /
+  // closeAll 反注册，互不串扰）。
   _threadPublisher = publishThreadEventInternal;
+  _appNotificationPublisher = publishAppNotificationInternal;
 
   return {
     setupRoutes(app) {
@@ -357,6 +403,7 @@ export function createSseEventsModule(deps = {}) {
       }
       if (typeof unsubscribe === 'function') unsubscribe();
       if (_threadPublisher === publishThreadEventInternal) _threadPublisher = null;
+      if (_appNotificationPublisher === publishAppNotificationInternal) _appNotificationPublisher = null;
     },
     stats() {
       return {

@@ -1,56 +1,60 @@
 /**
- * Desktop Notification 模块
- * 从 app-main.js 拆出
+ * Desktop Notification 模块 — app-notification 帧呈现器（ADR-0030）
  *
- * 功能：
- *   1. 当 agent 运行完毕且页面不在前台时，通过 Notification API 弹出系统通知。
- *   2. 当 user_input feature 的 choice 工具触发且页面不在前台时，同样弹出通知。
- *   内置 Web Worker 心跳绕过浏览器后台 tab timer 节流。
+ * 触发判定已上移 server（统一投递出口：权限闸 + 事件级去重 + SSE
+ * app-notification 帧）；本模块只承担设备端呈现策略：
+ *   1. 前台判定（document.hidden / focus）与前台宽限期；
+ *   2. 呈现级去重（finishTs / requestId 事件幂等 + 30s 并发窗口）；
+ *   3. 通知文案组装（fetch 最后回复做正文预览、markdown 剥离截断）；
+ *   4. Tauri/Web 通知权限处理与 toast 点击导航。
+ * 内置 Web Worker 心跳仅承担前台时钟同步（绕过后台 tab timer 节流，
+ * 宽限期判定依赖持续刷新的 _lastForegroundTs）。
+ *
+ * 帧语义（server 侧已保证）：type=finish 的完成事实已排除挂起（ADR-0019）
+ * 且按 agentId+finishTs 事件级去重；type=input 的 choice 请求按
+ * agentId+requestId 去重；type=reminder 等主动投递类透传 APP 文案。
+ * SSE 断连重连的 Last-Event-ID 重放会再次投递同帧，由本模块呈现级去重
+ * 挡住。严禁与既有 notification 快照帧（call 状态感知，runtime-status
+ * 消费）混淆——两者语义不同。
  *
  * 依赖全局状态 (定义在 app-core.js):
  *   allAgents, currentLanguage
- * 依赖全局函数 (定义在 app-main.js, 运行时调用):
- *   normalizeAgentIdentity, refreshAgentCallStates,
- *   window.handlePrebuiltAgentClick, window.switchAgent
- * 导出全局函数 (window.*):
- *   _tryNotifyAgentFinished, _tryNotifyInputRequest, _requestNotifyPermission
+ * 依赖全局函数 (运行时解析):
+ *   normalizeAgentIdentity, _recentlyFinishedRuntimes (sidebar-render.js),
+ *   window.handlePrebuiltAgentClick, window.switchAgent,
+ *   window.openConversationTarget
+ * 导出全局函数:
+ *   _presentAppNotification, _markAgentCallStartedForNotify,
+ *   _requestNotifyPermission
  */
 
-/* ── Dedup: 防止同一 agent 短时间内重复通知 ──
- * Map 存储 normId → { at, finishTs }（at=标记写入时刻，finishTs=完成的
- * 事件时间戳，0=payload 未携带）。事件级幂等：同一 finish 事件（时间戳
- * 相同）只通知一次——snapshot 的 state 在完成后持久保持 call.finish，
- * 看门狗对账（SSE 静默 30s 全量 poll）、resync、切换 agent 重载都会携带
- * 同一 payload 重放，仅靠 30s 时间窗口挡不住窗口过期后的重放（后台 tab
- * 节流下表现为每 30s~1min 重弹一条相同通知）。新一轮 call.start 清空旧
- * 记录，新 finish（时间戳不同）照常通知；30s 窗口保留为并发防护与无
- * 时间戳 payload 的 fallback。前台已观察完成分开记录
- * （_foregroundObservedFinishMap）。
+/* ── Dedup: 呈现级去重（ADR-0030 拆层的前端半边）──
+ * Map 存储 normId → { at, finishTs }（at=标记写入时刻，finishTs=帧携带的
+ * 完成事件时间戳，0=payload 未携带）。事件级幂等：同一 finish 帧（重放 /
+ * 多路径并发）finishTs 相同只弹一次；30s 时间窗口保留为并发防护与无
+ * 时间戳 payload 的 fallback。新一轮 call.start 清空旧记录
+ * （_markAgentCallStartedForNotify，所有开始入口汇聚）。
  */
 const _notifiedFinishMap = new Map();
-const _foregroundObservedFinishMap = new Map();
 
-/* ── Input request notification dedup ──
- * 与 finish 通知同样的模式：normId → { requestId, timestamp }
- * 当同一 agent 出现新的 requestId（新的 choice 请求）时替换旧条目，
- * 使新一轮 choice 请求能正常触发通知。
+/* ── Input request 通知去重 ──
+ * 与 finish 同构：normId → { requestId, ts }。同一 requestId 30s 内不重复
+ * 弹（重放防护）；新 requestId（新一轮 choice）替换旧条目照常弹。
  */
 const _notifiedInputRequestMap = new Map();
-const _foregroundObservedInputMap = new Map();
 
-/* ── Foreground grace period: 解决转换检测延迟导致的前台完成被误判为后台完成 ──
+/* ── Foreground grace period: 解决通知到达晚于用户离场的前台完成误判 ──
  *
  * 问题场景：
  *   1. 用户在前台观看 agent 运行
  *   2. Agent 完成，用户看到结果并读完
- *   3. calling-state 转换（true→false）被 refreshAgentCallStates 的 1s 节流、
- *      poll 周期延迟、或 _callStatesRefreshInProgress 互斥锁推迟
+ *   3. 通知帧的送达被 SSE 合并窗口、网络延迟或心跳节流推迟
  *   4. 用户切到其他应用
- *   5. Web Worker 心跳检测到延迟的转换，此时 document.hidden=true → 误发通知
+ *   5. 通知帧此时到达（document.hidden=true）→ 误发通知
  *
  * 方案：追踪页面最后一次处于前台（visible + focused）的时间戳。
  *       若通知触发时距最后一次前台在宽限期内，说明用户刚离开，
- *       agent 完成时用户很可能就在看着，跳过通知。
+ *       完成时用户很可能就在看着，跳过通知。
  */
 const FOREGROUND_GRACE_MS = 5000;
 let _lastForegroundTs = 0; // 0 = 页面从未获得过前台焦点
@@ -69,83 +73,9 @@ function _isNotifyForeground() {
   return !document.hidden && document.hasFocus();
 }
 
-function _normalizeNotifyTimestamp(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return n < 1000000000000 ? n * 1000 : n;
-}
-
-function _getNotificationAction(notifData) {
-  const state = notifData?.state && typeof notifData.state === 'object' ? notifData.state : null;
-  const event = notifData?.event && typeof notifData.event === 'object' ? notifData.event : null;
-  if (event && (!state || _normalizeNotifyTimestamp(event.timestamp) >= _normalizeNotifyTimestamp(state.timestamp))) {
-    return event;
-  }
-  return state;
-}
-
-/* ── ADR-0019：挂起（suspended）不是完成 ──────────────────────────────────
- * status=continued + reason=suspended = 回合挂起，等待后台任务唤醒。
- * call.finish 载荷（data 即 CallOutcome）与 runtime.lastOutcome 都携带
- * status/reason，任一命中即视为挂起：不弹"已完成"通知。标记已观察防止
- * 延迟路径补发（新一轮 call.start 会清观察标记，唤醒后的真完成照常通知）。
- */
-function _isSuspendedFinish(notifData) {
-  const isSuspended = (data) => !!(data && typeof data === 'object'
-    && String(data.status || '').trim() === 'continued'
-    && String(data.reason || '').trim() === 'suspended');
-  const action = _getNotificationAction(notifData);
-  if (String(action?.type || '').trim() === 'call.finish' && isSuspended(action.data)) {
-    return true;
-  }
-  return isSuspended(notifData?.runtime?.lastOutcome);
-}
-
-function _getFinishObservedTimestamp(notifData) {
-  const action = _getNotificationAction(notifData);
-  if (String(action?.type || '').trim() === 'call.finish') {
-    const actionTs = _normalizeNotifyTimestamp(action.timestamp);
-    if (actionTs) return actionTs;
-  }
-  const runtime = notifData?.runtime && typeof notifData.runtime === 'object' ? notifData.runtime : null;
-  const runtimeSettled = runtime && runtime.callActive === false
-    && ['completed', 'failed', 'cancelled'].includes(String(runtime.stage || '').trim());
-  if (runtimeSettled) {
-    const updatedAt = _normalizeNotifyTimestamp(runtime.updatedAt);
-    if (updatedAt) return updatedAt;
-  }
-  return 0;
-}
-
-function _markAgentCallStartedForNotify(runtimeId) {
-  const normId = normalizeAgentIdentity(runtimeId);
-  if (!normId) return;
-  _foregroundObservedFinishMap.delete(normId);
-  _notifiedFinishMap.delete(normId);
-  // 新一轮 call 开始 = 「刚刚完成」蓝灯熄灭：所有开始入口（SSE / 轮询 /
-  // 输入 / 语音 / 切换预热）都汇聚到此处。本轮结束后由
-  // applyAgentCallStateFromNotification 按原逻辑重新点亮。
-  _recentlyFinishedRuntimes.delete(normId);
-}
-
-function _markAgentFinishObserved(runtimeId, notifData = null) {
-  const normId = normalizeAgentIdentity(runtimeId);
-  if (!normId) return;
-  const finishTs = _getFinishObservedTimestamp(notifData) || Date.now();
-  _foregroundObservedFinishMap.set(normId, finishTs);
-}
-
-function _hasUserAlreadyObservedFinish(runtimeId, notifData = null) {
-  const normId = normalizeAgentIdentity(runtimeId);
-  if (!normId) return false;
-  if (_foregroundObservedFinishMap.has(normId)) return true;
-
-  const finishTs = _getFinishObservedTimestamp(notifData);
-  if (finishTs > 0 && _lastForegroundTs > 0 && finishTs <= _lastForegroundTs) {
-    _foregroundObservedFinishMap.set(normId, finishTs);
-    return true;
-  }
-  return false;
+/** 完成时刻用户已在前台看过（finishTs 落在最后一次前台之前）→ 不弹。 */
+function _hasUserAlreadyObservedFinish(finishTs) {
+  return finishTs > 0 && _lastForegroundTs > 0 && finishTs <= _lastForegroundTs;
 }
 
 /* ── 文本截断：去除 markdown 语法，只保留纯文本预览 ── */
@@ -165,58 +95,69 @@ function _truncateForNotification(text, maxLen = 120) {
   return plain;
 }
 
-/* ── 主通知逻辑 ── */
-async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
+/* ── call 开始标记：新一轮 call 清除 finish 呈现状态 ──
+ * 「刚刚完成」蓝灯熄灭 + dedup 记录清空：所有开始入口（SSE / 轮询 /
+ * 输入 / 语音 / 切换预热）都汇聚到此处。完成后由 app-notification 帧
+ * 重新走呈现流程。
+ */
+function _markAgentCallStartedForNotify(runtimeId) {
+  const normId = normalizeAgentIdentity(runtimeId);
+  if (!normId) return;
+  _notifiedFinishMap.delete(normId);
+  _recentlyFinishedRuntimes.delete(normId);
+}
+
+function _navigateToAgent(agent) {
+  if (!agent) return;
+  if (agent.source === 'prebuilt') {
+    window.handlePrebuiltAgentClick(agent.id);
+  } else {
+    window.switchAgent(agent.id);
+  }
+}
+
+function _findAgentByRuntimeId(normId) {
+  return (Array.isArray(allAgents) ? allAgents : []).find(
+    (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
+  );
+}
+
+/* ── 完成通知呈现（type=finish）─────────────────────────────────────────
+ * server 已判定 notifications.finish 权限、排除挂起、按 finishTs 事件级
+ * 去重；此处只做设备端呈现判定与文案组装。
+ */
+async function _presentAgentFinishedNotification(payload) {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
 
-  const normId = normalizeAgentIdentity(runtimeId);
-
-  // 挂起不是完成（ADR-0019）：完成通知留给唤醒后的真终态
-  if (_isSuspendedFinish(notifData)) {
-    _markAgentFinishObserved(normId, notifData);
-    return;
-  }
+  const normId = normalizeAgentIdentity(payload?.agentId);
+  if (!normId) return;
+  const finishTs = Number(payload?.finishTs) || 0;
 
   // 前台时不需要通知——用户已经看到了。
-  if (_isNotifyForeground()) {
-    _markAgentFinishObserved(normId, notifData);
-    return;
-  }
-
-  if (_hasUserAlreadyObservedFinish(normId, notifData)) return;
+  if (_isNotifyForeground()) return;
+  // 完成时刻用户在前台（此后才离开）：已经看到过，不补弹。
+  if (_hasUserAlreadyObservedFinish(finishTs)) return;
 
   // 前台宽限期：如果页面刚从前台切走不久（在 FOREGROUND_GRACE_MS 内），
-  // 说明 agent 完成时用户很可能就在看着，只是 calling-state 转换检测被
-  // 节流/poll延迟/互斥锁推迟到了用户离开之后。
-  // 标记 dedup 防止同一完成事件稍后被重复触发。
+  // 说明完成时用户很可能就在看着，只是通知帧送达被推迟了。
+  // 标记 dedup 防止同一完成帧稍后重放时重复触发。
   const sinceForeground = _lastForegroundTs > 0 ? Date.now() - _lastForegroundTs : Infinity;
   if (sinceForeground < FOREGROUND_GRACE_MS) {
-    _markAgentFinishObserved(normId, notifData);
-    _notifiedFinishMap.set(normId, { at: Date.now(), finishTs: _getFinishObservedTimestamp(notifData) });
+    _notifiedFinishMap.set(normId, { at: Date.now(), finishTs });
     return;
   }
 
-  // dedup（双层）：事件级幂等 + 30s 时间窗口。标记必须在任何 await 之前
-  // 同步写入：同一 call.finish payload 会经 updateNotificationStatus 的多
-  // 个分支同步调用本函数两次，SSE 事件与轮询路径也可能并发进入；若标记
-  // 写在下方 fetch 之后，两次并发调用都能通过检查、各发一条通知。浏览器
-  // 原生 Notification 的同 tag 替换语义掩盖了这种重复，Tauri 通知插件
-  // 忽略 tag（每次构造都弹独立 toast）后暴露为「通知弹两遍」。
-  // 事件级幂等（finishTs 相同即 return）挡住的是另一类重放：完成的
-  // snapshot 是持久的，SSE 静默 30s 看门狗对账、resync、切换 agent 重载
-  // 会隔 30s+ 反复携带同一 call.finish 重新进入本函数——时间窗口过期后
-  // 若无事件级比较，每个对账周期都会再弹一条相同通知。
+  // dedup（双层）：finishTs 事件幂等 + 30s 时间窗口。标记必须在任何 await
+  // 之前同步写入：重放与并发进入都靠它挡住（Tauri 通知插件忽略 tag，
+  // 重复构造会弹独立 toast）。
   const now = Date.now();
-  const finishTs = _getFinishObservedTimestamp(notifData);
   const lastNotified = _notifiedFinishMap.get(normId);
   if (lastNotified && finishTs > 0 && lastNotified.finishTs === finishTs) return;
   if (lastNotified && (now - lastNotified.at) < 30000) return;
   _notifiedFinishMap.set(normId, { at: now, finishTs });
 
-  const agent = (Array.isArray(allAgents) ? allAgents : []).find(
-    (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
-  );
+  const agent = _findAgentByRuntimeId(normId);
   const agentName = (agent?.name || agent?.id || normId).trim();
   const sessionTitle = (agent?.active_workspace_session_title || '').trim();
   const isZh = currentLanguage === 'zh';
@@ -253,73 +194,42 @@ async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
     notification.onclick = () => {
       window.focus();
       notification.close();
-      if (agent?.source === 'prebuilt') {
-        window.handlePrebuiltAgentClick(agent.id);
-      } else if (agent) {
-        window.switchAgent(agent.id);
-      }
+      _navigateToAgent(agent);
     };
   } catch (e) { /* ignore */ }
 }
 
-/* ── Input request (choice) 通知逻辑 ──────────────────────────────────────
- * 当 user_input feature 的 choice 工具触发时，如果页面不在前台，
- * 通过 Notification API 弹出系统通知。复用与 _tryNotifyAgentFinished 相同的
- * 保护机制：前台检测、已观察去重、前台宽限期、requestId 级去重。
- *
- * 与 finish 通知的对应关系：
- *   _foregroundObservedFinishMap  ↔  _foregroundObservedInputMap
- *   _notifiedFinishMap            ↔  _notifiedInputRequestMap
- *   _markAgentCallStartedForNotify (新一轮 call 清除 finish 状态)
- *     ↔  新 requestId 替换旧条目 (新一轮 choice 清除 input 状态)
+/* ── Input request（choice）通知呈现（type=input）─────────────────────────
+ * server 已判定 notifications.input 权限并按 requestId 事件级去重；此处
+ * 只做设备端呈现判定。新 requestId（新一轮 choice）替换旧条目照常弹。
  */
-async function _tryNotifyInputRequest(runtimeId, requestId, alertData = null, opts = {}) {
+function _presentInputRequestNotification(payload) {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
 
-  const normId = normalizeAgentIdentity(runtimeId);
+  const normId = normalizeAgentIdentity(payload?.agentId);
+  const requestId = String(payload?.requestId || '').trim();
   if (!normId || !requestId) return;
 
   // 前台时不需要通知——用户已经看到了 choice 卡片或 toast。
-  // markObserved:false（SSE 事件路径）：前台到达不写观察标记，用户离场后
-  // 由心跳低频重扫补发系统通知（对齐基线：基线心跳前台不运行、从不标记）。
-  if (_isNotifyForeground()) {
-    if (opts.markObserved !== false) {
-      _foregroundObservedInputMap.set(normId, Date.now());
-    }
-    return;
-  }
-
-  // 已在前台观察过此 agent 的 input request：跳过。
-  // 如果 requestId 变了（新一轮 choice），清除旧观察记录，继续走通知流程。
-  if (_foregroundObservedInputMap.has(normId)) {
-    const prev = _notifiedInputRequestMap.get(normId);
-    if (prev && prev.requestId !== requestId) {
-      _foregroundObservedInputMap.delete(normId);
-    } else {
-      return;
-    }
-  }
+  if (_isNotifyForeground()) return;
 
   // 前台宽限期：如果页面刚从前台切走不久（在 FOREGROUND_GRACE_MS 内），
   // 说明 choice 请求出现时用户很可能就在看着。
   const sinceForeground = _lastForegroundTs > 0 ? Date.now() - _lastForegroundTs : Infinity;
   if (sinceForeground < FOREGROUND_GRACE_MS) {
-    _foregroundObservedInputMap.set(normId, Date.now());
     _notifiedInputRequestMap.set(normId, { requestId, ts: Date.now() });
     return;
   }
 
-  // dedup: 同一 requestId 30s 内不重复通知。
+  // dedup: 同一 requestId 30s 内不重复通知（重放防护）。
   // 如果是新的 requestId（新一轮 choice），替换旧条目并继续。
   const now = Date.now();
   const prevEntry = _notifiedInputRequestMap.get(normId);
   if (prevEntry && prevEntry.requestId === requestId && (now - prevEntry.ts) < 30000) return;
 
-  const agent = (Array.isArray(allAgents) ? allAgents : []).find(
-    (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
-  );
-  const agentName = (agent?.name || alertData?.agentName || agent?.id || normId).trim();
+  const agent = _findAgentByRuntimeId(normId);
+  const agentName = (agent?.name || agent?.id || normId).trim();
   const sessionTitle = (agent?.active_workspace_session_title || '').trim();
   const isZh = currentLanguage === 'zh';
 
@@ -340,13 +250,47 @@ async function _tryNotifyInputRequest(runtimeId, requestId, alertData = null, op
     notification.onclick = () => {
       window.focus();
       notification.close();
-      if (agent?.source === 'prebuilt') {
-        window.handlePrebuiltAgentClick(agent.id);
-      } else if (agent) {
-        window.switchAgent(agent.id);
-      }
+      _navigateToAgent(agent);
     };
   } catch (e) { /* ignore */ }
+}
+
+/* ── 主动投递类通知呈现（type=reminder 等 APP 侧发起）─────────────────────
+ * 文案由 APP 经投递端点提供（title/body 透传）；threadId 存在时点击落点
+ * 优先会话导航。
+ */
+function _presentGenericAppNotification(payload) {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'granted') return;
+
+  const normId = normalizeAgentIdentity(payload?.agentId);
+  if (!normId) return;
+  const agent = _findAgentByRuntimeId(normId);
+  const agentName = (agent?.name || agent?.id || normId).trim();
+  const title = String(payload?.title || '').trim() || agentName;
+  const body = String(payload?.body || '').trim();
+  const threadId = String(payload?.threadId || '').trim();
+
+  try {
+    const notification = new Notification(title, { body, tag: 'claw-app-notification-' + normId });
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+      if (threadId && typeof window.openConversationTarget === 'function') {
+        window.openConversationTarget({ threadId, agentId: agent?.id || normId });
+        return;
+      }
+      _navigateToAgent(agent);
+    };
+  } catch (e) { /* ignore */ }
+}
+
+/* ── app-notification 帧呈现入口（sse-client 分发）── */
+function _presentAppNotification(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  if (payload.type === 'finish') _presentAgentFinishedNotification(payload);
+  else if (payload.type === 'input') _presentInputRequestNotification(payload);
+  else _presentGenericAppNotification(payload);
 }
 
 /* ── 请求通知权限（需在用户手势内调用） ── */
@@ -356,41 +300,10 @@ function _requestNotifyPermission() {
   }
 }
 
-/* ── Choice-alert 状态刷新（独立于 checkGlobalChoiceAlerts）────────────────
- *
- * 关键设计：此函数与 auto-title.js 中的 checkGlobalChoiceAlerts 完全独立。
- *
- * 问题背景：checkGlobalChoiceAlerts 使用 _seenChoiceAlertIds 做去重，
- *   一旦前台 poll 循环处理了某个 requestId，worker 心跳再调用同一函数时
- *   会被 _seenChoiceAlertIds 跳过，导致 _tryNotifyInputRequest 永远不会
- *   从后台路径被触发。
- *
- * 解决方案：refreshChoiceAlertStates 直接 fetch /protoclaw/choice_alerts，
- *   不经过 _seenChoiceAlertIds，为每个活跃请求调用 _tryNotifyInputRequest。
- *   所有去重逻辑（前台检测、宽限期、requestId 级 30s 窗口）由
- *   _tryNotifyInputRequest 内部处理。
- *
- * 这与 refreshAgentCallStates 的设计完全对称：
- *   refreshAgentCallStates  → 独立 fetch /notification → _tryNotifyAgentFinished
- *   refreshChoiceAlertStates → 独立 fetch /choice_alerts → _tryNotifyInputRequest
- */
-let _lastChoiceNotifyCheckAt = 0;
-
-async function refreshChoiceAlertStates() {
-  try {
-    const res = await fetch('/protoclaw/choice_alerts');
-    if (!res.ok) return;
-    const data = await res.json();
-    const alerts = Array.isArray(data.alerts) ? data.alerts : [];
-    for (const alert of alerts) {
-      _tryNotifyInputRequest(alert.agentId, alert.requestId, alert);
-    }
-  } catch { /* non-critical */ }
-}
-
 /* ── Background heartbeat via Web Worker ──────────────────────────────────
- * 浏览器会将后台 tab 的 setTimeout 节流至 1s 甚至 1min，导致轮询检测不到
- * agent 完成。Web Worker 的 setInterval 不受此限制。
+ * 浏览器会将后台 tab 的 setTimeout 节流至 1s 甚至 1min。Web Worker 的
+ * setInterval 不受此限制：持续刷新前台时钟（宽限期判定的时间源）。通知
+ * 本体由 app-notification 帧实时驱动，心跳不再轮询触发。
  */
 (function () {
   try {
@@ -398,28 +311,7 @@ async function refreshChoiceAlertStates() {
     const blob = new Blob([code], { type: 'application/javascript' });
     const worker = new Worker(URL.createObjectURL(blob));
     worker.onmessage = () => {
-      // 持续刷新前台时间戳（worker 不受后台 tab timer 节流）
       _syncForegroundState();
-      // 页面可见且有焦点时，常规 poll (300ms) 已经在跑，不需要 worker 介入
-      if (!document.hidden && document.hasFocus()) return;
-      // 通知权限未授予时也不需要心跳
-      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-      // SSE 激活时本地条目由事件实时驱动：call 状态走 notification 帧，
-      // choice 首发通知走 input-requests 帧（焦点 + 非焦点全覆盖，
-      // 前台到达不写观察标记）。refreshAgentCallStates 内部自动降为
-      // 远程条目专用轮询（§5.3，无远程条目时零请求）。
-      // choice 低频重扫（30s，基线 2s 的 1/15）补住事件路径覆盖不到的
-      // 两个基线职责：前台到达后离场的补发（markObserved:false 依赖此
-      // 扫描）、长挂起 choice 的 30s 周期重提醒；进入后台首个 tick 即刻
-      // 扫一次（时间戳 0 视为过期）。SSE 断连/降级瞬间 isSseActive()
-      // 翻 false，下一 tick 自动回到基线 2s 节流。
-      const sseActive = typeof isSseActive === 'function' && isSseActive();
-      refreshAgentCallStates(allAgents, { force: true });
-      const choiceCheckIntervalMs = sseActive ? 30000 : 2000;
-      if (Date.now() - _lastChoiceNotifyCheckAt > choiceCheckIntervalMs) {
-        _lastChoiceNotifyCheckAt = Date.now();
-        refreshChoiceAlertStates().catch(e => console.warn(e));
-      }
     };
   } catch (e) {
     console.warn('[Notify] Web Worker heartbeat unavailable:', e);

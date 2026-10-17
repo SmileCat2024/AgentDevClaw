@@ -722,7 +722,9 @@ let _callStatesRefreshInProgress = false;
  * 单 runtime 的 call 状态应用（notification payload → 侧栏级状态）。
  * refreshAgentCallStates 的轮询路径与 sse-client 的事件路径（非焦点
  * notification 事件）共用：_agentCallActive 维护、interrupt 抑制解除、
- * true→false 完成转换（_recentlyFinishedRuntimes + 桌面通知）。
+ * true→false 完成转换（_recentlyFinishedRuntimes 蓝灯）。桌面通知不在此
+ * 触发——完成通知由 server 统一出口的 app-notification 帧驱动
+ * （desktop-notify.js，ADR-0030）。
  * @returns {boolean} 该 runtime 的可视 call 状态是否发生变化
  */
 function applyAgentCallStateFromNotification(runtimeId, notifData) {
@@ -758,7 +760,6 @@ function applyAgentCallStateFromNotification(runtimeId, notifData) {
     if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
       _recentlyFinishedRuntimes.add(runtimeId);
     }
-    _tryNotifyAgentFinished(runtimeId, payload);
   }
   // 发送按钮三态与 _agentCallActive 同源（isRuntimeCalling），但它的同步点
   // 全部挂在 updateNotificationStatus（本地 SSE / 焦点 fetch 路径）；远程

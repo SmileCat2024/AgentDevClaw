@@ -101,6 +101,7 @@ import {
 import { setupGroupChatRoutes } from './server/routes/group-chat.js';
 import { setupDispatchRoutes, getProjectAdapter, fireBootSchedules } from './server/routes/dispatch.js';
 import { createSseEventsModule, createSseCompressionFilter } from './server/routes/sse-events.js';
+import { setupAppNotificationRoutes, observeCallStatusSnapshot } from './server/routes/app-notification.js';
 import { setupFeatureCommunicationRoutes, featureCommunicationStore } from './server/routes/feature-communication.js';
 import { setupIMRoutes, readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './server/routes/im.js';
 import { createSessionHelpers } from './server/routes/session-helpers.js';
@@ -211,6 +212,12 @@ const sseEvents = createSseEventsModule({
   viewerWorker,
   playSound: playSoundOnServer,
   seenChoiceRequestIds: () => _seenChoiceRequestIds,
+  // ADR-0030：runtime 状态类通知（完成/输入请求）在既有感知链上经统一
+  // 出口判定权限并发布 app-notification 帧；requireAgentLight 提供
+  // metadata 作者默认值（permissionDefaults，声明在下方解构，调用期取值）。
+  onCallStatusSnapshot: (kind, agentId, snapshot) => observeCallStatusSnapshot(kind, agentId, snapshot, {
+    requireAgent: requireAgentLight,
+  }),
 });
 sseEvents.setupRoutes(app);
 setupFeatureCommunicationRoutes(app, express, { communicationStore: featureCommunicationStore });
@@ -229,6 +236,9 @@ const {
   readWorkspaceSessionMeta, collectIdentities,
 } = agentDiscoveryApi;
 agentDiscoveryApi.setupRoutes(app);
+// ADR-0030：APP 主动投递端点（internal 鉴权），requireAgentLight 校验
+// agentId 为已知 prebuilt/workspace agent 并提供作者默认值。
+setupAppNotificationRoutes(app, express, { requireAgent: requireAgentLight });
 
 // ── Project docset helpers extracted to server/routes/project-docset.js ──
 // ── Session helpers extracted to server/routes/session-helpers.js ──

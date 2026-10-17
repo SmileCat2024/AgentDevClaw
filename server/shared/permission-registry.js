@@ -2,11 +2,16 @@
  * OS 权限项目录。
  *
  * 该目录是权限项 ID 与值类型的唯一权威；用户配置可以携带的权限项必须在此登记。
- * 目前只登记已落地的 runtime 并发上限，不包含申请、授权或展示流程。
+ * 目前只登记已落地的 runtime 并发上限（ADR-0027）与通知权限项族
+ * （ADR-0030），不包含申请、授权或展示流程。
  */
 
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0;
+}
+
+function isBoolean(value) {
+  return typeof value === 'boolean';
 }
 
 export const PERMISSION_ITEMS = Object.freeze({
@@ -14,6 +19,21 @@ export const PERMISSION_ITEMS = Object.freeze({
     id: 'maxLiveRuntimes',
     valueType: 'positive-integer',
     validate: isPositiveInteger,
+  }),
+  'notifications.finish': Object.freeze({
+    id: 'notifications.finish',
+    valueType: 'boolean',
+    validate: isBoolean,
+  }),
+  'notifications.reminder': Object.freeze({
+    id: 'notifications.reminder',
+    valueType: 'boolean',
+    validate: isBoolean,
+  }),
+  'notifications.input': Object.freeze({
+    id: 'notifications.input',
+    valueType: 'boolean',
+    validate: isBoolean,
   }),
 });
 
@@ -41,6 +61,31 @@ export function normalizePermissionDeclarations(value) {
 export function isValidPermissionValue(permissionId, value) {
   const item = PERMISSION_ITEMS[permissionId];
   return Boolean(item && item.validate(value));
+}
+
+/**
+ * 校验 metadata.permissionDefaults（作者默认值，ADR-0030）：对象，键必须是
+ * 该 metadata permissions 已声明的权限项 ID，值须通过该项 validate。未知项、
+ * 未声明的键或值非法均抛错（与 permissions 声明同等级校验，启动扫描报错）。
+ * undefined → 空对象。
+ */
+export function normalizePermissionDefaults(value, declaredIds) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('metadata.permissionDefaults 必须是对象。');
+  }
+  const declared = new Set(Array.isArray(declaredIds) ? declaredIds : []);
+  const defaults = {};
+  for (const [permissionId, defaultValue] of Object.entries(value)) {
+    if (!declared.has(permissionId)) {
+      throw new Error(`metadata.permissionDefaults 包含未声明的权限项：${permissionId}`);
+    }
+    if (!isValidPermissionValue(permissionId, defaultValue)) {
+      throw new Error(`metadata.permissionDefaults 的 ${permissionId} 值非法。`);
+    }
+    defaults[permissionId] = defaultValue;
+  }
+  return defaults;
 }
 
 /** 将任意对象投影为已登记且值合法的权限项。 */

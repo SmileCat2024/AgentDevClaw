@@ -20,7 +20,7 @@
  * updateNotificationStatus、applyAgentCallStateFromNotification、
  * getRuntimeRecord、commitMetadataUpdate、
  * runMessagesProbeCycle、applyQueuedInputsTexts、loadAgents、
- * captureSessionViewToken、_syncForegroundState、_tryNotifyInputRequest、
+ * captureSessionViewToken、_syncForegroundState、_presentAppNotification、
  * _seenChoiceAlertIds、ClawToast、window.ClawFW.requestImmediatePoll
  */
 
@@ -195,18 +195,8 @@ function handleInputRequestsEvent(frame) {
     if (typeof commitMetadataUpdate === 'function') {
       commitMetadataUpdate(token, { inputRequestsRaw: requests });
     }
-    // 焦点会话的 choice 通知（_tryNotifyInputRequest 内部自判前台/去重）。
-    // 谓词与非焦点分支、服务端 /protoclaw/choice_alerts 聚合同源：
-    // 普通文本输入请求在输入框内呈现即可，不得触发"需要你的选择"桌面通知。
-    const choiceLease = requests
-      .filter((lease) => lease?.mode === 'choices'
-        && Array.isArray(lease?.questions) && lease.questions.length > 0)
-      .pop();
-    if (choiceLease?.requestId && typeof _tryNotifyInputRequest === 'function') {
-      // markObserved:false：前台到达不写观察标记，离场后由心跳 30s 重扫
-      // 补发（基线行为对齐，详见 desktop-notify.js）
-      _tryNotifyInputRequest(frame.agentId, choiceLease.requestId, null, { markObserved: false });
-    }
+    // choice 的桌面通知不经此处触发：server 统一出口判定 notifications.input
+    // 权限后发布 app-notification 帧（desktop-notify.js 呈现，ADR-0030）。
   } else {
     // 与服务端 /protoclaw/choice_alerts 聚合同一谓词（mode=choices 且含
     // 问题项）：普通文本输入请求不进 choice toast（F1）
@@ -252,12 +242,26 @@ function handleMessagesEvent(frame) {
     .catch((e) => console.warn('[sse] messages probe cycle failed:', e));
 }
 
+// ── app-notification 帧（ADR-0030：统一通知出口的 SSE 载体）──────────
+// 全局帧（不按 thread 过滤、不按焦点会话分流）：server 侧已判权限并做
+// 事件级去重，呈现策略（前台判定 / 宽限期 / 呈现级去重 / 文案组装）在
+// desktop-notify.js。与既有 notification 快照帧（call 状态感知）语义不同，
+// 严禁混淆。
+function handleAppNotificationEvent(event) {
+  _lastFrameAt = Date.now();
+  let frame;
+  try { frame = JSON.parse(event.data); } catch { return; }
+  if (!frame || typeof frame.agentId !== 'string') return;
+  if (typeof _presentAppNotification === 'function') {
+    _presentAppNotification(frame);
+  }
+}
+
 // ── 非焦点 choice 提醒（§4.3：ClawToast 迁移为事件驱动）─────────────
 // 与 checkGlobalChoiceAlerts 共享 _seenChoiceAlertIds 去重：事件路径与
 // 轮询降级路径（SSE 断连恢复期）谁先处理谁标记，不会重复 toast。
-// 同时触发桌面通知（后台 tab 时 toast 不可见，系统通知直达）：此处驱动
-// 首发通知，30s 周期重提醒与前台到达后离场补发由心跳低频重扫承担
-// （desktop-notify.js，markObserved:false 语义）。
+// 桌面通知不在此触发：choice 通知由 server 统一出口的 app-notification
+// 帧驱动（desktop-notify.js，ADR-0030）；此处只承担应用内 toast。
 
 function notifyChoiceAlerts(alerts) {
   if (!Array.isArray(alerts)) return;
@@ -267,13 +271,6 @@ function notifyChoiceAlerts(alerts) {
     if (_seenChoiceAlertIds.has(requestId)) continue;
     if (_seenChoiceAlertIds.size > 500) _seenChoiceAlertIds.clear();
     _seenChoiceAlertIds.add(requestId);
-    // 后台桌面通知（_tryNotifyInputRequest 内部自判前台：前台时直接
-    // 返回，后台时弹系统通知）。接替 Worker 心跳 refreshChoiceAlertStates
-    // 对非焦点本地 agent 的首发通知职责；markObserved:false 使前台到达
-    // 不写观察标记，离场后由心跳 30s 重扫补发（基线行为对齐）。
-    if (typeof _tryNotifyInputRequest === 'function') {
-      _tryNotifyInputRequest(alert.agentId, requestId, null, { markObserved: false });
-    }
     if (typeof ClawToast === 'undefined' || !ClawToast?.show) continue;
     const matched = (Array.isArray(allAgents) ? allAgents : []).find(
       (a) => (a.runtime_session_id || a.runtimeSessionId) === alert.agentId
@@ -442,6 +439,7 @@ function connect() {
   source.addEventListener('input-requests', (e) => dispatch('input-requests', e));
   source.addEventListener('queued-inputs', (e) => dispatch('queued-inputs', e));
   source.addEventListener('messages', (e) => dispatch('messages', e));
+  source.addEventListener('app-notification', handleAppNotificationEvent);
   for (const name of THREAD_EVENT_NAMES) {
     source.addEventListener(name, (e) => handleThreadEvent(name, e));
   }

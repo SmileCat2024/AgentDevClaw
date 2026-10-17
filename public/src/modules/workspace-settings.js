@@ -139,10 +139,63 @@ async function loadWorkspaceSettingsPanel() {
       : 'On-demand workspaces appear in the sidebar only while they have running sessions. The concurrency limit caps simultaneously live runtime processes (new spawns are rejected at the limit; existing threads are unaffected).',
     '</div>',
     rows,
+    renderNotificationAuditSection(isZh, resourcePolicies),
     '<div id="workspace-settings-status"></div>',
   ].join('');
 
   if (window.ClawSelect) window.ClawSelect.enhanceAll(container);
+}
+
+// ── 通知权限只读审计（ADR-0030）──────────────────────────────────────
+// 编辑位置在各 APP 的设置页（editingSurface，ADR-0027「编辑位置迁就业务
+// 语义，知情权不迁就」），全局面板只保留知情权：逐 workspace 展示声明的
+// 通知权限项与当前生效值（判定链 = 用户覆盖 > 作者默认 > false）。
+// 无编辑控件；maxLiveRuntimes 现有编辑能力不动。
+const NOTIFICATION_AUDIT_ITEMS = [
+  { permissionId: 'notifications.finish', labelZh: '完成通知', labelEn: 'Finished runs' },
+  { permissionId: 'notifications.input', labelZh: '输入请求', labelEn: 'Input requests' },
+  { permissionId: 'notifications.reminder', labelZh: '提醒', labelEn: 'Reminders' },
+];
+
+function renderNotificationAuditSection(isZh, resourcePolicies) {
+  const agents = (Array.isArray(allAgents) ? allAgents : [])
+    .filter((agent) => agent?.source === 'prebuilt'
+      && Array.isArray(agent.permissions)
+      && agent.permissions.some((id) => String(id).indexOf('notifications.') === 0));
+  if (agents.length === 0) return '';
+  const rows = agents.map((agent) => {
+    const defaults = agent.permissionDefaults && typeof agent.permissionDefaults === 'object'
+      ? agent.permissionDefaults : {};
+    const cells = NOTIFICATION_AUDIT_ITEMS
+      .filter((item) => agent.permissions.includes(item.permissionId))
+      .map((item) => {
+        const userValue = resourcePolicies[agent.id]?.[item.permissionId];
+        const authorDefault = typeof defaults[item.permissionId] === 'boolean'
+          ? defaults[item.permissionId] : false;
+        const effective = typeof userValue === 'boolean' ? userValue : authorDefault;
+        const valueText = effective ? (isZh ? '开' : 'on') : (isZh ? '关' : 'off');
+        const sourceText = typeof userValue === 'boolean'
+          ? (isZh ? '自定义' : 'custom')
+          : (isZh ? '默认' : 'default');
+        return '<span style="font-size:12px;color:var(--text-secondary);">'
+          + (isZh ? item.labelZh : item.labelEn) + '：' + valueText + '（' + sourceText + '）</span>';
+      })
+      .join('<span style="margin:0 8px;color:var(--border-color);">·</span>');
+    return [
+      '<div class="proxy-toggle-row" style="align-items:center;">',
+      '<div class="proxy-toggle-label"><div>' + escapeHtml(agent.name || agent.id) + '</div></div>',
+      '<div>' + cells + '</div>',
+      '</div>',
+    ].join('');
+  }).join('<div style="height:6px;"></div>');
+  return [
+    '<div class="proxy-info-text" style="margin-top:12px;">',
+    isZh
+      ? '通知权限（只读）：编辑入口在各工作空间自己的设置页（设置 → 通知）。'
+      : 'Notification permissions (read-only): edit them in each workspace\'s own settings page (Settings → Notifications).',
+    '</div>',
+    rows,
+  ].join('');
 }
 
 window.onWorkspaceVisibilityChange = async function(agentId, policy) {

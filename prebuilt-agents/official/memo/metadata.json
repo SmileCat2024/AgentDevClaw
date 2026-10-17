@@ -10,6 +10,11 @@
   "enabled": true,
   "visibility": "persistent",
   "sidebarGroup": "tool",
+  "permissions": ["notifications.reminder", "notifications.input"],
+  "permissionDefaults": {
+    "notifications.reminder": true,
+    "notifications.input": true
+  },
   "features": [],
   "ui": {
     "entry": "home",

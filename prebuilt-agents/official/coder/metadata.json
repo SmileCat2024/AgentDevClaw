@@ -11,7 +11,10 @@
   "enabled": true,
   "host": "programming-helper",
   "visibility": "on-demand",
-  "permissions": ["maxLiveRuntimes"],
+  "permissions": ["maxLiveRuntimes", "notifications.finish"],
+  "permissionDefaults": {
+    "notifications.finish": false
+  },
   "features": [
     "todo",
     "force-continuation",
