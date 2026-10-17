@@ -63,7 +63,7 @@ import {
   managedAgents, assemblyRuntimeProcesses,
   getManagedRuntimeKey, listAgentRuntimes, pickPrimaryAgentRuntime,
   getAgentRuntime, getAssemblyRuntime, stopAssemblyRuntime, buildStatus,
-  isManagedRuntimeRunning,
+  isManagedRuntimeRunning, getRuntimeByViewerAgentId,
 } from './server/shared/agent-access.js';
 import {
   getPrebuiltAgentSessionDir, getPrebuiltSessionFilePath, getPrebuiltSessionIndexPath,
@@ -215,8 +215,15 @@ const sseEvents = createSseEventsModule({
   // ADR-0030：runtime 状态类通知（完成/输入请求）在既有感知链上经统一
   // 出口判定权限并发布 app-notification 帧；requireAgentLight 提供
   // metadata 作者默认值（permissionDefaults，声明在下方解构，调用期取值）。
+  // SSE 快照的 agentId 是 runtime 形态（agent-<n>-<pid>），而权限表与
+  // metadata 按 prebuilt/workspace id 键控——判定前经 getRuntimeByViewerAgentId
+  // 同步反查归一（进程内注册表，零 IO；未命中透传原值）。
   onCallStatusSnapshot: (kind, agentId, snapshot) => observeCallStatusSnapshot(kind, agentId, snapshot, {
     requireAgent: requireAgentLight,
+    resolveAgentId: (runtimeId) => {
+      const runtime = getRuntimeByViewerAgentId(runtimeId);
+      return runtime?.agentId || runtimeId;
+    },
   }),
 });
 sseEvents.setupRoutes(app);

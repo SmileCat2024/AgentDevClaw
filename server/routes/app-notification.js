@@ -86,6 +86,10 @@ export async function isNotificationAllowed({
  * dedupeKey 提供事件级去重（同一事实只发一帧）；去重标记在判定之前写入
  * （并发防护对齐 desktop-notify 教训：标记晚于 await 则并发调用都能通过
  * 检查），权限拒绝即该事实终局——在线投递语义下不补投。
+ * runtimeAgentId：帧的会话粒度定位（SSE 快照原始 agentId，runtime 形态）。
+ * agentId 用于权限与身份（prebuilt/workspace 形态）；多会话工作空间（如
+ * 编程小助手）下两者不同——前端焦点判定与导航用 runtimeAgentId，丢失
+ * 它会把"哪个会话完成"抹平成"哪个工作空间完成"。
  * @returns {Promise<boolean>} 是否实际发布（供调用方观测，不报错）
  */
 export async function deliverAppNotification({
@@ -97,10 +101,12 @@ export async function deliverAppNotification({
   requestId = null,
   finishTs = null,
   dedupeKey = null,
+  runtimeAgentId = null,
   requireAgent = null,
   settingsPath = undefined,
 } = {}) {
   const normalizedAgentId = String(agentId || '').trim();
+  const normalizedRuntimeAgentId = String(runtimeAgentId || '').trim();
   if (!normalizedAgentId || !APP_NOTIFICATION_TYPES[type]) return false;
   if (dedupeKey != null && dedupeKey !== '') {
     const key = `${type}:${dedupeKey}`;
@@ -114,6 +120,7 @@ export async function deliverAppNotification({
     kind: 'app-notification',
     agentId: normalizedAgentId,
     type,
+    ...(normalizedRuntimeAgentId ? { runtimeAgentId: normalizedRuntimeAgentId } : {}),
     ...(title ? { title: String(title) } : {}),
     ...(body ? { body: String(body) } : {}),
     ...(threadId ? { threadId: String(threadId) } : {}),
@@ -175,20 +182,30 @@ function isChoiceLease(lease) {
  * runtime 状态类通知感知：notification 快照 → 完成判定（挂起排除 + finishTs
  * 事实键去重）；input-requests 快照 → choice 请求（requestId 事实键去重）。
  * 判定权限后经统一出口发布。由 server.js 装配进 createSseEventsModule 的
- * onCallStatusSnapshot 钩子；opts 透传 requireAgent / settingsPath。
+ * onCallStatusSnapshot 钩子；opts 透传 requireAgent / settingsPath /
+ * resolveAgentId（SSE 快照的 agentId 为 runtime 形态，权限表按
+ * prebuilt/workspace id 键控，判定前归一；未注入或未命中透传原值）。
  * 自捕获错误：感知失败只留痕，绝不打断 SSE 管线。
  */
 export async function observeCallStatusSnapshot(kind, agentId, snapshot, opts = {}) {
   try {
+    // ID 归一（runtime → prebuilt/workspace）：两分支共用；非 runtime 形态
+    // （如测试直传 prebuilt id）反查未命中即透传，行为不变。
+    let targetAgentId = String(agentId || '').trim();
+    if (targetAgentId && typeof opts.resolveAgentId === 'function') {
+      targetAgentId = String(await opts.resolveAgentId(targetAgentId) || '') || targetAgentId;
+    }
+    if (!targetAgentId) return;
     if (kind === 'notification') {
       const finishTs = extractFinishTimestamp(snapshot);
       if (!finishTs) return; // 非完成态快照（call.start / calling 中）：无完成事实
       if (isSuspendedFinish(snapshot)) return; // 挂起等待唤醒，不是完成
       await deliverAppNotification({
-        agentId,
+        agentId: targetAgentId,
+        runtimeAgentId: agentId, // 会话粒度定位：多会话工作空间下与 agentId 不同
         type: 'finish',
         finishTs,
-        dedupeKey: `${agentId}:${finishTs}`,
+        dedupeKey: `${targetAgentId}:${finishTs}`,
         ...opts,
       });
       return;
@@ -197,10 +214,11 @@ export async function observeCallStatusSnapshot(kind, agentId, snapshot, opts = 
       for (const lease of snapshot) {
         if (!isChoiceLease(lease)) continue; // 普通文本输入请求不触发通知
         await deliverAppNotification({
-          agentId,
+          agentId: targetAgentId,
+          runtimeAgentId: agentId,
           type: 'input',
           requestId: lease.requestId,
-          dedupeKey: `${agentId}:${lease.requestId}`,
+          dedupeKey: `${targetAgentId}:${lease.requestId}`,
           ...opts,
         });
       }

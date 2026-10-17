@@ -3,12 +3,12 @@
  *
  * 触发判定已上移 server（统一投递出口：权限闸 + 事件级去重 + SSE
  * app-notification 帧）；本模块只承担设备端呈现策略：
- *   1. 前台判定（document.hidden / focus）与前台宽限期；
+ *   1. 免打扰判定（_isObservedConversation：页面聚焦且正选中该会话
+ *      才静默；页面失焦一律通知，判定用会话粒度 runtimeAgentId）；
  *   2. 呈现级去重（finishTs / requestId 事件幂等 + 30s 并发窗口）；
  *   3. 通知文案组装（fetch 最后回复做正文预览、markdown 剥离截断）；
  *   4. Tauri/Web 通知权限处理与 toast 点击导航。
- * 内置 Web Worker 心跳仅承担前台时钟同步（绕过后台 tab timer 节流，
- * 宽限期判定依赖持续刷新的 _lastForegroundTs）。
+ * 内置 Web Worker 心跳保留前台时钟刷新（事件路径刷新钩子）。
  *
  * 帧语义（server 侧已保证）：type=finish 的完成事实已排除挂起（ADR-0019）
  * 且按 agentId+finishTs 事件级去重；type=input 的 choice 请求按
@@ -18,7 +18,7 @@
  * 消费）混淆——两者语义不同。
  *
  * 依赖全局状态 (定义在 app-core.js):
- *   allAgents, currentLanguage
+ *   allAgents, currentLanguage, currentRuntimeAgentId
  * 依赖全局函数 (运行时解析):
  *   normalizeAgentIdentity, _recentlyFinishedRuntimes (sidebar-render.js),
  *   window.handlePrebuiltAgentClick, window.switchAgent,
@@ -43,20 +43,10 @@ const _notifiedFinishMap = new Map();
  */
 const _notifiedInputRequestMap = new Map();
 
-/* ── Foreground grace period: 解决通知到达晚于用户离场的前台完成误判 ──
- *
- * 问题场景：
- *   1. 用户在前台观看 agent 运行
- *   2. Agent 完成，用户看到结果并读完
- *   3. 通知帧的送达被 SSE 合并窗口、网络延迟或心跳节流推迟
- *   4. 用户切到其他应用
- *   5. 通知帧此时到达（document.hidden=true）→ 误发通知
- *
- * 方案：追踪页面最后一次处于前台（visible + focused）的时间戳。
- *       若通知触发时距最后一次前台在宽限期内，说明用户刚离开，
- *       完成时用户很可能就在看着，跳过通知。
+/* ── Foreground clock: 事件帧到达刷新（sse-client 调用）──
+ * 历史上用于页面级前台宽限判定；呈现判定已改为会话级焦点
+ * （_isObservedConversation），时钟保留供事件路径刷新。
  */
-const FOREGROUND_GRACE_MS = 5000;
 let _lastForegroundTs = 0; // 0 = 页面从未获得过前台焦点
 
 function _syncForegroundState() {
@@ -69,13 +59,24 @@ window.addEventListener('focus', _syncForegroundState);
 window.addEventListener('blur', _syncForegroundState);
 _syncForegroundState(); // 页面加载时初始化
 
-function _isNotifyForeground() {
-  return !document.hidden && document.hasFocus();
+/* ── 免打扰判定：页面聚焦 && 完成会话正被选中 ──
+ * 语义（与产品裁决对齐）：页面焦点不在 Claw（最小化 / 后台标签 /
+ * 被其他窗口遮挡 / 桌面形态失焦）→ 一律通知；页面聚焦时只有正选中
+ * 的会话免打扰（完成已可见），其他会话（含同一工作空间的兄弟会话）
+ * 照常通知。历史教训两条：页面级前台静默（页面在前台全静默）会让
+ * 单窗口工作流用户永远收不到通知；帧 agentId 归一到工作空间粒度
+ * 会让多会话工作空间的焦点判定误杀兄弟会话——判定必须用会话粒度
+ * 的 runtimeAgentId（帧缺失时回退 agentId）。
+ */
+function _isObservedConversation(runtimeAgentId) {
+  if (document.hidden || !document.hasFocus()) return false; // 页面失焦：一律通知
+  const focused = normalizeAgentIdentity(currentRuntimeAgentId);
+  return !!focused && normalizeAgentIdentity(runtimeAgentId) === focused;
 }
 
-/** 完成时刻用户已在前台看过（finishTs 落在最后一次前台之前）→ 不弹。 */
-function _hasUserAlreadyObservedFinish(finishTs) {
-  return finishTs > 0 && _lastForegroundTs > 0 && finishTs <= _lastForegroundTs;
+/** 帧的会话定位 id：runtimeAgentId 优先（会话粒度），缺失回退 agentId。 */
+function _frameConversationId(payload) {
+  return normalizeAgentIdentity(payload?.runtimeAgentId || payload?.agentId);
 }
 
 /* ── 文本截断：去除 markdown 语法，只保留纯文本预览 ── */
@@ -130,23 +131,12 @@ async function _presentAgentFinishedNotification(payload) {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
 
-  const normId = normalizeAgentIdentity(payload?.agentId);
+  const normId = _frameConversationId(payload);
   if (!normId) return;
   const finishTs = Number(payload?.finishTs) || 0;
 
-  // 前台时不需要通知——用户已经看到了。
-  if (_isNotifyForeground()) return;
-  // 完成时刻用户在前台（此后才离开）：已经看到过，不补弹。
-  if (_hasUserAlreadyObservedFinish(finishTs)) return;
-
-  // 前台宽限期：如果页面刚从前台切走不久（在 FOREGROUND_GRACE_MS 内），
-  // 说明完成时用户很可能就在看着，只是通知帧送达被推迟了。
-  // 标记 dedup 防止同一完成帧稍后重放时重复触发。
-  const sinceForeground = _lastForegroundTs > 0 ? Date.now() - _lastForegroundTs : Infinity;
-  if (sinceForeground < FOREGROUND_GRACE_MS) {
-    _notifiedFinishMap.set(normId, { at: Date.now(), finishTs });
-    return;
-  }
+  // 免打扰 = 页面聚焦 && 正选中该会话（完成已可见）；其余一律通知。
+  if (_isObservedConversation(normId)) return;
 
   // dedup（双层）：finishTs 事件幂等 + 30s 时间窗口。标记必须在任何 await
   // 之前同步写入：重放与并发进入都靠它挡住（Tauri 通知插件忽略 tag，
@@ -187,9 +177,12 @@ async function _presentAgentFinishedNotification(payload) {
     : (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.');
 
   try {
+    // 完成通知与主动投递类（提醒等）均持久显示（requireInteraction）：
+    // 停留至用户查看/关闭，
+    // 不随超时自动消失——完成的会话可能需要用户回来处理。
     const notification = new Notification(
       isZh ? `${agentName} 已完成` : `${agentName} finished`,
-      { body, tag: 'claw-agent-finished-' + normId }
+      { body, tag: 'claw-agent-finished-' + normId, requireInteraction: true }
     );
     notification.onclick = () => {
       window.focus();
@@ -207,20 +200,12 @@ function _presentInputRequestNotification(payload) {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
 
-  const normId = normalizeAgentIdentity(payload?.agentId);
+  const normId = _frameConversationId(payload);
   const requestId = String(payload?.requestId || '').trim();
   if (!normId || !requestId) return;
 
-  // 前台时不需要通知——用户已经看到了 choice 卡片或 toast。
-  if (_isNotifyForeground()) return;
-
-  // 前台宽限期：如果页面刚从前台切走不久（在 FOREGROUND_GRACE_MS 内），
-  // 说明 choice 请求出现时用户很可能就在看着。
-  const sinceForeground = _lastForegroundTs > 0 ? Date.now() - _lastForegroundTs : Infinity;
-  if (sinceForeground < FOREGROUND_GRACE_MS) {
-    _notifiedInputRequestMap.set(normId, { requestId, ts: Date.now() });
-    return;
-  }
+  // 免打扰 = 页面聚焦 && 正选中该会话（choice 卡片已可见）；其余一律通知。
+  if (_isObservedConversation(normId)) return;
 
   // dedup: 同一 requestId 30s 内不重复通知（重放防护）。
   // 如果是新的 requestId（新一轮 choice），替换旧条目并继续。
@@ -272,7 +257,12 @@ function _presentGenericAppNotification(payload) {
   const threadId = String(payload?.threadId || '').trim();
 
   try {
-    const notification = new Notification(title, { body, tag: 'claw-app-notification-' + normId });
+    const notification = new Notification(title, {
+      body,
+      tag: 'claw-app-notification-' + normId,
+      // 主动投递类（提醒等）持久显示：停留至用户查看/关闭
+      requireInteraction: true,
+    });
     notification.onclick = () => {
       window.focus();
       notification.close();

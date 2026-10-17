@@ -309,6 +309,33 @@ describe('observeCallStatusSnapshot', () => {
     assert.equal(frame.data.finishTs, 1710000000777);
   });
 
+  it('normalizes runtime-form agentId via resolveAgentId before permission checks', async () => {
+    // SSE 快照的 agentId 是 runtime 形态（agent-<n>-<pid>），权限表与
+    // metadata 按 prebuilt id 键控：归一后才应命中作者默认并发布（回归：
+    // 上线期感知路径因 ID 形态断裂全部静默拒绝）。
+    const runtimeId = 'agent-1-23188';
+    const prebuiltId = 'observe-runtime-map';
+    await observeCallStatusSnapshot('notification', runtimeId, finishSnapshot(1710000000888), {
+      requireAgent, settingsPath: settingsPath(),
+      resolveAgentId: (id) => (id === runtimeId ? prebuiltId : id),
+    });
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === prebuiltId && f.data.type === 'finish');
+    assert.ok(frame);
+    assert.equal(frame.data.finishTs, 1710000000888);
+    // 会话粒度定位必须透传（多会话工作空间的焦点判定依据，丢失即误杀兄弟会话）
+    assert.equal(frame.data.runtimeAgentId, runtimeId);
+  });
+
+  it('passes agentId through when resolveAgentId misses or is absent', async () => {
+    const agentId = 'observe-passthrough';
+    await observeCallStatusSnapshot('notification', agentId, finishSnapshot(1710000000999), {
+      requireAgent, settingsPath: settingsPath(),
+      resolveAgentId: () => null, // 未命中：透传原值
+    });
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === agentId && f.data.type === 'finish');
+    assert.ok(frame);
+  });
+
   it('does not publish for suspended finishes (ADR-0019)', async () => {
     const agentId = 'observe-suspended';
     const snapshot = finishSnapshot(1710000000778);

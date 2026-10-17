@@ -468,21 +468,20 @@ function createDesktopNotifySandbox() {
 }
 
 describe('desktop-notify: finish visibility', () => {
-  it('suppresses a delayed finish notification after the user already saw Claw', async () => {
+  it('焦点会话完成不弹（正盯着）；非焦点会话完成照常弹（含页面在前台）', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
-    const foregroundTs = Date.now();
-    ctx.run(`_syncForegroundState()`);
-    ctx.document.hidden = true;
-    ctx.document.hasFocus = () => false;
+    // 页面在前台（旧语义会全静默；新语义只看会话焦点）
+    ctx.run('_syncForegroundState()');
+    ctx.run('allAgents = [{ id: "ph", name: "PH", runtime_session_id: "runtime-1" }, { id: "other", name: "Other", runtime_session_id: "runtime-2" }]');
+    ctx.run('currentRuntimeAgentId = "runtime-1"');
 
-    await ctx.run(`_presentAppNotification({
-      type: "finish",
-      agentId: "runtime-1",
-      finishTs: ${foregroundTs - 1000}
-    })`);
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + (Date.now() - 1000) + ' })');
     await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(notifications.length, 0); // 焦点会话：正盯着，不弹
 
-    assert.equal(notifications.length, 0);
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-2", finishTs: ' + Date.now() + ' })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(notifications.length, 1); // 非焦点会话：前台也照常弹
   });
 
   it('allows a later unseen finish notification while Claw is hidden', async () => {
@@ -501,6 +500,19 @@ describe('desktop-notify: finish visibility', () => {
     })`);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    assert.equal(notifications.length, 1);
+  });
+
+  it('页面失焦（最小化/后台/被遮挡）时当前选中会话完成也照常弹', async () => {
+    const { ctx, notifications } = createDesktopNotifySandbox();
+    ctx.run('currentRuntimeAgentId = "runtime-1"');
+    ctx.run('_markAgentCallStartedForNotify("runtime-1")');
+    // 页面失焦：微信盖在上面 / 最小化 / 后台标签
+    ctx.document.hidden = true;
+    ctx.document.hasFocus = () => false;
+
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", runtimeAgentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(notifications.length, 1);
   });
 
@@ -566,18 +578,19 @@ describe('desktop-notify: Worker 心跳（ADR-0030：仅前台时钟同步）', 
 });
 
 describe('desktop-notify: input 帧呈现（choice 通知，ADR-0030）', () => {
-  it('前台到达 input 帧不弹（用户已看到 choice 卡片）；后台到达照常弹', async () => {
+  it('焦点会话的 choice 不弹（正盯着卡片）；非焦点会话照常弹', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
-    ctx.run('_syncForegroundState()'); // 前台：hidden=false + hasFocus=true
+    ctx.run('_syncForegroundState()');
+    ctx.run('allAgents = [{ id: "ph", name: "PH", runtime_session_id: "runtime-1" }, { id: "other", name: "Other", runtime_session_id: "runtime-2" }]');
+    ctx.run('currentRuntimeAgentId = "runtime-1"');
+
+    // 焦点会话 choice：正盯着，不弹
     ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-a" })');
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(notifications.length, 0);
 
-    // 用户离场（超宽限期），同帧后台到达照常弹
-    ctx.document.hidden = true;
-    ctx.document.hasFocus = () => false;
-    ctx.run(`_lastForegroundTs = ${Date.now() - 60000}`);
-    ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-a" })');
+    // 非焦点会话 choice：照常弹
+    ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-2", requestId: "req-a2" })');
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(notifications.length, 1);
   });
