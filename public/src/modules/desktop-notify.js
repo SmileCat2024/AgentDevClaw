@@ -26,6 +26,9 @@
  * 导出全局函数:
  *   _presentAppNotification, _markAgentCallStartedForNotify,
  *   _requestNotifyPermission
+ * 注册全局回调:
+ *   window.__clawConsumeNotificationActivation（壳原生 toast 点击激活，
+ *   desktop/main.rs on_activated 经 webview eval 调用）
  */
 
 /* ── Dedup: 呈现级去重（ADR-0030 拆层的前端半边）──
@@ -178,13 +181,15 @@ async function _presentAgentFinishedNotification(payload) {
 
   // 持久显示（requireInteraction / 壳内原生 reminder toast）：停留至用户
   // 查看/关闭，不随超时自动消失——完成的会话可能需要用户回来处理。
+  // navPayload 供原生 toast 点击后定位会话（runtimeId 切会话）。
   _showPersistentNotification(
     isZh ? `${agentName} 已完成` : `${agentName} finished`,
     { body, tag: 'claw-agent-finished-' + normId, requireInteraction: true },
     () => {
       window.focus();
       _navigateToAgent(agent);
-    }
+    },
+    { runtimeId: normId, agentId: agent?.id }
   );
 }
 
@@ -242,14 +247,19 @@ function _presentInputRequestNotification(payload) {
  * persistent_notification（Windows toast Scenario::Reminder：常驻屏幕
  * 直到用户处理）；invoke 不可用 / 失败时回退 Web API（浏览器语义不变，
  * requireInteraction 由浏览器自行解释）。原生 toast 成功后不再走 Web
- * API（避免双弹）；系统 toast 点击激活由 AUMID 唤起应用窗口，会话级
- * 精确导航仅 Web API 路径提供。
+ * API（避免双弹）。点击行为与 Web onclick 等价：点本体 / 点「查看」按钮
+ * 由壳拉窗口到前台并经 webview eval 回调 __clawConsumeNotificationActivation
+ * （navPayload 原样往返，壳不解释语义）；点 X 才是纯关闭。
  */
-function _showPersistentNotification(title, options, onClick) {
+function _showPersistentNotification(title, options, onClick, navPayload) {
   const internals = window.__TAURI_INTERNALS__;
   if (internals && typeof internals.invoke === 'function') {
     internals
-      .invoke('persistent_notification', { title, body: String(options.body || '') })
+      .invoke('persistent_notification', {
+        title,
+        body: String(options.body || ''),
+        navPayload: navPayload ? JSON.stringify(navPayload) : null,
+      })
       .catch(() => { try { _webNotification(title, options, onClick); } catch (e) { /* ignore */ } });
     return;
   }
@@ -260,6 +270,24 @@ function _webNotification(title, options, onClick) {
   const notification = new Notification(title, options);
   notification.onclick = onClick || null;
 }
+
+/* ── 原生 toast 点击激活的消费入口（壳 webview eval 调用）────────────────
+ * 与 desktop-open.js 的 __clawConsumeOpenRequest 同模式：壳侧 on_activated
+ * 拉窗口到前台后，把 invoke 时回传的导航 payload 原样交回这里执行，行为
+ * 与 Web 路径 onclick 一致（threadId 优先会话导航，否则按 runtime id
+ * 切会话）。payload 结构见各 _showPersistentNotification 调用点。
+ */
+window.__clawConsumeNotificationActivation = function (payloadJson) {
+  try {
+    const nav = JSON.parse(payloadJson) || {};
+    window.focus();
+    if (nav.threadId && typeof window.openConversationTarget === 'function') {
+      window.openConversationTarget({ threadId: nav.threadId, agentId: nav.agentId });
+      return;
+    }
+    _navigateToAgent(_findAgentByRuntimeId(nav.runtimeId || nav.agentId));
+  } catch (e) { /* ignore */ }
+};
 
 /* ── 主动投递类通知呈现（type=reminder 等 APP 侧发起）─────────────────────
  * 文案由 APP 经投递端点提供（title/body 透传）；threadId 存在时点击落点
@@ -278,7 +306,8 @@ function _presentGenericAppNotification(payload) {
   const threadId = String(payload?.threadId || '').trim();
 
   // 主动投递类（提醒等）持久显示：停留至用户查看/关闭（壳内走原生
-  // reminder toast，见 _showPersistentNotification）。
+  // reminder toast，见 _showPersistentNotification）。navPayload 供原生
+  // toast 点击后定位：threadId 优先精确到会话，否则按 agentId。
   _showPersistentNotification(
     title,
     {
@@ -293,7 +322,8 @@ function _presentGenericAppNotification(payload) {
         return;
       }
       _navigateToAgent(agent);
-    }
+    },
+    { agentId: agent?.id || normId, threadId: threadId || undefined }
   );
 }
 

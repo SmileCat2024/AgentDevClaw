@@ -546,6 +546,44 @@ describe('desktop-notify: finish visibility', () => {
     assert.equal(notifications[0].options.requireInteraction, true);
   });
 
+  it('Tauri 壳：invoke 携带 navPayload（原生 toast 点击后定位会话的数据）', async () => {
+    const { ctx } = createDesktopNotifySandbox();
+    const invokes = [];
+    ctx.window.__TAURI_INTERNALS__ = {
+      invoke: async (cmd, args) => { invokes.push({ cmd, args }); },
+    };
+    ctx.run('currentRuntimeAgentId = "runtime-2"');
+
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(invokes.length, 1);
+    const nav = JSON.parse(invokes[0].args.navPayload);
+    assert.equal(nav.runtimeId, 'runtime-1');
+    assert.equal(nav.agentId, 'runtime-1');
+  });
+
+  it('原生 toast 点击激活：__clawConsumeNotificationActivation 按导航意图落点', () => {
+    const { ctx } = createDesktopNotifySandbox();
+    const switched = [];
+    const opened = [];
+    ctx.window.switchAgent = (id) => { switched.push(id); };
+    ctx.window.openConversationTarget = (t) => { opened.push(t); };
+
+    // threadId 优先：精确到会话（memo 提醒等 APP 直投类）
+    ctx.window.__clawConsumeNotificationActivation(JSON.stringify({ agentId: 'memo', threadId: 'th-1' }));
+    // vm realm 对象与宿主原型不同，deepEqual 会误判——按字段断言
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].threadId, 'th-1');
+    assert.equal(opened[0].agentId, 'memo');
+    assert.equal(switched.length, 0);
+
+    // 无 threadId：按 runtime id 切会话（完成通知）
+    ctx.window.__clawConsumeNotificationActivation(JSON.stringify({ runtimeId: 'runtime-1' }));
+    assert.deepEqual(switched, ['runtime-1']);
+    assert.equal(opened.length, 1);
+  });
+
   it('新一轮 call 开始：清除「刚刚完成」蓝灯（_recentlyFinishedRuntimes）', () => {
     const { ctx } = createDesktopNotifySandbox();
     ctx.run('_recentlyFinishedRuntimes.add("runtime-1")');
