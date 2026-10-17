@@ -8,7 +8,11 @@
  * - UserInputFeature：面向「人类在面板输入」的交互式输入；
  * - ContextRotationTriggerFeature：上下文过界 → 自动线程接力
  *   （与 coder 同构的阈值触发，ADR-0024「APP 接续更频繁」方向的基础
- *   形态；后续 memo 的自定义接续变换在装配层叠加，不在本壳内实现）。
+ *   形态；后续 memo 的自定义接续变换在装配层叠加，不在本壳内实现）；
+ * - TimeAwarenessFeature：系统时间注入（提醒登记的相对时间解析前提）；
+ * - MemoNotesFeature / MemoRemindersFeature：便签与定时提醒的工具面
+ *   （数据落 workspaces/memo/，首页便签墙 / 提醒列表 block 的数据面在
+ *   server 侧 memo-app 路由，同域）。
  *
  * 与线程的关系同 coder：agent 本身不感知线程；会话创建 / trim / 摘要的
  * 线程接线由 server/thread-control/thread-integration.js 在会话生命
@@ -21,7 +25,9 @@ import { BasicAgent, TemplateComposer, UserInputFeature } from '@agentdevjs/core
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { ContextRotationTriggerFeature } from '../../../local-features/dist/context-guard/src/index.js';
+import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
 import { MemoNotesFeature } from '../../../local-features/dist/memo-notes/src/index.js';
+import { MemoRemindersFeature } from '../../../local-features/dist/memo-reminders/src/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -53,6 +59,19 @@ export default class MemoAgent extends BasicAgent {
     this.use(new ContextRotationTriggerFeature({
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
+      agentId: runtimeIdentity.agentId,
+      sessionId: runtimeIdentity.sessionId,
+      serverOrigin: runtimeIdentity.serverOrigin,
+    }));
+
+    // 时间感知：系统时间与时区按节奏注入——提醒登记的相对时间解析
+    //（「明天 9 点」→ 带时区 ISO）以此为前提。
+    this.use(new TimeAwarenessFeature());
+
+    // 定时提醒：工具面登记 + 到点投递（定时器住 runtime，boot 自启是提醒
+    // 刚性的前提；数据落 workspaces/memo/reminders.json，首页提醒列表
+    // block 的数据面在 server 侧 memo-app 路由，同域）。
+    this.use(new MemoRemindersFeature({
       agentId: runtimeIdentity.agentId,
       sessionId: runtimeIdentity.sessionId,
       serverOrigin: runtimeIdentity.serverOrigin,

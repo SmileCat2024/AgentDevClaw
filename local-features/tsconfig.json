@@ -49,6 +49,10 @@
     "./craft-awareness/src/**/*.ts",
     "./craft-awareness/test/**/*.ts",
     "./memo-notes/src/**/*.ts",
-    "./memo-notes/test/**/*.ts"
+    "./memo-notes/test/**/*.ts",
+    "./scheduled-trigger/src/**/*.ts",
+    "./scheduled-trigger/test/**/*.ts",
+    "./memo-reminders/src/**/*.ts",
+    "./memo-reminders/test/**/*.ts"
   ]
 }

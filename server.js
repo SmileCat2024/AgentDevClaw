@@ -682,7 +682,7 @@ setupAcpRoutes(app, express, {
 });
 
 // ── Memo APP 对话事务（单活动线程 + 新建换代归档，ADR-0024 APP 业务状态）──
-setupMemoAppRoutes(app, express, {
+const memoAppController = setupMemoAppRoutes(app, express, {
   requireAgentLight,
   createPrebuiltSession,
   deletePrebuiltSession,
@@ -1732,6 +1732,9 @@ async function main() {
   };
   restartRemoteClawConnector();
   fireBootSchedules();
+  // memo boot 自启（工单 039）：定时器住 runtime，是提醒刚性的前提。
+  // 内部自捕获失败（尽力而为，不阻断服务就绪）。
+  memoAppController.bootMemoAppOnServerReady();
 }
 
 main().catch(async (error) => {

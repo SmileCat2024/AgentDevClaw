@@ -653,7 +653,7 @@ coder 子代理散装 bash 调度的收编需求。定位裁决：**非沙箱**�
 | 票 | 仓库 | 内容 |
 |----|------|------|
 | [038](038-claw-notification-foundation.md) | AgentDevClaw | 通知基座：权限项族 + 统一投递出口（SSE app-notification 帧 + 主动投递端点）+ 完成/choice 通知迁移 + 设置承接面（已合入；server 重启后待冒烟） |
-| [039](039-claw-memo-reminders.md) | AgentDevClaw | memo 定时提醒：scheduled-trigger 机制件 + memo-reminders feature（APP 资产 + activeThreadId 投递解析 + 悬空降级）+ 装配与 boot 自启 + 首页提醒列表（待派发；038 的权限项生效依赖 server 重启） |
+| [039](039-claw-memo-reminders.md) | AgentDevClaw | memo 定时提醒：scheduled-trigger 机制件 + memo-reminders feature（APP 资产 + activeThreadId 投递解析 + 悬空降级）+ 装配与 boot 自启 + 首页提醒列表（已合入；整服重启后待冒烟） |
 
 ### 明确暂缓项
 

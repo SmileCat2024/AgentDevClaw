@@ -33,6 +33,43 @@ const STATE_FILE = path.join(getPrebuiltWorkspaceDir(MEMO_AGENT_ID), 'app-state.
 // 便签存储：workspaces/memo/notes/（一便签一篇 md，无索引文件）。
 // 工具面（增删改查）在 runtime 侧 local-features/memo-notes，两处同域。
 const NOTES_DIR = path.join(getPrebuiltWorkspaceDir(MEMO_AGENT_ID), 'notes');
+// 提醒存储：workspaces/memo/reminders.json（APP 级资产，线程零绑定）。
+// 工具面（登记 / 完成 / 删除）在 runtime 侧 local-features/memo-reminders，
+// 其 src/index.ts 有同构 inline 实现——两处必须同步修改。
+const REMINDERS_FILE = path.join(getPrebuiltWorkspaceDir(MEMO_AGENT_ID), 'reminders.json');
+
+// ── 提醒存储（与 local-features/memo-reminders/src/index.ts 的实现同步约定）──
+// 文档 { items: [...] }、写时全量落盘、原子写（临时文件 + rename）。runtime
+// 与 server 是两个写方，跨进程并发语义为 last-writer-wins（工单 039 认可）。
+
+/** 读提醒条目；ENOENT（尚未登记过）回空数组，数据损坏抛错（不静默覆盖）。 */
+async function readReminderEntries() {
+  let raw;
+  try {
+    raw = await fs.readFile(REMINDERS_FILE, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const doc = JSON.parse(raw);
+  return Array.isArray(doc?.items) ? doc.items : [];
+}
+
+/** 原子写：临时文件 + rename。 */
+async function writeReminderEntries(items) {
+  await ensureDir(path.dirname(REMINDERS_FILE));
+  const tmp = `${REMINDERS_FILE}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify({ items }, null, 2), 'utf8');
+  await fs.rename(tmp, REMINDERS_FILE);
+}
+
+/** 提醒文件的进程内写串行：完成 / 删除两个 HTTP 写口共用，防交错丢改。 */
+let remindersWriteChain = Promise.resolve();
+function withRemindersLock(task) {
+  const run = remindersWriteChain.then(task, task);
+  remindersWriteChain = run.then(() => undefined, () => undefined);
+  return run;
+}
 
 function memoError(status, code, message) {
   const err = new Error(message);
@@ -227,6 +264,65 @@ export function setupMemoAppRoutes(app, express, {
     }
   });
 
+  /** 提醒列表数据面（首页提醒列表 block）：返回全部条目，前端自行分组。 */
+  app.get('/protoclaw/memo-app/reminders', async (_req, res, next) => {
+    try {
+      const reminders = await readReminderEntries();
+      res.json({ ok: true, reminders });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** 提醒完成（写口与 runtime 侧工具面同文件，锁内读改写 + 原子写）。 */
+  app.post('/protoclaw/memo-app/reminders/complete', express.json(), async (req, res, next) => {
+    try {
+      const id = typeof req.body?.id === 'string' ? req.body.id.trim() : '';
+      if (!id) {
+        return res.status(400).json({ ok: false, error: 'id 必须是字符串' });
+      }
+      let updated = null;
+      await withRemindersLock(async () => {
+        const items = await readReminderEntries();
+        const item = items.find((entry) => entry && entry.id === id);
+        if (!item) return;
+        item.status = 'fired';
+        await writeReminderEntries(items);
+        updated = item;
+      });
+      if (!updated) {
+        return res.status(404).json({ ok: false, error: `提醒不存在: ${id}` });
+      }
+      return res.json({ ok: true, reminder: updated });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  /** 提醒删除（永久删除；写口与 runtime 侧工具面同文件，锁内读改写 + 原子写）。 */
+  app.post('/protoclaw/memo-app/reminders/delete', express.json(), async (req, res, next) => {
+    try {
+      const id = typeof req.body?.id === 'string' ? req.body.id.trim() : '';
+      if (!id) {
+        return res.status(400).json({ ok: false, error: 'id 必须是字符串' });
+      }
+      let removed = null;
+      await withRemindersLock(async () => {
+        const items = await readReminderEntries();
+        const index = items.findIndex((entry) => entry && entry.id === id);
+        if (index < 0) return;
+        removed = items.splice(index, 1)[0];
+        await writeReminderEntries(items);
+      });
+      if (!removed) {
+        return res.status(404).json({ ok: false, error: `提醒不存在: ${id}` });
+      }
+      return res.json({ ok: true, removed });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
   app.post('/protoclaw/memo-app/conversation/start', express.json(), async (_req, res, next) => {
     try {
       const conversation = await serialized(async () => {
@@ -288,4 +384,44 @@ export function setupMemoAppRoutes(app, express, {
       next(err);
     }
   });
+
+  /**
+   * boot 自启（工单 039）：定时器住 runtime，是提醒刚性的前提。server
+   * 就绪后调用（fireBootSchedules 同位）：
+   * - 有活动线程 → 唤起其 head runtime（与 conversation/start 复用路径同构）；
+   * - 无活动线程但有未触发提醒 → 建一段对话（定时器有宿主，agent 标唤醒
+   *   有落点；经 serialized 与用户侧对话事务互斥）；
+   * - 两者皆无 → 不拉起（保持按需拉起模型）。
+   * 尽力而为：失败只记日志，不阻断、不重试（crash respawn 挂账独立立项）。
+   * 手工停止 runtime 后提醒随之停发（模型 A 语义），无隐藏后台。
+   */
+  async function bootMemoAppOnServerReady() {
+    try {
+      const active = await resolveActiveThread();
+      if (active) {
+        const agent = await requireAgentLight(MEMO_AGENT_ID);
+        await startManagedAgent(agent, active.headSessionId);
+        const ready = await waitForManagedRuntimeReady(
+          MEMO_AGENT_ID, RUNTIME_READY_TIMEOUT_MS, active.headSessionId,
+        );
+        console.log(`[memo-app] boot: runtime ${ready ? 'ready' : 'not ready yet'}`
+          + ` (thread=${active.threadId}, session=${active.headSessionId})`);
+        return { booted: true, threadId: active.threadId };
+      }
+      const reminders = await readReminderEntries().catch(() => []);
+      const hasScheduled = reminders.some((item) => item
+        && (item.status === undefined || item.status === null || item.status === 'scheduled'));
+      if (hasScheduled) {
+        await serialized(() => createConversation());
+        console.log('[memo-app] boot: conversation created for pending reminders');
+        return { booted: true, created: true };
+      }
+      return { booted: false };
+    } catch (error) {
+      console.warn('[memo-app] boot runtime failed:', error?.message || error);
+      return { booted: false, error: String(error?.message || error) };
+    }
+  }
+
+  return { bootMemoAppOnServerReady };
 }

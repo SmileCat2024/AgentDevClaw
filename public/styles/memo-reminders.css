@@ -1,0 +1,100 @@
+/* memo-reminders.css — memo 首页提醒列表 block（只读列表 + 完成勾选 + 删除） */
+
+/* 列表：行式布局，行间发丝线分界（与设置行同语言），首行不带顶线 */
+.memo-reminder-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.memo-reminder-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 2px;
+}
+
+.memo-reminder-item + .memo-reminder-item {
+  border-top: 1px solid var(--border-color);
+}
+
+/* 完成勾选：原生 checkbox + 主题强调色 */
+.memo-reminder-check {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 3px 0 0;
+  accent-color: var(--accent, #6391ff);
+  cursor: pointer;
+}
+
+.memo-reminder-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.memo-reminder-content {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.memo-reminder-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+.memo-reminder-dot {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+/* 已过期标注（scheduled 且 fire_at 已过）：danger 提示 */
+.memo-reminder-overdue {
+  color: var(--danger, #e5484d);
+}
+
+/* 已完成行：整行降调 */
+.memo-reminder-item.is-fired .memo-reminder-content {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-muted);
+}
+
+.memo-reminder-item.is-fired .memo-reminder-meta {
+  opacity: 0.7;
+}
+
+/* 删除：幽灵图标按钮，hover 才着 danger */
+.memo-reminder-delete {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 24px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.memo-reminder-item:hover .memo-reminder-delete,
+.memo-reminder-delete:focus-visible {
+  opacity: 1;
+}
+
+.memo-reminder-delete:hover {
+  background: var(--hover-bg);
+  color: var(--danger, #e5484d);
+}
