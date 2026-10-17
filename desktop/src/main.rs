@@ -369,6 +369,9 @@ fn persistent_notification(app: tauri::AppHandle, title: String, body: String) -
     let result = tauri_winrt_notification::Toast::new(&app.config().identifier)
         .title(&title)
         .text2(&body)
+        // Windows 对 scenario=Reminder 的硬性要求：toast 必须至少带一个按钮，
+        // 否则系统静默降级为普通 toast（约 5 秒收进通知中心，show 仍返回 Ok）。
+        .add_button("知道了", "dismiss")
         .scenario(tauri_winrt_notification::Scenario::Reminder)
         .show();
     match &result {
