@@ -40,7 +40,7 @@
    - 0026 Session 视图统一：Session 身份为锚，Runtime 为运行态数据源，Thread 为连续性与输入控制投影
    - 0027 Agent OS 治理面：同意模型与 per-workspace runtime 配额（强制点在 startManagedAgent 内核漏斗；权限模型独立后行）
    - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换
-   - 0029 模型调用超时治理：对话默认 60s idle / 5 次重试，transform 预算 600s 经装配层实例分离，undici headersTimeout 锚 TRANSFORM_MODEL_TIMEOUT_MS，preset 级 timeoutMs/maxRetries 逃生门
+   - 0029 模型调用超时治理：对话默认首段（首 token）120s / chunk 间隔 60s idle / 5 次重试，transform 预算 600s 经装配层实例分离，undici headersTimeout / bodyTimeout 双锚 TRANSFORM_MODEL_TIMEOUT_MS（保底层垫在最大可配预算之下），preset 级 timeoutMs/maxRetries 逃生门（timeoutMs 显式值管首段与间隔两段）
    - 0030 OS 通知投递面：统一出口、通知权限项与应用承接（notifications.* 权限族往 PERMISSION_ITEMS 加项；editingSurface 挂账落地、全局设置通知项只读审计；server 投递闸 + SSE app-notification + 前端哑呈现器；不建 OS 定时器服务）
 
 实现层真实入口：
@@ -133,7 +133,7 @@ feature 三类来源（严格区分，改错层 = 白改）：
 
 **预制 agent runtime**（[scripts/run-prebuilt-agent.js](scripts/run-prebuilt-agent.js)）：动态加载 `prebuilt-agents/*/*/agent.js`、挂到本地 ViewerWorker、管理会话恢复与附加启动逻辑（如 IM gateway）。会话数据落在用户目录 `~/.agentdev/AgentDevClaw/prebuilt-sessions/<agentId>`，不污染仓库。`metadata.json` 的 `ui` 声明（entry / tabs / home blocks）是首页 block 渲染的基础壳能力。
 
-**本地 feature**（[local-features](local-features)）：顶层 `index.ts` barrel 聚合导出。活跃域：dispatch（调度）、group-admin（群聊管理）、checkpoint、context-compaction-mirror / context-guard（上下文精简与守卫）、continuity-participant（连续性参与方）、conversation-export（对话导出）、time-awareness（时间感知：按节奏注入系统时间与长间隔提示，状态经框架会话快照持久化）、craft-awareness（工程素养：条目化动态写法知识库，每会话每条目一次；条目一：首次写出成规模文档后注入读者视角写法标准，条目二：同一文档修改跨越两个用户输入边界——以 context 中最近一条用户消息为界，含 busy 排队插话——后的编辑注入协作/交付阶段判断；注入文案外置于 feature 的 knowledge/ 目录，md 维护）、feature-wrappers（框架 feature 的 Claw 协议薄包装，含后台任务实时面板镜像 PanelShellFeature，ADR-0018 首个通道接入）、agent-studio、generative-ui、github、agent-dev、memo-notes（memo 便签存储：runtime 侧工具面 + server 侧首页便签墙数据面）。`flow` 与 `feature-dev` 已悬置。
+**本地 feature**（[local-features](local-features)）：顶层 `index.ts` barrel 聚合导出。活跃域：dispatch（调度）、group-admin（群聊管理）、checkpoint、context-compaction-mirror / context-guard（上下文精简与守卫）、continuity-participant（连续性参与方）、conversation-export（对话导出）、time-awareness（时间感知：按节奏注入系统时间与长间隔提示，节奏可装配覆盖——memo 传 reportIntervalMs: 0 每次 call 都注入，状态经框架会话快照持久化）、craft-awareness（工程素养：条目化动态写法知识库，每会话每条目一次；条目一：首次写出成规模文档后注入读者视角写法标准，条目二：同一文档修改跨越两个用户输入边界——以 context 中最近一条用户消息为界，含 busy 排队插话——后的编辑注入协作/交付阶段判断；注入文案外置于 feature 的 knowledge/ 目录，md 维护）、feature-wrappers（框架 feature 的 Claw 协议薄包装，含后台任务实时面板镜像 PanelShellFeature，ADR-0018 首个通道接入）、agent-studio、generative-ui、github、agent-dev、memo-notes（memo 便签存储：runtime 侧工具面 + server 侧首页便签墙数据面）。`flow` 与 `feature-dev` 已悬置。
 
 app-core.js 全局状态纪律：全局状态区只减不增。新增前端状态放所属 modules 文件的局部作用域；确需跨模块共享用 `window.ClawFW` 命名空间。
 
@@ -171,7 +171,7 @@ dev agent 注入技能：`agent-studio-workflow`（权威工作流）+ `agentdev
 
 ### Memo（memo）壳
 
-入口 `prebuilt-agents/official/memo/`。备忘录 APP，APP 型工作空间的第一个实体（[ADR-0024](docs/adr/0024-app-workspace-eternal-thread-model.md)）：首页是内容门户（hero 按钮承载「开始/新建对话」，action type `start_app_conversation`，服务端端点由 block 声明携带，公共分发器不按 APP ID 分支），对话从侧栏会话栏点开（叶子 = runtime 投影，threadId 锚点击）。空壳装配：UserInputFeature + ContextRotationTriggerFeature（与 coder 同构的阈值触发接续）。
+入口 `prebuilt-agents/official/memo/`。备忘录 APP，APP 型工作空间的第一个实体（[ADR-0024](docs/adr/0024-app-workspace-eternal-thread-model.md)）：首页是内容门户（hero 按钮承载「开始/新建对话」，action type `start_app_conversation`，服务端端点由 block 声明携带，公共分发器不按 APP ID 分支），对话从侧栏会话栏点开（叶子 = runtime 投影，threadId 锚点击）。空壳装配：UserInputFeature + ContextRotationTriggerFeature（与 coder 同构的阈值触发接续）；TimeAwarenessFeature 以每次输入注入的细粒度节奏装配（默认 4 小时节奏对提醒的相对时间解析太粗）。
 
 - 唯一活动线程是 memo 的业务状态，权威持有方在服务端 [server/routes/memo-app.js](server/routes/memo-app.js)（start/new 事务经 in-flight 互斥串行；创建链失败回滚与 ACP 原子创建同构；新建换代 = 先落新引用再 best-effort 归档旧线程），状态文件 `workspaces/memo/app-state.json`
 - runtime 按需拉起：首开经首页「开始对话」事务（有活动线程恢复其 head，无则空会话等首条消息）；`/threads/:id/input` 的 `ensureHeadRuntime` 唤起闸共用

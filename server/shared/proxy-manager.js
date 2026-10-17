@@ -30,10 +30,12 @@ const LOOPBACK_NO_PROXY = ['localhost', '127.0.0.1'];
 const PROXY_CONNECT_TIMEOUT_MS = 10_000;
 // 非流式请求（transform 摘要走 noStream）的响应头要等服务端生成完整个结果才
 // 发出，headersTimeout 事实上是"非流式总等待预算"，须与框架 transform 预算
-// （TRANSFORM_MODEL_TIMEOUT_MS）对齐；对话默认 idle（60s）必先于该值触发。流式
-// chunk 间无数据由 bodyTimeout（60s）约束，与框架侧非代理 Agent 保持一致。
+// （TRANSFORM_MODEL_TIMEOUT_MS）对齐；流式请求的响应头在服务端受理后即刻到达，
+// 不受该值影响。bodyTimeout 是 undici 层流式 chunk 间隔的兜底，锚定同一常量
+// （保底层垫在最大可配 idle 预算之下，preset/实例级覆盖不会被这层提前掐断），
+// 与框架侧 http-client 保持一致。
 const PROXY_HEADERS_TIMEOUT_MS = TRANSFORM_MODEL_TIMEOUT_MS;
-const PROXY_BODY_TIMEOUT_MS = 60_000;
+const PROXY_BODY_TIMEOUT_MS = TRANSFORM_MODEL_TIMEOUT_MS;
 const ORIGINAL_NO_PROXY = {
   upper: process.env.NO_PROXY,
   lower: process.env.no_proxy,

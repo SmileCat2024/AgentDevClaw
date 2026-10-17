@@ -33,7 +33,8 @@ export const SUMMARY_TUNE_MAX_TOKENS = SUMMARY_MAX_TOKENS;
 
 /**
  * 摘要类实例的空闲时限装配约定：非流式摘要在整个结果生成完之前收不到响应头，
- * 必须拿远宽于对话默认（60s）的 transform 预算，锚定框架常量。
+ * 必须拿远宽于对话默认（首段 120s / 间隔 60s）的 transform 预算，锚定框架常量
+ * （timeoutMs 显式值管首段与间隔两段）。
  */
 export const SUMMARY_TUNED_IDLE_MS = TRANSFORM_MODEL_TIMEOUT_MS;
 

@@ -20,12 +20,15 @@ describe('proxy dispatcher timeout policy', () => {
     // 非流式请求（transform 摘要走 noStream）的响应头要等服务端生成完整个结果
     // 才发出，headersTimeout 事实上是"非流式总等待预算"，必须 ≥ 场景最大 idle
     // deadline（TRANSFORM_MODEL_TIMEOUT_MS），否则较短一侧先掐断、另一侧语义
-    // 形同虚设。对话默认 idle（60s）必先于该值触发。
+    // 形同虚设。
     const options = buildProxyDispatcherOptions();
     assert.equal(options.headersTimeout, TRANSFORM_MODEL_TIMEOUT_MS);
     assert.equal(options.headersTimeout, 600_000);
-    // 流式 chunk 间 60s 无数据即判定断流，与框架侧非代理 Agent 一致。
-    assert.equal(options.bodyTimeout, 60_000);
+    // bodyTimeout 是 undici 层流式 chunk 间隔的兜底，锚定最大可配预算（preset
+    // timeoutMs / 实例 deadlineMs 的上限空间），保证策略层永远先于保底层触发，
+    // 与框架侧 http-client 同锚。
+    assert.equal(options.bodyTimeout, TRANSFORM_MODEL_TIMEOUT_MS);
+    assert.equal(options.bodyTimeout, 600_000);
     assert.equal(options.connect.timeout, 10_000);
   });
 

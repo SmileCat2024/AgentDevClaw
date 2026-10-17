@@ -15,9 +15,10 @@
  * @param {object} [opts]
  * @param {boolean} [opts.forceMaxTokens]
  * @param {string} [opts.protocol]
- * @param {number} [opts.deadlineMs] - 空闲时限覆盖（毫秒）。仅需要长预算的
- *   调用方传（summary / trim 的非流式生成走 TRANSFORM_MODEL_TIMEOUT_MS）；
- *   标题 / recap 等小任务不传，沿用框架默认。
+ * @param {number} [opts.deadlineMs] - 空闲时限覆盖（毫秒），管首段与间隔两段。
+ *   仅需要长预算的调用方传（summary / trim 的非流式生成走
+ *   TRANSFORM_MODEL_TIMEOUT_MS）；标题 / recap 等小任务不传，沿用框架默认
+ *   （首段 120s / 间隔 60s）。
  */
 export function tuneMirrorLLM(llm, maxTokens, { forceMaxTokens = false, protocol, deadlineMs } = {}) {
   if (!llm || typeof llm !== 'object') return;
@@ -26,6 +27,11 @@ export function tuneMirrorLLM(llm, maxTokens, { forceMaxTokens = false, protocol
     if (Number.isFinite(deadlineMs) && deadlineMs > 0
       && Object.prototype.hasOwnProperty.call(llm, 'deadlineMs')) {
       llm.deadlineMs = deadlineMs;
+      // 两段语义：显式值管首段与间隔（框架侧 ModelConfig.timeoutMs 同构）。
+      // hasOwnProperty 探测兼容尚无首段字段的旧版框架实例。
+      if (Object.prototype.hasOwnProperty.call(llm, 'firstTokenDeadlineMs')) {
+        llm.firstTokenDeadlineMs = deadlineMs;
+      }
     }
   } catch {}
 

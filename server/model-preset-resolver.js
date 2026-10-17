@@ -20,8 +20,9 @@ export const GLOBAL_DEFAULT_PRESET_NAME = '__default__';
 
 /**
  * presets.json preset 条目上的可选调用策略字段（timeoutMs 空闲时限 / maxRetries
- * 重试上限）→ ModelConfig 字段，作为框架默认（对话 60s idle / 5 次重试）之外的
- * per-preset 逃生门。非法值不透传：落回框架默认，而不是把非法值放大成无超时保护。
+ * 重试上限）→ ModelConfig 字段，作为框架默认（对话首段 120s / 间隔 60s idle /
+ * 5 次重试）之外的 per-preset 逃生门（timeoutMs 显式值管首段与间隔两段）。
+ * 非法值不透传：落回框架默认，而不是把非法值放大成无超时保护。
  */
 function pickPresetCallPolicy(preset) {
   const fields = {};
