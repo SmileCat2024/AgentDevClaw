@@ -366,12 +366,16 @@ fn is_service_origin(url: &tauri::Url) -> bool {
 /// AUMID 与通知插件一致（app identifier），toast 归属与点击激活指向本应用。
 #[tauri::command]
 fn persistent_notification(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
-    tauri_winrt_notification::Toast::new(&app.config().identifier)
+    let result = tauri_winrt_notification::Toast::new(&app.config().identifier)
         .title(&title)
         .text2(&body)
         .scenario(tauri_winrt_notification::Scenario::Reminder)
-        .show()
-        .map_err(|e| e.to_string())
+        .show();
+    match &result {
+        Ok(()) => println!("[claw-desktop] persistent notification shown"),
+        Err(err) => eprintln!("[claw-desktop] persistent notification failed: {err}"),
+    }
+    result.map_err(|e| e.to_string())
 }
 
 fn main() {

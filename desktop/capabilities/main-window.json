@@ -4,5 +4,5 @@
   "description": "Permissions for the main Claw window. The main window loads the Claw service from http://127.0.0.1:<port> (an external URL, i.e. a remote origin for the Tauri IPC ACL), so remote access must be declared for IPC-based features such as notifications to work.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
-  "permissions": ["core:default", "notification:default"]
+  "permissions": ["core:default", "notification:default", "allow-persistent-notification"]
 }

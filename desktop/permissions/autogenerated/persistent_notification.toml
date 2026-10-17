@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-persistent-notification"
+description = "Enables the persistent_notification command without any pre-configured scope."
+commands.allow = ["persistent_notification"]
+
+[[permission]]
+identifier = "deny-persistent-notification"
+description = "Denies the persistent_notification command without any pre-configured scope."
+commands.deny = ["persistent_notification"]
