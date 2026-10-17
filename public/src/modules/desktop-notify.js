@@ -5,6 +5,8 @@
  * app-notification 帧）；本模块只承担设备端呈现策略：
  *   1. 免打扰判定（_isObservedConversation：页面聚焦且正选中该会话
  *      才静默；页面失焦一律通知，判定用会话粒度 runtimeAgentId）；
+ *   1b. 持久性判定（_shouldPersistNotification：页面失焦才常驻挂起；
+ *      前台（含看别的会话）普通 toast 自动收进通知中心）；
  *   2. 呈现级去重（finishTs / requestId 事件幂等 + 30s 并发窗口）；
  *   3. 通知文案组装（fetch 最后回复做正文预览、markdown 剥离截断）；
  *   4. Tauri/Web 通知权限处理与 toast 点击导航。
@@ -75,6 +77,16 @@ function _isObservedConversation(runtimeAgentId) {
   if (document.hidden || !document.hasFocus()) return false; // 页面失焦：一律通知
   const focused = normalizeAgentIdentity(currentRuntimeAgentId);
   return !!focused && normalizeAgentIdentity(runtimeAgentId) === focused;
+}
+
+/* ── 持久性判定：页面失焦（用户不在 Claw）才常驻挂起 ──
+ * 与免打扰判定（_isObservedConversation）同源的页面焦点语义：前台时
+ * 通知只是轻提示（普通 toast，约 5 秒收进通知中心，侧栏「刚刚完成」
+ * 蓝灯仍在）；页面失焦（最小化 / 后台标签 / 被遮挡）时持久挂起
+ * （requireInteraction / 壳内原生 Reminder toast），停留至用户处理。
+ */
+function _shouldPersistNotification() {
+  return document.hidden || !document.hasFocus();
 }
 
 /** 帧的会话定位 id：runtimeAgentId 优先（会话粒度），缺失回退 agentId。 */
@@ -179,12 +191,12 @@ async function _presentAgentFinishedNotification(payload) {
     ? bodyParts.join('\n')
     : (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.');
 
-  // 持久显示（requireInteraction / 壳内原生 reminder toast）：停留至用户
-  // 查看/关闭，不随超时自动消失——完成的会话可能需要用户回来处理。
-  // navPayload 供原生 toast 点击后定位会话（runtimeId 切会话）。
+  // 持久性按页面焦点判定：失焦（用户不在）常驻挂起；前台（看着别的
+  // 会话）轻提示，自动收进通知中心。navPayload 供原生 toast 点击后
+  // 定位会话（runtimeId 切会话）。
   _showPersistentNotification(
     isZh ? `${agentName} 已完成` : `${agentName} finished`,
-    { body, tag: 'claw-agent-finished-' + normId, requireInteraction: true },
+    { body, tag: 'claw-agent-finished-' + normId, requireInteraction: _shouldPersistNotification() },
     () => {
       window.focus();
       _navigateToAgent(agent);
@@ -241,15 +253,17 @@ function _presentInputRequestNotification(payload) {
   } catch (e) { /* ignore */ }
 }
 
-/* ── Tauri 壳原生持久通知 ──────────────────────────────────────────────
+/* ── Tauri 壳原生 toast ──────────────────────────────────────────────────
  * WebView2 的 Web Notification 不兑现 requireInteraction（toast 默认 5
- * 秒收进通知中心）。壳内持久类通知优先走自定义 command
- * persistent_notification（Windows toast Scenario::Reminder：常驻屏幕
- * 直到用户处理）；invoke 不可用 / 失败时回退 Web API（浏览器语义不变，
- * requireInteraction 由浏览器自行解释）。原生 toast 成功后不再走 Web
- * API（避免双弹）。点击行为与 Web onclick 等价：点本体 / 点「查看」按钮
- * 由壳拉窗口到前台并经 webview eval 回调 __clawConsumeNotificationActivation
- * （navPayload 原样往返，壳不解释语义）；点 X 才是纯关闭。
+ * 秒收进通知中心）。壳内 toast 通知统一经自定义 command
+ * persistent_notification 转系统通知：options.requireInteraction 为 true
+ * 时 Windows toast 用 Scenario::Reminder（常驻屏幕直到用户处理），false
+ * 时普通 toast（自动收进通知中心，与 Web API 语义对齐）。invoke 不可用 /
+ * 失败时回退 Web API（浏览器语义不变，requireInteraction 由浏览器自行
+ * 解释）。原生 toast 成功后不再走 Web API（避免双弹）。点击行为与 Web
+ * onclick 等价：点本体 / 点「查看」按钮由壳拉窗口到前台并经 webview eval
+ * 回调 __clawConsumeNotificationActivation（navPayload 原样往返，壳不
+ * 解释语义）；点 X 才是纯关闭。
  */
 function _showPersistentNotification(title, options, onClick, navPayload) {
   const internals = window.__TAURI_INTERNALS__;
@@ -258,6 +272,7 @@ function _showPersistentNotification(title, options, onClick, navPayload) {
       .invoke('persistent_notification', {
         title,
         body: String(options.body || ''),
+        persistent: options.requireInteraction !== false,
         navPayload: navPayload ? JSON.stringify(navPayload) : null,
       })
       .catch(() => { try { _webNotification(title, options, onClick); } catch (e) { /* ignore */ } });
@@ -305,15 +320,15 @@ function _presentGenericAppNotification(payload) {
   const body = String(payload?.body || '').trim();
   const threadId = String(payload?.threadId || '').trim();
 
-  // 主动投递类（提醒等）持久显示：停留至用户查看/关闭（壳内走原生
-  // reminder toast，见 _showPersistentNotification）。navPayload 供原生
-  // toast 点击后定位：threadId 优先精确到会话，否则按 agentId。
+  // 持久性按页面焦点判定（同 finish：失焦常驻，前台轻提示）。
+  // navPayload 供原生 toast 点击后定位：threadId 优先精确到会话，
+  // 否则按 agentId。
   _showPersistentNotification(
     title,
     {
       body,
       tag: 'claw-app-notification-' + normId,
-      requireInteraction: true,
+      requireInteraction: _shouldPersistNotification(),
     },
     () => {
       window.focus();

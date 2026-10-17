@@ -360,33 +360,44 @@ fn is_service_origin(url: &tauri::Url) -> bool {
     url.host_str() == Some("127.0.0.1") && url.port() == Some(service_port())
 }
 
-/// 持久通知走 Windows 原生 toast（Scenario::Reminder：常驻屏幕直到用户
-/// 处理）。WebView2 的 Web Notification 不兑现 requireInteraction（toast
-/// 默认 5 秒收进通知中心），壳内持久类通知经此 command 转系统通知。
-/// AUMID 与通知插件一致（app identifier），toast 归属与点击激活指向本应用。
+/// 壳内 toast 通知（Windows 原生）。persistent=true（默认）走
+/// Scenario::Reminder：常驻屏幕直到用户处理——WebView2 的 Web
+/// Notification 不兑现 requireInteraction（toast 默认 5 秒收进通知
+/// 中心），持久类通知经此 command 转系统通知。persistent=false 为
+/// 普通 toast：约 5 秒自动收进通知中心（前端按页面焦点判定——用户
+/// 在前台看别的会话时只需轻提示），与 Web API 语义对齐。
+/// AUMID 与通知插件一致（app identifier），toast 归属与点击激活指向
+/// 本应用。
 ///
-/// 点击行为（点本体 / 点「查看」按钮统一）：拉窗口到前台 + 经 webview eval
-/// 把 nav_payload（前端组装的会话定位 JSON，壳不解释语义）交回前端导航
-/// 入口（modules/desktop-notify.js 的 __clawConsumeNotificationActivation，
-/// 与右键唤起 __clawConsumeOpenRequest 同模式）；点 X 关闭是纯 dismiss，
+/// 点击行为（点本体 / 点「查看」按钮统一，两种模式一致）：拉窗口到
+/// 前台 + 经 webview eval 把 nav_payload（前端组装的会话定位 JSON，
+/// 壳不解释语义）交回前端导航入口（modules/desktop-notify.js 的
+/// __clawConsumeNotificationActivation，与右键唤起
+/// __clawConsumeOpenRequest 同模式）；点 X 关闭是纯 dismiss，
 /// 不唤起不导航。nav_payload 为空时只拉前台不导航。
 #[tauri::command]
 fn persistent_notification(
     app: tauri::AppHandle,
     title: String,
     body: String,
+    persistent: Option<bool>,
     nav_payload: Option<String>,
 ) -> Result<(), String> {
+    let persistent = persistent.unwrap_or(true);
     let handle = app.clone();
     let eval_payload = nav_payload.as_deref().map(js_string_literal).unwrap_or_default();
-    let result = tauri_winrt_notification::Toast::new(&app.config().identifier)
+    // 按钮两种模式都保留：Windows 对 scenario=Reminder 的硬性要求是
+    // toast 必须至少带一个按钮，否则系统静默降级为普通 toast（约 5 秒
+    // 收进通知中心，show 仍返回 Ok）；普通 toast 带按钮无副作用，且点
+    // 击语义统一（切回应用并定位会话，不是「知道了」）。
+    let mut toast = tauri_winrt_notification::Toast::new(&app.config().identifier)
         .title(&title)
         .text2(&body)
-        // Windows 对 scenario=Reminder 的硬性要求：toast 必须至少带一个按钮，
-        // 否则系统静默降级为普通 toast（约 5 秒收进通知中心，show 仍返回 Ok）。
-        // 按钮语义与点本体一致（切回应用并定位会话），不是「知道了」。
-        .add_button("查看", "view")
-        .scenario(tauri_winrt_notification::Scenario::Reminder)
+        .add_button("查看", "view");
+    if persistent {
+        toast = toast.scenario(tauri_winrt_notification::Scenario::Reminder);
+    }
+    let result = toast
         .on_activated(move |action| {
             // COM 回调线程，AppHandle/WebviewWindow 跨线程可用
             println!("[claw-desktop] notification activated: {:?}", action);
