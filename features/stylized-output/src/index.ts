@@ -223,7 +223,7 @@ export class StylizedOutput implements AgentFeature {
   readonly dependencies: string[] = [];
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
   readonly description =
-    '输出风格库与确认签名门禁：从 .agentdev/output-style/ 发现风格 md；风格选择是会话内存态（不落盘、跨会话重置，经面板 configure 人工选择）；启用风格后，每次最终回复必须调用签名工具逐字默写该风格的确认签名，验证通过才允许结束。';
+    '为会话选定输出风格后，agent 的每次回复都遵循该风格并经签名确认；风格文件放入工作区 .agentdev/output-style/ 目录即可选用。';
 
   private workspaceDir = process.cwd();
   private stylesDir = '';
