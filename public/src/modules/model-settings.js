@@ -260,13 +260,13 @@ function renderModelCatalogSettingsOverlay(host, data) {
   const connections = data.connections || { opencode: { hasApiKey: false, tier: 'zen' } };
   const catalog = window.ClawFW.modelCatalogs?.[tab] || { models: [], loaded: false, loading: false, error: '' };
   const labels = { overview: isZh ? '总览' : 'Overview', custom: isZh ? '自定义模型' : 'Custom', codex: 'Codex', opencode: 'OpenCode', speech: isZh ? '语音识别' : 'Speech', notification: isZh ? '通知' : 'Notifications' };
-  // 侧栏分组：核心四项直排，「其他」之下放语音识别与通知，与总览快速配置同序
+  // 侧栏分组：核心四项 + 通知直排（用户裁决「左栏多一个选项」，不埋「其他」），「其他」之下仅语音识别
   const tabButton = (key) =>
     '<button class="ph-settings-tab' + (tab === key ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'' + key + '\')">'
     + '<span class="ph-settings-tab-label">' + labels[key] + '</span></button>';
-  const nav = ['overview', 'codex', 'opencode', 'custom'].map(tabButton).join('')
+  const nav = ['overview', 'codex', 'opencode', 'custom', 'notification'].map(tabButton).join('')
     + '<div class="ph-settings-tab-group">' + (isZh ? '其他' : 'Other') + '</div>'
-    + tabButton('speech') + tabButton('notification');
+    + tabButton('speech');
   const dm = data.config?.defaultModel || {};
   const speechConfig = getClawSpeechModelConfig() || {};
   const speechPreset = getClawSpeechPresets().find((preset) => preset.baseUrl === speechConfig.baseUrl && preset.apiKey === speechConfig.apiKey && preset.model === speechConfig.model && (preset.apiType || 'chat') === (speechConfig.apiType || 'chat'));
