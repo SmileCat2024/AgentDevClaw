@@ -4,6 +4,7 @@
  * 形态：单列设置区（不分左右栏），首个区块为模型设置。与智能编码空间
  * （ph-model-config.js）的差异是刻意的——memo 只配一个模型（无备选模型、
  * 无身份分层），设置区按区块纵向追加，不引入左侧分页导航。
+ * 「通知」区块承接 ADR-0030 notifications.reminder（到点提醒系统通知）。
  *
  * 数据面复用通用接口，服务端零改动：
  *   GET/PUT /protoclaw/agent_model_presets?agentId=memo
@@ -30,6 +31,9 @@ let _memoSettingsOpen = false;
 // agent-configs/memo.json 的 modelPresets.default（{ primary, thinkingEffort } 或 null）
 let _memoDefaultPreset = null;
 let _memoSettingsLoaded = false;
+// 提醒通知权限态（ADR-0030 notifications.reminder）：null = 未加载；
+// { userValue: boolean|undefined, authorDefault: boolean } = 已解析判定链输入
+let _memoReminderState = null;
 
 function _memoIsZh() {
   return typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
@@ -137,6 +141,37 @@ function _memoRenderModelSection(presets) {
   ].join('');
 }
 
+/** 提醒通知开关区（ADR-0030：memo 设置页承接 notifications.reminder）。 */
+function _memoRenderNotificationSection() {
+  const isZh = _memoIsZh();
+  if (!_memoReminderState) return '';
+  const { userValue, authorDefault } = _memoReminderState;
+  const effective = typeof userValue === 'boolean' ? userValue : authorDefault;
+  const toggleRow = [
+    '<div class="ph-mc-list">',
+    '<div class="ph-mc-row">',
+    '<div class="ph-mc-role">',
+      '<div class="ph-mc-role-name">' + _memoEsc(isZh ? '到点提醒' : 'Reminders') + '</div>',
+      '</div>',
+    '<div style="display:flex;justify-content:flex-end;align-items:center;padding-top:7px;">',
+    '<label class="proxy-switch">',
+    '<input type="checkbox" ' + (effective ? 'checked' : '') + ' onchange="window.memoToggleReminderNotification(this.checked)" />',
+    '<span class="proxy-switch-slider"></span>',
+    '</label>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
+  return [
+    '<section class="memo-settings-section">',
+    '<div class="memo-settings-section-head">',
+    '<div class="memo-settings-section-title">' + _memoEsc(isZh ? '通知' : 'Notifications') + '</div>',
+    '</div>',
+    toggleRow,
+    '</section>',
+  ].join('');
+}
+
 function _memoRenderBody(presets) {
   const isZh = _memoIsZh();
   return [
@@ -149,6 +184,7 @@ function _memoRenderBody(presets) {
     '</div>',
     _memoRenderModelSection(presets),
     '</section>',
+    _memoRenderNotificationSection(),
   ].join('');
 }
 
@@ -186,12 +222,36 @@ function _memoRenderOverlay(presets) {
   }
 }
 
+/** 拉取提醒通知权限判定链输入：用户覆盖（resourcePolicy）+ 作者默认（metadata permissionDefaults）。 */
+async function _memoLoadReminderState() {
+  _memoReminderState = null;
+  try {
+    const resp = await fetch('/protoclaw/workspace_settings');
+    const data = resp.ok ? await resp.json().catch(() => null) : null;
+    const memo = (Array.isArray(allAgents) ? allAgents : [])
+      .find((a) => a?.id === MEMO_SETTINGS_AGENT_ID && a?.source === 'prebuilt');
+    const defaults = memo?.permissionDefaults && typeof memo.permissionDefaults === 'object'
+      ? memo.permissionDefaults : {};
+    const authorDefault = typeof defaults['notifications.reminder'] === 'boolean'
+      ? defaults['notifications.reminder'] : false;
+    const userValue = data?.resourcePolicy?.[MEMO_SETTINGS_AGENT_ID]?.['notifications.reminder'];
+    _memoReminderState = {
+      userValue: typeof userValue === 'boolean' ? userValue : undefined,
+      authorDefault,
+    };
+  } catch {
+    // 读取失败按作者默认渲染（开关仍可用，保存走同端点）
+    _memoReminderState = { userValue: undefined, authorDefault: true };
+  }
+}
+
 async function openMemoSettings() {
   _memoSettingsOpen = true;
   _memoSettingsLoaded = false;
   _memoDefaultPreset = null;
+  _memoReminderState = null;
   _memoRenderOverlay([]);
-  const presets = await _memoEnsurePresets();
+  const [presets] = await Promise.all([_memoEnsurePresets(), _memoLoadReminderState()]);
   await _memoLoadDefaultPreset();
   if (!_memoSettingsOpen) return;
   _memoSettingsLoaded = true;
@@ -202,11 +262,42 @@ function closeMemoSettings() {
   _memoSettingsOpen = false;
   _memoDefaultPreset = null;
   _memoSettingsLoaded = false;
+  _memoReminderState = null;
   const host = document.getElementById('memo-settings-host');
   if (host) host.innerHTML = '';
 }
 
 // ── 保存 ────────────────────────────────────────────────────────
+
+window.memoToggleReminderNotification = async function(checked) {
+  const isZh = _memoIsZh();
+  try {
+    const resp = await fetch('/protoclaw/workspace_settings/resource_policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: MEMO_SETTINGS_AGENT_ID,
+        permissionId: 'notifications.reminder',
+        value: checked === true,
+      }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data?.error || ('HTTP ' + resp.status));
+    }
+    if (_memoReminderState) _memoReminderState.userValue = checked === true;
+    _memoSetStatus(isZh ? '已保存' : 'Saved', false);
+  } catch (error) {
+    console.error('[memo-settings] reminder toggle failed:', error);
+    _memoSetStatus((isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error), true);
+  }
+  // 重取真值后重渲染：成功 = 新值收敛，失败 = 开关回滚服务器态
+  if (_memoSettingsOpen) {
+    await _memoLoadReminderState();
+    const presets = typeof getClawModelPresets === 'function' ? getClawModelPresets() : [];
+    _memoRenderOverlay(presets);
+  }
+};
 
 function _memoSetStatus(text, isError) {
   const el = document.getElementById('memo-settings-status');

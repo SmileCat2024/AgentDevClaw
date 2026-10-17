@@ -591,16 +591,19 @@ async function _phLoadCoderPolicy() {
     const limit = data?.resourcePolicy?.coder?.maxLiveRuntimes;
     const value = Number.isInteger(limit) && limit > 0 ? String(limit) : '';
     const live = Number.isInteger(data?.liveRuntimes?.coder) ? data.liveRuntimes.coder : 0;
+    // 行式布局照模型配置页（ph-mc-row）：左标题列 + 右定宽控件列，避免
+    // settings-input 满宽拉伸（width:100%）在 flex 行里被拉成通栏。
     host.innerHTML = [
-      '<div class="proxy-toggle-row" style="align-items:center;flex-wrap:wrap;gap:8px;">',
-      '<div class="proxy-toggle-label"><div>' + (isZh ? 'runtime 并发上限' : 'Runtime concurrency limit') + '</div>',
-      '<div style="font-size:12px;color:var(--text-secondary);">' + (isZh ? '当前 ' + live + ' 个运行中 · 留空不限制' : live + ' running · empty for unlimited') + '</div></div>',
-      '<input id="ph-coder-runtime-limit" type="number" min="1" step="1" class="settings-input" style="min-width:110px;" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" onchange="window.phSaveCoderRuntimeLimit(this.value)">',
+      '<div class="ph-mc-row">',
+      '<div class="ph-mc-role">',
+      '<div class="ph-mc-role-name">' + (isZh ? '并发上限' : 'Concurrency limit') + '</div>',
+      (live > 0 ? '<div class="ph-mc-role-desc">' + (isZh ? '当前 ' + live + ' 个运行中' : live + ' running') + '</div>' : ''),
       '</div>',
-      '<div class="ph-pm-intro">' + escapeHtml(isZh
-        ? '此策略属于 Coder 工作空间；全局“工作空间设置”和这里编辑的是同一项配置。已运行的 runtime 不会因调低上限而停止。'
-        : 'This policy belongs to the Coder workspace. Global Workspace Settings and this page edit the same value. Lowering the limit does not stop existing runtimes.') + '</div>',
-      '<div id="ph-coder-policy-status"></div>',
+      '<div style="flex:0 0 140px;display:flex;justify-content:flex-end;padding-top:7px;">',
+      '<input id="ph-coder-runtime-limit" type="number" min="1" step="1" class="settings-input" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" onchange="window.phSaveCoderRuntimeLimit(this.value)">',
+      '</div>',
+      '</div>',
+      '<div id="ph-coder-policy-status" style="margin:12px 24px 0;"></div>',
     ].join('');
   } catch (error) {
     host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml((isZh ? '读取 Coder 策略失败：' : 'Could not load Coder policy: ') + (error?.message || error)) + '</div>';
@@ -638,12 +641,95 @@ window.phSaveCoderRuntimeLimit = async function(rawValue) {
   }
 };
 
+// ── 通知：本工作空间与 Coder 完成通知的集中承接（ADR-0030 editingSurface）───
+
+// 声明制渲染：只显示 metadata 声明了 notifications.finish 的工作空间开关
+// （宿主配置自己 + coder）。生效值判定链：resourcePolicy 用户覆盖 >
+// permissionDefaults 作者默认 > false；写入 PUT
+// /protoclaw/workspace_settings/resource_policy（与全局「工作空间设置」
+// 的只读审计是同一份数据）。
+async function _phLoadNotificationSettings() {
+  const host = document.getElementById('ph-notification-host');
+  if (!host) return;
+  const isZh = currentLanguage === 'zh';
+  let resourcePolicy = {};
+  try {
+    const response = await fetch('/protoclaw/workspace_settings');
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    resourcePolicy = data?.resourcePolicy && typeof data.resourcePolicy === 'object' ? data.resourcePolicy : {};
+  } catch (error) {
+    if (!document.getElementById('ph-notification-host') || _phSettingsTab !== 'notification') return;
+    host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml((isZh ? '读取通知设置失败：' : 'Could not load notifications: ') + (error?.message || error)) + '</div>';
+    return;
+  }
+  if (!document.getElementById('ph-notification-host') || _phSettingsTab !== 'notification') return;
+  const agents = Array.isArray(allAgents) ? allAgents : [];
+  const targets = ['programming-helper', 'coder']
+    .map((agentId) => agents.find((a) => a.id === agentId && a.source === 'prebuilt'))
+    .filter((a) => a && Array.isArray(a.permissions) && a.permissions.includes('notifications.finish'));
+  if (targets.length === 0) {
+    host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml(isZh ? '暂无可配置的通知项。' : 'No notifications to configure.') + '</div>';
+    return;
+  }
+  const rows = targets.map((a) => {
+    const userValue = resourcePolicy[a.id]?.['notifications.finish'];
+    const defaults = a.permissionDefaults && typeof a.permissionDefaults === 'object' ? a.permissionDefaults : {};
+    const authorDefault = typeof defaults['notifications.finish'] === 'boolean' ? defaults['notifications.finish'] : false;
+    const effective = typeof userValue === 'boolean' ? userValue : authorDefault;
+    // 行式布局照模型配置页（ph-mc-row）：左标题列 + 右开关
+    return [
+      '<div class="ph-mc-row">',
+      '<div class="ph-mc-role">',
+      '<div class="ph-mc-role-name">' + escapeHtml(a.name || a.id) + '</div>',
+      '<div class="ph-mc-role-desc">' + (isZh ? '焦点不在本页面时，完成即弹通知' : 'Toast on finish while you are away') + '</div>',
+      '</div>',
+      '<div style="display:flex;justify-content:flex-end;align-items:center;padding-top:7px;">',
+      '<label class="proxy-switch">',
+      '<input type="checkbox" ' + (effective ? 'checked' : '') + ' onchange="window._phToggleNotificationFinish(\'' + escapeHtml(a.id) + '\', this.checked)" />',
+      '<span class="proxy-switch-slider"></span>',
+      '</label>',
+      '</div>',
+      '</div>',
+    ].join('');
+  }).join('');
+  host.innerHTML = [
+    rows,
+    '<div id="ph-notification-status" style="margin:0 24px;"></div>',
+  ].join('');
+}
+
+window._phToggleNotificationFinish = async function(agentId, checked) {
+  const isZh = currentLanguage === 'zh';
+  const status = document.getElementById('ph-notification-status');
+  const setStatus = (message) => { if (status) status.textContent = message; };
+  try {
+    const response = await fetch('/protoclaw/workspace_settings/resource_policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, permissionId: 'notifications.finish', value: checked === true }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error || 'HTTP ' + response.status);
+    }
+    setStatus(isZh ? '已保存' : 'Saved');
+  } catch (error) {
+    setStatus((isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error));
+  }
+  // 重取渲染：成功时与服务器态收敛一致，失败时开关回滚到服务器真值
+  await _phLoadNotificationSettings();
+};
+
 // ── Main panel render ─────────────────────────────────────────
 
 function renderPhModelConfigOverlay(agent, presets) {
   const host = ensurePhModelConfigHost();
   if (!agent) { host.innerHTML = ''; _closePhFeatureEditor(); return; }
   if (_phSettingsTab === 'coder-policy' && window.phModelConfigAgentId !== 'programming-helper') {
+    _phSettingsTab = 'model';
+  }
+  if (_phSettingsTab === 'notification' && window.phModelConfigAgentId !== 'programming-helper') {
     _phSettingsTab = 'model';
   }
   const isZh = currentLanguage === 'zh';
@@ -736,6 +822,10 @@ function renderPhModelConfigOverlay(agent, presets) {
       key: 'coder-policy',
       label: isZh ? 'Coder 策略' : 'Coder Policy',
       icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>',
+    }, {
+      key: 'notification',
+      label: isZh ? '通知' : 'Notifications',
+      icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
     }] : []),
   ];
 
@@ -753,8 +843,12 @@ function renderPhModelConfigOverlay(agent, presets) {
   } else if (_phSettingsTab === 'feature') {
     contentHtml = _renderFeatureEntryList();
   } else if (_phSettingsTab === 'coder-policy') {
-    contentHtml = '<div class="ph-pm-body" id="ph-coder-policy-host">'
+    contentHtml = '<div class="ph-mc-list" id="ph-coder-policy-host">'
       + '<div class="ph-settings-empty">' + escapeHtml(isZh ? '正在读取 Coder 策略…' : 'Loading Coder policy…') + '</div>'
+      + '</div>';
+  } else if (_phSettingsTab === 'notification') {
+    contentHtml = '<div class="ph-mc-list" id="ph-notification-host">'
+      + '<div class="ph-settings-empty">' + escapeHtml(isZh ? '正在读取通知设置…' : 'Loading notifications…') + '</div>'
       + '</div>';
   } else {
     contentHtml = _renderProcessModeContent(agent);
@@ -766,7 +860,9 @@ function renderPhModelConfigOverlay(agent, presets) {
       ? (isZh ? '选择身份的 Feature 配置层' : 'Choose the feature config layer for an identity')
       : _phSettingsTab === 'coder-policy'
         ? (isZh ? '配置关联工作空间 Coder 的 runtime 并发策略' : 'Configure runtime concurrency for the linked Coder workspace')
-        : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
+        : _phSettingsTab === 'notification'
+          ? (isZh ? '编程小助手与 Coder 运行完成时是否弹出系统通知' : 'Run-finished toasts for Programming Helper and Coder')
+          : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
@@ -791,6 +887,7 @@ function renderPhModelConfigOverlay(agent, presets) {
   ].join('');
 
   if (_phSettingsTab === 'coder-policy') _phLoadCoderPolicy();
+  if (_phSettingsTab === 'notification') _phLoadNotificationSettings();
 
   // Enhance native selects with custom dropdown
   if (window.ClawSelect) {
