@@ -9,7 +9,9 @@
  *   标题本身即入口（memo-overview-entry 整行可点跳子页面），提醒行 → 提醒
  *   页，便签卡 → 笔记页并直接打开阅读态；子页面经「← 总览」返回；
  * - render() 是纯投影：缓存先显（零闪烁），后台重取后 repaint（SWR）；
- *   刷新时机与便签墙/提醒列表一致（回总览重渲染 + 窗口重新聚焦各拉一次）；
+ *   取数不挂渲染（渲染规范 §1）——刷新时机 = 进入总览的导航事件（app-ui.js
+ *   的 refreshVisibleWorkspacePanelData）与窗口重新聚焦各拉一次，render 仅
+ *   冷启动无缓存时幂等兜底一次（im-ui ensure 先例）；
  * - 相对时间徽标复用 MemoRemindersUI.fmtRelativeBadge（提醒呈现域的公共
  *   纯函数，两处口径一致），缺席时退回绝对时间。
  *
@@ -31,6 +33,7 @@ window.MemoOverviewUI = (() => {
   let notesCache = []; // 便签索引（按 updatedAt 降序，前 LIMIT 条）
   let notesLoaded = false;
   let fetchSeq = 0; // 过期响应丢弃
+  let fetchInFlight = false; // 在途去重：导航重取与渲染兜底并发时只发一次
 
   function isZh() {
     return typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
@@ -61,34 +64,42 @@ window.MemoOverviewUI = (() => {
     return data.notes;
   }
 
-  /** 两源并行取数，各自独立落缓存与 repaint（单源失败不拖累另一源）。 */
+  /** 两源并行取数，各自独立落缓存与 repaint（单源失败不拖累另一源；
+   *  在途时重入直接跳过，全部落定后放行下一轮）。 */
   function fetchAll() {
+    if (fetchInFlight) return;
+    fetchInFlight = true;
     const seq = ++fetchSeq;
-    fetchReminders().then((reminders) => {
-      if (seq !== fetchSeq) return;
-      remindersCache = reminders
-        .filter((item) => item && item.id && item.status !== 'fired')
-        .sort((a, b) => {
-          const ta = new Date(a.fire_at).getTime();
-          const tb = new Date(b.fire_at).getTime();
-          if (!Number.isFinite(ta) && !Number.isFinite(tb)) return 0;
-          if (!Number.isFinite(ta)) return 1;
-          if (!Number.isFinite(tb)) return -1;
-          return ta - tb;
-        })
-        .slice(0, LIMIT);
-      remindersLoaded = true;
-      paint();
-    }).catch(() => { /* 保留旧内容，下次渲染 / 聚焦再试 */ });
-    fetchNotes().then((notes) => {
-      if (seq !== fetchSeq) return;
-      notesCache = notes
-        .filter((item) => item && item.filename)
-        .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
-        .slice(0, LIMIT);
-      notesLoaded = true;
-      paint();
-    }).catch(() => { /* 保留旧内容，下次渲染 / 聚焦再试 */ });
+    Promise.allSettled([
+      fetchReminders().then((reminders) => {
+        if (seq !== fetchSeq) return;
+        remindersCache = reminders
+          .filter((item) => item && item.id && item.status !== 'fired')
+          .sort((a, b) => {
+            const ta = new Date(a.fire_at).getTime();
+            const tb = new Date(b.fire_at).getTime();
+            if (!Number.isFinite(ta) && !Number.isFinite(tb)) return 0;
+            if (!Number.isFinite(ta)) return 1;
+            if (!Number.isFinite(tb)) return -1;
+            return ta - tb;
+          })
+          .slice(0, LIMIT);
+        remindersLoaded = true;
+        paint();
+      }),
+      fetchNotes().then((notes) => {
+        if (seq !== fetchSeq) return;
+        notesCache = notes
+          .filter((item) => item && item.filename)
+          .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
+          .slice(0, LIMIT);
+        notesLoaded = true;
+        paint();
+      }),
+    ]).finally(() => {
+      /* 单源失败保留旧内容，下次导航 / 聚焦再试 */
+      if (seq === fetchSeq) fetchInFlight = false;
+    });
   }
 
   function fmtFireAt(entry) {
@@ -189,8 +200,15 @@ window.MemoOverviewUI = (() => {
     if (host) host.innerHTML = sectionInnerHtml();
   }
 
+  /** 后台重取（导航进入总览 / 窗口聚焦触发；数据加载不挂渲染——渲染规范 §1）。 */
+  function refresh() {
+    fetchAll();
+  }
+
   function render() {
-    fetchAll(); // SWR：缓存先显，后台重取后重绘
+    // 冷启动兜底（im-ui ensure 先例）：无导航事件直达总览且尚无缓存时
+    // 幂等取一次（在途去重）；此后 render 纯投影，刷新由导航与聚焦事件驱动。
+    if (!remindersLoaded || !notesLoaded) fetchAll();
     return '<section class="workspace-section memo-overview-panel" id="memo-overview-panel">'
       + sectionInnerHtml()
       + '</section>';
@@ -213,10 +231,11 @@ window.MemoOverviewUI = (() => {
     window.MemoNotesUI?.openNote?.(String(filename || ''));
   }
 
-  // 窗口重新聚焦时刷新一次（对话内新增 / 编辑后的兜底；回总览重渲染走 render()）。
+  // 窗口重新聚焦时刷新一次（对话内新增 / 编辑后的兜底；导航刷新走 app-ui
+  // 的 refreshVisibleWorkspacePanelData）。
   window.addEventListener('focus', () => {
     if (document.getElementById('memo-overview-panel')) fetchAll();
   });
 
-  return { render, goReminders, openNote };
+  return { render, refresh, goReminders, openNote };
 })();

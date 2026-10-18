@@ -11,9 +11,10 @@
  * - render() 是纯投影：缓存先显（零闪烁），后台重取后 repaint（SWR）。
  *   完成与删除走乐观更新（先改缓存再请求），失败 toast 并回取真实数据。
  *   相对时间按渲染时刻计算，不做常驻定时刷新（刷新时机见下）。
- * - 刷新时机与便签墙一致：「回子页面重渲染」与「窗口重新聚焦」各拉一次，
- *   不做常驻轮询（到点提醒的实时触达走 038 的 app-notification SSE 通道，
- *   不经本 block）。
+ * - 刷新时机：进入分页的导航事件（app-ui.js 的 refreshVisibleWorkspacePanelData）
+ *   与「窗口重新聚焦」各拉一次，不做常驻轮询（到点提醒的实时触达走 038 的
+ *   app-notification SSE 通道，不经本 block）；render 仅冷启动无缓存时
+ *   幂等兜底一次（im-ui ensure 先例），此后纯投影。
  *
  * 数据面：/protoclaw/memo-app/reminders（GET 列表 / POST complete、delete），
  * server 侧 memo-app.js 持有，与 runtime 侧 memo-reminders 工具面同域。
@@ -30,6 +31,7 @@ window.MemoRemindersUI = (() => {
   let cache = []; // 最近一次成功拉取的提醒条目
   let loaded = false; // 区分「加载中」与「空态」
   let fetchSeq = 0; // 过期响应丢弃
+  let fetchInFlight = false; // 在途去重：导航重取与渲染兜底并发时只发一次
   let actionSeq = 0; // 过期动作响应丢弃
 
   function isZh() {
@@ -50,6 +52,8 @@ window.MemoRemindersUI = (() => {
   }
 
   async function fetchReminders() {
+    if (fetchInFlight) return;
+    fetchInFlight = true;
     const seq = ++fetchSeq;
     try {
       const resp = await fetch('/protoclaw/memo-app/reminders');
@@ -59,7 +63,9 @@ window.MemoRemindersUI = (() => {
       loaded = true;
       paint();
     } catch {
-      /* 拉取失败：保留旧内容，下次渲染 / 聚焦再试 */
+      /* 拉取失败：保留旧内容，下次导航 / 聚焦再试 */
+    } finally {
+      if (seq === fetchSeq) fetchInFlight = false;
     }
   }
 
@@ -268,8 +274,15 @@ window.MemoRemindersUI = (() => {
     if (host) host.innerHTML = sectionInnerHtml();
   }
 
+  /** 后台重取（导航进入分页 / 窗口聚焦触发；数据加载不挂渲染——渲染规范 §1）。 */
+  function refresh() {
+    fetchReminders();
+  }
+
   function render() {
-    fetchReminders(); // SWR：缓存先显，后台重取后重绘
+    // 冷启动兜底（im-ui ensure 先例）：无导航事件直达本分页且尚无缓存时
+    // 幂等取一次（在途去重）；此后 render 纯投影，刷新由导航与聚焦事件驱动。
+    if (!loaded) fetchReminders();
     return '<section class="workspace-section memo-reminders-panel" id="memo-reminders-panel">'
       + sectionInnerHtml()
       + '</section>';
@@ -319,10 +332,11 @@ window.MemoRemindersUI = (() => {
     }
   }
 
-  // 窗口重新聚焦时刷新一次（对话内登记 / 完成后的兜底；回首页重渲染走 render()）。
+  // 窗口重新聚焦时刷新一次（对话内登记 / 完成后的兜底；导航刷新走 app-ui
+  // 的 refreshVisibleWorkspacePanelData）。
   window.addEventListener('focus', () => {
     if (document.getElementById('memo-reminders-panel')) fetchReminders();
   });
 
-  return { render, complete, remove, fmtRelativeBadge, groupOf };
+  return { render, refresh, complete, remove, fmtRelativeBadge, groupOf };
 })();

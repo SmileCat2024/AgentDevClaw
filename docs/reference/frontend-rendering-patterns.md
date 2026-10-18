@@ -188,6 +188,16 @@ function renderWorkspace() {
 }
 ```
 
+### 工作空间首页面板的导航刷新（memo 先例）
+
+带数据面的 workspace 首页 block（memo 总览 / 便签 / 提醒）按 SWR 语义取数：缓存先显（零闪烁），后台重取后自行 repaint。取数时机全部在渲染之外：
+
+1. **导航事件**：`setPreferredUnitMode` 末尾经 `refreshVisibleWorkspacePanelData` 分发——进入工作空间 / 切分页 / 返回总览都汇经该函数，每次真实导航恰好一次。分发表 `WORKSPACE_PANEL_REFRESHERS` 按 block.type 登记（与 renderWorkspaceBlock 的分发表同构），不按 agent id 硬编码；新面板接入时在此登记 `refresh` 入口。
+2. **窗口聚焦**：模块自挂 focus 监听（阅读/编辑态跳过，避免打断）。
+3. **冷启动兜底**：render 仅在无缓存且无在途请求时幂等取一次（im-ui lazy ensure 先例），此后 render 纯投影——「F5 直接落在工作空间首页」没有导航事件，靠这条兜住。
+
+面板的取数函数内置在途去重（in-flight 标志）：导航重取与渲染兜底并发时只发一次，杜绝「render 内 fetch × 双渲染 = 请求翻倍」。
+
 ---
 
 ## 5. `_dispatchSchedulesRefreshPromise` 生命周期

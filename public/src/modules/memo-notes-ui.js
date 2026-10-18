@@ -19,8 +19,10 @@
  *   任何重建都无损。
  *
  * 数据面：/protoclaw/memo-app/notes（GET 不带 filename 列索引 / 带 filename
- * 读单篇全文；POST 整篇覆盖写，只覆盖已有便签）。墙的刷新时机是
- * 「回首页重渲染」与「窗口重新聚焦」各拉一次，不做常驻轮询。
+ * 读单篇全文；POST 整篇覆盖写，只覆盖已有便签）。刷新时机是进入分页的
+ * 导航事件（app-ui.js 的 refreshVisibleWorkspacePanelData）与「窗口重新
+ * 聚焦」各拉一次，不做常驻轮询；render 仅冷启动无缓存时幂等兜底一次
+ * （im-ui ensure 先例），此后纯投影。
  *
  * 依赖全局（运行时调用，加载顺序无关）：
  *   - escapeHtml, currentLanguage (app-core.js)
@@ -33,6 +35,7 @@ window.MemoNotesUI = (() => {
   let cache = []; // 最近一次成功拉取的便签索引
   let loaded = false; // 区分「加载中」与「空态」
   let fetchSeq = 0; // 过期响应丢弃
+  let fetchInFlight = false; // 在途去重：导航重取与渲染兜底并发时只发一次
   let currentNote = ''; // '' = 墙；非空 = 阅读态（便签文件名）
   const noteCache = new Map(); // filename -> { filename, title, content, updatedAt, fetchedAt } | { missing|error, fetchedAt }
 
@@ -64,6 +67,8 @@ window.MemoNotesUI = (() => {
   }
 
   async function fetchNotes() {
+    if (fetchInFlight) return;
+    fetchInFlight = true;
     const seq = ++fetchSeq;
     try {
       const resp = await fetch('/protoclaw/memo-app/notes');
@@ -73,7 +78,9 @@ window.MemoNotesUI = (() => {
       loaded = true;
       if (!currentNote) paint();
     } catch {
-      /* 拉取失败：保留旧内容，下次渲染 / 聚焦再试 */
+      /* 拉取失败：保留旧内容，下次导航 / 聚焦再试 */
+    } finally {
+      if (seq === fetchSeq) fetchInFlight = false;
     }
   }
 
@@ -294,9 +301,18 @@ window.MemoNotesUI = (() => {
     }
   }
 
-  function render() {
-    if (currentNote) fetchNote(currentNote); // SWR：缓存先显，后台重取后重绘
+  /** 后台重取（导航进入分页 / 窗口聚焦触发；数据加载不挂渲染——渲染规范 §1）。
+   *  阅读态重取当前篇（保持旧 SWR 语义，paint 有 !editing 守卫不打断编辑），
+   *  墙态重取索引。 */
+  function refresh() {
+    if (currentNote) fetchNote(currentNote);
     else fetchNotes();
+  }
+
+  function render() {
+    // 冷启动兜底（im-ui ensure 先例）：无导航事件直达本分页且尚无缓存时
+    // 幂等取一次；阅读态的数据经 openNote 交互回调取，render 不发请求。
+    if (!currentNote && !loaded) fetchNotes();
     // is-reading 在输出时即带上：外层重建 workspace-surface 的路径零闪烁
     return '<section class="workspace-section memo-notes-wall'
       + (currentNote ? ' is-reading' : '') + '" id="memo-notes-wall">'
@@ -408,14 +424,15 @@ window.MemoNotesUI = (() => {
     fetchNotes();
   }
 
-  // 窗口重新聚焦时刷新一次（跨窗口写便签的兜底；回首页重渲染走 render()）。
-  // 阅读态不刷，避免后台重取打断阅读；编辑态同理由 fetchNote 的 !editing 守卫。
+  // 窗口重新聚焦时刷新一次（跨窗口写便签的兜底；导航刷新走 app-ui 的
+  // refreshVisibleWorkspacePanelData）。聚焦不刷阅读态，避免后台重取打断
+  // 阅读；编辑态同理由 fetchNote 的 !editing 守卫。
   window.addEventListener('focus', () => {
     if (document.getElementById('memo-notes-wall') && !currentNote) fetchNotes();
   });
 
   return {
-    render, openNote, closeNote,
+    render, refresh, openNote, closeNote,
     startEditBlock, onEditorInput, onEditorKeydown, commitEditBlock,
   };
 })();

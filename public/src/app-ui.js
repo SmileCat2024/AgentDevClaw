@@ -103,6 +103,31 @@ function setPreferredUnitMode(mode, agent = getCurrentAgentRecord()) {
     workspaceSurfaceModePreferences[key] = mode;
   }
   currentWorkspaceTab = mode;
+  // 数据加载挂导航事件而非渲染（渲染规范 §1）：单元模式切换后，对当前
+  // 模式下可见的自刷新面板发起后台重取（面板缓存先显 SWR，取回自行 repaint）。
+  if (mode && mode !== 'chat') {
+    refreshVisibleWorkspacePanelData(agent);
+  }
+}
+
+/** 自刷新面板分发表（与 renderWorkspaceBlock 的 block 分发同构）：
+ *  block.type → 后台重取入口。新面板接入时在此登记。 */
+const WORKSPACE_PANEL_REFRESHERS = {
+  'memo-overview': () => window.MemoOverviewUI?.refresh?.(),
+  'memo-notes': () => window.MemoNotesUI?.refresh?.(),
+  'memo-reminders': () => window.MemoRemindersUI?.refresh?.(),
+};
+
+/** 导航进入工作空间单元时，对当前模式下可见的自刷新面板发起后台重取。
+ *  数据驱动（按目标 agent 的 blocks 与可见性判定），blocks 里没有登记
+ *  类型的工作空间空转，不按 agent id 硬编码。 */
+function refreshVisibleWorkspacePanelData(agent = getCurrentAgentRecord()) {
+  const ui = getCurrentUnitUi(agent);
+  const blocks = Array.isArray(ui?.home?.blocks) ? ui.home.blocks : [];
+  for (const block of blocks) {
+    const refresher = WORKSPACE_PANEL_REFRESHERS[block?.type];
+    if (refresher && shouldRenderBlock(block)) refresher();
+  }
 }
 
 function getPassiveWorkspaceSurfaceMode(agent = getCurrentAgentRecord()) {
