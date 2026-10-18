@@ -14,6 +14,12 @@
  * 冷却按条目 id 记账（每会话每条目一次）。新增素养提醒 = 代码加条目 +
  * knowledge 放对应 md，机制不动。
  *
+ * 技能携带（skills/ 目录）：本 feature 同时是 grill-me 技能（设计树拷问）
+ * 的载具——框架 collectFeatureSkills 按 dirname(source)/skills 约定自动
+ * 发现并注入系统提示词，构建时随 knowledge 同款机制拷入 dist
+ * （copy-local-feature-skills.mjs）。技能随 feature 装配走，不依赖工作
+ * 目录的 .agentdev/skills。
+ *
  * 条目一 doc-reader-awareness：write 写出成规模的文档文件（markdown/txt，
  * 默认 ≥30 行）或 edit 编辑此类文件成功后，注入"文档读者视角"写法标准。
  * write 设规模阈值是为了排除随手写的短 note；edit 本身就是改已有文档，不看规模。
@@ -188,7 +194,7 @@ export class CraftAwarenessFeature implements AgentFeature {
 
   readonly name = 'craft-awareness';
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = '在 agent 撰写与反复修改文档时注入工程写作提醒——读者视角标准与交付阶段判断，每条每会话至多一次。';
+  readonly description = '在 agent 撰写与反复修改文档时注入工程写作提醒——读者视角标准与交付阶段判断，每条每会话至多一次；并携带 grill-me 技能（设计树拷问）。';
 
   /** 已注入条目记账（id → true），随会话快照持久化。 */
   private injectedEntries: Record<string, true> = {};
