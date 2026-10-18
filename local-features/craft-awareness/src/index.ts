@@ -188,7 +188,7 @@ export class CraftAwarenessFeature implements AgentFeature {
 
   readonly name = 'craft-awareness';
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = '工程素养提醒：在恰当的工具事件后注入聚焦的写法提醒。条目一：首次写出成规模文档（write/edit 的 markdown/txt 文件）后注入读者视角写法标准；条目二：同一文档修改跨越两个用户输入边界（以 context 中最近一条用户消息为界，含 busy 排队插话）后的编辑注入协作/交付阶段判断。每会话每条目一次，文案外置于 knowledge/ 目录（md 维护）。';
+  readonly description = '在 agent 撰写与反复修改文档时注入工程写作提醒——读者视角标准与交付阶段判断，每条每会话至多一次。';
 
   /** 已注入条目记账（id → true），随会话快照持久化。 */
   private injectedEntries: Record<string, true> = {};
