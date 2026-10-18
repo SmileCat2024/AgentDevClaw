@@ -20,6 +20,13 @@
 ;   parse_open_request、前端 modules/desktop-open.js 的 URL query 键
 ;   保持一致，三处同步修改
 
+!macro NSIS_HOOK_PREINSTALL
+  ; 覆盖升级只增不删：旧版遗留的指南文档（改名 / 删除后）会残留在
+  ; app\guide 下，被指南目录树实时扫描成新旧混合的侧栏。安装前整目录
+  ; 重建——guide 是纯分发资产，无用户数据（用户数据在 %USERPROFILE%\.agentdev）。
+  RMDir /r "$INSTDIR\app\guide"
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   WriteRegStr HKCU "Software\Classes\Directory\Background\shell\AgentDevClaw.Open" "" "在编程小助手中打开"
   WriteRegStr HKCU "Software\Classes\Directory\Background\shell\AgentDevClaw.Open" "Icon" "$INSTDIR\${MAINBINARYNAME}.exe"
