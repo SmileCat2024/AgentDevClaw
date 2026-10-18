@@ -23,6 +23,8 @@
     "./agent-dev/src/**/*.ts",
     "./agent-studio/src/**/*.ts",
     "./agent-studio/test/**/*.ts",
+    "./claw-help/src/**/*.ts",
+    "./claw-help/test/**/*.ts",
     "./flow/src/**/*.ts",
     "./flow/test/**/*.ts",
     "./dispatch/src/**/*.ts",

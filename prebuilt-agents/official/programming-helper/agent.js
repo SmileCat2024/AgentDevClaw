@@ -23,6 +23,7 @@ import { dirname, join } from 'path';
 import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
+import { ClawHelpFeature } from '../../../local-features/dist/claw-help/src/index.js';
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
 import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
@@ -212,6 +213,9 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     this.use(new UserInputFeature());
     this.use(new GenerativeUISurfaceFeature());
     this.use(new GitHubShellFeature());
+    // 使用帮助技能载具（agentdevclaw-help）：无工具无钩子，唯一职责是
+    // 经框架 collectFeatureSkills 投递技能文档（终端用户使用问答）。
+    this.use(new ClawHelpFeature());
 
     // 会话内容分级读取（发现 → trim 概览 → 某轮全量）：话题接续的读取面，
     // 纯视图不落盘，agentId 可选参数支持跨 agent 会话参考。
