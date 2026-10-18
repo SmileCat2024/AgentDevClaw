@@ -37,6 +37,9 @@ let trimPageState = {
 
   keepSkillInvokes: 5, loading: false,
 };
+// 打开序号：open / close 各自递增；预览响应归来序号不符即丢弃——
+// 快开 A（慢响应）再开 B（快响应）时，A 的数据不允许覆盖 B 的页面状态。
+let trimPageSeq = 0;
 
 const trimPageEl = document.getElementById('trim-page');
 const trimPageList = document.getElementById('trim-page-list');
@@ -148,6 +151,7 @@ function computeSafeCutSet() {
 
 /* ── Open / close ── */
 window.openTrimPage = async (agentId, sessionId, archiveAfter = false) => {
+  const seq = ++trimPageSeq;
   trimPageState = {
     agentId, sessionId,
     messages: [], rounds: [], preambleCharCount: 0, preamblePercent: 0,
@@ -177,6 +181,7 @@ window.openTrimPage = async (agentId, sessionId, archiveAfter = false) => {
     const res = await fetch('/protoclaw/session_trim_preview?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
     if (!res.ok) throw new Error(await res.text().catch(() => 'failed'));
     const data = await res.json();
+    if (seq !== trimPageSeq) return; // 页面已被关闭或换开了别的会话：丢弃过期响应
     trimPageState.rounds = data.rounds || [];
     for (const round of trimPageState.rounds) {
       round.toolCalls = (round.toolCalls || []).filter((call) => call && typeof call.name === 'string' && call.name !== 'undefined');
@@ -197,12 +202,14 @@ window.openTrimPage = async (agentId, sessionId, archiveAfter = false) => {
     updateReadout();
     if (!trimPageState.ratioSupported) renderRatioUnsupported();
   } catch (err) {
+    if (seq !== trimPageSeq) return; // 过期响应的报错也不渲染到后来的页面上
     trimPageList.innerHTML = `<div class="trim-loading">${L('加载失败：', 'Load failed: ')}${escapeHtml(err.message || err)}</div>`;
     trimPageReadout.textContent = '';
   }
 };
 
 window.closeTrimPage = () => {
+  trimPageSeq++;
   trimPageEl.style.display = 'none';
   trimPageState = {
     agentId: '', sessionId: '',

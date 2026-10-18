@@ -35,7 +35,7 @@ function makeElement() {
   };
 }
 
-function createTrimPage() {
+function createTrimPage(fetchImpl) {
   const elements = new Map();
   const document = {
     getElementById(id) {
@@ -56,7 +56,7 @@ function createTrimPage() {
         computeReadout: () => ({ releasedPercent: 0.7, keptPercent: 0.3, keptCharCount: 30, totalCharCount: 100, keptMessageCount: 3 }),
       },
     },
-    fetch: async () => ({
+    fetch: fetchImpl || (async () => ({
       ok: true,
       json: async () => ({
         preamblePercent: 0.1,
@@ -251,5 +251,65 @@ describe('trim page timeline interactions', () => {
     archive.checked = false;
     archive.dispatch('change');
     assert.equal(submit.textContent, '确认精简');
+  });
+});
+
+describe('trim page stale response guard', () => {
+  const roundOf = (preview) => ({
+    userPreview: preview, assistantPreview: '', charPercent: 0.2, cumulativePercent: 0.2,
+    suggestedTrim: false, turnStart: 1, msgIndexStart: 0, msgIndexEnd: 0, toolCalls: [],
+  });
+  const payloadOf = (preview) => ({
+    preamblePercent: 0.1, preambleCharCount: 10,
+    rounds: [roundOf(preview)],
+    messages: [{ index: 0, role: 'user', roundIndex: 0, preview, charCount: 10, contentCharCount: 10 }],
+  });
+
+  /** 可控 fetch：按 URL 分桶，响应经 deferred 手动放行（复刻 A 慢 B 快）。 */
+  function deferredFetch() {
+    const pending = [];
+    return {
+      pending,
+      impl: (url) => {
+        const forA = String(url).includes('session-A');
+        let settle;
+        const response = new Promise((resolve) => { settle = resolve; });
+        pending.push({ forA, settle });
+        return response;
+      },
+      respond: (forA, payload) => {
+        const d = pending.find((item) => item.forA === forA);
+        assert.ok(d, 'no pending fetch for this bucket');
+        d.settle({ ok: true, json: async () => payload });
+      },
+    };
+  }
+
+  it('drops the slow session-A response after the page reopened for session B', async () => {
+    const { impl, respond } = deferredFetch();
+    const { ctx, elements } = createTrimPage(impl);
+    const openA = ctx.window.openTrimPage('programming-helper', 'session-A');
+    const openB = ctx.window.openTrimPage('programming-helper', 'session-B');
+    respond(false, payloadOf('B-round'));
+    await openB;
+    respond(true, payloadOf('A-round')); // A 的慢响应最后落地
+    await openA;
+
+    const html = elements.get('trim-page-list').innerHTML;
+    assert.match(html, /B-round/);
+    assert.doesNotMatch(html, /A-round/, '过期会话的数据不允许覆盖当前页面');
+  });
+
+  it('drops the late response after the page is closed', async () => {
+    const { impl, respond } = deferredFetch();
+    const { ctx, elements } = createTrimPage(impl);
+    const openA = ctx.window.openTrimPage('programming-helper', 'session-A');
+    ctx.window.closeTrimPage();
+    respond(true, payloadOf('A-round'));
+    await openA;
+
+    const html = elements.get('trim-page-list').innerHTML;
+    assert.doesNotMatch(html, /A-round/, '关闭后迟到的响应不渲染');
+    assert.doesNotMatch(html, /加载失败/, '过期响应的报错不落到页面上');
   });
 });
