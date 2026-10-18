@@ -143,6 +143,16 @@ function _markAgentCallStartedForNotify(runtimeId) {
 
 function _navigateToAgent(agent) {
   if (!agent) return;
+  // 通知点击的语义是「跳到会话」而非「打开工作空间」：条目携带 runtime id
+  // 时直接切 runtime（switchAgent 对 workspace 宿主上的 runtime 引用有专门
+  // 分支，落对话不落首页）；只有无 runtime 的宿主（ui-only / 未启动）才回落
+  // 首页点击语义。历史 bug：完成会话恰为宿主「当前」runtime 时，宿主条目先
+  // 被命中并走 handlePrebuiltAgentClick，kind: workspace 宿主一律落首页。
+  const runtimeId = String(agent.runtime_session_id || agent.runtimeSessionId || '').trim();
+  if (runtimeId) {
+    window.switchAgent(runtimeId);
+    return;
+  }
   if (agent.source === 'prebuilt') {
     window.handlePrebuiltAgentClick(agent.id);
   } else {
@@ -151,9 +161,13 @@ function _navigateToAgent(agent) {
 }
 
 function _findAgentByRuntimeId(normId) {
-  return (Array.isArray(allAgents) ? allAgents : []).find(
-    (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
-  );
+  const list = Array.isArray(allAgents) ? allAgents : [];
+  const matches = (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId;
+  // 会话粒度条目（child / external runtime）优先于 prebuilt 宿主条目：宿主
+  // 条目会镜像其「当前」runtime id 且排在列表前面（/api/agents 先推宿主再推
+  // children），先命中会把会话定位抹平成工作空间定位（文案取宿主名 + 点击
+  // 落首页）。宿主条目保留为兜底（viewer-only 归并进宿主的 runtime）。
+  return list.find((a) => a.source !== 'prebuilt' && matches(a)) || list.find(matches);
 }
 
 /* ── 完成通知呈现（type=finish）─────────────────────────────────────────
