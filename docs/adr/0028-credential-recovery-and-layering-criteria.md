@@ -72,6 +72,16 @@ OpenAI Codex OAuth 调查（对照 codex-rs `login/src/auth/manager.rs`）暴露
 
 落点：`server/shared/ipc.js`（`broadcastIPCToAllRuntimes`）、`server/oauth-codex.js`（listener）、`server/routes/model-config.js`（连接字段 diff）、`server/routes/oauth-codex.js`（装配接线）、`scripts/run-prebuilt-agent.js`（IPC 分支）；测试 `test/credential-refresh.test.js`。
 
+## 修订（2026-10-18，二）：存量 OpenCode preset 形态归一
+
+主动推送之外还留有一个更深的存量缺口：目录功能引入 `catalogProvider` 标记**之前**创建的 OpenCode preset（providerName 为官方模板名 `'OpenCode Go' / 'OpenCode Zen'`，无标记）走自定义 provider 路径——凭证内联在 presets.json providers 数组，**不随登录更新**。前端 model-settings 的归类口径早已把这类 preset 视为 OpenCode 连接（凭证=登录凭证，标签页与静态值都按 connections 渲染），resolver 却只认 `catalogProvider` 标记，读的是内联旧 key：UI 显示"已登录"，运行时 401——opencode 的手动 console key 过期后**重新登录不会续期**（`api_key_expired`），且重新 resolve、新开 runtime、auth-recovery 每一步都重新读到旧 key，反应式恢复与主动推送在此形态上全部失效。
+
+补齐：resolver 对 providerName 命中 OpenCode 官方模板名的无标记 preset **归一到 opencode catalog 解析**（凭证读 connections、baseUrl 按 tier 分流），与前端口径对齐；不动用户数据、不做数据迁移（读时归一，与前端既有决策一致）。connections 无凭证时 resolve 失败，不回落内联旧 key——这类 preset 的凭证语义就是登录凭证，回落只会把过期 key 再藏一层。
+
+同批修复：go tier 端点强制要求 `x-opencode-session`（缺失即 400 MissingSessionID），catalog preset 创建时 customHeaders 为空，此前靠用户手工补 header。resolver 的 opencode 路径现自动注入确定性 session id（per-preset SHA-256 派生 UUID 形态，幂等无写盘，保证路由亲和稳定），用户手工 header 优先不覆盖。
+
+落点：`server/model-preset-resolver.js`（归一判定 + `ensureOpenCodeSessionHeader`）；测试 `test/model-preset-resolver.test.js`。
+
 ## 与既有 ADR 的关系
 
 - 延伸 ADR-0009：`setModel` 从"用户/Feature 切换模型"扩展为"凭证恢复的编排原语"；三不变量（资产归应用层、能力以接口注入、状态由 agent 自持）不变。

@@ -6,10 +6,34 @@
  */
 
 import { join } from 'path';
+import { createHash } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { createLLM } from '@agentdevjs/llm';
 import { buildCodexOAuthHeaders, resolveAccessTokenSync } from './oauth-codex.js';
 import { MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, MODEL_CONNECTIONS_PATH, AGENT_USER_CONFIG_PATH } from './shared/constants.js';
+
+/**
+ * 目录功能引入 catalogProvider 标记之前创建的 OpenCode 存量 preset：providerName
+ * 为官方模板名（'OpenCode Zen' / 'OpenCode Go'），凭证内联在 providers 数组且
+ * 不随登录更新。前端 model-settings.js 的归类口径已将这类 preset 视为 OpenCode
+ * 连接（凭证=登录凭证），resolver 与之对齐，避免 UI 显示已登录而运行时读旧 key。
+ */
+const OPENCODE_LEGACY_PROVIDER_NAMES = ['OpenCode Zen', 'OpenCode Go'];
+
+/**
+ * go tier 端点强制要求 x-opencode-session（缺失即 400 MissingSessionID），而
+ * catalog preset 创建时 customHeaders 为空。运行时注入确定性 session id（per-preset
+ * hash 派生，幂等、无写盘），保证路由亲和稳定；用户手工配置的同名 header 优先。
+ */
+export function ensureOpenCodeSessionHeader(customHeaders, presetName) {
+  const list = Array.isArray(customHeaders)
+    ? customHeaders.filter((h) => h && typeof h === 'object')
+    : [];
+  if (list.some((h) => String(h.key || '').toLowerCase() === 'x-opencode-session')) return list;
+  const hex = createHash('sha256').update(`claw:opencode-session:${presetName}`).digest('hex');
+  const value = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  return [...list, { key: 'x-opencode-session', value, valueMode: 'static' }];
+}
 
 /**
  * 全局默认模型的合成 preset 名。Claw user data default.json 的内联 defaultModel 没有
@@ -55,11 +79,16 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       return null;
     }
     const provider = providers.find((p) => p.name === preset.providerName);
-    const isCatalogProvider = preset.catalogProvider === 'codex' || preset.catalogProvider === 'opencode';
+    // 归一存量形态：无标记但 providerName 命中 OpenCode 官方模板名的 preset
+    // 视为 opencode catalog 连接（凭证读 connections，tier 决定 baseUrl）。
+    const catalogProvider = preset.catalogProvider === 'codex' || preset.catalogProvider === 'opencode'
+      ? preset.catalogProvider
+      : (preset.providerName && OPENCODE_LEGACY_PROVIDER_NAMES.includes(preset.providerName) ? 'opencode' : '');
+    const isCatalogProvider = !!catalogProvider;
     const connectionsPath = options.connectionsPath || MODEL_CONNECTIONS_PATH;
     let connection = {};
     if (isCatalogProvider && existsSync(connectionsPath)) {
-      try { connection = JSON.parse(readFileSync(connectionsPath, 'utf8'))?.[preset.catalogProvider] || {}; } catch {}
+      try { connection = JSON.parse(readFileSync(connectionsPath, 'utf8'))?.[catalogProvider] || {}; } catch {}
     }
     if (!provider && !isCatalogProvider) {
       console.warn(`[ModelPreset] Provider "${preset.providerName}" not found for preset "${presetName}"`);
@@ -67,7 +96,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
     }
     const protocol = preset.protocol || 'anthropic';
     const baseUrl = isCatalogProvider
-      ? (preset.catalogProvider === 'codex' ? 'https://chatgpt.com/backend-api/codex' : (connection.tier === 'go' ? 'https://opencode.ai/zen/go/v1' : 'https://opencode.ai/zen/v1'))
+      ? (catalogProvider === 'codex' ? 'https://chatgpt.com/backend-api/codex' : (connection.tier === 'go' ? 'https://opencode.ai/zen/go/v1' : 'https://opencode.ai/zen/v1'))
       : (provider.endpoints?.[protocol] || '');
 
     // thinkingEffort: runtime override takes priority, then preset default.
@@ -76,7 +105,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       : (preset.thinkingEffort || undefined);
 
     // OAuth provider: resolve access_token from token store
-    const isOAuth = isCatalogProvider ? preset.catalogProvider === 'codex' : provider.authType === 'oauth-codex';
+    const isOAuth = isCatalogProvider ? catalogProvider === 'codex' : provider.authType === 'oauth-codex';
     let apiKey;
     if (isOAuth) {
       const clientId = isCatalogProvider ? 'app_EMoamEEZ73f0CkXaXp7hrann' : provider.clientId;
@@ -112,7 +141,9 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       : undefined;
     const customHeaders = isOAuth
       ? buildCodexOAuthHeaders(apiKey, preset.customHeaders)
-      : preset.customHeaders;
+      : (catalogProvider === 'opencode'
+        ? ensureOpenCodeSessionHeader(preset.customHeaders, preset.name || presetName)
+        : preset.customHeaders);
     const llm = createLLM({
       provider: protocol,
       model: preset.model,
@@ -135,7 +166,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       modelName: preset.model,
       presetName: preset.name || presetName,
       thinkingEffort: effectiveThinkingEffort || null,
-      providerName: (isCatalogProvider ? (preset.catalogProvider === 'codex' ? 'OpenAI Auth' : 'OpenCode') : provider.name) || preset.providerName || '',
+      providerName: (isCatalogProvider ? (catalogProvider === 'codex' ? 'OpenAI Auth' : 'OpenCode') : provider.name) || preset.providerName || '',
       provider: protocol,
       protocol,
       authType: isOAuth ? 'oauth-codex' : '',

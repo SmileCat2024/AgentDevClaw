@@ -39,7 +39,7 @@
    - 0025 coder 升格独立工作空间：会话身份投影机制退役（实施计划见 [docs/plans/2026-10-11-coder-workspace-promotion.md](docs/plans/2026-10-11-coder-workspace-promotion.md)）
    - 0026 Session 视图统一：Session 身份为锚，Runtime 为运行态数据源，Thread 为连续性与输入控制投影
    - 0027 Agent OS 治理面：同意模型与 per-workspace runtime 配额（强制点在 startManagedAgent 内核漏斗；权限模型独立后行）
-   - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换；修订：凭证变更（重登/换 key/连接字段变更）server 主动广播 refresh-credentials，运行中会话同 preset 重 resolve（旧凭证仍有效时无 401 可触发反应式恢复）
+   - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换；修订一：凭证变更（重登/换 key/连接字段变更）server 主动广播 refresh-credentials，运行中会话同 preset 重 resolve（旧凭证仍有效时无 401 可触发反应式恢复）；修订二：存量 OpenCode preset（无 catalogProvider 标记、providerName 为 'OpenCode Go/Zen'）resolver 读时归一到登录凭证（与前端归类口径对齐）+ opencode 路径自动注入 x-opencode-session（go tier 端点强制要求）
    - 0029 模型调用超时治理：对话默认首段（首 token）120s / chunk 间隔 60s idle / 5 次重试，transform 预算 600s 经装配层实例分离，undici headersTimeout / bodyTimeout 双锚 TRANSFORM_MODEL_TIMEOUT_MS（保底层垫在最大可配预算之下），preset 级 timeoutMs/maxRetries 逃生门（timeoutMs 显式值管首段与间隔两段）
    - 0030 OS 通知投递面：统一出口、通知权限项与应用承接（notifications.* 权限族往 PERMISSION_ITEMS 加项；editingSurface 挂账落地、全局设置通知项只读审计；server 投递闸 + SSE app-notification + 前端哑呈现器；不建 OS 定时器服务）
 

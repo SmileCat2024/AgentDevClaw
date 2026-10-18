@@ -9,6 +9,7 @@ import {
   resolveGlobalDefaultLLM,
   modelPresetResolver,
   GLOBAL_DEFAULT_PRESET_NAME,
+  ensureOpenCodeSessionHeader,
 } from '../server/model-preset-resolver.js';
 
 describe('model-preset-resolver', () => {
@@ -105,6 +106,7 @@ describe('model-preset-resolver', () => {
           { name: 'Fixture Anthropic', apiKey: 'test-key-a', endpoints: { anthropic: 'https://fixture-anthropic.example/api' } },
           { name: 'Fixture OpenAI', apiKey: 'test-key-b', endpoints: { openai: 'https://fixture-openai.example/v1' } },
           { name: 'Fixture OAuth', authType: 'oauth-codex', clientId: 'test-client-id', endpoints: { openai: 'https://fixture-oauth.example/v1' } },
+          { name: 'OpenCode Go', apiKey: 'expired-inline-key', endpoints: { openai: 'https://opencode.ai/zen/go/v1' } },
         ],
         presets: [
           { name: 'fixture-anthropic', providerName: 'Fixture Anthropic', protocol: 'anthropic', model: 'fixture-model-a' },
@@ -115,6 +117,12 @@ describe('model-preset-resolver', () => {
           { name: 'fixture-codex-catalog', providerName: 'Fixture OAuth', catalogProvider: 'codex', protocol: 'openai', model: 'fixture-model-codex' },
           { name: 'fixture-orphan', providerName: 'No Such Provider', protocol: 'anthropic', model: 'fixture-model-x' },
           { name: 'fixture-incomplete', providerName: 'Fixture Anthropic', protocol: 'anthropic' },
+          // OpenCode 存量形态：目录功能引入 catalogProvider 标记前创建，
+          // 凭证内联在 providers 数组（过期旧 key），登录新 key 只更新 connections。
+          { name: 'fixture-opencode-legacy-go', providerName: 'OpenCode Go', protocol: 'openai', apiSurface: 'chat', model: 'fixture-model-oc-go' },
+          { name: 'fixture-opencode-legacy-zen', providerName: 'OpenCode Zen', protocol: 'openai', apiSurface: 'chat', model: 'fixture-model-oc-zen' },
+          { name: 'fixture-opencode-catalog', providerName: 'OpenCode Go', catalogProvider: 'opencode', protocol: 'openai', apiSurface: 'chat', model: 'fixture-model-oc-cat' },
+          { name: 'fixture-opencode-manual-session', providerName: 'OpenCode Go', protocol: 'openai', apiSurface: 'chat', model: 'fixture-model-oc-manual', customHeaders: [{ key: 'x-opencode-session', value: 'manual-session-id', valueMode: 'static' }] },
         ],
       }));
     });
@@ -222,6 +230,83 @@ describe('model-preset-resolver', () => {
         const result = resolveModelPresetLLM('fixture-thinking', {}, { configPath });
         assert.ok(result);
         assert.equal(result.thinkingEffort, 'medium');
+      });
+    });
+
+    describe('OpenCode connections (legacy normalization + session header)', () => {
+      let connectionsPath;
+      let noCredentialConnectionsPath;
+
+      before(() => {
+        connectionsPath = join(fixtureDir, 'connections-fixture.json');
+        writeFileSync(connectionsPath, JSON.stringify({
+          opencode: { apiKey: 'fresh-login-key', tier: 'go' },
+        }));
+        noCredentialConnectionsPath = join(fixtureDir, 'connections-empty.json');
+        writeFileSync(noCredentialConnectionsPath, JSON.stringify({}));
+      });
+
+      it('normalizes a legacy OpenCode Go preset onto the login credential and tier baseUrl', () => {
+        const result = resolveModelPresetLLM('fixture-opencode-legacy-go', undefined, { configPath, connectionsPath });
+        assert.ok(result, 'legacy preset must resolve via connections credential');
+        assert.equal(result.baseUrl, 'https://opencode.ai/zen/go/v1', 'baseUrl must follow the login tier, not the inline provider endpoint');
+        assert.equal(result.providerName, 'OpenCode');
+        assert.equal(result.authType, '');
+      });
+
+      it('normalizes a legacy OpenCode Zen preset when the connection has no tier', () => {
+        const zenConnectionsPath = join(fixtureDir, 'connections-zen.json');
+        writeFileSync(zenConnectionsPath, JSON.stringify({ opencode: { apiKey: 'fresh-login-key' } }));
+        const result = resolveModelPresetLLM('fixture-opencode-legacy-zen', undefined, { configPath, connectionsPath: zenConnectionsPath });
+        assert.ok(result);
+        assert.equal(result.baseUrl, 'https://opencode.ai/zen/v1');
+      });
+
+      it('resolves a catalog OpenCode preset through the login credential', () => {
+        const result = resolveModelPresetLLM('fixture-opencode-catalog', undefined, { configPath, connectionsPath });
+        assert.ok(result);
+        assert.equal(result.baseUrl, 'https://opencode.ai/zen/go/v1');
+      });
+
+      it('fails (no fallback) when the login credential is absent, even if the inline provider key exists', () => {
+        const result = resolveModelPresetLLM('fixture-opencode-legacy-go', undefined, { configPath, connectionsPath: noCredentialConnectionsPath });
+        assert.equal(result, null, 'must not fall back to the stale inline provider key');
+      });
+
+      it('keeps resolving a legacy preset with a manual session header', () => {
+        const result = resolveModelPresetLLM('fixture-opencode-manual-session', undefined, { configPath, connectionsPath });
+        assert.ok(result);
+      });
+
+      it('non-OpenCode custom providers are untouched by the normalization', () => {
+        const result = resolveModelPresetLLM('fixture-anthropic', undefined, { configPath, connectionsPath });
+        assert.ok(result);
+        assert.equal(result.baseUrl, 'https://fixture-anthropic.example/api');
+        assert.equal(result.providerName, 'Fixture Anthropic');
+      });
+    });
+
+    describe('ensureOpenCodeSessionHeader', () => {
+      it('injects a deterministic UUID-shaped session header for absent headers', () => {
+        const injected = ensureOpenCodeSessionHeader([], 'preset-a');
+        assert.equal(injected.length, 1);
+        assert.equal(injected[0].key, 'x-opencode-session');
+        assert.match(injected[0].value, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      });
+
+      it('is idempotent: the same preset name yields the same session id', () => {
+        const a = ensureOpenCodeSessionHeader(undefined, 'preset-a');
+        const b = ensureOpenCodeSessionHeader([], 'preset-a');
+        assert.equal(a[0].value, b[0].value);
+        const c = ensureOpenCodeSessionHeader([], 'preset-b');
+        assert.notEqual(a[0].value, c[0].value, 'different presets get different session ids');
+      });
+
+      it('never overrides a user-configured session header (case-insensitive)', () => {
+        const manual = [{ key: 'X-OpenCode-Session', value: 'manual-session-id', valueMode: 'static' }];
+        const result = ensureOpenCodeSessionHeader(manual, 'preset-a');
+        assert.equal(result.length, 1);
+        assert.equal(result[0].value, 'manual-session-id');
       });
     });
 
