@@ -5,7 +5,9 @@
  *
  * - 时间汇报：距上一次发生汇报的 call 超过 4 小时才注入（含系统时区），
  *   避免每个 call 都注入造成上下文噪音。措辞强调上下文不一定在时间上
- *   均速积累，可能包含用户离线静默的时间。
+ *   均速积累，可能包含用户离线静默的时间。节奏可按装配覆盖
+ *   （reportIntervalMs ≤ 0 = 每次 call 都注入；提醒类应用如 memo 以
+ *   每输入一个时间锚点为前提，默认 4 小时节奏对相对时间解析太粗）。
  * - 长间隔提示：距上一轮 call（不限是否发生过汇报）超过 24 小时额外提示
  *   ——用户可能在其他会话推进过相关工作、系统可能重启、项目环境可能变化，
  *   不要完全代入之前的上下文假设与用户决策。连续多天但 call 间隔一直
@@ -55,13 +57,18 @@ function readTimestamp(value: unknown): number | null {
  * 汇报决策（纯函数）：
  * - 从未汇报过视为无限间隔 → 汇报（首轮拿到时间锚点是有用信息）；
  * - 没有上一轮 call 时不触发长间隔提示（无从比较，不假设静默）；
- * - 时钟回拨（now 早于记录值）视为未过阈值，只顺延 lastCallAt。
+ * - 时钟回拨（now 早于记录值）视为未过阈值，只顺延 lastCallAt；
+ * - reportIntervalMs ≤ 0 → 无条件汇报（细粒度节奏，每次 call 一个锚点）。
  */
-export function evaluateTimeAwareness(state: unknown, now: number): TimeAwarenessDecision {
+export function evaluateTimeAwareness(
+  state: unknown,
+  now: number,
+  reportIntervalMs: number = REPORT_INTERVAL_MS,
+): TimeAwarenessDecision {
   const record = (state && typeof state === 'object' ? state : {}) as Record<string, unknown>;
   const lastReportAt = readTimestamp(record.lastReportAt);
   const lastCallAt = readTimestamp(record.lastCallAt);
-  const report = lastReportAt === null || now - lastReportAt > REPORT_INTERVAL_MS;
+  const report = lastReportAt === null || reportIntervalMs <= 0 || now - lastReportAt > reportIntervalMs;
   const longGap = lastCallAt !== null && now - lastCallAt > LONG_GAP_MS;
   return {
     report,
@@ -114,6 +121,16 @@ export function renderTimeReminder(now: Date, decision: Pick<TimeAwarenessDecisi
   return `[时间感知] ${parts.join('\n\n')}`;
 }
 
+export interface TimeAwarenessConfig {
+  /** 时钟源；默认 Date.now（测试注入用）。 */
+  now?: () => number;
+  /**
+   * 汇报节奏（epoch ms）：距上次汇报超过该值才再次汇报；≤ 0 表示每次
+   * call 都汇报（提醒类应用需要每次输入都有新鲜时间锚点）。默认 4 小时。
+   */
+  reportIntervalMs?: number;
+}
+
 export class TimeAwarenessFeature implements AgentFeature {
 
   static hooks: HookDeclarations = {
@@ -122,14 +139,23 @@ export class TimeAwarenessFeature implements AgentFeature {
 
   readonly name = 'time-awareness';
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = '按节奏注入系统时间信息（超过 4 小时未汇报才汇报，含时区）；距上一轮 call 超过 24 小时时额外提示长间隔，提醒不要代入过时的上下文假设。';
+  readonly description: string;
 
   private state: TimeAwarenessState = { lastReportAt: null, lastCallAt: null };
   private readonly now: () => number;
+  private readonly reportIntervalMs: number;
   private logger?: FeatureInitContext['logger'];
 
-  constructor(config: { now?: () => number } = {}) {
+  constructor(config: TimeAwarenessConfig = {}) {
     this.now = typeof config.now === 'function' ? config.now : () => Date.now();
+    const rawInterval = config.reportIntervalMs;
+    this.reportIntervalMs = typeof rawInterval === 'number' && Number.isFinite(rawInterval)
+      ? rawInterval
+      : REPORT_INTERVAL_MS;
+    const cadence = this.reportIntervalMs <= 0
+      ? '每次 call 都注入'
+      : `超过 ${Math.round(this.reportIntervalMs / 3600000)} 小时未汇报才注入`;
+    this.description = `${cadence}系统时间信息（含时区）；距上一轮 call 超过 24 小时时额外提示长间隔，提醒不要代入过时的上下文假设。`;
   }
 
   async onInitiate(ctx: FeatureInitContext): Promise<void> {
@@ -139,7 +165,7 @@ export class TimeAwarenessFeature implements AgentFeature {
   async injectTimeContext(ctx: CallStartContext): Promise<void> {
     try {
       const now = this.now();
-      const decision = evaluateTimeAwareness(this.state, now);
+      const decision = evaluateTimeAwareness(this.state, now, this.reportIntervalMs);
       this.state = decision.nextState;
       if (!decision.report && !decision.longGap) return;
 

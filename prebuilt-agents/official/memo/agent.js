@@ -9,7 +9,8 @@
  * - ContextRotationTriggerFeature：上下文过界 → 自动线程接力
  *   （与 coder 同构的阈值触发，ADR-0024「APP 接续更频繁」方向的基础
  *   形态；后续 memo 的自定义接续变换在装配层叠加，不在本壳内实现）；
- * - TimeAwarenessFeature：系统时间注入（提醒登记的相对时间解析前提）；
+ * - TimeAwarenessFeature：系统时间注入，每次用户输入前都注入（提醒登记
+ *   的相对时间解析前提；默认 4 小时节奏对「一分钟后」类解析太粗）；
  * - MemoNotesFeature / MemoRemindersFeature：便签与定时提醒的工具面
  *   （数据落 workspaces/memo/，首页便签墙 / 提醒列表 block 的数据面在
  *   server 侧 memo-app 路由，同域）。
@@ -64,9 +65,11 @@ export default class MemoAgent extends BasicAgent {
       serverOrigin: runtimeIdentity.serverOrigin,
     }));
 
-    // 时间感知：系统时间与时区按节奏注入——提醒登记的相对时间解析
-    //（「明天 9 点」→ 带时区 ISO）以此为前提。
-    this.use(new TimeAwarenessFeature());
+    // 时间感知：每次用户输入前注入系统时间与时区——提醒登记的相对时间解析
+    //（「明天 9 点」「一分钟后」→ 带时区 ISO）以此为前提。APP 形态下相邻
+    // 输入可能相隔数小时，默认 4 小时节奏会让模型拿过时时间算提醒，故取
+    // reportIntervalMs: 0 全量注入。
+    this.use(new TimeAwarenessFeature({ reportIntervalMs: 0 }));
 
     // 定时提醒：工具面登记 + 到点投递（定时器住 runtime，boot 自启是提醒
     // 刚性的前提；数据落 workspaces/memo/reminders.json，首页提醒列表

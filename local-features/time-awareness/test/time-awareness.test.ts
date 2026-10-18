@@ -84,6 +84,20 @@ describe('evaluateTimeAwareness（纯决策）', () => {
       assert.equal(d.longGap, false);
     }
   });
+
+  it('reportIntervalMs ≤ 0：无条件汇报，同毫秒连续 call 也不抑制（memo 细粒度节奏）', () => {
+    const first = evaluateTimeAwareness({ lastReportAt: null, lastCallAt: null }, T0, 0);
+    assert.equal(first.report, true);
+    const second = evaluateTimeAwareness(first.nextState, T0, 0);
+    assert.equal(second.report, true, '细粒度节奏下同毫秒再次 call 也汇报');
+    assert.deepEqual(second.nextState, { lastReportAt: T0, lastCallAt: T0 });
+  });
+
+  it('reportIntervalMs ≤ 0 时长间隔判定不受影响', () => {
+    const d = evaluateTimeAwareness({ lastReportAt: T0, lastCallAt: T0 }, T0 + 25 * HOUR, 0);
+    assert.equal(d.report, true);
+    assert.equal(d.longGap, true);
+  });
 });
 
 describe('renderTimeReminder / formatTimezone', () => {
@@ -115,9 +129,9 @@ describe('renderTimeReminder / formatTimezone', () => {
 });
 
 describe('TimeAwarenessFeature（注入与快照契约）', () => {
-  function makeHarness() {
+  function makeHarness(config: { reportIntervalMs?: number } = {}) {
     let clock = T0;
-    const feature = new TimeAwarenessFeature({ now: () => clock });
+    const feature = new TimeAwarenessFeature({ now: () => clock, ...config });
     const injected: Array<{ text: string; source: string; tag: string }> = [];
     const ctx = {
       context: {
@@ -149,6 +163,20 @@ describe('TimeAwarenessFeature（注入与快照契约）', () => {
     h.setClock(T0 + 3 * HOUR);
     await h.call();
     assert.equal(h.injected.length, 1, '4 小时内不重复汇报');
+  });
+
+  it('reportIntervalMs: 0 → 每次 call 都注入（memo 装配节奏）', async () => {
+    const h = makeHarness({ reportIntervalMs: 0 });
+    await h.call();
+    h.setClock(T0 + 60 * 1000);
+    await h.call();
+    h.setClock(T0 + 2 * 60 * 1000);
+    await h.call();
+    assert.equal(h.injected.length, 3, '每次 call 都有时间锚点');
+    for (const item of h.injected) {
+      assert.ok(item.text.includes('时间是'));
+      assert.equal(item.source, 'time-awareness');
+    }
   });
 
   it('超过 4 小时再次汇报；超过 24 小时附加长间隔提示', async () => {
