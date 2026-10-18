@@ -41,6 +41,8 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 
 默认行为：按**最近活动倒序**取 **10 条**非终态线程（已归档/已关闭不出现，隐藏量在尾部附提示行）；每行含 threadId / lifeState / failed（异常才打印）/ status≠open（异常才打印）/ pending 指令数 / title / dir（head 会话项目目录）/ created / upd。检索语法（valued flag 一律 `=` 赋值形态，可出现在参数任意位置）：
 
+`status=rotating` = 上下文接续进行中（正常中间态，无需干预，watch 会自动跟随到新 head）；`status=rotation_failed` 配合 `failed=true` 才是接力失败（按故障表处置）。
+
 ```text
 list coder                                  # 某 agent 的线程
 list --status=executing,pending-commands                 # 只看执行中 / 有待投递指令的
@@ -147,7 +149,7 @@ coder_shell command="send wt-xxx ticket-025-dispatch '<指令全文>'"
 `send` 一次调用完成"派发 + 确认开工 + 等干完"：投递后 adapter 内部轮询线程事件，直到**本轮落定**（turn.completed 且 lifeState 离开 executing，链式多轮自动跟随）才返回。输出：
 
 - `sent <commandId> duplicate=... delivered=...`（投递确认）
-- `done reason=turn.completed | failed | idle-no-pending | thread archived | thread closed | thread not found | stalled | timeout | unreachable  life=... failed=... newEvents=...`（落定摘要）+ 事件尾
+- `done reason=turn.completed | failed | idle-no-pending | thread archived | thread closed | thread not found | stalled | timeout | interrupted | unreachable  life=... failed=... newEvents=...`（落定摘要；`interrupted` = 用户打断，续挂语义同 timeout）+ 事件尾
 
 `done reason=timeout` 不是错误：指令仍在执行，用 `watch` 续挂。幂等键是防重发保险，缺失时参数校验道直接拒绝（`arg_rejected`）。
 
@@ -164,7 +166,7 @@ coder_shell command="watch wt-aaa wt-bbb"
 | 场景 | 服务端行为 | 调度方该做什么 |
 |---|---|---|
 | 新键 | 指令入箱，runtime 就绪即内联投递（HTTP 201） | 等 `send` 落定或 `watch` |
-| 同键，指令尚在（pending/滞留） | `duplicate=true`，**不重复入箱、不做内联投递**；但每次 POST 都会先尝试唤起 head runtime，唤起成功后由投递消费者异步拾取 pending 指令 | 唤起失败的显式重投用 `deliver`；不要换新键重发同一指令 |
+| 同键，指令尚在（pending/滞留） | `duplicate=true`，**不重复入箱、不做内联投递**；但每次 send 都会先尝试唤起 head runtime，唤起成功后由投递消费者异步拾取 pending 指令 | 唤起失败的显式重投用 `deliver`；不要换新键重发同一指令 |
 | 同键，指令已执行 | `duplicate=true`，不会重新执行 | 修正/追加指令必须用**新键** |
 
 即：同键重发是"唤醒 + 等消费者"的恢复动作，不是再执行；想真正再跑一遍就换新键。`delivered=0` 时优先 `deliver`（恢复闸语义更直接）。
@@ -225,7 +227,7 @@ coder_shell command="result wt-xxx --turn=4"
 
 watch / send 的落定摘要行为一致：
 
-- `done reason=...`：`turn.completed` 本轮落定（链式多轮自动跟随；ADR-0019 挂起落定——turn.completed 事件带 `suspended` 标志——不算落定，watch 继续挂等后台任务唤醒轮）；`idle-no-pending` 线程空闲无 pending 且不在挂起等待；`thread archived` / `thread closed` 线程已归档/已关闭（确定终态，勿续挂——继续工作开新线程）；`thread not found` 线程已删除（确定终态，勿续挂）；`stalled` 两种形态：卡在 executing/pending-commands 且事件长期停滞且 head runtime 进程已不在（孤儿执行），或挂起等待中 head runtime 进程已不在（挂起任务随之死亡、唤醒不会到来）；`failed` failed=true（按故障表介入）；`timeout` 工具超时（正常续挂信号，续挂 `watch` 即可，挂起等待中的超时摘要会注明）；`unreachable` server 连续不可达
+- `done reason=...`：`turn.completed` 本轮落定（链式多轮自动跟随；ADR-0019 挂起落定——turn.completed 事件带 `suspended` 标志——不算落定，watch 继续挂等后台任务唤醒轮）；`idle-no-pending` 线程空闲无 pending 且不在挂起等待；`thread archived` / `thread closed` 线程已归档/已关闭（确定终态，勿续挂——继续工作开新线程）；`thread not found` 线程已删除（确定终态，勿续挂）；`stalled` 两种形态：卡在 executing/pending-commands 且事件长期停滞且 head runtime 进程已不在（孤儿执行），或挂起等待中 head runtime 进程已不在（挂起任务随之死亡、唤醒不会到来）；`failed` failed=true（按故障表介入）；`timeout` 工具超时（正常续挂信号，续挂 `watch` 即可，挂起等待中的超时摘要会注明）；`interrupted` 用户打断（与 timeout 同语义：指令仍在执行，续挂 `watch`）；`unreachable` server 连续不可达
 - 摘要附事件尾（`turn.started` / `turn.completed` / `item.*` 等）供快速取证；挂起落定的 turn.completed 显示 `suspended (pending=N)`
 
 超时不需要做别的——`watch` 续挂之间不需要 sleep、不需要查 git status；事件流停滞或摘要异常时才取证。
@@ -263,7 +265,7 @@ cd <AgentDev 仓库根目录> && git status --short && git diff --stat && git lo
    coder_shell command="deliver wt-xxx"
    ```
 
-   deliver 遇 runtime 不在时会自动唤起 head runtime 再投一次；唤起失败会在响应 `runtimeWake` 中带原因（按故障表处置）。
+   deliver 遇 runtime 不在时会自动唤起 head runtime 再投一次；唤起失败会在响应 `runtimeWake` 中带原因（按故障表处置）。deliver 返回 `reason=handoff_in_progress` 时表示线程正在接续中：指令保持 pending，接续完成后自动导向新 head，无需干预。deliver 结果里单条指令带 `reason=succession_precondition_violated` 时，那是系统的接续唤醒指令被作废（接续未完成、措辞前提不成立），不是你的指令——你派的指令不受影响；要继续工作直接 `send` 新指令即可。
 
 5. 如需修正，发送一条明确的恢复指令（`send` + 新幂等键），说明上次命令超时，禁止再次运行相同无界命令，改用定向测试或分段构建。
 6. 只有确认旧 turn 已结束且线程可接收新指令时才 send。
@@ -290,13 +292,13 @@ WorkThread 可能出现：
 → 原线程继续执行
 ```
 
-这通常是正常的上下文接力，不应当立即判定为失败。接力后重新确认：
+这通常是正常的上下文接力，不应当立即判定为失败。接力的直接信号是 `show` 报文的 `head=<sessionId>` 与之前不同，事件尾出现 `handoff_*` 事件。接力后重新确认（全部经 `show` + `watch` 即可完成）：
 
-- 新 `headSessionId`
-- `sessionIds` / chain edges
-- 新 agent 的日志活动
-- 原工单上下文是否保留
-- 是否出现重复施工或越界改动
+- 新 `head=<sessionId>`（show 第一行）
+- 事件尾最近事件正常推进（turn.started / item.*）
+- 新 agent 的日志活动（Debugger）
+- 原工单上下文是否保留（`result` 看最近轮回复是否延续工单语境）
+- 是否出现重复施工或越界改动（git diff）
 
 仅在新 head 没有上下文、pending command 丢失、长期无事件或重复施工时介入。
 
@@ -358,6 +360,7 @@ coder_shell command="unarchive wt-xxx"
 | 现象 | 先查 | 处理 |
 |---|---|---|
 | server 不可达 | `npm start` / `PORT` | 启动或确认端口，不重复发送命令 |
+| new-session 预检拒绝（并发上限已满）/ 创建返回 429 | 归档已完成线程腾名额、设置 → 工作空间的并发上限 | 归档完成的线程（archive）后重试；或请用户调高上限；不要反复重试创建 |
 | `delivered=0` | thread `status`、`pendingTexts`、head session | runtime 无承接：重新 `send`（幂等键防重）即可，send/deliver 的恢复闸会自动唤起 head runtime 再投；仅 `runtimeWake` 失败时按上面两行处置 |
 | `failed=true` / `status=rotation_failed` | 事件尾部 `handoff_failed`、pending commands | 接力失败：残局需人工介入——报告用户恢复；恢复前不要重发施工指令 |
 | 执行中误归档 | 事件尾部 turn 是否被打断 | 归档即打断收纳是预期行为；翻查后 `unarchive` 恢复，重新投递指令唤醒 runtime |
