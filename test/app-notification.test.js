@@ -205,11 +205,12 @@ describe('prebuilt metadata permission contracts', () => {
     });
   });
 
-  it('coder: finish=false declared, maxLiveRuntimes kept for the quota gate', async () => {
+  it('coder: finish=false declared, maxLiveRuntimes kept for the quota gate, rotation strategy defaults adaptive', async () => {
     const meta = await readMetadata('coder');
     assert.ok(meta.permissions.includes('maxLiveRuntimes'), 'quota gate depends on this declaration');
     assert.deepEqual(normalizePermissionDefaults(meta.permissionDefaults, meta.permissions), {
       'notifications.finish': false,
+      contextRotationStrategy: 'adaptive',
     });
   });
 

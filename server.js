@@ -110,7 +110,7 @@ import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnosti
 import { setupCapabilityRoutes } from './server/routes/capability.js';
 import { setupOAuthCodexRoutes } from './server/routes/oauth-codex.js';
 import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
-import { setupWorkspaceSettingsRoutes } from './server/routes/workspace-settings.js';
+import { setupWorkspaceSettingsRoutes, readWorkspaceResourcePolicies } from './server/routes/workspace-settings.js';
 import { setupToolStateRoutes } from './server/routes/tool-state.js';
 import { setupFeatureCatalogRoutes } from './server/routes/feature-catalog.js';
 import { setupFeatureStoreRoutes } from './server/routes/feature-store.js';
@@ -390,6 +390,25 @@ const threadRotation = createThreadRotationService({
   threadIntegration,
   threadControl,
   threadSuccession,
+  // 接续策略解析（coder 三选一，声明驱动，设计定案 2026-10-18）：
+  // 用户覆盖（workspace-settings resourcePolicy）> 作者默认（metadata
+  // permissionDefaults）；两者皆无 → null → 维持组合 trim+摘要（现状语义，
+  // 未声明权限项的线程宿主如 memo 不受 coder 试验影响）。
+  resolveRotationStrategy: async (agentId) => {
+    try {
+      const policies = await readWorkspaceResourcePolicies();
+      const override = policies?.[agentId]?.contextRotationStrategy;
+      if (typeof override === 'string' && override) return override;
+    } catch (error) {
+      console.warn('[thread-rotation] strategy override read failed:', error?.message || error);
+    }
+    try {
+      const declared = await discoverAgents(AGENTS_ROOT);
+      const authorDefault = declared.find((item) => item.id === agentId)?.permissionDefaults?.contextRotationStrategy;
+      if (typeof authorDefault === 'string' && authorDefault) return authorDefault;
+    } catch { /* 扫描失败按未声明（组合语义）兜底 */ }
+    return null;
+  },
 });
 
 // ── Identity Registry API → server/routes/agent-discovery.js (setupRoutes) ──

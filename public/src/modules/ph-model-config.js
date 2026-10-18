@@ -591,17 +591,68 @@ async function _phLoadCoderPolicy() {
     const limit = data?.resourcePolicy?.coder?.maxLiveRuntimes;
     const value = Number.isInteger(limit) && limit > 0 ? String(limit) : '';
     const live = Number.isInteger(data?.liveRuntimes?.coder) ? data.liveRuntimes.coder : 0;
-    // 行式布局照模型配置页（ph-mc-row）：左标题列 + 右定宽控件列，避免
-    // settings-input 满宽拉伸（width:100%）在 flex 行里被拉成通栏。
+    // 接续策略生效值判定链与通知设置同构：用户覆盖（resourcePolicy）>
+    // 作者默认（coder metadata permissionDefaults）> 'adaptive'。
+    const coderAgent = (Array.isArray(allAgents) ? allAgents : []).find((a) => a?.id === 'coder');
+    const authorDefault = coderAgent?.permissionDefaults?.contextRotationStrategy;
+    const strategyOverride = data?.resourcePolicy?.coder?.contextRotationStrategy;
+    const strategy = typeof strategyOverride === 'string' && strategyOverride
+      ? strategyOverride
+      : (typeof authorDefault === 'string' && authorDefault ? authorDefault : 'adaptive');
+    // 卡片形态照进程模式页（ph-pm-card 单选卡片），不另造控件。
+    const optionCard = (mode, active, title, desc) => {
+      return [
+        '<div class="ph-pm-card' + (active ? ' active' : '') + '" onclick="window.phSetCoderRotationStrategy(\'' + mode + '\')">',
+        '<div class="ph-pm-radio' + (active ? ' checked' : '') + '"></div>',
+        '<div class="ph-pm-card-body">',
+        '<div class="ph-pm-card-title">' + escapeHtml(title) + '</div>',
+        '<div class="ph-pm-card-desc">' + escapeHtml(desc) + '</div>',
+        '</div>',
+        '</div>',
+      ].join('');
+    };
     host.innerHTML = [
+      // 行式布局照模型配置页（ph-mc-row）：左标题列（名称 + 解释副标题）+
+      // 右定宽控件列，避免 settings-input 满宽拉伸（width:100%）在 flex
+      // 行里被拉成通栏。
       '<div class="ph-mc-row">',
       '<div class="ph-mc-role">',
       '<div class="ph-mc-role-name">' + (isZh ? '并发上限' : 'Concurrency limit') + '</div>',
+      '<div class="ph-mc-role-desc">' + (isZh
+        ? 'Coder 同时运行的会话数量上限，超出时新任务排队等待'
+        : 'Maximum simultaneous Coder sessions; new tasks queue beyond this limit') + '</div>',
       (live > 0 ? '<div class="ph-mc-role-desc">' + (isZh ? '当前 ' + live + ' 个运行中' : live + ' running') + '</div>' : ''),
       '</div>',
       '<div style="flex:0 0 140px;display:flex;justify-content:flex-end;padding-top:7px;">',
       '<input id="ph-coder-runtime-limit" type="number" min="1" step="1" class="settings-input" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" onchange="window.phSaveCoderRuntimeLimit(this.value)">',
       '</div>',
+      '</div>',
+      // 接续策略行与并发上限行同形态（ph-mc-row + role 名称/解释），
+      // 策略卡片区随行展开。
+      '<div class="ph-mc-row">',
+      '<div class="ph-mc-role">',
+      '<div class="ph-mc-role-name">' + (isZh ? '接续策略' : 'Rotation strategy') + '</div>',
+      '<div class="ph-mc-role-desc">' + (isZh
+        ? '上下文接近上限时，Coder 自动接续新会话所采用的精简方式'
+        : 'How Coder compacts context when rotating to a new session near the limit') + '</div>',
+      '</div>',
+      '</div>',
+      '<div class="ph-pm-body">',
+      optionCard('adaptive', strategy === 'adaptive',
+        isZh ? '自适应' : 'Adaptive',
+        isZh
+          ? '默认。先精简并保留最近 5 次工具调用；压缩不足时逐级升级——仍超 50% 追加摘要，超 80% 转为纯摘要。'
+          : 'Default. Trim first, keeping the last 5 tool calls; escalate only when compression falls short: above 50% appends a summary, above 80% switches to pure summary.'),
+      optionCard('trim', strategy === 'trim',
+        isZh ? '纯精简' : 'Trim Only',
+        isZh
+          ? '折叠工具活动，保留对话文本与最近 5 次工具调用；不生成摘要，无额外模型开销。'
+          : 'Fold tool activity, keep dialogue plus the last 5 tool calls. No summary, no extra LLM cost.'),
+      optionCard('summary', strategy === 'summary',
+        isZh ? '纯摘要' : 'Summary Only',
+        isZh
+          ? '将整个会话浓缩为一份九段式摘要；上下文最小，保留细节最少。'
+          : 'Condense the whole session into one nine-section summary. Smallest context, least detail.'),
       '</div>',
       '<div id="ph-coder-policy-status" style="margin:12px 24px 0;"></div>',
     ].join('');
@@ -609,6 +660,29 @@ async function _phLoadCoderPolicy() {
     host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml((isZh ? '读取 Coder 策略失败：' : 'Could not load Coder policy: ') + (error?.message || error)) + '</div>';
   }
 }
+
+window.phSetCoderRotationStrategy = async function(strategy) {
+  const isZh = currentLanguage === 'zh';
+  const status = document.getElementById('ph-coder-policy-status');
+  const setStatus = (message) => { if (status) status.textContent = message; };
+  if (strategy !== 'adaptive' && strategy !== 'trim' && strategy !== 'summary') return;
+  setStatus(isZh ? '正在保存…' : 'Saving…');
+  try {
+    const response = await fetch('/protoclaw/workspace_settings/resource_policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: 'coder', permissionId: 'contextRotationStrategy', value: strategy }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error || 'HTTP ' + response.status);
+    }
+    setStatus(isZh ? '已保存' : 'Saved');
+    await _phLoadCoderPolicy();
+  } catch (error) {
+    setStatus((isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error));
+  }
+};
 
 window.phSaveCoderRuntimeLimit = async function(rawValue) {
   const isZh = currentLanguage === 'zh';
@@ -859,7 +933,7 @@ function renderPhModelConfigOverlay(agent, presets) {
     : _phSettingsTab === 'feature'
       ? (isZh ? '选择身份的 Feature 配置层' : 'Choose the feature config layer for an identity')
       : _phSettingsTab === 'coder-policy'
-        ? (isZh ? '配置关联工作空间 Coder 的 runtime 并发策略' : 'Configure runtime concurrency for the linked Coder workspace')
+        ? (isZh ? '配置关联工作空间 Coder 的运行数量与接续策略' : 'Configure concurrency and rotation strategy for the linked Coder workspace')
         : _phSettingsTab === 'notification'
           ? (isZh ? '编程小助手与 Coder 运行完成时是否弹出系统通知' : 'Run-finished toasts for Programming Helper and Coder')
           : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');

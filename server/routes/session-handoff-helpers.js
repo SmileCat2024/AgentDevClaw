@@ -24,6 +24,7 @@ import {
   writeSummarizedHandoffPackage,
 } from '../context-continuity/summarized-handoff.js';
 import { runTrimTranscriptWithSummary } from '../context-continuity/trim-appended-summary.js';
+import { runAdaptiveRotationHandoff } from '../context-continuity/adaptive-rotation.js';
 import { applyContinuityToolPolicy } from '../context-continuity/feature-continuity.js';
 import { buildChildRuntimeAgent, sessionRecordToWorkspaceMeta } from './session-helpers-pure.js';
 import { RUNTIME_SPAWN_INTENTS } from './runtime-quota.js';
@@ -74,6 +75,27 @@ export function createSessionHandoffHelpers(deps) {
         agentRelativeDir: agent.relativeDir,
         projectRoot: PROJECT_ROOT,
         sourceSessionSnapshot,
+        signal: options.signal || null,
+        timeoutMs: options.timeoutMs,
+      });
+      await setSessionHasSummary(ownerAgentId, sessionId, true);
+      return result;
+    }
+    // 自适应接续（coder 三选一策略之一，设计定案 2026-10-18）：试探 trim 定档
+    // 后复用下方三条既有产物路径，编排与口径见 adaptive-rotation.js。
+    if (normalizedStrategy === 'adaptive') {
+      const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
+      const sessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
+      const result = await runAdaptiveRotationHandoff({
+        userDataRoot: USER_DATA_ROOT,
+        agentId: ownerAgentId,
+        sessionId,
+        sessionPath,
+        sourceRecord: record,
+        sessionSnapshot,
+        agentRelativeDir: agent.relativeDir,
+        projectRoot: PROJECT_ROOT,
+        policy,
         signal: options.signal || null,
         timeoutMs: options.timeoutMs,
       });

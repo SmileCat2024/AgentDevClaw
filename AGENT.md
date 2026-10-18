@@ -39,7 +39,7 @@
    - 0025 coder 升格独立工作空间：会话身份投影机制退役（实施计划见 [docs/plans/2026-10-11-coder-workspace-promotion.md](docs/plans/2026-10-11-coder-workspace-promotion.md)）
    - 0026 Session 视图统一：Session 身份为锚，Runtime 为运行态数据源，Thread 为连续性与输入控制投影
    - 0027 Agent OS 治理面：同意模型与 per-workspace runtime 配额（强制点在 startManagedAgent 内核漏斗；权限模型独立后行）
-   - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换
+   - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换；修订：凭证变更（重登/换 key/连接字段变更）server 主动广播 refresh-credentials，运行中会话同 preset 重 resolve（旧凭证仍有效时无 401 可触发反应式恢复）
    - 0029 模型调用超时治理：对话默认首段（首 token）120s / chunk 间隔 60s idle / 5 次重试，transform 预算 600s 经装配层实例分离，undici headersTimeout / bodyTimeout 双锚 TRANSFORM_MODEL_TIMEOUT_MS（保底层垫在最大可配预算之下），preset 级 timeoutMs/maxRetries 逃生门（timeoutMs 显式值管首段与间隔两段）
    - 0030 OS 通知投递面：统一出口、通知权限项与应用承接（notifications.* 权限族往 PERMISSION_ITEMS 加项；editingSurface 挂账落地、全局设置通知项只读审计；server 投递闸 + SSE app-notification + 前端哑呈现器；不建 OS 定时器服务）
 
@@ -145,7 +145,7 @@ app-core.js 全局状态纪律：全局状态区只减不增。新增前端状�
 
 ### Coder（coder）★
 
-入口 `prebuilt-agents/official/coder/`（`agent.js` + `metadata.json`，`host: programming-helper` / `visibility: on-demand`）。无人值守自主编码 APP（[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)，升格自原编程小助手的 coder 身份，旧数据经服务端启动搬移模块 [server/routes/coder-identity-retirement.js](server/routes/coder-identity-retirement.js) 迁入 `workspaces/coder/`）。配置层 `workspaces/coder/feature-config/agent.json`（`readAgentLayer('coder')`）。关键行为：线程宿主（自动建 WorkThread，`workspaceId=coder`，trim / 摘要后自动接力）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），用户不能在 UI 直接创建；Web UI 左侧 coder 入口（紧随智能编码空间，同在工具与效率组）是其线程列表投影，on-demand 可见性由服务端合流（有存活且绑定 Session 的 Runtime，或存在未归档线程资产——含 rotating 接续挡板与 hold 等非终态，删除事务窗口内除外，见 `hasRunningSessions`；+ 用户覆盖，设置 → 工作空间，见 [server/routes/workspace-settings.js](server/routes/workspace-settings.js)）；未归档线程记录本身不代表运行态；线程归档是生命周期事务（执行中归档直接打断当前轮并收纳，任何状态不拒绝归档；已归档拒绝新指令）。会话身份投影机制（sessionType 寻址、sidebar_entry_id 会话级身份）已退役：coder 会话直接以 `agentId=coder` 寻址。
+入口 `prebuilt-agents/official/coder/`（`agent.js` + `metadata.json`，`host: programming-helper` / `visibility: on-demand`）。无人值守自主编码 APP（[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)，升格自原编程小助手的 coder 身份，旧数据经服务端启动搬移模块 [server/routes/coder-identity-retirement.js](server/routes/coder-identity-retirement.js) 迁入 `workspaces/coder/`）。配置层 `workspaces/coder/feature-config/agent.json`（`readAgentLayer('coder')`）。关键行为：线程宿主（自动建 WorkThread，`workspaceId=coder`，上下文过阈值自动接力）；接续策略声明驱动三选一（自适应 / 纯 trim / 纯摘要，`metadata.json` 权限项 `contextRotationStrategy` + `permissionDefaults: adaptive`，智能编码空间设置窗 Coder 策略分页配置，`rotate()` 时现读即时生效；未声明宿主维持组合语义，实现见 [docs/plans/2026-10-18-coder-adaptive-rotation.md](docs/plans/2026-10-18-coder-adaptive-rotation.md)）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），用户不能在 UI 直接创建；Web UI 左侧 coder 入口（紧随智能编码空间，同在工具与效率组）是其线程列表投影，on-demand 可见性由服务端合流（有存活且绑定 Session 的 Runtime，或存在未归档线程资产——含 rotating 接续挡板与 hold 等非终态，删除事务窗口内除外，见 `hasRunningSessions`；+ 用户覆盖，设置 → 工作空间，见 [server/routes/workspace-settings.js](server/routes/workspace-settings.js)）；未归档线程记录本身不代表运行态；线程归档是生命周期事务（执行中归档直接打断当前轮并收纳，任何状态不拒绝归档；已归档拒绝新指令）。会话身份投影机制（sessionType 寻址、sidebar_entry_id 会话级身份）已退役：coder 会话直接以 `agentId=coder` 寻址。
 
 ### Agent Studio（agent-studio）★
 
@@ -219,7 +219,7 @@ Claw 不自带连续性引擎，全部消费 `@agentdevjs/core`。权威设计�
 - **Transformation**：官方变换（Trim / Summary / 组合），LLM 经 `TransformContext.llm` 进程内注入
 - **WorkThread**：线程状态机与看板，替代 Claw 原线程控制
 
-Claw 装配点索引：trim 引擎与落盘在 `server/context-continuity/`（handoff-package / trim-appended-summary / inprocess-summary，`resolveSummaryLLM` 供各装配层共用）；seed feature 由 `scripts/run-prebuilt-agent.js` 与 `run-one-shot-agent.js` 装配；连续性字段经 [local-features/continuity-participant](local-features/continuity-participant)（读旧写新，协议保留 `claw.*` 命名空间）；线程控制在 `server/thread-control/` 模块族，数据目录全局 `~/.agentdev/AgentDevClaw/threads/`；线程宿主判定为 APP 级（`agentId=coder`，判定入口 `thread-integration.js` 的 `isThreadHostApp()`）。
+Claw 装配点索引：trim 引擎与落盘在 `server/context-continuity/`（handoff-package / trim-appended-summary / inprocess-summary，`resolveSummaryLLM` 供各装配层共用；自适应接续编排在 adaptive-rotation.js——试探 trim 定档三路分派，产品层验证，验证后视结果下沉框架）；seed feature 由 `scripts/run-prebuilt-agent.js` 与 `run-one-shot-agent.js` 装配；连续性字段经 [local-features/continuity-participant](local-features/continuity-participant)（读旧写新，协议保留 `claw.*` 命名空间）；线程控制在 `server/thread-control/` 模块族，数据目录全局 `~/.agentdev/AgentDevClaw/threads/`；线程宿主判定为 APP 级（`agentId=coder`，判定入口 `thread-integration.js` 的 `isThreadHostApp()`）。
 
 易错：
 

@@ -38,6 +38,7 @@
 
 import { isSuccessionGateFailure } from './thread-integration.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
+import { ROTATION_KEEP_RECENT_TOOL_CALLS } from '../context-continuity/adaptive-rotation.js';
 
 export function createThreadRotationService({
   sessionApi,
@@ -45,6 +46,7 @@ export function createThreadRotationService({
   threadIntegration,
   threadControl,
   threadSuccession,
+  resolveRotationStrategy,
 } = {}) {
   if (!sessionApi || typeof sessionApi.updateSessionIndex !== 'function'
     || typeof sessionApi.compactAndResumeCurrentSession !== 'function'
@@ -63,6 +65,33 @@ export function createThreadRotationService({
 
   /** 同一 session 的接力防重入（guard 事件可能随 call 结束多次上报） */
   const inflight = new Map();
+
+  /** 策略解析包装：未注入解析器（旧装配/测试 stub）按未声明（组合语义）。 */
+  async function resolveRotationStrategyOption(agentId) {
+    if (typeof resolveRotationStrategy !== 'function') return null;
+    try {
+      return await resolveRotationStrategy(agentId);
+    } catch (error) {
+      console.warn('[thread-rotation] rotation strategy resolve failed (falling back to combined):', error?.message || error);
+      return null;
+    }
+  }
+
+  /** 策略 → handoff 调用面（policy + appendSummary）。 */
+  function buildRotationHandoffOptions(strategy) {
+    if (strategy === 'trim') {
+      return { policy: { strategy: 'trim-transcript', keepRecentToolCalls: ROTATION_KEEP_RECENT_TOOL_CALLS }, appendSummary: false };
+    }
+    if (strategy === 'summary') {
+      return { policy: { strategy: 'summarized-nine-section' }, appendSummary: false };
+    }
+    if (strategy === 'adaptive') {
+      return { policy: { strategy: 'adaptive', keepRecentToolCalls: ROTATION_KEEP_RECENT_TOOL_CALLS }, appendSummary: false };
+    }
+    // 组合 trim+追加摘要（现状语义）：mode trim-transcript-with-summary，
+    // 摘要 system message 追加到 seed 尾部。
+    return { policy: { strategy: 'trim-transcript' }, appendSummary: true };
+  }
 
   async function rotate(agentId, sessionId) {
     const thread = await threadCore.findThreadByHeadSession(agentId, sessionId);
@@ -90,11 +119,14 @@ export function createThreadRotationService({
       const result = await sessionApi.compactAndResumeCurrentSession({
         preferredAgentId: agentId,
         sessionId,
-        // 混合精简：trim-transcript 保留裁剪后的对话主干（工具记录折叠），
-        // appendSummary 走官方 summary 进程内实现，把摘要 system message
-        // 追加到 seed 尾部（mode: trim-transcript-with-summary）。
-        policy: { strategy: 'trim-transcript' },
-        appendSummary: true,
+        // 接续策略（设计定案 2026-10-18，声明驱动三选一）：
+        //   'trim'     → 纯精简（保最近 N 次工具调用，无 LLM 开销）
+        //   'summary'  → 九段式纯摘要
+        //   'adaptive' → 自适应阶梯（试探 trim 定档，见 adaptive-rotation.js）
+        //   null（未声明，如 memo 等未声明权限项的线程宿主）→ 维持组合
+        //   trim+追加摘要（现状语义，试验不波及其他宿主）。
+        // 策略每次接力现读（用户覆盖 > 作者默认），改配置对下一次接力即时生效。
+        ...buildRotationHandoffOptions(await resolveRotationStrategyOption(agentId)),
         startRuntime: true,
       });
       const nextSessionId = cleanSessionText(result?.session?.id);

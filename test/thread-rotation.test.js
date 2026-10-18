@@ -9,8 +9,10 @@ function buildDeps({
   compactError = null,
   beginResult = null,
   applyResult = null,
+  strategy = undefined,
+  strategyError = null,
 } = {}) {
-  const calls = { stop: [], begin: [], apply: [], fail: [], command: [], deliver: [], updateIndex: [] };
+  const calls = { stop: [], begin: [], apply: [], fail: [], command: [], deliver: [], updateIndex: [], compact: [], strategy: [] };
 
   const threadControl = {
     core: {
@@ -41,14 +43,24 @@ function buildDeps({
         calls.updateIndex.push(agentId);
         return mutator({ sessions: [] });
       },
-      compactAndResumeCurrentSession: async () => {
+      compactAndResumeCurrentSession: async (options) => {
         if (compactError) throw compactError;
+        calls.compact.push(options);
         return compactResult ?? { session: { id: 'session-next' } };
       },
     },
     stopManagedAgent: async (agentId, sessionId) => { calls.stop.push({ agentId, sessionId }); },
     threadIntegration,
     threadControl,
+    ...(strategy !== undefined || strategyError
+      ? {
+        resolveRotationStrategy: async (agentId) => {
+          calls.strategy.push(agentId);
+          if (strategyError) throw strategyError;
+          return strategy;
+        },
+      }
+      : {}),
   });
 
   return { service, calls };
@@ -199,5 +211,79 @@ describe('thread rotation (context guard relay)', () => {
 
     assert.deepEqual(firstResult, secondResult);
     assert.equal(beginCalls.length, 1);
+  });
+});
+
+describe('thread rotation strategy dispatch (声明驱动三选一)', () => {
+  const thread = { threadId: 'wt-1', status: 'running', headSessionId: 'session-1' };
+
+  it('trim strategy maps to history-only handoff with keepRecentToolCalls', async () => {
+    const { service, calls } = buildDeps({ thread, strategy: 'trim' });
+    const result = await service.handleContextGuard('coder', 'session-1');
+    assert.equal(result.applied, true);
+    assert.deepEqual(calls.compact, [{
+      preferredAgentId: 'coder',
+      sessionId: 'session-1',
+      policy: { strategy: 'trim-transcript', keepRecentToolCalls: 5 },
+      appendSummary: false,
+      startRuntime: true,
+    }]);
+    // 策略按 agentId 现读（用户覆盖 > 作者默认，改配置即时生效）
+    assert.deepEqual(calls.strategy, ['coder']);
+  });
+
+  it('summary strategy maps to the nine-section summarized handoff', async () => {
+    const { service, calls } = buildDeps({ thread, strategy: 'summary' });
+    const result = await service.handleContextGuard('coder', 'session-1');
+    assert.equal(result.applied, true);
+    assert.deepEqual(calls.compact, [{
+      preferredAgentId: 'coder',
+      sessionId: 'session-1',
+      policy: { strategy: 'summarized-nine-section' },
+      appendSummary: false,
+      startRuntime: true,
+    }]);
+  });
+
+  it('adaptive strategy maps to the adaptive handoff with keepRecentToolCalls', async () => {
+    const { service, calls } = buildDeps({ thread, strategy: 'adaptive' });
+    const result = await service.handleContextGuard('coder', 'session-1');
+    assert.equal(result.applied, true);
+    assert.deepEqual(calls.compact, [{
+      preferredAgentId: 'coder',
+      sessionId: 'session-1',
+      policy: { strategy: 'adaptive', keepRecentToolCalls: 5 },
+      appendSummary: false,
+      startRuntime: true,
+    }]);
+  });
+
+  it('undeclared strategy keeps the combined trim+summary semantics (memo-style hosts)', async () => {
+    const { service, calls } = buildDeps({ thread, strategy: null });
+    const result = await service.handleContextGuard('coder', 'session-1');
+    assert.equal(result.applied, true);
+    assert.deepEqual(calls.compact, [{
+      preferredAgentId: 'coder',
+      sessionId: 'session-1',
+      policy: { strategy: 'trim-transcript' },
+      appendSummary: true,
+      startRuntime: true,
+    }]);
+  });
+
+  it('strategy resolver failure falls back to combined semantics without failing the rotation', async () => {
+    const { service, calls } = buildDeps({ thread, strategyError: new Error('config read failed') });
+    const result = await service.handleContextGuard('coder', 'session-1');
+    assert.equal(result.applied, true);
+    assert.equal(calls.compact[0].appendSummary, true);
+    assert.equal(calls.compact[0].policy.strategy, 'trim-transcript');
+  });
+
+  it('uninjected resolver (legacy assembly) keeps the combined semantics', async () => {
+    const { service, calls } = buildDeps({ thread });
+    const result = await service.handleContextGuard('coder', 'session-1');
+    assert.equal(result.applied, true);
+    assert.equal(calls.compact[0].appendSummary, true);
+    assert.equal(calls.strategy.length, 0);
   });
 });
