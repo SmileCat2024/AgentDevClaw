@@ -30,6 +30,9 @@ import {
 import { exportSummarizedHandoffPackage } from './summarized-handoff.js';
 import { runTrimTranscriptWithSummary } from './trim-appended-summary.js';
 import { applyContinuityToolPolicy } from './feature-continuity.js';
+import { createClawLogger } from '../shared/claw-logger.js';
+
+const logger = createClawLogger('adaptive-rotation');
 
 /** coder 接续 trim 系策略的引擎保护面：保最近 N 次工具调用（设计定案 Q2=B）。 */
 export const ROTATION_KEEP_RECENT_TOOL_CALLS = 5;
@@ -128,7 +131,7 @@ export async function runAdaptiveRotationHandoff(params) {
   const trimmedTotal = measureMessagesCharTotal(seedMessages);
   const ratio = originalTotal > 0 ? trimmedTotal / originalTotal : 0;
   const { tier } = decideAdaptiveTier(ratio, options);
-  console.log(`[adaptive_rotation] agent=${agentId} session=${sessionId} tier=${tier} chars ${trimmedTotal}/${originalTotal} ratio=${(ratio * 100).toFixed(1)}%`);
+  logger.info(`agent=${agentId} session=${sessionId} tier=${tier} chars ${trimmedTotal}/${originalTotal} ratio=${(ratio * 100).toFixed(1)}%`);
 
   if (tier === 'trim') {
     const result = await exportHistoryOnly({
