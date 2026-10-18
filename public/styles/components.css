@@ -7222,8 +7222,8 @@ body[data-theme="light"] .trim-overlay {
 .trim-panel {
   position: relative;
   z-index: 10001;
-  width: min(100%, 680px);
-  max-height: min(100%, 640px);
+  width: min(100%, 720px);
+  max-height: min(100%, 700px);
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -7562,6 +7562,413 @@ body[data-theme="light"] .trim-footer-divider {
   padding: 32px 0;
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+/* ── Unified trim page: card body with left record / right config ── */
+/* 尺寸对标模型设置窗（ph-settings-window：1040 × 820），固定高不随内容收缩 */
+#trim-page .trim-panel {
+  width: min(100%, 1040px) !important;
+  height: min(100%, 820px) !important;
+  max-height: min(100%, 820px) !important;
+}
+.trim-page-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 14px;
+}
+.trim-page-left {
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 8px 4px;
+}
+body[data-theme="light"] .trim-page-left {
+  border-color: rgba(0,0,0,0.06);
+}
+.trim-page-right {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Mode switch: segmented control */
+.trim-page-mode {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+}
+body[data-theme="light"] .trim-page-mode {
+  border-color: rgba(0,0,0,0.08);
+  background: rgba(0,0,0,0.02);
+}
+.trim-page-mode-btn {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.trim-page-mode-btn:hover {
+  color: var(--text-primary);
+}
+.trim-page-mode-btn.active {
+  background: rgba(255,255,255,0.09);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+body[data-theme="light"] .trim-page-mode-btn:hover,
+body[data-theme="light"] .trim-page-mode-btn.active {
+  background: #fff;
+}
+.trim-page-mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Ratio controls use the page's normal vertical rhythm, not another card */
+.trim-page-ratio-settings,
+.trim-page-config {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0;
+}
+.trim-page-options {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.07);
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.008));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+body[data-theme="light"] .trim-page-options {
+  border-color: rgba(0,0,0,0.06);
+  background: linear-gradient(180deg, rgba(0,0,0,0.015), rgba(0,0,0,0.003));
+}
+.trim-page-config-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.45;
+}
+.trim-page-config-note {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+.trim-page-slider {
+  width: 100%;
+  height: 22px;
+  accent-color: #58a6ff;
+  cursor: pointer;
+  margin: 0;
+}
+.trim-page-ratio-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.trim-page-ratio-input {
+  width: 64px;
+  padding: 5px 8px;
+  font-size: 13px;
+  border-radius: 7px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+body[data-theme="light"] .trim-page-ratio-input {
+  border-color: rgba(0,0,0,0.12);
+  background: #ffffff;
+}
+.trim-page-ratio-input:focus {
+  outline: none;
+  border-color: rgba(88, 166, 255, 0.6);
+}
+.trim-page-ratio-unit {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Options column */
+.trim-page-options .trim-advanced-row {
+  margin-top: 2px;
+}
+
+/* Readout block */
+.trim-page-readout {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px dashed rgba(88, 166, 255, 0.3);
+  background: rgba(88, 166, 255, 0.05);
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.trim-page-readout-main {
+  color: var(--text-primary);
+}
+.trim-page-readout-main b {
+  font-variant-numeric: tabular-nums;
+}
+.trim-page-readout-sub {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Actions pinned to column bottom */
+.trim-page-actions {
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+}
+.trim-page-actions .workspace-action {
+  flex: 1;
+}
+
+/* ── Left pane: round cards (定位锚：用户输入主锚 + 工具活动一行注记) ── */
+.trim-page-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.trim-page-title-row .trim-title {
+  margin: 0;
+}
+/* ── Trim timeline：左栏统一时间轴 ──
+   轴线贯穿：系统上下文 / 已精简区 / 切点 / 轮次都是轴上节点；
+   精简侧节点空心淡化，保留侧实心，切点橙色嵌轴 */
+.trim-timeline { position: relative; padding: 4px 0 10px; }
+.trim-timeline::before {
+  content: '';
+  position: absolute;
+  left: 15px;
+  top: 10px;
+  bottom: 12px;
+  width: 2px;
+  border-radius: 1px;
+  background: rgba(255,255,255,0.14);
+}
+.trim-tl-node { position: relative; padding: 4px 8px 4px 34px; }
+.trim-tl-node.round { border-radius: 8px; }
+.trim-tl-node.round.clickable { cursor: pointer; }
+.trim-tl-node.round.clickable:hover { background: rgba(255,255,255,0.05); }
+.trim-tl-node::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 9px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #58a6ff;
+  box-shadow: 0 0 0 3px rgba(88,166,255,0.14);
+}
+.trim-tl-node.folded { opacity: 0.5; }
+.trim-tl-node.folded::before {
+  background: transparent;
+  border: 2px solid rgba(255,255,255,0.35);
+  box-shadow: none;
+  width: 8px;
+  height: 8px;
+  left: 12px;
+}
+.trim-tl-node.round.partial::before {
+  background: #15171b;
+  border: 2px solid rgba(255,255,255,0.48);
+  box-shadow: none;
+  width: 8px;
+  height: 8px;
+  left: 12px;
+}
+.trim-tl-node.preamble { padding: 2px 8px 5px 34px; }
+.trim-tl-node.preamble::before {
+  width: 6px;
+  height: 6px;
+  left: 13px;
+  top: 10px;
+  background: rgba(255,255,255,0.3);
+  box-shadow: none;
+}
+.trim-tl-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.trim-tl-title-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trim-tl-node.round:not(.manual) > .trim-tl-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trim-tl-title .trim-checkbox { flex-shrink: 0; }
+.trim-tl-sub {
+  margin-top: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 按轮次模式：节点右缘常驻「精简到此处」，标题区避让 */
+.trim-tl-node.manual { padding-right: 104px; }
+.trim-tl-node.manual .trim-to-here-btn {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10.5px;
+  padding: 2px 8px;
+  opacity: 1;
+}
+/* 已精简区：轴上收起节点 */
+.trim-tl-collapsed {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  margin: 2px 0;
+  padding: 5px 8px 5px 34px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.trim-tl-collapsed::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.35);
+}
+.trim-tl-collapsed:hover { color: var(--text-primary); }
+.trim-tl-action { color: var(--text-primary); }
+/* 切点：横线穿轴 + 轴上橙点，上方=已精简，下方=保留 */
+.trim-tl-cut {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin: 3px 0;
+  padding: 0 8px 0 34px;
+  border: 0;
+  background: transparent;
+  color: #ff9852;
+  font-size: 11px;
+  font-weight: 600;
+}
+.trim-tl-cut::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ff9852;
+  box-shadow: 0 0 0 3px rgba(255,152,82,0.2);
+}
+.trim-tl-cut-meta { color: var(--text-secondary); font-weight: 400; font-variant-numeric: tabular-nums; }
+/* 轮内详情（切线入轮）：assistant 回复锚点 + 工具段 */
+.trim-tl-detail { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 2px; }
+.trim-tl-dnode { position: relative; padding-left: 14px; color: var(--text-secondary); font-size: 11.5px; }
+.trim-tl-dnode::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.3);
+}
+.trim-tl-dnode.text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trim-tl-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.045);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+}
+button.trim-tl-chip { cursor: pointer; }
+button.trim-tl-chip:hover { background: rgba(255,255,255,0.09); color: var(--text-primary); }
+.trim-tl-dcut { align-self: center; color: #ff9852; font-size: 10.5px; }
+/* light */
+body[data-theme="light"] .trim-timeline::before { background: rgba(0,0,0,0.14); }
+body[data-theme="light"] .trim-tl-node::before { background: #3072d4; box-shadow: 0 0 0 3px rgba(48,114,212,0.12); }
+body[data-theme="light"] .trim-tl-node.folded::before { border-color: rgba(0,0,0,0.35); }
+body[data-theme="light"] .trim-tl-node.round.clickable:hover { background: rgba(0,0,0,0.045); }
+body[data-theme="light"] .trim-tl-node.preamble::before { background: rgba(0,0,0,0.3); }
+body[data-theme="light"] .trim-tl-collapsed::before { border-color: rgba(0,0,0,0.35); }
+body[data-theme="light"] .trim-tl-cut { color: #b45b27; background: transparent; }
+body[data-theme="light"] .trim-tl-cut::before { background: #d97a3d; box-shadow: 0 0 0 3px rgba(217,122,61,0.15); }
+body[data-theme="light"] .trim-tl-node.round.partial::before {
+  background: #fff;
+  border: 2px solid rgba(0,0,0,0.4);
+  box-shadow: none;
+  width: 8px;
+  height: 8px;
+  left: 16px;
+}
+body[data-theme="light"] .trim-tl-dnode::before { background: rgba(0,0,0,0.3); }
+body[data-theme="light"] .trim-tl-chip { background: rgba(0,0,0,0.045); }
+body[data-theme="light"] button.trim-tl-chip:hover { background: rgba(0,0,0,0.08); }
+
+/* Ratio target follows the normal settings rhythm rather than a nested card */
+.trim-page-ratio-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.trim-page-config-label {
+  font-weight: 500;
+}
+.trim-page-config-note {
+  font-weight: 400;
+}
+
+
+@media (max-width: 760px) {
+  .trim-page-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr auto;
+  }
+  .trim-page-left {
+    max-height: 46vh;
+  }
 }
 
 /* ── Preamble item: minimal one-liner ── */

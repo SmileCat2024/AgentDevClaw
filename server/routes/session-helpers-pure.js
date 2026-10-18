@@ -324,6 +324,112 @@ export function buildSessionTrimPreview(messages) {
 }
 
 /**
+ * 工具调用摘要（引擎折叠注记格式，括号版）。对齐框架 trim-transcript 的
+ * extractToolCallKeyInfo + name fallback：read/edit/write → `read(base.js)`、
+ * invoke_skill → `invoke_skill(skill)`、其余 → 裸工具名。与轮级预览的
+ * extractToolCallLabel（空格版 `read a.js`）是两个数据面：括号版使前端
+ * 折叠残留估算（trim-ratio-core estimateFoldResidue）可直接拼接、无需转换。
+ */
+function engineToolCallSummary(name, args) {
+  if (args && typeof args === 'object') {
+    if (name === 'read' || name === 'edit' || name === 'write') {
+      const filePath = typeof args.filePath === 'string' ? args.filePath : '';
+      if (filePath) {
+        const baseName = filePath.split(/[\\/]/).pop() || filePath;
+        return `${name}(${baseName})`;
+      }
+    }
+    if (name === 'invoke_skill') {
+      const skill = typeof args.skill === 'string' ? args.skill : '';
+      if (skill) return `invoke_skill(${skill})`;
+    }
+  }
+  return name;
+}
+
+/**
+ * Estimate the content-text-only character count of a message (no tool call
+ * args, no tool results). This is the volume that survives engine folding —
+ * user/assistant dialogue text is retained outside the preserve zone while
+ * tool activity collapses into a note. Non-string content parts contribute
+ * nothing (engine cleanMultilineText drops them), matching PR-2 residue math.
+ */
+function estimateContentCharCount(m) {
+  let count = 0;
+  if (typeof m.content === 'string') {
+    count += m.content.length;
+  } else if (Array.isArray(m.content)) {
+    for (const part of m.content) {
+      if (typeof part === 'string') count += part.length;
+    }
+  }
+  return count;
+}
+
+/**
+ * Build a message-level trim preview projection (unified trim page data plane).
+ *
+ * 与轮级 buildSessionTrimPreview 平行：统一精简页面左栏渲染与比例模式切点
+ * 计算（前端 trim-ratio-core）消费这一平铺数组。index 与引擎 rawMessages
+ * 索引严格对齐（preservedMsgRanges 的寻址基准），无 role 的脏消息也原位
+ * 保留（引擎对其按 drop 处理，但索引位不可塌缩）。
+ *
+ * 每条投影：index / role / turn（原始值，无则 null）/ roundIndex（轮归属，
+ * preamble 消息为 null）/ charCount（含工具体积）/ contentCharCount（纯对话
+ * 文本体积，折叠残留估算用）/ preview（user/assistant 文本，≤200 字符）
+ * / toolCalls[{id?, name, summary}]（assistant）/ toolCallId（tool 结果消息，
+ * 与 toolCalls[].id 配对，前端据此判定安全切点）。
+ *
+ * Pure function — depends only on estimateMessageCharCount,
+ * estimateContentCharCount and engineToolCallSummary (all module-level).
+ *
+ * @param {Array} messages - session messages
+ * @returns {Array} flat message projections
+ */
+export function buildSessionTrimMessagePreview(messages) {
+  const out = [];
+  let roundIndex = -1;
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    const role = typeof m?.role === 'string' ? m.role : '';
+    if (role === 'user') roundIndex += 1;
+    const entry = {
+      index: i,
+      role,
+      turn: Number.isFinite(m?.turn) ? m.turn : null,
+      roundIndex: roundIndex >= 0 ? roundIndex : null,
+      charCount: estimateMessageCharCount(m),
+      contentCharCount: estimateContentCharCount(m),
+    };
+    if (role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+      const toolCalls = [];
+      for (const tc of m.toolCalls) {
+        const name = typeof tc?.name === 'string' ? tc.name : '';
+        if (!name) continue;
+        let args = tc.args ?? tc.arguments ?? {};
+        if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+        const projected = {
+          ...(typeof tc.id === 'string' && tc.id ? { id: tc.id } : {}),
+          name,
+          summary: engineToolCallSummary(name, args),
+        };
+        toolCalls.push(projected);
+      }
+      if (toolCalls.length > 0) entry.toolCalls = toolCalls;
+    }
+    if (role === 'tool' && typeof m?.toolCallId === 'string' && m.toolCallId) {
+      entry.toolCallId = m.toolCallId;
+    }
+    if (role === 'user' || role === 'assistant') {
+      const content = typeof m.content === 'string' ? m.content.replace(/\s+/g, ' ').trim() : '';
+      entry.preview = content.slice(0, 200);
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+/**
  * Build a lightweight session record from an index entry without reading the file.
  *
  * Pure function — depends only on module-level imports (cleanSessionText,

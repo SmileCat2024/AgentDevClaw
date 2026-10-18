@@ -93,6 +93,7 @@ export function setupSessionRoutes(app, express, ctx) {
     activatePrebuiltSession,
     archivePrebuiltSession,
     buildSessionTrimPreview,
+    buildSessionTrimMessagePreview,
     estimatePreambleCharCount,
     compactAndResumeCurrentSession,
     compactAndResumeFromProvidedSummary,
@@ -476,6 +477,7 @@ app.get('/protoclaw/session_trim_preview', async (req, res, next) => {
     const parsed = JSON.parse(raw);
     const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
     const rounds = buildSessionTrimPreview(messages);
+    const messagePreviews = buildSessionTrimMessagePreview(messages);
     const preambleCharCount = estimatePreambleCharCount(messages);
     let totalCharCount = preambleCharCount;
     for (const r of rounds) totalCharCount += r.charCount;
@@ -484,7 +486,9 @@ app.get('/protoclaw/session_trim_preview', async (req, res, next) => {
       sessionTitle: parsed.title || '',
       contextLength: null,
       preamblePercent: totalCharCount > 0 ? preambleCharCount / totalCharCount : 0,
+      preambleCharCount,
       rounds,
+      messages: messagePreviews,
     });
   } catch (error) {
     next(error);

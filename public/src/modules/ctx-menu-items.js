@@ -30,7 +30,7 @@
  * 依赖 context-menu.js:
  *   closeCtxMenu (via window), showCtxMenu (via window)
  * 依赖 session-dialogs.js:
- *   openTrimDialog (via window), openBranchDialog (via window)
+ *   openTrimPage (via window), openBranchDialog (via window)
  * 依赖 assembly-data.js:
  *   isAssemblySession
  */
@@ -898,13 +898,13 @@ function dispatchCtxAction(action, target) {
 
     case 'trim':
       if (ns && sid) {
-        window.openTrimDialog(ns, sid);
+        window.openTrimPage(ns, sid);
       }
       break;
 
     case 'trim-and-archive':
       if (ns && sid) {
-        window.openTrimDialog(ns, sid, true);
+        window.openTrimPage(ns, sid, true);
       }
       break;
 

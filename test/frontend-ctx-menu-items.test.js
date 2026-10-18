@@ -74,7 +74,7 @@ function loadCtxMenuItems(overrides = {}) {
   ctx.window.switchAgent = (id) => { calls.push({ fn: 'switchAgent', args: [id] }); };
   ctx.window.closeCtxMenu = () => { calls.push({ fn: 'closeCtxMenu' }); };
   ctx.window.runWorkspaceAction = (json) => { calls.push({ fn: 'runWorkspaceAction', args: [json] }); };
-  ctx.window.openTrimDialog = (ns, sid, archive) => { calls.push({ fn: 'openTrimDialog', args: [ns, sid, archive] }); };
+  ctx.window.openTrimPage = (ns, sid, archive) => { calls.push({ fn: 'openTrimPage', args: [ns, sid, archive] }); };
   ctx.window.openBranchDialog = (ns, sid, archive) => { calls.push({ fn: 'openBranchDialog', args: [ns, sid, archive] }); };
   ctx.window.confirm = () => false;
   ctx.window.alert = () => {};
@@ -267,17 +267,18 @@ describe('ctx-menu-items: dispatchCtxAction (routing)', () => {
     assert.equal(payload.archiveOriginal, true);
   });
 
-  it('trim → window.openTrimDialog(ns, sid)', () => {
+  it('trim → window.openTrimPage(ns, sid)', () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('trim', { ns: 'ph', id: 's1', sessionId: 's1' })`);
-    assert.equal(calls[0].fn, 'openTrimDialog');
+    assert.equal(calls[0].fn, 'openTrimPage');
     assert.equal(calls[0].args[0], 'ph');
     assert.equal(calls[0].args[1], 's1');
   });
 
-  it('trim-and-archive → openTrimDialog with archive=true', () => {
+  it('trim-and-archive → openTrimPage with archive=true', () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('trim-and-archive', { ns: 'ph', id: 's1', sessionId: 's1' })`);
+    assert.equal(calls[0].fn, 'openTrimPage');
     assert.equal(calls[0].args[2], true);
   });
 

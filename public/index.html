@@ -407,40 +407,60 @@
 
   <div id="ctx-menu" class="ctx-menu"></div>
 
-  <div id="trim-dialog" class="trim-dialog" style="display:none;">
-    <div class="trim-overlay" onclick="window.closeTrimDialog()"></div>
+  <div id="trim-page" class="trim-dialog" style="display:none;">
+    <div class="trim-overlay" onclick="window.closeTrimPage()"></div>
     <div class="trim-panel">
-      <div class="trim-header">
-        <div class="trim-title">精简历史（Trim）</div>
-        <button class="trim-close" type="button" onclick="window.closeTrimDialog()">×</button>
+      <div class="trim-page-title-row">
+        <div class="trim-title" id="trim-page-title">精简对话</div>
+        <button class="trim-close" type="button" onclick="window.closeTrimPage()">×</button>
       </div>
-      <div class="trim-hint">勾选需要精简的轮次。被精简的轮次将折叠为摘要，保留工具调用的文件名和技能名。</div>
-      <div class="trim-advanced">
-        <div class="trim-advanced-row">
-          <label class="trim-advanced-toggle">
-            <input type="checkbox" id="trim-keep-skill-toggle" checked />
-            <span>保留最近技能调用</span>
-          </label>
-          <div class="trim-advanced-control" id="trim-keep-skill-control">
-            <button type="button" class="trim-stepper-btn" id="trim-keep-skill-dec">&minus;</button>
-            <span class="trim-stepper-value" id="trim-keep-skill-value">5</span>
-            <button type="button" class="trim-stepper-btn" id="trim-keep-skill-inc">+</button>
-          </div>
+      <div class="trim-page-body">
+        <div class="trim-page-left">
+          <div class="trim-list" id="trim-page-list"></div>
         </div>
-      </div>
-      <div class="trim-body">
-        <div class="trim-list" id="trim-round-list"></div>
-      </div>
-      <div class="trim-footer">
-        <div class="trim-footer-info" id="trim-footer-info"></div>
-        <div class="trim-footer-actions">
-          <label class="trim-footer-option" title="对被精简的轮次生成一份摘要，附加到新会话的保留轮次之后，延续任务上下文">
-            <input type="checkbox" id="trim-append-summary-toggle" />
-            <span>生成额外摘要</span>
-          </label>
-          <span class="trim-footer-divider" aria-hidden="true"></span>
-          <button class="workspace-action secondary" type="button" onclick="window.closeTrimDialog()">取消</button>
-          <button class="workspace-action" type="button" id="trim-submit" onclick="window.submitTrimCompact()">确认精简</button>
+        <div class="trim-page-right">
+          <div class="trim-page-mode" id="trim-page-mode">
+            <button type="button" class="trim-page-mode-btn active" data-mode="manual">按轮次</button>
+            <button type="button" class="trim-page-mode-btn" data-mode="ratio">按比例</button>
+          </div>
+          <div class="trim-page-ratio-settings" id="trim-page-ratio-config">
+            <div class="trim-page-ratio-label">目标保留的上下文比例</div>
+            <input type="range" class="trim-page-slider" id="trim-page-ratio-slider" min="5" max="95" step="1" value="30" />
+            <div class="trim-page-ratio-row">
+              <input type="number" class="trim-page-ratio-input" id="trim-page-ratio-input" min="5" max="95" step="1" value="30" />
+              <span class="trim-page-ratio-unit">%</span>
+            </div>
+            <div class="trim-page-config-note">读数为估算；生成的摘要长度另计</div>
+          </div>
+          <div class="trim-page-config" id="trim-page-manual-config" style="display:none;">
+            <div class="trim-page-config-label">勾选需要精简的轮次，未勾选的轮次完整保留</div>
+          </div>
+          <div class="trim-page-options">
+            <label class="trim-advanced-toggle" title="对被精简的部分生成一份摘要，附加到新会话的保留内容之后，延续任务上下文">
+              <input type="checkbox" id="trim-page-summary-toggle" />
+              <span>生成额外摘要</span>
+            </label>
+            <label class="trim-advanced-toggle">
+              <input type="checkbox" id="trim-page-archive-toggle" />
+              <span>归档原会话</span>
+            </label>
+            <div class="trim-advanced-row">
+              <label class="trim-advanced-toggle">
+                <input type="checkbox" id="trim-page-keep-skill-toggle" checked />
+                <span>保留最近技能调用</span>
+              </label>
+              <div class="trim-advanced-control" id="trim-page-keep-skill-control">
+                <button type="button" class="trim-stepper-btn" id="trim-page-keep-skill-dec">&minus;</button>
+                <span class="trim-stepper-value" id="trim-page-keep-skill-value">5</span>
+                <button type="button" class="trim-stepper-btn" id="trim-page-keep-skill-inc">+</button>
+              </div>
+            </div>
+          </div>
+          <div class="trim-page-readout" id="trim-page-readout"></div>
+          <div class="trim-page-actions">
+            <button class="workspace-action secondary" type="button" onclick="window.closeTrimPage()">取消</button>
+            <button class="workspace-action" type="button" id="trim-page-submit" onclick="window.submitTrimPage()">确认精简</button>
+          </div>
         </div>
       </div>
     </div>
@@ -510,6 +530,8 @@
   <script src="./src/modules/im-ui.js"></script>
   <script src="./src/modules/im-actions.js"></script>
   <script src="./src/modules/session-dialogs.js"></script>
+  <script src="./src/modules/trim-ratio-core.js"></script>
+  <script src="./src/modules/trim-page.js"></script>
   <script src="./src/modules/feature-setup-core.js"></script>
   <script src="./src/modules/feature-config-editor.js"></script>
   <script src="./src/modules/dir-config-dialog.js"></script>

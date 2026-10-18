@@ -49,7 +49,7 @@
  *   ClawToast (modules/toast-notify.js)
  * window 函数:
  *   handlePrebuiltAgentClick, applyWorkspaceBundle, launchAssemblyInstance,
- *   openTrimDialog, openSummaryPopup, confirm
+ *   openTrimPage, openSummaryPopup, confirm
  * HTML onclick 引用:
  *   onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"
  */
@@ -447,7 +447,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const compactType = action.compactType || 'summary';
 
     if (compactType === 'trim') {
-      window.openTrimDialog(_csAgent.id, action.sessionId);
+      window.openTrimPage(_csAgent.id, action.sessionId);
       return;
     }
 

@@ -13,6 +13,7 @@ import {
   extractLastMessagePreview,
   extractToolCallLabel,
   buildSessionTrimPreview,
+  buildSessionTrimMessagePreview,
   estimatePreambleCharCount,
   buildLightPrebuiltSessionRecord,
   compareSidebarSessionReadModels,
@@ -227,10 +228,141 @@ describe('buildSessionTrimPreview', () => {
   });
 });
 
+// ── buildSessionTrimMessagePreview ────────────────────────────────
+
+describe('buildSessionTrimMessagePreview', () => {
+  it('splits charCount into content vs tool volume for residue estimation', () => {
+    const messages = [
+      { role: 'user', content: 'Read it', turn: 1 },
+      {
+        role: 'assistant',
+        content: 'Reading',
+        turn: 1,
+        toolCalls: [{ id: 'tc-1', name: 'read', args: { filePath: '/src/app.js' } }],
+      },
+      { role: 'tool', toolCallId: 'tc-1', result: 'x'.repeat(500) },
+    ];
+    const previews = buildSessionTrimMessagePreview(messages);
+    // user：纯文本，两口径相等
+    assert.equal(previews[0].contentCharCount, previews[0].charCount);
+    // assistant：文本 7 + 工具调用名与参数体积，charCount > contentCharCount
+    assert.equal(previews[1].contentCharCount, 'Reading'.length);
+    assert.ok(previews[1].charCount > previews[1].contentCharCount);
+    // tool：体积全在 result，文本口径为 0（折叠后不残留）
+    assert.equal(previews[2].charCount, 500);
+    assert.equal(previews[2].contentCharCount, 0);
+  });
+
+  it('projects index / role / turn / roundIndex / charCount for every message', () => {
+    const messages = [
+      { role: 'system', content: 'SYS' },
+      { role: 'user', content: 'Hello', turn: 1 },
+      { role: 'assistant', content: 'Hi', turn: 1 },
+      { role: 'user', content: 'Again', turn: 2 },
+      { role: 'assistant', content: 'Back', turn: 2 },
+    ];
+    const previews = buildSessionTrimMessagePreview(messages);
+    assert.equal(previews.length, 5);
+    assert.deepEqual(previews.map((p) => p.index), [0, 1, 2, 3, 4]);
+    assert.deepEqual(previews.map((p) => p.roundIndex), [null, 0, 0, 1, 1]);
+    assert.deepEqual(previews.map((p) => p.turn), [null, 1, 1, 2, 2]);
+    assert.equal(previews[1].charCount, 5);
+    assert.equal(previews[1].contentCharCount, 5);
+    assert.equal(previews[1].preview, 'Hello');
+    assert.equal(previews[2].preview, 'Hi');
+  });
+
+  it('keeps dirty (role-less) messages in place so indexes stay engine-aligned', () => {
+    const messages = [
+      { role: 'user', content: 'A', turn: 1 },
+      { content: 'orphan' },
+      { role: 'assistant', content: 'B', turn: 1 },
+    ];
+    const previews = buildSessionTrimMessagePreview(messages);
+    assert.equal(previews.length, 3);
+    assert.deepEqual(previews.map((p) => p.index), [0, 1, 2]);
+    assert.equal(previews[1].role, '');
+    assert.equal(previews[1].roundIndex, 0);
+    assert.equal('preview' in previews[1], false);
+  });
+
+  it('returns empty array for empty messages', () => {
+    assert.deepEqual(buildSessionTrimMessagePreview([]), []);
+  });
+
+  it('projects assistant tool calls with engine paren summaries and ids', () => {
+    const messages = [
+      { role: 'user', content: 'Go', turn: 1 },
+      {
+        role: 'assistant',
+        content: '',
+        turn: 1,
+        toolCalls: [
+          { id: 'tc-1', name: 'read', args: { filePath: '/src/app.js' } },
+          { id: 'tc-2', name: 'invoke_skill', args: { skill: 'documents' } },
+          { id: 'tc-3', name: 'bash', args: { command: 'ls' } },
+        ],
+      },
+    ];
+    const previews = buildSessionTrimMessagePreview(messages);
+    assert.deepEqual(previews[1].toolCalls, [
+      { id: 'tc-1', name: 'read', summary: 'read(app.js)' },
+      { id: 'tc-2', name: 'invoke_skill', summary: 'invoke_skill(documents)' },
+      { id: 'tc-3', name: 'bash', summary: 'bash' },
+    ]);
+  });
+
+  it('parses string (JSON) tool call args and omits id-less calls from id field', () => {
+    const messages = [
+      { role: 'user', content: 'Go', turn: 1 },
+      {
+        role: 'assistant',
+        content: '',
+        turn: 1,
+        toolCalls: [{ name: 'read', arguments: '{"filePath":"/src/app.js"}' }],
+      },
+    ];
+    const previews = buildSessionTrimMessagePreview(messages);
+    assert.deepEqual(previews[1].toolCalls, [{ name: 'read', summary: 'read(app.js)' }]);
+  });
+
+  it('projects toolCallId on tool result messages for pair matching', () => {
+    const messages = [
+      { role: 'user', content: 'Go', turn: 1 },
+      { role: 'assistant', content: '', turn: 1, toolCalls: [{ id: 'tc-9', name: 'read', args: { filePath: '/x.js' } }] },
+      { role: 'tool', toolCallId: 'tc-9', result: 'file body' },
+    ];
+    const previews = buildSessionTrimMessagePreview(messages);
+    assert.equal(previews[2].toolCallId, 'tc-9');
+    assert.equal(previews[2].charCount, 'file body'.length);
+    assert.equal('preview' in previews[2], false);
+  });
+
+  it('omits toolCalls field when assistant message has no valid calls', () => {
+    const messages = [
+      { role: 'user', content: 'Go', turn: 1 },
+      { role: 'assistant', content: 'Plain reply', turn: 1 },
+      { role: 'assistant', content: '', turn: 1, toolCalls: [{ args: {} }] },
+    ];
+    const previews = buildSessionTrimMessagePreview(messages);
+    assert.equal('toolCalls' in previews[1], false);
+    assert.equal('toolCalls' in previews[2], false);
+  });
+
+  it('truncates preview to 200 chars and collapses whitespace', () => {
+    const long = `${'A'.repeat(250)}`;
+    const messages = [
+      { role: 'user', content: `start   \n\n  ${long}`, turn: 1 },
+    ];
+    const previews = buildSessionTrimMessagePreview(messages);
+    assert.equal(previews[0].preview.length, 200);
+    assert.ok(previews[0].preview.startsWith('start A'));
+  });
+});
+
 // ── estimatePreambleCharCount ─────────────────────────────────────
 
-describe('estimatePreambleCharCount', () => {
-  it('counts chars before first user message', () => {
+describe('estimatePreambleCharCount', () => {  it('counts chars before first user message', () => {
     const messages = [
       { role: 'system', content: 'abc' },
       { role: 'system', content: 'de' },

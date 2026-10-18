@@ -96,7 +96,7 @@ const EXPECTED_HELPER_KEYS = [
   'checkSessionHasSummary', 'buildSessionSummaryMap', 'buildLightPrebuiltSessionRecord',
   'findSessionSummary', 'findSessionSummaryPath', 'extractToolCallLabel',
   'findPrebuiltSessionRecordShared',
-  'buildSessionTrimPreview', 'estimatePreambleCharCount', 'summarizePrebuiltSession',
+  'buildSessionTrimPreview', 'buildSessionTrimMessagePreview', 'estimatePreambleCharCount', 'summarizePrebuiltSession',
   'getSearchIndexPath', 'loadPersistentSearchIndex', 'savePersistentSearchIndex',
   'extractSessionSearchText', 'ensureSearchIndex', 'searchInText', 'searchSessionsContent',
   'cleanupEmptySessions', 'listPrebuiltSessions', 'buildSessionModelInfoMap',
