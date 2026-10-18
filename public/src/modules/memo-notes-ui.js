@@ -274,9 +274,14 @@ window.MemoNotesUI = (() => {
       return '<div class="memo-note-reader">' + readerHtml() + '</div>';
     }
     const countSuffix = loaded ? '（' + cache.length + '）' : '';
-    return '<div class="workspace-section-header"><div>'
-      + '<div class="workspace-section-title">' + esc(isZh() ? '便签' : 'Notes') + esc(countSuffix) + '</div>'
-      + '</div></div>'
+    // 子页面顶栏：返回总览（导航反转后分页栏不再存在）+ 页标题
+    return '<div class="memo-subpage-head">'
+      + '<button class="memo-back-link" type="button" data-workspace-action="'
+      + esc(JSON.stringify({ type: 'show_home' }))
+      + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">'
+      + esc(isZh() ? '← 总览' : '← Overview') + '</button>'
+      + '<div class="memo-subpage-title">' + esc(isZh() ? '便签' : 'Notes') + esc(countSuffix) + '</div>'
+      + '</div>'
       + wallBodyHtml();
   }
 

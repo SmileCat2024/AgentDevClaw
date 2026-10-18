@@ -1,4 +1,15 @@
-/* memo-reminders.css — memo 首页提醒列表 block（只读列表 + 完成勾选 + 删除） */
+/* memo-reminders.css — memo 提醒子页面列表 block（只读列表 + 完成勾选 + 删除） */
+
+/* 无界：与便签墙/总览同款——section 不画面板，内容直接落在页面背景上；
+   浅色主题伴生选择器的优先级说明见 memo-notes.css */
+.memo-reminders-panel,
+body[data-theme="light"] .memo-reminders-panel {
+  background: none;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+}
 
 /* 列表：行式布局，行间发丝线分界（与设置行同语言），首行不带顶线 */
 .memo-reminder-list {
@@ -55,11 +66,6 @@
   opacity: 0.6;
 }
 
-/* 已过期标注（scheduled 且 fire_at 已过）：danger 提示 */
-.memo-reminder-overdue {
-  color: var(--danger, #e5484d);
-}
-
 /* 已完成行：整行降调 */
 .memo-reminder-item.is-fired .memo-reminder-content {
   color: var(--text-muted);
@@ -96,5 +102,53 @@
 
 .memo-reminder-delete:hover {
   background: var(--hover-bg);
+  color: var(--danger, #e5484d);
+}
+
+/* ── 时间分组（已过期 / 今天 / 明天 / 更晚 / 已完成沉底）────────── */
+
+.memo-reminder-group + .memo-reminder-group {
+  margin-top: 22px;
+}
+
+.memo-reminder-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.memo-reminder-group.is-overdue .memo-reminder-group-title {
+  color: var(--danger, #e5484d);
+}
+
+.memo-reminder-group-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* 相对时间徽标：accent 弱底胶囊，已过期转 danger（提醒分页与总览行共用，
+   口径见 memo-reminders-ui.js 的 fmtRelativeBadge） */
+.memo-reminder-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent, #6391ff) 30%, transparent);
+  background: color-mix(in srgb, var(--accent, #6391ff) 10%, transparent);
+  color: color-mix(in srgb, var(--accent, #6391ff) 78%, var(--text-primary));
+  font-size: 11px;
+  line-height: 17px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.memo-reminder-chip.is-overdue {
+  border-color: color-mix(in srgb, var(--danger, #e5484d) 36%, transparent);
+  background: color-mix(in srgb, var(--danger, #e5484d) 10%, transparent);
   color: var(--danger, #e5484d);
 }

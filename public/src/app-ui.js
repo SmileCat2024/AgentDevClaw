@@ -1197,6 +1197,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'coder-threads') return window.CoderThreadsUI?.render?.() || '';
   if (block.type === 'memo-notes') return window.MemoNotesUI?.render?.() || '';
   if (block.type === 'memo-reminders') return window.MemoRemindersUI?.render?.() || '';
+  if (block.type === 'memo-overview') return window.MemoOverviewUI?.render?.() || '';
   if (block.type === 'app-chat-input') return ''; // 快记输入框改挂主内容列底部槽位（syncAppChatInputSlot），不进 surface 内容流
   if (block.type === 'form') return renderWorkspaceForm(agent, block);
   if (block.type === 'status-grid') return renderWorkspaceStatusGrid(agent, block);

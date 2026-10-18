@@ -4,7 +4,7 @@
   "threadHost": true,
   "name": "Memo 智能备忘录",
   "description": "随聊随记的备忘与提醒应用：说一句就记下，到点主动找你",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "icon": "note",
   "category": "productivity",
   "enabled": true,
@@ -22,8 +22,22 @@
       {
         "id": "home",
         "label": {
-          "zh": "首页",
-          "en": "Home"
+          "zh": "总览",
+          "en": "Overview"
+        }
+      },
+      {
+        "id": "notes",
+        "label": {
+          "zh": "笔记",
+          "en": "Notes"
+        }
+      },
+      {
+        "id": "reminders",
+        "label": {
+          "zh": "提醒",
+          "en": "Reminders"
         }
       }
     ],
@@ -81,12 +95,19 @@
           ]
         },
         {
+          "id": "memo-overview",
+          "type": "memo-overview",
+          "visibility": "home-default"
+        },
+        {
           "id": "memo-notes",
-          "type": "memo-notes"
+          "type": "memo-notes",
+          "visibility": "tab:notes"
         },
         {
           "id": "memo-reminders",
-          "type": "memo-reminders"
+          "type": "memo-reminders",
+          "visibility": "tab:reminders"
         },
         {
           "id": "chat-input",
