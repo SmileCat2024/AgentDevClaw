@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "close-confirm-window",
+  "description": "Permissions for the close-confirm dialog window. It is an embedded shell page served by the close-dialog custom protocol (not the Claw service origin), so no remote access declaration is needed.",
+  "windows": ["close-confirm"],
+  "permissions": ["core:default", "allow-resolve-close-choice"]
+}

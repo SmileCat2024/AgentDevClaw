@@ -11,7 +11,9 @@
 //           public/src/modules/desktop-open.js 消费
 //   权限：WebView 权限对 Claw 服务源自动放行（通知等），不弹用户询问
 //   就绪：等 Claw health 确认 ready 后建窗口，避免误连任意端口占用者
-//   关窗：隐藏界面，服务和宿主继续运行，可从系统托盘恢复
+//   关窗：弹确认弹窗（壳内嵌 close-dialog 页面承载，不依赖服务就绪）：
+//         「最小化到系统托盘」隐藏界面，服务和宿主继续运行，可从托盘恢复；
+//         「退出程序」走退出路径；Esc / Alt+F4 取消
 //   退出：用户在设置或托盘选择退出 → server 自主有序关闭；
 //         宿主随服务退出，显式退出等待超时后只清理自己创建的服务子树
 //
@@ -424,6 +426,187 @@ fn persistent_notification(
     result.map_err(|e| e.to_string())
 }
 
+/// 关窗确认弹窗页面（仿 QQ / Telegram / Discord 的关窗确认交互）。
+/// 经 close-dialog custom protocol 由壳内嵌提供：零外部资源、不依赖 Claw
+/// 服务就绪。选择经 invoke 上报 resolve_close_choice；Esc / Alt+F4（弹窗
+/// 自身的 CloseRequested 不被拦截）等效取消。
+const CLOSE_DIALOG_HTML: &str = r##"<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>关闭 AgentDevClaw</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: transparent; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    user-select: none; cursor: default;
+  }
+  .card {
+    width: 400px; padding: 24px 28px 20px; border-radius: 10px;
+    background: #ffffff; color: #1f2329;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, .35), 0 0 0 1px rgba(0, 0, 0, .05);
+  }
+  .title { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+  .desc { font-size: 13px; line-height: 1.7; color: #6b7280; margin-bottom: 24px; }
+  .actions { display: flex; gap: 10px; justify-content: flex-end; }
+  button {
+    font: inherit; font-size: 13px; padding: 8px 18px; border-radius: 6px;
+    cursor: pointer;
+  }
+  .quit {
+    background: transparent; color: #e5484d;
+    border: 1px solid rgba(229, 72, 77, .45);
+  }
+  .quit:hover { background: rgba(229, 72, 77, .08); }
+  .minimize {
+    background: #3372ea; color: #ffffff; border: none;
+  }
+  .minimize:hover { background: #2b62c8; }
+  button:focus-visible { outline: 2px solid rgba(51, 114, 234, .55); outline-offset: 1px; }
+  @media (prefers-color-scheme: dark) {
+    .card {
+      background: #26262a; color: #e9e9ec;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .08);
+    }
+    .desc { color: #a6a6ad; }
+    .minimize { background: #3b76e0; }
+    .minimize:hover { background: #4c84e6; }
+  }
+</style>
+</head>
+<body>
+<main class="card" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title">
+  <h1 class="title" id="close-confirm-title">您要退出 AgentDevClaw 吗？</h1>
+  <p class="desc">选择「最小化到系统托盘」，AgentDevClaw 将继续在后台运行，会话与任务不会中断。</p>
+  <div class="actions">
+    <button class="quit" data-choice="quit">退出程序</button>
+    <button class="minimize" data-choice="minimize" autofocus>最小化到系统托盘</button>
+  </div>
+</main>
+<script>
+  const invoke = window.__TAURI_INTERNALS__.invoke;
+  const choose = (choice) => {
+    invoke('resolve_close_choice', { choice }).catch((err) => {
+      console.error('close dialog invoke failed:', err);
+    });
+  };
+  for (const button of document.querySelectorAll('button[data-choice]')) {
+    button.addEventListener('click', () => choose(button.dataset.choice));
+  }
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') choose('cancel');
+  });
+</script>
+</body>
+</html>
+"##;
+
+/// close-dialog custom protocol 的访问 URL：Windows/Android 平台是
+/// http://<scheme>.localhost，其余平台是 <scheme>://localhost。桌面壳
+/// 当前只发布 Windows（bundle targets 仅 nsis），两形态都给出以防本地
+/// 跨平台调试。
+fn close_dialog_url() -> tauri::Url {
+    let url = if cfg!(windows) {
+        "http://close-dialog.localhost/index.html"
+    } else {
+        "close-dialog://localhost/index.html"
+    };
+    url.parse().expect("valid close-dialog url")
+}
+
+/// 把 inner 尺寸的矩形居中到（origin, outer）外矩形内；外矩形放不下时
+/// 贴 origin 左上角，不产生负坐标。
+fn center_in_rect(origin: (i32, i32), outer: (i32, i32), inner: (i32, i32)) -> (i32, i32) {
+    let x = origin.0 + ((outer.0 - inner.0) / 2).max(0);
+    let y = origin.1 + ((outer.1 - inner.1) / 2).max(0);
+    (x, y)
+}
+
+/// 把确认弹窗定位到主窗口中心（主窗此刻可见——用户刚点它的关闭按钮）。
+/// 任一几何信息拿不到就不动（保持默认居中）。
+fn position_over_main_window(handle: &tauri::AppHandle, dialog: &tauri::WebviewWindow) {
+    let Some(main) = handle.get_webview_window("main") else { return };
+    let (Ok(origin), Ok(size), Ok(dialog_size)) =
+        (main.outer_position(), main.outer_size(), dialog.outer_size())
+    else {
+        return;
+    };
+    let (x, y) = center_in_rect(
+        (origin.x, origin.y),
+        (size.width as i32, size.height as i32),
+        (dialog_size.width as i32, dialog_size.height as i32),
+    );
+    let _ = dialog.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+/// 主窗口关闭请求 → 确认弹窗。已存在时复用（重定位 + 置前），不叠窗；
+/// 创建失败回退旧行为（直接隐藏主窗），不让用户被弹窗卡住。
+fn ensure_close_confirm_window(handle: tauri::AppHandle) {
+    if let Some(dialog) = handle.get_webview_window("close-confirm") {
+        position_over_main_window(&handle, &dialog);
+        let _ = dialog.show();
+        let _ = dialog.set_focus();
+        return;
+    }
+    // 与主窗口相同：窗口创建必须经事件循环（AppHandle 代理）投递。
+    // visible(false) 先建、定好位再 show，避免闪现在默认位置。
+    std::thread::spawn(move || {
+        let result = WebviewWindowBuilder::new(
+            &handle,
+            "close-confirm",
+            WebviewUrl::External(close_dialog_url()),
+        )
+        .title("关闭 AgentDevClaw")
+        .inner_size(440.0, 240.0)
+        .resizable(false)
+        .minimizable(false)
+        .maximizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .disable_drag_drop_handler()
+        .build();
+        match result {
+            Ok(dialog) => {
+                position_over_main_window(&handle, &dialog);
+                let _ = dialog.show();
+                let _ = dialog.set_focus();
+            }
+            Err(err) => {
+                eprintln!("[claw-desktop] failed to create close-confirm dialog: {err}");
+                if let Some(main) = handle.get_webview_window("main") {
+                    let _ = main.hide();
+                }
+            }
+        }
+    });
+}
+
+/// 关窗确认弹窗的选择结果：
+///   "minimize" → 隐藏主窗（托盘驻留，服务与会话继续运行）
+///   "quit"     → 托盘「退出程序」同款路径：exit(0) 触发 RunEvent::Exit
+///                的优雅关闭链路（请求 server 有序停机，超时才收子树）
+///   "cancel"   → 仅关弹窗，主窗保持原状
+#[tauri::command]
+fn resolve_close_choice(app: tauri::AppHandle, window: tauri::WebviewWindow, choice: String) {
+    let _ = window.close();
+    match choice.as_str() {
+        "minimize" => {
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.hide();
+            }
+        }
+        "quit" => app.exit(0),
+        _ => {}
+    }
+}
+
 fn main() {
     // 右键唤起参数（首实例冷启动路径）：随窗口 URL query 交给前端。
     let open_request = parse_open_request(std::env::args());
@@ -438,7 +621,18 @@ fn main() {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![persistent_notification])
+        // 关窗确认弹窗页面：壳内嵌 HTML（零外部资源，不依赖 Claw 服务）。
+        // custom protocol 的访问形态平台不同，见 close_dialog_url。
+        .register_uri_scheme_protocol("close-dialog", |_ctx, _request| {
+            tauri::http::Response::builder()
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(CLOSE_DIALOG_HTML.as_bytes().to_vec())
+                .expect("static close-dialog page")
+        })
+        .invoke_handler(tauri::generate_handler![
+            persistent_notification,
+            resolve_close_choice
+        ])
         // 服务源内的全部 WebView 权限（通知 / 麦克风 / 剪贴板等）自动授予，
         // 不向用户弹询问；前端 Notification.requestPermission 因此直接得 granted。
         .on_permission_request(|webview, _kind| {
@@ -456,7 +650,7 @@ fn main() {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    let _ = window.hide();
+                    ensure_close_confirm_window(window.app_handle().clone());
                 }
             }
         })
@@ -706,5 +900,25 @@ mod tests {
     fn js_literal_escapes_backslash_quote_and_controls() {
         assert_eq!(js_string_literal("D:\\a\"b"), "D:\\\\a\\\"b");
         assert_eq!(js_string_literal("a\nb\u{1}"), "a\\nb\\u0001");
+    }
+
+    #[test]
+    fn center_in_rect_places_inner_inside_outer() {
+        assert_eq!(center_in_rect((100, 200), (800, 600), (400, 200)), (300, 400));
+        // 外矩形放不下时贴左上角，不产生负坐标
+        assert_eq!(center_in_rect((10, 20), (300, 100), (400, 200)), (10, 20));
+        // 奇数差整数除法向下取整
+        assert_eq!(center_in_rect((0, 0), (401, 203), (400, 200)), (0, 1));
+    }
+
+    #[test]
+    fn close_dialog_url_matches_platform_scheme_form() {
+        let url = close_dialog_url();
+        if cfg!(windows) {
+            assert_eq!(url.scheme(), "http");
+            assert_eq!(url.host_str(), Some("close-dialog.localhost"));
+        } else {
+            assert_eq!(url.scheme(), "close-dialog");
+        }
     }
 }
