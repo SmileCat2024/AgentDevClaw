@@ -13,6 +13,7 @@
 
 - [AGENT.md](../AGENT.md) — agent 认知地图（入口，含 ADR 索引与协作纪律）
 - [前端渲染机制与常见陷阱](reference/frontend-rendering-patterns.md) — 涉及前端 UI / workspace 切换必读（活文档）
+- [线程状态矩阵与测试体系](reference/thread-state-matrix.md) — 改 WorkThread 状态机、接续、归档、投递、重启收敛前必读；测试按矩阵格子对齐（活文档）
 - [前端设计系统](reference/design-system.md) — 修改样式 / 新增 UI 控件前必读：配方清单、节奏表、场景参照系（活文档）
 - [Runtime input lease 协议](protocols/runtime-input-lease-protocol.md)
 - [输入区行为契约](protocols/input-area-behavioral-contract.md)
