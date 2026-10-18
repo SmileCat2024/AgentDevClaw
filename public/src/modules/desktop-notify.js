@@ -7,16 +7,19 @@
  *      才静默；页面失焦一律通知，判定用会话粒度 runtimeAgentId）；
  *   1b. 持久性判定（_shouldPersistNotification：页面失焦才常驻挂起；
  *      前台（含看别的会话）普通 toast 自动收进通知中心）；
- *   2. 呈现级去重（finishTs / requestId 事件幂等 + 30s 并发窗口）；
+ *   2. 呈现级去重（finish/input 事件幂等 + 30s 并发窗口；reminder 等
+ *      主动投递帧同帧只弹一次——server 逐条投无事件级键，重放防护在前端）；
  *   3. 通知文案组装（fetch 最后回复做正文预览、markdown 剥离截断）；
  *   4. Tauri/Web 通知权限处理与 toast 点击导航。
  * 内置 Web Worker 心跳保留前台时钟刷新（事件路径刷新钩子）。
  *
  * 帧语义（server 侧已保证）：type=finish 的完成事实已排除挂起（ADR-0019）
  * 且按 agentId+finishTs 事件级去重；type=input 的 choice 请求按
- * agentId+requestId 去重；type=reminder 等主动投递类透传 APP 文案。
+ * agentId+requestId 去重；type=reminder 等主动投递类透传 APP 文案，server
+ * 逐条投不做事件级去重（每次 POST 都是新事实）。
  * SSE 断连重连的 Last-Event-ID 重放会再次投递同帧，由本模块呈现级去重
- * 挡住。严禁与既有 notification 快照帧（call 状态感知，runtime-status
+ * 挡住（reminder 等无事件级键的帧：requestId 优先，内容键 + 30s 窗口
+ * 兜底）。严禁与既有 notification 快照帧（call 状态感知，runtime-status
  * 消费）混淆——两者语义不同。
  *
  * 依赖全局状态 (定义在 app-core.js):
@@ -47,6 +50,21 @@ const _notifiedFinishMap = new Map();
  * 弹（重放防护）；新 requestId（新一轮 choice）替换旧条目照常弹。
  */
 const _notifiedInputRequestMap = new Map();
+
+/* ── Generic（reminder 等主动投递）通知去重 ──
+ * 同构：normId → { key, ts }。server 对这类帧逐条投、无事件级键，SSE
+ * 重连重放的同一帧在此挡住。与 input 路径同语义——键匹配且 30s 窗口内
+ * 才抑制：同分钟两条不同内容的提醒互不吞；真循环提醒（同文案次日再发）
+ * 间隔远超窗口，不受影响。
+ */
+const _notifiedGenericMap = new Map();
+
+/** 主动投递帧的呈现级去重键：requestId 优先（帧携带时）；否则内容键。 */
+function _genericFrameKey(payload) {
+  const requestId = String(payload?.requestId || '').trim();
+  if (requestId) return `req:${requestId}`;
+  return `cnt:${payload?.title ?? ''}\u0000${payload?.body ?? ''}\u0000${payload?.threadId ?? ''}`;
+}
 
 /* ── Foreground clock: 事件帧到达刷新（sse-client 调用）──
  * 历史上用于页面级前台宽限判定；呈现判定已改为会话级焦点
@@ -314,6 +332,16 @@ function _presentGenericAppNotification(payload) {
 
   const normId = normalizeAgentIdentity(payload?.agentId);
   if (!normId) return;
+
+  // dedup：同帧（SSE 重连重放）30s 内只弹一次；requestId 优先，内容键
+  // 兜底（memo 等主动投递方不携带 requestId）。本函数全程同步，标记写
+  // 在呈现之前即可挡住重放与并发。
+  const now = Date.now();
+  const frameKey = _genericFrameKey(payload);
+  const prevGeneric = _notifiedGenericMap.get(normId);
+  if (prevGeneric && prevGeneric.key === frameKey && (now - prevGeneric.ts) < 30000) return;
+  _notifiedGenericMap.set(normId, { key: frameKey, ts: now });
+
   const agent = _findAgentByRuntimeId(normId);
   const agentName = (agent?.name || agent?.id || normId).trim();
   const title = String(payload?.title || '').trim() || agentName;
