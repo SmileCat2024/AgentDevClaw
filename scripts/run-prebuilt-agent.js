@@ -552,6 +552,33 @@ class SessionLifecycle {
       return;
     }
 
+    // ── credential refresh push（ADR-0028 修订）──
+    // server 侧凭证变更（重登 / 换 key / OpenCode 换档）后的主动重 resolve：
+    // 同 preset 换新实例，即拿到新凭证。fire-and-forget，无回执——失败保留
+    // 旧实例（401 → auth-recovery 反应式路径仍是兜底）；进行中的调用持有旧
+    // 实例引用不受影响，换实例只作用于下一次调用。
+    if (msg.type === 'refresh-credentials') {
+      try {
+        const meta = typeof this.agent?.getLLMMeta === 'function' ? this.agent.getLLMMeta() : null;
+        const presetName = meta?.presetName;
+        if (!presetName || typeof this.agent?.setModel !== 'function') return;
+        // 档位透传纪律与 auth-recovery 一致：meta 带 thinkingEffort 键（含显式
+        // null）原样透传，保持用户运行档位；键不存在则按 preset 默认档重造。
+        const swapped = this.agent.setModel(presetName, {
+          ...(meta.thinkingEffort !== undefined ? { thinkingEffort: meta.thinkingEffort } : {}),
+          source: 'credential-refresh',
+        });
+        if (swapped) {
+          console.log(`[ProtoClaw Runtime] Credentials refreshed for preset "${presetName}"`);
+        } else {
+          console.warn(`[ProtoClaw Runtime] Credential refresh could not re-resolve preset "${presetName}" — keeping previous instance`);
+        }
+      } catch (err) {
+        console.warn('[ProtoClaw Runtime] Credential refresh failed:', err?.message || err);
+      }
+      return;
+    }
+
     // ── model / thinking hot-swap ──
     // 消费框架官方 API（agent.setModel / setThinkingEffort）：resolver 已在构造时
     // 注入，宿主不再查表、不再私记状态；当前模型以 agent.getLLMMeta() 为唯一权威。

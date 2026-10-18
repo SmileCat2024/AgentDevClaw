@@ -5,7 +5,7 @@ import { spawn } from 'child_process';
 import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, MODEL_CONNECTIONS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS, AGENT_CONFIGS_ROOT, AGENT_USER_CONFIG_PATH } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
-import { requestRuntimeAck } from '../shared/ipc.js';
+import { requestRuntimeAck, broadcastIPCToAllRuntimes } from '../shared/ipc.js';
 import { getRuntimeByViewerAgentId, getAgentRuntime } from '../shared/agent-access.js';
 import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
@@ -67,6 +67,47 @@ function providerSignature(protocol, provider) {
     cleanSessionText(provider?.apiKey),
     cleanSessionText(provider?.authType),
   ]);
+}
+
+// ── Credential-change detection (ADR-0028 修订) ──────────────────────
+// LLM 实例 = 参数快照：preset 的连接字段（凭证/端点/认证形态）变化后，
+// 运行中实例不会自动更新，旧凭证仍有效时也没有 401 可触发 auth-recovery。
+// 保存路由对连接字段做 diff，变化时广播 refresh-credentials 让运行中
+// runtime 同 preset 重 resolve。非连接字段（档位、置顶、窗口元数据等）
+// 变化不广播。
+
+function presetConnectionSignature(preset) {
+  return JSON.stringify([
+    preset?.provider,
+    preset?.catalogProvider || '',
+    preset?.baseUrl,
+    preset?.apiKey,
+    preset?.authType || '',
+    preset?.clientId || '',
+  ]);
+}
+
+/**
+ * 新旧扁平 preset 列表的连接签名对比，按名字取交集：
+ * - 交集内任一 preset 连接签名变化 → true（运行中实例可能正持有旧快照）
+ * - 新增 preset 不触发（尚无 runtime 在用）；删除/改名不触发（对应
+ *   runtime 重 resolve 必失败，保留旧实例走 401 兜底即可）
+ */
+function presetsConnectionChanged(oldFlat, newFlat) {
+  const oldSig = new Map((oldFlat || []).map((p) => [p.name, presetConnectionSignature(p)]));
+  const newSig = new Map((newFlat || []).map((p) => [p.name, presetConnectionSignature(p)]));
+  for (const [name, signature] of newSig) {
+    const prev = oldSig.get(name);
+    if (prev !== undefined && prev !== signature) return true;
+  }
+  return false;
+}
+
+// 全局默认模型（default.json 内联 defaultModel）自带凭证字段，与 preset 表同口径参与 diff。
+function defaultModelConnectionChanged(oldDefaultModel, newDefaultModel) {
+  if (!newDefaultModel) return false;
+  const sig = (dm) => JSON.stringify([dm?.provider || '', dm?.baseUrl || '', dm?.apiKey || '']);
+  return sig(oldDefaultModel) !== sig(newDefaultModel);
 }
 
 function resolveProviderForPreset(normalized, protocol, providerName, presetBaseUrl, presetApiKey, presetAuthType) {
@@ -711,6 +752,11 @@ export function setupModelConfigRoutes(app, express) {
           tier: nextOpenCode.tier,
         },
       });
+      // OpenCode 凭证/档位变更 → 广播重 resolve（tier 决定 catalog preset 的 baseUrl，同属连接字段）
+      if (saved.opencode.apiKey !== current.opencode.apiKey
+        || (saved.opencode.tier === 'go') !== (current.opencode.tier === 'go')) {
+        broadcastIPCToAllRuntimes({ type: 'refresh-credentials' });
+      }
       res.json({ opencode: { hasApiKey: !!saved.opencode.apiKey, tier: saved.opencode.tier, apiKey: saved.opencode.apiKey || '' } });
     } catch (error) { next(error); }
   });
@@ -784,6 +830,10 @@ export function setupModelConfigRoutes(app, express) {
     try {
       const { config, presets } = req.body || {};
 
+      // 写前快照连接字段，写后 diff 决定是否广播 refresh-credentials
+      const oldConfig = await readModelConfig();
+      const oldFlatPresets = flattenModelPresets(await readModelPresets());
+
       let savedConfig = null;
       let savedPresets = null;
       if (config && typeof config === 'object') {
@@ -792,6 +842,15 @@ export function setupModelConfigRoutes(app, express) {
       if (Array.isArray(presets)) {
         savedPresets = await writeModelPresets(presets);
       }
+
+      const presetsChanged = Array.isArray(presets)
+        && presetsConnectionChanged(oldFlatPresets, flattenModelPresets(presets));
+      const defaultChanged = !!(config && typeof config === 'object')
+        && defaultModelConnectionChanged(oldConfig?.defaultModel, config?.defaultModel);
+      if (presetsChanged || defaultChanged) {
+        broadcastIPCToAllRuntimes({ type: 'refresh-credentials' });
+      }
+
       res.json({
         config: savedConfig ?? await readModelConfig(),
         presets: savedPresets ?? flattenModelPresets(await readModelPresets()),
@@ -1166,6 +1225,8 @@ export {
   flattenModelPresets,
   buildStructuredModelPresets,
   resolvePresetApiSurface,
+  presetsConnectionChanged,
+  defaultModelConnectionChanged,
   normalizeSpeechPreset,
   readSpeechModelConfig,
 };

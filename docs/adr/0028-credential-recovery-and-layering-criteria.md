@@ -58,6 +58,20 @@ OpenAI Codex OAuth 调查（对照 codex-rs `login/src/auth/manager.rs`）暴露
 - 测试：框架 vitest（`AgentDev` 体系）+ Claw `test/oauth-codex.test.js`（node:test 扩展）
 - 参照物：codex-rs `login/src/auth/manager.rs`（proactive_refresh_reason / UnauthorizedRecovery / refresh_token 错误分类）
 
+## 修订（2026-10-18）：凭证变更主动推送
+
+反应式恢复留有一个缺口：401 触发的前提是**旧凭证已失效**。用户主动换凭证（OpenCode 换 key、Codex 重登换账号、改 provider 的 apiKey）时旧凭证往往仍然有效——没有 401 就没有恢复触发，运行中会话的 LLM 实例（参数快照）会无限期继续用旧凭证，计费打到旧账号，直到重启 runtime 或手动切模型。
+
+补齐：**凭证变更落盘点在 server 侧主动广播** `refresh-credentials` IPC 到全部运行中 runtime，runtime 侧同 preset `setModel`（`source: 'credential-refresh'`，档位透传纪律与 auth-recovery 一致）重 resolve 换新实例。触发点：
+
+- `PUT /protoclaw/model_connections`：OpenCode apiKey / tier 变更（tier 决定 catalog baseUrl，同属连接字段）
+- OAuth 登录完成（设备码 + 浏览器 PKCE 两条流，经 `oauth-codex.js` 的 credential change listener；**常规 token refresh 不触发**——那类轮换仍由 401 反应式路径覆盖，推送只造成实例 churn）
+- `PUT /protoclaw/model_config`：既有 preset 的连接字段签名（provider / catalogProvider / baseUrl / apiKey / authType / clientId）或内联 defaultModel 的凭证字段变更；非连接字段（档位、置顶、窗口元数据）、新增 preset 不触发
+
+边界：fire-and-forget 无回执；runtime 重 resolve 失败（preset 被删、凭证被清）保留旧实例，401 → auth-recovery 兜底语义不变。共享进程模式下广播按 runtime 记录逐条投递并盖各自 `__targetSessionId`，正确路由到各会话的 agent 实例。核心不变量不变：凭证轮换 = 实例轮换，推送只是新增的触发源，不引入 getter / 动态凭证通道。
+
+落点：`server/shared/ipc.js`（`broadcastIPCToAllRuntimes`）、`server/oauth-codex.js`（listener）、`server/routes/model-config.js`（连接字段 diff）、`server/routes/oauth-codex.js`（装配接线）、`scripts/run-prebuilt-agent.js`（IPC 分支）；测试 `test/credential-refresh.test.js`。
+
 ## 与既有 ADR 的关系
 
 - 延伸 ADR-0009：`setModel` 从"用户/Feature 切换模型"扩展为"凭证恢复的编排原语"；三不变量（资产归应用层、能力以接口注入、状态由 agent 自持）不变。

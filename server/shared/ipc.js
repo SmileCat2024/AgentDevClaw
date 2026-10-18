@@ -1,4 +1,4 @@
-import { getAgentRuntime, listAgentRuntimes } from './agent-access.js';
+import { getAgentRuntime, listAgentRuntimes, managedAgents } from './agent-access.js';
 import { log } from './string-helpers.js';
 
 /**
@@ -56,6 +56,30 @@ export function sendIPCToAllSessions(agentId, message) {
     if (sendIPCtoSession(agentId, sessionId, message)) {
       delivered++;
     }
+  }
+  return delivered;
+}
+
+/**
+ * Broadcast a message to every running runtime, across all agents.
+ *
+ * Used by credential-change pushes (ADR-0028 修订：refresh-credentials)：每个
+ * managedAgents 记录独立投递并盖上各自的 selectedSessionId，共享进程模式下
+ * 同一进程会收到多条消息、各自路由到对应会话的 agent 实例。LLM 实例 =
+ * 参数快照，凭证变更不主动重 resolve 的话，旧凭证仍有效期间运行中会话会
+ * 无限期继续用旧凭证（401 自愈只覆盖旧凭证已失效的形态）。
+ *
+ * Returns the number of runtimes that received the message.
+ */
+export function broadcastIPCToAllRuntimes(message) {
+  let delivered = 0;
+  for (const runtime of managedAgents.values()) {
+    if (sendIPCToRuntime(runtime, message)) {
+      delivered++;
+    }
+  }
+  if (delivered > 0) {
+    log('ProtoClaw IPC', `Broadcast to ${delivered} runtime(s): ${JSON.stringify(message)}`);
   }
   return delivered;
 }

@@ -17,13 +17,22 @@ import {
   deleteTokens,
   refreshTokens,
   readTokensSync,
+  setCredentialChangeListener,
   DEFAULT_CLIENT_ID,
   DEFAULT_CODEX_BASE_URL,
 } from '../oauth-codex.js';
 import { getActiveProxyUrl } from '../shared/proxy-manager.js';
 import { openUrlInSystem } from '../shared/system-opener.js';
+import { broadcastIPCToAllRuntimes } from '../shared/ipc.js';
 
 export function setupOAuthCodexRoutes(app, express) {
+
+  // 登录完成（新凭证族落盘）→ 广播 refresh-credentials：运行中 runtime 同
+  // preset 重 resolve 换新实例（ADR-0028 修订）。旧凭证仍有效时没有 401 可
+  // 触发反应式恢复，这是唯一的主动换新通道。
+  setCredentialChangeListener(() => {
+    broadcastIPCToAllRuntimes({ type: 'refresh-credentials' });
+  });
 
   // ── Start login (browser PKCE or device code) ──
 

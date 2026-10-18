@@ -235,6 +235,28 @@ export function deleteTokens(providerName) {
   }
 }
 
+// ── Credential change notification (ADR-0028 修订) ──────────────────
+// 登录完成（新凭证族落盘）时通知宿主侧：运行中 runtime 的 LLM 实例是参数
+// 快照，旧凭证仍有效期间没有 401 可触发 auth-recovery，必须由宿主主动推送
+// 重 resolve。本模块被 server 与 runtime 子进程共享，保持零 server 侧依赖：
+// 回调由路由装配时经 setCredentialChangeListener 注入。仅登录流程触发，
+// 常规 token refresh 不触发——那类轮换由 401 反应式恢复覆盖，推送只会造成
+// 无意义的实例churn。
+let credentialChangeListener = null;
+
+export function setCredentialChangeListener(fn) {
+  credentialChangeListener = typeof fn === 'function' ? fn : null;
+}
+
+function notifyCredentialChange(providerName) {
+  if (!credentialChangeListener) return;
+  try {
+    credentialChangeListener(providerName);
+  } catch (err) {
+    console.warn(`[OAuth/Codex] Credential change listener failed:`, err?.message || err);
+  }
+}
+
 /**
  * Resolve the current access_token for an OAuth provider.
  * If the token is due for refresh (exp window or last_refresh fallback),
@@ -697,6 +719,7 @@ export async function runDeviceCodeLogin(sessionId, providerName, clientId) {
 
     // Save tokens
     writeTokens(providerName, tokens);
+    notifyCredentialChange(providerName);
 
     session.status = 'approved';
     console.log(`[OAuth/Codex] Login completed for provider "${providerName}" (session=${sessionId})`);
@@ -871,6 +894,7 @@ async function finishBrowserLogin(server, sessionId, providerName, clientId) {
 
     const tokens = await exchangeCodeForTokens(code, session.pkce.verifier, clientId, session.redirectUri);
     writeTokens(providerName, tokens);
+    notifyCredentialChange(providerName);
     session.status = 'approved';
     console.log(`[OAuth/Codex] Browser login completed for provider "${providerName}" (session=${sessionId})`);
   } catch (error) {
