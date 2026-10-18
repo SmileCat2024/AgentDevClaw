@@ -128,6 +128,7 @@ import { createThreadDeleteResources } from './server/thread-control/thread-dele
 import { setupAcpRoutes } from './server/routes/acp.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { createThreadRotationService } from './server/thread-control/thread-rotation.js';
+import { buildRotationStrategyResolver } from './server/context-continuity/rotation-strategy-resolver.js';
 import {
   createThreadSuccessionService,
   createThreadRecoveryService,
@@ -390,25 +391,13 @@ const threadRotation = createThreadRotationService({
   threadIntegration,
   threadControl,
   threadSuccession,
-  // 接续策略解析（coder 三选一，声明驱动，设计定案 2026-10-18）：
-  // 用户覆盖（workspace-settings resourcePolicy）> 作者默认（metadata
-  // permissionDefaults）；两者皆无 → null → 维持组合 trim+摘要（现状语义，
-  // 未声明权限项的线程宿主如 memo 不受 coder 试验影响）。
-  resolveRotationStrategy: async (agentId) => {
-    try {
-      const policies = await readWorkspaceResourcePolicies();
-      const override = policies?.[agentId]?.contextRotationStrategy;
-      if (typeof override === 'string' && override) return override;
-    } catch (error) {
-      console.warn('[thread-rotation] strategy override read failed:', error?.message || error);
-    }
-    try {
-      const declared = await discoverAgents(AGENTS_ROOT);
-      const authorDefault = declared.find((item) => item.id === agentId)?.permissionDefaults?.contextRotationStrategy;
-      if (typeof authorDefault === 'string' && authorDefault) return authorDefault;
-    } catch { /* 扫描失败按未声明（组合语义）兜底 */ }
-    return null;
-  },
+  // 接续策略解析（coder 三选一，声明驱动，设计定案 2026-10-18）：判定链
+  // 与回退语义见 rotation-strategy-resolver.js（用户覆盖 > 作者默认 > null
+  // → 组合 trim+摘要，未声明权限项的线程宿主如 memo 不受 coder 试验影响）。
+  resolveRotationStrategy: buildRotationStrategyResolver({
+    readPolicies: () => readWorkspaceResourcePolicies(),
+    readDeclaredAgents: () => discoverAgents(AGENTS_ROOT),
+  }),
 });
 
 // ── Identity Registry API → server/routes/agent-discovery.js (setupRoutes) ──

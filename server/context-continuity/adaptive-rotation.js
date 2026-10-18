@@ -91,6 +91,8 @@ export function decideAdaptiveTier(ratio, {
  *
  * @param {object} params
  * @param {object} params.sessionSnapshot 源会话快照（runtime.context.messages）
+ * @param {object} [params.llm] 显式注入的摘要 LLM（trim-summary 档透传给
+ *   runTrimTranscriptWithSummary；缺省走模型预设解析，生产不传行为不变）
  * @param {object} [params.options] 阶梯参数覆盖（测试缝）
  * @param {object} [params.executors] 三档执行器注入（测试缝；缺省绑定真实路径）
  * @returns {Promise<{ handoff: object, handoffPath: string, adaptive: { tier: string, ratio: number } }>}
@@ -108,6 +110,7 @@ export async function runAdaptiveRotationHandoff(params) {
     policy: rawPolicy = {},
     signal = null,
     timeoutMs,
+    llm = null,
     options = {},
     executors = {},
   } = params;
@@ -149,6 +152,7 @@ export async function runAdaptiveRotationHandoff(params) {
       policy: probePolicy,
       signal,
       timeoutMs,
+      ...(llm ? { llm } : {}),
     });
     const result = await writeTrimWithSummary({
       userDataRoot, agentId, sessionId, sessionPath, sourceRecord, sessionSnapshot, seed,
