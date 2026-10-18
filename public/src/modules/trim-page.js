@@ -410,7 +410,9 @@ function renderRatioRoundNode(rd, opts) {
       }
       const content = n.kind === 'text'
         ? `<div class="trim-tl-dnode text">${escapeHtml(n.preview || L('（文字回复）', '(text reply)'))} · ${fmtChars(n.charCount)}</div>`
-        : (opts.safeCutSet.has(n.cutIndex)
+        // chip 可点击 = 安全切点且保留区仍有对话消息；尾部注入 system 之后的
+        // 切点保留区只剩注入消息，提交会让末轮对话全部被折叠
+        : (opts.safeCutSet.has(n.cutIndex) && window.TrimRatioCore.keepZoneHasDialogue(st.messages, n.cutIndex)
           ? `<button type="button" class="trim-tl-chip" data-set-cut="${n.cutIndex}" title="${L('从此处保留', 'Keep from here')}">${escapeHtml(n.label)} · ${fmtChars(n.charCount)}</button>`
           : `<span class="trim-tl-chip">${escapeHtml(n.label)} · ${fmtChars(n.charCount)}</span>`);
       parts.push(content + (n.cutIndex === st.cutIndex ? renderCutNode(opts.readout) : ''));
@@ -599,6 +601,12 @@ window.submitTrimPage = async () => {
     if (!st.messages.length) return;
     if (st.cutIndex <= 0) {
       window.alert(L('切点未生效（保留区为空即不精简），请调整比例或改用按轮次模式', 'Nothing to trim: adjust the ratio or use the round mode'));
+      return;
+    }
+    // 出口守卫：保留区必须含对话消息——末尾只剩 system 注入消息的切点提交后
+    // 末轮对话全部被折叠（历史上由尾部任务提醒注入 + 小比例触发）
+    if (window.TrimRatioCore && !window.TrimRatioCore.keepZoneHasDialogue(st.messages, st.cutIndex)) {
+      window.alert(L('保留区内没有对话消息，请将切点上移到包含对话内容的位置', 'The keep zone holds no dialogue message; move the cut up to cover dialogue content'));
       return;
     }
     policy = { preservedMsgRanges: [[st.cutIndex, st.messages.length - 1]] };

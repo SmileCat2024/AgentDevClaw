@@ -214,6 +214,66 @@ describe('TrimRatioCore.ratioToCut', () => {
       assert.ok(unmet || actual <= ratio + 1e-9, `ratio ${ratio}: actual ${actual} exceeds budget`);
     }
   });
+  it('never lands the cut where the keep zone holds no dialogue (tail system injection)', () => {
+    const core = loadCore();
+    // 打断/任务提醒注入的形态：末轮文本与工具结果之后跟一条 system 注入
+    // 消息。其后的安全切点保留区不含任何 user/assistant——提交后末轮对话
+    // 全被折叠（实测事故：handoff preservedMsgRanges=[[277,277]] 仅保留
+    // 任务状态提醒一条）。kept% 几乎全是折叠残留底量，读数「保留 X%」
+    // 掩盖了保留区为空的事实。
+    const messages = [
+      msg('user', { charCount: 100, contentCharCount: 100 }),
+      ...toolPair('t1', 'a.js', 800, 2000),
+      msg('user', { charCount: 100, contentCharCount: 100 }),
+      msg('assistant', { charCount: 500, contentCharCount: 40, toolCalls: [{ id: 't2', name: 'edit', summary: 'edit(x.md)' }] }),
+      msg('tool', { charCount: 178, toolCallId: 't2' }),
+      msg('system', { charCount: 60, contentCharCount: 60 }),
+    ];
+    for (const ratio of [0.09, 0.2]) {
+      const { cutIndex } = core.ratioToCut(messages, 0, ratio);
+      assert.ok(
+        messages.slice(cutIndex).some((m) => m.role === 'user' || m.role === 'assistant'),
+        `ratio ${ratio}: keep zone [${cutIndex}, ${messages.length}) holds no dialogue message`,
+      );
+    }
+  });
+
+  it('unmet fallback keeps a dialogue-bearing minimal zone instead of trimming everything', () => {
+    const core = loadCore();
+    const messages = [
+      msg('user', { charCount: 100, contentCharCount: 100 }),
+      ...toolPair('t1', 'a.js', 800, 2000),
+      msg('user', { charCount: 100, contentCharCount: 100 }),
+      msg('assistant', { charCount: 40, contentCharCount: 40 }),
+      msg('system', { charCount: 60, contentCharCount: 60 }),
+    ];
+    // 预算低于一切有效切点的 kept（全精简残留 310 仍 > 5%×3548）
+    const { cutIndex, unmet } = core.ratioToCut(messages, 0, 0.05);
+    assert.equal(unmet, true);
+    assert.ok(
+      messages.slice(cutIndex).some((m) => m.role === 'user' || m.role === 'assistant'),
+      `unmet fallback cut ${cutIndex} leaves no dialogue in the keep zone`,
+    );
+  });
+
+  it('exposes keepZoneHasDialogue for the trim page submit guard', () => {
+    const core = loadCore();
+    const messages = [
+      msg('user', { charCount: 10, contentCharCount: 10 }),
+      msg('assistant', { charCount: 10, contentCharCount: 10 }),
+      msg('tool', { charCount: 10 }),
+      msg('system', { charCount: 10 }),
+    ];
+    assert.equal(typeof core.keepZoneHasDialogue, 'function');
+    assert.equal(core.keepZoneHasDialogue(messages, 0), true);   // 含 user/assistant
+    assert.equal(core.keepZoneHasDialogue(messages, 1), true);   // 含 assistant
+    assert.equal(core.keepZoneHasDialogue(messages, 2), false);  // 仅 tool/system
+    assert.equal(core.keepZoneHasDialogue(messages, 3), false);  // 仅 system
+    assert.equal(core.keepZoneHasDialogue(messages, 4), false);  // 空保留区
+    // cutIndex 越界按 clamp 处理（与 keptCharCount 同口径）
+    assert.equal(core.keepZoneHasDialogue(messages, 99), false);
+    assert.equal(core.keepZoneHasDialogue(messages, -1), true);
+  });
 });
 
 describe('TrimRatioCore.computeReadout', () => {

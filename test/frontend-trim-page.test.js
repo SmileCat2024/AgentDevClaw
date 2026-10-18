@@ -35,7 +35,7 @@ function makeElement() {
   };
 }
 
-function createTrimPage(fetchImpl) {
+function createTrimPage(fetchImpl, coreOverrides = {}) {
   const elements = new Map();
   const document = {
     getElementById(id) {
@@ -54,6 +54,9 @@ function createTrimPage(fetchImpl) {
         ratioToCut: () => ({ cutIndex: 3, unmet: false }),
         cutToRatio: () => 0.3,
         computeReadout: () => ({ releasedPercent: 0.7, keptPercent: 0.3, keptCharCount: 30, totalCharCount: 100, keptMessageCount: 3 }),
+        keepZoneHasDialogue: (messages, cutIndex) =>
+          messages.slice(cutIndex).some((m) => m.role === 'user' || m.role === 'assistant'),
+        ...coreOverrides,
       },
     },
     fetch: fetchImpl || (async () => ({
@@ -251,6 +254,76 @@ describe('trim page timeline interactions', () => {
     archive.checked = false;
     archive.dispatch('change');
     assert.equal(submit.textContent, '确认精简');
+  });
+});
+
+describe('trim page keep-zone dialogue guard', () => {
+  // 打断/任务提醒注入形态：末轮工具结果之后跟一条 system 注入消息。
+  // 其后的切点保留区不含任何对话消息——提交后末轮对话全部被折叠
+  // （实测事故：handoff preservedMsgRanges=[[277,277]]）。
+  const payloadWithMessages = (messages) => ({
+    preamblePercent: 0.1,
+    preambleCharCount: 10,
+    rounds: [{ userPreview: 'task', assistantPreview: '', charPercent: 0.8, cumulativePercent: 0.8, suggestedTrim: false, turnStart: 1, msgIndexStart: 0, msgIndexEnd: messages.length - 1, toolCalls: [] }],
+    messages,
+  });
+  const fetchWith = (payload) => async () => ({ ok: true, json: async () => payload });
+
+  it('renders the tail tool chip as a plain span when the keep zone holds only the injected system message', async () => {
+    const messages = [
+      { index: 0, role: 'user', roundIndex: 0, preview: 'task', charCount: 10, contentCharCount: 10 },
+      { index: 1, role: 'assistant', roundIndex: 0, preview: '', charCount: 5, contentCharCount: 0, toolCalls: [{ id: 'a', name: 'edit', summary: 'edit(a)' }] },
+      { index: 2, role: 'tool', roundIndex: 0, charCount: 20, contentCharCount: 0, toolCallId: 'a' },
+      { index: 3, role: 'assistant', roundIndex: 0, preview: '', charCount: 5, contentCharCount: 0, toolCalls: [{ id: 'b', name: 'write', summary: 'write(b)' }] },
+      { index: 4, role: 'tool', roundIndex: 0, charCount: 20, contentCharCount: 0, toolCallId: 'b' },
+      { index: 5, role: 'system', roundIndex: 0, charCount: 15, contentCharCount: 15 },
+    ];
+    const { ctx, elements } = createTrimPage(fetchWith(payloadWithMessages(messages)));
+    await ctx.window.openTrimPage('programming-helper', 'session-1');
+    elements.get('trim-page-mode').dispatch('click', clickEvent('.trim-page-mode-btn', { dataset: { mode: 'ratio' } }));
+    // 切点 3 入轮内：detail 展开，唯一工具段 chip cutIndex=5——保留区 [5,6) 仅 system
+    const html = elements.get('trim-page-list').innerHTML;
+    assert.doesNotMatch(html, /data-set-cut="5"/, 'chip after the last dialogue message must not be clickable');
+    assert.match(html, /<span class="trim-tl-chip">/, 'the guarded chip falls back to a plain span');
+  });
+
+  it('keeps the chip clickable when dialogue text follows in the keep zone', async () => {
+    const messages = [
+      { index: 0, role: 'user', roundIndex: 0, preview: 'task', charCount: 10, contentCharCount: 10 },
+      { index: 1, role: 'assistant', roundIndex: 0, preview: '', charCount: 5, contentCharCount: 0, toolCalls: [{ id: 'a', name: 'edit', summary: 'edit(a)' }] },
+      { index: 2, role: 'tool', roundIndex: 0, charCount: 20, contentCharCount: 0, toolCallId: 'a' },
+      { index: 3, role: 'assistant', roundIndex: 0, preview: '', charCount: 5, contentCharCount: 0, toolCalls: [{ id: 'b', name: 'write', summary: 'write(b)' }] },
+      { index: 4, role: 'tool', roundIndex: 0, charCount: 20, contentCharCount: 0, toolCallId: 'b' },
+      { index: 5, role: 'assistant', roundIndex: 0, preview: 'done', charCount: 10, contentCharCount: 10 },
+      { index: 6, role: 'system', roundIndex: 0, charCount: 15, contentCharCount: 15 },
+    ];
+    const { ctx, elements } = createTrimPage(fetchWith(payloadWithMessages(messages)));
+    await ctx.window.openTrimPage('programming-helper', 'session-1');
+    elements.get('trim-page-mode').dispatch('click', clickEvent('.trim-page-mode-btn', { dataset: { mode: 'ratio' } }));
+    // 同一切点下工具段 chip cutIndex=5 保留区含 assistant[5] → 可点击
+    assert.match(elements.get('trim-page-list').innerHTML, /data-set-cut="5"/);
+  });
+
+  it('blocks submission when the keep zone holds no dialogue message', async () => {
+    let fetchCalls = 0;
+    const fetchImpl = async () => {
+      fetchCalls += 1;
+      return { ok: true, json: async () => payloadWithMessages([
+        { index: 0, role: 'user', roundIndex: 0, preview: 'task', charCount: 10, contentCharCount: 10 },
+        { index: 1, role: 'assistant', roundIndex: 0, preview: 'reply', charCount: 10, contentCharCount: 10 },
+        { index: 2, role: 'tool', roundIndex: 0, charCount: 20, contentCharCount: 0, toolCallId: 'a' },
+        { index: 3, role: 'system', roundIndex: 0, charCount: 15, contentCharCount: 15 },
+      ]) };
+    };
+    const { ctx, elements } = createTrimPage(fetchImpl, { ratioToCut: () => ({ cutIndex: 3, unmet: false }) });
+    const alerts = [];
+    ctx.window.alert = (message) => alerts.push(String(message));
+    await ctx.window.openTrimPage('programming-helper', 'session-1');
+    elements.get('trim-page-mode').dispatch('click', clickEvent('.trim-page-mode-btn', { dataset: { mode: 'ratio' } }));
+    const callsAfterOpen = fetchCalls;
+    await ctx.window.submitTrimPage();
+    assert.ok(alerts.some((m) => m.includes('对话')), `expected a dialogue-guard alert, got: ${alerts.join(' | ')}`);
+    assert.equal(fetchCalls, callsAfterOpen, 'submission must not fire any request past the guard');
   });
 });
 

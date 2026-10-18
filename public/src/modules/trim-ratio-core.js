@@ -165,10 +165,34 @@
   }
 
   /**
+   * 切点有效性：保留区 [cutIndex, n) 内是否含 user / assistant 对话消息。
+   *
+   * 打断 / 任务提醒会在会话尾部注入 system 消息，其后（以及末尾）的安全
+   * 切点保留区只剩注入消息或为空——这类切点提交后末轮对话全部被折叠，
+   * 读数的 kept% 几乎全是折叠残留底量，掩盖保留区为空的事实（实测事故：
+   * preservedMsgRanges=[[277,277]] 仅保留一条任务状态提醒）。ratioToCut
+   * 的候选集与 trim 页提交守卫共用本判定。
+   */
+  function keepZoneHasDialogue(messages, cutIndex) {
+    var msgs = normalizeMessages(messages);
+    var c = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
+    for (var i = c; i < msgs.length; i++) {
+      var m = msgs[i];
+      if (m && (m.role === 'user' || m.role === 'assistant')) return true;
+    }
+    return false;
+  }
+
+  /**
    * 比例 → 切点。预算 = ratio × 总长；在安全切点中找保留最多的满足者
    * （cutIndex 最小的 kept(c) ≤ 预算），两级优先：
    *   1) 轮边界候选中找——切线落轮头，语义干净；
    *   2) 轮边界全超（单轮体量过大等）放宽到全部安全候选——切线入轮内。
+   *
+   * 候选有效性：保留区不含任何对话消息的切点（典型：尾部 system 注入
+   * 之后）先行剔除，不进帕累托——否则小预算下两级查找会退化到「全精简
+   * 附近」，保留区只剩注入消息。剔除后帕累托单调性不变（仍按 cutIndex
+   * 升序做严格递减过滤）。
    *
    * 帕累托过滤（单调保证）：kept(c) 随 c 增大总趋势递减，但折叠残留随
    * 切割量增长，会催生「切得更多反而保留不减」的坏切点（典型：切过
@@ -179,7 +203,7 @@
    * 反而更长。
    *
    * 连全精简（最小保留）都无法达标（前言占比过高）时返回最小保留候选并
-   * 标记 unmet。
+   * 标记 unmet；无任何有效候选（无对话消息的会话）返回 0（全保留）。
    *
    * @param {number} ratio 0..1
    * @returns {{cutIndex: number, unmet: boolean}}
@@ -188,7 +212,9 @@
     var msgs = normalizeMessages(messages);
     var total = totalCharCount(msgs, preambleCharCount);
     var budget = Math.max(Math.min(ratio, 1), 0) * total;
-    var candidates = safeCutCandidates(msgs);
+    var candidates = safeCutCandidates(msgs).filter(function (candidate) {
+      return keepZoneHasDialogue(msgs, candidate.cutIndex);
+    });
     var keptByCut = {};
     var keptFor = function (c) {
       if (!Object.prototype.hasOwnProperty.call(keptByCut, c)) {
@@ -248,6 +274,7 @@
 
   var api = {
     safeCutCandidates: safeCutCandidates,
+    keepZoneHasDialogue: keepZoneHasDialogue,
     estimateFoldResidue: estimateFoldResidue,
     keptCharCount: keptCharCount,
     ratioToCut: ratioToCut,
