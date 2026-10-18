@@ -110,6 +110,7 @@ async function loadAgentData(agentId) {
       read: 'Read',
       write: 'Write',
       edit: 'Edit',
+      batch_replace: 'Batch Replace',
       glob: 'Glob',
       grep: 'Grep',
       ls: 'LS',
