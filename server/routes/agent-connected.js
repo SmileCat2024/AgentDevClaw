@@ -92,7 +92,9 @@ export function createConnectedAgentsQuery(deps) {
     resolveThreadControl = getThreadControl,
   } = deps;
 
-  // 存活 Runtime、接续挡板或仍可寻址的未归档线程资产都能保留 APP 入口。
+  // 存活 Runtime 或 rotating 接续挡板（持久化事务事实）保留 APP 入口；
+  // 其余未归档线程资产（open/hold/rotation_failed 等）不代表运行态，
+  // 不撑入口（ADR-0025 原始裁决，2026-10-18 回摆撤销资产驱动扩展）。
   async function hasRunningSessions(agentId) {
     const hasRuntime = listAgentRuntimes(agentId).some((runtime) => (
       isManagedRuntimeRunning(runtime) && Boolean(runtime.selectedSessionId)
@@ -105,11 +107,11 @@ export function createConnectedAgentsQuery(deps) {
         control.core.listThreads({ agentId }),
         control.archive.list().catch(() => ({})),
       ]);
-      // listThreads 是 index 摘要（无 deleting）：摘要初筛归档 / closed 后，
+      // listThreads 是 index 摘要（无 deleting）：摘要初筛 rotating / 归档后，
       // 按全量记录排除删除事务窗口——deleting 只写在记录文件上。
       const candidates = threads.filter((thread) => (
         String(thread?.agentId || '').trim() === agentId
-          && thread?.status !== 'closed'
+          && thread?.status === 'rotating'
           && !Object.hasOwn(archiveEntries, thread?.threadId)
       ));
       for (const thread of candidates) {
@@ -176,7 +178,7 @@ export function createConnectedAgentsQuery(deps) {
         sidebarGroup: agent.sidebarGroup || null,
         // on-demand 存在性（服务端合流，前端纯消费）：作者声明默认 +
         // 用户覆盖（workspace-settings）合流出 visibilityPolicy；auto =
-        // 有存活且绑定 Session 的 Runtime，或未归档线程资产 / 接续挡板时显示。sidebarVisible 是最终判定结果。
+        // 有存活且绑定 Session 的 Runtime，或 rotating 接续挡板在途时显示。sidebarVisible 是最终判定结果。
         ...(visibility === 'on-demand' ? await (async () => {
           const overrides = await readVisibilityOverrides();
           const visibilityPolicy = overrides[agent.id] === 'always' ? 'always' : 'auto';

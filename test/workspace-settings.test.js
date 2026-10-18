@@ -109,7 +109,7 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
     assert.equal(coder.sidebarVisible, true);
   });
 
-  it('存活且绑定会话的 Runtime 或未归档线程资产显示入口', async () => {
+  it('存活且绑定会话的 Runtime 显示入口；未归档线程资产不撑入口', async () => {
     const runtime = (sessionId, overrides = {}) => ({
       agentId: 'coder',
       selectedSessionId: sessionId,
@@ -122,8 +122,8 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
     try {
       const ordinaryThread = [{ threadId: 'wt-idle', agentId: 'coder', status: 'open' }];
       const threadAsset = await createQuery({}, ordinaryThread).getConnectedAgents();
-      assert.equal(threadAsset.find((a) => a.id === 'coder').sidebarVisible, true,
-        '未归档的 open 线程资产在 Runtime 停止后仍显示入口');
+      assert.equal(threadAsset.find((a) => a.id === 'coder').sidebarVisible, false,
+        '未归档的 open 线程资产不代表运行态，不撑入口（ADR-0025 回摆）');
 
       managedAgents.set('coder::live', runtime('session-live'));
       assert.equal((await createQuery({}).getConnectedAgents()).find((a) => a.id === 'coder').sidebarVisible, true);
@@ -143,17 +143,17 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
     }
   });
 
-  it('未归档非 closed 且非 deleting 线程显示入口；归档、deleting、closed 线程不显示，hold 仍算资产', async () => {
+  it('仅 rotating 接续挡板撑入口；其余资产态（open/hold）、归档、deleting、closed 均不显示', async () => {
     managedAgents.clear();
     const thread = (threadId, overrides = {}) => ({ threadId, agentId: 'coder', status: 'open', ...overrides });
 
+    // 资产态不撑入口：open / hold 都不代表运行态
     for (const candidate of [
       thread('wt-open'),
-      thread('wt-rotating', { status: 'rotating' }),
       thread('wt-hold', { hold: true }),
     ]) {
-      const visible = await createQuery({}, [candidate]).getConnectedAgents();
-      assert.equal(visible.find((a) => a.id === 'coder').sidebarVisible, true, `${candidate.threadId} 显示入口`);
+      const hidden = await createQuery({}, [candidate]).getConnectedAgents();
+      assert.equal(hidden.find((a) => a.id === 'coder').sidebarVisible, false, `${candidate.threadId} 不显示入口`);
     }
 
     // deleting 只写在全量记录（index 摘要与普通 open 线程无异），经 getThread 排除
@@ -171,5 +171,10 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
     const rotating = [thread('wt-barrier', { status: 'rotating' })];
     const visible = await createQuery({}, rotating).getConnectedAgents();
     assert.equal(visible.find((a) => a.id === 'coder').sidebarVisible, true, 'rotating 接续挡板保留入口');
+
+    // 删除事务窗口内的 rotating 挡板不撑入口
+    const deletingRotating = { 'wt-barrier': thread('wt-barrier', { deleting: true }) };
+    const result = await createQuery({}, rotating, {}, deletingRotating).getConnectedAgents();
+    assert.equal(result.find((a) => a.id === 'coder').sidebarVisible, false, 'deleting 的 rotating 挡板不撑入口');
   });
 });

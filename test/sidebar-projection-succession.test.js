@@ -157,11 +157,11 @@ describe('coder APP 条目在接续窗口的存续', () => {
     assert.equal(coderChildEntries(f4).length, 1, 'F4 ready：successor 成为 coder 名下叶子');
     assert.equal(coderChildEntries(f4)[0].sidebar_entry_id, 'coder');
 
-    // F5 终态对照：runtime 全停且挡板已清——未归档线程是资产，仍撑住入口；
-    // 真正无资产（无线程）时 auto 隐藏。
+    // F5 终态对照：runtime 全停且挡板已清——未归档线程是资产但不代表
+    // 运行态（ADR-0025 原始裁决，2026-10-18 回摆：资产不撑入口），隐藏。
     setManaged();
     const f5 = await createQuery({ viewerAgents: [], threadSummaries: settledThread }).getConnectedAgents();
-    assert.equal(coderAppEntry(f5).sidebarVisible, true, 'F5：runtime 全停但未归档线程在，入口保留（资产驱动）');
+    assert.equal(coderAppEntry(f5).sidebarVisible, false, 'F5：runtime 全停且挡板已清，未归档线程不撑入口');
     const f5empty = await createQuery({ viewerAgents: [], threadSummaries: [] }).getConnectedAgents();
     assert.equal(coderAppEntry(f5empty).sidebarVisible, false, 'F5：无线程无挡板无 runtime，auto 入口隐藏');
 
@@ -172,7 +172,7 @@ describe('coder APP 条目在接续窗口的存续', () => {
     }
   });
 
-  it('无 Runtime 无线程资产时 auto 隐藏入口；未归档线程资产保留入口；always 覆盖仍可找回 APP', async () => {
+  it('无 Runtime 时 auto 隐藏入口（未归档线程资产不撑）；always 覆盖仍可找回 APP', async () => {
     setManaged();
     const autoList = await createQuery({
       viewerAgents: [],
@@ -183,12 +183,13 @@ describe('coder APP 条目在接续窗口的存续', () => {
     assert.equal(autoEntry.sidebarVisible, false, '无任何线程资产时 auto 隐藏');
     assert.equal(coderChildEntries(autoList).length, 0);
 
-    // 未归档线程是可寻址资产（C4）：入口必须保留，用户才能发现并唤醒它
+    // 未归档线程是可寻址资产（APP 首页全量列表可及），但不代表运行态：
+    // 不撑侧栏入口（ADR-0025 原始裁决，2026-10-18 回摆撤销资产驱动扩展）。
     const assetList = await createQuery({
       viewerAgents: [],
       threadSummaries: [{ threadId: 'wt-idle', agentId: 'coder', status: 'open' }],
     }).getConnectedAgents();
-    assert.equal(coderAppEntry(assetList).sidebarVisible, true, '存在未归档线程资产时入口保留');
+    assert.equal(coderAppEntry(assetList).sidebarVisible, false, '未归档 open 线程资产不撑入口');
 
     const alwaysList = await createQuery({ viewerAgents: [], visibilityOverrides: { coder: 'always' } }).getConnectedAgents();
     assert.equal(coderAppEntry(alwaysList).sidebarVisible, true);
