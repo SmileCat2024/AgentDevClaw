@@ -678,7 +678,9 @@ class SessionLifecycle {
       try {
         await this.agent.dispose();
       } catch (error) {
-        persisted = false;
+        // dispose 只释放资源，其失败不影响已落盘快照的完整性：保存屏障的
+        // persisted 只反映保存结果，不得因释放失败把已成功的保存误报为失败
+        // （rotation 伪失败路径之一）。
         console.error(`[ProtoClaw Runtime] 释放资源失败 (session=${this.sessionId}):`, error);
       }
     }

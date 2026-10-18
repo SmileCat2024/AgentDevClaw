@@ -365,6 +365,84 @@ describe('agent-lifecycle', () => {
       assert.equal(runtime.stopped, true);
       assert.equal(runtime.stopping, false);
     });
+
+    // ── 早关闭竞态（伪失败）：子进程自行关闭（保存已落盘）→ session-exited
+    // 发出时服务端尚未监听（消息丢失）→ process.exit(0) → 服务端 onExit 无确认。
+    // 保存屏障的语义是"快照落盘确认"，不是"握手确认"：进程死亡且未确认时，
+    // 必须核验盘上保存事实，而不是把落盘成功的关闭误判为失败（rotation 伪失败
+    // 的主路径，10-17/10-18 三次事故同签名）。
+    describe('early self-close persistence race', () => {
+      it('passes the barrier when the host exits after a fresh on-disk save', async () => {
+        const mod = createAgentLifecycleModule(createMockCtx({
+          readSessionSavedAt: async () => Date.now() - 500,
+        }));
+        const child = createMockChild();
+        const runtime = injectRuntime('shared-agent', 'raced-session', child);
+        runtime.processGroupKey = 'shared-agent::/project';
+        child.send = () => {
+          // 子进程已自行关闭（保存完成）后垂死：remove-session 无人处理，进程退出
+          queueMicrotask(() => {
+            child.exitCode = 0;
+            child.emit('exit', 0);
+          });
+        };
+
+        const status = await mod.stopManagedAgent('shared-agent', 'raced-session', { waitForPersistence: true });
+        assert.equal(status.status, 'stopped');
+        assert.equal(runtime.stopped, true);
+      });
+
+      it('fails the barrier when the host exits and the on-disk save is stale', async () => {
+        const mod = createAgentLifecycleModule(createMockCtx({
+          readSessionSavedAt: async () => Date.now() - 60_000,
+        }));
+        const child = createMockChild();
+        const runtime = injectRuntime('shared-agent', 'stale-save-session', child);
+        runtime.processGroupKey = 'shared-agent::/project';
+        child.send = () => {
+          queueMicrotask(() => {
+            child.exitCode = 0;
+            child.emit('exit', 0);
+          });
+        };
+
+        const stopping = mod.stopManagedAgent('shared-agent', 'stale-save-session', { waitForPersistence: true });
+        await assert.rejects(stopping, /Failed to confirm session persistence/);
+      });
+
+      it('fails the barrier when the host exits and no on-disk save exists', async () => {
+        const mod = createAgentLifecycleModule(createMockCtx({
+          readSessionSavedAt: async () => null,
+        }));
+        const child = createMockChild();
+        const runtime = injectRuntime('shared-agent', 'no-save-session', child);
+        runtime.processGroupKey = 'shared-agent::/project';
+        child.send = () => {
+          queueMicrotask(() => {
+            child.exitCode = 1;
+            child.emit('exit', 1);
+          });
+        };
+
+        const stopping = mod.stopManagedAgent('shared-agent', 'no-save-session', { waitForPersistence: true });
+        await assert.rejects(stopping, /Failed to confirm session persistence/);
+      });
+
+      it('keeps an explicit persisted:false acknowledgement a hard failure', async () => {
+        const mod = createAgentLifecycleModule(createMockCtx({
+          readSessionSavedAt: async () => Date.now() - 100,
+        }));
+        const child = createMockChild();
+        const runtime = injectRuntime('shared-agent', 'explicit-fail-session', child);
+        runtime.processGroupKey = 'shared-agent::/project';
+        child.send = () => {};
+
+        const stopping = mod.stopManagedAgent('shared-agent', 'explicit-fail-session', { waitForPersistence: true });
+        child.emit('message', { type: 'session-exited', sessionId: 'explicit-fail-session', persisted: false });
+
+        await assert.rejects(stopping, /Failed to confirm session persistence/);
+      });
+    });
   });
 
   // ── onAgentExit ──────────────────────────────────────────

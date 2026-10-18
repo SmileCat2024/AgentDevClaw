@@ -274,10 +274,17 @@ describe('T002: 提交点 READY 门禁（successor 未 READY 不得成为 head�
       });
 
       // 挡板已收敛：旧 head 的 runtime 就绪时 pending 照常投递
-      // （若仍靠 5 分钟 TTL 惰性清除，这里会被 handoff_in_progress 挡住）
-      // R3：播种恢复指令随挡板在 pending 里，与交接期指令一起投向旧 head
+      // （若仍靠 5 分钟 TTL 惰性清除，这里会被 handoff_in_progress 挡住）。
+      // R3 唤醒指令的措辞前提（「上下文已精简接续」）在 READY 门失败时不成立
+      // ——head 未推进，作废不投（succession_precondition_violated）；重试接续
+      // 同 from 再 begin 时幂等键不认 FAILED 会重新播种（wt-58471cd9 事故链修复）。
       const delivery = await env.core.deliverPendingCommands(thread.threadId);
-      assert.equal(delivery.delivered, 2);
+      assert.equal(delivery.delivered, 1, '普通 pending 指令照常投给旧 head');
+      assert.equal(turns.length, 1);
+      const after = await env.core.getThread(thread.threadId);
+      const seeded = after.commands.find((c) => String(c.idempotencyKey || '').startsWith(`succession:${thread.threadId}:`));
+      assert.equal(seeded.status, 'failed', 'R3 假前提指令作废');
+      assert.equal(seeded.lastReason, 'succession_precondition_violated');
       for (const turn of turns) {
         assert.equal(turn.agentId, 'viewer-s1', 'pending 投向仍有效的旧 head，不投向未知目标');
       }

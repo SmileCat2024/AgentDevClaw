@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createThreadRotationService } from '../server/thread-control/thread-rotation.js';
 
-function createHarness({ stopResult = 'success' } = {}) {
+function createHarness({ stopResult = 'success', retireError = null } = {}) {
   let releaseStop;
   let stopCalls = 0;
   let snapshotReads = 0;
@@ -23,8 +23,13 @@ function createHarness({ stopResult = 'success' } = {}) {
     },
     stopManagedAgent: async (_agentId, _sessionId, options) => {
       stopCalls += 1;
-      assert.deepEqual(options, { waitForPersistence: true });
-      return stopGate;
+      if (options?.waitForPersistence) {
+        assert.deepEqual(options, { waitForPersistence: true });
+        return stopGate;
+      }
+      // 无屏障退役路径（retireRuntime）：可注入失败
+      if (retireError) throw retireError;
+      return 'stopped';
     },
     threadIntegration: {
       beginSessionSuccession: async () => ({ applied: true, threadId: thread.threadId }),
@@ -126,6 +131,32 @@ describe('thread rotation session save barrier', () => {
     assert.equal(harness.failCalls, 1);
   });
 
+  it('logs when retiring the over-threshold runtime fails instead of swallowing silently', async () => {
+    // wt-58471cd9 链的僵尸 head 来源：退役失败曾被 .catch(() => {}) 静默
+    // 吞掉，旧 runtime 存活继续接收注定超限/前提为假的投递，且无从排查。
+    const errors = [];
+    const originalError = console.error;
+    console.error = (...args) => errors.push(args.map(String).join(' '));
+    try {
+      const harness = createHarness({
+        stopResult: new Error('persistence not confirmed'),
+        retireError: new Error('kill failed'),
+      });
+      const rotating = harness.service.handleContextGuard('coder', 'head-1');
+      await Promise.resolve();
+      await Promise.resolve();
+      harness.releaseStop();
+      const result = await rotating;
+
+      assert.equal(result.applied, false);
+      const retireLog = errors.find((line) => line.includes('failed to retire over-threshold runtime'));
+      assert.ok(retireLog, '退役失败必须留痕（僵尸 head 可排查）');
+      assert.ok(retireLog.includes('kill failed'), '留痕包含失败原因');
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   it('runtime closes a session single-flight: concurrent close calls share one outcome and one notification', async () => {
     // 审核发现的并发关闭竞态：remove-session 与输入循环结束并发关闭同一
     // 会话时，第二次调用曾因 remove() 的 disposed 守卫立即返回 false，在
@@ -145,5 +176,26 @@ describe('thread rotation session save barrier', () => {
     // 通知必须只发一次：session-exited 只能出现在共享的关闭 Promise 内。
     const notifyCount = (closeBlock.match(/type: 'session-exited'/g) || []).length;
     assert.equal(notifyCount, 1, 'session-exited 通知只能在共享关闭路径上发出一次');
+  });
+
+  it('persistence report reflects the save outcome only, not dispose failures', async () => {
+    // 伪失败路径之二：remove() 曾把 agent.dispose() 的失败翻成 persisted:false，
+    // 把已成功落盘的保存误报给服务端屏障（10-17/10-18 事故的候选签名）。
+    // persisted 的语义是"快照落盘确认"，dispose 只释放资源、失败仅记日志。
+    // remove() 不可导出，源码级断言锁定 catch 块不得否定保存事实。
+    const source = fs.readFileSync(new URL('../scripts/run-prebuilt-agent.js', import.meta.url), 'utf8');
+    const removeStart = source.indexOf('async remove() {');
+    const removeEnd = source.indexOf('// 会话关闭单飞', removeStart);
+    assert.notEqual(removeStart, -1, 'remove() 应存在');
+    assert.notEqual(removeEnd, -1, 'remove() 结束标记应存在');
+    const removeBlock = source.slice(removeStart, removeEnd);
+    const disposeSection = removeBlock.slice(removeBlock.indexOf('await this.agent.dispose()'));
+    assert.ok(disposeSection.includes('释放资源失败'), 'dispose 失败应记日志');
+    const persistedFlips = (disposeSection.match(/persisted = false/g) || []).length;
+    assert.equal(persistedFlips, 0, 'dispose 失败不得翻 persisted:false（保存事实不受释放失败影响）');
+    // saveSession 失败仍然必须否定 persisted（真失败语义不变）。
+    assert.ok(removeBlock.includes('保存会话失败'), 'saveSession 失败日志应存在');
+    const saveSection = removeBlock.slice(0, removeBlock.indexOf('await this.agent.dispose()'));
+    assert.ok(saveSection.includes('persisted = false'), '保存失败仍必须翻 persisted:false');
   });
 });

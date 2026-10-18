@@ -66,6 +66,19 @@ export function createThreadRotationService({
   /** 同一 session 的接力防重入（guard 事件可能随 call 结束多次上报） */
   const inflight = new Map();
 
+  /**
+   * 退役过阈旧 runtime（无屏障温和停机）。失败不阻断接续结果，但必须留痕：
+   * 退役失败的 runtime 会作为僵尸 head 存活，继续接收注定超限/前提为假的
+   * 投递（wt-58471cd9 链），静默吞错会让僵尸来源无从排查。
+   */
+  async function retireRuntime(agentId, sessionId) {
+    try {
+      await stopManagedAgent(agentId, sessionId);
+    } catch (error) {
+      console.error(`[thread-rotation] failed to retire over-threshold runtime ${agentId}::${sessionId}:`, error?.message || error);
+    }
+  }
+
   /** 策略解析包装：未注入解析器（旧装配/测试 stub）按未声明（组合语义）。 */
   async function resolveRotationStrategyOption(agentId) {
     if (typeof resolveRotationStrategy !== 'function') return null;
@@ -157,7 +170,7 @@ export function createThreadRotationService({
         // 不追加恢复指令、不做补投递——pending 工作归属留在旧 head。
         // 旧 runtime 上下文已过阈值（且触发器已一次性消耗），同样退役：
         // 与生成阶段失败同语义，留着只会接收注定超限的后续投递。
-        await stopManagedAgent(agentId, sessionId).catch(() => {});
+        await retireRuntime(agentId, sessionId);
         return {
           applied: false,
           threadId: thread.threadId,
@@ -173,7 +186,7 @@ export function createThreadRotationService({
     } catch (error) {
       // 接力失败时同样退役旧 runtime：其上下文已过阈值且触发器已一次性
       // 消耗，留着只会接收注定超限的后续投递。
-      await stopManagedAgent(agentId, sessionId).catch(() => {});
+      await retireRuntime(agentId, sessionId);
       // T002：失败阶段取错误 code（生成阶段 compact_or_successor 等），
       // 经共享失败收敛落盘并收敛挡板。
       const stage = error.code || 'compact_or_successor';

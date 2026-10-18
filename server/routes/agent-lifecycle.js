@@ -1,9 +1,11 @@
 import path from 'path';
+import { promises as fsp } from 'fs';
 import {
   APP_PORT, VIEWER_PORT, PROJECT_ROOT,
 } from '../shared/constants.js';
 import { readJsonSafe } from '../shared/fs-helpers.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
+import { getPrebuiltSessionFilePath } from '../shared/session-access.js';
 import {
   listAgentRuntimes, getAgentRuntime, getRuntimeByViewerAgentId, buildStatus, isChildProcessRunning,
 } from '../shared/agent-access.js';
@@ -56,6 +58,7 @@ export function createAgentLifecycleModule(ctx) {
     readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
     readViewerJson, getPendingInputCount, resolveAgentModelPresets,
     serviceLifecycle = null,
+    readSessionSavedAt = null,
   } = ctx;
 
   const _exitCallbacks = [];
@@ -110,6 +113,18 @@ export function createAgentLifecycleModule(ctx) {
     });
   }
 
+  // 默认盘上核验：读会话文件的 savedAt（子进程 saveSession 写入的时间戳）。
+  // 屏障核验只认"落盘事实"——读不到（文件缺失/损坏/无时间戳）一律视为未确认。
+  async function readSessionSavedAtFromDisk(agentId, sessionId) {
+    try {
+      const raw = await fsp.readFile(getPrebuiltSessionFilePath(agentId, sessionId), 'utf8');
+      const parsed = JSON.parse(raw);
+      return typeof parsed?.savedAt === 'number' ? parsed.savedAt : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function removeSharedSession(runtime, { waitForExit = false } = {}) {
     const sessionId = runtime?.selectedSessionId;
     const child = runtime?.process;
@@ -121,6 +136,7 @@ export function createAgentLifecycleModule(ctx) {
     }
 
     runtime.stopping = true;
+    const requestedAt = Date.now();
     let resolveRemoval;
     const removalPromise = new Promise((resolve) => { resolveRemoval = resolve; });
     runtime.stoppingPromise = removalPromise;
@@ -152,7 +168,22 @@ export function createAgentLifecycleModule(ctx) {
       convergeThreadBoardOnDeliberateStop(runtime.agentId, sessionId)
         .catch(() => { /* 收敛失败不阻断停止善后 */ });
     };
-    const onExit = () => settleRemoval(false);
+    // 早关闭竞态：子进程可能已自行关闭（保存落盘）并退出——session-exited 在
+    // 监听器注册前发出而丢失。屏障语义是"快照落盘确认"，不是握手确认：进程
+    // 死亡且无确认时核验盘上保存事实，落盘新鲜（>= 本次停止请求发起时刻，留
+    // 2s 时钟/调度容差）即通过。显式 persisted:false ack 不走此路径。
+    const confirmFromDisk = async () => {
+      const reader = readSessionSavedAt || readSessionSavedAtFromDisk;
+      try {
+        const savedAt = await reader(runtime.agentId || runtime.id, sessionId);
+        return typeof savedAt === 'number' && savedAt >= requestedAt - 2000;
+      } catch {
+        return false;
+      }
+    };
+    const onExit = () => {
+      void confirmFromDisk().then((confirmed) => settleRemoval(confirmed));
+    };
     child.on('message', onMessage);
     child.once?.('exit', onExit);
     try {
