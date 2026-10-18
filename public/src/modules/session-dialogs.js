@@ -3,8 +3,7 @@
  * 从 app-main.js 拆出 (域 R: trim/branch dialog)
  *
  * Trim 对话框已由统一精简页面（trim-page.js）替代并删除；
- * 本模块只保留分支对话框。fmtPct / renderPreambleItem 为
- * trim/branch 共用工具，随本模块保留。
+ * 本模块只保留分支对话框。
  *
  * 依赖全局状态 (定义在 app-core.js):
  *   currentLanguage
@@ -12,7 +11,8 @@
  *   renderCurrentMainView, escapeHtml, closeCompactMenu,
  *   getCurrentAgentRecord, createCompactedResumeSession,
  *   loadAgents, applyManagedPrebuiltAgent, setPreferredUnitMode,
- *   markSessionLoading, clearSessionLoading, window.switchAgent
+ *   markSessionLoading, clearSessionLoading, window.switchAgent,
+ *   fmtPct (app-core.js，trim/branch 共用口径)
  * 导出全局函数 (window.*):
  *   openBranchDialog, closeBranchDialog, submitBranch
  */
@@ -22,10 +22,6 @@ let branchDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercen
 const branchDialog = document.getElementById('branch-dialog');
 const branchRoundList = document.getElementById('branch-round-list');
 const branchFooterInfo = document.getElementById('branch-footer-info');
-
-function fmtPct(frac) {
-  return (frac * 100).toFixed(1) + '%';
-}
 
 function renderPreambleItem(preamblePercent) {
   if (preamblePercent <= 0) return '';

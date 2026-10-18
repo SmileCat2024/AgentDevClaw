@@ -447,6 +447,7 @@ function dialogsSandbox({ requests = [] } = {}) {
     var loadAgents = async function () {};
     var createSidebarOperationId = function (kind) { return 'op-' + kind; };
     var escapeHtml = function (value) { return String(value ?? ''); };
+    var fmtPct = function (frac) { return (frac * 100).toFixed(1) + '%'; }; // app-core 全局的沙箱替身
   `);
   // 远程目录 accessor（getHostNamespaceIdForSession 等）从 remote-connections.js
   // 加载；catalog 身份来自上方 mock 的 remote_catalog 响应。

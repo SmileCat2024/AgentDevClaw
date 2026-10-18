@@ -1204,6 +1204,11 @@ function formatWorkspaceDate(isoString) {
   return date.toLocaleString(currentLanguage === 'zh' ? 'zh-CN' : 'en-US');
 }
 
+/** 比例小数（0–1）→ 百分数文本（trim / 分支对话框的 preamble 占比等共用口径）。 */
+function fmtPct(frac) {
+  return (frac * 100).toFixed(1) + '%';
+}
+
 /**
  * Returns a time-of-day qualifier for the given hour.
  * 凌晨(0-5) / 上午(6-11) / 中午(12-13) / 下午(14-17) / 晚上(18-23)

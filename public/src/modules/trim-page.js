@@ -22,6 +22,7 @@
  *   requestArchivedSourceRuntimeCleanup, upsertConnectedAgent, getRuntimeId,
  *   isRemoteNamespaceAgentId, beginChatLoadingSession, clearChatLoadingSession,
  *   requestSwitch, getWorkspaceSessionById, getPathLeaf,
+ *   fmtPct (app-core.js，trim/branch 共用口径),
  *   window.RemoteConnections (远程精简切换)
  * 依赖模块: TrimRatioCore (trim-ratio-core.js, window 挂载)
  * 导出全局函数 (window.*): openTrimPage, closeTrimPage, submitTrimPage
@@ -60,10 +61,6 @@ const SKILL_INVOKE_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, Infinity];
 
 function L(zh, en) {
   return currentLanguage === 'zh' ? zh : en;
-}
-
-function fmtPct(frac) {
-  return (frac * 100).toFixed(1) + '%';
 }
 
 function fmtChars(n) {

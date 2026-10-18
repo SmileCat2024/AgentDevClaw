@@ -74,9 +74,10 @@ function createTrimPage() {
           { index: 5, role: 'assistant', roundIndex: 1, preview: 'reply 2', charCount: 10, contentCharCount: 10 },
         ],
       }),
-    }),
+    })),
     closeCompactMenu() {},
     currentLanguage: 'zh',
+    fmtPct: (frac) => (frac * 100).toFixed(1) + '%', // app-core 全局的沙箱替身
   });
   ctx.loadSource('public/src/modules/trim-page.js');
   return { ctx, elements };
