@@ -70,12 +70,12 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 
 ## 本地 Web 应用联测（开发服务器工作流）
 
-测本地开发中的应用时，服务器生命周期归后台命令工具（bash_bg），浏览器侧归本 shell：
+测本地开发中的应用时，dev server 的启停由宿主的命令执行工具负责（本 shell 只管浏览器侧）：
 
-1. **先分流**：纯静态 HTML 不起浏览器——`file://` 本就不入表，直接 read 源码定位结构；动态页面才走会话。
-2. **起服务**：bash_bg 后台跑 dev server（如 `npm run dev`），配 readyPattern（如 `listening on`）等就绪信号再开浏览器；本地地址无需 profile。
+1. **先分流**：纯静态 HTML 不起浏览器——`file://` 本就不入表，直接读源码文件定位结构；动态页面才走会话。
+2. **起服务**：后台跑 dev server（如 `npm run dev`），确认就绪信号（启动日志报端口监听）再开浏览器；本地地址无需 profile。
 3. **联测**：`open 'http://localhost:<端口>'` → snapshot 拿 refs → 交互验证；前端报错看 `console`，接口调用看 `requests`，留存画面用 `capture`/`screenshot`。本地地址含 `&` 查询串同样会被拒，改经页面内导航到达。
-4. **双收尾**：`close` 会话 + 停掉后台任务。页面异常先看 console，服务侧问题看后台任务日志。
+4. **收尾**：`close` 会话，停掉自己起的服务。页面异常先看 console，服务侧问题看服务日志。
 
 ## 登录态与 profile（持久化档案）
 
