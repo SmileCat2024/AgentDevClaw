@@ -1,6 +1,6 @@
 ---
 name: playwright-shell
-description: "浏览器页面取证与受控会话（playwright-shell feature 内嵌技能）：用 playwright_shell 工具完成单次渲染取证（截图/PDF/HAR，可带 --profile 登录档案与 --viewport-size/--color-scheme/--wait-for-timeout/--paper-format 等渲染参数）与多步页面交互（导航/输入/点击/悬停/下拉/标签页/网络抓包/控制台），并支持持久化登录档案（open --profile 会话与产物动词 --profile 共用，登录态跨会话留存）；含动词用法、refs 纪律、URL 引号纪律、资产缺失修复、会话收尾与超时纪律。适用于对网页做取证留存或按步骤完成页面任务。"
+description: "浏览器页面取证与受控会话（playwright-shell feature 内嵌技能）：用 playwright_shell 工具完成单次渲染取证（截图/PDF/HAR，可带 --profile 登录档案与 --viewport-size/--color-scheme/--wait-for-timeout/--paper-format 等渲染参数）与多步页面交互（导航/输入/点击/悬停/下拉/标签页/网络抓包/控制台），并支持持久化登录档案（open --profile 会话与产物动词 --profile 共用，登录态跨会话留存）；含动词用法、refs 纪律、URL 引号纪律、资产缺失修复、会话收尾与超时纪律。适用于对网页做取证留存、按步骤完成页面任务，以及联测本地开发中的 Web 应用。"
 ---
 
 # 浏览器页面取证与会话 Skill
@@ -68,6 +68,15 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 6. **超时唯一闸门是工具 timeout 契约**；会话命令是快命令（转发给常驻 daemon），超时一般只影响当前一步。
 7. **要登录态就带 profile**：任务涉及已登录站点时，会话用 `open '<url>' --profile=<名称>`，一次性取证用 `screenshot '<url>' <out.png> --profile=<名称>`（pdf/har 同），不要裸跑。先用 profile-list 查已有档案——输出里 `→` 后是该档案用过的站点域名，按任务站点自动匹配；对不上号再问用户。
 
+## 本地 Web 应用联测（开发服务器工作流）
+
+测本地开发中的应用时，服务器生命周期归后台命令工具（bash_bg），浏览器侧归本 shell：
+
+1. **先分流**：纯静态 HTML 不起浏览器——`file://` 本就不入表，直接 read 源码定位结构；动态页面才走会话。
+2. **起服务**：bash_bg 后台跑 dev server（如 `npm run dev`），配 readyPattern（如 `listening on`）等就绪信号再开浏览器；本地地址无需 profile。
+3. **联测**：`open 'http://localhost:<端口>'` → snapshot 拿 refs → 交互验证；前端报错看 `console`，接口调用看 `requests`，留存画面用 `capture`/`screenshot`。本地地址含 `&` 查询串同样会被拒，改经页面内导航到达。
+4. **双收尾**：`close` 会话 + 停掉后台任务。页面异常先看 console，服务侧问题看后台任务日志。
+
 ## 登录态与 profile（持久化档案）
 
 - `open '<url>' --profile=<名称>` 使用持久化登录档案：档案目录在用户数据目录下（报文与 `env` 输出给出根目录位置），浏览器在该目录里保留 cookie、localStorage 等站点数据——**登录态跨会话有效**。名称只允许字母/数字开头，含字母/数字/下划线/连字符，长度 1-64。
@@ -99,6 +108,7 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 | 站点要求重新登录（明明带过 profile） | 服务端会话可能已失效（过期/2FA/风控踢下线）：加 --headed 人工重登一次，档案会记住新登录态 |
 | 站点弹出人机验证（如百度安全验证） | 反自动化策略，不是故障：headed 模式人工接管过验证；或换等效入口（如站内搜索）。不要反复重试同形请求 |
 | `click` 后页面没动 | 链接可能开了新 tab：tab-list + tab-select 切换 |
+| snapshot 看不到预期内容 / 页面空白 | 动态内容未就绪（异步渲染、懒加载）：会话内重新 snapshot 轮询（无 wait 动词），勿凭旧 refs 硬操作；产物截图空白改加 `--wait-for-timeout=<ms>` |
 | snapshot 输出过大被截断 | 报文含完整落盘路径，分段读取文件 |
 | 未知动词报文 | 按报文里的可用动词清单与指引自我纠正（交互面只有 snapshot/find/fill/press/click/tab 系列） |
 | URL 含 `&` 被拒 | 已知边界：换无查询分隔符的 URL 或改用页面可直达地址 |
