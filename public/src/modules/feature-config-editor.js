@@ -280,6 +280,7 @@ function createFeatureConfigEditor(options = {}) {
     `;
     mainEl.scrollTop = 0;
     attachShowWhen(mainEl);
+    enhanceSelects(mainEl);
     applyShellAvailability();
   }
 
@@ -336,9 +337,17 @@ function createFeatureConfigEditor(options = {}) {
     const disabled = !!state.resolvedError || !state.resolved;
     const tmp = document.createElement('div');
     tmp.innerHTML = renderRow(prop, fullKey, states.get(fullKey), disabled);
-    row.replaceWith(tmp.firstElementChild);
+    const newRow = tmp.firstElementChild;
+    row.replaceWith(newRow);
     attachShowWhen(host.querySelector('[data-fce-main]'));
+    enhanceSelects(newRow);
     applyShellAvailability();
+  }
+
+  // select 下拉统一走 ClawSelect 增强（与模型配置页同款视觉）；组件未加载时
+  // 保留原生 select 的 fs-select 样式作为降级。enhance 幂等，局部重建安全。
+  function enhanceSelects(container) {
+    if (container && window.ClawSelect?.enhanceAll) window.ClawSelect.enhanceAll(container);
   }
 
   // ── 控件 ────────────────────────────────────────────────────
@@ -414,7 +423,7 @@ function createFeatureConfigEditor(options = {}) {
     const val = value != null ? String(value) : '';
     switch (prop.type) {
       case 'select': {
-        let h = `<select class="fs-select" data-config-key="${escapeHtml(fullKey)}"${dis}>`;
+        let h = `<select class="fs-select" data-claw-select data-config-key="${escapeHtml(fullKey)}"${dis}>`;
         for (const o of resolveSelectOptions(prop, value)) {
           h += `<option value="${escapeHtml(String(o.value))}"${String(o.value) === val ? ' selected' : ''}>${escapeHtml(o.label)}</option>`;
         }

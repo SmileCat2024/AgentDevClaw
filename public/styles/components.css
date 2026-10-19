@@ -9196,8 +9196,11 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   padding: 24px;
 }
 
-/* 字段行：布局由 ph-mc-row 提供，此处只挂状态与控件 */
+/* 字段行：布局由 ph-mc-row 提供，此处只挂状态与控件。
+   select 走 ClawSelect 增强后视觉载体是 .claw-select wrapper（原生 select
+   隐藏），状态样式需同时覆盖 wrapper。 */
 .fs-row.fs-state-follow .fs-select,
+.fs-row.fs-state-follow .claw-select,
 .fs-row.fs-state-follow .fs-input,
 .fs-row.fs-state-follow .fs-checkbox,
 .fs-row.fs-state-follow .fs-list {
@@ -9206,6 +9209,7 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
 }
 
 .fs-row.fs-state-follow:hover .fs-select,
+.fs-row.fs-state-follow:hover .claw-select,
 .fs-row.fs-state-follow:hover .fs-input,
 .fs-row.fs-state-follow:hover .fs-list,
 .fs-row.fs-state-follow .fs-select:focus,
@@ -9235,6 +9239,7 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
 }
 
 .fs-row-ctrl .fs-select,
+.fs-row-ctrl .claw-select,
 .fs-row-ctrl .fs-input,
 .fs-row-ctrl .fs-list { flex: 1 1 auto; min-width: 0; }
 
@@ -9266,10 +9271,12 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   background: rgba(91,141,239,0.08);
 }
 
-/* 即时保存失败：行内红边提示 */
+/* 即时保存失败：行内红边提示（select 增强后红边落在 trigger 上） */
 .fs-save-error .fs-select,
 .fs-save-error .fs-input,
 .fs-save-error .fs-list-item .fs-input { border-color: var(--error, #e55) !important; }
+
+.fs-save-error .claw-select .claw-select-trigger { border-color: var(--error, #e55) !important; }
 
 /* Shell availability badges */
 .fs-shell-badge {
