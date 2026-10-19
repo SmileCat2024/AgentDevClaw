@@ -63,9 +63,18 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   let isLastRequest = false;
   let overview = viewState && viewState.overview || {};
 
-  // 模型名：overview 实时优先，回退到 session 元数据
+  // 模型名：swap 回执（ack 即生效）优先——overview 帧经 SSE/轮询通道送达，
+  // 广域链路下可能滞后 ack 数秒；其次 overview 实时，回退到 session 元数据。
+  // getter（window.ClawFW.getActiveModelSwapReceipt，input-model-switcher.js）
+  // 内部完成退役判定，无回执时返回 null 走原链路。
   let modelName = '';
-  if (overview.modelName) {
+  let swapReceipt = (window.ClawFW && typeof window.ClawFW.getActiveModelSwapReceipt === 'function')
+    ? window.ClawFW.getActiveModelSwapReceipt()
+    : null;
+  if (swapReceipt && swapReceipt.modelName) {
+    modelName = swapReceipt.modelName;
+  }
+  if (!modelName && overview.modelName) {
     modelName = overview.modelName;
   }
   if (!modelName && activeSession) {

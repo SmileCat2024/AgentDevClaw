@@ -63,6 +63,10 @@ function createThinkingEffortSandbox(mocks = {}) {
     getCachedThinkingEffort: () => mocks.cachedEffort,
     // Mock _getCurrentPreset
     _getCurrentPreset: () => mocks.preset ?? null,
+    // Mock _activeSwapReceipt（swap 乐观回执，input-model-switcher.js 模块内
+    // 私有；本套件锁定的是无回执时的回退链：cache → overview → preset 默认。
+    // 有回执时的行为由 input-model-swap-optimistic.test.js 锁定）
+    _activeSwapReceipt: () => null,
     // currentOverviewSnapshot will be set per-test
     currentOverviewSnapshot: mocks.overview ?? null,
   });

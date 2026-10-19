@@ -4,13 +4,17 @@
  *
  * 包含：
  * - model 切换下拉：_getInputAgentId / _getInputDefaultPresetName /
+ *   _currentSwapReceiptPresetName（swap 乐观回执，见下方 _swapReceipt）/
  *   _closeInputModelDropdown / _inputModelDropdownOutsideClick /
  *   _performInputModelSwap / window.toggleInputModelDropdown / updateInputModelSwitcher
  * - thinking effort 切换下拉：OPENAI_EFFORT_LABELS / ANTHROPIC_EFFORT_LABELS /
  *   _getCurrentPreset / _getCurrentPresetProtocol / _getEffortList / _getEffortLabel /
- *   _getCurrentThinkingEffort / _currentModelSupportsThinking /
+ *   _getCurrentThinkingEffort（回执优先，盖住滞后 overview 同步进缓存的旧档位）/
+ *   _currentModelSupportsThinking /
  *   _closeThinkingEffortDropdown / _inputThinkingDropdownOutsideClick /
  *   _performThinkingEffortSwap / window.toggleThinkingEffortDropdown / updateThinkingEffortSwitcher
+ * - 跨模块只读出口：window.ClawFW.getActiveModelSwapReceipt（上下文条模型名
+ *   经它优先读 swap 回执，chat-context-bar.js）
  *
  * 依赖（全局符号，由先于本文件加载的脚本提供，加载序见 index.html）：
  * - escapeHtml, currentLanguage, ClawToast (app-core.js)
@@ -26,6 +30,58 @@
 
 let _inputModelDropdown = null;
 let _inputModelDropdownLoading = false;
+
+// swap 成功回执的乐观投影：ack 即 runtime 新状态（requestRuntimeAck 等
+// setModel / setThinkingEffort 完成才回包），但 overview 快照经 SSE 事件 /
+// 轮询通道送达——广域链路（反向代理缓冲等）下可能滞后 ack 数秒，切换器
+// 与上下文条不得等它。模型切换与思考强度切换共用一份回执（后者 preset
+// 不变、只断言 effort 轴）。退役规则（读取点 _activeSwapReceipt 内联执行）：
+// - runtimeKey !== currentRuntimeAgentId（会话切换 / runtime 重启）→ 整体失效；
+// - overview 仍是切换前旧快照（preset / effort 任一轴落在 prev 链上）→ 回执继续生效；
+// - overview 与回执同值（追认）→ 保持；任一轴出现更新的第三值（feature
+//   发起的再切换等）→ 回执退役，overview 重新权威。
+let _swapReceipt = null; // Object.freeze({ runtimeKey, presetName, modelName, thinkingEffort, hasEffort, prevPresetNames, prevEffortKeys })
+
+function _effortKey(value) {
+  return value == null ? '' : String(value);
+}
+
+function _activeSwapReceipt() {
+  if (!_swapReceipt) return null;
+  const rt = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
+  if (_swapReceipt.runtimeKey !== rt) {
+    _swapReceipt = null;
+    return null;
+  }
+  const overview = (typeof currentOverviewSnapshot !== 'undefined' && currentOverviewSnapshot) || null;
+  const overviewPreset = (overview && typeof overview.presetName === 'string') ? overview.presetName : '';
+  if (overviewPreset && overviewPreset !== _swapReceipt.presetName
+    && !_swapReceipt.prevPresetNames.includes(overviewPreset)) {
+    _swapReceipt = null;
+    return null;
+  }
+  if (_swapReceipt.hasEffort) {
+    const overviewEffort = overview ? _effortKey(overview.thinkingEffort) : '';
+    if (overviewEffort !== _effortKey(_swapReceipt.thinkingEffort)
+      && !_swapReceipt.prevEffortKeys.includes(overviewEffort)) {
+      _swapReceipt = null;
+      return null;
+    }
+  }
+  return _swapReceipt;
+}
+
+function _currentSwapReceiptPresetName() {
+  const receipt = _activeSwapReceipt();
+  return receipt ? (receipt.presetName || '') : '';
+}
+
+// 跨模块只读取用（上下文条模型名，window.ClawFW 命名空间纪律）：返回当前
+// 生效的回执（已过退役判定）或 null；对象为冻结快照，调用方不得修改。
+window.ClawFW = window.ClawFW || {};
+window.ClawFW.getActiveModelSwapReceipt = function () {
+  return _activeSwapReceipt();
+};
 
 // ── preset 列表的缓存与回源统一走 owner 模块（model-preset-cache.js）────
 // 会话命名空间语义（ADR-0011）：agentId 始终携带当前会话身份（远程为
@@ -53,7 +109,12 @@ function _getInputAgentId() {
 }
 
 function _getInputDefaultPresetName() {
-  // Priority 1: overview.presetName — the runtime LLM instance's actual preset.
+  // Priority 1: swap 回执（ack 即生效）。overview 快照仍在链路上时它滞后于
+  // 回执，不能作为切换后第一屏的数据源；追认或更新后回执自行退役。
+  let receiptPreset = _currentSwapReceiptPresetName();
+  if (receiptPreset) return receiptPreset;
+
+  // Priority 2: overview.presetName — the runtime LLM instance's actual preset.
   // This is the same per-session data source as the context bar's modelName.
   // It's set by agent.setLLM() and pushed via overview poll, so it's always
   // correct for the current session and immune to loadAgents replacement gaps.
@@ -122,6 +183,32 @@ async function _performInputModelSwap(agentId, presetName) {
     });
     const result = await resp.json();
     if (result.ok) {
+      // 乐观回执：ack 即生效，按钮立即显示新模型与档位；overview 快照追认
+      // （同值）或前进到更新值（feature 再切换）后回执退役，会话切换整体
+      // 失效。prev 链记录切换前的展示值（含上一次回执的值），用于把
+      // 「仍是旧快照的 overview 帧」与「更新的权威变化」区分开。
+      const receiptMeta = result.meta || null;
+      const prevDisplay = _getInputDefaultPresetName() || '';
+      const prevEffort = _getCurrentThinkingEffort();
+      const sameRuntimeReceipt = (_swapReceipt && _swapReceipt.runtimeKey === (runtimeId || ''))
+        ? _swapReceipt : null;
+      _swapReceipt = Object.freeze({
+        runtimeKey: runtimeId || '',
+        presetName: (receiptMeta && receiptMeta.presetName) || presetName,
+        modelName: (receiptMeta && typeof receiptMeta.modelName === 'string') ? receiptMeta.modelName : '',
+        hasEffort: !!(receiptMeta && 'thinkingEffort' in receiptMeta),
+        thinkingEffort: (receiptMeta && 'thinkingEffort' in receiptMeta)
+          ? (receiptMeta.thinkingEffort ?? null) : null,
+        prevPresetNames: [...new Set([
+          prevDisplay,
+          ...(sameRuntimeReceipt ? [...sameRuntimeReceipt.prevPresetNames, sameRuntimeReceipt.presetName] : []),
+        ])].filter(Boolean).slice(0, 4),
+        prevEffortKeys: [...new Set([
+          _effortKey(prevEffort),
+          ...(sameRuntimeReceipt && sameRuntimeReceipt.hasEffort
+            ? [...sameRuntimeReceipt.prevEffortKeys, _effortKey(sameRuntimeReceipt.thinkingEffort)] : []),
+        ])].slice(0, 4),
+      });
       // Clear thinking effort override on model change
       let agent = typeof getRuntimeAwareAgentRecord === 'function'
         ? getRuntimeAwareAgentRecord()
@@ -284,10 +371,15 @@ function updateInputModelSwitcher() {
   // _getInputDefaultPresetName already checks runtime cache first,
   // then falls back to the preset. No additional cache logic needed here.
   let displayName = _getInputDefaultPresetName() || '';
-  // __default__ 是合成名：runtime 实际在用的模型名就在 overview 里，优先显示它；
-  // overview 未推到时由 formatPresetDisplayName 兜底为"全局默认"占位。
-  if (displayName === '__default__' && typeof currentOverviewSnapshot !== 'undefined' && currentOverviewSnapshot?.modelName) {
-    displayName = currentOverviewSnapshot.modelName;
+  // __default__ 是合成名：优先显示 swap 回执携带的实际模型名（ack 即生效，
+  // 不等 overview 快照追认）；overview 未推到时由 formatPresetDisplayName
+  // 兜底为"全局默认"占位。
+  if (displayName === '__default__') {
+    let receipt = _activeSwapReceipt();
+    let receiptModel = (receipt && typeof receipt.modelName === 'string')
+      ? receipt.modelName : '';
+    let overviewModel = (typeof currentOverviewSnapshot !== 'undefined' && currentOverviewSnapshot?.modelName) || '';
+    displayName = receiptModel || overviewModel;
   }
   if (typeof formatPresetDisplayName === 'function') displayName = formatPresetDisplayName(displayName);
   nameEl.textContent = displayName || (currentLanguage === 'zh' ? '模型' : 'Model');
@@ -347,7 +439,16 @@ function _getEffortLabel(effort) {
 }
 
 function _getCurrentThinkingEffort() {
-  // Priority 1: Local optimistic cache (set during swap, before overview catches up)
+  // Priority 1: swap 回执（ack 即生效；含显式 null=清除为厂商默认）。
+  // 注意不能沿用 session-ui 缓存作第一优先级：updateThinkingEffortSwitcher
+  // 的 overview→cache 同步会把仍在链路上的滞后帧旧值写回缓存（本地无感，
+  // 广域链路下表现为切换后标签先退回旧档位数秒）。回执的退役判定不受
+  // 该同步影响。
+  let receipt = _activeSwapReceipt();
+  if (receipt && receipt.hasEffort) {
+    return receipt.thinkingEffort ?? null;
+  }
+  // Priority 2: Local optimistic cache (set during swap, before overview catches up)
   let agent = typeof getRuntimeAwareAgentRecord === 'function'
     ? getRuntimeAwareAgentRecord()
     : null;
@@ -426,6 +527,31 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort) {
     });
     const result = await resp.json();
     if (result.ok) {
+      // 乐观回执（与模型切换共用，preset 轴不变、只断言 effort 轴）：
+      // updateThinkingEffortSwitcher 的 overview→cache 同步会把仍在链路上的
+      // 滞后帧旧档位写回缓存，回执作为第一优先级盖住它，ack 即显示新档位。
+      const receiptMeta = result.meta || null;
+      const prevPreset = _getInputDefaultPresetName() || '';
+      const prevEffort = _getCurrentThinkingEffort();
+      const sameRuntimeReceipt = (_swapReceipt && _swapReceipt.runtimeKey === runtimeId)
+        ? _swapReceipt : null;
+      _swapReceipt = Object.freeze({
+        runtimeKey: runtimeId,
+        presetName: (receiptMeta && receiptMeta.presetName) || prevPreset,
+        modelName: (receiptMeta && typeof receiptMeta.modelName === 'string') ? receiptMeta.modelName : '',
+        hasEffort: true, // 本次切换断言的就是 effort 轴（请求值即回执语义）
+        thinkingEffort: (receiptMeta && 'thinkingEffort' in receiptMeta)
+          ? (receiptMeta.thinkingEffort ?? null) : (thinkingEffort ?? null),
+        prevPresetNames: [...new Set([
+          prevPreset,
+          ...(sameRuntimeReceipt ? [...sameRuntimeReceipt.prevPresetNames, sameRuntimeReceipt.presetName] : []),
+        ])].filter(Boolean).slice(0, 4),
+        prevEffortKeys: [...new Set([
+          _effortKey(prevEffort),
+          ...(sameRuntimeReceipt && sameRuntimeReceipt.hasEffort
+            ? [...sameRuntimeReceipt.prevEffortKeys, _effortKey(sameRuntimeReceipt.thinkingEffort)] : []),
+        ])].slice(0, 4),
+      });
       // Cache the runtime override so the switcher reflects it immediately.
       // swap_thinking_effort no longer mutates config/presets.json, so we
       // must track the override locally rather than re-fetching presets.
