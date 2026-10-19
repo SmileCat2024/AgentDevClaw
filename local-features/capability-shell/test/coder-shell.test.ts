@@ -650,7 +650,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       // 配额预检 GET（ADR-0027）：无配额 → 放行
       {
         match: (u) => u.endsWith('/protoclaw/workspace_settings'),
-        body: { workspaceVisibility: {}, resourcePolicy: {}, liveRuntimes: {} },
+        body: { workspaceVisibility: {}, resourcePolicy: {}, liveThreads: {} },
       },
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
@@ -738,7 +738,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     const { fetchImpl, requests } = recordingFetch([
       {
         match: (u) => u.endsWith('/protoclaw/workspace_settings'),
-        body: { resourcePolicy: { coder: { maxLiveRuntimes: 2 } }, liveRuntimes: { coder: 2 } },
+        body: { resourcePolicy: { coder: { maxLiveThreads: 2 } }, liveThreads: { coder: 2 } },
       },
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
@@ -763,7 +763,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     const { fetchImpl, requests } = recordingFetch([
       {
         match: (u) => u.endsWith('/protoclaw/workspace_settings'),
-        body: { resourcePolicy: { coder: { maxLiveRuntimes: 3 } }, liveRuntimes: { coder: 2 } },
+        body: { resourcePolicy: { coder: { maxLiveThreads: 3 } }, liveThreads: { coder: 2 } },
       },
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',

@@ -588,9 +588,9 @@ async function _phLoadCoderPolicy() {
     if (!response.ok) throw new Error('HTTP ' + response.status);
     const data = await response.json();
     if (!document.getElementById('ph-coder-policy-host') || _phSettingsTab !== 'coder-policy') return;
-    const limit = data?.resourcePolicy?.coder?.maxLiveRuntimes;
+    const limit = data?.resourcePolicy?.coder?.maxLiveThreads;
     const value = Number.isInteger(limit) && limit > 0 ? String(limit) : '';
-    const live = Number.isInteger(data?.liveRuntimes?.coder) ? data.liveRuntimes.coder : 0;
+    const live = Number.isInteger(data?.liveThreads?.coder) ? data.liveThreads.coder : 0;
     // 接续策略生效值判定链与通知设置同构：用户覆盖（resourcePolicy）>
     // 作者默认（coder metadata permissionDefaults）> 'adaptive'。
     const coderAgent = (Array.isArray(allAgents) ? allAgents : []).find((a) => a?.id === 'coder');
@@ -617,14 +617,14 @@ async function _phLoadCoderPolicy() {
       // 行里被拉成通栏。
       '<div class="ph-mc-row">',
       '<div class="ph-mc-role">',
-      '<div class="ph-mc-role-name">' + (isZh ? '并发上限' : 'Concurrency limit') + '</div>',
+      '<div class="ph-mc-role-name">' + (isZh ? '线程并发上限' : 'Thread concurrency limit') + '</div>',
       '<div class="ph-mc-role-desc">' + (isZh
-        ? 'Coder 同时运行的会话数量上限，超出时新任务排队等待'
-        : 'Maximum simultaneous Coder sessions; new tasks queue beyond this limit') + '</div>',
-      (live > 0 ? '<div class="ph-mc-role-desc">' + (isZh ? '当前 ' + live + ' 个运行中' : live + ' running') + '</div>' : ''),
+        ? 'Coder 未归档线程的数量上限，超出时新建线程被拒（已有线程不受影响，归档后释放名额）'
+        : 'Maximum live (unarchived) Coder threads; new thread creation is rejected beyond this limit (existing threads unaffected; archiving frees a slot)') + '</div>',
+      (live > 0 ? '<div class="ph-mc-role-desc">' + (isZh ? '当前 ' + live + ' 条未归档线程' : live + ' live threads') + '</div>' : ''),
       '</div>',
       '<div style="flex:0 0 140px;display:flex;justify-content:flex-end;padding-top:7px;">',
-      '<input id="ph-coder-runtime-limit" type="number" min="1" step="1" class="settings-input" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" onchange="window.phSaveCoderRuntimeLimit(this.value)">',
+      '<input id="ph-coder-thread-limit" type="number" min="1" step="1" class="settings-input" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" onchange="window.phSaveCoderThreadLimit(this.value)">',
       '</div>',
       '</div>',
       // 接续策略行与并发上限行同形态（ph-mc-row + role 名称/解释），
@@ -684,15 +684,15 @@ window.phSetCoderRotationStrategy = async function(strategy) {
   }
 };
 
-window.phSaveCoderRuntimeLimit = async function(rawValue) {
+window.phSaveCoderThreadLimit = async function(rawValue) {
   const isZh = currentLanguage === 'zh';
   const status = document.getElementById('ph-coder-policy-status');
   const setStatus = (message) => { if (status) status.textContent = message; };
   const trimmed = String(rawValue || '').trim();
-  let maxLiveRuntimes = null;
+  let maxLiveThreads = null;
   if (trimmed !== '') {
-    maxLiveRuntimes = Number(trimmed);
-    if (!Number.isInteger(maxLiveRuntimes) || maxLiveRuntimes <= 0) {
+    maxLiveThreads = Number(trimmed);
+    if (!Number.isInteger(maxLiveThreads) || maxLiveThreads <= 0) {
       setStatus(isZh ? '并发上限须为正整数，未保存。' : 'Limit must be a positive integer; not saved.');
       return;
     }
@@ -702,7 +702,7 @@ window.phSaveCoderRuntimeLimit = async function(rawValue) {
     const response = await fetch('/protoclaw/workspace_settings/resource_policy', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: 'coder', permissionId: 'maxLiveRuntimes', value: maxLiveRuntimes }),
+      body: JSON.stringify({ agentId: 'coder', permissionId: 'maxLiveThreads', value: maxLiveThreads }),
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));

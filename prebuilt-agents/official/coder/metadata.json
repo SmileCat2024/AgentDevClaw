@@ -11,7 +11,7 @@
   "enabled": true,
   "host": "programming-helper",
   "visibility": "on-demand",
-  "permissions": ["maxLiveRuntimes", "contextRotationStrategy", "notifications.finish"],
+  "permissions": ["maxLiveThreads", "contextRotationStrategy", "notifications.finish"],
   "permissionDefaults": {
     "contextRotationStrategy": "adaptive",
     "notifications.finish": false
