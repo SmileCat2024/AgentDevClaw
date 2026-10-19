@@ -3,30 +3,31 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'path';
+import { Decision } from '@agentdevjs/core';
 import { StylizedOutput } from '../dist/index.js';
 
 const SIGNATURE = '我确认本回复已逐句遵循测试风格的全部要求。';
 
 let workspaceDir;
-let feature;
 
 function createFeature() {
-  return new StylizedOutput({ workspaceDir });
+  const feature = new StylizedOutput({ workspaceDir });
+  feature.setActiveStyle('test-style');
+  return feature;
 }
 
-/** 构造 ToolUse 钩子上下文：context 尾部 assistant 消息即本步正文 */
-function createToolUseContext({ assistantContent = '', toolName = 'sign_output_style' } = {}) {
-  return {
-    call: { name: toolName, arguments: {} },
-    context: {
-      getAll: () => [
-        { role: 'user', content: '问题' },
-        { role: 'assistant', content: '我先看看。' },
-        { role: 'tool', toolCallId: 't1', content: '{}' },
-        { role: 'assistant', content: assistantContent },
-      ],
-    },
+/** 构造 StepFinish 门禁上下文 */
+function createGateContext({ toolCallsCount = 0 } = {}) {
+  const added = [];
+  const ctx = {
+    toolCallsCount,
+    hasActiveSubAgents: false,
+    hasPendingMessages: false,
+    hasPendingWakeups: false,
+    waitCalled: false,
+    context: { add: (msg) => added.push(msg) },
   };
+  return { ctx, added };
 }
 
 before(async () => {
@@ -52,121 +53,112 @@ after(() => {
   rmSync(workspaceDir, { recursive: true, force: true });
 });
 
-describe('StylizedOutput interrupt 空正文降级', () => {
-  it('captures the assistant step content for sign calls via the ToolUse hook', async () => {
-    feature = createFeature();
-    feature.setActiveStyle('test-style');
-    await feature.captureSignStepContent(createToolUseContext({ assistantContent: '最终回复正文。' }));
-    assert.equal(feature.signStepContent, '最终回复正文。');
-    await feature.captureSignStepContent(createToolUseContext({ assistantContent: '   ' }));
-    assert.equal(feature.signStepContent, '   ');
-  });
+describe('StylizedOutput 签名工具', () => {
+  it('签名匹配 → 记录本轮已签名并返回 ok', async () => {
+    const feature = createFeature();
+    const payload = await feature.signTool.execute({ signature: SIGNATURE });
 
-  it('ignores non-sign tool calls in the ToolUse hook', async () => {
-    feature = createFeature();
-    feature.setActiveStyle('test-style');
-    await feature.captureSignStepContent(createToolUseContext({ assistantContent: '正文', toolName: 'list_output_styles' }));
-    assert.equal(feature.signStepContent, null);
-  });
-
-  it('treats a missing trailing assistant message as blank content', async () => {
-    feature = createFeature();
-    feature.setActiveStyle('test-style');
-    await feature.captureSignStepContent({
-      call: { name: 'sign_output_style', arguments: {} },
-      context: { getAll: () => [{ role: 'user', content: '问题' }] },
-    });
-    assert.equal(feature.signStepContent, '');
-  });
-
-  it('demotes interrupt=true to false and rewrites the call when the step has no content', async () => {
-    feature = createFeature();
-    feature.setActiveStyle('test-style');
-    await feature.captureSignStepContent(createToolUseContext({ assistantContent: '' }));
-
-    const result = await feature.signTool.execute(
-      { signature: SIGNATURE, interrupt: true },
-      { callId: 'call-1' },
-    );
-
-    // withRewrite 形态：调用历史改写为显式 interrupt=false
-    assert.equal(result.__withRewrite, true);
-    assert.equal(result.effectiveCall.id, 'call-1');
-    assert.equal(result.effectiveCall.arguments.interrupt, false);
-
-    const payload = JSON.parse(result.text);
     assert.equal(payload.ok, true);
-    assert.equal(payload.interrupt, false);
-    assert.match(payload.note, /强制按 false 处理/);
-    assert.match(payload.note, /下一步直接输出完整的回复正文/);
-
-    // 签名本身有效（本轮已签名），但打断请求未置位
+    assert.equal(payload.signed, true);
+    assert.equal(payload.style, 'test-style');
     assert.equal(feature.signedForReply, true);
-    assert.equal(feature.interruptRequested, false);
   });
 
-  it('lets interrupt=true take effect when the step carries non-blank content', async () => {
-    feature = createFeature();
-    feature.setActiveStyle('test-style');
-    await feature.captureSignStepContent(createToolUseContext({ assistantContent: '这是最终回复。' }));
+  it('签名内部空白差异被规范化后匹配', async () => {
+    const feature = createFeature();
+    const payload = await feature.signTool.execute({ signature: `  ${SIGNATURE}  ` });
 
-    const payload = await feature.signTool.execute(
-      { signature: SIGNATURE, interrupt: true },
-      { callId: 'call-2' },
-    );
-
-    assert.equal(payload.__withRewrite, undefined);
     assert.equal(payload.ok, true);
-    assert.equal(payload.interrupt, true);
-    assert.match(payload.note, /interrupt=true 已生效/);
     assert.equal(feature.signedForReply, true);
-    assert.equal(feature.interruptRequested, true);
   });
 
-  it('keeps legacy behavior when the step content was never captured (no ToolUse hook run)', async () => {
-    feature = createFeature();
-    feature.setActiveStyle('test-style');
-    // 不调用 captureSignStepContent，signStepContent 保持 null（非标准执行链直调）
-
-    const payload = await feature.signTool.execute(
-      { signature: SIGNATURE, interrupt: true },
-      { callId: 'call-3' },
-    );
-
-    assert.equal(payload.ok, true);
-    assert.equal(payload.interrupt, true);
-    assert.equal(feature.interruptRequested, true);
-  });
-
-  it('urges the model to produce the final reply immediately when interrupt=false', async () => {
-    feature = createFeature();
-    feature.setActiveStyle('test-style');
-    await feature.captureSignStepContent(createToolUseContext({ assistantContent: '' }));
-
-    const payload = await feature.signTool.execute(
-      { signature: SIGNATURE, interrupt: false },
-      { callId: 'call-4' },
-    );
-
-    assert.equal(payload.ok, true);
-    assert.equal(payload.interrupt, false);
-    assert.match(payload.note, /请立即产出最终回复正文/);
-    assert.equal(feature.signedForReply, true);
-    assert.equal(feature.interruptRequested, false);
-  });
-
-  it('still rejects a mismatched signature regardless of interrupt', async () => {
-    feature = createFeature();
-    feature.setActiveStyle('test-style');
-    await feature.captureSignStepContent(createToolUseContext({ assistantContent: '正文' }));
-
-    const payload = await feature.signTool.execute(
-      { signature: '错误的签名', interrupt: true },
-      { callId: 'call-5' },
-    );
+  it('签名不匹配 → 拒绝且不记录签名', async () => {
+    const feature = createFeature();
+    const payload = await feature.signTool.execute({ signature: '错误的签名' });
 
     assert.equal(payload.ok, false);
     assert.equal(feature.signedForReply, false);
-    assert.equal(feature.interruptRequested, false);
+  });
+
+  it('signature 参数为空 → 拒绝', async () => {
+    const feature = createFeature();
+    const payload = await feature.signTool.execute({ signature: '   ' });
+
+    assert.equal(payload.ok, false);
+    assert.equal(feature.signedForReply, false);
+  });
+
+  it('未启用风格 → 明确拒绝，无需签名', async () => {
+    const feature = new StylizedOutput({ workspaceDir });
+    const payload = await feature.signTool.execute({ signature: SIGNATURE });
+
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /未启用任何输出风格/);
+  });
+});
+
+describe('StylizedOutput 签名门禁（StepFinish guard）', () => {
+  it('带工具调用的步不干预', async () => {
+    const feature = createFeature();
+    await feature.signTool.execute({ signature: SIGNATURE });
+    const { ctx } = createGateContext({ toolCallsCount: 2 });
+
+    const decision = await feature.decideSignatureGate(ctx);
+
+    assert.equal(decision, Decision.Continue);
+    assert.equal(feature.lastAction, 'signed');
+  });
+
+  it('已签名的自然结束步放行', async () => {
+    const feature = createFeature();
+    await feature.signTool.execute({ signature: SIGNATURE });
+    const { ctx, added } = createGateContext({ toolCallsCount: 0 });
+
+    const decision = await feature.decideSignatureGate(ctx);
+
+    assert.equal(decision, Decision.Continue);
+    assert.equal(added.length, 0);
+  });
+
+  it('未签名试图自然结束 → 拦截并注入补签要求', async () => {
+    const feature = createFeature();
+    const { ctx, added } = createGateContext({ toolCallsCount: 0 });
+
+    const decision = await feature.decideSignatureGate(ctx);
+
+    assert.equal(decision, Decision.Approve);
+    assert.equal(feature.lastAction, 'blocked');
+    assert.equal(feature.blockedCount, 1);
+    assert.equal(added.length, 1);
+    assert.match(added[0].content, /签名门禁/);
+  });
+
+  it('连续拦截达到上限后放行结束', async () => {
+    const feature = createFeature();
+    feature.setMaxSignatureBlocks(2);
+
+    for (let i = 0; i < 2; i++) {
+      const { ctx } = createGateContext({ toolCallsCount: 0 });
+      const decision = await feature.decideSignatureGate(ctx);
+      assert.equal(decision, Decision.Approve);
+    }
+
+    const { ctx } = createGateContext({ toolCallsCount: 0 });
+    const decision = await feature.decideSignatureGate(ctx);
+    assert.equal(decision, Decision.Continue);
+    assert.equal(feature.lastAction, 'released');
+  });
+
+  it('CallStart 重置签名状态，上一轮签名对本轮无效', async () => {
+    const feature = createFeature();
+    await feature.signTool.execute({ signature: SIGNATURE });
+    assert.equal(feature.signedForReply, true);
+
+    await feature.syncStyleState({});
+
+    assert.equal(feature.signedForReply, false);
+    const { ctx } = createGateContext({ toolCallsCount: 0 });
+    const decision = await feature.decideSignatureGate(ctx);
+    assert.equal(decision, Decision.Approve);
   });
 });
