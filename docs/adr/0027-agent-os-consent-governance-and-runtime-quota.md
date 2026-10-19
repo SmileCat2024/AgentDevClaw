@@ -1,7 +1,7 @@
 # ADR 0027: Agent OS 治理面——同意模型与 per-workspace runtime 配额
 
 日期：2026-10-15  
-状态：已接受
+状态：已接受（2026-10-19 修订一：配额计数语义改为非终态线程数，见文末修订记录）
 
 ## 背景与问题
 
@@ -30,26 +30,26 @@ Coder 是无人值守自主编码 APP（ADR-0025），会话只能经调度面�
 
 OS 词汇对照（glossary 同步收录）：程序 = agent 装配（agent.js + features + metadata.json）；进程 = runtime 子进程；syscall 边界 = server HTTP/IPC API；内核 = Claw server。配额、权限、审计等治理原语只属于内核边界（server）；应用自律（feature 层预检）不构成强制——CLI 与 ACP 不经过任何 feature。
 
-### 3. 配额：per-workspace 存活 runtime 数，缺省不限
+### 3. 配额：per-workspace 非终态线程数，缺省不限（修订一）
 
-- 计数对象：存活 runtime 子进程数（≈活跃线程的 head runtime；rotation 窗口的新旧并存见第 5 节豁免）。
-- 键：agentId（workspace）。权限项定义由 OS 注册，工作空间通过 `metadata.json` 声明自己使用的权限项。Coder 声明 `maxLiveRuntimes`，是首个消费者；编程小助手不声明该项，因此不展示其工作空间设置，也不执行该项配额。不引入"子代理"新分类——与 ADR-0025 身份收敛到 APP 粒度的方向一致。
-- 强制点：`startManagedAgent` 单点，覆盖全部拉起路径。
+- 计数对象：**非终态线程数**（未归档 / 未关闭 / 未删除，含 idle——执行完但未收口的线程占名额，归档 / 关闭 / 删除释放）。修订前计数存活 runtime 子进程数：共享进程模式下同项目多条线程只占一个名额，配额实际限制的是并发项目组数，与用户预期（限制线程数量）不符；且「收口归档 → 释放名额」的因果链要求计数对象就是线程本身，这同时把归档变成配额体系里的显性资源动作（治理面闭环）。
+- 键：agentId（workspace）。权限项定义由 OS 注册，工作空间通过 `metadata.json` 声明自己使用的权限项。Coder 声明 `maxLiveThreads`，是首个消费者；编程小助手不声明该项，因此不展示其工作空间设置，也不执行该项配额。不引入"子代理"新分类——与 ADR-0025 身份收敛到 APP 粒度的方向一致。
+- 强制点：**建线入口前置检查**（`POST /protoclaw/prebuilt_sessions` 会话创建、branch 分支、`POST /protoclaw/threads` 独立建线），先于会话落盘——满配额时连会话都不创建，不留无线程的孤儿会话。修订前强制点在 `startManagedAgent`（runtime 拉起漏斗）：该点晚于会话落盘，拒绝时留下工具面不可见的孤儿会话；且 send/deliver 唤醒 idle 线程 head runtime 同经此漏斗，满配额会挡已有线程续工。实施在 `server/routes/thread-quota.js`，线程计数经 thread-control 注入。
 - 缺省：不配置即不限制，行为与现状一致。
-- 存储：`workspace-settings.json` 新增 resourcePolicy 节（用户层工作空间资产，与呈现策略覆盖同文件同语义层）。
-- 编辑面：全局设置 → 工作空间页；关联宿主也可提供工作空间专属设置面。当前 Coder 同时由全局工作空间设置与智能编码空间的“Coder 策略”页编辑，两者共用 `workspace-settings.json` 中同一权限值。
+- 存储：`workspace-settings.json` resourcePolicy 节（用户层工作空间资产，与呈现策略覆盖同文件同语义层）。
+- 编辑面：全局设置 → 工作空间页（「线程并发上限」）；关联宿主也可提供工作空间专属设置面。当前 Coder 同时由全局工作空间设置与智能编码空间的“Coder 策略”页编辑，两者共用同一权限值。
 - 远程主机各管各的配额（远程 Claw 的 server 强制自己主机的）。
 
 ### 4. 超限行为：单配额、双角色
 
-系统里只有一个配额值、一处强制。它对用户是策略表达，对调度方是结构化拒绝信号：拒绝报文含当前 runtime 数与可行动建议（归档腾位 / 询问用户 / 放弃）；收到报文后怎么应对是应用层语义，内核不管。不存在"OS 兜底大配额 + 应用自限小配额"两套值。
+系统里只有一个配额值、一处强制。它对用户是策略表达，对调度方是结构化拒绝信号：拒绝报文含当前非终态线程数与可行动建议（归档自己已完成的线程腾位 / 询问用户 / 放弃）；收到报文后怎么应对是应用层语义，内核不管。不存在"OS 兜底大配额 + 应用自限小配额"两套值。
 
 不排队（掩盖背压，watch 语义被迫复杂化）；不静默驱逐 idle runtime（未经同意动用户可见线程）。
 
-### 5. 存量豁免与 rotation 豁免
+### 5. 存量豁免；rotation 豁免随修订一退役
 
-- 配额只约束未来 spawn：调低配额不追溯击杀存活 runtime，随归档 / rotation 自然收敛。
-- rotation / 接续 spawn（successor 接替旧 head 的短暂重叠窗口）豁免配额——它是生命周期接续不是扩编，且满配额时被拦会死锁线程精简。豁免依据是调用方传给内核的意图标记；内核不反推意图，调用方声明。
+- 配额只约束未来建线：调低配额不追溯归档已存活线程，随归档自然收敛。
+- 修订前的 rotation 豁免（接续 spawn 豁免配额）随强制点迁移退役：接续不新增线程（head 会话在原线程内推进），建线入口检查天然不经过；唤醒已有线程的 runtime 拉起（send/deliver 恢复闸）也不再过闸——线程已占着名额，唤醒不增计数，拦它只会让满配额时的既有线程无法续工。原意图标记参数（`spawnIntent`）随之删除。
 
 ### 6. 身份升级缝与三面模型
 
@@ -59,19 +59,20 @@ OS 词汇对照（glossary 同步收录）：程序 = agent 装配（agent.js + 
 - 未来授权存储按"主体 → 被授权动作"结构设计，不做全局开关。
 - per-child credential（server spawn 时逐子进程发唯一令牌）定位为**诚实的归因工具**——令牌只需对诚实应用可靠，不需对抗伪造。这是治理面升级的唯一 seam，设计时不得堵死。
 
-## 实施顺序
+## 实施顺序（修订一后形态）
 
-1. **配额模块 + 内核检查**：读 resourcePolicy；在 `startManagedAgent` 加配额判定；调用方传意图标记（rotation 类豁免）；接口签名留身份参数位。
-2. **结构化拒绝报文**：含配额值、当前存活数、可行动建议；对 agent 调度方可读可行动。
-3. **配置与 UI**：`workspace-settings.js` 扩展 resourcePolicy 节（读写 + 校验）；设置 → 工作空间页数值字段。
+1. **配额模块 + 建线入口检查**：读 resourcePolicy 与线程计数（thread-control 注入）；建线三入口（会话创建 / 分支 / 独立建线）前置判定。
+2. **结构化拒绝报文**：含配额值、当前非终态线程数、可行动建议；对 agent 调度方可读可行动。
+3. **配置与 UI**：resourcePolicy 读写 + 校验；设置 → 工作空间页「线程并发上限」数值字段；现状投影（liveThreads）与配置同端点读出。
 4. **调度方预检**：coder_shell 读配额做友好预检提示（UX 层，不承担强制）。
-5. **测试**：覆盖满配额拒绝、存量豁免（调低配额不击杀）、rotation 豁免、重启恢复不击穿四条路径。
+5. **测试**：满配额拒绝建线且无孤儿会话、存量豁免（调低配额不追溯）、归档释放名额、唤醒不受限。
 
-## 验收不变量
+## 验收不变量（修订一后形态）
 
-- 任何渠道（coder_shell / CLI / ACP / 群聊 / 恢复 / activate）拉起 runtime 都过同一配额判定；不存在绕过 `startManagedAgent` 检查的 spawn 路径。
-- 满配额时新建线程的 spawn 被拒并返回结构化报文；rotation / 接续 spawn 不被拦。
-- 调低配额不击杀存活 runtime；其后的新增 spawn 按新值判定。
+- 任何渠道（coder_shell / CLI / ACP / 群聊 / 恢复 / activate）建线都过同一配额判定；满配额拒绝发生在会话落盘之前，不产生孤儿会话。
+- 满配额时新建线程被拒并返回结构化报文；已有线程的 runtime 唤醒（send / deliver）与接续（rotation）不受配额影响。
+- 调低配额不追溯归档已存活线程；其后的新建线按新值判定。
+- 归档 / 关闭 / 删除线程即时释放名额。
 - 无配置（缺省）时行为与现状一致：不限，热路径零额外行为。
 - 拒绝报文是结构化数据（非裸错误字符串），调度方 agent 可解析并行动。
 
@@ -114,3 +115,21 @@ OS 词汇对照（glossary 同步收录）：程序 = agent 装配（agent.js + 
 - [ADR-0017](0017-feature-manifest-and-registry.md)：manifest 声明制，权限模型蓝本的注册半边。
 - [ADR-0018](0018-feature-panel-communication-transport.md)：声明制授权记录的先例。
 - [ADR-0024](0024-app-workspace-eternal-thread-model.md)、[ADR-0025](0025-coder-workspace-promotion.md)：APP 型工作空间与 coder 升格——配额的治理单位由此确定。
+
+## 修订记录
+
+### 修订一（2026-10-19）：配额计数改为非终态线程数
+
+初版配额计数存活 runtime 子进程数，强制点在 `startManagedAgent` 拉起漏斗。实施后暴露三点与预期不符：
+
+1. **计数失真**：coder 共享进程模式（shared-by-project）下同项目多条线程共享一个子进程，配额实际限制的是并发项目组数；用户预期与产品语义都是线程数量。
+2. **孤儿会话**：拉起漏斗晚于会话落盘，满配额拒绝时留下已创建但无线程、工具面不可见的会话。
+3. **满配额挡续工**：send/deliver 唤醒 idle 线程 head runtime 同经拉起漏斗，满配额时已有线程无法恢复执行。
+
+修订内容：
+
+- 计数对象改为**非终态线程数**（未归档 / 未关闭 / 未删除，idle 占名额）；归档、关闭、删除即时释放名额——归档由此成为配额体系内的显性资源动作，与调度方收口心智闭环。
+- 权限项 `maxLiveRuntimes` 更名 `maxLiveThreads`（UI 统一「线程并发上限 / Thread concurrency limit」）；语义变更即换名，存量配置不迁移——数字含义已变，沿用旧值即误导。
+- 强制点迁移到**建线入口前置检查**（`server/routes/thread-quota.js`：会话创建、分支、独立建线三入口，均先于会话落盘）；`startManagedAgent` 的 spawn 判定与 `spawnIntent` 意图标记机制删除，rotation 豁免随之退役（建线检查天然不经过接续路径）。
+- 存量豁免保留：调低配额不追溯归档已存活线程。
+- 拒绝报文结构化负载更名 `threadQuota`（`thread_quota_exceeded`），无外部解析方，一次性切换。
