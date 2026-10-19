@@ -137,10 +137,10 @@ describe('permission registry: notification boolean items', () => {
     }
   });
 
-  it('keeps maxLiveRuntimes intact alongside the new items', () => {
-    assert.equal(PERMISSION_ITEMS.maxLiveRuntimes?.valueType, 'positive-integer');
-    assert.equal(isValidPermissionValue('maxLiveRuntimes', 3), true);
-    assert.equal(isValidPermissionValue('maxLiveRuntimes', true), false);
+  it('keeps maxLiveThreads intact alongside the new items', () => {
+    assert.equal(PERMISSION_ITEMS.maxLiveThreads?.valueType, 'positive-integer');
+    assert.equal(isValidPermissionValue('maxLiveThreads', 3), true);
+    assert.equal(isValidPermissionValue('maxLiveThreads', true), false);
   });
 
   it('normalizes permissionDefaults: undefined -> {}, valid projection', () => {
@@ -157,7 +157,7 @@ describe('permission registry: notification boolean items', () => {
       /未声明/,
     );
     assert.throws(
-      () => normalizePermissionDefaults({ 'maxLiveRuntimes': 2 }, ['notifications.finish']),
+      () => normalizePermissionDefaults({ 'maxLiveThreads': 2 }, ['notifications.finish']),
       /未声明/,
     );
   });
@@ -205,9 +205,9 @@ describe('prebuilt metadata permission contracts', () => {
     });
   });
 
-  it('coder: finish=false declared, maxLiveRuntimes kept for the quota gate, rotation strategy defaults adaptive', async () => {
+  it('coder: finish=false declared, maxLiveThreads kept for the quota gate, rotation strategy defaults adaptive', async () => {
     const meta = await readMetadata('coder');
-    assert.ok(meta.permissions.includes('maxLiveRuntimes'), 'quota gate depends on this declaration');
+    assert.ok(meta.permissions.includes('maxLiveThreads'), 'quota gate depends on this declaration');
     assert.deepEqual(normalizePermissionDefaults(meta.permissionDefaults, meta.permissions), {
       'notifications.finish': false,
       contextRotationStrategy: 'adaptive',

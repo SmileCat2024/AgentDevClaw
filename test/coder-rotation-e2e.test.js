@@ -226,9 +226,9 @@ describe('scenario A: adaptive default rotates a tool-heavy thread end-to-end (t
     const nextSessionId = result.headSessionId;
     assert.ok(nextSessionId && nextSessionId !== sessionId);
 
-    // 接续 spawn（ROTATION 豁免意图）+ handoff 环境变量指向真实落盘文件
+    // 接续 spawn + handoff 环境变量指向真实落盘文件（ADR-0027 修订一后
+    // 接续不经配额闸，spawn 不再携带 spawnIntent 意图标记）
     assert.equal(spawnCalls.length - spawnBase, 1);
-    assert.equal(spawnCalls[spawnBase].opts.spawnIntent, 'rotation');
     const handoffPath = spawnCalls[spawnBase].opts.extraEnv.PROTOCLAW_HANDOFF_PATH;
     const handoff = JSON.parse(await readFile(handoffPath, 'utf8'));
     assert.equal(handoff.mode, 'trim-transcript');

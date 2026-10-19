@@ -21,11 +21,11 @@ after(async () => { await fs.rm(tmpRoot, { recursive: true, force: true }); });
 describe('workspace-settings: 用户覆盖层存储', () => {
   it('permission-item writer updates and clears the shared Coder policy value', async () => {
     const { readWorkspaceResourcePolicies } = await import('../server/routes/workspace-settings.js');
-    await writeWorkspacePermissionValue('coder', 'maxLiveRuntimes', 5, { settingsPath });
+    await writeWorkspacePermissionValue('coder', 'maxLiveThreads', 5, { settingsPath });
     assert.deepEqual(await readWorkspaceResourcePolicies({ settingsPath }), {
-      coder: { maxLiveRuntimes: 5 },
+      coder: { maxLiveThreads: 5 },
     });
-    await writeWorkspacePermissionValue('coder', 'maxLiveRuntimes', null, { settingsPath });
+    await writeWorkspacePermissionValue('coder', 'maxLiveThreads', null, { settingsPath });
     assert.deepEqual(await readWorkspaceResourcePolicies({ settingsPath }), {});
   });
 
@@ -35,7 +35,7 @@ describe('workspace-settings: 用户覆盖层存储', () => {
       (error) => error.status === 400,
     );
     await assert.rejects(
-      writeWorkspacePermissionValue('coder', 'maxLiveRuntimes', '5', { settingsPath }),
+      writeWorkspacePermissionValue('coder', 'maxLiveThreads', '5', { settingsPath }),
       (error) => error.status === 400,
     );
   });
@@ -62,7 +62,7 @@ describe('workspace-settings: 用户覆盖层存储', () => {
 function lightAgents() {
   return [
     { id: 'programming-helper', name: '智能编码空间', kind: 'agent', status: { pid: null, viewerAgentId: null } },
-    { id: 'coder', name: 'coder', kind: 'agent', host: 'programming-helper', visibility: 'on-demand', permissions: ['maxLiveRuntimes'], status: { pid: null, viewerAgentId: null } },
+    { id: 'coder', name: 'coder', kind: 'agent', host: 'programming-helper', visibility: 'on-demand', permissions: ['maxLiveThreads'], status: { pid: null, viewerAgentId: null } },
   ];
 }
 
@@ -92,7 +92,7 @@ describe('workspace-settings: on-demand Runtime 存活合流（服务端）', ()
   it('无覆盖且没有存活 Runtime → sidebarVisible=false', async () => {
     const agents = await createQuery({}).getConnectedAgents();
     const coder = agents.find((a) => a.id === 'coder');
-    assert.deepEqual(coder.permissions, ['maxLiveRuntimes']);
+    assert.deepEqual(coder.permissions, ['maxLiveThreads']);
     assert.equal(coder.visibilityPolicy, 'auto');
     assert.equal(typeof coder.hasRunningSessions, 'boolean');
     assert.equal(coder.sidebarVisible, coder.hasRunningSessions);

@@ -12,7 +12,7 @@
  *   作者在 metadata.json 声明，本文件只存用户覆盖层（agentId → 'auto' |
  *   'always'），缺省即作者默认。
  * - resourcePolicy：per-workspace 资源策略（ADR-0027）。首个字段
- *   maxLiveRuntimes 限存活 runtime 子进程数；缺省即不限。
+ *   maxLiveThreads 限非终态线程数（修订一）；缺省即不限。
  *
  * 写入约束：两个节同文件共存，任一写路径必须整文件读改写（保留兄弟节），
  * 不得整体重写为自己单节的投影。存储于用户数据根目录 workspace-settings.json，
@@ -22,7 +22,6 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { USER_DATA_ROOT } from '../shared/constants.js';
-import { countLiveRuntimeProcessesByAgent } from '../shared/agent-access.js';
 import { PERMISSION_ITEMS, projectPermissionValues } from '../shared/permission-registry.js';
 
 const DEFAULT_WORKSPACE_SETTINGS_PATH = path.join(USER_DATA_ROOT, 'workspace-settings.json');
@@ -141,7 +140,7 @@ export async function writeWorkspaceVisibilityOverride(agentId, policy, { settin
 }
 
 /**
- * 读资源策略表（{ <agentId>: { maxLiveRuntimes } }，ADR-0027）。损坏/缺省返回空表。
+ * 读资源策略表（{ <agentId>: { maxLiveThreads } }，ADR-0027）。损坏/缺省返回空表。
  */
 export async function readWorkspaceResourcePolicies({ settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH } = {}) {
   if (_resourcePolicyCaches.has(settingsPath)) return _resourcePolicyCaches.get(settingsPath);
@@ -186,19 +185,23 @@ export async function writeWorkspacePermissionValue(agentId, permissionId, value
   };
 }
 
-export async function writeWorkspaceResourcePolicy(agentId, maxLiveRuntimes, options = {}) {
-  const result = await writeWorkspacePermissionValue(agentId, PERMISSION_ITEMS.maxLiveRuntimes.id, maxLiveRuntimes, options);
-  return { ...result, maxLiveRuntimes: maxLiveRuntimes };
+export async function writeWorkspaceResourcePolicy(agentId, maxLiveThreads, options = {}) {
+  const result = await writeWorkspacePermissionValue(agentId, PERMISSION_ITEMS.maxLiveThreads.id, maxLiveThreads, options);
+  return { ...result, maxLiveThreads: maxLiveThreads };
 }
 
-export function setupWorkspaceSettingsRoutes(app, express) {
+export function setupWorkspaceSettingsRoutes(app, express, { countLiveThreadsByAgent } = {}) {
   app.get('/protoclaw/workspace_settings', async (_req, res) => {
     res.json({
       workspaceVisibility: await readWorkspaceVisibilityOverrides(),
       resourcePolicy: await readWorkspaceResourcePolicies(),
-      // 存活 runtime 现状投影（ADR-0027）：设置面板展示「当前 N」与
-      // coder_shell 预检共用本端点，配额策略与现状一次读齐。
-      liveRuntimes: countLiveRuntimeProcessesByAgent(),
+      // 非终态线程现状投影（ADR-0027 修订一）：设置面板展示「当前 N」与
+      // coder_shell 预检共用本端点，配额策略与现状一次读齐。计数闭包由
+      // 装配层注入（thread-quota 的 countNonTerminalThreadsByAgent）；
+      // 未注入时投影为空表（测试装配）。
+      liveThreads: typeof countLiveThreadsByAgent === 'function'
+        ? await countLiveThreadsByAgent()
+        : {},
     });
   });
 

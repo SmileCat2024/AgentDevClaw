@@ -36,13 +36,13 @@ describe('feature runtime schemas', () => {
     assert.deepEqual(metadata.permissions, []);
     assert.deepEqual(metadata.features[0], { package: '@agentdevjs/demo', version: '1.0.0', config: { enabled: true } });
     assert.deepEqual(normalizeAgentMetadata({
-      id: 'quota-agent', entry: './agent.js', permissions: ['maxLiveRuntimes'],
-    }).permissions, ['maxLiveRuntimes']);
+      id: 'quota-agent', entry: './agent.js', permissions: ['maxLiveThreads'],
+    }).permissions, ['maxLiveThreads']);
     assert.throws(() => normalizeAgentMetadata({
       id: 'bad-agent', entry: './agent.js', permissions: ['unknown-permission'],
     }), /未知权限项/);
     assert.throws(() => normalizeAgentMetadata({
-      id: 'duplicate-agent', entry: './agent.js', permissions: ['maxLiveRuntimes', 'maxLiveRuntimes'],
+      id: 'duplicate-agent', entry: './agent.js', permissions: ['maxLiveThreads', 'maxLiveThreads'],
     }), /重复声明/);
     assert.throws(() => normalizeAgentMetadata({
       id: 'demo-agent', entry: './agent.js',

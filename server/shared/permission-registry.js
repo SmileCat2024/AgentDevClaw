@@ -2,8 +2,8 @@
  * OS 权限项目录。
  *
  * 该目录是权限项 ID 与值类型的唯一权威；用户配置可以携带的权限项必须在此登记。
- * 目前登记：runtime 并发上限（ADR-0027）、通知权限项族（ADR-0030）、coder
- * 上下文接续策略（contextRotationStrategy）。
+ * 目前登记：线程并发上限（ADR-0027 修订一，maxLiveThreads）、通知权限
+ * 项族（ADR-0030）、coder 上下文接续策略（contextRotationStrategy）。
  */
 
 function isPositiveInteger(value) {
@@ -24,8 +24,8 @@ function isEnumValue(allowedValues) {
 export const CONTEXT_ROTATION_STRATEGY_VALUES = Object.freeze(['adaptive', 'trim', 'summary']);
 
 export const PERMISSION_ITEMS = Object.freeze({
-  maxLiveRuntimes: Object.freeze({
-    id: 'maxLiveRuntimes',
+  maxLiveThreads: Object.freeze({
+    id: 'maxLiveThreads',
     valueType: 'positive-integer',
     validate: isPositiveInteger,
   }),

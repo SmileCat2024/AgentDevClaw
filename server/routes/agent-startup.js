@@ -43,7 +43,6 @@ import {
 import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { addOpenSession } from '../shared/open-sessions-tracker.js';
-import { assertRuntimeSpawnAllowed } from './runtime-quota.js';
 
 const RUNTIME_DIAGNOSTIC_TAIL_CHARS = 8000;
 
@@ -390,18 +389,6 @@ export function createAgentStartupFns(deps) {
           return buildStatus(agent.id, resolvedSessionId);
       }
     }
-    // ── Runtime quota gate（ADR-0027）──────────────────────
-    // 走到这里必然要 spawn 新子进程（复用 existing / 共享进程 join 已在上方
-    // 提前返回，不增加进程数）。满配额抛结构化拒绝（status 429 + runtimeQuota
-    // 负载），经全局错误契约透传调度方；rotation/接续意图经 spawnIntent 声明
-    // 豁免——生命周期接续不是扩编，满配额拦它会死锁线程精简。spawnCaller 是
-    // 身份升级缝（ADR-0027 §6），本期无身份基建恒为 undefined。
-    await assertRuntimeSpawnAllowed({
-      agentId: agent.id,
-      permissions: agent.permissions,
-      intent: runtimeOptions?.spawnIntent,
-      caller: runtimeOptions?.spawnCaller,
-    });
 
     const runtimeCwd = agent.id === 'agent-studio' && projectDir
       ? projectDir

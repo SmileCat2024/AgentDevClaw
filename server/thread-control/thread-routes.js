@@ -38,9 +38,12 @@ import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-e
  *   直投；交接窗口 / 非 head → Inbox 暂存；终态 → 拒绝）由网关复用。
  * @param {Function} [options.publishThreadEvent] thread 事件发布（DI；缺省模块级
  *   publishThreadEvent，无订阅者时 no-op）
+ * @param {Function} [options.assertThreadQuota] 线程并发上限检查（ADR-0027 修订一）：
+ *   async (agentId) => void，满配额抛结构化 429；由装配层闭包 agent 声明与
+ *   线程控制面（server.js 注入）。不传则不检查（测试装配）。
  * @param {{ deleteThread: Function }} [options.threadDelete] - T005 删除级联服务
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, publishThreadEvent = publishThreadEventDefault } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, publishThreadEvent = publishThreadEventDefault, assertThreadQuota } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -214,6 +217,11 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
   app.post('/protoclaw/threads', jsonMiddleware, async (req, res) => {
     try {
       const { agentId, sessionId, title, mode, workspaceId } = req.body || {};
+      // 线程并发上限（ADR-0027 修订一）：满配额拒绝建线（会话创建路径的
+      // 检查在 session.js 落盘之前，这里覆盖 create 动词的独立建线）。
+      if (typeof assertThreadQuota === 'function') {
+        await assertThreadQuota(String(agentId || '').trim());
+      }
       // 锚点创建走 core.start（sessionRef 重组，Q6 清单第 1 项）；
       // mode 归看板（board.setMode）。
       const thread = await core.start({

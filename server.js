@@ -126,6 +126,7 @@ import { createThreadLifecycleService } from './server/thread-control/thread-lif
 import { createThreadDeleteService } from './server/thread-control/thread-delete.js';
 import { createThreadDeleteResources } from './server/thread-control/thread-delete-resources.js';
 import { setupAcpRoutes } from './server/routes/acp.js';
+import { assertThreadQuotaAllowed, countNonTerminalThreadsByAgent } from './server/routes/thread-quota.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { createThreadRotationService } from './server/thread-control/thread-rotation.js';
 import { buildRotationStrategyResolver } from './server/context-continuity/rotation-strategy-resolver.js';
@@ -611,7 +612,12 @@ app.post('/protoclaw/shutdown', async (req, res) => {
 setupModelConfigRoutes(app, express);
 setupOAuthCodexRoutes(app, express);
 setupProxyConfigRoutes(app, express);
-setupWorkspaceSettingsRoutes(app, express);
+setupWorkspaceSettingsRoutes(app, express, {
+  // 线程并发上限的现状投影（ADR-0027 修订一）：设置面板「当前 N」与
+  // coder_shell 预检共用本端点；计数闭包在装配层组合（workspace-settings
+  // 不依赖线程控制面）。
+  countLiveThreadsByAgent: () => countNonTerminalThreadsByAgent(threadControl),
+});
 setupToolStateRoutes(app);
 setupFeatureCatalogRoutes(app);
 setupFeatureStoreRoutes(app, express);
@@ -662,6 +668,17 @@ const threadRestartResume = createThreadRestartResume({
 setupThreadRoutes(app, express, {
   control: threadControl,
   lifecycle: threadLifecycle,
+  // 线程并发上限（ADR-0027 修订一）：POST /threads 建线入口的检查闭包——
+  // agent 声明解析在此收敛，thread-routes 只拿谓词。agent 不存在时
+  // permissions 解析为空（未声明 = 不治理），保持既有宽松行为。
+  assertThreadQuota: async (agentId) => {
+    const agent = await requireAgentLight(agentId).catch(() => null);
+    await assertThreadQuotaAllowed({
+      agentId,
+      permissions: agent?.permissions,
+      control: threadControl,
+    });
+  },
   // commands 端点的即时投递走 integration 的 consumer 消费面（退避 / 水位同源）
   tryDeliver: (threadId) => threadIntegration.tryDeliver(threadId),
   ensureHeadRuntime,
