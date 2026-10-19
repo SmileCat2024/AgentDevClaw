@@ -162,3 +162,118 @@ describe('StylizedOutput 签名门禁（StepFinish guard）', () => {
     assert.equal(decision, Decision.Approve);
   });
 });
+
+describe('StylizedOutput 内置风格与默认回填', () => {
+  it('内嵌风格与工作区风格合并发现', async () => {
+    const feature = new StylizedOutput({ workspaceDir });
+    await feature.syncStyleState({});
+    const names = feature.getStyles().map((style) => style.name);
+
+    assert.ok(names.includes('test-style'), '工作区风格应被发现');
+    assert.ok(names.includes('清晰表达'), 'feature 内嵌风格应被发现');
+  });
+
+  it('工作区与内嵌风格重名时工作区版本优先', async () => {
+    const styleDir = join(workspaceDir, '.agentdev', 'output-style');
+    writeFileSync(
+      join(styleDir, 'override.md'),
+      [
+        '---',
+        'name: 清晰表达',
+        'description: 工作区覆盖版',
+        'signature: 工作区覆盖版签名',
+        '---',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    try {
+      const feature = new StylizedOutput({ workspaceDir, defaultStyle: '清晰表达' });
+      await feature.syncStyleState({});
+
+      assert.equal(feature.getActiveStyle().signature, '工作区覆盖版签名');
+    } finally {
+      rmSync(join(styleDir, 'override.md'), { force: true });
+    }
+  });
+
+  it('defaultStyle：未选择时扫描后自动回填', async () => {
+    const feature = new StylizedOutput({ workspaceDir, defaultStyle: 'test-style' });
+    assert.equal(feature.getStatus().activeStyle, null);
+
+    await feature.syncStyleState({});
+
+    assert.equal(feature.getStatus().activeStyle, 'test-style');
+  });
+
+  it('defaultStyle 不在清单中 → 保持未选择', async () => {
+    const feature = new StylizedOutput({ workspaceDir, defaultStyle: '不存在的风格' });
+    await feature.syncStyleState({});
+
+    assert.equal(feature.getStatus().activeStyle, null);
+  });
+
+  it('显式清除后默认风格不再回填', async () => {
+    const feature = new StylizedOutput({ workspaceDir, defaultStyle: 'test-style' });
+    await feature.syncStyleState({});
+    assert.equal(feature.getStatus().activeStyle, 'test-style');
+
+    feature.setActiveStyle(null);
+    await feature.syncStyleState({});
+
+    assert.equal(feature.getStatus().activeStyle, null);
+  });
+
+  it('显式选择其他风格后默认不干预', async () => {
+    const feature = new StylizedOutput({ workspaceDir, defaultStyle: '清晰表达' });
+    feature.setActiveStyle('test-style');
+
+    await feature.syncStyleState({});
+
+    assert.equal(feature.getStatus().activeStyle, 'test-style');
+  });
+
+  it('activeStyleCleared 随快照往返', async () => {
+    const source = new StylizedOutput({ workspaceDir, defaultStyle: 'test-style' });
+    await source.syncStyleState({});
+    source.setActiveStyle(null);
+    assert.equal(source.captureState().activeStyleCleared, true);
+
+    const restored = new StylizedOutput({ workspaceDir, defaultStyle: 'test-style' });
+    restored.restoreState(source.captureState());
+    await restored.syncStyleState({});
+
+    assert.equal(restored.getStatus().activeStyle, null, '恢复显式清除态后不应回填默认');
+  });
+
+  it('旧快照（无 activeStyleCleared 字段）恢复后默认回填生效', async () => {
+    const legacySnapshot = { activeStyleName: null, signedForReply: false, blockedCount: 0, lastAction: 'idle' };
+    const feature = new StylizedOutput({ workspaceDir, defaultStyle: 'test-style' });
+
+    feature.restoreState(legacySnapshot);
+    await feature.syncStyleState({});
+
+    assert.equal(feature.getStatus().activeStyle, 'test-style');
+  });
+
+  it('onInitiate featureConfig.defaultStyle 声明默认风格', async () => {
+    const feature = new StylizedOutput({ workspaceDir });
+    await feature.onInitiate({ logger: undefined, featureConfig: { defaultStyle: 'test-style' }, config: {} });
+
+    assert.equal(feature.getStatus().defaultStyle, 'test-style');
+    assert.equal(feature.getStatus().activeStyle, 'test-style');
+  });
+
+  it('manifest：单一 section，defaultStyle 为下拉且选项来自内置风格', () => {
+    const manifest = new StylizedOutput({ workspaceDir }).getFeatureManifest();
+    const sections = manifest.settings.sections;
+    const prop = manifest.settings.properties.defaultStyle;
+
+    assert.equal(sections.length, 1);
+    assert.deepEqual(sections[0].properties, ['defaultStyle', 'maxSignatureBlocks']);
+    assert.equal(prop.type, 'select');
+    const values = prop.options.map((option) => option.value);
+    assert.ok(values.includes(''), '应含「不启用默认」空选项');
+    assert.ok(values.includes('清晰表达'), '内置风格应出现在选项中');
+  });
+});

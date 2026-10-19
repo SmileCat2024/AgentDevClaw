@@ -1,13 +1,17 @@
 /**
  * StylizedOutput —— 输出风格库 + 确认签名门禁
  *
- * 约定（与 SkillFeature 的 skills 发现同族，但布局不同）：
- *   <workspaceDir>/.agentdev/output-style/*.md   每个平铺 md 文件 = 一种风格
+ * 约定（与 SkillFeature 的 skills 发现同族，但布局不同），风格来自两个来源合并发现：
+ *   1. feature 内嵌目录 dist/styles/*.md（源码在 src/styles/，构建时经 copy-assets 镜像）
+ *   2. <workspaceDir>/.agentdev/output-style/*.md   每个平铺 md 文件 = 一种风格
+ *   两处风格名重复时工作区版本优先（用户自定义覆盖内置），并记录警告。
  *
  * 风格选择是会话作用域的内存状态（activeStyleName）：不落盘、不跨会话共享。
- * 同一会话内随 Feature 状态快照（captureState/restoreState）持久；新会话一律
- * 从未选择开始，必须人工经面板 capability（configure）重新选择——工作区里
- * 的任何遗留状态都不会让新对话“先入为主”地继承某个风格。
+ * 同一会话内随 Feature 状态快照（captureState/restoreState）持久；新会话从
+ * 「未选择」开始。defaultStyle 选项声明默认风格：未选择且未被显式清除时，
+ * 每次扫描后自动回填该风格（新会话、接续会话、旧会话恢复都适用）；用户经
+ * 面板显式清除选择后记 activeStyleCleared=true，不再回填——区分「没选过」
+ * 与「不要了」，二者都不会让工作区里的遗留状态先入为主地选中某个风格。
  * 每个风格 md 必须带 YAML frontmatter，必填字段：
  *   name        风格名（选择文件引用它，需全局唯一）
  *   description 一句话描述
@@ -33,7 +37,7 @@
 
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import {
   Decision,
@@ -54,6 +58,8 @@ import type {
 
 const STYLE_DIR_SEGMENTS = ['.agentdev', 'output-style'];
 const STYLE_FILE_EXT = '.md';
+/** feature 内嵌风格目录名（位于 dist/ 旁边，构建时由 copy-assets 从 src/styles/ 镜像） */
+const BUILTIN_STYLE_DIR_NAME = 'styles';
 const DEFAULT_MAX_SIGNATURE_BLOCKS = 5;
 
 export interface OutputStyleMeta {
@@ -71,6 +77,8 @@ export interface StylizedOutputStatus {
   styleCount: number;
   styles: Array<Pick<OutputStyleMeta, 'name' | 'description' | 'signature'>>;
   activeStyle: string | null;
+  /** 配置声明的默认风格名（未配置为 null；是否在清单中以其是否被回填为准） */
+  defaultStyle: string | null;
   /** 本轮回复是否已签名通过 */
   signedForReply: boolean;
   /** 本轮回复因未签名被拦截的连续次数 */
@@ -84,6 +92,8 @@ export interface StylizedOutputOptions {
   maxSignatureBlocks?: number;
   /** 会话工作区（缺省 process.cwd()；显式传入时优先于 onInitiate 的 ctx.config） */
   workspaceDir?: string;
+  /** 默认风格名：未选择且未被显式清除时扫描后自动启用；配置的名称不在清单中时保持未选择 */
+  defaultStyle?: string;
 }
 
 function clampMax(value: unknown): number {
@@ -194,6 +204,29 @@ function scanStyles(dir: string): { styles: OutputStyleMeta[]; warnings: string[
   return { styles, warnings };
 }
 
+/**
+ * 双源扫描合并：工作区目录风格优先，feature 内嵌风格补充。
+ * 同名时工作区版本生效（用户自定义覆盖内置）并记录警告；合并后按风格名排序，
+ * 展示顺序与来源无关、稳定可预测。
+ */
+function scanAllStyles(builtinDir: string, workspaceDir: string): { styles: OutputStyleMeta[]; warnings: string[] } {
+  const builtin = scanStyles(builtinDir);
+  const workspace = scanStyles(workspaceDir);
+  const warnings = [...builtin.warnings, ...workspace.warnings];
+  const styles = [...workspace.styles];
+  const seen = new Set(styles.map((style) => style.name));
+  for (const style of builtin.styles) {
+    if (seen.has(style.name)) {
+      warnings.push(`内嵌风格 "${style.name}" 与工作区风格重名，使用工作区版本`);
+      continue;
+    }
+    seen.add(style.name);
+    styles.push(style);
+  }
+  styles.sort((a, b) => a.name.localeCompare(b.name));
+  return { styles, warnings };
+}
+
 const VALID_ACTIONS = ['idle', 'blocked', 'signed', 'released'] as const;
 
 export class StylizedOutput implements AgentFeature {
@@ -207,12 +240,17 @@ export class StylizedOutput implements AgentFeature {
   readonly dependencies: string[] = [];
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
   readonly description =
-    '为会话选定输出风格后，agent 的每次回复都遵循该风格并经签名确认；风格文件放入工作区 .agentdev/output-style/ 目录即可选用。';
+    '为会话选定输出风格后，agent 的每次回复都遵循该风格并经签名确认；风格发现自 feature 内置目录与工作区 .agentdev/output-style/，可配置默认风格自动启用。';
 
   private workspaceDir = process.cwd();
   private stylesDir = '';
+  private builtinStylesDir = '';
   private styles: OutputStyleMeta[] = [];
   private activeStyleName: string | null = null;
+  /** 用户是否显式清除过选择：true 时默认风格不再自动回填（随快照持久化） */
+  private activeStyleCleared = false;
+  /** 配置声明的默认风格名（构造 options 或 onInitiate featureConfig） */
+  private defaultStyleName: string | null = null;
   private signedForReply = false;
   private blockedCount = 0;
   /** 已注入风格的内容指纹键：name@hash，风格或文件内容变化时重新注入 */
@@ -226,6 +264,9 @@ export class StylizedOutput implements AgentFeature {
 
   constructor(options: StylizedOutputOptions = {}) {
     this.maxSignatureBlocks = clampMax(options.maxSignatureBlocks);
+    this.defaultStyleName = cleanText(options.defaultStyle) || null;
+    // 内嵌风格目录随 dist 产物定位（源码装配与 tgz 安装下 dist/styles/ 结构一致）
+    this.builtinStylesDir = join(dirname(this.source), BUILTIN_STYLE_DIR_NAME);
     // 显式传入的 workspaceDir 优先于 onInitiate 的 ctx.config（Claw 静态装配
     // 在构造时就知道会话工作区，与 MemoryFeature 等兄弟 Feature 的传参方式对齐）。
     if (typeof options.workspaceDir === 'string' && options.workspaceDir.trim()) {
@@ -241,10 +282,22 @@ export class StylizedOutput implements AgentFeature {
   }
 
   getFeatureManifest(): FeatureManifestDefinition {
+    // 默认风格只能从 feature 内置风格中选（选项在 manifest 声明时扫描内置目录
+    // 生成）；运行时的风格发现与选择仍含工作区 .agentdev/output-style/ 双源合并。
+    const builtinStyles = scanStyles(this.builtinStylesDir).styles;
     return {
       schemaVersion: 1,
       settings: {
         properties: {
+          defaultStyle: {
+            type: 'select',
+            title: '默认输出风格',
+            description: '会话未选择且未显式清除输出风格时自动启用的风格，选项为本 feature 内置风格。工作区 .agentdev/output-style/ 中的风格仍可在会话控制面板选用（含同名覆盖内置）。',
+            options: [
+              { label: '不启用默认', value: '' },
+              ...builtinStyles.map((style) => ({ label: style.name, value: style.name })),
+            ],
+          },
           maxSignatureBlocks: {
             type: 'number',
             title: '签名拦截上限',
@@ -255,7 +308,7 @@ export class StylizedOutput implements AgentFeature {
             step: 1,
           },
         },
-        sections: [{ id: 'signature-gate', title: '签名门禁', properties: ['maxSignatureBlocks'] }],
+        sections: [{ id: 'output-style', title: '输出风格', properties: ['defaultStyle', 'maxSignatureBlocks'] }],
       },
     };
   }
@@ -268,6 +321,10 @@ export class StylizedOutput implements AgentFeature {
     if (featureConfig.maxSignatureBlocks !== undefined) {
       this.maxSignatureBlocks = clampMax(featureConfig.maxSignatureBlocks);
     }
+    // 宿主 manifest 编辑值优先（与 maxSignatureBlocks 同通道）；空串视为显式撤销默认
+    if (featureConfig.defaultStyle !== undefined) {
+      this.defaultStyleName = cleanText(featureConfig.defaultStyle) || null;
+    }
     const config = ctx.config as { workspaceDir?: unknown } | undefined;
     const workspaceDir = config && typeof config.workspaceDir === 'string' ? config.workspaceDir : '';
     this.workspaceDir = this.workspaceDirOption || workspaceDir || process.cwd();
@@ -275,8 +332,10 @@ export class StylizedOutput implements AgentFeature {
     this.rescan('init');
     this.logger?.info('stylized-output 初始化完成', {
       stylesDir: this.stylesDir,
+      builtinStylesDir: this.builtinStylesDir,
       styleCount: this.styles.length,
       activeStyle: this.activeStyleName,
+      defaultStyle: this.defaultStyleName,
     });
   }
 
@@ -293,12 +352,12 @@ export class StylizedOutput implements AgentFeature {
       {
         name: 'configure',
         title: '输出风格',
-        description: '查看与选择本会话的输出风格（发现自 .agentdev/output-style/）。选择是会话内存态：不落盘、不跨会话继承，新会话需重新选择；选中后模型每次最终回复须通过确认签名门禁。',
+        description: '查看与选择本会话的输出风格（feature 内置风格与 .agentdev/output-style/ 目录合并发现）。选择是会话内存态：不落盘、不跨会话继承；未选择时自动启用配置的默认风格，显式清除（传空）后不再自动回填。选中后模型每次最终回复须通过确认签名门禁。',
         parameters: {
           styleName: {
             type: 'string',
             title: '风格名',
-            description: '要启用的风格名（须在风格清单中）；传空字符串或 null 清除选择（门禁旁路）。',
+            description: '要启用的风格名（须在风格清单中）；传空字符串或 null 显式清除选择（门禁旁路，且默认风格不再自动回填）。',
           },
           maxSignatureBlocks: {
             type: 'number',
@@ -385,7 +444,7 @@ export class StylizedOutput implements AgentFeature {
   private readonly listTool: Tool = {
     name: 'list_output_styles',
     description:
-      '列出当前工作区已发现的全部输出风格（发现自 .agentdev/output-style/*.md）。返回每个风格的名称、一句话描述和是否为当前启用风格，无参数。查看某个风格的完整规则与确认签名请用 show_output_style。',
+      '列出当前会话已发现的全部输出风格（feature 内置风格与工作区 .agentdev/output-style/*.md 合并发现，重名时工作区优先）。返回每个风格的名称、一句话描述和是否为当前启用风格，无参数。查看某个风格的完整规则与确认签名请用 show_output_style。',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     execute: async () => {
       this.rescan('tool');
@@ -408,7 +467,7 @@ export class StylizedOutput implements AgentFeature {
       };
       if (styles.length === 0) {
         payload.hint =
-          '未发现任何输出风格。将带 name/description/signature frontmatter 的 md 文件放入 ' + this.stylesDir + ' 即可被发现。';
+          '未发现任何输出风格。将带 name/description/signature frontmatter 的 md 文件放入 ' + this.stylesDir + '（工作区）即可被发现；本 feature 另带内置风格目录 ' + this.builtinStylesDir + '。';
       }
       return payload;
     },
@@ -560,6 +619,7 @@ export class StylizedOutput implements AgentFeature {
   captureState() {
     return {
       activeStyleName: this.activeStyleName,
+      activeStyleCleared: this.activeStyleCleared,
       signedForReply: this.signedForReply,
       blockedCount: this.blockedCount,
       injectedStyleKey: this.injectedStyleKey,
@@ -570,6 +630,8 @@ export class StylizedOutput implements AgentFeature {
   restoreState(snapshot: unknown): void {
     const state = snapshot && typeof snapshot === 'object' ? snapshot as Record<string, unknown> : {};
     this.activeStyleName = cleanText(state.activeStyleName) || null;
+    // 旧快照无此字段按 false 处理：存量会话恢复后同样能获得默认风格回填
+    this.activeStyleCleared = state.activeStyleCleared === true;
     this.signedForReply = state.signedForReply === true;
     this.blockedCount = typeof state.blockedCount === 'number' && Number.isFinite(state.blockedCount)
       ? Math.max(0, Math.floor(state.blockedCount))
@@ -600,6 +662,7 @@ export class StylizedOutput implements AgentFeature {
         signature: style.signature,
       })),
       activeStyle: this.activeStyleName,
+      defaultStyle: this.defaultStyleName,
       signedForReply: this.signedForReply,
       blockedCount: this.blockedCount,
       maxSignatureBlocks: this.maxSignatureBlocks,
@@ -614,9 +677,10 @@ export class StylizedOutput implements AgentFeature {
   }
 
   /**
-   * 设置当前风格（会话内存态，立即生效，不落盘）；传 null 清空选择。
+   * 设置当前风格（会话内存态，立即生效，不落盘）；传 null 显式清空选择——
+   * 清空后记 activeStyleCleared，默认风格不再自动回填，直到再次显式选择。
    * 面板 configure capability 与未来控制面共用的写入入口；模型不可见。
-   * 选择只随 Feature 状态快照在会话恢复时还原，新会话一律从 null 开始。
+   * 选择只随 Feature 状态快照在会话恢复时还原。
    */
   setActiveStyle(name: string | null): StylizedOutputStatus {
     const value = cleanText(name);
@@ -627,8 +691,10 @@ export class StylizedOutput implements AgentFeature {
         return this.getStatus();
       }
       this.activeStyleName = value;
+      this.activeStyleCleared = false;
     } else {
       this.activeStyleName = null;
+      this.activeStyleCleared = true;
     }
     this.signedForReply = false;
     this.blockedCount = 0;
@@ -637,9 +703,9 @@ export class StylizedOutput implements AgentFeature {
 
   // ---------- 内部 ----------
 
-  /** 重扫风格目录；reason 只影响日志语境。风格选择是内存态，此处不读写任何选择文件 */
+  /** 重扫风格（双源合并）；reason 只影响日志语境。风格选择是内存态，此处不读写任何选择文件 */
   private rescan(reason: 'init' | 'call' | 'set' | 'tool'): void {
-    const { styles, warnings } = scanStyles(this.stylesDir);
+    const { styles, warnings } = scanAllStyles(this.builtinStylesDir, this.stylesDir);
     for (const warning of warnings) this.logger?.warn('[stylized-output] ' + warning);
     this.styles = styles;
     // 内存中选中的风格文件被删除/改名时主动失效，保持状态自洽（门禁旁路）。
@@ -650,6 +716,13 @@ export class StylizedOutput implements AgentFeature {
       this.activeStyleName = null;
       this.signedForReply = false;
       this.blockedCount = 0;
+    }
+    // 默认风格回填：未选择且未被显式清除时自动启用（新会话 / 接续会话 / 旧会话恢复统一走这里）
+    if (!this.activeStyleName && !this.activeStyleCleared && this.defaultStyleName) {
+      if (styles.some((style) => style.name === this.defaultStyleName)) {
+        this.activeStyleName = this.defaultStyleName;
+        this.logger?.info('[stylized-output] 未选择输出风格，已回填默认风格 "' + this.defaultStyleName + '"', { reason });
+      }
     }
   }
 }

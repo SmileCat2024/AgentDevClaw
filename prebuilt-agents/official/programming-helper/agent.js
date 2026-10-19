@@ -191,9 +191,11 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     //   ...(config.features?.['step-rotating-model'] && typeof config.features['step-rotating-model'] === 'object'
     //     ? config.features['step-rotating-model'] : {}),
     // }));
-    // 输出风格（stylized-output）：风格 md 由用户放入工作区 .agentdev/output-style/，
-    // Claw 会话控制面板经 stylized-output.configure capability 选择；选中后每次最终
-    // 回复须通过确认签名门禁（StepFinish guard），未选择时完全旁路。
+    // 输出风格（stylized-output）：风格发现自 feature 内置目录与工作区
+    // .agentdev/output-style/（重名时工作区优先）；默认风格经配置层
+    // defaultStyle 声明（workspaces/programming-helper/feature-config/agent.json），
+    // 会话未选择且未显式清除时自动启用。选中后每次最终回复须通过确认签名
+    // 门禁（StepFinish guard），未选择时完全旁路。
     this.use(new StylizedOutput({
       workspaceDir,
       ...(merged['stylized-output'] && typeof merged['stylized-output'] === 'object'

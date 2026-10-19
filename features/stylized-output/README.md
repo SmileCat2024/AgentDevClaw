@@ -4,7 +4,10 @@
 
 ## 目录约定
 
-- `<workspaceDir>/.agentdev/output-style/*.md` —— 每个平铺 md 文件 = 一种风格（非递归、忽略点开头的文件）。
+风格来自两个来源合并发现，同名时工作区版本优先（用户自定义覆盖内置）并记录警告：
+
+1. **feature 内嵌**：`src/styles/*.md`（构建时经 copy-assets 镜像到 `dist/styles/`，随包分发）
+2. **工作区**：`<workspaceDir>/.agentdev/output-style/*.md` —— 每个平铺 md 文件 = 一种风格（非递归、忽略点开头的文件）
 
 ## 风格选择的生命周期（会话作用域，不落盘）
 
@@ -12,7 +15,8 @@
 
 - 选择/清除的唯一写入入口是 `configure` capability（Claw 面板 / slash，人工操作，即时生效）；模型侧没有设置风格的工具。
 - 同一会话内随 Feature 状态快照（`captureState` / `restoreState`）持久：Runtime 停止重启恢复 stateful 会话时，选择一并还原。
-- 新会话一律从"未选择"开始——工作区目录里的任何遗留状态都不会让新对话先入为主地继承某个风格。
+- **默认风格回填**：配置了 `defaultStyle`（构造 options / manifest settings / featureConfig，三通道同 `maxSignatureBlocks`）时，会话未选择风格且未被显式清除，扫描后自动启用默认风格——新会话、接续会话、存量会话恢复统一适用，无需每会话手动设置。配置界面中它是下拉选择，选项只列 feature 内置风格（声明时扫描内置目录生成）；运行时的风格发现与选择不受此限，仍为双源合并。
+- **显式清除不被拉回**：面板清除选择会记 `activeStyleCleared`（随快照持久化），此后默认风格不再自动回填——区分"没选过"与"不要了"。旧快照无此字段按未清除处理，存量会话恢复后同样获得默认。
 - 内存中选中的风格文件被删除/改名时，下次扫描自动按未选择处理（门禁旁路）并记录警告。
 
 ## 风格文件格式
@@ -40,7 +44,7 @@ frontmatter 必填 `name` / `description` / `signature`（均为单行字符串�
 ## 公共 API（供控制面 / 其他 Feature 使用；模型不可见）
 
 - `getStyles()` / `getActiveStyle()` / `getStatus()`
-- `setActiveStyle(name | null)` —— 设置/清除当前风格（会话内存态，立即生效，不落盘）；面板 capability 的写入入口，清单外的风格名会被拒绝
+- `setActiveStyle(name | null)` —— 设置/显式清除当前风格（会话内存态，立即生效，不落盘）；面板 capability 的写入入口，清单外的风格名会被拒绝；显式清除后默认风格不再自动回填
 - `setMaxSignatureBlocks(value)` —— 调整签名拦截上限（1–10 钳制）
 
 对外控制链路是 `configure` capability（Claw 面板 / slash）：读取门禁状态、切换风格、调整签名拦截上限。
@@ -51,5 +55,6 @@ frontmatter 必填 `name` / `description` / `signature`（均为单行字符串�
 
 - 签名匹配 / 空白规范化匹配 / 不匹配拒绝 / 空参数拒绝 / 未启用风格拒绝
 - 门禁：带工具调用的步不干预、已签名自然结束放行、未签名拦截并注入补签要求、连续拦截达上限放行、CallStart 重置签名状态
+- 内置风格：内嵌与工作区风格合并发现、重名时工作区优先、默认风格回填、清单外默认保持未选择、显式清除后不回填、清除标记随快照往返、旧快照恢复后回填生效、featureConfig 通道声明默认
 
 风格启用后的门禁/签名正向路径依赖面板 capability 人工启用，Test Runtime 中无自动化入口，回归以面板人工验证为准（历史人工场景：`style-gate-bypass-when-unset` 未选择风格旁路放行；`style-gate-signed-finish` 未启用时签名被拒；`style-gate-forces-sign` 新会话不携带风格选择）。

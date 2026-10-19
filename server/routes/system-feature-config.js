@@ -278,6 +278,33 @@ export function setupSystemFeatureConfigRoutes(app, express) {
         features.push({ featureName: 'contextGuard', manifest: CONTEXT_GUARD_MANIFEST });
       }
 
+      // Claw 仓库 features/ 包（prebuilt agent 静态装配，不在上面的固定
+      // importPaths 与 $mount 链路内）：显式加载取其 manifest 单一权威，
+      // 配置界面才能看到它们的配置项。dist 缺失（未构建）时静默跳过。
+      for (const manifestImport of [
+        '../../features/stylized-output/dist/index.js',
+        '../../features/force-continuation/dist/index.js',
+      ]) {
+        try {
+          const mod = await import(manifestImport);
+          for (const FeatureClass of Object.values(mod)) {
+            if (typeof FeatureClass !== 'function') continue;
+            try {
+              const instance = new FeatureClass();
+              const fname = instance.name || FeatureClass.name;
+              if (seen.has(fname)) continue;
+              if (typeof instance.getFeatureManifest === 'function') {
+                const manifest = instance.getFeatureManifest();
+                if (manifest?.settings?.properties) {
+                  seen.add(fname);
+                  features.push({ featureName: fname, manifest });
+                }
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+
       // StepRotatingModel：类名不满足上面的 /Feature$/ 过滤，且属于 Claw 本地
       // features/ 包（不在固定 importPaths 内），显式加载取其 manifest 单一权威。
       // 已从编程小助手卸载（装配注释保留在 prebuilt-agents/official/
