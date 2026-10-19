@@ -35,20 +35,20 @@ describe('programming-helper workspace process mode UI', () => {
     const ctx = createFrontendSandbox({
       fetch: async (url, options) => {
         requests.push({ url, options });
-        if (!options) return { ok: true, json: async () => ({ resourcePolicy: {}, liveRuntimes: {} }) };
+        if (!options) return { ok: true, json: async () => ({ resourcePolicy: {}, liveThreads: {} }) };
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
     ctx.loadSource('public/src/modules/ph-model-config.js');
 
-    await ctx.run("window.phSaveCoderRuntimeLimit('4')");
+    await ctx.run("window.phSaveCoderThreadLimit('4')");
 
     const write = requests.find((request) => request.options?.method === 'PUT');
     assert.ok(write);
     assert.equal(write.url, '/protoclaw/workspace_settings/resource_policy');
     assert.deepEqual(JSON.parse(write.options.body), {
       agentId: 'coder',
-      permissionId: 'maxLiveRuntimes',
+      permissionId: 'maxLiveThreads',
       value: 4,
     });
     assert.ok(requests.some((request) => request.url === '/protoclaw/workspace_settings'));
@@ -70,7 +70,7 @@ describe('programming-helper workspace process mode UI', () => {
     assert.equal(requests[0].url, '/protoclaw/workspace_settings/resource_policy');
     assert.deepEqual(JSON.parse(requests[0].options.body), {
       agentId: 'coder',
-      permissionId: 'maxLiveRuntimes',
+      permissionId: 'maxLiveThreads',
       value: 4,
     });
   });
@@ -85,7 +85,7 @@ describe('programming-helper workspace process mode UI', () => {
     });
     ctx.loadSource('public/src/modules/ph-model-config.js');
 
-    await ctx.run("window.phSaveCoderRuntimeLimit('1.5')");
+    await ctx.run("window.phSaveCoderThreadLimit('1.5')");
 
     assert.equal(requests.length, 0);
   });
@@ -94,7 +94,7 @@ describe('programming-helper workspace process mode UI', () => {
     const ctx = createFrontendSandbox({
       fetch: async () => ({
         ok: true,
-        json: async () => ({ resourcePolicy: { coder: { contextRotationStrategy: 'trim' } }, liveRuntimes: {} }),
+        json: async () => ({ resourcePolicy: { coder: { contextRotationStrategy: 'trim' } }, liveThreads: {} }),
       }),
     });
     ctx.window.allAgents = [{ id: 'coder', permissionDefaults: { contextRotationStrategy: 'adaptive' } }];
@@ -121,18 +121,18 @@ describe('programming-helper workspace process mode UI', () => {
       'concurrency row renders above the rotation-strategy row',
     );
     // 两行都带固定解释副标题；生效时机的说明文案不再出现在页面上
-    assert.match(host.innerHTML, /同时运行的会话数量上限/);
+    assert.match(host.innerHTML, /未归档线程的数量上限/);
     assert.match(host.innerHTML, /自动接续新会话所采用的精简方式/);
     assert.doesNotMatch(host.innerHTML, /即时生效/);
     // 并发上限行仍在同一分页
-    assert.match(host.innerHTML, /并发上限/);
+    assert.match(host.innerHTML, /线程并发上限/);
   });
 
   it('falls back to the author default when no user override is stored', async () => {
     const ctx = createFrontendSandbox({
       fetch: async () => ({
         ok: true,
-        json: async () => ({ resourcePolicy: {}, liveRuntimes: {} }),
+        json: async () => ({ resourcePolicy: {}, liveThreads: {} }),
       }),
     });
     ctx.window.allAgents = [{ id: 'coder', permissionDefaults: { contextRotationStrategy: 'adaptive' } }];
@@ -150,7 +150,7 @@ describe('programming-helper workspace process mode UI', () => {
     const ctx = createFrontendSandbox({
       fetch: async (url, options) => {
         requests.push({ url, options });
-        if (!options) return { ok: true, json: async () => ({ resourcePolicy: {}, liveRuntimes: {} }) };
+        if (!options) return { ok: true, json: async () => ({ resourcePolicy: {}, liveThreads: {} }) };
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
