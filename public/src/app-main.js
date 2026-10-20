@@ -1336,7 +1336,7 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
 function commitMetadataUpdate(pollToken, { todoRaw, overviewJson, inputRequestsRaw } = {}) {
   const hasTodo = todoRaw !== undefined;
   const hasOverview = overviewJson !== undefined;
-  const hasInput = inputRequestsRaw !== undefined;
+  const hasInput = inputRequestsRaw !== undefined && isSessionViewInputRequestsCurrent(pollToken);
   const nextOverview = hasOverview ? normalizeOverviewSnapshot(overviewJson) : null;
   const nextOverviewSignature = hasOverview ? getOverviewSignature(nextOverview) : null;
   const nextTodoPlan = hasTodo ? (todoRaw === null ? null : normalizeTodoPlan(todoRaw)) : null;
@@ -1348,7 +1348,8 @@ function commitMetadataUpdate(pollToken, { todoRaw, overviewJson, inputRequestsR
   const metadataPatch = {};
   if (overviewChanged) metadataPatch.overview = nextOverview;
   if (todoChanged) metadataPatch.todoPlan = nextTodoPlan;
-  if (inputChanged) metadataPatch.inputRequests = inputRequests;
+  // 未变的事件也提交观察版本，防止在途旧响应复活已消费的 lease。
+  if (hasInput) metadataPatch.inputRequests = inputRequests;
   return commitSessionViewPatch(pollToken, metadataPatch, ({ current }) => {
 
     // 当目标任务进入终态时，自动清除中断标记

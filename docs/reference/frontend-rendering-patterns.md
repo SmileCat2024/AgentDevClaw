@@ -317,6 +317,19 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
 
 ---
 
+## 6a. SSE 与异步快照：视图身份有效不代表输入数据仍新鲜
+
+`SessionView` token 的身份/代次校验防跨会话提交；同一会话内还需独立的输入请求版本校验。全量 poll 和 `loadAgentData` 都可能在等待其他接口时，被 SSE 的新输入请求超越；旧空快照随后提交会移除历史 user 消息的编辑按钮，旧非空快照则可能复活已消费的 lease。
+
+- `captureSessionViewToken` 在 I/O 前捕获 `inputRequestsRevision`；规范写入点 `applySessionViewPatch` 每次接受输入快照都推进版本，包括内容相同的事件与本地清空。
+- `commitSessionViewPatch` 拒绝过期的 **inputRequests 字段**，其他字段与视图事务仍正常提交；返回 `true` 仅代表视图事务执行，不代表全部字段获准写入。
+- `commitMetadataUpdate` 在签名比较和副作用之前检查输入版本；相同内容也要提交观察版本，但不触发聊天按钮重构。不要在响应返回后重新捕获 token，也不要用刷新、追加轮询或延时掩盖时序覆盖。
+- 同步导航/缓存恢复直接写入仍有效；它们也使更早的在途输入快照失效。版本不随输入值清空而归零，避免 ABA。
+
+回归测试：`test/frontend-rollback-edit-buttons-race.test.js` 用受控 Promise 驱动真实 poll / load / SSE 消费及聊天渲染，验证最终编辑按钮、未变事件、lease 清除与后续新请求。
+
+---
+
 ## 7. Agent 切换的渲染时序
 
 ### 切换入口与调用链

@@ -68,6 +68,8 @@ let _sessionViewIdentity = null;
 // 时残留的旧 token（A→B→A 回访，epoch 未变）：旧生产者携带过期数据仍能
 // 通过校验。代次让任何身份变化作废全部在途 token。
 let _sessionViewGeneration = 0;
+// 独立于视图身份：输入请求被事件/本地操作写入后，在途快照不得覆盖它。
+let _sessionViewInputRequestsRevision = 0;
 
 function getCurrentSessionViewIdentity() {
   const explicit = normalizeSessionViewIdentity(_sessionViewIdentity);
@@ -85,7 +87,12 @@ function captureSessionViewToken(runtimeId = currentRuntimeAgentId, identity = g
     identity: normalizeSessionViewIdentity(identity),
     switchEpoch: _switchEpoch,
     generation: _sessionViewGeneration,
+    inputRequestsRevision: _sessionViewInputRequestsRevision,
   });
+}
+
+function isSessionViewInputRequestsCurrent(token) {
+  return token?.inputRequestsRevision === _sessionViewInputRequestsRevision;
 }
 
 function isSessionViewTokenCurrent(token) {
@@ -182,6 +189,8 @@ function applySessionViewPatch(patch) {
     currentMessages = Array.isArray(patch.messages) ? patch.messages : [];
   }
   if (has('inputRequests')) {
+    // 相同内容的快照也是新观察，必须阻止更早的响应重新写回旧 lease。
+    _sessionViewInputRequestsRevision += 1;
     currentInputRequests = Array.isArray(patch.inputRequests) ? patch.inputRequests : [];
     window.lastInputRequests = currentInputRequests;
     // 工单 037：inputRequests 的规范写入点即输入面的唯一变更声明通道——
@@ -242,6 +251,9 @@ function applySessionViewPatch(patch) {
  * Canonical writer for identity-bound loads, polling, cache restoration and
  * surface resets. It deliberately stores no mirror object: existing globals
  * remain compatibility storage while consumers migrate to the read-only view.
+ * Input snapshots additionally use the revision captured before I/O: an intervening
+ * write drops only inputRequests, preserving other fields and the current view.
+ * A true return value means the view transaction ran, not that every field applied.
  */
 function commitSessionViewPatch(token, patch, afterCommit) {
   if (afterCommit !== undefined && typeof afterCommit !== 'function') {
@@ -249,6 +261,11 @@ function commitSessionViewPatch(token, patch, afterCommit) {
   }
   return commitSessionViewState(token, () => {
     const previous = readCurrentSessionViewState();
+    if (Object.prototype.hasOwnProperty.call(patch, 'inputRequests')
+      && !isSessionViewInputRequestsCurrent(token)) {
+      patch = { ...patch };
+      delete patch.inputRequests;
+    }
     applySessionViewPatch(patch);
     if (afterCommit) {
       afterCommit({
