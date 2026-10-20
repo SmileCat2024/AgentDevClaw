@@ -34,7 +34,7 @@ function panelSandbox(overrides = {}) {
           ok: true,
           status: {
             enabled: false,
-            triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
+            triggers: { outputTruncation: true, apiErrorRetry: true },
             maxConsecutiveContinuations: 3,
             consecutiveContinuations: 0,
             lastProviderStopReason: 'end_turn',
@@ -66,8 +66,10 @@ describe('SessionControlsPanel', () => {
     // 无摘要/状态行：启停由开关本身表达，默认状态不渲染任何状态文本
     assert.doesNotMatch(html, /force-continuation-summary/);
     assert.doesNotMatch(html, /force-continuation-status-line/);
-    assert.match(html, /data-force-continuation-toggle>/);
-    assert.doesNotMatch(html, /data-force-continuation-toggle checked/);
+    assert.match(html, /API 重试/);
+    assert.match(html, /data-force-continuation-trigger="outputTruncation" checked/);
+    assert.match(html, /data-force-continuation-trigger="apiErrorRetry" checked/);
+    assert.doesNotMatch(html, /data-force-continuation-toggle|frameworkLimitReached|保持任务继续|任务步数/);
   });
 
   it('posts a session-targeted toggle and renders the runtime-confirmed state', async () => {
@@ -82,7 +84,7 @@ describe('SessionControlsPanel', () => {
             ok: true,
             status: {
               enabled: true,
-              triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
+              triggers: { outputTruncation: true, apiErrorRetry: true },
               maxConsecutiveContinuations: 3,
               lastAction: 'idle',
             },
@@ -91,7 +93,7 @@ describe('SessionControlsPanel', () => {
       },
     });
 
-    await ctx.run('window.SessionControlsPanel.updateEnabled(true)');
+    await ctx.run('window.SessionControlsPanel.updateTrigger("apiErrorRetry", true)');
     const html = ctx.run('window.SessionControlsPanel.render()');
 
     const fcCall = calls.find((c) => c.url === '/protoclaw/force_continuation_control');
@@ -99,16 +101,16 @@ describe('SessionControlsPanel', () => {
     assert.deepEqual(JSON.parse(fcCall.options.body), {
       agentId: 'programming-helper',
       sessionId: 'session-a',
-      enabled: true,
+      triggers: { apiErrorRetry: true },
     });
-    assert.match(html, /data-force-continuation-toggle checked/);
-    assert.match(html, /输出长度达到上限/);
+    assert.match(html, /data-force-continuation-trigger="apiErrorRetry" checked/);
+    assert.match(html, /正文输出达到上限/);
     assert.doesNotMatch(html, /max_tokens（|（length）|（max_tokens）/);
-    assert.match(html, /data-force-continuation-trigger=\"outputTruncation\" checked/);
-    assert.match(html, /data-force-continuation-limit[^>]*value=\"3\"/);
+    assert.match(html, /data-force-continuation-trigger="outputTruncation" checked/);
+    assert.match(html, /data-force-continuation-limit[^>]*value="3"/);
   });
 
-  it('updates one recovery candidate without changing the master switch and uses the Todo toggle markup', async () => {
+  it('updates one API retry policy independently and uses the Todo toggle markup', async () => {
     const calls = [];
     const { ctx } = panelSandbox({
       fetch: async (url, options = {}) => {
@@ -120,7 +122,7 @@ describe('SessionControlsPanel', () => {
             ok: true,
             status: {
               enabled: true,
-              triggers: { providerMaxTokens: true, providerLength: false, frameworkLimitReached: true },
+              triggers: { outputTruncation: false, apiErrorRetry: true },
             },
           }),
         };
@@ -134,10 +136,10 @@ describe('SessionControlsPanel', () => {
     assert.deepEqual(JSON.parse(fcCall.options.body), {
       agentId: 'programming-helper',
       sessionId: 'session-a',
-      triggers: { providerMaxTokens: false, providerLength: false },
+      triggers: { outputTruncation: false },
     });
-    assert.match(html, /class=\"tool-toggle-input\" data-force-continuation-toggle/);
-    assert.match(html, /class=\"tool-toggle-input\" data-force-continuation-trigger=\"frameworkLimitReached\" checked/);
+    assert.doesNotMatch(html, /data-force-continuation-toggle|frameworkLimitReached/);
+    assert.match(html, /class="tool-toggle-input" data-force-continuation-trigger="apiErrorRetry" checked/);
   });
 
   it('adjusts the auto-resume cap from the number input and clamps invalid values', async () => {
@@ -151,7 +153,7 @@ describe('SessionControlsPanel', () => {
             ok: true,
             status: {
               enabled: true,
-              triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
+              triggers: { outputTruncation: true, apiErrorRetry: true },
               maxConsecutiveContinuations: 8,
             },
           }),
@@ -167,14 +169,14 @@ describe('SessionControlsPanel', () => {
       sessionId: 'session-a',
       maxConsecutiveContinuations: 8,
     });
-    assert.match(html, /data-force-continuation-limit[^>]*value=\"8\"/);
+    assert.match(html, /data-force-continuation-limit[^>]*value="8"/);
 
     // Out-of-range input is rejected client-side without a request.
     await ctx.run('window.SessionControlsPanel.updateLimit(42)');
     await ctx.run('window.SessionControlsPanel.updateLimit("NaN")');
     assert.equal(calls.filter((c) => c.url === '/protoclaw/force_continuation_control').length, 1);
     html = ctx.run('window.SessionControlsPanel.render()');
-    assert.match(html, /data-force-continuation-limit[^>]*value=\"8\"/);
+    assert.match(html, /data-force-continuation-limit[^>]*value="8"/);
   });
 
   it('keeps the control unavailable when none of the controlled features is mounted', async () => {
@@ -212,12 +214,12 @@ describe('SessionControlsPanel', () => {
     });
     const html = ctx.run('window.SessionControlsPanel.render()');
 
-    assert.match(html, /data-force-continuation-toggle/);
+    assert.match(html, /data-force-continuation-trigger="outputTruncation"/);
     // 迁移回归：context-guard 的开关已迁至上边栏 badge，面板不再渲染任何 guard 控件
     assert.doesNotMatch(html, /data-guard-armed/);
     assert.doesNotMatch(html, /data-rotation-enabled/);
     // 底部说明只覆盖已显示的 section
-    assert.match(html, /手动停止与不可重试的错误（如认证失败）不会触发自动接续/);
+    assert.match(html, /手动停止和不可重试错误（如认证失败）不会自动重试/);
     assert.doesNotMatch(html, /超阈值打断触发后自动关闭/);
   });
 
@@ -236,7 +238,7 @@ describe('SessionControlsPanel', () => {
     });
     const html = ctx.run('window.SessionControlsPanel.render()');
 
-    assert.match(html, /data-force-continuation-toggle/);
+    assert.match(html, /data-force-continuation-trigger="outputTruncation"/);
     assert.doesNotMatch(html, /data-rotation-enabled/);
     assert.doesNotMatch(html, /data-rotation-menu/);
     assert.doesNotMatch(html, /模型轮转/);
@@ -270,7 +272,7 @@ describe('SessionControlsPanel', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const html = ctx.run('window.SessionControlsPanel.render()');
 
-    assert.match(html, /data-force-continuation-toggle/);
+    assert.match(html, /data-force-continuation-trigger="outputTruncation"/);
     assert.doesNotMatch(html, /data-guard-armed/);
     assert.equal(probeCount, 1); // 结果按 runtime 缓存，不再重复探测
   });
@@ -285,7 +287,7 @@ describe('SessionControlsPanel', () => {
     const html = ctx.run('window.SessionControlsPanel.render()');
 
     assert.match(fetchCalls[0].url, /agentId=agent-studio/);
-    assert.match(html, /data-force-continuation-toggle/);
+    assert.match(html, /data-force-continuation-trigger="outputTruncation"/);
   });
 });
 

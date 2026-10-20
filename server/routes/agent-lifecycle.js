@@ -708,7 +708,7 @@ export function createAgentLifecycleModule(ctx) {
 
     app.post('/protoclaw/force_continuation_control', express.json(), async (req, res, next) => {
       try {
-        const { enabled, triggers, maxConsecutiveContinuations } = req.body || {};
+        const { triggers, maxConsecutiveContinuations } = req.body || {};
         let target;
         try {
           target = resolveRuntimeControlTarget(req.body);
@@ -739,11 +739,9 @@ export function createAgentLifecycleModule(ctx) {
         } catch (error) {
           return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
-        if (enabled !== undefined && typeof enabled !== 'boolean') {
-          return res.status(400).json({ ok: false, error: 'enabled must be a boolean' });
-        }
-        if (triggers !== undefined && (typeof triggers !== 'object' || triggers === null || Array.isArray(triggers))) {
-          return res.status(400).json({ ok: false, error: 'triggers must be an object' });
+        if (triggers !== undefined && (typeof triggers !== 'object' || triggers === null || Array.isArray(triggers)
+          || Object.entries(triggers).some(([key, value]) => !['outputTruncation', 'apiErrorRetry'].includes(key) || typeof value !== 'boolean'))) {
+          return res.status(400).json({ ok: false, error: 'triggers must contain only boolean outputTruncation and apiErrorRetry fields' });
         }
         if (maxConsecutiveContinuations !== undefined
           && (typeof maxConsecutiveContinuations !== 'number' || !Number.isFinite(maxConsecutiveContinuations)
@@ -755,7 +753,6 @@ export function createAgentLifecycleModule(ctx) {
         // fallback: a shared process must never toggle another session's feature.
         const result = await requestForceContinuationState(agentId, sessionId, {
           type: 'force-continuation-control',
-          ...(enabled !== undefined ? { enabled } : {}),
           ...(triggers !== undefined ? { triggers } : {}),
           ...(maxConsecutiveContinuations !== undefined ? { maxConsecutiveContinuations } : {}),
         });
@@ -764,7 +761,6 @@ export function createAgentLifecycleModule(ctx) {
           ok: true,
           agentId,
           sessionId,
-          enabled: typeof enabled === 'boolean' ? enabled : (result.status?.enabled ?? false),
           status: result.status,
         });
       } catch (error) {

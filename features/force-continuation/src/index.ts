@@ -1,17 +1,6 @@
 /**
- * ForceContinuation Feature
- *
- * The session-local master switch gates individually configurable recovery
- * candidates: provider max_tokens, provider length, the framework-level
- * CallOutcome.reason=limit_reached, and retryable API errors (timeout,
- * disconnect, rate limit, 5xx — classified by the framework's error
- * taxonomy, not per-provider codes). Provider values remain diagnostic
- * facts; the framework reason/error fields are the authoritative signal for
- * a Call boundary.
- *
- * It deliberately never resumes user cancellations, and non-retryable
- * errors (auth failure, invalid key, prompt too long) stay terminal —
- * retrying those cannot succeed.
+ * API 重试：正文输出截断与网络错误独立控制，默认开启，共享有界重试预算。
+ * 框架负责响应安全与错误事实；Feature 负责策略，宿主负责失败 Call 后的重试。
  */
 
 import { fileURLToPath } from 'url';
@@ -31,27 +20,17 @@ const PROVIDER_TRUNCATION_REASONS = new Set(['max_tokens', 'length']);
 const DEFAULT_MAX_CONSECUTIVE_CONTINUATIONS = 5;
 
 export interface ForceContinuationTriggers {
-  /** Continue a Step after a provider signals token-budget truncation. */
-  providerMaxTokens: boolean;
-  /** Continue a Step after an OpenAI-style provider signals length truncation. */
-  providerLength: boolean;
-  /** Ask the Claw host to continue after AgentDev exhausts its ReAct-step budget. */
-  frameworkLimitReached: boolean;
-  /** Ask the Claw host to start a new segment after a retryable API error. */
+  outputTruncation: boolean;
   apiErrorRetry: boolean;
 }
 
 export interface ForceContinuationConfig {
-  /** Starts each newly-created runtime enabled only when explicitly true. */
-  enabled?: boolean;
-  /** Maximum forced continuations in the same call/envelope, 1–10. */
+  outputTruncation?: boolean;
+  apiErrorRetry?: boolean;
   maxConsecutiveContinuations?: number;
-  /** Independently controlled continuation candidates; all default to true. */
-  triggers?: ForceContinuationTriggers;
 }
 
 export interface ForceContinuationStatus {
-  enabled: boolean;
   triggers: ForceContinuationTriggers;
   maxConsecutiveContinuations: number;
   consecutiveContinuations: number;
@@ -61,58 +40,30 @@ export interface ForceContinuationStatus {
   lastAction: 'idle' | 'continued' | 'completed' | 'failed' | 'cancelled' | 'limit_reached';
 }
 
-function parseTriggers(raw: unknown): ForceContinuationTriggers {
-  const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-  return {
-    providerMaxTokens: value.providerMaxTokens !== false,
-    providerLength: value.providerLength !== false,
-    frameworkLimitReached: value.frameworkLimitReached !== false,
-    apiErrorRetry: value.apiErrorRetry !== false,
-  };
-}
-
-/** Shape of the CallOutcome error fact relevant to the retry decision. */
 interface OutcomeErrorFact {
   retryable?: unknown;
   category?: unknown;
 }
 
-/**
- * A retryable API error arrives as status=failed + reason=error with the
- * framework-classified retryable fact set by the LLM layer (connection
- * errors, timeouts, rate limits, 5xx). Non-retryable errors (auth, invalid
- * key, prompt too long) carry retryable=false/undefined and never qualify.
- */
-function isRetryableApiErrorOutcome(outcome: {
-  status?: unknown;
-  reason?: unknown;
-  error?: OutcomeErrorFact | null;
-}): boolean {
-  return normalizeStopReason(outcome?.status) === 'failed'
-    && normalizeStopReason(outcome?.reason) === 'error'
-    && outcome?.error?.retryable === true;
+function normalizeStopReason(value: unknown): string | null {
+  return typeof value === 'string' ? value.trim().toLowerCase() || null : null;
+}
+
+function isRetryableApiErrorOutcome(outcome: { status?: unknown; reason?: unknown; error?: OutcomeErrorFact | null }): boolean {
+  return outcome.status === 'failed' && outcome.reason === 'error'
+    && outcome.error?.retryable === true
+    && ['connection_error', 'connection_timeout', 'rate_limit', 'server_overload', 'server_error'].includes(String(outcome.error.category));
 }
 
 function parseConfig(raw: unknown): Required<ForceContinuationConfig> {
   const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-  const requestedLimit = value.maxConsecutiveContinuations;
-  const maxConsecutiveContinuations = typeof requestedLimit === 'number' && Number.isFinite(requestedLimit)
-    ? Math.max(1, Math.min(10, Math.floor(requestedLimit)))
-    : DEFAULT_MAX_CONSECUTIVE_CONTINUATIONS;
-
+  const limit = value.maxConsecutiveContinuations;
   return {
-    // This is a deliberate opt-in: mounting the feature must not unexpectedly
-    // make every session retry/continue incomplete calls.
-    enabled: value.enabled === true,
-    maxConsecutiveContinuations,
-    triggers: parseTriggers(value.triggers),
+    outputTruncation: value.outputTruncation !== false,
+    apiErrorRetry: value.apiErrorRetry !== false,
+    maxConsecutiveContinuations: typeof limit === 'number' && Number.isFinite(limit)
+      ? Math.max(1, Math.min(10, Math.floor(limit))) : DEFAULT_MAX_CONSECUTIVE_CONTINUATIONS,
   };
-}
-
-function normalizeStopReason(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().toLowerCase();
-  return normalized || null;
 }
 
 export class ForceContinuation implements AgentFeature {
@@ -122,9 +73,8 @@ export class ForceContinuation implements AgentFeature {
   };
 
   readonly name = 'force-continuation';
-  readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
-  readonly description = '在可恢复的模型输出截断或网络类 API 错误时，以受限次数强制 Agent 继续当前任务。';
-
+  readonly source = fileURLToPath(import.meta.url).replace(/\\\\/g, '/');
+  readonly description = 'API 重试：正文输出达到上限或发生可重试的网络错误时，在预算内自动重试。';
   private config: Required<ForceContinuationConfig>;
   private logger?: FeatureInitContext['logger'];
   private _packageInfo: PackageInfo | null = null;
@@ -143,200 +93,70 @@ export class ForceContinuation implements AgentFeature {
       schemaVersion: 1,
       settings: {
         properties: {
-          enabled: {
-            type: 'boolean',
-            title: '保持任务继续',
-            description: '总开关。开启后，才会对启用的异常中断候选请求受限继续；不会覆盖用户中断或不可重试的错误。',
-            default: false,
-          },
-          providerMaxTokens: {
-            type: 'boolean',
-            title: 'Provider max_tokens 截断',
-            description: 'Provider 报告 max_tokens 时，在当前 step 内请求继续。',
-            default: true,
-          },
-          providerLength: {
-            type: 'boolean',
-            title: 'Provider length 截断',
-            description: 'Provider 报告 length 时，在当前 step 内请求继续。',
-            default: true,
-          },
-          frameworkLimitReached: {
-            type: 'boolean',
-            title: '框架执行 step 上限耗尽',
-            description: '框架 Call 因 ReAct step 上限结束后，由宿主在预算内开始下一段。',
-            default: true,
+          outputTruncation: {
+            type: 'boolean', title: '正文输出达到上限', default: true,
+            description: '已有正文时达到输出上限，保留正文及返回的思考后请求继续；本次工具调用丢弃且不执行。只有思考、没有正文时按错误结束，不自动重试。',
           },
           apiErrorRetry: {
-            type: 'boolean',
-            title: 'API 错误自动重试',
-            description: 'Call 因可重试的网络类 API 错误（超时、断连、限流、5xx）失败结束后，由宿主在预算内开始下一段。',
-            default: true,
+            type: 'boolean', title: '网络错误', default: true,
+            description: '模型调用因超时、断连、限流或服务端错误失败后，在预算内自动重试。不重试用户停止、认证失败或输出预算耗尽错误。',
           },
           maxConsecutiveContinuations: {
-            type: 'number',
-            title: '最大连续继续次数',
-            description: '同一次 call 中连续检测到 provider 截断时允许的最大继续次数，达到上限后停止，避免无界循环。',
-            default: DEFAULT_MAX_CONSECUTIVE_CONTINUATIONS,
-            min: 1,
-            max: 10,
-            step: 1,
+            type: 'number', title: '最大重试次数', default: DEFAULT_MAX_CONSECUTIVE_CONTINUATIONS,
+            description: '两类 API 重试共享的连续重试上限（1–10），默认 5 次。', min: 1, max: 10, step: 1,
           },
         },
-        sections: [{ id: 'continuation', title: '继续策略', properties: ['enabled', 'providerMaxTokens', 'providerLength', 'frameworkLimitReached', 'apiErrorRetry', 'maxConsecutiveContinuations'] }],
+        sections: [{ id: 'api-retry', title: 'API 重试', properties: ['outputTruncation', 'apiErrorRetry', 'maxConsecutiveContinuations'] }],
       },
     };
   }
 
   async onInitiate(ctx: FeatureInitContext): Promise<void> {
     this.logger = ctx.logger;
-    // Project configuration overrides the constructor defaults and preserves
-    // an explicit false value.
-    const featureConfig = ctx.featureConfig && typeof ctx.featureConfig === 'object'
-      ? ctx.featureConfig as Record<string, unknown>
-      : {};
-    this.config = parseConfig({
-      ...this.config,
-      ...featureConfig,
-      triggers: {
-        ...this.config.triggers,
-        providerMaxTokens: featureConfig.providerMaxTokens === false ? false : this.config.triggers.providerMaxTokens,
-        providerLength: featureConfig.providerLength === false ? false : this.config.triggers.providerLength,
-        frameworkLimitReached: featureConfig.frameworkLimitReached === false ? false : this.config.triggers.frameworkLimitReached,
-        apiErrorRetry: featureConfig.apiErrorRetry === false ? false : this.config.triggers.apiErrorRetry,
-      },
-    });
+    const featureConfig = ctx.featureConfig && typeof ctx.featureConfig === 'object' ? ctx.featureConfig : {};
+    this.config = parseConfig({ ...this.config, ...featureConfig });
   }
 
-  getTools(): Tool[] {
-    // Fully automatic, session-scoped policy Feature. The private session IPC
-    // bridge (Claw side panel) is the only control surface; exposing a tool to
-    // the model would give model output a way to interact with a mode that can
-    // loop, so no tools are declared on purpose.
-    return [];
-  }
+  getTools(): Tool[] { return []; }
 
-  /**
-   * Capability 控制面声明：同一份 configure 命令同时服务 slash 菜单（用户
-   * 显式调用）与进程内 Feature 调用（如调度面自动配置）。triggers 拆平为
-   * 三个 boolean 参数，保持参数词汇表（FeatureManifestSettingProperty）内
-   * 的类型；未出现的字段不修改，仅应用显式传入的值。
-   *
-   * 注：手动触发一次继续（continue）需要会话输入队列原语，属 P2 Bridge
-   * 范畴，见 ADR。
-   */
   getCapabilities(): CapabilityDefinition[] {
-    return [
-      {
-        name: 'configure',
-        title: '配置强制继续',
-        description: '调整强制继续的总开关、触发候选与连续次数上限，返回调整后的完整状态。',
-        parameters: {
-          enabled: {
-            type: 'boolean',
-            title: '保持任务继续',
-            description: '总开关。关闭后不请求任何受限继续。',
-          },
-          providerMaxTokens: {
-            type: 'boolean',
-            title: 'Provider max_tokens 截断',
-            description: 'Provider 报告 max_tokens 时，在当前 step 内请求继续。',
-          },
-          providerLength: {
-            type: 'boolean',
-            title: 'Provider length 截断',
-            description: 'Provider 报告 length 时，在当前 step 内请求继续。',
-          },
-          frameworkLimitReached: {
-            type: 'boolean',
-            title: '框架执行 step 上限耗尽',
-            description: '框架 Call 因 ReAct step 上限结束后，由宿主在预算内开始下一段。',
-          },
-          apiErrorRetry: {
-            type: 'boolean',
-            title: 'API 错误自动重试',
-            description: 'Call 因可重试的网络类 API 错误失败结束后，由宿主在预算内开始下一段。',
-          },
-          maxConsecutive: {
-            type: 'number',
-            title: '最大连续继续次数',
-            description: '同一次 call 中允许的最大连续继续次数（1–10）。',
-            min: 1,
-            max: 10,
-            step: 1,
-          },
-        },
-        entryPoints: ['slash', 'feature'],
-        readCurrentValues: () => ({
-          enabled: this.config.enabled,
-          providerMaxTokens: this.config.triggers.providerMaxTokens,
-          providerLength: this.config.triggers.providerLength,
-          frameworkLimitReached: this.config.triggers.frameworkLimitReached,
-          apiErrorRetry: this.config.triggers.apiErrorRetry,
-          maxConsecutive: this.config.maxConsecutiveContinuations,
-        }),
-        execute: (args) => {
-          const input = args && typeof args === 'object' ? args as Record<string, unknown> : {};
-          if (typeof input.enabled === 'boolean') this.setEnabled(input.enabled);
-          const triggers: Partial<ForceContinuationTriggers> = {};
-          if (typeof input.providerMaxTokens === 'boolean') triggers.providerMaxTokens = input.providerMaxTokens;
-          if (typeof input.providerLength === 'boolean') triggers.providerLength = input.providerLength;
-          if (typeof input.frameworkLimitReached === 'boolean') triggers.frameworkLimitReached = input.frameworkLimitReached;
-          if (typeof input.apiErrorRetry === 'boolean') triggers.apiErrorRetry = input.apiErrorRetry;
-          if (Object.keys(triggers).length > 0) this.setTriggers(triggers);
-          if (typeof input.maxConsecutive === 'number') this.setMaxConsecutive(input.maxConsecutive);
-          return Promise.resolve(this.getStatus());
-        },
+    const properties = this.getFeatureManifest().settings!.properties;
+    return [{
+      name: 'configure', title: '配置 API 重试',
+      description: '独立设置正文输出达到上限、网络错误两类重试及共享次数上限。',
+      parameters: properties, entryPoints: ['slash', 'feature'],
+      readCurrentValues: () => ({ ...this.config }),
+      execute: (args) => {
+        const input = args && typeof args === 'object' ? args as Record<string, unknown> : {};
+        const triggers: Partial<ForceContinuationTriggers> = {};
+        if (typeof input.outputTruncation === 'boolean') triggers.outputTruncation = input.outputTruncation;
+        if (typeof input.apiErrorRetry === 'boolean') triggers.apiErrorRetry = input.apiErrorRetry;
+        if (Object.keys(triggers).length) this.setTriggers(triggers);
+        if (typeof input.maxConsecutiveContinuations === 'number') this.setMaxConsecutive(input.maxConsecutiveContinuations);
+        return Promise.resolve(this.getStatus());
       },
-    ];
+    }];
   }
 
-  /** Public control API for the Claw session IPC bridge and other Features. */
-  setEnabled(enabled: boolean): ForceContinuationStatus {
-    this.config.enabled = enabled === true;
-    this.consecutiveContinuations = 0;
-    this.lastAction = 'idle';
-    return this.getStatus();
-  }
-
-  /** Updates one or more candidate switches without bypassing the master switch. */
   setTriggers(triggers: Partial<ForceContinuationTriggers>): ForceContinuationStatus {
-    this.config.triggers = parseTriggers({ ...this.config.triggers, ...triggers });
-    this.consecutiveContinuations = 0;
+    this.config = parseConfig({ ...this.config, ...triggers });
     this.lastAction = 'idle';
     return this.getStatus();
   }
 
-  /**
-   * Adjusts the per-task auto-resume cap from the control panel. The value is
-   * clamped to 1–10 the same way parseConfig does; the running count is kept
-   * because raising the cap should let an in-flight task resume again, and
-   * lowering it takes effect on the next continuation decision.
-   */
   setMaxConsecutive(value: number): ForceContinuationStatus {
-    const next = typeof value === 'number' && Number.isFinite(value)
-      ? Math.max(1, Math.min(10, Math.floor(value)))
-      : this.config.maxConsecutiveContinuations;
-    this.config.maxConsecutiveContinuations = next;
+    if (Number.isFinite(value)) this.config.maxConsecutiveContinuations = Math.max(1, Math.min(10, Math.floor(value)));
     return this.getStatus();
   }
 
   getStatus(): ForceContinuationStatus {
     return {
-      enabled: this.config.enabled,
-      triggers: { ...this.config.triggers },
+      triggers: { outputTruncation: this.config.outputTruncation, apiErrorRetry: this.config.apiErrorRetry },
       maxConsecutiveContinuations: this.config.maxConsecutiveContinuations,
       consecutiveContinuations: this.consecutiveContinuations,
-      lastProviderStopReason: this.lastProviderStopReason,
-      lastFinishReason: this.lastFinishReason,
-      lastOutcomeStatus: this.lastOutcomeStatus,
-      lastAction: this.lastAction,
+      lastProviderStopReason: this.lastProviderStopReason, lastFinishReason: this.lastFinishReason,
+      lastOutcomeStatus: this.lastOutcomeStatus, lastAction: this.lastAction,
     };
-  }
-
-  private isProviderTriggerEnabled(stopReason: string): boolean {
-    return (stopReason === 'max_tokens' && this.config.triggers.providerMaxTokens)
-      || (stopReason === 'length' && this.config.triggers.providerLength);
   }
 
   private canRequestContinuation(): boolean {
@@ -355,77 +175,27 @@ export class ForceContinuation implements AgentFeature {
   }
 
   async decideContinuation(ctx: StepFinishDecisionContext) {
-    const stopReason = normalizeStopReason(ctx.llmResponse?.stopReason);
-    this.lastProviderStopReason = stopReason;
-
-    if (!this.config.enabled || ctx.toolCallsCount !== 0 || !stopReason) {
-      if (ctx.toolCallsCount !== 0 || !stopReason) this.consecutiveContinuations = 0;
-      return Decision.Continue;
-    }
-
-    if (!PROVIDER_TRUNCATION_REASONS.has(stopReason) || !this.isProviderTriggerEnabled(stopReason)) {
-      return Decision.Continue;
-    }
-
-    if (!this.canRequestContinuation()) {
-      this.logger?.warn('Force continuation limit reached', {
-        stopReason,
-        maxConsecutiveContinuations: this.config.maxConsecutiveContinuations,
-      });
-      return Decision.Continue;
-    }
-
+    const reason = normalizeStopReason(ctx.llmResponse?.stopReason);
+    this.lastProviderStopReason = reason;
+    if (!this.config.outputTruncation || !reason || !PROVIDER_TRUNCATION_REASONS.has(reason)
+      || !ctx.llmResponse?.content?.trim() || ctx.toolCallsCount !== 0) return Decision.Continue;
+    if (!this.canRequestContinuation()) return Decision.Continue;
     ctx.context.add({
       role: 'system',
-      content: [
-        '[强制继续]',
-        `上一段模型输出因 provider stop reason=${stopReason} 被截断。`,
-        '继续完成当前任务；不要重复已完成的工作。先检查已有上下文，再从中断处继续。',
-      ].join('\n'),
+      content: '[API 重试：正文输出达到上限]\n已有正文与返回的思考已保留；本次截断响应中的工具调用已丢弃且未执行。请从正文中断处继续，必要时重新发起工具调用，不要重复已完成的工作。',
     });
-    this.logger?.info('Force continuation requested', {
-      stopReason,
-      consecutiveContinuations: this.consecutiveContinuations,
-      maxConsecutiveContinuations: this.config.maxConsecutiveContinuations,
-    });
+    this.logger?.info('API retry requested after output truncation', { reason, count: this.consecutiveContinuations });
     return Decision.Approve;
   }
 
   /**
-   * Called by the Claw CallArbiter after an AgentDev Call reaches its own ReAct
-   * step budget. This is intentionally separate from StepFinish: at that point
-   * the framework Call has already ended and only the host can start a segment.
-   */
-  requestFrameworkLimitContinuation(outcome: { reason?: unknown; status?: unknown }): string | null {
-    const reason = normalizeStopReason(outcome.reason);
-    const status = normalizeStopReason(outcome.status);
-    if (!this.config.enabled || !this.config.triggers.frameworkLimitReached || reason !== 'limit_reached') {
-      return null;
-    }
-    // AgentDev represents an exhausted step budget as status=failed +
-    // reason=limit_reached. The reason (not status) is the recovery contract.
-    if (!this.canRequestContinuation()) return null;
-
-    this.lastFinishReason = reason;
-    this.lastOutcomeStatus = status;
-    this.logger?.info('Force continuation requested after framework limit', {
-      reason,
-      status,
-      consecutiveContinuations: this.consecutiveContinuations,
-    });
-    return '[本条消息由系统自动发送] 当前任务因框架执行步数上限而中断。请检查已有上下文，从中断处继续完成当前任务；不要重复已经完成的工作。';
-  }
-
-  /**
    * Called by the Claw CallArbiter after an AgentDev Call failed with a
-   * retryable API error (the LLM client has already exhausted its internal
-   * retries by then). Mirrors requestFrameworkLimitContinuation: at that
-   * point the framework Call has already ended and only the host can start
+   * retryable network error. The framework Call has already ended and only the host can start
    * a segment. Non-retryable errors never pass the retryable check, and
    * user cancellations arrive as status=cancelled, not here.
    */
   requestApiErrorContinuation(outcome: { status?: unknown; reason?: unknown; error?: OutcomeErrorFact | null }): string | null {
-    if (!this.config.enabled || !this.config.triggers.apiErrorRetry) return null;
+    if (!this.config.apiErrorRetry) return null;
     if (!isRetryableApiErrorOutcome(outcome)) return null;
     if (!this.canRequestContinuation()) return null;
 
@@ -435,7 +205,7 @@ export class ForceContinuation implements AgentFeature {
       category: typeof outcome.error?.category === 'string' ? outcome.error.category : null,
       consecutiveContinuations: this.consecutiveContinuations,
     });
-    return '[本条消息由系统自动发送] 上一段任务因网络类 API 错误而中断。请检查已有上下文，从中断处继续完成当前任务；不要重复已经完成的工作。';
+    return '[本条消息由系统自动发送] [API 重试：网络错误] 上一段模型调用因可重试的网络错误而中断。请检查已有上下文，从中断处继续完成当前任务；不要重复已经完成的工作。';
   }
 
   async recordCallFinish(ctx: { finishReason?: unknown; outcome?: { status?: unknown; reason?: unknown; error?: OutcomeErrorFact | null; model?: { providerStopReason?: unknown } } }): Promise<void> {
@@ -445,17 +215,8 @@ export class ForceContinuation implements AgentFeature {
     this.lastOutcomeStatus = typeof ctx.outcome?.status === 'string' ? ctx.outcome.status : null;
     this.lastProviderStopReason = normalizeStopReason(ctx.outcome?.model?.providerStopReason) ?? this.lastProviderStopReason;
 
-    if (this.lastFinishReason === 'limit_reached' && this.config.enabled && this.config.triggers.frameworkLimitReached) {
-      // Preserve the same-envelope budget for the host-side continuation that
-      // follows this CallFinish hook.
-      this.lastAction = 'limit_reached';
-      return;
-    }
-
-    // Same preservation for retryable API errors: the host-side retry follows
-    // immediately after this hook and must share the same-envelope budget.
-    if (this.config.enabled
-      && this.config.triggers.apiErrorRetry
+    // The host retry follows CallFinish and must share the same budget.
+    if (this.config.apiErrorRetry
       && isRetryableApiErrorOutcome({ status: this.lastOutcomeStatus, reason: this.lastFinishReason, error: ctx.outcome?.error })) {
       this.lastAction = 'failed';
       return;
@@ -484,7 +245,6 @@ export class ForceContinuation implements AgentFeature {
     this.config = parseConfig({
       ...this.config,
       ...storedConfig,
-      triggers: { ...this.config.triggers, ...(storedConfig.triggers && typeof storedConfig.triggers === 'object' ? storedConfig.triggers : {}) },
     });
     this.consecutiveContinuations = typeof state.consecutiveContinuations === 'number'
       ? Math.max(0, Math.min(this.config.maxConsecutiveContinuations, Math.floor(state.consecutiveContinuations)))

@@ -3,280 +3,96 @@ import assert from 'node:assert/strict';
 import { Decision } from '@agentdevjs/core';
 import { ForceContinuation } from '../dist/index.js';
 
-function createStepContext({ stopReason = 'max_tokens', toolCallsCount = 0 } = {}) {
+function step({ stopReason = 'max_tokens', content = 'partial body', toolCallsCount = 0 } = {}) {
   const added = [];
-  return {
-    ctx: {
-      llmResponse: { stopReason },
-      toolCallsCount,
-      context: {
-        add(message) {
-          added.push(message);
-        },
-      },
-    },
-    added,
-  };
+  return { ctx: { llmResponse: { stopReason, content }, toolCallsCount, context: { add: m => added.push(m) } }, added };
 }
+const network = { status: 'failed', reason: 'error', error: { category: 'connection_timeout', retryable: true } };
 
-describe('ForceContinuation', () => {
-  it('exposes no tools; the side panel is the only control surface', () => {
-    const feature = new ForceContinuation();
-    assert.deepEqual(feature.getTools(), []);
+describe('API retry', () => {
+  it('defaults both policies on without a master switch or step recovery API', () => {
+    const f = new ForceContinuation();
+    assert.deepEqual(f.getStatus().triggers, { outputTruncation: true, apiErrorRetry: true });
+    assert.equal(f.getStatus().maxConsecutiveContinuations, 5);
+    assert.equal('enabled' in f.getStatus(), false);
+    assert.equal(f.setEnabled, undefined);
+    assert.equal(f.requestFrameworkLimitContinuation, undefined);
+    assert.deepEqual(f.getTools(), []);
+    assert.deepEqual(Object.keys(f.getFeatureManifest().settings.properties), ['outputTruncation', 'apiErrorRetry', 'maxConsecutiveContinuations']);
   });
-
-  it('is opt-in and does nothing while disabled', async () => {
-    const feature = new ForceContinuation();
-    const { ctx, added } = createStepContext();
-
-    const result = await feature.decideContinuation(ctx);
-
-    assert.equal(result, Decision.Continue);
-    assert.equal(added.length, 0);
-    assert.equal(feature.getStatus().enabled, false);
+  for (const stopReason of ['max_tokens', 'length']) {
+    it(`continues body truncation for ${stopReason}`, async () => {
+      const f = new ForceContinuation();
+      const { ctx, added } = step({ stopReason });
+      assert.equal(await f.decideContinuation(ctx), Decision.Approve);
+      assert.match(added[0].content, /API 重试：正文输出达到上限/);
+      assert.equal(f.getStatus().consecutiveContinuations, 1);
+    });
+  }
+  it('never handles thinking-only, ordinary completion or unfiltered tools', async () => {
+    const f = new ForceContinuation();
+    for (const input of [{ content: '' }, { content: '  ' }, { stopReason: 'stop' }, { toolCallsCount: 1 }]) {
+      const { ctx, added } = step(input);
+      assert.equal(await f.decideContinuation(ctx), Decision.Continue);
+      assert.deepEqual(added, []);
+    }
   });
-
-  it('approves a bounded extra step only for a no-tool truncated response', async () => {
-    const feature = new ForceContinuation({ enabled: true, maxConsecutiveContinuations: 2 });
-    const { ctx, added } = createStepContext({ stopReason: 'length' });
-
-    const result = await feature.decideContinuation(ctx);
-
-    assert.equal(result, Decision.Approve);
-    assert.equal(added.length, 1);
-    assert.equal(added[0].role, 'system');
-    assert.match(added[0].content, /provider stop reason=length/);
-    assert.deepEqual(feature.getStatus(), {
-      enabled: true,
-      triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true, apiErrorRetry: true },
-      maxConsecutiveContinuations: 2,
-      consecutiveContinuations: 1,
-      lastProviderStopReason: 'length',
-      lastFinishReason: null,
-      lastOutcomeStatus: null,
-      lastAction: 'continued',
-    });
+  it('controls the two policies independently', async () => {
+    const f = new ForceContinuation({ outputTruncation: false });
+    assert.equal(await f.decideContinuation(step().ctx), Decision.Continue);
+    assert.match(f.requestApiErrorContinuation(network), /API 重试：网络错误/);
+    f.setTriggers({ outputTruncation: true, apiErrorRetry: false });
+    assert.equal(f.requestApiErrorContinuation(network), null);
+    assert.equal(await f.decideContinuation(step().ctx), Decision.Approve);
   });
-
-  it('does not continue ordinary completions or steps that used a tool', async () => {
-    const feature = new ForceContinuation({ enabled: true });
-
-    assert.equal(
-      await feature.decideContinuation(createStepContext({ stopReason: 'end_turn' }).ctx),
-      Decision.Continue,
-    );
-    assert.equal(
-      await feature.decideContinuation(createStepContext({ stopReason: 'max_tokens', toolCallsCount: 1 }).ctx),
-      Decision.Continue,
-    );
-    assert.equal(feature.getStatus().consecutiveContinuations, 0);
+  it('accepts only retryable network categories, never other runtime errors or cancellation', () => {
+    const f = new ForceContinuation();
+    for (const category of ['connection_error', 'connection_timeout', 'rate_limit', 'server_overload', 'server_error']) {
+      assert.ok(f.requestApiErrorContinuation({ ...network, error: { category, retryable: true } }));
+    }
+    for (const outcome of [
+      { ...network, status: 'cancelled' }, { ...network, reason: 'limit_reached' },
+      { ...network, error: { category: 'output_truncated', retryable: true } },
+      { ...network, error: { category: 'runtime_error', retryable: true } },
+      { ...network, error: { category: 'auth_error', retryable: false } },
+    ]) assert.equal(f.requestApiErrorContinuation(outcome), null);
   });
-
-  it('lets each provider truncation candidate be disabled independently beneath the master switch', async () => {
-    const feature = new ForceContinuation({ enabled: true });
-    feature.setTriggers({ providerMaxTokens: false, providerLength: true });
-
-    assert.equal(await feature.decideContinuation(createStepContext({ stopReason: 'max_tokens' }).ctx), Decision.Continue);
-    assert.equal(await feature.decideContinuation(createStepContext({ stopReason: 'length' }).ctx), Decision.Approve);
-    assert.deepEqual(feature.getStatus().triggers, {
-      providerMaxTokens: false,
-      providerLength: true,
-      frameworkLimitReached: true,
-      apiErrorRetry: true,
-    });
+  it('shares the budget between output and network retries across CallFinish', async () => {
+    const f = new ForceContinuation({ maxConsecutiveContinuations: 2 });
+    await f.decideContinuation(step().ctx);
+    await f.recordCallFinish({ outcome: network });
+    assert.ok(f.requestApiErrorContinuation(network));
+    await f.recordCallFinish({ outcome: network });
+    assert.equal(f.requestApiErrorContinuation(network), null);
+    assert.equal(f.getStatus().lastAction, 'limit_reached');
+    await f.recordCallFinish({ outcome: { status: 'completed', reason: 'completed' } });
+    assert.equal(f.getStatus().consecutiveContinuations, 0);
   });
-
-  it('requests a bounded host continuation for framework limit_reached only when that candidate and the master switch are enabled', () => {
-    const feature = new ForceContinuation({ enabled: true, maxConsecutiveContinuations: 1 });
-
-    assert.match(feature.requestFrameworkLimitContinuation({ status: 'failed', reason: 'limit_reached' }), /步数上限/);
-    assert.equal(feature.requestFrameworkLimitContinuation({ status: 'failed', reason: 'limit_reached' }), null);
-
-    feature.setTriggers({ frameworkLimitReached: false });
-    assert.equal(feature.requestFrameworkLimitContinuation({ status: 'failed', reason: 'limit_reached' }), null);
-    feature.setTriggers({ frameworkLimitReached: true });
-    feature.setEnabled(false);
-    assert.equal(feature.requestFrameworkLimitContinuation({ status: 'failed', reason: 'limit_reached' }), null);
+  it('clamps budget and preserves the active count when configuring', async () => {
+    const f = new ForceContinuation({ maxConsecutiveContinuations: 1 });
+    await f.decideContinuation(step().ctx);
+    f.setTriggers({ apiErrorRetry: false });
+    assert.equal(f.getStatus().consecutiveContinuations, 1);
+    assert.equal(await f.decideContinuation(step().ctx), Decision.Continue);
+    assert.equal(f.setMaxConsecutive(99).maxConsecutiveContinuations, 10);
+    assert.equal(await f.decideContinuation(step().ctx), Decision.Approve);
+    assert.equal(f.setMaxConsecutive(0).maxConsecutiveContinuations, 1);
+    assert.equal(f.setMaxConsecutive(NaN).maxConsecutiveContinuations, 1);
   });
-
-  it('stops approving after the configured consecutive-continuation budget', async () => {
-    const feature = new ForceContinuation({ enabled: true, maxConsecutiveContinuations: 1 });
-
-    assert.equal(await feature.decideContinuation(createStepContext().ctx), Decision.Approve);
-    assert.equal(await feature.decideContinuation(createStepContext().ctx), Decision.Continue);
-    assert.equal(feature.getStatus().lastAction, 'limit_reached');
+  it('restores snapshot and capability uses the same flat config as the manifest', async () => {
+    const f = new ForceContinuation();
+    const cap = f.getCapabilities()[0];
+    assert.equal(cap.title, '配置 API 重试');
+    assert.deepEqual(cap.entryPoints, ['slash', 'feature']);
+    await cap.execute({ outputTruncation: false, maxConsecutiveContinuations: 7 }, {});
+    assert.equal(cap.readCurrentValues().apiErrorRetry, true);
+    const copy = new ForceContinuation();
+    copy.restoreState(f.captureState());
+    assert.deepEqual(copy.getStatus(), f.getStatus());
   });
-
-  describe('retryable API error continuation', () => {
-    const retryableOutcome = {
-      status: 'failed',
-      reason: 'error',
-      error: { category: 'connection_error', retryable: true },
-    };
-
-    it('asks the host for a bounded new segment after a retryable API error', () => {
-      const feature = new ForceContinuation({ enabled: true, maxConsecutiveContinuations: 1 });
-
-      assert.match(feature.requestApiErrorContinuation(retryableOutcome), /API 错误/);
-      assert.equal(feature.getStatus().consecutiveContinuations, 1);
-      // Budget exhausted: the next failure closes the envelope as failed.
-      assert.equal(feature.requestApiErrorContinuation(retryableOutcome), null);
-      assert.equal(feature.getStatus().lastAction, 'limit_reached');
-    });
-
-    it('never continues non-retryable errors, cancellations, or unknown outcomes', () => {
-      const feature = new ForceContinuation({ enabled: true });
-
-      assert.equal(feature.requestApiErrorContinuation({
-        status: 'failed', reason: 'error', error: { category: 'auth_error', retryable: false },
-      }), null);
-      assert.equal(feature.requestApiErrorContinuation({ status: 'failed', reason: 'error' }), null);
-      assert.equal(feature.requestApiErrorContinuation({
-        status: 'cancelled', reason: 'cancelled', error: { retryable: true },
-      }), null);
-      assert.equal(feature.getStatus().consecutiveContinuations, 0);
-    });
-
-    it('keeps the shared continuation budget across consecutive failed calls', async () => {
-      const feature = new ForceContinuation({ enabled: true, maxConsecutiveContinuations: 2 });
-
-      assert.match(feature.requestApiErrorContinuation(retryableOutcome), /API 错误/);
-      // recordCallFinish must preserve the count so consecutive failures share
-      // the same cap as truncation/step-limit continuations.
-      await feature.recordCallFinish({ finishReason: 'error', outcome: retryableOutcome });
-      assert.equal(feature.getStatus().consecutiveContinuations, 1);
-
-      assert.match(feature.requestApiErrorContinuation(retryableOutcome), /API 错误/);
-      await feature.recordCallFinish({ finishReason: 'error', outcome: retryableOutcome });
-      assert.equal(feature.requestApiErrorContinuation(retryableOutcome), null);
-      assert.equal(feature.getStatus().lastAction, 'limit_reached');
-
-      // A terminal non-retryable outcome resets the budget as before.
-      await feature.recordCallFinish({
-        finishReason: 'error',
-        outcome: { status: 'failed', reason: 'error', error: { category: 'auth_error', retryable: false } },
-      });
-      assert.equal(feature.getStatus().consecutiveContinuations, 0);
-      assert.equal(feature.getStatus().lastAction, 'failed');
-    });
-
-    it('stays off beneath the master switch or the candidate switch', () => {
-      const feature = new ForceContinuation({ enabled: true });
-
-      feature.setTriggers({ apiErrorRetry: false });
-      assert.equal(feature.requestApiErrorContinuation(retryableOutcome), null);
-      feature.setTriggers({ apiErrorRetry: true });
-      feature.setEnabled(false);
-      assert.equal(feature.requestApiErrorContinuation(retryableOutcome), null);
-    });
-  });
-
-  it('records structured CallFinish semantics and resets a finished call budget', async () => {
-    const feature = new ForceContinuation({ enabled: true });
-    await feature.decideContinuation(createStepContext().ctx);
-
-    await feature.recordCallFinish({
-      finishReason: 'completed',
-      outcome: {
-        status: 'completed',
-        model: { providerStopReason: 'end_turn' },
-      },
-    });
-
-    assert.deepEqual(feature.getStatus(), {
-      enabled: true,
-      triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true, apiErrorRetry: true },
-      maxConsecutiveContinuations: 5,
-      consecutiveContinuations: 0,
-      lastProviderStopReason: 'end_turn',
-      lastFinishReason: 'completed',
-      lastOutcomeStatus: 'completed',
-      lastAction: 'completed',
-    });
-  });
-
-  it('adjusts the auto-resume cap with clamping and keeps the running count', async () => {
-    const feature = new ForceContinuation({ enabled: true, maxConsecutiveContinuations: 1 });
-    assert.equal(await feature.decideContinuation(createStepContext().ctx), Decision.Approve);
-    assert.equal(feature.getStatus().consecutiveContinuations, 1);
-
-    // Cap reached: the next decision falls back to the default rule.
-    assert.equal(await feature.decideContinuation(createStepContext().ctx), Decision.Continue);
-    assert.equal(feature.getStatus().lastAction, 'limit_reached');
-
-    // Raising the cap lets the in-flight task resume again.
-    assert.equal(feature.setMaxConsecutive(99).maxConsecutiveContinuations, 10);
-    assert.equal(feature.getStatus().consecutiveContinuations, 1);
-    assert.equal(await feature.decideContinuation(createStepContext().ctx), Decision.Approve);
-
-    // Out-of-range numbers clamp to the 1–10 boundary (same rule as parseConfig);
-    // non-numeric input keeps the current cap.
-    assert.equal(feature.setMaxConsecutive(0).maxConsecutiveContinuations, 1);
-    assert.equal(feature.setMaxConsecutive(Number.NaN).maxConsecutiveContinuations, 1);
-  });
-
-  it('restores session-local switch state without accepting invalid status values', () => {
-    const feature = new ForceContinuation();
-    feature.restoreState({
-      config: { enabled: true, maxConsecutiveContinuations: 100 },
-      consecutiveContinuations: 99,
-      lastProviderStopReason: 'MAX_TOKENS',
-      lastFinishReason: 'limit_reached',
-      lastOutcomeStatus: 'continued',
-      lastAction: 'invalid-action',
-    });
-
-    assert.deepEqual(feature.getStatus(), {
-      enabled: true,
-      triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true, apiErrorRetry: true },
-      maxConsecutiveContinuations: 10,
-      consecutiveContinuations: 10,
-      lastProviderStopReason: 'max_tokens',
-      lastFinishReason: 'limit_reached',
-      lastOutcomeStatus: 'continued',
-      lastAction: 'idle',
-    });
-  });
-
-  describe('capabilities (control plane)', () => {
-    it('declares a configure command open to slash and feature entry points', () => {
-      const feature = new ForceContinuation();
-      const caps = feature.getCapabilities();
-
-      assert.equal(caps.length, 1);
-      assert.equal(caps[0].name, 'configure');
-      assert.deepEqual(caps[0].entryPoints, ['slash', 'feature']);
-      // 参数词汇表全部在 FeatureManifestSettingProperty 类型内
-      for (const prop of Object.values(caps[0].parameters)) {
-        assert.ok(['boolean', 'number'].includes(prop.type), prop.type);
-      }
-      // 参数回显：readCurrentValues 反映当前生效配置
-      const feature2 = new ForceContinuation({ enabled: false, maxConsecutiveContinuations: 7 });
-      const current = feature2.getCapabilities()[0].readCurrentValues();
-      assert.equal(current.enabled, false);
-      assert.equal(current.maxConsecutive, 7);
-      assert.equal(typeof current.providerMaxTokens, 'boolean');
-    });
-
-    it('applies only explicitly passed fields and returns the status', async () => {
-      const feature = new ForceContinuation({ enabled: false, maxConsecutiveContinuations: 3 });
-      const execute = feature.getCapabilities()[0].execute;
-
-      const status = await execute({ enabled: true, providerLength: false, maxConsecutive: 99 }, {});
-
-      assert.equal(status.enabled, true);
-      assert.equal(status.maxConsecutiveContinuations, 10); // clamped
-      assert.deepEqual(status.triggers, {
-        providerMaxTokens: true,
-        providerLength: false,
-        frameworkLimitReached: true,
-        apiErrorRetry: true,
-      });
-
-      // 空参数：不改任何字段
-      const unchanged = await execute({}, {});
-      assert.equal(unchanged.enabled, true);
-      assert.equal(unchanged.maxConsecutiveContinuations, 10);
-    });
+  it('initialization honors explicit true overrides and false values', async () => {
+    const f = new ForceContinuation({ outputTruncation: false });
+    await f.onInitiate({ featureConfig: { outputTruncation: true, apiErrorRetry: false } });
+    assert.deepEqual(f.getStatus().triggers, { outputTruncation: true, apiErrorRetry: false });
   });
 });

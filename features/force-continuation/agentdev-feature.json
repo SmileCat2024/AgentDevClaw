@@ -3,7 +3,7 @@
   "id": "force-continuation",
   "name": "force-continuation",
   "version": "0.1.1",
-  "description": "force-continuation feature for AgentDev",
+  "description": "API 重试：正文输出达到上限与网络错误的有界恢复",
   "tags": [
     "agentdev",
     "feature",

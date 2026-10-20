@@ -4,7 +4,7 @@
  * 三个 section 对应三个可能挂载的 Feature，均以 runtime 内 Feature 为权威
  * 状态持有者，浏览器只是乐观 UI 缓存（请求-应答式 IPC，经 /protoclaw/*_status
  * / *_control 或 capability_invoke 路由）：
- *   - 保持任务继续：ForceContinuation 的开关 / 触发条件 / 上限
+ *   - API 重试：正文输出达到上限 / 网络错误 / 共享重试上限
  *   - 模型轮转：StepRotatingModel 的强/省模型配置（已屏蔽，见
  *     ROTATION_SECTION_DISABLED）
  *   - 输出风格：StylizedOutput 的风格选择与签名门禁状态
@@ -169,7 +169,6 @@
 
   function getState(key = runtimeKey()) {
     return stateByRuntime.get(key) || {
-      enabled: false,
       pending: false,
       refreshing: false,
       error: '',
@@ -188,27 +187,15 @@
 
   function getTriggers(item) {
     const raw = item && typeof item.triggers === 'object' && item.triggers ? item.triggers : {};
-    if ('outputTruncation' in raw) {
-      // already the merged panel view
-      return {
-        outputTruncation: raw.outputTruncation !== false,
-        frameworkLimitReached: raw.frameworkLimitReached !== false,
-        apiErrorRetry: raw.apiErrorRetry !== false,
-      };
-    }
-    // raw Feature status shape — the two provider keys are one concern for the
-    // user, so the panel shows them as a single switch (on = both respond).
     return {
-      outputTruncation: raw.providerMaxTokens !== false && raw.providerLength !== false,
-      frameworkLimitReached: raw.frameworkLimitReached !== false,
+      outputTruncation: raw.outputTruncation !== false,
       apiErrorRetry: raw.apiErrorRetry !== false,
     };
   }
 
   // ── 渲染 ─────────────────────────────────────────────────────────
-  // 结构对齐 todo-plan.js 的 renderPlanPanel：摘要行（strong/label 统计）→
-  // 主开关行 → 候选列表（.plan-task-list 同构）→
-  // 底部说明小字；不可用时返回与 hooks 面板一致的通用空态。
+  // 控件使用 todo-plan.js 的统一开关样式，并在 API 重试段落展示两类策略
+  // 与共享次数上限；不可用时返回与 hooks 面板一致的通用空态。
 
   function renderSwitch({ checked, disabled, title, attribute }) {
     return [
@@ -241,10 +228,10 @@
     return [
       '<div class="force-continuation-candidate force-continuation-limit-row">',
       '<div class="force-continuation-candidate-main">',
-      '<div class="force-continuation-candidate-label">', zh ? '自动接续上限' : 'Auto-resume cap', '</div>',
+      '<div class="force-continuation-candidate-label">', zh ? 'API 重试上限' : 'Retry limit', '</div>',
       '<div class="force-continuation-candidate-desc">', zh
-        ? '单次任务内最多自动接续的次数（1–10）。'
-        : 'Max auto-resumes within one task (1–10).', '</div>',
+        ? '单个任务连续 API 重试的上限（1–10 次）。'
+        : 'Maximum consecutive API retries per task (1–10).', '</div>',
       '</div>',
       '<input type="number" class="force-continuation-limit-input" data-force-continuation-limit',
       ' min="1" max="10" step="1" value="', String(max), '"', disabled ? ' disabled' : '', '>',
@@ -271,41 +258,19 @@
     const triggers = getTriggers(item);
 
     return [
-      '<section class="force-continuation-master">',
-      '<div class="force-continuation-master-main">',
-      '<div class="force-continuation-master-label">', zh ? '保持任务继续' : 'Keep task moving', '</div>',
-      '<div class="force-continuation-master-help">', zh
-        ? '开启后，输出被截断或可重试的 API 错误发生时，自动从中断处继续。仅当前会话生效。'
-        : 'When on, truncated output and retryable API errors continue automatically from where it stopped. Applies to this session only.', '</div>',
-      '</div>',
-      renderSwitch({
-        checked: item.enabled === true,
-        disabled,
-        title: zh ? '切换保持任务继续' : 'Toggle keep task moving',
-        attribute: 'data-force-continuation-toggle',
-      }),
-      '</section>',
-      '<section class="force-continuation-candidates', item.enabled ? '' : ' is-master-off', '">',
-      '<div class="force-continuation-group-label">', zh ? '自动接续的条件' : 'AUTO-RESUME CONDITIONS', '</div>',
+      '<section class="force-continuation-candidates">',
+      '<div class="force-continuation-group-label">', zh ? 'API 重试' : 'API RETRY', '</div>',
       renderTriggerRow({
         key: 'outputTruncation',
-        title: zh ? '输出长度达到上限' : 'Output hit the length cap',
-        help: zh ? '模型输出达到长度上限被截断时，自动从中断处继续。' : 'When output is truncated at the length cap, continue automatically from where it stopped.',
+        title: zh ? '正文输出达到上限' : 'Output hit the length cap',
+        help: zh ? '已有正文时达到输出上限，保留正文与返回的思考后继续；本次工具调用丢弃且不执行。只有思考时不重试。' : 'Continue with the saved body and returned thinking after truncation. Discard all tool calls from that response. Thinking-only truncation is not retried.',
         enabled: triggers.outputTruncation,
         disabled,
         zh,
       }),
       renderTriggerRow({
-        key: 'frameworkLimitReached',
-        title: zh ? '任务步数达到上限' : 'Task ran out of steps',
-        help: zh ? '单次任务执行步数达到上限时，自动开启下一段继续执行。' : 'When a task exhausts its step budget, the next segment starts automatically.',
-        enabled: triggers.frameworkLimitReached,
-        disabled,
-        zh,
-      }),
-      renderTriggerRow({
         key: 'apiErrorRetry',
-        title: zh ? 'API 错误自动重试' : 'Retry on API errors',
+        title: zh ? '网络错误' : 'Network errors',
         help: zh ? '调用因可重试的 API 错误（超时、断连、限流、服务端错误）失败时，自动开启下一段重试。' : 'When a call fails with a retryable API error (timeout, disconnect, rate limit, server error), the next segment retries automatically.',
         enabled: triggers.apiErrorRetry,
         disabled,
@@ -367,8 +332,8 @@
 
     const notes = [];
     if (caps.fc) notes.push(zh
-      ? '手动停止与不可重试的错误（如认证失败）不会触发自动接续；自动接续次数受上限约束。'
-      : 'Manual stops and non-retryable errors (e.g. auth failures) never trigger auto-resume; auto-resume is capped.');
+      ? '手动停止和不可重试错误（如认证失败）不会自动重试；API 重试次数受上限约束。'
+      : 'Manual stops and non-retryable errors (e.g. auth failures) are not retried; API retries are capped.');
     if (caps.style) notes.push(zh
       ? '风格切换在下一次模型调用前生效；清空选择即关闭签名门禁。'
       : 'Style changes apply before the next model call; clearing the selection disarms the signature gate.');
@@ -400,7 +365,7 @@
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
       const status = normalizeStatus(payload.status);
-      setState({ ...status, enabled: status.enabled === true, triggers: getTriggers(status), refreshing: false, initialized: true, error: '' }, key);
+      setState({ ...status, triggers: getTriggers(status), refreshing: false, initialized: true, error: '' }, key);
       return status;
     } catch (error) {
       setState({ refreshing: false, initialized: true, error: String(error?.message || error) }, key);
@@ -426,7 +391,7 @@
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
       const status = normalizeStatus(payload.status);
-      setState({ ...status, enabled: status.enabled === true, triggers: getTriggers(status), pending: false, initialized: true, error: '' }, key);
+      setState({ ...status, triggers: getTriggers(status), pending: false, initialized: true, error: '' }, key);
       if (typeof window._scheduleInspectorRefresh === 'function') window._scheduleInspectorRefresh(120);
     } catch (error) {
       setState({ pending: false, error: String(error?.message || error) }, key);
@@ -434,21 +399,9 @@
     if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
   }
 
-  async function updateEnabled(enabled) {
-    return updateControl({ enabled: enabled === true });
-  }
-
   async function updateTrigger(trigger, enabled) {
-    if (trigger === 'outputTruncation') {
-      // One user-facing switch drives both provider keys — the user should not
-      // need to know which API names its stop reason max_tokens vs length.
-      return updateControl({ triggers: { providerMaxTokens: enabled === true, providerLength: enabled === true } });
-    }
-    if (trigger === 'frameworkLimitReached') {
-      return updateControl({ triggers: { frameworkLimitReached: enabled === true } });
-    }
-    if (trigger === 'apiErrorRetry') {
-      return updateControl({ triggers: { apiErrorRetry: enabled === true } });
+    if (trigger === 'outputTruncation' || trigger === 'apiErrorRetry') {
+      return updateControl({ triggers: { [trigger]: enabled === true } });
     }
   }
 
@@ -459,11 +412,6 @@
   }
 
   featurePanelBody.addEventListener('change', (event) => {
-    const toggle = event.target?.closest?.('[data-force-continuation-toggle]');
-    if (toggle) {
-      updateEnabled(toggle.checked);
-      return;
-    }
     const trigger = event.target?.closest?.('[data-force-continuation-trigger]');
     if (trigger) {
       updateTrigger(trigger.dataset.forceContinuationTrigger, trigger.checked);
@@ -1041,7 +989,6 @@
 
   window.SessionControlsPanel = {
     render,
-    updateEnabled,
     updateTrigger,
     updateLimit,
     refreshStatus,

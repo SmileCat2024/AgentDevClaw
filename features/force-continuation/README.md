@@ -1,36 +1,32 @@
-# @agentdevjs/force-continuation
+# API 重试（@agentdevjs/force-continuation）
 
-A session-local AgentDev Feature that keeps a task moving after recoverable interruptions: provider output truncation (`max_tokens` / `length`) and the framework-level ReAct step budget being exhausted (`CallOutcome.reason = limit_reached`).
+两类独立策略默认开启，无总开关，共享最大重试次数（默认 5，范围 1–10）。包名和 runtime feature ID 保持 `force-continuation`。
 
-## Behavior and safety boundary
+## 行为与分工
 
-- **Default: disabled.** Mounting the Feature never turns on automatic continuation.
-- The master switch gates three independently toggleable candidates: provider `max_tokens`, provider `length`, and framework `limit_reached`.
-- When enabled, its `StepFinish` guard adds one clear continuation reminder and returns `Approve` only after a no-tool model response whose provider stop reason is an enabled truncation candidate.
-- Framework `limit_reached` is handled at the Call boundary: the Claw host `CallArbiter` asks the Feature whether to start a follow-up Call segment.
-- It never overrides a user cancellation, API failure, runtime error, or ordinary `end_turn` response.
-- Consecutive forced continuations are capped (default: 3; configurable from 1 to 10) to prevent loops.
-- State is snapshot/restored with the session: enabled status, trigger switches, recent stop reasons, and the latest terminal state are retained.
+- **正文输出达到上限**：Provider 返回 `max_tokens` 或 `length`，且已有非空正文。框架保留正文、返回的 reasoning / thinkingBlocks，丢弃本次响应全部工具调用且不执行。Feature 在 StepFinish 注入继续指令，在同一个 Call 的下一步请求继续；不调大输出预算、不拼接工具参数、不保证逐字无缝续写。
+- **网络错误**：Call 因可重试的超时、断连、限流、过载或服务端错误失败后，宿主 CallArbiter 询问 Feature，在预算内开启下一段。模型客户端内部请求重试与此处的任务重试是不同层级。
+- 只有思考或工具调用、尚无正文时耗尽输出预算，框架报告 `output_truncated` 错误，Feature 不介入。关闭正文重试或预算耗尽时，已有正文仍保留，截断不会伪装成正常完成。
+- 用户停止、认证失败、普通运行错误、正常回答结束和框架 step 上限均不触发 API 重试。
+- 快照保存两类策略、次数上限、计数及最近结果。原总开关、Provider 分项和 step 恢复配置已移除，不做旧字段兼容映射。
 
-## Configuration
+## 配置
 
 ```ts
 new ForceContinuation({
-  enabled: false,
-  maxConsecutiveContinuations: 3,
-  triggers: { providerMaxTokens: true, providerLength: true, frameworkLimitReached: true },
+  outputTruncation: true,
+  apiErrorRetry: true,
+  maxConsecutiveContinuations: 5,
 });
 ```
 
-The Feature manifest exposes the same values to compatible configuration UIs. In Claw's Programming Helper, the right-side **Force Continuation / 强制继续** panel is the intended session-local switch surface.
+Feature manifest、`configure` capability 与构造配置使用同一组字段。Claw 设置页及会话控制面板统一展示“API 重试”，下分“正文输出达到上限”“网络错误”。会话面板只修改当前会话；工作空间配置用于 runtime 装配。
 
-## Observability
+## 控制与开发
 
-The Feature deliberately exposes **no tools to the Agent** — it is a fully automatic policy and the side-panel session IPC is its only control surface. It participates in `StepFinish` and `CallFinish` inspector hooks, and the panel reads the current switch/counter/stop-reason state through the host bridge.
-
-## Development
+不向模型暴露工具；用户面板通过 session IPC 控制，slash / feature 可通过 `configure` capability 控制。`setTriggers` 接收 `{ outputTruncation?, apiErrorRetry? }`，`setMaxConsecutive` 设置共享预算。
 
 ```bash
-npm install
 npm run build
+node --test test/force-continuation.test.js
 ```

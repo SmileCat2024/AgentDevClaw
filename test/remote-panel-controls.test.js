@@ -610,7 +610,7 @@ describe('frontend session-controls-panel identity (R2-04)', () => {
     // 剩余两条写路径共用同一身份纪律
     ctx.newIdempotencyKey = () => 'test-idem-key';
     ctx.loadSource('public/src/modules/context-guard-toggle.js');
-    await ctx.window.SessionControlsPanel.updateEnabled(true);
+    await ctx.window.SessionControlsPanel.updateTrigger('apiErrorRetry', true);
     await ctx.window.ContextGuardToggle.toggleGuard();
     // 第三条写路径走 capability_invoke 通用路由（模型轮转已卸载，由输出风格承接）
     await ctx.window.SessionControlsPanel.updateStyleSelection('正式汇报');

@@ -410,9 +410,8 @@ describe('CallArbiter', () => {
     assert.equal(finished._segmentCount, 4, 'should have tried 4 segments (3 max + 1 check)');
   });
 
-  it('continues the same envelope after framework limit when force-continuation allows', async () => {
-    // 框架步数预算耗尽以 status=failed + reason=limit_reached 到达；
-    // force-continuation 必须有机会在同 envelope 内续跑，而不是直接收口 failed
+  it('never retries framework step limits even when a feature is mounted', async () => {
+    // Step-limit failures remain terminal; the API retry feature must not be consulted.
     const calls = [];
     let outcome = null;
     const agent = {
@@ -430,16 +429,7 @@ describe('CallArbiter', () => {
       features: {
         get: (name) => {
           if (name !== 'force-continuation') return null;
-          let asked = 0;
-          return {
-            requestFrameworkLimitContinuation: (o) => {
-              asked += 1;
-              if (o.reason === 'limit_reached' && asked === 1) {
-                return '[系统] 因步数上限中断，请继续完成当前任务';
-              }
-              return null;
-            },
-          };
+          return { requestApiErrorContinuation: () => { assert.fail('step limit is not a network error'); } };
         },
       },
     };
@@ -448,12 +438,12 @@ describe('CallArbiter', () => {
     const entry = arbiter.enqueue({ source: 'test', text: 'long task' });
     const finished = await arbiter.waitForCompletion(entry.id);
 
-    assert.equal(finished.status, 'completed', 'continued envelope should finish naturally');
-    assert.equal(calls.length, 2, 'force continuation runs a second segment in the same envelope');
-    assert.match(calls[1], /步数上限/, 'second segment starts with the forced continuation input');
+    assert.equal(finished.status, 'failed');
+    assert.equal(calls.length, 1);
+    assert.equal(finished.outcome.reason, 'limit_reached');
   });
 
-  it('closes envelope as failed on framework limit when force-continuation declines', async () => {
+  it('closes envelope as failed on framework step limit without API retry', async () => {
     const calls = [];
     let outcome = null;
     const agent = {

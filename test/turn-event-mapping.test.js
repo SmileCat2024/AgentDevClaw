@@ -70,15 +70,22 @@ describe('mapEnvelopeToTurnEvent', () => {
     assert.equal(event.error.retryable, false);
   });
 
-  it('truncation stop reasons stay natural completion (force-continuation owns them)', () => {
-    // max_tokens / length 在 StepFinish 层由 force-continuation 处理；
-    // 到达 envelope 终态时若仍是 completed，视为自然完成
+  it('maps unhandled output truncation to a failed turn', () => {
     for (const stopReason of ['max_tokens', 'length']) {
       const event = mapEnvelopeToTurnEvent(
-        { status: 'completed', outcome: { model: { providerStopReason: stopReason } } },
+        {
+          status: 'failed',
+          outcome: {
+            status: 'failed', reason: 'error',
+            error: { category: 'output_truncated', message: 'output budget exhausted', retryable: false },
+            model: { providerStopReason: stopReason },
+          },
+        },
         { turn: 0 },
       );
-      assert.equal(event.type, 'turn.completed');
+      assert.equal(event.type, 'turn.failed');
+      assert.equal(event.error.category, 'output_truncated');
+      assert.equal(event.error.retryable, false);
     }
   });
 

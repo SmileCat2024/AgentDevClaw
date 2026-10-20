@@ -508,7 +508,6 @@ class SessionLifecycle {
       }
       try {
         if (msg.type === 'force-continuation-control') {
-          if (typeof msg.enabled === 'boolean') feature.setEnabled(msg.enabled);
           if (msg.triggers && typeof msg.triggers === 'object') feature.setTriggers(msg.triggers);
           if (typeof msg.maxConsecutiveContinuations === 'number' && typeof feature.setMaxConsecutive === 'function') {
             feature.setMaxConsecutive(msg.maxConsecutiveContinuations);
