@@ -36,6 +36,7 @@ import { ensureAppPortAvailable } from './server/boot/port-recovery.js';
 import { migrateLegacyAppConfig } from './server/app-config-migration.js';
 import { runStudioFeatureMigration } from './server/routes/studio-feature-migration.js';
 import { runCoderIdentityRetirement } from './server/routes/coder-identity-retirement.js';
+import { ensureCoderFeaturePresets } from './server/routes/coder-feature-presets.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
 import {
@@ -1654,6 +1655,15 @@ async function main() {
   // 现存数据一次性遗弃搬移，任何一步失败拒绝启动（回滚以遗弃目录为基础
   // 人工整体还原）。
   await runCoderIdentityRetirement();
+
+  // coder 工作空间 feature 预设一次性出厂预填（agent.json 不存在时写入，
+  // 已存在不动——用户配置优先）。失败告警不阻断启动。
+  try {
+    const result = ensureCoderFeaturePresets();
+    if (result.created) log('server', `coder feature presets initialized: ${result.layerPath}`);
+  } catch (err) {
+    console.warn('[coder-presets] init failed:', err.message);
+  }
 
   // Agent Studio「项目 → feature」模型迁移（ADR-0022，幂等）：注册表 + 会话
   // 重绑定 + 删 projects.json。失败只告警，不阻断启动。
