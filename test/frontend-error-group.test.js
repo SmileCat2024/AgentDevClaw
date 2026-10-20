@@ -61,7 +61,21 @@ function createHarness({ messages } = {}) {
   });
   Object.defineProperty(container, 'innerHTML', {
     get() { return container._html; },
-    set(v) { container._html = String(v); container._entries = []; },
+    set(v) {
+      container._html = String(v);
+      // 全量渲染重建行：对齐真实 DOM 语义（render 后容器持有消息行），
+      // appendNewMessages 的欢迎页边界守卫经 querySelectorAll('.message-row')
+      // 判定"容器已有历史行"，entries 为空会误升级全量。
+      const rowCount = (String(v).match(/<div class="message-row/g) || []).length;
+      container._entries = Array.from({ length: rowCount }, () => ({
+        row: {
+          classList: makeClassList(), style: {}, dataset: {},
+          matches: () => false,
+          querySelector: () => null,
+          querySelectorAll: () => [],
+        },
+      }));
+    },
   });
   container.querySelectorAll = (sel) => (sel === '.message-row'
     ? container._entries.map((e) => e.row)
@@ -356,7 +370,9 @@ test('appendNewMessages: 新错误并入组升级全量渲染并自动展开一�
   assert.match(h.container._html, /error-group-head expanded/);
   assert.match(h.container._html, /error-group-body expanded/);
 
-  // reveal 只生效一次：再次全量渲染回到折叠
+  // reveal 只生效一次：签名去重会让同数据 render 跳过重建（DOM 保持
+  // expanded 是既有语义），这里清签名强制重建验证 reveal 已被消费。
+  h.sandbox._lastRenderedChatSig = '';
   h.sandbox.render(h.sandbox.currentMessages);
   assert.doesNotMatch(h.container._html, /error-group-head expanded/);
 });

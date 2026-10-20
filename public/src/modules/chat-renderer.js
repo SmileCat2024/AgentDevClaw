@@ -515,6 +515,19 @@ function appendNewMessages(newMessages, startIndex) {
     render(currentMessages);
     return;
   }
+  // 欢迎页边界升级全量：增量追加的前提是容器已呈现 [0, startIndex) 的历史
+  // 行。上次渲染是欢迎页/空态（隐藏过程 + 无 user 消息）时容器没有任何消
+  // 息行，首条 user 消息到达后直接增量追加，[0, startIndex) 的系统前缀永远
+  // 不物化，且末尾签名被记成"完整已渲染"——之后显示过程切换（只切类）与
+  // 同数据的全量 render（去重跳过）都无法恢复，滚到绝对顶部也看不到系统
+  // 消息。optimistic echo 覆盖层不算历史行（全量重建重写 container 后由
+  // reconcile 的 isConnected 清理兜底）。
+  const hasHistoryRows = Array.from(container.querySelectorAll('.message-row'))
+    .some(row => !row.classList.contains('optimistic-user-echo'));
+  if (startIndex > 0 && !hasHistoryRows) {
+    render(currentMessages);
+    return;
+  }
   // 聚合组影响：新增失败消息与相邻失败同 category（成组/入组）时，组结构
   // 无法增量 patch，升级全量渲染（签名去重 + 渲染分级兜底成本），并入组
   // 记 reveal 让该组当次渲染自动展开。

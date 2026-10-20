@@ -104,6 +104,12 @@ if (_lastRenderedChatEmptyHtml === emptyHtml && container.querySelector('.empty-
 - spinner（chat-loading）→ 欢迎页的过渡因 HTML 不同也会正确重建
 - 任何"带 CSS 入场动画的静态内容"的渲染入口都应套用此模式：**动画重启次数 = DOM 重建次数**，去重必须在内容层做，不能只依赖消息签名
 
+### 转场边界：增量追加的前提是容器已有历史行（2026-10-20）
+
+欢迎态转发只覆盖"仍在欢迎态"的 append；首条 user 消息到达后 `shouldShowChatWelcome` 已为 false，`appendNewMessages()` 走增量路径——但容器里只有欢迎页 DOM，`[0, startIndex)` 的系统前缀从未物化，末尾签名却被记成"完整已渲染"。此后显示过程切换（只切类）与同数据全量 render（签名去重跳过）都无法恢复，用户滚到绝对顶部也看不到系统提示词，直到某次签名变化的全量重建。
+
+守卫（chat-renderer.js `appendNewMessages()`，与欢迎态转发、错误组升级同族）：`startIndex > 0` 且容器无历史行（排除 `.optimistic-user-echo` 覆盖层——echo 不算历史行，全量重建后由 reconcile 的 isConnected 清理兜底）时升级 `render()` 全量构建。任何新增的增量 DOM 路径都要遵守同一前提：**渲染签名必须始终描述容器实际呈现的消息列表**，否则签名去重会把缺失的 DOM 判定为"已渲染"。
+
 ---
 
 ## 3. `resetRuntimeBackedSurfaceState` — 切换时的状态清理

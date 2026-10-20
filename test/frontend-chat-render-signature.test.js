@@ -140,6 +140,67 @@ function createRendererSandbox() {
   return { sandbox, container };
 }
 
+test('first user append after a hidden system-only welcome retains the system prefix', () => {
+  const { sandbox, container } = createRendererSandbox();
+  sandbox.showChatProcess = false;
+  const prefix = [
+    { role: 'system', content: 'system prompt' },
+    { role: 'system', content: 'system reminder' },
+  ];
+  sandbox.currentMessages = prefix;
+  sandbox.render(prefix);
+  assert.equal(container._rows.length, 0, 'system-only hidden process shows welcome instead of rows');
+
+  const user = { role: 'user', content: 'first input' };
+  sandbox.currentMessages = [...prefix, user];
+  sandbox.appendNewMessages([user], prefix.length);
+  sandbox.showChatProcess = true;
+  // Even requesting render cannot recover: append recorded a signature for
+  // the entire transcript despite only putting the user row into the DOM.
+  sandbox.render(sandbox.currentMessages);
+  assert.equal(container._rows.length, 3, 'show process must include both system messages above the first user');
+});
+
+test('welcome boundary append keeps the signature honest about the rendered DOM', () => {
+  const { sandbox, container } = createRendererSandbox();
+  sandbox.showChatProcess = false;
+  const prefix = [{ role: 'system', content: 'system prompt' }];
+  sandbox.currentMessages = prefix;
+  sandbox.render(prefix);
+  const all = [...prefix, { role: 'user', content: 'first input' }];
+  sandbox.currentMessages = all;
+  sandbox.appendNewMessages(all.slice(1), 1);
+  assert.equal(container._rows.length, 2, 'upgraded full render materialises the system prefix');
+  sandbox.showChatProcess = true;
+  sandbox.render(sandbox.currentMessages);
+  assert.equal(container._rows.length, 2, 'identical data render dedups against the now-complete DOM');
+  assert.equal(container.rebuildCount, 2, 'dedup means no extra rebuild after the boundary render');
+});
+
+test('optimistic echo bubble does not count as a history row at the welcome boundary', () => {
+  const { sandbox, container } = createRendererSandbox();
+  sandbox.showChatProcess = false;
+  const prefix = [{ role: 'system', content: 'system prompt' }];
+  sandbox.currentMessages = prefix;
+  sandbox.render(prefix);
+  // 用户从欢迎页直接发首条消息：echo 覆盖层先占一行（.message-row.user.
+  // optimistic-user-echo），真实消息随后经 poll 抵达——echo 行不能让增量
+  // 路径误判"容器已有历史行"。
+  const echoRow = makeRowEl();
+  echoRow.className = 'message-row user optimistic-user-echo';
+  echoRow.classList = {
+    contains: (c) => String(echoRow.className).split(' ').includes(c),
+    add() {}, remove() {}, toggle() {},
+  };
+  container._rows.push(echoRow);
+  const all = [...prefix, { role: 'user', content: 'first input' }];
+  sandbox.currentMessages = all;
+  sandbox.appendNewMessages(all.slice(1), 1);
+  sandbox.showChatProcess = true;
+  sandbox.render(sandbox.currentMessages);
+  assert.equal(container._rows.length, 2, 'echo-only container still upgrades to a full render');
+});
+
 const M = (i) => ({ role: 'user', content: `m${i}` });
 const M5 = [M(1), M(2), M(3), M(4), M(5)];
 
