@@ -363,17 +363,29 @@ async function addCatalogModels(provider, ids) {
     const protocolInfo = isCodex ? { protocol: 'openai', apiSurface: 'responses' } : resolveOpenCodeProtocolClient(model.id);
     const name = (isCodex ? 'Codex ' : 'OpenCode ') + model.id;
     if (data.presets.some((preset) => preset.catalogProvider === provider && preset.model === model.id)) continue;
+    // 目录来源预设的生成参数分两类取值：
+    //   Codex —— 上游 /models 回报真实能力，输出预算 0（不限）、温度 0、
+    //            思考预算留空（用厂商默认）、窗口取 context_window。
+    //   OpenCode —— 目录只回报 id（无窗口/能力字段），与「添加自定义模型」
+    //            共用同一份通用默认值，两处不再各写一套。
+    const generation = isCodex ? {
+      thinkingEffort: model.thinkingEffort || null,
+      thinkingBudgetTokens: null,
+      maxTokens: 0,
+      temperature: 0,
+      vision: true,
+      contextLength: model.contextLength || null,
+      compressRatio: 80,
+      customHeaders: [],
+    } : newPresetGenerationDefaults();
     data.presets.push({
       name, providerName: isCodex ? 'OpenAI Auth' : 'OpenCode ' + ((data.connections?.opencode?.tier === 'go') ? 'Go' : 'Zen'),
       catalogProvider: provider, provider: protocolInfo.protocol, apiSurface: protocolInfo.apiSurface,
       authType: isCodex ? 'oauth-codex' : '', clientId: isCodex ? 'app_EMoamEEZ73f0CkXaXp7hrann' : '',
       model: model.id, baseUrl: isCodex ? 'https://chatgpt.com/backend-api/codex' : (data.connections?.opencode?.tier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL),
-      apiKey: '', thinkingEffort: isCodex ? (model.thinkingEffort || null) : null,
-      // codex 目录模型创建默认值：总输出预算 0（不限）、温度 0、思考预算留空（用厂商默认）；
-      // 上下文保留目录真实窗口（上游 context_window），压缩阈值与全局一致。
-      thinkingBudgetTokens: null, maxTokens: isCodex ? 0 : null, temperature: isCodex ? 0 : null,
-      vision: isCodex, starred: false,
-      contextLength: model.contextLength || (isCodex ? null : 200000), compressRatio: 80, customHeaders: [],
+      apiKey: '',
+      ...generation,
+      starred: false,
     });
   }
   window.ClawFW.modelCatalogSelection = {};
@@ -864,6 +876,24 @@ window.onSettingsHeaderModeChange = function(select) {
   valueInput.style.opacity = isDynamic ? '0.4' : '';
 };
 
+/**
+ * 新建模型预设的通用生成参数默认值：自定义模型与 OpenCode 目录模型共用这一份。
+ * 思考/视觉默认开启，预算与上下文给常用经验值，保存后用户可在编辑表单里改。
+ * Codex 目录模型不使用本函数——它的取值来自上游 /models 回报的真实能力。
+ */
+function newPresetGenerationDefaults() {
+  return {
+    thinkingEffort: 'medium',
+    thinkingBudgetTokens: 32000,
+    maxTokens: 96000,
+    temperature: null,
+    vision: true,
+    contextLength: 1000000,
+    compressRatio: 80,
+    customHeaders: [],
+  };
+}
+
 function addSettingsPreset() {
   const presets = window.ClawFW.settingsData?.presets || [];
   presets.push({
@@ -876,16 +906,8 @@ function addSettingsPreset() {
     model: '',
     baseUrl: '',
     apiKey: '',
-    // 新增模型默认值：思考/视觉默认开启，预算与上下文给常用经验值，用户可改
-    thinkingEffort: 'medium',
-    thinkingBudgetTokens: 32000,
-    maxTokens: 96000,
-    temperature: null,
-    vision: true,
+    ...newPresetGenerationDefaults(),
     starred: false,
-    contextLength: 1000000,
-    compressRatio: 80,
-    customHeaders: [],
   });
   window.ClawFW.settingsData = window.ClawFW.settingsData || {};
   window.ClawFW.settingsData.presets = presets;
