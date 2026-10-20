@@ -175,12 +175,6 @@ body {
 .message-row.assistant .role-badge { color: var(--success); border-color: rgba(63,185,80,0.3); }
 .message-row.system .role-badge { color: var(--text-muted); }
 
-.token-info {
-  font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
 .message-content {
   padding: 10px 14px;
   border-radius: 8px;

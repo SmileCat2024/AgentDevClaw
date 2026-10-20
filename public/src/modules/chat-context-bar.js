@@ -358,10 +358,19 @@ function _collectActiveSessionMeta() {
       ? sessions.find(function (s) { return s && s.id === activeSessionId; }) || null
       : null;
 
+    // 导出寻址用宿主 agent id（会话文件按宿主目录落盘）。视图身份的 agentId
+    // 恒为宿主 id（session-view-state 归一化保证），比 runtime 记录的 .id 可靠。
+    let viewIdentity = typeof readCurrentSessionViewState === 'function'
+      ? (readCurrentSessionViewState() || {}).identity || null
+      : null;
+    let hostAgentId = String(viewIdentity && viewIdentity.agentId || agent.id || '').trim();
+
     return {
       session: session,
       agent: agent,
       activeSessionId: activeSessionId,
+      agentId: hostAgentId,
+      isRemote: false,
     };
   }
 
@@ -403,6 +412,9 @@ function _collectActiveSessionMeta() {
     session: session,
     agent: agentShim,
     activeSessionId: activeSessionId,
+    // 远程会话不在本机落盘，渲染链路（render_conversation 读本地会话文件）
+    // 不可用——导出按钮不显示（grill 共识：v1 本地会话限定）。
+    isRemote: true,
   };
 }
 
@@ -413,14 +425,24 @@ function _buildTitlePopupHtml(meta) {
   let a = meta.agent || {};
   let sections = [];
 
-  // ── Session title ──
+  // ── Session title（本地会话右侧带导出按钮，远程会话不显示）──
   let fullTitle = s.title
     || a.active_workspace_session_title
     || a.active_workspace_display_name
     || a.name
     || '';
   if (fullTitle) {
-    sections.push('<div class="ccb-popup-model">' + escapeHtml(fullTitle) + '</div>');
+    let canExport = !meta.isRemote && meta.agentId && meta.activeSessionId;
+    let exportLabel = isZh ? '导出对话' : 'Export conversation';
+    sections.push('<div class="ccb-popup-title-row">'
+      + '<div class="ccb-popup-model">' + escapeHtml(fullTitle) + '</div>'
+      + (canExport
+        ? '<button type="button" class="ccb-popup-export-btn" data-agent-id="' + escapeHtml(meta.agentId)
+          + '" data-session-id="' + escapeHtml(meta.activeSessionId)
+          + '" data-session-title="' + escapeHtml(fullTitle)
+          + '" title="' + exportLabel + '" aria-label="' + exportLabel + '">' + _CCB_ICON_EXPORT + '</button>'
+        : '')
+      + '</div>');
   }
 
   // ── Time info ──
@@ -524,6 +546,11 @@ let _CCB_ICON_COPY =
 let _CCB_ICON_CHECK =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
   + '<polyline points="20 6 9 17 4 12"/></svg>';
+let _CCB_ICON_EXPORT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>'
+  + '<polyline points="7 10 12 15 17 10"/>'
+  + '<line x1="12" y1="15" x2="12" y2="3"/></svg>';
 
 async function _copyPopupSessionId(btn) {
   let sessionId = btn?.dataset?.sessionId || '';
@@ -582,6 +609,17 @@ function _showTitlePopup() {
     _titlePopup.addEventListener('click', function (e) {
       let btn = e.target && e.target.closest ? e.target.closest('.ccb-popup-copy-btn') : null;
       if (btn) _copyPopupSessionId(btn);
+      let exportBtn = e.target && e.target.closest ? e.target.closest('.ccb-popup-export-btn') : null;
+      if (exportBtn) {
+        _hideTitlePopup();
+        if (typeof window.openConversationExportDialog === 'function') {
+          window.openConversationExportDialog({
+            agentId: exportBtn.dataset.agentId || '',
+            sessionId: exportBtn.dataset.sessionId || '',
+            title: exportBtn.dataset.sessionTitle || '',
+          });
+        }
+      }
     });
     document.body.appendChild(_titlePopup);
   }

@@ -28,7 +28,7 @@ import {
   findMissingCheckpoints,
 } from '../shared/session-access.js';
 import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
-import { renderConversationHtml } from '../conversation-renderer.js';
+import { renderConversationHtml, renderConversationMarkdown } from '../conversation-renderer.js';
 import { readWorkspaceState } from './workspace.js';
 import { cleanStudioFeatureIds } from './session-helpers-pure.js';
 import { runInProcessSummary } from '../context-continuity/inprocess-summary.js';
@@ -409,7 +409,7 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
 app.post('/protoclaw/render_conversation', express.json(), async (req, res, next) => {
   try {
     const { agentId: resolvedAgentId, sessionId } = resolveSessionTarget(req.body);
-    const { lastNCalls } = req.body || {};
+    const { lastNCalls, format, includeDetails, returnContent, title } = req.body || {};
     const sessionPath = getPrebuiltSessionFilePath(resolvedAgentId, sessionId);
     const raw = await fs.readFile(sessionPath, 'utf8');
     const parsed = JSON.parse(raw);
@@ -419,12 +419,30 @@ app.post('/protoclaw/render_conversation', express.json(), async (req, res, next
       return;
     }
 
-    const html = renderConversationHtml(messages, {
-      title: `对话记录 ${sessionId.slice(-12)}`,
+    const renderOptions = {
+      title: typeof title === 'string' && title.trim() ? title.trim() : `对话记录 ${sessionId.slice(-12)}`,
       agentId: resolvedAgentId,
       sessionId,
       lastNCalls: typeof lastNCalls === 'number' && lastNCalls > 0 ? lastNCalls : null,
-    });
+      // 默认 true：IM 的 export_conversation 工具（不传该参数）保持全量保真不变
+      includeDetails: includeDetails !== false,
+    };
+
+    // 浏览器保存路线（标题弹窗导出）：返回内容字符串，由前端落盘；不写服务端 temp
+    if (returnContent) {
+      const wantMd = format === 'md' || format === 'markdown';
+      const content = wantMd
+        ? renderConversationMarkdown(messages, renderOptions)
+        : renderConversationHtml(messages, renderOptions);
+      res.json({
+        content,
+        format: wantMd ? 'md' : 'html',
+        messageCount: messages.length,
+      });
+      return;
+    }
+
+    const html = renderConversationHtml(messages, renderOptions);
 
     // 对话导出属应用侧产物，落用户数据目录 temp（打包后进程 cwd 为只读安装目录，
     // 不可写 cwd/.agentdev/temp）。

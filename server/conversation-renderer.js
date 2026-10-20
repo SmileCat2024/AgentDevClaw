@@ -230,7 +230,6 @@ function renderAssistantMessage(msg, toolResults) {
       <div class="message-row assistant">
         <div class="message-meta">
           <div class="role-badge">assistant</div>
-          ${msg.usage ? `<span class="token-info">↑${msg.usage.inputTokens} ↓${msg.usage.outputTokens}</span>` : ''}
         </div>
         <div class="message-content">${innerContent}
         </div>
@@ -314,6 +313,18 @@ function groupByTurn(messages) {
   return groups;
 }
 
+/**
+ * 为轮组分配面向读者的连续编号：含 user 消息的组从 1 起递增（#1/#2/…）。
+ * 原始 turn 值（插话场景可能为小数、可能跳号）不外露到导出内容。
+ */
+function assignUserTurnNumbers(turnGroups) {
+  let seq = 0;
+  for (const g of turnGroups) {
+    g.userTurn = g.messages.some(m => m.role === 'user') ? ++seq : null;
+  }
+  return turnGroups;
+}
+
 function renderTurnGroup(group, groupIndex, toolCallIndex, callTimestamps, turnGroupCount) {
   // 收集 tool 结果，按 toolCallId 索引，供 assistant 消息合并使用
   const toolResults = new Map();
@@ -363,7 +374,7 @@ function renderTurnGroup(group, groupIndex, toolCallIndex, callTimestamps, turnG
     return `
     <details class="turn-group" ${groupIndex === turnGroupCount - 1 ? 'open' : ''}>
       <summary class="turn-summary">
-        <span class="turn-number">#${group.turn}</span>
+        <span class="turn-number">#${group.userTurn}</span>
         <span class="turn-title">${escapeHtml(titleText)}</span>
         ${timeLabel ? `<span class="turn-time">${escapeHtml(timeLabel)}</span>` : ''}
       </summary>
@@ -377,6 +388,36 @@ function renderTurnGroup(group, groupIndex, toolCallIndex, callTimestamps, turnG
   }
 }
 
+// ── 导出过滤 ──────────────────────────────────────────────
+
+/**
+ * HTML / Markdown 导出共用的消息过滤。
+ *
+ * - lastNCalls：只保留最近 N 轮（与既有语义一致）
+ * - includeDetails：false 时仅保留 user / assistant 的纯正文——
+ *   剔除 system 消息与 tool 结果消息，并剥离 assistant 消息上的
+ *   reasoning（思考过程）与 toolCalls（工具调用）。
+ */
+function applyExportFilters(messages, { lastNCalls = null, includeDetails = true } = {}) {
+  let filtered = messages;
+
+  if (lastNCalls != null && lastNCalls > 0) {
+    const turns = [...new Set(messages.map(m => m.turn).filter(t => t != null))].sort((a, b) => a - b);
+    const recentTurns = new Set(turns.slice(-lastNCalls));
+    filtered = filtered.filter(m => m.turn != null && recentTurns.has(m.turn));
+  }
+
+  if (!includeDetails) {
+    filtered = filtered
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => (m.role === 'assistant' && (m.reasoning || m.toolCalls))
+        ? { ...m, reasoning: undefined, toolCalls: undefined }
+        : m);
+  }
+
+  return filtered;
+}
+
 // ── 主渲染函数 ─────────────────────────────────────────────
 
 function renderConversationHtml(messages, options = {}) {
@@ -385,19 +426,17 @@ function renderConversationHtml(messages, options = {}) {
     agentId = '',
     sessionId = '',
     lastNCalls = null,
+    includeDetails = true,
     callTimestamps = null, // Map<turn, number(ms)> from usageStats.calls
   } = options;
 
-  // 过滤：最近 N 轮
-  let filteredMessages = messages;
-  if (lastNCalls != null && lastNCalls > 0) {
-    const turns = [...new Set(messages.map(m => m.turn).filter(t => t != null))].sort((a, b) => a - b);
-    const recentTurns = new Set(turns.slice(-lastNCalls));
-    filteredMessages = messages.filter(m => m.turn != null && recentTurns.has(m.turn));
-  }
+  const filteredMessages = applyExportFilters(messages, { lastNCalls, includeDetails });
 
   const toolCallIndex = buildToolCallIndex(filteredMessages);
-  const turnGroups = groupByTurn(filteredMessages);
+  // 轮组内无 user/assistant/system 消息时（如 includeDetails=false 过滤后只剩
+  // 空 system 组）整组跳过，避免产出空分节
+  const turnGroups = assignUserTurnNumbers(groupByTurn(filteredMessages)
+    .filter(g => g.messages.some(m => ['user', 'assistant', 'system'].includes(m.role))));
 
   // 统计信息
   const stats = {
@@ -446,8 +485,147 @@ ${groupHtml}
 </html>`;
 }
 
+// ── Markdown 渲染 ─────────────────────────────────────────
+
+/** 代码块围栏：内容本身含 ``` 时升级为四反引号，避免截断 */
+function mdFenceWrap(content, lang = '') {
+  const text = String(content ?? '');
+  const fence = text.includes('```') ? '````' : '```';
+  return `${fence}${lang}\n${text}\n${fence}`;
+}
+
+/** 引用块：逐行加 "> " 前缀（空行为 ">"） */
+function mdBlockquote(text) {
+  return String(text ?? '')
+    .split('\n')
+    .map(line => (line.trim() ? `> ${line}` : '>'))
+    .join('\n');
+}
+
+function renderToolBlockMarkdown(call, resultMsg) {
+  const displayName = getToolDisplayName(call.name);
+  const argsJson = JSON.stringify(call.arguments, null, 2);
+
+  let statusIcon = '·';
+  let resultSection = '';
+  if (resultMsg) {
+    const { success, data } = parseToolResult(resultMsg.content);
+    statusIcon = success ? '✓' : '✗';
+    const displayData = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+    resultSection = `\n结果：\n\n${mdFenceWrap(truncateForPreview(displayData, 5000))}\n`;
+  }
+
+  return `**工具调用 · ${displayName}** ${statusIcon}\n\n参数：\n\n${mdFenceWrap(argsJson, 'json')}\n${resultSection}`;
+}
+
+/**
+ * 将 Message[] 渲染为 Markdown 文档，结构与 HTML 导出镜像：
+ * 文档头（标题 + 元信息）→ 按 turn 分节 → 消息正文。
+ * user / assistant 的 content 本身就是 Markdown，原样透传。
+ */
+function renderConversationMarkdown(messages, options = {}) {
+  const {
+    title = '对话记录',
+    agentId = '',
+    sessionId = '',
+    lastNCalls = null,
+    includeDetails = true,
+    callTimestamps = null,
+  } = options;
+
+  const filteredMessages = applyExportFilters(messages, { lastNCalls, includeDetails });
+  const turnGroups = assignUserTurnNumbers(groupByTurn(filteredMessages)
+    .filter(g => g.messages.some(m => ['user', 'assistant', 'system'].includes(m.role))));
+
+  const stats = {
+    totalMessages: filteredMessages.length,
+    userTurns: turnGroups.filter(g => g.messages.some(m => m.role === 'user')).length,
+    toolCalls: filteredMessages.filter(m => m.role === 'tool').length,
+    chars: filteredMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0),
+  };
+
+  // 标题去掉换行，防止注入额外标题层级
+  const safeTitle = String(title).replace(/[\r\n]+/g, ' ').trim() || '对话记录';
+  const out = [];
+  out.push(`# ${safeTitle}`);
+  out.push('');
+  const metaLines = [];
+  if (agentId) metaLines.push(`Agent: ${agentId}`);
+  if (sessionId) metaLines.push(`Session: ${sessionId.slice(-12)}`);
+  metaLines.push(`${stats.userTurns} 轮对话 · ${stats.totalMessages} 条消息 · ${stats.toolCalls} 次工具调用`);
+  metaLines.push(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }));
+  out.push(mdBlockquote(metaLines.join('  \n')));
+  out.push('');
+
+  for (const group of turnGroups) {
+    const renderable = group.messages.filter(m => ['user', 'assistant', 'system'].includes(m.role));
+
+    // 含用户输入的轮组以连续编号作节标题；无 user 的组（初始 system prompt）无标题
+    const userMsg = group.messages.find(m => m.role === 'user');
+    if (userMsg) {
+      const titleText = truncateForPreview(userMsg.content.replace(/\n/g, ' '), 80);
+      out.push(`## #${group.userTurn} ${titleText}`);
+
+      if (callTimestamps) {
+        const ts = callTimestamps.get(group.turn);
+        if (ts) {
+          out.push('');
+          out.push(`*${new Date(ts).toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit',
+          })}*`);
+        }
+      }
+    }
+    out.push('');
+
+    // tool 结果按 toolCallId 索引，合并进 assistant 消息的工具调用块
+    const toolResults = new Map();
+    for (const msg of group.messages) {
+      if (msg.role === 'tool' && msg.toolCallId) {
+        toolResults.set(msg.toolCallId, msg);
+      }
+    }
+
+    for (const msg of renderable) {
+      if (msg.role === 'user') {
+        out.push('**user**');
+        out.push('');
+        out.push(msg.content || '');
+        out.push('');
+      } else if (msg.role === 'assistant') {
+        if (msg.reasoning) {
+          out.push(mdBlockquote(`**思考过程**\n\n${msg.reasoning}`));
+          out.push('');
+        }
+        if (msg.content) {
+          out.push('**assistant**');
+          out.push('');
+          out.push(msg.content);
+          out.push('');
+        }
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          for (const call of msg.toolCalls) {
+            out.push(renderToolBlockMarkdown(call, toolResults.get(call.id)));
+            out.push('');
+          }
+        }
+        // 无正文也无工具调用的 assistant 消息（仅 reasoning 且被过滤时）跳过空节
+      } else if (msg.role === 'system') {
+        out.push(mdBlockquote(`**系统提醒**\n\n${msg.content}`));
+        out.push('');
+      }
+    }
+  }
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
 export {
   renderConversationHtml,
+  renderConversationMarkdown,
+  applyExportFilters,
   groupByTurn,
   parseToolResult,
   escapeHtml,
