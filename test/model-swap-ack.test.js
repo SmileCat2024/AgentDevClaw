@@ -54,10 +54,12 @@ describe('requestRuntimeAck', () => {
     child.emitter.emit('message', { type: 'model-swap-result', requestId: 'other-id', ok: true });
     child.emitter.emit('message', { type: 'unrelated', requestId: child.sent[0].requestId, ok: true });
 
-    child.emitter.emit('message', { type: 'model-swap-result', requestId: child.sent[0].requestId, ok: true, meta: { modelName: 'glm-x' } });
+    const meta = { modelRevision: 2, modelName: 'glm-x', presetName: 'glm', provider: 'anthropic',
+      thinkingEffort: null, contextLength: 1000000, compressRatio: 70 };
+    child.emitter.emit('message', { type: 'model-swap-result', requestId: child.sent[0].requestId, ok: true, meta });
 
     const result = await promise;
-    assert.deepEqual(result, { ok: true, meta: { modelName: 'glm-x' } });
+    assert.deepEqual(result, { ok: true, meta });
     assert.equal(child.emitter.listenerCount('message'), 0, 'listener must be removed after settle');
   });
 

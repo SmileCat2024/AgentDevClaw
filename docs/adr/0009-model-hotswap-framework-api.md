@@ -49,6 +49,14 @@
 
 run-prebuilt-agent、run-studio-runtime（两模式）、run-plain-agent、run-one-shot-agent 构造时全部注入 `modelResolver: modelPresetResolver`——同一批 Feature 装配在哪个宿主里行为一致。辅助进程（recap / title mirror、inprocess-summary）无 agent 实例，继续直接 import 解析函数。
 
+### 8. 模型状态版本与前端原子呈现（2026-10-20）
+
+Agent 在每次 `setLLM` 生效时递增进程内 `modelRevision`，解析失败不推进；新 Agent 实例从 0 开始，版本只在同一 runtime 内比较。`getLLMMeta()` 与 Overview 从同一份模型状态输出版本、名称、预设、协议、思考强度、上下文窗口和压缩阈值。`setLLM` 整体替换模型元数据；未提供的参数清空，不继承上一客户端的窗口或档位。
+
+切换成功回执与 SSE / poll / 初始加载均经 `commitSessionViewPatch` 写入同一份 `overview`。提交先校验 Session 身份与视图代次，再整组比较模型版本：迟到的低版本不能覆盖已生效参数，但其用量与其他概览数据仍按原契约更新。同步视图重置与缓存恢复经 `applySessionViewPatch` 整体替换，不受上一视图的版本阻挡。模型切换只重新计算窗口占比，不清零已记录用量。
+
+输入框模型、思考强度、顶部模型名、用量条及已展开详情共同消费已提交状态；预设列表只提供可选项与思考支持能力，启动配置只在运行时模型状态到达前用于占位。当前模型不从历史 Session 元数据或列表缓存借值。无版本的旧远端仍可整组显示元数据，但无法提供同 runtime 的乱序版本保证；完整保证要求远端框架同步升级。
+
 ## 落点索引
 
 - 框架契约：`AgentDev/packages/core/src/core/types.ts`（`ModelPresetResolver` / `ResolvedModelPreset` / `LLMMeta.source|provider` / `AgentConfig.modelResolver`）+ `agent.ts`（`setModel` / `setThinkingEffort`）

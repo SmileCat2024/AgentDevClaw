@@ -63,23 +63,8 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   let isLastRequest = false;
   let overview = viewState && viewState.overview || {};
 
-  // 模型名：swap 回执（ack 即生效）优先——overview 帧经 SSE/轮询通道送达，
-  // 广域链路下可能滞后 ack 数秒；其次 overview 实时，回退到 session 元数据。
-  // getter（window.ClawFW.getActiveModelSwapReceipt，input-model-switcher.js）
-  // 内部完成退役判定，无回执时返回 null 走原链路。
-  let modelName = '';
-  let swapReceipt = (window.ClawFW && typeof window.ClawFW.getActiveModelSwapReceipt === 'function')
-    ? window.ClawFW.getActiveModelSwapReceipt()
-    : null;
-  if (swapReceipt && swapReceipt.modelName) {
-    modelName = swapReceipt.modelName;
-  }
-  if (!modelName && overview.modelName) {
-    modelName = overview.modelName;
-  }
-  if (!modelName && activeSession) {
-    modelName = activeSession.modelName || '';
-  }
+  // 名称、窗口和阈值来自同一份已提交的运行时模型状态。
+  let modelName = overview.modelName || '';
 
   let liveUsage = overview.usageStats && overview.usageStats.lastRequestUsage;
   if (liveUsage && liveUsage.inputTokens) {
@@ -96,7 +81,7 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
     }
   }
 
-  // contextLength / compressRatio 只走 overview 实时链路（模型热切换后立即反映）。
+  // contextLength / compressRatio 只读统一提交后的 overview（回执与实时快照同源）。
   // 不回退到 session 元数据——该旁路读取的是会话创建时写入的旧值，热切换后不更新，
   // 是历史上 context bar 显示不匹配的根源。overview 无 contextLength 时渲染空态占位。
   let contextLength = (overview.contextLength != null && overview.contextLength > 0)
@@ -158,6 +143,7 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   window._ccbDetailData = detailData;
 
   bar.innerHTML = html;
+  if (_ccbPopup?.classList.contains('visible')) _showCcbPopup();
   if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
     notifyChatViewportMutation({
       reason: 'context-bar',

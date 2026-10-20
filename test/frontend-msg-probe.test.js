@@ -392,7 +392,7 @@ test('missing probe keeps the legacy full-fetch path', async () => {
 test('probe fields are stripped from the snapshot and do not change the signature', () => {
   const sandbox = { Set };
   vm.createContext(sandbox);
-  vm.runInContext(overviewDataSource, sandbox);
+  vm.runInContext(sessionViewStateSource + '\n' + overviewDataSource, sandbox);
 
   const base = { modelName: 'model-a', updatedAt: 1, context: { messageCount: 3 } };
   const withProbe = {
@@ -424,7 +424,7 @@ test('probe fields are stripped from the snapshot and do not change the signatur
 test('extractMessagesProbe validates fields and returns null when unusable', () => {
   const sandbox = { Set };
   vm.createContext(sandbox);
-  vm.runInContext(overviewDataSource, sandbox);
+  vm.runInContext(sessionViewStateSource + '\n' + overviewDataSource, sandbox);
 
   const run = (expr) => vm.runInContext(expr, sandbox);
 

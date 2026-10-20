@@ -8,12 +8,12 @@
  *   1. getRuntimeAwareAgentRecord() merge — host → runtime child
  *   2. _modelInfoCache bridge — loadAgents replacement gap
  *   3. Agent switch — no cross-agent cache leakage
- *   4. Model swap — cache update + recovery
+ * Live model swaps are covered by input-model-swap-optimistic.test.js;
+ * this cache is only for historical session-list token bars.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { deepEqual as deepLoose } from 'node:assert';
 import vm from 'node:vm';
 import fs from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -65,54 +65,11 @@ function createRuntimeAwareSandbox(hostRecord, runtimeRecord) {
   return sandbox;
 }
 
-// ── Tests: _cacheModelInfo + getCachedPresetName ───────────
-
-describe('model-info cache: presetName round-trip', () => {
-  it('caches presetName per agent and reads it back', () => {
-    const ctx = loadSessionUi();
-    ctx.run(`var agent = { id: 'ph' };`);
-    ctx.run(`_cacheModelInfo(agent, null, null, 'glm-5.2')`);
-    assert.equal(ctx.run(`getCachedPresetName({ id: 'ph' })`), 'glm-5.2');
-  });
-
-  it('returns empty string for unknown agent', () => {
-    const ctx = loadSessionUi();
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, 'glm-5.2')`);
-    assert.equal(ctx.run(`getCachedPresetName({ id: 'other' })`), '');
-  });
-
-  it('does NOT leak presetName across agents', () => {
-    const ctx = loadSessionUi();
-    ctx.run(`_cacheModelInfo({ id: 'agentA' }, null, null, 'claude-sonnet')`);
-    ctx.run(`_cacheModelInfo({ id: 'agentB' }, null, null, 'gpt-4o')`);
-    assert.equal(ctx.run(`getCachedPresetName({ id: 'agentA' })`), 'claude-sonnet');
-    assert.equal(ctx.run(`getCachedPresetName({ id: 'agentB' })`), 'gpt-4o');
-  });
-
-  it('empty/null presetName does not overwrite existing cache', () => {
-    const ctx = loadSessionUi();
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, 'glm-5.2')`);
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, '')`);
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null)`);
-    assert.equal(ctx.run(`getCachedPresetName({ id: 'ph' })`), 'glm-5.2');
-  });
-
-  it('co-exists with contextLength and compressRatio in same cache slot', () => {
-    const ctx = loadSessionUi();
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, 128000, 75, 'claude-sonnet')`);
-    // All three values should be independently present
-    assert.equal(ctx.run(`getCachedPresetName({ id: 'ph' })`), 'claude-sonnet');
-    assert.equal(ctx.run(`getSessionContextLength({}, { id: 'ph' })`), 128000);
-    assert.equal(ctx.run(`getSessionCompressRatio({}, { id: 'ph' })`), 75);
-  });
-});
-
 // ── Tests: contextLength/compressRatio cache round-trip ────
 
 describe('model-info cache: contextLength/compressRatio survive loadAgents gap', () => {
   it('caches values when session provides them, then serves from cache when session loses them', () => {
     const ctx = loadSessionUi();
-    const agent = { id: 'ph' };
 
     // Phase 1: Full data available (loadAgentDetail has run)
     ctx.run(`var agent = { id: 'ph' }`);
@@ -208,22 +165,20 @@ describe('getRuntimeAwareAgentRecord: modelPresets preservation', () => {
 // ── Tests: Full round-trip — agent switch isolation ────────
 
 describe('model-info: full agent-switch round-trip', () => {
-  it('agent A preset does not leak to agent B after switch', () => {
+  it('historical window values stay isolated across agents', () => {
     const ctx = loadSessionUi();
 
     // Agent A is active, preset cached
-    ctx.run(`_cacheModelInfo({ id: 'agentA' }, 128000, 80, 'claude-sonnet')`);
+    ctx.run(`_cacheModelInfo({ id: 'agentA' }, 128000, 80)`);
 
     // Simulate switch to agent B — B has different model
     // Agent B's record arrives from getConnectedAgents
-    ctx.run(`_cacheModelInfo({ id: 'agentB' }, 200000, 70, 'gpt-4o')`);
+    ctx.run(`_cacheModelInfo({ id: 'agentB' }, 200000, 70)`);
 
     // Agent A cache should still be intact (not overwritten by B)
-    assert.equal(ctx.run(`getCachedPresetName({ id: 'agentA' })`), 'claude-sonnet');
     assert.equal(ctx.run(`getSessionContextLength({}, { id: 'agentA' })`), 128000);
 
     // Agent B cache should be separate
-    assert.equal(ctx.run(`getCachedPresetName({ id: 'agentB' })`), 'gpt-4o');
     assert.equal(ctx.run(`getSessionContextLength({}, { id: 'agentB' })`), 200000);
   });
 
@@ -303,51 +258,6 @@ describe('model swap: agentId resolution', () => {
 
     // This is exactly why _getInputAgentId / _getCurrentAgentIdForSwap
     // must use focusedAgentId (host ID) instead of record.id.
-  });
-});
-
-// ── Tests: thinkingEffort runtime override ─────────────────
-
-describe('_cacheModelInfo: thinkingEffort override', () => {
-  it('caches thinkingEffort override per-agentId', () => {
-    const ctx = loadSessionUi();
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, 'high')`);
-    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), 'high');
-  });
-
-  it('returns undefined when no override cached', () => {
-    const ctx = loadSessionUi();
-    // Never cached → undefined (means "use preset default")
-    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), undefined);
-  });
-
-  it('caches null as explicit "cleared to default"', () => {
-    const ctx = loadSessionUi();
-    // First set an override
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, 'high')`);
-    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), 'high');
-
-    // Then clear it
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, null)`);
-    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), null);
-    // null !== undefined — null means "explicitly cleared", not "never set"
-  });
-
-  it('does not leak thinkingEffort across agents', () => {
-    const ctx = loadSessionUi();
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, 'high')`);
-    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), 'high');
-    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'qqbot' })`), undefined);
-  });
-
-  it('thinkingEffort undefined does not overwrite existing cache', () => {
-    const ctx = loadSessionUi();
-    // Set override
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, 'high')`);
-    // Call with only contextLength — thinkingEffort is undefined (not passed)
-    ctx.run(`_cacheModelInfo({ id: 'ph' }, 128000, null)`);
-    // Override should still be there
-     assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), 'high');
   });
 });
 

@@ -29,6 +29,7 @@ function loadOverviewData(overrides = {}) {
     currentLanguage: 'zh',
     ...overrides,
   });
+  ctx.loadSource('public/src/modules/session-view-state.js');
   ctx.loadSource('public/src/modules/overview-data.js');
   return ctx;
 }

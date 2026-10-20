@@ -470,6 +470,7 @@ test('context bar renders one supplied session view snapshot', () => {
     },
   };
   const context = {
+    _ccbPopup: null,
     currentOverviewSnapshot: {
       modelName: 'stale-model',
       usageStats: { lastRequestUsage: { inputTokens: 75 } },

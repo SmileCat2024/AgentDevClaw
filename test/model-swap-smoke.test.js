@@ -131,6 +131,7 @@ describe('model hot-swap smoke (real runtime process)', () => {
     assert.equal(ack.ok, true, `expected ok ack, got: ${JSON.stringify(ack)}`);
     assert.equal(ack.meta?.presetName, '__default__');
     assert.ok(ack.meta?.modelName, 'modelName should be non-empty');
+    assert.ok(Number.isSafeInteger(ack.meta?.modelRevision) && ack.meta.modelRevision > 0, 'runtime ack must carry the framework model revision');
     assert.equal(child.exitCode, null, 'runtime process must stay alive after a successful swap');
   });
 

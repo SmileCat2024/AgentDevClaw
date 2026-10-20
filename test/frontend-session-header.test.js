@@ -219,7 +219,7 @@ describe('frontend session header: switch isolation', () => {
 // ── 场景 3：本地回归（golden，锚定当前行为） ────────────────
 
 describe('frontend session header: local regression', () => {
-  it('keeps the local record path output identical to the current implementation', () => {
+  it('keeps live model fields empty until overview arrives, retaining historical usage', () => {
     const { ctx, bar } = createHeaderSandbox();
     ctx.run(`
       currentRuntimeAgentId = 'ph-1';
@@ -244,15 +244,13 @@ describe('frontend session header: local regression', () => {
       updateChatContextBar();
     `);
 
-    // golden：模型名来自 overview 活源（此处为空 → 回退 session 元数据），
-    // 用量回退 session.tokenUsage，contextLength 只走 overview（无则常驻空态占位）
+    // 模型名与窗口同源：运行时未到时均为空态，历史用量仍可显示。
     assert.equal(
       bar.innerHTML,
-      '<span class="ccb-model" data-ccb-trigger="1">glm-5.3-flash</span>'
-      + '<span class="ccb-token ccb-token-empty"><span class="ccb-bar" data-ccb-trigger="1"></span><span class="ccb-label" data-ccb-trigger="1">—</span></span>',
+      '<span class="ccb-token ccb-token-empty"><span class="ccb-bar" data-ccb-trigger="1"></span><span class="ccb-label" data-ccb-trigger="1">—</span></span>',
     );
     const detail = ctx.run('window._ccbDetailData');
-    assert.equal(detail.modelName, 'glm-5.3-flash');
+    assert.equal(detail.modelName, '');
     assert.equal(detail.used, 3000);
     assert.equal(detail.isLastRequest, true);
     assert.equal(detail.contextLength, 0, 'contextLength must not fall back to session metadata');

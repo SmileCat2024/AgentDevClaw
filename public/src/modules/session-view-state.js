@@ -7,8 +7,8 @@
  * the user can leave and re-enter the same runtime while an older request is
  * still in flight.
  *
- * This module owns only commit eligibility. The poll timer and in-flight
- * promises remain runtime resources owned by the poll coordinator.
+ * This module owns commit eligibility and model-state ordering. The poll timer
+ * and in-flight promises remain resources owned by the poll coordinator.
  *
  * `sessionMeta` carries the selected session's rich metadata (session id,
  * type, timestamps, working directory, message count). Volatile display
@@ -61,6 +61,19 @@ function normalizeSessionMeta(value) {
   });
 }
 
+// 回执与 Overview 使用同一组模型字段；缺席值显式清空，不拼接旧模型参数。
+function normalizeSessionModelState(snapshot) {
+  return {
+    modelRevision: Number.isSafeInteger(snapshot?.modelRevision) && snapshot.modelRevision >= 0 ? snapshot.modelRevision : null,
+    modelName: typeof snapshot?.modelName === 'string' ? snapshot.modelName : '',
+    presetName: typeof snapshot?.presetName === 'string' ? snapshot.presetName : '',
+    thinkingEffort: typeof snapshot?.thinkingEffort === 'string' ? snapshot.thinkingEffort : null,
+    contextLength: typeof snapshot?.contextLength === 'number' && snapshot.contextLength > 0 ? snapshot.contextLength : null,
+    compressRatio: typeof snapshot?.compressRatio === 'number' && snapshot.compressRatio > 0 ? snapshot.compressRatio : null,
+    provider: typeof snapshot?.provider === 'string' ? snapshot.provider : '',
+  };
+}
+
 let _sessionMeta = EMPTY_SESSION_META;
 let _sessionViewIdentity = null;
 // 身份代次：每次生效身份变化（显式 identity 或 sessionMeta 推导）推进。
@@ -70,6 +83,7 @@ let _sessionViewIdentity = null;
 let _sessionViewGeneration = 0;
 // 独立于视图身份：输入请求被事件/本地操作写入后，在途快照不得覆盖它。
 let _sessionViewInputRequestsRevision = 0;
+let _sessionViewModelRuntimeId = '';
 
 function getCurrentSessionViewIdentity() {
   const explicit = normalizeSessionViewIdentity(_sessionViewIdentity);
@@ -213,8 +227,13 @@ function applySessionViewPatch(patch) {
   if (has('hookInspector')) {
     setCurrentHookInspector(patch.hookInspector);
   }
-  if (has('overview')) {
-    setCurrentOverviewSnapshot(patch.overview);
+  if (has('overview') || has('model')) {
+    const runtimeId = normalizeSessionViewRuntimeId(currentRuntimeAgentId);
+    setCurrentOverviewSnapshot({
+      ...(has('overview') ? patch.overview : currentOverviewSnapshot),
+      ...normalizeSessionModelState(has('model') ? patch.model : patch.overview),
+    });
+    _sessionViewModelRuntimeId = runtimeId;
   }
   if (has('todoPlan')) {
     setCurrentTodoPlan(patch.todoPlan);
@@ -265,6 +284,18 @@ function commitSessionViewPatch(token, patch, afterCommit) {
       && !isSessionViewInputRequestsCurrent(token)) {
       patch = { ...patch };
       delete patch.inputRequests;
+    }
+    // 异步生产者的回执和快照共用版本判据；同步 reset / cache restore
+    // 走 applySessionViewPatch，明确替换整个视图，不受旧版本阻挡。
+    const hasModel = Object.prototype.hasOwnProperty.call(patch, 'model');
+    const hasOverview = Object.prototype.hasOwnProperty.call(patch, 'overview');
+    if ((hasModel || hasOverview) && _sessionViewModelRuntimeId === previous.runtimeId) {
+      const incoming = normalizeSessionModelState(hasModel ? patch.model : patch.overview);
+      const current = normalizeSessionModelState(previous.overview);
+      if (current.modelRevision !== null
+        && (incoming.modelRevision === null || incoming.modelRevision < current.modelRevision)) {
+        patch = { ...patch, model: current };
+      }
     }
     applySessionViewPatch(patch);
     if (afterCommit) {

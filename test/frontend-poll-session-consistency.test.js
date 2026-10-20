@@ -112,6 +112,7 @@ function createPollSandbox({ blockStatus = true } = {}) {
     currentHookInspector: {},
     currentHookInspectorSignature: '',
     activeFeaturePanel: null,
+    selectedFeatureName: null,
     logPanelScope: 'current',
     lastAgentListRefreshAt: Date.now(),
     allAgents: [],
@@ -225,7 +226,8 @@ function createPollSandbox({ blockStatus = true } = {}) {
   };
 
   vm.createContext(sandbox);
-  vm.runInContext(`${sessionViewStateSource}\n${extractPollSource()}\nglobalThis.__poll = poll;`, sandbox);
+  const overviewSource = fs.readFileSync(new URL('../public/src/modules/overview-data.js', import.meta.url), 'utf8');
+  vm.runInContext(`${sessionViewStateSource}\n${overviewSource}\n${extractPollSource()}\nglobalThis.__poll = poll;`, sandbox);
 
   return {
     sandbox,

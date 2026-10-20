@@ -84,13 +84,9 @@ function renderSessionTitleAiButton(session) {
   return '<button class="session-title-ai-btn session-title-ai-btn-hidden" type="button" title="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '" onmousedown="if(this._setGenerating)this._setGenerating(true);" onclick="event.stopPropagation();window.generateSessionTitle(\'' + escapeHtml(session.id) + '\',this)" aria-label="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '"><span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + escapeHtml(isZh ? 'AI生成' : 'AI Generate') + '</span></button>';
 }
 
-// ── Client-side model info cache ───────────────────────────────────
-// getConnectedAgents returns light workspace_sessions without top-level
-// contextLength/compressRatio. These only appear after loadAgentDetail or
-// the 3-second prebuilt_sessions refresh. During the gap between data loss
-// (loadAgents replacing allAgents) and recovery (next refresh), the context
-// bar would flash hardcoded defaults. This cache bridges that gap by
-// remembering the last known-good values per agentId.
+// ── Historical session token-bar cache ──────────────────────────────
+// 历史会话列表在轻量目录刷新期间保留窗口/阈值；当前对话模型状态只读
+// SessionView.overview，切换器和顶栏不使用此缓存。
 let _modelInfoCache = {};
 
 function _resolveAgentKey(agent) {
@@ -135,7 +131,7 @@ function getSessionCompressRatio(session, agent) {
   return 80;
 }
 
-function _cacheModelInfo(agent, contextLength, compressRatio, presetName, thinkingEffort) {
+function _cacheModelInfo(agent, contextLength, compressRatio) {
   let key = _resolveAgentKey(agent);
   if (!key) return;
   if (!_modelInfoCache[key]) _modelInfoCache[key] = {};
@@ -145,37 +141,6 @@ function _cacheModelInfo(agent, contextLength, compressRatio, presetName, thinki
   if (Number.isFinite(compressRatio) && compressRatio > 0 && compressRatio <= 100) {
     _modelInfoCache[key].compressRatio = compressRatio;
   }
-  if (typeof presetName === 'string' && presetName) {
-    _modelInfoCache[key].presetName = presetName;
-  }
-  // thinkingEffort: string (explicit value) or null (cleared to default).
-  // Only cache when the argument was actually provided (not undefined).
-  if (thinkingEffort !== undefined) {
-    _modelInfoCache[key].thinkingEffort = thinkingEffort || null;
-  }
-}
-
-/**
- * Read the cached preset name for the given agent.
- * Used as a fallback when the live agent record temporarily
- * lacks modelPresets (e.g. during loadAgents replacement gap).
- */
-function getCachedPresetName(agent) {
-  let key = _resolveAgentKey(agent);
-  if (!key) return '';
-  return (_modelInfoCache[key] && _modelInfoCache[key].presetName) || '';
-}
-
-/**
- * Read the cached runtime thinkingEffort override for the given agent.
- * Returns undefined when no runtime override has been cached (meaning
- * the preset's default thinkingEffort should be used).
- */
-function getCachedThinkingEffort(agent) {
-  let key = _resolveAgentKey(agent);
-  if (!key) return undefined;
-  if (!_modelInfoCache[key] || !('thinkingEffort' in _modelInfoCache[key])) return undefined;
-  return _modelInfoCache[key].thinkingEffort;
 }
 
 function renderSessionTokenBar(session, agent) {

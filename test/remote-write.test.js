@@ -597,6 +597,7 @@ describe('thinking effort switcher preset refetch', () => {
     });
     ctx.run('window.ClawFW = {}');
     // 生产顺序：owner 模块（model-preset-cache.js）先于使用方加载
+    ctx.loadSource('public/src/modules/session-view-state.js');
     ctx.loadSource('public/src/modules/model-preset-cache.js');
     ctx.loadSource('public/src/modules/input-model-switcher.js');
     return { ctx, nameEl };

@@ -4,7 +4,7 @@
 > 每次遇到渲染层的新问题或提炼出新结论时，请更新对应章节，或在文末追加新章节。
 > 保持每个条目简短、有代码示例、有判断依据，便于后续 agent 直接复用。
 >
-> 最后更新：2026-09-30（新增 12d：常驻装饰动画与玻璃面叠加的 GPU 成本）
+> 最后更新：2026-10-20（新增 12g：模型状态的统一提交与版本顺序）
 
 ---
 
@@ -1024,6 +1024,16 @@ coder 投影（`runtime-status.js collectRuntimeEntriesForPrebuilt`，`sessionTy
 - **易错点**：`render()` 在 `innerHTML` 赋值前组串，DOM 修正（autoResize、录音态按钮重绑）必须 `setTimeout` 下一拍执行且 `getElementById` 落空安全 no-op（视图可能已切走）；草稿 key 为 `app-chat-input:<agentId>`（复用 `_sessionInputCache` 但独立命名空间，不污染对话视图会话草稿）；发送全程 in-flight 防重入；成功后清输入须按 id 重查 live 元素（await 期间重渲染会换节点）。
 
 配套通用扩展：`ClawToast.show` 支持 `action: { label, onClick }`（`modules/toast-notify.js` + `styles/toast.css`）。
+
+---
+
+## 12g. 模型状态的统一提交与版本顺序（2026-10-20）
+
+- 当前模型参数作为一组状态进入 `SessionView.overview`：`modelRevision`、`modelName`、`presetName`、`provider`、`thinkingEffort`、`contextLength`、`compressRatio`。归一化集中在 `session-view-state.js` 的 `normalizeSessionModelState`，回执与 Overview 共用。
+- 模型/思考强度切换在请求前捕获视图 token，成功后通过 `commitSessionViewPatch(token, { model: result.meta })` 提交；SSE、poll 和初始加载通过同一入口提交 Overview。同 runtime 的较低版本仅保留其非模型数据，模型参数整组沿用已接收版本；不能按名称或档位是否出现“第三个值”猜测先后。
+- 版本由框架 Agent 每次 `setLLM` 生效递增，回执与 Overview 同源输出；runtime 更换后重新比较。同步 reset / cache restore 通过 `applySessionViewPatch` 整体替换视图，不受上一视图版本阻挡。无版本的旧远端可以显示，但没有乱序判定保证（完整契约见 ADR-0009）。
+- 输入框模型与思考强度、顶部模型名和用量条只读已提交状态；历史 Session 参数不填补当前模型，未知窗口呈空态。切模型保留已记录用量，只按新窗口重算占比；已展开的详情随顶栏数据刷新。`session-ui.js` 的窗口缓存仅服务历史会话列表。
+- 回归覆盖：`test/input-model-swap-optimistic.test.js`（真实请求处理、统一提交与渲染，含乱序回执、旧快照、同名切换、Session 回访、runtime 重启、同步重置/缓存恢复、详情刷新）；`test/model-swap-smoke.test.js`（真实子进程版本回执）。
 
 ---
 

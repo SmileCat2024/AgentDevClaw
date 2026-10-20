@@ -68,6 +68,7 @@ function createHarness() {
     _switchEpoch: 0,
     currentMessages: [],
     currentInputRequests: [],
+    currentOverviewSnapshot: {},
     setCurrentHookInspector(value) { sandbox.currentHookInspector = value || {}; },
     setCurrentOverviewSnapshot(value) { sandbox.currentOverviewSnapshot = value || {}; },
     setCurrentTodoPlan(value) { sandbox.currentTodoPlan = value || {}; },
