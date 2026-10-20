@@ -4,7 +4,7 @@
 > 每次遇到渲染层的新问题或提炼出新结论时，请更新对应章节，或在文末追加新章节。
 > 保持每个条目简短、有代码示例、有判断依据，便于后续 agent 直接复用。
 >
-> 最后更新：2026-10-20（新增 12g：模型状态的统一提交与版本顺序）
+> 最后更新：2026-10-20（§7 会话加载独立提交与身份约束；12g 模型状态的统一提交与版本顺序）
 
 ---
 
@@ -379,7 +379,13 @@ workspace 内 session 按钮的点击走另一条路：
 7. loadAgents().catch(...)          ← fire-and-forget 刷新 agent 列表数据（epoch 守卫）
 ```
 
-步骤 6 的 `loadAgentData` 完成后，页面已经正确渲染新 agent 的消息。**之后任何使用旧 agent ID 的异步回调都可能导致闪烁**。
+`loadAgentData` 的消息、工具、hooks、overview、todo、input requests、宿主详情与运行状态并行加载、按数据域独立提交。正文不等待辅助请求；工具配置迟到时仅在配置变化后重绘当前消息。每个提交仍使用进入会话前捕获的 SessionView token，辅助请求失败独立记录，不吞掉已就绪的正文。
+
+宿主详情的 `sessionMeta` 按 token 中选中的 `sessionId` 查找，不能用宿主 `activeSessionId` 替代；分页详情缺少目标记录时保留现有元数据。详情不得改变当前视图身份或使同次消息加载的 token 失效。
+
+消息写入会推进独立的 `messagesRevision`。进入会话时发出的全量响应提交前校验该版本，避免实时消息已上屏后被旧加载快照回退。`loadAgentData` 仍等待各加载任务收尾后返回，但正文可以提前显示。**所有迟到回调都必须通过原 token 校验，不能重新捕获 token 使旧响应获得当前视图所有权。**
+
+回归测试：`test/frontend-agent-load-latency.test.js` 使用真实加载、缓存、详情与 SessionView 模块，受控阻塞辅助请求的响应头/响应体，验证正文提前显示、选中身份稳定、缓存切回与迟到消息隔离。
 
 ### `requestSwitch` 的延迟机制
 

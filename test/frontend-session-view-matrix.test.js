@@ -153,5 +153,6 @@ test('SSE focus events capture a SessionView token before metadata commits', () 
 test('cache restore is an explicit synchronous restore path and session detail uses guarded metadata commit', () => {
   assert.match(coreSource, /function restoreRuntimeFromCache\(agentId/);
   assert.match(coreSource, /applySessionViewPatch\(\{[\s\S]*?sessionMeta: cached\.sessionMeta/);
-  assert.match(coreSource, /commitSessionViewPatch\(sessionViewToken, \{ sessionMeta \}\)/);
+  assert.match(coreSource, /commitSessionViewPatch\(sessionViewToken, \{ sessionMeta \},/);
+  assert.match(coreSource, /extractSessionMetaFromDetail\(detail, selectedIdentity\.sessionId\)/);
 });

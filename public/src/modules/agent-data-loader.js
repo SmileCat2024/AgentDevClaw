@@ -55,43 +55,33 @@ async function loadAgentData(agentId) {
     _runCapsuleStartConfirmed = false;
     _currentRecapText = '';
     _recapPendingTrigger = false;
-    const [msgsRes, toolsRes, hooksRes, overviewRes, todoRes, inputRes] = await Promise.all([
-      fetch(`/api/agents/${agentId}/messages`),
-      fetch(`/api/agents/${agentId}/tools`),
-      fetch(`/api/agents/${agentId}/hooks`),
-      fetch(`/api/agents/${agentId}/overview`),
-      fetch(`/api/agents/${agentId}/todo`),
-      fetch(`/api/agents/${agentId}/input-requests`),
-      // Ensure the host agent has full workspace_sessions (contextLength,
-      // compressRatio, per-session model info) before the first render.
-      // Without this, updateChatContextBar falls back to hardcoded defaults
-      // because getConnectedAgents only returns light session records.
-      loadAgentDetail(focusedAgentId),
-    ]);
-
-    // Stale guard: if the user switched to a different agent during the
-    // fetch, discard this response to prevent rendering stale data (flashback).
-    if (!isSessionViewTokenCurrent(loadToken)) {
-      return;
-    }
-
-    const [msgsData, tools, hookInspector, overviewSnapshot, todoPlan, inputRequests] = await Promise.all([
-      msgsRes.json(),
-      toolsRes.json(),
-      hooksRes.json(),
-      overviewRes.json(),
-      todoRes.ok ? todoRes.json() : Promise.resolve(getEmptyTodoPlan()),
-      inputRes.json(),
-    ]);
-    // 目标不可用（远程条目未运行、转发失败等）时端点返回错误对象而非数组；
-    // 归一化为空集合，避免下游迭代崩溃污染整个加载流程。
-    const toolList = Array.isArray(tools) ? tools : [];
-    const inputRequestList = Array.isArray(inputRequests) ? inputRequests : [];
-    // Response headers may have arrived before a switch while one or more
-    // bodies were still streaming/parsing. Never commit that older batch.
-    if (!isSessionViewTokenCurrent(loadToken)) {
-      return;
-    }
+    // 各数据域独立提交：正文不等待详情/面板/输入请求，任一辅助请求失败也不
+    // 丢弃已就绪的消息。所有生产者仍绑定同一次进入的 token。
+    const loadPart = async (name, work) => {
+      try {
+        await work();
+      } catch (error) {
+        console.error(`Failed to load agent ${name}:`, error);
+      }
+    };
+    const fetchJson = async (endpoint) => {
+      const response = await fetch(`/api/agents/${agentId}/${endpoint}`);
+      if (endpoint === 'todo' && !response.ok) return getEmptyTodoPlan();
+      return response.json();
+    };
+    const messagesTask = loadPart('messages', async () => {
+      const data = await fetchJson('messages');
+      // 同会话的 SSE/poll 可能先提交更新；较早的全量响应不得回退正文。
+      if (!isSessionViewTokenCurrent(loadToken) || !isSessionViewMessagesCurrent(loadToken)) return;
+      commitSessionViewPatch(loadToken, {
+        messages: attachMessagesTimestamps(data.messages || [], data.timestamps),
+      }, ({ current }) => {
+        recheckAutoTitleCandidate();
+        if (current.messages.length > 0) clearChatLoadingSession();
+        updateRollbackActionVisibility();
+        renderCurrentMainView(current);
+      });
+    });
 
     const DEFAULT_DISPLAY_NAMES = {
       // 系统工具
@@ -116,53 +106,64 @@ async function loadAgentData(agentId) {
       ls: 'LS',
     };
 
-    const nextToolRenderConfigs = {};
-    const nextToolNames = {};
-    for (const tool of toolList) {
-      nextToolRenderConfigs[tool.name] = tool;
-      nextToolNames[tool.name] = DEFAULT_DISPLAY_NAMES[tool.name] || tool.name;
-    }
-
-    const committed = commitSessionViewPatch(loadToken, {
-      hookInspector,
-      overview: overviewSnapshot,
-      todoPlan,
-      messages: attachMessagesTimestamps(msgsData.messages || [], msgsData.timestamps),
-      inputRequests: inputRequestList,
-      toolRenderConfigs: nextToolRenderConfigs,
-      toolNames: nextToolNames,
-    }, ({ current }) => {
-      recheckAutoTitleCandidate();
-      // Only clear loading if messages arrived. If the runtime hasn't loaded
-      // messages yet (common for freshly-created compacted resume sessions),
-      // keep the spinner so the user doesn't see a premature empty welcome page.
-      // The poll loop will clear it once real messages appear, and the 10s
-      // timeout in beginChatLoadingSession is the ultimate fallback.
-      if (current.messages.length > 0) clearChatLoadingSession();
-      // 结构性时机（会话加载）：保留显式调用，但必须走唯一声明入口（工单 037）。
-      notifyInputSurfaceChanged(current.inputRequests);
-      updateRollbackActionVisibility();
-      renderCurrentMainView(current);
-      if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
-      if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
-    });
-    if (!committed) {
-      return;
-    }
-
-    await refreshCurrentRuntimeStatus(agentId, loadToken);
-    if (!isSessionViewTokenCurrent(loadToken)) {
-      return;
-    }
-    if (activeFeaturePanel === 'logs') {
-      await loadLogs(true);
-      if (!isSessionViewTokenCurrent(loadToken)) {
-        return;
+    const toolsTask = loadPart('tools', async () => {
+      const tools = await fetchJson('tools');
+      const toolList = Array.isArray(tools) ? tools : [];
+      const nextToolRenderConfigs = {};
+      const nextToolNames = {};
+      for (const tool of toolList) {
+        nextToolRenderConfigs[tool.name] = tool;
+        nextToolNames[tool.name] = DEFAULT_DISPLAY_NAMES[tool.name] || tool.name;
       }
-    }
-    renderFeaturePanel();
-
-    warmTemplatesInBackground(collectTemplateNames(tools), agentId);
+      commitSessionViewPatch(loadToken, {
+        toolRenderConfigs: nextToolRenderConfigs,
+        toolNames: nextToolNames,
+      }, ({ previous, current }) => {
+        // 工具配置决定历史卡片呈现。配置变更才重绘，消息不写回旧快照。
+        if (current.messages.some((message) => message.role === 'tool' || message.toolCalls?.length > 0)
+          && JSON.stringify(previous.toolRenderConfigs) !== JSON.stringify(current.toolRenderConfigs)) {
+          renderCurrentMainView(current);
+        }
+        warmTemplatesInBackground(collectTemplateNames(toolList), agentId);
+      });
+    });
+    const hooksTask = loadPart('hooks', async () => {
+      const hookInspector = await fetchJson('hooks');
+      commitSessionViewPatch(loadToken, { hookInspector }, () => renderFeaturePanel());
+    });
+    const overviewTask = loadPart('overview', async () => {
+      const overview = await fetchJson('overview');
+      commitSessionViewPatch(loadToken, { overview }, ({ current }) => {
+        if (typeof updateChatContextBar === 'function') updateChatContextBar(current);
+        if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
+        if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
+        if (activeFeaturePanel === 'workspace') renderFeaturePanel();
+      });
+    });
+    const todoTask = loadPart('todo', async () => {
+      const todoPlan = await fetchJson('todo');
+      commitSessionViewPatch(loadToken, { todoPlan }, () => {
+        if (typeof updatePlanBadge === 'function') updatePlanBadge();
+        if (activeFeaturePanel === 'plan') renderFeaturePanel();
+      });
+    });
+    const inputTask = loadPart('input requests', async () => {
+      const inputRequests = await fetchJson('input-requests');
+      commitSessionViewPatch(loadToken, {
+        inputRequests: Array.isArray(inputRequests) ? inputRequests : [],
+      }, () => updateRollbackActionVisibility());
+    });
+    const detailTask = loadPart('workspace detail', () => loadAgentDetail(focusedAgentId));
+    const statusTask = loadPart('runtime status', async () => {
+      await refreshCurrentRuntimeStatus(agentId, loadToken);
+      if (!isSessionViewTokenCurrent(loadToken)) return;
+      if (activeFeaturePanel === 'logs') {
+        await loadLogs(true);
+        if (!isSessionViewTokenCurrent(loadToken)) return;
+      }
+      renderFeaturePanel();
+    });
+    await Promise.all([messagesTask, toolsTask, hooksTask, overviewTask, todoTask, inputTask, detailTask, statusTask]);
   } catch (e) {
     console.error('Failed to load agent data:', e);
   }

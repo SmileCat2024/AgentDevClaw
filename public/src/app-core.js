@@ -35,14 +35,15 @@ function getAgentDetailPayload(agentId) {
   const key = String(agentId || '').trim();
   return _agentDetailPayloadCache.get(key) || null;
 }
-function extractSessionMetaFromDetail(detail) {
+function extractSessionMetaFromDetail(detail, sessionId) {
   const sessions = detail?.workspace_sessions;
-  const activeSessionId = String(sessions?.activeSessionId || '').trim();
+  const selectedSessionId = String(sessionId || '').trim();
+  if (!selectedSessionId) return null;
   const list = Array.isArray(sessions?.sessions) ? sessions.sessions : [];
-  const activeSession = list.find((item) => String(item?.id || '').trim() === activeSessionId);
+  const activeSession = list.find((item) => String(item?.id || '').trim() === selectedSessionId);
   if (!activeSession) return null;
   return {
-    sessionId: activeSessionId,
+    sessionId: selectedSessionId,
     sessionType: String(activeSession.sessionType || 'main').trim() || 'main',
     createdAt: String(activeSession.createdAt || '').trim(),
     updatedAt: String(activeSession.updatedAt || '').trim(),
@@ -83,16 +84,17 @@ async function loadAgentDetail(agentId) {
         console.info('[SIDEBAR_OPERATION]', { operation: 'agent_detail', phase: 'stale_snapshot_merged', agentId });
       }
     }
-    // 选中会话的富元数据收敛到 session-view-state：仅当载荷属于当前焦点 agent
-    // 且正处于会话浏览态时提交；无活跃会话记录时保留现有 slot 值。
-    const isFocusedAgent = String(agentId || '').trim() === String(focusedAgentId || '').trim();
-    const sessionMeta = isFocusedAgent && currentRuntimeAgentId
-      ? extractSessionMetaFromDetail(detail)
+    // 详情只补充请求发起时选中的 Session；宿主 activeSessionId 不是页面身份。
+    // 分页载荷不含目标时保留现有元数据，不借用其他会话，也不改写视图身份。
+    const selectedIdentity = sessionViewToken?.identity;
+    const sessionMeta = selectedIdentity?.agentId === String(agentId || '').trim()
+      && sessionViewToken.runtimeId
+      ? extractSessionMetaFromDetail(detail, selectedIdentity.sessionId)
       : null;
-    if (sessionMeta
-      && sessionViewToken
-      && typeof commitSessionViewPatch === 'function') {
-      commitSessionViewPatch(sessionViewToken, { sessionMeta });
+    if (sessionMeta && typeof commitSessionViewPatch === 'function') {
+      commitSessionViewPatch(sessionViewToken, { sessionMeta }, ({ current }) => {
+        if (typeof updateChatContextBar === 'function') updateChatContextBar(current);
+      });
     }
     loaded = true;
   } catch (e) {

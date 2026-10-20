@@ -588,6 +588,9 @@ test('loadAgentData discards response bodies that finish after a newer switch', 
   sandbox.currentInputRequests = [{ requestId: 'choice-b' }];
   sandbox.window.lastInputRequests = sandbox.currentInputRequests;
   sandbox.currentOverviewSnapshot = { modelName: 'model-b' };
+  // Ready fields may paint A before navigation; only late fields are forbidden
+  // from rendering after B becomes current.
+  renders.length = 0;
 
   toolsBarrier.resolve();
   await oldLoad;

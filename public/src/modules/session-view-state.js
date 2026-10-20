@@ -83,6 +83,8 @@ let _sessionViewIdentity = null;
 let _sessionViewGeneration = 0;
 // 独立于视图身份：输入请求被事件/本地操作写入后，在途快照不得覆盖它。
 let _sessionViewInputRequestsRevision = 0;
+// 消息已由实时路径更新时，进入会话时发出的旧全量快照不能回退正文。
+let _sessionViewMessagesRevision = 0;
 let _sessionViewModelRuntimeId = '';
 
 function getCurrentSessionViewIdentity() {
@@ -102,7 +104,12 @@ function captureSessionViewToken(runtimeId = currentRuntimeAgentId, identity = g
     switchEpoch: _switchEpoch,
     generation: _sessionViewGeneration,
     inputRequestsRevision: _sessionViewInputRequestsRevision,
+    messagesRevision: _sessionViewMessagesRevision,
   });
+}
+
+function isSessionViewMessagesCurrent(token) {
+  return token?.messagesRevision === _sessionViewMessagesRevision;
 }
 
 function isSessionViewInputRequestsCurrent(token) {
@@ -200,7 +207,10 @@ function applySessionViewPatch(patch) {
     _sessionViewIdentity = normalizeSessionViewIdentity(patch.identity);
   }
   if (has('messages')) {
-    currentMessages = Array.isArray(patch.messages) ? patch.messages : [];
+    const messages = Array.isArray(patch.messages) ? patch.messages : [];
+    // 未变化的 probe 会复用原数组，不是一次新的消息观察。
+    if (messages !== currentMessages) _sessionViewMessagesRevision += 1;
+    currentMessages = messages;
   }
   if (has('inputRequests')) {
     // 相同内容的快照也是新观察，必须阻止更早的响应重新写回旧 lease。

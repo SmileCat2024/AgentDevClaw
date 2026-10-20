@@ -442,7 +442,8 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     assert.match(renderBlock, /notifyInputSurfaceChanged\(viewState\.inputRequests\)/);
 
     const loaderSource = fs.readFileSync('public/src/modules/agent-data-loader.js', 'utf8');
-    assert.match(loaderSource, /notifyInputSurfaceChanged\(current\.inputRequests\)/);
+    // 加载独立提交 inputRequests，由 SessionView 写入 hook 声明输入面变化。
+    assert.match(loaderSource, /commitSessionViewPatch\(loadToken, \{\s*inputRequests:/);
   });
 
   it('§8 calling 翻转：按钮三态同步，输入面不重建（模式矩阵不变）', () => {
