@@ -6712,7 +6712,9 @@ body[data-theme="light"] .project-docset-detail-empty {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden; /* 表格右侧突破由 .md-table-wrap 内滚承载，容器不横滚 */
-  padding: 24px 24px 24px 44px;
+  /* 左内边距同时是左侧导航条（.chat-nav-timeline，命中区宽 40px）与正文之间
+     的安全距离：正文左缘 56 - 命中区右缘 40 = 16px，鼠标碰正文不会误触导航条 */
+  padding: 24px 24px 24px 56px;
   padding-bottom: 320px; /* 增加底部空间，避免输入框遮挡最新消息 */
   margin-right: 6px;
   display: flex;
@@ -6969,7 +6971,10 @@ body[data-theme="light"] .preset-tag-opencode {
 .chat-nav-timeline {
   position: absolute;
   left: 0;
-  width: 50px;
+  /* 容器宽 = 命中区宽 = 白条悬停展开后的最宽右缘（padding-left 8 + 12~30），
+     不再向正文方向多留隐形热区；与会话正文之间的安全距离由
+     #chat-container 的左内边距提供（正文左缘 56 - 40 = 16px） */
+  width: 40px;
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -6986,12 +6991,20 @@ body[data-theme="light"] .preset-tag-opencode {
   pointer-events: none;
 }
 
+/* 隐藏时子元素已挂的 pointer-events: auto 会逃逸父级的 none（隐藏条不再重建时
+   旧 slot / 感应带仍留在 DOM），鼠标划过左侧空白仍被拦下——显式收回 */
+.chat-nav-timeline.hidden .chat-nav-slot,
+.chat-nav-timeline.hidden .chat-nav-edge-band {
+  pointer-events: none;
+}
+
 /* 感应带：条带外侧的隐形滚动触发区，不覆盖白条——点击窗口内条目不会误触发滚动。
-   方向判定由容器级 mousemove 统一处理，这里只提供命中区域。 */
+   方向判定由容器级 mousemove 统一处理，这里只提供命中区域。
+   宽度跟随时间线容器（= 命中区宽），不单独维护数值。 */
 .chat-nav-edge-band {
   position: absolute;
   left: 0;
-  width: 50px;
+  width: 100%;
   height: 36px;
   pointer-events: auto;
 }
@@ -7004,14 +7017,14 @@ body[data-theme="light"] .preset-tag-opencode {
   bottom: 140px;
 }
 
-/* slot：大命中区域，处理鼠标事件。间距并入 slot 自身高度（gap 为 0），
-   鼠标在条与条之间移动时不脱靶；--nav-gap 调节视觉密度 */
+/* slot：命中区域，铺满时间线容器宽度（不向会话正文方向延伸）。
+   间距并入 slot 自身高度（gap 为 0），鼠标在条与条之间移动时不脱靶；
+   --nav-gap 调节视觉密度。padding-left 只决定白条的视觉起点。 */
 .chat-nav-slot {
   display: flex;
   align-items: center;
   min-height: calc(10px + var(--nav-gap, 4px));
   padding-left: 8px;
-  padding-right: 40px;
   cursor: pointer;
   pointer-events: auto;
   flex-shrink: 0;
@@ -7047,7 +7060,8 @@ body[data-theme="light"] .preset-tag-opencode {
 /* 预览卡片 */
 .chat-nav-card {
   position: absolute;
-  left: 44px;
+  /* 与 #chat-container 左内边距同值：卡片左缘对齐正文左缘 */
+  left: 56px;
   width: 360px;
   max-width: calc(100vw - 80px);
   padding: 16px 20px;
@@ -7160,9 +7174,9 @@ body[data-theme="light"] .preset-tag-opencode {
   .chat-context-bar .ccb-token .ccb-label { display: none; }
   .chat-context-bar .ccb-guard .ccb-guard-text { display: none; }
 
-  /* Chat container: reduce padding */
+  /* Chat container: reduce padding（左侧保持 56：导航条命中区右缘 40 + 安全距离） */
   #chat-container {
-    padding: 16px 16px 16px 38px;
+    padding: 16px 16px 16px 56px;
     padding-bottom: 220px;
   }
 
@@ -7202,7 +7216,8 @@ body[data-theme="light"] .preset-tag-opencode {
   /* Hide header docset toggle buttons */
   .header-docset-btn { display: none !important; }
 
-  #chat-container { padding: 10px 10px 10px 34px; padding-bottom: 260px; }
+  /* 极窄屏收窄安全距离（命中区宽仍 40，正文左缘 48 留 8px），避免左侧空白吃掉过多正文宽度 */
+  #chat-container { padding: 10px 10px 10px 48px; padding-bottom: 260px; }
 
   .feature-panel.open {
     width: calc(100vw - 56px);
