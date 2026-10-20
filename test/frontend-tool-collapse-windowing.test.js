@@ -1003,7 +1003,7 @@ test('appendNewMessages runs the process-state reveal before the fold-at-birth s
   const order = [...vm.runInContext('__order', h.sandbox)];
   assert.deepEqual(
     order,
-    ['process-state', 'collapse:2'],
+    ['process-state', 'collapse:1'],
     'fold-at-birth must run after the reveal (hidden rows cannot be measured)');
   assert.equal(toolStub.row.classList.contains('process-hidden'), true,
     'the append pre-hide itself must stay (display:none before any layout)');

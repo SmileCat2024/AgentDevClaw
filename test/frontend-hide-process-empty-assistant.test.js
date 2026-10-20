@@ -73,6 +73,7 @@ function makeAssistantRow({ text = '', callCount = 0, msgId = '' }) {
   const content = {
     id: msgId,
     scrollHeight: 200,
+    closest: selector => selector === '.message-row' ? row : null,
     classList: makeClassList(),
     style: {},
     get children() { return [markdownBody, ...callCards]; },
@@ -84,6 +85,7 @@ function makeAssistantRow({ text = '', callCount = 0, msgId = '' }) {
   row._appended = [];
   row.querySelector = (sel) => {
     if (sel === '.message-content') return content;
+    if (sel === '.tool-call-container') return callCards[0] || null;
     if (sel.includes('markdown-body')) return markdownBody;
     if (sel === '.expand-toggle-bar') {
       return row._appended.find((c) => c.classList.contains('expand-toggle-bar')) || null;
@@ -113,7 +115,12 @@ function createHarness({ messages } = {}) {
   container.querySelectorAll = (sel) => (sel === '.message-row'
     ? container._entries.map((e) => e.row)
     : []);
-  container.querySelector = () => null;
+  container.querySelector = (selector) => {
+    if (selector === '.message-row') return container._entries[0]?.row || null;
+    const match = /^#msg-\d+$/.test(selector);
+    return match ? container._entries.map(e => e.row.querySelector('.message-content'))
+      .find(content => '#' + content.id === selector) || null : null;
+  };
   container.getBoundingClientRect = () => ({ top: 0, left: 0, width: 1000, height: VIEW_H });
   container.addEventListener = () => {};
   container.removeEventListener = () => {};
@@ -230,6 +237,96 @@ function createHarness({ messages } = {}) {
     queueRow(row) { pendingRows.push({ row }); },
   };
 }
+
+function addGroupedPrefix(h) {
+  const user = makeAssistantRow({ text: 'hi', msgId: 'msg-0' });
+  user.classList.remove('assistant');
+  user.classList.add('user');
+  // Production render() projects two errors into one row with no msg-N element.
+  const group = makeAssistantRow({ text: 'two errors' });
+  h.container._entries.push({ row: user }, { row: group });
+  h.sandbox.currentMessages = [
+    { role: 'user', content: 'hi' },
+    ...['first', 'second'].map(content => ({ role: 'assistant', content,
+      execution: { status: 'failed', error: { category: 'server_error' } } })),
+  ];
+  return { user, group };
+}
+
+for (const show of [false, true]) {
+  test(`grouped prefix: append and tail text updates use DOM row positions (show=${show})`, () => {
+    const h = createHarness();
+    h.sandbox.showChatProcess = show;
+    addGroupedPrefix(h);
+    h.sandbox.setProcessWindowingDisabled(true);
+    h.sandbox.applyConversationProcessState(h.container);
+    const row = makeAssistantRow({ callCount: 1, msgId: 'msg-3' });
+    h.queueRow(row);
+    const message = { role: 'assistant', content: '',
+      toolCalls: [{ id: 'c1', name: 'Read', arguments: {} }] };
+    h.sandbox.currentMessages.push(message);
+    h.sandbox.appendNewMessages([message], 3);
+    assert.equal(row._callCards[0].classList.contains('process-hidden'), !show,
+      'show mode must reveal the appended call card without a process toggle');
+    assert.equal(row.classList.contains('process-hidden-empty'), !show);
+
+    let fullRenders = 0;
+    h.sandbox.renderCurrentMainView = () => { fullRenders++; };
+    message.content = 'streamed text';
+    h.sandbox.updateLastMessage(message);
+    assert.equal(fullRenders, 0, 'tail patch must find msg-3 in DOM row 2');
+    assert.equal(row._markdownBody.textContent, 'streamed text');
+    assert.equal(row.classList.contains('process-hidden-empty'), false);
+    message.content = '';
+    h.sandbox.updateLastMessage(message);
+    assert.equal(row.classList.contains('process-hidden-empty'), !show);
+  });
+}
+
+for (const show of [false, true]) {
+  test(`grouped prefix: late toolCalls rebuild the live tail row (show=${show})`, () => {
+    const h = createHarness();
+    h.sandbox.showChatProcess = show;
+    addGroupedPrefix(h);
+    h.sandbox.setProcessWindowingDisabled(true);
+    h.sandbox.applyConversationProcessState(h.container);
+    const born = makeAssistantRow({ msgId: 'msg-3' });
+    h.queueRow(born);
+    const message = { role: 'assistant', content: '' };
+    h.sandbox.currentMessages.push(message);
+    h.sandbox.appendNewMessages([message], 3);
+    const rebuilt = makeAssistantRow({ callCount: 1, msgId: 'msg-3' });
+    born.insertAdjacentHTML = () => {
+      h.container._entries.splice(2, 0, { row: rebuilt });
+    };
+    born.remove = () => {
+      const i = h.container._entries.findIndex(e => e.row === born);
+      h.container._entries.splice(i, 1);
+    };
+    message.toolCalls = [{ id: 'c1', name: 'Read', arguments: {} }];
+    h.sandbox.updateLastMessage(message);
+    assert.equal(h.container._entries[2].row, rebuilt);
+    assert.equal(rebuilt._callCards[0].classList.contains('process-hidden'), !show);
+    assert.equal(rebuilt.classList.contains('process-hidden-empty'), !show);
+  });
+}
+
+test('grouped prefix: appended call cards settle their collapse state at birth', () => {
+  const h = createHarness();
+  h.sandbox.showChatProcess = true;
+  addGroupedPrefix(h);
+  h.sandbox.setProcessWindowingDisabled(true);
+  h.sandbox.applyConversationProcessState(h.container);
+  const row = makeAssistantRow({ callCount: 1, msgId: 'msg-3' });
+  row.querySelector('.message-content').scrollHeight = 500;
+  h.queueRow(row);
+  const message = { role: 'assistant', content: '',
+    toolCalls: [{ id: 'c1', name: 'Read', arguments: {} }] };
+  h.sandbox.currentMessages.push(message);
+  h.sandbox.appendNewMessages([message], 3);
+  assert.equal(row.querySelector('.message-content').classList.contains('collapsed'), true,
+    'collapse scan must start at the actual appended DOM row');
+});
 
 test('hide mode: tool-call-only assistant message appended must be fully hidden', () => {
   const h = createHarness();

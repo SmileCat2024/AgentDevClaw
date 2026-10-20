@@ -548,8 +548,8 @@ function appendNewMessages(newMessages, startIndex) {
     if (emptyState) emptyState.remove();
   });
 
-  // 获取当前消息数量
-  const currentCount = container.querySelectorAll('.message-row').length;
+  // 过程可见性与折叠消费 DOM 行下标；错误聚合后它不等于消息下标。
+  const firstAppendedRowIndex = container.querySelectorAll('.message-row').length;
   const toolCallsById = newMessages.some(msg => msg.role === 'tool')
     ? indexToolCalls(currentMessages) : null;
   if (toolCallsById) refreshRewriteIndex(currentMessages);
@@ -629,8 +629,8 @@ function appendNewMessages(newMessages, startIndex) {
   // 长工具行/调用卡在全渲染分级（窗口化已禁用、后续扫描全部跳过）下
   // 永不折叠，直到用户切换隐藏/显示过程触发落地 settle。
   // fromIndex 让过程可见性同步走增量路径（只处理尾部新行）。
-  applyConversationProcessState(container, startIndex);
-  applyCollapseLogic(container, startIndex);
+  applyConversationProcessState(container, firstAppendedRowIndex);
+  applyCollapseLogic(container, firstAppendedRowIndex);
   restoreUserCollapseState(container);
   updateFollowLatestButton();
   if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
@@ -750,13 +750,13 @@ function updateLastMessage(msg) {
     return;
   }
 
-  const lastRow = container.querySelectorAll('.message-row')[lastIndex];
+  const msgId = `msg-${lastIndex}`;
+  let lastRow = container.querySelector('#' + msgId)?.closest('.message-row');
   if (!lastRow) {
     renderCurrentMainView();
     return;
   }
-
-  const msgId = `msg-${lastIndex}`;
+  const lastRowIndex = Array.from(container.querySelectorAll('.message-row')).indexOf(lastRow);
 
   if (msg.role === 'tool') {
     // tool 消息更新：重建 tool-result-body
@@ -812,14 +812,12 @@ function updateLastMessage(msg) {
         lastRow.insertAdjacentHTML('beforebegin', renderMessage(msg, lastIndex));
         lastRow.remove();
       });
-      const rebuiltRow = container.querySelectorAll('.message-row')[lastIndex];
-      if (rebuiltRow) {
-        const pEls = rebuiltRow.querySelectorAll('.reasoning-block, .tool-call-container');
-        for (let pi = 0; pi < pEls.length; pi++) pEls[pi].classList.add('process-hidden');
-        markAssistantBirthProcessState(rebuiltRow);
-        enhanceMathInElement(rebuiltRow);
-        enhanceMarkdownTables(rebuiltRow);
-      }
+      lastRow = container.querySelector('#' + msgId).closest('.message-row');
+      const pEls = lastRow.querySelectorAll('.reasoning-block, .tool-call-container');
+      for (let pi = 0; pi < pEls.length; pi++) pEls[pi].classList.add('process-hidden');
+      markAssistantBirthProcessState(lastRow);
+      enhanceMathInElement(lastRow);
+      enhanceMarkdownTables(lastRow);
     } else {
       const contentEl = lastRow.querySelector('.markdown-body:not(.reasoning-content)');
       if (contentEl) {
@@ -837,8 +835,8 @@ function updateLastMessage(msg) {
   syncMessageImages(lastRow, msg.images);
   updateRollbackActionVisibility();
   // 末行内容被整体替换（innerHTML 级 patch），rowCache 中该行的 els
-  // 引用已过期；fromIndex=lastIndex 让增量路径按 delete + 重建处理末行。
-  applyConversationProcessState(container, lastIndex);
+  // 引用已过期；按实际 DOM 行下标让增量路径重建末行缓存。
+  applyConversationProcessState(container, lastRowIndex);
   // 工具结果体重建后高度可能首次越过折叠阈值，重测末行折叠态（全渲染
   // 分级下没有后续扫描兜底）；cv-hidden / 隐藏态行由 computeRowCollapsePlan
   // 早退守卫，不会强制布局。

@@ -33,7 +33,11 @@ function makeRowEl(html) {
     dataset: {},
     style: {},
     _meta: null,
-    querySelector(sel) { return sel === '.message-meta' ? this._meta : null; },
+    querySelector(sel) {
+      if (sel === '.message-meta') return this._meta;
+      if (sel === '.message-content') return { id: /id="(msg-\d+)"/.exec(this._html)?.[1] || '' };
+      return null;
+    },
     querySelectorAll: () => [],
     insertAdjacentHTML() {},
     remove() {},
@@ -236,6 +240,20 @@ test('回归：陈旧 poll 响应不能覆盖事件已写入的 lease，编辑�
   assert.equal(rowHasEditButton(container._rows[0]), true, '旧响应不能移除编辑按钮');
   assert.equal(rowHasEditButton(container._rows[2]), true, '旧响应不能移除编辑按钮');
   assert.equal(sandbox.currentInputRequests[0], LEASE);
+});
+
+test('错误聚合后编辑按钮仍绑定实际 user 消息，而不是 DOM 行下标', () => {
+  const { sandbox, container } = createChatSandbox();
+  const error = content => ({ role: 'assistant', content,
+    execution: { status: 'failed', error: { category: 'server_error' } } });
+  sandbox.currentMessages = [MSGS[0], error('first'), error('second'), MSGS[2], MSGS[3]];
+  sandbox.render(sandbox.currentMessages);
+  assert.equal(container._rows.length, 4, '两条错误合并为一行');
+  emitInput(sandbox, [LEASE]);
+  assert.equal(rowHasEditButton(container._rows[0]), true);
+  assert.equal(rowHasEditButton(container._rows[1]), false, '聚合错误行没有编辑按钮');
+  assert.equal(rowHasEditButton(container._rows[2]), true, 'DOM 行 2 对应消息 3 的 user');
+  assert.equal(rowHasEditButton(container._rows[3]), false, 'assistant 不能冒领 user 编辑按钮');
 });
 
 test('刷新恢复：全新加载（等价刷新）带 lease 全量渲染 → 按钮正确', () => {

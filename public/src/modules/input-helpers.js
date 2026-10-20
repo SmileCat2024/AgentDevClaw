@@ -73,7 +73,10 @@ function syncRollbackActionButtons() {
   const allowRollback = !!getRollbackInputRequest();
   const rows = container.querySelectorAll('.message-row');
 
-  rows.forEach((row, index) => {
+  rows.forEach((row) => {
+    const msgId = row.querySelector('.message-content')?.id || '';
+    const match = /^msg-(\d+)$/.exec(msgId);
+    const index = match ? Number(match[1]) : -1;
     const msg = currentMessages[index];
     const meta = row.querySelector('.message-meta');
     if (!meta) return;
@@ -522,8 +525,8 @@ function updateChatProcessToggle() {
 function syncAssistantProcessOnlyRows(root = container, fromIndex = 0) {
   // fromIndex 之后才可能是新插入 / 被 patch 的行，旧行的空行判定不随
   // 尾部追加变化；child 探测里的 offsetParent 读取在布局脏时会强制
-  // flush，遍历必须限定在尾部范围。fromIndex 是全局消息索引，因此按
-  // 全行列表索引截断而非 .assistant 子集。
+  // flush，遍历必须限定在尾部范围。fromIndex 是 DOM 行下标，不是消息
+  // 下标（错误聚合会合并行），因此按全行列表而非 .assistant 子集截断。
   const rows = root.querySelectorAll('.message-row');
   for (let i = Math.max(0, fromIndex | 0); i < rows.length; i++) {
     const row = rows[i];

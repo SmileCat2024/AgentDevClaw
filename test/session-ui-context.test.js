@@ -314,6 +314,7 @@ function createChatMutationContext() {
   const restoreState = { calls: 0 };
   const row = {
     dataset: {},
+    classList: { contains: () => false },
     querySelector() {
       return null;
     },
@@ -327,8 +328,8 @@ function createChatMutationContext() {
     render: () => {},
     container: {
       scrollTop: 123,
-      querySelector() {
-        return null;
+      querySelector(selector) {
+        return selector === '#msg-0' ? { closest: () => row } : null;
       },
       querySelectorAll(selector) {
         return selector === '.message-row' ? [row] : [];

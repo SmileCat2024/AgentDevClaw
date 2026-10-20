@@ -522,7 +522,7 @@ test('applyProcessDistance(root, fromIndex) falls back to the full path after a 
   assert.equal(cacheAfter.size, 210, 'the full pass covers every rebuilt row');
 });
 
-test('appendNewMessages forwards the start index to the incremental process-state sync', () => {
+test('appendNewMessages forwards the DOM row start to the incremental process-state sync', () => {
   const h = createHarness();
   h.sandbox.showChatProcess = true;
   h.sandbox.followLatestEnabled = false;
@@ -556,8 +556,8 @@ test('appendNewMessages forwards the start index to the incremental process-stat
   vm.runInContext('appendNewMessages([currentMessages[2]], 2)', h.sandbox);
 
   const calls = [...vm.runInContext('__calls', h.sandbox)];
-  assert.deepEqual(calls, [2],
-    'appendNewMessages must pass the message start index so the process sync runs incrementally');
+  assert.deepEqual(calls, [1],
+    'process sync starts after the existing DOM rows, independently of the message start index');
   assert.equal(toolStub.row.classList.contains('process-hidden'), true,
     'the append pre-hide itself must stay (display:none before any layout)');
 });

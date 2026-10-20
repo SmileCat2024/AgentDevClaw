@@ -49,15 +49,21 @@ function makeContainer() {
     _rows: [],
     rebuildCount: 0,
     set innerHTML(html) {
-      const count = (String(html).match(/<div class="message-row/g) || []).length;
-      this._rows = Array.from({ length: count }, makeRowEl);
+      const chunks = String(html).split(/(?=<div class="message-row)/)
+        .filter(chunk => chunk.startsWith('<div class="message-row'));
+      this._rows = chunks.map(chunk => {
+        const row = makeRowEl();
+        row._msgId = /id="(msg-\d+)"/.exec(chunk)?.[1];
+        return row;
+      });
       this.rebuildCount += 1;
     },
     get innerHTML() { return ''; },
     get lastElementChild() { return this._rows[this._rows.length - 1] || null; },
     querySelector(sel) {
       if (sel === '.message-row') return this._rows[0] || null;
-      return null;
+      const row = this._rows.find(row => '#' + row._msgId === sel);
+      return row ? { closest: () => row } : null;
     },
     querySelectorAll(sel) {
       if (sel === '.message-row' || sel.endsWith('.message-row')) return [...this._rows];
