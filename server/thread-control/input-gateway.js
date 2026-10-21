@@ -114,6 +114,11 @@ export async function deliverUserInput(
     text: normalizedText,
     source: String(source || '').trim() || 'gateway',
     idempotencyKey: sourceRef ? `gw-${sourceRef}` : '',
+    // 来源侧引用（ADR-0031 步骤一）：携带 sourceRef 的输入进入线程域后换得
+    // 新 commandId，原始事件引用随指令记录持久化。宿主观察器结合来源、
+    // metadata 中的工作引用与 pendingWakeups 关联等待关系；事件引用本身
+    // 不是后台工作 ID。框架只透传不解释。
+    ...(sourceRef ? { originSourceRef: sourceRef } : {}),
     ...(normalizedImages.length > 0 ? { images: normalizedImages } : {}),
     ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
     // Thread Inbox command 契约携带 user-turn 自由元数据：随指令持久化，

@@ -387,6 +387,11 @@ export function createSummaryHandlers(ctx) {
       const metadata = (response.payload?.metadata && typeof response.payload.metadata === 'object' && !Array.isArray(response.payload.metadata))
         ? response.payload.metadata
         : null;
+      // 输入身份（ADR-0031 步骤一）：lease 直投路径的 sourceRef 原样保留，
+      // 随 envelope 流入 turn 事件；身份在直投 / 排队两条路径都不丢失
+      const sourceRef = typeof response.payload?.sourceRef === 'string' && response.payload.sourceRef
+        ? response.payload.sourceRef
+        : null;
       // metadata-only（空文本占位）同样是内容承载：不得在空文本 + 无图片时
       // 静默丢弃（与 viewer ' ' 占位提交语义一致）
       if (!text && images.length === 0 && !metadata) {
@@ -398,6 +403,7 @@ export function createSummaryHandlers(ctx) {
       return {
         kind: 'text',
         text: text || ' ',
+        ...(sourceRef ? { sourceRef } : {}),
         ...(images.length > 0 ? { images } : {}),
         ...(capabilityActivations.length > 0 ? { capabilityActivations } : {}),
         ...(metadata ? { metadata } : {}),

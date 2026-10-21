@@ -133,6 +133,17 @@
 
 优先级 `executing > pending-commands > idle`；`closed` 过滤值；`rotation_failed` → failed 标志（不改变可调度性）。覆盖：life-state.test Q4/Q5；前端 badge/await surface 系列。
 
+### 3.10 执行关联事实（ADR-0031，不新增线程状态）
+
+提交回执、投递成功与执行完成是不同事实。`sourceRef` 关联触发指令，`consumedSourceRefs` 记录 busy 时并入当前轮的指令；两者都随失败、取消保留。挂起轮的 `pendingWakeups` 是当时等待快照，不能据任意 `turn.completed` 或 idle 推断业务完成。
+
+| 格 | 前置 | 预期 | 覆盖 |
+|---|---|---|---|
+| M8D-EXEC-REF | M8D-EXEC，当前轮执行中追加指令 | 追加指令可并入同轮，终态携带其 `consumedSourceRefs`，不要求独立 turn | Claw `thread-association-chain` busy-time；框架 `turn-source-association` |
+| M8D-SUSPEND-REF | 执行轮挂起，后续 reminder 入箱 | 原轮保留等待快照；新指令以 `originSourceRef` 保留通知事件身份，metadata 保留工作引用，重放事件不重复入箱 | Claw `thread-association-chain` suspended、`input-gateway-queue` notice identity；框架 `association-chain` |
+| M8D-ROTATE-REF | 已投递指令执行中被接力打断 | 旧 head 落 `turn.cancelled` 并保留指令身份，不伪报完成；后继真正完成的跟随判定待 Coder 观察器实现 | Claw `thread-association-chain` succession interrupt |
+| M8D-PENDING-REF | pending 指令穿过 head 换代 | 投递到新 head，仍以原 commandId 关联事件 | 框架 `association-chain` succession |
+
 ## 4. F2 反直觉锁定清单（改动状态机前必读，严禁"顺手修正"）
 
 | # | 行为 | 锚 |

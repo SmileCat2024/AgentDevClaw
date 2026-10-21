@@ -786,8 +786,9 @@ describe('CallArbiter', () => {
     assert.equal(onCallArgs.length, 2);
     // reminder envelope：身份只随首段传给 onCall（kind + source）
     assert.deepEqual(onCallArgs[0].options, { kind: 'reminder', source: 'shell' });
-    // 普通 envelope：不传身份，框架走缺省 user 分支
-    assert.equal(onCallArgs[1].options, undefined);
+    // 普通 envelope：kind 不传（框架走缺省 user 分支），source 身份透传
+    // （ADR-0031 步骤一：user command 的 source 同样进框架 CallOutcome）
+    assert.deepEqual(onCallArgs[1].options, { source: 'viewer-input' });
   });
 
   it('drain preserves the reminder kind of leftover mailbox items', async () => {
@@ -826,10 +827,11 @@ describe('CallArbiter', () => {
     await new Promise(r => setTimeout(r, 100));
 
     // busy 期间积压的 reminder 在 call 结束后被安全网捞起时必须保住身份，
-    // 不能退化成 user 消息落账
+    // 不能退化成 user 消息落账；sourceRef（ADR-0031 步骤一）同样随项转正，
+    // 其执行随新 envelope 的 turn 事件可被关联回原提交
     assert.equal(onCallArgs.length, 2);
     assert.equal(onCallArgs[1].text, '[后台任务 bg-3 已完成]');
-    assert.deepEqual(onCallArgs[1].options, { kind: 'reminder', source: 'shell' });
+    assert.deepEqual(onCallArgs[1].options, { kind: 'reminder', source: 'shell', sourceRef: 'bg-3' });
 
     server.close();
     delete process.env.AGENTDEV_VIEWER_PORT;
@@ -1191,5 +1193,118 @@ describe('CallArbiter interrupt event queue (C3)', () => {
     await new Promise((resolve) => setTimeout(resolve, 5)); // 等 finally 链落定（_activeEnvelope 置 null）
     assert.deepEqual(arbiter.interruptActive('idle again'), { active: false, cleared: 0 });
     assert.equal(arbiter._interruptEvents.length, 0, 'no residual garbage after a completed envelope');
+  });
+});
+
+describe('CallArbiter source identity passthrough (ADR-0031 step 1)', () => {
+  it('forwards envelope sourceRef to onCall turn options on the first segment', async () => {
+    const onCallArgs = [];
+    const agent = {
+      onCall: async (text, images, activations, metadata, options) => {
+        onCallArgs.push({ text, images, activations, metadata, options });
+        return 'ok';
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'thread', sourceRef: 'cmd-1', text: 'main' });
+    await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(onCallArgs.length, 1);
+    assert.equal(onCallArgs[0].options?.sourceRef, 'cmd-1', 'first segment carries the dispatch identity');
+  });
+
+  it('passes user-command source to onCall; envelope source is always a label (unknown fallback)', async () => {
+    const onCallArgs = [];
+    const agent = {
+      onCall: async (text, images, activations, metadata, options) => {
+        onCallArgs.push({ options });
+        return 'ok';
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    // user command（source=thread）：source 身份进框架（ADR-0031 步骤一）
+    const withSource = arbiter.enqueue({ source: 'thread', text: 'dispatched task' });
+    await arbiter.waitForCompletion(withSource.id);
+    assert.deepEqual(onCallArgs[0].options, { source: 'thread' });
+
+    // 无显式 source 的 envelope：enqueue 兜底 'unknown' 标签同样透传——
+    // source 只是来源标签，框架侧不因它改变落地形态
+    const anonymous = arbiter.enqueue({ text: 'plain turn' });
+    await arbiter.waitForCompletion(anonymous.id);
+    assert.deepEqual(onCallArgs[1].options, { source: 'unknown' });
+  });
+
+  it('merges consumedSourceRefs across segments; pendingWakeups follow the current segment facts', async () => {
+    // 多段 envelope：每段 onCall 的 outcome 会覆盖观察对象。已消费身份是
+    // 历史事实，跨段累积不丢；pendingWakeups 以当前段为准——框架只在仍有
+    // 待唤醒工作时携带该字段，续跑段不带 = 当前无 pending，终态不得继承
+    // 先前段的过时快照（一度 suspended 不等于永远 pending，ADR-0031 步骤一）。
+    let segment = 0;
+    const outcomes = [
+      { status: 'continued', reason: 'suspended', sourceRef: 'cmd-1', consumedSourceRefs: ['cmd-a'], pendingWakeups: [{ source: 'shell', id: 'bg-9', summary: 'npm test' }] },
+      { status: 'completed', reason: 'completed', sourceRef: 'cmd-1', consumedSourceRefs: ['cmd-b'] },
+    ];
+    const agent = {
+      onCall: async () => 'ok',
+      getLastCallOutcome: () => outcomes[Math.min(segment, outcomes.length - 1)],
+      // 首段登记 checkpoint 续跑请求 → arbiter 跑第二段
+      consumeContinuationRequest: () => (segment++ === 0 ? { kind: 'checkpoint', checkpointId: 'cp-1' } : null),
+      clearNamedCheckpoints: () => {},
+      createNamedCheckpoint: async () => {},
+      getContext: () => ({ add: () => {} }),
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'thread', sourceRef: 'cmd-1', text: 'main' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'completed');
+    assert.deepEqual(finished.outcome.consumedSourceRefs, ['cmd-a', 'cmd-b'], 'consumed identity accumulates across segments');
+    assert.equal(
+      finished.outcome.pendingWakeups, undefined,
+      'terminal segment without pendingWakeups clears the stale suspended-segment snapshot',
+    );
+    // 末段仍挂起时：当前段的 pendingWakeups 照常透传
+    const suspendedOnly = new CallArbiter({
+      onCall: async () => 'ok',
+      getLastCallOutcome: () => ({ status: 'continued', reason: 'suspended', pendingWakeups: [{ source: 'shell', id: 'bg-1', summary: 'x' }] }),
+    });
+    const e2 = suspendedOnly.enqueue({ source: 'thread', text: 'y' });
+    const f2 = await suspendedOnly.waitForCompletion(e2.id);
+    assert.deepEqual(f2.outcome.pendingWakeups, [{ source: 'shell', id: 'bg-1', summary: 'x' }]);
+  });
+
+  it('keeps reminder turn options and adds sourceRef together', async () => {
+    const onCallArgs = [];
+    const agent = {
+      onCall: async (text, images, activations, metadata, options) => {
+        onCallArgs.push({ options });
+        return 'ok';
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'shell', sourceRef: 'cmd-r1', kind: 'reminder', text: 'notify' });
+    await arbiter.waitForCompletion(entry.id);
+
+    assert.deepEqual(onCallArgs[0].options, { kind: 'reminder', source: 'shell', sourceRef: 'cmd-r1' });
+  });
+
+  it('records outcome.sourceRef and consumedSourceRefs on the terminal envelope', async () => {
+    const agent = {
+      onCall: async () => 'ok',
+      getLastCallOutcome: () => ({
+        status: 'completed',
+        reason: 'completed',
+        steps: 1,
+        sourceRef: 'cmd-1',
+        consumedSourceRefs: ['cmd-2'],
+      }),
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'thread', sourceRef: 'cmd-1', text: 'main' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'completed');
+    assert.equal(finished.outcome.sourceRef, 'cmd-1');
+    assert.deepEqual(finished.outcome.consumedSourceRefs, ['cmd-2']);
   });
 });

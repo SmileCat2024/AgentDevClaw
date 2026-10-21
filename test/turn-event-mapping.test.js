@@ -152,3 +152,121 @@ describe('mapEnvelopeToTurnEvent', () => {
     assert.equal(event.turn, 0);
   });
 });
+
+describe('mapEnvelopeToTurnEvent source identity (ADR-0031 step 1)', () => {
+  it('carries envelope source/sourceRef on turn.completed', () => {
+    const event = mapEnvelopeToTurnEvent(
+      {
+        status: 'completed',
+        source: 'thread',
+        sourceRef: 'cmd-1',
+        outcome: { status: 'completed', reason: 'completed', model: { providerStopReason: 'stop' } },
+      },
+      { turn: 1 },
+    );
+    assert.equal(event.type, 'turn.completed');
+    assert.equal(event.source, 'thread');
+    assert.equal(event.sourceRef, 'cmd-1');
+    assert.equal(event.consumedSourceRefs, undefined);
+  });
+
+  it('carries consumedSourceRefs from outcome on turn.completed', () => {
+    const event = mapEnvelopeToTurnEvent(
+      {
+        status: 'completed',
+        source: 'thread',
+        sourceRef: 'cmd-1',
+        outcome: {
+          status: 'completed',
+          reason: 'completed',
+          consumedSourceRefs: ['cmd-2', 'cmd-3'],
+        },
+      },
+      { turn: 2 },
+    );
+    assert.deepEqual(event.consumedSourceRefs, ['cmd-2', 'cmd-3']);
+  });
+
+  it('falls back to outcome.sourceRef when envelope lacks it', () => {
+    const event = mapEnvelopeToTurnEvent(
+      {
+        status: 'completed',
+        outcome: { status: 'completed', reason: 'completed', sourceRef: 'cmd-from-outcome' },
+      },
+      { turn: 0 },
+    );
+    assert.equal(event.sourceRef, 'cmd-from-outcome');
+  });
+
+  it('omits identity fields when envelope carries none (old consumers unaffected)', () => {
+    const event = mapEnvelopeToTurnEvent(
+      { status: 'completed', outcome: { status: 'completed', reason: 'completed' } },
+      { turn: 1 },
+    );
+    assert.equal('source' in event, false);
+    assert.equal('sourceRef' in event, false);
+    assert.equal('consumedSourceRefs' in event, false);
+  });
+
+  it('carries identity on suspended completion', () => {
+    const event = mapEnvelopeToTurnEvent(
+      {
+        status: 'completed',
+        sourceRef: 'cmd-1',
+        outcome: { status: 'continued', reason: 'suspended', pendingWakeups: [{ source: 'shell', id: 'bg-1' }] },
+      },
+      { turn: 3 },
+    );
+    assert.equal(event.type, 'turn.completed');
+    assert.equal(event.suspended, true);
+    assert.equal(event.sourceRef, 'cmd-1');
+  });
+
+  it('carries identity on turn.cancelled and turn.failed', () => {
+    const cancelled = mapEnvelopeToTurnEvent(
+      { status: 'cancelled', source: 'thread', sourceRef: 'cmd-1', outcome: { reason: 'cancelled' } },
+      { turn: 2 },
+    );
+    assert.equal(cancelled.type, 'turn.cancelled');
+    assert.equal(cancelled.sourceRef, 'cmd-1');
+
+    const failed = mapEnvelopeToTurnEvent(
+      {
+        status: 'failed',
+        sourceRef: 'cmd-2',
+        outcome: { status: 'failed', reason: 'error', error: { category: 'runtime' } },
+      },
+      { turn: 4 },
+    );
+    assert.equal(failed.type, 'turn.failed');
+    assert.equal(failed.sourceRef, 'cmd-2');
+  });
+
+  it('carries consumedSourceRefs on cancelled and failed (consumed identity never dropped)', () => {
+    const cancelled = mapEnvelopeToTurnEvent(
+      {
+        status: 'cancelled',
+        sourceRef: 'cmd-1',
+        outcome: { reason: 'cancelled', consumedSourceRefs: ['cmd-q1'] },
+      },
+      { turn: 2 },
+    );
+    assert.equal(cancelled.type, 'turn.cancelled');
+    assert.deepEqual(cancelled.consumedSourceRefs, ['cmd-q1']);
+
+    const failed = mapEnvelopeToTurnEvent(
+      {
+        status: 'failed',
+        sourceRef: 'cmd-2',
+        outcome: {
+          status: 'failed', reason: 'error',
+          consumedSourceRefs: ['cmd-q1', 'cmd-q2'],
+          error: { category: 'runtime' },
+        },
+      },
+      { turn: 4 },
+    );
+    assert.equal(failed.type, 'turn.failed');
+    assert.deepEqual(failed.consumedSourceRefs, ['cmd-q1', 'cmd-q2']);
+  });
+});

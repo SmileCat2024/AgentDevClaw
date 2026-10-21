@@ -984,6 +984,9 @@ SessionLifecycle.prototype.start = async function () {
       type: 'turn.started',
       turn: typeof self.agent?._callIndex === 'number' ? self.agent._callIndex + 1 : null,
       source: envelope?.source || null,
+      // 输入身份（ADR-0031 步骤一）：观察器把本回合关联回触发它的提交；
+      // 身份未知时为 null，消费端不得据空值猜测
+      sourceRef: envelope?.sourceRef || null,
     });
   });
 
@@ -1221,6 +1224,9 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
       const entry = this.callArbiter.enqueue({
         source: 'viewer-input',
         text: handled.text,
+        // 输入身份（ADR-0031 步骤一）：lease 直投路径的 sourceRef 随
+        // envelope 流入 turn 事件，观察器据此关联回触发提交
+        ...(handled.sourceRef ? { sourceRef: handled.sourceRef } : {}),
         ...(Array.isArray(handled.images) && handled.images.length > 0 ? { images: handled.images } : {}),
         ...(Array.isArray(handled.capabilityActivations) && handled.capabilityActivations.length > 0
           ? { capabilityActivations: handled.capabilityActivations }

@@ -3,6 +3,8 @@
 日期：2026-09-27
 状态：已接受
 
+> 扩展决策：[ADR-0031](0031-background-work-and-domain-shell.md)（2026-10-21，部分实施）引入薄的后台接入层 `BackgroundAccess`，Bash 已迁移，Coder 监视接入待实施；保留本文的 pending-work / suspended 事实语义。本文关于 runtime 退出即后台任务结束的描述限定于 Bash 进程，不适用于由独立宿主执行的 Coder；不建设统一业务任务管理面。
+
 ## 背景与问题
 
 shell-feature 的后台 bash 让任务在 call 边界之外存活（`BgRegistry`），任务经 ViewerWorker user-turn 端口以 reminder 唤醒 agent。但"回合结束"只有一个机器语义：`completed`。由此产生两类同形的"中间停止"——bg_wait guard 打断的回合、模型自然结束但任务仍在跑的回合——与真完成无法区分，四个消费端全部误判：

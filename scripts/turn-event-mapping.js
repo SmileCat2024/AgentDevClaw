@@ -31,14 +31,17 @@
 const FILTER_STOP_REASONS = new Set(['content_filter', 'refusal']);
 
 /**
- * @param {{ status?: string, error?: string, outcome?: {
+ * @param {{ status?: string, error?: string, source?: string, sourceRef?: string, outcome?: {
  *   status?: string, reason?: string,
+ *   sourceRef?: string,
+ *   consumedSourceRefs?: string[],
  *   error?: { message?: string, category?: string, retryable?: boolean },
  *   model?: { providerStopReason?: string | null },
  *   pendingWakeups?: Array<{ source?: string, id?: string, summary?: string }>,
  * } }} envelope CallArbiter 终态 envelope
  * @param {{ turn?: number | null, usage?: object | null }} [extra]
  * @returns {{ type: string, turn: number | null, usage?: object,
+ *   source?: string, sourceRef?: string, consumedSourceRefs?: string[],
  *   error?: { message: string, reason: string, category: string, retryable?: boolean } }}
  */
 export function mapEnvelopeToTurnEvent(envelope, { turn = null, usage = null } = {}) {
@@ -46,11 +49,30 @@ export function mapEnvelopeToTurnEvent(envelope, { turn = null, usage = null } =
   const providerStopReason = outcome?.model?.providerStopReason || null;
   const turnNumber = Number.isInteger(turn) ? turn : null;
 
+  // 输入身份（ADR-0031 步骤一）：触发提交的稳定标识，观察器据此把本回合的
+  // 执行结果关联回触发它的那次提交。envelope.sourceRef 是派发侧事实（入队时
+  // 携带），outcome.sourceRef 是框架确认值（onCall options 回读）——两者一致，
+  // envelope 优先。身份未知时不加字段，消费端不得据空值猜测。
+  const source = typeof envelope?.source === 'string' && envelope.source ? envelope.source : null;
+  const sourceRef = (typeof envelope?.sourceRef === 'string' && envelope.sourceRef)
+    || (typeof outcome?.sourceRef === 'string' && outcome.sourceRef ? outcome.sourceRef : null);
+  const consumedSourceRefs = Array.isArray(outcome?.consumedSourceRefs) && outcome.consumedSourceRefs.length > 0
+    ? outcome.consumedSourceRefs
+    : null;
+  // 已消费身份跟随全部终态（ADR-0031 步骤一）：cancelled/failed 下这些
+  // busy 排队输入同样未完成，观察器不得当作已处理
+  const identity = {
+    ...(source ? { source } : {}),
+    ...(sourceRef ? { sourceRef } : {}),
+    ...(consumedSourceRefs ? { consumedSourceRefs } : {}),
+  };
+
   if (envelope?.status === 'completed') {
     if (providerStopReason && FILTER_STOP_REASONS.has(providerStopReason)) {
       return {
         type: 'turn.failed',
         turn: turnNumber,
+        ...identity,
         error: {
           message: `model output blocked by provider filter (stop reason: ${providerStopReason})`,
           reason: providerStopReason,
@@ -62,6 +84,7 @@ export function mapEnvelopeToTurnEvent(envelope, { turn = null, usage = null } =
     return {
       type: 'turn.completed',
       turn: turnNumber,
+      ...identity,
       ...(usage ? { usage } : {}),
       ...(outcome?.reason === 'suspended' ? {
         suspended: true,
@@ -76,6 +99,7 @@ export function mapEnvelopeToTurnEvent(envelope, { turn = null, usage = null } =
     return {
       type: 'turn.cancelled',
       turn: turnNumber,
+      ...identity,
       error: {
         message: envelope?.error || 'cancelled by interrupt',
         reason: outcome?.reason || 'cancelled',
@@ -87,6 +111,7 @@ export function mapEnvelopeToTurnEvent(envelope, { turn = null, usage = null } =
   return {
     type: 'turn.failed',
     turn: turnNumber,
+    ...identity,
     error: {
       message: envelope?.error || outcome?.error?.message || `call ${envelope?.status || 'failed'}`,
       reason: outcome?.reason || envelope?.status || 'failed',

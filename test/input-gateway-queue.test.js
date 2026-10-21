@@ -1,5 +1,10 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { BackgroundAccess, WorkThread, WorkThreadStore } from '@agentdevjs/core';
+import { createViewerUserTurnDeliver } from '@agentdevjs/shell-feature';
 
 /**
  * R6 网关队列化：线程域输入一律经 Thread Inbox，直投仅保留给纯 session 域。
@@ -60,6 +65,67 @@ let submitted;
 beforeEach(() => {
   managedAgents.clear();
   submitted = [];
+});
+
+describe('background notice identity through the thread gateway (ADR-0031)', () => {
+  it('keeps successive notices distinct, deduplicates replay, and retains every work reference', async (t) => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'claw-notice-gateway-'));
+    t.after(() => rm(rootDir, { recursive: true, force: true }));
+    registerRuntime();
+    const core = new WorkThread({ store: new WorkThreadStore({ rootDir }) });
+    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'session-1' } });
+    const integration = { core };
+    const originalFetch = globalThis.fetch;
+    t.after(() => { globalThis.fetch = originalFetch; managedAgents.clear(); });
+    const received = [];
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(init.body);
+      received.push(body);
+      const result = await deliverUserInput({
+        viewerAgentId: 'viewer-1',
+        text: body.text,
+        source: body.source,
+        sourceRef: body.sourceRef,
+        kind: body.kind,
+        turnMetadata: body.metadata,
+      }, { integration, fetchImpl: async () => { throw new Error('must use the inbox'); } });
+      return new Response(JSON.stringify(result));
+    };
+    const deliver = createViewerUserTurnDeliver('viewer-1');
+    const batches = [];
+    let onDelivered;
+    const access = new BackgroundAccess({
+      source: 'shell', sessionId: 'session-1',
+      deliver: async (event) => { batches.push(event); await deliver(event); onDelivered?.(); },
+    });
+    t.after(() => access.dispose());
+    access.registerWork({ id: 'bg-1', summary: 'build' });
+    access.registerWork({ id: 'bg-2', summary: 'test' });
+
+    async function submit(text, terminal = false) {
+      let keepAlive;
+      const done = new Promise((resolve, reject) => {
+        onDelivered = resolve;
+        // The production aggregation timer is unref'ed; bound this test's wait.
+        keepAlive = setTimeout(() => reject(new Error('notice was not delivered')), 1_000);
+      });
+      // Wait at the injected transport, without accessing implementation state.
+      access.submitNotice({ workId: 'bg-1', text, terminal });
+      if (terminal) access.submitNotice({ workId: 'bg-2', text: 'test done', terminal: true });
+      try { await done; } finally { clearTimeout(keepAlive); onDelivered = null; }
+    }
+    await submit('progress one');
+    await submit('progress two');
+    await submit('build done', true);
+    assert.equal(new Set(received.map((body) => body.sourceRef)).size, 3);
+    assert.deepEqual(received[2].metadata.shell.taskIds, ['bg-1', 'bg-2']);
+    assert.equal(received[2].sessionId, 'session-1');
+    await deliver(batches[2]); // Replaying one notification must not append another command.
+    const saved = await core.getThread(thread.threadId);
+    assert.equal(saved.commands.length, 3);
+    assert.deepEqual(saved.commands.map((command) => command.originSourceRef), batches.map((event) => event.eventId));
+    assert.deepEqual(saved.commands[2].metadata.shell.taskIds, ['bg-1', 'bg-2']);
+  });
 });
 
 describe('input gateway thread-domain queueing (R6)', () => {

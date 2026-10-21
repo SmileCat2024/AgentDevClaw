@@ -235,6 +235,11 @@ export class CallArbiter {
           // source 透传原始来源（reminder 落地为 system 消息时它就是
           // Message.source）；无 source 的项沿用邮箱兜底标识
           source: typeof data.input.source === 'string' && data.input.source ? data.input.source : 'queued-input',
+          // 输入身份（ADR-0031 步骤一）：安全网转正的排队项保留 sourceRef，
+          // 其执行随新 envelope 的 turn 事件可被关联回原提交
+          ...(typeof data.input.sourceRef === 'string' && data.input.sourceRef
+            ? { sourceRef: data.input.sourceRef }
+            : {}),
           text: data.input.text,
           ...(data.input.kind === 'reminder' ? { kind: 'reminder' } : {}),
           ...(Array.isArray(data.input.images) && data.input.images.length > 0
@@ -344,14 +349,22 @@ export class CallArbiter {
       // ── Execute one onCall segment ──
       // capabilityActivations / metadata 只随首段携带：续跑段（force-continuation
       // 等）的输入不是新用户消息，激活与元数据已由首段消费完毕。
-      // 输入身份（kind/source）同样只属于首段：续跑段是宿主合成的输入，
-      // 落地形态由框架缺省的 user 分支处理（system 上下文已在段前注入）。
+      // 输入身份（kind/source/sourceRef）同样只属于首段：续跑段是宿主合成的
+      // 输入，落地形态由框架缺省的 user 分支处理（system 上下文已在段前注入）。
+      // sourceRef（ADR-0031 步骤一）随 CallTurnOptions 进框架，turn 事件据此
+      // 把执行结果关联回触发它的那次提交；source 对 user 身份同样透传
+      // （source 仅在 reminder 落地时用作 Message.source，user 路径纯身份）。
       const activations = envelope._segmentCount === 1 ? envelope.capabilityActivations : undefined;
       const turnMetadata = envelope._segmentCount === 1 ? envelope.metadata : undefined;
-      const turnOptions = envelope._segmentCount === 1 && envelope.kind === 'reminder'
-        ? { kind: 'reminder', source: envelope.source }
+      const turnOptions = envelope._segmentCount === 1
+        ? {
+            ...(envelope.kind === 'reminder' ? { kind: 'reminder' } : {}),
+            ...(envelope.source ? { source: envelope.source } : {}),
+            ...(envelope.sourceRef ? { sourceRef: envelope.sourceRef } : {}),
+          }
         : undefined;
-      const result = await this._agent.onCall(input, envelope.images, activations, turnMetadata, turnOptions);
+      const result = await this._agent.onCall(input, envelope.images, activations, turnMetadata,
+        Object.keys(turnOptions || {}).length > 0 ? turnOptions : undefined);
       envelope.result = typeof result === 'string' ? result : '';
 
       // ── Observe the structured call outcome ──
@@ -364,12 +377,33 @@ export class CallArbiter {
         ? this._agent.getLastCallOutcome()
         : null;
       if (outcome) {
+        // 跨段合并（ADR-0031 步骤一）：每段 onCall 的 outcome 会覆盖本对象。
+        // consumedSourceRefs 跨段累积（去重）——已消费身份是历史事实，不随段
+        // 更替丢失。pendingWakeups 以当前段事实为准：框架只在仍有待唤醒工作
+        // 时携带该字段，新段不带 = 当前无 pending，终态不得继承先前段的
+        // 过时快照（一度 suspended 不等于永远 pending）。
+        const priorConsumed = Array.isArray(envelope.outcome?.consumedSourceRefs)
+          ? envelope.outcome.consumedSourceRefs
+          : [];
+        const mergedConsumed = [...priorConsumed];
+        if (Array.isArray(outcome.consumedSourceRefs)) {
+          for (const ref of outcome.consumedSourceRefs) {
+            if (!mergedConsumed.includes(ref)) mergedConsumed.push(ref);
+          }
+        }
         envelope.outcome = {
           status: outcome.status,
           reason: outcome.reason,
           steps: outcome.steps,
           ...(outcome.error ? { error: outcome.error } : {}),
           ...(outcome.model ? { model: outcome.model } : {}),
+          // 输入身份透传（ADR-0031 步骤一）：sourceRef 关联回触发提交，
+          // consumedSourceRefs 是本回合 busy 排队消费的输入身份列表
+          ...(outcome.sourceRef ? { sourceRef: outcome.sourceRef } : {}),
+          ...(mergedConsumed.length > 0 ? { consumedSourceRefs: mergedConsumed } : {}),
+          ...(Array.isArray(outcome.pendingWakeups) && outcome.pendingWakeups.length > 0
+            ? { pendingWakeups: outcome.pendingWakeups }
+            : {}),
         };
       }
 
