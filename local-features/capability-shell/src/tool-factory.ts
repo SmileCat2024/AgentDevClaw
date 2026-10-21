@@ -13,7 +13,7 @@ import { processOutputWithPersistence } from '@agentdevjs/shell-feature';
 import { checkSyntax, findBashPath } from './syntax.js';
 import { checkStructure } from './structure.js';
 import { checkVerbs, listVerbs } from './verbs.js';
-import { checkArgs } from './args.js';
+import { checkArgs, validateParamValue } from './args.js';
 import { dispatchPipeline } from './dispatch.js';
 import type {
   AdapterMap,
@@ -55,7 +55,7 @@ export function createCapabilityShellTool(
 ): Tool {
   const verbList = listVerbs(policy.verbs);
   const description = `${policy.description}\n\n可用动词：${verbList}。` +
-    'v1 语法白名单：字面量参数 + 管道 | + 重定向 > >> <；' +
+    '语法白名单：字面量参数、管道 |、序列 ; / 换行、条件 &&、重定向 > >> <；' +
     '命令替换、变量、进程替换、glob、heredoc、后台一律拒绝。';
 
   return createTool({
@@ -115,6 +115,7 @@ export interface CapabilityShellRunResult {
   ok: boolean;
   /** 成功：最后一段 stdout；拒绝/失败：模型可读拒绝文案 */
   output: string;
+  commands?: import('./dispatch.js').CommandExecution[];
   /** 拒绝报文契约：稳定错误码 + 阶段（拒绝时存在） */
   rejection?: {
     code: 'syntax_rejected' | 'structure_rejected' | 'unknown_verb' | 'arg_rejected' | 'dispatch_failed';
@@ -136,7 +137,7 @@ export function formatShellHelp(policy: CapabilityShellPolicy): string {
       return `  ${decl.usage || verb}  — ${decl.description}`;
     }),
     '',
-    'v1 语法白名单：字面量参数 + 管道 | + 重定向 > >> <；命令替换、变量、进程替换、glob、heredoc、后台一律拒绝。',
+    '语法白名单：字面量参数、管道 |、序列 ; / 换行、条件 &&、重定向 > >> <；命令替换、变量、进程替换、glob、heredoc、后台一律拒绝。',
     '详细用法与调度纪律：invoke_skill 激活对应领域技能。',
   ].join('\n');
 }
@@ -212,8 +213,18 @@ export async function runCapabilityShellPipeline(
   // help 命令（管线级，所有领域 shell 通用）：裸 help 输出动词表用法。
   // 在动词道之前拦截——help 不是领域动词，不占动词表，模型无需激活技能
   // 即可自我发现动词面；文本从策略声明生成（单一事实源，不随实现漂移）。
-  if (segments.length === 1 && segments[0].verb === 'help' && segments[0].args.length === 0) {
+  if (segments.length === 1 && segments[0].verb === 'help' && segments[0].args.length === 0 && !segments[0].redirects?.length) {
     return { ok: true, output: formatShellHelp(policy) };
+  }
+
+  for (let index = 0; index < segments.length; index++) {
+    for (const redirect of segments[index].redirects ?? []) {
+      const message = validateParamValue(redirect.target, { name: 'redirect', kind: 'path' });
+      if (message || redirect.target.includes('\\')) return {
+        ok: false, output: message || '重定向路径请使用 / 分隔。',
+        rejection: { code: 'arg_rejected', stage: 'args', message: message || 'invalid redirect', segmentIndex: index },
+      };
+    }
   }
 
   // 第三道：逐段动词校验
@@ -266,6 +277,8 @@ export async function runCapabilityShellPipeline(
       args: seg.args,
       adapterKey: decl.adapter.key,
       kind: decl.adapter.key in adapterMap ? 'function' : 'spawn',
+      connector: seg.connector,
+      redirects: seg.redirects,
     };
   });
 
@@ -288,9 +301,10 @@ export async function runCapabilityShellPipeline(
   } satisfies CapabilityShellAuditEvent);
 
   return dispatch.ok
-    ? { ok: true, output: dispatch.output ?? '' }
+    ? { ok: true, output: dispatch.output ?? '', commands: dispatch.commands }
     : {
         ok: false,
+        commands: dispatch.commands,
         output: dispatch.message ?? 'dispatch failed',
         rejection: {
           code: 'dispatch_failed',

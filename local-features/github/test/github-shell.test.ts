@@ -36,6 +36,18 @@ test('GitHub shell exposes one command per existing GitHub capability', async ()
   assert.deepEqual(calls, [{ owner: 'acme', pull_number: 42, comments: true }]);
 });
 
+test('GitHub domain errors stop && instead of becoming successful text', async () => {
+  let calls = 0;
+  const tools = [{ name: 'gh_get_me', description: 'test', parameters: { type: 'object', properties: {} },
+    execute: async () => { calls++; return { error: 'unauthorized' }; } }] as unknown as Tool[];
+  const result = await runCapabilityShellPipeline(createGitHubShellPolicy(tools), 'get-me && get-me', {
+    adapters: createGitHubShellAdapters(tools), bashPath: null,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(calls, 1);
+  assert.equal(result.commands[1].status, 'skipped');
+});
+
 test('GitHub shell rejects unregistered commands and arguments', async () => {
   const tools = [{
     name: 'gh_get_me',

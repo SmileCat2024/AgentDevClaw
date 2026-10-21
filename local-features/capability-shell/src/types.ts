@@ -21,6 +21,9 @@ export interface ShellSegment {
   verb: string;
   /** 段内参数（字面量，已剥引号） */
   args: string[];
+  /** Connector from the preceding segment; absent means a pipe for legacy callers. */
+  connector?: '|' | ';' | '&&';
+  redirects?: ShellRedirect[];
 }
 
 export interface ShellRedirect {

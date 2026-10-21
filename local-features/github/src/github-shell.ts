@@ -73,7 +73,8 @@ export function createGitHubShellAdapters(tools: Tool[]): Record<string, (args: 
       if (typeof result === 'string') return result;
       if (result && typeof result === 'object') {
         const record = result as Record<string, unknown>;
-        return String(record.text ?? record.error ?? JSON.stringify(result));
+        if (record.error !== undefined || record.success === false) throw new Error(String(record.error ?? record.text ?? 'GitHub command failed'));
+        return String(record.text ?? JSON.stringify(result));
       }
       return String(result ?? 'ok');
     }];

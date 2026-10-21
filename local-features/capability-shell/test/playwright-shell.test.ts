@@ -1212,7 +1212,7 @@ describe('playwright_shell 登录档案（open --profile / profile-list）', () 
       const out = await h.adapters['playwright:open'](['https://example.com', '--profile=work'], CTX);
       assert.equal(h.calls.length, 1, '保活失败不应阻塞 open');
       assert.ok(String(out).includes('warn:'), `应附保活跳过警告：${out}`);
-      assert.ok(String(out).includes('### Browser'), out);
+      assert.ok(String(out).includes('### Browser'), String(out));
     } finally {
       rmSync(h.root, { recursive: true, force: true });
     }
@@ -1230,7 +1230,7 @@ describe('playwright_shell 登录档案（open --profile / profile-list）', () 
       db.close();
       const out = await h.adapters['playwright:open'](['https://example.com', '--profile=work'], CTX);
       assert.equal(h.calls.length, 1);
-      assert.ok(String(out).includes('schema 未知'), out);
+      assert.ok(String(out).includes('schema 未知'), String(out));
     } finally {
       rmSync(h.root, { recursive: true, force: true });
     }

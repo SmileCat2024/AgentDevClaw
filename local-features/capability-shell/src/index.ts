@@ -54,6 +54,8 @@ export type {
   DispatchSegment,
   DispatchOptions,
   DispatchResult,
+  CommandResult,
+  CommandExecution,
   SpawnRunResult,
 } from './dispatch.js';
 

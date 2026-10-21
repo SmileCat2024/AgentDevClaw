@@ -112,10 +112,10 @@ describe('capability-shell checkStructure', () => {
     assert.equal(checkStructure('sleep 5 &').ok, false);
   });
 
-  it('拒绝：&& 与 ; 与 ||', () => {
-    assert.equal(checkStructure('a && b').ok, false);
+  it('放行 && 与 ;，拒绝 ||', () => {
+    assert.equal(checkStructure('a && b').ok, true);
     assert.equal(checkStructure('a || b').ok, false);
-    assert.equal(checkStructure('a; b').ok, false);
+    assert.equal(checkStructure('a; b').ok, true);
   });
 
   it('拒绝：空命令', () => {

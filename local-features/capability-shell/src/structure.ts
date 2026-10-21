@@ -4,7 +4,7 @@
  * 原文级预扫描（shell-quote 解析前）：命令替换、变量、进程替换、glob、
  * heredoc、后台命中即终态拒绝。glob 为引号区域感知：仅拒绝引号外的
  * * ? 与词首 [（引号内是 bash 字面量）。随后 shell-quote 切段 + 管道拆分，
- * 只放行：字面量参数 + 管道 | + 重定向 > >> <。
+ * 放行字面量、管道、顺序/条件组合和重定向；不执行 bash 脚本。
  *
  * 本道为纯函数。
  */
@@ -26,7 +26,7 @@ export interface StructureCheckResult {
 
 /** v1 白名单/拒绝特征说明（报错文案固定后缀，模型可据此自我纠正）。 */
 const REJECTED_FEATURES_TEXT =
-  '本 shell v1 只放行：字面量参数、管道 |、重定向 > >> <。' +
+  '本 shell 只放行：字面量参数、管道 |、序列 ; / 换行、条件 &&、重定向 > >> <。' +
   '拒绝：命令替换 $() 与反引号、变量 $x、进程替换 <(...)、glob 通配符、heredoc、后台 &。';
 
 type ShellToken = string | { op: string } | { comment: string };
@@ -180,6 +180,21 @@ export function normalizeWindowsAbsolutePaths(command: string): string {
 
 export function checkStructure(command: string): StructureCheckResult {
   const trimmed = normalizeWindowsAbsolutePaths(command.trim());
+  let normalized = '';
+  let quote = '';
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (ch === '\\' && quote !== "'") {
+      if (trimmed[i + 1] !== '\n') normalized += ch + (trimmed[i + 1] ?? '');
+      i++;
+    } else if ((ch === "'" || ch === '"') && (!quote || quote === ch)) {
+      quote = quote ? '' : ch;
+      normalized += ch;
+    } else if (ch === '\n' && !quote) {
+      normalized += !normalized.trim() || /(?:[|;]|&&)\s*$/.test(normalized) ? ' ' : ' ; ';
+    } else normalized += ch;
+  }
+  if (quote) return { ok: false, code: 'structure_rejected', message: '引号未闭合。' };
   if (!trimmed) {
     return { ok: false, code: 'structure_rejected', message: '命令为空。' + REJECTED_FEATURES_TEXT };
   }
@@ -193,7 +208,7 @@ export function checkStructure(command: string): StructureCheckResult {
 
   let tokens: ShellToken[];
   try {
-    tokens = parse(trimmed) as ShellToken[];
+    tokens = parse(normalized) as ShellToken[];
   } catch (err) {
     return { ok: false, code: 'structure_rejected', message: `无法解析命令：${String(err)}` };
   }
@@ -204,62 +219,41 @@ export function checkStructure(command: string): StructureCheckResult {
 
   const segments: ShellSegment[] = [];
   let current: ShellSegment | null = null;
-  /** 已出现但未闭合的管道 op（尾悬空检测用）。 */
-  let sawTrailingPipe = false;
-
+  let connector: ShellSegment['connector'];
+  let redirect: '>' | '>>' | '<' | undefined;
+  const rejected = (message: string): StructureCheckResult => ({
+    ok: false, code: 'structure_rejected', message: message + REJECTED_FEATURES_TEXT,
+  });
   for (const token of tokens) {
     if (typeof token === 'string') {
-      if (!current) {
-        // 段首词 = 动词（管道后或段首）
-        current = { verb: token, args: [] };
-        sawTrailingPipe = false;
-        continue;
-      }
-      current.args.push(token);
+      if (redirect) {
+        current!.redirects ??= [];
+        if (current!.redirects.some((r) => (r.op === '<') === (redirect === '<'))) return rejected('同一命令不接受重复输入或输出重定向。');
+        current!.redirects.push({ op: redirect, target: token });
+        redirect = undefined;
+      } else if (!current) {
+        current = { verb: token, args: [], ...(connector ? { connector } : {}) };
+        connector = undefined;
+      } else current.args.push(token);
       continue;
     }
-
-    if ('comment' in token) {
-      return { ok: false, code: 'structure_rejected', message: '不允许注释。' + REJECTED_FEATURES_TEXT };
-    }
-
+    if ('comment' in token) return rejected('不允许注释。');
+    if (redirect) return rejected('重定向缺少文件路径。');
     const op = token.op;
-    if (op === '|') {
-      if (!current || current.verb === '') {
-        return { ok: false, code: 'structure_rejected', message: '管道 | 左侧缺少命令。' + REJECTED_FEATURES_TEXT };
+    if (op === '|' || op === ';' || op === '&&') {
+      if (!current) {
+        return rejected(`连接符 ${op} 左侧缺少命令。`);
       }
       segments.push(current);
       current = null;
-      sawTrailingPipe = true;
-      continue;
-    }
-
-    if (op === '>' || op === '>>' || op === '<') {
-      // shell-quote 把重定向目标作为后续普通 token 给出，本道只校验 op 本身；
-      // 目标路径校验在参数校验道做（路径边界）。
-      if (!current) {
-        return {
-          ok: false,
-          code: 'structure_rejected',
-          message: `重定向 ${op} 缺少左侧命令。` + REJECTED_FEATURES_TEXT,
-        };
-      }
-      continue;
-    }
-
-    // 其余 op（&& || ; & |& 等）全部拒绝
-    return {
-      ok: false,
-      code: 'structure_rejected',
-      message: `bash 结构 “${op}” 不在本 shell 白名单内。` + REJECTED_FEATURES_TEXT,
-    };
+      connector = op;
+    } else if (op === '>' || op === '>>' || op === '<') {
+      if (!current) return rejected(`重定向 ${op} 缺少命令。`);
+      redirect = op;
+    } else return rejected(`bash 结构 “${op}” 不在白名单内。`);
   }
-
-  // 尾悬空管道：| 后没有后续段
-  if (sawTrailingPipe) {
-    return { ok: false, code: 'structure_rejected', message: '管道 | 右侧缺少命令。' + REJECTED_FEATURES_TEXT };
-  }
-
+  if (redirect) return rejected('重定向缺少文件路径。');
+  if (!current && (connector === '|' || connector === '&&')) return rejected(`连接符 ${connector} 右侧缺少命令。`);
   if (current) segments.push(current);
 
   // 段校验：每段必须有动词（glob / 变量等拒绝特征已在原文级预扫描道处理）

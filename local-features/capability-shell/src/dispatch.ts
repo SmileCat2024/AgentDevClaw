@@ -12,6 +12,22 @@
  */
 
 import { spawn } from 'child_process';
+import { open, realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import type { ShellRedirect } from './types.js';
+
+/** Plain strings mean command success; failures must throw or explicitly return ok:false. */
+export interface CommandResult {
+  ok: boolean;
+  output: string;
+  terminated?: boolean;
+}
+export interface CommandExecution extends CommandResult {
+  index: number;
+  verb: string;
+  status: 'executed' | 'skipped' | 'not-executed';
+}
 
 /** 进程内 adapter：接收校验后参数；有上游管道数据时经 ctx.stdin 接收。 */
 export type InProcessAdapter = (
@@ -23,13 +39,14 @@ export type InProcessAdapter = (
     /** 框架合并 signal（Tool.timeout / 用户打断共用，ADR-0005） */
     signal?: AbortSignal;
   },
-) => Promise<string>;
+) => Promise<string | CommandResult>;
 
 /** adapter map：adapter 键 → 进程内实现。由工具工厂注入以便测试。 */
 export type AdapterMap = Record<string, InProcessAdapter>;
 
 export interface DispatchResult {
   ok: boolean;
+  commands?: CommandExecution[];
   /** 输出文本（管道最后一段的 stdout，或进程内函数返回值） */
   output?: string;
   /** 失败错误码 */
@@ -45,6 +62,8 @@ export interface DispatchSegment {
   adapterKey: string;
   /** 该段的分派形态：'function'（进程内）或 'spawn'（数组 spawn 段） */
   kind: 'function' | 'spawn';
+  connector?: '|' | ';' | '&&';
+  redirects?: ShellRedirect[];
 }
 
 export interface DispatchOptions {
@@ -81,42 +100,82 @@ export async function dispatchPipeline(
   }
 
   const adapters = options.adapters ?? {};
-  let upstream: string | null = null;
-
-  try {
-    for (const seg of segments) {
-      const fn = adapters[seg.adapterKey];
-      if (typeof fn === 'function') {
-        // 进程内函数：接收校验后参数；上游管道数据、终止原因与合并 signal 经 ctx 传入
-        const result = await fn(seg.args.slice(), {
-          stdin: upstream ?? '',
-          termination: () => options.termination?.() ?? null,
-          signal: options.signal,
-        });
-        upstream = typeof result === 'string' ? result : String(result ?? '');
-      } else {
-        // spawn 段：adapterKey 即可执行名；上游输出写 stdin
-        const run = await runCollectedSpawn(seg.adapterKey, seg.args, {
-          input: upstream,
-          signal: options.signal,
-          workdir: options.workdir,
-          env: options.spawnEnv,
-        });
-        if (!run.ok) {
-          return {
-            ok: false,
-            code: 'dispatch_failed',
-            message: `命令 “${seg.adapterKey}” 执行失败：${detailFrom(run)}`,
-          };
-        }
-        upstream = run.stdout;
-      }
+  const commands: CommandExecution[] = [];
+  let upstream = '';
+  let chainOk = true;
+  let stopped = false;
+  for (let index = 0; index < segments.length; index++) {
+    const seg = segments[index];
+    const connector = seg.connector ?? (index ? '|' : ';');
+    if (connector === ';') chainOk = true;
+    const status = stopped || options.signal?.aborted ? 'not-executed' : !chainOk ? 'skipped' : 'executed';
+    if (status !== 'executed') {
+      commands.push({ index, verb: seg.verb, status, ok: false,
+        output: status === 'skipped' ? '前序命令失败，条件或管道未执行。' : '工具已终止，未执行。' });
+      continue;
     }
-
-    return { ok: true, output: upstream ?? '' };
-  } catch (err) {
-    return { ok: false, code: 'dispatch_failed', message: String(err) };
+    let result: CommandResult;
+    try {
+      let input = connector === '|' ? upstream : '';
+      const redirects = seg.redirects ?? [];
+      const inputRedirect = redirects.find((r) => r.op === '<');
+      if (inputRedirect) {
+        const file = await openRedirect(inputRedirect.target, options.workdir, false);
+        try { input = await file.readFile('utf8'); } finally { await file.close(); }
+      }
+      // Opening output first validates the target before any command side effect.
+      const outputRedirect = redirects.find((r) => r.op !== '<');
+      const outputFile = outputRedirect ? await openRedirect(outputRedirect.target, options.workdir, true, outputRedirect.op === '>>') : undefined;
+      try {
+        if (options.signal?.aborted) result = { ok: false, output: '工具已终止，命令未启动。', terminated: true };
+        else if (seg.kind === 'function') {
+          const fn = adapters[seg.adapterKey];
+          if (!fn) throw new Error(`未装配 adapter：${seg.adapterKey}`);
+          const value = await fn(seg.args.slice(), { stdin: input,
+            termination: () => options.termination?.() ?? null, signal: options.signal });
+          result = typeof value === 'string' ? { ok: true, output: value } : value;
+        } else {
+          const run = await runCollectedSpawn(seg.adapterKey, seg.args, {
+            input, signal: options.signal, workdir: options.workdir, env: options.spawnEnv,
+          });
+          result = { ok: run.ok, output: run.ok ? run.stdout : [run.stdout, detailFrom(run)].filter(Boolean).join('\n'), terminated: run.terminated };
+        }
+        if (outputFile) await outputFile.writeFile(result.output, 'utf8');
+      } finally { await outputFile?.close(); }
+      upstream = outputFile ? '' : result.output;
+    } catch (error) {
+      result = { ok: false, output: String(error) };
+      upstream = '';
+    }
+    commands.push({ ...result, index, verb: seg.verb, status: 'executed' });
+    chainOk = result.ok;
+    stopped = result.terminated === true || options.signal?.aborted === true;
   }
+  const ok = commands.every((c) => c.status === 'executed' && c.ok);
+  const grouped = segments.some((s) => s.connector === ';' || s.connector === '&&');
+  const output = grouped ? commands.map((c) => `[${c.index + 1}] ${c.verb} ${c.status} ${c.ok ? 'ok' : 'failed'}\n${c.output}`).join('\n\n')
+    : ok ? upstream : commands.map((c) => c.output).filter(Boolean).join('\n');
+  return { ok, output, commands, ...(!ok ? { code: 'dispatch_failed' as const, message: output } : {}) };
+}
+
+/** Resolve symlinks before IO; no absolute/parent paths or workspace escapes. */
+async function openRedirect(target: string, workdir = process.cwd(), write = false, append = false) {
+  if (!target || isAbsolute(target) || /^[A-Za-z]:/.test(target) || target.includes('\\') || target.split('/').includes('..')) {
+    throw new Error(`重定向要求 workspace 相对路径：${target}`);
+  }
+  const root = await realpath(workdir);
+  const path = resolve(root, target);
+  const inside = (candidate: string) => {
+    const rel = relative(root, candidate);
+    return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  };
+  const parent = await realpath(dirname(path));
+  if (!inside(parent)) throw new Error(`重定向路径逃逸 workspace：${target}`);
+  let actual = path;
+  try { actual = await realpath(path); } catch (error: any) { if (error.code !== 'ENOENT' || !write) throw error; }
+  if (!inside(actual)) throw new Error(`重定向路径逃逸 workspace：${target}`);
+  return open(actual, write ? constants.O_WRONLY | constants.O_CREAT | (append ? constants.O_APPEND : constants.O_TRUNC) | (constants.O_NOFOLLOW || 0)
+    : constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
 }
 
 function detailFrom(result: SpawnRunResult): string {

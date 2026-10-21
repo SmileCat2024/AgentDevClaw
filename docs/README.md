@@ -27,7 +27,7 @@
 ## 查设计决策
 
 - [adr/](adr/) — 架构决策记录（编号递增；改动相关领域前先读对应篇）
-- [后台接入与领域 Shell 分层](adr/0031-background-work-and-domain-shell.md) — 执行关联、Bash 薄接入与 Coder 监视已实现，Shell 组合与面板协议接入待实施；[实施方案](plans/2026-10-21-background-work-and-coder-monitoring.md)：先验证 Bash/Coder 后台接入，再独立扩展 Shell 命令组合
+- [后台接入与领域 Shell 分层](adr/0031-background-work-and-domain-shell.md) — 执行关联、Bash 薄接入与 Coder 监视已实现，Shell 组合已实现；面板协议接入待实施；[实施方案](plans/2026-10-21-background-work-and-coder-monitoring.md)：先验证 Bash/Coder 后台接入，再独立扩展 Shell 命令组合
 - [plans/](plans/) — 设计与执行计划（[应用配置与用户数据边界收敛](plans/2026-09-25-app-config-and-data-boundaries.md)、[桌面打包前置与只读化验证](plans/2026-09-26-desktop-packaging-prerequisites.md)、[Feature 安装与激活分离](plans/2026-09-26-feature-install-activation-split.md)、[轮次挂起语义实施计划](plans/2026-09-27-turn-suspension-semantics.md)（ADR-0019）、[状态机统一内核实施计划](plans/2026-10-06-state-kernel-implementation.md)（ADR-0021）、[Agent Studio Feature-First 重构](plans/2026-10-07-agent-studio-feature-first-refactor.md)（ADR-0022）、[工具调用历史改写实施计划](plans/2026-10-07-tool-call-history-rewrite.md)（ADR-0023）、[APP 型工作空间单对话实施计划](plans/2026-10-10-app-workspace-eternal-thread.md)（ADR-0024）、[coder 升格独立工作空间实施计划](plans/2026-10-11-coder-workspace-promotion.md)（ADR-0025）、[工具摩擦治理与本地 feature 增补归属记录](plans/2026-10-08-tool-friction-and-local-feature-attribution.md)、SSE 改造、group-chat 系列、compact/trim、IM 渠道转接、CLI 重设计、dsh 差异化战略等；含悬置域 Flow 系列与 ACP 适配器设计）
 
 ## 排查问题

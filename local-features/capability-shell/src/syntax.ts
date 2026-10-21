@@ -84,6 +84,7 @@ export async function checkSyntax(
     });
 
     child.on('close', (code) => {
+      clearTimeout(timer);
       if (code === 0) {
         resolve({ ok: true, degraded: false });
       } else {
