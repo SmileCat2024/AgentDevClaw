@@ -141,7 +141,7 @@
 |---|---|---|---|
 | M8D-EXEC-REF | M8D-EXEC，当前轮执行中追加指令 | 追加指令可并入同轮，终态携带其 `consumedSourceRefs`，不要求独立 turn | Claw `thread-association-chain` busy-time；框架 `turn-source-association` |
 | M8D-SUSPEND-REF | 执行轮挂起，后续 reminder 入箱 | 原轮保留等待快照；新指令以 `originSourceRef` 保留通知事件身份，metadata 保留工作引用，重放事件不重复入箱 | Claw `thread-association-chain` suspended、`input-gateway-queue` notice identity；框架 `association-chain` |
-| M8D-ROTATE-REF | 已投递指令执行中被接力打断 | 旧 head 落 `turn.cancelled` 并保留指令身份，不伪报完成；后继真正完成的跟随判定待 Coder 观察器实现 | Claw `thread-association-chain` succession interrupt |
+| M8D-ROTATE-REF | 已投递指令执行中被接力打断 | 旧 head 落 `turn.cancelled` 并保留指令身份，不伪报完成；观察器经 sessionChain 和接续指令关联后继落定 | Claw `thread-association-chain` succession interrupt、`coder-monitor` M8D-ROTATE-REF |
 | M8D-PENDING-REF | pending 指令穿过 head 换代 | 投递到新 head，仍以原 commandId 关联事件 | 框架 `association-chain` succession |
 
 ## 4. F2 反直觉锁定清单（改动状态机前必读，严禁"顺手修正"）

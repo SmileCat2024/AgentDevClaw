@@ -18,16 +18,8 @@
  * create 仅用于给已存在会话加挂线程（建线前预校验会话存在且归属匹配，
  * 消灭 head_session_missing 僵尸线程，ticket 035B）。
  *
- * send 阻塞语义：POST commands 后在本 adapter 内轮询 GET events 直到本轮
- * 落定（判定字段语义参照 bin/claw.mjs watchThread：turn.completed 且
- * lifeState 离开 executing，链式多轮自动跟随；failed=true / 线程终态即出）。
- * 不实现任何 CLI 时间 flag；超时唯一闸门 = 033 基座的 Tool.timeout 契约：
- * 终止信号到达后 adapter 在 settle 窗口内返回结构化 done reason=timeout
- * （非错误），模型自然续挂 watch。
- *
- * watch 多线程 any-settle（bin/claw.mjs threads watch 同语义）：并发单线程
- * 监视，任一线程落定/失败/终态即整条返回，第一个 settle 的胜出；其余停挂
- * 并在报文尾附最后已知状态，模型用一条 watch 续挂剩余线程。
+ * send 提交后登记监视并返回；watch 查询或建立监视并登记一次性待命。
+ * 观察生命周期由 CoderMonitor 与 BackgroundAccess 承接，工具不等待执行落定。
  *
  * advance / resume 不入动词表（rotation_failed 残局需人工介入，与技能
  * 故障表一致）：模型调用时得到 unknown_verb + 结构化指引。
@@ -35,17 +27,9 @@
 
 import { stat } from 'node:fs/promises';
 import { isAbsolute, normalize } from 'node:path';
+import type { BackgroundAccess } from '@agentdevjs/core';
+import type { CoderMonitor } from './coder-monitor.js';
 
-/** 线程/server 连续不可达上限（bin/claw.mjs watchThread 同款语义）。 */
-const MAX_CONSECUTIVE_FETCH_ERRORS = 3;
-/**
- * 事件停滞判定阈值（bin/claw.mjs watchThread 同款语义）：孤儿执行
- * （runtime 死亡后看板残留 running）或 pending 永不承接时，turn.completed
- * 永不收敛。事件粒度是 turn/item 级，长工具调用期间不产生新事件——单凭
- * 事件停滞误杀正常长任务，需叠加 server 附带的 head runtime 进程存活
- * 事实（headRuntimeRunning）才按停滞终态处置。
- */
-const STALE_THREAD_MS = 300_000;
 /** 落定报文附带的事件尾条数（取证用，防长文本撑爆上下文）。 */
 const TAIL_EVENT_COUNT = 5;
 /** list 行内标题的显示上限（工单全文标题会撑爆行宽）。 */
@@ -83,8 +67,8 @@ export type ThreadAdapter = (args: string[], context?: ThreadAdapterContext) => 
 export function createThreadsAdapters(deps: {
   serverOrigin: string;
   fetchImpl?: FetchLike;
-  pollIntervalMs?: number;
-  sleep?: (ms: number) => Promise<void>;
+  monitor?: CoderMonitor;
+  access?: BackgroundAccess;
 }): Record<string, ThreadAdapter> {
   const adapter = createThreadsAdapter(deps).threads;
   const verbs = ['new-session', 'create', 'send', 'watch', 'result', 'list', 'show', 'archive', 'unarchive', 'deliver'] as const;
@@ -99,20 +83,6 @@ export function createThreadsAdapters(deps: {
   return map;
 }
 
-interface SettleOutcome {
-  reason: string;
-  lifeState: string;
-  failed: boolean;
-  newEvents: number;
-  /** 连续不可达时的诊断 */
-  detail?: string;
-  /** ADR-0019：落定时刻线程处于挂起等待（上个 turn.completed 带 suspended） */
-  suspended?: boolean;
-  /** 挂起等待中的后台任务数（事件携带的 pendingWakeups 长度） */
-  pendingWakeupCount?: number;
-  /** 落定时刻的事件尾摘要（取证用） */
-  tailEvents: Array<Record<string, any>>;
-}
 
 /**
  * threads adapter 工厂。
@@ -125,8 +95,8 @@ interface SettleOutcome {
 export function createThreadsAdapter(deps: {
   serverOrigin: string;
   fetchImpl?: FetchLike;
-  pollIntervalMs?: number;
-  sleep?: (ms: number) => Promise<void>;
+  monitor?: CoderMonitor;
+  access?: BackgroundAccess;
 }): { threads: ThreadAdapter } {
   const origin = deps.serverOrigin.replace(/\/+$/, '');
   const fetchImpl: FetchLike = deps.fetchImpl
@@ -134,13 +104,6 @@ export function createThreadsAdapter(deps: {
       const response = await fetch(url, init);
       return { ok: response.ok, status: response.status, json: () => response.json() };
     });
-  const pollIntervalMs = deps.pollIntervalMs ?? 2_000;
-  const sleepMs = deps.sleep
-    ?? ((ms: number) => new Promise<void>((resolve) => {
-      const t = setTimeout(resolve, ms);
-      t.unref?.();
-    }));
-
   /** 请求 /protoclaw/threads* 控制面（同 bin/claw.mjs clawServerFetch 契约）。 */
   async function clawFetch(pathname: string, init: RequestInit = {}): Promise<Record<string, any>> {
     const internalToken = String(process.env.PROTOCLAW_INTERNAL_TOKEN || '').trim();
@@ -331,227 +294,6 @@ export function createThreadsAdapter(deps: {
     return `  event: ${event?.type || 'event'}${turn}${itemType}${suspendedMark}`;
   }
 
-  /**
-   * 阻塞等待本轮落定（判定字段语义参照 bin/claw.mjs watchThread 与
-   * server/thread-control 的 started/done 逻辑：turn.completed 且 lifeState
-   * 离开 executing，链式多轮自动跟随；failed=true / 线程终态即出）。
-   * Tool.timeout / 用户打断经 signal + termination 在 settle 窗口内到达：
-   * 返回结构化 done（reason=timeout / interrupted，非错误），模型自然续挂
-   * watch——这是唯一超时闸门，adapter 不实现任何时间 flag。
-   */
-  async function waitForTurnSettled(
-    threadId: string,
-    options: Pick<ThreadAdapterContext, 'signal' | 'termination'> = {},
-  ): Promise<SettleOutcome> {
-    // 基线：只取游标不回放历史事件（watch 语义：只等本轮的新事件）
-    let cursor = 0;
-    try {
-      const base = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/events`);
-      cursor = Number(base?.cursor) || 0;
-    } catch { /* 事件端点瞬时不可用不阻断等待 */ }
-
-    let turnSettled = false;
-    // ADR-0019 挂起记忆：最近一次 turn.completed 是否为 suspended 落定
-    // （等待后台任务唤醒）。挂起等待期间 watch 不提前返回——唤醒轮的
-    // turn.started 会接棒重置记忆，正常跟随到非挂起落定。
-    let settledSuspended = false;
-    let settledPendingWakeups = 0;
-    let idleRounds = 0;
-    let consecutiveFetchErrors = 0;
-    let lifeState = 'unknown';
-    let failed = false;
-    let newEvents = 0;
-    const tailEvents: Array<Record<string, any>> = [];
-
-    while (true) {
-      // 终止即结果（ADR-0005）：结构化 done（reason=timeout / interrupted，非错误）
-      if (options.signal?.aborted) {
-        const reason = options.termination?.() === 'timeout' ? 'timeout' : 'interrupted';
-        return {
-          reason,
-          lifeState,
-          failed,
-          newEvents,
-          suspended: settledSuspended || undefined,
-          pendingWakeupCount: settledSuspended ? settledPendingWakeups : undefined,
-          tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
-        };
-      }
-      await sleepMs(pollIntervalMs);
-
-      let thread: Record<string, any> | null;
-      try {
-        thread = (await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}`))?.thread ?? null;
-        consecutiveFetchErrors = 0;
-      } catch (error) {
-        // 线程已删除（record 移除后 404 thread_not_found）：确定终态，续挂
-        // 无意义，立即退出——不与 server 不可达混同（那需要连续错误确认）
-        if ((error as any)?.code === 'thread_not_found' || (error as any)?.status === 404) {
-          return {
-            reason: 'thread not found',
-            lifeState,
-            failed,
-            newEvents,
-            detail: String((error as Error)?.message || error),
-            tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
-          };
-        }
-        consecutiveFetchErrors += 1;
-        if (consecutiveFetchErrors >= MAX_CONSECUTIVE_FETCH_ERRORS) {
-          return {
-            reason: 'unreachable',
-            lifeState,
-            failed,
-            newEvents,
-            detail: String((error as Error)?.message || error),
-            tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
-          };
-        }
-        continue; // server 短暂不可达不打断等待窗口
-      }
-      lifeState = String(thread?.lifeState || 'unknown');
-      failed = thread?.failed === true;
-
-      // 事件游标推进（只计数 + 记忆 turn 状态，不透传事件流）
-      let events: Array<Record<string, any>> = [];
-      try {
-        const payload = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/events?after=${cursor}`);
-        events = (payload?.events as Array<Record<string, any>>) || [];
-        if (payload?.cursor !== undefined) cursor = Number(payload.cursor) || cursor;
-      } catch { /* 瞬时失败下轮再取 */ }
-      for (const event of events) {
-        newEvents += 1;
-        tailEvents.push(event);
-        // 跨轮记忆：turn.completed 与 lifeState 离开 executing 常在不同轮次到达；
-        // 链式多轮时新一轮 turn.started 已接棒（bin/claw.mjs watchThread 同款语义）
-        if (event?.type === 'turn.completed') {
-          turnSettled = true;
-          settledSuspended = event?.suspended === true;
-          settledPendingWakeups = settledSuspended && Array.isArray(event?.pendingWakeups)
-            ? event.pendingWakeups.length
-            : 0;
-        }
-        if (event?.type === 'turn.started') {
-          turnSettled = false;
-          settledSuspended = false;
-          settledPendingWakeups = 0;
-        }
-      }
-
-      if (failed) {
-        return { reason: 'failed', lifeState, failed, newEvents, tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT) };
-      }
-      // 终态判定用合成 lifeState：归档是宿主层标记（archive-index），
-      // record status 恒为 'open'，按 status 判 archived 永不命中
-      const terminalLifeState = String(lifeState || '');
-      if (['archived', 'closed'].includes(terminalLifeState)) {
-        return {
-          reason: `thread ${terminalLifeState}`,
-          lifeState,
-          failed,
-          newEvents,
-          tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
-        };
-      }
-      // 孤儿执行/滞留：lifeState 卡在 executing（runtime 死亡后看板残留
-      // running）或 pending-commands（runtime 永不承接）且事件长期停滞，
-      // turn.completed 永不收敛——按停滞终态处置，不烧满 Tool.timeout。
-      // 事件停滞不是死亡的充分证据：coder 执行长工具调用（跑实验 / 构建，
-      // 可达小时级）期间不产生新 turn/item 事件，事件停滞同样发生；
-      // 死亡判定需叠加 head runtime 进程存活事实（server 详情响应附带）。
-      // 老版本 server 缺该字段时维持停滞终态，保守行为不变。
-      const lastEventAt = Number(thread?.lastEventAt) || 0;
-      if (['executing', 'pending-commands'].includes(lifeState) && lastEventAt
-        && Date.now() - lastEventAt > STALE_THREAD_MS
-        && thread?.headRuntimeRunning !== true) {
-        const staleSec = Math.round((Date.now() - lastEventAt) / 1000);
-        return {
-          reason: 'stalled',
-          lifeState,
-          failed,
-          newEvents,
-          detail: thread?.headRuntimeRunning === false
-            ? `事件停滞 ${staleSec}s 且 head runtime 进程已不在——孤儿执行，查 Debugger 日志后走恢复路径`
-            : `事件停滞 ${staleSec}s——runtime 可能已死亡，查 Debugger 日志后再决定介入方式`,
-          tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
-        };
-      }
-      if (turnSettled && lifeState !== 'executing') {
-        // ADR-0019：suspended 落定 = 回合挂起等后台任务唤醒，不是交付完成。
-        // 不在此返回：继续等唤醒轮（turn.started 接棒后正常跟随落定）。
-        // 唤醒来源存活边界 = runtime 进程：headRuntimeRunning 明确 false 时
-        // 挂起任务已随之死亡、唤醒永不来，按停滞终态退出；老版本 server
-        // 字段缺失时保守继续等（Tool.timeout 兜底）。
-        if (!settledSuspended) {
-          return { reason: 'turn.completed', lifeState, failed, newEvents, tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT) };
-        }
-        if (thread?.headRuntimeRunning === false) {
-          return {
-            reason: 'stalled',
-            lifeState,
-            failed,
-            newEvents,
-            suspended: true,
-            pendingWakeupCount: settledPendingWakeups,
-            detail: `上个回合挂起等待后台任务（${settledPendingWakeups || '?'} 个），但 head runtime 进程已不在——挂起任务随之死亡，唤醒不会到来，查 Debugger 日志后走恢复路径`,
-            tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
-          };
-        }
-      }
-      const pending = Array.isArray(thread?.commands)
-        ? thread.commands.filter((command: any) => command?.status === 'pending').length
-        : 0;
-      // 挂起等待期间线程 idle 是常态（模型已让出回合），豁免 idle 提前返回
-      if (lifeState !== 'executing' && pending === 0 && !settledSuspended) {
-        idleRounds += 1;
-        if (idleRounds >= 2) {
-          return {
-            reason: 'idle-no-pending',
-            lifeState,
-            failed,
-            newEvents,
-            tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
-          };
-        }
-      } else {
-        idleRounds = 0;
-      }
-    }
-  }
-
-  /** done 摘要（紧凑输出：只给调度判断所需字段，不回显工单全文）。 */
-  function formatSettled(threadId: string, outcome: SettleOutcome, sentLine?: string): string {
-    const lines = [
-      sentLine,
-      `done reason=${outcome.reason}  threadId=${threadId}  life=${outcome.lifeState}  failed=${outcome.failed}  newEvents=${outcome.newEvents}`,
-    ];
-    // unreachable / thread not found / stalled 等终态附诊断 detail
-    if (outcome.detail) {
-      lines.push(`detail: ${outcome.detail}`);
-    }
-    if (outcome.tailEvents.length > 0) {
-      lines.push('事件尾：', ...outcome.tailEvents.map(eventLine));
-    }
-    return lines.join('\n');
-  }
-
-  /** 工具超时终态（结构化 done，非错误；模型据此续挂 watch）。 */
-  function formatTimeoutDone(threadId: string, outcome: SettleOutcome): string {
-    const suspendedNote = outcome.suspended === true
-      ? `线程当前挂起等待后台任务唤醒（${outcome.pendingWakeupCount || '?'} 个）——唤醒轮到达时 watch 会自动跟随，续挂即可。`
-      : `工具调用超时（Tool.timeout 契约），指令仍在执行：用 watch ${threadId} 续挂监视，不要重复派发同键指令。`;
-    return [
-      `done reason=timeout  threadId=${threadId}  life=${outcome.lifeState}  failed=${outcome.failed}  newEvents=${outcome.newEvents}`,
-      suspendedNote,
-      ...(outcome.tailEvents.length > 0 ? ['事件尾：', ...outcome.tailEvents.map(eventLine)] : []),
-    ].join('\n');
-  }
-
-  /** waitForTurnSettled 按契约不 reject；此兜底仅防意外异常中断 any-settle 竞速。 */
-  function unreachableOutcome(): SettleOutcome {
-    return { reason: 'unreachable', lifeState: 'unknown', failed: false, newEvents: 0, tailEvents: [] };
-  }
-
   // ── 动词实现（参数已过 033 参数校验道；位置语义见策略声明）──────
 
   const adapter: ThreadAdapter = async (args, context) => {
@@ -676,130 +418,48 @@ export function createThreadsAdapter(deps: {
         return sessionNote ? `${line}\n${sessionNote}` : line;
       }
 
-      // send <threadId> <idempotencyKey> <text> [--no-wait]：派发 + 阻塞等
-      // 本轮落定（幂等键必填，缺失在参数校验道拒绝——复用 threads API 既有
-      // 字段）。--no-wait：只确认投递即返回，不进落定等待——并行派发多条
-      // 长任务时逐条阻塞会烧满工具超时，落定确认交给 watch。flag 按声明
-      // 全位置剥离（与参数校验道同语义），位置不影响识别。
+      // Submission and observation are separate facts; neither operation waits for execution.
       case 'send': {
-        const positional = rest.filter((token) => token !== '--no-wait');
-        const noWait = positional.length !== rest.length;
-        const [threadId, idempotencyKey, text] = positional;
+        const dispatchOnly = rest.includes('--dispatch-only');
+        const [threadId, idempotencyKey, text] = rest.filter((token) => token !== '--dispatch-only');
         const payload = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/commands`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, idempotencyKey, source: 'coder_shell' }),
-        });
-        // head runtime 唤起失败：指令已入箱但无承接进程，如实透出（按技能故障表
-        // 处置），不进入落定等待——等待只会滞留到一个不会来的 ready。
-        const runtimeWake = payload?.runtimeWake;
-        if (runtimeWake && runtimeWake.ok === false) {
-          return [
-            `sent ${payload?.command?.commandId || '(unknown)'} duplicate=${payload?.duplicate === true} delivered=${payload?.delivery?.delivered ?? '(unknown)'}`,
-            `runtimeWake=failed (${runtimeWake.code}): ${runtimeWake.message}`,
-            'runtime 唤起失败：按技能故障表处置（head_session_missing / runtime_ready_timeout），不要重复派发同键指令。',
-          ].join('\n');
-        }
-        const sentLine = `sent ${payload?.command?.commandId || '(unknown)'} duplicate=${payload?.duplicate === true} delivered=${payload?.delivery?.delivered ?? '(unknown)'}`;
-        if (noWait) {
-          return [
-            sentLine,
-            `dispatched --no-wait：投递已确认，未等落定。用 watch ${threadId} 续挂等落定，不要重发同键指令。`,
-          ].join('\n');
-        }
-        const outcome = await waitForTurnSettled(threadId, {
           signal: context?.signal,
-          termination: context?.termination,
         });
-        // settle 窗口内因 Tool.timeout 收尾：结构化 done（非错误），模型续挂 watch
-        if (outcome.reason === 'timeout' || outcome.reason === 'interrupted') {
-          return [
-            sentLine,
-            formatTimeoutDone(threadId, outcome),
-          ].join('\n');
+        const commandId = payload?.command?.commandId;
+        const receipt = `sent ${commandId || '(unknown)'} duplicate=${payload?.duplicate === true} delivered=${payload?.delivery?.delivered ?? '(unknown)'}`;
+        const wake = payload?.runtimeWake?.ok === false
+          ? `runtimeWake=failed (${payload.runtimeWake.code}): ${payload.runtimeWake.message}` : '';
+        if (dispatchOnly) return [receipt, wake, 'dispatch-only：未登记监视；需要时显式 watch。'].filter(Boolean).join('\n');
+        try {
+          if (!deps.monitor) throw new Error('未装配后台监视接入');
+          return [receipt, wake, await deps.monitor.observe({ threadId, commandId })].filter(Boolean).join('\n');
+        } catch (error) {
+          return [receipt, wake, `monitor=failed：${String(error)}。提交已生效，未回滚；用 watch ${threadId} --command=${commandId || '<commandId>'} 重建，不要重发任务。`].filter(Boolean).join('\n');
         }
-        return formatSettled(threadId, outcome, sentLine);
       }
 
-      // watch <threadId> [threadId...]：续挂监视，落定即返（超时同 send：
-      // 结构化 done）。多线程 any-settle 与 bin/claw.mjs threads watch 同
-      // 语义：并发单线程监视，任一线程落定/失败/终态即整条返回，第一个
-      // settle 的胜出；其余停挂并附最后已知状态，模型用一条 watch 续挂。
       case 'watch': {
-        if (rest.length === 1) {
-          const outcome = await waitForTurnSettled(rest[0], {
-            signal: context?.signal,
-            termination: context?.termination,
-          });
-          if (outcome.reason === 'timeout' || outcome.reason === 'interrupted') {
-            return formatTimeoutDone(rest[0], outcome);
+        if (!deps.monitor || !deps.access) throw new Error('watch 要求已装配后台监视与唤醒投递器');
+        const commandId = rest.find((token) => token.startsWith('--command='))?.slice('--command='.length);
+        const threads = rest.filter((token) => !token.startsWith('--command='));
+        if (commandId && threads.length !== 1) throw new Error('--command 只接受一个 threadId');
+        const lines: string[] = [];
+        let waiting = false;
+        for (const threadId of threads) {
+          const thread = (await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}`, { signal: context?.signal })).thread;
+          const commands = (thread?.commands || []).filter((c: any) => c.source === 'coder_shell');
+          const ids = commandId ? [commandId] : commands.map((c: any) => c.commandId);
+          if (!ids.length) throw new Error(`线程 ${threadId} 没有可关联的派发指令；请用 --command=<commandId> 明确目标`);
+          for (const id of ids) {
+            const identity = { threadId, commandId: id };
+            lines.push(await deps.monitor.observe(identity));
+            waiting ||= deps.monitor.isObserving(identity);
           }
-          return formatSettled(rest[0], outcome);
         }
-        const watchTargets = rest;
-        // 每线程独立中止闸：胜出即停挂其余监视；context 终止（Tool.timeout /
-        // 用户打断）级联到全部线程
-        const controllers = watchTargets.map(() => new AbortController());
-        const contextSignal = context?.signal;
-        const abortAll = () => {
-          for (const controller of controllers) controller.abort();
-        };
-        if (contextSignal) {
-          if (contextSignal.aborted) abortAll();
-          else contextSignal.addEventListener('abort', abortAll, { once: true });
-        }
-        const attempts = watchTargets.map((threadId, index) =>
-          waitForTurnSettled(threadId, {
-            signal: controllers[index].signal,
-            termination: context?.termination,
-          })
-            .then((outcome) => ({ threadId, outcome }))
-            .catch(() => ({ threadId, outcome: unreachableOutcome() })),
-        );
-        try {
-          const first = await Promise.race(attempts.map(async (attempt) => {
-            const { threadId, outcome } = await attempt;
-            // timeout/interrupted 是整条调用的终止信号（context 级联产生），
-            // 不算单线程胜出
-            return {
-              threadId,
-              outcome,
-              settled: outcome.reason !== 'timeout' && outcome.reason !== 'interrupted',
-            };
-          }));
-          if (!first.settled) {
-            // 整条调用终止：逐线程附最后已知状态，模型用一条 watch 全部续挂
-            const results = await Promise.all(attempts);
-            return [
-              ...results.map(({ threadId, outcome }) =>
-                `done reason=timeout  threadId=${threadId}  life=${outcome.lifeState}  failed=${outcome.failed}  newEvents=${outcome.newEvents}`),
-              `工具调用超时（Tool.timeout 契约），指令仍在执行：用 watch ${watchTargets.join(' ')} 续挂监视，不要重复派发同键指令。`,
-            ].join('\n');
-          }
-          // 胜出：停挂其余监视并收集最后已知状态（进程内不弃管，防轮询泄漏）
-          abortAll();
-          const results = await Promise.all(attempts);
-          const losers = results.filter(({ threadId }) => threadId !== first.threadId);
-          const stillPending = losers.filter(({ outcome }) =>
-            outcome.reason === 'timeout' || outcome.reason === 'interrupted');
-          const coSettled = losers.filter(({ outcome }) =>
-            outcome.reason !== 'timeout' && outcome.reason !== 'interrupted');
-          return [
-            formatSettled(first.threadId, first.outcome),
-            ...(losers.length > 0 ? [
-              '其余监视线程（已停挂）：',
-              ...stillPending.map(({ threadId, outcome }) =>
-                `  ${threadId}  life=${outcome.lifeState}  failed=${outcome.failed}`),
-              ...coSettled.map(({ threadId, outcome }) =>
-                `  ${threadId}  done reason=${outcome.reason}  life=${outcome.lifeState}  failed=${outcome.failed}`),
-              ...(stillPending.length > 0
-                ? [`继续监视：watch ${stillPending.map(({ threadId }) => threadId).join(' ')}`]
-                : []),
-            ] : []),
-          ].join('\n');
-        } finally {
-          contextSignal?.removeEventListener('abort', abortAll);
-        }
+        if (waiting) deps.access.requestStandby();
+        return lines.join('\n');
       }
 
       // result <threadId> [--turn=N]：取末轮回复（缺省）或指定轮回复全文。

@@ -304,7 +304,10 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
           ...(entry?.event || {}),
           eventId: entry?.eventId,
           receivedAt: entry?.receivedAt,
+          sessionId: entry?.sessionId,
+          runtimeInstanceId: entry?.runtimeInstanceId,
         })),
+        baseOffset,
         cursor: baseOffset + entries.length,
       });
     } catch (err) {

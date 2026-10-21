@@ -1,6 +1,6 @@
 ---
 name: claw-coder-dispatch
-description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技能）：用 coder_shell 工具创建 Coder 工作线程、派发工单并阻塞等落定、监视执行、处理超时/接力/待投递命令，完成后按仓库和板块提交并归档线程收口（未归档线程占用线程并发名额，工单闭环以归档收口）。仅适用于智能编码工作空间中的 Coder 智能体。"
+description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技能）：用 coder_shell 工具创建 Coder 工作线程、派发工单并后台监视、监视执行、处理超时/接力/待投递命令，完成后按仓库和板块提交并归档线程收口（未归档线程占用线程并发名额，工单闭环以归档收口）。仅适用于智能编码工作空间中的 Coder 智能体。"
 ---
 
 # Coder 智能体调度 Skill
@@ -16,7 +16,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 ## 适用范围与限制（先读）
 
 - **仅限领域内使用**：coder_shell 只做一件事——调度智能编码工作空间中的 Coder 智能体（建线程、派发工单、监视、收口）。它不是通用 bash：文件操作用 read/write/edit 工具，代码搜索用 glob/grep 工具，一律不要塞进这个 shell。
-- **工具受限**：只认识下表动词；语法只放行**字面量参数、声明 flag（如 `--no-wait`、`--status=executing`，`=` 赋值 flag 可出现在参数任意位置）、管道 `|`、重定向 `> >> <`**。命令替换 `$()`/反引号、变量 `$x`、进程替换、glob 通配、heredoc、后台 `&` 一律拒绝；`rm`、`curl`、`git` 等不在动词表内的动词直接拒绝并附可用动词清单。拒绝是终态，换正确的动词重试，不要绕。
+- **工具受限**：只认识下表动词；语法只放行**字面量参数、声明 flag（如 `--dispatch-only`、`--status=executing`，`=` 赋值 flag 可出现在参数任意位置）、管道 `|`、重定向 `> >> <`**。命令替换 `$()`/反引号、变量 `$x`、进程替换、glob 通配、heredoc、后台 `&` 一律拒绝；`rm`、`curl`、`git` 等不在动词表内的动词直接拒绝并附可用动词清单。拒绝是终态，换正确的动词重试，不要绕。
 
 ## coder_shell 用法
 
@@ -26,8 +26,8 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 |---|---|
 | `new-session <agentId> <目标工作目录> ['标题']` | 创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId）；**目标工作目录必填**（已存在的绝对路径，服务端拒绝目录回退默认） |
 | `create <agentId> <sessionId> ['标题']` | 给已存在的会话加挂线程，返回 threadId |
-| `send <threadId> <idempotencyKey> '<指令文本>' [--no-wait]` | 派发并**阻塞**等本轮落定；`--no-wait` 只确认投递即返回（并行派发用），落定交给 `watch` |
-| `watch <threadId> [threadId...]` | 续挂监视（可多线程 any-settle），任一线程落定即整条返回 |
+| `send <threadId> <idempotencyKey> '<指令文本>' [--dispatch-only]` | 提交并默认登记后台监视，快速返回；--dispatch-only 只提交不监视 |
+| `watch <threadId> [threadId...] [--command=<commandId>]` | 查询/建立监视并请求一次性待命；目标已结束则直接返回结果 |
 | `result <threadId> [--turn=N]` | 取线程末轮回复全文（coder 的最终报告，落定后取证用）；多轮回复时附全部轮次索引，--turn=N 取指定轮回复全文 |
 | `list [agentId] [过滤flag]` | 线程列表（默认按最近活动倒序取 10 条非终态线程；支持状态/目录/标题检索，见下文「线程检索」） |
 | `show <threadId>` | 线程详情（pending 指令数 + 事件尾摘要） |
@@ -36,7 +36,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 
 裸 `help` 输出动词表用法（管线级，不占动词表）；`advance` / `resume` **不在动词表**：调用会得到 unknown_verb 和结构化指引——rotation_failed 残局需人工介入（见故障表），不要在 shell 内重试。`rm`、`curl` 等其他动词同样被拒并附可用动词清单。
 
-超时唯一闸门是工具自身的 timeout 契约：超时返回结构化 `done reason=timeout`（不是错误），指令仍在执行，用 `watch` 续挂即可（可一条挂多线程）。不要试图给动词加时间参数。
+控制面提交受工具 timeout 契约约束。请求结果未知时先查询幂等回执，不换键重派。观察不占用工具超时窗口；后台读取失联会明确通知。
 
 ### 线程检索（list）
 
@@ -63,13 +63,13 @@ list -n=0                                                # 不限条数；-n=50 
 1. **依赖由调度方控制，不由 coder 自主轮询。** 前置工单未完成时，可以创建线程但不要发送施工指令。
 2. **一个工单一个线程。** 不要把多个互不相关工单塞进同一条线程。
 3. **有文件交集的工单必须串行。** 无交集且不共享构建产物的工单才可以并行。
-4. **发送成功不等于执行开始。** `send` 在同一次调用内阻塞等待本轮落定，返回的 `done reason=...` 字段判定落定；超时返回 `done reason=timeout`（正常续挂信号），用 `watch` 续挂，不要靠再查一遍 events 人工确认。并行派发多条长任务时用 `send --no-wait`（投递确认即返回），落定统一交给一条多线程 `watch`，不要逐条阻塞烧满超时。
+4. **提交成功不等于业务完成。** send 默认登记后台监视后返回；可以继续工作，重要执行事件自动通知。只有显式 --dispatch-only 不登记监视。
 5. **以证据判定完成。** 最终报告、文件 diff、测试输出、构建产物和 git 状态必须相互吻合。
 6. **绝不覆盖其他会话的工作。** 禁止使用 `git reset --hard`、`git clean`、`git checkout -- .` 清理未知改动。
 7. **默认不让 coder 自行 push。** commit、push、分支操作由调度方在验收后执行，除非工单明确授权。
 8. **幂等键是防重发保险。** `send` 必填唯一幂等键（服务端按键去重，同键重发三种结局见下文"幂等键语义"）；**不要**故意重发同键指令去"验证去重是否生效"。
-9. **线程监视只用阻塞等：`watch`（或 `send` 自带阻塞）。** 任何"sleep 之后检查"的替代法一律禁止（见下文"监视纪律"）——落定信号只在阻塞调用返回瞬间送达，别的方式让 Coder 干完了活却无人接收。
-10. **看到落定结果之前不离场。** 监视期间不因临时答复用户或处理别的任务而中断监视、结束回合；除非用户明确要求先去处理，且处理完的第一件事是把 `watch` 续挂上（见下文"监视纪律"）。
+9. **使用后台监视，不用模型定期轮询。** show/list/result 是主动取证入口，不用 sleep 加查询模拟监视。
+10. **可以结束轮次等待自动通知。** watch 表达一次性待命；自然结束且仍有监视时按 suspended 等待。监视失效时按通知重新建立，不能假设旧连接仍有效。
 11. **工单闭环以归档收口。** 验收提交完成、工单了结后归档线程——未归档线程持续占用线程并发名额，攒着不归档会挡住后续工单的创建（429）。只归档**自己创建并已验收**的线程；不是自己建的线程不要动，拿不准归属就先问用户。
 
 
@@ -145,7 +145,7 @@ coder_shell command="create coder <session-id> '工单025 工具进度UI'"
 
 返回单行 `threadId=... lifeState=... status=... head=...`。标题在创建/建线时一次写入，线程标题自动跟随会话标题。线程列表用 `list coder` 核对。
 
-### 3. 依赖满足后发送开工指令（send 阻塞等落定）
+### 3. 依赖满足后发送开工指令并登记监视
 
 长指令先写文件再读入内容拼进 command（单引号字面量；文本内单引号按 shell-quote 规则转义）。发送必须带唯一幂等键：
 
@@ -153,20 +153,11 @@ coder_shell command="create coder <session-id> '工单025 工具进度UI'"
 coder_shell command="send wt-xxx ticket-025-dispatch '<指令全文>'"
 ```
 
-`send` 一次调用完成"派发 + 确认开工 + 等干完"：投递后 adapter 内部轮询线程事件，直到**本轮落定**（turn.completed 且 lifeState 离开 executing，链式多轮自动跟随）才返回。输出：
+`send` 返回真实提交回执和监视状态，不等待业务执行结束。只提交不监视时显式使用 `--dispatch-only`；旧 `--no-wait` 已删除，不再使用。
 
-- `sent <commandId> duplicate=... delivered=...`（投递确认）
-- `done reason=turn.completed | failed | idle-no-pending | thread archived | thread closed | thread not found | stalled | timeout | interrupted | unreachable  life=... failed=... newEvents=...`（落定摘要；`interrupted` = 用户打断，续挂语义同 timeout）+ 事件尾
+提交成功、监视失败是两个独立事实：回执仍然有效，按返回的 commandId 重新 `watch`，不要换键重派。重复幂等提交复用同一观察目标；同线程不同提交各自关联。
 
-`done reason=timeout` 不是错误：指令仍在执行，用 `watch` 续挂。幂等键是防重发保险，缺失时参数校验道直接拒绝（`arg_rejected`）。
-
-**并行派发用 `--no-wait`**：一次派发多条长任务时，逐条阻塞等落定会把每条 `send` 都烧满工具超时。尾随 `--no-wait` 让 send 只确认投递（`sent ... delivered=...`）即返回，落定统一交给一条多线程 watch：
-
-```text
-coder_shell command="send wt-aaa ticket-a '<指令A>' --no-wait"
-coder_shell command="send wt-bbb ticket-b '<指令B>' --no-wait"
-coder_shell command="watch wt-aaa wt-bbb"
-```
+并行派发无须专门 flag：分别 send 即可。需要待命时调用 `watch wt-aaa wt-bbb`，也可以自然结束轮次等待通知。
 
 **幂等键语义（同键重发的三种结局，服务端真实契约）**：
 
@@ -195,49 +186,17 @@ coder_shell command="watch wt-aaa wt-bbb"
 
 不要把"前置未满足时每 15 分钟自查"交给 coder。那会消耗模型调用，并且 turn 结束后不会自动醒来；依赖等待必须由调度方完成。
 
-## 监控（send 阻塞 + watch 续挂）
+## 后台监视与待命
 
-**监视纪律（先读）**：
+`send` 默认提交并登记监视，返回 `sent <commandId>` 与监视状态。可以继续处理其他工作，也可以自然结束本轮；存在有效监视时框架按 suspended 等待通知。完成、失败、需要干预和监视失效会自动送达，正常工具活动和正常接力不反复唤醒。
 
-1. **监视线程只有一个合法手段：阻塞等在 `watch`（或 `send` 自带的阻塞）上。** 除非极为特殊的需要（如 watch 通道本身不可用、正在按故障表处置残局），不要在任何其他地方用等效于"sleep 之后检查"的方法监视——bash sleep 后轮询 `show` / `list` / `result` / `git status`、按估计时间"过一会儿再看一眼"，一律不许。阻塞调用挂在线程事件上，落定瞬间即返回；sleep-then-check 在落定的那一刻没有人在等，完成信号被推迟到你下一次检查才被发现——Coder 早已干完，反馈却被平白拖延。取证（查日志 / git status）只作为 `watch` 返回异常摘要之后的响应动作，不是周期性监视手段。
-2. **看到落定结果之前不离场。** 从派发到拿到结果，监视就是当前回合的主线：不要为了临时答复用户消息或插手其他任务而中断监视、结束对话回合——回合一旦让出不会自动醒来，线程落定时无人接收，完成反馈就此断线。除非用户明确要求先处理别的事；即便如此，处理完的第一件事也是用 `watch` 把监视续上（纯监视，可安全续挂任何执行中的线程），而不是就此把线程晾在后台。
+`watch wt-aaa wt-bbb` 查询或建立监视，对仍运行的目标请求一次性待命，工具完整返回后才结束本轮。已结束的目标直接返回结果。`watch wt-aaa --command=cmd-xxx` 精确选择一次提交；没有 `--command` 时查询该线程保留的 coder_shell 派发。重复观察不会重复派发任务或重复通知同一终态。
 
-**标准路径**：`send` 自带阻塞等落定，一次调用完成派发到落定，无需单独 watch。返回 `done reason=timeout` 时改用 `watch` 续挂。
+不要用 sleep 后轮询 show/list/result 替代后台监视。自然结束回合不会取消 Coder。只有明确要停止执行时才使用线程归档等领域操作；不要用归档来结束自己的等待。
 
-**多线程并行监视（any-settle）**：并发多条工单时，一条 `watch` 挂全部线程：
+完成通知含关联标识、实际终态及结果摘要或证据缺口。用 `result wt-xxx [--turn=N]` 补取完整报告，并核对 diff、测试与构建，不以自然语言“完成”代替验收。
 
-```text
-coder_shell command="watch wt-aaa wt-bbb wt-ccc"
-```
-
-任一线程落定/失败/终态即整条返回：报文含胜者的 done 摘要，其余线程附最后已知状态（`life=...`）与一条续挂指引（`watch wt-...`）——用一条 watch 把剩余线程续挂上即可，无需逐条轮询。超时时逐线程给 `done reason=timeout` 行，同样一条 watch 全部续挂。
-
-**续挂监控**（指令仍在执行 / 分轮盯进度）：
-
-```text
-coder_shell command="watch wt-xxx"
-```
-
-**纯监视已运行线程**（不派发任何指令，只挂到一条正在执行的线程上等它干完）：同一条 `watch` 命令——不派发、不修改线程状态，可安全挂在任何执行中的线程上。
-
-**取末轮回复**：线程落定后用 `result` 取 coder 的最终报告全文（验收证据的第一手材料）：
-
-```text
-coder_shell command="result wt-xxx"
-```
-
-核心内容不一定在末轮（末轮可能只是简短确认或对追问的回答）。多轮回复时 result 报文尾附全部轮次索引（各轮 turn 号与字符数——字符数是定位实质报告的信号），用 `result wt-xxx --turn=N` 取指定轮回复全文。报文头部的 `session=` 是该线程 head 会话 id（寻址字段）。
-
-```text
-coder_shell command="result wt-xxx --turn=4"
-```
-
-watch / send 的落定摘要行为一致：
-
-- `done reason=...`：`turn.completed` 本轮落定（链式多轮自动跟随；ADR-0019 挂起落定——turn.completed 事件带 `suspended` 标志——不算落定，watch 继续挂等后台任务唤醒轮）；`idle-no-pending` 线程空闲无 pending 且不在挂起等待；`thread archived` / `thread closed` 线程已归档/已关闭（确定终态，勿续挂——继续工作开新线程）；`thread not found` 线程已删除（确定终态，勿续挂）；`stalled` 两种形态：卡在 executing/pending-commands 且事件长期停滞且 head runtime 进程已不在（孤儿执行），或挂起等待中 head runtime 进程已不在（挂起任务随之死亡、唤醒不会到来）；`failed` failed=true（按故障表介入）；`timeout` 工具超时（正常续挂信号，续挂 `watch` 即可，挂起等待中的超时摘要会注明）；`interrupted` 用户打断（与 timeout 同语义：指令仍在执行，续挂 `watch`）；`unreachable` server 连续不可达
-- 摘要附事件尾（`turn.started` / `turn.completed` / `item.*` 等）供快速取证；挂起落定的 turn.completed 显示 `suspended (pending=N)`
-
-超时不需要做别的——`watch` 续挂之间不需要 sleep、不需要查 git status；事件流停滞或摘要异常时才取证。
+主 Agent 接续或重启不会透明恢复观察连接。若提示此前监视未恢复，按提示先查询并重新 watch，获取空窗内结果；不要重发原任务。迟到通知仍固定投给原会话，不按界面焦点改投。
 
 ### 异常取证（仅在 watch 停滞 / done failed=true 时做）
 
@@ -261,7 +220,7 @@ cd <AgentDev 仓库根目录> && git status --short && git diff --stat && git lo
 
 ## 长命令、超时和卡住处理
 
-`send` / `watch` 超时返回结构化 `done reason=timeout`（非错误）：指令仍在执行，续挂 `watch` 即可，不要重复派发。处理顺序：
+监视异常通知与执行失败分别处理；提交请求超时不代表任务取消，不重复派发。处理顺序如下。
 
 1. 查线程事件尾摘要和 Debugger 最新日志。
 2. 判断 agent 是否仍有新 step。
@@ -376,15 +335,17 @@ coder_shell command="unarchive wt-xxx"
 | 执行中误归档 | 事件尾部 turn 是否被打断 | 归档即打断收纳是预期行为；翻查后 `unarchive` 恢复，重新投递指令唤醒 runtime |
 | `runtimeWake` 失败（`head_session_missing`） | 会话索引、线程 head | head 会话已被删除，线程无法恢复：取消 pending 指令后归档线程，重新建线程派发；若环境无可用 Coder 会话，先 `new-session` 再派发 |
 | `runtimeWake` 失败（`runtime_ready_timeout`） | server 日志、agent 装配 | 唤起已尝试但 runtime 未 READY：查启动失败原因（如 worktree 缺 config），修复后重新 send（幂等键防重） |
-| send/watch 返回 `done reason=timeout` | 线程 lifeState | 指令仍在执行，属正常续挂信号：用 `watch` 续挂，不重复派发 |
-| watch 返回 `done reason=thread archived` / `thread closed` | `show` 确认归档者 | 确定终态：正常收口或按需开新线程；勿续挂、勿重发指令 |
-| watch 返回 `done reason=thread not found` | `list` 核对线程 | 线程已删除（用户或删除级联）：确定终态，勿续挂；未收口的工作用 `new-session` 重建线程派发 |
-| watch 返回 `done reason=stalled` | Debugger 最新日志、事件尾 | 事件停滞且 head runtime 进程已不在（孤儿执行）：查日志确认后走恢复路径（恢复指令 / deliver / 人工介入），确认死亡则归档重建 |
+
+
+
+
 | 只有 `delivered=1` 无开工迹象 | 线程事件、agent 连接状态 | 保持 dispatched，查 runtime，不重复派发（send 已自动唤起 runtime；此态多为唤起超时） |
-| 单次调用超时（done reason=timeout） | 事件尾、最新日志和进程状态 | 指令仍在执行：`watch` 续挂；长指令改成分段/定向命令，避免重复无界命令 |
+
 | 文件突然变干净 | `git log`、agent 最终报告 | 先确认是否自行 commit |
 | agent 接力 | `headSessionId`、`sessionIds`、新 agent 日志 | 通常继续监控，不立即重派 |
-| 线程长期无新事件 | show、agent lastActive、pending commands | 长工具调用（跑实验 / 构建）期间无新事件属正常，watch 会持续挂到落定或工具超时；仅当 watch 以 `stalled` 返回（进程也不在）才走恢复路径 |
+| 线程长期无新事件 | show、runtime 存活事实 | 长工具调用无新事件正常；只在 runtime 明确失联或收到监视异常通知时取证 |
+| monitor_unreachable / runtime_unavailable / association_lost | commandId、线程详情、保留事件 | 修复连接或核实证据后重新 watch，不重发任务；事件已裁剪时需主动验收 |
+| thread_archived / thread_closed / thread_deleted | show / list --all | 确定生命周期终态，不当作任务成功；需要继续施工则新建线程 |
 | 修改了不相关文件 | git diff、文件时间、其他 agent | 分离归属，禁止 reset 覆盖 |
 | 测试失败 | 失败文件、是否基线失败 | 区分本票回归、环境失败、既有失败，报告真实边界 |
 

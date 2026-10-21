@@ -1010,7 +1010,7 @@ describe('thread events — additive eventId / receivedAt', () => {
   }
 
   const entries = [
-    { eventId: 'ev-1', receivedAt: 111, event: { type: 'turn.started', turn: 1 } },
+    { eventId: 'ev-1', receivedAt: 111, sessionId: 's1', runtimeInstanceId: 'r1', event: { type: 'turn.started', turn: 1 } },
     { eventId: 'ev-2', receivedAt: 222, event: { type: 'item.completed', turn: 1, item: { id: 'i1' } } },
   ];
 
@@ -1022,11 +1022,11 @@ describe('thread events — additive eventId / receivedAt', () => {
     assert.equal(res.body.cursor, 2);
     assert.deepEqual(
       res.body.events[0],
-      { type: 'turn.started', turn: 1, eventId: 'ev-1', receivedAt: 111 },
+      { type: 'turn.started', turn: 1, eventId: 'ev-1', receivedAt: 111, sessionId: 's1', runtimeInstanceId: 'r1' },
     );
     assert.deepEqual(
       res.body.events[1],
-      { type: 'item.completed', turn: 1, item: { id: 'i1' }, eventId: 'ev-2', receivedAt: 222 },
+      { type: 'item.completed', turn: 1, item: { id: 'i1' }, eventId: 'ev-2', receivedAt: 222, sessionId: undefined, runtimeInstanceId: undefined },
     );
   });
 
@@ -1042,6 +1042,7 @@ describe('thread events — additive eventId / receivedAt', () => {
     // after=6 → 从窗口下标 1 开始（绝对序号 6、7）
     const sliced = await callEvents(app, 't1', { after: '6' });
     assert.equal(sliced.body.cursor, 8);
+    assert.equal(sliced.body.baseOffset, 5);
     assert.deepEqual(sliced.body.events.map((e) => e.eventId), ['ev-2', 'ev-3']);
 
     // after=2（落后于窗口起点 5）→ clamp 到 0，从头返回可用窗口

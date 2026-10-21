@@ -6,9 +6,7 @@
  * （无鉴权层，同机回环）。
  *
  * advance / resume 不入表：rotation_failed 场景输出结构化指引，人工介入
- * （与技能故障表一致）。watch 是只读续挂监视（send 已内置阻塞等落定，
- * watch 用于超时续挂与纯监视已运行线程），可一条同时挂多条线程
- * （any-settle，与 bin/claw.mjs threads watch 同语义）。
+ * （与技能故障表一致）。send 后台监视，watch 登记一次性待命。
  */
 
 import type { CapabilityShellPolicy } from './types.js';
@@ -17,7 +15,7 @@ export const CODER_SHELL_NAME = 'coder_shell';
 
 export const CODER_SHELL_DESCRIPTION = [
   '调度智能编码工作空间中的 Coder 智能体（自主编码的子代理）：',
-  '按工单创建线程、派发指令（阻塞等本轮落定）、监视执行、处理超时/待投递命令、收口归档。',
+  '按工单创建线程、派发并后台监视、处理待投递命令、收口归档。send 快速返回，watch 表达待命，重要事件自动通知。',
   '首次使用或遇到拒绝报文时，先用 invoke_skill 激活 claw-coder-dispatch 技能——它是本工具的权威用法手册（动词用法、参数语义、调度纪律与故障处置）。',
   '核心不变量：一个工单一个线程；有文件交集的工单串行；发送成功不等于执行开始；',
   '以证据判定完成；绝不覆盖其他会话的工作（禁 reset/clean/checkout 覆盖）；默认不让 coder 自行 push。',
@@ -53,20 +51,21 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
         adapter: { key: 'threads:create' },
       },
       'send': {
-        description: '向线程派发指令并阻塞等本轮落定；--no-wait 只确认投递即返回，落定确认交给 watch（幂等键必填）',
+        description: '提交指令并默认登记后台监视后返回；--dispatch-only 仅提交不监视。幂等键必填，提交成功不等于业务完成',
         params: [
           { name: 'threadId', kind: 'literal' },
           { name: 'idempotencyKey', kind: 'literal' },
           { name: 'text', kind: 'literal' },
         ],
-        flags: ['--no-wait'],
-        usage: "send <threadId> <idempotencyKey> '<指令文本>' [--no-wait]",
+        flags: ['--dispatch-only'],
+        usage: "send <threadId> <idempotencyKey> '<指令文本>' [--dispatch-only]",
         adapter: { key: 'threads:send' },
       },
       'watch': {
-        description: '续挂监视线程（可多个，any-settle）：任一线程落定/失败/终态即整条返回，报文附其余线程状态（超时返回结构化 done reason=timeout）',
+        description: '查询或建立执行监视，登记一次性待命后快速返回；目标已结束则直接返回结果。--command 精确选择一次提交',
         params: [{ name: 'threadId', kind: 'literal', variadic: true }],
-        usage: 'watch <threadId> [threadId...]',
+        flags: ['--command='],
+        usage: 'watch <threadId> [threadId...] [--command=<commandId>]',
         adapter: { key: 'threads:watch' },
       },
       'result': {
@@ -118,10 +117,7 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
         adapter: { key: 'threads:deliver' },
       },
     },
-    // 派发语义可并行：一个批次内对多个无交集线程派发/监视（send 阻塞等落定），
-    // 并发执行把总耗时从"各次落定之和"降为"最慢一次"。副作用是线程作用域的
-    // 服务端操作，不同线程无冲突；同线程乱序由服务端结构化拒绝仲裁
-    // （409 thread_busy / thread_archived / duplicate），不会静默串数据。
+    // 不同线程的控制面操作允许并行；监视按指令身份隔离。
     parallelizable: true,
     // 显式排除动词的结构化指引（rotation_failed 残局需人工介入，与技能故障表一致）
     unknownVerbHints: {
