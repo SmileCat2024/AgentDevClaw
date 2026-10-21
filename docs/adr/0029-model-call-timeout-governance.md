@@ -14,7 +14,8 @@
 
 ### 1. 对话默认：首段 120s idle / 间隔 60s idle / 5 次重试
 
-- `DEFAULT_MODEL_TIMEOUT_MS = 60_000`：空闲语义不变（持续无远端活动才中止；思考期间 reasoning delta 持续流出的调用不受限）。chunk 间隔统一 60s 硬边界；空闲超时以 TimeoutError 中止，按中断处理**不重试**。
+- `DEFAULT_MODEL_TIMEOUT_MS = 60_000`：空闲语义不变（持续无远端活动才中止；思考期间 reasoning delta 持续流出的调用不受限）。chunk 间隔统一 60s 硬边界；空闲超时以 `TimeoutError` 结束，**不参与 LLM 客户端内重试**，分类为 `connection_timeout`，Call 终态为可重试失败，由宿主按 Feature 的网络重试策略决定是否开始下一段。用户主动取消保持 `AbortError` → cancelled，永不自动恢复。
+- SDK/fetch 边界以请求 signal 保留的原因判定中止来源：SDK 可能把超时改写为 `APIUserAbortError`，也可能吞掉流中的 `AbortError` 并正常结束迭代。适配器在 catch 和流迭代结束后核对 signal，避免超时落入 `unknown` 或被误报为成功；不能只靠 SDK 错误名称或消息判断。
 - `DEFAULT_MODEL_FIRST_TOKEN_TIMEOUT_MS = 120_000`（修订新增）：首段预算独立，约束"请求发出 → 第一个流式数据"。大上下文 + 高思考档位下首 token 静默经常超过 60s，60s 会误杀正常调用；响应头不算首 token（部分端点秒回 headers 后静默思考）。响应头与新 attempt 开始只重置当前段计时，首个数据 `touchData()` 把计时切换到间隔预算。
 - `DEFAULT_MODEL_MAX_RETRIES = 5`。
 - `ModelConfig.timeoutMs` 显式配置时管两段（首段 = 间隔）；缺省时两段分别取各自默认。preset / 实例级覆盖语义不变。
