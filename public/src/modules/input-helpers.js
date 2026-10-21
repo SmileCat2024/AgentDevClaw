@@ -54,7 +54,7 @@ function isInputViewTokenCurrent(token, runtimeId) {
 
 function commitInputViewPatch(token, patch, runtimeId) {
   if (token && typeof commitSessionViewState === 'function') {
-    return commitSessionViewState(token, () => applySessionViewPatch(patch));
+    return commitSessionViewPatch(token, patch);
   }
   if (currentRuntimeAgentId !== runtimeId) return false;
   applySessionViewPatch(patch);
@@ -152,6 +152,7 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
 async function _submitInputInner(requestId, targetRuntimeId, viewToken) {
   const textarea = document.getElementById(`input-${requestId}`);
   const input = textarea ? textarea.value : '';
+  const echoFromIndex = currentMessages.length;
   const targetCacheKey = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
   // 图片就绪：等待后台上传，并把宿主与发送目标不一致的附件转存过去。
   // 任何附件失败都显式中止（输入与预览保留，供用户重试），绝不静默丢弃
@@ -179,6 +180,17 @@ async function _submitInputInner(requestId, targetRuntimeId, viewToken) {
       return;
     }
     images = resolved.images;
+  }
+
+  // 准备阶段尚未投递；视图已切走时保留草稿，不能读取新会话的路由与引用。
+  if (!isInputViewTokenCurrent(viewToken, targetRuntimeId)) {
+    window.ClawToast?.show?.({
+      id: `input-navigation-${targetRuntimeId}`,
+      status: 'info',
+      title: currentLanguage === 'zh' ? '会话已切换，消息尚未发送' : 'Session changed; message not sent',
+      description: currentLanguage === 'zh' ? '草稿已保留，切回原会话后可重试。' : 'Your draft is preserved. Return to the original session to retry.',
+    });
+    return;
   }
 
   // ── 线程路由守卫（coder 工作空间）─────────────────────────────
@@ -329,6 +341,9 @@ async function _submitInputInner(requestId, targetRuntimeId, viewToken) {
       // 输入卡绑定其渲染时的 runtime；若提交过程中切换了会话，绝不能
       // 把旧 session 的成功结果写进新 session 的输入视图。
       if (isInputViewTokenCurrent(viewToken, targetRuntimeId)) {
+        window.ClawFW?.pushOptimisticUserEcho?.({
+          text: input, images, sessionReferences: sessionRefs, fromIndex: echoFromIndex,
+        });
         beginFollowLatestEntryWindow();
         requestFollowLatest({ forceEnable: true, behavior: 'auto' });
         // patch 写入即声明（工单 037）：乐观清空 inputRequests 自动触发
@@ -677,27 +692,6 @@ function _notifyActionSubmitFailed(actionId) {
     status: 'error',
     autoDismiss: 5000,
   });
-}
-
-function captureInputViewToken(runtimeId) {
-  return typeof captureSessionViewToken === 'function'
-    ? captureSessionViewToken(runtimeId)
-    : null;
-}
-
-function isInputViewTokenCurrent(token, runtimeId) {
-  return token && typeof isSessionViewTokenCurrent === 'function'
-    ? isSessionViewTokenCurrent(token)
-    : currentRuntimeAgentId === runtimeId;
-}
-
-function commitInputViewPatch(token, patch, runtimeId) {
-  if (token && typeof commitSessionViewState === 'function') {
-    return commitSessionViewState(token, () => applySessionViewPatch(patch));
-  }
-  if (currentRuntimeAgentId !== runtimeId) return false;
-  applySessionViewPatch(patch);
-  return true;
 }
 
 async function submitInputAction(requestId, actionId, payload = {}, boundRuntimeId = currentRuntimeAgentId, boundViewToken = null) {

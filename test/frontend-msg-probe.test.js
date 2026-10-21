@@ -232,6 +232,72 @@ function messageCalls(fetchCalls) {
   return fetchCalls.filter((url) => url.includes('/messages'));
 }
 
+test('late message response cannot hide a user message already delivered by SSE', async () => {
+  const harness = createSandbox({ initialMessages: [msg('previous reply')] });
+  const { sandbox } = harness;
+  const pending = [];
+  sandbox.fetch = () => new Promise((resolve) => pending.push(resolve));
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/sse-client.js', import.meta.url), 'utf8'), sandbox);
+  const user = { role: 'user', content: 'new user input' };
+  const rendered = [];
+  sandbox.appendNewMessages = (messages) => rendered.push(...messages);
+  sandbox.renderCurrentMainView = () => { rendered.splice(0, rendered.length, ...sandbox.currentMessages); };
+
+  const old = sandbox.runMessagesProbeCycle(sandbox.captureSessionViewToken(), {
+    seq: 1, count: 1, changeKind: 'tail',
+  });
+  sandbox.handleMessagesEvent({ agentId: 'rt', probe: { seq: 2, count: 2, changeKind: 'append' } });
+  assert.equal(pending.length, 2);
+  pending[1]({ status: 200, json: async () => ({ messages: [msg('previous reply updated'), user] }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(rendered.some((message) => message.content === user.content));
+  pending[0]({ status: 200, json: async () => ({ messages: [msg('previous reply updated')] }) });
+  await old;
+  assert.ok(sandbox.currentMessages.some((message) => message.content === user.content),
+    'an older response must not remove the newly visible user message');
+  assert.ok(rendered.some((message) => message.content === user.content),
+    'the user message must remain visible without a page refresh');
+});
+
+test('worker seq reset rebuilds messages instead of rejecting all future probes', async () => {
+  const { sandbox } = createSandbox({ initialMessages: [msg('old runtime data')] });
+  sandbox.fetch = async () => ({ status: 200, json: async () => ({ messages: [msg('baseline')] }) });
+  await sandbox.runMessagesProbeCycle(sandbox.captureSessionViewToken(), { seq: 50, count: 1, changeKind: 'rewrite' });
+  sandbox.fetch = async () => ({ status: 200, json: async () => ({ messages: [] }) });
+  assert.equal(await sandbox.runMessagesProbeCycle(sandbox.captureSessionViewToken(), {
+    seq: 0, count: 0, changeKind: 'rewrite',
+  }), 'committed');
+  assert.deepEqual(plain(sandbox.currentMessages), []);
+});
+
+for (const finishNewFirst of [false, true]) {
+  test(`concurrent tail and append keep the updated prefix (new first=${finishNewFirst})`, async () => {
+    const { sandbox } = createSandbox({ initialMessages: [msg('streaming')] });
+    const pending = [];
+    sandbox.fetch = (url) => new Promise((resolve) => pending.push({ url, resolve }));
+    const token = sandbox.captureSessionViewToken();
+    const older = sandbox.runMessagesProbeCycle(token, { seq: 1, count: 1, changeKind: 'tail' });
+    const newer = sandbox.runMessagesProbeCycle(token, { seq: 2, count: 2, changeKind: 'append' });
+    const reply = (index, messages) => pending[index].resolve({ status: 200, json: async () => ({ messages }) });
+    if (finishNewFirst) {
+      // seq=2 follows an unapplied tail change: fetching just the append delta
+      // would keep the stale prefix even though the latest seq is marked applied.
+      assert.ok(pending[1].url.endsWith('/messages'), 'a skipped seq needs a full baseline');
+      reply(1, [msg('done'), msg('next')]);
+      await newer;
+      reply(0, [msg('done')]);
+    } else {
+      reply(0, [msg('done')]);
+      await older;
+      reply(1, [msg('next')]);
+      await new Promise((resolve) => setImmediate(resolve));
+      reply(2, [msg('next')]);
+    }
+    await Promise.all([older, newer]);
+    assert.deepEqual(plain(sandbox.currentMessages), [msg('done'), msg('next')]);
+  });
+}
+
 // ── Four fetch paths ──────────────────────────────────────────
 
 test('unchanged probe skips the /messages request and reuses the known array', async () => {

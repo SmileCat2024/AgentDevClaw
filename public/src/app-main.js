@@ -1205,9 +1205,10 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
     : pollRuntimeId;
   const appliedSeq = _appliedMessagesSeq.get(sessionViewKey) || 0;
   const seqAdvanced = msgProbe ? msgProbe.seq > appliedSeq : true;
-  if (!msgProbe || msgProbe.count < prevKnownCount || (msgProbe.count > 0 && prevKnownCount === 0)) {
-    // 探测不可用（probe 缺省 / 首次加载 / 拼接基线缺失），或 probe.count 回退
-    // （Worker 重启 / 修剪）→ 全量拉一次重建基线，下周期恢复探测。
+  if (!msgProbe || msgProbe.seq < appliedSeq || msgProbe.seq > appliedSeq + 1
+    || msgProbe.count < prevKnownCount || (msgProbe.count > 0 && prevKnownCount === 0)) {
+    // probe 缺省、基线缺失、seq 重置/跨代或 count 回退 → 全量重建。
+    // changeKind 只描述最后一次变化；跳过 seq 时，增量不能保证旧前缀有效。
     if (msgProbe && msgProbe.count < prevKnownCount) msgMetrics.downgraded = true;
     const result = await fetchMessagesJson('');
     if (result.handled404) return 'handled404';
@@ -1273,13 +1274,17 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
     msgMetrics.actualBytes += computeSerializedBytes(result.data);
   }
 
-  // 取数成功（含降级）→ 记录已应用的 seq。放 commit 之后会让"commit 被
-  // stale check 拒绝"的周期丢失 seq 进度，但那些周期本来就已放弃本次
-  // 渲染，下周期 count 对账仍会兜底；这里先记，避免同 seq 被重复取数。
-  if (!isSessionViewTokenCurrent(pollToken)) {
-    return 'stale';
+  // SSE 与 poll 可以并发取数。只允许尚未被更新消息超越的响应提交；
+  // 身份 token 仍有效不代表本次使用的消息基线仍有效。
+  if (!isSessionViewTokenCurrent(pollToken)) return 'stale';
+  const latestAppliedSeq = _appliedMessagesSeq.get(sessionViewKey) || 0;
+  if (msgProbe && latestAppliedSeq !== appliedSeq && msgProbe.seq <= latestAppliedSeq) return 'stale';
+  if (currentMessages !== prevKnownMessages) {
+    if (msgProbe && msgProbe.seq <= latestAppliedSeq) return 'stale';
+    // 更新的 probe 仍待应用，但增量的旧前缀已失效：用已提交的基线重新
+    // 求值取数策略。保留原身份 token，不能跨过会话切换边界。
+    return runMessagesProbeCycle(pollToken, msgProbe);
   }
-  _appliedMessagesSeq.set(sessionViewKey, msgProbe ? msgProbe.seq : 0);
   const messagesCommitted = commitSessionViewPatch(pollToken, { messages }, ({ previous, current }) => {
     // Clear session loading indicator once messages are available
     if (current.messages.length > 0) clearChatLoadingSession();
@@ -1323,6 +1328,8 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
   if (!messagesCommitted) {
     return 'stale';
   }
+  // seq 只描述已经成功提交并渲染的消息，不为被拒绝的响应推进进度。
+  _appliedMessagesSeq.set(sessionViewKey, msgProbe ? msgProbe.seq : 0);
   emitMsgMetrics(msgMetrics);
   return 'committed';
 }

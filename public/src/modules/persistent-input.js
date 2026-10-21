@@ -679,6 +679,8 @@ async function submitQueuedInput() {
   const sessionReferenceCount = (window.SessionReference?.peek?.() || []).length;
   if (!text && _imageBucket().length === 0 && sessionReferenceCount === 0) return;
   const targetRuntimeId = currentRuntimeAgentId;
+  const viewToken = captureSessionViewToken(targetRuntimeId);
+  const echoFromIndex = currentMessages.length;
   // 一致性校验后的线程输入目标（getActiveThreadInputTarget）：全局指向与
   // 当前视图不符（用户已切走、残留未清）时为 null——消息走当前视图常规
   // 路径，绝不串到别的线程（会话绝对隔离）。
@@ -711,6 +713,16 @@ async function submitQueuedInput() {
         : 'Some image uploads failed: retry or remove the failed attachments');
     }
     const images = resolved.images;
+    // 准备阶段尚未投递；导航后保留原草稿，不读取新会话的线程或附件。
+    if (!isSessionViewTokenCurrent(viewToken)) {
+      window.ClawToast?.show?.({
+        id: `input-navigation-${targetRuntimeId}`,
+        status: 'info',
+        title: currentLanguage === 'zh' ? '会话已切换，消息尚未发送' : 'Session changed; message not sent',
+        description: currentLanguage === 'zh' ? '草稿已保留，切回原会话后可重试。' : 'Your draft is preserved. Return to the original session to retry.',
+      });
+      return;
+    }
 
     if (activeConversation?.threadId && typeof window.submitThreadInput === 'function') {
       sessionRefs = window.SessionReference?.consume?.() || [];
@@ -837,9 +849,12 @@ async function submitQueuedInput() {
       }
       clearPendingInputImages(targetImageKey);
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
-      _clearRecapForNewMessage();
-      beginFollowLatestEntryWindow();
-      requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+      const stillOwnsView = isSessionViewTokenCurrent(viewToken);
+      if (stillOwnsView) {
+        _clearRecapForNewMessage();
+        beginFollowLatestEntryWindow();
+        requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+      }
       // 只有当 agent 正在 calling 时才显示排队气泡。
       // agent 空闲时后端会立即消费输入，不需要排队指示。
       if (delivery.delivery === 'thread_queued') {
@@ -869,12 +884,11 @@ async function submitQueuedInput() {
       } else if (delivery.delivery === 'queued') {
         // SSE 乱序防护（F5）：事件帧先到时快照已含该排队项，POST 响应后到
         // 不再乐观 push，避免气泡瞬时重复（约 1s 才能对账消除）
-        const snapshotAlreadyHasIt = delivery.id
-          && window.ClawFW?.SseClient?.getLastQueuedSnapshot
-          && (window.ClawFW.SseClient.getLastQueuedSnapshot(targetRuntimeId)?.items || [])
-            .some((item) => item?.id === delivery.id);
-        if (!snapshotAlreadyHasIt
-          && String(targetRuntimeId || '').trim() === String(currentRuntimeAgentId || '').trim()) {
+        const queueClient = window.ClawFW?.SseClient;
+        const queueText = text || (images.length ? '🖼' : '') || ' ';
+        const shouldProject = !delivery.id || !queueClient?.noteQueuedOptimistic
+          || queueClient.noteQueuedOptimistic(delivery.id, queueText, targetRuntimeId);
+        if (shouldProject && stillOwnsView) {
           // 乐观气泡只写入提交目标的投影：await 期间用户可能已切走，新会话
           // 的输入面不冒出本会话的排队文本（服务端队列与 SSE 乐观锚点仍
           // 完整记录，切回时经快照恢复）。
@@ -882,19 +896,15 @@ async function submitQueuedInput() {
           _pendingQueuedCount++;
           _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
         }
-        // 乐观锚点（SSE §5.5）：响应携带服务端排队 id，供 queued-inputs 事件
-        // 快照按 id 对账（无 SSE 时为 no-op，气泡由轮询快照自然覆盖）
-        if (window.ClawFW?.SseClient?.noteQueuedOptimistic && delivery.id) {
-          window.ClawFW.SseClient.noteQueuedOptimistic(
-            delivery.id, text || (images && images.length ? '🖼' : '') || ' ', targetRuntimeId);
-        }
         updateQueueIndicator();
       } else if (targetRuntimeId) {
         // 空闲直投（lease / 即时消费）：乐观回显先上屏，真实消息经
         // poll 回流后由对账无缝替换；排队路径走上方气泡，不回显。
         // 引用 chips 只随乐观气泡呈现（服务端消息不持久化引用字段，
         // 引用的持久化产物是随后出现的 session-reference reminder）
-        window.ClawFW?.pushOptimisticUserEcho?.({ text, images, sessionReferences: sessionRefs });
+        if (stillOwnsView) {
+          window.ClawFW?.pushOptimisticUserEcho?.({ text, images, sessionReferences: sessionRefs, fromIndex: echoFromIndex });
+        }
         clearInterruptSuppression(targetRuntimeId);
         _markAgentCallStartedForNotify(targetRuntimeId);
         _agentCallActive.set(targetRuntimeId, true);
@@ -990,7 +1000,9 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
   // Always update model switcher regardless of queue/runtime state
   updateInputModelSwitcher();
   updateThinkingEffortSwitcher();
-  const prevQueueSignature = JSON.stringify(_queuedTexts);
+  const viewToken = captureSessionViewToken(runtimeId);
+  const queueClient = window.ClawFW?.SseClient;
+  const snapshotBeforeFetch = queueClient?.getLastQueuedSnapshot?.(runtimeId);
   try {
     if (!runtimeId) {
       _queuedTexts = [];
@@ -1019,6 +1031,9 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
     const res = await fetch(`/api/agents/${expectedRuntimeId}/queued-inputs`);
     if (!res.ok || expectedRuntimeId !== currentRuntimeAgentId) return;
     const data = await res.json();
+    if (!isSessionViewTokenCurrent(viewToken)) return;
+    // 请求期间 SSE 已带来更新的观察，HTTP 快照不再拥有队列写入权。
+    if (queueClient?.getLastQueuedSnapshot?.(expectedRuntimeId) !== snapshotBeforeFetch) return;
     const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
     // 同上：reminder（机器通报）不进待发送气泡与待发送计数
     const userQueue = queue.filter((item) => item?.kind !== 'reminder');
@@ -1031,9 +1046,9 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
       })
       .filter(Boolean);
 
-    if (JSON.stringify(viewerQueueTexts) !== prevQueueSignature) {
-      applyQueuedInputsTexts(expectedRuntimeId, viewerQueueTexts, userQueue.length);
-    }
+    // 即使文本相同也消费权威计数与排空事实；DOM 去重由渲染器负责。
+    queueClient?.reconcileQueuedTexts?.(queue, Date.now(), expectedRuntimeId);
+    applyQueuedInputsTexts(expectedRuntimeId, viewerQueueTexts, userQueue.length);
   } catch (e) {
     // ignore transient queue sync failures
   } finally {

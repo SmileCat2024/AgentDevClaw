@@ -43,6 +43,9 @@ const _lastQueuedSnapshots = new Map(); // runtimeId -> { runtimeId, items, at }
 // 提交目标 runtime，对账只作用于同 runtime 的快照——提交后切走的乐观
 // 文本不得拼进其他会话的排队气泡（TTL 兜底回收）。
 const _optimisticQueued = new Map();
+// 保留已观察到的排队身份：排队→消费事件可能都早于 POST 回执。
+// 最新空快照只说明现在已排空，不能抹掉这条输入已经被观察的事实。
+const _observedQueuedIds = new Map(); // id -> runtimeId
 const OPTIMISTIC_QUEUED_TTL_MS = 10000;
 
 // ── thread 事件订阅（ADR-0024 PR-2：仅订阅层，流视图后续工单消费）──
@@ -216,8 +219,9 @@ function handleQueuedInputsEvent(frame) {
   const items = Array.isArray(frame?.data) ? frame.data : [];
   const snapshot = { runtimeId, items, at: Date.now() };
   _lastQueuedSnapshots.set(runtimeId, snapshot);
-  if (!isSameRuntime(runtimeId, currentRuntimeAgentId)) return;
+  // 非焦点快照也确认乐观锚点，避免离开期间已消费、切回后气泡复活。
   const texts = reconcileQueuedTexts(items, Date.now(), runtimeId);
+  if (!isSameRuntime(runtimeId, currentRuntimeAgentId)) return;
   if (typeof applyQueuedInputsTexts === 'function') {
     applyQueuedInputsTexts(runtimeId, texts, items.filter(isUserQueuedItem).length);
   }
@@ -306,7 +310,11 @@ function reconcileQueuedTexts(items, nowMs = Date.now(), runtimeId = currentRunt
   const snapshotTexts = [];
   for (const item of Array.isArray(items) ? items : []) {
     if (!isUserQueuedItem(item)) continue;
-    if (typeof item?.id === 'string' && item.id) snapshotIds.add(item.id);
+    if (typeof item?.id === 'string' && item.id) {
+      snapshotIds.add(item.id);
+      _observedQueuedIds.set(item.id, scopedRuntimeId);
+      if (_observedQueuedIds.size > 1000) _observedQueuedIds.delete(_observedQueuedIds.keys().next().value);
+    }
     const t = typeof item?.text === 'string' ? item.text.trim() : '';
     if (t) snapshotTexts.push(t);
     else if (Array.isArray(item?.images) && item.images.length > 0) snapshotTexts.push('🖼');
@@ -331,12 +339,15 @@ function reconcileQueuedTexts(items, nowMs = Date.now(), runtimeId = currentRunt
 }
 
 function noteQueuedOptimistic(id, text, runtimeId) {
-  if (!id) return;
+  if (!id) return false;
+  const scopedRuntimeId = String(runtimeId ?? currentRuntimeAgentId ?? '').trim();
+  if (_observedQueuedIds.get(id) === scopedRuntimeId) return false;
   _optimisticQueued.set(id, {
     text: text || ' ',
     ts: Date.now(),
-    runtimeId: String(runtimeId ?? currentRuntimeAgentId ?? '').trim(),
+    runtimeId: scopedRuntimeId,
   });
+  return true;
 }
 
 function getLastQueuedSnapshot(runtimeId) {

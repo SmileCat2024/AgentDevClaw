@@ -737,6 +737,245 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
   });
 });
 
+function loadQueueSubmitPaths(ctx) {
+  const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+  ctx.run(source.slice(source.indexOf('function _interactiveSurfaceOccupiesInput()'), source.indexOf('function _renderLastCallElapsed()')));
+  ctx.run(source.slice(source.indexOf('function _renderQueueBubbles(container)'), source.indexOf('function handlePersistentInputKey')));
+  ctx.run(source.slice(source.indexOf('async function submitQueuedInput()'), source.indexOf('// 返回 { ok }')));
+  ctx.run(`
+    var _submitInFlight = false;
+    var _persistentUiSyncInFlight = false;
+    function _requestNotifyPermission() {}
+    function _imageBucketKey() { return 'images-a'; }
+    function _imageBucket() { return []; }
+    function _beginSubmitFeedbackWindow() {}
+    function _endSubmitFeedbackWindow() {}
+    async function _nextPaint() {}
+    async function _resolvePendingImagesForTarget() { return { images: [], failedCount: 0 }; }
+    function clearPendingInputImages() {}
+    function _clearRecapForNewMessage() {}
+    function beginFollowLatestEntryWindow() {}
+    function requestFollowLatest() {}
+    function newIdempotencyKey() { return 'test-key'; }
+    function isRuntimeCalling(id) { return !!_agentCallActive.get(id); }
+  `);
+  ctx.window.__clawAuthReady = new Promise(() => {});
+  ctx.loadSource('public/src/modules/sse-client.js');
+}
+
+function queueBubbleTexts(ctx) {
+  return ctx.state.container.querySelectorAll('.queue-bubble').map((el) => el.textContent);
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+it('late queued POST receipt does not resurrect a consumed bubble in the live input DOM', async () => {
+  const ctx = createConvergenceSandbox();
+  ctx.run('renderInputRequests([])');
+  loadQueueSubmitPaths(ctx);
+  const receipt = deferred();
+  ctx.fetch = () => receipt.promise;
+  ctx.run("document.getElementById('input-persistent').value = 'fast queued message'");
+  const submit = ctx.run('submitQueuedInput()');
+  await new Promise((resolve) => setImmediate(resolve));
+  ctx.run(`handleQueuedInputsEvent({ agentId: 'agent-1', data: [{ id: 'q-fast', text: 'fast queued message' }] });
+    handleQueuedInputsEvent({ agentId: 'agent-1', data: [] });`);
+  receipt.resolve({ ok: true, json: async () => ({ delivery: 'queued', id: 'q-fast' }) });
+  await submit;
+  assert.deepEqual(queueBubbleTexts(ctx), [], 'already consumed input must not return to the staging stack');
+});
+
+it('empty queue response clears a bubble added while the response was in flight', async () => {
+  const ctx = createConvergenceSandbox();
+  ctx.run('renderInputRequests([])');
+  loadQueueSubmitPaths(ctx);
+  const response = deferred();
+  ctx.fetch = () => response.promise;
+  const sync = ctx.run('_syncPersistentInputUi()');
+  ctx.run(`_queuedTexts = ['already consumed']; _pendingQueuedCount = 1;
+    _localQueuedInputPending = true; _queuedProjectionRuntimeId = 'agent-1'; updateQueueIndicator();`);
+  assert.deepEqual(queueBubbleTexts(ctx), ['already consumed']);
+  response.resolve({ ok: true, json: async () => [] });
+  await sync;
+  assert.deepEqual(queueBubbleTexts(ctx), [], 'compare the response against live state, not the pre-request signature');
+  assert.equal(ctx.run('_localQueuedInputPending'), false);
+});
+
+it('late HTTP queue snapshot cannot restore bubbles consumed by a newer SSE event', async () => {
+  const ctx = createConvergenceSandbox();
+  ctx.run('renderInputRequests([])');
+  loadQueueSubmitPaths(ctx);
+  const body = deferred();
+  ctx.fetch = async () => ({ ok: true, json: () => body.promise });
+  const sync = ctx.run('_syncPersistentInputUi()');
+  await new Promise((resolve) => setImmediate(resolve));
+  ctx.run(`handleQueuedInputsEvent({ agentId: 'agent-1', data: [] });`);
+  body.resolve([{ id: 'old-q', text: 'already consumed' }]);
+  await sync;
+  assert.deepEqual(queueBubbleTexts(ctx), [], 'newer SSE queue state must remain visible');
+});
+
+it('queue body from an earlier visit cannot restore bubbles after A to B to A', async () => {
+  const ctx = createConvergenceSandbox();
+  ctx.run('renderInputRequests([])');
+  loadQueueSubmitPaths(ctx);
+  const body = deferred();
+  ctx.fetch = async () => ({ ok: true, json: () => body.promise });
+  const sync = ctx.run('_syncPersistentInputUi()');
+  await new Promise((resolve) => setImmediate(resolve));
+  ctx.run(`applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'B' } });
+    applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'A' } });`);
+  body.resolve([{ id: 'stale', text: 'old visit' }]);
+  await sync;
+  assert.deepEqual(queueBubbleTexts(ctx), []);
+});
+
+it('off-focus queue confirmation clears optimistic anchors before switching back', () => {
+  const ctx = createConvergenceSandbox();
+  loadQueueSubmitPaths(ctx);
+  ctx.run(`noteQueuedOptimistic('q-away', 'sent while away', 'agent-1');
+    currentRuntimeAgentId = 'agent-2';
+    handleQueuedInputsEvent({ agentId: 'agent-1', data: [{ id: 'q-away', text: 'sent while away' }] });
+    handleQueuedInputsEvent({ agentId: 'agent-1', data: [] });
+    currentRuntimeAgentId = 'agent-1';`);
+  assert.equal(ctx.run("reconcileQueuedTexts([], Date.now(), 'agent-1').length"), 0);
+});
+
+it('direct POST receipt after switching sessions cannot echo or scroll in the other session', async () => {
+  const ctx = createConvergenceSandbox();
+  ctx.run('renderInputRequests([])');
+  loadQueueSubmitPaths(ctx);
+  const receipt = deferred();
+  ctx.fetch = () => receipt.promise;
+  const echoes = [];
+  ctx.window.ClawFW.pushOptimisticUserEcho = (value) => echoes.push(value);
+  let followCalls = 0;
+  ctx.beginFollowLatestEntryWindow = () => { followCalls += 1; };
+  ctx.clearInterruptSuppression = () => {};
+  ctx._markAgentCallStartedForNotify = () => {};
+  ctx.renderAgentList = () => {};
+  ctx.run("document.getElementById('input-persistent').value = 'message for A'");
+  const submit = ctx.run('submitQueuedInput()');
+  await new Promise((resolve) => setImmediate(resolve));
+  ctx.currentRuntimeAgentId = 'agent-2';
+  ctx.state.liveKey = 'session-b';
+  ctx.run('applySessionViewPatch({ inputRequests: [] })');
+  const textarea = ctx.run("document.getElementById('input-persistent')");
+  textarea.value = 'draft B';
+  receipt.resolve({ ok: true, json: async () => ({ delivery: 'direct' }) });
+  await submit;
+  assert.deepEqual(echoes, [], 'A must not appear in B');
+  assert.equal(followCalls, 0, 'A must not force B to scroll');
+  assert.equal(textarea.value, 'draft B');
+});
+
+function loadEchoPaths(ctx) {
+  const source = fs.readFileSync('public/src/modules/chat-renderer.js', 'utf8');
+  ctx.run(source.slice(source.indexOf('let _optimisticEchoes'), source.indexOf('// 更新最后一条消息')));
+  const chat = ctx.document.createElement('div');
+  ctx.state.doc.body.appendChild(chat);
+  ctx.container = chat;
+  ctx.renderMarkdown = (text) => text;
+  ctx.renderUserImages = () => '';
+  ctx.renderSessionReferenceChips = () => '';
+  ctx.enhanceMathInElement = () => {};
+  ctx.enhanceMarkdownTables = () => {};
+  ctx.updateFollowLatestButton = () => {};
+  return chat;
+}
+
+it('echo does not disappear against a repeated older user message', () => {
+  const ctx = createConvergenceSandbox();
+  const chat = loadEchoPaths(ctx);
+  ctx.run(`currentMessages = [{ role: 'user', content: 'again' }];
+    pushOptimisticUserEcho({ text: 'again', fromIndex: 1 });
+    reconcileOptimisticUserEchoes(currentMessages);`);
+  assert.equal(chat.children.length, 1, 'only a message after submission can confirm this echo');
+  ctx.run(`currentMessages = [...currentMessages, { role: 'user', content: 'again' }];
+    reconcileOptimisticUserEchoes(currentMessages);`);
+  assert.equal(chat.children.length, 0);
+});
+
+it('image-only echoes require the same attachment and survive long message bursts', () => {
+  const ctx = createConvergenceSandbox();
+  const chat = loadEchoPaths(ctx);
+  ctx.run(`currentMessages = [];
+    pushOptimisticUserEcho({ text: ' ', images: [{ path: 'new.png' }], fromIndex: 0 });
+    reconcileOptimisticUserEchoes([{ role: 'user', content: ' ', images: [{ path: 'old.png' }] }]);`);
+  assert.equal(chat.children.length, 1);
+  ctx.run(`reconcileOptimisticUserEchoes([
+    { role: 'user', content: ' ', images: [{ path: 'new.png' }] },
+    ...Array.from({ length: 20 }, () => ({ role: 'assistant', content: 'activity' }))
+  ]);`);
+  assert.equal(chat.children.length, 0, 'confirmation is not lost beyond a fixed tail window');
+});
+
+it('real message preceding the POST receipt does not leave a duplicate echo', () => {
+  const ctx = createConvergenceSandbox();
+  const chat = loadEchoPaths(ctx);
+  ctx.run(`currentMessages = [{ role: 'user', content: 'already arrived' }];
+    pushOptimisticUserEcho({ text: 'already arrived', fromIndex: 0 });`);
+  assert.equal(chat.children.length, 0, 'the already visible real message is sufficient');
+});
+
+it('slot text submission provides immediate echo without waiting for a poll', async () => {
+  const ctx = createConvergenceSandbox();
+  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'slot' }] })`);
+  loadQueueSubmitPaths(ctx);
+  ctx.loadSource('public/src/modules/input-helpers.js');
+  ctx.run(`function beginFollowLatestEntryWindow() {} function requestFollowLatest() {}
+    function clearInterruptSuppression() {} function _markAgentCallStartedForNotify() {}
+    function renderAgentList() {} function poll() {}`);
+  const echoes = [];
+  ctx.window.ClawFW.pushOptimisticUserEcho = (value) => echoes.push(value);
+  ctx.run("document.getElementById('input-slot').value = 'slot input'");
+  ctx.fetch = async () => ({ ok: true });
+  await ctx.run("submitInput('slot')");
+  assert.equal(echoes.length, 1);
+  assert.equal(echoes[0].text, 'slot input');
+  assert.equal(echoes[0].fromIndex, 0);
+});
+
+it('switching sessions during image preparation cannot reroute A input to B thread', async () => {
+  const ctx = createConvergenceSandbox();
+  ctx.run('renderInputRequests([])');
+  loadQueueSubmitPaths(ctx);
+  const ready = deferred();
+  ctx._resolvePendingImagesForTarget = () => ready.promise;
+  const sends = [];
+  ctx.fetch = async (url) => { sends.push(url); return { ok: true, json: async () => ({}) }; };
+  ctx.window.submitThreadCommand = async (threadId) => { sends.push(threadId); return {}; };
+  ctx.run("document.getElementById('input-persistent').value = 'A input'");
+  const submit = ctx.run('submitQueuedInput()');
+  await new Promise((resolve) => setImmediate(resolve));
+  ctx.currentRuntimeAgentId = 'agent-2';
+  ctx.state.liveKey = 'session-b';
+  ctx.window.resolveThreadInputRoute = () => ({ route: 'thread', thread: { threadId: 'B-thread' } });
+  ready.resolve({ images: [], failedCount: 0 });
+  await submit;
+  assert.deepEqual(sends, [], 'a navigation during preparation leaves A draft unsent');
+});
+
+it('action receipt cannot clear a newer input lease in the same session', async () => {
+  const ctx = createConvergenceSandbox();
+  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'old' }] })`);
+  ctx.loadSource('public/src/modules/input-helpers.js');
+  ctx.run(`function beginFollowLatestEntryWindow() {} function requestFollowLatest() {}
+    function clearInterruptSuppression() {} function _markAgentCallStartedForNotify() {}
+    function renderAgentList() {} function poll() {}`);
+  const receipt = deferred();
+  ctx.fetch = () => receipt.promise;
+  const submit = ctx.run("submitInputAction('old', 'proceed')");
+  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'new' }] })`);
+  receipt.resolve({ ok: true });
+  await submit;
+  assert.equal(ctx.run('currentInputRequests[0]?.requestId'), 'new');
+});
+
 // ── 收敛断言：手动戳协议灭绝（源码级锁死） ──────────────────────────────────
 
 const FILES_OUTSIDE_RENDERER = [

@@ -235,6 +235,8 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
     isChatSurfaceActive: () => true,
     isRemoteNamespaceAgentId: () => false,
     readCurrentSessionViewState: () => ({ inputRequests: state.requests }),
+    captureSessionViewToken: (runtimeId) => ({ runtimeId, key: state.liveKey }),
+    isSessionViewTokenCurrent: (token) => token.runtimeId === ctx.currentRuntimeAgentId && token.key === state.liveKey,
     runWithSuppressedChatViewportObservers: (fn) => fn(),
     notifyChatViewportMutation: () => {},
     isChoiceInputRequest: (req) => !!req && req.mode === 'choices'

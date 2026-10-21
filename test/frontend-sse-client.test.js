@@ -523,6 +523,15 @@ describe('sse-client: 排队气泡乐观对账（reconcileQueuedTexts）', () =>
     assert.deepEqual(second, []);
   });
 
+  it('排队与消费事件先于 POST 回执到达：迟到回执不能复活已发送气泡', () => {
+    const ctx = fresh();
+    ctx.run(`handleQueuedInputsEvent({ agentId: 'rt-focus', data: [{ id: 'q-fast', text: '已发送' }] });
+      handleQueuedInputsEvent({ agentId: 'rt-focus', data: [] });
+      noteQueuedOptimistic('q-fast', '已发送', 'rt-focus');`);
+    assert.deepEqual(runJson(ctx, `reconcileQueuedTexts(getLastQueuedSnapshot('rt-focus').items)`), [],
+      'the consumed message must not remain staged until TTL or page refresh');
+  });
+
   it('快照不含乐观 id 且未超 TTL → 乐观文本保留追加', () => {
     const ctx = fresh();
     ctx.run('window.ClawFW.SseClient.noteQueuedOptimistic("q-9", "还在等")');
