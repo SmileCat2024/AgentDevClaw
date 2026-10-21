@@ -36,6 +36,7 @@ import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { runCollectedSpawn } from '../dispatch.js';
+import type { CommandResult } from '../dispatch.js';
 import { PLAYWRIGHT_ENV_FIX_GUIDANCE } from './playwright-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -145,7 +146,7 @@ export function migrateLegacyBrowsersRoot(nextRoot: string, legacyRoot: string):
   }
 }
 
-export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<string, (args: string[], context?: PlaywrightAdapterContext) => Promise<string>> {
+export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<string, (args: string[], context?: PlaywrightAdapterContext) => Promise<string | CommandResult>> {
   const workdir = expandDir(deps.workdir ?? process.cwd());
   const spawnImpl: SpawnLike = deps.spawnImpl
     ?? (async (command, args, options) => {
@@ -601,12 +602,12 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
     ].join('\n');
   }
 
-  function terminatedReport(verb: string, run: BackendRunResult): string {
-    return [
+  function terminatedReport(verb: string, run: BackendRunResult): CommandResult {
+    return { ok: false, terminated: true, output: [
       `terminated ${verb}`,
       '渲染被终止（超时或用户打断），浏览器子进程已随进程组回收。',
       run.stdout.trim() ? `partial stdout: ${run.stdout.trim().slice(0, MAX_STDERR_CHARS)}` : '',
-    ].filter(Boolean).join('\n');
+    ].filter(Boolean).join('\n') };
   }
 
   /** 产物动词成功报文：路径 + 字节数等元数据，不回灌大块输出。 */
@@ -652,7 +653,7 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
     return { name, dir, warnings };
   }
 
-  async function renderVerb(sub: 'screenshot' | 'pdf', args: string[], context?: PlaywrightAdapterContext): Promise<string> {
+  async function renderVerb(sub: 'screenshot' | 'pdf', args: string[], context?: PlaywrightAdapterContext): Promise<string | CommandResult> {
     const { positional, tailFlags } = stripTailFlags(args, [
       '--full-page', '--ignore-https-errors', '--profile=',
       '--viewport-size=', '--color-scheme=', '--wait-for-timeout=', '--paper-format=',
@@ -698,7 +699,7 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
     return successReport();
   }
 
-  async function harVerb(args: string[], context?: PlaywrightAdapterContext): Promise<string> {
+  async function harVerb(args: string[], context?: PlaywrightAdapterContext): Promise<string | CommandResult> {
     const { positional, tailFlags } = stripTailFlags(args, [
       '--ignore-https-errors', '--profile=',
       '--viewport-size=', '--color-scheme=', '--wait-for-timeout=',
@@ -795,7 +796,7 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
 
   /** 会话动词转发：spawn 官方 CLI 子命令，输出直接回模型（### Page / ### Snapshot 结构化文本）。
    *  cliSub：动词名与 CLI 子命令不一致时显式指定（如 capture → screenshot）。 */
-  async function forwardSessionVerb(verb: string, args: string[], context?: PlaywrightAdapterContext, cliSub?: string): Promise<string> {
+  async function forwardSessionVerb(verb: string, args: string[], context?: PlaywrightAdapterContext, cliSub?: string): Promise<string | CommandResult> {
     if (verb === 'close') activeProfileName = null;
     if (verb === 'goto' || verb === 'tab-new') {
       if (!validateUrl(args[0])) {
@@ -821,7 +822,8 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
       env: backendEnv(),
     });
     if (run.terminated) {
-      return `terminated ${verb}\n命令被终止（超时或用户打断）；会话浏览器进程独立存活，可重试或用 close 收尾。\npartial stdout: ${firstLine(run.stdout)}`;
+      return { ok: false, terminated: true,
+        output: `terminated ${verb}\n命令被终止（超时或用户打断）；会话浏览器进程独立存活，可重试或用 close 收尾。\npartial stdout: ${firstLine(run.stdout)}` };
     }
     const output = `${run.stdout}${run.stderr ? `\n${run.stderr}` : ''}`.trim();
     if (!run.ok) {
@@ -842,7 +844,7 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
       || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
   }
 
-  async function openVerb(args: string[], context?: PlaywrightAdapterContext): Promise<string> {
+  async function openVerb(args: string[], context?: PlaywrightAdapterContext): Promise<string | CommandResult> {
     // open 的 flags（--headed / --browser=chrome / --profile=name）已在参数道
     // 剥离校验，透传给官方 CLI；URL 同产物动词的 scheme 校验。
     const { positional, tailFlags } = stripTailFlags(args, ['--headed', '--browser=', '--profile=']);
@@ -851,13 +853,13 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
       throw new Error(failureReport('open', invalidUrlReason(url), ''));
     }
     if (tailFlags.includes('--headed') && !hasHeadedDisplay()) {
-      return [
+      throw new Error([
         'open 失败',
         'headed 模式需要显示环境：当前进程没有可用的桌面显示。',
         'Windows/macOS 桌面会自动使用系统显示；Linux 请在带 DISPLAY 或 WAYLAND_DISPLAY 的环境运行 agent；',
         '无桌面 Linux 服务器可由人工用 xvfb-run 包裹（虚拟显示，窗口无人观看，仅用于兼容站点检测或人工接管）。',
         'headless（默认）不受影响，绝大多数取证与会话任务无需 --headed。',
-      ].join('\n');
+      ].join('\n'));
     }
     // --profile=<名称>：持久化登录档案，与产物动词共用同一解析（白名单校验 +
     // 档案目录创建 + 会话级 cookie 保活，见 resolveProfileDir）。open 以绝对

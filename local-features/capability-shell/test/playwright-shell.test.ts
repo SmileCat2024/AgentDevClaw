@@ -850,7 +850,7 @@ describe('playwright_shell v2 会话动词（daemon 转发）', () => {
     else process.env.DISPLAY = ':99';
     try {
       const out = await adapters['playwright:open'](['https://www.baidu.com', '--headed'], { stdin: '', termination: () => null });
-      assert.ok(out.includes('### Browser'), out);
+      assert.ok(String(out).includes('### Browser'), String(out));
       assert.deepEqual(calls[0].argv, ['/fake/pw-cli/bin.js', 'open', 'https://www.baidu.com', '--headed']);
       assert.equal(
         (calls[0].env as Record<string, string>).PLAYWRIGHT_BROWSERS_PATH,
@@ -901,7 +901,7 @@ describe('playwright_shell v2 会话动词（daemon 转发）', () => {
   it('close 幂等：未开会话时以 ok 报文收尾（不裸抛）', async () => {
     const adapters = makeSessionAdapter(() => ({ ok: false, stdout: '', stderr: "Browser 'default' is not open.", exitCode: 1, terminated: false }));
     const out = await adapters['playwright:close']([], { stdin: '', termination: () => null });
-    assert.ok(out.includes('close ok'), out);
+    assert.ok(String(out).includes('close ok'), String(out));
   });
 
   it('会话动词失败分类：无会话时 goto 给出先 open 的结构化指引（不裸抛）', async () => {
@@ -913,6 +913,43 @@ describe('playwright_shell v2 会话动词（daemon 转发）', () => {
       thrown = (e as Error).message;
     }
     assert.ok(thrown.includes('先运行 open'), thrown);
+  });
+
+  it('后端终止后不执行序列后续命令，即使外层 signal 尚未 aborted', async () => {
+    const calls: string[] = [];
+    const adapters = makeSessionAdapter((_c, argv) => {
+      calls.push(argv[1]);
+      return { ok: false, stdout: 'partial', stderr: '', exitCode: 1, terminated: true };
+    });
+    const result = await run('snapshot; close', { adapters });
+    assert.equal(result.ok, false);
+    assert.deepEqual(calls, ['snapshot']);
+    assert.equal(result.commands[0].terminated, true);
+    assert.equal(result.commands[1].status, 'not-executed');
+    assert.match(result.output, /partial/);
+  });
+
+  it('无显示环境的 headed 失败使 && 跳过后续命令', async (t) => {
+    if (process.platform !== 'linux') { t.skip('Linux display contract'); return; }
+    const saved = { DISPLAY: process.env.DISPLAY, WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY };
+    t.after(() => {
+      for (const key of Object.keys(saved)) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    });
+    delete process.env.DISPLAY;
+    delete process.env.WAYLAND_DISPLAY;
+    let calls = 0;
+    const adapters = makeSessionAdapter(() => {
+      calls++;
+      return { ok: true, stdout: '', stderr: '', exitCode: 0, terminated: false };
+    });
+    const result = await run("open 'https://example.com' --headed && snapshot", { adapters });
+    assert.equal(result.ok, false);
+    assert.equal(calls, 0);
+    assert.equal(result.commands[1].status, 'skipped');
+    assert.match(result.output, /显示环境/);
   });
 
   it('goto 拒绝非 HTTP URL，且不调用会话后端', async () => {
@@ -978,7 +1015,7 @@ describe('playwright_shell v2 会话动词（daemon 转发）', () => {
     });
     const out = await adapters['playwright:capture']([], { stdin: '', termination: () => null });
     assert.equal(sub, 'screenshot');
-    assert.ok(out.includes('saved to x.png'), out);
+    assert.ok(String(out).includes('saved to x.png'), String(out));
   });
 
   it('v3 参数校验：tab-new 拒绝非 HTTP URL；resize/tab-close/request 拒绝非数字；且不 spawn', async () => {
@@ -1112,10 +1149,10 @@ describe('playwright_shell 登录档案（open --profile / profile-list）', () 
       mkdirSync(join(h.profilesPath, 'shop'), { recursive: true });
       writeFileSync(join(h.profilesPath, 'notes.txt'), 'not a profile');
       const out = String(await h.adapters['playwright:profile-list']([], CTX));
-      assert.ok(out.includes('profile-list ok'), out);
-      assert.ok(out.includes('work'), out);
-      assert.ok(out.includes('shop'), out);
-      assert.ok(out.includes('profiles (2)'), out);
+      assert.ok(String(out).includes('profile-list ok'), String(out));
+      assert.ok(String(out).includes('work'), String(out));
+      assert.ok(String(out).includes('shop'), String(out));
+      assert.ok(String(out).includes('profiles (2)'), String(out));
       assert.ok(!out.includes('notes.txt'), '普通文件不应列为档案');
     } finally {
       rmSync(h.root, { recursive: true, force: true });
@@ -1130,7 +1167,7 @@ describe('playwright_shell 登录档案（open --profile / profile-list）', () 
       writeFileSync(join(h.profilesPath, 'taobao', 'agentdev-sites.json'), JSON.stringify(['taobao.com', 'tmall.com']));
       writeFileSync(join(h.profilesPath, 'fresh', 'agentdev-sites.json'), '{broken json');
       const out = String(await h.adapters['playwright:profile-list']([], CTX));
-      assert.ok(out.includes('taobao → taobao.com, tmall.com'), out);
+      assert.ok(String(out).includes('taobao → taobao.com, tmall.com'), String(out));
       assert.ok(/fresh\s*$/m.test(out), '损坏站点文件应降级为裸档案名');
     } finally {
       rmSync(h.root, { recursive: true, force: true });
@@ -1141,9 +1178,9 @@ describe('playwright_shell 登录档案（open --profile / profile-list）', () 
     const h = makeProfileHarness();
     try {
       const out = String(await h.adapters['playwright:profile-list']([], CTX));
-      assert.ok(out.includes('profile-list ok'), out);
-      assert.ok(out.includes('(空)'), out);
-      assert.ok(out.includes('--profile='), '空态应指向 open --profile 用法');
+      assert.ok(String(out).includes('profile-list ok'), String(out));
+      assert.ok(String(out).includes('(空)'), String(out));
+      assert.ok(String(out).includes('--profile='), '空态应指向 open --profile 用法');
     } finally {
       rmSync(h.root, { recursive: true, force: true });
     }
