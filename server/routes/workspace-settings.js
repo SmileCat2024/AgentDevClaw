@@ -4,6 +4,7 @@
  *   GET  /protoclaw/workspace_settings                    — 读覆盖表（两节）
  *   PUT  /protoclaw/workspace_settings                    — 写呈现策略覆盖（{ agentId, policy }）
  *   PUT  /protoclaw/workspace_settings/resource_policy    — 写权限项用户值（{ agentId, permissionId, value }）
+ *   GET/PUT /protoclaw/workspace_settings/sidebar_layout — 应用位置、文件夹排序与折叠状态（sidebarLayout 节）
  *
  * 概念层级：工作空间是用户资产（用户可安装任意工作空间集，甚至不装智能
  * 编码空间），本设置随用户工作空间集走，不属于随 Claw 的系统设置。
@@ -190,7 +191,76 @@ export async function writeWorkspaceResourcePolicy(agentId, maxLiveThreads, opti
   return { ...result, maxLiveThreads: maxLiveThreads };
 }
 
-export function setupWorkspaceSettingsRoutes(app, express, { countLiveThreadsByAgent } = {}) {
+const SIDEBAR_FOLDER_IDS = ['prebuilt-group', 'tool-group'];
+const RETIRED_SIDEBAR_FOLDER = 'work-group-group';
+
+function validateSidebarLayout(value, readStored = false) {
+  const folderIds = readStored && Array.isArray(value?.folders) && value.folders.some(folder => folder?.id === RETIRED_SIDEBAR_FOLDER)
+    ? [...SIDEBAR_FOLDER_IDS, RETIRED_SIDEBAR_FOLDER] : SIDEBAR_FOLDER_IDS;
+  const invalid = () => { throw Object.assign(new Error('Invalid sidebar layout'), { status: 400 }); };
+  if (!value || value.version !== 1 || !Array.isArray(value.order) || !Array.isArray(value.folders)
+    || value.order.length > 1000 || value.folders.length !== folderIds.length) invalid();
+  const apps = new Set();
+  const validApp = (id) => typeof id === 'string' && id.length > 0 && id.length <= 200 && !/[\s]/.test(id) && [...id].every(char => char.charCodeAt(0) >= 32);
+  const takeApp = (id) => {
+    if (!validApp(id) || apps.has(id)) invalid();
+    apps.add(id);
+  };
+  const roots = new Set();
+  for (const item of value.order) {
+    if (typeof item !== 'string' || roots.has(item)) invalid();
+    roots.add(item);
+    if (item.startsWith('app:')) takeApp(item.slice(4));
+    else if (!folderIds.some(id => item === `folder:${id}`)) invalid();
+  }
+  if (!folderIds.every(id => roots.has(`folder:${id}`))) invalid();
+  const folders = new Set();
+  for (const folder of value.folders) {
+    if (!folder || !folderIds.includes(folder.id) || folders.has(folder.id)
+      || typeof folder.collapsed !== 'boolean' || !Array.isArray(folder.apps) || folder.apps.length > 1000) invalid();
+    folders.add(folder.id);
+    for (const id of folder.apps) takeApp(id);
+  }
+  if (typeof value.externalCollapsed !== 'boolean') invalid();
+  return {
+    version: 1,
+    // Stored layouts may contain user-moved apps in the retired folder: unwrap
+    // them in place rather than losing their positions or resetting the layout.
+    order: value.order.flatMap(id => id === `folder:${RETIRED_SIDEBAR_FOLDER}`
+      ? value.folders.find(folder => folder.id === RETIRED_SIDEBAR_FOLDER).apps.map(app => `app:${app}`) : [id]),
+    folders: value.folders.filter(folder => folder.id !== RETIRED_SIDEBAR_FOLDER)
+      .map(({ id, apps: ids, collapsed }) => ({ id, apps: [...ids], collapsed })),
+    externalCollapsed: value.externalCollapsed,
+  };
+}
+
+export async function readSidebarLayout({ settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH } = {}) {
+  const data = await readWorkspaceSettingsFile(settingsPath);
+  if (data.sidebarLayout === undefined) return null;
+  return validateSidebarLayout(data.sidebarLayout, true);
+}
+
+export async function writeSidebarLayout(layout, { settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH } = {}) {
+  const next = validateSidebarLayout(layout);
+  await withSettingsWriteLock(settingsPath, async () => {
+    const current = await readWorkspaceSettingsFile(settingsPath);
+    await writeWorkspaceSettingsFile(settingsPath, { ...current, version: 1, sidebarLayout: next });
+  });
+  return { ok: true, sidebarLayout: next };
+}
+
+export function setupWorkspaceSettingsRoutes(app, express, { countLiveThreadsByAgent, settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH } = {}) {
+  app.get('/protoclaw/workspace_settings/sidebar_layout', async (_req, res, next) => {
+    try { res.json({ ok: true, sidebarLayout: await readSidebarLayout({ settingsPath }) }); }
+    catch (error) { next(error); }
+  });
+  app.put('/protoclaw/workspace_settings/sidebar_layout', express.json(), async (req, res, next) => {
+    try { res.json(await writeSidebarLayout(req.body?.sidebarLayout, { settingsPath })); }
+    catch (error) {
+      if (error?.status) return res.status(error.status).json({ error: error.message });
+      next(error);
+    }
+  });
   app.get('/protoclaw/workspace_settings', async (_req, res) => {
     res.json({
       workspaceVisibility: await readWorkspaceVisibilityOverrides(),

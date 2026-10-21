@@ -134,10 +134,6 @@ window.onSidebarSessionPinClick = function(event, el) {
   renderAgentList();
 };
 
-// Tracks collapsed state of category groups in the sidebar (系统空间, 工作群, etc.).
-// Keyed by the .agent-group element id so state persists across re-renders.
-const _collapsedCategoryGroups = new Set();
-
 function renderSidebarChildItems(entries, ownerAgentId) {
   const visibleEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
   const remoteEntries = typeof getRemoteSidebarProjection === 'function'
@@ -315,10 +311,13 @@ function getAgentIconHtml(agentId) {
 }
 
 function renderAgentGroup(listElement, groupElement, countElement, agents, options = {}) {
-  const { prebuilt = false } = options;
   groupElement.style.display = agents.length ? '' : 'none';
   countElement.textContent = String(agents.length);
-  listElement.innerHTML = agents.map((agent) => {
+  listElement.innerHTML = renderAgentItems(agents, options);
+}
+
+function renderAgentItems(agents, { prebuilt = false } = {}) {
+  return agents.map((agent) => {
     const active = isAgentActive(agent);
     const connected = agent.connected !== false;
     const pending = pendingPrebuiltAgentIds.has(agent.id);
@@ -485,6 +484,7 @@ async function loadAgents() {
     const [connectedAgents, res] = await Promise.all([
       invoke('get_connected_agents'),
       fetch('/api/agents'),
+      window.ClawSidebarLayout?.load(),
     ]);
     const data = res.ok ? await res.json().catch(() => ({ agents: [] })) : { agents: [] };
     if (sidebarSnapshotToken && typeof isSidebarSnapshotTokenCurrent === 'function' && !isSidebarSnapshotTokenCurrent(sidebarSnapshotToken)) {
@@ -972,6 +972,8 @@ function getAgentListRenderSignature() {
     : null;
   return JSON.stringify({
     awaitHighlight,
+    sidebarLayout: window.ClawSidebarLayout?.signature(),
+    language: currentLanguage,
     focusedAgentId: normalizeAgentIdentity(focusedAgentId),
     currentRuntimeAgentId: normalizeAgentIdentity(currentRuntimeAgentId),
     pending: Array.from(pendingPrebuiltAgentIds || []).sort(),
@@ -1030,6 +1032,7 @@ function getAgentListRenderSignature() {
 }
 
 function renderAgentList() {
+  if (window.ClawSidebarLayout?.isInteracting()) return;
   const nextSignature = getAgentListRenderSignature();
   if (nextSignature === lastAgentListRenderSignature) {
     updateCurrentAgentChrome();
@@ -1037,9 +1040,7 @@ function renderAgentList() {
   }
   lastAgentListRenderSignature = nextSignature;
   const groups = groupConnectedAgents(allAgents);
-  renderAgentGroup(prebuiltAgentList, prebuiltGroup, prebuiltCount, groups.prebuilt, { prebuilt: true });
-  renderAgentGroup(workGroupAgentList, workGroupGroup, workGroupCount, groups.workGroup, { prebuilt: true });
-  renderAgentGroup(toolAgentList, toolGroup, toolCount, groups.tool, { prebuilt: true });
+  window.ClawSidebarLayout.render(groups);
   renderAgentGroup(externalAgentList, externalGroup, externalCount, groups.external);
 
   updateCurrentAgentChrome();
@@ -1050,15 +1051,7 @@ agentList.addEventListener('click', async (event) => {
   const categoryHeader = event.target.closest('.agent-group-header');
   if (categoryHeader) {
     const groupEl = categoryHeader.closest('.agent-group');
-    if (groupEl && groupEl.id) {
-      if (_collapsedCategoryGroups.has(groupEl.id)) {
-        _collapsedCategoryGroups.delete(groupEl.id);
-        groupEl.classList.remove('collapsed');
-      } else {
-        _collapsedCategoryGroups.add(groupEl.id);
-        groupEl.classList.add('collapsed');
-      }
-    }
+    if (groupEl?.id) window.ClawSidebarLayout.toggle(groupEl.id);
     return;
   }
 

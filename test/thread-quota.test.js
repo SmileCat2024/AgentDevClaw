@@ -96,9 +96,14 @@ describe('assertThreadQuotaAllowed', () => {
 
   it('passes when unconfigured (default unlimited)', async () => {
     const control = makeControl([T('wt-1', 'coder'), T('wt-2', 'coder')]);
-    await assert.doesNotReject(assertThreadQuotaAllowed({
-      agentId: 'coder', permissions: ['maxLiveThreads'], control,
-    }));
+    const empty = await writePolicy({});
+    try {
+      await assert.doesNotReject(assertThreadQuotaAllowed({
+        agentId: 'coder', permissions: ['maxLiveThreads'], control, settingsPath: empty.settingsPath,
+      }));
+    } finally {
+      await empty.cleanup();
+    }
   });
 
   it('passes below the limit, rejects at the limit with structured 429 payload', async () => {

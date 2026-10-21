@@ -1,0 +1,64 @@
+/* Sidebar arranging uses the existing row and folder visual recipes. */
+[data-layout-handle] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+[data-layout-handle]:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+}
+.agent-group-header[data-layout-handle] {
+  letter-spacing: normal;
+  text-transform: none;
+}
+.sidebar-root-app { margin-bottom: 8px; }
+.layout-arranging { cursor: grabbing; }
+.layout-picked {
+  opacity: .55;
+}
+.layout-drop-before, .layout-drop-after { position: relative; }
+.layout-drop-before::before, .layout-drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent-text);
+  pointer-events: none;
+  z-index: 2;
+}
+.layout-drop-before::before { top: 0; }
+.layout-drop-after::after { bottom: 0; }
+.layout-drop-inside {
+  position: relative;
+  isolation: isolate;
+  border-radius: 8px;
+}
+.layout-drop-inside::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--accent-text);
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 2;
+}
+.sidebar-layout-status {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 3;
+  pointer-events: none;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.sidebar-layout-status:empty { display: none; }
+.sidebar-layout-status.is-error { color: var(--error-color); }
+.layout-arranging .agent-item { transition: none; }
