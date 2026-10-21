@@ -2,7 +2,12 @@
 function selectWorkspaceSurface(agentId, options = {}) {
   bumpNavigationGuard();
   if (agentId && !loadedAgentDetailIds.has(agentId)) {
-    loadAgentDetail(agentId).then(() => renderCurrentMainView());
+    loadAgentDetail(agentId).then(() => {
+      renderCurrentMainView();
+      // detail 就绪后 blocks 才可用：导航进入工作空间单元的面板重取在
+      // 此补发（末尾的同步调用此时会因 ui 未挂而空转）。
+      refreshVisibleWorkspacePanelData(allAgents.find((item) => item.id === agentId) || null);
+    });
   }
   const targetAgent = allAgents.find((item) => item.id === agentId) || null;
   const unitKey = getUnitPreferenceKey(targetAgent || getCurrentAgentRecord());
@@ -57,6 +62,11 @@ function selectWorkspaceSurface(agentId, options = {}) {
   if (!options.skipFeaturePanel) {
     renderFeaturePanel();
   }
+  // 侧栏点击宿主条目 / switchAgent 落首页也是导航进入工作空间单元的事件：
+  // 对当前模式下可见的自刷新面板发起后台重取，与 setPreferredUnitMode 同
+  // 口径（渲染规范 §1）。不补此调用时，从会话切回首页只重投影面板旧缓存，
+  // 对话里新增的便签 / 提醒要硬刷新页面才能看到（tab 间切换不受影响）。
+  refreshVisibleWorkspacePanelData(targetAgent);
 }
 
 function upsertConnectedAgent(agent) {
