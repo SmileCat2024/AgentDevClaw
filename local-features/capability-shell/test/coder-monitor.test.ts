@@ -25,6 +25,36 @@ function harness(t: any, read: (after: number, signal: AbortSignal) => Promise<C
 }
 
 describe('Coder execution observation (ADR-0031)', () => {
+  it('projects real execution states and isolates a throwing presentation observer', async (t) => {
+    const access = new BackgroundAccess({ source: 'test', deliver: async () => {} });
+    let state = snapshot();
+    const projected: any[] = [];
+    const monitor = new CoderMonitor({ access, read: async () => state,
+      onUpdate: (task) => { projected.push(task); throw new Error('panel offline'); } });
+    t.after(async () => { await monitor.dispose(); access.dispose(); });
+    await monitor.observe(identity);
+    assert.equal(monitor.list()[0].status, 'submitted'); // idle is not completion
+    state = snapshot([{ type: 'turn.started', sourceRef: 'cmd-1' }]);
+    await monitor.observe(identity);
+    assert.equal(monitor.list()[0].status, 'executing');
+    state = snapshot([completed('cmd-1', { suspended: true, pendingWakeups: [{ source: 'shell', id: 'bg' }] })]);
+    await monitor.observe(identity);
+    assert.equal(monitor.list()[0].status, 'suspended');
+    state = snapshot([], { status: 'rotating' });
+    await monitor.observe(identity);
+    assert.equal(monitor.list()[0].status, 'rotating');
+    assert.ok(projected.length >= 4);
+    assert.equal(monitor.list()[0].threadId, 'wt-1');
+    state = snapshot([completed('wake')], { commands: [
+      { commandId: 'cmd-1', status: 'delivered' },
+      { commandId: 'wake', kind: 'reminder', source: 'shell', metadata: { shell: { taskIds: ['bg'] } } },
+    ] });
+    await monitor.observe(identity);
+    assert.equal(monitor.list()[0].status, 'completed');
+    assert.match(monitor.list()[0].summary, /已完成/);
+    assert.ok(monitor.list()[0].endedAt);
+  });
+
   it('fast completion is read from history, unrelated completion/idle never wins', async (t) => {
     let events = [completed('old-command')];
     const { monitor, access } = harness(t, async () => snapshot(events));
@@ -70,6 +100,7 @@ describe('Coder execution observation (ADR-0031)', () => {
   it('ordinary interruption is not completed and does not wait forever', async (t) => {
     const { monitor } = harness(t, async () => snapshot([{ type: 'turn.cancelled', sourceRef: 'cmd-1' }]));
     assert.match(await monitor.observe(identity), /reason=execution_cancelled/);
+    assert.equal(monitor.list()[0].status, 'cancelled');
   });
 
   it('different submissions in the same thread are not merged', async (t) => {
@@ -117,6 +148,7 @@ describe('Coder execution observation (ADR-0031)', () => {
     await other.monitor.observe(identity);
     await other.monitor.observe(identity);
     assert.match(await other.monitor.observe(identity), /reason=monitor_unreachable/);
+    assert.equal(other.monitor.list()[0].status, 'monitor_lost');
   });
 
   it('retained event gap is reported, not converted to idle completion', async (t) => {
@@ -172,6 +204,25 @@ describe('Coder execution observation (ADR-0031)', () => {
     assert.match(result, /correct report/);
     assert.doesNotMatch(result, /wrong report/);
   });
+});
+
+it('restored intent projects lost monitoring, never fake activity, and rejects controls', async (t) => {
+  const previous = globalThis.fetch;
+  const published: any[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    published.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ ok: true }));
+  }) as typeof fetch;
+  const feature = new CapabilityShellFeature({ agentId: 'parent', sessionId: 'next', panel: true });
+  t.after(async () => { await feature.onDestroy(); globalThis.fetch = previous; });
+  feature.restoreState({ observations: [identity] });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const list = await feature.onHostRequest('list');
+  assert.equal((list.tasks as any[])[0].status, 'monitor_lost');
+  assert.match((list.tasks as any[])[0].summary, /重新 watch/);
+  assert.equal(published[0].presentation.protocol, 'claw.background.agent');
+  assert.equal(published.find(body => body.kind === 'event').data.status, 'monitor_lost');
+  assert.equal((await feature.onHostRequest('kill')).ok, false);
 });
 
 it('feature send returns receipt; watch standby is one-shot; continuity warns without redispatch', async (t) => {

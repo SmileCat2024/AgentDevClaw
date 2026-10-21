@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
@@ -33,6 +33,9 @@ function registerRuntime() {
 }
 
 describe('feature communication routes', () => {
+  let previousAuth;
+  beforeEach(() => { previousAuth = setAuthEnabledForTest(false); });
+  afterEach(() => { setAuthEnabledForTest(previousAuth); });
   it('declares channels from internal-token requests on live runtimes only', async () => {
     const app = makeApp();
     const store = setupFeatureCommunicationRoutes(app, { json: () => (_req, _res, next) => next() }, { communicationStore: new FeatureCommunicationStore() });
@@ -40,9 +43,15 @@ describe('feature communication routes', () => {
     try {
       const handler = app.routes['POST /protoclaw/feature-comms/declare'].at(-1);
       const response = res();
-      await handler(internalReq({ agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1', title: 'Background tasks' }), response);
+      await handler(internalReq({ agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1', title: 'Background tasks', presentation: { panel: 'background', protocol: 'claw.background.process', version: 1 } }), response);
       assert.equal(response.body.ok, true);
       assert.equal(response.body.declaration.title, 'Background tasks');
+      assert.deepEqual(store.listChannels('comms-agent', 'comms-session')[0].presentation,
+        { panel: 'background', protocol: 'claw.background.process', version: 1 });
+      const invalid = res();
+      await handler(internalReq({ agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'bad', channelId: 'bad',
+        presentation: { panel: 'background', protocol: 'future', version: '1' } }), invalid);
+      assert.equal(invalid.statusCode, 400);
       assert.equal(store.isDeclared({ agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'shell', channelId: 'task-1' }), true);
 
       const denied = res();
@@ -185,9 +194,14 @@ describe('feature communication routes', () => {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/protoclaw/feature-comms/stream?${new URLSearchParams(target)}`, { signal: controller.signal });
     try {
       const reader = response.body.getReader();
-      const firstFrame = new TextDecoder().decode((await reader.read()).value);
-      assert.ok(firstFrame.startsWith(': connected'));
-      assert.ok(firstFrame.includes('event: resync'));
+      let frames = '';
+      while (!frames.includes('event: resync')) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        frames += new TextDecoder().decode(value);
+      }
+      assert.ok(frames.startsWith(': connected'));
+      assert.ok(frames.includes('event: resync'));
     } finally { controller.abort(); }
   });
 

@@ -1,9 +1,9 @@
 # Feature-Panel 通信基座（feature-comms 通道）接入指引
 
 状态：现行（设计裁决见 [ADR-0018](../adr/0018-feature-panel-communication-transport.md)）
-最后更新：2026-09-23
+最后更新：2026-10-21
 
-面向两类接入者：想让运行时 Feature 状态实时上板的 **Feature 作者**，与想订阅通道的 **面板作者**。参考实现：`local-features/shell-bg-comms`（Feature 侧）+ `public/src/modules/bg-panel.js`（面板侧）。
+面向两类接入者：想让运行时 Feature 状态实时上板的 **Feature 作者**，与想订阅通道的 **面板作者**。参考实现：`local-features/feature-wrappers/src/panel-shell-feature.ts`（Feature 侧）+ `public/src/modules/bg-panel.js`（面板侧）。
 
 ## 何时用 / 何时不用
 
@@ -63,8 +63,25 @@ async onHostRequest(requestType: string, payload: unknown) {
 1. **寻址纪律**（对齐 session-controls-panel）：`agentId` = `focusedAgentId`（本地宿主逻辑 id），`sessionId` = `getRuntimeWorkspaceSessionId(currentRuntimeAgentId) || getActiveWorkspaceSessionId()`；远程命名空间会话（`isRemoteNamespaceAgentId`）与本机通道不兼容，降级为"不可用"空态，不猜目标。
 2. **订阅**：`new EventSource('/protoclaw/feature-comms/stream?' + 四元组参数)`（同源 cookie 自动携带）；监听 `event`（data JSON 内含 `type`/`data`）、`resync`（拉请求面对齐）、`closed`（会话终结，展示终态并停订）。
 3. **初始对齐**：订阅建立后经 `request` 拉全量（如 `list`），事件只做增量更新。
-4. **生命周期**：`onOpen` 建订阅、`onClose` 拆订阅；面板常开时用定时守卫检测焦点会话变化重订；面板被取消激活（`activeFeaturePanel` 不再是本面板）自动拆订阅。
+4. **生命周期**：一般面板在 `onOpen` 建订阅、`onClose` 拆订阅；有关闭态徽标需求的后台面板继续用同一流维护缓存与徽标，只停止展示计时。用定时守卫检测会话变化并清理旧来源，异步回调先检查来源仍属于当前会话。
 5. **注册**：`app-ui.js` 经 `registerFeaturePanel` 声明 `when`（agentIds/surfaces）与 i18n 元数据；开合钩子在 `modules/debug-panel-host.js` 的 `toggleFeaturePanel` 显式接线（git/genui/bg 先例）。
+
+## 后台任务面板展示协议（ADR-0031）
+
+声明可选携带 `presentation: { panel: 'background', protocol, version: 1 }`，server 原样保留合法协议身份，经 channels 发现；未知协议或版本由面板明确显示“不支持”，不套进程卡片。无 presentation 的普通通道不参与后台面板。Feature 只发布数据，不携带 HTML/CSS/模板；协议类型与常量在 `local-features/shared/src/background-panel.ts`，不属于框架 BackgroundAccess。
+
+| 协议 | 数据与请求面 | 宿主交互 |
+|---|---|---|
+| `claw.background.process` v1 | 沿用 BgTaskSnapshot + outputTail，事件 registered/output/report/ready/finalized/tuned；`list → {ok:true,tasks}`、count/status/report/kill | 沿用进程卡片、运行时长、立即汇报、手动打断 |
+| `claw.background.agent` v1 | AgentBackgroundTask：id/revision/title/agentId/threadId/commandId、可选 sessionId、status/summary、startedAt/updatedAt、可选 endedAt；`updated` 事件；只接受 `list → {ok:true,tasks}` | 仅显示身份、关联执行、状态、摘要与更新时间，无反向控制 |
+
+智能体状态为 submitted/executing/suspended/rotating/completed/failed/cancelled/blocked/monitor_lost。CoderMonitor 按真实关联事件与监视结果生成；线程 idle/delivered 不代表执行完成。monitor_lost 明示监视证据丢失，不等于业务失败；接续恢复仅投影已丢失监视意图，不假造活跃监视、不重发任务。
+
+- 传输仍精确隔离四元组。卡片键 = 四元组 + 数据 id；独立 Bash/PowerShell 等来源即使协议与任务 id 相同也不冲突，操作路由使用卡片冻结的来源与原始任务 id。
+- 每个来源独立订阅 live-only SSE，连接建立、重连、resync/snapshot 时请求 list；有界增量超窗仍走既有 resync。逐项事件版本与逐来源请求版本阻止迟到列表回退新事件；智能体同一 startedAt 观察周期内 revision 单调递增，防止异步发布晚于更新列表时回退状态。finalized 后对账淘汰的进程任务。
+- 面板关闭后同一流仅维护缓存与徽标，无时长重绘；打开先显示缓存再对账。发现周期确认新增/消失来源，closed 清该来源，切会话清全部来源、缓存、徽标；迟到回调不得写入新会话。
+- 徽标计算进程 running 与智能体 submitted/executing/suspended/rotating 的总数。断线保留缓存但显示投影连接异常，等待 EventSource 自动续接；不会停止执行、观察或通知。
+- 可选装配：普通 ShellFeature 无需面板；PanelShellFeature 为 Claw 增强包装。CapabilityShellFeature 默认不投影，显式 `panel:true` 及 runtimeIdentity 才启用；编程小助手默认启用。投影失败与通知投递互不依赖。
 
 ## 已知限制（接入前读一遍）
 

@@ -128,6 +128,7 @@ describe('继承替换形态', () => {
       { agentId: 'programming-helper', sessionId: 'session-x', featureId: 'shell', channelId: 'shell-bg' },
     );
     assert.equal(script.calls[0].body.title, '后台任务');
+    assert.deepEqual(script.calls[0].body.presentation, { panel: 'background', protocol: 'claw.background.process', version: 1 });
   });
 
   it('构造期声明失败不抛出，首个观察事件触发补声明后发布成功', async () => {

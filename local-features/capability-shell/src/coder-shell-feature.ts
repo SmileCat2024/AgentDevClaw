@@ -14,6 +14,9 @@ import { BackgroundAccess, CoreLifecycle, Decision } from '@agentdevjs/core';
 import type { AgentFeature, FeatureInitContext, CallStartContext, HookDeclarations, WakeupDeliver } from '@agentdevjs/core';
 import { declareContinuity, GENERIC_CONTINUITY_PROTOCOL } from '../../continuity-participant/src/index.js';
 import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
+import { FeatureCommunicationClient } from '../../shared/src/feature-communication.js';
+import { AGENT_BACKGROUND_PRESENTATION } from '../../shared/src/background-panel.js';
+import type { AgentBackgroundTask } from '../../shared/src/background-panel.js';
 import { CoderMonitor } from './coder-monitor.js';
 import type { CoderObservation, CoderSnapshot } from './coder-monitor.js';
 import type { FetchLike } from './coder-shell.js';
@@ -35,6 +38,8 @@ export interface CapabilityShellFeatureConfig {
   fetchImpl?: FetchLike;
   deliver?: WakeupDeliver;
   pollIntervalMs?: number;
+  /** Optional Claw projection; observation and wakeup work without it. */
+  panel?: boolean;
 }
 
 class CapabilityShellFeatureInner implements AgentFeature {
@@ -53,11 +58,42 @@ class CapabilityShellFeatureInner implements AgentFeature {
   private monitor?: CoderMonitor;
   private restored: CoderObservation[] = [];
   private viewerId?: string;
+  private panelClient?: FeatureCommunicationClient;
+  private panelDeclared = false;
+  private destroyed = false;
+  private panelQueue = Promise.resolve();
+  private readonly lostProjections = new Map<string, AgentBackgroundTask>();
+
+  private publishPanel(task?: AgentBackgroundTask): void {
+    if (!this.panelClient || this.destroyed) return;
+    this.panelQueue = this.panelQueue.then(async () => {
+      if (this.destroyed) return;
+      if (!this.panelDeclared) {
+        await this.panelClient!.declareChannel({ title: 'Coder 执行', presentation: AGENT_BACKGROUND_PRESENTATION });
+        this.panelDeclared = true;
+      }
+      if (task && !this.destroyed) await this.panelClient!.publishEvent('updated', task);
+    }).catch(() => {});
+  }
+
+  async onHostRequest(requestType: string): Promise<Record<string, unknown>> {
+    if (!this.config.panel || requestType !== 'list') return { ok: false, code: 'operation_unavailable' };
+    const tasks = new Map(this.lostProjections);
+    for (const task of this.monitor?.list() || []) tasks.set(task.id, task);
+    return { ok: true, tasks: [...tasks.values()] };
+  }
 
   constructor(private readonly config: CapabilityShellFeatureConfig = {}) {
     this.serverOrigin = config.serverOrigin
       || process.env.PROTOCLAW_SERVER_ORIGIN
       || 'http://127.0.0.1:1420';
+    if (config.panel) {
+      if (!config.agentId || !config.sessionId) throw new Error('面板投影要求显式 agentId/sessionId');
+      this.panelClient = new FeatureCommunicationClient(this.serverOrigin, {
+        agentId: config.agentId, sessionId: config.sessionId, featureId: this.name, channelId: 'coder-executions',
+      });
+      this.publishPanel();
+    }
     this.options = {
       ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
       ...(config.maxTimeoutMs !== undefined ? { maxTimeoutMs: config.maxTimeoutMs } : {}),
@@ -95,6 +131,7 @@ class CapabilityShellFeatureInner implements AgentFeature {
       });
       this.monitor = new CoderMonitor({
         access: this.access, intervalMs: this.config.pollIntervalMs,
+        onUpdate: (task) => { this.lostProjections.delete(task.id); this.publishPanel(task); },
         read: async (threadId, after, signal): Promise<CoderSnapshot> => {
           const path = `/protoclaw/threads/${encodeURIComponent(threadId)}`;
           const bounded = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
@@ -149,9 +186,18 @@ class CapabilityShellFeatureInner implements AgentFeature {
     this.restored = Array.isArray(snapshot?.observations)
       ? snapshot.observations.filter((i: any) => typeof i?.threadId === 'string' && typeof i?.commandId === 'string')
         .map((i: CoderObservation) => ({ threadId: i.threadId, commandId: i.commandId })) : [];
+    this.lostProjections.clear();
+    for (const identity of this.restored) {
+      const task: AgentBackgroundTask = { id: `${identity.threadId}/${identity.commandId}`, revision: 1, ...identity,
+        agentId: 'coder', title: `Coder ${identity.threadId}`, status: 'monitor_lost',
+        summary: '此前监视未恢复；请查询并重新 watch，勿重发原任务', startedAt: 0, updatedAt: Date.now() };
+      this.lostProjections.set(task.id, task);
+      this.publishPanel(task);
+    }
   }
 
   async onDestroy(): Promise<void> {
+    this.destroyed = true;
     await this.monitor?.dispose();
     this.access?.dispose();
   }

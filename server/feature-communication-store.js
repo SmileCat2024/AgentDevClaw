@@ -39,7 +39,14 @@ export class FeatureCommunicationStore {
   declareChannel(target, meta = {}) {
     const normalized = normalizeTarget(target);
     const key = targetKey(normalized);
+    const presentation = meta.presentation;
+    if (presentation !== undefined && (!presentation || typeof presentation.panel !== 'string'
+      || !presentation.panel.trim() || typeof presentation.protocol !== 'string' || !presentation.protocol.trim()
+      || !Number.isSafeInteger(presentation.version) || presentation.version < 1)) {
+      throw new TypeError('presentation requires panel, protocol and a positive integer version');
+    }
     const declaration = {
+      ...(presentation ? { presentation: { panel: presentation.panel.trim(), protocol: presentation.protocol.trim(), version: presentation.version } } : {}),
       featureId: normalized.featureId,
       channelId: normalized.channelId,
       title: typeof meta.title === 'string' ? meta.title.trim() : '',
@@ -66,6 +73,7 @@ export class FeatureCommunicationStore {
       channels.push({
         featureId: declaration.featureId,
         channelId: declaration.channelId,
+        ...(declaration.presentation ? { presentation: { ...declaration.presentation } } : {}),
         title: declaration.title,
         description: declaration.description,
         declaredAt: declaration.declaredAt,

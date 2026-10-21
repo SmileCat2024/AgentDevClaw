@@ -35,11 +35,14 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
       if (!runtime || !runtime.process || runtime.stopped) return res.status(404).json({ ok: false, code: 'runtime_not_found' });
       target = normalizeFeatureCommunicationTarget({ agentId: runtime.agentId || runtime.id, sessionId, featureId: body.featureId, channelId: body.channelId });
     } catch (error) { return badRequest(res, error.message); }
-    const declaration = communicationStore.declareChannel(target, {
-      title: typeof body.title === 'string' ? body.title.slice(0, 200) : '',
-      description: typeof body.description === 'string' ? body.description.slice(0, 500) : '',
-    });
-    return res.json({ ok: true, declaration });
+    try {
+      const declaration = communicationStore.declareChannel(target, {
+        title: typeof body.title === 'string' ? body.title.slice(0, 200) : '',
+        description: typeof body.description === 'string' ? body.description.slice(0, 500) : '',
+        presentation: body.presentation,
+      });
+      return res.json({ ok: true, declaration });
+    } catch (error) { return badRequest(res, error.message); }
   });
 
   app.get('/protoclaw/feature-comms/channels', (req, res) => {

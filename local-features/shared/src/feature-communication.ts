@@ -7,6 +7,12 @@ export interface FeatureCommunicationTarget {
   channelId: string;
 }
 
+export interface PanelPresentation {
+  panel: string;
+  protocol: string;
+  version: number;
+}
+
 export class FeatureCommunicationClient {
   constructor(private readonly serverOrigin: string, private readonly target: FeatureCommunicationTarget) {}
 
@@ -16,6 +22,7 @@ export class FeatureCommunicationClient {
       method: 'POST',
       headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5_000),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload?.ok !== true) {
@@ -28,7 +35,7 @@ export class FeatureCommunicationClient {
    * Declare the channel before any publish: the declaration is the host-side
    * authorization record that gates panel subscription and requests.
    */
-  declareChannel(meta: { title?: string; description?: string } = {}): Promise<Record<string, any>> {
+  declareChannel(meta: { title?: string; description?: string; presentation?: PanelPresentation } = {}): Promise<Record<string, any>> {
     return this.post('/protoclaw/feature-comms/declare', { ...this.target, ...meta });
   }
 

@@ -15,15 +15,14 @@
  * error），按钮只承担在途/冷却展示并防连点风暴。
  * 任务状态真值仍是 bash_bg / bg_status。
  *
- * 图标徽标（rail-bg-badge，与「交互页面」徽标同款）：显示当前运行中的
- * 后台任务数。两条路径互斥不双写（source 存活时轮询与徽标订阅让位）：
- * 面板打开时由 SSE 事件流（tasks 真值）驱动；面板关闭时由徽标专用的
- * SSE 订阅驱动——事件帧即时增减 running 集合，连接建立 / resync 时拉一
- * 次 list（带 id）重建基线。订阅的建立与通道发现走 30s 周期轮询（恒 200
- * 的 channels 列表）兼 runtime 切换后的再声明重试；无通道会话（coder /
- * 其他工作空间 / 已停止）不建订阅。事件断线由 EventSource 自动带
- * Last-Event-ID 续传，数字漂移在下次基线重建时对齐（徽标是概览提示，
- * 真值在面板与 bg_status）。
+ * 协议发现：presentation.panel=background；按 protocol/version 选择宿主渲染，
+ * 不按 Feature ID 猜卡片类型。进程保留 report/kill，智能体仅展示。
+ * 四元组 + 项目 ID 共同构成卡片键，操作始终投递到卡片冻结的来源。
+ *
+ * 图标徽标（rail-bg-badge）：由各来源同一缓存计算活跃项总数。
+ * 面板关闭后保留流作徽标/缓存订阅，不保留时长渲染计时器；30s 发现增删
+ * 来源，2s 守卫清理会话切换。EventSource 自持 Last-Event-ID 断线续接，
+ * open/resync/snapshot 经 list 对账，逐来源版本防迟到列表覆盖新事件。
  *
  * 重开保暖（stale-while-revalidate）：面板关闭不丢任务快照——徽标流的
  * 事件与基线在关闭期间持续镜像进缓存，重开面板先渲染缓存再经 list 对账
@@ -41,10 +40,12 @@
 (function () {
   'use strict';
 
-  // 通道四元组的 featureId 必须等于 feature name（'shell'）：IPC 分发按它
-  // 在 runtime 内查 feature 实例（run-prebuilt-agent.js）。
-  const FEATURE_ID = 'shell';
-  const CHANNEL_ID = 'shell-bg';
+  const PROCESS_PROTOCOL = 'claw.background.process';
+  const AGENT_PROTOCOL = 'claw.background.agent';
+  const channels = new Map();
+  let panelOpen = false;
+  let discoveryRevision = 0;
+  let discoveryStatus = '';
   const REFRESH_SESSION_WATCH_MS = 2_000;
   const ELAPSED_TICK_MS = 1_000;
   /** 面板关闭态的通道发现与徽标订阅保障周期（发现走恒 200 的 channels 列表）。 */
@@ -74,15 +75,9 @@
   /** taskId -> 任务快照（通道事件 + list 合并，含 outputTail） */
   const tasks = new Map();
   const state = {
-    status: 'idle', // idle | connecting | live | unavailable | closed
-    agentId: '',
-    sessionId: '',
+    status: 'idle', // idle | connecting | live | unavailable
   };
   let source = null;
-  let channelGeneration = 0;
-  let eventRevision = 0;
-  let listRevision = 0;
-  const taskRevisions = new Map();
   let sessionWatchTimer = null;
   let elapsedTimer = null;
   let lastHtml = '';
@@ -90,12 +85,8 @@
   let lastSkeleton = '';
 
   /** 徽标状态（面板关闭态）：事件订阅驱动 running 集合，并镜像进任务缓存。 */
-  let badgeAddressKey = '';
-  let badgePollInFlight = false;
   let badgeTimer = null;
   let badgeSource = null;
-  let badgeStreamKey = '';
-  const badgeRunningIds = new Set();
   /** 任务快照缓存归属的会话寻址（`${agentId}::${sessionId}`）：面板流与
    * 徽标流两个写入源共用，重开保暖时按它判定保留还是丢弃。 */
   let cacheAddressKey = '';
@@ -131,17 +122,17 @@
 
   // ── 服务端请求面（仅初始快照 / resync 对账用；实时更新走事件流）───
 
-  async function channelRequest(requestType, payload) {
-    const addressing = currentAddressing();
-    if (!addressing) return { ok: false, code: 'no_session' };
+  async function channelRequest(channel, requestType, payload) {
+    if (!isCurrentChannel(channel)) return { ok: false, code: 'no_session' };
+    const addressing = channel.target;
     const response = await fetch('/protoclaw/feature-comms/request', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         agentId: addressing.agentId,
         sessionId: addressing.sessionId,
-        featureId: FEATURE_ID,
-        channelId: CHANNEL_ID,
+        featureId: addressing.featureId,
+        channelId: addressing.channelId,
         requestType,
         payload: payload || {},
       }),
@@ -220,6 +211,20 @@
   /** 任务卡片。skeleton=true 时挖空易变文本（时长、输出尾巴）供骨架比对；
    * 易变文本由 updateVolatileTexts 定点更新，不走 DOM 重建。 */
   function renderTaskCard(task, skeleton = false) {
+    if (task.protocol === AGENT_PROTOCOL) {
+      const labels = { submitted: t('已提交', 'submitted'), executing: t('执行中', 'executing'),
+        suspended: t('已挂起', 'suspended'), rotating: t('接力中', 'rotating'), completed: t('完成', 'completed'),
+        failed: t('失败', 'failed'), cancelled: t('已中断', 'cancelled'), blocked: t('需介入', 'blocked'),
+        monitor_lost: t('监视失联（非业务失败）', 'monitor lost (not execution failure)') };
+      return `<div class="bgp-card${collapsedTasks.has(task.id) ? ' bgp-collapsed' : ''}" data-bgp-task="${escapeHtml(task.id)}">
+        <div class="bgp-head"><span class="bgp-dot bgp-dot-${escapeHtml(task.status)}"></span>
+          <span class="bgp-id">${escapeHtml(task.title)}</span>
+          <span class="bgp-chevron${collapsedTasks.has(task.id) ? '' : ' bgp-chevron-open'}">${CHEVRON_SVG}</span></div>
+        <pre class="bgp-cmd">${escapeHtml(task.agentId)} · ${escapeHtml(task.threadId)} / ${escapeHtml(task.commandId)}</pre>
+        <pre class="bgp-tail">${escapeHtml(task.summary)}</pre>
+        <div class="bgp-result"><span class="bgp-result-main">${escapeHtml(labels[task.status] || task.status)}</span>
+          <span class="bgp-result-time">${formatClock(task.updatedAt)}</span></div></div>`;
+    }
     const duration = taskDurationMs(task);
     const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
     const clock = formatClock(task.startedAt);
@@ -232,7 +237,7 @@
       <div class="bgp-card${collapsed ? ' bgp-collapsed' : ''}" data-bgp-task="${escapeHtml(task.id)}">
         <div class="bgp-head" title="${t('点击折叠 / 展开', 'Click to collapse / expand')}">
           <span class="bgp-dot bgp-dot-${escapeHtml(task.status)}"></span>
-          <span class="bgp-id" title="${escapeHtml(task.id)}">${escapeHtml(task.id)}</span>
+          <span class="bgp-id" title="${escapeHtml(task.channelKey)}">${escapeHtml(task.taskId)} · ${escapeHtml(channels.get(task.channelKey)?.title || '')}</span>
           ${task.status === 'running' ? reportButton(task.id) + interruptButton(task.id) : ''}
           <span class="bgp-chevron${collapsed ? '' : ' bgp-chevron-open'}">${CHEVRON_SVG}</span>
         </div>
@@ -260,7 +265,7 @@
           ? t('暂无后台任务', 'No background tasks')
           : t('面板未连接', 'Panel not connected')}</div>
         <div class="bgp-empty-desc">${connected
-          ? t('bash_bg 启动的任务会实时出现在这里', 'Tasks started via bash_bg appear here in real time')
+          ? t('已接入的后台进程与智能体执行会出现在这里', 'Connected background processes and agent executions appear here')
           : t('当前会话没有活跃的后台任务通道', 'No live background-task channel for this session')}</div>
       </div>`;
   }
@@ -268,7 +273,12 @@
   function getHtml(skeleton = false) {
     const sorted = Array.from(tasks.values())
       .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
-    const cards = sorted.map((t) => renderTaskCard(t, skeleton)).join('');
+    const notices = [...channels.values()].filter(channel => !channel.supported || channel.error).map(channel =>
+      `<div class="bgp-empty-desc">${escapeHtml(channel.title)} · ${escapeHtml(channel.supported
+        ? t('面板连接/快照异常', 'Panel connection/snapshot error') + ': ' + channel.error
+        : t('不支持的协议/版本', 'Unsupported protocol/version') + ': ' + channel.presentation.protocol + '@' + channel.presentation.version)}</div>`).join('');
+    const cards = sorted.map((task) => renderTaskCard(task, skeleton)).join('') + notices
+      + (discoveryStatus ? `<div class="bgp-empty-desc">${t('通道发现失败，等待重连', 'Channel discovery failed; awaiting reconnect')}</div>` : '');
     return `
       <div id="bg-panel-root" class="bgp-root">
         ${cards || renderEmpty()}
@@ -288,11 +298,11 @@
     // 这里只覆盖打开态（所有 tasks 变更路径都以 repaint 收尾，单点汇合）。
     let running = 0;
     for (const task of tasks.values()) {
-      if (task.status === 'running') running += 1;
+      if (isActive(task)) running += 1;
     }
     _setBadge(running);
     const root = document.getElementById('bg-panel-root');
-    if (!root) return;
+    if (!root || !panelOpen) return;
     const html = getHtml();
     if (html === lastHtml) return;
     const skeleton = getHtml(true);
@@ -308,7 +318,7 @@
       positions.set(el.getAttribute('data-bgp-tail'), { top: el.scrollTop, atBottom });
     });
     const next = root.cloneNode(false);
-    next.innerHTML = html;
+    next.innerHTML = html.slice(html.indexOf('>') + 1, html.lastIndexOf('</div>'));
     root.replaceWith(next);
     next.querySelectorAll('[data-bgp-tail]').forEach((el) => {
       const p = positions.get(el.getAttribute('data-bgp-tail'));
@@ -321,7 +331,8 @@
   /** 轻量路径：只更新漂移的文本（时长走秒、输出尾巴）。 */
   function updateVolatileTexts(root, elapsedOnly = false) {
     for (const task of tasks.values()) {
-      const id = window.CSS?.escape ? CSS.escape(task.id) : task.id;
+      if (task.protocol === AGENT_PROTOCOL) continue;
+      const id = window.CSS?.escape ? CSS.escape(task.id) : task.id.replace(/["\\]/g, '\\$&');
       const card = root.querySelector(`[data-bgp-task="${id}"]`);
       if (!card) continue;
       const elapsedEl = card.querySelector('[data-bgp-elapsed]');
@@ -366,354 +377,243 @@
    * / 未声明）。终态缓存常驻会让重开面板显示早已消亡的陈旧卡片。 */
   function _resetTaskCache() {
     tasks.clear();
-    taskRevisions.clear();
     reportStates.clear();
     killPending.clear();
     collapsedTasks.clear();
     userToggledTasks.clear();
   }
 
+  function addressKey(address) {
+    return address ? JSON.stringify([address.agentId, address.sessionId]) : '';
+  }
+
+  function isCurrentChannel(channel) {
+    return !!channel && channels.get(channel.key) === channel && cacheAddressKey === addressKey(currentAddressing());
+  }
+
+  function taskKey(channel, id) {
+    return JSON.stringify([channel.target.agentId, channel.target.sessionId, channel.target.featureId, channel.target.channelId, id]);
+  }
+
+  function isActive(task) {
+    return task.protocol === AGENT_PROTOCOL
+      ? ['submitted', 'executing', 'suspended', 'rotating'].includes(task.status) : task.status === 'running';
+  }
+
+  function applyTask(channel, data) {
+    if (!data || typeof data.id !== 'string') return;
+    const key = taskKey(channel, data.id);
+    const task = { ...data, id: key, taskId: data.id, channelKey: channel.key, protocol: channel.presentation.protocol };
+    const prev = tasks.get(key);
+    if (prev && task.protocol === AGENT_PROTOCOL && task.startedAt === prev.startedAt
+      && typeof task.revision === 'number' && task.revision < prev.revision) return;
+    if (prev && isActive(prev) && !isActive(task)) collapsedTasks.add(key);
+    tasks.set(key, task);
+    if (!isActive(task) && !userToggledTasks.has(key)) collapsedTasks.add(key);
+  }
+
+  function removeChannel(channel) {
+    channel.stream?.close();
+    channels.delete(channel.key);
+    for (const [id, task] of tasks) {
+      if (task.channelKey !== channel.key) continue;
+      tasks.delete(id);
+      reportStates.delete(id);
+      killPending.delete(id);
+      collapsedTasks.delete(id);
+      userToggledTasks.delete(id);
+    }
+  }
+
   function teardownChannel() {
-    channelGeneration += 1;
-    if (source) { source.close(); source = null; }
-    if (sessionWatchTimer) { clearInterval(sessionWatchTimer); sessionWatchTimer = null; }
+    discoveryRevision += 1;
+    for (const channel of channels.values()) channel.stream?.close();
+    channels.clear();
+    source = null;
+    badgeSource = null;
     if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
   }
 
-  function applyTask(data) {
-    if (!data || typeof data.id !== 'string') return;
-    const prev = tasks.get(data.id);
-    // 面板眼皮底下跑完 / 被打断 → 自动收起（用户可点头行重新展开）。
-    if (prev && prev.status === 'running' && data.status && data.status !== 'running') {
-      collapsedTasks.add(data.id);
+  function syncAddress() {
+    const address = currentAddressing();
+    const key = addressKey(address);
+    if (cacheAddressKey !== key) {
+      teardownChannel();
+      _resetTaskCache();
+      cacheAddressKey = key;
+      discoveryStatus = '';
+      state.status = 'connecting';
+      repaint();
     }
-    tasks.set(data.id, data);
+    return address;
   }
 
-  /** 面板打开（list 全量重建，无 prev）时：已终态的任务默认收起。 */
-  function foldTerminalByDefault(task) {
-    if (task.status && task.status !== 'running' && !userToggledTasks.has(task.id)) {
-      collapsedTasks.add(task.id);
-    }
-  }
-
-  function handleStreamEvent(data) {
-    let payload;
-    try { payload = JSON.parse(data); } catch { return; }
-    if (payload?.type && payload?.data && typeof payload.data.id === 'string') {
-      eventRevision += 1;
-      taskRevisions.set(payload.data.id, eventRevision);
-      applyTask(payload.data);
-      // The registry retires old terminal tasks; events only carry the task
-      // that changed, so reconcile membership after finalization.
-      if (payload.type === 'finalized') void refreshList();
-    }
-    syncElapsedTimer();
+  async function refreshChannel(channel) {
+    const revision = channel.eventRevision;
+    const requestRevision = ++channel.listRevision;
+    let result;
+    try { result = await channelRequest(channel, 'list', {}); }
+    catch { result = { ok: false, code: 'network_error' }; }
+    if (!isCurrentChannel(channel) || requestRevision !== channel.listRevision) return;
+    if (result.ok === true && Array.isArray(result.tasks)) {
+      channel.error = '';
+      const listed = new Set();
+      for (const task of result.tasks) {
+        if (typeof task?.id !== 'string') continue;
+        const key = taskKey(channel, task.id);
+        listed.add(key);
+        if ((channel.revisions.get(key) || 0) <= revision) applyTask(channel, task);
+      }
+      for (const [id, task] of tasks) {
+        if (task.channelKey === channel.key && !listed.has(id) && (channel.revisions.get(id) || 0) <= revision) {
+          tasks.delete(id);
+          channel.revisions.delete(id);
+          collapsedTasks.delete(id);
+          userToggledTasks.delete(id);
+          reportStates.delete(id);
+          killPending.delete(id);
+        }
+      }
+    } else if (['channel_not_declared', 'runtime_not_connected'].includes(result.code)) {
+      removeChannel(channel);
+    } else channel.error = result.code || 'list_failed';
+    if (panelOpen) syncElapsedTimer();
     repaint();
   }
 
-  async function refreshList() {
-    const generation = channelGeneration;
-    const revision = eventRevision;
-    const requestRevision = ++listRevision;
-    let result;
-    try {
-      result = await channelRequest('list', {});
-    } catch {
-      return; // 网络层异常：保持当前渲染，由重订 / 下一轮事件对账
+  function refreshList() {
+    return Promise.all([...channels.values()].filter(channel => channel.supported).map(refreshChannel));
+  }
+
+  function subscribeChannel(channel) {
+    const params = new URLSearchParams({ ...channel.target, latest: '1' });
+    const stream = new EventSource(`/protoclaw/feature-comms/stream?${params}`);
+    channel.stream = stream;
+    stream.addEventListener('open', () => {
+      if (!isCurrentChannel(channel)) return;
+      channel.error = '';
+      state.status = 'live';
+      void refreshChannel(channel);
+      repaint();
+    });
+    stream.addEventListener('event', event => {
+      if (!isCurrentChannel(channel)) return;
+      let payload;
+      try { payload = JSON.parse(event.data); } catch { return; }
+      if (typeof payload?.data?.id !== 'string') return;
+      const key = taskKey(channel, payload.data.id);
+      channel.revisions.set(key, ++channel.eventRevision);
+      applyTask(channel, payload.data);
+      if (payload.type === 'finalized') void refreshChannel(channel);
+      if (panelOpen) syncElapsedTimer();
+      repaint();
+    });
+    for (const type of ['resync', 'snapshot']) stream.addEventListener(type, () => {
+      if (isCurrentChannel(channel)) void refreshChannel(channel);
+    });
+    stream.addEventListener('error', () => {
+      if (!isCurrentChannel(channel)) return;
+      channel.error = 'disconnected';
+      repaint(); // EventSource owns cursor-preserving reconnect; never stop business work.
+    });
+    stream.addEventListener('closed', () => {
+      if (!isCurrentChannel(channel)) return;
+      removeChannel(channel);
+      source = [...channels.values()].find(c => c.stream)?.stream || null;
+      badgeSource = panelOpen ? null : source;
+      if (panelOpen) syncElapsedTimer();
+      repaint();
+    });
+  }
+
+  async function discover() {
+    const address = syncAddress();
+    if (!address) { state.status = 'unavailable'; repaint(); return; }
+    const revision = ++discoveryRevision;
+    let declarations;
+    try { declarations = await window.ClawFeatureCommunication.listChannels(address.agentId, address.sessionId); }
+    catch {
+      if (revision === discoveryRevision && cacheAddressKey === addressKey(currentAddressing())) {
+        discoveryStatus = 'discovery_failed';
+        repaint();
+      }
+      return;
     }
-    if (!source || generation !== channelGeneration || requestRevision !== listRevision) return;
-    const current = currentAddressing();
-    if (!current || current.agentId !== state.agentId || current.sessionId !== state.sessionId) return;
-    if (result.ok === true && Array.isArray(result.tasks)) {
-      const listedIds = new Set(result.tasks.map(task => task.id));
-      // Keep events received since the request started; an older list snapshot
-      // must not roll back output or a finalized task.
-      for (const task of result.tasks) {
-        if ((taskRevisions.get(task.id) || 0) > revision) continue;
-        applyTask(task);
-        foldTerminalByDefault(task);
-      }
-      for (const id of tasks.keys()) {
-        if ((taskRevisions.get(id) || 0) <= revision && !listedIds.has(id)) tasks.delete(id);
-      }
-      for (const id of taskRevisions.keys()) {
-        if (!tasks.has(id)) taskRevisions.delete(id);
-      }
-      for (const id of collapsedTasks) {
-        if (!tasks.has(id)) collapsedTasks.delete(id);
-      }
-      for (const id of userToggledTasks) {
-        if (!tasks.has(id)) userToggledTasks.delete(id);
-      }
-      for (const id of reportStates.keys()) {
-        if (!tasks.has(id)) reportStates.delete(id);
-      }
-      for (const id of killPending) {
-        if (!tasks.has(id)) killPending.delete(id);
-      }
-    } else if (result.code === 'channel_not_declared' || result.code === 'runtime_not_connected') {
-      state.status = 'unavailable';
+    if (revision !== discoveryRevision || cacheAddressKey !== addressKey(currentAddressing())) return;
+    discoveryStatus = '';
+    const found = new Set();
+    for (const declaration of declarations) {
+      if (declaration?.presentation?.panel !== 'background') continue;
+      const target = { ...address, featureId: declaration.featureId, channelId: declaration.channelId };
+      const key = JSON.stringify(Object.values(target));
+      found.add(key);
+      const existing = channels.get(key);
+      if (existing && JSON.stringify(existing.presentation) === JSON.stringify(declaration.presentation)) continue;
+      if (existing) removeChannel(existing);
+      const presentation = declaration.presentation;
+      const supported = presentation.version === 1 && [PROCESS_PROTOCOL, AGENT_PROTOCOL].includes(presentation.protocol);
+      const channel = { key, target, presentation, title: declaration.title || declaration.featureId,
+        supported, error: '', stream: null, eventRevision: 0, listRevision: 0, revisions: new Map() };
+      channels.set(key, channel);
+      if (supported) subscribeChannel(channel);
     }
-    syncElapsedTimer();
+    for (const channel of channels.values()) if (!found.has(channel.key)) removeChannel(channel);
+    // Reopening retains a warm cache but recreates subscriptions; absent sources
+    // must also retire cached cards whose previous channel object is already gone.
+    for (const [id, task] of tasks) {
+      const channel = channels.get(task.channelKey);
+      if (channel?.supported && channel.presentation.protocol === task.protocol) continue;
+      tasks.delete(id);
+      collapsedTasks.delete(id);
+      userToggledTasks.delete(id);
+      reportStates.delete(id);
+      killPending.delete(id);
+    }
+    source = [...channels.values()].find(c => c.stream)?.stream || null;
+    badgeSource = panelOpen ? null : source;
+    state.status = channels.size ? 'live' : 'unavailable';
+    if (panelOpen) syncElapsedTimer();
     repaint();
   }
 
   function startChannel() {
     teardownChannel();
-    // 面板订阅接管徽标（repaint 每次以面板 tasks 汇写）：拆徽标订阅，避免
-    // 同通道双订阅双写。
-    _teardownBadgeStream();
-    eventRevision = 0;
-    listRevision = 0;
-    taskRevisions.clear();
-    const addressing = currentAddressing();
-    // 重开保暖（stale-while-revalidate）：同一会话重开面板保留任务快照，
-    // 打开即渲染卡片——快照新鲜度由关闭期间徽标流的事件镜像保障（见
-    // _ensureBadgeStream）；寻址（agentId/sessionId）变化才整体丢弃，防跨
-    // 会话串台。
-    const nextCacheKey = addressing ? `${addressing.agentId}::${addressing.sessionId}` : '';
-    if (nextCacheKey !== cacheAddressKey) {
-      _resetTaskCache();
-      cacheAddressKey = nextCacheKey;
-    }
+    panelOpen = true;
+    badgeSource = null;
+    syncAddress();
     lastHtml = '';
     lastSkeleton = '';
-    if (!addressing) {
-      state.status = 'unavailable';
-      repaint();
-      return;
-    }
-    state.agentId = addressing.agentId;
-    state.sessionId = addressing.sessionId;
-    state.status = 'connecting';
     syncElapsedTimer();
     repaint();
-
-    // 会话切换守卫：面板常开时，焦点会话变了就重订通道（对齐面板寻址纪律）；
-    // 面板被取消激活（如切出 chat 表面）时自动拆通道，不留隐藏订阅。
-    sessionWatchTimer = setInterval(() => {
-      if (typeof activeFeaturePanel !== 'string' || activeFeaturePanel !== 'bg') {
-        teardownChannel();
-        return;
-      }
-      const current = currentAddressing();
-      if (!current || current.agentId !== state.agentId || current.sessionId !== state.sessionId) {
-        startChannel();
-      }
-    }, REFRESH_SESSION_WATCH_MS);
-
-    // 能力发现先行：无 shell-bg 通道的会话（coder / 其他工作空间 / 已停止）
-    // 不建 EventSource——空态 stream 必 404，浏览器网络层日志无法从 JS 抑制。
-    // channels 列表恒 200；发现期间面板被关 / 会话切换由 generation 守卫兜住。
-    // 查询本身失败（网络异常）时按已声明处理，让订阅走既有的错误降级路径。
-    const generation = channelGeneration;
-    void (async () => {
-      let declared = true;
-      try {
-        const channels = await window.ClawFeatureCommunication.listChannels(addressing.agentId, addressing.sessionId);
-        declared = channels.some((channel) => channel?.featureId === FEATURE_ID && channel?.channelId === CHANNEL_ID);
-      } catch { /* keep declared */ }
-      if (generation !== channelGeneration) return;
-      if (!declared) {
-        state.status = 'unavailable';
-        repaint();
-        return;
-      }
-      const params = new URLSearchParams({
-        agentId: state.agentId,
-        sessionId: state.sessionId,
-        featureId: FEATURE_ID,
-        channelId: CHANNEL_ID,
-      });
-      params.set('latest', '1');
-      source = new EventSource(`/protoclaw/feature-comms/stream?${params.toString()}`);
-      source.addEventListener('open', () => {
-        state.status = 'live';
-        void refreshList();
-        repaint();
-      });
-      source.addEventListener('event', (e) => handleStreamEvent(e.data));
-      source.addEventListener('resync', () => { void refreshList(); });
-      source.addEventListener('closed', () => {
-        state.status = 'closed';
-        // 通道终态：任务已随会话消亡，缓存作废，防陈旧卡片常驻。
-        _resetTaskCache();
-        teardownChannel();
-        repaint();
-      });
-      source.addEventListener('error', () => {
-        // 连接失败（网络层异常 / 订阅中途服务不可达）：降级提示，等待会话
-        // 切换重试。channel_not_declared 已由发现步前置过滤，不再走此分支。
-        if (state.status !== 'live') {
-          state.status = 'unavailable';
-          teardownChannel();
-          repaint();
-        }
-      });
-    })();
+    void discover();
   }
 
-  // ── 图标徽标（运行中任务数）──────────────────────────────────────
-
-  /** 写徽标 DOM（99+ 截断，与 genui badge 同款）；值未变不碰 DOM。 */
   function _setBadge(count) {
-    const value = count > 0 ? (count > 99 ? 99 : count) : -1;
+    const value = count > 0 ? Math.min(count, 99) : -1;
     if (value === lastBadgeValue) return;
     lastBadgeValue = value;
     const badge = document.getElementById('rail-bg-badge');
     if (!badge) return;
-    if (count > 0) {
-      badge.textContent = count > 99 ? '99+' : String(count);
-      badge.classList.add('visible');
-    } else {
-      badge.classList.remove('visible');
-      badge.textContent = '';
-    }
+    badge.textContent = count > 0 ? (count > 99 ? '99+' : String(count)) : '';
+    if (count > 0) badge.classList.add('visible');
+    else badge.classList.remove('visible');
   }
 
-  /** 拆除徽标订阅并清空 running 集合（面板接管 / 会话切换 / 通道消失）。 */
-  function _teardownBadgeStream() {
-    if (badgeSource) { badgeSource.close(); badgeSource = null; }
-    badgeStreamKey = '';
-    badgeRunningIds.clear();
-  }
-
-  /** 拉一次 list（带 id）重建徽标基线：连接建立与 resync 对账共用。基线
-   * 快照同时镜像进任务缓存（含成员对账与终态默认收起）——徽标流先于面板
-   * 建立的场景（切换 runtime 即触发 refreshBadge）下，首次打开面板也无需
-   * 冷启动。 */
-  async function _rebuildBadgeBaseline(stream) {
-    let result;
-    try {
-      result = await channelRequest('list', {});
-    } catch {
-      return; // 网络层异常：徽标数值与缓存留待重连 / resync 对账
-    }
-    if (badgeSource !== stream) return;
-    if (result.ok === true && Array.isArray(result.tasks)) {
-      badgeRunningIds.clear();
-      for (const task of result.tasks) {
-        if (task?.id && task.status === 'running') badgeRunningIds.add(task.id);
-      }
-      _setBadge(badgeRunningIds.size);
-      const listedIds = new Set();
-      for (const task of result.tasks) {
-        if (!task?.id) continue;
-        listedIds.add(task.id);
-        applyTask(task);
-        foldTerminalByDefault(task);
-      }
-      for (const id of tasks.keys()) {
-        if (!listedIds.has(id)) tasks.delete(id);
-      }
-    }
-  }
-
-  /**
-   * 徽标专用 SSE 订阅（面板关闭态）：latest=1 不重放事件环，事件帧即时
-   * 增减 running 集合；断线由 EventSource 自动带 Last-Event-ID 续传，
-   * 重连成功 / resync 时重建基线。面板订阅存活时让位（互斥不双写）。
-   */
-  function _ensureBadgeStream(agentId, sessionId) {
-    if (source) return; // 面板已订阅同通道：徽标由面板事件流驱动
-    const key = `${agentId}::${sessionId}`;
-    if (badgeSource && badgeStreamKey === key) return;
-    _teardownBadgeStream();
-    // 缓存归属会话变化：丢弃旧会话快照，防徽标流把新会话事件混进旧缓存。
-    if (cacheAddressKey !== key) {
-      _resetTaskCache();
-      cacheAddressKey = key;
-    }
-    badgeStreamKey = key;
-    const params = new URLSearchParams({
-      agentId,
-      sessionId,
-      featureId: FEATURE_ID,
-      channelId: CHANNEL_ID,
-      latest: '1',
-    });
-    const stream = new EventSource(`/protoclaw/feature-comms/stream?${params.toString()}`);
-    badgeSource = stream;
-    stream.addEventListener('open', () => {
-      if (badgeSource === stream) void _rebuildBadgeBaseline(stream);
-    });
-    stream.addEventListener('event', (e) => {
-      if (badgeSource !== stream) return;
-      let task;
-      try { task = JSON.parse(e.data)?.data; } catch { return; }
-      if (!task || typeof task.id !== 'string') return;
-      if (task.status === 'running') badgeRunningIds.add(task.id);
-      else badgeRunningIds.delete(task.id);
-      _setBadge(badgeRunningIds.size);
-      // 免费保鲜：徽标流与面板同通道同会话，事件随手镜像进任务缓存——
-      // 面板重开即时呈现最新状态。只更新数据不重绘（面板关闭时无渲染
-      // 目标，徽标由上方 _setBadge 单独驱动）。
-      applyTask(task);
-    });
-    stream.addEventListener('resync', () => {
-      if (badgeSource === stream) void _rebuildBadgeBaseline(stream);
-    });
-    stream.addEventListener('closed', () => {
-      if (badgeSource !== stream) return;
-      _teardownBadgeStream();
-      _setBadge(0);
-      // 通道终态（runtime 退出 / 会话摘除）：任务缓存随之作废，防陈旧卡片。
-      _resetTaskCache();
-    });
-    // error：EventSource 自动重连（重连成功走 open 重建基线）；通道已消失
-    // 时由 30s 发现轮询兜底拆除。
-  }
-
-  /**
-   * 面板关闭态的徽标数据源保障：channels 列表（恒 200）确认会话声明了
-   * shell-bg 通道后建立事件订阅；未声明 / 寻址消失则拆除并归零（旧会话
-   * 数字滞留防护）。寻址与面板同源（currentAddressing）：会话切换即先
-   * 隐藏，避免旧会话计数串台。
-   */
-  async function _pollBadge() {
-    if (badgePollInFlight || source) return;
-    const addressing = currentAddressing();
-    const key = addressing ? `${addressing.agentId}::${addressing.sessionId}` : '';
-    if (key !== badgeAddressKey) {
-      badgeAddressKey = key;
-      _teardownBadgeStream();
-      _setBadge(0);
-      if (!key) return;
-    }
-    badgePollInFlight = true;
-    try {
-      // 能力发现先行：无 shell-bg 通道的会话（coder / 其他工作空间 / 已
-      // 停止）不建订阅——空态 stream 必 404，而浏览器对非 2xx 的网络层
-      // 日志无法从 JS 抑制。channels 列表恒 200（对齐 genui 徽标先例）。
-      const channels = await window.ClawFeatureCommunication.listChannels(addressing.agentId, addressing.sessionId);
-      const latest = currentAddressing();
-      if (source || key !== (latest ? `${latest.agentId}::${latest.sessionId}` : '')) return;
-      const declared = channels.some((channel) => channel?.featureId === FEATURE_ID && channel?.channelId === CHANNEL_ID);
-      if (!declared) {
-        _teardownBadgeStream();
-        _setBadge(0);
-        // 会话确证无通道（runtime 未起 / 已退出）：缓存作废，防陈旧卡片。
-        _resetTaskCache();
-        return;
-      }
-      _ensureBadgeStream(addressing.agentId, addressing.sessionId);
-    } catch {
-      // 瞬时网络错误：保持现值，下轮再试
-    } finally {
-      badgePollInFlight = false;
-    }
-  }
+  function _pollBadge() { return discover(); }
 
   function _ensureBadgePolling() {
-    // 周期轮询常驻：徽标需要在面板未打开时也持续更新（发现 + 订阅保障）。
-    if (badgeTimer !== null) return;
-    badgeTimer = setInterval(() => { void _pollBadge(); }, BADGE_POLL_MS);
+    badgeTimer = setInterval(() => { void discover(); }, BADGE_POLL_MS);
+    sessionWatchTimer = setInterval(() => {
+      const previous = cacheAddressKey;
+      syncAddress();
+      if (previous !== cacheAddressKey) void discover();
+      if (panelOpen && activeFeaturePanel !== 'bg') window.BgPanel.onClose();
+    }, REFRESH_SESSION_WATCH_MS);
   }
 
   // ── 手动汇报触发器（请求面 report → BgRegistry.reportNow）──────────
 
-  // 卡片每秒随时长走秒重绘（innerHTML 重建），点击监听挂 document 做委托，
+  // 卡片结构变化时会重建，点击监听挂 document 做委托，
   // 不随重绘丢失；.bgp-* 类名空间归本面板，命中即本面板卡片。
   // 反馈走 ClawToast（loading → success/error）；按钮只承担在途/冷却展示。
   document.addEventListener('click', (e) => {
@@ -721,6 +621,9 @@
     if (!btn) return;
     const taskId = btn.getAttribute('data-bgp-report');
     if (!taskId || reportStates.has(taskId)) return; // 冷却期防抖：防通知风暴
+    const task = tasks.get(taskId);
+    const channel = channels.get(task?.channelKey);
+    if (!task || task.protocol !== PROCESS_PROTOCOL || !isCurrentChannel(channel)) return;
     reportStates.set(taskId, 'pending');
     repaint();
     const toastId = `bgp-report-${taskId}`;
@@ -738,8 +641,9 @@
         window.ClawToast?.update?.(toastId, { status: 'error', title: t('推送超时', 'Report timed out'), description: taskId });
       }
     }, REPORT_PENDING_TIMEOUT_MS);
-    void channelRequest('report', { taskId }).then((result) => {
+    void channelRequest(channel, 'report', { taskId: task.taskId }).then((result) => {
       clearTimeout(fallback);
+      if (!isCurrentChannel(channel)) return;
       if (result.ok === true) {
         reportStates.set(taskId, 'sent');
         window.ClawToast?.update?.(toastId, {
@@ -773,6 +677,9 @@
     if (!btn) return;
     const taskId = btn.getAttribute('data-bgp-kill');
     if (!taskId || killPending.has(taskId)) return;
+    const task = tasks.get(taskId);
+    const channel = channels.get(task?.channelKey);
+    if (!task || task.protocol !== PROCESS_PROTOCOL || !isCurrentChannel(channel)) return;
     killPending.add(taskId);
     repaint();
     const toastId = `bgp-kill-${taskId}`;
@@ -782,7 +689,8 @@
       title: t('正在打断任务…', 'Interrupting task…'),
       description: taskId,
     });
-    void channelRequest('kill', { taskId }).then((result) => {
+    void channelRequest(channel, 'kill', { taskId: task.taskId }).then((result) => {
+      if (!isCurrentChannel(channel)) return;
       killPending.delete(taskId);
       repaint();
       if (result.ok === true) {
@@ -847,7 +755,10 @@
     .bgp-chevron-open { transform: rotate(90deg); }
     .bgp-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
     .bgp-dot-running { background: var(--success-color); animation: bgp-pulse 1.2s ease-in-out infinite; }
-    .bgp-dot-done { background: var(--code-accent); }
+    .bgp-dot-done, .bgp-dot-completed { background: var(--code-accent); }
+    .bgp-dot-submitted, .bgp-dot-suspended, .bgp-dot-rotating, .bgp-dot-blocked, .bgp-dot-monitor_lost { background: var(--warning-color); }
+    .bgp-dot-executing { background: var(--success-color); }
+    .bgp-dot-failed, .bgp-dot-cancelled { background: var(--error-color); }
     .bgp-dot-killed, .bgp-dot-terminated { background: var(--error-color); }
     .bgp-id {
       font-family: ${MONO};
@@ -977,8 +888,10 @@
     getHtml,
     onOpen: startChannel,
     onClose: () => {
-      teardownChannel();
-      // 面板关闭后徽标订阅即时接管（不等 30s 发现轮询）。
+      panelOpen = false;
+      if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+      badgeSource = source;
+      // Same protocol streams keep the cache and badge fresh without a second subscription.
       void _pollBadge();
     },
     refresh: refreshList,

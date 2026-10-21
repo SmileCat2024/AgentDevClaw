@@ -5,6 +5,17 @@ import { FeatureCommunicationStore } from '../server/feature-communication-store
 const target = { agentId: 'agent-a', sessionId: 'session-a', featureId: 'shell', channelId: 'task-1' };
 
 describe('FeatureCommunicationStore', () => {
+  it('discovers versioned panel protocols without merging independent sources', () => {
+    const store = new FeatureCommunicationStore();
+    const presentation = { panel: 'background', protocol: 'claw.background.process', version: 1 };
+    store.declareChannel(target, { presentation });
+    store.declareChannel({ ...target, featureId: 'powershell' }, { presentation });
+    const channels = store.listChannels(target.agentId, target.sessionId);
+    assert.equal(channels.length, 2);
+    assert.deepEqual(channels.map(channel => channel.presentation), [presentation, presentation]);
+    assert.throws(() => store.declareChannel(target, { presentation: { ...presentation, version: 0 } }), /presentation/);
+  });
+
   it('stores a replaceable current snapshot per exact feature channel', () => {
     const store = new FeatureCommunicationStore();
     store.declareChannel(target);

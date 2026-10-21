@@ -1,6 +1,7 @@
 /** Coder execution observation. Business execution stays in WorkThread; only observation lives here. */
 import { BackgroundAccess } from '@agentdevjs/core';
 import type { BackgroundWorkHandle } from '@agentdevjs/core';
+import type { AgentBackgroundTask } from '../../shared/src/background-panel.js';
 
 export interface CoderObservation {
   threadId: string;
@@ -14,7 +15,7 @@ export interface CoderSnapshot {
   baseOffset: number;
 }
 
-type NodeState = 'pending' | 'suspended' | 'completed' | 'cancelled' | 'rotating';
+type NodeState = 'pending' | 'executing' | 'suspended' | 'completed' | 'cancelled' | 'rotating';
 interface ExecutionNode { state: NodeState; sessionId?: string }
 interface Reply { sessionId: string; turn: number; text: string }
 interface WaitingWork { source: string; id: string; owner: string }
@@ -30,12 +31,14 @@ interface Observation {
   replies: Map<string, Reply>;
   terminal?: string;
   message?: string;
+  projection: AgentBackgroundTask;
 }
 
 export interface CoderMonitorOptions {
   access: BackgroundAccess;
   read: (threadId: string, after: number, signal: AbortSignal) => Promise<CoderSnapshot>;
   intervalMs?: number;
+  onUpdate?: (task: AgentBackgroundTask) => void | Promise<void>;
 }
 
 export function observationKey(identity: CoderObservation): string {
@@ -51,6 +54,18 @@ export class CoderMonitor {
   private disposed = false;
 
   constructor(private readonly options: CoderMonitorOptions) {}
+
+  list(): AgentBackgroundTask[] {
+    return [...this.observations.values()].map((target) => ({ ...target.projection }));
+  }
+
+  private project(target: Observation, patch: Partial<AgentBackgroundTask>): void {
+    if (Object.keys(patch).length && Object.entries(patch).every(([key, value]) => target.projection[key] === value)) return;
+    target.projection = { ...target.projection, ...patch, revision: target.projection.revision + 1, updatedAt: Date.now() };
+    try {
+      void Promise.resolve(this.options.onUpdate?.({ ...target.projection })).catch(() => {});
+    } catch { /* optional projection never participates in observation or notification */ }
+  }
 
   identities(): CoderObservation[] {
     return [...this.observations.values()]
@@ -71,11 +86,14 @@ export class CoderMonitor {
     if (!target) {
       target = {
         identity: { ...identity },
+        projection: { id: key, revision: 0, title: `Coder ${identity.threadId}`, agentId: 'coder', ...identity,
+          status: 'submitted', summary: '已提交，等待关联执行事件', startedAt: Date.now(), updatedAt: Date.now() },
         handle: this.options.access.registerWork({ id: key, summary: `Coder ${key}` }),
         nodes: new Map([[identity.commandId, { state: 'pending' }]]),
         waits: new Map(), replies: new Map(), cursor: 0, initialized: false, errors: 0,
       };
       this.observations.set(key, target);
+      this.project(target, {});
     }
     await this.refresh(target);
     if (this.disposed) return `monitor_disposed threadId=${identity.threadId} commandId=${identity.commandId}`;
@@ -170,7 +188,7 @@ export class CoderMonitor {
       for (const ref of refs) {
         const node = target.nodes.get(ref)!;
         if (event.sessionId) node.sessionId = event.sessionId;
-        if (event.type === 'turn.started') node.state = 'pending';
+        if (event.type === 'turn.started') node.state = 'executing';
         if (event.type === 'turn.failed') {
           this.finish(target, 'execution_failed', `执行失败：${event.error?.message || event.error?.reason || '原因未提供'}`);
           return;
@@ -206,6 +224,13 @@ export class CoderMonitor {
         : `本次执行已完成，但缺少可关联的最终回复。请 result ${target.identity.threadId} 补取证据。`);
       return;
     }
+    const status = thread.status === 'rotating' || thread.pendingSuccession ? 'rotating'
+      : [...target.nodes.values()].some((node) => node.state === 'executing') ? 'executing'
+        : target.waits.size > 0 ? 'suspended' : 'submitted';
+    this.project(target, { status, title: thread.headSessionTitle || target.projection.title,
+      sessionId: thread.headSessionId,
+      summary: status === 'rotating' ? '会话接力中' : status === 'suspended' ? '等待关联后台工作唤醒'
+        : status === 'executing' ? '本次关联执行进行中' : '等待关联执行事件' });
     if (thread.status === 'rotating' || thread.pendingSuccession) return;
     for (const [ref, node] of target.nodes) {
       const command = commands.find((c) => c.commandId === ref);
@@ -255,6 +280,11 @@ export class CoderMonitor {
     if (target.terminal || this.disposed) return;
     target.terminal = reason;
     target.message = message;
+    const status = reason === 'completed' ? 'completed'
+      : ['monitor_unreachable', 'runtime_unavailable', 'association_lost', 'thread_deleted'].includes(reason) ? 'monitor_lost'
+        : reason === 'execution_failed' || reason === 'command_failed' ? 'failed'
+          : reason.includes('cancelled') ? 'cancelled' : 'blocked';
+    this.project(target, { status, summary: message, endedAt: Date.now() });
     this.options.access.submitNotice({ workId: target.handle.id, terminal: true,
       text: `[Coder 监视 ${reason}] threadId=${target.identity.threadId} commandId=${target.identity.commandId}\n${message}` });
   }

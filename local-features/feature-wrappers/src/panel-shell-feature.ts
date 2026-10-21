@@ -16,6 +16,7 @@
 import { ShellFeature } from '@agentdevjs/shell-feature';
 import type { BgObserverEvent, ShellFeatureConfig } from '@agentdevjs/shell-feature';
 import { FeatureCommunicationClient } from '../../shared/src/feature-communication.js';
+import { PROCESS_BACKGROUND_PRESENTATION } from '../../shared/src/background-panel.js';
 
 export interface PanelShellFeatureConfig extends Omit<ShellFeatureConfig, 'bgObserver'> {
   agentId: string;
@@ -119,7 +120,7 @@ export class PanelShellFeature extends ShellFeature {
   }
 
   private async declare(): Promise<void> {
-    await this.client.declareChannel({ title: this.channelTitle, description: this.channelDescription });
+    await this.client.declareChannel({ title: this.channelTitle, description: this.channelDescription, presentation: PROCESS_BACKGROUND_PRESENTATION });
     this.declared = true;
   }
 
