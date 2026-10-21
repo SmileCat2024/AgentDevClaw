@@ -1,0 +1,9 @@
+{
+  "id": "workspace-agents-fixture",
+  "name": "Fixture workspace",
+  "defaultAgentId": "main",
+  "agents": [
+    { "id": "main", "displayName": "Main helper" },
+    { "id": "reviewer", "displayName": "Review helper" }
+  ]
+}

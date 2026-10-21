@@ -23,6 +23,7 @@ import { resolveSessionModelInfo } from './model-config.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createSessionHandoffHelpers } from './session-handoff-helpers.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
+import { resolveNewSessionAgent } from '../shared/workspace-agents.js';
 
 import {
   META_VERSION,
@@ -317,6 +318,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         expectedOutput,
         targetFiles,
         referenceMaterials,
+        workspaceAgentId: record.workspaceAgentId || 'main',
         sessionType: sTypeFP,
         status: cleanSessionText(record.status),
         archived: record.archived === true,
@@ -369,6 +371,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       expectedOutput,
       targetFiles,
       referenceMaterials,
+      workspaceAgentId: record.workspaceAgentId || 'main',
       sessionType: cleanSessionText(record.sessionType) || 'main',
       status: cleanSessionText(record.status),
       archived: record.archived === true,
@@ -421,6 +424,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       expectedOutput,
       targetFiles,
       referenceMaterials,
+      workspaceAgentId: record.workspaceAgentId || 'main',
       sessionType: cleanSessionText(record.sessionType) || 'main',
       status: cleanSessionText(record.status),
       archived: record.archived === true,
@@ -868,6 +872,12 @@ async function createPrebuiltSession(agentId, options = {}) {
   const sourceSession = sourceSessionId
     ? preIndex.sessions.find((session) => session.id === sourceSessionId) || null
     : null;
+  const workspace = (await discoverAgents(AGENTS_ROOT)).find((entry) => entry.id === agentId);
+  if (!workspace) throw Object.assign(new Error(`Unknown workspace: ${agentId}`), { statusCode: 404 });
+  if (sourceSessionId && !sourceSession) {
+    throw Object.assign(new Error(`Unknown source session: ${sourceSessionId}`), { statusCode: 404 });
+  }
+  const workspaceAgentId = resolveNewSessionAgent(workspace, options, sourceSession);
   const createdAt = new Date().toISOString();
   const sessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
   const nextFeatureName =
@@ -974,6 +984,7 @@ async function createPrebuiltSession(agentId, options = {}) {
     formId: requestedFormId,
     openDirectory: nextOpenDirectory,
     sessionType,
+    workspaceAgentId,
     metadata: {
       ...sessionMetadata,
       // 会话 ↔ feature 绑定（ADR-0022）：创建参数直传 + 派生会话继承来源绑定。

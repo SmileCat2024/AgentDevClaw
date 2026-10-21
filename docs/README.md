@@ -17,6 +17,7 @@
 - [前端设计系统](reference/design-system.md) — 修改样式 / 新增 UI 控件前必读：配方清单、节奏表、场景参照系（活文档）
 - [Runtime input lease 协议](protocols/runtime-input-lease-protocol.md)
 - [输入区行为契约](protocols/input-area-behavioral-contract.md)
+- [工作空间内 Agent 声明与会话绑定](protocols/workspace-agents.md) — 多 Agent 命名与装配、固定会话绑定、欢迎页名称来源
 - [CLI 调用 Schema](protocols/cli-calling-schema.md)
 - [Claw 服务生命周期契约](protocols/service-lifecycle.md)
 - [工具调用与结果的渲染约定](protocols/tool-rendering.md) — Feature 模板的推荐结构、宿主分工和官方样例

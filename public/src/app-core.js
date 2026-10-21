@@ -45,6 +45,7 @@ function extractSessionMetaFromDetail(detail, sessionId) {
   return {
     sessionId: selectedSessionId,
     sessionType: String(activeSession.sessionType || 'main').trim() || 'main',
+    workspaceAgentId: activeSession.workspaceAgentId || 'main',
     createdAt: String(activeSession.createdAt || '').trim(),
     updatedAt: String(activeSession.updatedAt || '').trim(),
     openDirectory: String(
@@ -94,6 +95,7 @@ async function loadAgentDetail(agentId) {
     if (sessionMeta && typeof commitSessionViewPatch === 'function') {
       commitSessionViewPatch(sessionViewToken, { sessionMeta }, ({ current }) => {
         if (typeof updateChatContextBar === 'function') updateChatContextBar(current);
+        if (!current.messages.length && typeof renderCurrentMainView === 'function') renderCurrentMainView(current);
       });
     }
     loaded = true;
@@ -1131,11 +1133,7 @@ function getEmptyStateHtml() {
       + '</span></div>';
   }
   let _isZh = currentLanguage === 'zh';
-  let _displayName = '';
-  try {
-    let _agent = getCurrentAgentRecord();
-    _displayName = String(_agent && _agent.name || '').trim();
-  } catch (_) { /* agent not loaded yet */ }
+  const _displayName = window.ClawFW?.workspaceAgents?.getWelcomeName() || '';
   let _title = _displayName
     ? (_isZh ? '欢迎使用' : 'Welcome to')
     : (_isZh ? '新对话' : 'New Conversation');

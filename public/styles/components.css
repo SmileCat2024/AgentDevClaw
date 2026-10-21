@@ -1090,6 +1090,39 @@ body[data-theme="light"] .markdown-body :not(pre) > code:not(.inline-code-accent
   overflow-x: auto;
 }
 
+/* Welcome/loading use the space above the composer, not message-list scroll padding. */
+#chat-container:has(> .empty-welcome),
+#chat-container:has(> .chat-loading) {
+  min-height: 0;
+  padding: clamp(12px, 3vh, 24px) 24px;
+  overflow: clip;
+}
+#chat-container > .empty-welcome,
+#chat-container > .chat-loading {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.main-content:has(#chat-container > .empty-welcome) #user-input-container,
+.main-content:has(#chat-container > .chat-loading) #user-input-container {
+  position: relative;
+  bottom: auto;
+  flex-shrink: 0;
+  margin-bottom: clamp(12px, 5vh, 50px);
+}
+#chat-container > .empty-welcome {
+  gap: clamp(8px, 2vh, 20px);
+}
+#chat-container > .empty-welcome .empty-welcome-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workspace-agent-picker { width: min(100%, 480px); }
+.workspace-agent-picker h2,
+.workspace-agent-picker p { margin: 0; }
+.workspace-agent-picker p { color: var(--text-secondary); }
+.workspace-agent-picker-actions { display: flex; justify-content: flex-end; gap: 12px; }
+
 /* ── Empty state: welcome cover & loading ── */
 .empty-state {
   display: flex;
@@ -1159,7 +1192,7 @@ body[data-theme="light"] .markdown-body :not(pre) > code:not(.inline-code-accent
   font-size: 1.05rem;
   font-weight: 400;
   letter-spacing: 0.04em;
-  color: rgba(220, 229, 239, 0.6);
+  color: var(--text-secondary);
 }
 .chat-loading-spinner {
   width: 14px; height: 14px;

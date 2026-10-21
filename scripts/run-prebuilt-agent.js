@@ -30,6 +30,7 @@ import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH
 import { resolveDesktopWorkspace } from '../server/shared/desktop-workspace.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
+import { resolveWorkspaceAgent, resolveWorkspaceAgentClass, workspaceAgentDisplayName } from '../server/shared/workspace-agents.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -83,19 +84,6 @@ function sanitizeSessionFragment(value) {
     .replace(/^-|-$/g, '') || 'default';
 }
 
-function resolveAgentClass(agentModule) {
-  if (typeof agentModule.default === 'function') {
-    return agentModule.default;
-  }
-
-  for (const exported of Object.values(agentModule)) {
-    if (typeof exported === 'function') {
-      return exported;
-    }
-  }
-
-  return null;
-}
 
 function getWorkspaceStatePath(agentId) {
   return join(USER_DATA_ROOT, 'workspaces', sanitizeSessionFragment(agentId), 'state.json');
@@ -764,11 +752,18 @@ SessionLifecycle.prototype.start = async function () {
   }
 
   const agentModule = await import(pathToFileURL(agentJsPath).href);
-  const AgentClass = resolveAgentClass(agentModule);
-
-  if (!AgentClass) {
-    throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
+  const metadata = JSON.parse(readFileSync(join(agentPath, 'metadata.json'), 'utf8'));
+  let boundAgentId;
+  if (this.sessionId) {
+    const index = JSON.parse(readFileSync(getSessionIndexPath(agentId), 'utf8'));
+    const record = index.sessions.find((entry) => entry.id === this.sessionId);
+    if (!record) throw new Error(`Session index record not found: ${this.sessionId}`);
+    boundAgentId = record.workspaceAgentId === undefined ? 'main' : record.workspaceAgentId;
   }
+  const declaration = resolveWorkspaceAgent(metadata, boundAgentId);
+  this.runtime.workspaceAgentId = declaration.id;
+  if (metadata.agents !== undefined) this.agentName = workspaceAgentDisplayName(declaration);
+  const AgentClass = resolveWorkspaceAgentClass(agentModule, declaration.id);
 
   // coder 是独立 APP（ADR-0025）：模型配置走自己的 agent-configs/coder.json。
   const modelOptions = agentId === 'coder'

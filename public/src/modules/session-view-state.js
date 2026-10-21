@@ -33,6 +33,7 @@ function normalizeSessionViewRuntimeId(value) {
 const EMPTY_SESSION_META = Object.freeze({
   sessionId: '',
   sessionType: '',
+  workspaceAgentId: '',
   createdAt: '',
   updatedAt: '',
   openDirectory: '',
@@ -54,6 +55,7 @@ function normalizeSessionMeta(value) {
   return Object.freeze({
     sessionId: normalizeSessionMetaField(value.sessionId),
     sessionType: normalizeSessionMetaField(value.sessionType),
+    workspaceAgentId: normalizeSessionMetaField(value.workspaceAgentId),
     createdAt: normalizeSessionMetaField(value.createdAt),
     updatedAt: normalizeSessionMetaField(value.updatedAt),
     openDirectory: normalizeSessionMetaField(value.openDirectory),

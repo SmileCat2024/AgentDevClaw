@@ -192,6 +192,7 @@ function createSandbox({
   ctx.loadSource('public/src/modules/session-list-render.js');
   // workspace-actions.js 依赖（远程 create 分支触达的以记录替身注入）。
   ctx.run(`
+    var _navigationGuardEpoch = 0;
     var bumpNavigationGuard = function () {};
     var saveCurrentWorkspaceSurfaceScroll = function () {};
     var hasWorkspaceSessions = function () { return true; };
@@ -240,6 +241,7 @@ function createSandbox({
     window.alert = function (msg) { window.__calls.push({ fn: 'alert', args: [String(msg)] }); };
     window.__calls = [];
   `);
+  ctx.loadSource('public/src/modules/workspace-agents.js');
   ctx.loadSource('public/src/modules/workspace-actions.js');
   ctx.run(`var __phAgent = ${JSON.stringify(PH_AGENT)};`);
   return ctx;
@@ -250,7 +252,7 @@ async function renderSurface(ctx, { viewProjectId = null } = {}) {
   await ctx.window.RemoteConnections.refresh();
   await ctx.run('window.RemoteConnections.maybeRefreshRemoteHistory()');
   await new Promise((resolve) => setTimeout(resolve, 0));
-  ctx.run(`window.ClawFW = { phSurfaceViewProjectId: ${JSON.stringify(viewProjectId)} };`);
+  ctx.run(`window.ClawFW = { ...window.ClawFW, phSurfaceViewProjectId: ${JSON.stringify(viewProjectId)} };`);
   return ctx.run('renderWorkspaceSessionList(__phAgent, {})');
 }
 

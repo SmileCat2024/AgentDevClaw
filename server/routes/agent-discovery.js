@@ -14,6 +14,7 @@ import { resolveAgentProcessMode } from '../shared/process-mode.js';
 import { normalizePermissionDeclarations, normalizePermissionDefaults } from '../shared/permission-registry.js';
 import { sessionRecordToWorkspaceMeta } from './session-helpers-pure.js';
 
+import { normalizeWorkspaceAgents } from '../shared/workspace-agents.js';
 export { resolveAgentProcessMode } from '../shared/process-mode.js';
 
 // ── Identity Registry (pure function, exported for testing) ────────
@@ -98,6 +99,7 @@ export function createAgentDiscoveryModule(ctx) {
         const permissions = normalizePermissionDeclarations(metadata.permissions);
         results.push({
           ...metadata,
+          ...normalizeWorkspaceAgents(metadata),
           permissions,
           // 作者默认值（ADR-0030）：键必须 ∈ permissions 声明集且值合法，
           // 否则启动扫描报错（与 permissions 声明同等级校验）。

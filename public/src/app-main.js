@@ -343,6 +343,7 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
     ? {
         agentId,
         sourceSessionId: action.sessionId || null,
+        workspaceAgentId: action.workspaceAgentId,
         featureName: action.featureName || '',
         agentName: action.agentName || '',
         projectName: action.projectName || '',

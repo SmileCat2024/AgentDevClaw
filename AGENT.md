@@ -69,6 +69,8 @@
 
 全局 Feature 参数配置已并入前端设置菜单（多作用域三态编辑器），不再是独立工作空间。
 
+工作空间内 Agent 通过 `metadata.agents` / `defaultAgentId` 声明名字，`agent.js` 的 `agents` 导出声明装配；会话索引 `workspaceAgentId` 固定绑定，恢复、分支及接续继承。欢迎页显示当前会话 Agent 名，不用工作空间名或标题猜测；该字段不参与 OS 寻址与侧栏层级，也不同于群聊 `identities[]`。权威契约见 [工作空间内 Agent 声明与会话绑定](docs/protocols/workspace-agents.md)。
+
 ## 启动与依赖模式
 
 `npm install` → `npm run build` → `npm start` 三段式。`npm start` 经宿主 [scripts/run-supervised.js](scripts/run-supervised.js) 托管 server.js：宿主持有进程裁决权（优雅窗口后收割整棵进程树，杜绝 Ctrl+C 后端口残留），server 侧配套 stdin watchdog 与启动端口自愈，契约见 [docs/protocols/service-lifecycle.md](docs/protocols/service-lifecycle.md)。build 与 prestart 都按 package.json 中 `@agentdevjs/*` 依赖声明形态自动分流：

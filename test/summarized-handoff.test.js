@@ -106,7 +106,7 @@ describe('summarized-handoff pure functions', () => {
       const expectedKeys = [
         'title', 'featureName', 'agentName', 'taskTitle', 'taskType',
         'goal', 'constraints', 'expectedOutput', 'targetFiles',
-        'referenceMaterials', 'openDirectory', 'createdAt', 'updatedAt', 'sessionType',
+        'referenceMaterials', 'openDirectory', 'createdAt', 'updatedAt', 'sessionType', 'workspaceAgentId',
       ];
       assert.deepEqual(Object.keys(rec).sort(), expectedKeys.sort());
     });

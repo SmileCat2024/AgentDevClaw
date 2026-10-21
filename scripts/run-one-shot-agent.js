@@ -26,6 +26,7 @@ import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } fr
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
+import { resolveWorkspaceAgent, resolveWorkspaceAgentClass, workspaceAgentDisplayName } from '../server/shared/workspace-agents.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -70,14 +71,6 @@ function sanitizeSessionFragment(value) {
     .replace(/[^a-zA-Z0-9_-]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '') || 'default';
-}
-
-function resolveAgentClass(agentModule) {
-  if (typeof agentModule.default === 'function') return agentModule.default;
-  for (const exported of Object.values(agentModule)) {
-    if (typeof exported === 'function') return exported;
-  }
-  return null;
 }
 
 function getWorkspaceStatePath(agentId) {
@@ -202,15 +195,21 @@ async function main() {
 
   // 3. Import and instantiate agent class
   const agentModule = await import(pathToFileURL(agentJsPath).href);
-  const AgentClass = resolveAgentClass(agentModule);
-  if (!AgentClass) {
-    throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
+  const metadata = JSON.parse(readFileSync(join(agentPath, 'metadata.json'), 'utf8'));
+  let boundAgentId;
+  if (sessionId) {
+    const index = JSON.parse(readFileSync(getSessionIndexPath(agentId), 'utf8'));
+    const record = index.sessions.find((entry) => entry.id === sessionId);
+    if (!record) throw new Error(`Session index record not found: ${sessionId}`);
+    boundAgentId = record.workspaceAgentId === undefined ? 'main' : record.workspaceAgentId;
   }
+  const declaration = resolveWorkspaceAgent(metadata, boundAgentId);
+  const AgentClass = resolveWorkspaceAgentClass(agentModule, declaration.id);
 
   const modelPresetRole = cleanValue(process.env.PROTOCLAW_MODEL_PRESET_ROLE) || 'sub';
   const resolved = resolveAgentModelLLM(agentPath, modelPresetRole) || resolveGlobalDefaultLLM();
   const agent = new AgentClass({
-    name: agentId,
+    name: workspaceAgentDisplayName(declaration),
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
     ...(resolved ? { llm: resolved.llm } : {}),

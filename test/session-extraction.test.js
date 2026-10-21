@@ -13,7 +13,7 @@
  * Uses node:test format per project convention (test/*.test.js).
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveSessionTarget } from '../server/shared/operation-target.js';
 import path from 'node:path';
@@ -24,9 +24,12 @@ import {
   getAssemblyWorkspaceDir,
   normalizeClientAgentId,
 } from '../server/shared/string-helpers.js';
-import { createSessionHelpers, META_VERSION } from '../server/routes/session-helpers.js';
-import { setupSessionRoutes } from '../server/routes/session.js';
-import { createSessionHandoffHelpers } from '../server/routes/session-handoff-helpers.js';
+const isolatedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-session-extraction-'));
+process.env.AGENTDEV_DATA_DIR = isolatedRoot;
+after(() => fs.rm(isolatedRoot, { recursive: true, force: true }));
+const { createSessionHelpers, META_VERSION } = await import('../server/routes/session-helpers.js');
+const { setupSessionRoutes } = await import('../server/routes/session.js');
+const { createSessionHandoffHelpers } = await import('../server/routes/session-handoff-helpers.js');
 import { HANDOFF_SCHEMA_VERSION } from '@agentdevjs/core';
 
 // ─── Helpers ───────────────────────────────────────────────────────
@@ -36,7 +39,7 @@ function makeMockHelpersCtx() {
   return {
     readWorkspaceState: async () => ({}),
     writeWorkspaceState: async () => {},
-    discoverAgents: async () => [],
+    discoverAgents: async () => [{ id: 'flow-workspace' }, { id: 'agent-studio' }],
     enrichAgent: async (agent) => agent,
     startManagedAgent: async () => {},
     waitForManagedRuntimeReady: async () => true,

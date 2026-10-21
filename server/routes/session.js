@@ -712,6 +712,7 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       formId: sourceRecord?.formId || '',
       openDirectory: await normalizePathCasing(sourceRecord?.openDirectory || ''),
       sessionType: sourceRecord?.sessionType || 'main',
+      workspaceAgentId: sourceRecord?.workspaceAgentId || 'main',
       metadata: {
         ...(sourceRecord?.metadata || {}),
         branchSourceSessionId: sourceSessionId,
@@ -1020,6 +1021,7 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       returnSummary: false,
       title: requestedTitle || undefined,
       sessionType: requestedSessionType || undefined,
+      workspaceAgentId: req.body.workspaceAgentId,
       sourceSessionId: req.body.sourceSessionId,
       formId: req.body.formId,
       featureName: req.body.featureName,

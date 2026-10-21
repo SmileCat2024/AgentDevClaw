@@ -455,6 +455,7 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
     targetFiles: cleanSessionText(record?.targetFiles),
     referenceMaterials: cleanSessionText(record?.referenceMaterials),
     sessionType,
+    workspaceAgentId: record?.workspaceAgentId || 'main',
     status: cleanSessionText(record?.status),
     archived: record?.archived === true,
     todo: record?.todo === true,
@@ -720,6 +721,7 @@ export function sessionRecordToWorkspaceMeta(record) {
   const agentName = cleanSessionText(record?.agentName);
   const formId = cleanSessionText(record?.formId);
   return {
+    workspaceAgentId: record?.workspaceAgentId || 'main',
     active_workspace_session_id: cleanSessionText(record?.id) || null,
     active_workspace_session_form_id: formId || null,
     active_workspace_session_title: title,
@@ -762,6 +764,7 @@ export function buildChildRuntimeAgent(viewerAgent, { agentId, sessionId = '', s
   const title = cleanSessionText(meta.active_workspace_session_title);
   return {
     ...viewerAgent,
+    workspaceAgentId: meta.workspaceAgentId || 'main',
     name: displayName || agentName || title || viewerAgent.name || String(viewerAgent.id || ''),
     description: viewerAgent.description || '',
     status: viewerAgent.connected ? 'running' : 'stopped',

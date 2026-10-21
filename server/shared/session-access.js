@@ -95,6 +95,7 @@ function normalizeSessionIndexData(data) {
         referenceMaterials: cleanSessionText(session.referenceMaterials),
         openDirectory: cleanSessionText(session.openDirectory),
         sessionType: cleanSessionText(session.sessionType) || 'main',
+        workspaceAgentId: session.workspaceAgentId === undefined ? 'main' : session.workspaceAgentId,
         archived: session.archived === true,
         todo: session.todo === true,
         metadata: normalizeSessionMetadata(session.metadata),

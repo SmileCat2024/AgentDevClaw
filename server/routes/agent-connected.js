@@ -161,6 +161,8 @@ export function createConnectedAgentsQuery(deps) {
         launchMode: agent.launchMode || null,
         processMode: agent.processMode || 'isolated',
         ui: agent.ui || null,
+        agents: agent.agents,
+        defaultAgentId: agent.defaultAgentId,
         workspace: agent.workspace || null,
         permissions: Array.isArray(agent.permissions) ? agent.permissions : [],
         // 作者默认值（ADR-0030）：通知权限项的 metadata 默认层，设置面板
@@ -223,6 +225,7 @@ export function createConnectedAgentsQuery(deps) {
         const runtimeMeta = await readWorkspaceSessionMeta(managedRuntime.agentId, managedRuntime.selectedSessionId);
         connectedAgents.push({
           id: runtimeAgent.id,
+          workspaceAgentId: runtimeMeta.workspaceAgentId || 'main',
           sidebar_entry_id: managedRuntime.agentId,
           name: runtimeMeta.active_workspace_display_name
             || runtimeMeta.active_workspace_agent_name
@@ -301,6 +304,7 @@ export function createConnectedAgentsQuery(deps) {
         : null;
       connectedAgents.push({
         id: runtimeAgent.id,
+        workspaceAgentId: childWorkspaceMeta?.workspaceAgentId || 'main',
         name: runtimeAgent.name,
         description: runtimeAgent.description || '',
         status: runtimeAgent.connected ? 'running' : 'stopped',

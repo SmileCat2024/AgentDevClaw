@@ -328,6 +328,8 @@ export function createAgentLifecycleModule(ctx) {
           launchMode: agent.launchMode || null,
           processMode: agent.processMode || 'isolated',
           ui: agent.ui || null,
+          agents: agent.agents,
+          defaultAgentId: agent.defaultAgentId,
           features: agent.features || [],
           workspace: agent.workspace || null,
           // 与 get_connected_agents / agent_detail 同一 wire 投影（PH 当前
@@ -433,6 +435,7 @@ export function createAgentLifecycleModule(ctx) {
           status,
           agent: viewerAgent ? {
             id: viewerAgent.id,
+            workspaceAgentId: meta?.workspaceAgentId || 'main',
             name: meta?.active_workspace_display_name
               || meta?.active_workspace_agent_name
               || meta?.active_workspace_session_title
@@ -496,6 +499,8 @@ export function createAgentLifecycleModule(ctx) {
           workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))
             ? await buildPhProjectScopedSnapshot(agentId, enriched.workspace_sessions)
             : buildWireSessionsSnapshot(agentId, enriched.workspace_sessions),
+          agents: enriched.agents,
+          defaultAgentId: enriched.defaultAgentId,
           workspace_data: enriched.workspace_data || {},
           workspace_state: enriched.workspace_state || { forms: {}, openDirectory: '', updatedAt: null },
         });

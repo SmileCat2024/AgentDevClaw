@@ -776,6 +776,7 @@ describe('sessionRecordToWorkspaceMeta', () => {
       openDirectory: 'D:\\code\\AgentDevClaw',
     });
     assert.deepEqual(meta, {
+      workspaceAgentId: 'main',
       active_workspace_session_id: 'session-1',
       active_workspace_session_form_id: null,
       active_workspace_session_title: '（精简）排查幽灵会话',

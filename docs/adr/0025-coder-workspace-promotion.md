@@ -18,7 +18,7 @@
 ### 1. 对象模型：OS → APP（工作空间）→ agent
 
 - **APP 是 OS 的应用单元**：侧栏条目、可寻址（HTTP/CLI/ACP）、可拔插（验收约束沿用 ADR-0024 §5）、可声明呈现策略。
-- **agent 是 APP 内对话实体**：持有装配（提示词、工具集、运行时类）与名字。本 ADR 落地后所有 APP 均为单 agent；APP 内多 agent 是模型允许、本 ADR 不实现的未来工程。agent 不产生侧栏入口、不参与会话寻址分支——身份投影不会借这层还魂。
+- **agent 是 APP 内对话实体**：持有装配（提示词、工具集、运行时类）与名字。APP 内多 agent 采用每对话固定绑定，声明、装配和继承契约见 [工作空间内 Agent 声明与会话绑定](../protocols/workspace-agents.md)（2026-10-21 实施）。agent 不产生侧栏入口、不参与会话寻址分支——身份投影不会借这层还魂。
 - **智能编码空间**（主 APP，`programming-helper`）：内含编程小助手 agent。APP 名与 agent 名两层保留，各司其职。
 - **Coder**（后台型 APP，新建 `prebuilt-agents/official/coder/`）：内含 coder agent（`coder-agent.js` 迁回）。与主 APP 在侧栏**平行**；声明 `host: programming-helper` 关联——表达同域绑定，落点为侧栏排序相邻（hosted APP 跟随宿主分组，如 Coder 紧随智能编码空间同在工具与效率组）。host 是 APP 级元数据与呈现属性，不是身份机制，不产生嵌套层级。
 - 本 ADR 是 2026-08-24 合并的定向回摆：保留其产品面决策，替换其建模面决策。
@@ -76,7 +76,7 @@
 
 ## 不做清单（显式边界）
 
-- 不做 APP 内多 agent 机制（模型允许，实现另立项）
+- 不做同一对话内的 Agent 切换或多 Agent 协作；APP 内多个 Agent 可分别绑定不同对话，见 [声明与绑定契约](../protocols/workspace-agents.md)
 - 不做运行时动态安装子 APP（真·小程序商店）；Coder 可拔插按 ADR-0024 §5 静态验收
 - 不做 Coder 线程的 UI 创建入口（派遣表单另立项）
 - 不做 ADR-0024 的接续收尾（thread SSE 事件源、reminder 输入槽位）——本 ADR 接续机制零改动，全量回归为验收门槛

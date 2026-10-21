@@ -67,6 +67,7 @@ function buildSourceRecord(sourceRecord = {}) {
     createdAt: cleanInlineText(sourceRecord?.createdAt),
     updatedAt: cleanInlineText(sourceRecord?.updatedAt),
     sessionType: cleanInlineText(sourceRecord?.sessionType),
+    workspaceAgentId: sourceRecord?.workspaceAgentId === undefined ? 'main' : sourceRecord.workspaceAgentId,
   };
 }
 

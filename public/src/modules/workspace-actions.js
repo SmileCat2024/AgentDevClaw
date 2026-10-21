@@ -887,6 +887,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     );
 
   if (needsManagedSession) {
+    const selectionEpoch = _navigationGuardEpoch;
+    action = await window.ClawFW.workspaceAgents.selectForNewSession(activeAgent, action);
+    if (!action || selectionEpoch !== _navigationGuardEpoch) return;
     // A session becomes the user's navigation target as soon as the operation
     // starts. Its runtime may still be absent, so keep the target intent
     // separate from currentRuntimeAgentId and render the chat loading surface
@@ -920,6 +923,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             type: action.type,
             sessionId: action.sessionId,
             formId: action.formId,
+            workspaceAgentId: action.workspaceAgentId,
             featureName: action.featureName,
             agentName: action.agentName,
             projectName: action.projectName,
@@ -1273,6 +1277,13 @@ window._createRemoteWorkspaceSession = async function(hostNsId, action, triggerB
         ? '缺少创建会话所需的项目目录'
         : 'Missing project directory for session creation');
     }
+    const selectionEpoch = _navigationGuardEpoch;
+    const detailResponse = await fetch('/protoclaw/agent_detail?agentId=' + encodeURIComponent(hostNsId));
+    const detail = await detailResponse.json();
+    if (!detailResponse.ok) throw new Error(detail?.error || 'Unable to load workspace Agents');
+    if (selectionEpoch !== _navigationGuardEpoch) return;
+    action = await window.ClawFW.workspaceAgents.selectForNewSession(detail, action);
+    if (!action || selectionEpoch !== _navigationGuardEpoch) return;
     sidebarOperation = beginSidebarOperation({
       type: 'create',
       kind: 'create',
@@ -1289,6 +1300,7 @@ window._createRemoteWorkspaceSession = async function(hostNsId, action, triggerB
       headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         agentId: hostNsId,
+        workspaceAgentId: action.workspaceAgentId,
         openDirectory,
         responseMode: 'delta',
         operationId: sidebarOperation.operationId,
