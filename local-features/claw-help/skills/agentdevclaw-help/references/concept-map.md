@@ -6,7 +6,7 @@
 
 | 你在别的工具里熟悉的 | 这里的对应 |
 |---|---|
-| `claude mcp add` / 项目 `.mcp.json` / Claude Desktop 的 `claude_desktop_config.json` | 项目 `.agentdev/mcps/*.json`（直接兼容 `mcpServers` 键）或 设置 → MCP 网关；见 references/mcp.md |
+| `claude mcp add` / 项目 `.mcp.json` / Claude Desktop 的 `claude_desktop_config.json` | 项目 `.agentdev/mcps/*.json`（兼容 `mcpServers` 键；stdio 条目需补 `"type": "stdio"`）或 设置 → MCP 网关；见 references/mcp.md |
 | 项目 `.claude/skills/` 技能目录 | 项目 `.agentdev/skills/`（默认扫描）；项目内 `.claude/skills/` 也可开启扫描直接复用；见 references/skills.md |
 | `CLAUDE.md` / `AGENTS.md` / `.cursorrules` 项目记忆文件 | `CLAUDE.md` 和 `AGENT.md` 原生支持：放在项目根目录自动读取注入（默认开启），另可配置最多 10 个额外文档；`.cursorrules` 改名或列入额外文档即可 |
 | `/model` 命令、`ANTHROPIC_API_KEY` 等环境变量 | 设置 → 模型配置（三类入口），会话内可在输入框旁切换模型；见 references/models.md |

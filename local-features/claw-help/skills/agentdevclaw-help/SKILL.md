@@ -18,7 +18,7 @@ description: AgentDevClaw 使用帮助。当用户询问模型/MCP/技能怎么�
 | 界面导览：左侧工作空间列表、右侧面板、各入口是什么 | references/ui-tour.md |
 | 从 Claude Code / Cursor / Codex CLI / Claude Desktop 迁移：某概念在这里对应什么 | references/concept-map.md |
 | 模型配置：接入订阅或 API key、Codex / OpenCode 登录、网络代理、换模型、凭证失效 | references/models.md |
-| MCP 配置：server 怎么加、配置文件格式、mcp_ 工具、共享网关 | references/mcp.md |
+| MCP 配置：server 怎么加、配置文件格式、mcp_ 工具、共享网关、助手代配与验证 | references/mcp.md |
 | 技能（Skills）：用户自己的技能怎么装、SKILL.md 怎么写、怎么触发 | references/skills.md |
 | 上下文与会话：精简、摘要、接续、自动打断、数据存储位置 | references/sessions-and-data.md |
 | 故障排查：报错、连不上、不工作、日志在哪看、如何报告问题 | references/troubleshooting.md |
@@ -33,11 +33,12 @@ description: AgentDevClaw 使用帮助。当用户询问模型/MCP/技能怎么�
 | 设置入口 | 界面右侧栏底部齿轮图标，弹出菜单：模型配置 / 访问保护 / 全局 Feature 设置 / 工作空间 / 网络代理 / 用量信息 / MCP 网关 / 退出程序 |
 | 模型配置 | 设置 → 模型配置，三类入口：Codex 订阅（登录 OpenAI 账户）/ OpenCode 订阅 / 自定义模型（支持 OpenAI Chat Completions、Responses、Anthropic Messages 三种协议） |
 | 网络代理 | 设置 → 网络代理；保存后全局生效，含连通性测试。Codex / OpenCode 等订阅服务通常需要代理 |
-| MCP 项目级配置 | 项目目录 `.agentdev/mcps/*.json`，兼容 Claude 格式的 `mcpServers` 包裹键 |
-| MCP 共享网关 | 设置 → MCP 网关；系统内置（Claw MCP、Debugger MCP）与用户自定义 server，跨项目共享 |
+| MCP 项目级配置 | 会话目录 `.agentdev/mcps/*.json`；stdio 条目必须写 `"type": "stdio"`，缺省会被当 HTTP 连接而静默失败 |
+| MCP 共享网关 | 设置 → MCP 网关；助手先读 `PROTOCLAW_SERVER_ORIGIN` 定位当前实例（默认端口 1420），经网关 API 代配；必须实际调用所需工具，connected 与工具枚举只是中间状态；见 references/mcp.md |
+| MCP 代配验收 | 配置回读 → 工具注册 → 实际调用 → 所需操作验证。桌面桥接还要核对下游端口、凭证与文件授权；改用脚本或无界面模式前先与用户确认 |
 | 用户技能目录 | 项目目录 `.agentdev/skills/`（默认扫描）；项目 `.claude/skills/` 可经设置开启扫描 |
 | 项目记忆文件 | `CLAUDE.md` / `AGENT.md` 自动读取注入（默认开启，可在 Feature 设置中调整，另可附加最多 10 个额外文档） |
-| 用户数据根 | `~/.agentdev/AgentDevClaw/`（会话、工作空间状态、Feature 资产；不写入用户的项目目录） |
+| 用户数据根 | `AGENTDEV_DATA_DIR` 指定的目录，未设置时为 `~/.agentdev/AgentDevClaw/`（会话、工作空间状态、Feature 资产；与安装目录、项目目录分开） |
 
 ## 回答纪律
 
