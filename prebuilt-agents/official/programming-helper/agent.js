@@ -131,7 +131,7 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // - MCP / Skill / OpencodeBasic 在此显式补装，恢复被框架移除的能力。
 
     // MCPFeature：连接 Claw 共享 MCP 网关 + 扫描 .agentdev/mcps，排除 crawl4ai 等系统 server。
-    this.use(new MCPFeature(undefined, { excludeServers: excludeMcpServers }));
+    this.use(new MCPFeature(undefined, { excludeServers: excludeMcpServers, storageDir: IMAGE_STORAGE_DIR }));
 
     // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
     // feature-setup.json 中的 skill 配置（scanAgentdevDir/scanClaudeDir/extraDirs 等）会覆盖默认值。
