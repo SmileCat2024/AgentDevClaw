@@ -98,14 +98,16 @@ window.refreshThreads = async (force = false) => {
         // 新线程事实落地后对账：视图冻结在旧 head 而线程 head 已推进（SSE
         // 事件丢失 / 与 404 清理竞态）时原地重绑。unchanged 短路不经过这里。
         _reconcileConversationWithThreadHead();
-        // 线程签名变化（新建/推进）时失效 workspace HTML 缓存，
-        // 使会话列表在下次渲染时带上最新徽标（不主动触发渲染）。
-        const sig = data.threads.map((t) => `${t.threadId}:${t.headSessionId}:${t.status}`).sort().join('|');
+        // This is the thread fact commit boundary for polling and SSE alike.
+        // Consumers render only after indexes and the conversation target agree.
+        const sig = JSON.stringify(data.threads);
         if (sig !== state.lastThreadsSig) {
           state.lastThreadsSig = sig;
           if (typeof lastRenderedWorkspaceHtml !== 'undefined') {
             lastRenderedWorkspaceHtml = '';
           }
+          if (typeof renderAgentList === 'function') renderAgentList();
+          if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
         }
       }
     } catch {
@@ -668,20 +670,26 @@ function _syncActiveThreadSubscription() {
   }
   const selectedThreadId = String(window.ClawThreads.activeConversation?.threadId || '').trim();
   const threadId = selectedThreadId || String(thread?.threadId || '').trim();
-  if (_activeThreadSubscription && _activeThreadSubscription.threadId === threadId) return;
+  // Sidebar facts belong to every known thread, not just the selected view.
+  // Keep the selected target during a succession gap even if it is not listed.
+  const threadIds = Array.from(new Set([
+    ...window.ClawThreads.threads.map((item) => String(item.threadId || '').trim()),
+    threadId,
+  ].filter(Boolean))).sort();
+  const key = JSON.stringify(threadIds);
+  if (_activeThreadSubscription?.key === key) return;
   const client = window.ClawFW?.SseClient;
-  if (!threadId || typeof client?.subscribeThreadEvents !== 'function') {
+  if (threadIds.length === 0 || typeof client?.subscribeThreadEvents !== 'function') {
     _activeThreadSubscription?.unsubscribe?.();
     _activeThreadSubscription = null;
     return;
   }
   _activeThreadSubscription?.unsubscribe?.();
-  const subscription = { threadId, unsubscribe: null };
-  subscription.unsubscribe = client.subscribeThreadEvents(threadId, async (event) => {
-    if (event?.type === 'thread.handoff-started') {
-      // 交接开始即时可见：事件只是发现信号，状态事实仍以 /threads 数据
-      // 为准——立即拉取（内部顺带刷新顶栏指示器为「接力中」）并重渲侧栏
-      // 过渡占位，不等 20s contentHash 轮询。
+  const subscription = { key, unsubscribe: null };
+  subscription.unsubscribe = client.subscribeThreadEvents(threadIds.length === 1 ? threadIds[0] : threadIds, async (event) => {
+    if (['thread.created', 'thread.handoff-started', 'thread.archived', 'thread.deleted'].includes(event?.type)) {
+      // Events discover changes; the shared refresh commits authoritative facts
+      // for background sidebar entries as well as the selected conversation.
       if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
       renderAgentList();
       return;
@@ -695,7 +703,7 @@ function _syncActiveThreadSubscription() {
     // 对账共用同一实现，不存在第二条重绑路径。
     if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
     renderAgentList();
-    await _rebindConversationToThreadHead(threadId, fromSessionId, toSessionId);
+    await _rebindConversationToThreadHead(event.threadId || threadId, fromSessionId, toSessionId);
   });
   _activeThreadSubscription = subscription;
 }

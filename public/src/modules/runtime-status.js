@@ -169,8 +169,10 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // 待办标记：运行中会话条目按 sessionId 关联宿主会话索引的 todo 字段，
   // 侧栏据此渲染 pin。
   const sessionTodoMap = new Map();
+  const sessionById = new Map();
   for (const session of Array.isArray(prebuiltAgent?.workspace_sessions?.sessions)
     ? prebuiltAgent.workspace_sessions.sessions : []) {
+    if (session?.id) sessionById.set(String(session.id), session);
     if (session?.todo === true) {
       const todoSid = String(session?.id || '').trim();
       if (todoSid) sessionTodoMap.set(todoSid, window.SIDEBAR_TODO_COLORS.has(session.todoColor) ? session.todoColor : 'white');
@@ -224,12 +226,25 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     if (!entry?.runtimeId) return;
     if (seenRuntimeIds.has(entry.runtimeId)) return;
     seenRuntimeIds.add(entry.runtimeId);
+    const thread = threadBySessionId.get(String(entry.sessionId || '').trim());
+    if (thread && (thread.archivedAt || thread.status === 'closed')) return;
     // 乐观退场：归档已提交、stop_agent 进行中的源 runtime 不再作为侧栏叶子
     // （operation 合成条目是操作反馈本身，不在此列）。
     if (typeof isRuntimeStopPending === 'function'
       && !String(entry.source || '').startsWith('operation-')
       && isRuntimeStopPending(entry.ownerId || hostAgentId, entry.sessionId, entry.runtimeId)) {
       return;
+    }
+    // Session-owned display fields come from the revisioned index, shared by
+    // mutation receipts and list refreshes. Runtime/thread summaries only fill
+    // an unloaded session; operation labels remain owned by the operation.
+    const session = sessionById.get(String(entry.sessionId || '').trim());
+    if (session && !String(entry.source || '').startsWith('operation-')) {
+      const title = session.formId === 'assembly-form'
+        ? (session.agentName || session.title)
+        : session.title;
+      if (title) entry.name = title;
+      if (session.title) entry.metaLabel = session.title;
     }
     const entryTodoColor = sessionTodoMap.get(String(entry.sessionId || '').trim());
     entry.todo = entryTodoColor !== undefined;
@@ -284,7 +299,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // 线程宿主 APP（ADR-0025：coder）的线程域：归属 = 线程记录 agentId。
   // 非线程宿主的 APP 此 Map 恒空，线程条目逻辑整体短路。
   const hostThreadsById = new Map((window.ClawThreads?.threads || [])
-    .filter((thread) => thread?.agentId === hostAgentId && thread.status !== 'closed')
+    .filter((thread) => thread?.agentId === hostAgentId)
     .map((thread) => [thread.threadId, thread]));
   const isThreadHostApp = hostThreadsById.size > 0;
   const threadBySessionId = new Map();
@@ -334,7 +349,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
           && Date.now() - Number(candidate.handoffStartedAt) < 5 * 60 * 1000
         )) || null;
       }
-      const threadAlive = thread && !thread.archivedAt;
+      if (thread && (thread.archivedAt || thread.status === 'closed')) return;
+      const threadAlive = !!thread;
       if (threadAlive && String(thread.headSessionId || '') !== coveredSessionId) {
         // 非 head 成员 runtime（head 已推进、本体待退役，或换代 successor
         // 尚未 commit）：不是侧栏叶子。
@@ -366,7 +382,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     // 项目归属的稳定锚），缓存缺席（接续中途刷新页面）时占位由线程 wire
     // 事实合成——侧栏连续性不依赖页面存活时间。
     for (const [threadId, thread] of hostThreadsById) {
-      if (thread.archivedAt) {
+      if (thread.archivedAt || thread.status === 'closed') {
         _coderThreadLiveEntries.delete(threadId);
         continue;
       }

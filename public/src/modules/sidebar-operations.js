@@ -571,6 +571,7 @@ function applySessionMutationDelta(agentId, payload) {
       : (agent.active_workspace_session_id || current.activeSessionId || null),
   });
   markSidebarAuthoritativeMutation();
+  if (typeof renderAgentList === 'function') renderAgentList();
   if (typeof lastRenderedWorkspaceHtml !== 'undefined') lastRenderedWorkspaceHtml = '';
   if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
   return true;

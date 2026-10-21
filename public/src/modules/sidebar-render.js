@@ -984,6 +984,9 @@ function getAgentListRenderSignature() {
       threadId: thread.threadId,
       headSessionId: thread.headSessionId,
       title: thread.title,
+      headSessionTitle: thread.headSessionTitle,
+      status: thread.status,
+      archivedAt: thread.archivedAt,
       lifeState: thread.lifeState,
       // 接续窗口的侧栏事实：挡板立/清与 head runtime 存活翻转必须进签名，
       // 否则交接占位条目的出现/退场不触发重渲（SSE 丢失时靠 20s 轮询驱动）。
@@ -1024,6 +1027,9 @@ function getAgentListRenderSignature() {
         suspended: rid !== '' && isRuntimeSuspended(rid) === true,
         activeSessionId: normalizeAgentIdentity(getActiveSessionId(agent)),
         workspaceRevision: Number(agent?.workspace_sessions?.revision) || 0,
+        sessions: (agent?.workspace_sessions?.sessions || []).map((session) => ({
+          id: session.id, title: session.title, formId: session.formId, agentName: session.agentName,
+        })),
         displayName: agent?.active_workspace_display_name || '',
         sessionTitle: agent?.active_workspace_session_title || '',
       };
@@ -1032,7 +1038,8 @@ function getAgentListRenderSignature() {
 }
 
 function renderAgentList() {
-  if (window.ClawSidebarLayout?.isInteracting()) return;
+  if (window.ClawSidebarLayout?.isInteracting()
+    || document.querySelector('.agent-runtime-item.editing')) return;
   const nextSignature = getAgentListRenderSignature();
   if (nextSignature === lastAgentListRenderSignature) {
     updateCurrentAgentChrome();

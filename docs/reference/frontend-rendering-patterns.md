@@ -4,7 +4,7 @@
 > 每次遇到渲染层的新问题或提炼出新结论时，请更新对应章节，或在文末追加新章节。
 > 保持每个条目简短、有代码示例、有判断依据，便于后续 agent 直接复用。
 >
-> 最后更新：2026-10-21（左栏应用布局与持久折叠；§7 会话加载独立提交与身份约束；12g 模型状态的统一提交与版本顺序）
+> 最后更新：2026-10-21（左栏应用布局与持久折叠；§7 会话加载独立提交与身份约束；12e 左栏事实提交与归档、标题刷新；12g 模型状态的统一提交与版本顺序）
 
 ---
 
@@ -1015,18 +1015,20 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 
 ## 12e. coder 线程条目：threadId 键控的单叶子投影（2026-10-10）
 
-coder 投影（`runtime-status.js collectRuntimeEntriesForPrebuilt`，`sessionType='coder'` 分支）把侧栏叶子从「每个存活 runtime 一条」升级为「每条线程一条」（[ADR-0024](../adr/0024-app-workspace-eternal-thread-model.md) 决策 4：稳定条目不随 successor 闪烁）：
+线程宿主投影（`runtime-status.js collectRuntimeEntriesForPrebuilt`，按线程 `agentId` 归属 APP）把侧栏叶子从「每个存活 runtime 一条」升级为「每条线程一条」（[ADR-0024](../adr/0024-app-workspace-eternal-thread-model.md) 决策 4：稳定条目不随 successor 闪烁）：
 
 - **只由当前 head 会话的 runtime 呈现**：非 head 成员 runtime（换代已推进后的退役滞留 / 历史棒次）一律不渲染。否则换代窗口新旧 runtime 并存时同线程双条目并列，点击旧条目被解析到新 head，成为生硬跳转（历史 bug，2026-10-10）。
 - **身份锚定**：`_coderThreadLiveEntries` 缓存线程首见条目的 `createdAt` / `projectDir` / `projectName` / `projectKey`，head 换锚时沿用，条目不换位。
+- **会话字段只读投影**：左栏叶子的存在性来自 runtime / thread，标题来自宿主按 revision 合并的会话索引；索引缺席时才取 runtime / thread 摘要，不从会话历史制造叶子。assembly 会话继续以 `agentName` 呈现，operation 条目保留操作文案。`applySessionMutationDelta` 提交后同时刷新左栏与主视图，重命名处理器不再分别写宿主、runtime、线程几份标题。编辑期间暂停左栏 DOM 替换，结束编辑后消费最新事实。
+- **归档约束**：归档或 closed 的线程成员不再呈现为运行条目，包含仍滞留在 agents 快照中的 child 与宿主合成条目；同一事实也清除接续占位。归档与 runtime 下线的先后顺序不应影响最终左栏。
 - **head 空窗补位**：head runtime 未上线（退役窗口 / successor 启动中）且线程活跃（handoff 进行 / 置换 operation / executing）时，以缓存条目 + `disconnected + transitionPending` 占位，不闪失；线程闭合 / 归档 / 不活跃则清缓存。
 - **点击 = 打开线程 head 会话**：条目带 `data-thread-id`，点击经 `openConversationTarget`（thread-store.js）解析到 head，不直连 runtime。
-- **状态发现（SSE 优先，轮询兜底）**：活动会话订阅 SSE thread 事件——`thread.handoff-started` 即时拉取线程事实并重渲（顶栏「接力中」指示器与侧栏过渡占位即时点亮，不等轮询）；`thread.head-advanced` 原地重绑（数据源换绑，非导航）。非活动线程靠 `/protoclaw/threads` contentHash 轮询（20s）兜底——轮询间隙内新 runtime 可能以「无 threadId 普通条目」短暂并列，属已知自愈瞬态。
-- **渲染签名**：`getAgentListRenderSignature` 必须含 `threadHeads`（threadId / headSessionId / title / lifeState），否则 head 推进后侧栏停留旧 DOM。
+- **状态发现（SSE 优先，轮询兜底）**：已知线程集合统一订阅 SSE thread 事件，后台线程与当前会话同样消费 `thread.handoff-started` / `thread.head-advanced` / `thread.archived` / `thread.deleted`。事件只触发事实刷新；`refreshThreads` 在更新索引和会话指向后驱动左栏与主视图，周期刷新走同一提交边界。换头重绑仍校验当前视图归属，不因后台线程事件切换用户会话。新线程发现与断连恢复由 `/protoclaw/threads` contentHash 周期刷新（20s）兜底。
+- **渲染签名**：`getAgentListRenderSignature` 必须包含线程标题 `headSessionTitle`、归档 `archivedAt`、`status`，以及 head、运行态、挡板等投影输入；会话索引中的标题及 assembly 显示名也参与签名。数据变化后由提交方调用渲染，签名只负责跳过未变内容。
 - **APP 身份与运行态可见性分离**：Coder APP 条目来自 metadata 声明，具体是否呈现由 `/api/agents` 的 `sidebarVisible` 决定。默认 `auto` 认「存活且绑定 Session 的 managed Runtime，或 rotating 接续挡板在途（删除事务窗口内除外）」——接续空窗（旧 head 退役、successor 未上线）期间入口保持，配合下方接续占位实现无感连续。未归档线程资产（open/hold/rotation_failed 等非终态）不代表运行态、不撑入口（ADR-0025 2026-10-18 回摆）；线程和历史仍可从 APP 首页查看；设置为 `always` 时 APP 入口常驻，但不合成运行会话叶子。相关合流见 `server/routes/agent-connected.js`，按接续帧覆盖的回归测试见 `test/sidebar-projection-succession.test.js`。
 - **`handoffStartedAt` 是 wire 字段（服务端投影，勿在前端另造）**：顶栏「接力中」指示器、输入路由守卫（交接窗口内输入改走 Thread Inbox 暂存）、侧栏交接占位共用 `thread.handoffStartedAt`（>0 且 <5min 视为交接中）。权威值 = `/protoclaw/threads` 对 `status='rotating'` 线程补读的 `pendingSuccession.startedAt`（`thread-routes.js` `_attachLifeState`）。历史事故（2026-10-10）：前端三处消费一个服务端从未下发的字段名，指示器永不亮、自动轮换窗口内输入被判 direct 直投已退役 runtime。
 
-回归测试：`test/frontend-runtime-status.test.js`（coder live session projection：head 推进 / zombie 并存 / head 空窗全时间线）；`test/frontend-thread-store-t006.test.js`（thread 事件消费：handoff-started 状态刷新 / head-advanced 原地重绑）；`test/sidebar-projection-succession.test.js`（宿主层：接续窗口投影条目逐帧存续）；`test/thread-routes-command-fields.test.js`（wire：handoffStartedAt 挡板投影与收敛）；`test/thread-control.test.js`（挡板身份镜像的立/清对称）。
+回归测试：`test/frontend-sidebar-freshness.test.js`（归档 / 重命名 / 后台线程事件 / 编辑保护与去重跨模块链路）；`node test/sidebar-freshness-browser-check.mjs`（隔离 Chromium 的 Enter 保存与虚影退场）；`test/frontend-runtime-status.test.js`（coder live session projection：head 推进 / zombie 并存 / head 空窗全时间线）；`test/frontend-thread-store-t006.test.js`（thread 事件消费：handoff-started 状态刷新 / head-advanced 原地重绑）；`test/sidebar-projection-succession.test.js`（宿主层：接续窗口投影条目逐帧存续）；`test/thread-routes-command-fields.test.js`（wire：handoffStartedAt 挡板投影与收敛）；`test/thread-control.test.js`（挡板身份镜像的立/清对称）。
 
 ---
 

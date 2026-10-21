@@ -661,6 +661,7 @@ function ctxRenameSession(target) {
   const restore = () => {
     nameEl.textContent = currentTitle;
     finishEditing();
+    renderAgentList();
   };
 
   const saveTitle = async () => {
@@ -678,19 +679,10 @@ function ctxRenameSession(target) {
         body: JSON.stringify({ agentId, title: newTitle }),
       });
       const result = await resp.json();
-      if (typeof applySessionMutationDelta === 'function') {
-        applySessionMutationDelta(agentId, result);
-      }
-      if (result.ok) {
-        nameEl.textContent = newTitle;
+      if (resp.ok && result.ok) {
+        nameEl.textContent = result.title || newTitle;
         finishEditing();
-        if (agent?.workspace_sessions?.sessions) {
-          const s = agent.workspace_sessions.sessions.find((s2) => s2.id === sessionId);
-          if (s) s.title = newTitle;
-        }
-        if (agent?.active_workspace_session_id === sessionId) {
-          updateAgentRecord(agentId, { active_workspace_session_title: newTitle });
-        }
+        applySessionMutationDelta(agentId, result);
         renderAgentList();
       } else {
         restore();
