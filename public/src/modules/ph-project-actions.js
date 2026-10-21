@@ -15,7 +15,7 @@
  *   ClawToast (modules/toast-notify.js)
  * 依赖全局变量:
  *   lastRenderedWorkspaceHtml (app-ui.js)
- *   phSearchQuery, phSearchResults, phSearchLoading, _phSearchTimer (app-main.js)
+ *   phSearchQuery, _phSearchTimer (app-core.js)
  * window 函数:
  *   phOpenModelConfig, phCloseModelConfig, phAutoSaveModelConfig,
  *   phOpenProject, phOpenProjectDirectory, phSwitchProject, phToggleProjectDropdown,
@@ -273,9 +273,9 @@ window.phSwitchProject = async (projectId) => {
     window.ClawFW = window.ClawFW || {};
     window.ClawFW.phSurfaceViewProjectId = projectId;
     phSearchQuery = '';
-    phSearchResults = null;
-    phSearchLoading = false;
     if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+    // 搜索结果/范围/分页等模块状态一并作废（身份已随项目切换漂移）
+    if (typeof window.phSearchResetState === 'function') window.phSearchResetState();
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
     return;
@@ -303,9 +303,9 @@ window.phSwitchProject = async (projectId) => {
 
     // Clear search state on project switch
     phSearchQuery = '';
-    phSearchResults = null;
-    phSearchLoading = false;
     if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+    // 搜索结果/范围/分页等模块状态一并作废（身份已随项目切换漂移）
+    if (typeof window.phSearchResetState === 'function') window.phSearchResetState();
 
     // 会话列表按项目分页：切换后拉取新项目首屏（替换旧项目切片）
     const switched = await phLoadProjectSessions(targetProject?.openDirectory || freshState?.openDirectory || '');
@@ -404,7 +404,7 @@ window.phSetupLoadMoreAutoScroll = () => {
     _phLoadMoreObserver.disconnect();
     _phLoadMoreObserver = null;
   }
-  const sentinels = document.querySelectorAll('.ph-load-more-wrap');
+  const sentinels = document.querySelectorAll('.ph-session-tab-panel .ph-load-more-wrap');
   if (sentinels.length === 0) return;
   _phLoadMoreObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {

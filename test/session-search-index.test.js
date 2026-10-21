@@ -21,6 +21,16 @@ describe('session search index memory cache', () => {
     assert.deepEqual(cache.getStats(), { size: 1, totalBytes: 6 });
   });
 
+  it('retains a workspace index above 64 MiB within the bounded default budget', () => {
+    const cache = createSearchIndexMemoryCache();
+    const entries = new Map();
+    cache.set('workspace', entries, 70 * 1024 * 1024);
+    assert.equal(cache.get('workspace'), entries);
+    cache.set('other-workspace', new Map(), 70 * 1024 * 1024);
+    assert.equal(cache.get('workspace'), null, 'the process-wide budget still evicts older workspaces');
+    assert.equal(cache.getStats().size, 1);
+  });
+
   it('does not retain a single index larger than the cache budget', () => {
     const cache = createSearchIndexMemoryCache(10);
     cache.set('oversized-agent', new Map(), 11);

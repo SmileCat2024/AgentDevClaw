@@ -2580,38 +2580,315 @@ undefined
 
 .ph-search-status {
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   padding: 8px 4px;
 }
 
+.ph-search-status.ph-search-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+
+.ph-search-retry-btn {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* 搜索面板工具行：范围 tabs（左） + 排序切换（右） */
+.ph-search-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0 6px;
+  flex-wrap: wrap;
+}
+
+.ph-search-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--active-bg);
+}
+
+.ph-search-scope-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.ph-search-scope-tab:hover {
+  color: var(--text-primary);
+}
+
+.ph-search-scope-tab.active {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+}
+
+.ph-search-sort-btn {
+  height: 26px;
+  background: transparent;
+  border: 1px solid var(--active-bg);
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.ph-search-sort-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+/* 搜索上下文片段：按消息边界生成，保留换行结构（pre-wrap），
+   来源（你/助手）与内容用字重/字号/颜色区分，不套卡片。 */
 .ph-search-snippet {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ph-search-snippet-title-only {
   font-size: 12px;
   color: var(--text-muted);
-  line-height: 1.5;
-  margin-top: 2px;
-  overflow: hidden;
+}
+
+.ph-search-match {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ph-search-match-role {
+  flex: 0 0 28px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.ph-search-match-context {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ph-search-passage + .ph-search-passage {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.ph-search-passage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ph-search-snippet:not(.expanded) .ph-search-match-text {
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
-  word-break: break-all;
+  overflow: hidden;
+}
+
+.ph-session-tabs.searching > .ph-session-tab-bar .ph-session-tabs-row,
+.ph-session-tabs.searching > .ph-session-tab-bar .ph-session-sort-toggle {
+  display: none;
+}
+
+.ph-session-tabs.searching {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+}
+
+.ph-session-tabs.searching > .ph-session-tab-bar {
+  grid-column: 2;
+  grid-row: 1;
+  justify-content: flex-end;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.ph-session-tabs.searching .ph-search-panel { display: contents; }
+.ph-session-tabs.searching .ph-search-toolbar {
+  grid-column: 1;
+  grid-row: 1;
+  padding: 0;
+}
+.ph-session-tabs.searching .ph-search-status,
+.ph-session-tabs.searching > .feature-project-session-list { grid-column: 1 / -1; }
+.ph-session-tabs.searching .ph-search-panel > .feature-project-session-list { grid-column: 1 / -1; }
+
+@media (max-width: 640px) {
+  .ph-session-tabs.searching { grid-template-columns: minmax(0, 1fr); }
+  .ph-session-tabs.searching > .ph-session-tab-bar { grid-column: 1; grid-row: 1; }
+  .ph-session-tabs.searching .ph-search-toolbar { grid-row: 2; }
+}
+
+.ph-search-result-item .workspace-history-side {
+  min-width: 0;
+  padding-right: 0;
+}
+
+.ph-search-result-item .workspace-history-main {
+  min-width: 0;
+}
+
+.ph-search-result-item .workspace-history-title-row {
+  flex-wrap: wrap;
+}
+
+.ph-search-result-item .workspace-actions.stacked:focus-within {
+  opacity: 1;
+}
+
+.ph-search-expand-btn:focus-visible,
+.ph-search-scope-tab:focus-visible,
+.ph-search-sort-btn:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+@media (max-width: 768px) {
+  .ph-search-result-item .workspace-actions.stacked { opacity: 1; }
+  .ph-search-result-item { gap: 10px; }
+}
+
+.ph-search-match-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}
+
+.ph-search-match-context .ph-search-match-text {
+  color: var(--text-secondary);
+}
+
+.ph-search-expand-btn {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--accent-color);
+  cursor: pointer;
+}
+
+.ph-search-expand-btn:hover {
+  text-decoration: underline;
 }
 
 .search-highlight {
-  background: rgba(255, 213, 79, 0.35);
-  color: inherit;
+  background: var(--accent-bg);
+  color: var(--accent-text);
   border-radius: 2px;
   padding: 0 1px;
 }
 
-.ph-search-role-badge {
-  font-size: 10px;
-  font-weight: 500;
-  background: var(--surface-alt);
-  color: var(--text-muted);
-  border-radius: 4px;
-  padding: 1px 5px;
-  margin-left: 6px;
-  white-space: nowrap;
+/* 搜索定位浮动条（返回搜索 / 回最新） */
+.ph-locate-bar {
+  position: fixed;
+  left: 50%;
+  top: 64px;
+  max-width: calc(100vw - 32px);
+  flex-wrap: wrap;
+  transform: translate(-50%, -8px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 10px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s, transform 0.18s;
+  z-index: 600;
+}
+
+.ph-locate-bar.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.ph-locate-bar-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ph-locate-bar-btn {
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-color);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.ph-locate-bar-btn:hover {
+  background: var(--active-bg);
+}
+
+.ph-locate-bar-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ph-locate-bar-close:hover {
+  color: var(--text-primary);
+  background: var(--active-bg);
+}
+
+/* 定位命中行短暂闪烁（与 chat-nav-timeline 导航点击高亮同语义） */
+.chat-locate-flash {
+  animation: chat-locate-flash-fade 2s ease-out 1;
+}
+
+@keyframes chat-locate-flash-fade {
+  0% { background: var(--accent-bg); }
+  100% { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-locate-flash { animation: none; background: var(--accent-bg); }
+  .ph-locate-bar { transition: none; }
 }
 
 .feature-project-subtitle {

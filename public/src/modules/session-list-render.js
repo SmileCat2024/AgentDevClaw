@@ -299,6 +299,69 @@ function _renderAgentCreatorSessionList(agent, block, ctx) {
 
 // ── Programming Helper ───────────────────────────────────────────
 
+/**
+ * PH 会话条目骨架（正常列表与搜索结果共用——不维护两套会话操作实现）。
+ * opts:
+ *   - type: 分区语义（main/archived/会话类型，进 data-ctx-variant 与菜单）
+ *   - nsId: 操作寻址身份（远程视图传宿主命名空间 id；默认 agent.id）
+ *   - bodyHtml: 覆盖 preview+token bar 的正文区（搜索上下文片段用）
+ *   - openActionExtra: 并入打开动作 JSON 的额外字段（如 messageIndex 定位）
+ *   - extraClasses: 附加到条目根的额外 class
+ */
+window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
+  const isZh = currentLanguage === 'zh';
+  const sType = opts.type || session.sessionType || 'main';
+  // 远程历史会话（ADR-0012 决策 1）：操作寻址用宿主级命名空间 id——
+  // 服务端会话端点按命名空间 agentId 解析远程目标并转发（裸 id）。
+  const sessionNsId = opts.nsId || session.remoteHostNsId || agent.id;
+  const openActionJson = {
+    type: 'open_session',
+    sessionId: session.id,
+    ...(opts.openActionExtra || {}),
+  };
+  const openAction = escapeHtml(JSON.stringify(openActionJson));
+  const primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>';
+  const moreBtn = '<button class="workspace-action secondary session-more-btn" type="button" onclick="window.phShowSessionCtxMenu(event, this, \'' + escapeHtml(sessionNsId) + '\', \'' + escapeHtml(session.id) + '\', \'' + escapeHtml(sType) + '\')"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>';
+  const buttonsHtml = [primaryBtn, moreBtn].join('');
+  // Build compact time indicator for title-row left side (only within this week)
+  let shortTime = getSessionShortTime(session.updatedAt);
+  let recencyCls = getSessionRecencyClass(session.updatedAt);
+  let indicatorHtml = shortTime
+    ? '<span class="session-time-indicator ' + recencyCls + '"><span class="session-time-dot"></span><span class="session-time-label">' + escapeHtml(shortTime) + '</span></span>'
+    : '';
+  // 会话记录可拖拽（引用源）：远程历史会话禁拖（引用寻址不到远程数据）
+  const dragAttrs = (session.remoteHostNsId || opts.disableDrag)
+    ? ''
+    : ' draggable="true" ondragstart="onPhSessionDragStart(event, this)" data-ref-session-type="' + escapeHtml(session.sessionType || 'main') + '"';
+  const metaHtml = '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt))
+    + ' · ' + escapeHtml(String(session.messageCount ?? 0)) + ' ' + escapeHtml(isZh ? '条消息' : 'messages') + '</div>';
+  const defaultBodyHtml = (session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '')
+    + renderSessionTokenBar(session, agent);
+  const bodyHtml = opts.bodyHtml !== undefined ? opts.bodyHtml : defaultBodyHtml;
+  return [
+    '<div class="feature-project-session-item workspace-history-item' + (opts.extraClasses ? ' ' + escapeHtml(opts.extraClasses) : '') + '" data-prebuilt-session-agent-id="' + escapeHtml(sessionNsId) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(sessionNsId) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '"' + dragAttrs + '>',
+    '<div class="workspace-history-main">',
+    '<div class="workspace-history-title-row">',
+    indicatorHtml,
+    '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(isZh ? '双击编辑标题' : 'Double-click to edit title') + '">' + (opts.titleHtml || escapeHtml(session.title || session.id)) + '</div>',
+    renderSessionResumeBadge(session),
+    (typeof window.renderSessionThreadBadge === 'function' ? window.renderSessionThreadBadge(agent.id, session) : ''),
+    renderSessionTodoBadge(session),
+    renderSessionArchivedBadge(session),
+    renderSessionTitleAiButton(session),
+    '</div>',
+    metaHtml,
+    bodyHtml,
+    '</div>',
+    '<div class="workspace-history-side">',
+    '<div class="workspace-actions stacked">',
+    buttonsHtml,
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
+};
+
 function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const { desc } = ctx;
   const projects = getProgrammingHelperProjects(agent);
@@ -478,50 +541,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const archivedSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.archived === true));
   const needsTabs = true; // 始终显示分页器，不管每个类型有没有对话
 
-  const renderPhSessionItem = (session, type) => {
-    const sType = type || session.sessionType || 'main';
-    // 远程历史会话（ADR-0012 决策 1）：操作寻址用宿主级命名空间 id——
-    // 服务端会话端点按命名空间 agentId 解析远程目标并转发（裸 id）。
-    const sessionNsId = session.remoteHostNsId || agent.id;
-    // Primary action button + ⋯ more menu button (equivalent to right-click ctx-menu)
-    const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
-    const primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>';
-    const moreBtn = '<button class="workspace-action secondary session-more-btn" type="button" onclick="window.phShowSessionCtxMenu(event, this, \'' + escapeHtml(sessionNsId) + '\', \'' + escapeHtml(session.id) + '\', \'' + escapeHtml(sType) + '\')"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>';
-    const buttonsHtml = [primaryBtn, moreBtn].join('');
-    // Build compact time indicator for title-row left side (only within this week)
-    let shortTime = getSessionShortTime(session.updatedAt);
-    let recencyCls = getSessionRecencyClass(session.updatedAt);
-    let indicatorHtml = shortTime
-      ? '<span class="session-time-indicator ' + recencyCls + '"><span class="session-time-dot"></span><span class="session-time-label">' + escapeHtml(shortTime) + '</span></span>'
-      : '';
-    // 会话记录可拖拽（引用源）：远程历史会话禁拖（引用寻址不到远程数据）
-    const dragAttrs = session.remoteHostNsId
-      ? ''
-      : ' draggable="true" ondragstart="onPhSessionDragStart(event, this)" data-ref-session-type="' + escapeHtml(session.sessionType || 'main') + '"';
-    return [
-      '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(sessionNsId) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(sessionNsId) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '"' + dragAttrs + '>',
-      '<div class="workspace-history-main">',
-      '<div class="workspace-history-title-row">',
-      indicatorHtml,
-      '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(isZh ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
-      renderSessionResumeBadge(session),
-      (typeof window.renderSessionThreadBadge === 'function' ? window.renderSessionThreadBadge(agent.id, session) : ''),
-      renderSessionTodoBadge(session),
-      renderSessionArchivedBadge(session),
-      renderSessionTitleAiButton(session),
-      '</div>',
-      '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + ' · ' + escapeHtml(String(session.messageCount ?? 0)) + ' ' + escapeHtml(isZh ? '条消息' : 'messages') + '</div>',
-      session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
-      renderSessionTokenBar(session, agent),
-      '</div>',
-      '<div class="workspace-history-side">',
-      '<div class="workspace-actions stacked">',
-      buttonsHtml,
-      '</div>',
-      '</div>',
-      '</div>',
-    ].join('');
-  };
+  const renderPhSessionItem = (session, type) =>
+    window.renderPhSessionItemHtml(agent, session, { type });
 
   // Render sessions with time-based group headers (今天 / 昨天 / 本周 / 更早)
   const renderPhSessionsWithGroups = (sessions, type) => {
@@ -558,10 +579,20 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     const loadMoreBtnHtml = hasMore
       ? '<div class="ph-load-more-wrap"><button class="workspace-action secondary ph-load-more-btn" type="button" onclick="window.phLoadMoreSessions()">' + escapeHtml(isZh ? '加载更多（已显示 ' + loadedCount + ' / ' + sessionTotal + '）' : 'Load more (' + loadedCount + ' / ' + sessionTotal + ')') + '</button></div>'
       : '';
-    sessionsHtml += '<div class="ph-session-tabs' + (isSearching ? ' searching' : '') + '" data-tab-group="' + tabId + '">';
+    const searchIdentity = {
+      identity: viewIdentity,
+      openDirectory: currentProject.openDirectory || '',
+      remoteOnly: currentProject.remoteOnly === true,
+    };
+    const searchData = ' data-search-agent-id="' + escapeHtml(viewIdentity)
+      + '" data-search-directory="' + escapeHtml(currentProject.openDirectory || '')
+      + '" data-search-remote="' + String(currentProject.remoteOnly === true)
+      + '" data-search-project-id="' + escapeHtml(currentProject.id)
+      + '" data-search-host-id="' + escapeHtml(agent.id) + '"';
+    sessionsHtml += '<div class="ph-session-tabs' + (isSearching ? ' searching' : '') + '" data-tab-group="' + tabId + '"' + searchData + '>';
     sessionsHtml += '<div class="ph-session-tab-bar">';
     sessionsHtml += '<div class="ph-session-tabs-row">';
-    sessionsHtml += '<button class="ph-session-tab' + (isSearching ? '' : ' active') + '" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainTabCount)) + '</span></button>';
+    sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainTabCount)) + '</span></button>';
     sessionsHtml += '<button class="ph-session-tab" data-ph-tab="archived" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_archived_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(archivedTabCount)) + '</span></button>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-toolbar">';
@@ -578,7 +609,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="archived"><div class="feature-project-session-list">' + (archivedSessions.length > 0 ? renderPhSessionsWithGroups(archivedSessions, 'archived') + loadMoreBtnHtml : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>' + (hasMore ? loadMoreBtnHtml : '')) + '</div></div>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-search-panel">';
-    sessionsHtml += (typeof window._buildPhSearchPanelHtml === 'function' ? window._buildPhSearchPanelHtml(agent.id) : '');
+    sessionsHtml += (typeof window._buildPhSearchPanelHtml === 'function' ? window._buildPhSearchPanelHtml(searchIdentity) : '');
     sessionsHtml += '</div>';
     sessionsHtml += '</div>';
   } else {

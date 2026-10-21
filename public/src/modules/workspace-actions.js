@@ -94,13 +94,35 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     }
   }
 
+  // 搜索结果进入（action 携带 messageIndex）：导航开始前捕获搜索面身份与
+  // 滚动位置——此刻 .ph-session-tabs dataset 与列表 scrollTop 仍在 DOM。
+  if (action.type === 'open_session' && typeof window.phSearchLocatePrepare === 'function') {
+    window.phSearchLocatePrepare(action);
+  }
+
   if (action.type === 'open_session' && isRemoteNamespaceAgentId(action.sessionId)) {
     // 远程历史会话激活（R2-01，ADR-0012 决策 2）：与本地同一动作入口，
     // 身份来自列表项数据层（host 级命名空间 id + 命名空间 sessionId），
     // activate 经服务端命名空间分支转发到远程。
-    const hostNsId = typeof window.RemoteConnections?.getEntryHostNamespaceId === 'function'
-      ? (window.RemoteConnections.getEntryHostNamespaceId(action.sessionId) || '')
-      : '';
+    // 宿主解析优先显式 action.agentId（搜索结果可召回未进目录历史页的
+    // 条目，目录查找会落空）；显式宿主必须与 sessionId 同连接，跨连接
+    // 寻址不采用，回退目录查找。
+    let hostNsId = '';
+    const explicitAgentId = String(action.agentId || '').trim();
+    const sessionSplit = typeof splitRemoteNamespaceId === 'function'
+      ? splitRemoteNamespaceId(action.sessionId)
+      : null;
+    if (explicitAgentId && isRemoteNamespaceAgentId(explicitAgentId) && sessionSplit) {
+      const agentSplit = splitRemoteNamespaceId(explicitAgentId);
+      if (agentSplit && agentSplit.connectionId === sessionSplit.connectionId) {
+        hostNsId = explicitAgentId;
+      }
+    }
+    if (!hostNsId) {
+      hostNsId = typeof window.RemoteConnections?.getEntryHostNamespaceId === 'function'
+        ? (window.RemoteConnections.getEntryHostNamespaceId(action.sessionId) || '')
+        : '';
+    }
     if (!hostNsId) {
       // 目录未含该会话（连接断开/条目消失）：显式失败，不猜测宿主。
       window.alert(currentLanguage === 'zh'
@@ -108,7 +130,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         : 'Remote connection is unavailable for this session');
       return;
     }
-    await window._activateRemoteHistorySession(hostNsId, action.sessionId, triggerButton);
+    await window._activateRemoteHistorySession(hostNsId, action.sessionId, triggerButton, action);
     return;
   }
 
@@ -1014,19 +1036,32 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             return;
           }
           setPreferredUnitMode('chat', nextAgent);
+          let switchSettled = true;
           if (nextRuntimeId === currentRuntimeAgentId) {
             clearPendingSessionNavigation();
             clearChatLoadingSession();
             beginFollowLatestEntryWindow();
             renderCurrentMainView();
           } else {
-            await requestSwitch(nextRuntimeId, 'session-open');
+            switchSettled = (await requestSwitch(nextRuntimeId, 'session-open'))?.switched === true;
           }
           if (managedNavigationEpoch === _navigationGuardEpoch) {
             clearPendingSessionNavigation();
             clearChatLoadingSession();
           }
           finishSidebarOperation(sidebarOperation.operationId, 'settled');
+          // 搜索结果进入（action 携带 messageIndex）：导航落定后定位到命中
+          // 消息。正常列表进入不带该字段，行为不变。sessionAction 在上方被
+          // 重建为仅含 sessionId（不向服务端传定位字段），messageIndex 从
+          // 原始 action 读取。switchAgent 落定会推进导航代次（旧 epoch 比
+          // 较恒否），守卫改用 switched 结果 + 当前 runtime 即目标的双重
+          // 落定判据；定位模块内部另有 runtime+session 身份锚。
+          if (switchSettled
+            && currentRuntimeAgentId === nextRuntimeId
+            && Number.isInteger(Number(action.messageIndex))
+            && typeof window.phSearchLocateAfterOpen === 'function') {
+            window.phSearchLocateAfterOpen(action);
+          }
           loadAgents().catch((error) => console.error('Failed to refresh agents after opening prebuilt session:', error));
           return;
         }
@@ -1062,6 +1097,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             // failed navigation must not leave the chat spinner or tabless
             // workspace in an unusable intermediate state. Do not touch the
             // view after a newer user navigation has taken ownership.
+            // 搜索结果进入·runtime 延迟就绪路径：导航落定后同样定位（navigated
+            // = 内部 requestSwitch 已执行；定位模块自带 runtime+session 身份
+            // 锚，用户已切走会自行放弃。epoch 已被 switchAgent 推进，下方旧
+            // 代次比较恒否，定位必须在其 return 之前）。
+            if (navigated
+              && Number.isInteger(Number(action.messageIndex))
+              && typeof window.phSearchLocateAfterOpen === 'function') {
+              window.phSearchLocateAfterOpen(action);
+            }
             if (_navGuard !== _navigationGuardEpoch) return;
             clearPendingSessionNavigation();
             clearChatLoadingSession();
@@ -1161,8 +1205,11 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
 // runtime），无确认层、无远程特判 UI。激活后远程 catalog 出现运行中 runtime，
 // Phase 1.5 统一投影自动带出（零新代码）；此处轮询目录条目出现后切换焦点。
 // 断线/远程不可达按 ADR-0011 三分类由 operation 契约显式呈现。
-window._activateRemoteHistorySession = async function(hostNsId, sessionId, triggerButton) {
+window._activateRemoteHistorySession = async function(hostNsId, sessionId, triggerButton, locateAction) {
   if (triggerButton) markActionLoading(triggerButton);
+  // 导航代次守卫锚点：等待 runtime 期间用户切走（epoch 前进）则放弃，
+  // 不把用户抢回目标会话。
+  const navEpoch = _navigationGuardEpoch;
   try {
     const response = await fetch('/protoclaw/prebuilt_sessions/activate', {
       method: 'POST',
@@ -1186,8 +1233,17 @@ window._activateRemoteHistorySession = async function(hostNsId, sessionId, trigg
     });
     // 远程 runtime 经 Phase 1.5 投影自动进入侧栏；等待目录条目出现后切换。
     const runtimeRef = await _waitForRemoteRuntimeForSession(sessionId, 50);
+    if (navEpoch !== _navigationGuardEpoch) return;
     if (runtimeRef) {
       await window.switchAgent(runtimeRef);
+      // 搜索结果进入（locateAction 携带 messageIndex）：导航落定后定位到
+      // 命中消息。switchAgent 内部推进导航代次，此处不可再用入口 epoch
+      // 比较；定位模块自带 runtime+session 身份锚，用户已切走会自行放弃。
+      if (locateAction
+        && Number.isInteger(Number(locateAction.messageIndex))
+        && typeof window.phSearchLocateAfterOpen === 'function') {
+        window.phSearchLocateAfterOpen(locateAction);
+      }
     } else {
       // 会话已在远程激活；runtime 就绪有延迟时留给 catalog 轮询自然带出。
       void loadAgents();

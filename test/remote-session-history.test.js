@@ -60,6 +60,7 @@ const REMOTE_HISTORY = {
 function loadWorkspaceActions(ctx) {
   ctx.run(`
     var bumpNavigationGuard = function () {};
+    var _navigationGuardEpoch = 0; // _activateRemoteHistorySession 的代次守卫锚
     var saveCurrentWorkspaceSurfaceScroll = function () {};
     var hasWorkspaceSessions = function () { return true; };
     var getWorkspaceSessions = function () { return []; };
@@ -245,7 +246,7 @@ describe('remote session history merge (R2-01)', () => {
       window.RemoteConnections.getEntryHostNamespaceId = function (id) {
         return id === 'remote:server-a:session-hist-1' ? 'remote:server-a:programming-helper' : null;
       };
-      window.RemoteConnections.resolveRuntimeRef = function () { return null; };
+      window.RemoteConnections.waitForRuntimeForSession = async function () { return null; };
       window.switchAgent = async () => {};
     `);
     await ctx.run(

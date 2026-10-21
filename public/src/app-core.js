@@ -764,9 +764,6 @@ function bumpNavigationGuard() {
 }
 let phSessionSortMode = 'updatedAt'; // 'updatedAt' | 'createdAt' — programming-helper session list sort preference
 let phSearchQuery = '';              // current search query for session list
-let phSearchResults = null;          // search results array or null (not searching)
-let phSearchLoading = false;         // search in progress
-let phSearchTab = 'main';            // which tab filter to apply during search: 'main' | 'archived'
 let _phSearchTimer = null;           // debounce timer for search input
 
 // ── User expand/collapse preferences (survive full re-render) ──────────────

@@ -283,8 +283,16 @@ app.get('/protoclaw/search_sessions', async (req, res, next) => {
       res.status(400).json({ error: 'agentId is required' });
       return;
     }
+    // scope（all/main/archived）/ sort（relevance/recency）/ offset / limit
+    // —— 分类过滤与分页在服务端完成；远程搜索透传同一参数与结果契约。
+    const searchOptions = {
+      scope: typeof req.query.scope === 'string' ? req.query.scope : 'all',
+      sort: typeof req.query.sort === 'string' ? req.query.sort : 'relevance',
+      offset: Number(req.query.offset),
+      limit: Number(req.query.limit),
+    };
     // ADR-0011：远程命名空间身份 → 转发远程同名搜索路由（裸 id + 原始 q /
-    // openDirectory）；本地身份走下方既有索引扫描路径，行为字节级不动。
+    // openDirectory / 范围与分页参数）；本地身份走下方既有索引扫描路径。
     try {
       const hostTarget = resolveForwardHostTarget(agentId);
       if (hostTarget.scope === 'remote') {
@@ -293,6 +301,10 @@ app.get('/protoclaw/search_sessions', async (req, res, next) => {
           q: query,
           ...(openDirectory ? { openDirectory } : {}),
         });
+        if (searchOptions.scope !== 'all') params.set('scope', searchOptions.scope);
+        if (searchOptions.sort !== 'relevance') params.set('sort', searchOptions.sort);
+        if (Number.isFinite(searchOptions.offset) && searchOptions.offset > 0) params.set('offset', String(Math.floor(searchOptions.offset)));
+        if (Number.isFinite(searchOptions.limit) && searchOptions.limit > 0) params.set('limit', String(Math.floor(searchOptions.limit)));
         return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/search_sessions?${params.toString()}`);
       }
     } catch (error) {
@@ -302,7 +314,7 @@ app.get('/protoclaw/search_sessions', async (req, res, next) => {
       res.json({ query: '', results: [], total: 0, indexed: 0 });
       return;
     }
-    const result = await searchSessionsContent(agentId, query, openDirectory);
+    const result = await searchSessionsContent(agentId, query, openDirectory, searchOptions);
     res.json(result);
   } catch (error) {
     next(error);
