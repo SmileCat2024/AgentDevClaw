@@ -49,7 +49,7 @@ let _threadPublisher = null;
  * 发布线程事实事件：payload.kind 为 SSE 事件名（最小集 thread.created /
  * thread.handoff-started / thread.head-advanced / thread.archived /
  * thread.deleted），threadId 由参数提供并合入帧 data。只投递到经
- * ?threads= 订阅该 threadId 的连接；无订阅者时 no-op。
+ * ?threads= 订阅该 threadId 或 * 全线程的连接；无订阅者时 no-op。
  */
 export function publishThreadEvent(threadId, payload) {
   if (typeof _threadPublisher === 'function') _threadPublisher(threadId, payload);
@@ -126,7 +126,7 @@ export function createSseEventsModule(deps = {}) {
   /**
    * thread 事件发布（模块级 publishThreadEvent 的实例侧实现）：
    * - 事件名取 payload.kind；帧 data 合入 threadId；
-   * - 只投递到 ?threads= 订阅该 threadId 的连接，无订阅者 = no-op；
+   * - ?threads=id1,id2 定向订阅，?threads=* 全线程发现；缺省不收 thread 帧；
    * - 帧进环形缓冲并携带 threadId（非 thread 帧无该字段），Last-Event-ID
    *   重放同样按连接的订阅集过滤——重放与 live 路由一致，不会把别的
    *   thread 的事件补投给未订阅的重连客户端。
@@ -141,7 +141,7 @@ export function createSseEventsModule(deps = {}) {
       ring.push({ eid, frame, threadId: id });
       if (ring.length > ringSize) ring.splice(0, ring.length - ringSize);
       for (const conn of clients) {
-        if (conn.live && conn.threadFilter && conn.threadFilter.has(id)) writeConn(conn, frame);
+        if (conn.live && acceptsThread(conn, id)) writeConn(conn, frame);
       }
     } catch (err) {
       // 发布永不打断线程事务：帧组装失败只丢这一帧并留痕
@@ -286,6 +286,10 @@ export function createSseEventsModule(deps = {}) {
     }
   }
 
+  function acceptsThread(conn, threadId) {
+    return !!conn.threadFilter && (conn.threadFilter.has('*') || conn.threadFilter.has(threadId));
+  }
+
   function writeConn(conn, text) {
     if (conn.closed || conn.res.writableEnded || conn.res.destroyed) return false;
     if (conn.res.socket && conn.res.socket.destroyed) return false;
@@ -320,7 +324,7 @@ export function createSseEventsModule(deps = {}) {
     if (typeof res.flushHeaders === 'function') res.flushHeaders();
     res.write(': connected\n\n');
 
-    // thread 事件订阅过滤（opt-in）：?threads=id1,id2；缺省 = 不订阅任何
+    // thread 事件订阅过滤（opt-in）：?threads=id1,id2 或 *；缺省 = 不订阅任何
     // thread 事件。订阅集在连接存续期间固定，live 投递与重放共用。
     const rawThreads = req.query?.threads;
     const threadsParam = Array.isArray(rawThreads) ? rawThreads.join(',') : rawThreads;
@@ -347,7 +351,7 @@ export function createSseEventsModule(deps = {}) {
           resync = true;
         } else {
           replay = ring.filter((f) => f.eid > lastEventId
-            && (!f.threadId || (threadFilter ? threadFilter.has(f.threadId) : false)));
+            && (!f.threadId || acceptsThread(conn, f.threadId)));
         }
       }
     }

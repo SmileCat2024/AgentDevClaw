@@ -668,25 +668,13 @@ function _syncActiveThreadSubscription() {
       wasHead: false,
     } : null);
   }
-  const selectedThreadId = String(window.ClawThreads.activeConversation?.threadId || '').trim();
-  const threadId = selectedThreadId || String(thread?.threadId || '').trim();
-  // Sidebar facts belong to every known thread, not just the selected view.
-  // Keep the selected target during a succession gap even if it is not listed.
-  const threadIds = Array.from(new Set([
-    ...window.ClawThreads.threads.map((item) => String(item.threadId || '').trim()),
-    threadId,
-  ].filter(Boolean))).sort();
-  const key = JSON.stringify(threadIds);
-  if (_activeThreadSubscription?.key === key) return;
+  // Sidebar discovery includes new and background threads. A wildcard keeps
+  // the request bounded regardless of history size and needs no reconnect on edits.
+  if (_activeThreadSubscription) return;
   const client = window.ClawFW?.SseClient;
-  if (threadIds.length === 0 || typeof client?.subscribeThreadEvents !== 'function') {
-    _activeThreadSubscription?.unsubscribe?.();
-    _activeThreadSubscription = null;
-    return;
-  }
-  _activeThreadSubscription?.unsubscribe?.();
-  const subscription = { key, unsubscribe: null };
-  subscription.unsubscribe = client.subscribeThreadEvents(threadIds.length === 1 ? threadIds[0] : threadIds, async (event) => {
+  if (typeof client?.subscribeThreadEvents !== 'function') return;
+  const subscription = { unsubscribe: null };
+  subscription.unsubscribe = client.subscribeThreadEvents('*', async (event) => {
     if (['thread.created', 'thread.handoff-started', 'thread.archived', 'thread.deleted'].includes(event?.type)) {
       // Events discover changes; the shared refresh commits authoritative facts
       // for background sidebar entries as well as the selected conversation.
@@ -703,7 +691,7 @@ function _syncActiveThreadSubscription() {
     // 对账共用同一实现，不存在第二条重绑路径。
     if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
     renderAgentList();
-    await _rebindConversationToThreadHead(event.threadId || threadId, fromSessionId, toSessionId);
+    await _rebindConversationToThreadHead(event.threadId, fromSessionId, toSessionId);
   });
   _activeThreadSubscription = subscription;
 }

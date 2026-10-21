@@ -141,7 +141,7 @@ test('T014-1: 常驻会话接续——SSE handoff-started → 徽标即时渲染
   await vm.runInContext('window.refreshThreads(true)', sandbox);
 
   // 断言订阅已建立（常驻态必须有线程订阅，否则 SSE 接续事件无人听）
-  const sub = sandbox.__sseHandlers.find((s) => s.threadId === 'wt-live');
+  const sub = sandbox.__sseHandlers.find((s) => s.threadId === '*');
   assert.ok(sub, '常驻态应建立线程 SSE 订阅');
 
   // 挡板立起：SSE 事件到达 → 拉取到 rotating + handoffStartedAt
@@ -150,7 +150,7 @@ test('T014-1: 常驻会话接续——SSE handoff-started → 徽标即时渲染
     threads: [baseThread({ status: 'rotating', handoffStartedAt: Date.now() })],
   });
   await vm.runInContext(
-    'window.ClawThreads && (async () => { for (const h of __sseHandlers) { if (h.threadId === "wt-live") await h.handler({ type: "thread.handoff-started" }); } })()',
+    'window.ClawThreads && (async () => { for (const h of __sseHandlers) { if (h.threadId === "*") await h.handler({ type: "thread.handoff-started", threadId: "wt-live" }); } })()',
     sandbox,
   );
 

@@ -58,7 +58,7 @@ describe('thread-store: successor view rebind', () => {
     });
     ctx.bindings = [];
     ctx.window.ClawFW = { SseClient: { subscribeThreadEvents: (id, handler) => {
-      assert.equal(id, 'wt-viewed');
+      assert.equal(id, '*');
       eventHandler = handler;
       return () => {};
     } } };
@@ -122,7 +122,7 @@ describe('thread-store: handoff-started visibility', () => {
       renderAgentList() { renderCalls += 1; },
     });
     ctx.window.ClawFW = { SseClient: { subscribeThreadEvents: (id, handler) => {
-      assert.equal(id, 'wt-viewed');
+      assert.equal(id, '*');
       eventHandler = handler;
       return () => {};
     } } };

@@ -66,7 +66,7 @@ function makeRebindSandbox({
     setInterval: (fn, ms) => unrefTimer(globalThis.setInterval(fn, ms)),
   });
   ctx.window.ClawFW = { SseClient: { subscribeThreadEvents: (id, handler) => {
-    assert.equal(id, 'wt-viewed', 'subscription must target the viewed thread');
+    assert.equal(id, '*', 'sidebar and viewed-thread discovery share a bounded subscription');
     eventHandler = handler;
     return () => {};
   } } };

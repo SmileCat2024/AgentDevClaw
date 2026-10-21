@@ -102,19 +102,19 @@ test('archived thread cannot reappear as a plain runtime while the agents snapsh
 test('background thread archive and deletion events refresh facts without changing the selected view', async () => {
   const h = harness();
   await h.threads([thread()]);
-  assert.ok(h.handlers.has('t1'), 'known background thread must be subscribed');
+  assert.ok(h.handlers.has('*'), 'all background threads must be subscribed');
   h.ctx.focusedAgentId = 'programming-helper';
   h.setThreads([thread({ lifeState: 'archived', archivedAt: 1, headRuntimeRunning: false })]);
-  await h.handlers.get('t1')({ type: 'thread.archived', threadId: 't1' });
+  await h.handlers.get('*')({ type: 'thread.archived', threadId: 't1' });
   assert.equal(h.html, '');
   assert.equal(h.ctx.focusedAgentId, 'programming-helper');
   await h.threads([thread()]);
   h.ctx.allAgents = [h.host];
   h.ctx.run('renderAgentList()');
   h.setThreads([]);
-  await h.handlers.get('t1')({ type: 'thread.deleted', threadId: 't1' });
+  await h.handlers.get('*')({ type: 'thread.deleted', threadId: 't1' });
   assert.equal(h.html, '');
-  assert.equal(h.handlers.has('t1'), false, 'deleted thread subscription is released');
+  assert.ok(h.handlers.has('*'), 'discovery survives deletion and can observe newly created threads');
 });
 
 test('session delta updates ordinary and threaded sidebar titles at the commit boundary', async () => {
@@ -167,10 +167,10 @@ test('title-only thread refresh is rendered, while identical snapshots remain de
 test('multiple background threads share one subscription without selecting a conversation', async () => {
   const h = harness();
   await h.threads([thread(), thread({ threadId: 't2', headSessionId: 's2', sessionIds: ['s2'] })]);
-  assert.deepEqual([...h.handlers.keys()], ['t1', 't2']);
+  assert.deepEqual([...h.handlers.keys()], ['*']);
   assert.equal(h.ctx.window.ClawThreads.activeConversation, null);
   h.setThreads([thread(), thread({ threadId: 't2', headSessionId: 's2', sessionIds: ['s2'], archivedAt: 1, lifeState: 'archived' })]);
-  await h.handlers.get('t2')({ type: 'thread.archived', threadId: 't2' });
+  await h.handlers.get('*')({ type: 'thread.archived', threadId: 't2' });
   assert.equal(h.ctx.window.ClawThreads.byId.t2.lifeState, 'archived');
   assert.equal(h.ctx.window.ClawThreads.activeConversation, null);
   assert.match(h.html, /data-thread-id="t1"/);

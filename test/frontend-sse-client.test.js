@@ -151,6 +151,52 @@ describe('sse-client: URL 开关', () => {
   });
 });
 
+describe('sse-client: thread subscriptions', () => {
+  it('keeps sidebar discovery URL constant with a large history and discovers new threads', async () => {
+    const { ctx } = loadSseClient({ setTimeout: () => 0, setInterval: () => 0 });
+    ctx.run('bootSseClient()');
+    ctx.loadSource('public/src/modules/thread-store.js');
+    let threads = Array.from({ length: 1000 }, (_, i) => ({
+      threadId: `wt-${String(i).padStart(36, '0')}`, agentId: 'coder', sessionIds: [],
+    }));
+    let reads = 0;
+    ctx.fetch = async () => {
+      reads += 1;
+      return { ok: true, json: async () => ({ threads }) };
+    };
+    await ctx.window.refreshThreads(true);
+    const source = latestSource();
+    assert.equal(source.url, '/protoclaw/events?threads=*');
+    const connections = MockEventSource.instances.length;
+    threads = [...threads, { threadId: 'brand-new', agentId: 'coder', sessionIds: [] }];
+    source.emit('thread.created', { threadId: 'brand-new' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(reads >= 2);
+    assert.ok(ctx.window.ClawThreads.byId['brand-new']);
+    assert.equal(MockEventSource.instances.length, connections, 'history changes must not rebuild the stream');
+  });
+
+  it('combines wildcard and targeted handlers without duplicate delivery and releases subscriptions', () => {
+    const { ctx } = loadSseClient();
+    ctx.run('bootSseClient()');
+    const calls = [];
+    const shared = event => calls.push(event.threadId);
+    const subscribe = ctx.window.ClawFW.SseClient.subscribeThreadEvents;
+    const offTarget = subscribe('t1', shared);
+    const offAll = subscribe('*', shared);
+    assert.equal(latestSource().url, '/protoclaw/events?threads=*');
+    latestSource().emit('thread.created', { threadId: 't1' });
+    latestSource().emit('thread.created', { threadId: 't2' });
+    assert.deepEqual(calls, ['t1', 't2']);
+    offAll();
+    assert.equal(latestSource().url, '/protoclaw/events?threads=t1');
+    latestSource().emit('thread.created', { threadId: 't2' });
+    assert.deepEqual(calls, ['t1', 't2']);
+    offTarget();
+    assert.equal(latestSource().url, '/protoclaw/events');
+  });
+});
+
 describe('sse-client: hello 帧', () => {
   it('resynced 触发一次全量对账', () => {
     const { ctx, calls } = loadSseClient();

@@ -200,6 +200,20 @@ describe('thread SSE: subscription routing', () => {
     assert.equal(await plain.readUntil((tx) => tx.includes('event: thread.'), 60), false);
   });
 
+  it('wildcard subscription delivers existing and newly created threads live and on replay', async (t) => {
+    const h = makeSseHarness(t);
+    await h.start();
+    const all = await h.openStream('/protoclaw/events?threads=*');
+    assert.ok(await all.readUntil(hasHello));
+    publishThreadEvent('existing', { kind: 'thread.archived' });
+    publishThreadEvent('new-thread', { kind: 'thread.created' });
+    assert.ok(await all.readUntil(tx => threadFrames(tx).length === 2));
+    assert.deepEqual(threadFrames(all.state.text).map(f => f.data.threadId), ['existing', 'new-thread']);
+    const replay = await h.openStream('/protoclaw/events?threads=*', { lastEventId: 0 });
+    assert.ok(await replay.readUntil(hasHello));
+    assert.deepEqual(threadFrames(replay.state.text).map(f => f.data.threadId), ['existing', 'new-thread']);
+  });
+
   it('thread events bypass the coalescing window (100ms budget by construction)', async (t) => {
     const h = makeSseHarness(t, { coalesceMs: 5000 });
     await h.start();

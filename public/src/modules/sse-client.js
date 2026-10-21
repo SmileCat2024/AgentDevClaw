@@ -61,6 +61,7 @@ const _threadHandlers = new Map(); // threadId -> Set<(evt) => void>
 let _threadsParamOnConnect = null;  // 本次连接使用的 ?threads= 值（null = 未带）
 
 function threadsQueryParam() {
+  if (_threadHandlers.has('*')) return '*';
   const ids = Array.from(_threadHandlers.keys());
   return ids.length > 0 ? ids.map(encodeURIComponent).join(',') : null;
 }
@@ -71,8 +72,10 @@ function handleThreadEvent(type, event) {
   try { frame = JSON.parse(event.data); } catch { return; }
   const threadId = String(frame?.threadId || '').trim();
   if (!threadId) return;
-  const handlers = _threadHandlers.get(threadId);
-  if (!handlers) return;
+  const handlers = new Set([
+    ...(_threadHandlers.get('*') || []),
+    ...(_threadHandlers.get(threadId) || []),
+  ]);
   for (const handler of handlers) {
     try { handler({ type, threadId, payload: frame }); }
     catch (e) { console.warn('[sse] thread event handler failed:', e); }
@@ -82,7 +85,7 @@ function handleThreadEvent(type, event) {
 /**
  * 订阅 thread 事件（thread.created / thread.handoff-started /
  * thread.head-advanced / thread.archived / thread.deleted，服务端 ?threads= 过滤）。
- * @param {string|string[]} threadIds - 订阅的 threadId 集合
+ * @param {string|string[]} threadIds - threadId 集合；'*' 显式订阅全部线程
  * @param {(evt: {type: string, threadId: string, payload: object}) => void} handler
  * @returns {() => void} 取消订阅函数（移除该 handler 的全部订阅 id）
  */

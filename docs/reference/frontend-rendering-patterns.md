@@ -4,7 +4,7 @@
 > 每次遇到渲染层的新问题或提炼出新结论时，请更新对应章节，或在文末追加新章节。
 > 保持每个条目简短、有代码示例、有判断依据，便于后续 agent 直接复用。
 >
-> 最后更新：2026-10-21（左栏应用布局与持久折叠；§7 会话加载独立提交与身份约束；12e 左栏事实提交与归档、标题刷新；12g 模型状态的统一提交与版本顺序；对话欢迎态的 Agent 命名与无滚动布局）
+> 最后更新：2026-10-21（左栏应用布局与持久折叠；§7 会话加载独立提交与身份约束；12e 左栏事实提交与归档、标题刷新、全线程有界订阅；12g 模型状态的统一提交与版本顺序；对话欢迎态的 Agent 命名与无滚动布局）
 
 ---
 
@@ -1031,7 +1031,7 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 - **归档约束**：归档或 closed 的线程成员不再呈现为运行条目，包含仍滞留在 agents 快照中的 child 与宿主合成条目；同一事实也清除接续占位。归档与 runtime 下线的先后顺序不应影响最终左栏。
 - **head 空窗补位**：head runtime 未上线（退役窗口 / successor 启动中）且线程活跃（handoff 进行 / 置换 operation / executing）时，以缓存条目 + `disconnected + transitionPending` 占位，不闪失；线程闭合 / 归档 / 不活跃则清缓存。
 - **点击 = 打开线程 head 会话**：条目带 `data-thread-id`，点击经 `openConversationTarget`（thread-store.js）解析到 head，不直连 runtime。
-- **状态发现（SSE 优先，轮询兜底）**：已知线程集合统一订阅 SSE thread 事件，后台线程与当前会话同样消费 `thread.handoff-started` / `thread.head-advanced` / `thread.archived` / `thread.deleted`。事件只触发事实刷新；`refreshThreads` 在更新索引和会话指向后驱动左栏与主视图，周期刷新走同一提交边界。换头重绑仍校验当前视图归属，不因后台线程事件切换用户会话。新线程发现与断连恢复由 `/protoclaw/threads` contentHash 周期刷新（20s）兜底。
+- **状态发现（SSE 优先，轮询兜底）**：侧栏显式使用 `/protoclaw/events?threads=*` 订阅全部线程（含新建线程），不把历史线程 ID 集合拼进 URL；请求长度必须与历史规模无关。按 ID 订阅仍可用，服务端实时投递与 Last-Event-ID 重放共用过滤规则；前端全线程与定向 handler 合并去重。后台线程与当前会话同样消费创建、交接、换头、归档与删除事件。事件只触发事实刷新；`refreshThreads` 在更新索引和会话指向后驱动左栏与主视图，周期刷新走同一提交边界。换头重绑仍校验当前视图归属，不因后台线程事件切换用户会话；`/protoclaw/threads` contentHash 周期刷新（20s）负责断连恢复。历史事故：枚举 ID 产生超长 `:path`，公网 HTTP/2 对端发送 `GOAWAY ENHANCE_YOUR_CALM` 并关闭整条连接，同连接的普通 API 与面板 SSE 一并报错；不能通过关代理、截断订阅或放宽入口限制掩盖无界寻址。回归：`test/frontend-sse-client.test.js` 使用真实 thread-store 与 SSE client 驱动大历史和新线程发现，`test/thread-sse-events.test.js` 覆盖全线程实时与重放。
 - **渲染签名**：`getAgentListRenderSignature` 必须包含线程标题 `headSessionTitle`、归档 `archivedAt`、`status`，以及 head、运行态、挡板等投影输入；会话索引中的标题及 assembly 显示名也参与签名。数据变化后由提交方调用渲染，签名只负责跳过未变内容。
 - **APP 身份与运行态可见性分离**：Coder APP 条目来自 metadata 声明，具体是否呈现由 `/api/agents` 的 `sidebarVisible` 决定。默认 `auto` 认「存活且绑定 Session 的 managed Runtime，或 rotating 接续挡板在途（删除事务窗口内除外）」——接续空窗（旧 head 退役、successor 未上线）期间入口保持，配合下方接续占位实现无感连续。未归档线程资产（open/hold/rotation_failed 等非终态）不代表运行态、不撑入口（ADR-0025 2026-10-18 回摆）；线程和历史仍可从 APP 首页查看；设置为 `always` 时 APP 入口常驻，但不合成运行会话叶子。相关合流见 `server/routes/agent-connected.js`，按接续帧覆盖的回归测试见 `test/sidebar-projection-succession.test.js`。
 - **`handoffStartedAt` 是 wire 字段（服务端投影，勿在前端另造）**：顶栏「接力中」指示器、输入路由守卫（交接窗口内输入改走 Thread Inbox 暂存）、侧栏交接占位共用 `thread.handoffStartedAt`（>0 且 <5min 视为交接中）。权威值 = `/protoclaw/threads` 对 `status='rotating'` 线程补读的 `pendingSuccession.startedAt`（`thread-routes.js` `_attachLifeState`）。历史事故（2026-10-10）：前端三处消费一个服务端从未下发的字段名，指示器永不亮、自动轮换窗口内输入被判 direct 直投已退役 runtime。
