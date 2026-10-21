@@ -12,7 +12,7 @@
 
 欢迎语从当前 Session 的 `workspaceAgentId` 解析工作空间 `agents[].displayName`，解析逻辑在 `modules/workspace-agents.js`。工作空间名、Agent 名与会话标题分别独立；宿主 `activeSessionId` 不是当前视图的身份来源。绑定尚未加载时显示通用“新对话”，详情提交后重绘空态。声明契约见 [workspace-agents.md](../protocols/workspace-agents.md)。
 
-欢迎/加载态的聊天容器取消消息列表底部留白与 `55vh` 最小高度，使用 composer 上方的剩余空间；composer 此时在主内容列中占据固定尺寸，仍位于聊天容器外。有消息后恢复悬浮输入框和消息列表滚动。不要仅隐藏滚动条而保留超高布局。浏览器验证入口为 `test/welcome-browser-check.mjs`。
+欢迎/加载态的聊天容器取消消息列表底部留白与 `55vh` 最小高度，使用 composer 上方的剩余空间；composer 此时在主内容列中占据固定尺寸，仍位于聊天容器外。有消息后恢复悬浮输入框和消息列表滚动。两种排版共用输入槽位的 `--composer-bottom`（50px）底部基线；切换显示过程只更换上方内容，不改变输入卡坐标。不要仅隐藏滚动条而保留超高布局。浏览器验证入口为 `test/welcome-browser-check.mjs`。
 
 ## 1. 核心原则：渲染函数必须是纯函数
 
@@ -637,9 +637,11 @@ renderInputRequests([]) → 重建前 _storeVisibleSessionInputDraft 读到 live
 - 切到正在运行的会话：快照未到达时沿用**上一会话**的起始时间
 - `confirmed=true` 遗留 → 只接受更晚的快照值 → 若新会话本轮 call 起得更早（并行会话常态），错误时长永远无法纠正
 
-修复：`loadAgentData` 与 `_lastCallFinishTime = 0` 同点清零全部三个变量；
-`resetRuntimeBackedSurfaceState` 的 `updateNotificationStatus` 必须传 `null`（falsy）而非 `{}`——
-`_lastCallFinishTime = 0` 只对 falsy 入参生效。
+计时状态与 DOM 由 `persistent-input.js` 的 `resetCallElapsedForSwitch()` 一起清理，经统一 `resetRuntimeStatusForSwitch()` 在首次乐观渲染前调用；加载入口与线程接续重绑复用该入口，不在加载层散落赋值。`updateNotificationStatus(null)` 同样清理计时投影；空对象不是重置信号。1s interval 只负责时长刷新，不承担会话切换清理。
+
+`.input-meta-bar` 绝对定位于输入槽位上方，不参与槽位高度与欢迎区剩余空间分配。跟随按钮只测量 `.user-input-card`，不按 `persistent-input` 提交模式类寻址，也不回退测量整个槽位：请求模式会移除该类，容器仍可能含排队气泡等辅助内容。欢迎/加载态隐藏跟随按钮，即使消息数组已有系统提示词。
+
+回归：`test/welcome-browser-check.mjs` 使用真实计时渲染、composer 模式切换与按钮定位，验证显隐前后几何恒定、切换同步清理及欢迎态不滚动；`test/frontend-layout-adaptive.test.js` 覆盖卡片定位与无卡片时清除定位覆盖。
 
 ---
 

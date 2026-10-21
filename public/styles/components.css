@@ -1108,7 +1108,7 @@ body[data-theme="light"] .markdown-body :not(pre) > code:not(.inline-code-accent
   position: relative;
   bottom: auto;
   flex-shrink: 0;
-  margin-bottom: clamp(12px, 5vh, 50px);
+  margin-bottom: var(--composer-bottom);
 }
 #chat-container > .empty-welcome {
   gap: clamp(8px, 2vh, 20px);
@@ -5331,8 +5331,9 @@ body[data-theme="light"] .tool-result-body .d2h-code-line-ctn { color: var(--tex
 /* 用户输入容器（默认隐藏） */
 #user-input-container {
   display: none;
+  --composer-bottom: 50px;
   position: absolute;
-  bottom: 50px;
+  bottom: var(--composer-bottom);
   left: 0;
   right: 0;
   z-index: 1000;
@@ -5347,6 +5348,9 @@ body[data-theme="light"] .tool-result-body .d2h-code-line-ctn { color: var(--tex
 }
 
 .input-meta-bar {
+  /* Runtime metadata floats above the composer; its visibility never sizes the welcome area. */
+  position: absolute;
+  bottom: 100%;
   display: flex;
   align-items: center;
   gap: 10px;

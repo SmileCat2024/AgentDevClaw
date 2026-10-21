@@ -26,15 +26,12 @@ function loadRuntimeState() {
     shouldShowRuntimeStatus: () => false,
     shouldStatusUseQueueSync: () => false,
     isSuspendedCallOutcome: (value) => value?.status === 'continued' && value?.reason === 'suspended',
-    isRuntimeCalling: (id) => false,
+    isRuntimeCalling: () => false,
     getRuntimeStageClass: () => '',
     renderRuntimeTimer: () => '',
     focusedAgentId: 'agent-1',
     currentInputRequests: [],
     toolRenderConfigs: {},
-    currentHookInspector: null,
-    currentOverviewSnapshot: {},
-    currentTodoPlan: {},
     TOOL_NAMES: {},
     _agentCallActive: new Map(),
     _agentSuspended: new Map(),
@@ -91,6 +88,30 @@ describe('SessionView runtime status ownership', () => {
     ctx.run(`updateNotificationStatus({ state: { type: 'tool.progress', data: { callId: 'call-b', toolName: 'bash', startedAt: Date.now(), outputTail: 'session b' } } })`);
     assert.equal(ctx.run('resolveToolProgressForCall({ id: "call-a" })'), null);
     assert.equal(ctx.run('resolveToolProgressForCall({ id: "call-b" })?.outputTail'), 'session b');
+  });
+
+  it('clears elapsed state at the switch boundary, before a new snapshot or timer tick', () => {
+    const ctx = loadRuntimeState();
+    ctx.setInterval = () => 0;
+    ctx.loadSource('public/src/modules/persistent-input.js');
+    ctx.run(`
+      _lastCallFinishTime = 1234;
+      _runCapsuleStartAt = 5678;
+      _runCapsuleStartConfirmed = true;
+      resetRuntimeStatusForSwitch();
+    `);
+    assert.equal(ctx.run('_lastCallFinishTime'), 0);
+    assert.equal(ctx.run('_runCapsuleStartAt'), 0);
+    assert.equal(ctx.run('_runCapsuleStartConfirmed'), false);
+    ctx.run(`
+      _lastCallFinishTime = 1234;
+      _runCapsuleStartAt = 5678;
+      _runCapsuleStartConfirmed = true;
+      updateNotificationStatus(null);
+    `);
+    assert.equal(ctx.run('_lastCallFinishTime'), 0);
+    assert.equal(ctx.run('_runCapsuleStartAt'), 0);
+    assert.equal(ctx.run('_runCapsuleStartConfirmed'), false);
   });
 
   it('preserves call-finish suspension semantics and clears the matching tool progress', () => {

@@ -41,8 +41,8 @@
 | 设置弹窗 | `.feature-detail-window`（layout.css feature-detail 区段） | `min(100%, 720px)` / radius 20 / 玻璃三件套 + saturate(1.3) / padding 24 / 顶部径向光 | **全部设置类弹窗的统一壳**。更大规格用同配方改宽：IDE 风格 `.ph-settings-window`（1040×820）、auth 520、登录卡 400 |
 | 工作空间 banner | `.ph-banner`（components.css PH Banner 区段） | radius 20 / padding 24×28 / 多层径向光 + 深底 / blur(16px) saturate(1.2) / title 20px/750 | 工作空间首页的头部横幅，规格大气（比设置弹窗内卡片大一号）；窄屏响应式降 padding（媒体查询随配方） |
 | 首页卡片 | `.workspace-launch-card`（components.css workspace 区段） | radius 20 / padding 24 / min-height 220 / 顶部 2px 高光线 / inset 顶光 | 工作空间首页功能卡；`.primary` 变体加蓝色径向光 |
-| 玻璃胶囊 | `.call-elapsed-capsule`（components.css 调用状态区段） | radius 999 / padding 4×11 / 13px/500 / 玻璃底 + saturate(1.3) / inset 1px 白描边 | 悬浮于滚动内容之上的状态胶囊（时长、计数类）；accent 变体叠靛蓝半透明 |
-| 悬浮几何基线 | `#user-input-container`（components.css composer 区段） | `position: absolute; bottom: 50px` / z-index 1000 / 钉主内容列 | 主内容列底部悬浮输入条（对话 composer、APP 首页快记条）的统一几何：**不进滚动内容流**（进内容流会随内容高度被推走）；整条空白带 `pointer-events: none`、可交互体恢复 `auto`；滚动容器按悬浮体最大高度留底 padding 让位。**无消息欢迎/加载态例外**：composer 作为主内容列的固定尺寸 flex 子项参与排版（仍在聊天容器外），欢迎区使用其上方剩余空间；有消息后恢复悬浮几何 |
+| 玻璃胶囊 | `.call-elapsed-capsule`（components.css 调用状态区段） | radius 999 / padding 4×11 / 13px/500 / 玻璃底 + saturate(1.3) / inset 1px 白描边 | 悬浮于滚动内容之上的状态胶囊（时长、计数类）；accent 变体叠靛蓝半透明。承载它的 `.input-meta-bar` 绝对定位在输入槽位上方，不撑高槽位；显隐不改变欢迎标题、输入卡及跟随按钮位置 |
+| 悬浮几何基线 | `#user-input-container`（components.css composer 区段） | `position: absolute; bottom: var(--composer-bottom)`（50px）/ z-index 1000 / 钉主内容列 | 主内容列底部悬浮输入条（对话 composer、APP 首页快记条）的统一几何：**不进滚动内容流**（进内容流会随内容高度被推走）；整条空白带 `pointer-events: none`、可交互体恢复 `auto`；滚动容器按悬浮体最大高度留底 padding 让位。**无消息欢迎/加载态例外**：composer 作为主内容列的固定尺寸 flex 子项参与排版（仍在聊天容器外），欢迎区使用其上方剩余空间；底部间距仍取同一 `--composer-bottom`，与消息态输入卡坐标一致；有消息后恢复悬浮几何 |
 
 ### 2.3 区段与文字结构
 

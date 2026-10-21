@@ -9,7 +9,7 @@
  *
  * 2. Follow-latest button dynamic avoidance (updateFollowLatestButtonPosition):
  *    when avoidance is active (narrow main content or open panel) the button
- *    bottom is measured from the real input container top edge instead of
+ *    bottom is measured from the actual input card top edge instead of
  *    fixed-pixel breakpoints, so it tracks input height changes and never
  *    falls back onto the input at narrow breakpoints.
  *
@@ -106,7 +106,7 @@ function makeRect({ top = 0, bottom = 0, height = 0 }) {
   return { top, bottom, height };
 }
 
-function loadFollowPositionSandbox({ panelOpen = false, mainWidth = 1400, mainBottom = 900, inputTop = 700, inputHeight = 200, cardTop = null, cardHeight = null }) {
+function loadFollowPositionSandbox({ panelOpen = false, mainWidth = 1400, mainBottom = 900, inputTop = 700, inputHeight = 200, cardTop = null, cardHeight = null, hasCard = true }) {
   const styleProps = new Map();
   const button = {
     style: {
@@ -128,7 +128,7 @@ function loadFollowPositionSandbox({ panelOpen = false, mainWidth = 1400, mainBo
   };
   const inputHost = {
     getBoundingClientRect: () => makeRect({ top: inputTop, height: inputHeight }),
-    querySelector: (sel) => (sel === '.user-input-card.persistent-input' ? inputCard : null),
+    querySelector: (sel) => (hasCard && sel === '.user-input-card' ? inputCard : null),
   };
   const sandbox = {
     followLatestButton: button,
@@ -186,6 +186,11 @@ test('measures the input card, not the taller wrapper (runtime pill excluded)', 
   });
   // bottom = 900 - 740 + 10 = 170, NOT 900 - 640 + 10 = 270.
   assert.equal(styleProps.get('--follow-latest-bottom'), '170px');
+});
+
+test('metadata-only host never becomes the follow-button positioning anchor', () => {
+  const { styleProps } = loadFollowPositionSandbox({ mainWidth: 1000, hasCard: false });
+  assert.equal(styleProps.size, 0);
 });
 
 test('zero-height input card (no input surface) clears the override', () => {

@@ -1119,6 +1119,7 @@ function shouldStatusUseQueueSync(runtime) {
  * 指示块出现/消失带来的高度抖动。切换瞬间直接清空，等新数据到达后再渲染。
  */
 function resetRuntimeStatusForSwitch() {
+  if (typeof resetCallElapsedForSwitch === 'function') resetCallElapsedForSwitch();
   _lastRenderedNotificationRuntime = null;
   lastNotificationStatusPayload = null;
   const statusEl = document.getElementById('notification-status');
@@ -1159,7 +1160,7 @@ function updateNotificationStatus(notifData, runtimeId = currentRuntimeAgentId, 
 function applyNotificationStatus(notifData, runtimeId) {
   if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) return;
   const payload = (notifData && typeof notifData === 'object') ? notifData : {};
-  if (!notifData) _lastCallFinishTime = 0;
+  if (!notifData && typeof resetCallElapsedForSwitch === 'function') resetCallElapsedForSwitch();
   // 工具执行中进度（ticket 025）：tool.progress 入表 / 终态信号清除
   if (typeof applyToolProgressNotification === 'function') {
     applyToolProgressNotification(payload);

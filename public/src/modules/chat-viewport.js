@@ -101,7 +101,8 @@ function isNearBottom() {
 function updateFollowLatestButton() {
   if (!followLatestButton) return;
   ensureFollowLatestAvoidObserver();
-  const hasMessages = currentMessages.length > 0 && isChatSurfaceActive();
+  const hasMessages = currentMessages.length > 0 && isChatSurfaceActive()
+    && !container.querySelector('.empty-welcome, .chat-loading');
   followLatestButton.classList.toggle('hidden', !hasMessages);
   followLatestButton.classList.toggle('active', followLatestEnabled);
   followLatestButton.innerHTML =
@@ -131,12 +132,12 @@ function updateFollowLatestButtonPosition() {
 
   // 严格贴输入卡顶边：容器还包裹运行时长胶囊等更高元素，按容器测会使
   // 按钮悬空在输入卡上方一个胶囊的高度。
-  const inputCard =
-    inputHost.querySelector('.user-input-card.persistent-input') || inputHost;
-  const inputRect = inputCard.getBoundingClientRect();
+  // persistent / requests 是同一输入卡的提交模式，不是几何身份。
+  const inputCard = inputHost.querySelector('.user-input-card');
+  const inputRect = inputCard?.getBoundingClientRect();
   const needsAvoid = main.classList.contains('panel-open')
     || main.clientWidth <= FOLLOW_LATEST_AVOID_MAX_WIDTH;
-  if (!needsAvoid || !inputRect.height) {
+  if (!needsAvoid || !inputRect?.height) {
     followLatestButton.style.removeProperty('--follow-latest-bottom');
     return;
   }

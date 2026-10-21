@@ -73,6 +73,16 @@ let _callFinishTimerInterval = null;
 let _runCapsuleStartAt = 0; // 运行期间胶囊使用的本轮 call 起始时间
 let _runCapsuleStartConfirmed = false; // 起始时间是否已由运行时快照确认（未确认前允许快照值回拨纠正）
 
+function resetCallElapsedForSwitch() {
+  _lastCallFinishTime = 0;
+  _runCapsuleStartAt = 0;
+  _runCapsuleStartConfirmed = false;
+  const container = document.getElementById('user-input-container');
+  if (!container) return;
+  container.querySelector('.call-elapsed-capsule')?.remove();
+  _cleanupInputMetaBar(container);
+}
+
 const _CAPSULE_CLOCK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
 
 function formatCallElapsed(finishTime) {
