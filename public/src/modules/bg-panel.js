@@ -71,6 +71,8 @@
   const collapsedTasks = new Set();
   /** 用户手动点过折叠/展开的任务：面板打开时的终态默认收起不覆盖用户意图。 */
   const userToggledTasks = new Set();
+  /** 隐藏的输出区没有可用滚动尺寸；折叠期间沿用最后一次可见位置。 */
+  const tailPositions = new Map();
 
   /** taskId -> 任务快照（通道事件 + list 合并，含 outputTail） */
   const tasks = new Map();
@@ -221,9 +223,9 @@
           <span class="bgp-id">${escapeHtml(task.title)}</span>
           <span class="bgp-chevron${collapsedTasks.has(task.id) ? '' : ' bgp-chevron-open'}">${CHEVRON_SVG}</span></div>
         <pre class="bgp-cmd">${escapeHtml(task.agentId)} · ${escapeHtml(task.threadId)} / ${escapeHtml(task.commandId)}</pre>
-        <pre class="bgp-tail">${escapeHtml(task.summary)}</pre>
+        <pre class="bgp-tail" data-bgp-tail="${escapeHtml(task.id)}">${skeleton ? '' : escapeHtml(task.summary)}</pre>
         <div class="bgp-result"><span class="bgp-result-main">${escapeHtml(labels[task.status] || task.status)}</span>
-          <span class="bgp-result-time">${formatClock(task.updatedAt)}</span></div></div>`;
+          <span class="bgp-result-time" data-bgp-updated>${skeleton ? '' : formatClock(task.updatedAt)}</span></div></div>`;
     }
     const duration = taskDurationMs(task);
     const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
@@ -312,16 +314,17 @@
       return;
     }
     // 全量重建：记录各输出区的滚动位置与跟随状态，重建后回贴。
-    const positions = new Map();
     root.querySelectorAll('[data-bgp-tail]').forEach((el) => {
+      const id = el.getAttribute('data-bgp-tail');
+      if (!el.clientHeight || !tasks.has(id)) return;
       const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - FOLLOW_THRESHOLD_PX;
-      positions.set(el.getAttribute('data-bgp-tail'), { top: el.scrollTop, atBottom });
+      tailPositions.set(id, { top: el.scrollTop, atBottom });
     });
     const next = root.cloneNode(false);
     next.innerHTML = html.slice(html.indexOf('>') + 1, html.lastIndexOf('</div>'));
     root.replaceWith(next);
     next.querySelectorAll('[data-bgp-tail]').forEach((el) => {
-      const p = positions.get(el.getAttribute('data-bgp-tail'));
+      const p = tailPositions.get(el.getAttribute('data-bgp-tail'));
       el.scrollTop = p ? (p.atBottom ? el.scrollHeight : p.top) : el.scrollHeight;
     });
     lastHtml = html;
@@ -331,7 +334,6 @@
   /** 轻量路径：只更新漂移的文本（时长走秒、输出尾巴）。 */
   function updateVolatileTexts(root, elapsedOnly = false) {
     for (const task of tasks.values()) {
-      if (task.protocol === AGENT_PROTOCOL) continue;
       const id = window.CSS?.escape ? CSS.escape(task.id) : task.id.replace(/["\\]/g, '\\$&');
       const card = root.querySelector(`[data-bgp-task="${id}"]`);
       if (!card) continue;
@@ -340,13 +342,19 @@
       const durText = duration !== null ? formatDuration(duration) : '';
       if (elapsedEl && elapsedEl.textContent !== durText) elapsedEl.textContent = durText;
       if (elapsedOnly) continue;
+      const updatedEl = card.querySelector('[data-bgp-updated]');
+      const clock = formatClock(task.updatedAt);
+      if (updatedEl && updatedEl.textContent !== clock) updatedEl.textContent = clock;
       const tailEl = card.querySelector('[data-bgp-tail]');
-      const tail = typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
+      const tail = task.protocol === AGENT_PROTOCOL ? String(task.summary ?? '')
+        : typeof task.outputTail === 'string' ? task.outputTail.replace(/\s+$/, '') : '';
       if (tailEl && tailEl.textContent !== tail) {
+        const visible = tailEl.clientHeight > 0;
         const atBottom = tailEl.scrollTop + tailEl.clientHeight >= tailEl.scrollHeight - FOLLOW_THRESHOLD_PX;
         const prevTop = tailEl.scrollTop;
+        if (visible) tailPositions.set(task.id, { top: prevTop, atBottom });
         tailEl.textContent = tail;
-        tailEl.scrollTop = atBottom ? tailEl.scrollHeight : prevTop;
+        if (visible) tailEl.scrollTop = atBottom ? tailEl.scrollHeight : prevTop;
       }
     }
   }
@@ -377,6 +385,7 @@
    * / 未声明）。终态缓存常驻会让重开面板显示早已消亡的陈旧卡片。 */
   function _resetTaskCache() {
     tasks.clear();
+    tailPositions.clear();
     reportStates.clear();
     killPending.clear();
     collapsedTasks.clear();
@@ -418,6 +427,7 @@
     for (const [id, task] of tasks) {
       if (task.channelKey !== channel.key) continue;
       tasks.delete(id);
+      tailPositions.delete(id);
       reportStates.delete(id);
       killPending.delete(id);
       collapsedTasks.delete(id);
@@ -467,6 +477,7 @@
       for (const [id, task] of tasks) {
         if (task.channelKey === channel.key && !listed.has(id) && (channel.revisions.get(id) || 0) <= revision) {
           tasks.delete(id);
+          tailPositions.delete(id);
           channel.revisions.delete(id);
           collapsedTasks.delete(id);
           userToggledTasks.delete(id);
@@ -564,6 +575,7 @@
       const channel = channels.get(task.channelKey);
       if (channel?.supported && channel.presentation.protocol === task.protocol) continue;
       tasks.delete(id);
+      tailPositions.delete(id);
       collapsedTasks.delete(id);
       userToggledTasks.delete(id);
       reportStates.delete(id);

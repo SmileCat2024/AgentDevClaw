@@ -1582,6 +1582,7 @@ registerFeaturePanel('bg', {
   label: { zh: '后台任务', en: 'Background' },
   description: { zh: 'bash_bg 后台任务实时状态', en: 'Live bash_bg task status' },
   render: () => window.BgPanel ? window.BgPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+  preserveOnReRender: true,
 });
 registerFeaturePanel('monitor', {
   when: { surfaces: ['chat'] },
