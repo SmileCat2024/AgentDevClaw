@@ -129,6 +129,42 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
 });
 
 describe('coder_shell result 末轮回复', () => {
+  it('M9-RESULT-TURN: 指定轮次取该轮最后一条报告，而非早期过程说明', async () => {
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl: stubFetch([
+      { match: u => u.includes('/events'), body: { ok: true, events: [
+        { sessionId: 's1', type: 'item.completed', item: { type: 'agent_message', turn: 0, text: '旧轮报告' } },
+        { sessionId: 's1', type: 'item.completed', item: { type: 'agent_message', turn: 1, text: '正在检查' } },
+        { sessionId: 's1', type: 'item.completed', item: { type: 'agent_message', turn: 1, text: '最终完整报告' } },
+      ], cursor: 3, baseOffset: 0 } },
+    ]) });
+    const result = await runCapabilityShellPipeline(POLICY, 'result wt-1 --turn=1', { adapters });
+    assert.equal(result.ok, true, result.output);
+    assert.match(result.output, /最终完整报告/);
+    assert.doesNotMatch(result.output, /正在检查/);
+  });
+
+  it('M9-WATCH-LATEST: 裸 watch 每线程只观察最新派发，历史命令仍可显式选取', async () => {
+    const observed: string[] = [];
+    let standbys = 0;
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test',
+      fetchImpl: stubFetch([{ match: () => true, body: { ok: true, thread: { commands: [
+        { commandId: 'old', source: 'coder_shell', createdAt: 1 },
+        { commandId: 'latest', source: 'coder_shell', createdAt: 2 },
+        { commandId: 'wake', source: 'shell', createdAt: 3 },
+      ] } } }]),
+      monitor: { observe: async identity => { observed.push(identity.commandId); return `observed ${identity.commandId}`; },
+        isObserving: identity => identity.commandId === 'latest' } as any,
+      access: { requestStandby: () => { standbys++; } } as any,
+    });
+    const result = await runCapabilityShellPipeline(POLICY, 'watch wt-1 wt-2', { adapters });
+    assert.equal(result.ok, true, result.output);
+    assert.deepEqual(observed, ['latest', 'latest']);
+    assert.equal(standbys, 1);
+    observed.length = 0;
+    await runCapabilityShellPipeline(POLICY, 'watch wt-1 --command=old', { adapters });
+    assert.deepEqual(observed, ['old']);
+    assert.equal(standbys, 1);
+  });
   it('取最后一个 agent_message 的全文，带 turn 与 chars', async () => {
     const adapters = createThreadsAdapters({
       serverOrigin: 'http://test',

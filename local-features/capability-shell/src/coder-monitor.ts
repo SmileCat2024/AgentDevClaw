@@ -80,8 +80,17 @@ export class CoderMonitor {
     let target = this.observations.get(key);
     if (target && ['monitor_unreachable', 'runtime_unavailable', 'rotation_failed', 'association_lost'].includes(target.terminal)
       && !this.options.access.hasUndelivered(key)) {
-      this.observations.delete(key);
-      target = undefined;
+      target.handle = this.options.access.registerWork({ id: key, summary: `Coder ${key}` });
+      target.nodes = new Map([[identity.commandId, { state: 'pending' }]]);
+      target.waits.clear();
+      target.replies.clear();
+      target.cursor = 0;
+      target.initialized = false;
+      target.errors = 0;
+      target.result = undefined;
+      target.terminal = undefined;
+      target.message = undefined;
+      this.project(target, { status: 'submitted', summary: '已重新建立观察，等待关联执行事件', endedAt: undefined });
     }
     if (!target) {
       target = {
@@ -149,6 +158,10 @@ export class CoderMonitor {
       return;
     }
     const { thread, events, cursor, baseOffset } = snapshot;
+    if (target.initialized && cursor < target.cursor) {
+      this.finish(target, 'association_lost', '执行事件游标已回退，原事件流不再完整，无法证明本次执行结果。请主动取证。');
+      return;
+    }
     if (baseOffset > target.cursor && target.initialized) {
       this.finish(target, 'association_lost', '执行事件已被裁剪，监视无法证明本次执行结果。请主动取证。');
       return;
@@ -182,7 +195,7 @@ export class CoderMonitor {
       }
       const refs = eventRefs.filter((ref) => target.nodes.has(ref));
       if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
-        target.replies.set(event.sessionId, { sessionId: event.sessionId, turn: event.item.turn, text: String(event.item.text || '') });
+        target.replies.set(JSON.stringify([event.sessionId, event.item.turn]), { sessionId: event.sessionId, turn: event.item.turn, text: String(event.item.text || '') });
         continue;
       }
       for (const ref of refs) {
@@ -210,7 +223,7 @@ export class CoderMonitor {
           this.finish(target, 'association_lost', '挂起事件缺少待唤醒工作引用，无法关联后续执行。');
           return;
         }
-        const reply = target.replies.get(event.sessionId);
+        const reply = target.replies.get(JSON.stringify([event.sessionId, event.turn]));
         target.result = reply?.turn === event.turn ? reply.text : undefined;
       }
     }

@@ -64,6 +64,112 @@ function harness({ listChannels } = {}) {
 const output = (id, status, tail) => ({ type: 'output', data: { id, status, startedAt: 1, command: 'bash', outputTail: tail } });
 
 describe('background task panel', () => {
+  const agentChannel = { featureId: 'claw-coder-dispatch', channelId: 'coder-executions',
+    presentation: { panel: 'background', protocol: 'claw.background.agent', version: 1 } };
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const agentTask = (status, revision = 1) => ({ id: 'wt/cmd', revision, startedAt: 1,
+    title: 'Coder work', agentId: 'coder', threadId: 'wt', commandId: 'cmd', status, summary: 'report' });
+
+  for (const [status, label, active] of [
+    ['submitted', '已提交', true], ['executing', '执行中', true], ['suspended', '已挂起', true],
+    ['rotating', '接力中', true], ['completed', '完成', false], ['failed', '失败', false],
+    ['cancelled', '已中断', false], ['blocked', '需介入', false], ['monitor_lost', '监视失联（非业务失败）', false],
+  ]) {
+    it(`M9-UI-STATES M9-PANEL-FAIL: ${status} renders its status and badge without process controls`, async () => {
+      const h = harness({ listChannels: async () => [agentChannel] });
+      h.ctx.window.BgPanel.onOpen();
+      await flush();
+      h.source().emit('open');
+      h.pending.shift()({ ok: true, tasks: [agentTask(status)] });
+      await flush();
+      const html = h.ctx.window.BgPanel.getHtml();
+      assert.match(html, new RegExp(`bgp-dot-${status}`));
+      assert.ok(html.includes(label));
+      assert.doesNotMatch(html, /data-bgp-kill=|data-bgp-report=/);
+      assert.equal(h.badge.textContent, active ? '1' : '');
+      const before = h.requests.length;
+      const key = [...h.ctx.window.BgPanel.__testTasks().keys()][0];
+      h.click('kill', key);
+      h.click('report', key);
+      assert.equal(h.requests.length, before);
+      h.ctx.window.BgPanel.onClose();
+    });
+  }
+
+  it('M9-UI-ORDER: rebuilt observation supersedes lost card; delayed event/list never roll it back', async () => {
+    const h = harness({ listChannels: async () => [agentChannel] });
+    h.ctx.window.BgPanel.onOpen();
+    await flush();
+    const stream = h.source();
+    stream.emit('open');
+    h.pending.shift()({ ok: true, tasks: [agentTask('monitor_lost', 4)] });
+    await flush();
+    stream.emit('resync');
+    stream.emit('event', { type: 'updated', data: agentTask('executing', 5) });
+    h.pending.shift()({ ok: true, tasks: [agentTask('monitor_lost', 4)] });
+    await flush();
+    stream.emit('event', { type: 'updated', data: agentTask('monitor_lost', 4) });
+    assert.equal(h.task('wt/cmd').status, 'executing');
+    assert.equal(h.badge.textContent, '1');
+    stream.emit('event', { type: 'updated', data: agentTask('completed', 6) });
+    stream.emit('event', { type: 'updated', data: agentTask('completed', 6) });
+    assert.equal(h.task('wt/cmd').status, 'completed');
+    assert.equal(h.ids().length, 1);
+    assert.equal(h.badge.textContent, '');
+    h.ctx.window.BgPanel.onClose();
+  });
+
+  it('M9-UI-ISOLATION: disconnect does not change execution; reconnect/list and source retirement reconcile', async () => {
+    let declared = true;
+    const h = harness({ listChannels: async () => declared ? [agentChannel] : [] });
+    h.ctx.window.BgPanel.onOpen();
+    await flush();
+    const stream = h.source();
+    stream.emit('open');
+    h.pending.shift()({ ok: true, tasks: [agentTask('executing')] });
+    await flush();
+    stream.emit('error');
+    assert.equal(h.task('wt/cmd').status, 'executing');
+    assert.match(h.ctx.window.BgPanel.getHtml(), /disconnected/);
+    stream.emit('open');
+    h.pending.shift()({ ok: true, tasks: [agentTask('completed', 2)] });
+    await flush();
+    h.ctx.window.BgPanel.onClose();
+    await flush();
+    assert.equal(stream.closed, false);
+    h.ctx.window.BgPanel.onOpen();
+    assert.match(h.ctx.window.BgPanel.getHtml(), /完成/);
+    await flush();
+    declared = false;
+    h.ctx.window.BgPanel.refreshBadge();
+    await flush();
+    assert.deepEqual(h.ids(), []);
+    stream.emit('event', { type: 'updated', data: agentTask('executing', 3) });
+    assert.deepEqual(h.ids(), []);
+    h.ctx.window.BgPanel.onClose();
+  });
+
+  it('M9-UI-ISOLATION: previous-session agent event and list cannot populate a new session', async () => {
+    const h = harness({ listChannels: async () => [agentChannel] });
+    h.ctx.window.BgPanel.onOpen();
+    await flush();
+    const old = h.source();
+    old.emit('open');
+    h.ctx.getRuntimeWorkspaceSessionId = () => 'session-b';
+    h.ctx.currentRuntimeAgentId = 'runtime-b';
+    h.ctx.window.BgPanel.onOpen();
+    await flush();
+    old.emit('event', { type: 'updated', data: agentTask('monitor_lost') });
+    h.pending.shift()({ ok: true, tasks: [agentTask('monitor_lost')] });
+    await flush();
+    assert.deepEqual(h.ids(), []);
+    h.source().emit('open');
+    h.pending.shift()({ ok: true, tasks: [agentTask('executing')] });
+    await flush();
+    assert.equal(h.task('wt/cmd').status, 'executing');
+    assert.equal(h.badge.textContent, '1');
+    h.ctx.window.BgPanel.onClose();
+  });
   it('aggregates same-ID process sources and read-only agents by declared protocol', async () => {
     const h = harness({ listChannels: async () => [
       { featureId: 'bash-other', channelId: 'jobs', presentation: { panel: 'background', protocol: 'claw.background.process', version: 1 } },

@@ -57,6 +57,7 @@ class CapabilityShellFeatureInner implements AgentFeature {
   private access?: BackgroundAccess;
   private monitor?: CoderMonitor;
   private restored: CoderObservation[] = [];
+  private restoredWarningPending = false;
   private viewerId?: string;
   private panelClient?: FeatureCommunicationClient;
   private panelDeclared = false;
@@ -131,7 +132,11 @@ class CapabilityShellFeatureInner implements AgentFeature {
       });
       this.monitor = new CoderMonitor({
         access: this.access, intervalMs: this.config.pollIntervalMs,
-        onUpdate: (task) => { this.lostProjections.delete(task.id); this.publishPanel(task); },
+        onUpdate: (task) => {
+          this.restored = this.restored.filter(identity => `${identity.threadId}/${identity.commandId}` !== task.id);
+          this.lostProjections.delete(task.id);
+          this.publishPanel(task);
+        },
         read: async (threadId, after, signal): Promise<CoderSnapshot> => {
           const path = `/protoclaw/threads/${encodeURIComponent(threadId)}`;
           const bounded = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
@@ -163,13 +168,13 @@ class CapabilityShellFeatureInner implements AgentFeature {
   registerBackground(ctx: CallStartContext): void {
     this.access?.consumeStandbyRequest();
     if (this.access) this.access.attachAgent(ctx.agent);
-    if (this.restored.length) {
+    if (this.restoredWarningPending && this.restored.length) {
       ctx.context.addSystemMessage(
         '[Coder 监视未恢复] 此前监视资源已失效；请先查询并重新 watch，勿重发原任务。\n'
         + this.restored.map((i) => `watch ${i.threadId} --command=${i.commandId}`).join('\n'),
         ctx.agent?._callIndex ?? 0, this.name, 'reminder',
       );
-      this.restored = [];
+      this.restoredWarningPending = false;
     }
   }
 
@@ -185,6 +190,7 @@ class CapabilityShellFeatureInner implements AgentFeature {
     this.restored = Array.isArray(snapshot?.observations)
       ? snapshot.observations.filter((i: any) => typeof i?.threadId === 'string' && typeof i?.commandId === 'string')
         .map((i: CoderObservation) => ({ threadId: i.threadId, commandId: i.commandId })) : [];
+    this.restoredWarningPending = this.restored.length > 0;
     this.lostProjections.clear();
     for (const identity of this.restored) {
       const task: AgentBackgroundTask = { id: `${identity.threadId}/${identity.commandId}`, revision: 1, ...identity,

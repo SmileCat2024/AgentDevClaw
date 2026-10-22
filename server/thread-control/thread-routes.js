@@ -291,7 +291,8 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
       // 游标语义变更时与 board.getExecutionEvents 同步。
       const state = await board.getState(req.params.threadId);
       if (!state) {
-        res.json({ ok: true, events: [], cursor: 0 });
+        // 新线程在首条 runtime 事件落盘前没有 board，仍返回完整的空窗口契约。
+        res.json({ ok: true, events: [], baseOffset: 0, cursor: 0 });
         return;
       }
       const entries = Array.isArray(state.executionEvents) ? state.executionEvents : [];

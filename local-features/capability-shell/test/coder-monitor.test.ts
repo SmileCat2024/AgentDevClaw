@@ -40,7 +40,7 @@ describe('Coder execution observation (ADR-0031)', () => {
     state = snapshot([completed('cmd-1', { suspended: true, pendingWakeups: [{ source: 'shell', id: 'bg' }] })]);
     await monitor.observe(identity);
     assert.equal(monitor.list()[0].status, 'suspended');
-    state = snapshot([], { status: 'rotating' });
+    state = { ...snapshot([], { status: 'rotating' }), cursor: 1 };
     await monitor.observe(identity);
     assert.equal(monitor.list()[0].status, 'rotating');
     assert.ok(projected.length >= 4);

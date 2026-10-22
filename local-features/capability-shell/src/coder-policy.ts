@@ -62,14 +62,14 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
         adapter: { key: 'threads:send' },
       },
       'watch': {
-        description: '查询或建立执行监视，登记一次性待命后快速返回；目标已结束则直接返回结果。--command 精确选择一次提交',
+        description: '默认观察每线程最近一次派发，登记一次性待命后快速返回；目标已结束则直接返回结果。--command 精确选择历史提交',
         params: [{ name: 'threadId', kind: 'literal', variadic: true }],
         flags: ['--command='],
         usage: 'watch <threadId> [threadId...] [--command=<commandId>]',
         adapter: { key: 'threads:watch' },
       },
       'result': {
-        description: '取线程末轮回复全文（coder 的最终报告）；多轮回复时附全部轮次索引，--turn=N 取指定轮回复全文',
+        description: '取线程最新回复全文；多轮回复时附全部轮次索引，--turn=N 取指定轮最后一条回复全文',
         params: [{ name: 'threadId', kind: 'literal' }],
         flags: ['--turn='],
         usage: 'result <threadId> [--turn=N]',

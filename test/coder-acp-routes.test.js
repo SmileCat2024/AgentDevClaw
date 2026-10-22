@@ -1051,10 +1051,10 @@ describe('thread events — additive eventId / receivedAt', () => {
     assert.deepEqual(clamped.body.events.map((e) => e.eventId), ['ev-1', 'ev-2', 'ev-3']);
   });
 
-  it('keeps the legacy response shape for unknown threads', async () => {
+  it('returns the complete empty cursor window before a board exists', async () => {
     const app = setupEventsRoute(null);
-    const res = await callEvents(app, 'missing', { after: '0' });
-    assert.deepEqual(res.body, { ok: true, events: [], cursor: 0 });
+    const res = await callEvents(app, 'not-yet-recorded', { after: '0' });
+    assert.deepEqual(res.body, { ok: true, events: [], baseOffset: 0, cursor: 0 });
   });
 });
 

@@ -454,7 +454,7 @@ export function createThreadsAdapter(deps: {
         for (const threadId of threads) {
           const thread = (await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}`, { signal: context?.signal })).thread;
           const commands = (thread?.commands || []).filter((c: any) => c.source === 'coder_shell');
-          const ids = commandId ? [commandId] : commands.map((c: any) => c.commandId);
+          const ids = commandId ? [commandId] : commands.slice(-1).map((c: any) => c.commandId);
           if (!ids.length) throw new Error(`线程 ${threadId} 没有可关联的派发指令；请用 --command=<commandId> 明确目标`);
           for (const id of ids) {
             const identity = { threadId, commandId: id };
@@ -495,7 +495,7 @@ export function createThreadsAdapter(deps: {
           return `result: 线程 ${threadId} 尚无 agent_message 事件（无末轮回复可取）`;
         }
         const target = requestedTurn !== null
-          ? messages.find((item) => Number(item?.turn) === requestedTurn)
+          ? messages.filter((item) => Number(item?.turn) === requestedTurn).at(-1)
           : messages[messages.length - 1];
         if (!target) {
           const available = messages.map((item) => item?.turn).join(',');

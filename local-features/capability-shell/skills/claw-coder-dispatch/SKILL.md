@@ -86,7 +86,7 @@ watch wt-xxx
 watch wt-aaa wt-bbb
 ```
 
-`watch` 返回后，本轮结束并等待通知；任务已经结束时，会直接返回结果。自然结束本轮也不会取消 Coder 的工作。
+`watch` 默认跟踪每条线程最近一次派发，不重放历次任务的报告；查看或恢复某次历史任务时使用 `--command=<commandId>`。返回后，本轮结束并等待通知；任务已经结束时，会直接返回结果。自然结束本轮也不会取消 Coder 的工作。
 
 **不要用 `sleep` 加 `show/list/result` 循环查询进度。** 这些命令用于需要时查看信息，不用于定时轮询。
 
@@ -98,7 +98,7 @@ watch wt-aaa wt-bbb
 result wt-xxx
 ```
 
-有多轮回复时，返回内容会附轮次索引，可以查看指定轮：
+有多轮回复时，返回内容会附轮次索引，可以查看指定轮；同一轮有多条回复时，取该轮最后一条：
 
 ```bash
 result wt-xxx --turn=2
@@ -167,34 +167,61 @@ archive wt-xxx
 
 它不是执行任意系统命令的终端。文件读写、代码搜索和 Git 操作仍使用对应工具或普通 Bash 工具，不要把 `git`、`curl`、`rm` 等命令放进 `coder_shell`。
 
-### 向多个已有线程派发
+### 按工单列表创建并派发
 
-仅在这些任务可以并行时使用：
+先确认这些工单互相独立、可以并行，并将目录和要求替换为本次任务的实际内容。工单编号用于生成各自的标题、幂等键和指令，共同要求只需写一次：
 
 ```bash
-threads=(wt-aaa wt-bbb)
-for thread in "${threads[@]}"; do
-  send "$thread" "batch-001-$thread" '执行该线程已明确的独立任务'
+set -e
+tickets=(123 456 789)
+threads=()
+
+for ticket in "${tickets[@]}"; do
+  created=$(new-session coder /home/dev/AgentDevClaw "处理工单 #$ticket")
+  thread=${created##*threadId=}
+  if [[ "$thread" != wt-* ]]; then
+    printf '工单 #%s 未取得线程 ID，请检查创建回执。\n' "$ticket"
+    exit 1
+  fi
+
+  send "$thread" "ticket-$ticket-dispatch-001" \
+    "请处理工单 #$ticket。先阅读对应工单全文，按工单要求完成修改和验证。
+     仅修改该工单范围内的文件，不覆盖其他会话的改动。
+     不提交、不推送；完成后报告修改内容、验证结果和未验证项。"
+  threads+=("$thread")
 done
+
 watch "${threads[@]}"
 ```
 
-每次 `send` 提交后循环继续，**不会等前一个 Coder 做完再派发下一个**。
+`$()` 获取创建结果，参数展开提取线程 ID，随后直接用于派发，无须在两次工具调用之间手工复制。每次 `send` 提交后循环继续，**不会等前一个 Coder 做完再派发下一个**；`send` 后接 `&&` 也只判断提交是否成功。
 
 末尾的 `watch` 表示派发完后等待通知；如果还有其他事情要做，可以省略。即使把 `watch` 写在循环内，也只会在整段脚本返回后进入等待，不会在循环中途暂停。
 
+示例遇错即停，已完成的创建和派发不会撤销。检查逐条回执，保留工单与线程的对应关系，只补未完成的部分，不要从头重新创建整批线程。
+
 需要“先完成 A，再执行 B”时，先派发 A，收到通知并验收后再派发 B。不要用查询循环等待 A。
 
-### 创建后直接派发
+### 批量保存报告，验收后归档
 
-可以用命令替换读取创建结果，再用 Bash 参数展开提取线程 ID：
+同样的语法也可用于读取结果和收尾。先保存已结束任务的报告：
 
 ```bash
-created=$(new-session coder /home/dev/AgentDevClaw '独立任务')
-thread=${created##*threadId=}
-if [[ "$thread" == wt-* ]]; then
-  send "$thread" task-001 '任务目标、修改边界和验收要求'
-fi
+set -e
+for thread in wt-aaa wt-bbb; do
+  result "$thread" > "report-$thread.txt"
+done
+```
+
+文件保存在当前工具工作目录，不是自动写到 Coder 的项目目录。工具仍保留调度回执，重定向不保证报告内容不出现在工具返回中。
+
+阅读报告并核对实际结果后，在另一次调用中归档已验收、由自己负责的线程：
+
+```bash
+set -e
+for thread in wt-aaa wt-bbb; do
+  archive "$thread"
+done
 ```
 
 ### 支持的写法和限制
