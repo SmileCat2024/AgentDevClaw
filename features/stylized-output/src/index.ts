@@ -24,9 +24,10 @@
  *   2. Feature 暴露 sign_output_style 签名工具：模型逐字默写当前风格的确认签名，
  *      规范化空白后全等比对；匹配才记为“本轮已签名”。
  *   3. StepFinish guard 门禁：风格启用期间，模型的自然结束（无工具调用的收尾步）
- *      必须已经签名通过；否则拦截本次结束并注入 system 消息勒令补签，强制再跑一轮。
+ *      必须已经签名通过；否则拦截本次结束并注入复核补签提醒。拦截后补签成功
+ *      即正常结束当前回复，不再额外调用模型收尾；普通签名不自动结束。
  *      连续拦截达到 maxSignatureBlocks 上限后放行结束并记录警告（防死循环）。
- *      子代理、wait、后台唤醒等机制活跃时不干预。
+ *      子代理、wait 等机制活跃时不干预；后台工作的挂起由框架处理。
  *   4. 只读管理工具 list_output_styles / show_output_style：模型可主动列出
  *      风格清单、查看风格说明原文（frontmatter + 正文 + signature）；上下文中
  *      的风格说明被精简或遗失时，凭这两个工具即可重新核对，无需用户介入。
@@ -253,6 +254,8 @@ export class StylizedOutput implements AgentFeature {
   private defaultStyleName: string | null = null;
   private signedForReply = false;
   private blockedCount = 0;
+  /** 最近用户输入的 sequence；同一次 call 内的排队插话也会刷新签名与补签条件。 */
+  private lastUserSequence: number | null = null;
   /** 已注入风格的内容指纹键：name@hash，风格或文件内容变化时重新注入 */
   private injectedStyleKey: string | null = null;
   private maxSignatureBlocks = DEFAULT_MAX_SIGNATURE_BLOCKS;
@@ -435,7 +438,9 @@ export class StylizedOutput implements AgentFeature {
         ok: true,
         signed: true,
         style: active.name,
-        note: '签名验证通过，本轮回复现在可以正常结束。签名属于内部流程：不要在给用户的回复正文里提及签名或本工具调用，直接输出面向用户的最终回复即可。',
+        note: this.blockedCount > 0
+          ? '签名验证通过。签名属于内部流程，不要在给用户的回复正文里提及签名或本工具调用。'
+          : '签名验证通过，本轮回复现在可以正常结束。签名属于内部流程：不要在给用户的回复正文里提及签名或本工具调用，直接输出面向用户的最终回复即可。',
       };
     },
   };
@@ -531,10 +536,17 @@ export class StylizedOutput implements AgentFeature {
     this.rescan('call');
     this.signedForReply = false;
     this.blockedCount = 0;
+    this.lastUserSequence = null;
   }
 
-  /** StepStart：确保当前风格说明已注入上下文（风格或其文件内容变化时注入一次，不逐 step 重复） */
+  /** StepStart：同步用户输入边界，并确保当前风格说明已注入上下文。 */
   async ensureStyleInjection(ctx: StepStartContext): Promise<void> {
+    const userSequence = ctx.context.query().byRole('user').last()?.sequence ?? null;
+    if (userSequence !== this.lastUserSequence) {
+      this.signedForReply = false;
+      this.blockedCount = 0;
+      this.lastUserSequence = userSequence;
+    }
     const active = this.getActiveStyle();
     if (!active) {
       this.injectedStyleKey = null;
@@ -578,17 +590,23 @@ export class StylizedOutput implements AgentFeature {
 
   /**
    * StepFinish guard：签名门禁。
-   * - 未启用风格 / 该步仍有工具调用 / 子代理与 wait 等机制活跃 / 已签名 → 不干预（Continue）。
-   * - 自然结束但未签名 → 注入勒令补签的 system 消息并 Approve 强制再跑一轮；
+   * - 拦截后成功补签 → Deny 结束当前回复，不再为收尾额外调用模型。
+   * - 未启用风格 / 子代理与 wait 等机制活跃 / 普通签名或工具步 → 不干预（Continue）。
+   * - 自然结束但未签名 → 注入复核补签的 system 消息并 Approve 强制再跑一轮；
    *   连续拦截达到上限后放行并告警（防死循环）。
    */
   async decideSignatureGate(ctx: StepFinishDecisionContext) {
     const active = this.getActiveStyle();
     if (!active) return Decision.Continue;
-    if (ctx.toolCallsCount !== 0) return Decision.Continue;
     if (ctx.hasActiveSubAgents || ctx.hasPendingMessages || ctx.waitCalled) {
       return Decision.Continue;
     }
+    if (this.signedForReply && this.blockedCount > 0) {
+      this.blockedCount = 0;
+      this.logger?.info('输出风格签名门禁：补签成功，结束本轮回复', { style: active.name });
+      return Decision.Deny;
+    }
+    if (ctx.toolCallsCount !== 0) return Decision.Continue;
     if (this.signedForReply) return Decision.Continue;
     if (this.blockedCount >= this.maxSignatureBlocks) {
       this.blockedCount = 0;
@@ -603,10 +621,10 @@ export class StylizedOutput implements AgentFeature {
     this.lastAction = 'blocked';
     const demand = [
       '[输出风格签名门禁]',
-      '当前已启用输出风格「' + active.name + '」，但你的回复尚未完成签名确认，不能就此结束。',
-      '请立即检查本回复是否符合该风格的输出要求；若有不符合之处，请更正后重新输出。',
-      '自检无误后，调用 sign_output_style 工具完成签名确认：参数 signature 逐字默写该风格说明中 signature 字段的确认签名原文。',
-      '签名验证通过后，本轮回复才会被放行结束；直接在正文里书写签名无效。',
+      '当前已启用输出风格「' + active.name + '」，但本轮回复尚未完成签名确认，暂不能结束。',
+      '若已完成面向用户的最终输出，请复核已有表述是否符合该风格：符合则直接签名；有不符合之处，只需作必要补充或局部重新表述，无需全文重写。',
+      '若忘记风格要求或确认签名原文，请调用 show_output_style（不传参数即可查看当前风格完整说明）。',
+      '自检无误后，调用 sign_output_style，参数 signature 逐字默写该风格说明中 signature 字段的原文。直接在正文中书写签名无效。',
     ].join('\n');
     ctx.context.add({ role: 'system', content: demand });
     this.logger?.info('输出风格签名门禁：拦截未签名结束', {
@@ -622,6 +640,7 @@ export class StylizedOutput implements AgentFeature {
       activeStyleCleared: this.activeStyleCleared,
       signedForReply: this.signedForReply,
       blockedCount: this.blockedCount,
+      lastUserSequence: this.lastUserSequence,
       injectedStyleKey: this.injectedStyleKey,
       lastAction: this.lastAction,
     };
@@ -636,6 +655,9 @@ export class StylizedOutput implements AgentFeature {
     this.blockedCount = typeof state.blockedCount === 'number' && Number.isFinite(state.blockedCount)
       ? Math.max(0, Math.floor(state.blockedCount))
       : 0;
+    this.lastUserSequence = typeof state.lastUserSequence === 'number' && Number.isFinite(state.lastUserSequence)
+      ? state.lastUserSequence
+      : null;
     this.injectedStyleKey = cleanText(state.injectedStyleKey) || null;
     this.lastAction = VALID_ACTIONS.includes(state.lastAction as typeof VALID_ACTIONS[number])
       ? state.lastAction as StylizedOutputStatus['lastAction']

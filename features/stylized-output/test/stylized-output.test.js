@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'path';
-import { Decision } from '@agentdevjs/core';
+import { Agent, Context, Decision } from '@agentdevjs/core';
 import { StylizedOutput } from '../dist/index.js';
 
 const SIGNATURE = '我确认本回复已逐句遵循测试风格的全部要求。';
@@ -131,6 +131,11 @@ describe('StylizedOutput 签名门禁（StepFinish guard）', () => {
     assert.equal(feature.blockedCount, 1);
     assert.equal(added.length, 1);
     assert.match(added[0].content, /签名门禁/);
+    assert.match(added[0].content, /当前已启用输出风格「test-style」/);
+    assert.match(added[0].content, /符合则直接签名/);
+    assert.match(added[0].content, /必要补充或局部重新表述，无需全文重写/);
+    assert.match(added[0].content, /show_output_style（不传参数/);
+    assert.doesNotMatch(added[0].content, /更正后重新输出|不会再给你补写正文的机会|自动结束/);
   });
 
   it('连续拦截达到上限后放行结束', async () => {
@@ -160,6 +165,174 @@ describe('StylizedOutput 签名门禁（StepFinish guard）', () => {
     const { ctx } = createGateContext({ toolCallsCount: 0 });
     const decision = await feature.decideSignatureGate(ctx);
     assert.equal(decision, Decision.Approve);
+  });
+});
+
+describe('StylizedOutput 补签收尾', () => {
+  it('拦截后可以查阅风格，签名失败不结束，成功才正常结束', async () => {
+    const feature = createFeature();
+    await feature.decideSignatureGate(createGateContext().ctx);
+    await feature.showTool.execute({});
+    assert.equal(await feature.decideSignatureGate(createGateContext({ toolCallsCount: 1 }).ctx), Decision.Continue);
+
+    await feature.signTool.execute({ signature: '错误签名' });
+    assert.equal(await feature.decideSignatureGate(createGateContext({ toolCallsCount: 1 }).ctx), Decision.Continue);
+    const payload = await feature.signTool.execute({ signature: SIGNATURE });
+    assert.equal(payload.ok, true);
+    assert.doesNotMatch(payload.note, /直接输出面向用户的最终回复/);
+    assert.equal(await feature.decideSignatureGate(createGateContext({ toolCallsCount: 1 }).ctx), Decision.Deny);
+    assert.equal(feature.blockedCount, 0);
+    assert.equal(feature.lastAction, 'signed');
+    assert.equal(await feature.decideSignatureGate(createGateContext({ toolCallsCount: 1 }).ctx), Decision.Continue);
+  });
+
+  for (const flag of ['hasActiveSubAgents', 'hasPendingMessages', 'waitCalled']) {
+    it(`${flag} 活跃时，补签不覆盖原有控制流程`, async () => {
+      const feature = createFeature();
+      await feature.decideSignatureGate(createGateContext().ctx);
+      await feature.signTool.execute({ signature: SIGNATURE });
+      const { ctx } = createGateContext({ toolCallsCount: 1 });
+      ctx[flag] = true;
+      assert.equal(await feature.decideSignatureGate(ctx), Decision.Continue);
+    });
+  }
+
+  it('新 CallStart、风格重选或风格清除均撤销补签自动结束条件', async () => {
+    for (const reset of [feature => feature.syncStyleState({}), feature => feature.setActiveStyle('test-style'), feature => feature.setActiveStyle(null)]) {
+      const feature = createFeature();
+      await feature.decideSignatureGate(createGateContext().ctx);
+      await reset(feature);
+      await feature.signTool.execute({ signature: SIGNATURE });
+      assert.equal(await feature.decideSignatureGate(createGateContext({ toolCallsCount: 1 }).ctx), Decision.Continue);
+    }
+  });
+
+  it('同次 call 的新用户输入清除签名及补签条件，系统提醒不清除', async () => {
+    const feature = createFeature();
+    const context = new Context();
+    context.addUserMessage('原任务', 1);
+    await feature.ensureStyleInjection({ context });
+    await feature.decideSignatureGate({ ...createGateContext().ctx, context });
+    context.addSystemMessage('机器提醒', 1);
+    await feature.ensureStyleInjection({ context });
+    assert.equal(feature.blockedCount, 1);
+    await feature.signTool.execute({ signature: SIGNATURE });
+
+    context.addUserMessage('排队插话', 1);
+    await feature.ensureStyleInjection({ context });
+    assert.equal(feature.blockedCount, 0);
+    assert.equal(feature.signedForReply, false);
+    await feature.signTool.execute({ signature: SIGNATURE });
+    assert.equal(await feature.decideSignatureGate(createGateContext({ toolCallsCount: 1 }).ctx), Decision.Continue);
+  });
+
+  it('快照恢复保留同一输入的补签条件，新输入仍使其失效', async () => {
+    const original = createFeature();
+    const context = new Context();
+    context.addUserMessage('原任务', 1);
+    await original.ensureStyleInjection({ context });
+    await original.decideSignatureGate({ ...createGateContext().ctx, context });
+    const snapshot = original.captureState();
+    const restored = createFeature();
+    restored.restoreState(snapshot);
+    await restored.ensureStyleInjection({ context });
+    await restored.signTool.execute({ signature: SIGNATURE });
+    assert.equal(await restored.decideSignatureGate(createGateContext({ toolCallsCount: 1 }).ctx), Decision.Deny);
+
+    restored.restoreState(snapshot);
+    context.addUserMessage('新任务', 2);
+    await restored.ensureStyleInjection({ context });
+    assert.equal(restored.blockedCount, 0);
+  });
+});
+
+describe('StylizedOutput 框架收尾集成', () => {
+  function createAgent(t, responses) {
+    const requests = [];
+    const queuedInputs = [];
+    t.mock.method(globalThis, 'fetch', async (url) => {
+      assert.match(String(url), /\/dequeue-input$/);
+      return { ok: true, json: async () => ({ input: queuedInputs.shift() ?? null }) };
+    });
+    const feature = new StylizedOutput({ workspaceDir, defaultStyle: 'test-style' });
+    const agent = new Agent({ maxTurns: 10, llm: { chat: async messages => {
+      requests.push(structuredClone(messages));
+      assert.ok(responses.length > 0, '不应为补签收尾额外请求模型');
+      const next = responses.shift();
+      return typeof next === 'function' ? next() : next;
+    } } }).use(feature);
+    t.after(() => agent.dispose());
+    return { agent, feature, requests, queuedInputs };
+  }
+
+  const sign = (signature = SIGNATURE, content = '') => ({
+    content,
+    toolCalls: [{ id: 'signature', name: 'sign_output_style', arguments: { signature } }],
+  });
+
+  it('已有最终输出后补签即完成，工具结果和原文均留在上下文', async t => {
+    const { agent, requests } = createAgent(t, [{ content: '完整最终回复' }, sign()]);
+    await agent.onCall('任务');
+    assert.equal(requests.length, 2);
+    assert.equal(agent.getLastCallOutcome().status, 'completed');
+    const messages = agent.getContext().getAll();
+    assert.ok(messages.some(message => message.role === 'assistant' && message.content === '完整最终回复'));
+    assert.equal(messages.at(-1).role, 'tool');
+    const toolResult = JSON.parse(messages.at(-1).content);
+    assert.equal(toolResult.success, true);
+    assert.equal(JSON.parse(toolResult.result).signed, true);
+  });
+
+  it('未拦截的普通签名仍允许模型输出最终回复', async t => {
+    const { agent, requests } = createAgent(t, [sign(), { content: '签名后的正常最终回复' }]);
+    assert.equal(await agent.onCall('任务'), '签名后的正常最终回复');
+    assert.equal(requests.length, 2);
+  });
+
+  it('允许先重读风格、失败重试和局部改述，成功补签后不再请求模型', async t => {
+    const { agent, requests } = createAgent(t, [
+      { content: '已有回复' },
+      { content: '', toolCalls: [{ id: 'read-style', name: 'show_output_style', arguments: {} }] },
+      sign('错误签名'),
+      sign(SIGNATURE, '局部更正说明'),
+    ]);
+    assert.equal(await agent.onCall('任务'), '局部更正说明');
+    assert.equal(requests.length, 4);
+    assert.equal(agent.getLastCallOutcome().status, 'completed');
+  });
+
+  it('补签收尾时排队的新用户输入仍被处理，旧补签条件不会截断新回复', async t => {
+    const responses = [{ content: '旧任务回复' }];
+    const { agent, requests, queuedInputs } = createAgent(t, responses);
+    responses.push(() => {
+      queuedInputs.push({ text: '新任务', sourceRef: 'queued-user' });
+      return sign();
+    }, sign(), { content: '新任务回复' });
+    assert.equal(await agent.onCall('原任务'), '新任务回复');
+    assert.equal(requests.length, 4);
+    assert.ok(requests[2].some(message => message.role === 'user' && message.content === '新任务'));
+    assert.deepEqual(agent.getLastCallOutcome().consumedSourceRefs, ['queued-user']);
+  });
+
+  it('成功补签后仍保留后台 pending work 并由框架判定 suspended', async t => {
+    const { agent, requests } = createAgent(t, [{ content: '任务已交给后台' }, sign()]);
+    agent.registerPendingWorkProvider('test-background', () => [{ source: 'test-background', id: 'job-1' }]);
+    await agent.onCall('任务');
+    assert.equal(requests.length, 2);
+    assert.equal(agent.getLastCallOutcome().reason, 'suspended');
+    assert.equal(agent.collectPendingWakeups().length, 1);
+  });
+
+  it('同批混用签名与其他工具时不会误判成功补签或执行其他工具', async t => {
+    let executions = 0;
+    const mixed = sign();
+    mixed.toolCalls.push({ id: 'other', name: 'other', arguments: {} });
+    const { agent, requests } = createAgent(t, [{ content: '最终回复' }, mixed, sign()]);
+    agent.tools.register({ name: 'other', description: 'test', parameters: {}, execute: async () => { executions++; } });
+    await agent.onCall('任务');
+    assert.equal(requests.length, 3);
+    assert.equal(executions, 0);
+    assert.equal(agent.getLastCallOutcome().status, 'completed');
   });
 });
 
