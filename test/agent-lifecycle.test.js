@@ -1,7 +1,7 @@
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -14,6 +14,7 @@ process.env.AGENTDEV_DATA_DIR = DATA_DIR;
 const { createAgentLifecycleModule } = await import('../server/routes/agent-lifecycle.js');
 const { buildSessionWorkspaceEnv, buildSharedSessionStartMessage, resolveManagedProcessPlacement } = await import('../server/routes/agent-startup.js');
 const { managedAgents } = await import('../server/shared/agent-access.js');
+const { FileSessionStore } = await import('@agentdevjs/core');
 
 after(() => rmSync(DATA_DIR, { recursive: true, force: true }));
 
@@ -327,6 +328,44 @@ describe('agent-lifecycle', () => {
       assert.equal(status.status, 'stopped');
       assert.equal(runtime.stopped, true);
       assert.equal(runtime.stopping, false);
+    });
+
+    it('confirms the closing snapshot while automatic saves of the same session are pending', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const child = createMockChild();
+      injectRuntime('coder', 'concurrent-save-session', child);
+      const sessionDir = path.join(DATA_DIR, 'concurrent-session-saves');
+      const store = new FileSessionStore(sessionDir);
+      const snapshot = (callIndex) => ({
+        version: 3,
+        sessionId: 'concurrent-save-session',
+        savedAt: callIndex,
+        agentType: 'TestAgent',
+        runtime: { initialized: true, callIndex, featureStates: [] },
+        rollbackHistory: [],
+      });
+      // Keep the storage implementation real; only the child IPC transport is replaced.
+      const autoSaves = Array.from({ length: 16 }, (_, index) =>
+        store.save('concurrent-save-session', snapshot(index)));
+      const autoResults = Promise.allSettled(autoSaves);
+      let closing;
+      child.send = (message) => {
+        assert.deepEqual(message, { type: 'remove-session', sessionId: 'concurrent-save-session' });
+        closing = store.save('concurrent-save-session', snapshot(16)).then(
+          () => child.emit('message', { type: 'session-exited', sessionId: message.sessionId, persisted: true }),
+          () => child.emit('message', { type: 'session-exited', sessionId: message.sessionId, persisted: false }),
+        );
+      };
+
+      const stopping = mod.stopManagedAgent('coder', 'concurrent-save-session', { waitForPersistence: true });
+      try {
+        assert.equal((await stopping).status, 'stopped');
+        assert.deepEqual((await autoResults).map(result => result.status), Array(16).fill('fulfilled'));
+        const saved = JSON.parse(readFileSync(path.join(sessionDir, 'concurrent-save-session.json'), 'utf8'));
+        assert.deepEqual(saved, snapshot(16), 'the acknowledged closing snapshot must remain on disk');
+      } finally {
+        await Promise.allSettled([autoResults, closing, stopping]);
+      }
     });
 
     it('fails a persistence wait when no runtime can confirm the session save', async () => {
