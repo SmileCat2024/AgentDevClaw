@@ -359,7 +359,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const targetDir = tmpdir();
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${targetDir} '工单035 标题'`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${targetDir}" '工单035 标题'`, {
       adapters
     });
     assert.equal(r.ok, true, r.output);
@@ -424,7 +424,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}"`, {
       adapters
     });
     assert.equal(r.ok, true, r.output);
@@ -445,7 +445,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       },
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}"`, {
       adapters
     });
     assert.equal(r.ok, false, r.output);
@@ -470,7 +470,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       },
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}"`, {
       adapters
     });
     assert.equal(r.ok, true, r.output);
@@ -490,7 +490,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       },
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}"`, {
       adapters
     });
     assert.equal(r.ok, true, r.output);
