@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
+import { Context } from '@agentdevjs/core';
 import {
   CraftAwarenessFeature,
   shouldRemindDocCraft,
@@ -105,6 +106,224 @@ describe('shouldRemindDocCraft（触发判定纯函数）', () => {
       shouldRemindDocCraft({ toolName: 'write', args: null, success: true }),
       false,
     );
+  });
+});
+
+describe('测试素养（分层注入契约）', () => {
+  const layerIds = ['test-behavior-contract', 'test-discriminating-power', 'test-verification-delivery'];
+  const knowledgeDir = mkdtempSync(join(tmpdir(), 'craft-test-layers-'));
+  for (const id of layerIds) writeFileSync(join(knowledgeDir, `${id}.md`), id);
+  after(() => rmSync(knowledgeDir, { recursive: true, force: true }));
+
+  function session(dir = knowledgeDir) {
+    const feature = new CraftAwarenessFeature({ knowledgeDir: dir });
+    const injected: Array<{ text: string; turn: number; source?: string; tag?: string }> = [];
+    return {
+      feature,
+      injected,
+      async fire(filePath = 'cart.test.ts', toolName = 'edit', success = true, pathKey = 'filePath') {
+        await feature.injectCraftReminder({
+          toolName,
+          call: { arguments: { [pathKey]: filePath, content: 'test', oldString: 'a', newString: 'b' } },
+          success,
+          context: {
+            getRecent() { return [{ role: 'user', sequence: 10, turn: 7 }, { role: 'tool', turn: 7 }]; },
+            addSystemMessage(text: string, turn: number, source?: string, tag?: string) {
+              injected.push({ text, turn, source, tag });
+            },
+          },
+        } as never);
+      },
+    };
+  }
+
+  it('给定的文件名模式均触发，包括跨平台路径和多重扩展名', async () => {
+    for (const name of [
+      'test_cart.py', 'test_cart', 'cart_test.go', 'cart.test.ts', 'cart.test.helper.ts',
+      'cart.spec.tsx', 'CartTest.java', 'CartTests.cs', 'CartTestCase.php', 'CartSpec.scala',
+      'D:\\repo\\CartTest.java', '/repo/tests/cart.spec.js',
+    ]) {
+      const s = session();
+      await s.fire(name, 'write');
+      assert.deepEqual(s.injected.map((item) => item.text), ['[工程素养] test-behavior-contract'], name);
+      assert.equal(s.injected[0].turn, 7);
+      assert.equal(s.injected[0].source, 'craft-awareness');
+      assert.equal(s.injected[0].tag, 'reminder');
+    }
+  });
+
+  it('只匹配文件名，不匹配测试目录、普通名称或近似后缀', async () => {
+    for (const name of ['tests/cart.ts', 'test_cart/cart.py', 'a.test.ts/main.js', 'contest.js',
+      'special.ts', 'CartTestsHelper.cs', 'cart.test', 'cart_test', 'README.md', '']) {
+      const s = session();
+      await s.fire(name);
+      assert.equal(s.injected.length, 0, name);
+    }
+  });
+
+  it('同一用户输入内的 write、edit、edit 逐层注入，后续不重复', async () => {
+    const s = session();
+    await s.fire('cart.test.ts', 'write');
+    assert.deepEqual(s.injected.map((item) => item.text), ['[工程素养] test-behavior-contract']);
+    await s.fire();
+    assert.equal(s.injected.at(-1)?.text, '[工程素养] test-discriminating-power');
+    await s.fire();
+    assert.deepEqual(s.injected.map((item) => item.text), layerIds.map((id) => `[工程素养] ${id}`));
+    await s.fire();
+    await s.fire('other.spec.ts');
+    assert.equal(s.injected.length, 3, '每层每会话一次，而不是每文件一次');
+  });
+
+  it('首次 edit 也只注入第一层，重复 write 不解锁后两层', async () => {
+    const s = session();
+    await s.fire('cart.test.ts');
+    await s.fire('cart.test.ts', 'write');
+    await s.fire('cart.test.ts', 'write');
+    assert.equal(s.injected.length, 1);
+    await s.fire();
+    assert.equal(s.injected.at(-1)?.text, '[工程素养] test-discriminating-power');
+    await s.fire();
+    assert.equal(s.injected.at(-1)?.text, '[工程素养] test-verification-delivery');
+  });
+
+  it('不同文件进度分开，不因连续新建测试文件而提前注入深层知识', async () => {
+    const s = session();
+    await s.fire('a.test.ts', 'write');
+    await s.fire('b.spec.ts', 'write');
+    await s.fire('c_test.go');
+    assert.equal(s.injected.length, 1);
+    await s.fire('b.spec.ts');
+    assert.equal(s.injected.at(-1)?.text, '[工程素养] test-discriminating-power');
+    await s.fire('a.test.ts');
+    assert.equal(s.injected.length, 2, '第三层需要当前文件至少第三次修改');
+    await s.fire('b.spec.ts');
+    assert.equal(s.injected.at(-1)?.text, '[工程素养] test-verification-delivery');
+  });
+
+  it('失败、无关工具、缺失路径不注入也不累计，路径参数别名可用', async () => {
+    const s = session();
+    await s.fire('cart.test.ts', 'write', false);
+    await s.fire('cart.test.ts', 'read');
+    await s.fire('');
+    assert.equal(s.injected.length, 0);
+    await s.fire('cart.test.ts', 'edit', true, 'filepath');
+    assert.equal(s.injected.length, 1);
+    await s.fire('cart.test.ts', 'edit', false);
+    await s.fire('cart.test.ts', 'read');
+    await s.fire('cart.test.ts', 'edit', true, 'path');
+    assert.equal(s.injected.length, 2);
+    assert.equal(s.injected.at(-1)?.text, '[工程素养] test-discriminating-power');
+  });
+
+  it('分隔符和 Windows 大小写漂移仍延续同文件进度', async () => {
+    const s = session();
+    await s.fire('D:/repo/cart.test.ts', 'write');
+    await s.fire('d:\\repo\\cart.test.ts');
+    await s.fire('D:/REPO/cart.test.ts');
+    assert.deepEqual(s.injected.map((item) => item.text), layerIds.map((id) => `[工程素养] ${id}`));
+  });
+
+  it('快照经 JSON 往返恢复后保留文件进度及各层冷却，快照不被后续编辑改变', async () => {
+    const first = session();
+    await first.fire('cart.test.ts', 'write');
+    const snapshot = first.feature.captureState();
+    await first.fire();
+    const second = session();
+    second.feature.restoreState(JSON.parse(JSON.stringify(snapshot)));
+    await second.fire();
+    assert.deepEqual(second.injected.map((item) => item.text), ['[工程素养] test-discriminating-power']);
+    const third = session();
+    third.feature.restoreState(JSON.parse(JSON.stringify(second.feature.captureState())));
+    await third.fire();
+    assert.deepEqual(third.injected.map((item) => item.text), ['[工程素养] test-verification-delivery']);
+    await third.fire();
+    assert.equal(third.injected.length, 1);
+  });
+
+  it('没有测试进度的现有快照从首次操作开始，非法进度不提前解锁', async () => {
+    for (const testFileChanges of [undefined, null, 'bad', { 'cart.test.ts': -1 },
+      { 'cart.test.ts': '3' }, { 'cart.test.ts': 1.5 }, { 'cart.test.ts': 99 }]) {
+      const s = session();
+      s.feature.restoreState({ injected: { 'test-behavior-contract': true }, testFileChanges } as never);
+      await s.fire();
+      assert.equal(s.injected.length, 0);
+      await s.fire();
+      assert.equal(s.injected.at(-1)?.text, '[工程素养] test-discriminating-power');
+    }
+  });
+
+  it('前层知识缺失时不越级注入，缺失条目不消耗冷却', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'craft-test-missing-'));
+    try {
+      writeFileSync(join(dir, `${layerIds[1]}.md`), layerIds[1]);
+      writeFileSync(join(dir, `${layerIds[2]}.md`), layerIds[2]);
+      const s = session(dir);
+      await s.fire();
+      await s.fire();
+      await s.fire();
+      assert.equal(s.injected.length, 0);
+      assert.deepEqual((s.feature.captureState() as { injected: Record<string, true> }).injected, {});
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('真实 Context 中每次工具结果后仅追加一层提醒，不改变工具结果', async () => {
+    const feature = new CraftAwarenessFeature({ knowledgeDir });
+    const context = new Context();
+    context.addUserMessage('补充购物车回归测试', 4);
+    for (const [index, name] of ['write', 'edit', 'edit'].entries()) {
+      const call = { id: `test-${index}`, name, arguments: { filePath: 'cart.test.ts', content: 'test' } };
+      context.addToolMessage(call, { success: true, result: 'saved' }, 4);
+      await feature.injectCraftReminder({ toolName: name, call, success: true, context } as never);
+      const [tool, reminder] = context.getRecent(2);
+      assert.equal(tool.role, 'tool');
+      assert.equal(JSON.parse(tool.content).result, 'saved');
+      assert.equal(reminder.role, 'system');
+      assert.equal(reminder.content, `[工程素养] ${layerIds[index]}`);
+      assert.equal(reminder.turn, 4);
+      assert.equal(reminder.source, 'craft-awareness');
+      assert.equal(reminder.tag, 'reminder');
+    }
+    assert.deepEqual(context.getRecent(6).map((message) => message.role),
+      ['tool', 'system', 'tool', 'system', 'tool', 'system']);
+  });
+
+  it('上下文注入失败不阻断工具回调、不消耗冷却，重试仍从第一层开始', async () => {
+    const feature = new CraftAwarenessFeature({ knowledgeDir });
+    const call = { arguments: { filePath: 'cart.test.ts' } };
+    await assert.doesNotReject(feature.injectCraftReminder({
+      toolName: 'edit', call, success: true,
+      context: { getRecent() { return []; }, addSystemMessage() { throw new Error('injection unavailable'); } },
+    } as never));
+    const next = session();
+    next.feature.restoreState(JSON.parse(JSON.stringify(feature.captureState())));
+    await next.fire();
+    assert.deepEqual(next.injected.map((item) => item.text), ['[工程素养] test-behavior-contract']);
+    await next.fire();
+    assert.equal(next.injected.at(-1)?.text, '[工程素养] test-discriminating-power');
+  });
+
+  it('文档条目和测试条目冷却独立，一次事件最多一条提醒', async () => {
+    const s = session(REAL_KNOWLEDGE_DIR);
+    await s.fire('guide.md');
+    assert.equal(s.injected.length, 1);
+    await s.fire();
+    assert.equal(s.injected.length, 2);
+    assert.equal(s.injected.at(-1)?.text, `[工程素养] ${loadKnowledgeDir(REAL_KNOWLEDGE_DIR).get(layerIds[0])}`);
+    await s.fire('test_notes.md');
+    assert.equal(s.injected.length, 2, '另一文件首次修改不提前解锁，也不重复文档条目');
+  });
+
+  it('真实构建知识库按层次加载，注入文案与文件一致且互不重复', async () => {
+    const s = session(REAL_KNOWLEDGE_DIR);
+    const knowledge = loadKnowledgeDir(REAL_KNOWLEDGE_DIR);
+    for (const id of layerIds) {
+      assert.ok(knowledge.get(id), `${id} 已随构建复制`);
+      await s.fire();
+      assert.equal(s.injected.at(-1)?.text, `[工程素养] ${knowledge.get(id)}`);
+    }
+    assert.equal(new Set(s.injected.map((item) => item.text)).size, 3);
   });
 });
 

@@ -32,6 +32,10 @@
  * （模型自我更正）不累计。边界记账不随快照持久化——会话恢复后清零，最多
  * 少注入一次，无正确性影响。
  *
+ * 测试条目：成功 write/edit 的文件名命中测试命名模式时，按同文件修改次数递进：
+ * 首次注入行为契约，第二次且为 edit 注入辨别能力，第三次且为 edit 注入验证交付。
+ * 同一用户输入内也递进；每条每会话一次，前层未注入不越级。文件进度随快照持久化。
+ *
  * 冷却状态不自行落盘：经框架原生 feature 快照契约（captureState / restoreState）
  * 随会话快照持久化，会话恢复（含 runtime 重启）后同一会话不重复提醒。
  *
@@ -70,6 +74,21 @@ function readPathArg(args: Record<string, unknown> | null | undefined): string {
     if (typeof value === 'string' && value.trim()) return value;
   }
   return '';
+}
+
+// 仅匹配 basename；CamelCase 后缀保留大小写，避免把 contest.js 等普通文件当作测试。
+const TEST_FILE_NAME = /^(?:test_.*|.*_test\..*|.*\.test\..*|.*\.spec\..*|.*(?:Test|Tests|TestCase|Spec)\..*)$/;
+const TEST_CRAFT_LAYERS = [
+  { id: 'test-behavior-contract', description: '测试行为契约：从需求确定可观察结果', minChanges: 1 },
+  { id: 'test-discriminating-power', description: '测试辨别能力：能抓住错误且不绑定内部实现', minChanges: 2 },
+  { id: 'test-verification-delivery', description: '测试验证交付：运行、归因与真实证据', minChanges: 3 },
+] as const;
+
+function readTestFilePath(event: CraftToolEvent): string {
+  if (event.success !== true || (event.toolName !== 'write' && event.toolName !== 'edit')) return '';
+  const filePath = readPathArg(event.args);
+  const name = filePath.replace(/\\/g, '/').split('/').pop() ?? '';
+  return TEST_FILE_NAME.test(name) ? filePath : '';
 }
 
 function isDocFile(filePath: string): boolean {
@@ -170,6 +189,11 @@ interface CraftEntry {
 }
 
 const CRAFT_ENTRIES: readonly CraftEntry[] = [
+  ...TEST_CRAFT_LAYERS.map((layer, index): CraftEntry => ({
+    id: layer.id,
+    description: layer.description,
+    match: (ctx, feature) => feature.shouldRemindTestLayer(ctx, index),
+  })),
   {
     id: 'doc-reader-awareness',
     description: '文档读者视角：首次写出成规模文档后注入写法标准',
@@ -194,7 +218,7 @@ export class CraftAwarenessFeature implements AgentFeature {
 
   readonly name = 'craft-awareness';
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = '在 agent 撰写与反复修改文档时注入工程写作提醒——读者视角标准与交付阶段判断，每条每会话至多一次；并携带 grill-me 技能（设计树拷问）。';
+  readonly description = '在文档写作与测试文件修改时分层注入工程素养——读者视角、交付阶段判断，以及测试行为契约、辨别能力与验证交付，每条每会话至多一次；并携带 grill-me 技能。';
 
   /** 已注入条目记账（id → true），随会话快照持久化。 */
   private injectedEntries: Record<string, true> = {};
@@ -205,6 +229,8 @@ export class CraftAwarenessFeature implements AgentFeature {
    * 不随快照持久化——会话恢复后清零，最多少注入一次，无正确性影响。
    */
   private readonly docBoundaries = new Map<string, { lastBoundary: number | null; boundaryCount: number }>();
+  /** 同一测试文件的成功修改次数，达到最深层后封顶，随快照恢复。 */
+  private readonly testFileChanges = new Map<string, number>();
   private logger?: FeatureInitContext['logger'];
 
   constructor(config: { knowledgeDir?: string } = {}) {
@@ -252,6 +278,20 @@ export class CraftAwarenessFeature implements AgentFeature {
     return (record?.boundaryCount ?? 0) >= 2;
   }
 
+  private trackTestChanges(ctx: ToolFinishedDecisionContext): void {
+    const filePath = readTestFilePath({ toolName: ctx.toolName, args: ctx.call?.arguments, success: ctx.success === true });
+    if (!filePath || this.injectedEntries[TEST_CRAFT_LAYERS[TEST_CRAFT_LAYERS.length - 1].id]) return;
+    const key = normalizeDocPath(filePath);
+    this.testFileChanges.set(key, Math.min((this.testFileChanges.get(key) ?? 0) + 1, TEST_CRAFT_LAYERS.length));
+  }
+
+  shouldRemindTestLayer(ctx: ToolFinishedDecisionContext, index: number): boolean {
+    const filePath = readTestFilePath({ toolName: ctx.toolName, args: ctx.call?.arguments, success: ctx.success === true });
+    if (!filePath) return false;
+    if (index > 0 && (ctx.toolName !== 'edit' || !this.injectedEntries[TEST_CRAFT_LAYERS[index - 1].id])) return false;
+    return (this.testFileChanges.get(normalizeDocPath(filePath)) ?? 0) >= TEST_CRAFT_LAYERS[index].minChanges;
+  }
+
   /**
    * ToolFinished 通知（结果已写入 context，提醒落在结果消息之后）。
    * 先记账（trackDocBoundary），再做条目判定；一次工具事件最多注入一条——
@@ -260,6 +300,7 @@ export class CraftAwarenessFeature implements AgentFeature {
   async injectCraftReminder(ctx: ToolFinishedDecisionContext): Promise<void> {
     try {
       this.trackDocBoundary(ctx);
+      this.trackTestChanges(ctx);
       for (const entry of CRAFT_ENTRIES) {
         if (this.injectedEntries[entry.id]) continue;
         if (!entry.match(ctx, this)) continue;
@@ -268,8 +309,8 @@ export class CraftAwarenessFeature implements AgentFeature {
           this.logger?.warn?.('Craft awareness knowledge missing, skip injection', { entry: entry.id });
           continue;
         }
-        this.injectedEntries[entry.id] = true;
         ctx.context.addSystemMessage(CRAFT_PREFIX + content, readCurrentTurn(ctx.context), this.name, 'reminder');
+        this.injectedEntries[entry.id] = true;
         this.logger?.info?.('Craft awareness injected', {
           entry: entry.id,
           toolName: ctx.toolName,
@@ -287,7 +328,10 @@ export class CraftAwarenessFeature implements AgentFeature {
   // ── Feature state snapshot（框架原生快照契约，随会话持久化）──
 
   captureState(): FeatureStateSnapshot {
-    return { injected: { ...this.injectedEntries } };
+    return {
+      injected: { ...this.injectedEntries },
+      ...(this.testFileChanges.size > 0 ? { testFileChanges: Object.fromEntries(this.testFileChanges) } : {}),
+    };
   }
 
   restoreState(snapshot: FeatureStateSnapshot): void {
@@ -300,6 +344,14 @@ export class CraftAwarenessFeature implements AgentFeature {
       if (injected[entry.id] === true) next[entry.id] = true;
     }
     this.injectedEntries = next;
+    this.testFileChanges.clear();
+    if (record.testFileChanges && typeof record.testFileChanges === 'object' && !Array.isArray(record.testFileChanges)) {
+      for (const [filePath, count] of Object.entries(record.testFileChanges)) {
+        if (typeof count === 'number' && Number.isInteger(count) && count >= 1 && count <= TEST_CRAFT_LAYERS.length) {
+          this.testFileChanges.set(normalizeDocPath(filePath), count);
+        }
+      }
+    }
     // 边界记账是会话内运行时状态，不计入快照；恢复快照时重置，避免跨会话残留。
     this.docBoundaries.clear();
   }
