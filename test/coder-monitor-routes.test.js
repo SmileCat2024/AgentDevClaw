@@ -290,9 +290,10 @@ for (const action of ['archive', 'close', 'delete']) {
     else t.mock.method(h.core, 'getThread', async () => null);
     if (action === 'delete') {
       // Background observer, unlike watch's initial detail lookup, owns this 404.
+      // The 404 path crosses timer tick → events read → detail read → projection, so
+      // drain the event loop until the observer settles instead of counting rounds.
       t.mock.timers.tick(60_000);
-      await flush();
-      await flush();
+      for (let i = 0; i < 50 && (await h.tasks())[0]?.status === 'submitted'; i++) await flush();
     } else assert.match(await h.watch(ref), new RegExp(`reason=thread_${action === 'archive' ? 'archived' : 'closed'}`));
     assert.equal((await h.tasks())[0].status, action === 'delete' ? 'monitor_lost' : 'blocked');
     assert.equal(h.submitted.length, 1);
