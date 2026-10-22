@@ -20,7 +20,7 @@ AgentDevClaw 是一个以 Agent 为中心的，可扩展的工作台架构，整
 
 ## 快速开始
 
-**前置要求：** Node.js >= 20
+**前置要求：** Node.js >= 20.19
 
 ```bash
 git clone https://github.com/SmileCat2024/AgentDevClaw.git

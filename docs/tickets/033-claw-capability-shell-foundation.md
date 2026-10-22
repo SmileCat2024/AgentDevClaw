@@ -1,5 +1,7 @@
 # 033 — Capability Shell 基座（管线四道检查点 + 领域策略声明）
 
+> 历史工单：下文记录初版字面量分段基座。语法执行方案已由 [ADR-0031](../adr/0031-background-work-and-domain-shell.md) 的领域 Bash 修订取代；当前变量、循环与控制流由 `just-bash` 解释执行，不再使用 `bash -n` + `shell-quote` 路径。
+
 - **仓库**：AgentDevClaw（local-features/capability-shell，新建）
 - **决策依据**：2026-08-31 Capability-Scoped Shell grill 会话（设计树全部确认）；
   调研报告（sh-syntax AST 残缺 → 弃用；bwrap 移出 v1；不引 execa）

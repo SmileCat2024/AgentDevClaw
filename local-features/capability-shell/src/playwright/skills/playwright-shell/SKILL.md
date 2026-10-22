@@ -14,8 +14,10 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 - **两组动词**：(1) 一次性产物取证（screenshot / pdf / har）——单页渲染即退出；(2) 受控会话交互（open/goto/snapshot/find/fill/press/click/tab-list/tab-select/close）——跨调用共享同一页面，做多步导航/输入/点击/读取。
 - **动作面受 refs 约束**：click/fill 只接受 snapshot/find 输出里的元素 ref（如 `e37`、`f3e949`）。不能凭空构造 CSS 选择器——这是防注入核心约束，也是规范：先 snapshot/find 看到元素，再拿 ref 交互。
 - **任意 JS 执行不入表**（eval/run-code 显式排除）：读页面内容用 snapshot/find，不要试图 eval。
-- **URL 必须整体加引号**；含查询分隔符 `&` 的 URL 被确定拒绝（已知边界，换无查询分隔符的地址）。
+- **URL 必须整体加引号**；引号内的 `?` / `&` / `#` / `;` 都作为 URL 字面量传入，不会拆成命令。
 - **只接受 http:// 与 https://**；`file://`/`data:` 拒绝。
+
+公共基座支持 Bash 变量、数组、循环、条件、函数、命令替换及管道；具体辅助命令见 `help`。展开后的参数仍受领域约束，函数与循环不会绕过 refs、URL 或路径校验。命令名静态明确，不开放系统命令、`eval` / `source`、进程替换或后台 `&`。脚本总状态遵循 Bash 最终退出状态，逐条回执保留此前失败；需要首错即停时使用 `set -e`。
 
 ## 动词用法
 
@@ -74,7 +76,7 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 
 1. **先分流**：纯静态 HTML 不起浏览器——`file://` 本就不入表，直接读源码文件定位结构；动态页面才走会话。
 2. **起服务**：后台跑 dev server（如 `npm run dev`），确认就绪信号（启动日志报端口监听）再开浏览器；本地地址无需 profile。
-3. **联测**：`open 'http://localhost:<端口>'` → snapshot 拿 refs → 交互验证；前端报错看 `console`，接口调用看 `requests`，留存画面用 `capture`/`screenshot`。本地地址含 `&` 查询串同样会被拒，改经页面内导航到达。
+3. **联测**：`open 'http://localhost:<端口>'` → snapshot 拿 refs → 交互验证；前端报错看 `console`，接口调用看 `requests`，留存画面用 `capture`/`screenshot`。本地地址带查询串时同样整体加引号。
 4. **收尾**：`close` 会话，停掉自己起的服务。页面异常先看 console，服务侧问题看服务日志。
 
 ## 登录态与 profile（持久化档案）
@@ -111,7 +113,7 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 | snapshot 看不到预期内容 / 页面空白 | 动态内容未就绪（异步渲染、懒加载）：会话内重新 snapshot 轮询（无 wait 动词），勿凭旧 refs 硬操作；产物截图空白改加 `--wait-for-timeout=<ms>` |
 | snapshot 输出过大被截断 | 报文含完整落盘路径，分段读取文件 |
 | 未知动词报文 | 按报文里的可用动词清单与指引自我纠正（交互面只有 snapshot/find/fill/press/click/tab 系列） |
-| URL 含 `&` 被拒 | 已知边界：换无查询分隔符的 URL 或改用页面可直达地址 |
+| URL 被拆成多条命令或出现后台 `&` 拒绝 | 将整个 URL 用单引号或双引号包住，不删除合法查询参数 |
 
 ## 边界（先读）
 

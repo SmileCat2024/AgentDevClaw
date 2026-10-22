@@ -94,11 +94,10 @@ function stubSpawn(behavior: {
   return { spawn, calls };
 }
 
-/** 用 playwright_shell 策略跑完整管线（bashPath null 降级，结构道兜底）。 */
+/** 用 playwright_shell 策略跑完整管线（公共 Bash AST 与解释器）。 */
 async function run(command: string, opts: { adapters?: AdapterMap; signal?: AbortSignal } = {}) {
   return runCapabilityShellPipeline(POLICY, command, {
     adapters: opts.adapters,
-    bashPath: null,
     signal: opts.signal,
   });
 }
@@ -145,7 +144,7 @@ describe('playwright_shell 动词表（ticket 036）', () => {
   });
 
   it('工具未声明 parallelizable（渲染开销大，默认串行）', () => {
-    const tool = createCapabilityShellTool(POLICY, {}, { bashPath: null });
+    const tool = createCapabilityShellTool(POLICY, {}, { });
     assert.ok(!tool.parallelizable, '未声明 parallelizable 时工具应为串行（基座默认）');
   });
 
@@ -155,14 +154,13 @@ describe('playwright_shell 动词表（ticket 036）', () => {
     for (const fragment of ['playwright_shell', 'env', 'screenshot', 'pdf', 'har', '--full-page', "screenshot '<url>' <output.png>"]) {
       assert.ok(r.output.includes(fragment), `help 缺 fragment: ${fragment}\n---\n${r.output}`);
     }
-    assert.ok(r.output.includes('拒绝'), 'help 应说明语法白名单边界');
+    assert.ok(r.output.includes('不开放'), 'help 应说明领域执行边界');
   });
 
-  it('URL 含 & 被结构道确定拒绝（已知基座边界，另票放宽）', async () => {
+  it('引号内 URL 的 & 是字面量，不再被原文正则误拒绝', async () => {
     const r = await run("screenshot 'https://x.com/search?q=a&lang=en' out.png");
-    assert.equal(r.ok, false);
-    assert.equal(r.rejection?.code, 'structure_rejected');
-    assert.ok(r.output.includes('&'), r.output);
+    assert.notEqual(r.rejection?.code, 'structure_rejected');
+    assert.notEqual(r.rejection?.code, 'arg_rejected');
   });
 
   it('引号内 URL 的 ? # ; 是字面量，通过结构道', async () => {
@@ -676,7 +674,8 @@ describe('playwright_shell 产物落盘回收（上游 CLI 收尾挂起补偿）
       const p = run("screenshot 'https://example.com' x.png --profile=work", { adapters: h.adapters, signal: outer.signal });
       queueMicrotask(() => outer.abort()); // 宽限（25ms）之前外部中断
       const r = await p;
-      assert.ok(r.output.includes('terminated screenshot'), `外部中断应报终止: ${r.output}`);
+      assert.ok(r.output.startsWith('terminated'), `外部中断应报终止: ${r.output}`);
+      assert.equal(r.ok, false);
       assert.ok(!r.output.includes('screenshot ok'), r.output);
       assert.ok(!r.output.includes('note:'), r.output);
     } finally {

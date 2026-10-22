@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCapabilityShellPipeline } from '../src/tool-factory.js';
-import { checkStructure } from '../src/structure.js';
+import { parseBashProgram } from '../src/bash-program.js';
 import { createCoderShellPolicy } from '../src/coder-policy.js';
 import { createThreadsAdapters } from '../src/coder-shell.js';
 import type { CapabilityShellPolicy } from '../src/types.js';
@@ -16,7 +16,7 @@ const policy: CapabilityShellPolicy = { name: 'test_shell', description: 'test',
   }]),
 ) };
 function run(command: string, adapters: AdapterMap, extra: any = {}) {
-  return runCapabilityShellPipeline(policy, command, { adapters, bashPath: null, ...extra });
+  return runCapabilityShellPipeline(policy, command, { adapters, ...extra });
 }
 
 it('sequences execute all commands and retain every receipt; && skips failure until next sequence', async () => {
@@ -26,7 +26,7 @@ it('sequences execute all commands and retain every receipt; && skips failure un
     fail: async () => ({ ok: false, output: 'explicit domain failure' }),
   };
   const result = await run('send A; fail && send B && send C\nsend D', adapters);
-  assert.equal(result.ok, false);
+  assert.equal(result.ok, true); // Bash returns the final command's status; earlier failures stay in receipts.
   assert.deepEqual(calls, ['A', 'D']);
   assert.match(result.output, /receipt A/);
   assert.match(result.output, /receipt D/);
@@ -41,7 +41,7 @@ it('two real coder submissions keep both receipts without waiting for either exe
     return { ok: true, status: 201, json: async () => ({ ok: true, command: { commandId: `c${submissions.length}` } }) };
   } });
   const result = await runCapabilityShellPipeline(createCoderShellPolicy(),
-    "send wt1 k1 'A' --dispatch-only && send wt2 k2 'B' --dispatch-only", { adapters, bashPath: null });
+    "send wt1 k1 'A' --dispatch-only && send wt2 k2 'B' --dispatch-only", { adapters });
   assert.equal(result.ok, true);
   assert.deepEqual(submissions, ['k1', 'k2']);
   assert.match(result.output, /sent c1/);
@@ -99,12 +99,13 @@ it('redirect symlinks outside workspace are rejected before adapter execution', 
   assert.equal(called, false);
 });
 
-it('quoted newlines/operators stay literal; malformed connectors and redirects are rejected without bash', () => {
-  const parsed = checkStructure("send 'A\nB; C && D';\ncopy");
-  assert.equal(parsed.ok, true);
-  assert.equal(parsed.segments[0].args[0], 'A\nB; C && D');
-  assert.equal(parsed.segments[1].connector, ';');
-  for (const command of ['send &&', 'send |', 'send && ; copy', "send 'unterminated", 'send > > out', 'send || copy']) {
-    assert.equal(checkStructure(command).ok, false, command);
+it('quoted newlines/operators stay literal; malformed scripts are rejected by the shared parser', () => {
+  const parsed = parseBashProgram("send 'A\nB; C && D';\ncopy", policy);
+  assert.ok(!('code' in parsed));
+  if ('code' in parsed) return;
+  assert.equal(parsed.commands[0].args[0], 'A\nB; C && D');
+  assert.equal(parsed.commands[1].verb, 'copy');
+  for (const command of ['send &&', 'send |', 'send && ; copy', "send 'unterminated", 'send > > out']) {
+    assert.ok('code' in parseBashProgram(command, policy), command);
   }
 });

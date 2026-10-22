@@ -42,7 +42,7 @@
    - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换；修订一：凭证变更（重登/换 key/连接字段变更）server 主动广播 refresh-credentials，运行中会话同 preset 重 resolve（旧凭证仍有效时无 401 可触发反应式恢复）；修订二：存量 OpenCode preset（无 catalogProvider 标记、providerName 为 'OpenCode Go/Zen'）resolver 读时归一到登录凭证（与前端归类口径对齐）+ opencode 路径自动注入 x-opencode-session（go tier 端点强制要求）
    - 0029 模型调用超时治理：对话默认首段（首 token）120s / chunk 间隔 60s idle / 5 次重试，transform 预算 600s 经装配层实例分离，undici headersTimeout / bodyTimeout 双锚 TRANSFORM_MODEL_TIMEOUT_MS（保底层垫在最大可配预算之下），preset 级 timeoutMs/maxRetries 逃生门（timeoutMs 显式值管首段与间隔两段）
    - 0030 OS 通知投递面：统一出口、通知权限项与应用承接（notifications.* 权限族往 PERMISSION_ITEMS 加项；editingSurface 挂账落地、全局设置通知项只读审计；server 投递闸 + SSE app-notification + 前端哑呈现器；不建 OS 定时器服务）
-   - [0031 后台工作的薄接入层与领域 Shell 的独立组合](docs/adr/0031-background-work-and-domain-shell.md)（代码已实施，在线冒烟待执行）：执行关联、`BackgroundAccess` / Bash 迁移、Coder 非阻塞监视、Shell 组合与 Claw 面板协议接入已落地；复用 pending-work / suspended，监控策略归领域，不建设脚本挂起续跑；[实施方案](docs/plans/2026-10-21-background-work-and-coder-monitoring.md)
+   - [0031 后台工作的薄接入层与领域 Shell 的独立组合](docs/adr/0031-background-work-and-domain-shell.md)（代码已实施，在线冒烟待执行）：执行关联、`BackgroundAccess` / Bash 迁移、Coder 非阻塞监视、领域 Bash 基座（`local-features/capability-shell/src/bash-program.ts` / `bash-runtime.ts`，`just-bash` AST 预检与解释执行，支持变量/循环/条件，展开后再校验领域参数）与 Claw 面板协议接入已落地；Bash 语法不开放系统命令，`send` 返回提交回执后循环继续，`watch` 待命只在整次调用返回后生效；复用 pending-work / suspended，监控策略归领域，不建设脚本挂起续跑；[实施方案](docs/plans/2026-10-21-background-work-and-coder-monitoring.md)
 
 实现层真实入口：
 

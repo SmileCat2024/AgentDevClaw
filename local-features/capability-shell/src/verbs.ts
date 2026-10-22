@@ -36,7 +36,7 @@ export function checkVerbs(
 ): VerbCheckResult {
   for (let i = 0; i < segments.length; i++) {
     const verb = segments[i].verb;
-    if (!(verb in verbs)) {
+    if (!Object.hasOwn(verbs, verb)) {
       const hint = unknownVerbHints?.[verb];
       return {
         ok: false,

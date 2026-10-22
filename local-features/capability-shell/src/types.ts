@@ -2,8 +2,8 @@
  * Capability Shell 基座类型（ticket 033）
  *
  * 每个领域 shell = 一份策略声明（动词表 + 参数约束）+ 若干 adapter 映射。
- * 边界 = 管线确定性拒绝：语法验收 → 结构分段 → 逐段动词校验 → 参数校验，
- * 任一道命中拒绝即终态。不是沙箱，无环境隔离。
+ * Bash AST 校验静态命令入口，解释器负责语法与展开，每次领域调用前复核参数。
+ * 不是操作系统沙箱：受信任的 adapter 仍在宿主执行。
  */
 
 /** 拒绝报文稳定错误码（模型可自我纠正的契约）。 */
@@ -15,21 +15,12 @@ export type CapabilityShellErrorCode =
   | 'arg_rejected'
   | 'dispatch_failed';
 
-/** 单个管道段的解析结果（第二道检查点产物）。 */
+/** 用于领域动词与参数校验的命令。 */
 export interface ShellSegment {
   /** 段首动词（command 名，已 trim） */
   verb: string;
-  /** 段内参数（字面量，已剥引号） */
+  /** 参数字符串；静态预检或解释器展开后的实际值。 */
   args: string[];
-  /** Connector from the preceding segment; absent means a pipe for legacy callers. */
-  connector?: '|' | ';' | '&&';
-  redirects?: ShellRedirect[];
-}
-
-export interface ShellRedirect {
-  op: '>' | '>>' | '<';
-  /** 重定向目标（文件路径字面量，重定向不允许管道） */
-  target: string;
 }
 
 /** 领域 shell 策略声明：动词表 + 每-动词参数与 adapter 约束。 */
@@ -64,8 +55,8 @@ export interface ShellVerbDecl {
   /** 可选：给模型的一句话用法提示（参数个数不符时附在报错里） */
   usage?: string;
   /**
-   * 可选：flag 白名单（如 ['--no-wait', '--status=']）。声明过的 flag 在
-   * 参数任意位置识别：plain flag（--no-wait）直接剥离；valued flag（声明以
+   * 可选：flag 白名单（如 ['--dispatch-only', '--status=']）。声明过的 flag 在
+   * 参数任意位置识别：plain flag（--dispatch-only）直接剥离；valued flag（声明以
    * `=` 结尾）只按 `--key=<值>` 等号赋值形态剥离。均不计入位置参数个数，
    * adapter 收到的仍是原始参数数组（含 flag token），按本声明自行剥离。
    * 未声明的 `--` 前缀参数仍按位置参数校验（防误吞指令文本中的连字符词）。
@@ -78,11 +69,6 @@ export interface ShellVerbDecl {
    */
   adapter: CapabilityAdapterRef;
 }
-
-/** adapter 键：进程内函数查 inProcess；否则视为 spawn 段命令名。 */
-export type CapabilityAdapterDecl =
-  | { kind: 'function'; name: string }
-  | { kind: 'spawn'; argv: string[] };
 
 /** 动词声明的 adapter 引用：键必须存在于注入的 adapter map。 */
 export interface CapabilityAdapterRef {
@@ -108,18 +94,11 @@ export interface ShellParamDecl {
   variadic?: boolean;
   /**
    * kind=literal 的字面量白名单（枚举参数用）。
-   * 未提供则只校验「是字面量」（由前道检查点保证）。
+    * 未提供则接受解释器展开后的字符串，由领域 adapter 决定其业务含义。
    */
   enum?: string[];
   /** kind=path 时：是否只读（< 方向）；写路径要求落在 workspace 内 */
   readOnly?: boolean;
-}
-
-/** 参数校验结果（第三道检查点产出，供分派层消费） */
-export interface ValidatedSegment {
-  verb: string;
-  args: string[];
-  decl: ShellVerbDecl;
 }
 
 /** 拒绝报文契约：稳定错误码 + 可用动词清单，模型可自我纠正。 */
@@ -131,13 +110,6 @@ export interface PipelineRejection {
   stage: 'syntax' | 'structure' | 'verb' | 'args';
   /** 命中拒绝特征的管道段序号（0-based；语法道无段号） */
   segmentIndex?: number;
-}
-
-/** 分派成功的结果 */
-export interface ShellDispatchResult {
-  output: string;
-  /** 终止/截断等元数据（沿用 shell_metadata 契约时在 output 尾部） */
-  terminated?: boolean;
 }
 
 /** 结构化审计事件（按未来 Web UI 可呈现设计；本票只落日志） */

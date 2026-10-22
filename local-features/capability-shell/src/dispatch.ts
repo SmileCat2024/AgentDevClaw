@@ -12,10 +12,6 @@
  */
 
 import { spawn } from 'child_process';
-import { open, realpath } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { ShellRedirect } from './types.js';
 
 /** Plain strings mean command success; failures must throw or explicitly return ok:false. */
 export interface CommandResult {
@@ -43,146 +39,6 @@ export type InProcessAdapter = (
 
 /** adapter map：adapter 键 → 进程内实现。由工具工厂注入以便测试。 */
 export type AdapterMap = Record<string, InProcessAdapter>;
-
-export interface DispatchResult {
-  ok: boolean;
-  commands?: CommandExecution[];
-  /** 输出文本（管道最后一段的 stdout，或进程内函数返回值） */
-  output?: string;
-  /** 失败错误码 */
-  code?: 'dispatch_failed';
-  message?: string;
-}
-
-/** 已校验的管道段（第三/四道检查点通过后的产物）。 */
-export interface DispatchSegment {
-  verb: string;
-  args: string[];
-  /** adapter map 中的键 */
-  adapterKey: string;
-  /** 该段的分派形态：'function'（进程内）或 'spawn'（数组 spawn 段） */
-  kind: 'function' | 'spawn';
-  connector?: '|' | ';' | '&&';
-  redirects?: ShellRedirect[];
-}
-
-export interface DispatchOptions {
-  /** 进程内函数 adapter map（注入以便测试） */
-  adapters?: AdapterMap;
-  /** 框架注入的合并 signal（用户打断与框架超时共用，ticket 023） */
-  signal?: AbortSignal;
-  /** spawn 工作目录 */
-  workdir?: string;
-  /** 框架终止原因查询（timeout / user / null），透传给进程内 adapter（ticket 034） */
-  termination?: () => 'timeout' | 'user' | null;
-  /**
-   * spawn 段透传的额外环境变量（ticket 036 扩展点：CLI 后端需经 env 注入
-   * 资产目录重定向等）。与 process.env 合并（本表优先）。
-   */
-  spawnEnv?: Record<string, string>;
-}
-
-/**
- * 分派执行一组已校验的管道段。
- *
- * - 段声明的 adapter 键命中 adapter map → 进程内函数：直接调用；
- *   若存在上游管道数据，以上下文成员 `stdin` 传入（适配器自行决定是否消费）。
- * - 未命中 adapter map 的段按 spawn 命令处理：数组 spawn，上游 stdout
- *   写下游 stdin（内存串流，不落盘、不进 env）。
- * - signal aborted：整条链以终止态收尾（kill → 收集部分输出，ADR-0005）。
- */
-export async function dispatchPipeline(
-  segments: DispatchSegment[],
-  options: DispatchOptions,
-): Promise<DispatchResult> {
-  if (segments.length === 0) {
-    return { ok: false, code: 'dispatch_failed', message: '没有可执行的命令段。' };
-  }
-
-  const adapters = options.adapters ?? {};
-  const commands: CommandExecution[] = [];
-  let upstream = '';
-  let chainOk = true;
-  let stopped = false;
-  for (let index = 0; index < segments.length; index++) {
-    const seg = segments[index];
-    const connector = seg.connector ?? (index ? '|' : ';');
-    if (connector === ';') chainOk = true;
-    const status = stopped || options.signal?.aborted ? 'not-executed' : !chainOk ? 'skipped' : 'executed';
-    if (status !== 'executed') {
-      commands.push({ index, verb: seg.verb, status, ok: false,
-        output: status === 'skipped' ? '前序命令失败，条件或管道未执行。' : '工具已终止，未执行。' });
-      continue;
-    }
-    let result: CommandResult;
-    try {
-      let input = connector === '|' ? upstream : '';
-      const redirects = seg.redirects ?? [];
-      const inputRedirect = redirects.find((r) => r.op === '<');
-      if (inputRedirect) {
-        const file = await openRedirect(inputRedirect.target, options.workdir, false);
-        try { input = await file.readFile('utf8'); } finally { await file.close(); }
-      }
-      // Opening output first validates the target before any command side effect.
-      const outputRedirect = redirects.find((r) => r.op !== '<');
-      const outputFile = outputRedirect ? await openRedirect(outputRedirect.target, options.workdir, true, outputRedirect.op === '>>') : undefined;
-      try {
-        if (options.signal?.aborted) result = { ok: false, output: '工具已终止，命令未启动。', terminated: true };
-        else if (seg.kind === 'function') {
-          const fn = adapters[seg.adapterKey];
-          if (!fn) throw new Error(`未装配 adapter：${seg.adapterKey}`);
-          const value = await fn(seg.args.slice(), { stdin: input,
-            termination: () => options.termination?.() ?? null, signal: options.signal });
-          result = typeof value === 'string' ? { ok: true, output: value } : value;
-        } else {
-          const run = await runCollectedSpawn(seg.adapterKey, seg.args, {
-            input, signal: options.signal, workdir: options.workdir, env: options.spawnEnv,
-          });
-          result = { ok: run.ok, output: run.ok ? run.stdout : [run.stdout, detailFrom(run)].filter(Boolean).join('\n'), terminated: run.terminated };
-        }
-        if (outputFile) await outputFile.writeFile(result.output, 'utf8');
-      } finally { await outputFile?.close(); }
-      upstream = outputFile ? '' : result.output;
-    } catch (error) {
-      result = { ok: false, output: String(error) };
-      upstream = '';
-    }
-    commands.push({ ...result, index, verb: seg.verb, status: 'executed' });
-    chainOk = result.ok;
-    stopped = result.terminated === true || options.signal?.aborted === true;
-  }
-  const ok = commands.every((c) => c.status === 'executed' && c.ok);
-  const grouped = segments.some((s) => s.connector === ';' || s.connector === '&&');
-  const output = grouped ? commands.map((c) => `[${c.index + 1}] ${c.verb} ${c.status} ${c.ok ? 'ok' : 'failed'}\n${c.output}`).join('\n\n')
-    : ok ? upstream : commands.map((c) => c.output).filter(Boolean).join('\n');
-  return { ok, output, commands, ...(!ok ? { code: 'dispatch_failed' as const, message: output } : {}) };
-}
-
-/** Resolve symlinks before IO; no absolute/parent paths or workspace escapes. */
-async function openRedirect(target: string, workdir = process.cwd(), write = false, append = false) {
-  if (!target || isAbsolute(target) || /^[A-Za-z]:/.test(target) || target.includes('\\') || target.split('/').includes('..')) {
-    throw new Error(`重定向要求 workspace 相对路径：${target}`);
-  }
-  const root = await realpath(workdir);
-  const path = resolve(root, target);
-  const inside = (candidate: string) => {
-    const rel = relative(root, candidate);
-    return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-  };
-  const parent = await realpath(dirname(path));
-  if (!inside(parent)) throw new Error(`重定向路径逃逸 workspace：${target}`);
-  let actual = path;
-  try { actual = await realpath(path); } catch (error: any) { if (error.code !== 'ENOENT' || !write) throw error; }
-  if (!inside(actual)) throw new Error(`重定向路径逃逸 workspace：${target}`);
-  return open(actual, write ? constants.O_WRONLY | constants.O_CREAT | (append ? constants.O_APPEND : constants.O_TRUNC) | (constants.O_NOFOLLOW || 0)
-    : constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
-}
-
-function detailFrom(result: SpawnRunResult): string {
-  if (result.terminated) return '命令被终止（中断/超时），已收集部分输出。';
-  if (result.stderr.trim()) return result.stderr.trim();
-  return `退出码 ${result.exitCode ?? 'unknown'}`;
-}
 
 /** 单段 spawn 的 collect 结果。 */
 export interface SpawnRunResult {
@@ -228,26 +84,7 @@ export async function runCollectedSpawn(
       } catch { /* 已退出 */ }
     };
 
-    // 兜底计时器只在「已 kill、还需等 close 释放句柄」的场景启动
-    // （ticket 036 修复：原实现自 spawn 起无条件计时，1s 后把任何慢命令
-    // 误判为 terminated 且不 kill——coder 段全是快命令未暴露，浏览器渲染
-    // 类秒级命令直接触发）。正常路径等真实 close；abort 路径 kill 后
-    // 立即 resolve（中断即结果），无需计时。
-    let killFallbackTimer: NodeJS.Timeout | null = null;
-    const armKillFallback = () => {
-      if (killFallbackTimer) return;
-      killFallbackTimer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          cleanup();
-          resolve({ ok: false, stdout, stderr, exitCode: null, terminated: true });
-        }
-      }, SPAWN_KILL_FALLBACK_MS);
-      killFallbackTimer.unref?.();
-    };
-
     const cleanup = () => {
-      if (killFallbackTimer) clearTimeout(killFallbackTimer);
       options.signal?.removeEventListener('abort', onAbort);
     };
 

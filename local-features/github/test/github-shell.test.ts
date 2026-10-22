@@ -28,8 +28,7 @@ test('GitHub shell exposes one command per existing GitHub capability', async ()
 
   assert.deepEqual(Object.keys(policy.verbs), ['get-pr']);
   const result = await runCapabilityShellPipeline(policy, 'get-pr --owner=acme --pull-number=42 --comments=true', {
-    adapters,
-    bashPath: null,
+    adapters
   });
   assert.equal(result.ok, true);
   assert.equal(result.output, 'PR #42');
@@ -41,7 +40,7 @@ test('GitHub domain errors stop && instead of becoming successful text', async (
   const tools = [{ name: 'gh_get_me', description: 'test', parameters: { type: 'object', properties: {} },
     execute: async () => { calls++; return { error: 'unauthorized' }; } }] as unknown as Tool[];
   const result = await runCapabilityShellPipeline(createGitHubShellPolicy(tools), 'get-me && get-me', {
-    adapters: createGitHubShellAdapters(tools), bashPath: null,
+    adapters: createGitHubShellAdapters(tools)
   });
   assert.equal(result.ok, false);
   assert.equal(calls, 1);
@@ -58,11 +57,11 @@ test('GitHub shell rejects unregistered commands and arguments', async () => {
   const policy = createGitHubShellPolicy(tools);
   const adapters = createGitHubShellAdapters(tools);
 
-  const unknown = await runCapabilityShellPipeline(policy, 'api repos/acme/project', { adapters, bashPath: null });
+  const unknown = await runCapabilityShellPipeline(policy, 'api repos/acme/project', { adapters });
   assert.equal(unknown.ok, false);
   assert.match(unknown.output, /不是 github_shell 的可用动词/);
 
-  const badArg = await runCapabilityShellPipeline(policy, 'get-me --token=secret', { adapters, bashPath: null });
+  const badArg = await runCapabilityShellPipeline(policy, 'get-me --token=secret', { adapters });
   assert.equal(badArg.ok, false);
   assert.match(badArg.output, /期望 0 个参数/);
 });

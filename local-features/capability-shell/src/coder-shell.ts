@@ -105,7 +105,7 @@ export function createThreadsAdapter(deps: {
       return { ok: response.ok, status: response.status, json: () => response.json() };
     });
   /** 请求 /protoclaw/threads* 控制面（同 bin/claw.mjs clawServerFetch 契约）。 */
-  async function clawFetch(pathname: string, init: RequestInit = {}): Promise<Record<string, any>> {
+  async function request(pathname: string, init: RequestInit = {}): Promise<Record<string, any>> {
     const internalToken = String(process.env.PROTOCLAW_INTERNAL_TOKEN || '').trim();
     const headers: Record<string, string> = {
       ...((init.headers as Record<string, string>) || {}),
@@ -298,6 +298,10 @@ export function createThreadsAdapter(deps: {
 
   const adapter: ThreadAdapter = async (args, context) => {
     const [verb, ...rest] = args;
+    const clawFetch = (pathname: string, init: RequestInit = {}) => {
+      context?.signal?.throwIfAborted();
+      return request(pathname, { ...init, signal: context?.signal });
+    };
     switch (verb) {
       // new-session <agentId> <目录> [title]：创建 Coder APP 会话（agentId=coder，
       // ADR-0025），线程宿主 APP 自动建线（标准路径；create 仅用于已存在会话加挂线程）。

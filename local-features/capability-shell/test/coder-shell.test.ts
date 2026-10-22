@@ -5,7 +5,7 @@
  * - 8 个动词声明齐备，advance / resume 不入表且 unknown_verb 报文附结构化指引
  * - send 缺幂等键被参数校验道拒绝
  * - adapter 直调 /protoclaw/threads*（请求形态与参数参照 bin/claw.mjs）
- * - send 阻塞语义：轮询 events 直到落定；超时返回结构化 done reason=timeout（非错误）
+ * - send 返回提交回执；监视与待命由 CoderMonitor/Feature 的独立测试覆盖
  *
  * fetch / sleep 全部注入，无真实网络与真实 sleep（遵守测试时长预算）。
  */
@@ -33,15 +33,6 @@ function stubFetch(routes: Array<{ match: (url: string, init?: RequestInit) => b
   };
 }
 
-/** 用 coder_shell 策略跑管线（bashPath null 降级，结构道兜底）。 */
-function runCapabilityShellPolicy(command: string) {
-  const policy = createCoderShellPolicy();
-  return runCapabilityShellPipeline(policy, command, {
-    adapters: {},
-    bashPath: null,
-  });
-}
-
 describe('coder_shell 动词表（ticket 034/035）', () => {
   it('v1 动词表恰为 10 个：new-session/create/send/watch/result/list/show/archive/unarchive/deliver', () => {
     assert.deepEqual(
@@ -56,7 +47,7 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
   });
 
   it('工具声明 parallelizable：派发语义批次可并发（同线程冲突由服务端 409 仲裁）', () => {
-    const tool = createCapabilityShellTool(POLICY, {}, { bashPath: null });
+    const tool = createCapabilityShellTool(POLICY, {}, { });
     assert.equal(tool.parallelizable, true);
   });
 
@@ -71,7 +62,7 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
       ]),
     });
     for (const cmd of ['list', 'list coder']) {
-      const r = await runCapabilityShellPipeline(POLICY, cmd, { adapters, bashPath: null });
+      const r = await runCapabilityShellPipeline(POLICY, cmd, { adapters });
       assert.equal(r.ok, true, `应放行: ${cmd} → ${r.output}`);
     }
   });
@@ -79,8 +70,7 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
   it('send 幂等键必填：缺失在参数校验道拒绝', async () => {
     // 缺幂等键：只有 threadId + text 两个参数（期望 3 个）
     const result = await runCapabilityShellPipeline(POLICY, "send wt-1 'do work'", {
-      adapters: {},
-      bashPath: null,
+      adapters: {}
     });
     assert.equal(result.ok, false);
     assert.equal(result.rejection?.code, 'arg_rejected');
@@ -92,8 +82,7 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
   it('越权动词（advance/resume/rm/curl）被拒绝且报文附结构化指引 / 动词清单', async () => {
     for (const verb of ['advance', 'resume', 'rm', 'curl']) {
       const r = await runCapabilityShellPipeline(POLICY, verb, {
-        adapters: {},
-        bashPath: null,
+        adapters: {}
       });
       assert.equal(r.ok, false, `应拒绝: ${verb}`);
       assert.equal(r.rejection?.code, 'unknown_verb');
@@ -124,13 +113,13 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
         { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 0 } },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'show wt-1', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'show wt-1', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('commands=3 (2 pending)'), r.output);
   });
 
   it('help：裸 help 输出策略声明的动词表用法（管线级，不占动词表）', async () => {
-    const r = await runCapabilityShellPipeline(POLICY, 'help', { adapters: {}, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'help', { adapters: {} });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('coder_shell'), r.output);
     assert.ok(r.output.includes('watch <threadId> [threadId...]'), r.output);
@@ -158,7 +147,7 @@ describe('coder_shell result 末轮回复', () => {
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('turn=2'), r.output);
     assert.ok(r.output.includes('chars='), r.output);
@@ -173,7 +162,7 @@ describe('coder_shell result 末轮回复', () => {
         { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 0 } },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('无末轮回复'), r.output);
   });
@@ -189,7 +178,7 @@ describe('coder_shell result 末轮回复', () => {
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('chars=5000'), r.output);
     assert.ok(r.output.endsWith(longText), '全文应完整透传，不截断');
@@ -212,7 +201,7 @@ describe('coder_shell result 末轮回复', () => {
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1 --turn=2', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1 --turn=2', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('turn=2'), r.output);
     assert.ok(r.output.includes('第一份实质报告'), r.output);
@@ -239,7 +228,7 @@ describe('coder_shell result 末轮回复', () => {
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('本线程共 2 条回复'), r.output);
     assert.ok(r.output.includes('1(chars=4)'), r.output);
@@ -261,7 +250,7 @@ describe('coder_shell result 末轮回复', () => {
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('session=session-head'), r.output);
   });
@@ -283,7 +272,7 @@ describe('coder_shell result 末轮回复', () => {
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1 --turn=9', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1 --turn=9', { adapters });
     assert.equal(r.ok, false, r.output);
     assert.ok(r.output.includes('无 turn=9'), r.output);
     assert.ok(r.output.includes('可用轮次：1,3'), r.output);
@@ -297,7 +286,7 @@ describe('coder_shell result 末轮回复', () => {
           { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 0 } },
         ]),
       });
-      const r = await runCapabilityShellPipeline(POLICY, `result wt-1 ${bad}`, { adapters, bashPath: null });
+      const r = await runCapabilityShellPipeline(POLICY, `result wt-1 ${bad}`, { adapters });
       assert.equal(r.ok, false, `${bad} 应被拒绝：${r.output}`);
       assert.ok(r.output.includes('result 拒绝'), r.output);
     }
@@ -335,7 +324,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const targetDir = tmpdir();
     const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${targetDir} '工单035 标题'`, {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, true, r.output);
     const posts = requests.filter((req) => req.url.endsWith('/protoclaw/prebuilt_sessions') && req.init?.method === 'POST');
@@ -358,7 +347,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     const { fetchImpl, requests } = recordingFetch([]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const r = await runCapabilityShellPipeline(POLICY, `new-session programming-helper ${tmpdir()}`, {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, false, r.output);
     assert.ok(r.output.includes('new-session 拒绝'), r.output);
@@ -371,18 +360,18 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     // 缺目录参数
     const rMissing = await runCapabilityShellPipeline(POLICY, 'new-session coder', {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(rMissing.ok, false, rMissing.output);
     assert.ok(rMissing.output.includes('目标工作目录'), rMissing.output);
     // 目录不存在
     const rGhost = await runCapabilityShellPipeline(POLICY, 'new-session coder /nonexistent/dir-xyz', {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(rGhost.ok, false, rGhost.output);
     // 相对路径（存在目录但非绝对路径）
     const rRelative = await runCapabilityShellPipeline(POLICY, `new-session coder ${basename(tmpdir())}`, {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(rRelative.ok, false, rRelative.output);
     assert.ok(rRelative.output.includes('绝对路径'), rRelative.output);
@@ -400,7 +389,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       ]),
     });
     const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('sessionId=session-null'), r.output);
@@ -421,7 +410,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, false, r.output);
     assert.ok(r.output.includes('预检拒绝'), r.output);
@@ -446,7 +435,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('threadId=wt-ok'), r.output);
@@ -466,7 +455,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const r = await runCapabilityShellPipeline(POLICY, `new-session coder ${tmpdir()}`, {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('threadId=wt-fallback'), r.output);
@@ -474,12 +463,12 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
 
   it('new-session 缺 agentId → 参数校验道拒绝（title 可选，2 参可过个数道）', async () => {
     // 0 参数：agentId 必填缺失
-    const r0 = await runCapabilityShellPipeline(POLICY, 'new-session', { adapters: {}, bashPath: null });
+    const r0 = await runCapabilityShellPipeline(POLICY, 'new-session', { adapters: {} });
     assert.equal(r0.ok, false);
     assert.equal(r0.rejection?.code, 'arg_rejected');
     assert.ok(r0.output.includes('new-session coder'), r0.output);
     // 4 个参数（超限）同样拒绝
-    const r4 = await runCapabilityShellPipeline(POLICY, 'new-session a b c d', { adapters: {}, bashPath: null });
+    const r4 = await runCapabilityShellPipeline(POLICY, 'new-session a b c d', { adapters: {} });
     assert.equal(r4.ok, false);
     assert.equal(r4.rejection?.code, 'arg_rejected');
   });
@@ -507,7 +496,7 @@ describe('coder_shell create 会话预校验（ticket 035B）', () => {
       { match: (u) => u.includes('/protoclaw/prebuilt_sessions?agentId='), body: { sessions: [{ id: 'session-other' }] } },
     ]);
     const r = await runCapabilityShellPipeline(POLICY, "create coder session-missing '工单'", {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, false, r.output);
     assert.equal(r.rejection?.code, 'dispatch_failed');
@@ -522,7 +511,7 @@ describe('coder_shell create 会话预校验（ticket 035B）', () => {
   it('域校验：create 传非 coder 的 agentId → 结构化拒绝，不发出任何请求（ADR-0025 防呆）', async () => {
     const { adapters, requests } = makeAdapters([]);
     const r = await runCapabilityShellPipeline(POLICY, 'create programming-helper session-ok', {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, false, r.output);
     assert.ok(r.output.includes('create 拒绝'), r.output);
@@ -536,7 +525,7 @@ describe('coder_shell create 会话预校验（ticket 035B）', () => {
       { match: (u, init) => u.endsWith('/protoclaw/threads') && init?.method === 'POST', body: { thread: { threadId: 'wt-1', lifeState: 'idle', status: 'open', failed: false } } },
     ]);
     const r = await runCapabilityShellPipeline(POLICY, 'create coder session-ok', {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('threadId=wt-1'), r.output);
@@ -550,7 +539,7 @@ describe('coder_shell create 会话预校验（ticket 035B）', () => {
       { match: (u, init) => u.endsWith('/protoclaw/threads') && init?.method === 'POST', body: { thread: { threadId: 'wt-2', lifeState: 'idle', status: 'open', failed: false } } },
     ]);
     const r = await runCapabilityShellPipeline(POLICY, 'create coder session-ok', {
-      adapters, bashPath: null,
+      adapters
     });
     assert.ok(r.output.includes('threadId=wt-2'), '查询失败不阻塞建线');
     assert.ok(r.output.includes('未验证'), `响应应注明会话未验证: ${r.output}`);
@@ -580,7 +569,7 @@ describe('coder_shell send --dispatch-only（只派发不等落定）', () => {
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const r = await runCapabilityShellPipeline(POLICY, "send wt-1 ticket-9 'long work' --dispatch-only", {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('sent cmd-9'), r.output);
@@ -598,7 +587,7 @@ describe('coder_shell send --dispatch-only（只派发不等落定）', () => {
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const r = await runCapabilityShellPipeline(POLICY, "send wt-1 ticket-x 'work' --dispatch-only", {
-      adapters, bashPath: null,
+      adapters
     });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('runtimeWake=failed (head_session_missing)'), r.output);
@@ -606,7 +595,7 @@ describe('coder_shell send --dispatch-only（只派发不等落定）', () => {
 
   it('未声明的尾随 flag 按位置参数计数 → 参数道拒绝', async () => {
     const r = await runCapabilityShellPipeline(POLICY, "send wt-1 k 'text' --async", {
-      adapters: {}, bashPath: null,
+      adapters: {}
     });
     assert.equal(r.ok, false);
     assert.equal(r.rejection?.code, 'arg_rejected');
@@ -614,7 +603,7 @@ describe('coder_shell send --dispatch-only（只派发不等落定）', () => {
   });
 
   it('help 报文含 send [--dispatch-only] 用法', async () => {
-    const r = await runCapabilityShellPipeline(POLICY, 'help', { adapters: {}, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'help', { adapters: {} });
     assert.ok(r.output.includes("[--dispatch-only]"), r.output);
   });
 });
@@ -627,7 +616,7 @@ describe('coder_shell 超长输出自动落盘（与 bash 工具同实现）', (
       const policy = createCoderShellPolicy();
       // 借 list 动词回放长输出：adapter 直接返回长文本
       const adapters: Record<string, unknown> = { 'threads:list': async () => long };
-      const tool = createCapabilityShellTool(policy, adapters as any, { bashPath: null, workdir: tmp });
+      const tool = createCapabilityShellTool(policy, adapters as any, { workdir: tmp });
       const out = await tool.execute({ command: 'list' }, {} as any);
       const text = String(out);
       assert.ok(text.includes('saved to:'), `应含落盘路径提示: ${text.slice(0, 200)}`);
@@ -648,7 +637,7 @@ describe('coder_shell 超长输出自动落盘（与 bash 工具同实现）', (
     try {
       const policy = createCoderShellPolicy();
       const adapters: Record<string, unknown> = { 'threads:list': async () => 'short output' };
-      const tool = createCapabilityShellTool(policy, adapters as any, { bashPath: null, workdir: tmp });
+      const tool = createCapabilityShellTool(policy, adapters as any, { workdir: tmp });
       const out = await tool.execute({ command: 'list' }, {} as any);
       assert.equal(String(out), 'short output');
       assert.ok(!existsSync(join(tmp, '.agentdev', 'temp')), '短输出不产生落盘文件');
@@ -694,7 +683,7 @@ describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () =>
       serverOrigin: 'http://test',
       fetchImpl: stubFetch([{ match: () => true, body: { threads } }]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'list', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'list', { adapters });
     assert.equal(r.ok, true, r.output);
     const rows = r.output.split('\n').filter((line) => line.includes('threadId=wt-'));
     assert.equal(rows.length, 10, `默认只显示 10 行: ${r.output}`);
@@ -710,7 +699,7 @@ describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () =>
       thread({ threadId: 'wt-a', title: '审查远程图片修复', lifeState: 'executing', headProjectDir: '/home/dev/AgentDevClaw', lastEventAt: 86_400_000, createdAt: 3_600_000 }),
       thread({ threadId: 'wt-b', title: '', lifeState: 'pending-commands', failed: true, status: 'rotation_failed', commands: [{ status: 'pending' }] }),
     ]);
-    const r = await runCapabilityShellPipeline(POLICY, 'list', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'list', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('title=审查远程图片修复'), r.output);
     assert.ok(r.output.includes('title=(无标题)'), r.output);
@@ -728,16 +717,16 @@ describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () =>
       thread({ threadId: 'wt-run', lifeState: 'executing' }),
       thread({ threadId: 'wt-arch', lifeState: 'archived' }),
     ]);
-    const onlyRunning = await runCapabilityShellPipeline(POLICY, 'list --status=executing', { adapters, bashPath: null });
+    const onlyRunning = await runCapabilityShellPipeline(POLICY, 'list --status=executing', { adapters });
     assert.equal(onlyRunning.ok, true, onlyRunning.output);
     assert.ok(onlyRunning.output.includes('wt-run'), '应只剩 executing 线程');
     assert.ok(!onlyRunning.output.includes('wt-arch'), '非 executing 不应出现');
     // 显式点名终态：覆盖默认隐藏
-    const archivedOnly = await runCapabilityShellPipeline(POLICY, 'list --status=archived', { adapters, bashPath: null });
+    const archivedOnly = await runCapabilityShellPipeline(POLICY, 'list --status=archived', { adapters });
     assert.equal(archivedOnly.ok, true, archivedOnly.output);
     assert.ok(archivedOnly.output.includes('wt-arch'), archivedOnly.output);
     // 未知 lifeState → 派发侧结构化拒绝（附可用值）
-    const bad = await runCapabilityShellPipeline(POLICY, 'list --status=running', { adapters, bashPath: null });
+    const bad = await runCapabilityShellPipeline(POLICY, 'list --status=running', { adapters });
     assert.equal(bad.ok, false);
     assert.equal(bad.rejection?.code, 'dispatch_failed');
     assert.ok(bad.output.includes('executing,pending-commands'), bad.output);
@@ -750,7 +739,7 @@ describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () =>
       thread({ threadId: 'wt-out', headProjectDir: '/home/dev/other' }),
       thread({ threadId: 'wt-nodir', headProjectDir: null }),
     ]);
-    const r = await runCapabilityShellPipeline(POLICY, 'list --dir=/home/dev/agentdevclaw', { adapters, bashPath: null });
+    const r = await runCapabilityShellPipeline(POLICY, 'list --dir=/home/dev/agentdevclaw', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('wt-in'), r.output);
     assert.ok(r.output.includes('wt-sub'), '子目录线程应归属命中');
@@ -764,11 +753,11 @@ describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () =>
       thread({ threadId: 'wt-miss', title: '无关工单' }),
       thread({ threadId: 'wt-failed', title: '工单 999', lifeState: 'executing', failed: true }),
     ]);
-    const byTitle = await runCapabilityShellPipeline(POLICY, 'list --title=TICKET-025', { adapters, bashPath: null });
+    const byTitle = await runCapabilityShellPipeline(POLICY, 'list --title=TICKET-025', { adapters });
     assert.equal(byTitle.ok, true, byTitle.output);
     assert.ok(byTitle.output.includes('wt-hit'), byTitle.output);
     assert.ok(!byTitle.output.includes('wt-miss'), '不匹配标题应被过滤');
-    const failedOnly = await runCapabilityShellPipeline(POLICY, 'list --failed', { adapters, bashPath: null });
+    const failedOnly = await runCapabilityShellPipeline(POLICY, 'list --failed', { adapters });
     assert.equal(failedOnly.ok, true, failedOnly.output);
     assert.ok(failedOnly.output.includes('wt-failed'), failedOnly.output);
     assert.ok(!failedOnly.output.includes('wt-hit'), '非失败线程应被过滤');
@@ -777,11 +766,11 @@ describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () =>
   it('-n 覆盖默认条数，-n=0 不限制；截断时附 -n=0 指引', async () => {
     const many = Array.from({ length: 6 }, (_, i) => thread({ threadId: `wt-${i}`, lastEventAt: i, createdAt: i }));
     const adapters = listAdapters(many);
-    const two = await runCapabilityShellPipeline(POLICY, 'list -n=2', { adapters, bashPath: null });
+    const two = await runCapabilityShellPipeline(POLICY, 'list -n=2', { adapters });
     assert.equal(two.ok, true, two.output);
     assert.ok(two.output.includes('Threads (2/6)'), two.output);
     assert.ok(two.output.includes('只显示最近 2 条'), two.output);
-    const unlimited = await runCapabilityShellPipeline(POLICY, 'list -n=0', { adapters, bashPath: null });
+    const unlimited = await runCapabilityShellPipeline(POLICY, 'list -n=0', { adapters });
     assert.equal(unlimited.ok, true, unlimited.output);
     assert.ok(unlimited.output.includes('Threads (6/6)'), unlimited.output);
   });
@@ -791,7 +780,7 @@ describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () =>
       thread({ threadId: 'wt-arch', lifeState: 'archived' }),
       thread({ threadId: 'wt-live', lifeState: 'idle' }),
     ]);
-    const withAll = await runCapabilityShellPipeline(POLICY, 'list --all', { adapters, bashPath: null });
+    const withAll = await runCapabilityShellPipeline(POLICY, 'list --all', { adapters });
     assert.equal(withAll.ok, true, withAll.output);
     assert.ok(withAll.output.includes('wt-arch'), '--all 应含归档线程');
     assert.ok(!withAll.output.includes('另有'), '--all 下无隐藏终态提示');
@@ -802,16 +791,16 @@ describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () =>
         { match: (u) => u.includes('agentId=coder'), body: { threads: [thread({ threadId: 'wt-ph' })] } },
       ]),
     });
-    const anywhere = await runCapabilityShellPipeline(POLICY, 'list --all coder', { adapters: adaptersWithAgent, bashPath: null });
+    const anywhere = await runCapabilityShellPipeline(POLICY, 'list --all coder', { adapters: adaptersWithAgent });
     assert.equal(anywhere.ok, true, anywhere.output);
     assert.ok(anywhere.output.includes('wt-ph'), anywhere.output);
   });
 
   it('未知 flag（= 形态）派发侧拒绝；裸 --dir 在参数道拒绝', async () => {
-    const unknown = await runCapabilityShellPipeline(POLICY, 'list --nope=1', { adapters: listAdapters([]), bashPath: null });
+    const unknown = await runCapabilityShellPipeline(POLICY, 'list --nope=1', { adapters: listAdapters([]) });
     assert.equal(unknown.ok, false);
     assert.ok(unknown.output.includes('--nope'), unknown.output);
-    const bareFlag = await runCapabilityShellPipeline(POLICY, 'list --dir /some/path', { adapters: {}, bashPath: null });
+    const bareFlag = await runCapabilityShellPipeline(POLICY, 'list --dir /some/path', { adapters: {} });
     assert.equal(bareFlag.ok, false);
     assert.equal(bareFlag.rejection?.code, 'arg_rejected', `裸 --dir 应在参数道拒绝: ${bareFlag.rejection?.code}`);
   });

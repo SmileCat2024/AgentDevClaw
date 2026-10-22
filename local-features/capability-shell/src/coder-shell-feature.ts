@@ -153,7 +153,6 @@ class CapabilityShellFeatureInner implements AgentFeature {
         adapters,
         // 只等待控制面提交与快照，不在工具中等 Coder 执行。
         {
-          bashPath: null,
           timeoutMs: this.options.timeoutMs ?? 120_000,
           maxTimeoutMs: this.options.maxTimeoutMs ?? 600_000,
         },

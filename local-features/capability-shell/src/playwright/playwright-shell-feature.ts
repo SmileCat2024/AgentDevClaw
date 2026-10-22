@@ -104,7 +104,6 @@ export class PlaywrightShellFeature implements AgentFeature {
         createPlaywrightShellPolicy(),
         adapters,
         {
-          bashPath: null,
           ...(this.config.timeoutMs !== undefined ? { timeoutMs: this.config.timeoutMs } : {}),
           ...(this.config.maxTimeoutMs !== undefined ? { maxTimeoutMs: this.config.maxTimeoutMs } : {}),
           ...(this.config.workdir !== undefined ? { workdir: this.config.workdir } : {}),

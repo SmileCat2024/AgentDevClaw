@@ -1,16 +1,14 @@
 /**
  * Capability Shell 基座（ticket 033）
  *
- * 管线四道检查点（语法验收 / 结构分段 / 逐段动词校验 / 参数校验）+
- * bash 形态工具工厂 + adapter 分派。每个领域 shell = 一份策略声明 +
- * 若干 adapter 映射；边界 = 管线确定性拒绝，不是沙箱。
+ * Bash AST 预检 + 解释执行 + 展开后参数校验 + adapter 分派。
+ * 每个领域 shell = 一份策略声明 + 若干 adapter；不开放系统 shell 执行。
  */
 
 export type {
   CapabilityShellErrorCode,
   CapabilityShellPolicy,
   ShellSegment,
-  ShellRedirect,
   ShellVerbDecl,
   ShellParamDecl,
   ShellParamKind,
@@ -18,17 +16,9 @@ export type {
   CapabilityShellAuditEvent,
 } from './types.js';
 
-// 第一道：语法验收（唯一非纯函数道）
-export { checkSyntax, findBashPath, resolveBashForSyntaxCheck } from './syntax.js';
-export type { SyntaxCheckOptions, SyntaxCheckResult } from './syntax.js';
-
-// 第二道：结构分段 + v1 拒绝特征
-export {
-  checkStructure,
-  containsGlobOutsideQuotes,
-  containsDollarOutsideSingleQuotes,
-} from './structure.js';
-export type { StructureCheckResult } from './structure.js';
+// Bash AST parsing/validation; evaluation and expansion share the same interpreter.
+export { parseBashProgram, BASH_SYNTAX_DESCRIPTION } from './bash-program.js';
+export type { BashProgram, BashRejection } from './bash-program.js';
 
 // 第三道：逐段动词校验
 export { checkVerbs, listVerbs } from './verbs.js';
@@ -45,15 +35,11 @@ export type { ParamCheckResult } from './args.js';
 
 // 分派层
 export {
-  dispatchPipeline,
   runCollectedSpawn,
 } from './dispatch.js';
 export type {
   AdapterMap,
   InProcessAdapter,
-  DispatchSegment,
-  DispatchOptions,
-  DispatchResult,
   CommandResult,
   CommandExecution,
   SpawnRunResult,

@@ -35,10 +35,10 @@ export function checkArgs(
 ): ParamCheckResult {
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    const decl = verbs[seg.verb];
+    const decl = Object.hasOwn(verbs, seg.verb) ? verbs[seg.verb] : undefined;
     if (!decl) continue; // 动词道已拦截，此处防御性跳过
 
-    // 声明 flag 剥离：不占位置参数个数。plain flag（如 --no-wait）任意位置
+    // 声明 flag 剥离：不占位置参数个数。plain flag（如 --dispatch-only）任意位置
     // 出现即剥离；valued flag（声明以 = 结尾，如 --status=）只按等号赋值形态
     // 识别（--status=a 整体剥离），不吃裸 --key 后跟值的写法——后者会被留给
     // 位置参数计数拒绝，避免把下一个字面量吞成 flag 值产生歧义。
