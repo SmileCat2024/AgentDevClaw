@@ -201,14 +201,14 @@ window.phOpenProject = async () => {
     await window.phOpenProjectDirectory(chosenPath);
   } catch (error) {
     console.error('Failed to open project:', error);
-    window.alert((currentLanguage === 'zh' ? '打开项目失败：' : 'Failed to open project: ') + (error?.message || error));
+    window.alert((currentLanguage === 'zh' ? '打开目录失败：' : 'Failed to open directory: ') + (error?.message || error));
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
   }
 };
 
-// 以给定目录打开项目（加入目录列表并设为当前项目，ph_project/open 一次完成），
-// 随后按项目切片拉取会话首屏。目录来源由调用方决定：工具栏「打开项目」按钮
+// 以给定目录打开（加入目录列表并设为当前目录，ph_project/open 一次完成），
+// 随后按目录切片拉取会话首屏。目录来源由调用方决定：工具栏「打开目录」按钮
 // 先弹目录选择器；桌面右键「在编程小助手中打开」由壳直接给定
 // （modules/desktop-open.js）。
 window.phOpenProjectDirectory = async (chosenPath) => {
@@ -232,13 +232,15 @@ window.phOpenProjectDirectory = async (chosenPath) => {
     // Use returned state directly — no extra fetch
     const freshState = openResult.state || await (await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent(currentAgent.id))).json();
     updateAgentWorkspaceState(currentAgent.id, freshState);
-    // 「打开目录」是显式目录选择：回到目录模式（清除可能的项目目标）
+    // 「打开目录」是显式目录选择：回到目录默认集合（清除可能的项目目标）
     setPhBrowsingTarget(currentAgent.id, {
       type: 'dir',
       id: 'dir:' + String(chosenPath).replace(/\\/g, '/').toLowerCase(),
     });
+    // 多选状态随导航作废（状态不跨目录/归属泄漏）
+    if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
 
-    // 新项目会话列表首屏（按项目切片拉取）
+    // 目录会话列表首屏（按目录切片拉取）
     const loaded = await phLoadProjectSessions(chosenPath);
     if (!loaded) {
       lastRenderedWorkspaceHtml = '';
@@ -246,7 +248,7 @@ window.phOpenProjectDirectory = async (chosenPath) => {
     }
   } catch (error) {
     console.error('Failed to open project:', error);
-    window.alert((currentLanguage === 'zh' ? '打开项目失败：' : 'Failed to open project: ') + (error?.message || error));
+    window.alert((currentLanguage === 'zh' ? '打开目录失败：' : 'Failed to open directory: ') + (error?.message || error));
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
   }
@@ -275,8 +277,40 @@ window.phSwitchProject = async (projectId) => {
       window.alert((currentLanguage === 'zh' ? '项目不存在：' : 'Project not found: ') + projectId);
       return;
     }
+    // 目录决定位置：跨目录项目（左侧目录树二级进入）先把工作区目录切到
+    // 项目绑定目录——仅当该目录已在目录注册表（workspace phProjects）里；
+    // 项目绑定目录（含托管）不写目录注册表，位置随项目目标视图寻址。
+    const wsStateNow = (typeof getAgentWorkspaceState === 'function')
+      ? (getAgentWorkspaceState(currentAgent) || {}) : {};
+    const normDir = (dir) => String(dir || '').replace(/\\/g, '/').toLowerCase();
+    const entityDirNorm = normDir(resolved.openDirectory);
+    const wsDirNorm = normDir(wsStateNow.openDirectory);
+    const registryDirs = (Array.isArray(wsStateNow.phProjects) ? wsStateNow.phProjects : [])
+      .map((p) => normDir(p?.openDirectory)).filter(Boolean);
+    if (entityDirNorm && entityDirNorm !== wsDirNorm && registryDirs.includes(entityDirNorm)) {
+      try {
+        const dirSwitchRes = await fetch('/protoclaw/ph_project/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agentId: currentAgent.id, projectId: 'dir:' + entityDirNorm }),
+        });
+        if (!dirSwitchRes.ok) {
+          throw new Error(await dirSwitchRes.text().catch(() => 'Failed to switch directory'));
+        }
+        const dirSwitchResult = await dirSwitchRes.json();
+        const freshDirState = dirSwitchResult.state
+          || await (await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent(currentAgent.id))).json();
+        updateAgentWorkspaceState(currentAgent.id, freshDirState);
+      } catch (error) {
+        console.error('Failed to switch directory for project:', error);
+        window.alert((currentLanguage === 'zh' ? '切换目录失败：' : 'Failed to switch directory: ') + (error?.message || error));
+        return;
+      }
+    }
     setPhBrowsingTarget(currentAgent.id, { type: 'project', id: projectId });
     if (window.ClawFW) window.ClawFW.phSurfaceViewProjectId = null;
+    // 多选状态随归属切换作废（状态不跨目录/归属泄漏）
+    if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
     phSearchQuery = '';
     if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
     if (typeof window.phSearchResetState === 'function') window.phSearchResetState();
@@ -317,6 +351,31 @@ window.phSwitchProject = async (projectId) => {
   }
   if (window.ClawFW) window.ClawFW.phSurfaceViewProjectId = null;
 
+  // 项目绑定目录（含托管，不在目录注册表）：纯视图导航——目录清单收录项目
+  // 绑定目录，但选择它不写 workspace_state、不进目录注册表、不触发
+  // ph_project/switch（switch 会把目录 upsert 进旧目录 state / docset 同步）。
+  // 目录会话仍按 projectDir 切片正常呈现。
+  if (!targetProject) {
+    const normDirId = (dir) => 'dir:' + String(dir || '').replace(/\\/g, '/').toLowerCase();
+    const boundEntity = (window.ClawFW.phProjectEntities?.projects || [])
+      .find((p) => !p.archived && p.openDirectory && normDirId(p.openDirectory) === projectId);
+    if (boundEntity) {
+      setPhBrowsingTarget(currentAgent.id, { type: 'dir', id: projectId });
+      phSearchQuery = '';
+      if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+      if (typeof window.phSearchResetState === 'function') window.phSearchResetState();
+      if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
+      const loaded = await phLoadProjectSessions({ projectDir: boundEntity.openDirectory });
+      if (!loaded) {
+        lastRenderedWorkspaceHtml = '';
+        renderCurrentMainView();
+      }
+      return;
+    }
+    // 未知目录 id（既非注册目录桶也非项目绑定目录）：落入下方旧路径，
+    // 服务端显式拒绝（alert），不静默 fallback。
+  }
+
   try {
     const switchRes = await fetch('/protoclaw/ph_project/switch', {
       method: 'POST',
@@ -335,15 +394,16 @@ window.phSwitchProject = async (projectId) => {
     // workspace_state 更新不再反向改写浏览目标。
     setPhBrowsingTarget(currentAgent.id, { type: 'dir', id: projectId });
 
-    // Close dropdown
-    const dropdown = document.querySelector('.ph-project-dropdown');
-    if (dropdown) dropdown.classList.remove('open');
+    // Close dropdown（双选择器并存：收起全部打开的下拉）
+    document.querySelectorAll('.ph-project-dropdown.open').forEach((item) => item.classList.remove('open'));
 
     // Clear search state on project switch
     phSearchQuery = '';
     if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
     // 搜索结果/范围/分页等模块状态一并作废（身份已随项目切换漂移）
     if (typeof window.phSearchResetState === 'function') window.phSearchResetState();
+    // 多选状态随目录切换作废（状态不跨目录/归属泄漏）
+    if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
 
     // 会话列表按项目分页：切换后拉取新项目首屏（替换旧项目切片）
     const switched = await phLoadProjectSessions(targetProject?.openDirectory || freshState?.openDirectory || '');
@@ -474,20 +534,72 @@ window.phSetupLoadMoreAutoScroll = () => {
   sentinels.forEach((el) => _phLoadMoreObserver.observe(el));
 };
 
+// 触发器 aria-expanded 同步（open class → 属性），toggle/外点/Escape 后调用
+function _phSyncDropdownAria() {
+  document.querySelectorAll('.ph-project-dropdown').forEach((dropdown) => {
+    const trigger = dropdown.querySelector('.ph-project-dropdown-trigger');
+    if (trigger && typeof trigger.setAttribute === 'function') {
+      trigger.setAttribute('aria-expanded', dropdown.classList.contains('open') ? 'true' : 'false');
+    }
+  });
+}
+
+// 双选择器并存（左目录 / 右归属）：点一个 trigger 收起另一个下拉，避免两个
+// 菜单同开。旧单下拉行为按 closest 兼容。触发器为 button（键盘可达）。
 window.phToggleProjectDropdown = (event) => {
   event.stopPropagation();
-  const dropdown = document.querySelector('.ph-project-dropdown');
+  event.preventDefault();
+  const target = event.target || event.currentTarget;
+  const dropdown = (target && typeof target.closest === 'function')
+    ? target.closest('.ph-project-dropdown')
+    : document.querySelector('.ph-project-dropdown');
   if (!dropdown) return;
+  document.querySelectorAll('.ph-project-dropdown.open').forEach((item) => {
+    if (item !== dropdown) item.classList.remove('open');
+  });
   dropdown.classList.toggle('open');
+  _phSyncDropdownAria();
 };
 
-// Close dropdown on outside click
+// Close dropdown on outside click（多下拉：任一 open 且不含点击目标即收起）
 document.addEventListener('click', (e) => {
-  const dropdown = document.querySelector('.ph-project-dropdown');
-  if (dropdown && !dropdown.contains(e.target)) {
-    dropdown.classList.remove('open');
-  }
+  let changed = false;
+  document.querySelectorAll('.ph-project-dropdown.open').forEach((dropdown) => {
+    if (!dropdown.contains(e.target)) {
+      dropdown.classList.remove('open');
+      changed = true;
+    }
+  });
+  if (changed) _phSyncDropdownAria();
 });
+
+// Escape 关闭打开的下拉（键盘操作沿既有弹窗的 Escape 语义）
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  let changed = false;
+  document.querySelectorAll('.ph-project-dropdown.open').forEach((dropdown) => {
+    dropdown.classList.remove('open');
+    changed = true;
+  });
+  if (changed) _phSyncDropdownAria();
+});
+
+// 目录树二级展开（左选择器）：捕获阶段拦截，避免冒泡触发目录切换；
+// 仅切换折叠态，不产生导航副作用。aria-expanded 随之同步。
+document.addEventListener('click', (e) => {
+  const btn = e.target && typeof e.target.closest === 'function' ? e.target.closest('.ph-dir-expand') : null;
+  if (!btn) return;
+  e.stopPropagation();
+  e.preventDefault();
+  const dirId = btn.getAttribute('data-expand-dir') || '';
+  const safeId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(dirId) : dirId;
+  const sub = document.querySelector('.ph-dir-subprojects[data-subprojects-for="' + safeId + '"]');
+  if (sub) sub.classList.toggle('open');
+  btn.classList.toggle('expanded');
+  if (typeof btn.setAttribute === 'function') {
+    btn.setAttribute('aria-expanded', btn.classList.contains('expanded') ? 'true' : 'false');
+  }
+}, true);
 
 // Open-in-folder 按钮经事件委托接线（目录在 data-open-dir 属性上）。
 // 必须用捕获阶段：按钮嵌在下拉项内部，下拉项的内联 onclick 负责切换项目，
@@ -528,6 +640,11 @@ window.phOpenNewProjectDialog = () => {
   if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent)) return;
   const isZh = currentLanguage === 'zh';
 
+  // 当前目录（目录决定位置）：新建项目默认落在当前目录；无当前目录时不
+  // 预选任何路径——托管或浏览必须显式选择，不无声指定其他路径。
+  const currentDirContext = (typeof getPhCurrentDirectoryContext === 'function')
+    ? getPhCurrentDirectoryContext(currentAgent) : null;
+
   let host = document.getElementById('ph-new-project-host');
   if (!host) {
     host = document.createElement('div');
@@ -543,7 +660,7 @@ window.phOpenNewProjectDialog = () => {
     '<div class="feature-detail-head">',
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '新建项目' : 'New Project') + '</div>',
-    '<div class="feature-detail-subtitle">' + (isZh ? '项目是稳定的身份，与目录对话并存；可在创建后再打开对话。' : 'A project is a stable identity alongside directory chats; open a conversation after creation.') + '</div>',
+    '<div class="feature-detail-subtitle">' + (isZh ? '项目按目录组织，创建后可改绑目录；不会自动创建对话。' : 'Projects organize by directory; rebind later. No conversation is created automatically.') + '</div>',
     '</div>',
     '<button type="button" class="feature-detail-close ph-new-project-cancel">&times;</button>',
     '</div>',
@@ -553,10 +670,28 @@ window.phOpenNewProjectDialog = () => {
     '<input type="text" id="ph-new-project-name" class="settings-input" autocomplete="off" maxlength="80" placeholder="' + (isZh ? '项目名称' : 'Project name') + '" />',
     '</div>',
     '<div class="settings-field">',
-    '<label for="ph-new-project-dir">' + (isZh ? '目录（可选，缺省使用托管目录）' : 'Directory (optional; managed by default)') + '</label>',
-    '<div class="ph-new-project-dir-row">',
-    '<input type="text" id="ph-new-project-dir" class="settings-input" autocomplete="off" placeholder="' + (isZh ? '留空 = 服务端托管目录' : 'Empty = server-managed directory') + '" />',
-    '<button type="button" class="settings-btn settings-btn-secondary ph-new-project-browse">' + (isZh ? '浏览' : 'Browse') + '</button>',
+    '<label>' + (isZh ? '目录' : 'Directory') + '</label>',
+    // 目录显式三选：默认当前目录（无当前目录时不预选——不无声指定其他
+    // 路径）；其他目录经浏览显式选择；托管目录由服务端分配。
+    '<div class="ph-new-project-dir-options" id="ph-new-project-dir-options">',
+    (currentDirContext ? (
+      '<label class="ph-dir-option">' +
+      '<input type="radio" name="ph-new-project-dir-mode" value="current" checked>' +
+      '<span class="ph-dir-option-label">' + (isZh ? '当前目录' : 'Current directory') + '</span>' +
+      '<span class="ph-dir-option-path">' + escapeHtml(currentDirContext.openDirectory) + '</span>' +
+      '</label>'
+    ) : ''),
+    '<label class="ph-dir-option">' +
+    '<input type="radio" name="ph-new-project-dir-mode" value="browse">' +
+    '<span class="ph-dir-option-label">' + (isZh ? '其他目录' : 'Other directory') + '</span>' +
+    '<button type="button" class="settings-btn settings-btn-secondary ph-new-project-browse">' + (isZh ? '浏览…' : 'Browse…') + '</button>' +
+    '<span class="ph-dir-option-path ph-new-project-browse-path"></span>' +
+    '</label>',
+    '<label class="ph-dir-option">' +
+    '<input type="radio" name="ph-new-project-dir-mode" value="managed">' +
+    '<span class="ph-dir-option-label">' + (isZh ? '托管目录' : 'Managed directory') + '</span>' +
+    '<span class="ph-dir-option-path">' + (isZh ? '服务端分配，稍后可改绑' : 'Assigned by server; rebind later') + '</span>' +
+    '</label>',
     '</div>',
     '</div>',
     '<div class="ph-new-project-error" hidden></div>',
@@ -570,10 +705,11 @@ window.phOpenNewProjectDialog = () => {
   host.appendChild(overlay);
 
   const nameInput = overlay.querySelector('#ph-new-project-name');
-  const dirInput = overlay.querySelector('#ph-new-project-dir');
+  const browsePathEl = overlay.querySelector('.ph-new-project-browse-path');
   const errorEl = overlay.querySelector('.ph-new-project-error');
   const submitBtn = overlay.querySelector('button[type="submit"]');
   const previousFocus = document.activeElement;
+  let browseDir = '';
 
   const close = () => {
     overlay.remove();
@@ -589,7 +725,12 @@ window.phOpenNewProjectDialog = () => {
     try {
       const result = await invoke('select_directory');
       const chosen = Array.isArray(result?.paths) ? String(result.paths[0] || '').trim() : (typeof result?.path === 'string' ? result.path.trim() : '');
-      if (chosen) dirInput.value = chosen;
+      if (chosen) {
+        browseDir = chosen;
+        if (browsePathEl) browsePathEl.textContent = chosen;
+        const browseRadio = overlay.querySelector('input[name="ph-new-project-dir-mode"][value="browse"]');
+        if (browseRadio) browseRadio.checked = true;
+      }
     } catch { /* 用户取消选择器：无副作用 */ }
   });
   nameInput.focus();
@@ -597,12 +738,30 @@ window.phOpenNewProjectDialog = () => {
   overlay.querySelector('form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const name = String(nameInput.value || '').trim();
-    const workDirectory = String(dirInput.value || '').trim();
     errorEl.hidden = true;
     if (!name) {
       errorEl.textContent = isZh ? '请填写项目名称' : 'Project name is required';
       errorEl.hidden = false;
       nameInput.focus();
+      return;
+    }
+    // 目录三选：当前目录 / 其他目录（浏览）/ 托管目录。未显式选择且无当前
+    // 目录时拒绝提交——不无声指定其他路径。
+    const modeRadio = overlay.querySelector('input[name="ph-new-project-dir-mode"]:checked');
+    const mode = modeRadio ? String(modeRadio.value || '') : '';
+    let workDirectory = '';
+    if (mode === 'current') {
+      workDirectory = currentDirContext?.openDirectory || '';
+    } else if (mode === 'browse') {
+      workDirectory = browseDir;
+      if (!workDirectory) {
+        errorEl.textContent = isZh ? '请先浏览选择目录' : 'Browse and pick a directory first';
+        errorEl.hidden = false;
+        return;
+      }
+    } else if (mode !== 'managed') {
+      errorEl.textContent = isZh ? '请选择项目目录（其他目录 / 托管目录）' : 'Choose a directory (other / managed)';
+      errorEl.hidden = false;
       return;
     }
     submitBtn.disabled = true;
@@ -620,9 +779,11 @@ window.phOpenNewProjectDialog = () => {
       if (!response.ok || !payload?.ok) {
         throw new Error(payload?.error || ('HTTP ' + response.status));
       }
-      // 创建即显式进入该项目：刷新实体缓存 → typed target → 项目会话切片
+      // 创建即显式进入该项目：刷新实体缓存 → typed target → 项目会话切片。
+      // 目标项目隐含其绑定目录，两个选择器随之同步。
       await ensurePhProjectEntitiesLoaded(true);
       setPhBrowsingTarget(currentAgent.id, { type: 'project', id: payload.project.id });
+      if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
       close();
       const loaded = await phLoadProjectSessions({ projectId: payload.project.id });
       if (!loaded) {

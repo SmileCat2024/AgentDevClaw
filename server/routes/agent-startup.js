@@ -44,7 +44,7 @@ import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { addOpenSession } from '../shared/open-sessions-tracker.js';
 import { resolveSessionRuntimeDirectory } from '../shared/session-project.js';
-import { isPhProjectRebindActive } from './ph-projects.js';
+import { getPhSessionGateInfo, getPhProjectGateInfo } from './ph-projects.js';
 
 const RUNTIME_DIAGNOSTIC_TAIL_CHARS = 8000;
 
@@ -216,6 +216,18 @@ export function createAgentStartupFns(deps) {
       ? requestedSessionId
       : (preferredSessionId || existing?.selectedSessionId || agent.workspace_sessions?.activeSessionId || null);
 
+    // ticket 046：PH 归属释放窗口（项目改绑 / 会话归属转移）先于一切复用与
+    // 启动判定。下方 existing 复用会直接返回按旧归属装配的存活实例；spawn
+    // 会按旧索引记录绑旧目录——两者都会在转移落盘后变成幽灵实例，必须在此
+    // 提前拒绝（无窗口时空表短路，热路径零成本）。
+    const phSessionGate = resolvedSessionId ? getPhSessionGateInfo(resolvedSessionId) : null;
+    if (phSessionGate) {
+      const error = new Error(phSessionGate.message);
+      error.statusCode = 409;
+      error.code = phSessionGate.code;
+      throw error;
+    }
+
     if (sanitizeSessionFragment(agent?.id) === 'qqbot') {
       const siblings = listAgentRuntimes(agent.id).filter((rt) =>
         isManagedRuntimeRunning(rt)
@@ -304,14 +316,17 @@ export function createAgentStartupFns(deps) {
     // 解析放在上面的 try 之外：项目身份失效是确定性错误，不能被索引读取
     // 容错吞掉。
     if (sessionRecord) {
-      // ticket 046：改绑释放窗口（实例失效 → 项目表落盘之间）拒绝按旧表启动，
-      // 否则新 runtime 会绑到旧目录、改绑落盘后变成幽灵实例。
+      // ticket 046：归属窗口（改绑 / 转移 / 归档 / 删除）内拒绝按旧表启动，
+      // 否则新 runtime 会绑到旧目录、窗口落盘后变成幽灵实例。
       const recordProjectId = cleanSessionText(sessionRecord?.projectId);
-      if (recordProjectId && isPhProjectRebindActive(recordProjectId)) {
-        const error = new Error(`PH project ${recordProjectId} is being rebound; retry starting the session after the rebind completes`);
-        error.statusCode = 409;
-        error.code = 'ph_project_rebind_in_progress';
-        throw error;
+      if (recordProjectId) {
+        const projectGate = getPhProjectGateInfo(recordProjectId);
+        if (projectGate) {
+          const error = new Error(projectGate.message);
+          error.statusCode = 409;
+          error.code = projectGate.code;
+          throw error;
+        }
       }
       const sessionProjectDir = resolveSessionRuntimeDirectory(sessionRecord, { sessionId: resolvedSessionId });
       sessionRecordType = cleanSessionText(sessionRecord?.sessionType) || null;

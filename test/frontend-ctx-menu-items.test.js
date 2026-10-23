@@ -157,39 +157,42 @@ describe('ctx-menu-items: getCtxMenuItems (session)', () => {
   it('session main (not archived, not todo) → full menu with submenus', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-active')`);
-    // Expected: generate-title, separator, summary submenu, trim submenu,
-    //           branch submenu, separator, copy-session-id, todo-session,
-    //           archive-session, separator, delete-session
-    assert.equal(items.length, 11);
+    // Expected: generate-title, move-session (local PH only), separator,
+    //           summary submenu, trim submenu, branch submenu, separator,
+    //           copy-session-id, todo-session, archive-session, separator,
+    //           delete-session
+    assert.equal(items.length, 12);
     assert.equal(items[0].action, 'generate-title');
-    assert.equal(items[1].type, 'separator');
-    assert.ok(items[2].submenu, 'summary should have submenu');
-    assert.equal(items[2].label, '总结历史（Summary）');
-    assert.ok(items[3].submenu, 'trim should have submenu');
-    assert.ok(items[4].submenu, 'branch should have submenu');
-    assert.equal(items[5].type, 'separator');
-    assert.equal(items[6].action, 'copy-session-id');
-    assert.equal(items[7].action, 'todo-session');
-    assert.equal(items[7].label, '设为待办'); // not todo → set
-    assert.equal(items[8].action, 'archive-session');
-    assert.equal(items[9].type, 'separator');
-    assert.equal(items[10].action, 'delete-session');
-    assert.equal(items[10].danger, true);
+    assert.equal(items[1].action, 'move-session');
+    assert.equal(items[2].type, 'separator');
+    assert.ok(items[3].submenu, 'summary should have submenu');
+    assert.equal(items[3].label, '总结历史（Summary）');
+    assert.ok(items[4].submenu, 'trim should have submenu');
+    assert.ok(items[5].submenu, 'branch should have submenu');
+    assert.equal(items[6].type, 'separator');
+    assert.equal(items[7].action, 'copy-session-id');
+    assert.equal(items[8].action, 'todo-session');
+    assert.equal(items[8].label, '设为待办'); // not todo → set
+    assert.equal(items[9].action, 'archive-session');
+    assert.equal(items[10].type, 'separator');
+    assert.equal(items[11].action, 'delete-session');
+    assert.equal(items[11].danger, true);
   });
 
   it('session archived → flattened items, no submenus, no todo', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'archived', 'sess-archived')`);
-    // Expected: generate-title, separator, summary (flat), trim (flat), branch (flat),
-    //           separator, copy-session-id, archive-session (unarchive), separator, delete-session
-    assert.equal(items.length, 10);
-    assert.equal(items[2].action, 'summary');
-    assert.ok(!items[2].submenu, 'archived: summary should be flat');
-    assert.equal(items[3].action, 'trim');
-    assert.ok(!items[3].submenu);
-    assert.equal(items[4].action, 'branch');
+    // Expected: generate-title, move-session, separator, summary (flat), trim (flat),
+    //           branch (flat), separator, copy-session-id, archive-session (unarchive),
+    //           separator, delete-session
+    assert.equal(items.length, 11);
+    assert.equal(items[3].action, 'summary');
+    assert.ok(!items[3].submenu, 'archived: summary should be flat');
+    assert.equal(items[4].action, 'trim');
     assert.ok(!items[4].submenu);
-    assert.equal(items[6].action, 'copy-session-id');
+    assert.equal(items[5].action, 'branch');
+    assert.ok(!items[5].submenu);
+    assert.equal(items[7].action, 'copy-session-id');
     // No todo toggle for archived
     assert.ok(!items.find((i) => i.action === 'todo-session'));
   });

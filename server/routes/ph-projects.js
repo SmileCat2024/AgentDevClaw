@@ -10,7 +10,7 @@ import {
 } from '../shared/constants.js';
 import { ensureDir, normalizePathCasing } from '../shared/fs-helpers.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
-import { readSessionIndex } from '../shared/session-access.js';
+import { readSessionIndex, updateSessionIndex } from '../shared/session-access.js';
 
 // ── PH 独立项目存储（ticket 041）─────────────────────────────────────────────
 //
@@ -323,40 +323,100 @@ export async function renamePhProject(projectId, name) {
 //
 // 改绑 = 把项目的 workDirectory 换到新目录，同时让该项目的空闲存活实例按
 // 「先持久化、再移除、最后写表」的顺序安全失效：
-//   1. 改绑释放窗口内，新输入与新启动都被门闩拒绝（isPhSessionRebindGated /
-//      isPhProjectRebindActive）——不存在输入落进旧实例执行的窗口；
+//   1. 改绑释放窗口内，新输入与新启动都被门闩拒绝（getPhSessionGateInfo /
+//      getPhProjectGateInfo）——不存在输入落进旧实例执行的窗口；
 //   2. 停止走 stopManagedAgent(agentId, sessionId, { waitForPersistence: true })，
 //      共享进程经 remove-session 精确释放单个会话，兄弟会话（B/D）不受影响；
 //      不带 sessionId 的全量停止语义绝不使用；
 //   3. 所有存活实例释放成功后才写项目表——失败时旧绑定完整保留（会话下次
 //      启动仍绑旧目录），绝不出现「记录已变、下一轮还用旧实例」或假成功。
-// 门闩是进程内的改绑专用协调（与线程 handoff barrier 同风格），不是通用
-// 事务框架；热路径（无改绑进行中）零查询成本。
+// 门闩是进程内的归属协调（与线程 handoff barrier 同风格），不是通用事务
+// 框架；热路径（无归属释放进行中）零查询成本。PH 会话归属转移
+// （movePhSessions）共用同一张门闩表。
 
-const _phProjectRebindGates = new Map(); // projectId -> Set<sessionId>
+const _phOwnershipGates = new Map(); // gateKey -> { projectIds:Set, sessionIds:Set, code, message }
 
-/** 项目改绑是否进行中（agent-startup 启动闸用）。 */
-export function isPhProjectRebindActive(projectId) {
-  return _phProjectRebindGates.has(projectId);
-}
+const PH_REBIND_GATE_CODE = 'ph_project_rebind_in_progress';
+const PH_MOVE_GATE_CODE = 'ph_sessions_move_in_progress';
+const PH_ARCHIVE_GATE_CODE = 'ph_project_archive_in_progress';
+const PH_DELETE_GATE_CODE = 'ph_project_delete_in_progress';
 
-/** 会话是否处于改绑释放窗口（input-gateway 输入闸用）。空表短路。 */
-export function isPhSessionRebindGated(sessionId) {
-  if (_phProjectRebindGates.size === 0 || !sessionId) return false;
-  for (const gatedIds of _phProjectRebindGates.values()) {
-    if (gatedIds.has(sessionId)) return true;
+function findOwnershipGateByProject(projectId) {
+  for (const gate of _phOwnershipGates.values()) {
+    if (gate.projectIds.has(projectId)) return gate;
   }
-  return false;
+  return null;
 }
 
-function beginPhProjectRebindGate(projectId, sessionIds) {
-  if (_phProjectRebindGates.has(projectId)) return false;
-  _phProjectRebindGates.set(projectId, new Set(sessionIds));
-  return true;
+function findOwnershipGateBySession(sessionId) {
+  for (const gate of _phOwnershipGates.values()) {
+    if (gate.sessionIds.has(sessionId)) return gate;
+  }
+  return null;
 }
 
-function endPhProjectRebindGate(projectId) {
-  _phProjectRebindGates.delete(projectId);
+/** 项目是否处于任何归属事务窗口（改绑/转移/归档/删除）。 */
+export function isPhProjectRebindActive(projectId) {
+  return Boolean(projectId) && findOwnershipGateByProject(projectId) !== null;
+}
+
+/** 会话是否处于归属释放窗口（input-gateway 输入闸用）。空表短路。 */
+export function isPhSessionRebindGated(sessionId) {
+  if (_phOwnershipGates.size === 0 || !sessionId) return false;
+  return findOwnershipGateBySession(sessionId) !== null;
+}
+
+/** 会话所在归属窗口的失败语义（code + message），无窗口返回 null。 */
+export function getPhSessionGateInfo(sessionId) {
+  if (_phOwnershipGates.size === 0 || !sessionId) return null;
+  const gate = findOwnershipGateBySession(sessionId);
+  return gate ? { code: gate.code, message: gate.message } : null;
+}
+
+/** 项目所在归属窗口的失败语义（code + message），无窗口返回 null。 */
+export function getPhProjectGateInfo(projectId) {
+  if (_phOwnershipGates.size === 0 || !projectId) return null;
+  const gate = findOwnershipGateByProject(projectId);
+  return gate ? { code: gate.code, message: gate.message } : null;
+}
+
+function ownershipGateError(gate, fallbackMessage) {
+  const error = new Error(gate?.message || fallbackMessage);
+  error.statusCode = 409;
+  error.code = gate?.code || PH_REBIND_GATE_CODE;
+  return error;
+}
+
+/**
+ * 归属门闩：改绑 / 转移 / 归档 / 删除共用的进程内互斥。任何 project /
+ * session 维度与既有窗口相交时返回冲突门闩（同步原子判定，检查与登记
+ * 之间无 await）。持有期必须覆盖操作自身的整个异步事务；建立前的预读
+ * 快照一律视为过期，须在窗口内刷新或落盘锁内按 fresh 事实重验。
+ */
+function beginPhOwnershipGate(gateKey, projectIds, sessionIds, code, message) {
+  for (const gate of _phOwnershipGates.values()) {
+    const projectOverlap = projectIds.some((id) => gate.projectIds.has(id));
+    const sessionOverlap = sessionIds.some((id) => gate.sessionIds.has(id));
+    if (projectOverlap || sessionOverlap) return gate;
+  }
+  _phOwnershipGates.set(gateKey, {
+    projectIds: new Set(projectIds),
+    sessionIds: new Set(sessionIds),
+    code,
+    message,
+  });
+  return null;
+}
+
+function endPhOwnershipGate(gateKey) {
+  _phOwnershipGates.delete(gateKey);
+}
+
+/** 窗口内补充会话成员（rebind/delete 建立后刷新索引成员）。 */
+function addPhOwnershipGateSessions(gateKey, sessionIds) {
+  const gate = _phOwnershipGates.get(gateKey);
+  if (!gate) return;
+  for (const sessionId of sessionIds) gate.sessionIds.add(sessionId);
 }
 
 function normalizeDirectoryForCompare(value) {
@@ -438,21 +498,29 @@ export async function rebindPhProject(projectId, { workDirectory } = {}, deps = 
     return { project, releasedSessionIds: [], unchanged: true };
   }
 
-  // 枚举项目会话（归属规则同 session-project.getSessionProjectId；此处内联
-  // 使用同一表达式，避免 ph-projects ↔ session-project 的 import 环）。
-  const index = await readIndex(PH_AGENT_ID);
-  const sessionIds = (index?.sessions || [])
-    .map((record) => ({ id: cleanSessionText(record?.id), projectId: cleanSessionText(record?.projectId) }))
-    .filter((item) => item.id && item.projectId === project.id)
-    .map((item) => item.id);
-
-  if (!beginPhProjectRebindGate(project.id, sessionIds)) {
-    const error = new Error(`PH project ${project.id} is already being rebound`);
-    error.statusCode = 409;
-    error.code = 'ph_project_rebind_in_progress';
-    throw error;
+  // 门闩覆盖改绑全程；项目会话成员在窗口内按 fresh 索引刷新——建立前的
+  // 索引快照可能已被并发归属转移改写（新成员不在旧快照里就不会被门闩
+  // 保护，也不会被释放，改绑落盘后变成旧目录幽灵实例）。
+  const rebindGateKey = `rebind:${project.id}`;
+  const rebindConflict = beginPhOwnershipGate(
+    rebindGateKey,
+    [project.id],
+    [],
+    PH_REBIND_GATE_CODE,
+    `PH project ${project.id} is being rebound; retry after the rebind completes`,
+  );
+  if (rebindConflict) {
+    throw ownershipGateError(rebindConflict, `PH project ${project.id} is already being rebound`);
   }
   try {
+    // 枚举项目会话（归属规则同 session-project.getSessionProjectId；此处内联
+    // 使用同一表达式，避免 ph-projects ↔ session-project 的 import 环）。
+    const index = await readIndex(PH_AGENT_ID);
+    const sessionIds = (index?.sessions || [])
+      .map((record) => ({ id: cleanSessionText(record?.id), projectId: cleanSessionText(record?.projectId) }))
+      .filter((item) => item.id && item.projectId === project.id)
+      .map((item) => item.id);
+    addPhOwnershipGateSessions(rebindGateKey, sessionIds);
     // busy 探测：全部存活实例先探一遍再动手，杜绝"释放了一半才发现 busy"。
     const liveRuntimes = [];
     for (const sessionId of sessionIds) {
@@ -497,7 +565,7 @@ export async function rebindPhProject(projectId, { workDirectory } = {}, deps = 
     });
     return { project: updated, releasedSessionIds, unchanged: false };
   } finally {
-    endPhProjectRebindGate(project.id);
+    endPhOwnershipGate(rebindGateKey);
   }
 }
 
@@ -508,34 +576,52 @@ export async function rebindPhProject(projectId, { workDirectory } = {}, deps = 
 // 「不可用」是选择器层面的隐藏/标注，不是 Session archived 语义——那是另一
 // 个既有字段，本项目状态不写入任何 Session 记录。
 
-export async function setPhProjectArchived(projectId, archived) {
+export async function setPhProjectArchived(projectId, archived, deps = {}) {
+  const { withStoreWriteLock: lockFn = withStoreWriteLock } = deps;
   if (!isValidPhProjectId(projectId)) {
     const error = new Error(`Invalid projectId: ${projectId}`);
     error.statusCode = 400;
     throw error;
   }
-  const nextArchived = archived === true;
-  return withStoreWriteLock(async () => {
-    const store = await readPhProjectStore();
-    const index = store.projects.findIndex((item) => item.id === projectId);
-    if (index < 0) {
-      const error = new Error(`Unknown project: ${projectId}`);
-      error.statusCode = 404;
-      throw error;
-    }
-    if (store.projects[index].archived === nextArchived) {
-      return store.projects[index]; // 幂等：重复归档/恢复 no-op
-    }
-    const project = {
-      ...store.projects[index],
-      archived: nextArchived,
-      archivedAt: nextArchived ? new Date().toISOString() : null,
-      updatedAt: new Date().toISOString(),
-    };
-    store.projects.splice(index, 1, project);
-    await writePhProjectStore(store);
-    return project;
-  });
+  // 门闩覆盖归档翻转全程：与改绑 / 转移 / 删除互斥。只查不持有会留下
+  // 「归档等表锁期间 move 落盘、归档按陈旧状态翻转」的反向竞态。
+  const archiveGateKey = `archive:${projectId}`;
+  const archiveConflict = beginPhOwnershipGate(
+    archiveGateKey,
+    [projectId],
+    [],
+    PH_ARCHIVE_GATE_CODE,
+    `PH project ${projectId} archive state is being changed; retry after it completes`,
+  );
+  if (archiveConflict) {
+    throw ownershipGateError(archiveConflict, `PH project ${projectId} is in an ownership transfer window`);
+  }
+  try {
+    const nextArchived = archived === true;
+    return await lockFn(async () => {
+      const store = await readPhProjectStore();
+      const index = store.projects.findIndex((item) => item.id === projectId);
+      if (index < 0) {
+        const error = new Error(`Unknown project: ${projectId}`);
+        error.statusCode = 404;
+        throw error;
+      }
+      if (store.projects[index].archived === nextArchived) {
+        return store.projects[index]; // 幂等：重复归档/恢复 no-op
+      }
+      const project = {
+        ...store.projects[index],
+        archived: nextArchived,
+        archivedAt: nextArchived ? new Date().toISOString() : null,
+        updatedAt: new Date().toISOString(),
+      };
+      store.projects.splice(index, 1, project);
+      await writePhProjectStore(store);
+      return project;
+    });
+  } finally {
+    endPhOwnershipGate(archiveGateKey);
+  }
 }
 
 // ── 项目永久删除（ticket 046）────────────────────────────────────────────────
@@ -669,91 +755,457 @@ export async function deletePhProject(projectId, { deleteManagedDirectory = fals
     throw new Error('deletePhProject requires lifecycle deps: getAgentRuntime / isManagedRuntimeRunning / stopManagedAgent / deletePrebuiltSession');
   }
 
-  const project = await getPhProject(projectId);
-  const sessions = await _listProjectSessions(project.id, readIndex);
+  // 门闩覆盖删除全程（枚举 → 释放 → 删文件 → 写表）：只查不持有会留下
+  // 「删除 await 停实例期间 move 建窗落盘」的反向竞态；成员在窗口内按
+  // fresh 索引刷新。
+  const deleteGateKey = `delete:${projectId}`;
+  const deleteConflict = beginPhOwnershipGate(
+    deleteGateKey,
+    [projectId],
+    [],
+    PH_DELETE_GATE_CODE,
+    `PH project ${projectId} is being deleted; retry after it completes`,
+  );
+  if (deleteConflict) {
+    throw ownershipGateError(deleteConflict, `PH project ${projectId} is in an ownership transfer window`);
+  }
+  try {
+    const project = await getPhProject(projectId);
+    const sessions = await _listProjectSessions(project.id, readIndex);
+    addPhOwnershipGateSessions(deleteGateKey, sessions.map((session) => session.id));
 
-  // 托管目录删除判定（与 preview 同源）。显式要求但不可删 → 整个请求拒绝，
-  // 不做「删了项目却悄悄留下目录」的半成功。
-  let removeManagedDirectory = false;
-  if (deleteManagedDirectory === true) {
-    const preview = await previewPhProjectDeletion(projectId, { readIndex, readWorkspaceState, projectLayerPath: layerPath });
-    if (!preview.managedDirectory.deletable) {
-      throw directoryNotDeletableError(projectId, preview.managedDirectory.reasons);
+    // 托管目录删除判定（与 preview 同源）。显式要求但不可删 → 整个请求拒绝，
+    // 不做「删了项目却悄悄留下目录」的半成功。
+    let removeManagedDirectory = false;
+    if (deleteManagedDirectory === true) {
+      const preview = await previewPhProjectDeletion(projectId, { readIndex, readWorkspaceState, projectLayerPath: layerPath });
+      if (!preview.managedDirectory.deletable) {
+        throw directoryNotDeletableError(projectId, preview.managedDirectory.reasons);
+      }
+      removeManagedDirectory = true;
     }
-    removeManagedDirectory = true;
-  }
 
-  // 1) 存活 runtime 逐会话精确失效（共享进程兄弟会话——其他项目/目录的
-  //    会话——不经此路径，不受影响）。
-  const stoppedViewerAgentIds = [];
-  for (const session of sessions) {
-    const runtime = getRuntime(PH_AGENT_ID, session.id);
-    if (runtime?.viewerAgentId) stoppedViewerAgentIds.push(runtime.viewerAgentId);
-    if (!runtime || !isRuntimeRunning(runtime)) continue;
-    try {
-      await stopAgent(PH_AGENT_ID, session.id, { waitForPersistence: true });
-    } catch (error) {
-      console.warn(`[ph-projects] graceful stop failed before delete, falling back to hard stop: ${session.id}:`, error?.message || error);
-      await stopAgent(PH_AGENT_ID, session.id);
+    // 1) 存活 runtime 逐会话精确失效（共享进程兄弟会话——其他项目/目录的
+    //    会话——不经此路径，不受影响）。
+    const stoppedViewerAgentIds = [];
+    for (const session of sessions) {
+      const runtime = getRuntime(PH_AGENT_ID, session.id);
+      if (runtime?.viewerAgentId) stoppedViewerAgentIds.push(runtime.viewerAgentId);
+      if (!runtime || !isRuntimeRunning(runtime)) continue;
+      try {
+        await stopAgent(PH_AGENT_ID, session.id, { waitForPersistence: true });
+      } catch (error) {
+        console.warn(`[ph-projects] graceful stop failed before delete, falling back to hard stop: ${session.id}:`, error?.message || error);
+        await stopAgent(PH_AGENT_ID, session.id);
+      }
     }
-  }
 
-  // 2) 逐会话删除（索引 + 会话文件 + 搜索索引 + tracker 一体清理）。
-  const deletedSessions = [];
-  for (const session of sessions) {
-    try {
-      await deleteSession(PH_AGENT_ID, session.id);
-      deletedSessions.push(session.id);
-    } catch (error) {
-      if (error?.statusCode !== 404) throw error; // 已不存在的会话视为已删
+    // 2) 逐会话删除（索引 + 会话文件 + 搜索索引 + tracker 一体清理）。
+    const deletedSessions = [];
+    for (const session of sessions) {
+      try {
+        await deleteSession(PH_AGENT_ID, session.id);
+        deletedSessions.push(session.id);
+      } catch (error) {
+        if (error?.statusCode !== 404) throw error; // 已不存在的会话视为已删
+      }
     }
-  }
 
-  // 3) UI surface 缓存清理（与单会话删除路由同款善后）。
-  if (clearSurfaces) {
-    for (const viewerAgentId of stoppedViewerAgentIds) clearSurfaces(viewerAgentId);
-  }
-
-  // 4) 项目层配置文件删除（best-effort，缺失不算失败）。
-  let featureConfigDeleted = false;
-  if (layerPath) {
-    const configPath = layerPath(project.id);
-    featureConfigDeleted = await fs.rm(configPath, { force: true }).then(() => true, () => false);
-  }
-
-  // 5) 托管目录删除：三重条件已在上方判定，此处只做物理移除。
-  let managedDirectoryDeleted = false;
-  if (removeManagedDirectory) {
-    await fs.rm(project.workDirectory, { recursive: true, force: true });
-    managedDirectoryDeleted = true;
-  }
-
-  // 6) 项目记录移除。
-  await withStoreWriteLock(async () => {
-    const store = await readPhProjectStore();
-    const index = store.projects.findIndex((item) => item.id === project.id);
-    if (index < 0) {
-      const error = new Error(`Unknown project: ${projectId}`);
-      error.statusCode = 404;
-      throw error;
+    // 3) UI surface 缓存清理（与单会话删除路由同款善后）。
+    if (clearSurfaces) {
+      for (const viewerAgentId of stoppedViewerAgentIds) clearSurfaces(viewerAgentId);
     }
-    store.projects.splice(index, 1);
-    await writePhProjectStore(store);
-  });
 
-  return {
-    project,
-    deletedSessions,
-    featureConfigDeleted,
-    managedDirectory: {
-      path: project.workDirectory,
-      deleted: managedDirectoryDeleted,
-      deleteRequested: deleteManagedDirectory === true,
-    },
-  };
+    // 4) 项目层配置文件删除（best-effort，缺失不算失败）。
+    let featureConfigDeleted = false;
+    if (layerPath) {
+      const configPath = layerPath(project.id);
+      featureConfigDeleted = await fs.rm(configPath, { force: true }).then(() => true, () => false);
+    }
+
+    // 5) 托管目录删除：三重条件已在上方判定，此处只做物理移除。
+    let managedDirectoryDeleted = false;
+    if (removeManagedDirectory) {
+      await fs.rm(project.workDirectory, { recursive: true, force: true });
+      managedDirectoryDeleted = true;
+    }
+
+    // 6) 项目记录移除。
+    await withStoreWriteLock(async () => {
+      const store = await readPhProjectStore();
+      const index = store.projects.findIndex((item) => item.id === project.id);
+      if (index < 0) {
+        const error = new Error(`Unknown project: ${projectId}`);
+        error.statusCode = 404;
+        throw error;
+      }
+      store.projects.splice(index, 1);
+      await writePhProjectStore(store);
+    });
+
+    return {
+      project,
+      deletedSessions,
+      featureConfigDeleted,
+      managedDirectory: {
+        path: project.workDirectory,
+        deleted: managedDirectoryDeleted,
+        deleteRequested: deleteManagedDirectory === true,
+      },
+    };
+  } finally {
+    endPhOwnershipGate(deleteGateKey);
+  }
 }
 
 
+
+// ── PH 会话归属转移（sessions_move）────────────────────────────────────────
+//
+// 同一有效工作目录内，把 Session 的正式归属在「默认目录 ↔ 项目」与
+// 「项目 A ↔ 项目 B」之间转移（移动非复制）：
+// - 只改索引记录的归属字段（projectId / openDirectory）：会话 id、历史、
+//   workspaceAgentId、checkpoint 等全部保留，会话文件本体一字节不动；
+// - 全部先校验后释放：busy（执行中轮次 / 排队输入 / 探测失败）409 拒绝且
+//   零状态变化；批量预校验不通过绝不部分改归属；
+// - 空闲存活实例按「精确单会话 + waitForPersistence」安全失效（共享进程
+//   兄弟会话不受影响），下次启动按目标归属重新装配（runtime 逐实例读索引
+//   projectId 选项目配置层，run-prebuilt-agent ticket 043）；
+// - 释放窗口经归属门闩拒绝新输入 / 新启动 / 派生会话；涉及项目（来源 +
+//   目标）窗口内拒绝改绑 / 归档 / 删除；
+// - 归属无变化（会话已在目标集合）为 no-op 成功：不停实例、不重写索引、
+//   不递增 revision；
+// - 目标项目未知 / 已归档、跨有效目录、无效 Session → 显式失败，不自动
+//   回退、不猜测。
+
+function moveRequestError(message, code, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+/** 目标描述（响应回显用）：解析后的归属身份 + 有效目录。 */
+function describeMoveTarget(targetType, targetProject, targetDirectory) {
+  return targetType === 'project'
+    ? { type: 'project', id: targetProject.id, workDirectory: targetProject.workDirectory }
+    : { type: 'directory', openDirectory: targetDirectory };
+}
+
+/**
+ * 会话索引记录 → 目标归属字段。project 目标：projectId + 项目当前目录
+ * （与 createPrebuiltSession 的项目会话写法对齐）；directory 目标：
+ * 删除 projectId（目录会话无此字段，与历史记录形态一致）+ 目标目录。
+ */
+function applyMoveOwnership(record, targetType, targetProject, targetDirectory) {
+  const next = { ...record };
+  if (targetType === 'project') {
+    next.projectId = targetProject.id;
+    next.openDirectory = targetProject.workDirectory;
+  } else {
+    delete next.projectId;
+    next.openDirectory = targetDirectory;
+  }
+  return next;
+}
+
+/** 记录当前归属是否已等于目标（幂等重试 / no-op 判定）。 */
+function recordMatchesMoveTarget(record, targetType, targetProjectId, targetDirectory) {
+  if (targetType === 'project') {
+    return cleanSessionText(record?.projectId) === targetProjectId;
+  }
+  return !cleanSessionText(record?.projectId)
+    && sameNormalizedDirectory(cleanSessionText(record?.openDirectory), targetDirectory);
+}
+
+/**
+ * PH 会话归属转移编排（单条/批量共用）。deps 与 rebindPhProject 同源注入
+ * （生产 server.js / 测试假件）：getAgentRuntime / isManagedRuntimeRunning /
+ * stopManagedAgent / readViewerJson，另可注入 readSessionIndex /
+ * updateSessionIndex（缺省走 server/shared/session-access.js）。
+ */
+export async function movePhSessions({ sessionIds, target } = {}, deps = {}) {
+  const {
+    getAgentRuntime: getRuntime,
+    isManagedRuntimeRunning: isRuntimeRunning,
+    stopManagedAgent: stopAgent,
+    readViewerJson: readViewer,
+    readSessionIndex: readIndex = readSessionIndex,
+    updateSessionIndex: updateIndex = updateSessionIndex,
+  } = deps;
+  if (!getRuntime || !isRuntimeRunning || !stopAgent || !readViewer) {
+    throw new Error('movePhSessions requires lifecycle deps: getAgentRuntime / isManagedRuntimeRunning / stopManagedAgent / readViewerJson');
+  }
+
+  // ── 参数与目标解析（失败零状态变化）──────────────────────────────
+  if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
+    throw moveRequestError('sessionIds must be a non-empty array', 'ph_sessions_move_invalid_request');
+  }
+  const uniqueSessionIds = [];
+  const seenIds = new Set();
+  for (const raw of sessionIds) {
+    const id = cleanSessionText(raw);
+    if (!id) {
+      throw moveRequestError(`sessionIds contains an invalid entry: ${JSON.stringify(raw)}`, 'ph_sessions_move_invalid_request');
+    }
+    if (!seenIds.has(id)) {
+      seenIds.add(id);
+      uniqueSessionIds.push(id);
+    }
+  }
+
+  const targetType = target?.type;
+  if (targetType !== 'project' && targetType !== 'directory') {
+    throw moveRequestError(`target.type must be "project" or "directory": ${JSON.stringify(targetType)}`, 'ph_sessions_move_invalid_request');
+  }
+  let targetProject = null;
+  let targetDirectory = '';
+  if (targetType === 'project') {
+    const targetProjectId = cleanSessionText(target.id);
+    if (!isValidPhProjectId(targetProjectId)) {
+      throw moveRequestError(`Invalid projectId: ${targetProjectId}`, 'ph_sessions_move_invalid_request');
+    }
+    try {
+      targetProject = await getPhProject(targetProjectId); // 400 非法 / 404 未知
+    } catch (error) {
+      if (error?.statusCode === 404) error.code = 'ph_project_unknown';
+      throw error;
+    }
+    if (targetProject.archived) {
+      throw moveRequestError(
+        `PH project ${targetProject.id} is archived; cannot move sessions into an archived project`,
+        'ph_project_archived',
+        409,
+      );
+    }
+    // 有效目录契约与 directory 分支对齐：目录不在盘上就拒绝（落盘后的下次
+    // 启动 resolveSessionRuntimeDirectory 也会因目录缺失而失败，提前给明确错）。
+    if (!existsSync(targetProject.workDirectory)) {
+      throw moveRequestError(
+        `PH project ${targetProject.id} work directory does not exist: ${targetProject.workDirectory}`,
+        'ph_project_directory_missing',
+        409,
+      );
+    }
+    targetDirectory = targetProject.workDirectory;
+  } else {
+    targetDirectory = await resolvePhProjectDirectory(target.openDirectory); // 400 不存在
+  }
+
+  // ── 批量预校验（全部通过才动手，绝不部分改归属）──────────────────
+  const index = await readIndex(PH_AGENT_ID);
+  const recordsById = new Map(
+    (index?.sessions || [])
+      .filter((record) => cleanSessionText(record?.id))
+      .map((record) => [cleanSessionText(record?.id), record]),
+  );
+  const store = await readPhProjectStore();
+  const projectsById = new Map(store.projects.map((project) => [project.id, project]));
+
+  const toMove = [];
+  for (const sessionId of uniqueSessionIds) {
+    const record = recordsById.get(sessionId);
+    if (!record) {
+      throw moveRequestError(`Unknown session: ${sessionId}`, 'ph_session_unknown', 404);
+    }
+    if (recordMatchesMoveTarget(record, targetType, targetProject?.id || '', targetDirectory)) {
+      continue; // 已在目标集合：no-op 成员，不动实例不改索引
+    }
+    const sourceProjectId = cleanSessionText(record?.projectId);
+    let currentDirectory;
+    if (sourceProjectId) {
+      const sourceProject = projectsById.get(sourceProjectId) || null;
+      if (!sourceProject) {
+        throw moveRequestError(
+          `Session ${sessionId} belongs to unknown PH project ${sourceProjectId}`,
+          'ph_session_source_project_unknown',
+          409,
+        );
+      }
+      currentDirectory = sourceProject.workDirectory;
+    } else {
+      currentDirectory = cleanSessionText(record?.openDirectory);
+      if (!currentDirectory) {
+        throw moveRequestError(
+          `Session ${sessionId} has no resolvable working directory`,
+          'ph_session_directory_unresolved',
+          409,
+        );
+      }
+    }
+    if (!sameNormalizedDirectory(currentDirectory, targetDirectory)) {
+      throw moveRequestError(
+        `Session ${sessionId} belongs to ${currentDirectory}; move target directory is ${targetDirectory} (cross-directory moves are not supported)`,
+        'ph_session_cross_directory',
+        409,
+      );
+    }
+    toMove.push({ sessionId, sourceProjectId });
+  }
+
+  // 全员 no-op：归属无改动成功，不触碰 runtime、不重写索引、不递增 revision。
+  if (toMove.length === 0) {
+    return {
+      movedSessionIds: [],
+      releasedSessionIds: [],
+      revision: Number(index?.revision) || 0,
+      target: describeMoveTarget(targetType, targetProject, targetDirectory),
+    };
+  }
+
+  // ── 与既有归属释放窗口互斥（项目级 + 会话级，防改绑/移动并发竞态）──
+  const involvedProjectIds = new Set(toMove.map((item) => item.sourceProjectId).filter(Boolean));
+  if (targetProject) involvedProjectIds.add(targetProject.id);
+  for (const projectId of involvedProjectIds) {
+    const activeGate = getPhProjectGateInfo(projectId);
+    if (activeGate) {
+      throw ownershipGateError(activeGate, `PH project ${projectId} is in an ownership transfer window`);
+    }
+  }
+  for (const item of toMove) {
+    const activeGate = getPhSessionGateInfo(item.sessionId);
+    if (activeGate) {
+      throw ownershipGateError(activeGate, `Session ${item.sessionId} is in an ownership transfer window`);
+    }
+  }
+
+  // ── 释放窗口（门闩建立 → busy 探测 → 精确释放 → 落盘）────────────
+  const movingIds = toMove.map((item) => item.sessionId);
+  const plansById = new Map(toMove.map((item) => [item.sessionId, item]));
+  const moveGateKey = `move:${crypto.randomUUID()}`;
+  const conflictGate = beginPhOwnershipGate(
+    moveGateKey,
+    [...involvedProjectIds],
+    movingIds,
+    PH_MOVE_GATE_CODE,
+    'PH session ownership move is in progress; retry after it completes',
+  );
+  if (conflictGate) {
+    throw ownershipGateError(conflictGate, 'PH sessions move conflicts with an in-flight ownership transfer');
+  }
+  try {
+    // busy 探测：全部存活实例先探一遍再动手，杜绝「释放了一半才发现 busy」。
+    const liveRuntimes = [];
+    for (const sessionId of movingIds) {
+      const runtime = getRuntime(PH_AGENT_ID, sessionId);
+      if (runtime && isRuntimeRunning(runtime)) liveRuntimes.push(runtime);
+    }
+    for (const runtime of liveRuntimes) {
+      if (!runtime.viewerAgentId) {
+        // 存活但无 viewer 身份（启动中）：无法探测，按 busy 拒绝（fail-closed）
+        throw moveRequestError(
+          `Sessions are busy (runtime_starting); move is rejected: session=${runtime.selectedSessionId}`,
+          'ph_sessions_busy',
+          409,
+        );
+      }
+      const probe = await _probeRuntimeBusy(runtime.viewerAgentId, readViewer);
+      if (probe.busy) {
+        throw moveRequestError(
+          `Sessions are busy (${probe.reason}); move is rejected: session=${runtime.selectedSessionId}`,
+          'ph_sessions_busy',
+          409,
+        );
+      }
+    }
+
+    // 精确释放：带 sessionId + waitForPersistence，共享进程兄弟会话不受影响。
+    // 任一持久化确认失败即抛错——归属保持原样，调用方收到的就是失败。
+    const releasedSessionIds = [];
+    for (const runtime of liveRuntimes) {
+      await stopAgent(PH_AGENT_ID, runtime.selectedSessionId, { waitForPersistence: true });
+      releasedSessionIds.push(runtime.selectedSessionId);
+    }
+
+    // 落盘：门闩建立前的预读一律视为过期，锁内按 fresh 事实全量重验——
+    // 目标（项目存在/未归档/目录在盘，或目录目标仍在盘）、会话仍在、归属
+    // 未被并发改变、逐会话有效目录（来源项目表现值或记录 openDirectory）
+    // 仍与目标目录一致（窗口前按陈旧目录通过的预校验在这里被拦截）。
+    // 任一不满足立即抛错——索引不写，归属不变。
+    const updatedIndex = await updateIndex(PH_AGENT_ID, async (current) => {
+      const freshStore = await readPhProjectStore();
+      if (targetType === 'project') {
+        const freshTarget = freshStore.projects.find((project) => project.id === targetProject.id) || null;
+        if (!freshTarget) {
+          throw moveRequestError(`Unknown project: ${targetProject.id}`, 'ph_project_unknown', 404);
+        }
+        if (freshTarget.archived) {
+          throw moveRequestError(
+            `PH project ${targetProject.id} is archived; cannot move sessions into an archived project`,
+            'ph_project_archived',
+            409,
+          );
+        }
+        if (!existsSync(cleanSessionText(freshTarget.workDirectory))) {
+          throw moveRequestError(
+            `PH project ${freshTarget.id} work directory does not exist: ${freshTarget.workDirectory}`,
+            'ph_project_directory_missing',
+            409,
+          );
+        }
+        targetProject = freshTarget;
+        targetDirectory = cleanSessionText(freshTarget.workDirectory);
+      } else if (!existsSync(targetDirectory)) {
+        throw moveRequestError(`Target directory does not exist: ${targetDirectory}`, 'ph_project_directory_missing', 409);
+      }
+      const currentIds = new Set((current.sessions || []).map((record) => cleanSessionText(record?.id)));
+      for (const sessionId of movingIds) {
+        if (!currentIds.has(sessionId)) {
+          throw moveRequestError(`Unknown session: ${sessionId}`, 'ph_session_unknown', 404);
+        }
+      }
+      const freshProjectDirs = new Map(
+        freshStore.projects.map((project) => [project.id, cleanSessionText(project.workDirectory)]),
+      );
+      let changed = false;
+      const nextSessions = (current.sessions || []).map((record) => {
+        const sessionId = cleanSessionText(record?.id);
+        if (!plansById.has(sessionId)) return record;
+        if (recordMatchesMoveTarget(record, targetType, targetProject?.id || '', targetDirectory)) {
+          return record; // 已在目标（幂等重试）：不再改写
+        }
+        const currentProjectId = cleanSessionText(record?.projectId);
+        if (currentProjectId !== plansById.get(sessionId).sourceProjectId) {
+          // 窗口内归属被并发改变：拒绝继续，绝不盲目覆写
+          throw moveRequestError(
+            `Session ${sessionId} ownership changed during the move window`,
+            'ph_sessions_move_conflict',
+            409,
+          );
+        }
+        const currentDirectory = currentProjectId
+          ? (freshProjectDirs.get(currentProjectId) || '')
+          : cleanSessionText(record?.openDirectory);
+        if (!currentDirectory || !sameNormalizedDirectory(currentDirectory, targetDirectory)) {
+          throw moveRequestError(
+            `Session ${sessionId} effective directory (${currentDirectory || 'unresolved'}) no longer matches the move target (${targetDirectory}); retry the move`,
+            'ph_sessions_move_conflict',
+            409,
+          );
+        }
+        changed = true;
+        return applyMoveOwnership(record, targetType, targetProject, targetDirectory);
+      });
+      if (!changed) return current;
+      return { ...current, sessions: nextSessions };
+    });
+
+    // 从落盘后的事实回读实际归属（幂等重试时也如实报告）
+    const movedSessionIds = (updatedIndex?.sessions || [])
+      .filter((record) => plansById.has(cleanSessionText(record?.id))
+        && recordMatchesMoveTarget(record, targetType, targetProject?.id || '', targetDirectory))
+      .map((record) => cleanSessionText(record?.id));
+
+    return {
+      movedSessionIds,
+      releasedSessionIds,
+      revision: Number(updatedIndex?.revision) || 0,
+      target: describeMoveTarget(targetType, targetProject, targetDirectory),
+    };
+  } finally {
+    endPhOwnershipGate(moveGateKey);
+  }
+}
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 // 与既有 ph_project 路由同款守卫：agentId 缺省 programming-helper，
@@ -786,6 +1238,26 @@ export function setupPhProjectRoutes(app, express, deps = {}) {
         project: result.project,
         releasedSessionIds: result.releasedSessionIds,
         unchanged: result.unchanged,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/protoclaw/ph_project/sessions_move', express.json(), async (req, res, next) => {
+    try {
+      const guardError = phProjectAgentIdGuard(req.body?.agentId);
+      if (guardError) throw guardError;
+      const result = await movePhSessions({
+        sessionIds: req.body?.sessionIds,
+        target: req.body?.target,
+      }, deps);
+      res.json({
+        ok: true,
+        movedSessionIds: result.movedSessionIds,
+        releasedSessionIds: result.releasedSessionIds,
+        revision: result.revision,
+        target: result.target,
       });
     } catch (error) {
       next(error);

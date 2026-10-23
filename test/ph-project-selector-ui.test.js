@@ -1,11 +1,14 @@
 /**
- * Ticket 045 — PH 项目选择器与对话 UI（VM 沙箱驱动真实前端源码）。
+ * Ticket 045+ — PH 顶部双选择器与对话 UI（VM 沙箱驱动真实前端源码）。
  *
  * 覆盖：
- *  - 纯目录无回归（目录组 / 新对话 openDirectory / 无 projectId）
- *  - 同目录 D/A/B：两组选择器、切片隔离、新建对话动作显式 projectId
- *  - phSwitchProject 前端项目切换（无 ph_project/switch 调用）、未知项目拒绝
- *  - 新建项目对话框：取消无副作用 / 托管创建 / 外部目录 / 空项目可见
+ *  - 纯目录无回归（左目录选择器 + 右归属默认项 / 新对话 openDirectory / 无 projectId）
+ *  - 同目录 D/A/B：左目录树二级项目、右归属只列同目录项目、切片隔离、动作显式 projectId
+ *  - phSwitchProject 前端项目切换（同目录无 ph_project/switch）、未知项目拒绝
+ *  - 跨目录项目（左树二级）：目录位置跟随（switch）+ 项目目标，一次切换两者
+ *  - 项目绑定目录（含托管）：清单收录、纯视图导航（不写 workspace_state/不 switch）
+ *  - 目录本体点击进默认集合（不恢复上次项目）
+ *  - 新建项目对话框：默认当前目录 / 显式托管 / 浏览其他目录 / 无当前目录不无声指定
  *  - 名称相同 ID 独立
  *  - typed target 不被 workspace_state.openDirectory 漂移覆盖（轮询参数）
  *  - 搜索归属身份 + 快速切换 stale 拒绝
@@ -22,7 +25,9 @@ const flush = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise(s
 /** 新建项目对话框的智能元素：querySelector 按选择器映射到预置桩。 */
 function createDialogDom() {
   const nameInput = { value: '', focus() {} };
-  const dirInput = { value: '' };
+  const modeRadio = { value: '', checked: false };
+  const browseRadio = { value: 'browse', checked: false };
+  const browsePathEl = { textContent: '' };
   const errorEl = { hidden: true, textContent: '' };
   const submitBtn = { disabled: false };
   const form = { listeners: {}, addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); } };
@@ -30,7 +35,9 @@ function createDialogDom() {
   const cancelBtn = { listeners: {}, addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); } };
   const refs = {
     '#ph-new-project-name': nameInput,
-    '#ph-new-project-dir': dirInput,
+    'input[name="ph-new-project-dir-mode"]:checked': modeRadio,
+    'input[name="ph-new-project-dir-mode"][value="browse"]': browseRadio,
+    '.ph-new-project-browse-path': browsePathEl,
     '.ph-new-project-error': errorEl,
     'button[type="submit"]': submitBtn,
     'form': form,
@@ -49,7 +56,7 @@ function createDialogDom() {
     created.push(el);
     return el;
   };
-  return { refs, makeElement, created, nameInput, dirInput, errorEl, submitBtn, form, browse, cancelBtn };
+  return { refs, makeElement, created, nameInput, modeRadio, browseRadio, browsePathEl, errorEl, submitBtn, form, browse, cancelBtn };
 }
 
 /**
@@ -78,6 +85,8 @@ function createSetup({ entities = [], target = null, openDirectory = '', phProje
   const searchPanel = { innerHTML: '' };
   const dialog = createDialogDom();
   const openContainer = { innerHTML: '' };
+  let invokeResult = null;
+  const invokeCalls = [];
 
   const ctx = createFrontendSandbox({
     URLSearchParams, marked,
@@ -109,6 +118,7 @@ function createSetup({ entities = [], target = null, openDirectory = '', phProje
     setTimeout: (fn) => { fn(); return 0; },
     clearTimeout() {},
     allAgents: [agent],
+    invoke: async (mode) => { invokeCalls.push(mode); return invokeResult; },
     fetch(url, opts) {
       fetchLog.push({ url, opts });
       return new Promise((resolve) => requests.push({ url, opts, resolve }));
@@ -145,16 +155,24 @@ function createSetup({ entities = [], target = null, openDirectory = '', phProje
     ctx.__agent = currentAgent();
     return ctx.run('_renderProgrammingHelperSessionList(__agent, {}, { desc: "d" })');
   };
-  return { ctx, agent, currentAgent, workspaceState, requests, fetchLog, alerts, cardCalls, tabsRoot, searchPanel, dialog, render };
+  return {
+    ctx, agent, currentAgent, workspaceState, requests, fetchLog, alerts, cardCalls, tabsRoot, searchPanel, dialog, render,
+    setInvokeResult: (result) => { invokeResult = result; },
+    invokeCalls,
+  };
 }
 
 const resolve = async (entry, data, ok = true) => {
-  entry.resolve({ ok, status: ok ? 200 : 500, json: async () => data });
+  entry.resolve({
+    ok, status: ok ? 200 : 500,
+    json: async () => data,
+    text: async () => (typeof data === 'string' ? data : JSON.stringify(data)),
+  });
   await flush();
 };
 
-describe('045 selector — 纯目录无回归', () => {
-  it('单一目录：目录组 + 常驻下拉 + 新建对话携带 openDirectory 而非 projectId', () => {
+describe('双选择器 — 纯目录无回归', () => {
+  it('单一目录：左目录项 + 右「目录对话」默认项 active + 新建对话携带 openDirectory 而非 projectId', () => {
     const s = createSetup({
       openDirectory: 'D:/alpha',
       phProjects: [{ openDirectory: 'D:/alpha' }],
@@ -165,12 +183,25 @@ describe('045 selector — 纯目录无回归', () => {
     });
     const html = s.render();
     assert.match(html, /Dir chat/);
-    // 常驻下拉：目录组（旧行为的目录条目仍在）+ 新建项目入口
-    assert.match(html, /ph-project-dropdown/);
-    assert.match(html, /ph-project-dropdown-group-label[^>]*>目录</);
-    assert.doesNotMatch(html, /ph-project-dropdown-group-label[^>]*>项目</);
-    assert.match(html, /ph-project-dropdown-new/);
+    // 双选择器：左目录 / 右归属
+    assert.match(html, /ph-dir-selector/);
+    assert.match(html, /ph-org-selector/);
+    // 左：目录项（无项目时不渲染二级展开）；触发器为 button（键盘可达）
+    assert.match(html, /ph-dir-item[^>]*data-dir-id="dir:d:\/alpha"/);
+    assert.doesNotMatch(html, /ph-dir-expand/);
+    assert.match(html, /<button[^>]*ph-project-dropdown-trigger[^>]*aria-expanded="false"/);
+    // 左：打开目录…入口置顶（不埋在目录清单尾部）+ banner 文案
+    assert.ok(html.indexOf('打开目录…') < html.indexOf('ph-dir-item'), 'open-directory entry pinned above the directory list');
+    // 键盘可达：可选择菜单项带 role=menuitem + tabindex；key handler 仅在
+    // 目标为自身时响应（不吞行内 button 的 Space 原生激活）
+    assert.match(html, /role="menuitem" tabindex="0" onkeydown="if\(event\.target===this/);
+    assert.match(html, /ph-dir-item[^>]*role="menuitem"/);
+    assert.match(html, /ph-org-item[^>]*role="menuitem"/);
+    assert.match(html, /ph-banner-btn[^>]*>打开目录</);
+    // 右：目录对话默认项 active + 新建/管理入口
+    assert.match(html, /ph-org-directory active/);
     assert.match(html, /新建项目…/);
+    assert.match(html, /管理项目…/);
     // 新对话动作：目录身份（openDirectory 有值，无 projectId 键）
     const action = /data-workspace-action="([^"]+)"/.exec(html)[1];
     const parsed = JSON.parse(action.replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
@@ -181,18 +212,19 @@ describe('045 selector — 纯目录无回归', () => {
   });
 });
 
-describe('045 selector — 同目录 D/A/B', () => {
+describe('双选择器 — 同目录 D/A/B', () => {
   const entities = [
     { id: 'prj_A', name: 'Alpha', workDirectory: 'D:/shared', createdAt: '2026-10-01', updatedAt: '2026-10-02' },
     { id: 'prj_B', name: 'Beta', workDirectory: 'D:/shared', createdAt: '2026-10-01', updatedAt: '2026-10-02' },
+    { id: 'prj_C', name: 'Cross', workDirectory: 'D:/other', createdAt: '2026-10-01', updatedAt: '2026-10-02' },
   ];
   const base = {
     entities,
     openDirectory: 'D:/shared',
-    phProjects: [{ openDirectory: 'D:/shared' }],
+    phProjects: [{ openDirectory: 'D:/shared' }, { openDirectory: 'D:/other' }],
   };
 
-  it('项目目标：两组并存、active 归属、切片只含项目会话、动作显式 projectId', () => {
+  it('项目目标：左目录树含二级项目、右归属只列同目录项目（不跨目录）、active 归属、动作显式 projectId', () => {
     const s = createSetup({
       ...base,
       target: { type: 'project', id: 'prj_A' },
@@ -202,16 +234,29 @@ describe('045 selector — 同目录 D/A/B', () => {
       },
     });
     const html = s.render();
-    // 两组：目录（D:/shared 桶）+ 项目（Alpha/Beta）
-    assert.match(html, /ph-project-dropdown-group-label[^>]*>目录</);
-    assert.match(html, /ph-project-dropdown-group-label[^>]*>项目</);
-    assert.match(html, /data-project-id="dir:d:\/shared"/);
-    assert.match(html, /data-project-id="prj_A"/);
-    assert.match(html, /data-project-id="prj_B"/);
-    // active 是 prj_A（项目目标切换后目录桶不 active）
-    assert.match(html, /ph-project-dropdown-item active" data-project-id="prj_A"/);
-    assert.doesNotMatch(html, /ph-project-dropdown-item active" data-project-id="dir:d:\/shared"/);
-    // 头部显示项目名（不是目录叶名）
+    const dirSeg = html.slice(0, html.indexOf('ph-org-selector'));
+    const orgSeg = html.slice(html.indexOf('ph-org-selector'));
+    // 左：目录树 —— shared 目录行 + 二级（默认项 + Alpha/Beta）；other 目录行 + Cross
+    assert.match(dirSeg, /ph-dir-item[^>]*data-dir-id="dir:d:\/shared"/);
+    assert.match(dirSeg, /ph-dir-item[^>]*data-dir-id="dir:d:\/other"/);
+    const subStart = dirSeg.indexOf('data-subprojects-for="dir:d:/shared"');
+    const subEnd = dirSeg.indexOf('<div class="ph-project-dropdown-item ph-dir-item', subStart);
+    const sharedSub = dirSeg.slice(subStart, subEnd < 0 ? undefined : subEnd);
+    assert.ok(subStart >= 0, 'shared dir subprojects block exists');
+    assert.match(sharedSub, /ph-dir-sub-default[^>]*data-dir-id="dir:d:\/shared"/, 'sub menu has the default directory entry');
+    assert.match(sharedSub, /data-project-id="prj_A"/);
+    assert.match(sharedSub, /data-project-id="prj_B"/);
+    assert.doesNotMatch(sharedSub, /prj_C/);
+    // 左：当前目录 active = 项目绑定目录（shared），右：项目 active
+    assert.match(dirSeg, /ph-dir-item active" data-dir-id="dir:d:\/shared"/);
+    // 右：新建/管理入口置顶 + 目录对话（非 active）+ Alpha(active) + Beta；Cross 不跨目录出现
+    assert.ok(orgSeg.indexOf('新建项目…') < orgSeg.indexOf('ph-org-directory'), 'new/manage entries pinned above the org list');
+    assert.ok(orgSeg.indexOf('管理项目…') < orgSeg.indexOf('ph-org-directory'));
+    assert.match(orgSeg, /ph-org-directory[^>]*>/);
+    assert.match(orgSeg, /ph-org-item active" data-project-id="prj_A"/);
+    assert.match(orgSeg, /data-project-id="prj_B"/);
+    assert.doesNotMatch(orgSeg, /prj_C/);
+    // 头部归属显示项目名
     assert.match(html, /ph-project-header-name[^>]*>Alpha</);
     // 切片只含项目会话（目录会话不在项目切片内）
     assert.match(html, /A chat/);
@@ -224,7 +269,7 @@ describe('045 selector — 同目录 D/A/B', () => {
     assert.ok(s.cardCalls.some((args) => args[2] === 'prj_A'));
   });
 
-  it('目录目标（同目录）：目录组 active、动作走 openDirectory、无 projectId', () => {
+  it('目录目标（同目录）：左目录行 active、右目录对话默认项 active、动作走 openDirectory、无 projectId', () => {
     const s = createSetup({
       ...base,
       target: { type: 'dir', id: 'dir:d:/shared' },
@@ -234,7 +279,9 @@ describe('045 selector — 同目录 D/A/B', () => {
       },
     });
     const html = s.render();
-    assert.match(html, /ph-project-dropdown-item active" data-project-id="dir:d:\/shared"/);
+    assert.match(html, /ph-dir-item active" data-dir-id="dir:d:\/shared"/);
+    assert.match(html, /ph-org-directory active/);
+    assert.doesNotMatch(html, /ph-org-item active" data-project-id=/);
     const action = /data-workspace-action="([^"]+)"/.exec(html)[1];
     const parsed = JSON.parse(action.replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
     assert.equal(parsed.openDirectory, 'D:/shared');
@@ -242,7 +289,7 @@ describe('045 selector — 同目录 D/A/B', () => {
     assert.match(html, /Dir chat/);
   });
 
-  it('前端项目切换：按 projectId 拉切片、不调用 ph_project/switch、目标持久化', async () => {
+  it('前端项目切换（同目录）：按 projectId 拉切片、不调用 ph_project/switch、目标持久化', async () => {
     const s = createSetup({ ...base, target: { type: 'project', id: 'prj_A' },
       sessionsMeta: { sessions: [], sessionProjectId: 'prj_A', sessionTotal: 0, mainTotal: 0, archivedTotal: 0 } });
     const switched = s.ctx.run('window.phSwitchProject("prj_B")');
@@ -251,12 +298,51 @@ describe('045 selector — 同目录 D/A/B', () => {
     assert.ok(req, 'project slice fetch should fire');
     assert.match(req.url, /projectId=prj_B/);
     assert.doesNotMatch(req.url, /projectDir=/);
-    assert.ok(!s.fetchLog.some((f) => f.url.includes('/protoclaw/ph_project/switch')), 'project switch must stay frontend-only');
+    assert.ok(!s.fetchLog.some((f) => f.url.includes('/protoclaw/ph_project/switch')), 'same-dir project switch must stay frontend-only');
     await resolve(s.requests.at(-1), { sessions: [{ id: 'sB', title: 'B chat', updatedAt: '2026-10-22T09:00:00Z', projectId: 'prj_B', messageCount: 1 }], sessionProjectId: 'prj_B', sessionTotal: 1, mainTotal: 1, archivedTotal: 0 });
     await switched;
     assert.equal(s.currentAgent().workspace_sessions.sessionProjectId, 'prj_B');
     const stored = s.ctx.run(`localStorage.getItem('protoclaw:ph-browsing-target:programming-helper')`);
     assert.equal(JSON.parse(stored).id, 'prj_B');
+  });
+
+  it('跨目录项目（左树二级）：目录位置跟随（switch）+ 项目目标，一次切换两者', async () => {
+    const s = createSetup({ ...base, target: { type: 'project', id: 'prj_A' },
+      sessionsMeta: { sessions: [], sessionProjectId: 'prj_A', sessionTotal: 0, mainTotal: 0, archivedTotal: 0 } });
+    const switched = s.ctx.run('window.phSwitchProject("prj_C")');
+    await flush();
+    // 1) 目录位置切换：switch 调用（registry 目录 d:/other）
+    const switchReq = s.fetchLog.find((f) => f.url.includes('/protoclaw/ph_project/switch'));
+    assert.ok(switchReq, 'cross-dir project must switch the workspace directory');
+    assert.deepEqual(JSON.parse(switchReq.opts.body), { agentId: 'programming-helper', projectId: 'dir:d:/other' });
+    await resolve(s.requests[0], { state: { openDirectory: 'D:/other', phProjects: [{ openDirectory: 'D:/shared' }, { openDirectory: 'D:/other' }] } });
+    // 2) 项目切片（projectId）
+    const req = s.fetchLog.find((f) => f.url.includes('/protocloud') || f.url.includes('/protoclaw/prebuilt_sessions'));
+    assert.match(req.url, /projectId=prj_C/);
+    await resolve(s.requests.at(-1), { sessions: [], sessionProjectId: 'prj_C', sessionTotal: 0, mainTotal: 0, archivedTotal: 0 });
+    await switched;
+    const stored = s.ctx.run(`localStorage.getItem('protoclaw:ph-browsing-target:programming-helper')`);
+    assert.equal(JSON.parse(stored).id, 'prj_C');
+    // 双选择器同步：左 = other 目录，右 = Cross 项目
+    const html = s.render();
+    assert.match(html, /ph-dir-item active" data-dir-id="dir:d:\/other"/);
+    assert.match(html, /ph-org-item active" data-project-id="prj_C"/);
+  });
+
+  it('目录本体点击进默认集合：不恢复上次项目', async () => {
+    const s = createSetup({ ...base, target: { type: 'project', id: 'prj_A' },
+      sessionsMeta: { sessions: [], sessionProjectId: 'prj_A', sessionTotal: 0, mainTotal: 0, archivedTotal: 0 } });
+    const switched = s.ctx.run('window.phSwitchProject("dir:d:/shared")');
+    await flush();
+    assert.ok(s.fetchLog.some((f) => f.url.includes('/protoclaw/ph_project/switch')));
+    await resolve(s.requests[0], { state: { openDirectory: 'D:/shared', phProjects: [{ openDirectory: 'D:/shared' }, { openDirectory: 'D:/other' }] } });
+    await resolve(s.requests.at(-1), { sessions: [{ id: 'sD2', title: 'Back to dir', updatedAt: '2026-10-22T10:00:00Z', openDirectory: 'D:/shared', messageCount: 1 }], sessionProjectId: '', sessionTotal: 1, mainTotal: 1, archivedTotal: 0 });
+    await switched;
+    const stored = s.ctx.run(`localStorage.getItem('protoclaw:ph-browsing-target:programming-helper')`);
+    assert.equal(JSON.parse(stored).id, 'dir:d:/shared', 'directory click resets to the default collection');
+    const html = s.render();
+    assert.match(html, /ph-org-directory active/);
+    assert.doesNotMatch(html, /ph-org-item active" data-project-id=/);
   });
 
   it('未知项目：显式失败（不退回另一个目标、不发切片请求）', async () => {
@@ -270,11 +356,95 @@ describe('045 selector — 同目录 D/A/B', () => {
   });
 });
 
-describe('045 — 新建项目对话框', () => {
+describe('双选择器 — 项目绑定目录（含托管）', () => {
+  const managedDir = 'D:/data/workspaces/ph-projects/prj_M';
+  const entities = [
+    { id: 'prj_A', name: 'Alpha', workDirectory: 'D:/shared', createdAt: '2026-10-01', updatedAt: '2026-10-02' },
+    { id: 'prj_M', name: 'Managed One', workDirectory: managedDir, directorySource: 'managed', createdAt: '2026-10-01', updatedAt: '2026-10-02' },
+  ];
+
+  it('清单收录项目绑定目录（含托管），不写目录注册表、不混入目录会话桶', () => {
+    const s = createSetup({
+      entities,
+      openDirectory: 'D:/shared',
+      phProjects: [{ openDirectory: 'D:/shared' }],
+      sessionsMeta: { sessions: [], sessionProjectId: '', sessionTotal: 0, mainTotal: 0, archivedTotal: 0 },
+    });
+    const html = s.render();
+    // 左清单含托管目录条目 + 其二级项目；托管目录不在 workspace phProjects 里
+    assert.match(html, /ph-dir-item[^>]*data-dir-id="dir:d:\/data\/workspaces\/ph-projects\/prj_m"/);
+    assert.match(html, /data-subprojects-for="dir:d:\/data\/workspaces\/ph-projects\/prj_m"/);
+    assert.deepEqual(s.workspaceState.phProjects, [{ openDirectory: 'D:/shared' }], 'listing must not register the bound directory');
+  });
+
+  it('选择项目绑定目录：纯视图导航（无 switch、切片按 projectDir、目标持久化、workspace_state 不写）', async () => {
+    const s = createSetup({
+      entities,
+      openDirectory: 'D:/shared',
+      phProjects: [{ openDirectory: 'D:/shared' }],
+      sessionsMeta: { sessions: [], sessionProjectId: '', sessionTotal: 0, mainTotal: 0, archivedTotal: 0 },
+    });
+    const switched = s.ctx.run('window.phSwitchProject("dir:d:/data/workspaces/ph-projects/prj_m")');
+    await flush();
+    assert.ok(!s.fetchLog.some((f) => f.url.includes('/protoclaw/ph_project/switch')), 'project-bound dir must not call ph_project/switch');
+    const req = s.fetchLog.find((f) => f.url.includes('/protoclaw/prebuilt_sessions'));
+    assert.ok(req, 'slice fetch should fire');
+    assert.match(decodeURIComponent(req.url), new RegExp('projectDir=' + managedDir.replace(/\//g, '\\/')));
+    await resolve(s.requests.at(-1), { sessions: [{ id: 'sM', title: 'Managed dir chat', updatedAt: '2026-10-22T08:00:00Z', openDirectory: managedDir, messageCount: 1 }], sessionProjectId: '', sessionTotal: 1, mainTotal: 1, archivedTotal: 0 });
+    await switched;
+    // workspace_state 不被写（无 openDirectory 变更）
+    assert.equal(s.workspaceState.openDirectory, 'D:/shared');
+    const stored = s.ctx.run(`localStorage.getItem('protoclaw:ph-browsing-target:programming-helper')`);
+    assert.equal(JSON.parse(stored).id, 'dir:d:/data/workspaces/ph-projects/prj_m');
+    // 渲染：目录视图（左 active = 托管目录；右 = 目录对话默认 + 同目录项目 prj_M）
+    const html = s.render();
+    assert.match(html, /Managed dir chat/);
+    assert.match(html, /ph-dir-item active" data-dir-id="dir:d:\/data\/workspaces\/ph-projects\/prj_m"/);
+    assert.match(html, /ph-org-directory active/);
+    const orgSeg = html.slice(html.indexOf('ph-org-selector'));
+    assert.match(orgSeg, /data-project-id="prj_M"/);
+    // 新对话：目录身份（托管目录 openDirectory）
+    const action = /data-workspace-action="([^"]+)"/.exec(html)[1];
+    const parsed = JSON.parse(action.replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+    assert.equal(parsed.openDirectory, managedDir);
+    assert.equal(parsed.projectId, undefined);
+  });
+
+  it('持久化目标指向项目绑定目录：重载不回退（stale 防污染）', () => {
+    const s = createSetup({
+      entities,
+      openDirectory: 'D:/shared',
+      phProjects: [{ openDirectory: 'D:/shared' }],
+      target: { type: 'dir', id: 'dir:d:/data/workspaces/ph-projects/prj_m' },
+      sessionsMeta: { sessions: [{ id: 'sM', title: 'Managed dir chat', updatedAt: '2026-10-22T08:00:00Z', openDirectory: managedDir, messageCount: 1 }], sessionProjectId: '', sessionTotal: 1, mainTotal: 1, archivedTotal: 0 },
+    });
+    const html = s.render();
+    assert.match(html, /ph-dir-item active" data-dir-id="dir:d:\/data\/workspaces\/ph-projects\/prj_m"/, 'stored project-bound dir target survives reload');
+  });
+
+  it('未知目录 id（既非注册桶也非项目绑定目录）：走旧 fall-through，服务端显式拒绝', async () => {
+    const s = createSetup({
+      entities,
+      openDirectory: 'D:/shared',
+      phProjects: [{ openDirectory: 'D:/shared' }],
+      sessionsMeta: { sessions: [], sessionProjectId: '', sessionTotal: 0, mainTotal: 0, archivedTotal: 0 },
+    });
+    const switched = s.ctx.run('window.phSwitchProject("dir:/nowhere")');
+    await flush();
+    const switchReq = s.fetchLog.find((f) => f.url.includes('/protoclaw/ph_project/switch'));
+    assert.ok(switchReq, 'unknown dir falls through to the switch endpoint');
+    await resolve(s.requests[0], 'unknown directory', false);
+    await switched;
+    assert.ok(s.alerts.some((m) => String(m).includes('切换项目失败') || String(m).includes('Failed')), 'server rejection surfaces visibly');
+  });
+});
+
+describe('双选择器 — 新建项目对话框', () => {
   const entities = [{ id: 'prj_A', name: 'Alpha', workDirectory: 'D:/shared', createdAt: '2026-10-01', updatedAt: '2026-10-02' }];
+  const base = { entities, phProjects: [{ openDirectory: 'D:/shared' }], openDirectory: 'D:/shared' };
 
   it('取消：对话框关闭、无网络副作用、无目标变更', async () => {
-    const s = createSetup({ entities, phProjects: [{ openDirectory: 'D:/shared' }], openDirectory: 'D:/shared' });
+    const s = createSetup(base);
     s.ctx.run('window.phOpenNewProjectDialog()');
     // created[0]=host, created[1]=overlay；取消按钮 click 绑定 close()
     const overlay = s.dialog.created[1];
@@ -285,10 +455,27 @@ describe('045 — 新建项目对话框', () => {
     assert.equal(stored, null);
   });
 
-  it('托管创建：名称必填、无 workDirectory 键、创建后进入空项目（不建会话）', async () => {
-    const s = createSetup({ entities, phProjects: [{ openDirectory: 'D:/shared' }], openDirectory: 'D:/shared' });
+  it('默认当前目录：radio 预选 current、提交携带当前目录路径', async () => {
+    const s = createSetup(base);
+    s.ctx.run('window.phOpenNewProjectDialog()');
+    const overlayHtml = s.dialog.created[1].innerHTML;
+    assert.match(overlayHtml, /value="current" checked/, 'current directory is the default selection');
+    assert.match(overlayHtml, /D:\/shared/);
+    s.dialog.nameInput.value = 'In Current';
+    Object.assign(s.dialog.modeRadio, { value: 'current', checked: true });
+    const job = s.dialog.form.listeners.submit[0]({ preventDefault() {} });
+    const createReq = s.fetchLog.find((f) => f.url.includes('/protoclaw/ph_project/project_create'));
+    assert.ok(createReq, 'create request fired');
+    assert.equal(JSON.parse(createReq.opts.body).workDirectory, 'D:/shared');
+    await resolve(s.requests.at(-1), { ok: false, error: 'stop here' });
+    await job;
+  });
+
+  it('托管显式选择：无 workDirectory 键、创建后进入空项目（不建会话）、双选择器同步', async () => {
+    const s = createSetup(base);
     s.ctx.run('window.phOpenNewProjectDialog()');
     s.dialog.nameInput.value = 'Managed';
+    Object.assign(s.dialog.modeRadio, { value: 'managed', checked: true });
     const submit = s.dialog.form.listeners.submit[0];
     const job = submit({ preventDefault() {} });
     const createReq = s.fetchLog.find((f) => f.url.includes('/protoclaw/ph_project/project_create'));
@@ -301,7 +488,7 @@ describe('045 — 新建项目对话框', () => {
     const listReq = s.fetchLog.find((f) => f.url.includes('/protoclaw/ph_project/projects'));
     assert.ok(listReq, 'entities refresh fired');
     await resolve(s.requests.at(-1), { ok: true, projects: [
-      { id: 'prj_new', name: 'Managed', workDirectory: 'D:/managed/prj_new', createdAt: '2026-10-23', updatedAt: '2026-10-23' },
+      { id: 'prj_new', name: 'Managed', workDirectory: 'D:/managed/prj_new', directorySource: 'managed', createdAt: '2026-10-23', updatedAt: '2026-10-23' },
       ...entities,
     ] });
     // 空项目切片
@@ -312,29 +499,57 @@ describe('045 — 新建项目对话框', () => {
     await job;
     const stored = s.ctx.run(`localStorage.getItem('protoclaw:ph-browsing-target:programming-helper')`);
     assert.equal(JSON.parse(stored).id, 'prj_new');
-    // 空项目可见：空态提示 + 新建对话按钮（显式 projectId）
+    // 空项目可见 + 双选择器同步（左=托管目录，右=Managed 项目 active）
     const html = s.render();
     assert.match(html, /workspace_feature_no_sessions/);
+    assert.match(html, /ph-dir-item active" data-dir-id="dir:d:\/managed\/prj_new"/);
+    assert.match(html, /ph-org-item active" data-project-id="prj_new"/);
     const action = /data-workspace-action="([^"]+)"/.exec(html)[1];
     const parsed = JSON.parse(action.replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
     assert.equal(parsed.projectId, 'prj_new');
   });
 
-  it('外部目录创建：携带 workDirectory', async () => {
-    const s = createSetup({ entities, phProjects: [{ openDirectory: 'D:/shared' }], openDirectory: 'D:/shared' });
+  it('其他目录（浏览）：选后 radio 联动、提交携带浏览路径', async () => {
+    const s = createSetup(base);
     s.ctx.run('window.phOpenNewProjectDialog()');
     s.dialog.nameInput.value = 'External';
-    s.dialog.dirInput.value = 'E:/ext';
+    s.setInvokeResult({ path: 'E:/ext' });
+    await (s.dialog.browse.listeners.click[0])();
+    assert.deepEqual(s.invokeCalls, ['select_directory']);
+    assert.equal(s.dialog.browseRadio.checked, true, 'browse radio auto-selects after picking a directory');
+    assert.equal(s.dialog.browsePathEl.textContent, 'E:/ext');
+    Object.assign(s.dialog.modeRadio, { value: 'browse', checked: true });
     const job = s.dialog.form.listeners.submit[0]({ preventDefault() {} });
     const createReq = s.fetchLog.find((f) => f.url.includes('/protoclaw/ph_project/project_create'));
-    const body = JSON.parse(createReq.opts.body);
-    assert.equal(body.workDirectory, 'E:/ext');
+    assert.equal(JSON.parse(createReq.opts.body).workDirectory, 'E:/ext');
     await resolve(s.requests.at(-1), { ok: false, error: 'stop here' });
     await job;
   });
 
+  it('browse 模式未选路径：本地校验，不发请求', async () => {
+    const s = createSetup(base);
+    s.ctx.run('window.phOpenNewProjectDialog()');
+    s.dialog.nameInput.value = 'X';
+    Object.assign(s.dialog.modeRadio, { value: 'browse', checked: true });
+    await s.dialog.form.listeners.submit[0]({ preventDefault() {} });
+    assert.ok(!s.fetchLog.some((f) => f.url.includes('project_create')));
+    assert.equal(s.dialog.errorEl.hidden, false);
+  });
+
+  it('无当前目录：不预选任何路径、未显式选择时拒绝提交（不无声指定）', async () => {
+    const s = createSetup({ entities: [], phProjects: [], openDirectory: '' });
+    s.ctx.run('window.phOpenNewProjectDialog()');
+    const overlayHtml = s.dialog.created[1].innerHTML;
+    assert.doesNotMatch(overlayHtml, /value="current"/, 'no current-directory option without a current directory');
+    s.dialog.nameInput.value = 'Nowhere';
+    Object.assign(s.dialog.modeRadio, { value: '', checked: false });
+    await s.dialog.form.listeners.submit[0]({ preventDefault() {} });
+    assert.ok(!s.fetchLog.some((f) => f.url.includes('project_create')), 'must not silently pick another path');
+    assert.equal(s.dialog.errorEl.hidden, false);
+  });
+
   it('名称为空：本地校验，不发请求', async () => {
-    const s = createSetup({ entities, phProjects: [{ openDirectory: 'D:/shared' }], openDirectory: 'D:/shared' });
+    const s = createSetup(base);
     s.ctx.run('window.phOpenNewProjectDialog()');
     s.dialog.nameInput.value = '  ';
     await s.dialog.form.listeners.submit[0]({ preventDefault() {} });
@@ -343,18 +558,35 @@ describe('045 — 新建项目对话框', () => {
   });
 });
 
-describe('045 — 名称相同 ID 独立', () => {
-  it('两个同名项目：下拉两条、切换按 ID 拉切片、持久化 ID', async () => {
+describe('双选择器 — 名称相同 ID 独立', () => {
+  it('两个同名项目（不同目录）：左树各挂各目录、右归属只列当前目录者、切换按 ID 拉切片、持久化 ID', async () => {
     const entities = [
       { id: 'prj_1', name: 'Same', workDirectory: 'D:/x', createdAt: '2026-10-01', updatedAt: '2026-10-01' },
       { id: 'prj_2', name: 'Same', workDirectory: 'D:/y', createdAt: '2026-10-01', updatedAt: '2026-10-01' },
     ];
-    const s = createSetup({ entities, phProjects: [{ openDirectory: 'D:/x' }], openDirectory: 'D:/x' });
+    const s = createSetup({ entities, phProjects: [{ openDirectory: 'D:/x' }, { openDirectory: 'D:/y' }], openDirectory: 'D:/x' });
     const html = s.render();
-    assert.equal((html.match(/data-project-id="prj_\d"/g) || []).length, 2);
+    // 左树：两个目录行，各带一个同名项目（子菜单首项是默认目录项）
+    const dirSeg = html.slice(0, html.indexOf('ph-org-selector'));
+    const xStart = dirSeg.indexOf('data-subprojects-for="dir:d:/x"');
+    const xEnd = dirSeg.indexOf('<div class="ph-project-dropdown-item ph-dir-item', xStart);
+    const subX = dirSeg.slice(xStart, xEnd < 0 ? undefined : xEnd);
+    assert.ok(xStart >= 0);
+    assert.match(subX, /ph-dir-sub-default/);
+    assert.match(subX, /data-project-id="prj_1"/);
+    assert.doesNotMatch(subX, /prj_2/);
+    // 右归属（当前目录 x）：只列 prj_1
+    const orgSeg = html.slice(html.indexOf('ph-org-selector'));
+    assert.match(orgSeg, /data-project-id="prj_1"/);
+    assert.doesNotMatch(orgSeg, /prj_2/);
     const switched = s.ctx.run('window.phSwitchProject("prj_2")');
     await flush();
-    const req = s.fetchLog.find((f) => f.url.includes('/protoclaw/prebuilt_sessions'));
+    // prj_2 跨目录（D:/y，registry）：先目录位置跟随，再项目切片
+    const switchReq = s.fetchLog.find((f) => f.url.includes('/protoclaw/ph_project/switch'));
+    assert.ok(switchReq, 'cross-dir project switches the workspace directory first');
+    assert.deepEqual(JSON.parse(switchReq.opts.body), { agentId: 'programming-helper', projectId: 'dir:d:/y' });
+    await resolve(s.requests[0], { state: { openDirectory: 'D:/y', phProjects: [{ openDirectory: 'D:/x' }, { openDirectory: 'D:/y' }] } });
+    const req = s.fetchLog.filter((f) => f.url.includes('/protoclaw/prebuilt_sessions')).at(-1);
     assert.match(req.url, /projectId=prj_2/);
     await resolve(s.requests.at(-1), { sessions: [], sessionProjectId: 'prj_2', sessionTotal: 0, mainTotal: 0, archivedTotal: 0 });
     await switched;

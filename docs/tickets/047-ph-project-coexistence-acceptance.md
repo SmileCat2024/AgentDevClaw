@@ -1,6 +1,6 @@
 # 047 — 并存方案端到端回归与发布收尾
 
-状态：待实施。
+状态：已完成并归档（2026-10-23）。验收记录见文末。
 仓库：AgentDevClaw。前置：[046](046-ph-project-rebind-and-retirement.md)，以及 041–045 全部交付。
 共同契约：[目录对话与项目对话并存](2026-10-22-ph-project-coexistence.md)。
 
@@ -17,6 +17,8 @@
 | 三份配置 | D 目录层与 A/B 项目层各自生效，项目不继承目录层；同进程与 shared-global 下也不串配置 |
 | 保存、分支与 trim/summary | projectId/workspaceAgentId 继承且保存重启后仍在；目录会话仍无项目归属 |
 | 运行中实例改绑 | 无执行轮次的存活实例失效，后续运行用新目录；共享进程其他成员不受影响；busy 改绑明确失败 |
+| 双选择器与创建 | 目录二级菜单可直达默认集合或项目；右侧只列当前目录归属；创建默认当前目录，其他/托管目录显式选择，创建不建会话 |
+| 同目录对话整理 | 默认↔项目、项目↔项目支持单条/批量移动；历史与 Agent 绑定保留，目标配置后续生效；busy/排队/跨目录明确拒绝，其他共享实例不受影响 |
 | 归档、删除与回选 | A 操作不影响 D/B，外部目录保留，托管文件删除明确选择 |
 | 旧外围入口 | CLI 两套目录创建入口、桌面目录打开/新建、调度目录 latest、群聊目录候选继续原逻辑，不匹配同路径项目；ACP/Coder 原测试不回归 |
 | 异常资源 | 未知项目不回退目录；目录暂时不可用时项目与历史仍可见，执行明确报错 |
@@ -40,3 +42,12 @@
 ## 不做
 
 不运行真实用户迁移脚本，不做 Thread 化和历史链重建，不改旧调度项目 ID，不增加 ACP/CLI/桌面/群聊项目能力，不自动部署、push 或重启正式服务。若验收发现新增能力必须改变既有外围契约，停止并报告，不能顺手扩大边界。
+
+## 验收记录（2026-10-23）
+
+- 全量 `npm run test:core`：4976 项，0 失败、4 项跳过（套件既有跳过项）。独立复跑确认。
+- 真实 Chromium 浏览器检查 `test/ph-project-browser-check.mjs`（隔离 fixture：真实 session index + 真实 `sessions_move` 路由）：PASS。覆盖双选择器渲染与同步、目录二级展开、一键切换、目录本体回默认集合、新建项目默认当前目录、批量/单条真实索引归属往返、busy 409 可读提示且索引零变化、错误 payload.error、键盘操作、重载持久化、深浅主题 × 1280/375 视口。
+- 定向回归：选择器 / 移动 / 上下文菜单 / 守卫共 96 项通过（`ph-project-session-move` / `ph-session-move-runtime` / `ph-session-move-ui` / `ph-project-selector-ui` / `frontend-ctx-menu-items` / `frontend-ph-project-guard`），含释放窗口并发 gate（重叠移动 / 新输入 / 派生 / 改绑·归档·删除双向互斥）、反向竞态（生命周期事务先行时锁内 fresh 重验）、真实共享进程按目标配置重装配且兄弟会话不受影响。
+- 矩阵逐行核对：升级无批量改写（workspace-normalize / workspace-projects）、同目录 D/A/B 互斥与同名不合并、三份配置不串层（含 shared-global）、保存分支 trim 继承归属、运行中实例改绑（ph-project-rebind-retirement）、归档删除不串组、旧外围入口原逻辑（CLI / 桌面 / 调度 / 群聊 / ACP / Coder 测试全绿，归属门闩在无窗口时空表短路不影响非 PH 流量）、异常资源显式失败不回退、投影与重启一致（typed target 不被轮询漂移覆盖、恢复卡片双向刷新）。
+- 收尾检查：`check:cycles` 0 新增环；`git diff --check` 通过；改动 JS 语法检查通过。
+- 生效范围：前端与 server 路由改动需整服重启后生效；本验收未重启正式服务、未推送。本机 Chromium 与 playwright 依赖版本不匹配时，浏览器检查经 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 指定本机 chromium 实体运行。

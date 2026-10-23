@@ -84,11 +84,14 @@ export async function getRecoverySessions(agentId) {
       entry.openDirectory = record.openDirectory;
       changed = true;
     }
-    // 归属身份补齐（ticket 044）：卡片条目从会话索引补 projectId——恢复
-    // 卡片只呈现身份，不改变对话归属（激活走会话自身记录）。原目录条目
-    // （记录无 projectId）不强制改写或补字段。
-    if (String(record.projectId || '').trim() && record.projectId !== entry.projectId) {
-      entry.projectId = String(record.projectId).trim();
+    // 归属身份双向刷新（ticket 044 + 归属转移）：索引记录是归属权威——
+    // 项目→默认目录的转移会清空 record.projectId，卡片条目必须同步清除旧
+    // projectId（只补不清会让卡片永远挂着已失效的项目徽标）。恢复卡片只
+    // 呈现身份，不改变对话归属（激活走会话自身记录）。
+    const recordProjectId = String(record.projectId || '').trim();
+    if (recordProjectId !== String(entry.projectId || '').trim()) {
+      if (recordProjectId) entry.projectId = recordProjectId;
+      else delete entry.projectId;
       changed = true;
     }
   }

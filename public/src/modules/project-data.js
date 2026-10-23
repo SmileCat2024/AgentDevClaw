@@ -380,11 +380,125 @@ function getPhBrowsingTarget(agent = getCurrentAgentRecord()) {
   if (stored && stored.type === 'dir' && String(stored.id || '').startsWith('dir:')) {
     const match = dirProjects.find((dir) => normDirId(dir) === stored.id);
     if (match) return { type: 'dir', id: stored.id, openDirectory: match };
+    // 项目绑定目录（含托管）也是合法目录目标：目录清单收录项目绑定目录，
+    // 但这类目录不写 workspace_state / 目录注册表——目标凭项目实体解析。
+    const boundEntity = (window.ClawFW.phProjectEntities?.projects || [])
+      .find((p) => !p.archived && p.openDirectory && normDirId(p.openDirectory) === stored.id);
+    if (boundEntity) return { type: 'dir', id: stored.id, openDirectory: boundEntity.openDirectory };
+    // 远程目录桶（ADR-0012）：既有远程目录能力与寻址保持——目标凭远程历史
+    // 桶解析，不因本地无此目录而静默回退（回退会把远程导航污染成本地目录）。
+    if (typeof getRemoteHistoryProjectBuckets === 'function') {
+      const remoteBucket = getRemoteHistoryProjectBuckets()
+        .find((bucket) => bucket?.openDirectory && normDirId(bucket.openDirectory) === stored.id);
+      if (remoteBucket) return { type: 'dir', id: stored.id, openDirectory: remoteBucket.openDirectory, remote: true };
+    }
   }
   // 目录回退：当前工作区目录 → 首个目录桶（旧版行为）
   if (openDirectory) return { type: 'dir', id: normDirId(openDirectory), openDirectory };
   if (dirProjects.length > 0) return { type: 'dir', id: normDirId(dirProjects[0]), openDirectory: dirProjects[0] };
   return null;
+}
+
+/**
+ * ── 顶部双选择器数据（目录决定位置，项目决定组织）────────────────────
+ */
+function phDirIdOf(directory) {
+  return 'dir:' + String(directory || '').replace(/\\/g, '/').toLowerCase();
+}
+
+/**
+ * 左侧目录选择器导航清单：目录桶（workspace phProjects 注册目录 + 远程目录桶）
+ * + 项目绑定目录（含托管，kind: 'projectBound'）。项目绑定目录只作导航清单
+ * 条目——不写 workspace_state、不进目录注册表、不混入目录会话桶；远程目录
+ * 不派生项目（不伪造远程项目）。每个条目携带其下非归档项目（二级展开）。
+ */
+function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
+  if (typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return [];
+  const projects = typeof getProgrammingHelperProjects === 'function'
+    ? getProgrammingHelperProjects(agent) : [];
+  const entries = [];
+  const byId = new Map();
+  for (const bucket of projects) {
+    if (bucket.type === 'project' || !bucket.openDirectory) continue;
+    const entry = {
+      id: phDirIdOf(bucket.openDirectory),
+      openDirectory: bucket.openDirectory,
+      name: getPathLeaf(bucket.openDirectory),
+      kind: 'registry',
+      remoteOnly: bucket.remoteOnly === true,
+      projects: [],
+    };
+    entries.push(entry);
+    byId.set(entry.id, entry);
+  }
+  for (const entity of (window.ClawFW.phProjectEntities?.projects || [])) {
+    if (entity.archived || !entity.openDirectory) continue;
+    const id = phDirIdOf(entity.openDirectory);
+    let entry = byId.get(id);
+    if (!entry) {
+      entry = {
+        id,
+        openDirectory: entity.openDirectory,
+        name: getPathLeaf(entity.openDirectory),
+        kind: 'projectBound',
+        remoteOnly: false,
+        projects: [],
+      };
+      entries.push(entry);
+      byId.set(id, entry);
+    }
+    if (!entry.remoteOnly) entry.projects.push(entity);
+  }
+  return entries;
+}
+
+/**
+ * 当前选中目录上下文（两个选择器的同步锚点）：项目目标 → 项目绑定目录；
+ * 目录目标 → 目标目录；无有效目标 → null（无当前目录，新建项目不得无声
+ * 指定其他路径）。
+ */
+function getPhCurrentDirectoryContext(agent = getCurrentAgentRecord()) {
+  const target = typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
+  if (target?.type === 'project' && target.project) {
+    return {
+      dirId: phDirIdOf(target.project.openDirectory),
+      openDirectory: target.project.openDirectory,
+      org: 'project',
+      projectId: target.project.id,
+    };
+  }
+  if (target?.type === 'dir' && target.openDirectory) {
+    return { dirId: target.id, openDirectory: target.openDirectory, org: 'directory', projectId: '' };
+  }
+  return null;
+}
+
+/** 同目录项目（右侧归属选择器候选）：非归档实体按归一化 workDirectory 匹配。 */
+function getPhProjectsInDirectory(openDirectory) {
+  const norm = String(openDirectory || '').replace(/\\/g, '/').toLowerCase();
+  if (!norm) return [];
+  return (window.ClawFW.phProjectEntities?.projects || [])
+    .filter((p) => !p.archived && p.openDirectory
+      && String(p.openDirectory).replace(/\\/g, '/').toLowerCase() === norm);
+}
+
+/**
+ * 项目绑定目录的呈现桶（渲染层用）：目录目标指向项目绑定目录（非注册目录桶）
+ * 时合成 directory 桶，仅驱动 surface 呈现与目录切片——不进目录注册表。
+ */
+function getPhProjectBoundDirectoryBucket(agent = getCurrentAgentRecord()) {
+  const target = typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
+  if (target?.type !== 'dir') return null;
+  const boundEntity = (window.ClawFW.phProjectEntities?.projects || [])
+    .find((p) => !p.archived && p.openDirectory && phDirIdOf(p.openDirectory) === target.id);
+  if (!boundEntity) return null;
+  return {
+    id: target.id,
+    type: 'directory',
+    openDirectory: boundEntity.openDirectory,
+    name: getPathLeaf(boundEntity.openDirectory),
+    projectBound: true,
+  };
 }
 
 /** 显式设置浏览目标（selector 选择 / 新建项目后进入）。 */

@@ -1,6 +1,14 @@
-// Isolated browser fixture for the PH project selector surface (ticket 045).
+// Isolated browser fixture for the PH dual-selector + session-move surface.
 // Real frontend modules + real CSS; curated API subset on an isolated data root
 // (AGENTDEV_DATA_DIR set before any server import). No real user data, no models.
+//
+// Sessions live in the REAL session index (server/shared/session-access.js):
+// seeds go through updateSessionIndex, the slice endpoint reads via
+// readSessionIndex, and sessions_move is the REAL route from
+// setupPhProjectRoutes — so browser-driven moves actually mutate the real
+// index and slice re-pulls reflect it (ownership round-trip, no mocks of the
+// move itself). Runtime lifecycle deps are injected fakes with a switchable
+// busy mode.
 import express from 'express';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -14,6 +22,7 @@ export async function startPhProjectFixture(port = 0) {
 
   const { setupPhProjectRoutes, createPhProject, listPhProjects } = await import('../server/routes/ph-projects.js');
   const { setupFeatureConfigRoutes } = await import('../server/routes/feature-config.js');
+  const { readSessionIndex, updateSessionIndex } = await import('../server/shared/session-access.js');
 
   const cwd = process.cwd().replace(/\\/g, '/');
   // 同目录 D/A/B：目录桶 + 两个项目共用同一物理目录
@@ -21,21 +30,53 @@ export async function startPhProjectFixture(port = 0) {
   const projB = await createPhProject({ name: 'Beta', workDirectory: cwd });
   const projects = await listPhProjects();
 
-  const dirSession = { id: 'sess_dir_1', title: 'Dir chat D', updatedAt: '2026-10-22T10:00:00.000Z', createdAt: '2026-10-20T00:00:00.000Z', openDirectory: cwd, messageCount: 4, archived: false };
-  const projectSessions = [
+  // 会话种子写入真实索引（sessions_move / 切片都对着这份索引工作）
+  const seedSessions = [
+    { id: 'sess_dir_1', title: 'Dir chat D', updatedAt: '2026-10-22T10:00:00.000Z', createdAt: '2026-10-20T00:00:00.000Z', openDirectory: cwd, messageCount: 4, archived: false },
     { id: 'sess_a_1', title: 'A1 project chat', updatedAt: '2026-10-22T11:00:00.000Z', createdAt: '2026-10-20T00:00:00.000Z', projectId: projA.id, messageCount: 2, archived: false },
     { id: 'sess_b_1', title: 'B1 project chat', updatedAt: '2026-10-22T12:00:00.000Z', createdAt: '2026-10-20T00:00:00.000Z', projectId: projB.id, messageCount: 3, archived: false },
   ];
-  const allSessions = [dirSession, ...projectSessions];
+  await updateSessionIndex('programming-helper', (index) => ({ ...index, sessions: seedSessions }));
 
-  const captured = { sessions: [], search: [], actions: [] };
+  const captured = { sessions: [], search: [], actions: [], stopped: [] };
+  // 生命周期 deps 假件：默认无存活实例；busy 模式可切换（模拟执行中轮次）
+  const runtimeState = { runtime: null, running: false, viewer: null };
+  const deps = {
+    getAgentRuntime: () => runtimeState.runtime,
+    isManagedRuntimeRunning: () => runtimeState.running,
+    stopManagedAgent: async (_agentId, sessionId) => { captured.stopped.push(sessionId); runtimeState.runtime = null; runtimeState.running = false; },
+    readViewerJson: async (viewerPath) => {
+      if (runtimeState.viewer) return runtimeState.viewer(viewerPath);
+      if (viewerPath.endsWith('/notification')) return { callActive: false };
+      if (viewerPath.endsWith('/queued-inputs')) return [];
+      return {};
+    },
+  };
+
   const app = express();
-  setupPhProjectRoutes(app, express);
+  setupPhProjectRoutes(app, express, deps);
   setupFeatureConfigRoutes(app, express);
+  // 生产同款失败序列化（server.js 末段契约：code/message/error 字段形状）
+  const { buildLocalFailureResponse, readOperationMetadata } = await import('../server/shared/operation-contract.js');
+  app.use((error, req, res, _next) => {
+    const status = error.statusCode || error.status || 500;
+    res.status(status).json(buildLocalFailureResponse(error, readOperationMetadata(req)));
+  });
 
-  app.get('/protoclaw/prebuilt_sessions', (req, res) => {
+  // 目录切换（curated mock）：切换即返回目录 state（fixture 只有一个本地目录）
+  const wsState = { openDirectory: cwd, phProjects: [{ openDirectory: cwd }] };
+  app.post('/protoclaw/ph_project/switch', express.json(), (req, res) => {
+    captured.actions.push({ type: 'dir-switch', projectId: req.body?.projectId });
+    res.json({ ok: true, state: wsState });
+  });
+  app.get('/protoclaw/workspace_state', (_req, res) => res.json(wsState));
+
+  // 切片端点：从真实索引读取（移动后归属变化立即反映）
+  app.get('/protoclaw/prebuilt_sessions', async (req, res) => {
     const entry = { url: req.originalUrl };
     captured.sessions.push(entry);
+    const index = await readSessionIndex('programming-helper');
+    const allSessions = index.sessions || [];
     let sessions = [];
     let sessionProjectId = '';
     if (typeof req.query.projectId === 'string' && req.query.projectId) {
@@ -48,7 +89,7 @@ export async function startPhProjectFixture(port = 0) {
     }
     const main = sessions.filter((s) => !s.archived).length;
     res.json({
-      revision: 2, activeSessionId: null, sessions,
+      revision: index.revision, activeSessionId: index.activeSessionId || null, sessions,
       sessionProjectId, sessionTotal: sessions.length, mainTotal: main, archivedTotal: sessions.length - main,
     });
   });
@@ -107,6 +148,7 @@ export async function startPhProjectFixture(port = 0) {
     </script>
     <script src="/src/modules/project-data.js"></script>
     <script src="/src/modules/ph-project-actions.js"></script>
+    <script src="/src/modules/ph-session-move.js"></script>
     <script src="/src/modules/session-list-render.js"></script>
     <script src="/src/modules/ph-session-list.js"></script>
     <script src="/src/modules/dir-config-dialog.js"></script>
@@ -127,7 +169,20 @@ export async function startPhProjectFixture(port = 0) {
   await new Promise(resolve => server.once('listening', resolve));
   return {
     url: `http://127.0.0.1:${server.address().port}/fixture`,
-    dataDir, cwd, projA, projB, projects, captured,
+    dataDir, cwd, projA, projB, projects, captured, deps,
+    runtimeState,
+    readIndex: () => readSessionIndex('programming-helper'),
+    /** busy 模式：让指定会话表现为「执行中轮次」的存活实例。 */
+    setBusy(sessionId) {
+      runtimeState.runtime = { viewerAgentId: 'v-fixture-busy', selectedSessionId: sessionId };
+      runtimeState.running = true;
+      runtimeState.viewer = (p) => (p.endsWith('/notification') ? { callActive: true } : []);
+    },
+    clearBusy() {
+      runtimeState.runtime = null;
+      runtimeState.running = false;
+      runtimeState.viewer = null;
+    },
     async close() {
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));

@@ -24,7 +24,7 @@ import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createSessionHandoffHelpers } from './session-handoff-helpers.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { resolveNewSessionAgent } from '../shared/workspace-agents.js';
-import { getPhProject } from './ph-projects.js';
+import { getPhProject, getPhSessionGateInfo } from './ph-projects.js';
 import { getSessionProjectId } from '../shared/session-project.js';
 
 import {
@@ -899,6 +899,17 @@ async function createPrebuiltSession(agentId, options = {}) {
   if (!workspace) throw Object.assign(new Error(`Unknown workspace: ${agentId}`), { statusCode: 404 });
   if (sourceSessionId && !sourceSession) {
     throw Object.assign(new Error(`Unknown source session: ${sourceSessionId}`), { statusCode: 404 });
+  }
+  // PH 归属释放窗口（项目改绑 / 会话归属转移）内拒绝派生：来源会话的归属
+  // 正在被改写，此刻派生会按旧归属落盘、随即与来源分叉成不一致的兄弟。
+  if (sourceSessionId) {
+    const sourceOwnershipGate = getPhSessionGateInfo(sourceSessionId);
+    if (sourceOwnershipGate) {
+      throw Object.assign(new Error(sourceOwnershipGate.message), {
+        statusCode: 409,
+        code: sourceOwnershipGate.code,
+      });
+    }
   }
   const workspaceAgentId = resolveNewSessionAgent(workspace, options, sourceSession);
   // ── PH 项目归属（ticket 042）──────────────────────────────────────────

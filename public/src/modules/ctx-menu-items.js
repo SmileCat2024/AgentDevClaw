@@ -155,6 +155,12 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
     // AI Generate Title
     items.push({ label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' });
 
+    // 移动到…（本地 PH only）：归属变更走本地 sessions_move；远程命名空间
+    // 不经本地移动（不伪造远程移动），不在此呈现。
+    if (ns === 'programming-helper') {
+      items.push({ label: isZh ? '移动到…' : 'Move to…', action: 'move-session' });
+    }
+
     // Summary / Trim / Branch — only for main/archived sessions
     if (!isOpsExcluded) {
       items.push({ type: 'separator' });
@@ -940,6 +946,14 @@ function dispatchCtxAction(action, target) {
     case 'archive-and-stop':
       window.closeCtxMenu();
       ctxArchiveAndStopRuntime(target);
+      break;
+
+    case 'move-session':
+      window.closeCtxMenu();
+      // 本地 PH 单条移动入口（批量入口在会话列表工具条多选）
+      if (ns === 'programming-helper' && sid && typeof window.phOpenSessionMoveDialog === 'function') {
+        window.phOpenSessionMoveDialog([sid]);
+      }
       break;
 
     case 'todo-session':

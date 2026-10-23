@@ -338,9 +338,14 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
   const defaultBodyHtml = (session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '')
     + renderSessionTokenBar(session, agent);
   const bodyHtml = opts.bodyHtml !== undefined ? opts.bodyHtml : defaultBodyHtml;
+  // 多选模式（移动到…）：本地 PH 会话前置复选框（远程会话不进入多选）
+  const selectCheckboxHtml = opts.selectMode
+    ? '<label class="ph-session-select" onclick="event.stopPropagation()"><input type="checkbox" data-select-session-id="' + escapeHtml(session.id) + '"' + (opts.selected ? ' checked' : '') + ' onchange="window.phToggleSessionSelection(\'' + escapeHtml(session.id) + '\', this.checked)"></label>'
+    : '';
   return [
-    '<div class="feature-project-session-item workspace-history-item' + (opts.extraClasses ? ' ' + escapeHtml(opts.extraClasses) : '') + '" data-prebuilt-session-agent-id="' + escapeHtml(sessionNsId) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(sessionNsId) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '"' + dragAttrs + '>',
+    '<div class="feature-project-session-item workspace-history-item' + (opts.selected ? ' ph-session-item-selected' : '') + (opts.extraClasses ? ' ' + escapeHtml(opts.extraClasses) : '') + '" data-prebuilt-session-agent-id="' + escapeHtml(sessionNsId) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(sessionNsId) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '"' + dragAttrs + '>',
     '<div class="workspace-history-main">',
+    selectCheckboxHtml,
     '<div class="workspace-history-title-row">',
     indicatorHtml,
     '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(isZh ? '双击编辑标题' : 'Double-click to edit title') + '">' + (opts.titleHtml || escapeHtml(session.title || session.id)) + '</div>',
@@ -401,6 +406,15 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     currentProject = (browsingTarget?.type === 'dir')
       ? projects.find(p => p.id === browsingTarget.id) || null
       : null;
+    // 项目绑定目录（非注册目录桶）：合成目录呈现桶——只驱动 surface 视图
+    // 与目录切片，不进目录注册表、不写 workspace_state。
+    if (!currentProject && browsingTarget?.type === 'dir'
+      && typeof getPhProjectBoundDirectoryBucket === 'function') {
+      const boundBucket = getPhProjectBoundDirectoryBucket(agent);
+      if (boundBucket) {
+        currentProject = { ...boundBucket, sessions: getWorkspaceSessions(agent) };
+      }
+    }
   }
   if (!currentProject && !projectPending) {
     currentProject = currentOpenDir
@@ -420,16 +434,6 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     }
   }
 
-  // Project header avatar
-  const headerAvatar = currentProject
-    ? escapeHtml((getProgrammingHelperProjectDisplayName(currentProject) || '?')[0].toUpperCase())
-    : '?';
-  const headerName = projectPending
-    ? (isZh ? '项目加载中…' : 'Loading project…')
-    : (currentProject
-      ? escapeHtml(getProgrammingHelperProjectDisplayName(currentProject))
-      : (isZh ? '未打开项目' : 'No Project'));
-
   // Open-folder icon button for the active project.
   // 目录只能经 data 属性传递，禁止内联进 onclick 的 JS 字符串字面量——
   // Windows 反斜杠路径会被字符串转义静默吞掉（\c → c），导致服务端找不到目录。
@@ -441,64 +445,160 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '<span class="ph-dropdown-open-folder-text">' + escapeHtml(isZh ? '打开' : 'Open') + '</span>' +
     '</button>';
 
-  // Dropdown items — 目录与项目两组（ticket 045）：目录组沿用旧行为
-  // （含远程目录桶），项目组按稳定 prj_* 身份。组标题只作视觉分区，
-  // 选择仍走 phSwitchProject（dir: 服务端切换 / prj_: 前端目标切换）。
-  const dirProjects = projects.filter((p) => p.type !== 'project');
-  const projectProjects = projects.filter((p) => p.type === 'project');
-  const renderDropdownItem = (p) => {
-    const pName = getProgrammingHelperProjectDisplayName(p);
-    const pAvatar = escapeHtml((pName || '?')[0].toUpperCase());
-    const isActive = p.id === (currentProject?.id || '');
-    return [
-      '<div class="ph-project-dropdown-item' + (isActive ? ' active' : '') + '" data-project-id="' + escapeHtml(p.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(p.id) + '\')">',
-      '<div class="ph-project-dropdown-avatar">' + pAvatar + '</div>',
+  // ── 顶部双选择器（目录决定位置，项目决定组织）────────────────────
+  // 左：目录选择器（目录桶 + 项目绑定目录含托管，二级展开该目录项目；
+  // 点目录本体进默认集合，不恢复上次项目）。右：归属选择器（目录对话默认
+  // + 当前同目录项目 + 新建/管理入口；项目不跨目录）。远程目录保持既有
+  // 视图寻址，不伪造远程项目。
+  const dirNavEntries = (typeof getPhDirectoryNavigationList === 'function')
+    ? getPhDirectoryNavigationList(agent) : [];
+  const dirContext = (!projectPending && typeof getPhCurrentDirectoryContext === 'function')
+    ? getPhCurrentDirectoryContext(agent) : null;
+  const currentDirId = dirContext?.dirId || '';
+  const currentDirPath = dirContext?.openDirectory || '';
+  const dirEntryActive = dirNavEntries.find((e) => e.id === currentDirId) || null;
+
+  const pendingLabel = isZh ? '加载中…' : 'Loading…';
+  // 菜单项键盘可达：div 菜单项以 role=menuitem + tabindex 进入 Tab 序列，
+  // Enter/Space 触发既有 onclick（与触发器原生 button 的行为对齐；展开
+  // 按钮本就是 button + aria-expanded，不走此路径）。仅当事件目标就是
+  // 菜单项自身时响应——行内的 button（展开/打开目录）按键冒泡到这里时
+  // 不得吞掉原生激活（preventDefault 会取消 button 的 Space click）。
+  const menuItemKbd = ' role="menuitem" tabindex="0" onkeydown="if(event.target===this&&(event.key===\'Enter\'||event.key===\' \')){event.preventDefault();this.click();}"';
+  const dirTriggerName = projectPending ? pendingLabel
+    : (dirEntryActive ? dirEntryActive.name : (isZh ? '未打开目录' : 'No Directory'));
+  const dirTriggerPath = projectPending ? '' : (dirEntryActive ? dirEntryActive.openDirectory : '');
+  const dirAvatar = projectPending ? '·'
+    : (dirTriggerName ? escapeHtml(dirTriggerName[0].toUpperCase()) : '?');
+
+  const renderDirSubprojectItem = (entity) => [
+    '<div class="ph-project-dropdown-item ph-dir-subproject-item' + (entity.id === currentProject?.id ? ' active' : '') + '" data-project-id="' + escapeHtml(entity.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(entity.id) + '\')"' + menuItemKbd + '>',
+    '<div class="ph-project-dropdown-avatar">' + escapeHtml((entity.name || '?')[0].toUpperCase()) + '</div>',
+    '<div class="ph-project-dropdown-info">',
+    '<div class="ph-project-dropdown-name">' + escapeHtml(entity.name) + '</div>',
+    '<div class="ph-project-dropdown-path">' + (entity.directorySource === 'managed' ? escapeHtml(isZh ? '托管目录' : 'Managed directory') : escapeHtml(entity.openDirectory)) + '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
+
+  const dirMenuItems = [];
+  // 「打开目录…」入口置顶常驻：不埋在目录清单尾部（清单可能很长）
+  const openDirEntryHtml =
+    '<div class="ph-project-dropdown-new" onclick="window.phOpenProject()"' + menuItemKbd + '>' +
+    '<div class="ph-project-dropdown-avatar">+</div>' +
+    '<div class="ph-project-dropdown-info">' +
+    '<div class="ph-project-dropdown-name">' + (isZh ? '打开目录…' : 'Open Directory…') + '</div>' +
+    '<div class="ph-project-dropdown-path">' + (isZh ? '选择一个本地文件夹作为工作目录' : 'Pick a local folder as the working directory') + '</div>' +
+    '</div>' +
+    '</div>';
+  const viewingProject = currentProject?.type === 'project';
+  for (const entry of dirNavEntries) {
+    const isActive = entry.id === currentDirId;
+    dirMenuItems.push(
+      '<div class="ph-project-dropdown-item ph-dir-item' + (isActive ? ' active' : '') + '" data-dir-id="' + escapeHtml(entry.id) + '" data-project-id="' + escapeHtml(entry.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(entry.id) + '\')"' + menuItemKbd + '>',
+      '<div class="ph-project-dropdown-avatar">' + escapeHtml((entry.name || '?')[0].toUpperCase()) + '</div>',
       '<div class="ph-project-dropdown-info">',
-      '<div class="ph-project-dropdown-name">' + escapeHtml(pName) + '</div>',
-      '<div class="ph-project-dropdown-path">' + escapeHtml(p.openDirectory || (p.type === 'project' ? (isZh ? '托管目录' : 'Managed directory') : '')) + '</div>',
+      '<div class="ph-project-dropdown-name">' + escapeHtml(entry.name)
+        + (entry.remoteOnly ? '<span class="ph-dir-remote-badge">' + escapeHtml(isZh ? '远程' : 'Remote') + '</span>' : '')
+        + '</div>',
+      '<div class="ph-project-dropdown-path">' + escapeHtml(entry.openDirectory) + '</div>',
       '</div>',
-      (isActive && p.openDirectory ? openFolderBtnHtml(p.openDirectory) : ''),
+      '<div class="ph-dir-row-actions">',
+      (entry.projects.length > 0
+        ? '<button type="button" class="ph-dir-expand" aria-expanded="false" data-expand-dir="' + escapeHtml(entry.id) + '" title="' + escapeHtml(isZh ? '展开项目' : 'Expand projects') + '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>'
+        : ''),
+      (isActive && entry.openDirectory && !entry.remoteOnly ? openFolderBtnHtml(entry.openDirectory) : ''),
       '</div>',
-    ].join('');
-  };
-  const renderDropdownGroup = (label, items) => (
-    '<div class="ph-project-dropdown-group">' +
-    '<div class="ph-project-dropdown-group-label">' + escapeHtml(label) + '</div>' +
-    items +
-    '</div>'
-  );
-  const dropdownItems = [
-    dirProjects.length > 0 ? renderDropdownGroup(isZh ? '目录' : 'Directories', dirProjects.map(renderDropdownItem).join('')) : '',
-    projectProjects.length > 0 ? renderDropdownGroup(isZh ? '项目' : 'Projects', projectProjects.map(renderDropdownItem).join('')) : '',
-    '<div class="ph-project-dropdown-new" onclick="window.phOpenNewProjectDialog()">',
+      '</div>',
+    );
+    if (entry.projects.length > 0) {
+      // 二级默认项：目录本体等价的「目录对话（默认）」——键盘在子菜单内
+      // 也能直达默认集合，与项目项并列。
+      const defaultSubItem =
+        '<div class="ph-project-dropdown-item ph-dir-subproject-item ph-dir-sub-default' + (isActive && !viewingProject ? ' active' : '') + '" data-dir-id="' + escapeHtml(entry.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(entry.id) + '\')"' + menuItemKbd + '>' +
+        '<div class="ph-project-dropdown-avatar">&#9638;</div>' +
+        '<div class="ph-project-dropdown-info">' +
+        '<div class="ph-project-dropdown-name">' + (isZh ? '目录对话（默认）' : 'Directory Chats (default)') + '</div>' +
+        '<div class="ph-project-dropdown-path">' + escapeHtml(entry.openDirectory) + '</div>' +
+        '</div>' +
+        '</div>';
+      dirMenuItems.push('<div class="ph-dir-subprojects" data-subprojects-for="' + escapeHtml(entry.id) + '">'
+        + defaultSubItem + entry.projects.map(renderDirSubprojectItem).join('') + '</div>');
+    }
+  }
+  const dirSelectorHtml = '<div class="ph-project-dropdown ph-dir-selector">' +
+    '<button type="button" class="ph-project-dropdown-trigger" aria-haspopup="menu" aria-expanded="false" onclick="window.phToggleProjectDropdown(event)">' +
+    '<div class="ph-project-header-avatar">' + dirAvatar + '</div>' +
+    '<div class="ph-project-header-info">' +
+    '<div class="ph-project-header-name">' + escapeHtml(dirTriggerName) + '</div>' +
+    (dirTriggerPath ? '<div class="ph-selector-path">' + escapeHtml(dirTriggerPath) + '</div>' : '') +
+    '</div>' +
+    '<svg class="ph-project-dropdown-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
+    '</button>' +
+    '<div class="ph-project-dropdown-menu">' + openDirEntryHtml + dirMenuItems.join('') + '</div>' +
+    '</div>';
+
+  // 右侧归属选择器：目录对话（默认）+ 当前同目录项目 + 新建/管理。
+  // 项目不跨目录——跨目录导航经左侧目录树（一次切换两者）。
+  const sameDirProjects = (!projectPending && currentDirPath && !dirEntryActive?.remoteOnly)
+    ? (typeof getPhProjectsInDirectory === 'function' ? getPhProjectsInDirectory(currentDirPath) : [])
+    : [];
+  const isOrgProject = currentProject?.type === 'project';
+  const orgTriggerName = projectPending ? (isZh ? '项目加载中…' : 'Loading project…')
+    : (isOrgProject ? escapeHtml(getProgrammingHelperProjectDisplayName(currentProject)) : (isZh ? '目录对话' : 'Directory Chats'));
+  const orgAvatar = projectPending ? '·' : (isOrgProject
+    ? escapeHtml((getProgrammingHelperProjectDisplayName(currentProject) || '?')[0].toUpperCase())
+    : '&#9638;');
+
+  const renderOrgProjectItem = (entity) => [
+    '<div class="ph-project-dropdown-item ph-org-item' + (entity.id === currentProject?.id ? ' active' : '') + '" data-project-id="' + escapeHtml(entity.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(entity.id) + '\')"' + menuItemKbd + '>',
+    '<div class="ph-project-dropdown-avatar">' + escapeHtml((entity.name || '?')[0].toUpperCase()) + '</div>',
+    '<div class="ph-project-dropdown-info">',
+    '<div class="ph-project-dropdown-name">' + escapeHtml(entity.name) + '</div>',
+    '<div class="ph-project-dropdown-path">' + (entity.directorySource === 'managed' ? escapeHtml(isZh ? '托管目录' : 'Managed directory') : escapeHtml(entity.openDirectory)) + '</div>',
+    '</div>',
+    (entity.id === currentProject?.id && entity.openDirectory && entity.directorySource !== 'managed' ? openFolderBtnHtml(entity.openDirectory) : ''),
+    '</div>',
+  ].join('');
+
+  const orgMenuItems = [
+    // 将主要操作置顶，项目列表较长时也不必滚动才能新建或管理。
+    '<div class="ph-project-dropdown-new" onclick="window.phOpenNewProjectDialog()"' + menuItemKbd + '>',
     '<div class="ph-project-dropdown-avatar">+</div>',
     '<div class="ph-project-dropdown-info">',
     '<div class="ph-project-dropdown-name">' + (isZh ? '新建项目…' : 'New Project…') + '</div>',
-    '<div class="ph-project-dropdown-path">' + (isZh ? '名称 + 可选目录，不自动创建对话' : 'Name + optional directory, no auto conversation') + '</div>',
+    '<div class="ph-project-dropdown-path">' + (isZh ? '默认当前目录，不自动创建对话' : 'Defaults to current directory, no auto conversation') + '</div>',
     '</div>',
     '</div>',
-    // 项目管理入口（ticket 046）：改绑/归档/删除都从这进，正常选择器不出现
-    // 归档项目（getProgrammingHelperProjects 已过滤）。
-    '<div class="ph-project-dropdown-new" onclick="window.phOpenManageProjectsDialog()">',
+    '<div class="ph-project-dropdown-new" onclick="window.phOpenManageProjectsDialog()"' + menuItemKbd + '>',
     '<div class="ph-project-dropdown-avatar">&#9881;</div>',
     '<div class="ph-project-dropdown-info">',
     '<div class="ph-project-dropdown-name">' + (isZh ? '管理项目…' : 'Manage Projects…') + '</div>',
     '<div class="ph-project-dropdown-path">' + (isZh ? '改绑目录 / 归档 / 删除' : 'Rebind / archive / delete') + '</div>',
     '</div>',
     '</div>',
-  ].filter(Boolean).join('');
+    '<div class="ph-project-dropdown-divider" role="separator"></div>',
+    // 默认：目录对话（当前目录的默认集合；点目录本体即回默认，不恢复上次项目）
+    '<div class="ph-project-dropdown-item ph-org-item ph-org-directory' + (!isOrgProject && !projectPending ? ' active' : '') + '"' +
+      (currentDirId ? ' data-dir-id="' + escapeHtml(currentDirId) + '" onclick="window.phSwitchProject(\'' + escapeHtml(currentDirId) + '\')"' : '') + menuItemKbd + '>' +
+    '<div class="ph-project-dropdown-avatar">&#9638;</div>' +
+    '<div class="ph-project-dropdown-info">' +
+    '<div class="ph-project-dropdown-name">' + (isZh ? '目录对话' : 'Directory Chats') + (isZh ? '（默认）' : ' (default)') + '</div>' +
+    '<div class="ph-project-dropdown-path">' + escapeHtml(currentDirPath ? (isZh ? '当前目录的默认集合：' + currentDirPath : 'Default collection of: ' + currentDirPath) : (isZh ? '无当前目录' : 'No current directory')) + '</div>' +
+    '</div>' +
+    '</div>',
+    ...sameDirProjects.map(renderOrgProjectItem),
+  ];
 
-  // 选择器常驻（ticket 045）：目录/项目两组 + 「新建项目…」入口。即使只有
-  // 单一目录也保持下拉形态——新建项目入口必须在任何 PH surface 状态可达。
-  const dropdownHtml = '<div class="ph-project-dropdown">' +
-    '<div class="ph-project-dropdown-trigger" onclick="window.phToggleProjectDropdown(event)">' +
-    '<div class="ph-project-header-avatar">' + headerAvatar + '</div>' +
+  const orgSelectorHtml = '<div class="ph-project-dropdown ph-org-selector">' +
+    '<button type="button" class="ph-project-dropdown-trigger" aria-haspopup="menu" aria-expanded="false" onclick="window.phToggleProjectDropdown(event)">' +
+    '<div class="ph-project-header-avatar">' + orgAvatar + '</div>' +
     '<div class="ph-project-header-info">' +
-    '<div class="ph-project-header-name">' + headerName + '</div>' +
+    '<div class="ph-project-header-name">' + orgTriggerName + '</div>' +
     '</div>' +
     '<svg class="ph-project-dropdown-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
-    '</div>' +
-    '<div class="ph-project-dropdown-menu">' + dropdownItems + '</div>' +
+    '</button>' +
+    '<div class="ph-project-dropdown-menu">' + orgMenuItems.join('') + '</div>' +
     '</div>';
 
   // Banner (restored) + project bar
@@ -510,7 +610,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '</div>',
     '<div class="ph-banner-actions">',
     '<button class="ph-banner-btn secondary" type="button" onclick="window.phOpenModelConfig()">' + (isZh ? '工作空间设置' : 'Settings') + '</button>',
-    '<button class="ph-banner-btn" type="button" onclick="window.phOpenProject()">' + (isZh ? '打开项目' : 'Open Project') + '</button>',
+    '<button class="ph-banner-btn" type="button" onclick="window.phOpenProject()">' + (isZh ? '打开目录' : 'Open Directory') + '</button>',
     '</div>',
     '</div>',
   ].join('');
@@ -574,8 +674,11 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     const headerBar = [
       '<div class="ph-project-bar">',
       '<div class="ph-project-bar-left">',
-      dropdownHtml,
-      // 目录设置（齿轮图标按钮）紧跟项目选择器，属项目级操作。
+      // 左目录选择器 + 右归属选择器：目录决定位置，项目决定组织。
+      dirSelectorHtml,
+      orgSelectorHtml,
+      // 目录/项目设置（齿轮图标按钮）紧跟归属选择器，scope 随目标：
+      // 目录目标=目录层，项目目标=项目层。
       configBtn,
       '</div>',
       '<div class="ph-project-bar-right">',
@@ -593,8 +696,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<section class="workspace-section">',
       '<div class="ph-welcome">',
       '<div class="ph-welcome-icon">&#128193;</div>',
-      '<div class="ph-welcome-title">' + (isZh ? '打开一个项目开始编程' : 'Open a project to start coding') + '</div>',
-      '<div class="ph-welcome-desc">' + (isZh ? '选择一个本地文件夹作为工作目录，智能编码空间将在该项目中协助你。' : 'Select a local folder as your workspace. The assistant will help you code within the project.') + '</div>',
+      '<div class="ph-welcome-title">' + (isZh ? '打开一个目录开始编程' : 'Open a directory to start coding') + '</div>',
+      '<div class="ph-welcome-desc">' + (isZh ? '打开一个本地文件夹作为工作目录，智能编码空间将在该目录中协助你；项目可再按目录组织对话。' : 'Open a local folder as your working directory. The assistant will help you code within it; projects organize conversations by directory.') + '</div>',
       '</div>',
       '</section>',
     ].join('');
@@ -615,8 +718,23 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const archivedSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.archived === true));
   const needsTabs = true; // 始终显示分页器，不管每个类型有没有对话
 
+  // 会话移动多选（本地 PH only）：远程会话不可选——移动是本地归属变更，
+  // 不伪造远程移动（ADR-0012 远程目录仅保持既有视图寻址）。
+  const moveState = (typeof window !== 'undefined' && window.ClawFW?.phSessionMove) || null;
+  const selectModeOn = agent.id === 'programming-helper'
+    && currentProject && !currentProject.remoteOnly
+    && moveState?.selectMode === true;
+  // 多选状态与当前切片和解：浏览目标/切片更换（轮询、加载更多替换）后，
+  // 清理不可见的选中 id；目标漂移则整体作废（回调 reset 之外的兜底）。
+  if (selectModeOn && typeof window.phSessionMoveSyncScope === 'function') {
+    window.phSessionMoveSyncScope(agent.id, currentProject.id, currentProject.sessions.map((s) => s.id));
+  }
   const renderPhSessionItem = (session, type) =>
-    window.renderPhSessionItemHtml(agent, session, { type });
+    window.renderPhSessionItemHtml(agent, session, {
+      type,
+      selectMode: selectModeOn && !session.remoteHostNsId,
+      selected: selectModeOn && moveState.selected.has(session.id),
+    });
 
   // Render sessions with time-based group headers (今天 / 昨天 / 本周 / 更早)
   const renderPhSessionsWithGroups = (sessions, type) => {
@@ -679,6 +797,21 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '<button class="ph-search-clear-btn" type="button" onclick="window.phClearSearch()" title="' + escapeHtml(isZh ? '清除搜索' : 'Clear search') + '"' + (isSearching ? '' : ' style="display:none"') + '><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-sort-toggle"><button type="button" onclick="window.phToggleSessionSort(this)" title="' + escapeHtml(isZh ? '切换排序方式' : 'Toggle sort order') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2v8M3 10L1.5 8.5M3 10l1.5-1.5M9 10V2M9 2L7.5 3.5M9 2l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' + escapeHtml(phSessionSortMode === 'createdAt' ? t('workspace_sort_created') : t('workspace_sort_updated')) + '</button></div>';
+    // 会话多选入口（「移动到…」批量路径，本地 PH only）
+    if (agent.id === 'programming-helper' && currentProject && !currentProject.remoteOnly) {
+      if (moveState?.selectMode === true) {
+        const selectedIds = Array.from(moveState.selected);
+        sessionsHtml += '<div class="ph-session-select-controls active">'
+          + '<span class="ph-select-count">' + escapeHtml(String(selectedIds.length)) + ' ' + escapeHtml(isZh ? '已选' : 'selected') + '</span>'
+          + '<button type="button" class="ph-select-move-btn" onclick="window.phOpenSessionMoveDialog()">' + escapeHtml(isZh ? '移动到…' : 'Move to…') + '</button>'
+          + '<button type="button" class="ph-select-exit-btn" onclick="window.phToggleSessionSelectMode()">' + escapeHtml(isZh ? '退出多选' : 'Done') + '</button>'
+          + '</div>';
+      } else {
+        sessionsHtml += '<div class="ph-session-select-controls">'
+          + '<button type="button" class="ph-select-toggle-btn" onclick="window.phToggleSessionSelectMode()">' + escapeHtml(isZh ? '多选' : 'Select') + '</button>'
+          + '</div>';
+      }
+    }
     sessionsHtml += '</div>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-tab-panels">';

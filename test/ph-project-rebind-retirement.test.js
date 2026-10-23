@@ -338,10 +338,11 @@ describe('046 改绑：失败不假成功', () => {
       selectedSessionId: fixture.sessionA1.id, viewerAgentId: aEntry.viewerAgentId,
     });
     const firstRebind = rebindPhProject(fixture.projectA.id, { workDirectory: fixture.dirNew }, deps);
-    // 等待门闩建立（改绑编排先做表/目录/索引 IO，门闩在停止前建立；停止被
-    // stopGate 挂住，此处轮询到 active 即进入释放窗口，确定性同步）
+    // 等待门闩建立与会话成员刷新（成员在窗口内按 fresh 索引登记，先于
+    // 探测与停止；停止被 stopGate 挂住，轮询到双条件即进入释放窗口，
+    // 确定性同步）
     const pollStart = Date.now();
-    while (!isPhProjectRebindActive(fixture.projectA.id) && Date.now() - pollStart < 500) {
+    while ((!isPhProjectRebindActive(fixture.projectA.id) || !isPhSessionRebindGated(fixture.sessionA1.id)) && Date.now() - pollStart < 500) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     try {

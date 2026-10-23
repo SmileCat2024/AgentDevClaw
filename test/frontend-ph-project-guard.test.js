@@ -60,6 +60,9 @@ const REMOTE_ONLY_PROJECT_ID = 'dir:/srv/project-c';
 
 function guardSandbox({ requests = [] } = {}) {
   const ctx = createFrontendSandbox({
+    // URLSearchParams 必须注入：phFetchSessionsPage 构造切片查询参数依赖它，
+    // 缺失时 phLoadProjectSessions 的 catch 会把请求静默吞掉（假阳性事故）。
+    URLSearchParams,
     fetch: async (url, init) => {
       requests.push({ url: String(url), init });
       const path = String(url).split('?')[0];
@@ -190,6 +193,14 @@ describe('phSwitchProject capability guard migration (remoteOnly → capabilityF
     // 门控查询按契约签名走本地宿主身份。
     const capabilityCalls = JSON.parse(ctx.run('JSON.stringify(window.__capabilityCalls)'));
     assert.deepEqual(capabilityCalls, [{ agentId: 'programming-helper', action: 'write' }]);
+    // 切片请求观察：目录切换后必须按 projectDir 拉首屏切片——该请求被
+    // phLoadProjectSessions 的 catch 吞掉曾是静默失败（沙箱缺
+    // URLSearchParams 时的假阳性），在此显式锚定。（日志里还混有远程历史
+    // 刷新的 prebuilt_sessions 请求，按归属参数区分。）
+    const sliceCalls = requests.filter((r) => r.url.includes('projectDir=D%3A%2Fproj-a'));
+    assert.ok(sliceCalls.length >= 1, 'slice request must actually fire after directory switch');
+    assert.match(sliceCalls[0].url, /agentId=programming-helper/);
+    assert.doesNotMatch(sliceCalls[0].url, /projectId=/);
   });
 
   it('legacy parity: without RemoteConnections.capabilityFor local switching still works and remoteOnly stays view-only', async () => {
