@@ -9457,7 +9457,7 @@ body[data-theme="light"] .ph-open-sessions-dismiss:hover {
   letter-spacing: 0.02em;
 }
 
-/* ── 顶部双选择器：左目录 / 右归属（目录决定位置，项目决定组织）── */
+/* ── 顶部双选择器：目录（标题块主形态）与归属（胶囊从属形态）根本不同 ── */
 /* 触发器是 button（键盘可达）：继承文本样式，去除按钮默认外观 */
 button.ph-project-dropdown-trigger {
   background: transparent;
@@ -9467,54 +9467,117 @@ button.ph-project-dropdown-trigger {
   text-align: left;
   width: fit-content;
 }
-.ph-dir-selector .ph-project-dropdown-trigger { max-width: 260px; }
-.ph-org-selector .ph-project-dropdown-trigger { max-width: 200px; }
+.ph-dir-selector .ph-project-dropdown-trigger { max-width: 300px; }
 .ph-selector-path {
   font-size: 11px;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 220px;
+  max-width: 280px;
   line-height: 1.3;
 }
-@container main-content (max-width: 640px) {
-  .ph-dir-selector .ph-project-dropdown-trigger,
-  .ph-org-selector .ph-project-dropdown-trigger { max-width: 150px; }
-  .ph-selector-path { max-width: 120px; }
+/* 目录菜单滚动条隐藏（内容仍可滚）：与右侧悬浮面板衔接处不被滚动条打断 */
+.ph-dir-selector .ph-project-dropdown-menu {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
+.ph-dir-selector .ph-project-dropdown-menu::-webkit-scrollbar { display: none; }
 
-/* 目录行右侧动作组：二级展开箭头 + 打开目录按钮 */
-.ph-dir-row-actions {
-  display: flex;
+/* 归属控件组：胶囊 + 常驻 + 按钮 */
+.ph-org-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ph-org-pill-trigger {
+  display: inline-flex;
   align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
+  gap: 7px;
+  padding: 4px 10px 4px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: rgba(88, 166, 255, 0.08);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  max-width: 220px;
+  transition: border-color 0.15s, background 0.15s;
 }
-.ph-dir-expand {
+.ph-org-pill-trigger:hover { border-color: rgba(88, 166, 255, 0.5); background: rgba(88, 166, 255, 0.14); }
+.ph-org-pill-badge {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.ph-org-pill-badge.project {
+  background: linear-gradient(135deg, rgba(88,166,255,0.4), rgba(88,166,255,0.18));
+  color: var(--code-accent);
+}
+.ph-org-pill-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ph-org-pill-arrow { color: var(--text-secondary); flex-shrink: 0; transition: transform 0.2s; }
+.ph-org-selector.open .ph-org-pill-arrow { transform: rotate(180deg); }
+
+/* + 快速操作按钮：新建/管理/设置一步可见 */
+.ph-quick-add-btn {
   width: 26px;
   height: 26px;
-  border: none;
-  border-radius: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
   background: transparent;
   color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  padding: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.ph-dir-expand:hover { background: rgba(255,255,255,0.12); color: var(--text-primary); }
-.ph-dir-expand svg { transition: transform 0.15s; }
-.ph-dir-expand.expanded svg { transform: rotate(90deg); }
+.ph-quick-add-btn:hover { background: var(--hover-bg); color: var(--text-primary); border-color: rgba(88, 166, 255, 0.5); }
+.ph-quick-add .ph-project-dropdown-menu {
+  left: auto;
+  right: 0;
+  min-width: 250px;
+}
 
-/* 目录二级项目列表（默认折叠；仅展开呈现，不产生导航副作用） */
+@container main-content (max-width: 640px) {
+  .ph-dir-selector .ph-project-dropdown-trigger { max-width: 160px; }
+  .ph-selector-path { max-width: 140px; }
+  .ph-org-pill-trigger { max-width: 130px; }
+}
+
+/* 目录行右侧动作：仅当前目录显示打开目录按钮；项目通过悬停目录行查看 */
+/* 目录下的项目面板紧贴目录菜单右缘；JS 负责将面板提升到 body 并按视口定位。 */
+.ph-dir-nav-group { position: relative; }
 .ph-dir-subprojects {
   display: none;
-  margin: 2px 0 4px 20px;
-  padding-left: 8px;
-  border-left: 1px solid var(--border-color);
+  position: fixed;
+  width: 280px;
+  max-width: min(340px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 24px));
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding: 6px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 0 8px 8px 0;
+  box-shadow: 0 10px 30px var(--shadow-color);
+  z-index: 210;
 }
+.ph-dir-subprojects::-webkit-scrollbar { display: none; }
 .ph-dir-subprojects.open { display: block; }
 .ph-dir-subproject-item { padding: 7px 12px; }
 .ph-dir-remote-badge {
@@ -9528,6 +9591,7 @@ button.ph-project-dropdown-trigger {
   color: var(--text-secondary);
   vertical-align: 1px;
 }
+.ph-dir-sub-default { border-bottom: 1px solid var(--border-color); margin-bottom: 4px; }
 
 /* ── 会话多选（移动到…批量入口）── */
 .ph-session-select-controls {

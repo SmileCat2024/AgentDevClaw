@@ -260,6 +260,12 @@ window.phSwitchProject = async (projectId) => {
     return;
   }
 
+  // 选中即收起菜单与子菜单：切换是异步的（fetch + 重渲染），不能依赖
+  // 悬停超时/点击兜底——浮动面板在重渲染窗口内可见会闪现（见
+  // _phCloseDirectorySubmenus 的顺序说明）。
+  document.querySelectorAll('.ph-project-dropdown.open').forEach((item) => item.classList.remove('open'));
+  _phCloseDirectorySubmenus();
+
   // 项目目标（ticket 045，prj_* 稳定身份）：纯前端浏览目标切换 + 按项目
   // 过滤拉取会话切片。不调用 ph_project/switch（那是目录身份的 workspace
   // 目录切换），也不改变 workspace_state.openDirectory——项目选择不被
@@ -395,9 +401,10 @@ window.phSwitchProject = async (projectId) => {
     setPhBrowsingTarget(currentAgent.id, { type: 'dir', id: projectId });
 
     // Close dropdown（双选择器并存：收起全部打开的下拉）
-    document.querySelectorAll('.ph-project-dropdown.open').forEach((item) => item.classList.remove('open'));
+      document.querySelectorAll('.ph-project-dropdown.open').forEach((item) => item.classList.remove('open'));
+      _phCloseDirectorySubmenus();
 
-    // Clear search state on project switch
+      // Clear search state on project switch
     phSearchQuery = '';
     if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
     // 搜索结果/范围/分页等模块状态一并作废（身份已随项目切换漂移）
@@ -534,10 +541,12 @@ window.phSetupLoadMoreAutoScroll = () => {
   sentinels.forEach((el) => _phLoadMoreObserver.observe(el));
 };
 
-// 触发器 aria-expanded 同步（open class → 属性），toggle/外点/Escape 后调用
+// 触发器 aria-expanded 同步（open class → 属性），toggle/外点/Escape 后调用。
+// 触发器形态不统一（目录大字块 / 归属胶囊 / + 按钮），统一以
+// button[aria-haspopup] 定位。
 function _phSyncDropdownAria() {
   document.querySelectorAll('.ph-project-dropdown').forEach((dropdown) => {
-    const trigger = dropdown.querySelector('.ph-project-dropdown-trigger');
+    const trigger = dropdown.querySelector('button[aria-haspopup]');
     if (trigger && typeof trigger.setAttribute === 'function') {
       trigger.setAttribute('aria-expanded', dropdown.classList.contains('open') ? 'true' : 'false');
     }
@@ -554,6 +563,7 @@ window.phToggleProjectDropdown = (event) => {
     ? target.closest('.ph-project-dropdown')
     : document.querySelector('.ph-project-dropdown');
   if (!dropdown) return;
+  _phCloseDirectorySubmenus();
   document.querySelectorAll('.ph-project-dropdown.open').forEach((item) => {
     if (item !== dropdown) item.classList.remove('open');
   });
@@ -571,9 +581,11 @@ document.addEventListener('click', (e) => {
     }
   });
   if (changed) _phSyncDropdownAria();
+  _phCloseDirectorySubmenus();
 });
 
-// Escape 关闭打开的下拉（键盘操作沿既有弹窗的 Escape 语义）
+// Escape 关闭打开的下拉（键盘操作沿既有弹窗的 Escape 语义；子菜单的
+// Escape 由专属 keydown 先行处理并 stopPropagation）
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   let changed = false;
@@ -582,23 +594,125 @@ document.addEventListener('keydown', (e) => {
     changed = true;
   });
   if (changed) _phSyncDropdownAria();
+  _phCloseDirectorySubmenus();
 });
 
-// 目录树二级展开（左选择器）：捕获阶段拦截，避免冒泡触发目录切换；
-// 仅切换折叠态，不产生导航副作用。aria-expanded 随之同步。
-document.addEventListener('click', (e) => {
-  const btn = e.target && typeof e.target.closest === 'function' ? e.target.closest('.ph-dir-expand') : null;
-  if (!btn) return;
-  e.stopPropagation();
-  e.preventDefault();
-  const dirId = btn.getAttribute('data-expand-dir') || '';
+// 目录树子菜单：同一时刻只展开一个目录；点击菜单外关闭，Escape 关闭并归焦触发器。
+function _phCloseDirectorySubmenus() {
+  // 先隐藏再复位：顺序颠倒会让仍带 .open 的面板在样式清空的瞬间以
+  // 无定位状态在 (0,0) 闪现一帧（关闭闪烁的历史 bug）。
+  document.querySelectorAll('.ph-dir-subprojects.open').forEach((menu) => menu.classList.remove('open'));
+  document.querySelectorAll('.ph-dir-subprojects[data-floating="true"]').forEach((menu) => {
+    menu.removeAttribute('data-floating');
+    menu.style.removeProperty('position');
+    menu.style.removeProperty('left');
+    menu.style.removeProperty('top');
+    menu.style.removeProperty('width');
+    menu.style.removeProperty('max-width');
+    menu.style.removeProperty('max-height');
+    menu.style.removeProperty('border-radius');
+    const dirId = menu.getAttribute('data-subprojects-for') || '';
+    const safeId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(dirId) : dirId;
+    const group = document.querySelector('.ph-dir-nav-group .ph-dir-item[data-dir-id="' + safeId + '"]')?.closest('.ph-dir-nav-group');
+    if (group) {
+      group.appendChild(menu);
+    } else {
+      // 锚点目录行已随重渲染消失：浮动副本是孤儿，直接删除
+      // （新渲染的菜单内自带新的子菜单节点，旧节点无保留价值）。
+      menu.remove();
+    }
+  });
+}
+
+let _phSubmenuCloseTimer = null;
+window.phOpenDirectorySubmenu = (group) => {
+  if (!group) return;
+  // 不变量：子菜单只依附在「打开状态」的宿主菜单上。重渲染后浏览器会向
+  // 光标下的新元素重放 mouseenter/focusin，此时宿主可能已关闭（矩形全零，
+  // 兜底坐标会算出屏幕左上角）——历史 bug：切换项目后面板在 (0,0) 闪现。
+  const hostMenu = document.querySelector('.ph-dir-selector.ph-project-dropdown.open .ph-project-dropdown-menu');
+  if (!hostMenu) return;
+  if (_phSubmenuCloseTimer) clearTimeout(_phSubmenuCloseTimer);
+  const dirItem = group.querySelector('.ph-dir-item');
+  const dirId = dirItem?.getAttribute('data-dir-id') || '';
   const safeId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(dirId) : dirId;
   const sub = document.querySelector('.ph-dir-subprojects[data-subprojects-for="' + safeId + '"]');
-  if (sub) sub.classList.toggle('open');
-  btn.classList.toggle('expanded');
-  if (typeof btn.setAttribute === 'function') {
-    btn.setAttribute('aria-expanded', btn.classList.contains('expanded') ? 'true' : 'false');
+  if (!sub) return;
+  document.querySelectorAll('.ph-dir-subprojects.open').forEach((item) => {
+    if (item !== sub) item.classList.remove('open');
+  });
+  const rect = group.getBoundingClientRect();
+  const menuRect = hostMenu.getBoundingClientRect();
+  const desktop = window.matchMedia('(min-width: 641px)').matches;
+  sub.dataset.floating = 'true';
+  if (sub.parentElement !== document.body) document.body.appendChild(sub);
+  sub.style.position = 'fixed';
+  const panelWidth = desktop
+    ? Math.min(280, window.innerWidth - menuRect.right - 12)
+    : Math.min(280, window.innerWidth - 24);
+  sub.style.width = panelWidth + 'px';
+  sub.style.maxWidth = (window.innerWidth - 24) + 'px';
+  sub.style.maxHeight = Math.min(420, window.innerHeight - 24) + 'px';
+  // 桌面：面板与宿主菜单右缘无缝衔接（右贴）；窄屏：挂在菜单正下方、
+  // 左对齐——不覆盖菜单行（悬停回菜单收起面板的交互依赖菜单可命中）。
+  sub.style.left = (desktop
+    ? Math.min(menuRect.right - 1, Math.max(8, window.innerWidth - panelWidth - 8))
+    : Math.max(8, menuRect.x)) + 'px';
+  sub.style.top = Math.max(12, Math.min(desktop ? rect.top : (menuRect.bottom + 4), window.innerHeight - Math.min(sub.offsetHeight || 420, window.innerHeight - 24))) + 'px';
+  sub.style.borderRadius = desktop ? '0 8px 8px 0' : '8px';
+  sub.classList.add('open');
+  dirItem?.setAttribute('aria-expanded', 'true');
+}
+
+window.phScheduleDirectorySubmenuClose = () => {
+  if (_phSubmenuCloseTimer) clearTimeout(_phSubmenuCloseTimer);
+  _phSubmenuCloseTimer = setTimeout(() => {
+    const hovered = document.querySelector('.ph-dir-nav-group:hover, .ph-dir-subprojects:hover');
+    const focused = document.activeElement?.closest?.('.ph-dir-nav-group, .ph-dir-subprojects');
+    if (!hovered && !focused) _phCloseDirectorySubmenus();
+  }, 120);
+}
+
+document.addEventListener('pointerover', (e) => {
+  if (e.target?.closest?.('.ph-dir-subprojects')) {
+    if (_phSubmenuCloseTimer) clearTimeout(_phSubmenuCloseTimer);
+    return;
   }
+  const group = e.target?.closest?.('.ph-dir-nav-group');
+  if (group) {
+    window.phOpenDirectorySubmenu(group);
+    return;
+  }
+  // 悬停进入目录菜单的非目录行区域（如「打开目录…」入口、留白）：
+  // 当前面板失去指向，按既有关闭节奏收起。
+  if (e.target?.closest?.('.ph-dir-selector .ph-project-dropdown-menu')) {
+    window.phScheduleDirectorySubmenuClose();
+  }
+});
+document.addEventListener('focusin', (e) => {
+  // 子菜单面板渲染在菜单外（浮动化后独立数组），不在组内——
+  // 不能用 group.querySelector 探测，phOpenDirectorySubmenu 自会按
+  // data-subprojects-for 解析，找不到时安全返回。
+  const group = e.target?.closest?.('.ph-dir-nav-group');
+  if (group) window.phOpenDirectorySubmenu(group);
+});document.addEventListener('pointerout', (e) => {
+  if (e.target?.closest?.('.ph-dir-nav-group, .ph-dir-subprojects')) window.phScheduleDirectorySubmenuClose();
+});
+
+document.addEventListener('click', (e) => {
+  if (e.target?.closest?.('.ph-dir-nav-group, .ph-dir-subprojects')) return;
+  _phCloseDirectorySubmenus();
+});
+
+window.addEventListener('resize', () => _phCloseDirectorySubmenus());
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!document.querySelector('.ph-dir-subprojects.open')) return;
+  e.stopPropagation();
+  e.preventDefault();
+  _phCloseDirectorySubmenus();
+  document.querySelector('.ph-dir-selector > .ph-project-dropdown-trigger')?.focus?.();
 }, true);
 
 // Open-in-folder 按钮经事件委托接线（目录在 data-open-dir 属性上）。
@@ -1290,7 +1404,7 @@ window.phDeleteProject = (projectId, onCloseManage) => {
       if (reason?.kind === 'outside_managed_root') return isZh ? '路径不在托管区内，不删除' : 'Outside the managed area, not deleted';
       if (reason?.kind === 'project') return (isZh ? '被项目引用：' : 'Referenced by project: ') + (reason.name || reason.id);
       if (reason?.kind === 'session') return (isZh ? '被目录会话引用：' : 'Referenced by a directory session: ') + (reason.title || reason.id);
-      if (reason?.kind === 'workspace_open_directory') return isZh ? '是当前工作区目录（目录对话在用）' : 'It is the current workspace directory (in use by directory chats)';
+      if (reason?.kind === 'workspace_open_directory') return isZh ? '是当前工作区目录（默认项目在用）' : 'It is the current workspace directory (in use by the default project)';
       return reason?.kind || '';
     };
 

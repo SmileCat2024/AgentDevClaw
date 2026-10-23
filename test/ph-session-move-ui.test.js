@@ -246,7 +246,7 @@ describe('移动 — 入口渲染', () => {
 });
 
 describe('移动 — 弹窗目标与归属来源', () => {
-  it('目录视图批量：目标 = 目录对话（当前归属禁用）+ 同目录项目；跨目录项目不出现', async () => {
+  it('目录视图批量：目标 = 默认项目（当前归属禁用）+ 同目录项目；跨目录项目不出现', async () => {
     const s = createSetup({
       entities: ENTITIES,
       sessionsMeta: DIR_SLICE(['s1', 's2']),
@@ -257,7 +257,7 @@ describe('移动 — 弹窗目标与归属来源', () => {
     s.ctx.run('window.phToggleSessionSelection("s2", true)');
     s.ctx.run('window.phOpenSessionMoveDialog(["s1", "s2"])');
     const overlayHtml = s.moveDialog.created[1].innerHTML;
-    assert.match(overlayHtml, /目录对话（默认）/);
+    assert.match(overlayHtml, /默认项目/);
     assert.match(overlayHtml, /Alpha/);
     assert.match(overlayHtml, /Beta/);
     assert.doesNotMatch(overlayHtml, /Elsewhere/, 'cross-directory project must not be a target');
@@ -281,7 +281,7 @@ describe('移动 — 弹窗目标与归属来源', () => {
     s.render();
     s.ctx.run('window.phOpenSessionMoveDialog(["sB"])');
     const overlayHtml = s.moveDialog.created[1].innerHTML;
-    assert.match(overlayHtml, /目录对话（默认）/);
+    assert.match(overlayHtml, /默认项目/);
     assert.match(overlayHtml, /Alpha/);
     // prj_B 是该会话当前归属 → 禁用；prj_A 可选（label 结构：class 先于名称文本）
     const segments = overlayHtml.split('ph-move-target-item');

@@ -172,7 +172,7 @@ const resolve = async (entry, data, ok = true) => {
 };
 
 describe('双选择器 — 纯目录无回归', () => {
-  it('单一目录：左目录项 + 右「目录对话」默认项 active + 新建对话携带 openDirectory 而非 projectId', () => {
+  it('单一目录：左目录项 + 右「默认项目」 active + 新建对话携带 openDirectory 而非 projectId', () => {
     const s = createSetup({
       openDirectory: 'D:/alpha',
       phProjects: [{ openDirectory: 'D:/alpha' }],
@@ -186,10 +186,21 @@ describe('双选择器 — 纯目录无回归', () => {
     // 双选择器：左目录 / 右归属
     assert.match(html, /ph-dir-selector/);
     assert.match(html, /ph-org-selector/);
-    // 左：目录项（无项目时不渲染二级展开）；触发器为 button（键盘可达）
+    // 左：目录项（无项目目录同样有右侧面板，只含默认项目）；触发器为 button（键盘可达）
     assert.match(html, /ph-dir-item[^>]*data-dir-id="dir:d:\/alpha"/);
     assert.doesNotMatch(html, /ph-dir-expand/);
     assert.match(html, /<button[^>]*ph-project-dropdown-trigger[^>]*aria-expanded="false"/);
+    assert.match(html, /ph-dir-subprojects[^>]*data-subprojects-for="dir:d:\/alpha"/, 'project-less dir still gets a submenu');
+    // 左触发器：大字目录名（主形态）
+    assert.match(html, /ph-project-header-name">alpha</);
+    // 右胶囊：默认项目（无项目时）
+    assert.match(html, /ph-org-pill-label">默认项目</);
+    // + 快速菜单：新建/管理/目录设置一步可见；胶囊菜单只做选择
+    assert.match(html, /ph-quick-add-btn/);
+    assert.match(html, /新建项目…/);
+    assert.match(html, /管理项目…/);
+    assert.match(html, /目录设置/);
+    assert.doesNotMatch(html, /ph-org-selector[^"]*"[\s\S]*?ph-project-dropdown-new/, 'org menu is selection-only');
     // 左：打开目录…入口置顶（不埋在目录清单尾部）+ banner 文案
     assert.ok(html.indexOf('打开目录…') < html.indexOf('ph-dir-item'), 'open-directory entry pinned above the directory list');
     // 键盘可达：可选择菜单项带 role=menuitem + tabindex；key handler 仅在
@@ -198,10 +209,8 @@ describe('双选择器 — 纯目录无回归', () => {
     assert.match(html, /ph-dir-item[^>]*role="menuitem"/);
     assert.match(html, /ph-org-item[^>]*role="menuitem"/);
     assert.match(html, /ph-banner-btn[^>]*>打开目录</);
-    // 右：目录对话默认项 active + 新建/管理入口
+    // 右：默认项目 active
     assert.match(html, /ph-org-directory active/);
-    assert.match(html, /新建项目…/);
-    assert.match(html, /管理项目…/);
     // 新对话动作：目录身份（openDirectory 有值，无 projectId 键）
     const action = /data-workspace-action="([^"]+)"/.exec(html)[1];
     const parsed = JSON.parse(action.replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
@@ -224,6 +233,21 @@ describe('双选择器 — 同目录 D/A/B', () => {
     phProjects: [{ openDirectory: 'D:/shared' }, { openDirectory: 'D:/other' }],
   };
 
+  it('渲染 HTML 的 div 标签平衡：多余的 </div> 会让浏览器解析时吃掉菜单容器，布局整体塌掉', () => {
+    const s = createSetup({
+      ...base,
+      target: { type: 'project', id: 'prj_A' },
+      sessionsMeta: {
+        sessions: [{ id: 'sA', title: 'A chat', updatedAt: '2026-10-21T10:00:00Z', projectId: 'prj_A', messageCount: 1 }],
+        sessionProjectId: 'prj_A', sessionTotal: 1, mainTotal: 1, archivedTotal: 0,
+      },
+    });
+    const html = s.render();
+    const opened = (html.match(/<div\b/g) || []).length;
+    const closed = (html.match(/<\/div>/g) || []).length;
+    assert.equal(opened, closed, `div tags unbalanced: ${opened} opened vs ${closed} closed`);
+  });
+
   it('项目目标：左目录树含二级项目、右归属只列同目录项目（不跨目录）、active 归属、动作显式 projectId', () => {
     const s = createSetup({
       ...base,
@@ -235,29 +259,41 @@ describe('双选择器 — 同目录 D/A/B', () => {
     });
     const html = s.render();
     const dirSeg = html.slice(0, html.indexOf('ph-org-selector'));
-    const orgSeg = html.slice(html.indexOf('ph-org-selector'));
+    // orgSeg 止于 + 快速菜单（两者同在 ph-org-controls 内，先后渲染）
+    const orgSeg = html.slice(html.indexOf('ph-org-selector'), html.indexOf('ph-quick-add'));
     // 左：目录树 —— shared 目录行 + 二级（默认项 + Alpha/Beta）；other 目录行 + Cross
     assert.match(dirSeg, /ph-dir-item[^>]*data-dir-id="dir:d:\/shared"/);
     assert.match(dirSeg, /ph-dir-item[^>]*data-dir-id="dir:d:\/other"/);
-    const subStart = dirSeg.indexOf('data-subprojects-for="dir:d:/shared"');
-    const subEnd = dirSeg.indexOf('<div class="ph-project-dropdown-item ph-dir-item', subStart);
-    const sharedSub = dirSeg.slice(subStart, subEnd < 0 ? undefined : subEnd);
-    assert.ok(subStart >= 0, 'shared dir subprojects block exists');
+    const sharedSubStart = dirSeg.indexOf('data-subprojects-for="dir:d:/shared"');
+    const otherSubStart = dirSeg.indexOf('data-subprojects-for="dir:d:/other"');
+    // 目录顺序由稳定排序决定（不依赖插入顺序）：每块取自身到下一块
+    const subBlockOf = (seg, start) => {
+      if (start < 0) return '';
+      const next = seg.indexOf('data-subprojects-for="', start + 1);
+      return seg.slice(start, next < 0 ? undefined : next);
+    };
+    const sharedSub = subBlockOf(dirSeg, sharedSubStart);
+    const otherSub = subBlockOf(dirSeg, otherSubStart);
+    assert.ok(sharedSubStart >= 0, 'shared dir subprojects block exists');
+    assert.ok(otherSubStart >= 0, 'other dir subprojects block exists');
     assert.match(sharedSub, /ph-dir-sub-default[^>]*data-dir-id="dir:d:\/shared"/, 'sub menu has the default directory entry');
     assert.match(sharedSub, /data-project-id="prj_A"/);
     assert.match(sharedSub, /data-project-id="prj_B"/);
     assert.doesNotMatch(sharedSub, /prj_C/);
     // 左：当前目录 active = 项目绑定目录（shared），右：项目 active
     assert.match(dirSeg, /ph-dir-item active" data-dir-id="dir:d:\/shared"/);
-    // 右：新建/管理入口置顶 + 目录对话（非 active）+ Alpha(active) + Beta；Cross 不跨目录出现
-    assert.ok(orgSeg.indexOf('新建项目…') < orgSeg.indexOf('ph-org-directory'), 'new/manage entries pinned above the org list');
-    assert.ok(orgSeg.indexOf('管理项目…') < orgSeg.indexOf('ph-org-directory'));
+    // 右：默认项目（非 active）+ Alpha(active) + Beta；Cross 不跨目录出现；
+    // 胶囊菜单只做选择（新建/管理在 + 快速菜单，不在胶囊菜单里）
+    assert.doesNotMatch(orgSeg, /新建项目…/, 'org menu is selection-only');
     assert.match(orgSeg, /ph-org-directory[^>]*>/);
     assert.match(orgSeg, /ph-org-item active" data-project-id="prj_A"/);
     assert.match(orgSeg, /data-project-id="prj_B"/);
     assert.doesNotMatch(orgSeg, /prj_C/);
-    // 头部归属显示项目名
-    assert.match(html, /ph-project-header-name[^>]*>Alpha</);
+    assert.match(html, /ph-quick-menu[\s\S]*?新建项目…/, 'quick menu carries new-project');
+    assert.match(html, /ph-quick-menu[\s\S]*?管理项目…/, 'quick menu carries manage');
+    // 胶囊显示项目名；项目目标时 + 菜单设置项=项目设置（scope 随归属）
+    assert.match(html, /ph-org-pill-label">Alpha</);
+    assert.match(html, /ph-quick-menu[\s\S]*?项目设置/);
     // 切片只含项目会话（目录会话不在项目切片内）
     assert.match(html, /A chat/);
     // 新对话动作：显式 projectId，openDirectory 为空
@@ -269,7 +305,7 @@ describe('双选择器 — 同目录 D/A/B', () => {
     assert.ok(s.cardCalls.some((args) => args[2] === 'prj_A'));
   });
 
-  it('目录目标（同目录）：左目录行 active、右目录对话默认项 active、动作走 openDirectory、无 projectId', () => {
+  it('目录目标（同目录）：左目录行 active、右默认项目 active、动作走 openDirectory、无 projectId', () => {
     const s = createSetup({
       ...base,
       target: { type: 'dir', id: 'dir:d:/shared' },
@@ -396,7 +432,7 @@ describe('双选择器 — 项目绑定目录（含托管）', () => {
     assert.equal(s.workspaceState.openDirectory, 'D:/shared');
     const stored = s.ctx.run(`localStorage.getItem('protoclaw:ph-browsing-target:programming-helper')`);
     assert.equal(JSON.parse(stored).id, 'dir:d:/data/workspaces/ph-projects/prj_m');
-    // 渲染：目录视图（左 active = 托管目录；右 = 目录对话默认 + 同目录项目 prj_M）
+    // 渲染：目录视图（左 active = 托管目录；右 = 默认项目 + 同目录项目 prj_M）
     const html = s.render();
     assert.match(html, /Managed dir chat/);
     assert.match(html, /ph-dir-item active" data-dir-id="dir:d:\/data\/workspaces\/ph-projects\/prj_m"/);
@@ -566,11 +602,12 @@ describe('双选择器 — 名称相同 ID 独立', () => {
     ];
     const s = createSetup({ entities, phProjects: [{ openDirectory: 'D:/x' }, { openDirectory: 'D:/y' }], openDirectory: 'D:/x' });
     const html = s.render();
-    // 左树：两个目录行，各带一个同名项目（子菜单首项是默认目录项）
+    // 左树：两个目录行，各带一个同名项目（子菜单块渲染在目录行之后，
+    // 块终点取下一个子菜单块而非目录行；目录顺序由稳定排序决定）
     const dirSeg = html.slice(0, html.indexOf('ph-org-selector'));
     const xStart = dirSeg.indexOf('data-subprojects-for="dir:d:/x"');
-    const xEnd = dirSeg.indexOf('<div class="ph-project-dropdown-item ph-dir-item', xStart);
-    const subX = dirSeg.slice(xStart, xEnd < 0 ? undefined : xEnd);
+    const xNext = dirSeg.indexOf('data-subprojects-for="', xStart + 1);
+    const subX = dirSeg.slice(xStart, xNext < 0 ? undefined : xNext);
     assert.ok(xStart >= 0);
     assert.match(subX, /ph-dir-sub-default/);
     assert.match(subX, /data-project-id="prj_1"/);

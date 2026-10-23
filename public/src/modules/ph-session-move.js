@@ -1,5 +1,5 @@
 /**
- * PH 会话移动（本地）：目录对话（默认集合）↔ 项目 ↔ 项目（同目录内）。
+ * PH 会话移动（本地）：默认项目 ↔ 项目（同目录内）。
  *
  * 入口：
  *  - 会话条目 ⋯ 菜单「移动到…」（单条，ctx-menu-items.js 分发 move-session）
@@ -173,7 +173,7 @@ window.phOpenSessionMoveDialog = (sessionIds) => {
       {
         target: { type: 'directory', openDirectory: sourceDirectory },
         key: 'directory',
-        name: isZh ? '目录对话（默认）' : 'Directory Chats (default)',
+        name: isZh ? '默认项目' : 'Directory Chats (default)',
         path: sourceDirectory,
         disabled: allSameOwner(directoryOwnerKey),
       },
@@ -226,7 +226,7 @@ window.phOpenSessionMoveDialog = (sessionIds) => {
     '<div class="ph-move-target-list">' + targetRows.join('') + '</div>',
     '</div>',
     '<div class="ph-move-note">' + (isZh
-      ? '仅支持同目录内移动：目录对话 ↔ 项目 ↔ 项目；跨目录移动暂不支持。'
+      ? '仅支持同目录内移动：默认项目 ↔ 项目；跨目录移动暂不支持。'
       : 'Same-directory moves only: directory chats ↔ projects. Cross-directory moves are not supported.') + '</div>',
     '<div class="ph-new-project-error ph-move-error" hidden></div>',
     '</div>',

@@ -25,7 +25,9 @@ export async function startPhProjectFixture(port = 0) {
   const { readSessionIndex, updateSessionIndex } = await import('../server/shared/session-access.js');
 
   const cwd = process.cwd().replace(/\\/g, '/');
-  // 同目录 D/A/B：目录桶 + 两个项目共用同一物理目录
+  // 同目录 D/A/B：目录桶 + 两个项目共用同一物理目录；
+  // plain 空目录桶（无任何项目）：验证无项目目录的子菜单行为
+  const plainDir = cwd + '/.tmp/plain-dir';
   const projA = await createPhProject({ name: 'Alpha', workDirectory: cwd });
   const projB = await createPhProject({ name: 'Beta', workDirectory: cwd });
   const projects = await listPhProjects();
@@ -64,7 +66,7 @@ export async function startPhProjectFixture(port = 0) {
   });
 
   // 目录切换（curated mock）：切换即返回目录 state（fixture 只有一个本地目录）
-  const wsState = { openDirectory: cwd, phProjects: [{ openDirectory: cwd }] };
+  const wsState = { openDirectory: cwd, phProjects: [{ openDirectory: cwd }, { openDirectory: plainDir }] };
   app.post('/protoclaw/ph_project/switch', express.json(), (req, res) => {
     captured.actions.push({ type: 'dir-switch', projectId: req.body?.projectId });
     res.json({ ok: true, state: wsState });
@@ -115,7 +117,7 @@ export async function startPhProjectFixture(port = 0) {
     let lastRenderedWorkspaceHtml='', _phOpenSessionsCache={html:''};
     let allAgents=[{
       id:'programming-helper', name:'智能编码空间', modelPresets:{default:{primary:'m1'}},
-      workspace_state:{ openDirectory: ${JSON.stringify(cwd)}, phProjects:[{ openDirectory: ${JSON.stringify(cwd)} }] },
+      workspace_state:{ openDirectory: ${JSON.stringify(cwd)}, phProjects:[{ openDirectory: ${JSON.stringify(cwd)} }, { openDirectory: ${JSON.stringify(plainDir)} }] },
       workspace_sessions:{ sessions:[], sessionProjectId:'', sessionTotal:0, mainTotal:0, archivedTotal:0 },
     }];
     function getCurrentAgentRecord(){ return allAgents.find(a=>a.id==='programming-helper'); }
@@ -169,7 +171,7 @@ export async function startPhProjectFixture(port = 0) {
   await new Promise(resolve => server.once('listening', resolve));
   return {
     url: `http://127.0.0.1:${server.address().port}/fixture`,
-    dataDir, cwd, projA, projB, projects, captured, deps,
+      dataDir, cwd, plainDir, projA, projB, projects, captured, deps,
     runtimeState,
     readIndex: () => readSessionIndex('programming-helper'),
     /** busy 模式：让指定会话表现为「执行中轮次」的存活实例。 */
