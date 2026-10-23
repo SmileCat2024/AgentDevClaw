@@ -62,6 +62,7 @@ describe('StylizedOutput 签名工具', () => {
     assert.equal(payload.signed, true);
     assert.equal(payload.style, 'test-style');
     assert.equal(feature.signedForReply, true);
+    assert.match(payload.note, /不必复述全文，用简短几句与用户自然交接/);
   });
 
   it('签名内部空白差异被规范化后匹配', async () => {
