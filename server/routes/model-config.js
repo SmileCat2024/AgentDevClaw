@@ -14,6 +14,7 @@ import { normalizeProgrammingHelperProcessMode, GLOBAL_SHARED_AGENT_ID } from '.
 import { resolveOpenCodeBaseUrl, parseZenModelsResponse } from '../zen-helpers.js';
 import { fetchWithRetry } from '../shared/fetch-retry.js';
 import { resolveAccessTokenSync, buildCodexOAuthHeaders, DEFAULT_CLIENT_ID, DEFAULT_CODEX_BASE_URL } from '../oauth-codex.js';
+import { resolveActiveCodexProviderName } from '../codex-accounts.js';
 
 export { normalizeProgrammingHelperProcessMode } from '../shared/process-mode.js';
 
@@ -314,7 +315,11 @@ async function readModelConnections() {
 }
 
 async function writeModelConnections(data) {
+  // 保留 codex 段（多账号账号簿，codex-accounts.js 自管读写）：opencode 保存
+  // 只覆写自己的 key，不再全量重建文件，避免抹掉账号列表与 activeProvider。
+  const existing = await readJsonSafe(MODEL_CONNECTIONS_PATH, {});
   const next = {
+    ...existing,
     opencode: {
       apiKey: cleanSessionText(data?.opencode?.apiKey),
       tier: data?.opencode?.tier === 'go' ? 'go' : 'zen',
@@ -767,7 +772,12 @@ export function setupModelConfigRoutes(app, express) {
       if (provider === 'codex') {
         const oauthPresets = flattenModelPresets(await readModelPresets())
           .filter((preset) => preset.authType === 'oauth-codex' && preset.providerName);
-        const tokenProviders = [...new Set(['OpenAI Auth', ...oauthPresets.map((preset) => preset.providerName)])];
+        // 当前账号（codex-accounts.js 账号簿）优先；无账号簿数据时退回存量链
+        const tokenProviders = [...new Set([
+          resolveActiveCodexProviderName(),
+          'OpenAI Auth',
+          ...oauthPresets.map((preset) => preset.providerName),
+        ])].filter(Boolean);
         let accessToken = null;
         for (const providerName of tokenProviders) {
           accessToken = resolveAccessTokenSync(providerName, DEFAULT_CLIENT_ID);

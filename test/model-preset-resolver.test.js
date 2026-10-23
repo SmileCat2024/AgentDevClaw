@@ -1,16 +1,27 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import {
+
+// 数据隔离：AGENTDEV_DATA_DIR 指向临时目录，必须在任何 server 模块 import
+// 之前设置（constants 在模块加载期解析 USER_DATA_ROOT / MODEL_CONNECTIONS_PATH；
+// codex 账号簿查找链会读 connections 文件与 oauth-tokens 目录）。
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'claw-resolver-fixture-'));
+process.env.AGENTDEV_DATA_DIR = DATA_DIR;
+
+const {
   resolveModelPresetLLM,
   resolveAgentModelLLM,
   resolveGlobalDefaultLLM,
   modelPresetResolver,
   GLOBAL_DEFAULT_PRESET_NAME,
   ensureOpenCodeSessionHeader,
-} from '../server/model-preset-resolver.js';
+} = await import('../server/model-preset-resolver.js');
+
+after(() => {
+  rmSync(DATA_DIR, { recursive: true, force: true });
+});
 
 describe('model-preset-resolver', () => {
 
@@ -172,10 +183,36 @@ describe('model-preset-resolver', () => {
         const seen = [];
         const result = resolveModelPresetLLM('fixture-codex-catalog', undefined, {
           configPath,
+          resolveActiveProvider: () => null,
           resolveAccessToken: (providerName) => { seen.push(providerName); return providerName === 'Fixture OAuth' ? 'fixture-access-token' : null; },
         });
         assert.ok(result);
         assert.deepEqual(seen, ['Fixture OAuth']);
+      });
+
+      it('prefers the active codex account token over the preset static provider reference', () => {
+        // 多账号：账号簿 active 槽位优先——全局切换账号后同一 preset 换 token 来源
+        const seen = [];
+        const result = resolveModelPresetLLM('fixture-codex-catalog', undefined, {
+          configPath,
+          resolveActiveProvider: () => 'codex-account-2',
+          resolveAccessToken: (providerName) => { seen.push(providerName); return providerName === 'codex-account-2' ? 'active-account-token' : null; },
+        });
+        assert.ok(result);
+        assert.deepEqual(seen, ['codex-account-2'], 'active 命中时不得再试静态引用');
+        assert.equal(result.providerName, 'codex-account-2', '返回值透传实际命中的槽位名（UI 显示当前账号）');
+      });
+
+      it('falls back to the static lookup chain when the active account has no token', () => {
+        const seen = [];
+        const result = resolveModelPresetLLM('fixture-codex-catalog', undefined, {
+          configPath,
+          resolveActiveProvider: () => 'logged-out-slot',
+          resolveAccessToken: (providerName) => { seen.push(providerName); return providerName === 'Fixture OAuth' ? 'legacy-token' : null; },
+        });
+        assert.ok(result);
+        assert.deepEqual(seen, ['logged-out-slot', 'Fixture OAuth']);
+        assert.equal(result.providerName, 'Fixture OAuth');
       });
 
       it('resolves a Codex catalog preset through the legacy OAuth provider token name', () => {

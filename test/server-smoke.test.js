@@ -223,6 +223,11 @@ describe('Route registration smoke test', () => {
     assert.ok(routes.some(r => r.method === 'delete' && r.path === '/protoclaw/oauth/codex/tokens/:providerName'));
     assert.ok(routes.some(r => r.method === 'post' && r.path === '/protoclaw/oauth/codex/refresh/:providerName'));
     assert.ok(routes.some(r => r.method === 'get' && r.path === '/protoclaw/oauth/codex/defaults'));
+    // 多账号账号簿端点（codex-accounts.js）
+    assert.ok(routes.some(r => r.method === 'get' && r.path === '/protoclaw/oauth/codex/accounts'));
+    assert.ok(routes.some(r => r.method === 'put' && r.path === '/protoclaw/oauth/codex/accounts/:providerName'));
+    assert.ok(routes.some(r => r.method === 'post' && r.path === '/protoclaw/oauth/codex/accounts/:providerName/activate'));
+    assert.ok(routes.some(r => r.method === 'delete' && r.path === '/protoclaw/oauth/codex/accounts/:providerName'));
   });
 
   it('setupProxyConfigRoutes should register config and connectivity endpoints', async () => {

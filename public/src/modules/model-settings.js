@@ -185,21 +185,22 @@ function renderModelCatalogSettingsOverlay(host, data) {
       ? '<div class="settings-catalog-status error">' + escapeHtml(catalog.error) + '</div>'
       : catalog.loading ? '<div class="settings-catalog-status">' + (isZh ? '正在刷新模型目录…' : 'Refreshing model catalog…') + '</div>'
       : catalog.loaded ? '<div class="settings-catalog-status">' + (isZh ? '目录已更新' : 'Catalog refreshed') + '</div>' : '';
-    const connectionStatus = window.ClawFW.oauthConnectionStatus || 'unknown';
     let connectionCard;
     if (isCodex) {
-      // Codex 连接：列表页只保留入口卡片，登录/鉴权等复杂操作进入专门配置页；不做状态徽章提升
-      const cardIntro = '<div><div class="settings-connection-title">OpenAI Auth</div><div class="settings-connection-description">' + (isZh ? '通过 OpenAI 账户连接 Codex 模型目录' : 'Connect your OpenAI account to discover Codex models') + '</div></div>';
+      // Codex 连接：列表页只保留入口卡片，账号管理（多账号登录/切换/登出）进入专门配置页
+      const cardIntro = '<div><div class="settings-connection-title">OpenAI Auth</div><div class="settings-connection-description">' + (isZh ? '通过 OpenAI 账户连接 Codex 模型目录，支持多账号切换' : 'Connect OpenAI accounts to discover Codex models; multiple accounts supported') + '</div></div>';
       if (window.ClawFW.codexConnectionView) {
-        // 专门配置页：标题与登录操作同行，状态面板承载登录流程反馈，登出仅在已连接时出现
+        // 专门配置页：账号列表（refreshCodexAccounts 渲染）+ 登录入口；登录流程
+        // 反馈仍由 #oauth-status-display 承载（轮询期间独占）
         connectionCard = '<div class="settings-section settings-connection-card settings-codex-auth">'
           + '<div class="settings-connection-row">' + cardIntro
-          + '<div class="oauth-action-row"><button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin(\'browser\')">' + (isZh ? '浏览器授权登录' : 'Login in Browser') + '</button><button class="settings-btn settings-btn-secondary" type="button" onclick="startOAuthLogin(\'device\')">' + (isZh ? '设备码登录' : 'Device Code Login') + '</button><button class="settings-btn settings-btn-secondary settings-btn-quiet" id="codex-auth-logout" type="button" style="' + (connectionStatus === 'connected' ? '' : 'display:none;') + '" onclick="logoutOAuth()">' + (isZh ? '登出' : 'Logout') + '</button></div></div>'
+          + '<div class="oauth-action-row"><button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin(\'browser\')">' + (isZh ? '添加账号 · 浏览器授权' : 'Add · Browser') + '</button><button class="settings-btn settings-btn-secondary" type="button" onclick="startOAuthLogin(\'device\')">' + (isZh ? '添加账号 · 设备码' : 'Add · Device Code') + '</button></div></div>'
+          + '<div id="codex-accounts-list" class="oauth-accounts-list"></div>'
           + '<div id="oauth-status-display" class="oauth-status-text settings-codex-auth-status"></div></div>';
       } else {
         connectionCard = '<div class="settings-section settings-connection-card settings-connection-entry" role="button" tabindex="0" onclick="openCodexConnectionView()" onkeydown="if(event.key===\'Enter\'&&event.target===this)openCodexConnectionView()">'
           + '<div class="settings-connection-row">' + cardIntro
-          + '<button class="settings-btn settings-btn-secondary" type="button" onclick="event.stopPropagation();openCodexConnectionView()">' + (isZh ? '配置登录' : 'Configure Login') + '</button>'
+          + '<button class="settings-btn settings-btn-secondary" type="button" onclick="event.stopPropagation();openCodexConnectionView()">' + (isZh ? '管理账号' : 'Manage Accounts') + '</button>'
           + '</div></div>';
       }
     } else {
@@ -297,6 +298,12 @@ function renderModelCatalogSettingsOverlay(host, data) {
       syncBaseEndpointBadge();
     }
     if (presets[editing]?.authType === 'oauth-codex') refreshOAuthStatus();
+  }
+  // 账号页统一回填：本函数整体重建 DOM，#codex-accounts-list 随之变为空容器；
+  // 目录刷新（refreshModelCatalog 前后各一次）、保存配置等任何路径触发的重渲染
+  // 都必须重新拉取账号列表，否则列表悬空（表现为账号"莫名消失"）
+  if (window.ClawFW.codexConnectionView && tab === 'codex' && typeof renderCodexAccountsList === 'function') {
+    renderCodexAccountsList();
   }
 }
 
@@ -455,8 +462,9 @@ async function saveModelConnection(opts) {
 
 function openCodexConnectionView() {
   window.ClawFW.codexConnectionView = true;
+  // 账号列表回填由 renderSettingsOverlay 统一负责（见其尾部），无需再经
+  // refreshOAuthStatus 转发一次（避免双 fetch）
   renderSettingsOverlay();
-  refreshOAuthStatus();
   // 进入配置页时检查代理环境（未配置代理时 OpenAI 登录请求可能被地区限制拦截）
   checkOAuthProxy(currentLanguage === 'zh');
 }

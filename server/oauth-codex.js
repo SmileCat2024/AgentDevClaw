@@ -50,7 +50,7 @@ const MAX_LOGIN_WAIT_MS = 15 * 60 * 1000; // 15 minutes
 const OAUTH_FETCH_ATTEMPTS = 3;
 const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 
-const OAUTH_TOKENS_DIR = path.join(USER_DATA_ROOT, 'oauth-tokens');
+export const OAUTH_TOKENS_DIR = path.join(USER_DATA_ROOT, 'oauth-tokens');
 
 // ── Proxy support ───────────────────────────────────────────────────
 //
@@ -185,10 +185,15 @@ export function buildCodexOAuthHeaders(accessToken, customHeaders = []) {
 
 // ── Token storage ──────────────────────────────────────────────────
 
-function tokenFilePath(providerName) {
+// 账号簿（codex-accounts.js）按同一目录与命名规则扫描 token 槽位；导出以
+// 免文件名 sanitize 规则在两处漂移。
+export function sanitizeProviderSlotKey(providerName) {
   // Sanitize provider name for filesystem
-  const safe = providerName.replace(/[^a-zA-Z0-9_\-.]/g, '_');
-  return path.join(OAUTH_TOKENS_DIR, `${safe}.json`);
+  return String(providerName || '').replace(/[^a-zA-Z0-9_\-.]/g, '_');
+}
+
+export function tokenFilePath(providerName) {
+  return path.join(OAUTH_TOKENS_DIR, `${sanitizeProviderSlotKey(providerName)}.json`);
 }
 
 /**
@@ -986,6 +991,7 @@ export function getLoginSession(sessionId) {
   if (!sess) return null;
   return {
     sessionId: sess.sessionId,
+    providerName: sess.providerName || null,
     mode: sess.mode || 'device',
     status: sess.status,
     userCode: sess.userCode,

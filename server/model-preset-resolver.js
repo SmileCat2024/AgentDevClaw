@@ -10,6 +10,7 @@ import { createHash } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { createLLM } from '@agentdevjs/llm';
 import { buildCodexOAuthHeaders, resolveAccessTokenSync } from './oauth-codex.js';
+import { resolveActiveCodexProviderName } from './codex-accounts.js';
 import { MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, MODEL_CONNECTIONS_PATH, AGENT_USER_CONFIG_PATH } from './shared/constants.js';
 
 /**
@@ -61,9 +62,10 @@ function pickPresetCallPolicy(preset) {
  * Resolve a preset name to { llm, modelName }.
  * @param {string} presetName
  * @param {{ thinkingEffort?: string | null }} [overrides] - Runtime overrides for this resolution only; does not mutate Claw user data presets.json.
- * @param {{   configPath?: string, connectionsPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
+ * @param {{   configPath?: string, connectionsPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null, resolveActiveProvider?: () => string | null }} [options]
  *   Test seam — production callers omit. configPath overrides Claw user data presets.json;
- *   resolveAccessToken replaces the OAuth token-store lookup.
+ *   resolveAccessToken replaces the OAuth token-store lookup; resolveActiveProvider
+ *   replaces the codex account-book active-account lookup.
  * @returns {{ llm: import('@agentdevjs/llm').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
  */
 export function resolveModelPresetLLM(presetName, overrides, options = {}) {
@@ -107,11 +109,20 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
     // OAuth provider: resolve access_token from token store
     const isOAuth = isCatalogProvider ? catalogProvider === 'codex' : provider.authType === 'oauth-codex';
     let apiKey;
+    let tokenProviderName = '';
     if (isOAuth) {
       const clientId = isCatalogProvider ? 'app_EMoamEEZ73f0CkXaXp7hrann' : provider.clientId;
       const resolveToken = options.resolveAccessToken || resolveAccessTokenSync;
+      // 多账号（codex-accounts.js 账号簿）：当前账号（activeProvider，读路径懒
+      // 回退到第一个有 token 的槽位）优先于一切静态引用；无账号簿数据时返回
+      // null，查找链退回存量顺序（preset.providerName → 'OpenAI Auth' → 任意
+      // oauth provider），未启用多账号的环境行为不变。
+      const activeProvider = catalogProvider === 'codex'
+        ? (options.resolveActiveProvider ? options.resolveActiveProvider() : resolveActiveCodexProviderName(connectionsPath))
+        : null;
       const tokenProviderNames = isCatalogProvider
         ? [...new Set([
+          activeProvider,
           preset.providerName,
           'OpenAI Auth',
           ...providers.filter((item) => item.authType === 'oauth-codex').map((item) => item.name),
@@ -119,11 +130,11 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
         : [provider.name];
       for (const providerName of tokenProviderNames) {
         apiKey = resolveToken(providerName, clientId);
-        if (apiKey) break;
+        if (apiKey) { tokenProviderName = providerName; break; }
       }
       apiKey = apiKey || '';
       if (!apiKey) {
-        console.warn(`[ModelPreset] OAuth provider "${isCatalogProvider ? 'OpenAI Auth' : provider.name}" has no stored token — login required`);
+        console.warn(`[ModelPreset] OAuth provider "${isCatalogProvider ? (activeProvider || 'OpenAI Auth') : provider.name}" has no stored token — login required`);
         return null;
       }
     } else {
@@ -166,7 +177,11 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       modelName: preset.model,
       presetName: preset.name || presetName,
       thinkingEffort: effectiveThinkingEffort || null,
-      providerName: (isCatalogProvider ? (catalogProvider === 'codex' ? 'OpenAI Auth' : 'OpenCode') : provider.name) || preset.providerName || '',
+      // 显示与上游对账用的 providerName：codex 透传实际命中的 token 槽位名
+      //（多账号下即当前账号），OpenCode 维持目录归类名，非 catalog 用 provider.name。
+      providerName: (isCatalogProvider
+        ? (catalogProvider === 'codex' ? (tokenProviderName || preset.providerName || 'OpenAI Auth') : 'OpenCode')
+        : provider.name) || preset.providerName || '',
       provider: protocol,
       protocol,
       authType: isOAuth ? 'oauth-codex' : '',

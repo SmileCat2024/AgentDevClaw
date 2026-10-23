@@ -6956,6 +6956,12 @@ body[data-theme="light"] .user-choice-card:focus-within {
 .settings-connection-entry .settings-btn { width: auto; min-height: 34px; padding: 7px 14px; font-size: 12px; }
 /* Codex 连接配置页：登录状态面板（承载设备码 / 授权链接 / 状态文案） */
 .settings-connection-card .settings-codex-auth-status { box-sizing: border-box; min-height: 48px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--panel-bg) 55%, transparent); }
+/* Codex 账号列表（多账号）：行卡片复用 settings-preset-card 配方，容器控制堆叠节奏；整卡无点击行为（操作走行内按钮） */
+.settings-codex-auth .oauth-accounts-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.settings-codex-auth .oauth-accounts-list .settings-preset-card { cursor: default; }
+.settings-codex-auth .oauth-accounts-list .settings-preset-card:hover { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); }
+.settings-codex-auth .oauth-accounts-list .settings-preset-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.settings-codex-auth .oauth-accounts-list .settings-preset-actions .settings-btn { width: auto; min-height: 30px; padding: 5px 10px; font-size: 11px; }
 /* 空态：对齐右侧面板 feature-panel-empty 的「标题 + 说明」形态 */
 .settings-catalog-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 24px; text-align: center; color: var(--text-secondary); }
 .settings-catalog-empty strong { color: var(--text-primary); font-size: 13px; font-weight: 600; }

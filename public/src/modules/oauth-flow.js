@@ -215,13 +215,14 @@ window.startOAuthLogin = async function(mode) {
   let isZh = currentLanguage === 'zh';
   let loginMode = mode === 'device' ? 'device' : 'browser';
   let idx = window.ClawFW.settingsEditing;
-  let providerName = getEditingProviderName();
 
   if (idx === null) {
+    // 连接视图（账号列表页）：每次添加账号都让服务端生成新槽位（'__new__'），
+    // 不再复用既有 preset 的 providerName —— 那会把新账号 token 写进旧槽位。
     fetch('/protoclaw/oauth/codex/defaults').then((response) => response.json()).then((defaults) => {
       const launchLogin = () => fetch('/protoclaw/oauth/codex/start', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providerName, clientId: defaults.defaultClientId, mode: loginMode }),
+        body: JSON.stringify({ providerName: '__new__', clientId: defaults.defaultClientId, mode: loginMode }),
       }).then((response) => response.json()).then((data) => {
         // Browser mode: the server opens the system default browser itself
         // (the desktop webview cannot pop one); just poll for completion.
@@ -237,6 +238,9 @@ window.startOAuthLogin = async function(mode) {
     });
     return;
   }
+
+  // 编辑表单路径（存量单 preset 语义）：登录写进该 preset 声明的 providerName
+  let providerName = getEditingProviderName();
 
   if (oauthProviderNeedsSave()) {
     let display = document.getElementById('oauth-status-display');
@@ -324,11 +328,10 @@ function pollOAuthLogin(sessionId) {
           renderPending(sess);
         } else if (sess.status === 'approved') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
-          window.ClawFW.oauthConnectionStatus = 'connected';
-          updateCodexConnectionUI(true);
           let el = display();
           if (el) el.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存' : 'Login successful! Token saved.') + '</span>';
           refreshModelCatalog('codex');
+          renderCodexAccountsList();
         } else if (sess.status === 'expired') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
           let el = display();
@@ -390,15 +393,15 @@ window.logoutOAuth = function() {
     .then(function() { refreshOAuthStatus(); });
 };
 
-function updateCodexConnectionUI(connected) {
-  // 状态徽章已随连接卡片改版取消；配置页登出按钮随登录状态显隐（未登录时登出无意义）
-  let logoutBtn = document.getElementById('codex-auth-logout');
-  if (logoutBtn) logoutBtn.style.display = connected ? '' : 'none';
-}
-
 function refreshOAuthStatus() {
   // While a device-code login poll is running, it owns the status display
   if (_oauthPollTimer) return;
+  // Codex 连接视图（账号列表页）：状态呈现完全由账号列表承载；编辑表单路径
+  // （settingsEditing 非 null）保持单 preset 的状态查询语义
+  if (window.ClawFW.codexConnectionView) {
+    renderCodexAccountsList();
+    return;
+  }
   let providerName = getEditingProviderName();
   if (!providerName) return;
   let isZh = currentLanguage === 'zh';
@@ -406,8 +409,6 @@ function refreshOAuthStatus() {
   fetch('/protoclaw/oauth/codex/tokens/' + encodeURIComponent(providerName))
     .then(function(r) { return r.json(); })
     .then(function(status) {
-      window.ClawFW.oauthConnectionStatus = status.loggedIn ? 'connected' : 'disconnected';
-      updateCodexConnectionUI(!!status.loggedIn);
       let display = document.getElementById('oauth-status-display');
       if (!display) return;
       if (status.loggedIn) {
@@ -422,9 +423,128 @@ function refreshOAuthStatus() {
       }
     })
     .catch(function() {
-      window.ClawFW.oauthConnectionStatus = 'disconnected';
-      updateCodexConnectionUI(false);
       let display = document.getElementById('oauth-status-display');
       if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '未登录' : 'Not logged in') + '</span>';
     });
 }
+
+// ── Codex multi-account list (connection view) ─────────────────────
+//
+// 账号行复用 settings-preset-card 配方；行操作（设为当前/重命名/登出）经
+// data-provider 寻址，全局切换由服务端 activate 端点 + refresh-credentials
+// 广播完成（无客户端热重载逻辑）。
+
+function renderCodexAccountsList() {
+  let container = document.getElementById('codex-accounts-list');
+  if (!container) return;
+  let isZh = currentLanguage === 'zh';
+  container.innerHTML = '<div class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在加载账号…' : 'Loading accounts…') + '</div>';
+  fetch('/protoclaw/oauth/codex/accounts')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      let el = document.getElementById('codex-accounts-list');
+      if (!el) return;
+      let accounts = Array.isArray(data.accounts) ? data.accounts : [];
+      if (!accounts.length) {
+        el.innerHTML = '<div class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '尚无账号，点击上方按钮添加' : 'No accounts yet; use the buttons above to add one') + '</div>';
+        return;
+      }
+      el.innerHTML = accounts.map(function(a) { return codexAccountRowHtml(a, isZh); }).join('');
+    })
+    .catch(function() {
+      let el = document.getElementById('codex-accounts-list');
+      if (el) el.innerHTML = '<div class="oauth-status-text" style="color:#e57373;">' + (isZh ? '账号列表加载失败' : 'Failed to load accounts') + '</div>';
+    });
+}
+
+function codexAccountRowHtml(a, isZh) {
+  let status;
+  if (!a.hasToken) {
+    status = { color: 'var(--text-secondary)', icon: '○', label: isZh ? '未登录' : 'Not logged in' };
+  } else if (a.status && a.status.loggedIn) {
+    status = a.status.isExpiring
+      ? { color: '#ffb74d', icon: '⚠', label: isZh ? '即将过期' : 'Expiring soon' }
+      : { color: '#81c784', icon: '✓', label: isZh ? '已登录' : 'Logged in' };
+  } else {
+    status = { color: '#e57373', icon: '✕', label: isZh ? '已过期' : 'Expired' };
+  }
+  let expiry = a.status && a.status.expiresAt ? new Date(a.status.expiresAt).toLocaleString() : '';
+  let providerAttr = escapeHtml(a.providerName);
+  let actions = ''
+    + (a.hasToken && !a.active
+      ? '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" onclick="activateCodexAccountBtn(this)">' + (isZh ? '设为当前' : 'Set Active') + '</button>'
+      : '')
+    + '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" data-name="' + escapeHtml(a.displayName || '') + '" onclick="renameCodexAccountBtn(this)">' + (isZh ? '重命名' : 'Rename') + '</button>'
+    + '<button class="settings-btn settings-btn-secondary settings-btn-quiet" type="button" data-provider="' + providerAttr + '" onclick="logoutCodexAccountBtn(this)">' + (isZh ? '登出' : 'Logout') + '</button>';
+  return '<div class="settings-preset-card oauth-account-row' + (a.active ? ' active' : '') + '">'
+    + '<div class="settings-preset-dot"></div>'
+    + '<div class="settings-preset-info">'
+    + '<div class="settings-preset-name">' + escapeHtml(a.displayName || a.providerName)
+    + (a.active ? ' <span class="preset-tag">' + (isZh ? '当前' : 'Active') + '</span>' : '') + '</div>'
+    + '<div class="settings-preset-detail"><span style="color:' + status.color + ';">' + status.icon + ' ' + status.label + '</span>'
+    + (expiry ? ' · ' + (isZh ? '过期: ' : 'Expires: ') + escapeHtml(expiry) : '') + '</div>'
+    + '</div>'
+    + '<div class="settings-preset-actions">' + actions + '</div>'
+    + '</div>';
+}
+
+window.activateCodexAccountBtn = function(btn) {
+  let providerName = btn?.dataset?.provider;
+  if (!providerName) return;
+  let isZh = currentLanguage === 'zh';
+  fetch('/protoclaw/oauth/codex/accounts/' + encodeURIComponent(providerName) + '/activate', { method: 'POST' })
+    .then(async function(r) {
+      let data = await r.json().catch(function() { return {}; });
+      if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+      return data;
+    })
+    .then(function() {
+      // 全局切换：目录按新账号重拉；运行中会话由服务端广播 refresh-credentials 自然重 resolve
+      renderCodexAccountsList();
+      refreshModelCatalog('codex');
+    })
+    .catch(function(err) {
+      alert((isZh ? '切换失败: ' : 'Switch failed: ') + (err?.message || err));
+    });
+};
+
+window.renameCodexAccountBtn = function(btn) {
+  let providerName = btn?.dataset?.provider;
+  if (!providerName) return;
+  let isZh = currentLanguage === 'zh';
+  let next = prompt(isZh ? '账号显示名' : 'Account display name', btn?.dataset?.name || '');
+  if (next === null) return;
+  let trimmed = next.trim();
+  if (!trimmed) return;
+  fetch('/protoclaw/oauth/codex/accounts/' + encodeURIComponent(providerName), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ displayName: trimmed }),
+  })
+    .then(async function(r) {
+      if (!r.ok) {
+        let data = await r.json().catch(function() { return {}; });
+        throw new Error(data.error || ('HTTP ' + r.status));
+      }
+      renderCodexAccountsList();
+    })
+    .catch(function(err) {
+      alert((isZh ? '重命名失败: ' : 'Rename failed: ') + (err?.message || err));
+      renderCodexAccountsList();
+    });
+};
+
+window.logoutCodexAccountBtn = function(btn) {
+  let providerName = btn?.dataset?.provider;
+  if (!providerName) return;
+  let isZh = currentLanguage === 'zh';
+  fetch('/protoclaw/oauth/codex/accounts/' + encodeURIComponent(providerName), { method: 'DELETE' })
+    .then(function() {
+      // 登出后 active 自动回退到下一个有 token 的账号（服务端），目录随之重拉
+      renderCodexAccountsList();
+      refreshModelCatalog('codex');
+    })
+    .catch(function(err) {
+      alert((isZh ? '登出失败: ' : 'Logout failed: ') + (err?.message || err));
+    });
+};
