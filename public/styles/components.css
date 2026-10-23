@@ -13287,6 +13287,10 @@ body[data-theme="light"] .session-controls-rotation-model + .session-controls-ro
   border-top-color: rgba(0,0,0,0.08);
 }
 .session-controls-rotation-controls { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.session-controls-style-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.session-controls-style-row .force-continuation-candidate-main { flex: 1 1 auto; }
+.session-controls-style-row .session-controls-rotation-controls { justify-content: flex-end; flex: 0 0 180px; margin-top: 0; }
+.session-controls-style-row .session-controls-rotation-trigger { flex: 0 1 180px; width: 180px; }
 /* 触发按钮：配 .ccb-model-dropdown 浮层（同输入框模型切换配方） */
 .session-controls-rotation-trigger {
   flex: 1 1 120px; min-width: 0;

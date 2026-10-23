@@ -330,18 +330,9 @@
     if (caps.rot) sections.push(renderRotationSection({ zh, writeEnabled }));
     if (caps.style) sections.push(renderStyleSection({ zh, writeEnabled }));
 
-    const notes = [];
-    if (caps.fc) notes.push(zh
-      ? '手动停止和不可重试错误（如认证失败）不会自动重试；API 重试次数受上限约束。'
-      : 'Manual stops and non-retryable errors (e.g. auth failures) are not retried; API retries are capped.');
-    if (caps.style) notes.push(zh
-      ? '风格切换在下一次模型调用前生效；清空选择即关闭签名门禁。'
-      : 'Style changes apply before the next model call; clearing the selection disarms the signature gate.');
-
     return [
       '<div class="force-continuation-panel session-controls-panel">',
       ...sections,
-      notes.length ? '<div class="force-continuation-note">' + esc(notes.join(zh ? '' : ' ')) + '</div>' : '',
       '</div>',
     ].join('');
   }
@@ -624,16 +615,20 @@
     _closeRotationMenu();
   }
 
-  function _placeRotationMenu(el, rect) {
+  function _placeRotationMenu(el, rect, preferBelow = false) {
     document.body.appendChild(el);
     el.style.left = rect.left + 'px';
     el.style.top = '0px';
     const w = el.offsetWidth;
     const h = el.offsetHeight;
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - w - 8));
-    const top = rect.top - h - 4 >= 8
-      ? rect.top - h - 4
-      : Math.min(rect.bottom + 4, Math.max(8, window.innerHeight - h - 8));
+    const top = preferBelow
+      ? (rect.bottom + h + 4 <= window.innerHeight - 8
+        ? rect.bottom + 4
+        : Math.max(8, rect.top - h - 4))
+      : (rect.top - h - 4 >= 8
+        ? rect.top - h - 4
+        : Math.min(rect.bottom + 4, Math.max(8, window.innerHeight - h - 8)));
     el.style.left = left + 'px';
     el.style.top = top + 'px';
     requestAnimationFrame(function () { el.classList.add('visible'); });
@@ -932,7 +927,7 @@
     });
 
     _styleMenuEl = el;
-    _placeRotationMenu(el, btn.getBoundingClientRect());
+    _placeRotationMenu(el, btn.getBoundingClientRect(), true);
     setTimeout(function () {
       document.addEventListener('click', _styleMenuOutsideClick, { once: true });
     }, 0);
@@ -949,41 +944,32 @@
     const active = typeof status.activeStyle === 'string' ? status.activeStyle : '';
     const disabled = st.pending || !writeEnabled;
 
-    const facts = [];
-    if (styles.length) facts.push((zh ? '已发现 ' : 'found ') + String(styles.length));
-    facts.push(active
-      ? (zh ? '门禁已启用，每轮回复须签名' : 'gate on: every reply must sign')
-      : (zh ? '门禁未启用（未选择风格）' : 'gate off (no style selected)'));
-    if (status.lastAction && status.lastAction !== 'idle') {
-      facts.push((zh ? '最近动作 ' : 'last ') + String(status.lastAction));
-    }
-
     const rows = [];
     if (st.error) rows.push('<div class="session-controls-guard-error">' + esc(st.error) + '</div>');
     else if (!styles.length && st.initialized) rows.push('<div class="session-controls-guard-fact">' + esc(zh
-      ? '尚未发现风格：把风格 md 放入工作区 .agentdev/output-style/'
-      : 'No styles found: drop style md files into .agentdev/output-style/ in the workspace') + '</div>');
+      ? '未找到可用风格。'
+      : 'No styles are available.') + '</div>');
 
     return [
       '<section class="force-continuation-candidates session-controls-style">',
       '<div class="force-continuation-group-label">', zh ? '输出风格' : 'OUTPUT STYLE', '</div>',
-      '<div class="force-continuation-candidate">',
+      '<div class="force-continuation-candidate session-controls-style-row">',
       '<div class="force-continuation-candidate-main">',
       '<div class="force-continuation-candidate-label">', zh ? '风格选择' : 'Style', '</div>',
       '<div class="force-continuation-candidate-desc">', zh
-        ? '选中后下一次模型调用起按该风格输出，且每次最终回复须通过确认签名门禁。风格文件由你放入 .agentdev/output-style/。'
-        : 'Once selected, replies follow the style and each final reply must pass the confirmation-signature gate. Style files live in .agentdev/output-style/.', '</div>',
+        ? '选择用于回复的表达风格。'
+        : 'Choose a style for your replies.', '</div>',
+      '</div>',
       '<div class="session-controls-rotation-controls">',
       '<button type="button" class="session-controls-rotation-trigger" data-style-menu="1"'
       + ' title="', esc(zh ? '选择输出风格' : 'Pick output style'), '"', disabled ? ' disabled' : '', '>',
-      '<span class="scr-trigger-label">', esc(active || (zh ? '未选择（不启用）' : '(none)')), '</span>',
+      '<span class="scr-trigger-label">', esc(active || (zh ? '未选择' : '(none)')), '</span>',
       ROTATION_CHEVRON_SVG,
       '</button>',
       '</div>',
       '</div>',
     ].concat(rows)
-      .concat(facts.length ? ['<div class="session-controls-guard-fact">' + esc(facts.join(' · ')) + '</div>'] : [])
-      .concat(['</div>', '</section>'])
+      .concat(['</section>'])
       .join('');
   }
 

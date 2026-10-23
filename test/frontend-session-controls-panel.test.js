@@ -218,8 +218,7 @@ describe('SessionControlsPanel', () => {
     // 迁移回归：context-guard 的开关已迁至上边栏 badge，面板不再渲染任何 guard 控件
     assert.doesNotMatch(html, /data-guard-armed/);
     assert.doesNotMatch(html, /data-rotation-enabled/);
-    // 底部说明只覆盖已显示的 section
-    assert.match(html, /手动停止和不可重试错误（如认证失败）不会自动重试/);
+    assert.doesNotMatch(html, /手动停止和不可重试错误|API 重试次数受上限约束/);
     assert.doesNotMatch(html, /超阈值打断触发后自动关闭/);
   });
 
@@ -340,9 +339,11 @@ describe('SessionControlsPanel output style (stylized-output)', () => {
     await ctx.run('window.SessionControlsPanel.refreshStyleStatus({ renderWhenDone: false })');
     const html = ctx.run('window.SessionControlsPanel.render()');
 
+    assert.match(html, /session-controls-style-row/);
     assert.match(html, /data-style-menu/);
     assert.match(html, /简洁汇报/);
-    assert.match(html, /门禁已启用/);
+    assert.match(html, /选择用于回复的表达风格/);
+    assert.doesNotMatch(html, /已发现|门禁已启用|门禁未启用|最近动作|风格文件由你放入|风格切换在下一次模型调用前生效|清空选择即关闭签名门禁/);
 
     const invoke = invokeCalls.find((c) => String(c.url).includes('capability_invoke'));
     assert.ok(invoke, 'capability_invoke was called');
