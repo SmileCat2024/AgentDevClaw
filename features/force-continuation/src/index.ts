@@ -194,10 +194,10 @@ export class ForceContinuation implements AgentFeature {
    * a segment. Non-retryable errors never pass the retryable check, and
    * user cancellations arrive as status=cancelled, not here.
    */
-  requestApiErrorContinuation(outcome: { status?: unknown; reason?: unknown; error?: OutcomeErrorFact | null }): string | null {
-    if (!this.config.apiErrorRetry) return null;
-    if (!isRetryableApiErrorOutcome(outcome)) return null;
-    if (!this.canRequestContinuation()) return null;
+  requestApiErrorContinuation(outcome: { status?: unknown; reason?: unknown; error?: OutcomeErrorFact | null }): boolean {
+    if (!this.config.apiErrorRetry) return false;
+    if (!isRetryableApiErrorOutcome(outcome)) return false;
+    if (!this.canRequestContinuation()) return false;
 
     this.lastFinishReason = normalizeStopReason(outcome.reason);
     this.lastOutcomeStatus = normalizeStopReason(outcome.status);
@@ -205,7 +205,7 @@ export class ForceContinuation implements AgentFeature {
       category: typeof outcome.error?.category === 'string' ? outcome.error.category : null,
       consecutiveContinuations: this.consecutiveContinuations,
     });
-    return '[本条消息由系统自动发送] [API 重试：网络错误] 上一段模型调用因可重试的网络错误而中断。请检查已有上下文，从中断处继续完成当前任务；不要重复已经完成的工作。';
+    return true;
   }
 
   async recordCallFinish(ctx: { finishReason?: unknown; outcome?: { status?: unknown; reason?: unknown; error?: OutcomeErrorFact | null; model?: { providerStopReason?: unknown } } }): Promise<void> {

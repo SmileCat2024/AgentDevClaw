@@ -40,9 +40,9 @@ describe('API retry', () => {
   it('controls the two policies independently', async () => {
     const f = new ForceContinuation({ outputTruncation: false });
     assert.equal(await f.decideContinuation(step().ctx), Decision.Continue);
-    assert.match(f.requestApiErrorContinuation(network), /API 重试：网络错误/);
+    assert.equal(f.requestApiErrorContinuation(network), true);
     f.setTriggers({ outputTruncation: true, apiErrorRetry: false });
-    assert.equal(f.requestApiErrorContinuation(network), null);
+    assert.equal(f.requestApiErrorContinuation(network), false);
     assert.equal(await f.decideContinuation(step().ctx), Decision.Approve);
   });
   it('accepts only retryable network categories, never other runtime errors or cancellation', () => {
@@ -55,7 +55,7 @@ describe('API retry', () => {
       { ...network, error: { category: 'output_truncated', retryable: true } },
       { ...network, error: { category: 'runtime_error', retryable: true } },
       { ...network, error: { category: 'auth_error', retryable: false } },
-    ]) assert.equal(f.requestApiErrorContinuation(outcome), null);
+    ]) assert.equal(f.requestApiErrorContinuation(outcome), false);
   });
   it('shares the budget between output and network retries across CallFinish', async () => {
     const f = new ForceContinuation({ maxConsecutiveContinuations: 2 });
@@ -63,7 +63,7 @@ describe('API retry', () => {
     await f.recordCallFinish({ outcome: network });
     assert.ok(f.requestApiErrorContinuation(network));
     await f.recordCallFinish({ outcome: network });
-    assert.equal(f.requestApiErrorContinuation(network), null);
+    assert.equal(f.requestApiErrorContinuation(network), false);
     assert.equal(f.getStatus().lastAction, 'limit_reached');
     await f.recordCallFinish({ outcome: { status: 'completed', reason: 'completed' } });
     assert.equal(f.getStatus().consecutiveContinuations, 0);

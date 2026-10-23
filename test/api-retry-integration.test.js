@@ -47,26 +47,31 @@ for (const [protocol, factory] of [['chat', createOpenAILLM], ['responses', crea
     for (const policy of ['recover', 'disabled', 'exhausted', 'cancel']) {
       test(`${protocol}: real HTTP ${phase} timeout with ${policy} network retry policy`, async t => {
         let requests = 0;
+        const requestBodies = [];
         let firstRequest;
         const received = new Promise(resolve => { firstRequest = resolve; });
         const server = createServer((req, res) => {
-          req.resume();
-          requests++;
-          firstRequest();
-          if (policy !== 'recover' || requests === 1) {
-            if (phase === 'stream') {
-              res.writeHead(200, { 'content-type': 'text/event-stream' });
-              res.flushHeaders();
+          const chunks = [];
+          req.on('data', chunk => chunks.push(chunk));
+          req.on('end', () => {
+            requests++;
+            requestBodies.push(Buffer.concat(chunks).toString('utf8'));
+            firstRequest();
+            if (policy !== 'recover' || requests === 1) {
+              if (phase === 'stream') {
+                res.writeHead(200, { 'content-type': 'text/event-stream' });
+                res.flushHeaders();
+              }
+              return;
             }
-            return;
-          }
-          res.writeHead(200, { 'content-type': 'text/event-stream' });
-          const data = protocol === 'chat'
-            ? { id: 'chat-test', choices: [{ index: 0, delta: { content: 'recovered' }, finish_reason: 'stop' }] }
-            : { type: 'response.completed', response: { id: 'resp-test', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'recovered', annotations: [] }] }] } };
-          const created = protocol === 'responses'
-            ? `data: ${JSON.stringify({ type: 'response.created', response: { id: 'resp-test', status: 'in_progress', output: [] } })}\n\n` : '';
-          res.end(`${created}data: ${JSON.stringify(data)}\n\ndata: [DONE]\n\n`);
+            res.writeHead(200, { 'content-type': 'text/event-stream' });
+            const data = protocol === 'chat'
+              ? { id: 'chat-test', choices: [{ index: 0, delta: { content: 'recovered' }, finish_reason: 'stop' }] }
+              : { type: 'response.completed', response: { id: 'resp-test', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'recovered', annotations: [] }] }] } };
+            const created = protocol === 'responses'
+              ? `data: ${JSON.stringify({ type: 'response.created', response: { id: 'resp-test', status: 'in_progress', output: [] } })}\n\n` : '';
+            res.end(`${created}data: ${JSON.stringify(data)}\n\ndata: [DONE]\n\n`);
+          });
         });
         t.after(() => new Promise(resolve => {
           server.close(resolve);
@@ -91,6 +96,8 @@ for (const [protocol, factory] of [['chat', createOpenAILLM], ['responses', crea
         if (policy === 'recover') {
           assert.equal(finished.status, 'completed');
           assert.ok(agent.getContext().getAll().some(message => message.content === 'recovered'));
+          assert.match(requestBodies[1], /go/, 'the retry request must include the original conversation context');
+          assert.doesNotMatch(requestBodies[1], /本条消息由系统自动发送|API 重试：网络错误/, 'retry must not append a synthetic user prompt');
         } else if (policy === 'cancel') {
           assert.equal(finished.status, 'cancelled');
           assert.equal(feature.getStatus().consecutiveContinuations, 0);

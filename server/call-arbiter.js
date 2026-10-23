@@ -347,24 +347,22 @@ export class CallArbiter {
       }
 
       // ── Execute one onCall segment ──
-      // capabilityActivations / metadata 只随首段携带：续跑段（force-continuation
-      // 等）的输入不是新用户消息，激活与元数据已由首段消费完毕。
-      // 输入身份（kind/source/sourceRef）同样只属于首段：续跑段是宿主合成的
-      // 输入，落地形态由框架缺省的 user 分支处理（system 上下文已在段前注入）。
-      // sourceRef（ADR-0031 步骤一）随 CallTurnOptions 进框架，turn 事件据此
-      // 把执行结果关联回触发它的那次提交；source 对 user 身份同样透传
-      // （source 仅在 reminder 落地时用作 Message.source，user 路径纯身份）。
+      // capabilityActivations / metadata 只随首段携带：后续段复用已消费的上下文。
+      // 原始输入身份（kind/source/sourceRef）也只属于首段；失败重试段显式使用
+      // kind='resume'，让框架不追加新消息，直接凭现有上下文续跑。
+      // sourceRef 随 CallTurnOptions 进框架，供 turn 事件关联原始提交。
       const activations = envelope._segmentCount === 1 ? envelope.capabilityActivations : undefined;
       const turnMetadata = envelope._segmentCount === 1 ? envelope.metadata : undefined;
-      const turnOptions = envelope._segmentCount === 1
-        ? {
-            ...(envelope.kind === 'reminder' ? { kind: 'reminder' } : {}),
-            ...(envelope.source ? { source: envelope.source } : {}),
-            ...(envelope.sourceRef ? { sourceRef: envelope.sourceRef } : {}),
-          }
-        : undefined;
+      const isResume = envelope._resume === true;
+      const turnOptions = {
+        ...(envelope._segmentCount === 1 && envelope.kind === 'reminder' ? { kind: 'reminder' } : {}),
+        ...(envelope._segmentCount === 1 && envelope.source ? { source: envelope.source } : {}),
+        ...(envelope._segmentCount === 1 && envelope.sourceRef ? { sourceRef: envelope.sourceRef } : {}),
+        ...(isResume ? { kind: 'resume' } : {}),
+      };
+      envelope._resume = false;
       const result = await this._agent.onCall(input, envelope.images, activations, turnMetadata,
-        Object.keys(turnOptions || {}).length > 0 ? turnOptions : undefined);
+        Object.keys(turnOptions).length > 0 ? turnOptions : undefined);
       envelope.result = typeof result === 'string' ? result : '';
 
       // ── Observe the structured call outcome ──
@@ -421,10 +419,12 @@ export class CallArbiter {
         // Network failures may be retried by the session API retry policy.
         // Step limits and output-budget errors are never recovered here.
         if (outcome.status === 'failed') {
-          const forcedInput = this._requestForcedContinuationInput(outcome);
-          if (typeof forcedInput === 'string' && forcedInput) {
+          const shouldResume = this._requestForcedContinuationInput(outcome);
+          if (shouldResume) {
             console.log(`[CallArbiter] force continuation after ${outcome.reason} (envelope=${envelope.id})`);
-            input = forcedInput;
+            // Retry the existing transcript without adding a synthetic user prompt.
+            input = '';
+            envelope._resume = true;
             continue;
           }
         }
