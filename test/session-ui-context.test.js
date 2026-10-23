@@ -438,9 +438,8 @@ test('request input controls keep the runtime they were rendered for', () => {
   assert.ok(inputComposerSource.includes(
     'function(event) { handleInputKey(event, requestId, boundRuntimeId); }',
   ));
-  assert.ok(inputComposerSource.includes(
-    'function() { submitInput(requestId, boundRuntimeId); }',
-  ));
+  // Button routing is exercised at runtime in frontend-input-convergence.test.js;
+  // do not bind this contract to the submit callback's source spelling.
   assert.match(inputComposerSource, /visibleActions\.map[\s\S]*?escapeHtml\(boundRuntimeId\)/);
 });
 

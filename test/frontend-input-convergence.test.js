@@ -279,7 +279,7 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
     var currentOverviewSignature = '';
     var currentTodoPlan = {};
     var currentTodoPlanSignature = '';
-    var currentRuntimeConnected = true;
+    currentRuntimeConnected = true;
     // 队列乐观态（persistent-input 域全局；§3 级 6 输入）+ 投影归属
     var _queuedTexts = [];
     var _pendingQueuedCount = 0;
@@ -762,6 +762,146 @@ function loadQueueSubmitPaths(ctx) {
   ctx.window.__clawAuthReady = new Promise(() => {});
   ctx.loadSource('public/src/modules/sse-client.js');
 }
+
+// Real notification → composer button path, including an idle text lease that
+// remains open when a background reminder starts another call.
+function loadWakeupButtonPaths(ctx) {
+  const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+  ctx.run(source.slice(source.indexOf('function onPersistentBtnClick('), source.indexOf('function _renderQueueBubbles(container)')));
+  ctx.run(`var _submitInFlight = false; var _sendingHoldTimer = null;
+    var _sendingStartedAt = 0; var _lastCallFinishTime = 0;
+    var _recapPendingTrigger = false;
+    var _interruptSuppression = new Map();
+    function _markAgentCallStartedForNotify() {}
+    function renderAgentList() {}
+    function _imageBucket() { return []; }
+    function normalizeAgentIdentity(id) { return String(id || '').trim(); }
+  `);
+  const core = fs.readFileSync('public/src/app-core.js', 'utf8');
+  ctx.run(core.slice(core.indexOf('function getNotificationCallStartedAt('), core.indexOf('// 追踪刚完成调用')));
+  ctx.state.now = 1000;
+  ctx.Date = class extends Date { static now() { return ctx.state.now; } };
+  ctx.window.setInterval = () => 0;
+  ctx.loadSource('public/src/modules/runtime-status.js');
+  ctx.run('function ensureChatRuntimeIndicator() {}');
+  for (const id of ['notification-status', 'notification-phase', 'notification-summary', 'notification-metrics']) {
+    const el = ctx.document.createElement('div');
+    el.id = id;
+    ctx.state.doc.body.appendChild(el);
+  }
+}
+
+it('background wakeup restores the interrupt button with an outstanding text lease', () => {
+  const ctx = createConvergenceSandbox();
+  loadWakeupButtonPaths(ctx);
+  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'idle-lease' }] });
+    updateNotificationStatus({ callActive: false, runtime: { callActive: false,
+      lastOutcome: { status: 'continued', reason: 'suspended' } } });`);
+  const textarea = ctx.run("document.getElementById('input-idle-lease')");
+  const button = ctx.state.container.querySelector('.persistent-action-btn');
+  assert.equal(button.classList.contains('is-stop'), false, 'waiting may show send');
+  ctx.run(`updateNotificationStatus({ callActive: true,
+    state: { type: 'call.start', timestamp: 100, data: {} },
+    runtime: { callActive: true, callStartedAt: 100 } });`);
+  assert.equal(ctx.run('isRuntimeCalling(currentRuntimeAgentId)'), true);
+  assert.equal(button.classList.contains('is-stop'), true, 'running must show interrupt, even in requests mode');
+  assert.equal(ctx.run("document.getElementById('input-idle-lease')"), textarea);
+  let interrupts = 0;
+  ctx.interruptAgent = () => { interrupts++; };
+  button.onclick();
+  assert.equal(interrupts, 1, 'empty running composer must interrupt, not submit an empty lease');
+});
+
+it('request send button retains its bound runtime even if selection changes before rerender', () => {
+  const ctx = createConvergenceSandbox();
+  loadWakeupButtonPaths(ctx);
+  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'bound-lease' }] });`);
+  const textarea = ctx.run("document.getElementById('input-bound-lease')");
+  textarea.value = 'message for the original session';
+  const submissions = [];
+  ctx.submitInput = (requestId, runtimeId) => submissions.push({ requestId, runtimeId });
+  ctx.currentRuntimeAgentId = 'agent-2';
+  ctx.state.container.querySelector('.persistent-action-btn').onclick();
+  assert.deepEqual(submissions, [{ requestId: 'bound-lease', runtimeId: 'agent-1' }],
+    'the callback must never target the newly selected runtime using the old lease');
+});
+
+it('running request composer keeps text submission and reports rejected input without a false echo', async () => {
+  const ctx = createConvergenceSandbox();
+  loadWakeupButtonPaths(ctx);
+  ctx.loadSource('public/src/modules/input-helpers.js');
+  ctx._nextPaint = async () => {};
+  ctx._resolvePendingImagesForTarget = async () => ({ images: [], failedCount: 0 });
+  ctx._imageBucketKey = () => 'images-a';
+  ctx.poll = () => {};
+  const toasts = [];
+  const echoes = [];
+  ctx.window.ClawToast = { show: (value) => toasts.push(value) };
+  ctx.window.ClawFW = { ...ctx.window.ClawFW, pushOptimisticUserEcho: (value) => echoes.push(value) };
+  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'idle-lease' }] });
+    updateNotificationStatus({ callActive: true, runtime: { callActive: true, callStartedAt: 100 } });`);
+  const textarea = ctx.run("document.getElementById('input-idle-lease')");
+  textarea.value = 'follow-up during wakeup';
+  ctx.run('_cacheSessionInput(document.getElementById("input-idle-lease"))');
+  const requests = [];
+  ctx.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    ctx.state.now += 301;
+    return { ok: false, status: 404, json: async () => ({ error: 'Request not found or expired' }) };
+  };
+  await ctx.state.container.querySelector('.persistent-action-btn').onclick();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/api/agents/agent-1/input');
+  assert.equal(requests[0].body.requestId, 'idle-lease');
+  assert.equal(requests[0].body.response.text, 'follow-up during wakeup');
+  assert.equal(textarea.value, 'follow-up during wakeup');
+  assert.equal(ctx.run('_sessionInputCache["session-a"]'), textarea.value);
+  assert.deepEqual(echoes, [], 'rejected input must not look sent');
+  assert.equal(toasts.some((toast) => toast.status === 'error'), true, 'rejection must be visible, not silently retained');
+  assert.equal(ctx.state.container.querySelector('.persistent-action-btn').classList.contains('is-stop'), true,
+    'submission feedback must restore the running button, not force send');
+});
+
+it('request composer keeps interrupting sticky through a stale running frame until call finish', async () => {
+  const ctx = createConvergenceSandbox();
+  loadWakeupButtonPaths(ctx);
+  const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+  ctx.run(source.slice(source.indexOf('async function interruptAgent()'), source.indexOf('// ── 启动上次对话结束时间')));
+  ctx.run('function updateQueueIndicator() {} function newIdempotencyKey() { return "interrupt-key"; }');
+  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'idle-lease' }] });
+    updateNotificationStatus({ callActive: true, runtime: { callActive: true, callStartedAt: 100 } });`);
+  const request = deferred();
+  const requests = [];
+  ctx.fetch = (url) => { requests.push(url); return request.promise; };
+  const button = ctx.state.container.querySelector('.persistent-action-btn');
+  button.onclick();
+  assert.deepEqual(requests, ['/api/agents/agent-1/interrupt']);
+  assert.equal(button.classList.contains('is-interrupting'), true);
+  ctx.run(`updateNotificationStatus({ callActive: true, runtime: { callActive: true, callStartedAt: 100 } });`);
+  button.onclick();
+  assert.equal(requests.length, 1, 'no duplicate interrupt or accidental text submission');
+  assert.equal(button.classList.contains('is-interrupting'), true);
+  request.resolve({ ok: true, status: 200, json: async () => ({ success: true }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(button.classList.contains('is-interrupting'), true, 'HTTP acceptance is not call termination');
+  ctx.run(`updateNotificationStatus({ callActive: false, state: { type: 'call.finish', timestamp: 200,
+    data: { status: 'cancelled', reason: 'interrupted' } }, runtime: { callActive: false } });`);
+  assert.equal(button.classList.contains('is-interrupting'), false);
+  assert.equal(button.classList.contains('is-stop'), false);
+});
+
+it('a text lease arriving during a running call cannot reset the interrupt button', () => {
+  const ctx = createConvergenceSandbox();
+  loadWakeupButtonPaths(ctx);
+  ctx.run(`renderInputRequests([]);
+    updateNotificationStatus({ callActive: true, runtime: { callActive: true, callStartedAt: 100 } });
+    applySessionViewPatch({ inputRequests: [{ requestId: 'late-lease' }] });`);
+  const button = ctx.state.container.querySelector('.persistent-action-btn');
+  assert.equal(button.classList.contains('is-stop'), true);
+  ctx.run(`updateNotificationStatus({ callActive: false, runtime: { callActive: false,
+    lastOutcome: { status: 'continued', reason: 'suspended' } } });`);
+  assert.equal(button.classList.contains('is-stop'), false, 'waiting restores send without removing the lease');
+});
 
 function queueBubbleTexts(ctx) {
   return ctx.state.container.querySelectorAll('.queue-bubble').map((el) => el.textContent);

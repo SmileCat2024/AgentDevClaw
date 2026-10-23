@@ -636,6 +636,12 @@ renderInputRequests([]) → 重建前 _storeVisibleSessionInputDraft 读到 live
 
 ---
 
+## 输入请求在场时的后台唤醒
+
+文本 input lease 可在后台通知唤醒 Agent 后继续存在。`requests` / `persistent` 是提交端点，不是运行态：两种模式都保留同一个 `persistent-action-btn`，由 `_syncPersistentActionButton()` 更新发送、打断和正在停止状态，提交反馈结束也回到此入口。请求模式移除按钮 ID 或固定恢复 send，会使 notification 已报告 `callActive:true` 时按钮仍不可打断。
+
+回归：`test/frontend-input-convergence.test.js` 驱动真实 notification、composer 与点击路径，覆盖保留/迟到文本 lease、打断粘性与拒绝投递；`test/input-wakeup-browser-check.mjs` 验证实际图标、请求、刷新恢复和重试。
+
 ## 8c. 运行胶囊计时状态属于会话，切换必须清零（2026-08-19）
 
 `_renderLastCallElapsed`（1s interval）依赖三个模块级变量：`_lastCallFinishTime`、

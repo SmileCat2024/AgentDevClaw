@@ -379,23 +379,19 @@ function applyComposerMode(card, mode, lease = null) {
     // 三态（send/stop/interrupting）交还 _syncPersistentActionButton 决定
     _syncPersistentActionButton();
   } else {
-    // 请求卡的发送按钮只是 send：移除 persistent 三态标识，避免 calling
-    // 状态误把请求卡发送按钮切为 stop（现状请求卡按钮无此 id，行为等价）。
-    sendBtn.removeAttribute('id');
-    sendBtn.classList.remove('is-stop', 'is-interrupting', 'is-sending');
-    sendBtn.removeAttribute('aria-busy');
-    sendBtn.title = 'Send';
-    const iconSend = sendBtn.querySelector('.icon-send');
-    const iconStop = sendBtn.querySelector('.icon-stop');
-    if (iconSend) iconSend.style.display = '';
-    if (iconStop) iconStop.style.display = 'none';
+    // 输入租约与 call 活动正交：后台唤醒时，等待真人输入的 lease 仍可能
+    // 存在。提交端点不决定按钮状态，两种模式都消费运行态/打断态。
+    sendBtn.id = 'persistent-action-btn';
+    _syncPersistentActionButton();
     sendBtn.onclick = function() {
       const textarea = card.querySelector('.user-input-textarea');
-      const submit = function() { submitInput(requestId, boundRuntimeId); };
+      const submit = function() {
+        return onPersistentBtnClick(() => submitInput(requestId, boundRuntimeId));
+      };
       if (window.ClawSlash?.submitWithPendingPrompts && textarea) {
         void window.ClawSlash.submitWithPendingPrompts(textarea, submit);
       } else {
-        submit();
+        return submit();
       }
     };
   }

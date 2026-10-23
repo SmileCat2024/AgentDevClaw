@@ -350,8 +350,8 @@ describe('persistent composer DOM identity (ticket 036)', () => {
 
     // 发送按钮端点绑定随模式切换（persistent → user-turn，requests → submitInput）
     ctx.run('lastRenderedInputSignature = ""; renderInputRequests([{ requestId: "r2" }])');
-    assert.equal(ctx.run("document.getElementById('persistent-action-btn')"), null,
-      'requests mode must not expose the persistent tri-state send button');
+    assert.ok(ctx.run("document.getElementById('persistent-action-btn')"),
+      'requests mode retains the same runtime-controlled action button');
     assert.equal(ctx.run("document.getElementById('input-r1')"), null,
       'stale request endpoint id must be replaced');
   });

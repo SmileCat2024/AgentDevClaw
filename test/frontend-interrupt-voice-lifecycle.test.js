@@ -9,6 +9,7 @@ describe('persistent input interrupt precedence', () => {
     let stopRecordingCalls = 0;
     const classes = new Set(['is-stop']);
     const button = {
+      closest: () => ({ querySelector: () => null }),
       classList: {
         contains: (name) => classes.has(name),
       },
@@ -25,7 +26,7 @@ describe('persistent input interrupt precedence', () => {
       submitQueuedInput() { throw new Error('must not submit'); },
     });
     const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-    ctx.run(sourceBetween(source, 'function onPersistentBtnClick()', 'function _setActionBtnStop()'));
+    ctx.run(sourceBetween(source, 'function onPersistentBtnClick(', 'function _setActionBtnStop()'));
     ctx.run('let _submitInFlight = false; onPersistentBtnClick();');
 
     assert.equal(interruptCalls, 1);
@@ -40,6 +41,7 @@ describe('persistent input interrupt precedence', () => {
     let submitCalls = 0;
     const classes = new Set(['is-stop']);
     const button = {
+      closest: () => ({ querySelector: () => textarea }),
       classList: {
         contains: (name) => classes.has(name),
       },
@@ -57,7 +59,7 @@ describe('persistent input interrupt precedence', () => {
       submitQueuedInput() { submitCalls += 1; },
     });
     const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-    ctx.run(sourceBetween(source, 'function onPersistentBtnClick()', 'function _setActionBtnStop()'));
+    ctx.run(sourceBetween(source, 'function onPersistentBtnClick(', 'function _setActionBtnStop()'));
     ctx.run('let _submitInFlight = false; onPersistentBtnClick();');
 
     assert.equal(interruptCalls, 0);
@@ -70,6 +72,7 @@ describe('persistent input interrupt precedence', () => {
     let submitCalls = 0;
     const classes = new Set(['is-stop']);
     const button = {
+      closest: () => ({ querySelector: () => textarea }),
       classList: {
         contains: (name) => classes.has(name),
       },
@@ -88,7 +91,7 @@ describe('persistent input interrupt precedence', () => {
       submitQueuedInput() { submitCalls += 1; },
     });
     const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-    ctx.run(sourceBetween(source, 'function onPersistentBtnClick()', 'function _setActionBtnStop()'));
+    ctx.run(sourceBetween(source, 'function onPersistentBtnClick(', 'function _setActionBtnStop()'));
     ctx.run('let _submitInFlight = false; onPersistentBtnClick();');
 
     assert.equal(interruptCalls, 0);

@@ -445,7 +445,7 @@ function renderPersistentInput(container) {
   updateThinkingEffortSwitcher();
 }
 
-function onPersistentBtnClick() {
+function onPersistentBtnClick(submit) {
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
   if (_submitInFlight) return;         // fetch 进行中：阻止连点（防误触暂停）
@@ -453,7 +453,7 @@ function onPersistentBtnClick() {
   // 输入框有内容时，按钮的语义是发送，即使 runtime 正在处理上一轮；
   // user-turn 会由 ViewerWorker 排队。仅空输入时才把 stop 状态解释为中断。
   // 这也避免轮询状态滞后把一个已空闲 runtime 永久卡在 stop 按钮上。
-  const textarea = document.getElementById('input-persistent');
+  const textarea = btn.closest('.user-input-card')?.querySelector('.user-input-textarea');
   const hasText = !!textarea?.value?.trim();
   const hasImages = _imageBucket().length > 0;
   const hasSessionReferences = (window.SessionReference?.peek?.() || []).length > 0;
@@ -471,7 +471,7 @@ function onPersistentBtnClick() {
     _voicePendingSend = true;
     return;
   }
-  submitQueuedInput();
+  return typeof submit === 'function' ? submit() : submitQueuedInput();
 }
 
 function _setActionBtnStop() {
@@ -515,14 +515,10 @@ function _setActionBtnSend() {
   if (iconStop) iconStop.style.display = 'none';
 }
 
-// 发送进行中（点击/Enter → user-turn 落定）：spinner 替代图标，覆盖
-// 图片转存 + fetch 的整个提交窗口，消除"点了没反应"的空窗手感。
-// requests 端点（请求卡模式）下按钮无 id，回落类名定位——composer 卡
-// 内只有一个 .persistent-action-btn 按钮。图标用 inline style 隐藏（与
-// 三个 setter 同款），恢复由 _restoreActionBtnAfterSubmit 完成。
+// 发送进行中（点击/Enter → 投递落定）：两种 composer 端点共用 spinner，
+// 覆盖图片转存 + fetch 的整个提交窗口；恢复后重新读取运行态。
 function _setActionBtnSending() {
-  const btn = document.getElementById('persistent-action-btn')
-    || document.querySelector('.persistent-action-btn');
+  const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
   btn.classList.remove('is-stop', 'is-interrupting');
   btn.classList.add('is-sending');
@@ -534,24 +530,9 @@ function _setActionBtnSending() {
   if (iconStop) iconStop.style.display = 'none';
 }
 
-// 提交窗口结束的统一恢复：persistent 端点（按钮持有 id）交还三态同步；
-// requests 端点按钮无 id、无三态，复位为纯 send 图标（applyComposerMode
-// requests 分支的同款复位）。
+// 提交窗口结束后，两种输入端点都恢复到当前运行态，而非固定恢复发送。
 function _restoreActionBtnAfterSubmit() {
-  const btn = document.getElementById('persistent-action-btn')
-    || document.querySelector('.persistent-action-btn');
-  if (!btn) return;
-  if (btn.id === 'persistent-action-btn') {
-    _syncPersistentActionButton();
-  } else {
-    btn.classList.remove('is-sending');
-    btn.removeAttribute('aria-busy');
-    btn.title = 'Send';
-    const iconSend = btn.querySelector('.icon-send');
-    const iconStop = btn.querySelector('.icon-stop');
-    if (iconSend) iconSend.style.display = '';
-    if (iconStop) iconStop.style.display = 'none';
-  }
+  _syncPersistentActionButton();
 }
 
 // ── 发送反馈窗口（persistent 与 requests 两端点共用）──────────────────

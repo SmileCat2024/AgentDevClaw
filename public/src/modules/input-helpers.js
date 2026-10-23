@@ -379,6 +379,8 @@ async function _submitInputInner(requestId, targetRuntimeId, viewToken) {
       // 无兜底路径：归还激活与引用，输入保留供重试
       window.ClawSlash?.restoreActivations?.(capabilityActivations);
       window.SessionReference?.restore?.(sessionRefs);
+      const error = await res.json().catch(() => ({}));
+      _notifyInputSubmissionFailed(targetRuntimeId, error.error || `HTTP ${res.status}`);
     }
   } catch (e) {
     console.error('提交输入失败:', e);
@@ -393,16 +395,28 @@ async function _submitInputInner(requestId, targetRuntimeId, viewToken) {
           turnMetadata,
           imageKey: targetImageKey,
         });
-      } catch {
+      } catch (threadError) {
         // Thread Inbox 也不可用：保留输入文本与激活，用户可重试
         window.ClawSlash?.restoreActivations?.(capabilityActivations);
         window.SessionReference?.restore?.(sessionRefs);
+        _notifyInputSubmissionFailed(targetRuntimeId, threadError);
       }
     } else {
       window.ClawSlash?.restoreActivations?.(capabilityActivations);
       window.SessionReference?.restore?.(sessionRefs);
+      _notifyInputSubmissionFailed(targetRuntimeId, e);
     }
   }
+}
+
+function _notifyInputSubmissionFailed(runtimeId, error) {
+  window.ClawToast?.show?.({
+    id: `input-failed-${runtimeId}`,
+    status: 'error',
+    title: currentLanguage === 'zh' ? '消息发送失败，输入已保留' : 'Message not sent; input preserved',
+    description: error instanceof Error ? error.message : String(error),
+    autoDismiss: 6000,
+  });
 }
 
 /**
