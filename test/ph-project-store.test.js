@@ -140,6 +140,34 @@ describe('PH 独立项目路由（隔离数据根）', () => {
     assert.deepStrictEqual(listDir(sharedDir), before);
   });
 
+  test('list 附带 lastActivityAt：项目会话最大 updatedAt；无会话项目为 null', async () => {
+    const { updateSessionIndex } = await import('../server/shared/session-access.js');
+    const resA = await call(createHandler, { body: { name: 'Act', workDirectory: sharedDir } });
+    const resIdle = await call(createHandler, { body: { name: 'Idle', workDirectory: sharedDir } });
+    const actId = resA.jsonPayload.project.id;
+    await updateSessionIndex('programming-helper', (index) => {
+      index.sessions = [
+        { id: 's_act_old', title: 'older', projectId: actId, updatedAt: '2026-10-20T10:00:00.000Z' },
+        { id: 's_act_new', title: 'newer', projectId: actId, updatedAt: '2026-10-22T08:30:00.000Z' },
+      ];
+      return index;
+    });
+
+    const listRes = await call(listHandler, { query: {} });
+    assert.equal(listRes.statusCode, 200);
+    const byId = new Map(listRes.jsonPayload.projects.map((p) => [p.id, p]));
+    assert.equal(byId.get(actId).lastActivityAt, '2026-10-22T08:30:00.000Z', 'max session updatedAt across project sessions');
+    assert.equal(byId.get(resIdle.jsonPayload.project.id).lastActivityAt, null, 'project without sessions has null');
+
+    // 索引与落盘文件不泄漏给后续测试（共享数据根：托管项目测试断言
+    // sessions 目录不存在，仅清空数组不够，必须还原文件系统原状）
+    await updateSessionIndex('programming-helper', (index) => {
+      index.sessions = [];
+      return index;
+    });
+    rmSync(join(DATA_ROOT, 'workspaces', 'programming-helper', 'sessions'), { recursive: true, force: true });
+  });
+
   test('托管项目：数据根 ph-projects/<id>/ 专属目录；无 Session / workspace state 副作用', async () => {
     const res = await call(createHandler, { body: { name: 'Managed 项目' } });
     assert.equal(res.statusCode, 200);

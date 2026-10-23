@@ -499,12 +499,10 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-project-dropdown-item ph-dir-item' + (isActive ? ' active' : '') + '" data-dir-id="' + escapeHtml(entry.id) + '" data-project-id="' + escapeHtml(entry.id) + '" aria-haspopup="menu" aria-expanded="false" onclick="window.phSwitchProject(\'' + escapeHtml(entry.id) + '\')"' + menuItemKbd + '>',
       '<div class="ph-project-dropdown-avatar">' + escapeHtml((entry.name || '?')[0].toUpperCase()) + '</div>',
       '<div class="ph-project-dropdown-info">',
-      '<div class="ph-project-dropdown-name">' + escapeHtml(entry.name)
-        + (entry.remoteOnly ? '<span class="ph-dir-remote-badge">' + escapeHtml(isZh ? '远程' : 'Remote') + '</span>' : '')
-        + '</div>',
+      '<div class="ph-project-dropdown-name">' + escapeHtml(entry.name) + '</div>',
       '<div class="ph-project-dropdown-path">' + escapeHtml(entry.openDirectory) + '</div>',
       '</div>',
-      (isActive && entry.openDirectory && !entry.remoteOnly ? openFolderBtnHtml(entry.openDirectory) : ''),
+      (isActive && entry.openDirectory ? openFolderBtnHtml(entry.openDirectory) : ''),
       '</div>',
       '</div>',
     );
@@ -535,7 +533,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
 
   // 右侧归属选择器：默认项目+ 当前同目录项目 + 新建/管理。
   // 项目不跨目录——跨目录导航经左侧目录树（一次切换两者）。
-  const sameDirProjects = (!projectPending && currentDirPath && !dirEntryActive?.remoteOnly)
+  const sameDirProjects = (!projectPending && currentDirPath)
     ? (typeof getPhProjectsInDirectory === 'function' ? getPhProjectsInDirectory(currentDirPath) : [])
     : [];
   const isOrgProject = currentProject?.type === 'project';

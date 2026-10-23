@@ -392,6 +392,69 @@ describe('双选择器 — 同目录 D/A/B', () => {
   });
 });
 
+describe('双选择器 — 最近访问排序与远程目录退场', () => {
+  it('目录按最近访问排序（当前目录置顶）、远程目录不出现、子菜单项目按最近访问排序', () => {
+    const s = createSetup({
+      phProjects: [
+        { openDirectory: 'D:/idle' },
+        { openDirectory: 'D:/old' },
+        { openDirectory: 'D:/recent' },
+      ],
+      // 当前目录 = idle（无任何会话活动）：置顶验证「正在访问 = 最近访问」
+      target: { type: 'dir', id: 'dir:d:/idle', openDirectory: 'D:/idle' },
+      openDirectory: 'D:/idle',
+      sessionsMeta: {
+        sessions: [
+          { id: 'so', title: 'old chat', openDirectory: 'D:/old', updatedAt: '2026-10-01T10:00:00Z', messageCount: 1 },
+          { id: 'sr', title: 'recent chat', openDirectory: 'D:/recent', updatedAt: '2026-10-21T10:00:00Z', messageCount: 1 },
+        ],
+        sessionTotal: 2, mainTotal: 2, archivedTotal: 0,
+      },
+      entities: [
+        { id: 'prj_old', name: 'OldProj', workDirectory: 'D:/recent', createdAt: '2026-09-01', updatedAt: '2026-09-01', lastActivityAt: '2026-10-02T10:00:00Z' },
+        { id: 'prj_new', name: 'NewProj', workDirectory: 'D:/recent', createdAt: '2026-09-01', updatedAt: '2026-09-02', lastActivityAt: '2026-10-22T10:00:00Z' },
+      ],
+    });
+    // 远程历史桶（E:/ghost 即使活动最新也不得进入目录菜单）
+    s.ctx.window.getRemoteHistoryProjectBuckets = () => [
+      { openDirectory: 'E:/ghost', sessions: [{ id: 'r1', title: 'r', updatedAt: '2026-10-23T00:00:00Z' }] },
+    ];
+    const html = s.render();
+    const dirSeg = html.slice(0, html.indexOf('ph-org-selector'));
+    assert.doesNotMatch(dirSeg, /dir:e:\/ghost/, 'remote-only dir stays out of the directory menu');
+    const pos = (id) => dirSeg.indexOf('data-dir-id="dir:' + id + '"');
+    assert.ok(pos('d:/idle') >= 0 && pos('d:/recent') >= 0 && pos('d:/old') >= 0, 'all local dirs present');
+    assert.ok(pos('d:/idle') < pos('d:/recent'), 'current dir pinned first (being accessed now)');
+    assert.ok(pos('d:/recent') < pos('d:/old'), 'recently used dir before older one');
+    // recent 子菜单项目：lastActivityAt 新者优先（无当前项目）
+    const subStart = dirSeg.indexOf('data-subprojects-for="dir:d:/recent"');
+    const subNext = dirSeg.indexOf('data-subprojects-for="', subStart + 1);
+    const sub = dirSeg.slice(subStart, subNext < 0 ? undefined : subNext);
+    assert.ok(sub.indexOf('prj_new') >= 0 && sub.indexOf('prj_old') >= 0);
+    assert.ok(sub.indexOf('prj_new') < sub.indexOf('prj_old'), 'recently accessed project first in submenu');
+  });
+
+  it('同目录项目当前目标置顶（正在访问），其余按最近活动倒序', () => {
+    const s = createSetup({
+      phProjects: [{ openDirectory: 'D:/w' }],
+      target: { type: 'project', id: 'prj_mid' },
+      openDirectory: 'D:/w',
+      sessionsMeta: { sessions: [], sessionProjectId: 'prj_mid', sessionTotal: 0, mainTotal: 0, archivedTotal: 0 },
+      entities: [
+        { id: 'prj_new', name: 'N', workDirectory: 'D:/w', createdAt: '2026-09-01', updatedAt: '2026-09-03', lastActivityAt: '2026-10-23T00:00:00Z' },
+        { id: 'prj_mid', name: 'M', workDirectory: 'D:/w', createdAt: '2026-09-01', updatedAt: '2026-09-02', lastActivityAt: '2026-10-10T00:00:00Z' },
+        { id: 'prj_old', name: 'O', workDirectory: 'D:/w', createdAt: '2026-09-01', updatedAt: '2026-09-01', lastActivityAt: '2026-10-01T00:00:00Z' },
+      ],
+    });
+    const html = s.render();
+    // 归属胶囊菜单（getPhProjectsInDirectory 同一排序规则）
+    const orgSeg = html.slice(html.indexOf('ph-org-selector'), html.indexOf('ph-quick-add'));
+    const order = ['prj_mid', 'prj_new', 'prj_old'].map((id) => orgSeg.indexOf('data-project-id="' + id + '"'));
+    assert.ok(order.every((p) => p >= 0), 'all three projects listed');
+    assert.ok(order[0] < order[1] && order[1] < order[2], 'current project first, then by lastActivityAt desc');
+  });
+});
+
 describe('双选择器 — 项目绑定目录（含托管）', () => {
   const managedDir = 'D:/data/workspaces/ph-projects/prj_M';
   const entities = [

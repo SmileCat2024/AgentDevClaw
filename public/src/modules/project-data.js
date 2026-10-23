@@ -317,6 +317,7 @@ function normalizePhProjectEntity(raw) {
     archived: raw?.archived === true,
     createdAt: String(raw?.createdAt || '').trim(),
     updatedAt: String(raw?.updatedAt || '').trim(),
+    lastActivityAt: String(raw?.lastActivityAt || '').trim(),
   };
 }
 
@@ -414,6 +415,30 @@ function phDirIdOf(directory) {
  * 条目——不写 workspace_state、不进目录注册表、不混入目录会话桶；远程目录
  * 不派生项目（不伪造远程项目）。每个条目携带其下非归档项目（二级展开）。
  */
+// 项目最近活动时间戳（ms）：服务端按会话索引算的 lastActivityAt 优先，
+// 实体 updatedAt（创建/改名时间）兜底。
+function _phProjectActivityAt(entity) {
+  return Math.max(
+    Date.parse(String(entity?.lastActivityAt || '')) || 0,
+    Date.parse(String(entity?.updatedAt || '')) || 0,
+  );
+}
+
+/** 同目录项目按最近访问排序：当前项目置顶（正在访问），其余活动时间倒序，名称稳定垫底。 */
+function _phSortProjectsByRecency(list, agent) {
+  // 调用方可能没有当前 agent（如脱离主壳的渲染场景）：此时只做活动时间排序，
+  // 不解析浏览目标——避免依赖主壳全局 getCurrentAgentRecord。
+  const resolvedAgent = agent ?? (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null);
+  const target = resolvedAgent && typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(resolvedAgent) : null;
+  const currentId = target?.type === 'project' ? String(target.id || '') : '';
+  return [...list].sort((a, b) => {
+    if (a.id === currentId) return -1;
+    if (b.id === currentId) return 1;
+    const diff = _phProjectActivityAt(b) - _phProjectActivityAt(a);
+    return diff !== 0 ? diff : String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+  });
+}
+
 function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
   if (typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return [];
   const projects = typeof getProgrammingHelperProjects === 'function'
@@ -421,13 +446,15 @@ function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
   const entries = [];
   const byId = new Map();
   for (const bucket of projects) {
-    if (bucket.type === 'project' || !bucket.openDirectory) continue;
+    // 远程独有目录不再进入目录菜单（用户决策 2026-10-23：远程目录从目录
+    // 导航退场；远程历史会话仍在会话列表按 ADR-0012 呈现，互不影响）。
+    if (bucket.type === 'project' || !bucket.openDirectory || bucket.remoteOnly) continue;
     const entry = {
       id: phDirIdOf(bucket.openDirectory),
       openDirectory: bucket.openDirectory,
       name: getPathLeaf(bucket.openDirectory),
       kind: 'registry',
-      remoteOnly: bucket.remoteOnly === true,
+      sessions: bucket.sessions || [],
       projects: [],
     };
     entries.push(entry);
@@ -443,14 +470,38 @@ function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
         openDirectory: entity.openDirectory,
         name: getPathLeaf(entity.openDirectory),
         kind: 'projectBound',
-        remoteOnly: false,
+        sessions: [],
         projects: [],
       };
       entries.push(entry);
       byId.set(id, entry);
     }
-    if (!entry.remoteOnly) entry.projects.push(entity);
+    entry.projects.push(entity);
   }
+  // 目录按最近访问排序：当前目录置顶（正在访问），其余按桶内会话与目录
+  // 内项目的最近活动时间倒序，无活动目录按路径稳定垫底（空间记忆稳定，
+  // 顺序不随项目切换跳位——跳位只发生在真实访问顺序变化时）。
+  const dirActivityAt = (entry) => {
+    let t = 0;
+    for (const session of entry.sessions) {
+      const at = Date.parse(String(session?.updatedAt || '')) || 0;
+      if (at > t) t = at;
+    }
+    for (const project of entry.projects) {
+      const at = _phProjectActivityAt(project);
+      if (at > t) t = at;
+    }
+    return t;
+  };
+  const currentDirId = (typeof getPhCurrentDirectoryContext === 'function'
+    ? getPhCurrentDirectoryContext(agent)?.dirId : '') || '';
+  entries.sort((a, b) => {
+    if (a.id === currentDirId) return -1;
+    if (b.id === currentDirId) return 1;
+    const diff = dirActivityAt(b) - dirActivityAt(a);
+    return diff !== 0 ? diff : String(a.openDirectory).localeCompare(String(b.openDirectory), undefined, { sensitivity: 'base' });
+  });
+  for (const entry of entries) entry.projects = _phSortProjectsByRecency(entry.projects, agent);
   return entries;
 }
 
@@ -475,13 +526,14 @@ function getPhCurrentDirectoryContext(agent = getCurrentAgentRecord()) {
   return null;
 }
 
-/** 同目录项目（右侧归属选择器候选）：非归档实体按归一化 workDirectory 匹配。 */
+/** 同目录项目（右侧归属选择器候选）：非归档实体按归一化 workDirectory 匹配，最近访问排序。 */
 function getPhProjectsInDirectory(openDirectory) {
   const norm = String(openDirectory || '').replace(/\\/g, '/').toLowerCase();
   if (!norm) return [];
-  return (window.ClawFW.phProjectEntities?.projects || [])
+  const matched = (window.ClawFW.phProjectEntities?.projects || [])
     .filter((p) => !p.archived && p.openDirectory
       && String(p.openDirectory).replace(/\\/g, '/').toLowerCase() === norm);
+  return _phSortProjectsByRecency(matched);
 }
 
 /**

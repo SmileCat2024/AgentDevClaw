@@ -1324,7 +1324,28 @@ export function setupPhProjectRoutes(app, express, deps = {}) {
     try {
       const guardError = phProjectAgentIdGuard(req.query?.agentId);
       if (guardError) throw guardError;
-      res.json({ ok: true, projects: await listPhProjects() });
+      const projects = await listPhProjects();
+      // 最近访问排序信号（前端目录/项目菜单按最近访问排序）：实体 updatedAt
+      // 只反映创建/改名，真实访问时间取会话索引内该项目会话的最大 updatedAt；
+      // 索读取失败不阻塞列表（降级为 null，前端回退实体 updatedAt）。
+      const index = await readSessionIndex(PH_AGENT_ID).catch(() => null);
+      const lastActivityByProject = new Map();
+      for (const record of index?.sessions || []) {
+        const pid = cleanSessionText(record?.projectId);
+        const at = Date.parse(cleanSessionText(record?.updatedAt) || '');
+        if (pid && Number.isFinite(at)) {
+          lastActivityByProject.set(pid, Math.max(lastActivityByProject.get(pid) || 0, at));
+        }
+      }
+      res.json({
+        ok: true,
+        projects: projects.map((project) => ({
+          ...project,
+          lastActivityAt: lastActivityByProject.has(project.id)
+            ? new Date(lastActivityByProject.get(project.id)).toISOString()
+            : null,
+        })),
+      });
     } catch (error) {
       next(error);
     }
