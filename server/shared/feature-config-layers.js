@@ -11,6 +11,7 @@ import { basename, join, resolve } from 'path';
 import { existsSync, readFileSync } from 'fs';
 
 import { USER_DATA_ROOT } from './constants.js';
+import { isValidPhProjectId } from '../routes/ph-projects.js';
 
 /** 全局层：feature-setup.json（已由 ticket 02 清洗为稀疏）。 */
 export const GLOBAL_LAYER_PATH = join(USER_DATA_ROOT, 'feature-setup.json');
@@ -35,6 +36,24 @@ export function encodeDirConfigFile(workspaceDir) {
 /** 目录层的完整路径。 */
 export function dirLayerPath(workspaceDir, agentId = 'programming-helper') {
   return join(featureConfigDirFor(agentId), encodeDirConfigFile(workspaceDir));
+}
+
+/**
+ * 项目层文件编码：`project-<projectId>.json`（ticket 043）。
+ * 项目层按项目 ID 寻址（契约：项目身份不由目录决定，改名/改绑不改 ID，配置
+ * 文件随 ID 稳定）。projectId 进文件名，必须先过 isValidPhProjectId 守卫——
+ * 既挡路径穿越（`../` 等），也与项目表 ID 生成规则（041）同源。
+ */
+export function encodeProjectConfigFile(projectId) {
+  if (!isValidPhProjectId(projectId)) {
+    throw new Error(`Invalid projectId: ${projectId}`);
+  }
+  return `project-${projectId}.json`;
+}
+
+/** 项目层的完整路径（agentId 当前固定 programming-helper——项目层仅 PH 有）。 */
+export function projectLayerPath(projectId, agentId = 'programming-helper') {
+  return join(featureConfigDirFor(agentId), encodeProjectConfigFile(projectId));
 }
 
 /**
@@ -81,6 +100,15 @@ export function readGlobalLayer(globalPath = GLOBAL_LAYER_PATH) {
 /** 编程小助手目录层读取（按目录定位，文件不存在返回 {}）。 */
 export function readDirLayer(workspaceDir, agentId = 'programming-helper') {
   return readLayerFile(dirLayerPath(workspaceDir, agentId));
+}
+
+/**
+ * 编程小助手项目层读取（ticket 043，按项目 ID 定位，文件不存在返回 {}）。
+ * 只负责读文件——项目存在性校验（无效格式 400 / 未知项目 404）由调用方经
+ * ph-projects 的 findPhProjectSync / getPhProject 完成，本函数不重复查表。
+ */
+export function readProjectLayer(projectId, agentId = 'programming-helper') {
+  return readLayerFile(projectLayerPath(projectId, agentId));
 }
 
 /** agent 层读取（该 agent 整体级，文件不存在返回 {}）。 */

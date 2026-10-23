@@ -456,6 +456,11 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
     referenceMaterials: cleanSessionText(record?.referenceMaterials),
     sessionType,
     workspaceAgentId: record?.workspaceAgentId || 'main',
+    // PH 项目会话归属（ticket 042）：仅项目会话携带该字段——目录会话完全
+    // 不带 key（与索引落盘/分支记录的条件写入同约定），轻记录是创建响应与
+    // 侧栏读模型的字段来源，字段形状需与旧版兼容；前端（044/045）以
+    // projectId 非空判定项目会话，'' 与缺席同义。
+    ...(cleanSessionText(record?.projectId) ? { projectId: cleanSessionText(record.projectId) } : {}),
     status: cleanSessionText(record?.status),
     archived: record?.archived === true,
     todo: record?.todo === true,
@@ -546,20 +551,26 @@ export function trimSessionRecordForWire(record) {
 /**
  * 按分页/过滤参数从已排序的全量 light records 产出响应切片。
  *
- * 过滤顺序与语义：
- *   - projectDir: 归一化目录相等（反斜杠→斜杠、忽略大小写、去尾斜杠），
- *     与前端项目桶 id 的归一化规则一致
+ * 过滤顺序与语义（归属规则，ticket 044）：
+ *   - projectId: 项目身份相等（非空字符串精确比较）——项目会话只属于
+ *     该项目集合，同路径目录会话/其他项目不进入
+ *   - projectDir: 归一化目录相等（反斜杠→斜杠、忽略大小写、去尾斜杠）
+ *     且会话不带非空 projectId——目录集合排除一切项目会话，目录字段是
+ *     文件环境，不承担归属（项目会话的 openDirectory 只是创建时记录）
+ *   - projectId 与 projectDir 同时提供是调用方错误：按 projectId 优先
+ *     收窄（项目身份是显式归属，目录此时只是物理位置），路由层已互斥校验
  *   - studioFeatureId: 会话绑定数组包含该 feature id（feature 详情页会话列表）
  *   - archived: 'main'（archived !== true）| 'archived'（=== true）| 缺省全部
  *   - query: title / openDirectory 子串（大小写不敏感）
  *
  * 返回 { slice, total, mainTotal, archivedTotal }；total 为过滤后未切片
- * 总数，main/archived 计数不受过滤影响（前端 tab 徽标需要真实总数）。
+ * 总数，main/archived 计数是同一归属集合内的真实总数（前端 tab 徽标）。
  */
 export function sliceSessionsForWire(sessions, options = {}) {
   const source = Array.isArray(sessions) ? sessions : [];
   const projectDir = String(options.projectDir || '').trim();
   const normalizedProject = projectDir ? normalizeProjectDirForCompare(projectDir) : '';
+  const projectIdentity = cleanSessionText(options.projectId);
   const query = String(options.query || '').trim().toLowerCase();
   const archivedFilter = options.archived === 'main' || options.archived === 'archived'
     ? options.archived
@@ -571,8 +582,13 @@ export function sliceSessionsForWire(sessions, options = {}) {
   for (const session of source) {
     if (options.studioFeatureId !== undefined
       && !cleanStudioFeatureIds(session?.studioFeatureIds).includes(cleanSessionText(options.studioFeatureId))) continue;
-    if (normalizedProject
-      && normalizeProjectDirForCompare(session?.openDirectory) !== normalizedProject) continue;
+    if (projectIdentity) {
+      if (cleanSessionText(session?.projectId) !== projectIdentity) continue;
+    } else if (normalizedProject) {
+      // 目录集合 = 目录相等且非项目会话；项目会话不因同路径混入
+      if (cleanSessionText(session?.projectId)) continue;
+      if (normalizeProjectDirForCompare(session?.openDirectory) !== normalizedProject) continue;
+    }
     // 徽标计数：当前项目内 main/archived 真实总数，不受 tab/query 过滤影响
     if (session?.archived === true) archivedTotal += 1; else mainTotal += 1;
     if (archivedFilter === 'main' && session?.archived === true) continue;
@@ -686,6 +702,9 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
         title: cleanSessionText(record.title),
         preview: cleanSessionText(record.preview),
         openDirectory: cleanSessionText(record.openDirectory),
+        // 全局总览保留全部会话并透传归属（ticket 044）：项目会话带非空
+        // projectId，消费方不得按 openDirectory 把它归入目录集合。
+        projectId: cleanSessionText(record?.projectId),
         sessionType: cleanSessionText(record.sessionType) || 'main',
         createdAt,
         updatedAt: cleanSessionText(record?.updatedAt) || createdAt,
@@ -714,6 +733,7 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
  *   active_workspace_agent_name: string,
  *   active_workspace_display_name: string,
  *   open_directory: string,
+ *   project_id: string,
  * }}
  */
 export function sessionRecordToWorkspaceMeta(record) {
@@ -728,6 +748,9 @@ export function sessionRecordToWorkspaceMeta(record) {
     active_workspace_agent_name: agentName,
     active_workspace_display_name: formId === 'assembly-form' ? (agentName || title) : '',
     open_directory: cleanSessionText(record?.openDirectory),
+    // 归属身份透传（ticket 044）：'' = 目录会话；非空 = 项目会话归属。
+    // open_directory 只描述文件环境，消费方不得用它推断归属。
+    project_id: cleanSessionText(record?.projectId),
   };
 }
 
@@ -779,6 +802,9 @@ export function buildChildRuntimeAgent(viewerAgent, { agentId, sessionId = '', s
     active_workspace_agent_name: agentName,
     active_workspace_display_name: displayName,
     open_directory: cleanSessionText(meta.open_directory),
+    // 归属身份补齐（ticket 044）：乐观 child 与轮询 child 同形，前端侧栏
+    // 分组据此把项目会话与同路径目录会话分开；'' = 目录会话。
+    project_id: cleanSessionText(meta.project_id),
   };
 }
 

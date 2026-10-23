@@ -297,6 +297,7 @@ export function createAgentDiscoveryModule(ctx) {
           active_workspace_agent_name: '',
           active_workspace_display_name: noSessionDisplayName,
           active_workspace_session_dir: '',
+          active_workspace_session_project_id: '',
         },
       };
     }
@@ -308,6 +309,7 @@ export function createAgentDiscoveryModule(ctx) {
     let agentName = cleanSessionText(matched?.agentName);
     let formId = cleanSessionText(matched?.formId);
     let openDirectory = cleanSessionText(matched?.openDirectory);
+    let projectId = cleanSessionText(matched?.projectId);
 
     if (!matched) {
       try {
@@ -319,6 +321,7 @@ export function createAgentDiscoveryModule(ctx) {
         agentName = cleanSessionText(record?.agentName);
         formId = cleanSessionText(record?.formId);
         openDirectory = cleanSessionText(record?.openDirectory);
+        projectId = cleanSessionText(record?.projectId);
       } catch {}
     }
 
@@ -349,6 +352,9 @@ export function createAgentDiscoveryModule(ctx) {
         // 依赖该字段兜底，不得回退到 workspace_state.openDirectory——
         // 那是"workspace 当前打开的项目"，与当前会话无绑定关系。
         active_workspace_session_dir: openDirectory,
+        // 归属身份透传（ticket 044）：'' = 目录会话；非空 = 项目会话归属。
+        // open_directory 只描述文件环境，消费方不得以目录推断归属。
+        active_workspace_session_project_id: projectId,
       },
     };
   }
@@ -362,6 +368,7 @@ export function createAgentDiscoveryModule(ctx) {
       active_workspace_agent_name: '',
       active_workspace_display_name: '',
       open_directory: '',
+      project_id: '',
     };
     if (!selectedSessionId) return emptyMeta;
 

@@ -464,7 +464,7 @@ let _phOpenSessionsCache = { sig: null, html: '' };
 // 代码全部保留，恢复显示时改回 false 即可。
 const PH_OPEN_SESSIONS_CARD_DISABLED = true;
 
-window.phLoadOpenSessionsCard = async function(agentId, openDirectory) {
+window.phLoadOpenSessionsCard = async function(agentId, openDirectory, targetProjectId) {
   if (PH_OPEN_SESSIONS_CARD_DISABLED) return;
   const container = document.getElementById('ph-open-sessions-container');
   if (!container) return;
@@ -475,12 +475,18 @@ window.phLoadOpenSessionsCard = async function(agentId, openDirectory) {
     const data = await resp.json();
     const allOpen = Array.isArray(data.sessions) ? data.sessions : [];
 
-    // Filter by current project's openDirectory (normalized comparison)
+    // Filter by full ownership (ticket 045): project target matches the stable
+    // projectId; directory target keeps the directory match and excludes
+    // project sessions (a project session shares the same workDirectory).
     const normDir = String(openDirectory || '').replace(/\\/g, '/').toLowerCase();
-    const projectSessions = allOpen.filter((s) => {
-      const sDir = String(s.openDirectory || '').replace(/\\/g, '/').toLowerCase();
-      return sDir === normDir;
-    });
+    const projectId = String(targetProjectId || '');
+    const projectSessions = projectId.startsWith('prj_')
+      ? allOpen.filter((s) => String(s.projectId || '') === projectId)
+      : allOpen.filter((s) => {
+        if (String(s.projectId || '').startsWith('prj_')) return false;
+        const sDir = String(s.openDirectory || '').replace(/\\/g, '/').toLowerCase();
+        return sDir === normDir;
+      });
 
     // Exclude sessions that already have a running runtime
     const runningSessionIds = new Set(

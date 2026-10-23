@@ -27,6 +27,7 @@ import { attachSessionEventOutput, emitFatalSessionError } from './headless-sess
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { resolveWorkspaceAgent, resolveWorkspaceAgentClass, workspaceAgentDisplayName } from '../server/shared/workspace-agents.js';
+import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -92,16 +93,21 @@ function resolveSessionWorkspaceCwd(agentId, sessionId) {
   const indexPath = getSessionIndexPath(agentId);
   if (!existsSync(indexPath)) return null;
 
+  let record = null;
   try {
     const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
     const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
-    const record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId));
-    const openDirectory = cleanValue(record?.openDirectory);
-    if (!openDirectory || !existsSync(openDirectory)) return null;
-    return openDirectory;
+    record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId)) || null;
   } catch {
     return null;
   }
+  // PH 项目会话（ticket 042）：运行目录由项目表当前记录解析，失败直接抛错
+  // （main 的 catch 输出 Fatal 后以 exit 1 终止），不退回目录会话语义。
+  const projectDirectory = resolveSessionRuntimeDirectory(record, { sessionId: normalizedSessionId });
+  if (projectDirectory) return projectDirectory;
+  const openDirectory = cleanValue(record?.openDirectory);
+  if (!openDirectory || !existsSync(openDirectory)) return null;
+  return openDirectory;
 }
 
 function resolveWorkspaceCwd(agentId, sessionId = '') {
@@ -197,11 +203,14 @@ async function main() {
   const agentModule = await import(pathToFileURL(agentJsPath).href);
   const metadata = JSON.parse(readFileSync(join(agentPath, 'metadata.json'), 'utf8'));
   let boundAgentId;
+  let sessionProjectId = '';
   if (sessionId) {
     const index = JSON.parse(readFileSync(getSessionIndexPath(agentId), 'utf8'));
     const record = index.sessions.find((entry) => entry.id === sessionId);
     if (!record) throw new Error(`Session index record not found: ${sessionId}`);
     boundAgentId = record.workspaceAgentId === undefined ? 'main' : record.workspaceAgentId;
+    // PH 项目会话归属（ticket 043）：逐实例注入，agent 构造据此选项目配置层
+    sessionProjectId = cleanValue(record?.projectId);
   }
   const declaration = resolveWorkspaceAgent(metadata, boundAgentId);
   const AgentClass = resolveWorkspaceAgentClass(agentModule, declaration.id);
@@ -212,6 +221,7 @@ async function main() {
     name: workspaceAgentDisplayName(declaration),
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
+    ...(sessionProjectId ? { projectId: sessionProjectId } : {}),
     ...(resolved ? { llm: resolved.llm } : {}),
     // 装配同一批 Feature：运行时模型切换（agent.setModel）与主宿主同源
     modelResolver: modelPresetResolver,

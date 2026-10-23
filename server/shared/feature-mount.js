@@ -6,8 +6,9 @@
  * 自身配置值，两者互不污染。
  *
  * 语义对齐三层配置树：
- * - 允许层：global / agent / coder；目录层（dir:*）与会话注入（session）拒绝
- *   （装配是 agent 身份级事实，不开目录粒度——装配一期决策）
+ * - 允许层：global / agent / coder；目录层（dir:*）、项目层（project:*）与
+ *   会话注入（session）拒绝（装配是 agent 身份级事实，不开目录/项目粒度
+ *   ——装配一期决策，ticket 043 维持项目层拒绝）
  * - 后层 $mount 整体替换前层（装配事实不是配置值，不做字段级合并）
  * - $mount: null = 卸载（对齐框架 resolveFeatureConfig 的 null 删除语义；
  *   层文件经 PUT 校验本不含 null，此形态仅出现于手工编辑层文件）
@@ -73,7 +74,7 @@ export function extractFeatureMounts(layers) {
       if (!isPlainObject(featureConfig) || !(MOUNT_KEY in featureConfig)) continue;
       if (!MOUNT_ALLOWED_LAYER_IDS.has(id)) {
         throw new Error(
-          `层 '${id}' 不允许声明 ${MOUNT_KEY}（装配是 agent 身份级配置，目录层与会话注入不支持）：${featureName}`
+          `层 '${id}' 不允许声明 ${MOUNT_KEY}（装配是 agent 身份级配置，目录层、项目层与会话注入不支持）：${featureName}`
         );
       }
       const mount = featureConfig[MOUNT_KEY];

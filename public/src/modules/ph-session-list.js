@@ -56,6 +56,7 @@ const _phSearch = window.ClawFW.phSearch = window.ClawFW.phSearch || {
   epoch: 0,
   agentId: '',
   openDirectory: '',
+  projectId: '',
   scope: 'all',          // 'all' | 'main' | 'archived'
   sort: 'relevance',     // 'relevance' | 'recency'
   results: [],
@@ -79,7 +80,9 @@ function _phSearchIdentity() {
 }
 
 function _phSearchStateMatches(identity) {
-  return _phSearch.agentId === identity.identity && _phSearch.openDirectory === identity.openDirectory;
+  return _phSearch.agentId === identity.identity
+    && _phSearch.openDirectory === identity.openDirectory
+    && _phSearch.projectId === identity.projectId;
 }
 
 /** Split before escaping so a match can never cut an HTML entity in half. */
@@ -289,6 +292,7 @@ function _phSearchRequestIsCurrent(token) {
     && phSearchQuery.trim() === token.query
     && current.identity === token.agentId
     && current.openDirectory === token.openDirectory
+    && current.projectId === token.projectId
     && _phSearch.scope === token.scope && _phSearch.sort === token.sort;
 }
 
@@ -304,16 +308,21 @@ async function _phSearchFetch({ replace }) {
   }
 
   _phSearch.epoch += 1;
+  // 归属身份（045）：项目目标携带 prj_ projectId（服务端与 openDirectory
+  // 互斥），目录目标携带 openDirectory；身份比较两者都参与（快速切换
+  // A/B/D 时旧响应不落地）。
   const token = {
     epoch: _phSearch.epoch,
     agentId: identity.identity,
     openDirectory: identity.openDirectory,
+    projectId: identity.projectId,
     query: queryTrimmed,
     scope: _phSearch.scope,
     sort: _phSearch.sort,
   };
   _phSearch.agentId = identity.identity;
   _phSearch.openDirectory = identity.openDirectory;
+  _phSearch.projectId = identity.projectId;
   _phSearch.loading = true;
   _phSearch.error = false;
   if (replace) _phSearch.results = [];
@@ -329,7 +338,8 @@ async function _phSearchFetch({ replace }) {
       offset: String(offset),
       limit: String(_phSearch.limit),
     });
-    if (token.openDirectory) params.set('openDirectory', token.openDirectory);
+    if (token.projectId) params.set('projectId', token.projectId);
+    else if (token.openDirectory) params.set('openDirectory', token.openDirectory);
     const resp = await fetch('/protoclaw/search_sessions?' + params.toString());
     if (!resp.ok) throw new Error('search failed: ' + resp.status);
     const data = await resp.json();
@@ -446,6 +456,7 @@ window.phSearchResetState = () => {
   _phSearchResetResults();
   _phSearch.agentId = '';
   _phSearch.openDirectory = '';
+  _phSearch.projectId = '';
   _phSearch.scope = 'all';
   _phSearch.sort = 'relevance';
   if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }

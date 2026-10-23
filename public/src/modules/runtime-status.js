@@ -120,6 +120,9 @@ function buildChildRuntimeEntry(runtimeAgent) {
     replacementMutation: mutation,
     // 会话绑定的项目目录（server 从 session index 附带），参与目录分组。
     openDirectory: String(runtimeAgent.open_directory || '').trim(),
+    // 归属身份（ticket 044）：项目会话带非空 projectId，分组走项目身份
+    // （resolveSidebarChildProjectGroup），openDirectory 不再参与其分组。
+    projectId: String(runtimeAgent.project_id || runtimeAgent.projectId || '').trim(),
   };
 }
 
@@ -249,16 +252,21 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     const entryTodoColor = sessionTodoMap.get(String(entry.sessionId || '').trim());
     entry.todo = entryTodoColor !== undefined;
     entry.todoColor = entryTodoColor || '';
-    if (!entry.projectDir) {
-      // PH 宿主走 workspace_sessions 映射（大小写已校正）；其余 APP
-      // （coder 等）用 server 附带的 open_directory 兜底。
-      let dir = entry.openDirectory || '';
-      if (sessionDirMap.size > 0 && entry.sessionId) {
-        dir = sessionDirMap.get(entry.sessionId) || dir;
-      }
-      if (dir) {
-        entry.projectDir = dir;
-        entry.projectName = getPathLeaf(dir);
+    if (!entry.projectDir && !entry.projectKey) {
+      // 分组身份统一经 resolveSidebarChildProjectGroup（project-data.js，
+      // ticket 044）：项目会话（projectId）走独立项目身份组，目录会话按
+      // sessionDirMap 校正后的目录分组——项目会话的 openDirectory 只是
+      // 创建时记录，不参与分组。
+      const identity = typeof window.resolveSidebarChildProjectGroup === 'function'
+        ? window.resolveSidebarChildProjectGroup(entry, sessionDirMap)
+        : null;
+      if (identity) {
+        if (identity.projectKey) entry.projectKey = identity.projectKey;
+        if (identity.projectDir) entry.projectDir = identity.projectDir;
+        if (identity.projectName) entry.projectName = identity.projectName;
+      } else if (entry.openDirectory) {
+        entry.projectDir = entry.openDirectory;
+        entry.projectName = getPathLeaf(entry.openDirectory);
       }
     }
     if (typeof findSidebarOperation === 'function') {
@@ -475,6 +483,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
           contextMenuEnabled: false,
           deleting: operation.type === 'delete',
           sidebarOperation: operation,
+          projectId: operation.projectId,
           projectDir: operation.projectDir,
           projectName: operation.projectName,
           createdAt: new Date(operation.startedAt).toISOString(),
@@ -491,7 +500,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     // Programming-helper groups every runtime by project. Its operation creator
     // must provide this identity explicitly; never infer it from a current or
     // historical session, because either can belong to another project.
-    if (hostAgentId === 'programming-helper' && !operation.projectDir) continue;
+    // 项目会话的操作带 projectId（ticket 044），与 projectDir 同为合法身份。
+    if (hostAgentId === 'programming-helper' && !operation.projectDir && !operation.projectId) continue;
 
     if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {
       addEntry({
@@ -505,6 +515,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
         contextMenuEnabled: false,
         pendingOperation: true,
         sidebarOperation: operation,
+        projectId: operation.projectId,
         projectDir: operation.projectDir,
         projectName: operation.projectName,
         createdAt: new Date(operation.startedAt).toISOString(),
@@ -533,6 +544,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       pendingReplacement: isReplacement,
       pendingOperation: true,
       sidebarOperation: operation,
+      projectId: operation.projectId,
       projectDir: operation.projectDir,
       projectName: operation.projectName,
       createdAt: new Date(operation.startedAt).toISOString(),

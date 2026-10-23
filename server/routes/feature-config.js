@@ -20,6 +20,7 @@ import {
   GLOBAL_LAYER_PATH,
   agentLayerPath,
   dirLayerPath,
+  projectLayerPath,
   readGlobalLayer,
   readLayerFile,
 } from '../shared/feature-config-layers.js';
@@ -28,6 +29,7 @@ import {
   ACCUMULATED_FIELD_PATHS,
   collapseAccumulatedFields,
 } from '../shared/feature-config-accumulate.js';
+import { findPhProjectSync } from './ph-projects.js';
 
 // ── scope → queue 解析注册表（server 进程内存态，不做热更新） ──────────
 
@@ -59,12 +61,40 @@ export function listRegisteredScopes() {
 
 const PROGRAMMING_HELPER_ID = 'programming-helper';
 
-registerScopeResolver(PROGRAMMING_HELPER_ID, ({ dir } = {}) => {
+/**
+ * 项目层定位前校验（ticket 043）：解析真实项目后才能定位层文件——
+ * 非法 ID 格式（findPhProjectSync throw 400 语义）与未知项目（404 语义）
+ * 都明确失败，绝不退回目录层。同步查表与 scope resolver 的同步签名对齐。
+ */
+function requirePhProjectForLayer(projectId) {
+  const project = findPhProjectSync(projectId); // 非法格式直接 throw
+  if (!project) {
+    const error = new Error(`Unknown project: ${projectId}`);
+    error.statusCode = 404;
+    throw error;
+  }
+  return project;
+}
+
+registerScopeResolver(PROGRAMMING_HELPER_ID, ({ dir, projectId } = {}) => {
+  if (dir && projectId) {
+    const error = new Error('dir 与 projectId 是互斥的归属参数，不能同时提供');
+    error.statusCode = 400;
+    throw error;
+  }
   const layers = [
     { id: 'global', label: '全局', path: GLOBAL_LAYER_PATH },
     { id: 'agent', label: '编程小助手', path: agentLayerPath(PROGRAMMING_HELPER_ID) },
   ];
-  if (dir) {
+  if (projectId) {
+    // 项目链（ticket 043）：global → agent → project → session，不读目录层
+    const project = requirePhProjectForLayer(projectId);
+    layers.push({
+      id: `project:${projectId}`,
+      label: project.name,
+      path: projectLayerPath(projectId, PROGRAMMING_HELPER_ID),
+    });
+  } else if (dir) {
     layers.push({
       id: `dir:${dir}`,
       label: basename(dir),
@@ -106,16 +136,17 @@ export { collectSensitiveFields };
 // ── 纯逻辑：queue 组装 + resolve ───────────────────────────────────────
 
 /**
- * 按注册表解析某 scope 的配置队列。
+ * 按注册表解析某 scope 的配置队列。dir / projectId 归属参数原样透传给
+ * 组装函数（PH 组装函数据此选目录层或项目层，ticket 043）。
  * @returns {{ layers: Array<{id,label,path,sparse}>, queue }}
  * @throws 未注册的 agentId 抛错（路由转 404）
  */
-export function buildScopeLayers({ agentId, dir }, resolvers = scopeResolvers) {
+export function buildScopeLayers({ agentId, dir, projectId }, resolvers = scopeResolvers) {
   const resolver = resolvers.get(agentId);
   if (!resolver) {
     throw new Error(`未注册的 scope: "${agentId}"`);
   }
-  const declared = resolver({ dir });
+  const declared = resolver({ dir, projectId });
   const layers = (declared.layers || []).map((layer) => ({
     ...layer,
     sparse: readLayerFile(layer.path),
@@ -166,8 +197,8 @@ export function validateLayerContent(content, { layerId } = {}) {
     for (const [featureName, featureConfig] of Object.entries(content)) {
       if (typeof featureConfig !== 'object' || featureConfig === null || Array.isArray(featureConfig)) continue;
       if (!(MOUNT_KEY in featureConfig)) continue;
-      if (String(layerId).startsWith('dir:')) {
-        return `layer '${layerId}' 不支持 $mount 装配声明（feature '${featureName}'）；装配是 agent 身份级配置`;
+      if (String(layerId).startsWith('dir:') || String(layerId).startsWith('project:')) {
+        return `layer '${layerId}' 不支持 ${MOUNT_KEY} 装配声明（feature '${featureName}'）；装配是 agent 身份级配置，目录层与项目层均不开放`;
       }
       const mountError = validateMountEntry(featureConfig[MOUNT_KEY], { featureName });
       if (mountError) return mountError;
@@ -192,10 +223,12 @@ export function resolveWriteTarget({ agentId, layerId }, resolvers = scopeResolv
   if (!resolvers.get(agentId)) {
     throw new Error(`未注册的 scope: "${agentId}"`);
   }
-  // 组装函数按 dir 声明目录层；id 约定为 `dir:<path>`（见 ticket 05 示例），
-  // 写回时从 layerId 还原 dir 以便组装函数重新定位层文件。
+  // 组装函数按 dir / projectId 声明归属层；id 约定为 `dir:<path>` 与
+  // `project:<id>`（ticket 043），写回时从 layerId 还原参数以便组装函数
+  // 重新定位层文件（项目层经 requirePhProjectForLayer 校验真实项目存在）。
   const dir = typeof layerId === 'string' && layerId.startsWith('dir:') ? layerId.slice(4) : undefined;
-  const { layers } = buildScopeLayers({ agentId, dir }, resolvers);
+  const projectId = typeof layerId === 'string' && layerId.startsWith('project:') ? layerId.slice(8) : undefined;
+  const { layers } = buildScopeLayers({ agentId, dir, projectId }, resolvers);
   const layer = layers.find((entry) => entry.id === layerId);
   if (layer) return layer.path;
   if (layerId === 'global') return GLOBAL_LAYER_PATH;
@@ -204,6 +237,25 @@ export function resolveWriteTarget({ agentId, layerId }, resolvers = scopeResolv
 
 // ── Express 路由 ───────────────────────────────────────────────────────
 
+/** 归属类确定性错误 → HTTP 语义码（其余异常 → 500）。 */
+function mapScopeError(res, error) {
+  const message = String(error?.message || error);
+  if (/未注册的 scope/.test(message)) {
+    return res.status(404).json({ error: message });
+  }
+  // 项目归属校验（ticket 043）：非法 ID 格式 400；未知项目 404——绝不退回目录层
+  if (/Invalid projectId/.test(message)) {
+    return res.status(400).json({ error: message });
+  }
+  if (/Unknown project/.test(message)) {
+    return res.status(404).json({ error: message });
+  }
+  if (/互斥的归属参数/.test(message)) {
+    return res.status(400).json({ error: message });
+  }
+  return res.status(500).json({ error: message });
+}
+
 export function setupFeatureConfigRoutes(app, express) {
   app.get('/protoclaw/feature_config/resolved', (req, res) => {
     const agentId = req.query.agentId;
@@ -211,14 +263,12 @@ export function setupFeatureConfigRoutes(app, express) {
       return res.status(400).json({ error: 'agentId required' });
     }
     const dir = req.query.dir || undefined;
+    // 项目会话（ticket 043）以 projectId 查询项目链；dir 与 projectId 互斥
+    const projectId = req.query.projectId || undefined;
     try {
-      res.json(resolveScopeConfig({ agentId, dir }));
+      res.json(resolveScopeConfig({ agentId, dir, projectId }));
     } catch (error) {
-      // 未注册 scope → 明确 404；其他异常 → 500
-      if (/未注册的 scope/.test(String(error?.message))) {
-        return res.status(404).json({ error: error.message });
-      }
-      res.status(500).json({ error: error.message });
+      mapScopeError(res, error);
     }
   });
 
@@ -238,10 +288,7 @@ export function setupFeatureConfigRoutes(app, express) {
     try {
       targetPath = resolveWriteTarget({ agentId, layerId });
     } catch (error) {
-      if (/未注册的 scope/.test(String(error?.message))) {
-        return res.status(404).json({ error: error.message });
-      }
-      return res.status(500).json({ error: error.message });
+      return mapScopeError(res, error);
     }
     if (!targetPath) {
       return res.status(404).json({ error: `未知 layerId: "${layerId}"` });

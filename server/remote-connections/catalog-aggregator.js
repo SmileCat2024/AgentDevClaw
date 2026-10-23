@@ -123,6 +123,10 @@ function collectRuntimes({ connected, viewer }) {
         || cleanText(raw.active_workspace_agent_name) || cleanText(raw.name),
       sessionType,
       openDirectory: cleanText(raw.open_directory) || cleanText(raw.openDirectory) || '',
+      // 归属身份透传（ticket 044）：远端项目会话携带非空 projectId；身份
+      // 只透传不解析——本地不得把远端项目当本地项目操作，也不得按
+      // openDirectory 把它归入目录组（openDirectory 只是文件环境）。
+      projectId: cleanText(raw.project_id) || cleanText(raw.projectId) || '',
       sessionId: cleanText(raw.active_workspace_session_id) || cleanText(raw.activeWorkspaceSessionId) || '',
       sessionTitle: cleanText(raw.active_workspace_session_title) || '',
       updatedAt: cleanText(raw.updated_at) || cleanText(raw.updatedAt) || '',
@@ -146,6 +150,7 @@ function collectRuntimes({ connected, viewer }) {
         workspaceName: cleanText(raw.name),
         sessionType,
         openDirectory: '',
+        projectId: '',
         sessionId: '',
         sessionTitle: '',
         updatedAt: '',
@@ -169,6 +174,9 @@ function buildRuntimeEntry(connectionId, runtime) {
     sessionType: runtime.sessionType,
     runtimeId: namespacedRuntimeId,
     openDirectory: runtime.openDirectory,
+    // 归属身份透传（ticket 044）：远端项目会话带非空 projectId，前端据此
+    // 与目录组分开呈现；本地不解析该身份（无远端项目管理协议）。
+    ...(runtime.projectId ? { projectId: runtime.projectId } : {}),
     ...(runtime.sessionId ? { sessionId: namespaceId(connectionId, runtime.sessionId) } : {}),
     ...(runtime.sessionTitle ? { sessionTitle: runtime.sessionTitle } : {}),
     ...(runtime.updatedAt ? { updatedAt: runtime.updatedAt } : {}),
@@ -185,6 +193,9 @@ function buildRuntimeEntry(connectionId, runtime) {
 // 取叶段。无目录的 runtime 保持为直属会话，不生成伪项目组。
 // groupKey 用完整目录身份（remote:<connId>:<agentId>:<encoded-dir>）防同名叶目录
 // 跨 agent / 跨连接串组；目录名本身不参与路由寻址，仅作分组键。
+// 远端项目会话（projectId 非空，ticket 044）不进目录组——openDirectory 只是
+// 文件环境，把它渲染成目录组会让远端项目会话被当作本地目录操作入口；改走
+// 无目录分支（workspace 直属会话），身份经条目 projectId 透传。
 function composeWorkspaces(connectionId, connectionName, sources) {
   const runtimes = collectRuntimes(sources);
   const groups = new Map();
@@ -204,12 +215,15 @@ function composeWorkspaces(connectionId, connectionName, sources) {
   for (const runtime of runtimes.values()) {
     const entry = buildRuntimeEntry(connectionId, runtime);
     const dir = runtime.openDirectory;
-    if (dir) {
+    if (dir && !runtime.projectId) {
       const identity = namespaceId(connectionId, `${runtime.agentId || runtime.id}:${encodeDirKey(dir)}`);
       groupOf(identity, directoryLeaf(dir), dir).entries.set(entry.id, entry);
     } else {
       const fallbackName = runtime.workspaceName || runtime.name || '未命名工作空间';
-      const identity = namespaceId(connectionId, `no-dir:${encodeDirKey(runtime.agentId || runtime.id)}:${encodeDirKey(fallbackName)}`);
+      const noDirScope = runtime.projectId
+        ? `prj:${encodeDirKey(runtime.projectId)}:${runtime.agentId || runtime.id}`
+        : `${runtime.agentId || runtime.id}`;
+      const identity = namespaceId(connectionId, `no-dir:${encodeDirKey(noDirScope)}:${encodeDirKey(fallbackName)}`);
       groupOf(identity, fallbackName, '').entries.set(entry.id, entry);
     }
   }

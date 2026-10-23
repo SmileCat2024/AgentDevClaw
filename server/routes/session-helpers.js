@@ -24,6 +24,8 @@ import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createSessionHandoffHelpers } from './session-handoff-helpers.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { resolveNewSessionAgent } from '../shared/workspace-agents.js';
+import { getPhProject } from './ph-projects.js';
+import { getSessionProjectId } from '../shared/session-project.js';
 
 import {
   META_VERSION,
@@ -93,14 +95,26 @@ export function selectFallbackSession(agentId, sessions, sourceSession) {
     session?.archived !== true
   ));
   if (PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
-    const sourceDirectory = String(sourceSession?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase();
-    if (!sourceDirectory) return null;
-    // PH 后继只选仍在运行的会话：目录下再无运行中会话时回退 null，
-    // 归档/删除路由据此跳过 startManagedAgent，而不是复活已停止的会话。
-    candidates.splice(0, candidates.length, ...candidates.filter((session) => (
-      String(session?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase() === sourceDirectory
-      && isManagedRuntimeRunning(getAgentRuntime(agentId, session.id))
-    )));
+    // 归属优先于目录（ticket 044）：回选只在来源会话自己的集合内进行——
+    // 项目会话回选同项目运行中会话，目录会话回选同目录且非项目的运行中
+    // 会话；绝不让删除/归档 A 内会话回选到 D 或 B（同路径也不行）。
+    const sourceProjectId = cleanSessionText(sourceSession?.projectId);
+    if (sourceProjectId) {
+      candidates.splice(0, candidates.length, ...candidates.filter((session) => (
+        cleanSessionText(session?.projectId) === sourceProjectId
+        && isManagedRuntimeRunning(getAgentRuntime(agentId, session.id))
+      )));
+    } else {
+      const sourceDirectory = String(sourceSession?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase();
+      if (!sourceDirectory) return null;
+      // PH 后继只选仍在运行的会话：目录下再无运行中会话时回退 null，
+      // 归档/删除路由据此跳过 startManagedAgent，而不是复活已停止的会话。
+      candidates.splice(0, candidates.length, ...candidates.filter((session) => (
+        !cleanSessionText(session?.projectId)
+        && String(session?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase() === sourceDirectory
+        && isManagedRuntimeRunning(getAgentRuntime(agentId, session.id))
+      )));
+    }
   }
   return candidates.sort((left, right) => (
     getSessionRecencyValue(right).localeCompare(getSessionRecencyValue(left))
@@ -142,9 +156,9 @@ function buildNamedSessionTitle(name, createdAtIso) {
   return buildFeatureSessionTitle(name, createdAtIso);
 }
 
-async function getNextNewSessionTitle(agentId, openDirectory) {
+async function getNextNewSessionTitle(agentId, openDirectory, projectId = '') {
   const index = await readSessionIndex(agentId);
-  return `新对话${computeNextSessionNumber(index.sessions, openDirectory)}`;
+  return `新对话${computeNextSessionNumber(index.sessions, openDirectory, { projectId })}`;
 }
 
 async function checkSessionHasSummary(agentId, sessionId) {
@@ -319,6 +333,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         targetFiles,
         referenceMaterials,
         workspaceAgentId: record.workspaceAgentId || 'main',
+        projectId: cleanSessionText(record.projectId),
         sessionType: sTypeFP,
         status: cleanSessionText(record.status),
         archived: record.archived === true,
@@ -372,6 +387,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       targetFiles,
       referenceMaterials,
       workspaceAgentId: record.workspaceAgentId || 'main',
+      projectId: cleanSessionText(record.projectId),
       sessionType: cleanSessionText(record.sessionType) || 'main',
       status: cleanSessionText(record.status),
       archived: record.archived === true,
@@ -425,6 +441,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       targetFiles,
       referenceMaterials,
       workspaceAgentId: record.workspaceAgentId || 'main',
+      projectId: cleanSessionText(record.projectId),
       sessionType: cleanSessionText(record.sessionType) || 'main',
       status: cleanSessionText(record.status),
       archived: record.archived === true,
@@ -589,12 +606,14 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
   // 过滤无关）。
   const richPageOptions = {
     projectDir: options.sessionProjectDir,
+    projectId: options.sessionProjectId,
     query: options.sessionQuery,
     archived: options.sessionArchived,
     offset: options.sessionOffset,
     limit: options.sessionLimit,
   };
   const richPageActive = options.sessionProjectDir !== undefined
+    || options.sessionProjectId !== undefined
     || options.sessionQuery !== undefined
     || options.sessionArchived !== undefined
     || options.sessionOffset !== undefined
@@ -610,6 +629,7 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
       sessionOffset: page.offset,
       sessionHasMore: page.offset + page.slice.length < page.total,
       sessionProjectDir: String(options.sessionProjectDir || '') || null,
+      sessionProjectId: cleanSessionText(options.sessionProjectId) || null,
       mainTotal: page.mainTotal,
       archivedTotal: page.archivedTotal,
     };
@@ -763,12 +783,14 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
   // 完整投影。
   const pageOptions = {
     projectDir: options.sessionProjectDir,
+    projectId: options.sessionProjectId,
     query: options.sessionQuery,
     archived: options.sessionArchived,
     offset: options.sessionOffset,
     limit: options.sessionLimit,
   };
   const pageActive = options.sessionProjectDir !== undefined
+    || options.sessionProjectId !== undefined
     || options.sessionQuery !== undefined
     || options.sessionArchived !== undefined
     || options.sessionOffset !== undefined
@@ -784,6 +806,7 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
       sessionOffset: page.offset,
       sessionHasMore: page.offset + page.slice.length < page.total,
       sessionProjectDir: String(options.sessionProjectDir || '') || null,
+      sessionProjectId: cleanSessionText(options.sessionProjectId) || null,
       mainTotal: page.mainTotal,
       archivedTotal: page.archivedTotal,
     };
@@ -878,6 +901,31 @@ async function createPrebuiltSession(agentId, options = {}) {
     throw Object.assign(new Error(`Unknown source session: ${sourceSessionId}`), { statusCode: 404 });
   }
   const workspaceAgentId = resolveNewSessionAgent(workspace, options, sourceSession);
+  // ── PH 项目归属（ticket 042）──────────────────────────────────────────
+  // 显式 projectId 仅 PH 接受；无参数保持目录语义（不查找同路径项目）；
+  // 派生会话（sourceSessionId）继承来源索引的归属，显式传入与来源不一致时
+  // 报错——与 workspaceAgentId 的"A derived session must retain its source
+  // Agent"同构，当前页面/工作空间选择不能覆盖来源归属。
+  const requestedProjectId = cleanSessionText(options.projectId);
+  if (requestedProjectId && normalizedAgentId !== 'programming-helper') {
+    throw Object.assign(
+      new Error(`projectId is only supported for programming-helper sessions: ${normalizedAgentId}`),
+      { statusCode: 400 },
+    );
+  }
+  const inheritedProjectId = getSessionProjectId(sourceSession);
+  if (requestedProjectId && sourceSession && requestedProjectId !== inheritedProjectId) {
+    throw Object.assign(
+      new Error('A derived session must retain its source project'),
+      { statusCode: 400 },
+    );
+  }
+  const nextProjectId = requestedProjectId || inheritedProjectId;
+  // 项目会话的运行/记录目录来自项目表当前记录；显式项目身份无效或未知直接
+  // 报错（400/404/500 由 getPhProject 语义决定），不退回目录路径。
+  const projectWorkDirectory = nextProjectId
+    ? (await getPhProject(nextProjectId)).workDirectory
+    : '';
   const createdAt = new Date().toISOString();
   const sessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
   const nextFeatureName =
@@ -898,13 +946,17 @@ async function createPrebuiltSession(agentId, options = {}) {
     || (requestedFormId === 'assembly-form' && nextAgentName ? getAssemblyWorkspaceDir(nextAgentName) : '');
   const nextOpenDirectory =
     await normalizePathCasing(
-      requestedFormId === 'assembly-form'
-        ? nextAssemblyEnvDir
-        : (
-          cleanSessionText(options.openDirectory)
-          || cleanSessionText(sourceSession?.openDirectory)
-          || (normalizedAgentId === 'agent-studio' ? '' : cleanSessionText(currentState?.openDirectory))
-        )
+      // 项目会话（显式或派生继承）：目录以项目表当前记录为权威，
+      // options.openDirectory / 来源旧记录 / 工作空间当前目录都不参与。
+      nextProjectId
+        ? projectWorkDirectory
+        : (requestedFormId === 'assembly-form'
+          ? nextAssemblyEnvDir
+          : (
+            cleanSessionText(options.openDirectory)
+            || cleanSessionText(sourceSession?.openDirectory)
+            || (normalizedAgentId === 'agent-studio' ? '' : cleanSessionText(currentState?.openDirectory))
+          ))
     );
   if (normalizedAgentId === 'agent-studio') {
     if (!nextOpenDirectory || !path.isAbsolute(nextOpenDirectory)) {
@@ -958,7 +1010,7 @@ async function createPrebuiltSession(agentId, options = {}) {
     : (normalizedAgentId === 'agent-studio' ? (nextProjectName || nextGoal) : (isPhStyleWorkspace ? '' : nextFeatureName));
   const explicitTitle = cleanSessionText(options.title);
   const nextTitle = explicitTitle || nextTaskTitle || (isPhStyleWorkspace
-    ? await getNextNewSessionTitle(agentId, nextOpenDirectory)
+    ? await getNextNewSessionTitle(agentId, nextOpenDirectory, nextProjectId)
     : buildNamedSessionTitle(sessionDisplayName, createdAt));
   // 派生会话默认继承来源会话的身份；只有没有来源时才创建 main。
   // 这样 compact/summary 等 successor 路径即使未重复传参，也不会把 coder
@@ -983,6 +1035,9 @@ async function createPrebuiltSession(agentId, options = {}) {
     referenceMaterials: nextReferenceMaterials,
     formId: requestedFormId,
     openDirectory: nextOpenDirectory,
+    // PH 项目归属（ticket 042）：仅项目会话落盘该字段，目录会话不带非空
+    // projectId（旧记录无此字段 = 目录会话，读取时归一为 ''）。
+    ...(nextProjectId ? { projectId: nextProjectId } : {}),
     sessionType,
     workspaceAgentId,
     metadata: {
@@ -1087,13 +1142,17 @@ async function createPrebuiltSession(agentId, options = {}) {
     // 最近目录，任何一次会话创建都会改写它，制造目录漂移。会话目录以会话
     // 自身 openDirectory 为唯一权威（创建时显式指定或继承来源会话）。
   } else if (normalizedAgentId === 'programming-helper') {
-    const openDirectory = nextOpenDirectory || cleanSessionText(currentState.openDirectory);
-    const cleanedForms = { ...currentState.forms };
-    delete cleanedForms['startup-form'];
-    await writeWorkspaceState(agentId, {
-      forms: cleanedForms,
-      openDirectory,
-    });
+    // 项目会话不触碰 workspace state：openDirectory 是目录对话的当前选择，
+    // 项目路径由项目表权威持有，不得借会话创建写回旧目录状态（041 契约）。
+    if (!nextProjectId) {
+      const openDirectory = nextOpenDirectory || cleanSessionText(currentState.openDirectory);
+      const cleanedForms = { ...currentState.forms };
+      delete cleanedForms['startup-form'];
+      await writeWorkspaceState(agentId, {
+        forms: cleanedForms,
+        openDirectory,
+      });
+    }
   }
 
   if (options.returnSummary === false) {
@@ -1193,14 +1252,18 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
       openDirectory,
     });
   } else if (PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
-    const currentState = await readWorkspaceState(agentId);
-    const openDirectory = cleanSessionText(existing.openDirectory) || cleanSessionText(currentState.openDirectory);
-    const cleanedForms = { ...currentState.forms };
-    delete cleanedForms['startup-form'];
-    await writeWorkspaceState(agentId, {
-      forms: cleanedForms,
-      openDirectory,
-    });
+    // 项目会话（ticket 042）：Session 保存的旧目录记录不得写回目录选择——
+    // openDirectory state 是目录对话的当前选择，项目目录由项目表权威持有。
+    if (!cleanSessionText(existing?.projectId)) {
+      const currentState = await readWorkspaceState(agentId);
+      const openDirectory = cleanSessionText(existing.openDirectory) || cleanSessionText(currentState.openDirectory);
+      const cleanedForms = { ...currentState.forms };
+      delete cleanedForms['startup-form'];
+      await writeWorkspaceState(agentId, {
+        forms: cleanedForms,
+        openDirectory,
+      });
+    }
   }
 
   if (options?.returnSummary === false) {
@@ -1441,6 +1504,10 @@ async function deletePrebuiltProject(agentId, projectId, options = {}) {
   const newIndex = await updateSessionIndex(agentId, (index) => {
     sessionsToDelete = [];
     const remainingSessions = index.sessions.filter((session) => {
+      // 目录批量删除不收编项目会话（ticket 044）：项目会话的 openDirectory
+      // 只是创建时记录，与同路径目录会话分属不同集合；其删除走项目删除
+      // 端点（046），不得随目录删除连带清索引或正文。
+      if (cleanSessionText(session?.projectId)) return true;
       const sessionDir = typeof session.openDirectory === 'string' ? session.openDirectory.trim().toLowerCase().replace(/\\/g, '/') : '';
       const sessionName = typeof (session.featureName || session.agentName) === 'string' ? (session.featureName || session.agentName).trim().toLowerCase() : '';
       const matchesDir = projectOpenDirectory && sessionDir === projectOpenDirectory;

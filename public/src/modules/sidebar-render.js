@@ -270,9 +270,11 @@ function renderSidebarChildItems(entries, ownerAgentId) {
     const isWorkGroup = ownerAgentId === 'work-group';
     // ph 组一律可进入（ADR-0012 决策 1）：远程目录组进入后以 remoteOnly
     // 视图呈现其历史会话（见 phSwitchProject）；work-group 仍按本地会话判定。
+    // 项目身份组（ticket 044，projectKey 'prj:*'）无 projectDir——不是目录
+    // 操作入口，045 接项目视图前不提供进入按钮。
     const canEnter = isWorkGroup
       ? group.items.some((entry) => entry.source !== 'remote')
-      : group.items.length > 0;
+      : (!!group.projectDir && group.items.length > 0);
     // For work-group: enter navigates to the group chat by chatId.
     // For programming-helper: enter navigates to the workspace surface and
     // scrolls to / expands the corresponding project card.

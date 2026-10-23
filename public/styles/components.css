@@ -9309,14 +9309,7 @@ body[data-theme="light"] .ph-open-sessions-dismiss:hover {
   margin-top: 1px;
 }
 
-/* Static header (single project) */
-.ph-project-header-static {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* Dropdown trigger */
+/* Dropdown trigger（选择器常驻，ticket 045：目录/项目两组 + 新建项目入口） */
 .ph-project-dropdown {
   position: relative;
 }
@@ -9352,6 +9345,9 @@ body[data-theme="light"] .ph-open-sessions-dismiss:hover {
   top: calc(100% + 6px);
   left: 0;
   min-width: 280px;
+  /* 窄视口 + 托管目录长路径：钳住菜单宽度，条目内路径省略号生效
+     （ticket 045：选择器常驻后窄屏必须可用） */
+  max-width: min(420px, calc(100vw - 32px));
   max-height: 320px;
   overflow-y: auto;
   background: var(--panel-bg);
@@ -9363,6 +9359,18 @@ body[data-theme="light"] .ph-open-sessions-dismiss:hover {
 }
 .ph-project-dropdown.open .ph-project-dropdown-menu {
   display: block;
+}
+
+/* 窄容器（ticket 045）：菜单改锚到项目栏整体（sticky 定位祖先），左右贴
+   栏宽——下拉触发器自身偏移不再决定菜单左缘，窄视口不越界 */
+@container main-content (max-width: 640px) {
+  .ph-project-dropdown { position: static; }
+  .ph-project-dropdown-menu {
+    left: 0;
+    right: 0;
+    min-width: 0;
+    max-width: none;
+  }
 }
 
 /* Dropdown item */
@@ -13546,3 +13554,167 @@ body[data-theme="light"] .session-ref-chip {
 .session-ref-picker-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
 .session-ref-picker-confirm:not(:disabled):hover { background: var(--hover-bg); }
 .session-ref-picker-cancel:hover { background: var(--hover-bg); }
+
+/* ── PH 项目选择器：目录/项目两组 + 新建项目（ticket 045）──────────── */
+/* 组标题：视觉分区，不参与交互；中文标签禁用 uppercase/letter-spacing
+ * （design-system §2.3）。 */
+.ph-project-dropdown-group {
+  padding: 2px 0;
+}
+.ph-project-dropdown-group + .ph-project-dropdown-group,
+.ph-project-dropdown-group + .ph-project-dropdown-new {
+  border-top: 1px solid var(--border-color);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+.ph-project-dropdown-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 4px 12px 4px;
+}
+body[data-theme="light"] .ph-project-dropdown-group-label {
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+/* 新建项目入口：与条目同构（avatar 列 + 信息列），视觉上是动作而非目标 */
+.ph-project-dropdown-new {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.ph-project-dropdown-new:hover {
+  background: var(--hover-bg);
+}
+.ph-project-dropdown-new .ph-project-dropdown-avatar {
+  border: 1px dashed var(--border-color);
+  background: transparent;
+}
+.ph-project-dropdown-new .ph-project-dropdown-name {
+  color: var(--text-secondary);
+}
+/* 新建项目弹窗：设置类弹窗规格（feature-detail-window 壳 + settings 表单） */
+.ph-new-project-window {
+  width: min(100%, 460px);
+}
+.ph-new-project-dir-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ph-new-project-dir-row .settings-input {
+  flex: 1;
+  min-width: 0;
+}
+.ph-new-project-error {
+  color: var(--error-color);
+  font-size: 13px;
+  padding: 6px 2px 0;
+}
+
+/* ── 项目管理弹窗（ticket 046：改绑/归档/删除）──────────────────────────
+   复用 feature-detail 弹窗壳 + settings 表单配方，这里只补行布局与
+   影响预览的排版。 */
+.ph-manage-projects-window {
+  width: min(100%, 640px);
+}
+.ph-manage-projects-body {
+  max-height: min(56vh, 480px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ph-manage-projects-loading {
+  color: var(--muted-color, rgba(255, 255, 255, 0.55));
+  font-size: 13px;
+  padding: 12px 2px;
+}
+.ph-manage-group-label {
+  font-size: 12px;
+  color: var(--muted-color, rgba(255, 255, 255, 0.55));
+  padding: 8px 2px 2px;
+}
+.ph-manage-project-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.ph-manage-project-info {
+  flex: 1;
+  min-width: 0;
+}
+.ph-manage-project-name {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ph-manage-project-flag {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-color, rgba(255, 255, 255, 0.55));
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.ph-manage-project-dir {
+  font-size: 12px;
+  color: var(--muted-color, rgba(255, 255, 255, 0.55));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.ph-manage-project-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ph-rebind-window,
+.ph-delete-window {
+  width: min(100%, 520px);
+}
+.ph-rebind-note {
+  font-size: 12px;
+  color: var(--muted-color, rgba(255, 255, 255, 0.55));
+  line-height: 1.6;
+  padding-top: 4px;
+}
+.ph-delete-impact,
+.ph-delete-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ph-delete-impact-row {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ph-delete-impact-note {
+  font-size: 12px;
+  color: var(--muted-color, rgba(255, 255, 255, 0.55));
+  line-height: 1.6;
+}
+.ph-delete-dir-option {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px 2px 0;
+  cursor: pointer;
+}
+.ph-delete-dir-option input[type="checkbox"] {
+  margin-top: 3px;
+}

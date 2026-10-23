@@ -20,7 +20,7 @@ import {
   EnvelopeStatus,
 } from '../runtime-call-envelope.js';
 import { DISPATCH_FIRED_TIMEOUT_MS } from '../shared/constants.js';
-import { sanitizeSessionFragment } from '../shared/string-helpers.js';
+import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
 import {
   getManagedRuntimeKey,
   getAgentRuntime,
@@ -63,7 +63,11 @@ async function fireSingleTarget(s, target) {
   if (sessionId === '__latest__') {
     try {
       const sessionsResult = await _ctx.listPrebuiltSessions(agentId);
-      const allSessions = sessionsResult?.sessions || [];
+      // 目录外围不收编项目会话（ticket 044）：__latest__ 只在目录会话集合
+      // 内解析，项目会话（非空 projectId）不顶替目录 latest——调度没有
+      // 项目入口，选中 A/B 会把项目会话当目录会话派发。
+      const allSessions = (sessionsResult?.sessions || [])
+        .filter((ss) => !cleanSessionText(ss?.projectId));
       // Further filter by project if specified
       const projId = s.projectId;
       const byProject = projId

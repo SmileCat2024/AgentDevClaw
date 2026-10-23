@@ -29,6 +29,7 @@ import {
   normalizeWorkspaceFeatureProject,
   normalizeWorkspaceAgentProject,
   normalizeWorkspacePhProject,
+  deriveDirectoryPhProjectsFromSessions,
   upsertWorkspacePhProject,
   removeWorkspacePhProject,
   syncFeatureCreatorProjects,
@@ -200,21 +201,14 @@ export async function readWorkspaceState(agentId) {
       _wsCache.delete(key);
     }
     if (key === 'programming-helper' && (!Array.isArray(data.phProjects) || data.phProjects.length === 0)) {
+      // 补建目录列表只消费目录会话（ticket 044，纯函数见
+      // deriveDirectoryPhProjectsFromSessions）：项目会话的 openDirectory
+      // 是创建时记录，不得播种目录列表 / auto-openDirectory。
       const sessionIndex = await readSessionIndex(key);
-      const directories = new Map();
-      for (const session of (sessionIndex?.sessions || [])) {
-        const dir = String(session.openDirectory || '').trim();
-        if (dir && !directories.has(dir.replace(/\\/g, '/').toLowerCase())) {
-          directories.set(dir.replace(/\\/g, '/').toLowerCase(), {
-            openDirectory: dir,
-            createdAt: session.createdAt,
-            updatedAt: session.updatedAt,
-          });
-        }
-      }
-      if (directories.size > 0) {
+      const directories = deriveDirectoryPhProjectsFromSessions(sessionIndex?.sessions || []);
+      if (directories.length > 0) {
         const timestamp = new Date().toISOString();
-        data.phProjects = Array.from(directories.values()).map(d =>
+        data.phProjects = directories.map(d =>
           normalizeWorkspacePhProject({ ...d, createdAt: d.createdAt || timestamp, updatedAt: d.updatedAt || timestamp })
         ).filter(Boolean);
         writeWorkspaceState(key, data).catch(e => console.warn(e));

@@ -205,6 +205,10 @@ function normalizeSidebarOperation(raw = {}) {
   const operationId = String(raw.operationId || '').trim() || createSidebarOperationId(kind);
   const sourceSessionId = String(raw.sourceSessionId || raw.sessionId || '').trim();
   const agentId = String(raw.agentId || raw.ownerAgentId || '').trim();
+  // 归属身份（ticket 044）：项目会话的操作（乐观条目）携带 projectId，
+  // 此时 projectDir 只是文件环境，不作为分组身份——归一时清空，避免项目
+  // 会话的乐观条目被归进同路径目录 D 的组。
+  const projectId = String(raw.projectId || '').trim();
   return {
     schemaVersion: 1,
     operationId,
@@ -217,7 +221,8 @@ function normalizeSidebarOperation(raw = {}) {
     sourceRuntimeId: String(raw.sourceRuntimeId || '').trim(),
     targetSessionId: String(raw.targetSessionId || '').trim(),
     targetRuntimeId: String(raw.targetRuntimeId || '').trim(),
-    projectDir: String(raw.projectDir || '').trim(),
+    projectId,
+    projectDir: projectId ? '' : String(raw.projectDir || '').trim(),
     projectName: String(raw.projectName || '').trim(),
     title: String(raw.title || '').trim(),
     serverRevision: raw.serverRevision !== null

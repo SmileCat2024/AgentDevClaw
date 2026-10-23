@@ -75,6 +75,28 @@ export function normalizeWorkspacePhProject(raw = {}) {
   };
 }
 
+/**
+ * 从会话索引历史派生目录 phProjects（workspace.js 无目录列表时的补建）。
+ * 纯函数（ticket 044）：项目会话（非空 projectId）不参与派生——openDirectory
+ * 只是项目会话的创建时记录，让它播种目录列表会把项目路径误当"用过的目录"，
+ * 还可能经 auto-openDirectory 把项目路径写成目录会话的当前选择。
+ */
+export function deriveDirectoryPhProjectsFromSessions(sessions = []) {
+  const directories = new Map();
+  for (const session of Array.isArray(sessions) ? sessions : []) {
+    if (cleanSessionText(session?.projectId)) continue;
+    const dir = String(session?.openDirectory || '').trim();
+    if (dir && !directories.has(dir.replace(/\\/g, '/').toLowerCase())) {
+      directories.set(dir.replace(/\\/g, '/').toLowerCase(), {
+        openDirectory: dir,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      });
+    }
+  }
+  return Array.from(directories.values());
+}
+
 export function buildWorkspaceFeatureProjectId(project = {}) {
   const openDirectory = typeof project.openDirectory === 'string' ? project.openDirectory.trim() : '';
   if (openDirectory) {

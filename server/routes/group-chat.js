@@ -1444,9 +1444,11 @@ app.get('/protoclaw/group_chats/:chatId/sessions/:identityRef', async (req, res,
         isActive: s.id === activeSessionId,
       }));
 
-    // 外部会话：不在群内映射中的会话（取最近 20 条）
+    // 外部会话：不在群内映射中的会话（取最近 20 条）。目录候选排除项目
+    // 会话（ticket 044）——项目会话的 openDirectory 只是创建时记录，把它
+    // 列为群聊候选等于给外围开了项目入口；群聊派发不接项目集合。
     const externalSessions = index.sessions
-      .filter((s) => !chatSessionIds.has(s.id))
+      .filter((s) => !chatSessionIds.has(s.id) && !cleanSessionText(s?.projectId))
       .slice(0, 20)
       .map((s) => ({
         id: s.id,
@@ -1570,6 +1572,9 @@ app.get('/protoclaw/group_chats/:chatId/search_sessions', async (req, res, next)
       for (const session of index.sessions) {
         if (session.archived) continue;
         if (pooledIds.has(session.id)) continue;
+        // 引入候选排除项目会话（ticket 044）：群聊搜索是目录外围入口，
+        // 不提供项目集合的引入/派发。
+        if (cleanSessionText(session?.projectId)) continue;
 
         const title = session.title || session.taskTitle || '未命名';
         const searchText = [title, session.goal, session.taskTitle]

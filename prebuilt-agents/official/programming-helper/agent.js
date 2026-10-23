@@ -37,6 +37,7 @@ import {
   readGlobalLayer,
   readAgentLayer,
   readDirLayer,
+  readProjectLayer,
 } from '../../../server/shared/feature-config-layers.js';
 import { extractFeatureMounts } from '../../../server/shared/feature-mount.js';
 import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
@@ -84,6 +85,38 @@ function readProgrammingWorkspaceState() {
 }
 
 /**
+ * PH 配置队列组装（ticket 00/03 + 043 的唯一实现）。
+ *
+ * 两条正式链按显式运行时身份二选一，互不继承（契约：项目不继承同路径目录配置）：
+ * - 目录会话（无 projectId）：[全局层, agent 层, 目录层(workspaceDir), 会话注入]；
+ * - 项目会话（宿主逐实例注入 projectId）：[全局层, agent 层, 项目层(按项目 ID),
+ *   会话注入]——项目层文件由项目 ID 寻址，与 workspaceDir 无关（同目录的项目
+ *   A/B 与目录会话各读各的层）。
+ *
+ * projectId 是显式注入的实例身份（宿主从 Session 索引逐实例传入），不做进程级
+ * 缓存——同进程多 session 各自构造，互不沿用。$mount 装配声明先于 merge 提取
+ * （允许层：global/agent；目录层、项目层与会话注入拒绝，见
+ * shared/feature-mount.js），剔除后的纯配置层再进 merge；累加型多值字段
+ * （skill.extraDirs 等）进 merge 前跨层叠加。导出供装配测试直接消费，避免
+ * 测试复刻队列逻辑漂移。
+ */
+export function assemblePhFeatureConfig({ projectId, workspaceDir, sessionConfig } = {}) {
+  const normalizedProjectId = cleanValue(projectId);
+  const ownershipLayer = normalizedProjectId
+    ? { id: 'project', config: readProjectLayer(normalizedProjectId) }
+    : { id: 'dir', config: readDirLayer(workspaceDir) };
+  const layers = [
+    { id: 'global', config: readGlobalLayer() },
+    { id: 'agent', config: readAgentLayer() },
+    ownershipLayer,
+    { id: 'session', config: sessionConfig && typeof sessionConfig === 'object' ? sessionConfig : {} },
+  ];
+  const { mounts, configLayers } = extractFeatureMounts(layers);
+  const { merged, warnings } = resolveFeatureConfig(collapseAccumulatedFields(configLayers));
+  return { mounts, merged, warnings, layerIds: layers.map((layer) => layer.id) };
+}
+
+/**
  * 编程小助手 Agent
  *
  * 专业的编程助手，擅长代码编写、调试和优化
@@ -94,21 +127,17 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     const workspaceDir = config.workspaceDir || process.cwd();
     const runtime = config.runtime && typeof config.runtime === 'object' ? config.runtime : {};
 
-    // 配置队列（ticket 00/03）：[全局层, agent 层, 目录层(构造时 cwd), 会话注入]。
-    // 队列在构造函数内组装——同进程多 session 可能对应不同 cwd，禁止进程级缓存。
-    // 会话注入（featureOverrides）不落盘。
-    // $mount 装配声明先于 merge 提取（允许层：global/agent；目录层与会话注入
-    // 拒绝，见 shared/feature-mount.js），剔除后的纯配置层再进 merge；装配事实
-    // 挂到 pendingFeatureMounts，由宿主（run-prebuilt-agent）构造完成后消费。
-    const { mounts: featureMounts, configLayers } = extractFeatureMounts([
-      { id: 'global', config: readGlobalLayer() },
-      { id: 'agent', config: readAgentLayer() },
-      { id: 'dir', config: readDirLayer(workspaceDir) },
-      { id: 'session', config: runtime.config && typeof runtime.config === 'object' ? (runtime.config.featureOverrides || {}) : {} },
-    ]);
-    // 累加型多值字段（skill.extraDirs 等）在进 merge 前跨层叠加：
-    // 下层条目是追加而非顶掉上游（server/shared/feature-config-accumulate.js）
-    const { merged } = resolveFeatureConfig(collapseAccumulatedFields(configLayers));
+    // 配置队列见 assemblePhFeatureConfig 注释（构造函数内组装——同进程多
+    // session 可能对应不同归属，禁止进程级缓存）。会话注入（featureOverrides）
+    // 不落盘。装配事实挂到 pendingFeatureMounts，由宿主（run-prebuilt-agent）
+    // 构造完成后消费。
+    const { mounts: featureMounts, merged } = assemblePhFeatureConfig({
+      projectId: config.projectId,
+      workspaceDir,
+      sessionConfig: runtime.config && typeof runtime.config === 'object'
+        ? (runtime.config.featureOverrides || {})
+        : {},
+    });
 
     const excludeMcpServers = Array.from(new Set([
       ...(config.excludeMcpServers ?? []),

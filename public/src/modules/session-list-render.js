@@ -364,24 +364,54 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
 
 function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const { desc } = ctx;
+  // 项目实体清单按需拉取（在飞合并）；无显式项目目标时不强制重渲染——
+  // 轮询自然刷新 surface，项目组随下次渲染出现（避免渲染-加载循环）。
+  if (typeof ensurePhProjectEntitiesLoaded === 'function') {
+    ensurePhProjectEntitiesLoaded();
+  }
   const projects = getProgrammingHelperProjects(agent);
   const wsState = getAgentWorkspaceState(agent);
   const currentOpenDir = String(wsState?.openDirectory || '').trim();
   const isZh = currentLanguage === 'zh';
   const agentName = isZh ? '智能编码空间' : 'Intelligent Coding Space';
 
-  // Determine current project — match by normalized id, not raw openDirectory,
-  // because workspace_state.openDirectory and project.openDirectory may use
-  // different path separators (backslash vs forward slash) or case.
+  // Determine current project — typed browsing target first (ticket 045):
+  // 显式项目目标 > 显式目录目标 > workspace_state.openDirectory 目录回退。
+  // 轮询刷新的 workspace_state 不会覆盖显式选择；项目元数据未加载完时
+  // 保持项目待定态（projectPending），不退回目录。
+  const browsingTarget = (typeof getPhBrowsingTarget === 'function')
+    ? getPhBrowsingTarget(agent) : null;
   let normCurrentDir = currentOpenDir.replace(/\\/g, '/').toLowerCase();
-  let currentProject = currentOpenDir
-    ? projects.find(p => p.id === ('dir:' + normCurrentDir)) || null
-    : (projects.length > 0 ? projects[0] : null);
+  let currentProject = null;
+  let projectPending = false;
+  if (browsingTarget?.type === 'project') {
+    if (browsingTarget.project) {
+      currentProject = projects.find((p) => p.id === browsingTarget.id) || null;
+    } else {
+      projectPending = true; // 元数据加载中：不退回另一个目标（契约）
+      ensurePhProjectEntitiesLoaded().then(() => {
+        lastRenderedWorkspaceHtml = '';
+        renderCurrentMainView();
+      });
+    }
+  }
+  if (!currentProject && !projectPending) {
+    // 显式目录目标优先于 workspace_state.openDirectory（两者通常一致；
+    // 不一致时以用户显式选择为准）
+    currentProject = (browsingTarget?.type === 'dir')
+      ? projects.find(p => p.id === browsingTarget.id) || null
+      : null;
+  }
+  if (!currentProject && !projectPending) {
+    currentProject = currentOpenDir
+      ? projects.find(p => p.id === ('dir:' + normCurrentDir)) || null
+      : (projects.length > 0 ? projects[0] : null);
+  }
 
   // 远程独有项目视图覆盖（ADR-0012 决策 1）：view-only 选中优先于工作区目录；
   // 项目消失（断线 / 目录历史清空）时自动回落到工作区目录并清除覆盖。
   const overrideProjectId = (typeof window !== 'undefined' && window.ClawFW?.phSurfaceViewProjectId) || '';
-  if (overrideProjectId && overrideProjectId !== currentProject?.id) {
+  if (!projectPending && overrideProjectId && overrideProjectId !== currentProject?.id) {
     const overrideProject = projects.find((p) => p.id === overrideProjectId && p.remoteOnly);
     if (overrideProject) {
       currentProject = overrideProject;
@@ -394,9 +424,11 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const headerAvatar = currentProject
     ? escapeHtml((getProgrammingHelperProjectDisplayName(currentProject) || '?')[0].toUpperCase())
     : '?';
-  const headerName = currentProject
-    ? escapeHtml(getProgrammingHelperProjectDisplayName(currentProject))
-    : (isZh ? '未打开项目' : 'No Project');
+  const headerName = projectPending
+    ? (isZh ? '项目加载中…' : 'Loading project…')
+    : (currentProject
+      ? escapeHtml(getProgrammingHelperProjectDisplayName(currentProject))
+      : (isZh ? '未打开项目' : 'No Project'));
 
   // Open-folder icon button for the active project.
   // 目录只能经 data 属性传递，禁止内联进 onclick 的 JS 字符串字面量——
@@ -409,8 +441,12 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '<span class="ph-dropdown-open-folder-text">' + escapeHtml(isZh ? '打开' : 'Open') + '</span>' +
     '</button>';
 
-  // Dropdown items for recent projects
-  const dropdownItems = projects.map((p) => {
+  // Dropdown items — 目录与项目两组（ticket 045）：目录组沿用旧行为
+  // （含远程目录桶），项目组按稳定 prj_* 身份。组标题只作视觉分区，
+  // 选择仍走 phSwitchProject（dir: 服务端切换 / prj_: 前端目标切换）。
+  const dirProjects = projects.filter((p) => p.type !== 'project');
+  const projectProjects = projects.filter((p) => p.type === 'project');
+  const renderDropdownItem = (p) => {
     const pName = getProgrammingHelperProjectDisplayName(p);
     const pAvatar = escapeHtml((pName || '?')[0].toUpperCase());
     const isActive = p.id === (currentProject?.id || '');
@@ -419,31 +455,51 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-project-dropdown-avatar">' + pAvatar + '</div>',
       '<div class="ph-project-dropdown-info">',
       '<div class="ph-project-dropdown-name">' + escapeHtml(pName) + '</div>',
-      '<div class="ph-project-dropdown-path">' + escapeHtml(p.openDirectory) + '</div>',
+      '<div class="ph-project-dropdown-path">' + escapeHtml(p.openDirectory || (p.type === 'project' ? (isZh ? '托管目录' : 'Managed directory') : '')) + '</div>',
       '</div>',
-      (isActive ? openFolderBtnHtml(p.openDirectory) : ''),
+      (isActive && p.openDirectory ? openFolderBtnHtml(p.openDirectory) : ''),
       '</div>',
     ].join('');
-  }).join('');
+  };
+  const renderDropdownGroup = (label, items) => (
+    '<div class="ph-project-dropdown-group">' +
+    '<div class="ph-project-dropdown-group-label">' + escapeHtml(label) + '</div>' +
+    items +
+    '</div>'
+  );
+  const dropdownItems = [
+    dirProjects.length > 0 ? renderDropdownGroup(isZh ? '目录' : 'Directories', dirProjects.map(renderDropdownItem).join('')) : '',
+    projectProjects.length > 0 ? renderDropdownGroup(isZh ? '项目' : 'Projects', projectProjects.map(renderDropdownItem).join('')) : '',
+    '<div class="ph-project-dropdown-new" onclick="window.phOpenNewProjectDialog()">',
+    '<div class="ph-project-dropdown-avatar">+</div>',
+    '<div class="ph-project-dropdown-info">',
+    '<div class="ph-project-dropdown-name">' + (isZh ? '新建项目…' : 'New Project…') + '</div>',
+    '<div class="ph-project-dropdown-path">' + (isZh ? '名称 + 可选目录，不自动创建对话' : 'Name + optional directory, no auto conversation') + '</div>',
+    '</div>',
+    '</div>',
+    // 项目管理入口（ticket 046）：改绑/归档/删除都从这进，正常选择器不出现
+    // 归档项目（getProgrammingHelperProjects 已过滤）。
+    '<div class="ph-project-dropdown-new" onclick="window.phOpenManageProjectsDialog()">',
+    '<div class="ph-project-dropdown-avatar">&#9881;</div>',
+    '<div class="ph-project-dropdown-info">',
+    '<div class="ph-project-dropdown-name">' + (isZh ? '管理项目…' : 'Manage Projects…') + '</div>',
+    '<div class="ph-project-dropdown-path">' + (isZh ? '改绑目录 / 归档 / 删除' : 'Rebind / archive / delete') + '</div>',
+    '</div>',
+    '</div>',
+  ].filter(Boolean).join('');
 
-  const dropdownHtml = projects.length > 1
-    ? '<div class="ph-project-dropdown">' +
-      '<div class="ph-project-dropdown-trigger" onclick="window.phToggleProjectDropdown(event)">' +
-      '<div class="ph-project-header-avatar">' + headerAvatar + '</div>' +
-      '<div class="ph-project-header-info">' +
-      '<div class="ph-project-header-name">' + headerName + '</div>' +
-      '</div>' +
-      '<svg class="ph-project-dropdown-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
-      '</div>' +
-      '<div class="ph-project-dropdown-menu">' + dropdownItems + '</div>' +
-      '</div>'
-    : '<div class="ph-project-header-static">' +
-      '<div class="ph-project-header-avatar">' + headerAvatar + '</div>' +
-      '<div class="ph-project-header-info">' +
-      '<div class="ph-project-header-name">' + headerName + '</div>' +
-      '</div>' +
-      (currentProject ? openFolderBtnHtml(currentProject.openDirectory) : '') +
-      '</div>';
+  // 选择器常驻（ticket 045）：目录/项目两组 + 「新建项目…」入口。即使只有
+  // 单一目录也保持下拉形态——新建项目入口必须在任何 PH surface 状态可达。
+  const dropdownHtml = '<div class="ph-project-dropdown">' +
+    '<div class="ph-project-dropdown-trigger" onclick="window.phToggleProjectDropdown(event)">' +
+    '<div class="ph-project-header-avatar">' + headerAvatar + '</div>' +
+    '<div class="ph-project-header-info">' +
+    '<div class="ph-project-header-name">' + headerName + '</div>' +
+    '</div>' +
+    '<svg class="ph-project-dropdown-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
+    '</div>' +
+    '<div class="ph-project-dropdown-menu">' + dropdownItems + '</div>' +
+    '</div>';
 
   // Banner (restored) + project bar
   const bannerHtml = [
@@ -492,11 +548,15 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '</div>',
   ].join('') : '';
 
-    // 新对话动作（R2-03）：remoteOnly 视图携带宿主级命名空间 agentId，服务端
-    // 按命名空间分支转发到远程宿主创建；本地动作形状不变。
+    // 新对话动作（R2-03 / 045）：目录目标沿用 openDirectory；项目目标显式
+    // 携带稳定 projectId（服务端按项目解析工作目录，不经目录回退）。
+    // remoteOnly 视图携带宿主级命名空间 agentId，服务端按命名空间分支
+    // 转发到远程宿主创建；本地动作形状不变。
+    const isProjectTarget = currentProject?.type === 'project';
     const newChatAction = escapeHtml(JSON.stringify({
       type: 'create_session',
-      openDirectory: currentProject?.openDirectory || '',
+      openDirectory: (!isProjectTarget && currentProject?.openDirectory) || '',
+      ...(isProjectTarget ? { projectId: currentProject.id } : {}),
       ...((currentProject?.remoteOnly && viewIdentity) ? { agentId: viewIdentity } : {}),
     }));
 
@@ -504,15 +564,19 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     // 目录由当前项目显式传入，避免运行时二次查询 workspace_state 失效。
     // 目录配置编辑的是本地 agent 的目录层配置，属真本地语义：remoteOnly
     // 项目保持隐藏，不随远程能力放开（无对应远程能力位，不引入伪能力）。
-    const dirConfigBtn = (currentProject && !currentProject.remoteOnly && typeof phDirConfigButtonHtml === 'function')
-      ? phDirConfigButtonHtml(agent, currentProject.openDirectory) : '';
+    // 项目目标（045）改走项目层配置（project:<id> scope，project_scope
+    // 编辑器 + 项目名/真实目录呈现）。
+    const configBtn = (currentProject?.type === 'project' && typeof phProjectConfigButtonHtml === 'function')
+      ? phProjectConfigButtonHtml(agent, currentProject)
+      : ((currentProject && currentProject.type !== 'project' && !currentProject.remoteOnly && typeof phDirConfigButtonHtml === 'function')
+        ? phDirConfigButtonHtml(agent, currentProject.openDirectory) : '');
 
     const headerBar = [
       '<div class="ph-project-bar">',
       '<div class="ph-project-bar-left">',
       dropdownHtml,
       // 目录设置（齿轮图标按钮）紧跟项目选择器，属项目级操作。
-      dirConfigBtn,
+      configBtn,
       '</div>',
       '<div class="ph-project-bar-right">',
       modelSwitchHtml,
@@ -522,8 +586,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '</div>',
     ].join('');
 
-  // No project state
-  if (!currentProject) {
+  // No project state（项目元数据加载中不算空态——不退回目录/欢迎页）
+  if (!currentProject && !projectPending) {
     return [
       bannerHtml,
       '<section class="workspace-section">',
@@ -532,6 +596,16 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-welcome-title">' + (isZh ? '打开一个项目开始编程' : 'Open a project to start coding') + '</div>',
       '<div class="ph-welcome-desc">' + (isZh ? '选择一个本地文件夹作为工作目录，智能编码空间将在该项目中协助你。' : 'Select a local folder as your workspace. The assistant will help you code within the project.') + '</div>',
       '</div>',
+      '</section>',
+    ].join('');
+  }
+  if (!currentProject && projectPending) {
+    // 目标项目元数据加载中：仅项目栏 + 空列表骨架，ensure 完成后重渲染
+    return [
+      bannerHtml,
+      headerBar,
+      '<section class="workspace-section">',
+      '<div class="feature-project-empty-note">' + escapeHtml(isZh ? '项目加载中…' : 'Loading project…') + '</div>',
       '</section>',
     ].join('');
   }
@@ -581,13 +655,16 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       : '';
     const searchIdentity = {
       identity: viewIdentity,
-      openDirectory: currentProject.openDirectory || '',
+      // 搜索归属（045）：项目目标按 projectId（服务端互斥），目录目标按
+      // openDirectory；dataset 的 search-project-id 只在项目目标携带 prj_ id。
+      openDirectory: (currentProject.type === 'project' ? '' : (currentProject.openDirectory || '')),
       remoteOnly: currentProject.remoteOnly === true,
+      projectId: (currentProject.type === 'project' ? currentProject.id : ''),
     };
     const searchData = ' data-search-agent-id="' + escapeHtml(viewIdentity)
-      + '" data-search-directory="' + escapeHtml(currentProject.openDirectory || '')
+      + '" data-search-directory="' + escapeHtml(searchIdentity.openDirectory)
       + '" data-search-remote="' + String(currentProject.remoteOnly === true)
-      + '" data-search-project-id="' + escapeHtml(currentProject.id)
+      + '" data-search-project-id="' + escapeHtml(searchIdentity.projectId)
       + '" data-search-host-id="' + escapeHtml(agent.id) + '"';
     sessionsHtml += '<div class="ph-session-tabs' + (isSearching ? ' searching' : '') + '" data-tab-group="' + tabId + '"' + searchData + '>';
     sessionsHtml += '<div class="ph-session-tab-bar">';
@@ -617,8 +694,9 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? renderPhSessionsWithGroups(mainSessions, 'main') : emptyNote) + '</div></div>';
   }
 
-  // Schedule async open-sessions recovery card
-  setTimeout(() => window.phLoadOpenSessionsCard(agent.id, currentProject.openDirectory), 0);
+  // Schedule async open-sessions recovery card（归属随目标：项目目标传
+  // projectId，目录目标传目录；卡片内部按完整归属过滤）
+  setTimeout(() => window.phLoadOpenSessionsCard(agent.id, currentProject.openDirectory, currentProject.id), 0);
 
   return [
     bannerHtml,

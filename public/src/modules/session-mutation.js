@@ -59,6 +59,7 @@ function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary', o
     agentId,
     sourceSessionId: sessionId,
     sourceRuntimeId: options.sourceRuntimeId || getRuntimeId(sourceRuntime) || '',
+    projectId: String(options.projectId || session?.projectId || '').trim(),
     projectDir,
     projectName: options.projectName || (projectDir && typeof getPathLeaf === 'function' ? getPathLeaf(projectDir) : ''),
     title: session?.title || '',

@@ -366,6 +366,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       agentId: activeAgent.id,
       sourceSessionId: action.sessionId,
       sourceRuntimeId: currentRuntimeAgentId || '',
+      projectId: sourceSession?.projectId || '',
       projectDir: sourceSession?.openDirectory || '',
       projectName: getPathLeaf(sourceSession?.openDirectory || ''),
       title: sourceSession?.title || '',
@@ -507,6 +508,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           agentId: _csAgent.id,
           sourceSessionId: action.sessionId,
           sourceRuntimeId: _csOldRuntimeId || '',
+          projectId: _csSourceSession?.projectId || '',
           projectDir: _csSourceSession?.openDirectory || '',
           projectName: getPathLeaf(_csSourceSession?.openDirectory || ''),
           title: _csSourceSession?.title || '',
@@ -928,6 +930,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             agentName: action.agentName,
             projectName: action.projectName,
             openDirectory: action.openDirectory,
+            // 项目目标的新对话显式携带稳定 projectId（045）；目录目标为空
+            projectId: String(action.projectId || '').trim() || undefined,
             targetDir: action.targetDir,
       };
       const runSessionOpen = async () => {
@@ -946,6 +950,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           sourceSessionId,
           sourceRuntimeId: previousRuntimeId || '',
           targetSessionId: knownTargetSession?.id || '',
+          // 项目新对话的乐观身份来自动作携带的显式 projectId（045）；
+          // 打开/接续类从已知会话记录取归属（045/044）。
+          projectId: knownTargetSession?.projectId || sourceSession?.projectId || String(action.projectId || '').trim(),
           projectDir: knownTargetSession?.openDirectory || action.openDirectory || sourceSession?.openDirectory || '',
           projectName: getPathLeaf(knownTargetSession?.openDirectory || action.openDirectory || sourceSession?.openDirectory || ''),
           title: knownTargetSession?.title || action.agentName || action.featureName || '',

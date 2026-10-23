@@ -213,6 +213,36 @@ function getPathLeaf(value) {
   return parts.length > 0 ? parts[parts.length - 1] : text;
 }
 
+/**
+ * 侧栏运行中会话（child runtime）条目的分组身份解析（ticket 044）。
+ * 纯函数：输入是 wire child 条目（buildChildRuntimeEntry 归一后）+ 宿主
+ * workspace_sessions 的 sessionId→目录映射（大小写校正），输出分组身份。
+ *
+ * 归属规则：projectId 非空 = 项目会话 → 独立项目身份组（projectKey
+ * 'prj:<id>'，不带 projectDir——项目组不是目录操作入口）；否则按目录分组
+ * （sessionDirMap 校正后的目录）。openDirectory 是文件环境：项目会话的
+ * openDirectory 只是创建时记录，绝不能用来分组（否则 A/B 混进同路径
+ * 目录 D 的组）。显示名不参与身份比较（契约：侧栏组键）。
+ */
+window.resolveSidebarChildProjectGroup = function (entry, sessionDirMap) {
+  const projectId = String(entry?.projectId || '').trim();
+  if (projectId) {
+    const zh = currentLanguage === 'zh';
+    const shortId = projectId.replace(/^prj_/, '').slice(0, 8);
+    return {
+      projectKey: 'prj:' + projectId,
+      projectName: (zh ? '项目 ' : 'Project ') + shortId,
+      projectDir: '',
+    };
+  }
+  let dir = String(entry?.openDirectory || '').trim();
+  if (sessionDirMap && sessionDirMap.size > 0 && entry?.sessionId) {
+    dir = sessionDirMap.get(String(entry.sessionId)) || dir;
+  }
+  if (!dir) return null;
+  return { projectKey: '', projectName: getPathLeaf(dir), projectDir: dir };
+};
+
 function toFeatureDisplayName(value) {
   const text = String(value || '').trim().replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9-]+$/g, '');
   if (!text) return '';
@@ -252,6 +282,124 @@ function getAgentProjectDisplayName(project) {
   const rawName = toFeatureDisplayName(project?.agentName);
   if (rawName) return rawName;
   return 'UntitledAgent';
+}
+
+// ── PH 项目实体与带类型浏览目标（ticket 045）────────────────────────
+// 目录对话与项目对话并存（共同契约 2026-10-22）：项目是稳定身份（prj_*），
+// 目录是文件环境。surface 的"当前浏览目标"必须带类型持久化——用户显式
+// 选择项目后，轮询刷新的 workspace_state.openDirectory（目录事实）不得
+// 覆盖该选择；反之目录入口（打开目录 / 桌面 / 侧栏进入）不设置项目目标，
+// 继续目录模式。持久化沿既有本地 UI 模式（localStorage，同 workspace-form
+// 草稿的键风格），不进 app-core 全局状态区。
+window.ClawFW = window.ClawFW || {};
+
+function _phBrowsingTargetStorageKey(agentId) {
+  return `protoclaw:ph-browsing-target:${agentId}`;
+}
+
+/** 项目实体缓存（/protoclaw/ph_project/projects 的前端镜像）。 */
+window.ClawFW.phProjectEntities = window.ClawFW.phProjectEntities || {
+  loaded: false,
+  loading: null,
+  projects: [],
+};
+
+function normalizePhProjectEntity(raw) {
+  const id = String(raw?.id || '').trim();
+  if (!id.startsWith('prj_')) return null;
+  return {
+    id,
+    type: 'project',
+    name: String(raw?.name || '').trim() || id,
+    openDirectory: String(raw?.workDirectory || '').trim(),
+    directorySource: raw?.directorySource === 'managed' ? 'managed' : 'external',
+    archived: raw?.archived === true,
+    createdAt: String(raw?.createdAt || '').trim(),
+    updatedAt: String(raw?.updatedAt || '').trim(),
+  };
+}
+
+/**
+ * 拉取项目实体清单（ensure*Loaded 模式：在飞合并、幂等）。返回后调用方
+ * 自行重渲染；不主动触发渲染（数据层无渲染职责）。
+ */
+function ensurePhProjectEntitiesLoaded(force = false) {
+  const store = window.ClawFW.phProjectEntities;
+  if (!force && (store.loaded || store.loading)) return store.loading || Promise.resolve();
+  store.loading = (async () => {
+    try {
+      const response = await fetch('/protoclaw/ph_project/projects?agentId=programming-helper');
+      const data = response.ok ? await response.json() : null;
+      store.projects = (Array.isArray(data?.projects) ? data.projects : [])
+        .map(normalizePhProjectEntity)
+        .filter(Boolean);
+      store.loaded = true;
+    } catch {
+      // 加载失败保留旧清单；loaded 不置位，下次 surface 渲染重试
+    } finally {
+      store.loading = null;
+    }
+  })();
+  return store.loading;
+}
+
+/**
+ * 当前浏览目标（typed）。解析优先级：
+ *   1. 显式持久化目标（用户上次显式选择）——目标仍存在才采信：
+ *      项目须在实体缓存中；目录须在目录桶列表中；
+ *   2. 目录模式回退：workspace_state.openDirectory 的目录桶；无目录时
+ *      首个目录桶（旧版行为）。
+ * 没有显式项目目标的桌面/目录入口自然落入目录模式。
+ */
+function getPhBrowsingTarget(agent = getCurrentAgentRecord()) {
+  const workspaceState = getAgentWorkspaceState(agent);
+  const openDirectory = String(workspaceState?.openDirectory || '').trim();
+  const normDirId = (dir) => `dir:${String(dir).replace(/\\/g, '/').toLowerCase()}`;
+  const dirProjects = (Array.isArray(workspaceState?.phProjects) ? workspaceState.phProjects : [])
+    .map((p) => String(p?.openDirectory || '').trim())
+    .filter(Boolean);
+
+  let stored = null;
+  try {
+    stored = JSON.parse(localStorage.getItem(_phBrowsingTargetStorageKey(agent?.id || '')) || 'null');
+  } catch { stored = null; }
+  if (stored && stored.type === 'project' && String(stored.id || '').startsWith('prj_')) {
+    const entity = (window.ClawFW.phProjectEntities?.projects || [])
+      .find((p) => p.id === stored.id);
+    // 已归档项目不再是有效浏览目标（ticket 046：从正常选择器隐藏）——与
+    // 被删除同款处理：清掉过期目标，走目录回退。恢复归档后用户重新选择。
+    if (entity && !entity.archived) return { type: 'project', id: entity.id, project: entity };
+    // 元数据未加载完（loaded=false）：不退回另一个目标（契约），保持项目
+    // 待定态——id 保留，project 为空，渲染层呈现加载中而非目录回退。
+    if (!(window.ClawFW.phProjectEntities?.loaded)) {
+      return { type: 'project', id: stored.id, project: null };
+    }
+    // 已加载但项目不在列（被删除）：清掉过期目标，走目录回退
+    try { localStorage.removeItem(_phBrowsingTargetStorageKey(agent?.id || '')); } catch { /* ignore */ }
+  }
+  if (stored && stored.type === 'dir' && String(stored.id || '').startsWith('dir:')) {
+    const match = dirProjects.find((dir) => normDirId(dir) === stored.id);
+    if (match) return { type: 'dir', id: stored.id, openDirectory: match };
+  }
+  // 目录回退：当前工作区目录 → 首个目录桶（旧版行为）
+  if (openDirectory) return { type: 'dir', id: normDirId(openDirectory), openDirectory };
+  if (dirProjects.length > 0) return { type: 'dir', id: normDirId(dirProjects[0]), openDirectory: dirProjects[0] };
+  return null;
+}
+
+/** 显式设置浏览目标（selector 选择 / 新建项目后进入）。 */
+function setPhBrowsingTarget(agentId, target) {
+  if (!agentId || !target?.type) return;
+  try {
+    localStorage.setItem(_phBrowsingTargetStorageKey(agentId), JSON.stringify({
+      type: target.type,
+      id: String(target.id || ''),
+    }));
+  } catch { /* localStorage 不可用时仅内存态（下次渲染回退目录模式） */ }
+}
+
+function clearPhBrowsingTarget(agentId) {
+  try { localStorage.removeItem(_phBrowsingTargetStorageKey(agentId)); } catch { /* ignore */ }
 }
 
 function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
@@ -321,6 +469,30 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
     }
   }
 
+  // 项目实体（ticket 045）：与目录桶并存、互不继承。项目会话列表来自
+  // workspace_sessions 的项目切片（服务端按 projectId 过滤返回，切片带
+  // sessionProjectId 标记）；切片身份与项目一致时才计入——否则该项目
+  // 处于未加载/空态（空项目可见，conversationCount 0）。
+  const wsMeta = agent?.workspace_sessions || {};
+  const sliceProjectId = String(wsMeta?.sessionProjectId || '').trim();
+  for (const entity of (window.ClawFW.phProjectEntities?.projects || [])) {
+    // 归档项目不出现在选择器/项目组（ticket 046）：正常入口隐藏，管理弹窗
+    // 单独经 ClawFW.phProjectEntities 呈现与恢复。项目会话仍留在索引里。
+    if (entity.archived) continue;
+    const projectSessions = sliceProjectId === entity.id
+      ? sessions.filter((session) => String(session?.projectId || '').trim() === entity.id)
+      : [];
+    projects.set(entity.id, {
+      id: entity.id,
+      type: 'project',
+      name: entity.name,
+      openDirectory: entity.openDirectory,
+      sessions: projectSessions,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
+    });
+  }
+
   return Array.from(projects.values())
     .map((project) => ({
       ...project,
@@ -333,6 +505,8 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
 }
 
 function getProgrammingHelperProjectDisplayName(project) {
+  // 项目实体有独立名称（ticket 045）；目录桶沿用目录叶名
+  if (project?.type === 'project') return project.name || 'UntitledProject';
   const directoryName = getPathLeaf(project?.openDirectory);
   return directoryName || 'UntitledProject';
 }

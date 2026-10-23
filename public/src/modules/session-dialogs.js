@@ -180,6 +180,7 @@ window.submitBranch = async () => {
         agentId,
         sourceSessionId: sessionId,
         sourceRuntimeId: _oldRuntimeId || '',
+        projectId: sourceSession?.projectId || '',
         projectDir: sourceSession?.openDirectory || '',
         projectName: getPathLeaf(sourceSession?.openDirectory || ''),
         title: sourceSession?.title || '',

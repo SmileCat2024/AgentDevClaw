@@ -68,6 +68,9 @@ function createFeatureConfigEditor(options = {}) {
   async function fetchResolved() {
     const params = new URLSearchParams({ agentId: scopeAgentId });
     if (scopeId.startsWith('dir:')) params.set('dir', scopeId.slice(4));
+    // 项目层（ticket 043/045，project:<prj_id>）：resolved 按稳定项目身份
+    // 解析（项目链 global→agent→project→session，与目录链互不继承）
+    if (scopeId.startsWith('project:')) params.set('projectId', scopeId.slice('project:'.length));
     const res = await fetch(`/protoclaw/feature_config/resolved?${params.toString()}`);
     if (!res.ok) {
       const text = await res.text().catch(() => '');

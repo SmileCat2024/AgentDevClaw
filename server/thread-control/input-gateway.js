@@ -42,6 +42,7 @@
 import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
 import { submitUserTurn, UserTurnDeliveryError } from '../shared/user-turn.js';
 import { getThreadIntegration, isThreadHostSession } from './thread-integration.js';
+import { isPhSessionRebindGated } from '../routes/ph-projects.js';
 
 export { UserTurnDeliveryError };
 
@@ -169,6 +170,16 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
   const runtime = getRuntimeByViewerAgentId(viewerAgentId);
   const agentId = String(runtime?.agentId || '').trim();
   const sessionId = String(runtime?.selectedSessionId || '').trim();
+  // ticket 046：PH 项目改绑释放窗口（会话失效 → 项目表落盘之间）拒绝新输入，
+  // 杜绝输入落进即将按旧目录保存/执行的旧实例。改绑完成后 viewer 会话已移除，
+  // 后续输入由 submitUserTurn 以 404/409 响亮失败并触发前端刷新。无改绑进行
+  // 中时短路返回（空表零成本），网关热路径不付出查询开销。
+  if (sessionId && isPhSessionRebindGated(sessionId)) {
+    throw new UserTurnDeliveryError(
+      'PH project is being rebound: input is rejected until the rebind completes',
+      { code: 'ph_project_rebind_in_progress', status: 409, retryable: false },
+    );
+  }
   if (!agentId || !sessionId || !isThreadHostSession(agentId)) {
     return { route: 'direct' };
   }

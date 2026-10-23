@@ -783,6 +783,7 @@ describe('sessionRecordToWorkspaceMeta', () => {
       active_workspace_agent_name: '',
       active_workspace_display_name: '',
       open_directory: 'D:\\code\\AgentDevClaw',
+      project_id: '',
     });
   });
 

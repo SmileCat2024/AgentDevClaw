@@ -43,6 +43,8 @@ import {
 import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { addOpenSession } from '../shared/open-sessions-tracker.js';
+import { resolveSessionRuntimeDirectory } from '../shared/session-project.js';
+import { isPhProjectRebindActive } from './ph-projects.js';
 
 const RUNTIME_DIAGNOSTIC_TAIL_CHARS = 8000;
 
@@ -96,11 +98,17 @@ export function buildSharedSessionStartMessage({ sessionId, agentName, projectDi
   };
 }
 
-export function resolveManagedProcessPlacement(agent, sessionRecord) {
+export function resolveManagedProcessPlacement(agent, sessionRecord, resolvedProjectDir) {
   const agentId = sanitizeSessionFragment(agent?.id);
-  const projectDir = typeof sessionRecord?.openDirectory === 'string'
-    ? sessionRecord.openDirectory.trim()
-    : '';
+  // ticket 042：项目会话的运行目录由调用方先经 resolveSessionRuntimeDirectory
+  // 从项目表解析（resolvedProjectDir 传入）；缺省时沿用 openDirectory（目录
+  // 会话语义）。processGroupKey 跟随解析后的目录——同路径项目/目录会话按现有
+  // 进程模式分组，不因项目配置强制改变进程形态。
+  const projectDir = typeof resolvedProjectDir === 'string'
+    ? resolvedProjectDir.trim()
+    : (typeof sessionRecord?.openDirectory === 'string'
+      ? sessionRecord.openDirectory.trim()
+      : '');
   const processMode = agent?.processMode || PROCESS_MODE_ISOLATED;
 
   if (!projectDir) {
@@ -281,18 +289,36 @@ export function createAgentStartupFns(deps) {
     let processGroupKey = null;
     let projectDir = '';
     let sessionRecordType = null;
+    let sessionRecord = null;
     if (resolvedSessionId) {
       try {
         const idx = await readSessionIndex(agent.id);
-        const sessionRecord = (idx?.sessions || []).find(s => s.id === resolvedSessionId);
-        const placement = resolveManagedProcessPlacement(agent, sessionRecord);
-        processMode = placement.processMode;
-        projectDir = placement.projectDir;
-        processGroupKey = placement.processGroupKey;
-        sessionRecordType = cleanSessionText(sessionRecord?.sessionType) || null;
+        sessionRecord = (idx?.sessions || []).find(s => s.id === resolvedSessionId) || null;
       } catch {
         // Session index unreadable — retain the agent-level default.
       }
+    }
+    // ticket 042：项目会话的运行目录以项目表当前记录为权威（改绑后跟随新
+    // 目录），openDirectory 只是创建时的目录记录。项目身份无法解析时直接
+    // 报错——绝不退回 openDirectory 旧记录或 workspace 当前目录继续运行。
+    // 解析放在上面的 try 之外：项目身份失效是确定性错误，不能被索引读取
+    // 容错吞掉。
+    if (sessionRecord) {
+      // ticket 046：改绑释放窗口（实例失效 → 项目表落盘之间）拒绝按旧表启动，
+      // 否则新 runtime 会绑到旧目录、改绑落盘后变成幽灵实例。
+      const recordProjectId = cleanSessionText(sessionRecord?.projectId);
+      if (recordProjectId && isPhProjectRebindActive(recordProjectId)) {
+        const error = new Error(`PH project ${recordProjectId} is being rebound; retry starting the session after the rebind completes`);
+        error.statusCode = 409;
+        error.code = 'ph_project_rebind_in_progress';
+        throw error;
+      }
+      const sessionProjectDir = resolveSessionRuntimeDirectory(sessionRecord, { sessionId: resolvedSessionId });
+      sessionRecordType = cleanSessionText(sessionRecord?.sessionType) || null;
+      const placement = resolveManagedProcessPlacement(agent, sessionRecord, sessionProjectDir || undefined);
+      processMode = placement.processMode;
+      projectDir = placement.projectDir;
+      processGroupKey = placement.processGroupKey;
     }
     // Runtime startup carries the session record's run-form tag (e.g.
     // 'exploration') for agents that branch on it. When the caller does not

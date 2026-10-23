@@ -207,10 +207,14 @@ export async function ensureSearchIndex(agentId) {
         source.fileMtimeMs === (record.fileMtimeMs || 0) &&
         Array.isArray(source.msgs)
       ) {
+        // 命中缓存也用 Session 索引元数据刷新身份字段（ticket 044）：旧
+        // v2 缓存缺 projectId，这里按索引记录补齐——msgs（正文派生物）原样
+        // 保留，不重读会话文件、不全量重扫历史。
         entries.set(record.id, {
           ...source,
           title: cleanSessionText(record.title) || source.title || record.id,
           openDirectory: cleanSessionText(record.openDirectory),
+          projectId: cleanSessionText(record.projectId),
           sessionType: cleanSessionText(record.sessionType) || source.sessionType || 'main',
           archived: record.archived === true,
           todo: record.todo === true,
@@ -236,6 +240,7 @@ export async function ensureSearchIndex(agentId) {
             sessionId: record.id,
             title: cleanSessionText(record.title) || record.id,
             openDirectory: cleanSessionText(record.openDirectory),
+            projectId: cleanSessionText(record.projectId),
             sessionType: cleanSessionText(record.sessionType) || 'main',
             archived: record.archived === true,
             todo: record.todo === true,
@@ -264,6 +269,7 @@ export async function ensureSearchIndex(agentId) {
           sessionId: entry.sessionId,
           title: entry.title,
           openDirectory: entry.openDirectory,
+          projectId: entry.projectId,
           sessionType: entry.sessionType,
           archived: entry.archived,
           todo: entry.todo,
@@ -382,11 +388,18 @@ export async function searchSessionsContent(agentId, query, openDirectory, optio
   const normalizedDir = openDirectory
     ? String(openDirectory).replace(/\\/g, '/').toLowerCase()
     : null;
+  // 归属过滤（ticket 044）：projectId 是项目集合过滤（身份相等）；
+  // openDirectory 是目录集合过滤（目录相等且排除项目会话——项目会话的
+  // openDirectory 只是创建时记录，不构成目录归属）。
+  const projectFilter = cleanSessionText(options.projectId);
 
   const results = [];
   for (const [, entry] of entries) {
-    // Filter by openDirectory
-    if (normalizedDir) {
+    if (projectFilter) {
+      if (cleanSessionText(entry.projectId) !== projectFilter) continue;
+    } else if (normalizedDir) {
+      if (cleanSessionText(entry.projectId)) continue;
+      // Filter by openDirectory
       const entryDir = String(entry.openDirectory || '').replace(/\\/g, '/').toLowerCase();
       if (entryDir !== normalizedDir) continue;
     }
@@ -406,6 +419,7 @@ export async function searchSessionsContent(agentId, query, openDirectory, optio
       sessionId: entry.sessionId,
       title: entry.title,
       openDirectory: entry.openDirectory,
+      projectId: cleanSessionText(entry.projectId),
       sessionType: entry.sessionType || 'main',
       archived: entry.archived === true,
       todo: entry.todo === true,

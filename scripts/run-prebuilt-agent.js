@@ -31,6 +31,7 @@ import { resolveDesktopWorkspace } from '../server/shared/desktop-workspace.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
 import { resolveWorkspaceAgent, resolveWorkspaceAgentClass, workspaceAgentDisplayName } from '../server/shared/workspace-agents.js';
+import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -108,19 +109,26 @@ function resolveSessionWorkspaceCwd(agentId, sessionId) {
     return null;
   }
 
+  let record = null;
   try {
     const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
     const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
-    const record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId));
-    const openDirectory = cleanValue(record?.openDirectory);
-    if (!openDirectory || !existsSync(openDirectory)) {
-      return null;
-    }
-    return openDirectory;
+    record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId)) || null;
   } catch (error) {
     console.warn('[ProtoClaw Runtime] 读取 session 工作目录失败:', error);
     return null;
   }
+  // PH 项目会话（ticket 042）：运行目录由项目表当前记录解析，失败直接抛错
+  // （被上层启动失败路径捕获），不退回 openDirectory/state 的目录会话语义。
+  const projectDirectory = resolveSessionRuntimeDirectory(record, { sessionId: normalizedSessionId });
+  if (projectDirectory) {
+    return projectDirectory;
+  }
+  const openDirectory = cleanValue(record?.openDirectory);
+  if (!openDirectory || !existsSync(openDirectory)) {
+    return null;
+  }
+  return openDirectory;
 }
 
 function resolveWorkspaceCwd(agentId, sessionId = '') {
@@ -754,11 +762,15 @@ SessionLifecycle.prototype.start = async function () {
   const agentModule = await import(pathToFileURL(agentJsPath).href);
   const metadata = JSON.parse(readFileSync(join(agentPath, 'metadata.json'), 'utf8'));
   let boundAgentId;
+  let sessionProjectId = '';
   if (this.sessionId) {
     const index = JSON.parse(readFileSync(getSessionIndexPath(agentId), 'utf8'));
     const record = index.sessions.find((entry) => entry.id === this.sessionId);
     if (!record) throw new Error(`Session index record not found: ${this.sessionId}`);
     boundAgentId = record.workspaceAgentId === undefined ? 'main' : record.workspaceAgentId;
+    // PH 项目会话归属（ticket 043）：逐实例注入，agent 构造函数据此选项目配置层
+    // （禁止进程级缓存——同进程多 session 归属可能不同）。
+    sessionProjectId = cleanValue(record?.projectId);
   }
   const declaration = resolveWorkspaceAgent(metadata, boundAgentId);
   this.runtime.workspaceAgentId = declaration.id;
@@ -784,6 +796,8 @@ SessionLifecycle.prototype.start = async function () {
     agentId,
     sessionId: this.sessionId || undefined,
     serverOrigin: SERVER_ORIGIN,
+    // PH 项目归属（ticket 043）：目录会话不传（undefined），保持旧构造面不变
+    ...(sessionProjectId ? { projectId: sessionProjectId } : {}),
     // contextGuard 只是首轮调用前的兜底种子（启动预设的窗口期快照）；
     // 阈值真相是会话当前模型的 live meta，feature 每轮 CallStart /
     // onLLMSwap 都会重算，不依赖这里的快照。

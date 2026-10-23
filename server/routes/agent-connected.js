@@ -204,6 +204,8 @@ export function createConnectedAgentsQuery(deps) {
         active_workspace_agent_name: sessionMeta.active_workspace_agent_name,
         active_workspace_display_name: sessionMeta.active_workspace_display_name,
         active_workspace_session_dir: sessionMeta.active_workspace_session_dir || '',
+        // 归属身份透传（ticket 044）：'' = 目录会话；非空 = 项目归属。
+        active_workspace_session_project_id: sessionMeta.active_workspace_session_project_id || '',
         status: 'stopped',
         source: 'prebuilt',
         parent_id: null,
@@ -241,6 +243,9 @@ export function createConnectedAgentsQuery(deps) {
           active_workspace_agent_name: runtimeMeta.active_workspace_agent_name,
           active_workspace_display_name: runtimeMeta.active_workspace_display_name,
           open_directory: runtimeMeta.open_directory || '',
+          // 归属身份透传（ticket 044）：'' = 目录会话；非空 = 项目归属，
+          // 前端侧栏据此把项目会话与同路径目录会话分组隔离。
+          project_id: runtimeMeta.project_id || '',
           connection_info: runtimeAgent.connectionInfo || 'viewer://127.0.0.1:2026',
           pid: runtimeAgent.pid || managedRuntime.process?.pid || null,
           runtime_session_id: runtimeAgent.id,
@@ -331,6 +336,9 @@ export function createConnectedAgentsQuery(deps) {
         open_directory: exposeAsSeparateAssemblyRuntime
           ? ''
           : (childWorkspaceMeta?.open_directory || ''),
+        project_id: exposeAsSeparateAssemblyRuntime
+          ? ''
+          : (childWorkspaceMeta?.project_id || ''),
         connection_info: runtimeAgent.connectionInfo || 'viewer://127.0.0.1:2026',
         pid: runtimeAgent.pid || null,
         runtime_session_id: runtimeAgent.id,

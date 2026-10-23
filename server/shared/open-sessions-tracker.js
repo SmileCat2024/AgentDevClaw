@@ -84,6 +84,13 @@ export async function getRecoverySessions(agentId) {
       entry.openDirectory = record.openDirectory;
       changed = true;
     }
+    // 归属身份补齐（ticket 044）：卡片条目从会话索引补 projectId——恢复
+    // 卡片只呈现身份，不改变对话归属（激活走会话自身记录）。原目录条目
+    // （记录无 projectId）不强制改写或补字段。
+    if (String(record.projectId || '').trim() && record.projectId !== entry.projectId) {
+      entry.projectId = String(record.projectId).trim();
+      changed = true;
+    }
   }
 
   if (changed) {
@@ -125,6 +132,7 @@ export async function addOpenSession(agentId, sessionId) {
 
   let title = null;
   let openDirectory = null;
+  let projectId = null;
   try {
     const index = await readSessionIndex(agentId);
     const record = (index.sessions || []).find((s) => s.id === sessionId);
@@ -135,12 +143,15 @@ export async function addOpenSession(agentId, sessionId) {
       if (String(record.sessionType || 'main').trim() !== 'main') return;
       title = record.title || null;
       openDirectory = record.openDirectory || null;
+      // 归属身份随登记写入（ticket 044）：恢复卡片呈现项目/目录身份，
+      // 恢复动作不改变归属。
+      projectId = String(record.projectId || '').trim() || null;
     }
   } catch { /* session index unreadable — store minimal info */ }
 
   const now = new Date().toISOString();
   const filtered = sessions.filter((s) => s.sessionId !== sessionId);
-  filtered.unshift({ sessionId, title, openDirectory, updatedAt: now });
+  filtered.unshift({ sessionId, title, openDirectory, ...(projectId ? { projectId } : {}), updatedAt: now });
 
   const nextData = { updatedAt: now, sessions: filtered };
   await fs.writeFile(filePath, JSON.stringify(nextData, null, 2), 'utf8');

@@ -94,6 +94,12 @@ function normalizeSessionIndexData(data) {
         targetFiles: cleanSessionText(session.targetFiles),
         referenceMaterials: cleanSessionText(session.referenceMaterials),
         openDirectory: cleanSessionText(session.openDirectory),
+        // PH 项目会话归属（ticket 042）：读取侧只归一非空值，不给无此字段的
+        // 历史记录补 key——updateSessionIndex 是"读（归一）→ 改 → 整写回"的
+        // round-trip，无条件归一会让任何一次索引写入（meta_sync/标题/激活）
+        // 给全部旧记录批量落上 projectId:''，违反"无历史批量补字段"验收。
+        // 目录会话旧记录保持字段缺席，消费方经 getSessionProjectId 读作 ''。
+        ...(cleanSessionText(session.projectId) ? { projectId: cleanSessionText(session.projectId) } : {}),
         sessionType: cleanSessionText(session.sessionType) || 'main',
         workspaceAgentId: session.workspaceAgentId === undefined ? 'main' : session.workspaceAgentId,
         archived: session.archived === true,
@@ -327,13 +333,27 @@ export function buildSessionTitle(createdAtIso) {
   return `对话 ${parts.join('-')} ${time.join(':')}`;
 }
 
-export function computeNextSessionNumber(sessions, openDirectory) {
+/**
+ * "新对话N" 计数器。归属集合判定（ticket 042）：
+ * - projectId 非空：项目集合 = 同 projectId 的会话（目录不参与，同路径的
+ *   目录/其他项目会话不混入编号）；
+ * - projectId 空：目录集合 = 无 projectId 且 openDirectory 匹配的会话
+ *   （原目录语义，项目会话即使同路径也不占用目录编号）。
+ */
+export function computeNextSessionNumber(sessions, openDirectory, { projectId = '' } = {}) {
   const normalizedDir = String(openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const normalizedProjectId = String(projectId || '').trim();
   const newSessionPattern = /^新对话(\d+)$/;
   let maxN = 0;
   for (const session of (sessions || [])) {
-    const sessionDir = String(session?.openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-    if (normalizedDir && sessionDir !== normalizedDir) continue;
+    const sessionProjectId = String(session?.projectId || '').trim();
+    if (normalizedProjectId) {
+      if (sessionProjectId !== normalizedProjectId) continue;
+    } else {
+      if (sessionProjectId) continue;
+      const sessionDir = String(session?.openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      if (normalizedDir && sessionDir !== normalizedDir) continue;
+    }
     const m = cleanSessionText(session?.title).match(newSessionPattern);
     if (m) {
       const n = parseInt(m[1], 10);

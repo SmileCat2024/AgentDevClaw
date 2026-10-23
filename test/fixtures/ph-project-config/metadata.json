@@ -1,0 +1,8 @@
+{
+  "id": "ph-project-config-fixture",
+  "name": "PH project config fixture",
+  "defaultAgentId": "main",
+  "agents": [
+    { "id": "main", "displayName": "PH config probe" }
+  ]
+}

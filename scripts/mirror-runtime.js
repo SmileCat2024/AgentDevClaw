@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { Agent, FileSessionStore } from '@agentdevjs/core';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
+import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
 
 // 权威集合来自 server/shared/constants.js（服务端与所有脚本必须同源）
 export const WORKSPACE_BOUND_AGENT_IDS = WORKSPACE_SESSION_AGENT_IDS;
@@ -94,18 +95,25 @@ function resolveSessionWorkspaceCwd(agentId, sessionId) {
     return null;
   }
 
+  let record = null;
   try {
     const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
     const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
-    const record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId));
-    const openDirectory = cleanValue(record?.openDirectory);
-    if (!openDirectory || !existsSync(openDirectory)) {
-      return null;
-    }
-    return openDirectory;
+    record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId)) || null;
   } catch {
     return null;
   }
+  // PH 项目会话（ticket 042）：运行目录由项目表当前记录解析，失败直接抛错，
+  // 不退回 openDirectory/state 的目录会话语义。
+  const projectDirectory = resolveSessionRuntimeDirectory(record, { sessionId: normalizedSessionId });
+  if (projectDirectory) {
+    return projectDirectory;
+  }
+  const openDirectory = cleanValue(record?.openDirectory);
+  if (!openDirectory || !existsSync(openDirectory)) {
+    return null;
+  }
+  return openDirectory;
 }
 
 export function resolveWorkspaceCwd(agentId, projectRoot, sessionId = '') {

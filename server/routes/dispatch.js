@@ -20,7 +20,7 @@ import {
 } from '../runtime-call-envelope.js';
 import { USER_DATA_ROOT, LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC, DISPATCH_IDLE_THRESHOLD_DEFAULT_SEC, DISPATCH_IDLE_POLL_MIN_MS } from '../shared/constants.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
-import { sanitizeSessionFragment } from '../shared/string-helpers.js';
+import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { resolveSessionTarget } from '../shared/operation-target.js';
 import {
@@ -77,6 +77,10 @@ class ProgrammingHelperProjectAdapter {
   extractProjectId(session) {
     const openDirectory = session?.openDirectory;
     if (!openDirectory) return null;
+    // 目录集合排除项目会话（ticket 044）：项目会话的 openDirectory 只是
+    // 创建时记录，不构成目录归属；调度是目录外围入口，不提供项目能力，
+    // 也不让项目会话顶替目录 latest / 撑起目录会话列表。
+    if (cleanSessionText(session?.projectId)) return null;
     const id = `dir:${String(openDirectory).replace(/\\/g, '/').toLowerCase()}`;
     this.observedDirs.set(id, String(openDirectory).trim());
     return id;
@@ -670,6 +674,7 @@ export {
   getProjectAdapter,
   fireBootSchedules,
   // Internal exports (for testing + reuse)
+  ProgrammingHelperProjectAdapter,
   loadDispatchSchedules,
   saveDispatchSchedules,
   pushDispatchMessage,

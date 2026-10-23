@@ -57,7 +57,7 @@ import {
 } from './server/shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log, getAssemblyWorkspaceDir, normalizeClientAgentId, parseListField } from './server/shared/string-helpers.js';
 import { compareSemver, uniqueStrings } from './server/shared/feature-utils.js';
-import { readJson, readJsonSafe, ensureDir, normalizePathCasing } from './server/shared/fs-helpers.js';
+import { readJson, readJsonSafe, ensureDir } from './server/shared/fs-helpers.js';
 import { openDirectoryInSystem } from './server/shared/system-opener.js';
 import { createOperationTrace } from './server/shared/operation-trace.js';
 import {
@@ -117,6 +117,7 @@ import { setupFeatureCatalogRoutes } from './server/routes/feature-catalog.js';
 import { setupFeatureStoreRoutes } from './server/routes/feature-store.js';
 import { setupImageRoutes } from './server/routes/images.js';
 import { getUISurfaceStore, setupUISurfaceRoutes } from './server/routes/ui-surfaces.js';
+import { projectLayerPath } from './server/shared/feature-config-layers.js';
 import { getThreadControl } from './server/thread-control/thread-controller.js';
 import { getThreadIntegration } from './server/thread-control/thread-integration.js';
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
@@ -161,6 +162,10 @@ import {
   resolveWorkspaceData,
   upsertWorkspacePhProject,
 } from './server/routes/workspace.js';
+import {
+  setupPhProjectRoutes,
+  resolvePhProjectDirectory,
+} from './server/routes/ph-projects.js';
 import { setupGuideRoutes } from './server/routes/guide.js';
 import { setupSpeechStreamProxy } from './server/routes/speech-stream.js';
 import { setupWorkspaceCreatorRoutes } from './server/routes/workspace-creators.js';
@@ -577,6 +582,21 @@ app.post('/protoclaw/open_sessions/dismiss', express.json(), (req, res) => {
 
 setupWorkspaceRoutes(app, express);
 
+// PH 独立项目（ticket 041）：存储与基本管理端点，与上方目录 ph_project 路由分轨。
+// ticket 046：注入改绑/删除所需的运行时生命周期依赖（精确单会话停止 + busy
+// 探测 + 复用单会话删除清理链）。projectLayerPath 经注入传递而非 import：
+// feature-config-layers 已依赖本路由模块，直接反向 import 会成环。
+setupPhProjectRoutes(app, express, {
+  getAgentRuntime,
+  isManagedRuntimeRunning,
+  stopManagedAgent,
+  readViewerJson,
+  deletePrebuiltSession,
+  clearUISurfaces: (viewerAgentId) => getUISurfaceStore().clearAgent(viewerAgentId),
+  readWorkspaceState,
+  projectLayerPath,
+});
+
 setupProjectDocsetRoutes(app, express);
 
 // ── AgentDevClaw 指南 → server/routes/guide.js ────────────────────────────────
@@ -848,27 +868,6 @@ app.post('/protoclaw/assembly_runtime/stop', express.json(), async (req, res, ne
   }
 });
 
-
-/**
- * PH 项目目录入参收敛：绝对化 + 真实大小写还原 + 存在性校验。
- *
- * 大小写还原（normalizePathCasing）只在 Windows 生效——Linux 上文件系统
- * 大小写敏感，错误大小写的路径本就不存在，因此这里的存在性校验同时
- * 充当大小写闸门：拼写大小写与磁盘不符的目录在此被拒绝，而不是被照单
- * 全收生成幽灵项目、再由 runtime spawn 撑出一个错误大小写的真实目录
- * （历史事故：bookscanning/BookScanning 双目录）。
- */
-async function resolvePhProjectDirectory(rawDirectory) {
-  const trimmed = typeof rawDirectory === 'string' ? rawDirectory.trim() : '';
-  const resolved = trimmed ? path.resolve(trimmed) : '';
-  const stat = resolved ? await fs.stat(resolved).catch(() => null) : null;
-  if (!stat || !stat.isDirectory()) {
-    const error = new Error(`openDirectory does not exist or is not a directory: ${trimmed || '(empty)'}`);
-    error.statusCode = 400;
-    throw error;
-  }
-  return normalizePathCasing(resolved);
-}
 
 app.post('/protoclaw/ph_project/open', express.json(), async (req, res, next) => {
   try {

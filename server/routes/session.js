@@ -30,6 +30,7 @@ import {
 import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
 import { renderConversationHtml, renderConversationMarkdown } from '../conversation-renderer.js';
 import { readWorkspaceState } from './workspace.js';
+import { getPhProject } from './ph-projects.js';
 import { cleanStudioFeatureIds } from './session-helpers-pure.js';
 import { runInProcessSummary } from '../context-continuity/inprocess-summary.js';
 import { createOperationTrace } from '../shared/operation-trace.js';
@@ -185,7 +186,7 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
       const hostTarget = resolveForwardHostTarget(req.query.agentId);
       if (hostTarget.scope === 'remote') {
         const passthrough = new URLSearchParams({ agentId: bareId(req.query.agentId) });
-        for (const key of ['sinceRevision', 'projectDir', 'query', 'archived', 'offset', 'limit']) {
+        for (const key of ['sinceRevision', 'projectDir', 'projectId', 'query', 'archived', 'offset', 'limit']) {
           if (typeof req.query[key] === 'string' && req.query[key] !== '') {
             passthrough.set(key, req.query[key]);
           }
@@ -227,13 +228,26 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
     }
     // 分页读取（PH 类工作空间）：projectDir 缺省时自解析为工作区当前项目
     // （workspace_state.openDirectory），前端切换项目/滚动加载都经此参数。
+    // projectId（ticket 044）是显式项目归属过滤：与 projectDir 互斥，且必须
+    // 解析为真实项目（无效格式 400 / 未知项目 404），绝不退回目录语义。
     // 非 PH agent 的会话量小，忽略分页参数保持全量。
     const listOptions = {};
     const isPhWorkspace = PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(req.query.agentId));
     if (isPhWorkspace) {
       listOptions.wireTrim = true;
       let projectDir = typeof req.query.projectDir === 'string' ? req.query.projectDir.trim() : '';
-      if (!projectDir) {
+      const requestProjectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
+      if (requestProjectId) {
+        if (projectDir) {
+          return res.status(400).json({ error: 'projectDir 与 projectId 是互斥的归属过滤参数，不能同时提供' });
+        }
+        try {
+          await getPhProject(requestProjectId);
+        } catch (error) {
+          return res.status(error.statusCode || 400).json({ error: error.message });
+        }
+        listOptions.sessionProjectId = requestProjectId;
+      } else if (!projectDir) {
         try {
           const wsState = await readWorkspaceState(req.query.agentId);
           projectDir = String(wsState?.openDirectory || '').trim();
@@ -279,9 +293,22 @@ app.get('/protoclaw/search_sessions', async (req, res, next) => {
     const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : '';
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const openDirectory = typeof req.query.openDirectory === 'string' ? req.query.openDirectory : '';
+    const searchProjectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
     if (!agentId) {
       res.status(400).json({ error: 'agentId is required' });
       return;
+    }
+    // 归属过滤互斥（ticket 044）：openDirectory 是目录集合过滤（排除项目
+    // 会话），projectId 是项目集合过滤——两者同时提供是调用方错误。
+    if (openDirectory && searchProjectId) {
+      return res.status(400).json({ error: 'openDirectory 与 projectId 是互斥的归属过滤参数，不能同时提供' });
+    }
+    if (searchProjectId) {
+      try {
+        await getPhProject(searchProjectId);
+      } catch (error) {
+        return res.status(error.statusCode || 400).json({ error: error.message });
+      }
     }
     // scope（all/main/archived）/ sort（relevance/recency）/ offset / limit
     // —— 分类过滤与分页在服务端完成；远程搜索透传同一参数与结果契约。
@@ -290,9 +317,11 @@ app.get('/protoclaw/search_sessions', async (req, res, next) => {
       sort: typeof req.query.sort === 'string' ? req.query.sort : 'relevance',
       offset: Number(req.query.offset),
       limit: Number(req.query.limit),
+      ...(searchProjectId ? { projectId: searchProjectId } : {}),
     };
     // ADR-0011：远程命名空间身份 → 转发远程同名搜索路由（裸 id + 原始 q /
-    // openDirectory / 范围与分页参数）；本地身份走下方既有索引扫描路径。
+    // openDirectory / projectId / 范围与分页参数）；本地身份走下方既有索引
+    // 扫描路径。
     try {
       const hostTarget = resolveForwardHostTarget(agentId);
       if (hostTarget.scope === 'remote') {
@@ -300,6 +329,7 @@ app.get('/protoclaw/search_sessions', async (req, res, next) => {
           agentId: bareId(agentId),
           q: query,
           ...(openDirectory ? { openDirectory } : {}),
+          ...(searchProjectId ? { projectId: searchProjectId } : {}),
         });
         if (searchOptions.scope !== 'all') params.set('scope', searchOptions.scope);
         if (searchOptions.sort !== 'relevance') params.set('sort', searchOptions.sort);
@@ -711,6 +741,11 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       referenceMaterials: sourceRecord?.referenceMaterials || '',
       formId: sourceRecord?.formId || '',
       openDirectory: await normalizePathCasing(sourceRecord?.openDirectory || ''),
+      // 分支继承来源归属（ticket 042）：与 workspaceAgentId 同构，从来源索引
+      // 复制，不受当前页面/工作空间选择影响；目录会话来源不带非空 projectId。
+      ...(cleanSessionText(sourceRecord?.projectId)
+        ? { projectId: cleanSessionText(sourceRecord.projectId) }
+        : {}),
       sessionType: sourceRecord?.sessionType || 'main',
       workspaceAgentId: sourceRecord?.workspaceAgentId || 'main',
       metadata: {
@@ -1028,6 +1063,7 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       agentName: req.body.agentName,
       projectName: req.body.projectName,
       openDirectory: req.body.openDirectory,
+      projectId: req.body.projectId,
       studioFeatureIds: req.body.studioFeatureIds,
       targetDir: req.body.targetDir,
     });

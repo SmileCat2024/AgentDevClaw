@@ -348,6 +348,9 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
         agentName: action.agentName || '',
         projectName: action.projectName || '',
         openDirectory: action.openDirectory || '',
+        // 项目会话显式声明稳定归属（045）：服务端按项目解析工作目录，
+        // 不做目录回退；目录会话不携带该字段
+        ...(String(action.projectId || '').trim() ? { projectId: String(action.projectId).trim() } : {}),
         studioFeatureIds: Array.isArray(action.studioFeatureIds) ? action.studioFeatureIds : [],
         targetDir: action.targetDir || '',
         operationId: action.operationId || '',
@@ -948,11 +951,25 @@ async function fetchWorkspaceSessionsForPoll(agentId, agentRecord = null) {
   const hostRecord = agentRecord
     || (Array.isArray(allAgents) ? allAgents.find((item) => item?.id === agentId) : null);
   if (hostRecord && typeof isPhStyleWorkspaceAgent === 'function' && isPhStyleWorkspaceAgent(hostRecord)) {
-    const projectDir = String(
-      (typeof getAgentWorkspaceState === 'function' ? getAgentWorkspaceState(hostRecord)?.openDirectory : '')
-      || '',
-    ).trim();
-    if (projectDir) params.set('projectDir', projectDir);
+    // 归属过滤随 typed browsing target（045）：项目目标按 projectId（不因
+    // workspace_state.openDirectory 轮询漂移把项目切片换成目录切片——
+    // 目录过滤会排除项目会话，乐观条目会被轮询"洗掉"）；目录目标按
+    // projectDir（旧行为）。
+    let ownership = null;
+    if (typeof getPhBrowsingTarget === 'function') {
+      const target = getPhBrowsingTarget(hostRecord);
+      if (target?.type === 'project') ownership = { projectId: target.id };
+      else if (target?.openDirectory) ownership = { projectDir: target.openDirectory };
+    }
+    if (!ownership) {
+      const projectDir = String(
+        (typeof getAgentWorkspaceState === 'function' ? getAgentWorkspaceState(hostRecord)?.openDirectory : '')
+        || '',
+      ).trim();
+      if (projectDir) ownership = { projectDir };
+    }
+    if (ownership?.projectId) params.set('projectId', ownership.projectId);
+    else if (ownership?.projectDir) params.set('projectDir', ownership.projectDir);
     const loadedCount = Array.isArray(hostRecord?.workspace_sessions?.sessions)
       ? hostRecord.workspace_sessions.sessions.length
       : 0;

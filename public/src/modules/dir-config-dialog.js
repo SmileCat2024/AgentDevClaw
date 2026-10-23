@@ -107,6 +107,55 @@ window.phCloseDirConfig = function () {
   if (host) host.innerHTML = '';
 };
 
+// ── 项目层配置入口（ticket 045，project:<prj_id> scope）────────────
+// 项目目标的项目栏齿轮：编辑项目层（project:<id>），标题呈现项目名与真实
+// 工作目录（managed/外部指定）。编辑器复用共享三态配置编辑器；保存走
+// PUT feature_config/layer（layerId=project:<id>，043 服务端已支持）。
+function phProjectConfigButtonHtml(agent, project) {
+  if (agent?.id !== 'programming-helper') return '';
+  const projectId = String(project?.id || '').trim();
+  if (!projectId.startsWith('prj_')) return '';
+  const isZh = currentLanguage === 'zh';
+  const projectName = String(project?.name || projectId);
+  return '<button class="ph-dir-config-btn" type="button"'
+    + ' onclick="window.phOpenProjectConfig(\'' + escapeHtml(projectId) + '\')"'
+    + ' title="' + escapeHtml((isZh ? '项目设置 · ' : 'Project Config · ') + projectName) + '"'
+    + ' aria-label="' + escapeHtml(isZh ? '项目设置' : 'Project Config') + '">'
+    + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg>'
+    + '</button>';
+}
+
+window.phOpenProjectConfig = function (projectId) {
+  projectId = String(projectId || '').trim();
+  if (!projectId.startsWith('prj_')) return;
+  if (typeof createFeatureConfigEditor !== 'function') return;
+  const entity = ((window.ClawFW?.phProjectEntities?.projects) || [])
+    .find((p) => p.id === projectId) || null;
+  if (!entity) {
+    // 元数据未就绪：补拉后重开（不退回目录设置）
+    if (typeof ensurePhProjectEntitiesLoaded === 'function') {
+      ensurePhProjectEntitiesLoaded(true).then(() => window.phOpenProjectConfig(projectId));
+    }
+    return;
+  }
+  if (_dirConfigEditor) {
+    _dirConfigEditor.close();
+    _dirConfigEditor = null;
+  }
+  const isZh = currentLanguage === 'zh';
+  _dirConfigHost().innerHTML = _featureConfigDialogShell(
+    'ph-dir-config-mount',
+    escapeHtml(isZh ? '项目设置 · ' : 'Project Config · ') + escapeHtml(entity.name),
+    escapeHtml(entity.openDirectory || (isZh ? '托管目录' : 'Managed directory')),
+    'phCloseDirConfig'
+  );
+  _dirConfigEditor = createFeatureConfigEditor({
+    host: document.getElementById('ph-dir-config-mount'),
+    scopeId: 'project:' + projectId,
+  });
+  _dirConfigEditor.open();
+};
+
 // ── 全局 Feature 设置（设置 flyout 菜单入口，编辑全局层）──────
 
 window.phOpenGlobalFeatureConfig = function () {
