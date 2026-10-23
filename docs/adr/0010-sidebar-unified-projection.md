@@ -66,6 +66,15 @@ Workspace（工作空间入口）
 
 选中工作空间（surface）时 `currentRuntimeAgentId` 为空。任何"兜底比较"（如 `resolveRuntimeRef` 未命中归一化为空串）不得与空当前值对称相等，否则全量运行会话误高亮。规则：无选中运行时直接判非；兜底解析必须实际命中。
 
+### 8. 归属事实先于可见性（修订一，2026-10-23）
+
+新会话短暂闪入"外部代理"分组（随后又归回工作空间）的根因：托管 runtime 先在 Viewer 列表可见、归属（viewerAgentId → `managedAgents` 记录）后补，且 `get_connected_agents` 在读取工作空间元数据**之前**就冻结归属映射。两条修订消除该窗口，保证"出现在 viewer 列表中的托管 runtime 必然已在归属映射中"：
+
+- **发布握手**（`scripts/run-prebuilt-agent.js` + `server/routes/agent-startup.js`）：子进程在 `withViewer` 注册前经 IPC 发布 `runtime-identity`（agentId / sessionId / viewerAgentId），并阻塞等待 `runtime-identity-accepted`；服务端在写入 `managedAgents` 记录后才回 ack（新 spawn 与共享进程 add-session 两条路径同构）。ack 超时（2s）即会话启动失败——归属不可靠时宁可失败，不静默放行。未托管运行时（无 IPC、env 不匹配，如装配运行时与外部代理）不参与握手，行为不变。
+- **后置快照**（`server/routes/agent-connected.js`）：归属映射在工作空间元数据加载完成后才构建，查询等待期间补齐的身份同样参与本轮分类。
+
+回归：`test/agent-lifecycle.test.js`（身份在元数据读取期间补齐仍归类 child、真实外部代理仍为 external）；`test/workspace-agents-runtime.test.js`（身份发布先于 Viewer 注册、ack 前不注册，含共享进程 add-session 路径）。
+
 ## Consequences
 
 - **产品语义边界被刻意抹平**：本机与远程的边界感下降（早期产品的取舍，用户明示接受）。未来要恢复边界（来源徽标、远程目录筛选、按来源区分交互）时，只改投影策略与条目元数据的呈现层，不动数据契约与点击链路。

@@ -128,21 +128,6 @@ export function createConnectedAgentsQuery(deps) {
     const prebuiltAgents = await getAgentsLight();
     const viewerData = await readViewerJson('/api/agents').catch(() => ({ agents: [] }));
     const runtimeAgents = Array.isArray(viewerData.agents) ? viewerData.agents : [];
-    const managedRuntimeByViewerId = new Map(
-      Array.from(managedAgents.values())
-        .filter((runtime) => runtime?.viewerAgentId
-          && runtime.process
-          && runtime.process.exitCode === null
-          && !runtime.stopped
-          && !runtime.stopping)
-        .map((runtime) => [String(runtime.viewerAgentId), runtime])
-    );
-    const stoppingViewerRuntimeIds = new Set(
-      Array.from(managedAgents.values())
-        .filter((runtime) => runtime?.stopping && runtime?.viewerAgentId)
-        .map((runtime) => String(runtime.viewerAgentId))
-    );
-
     // Pre-fetch group chat data for work-group sidebar grouping.
     // Only reads files when work-group agent is present; skipped otherwise.
     const hasWorkGroup = prebuiltAgents.some((agent) => sanitizeSessionFragment(agent.id) === 'work-group');
@@ -219,6 +204,21 @@ export function createConnectedAgentsQuery(deps) {
         connected: false,
       };
     }));
+
+    // Snapshot identity after workspace metadata loading. A runtime may publish
+    // its ID while the async APP/session projection above is in flight.
+    const managedRuntimes = Array.from(managedAgents.values());
+    const managedRuntimeByViewerId = new Map();
+    const stoppingViewerRuntimeIds = new Set();
+    for (const runtime of managedRuntimes) {
+      const viewerAgentId = cleanSessionText(runtime?.viewerAgentId);
+      if (!viewerAgentId) continue;
+      if (runtime?.stopping) {
+        stoppingViewerRuntimeIds.add(viewerAgentId);
+      } else if (runtime.process && runtime.process.exitCode === null && !runtime.stopped) {
+        managedRuntimeByViewerId.set(viewerAgentId, runtime);
+      }
+    }
 
     for (const runtimeAgent of runtimeAgents) {
       if (stoppingViewerRuntimeIds.has(String(runtimeAgent.id || ''))) continue;

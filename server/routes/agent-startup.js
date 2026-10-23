@@ -387,6 +387,14 @@ export function createAgentStartupFns(deps) {
             const handler = (msg) => {
               if (!msg || typeof msg !== 'object') return;
               if (msg.sessionId !== resolvedSessionId) return;
+              if (msg.type === 'runtime-identity') {
+                if (msg.agentId !== agent.id || msg.sessionId !== resolvedSessionId) return;
+                const viewerAgentId = cleanSessionText(msg.viewerAgentId);
+                if (!viewerAgentId) return;
+                sharedRuntime.viewerAgentId = viewerAgentId;
+                existingShared.process.send({ ...msg, type: 'runtime-identity-accepted' });
+                return;
+              }
               if (msg.type === 'session-ready') {
                 clearTimeout(timeout);
                 existingShared.process.removeListener('message', handler);
@@ -469,6 +477,23 @@ export function createAgentStartupFns(deps) {
     };
 
     managedAgents.set(runtime.key, runtime);
+    child.on('message', (message) => {
+      if (message?.type !== 'runtime-identity') return;
+      if (message.agentId !== agent.id || message.sessionId !== (resolvedSessionId || null)) return;
+      const viewerAgentId = cleanSessionText(message.viewerAgentId);
+      if (!viewerAgentId) return;
+
+      // The child must publish its session ownership before registering with
+      // ViewerWorker. Acknowledge only after the managed runtime record is
+      // updated, making this the authoritative identity handoff boundary.
+      runtime.viewerAgentId = viewerAgentId;
+      child.send({
+        type: 'runtime-identity-accepted',
+        agentId: agent.id,
+        sessionId: resolvedSessionId || null,
+        viewerAgentId,
+      });
+    });
 
     child.stdout.on('data', (chunk) => {
       const text = String(chunk);

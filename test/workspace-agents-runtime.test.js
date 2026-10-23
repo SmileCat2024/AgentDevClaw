@@ -37,7 +37,8 @@ test('real shared runtime loads two Session-bound assemblies independently and r
     { id: 'bad', workspaceAgentId: 'missing' },
   ] }));
   const env = { ...process.env, AGENTDEV_DATA_DIR: root, AGENTDEV_PORT: String(port), AGENTDEV_VIEWER_PORT: String(port), AGENTDEV_OPEN_BROWSER: 'false',
-    AGENTDEV_UDS_PATH: process.platform === 'win32' ? `\\\\.\\pipe\\claw-agent-test-${Date.now()}` : path.join(root, 'viewer.sock') };
+    AGENTDEV_UDS_PATH: process.platform === 'win32' ? `\\\\.\\pipe\\claw-agent-test-${Date.now()}` : path.join(root, 'viewer.sock'),
+    PROTOCLAW_PREBUILT_AGENT_ID: agentId, PROTOCLAW_PREBUILT_SESSION_ID: 'first' };
   let viewer, runtime;
   let output = '';
   try {
@@ -51,12 +52,31 @@ test('real shared runtime loads two Session-bound assemblies independently and r
     runtime = fork('scripts/run-prebuilt-agent.js', ['test/fixtures/workspace-agents', agentId, 'Fixture', 'first'], { env, silent: true });
     runtime.stdout.on('data', (chunk) => { output += String(chunk); });
     runtime.stderr.on('data', (chunk) => { output += String(chunk); });
-    const first = await waitMessage(runtime, (msg) => msg.type === 'assembly-probe');
+    // The fixture emits assembly-probe from its Agent constructor, which runs
+    // before the identity publish (viewerAgentId only exists after allocation
+    // in the constructor). Register both waits up front so neither message is
+    // dropped for arriving before its listener.
+    const firstProbeWait = waitMessage(runtime, (msg) => msg.type === 'assembly-probe' && msg.sessionId === 'first');
+    const firstIdentity = await waitMessage(runtime, (msg) => msg.type === 'runtime-identity');
+    assert.deepEqual([firstIdentity.agentId, firstIdentity.sessionId, firstIdentity.viewerAgentId], [agentId, 'first', firstIdentity.viewerAgentId]);
+    assert.match(firstIdentity.viewerAgentId, /^agent-/);
+    // The core ordering contract: the child stays blocked on the ack until the
+    // server has recorded the identity, so registration with the Viewer (and
+    // thus sidebar visibility) cannot overtake identity publication.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(output.includes('已连接到 ViewerWorker'), false, 'child must not reach Viewer registration before the ack');
+    runtime.send({ ...firstIdentity, type: 'runtime-identity-accepted' });
+    const first = await firstProbeWait;
     assert.deepEqual([first.assembly, first.sessionId, first.name], ['main', 'first', 'Main helper']);
-    const secondProbe = waitMessage(runtime, (msg) => msg.type === 'assembly-probe' && msg.sessionId === 'second');
-    const secondReady = waitMessage(runtime, (msg) => msg.type === 'session-ready' && msg.sessionId === 'second');
+    const secondProbeWait = waitMessage(runtime, (msg) => msg.type === 'assembly-probe' && msg.sessionId === 'second');
+    const secondIdentity = waitMessage(runtime, (msg) => msg.type === 'runtime-identity' && msg.sessionId === 'second');
     runtime.send({ type: 'add-session', sessionId: 'second' });
-    const second = await secondProbe;
+    const identity = await secondIdentity;
+    assert.deepEqual([identity.agentId, identity.sessionId], [agentId, 'second']);
+    assert.match(identity.viewerAgentId, /^agent-/);
+    runtime.send({ ...identity, type: 'runtime-identity-accepted' });
+    const secondReady = waitMessage(runtime, (msg) => msg.type === 'session-ready' && msg.sessionId === 'second');
+    const second = await secondProbeWait;
     assert.deepEqual([second.assembly, second.name], ['reviewer', 'Review helper']);
     await secondReady;
     const bad = waitMessage(runtime, (msg) => msg.type === 'session-error' && msg.sessionId === 'bad');

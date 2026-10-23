@@ -21,7 +21,7 @@
    - 0007 Capability Registry as the Unified Control Plane
    - 0008 远程 Claw 连接架构
    - 0009 模型热切换框架 API：资产归应用层，状态由 agent 自持
-   - 0010 侧栏统一投影：工作空间 → 项目目录 → 运行中会话，连接不产生侧栏层级
+   - 0010 侧栏统一投影：工作空间 → 项目目录 → 运行中会话，连接不产生侧栏层级；修订一：托管 runtime 归属先于 Viewer 可见性（子进程注册前 IPC 握手 runtime-identity，服务端记录后 ack；查询在元数据加载后取归属快照）
    - 0011 ProtoClaw 远程写适配
    - 0012 远程会话历史统一呈现
    - 0013 消息轮询的增量探测：probe + tail

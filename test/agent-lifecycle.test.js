@@ -604,6 +604,41 @@ describe('agent-lifecycle', () => {
       assert.ok(agent.pid);
     });
 
+    it('projects a newly published managed runtime identity when publication races workspace metadata loading', async () => {
+      const child = createMockChild();
+      const runtime = injectRuntime('programming-helper', 'new-session', child);
+      const viewerEntry = { id: 'viewer-new', name: '编程小助手', connected: true };
+      const mod = createAgentLifecycleModule(createMockCtx({
+        getAgentsLight: async () => [{
+          id: 'programming-helper', name: '智能编码空间', description: '', kind: 'workspace',
+          status: { pid: 12345, viewerAgentId: null },
+        }],
+        readActiveWorkspaceSessionMeta: async () => {
+          // Simulates the runtime identity arriving while APP metadata is read.
+          runtime.viewerAgentId = viewerEntry.id;
+          return { workspaceSessions: { sessions: [] }, sessionMeta: { ...EMPTY_SESSION_META } };
+        },
+        readWorkspaceSessionMeta: async (agentId, sessionId) => ({
+          ...EMPTY_SESSION_META,
+          active_workspace_session_id: sessionId,
+          active_workspace_session_title: '新对话',
+          active_workspace_display_name: '编程小助手',
+        }),
+        readViewerJson: async (url) => url.includes('/api/agents')
+          ? { agents: [viewerEntry, { id: 'external-viewer', name: '真实外部代理', connected: true }], currentAgentId: viewerEntry.id }
+          : { callActive: false },
+      }));
+
+      const agents = await mod.getConnectedAgents();
+      const childEntry = agents.find((agent) => agent.id === viewerEntry.id);
+      assert.equal(childEntry?.source, 'child');
+      assert.equal(childEntry?.parent_id, 'programming-helper');
+      assert.equal(childEntry?.sidebar_entry_id, 'programming-helper');
+      assert.equal(childEntry?.active_workspace_session_id, 'new-session');
+      assert.equal(agents.some((agent) => agent.id === viewerEntry.id && agent.source === 'external'), false);
+      assert.equal(agents.find((agent) => agent.id === 'external-viewer')?.source, 'external');
+    });
+
     it('hides a shared session while its disposal acknowledgement is pending', async () => {
       const child = createMockChild();
       const runtime = injectRuntime('stopping-agent', 'stopping-session', child);

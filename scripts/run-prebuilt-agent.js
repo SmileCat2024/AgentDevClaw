@@ -261,6 +261,9 @@ class SessionLifecycle {
     this.workspaceCwd = opts.workspaceCwd ?? null;
     this.runtimeHandoff = opts.runtimeHandoff ?? null;
     this.announceOnStdout = opts.announceOnStdout === true;
+    this.managedRuntimeIdentity = opts.managedRuntimeIdentity?.enabled === true
+      ? { agentId: opts.managedRuntimeIdentity.agentId, sessionId: opts.managedRuntimeIdentity.sessionId }
+      : null;
     this.runtime = {
       agentId,
       sessionId: this.sessionId,
@@ -896,6 +899,36 @@ SessionLifecycle.prototype.start = async function () {
   console.log(`[ProtoClaw Runtime] Agent 实例已创建: ${this.agentName}`);
 
   console.log(`[ProtoClaw Runtime] 正在连接到 ViewerWorker (端口 ${VIEWER_PORT})...`);
+  if (this.sessionId && this.managedRuntimeIdentity && process.connected) {
+    const identity = {
+      type: 'runtime-identity',
+      agentId: this.managedRuntimeIdentity.agentId,
+      sessionId: this.managedRuntimeIdentity.sessionId,
+      viewerAgentId: this.agent.agentId,
+    };
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        process.off('message', onMessage);
+        reject(new Error('Managed runtime identity acknowledgement timed out'));
+      }, 2000);
+      const onMessage = (message) => {
+        if (message?.type !== 'runtime-identity-accepted'
+          || message.agentId !== this.managedRuntimeIdentity.agentId
+          || message.sessionId !== this.sessionId
+          || message.viewerAgentId !== this.agent.agentId) return;
+        clearTimeout(timer);
+        process.off('message', onMessage);
+        resolve();
+      };
+      process.on('message', onMessage);
+      process.send(identity, (error) => {
+        if (!error) return;
+        clearTimeout(timer);
+        process.off('message', onMessage);
+        reject(error);
+      });
+    });
+  }
   await this.agent.withViewer(this.agentName, VIEWER_PORT, false, {
     projectRoot: PROTOCLAW_ROOT,
   });
@@ -1273,6 +1306,11 @@ process.on('message', async (msg) => {
     }
     const newSession = new SessionLifecycle({
       sessionId: newSessionId,
+      managedRuntimeIdentity: {
+        agentId,
+        sessionId: newSessionId,
+        enabled: Boolean(process.connected && process.env.PROTOCLAW_PREBUILT_AGENT_ID === agentId),
+      },
       agentName: msg.agentName || agentName,
       workspaceCwd: msg.workspaceCwd || null,
       runtimeHandoff: msg.handoffPath ? loadRuntimeHandoffFromPath(msg.handoffPath) : null,
@@ -1384,6 +1422,12 @@ async function main() {
   const initialSession = new SessionLifecycle({
     sessionId,
     agentName,
+    managedRuntimeIdentity: {
+      agentId,
+      sessionId,
+      enabled: process.env.PROTOCLAW_PREBUILT_AGENT_ID === agentId
+      && process.env.PROTOCLAW_PREBUILT_SESSION_ID === sessionId,
+    },
     workspaceCwd,
     runtimeHandoff,
     announceOnStdout: true,
