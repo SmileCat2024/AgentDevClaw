@@ -184,7 +184,7 @@ export class CoderMonitor {
     // Replay retained events in order. Expanding edges before each event also covers a
     // suspended round and its wakeup completing within the same polling interval.
     for (const event of events) {
-      this.expand(target, thread, commands);
+      this.expand(target, thread, commands, event.sessionId);
       const eventRefs = [...new Set([event.sourceRef, ...(event.consumedSourceRefs || [])].filter(Boolean))];
       for (const ref of eventRefs) {
         if (target.nodes.has(ref)) continue;
@@ -272,11 +272,14 @@ export class CoderMonitor {
     return command.source === wait.source && Array.isArray(ids) && ids.includes(wait.id);
   }
 
-  private expand(target: Observation, thread: Record<string, any>, commands: Array<Record<string, any>>): void {
+  private expand(target: Observation, thread: Record<string, any>, commands: Array<Record<string, any>>, eventSessionId?: string): void {
     for (const node of target.nodes.values()) {
-      if (!['cancelled', 'suspended'].includes(node.state) || !node.sessionId) continue;
+      if (!['executing', 'cancelled', 'suspended'].includes(node.state) || !node.sessionId) continue;
       const index = (thread.sessionChain || []).findIndex((s: any) => s.sessionId === node.sessionId);
       if (index < 0 || !thread.sessionChain[index + 1]) continue;
+      // A retiring runtime may omit its terminal event. Cross that boundary only
+      // when replay reaches the committed successor, not while replaying old work.
+      if (node.state === 'executing' && eventSessionId !== thread.sessionChain[index + 1].sessionId) continue;
       const successor = commands.find((c) => c.kind === 'system_continuation'
         && c.idempotencyKey === `succession:${thread.threadId}:${node.sessionId}`);
       if (!successor) continue;

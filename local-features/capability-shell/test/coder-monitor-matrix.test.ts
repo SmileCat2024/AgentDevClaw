@@ -96,16 +96,16 @@ for (const mode of ['split', 'other-turn', 'other-session', 'absent']) {
 }
 
 /** Every bit controls one poll boundary; equivalent histories must have equivalent outcomes. */
-for (const scenario of ['suspend', 'rotate']) {
+for (const scenario of ['suspend', 'rotate', 'rotate-without-terminal']) {
   it(`M9-PARTITIONS M9-SUSPEND M9-ROTATE: ${scenario} every adjacent event partition`, async t => {
     const events = scenario === 'suspend' ? [
       done('cmd', { suspended: true, pendingWakeups: [{ source: 'shell', id: 'bg' }] }),
       { type: 'turn.started', sourceRef: 'wake', sessionId: 's1', turn: 1 }, reply('final', 1), done('wake', { turn: 1 }),
     ] : [
-      { type: 'turn.cancelled', sourceRef: 'cmd', sessionId: 's1', turn: 0 },
+      { type: scenario === 'rotate' ? 'turn.cancelled' : 'turn.started', sourceRef: 'cmd', sessionId: 's1', turn: 0 },
       { type: 'turn.started', sourceRef: 'next', sessionId: 's2', turn: 0 }, reply('final', 0, 's2'), done('next', { sessionId: 's2' }),
     ];
-    // Model handoff facts at their actual temporal boundary, not before the cancellation.
+    // The old runtime can disappear without publishing a terminal turn event.
     for (let mask = 0; mask < 1 << (events.length - 1); mask++) {
       await t.test(`partition-${mask}`, async st => {
         let visible = 0;
@@ -114,7 +114,7 @@ for (const scenario of ['suspend', 'rotate']) {
             ? { commandId: 'wake', kind: 'reminder', source: 'shell', metadata: { shell: { taskIds: ['bg'] } } }
             : { commandId: 'next', kind: 'system_continuation', idempotencyKey: 'succession:wt:s1' }];
           return { ...snap(events.slice(after, visible), { commands,
-            ...(scenario === 'rotate' ? { status: visible === 1 ? 'rotating' : 'open',
+            ...(scenario !== 'suspend' ? { status: visible === 1 ? 'rotating' : 'open',
               headSessionId: visible === 1 ? 's1' : 's2', sessionChain: [{ sessionId: 's1' }, { sessionId: 's2' }] } : {}) }), cursor: visible };
         } });
         for (let end = 1; end <= events.length; end++) {
@@ -132,6 +132,42 @@ for (const scenario of ['suspend', 'rotate']) {
     }
   });
 }
+
+for (const mismatch of ['chain', 'command', 'key']) {
+  it(`unfinished execution does not follow a successor with missing ${mismatch} evidence`, async t => {
+    const h = harness(t);
+    h.set(snap([
+      { type: 'turn.started', sourceRef: 'cmd', sessionId: 's1', turn: 0 },
+      done('next', { sessionId: 's2' }),
+    ], {
+      headSessionId: 's2',
+      sessionChain: mismatch === 'chain' ? [{ sessionId: 's1' }] : [{ sessionId: 's1' }, { sessionId: 's2' }],
+      commands: [{ commandId: 'cmd' }, { commandId: 'next',
+        kind: mismatch === 'command' ? 'user_message' : 'system_continuation',
+        idempotencyKey: mismatch === 'key' ? 'succession:other:s1' : 'succession:wt:s1' }],
+    }));
+    assert.match(await h.monitor.observe(identity), /^monitoring/);
+    assert.equal(h.monitor.list()[0].status, 'executing');
+    await h.flush();
+    assert.equal(h.notices.length, 0);
+  });
+}
+
+it('a completed old execution is not attached to later work in the successor session', async t => {
+  const h = harness(t);
+  h.set(snap([
+    { type: 'turn.started', sourceRef: 'cmd', sessionId: 's1', turn: 0 },
+    reply('original report'), done(),
+    { type: 'turn.started', sourceRef: 'next', sessionId: 's2', turn: 1 },
+  ], {
+    headSessionId: 's2', sessionChain: [{ sessionId: 's1' }, { sessionId: 's2' }],
+    commands: [{ commandId: 'cmd' }, { commandId: 'next', kind: 'system_continuation', idempotencyKey: 'succession:wt:s1' }],
+  }));
+  assert.match(await h.monitor.observe(identity), /reason=completed/);
+  assert.match(h.monitor.list()[0].summary, /original report/);
+  await h.flush();
+  assert.equal(h.notices.length, 1);
+});
 
 for (const mode of ['missing', 'long-tool', 'rotating', 'completed']) {
   it(`M9-RUNTIME: ${mode} uses execution evidence, not elapsed silence`, async t => {
