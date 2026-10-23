@@ -228,10 +228,11 @@ window.resolveSidebarChildProjectGroup = function (entry, sessionDirMap) {
   const projectId = String(entry?.projectId || '').trim();
   if (projectId) {
     const zh = currentLanguage === 'zh';
-    const shortId = projectId.replace(/^prj_/, '').slice(0, 8);
+    const entity = (window.ClawFW?.phProjectEntities?.projects || [])
+      .find((project) => project.id === projectId);
     return {
       projectKey: 'prj:' + projectId,
-      projectName: (zh ? '项目 ' : 'Project ') + shortId,
+      projectName: entity?.name || (zh ? '项目名称不可用' : 'Project name unavailable'),
       projectDir: '',
     };
   }
@@ -329,7 +330,8 @@ function ensurePhProjectEntitiesLoaded(force = false) {
   store.loading = (async () => {
     try {
       const response = await fetch('/protoclaw/ph_project/projects?agentId=programming-helper');
-      const data = response.ok ? await response.json() : null;
+      if (!response.ok) throw new Error('Failed to load projects: HTTP ' + response.status);
+      const data = await response.json();
       store.projects = (Array.isArray(data?.projects) ? data.projects : [])
         .map(normalizePhProjectEntity)
         .filter(Boolean);

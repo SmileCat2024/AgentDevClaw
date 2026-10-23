@@ -489,6 +489,11 @@ async function loadAgents() {
       window.ClawSidebarLayout?.load(),
     ]);
     const data = res.ok ? await res.json().catch(() => ({ agents: [] })) : { agents: [] };
+    // 侧栏不依赖用户先进入 PH 首页；首次快照即加载项目名称，后续复用实体缓存。
+    if (connectedAgents.some((agent) => agent.id === 'programming-helper')
+      && typeof ensurePhProjectEntitiesLoaded === 'function') {
+      await ensurePhProjectEntitiesLoaded();
+    }
     if (sidebarSnapshotToken && typeof isSidebarSnapshotTokenCurrent === 'function' && !isSidebarSnapshotTokenCurrent(sidebarSnapshotToken)) {
       window.setTimeout(() => loadAgents().catch(e => console.warn(e)), 25);
       return { stale: true };
@@ -975,6 +980,8 @@ function getAgentListRenderSignature() {
   return JSON.stringify({
     awaitHighlight,
     sidebarLayout: window.ClawSidebarLayout?.signature(),
+    phProjectNames: (window.ClawFW?.phProjectEntities?.projects || [])
+      .map((project) => ({ id: project.id, name: project.name })),
     language: currentLanguage,
     focusedAgentId: normalizeAgentIdentity(focusedAgentId),
     currentRuntimeAgentId: normalizeAgentIdentity(currentRuntimeAgentId),

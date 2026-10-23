@@ -83,7 +83,7 @@ function serverWireChild(sessionRecord, runtimeId) {
   });
 }
 
-function loadFrontend() {
+function loadFrontend({ realSidebarRenderer = false } = {}) {
   const ctx = createFrontendSandbox({
     t: (key) => key,
     currentLanguage: 'zh',
@@ -112,7 +112,7 @@ function loadFrontend() {
   ctx.loadSource('public/src/modules/sidebar-render.js');
   // 全量 renderAgentList 依赖 app-core 全局；本测试只驱动投影函数，
   // 操作登记触发的侧栏失效重渲染替换为哑件（不参与断言）。
-  ctx.run('renderAgentList = () => {};');
+  if (!realSidebarRenderer) ctx.run('renderAgentList = () => {};');
   return ctx;
 }
 
@@ -192,6 +192,81 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
     assert.ok(dirGroup, 'directory group exists');
     assert.equal(dirGroup.enterBtn, true);
     assert.deepEqual(dirGroup.runtimeIds, ['rt-d1']);
+  });
+
+  test('侧栏项目标签使用实体名称，同名项目仍按 ID 独立分组', () => {
+    const named = loadFrontend();
+    named.window.ClawFW.phProjectEntities.projects = [
+      { id: PROJECT_A, name: '发布整理 <A>' },
+      { id: PROJECT_B, name: '发布整理 <A>' },
+    ];
+    const html = named.run(`renderSidebarChildItems(
+      collectRuntimeEntriesForPrebuilt(${JSON.stringify(hostFixture())}, ${JSON.stringify(wireChildren)}),
+      'programming-helper'
+    )`);
+    const labels = [...html.matchAll(/class="project-collapse-label">([^<]*)</g)].map((m) => m[1]);
+    assert.equal(labels.filter((label) => label === '发布整理 &lt;A&gt;').length, 2);
+    assert.match(html, new RegExp('data-project-key="prj:' + PROJECT_A + '"'));
+    assert.match(html, new RegExp('data-project-key="prj:' + PROJECT_B + '"'));
+    assert.ok(!labels.some((label) => /^项目 [a-f0-9]+$/.test(label)));
+  });
+
+  test('首次侧栏加载即显示项目名，无须先开首页；改名后实际重绘', async () => {
+    const named = loadFrontend({ realSidebarRenderer: true });
+    const agents = [hostFixture(), ...wireChildren];
+    let html = '';
+    let requests = 0;
+    named.window.ClawSidebarLayout = {
+      load: async () => {}, isInteracting: () => false, signature: () => '',
+      render() {
+        html = named.run('renderSidebarChildItems(collectRuntimeEntriesForPrebuilt(allAgents[0], allAgents), "programming-helper")');
+      },
+    };
+    Object.assign(named, {
+      performance: { now: () => 0 }, loadAgentsInFlight: null,
+      loadedAgentDetailIds: new Set(), suppressSidebarRerender: false,
+      pendingPrebuiltAgentIds: new Set(), focusedAgentId: 'programming-helper',
+      groupConnectedAgents: () => ({ external: [] }),
+      externalAgentList: {}, externalGroup: { style: {} }, externalCount: {},
+      updateCurrentAgentChrome() {}, renderFeaturePanel() {},
+      refreshAgentCallStates: async () => {}, isRemoteNamespaceAgentId: () => false,
+      getAgentRuntimeId: (agent) => agent.runtime_session_id || '',
+      invoke: async () => agents,
+      fetch: async (url) => {
+        if (url === '/api/agents') return { ok: true, json: async () => ({ agents: [] }) };
+        assert.equal(url, '/protoclaw/ph_project/projects?agentId=programming-helper');
+        requests += 1;
+        return { ok: true, json: async () => ({ projects: [
+          { id: PROJECT_A, name: requests === 1 ? '发布整理' : '前端体验', workDirectory: DIR_D },
+          { id: PROJECT_B, name: '另一个项目', workDirectory: DIR_D },
+        ] }) };
+      },
+    });
+    await named.run('loadAgents()');
+    assert.match(html, /class="project-collapse-label">发布整理</);
+    assert.match(html, /class="project-collapse-label">另一个项目</);
+    await named.run('loadAgents()');
+    assert.equal(requests, 1, '普通侧栏轮询复用已加载清单');
+    await named.run('ensurePhProjectEntitiesLoaded(true)');
+    named.run('renderAgentList()');
+    assert.match(html, /class="project-collapse-label">前端体验</);
+    assert.doesNotMatch(html, /class="project-collapse-label">发布整理</);
+  });
+
+  test('项目名称请求失败保留旧清单，下次侧栏加载可以重试', async () => {
+    const named = loadFrontend();
+    const store = named.window.ClawFW.phProjectEntities;
+    store.projects = [{ id: PROJECT_A, name: '已有名称' }];
+    named.fetch = async () => ({ ok: false, status: 503 });
+    await named.run('ensurePhProjectEntitiesLoaded()');
+    assert.equal(store.loaded, false);
+    assert.equal(store.projects[0].name, '已有名称');
+    named.fetch = async () => ({ ok: true, json: async () => ({ projects: [
+      { id: PROJECT_A, name: '恢复后的名称', workDirectory: DIR_D },
+    ] }) });
+    await named.run('ensurePhProjectEntitiesLoaded()');
+    assert.equal(store.loaded, true);
+    assert.equal(store.projects[0].name, '恢复后的名称');
   });
 
   test('乐观 child：项目操作（projectId）合成条目进项目身份组；目录身份不丢', () => {
