@@ -12,7 +12,7 @@
  *
  * 验收锚（044 工单）：
  *   - 同目录 D 下的 A/B/D 运行中会话渲染为三个互不混入的组
- *   - 项目身份组（prj:*）无「进入」按钮（不是目录操作入口）；目录组有
+ *   - 项目身份组（prj:*）与目录组均有「进入」按钮，分别使用项目 ID / 目录路径寻址
  *   - 乐观条目与轮询条目同一归属规则；无身份的操作不合成条目
  */
 
@@ -83,7 +83,7 @@ function serverWireChild(sessionRecord, runtimeId) {
   });
 }
 
-function loadFrontend({ realSidebarRenderer = false } = {}) {
+function loadFrontend({ realSidebarRenderer = false, onSidebarClickListener } = {}) {
   const ctx = createFrontendSandbox({
     t: (key) => key,
     currentLanguage: 'zh',
@@ -102,7 +102,7 @@ function loadFrontend({ realSidebarRenderer = false } = {}) {
     getRuntimeId: (agent) => String(agent?.id || '').trim(),
     getParentAgentId: (agent) => String(agent?.parent_id || '').trim(),
     // sidebar-render.js 底部的全局事件挂载（app-ui.js 持有元素；沙箱给哑件）
-    agentList: { addEventListener() {}, classList: { add() {}, remove() {}, toggle() {} }, style: {} },
+    agentList: { addEventListener(type, listener) { if (type === 'click') onSidebarClickListener?.(listener); }, classList: { add() {}, remove() {}, toggle() {} }, style: {} },
   });
   ctx.window.setInterval = () => 0;
   ctx.window.SIDEBAR_TODO_COLORS = new Set(['white']);
@@ -161,7 +161,7 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
     assert.equal(bySession.get('d1').projectId, '');
   });
 
-  test('渲染：三个组各归其位；项目组无「进入」按钮，目录组有', () => {
+  test('渲染：项目组与目录组分别提供正确身份的「进入」按钮', () => {
     const html = ctx.run(`(() => {
       const host = ${JSON.stringify(hostFixture())};
       const children = ${JSON.stringify(wireChildren)};
@@ -172,15 +172,18 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
     assert.equal(groups.length, 3, 'three project groups rendered');
     const parsed = groups.map((chunk) => ({
       key: /data-project-key="([^"]*)"/.exec(chunk)?.[1] || '',
-      enterBtn: chunk.includes('project-enter-btn'),
+      enterBtn: /<button class="project-enter-btn" data-enter-type="([^"]*)" data-enter-target="([^"]*)"/.exec(chunk),
       runtimeIds: [...chunk.matchAll(/data-agent-id="([^"]*)"/g)].map((m) => m[1]),
     }));
     const projectGroups = parsed.filter((g) => g.key.startsWith('prj:'));
     const dirGroup = parsed.find((g) => !g.key.startsWith('prj:'));
     assert.equal(projectGroups.length, 2);
-    // 项目身份组：不是目录操作入口，无进入按钮（045 接项目视图前）
+    // 项目身份组以 prj_* 稳定 ID 作为目标，不能退化为名称或目录路径。
     for (const group of projectGroups) {
-      assert.equal(group.enterBtn, false, group.key);
+      const [, enterType, enterTarget] = group.enterBtn || [];
+      const projectId = group.key.slice('prj:'.length);
+      assert.equal(enterType, 'ph-project', group.key);
+      assert.equal(enterTarget, projectId, group.key);
       assert.equal(group.runtimeIds.length, 1, group.key);
     }
     assert.deepEqual(
@@ -190,8 +193,81 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
     );
     // 目录组：唯一持有 d1，进入按钮在（本地目录操作入口不变）
     assert.ok(dirGroup, 'directory group exists');
-    assert.equal(dirGroup.enterBtn, true);
+    const [, dirEnterType, dirEnterTarget] = dirGroup.enterBtn || [];
+    assert.equal(dirEnterType, 'ph');
+    assert.equal(dirEnterTarget, DIR_D);
     assert.deepEqual(dirGroup.runtimeIds, ['rt-d1']);
+  });
+
+  test('重新点击编程小助手：恢复已保存的项目会话切片', async () => {
+    let clickListener = null;
+    const clickCtx = loadFrontend({
+      onSidebarClickListener: (listener) => { clickListener = listener; },
+    });
+    const calls = [];
+    clickCtx.allAgents = [{ id: 'programming-helper', source: 'prebuilt' }];
+    clickCtx.window.handlePrebuiltAgentClick = async (agentId) => calls.push(['workspace', agentId]);
+    clickCtx.ensurePhProjectEntitiesLoaded = async () => calls.push(['projects-loaded']);
+    clickCtx.getPhBrowsingTarget = () => ({ type: 'project', id: PROJECT_A });
+    clickCtx.phLoadProjectSessions = async (target) => calls.push(['sessions', target]);
+
+    const item = { dataset: { agentPrebuilt: 'true', agentId: 'programming-helper' }, classList: { contains: () => false } };
+    const event = { target: { closest(selector) { return selector === '.agent-item' ? item : null; } } };
+    await clickListener(event);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+      ['workspace', 'programming-helper'],
+      ['projects-loaded'],
+      ['sessions', { projectId: PROJECT_A }],
+    ]);
+  });
+
+  test('重新点击编程小助手：恢复默认目录会话切片', async () => {
+    let clickListener = null;
+    const clickCtx = loadFrontend({
+      onSidebarClickListener: (listener) => { clickListener = listener; },
+    });
+    const calls = [];
+    clickCtx.allAgents = [{ id: 'programming-helper', source: 'prebuilt' }];
+    clickCtx.getAgentWorkspaceState = () => ({ openDirectory: DIR_D });
+    clickCtx.window.handlePrebuiltAgentClick = async (agentId) => calls.push(['workspace', agentId]);
+    clickCtx.ensurePhProjectEntitiesLoaded = async () => calls.push(['projects-loaded']);
+    clickCtx.getPhBrowsingTarget = () => ({ type: 'dir', id: 'dir:' + DIR_D.toLowerCase(), openDirectory: DIR_D });
+    clickCtx.phLoadProjectSessions = async (target) => calls.push(['sessions', target]);
+
+    const item = { dataset: { agentPrebuilt: 'true', agentId: 'programming-helper' }, classList: { contains: () => false } };
+    const event = { target: { closest(selector) { return selector === '.agent-item' ? item : null; } } };
+    await clickListener(event);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+      ['workspace', 'programming-helper'],
+      ['projects-loaded'],
+      ['sessions', { projectDir: DIR_D }],
+    ]);
+  });
+
+  test('点击项目进入按钮：先进入编程小助手，再按项目 ID 切换', async () => {
+    let clickListener = null;
+    const clickCtx = loadFrontend({
+      onSidebarClickListener: (listener) => { clickListener = listener; },
+    });
+    const calls = [];
+    clickCtx.window.handlePrebuiltAgentClick = async (agentId) => calls.push(['workspace', agentId]);
+    clickCtx.window.phSwitchProject = async (targetId) => calls.push(['target', targetId]);
+    assert.equal(typeof clickListener, 'function', 'sidebar click handler is registered');
+
+    const button = { dataset: { enterType: 'ph-project', enterTarget: PROJECT_A } };
+    const event = {
+      target: {
+        closest(selector) {
+          if (selector === '.project-enter-btn') return button;
+          return null;
+        },
+      },
+    };
+    await clickListener(event);
+    assert.deepEqual(calls, [
+      ['workspace', 'programming-helper'],
+      ['target', PROJECT_A],
+    ]);
   });
 
   test('侧栏项目标签使用实体名称，同名项目仍按 ID 独立分组', () => {

@@ -234,6 +234,7 @@ window.resolveSidebarChildProjectGroup = function (entry, sessionDirMap) {
       projectKey: 'prj:' + projectId,
       projectName: entity?.name || (zh ? '项目名称不可用' : 'Project name unavailable'),
       projectDir: '',
+      projectId,
     };
   }
   let dir = String(entry?.openDirectory || '').trim();

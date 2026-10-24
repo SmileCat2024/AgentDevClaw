@@ -249,7 +249,7 @@ function renderSidebarChildItems(entries, ownerAgentId) {
     const key = entry.projectKey || entry.projectDir || entry.projectName || '';
     if (!groupIndex.has(key)) {
       groupIndex.set(key, groups.length);
-      groups.push({ projectKey: key, projectName: entry.projectName || '', projectDir: entry.projectDir || '', items: [] });
+      groups.push({ projectKey: key, projectName: entry.projectName || '', projectDir: entry.projectDir || '', projectId: entry.projectId || '', items: [] });
     }
     groups[groupIndex.get(key)].items.push(entry);
   }
@@ -270,16 +270,17 @@ function renderSidebarChildItems(entries, ownerAgentId) {
     const isWorkGroup = ownerAgentId === 'work-group';
     // ph 组一律可进入（ADR-0012 决策 1）：远程目录组进入后以 remoteOnly
     // 视图呈现其历史会话（见 phSwitchProject）；work-group 仍按本地会话判定。
-    // 项目身份组（ticket 044，projectKey 'prj:*'）无 projectDir——不是目录
-    // 操作入口，045 接项目视图前不提供进入按钮。
+    // 项目组按稳定 projectId 进入；目录组按绑定目录进入，不能把二者身份混用。
     const canEnter = isWorkGroup
       ? group.items.some((entry) => entry.source !== 'remote')
-      : (!!group.projectDir && group.items.length > 0);
+      : (ownerAgentId === 'programming-helper'
+        ? (group.projectId ? group.items.length > 0 : !!group.projectDir && group.items.length > 0)
+        : (!!group.projectDir && group.items.length > 0));
     // For work-group: enter navigates to the group chat by chatId.
     // For programming-helper: enter navigates to the workspace surface and
     // scrolls to / expands the corresponding project card.
-    const enterType = isWorkGroup ? 'wg' : 'ph';
-    const enterTarget = isWorkGroup ? projectKey : (group.projectDir || label);
+    const enterType = isWorkGroup ? 'wg' : (group.projectId ? 'ph-project' : 'ph');
+    const enterTarget = isWorkGroup ? projectKey : (group.projectId || group.projectDir || label);
     return `<div class="agent-runtime-project-group${collapsed ? ' collapsed' : ''}" data-project-key="${escapeHtml(projectKey)}">` +
       `<div class="agent-runtime-project-header" title="${escapeHtml(group.projectDir || label)}">` +
         `<span class="project-collapse-arrow"></span>` +
@@ -1081,13 +1082,15 @@ agentList.addEventListener('click', async (event) => {
       if (window.WorkGroupUI && typeof window.WorkGroupUI.selectChat === 'function') {
         window.WorkGroupUI.selectChat(enterTarget);
       }
-    } else if (enterType === 'ph') {
-      // Navigate to programming-helper workspace, then switch active project.
-      const projectDir = enterTarget || '';
+    } else if (enterType === 'ph' || enterType === 'ph-project') {
+      // Navigate to programming-helper workspace, then switch the selected directory/project.
+      const target = enterTarget || '';
       await window.handlePrebuiltAgentClick('programming-helper');
-      if (projectDir && typeof window.phSwitchProject === 'function') {
-        const projectId = 'dir:' + projectDir.replace(/\\/g, '/').toLowerCase();
-        await window.phSwitchProject(projectId);
+      if (target && typeof window.phSwitchProject === 'function') {
+        const targetId = enterType === 'ph-project'
+          ? target
+          : 'dir:' + target.replace(/\\/g, '/').toLowerCase();
+        await window.phSwitchProject(targetId);
       }
     }
     return;
@@ -1122,6 +1125,27 @@ agentList.addEventListener('click', async (event) => {
 
   if (item.dataset.agentPrebuilt === 'true') {
     await window.handlePrebuiltAgentClick(agentId);
+    // Re-entering the programming-helper workspace must load the persisted
+    // browsing slice explicitly. Its cached workspace_sessions may still hold
+    // the default-directory slice, while the project target lives in local UI
+    // state and is not part of handlePrebuiltAgentClick's workspace navigation.
+    if (agentId === 'programming-helper'
+      && typeof ensurePhProjectEntitiesLoaded === 'function'
+      && typeof getPhBrowsingTarget === 'function'
+      && typeof phLoadProjectSessions === 'function') {
+      await ensurePhProjectEntitiesLoaded();
+      const host = (Array.isArray(allAgents) ? allAgents : [])
+        .find((agent) => agent.id === 'programming-helper');
+      const target = getPhBrowsingTarget(host);
+      if (target?.type === 'project' && target.id) {
+        await phLoadProjectSessions({ projectId: target.id });
+      } else if (target?.openDirectory) {
+        await phLoadProjectSessions({ projectDir: target.openDirectory });
+      } else {
+        const openDirectory = String(getAgentWorkspaceState(host)?.openDirectory || '').trim();
+        if (openDirectory) await phLoadProjectSessions({ projectDir: openDirectory });
+      }
+    }
     return;
   }
 
