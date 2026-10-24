@@ -484,6 +484,56 @@ async function phLoadProjectSessions(target) {
 
 let _phLoadingMoreSessions = false;
 
+// ── 加载更多的原地落地：只同步会话列表区，不重建 workspace surface ──
+// surface 的 innerHTML 全量替换会连带销毁重建 banner 里的目录切换下拉
+// （open 状态丢失）、目录子菜单浮窗锚点与搜索输入框——用户悬停目录行
+// 滚动列表触发自动加载时，浮窗先收起、hover 事件向新 DOM 重放后再被
+// 重新定位打开，表现为"收起重放、大小跳变"。加载更多是纯列表增量，
+// 只同步 tab 计数徽标与列表面板；面板 HTML 经 renderWorkspaceSurface
+// 重新生成后抽取（与全量渲染同一函数产出，逐字节一致），并把签名缓存
+// 同步为该 HTML——否则下一轮轮询签名不匹配会再次全量替换，浮窗仍跳变。
+// 结构不匹配（视图已切走 / 焦点漂移）时返回 false，调用方回退全量渲染。
+function _phSyncSessionPanelsInPlace() {
+  const liveTabsList = document.querySelectorAll('.ph-session-tabs[data-tab-group]');
+  if (liveTabsList.length === 0) return false;
+  if (typeof renderWorkspaceSurface !== 'function') return false;
+  let newHtml;
+  try {
+    newHtml = renderWorkspaceSurface(getCurrentAgentRecord());
+  } catch {
+    return false;
+  }
+  const tpl = document.createElement('template');
+  tpl.innerHTML = newHtml;
+  const freshTabsList = Array.from(tpl.content.querySelectorAll('.ph-session-tabs[data-tab-group]'));
+  let synced = 0;
+  for (const liveTabs of liveTabsList) {
+    const freshTabs = freshTabsList.find((el) => el.dataset.tabGroup === liveTabs.dataset.tabGroup);
+    if (!freshTabs) continue;
+    // 计数徽标在按钮内部；active 态在按钮元素自身，不被 innerHTML 替换触碰
+    for (const liveTab of liveTabs.querySelectorAll('.ph-session-tab')) {
+      const freshTab = Array.from(freshTabs.querySelectorAll('.ph-session-tab'))
+        .find((el) => el.dataset.phTab === liveTab.dataset.phTab);
+      if (freshTab) liveTab.innerHTML = freshTab.innerHTML;
+    }
+    // 两个列表面板整体替换：条目 / 时间组头 / 加载更多哨兵 / 空态切换
+    // 全部由同一渲染函数产出；面板元素的 active class 保留用户当前 tab
+    const livePanels = liveTabs.querySelector('.ph-session-tab-panels');
+    const freshPanels = freshTabs.querySelector('.ph-session-tab-panels');
+    if (livePanels && freshPanels) {
+      livePanels.innerHTML = freshPanels.innerHTML;
+      synced += 1;
+    }
+  }
+  if (synced === 0) return false;
+  lastRenderedWorkspaceHtml = newHtml;
+  // 哨兵节点随面板替换重建：重挂滚动自动加载观察器（与全量渲染路径一致）
+  if (typeof window.phSetupLoadMoreAutoScroll === 'function') {
+    window.phSetupLoadMoreAutoScroll();
+  }
+  return true;
+}
+
 window.phLoadMoreSessions = async () => {
   if (_phLoadingMoreSessions) return;
   const agent = getCurrentAgentRecord();
@@ -511,8 +561,12 @@ window.phLoadMoreSessions = async () => {
         ? mergeWorkspaceSessionSnapshots(ws, fresh, agent.id)
         : { ...ws, ...fresh, sessions: [...(ws?.sessions || []), ...(fresh.sessions || [])] };
       updateAgentRecord(agent.id, { workspace_sessions: merged });
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      // 原地同步列表区：surface 骨架（目录切换下拉 / 子菜单浮窗 / 搜索
+      // 输入态）不重建；同步失败回退既有全量渲染路径。
+      if (!_phSyncSessionPanelsInPlace()) {
+        lastRenderedWorkspaceHtml = '';
+        renderCurrentMainView();
+      }
     }
   } catch (error) {
     console.error('Failed to load more sessions:', error);
