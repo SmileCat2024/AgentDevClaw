@@ -6693,8 +6693,11 @@ body[data-theme="light"] .project-docset-detail-empty {
   }
 }
 
+/* 行内代码强调色：取自《正文标注视觉方案》的薰衣草紫（深色 #a6a8e7，
+   即该方案的主 accent；亮色取同方案的中调紫 #69648d，保住白底对比度）。
+   与全局 --accent-text 解耦——那套靛紫服务选中态/设置页等 40 处 UI，不随此调整。 */
 .markdown-body code.inline-code-accent {
-  color: var(--accent-text) !important;
+  color: #a6a8e7 !important;
   background: transparent !important;
   padding: 0 !important;
   border-radius: 0 !important;
@@ -6702,6 +6705,10 @@ body[data-theme="light"] .project-docset-detail-empty {
   font-family: inherit !important;
   font-weight: 600 !important;
   line-height: inherit !important;
+}
+
+body[data-theme="light"] .markdown-body code.inline-code-accent {
+  color: #69648d !important;
 }
 
 .markdown-body pre code {
@@ -8889,10 +8896,10 @@ body[data-theme="light"] .slash-menu {
   padding: 4px 11px;
   border: none;
   border-radius: 999px;
-  background: var(--accent-bg, rgba(99, 102, 241, 0.15));
+  background: var(--accent-bg, rgba(166, 166, 231, 0.15));
   font-size: 13px;
   font-weight: 500;
-  color: var(--accent-text, #a5b4fc);
+  color: var(--accent-text, #a6a8e7);
   cursor: default;
   user-select: none;
   white-space: nowrap;

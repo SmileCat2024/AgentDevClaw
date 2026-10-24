@@ -5389,14 +5389,14 @@ body[data-theme="light"] .call-elapsed-capsule {
 }
 
 .call-elapsed-capsule.is-running {
-  /* accent 玻璃：靛蓝半透明叠在磨砂上，色相可辨且不透字 */
-  background: rgba(99, 102, 241, 0.35);
-  color: #e0e7ff;
+  /* accent 玻璃：薰衣草半透明叠在磨砂上，色相可辨且不透字 */
+  background: rgba(125, 121, 188, 0.35);
+  color: #e1e0fe;
 }
 
 body[data-theme="light"] .call-elapsed-capsule.is-running {
-  background: rgba(79, 70, 229, 0.18);
-  color: var(--accent-text, #4f46e5);
+  background: rgba(105, 100, 141, 0.18);
+  color: var(--accent-text, #69648d);
 }
 
 .recap-hint {
@@ -7631,7 +7631,7 @@ body[data-theme="light"] .ccb-model-dropdown-list {
 .ccb-md-vision {
   width: 14px;
   height: 14px;
-  color: var(--accent-color, #818cf8);
+  color: var(--accent-color, #a6a8e7);
   flex-shrink: 0;
   opacity: 0.7;
 }

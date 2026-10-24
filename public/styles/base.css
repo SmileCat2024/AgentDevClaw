@@ -25,9 +25,9 @@
   --shadow-color: rgba(0, 0, 0, 0.18);
   --shadow-strong: rgba(0, 0, 0, 0.8);
   --status-text-on-color: #fff;
-  /* ── selection / dropdown active state ── */
-  --accent-bg: rgba(99, 102, 241, 0.15);
-  --accent-text: #a5b4fc;
+  /* ── selection / dropdown active state（薰衣草紫系，取自正文标注视觉方案）── */
+  --accent-bg: rgba(166, 166, 231, 0.15);
+  --accent-text: #a6a8e7;
   --dropdown-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
   /* ── glass variables ── */
   --glass-bg: rgba(20, 20, 23, 0.72);
@@ -39,7 +39,7 @@
   /* 静态柔光与暗角保留背景纵深；低透明度光晕不抬高页面基色。
      背景不持续移动，避免上方玻璃面在空闲时仍需重新合成。 */
   --ambient-glow-1: rgba(88, 118, 255, 0.07);
-  --ambient-glow-2: rgba(135, 100, 235, 0.06);
+  --ambient-glow-2: rgba(166, 166, 231, 0.06);
   --ambient-glow-3: rgba(60, 180, 200, 0.05);
   --ambient-base: radial-gradient(ellipse 90% 75% at 55% 42%, #0b0e15 0%, #060709 55%, #050505 100%);
   --ambient-vignette: radial-gradient(ellipse 120% 105% at 50% 46%, transparent 55%, rgba(0, 0, 0, 0.32) 100%);
@@ -75,13 +75,13 @@ body[data-theme="light"] {
   --diff-gutter-bg: #f1f1f3;
   /* ── ambient backdrop (light) ── */
   --ambient-glow-1: rgba(90, 125, 245, 0.05);
-  --ambient-glow-2: rgba(150, 110, 235, 0.045);
+  --ambient-glow-2: rgba(150, 146, 205, 0.045);
   --ambient-glow-3: rgba(80, 175, 205, 0.04);
   --ambient-base: radial-gradient(ellipse 90% 75% at 55% 42%, #fcfcfe 0%, #f2f2f6 55%, #e9e9ef 100%);
   --ambient-vignette: radial-gradient(ellipse 120% 105% at 50% 46%, transparent 55%, rgba(60, 70, 100, 0.08) 100%);
   /* ── selection / dropdown active state (light) ── */
-  --accent-bg: rgba(79, 70, 229, 0.10);
-  --accent-text: #4f46e5;
+  --accent-bg: rgba(105, 100, 141, 0.10);
+  --accent-text: #69648d;
   --dropdown-shadow: 0 12px 36px rgba(0, 0, 0, 0.15);
 }
 
