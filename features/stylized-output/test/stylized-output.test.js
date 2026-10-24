@@ -8,6 +8,23 @@ import { StylizedOutput } from '../dist/index.js';
 
 const SIGNATURE = '我确认本回复已逐句遵循测试风格的全部要求。';
 
+// 长签名（对齐内置「清晰表达」的真实形态）：预算 = max(2, floor(长度 × 5%)) = 5。
+// 笔误侧变体距离 1–2（远低于预算）；拒绝侧变体距离 ≥ 11（远超预算），
+// 两侧在长度 ±3 的误差下判定不变，用例不依赖精确长度。
+const LONG_SIGNATURE = '我确认本回复已按<清晰表达>复核：回答对准读者当前的问题与所需认识；背景足够，名称和指代清楚；内容的性质、来源与确定程度没有混淆，关键关系与意义已讲明；结论直接，依据、限制及场景所需信息完整，详略合宜；变化已交代，读者无需自行拼接理解。';
+const LONG_TYPO_SYNONYM = LONG_SIGNATURE.replace('关键关系与意义已讲明', '关键关系和意义已讲明'); // 与→和，距离 1
+const LONG_TYPO_WORD = LONG_SIGNATURE.replace('已讲明', '已说明'); // 两字词替换，距离 2
+const LONG_TYPO_PUNCT = LONG_SIGNATURE.replace('：', ':').replace('；', ';'); // 全半角标点 ×2，距离 2
+const LONG_MISSING_CLAUSE = LONG_SIGNATURE.replace('结论直接，依据、限制及场景所需信息完整，详略合宜；', ''); // 漏分句，距离 25
+const LONG_PARAPHRASE = '我确认这次回答已经按照清晰表达风格的各项要求认真复核过，读者应当可以不费力地理解全部内容。'; // 意译改写
+const LONG_APPENDED = LONG_SIGNATURE + '（以上为我的确认签名）'; // 附加解释短语，距离 11
+
+function createLongStyleFeature(options = {}) {
+  const feature = new StylizedOutput({ workspaceDir, ...options });
+  feature.setActiveStyle('long-style');
+  return feature;
+}
+
 let workspaceDir;
 
 function createFeature() {
@@ -40,6 +57,22 @@ before(async () => {
       'name: test-style',
       'description: 测试风格',
       `signature: ${SIGNATURE}`,
+      '---',
+      '',
+      '正文规则。',
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
+  // 长签名风格（≈118 字符）：预算 = max(2, floor(长度 × 5%)) = 5，
+  // 覆盖"笔误放行、漏句/改写拒绝"的真实量级（对齐内置「清晰表达」签名形态）。
+  writeFileSync(
+    join(workspaceDir, '.agentdev', 'output-style', 'long-style.md'),
+    [
+      '---',
+      'name: long-style',
+      'description: 长签名测试风格',
+      `signature: ${LONG_SIGNATURE}`,
       '---',
       '',
       '正文规则。',
@@ -95,6 +128,109 @@ describe('StylizedOutput 签名工具', () => {
 
     assert.equal(payload.ok, false);
     assert.match(payload.error, /未启用任何输出风格/);
+  });
+});
+
+describe('StylizedOutput 签名笔误宽恕', () => {
+  it('近义单字替换（与→和，本次事故形态）→ 放行并记为已签名', async () => {
+    const feature = createLongStyleFeature();
+
+    const payload = await feature.signTool.execute({ signature: LONG_TYPO_SYNONYM });
+
+    assert.equal(payload.ok, true);
+    assert.equal(payload.signed, true);
+    assert.equal(feature.signedForReply, true);
+  });
+
+  it('两字词替换与全半角标点差异 → 放行', async () => {
+    for (const typo of [LONG_TYPO_WORD, LONG_TYPO_PUNCT]) {
+      const feature = createLongStyleFeature();
+      const payload = await feature.signTool.execute({ signature: typo });
+      assert.equal(payload.ok, true, `应放行笔误：${typo.slice(0, 20)}…`);
+      assert.equal(feature.signedForReply, true);
+    }
+  });
+
+  it('宽恕通过对外静默：返回与精确通过完全一致', async () => {
+    const exact = await createLongStyleFeature().signTool.execute({ signature: LONG_SIGNATURE });
+    const forgiven = await createLongStyleFeature().signTool.execute({ signature: LONG_TYPO_SYNONYM });
+
+    assert.deepEqual(forgiven, exact);
+  });
+
+  it('审计留痕分化：宽恕通过记 warn（含距离），精确通过记 info', async () => {
+    const logs = [];
+    const spy = {
+      info: (message, data) => logs.push({ level: 'info', message, data }),
+      warn: (message, data) => logs.push({ level: 'warn', message, data }),
+    };
+    const exactFeature = createLongStyleFeature();
+    exactFeature.logger = spy;
+    await exactFeature.signTool.execute({ signature: LONG_SIGNATURE });
+    const forgivenFeature = createLongStyleFeature();
+    forgivenFeature.logger = spy;
+    await forgivenFeature.signTool.execute({ signature: LONG_TYPO_SYNONYM });
+
+    assert.equal(logs.filter((entry) => entry.level === 'info' && /验证通过/.test(entry.message)).length, 1);
+    const warns = logs.filter((entry) => entry.level === 'warn' && /笔误宽恕/.test(entry.message));
+    assert.equal(warns.length, 1);
+    assert.equal(warns[0].data.distance, 1);
+    assert.equal(warns[0].data.style, 'long-style');
+  });
+
+  it('漏分句 / 意译改写 / 附加解释短语 → 拒绝，提示差异量级与容忍上限，且不记签名', async () => {
+    for (const rewritten of [LONG_MISSING_CLAUSE, LONG_PARAPHRASE, LONG_APPENDED]) {
+      const feature = createLongStyleFeature();
+      const payload = await feature.signTool.execute({ signature: rewritten });
+      assert.equal(payload.ok, false, `应拒绝改写：${rewritten.slice(0, 20)}…`);
+      assert.equal(payload.signed, false);
+      assert.match(payload.error, /超出笔误容忍上限/);
+      assert.equal(feature.signedForReply, false);
+    }
+  });
+
+  it('短签名按基数 2 宽恕：单字替换通过，距离 4 的改写仍拒绝', async () => {
+    const singleTypo = SIGNATURE.replace('遵循', '遵照'); // 距离 1
+    const multiDiff = SIGNATURE.replace('遵循', '贯彻执行'); // 距离 4 > 基数 2
+
+    const pass = await createFeature().signTool.execute({ signature: singleTypo });
+    assert.equal(pass.ok, true);
+
+    const feature = createFeature();
+    const reject = await feature.signTool.execute({ signature: multiDiff });
+    assert.equal(reject.ok, false);
+    assert.equal(feature.signedForReply, false);
+  });
+
+  it('signatureTolerance=0 → 严格逐字回退：笔误被拒并提示容忍已关闭，精确匹配仍通过', async () => {
+    const feature = createLongStyleFeature({ signatureTolerance: 0 });
+    assert.equal(feature.getStatus().signatureTolerance, 0);
+
+    const rejected = await feature.signTool.execute({ signature: LONG_TYPO_SYNONYM });
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /笔误容忍已关闭/);
+
+    const exact = await feature.signTool.execute({ signature: LONG_SIGNATURE });
+    assert.equal(exact.ok, true);
+    assert.equal(feature.signedForReply, true);
+  });
+
+  it('signatureTolerance 配置贯通：options → status，capability 与 featureConfig 通道写入生效', async () => {
+    const feature = createLongStyleFeature({ signatureTolerance: 3 });
+    assert.equal(feature.getStatus().signatureTolerance, 3);
+
+    feature.setSignatureTolerance(99); // 越界钳制到 10
+    assert.equal(feature.getStatus().signatureTolerance, 10);
+
+    const capability = feature.getCapabilities().find((cap) => cap.name === 'configure');
+    await capability.execute({ signatureTolerance: 0 });
+    assert.equal(feature.getStatus().signatureTolerance, 0);
+    const rejected = await feature.signTool.execute({ signature: LONG_TYPO_SYNONYM });
+    assert.equal(rejected.ok, false);
+
+    const viaConfig = new StylizedOutput({ workspaceDir });
+    await viaConfig.onInitiate({ logger: undefined, featureConfig: { signatureTolerance: 0 }, config: {} });
+    assert.equal(viaConfig.getStatus().signatureTolerance, 0);
   });
 });
 
@@ -438,16 +574,22 @@ describe('StylizedOutput 内置风格与默认回填', () => {
     assert.equal(feature.getStatus().activeStyle, 'test-style');
   });
 
-  it('manifest：单一 section，defaultStyle 为下拉且选项来自内置风格', () => {
+  it('manifest：单一 section，defaultStyle 为下拉且选项来自内置风格，signatureTolerance 进设置', () => {
     const manifest = new StylizedOutput({ workspaceDir }).getFeatureManifest();
     const sections = manifest.settings.sections;
     const prop = manifest.settings.properties.defaultStyle;
 
     assert.equal(sections.length, 1);
-    assert.deepEqual(sections[0].properties, ['defaultStyle', 'maxSignatureBlocks']);
+    assert.deepEqual(sections[0].properties, ['defaultStyle', 'maxSignatureBlocks', 'signatureTolerance']);
     assert.equal(prop.type, 'select');
     const values = prop.options.map((option) => option.value);
     assert.ok(values.includes(''), '应含「不启用默认」空选项');
     assert.ok(values.includes('清晰表达'), '内置风格应出现在选项中');
+
+    const tolerance = manifest.settings.properties.signatureTolerance;
+    assert.equal(tolerance.type, 'number');
+    assert.equal(tolerance.default, 5);
+    assert.equal(tolerance.min, 0);
+    assert.equal(tolerance.max, 10);
   });
 });

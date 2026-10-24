@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "stylized-output",
   "name": "stylized-output",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "stylized-output feature for AgentDev",
   "tags": [
     "agentdev",

@@ -22,7 +22,12 @@
  * 行为：
  *   1. 启用风格时，风格全文以 system 消息注入上下文（风格或其文件内容变化时注入一次）。
  *   2. Feature 暴露 sign_output_style 签名工具：模型逐字默写当前风格的确认签名，
- *      规范化空白后全等比对；匹配才记为“本轮已签名”。
+ *      判定分两层：先规范化空白后全等比对；不等时计算字符级编辑距离，在笔误容忍
+ *      预算内（signatureTolerance% × 签名长度，基数至少 2）的个别笔误静默放行——
+ *      返回与精确通过完全一致，仅记警告日志供审计，模型可见文案（工具描述 / 注入
+ *      说明 / 门禁提示）不宣传容错，避免宽恕层从安全网变成常态通道；超预算的
+ *      漏句 / 意译 / 大面积改写照旧拒绝，错误信息带差异量级与容忍上限。
+ *      通过才记为“本轮已签名”。
  *   3. StepFinish guard 门禁：风格启用期间，模型的自然结束（无工具调用的收尾步）
  *      必须已经签名通过；否则拦截本次结束并注入复核补签提醒。拦截后补签成功
  *      即正常结束当前回复，不再额外调用模型收尾；普通签名不自动结束。
@@ -62,6 +67,10 @@ const STYLE_FILE_EXT = '.md';
 /** feature 内嵌风格目录名（位于 dist/ 旁边，构建时由 copy-assets 从 src/styles/ 镜像） */
 const BUILTIN_STYLE_DIR_NAME = 'styles';
 const DEFAULT_MAX_SIGNATURE_BLOCKS = 5;
+/** 笔误容忍基数：签名再短也至少容忍的编辑距离（覆盖近义单字替换 / 漏字 / 标点全半角） */
+const SIGNATURE_TOLERANCE_BASE = 2;
+/** 默认笔误容忍比例（%，0–10；0 = 严格逐字比对） */
+const DEFAULT_SIGNATURE_TOLERANCE = 5;
 
 export interface OutputStyleMeta {
   /** 风格名（frontmatter name 字段，选择文件引用它） */
@@ -85,12 +94,16 @@ export interface StylizedOutputStatus {
   /** 本轮回复因未签名被拦截的连续次数 */
   blockedCount: number;
   maxSignatureBlocks: number;
+  /** 签名笔误容忍比例（%，0–10；0 = 严格逐字比对） */
+  signatureTolerance: number;
   lastAction: 'idle' | 'blocked' | 'signed' | 'released';
 }
 
 export interface StylizedOutputOptions {
   /** 同一轮回复的最大连续签名拦截次数，1–10，缺省 5 */
   maxSignatureBlocks?: number;
+  /** 签名笔误容忍比例（%，0–10）：允许的编辑距离 ≈ 签名长度 × 该比例（基数 2）；0 = 严格逐字比对，缺省 5 */
+  signatureTolerance?: number;
   /** 会话工作区（缺省 process.cwd()；显式传入时优先于 onInitiate 的 ctx.config） */
   workspaceDir?: string;
   /** 默认风格名：未选择且未被显式清除时扫描后自动启用；配置的名称不在清单中时保持未选择 */
@@ -102,13 +115,44 @@ function clampMax(value: unknown): number {
   return Math.max(1, Math.min(10, Math.floor(value)));
 }
 
+function clampTolerance(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_SIGNATURE_TOLERANCE;
+  return Math.max(0, Math.min(10, Math.floor(value)));
+}
+
 function cleanText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-/** 签名规范化：trim + 内部连续空白折叠为单空格；不做大小写与标点宽恕（严格比对） */
+/** 签名规范化：trim + 内部连续空白折叠为单空格。大小写与标点宽恕（全半角等价表）
+ *  不做：这类差异按编辑距离 1–2 计入笔误预算，由 signTool 的宽恕层统一覆盖。 */
 function normalizeSignature(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
+}
+
+/** 字符级 Levenshtein 编辑距离（codepoint 展开，规避代理对；签名长度内性能无感） */
+function editDistance(a: string, b: string): number {
+  const left = Array.from(a);
+  const right = Array.from(b);
+  if (left.length === 0) return right.length;
+  if (right.length === 0) return left.length;
+  let prev = Array.from({ length: right.length + 1 }, (_, j) => j);
+  let curr = new Array<number>(right.length + 1);
+  for (let i = 1; i <= left.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= right.length; j++) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[right.length];
+}
+
+/** 笔误容忍预算：随签名长度按比例伸缩，短签名保底基数；漏句 / 意译 / 改写的
+ *  编辑距离超出预算一个数量级，仍被拒绝。 */
+function toleranceBudget(signatureLength: number, tolerancePercent: number): number {
+  return Math.max(SIGNATURE_TOLERANCE_BASE, Math.floor((signatureLength * tolerancePercent) / 100));
 }
 
 function unquote(value: string): string {
@@ -259,6 +303,7 @@ export class StylizedOutput implements AgentFeature {
   /** 已注入风格的内容指纹键：name@hash，风格或文件内容变化时重新注入 */
   private injectedStyleKey: string | null = null;
   private maxSignatureBlocks = DEFAULT_MAX_SIGNATURE_BLOCKS;
+  private signatureTolerance = DEFAULT_SIGNATURE_TOLERANCE;
   private lastAction: StylizedOutputStatus['lastAction'] = 'idle';
   private logger?: FeatureInitContext['logger'];
   private _packageInfo: PackageInfo | null = null;
@@ -267,6 +312,7 @@ export class StylizedOutput implements AgentFeature {
 
   constructor(options: StylizedOutputOptions = {}) {
     this.maxSignatureBlocks = clampMax(options.maxSignatureBlocks);
+    this.signatureTolerance = clampTolerance(options.signatureTolerance);
     this.defaultStyleName = cleanText(options.defaultStyle) || null;
     // 内嵌风格目录随 dist 产物定位（源码装配与 tgz 安装下 dist/styles/ 结构一致）
     this.builtinStylesDir = join(dirname(this.source), BUILTIN_STYLE_DIR_NAME);
@@ -310,8 +356,17 @@ export class StylizedOutput implements AgentFeature {
             max: 10,
             step: 1,
           },
+          signatureTolerance: {
+            type: 'number',
+            title: '签名笔误容忍',
+            description: '签名比对允许的编辑距离占签名长度的百分比（0–10）。0 为严格逐字比对；默认 5：个别错字、近义单字替换、标点全半角等笔误静默放行（仅记警告日志），漏句与大面积改写仍拒绝。',
+            default: DEFAULT_SIGNATURE_TOLERANCE,
+            min: 0,
+            max: 10,
+            step: 1,
+          },
         },
-        sections: [{ id: 'output-style', title: '输出风格', properties: ['defaultStyle', 'maxSignatureBlocks'] }],
+        sections: [{ id: 'output-style', title: '输出风格', properties: ['defaultStyle', 'maxSignatureBlocks', 'signatureTolerance'] }],
       },
     };
   }
@@ -323,6 +378,9 @@ export class StylizedOutput implements AgentFeature {
       : {};
     if (featureConfig.maxSignatureBlocks !== undefined) {
       this.maxSignatureBlocks = clampMax(featureConfig.maxSignatureBlocks);
+    }
+    if (featureConfig.signatureTolerance !== undefined) {
+      this.signatureTolerance = clampTolerance(featureConfig.signatureTolerance);
     }
     // 宿主 manifest 编辑值优先（与 maxSignatureBlocks 同通道）；空串视为显式撤销默认
     if (featureConfig.defaultStyle !== undefined) {
@@ -370,6 +428,14 @@ export class StylizedOutput implements AgentFeature {
             max: 10,
             step: 1,
           },
+          signatureTolerance: {
+            type: 'number',
+            title: '签名笔误容忍',
+            description: '签名比对允许的编辑距离占签名长度的百分比（0–10）。0 为严格逐字比对；默认 5：个别笔误静默放行，漏句与改写仍拒绝。',
+            min: 0,
+            max: 10,
+            step: 1,
+          },
         },
         entryPoints: ['slash', 'feature'],
         readCurrentValues: () => {
@@ -387,6 +453,9 @@ export class StylizedOutput implements AgentFeature {
           }
           if (typeof input.maxSignatureBlocks === 'number') {
             this.setMaxSignatureBlocks(input.maxSignatureBlocks);
+          }
+          if (typeof input.signatureTolerance === 'number') {
+            this.setSignatureTolerance(input.signatureTolerance);
           }
           return Promise.resolve(this.getStatus());
         },
@@ -423,17 +492,40 @@ export class StylizedOutput implements AgentFeature {
           error: 'signature 参数为空。请在上下文中已注入的风格说明里找到 signature 字段原文并逐字默写。',
         };
       }
-      if (provided !== normalizeSignature(active.signature)) {
-        this.logger?.info('输出风格签名不匹配', { style: active.name });
-        return {
-          ok: false,
-          signed: false,
-          error: '确认签名与当前风格不匹配。请在上下文中已注入的风格说明里核对 signature 字段原文，逐字默写后重试；不要编造或改写。',
-        };
+      const expected = normalizeSignature(active.signature);
+      if (provided !== expected) {
+        const distance = editDistance(provided, expected);
+        const budget = toleranceBudget(expected.length, this.signatureTolerance);
+        if (this.signatureTolerance > 0 && distance <= budget) {
+          // 笔误宽恕：静默放行，返回与精确通过完全一致；仅日志留痕供审计。
+          // 模型可见文案不宣传容错（工具描述 / 注入说明 / 门禁提示仍要求逐字默写），
+          // 避免宽恕层从安全网变成常态通道。
+          this.logger?.warn('输出风格签名经笔误宽恕通过', {
+            style: active.name,
+            distance,
+            budget,
+            tolerancePercent: this.signatureTolerance,
+          });
+        } else {
+          this.logger?.info('输出风格签名不匹配', {
+            style: active.name,
+            distance,
+            budget,
+            tolerancePercent: this.signatureTolerance,
+          });
+          return {
+            ok: false,
+            signed: false,
+            error: this.signatureTolerance > 0
+              ? `确认签名与当前风格不匹配：与原文约有 ${distance} 处字符差异，超出笔误容忍上限 ${budget}。差距只有两三处属个别笔误，请对照上下文中已注入的风格说明再逐字默写一次；差距明显说明未对照原文，请调用 show_output_style 核对 signature 字段原文。不要编造或改写。`
+              : `确认签名与当前风格不匹配：与原文约有 ${distance} 处字符差异（笔误容忍已关闭，须逐字一致）。请在上下文中已注入的风格说明里核对 signature 字段原文，逐字默写后重试；不要编造或改写。`,
+          };
+        }
+      } else {
+        this.logger?.info('输出风格签名验证通过', { style: active.name });
       }
       this.signedForReply = true;
       this.lastAction = 'signed';
-      this.logger?.info('输出风格签名验证通过', { style: active.name });
       return {
         ok: true,
         signed: true,
@@ -688,6 +780,7 @@ export class StylizedOutput implements AgentFeature {
       signedForReply: this.signedForReply,
       blockedCount: this.blockedCount,
       maxSignatureBlocks: this.maxSignatureBlocks,
+      signatureTolerance: this.signatureTolerance,
       lastAction: this.lastAction,
     };
   }
@@ -695,6 +788,12 @@ export class StylizedOutput implements AgentFeature {
   /** 调整签名拦截上限（1–10 钳制） */
   setMaxSignatureBlocks(value: number): StylizedOutputStatus {
     this.maxSignatureBlocks = clampMax(value);
+    return this.getStatus();
+  }
+
+  /** 调整签名笔误容忍比例（0–10 钳制；0 = 严格逐字比对，回退旧行为） */
+  setSignatureTolerance(value: number): StylizedOutputStatus {
+    this.signatureTolerance = clampTolerance(value);
     return this.getStatus();
   }
 
