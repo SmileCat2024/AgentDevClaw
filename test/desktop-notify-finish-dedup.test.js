@@ -62,6 +62,45 @@ const FINISH_FRAME = {
 };
 
 describe('finish notification dedup (frontend sandbox)', () => {
+  it('成功终态通知仍显示已完成', async () => {
+    const notifications = [];
+    const ctx = loadNotifyModule({ notifications });
+    ctx.run(`_presentAppNotification(${JSON.stringify({ ...FINISH_FRAME, outcomeStatus: 'completed' })})`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0].title, /已完成|finished/);
+  });
+
+  it('取消终态通知明确显示已取消', async () => {
+    const notifications = [];
+    const ctx = loadNotifyModule({ notifications });
+    ctx.run(`_presentAppNotification(${JSON.stringify({ ...FINISH_FRAME, outcomeStatus: 'cancelled' })})`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0].title, /已取消|cancelled/);
+    assert.doesNotMatch(notifications[0].title, /已完成|finished/);
+  });
+
+  it('失败终态通知显示失败而不是已完成，并暴露结构化错误信息', async () => {
+    const notifications = [];
+    const ctx = loadNotifyModule({ notifications });
+    const frame = {
+      ...FINISH_FRAME,
+      outcomeStatus: 'failed',
+      outcomeReason: 'error',
+      errorMessage: 'provider disconnected',
+    };
+    ctx.run(`_presentAppNotification(${JSON.stringify(frame)})`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0].title, /执行失败|failed/);
+    assert.doesNotMatch(notifications[0].title, /已完成|finished/);
+    assert.match(notifications[0].options.body, /provider disconnected/);
+  });
+
   it('同一帧的并发双投递只弹一条通知（回归锁：Tauri 下不再弹两遍）', async () => {
     const notifications = [];
     const ctx = loadNotifyModule({ notifications });

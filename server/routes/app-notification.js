@@ -100,6 +100,9 @@ export async function deliverAppNotification({
   threadId = null,
   requestId = null,
   finishTs = null,
+  outcomeStatus = null,
+  outcomeReason = null,
+  errorMessage = null,
   dedupeKey = null,
   runtimeAgentId = null,
   requireAgent = null,
@@ -126,6 +129,9 @@ export async function deliverAppNotification({
     ...(threadId ? { threadId: String(threadId) } : {}),
     ...(requestId ? { requestId: String(requestId) } : {}),
     ...(finishTs ? { finishTs } : {}),
+    ...(outcomeStatus ? { outcomeStatus: String(outcomeStatus) } : {}),
+    ...(outcomeReason ? { outcomeReason: String(outcomeReason) } : {}),
+    ...(errorMessage ? { errorMessage: String(errorMessage).slice(0, 500) } : {}),
   });
   return true;
 }
@@ -171,6 +177,22 @@ export function isSuspendedFinish(notifData) {
   return suspended(notifData?.runtime?.lastOutcome);
 }
 
+/** 只透传运行时明确记录的 CallOutcome，绝不从断连或 active=false 猜结果。 */
+export function extractCallOutcome(notifData) {
+  const action = notificationAction(notifData);
+  const eventOutcome = String(action?.type || '').trim() === 'call.finish'
+    && action.data && typeof action.data === 'object' ? action.data : null;
+  const outcome = eventOutcome || notifData?.runtime?.lastOutcome;
+  if (!outcome || typeof outcome !== 'object') return null;
+  const status = String(outcome.status || '').trim();
+  if (!['completed', 'failed', 'cancelled', 'continued'].includes(status)) return null;
+  return {
+    outcomeStatus: status,
+    ...(outcome.reason ? { outcomeReason: String(outcome.reason) } : {}),
+    ...(outcome.error?.message ? { errorMessage: String(outcome.error.message) } : {}),
+  };
+}
+
 /** input-requests 快照中的 choice lease 谓词（与 sse-events bell 过滤同源）。 */
 function isChoiceLease(lease) {
   return Boolean(lease && lease.mode === 'choices'
@@ -198,13 +220,15 @@ export async function observeCallStatusSnapshot(kind, agentId, snapshot, opts = 
     if (!targetAgentId) return;
     if (kind === 'notification') {
       const finishTs = extractFinishTimestamp(snapshot);
-      if (!finishTs) return; // 非完成态快照（call.start / calling 中）：无完成事实
+      if (!finishTs) return; // 非结束态快照（call.start / calling 中）：无结束事实
       if (isSuspendedFinish(snapshot)) return; // 挂起等待唤醒，不是完成
+      const outcome = extractCallOutcome(snapshot);
       await deliverAppNotification({
         agentId: targetAgentId,
         runtimeAgentId: agentId, // 会话粒度定位：多会话工作空间下与 agentId 不同
         type: 'finish',
         finishTs,
+        ...(outcome || {}),
         dedupeKey: `${targetAgentId}:${finishTs}`,
         ...opts,
       });

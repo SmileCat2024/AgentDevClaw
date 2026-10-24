@@ -29,7 +29,7 @@
 - 往 `PERMISSION_ITEMS` 枚举加布尔项：`notifications.finish`（完成通报）、`notifications.reminder`（提醒类）、`notifications.input`（输入请求）。加项不改模型（ADR-0027 裁决的升级路径）。
 - 三层结构：作者声明（metadata.json 声明使用的项 + 建议默认值）→ 用户覆盖（workspace-settings resourcePolicy，按 agentId 键控）→ 内核强制（投递闸）。
 - 首个作者默认差异：编程小助手 `finish=true`（现状保持）；coder `finish=false`（无人值守任务不应默认每轮骚扰）。coder 默认值相对现状（无差别全弹）是显式收紧，须在发布说明告知，用户可改回。
-- 完成通报的"完成"语义 = call.finish（每轮结束），与线程归档等看板域事实无关，通知不重复解释生命周期。
+- 运行结束通报的触发事实 = call.finish（每轮结束），与线程归档等看板域事实无关；通报结果按 CallOutcome 区分成功、失败、取消与移交，不把“有结束事件”一概表述为成功完成。
 
 ### 3. editingSurface：应用承接编辑面（ADR-0027 挂账概念的落地）
 

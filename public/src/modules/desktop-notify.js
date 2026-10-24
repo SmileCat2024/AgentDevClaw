@@ -198,6 +198,13 @@ async function _presentAgentFinishedNotification(payload) {
   const agentName = (agent?.name || agent?.id || normId).trim();
   const sessionTitle = (agent?.active_workspace_session_title || '').trim();
   const isZh = currentLanguage === 'zh';
+  const outcomeStatus = String(payload?.outcomeStatus || '').trim();
+  const titleSuffix = {
+    completed: isZh ? '已完成' : 'finished',
+    failed: isZh ? '执行失败' : 'failed',
+    cancelled: isZh ? '已取消' : 'cancelled',
+    continued: isZh ? '已移交' : 'handed off',
+  }[outcomeStatus] || (isZh ? '运行已结束' : 'run ended');
 
   // 尝试获取最后一条 assistant 回复
   let replyPreview = '';
@@ -218,16 +225,20 @@ async function _presentAgentFinishedNotification(payload) {
   // 构建通知正文
   const bodyParts = [];
   if (sessionTitle) bodyParts.push(sessionTitle);
-  if (replyPreview) bodyParts.push(replyPreview);
+  if (outcomeStatus === 'completed' && replyPreview) bodyParts.push(replyPreview);
+  const errorMessage = String(payload?.errorMessage || '').trim();
+  if (errorMessage) bodyParts.push(errorMessage.slice(0, 180));
   const body = bodyParts.length > 0
     ? bodyParts.join('\n')
-    : (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.');
+    : (outcomeStatus === 'completed'
+      ? (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.')
+      : (isZh ? 'Agent 运行已结束，点击查看' : 'Agent run ended. Click to view.'));
 
   // 持久性按页面焦点判定：失焦（用户不在）常驻挂起；前台（看着别的
   // 会话）轻提示，自动收进通知中心。navPayload 供原生 toast 点击后
   // 定位会话（runtimeId 切会话）。
   _showPersistentNotification(
-    isZh ? `${agentName} 已完成` : `${agentName} finished`,
+    isZh ? `${agentName} ${titleSuffix}` : `${agentName} ${titleSuffix}`,
     { body, tag: 'claw-agent-finished-' + normId, requireInteraction: _shouldPersistNotification() },
     () => {
       window.focus();

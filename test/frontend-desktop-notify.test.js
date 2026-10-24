@@ -17,6 +17,9 @@ function createNotifySandbox() {
   let now = 1_000_000; // 可控时钟：30s 窗口用 tick 推进，不用真实 sleep
   const ctx = createFrontendSandbox({
     Notification: FakeNotification,
+    Worker: class { constructor() {} },
+    Blob: class { constructor() {} },
+    URL: { createObjectURL: () => 'blob:fake' },
     normalizeAgentIdentity: (id) => String(id || '').trim(),
     Date: { now: () => now },
   });

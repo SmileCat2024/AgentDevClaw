@@ -33,6 +33,7 @@ const {
   deliverAppNotification,
   observeCallStatusSnapshot,
   extractFinishTimestamp,
+  extractCallOutcome,
   isSuspendedFinish,
   setupAppNotificationRoutes,
 } = await import('../server/routes/app-notification.js');
@@ -308,6 +309,23 @@ describe('observeCallStatusSnapshot', () => {
     const frame = await waitAppNotificationFrame((f) => f.data.agentId === agentId && f.data.type === 'finish');
     assert.ok(frame);
     assert.equal(frame.data.finishTs, 1710000000777);
+    assert.equal(frame.data.outcomeStatus, 'completed');
+  });
+
+  it('publishes failed outcome and error details without changing the notification type', async () => {
+    const agentId = 'observe-failed';
+    const snapshot = {
+      event: {
+        type: 'call.finish', timestamp: 1710000000780,
+        data: { status: 'failed', reason: 'error', error: { message: 'provider disconnected' } },
+      },
+    };
+    await observeCallStatusSnapshot('notification', agentId, snapshot, { requireAgent, settingsPath: settingsPath() });
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === agentId && f.data.type === 'finish');
+    assert.ok(frame);
+    assert.equal(frame.data.outcomeStatus, 'failed');
+    assert.equal(frame.data.outcomeReason, 'error');
+    assert.equal(frame.data.errorMessage, 'provider disconnected');
   });
 
   it('normalizes runtime-form agentId via resolveAgentId before permission checks', async () => {
@@ -372,6 +390,30 @@ describe('observeCallStatusSnapshot', () => {
       state: null,
       event: { type: 'call.finish', timestamp: 1710000000 },
     }), 1710000000000, 'seconds are normalized to ms');
+  });
+
+  it('preserves explicit terminal outcome for the notification consumer', () => {
+    assert.deepEqual(extractCallOutcome(finishSnapshot(1710000000123)), {
+      outcomeStatus: 'completed',
+    });
+    assert.deepEqual(extractCallOutcome({
+      event: { type: 'call.finish', timestamp: 1710000000124, data: {
+        status: 'failed', reason: 'error', error: { message: 'provider disconnected' },
+      } },
+    }), {
+      outcomeStatus: 'failed',
+      outcomeReason: 'error',
+      errorMessage: 'provider disconnected',
+    });
+    assert.deepEqual(extractCallOutcome({
+      runtime: { lastOutcome: { status: 'cancelled', reason: 'cancelled' } },
+    }), {
+      outcomeStatus: 'cancelled',
+      outcomeReason: 'cancelled',
+    });
+    assert.equal(extractCallOutcome({
+      runtime: { callActive: false, stage: 'failed' },
+    }), null, '运行结束状态不包含 CallOutcome 时不得推测结果');
   });
 
   it('flags suspended outcomes', () => {
