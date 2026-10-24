@@ -480,9 +480,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const _csPolicy = isTrimAll ? { preservedTurns: [], preservedMsgRanges: [] } : null;
     const _csIsZh2 = currentLanguage === 'zh';
     if (!isTrimAll) {
-      const confirmMsg = action.archiveOriginal
-        ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？\n\n原会话将被自动归档。' : 'Summarize session history and create a new session?\n\nThe original session will be archived.')
-        : t('workspace_compact_summary_confirm');
+      // 线程会话（ADR-0032）：摘要是同一对话内的上下文接力——不说「创建新
+      // 会话」，历史自动存档。索引未就绪时保守回落 Session 语义文案。
+      const _csOnThread = typeof window.isThreadHostAgentId === 'function'
+        && window.isThreadHostAgentId(_csAgent.id, action.sessionId);
+      const confirmMsg = _csOnThread
+        ? (_csIsZh2 ? '确定要总结当前对话历史并继续本对话？\n\n总结前的记录自动存档。' : 'Summarize this conversation and continue here?\n\nPre-summary history is archived automatically.')
+        : (action.archiveOriginal
+          ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？\n\n原会话将被自动归档。' : 'Summarize session history and create a new session?\n\nThe original session will be archived.')
+          : t('workspace_compact_summary_confirm'));
       if (!window.confirm(confirmMsg)) {
         return;
       }
@@ -567,6 +573,27 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         title: result?.session?.title || _csOperation?.title || '',
         serverRevision: result?.revision ?? null,
       });
+      // 线程接续（ADR-0032）：响应返回时 head 已推进，视图不导航切换——
+      // refreshThreads 事实对账经 thread-store 唯一重绑原地换头（幂等）。
+      if (result?.threadSuccession?.applied === true) {
+        finishSidebarOperation(_csOperation?.operationId, 'settled');
+        clearSessionLoading(_csAgent.id);
+        ClawToast.update(_csToastId, {
+          status: 'success',
+          title: _csDoneTitle,
+        });
+        if (action.archiveOriginal && !archiveSucceeded) {
+          ClawToast.update(_csToastId, {
+            status: 'error',
+            title: _csIsZh ? '精简完成，但原会话归档失败' : 'Trim completed, but archiving the original failed',
+            description: result?.archive?.error || '',
+          });
+        }
+        await window.refreshThreads(true).catch(() => {});
+        loadAgents().catch(e => console.warn(e));
+        _csArchiveRollback = null;
+        return;
+      }
       // The response is authoritative for the committed session. Runtime
       // readiness may arrive after this response; never block or downgrade the
       // completed summary merely because it is not present yet.

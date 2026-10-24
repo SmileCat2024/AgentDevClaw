@@ -690,54 +690,64 @@ window.submitTrimPage = async () => {
       title: result?.session?.title || trimOperation?.title || '',
       serverRevision: result?.revision ?? null,
     });
-    // The server has already committed the trimmed session and observed startup.
-    // Delayed Viewer registration must not block or downgrade this operation.
-    // 远程目标：响应中的 agent 是远程端 runtime 形态（裸 id），不进入本地
-    // allAgents——切换走远程目录轮询（见下方 isRemoteTrim 分支）。
-    const readyAgent = (isRemoteTrim ? null : result?.agent) || null;
-    const targetStopped = false;
-    const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
-    const nextRuntimeId = connectedTarget ? (getRuntimeId(connectedTarget) || null) : null;
-    if (archiveAfter && archiveSucceeded) {
-      // The server has committed both the successor and source archive. This is
-      // the replacement operation's terminal success boundary; source runtime
-      // disposal is deliberately not part of this session mutation.
+    // 线程接续（ADR-0032）：同步模式下响应返回时服务端已推进 head、
+    // successor READY。视图不做导航切换——保持原会话身份，refreshThreads
+    // 事实对账经 thread-store 唯一重绑实现原地换头（SSE head-advanced 已
+    // 处理过则幂等），滚动位置与输入草稿由重绑链路保留。
+    if (result?.threadSuccession?.applied === true) {
       finishSidebarOperation(trimOperation?.operationId, 'settled');
-    } else if (nextRuntimeId) {
-      updateSidebarOperation(trimOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
-    } else if (targetStopped) {
-      updateSidebarOperation(trimOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
+      clearSessionLoading(agentId);
+      await window.refreshThreads(true).catch(() => {});
     } else {
-      finishSidebarOperation(trimOperation?.operationId, 'settled');
-    }
-    if (_navGuard !== _navigationGuardEpoch) {
-      if (!archiveAfter && nextRuntimeId) finishSidebarOperation(trimOperation?.operationId, 'settled');
-      archiveRollback = null;
-      return;
-    }
-    if (isRemoteTrim) {
-      // 远程精简（ADR-0011/0012）：新会话与 runtime 都在远程端，等待远程目录
-      // 投影带出新 runtime 后按命名空间引用切换（与 R2-01 activate 同链路）。
-      const remoteRuntimeRef = typeof window.RemoteConnections?.waitForRuntimeForSession === 'function'
-        ? await window.RemoteConnections.waitForRuntimeForSession(targetSessionId, 50)
-        : null;
-      if (remoteRuntimeRef && _navGuard === _navigationGuardEpoch) {
+      // The server has already committed the trimmed session and observed startup.
+      // Delayed Viewer registration must not block or downgrade this operation.
+      // 远程目标：响应中的 agent 是远程端 runtime 形态（裸 id），不进入本地
+      // allAgents——切换走远程目录轮询（见下方 isRemoteTrim 分支）。
+      const readyAgent = (isRemoteTrim ? null : result?.agent) || null;
+      const targetStopped = false;
+      const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
+      const nextRuntimeId = connectedTarget ? (getRuntimeId(connectedTarget) || null) : null;
+      if (archiveAfter && archiveSucceeded) {
+        // The server has committed both the successor and source archive. This is
+        // the replacement operation's terminal success boundary; source runtime
+        // disposal is deliberately not part of this session mutation.
+        finishSidebarOperation(trimOperation?.operationId, 'settled');
+      } else if (nextRuntimeId) {
+        updateSidebarOperation(trimOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
+      } else if (targetStopped) {
+        updateSidebarOperation(trimOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
+      } else {
+        finishSidebarOperation(trimOperation?.operationId, 'settled');
+      }
+      if (_navGuard !== _navigationGuardEpoch) {
+        if (!archiveAfter && nextRuntimeId) finishSidebarOperation(trimOperation?.operationId, 'settled');
+        archiveRollback = null;
+        return;
+      }
+      if (isRemoteTrim) {
+        // 远程精简（ADR-0011/0012）：新会话与 runtime 都在远程端，等待远程目录
+        // 投影带出新 runtime 后按命名空间引用切换（与 R2-01 activate 同链路）。
+        const remoteRuntimeRef = typeof window.RemoteConnections?.waitForRuntimeForSession === 'function'
+          ? await window.RemoteConnections.waitForRuntimeForSession(targetSessionId, 50)
+          : null;
+        if (remoteRuntimeRef && _navGuard === _navigationGuardEpoch) {
+          setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+          beginChatLoadingSession();
+          await requestSwitch(remoteRuntimeRef, 'trim');
+          if (!archiveAfter) finishSidebarOperation(trimOperation?.operationId, 'settled');
+        } else {
+          lastRenderedWorkspaceHtml = '';
+          renderCurrentMainView();
+        }
+      } else if (nextRuntimeId) {
         setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
         beginChatLoadingSession();
-        await requestSwitch(remoteRuntimeRef, 'trim');
+        await requestSwitch(nextRuntimeId, 'trim');
         if (!archiveAfter) finishSidebarOperation(trimOperation?.operationId, 'settled');
       } else {
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
       }
-    } else if (nextRuntimeId) {
-      setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
-      beginChatLoadingSession();
-      await requestSwitch(nextRuntimeId, 'trim');
-      if (!archiveAfter) finishSidebarOperation(trimOperation?.operationId, 'settled');
-    } else {
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
     }
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新会话已创建，但原会话归档失败：' : 'The new session was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));

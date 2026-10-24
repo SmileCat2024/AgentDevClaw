@@ -153,9 +153,17 @@ async function _handleTrim() {
   const statsSuffix = trimCount > 0
     ? (isZh ? `共 ${trimCount} 轮 · 释放约 ${freedPctText} 上下文` : `${trimCount} rounds · frees ~${freedPctText} context`)
     : '';
-  const confirmMsg = isZh
-    ? `将精简当前会话全部轮次并创建新会话继续？${statsSuffix ? '\n' + statsSuffix : ''}\n（不生成摘要；需要逐轮选择请用会话右键“仅精简”）`
-    : `Trim all rounds of this session and continue in a new one?${statsSuffix ? '\n' + statsSuffix : ''}\n(No summary; use right-click "Trim" for per-round selection)`;
+  // 线程会话（ADR-0032）：精简是同一对话内的上下文接力——不说「创建新
+  // 会话」，历史自动存档。索引未就绪时保守回落 Session 语义文案。
+  const _trimOnThread = typeof window.isThreadHostAgentId === 'function'
+    && window.isThreadHostAgentId(ctx.agentId, ctx.sessionId);
+  const confirmMsg = _trimOnThread
+    ? (isZh
+      ? `将精简当前对话全部轮次并继续本对话？${statsSuffix ? '\n' + statsSuffix : ''}\n（精简前的记录自动存档；需要逐轮选择请用会话右键“仅精简”）`
+      : `Trim all rounds of this conversation and continue here?${statsSuffix ? '\n' + statsSuffix : ''}\n(Pre-trim history is archived automatically; use right-click "Trim" for per-round selection)`)
+    : (isZh
+      ? `将精简当前会话全部轮次并创建新会话继续？${statsSuffix ? '\n' + statsSuffix : ''}\n（不生成摘要；需要逐轮选择请用会话右键“仅精简”）`
+      : `Trim all rounds of this session and continue in a new one?${statsSuffix ? '\n' + statsSuffix : ''}\n(No summary; use right-click "Trim" for per-round selection)`);
   if (!window.confirm(confirmMsg)) return;
 
   runWorkspaceAction({

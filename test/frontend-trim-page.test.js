@@ -35,7 +35,7 @@ function makeElement() {
   };
 }
 
-function createTrimPage(fetchImpl, coreOverrides = {}) {
+function createTrimPage(fetchImpl, coreOverrides = {}, extraGlobals = {}) {
   const elements = new Map();
   const document = {
     getElementById(id) {
@@ -81,6 +81,7 @@ function createTrimPage(fetchImpl, coreOverrides = {}) {
     closeCompactMenu() {},
     currentLanguage: 'zh',
     fmtPct: (frac) => (frac * 100).toFixed(1) + '%', // app-core 全局的沙箱替身
+    ...extraGlobals,
   });
   ctx.loadSource('public/src/modules/trim-page.js');
   return { ctx, elements };
@@ -384,5 +385,76 @@ describe('trim page stale response guard', () => {
     const html = elements.get('trim-page-list').innerHTML;
     assert.doesNotMatch(html, /A-round/, '关闭后迟到的响应不渲染');
     assert.doesNotMatch(html, /加载失败/, '过期响应的报错不落到页面上');
+  });
+});
+
+describe('trim page submit: thread succession vs session navigation', () => {
+  // ADR-0032：线程会话的手动精简是同一对话内的上下文接力——响应
+  // threadSuccession.applied=true 时视图不导航，refreshThreads 事实对账经
+  // thread-store 唯一重绑原地换头；非线程会话（存量未迁移）维持
+  // requestSwitch 跳转（Session 语义，行为不变）。
+  const submitDeps = (compactResult) => {
+    const calls = { requestSwitch: 0, beginChatLoading: 0, refreshThreads: 0, clearSessionLoading: 0, settled: 0 };
+    return { calls, overrides: {
+      createCompactedResumeSession: async () => compactResult,
+      markSessionLoading: () => {},
+      clearSessionLoading: () => { calls.clearSessionLoading += 1; },
+      bumpNavigationGuard: () => {},
+      _navigationGuardEpoch: 1,
+      beginSidebarOperation: () => ({ operationId: 'op-1', title: '' }),
+      getSidebarOperation: () => ({ operationId: 'op-1', title: '' }),
+      updateSidebarOperation: () => {},
+      finishSidebarOperation: (_id, status) => { if (status === 'settled') calls.settled += 1; },
+      setPreferredUnitMode: () => {},
+      beginChatLoadingSession: () => { calls.beginChatLoading += 1; },
+      requestSwitch: async () => { calls.requestSwitch += 1; },
+      upsertConnectedAgent: (agent) => agent,
+      getRuntimeId: (agent) => agent?.id || '',
+      renderCurrentMainView: () => {},
+      getCurrentAgentRecord: () => null,
+      loadAgents: async () => {},
+      allAgents: [],
+      getWorkspaceSessionById: () => null,
+      getPathLeaf: () => '',
+      currentRuntimeAgentId: '',
+    } };
+  };
+
+  const openAndSubmit = async (ctx) => {
+    await ctx.window.openTrimPage('programming-helper', 'session-A');
+    await ctx.window.submitTrimPage();
+  };
+
+  it('thread succession: stays on the view, reconciles via refreshThreads, never navigates', async () => {
+    const { calls, overrides } = submitDeps({
+      session: { id: 'session-B', title: 'Trimmed' },
+      agent: { id: 'rt-B' },
+      threadSuccession: { applied: true },
+      revision: 3,
+    });
+    const { ctx } = createTrimPage(null, {}, overrides);
+    ctx.window.refreshThreads = async () => { calls.refreshThreads += 1; return { ok: true }; };
+    await openAndSubmit(ctx);
+
+    assert.equal(calls.requestSwitch, 0, 'thread succession must not navigate');
+    assert.equal(calls.beginChatLoading, 0, 'no chat-loading navigation shell');
+    assert.ok(calls.refreshThreads >= 1, 'refreshThreads reconciliation must run');
+    assert.ok(calls.clearSessionLoading >= 1, 'session loading flag must be cleared');
+    assert.ok(calls.settled >= 1, 'sidebar operation settles');
+  });
+
+  it('non-thread session: keeps the requestSwitch navigation (unchanged legacy path)', async () => {
+    const { calls, overrides } = submitDeps({
+      session: { id: 'session-B', title: 'Trimmed' },
+      agent: { id: 'rt-B' },
+      threadSuccession: { applied: false, reason: 'no_thread_for_session' },
+      revision: 3,
+    });
+    const { ctx } = createTrimPage(null, {}, overrides);
+    ctx.window.refreshThreads = async () => { calls.refreshThreads += 1; return { ok: true }; };
+    await openAndSubmit(ctx);
+
+    assert.equal(calls.requestSwitch, 1, 'legacy sessions keep the navigation switch');
+    assert.equal(calls.refreshThreads, 0, 'thread reconciliation must not run for plain sessions');
   });
 });
