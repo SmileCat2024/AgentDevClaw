@@ -195,14 +195,24 @@ describe('双选择器 — 纯目录无回归', () => {
     assert.match(html, /ph-project-header-name">alpha</);
     // 右胶囊：默认项目（无项目时）
     assert.match(html, /ph-org-pill-label">默认项目</);
-    // + 快速菜单：新建/管理/目录设置一步可见；胶囊菜单只做选择
-    assert.match(html, /ph-quick-add-btn/);
-    assert.match(html, /新建项目…/);
-    assert.match(html, /管理项目…/);
-    assert.match(html, /目录设置/);
-    assert.doesNotMatch(html, /ph-org-selector[^"]*"[\s\S]*?ph-project-dropdown-new/, 'org menu is selection-only');
-    // 左：打开目录…入口置顶（不埋在目录清单尾部）+ banner 文案
-    assert.ok(html.indexOf('打开目录…') < html.indexOf('ph-dir-item'), 'open-directory entry pinned above the directory list');
+    // 归属菜单顶部是添加/编辑动作；加号直接添加，不再展开快速菜单。
+    const orgMenu = html.slice(html.indexOf('ph-org-menu'), html.indexOf('ph-quick-add'));
+    assert.ok(orgMenu.includes('ph-org-menu-actions'));
+    assert.ok(orgMenu.includes('ph-org-menu-options\" role=\"group\" tabindex=\"0\"'));
+    assert.ok(orgMenu.indexOf('ph-org-menu-actions') < orgMenu.indexOf('ph-org-menu-options'));
+    assert.ok(orgMenu.indexOf('添加项目') < orgMenu.indexOf('编辑项目'));
+    assert.ok(orgMenu.indexOf('编辑项目') < orgMenu.indexOf('ph-org-menu-options'));
+    assert.ok(html.includes('class="ph-quick-add-btn" aria-label="添加项目"'));
+    assert.ok(html.includes('onclick="window.phOpenNewProjectDialog()"'));
+    assert.doesNotMatch(html, /ph-quick-menu|管理项目…/);
+    assert.doesNotMatch(html, /目录设置/);
+    assert.ok(html.includes('data-dir-config="D:/alpha"'), 'default-project row carries a settings gear');
+    assert.ok(html.lastIndexOf('项目设置') < html.indexOf('ph-quick-add'), 'settings entry lives in org rows');
+    // 左：打开目录…动作入口置顶（动作形态，非目录行结构）+ banner 文案；
+    // 目录项包进独立滚动区（动作行固定不随列表滚动）
+    assert.ok(html.indexOf('ph-open-dir-entry') < html.indexOf('ph-dir-menu-options'), 'open-directory action pinned above the directory options');
+    assert.ok(html.indexOf('ph-dir-menu-options\\\" role=\\\"group\\\" tabindex=\\\"0\\\"') < html.indexOf('ph-dir-item'), 'directory rows live inside the scrollable options region');
+    assert.ok(html.indexOf('ph-dir-menu-options') < html.indexOf('ph-dir-subprojects'), 'hover submenus stay outside the options region');
     // 键盘可达：可选择菜单项带 role=menuitem + tabindex；key handler 仅在
     // 目标为自身时响应（不吞行内 button 的 Space 原生激活）
     assert.match(html, /role="menuitem" tabindex="0" onkeydown="if\(event\.target===this/);
@@ -282,18 +292,19 @@ describe('双选择器 — 同目录 D/A/B', () => {
     assert.doesNotMatch(sharedSub, /prj_C/);
     // 左：当前目录 active = 项目绑定目录（shared），右：项目 active
     assert.match(dirSeg, /ph-dir-item active" data-dir-id="dir:d:\/shared"/);
-    // 右：默认项目（非 active）+ Alpha(active) + Beta；Cross 不跨目录出现；
-    // 胶囊菜单只做选择（新建/管理在 + 快速菜单，不在胶囊菜单里）
-    assert.doesNotMatch(orgSeg, /新建项目…/, 'org menu is selection-only');
-    assert.match(orgSeg, /ph-org-directory[^>]*>/);
+    // 右：项目下拉开头提供添加/编辑动作，之后是默认项目 + 同目录项目；Cross 不跨目录出现。
+    assert.match(orgSeg, /添加项目[\s\S]*?编辑项目[\s\S]*?ph-org-directory/);
     assert.match(orgSeg, /ph-org-item active" data-project-id="prj_A"/);
     assert.match(orgSeg, /data-project-id="prj_B"/);
     assert.doesNotMatch(orgSeg, /prj_C/);
-    assert.match(html, /ph-quick-menu[\s\S]*?新建项目…/, 'quick menu carries new-project');
-    assert.match(html, /ph-quick-menu[\s\S]*?管理项目…/, 'quick menu carries manage');
-    // 胶囊显示项目名；项目目标时 + 菜单设置项=项目设置（scope 随归属）
+    const quickAdd = html.slice(html.indexOf('ph-quick-add'));
+    assert.doesNotMatch(quickAdd, /ph-quick-menu|phOpenManageProjectsDialog/);
+    // 加号是直接添加入口，不再充当下拉触发器；设置仍由归属行内齿轮负责。
     assert.match(html, /ph-org-pill-label">Alpha</);
-    assert.match(html, /ph-quick-menu[\s\S]*?项目设置/);
+    assert.match(html, /class="ph-quick-add-btn"[^>]*aria-label="添加项目"[^>]*onclick="window\.phOpenNewProjectDialog\(\)"/);
+    assert.match(orgSeg, /data-project-config="prj_A"/, 'project row carries its own settings gear');
+    assert.match(orgSeg, /data-project-config="prj_B"/);
+    assert.match(orgSeg, /data-dir-config="D:\/shared"/, 'default-project row carries a dir-scope settings gear');
     // 切片只含项目会话（目录会话不在项目切片内）
     assert.match(html, /A chat/);
     // 新对话动作：显式 projectId，openDirectory 为空

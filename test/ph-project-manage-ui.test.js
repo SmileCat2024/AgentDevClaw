@@ -229,11 +229,14 @@ describe('046 — 归档项目的选择器语义', () => {
     assert.equal(target.id, 'prj_A');
   });
 
-  it('下拉含「管理项目…」入口', () => {
+  it('项目下拉开头提供「编辑项目」动作，直达项目管理弹窗', () => {
     const s = createSetup({ openDirectory: 'D:/shared', phProjects: [{ openDirectory: 'D:/shared' }] });
     const html = s.render();
-    assert.match(html, /管理项目…/);
-    assert.match(html, /phOpenManageProjectsDialog/);
+    const orgMenu = html.slice(html.indexOf('ph-org-menu'), html.indexOf('ph-quick-add'));
+    assert.match(orgMenu, /编辑项目/);
+    assert.ok(orgMenu.includes('onclick=\"window.phOpenManageProjectsDialog()\"'));
+    assert.ok(orgMenu.indexOf('编辑项目') < orgMenu.indexOf('ph-org-directory'));
+    assert.doesNotMatch(html, /ph-quick-menu/);
   });
 });
 

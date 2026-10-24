@@ -469,6 +469,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     : (dirEntryActive ? dirEntryActive.name : (isZh ? '未打开目录' : 'No Directory'));
   const dirTriggerPath = projectPending ? '' : (dirEntryActive ? dirEntryActive.openDirectory : '');
   const dirAvatar = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H10l2 2h7.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path d="M3.5 10h17"/></svg>';
+  // 归属菜单行内设置钮的齿轮图标（SVG；§6.3 禁止文字符号冒充图标）
+  const orgItemGearSvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg>';
 
   // 子菜单项不显示路径：面板已由目录行锚定范围，重复同一路径是噪音。
   const renderDirSubprojectItem = (entity) => [
@@ -481,15 +483,15 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   ].join('');
 
   const dirMenuItems = [];
-  // 「打开目录…」入口置顶常驻：不埋在目录清单尾部（清单可能很长）
+  // 「打开目录…」入口置顶常驻：不埋在目录清单尾部（清单可能很长）。
+  // 采用轻量菜单动作行（图标 + 单行文字），避免整块卡片打断目录清单；与目录项
+  // 的头像和路径双行结构仍有区分。
   const openDirEntryHtml =
-    '<div class="ph-project-dropdown-new" onclick="window.phOpenProject()"' + menuItemKbd + '>' +
-    '<div class="ph-project-dropdown-avatar">+</div>' +
-    '<div class="ph-project-dropdown-info">' +
-    '<div class="ph-project-dropdown-name">' + (isZh ? '打开目录…' : 'Open Directory…') + '</div>' +
-    '<div class="ph-project-dropdown-path">' + (isZh ? '选择一个本地文件夹作为工作目录' : 'Pick a local folder as the working directory') + '</div>' +
-    '</div>' +
-    '</div>';
+    '<div class="ph-open-dir-entry" onclick="window.phOpenProject()"' + menuItemKbd
+    + ' title="' + escapeHtml(isZh ? '选择一个本地文件夹作为工作目录' : 'Pick a local folder as the working directory') + '">'
+    + '<span class="ph-open-dir-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4.5C2 3.67 2.67 3 3.5 3H6.5L8 4.5H12.5C13.33 4.5 14 5.17 14 6V11.5C14 12.33 13.33 13 12.5 13H3.5C2.67 13 2 12.33 2 11.5V4.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 7v4M6 9h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span>'
+    + '<span class="ph-open-dir-label">' + (isZh ? '打开目录…' : 'Open Directory…') + '</span>'
+    + '</div>';
   const viewingProject = currentProject?.type === 'project';
   const dirSubmenuItems = [];
   for (const entry of dirNavEntries) {
@@ -528,7 +530,9 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '</div>' +
     '<svg class="ph-project-dropdown-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
     '</button>' +
-    '<div class="ph-project-dropdown-menu">' + openDirEntryHtml + dirMenuItems.join('') + dirSubmenuItems.join('') + '</div>' +
+    '<div class="ph-project-dropdown-menu">' + openDirEntryHtml +
+    '<div class="ph-dir-menu-options" role="group" tabindex="0" aria-label="' + escapeHtml(isZh ? '目录选项' : 'Directory options') + '">' + dirMenuItems.join('') + '</div>' +
+    dirSubmenuItems.join('') + '</div>' +
     '</div>';
 
   // 右侧归属选择器：默认项目+ 当前同目录项目 + 新建/管理。
@@ -550,13 +554,26 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '<div class="ph-project-dropdown-name">' + escapeHtml(entity.name) + '</div>',
     '<div class="ph-project-dropdown-path">' + (entity.directorySource === 'managed' ? escapeHtml(isZh ? '托管目录' : 'Managed directory') : escapeHtml(entity.openDirectory)) + '</div>',
     '</div>',
-    (entity.id === currentProject?.id && entity.openDirectory && entity.directorySource !== 'managed' ? openFolderBtnHtml(entity.openDirectory) : ''),
+    // 行内设置齿轮：直达该项目的项目设置（捕获阶段委托，见 ph-project-actions.js）
+    '<button class="ph-org-item-config" type="button" data-project-config="' + escapeHtml(entity.id) + '"'
+      + ' title="' + escapeHtml((isZh ? '项目设置 · ' : 'Project Settings · ') + (entity.name || entity.id)) + '"'
+      + ' aria-label="' + escapeHtml(isZh ? '项目设置' : 'Project Settings') + '">' + orgItemGearSvg + '</button>',
     '</div>',
   ].join('');
 
-  const orgMenuItems = [
-    // 胶囊菜单只做选择：默认项目 + 当前同目录项目（项目不跨目录）。
-    // 项目类操作（新建/管理/设置）全部走常驻 + 快速菜单，不藏在下拉里。
+  const orgMenuActions = [
+    // 管理动作固定显示在项目列表上方；加号按钮另作添加项目的快速入口。
+    '<div class="ph-open-dir-entry ph-org-action" onclick="window.phOpenNewProjectDialog()"' + menuItemKbd + '>' +
+      '<span class="ph-open-dir-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>' +
+      '<span class="ph-open-dir-label">' + (isZh ? '添加项目' : 'Add Project') + '</span>' +
+    '</div>' +
+    '<div class="ph-open-dir-entry ph-org-action" onclick="window.phOpenManageProjectsDialog()"' + menuItemKbd + '>' +
+      '<span class="ph-open-dir-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3.5h10v9H3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5.5 6h5M5.5 8h5M5.5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>' +
+      '<span class="ph-open-dir-label">' + (isZh ? '编辑项目' : 'Edit Projects') + '</span>' +
+    '</div>',
+  ];
+  const orgMenuOptions = [
+    // 胶囊菜单：默认项目 + 当前同目录项目（项目不跨目录）；行内齿轮直达各项设置。
     '<div class="ph-project-dropdown-item ph-org-item ph-org-directory' + (!isOrgProject && !projectPending ? ' active' : '') + '"' +
       (currentDirId ? ' data-dir-id="' + escapeHtml(currentDirId) + '" onclick="window.phSwitchProject(\'' + escapeHtml(currentDirId) + '\')"' : '') + menuItemKbd + '>' +
     '<div class="ph-project-dropdown-avatar">&#9638;</div>' +
@@ -564,6 +581,13 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '<div class="ph-project-dropdown-name">' + (isZh ? '默认项目' : 'Default Project') + '</div>' +
     '<div class="ph-project-dropdown-path">' + escapeHtml(currentDirPath ? (isZh ? '未归类到项目的对话' : 'Chats not grouped into a project') : (isZh ? '无当前目录' : 'No current directory')) + '</div>' +
     '</div>' +
+    // 默认项目的设置齿轮（dir:<path> 层，弹窗呈现为「项目设置 · 默认项目」）；
+    // remoteOnly 视图无本地配置语义，不提供
+    (currentDirPath && !currentProject?.remoteOnly
+      ? '<button class="ph-org-item-config" type="button" data-dir-config="' + escapeHtml(currentDirPath) + '"'
+        + ' title="' + escapeHtml(isZh ? '项目设置 · 默认项目' : 'Project Settings · Default Project') + '"'
+        + ' aria-label="' + escapeHtml(isZh ? '项目设置' : 'Project Settings') + '">' + orgItemGearSvg + '</button>'
+      : '') +
     '</div>',
     ...sameDirProjects.map(renderOrgProjectItem),
   ];
@@ -579,7 +603,10 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '<span class="ph-org-pill-label">' + orgTriggerName + '</span>' +
     '<svg class="ph-org-pill-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
     '</button>' +
-    '<div class="ph-project-dropdown-menu ph-org-menu">' + orgMenuItems.join('') + '</div>' +
+    '<div class="ph-project-dropdown-menu ph-org-menu">' +
+      '<div class="ph-org-menu-actions">' + orgMenuActions.join('') + '</div>' +
+      '<div class="ph-org-menu-options" role="group" tabindex="0" aria-label="' + (isZh ? '项目选项' : 'Project options') + '">' + orgMenuOptions.join('') + '</div>' +
+    '</div>' +
     '</div>';
 
   // Banner (restored) + project bar
@@ -641,43 +668,9 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       ...((currentProject?.remoteOnly && viewIdentity) ? { agentId: viewIdentity } : {}),
     }));
 
-    // + 快速菜单第三段：设置项跟随当前归属——项目目标→项目设置
-    // （project:<id> scope），目录目标→目录设置（dir:<path> scope）。
-    // remoteOnly 视图是真远程语义，本地配置编辑器不适用，不提供。
-    // 弹窗标题与菜单文案一致（项目设置/目录设置），指向不漂移。
-    const settingsQuickItem = (currentProject?.type === 'project')
-      ? ('<div class="ph-project-dropdown-item" onclick="window.phOpenProjectConfig(\'' + escapeHtml(currentProject.id) + '\')"' + menuItemKbd + '>' +
-        '<div class="ph-project-dropdown-avatar">&#9881;</div>' +
-        '<div class="ph-project-dropdown-info">' +
-        '<div class="ph-project-dropdown-name">' + (isZh ? '项目设置' : 'Project Settings') + '</div>' +
-        '<div class="ph-project-dropdown-path">' + escapeHtml(getProgrammingHelperProjectDisplayName(currentProject)) + '</div>' +
-        '</div></div>')
-      : ((currentProject && currentProject.type !== 'project' && !currentProject.remoteOnly && currentProject.openDirectory)
-        ? ('<div class="ph-project-dropdown-item" onclick="window.phOpenDirConfig(\'' + escapeHtml(currentProject.openDirectory) + '\')"' + menuItemKbd + '>' +
-          '<div class="ph-project-dropdown-avatar">&#9881;</div>' +
-          '<div class="ph-project-dropdown-info">' +
-          '<div class="ph-project-dropdown-name">' + (isZh ? '目录设置' : 'Directory Settings') + '</div>' +
-          '<div class="ph-project-dropdown-path">' + escapeHtml(currentProject.openDirectory) + '</div>' +
-          '</div></div>')
-        : '');
-    // + 快速菜单：项目域操作一步可见（新建/管理常驻，设置随归属）。
-    const quickAddHtml = '<div class="ph-project-dropdown ph-quick-add">' +
-      '<button type="button" class="ph-quick-add-btn" aria-haspopup="menu" aria-expanded="false" aria-label="' + (isZh ? '项目操作' : 'Project actions') + '" title="' + (isZh ? '新建 / 管理 / 设置' : 'New / manage / settings') + '" onclick="window.phToggleProjectDropdown(event)">&#43;</button>' +
-      '<div class="ph-project-dropdown-menu ph-quick-menu">' +
-      '<div class="ph-project-dropdown-item" onclick="window.phOpenNewProjectDialog()"' + menuItemKbd + '>' +
-      '<div class="ph-project-dropdown-avatar">+</div>' +
-      '<div class="ph-project-dropdown-info">' +
-      '<div class="ph-project-dropdown-name">' + (isZh ? '新建项目…' : 'New Project…') + '</div>' +
-      '<div class="ph-project-dropdown-path">' + (isZh ? '默认当前目录，不自动创建对话' : 'Defaults to current directory, no auto conversation') + '</div>' +
-      '</div></div>' +
-      '<div class="ph-project-dropdown-item" onclick="window.phOpenManageProjectsDialog()"' + menuItemKbd + '>' +
-      '<div class="ph-project-dropdown-avatar">&#9881;</div>' +
-      '<div class="ph-project-dropdown-info">' +
-      '<div class="ph-project-dropdown-name">' + (isZh ? '管理项目…' : 'Manage Projects…') + '</div>' +
-      '<div class="ph-project-dropdown-path">' + (isZh ? '改绑目录 / 归档 / 删除' : 'Rebind / archive / delete') + '</div>' +
-      '</div></div>' +
-      (settingsQuickItem ? '<div class="ph-project-dropdown-divider" role="separator"></div>' + settingsQuickItem : '') +
-      '</div>' +
+    // + 是添加项目的快速入口；编辑项目入口位于归属菜单顶部。
+    const quickAddHtml = '<div class="ph-quick-add">' +
+      '<button type="button" class="ph-quick-add-btn" aria-label="' + (isZh ? '添加项目' : 'Add Project') + '" title="' + (isZh ? '添加项目' : 'Add Project') + '" onclick="window.phOpenNewProjectDialog()"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>' +
       '</div>';
     const orgControlsHtml = '<div class="ph-org-controls">' + orgSelectorHtml + quickAddHtml + '</div>';
 

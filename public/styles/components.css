@@ -9356,7 +9356,6 @@ body[data-theme="light"] .ph-open-sessions-dismiss:hover {
   max-width: min(420px, calc(100vw - 32px));
   /* 给项目组与更多目录留出更大的首屏空间；屏幕较矮时仍限制在视口内。 */
   max-height: min(480px, calc(100vh - 120px));
-  overflow-y: auto;
   background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -9365,7 +9364,9 @@ body[data-theme="light"] .ph-open-sessions-dismiss:hover {
   padding: 6px;
 }
 .ph-project-dropdown.open .ph-project-dropdown-menu {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* 窄容器（ticket 045）：菜单改锚到项目栏整体（sticky 定位祖先），左右贴
@@ -9378,6 +9379,32 @@ body[data-theme="light"] .ph-open-sessions-dismiss:hover {
     min-width: 0;
     max-width: none;
   }
+}
+/* 动作区固定不滚，仅选项区滚动（目录菜单与归属菜单同构：容器 max-height
+ * 钳总高，选项区 flex 收缩 + min-height:0 后在剩余空间内自滚）。 */
+.ph-org-menu-actions,
+.ph-open-dir-entry {
+  flex: 0 0 auto;
+}
+.ph-dir-menu-options,
+.ph-org-menu-options {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  /* 与上方固定动作区用横线分隔（间隙对称，动作行区在下缘不重复画线） */
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-color);
+}
+.ph-dir-menu-options::-webkit-scrollbar,
+.ph-org-menu-options::-webkit-scrollbar {
+  width: 6px;
+}
+.ph-dir-menu-options::-webkit-scrollbar-thumb,
+.ph-org-menu-options::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 999px;
 }
 
 /* Dropdown item */
@@ -9394,8 +9421,7 @@ body[data-theme="light"] .ph-open-sessions-dismiss:hover {
   background: var(--hover-bg);
 }
 /* 键盘可达：菜单项（div role=menuitem）聚焦可见，与触发器 button 一致 */
-.ph-project-dropdown-item:focus-visible,
-.ph-project-dropdown-new:focus-visible {
+.ph-project-dropdown-item:focus-visible {
   outline: 2px solid var(--accent-text);
   outline-offset: -2px;
 }
@@ -9483,12 +9509,12 @@ button.ph-project-dropdown-trigger {
   max-width: 280px;
   line-height: 1.3;
 }
-/* 目录菜单滚动条隐藏（内容仍可滚）：与右侧悬浮面板衔接处不被滚动条打断 */
-.ph-dir-selector .ph-project-dropdown-menu {
+/* 目录选项区滚动条隐藏（内容仍可滚）：与右侧悬浮面板衔接处不被滚动条打断 */
+.ph-dir-selector .ph-dir-menu-options {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
-.ph-dir-selector .ph-project-dropdown-menu::-webkit-scrollbar { display: none; }
+.ph-dir-selector .ph-dir-menu-options::-webkit-scrollbar { display: none; }
 
 /* 归属控件组：胶囊 + 常驻 + 按钮 */
 .ph-org-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -9534,7 +9560,33 @@ button.ph-project-dropdown-trigger {
 .ph-org-pill-arrow { color: var(--text-secondary); flex-shrink: 0; transition: transform 0.2s; }
 .ph-org-selector.open .ph-org-pill-arrow { transform: rotate(180deg); }
 
-/* + 快速操作按钮：新建/管理/设置一步可见 */
+/* 归属菜单行内设置齿轮：行级直达动作（捕获阶段委托接线，点击不触发
+ * 行的项目切换）。紧凑图标钮，次要色常态、hover 提亮。 */
+.ph-org-item-config {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.ph-org-item-config:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+.ph-org-item-config:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+}
+
+/* 加号快速添加项目：保持圆形图标按钮，直接打开新建项目流程。 */
 .ph-quick-add-btn {
   width: 26px;
   height: 26px;
@@ -9542,8 +9594,6 @@ button.ph-project-dropdown-trigger {
   border: 1px solid var(--border-color);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 15px;
-  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -9551,11 +9601,10 @@ button.ph-project-dropdown-trigger {
   padding: 0;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.ph-quick-add-btn:hover { background: var(--hover-bg); color: var(--text-primary); border-color: rgba(88, 166, 255, 0.5); }
-.ph-quick-add .ph-project-dropdown-menu {
-  left: auto;
-  right: 0;
-  min-width: 250px;
+.ph-quick-add-btn:hover { background: var(--hover-bg); color: var(--text-primary); }
+.ph-quick-add-btn:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
 }
 
 @container main-content (max-width: 640px) {
@@ -13814,47 +13863,39 @@ body[data-theme="light"] .session-ref-chip {
 .session-ref-picker-confirm:not(:disabled):hover { background: var(--hover-bg); }
 .session-ref-picker-cancel:hover { background: var(--hover-bg); }
 
-/* ── PH 项目选择器：目录/项目两组 + 新建项目（ticket 045）──────────── */
-/* 组标题：视觉分区，不参与交互；中文标签禁用 uppercase/letter-spacing
- * （design-system §2.3）。 */
-.ph-project-dropdown-group {
-  padding: 2px 0;
-}
-.ph-project-dropdown-group + .ph-project-dropdown-group,
-.ph-project-dropdown-group + .ph-project-dropdown-new {
-  border-top: 1px solid var(--border-color);
-  margin-top: 4px;
-  padding-top: 6px;
-}
-.ph-project-dropdown-group-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  padding: 4px 12px 4px;
-}
-body[data-theme="light"] .ph-project-dropdown-group-label {
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-}
-/* 新建项目入口：与条目同构（avatar 列 + 信息列），视觉上是动作而非目标 */
-.ph-project-dropdown-new {
+/* ── PH 目录菜单：「打开目录…」置顶动作（ticket 045）──────────────── */
+/* 参考目录选择菜单中的动作行：图标 + 单行文字，不再做卡片容器；与下方目录目标
+ * 仍以单行动作标签 vs. 头像/路径双行结构区分。 */
+.ph-open-dir-entry {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
   border-radius: 8px;
+  color: var(--text-primary);
   cursor: pointer;
   transition: background 0.12s;
 }
-.ph-project-dropdown-new:hover {
+.ph-open-dir-entry:hover {
   background: var(--hover-bg);
 }
-.ph-project-dropdown-new .ph-project-dropdown-avatar {
-  border: 1px dashed var(--border-color);
-  background: transparent;
-}
-.ph-project-dropdown-new .ph-project-dropdown-name {
+.ph-open-dir-entry .ph-open-dir-icon {
+  display: flex;
   color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.ph-open-dir-entry .ph-open-dir-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ph-open-dir-entry:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
 }
 /* 新建项目弹窗：设置类弹窗规格（feature-detail-window 壳 + settings 表单） */
 .ph-new-project-window {

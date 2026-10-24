@@ -1,21 +1,22 @@
 /**
- * dir-config-dialog.js — Feature 配置弹窗（目录层 / 全局层）
+ * dir-config-dialog.js — Feature 配置弹窗（项目层 / 默认项目层 / 全局层）
  *
- * 两个入口，均为弹窗形式，内嵌共享配置编辑器（feature-config-editor.js）：
- *   - 目录层：编程小助手项目栏（ph-project-bar）左侧项目选择器旁的
- *     齿轮图标按钮，绑定当前项目目录（scopeId='dir:<path>'）；
- *   - 全局层：左下角设置 flyout 菜单"全局 Feature 设置"
- *     （scopeId='global'）。
+ * 三个入口，均为弹窗形式，内嵌共享配置编辑器（feature-config-editor.js）：
+ *   - 项目层（project:<prj_id>）：归属菜单项目行的设置齿轮；
+ *   - 默认项目层（dir:<path>）：归属菜单默认项目行的设置齿轮——目录桶的
+ *     会话配置层，用户面统一呈现为「项目设置」（目录是内部 scope 概念，
+ *     不再作为设置命名出现在界面上）；
+ *   - 全局层：左下角设置 flyout 菜单"全局 Feature 设置"（scopeId='global'）。
  *
- * 配置队列位置：出厂默认 → 全局层 → agent 层 → 目录层。
+ * 配置队列位置：出厂默认 → 全局层 → agent 层 → 目录层（默认项目层）。
  *
  * 外部依赖（通过全局作用域）：
  *   - escapeHtml (app-ui.js)
  *   - currentLanguage (app-core.js)
- *   - createFeatureConfigEditor / fsBaseName (feature-setup-core / editor)
+ *   - createFeatureConfigEditor (feature-setup-core / editor)
  *
- * 入口：renderPhProjectBar (session-list-render.js) 调用
- * phDirConfigButtonHtml(agent)；window.phOpenDirConfig / phOpenGlobalFeatureConfig
+ * 入口：归属菜单行内齿轮（session-list-render.js 渲染按钮 + ph-project-actions.js
+ * 捕获阶段委托调用）；window.phOpenGlobalFeatureConfig
  */
 
 let _dirConfigEditor = null;
@@ -38,25 +39,6 @@ function _dirConfigCurrentDir() {
   return typeof dir === 'string' && dir.trim() ? dir.trim() : '';
 }
 
-/**
- * 编程小助手项目栏（ph-project-bar）上的"目录设置"按钮 HTML。
- * 仅编程小助手且传入了项目目录时返回按钮，否则返回空串。
- * 目录由渲染方显式传入（currentProject.openDirectory），不在此处
- * 二次查询 workspace_state——投影/焦点态下该查询不可靠。
- */
-function phDirConfigButtonHtml(agent, dir) {
-  if (agent?.id !== 'programming-helper') return '';
-  dir = (typeof dir === 'string' && dir.trim()) ? dir.trim() : '';
-  if (!dir) return '';
-  const isZh = currentLanguage === 'zh';
-  return '<button class="ph-dir-config-btn" type="button"'
-    + ' onclick="window.phOpenDirConfig(\'' + escapeHtml(dir) + '\')"'
-    + ' title="' + escapeHtml((isZh ? '目录设置 · ' : 'Dir Config · ') + dir) + '"'
-    + ' aria-label="' + escapeHtml(isZh ? '目录设置' : 'Dir Config') + '">'
-    + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg>'
-    + '</button>';
-}
-
 /** 通用 Feature 配置弹窗骨架（head + 编辑器挂载点）。 */
 function _featureConfigDialogShell(hostId, titleHtml, subtitleHtml, closeFnName) {
   return [
@@ -75,6 +57,9 @@ function _featureConfigDialogShell(hostId, titleHtml, subtitleHtml, closeFnName)
   ].join('');
 }
 
+// ── 默认项目层配置入口（dir:<path> scope）────────────────────────
+// 归属菜单「默认项目」行的设置齿轮。目录桶的会话配置层在用户面统一呈现为
+// 项目设置（「项目设置 · 默认项目」）——目录是内部 scope 概念，不进界面命名。
 window.phOpenDirConfig = function (dir) {
   dir = (typeof dir === 'string' && dir.trim()) ? dir.trim() : _dirConfigCurrentDir();
   if (!dir) return;
@@ -84,10 +69,9 @@ window.phOpenDirConfig = function (dir) {
     _dirConfigEditor = null;
   }
   const isZh = currentLanguage === 'zh';
-  const baseName = (typeof fsBaseName === 'function' ? fsBaseName(dir) : dir);
   _dirConfigHost().innerHTML = _featureConfigDialogShell(
     'ph-dir-config-mount',
-    escapeHtml(isZh ? '目录设置 · ' : 'Directory Config · ') + escapeHtml(baseName),
+    escapeHtml(isZh ? '项目设置 · 默认项目' : 'Project Settings · Default Project'),
     escapeHtml(dir),
     'phCloseDirConfig'
   );
@@ -108,23 +92,10 @@ window.phCloseDirConfig = function () {
 };
 
 // ── 项目层配置入口（ticket 045，project:<prj_id> scope）────────────
-// 项目目标的项目栏齿轮：编辑项目层（project:<id>），标题呈现项目名与真实
-// 工作目录（managed/外部指定）。编辑器复用共享三态配置编辑器；保存走
-// PUT feature_config/layer（layerId=project:<id>，043 服务端已支持）。
-function phProjectConfigButtonHtml(agent, project) {
-  if (agent?.id !== 'programming-helper') return '';
-  const projectId = String(project?.id || '').trim();
-  if (!projectId.startsWith('prj_')) return '';
-  const isZh = currentLanguage === 'zh';
-  const projectName = String(project?.name || projectId);
-  return '<button class="ph-dir-config-btn" type="button"'
-    + ' onclick="window.phOpenProjectConfig(\'' + escapeHtml(projectId) + '\')"'
-    + ' title="' + escapeHtml((isZh ? '项目设置 · ' : 'Project Config · ') + projectName) + '"'
-    + ' aria-label="' + escapeHtml(isZh ? '项目设置' : 'Project Config') + '">'
-    + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg>'
-    + '</button>';
-}
-
+// 归属菜单项目行的设置齿轮（捕获阶段委托调用）：编辑项目层（project:<id>），
+// 标题呈现项目名与真实工作目录（managed/外部指定）。编辑器复用共享三态
+// 配置编辑器；保存走 PUT feature_config/layer（layerId=project:<id>，043
+// 服务端已支持）。
 window.phOpenProjectConfig = function (projectId) {
   projectId = String(projectId || '').trim();
   if (!projectId.startsWith('prj_')) return;
@@ -132,7 +103,7 @@ window.phOpenProjectConfig = function (projectId) {
   const entity = ((window.ClawFW?.phProjectEntities?.projects) || [])
     .find((p) => p.id === projectId) || null;
   if (!entity) {
-    // 元数据未就绪：补拉后重开（不退回目录设置）
+    // 元数据未就绪：补拉后重开（不退回默认项目设置）
     if (typeof ensurePhProjectEntitiesLoaded === 'function') {
       ensurePhProjectEntitiesLoaded(true).then(() => window.phOpenProjectConfig(projectId));
     }
@@ -145,7 +116,7 @@ window.phOpenProjectConfig = function (projectId) {
   const isZh = currentLanguage === 'zh';
   _dirConfigHost().innerHTML = _featureConfigDialogShell(
     'ph-dir-config-mount',
-    escapeHtml(isZh ? '项目设置 · ' : 'Project Config · ') + escapeHtml(entity.name),
+    escapeHtml(isZh ? '项目设置 · ' : 'Project Settings · ') + escapeHtml(entity.name),
     escapeHtml(entity.openDirectory || (isZh ? '托管目录' : 'Managed directory')),
     'phCloseDirConfig'
   );

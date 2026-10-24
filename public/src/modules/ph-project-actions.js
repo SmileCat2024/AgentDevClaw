@@ -779,6 +779,25 @@ document.addEventListener('click', (e) => {
   window.phOpenInExplorer(btn.getAttribute('data-open-dir') || '');
 }, true);
 
+// 归属菜单行内「设置」齿轮（data 属性路由：project-config → 该项目的项目
+// 设置；dir-config → 默认项目的目录层设置）。与「打开文件夹」同因必须捕获
+// 阶段——按钮嵌在下拉项内，捕获先 stopPropagation 才能不误触发项目切换。
+// 设置是打开弹窗的独立动作：先收起菜单与子菜单，再打开弹窗。
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-project-config], [data-dir-config]');
+  if (!btn) return;
+  e.stopPropagation();
+  document.querySelectorAll('.ph-project-dropdown.open').forEach((item) => item.classList.remove('open'));
+  _phCloseDirectorySubmenus();
+  const projectId = btn.getAttribute('data-project-config');
+  if (projectId) {
+    window.phOpenProjectConfig(projectId);
+    return;
+  }
+  const dir = btn.getAttribute('data-dir-config');
+  if (dir) window.phOpenDirConfig(dir);
+}, true);
+
 window.phOpenInExplorer = async (dirPath) => {
   if (!dirPath) return;
   try {
