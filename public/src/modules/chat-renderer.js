@@ -711,6 +711,8 @@ function reconcileOptimisticUserEchoes(messages) {
     }
   }
   _optimisticEchoes = _optimisticEchoes.filter(e => e.el);
+  // 会话标注：增量追加后重放高亮（无标注时零成本；rAF 去抖）
+  if (window.ClawAnnotations) window.ClawAnnotations.scheduleReplay();
 }
 
 // 更新最后一条消息
@@ -858,6 +860,8 @@ function updateLastMessage(msg) {
   // 同 appendNewMessages：末行在位 patch 后同步渲染签名，保持签名与 DOM
   // 实态一致（防回退指纹碰撞导致 render() 去重误跳过重建）。
   _lastRenderedChatSig = buildChatRenderSignature(currentMessages);
+  // 会话标注：末行 patch 后重放高亮（流式更新高频，rAF 去抖 + 空列表早退）
+  if (window.ClawAnnotations) window.ClawAnnotations.scheduleReplay();
 }
 
 function getCollapseThresholdForRow(row) {
@@ -1322,6 +1326,8 @@ function render(messages) {
     forceSnap: shouldFollowAfterMutation,
     allowChase: false,
   });
+  // 会话标注：全量重建后重放高亮（容器 innerHTML 已重写，旧 mark 全部消失）
+  if (window.ClawAnnotations) window.ClawAnnotations.scheduleReplay();
 }
 
 function stableSerializeForChatSignature(value) {

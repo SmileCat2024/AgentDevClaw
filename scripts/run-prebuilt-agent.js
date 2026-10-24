@@ -284,6 +284,12 @@ class SessionLifecycle {
     // 广播给前端（toast 呈现），不再只进输入框 placeholder（几乎不可见）。
     this._lastActionError = null;
 
+    // feature-comms 请求面的去抖保存（scheduleCommsSave）：idle 期经
+    // onHostRequest 变更的 feature 状态（如会话标注）没有近期保存点，
+    // 宿主统一在请求成功后去抖补一次 saveSession。
+    this._commsSaveTimer = null;
+    this._commsSaveChain = Promise.resolve();
+
     // Per-session bridge contexts (shared by reference with extracted modules)
     this.imBridgeCtx = {
       agentId,
@@ -395,6 +401,26 @@ class SessionLifecycle {
   // ── IPC handler for this session ────────────────────────────
   // Called by the central IPC dispatcher when __targetSessionId matches
   // this session, or as fallback when only one session exists.
+  /**
+   * feature-comms 请求面去抖保存：2s 窗口合并连续请求（连续标注只写一次
+   * 盘），串行链保证自身重入不交错；与 callFinished / step auto-save 的
+   * 并发保存由快照语义兜底（后写胜出，双方均为有效快照）。disposed 后静默
+   * 不调度——remove() 的保存屏障已覆盖去抖窗口内的变更。
+   */
+  scheduleCommsSave() {
+    if (this.disposed) return;
+    if (this._commsSaveTimer) clearTimeout(this._commsSaveTimer);
+    this._commsSaveTimer = setTimeout(() => {
+      this._commsSaveTimer = null;
+      if (this.disposed || !this.agent || !this.sessionId) return;
+      this._commsSaveChain = this._commsSaveChain
+        .then(() => this.agent.saveSession(this.sessionId, sessionStore))
+        .catch((error) => {
+          console.warn('[ProtoClaw Runtime] feature-comms 去抖保存失败:', error?.message || error);
+        });
+    }, 2000);
+  }
+
   async handleIPC(msg) {
     if (!msg || typeof msg !== 'object') return;
 
@@ -459,7 +485,14 @@ class SessionLifecycle {
         return;
       }
       try {
-        reply(await feature.onHostRequest(msg.requestType, msg.payload, { channelId: msg.channelId, sessionId: this.sessionId }));
+        const result = await feature.onHostRequest(msg.requestType, msg.payload, { channelId: msg.channelId, sessionId: this.sessionId });
+        reply(result);
+        // 请求面可能变更 feature 状态（如标注创建），而 callFinished / step
+        // auto-save 的保存点在 idle 期不会到来；宿主在成功请求后统一去抖补
+        // 一次保存，对所有走请求面的 feature 生效（bg kill 等瞬态请求触发
+        // 的保存幂等无害）。ok:false 是 feature 明确的业务失败，无状态变更
+        // 可言，不调度。
+        if (result?.ok !== false) this.scheduleCommsSave();
       } catch (error) {
         reply({ ok: false, code: 'operation_failed', error: String(error?.message || error) });
       }
@@ -658,6 +691,9 @@ class SessionLifecycle {
     if (this.disposed) return false;
     this.disposed = true;
     this.inputLoopRunning = false;
+    // 去抖窗口内的变更由下方 saveSession 覆盖；清掉 pending 定时器，
+    // 避免 remove 保存完成后再多跑一次写盘。
+    if (this._commsSaveTimer) { clearTimeout(this._commsSaveTimer); this._commsSaveTimer = null; }
     let persisted = true;
 
     if (this.agent) {

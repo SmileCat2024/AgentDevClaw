@@ -29,6 +29,7 @@ import { ContextGuardFeature } from '../../../local-features/dist/context-guard/
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
 import { GitHubShellFeature } from '../../../local-features/dist/github/src/index.js';
 import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
+import { ConversationAnnotationsFeature } from '../../../local-features/dist/conversation-annotations/src/index.js';
 import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
 import { CraftAwarenessFeature } from '../../../local-features/dist/craft-awareness/src/index.js';
 import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
@@ -254,6 +255,11 @@ export default class ProgrammingHelperAgent extends BasicAgent {
       agentId: runtimeIdentity.agentId,
       serverOrigin: runtimeIdentity.serverOrigin,
     }));
+
+    // 会话标注（用户选中文本的高亮标注）：内存态经框架快照契约持久化
+    // （captureState/restoreState，rollback 按消息边界合并），前端经
+    // feature-comms annotations 通道读写（annotations.js）。
+    this.use(new ConversationAnnotationsFeature(runtimeIdentity));
 
     // coder 领域 shell（ticket 034）：线程调度收编为受管线约束的 feature 工具。
     // 仅 main 身份挂载；CoderAgent 不挂（不自派工单，避免递归调度）。

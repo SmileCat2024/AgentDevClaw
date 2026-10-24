@@ -228,6 +228,9 @@ function toggleFeaturePanel(panelId) {
   if (previousPanel && previousPanel !== panelId && previousPanel === 'bg' && window.BgPanel) {
     window.BgPanel.onClose();
   }
+  if (previousPanel && previousPanel !== panelId && previousPanel === 'annotations' && window.ClawAnnotations) {
+    window.ClawAnnotations.onClose();
+  }
 
   activeFeaturePanel = wasOpen ? null : panelId;
   renderFeaturePanel({ deferBody: shouldDeferBody });
@@ -250,6 +253,9 @@ function toggleFeaturePanel(panelId) {
   if (wasOpen && panelId === 'bg' && window.BgPanel) {
     window.BgPanel.onClose();
   }
+  if (wasOpen && panelId === 'annotations' && window.ClawAnnotations) {
+    window.ClawAnnotations.onClose();
+  }
 
   // 初始化钩子：settings 面板首次打开时加载异步数据
   if (!wasOpen && panelId === 'settings' && window._wgSettingsInit) {
@@ -266,6 +272,10 @@ function toggleFeaturePanel(panelId) {
   // 后台任务面板：打开即订阅当前会话的 feature-comms 通道
   if (!wasOpen && panelId === 'bg' && window.BgPanel) {
     window.BgPanel.onOpen();
+  }
+  // 会话标注面板：打开即同步当前会话列表
+  if (!wasOpen && panelId === 'annotations' && window.ClawAnnotations) {
+    window.ClawAnnotations.onOpen();
   }
 
   // 面板 class 已切换（宽度变化写入样式），下一帧布局应用新宽度后恢复滚动位置。

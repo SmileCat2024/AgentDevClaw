@@ -13,6 +13,10 @@ export { GitHubShellFeature } from './github/src/index.js';
 export { createGitHubShellPolicy, createGitHubShellAdapters, GITHUB_SHELL_NAME } from './github/src/github-shell.js';
 export { SessionReferenceFeature } from './session-reference/src/index.js';
 export {
+  ConversationAnnotationsFeature,
+  ConversationAnnotationsFeatureInner,
+} from './conversation-annotations/src/index.js';
+export {
   TimeAwarenessFeature,
   evaluateTimeAwareness,
   renderTimeReminder,

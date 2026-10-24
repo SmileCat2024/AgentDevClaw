@@ -1584,6 +1584,14 @@ registerFeaturePanel('bg', {
   render: () => window.BgPanel ? window.BgPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
   preserveOnReRender: true,
 });
+registerFeaturePanel('annotations', {
+  when: { agentIds: ['programming-helper'], surfaces: ['chat'] },
+  title: () => currentLanguage === 'zh' ? '标注' : 'Annotations',
+  label: { zh: '标注', en: 'Annotations' },
+  description: { zh: '对话内容高亮标注', en: 'Highlights on conversation text' },
+  render: () => window.ClawAnnotations ? window.ClawAnnotations.getPanelHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+  preserveOnReRender: true,
+});
 registerFeaturePanel('monitor', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_monitor'),

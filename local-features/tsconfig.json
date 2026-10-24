@@ -34,6 +34,8 @@
     "./checkpoint/test/**/*.ts",
     "./continuity-participant/src/**/*.ts",
     "./continuity-participant/test/**/*.ts",
+    "./conversation-annotations/src/**/*.ts",
+    "./conversation-annotations/test/**/*.ts",
     "./feature-wrappers/src/**/*.ts",
     "./feature-wrappers/test/**/*.ts",
     "./group-admin/src/**/*.ts",
