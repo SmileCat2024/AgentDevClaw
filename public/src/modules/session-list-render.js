@@ -367,6 +367,24 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
   ].join('');
 };
 
+// ── PH 会话空态卡（gen-ui-empty / git-empty-card 同款配方）──────────
+// 虚线卡片 + 图标块 + 标题 + 描述 + 可选动作。图标走 24 viewBox stroke
+// 线稿、随图标块 currentColor 着色：对话气泡取自输入区会话引用等既有先例，
+// 归档盒为同线宽新绘（无既有先例）。
+const _PH_EMPTY_CHAT_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+const _PH_EMPTY_ARCHIVE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>';
+
+function renderPhSessionsEmptyCard(iconSvg, title, desc, actionHtml) {
+  return [
+    '<div class="ph-sessions-empty-card">',
+    '<div class="ph-sessions-empty-icon" aria-hidden="true">' + iconSvg + '</div>',
+    '<div class="ph-sessions-empty-title">' + escapeHtml(title) + '</div>',
+    desc ? '<div class="ph-sessions-empty-desc">' + escapeHtml(desc) + '</div>' : '',
+    actionHtml || '',
+    '</div>',
+  ].join('');
+}
+
 function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const { desc } = ctx;
   // 项目实体清单按需拉取（在飞合并）；无显式项目目标时不强制重渲染——
@@ -756,9 +774,18 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   if (needsTabs) {
     const tabId = 'ph-tab-' + escapeHtml(agent.id) + '-' + escapeHtml(currentProject.id);
     // 新对话渲染查 workspaceCreate 能力（R2-03）：remoteOnly 视图按宿主握手
-    // 能力放开，本地视图恒渲染。
-    const newChatBtnHtml = canWorkspaceCreate ? '<div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>' : '';
-    const mainEmptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>' + newChatBtnHtml;
+    // 能力放开，本地视图恒渲染。空态走 gen-ui-empty / git-empty-card 同款
+    // 空态卡配方（虚线卡 + 图标块 + 标题 + 描述 + 动作）。
+    const newChatBtnHtml = canWorkspaceCreate ? '<div class="ph-sessions-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>' : '';
+    const mainEmptyNote = renderPhSessionsEmptyCard(
+      _PH_EMPTY_CHAT_ICON,
+      isZh ? '还没有对话' : 'No conversations yet',
+      isZh ? '创建第一段对话，描述需求或贴上报错即可开始。' : 'Start the first conversation — describe a task or paste an error.',
+      newChatBtnHtml);
+    const archivedEmptyNote = renderPhSessionsEmptyCard(
+      _PH_EMPTY_ARCHIVE_ICON,
+      isZh ? '还没有归档对话' : 'No archived conversations',
+      isZh ? '归档的对话会收纳到这里，随时可恢复。' : 'Archived conversations are kept here and can be restored anytime.');
     const isSearching = phSearchQuery.trim().length > 0;
     // 分页徽标：服务端切片携带当前项目 main/archived 真实总数（远程旧版
     // 无此字段时回退已加载数）。加载更多按整体切片进度（sessionTotal vs
@@ -817,7 +844,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-tab-panels">';
     sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? renderPhSessionsWithGroups(mainSessions, 'main') + loadMoreBtnHtml : mainEmptyNote) + '</div></div>';
-    sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="archived"><div class="feature-project-session-list">' + (archivedSessions.length > 0 ? renderPhSessionsWithGroups(archivedSessions, 'archived') + loadMoreBtnHtml : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>' + (hasMore ? loadMoreBtnHtml : '')) + '</div></div>';
+    sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="archived"><div class="feature-project-session-list">' + (archivedSessions.length > 0 ? renderPhSessionsWithGroups(archivedSessions, 'archived') + loadMoreBtnHtml : archivedEmptyNote + (hasMore ? loadMoreBtnHtml : '')) + '</div></div>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-search-panel">';
     sessionsHtml += (typeof window._buildPhSearchPanelHtml === 'function' ? window._buildPhSearchPanelHtml(searchIdentity) : '');
