@@ -70,13 +70,17 @@ function ctxSessionOpsAllowed(ns) {
 }
 
 function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
-  // 线程宿主（coder 等）的侧栏线程叶子：线程语义菜单（与线程视图行动作
-  // 同源——coder-threads-ui）。中断只在执行/待投递时有对象；归档任何状态
-  // 都可用——生产 lifecycle（thread-lifecycle.js）归档即打断收纳（seal
-  // 取消 pending + 收敛接续挡板 + 停全链 runtime），不做 busy 拒绝
-  // （thread_busy 仅 thread-routes.js 测试兜底 lifecycle 的行为，前端
-  // 不得据此置灰，否则接续中的线程无法归档）。
-  if (role === 'runtime' && threadId) {
+  // 线程宿主的侧栏线程叶子：自动接续 APP（coder / memo）走线程语义菜单
+  // （与线程视图行动作同源——coder-threads-ui）。中断只在执行/待投递时
+  // 有对象；归档任何状态都可用——生产 lifecycle（thread-lifecycle.js）
+  // 归档即打断收纳（seal 取消 pending + 收敛接续挡板 + 停全链 runtime），
+  // 不做 busy 拒绝（thread_busy 仅 thread-routes.js 测试兜底 lifecycle 的
+  // 行为，前端不得据此置灰，否则接续中的线程无法归档）。
+  // 手动接续 APP（ADR-0032，编程小助手）：会话操作菜单是既有产品面，
+  // 线程化不替换——落到下方 runtime 会话菜单，线程专属项（复制
+  // Thread ID / 中断线程 / 归档线程）在其中追加；删除会话在 head 上
+  // 即整线程删除（服务端重定向），不另设重复项。
+  if (role === 'runtime' && threadId && !ctxSessionOpsAllowed(ns)) {
     const thread = typeof window.getThreadById === 'function' ? window.getThreadById(threadId) : null;
     if (thread) {
       const isZh = currentLanguage === 'zh';
@@ -117,6 +121,13 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
         { label: isZh ? '分支并归档原会话' : 'Branch & Archive', action: 'branch-and-archive' },
       ]},
     ];
+    // 线程会话（ADR-0032 手动接续 APP）：追加线程专属项——复制 Thread ID
+    // 与复制 Session ID 并列；中断线程仅 busy（执行/待投递）时有对象；
+    // 归档线程任何状态可用（lifecycle 打断收纳，前端不置灰）。
+    const thread = threadId && typeof window.getThreadById === 'function'
+      ? window.getThreadById(threadId) : null;
+    const threadBusy = thread
+      && (thread.lifeState === 'executing' || thread.lifeState === 'pending-commands');
     // 分组：标题编辑 / 历史变换 / 会话管理 / runtime 生命周期（危险置底）。
     const items = [
       { label: isZh ? '重命名' : 'Rename', action: 'rename' },
@@ -124,6 +135,10 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
       ...historyItems,
       { type: 'separator' },
       { label: isZh ? '复制 Session ID' : 'Copy Session ID', action: 'copy-session-id' },
+      ...(thread ? [
+        { label: isZh ? '复制 Thread ID' : 'Copy Thread ID', action: 'copy-thread-id' },
+        { label: isZh ? '中断线程' : 'Interrupt Thread', action: 'thread-interrupt', disabled: !threadBusy },
+      ] : []),
     ];
     // TODO toggle — non-archived only（与 session 角色菜单一致）
     if (!isArchived) {
@@ -133,6 +148,9 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
     // ADR-0011 转发远程同名路由（agentId 用宿主命名空间 id）。
     items.push(
       { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive'), action: 'archive-and-stop' },
+      ...(thread ? [
+        { label: isZh ? '归档线程' : 'Archive Thread', action: 'thread-archive' },
+      ] : []),
       { type: 'separator' },
       { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
       { label: isZh ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
