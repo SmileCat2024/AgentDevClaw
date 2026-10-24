@@ -993,3 +993,100 @@ describe('归属转移：路由装配', () => {
     assert.ok(existsSync(getPrebuiltSessionFilePath(AGENT, fixture.sessionA1.id)), '移动不删除会话文件');
   });
 });
+
+// ── 9. 线程域 busy 判定（ticket 048 / ADR-0032 决策 5）──────────────────
+//
+// 会话域 probe 只看「存活 runtime」；线程域活跃态（接续窗口 rotating /
+// Inbox 待投递 pending-commands）在 head runtime 缺席时探不到——此时放行
+// 会与 succession 事务竞态。findThreadBySession 假件注入构造线程事实；
+// runtimes 传空 Map 模拟「无存活 runtime」的缺口场景。
+
+describe('归属转移：线程域 busy 判定', () => {
+  function makeThreadDeps({ threadsBySession, runtimes = new Map(), probeThrows = false } = {}) {
+    const base = makeLifecycleDeps({
+      runtimes,
+      viewerImpl: runtimes.size ? viewerFromRuntimes(runtimes) : undefined,
+    });
+    return {
+      ...base.deps,
+      findThreadBySession: async (_agentId, sessionId) => {
+        if (probeThrows) throw new Error('thread probe down');
+        return threadsBySession?.get(sessionId) || null;
+      },
+    };
+  }
+
+  test('接续窗口（rotating，无存活 runtime）：move 拒绝 409 thread_executing，索引零变化', async () => {
+    const fixture = await setupMoveFixture();
+    const deps = makeThreadDeps({
+      threadsBySession: new Map([[fixture.sessionA1.id, { threadId: 'th-1', status: 'rotating' }]]),
+    });
+    const beforeIndex = await readSessionIndex(AGENT);
+    await assert.rejects(
+      movePhSessions({ sessionIds: [fixture.sessionA1.id], target: { type: 'project', id: fixture.projectB.id } }, deps),
+      (error) => error.statusCode === 409 && error.code === 'ph_sessions_busy' && /thread_executing/.test(error.message),
+    );
+    assert.deepEqual(await readSessionIndex(AGENT), beforeIndex, '拒绝时索引零变化');
+  });
+
+  test('Inbox 待投递（pending-commands，无存活 runtime）：move 拒绝 409 thread_pending_commands', async () => {
+    const fixture = await setupMoveFixture();
+    const deps = makeThreadDeps({
+      threadsBySession: new Map([[
+        fixture.sessionA1.id,
+        { threadId: 'th-1', status: 'open', commands: [{ commandId: 'c1', status: 'pending' }] },
+      ]]),
+    });
+    await assert.rejects(
+      movePhSessions({ sessionIds: [fixture.sessionA1.id], target: { type: 'project', id: fixture.projectB.id } }, deps),
+      (error) => error.statusCode === 409 && error.code === 'ph_sessions_busy' && /thread_pending-commands/.test(error.message),
+    );
+  });
+
+  test('空闲线程（idle）：move 正常执行，线程域判定不阻塞', async () => {
+    const fixture = await setupMoveFixture();
+    const deps = makeThreadDeps({
+      threadsBySession: new Map([[
+        fixture.sessionA1.id,
+        { threadId: 'th-1', status: 'open', commands: [{ commandId: 'c1', status: 'delivered' }] },
+      ]]),
+    });
+    const result = await movePhSessions({ sessionIds: [fixture.sessionA1.id], target: { type: 'project', id: fixture.projectB.id } }, deps);
+    assert.deepEqual(result.movedSessionIds, [fixture.sessionA1.id]);
+  });
+
+  test('无线程 / 已关闭线程（closed）：move 正常执行（混合期存量会话路径）', async () => {
+    const fixture = await setupMoveFixture();
+    const deps = makeThreadDeps({
+      threadsBySession: new Map([[fixture.sessionA2.id, { threadId: 'th-2', status: 'closed' }]]),
+    });
+    const result = await movePhSessions({ sessionIds: [fixture.sessionA1.id, fixture.sessionA2.id], target: { type: 'project', id: fixture.projectB.id } }, deps);
+    assert.deepEqual(
+      [...result.movedSessionIds].sort(),
+      [fixture.sessionA1.id, fixture.sessionA2.id].sort(),
+      '两成员均完成移动（返回顺序不作断言）',
+    );
+  });
+
+  test('线程探测失败：按 busy 拒绝（fail-closed，与会话域 probe 同纪律）', async () => {
+    const fixture = await setupMoveFixture();
+    const deps = makeThreadDeps({ probeThrows: true });
+    await assert.rejects(
+      movePhSessions({ sessionIds: [fixture.sessionA1.id], target: { type: 'project', id: fixture.projectB.id } }, deps),
+      (error) => error.statusCode === 409 && error.code === 'ph_sessions_busy' && /thread_probe_failed/.test(error.message),
+    );
+  });
+
+  test('项目改绑：线程接续窗口拒绝 409 ph_project_busy（thread_executing）', async () => {
+    const fixture = await setupMoveFixture();
+    const deps = makeThreadDeps({
+      threadsBySession: new Map([[fixture.sessionA1.id, { threadId: 'th-1', status: 'rotating' }]]),
+    });
+    await assert.rejects(
+      rebindPhProject(fixture.projectA.id, { workDirectory: fixture.dirY }, deps),
+      (error) => error.statusCode === 409 && error.code === 'ph_project_busy' && /thread_executing/.test(error.message),
+    );
+    const project = await getPhProject(fixture.projectA.id);
+    assert.equal(project.workDirectory, fixture.dirX, '拒绝时项目绑定不变');
+  });
+});

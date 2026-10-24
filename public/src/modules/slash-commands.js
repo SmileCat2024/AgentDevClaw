@@ -79,14 +79,20 @@ function _currentSessionContext() {
   return null;
 }
 
-// 线程宿主会话（coder / memo 等，线程事实驱动判定）不提供手动精简/摘要：
+// 自动接续 APP（coder / memo 等，线程事实驱动判定）不提供手动精简/摘要：
 // 连续性由线程接力持有（自动触发 + 接续事务），手动入口与 APP 对话模型
 // 矛盾（ADR-0024 决策 4「不出现手动 trim / compact 等通用会话操作」）。
+// 手动接续 APP（ADR-0032 决策 2，编程小助手）的线程会话保留入口：线程
+// 承接的是接续事务（挡板 → 变换 → head 推进），变换由用户手动发起。
+// 判定复用 ctx-menu-items 的会话操作产品面谓词 ctxSessionOpsAllowed
+// （CTX_SESSION_OPS_AGENTS 白名单），不新增平行清单：白名单内 = 有手动
+// 精简产品面 = 手动接续 APP；coder / memo 不在名单，行为不变。
 // 线程索引未就绪时保守放行（显示），执行侧守卫兜底。
 function _isThreadCarriedSession(ctx) {
-  return !!(ctx && ctx.agentId && ctx.sessionId
-    && typeof window.isThreadHostAgentId === 'function'
-    && window.isThreadHostAgentId(ctx.agentId, ctx.sessionId));
+  if (!ctx || !ctx.agentId || !ctx.sessionId) return false;
+  if (typeof window.isThreadHostAgentId !== 'function') return false;
+  if (!window.isThreadHostAgentId(ctx.agentId, ctx.sessionId)) return false;
+  return !ctxSessionOpsAllowed(ctx.agentId);
 }
 
 function _manualSessionOpsApplicable() {
@@ -162,7 +168,8 @@ async function _handleTrim() {
 }
 
 // P0 静态注册（P1 起由 GET /protoclaw/commands 动态清单合并取代）。
-// applies：线程宿主会话不显示（裁剪声明住命令注册方，菜单机制通用）。
+// applies：自动接续 APP 的线程会话不显示；手动接续 APP（PH）保留——
+// 口径见上方 _isThreadCarriedSession 注释（ADR-0032 决策 2）。
 SlashMenu.registerCommands([
   {
     name: 'trim',

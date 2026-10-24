@@ -595,6 +595,10 @@ setupPhProjectRoutes(app, express, {
   clearUISurfaces: (viewerAgentId) => getUISurfaceStore().clearAgent(viewerAgentId),
   readWorkspaceState,
   projectLayerPath,
+  // 线程域 busy 判定（ticket 048 / ADR-0032 决策 5）：会话移动与项目改绑
+  // 在会话域 probe 外补线程域活跃态（接续窗口 / Inbox 待投递）。每次调用
+  // 解析 integration 实例，规避装配期初始化时序；方法为闭包实现，无 this 依赖。
+  findThreadBySession: (agentId, sessionId) => getThreadIntegration().findThreadBySession(agentId, sessionId),
 });
 
 setupProjectDocsetRoutes(app, express);

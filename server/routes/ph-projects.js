@@ -11,6 +11,7 @@ import {
 import { ensureDir, normalizePathCasing } from '../shared/fs-helpers.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readSessionIndex, updateSessionIndex } from '../shared/session-access.js';
+import { synthesizeThreadLifeState } from '../thread-control/thread-life-state.js';
 
 // ── PH 独立项目存储（ticket 041）─────────────────────────────────────────────
 //
@@ -460,6 +461,37 @@ function rebindBusyError(projectId, sessionId, reason) {
 }
 
 /**
+ * 线程域 busy 判定（ticket 048 / ADR-0032 决策 5）：会话域 probe 只看
+ * 「存活 runtime」，线程域活跃态在 runtime 缺席时同样存在——接续窗口
+ * （rotating：旧 head 已退役、successor 未 READY）与 Inbox 待投递
+ * （pending-commands）。此时放行移动/改绑会与 succession 事务竞态
+ * （归属落盘与 head 推进交错）。board 级执行中轮次必然伴随存活
+ * runtime，由既有会话域 probe 拦截，此处 boardState 传 null 只补线程
+ * 域独有信号；归档事务收敛 pending 与 rotating，closed 为清理残迹，
+ * 均放行。deps.findThreadBySession 未注入（既有测试装配）时跳过，
+ * 不引入线程控制面初始化副作用；探测失败按 busy 拒绝（fail-closed）。
+ */
+async function _assertSessionsThreadsIdle(sessionIds, deps, busyError) {
+  const findThreadBySession = typeof deps?.findThreadBySession === 'function'
+    ? deps.findThreadBySession
+    : null;
+  if (!findThreadBySession) return;
+  for (const sessionId of sessionIds) {
+    let thread = null;
+    try {
+      thread = await findThreadBySession(PH_AGENT_ID, sessionId);
+    } catch (error) {
+      throw busyError(sessionId, `thread_probe_failed: ${error?.message || error}`);
+    }
+    if (!thread) continue;
+    const life = synthesizeThreadLifeState({ thread, boardState: null });
+    if (life.lifeState === 'executing' || life.lifeState === 'pending-commands') {
+      throw busyError(sessionId, `thread_${life.lifeState}`);
+    }
+  }
+}
+
+/**
  * 项目改绑编排。
  * - workDirectory 非空：external，经 resolvePhProjectDirectory 校验（存在性 +
  *   大小写还原）；为空：managed，按项目 ID 重新分配托管目录。
@@ -521,6 +553,13 @@ export async function rebindPhProject(projectId, { workDirectory } = {}, deps = 
       .filter((item) => item.id && item.projectId === project.id)
       .map((item) => item.id);
     addPhOwnershipGateSessions(rebindGateKey, sessionIds);
+    // 线程域 busy 判定先于会话域 probe（ticket 048）：接续窗口 / Inbox
+    // 待投递时 head runtime 可能不存活，会话域探测探不到。
+    await _assertSessionsThreadsIdle(
+      sessionIds,
+      deps,
+      (sessionId, reason) => rebindBusyError(project.id, sessionId, reason),
+    );
     // busy 探测：全部存活实例先探一遍再动手，杜绝"释放了一半才发现 busy"。
     const liveRuntimes = [];
     for (const sessionId of sessionIds) {
@@ -1084,6 +1123,17 @@ export async function movePhSessions({ sessionIds, target } = {}, deps = {}) {
     throw ownershipGateError(conflictGate, 'PH sessions move conflicts with an in-flight ownership transfer');
   }
   try {
+    // 线程域 busy 判定先于会话域 probe（ticket 048）：接续窗口 / Inbox
+    // 待投递时 head runtime 可能不存活，会话域探测探不到。
+    await _assertSessionsThreadsIdle(
+      movingIds,
+      deps,
+      (sessionId, reason) => moveRequestError(
+        `Sessions are busy (${reason}); move is rejected: session=${sessionId}`,
+        'ph_sessions_busy',
+        409,
+      ),
+    );
     // busy 探测：全部存活实例先探一遍再动手，杜绝「释放了一半才发现 busy」。
     const liveRuntimes = [];
     for (const sessionId of movingIds) {
