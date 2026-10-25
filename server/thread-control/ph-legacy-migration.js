@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { writePreview, applyPreview } from '../../scripts/migrate-ph-threads.mjs';
-import { PREBUILT_WORKSPACES_ROOT, THREADS_ROOT, USER_DATA_ROOT } from '../shared/constants.js';
+import { USER_DATA_ROOT } from '../shared/constants.js';
 
 const AGENT_ID = 'programming-helper';
 const MIGRATION_DIR = path.join('migrations', 'ph-thread-legacy-v1');
