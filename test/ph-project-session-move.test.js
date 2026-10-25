@@ -1090,3 +1090,84 @@ describe('归属转移：线程域 busy 判定', () => {
     assert.equal(project.workDirectory, fixture.dirX, '拒绝时项目绑定不变');
   });
 });
+
+// ── 10. 整链移动（ticket 050 / ADR-0032 决策 5）─────────────────────────
+//
+// 移动对话 = 移动整条线程：选中 head 时历史代成员并入移动集合，走与显式
+// 选中完全相同的校验与落盘；两代归属一致是验收标准（head 移走而历史代
+// 留在原项目 = 对话归属撕裂）。
+
+describe('归属转移：整链移动', () => {
+  function makeThreadDeps({ threadsBySession, runtimes = new Map() } = {}) {
+    const base = makeLifecycleDeps({
+      runtimes,
+      viewerImpl: runtimes.size ? viewerFromRuntimes(runtimes) : undefined,
+    });
+    return {
+      stops: base.stops,
+      deps: { ...base.deps, findThreadBySession: async (_agentId, sessionId) => threadsBySession?.get(sessionId) || null },
+    };
+  }
+
+  test('移动 head 扩链：两代一并移动，归属一致翻转，释放覆盖整链', async () => {
+    const fixture = await setupMoveFixture();
+    const thread = {
+      threadId: 'th-chain-1',
+      status: 'open',
+      headSessionId: fixture.sessionA1.id,
+      sessionChain: [
+        { sessionId: fixture.sessionA2.id, role: 'predecessor' },
+        { sessionId: fixture.sessionA1.id, role: 'head' },
+      ],
+      commands: [{ commandId: 'c1', status: 'delivered' }],
+    };
+    const { stops, deps } = makeThreadDeps({
+      threadsBySession: new Map([[fixture.sessionA1.id, thread]]),
+      runtimes: fixture.runtimes,
+    });
+    const result = await movePhSessions({ sessionIds: [fixture.sessionA1.id], target: { type: 'project', id: fixture.projectB.id } }, deps);
+
+    assert.deepEqual(
+      [...result.movedSessionIds].sort(),
+      [fixture.sessionA1.id, fixture.sessionA2.id].sort(),
+      '只选 head，历史代一并移动（返回顺序不作断言）',
+    );
+    assert.equal((await readRecord(fixture.sessionA1.id))?.projectId, fixture.projectB.id, 'head 归属翻转');
+    assert.equal((await readRecord(fixture.sessionA2.id))?.projectId, fixture.projectB.id, '历史代归属与 head 一致');
+    const stopIds = stops.map((stop) => stop.sessionId).sort();
+    assert.deepEqual(stopIds, [fixture.sessionA1.id, fixture.sessionA2.id].sort(), '存活实例释放覆盖整链');
+  });
+
+  test('扩链成员执行中（会话域 busy）：move head 拒绝 409，索引零变化', async () => {
+    const fixture = await setupMoveFixture();
+    const runtimes = new Map(fixture.runtimes);
+    runtimes.set(fixture.sessionA2.id, { viewerAgentId: `view-${fixture.sessionA2.id}`, busy: { callActive: true, queued: [] } });
+    const thread = {
+      threadId: 'th-chain-2',
+      status: 'open',
+      headSessionId: fixture.sessionA1.id,
+      sessionChain: [
+        { sessionId: fixture.sessionA2.id, role: 'predecessor' },
+        { sessionId: fixture.sessionA1.id, role: 'head' },
+      ],
+    };
+    const { deps } = makeThreadDeps({
+      threadsBySession: new Map([[fixture.sessionA1.id, thread]]),
+      runtimes,
+    });
+    const beforeIndex = await readSessionIndex(AGENT);
+    await assert.rejects(
+      movePhSessions({ sessionIds: [fixture.sessionA1.id], target: { type: 'project', id: fixture.projectB.id } }, deps),
+      (error) => error.statusCode === 409 && error.code === 'ph_sessions_busy' && error.message.includes(fixture.sessionA2.id),
+    );
+    assert.deepEqual(await readSessionIndex(AGENT), beforeIndex, '拒绝时两代归属零变化');
+  });
+
+  test('未注入 findThreadBySession（旧装配）：不扩链，单会话移动语义保持（048 兼容）', async () => {
+    const fixture = await setupMoveFixture();
+    const { deps } = makeLifecycleDeps({ runtimes: fixture.runtimes, viewerImpl: viewerFromRuntimes(fixture.runtimes) });
+    const result = await movePhSessions({ sessionIds: [fixture.sessionA1.id], target: { type: 'project', id: fixture.projectB.id } }, deps);
+    assert.deepEqual(result.movedSessionIds, [fixture.sessionA1.id]);
+    assert.equal((await readRecord(fixture.sessionA2.id))?.projectId, fixture.projectA.id, '未选中会话归属不动');
+  });
+});

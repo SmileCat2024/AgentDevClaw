@@ -308,6 +308,43 @@ function _renderAgentCreatorSessionList(agent, block, ctx) {
  *   - openActionExtra: 并入打开动作 JSON 的额外字段（如 messageIndex 定位）
  *   - extraClasses: 附加到条目根的额外 class
  */
+/**
+ * 对话历史徽标（ticket 050）：会话是某线程 head 且存在历史代时渲染
+ * 「历史 · N」入口。用户语言：「历史」= 本对话每次精简前的完整记录
+ * （ADR-0032 决策 3），不是内部代次概念。非 head 成员 / 无线程会话不
+ * 渲染（归档区的历史代成员由列表过滤收敛，只经本入口可达）。线程数据
+ * 未加载（getThreadForSession 缺席）时保守不渲染——轮询到位后自动补。
+ */
+window.renderSessionThreadBadge = function (agentId, session) {
+  if (typeof window.getThreadForSession !== 'function') return '';
+  const thread = window.getThreadForSession(agentId, session?.id);
+  if (!thread || thread.headSessionId !== session?.id) return '';
+  // 列表接口的 thread 摘要不带 sessionChain（详情端点才带），以 sessionIds 兜底计数
+  const chain = Array.isArray(thread.sessionChain) ? thread.sessionChain : null;
+  const archiveCount = chain
+    ? chain.filter((entry) => entry?.sessionId !== thread.headSessionId).length
+    : Math.max(0, (Array.isArray(thread.sessionIds) ? thread.sessionIds.length : 1) - 1);
+  if (archiveCount <= 0) return '';
+  const isZh = currentLanguage === 'zh';
+  return '<button type="button" class="session-thread-badge" onclick="event.stopPropagation();window.phOpenThreadHistory(\'' + escapeHtml(agentId) + '\', \'' + escapeHtml(thread.threadId) + '\')"'
+    + ' title="' + escapeHtml(isZh ? '查看本对话的精简前存档' : 'View pre-trim archives of this conversation') + '">'
+    + escapeHtml(isZh ? '历史 · ' + archiveCount : 'History · ' + archiveCount)
+    + '</button>';
+};
+
+/**
+ * 归档区线程收敛谓词（ticket 050）：历史代成员（线程内非 head）不再在
+ * 归档区单独成行——它们是某条对话的精简前存档，经 head 行「历史 · N」
+ * 入口可达（ADR-0032 列表语义：一行 = 一段对话）。线程数据未加载时返回
+ * false（保守渲染），数据到位后 sig 变化触发重渲染收敛。已归档线程的
+ * head 保留为对话行（历史入口仍可用）。
+ */
+window.phIsThreadArchivedMember = function (agentId, session) {
+  if (typeof window.getThreadForSession !== 'function') return false;
+  const thread = window.getThreadForSession(agentId, session?.id);
+  return !!(thread && thread.headSessionId !== session?.id);
+};
+
 window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
   const isZh = currentLanguage === 'zh';
   const sType = opts.type || session.sessionType || 'main';
@@ -734,7 +771,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
 
   // Project is active - show its sessions with tabs
   const mainSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.archived !== true));
-  const archivedSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.archived === true));
+  // 归档区线程收敛：历史代成员过滤（谓词定义见 phIsThreadArchivedMember）。
+  const archivedSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.archived === true && !window.phIsThreadArchivedMember(agent.id, s)));
   const needsTabs = true; // 始终显示分页器，不管每个类型有没有对话
 
   // 会话移动多选（本地 PH only）：远程会话不可选——移动是本地归属变更，

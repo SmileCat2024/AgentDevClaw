@@ -1,0 +1,86 @@
+// PH 列表线程聚合（ticket 050）：徽标（历史 · N）与归档区收敛谓词。
+// 行 = 一段对话（ADR-0032）：head 行挂历史入口；历史代成员从归档区
+// 过滤，只经入口可达。徽标契约：仅 head 且存在历史代时渲染，点击经
+// phOpenThreadHistory 打开；线程数据未加载保守不渲染（轮询到位自动补）。
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import test from 'node:test';
+import { createFrontendSandbox } from './helpers/frontend-vm.js';
+
+const source = fs.readFileSync(new URL('../public/src/modules/session-list-render.js', import.meta.url), 'utf8');
+
+function loadModule({ sessionThread = null, language = 'zh' } = {}) {
+  const ctx = createFrontendSandbox({
+    currentLanguage: language,
+    getWorkspaceSessions: () => [],
+  });
+  if (sessionThread !== null) {
+    ctx.window.getThreadForSession = (_agentId, sessionId) => {
+      if (!sessionThread) return null;
+      // 真实接口形态：列表摘要只有 sessionIds（sessionChain 是详情端点字段）
+      const inChain = (sessionThread.sessionIds || []).includes(sessionId);
+      return inChain ? sessionThread : null;
+    };
+  }
+  ctx.run(source);
+  return ctx;
+}
+
+// 真实列表接口的 thread 摘要形态：无 sessionChain，成员只有 sessionIds
+const HEAD_THREAD = {
+  threadId: 'wt-1',
+  headSessionId: 'sess-head',
+  sessionIds: ['sess-old', 'sess-head'],
+};
+
+test('head 行（1 份存档）：渲染「历史 · 1」入口，点击指向 phOpenThreadHistory', () => {
+  const ctx = loadModule({ sessionThread: HEAD_THREAD });
+  const html = ctx.run(`window.renderSessionThreadBadge('programming-helper', { id: 'sess-head' })`);
+  assert.ok(html.includes('历史 · 1'), `徽标文案含存档数：${html}`);
+  assert.ok(html.includes("phOpenThreadHistory('programming-helper', 'wt-1')"), '点击经线程身份打开历史面板');
+});
+
+test('多代线程：存档数跟随链成员数（不含 head）', () => {
+  const thread = {
+    ...HEAD_THREAD,
+    sessionIds: ['s1', 's2', 's3', 'sess-head'],
+  };
+  const ctx = loadModule({ sessionThread: thread });
+  const html = ctx.run(`window.renderSessionThreadBadge('programming-helper', { id: 'sess-head' })`);
+  assert.ok(html.includes('历史 · 3'), `三份存档：${html}`);
+});
+
+test('非 head 成员（归档区历史代）：无徽标', () => {
+  const ctx = loadModule({ sessionThread: HEAD_THREAD });
+  const html = ctx.run(`window.renderSessionThreadBadge('programming-helper', { id: 'sess-old' })`);
+  assert.equal(html, '', '历史代成员不挂入口（行本身会被归档区收敛）');
+});
+
+test('单代线程 / 无线程会话 / 数据未加载：无徽标（混合期自然特例）', () => {
+  const single = { threadId: 'wt-2', headSessionId: 'sess-x', sessionChain: [{ sessionId: 'sess-x', role: 'head' }] };
+  assert.equal(loadModule({ sessionThread: single }).run(`window.renderSessionThreadBadge('programming-helper', { id: 'sess-x' })`), '', '单代：无历史可看');
+  assert.equal(loadModule({ sessionThread: null }).run(`window.renderSessionThreadBadge('programming-helper', { id: 'sess-any' })`), '', '无线程：不渲染');
+  const ctxNoStore = loadModule({});
+  delete ctxNoStore.window.getThreadForSession;
+  assert.equal(ctxNoStore.run(`window.renderSessionThreadBadge('programming-helper', { id: 'sess-any' })`), '', '线程索引缺席：保守不渲染');
+});
+
+test('英文语言：徽标文案切换', () => {
+  const ctx = loadModule({ sessionThread: HEAD_THREAD, language: 'en' });
+  const html = ctx.run(`window.renderSessionThreadBadge('programming-helper', { id: 'sess-head' })`);
+  assert.ok(html.includes('History · 1'), `English label: ${html}`);
+});
+
+test('归档区收敛：历史代成员过滤、head 与无线程会话保留', () => {
+  const ctx = loadModule({ sessionThread: HEAD_THREAD });
+  const isMember = (id) => ctx.run(`window.phIsThreadArchivedMember('programming-helper', { id: '${id}' })`);
+  assert.equal(isMember('sess-old'), true, '历史代成员：归档区过滤');
+  assert.equal(isMember('sess-head'), false, 'head：保留为对话行');
+  assert.equal(isMember('sess-plain'), false, '无线程会话：混合期自然特例，不受影响');
+});
+
+test('归档区收敛：线程数据未加载时不过滤（保守渲染）', () => {
+  const ctx = loadModule({});
+  delete ctx.window.getThreadForSession;
+  assert.equal(ctx.run(`window.phIsThreadArchivedMember('programming-helper', { id: 'sess-any' })`), false, '索引缺席：不过滤');
+});

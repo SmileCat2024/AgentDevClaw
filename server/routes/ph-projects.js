@@ -993,6 +993,37 @@ export async function movePhSessions({ sessionIds, target } = {}, deps = {}) {
     }
   }
 
+  // ── 整链扩展（ticket 050）：移动对话 = 移动整条线程 ──────────────
+  // 选中会话属线程时，历史代成员一并并入移动集合（对话的归属是整体事实，
+  // head 移走而历史代留在原归属没有意义）。扩展成员走与显式选中完全相同
+  // 的后续校验（存在 / 跨目录 / gate / busy）与落盘，异常归属数据自然被
+  // 既有校验拦截。deps.findThreadBySession 未注入（旧测试装配）时不扩链，
+  // 行为退回单会话移动（048 语义）。
+  const findThreadBySessionMove = typeof deps?.findThreadBySession === 'function'
+    ? deps.findThreadBySession
+    : null;
+  if (findThreadBySessionMove) {
+    for (const sessionId of [...uniqueSessionIds]) {
+      let thread = null;
+      try {
+        thread = await findThreadBySessionMove(PH_AGENT_ID, sessionId);
+      } catch (error) {
+        throw moveRequestError(
+          `Sessions are busy (thread_probe_failed: ${error?.message || error}); move is rejected: session=${sessionId}`,
+          'ph_sessions_busy',
+          409,
+        );
+      }
+      for (const entry of thread?.sessionChain || []) {
+        const memberId = cleanSessionText(entry?.sessionId);
+        if (memberId && !seenIds.has(memberId)) {
+          seenIds.add(memberId);
+          uniqueSessionIds.push(memberId);
+        }
+      }
+    }
+  }
+
   const targetType = target?.type;
   if (targetType !== 'project' && targetType !== 'directory') {
     throw moveRequestError(`target.type must be "project" or "directory": ${JSON.stringify(targetType)}`, 'ph_sessions_move_invalid_request');

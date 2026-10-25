@@ -721,6 +721,21 @@ setupThreadRoutes(app, express, {
     const record = await findPrebuiltSessionRecordShared(agentId, sessionId);
     return cleanSessionText(record?.title) || null;
   },
+  // 代际元数据批量解析（ticket 050 历史存档面板）：共享只读索引一次读全
+  // 部代，缺省字段收敛为 null（索引查不到的代只保留链事实）。
+  resolveSessionChainMeta: async (agentId, sessionIds) => Promise.all(
+    (sessionIds || []).map(async (sessionId) => {
+      const record = await findPrebuiltSessionRecordShared(agentId, sessionId);
+      if (!record) return null;
+      return {
+        sessionId,
+        title: cleanSessionText(record.title) || null,
+        updatedAt: cleanSessionText(record.updatedAt) || null,
+        messageCount: Number.isFinite(Number(record.messageCount)) ? Number(record.messageCount) : null,
+        archived: record.archived === true,
+      };
+    }),
+  ),
 });
 
 // ── ACP 支撑路由（coder 原子创建 + 精确中断 + list/resume，ticket 018）──

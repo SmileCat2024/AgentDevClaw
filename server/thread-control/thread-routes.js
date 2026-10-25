@@ -42,8 +42,13 @@ import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-e
  *   async (agentId) => void，满配额抛结构化 429；由装配层闭包 agent 声明与
  *   线程控制面（server.js 注入）。不传则不检查（测试装配）。
  * @param {{ deleteThread: Function }} [options.threadDelete] - T005 删除级联服务
+ * @param {Function} [options.resolveSessionChainMeta] 会话代际元数据批量解析
+ *   （ticket 050）：async (agentId, sessionIds[]) => Array<{ sessionId, title,
+ *   updatedAt, messageCount, archived } | null>，按入参顺序返回，会话不存在为
+ *   null。供详情端点组装 sessionChainMeta（历史存档面板的时间锚 / 标题 /
+ *   规模）；不注入则详情响应不含该字段。
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, publishThreadEvent = publishThreadEventDefault, assertThreadQuota } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, publishThreadEvent = publishThreadEventDefault, assertThreadQuota } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -256,7 +261,30 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
       if (!thread) {
         return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
       }
-      res.json({ ok: true, thread: await _attachLifeState(thread, await _getArchiveEntries()) });
+      const withState = await _attachLifeState(thread, await _getArchiveEntries());
+      // 代际元数据（ticket 050 历史存档面板）：sessionChain 事实（时间锚 /
+      // 触发方式来自线程记录）合并会话索引元数据（标题 / 规模 / 归档态），
+      // 索引查不到的代保留链事实、其余字段为 null。按代倒序（最新在前）
+      // 返回——面板按时间倒序呈现存档。
+      let sessionChainMeta = undefined;
+      if (typeof resolveSessionChainMeta === 'function' && Array.isArray(thread.sessionChain)) {
+        const metas = await resolveSessionChainMeta(thread.agentId, thread.sessionChain.map((e) => e.sessionId));
+        sessionChainMeta = thread.sessionChain.map((entry, idx) => {
+          const meta = Array.isArray(metas) ? metas[idx] : null;
+          return {
+            sessionId: entry.sessionId,
+            role: entry.role || null,
+            startedAt: entry.startedAt ?? null,
+            endedAt: entry.endedAt ?? null,
+            endKind: entry.endKind || null,
+            title: meta?.title ?? null,
+            updatedAt: meta?.updatedAt ?? null,
+            messageCount: Number.isFinite(meta?.messageCount) ? meta.messageCount : null,
+            archived: meta?.archived === true,
+          };
+        }).reverse();
+      }
+      res.json({ ok: true, thread: withState, ...(sessionChainMeta ? { sessionChainMeta } : {}) });
     } catch (err) {
       _errorResponse(res, err);
     }
