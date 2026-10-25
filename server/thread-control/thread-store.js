@@ -79,7 +79,9 @@ export class ThreadStore extends WorkThreadStore {
       this._indexLock = indexNext;
       try {
         await indexPrev.catch(() => {});
-        const index = await this.readIndex();
+        // 框架 readIndex 命中读缓存时返回共享只读对象（store.ts 缓存契约）；
+        // 读-改-写先深拷贝，条目移除的改写不污染缓存。
+        const index = structuredClone(await this.readIndex());
         if ((index.threads || []).some((entry) => entry?.threadId === normalizedThreadId)) {
           index.threads = index.threads.filter(
             (entry) => entry?.threadId !== normalizedThreadId,

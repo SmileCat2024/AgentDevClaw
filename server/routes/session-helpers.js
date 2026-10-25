@@ -1428,7 +1428,11 @@ async function requirePrebuiltSessionRecord(agentId, sessionId) {
  */
 async function findPrebuiltSessionRecordShared(agentId, sessionId) {
   const index = await readSessionIndexShared(agentId);
-  return index.sessions.find((session) => session.id === cleanSessionText(sessionId)) || null;
+  // 目标 id 提到 find 外归一一次：此前每条记录比较都重复 cleanSessionText，
+  // 在线程列表逐线程解析 head 字段等批量路径上随会话数×线程数线性放大。
+  const wanted = cleanSessionText(sessionId);
+  if (!wanted) return null;
+  return index.sessions.find((session) => session.id === wanted) || null;
 }
 
 async function resolvePrebuiltSessionOwner(sessionId, preferredAgentId = '') {
