@@ -32,7 +32,12 @@ export default {
   call: (args: Record<string, unknown>) => {
     const agentId = String(args?.agentId ?? '');
     const sessionId = String(args?.sessionId ?? '');
-    let html = `<div class="bash-command">${escapeHtml(agentId)}${sessionId ? '/' + escapeHtml(sessionId) : ''}</div>`;
+    // 双模输入：wt- 前缀是线程 ID（读代际导航），agentId 此时缺席；
+    // 会话输入仍是 agentId/sessionId 二元组。
+    const isThread = sessionId.startsWith('wt-');
+    let html = isThread
+      ? `<div class="bash-command">线程 ${escapeHtml(sessionId)}</div>`
+      : `<div class="bash-command">${escapeHtml(agentId)}${sessionId ? '/' + escapeHtml(sessionId) : ''}</div>`;
     if (args?.turn !== undefined && args?.turn !== null) {
       html += `<div class="tool-bg-meta">轮次 T${escapeHtml(args.turn)}</div>`;
     }

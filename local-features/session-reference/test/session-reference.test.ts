@@ -11,6 +11,8 @@ import {
   extractTodoEvents,
   renderTurnDetail,
   renderReferenceReminder,
+  renderThreadOverview,
+  isThreadId,
   SessionReferenceFeature,
   type VerifiedSessionReference,
 } from '../src/index.js';
@@ -359,15 +361,17 @@ describe('injectSessionReferences', () => {
   });
 });
 
-// ── 读取工具契约：(agentId, sessionId) 二元组寻址 ─────────────────
+// ── 读取工具契约：双模寻址（sessionId 必填；agentId 仅会话输入必填） ──
 
 describe('read tools address sessions by the (agentId, sessionId) pair', () => {
   const realFetch = globalThis.fetch;
 
-  it('requires agentId in the schema instead of defaulting it to the current agent', () => {
+  it('requires sessionId in the schema; agentId is runtime-checked per input mode', () => {
     const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
     const tools = new Map(feature.getTools().map((tool) => [tool.name, tool]));
-    assert.deepEqual(tools.get('session_read_overview')!.parameters!.required, ['sessionId', 'agentId']);
+    // 双模后 agentId 从 schema 必填降为运行时校验：sessionId 输入必填
+    // （下方用例覆盖），threadId 输入无需提供（线程全局唯一）。
+    assert.deepEqual(tools.get('session_read_overview')!.parameters!.required, ['sessionId']);
     assert.deepEqual(tools.get('session_read_turn')!.parameters!.required, ['sessionId', 'turn', 'agentId']);
   });
 
@@ -477,6 +481,142 @@ describe('read tools transport and paging', () => {
       assert.equal(urls.length, 1);
       assert.match(urls[0], /session_directory\?limit=5&offset=10/);
       assert.match(result.text, /第 11 条起/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+// ── 线程双模：threadId 输入 → 代际导航索引 ─────────────────────────
+
+describe('thread navigation (dual-mode session_read_overview)', () => {
+  const realFetch = globalThis.fetch;
+
+  function makeTools() {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    return new Map(feature.getTools().map((tool) => [tool.name, tool]));
+  }
+
+  it('isThreadId distinguishes thread ids from session ids by the wt- prefix', () => {
+    assert.equal(isThreadId('wt-4fbff1b4-d88a-4285-8bcd-78b23fee35a8'), true);
+    assert.equal(isThreadId('session-1791714788565-3ec628'), false);
+    assert.equal(isThreadId(''), false);
+  });
+
+  it('renders the generation chain with head/root marks and verbatim agentId labels', () => {
+    const thread = {
+      threadId: 'wt-x',
+      agentId: 'coder',
+      title: '审查最近更改',
+      lifeState: 'archived',
+      rootSessionId: 's-1',
+      headSessionId: 's-3',
+      createdAt: 1791714788613,
+      updatedAt: 1791718001021,
+    };
+    // sessionChainMeta 契约：服务端按代倒序（最新在前），每代合并索引元数据
+    const chainMeta = [
+      { sessionId: 's-3', title: 'head 代标题', startedAt: 1791716209735, endedAt: null, endKind: null, messageCount: 12, archived: false },
+      { sessionId: 's-2', title: '第 2 代标题', startedAt: 1791716138277, endedAt: 1791716209735, endKind: 'trim', messageCount: 8, archived: false },
+      { sessionId: 's-1', title: '起始代标题', startedAt: 1791714788565, endedAt: 1791716138277, endKind: 'trim', messageCount: 20, archived: true },
+    ];
+    const text = renderThreadOverview(thread as any, chainMeta as any);
+    assert.match(text, /\[线程导航\] wt-x「审查最近更改」/);
+    assert.match(text, /agent: coder ｜ 状态: 已归档/);
+    assert.match(text, /共 3 代/);
+    // head 代：最新标记 + 进行中（无 endedAt）+ agentId 纯值可原样填参
+    assert.match(text, /- \[第 3 代·最新\] s-3「head 代标题」 \(12 条消息, [^)]+~ 进行中\) — agentId: coder/);
+    // 中间代：接续方式透出
+    assert.match(text, /- \[第 2 代\] s-2「第 2 代标题」 \([^)]*接续: trim[^)]*\)/);
+    // 起始代：root 标记 + 归档态
+    assert.match(text, /- \[第 1 代·起始\] s-1「起始代标题」 \([^)]*会话已归档[^)]*\) — agentId: coder/);
+    assert.match(text, /阅读策略：最新代承载当前结论/);
+  });
+
+  it('falls back to the thread record sessionChain (reversed) when sessionChainMeta is absent', () => {
+    const thread = {
+      threadId: 'wt-y',
+      agentId: 'coder',
+      title: '接力线程',
+      headSessionId: 's-b',
+      // 线程记录的 sessionChain 为正序（最老在前），导航视图必须倒序呈现
+      sessionChain: [
+        { sessionId: 's-a', role: 'predecessor', startedAt: 1, endedAt: 2, endKind: 'trim' },
+        { sessionId: 's-b', role: 'head', startedAt: 2, endedAt: null, endKind: null },
+      ],
+    };
+    const text = renderThreadOverview(thread as any);
+    assert.match(text, /共 2 代/);
+    assert.match(text, /- \[第 2 代·最新\] s-b \(/);
+    assert.ok(text.indexOf('s-b') < text.indexOf('s-a'), '最新代应排在最老代之前');
+  });
+
+  it('renders an explicit empty note when the chain has no entries', () => {
+    const text = renderThreadOverview({ threadId: 'wt-z', agentId: 'a' } as any, []);
+    assert.match(text, /无线程代际记录/);
+  });
+
+  it('routes wt- input to the thread detail endpoint without requiring agentId', async () => {
+    const tools = makeTools();
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          thread: { threadId: 'wt-live', agentId: 'coder', title: 'T', headSessionId: 's-9' },
+          sessionChainMeta: [
+            { sessionId: 's-9', title: 'head', startedAt: 5, endedAt: null, messageCount: 3 },
+          ],
+        }),
+      } as any;
+    }) as any;
+    try {
+      const result = await (tools.get('session_read_overview')!.execute as any)({ sessionId: 'wt-live' });
+      assert.equal(urls.length, 1);
+      assert.match(urls[0], /\/protoclaw\/threads\/wt-live$/);
+      assert.match(result.text, /\[线程导航\] wt-live/);
+      assert.equal(result.threadId, 'wt-live');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('turns a thread 404 into a readable error that guides back to session ids', async () => {
+    const tools = makeTools();
+    globalThis.fetch = (async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({ message: 'Thread not found' }),
+    })) as any;
+    try {
+      const result = await (tools.get('session_read_overview')!.execute as any)({ sessionId: 'wt-none' });
+      assert.match(String(result.error), /线程不存在: wt-none/);
+      assert.match(String(result.error), /sessionId/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('session_list annotates thread ownership per entry and leaves plain sessions unannotated', async () => {
+    const tools = makeTools();
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        sessions: [
+          { agentId: 'coder', sessionId: 's-3', title: 'head 代', updatedAt: '2026-10-11T20:00:00Z', messageCount: 5, threadId: 'wt-abc', threadTitle: '审查最近更改' },
+          { agentId: 'ph', sessionId: 's-7', title: '普通会话', updatedAt: '2026-10-10T10:00:00Z', messageCount: 2 },
+        ],
+      }),
+    })) as any;
+    try {
+      const result = await (tools.get('session_list')!.execute as any)({});
+      assert.match(result.text, /— 线程 wt-abc「审查最近更改」/);
+      const plainLine = result.text.split('\n').find((line: string) => line.includes('s-7'))!;
+      assert.ok(plainLine, '普通会话条目应存在');
+      assert.doesNotMatch(plainLine, /— 线程/, '无线程归属的条目不应带线程标注');
     } finally {
       globalThis.fetch = realFetch;
     }

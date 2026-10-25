@@ -5,16 +5,24 @@
  * trim 投影视图）→ 某轮全量（session_read_turn）。纯读取视图：不落盘任何
  * 中间材料文件，每次调用对源会话快照现场投影。
  *
+ * session_read_overview 双模寻址：sessionId 输入走会话概览（trim 投影）；
+ * threadId 输入（wt- 前缀，线程全局唯一）走线程代际导航索引——线程是
+ * "对话"的身份（ADR-0032），一条线程经接续产生多代会话，导航索引按代
+ * 列出 sessionId/标题/时间/规模/接续方式，供 AI 定位要深入的会话；内容
+ * 读取仍以会话为单位（选定代后回到 sessionId 输入）。
+ *
  * 输入框引用联动：user-turn 的 metadata['session-reference']（条目：
  * {agentId, sessionId, title?, sessionType?}）在 CallStart 注入一条
  * reminder，提示 AI 按三级读取协议消费被引用会话。引用随消息一次性流动，
  * feature 不持有引用状态。
  *
  * 数据访问走 Claw server：/protoclaw/session_directory（跨 agent 会话目录，
- * 只读各 agent 的 index.json 元数据）与 /protoclaw/session_record（规范化
- * 消息，含远程命名空间转发）。投影复用框架 trim 引擎的纯函数
- * buildTrimmedSeedMessages（默认策略：对话骨架保留、工具活动折叠），
- * 与语境接续（handoff 落盘交接）共享投影逻辑、不共享任何链路。
+ * 只读各 agent 的 index.json 元数据 + threads/index.json 线程归属标注）与
+ * /protoclaw/session_record（规范化消息，含远程命名空间转发）、
+ * /protoclaw/threads/:threadId（线程详情 + 代际元数据）。投影复用框架
+ * trim 引擎的纯函数 buildTrimmedSeedMessages（默认策略：对话骨架保留、
+ * 工具活动折叠），与语境接续（handoff 落盘交接）共享投影逻辑、不共享
+ * 任何链路。
  */
 
 import type { AgentFeature, Tool } from '@agentdevjs/core';
@@ -46,7 +54,9 @@ interface SessionMessage {
   content?: unknown;
   toolCalls?: Array<Record<string, unknown>>;
   toolCallId?: string;
-  tag?: string;
+  // unknown：兼容框架 trim 引擎返回的 SessionSeedMessage（tag 为 JsonValue），
+  // 本文件对 tag 只做严格等值比较（'folded-tool-activity'），不做类型收窄。
+  tag?: unknown;
 }
 
 function formatTurn(turn: unknown): string {
@@ -336,6 +346,144 @@ function truncateText(text: string, maxChars: number): string {
 }
 
 /**
+ * 线程 ID 判别：线程全局 ID 固定 wt- 前缀（generateWorkThreadId），与会话
+ * ID（session- 前缀）格式天然可辨，双模输入按前缀分流、零歧义。
+ */
+export function isThreadId(id: string): boolean {
+  return id.startsWith('wt-');
+}
+
+function formatTimestamp(ms: unknown): string {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  const date = new Date(value);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** 线程代际链条目（sessionChainMeta 形态：链事实 + 会话索引合并元数据）。 */
+export interface ThreadChainEntry {
+  sessionId?: string;
+  role?: string | null;
+  startedAt?: number | null;
+  endedAt?: number | null;
+  endKind?: string | null;
+  title?: string | null;
+  updatedAt?: string | null;
+  messageCount?: number | null;
+  archived?: boolean;
+}
+
+/** 线程详情记录（GET /protoclaw/threads/:threadId 响应的 thread 字段子集）。 */
+export interface ThreadDetailRecord {
+  threadId?: string;
+  agentId?: string;
+  title?: string;
+  status?: string;
+  lifeState?: string;
+  rootSessionId?: string;
+  headSessionId?: string;
+  sessionChain?: ThreadChainEntry[];
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+const THREAD_LIFE_STATE_LABELS: Record<string, string> = {
+  archived: '已归档',
+  executing: '执行中',
+  'pending-commands': '待投递指令',
+  idle: '空闲',
+  closed: '已关闭',
+};
+
+/**
+ * 线程代际导航索引（threadId 输入的概览形态）：线程元信息 + 按代列出的
+ * 会话链。这是定位视图不是内容视图——每代给出 sessionId（含可原样填参的
+ * agentId 纯值标注）、标题、时间与规模、接续方式，AI 据此选定要深入的
+ * 代，再以 sessionId 输入读会话概览。
+ *
+ * 代际链数据源：优先 sessionChainMeta（服务端已合并会话索引元数据——
+ * 标题/规模/归档态，按代倒序最新在前）；缺省时退化为线程记录自带的
+ * sessionChain（正序，无索引合并字段）。
+ */
+export function renderThreadOverview(
+  thread: ThreadDetailRecord,
+  sessionChainMeta?: ThreadChainEntry[],
+): string {
+  const threadId = cleanText(thread.threadId);
+  const agentId = cleanText(thread.agentId);
+  const title = cleanText(thread.title) || '(无标题)';
+  const lifeState = cleanText(thread.lifeState);
+  const lifeLabel = THREAD_LIFE_STATE_LABELS[lifeState] || lifeState || cleanText(thread.status) || 'unknown';
+
+  let chain: ThreadChainEntry[];
+  if (Array.isArray(sessionChainMeta) && sessionChainMeta.length > 0) {
+    chain = sessionChainMeta;
+  } else {
+    chain = [...(Array.isArray(thread.sessionChain) ? thread.sessionChain : [])].reverse();
+  }
+
+  const lines = [
+    `[线程导航] ${threadId}「${title}」`,
+    `agent: ${agentId || 'unknown'} ｜ 状态: ${lifeLabel} ｜ 创建: ${formatTimestamp(thread.createdAt) || 'unknown'} ｜ 更新: ${formatTimestamp(thread.updatedAt) || 'unknown'} ｜ 共 ${chain.length} 代`,
+    '（线程是代际导航索引：同一对话经接续产生的各代会话按时间在此列出；选定代后用 session_read_overview 以该代 sessionId + agentId 深入，最终内容读取仍以会话为单位）',
+  ];
+  if (chain.length === 0) {
+    lines.push('（无线程代际记录）');
+    return lines.join('\n');
+  }
+
+  lines.push('──────────────────', '## 代际链（最新在前）');
+  const total = chain.length;
+  chain.forEach((entry, index) => {
+    const sessionId = cleanText(entry.sessionId) || '(unknown)';
+    const generation = total - index; // 倒序下标 0 = 最新代
+    const marks = [`第 ${generation} 代`];
+    if (sessionId === cleanText(thread.headSessionId)) marks.push('最新');
+    if (sessionId === cleanText(thread.rootSessionId)) marks.push('起始');
+    const facts: string[] = [];
+    if (Number.isFinite(Number(entry.messageCount))) facts.push(`${Number(entry.messageCount)} 条消息`);
+    const started = formatTimestamp(entry.startedAt);
+    const ended = formatTimestamp(entry.endedAt);
+    if (started) facts.push(`${started}${ended ? ` ~ ${ended}` : ' ~ 进行中'}`);
+    if (cleanText(entry.endKind)) facts.push(`接续: ${cleanText(entry.endKind)}`);
+    if (entry.archived === true) facts.push('会话已归档');
+    const entryTitle = cleanText(entry.title);
+    lines.push(
+      `- [${marks.join('·')}] ${sessionId}${entryTitle ? `「${truncateText(entryTitle, 60)}」` : ''}`
+      + ` (${facts.join(', ') || '无元数据'}) — agentId: ${agentId || 'unknown'}`,
+    );
+  });
+
+  lines.push(
+    '──────────────────',
+    '阅读策略：最新代承载当前结论与状态、早期代含任务起源与背景；与任务相关的是哪一代就深入哪一代，无需逐代通读。',
+  );
+  return lines.join('\n');
+}
+
+/**
+ * 取回线程详情（GET /protoclaw/threads/:threadId，线程全局唯一寻址不依赖
+ * agentId）。404 返回 null（线程不存在，调用方转译为可读错误）；其他失败
+ * 抛错由调用方捕获。
+ */
+async function fetchThreadDetail(
+  serverOrigin: string,
+  threadId: string,
+): Promise<{ thread?: ThreadDetailRecord; sessionChainMeta?: ThreadChainEntry[] } | null> {
+  const resp = await fetch(`${serverOrigin}/protoclaw/threads/${encodeURIComponent(threadId)}`, {
+    headers: internalAuthHeaders(),
+  });
+  if (resp.status === 404) return null;
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    const message = (data as { message?: unknown; error?: unknown } | null);
+    throw new Error(cleanText(message?.message) || cleanText(message?.error) || `threads 详情请求失败 (${resp.status})`);
+  }
+  return data as { thread?: ThreadDetailRecord; sessionChainMeta?: ThreadChainEntry[] } | null;
+}
+
+/**
  * 已验证的会话引用条目（injectSessionReferences 的注入输入）。
  */
 export interface VerifiedSessionReference {
@@ -378,8 +526,13 @@ function formatDirectoryEntryText(entry: Record<string, unknown>): string[] {
   const messageCount = typeof entry.messageCount === 'number' ? entry.messageCount : 0;
   const sessionType = cleanText(entry.sessionType) || 'main';
   const preview = truncateText(cleanText(entry.preview), LIST_PREVIEW_CHAR_LIMIT);
+  // 线程归属标注（可空）：同线程的多代条目共享同一 threadId，AI 可据此
+  // 识别"这几条是同一对话的几代"并按 threadId 输入读代际导航。
+  const threadId = cleanText(entry.threadId);
+  const threadTitle = cleanText(entry.threadTitle);
+  const threadNote = threadId ? ` — 线程 ${threadId}${threadTitle ? `「${truncateText(threadTitle, 40)}」` : ''}` : '';
   const lines = [
-    `[${agentId}] ${sessionId} "${title}" (${sessionType}, ${messageCount}条, ${updatedAt})${openDirectory ? ` @ ${openDirectory}` : ''}`,
+    `[${agentId}] ${sessionId} "${title}" (${sessionType}, ${messageCount}条, ${updatedAt})${openDirectory ? ` @ ${openDirectory}` : ''}${threadNote}`,
   ];
   if (preview) {
     lines.push(`    摘要: ${preview}`);
@@ -500,8 +653,10 @@ export class SessionReferenceFeature implements AgentFeature {
         parallelizable: true,
         render: { call: 'session-list', result: 'session-list' },
         description:
-          '列出可参考的历史会话目录（跨 agent 聚合）。返回每个会话的 agentId、sessionId、标题、摘要、工作目录与更新时间。' +
-          '先找到目标会话的 agentId 与 sessionId（会话按二元组寻址），再用 session_read_overview 查看其 trim 概览。',
+          '列出可参考的历史会话目录（跨 agent 聚合）。返回每个会话的 agentId、sessionId、标题、摘要、工作目录与更新时间；' +
+          '属于线程宿主工作空间的条目带线程归属标注（— 线程 wt-…「线程标题」）：同一线程的多代条目共享同一 threadId，' +
+          '线程 ID 可直接作为 session_read_overview 的输入读代际导航。' +
+          '先找到目标会话的 agentId 与 sessionId（会话按二元组寻址），再用 session_read_overview 查看其概览。',
         parameters: {
           type: 'object',
           properties: {
@@ -554,24 +709,25 @@ export class SessionReferenceFeature implements AgentFeature {
         parallelizable: true,
         render: { call: 'session-read', result: 'session-read' },
         description:
-          '读取指定会话的 trim 视图概览：头部附任务事件时间线（todo 语义锚点），正文为按 call 分组的对话骨架' +
-          '（用户/AI 消息保留，工具活动折叠为单行摘要），每行标注轮次号 T<N>；轮次过多时未入正文的轮次' +
-          '以单行速览收录（概览覆盖全部轮次）。' +
-          '阅读策略：仅对与当前任务相关的轮次调用 session_read_turn 深入，不要逐轮通读——概览是索引不是全文；' +
+          '读取概览，输入双模：sessionId 输入返回该会话的 trim 视图概览；threadId 输入（wt- 前缀，线程全局唯一）返回线程的代际导航索引。' +
+          '会话概览：头部附任务事件时间线（todo 语义锚点），正文为按 call 分组的对话骨架（用户/AI 消息保留，工具活动折叠为单行摘要），每行标注轮次号 T<N>；' +
+          '轮次过多时未入正文的轮次以单行速览收录（概览覆盖全部轮次）。' +
+          '线程导航：线程元信息 + 代际链（每代的 sessionId、标题、时间与规模、接续方式），用于定位要深入的会话——选定代后仍以该代 sessionId + agentId 调用本工具读会话概览。' +
+          '阅读策略：仅对与当前任务相关的轮次/代际深入，不要逐轮通读——概览是索引不是全文；' +
           '用户意图不明确时，先复述概览脉络与用户确认关注点再下钻。',
         parameters: {
           type: 'object',
           properties: {
             sessionId: {
               type: 'string',
-              description: '要读取的会话 ID',
+              description: '要读取的会话 ID，或线程 ID（wt- 前缀）',
             },
             agentId: {
               type: 'string',
-              description: '会话所属的 agent ID（session_list 条目或会话引用 reminder 行内 agentId 标注的值）',
+              description: '会话所属的 agent ID（session_list 条目或会话引用 reminder 行内 agentId 标注的值）；sessionId 输入时必填，threadId 输入时无需提供（线程全局唯一）',
             },
           },
-          required: ['sessionId', 'agentId'],
+          required: ['sessionId'],
         },
         execute: async (args: any) => {
           const sessionId = cleanText(args?.sessionId);
@@ -579,10 +735,25 @@ export class SessionReferenceFeature implements AgentFeature {
           if (!sessionId) {
             return { error: 'sessionId is required' };
           }
-          if (!agentId) {
-            return { error: 'agentId is required（会话按 (agentId, sessionId) 二元组寻址，不能省略）' };
-          }
           try {
+            if (isThreadId(sessionId)) {
+              const detail = await fetchThreadDetail(this.serverOrigin, sessionId);
+              if (detail === null) {
+                return {
+                  error: `线程不存在: ${sessionId}（线程按全局 ID 寻址；若要读的是对话，请改用 sessionId 输入）`,
+                };
+              }
+              const thread = detail?.thread;
+              if (!thread || !cleanText(thread.threadId)) {
+                return { error: '线程详情响应缺少 thread 记录' };
+              }
+              const chainMeta = Array.isArray(detail?.sessionChainMeta) ? detail.sessionChainMeta : undefined;
+              const text = renderThreadOverview(thread, chainMeta);
+              return { text, threadId: cleanText(thread.threadId) };
+            }
+            if (!agentId) {
+              return { error: 'agentId is required（会话按 (agentId, sessionId) 二元组寻址，不能省略；线程 ID 输入时无需 agentId）' };
+            }
             const record = await fetchSessionRecord(this.serverOrigin, agentId, sessionId);
             const messages = Array.isArray(record?.messages) ? record.messages : [];
             if (messages.length === 0) {

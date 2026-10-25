@@ -10,6 +10,7 @@ import {
   MIRROR_SCRIPT_TIMEOUT_MS,
   SESSION_TRANSFORMATION_TIMEOUT_MS,
   PH_STYLE_WORKSPACE_AGENT_IDS,
+  THREADS_ROOT,
   USER_DATA_ROOT,
 } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
@@ -354,6 +355,21 @@ app.get('/protoclaw/search_sessions', async (req, res, next) => {
 // 跨 agent 会话目录（session-reference feature 的发现数据面）：聚合全部
 // 已发现 prebuilt agent 的 session index 元数据，只读索引不读会话本体。
 // 临时 runtime 目录（agent-N-xxx）无 metadata.json，天然不进目录。
+
+// 线程索引摘要（threads/index.json 的 threads 数组）：目录条目标注线程
+// 归属用（buildSessionDirectoryEntries 建反查表）。直接读 index 文件而非
+// 经线程控制面——目录是只读视图，无线程目录 / 解析失败时返回空数组，
+// 条目退化为无归属标注，与聚合主路径解耦。
+async function readThreadIndexEntries() {
+  try {
+    const raw = await fs.readFile(path.join(THREADS_ROOT, 'index.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.threads) ? parsed.threads : [];
+  } catch {
+    return [];
+  }
+}
+
 app.get('/protoclaw/session_directory', async (req, res, next) => {
   try {
     const agents = await discoverAgents(AGENTS_ROOT);
@@ -373,6 +389,7 @@ app.get('/protoclaw/session_directory', async (req, res, next) => {
       includeArchived,
       limit: Number.isFinite(limit) && limit > 0 ? limit : 50,
       offset: Number.isFinite(offset) && offset > 0 ? offset : 0,
+      threadIndexEntries: await readThreadIndexEntries(),
     });
     res.json({ sessions, total: sessions.length });
   } catch (error) {

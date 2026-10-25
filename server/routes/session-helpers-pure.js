@@ -681,11 +681,32 @@ export function compareSidebarSessionReadModels(lightSessions = [], authoritativ
  * 不读会话文件本体。供 session-reference feature 的发现工具消费。
  * 纯函数：过滤 archived、按 updatedAt 倒序、offset 跳过、limit 截断。
  *
+ * 线程归属标注（session-reference 双模读取）：threadIndexEntries 传
+ * threads/index.json 的 threads 摘要数组（threadId/title/sessionIds），
+ * 聚合时建 sessionId → 线程反查表，每条会话标注所属 threadId 与线程
+ * 标题；不传或无线程目录时条目不带归属（threadId 为空串），行为与
+ * 之前一致。归属是结构事实（同一 session 只属于一条线程），标题用
+ * 线程标题（任务级语义），不是某代会话的标题。
+ *
  * @param {Array<{agentId: string, agentName?: string, sessions: Array<object>}>} agentIndexEntries
- * @param {{limit?: number, offset?: number, includeArchived?: boolean}} [options]
+ * @param {{limit?: number, offset?: number, includeArchived?: boolean, threadIndexEntries?: Array<{threadId: string, title?: string, sessionIds?: string[]}>}} [options]
  */
 export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
   const includeArchived = options?.includeArchived === true;
+  // sessionId → { threadId, threadTitle } 反查表。同 session 多线程理论不
+  // 发生（迁移保证单归属），异常数据时首条胜出（后写不覆盖）。
+  const threadBySessionId = new Map();
+  for (const thread of Array.isArray(options?.threadIndexEntries) ? options.threadIndexEntries : []) {
+    const threadId = cleanSessionText(thread?.threadId);
+    if (!threadId) continue;
+    const threadTitle = cleanSessionText(thread?.title);
+    for (const sessionId of Array.isArray(thread?.sessionIds) ? thread.sessionIds : []) {
+      const key = cleanSessionText(sessionId);
+      if (key && !threadBySessionId.has(key)) {
+        threadBySessionId.set(key, { threadId, threadTitle });
+      }
+    }
+  }
   const entries = [];
   for (const entry of Array.isArray(agentIndexEntries) ? agentIndexEntries : []) {
     const agentId = cleanSessionText(entry?.agentId);
@@ -695,10 +716,12 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
       if (!record?.id) continue;
       if (record.archived === true && !includeArchived) continue;
       const createdAt = cleanSessionText(record?.createdAt);
+      const sessionId = cleanSessionText(record.id);
+      const thread = threadBySessionId.get(sessionId) || null;
       entries.push({
         agentId,
         agentName,
-        sessionId: cleanSessionText(record.id),
+        sessionId,
         title: cleanSessionText(record.title),
         preview: cleanSessionText(record.preview),
         openDirectory: cleanSessionText(record.openDirectory),
@@ -709,6 +732,9 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
         createdAt,
         updatedAt: cleanSessionText(record?.updatedAt) || createdAt,
         messageCount: typeof record.messageCount === 'number' ? record.messageCount : 0,
+        // 线程归属（可能为空：非线程宿主会话 / 线程目录缺失）
+        threadId: thread?.threadId || '',
+        threadTitle: thread?.threadTitle || '',
       });
     }
   }
