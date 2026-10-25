@@ -79,6 +79,28 @@ test('归档区收敛：历史代成员过滤、head 与无线程会话保留', 
   assert.equal(isMember('sess-plain'), false, '无线程会话：混合期自然特例，不受影响');
 });
 
+test('对话归档状态：线程 lifeState 优先于 head session.archived', () => {
+  const archivedThread = { ...HEAD_THREAD, lifeState: 'archived' };
+  const ctx = loadModule({ sessionThread: archivedThread });
+  const isArchived = (session) => ctx.run(`window.phConversationArchived('programming-helper', ${JSON.stringify(session)})`);
+  assert.equal(isArchived({ id: 'sess-head', archived: false }), true, '归档线程的 head 进入「已归档」');
+  assert.equal(isArchived({ id: 'sess-old', archived: true }), true, '归档线程历史成员仍按线程归档状态');
+});
+
+test('对话归档状态：活跃线程覆盖遗留 session.archived=true', () => {
+  const activeThread = { ...HEAD_THREAD, lifeState: 'active' };
+  const ctx = loadModule({ sessionThread: activeThread });
+  assert.equal(ctx.run(`window.phConversationArchived('programming-helper', { id: 'sess-head', archived: true })`), false, '线程归档状态是权威值');
+});
+
+test('对话归档状态：无线程 / 线程数据未就绪时回退 session.archived', () => {
+  const ctx = loadModule({ sessionThread: null });
+  assert.equal(ctx.run(`window.phConversationArchived('programming-helper', { id: 'sess-plain', archived: true })`), true, '无线程的存量会话沿用旧标志');
+  const noStore = loadModule({});
+  delete noStore.window.getThreadForSession;
+  assert.equal(noStore.run(`window.phConversationArchived('programming-helper', { id: 'sess-plain', archived: true })`), true, '线程索引不可用时保守回退');
+});
+
 test('归档区收敛：线程数据未加载时不过滤（保守渲染）', () => {
   const ctx = loadModule({});
   delete ctx.window.getThreadForSession;

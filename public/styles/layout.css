@@ -911,7 +911,8 @@ body[data-theme="light"] .agent-icon {
   padding: 6px;
   z-index: 1100;
 }
-.ctx-menu .ctx-menu-item.has-submenu:hover > .ctx-sub { display: block; }
+.ctx-menu .ctx-menu-item.has-submenu:hover > .ctx-sub,
+.ctx-menu .ctx-menu-item.has-submenu:focus-within > .ctx-sub { display: block; }
 .ctx-menu.flip-submenu .ctx-menu-item.has-submenu > .ctx-sub {
   left: auto;
   right: 100%;

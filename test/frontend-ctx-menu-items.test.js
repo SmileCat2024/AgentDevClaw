@@ -95,33 +95,36 @@ function loadCtxMenuItems(overrides = {}) {
 // ── getCtxMenuItems: runtime role ───────────────────────────
 
 describe('ctx-menu-items: getCtxMenuItems (runtime)', () => {
-  it('runtime + programming-helper → full menu with submenus', () => {
+  it('runtime + programming-helper → unified conversation menu (no thread data)', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1')`);
-    // Expected: rename, generate-title, separator, summary submenu, trim submenu,
-    //           branch submenu, separator, copy-session-id, todo-session,
-    //           archive-and-stop, separator, restart, stop, delete-session-runtime
-    assert.equal(items.length, 14);
+    // All content-changing operations are grouped: rename parent includes AI title;
+    // continuity parent includes Summary, Trim, and Branch.
+    assert.equal(items.length, 13);
     assert.equal(items[0].action, 'rename');
-    assert.equal(items[1].action, 'generate-title');
-    assert.equal(items[2].type, 'separator');
-    assert.ok(items[3].submenu, 'summary should have submenu');
-    assert.equal(items[3].label, '总结历史（Summary）');
-    assert.equal(items[3].submenu[0].action, 'summary');
-    assert.equal(items[3].submenu[1].action, 'summary-and-archive');
-    assert.ok(items[4].submenu, 'trim should have submenu');
-    assert.ok(items[5].submenu, 'branch should have submenu');
+    assert.deepEqual(Array.from(items[0].submenu, (item) => item.action), ['generate-title']);
+    assert.equal(items[1].action, 'todo-session');
+    assert.equal(items[1].label, '设为待办'); // active session todo=false → set
+    assert.equal(items[2].action, 'move-session');
+    assert.equal(items[3].action, 'copy-id');
+    assert.equal(items[4].type, 'separator');
+    assert.equal(items[5].label, '会话接续');
+    assert.deepEqual(Array.from(items[5].submenu, (item) => item.action), ['summary', 'trim', 'branch']);
+    assert.deepEqual(Array.from(items[5].submenu, (item) => item.label), ['总结历史', '精简历史', '创建分支']);
     assert.equal(items[6].type, 'separator');
-    assert.equal(items[7].action, 'copy-session-id');
-    assert.equal(items[8].action, 'todo-session');
-    assert.equal(items[8].label, '设为待办'); // active session todo=false → set
-    assert.equal(items[9].action, 'archive-and-stop');
-    assert.equal(items[10].type, 'separator');
-    assert.equal(items[11].action, 'restart');
-    assert.equal(items[12].action, 'stop');
+    assert.equal(items[7].action, 'archive-and-stop');
+    assert.equal(items[7].label, '归档');
+    assert.equal(items[8].type, 'separator');
+    assert.equal(items[9].action, 'restart');
+    assert.equal(items[10].action, 'stop');
+    assert.equal(items[10].danger, true);
+    assert.equal(items[11].type, 'separator');
+    assert.equal(items[12].action, 'delete-session-runtime');
     assert.equal(items[12].danger, true);
-    assert.equal(items[13].action, 'delete-session-runtime');
-    assert.equal(items[13].danger, true);
+    // 无线程数据时不出现线程专属动作与「停止」
+    assert.ok(!items.find((i) => i.action === 'thread-archive'));
+    assert.ok(!items.find((i) => i.action === 'thread-interrupt'));
+    assert.ok(!items.find((i) => i.action === 'open-history'));
   });
 
   it('runtime with archived active session → unarchive label, no todo item', () => {
@@ -154,47 +157,70 @@ describe('ctx-menu-items: getCtxMenuItems (runtime)', () => {
 // ── getCtxMenuItems: session role ───────────────────────────
 
 describe('ctx-menu-items: getCtxMenuItems (session)', () => {
-  it('session main (not archived, not todo) → full menu with submenus', () => {
+  it('session main (not archived, not todo) → unified menu, direct transforms', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-active')`);
-    // Expected: generate-title, move-session (local PH only), separator,
-    //           summary submenu, trim submenu, branch submenu, separator,
-    //           copy-session-id, todo-session, archive-session, separator,
-    //           delete-session
-    assert.equal(items.length, 12);
-    assert.equal(items[0].action, 'generate-title');
-    assert.equal(items[1].action, 'move-session');
-    assert.equal(items[2].type, 'separator');
-    assert.ok(items[3].submenu, 'summary should have submenu');
-    assert.equal(items[3].label, '总结历史（Summary）');
-    assert.ok(items[4].submenu, 'trim should have submenu');
-    assert.ok(items[5].submenu, 'branch should have submenu');
+    assert.equal(items.length, 10);
+    assert.equal(items[0].action, 'rename-session');
+    assert.deepEqual(Array.from(items[0].submenu, (item) => item.action), ['generate-title']);
+    assert.equal(items[1].action, 'todo-session'); // not todo → set
+    assert.equal(items[1].label, '设为待办');
+    assert.equal(items[2].action, 'move-session');
+    assert.equal(items[3].action, 'copy-id');
+    assert.equal(items[4].type, 'separator');
+    assert.equal(items[5].label, '会话接续');
+    assert.deepEqual(Array.from(items[5].submenu, (item) => item.action), ['summary', 'trim', 'branch']);
+    assert.deepEqual(Array.from(items[5].submenu, (item) => item.label), ['总结历史', '精简历史', '创建分支']);
     assert.equal(items[6].type, 'separator');
-    assert.equal(items[7].action, 'copy-session-id');
-    assert.equal(items[8].action, 'todo-session');
-    assert.equal(items[8].label, '设为待办'); // not todo → set
-    assert.equal(items[9].action, 'archive-session');
-    assert.equal(items[10].type, 'separator');
-    assert.equal(items[11].action, 'delete-session');
-    assert.equal(items[11].danger, true);
+    assert.equal(items[7].action, 'archive-session');
+    assert.equal(items[7].label, '归档');
+    assert.equal(items[8].type, 'separator');
+    assert.equal(items[9].action, 'delete-session');
+    assert.equal(items[9].danger, true);
   });
 
-  it('session archived → flattened items, no submenus, no todo', () => {
+  it('session archived → same menu shape, unarchive label, no todo', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'archived', 'sess-archived')`);
-    // Expected: generate-title, move-session, separator, summary (flat), trim (flat),
-    //           branch (flat), separator, copy-session-id, archive-session (unarchive),
-    //           separator, delete-session
-    assert.equal(items.length, 11);
-    assert.equal(items[3].action, 'summary');
-    assert.ok(!items[3].submenu, 'archived: summary should be flat');
-    assert.equal(items[4].action, 'trim');
-    assert.ok(!items[4].submenu);
-    assert.equal(items[5].action, 'branch');
-    assert.ok(!items[5].submenu);
-    assert.equal(items[7].action, 'copy-session-id');
+    assert.equal(items.length, 9);
+    const continuityItem = items.find((i) => i.label === '会话接续');
+    assert.ok(continuityItem, 'archived conversations still offer continuity actions');
+    assert.deepEqual(Array.from(continuityItem.submenu, (item) => item.action), ['summary', 'trim', 'branch']);
+    const archiveItem = items.find((i) => i.action === 'archive-session');
+    assert.ok(archiveItem.label.includes('取消归档'));
     // No todo toggle for archived
     assert.ok(!items.find((i) => i.action === 'todo-session'));
+  });
+
+  it('session with thread data → thread-semantics archive and history entry', () => {
+    // 线程会话：归档动作走线程端点，归档状态以线程 lifeState 为准；
+    // 有历史存档时出现「查看历史 (N)」；归档线程行不再呈现待办。
+    const { ctx } = loadCtxMenuItems();
+    ctx.window.getThreadForSession = (agentId, sessionId) => (sessionId === 'sess-threaded'
+      ? { threadId: 'wt-1', headSessionId: 'sess-threaded', lifeState: 'open', sessionIds: ['sess-threaded', 's-old-1', 's-old-2'] }
+      : null);
+    ctx.window.phThreadArchiveCount = (agentId, sessionId) => (sessionId === 'sess-threaded' ? 2 : 0);
+    const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-threaded')`);
+    const archiveItem = items.find((i) => i.action === 'thread-archive');
+    assert.ok(archiveItem, 'threaded conversation archives via the thread endpoint');
+    assert.equal(archiveItem.label, '归档');
+    const historyItem = items.find((i) => i.action === 'open-history');
+    assert.ok(historyItem, 'history entry appears when archives exist');
+    assert.ok(historyItem.label.includes('2'), 'history count reflects archive count');
+    assert.ok(items.find((i) => i.action === 'todo-session'), 'open thread keeps todo toggle');
+  });
+
+  it('session with archived thread → unarchive via thread endpoint even if row sits in main list', () => {
+    // 服务端线程归档不写 session index 的 archived 位：行可能仍在主列表，
+    // 菜单必须以线程 lifeState 为准给出「取消归档」并走线程端点。
+    const { ctx } = loadCtxMenuItems();
+    ctx.window.getThreadForSession = () => ({ threadId: 'wt-2', headSessionId: 'sess-x', lifeState: 'archived', sessionIds: ['sess-x'] });
+    ctx.window.phThreadArchiveCount = () => 0;
+    const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-x')`);
+    const archiveItem = items.find((i) => i.action === 'thread-unarchive');
+    assert.ok(archiveItem, 'archived thread offers thread unarchive');
+    assert.ok(archiveItem.label.includes('取消归档'));
+    assert.ok(!items.find((i) => i.action === 'todo-session'), 'archived thread hides todo');
   });
 
   it('session todo=true → "取消待办" label', () => {
@@ -213,7 +239,9 @@ describe('ctx-menu-items: getCtxMenuItems (session)', () => {
     const { ctx } = loadCtxMenuItems({ currentLanguage: 'en' });
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-active')`);
     const del = items.find((i) => i.action === 'delete-session');
-    assert.equal(del.label, 'Delete');
+    assert.equal(del.label, 'Delete Conversation');
+    const copyItem = items.find((i) => i.action === 'copy-id');
+    assert.equal(copyItem.label, 'Copy ID');
   });
 });
 
@@ -261,13 +289,7 @@ describe('ctx-menu-items: dispatchCtxAction (routing)', () => {
     const payload = JSON.parse(calls[0].args[0]);
     assert.equal(payload.type, 'compact_session_menu');
     assert.equal(payload.compactType, 'summary');
-  });
-
-  it('summary-and-archive → includes archiveOriginal', () => {
-    const { ctx, calls } = loadCtxMenuItems();
-    ctx.run(`dispatchCtxAction('summary-and-archive', { ns: 'ph', id: 's1', sessionId: 's1' })`);
-    const payload = JSON.parse(calls[0].args[0]);
-    assert.equal(payload.archiveOriginal, true);
+    assert.equal(payload.archiveOriginal, undefined, 'menu summary no longer archives the original');
   });
 
   it('trim → window.openTrimPage(ns, sid)', () => {
@@ -278,13 +300,6 @@ describe('ctx-menu-items: dispatchCtxAction (routing)', () => {
     assert.equal(calls[0].args[1], 's1');
   });
 
-  it('trim-and-archive → openTrimPage with archive=true', () => {
-    const { ctx, calls } = loadCtxMenuItems();
-    ctx.run(`dispatchCtxAction('trim-and-archive', { ns: 'ph', id: 's1', sessionId: 's1' })`);
-    assert.equal(calls[0].fn, 'openTrimPage');
-    assert.equal(calls[0].args[2], true);
-  });
-
   it('branch → window.openBranchDialog(ns, sid)', () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('branch', { ns: 'ph', id: 's1', sessionId: 's1' })`);
@@ -293,10 +308,23 @@ describe('ctx-menu-items: dispatchCtxAction (routing)', () => {
     assert.equal(calls[0].args[1], 's1');
   });
 
-  it('branch-and-archive → openBranchDialog with archive=true', () => {
+  it('rename-session → window.phOpenRenameDialog(ns, sid)', () => {
     const { ctx, calls } = loadCtxMenuItems();
-    ctx.run(`dispatchCtxAction('branch-and-archive', { ns: 'ph', id: 's1', sessionId: 's1' })`);
-    assert.equal(calls[0].args[2], true);
+    ctx.window.phOpenRenameDialog = (ns, sid) => { calls.push({ fn: 'phOpenRenameDialog', args: [ns, sid] }); };
+    ctx.run(`dispatchCtxAction('rename-session', { ns: 'ph', id: 's1', sessionId: 's1' })`);
+    const renameCall = calls.find((c) => c.fn === 'phOpenRenameDialog');
+    assert.ok(renameCall, 'rename dialog must open for the main-list role');
+    assert.deepEqual(renameCall.args, ['ph', 's1']);
+  });
+
+  it('open-history → phOpenThreadHistory with the resolved thread id', () => {
+    const { ctx, calls } = loadCtxMenuItems();
+    ctx.window.getThreadForSession = () => ({ threadId: 'wt-hist', headSessionId: 's1', lifeState: 'open' });
+    ctx.window.phOpenThreadHistory = (ns, tid) => { calls.push({ fn: 'phOpenThreadHistory', args: [ns, tid] }); };
+    ctx.run(`dispatchCtxAction('open-history', { ns: 'ph', id: 's1', sessionId: 's1' })`);
+    const historyCall = calls.find((c) => c.fn === 'phOpenThreadHistory');
+    assert.ok(historyCall, 'history panel must open');
+    assert.deepEqual(historyCall.args, ['ph', 'wt-hist']);
   });
 
   it('delete-session → runWorkspaceAction with delete type', () => {
@@ -366,17 +394,22 @@ describe('ctx-menu-items: remote runtime leaf menu parity', () => {
     const items = ctx.run(`getCtxMenuItems('runtime', '${REMOTE_NS}', 'remote', 'remote:lab-b:rt-1')`);
     // Menu structure must be identical to the local runtime menu: the remote
     // leaf keeps restart / stop / archive-and-stop (forwarded server-side),
-    // with no degraded variant.
-    const actions = items.map((item) => item.action);
+    // with no degraded variant. Remote sessions have no local thread data →
+    // archive stays session-semantics, no thread items.
+    const actions = (function flatten(list) {
+      return list.flatMap((item) => [...(item.action ? [item.action] : []), ...(item.submenu ? flatten(item.submenu) : [])]);
+    })(items);
     assert.ok(actions.includes('restart'), 'remote leaf keeps Restart');
     assert.ok(actions.includes('stop'), 'remote leaf keeps Stop');
-    assert.ok(actions.includes('archive-and-stop'), 'remote leaf keeps Archive & Stop');
+    assert.ok(actions.includes('archive-and-stop'), 'remote leaf keeps Archive');
     assert.ok(actions.includes('delete-session-runtime'));
     assert.ok(actions.includes('rename'));
     assert.ok(actions.includes('generate-title'));
-    assert.ok(actions.includes('copy-session-id'), 'remote leaf keeps Copy Session ID (client-side only)');
+    assert.ok(actions.includes('copy-id'), 'remote leaf keeps Copy ID (client-side only)');
     assert.ok(actions.includes('todo-session'), 'remote leaf keeps TODO toggle (forwarded route)');
-    assert.equal(items.filter((item) => item.type === 'separator').length, 3);
+    assert.ok(!actions.includes('move-session'), 'move stays local-PH only');
+    assert.ok(!actions.includes('thread-archive'), 'no local thread data → no thread endpoint action');
+    assert.equal(items.filter((item) => item.type === 'separator').length, 4);
   });
 
   it('remote runtime leaf under an unknown host still gets no menu', () => {
@@ -488,7 +521,7 @@ describe('ctx-menu-items: sessionOps capability gating (merged integration)', ()
   it('remote leaf with sessionOps capability keeps the full ops menu', () => {
     const ctx = loadWithCapability(true);
     const items = ctx.run(`getCtxMenuItems('runtime', '${REMOTE_NS}', 'remote', 'remote:lab-b:rt-1')`);
-    const actions = items.map((item) => item.action);
+    const actions = items.flatMap((item) => [item.action, ...(item.submenu || []).map((child) => child.action)]);
     assert.ok(actions.includes('restart') && actions.includes('stop') && actions.includes('archive-and-stop'));
   });
 
@@ -501,13 +534,18 @@ describe('ctx-menu-items: sessionOps capability gating (merged integration)', ()
   it('local agent menu is unaffected by the capability lookup', () => {
     const ctx = loadWithCapability(false);
     const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1')`);
-    assert.equal(items.length, 14, 'local runtime menu unchanged');
+    assert.equal(items.length, 13, 'local runtime menu keeps its grouped conversation actions');
+    const actions = (function flatten(list) {
+      return list.flatMap((item) => [...(item.action ? [item.action] : []), ...(item.submenu ? flatten(item.submenu) : [])]);
+    })(items);
+    assert.ok(actions.includes('generate-title'));
+    assert.ok(actions.includes('summary') && actions.includes('trim') && actions.includes('branch'));
   });
 });
 
-// ── copy-session-id action ──────────────────────────────────
+// ── copy-id action ──────────────────────────────────────────
 
-describe('ctx-menu-items: copy-session-id action', () => {
+describe('ctx-menu-items: copy-id action', () => {
   function loadCopyHarness() {
     const copied = [];
     const toasts = [];
@@ -522,9 +560,9 @@ describe('ctx-menu-items: copy-session-id action', () => {
     return { ctx, copied, toasts };
   }
 
-  it('dispatchCtxAction copies the target sessionId and shows a success toast', async () => {
+  it('copies the sessionId when no thread data exists', async () => {
     const { ctx, copied, toasts } = loadCopyHarness();
-    ctx.run(`dispatchCtxAction('copy-session-id', { ns: 'programming-helper', id: 'rt-1', sessionId: 'sess-abc' })`);
+    ctx.run(`dispatchCtxAction('copy-id', { ns: 'programming-helper', id: 'rt-1', sessionId: 'sess-abc' })`);
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(copied.includes('sess-abc'), 'clipboard must receive the sessionId');
     assert.equal(toasts.length, 1);
@@ -532,9 +570,21 @@ describe('ctx-menu-items: copy-session-id action', () => {
     assert.equal(toasts[0].description, 'sess-abc');
   });
 
+  it('copies the thread id when the session resolves to a thread', async () => {
+    const { ctx, copied, toasts } = loadCopyHarness();
+    ctx.window.getThreadForSession = (ns, sid) => (sid === 'sess-th'
+      ? { threadId: 'wt-abc', headSessionId: 'sess-th', lifeState: 'open' }
+      : null);
+    ctx.run(`dispatchCtxAction('copy-id', { ns: 'programming-helper', id: 'rt-1', sessionId: 'sess-th' })`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(copied.includes('wt-abc'), 'thread id wins when the conversation is threaded');
+    assert.ok(!copied.includes('sess-th'), 'sessionId must not be copied for threaded rows');
+    assert.equal(toasts[0].status, 'success');
+  });
+
   it('runtime leaf without explicit sessionId falls back to id', async () => {
     const { ctx, copied, toasts } = loadCopyHarness();
-    ctx.run(`dispatchCtxAction('copy-session-id', { ns: 'programming-helper', id: 'sess-fallback' })`);
+    ctx.run(`dispatchCtxAction('copy-id', { ns: 'programming-helper', id: 'sess-fallback' })`);
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(copied.includes('sess-fallback'));
     assert.equal(toasts[0].status, 'success');

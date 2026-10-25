@@ -14,7 +14,8 @@
  *   markSessionLoading, clearSessionLoading, window.switchAgent,
  *   fmtPct (app-core.js，trim/branch 共用口径)
  * 导出全局函数 (window.*):
- *   openBranchDialog, closeBranchDialog, submitBranch
+ *   openBranchDialog, closeBranchDialog, submitBranch,
+ *   phOpenRenameDialog, phCloseRenameDialog（重命名对话框，动态 overlay）
  */
 
 /* ── Branch dialog state ── */
@@ -337,6 +338,105 @@ window.submitBranch = async () => {
     clearSessionLoading(agentId);
     clearChatLoadingSession();
   }
+};
+
+/* ════════════════════════════════════════════════════════════
+   Rename dialog（统一对话菜单的主列表「重命名」入口）
+   动态 overlay 配方复用 feature-detail-overlay/window（ph-thread-history
+   同款），不自造同类控件。保存链路与侧栏内联重命名（ctxRenameSession）
+   同一端点与刷新路径。
+   ════════════════════════════════════════════════════════════ */
+let _renameOverlay = null;
+
+function _closeRenameDialog() {
+  if (_renameOverlay && _renameOverlay.parentNode) {
+    _renameOverlay.parentNode.removeChild(_renameOverlay);
+  }
+  _renameOverlay = null;
+}
+
+window.phCloseRenameDialog = _closeRenameDialog;
+
+window.phOpenRenameDialog = async function (agentId, sessionId) {
+  _closeRenameDialog();
+  if (!agentId || !sessionId) return;
+  const isZh = currentLanguage === 'zh';
+  // 当前标题：本地缓存优先，取不到时由列表行数据兜底
+  const agent = (typeof allAgents !== 'undefined' ? allAgents : []).find((item) => item.id === agentId) || null;
+  const session = (agent?.workspace_sessions?.sessions || []).find((s) => s.id === sessionId) || null;
+  const currentTitle = session?.title || sessionId;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'feature-detail-overlay';
+  overlay.innerHTML = [
+    '<form class="feature-detail-window" role="dialog" aria-modal="true" onsubmit="return false" style="max-width:420px">',
+    '<div class="feature-detail-header">',
+    '<div class="feature-detail-title">' + (isZh ? '重命名对话' : 'Rename Conversation') + '</div>',
+    '<button type="button" class="feature-detail-close" onclick="window.phCloseRenameDialog()" aria-label="' + (isZh ? '关闭' : 'Close') + '">&times;</button>',
+    '</div>',
+    '<div style="display:flex;flex-direction:column;gap:12px;padding:16px">',
+    '<input type="text" class="agent-name-edit-input" data-rename-input value="' + escapeHtml(currentTitle) + '"',
+    ' maxlength="120" placeholder="' + (isZh ? '输入标题' : 'Enter title') + '"',
+    ' style="width:100%;box-sizing:border-box;padding:8px 10px"> ',
+    '<div style="display:flex;justify-content:flex-end;gap:8px">',
+    '<button type="button" class="workspace-action secondary" onclick="window.phCloseRenameDialog()">' + (isZh ? '取消' : 'Cancel') + '</button>',
+    '<button type="button" class="workspace-action" data-rename-save>' + (isZh ? '保存' : 'Save') + '</button>',
+    '</div>',
+    '</div>',
+    '</form>',
+  ].join('');
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) _closeRenameDialog();
+  });
+
+  const input = overlay.querySelector('[data-rename-input]');
+  const saveBtn = overlay.querySelector('[data-rename-save]');
+  let saved = false;
+
+  const save = async () => {
+    if (saved) return;
+    const newTitle = String(input.value || '').trim();
+    if (!newTitle || newTitle === currentTitle) {
+      _closeRenameDialog();
+      return;
+    }
+    saved = true;
+    saveBtn.disabled = true;
+    try {
+      const resp = await fetch('/protoclaw/prebuilt_sessions/' + encodeURIComponent(sessionId) + '/title', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+        body: JSON.stringify({ agentId, title: newTitle }),
+      });
+      const result = await resp.json();
+      if (resp.ok && result.ok) {
+        _closeRenameDialog();
+        if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
+        if (typeof lastRenderedWorkspaceHtml !== 'undefined') lastRenderedWorkspaceHtml = '';
+        if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+        if (typeof renderAgentList === 'function') renderAgentList();
+      } else {
+        saved = false;
+        saveBtn.disabled = false;
+        ClawToast.show({ title: (isZh ? '重命名失败：' : 'Rename failed: ') + (result?.error || 'unknown'), status: 'error' });
+      }
+    } catch (error) {
+      saved = false;
+      saveBtn.disabled = false;
+      ClawToast.show({ title: (isZh ? '重命名失败：' : 'Rename failed: ') + (error?.message || error), status: 'error' });
+    }
+  };
+
+  saveBtn.addEventListener('click', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') { e.preventDefault(); _closeRenameDialog(); }
+  });
+
+  document.body.appendChild(overlay);
+  _renameOverlay = overlay;
+  input.focus();
+  input.select();
 };
 
 // ── End Session Dialogs ────────────────────────────────────────────

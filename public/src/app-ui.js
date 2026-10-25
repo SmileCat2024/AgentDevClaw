@@ -2196,7 +2196,11 @@ function renderCtxItems(items) {
   return items.map((item, i) => {
     if (item.type === 'separator') return '<div class="ctx-menu-sep"></div>';
     if (item.submenu) {
-      return '<div class="ctx-menu-item has-submenu">'
+      const actionAttrs = item.action
+        ? ' data-ctx-action="' + escapeHtmlCtx(item.action) + '" role="menuitem" tabindex="0"'
+          + ' aria-haspopup="true" aria-expanded="false"'
+        : '';
+      return '<div class="ctx-menu-item has-submenu"' + actionAttrs + '>'
         + escapeHtmlCtx(item.label)
         + '<span class="ctx-menu-arrow">›</span>'
         + '<div class="ctx-sub">' + renderCtxItems(item.submenu) + '</div>'

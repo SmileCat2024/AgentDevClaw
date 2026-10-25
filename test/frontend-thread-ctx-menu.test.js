@@ -63,38 +63,51 @@ test('threadId 缺席或线程事实不可得：回退既有菜单体系（coder
   assert.equal(ctx.run(`getCtxMenuItems('runtime', 'coder', 'child', 'rt-1', 'sess-1', 'wt-unknown')`).length, 0);
 });
 
-// 手动接续 APP（ADR-0032，编程小助手）：线程化不替换会话操作菜单——
-// 完整 Session 菜单保留，线程专属项（复制 Thread ID / 中断 / 归档线程）
-// 追加；删除会话在 head 上即整线程删除（服务端重定向），不另设删除线程。
-test('PH 线程会话：完整会话菜单保留 + 线程项追加，无重复删除项', () => {
+// 手动接续 APP（ADR-0032，编程小助手）：统一对话菜单——线程项不再作为
+// 工程身份并列追加，而是语义合并进「对话」语言：归档走线程端点（归档即
+// 整链收纳）、执行中呈现「停止」（thread-interrupt）、复制 ID 合并为单个
+// copy-id、变换直达（无「并归档原会话」子项）。删除会话在 head 上即整
+// 线程删除（服务端重定向），不另设删除线程。
+test('PH 线程会话：统一菜单走线程语义，无重复删除项', () => {
   const ctx = loadModule({ threads: {
     'wt-ph': { threadId: 'wt-ph', agentId: 'programming-helper', lifeState: 'idle', headViewerAgentId: 'viewer-1' },
   } });
   const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'child', 'rt-1', 'sess-ph', 'wt-ph')`);
-  const collect = (list) => list.flatMap((i) => (i.submenu ? collect(i.submenu) : (i.action ? [i.action] : [])));
+  const collect = (list) => list.flatMap((i) => [...(i.action ? [i.action] : []), ...(i.submenu ? collect(i.submenu) : [])]);
   const actions = collect(items);
-  // 既有会话操作面（049 前 PH 菜单的全部动作，含 submenu 子项）逐一在场
-  for (const action of ['rename', 'generate-title', 'summary', 'summary-and-archive', 'trim', 'trim-and-archive', 'branch', 'branch-and-archive', 'copy-session-id', 'todo-session', 'archive-and-stop', 'restart', 'stop', 'delete-session-runtime']) {
+  // 会话操作面保留（变换直达 + 复制 ID + 待办 + 运行组 + 删除）
+  for (const action of ['rename', 'generate-title', 'summary', 'trim', 'branch', 'copy-id', 'todo-session', 'restart', 'stop', 'delete-session-runtime']) {
     assert.ok(actions.includes(action), `会话操作项必须保留：${action}`);
   }
-  // 线程专属项追加
-  for (const action of ['copy-thread-id', 'thread-interrupt', 'thread-archive']) {
-    assert.ok(actions.includes(action), `线程项应追加：${action}`);
+  // 归档动作走线程端点（线程归档 = 归档整条对话）
+  assert.ok(actions.includes('thread-archive'), '线程会话的归档必须走线程归档');
+  assert.ok(!actions.includes('archive-and-stop'), '归档入口唯一，不得并列会话归档');
+  // 归档子项是线程化前残留，不再出现
+  for (const action of ['summary-and-archive', 'trim-and-archive', 'branch-and-archive']) {
+    assert.ok(!actions.includes(action), `归档子项必须移除：${action}`);
   }
+  // 工程身份项合并后不再出现
+  for (const action of ['copy-session-id', 'copy-thread-id']) {
+    assert.ok(!actions.includes(action), `复制 ID 已合并为 copy-id：${action}`);
+  }
+  // idle 线程无事可断：菜单不呈现「停止」（非置灰——没有对象就不是选项）
+  assert.ok(!actions.includes('thread-interrupt'), 'idle：不呈现停止项');
   // 不重复设删除线程（删除会话在 head 上即整线程删除）
   assert.ok(!actions.includes('thread-delete'), '不得与删除会话重复设删除线程项');
-  const byAction = Object.fromEntries(items.filter((i) => i.action).map((i) => [i.action, i]));
-  assert.ok(byAction['thread-interrupt'].disabled, 'idle：中断置灰（无事可断）');
-  assert.ok(!byAction['thread-archive'].disabled, '任何状态归档可用');
 });
 
-test('PH 线程会话 executing：中断线程可用', () => {
+test('PH 线程会话 executing：呈现「停止」且可用', () => {
   const ctx = loadModule({ threads: {
     'wt-ph2': { threadId: 'wt-ph2', agentId: 'programming-helper', lifeState: 'executing', headViewerAgentId: 'viewer-1' },
   } });
   const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'child', 'rt-1', 'sess-ph', 'wt-ph2')`);
-  const byAction = Object.fromEntries(items.filter((i) => i.action).map((i) => [i.action, i]));
-  assert.ok(!byAction['thread-interrupt'].disabled, 'executing：中断可用');
+  const flattened = (function flatten(list) {
+    return list.flatMap((i) => [...(i.action ? [i] : []), ...(i.submenu ? flatten(i.submenu) : [])]);
+  })(items);
+  const byAction = Object.fromEntries(flattened.map((i) => [i.action, i]));
+  assert.ok(byAction['thread-interrupt'], 'executing：停止项必须在场');
+  assert.ok(!byAction['thread-interrupt'].disabled, 'executing：停止可用');
+  assert.equal(byAction['thread-interrupt'].label, '停止');
 });
 
 test('PH 无线程会话（存量未迁移）：菜单不含线程项（回归保护）', () => {

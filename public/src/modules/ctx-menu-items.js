@@ -8,7 +8,6 @@
  *   - ctxStopAgent: 关闭 Agent
  *   - ctxArchiveAndStopRuntime: 归档会话并关闭 runtime
  *   - ctxGenerateTitle: AI 生成标题
- *   - ctxCopySessionId: 复制会话 ID 到剪贴板
  *   - ctxRenameSession: 侧栏 runtime 项内联重命名
  *   - ctxArchiveSession: 归档/取消归档会话
  *   - ctxTodoSession: 设置/取消待办
@@ -98,6 +97,15 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
   if (role === 'runtime' && ctxSessionOpsAllowed(ns)) {
     // 侧栏 runtime 叶子：优先按条目携带的 sessionId 解析目标会话（多个
     // runtime 并存时 activeSessionId 未必指向被右键的会话）。
+    //
+    // 菜单心智（ADR-0032 后的统一对话菜单）：一行 = 一个对话，不暴露
+    // Session / Thread / Runtime 分层。线程专属项不再并列追加，语义合并：
+    //   - 归档：有线程走线程归档（归档即整链收纳），无线程走会话归档；
+    //   - 停止：线程执行中呈现（= 原中断线程），空闲不出现在菜单；
+    //   - 复制 ID：有线程复制 thread id，无线程复制 session id；
+    //   - 删除：head 上删除即整链删除（服务端重定向），文案只说「对话」。
+    // 变换项（总结/精简/分支）直达执行，不再提供「并归档原会话」子项——
+    // 线程化后精简是对话内接续，列表本来只有一行，该选项无对应物。
     const isZh = currentLanguage === 'zh';
     const agent = allAgents.find((item) => item.id === ns) || null;
     const targetSessionId = String(sessionId || agent?.workspace_sessions?.activeSessionId || '').trim();
@@ -106,55 +114,78 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
     const isTodo = targetSession?.todo === true;
     // Assembly sessions (agent-studio) are excluded from summary/trim/branch.
     const isOpsExcluded = isAssemblySession(targetSession);
-    const historyItems = isOpsExcluded ? [] : [
-      { type: 'separator' },
-      { label: isZh ? '总结历史（Summary）' : 'Summary', submenu: [
-        { label: isZh ? '仅摘要' : 'Summary Only', action: 'summary' },
-        { label: isZh ? '摘要并归档原会话' : 'Summary & Archive', action: 'summary-and-archive' },
-      ]},
-      { label: isZh ? '精简历史（Trim）' : 'Trim', submenu: [
-        { label: isZh ? '仅精简' : 'Trim Only', action: 'trim' },
-        { label: isZh ? '精简并归档原会话' : 'Trim & Archive', action: 'trim-and-archive' },
-      ]},
-      { label: isZh ? '创建分支' : 'Branch', submenu: [
-        { label: isZh ? '仅分支' : 'Branch Only', action: 'branch' },
-        { label: isZh ? '分支并归档原会话' : 'Branch & Archive', action: 'branch-and-archive' },
-      ]},
-    ];
-    // 线程会话（ADR-0032 手动接续 APP）：追加线程专属项——复制 Thread ID
-    // 与复制 Session ID 并列；中断线程仅 busy（执行/待投递）时有对象；
-    // 归档线程任何状态可用（lifecycle 打断收纳，前端不置灰）。
-    const thread = threadId && typeof window.getThreadById === 'function'
-      ? window.getThreadById(threadId) : null;
-    const threadBusy = thread
+    // 线程解析：侧栏叶子携带 threadId 时直接取（与 coder 线程菜单同源），
+    // 否则按会话归属解析（数据未就绪时 null → 会话语义，不硬造线程项）。
+    const thread = (threadId && typeof window.getThreadById === 'function'
+      ? window.getThreadById(threadId) : null)
+      || (targetSessionId && typeof window.getThreadForSession === 'function'
+        ? window.getThreadForSession(ns, targetSessionId) : null);
+    const threadBusy = Boolean(thread)
       && (thread.lifeState === 'executing' || thread.lifeState === 'pending-commands');
-    // 分组：标题编辑 / 历史变换 / 会话管理 / runtime 生命周期（危险置底）。
+    const threadArchived = thread?.lifeState === 'archived';
+    const historyCount = typeof window.phThreadArchiveCount === 'function'
+      ? window.phThreadArchiveCount(ns, targetSessionId) : 0;
+    // 归档状态线程优先：有线程的行以线程 lifeState 为准（服务端线程归档
+    // 不写 session index 的 archived 位）；无线程会话才读 session 标志。
+    const conversationArchived = thread ? threadArchived : isArchived;
+
     const items = [
-      { label: isZh ? '重命名' : 'Rename', action: 'rename' },
-      { label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
-      ...historyItems,
-      { type: 'separator' },
-      { label: isZh ? '复制 Session ID' : 'Copy Session ID', action: 'copy-session-id' },
-      ...(thread ? [
-        { label: isZh ? '复制 Thread ID' : 'Copy Thread ID', action: 'copy-thread-id' },
-        { label: isZh ? '中断线程' : 'Interrupt Thread', action: 'thread-interrupt', disabled: !threadBusy },
-      ] : []),
+      {
+        label: isZh ? '重命名' : 'Rename',
+        action: 'rename',
+        submenu: [{ label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' }],
+      },
     ];
     // TODO toggle — non-archived only（与 session 角色菜单一致）
-    if (!isArchived) {
+    if (!conversationArchived) {
       items.push({ label: isTodo ? (isZh ? '取消待办' : 'Remove TODO') : (isZh ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
     }
-    // restart / stop / archive-and-stop 对远程叶子同样可用：服务端按
+    if (ns === 'programming-helper') {
+      items.push({ label: isZh ? '移动到…' : 'Move to…', action: 'move-session' });
+    }
+    items.push({ label: isZh ? '复制 ID' : 'Copy ID', action: 'copy-id' });
+    if (!isOpsExcluded) {
+      items.push(
+        { type: 'separator' },
+        {
+          label: isZh ? '会话接续' : 'Conversation Continuity',
+          submenu: [
+            { label: isZh ? '总结历史' : 'Summary', action: 'summary' },
+            { label: isZh ? '精简历史' : 'Trim', action: 'trim' },
+            { label: isZh ? '创建分支' : 'Branch', action: 'branch' },
+          ],
+        },
+      );
+    }
+    if (historyCount > 0) {
+      items.push(
+        { type: 'separator' },
+        { label: isZh ? `查看历史 (${historyCount})` : `History (${historyCount})`, action: 'open-history' },
+      );
+    }
+    // restart / stop / archive 对远程叶子同样可用：服务端按
     // ADR-0011 转发远程同名路由（agentId 用宿主命名空间 id）。
     items.push(
-      { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive'), action: 'archive-and-stop' },
-      ...(thread ? [
-        { label: isZh ? '归档线程' : 'Archive Thread', action: 'thread-archive' },
-      ] : []),
       { type: 'separator' },
+      thread
+        ? {
+            label: conversationArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档' : 'Archive'),
+            action: conversationArchived ? 'thread-unarchive' : 'thread-archive',
+          }
+        : {
+            label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档' : 'Archive'),
+            action: 'archive-and-stop',
+          },
+      { type: 'separator' },
+    );
+    if (threadBusy) {
+      items.push({ label: isZh ? '停止' : 'Stop', action: 'thread-interrupt' });
+    }
+    items.push(
       { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
       { label: isZh ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
-      { label: isZh ? '删除会话' : 'Delete Session', action: 'delete-session-runtime', danger: true },
+      { type: 'separator' },
+      { label: isZh ? '删除对话' : 'Delete Conversation', action: 'delete-session-runtime', danger: true },
     );
     return items;
   }
@@ -162,16 +193,35 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
     const agent = allAgents.find((item) => item.id === ns) || null;
     const session = getWorkspaceSessionById(agent, id);
     const sType = variant || 'main';
-    const isArchived = sType === 'archived' || session?.archived === true;
-    const isTodo = session?.todo === true;
     // Assembly sessions (agent-studio test-runtime) are excluded from summary/trim/branch.
     const isOpsExcluded = sType === 'assembly';
     const isZh = currentLanguage === 'zh';
+    // 线程解析与 runtime 角色同源；远程命名空间无本地线程数据，无线程项
+    // 自然退化，不伪造。
+    const thread = typeof window.getThreadForSession === 'function'
+      ? window.getThreadForSession(ns, id) : null;
+    const threadArchived = thread?.lifeState === 'archived';
+    const historyCount = typeof window.phThreadArchiveCount === 'function'
+      ? window.phThreadArchiveCount(ns, id) : 0;
+    // 归档状态线程优先（服务端线程归档不写 session index 的 archived 位，
+    // 迁移遗留的 head archived=true 也以线程 lifeState 为准）。
+    const conversationArchived = thread
+      ? threadArchived
+      : (sType === 'archived' || session?.archived === true);
+    const isTodo = session?.todo === true;
 
-    const items = [];
+    const items = [
+      {
+        label: isZh ? '重命名' : 'Rename',
+        action: 'rename-session',
+        submenu: [{ label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' }],
+      },
+    ];
 
-    // AI Generate Title
-    items.push({ label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' });
+    // TODO toggle — non-archived only
+    if (!conversationArchived) {
+      items.push({ label: isTodo ? (isZh ? '取消待办' : 'Remove TODO') : (isZh ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
+    }
 
     // 移动到…（本地 PH only）：归属变更走本地 sessions_move；远程命名空间
     // 不经本地移动（不伪造远程移动），不在此呈现。
@@ -179,45 +229,49 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
       items.push({ label: isZh ? '移动到…' : 'Move to…', action: 'move-session' });
     }
 
-    // Summary / Trim / Branch — only for main/archived sessions
+    items.push({ label: isZh ? '复制 ID' : 'Copy ID', action: 'copy-id' });
+
+    // Summary / Trim / Branch — direct execution（无归档子项，理由同 runtime 角色）
     if (!isOpsExcluded) {
-      items.push({ type: 'separator' });
-      if (isArchived) {
-        // Archived: no need for "archive original" option, flatten to direct items
-        items.push({ label: isZh ? '总结历史（Summary）' : 'Summary', action: 'summary' });
-        items.push({ label: isZh ? '精简历史（Trim）' : 'Trim', action: 'trim' });
-        items.push({ label: isZh ? '创建分支' : 'Branch', action: 'branch' });
-      } else {
-        items.push({ label: isZh ? '总结历史（Summary）' : 'Summary', submenu: [
-          { label: isZh ? '仅摘要' : 'Summary Only', action: 'summary' },
-          { label: isZh ? '摘要并归档原会话' : 'Summary & Archive', action: 'summary-and-archive' },
-        ]});
-        items.push({ label: isZh ? '精简历史（Trim）' : 'Trim', submenu: [
-          { label: isZh ? '仅精简' : 'Trim Only', action: 'trim' },
-          { label: isZh ? '精简并归档原会话' : 'Trim & Archive', action: 'trim-and-archive' },
-        ]});
-        items.push({ label: isZh ? '创建分支' : 'Branch', submenu: [
-          { label: isZh ? '仅分支' : 'Branch Only', action: 'branch' },
-          { label: isZh ? '分支并归档原会话' : 'Branch & Archive', action: 'branch-and-archive' },
-        ]});
-      }
+      items.push(
+        { type: 'separator' },
+        {
+          label: isZh ? '会话接续' : 'Conversation Continuity',
+          submenu: [
+            { label: isZh ? '总结历史' : 'Summary', action: 'summary' },
+            { label: isZh ? '精简历史' : 'Trim', action: 'trim' },
+            { label: isZh ? '创建分支' : 'Branch', action: 'branch' },
+          ],
+        },
+      );
     }
 
-    // Session management group（与 runtime 角色菜单同构）
-    items.push({ type: 'separator' });
-    items.push({ label: isZh ? '复制 Session ID' : 'Copy Session ID', action: 'copy-session-id' });
-
-    // TODO toggle — non-archived only
-    if (!isArchived) {
-      items.push({ label: isTodo ? (isZh ? '取消待办' : 'Remove TODO') : (isZh ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
+    if (historyCount > 0) {
+      items.push(
+        { type: 'separator' },
+        { label: isZh ? `查看历史 (${historyCount})` : `History (${historyCount})`, action: 'open-history' },
+      );
     }
 
-    // Archive / Unarchive
-    items.push({ label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive'), action: 'archive-session' });
+    // Archive / Unarchive（线程优先；无线程走会话归档）
+    items.push(
+      { type: 'separator' },
+      thread
+        ? {
+            label: conversationArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档' : 'Archive'),
+            action: conversationArchived ? 'thread-unarchive' : 'thread-archive',
+          }
+        : {
+            label: conversationArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档' : 'Archive'),
+            action: 'archive-session',
+          },
+    );
 
     // Danger zone
-    items.push({ type: 'separator' });
-    items.push({ label: isZh ? '删除对话' : 'Delete', action: 'delete-session', danger: true });
+    items.push(
+      { type: 'separator' },
+      { label: isZh ? '删除对话' : 'Delete Conversation', action: 'delete-session', danger: true },
+    );
 
     return items;
   }
@@ -584,17 +638,6 @@ async function ctxGenerateTitle(target) {
   }
 }
 
-async function ctxCopySessionId(target) {
-  const { ns, id, sessionId } = target;
-  const sid = String(sessionId || id || '').trim();
-  if (!sid) return;
-  const isZh = currentLanguage === 'zh';
-  await _copyTextWithToast(sid, {
-    okTitle: isZh ? '会话 ID 已复制' : 'Session ID copied',
-    failTitle: isZh ? '复制会话 ID 失败' : 'Failed to copy session ID',
-  });
-}
-
 /** 剪贴板写入 + 结果 toast（secure clipboard 优先，非安全上下文降级 execCommand） */
 async function _copyTextWithToast(text, { okTitle, failTitle }) {
   const isZh = currentLanguage === 'zh';
@@ -906,33 +949,15 @@ function dispatchCtxAction(action, target) {
       }
       break;
 
-    case 'summary-and-archive':
-      if (ns && sid) {
-        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', agentId: ns, sessionId: sid, compactType: 'summary', archiveOriginal: true }));
-      }
-      break;
-
     case 'trim':
       if (ns && sid) {
         window.openTrimPage(ns, sid);
       }
       break;
 
-    case 'trim-and-archive':
-      if (ns && sid) {
-        window.openTrimPage(ns, sid, true);
-      }
-      break;
-
     case 'branch':
       if (ns && sid) {
         window.openBranchDialog(ns, sid);
-      }
-      break;
-
-    case 'branch-and-archive':
-      if (ns && sid) {
-        window.openBranchDialog(ns, sid, true);
       }
       break;
 
@@ -983,12 +1008,53 @@ function dispatchCtxAction(action, target) {
       }
       break;
 
-    case 'copy-session-id':
+    // 统一「复制 ID」：有线程复制 thread id（定位整条对话），否则 session id
+    case 'copy-id': {
       window.closeCtxMenu();
-      ctxCopySessionId(target);
+      const threadForId = (sid && typeof window.getThreadForSession === 'function')
+        ? window.getThreadForSession(ns, sid) : null;
+      const valueToCopy = String(threadForId?.threadId || sid || id || '').trim();
+      if (!valueToCopy) break;
+      const isZh = currentLanguage === 'zh';
+      _copyTextWithToast(valueToCopy, {
+        okTitle: isZh ? 'ID 已复制' : 'ID copied',
+        failTitle: isZh ? '复制 ID 失败' : 'Failed to copy ID',
+      });
+      break;
+    }
+
+    // 「查看历史 (N)」：与行内徽标同一入口（050 历史存档面板）
+    case 'open-history': {
+      window.closeCtxMenu();
+      const threadForHistory = (sid && typeof window.getThreadForSession === 'function')
+        ? window.getThreadForSession(ns, sid) : null;
+      if (threadForHistory?.threadId && typeof window.phOpenThreadHistory === 'function') {
+        window.phOpenThreadHistory(ns, threadForHistory.threadId);
+      }
+      break;
+    }
+
+    // 主列表行「重命名」对话框（侧栏叶子保持内联编辑 'rename'）
+    case 'rename-session':
+      window.closeCtxMenu();
+      if (ns && sid && typeof window.phOpenRenameDialog === 'function') {
+        window.phOpenRenameDialog(ns, sid);
+      }
       break;
 
     // ── 线程宿主叶子（coder 等）：线程语义动作 ──
+    // PH 统一菜单的归档/停止/取消归档同样落到这组端点；threadId 优先取
+    // target 携带值（coder 线程叶子），缺省经会话归属解析（PH 会话叶子/
+    // 主列表行——target 不带 threadId）。
+    function _resolveCtxThread() {
+      if (threadId && typeof window.getThreadById === 'function') {
+        const byId = window.getThreadById(threadId);
+        if (byId) return byId;
+      }
+      return (sid && typeof window.getThreadForSession === 'function')
+        ? window.getThreadForSession(ns, sid) : null;
+    }
+
     case 'copy-thread-id': {
       window.closeCtxMenu();
       const tid = String(threadId || '').trim();
@@ -1001,16 +1067,17 @@ function dispatchCtxAction(action, target) {
       break;
     }
 
+    // 「停止」（PH 统一菜单）/「中断线程」（coder 线程菜单）同一端点
     case 'thread-interrupt': {
       window.closeCtxMenu();
       const isZh = currentLanguage === 'zh';
+      const threadToInterrupt = _resolveCtxThread();
       (async () => {
         try {
-          const thread = typeof window.getThreadById === 'function' ? window.getThreadById(threadId) : null;
-          if (!thread?.headViewerAgentId) {
+          if (!threadToInterrupt?.headViewerAgentId) {
             throw new Error(isZh ? 'head 会话 runtime 未运行' : 'head runtime is not running');
           }
-          const response = await fetch('/api/agents/' + encodeURIComponent(thread.headViewerAgentId) + '/interrupt', {
+          const response = await fetch('/api/agents/' + encodeURIComponent(threadToInterrupt.headViewerAgentId) + '/interrupt', {
             method: 'POST',
             headers: { 'x-idempotency-key': newIdempotencyKey() },
           });
@@ -1026,18 +1093,46 @@ function dispatchCtxAction(action, target) {
     case 'thread-archive': {
       window.closeCtxMenu();
       const isZh = currentLanguage === 'zh';
+      const threadToArchive = _resolveCtxThread();
+      if (!threadToArchive?.threadId) break;
       (async () => {
         try {
-          await ctxThreadRequest(threadId, '/protoclaw/threads/' + encodeURIComponent(threadId) + '/archive');
+          await ctxThreadRequest(threadToArchive.threadId, '/protoclaw/threads/' + encodeURIComponent(threadToArchive.threadId) + '/archive');
           ClawToast.show({
-            id: 'ctx-thread-archive-' + threadId,
+            id: 'ctx-thread-archive-' + threadToArchive.threadId,
             status: 'success',
             title: isZh ? '已归档' : 'Archived',
             description: isZh ? '恢复（取消归档）不复活已取消的指令。' : 'Unarchive will not revive cancelled commands.',
           });
           await afterThreadMutation();
+          // 归档事务停掉整链 runtime：若被归档会话正停靠在前台，切回
+          // 工作台面，避免停留在一个已无 runtime 的对话上。
+          if (id && currentRuntimeAgentId === id) {
+            selectWorkspaceSurface(ns);
+          }
         } catch (error) {
           ClawToast.error(error?.message || 'Thread archive failed');
+        }
+      })();
+      break;
+    }
+
+    case 'thread-unarchive': {
+      window.closeCtxMenu();
+      const isZh = currentLanguage === 'zh';
+      const threadToRestore = _resolveCtxThread();
+      if (!threadToRestore?.threadId) break;
+      (async () => {
+        try {
+          await ctxThreadRequest(threadToRestore.threadId, '/protoclaw/threads/' + encodeURIComponent(threadToRestore.threadId) + '/unarchive');
+          ClawToast.show({
+            id: 'ctx-thread-unarchive-' + threadToRestore.threadId,
+            status: 'success',
+            title: isZh ? '已取消归档' : 'Unarchived',
+          });
+          await afterThreadMutation();
+        } catch (error) {
+          ClawToast.error(error?.message || 'Thread unarchive failed');
         }
       })();
       break;

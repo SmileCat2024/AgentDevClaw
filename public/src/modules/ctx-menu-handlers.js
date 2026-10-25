@@ -537,9 +537,27 @@ deleteFeatureAction.addEventListener('click', async () => {
   }
 });
 
+document.addEventListener('keydown', (event) => {
+  const item = event.target.closest('#ctx-menu [data-ctx-action][role="menuitem"]');
+  if (!item || !ctxMenu.classList.contains('open')) return;
+  if (event.key === 'ArrowRight' && item.classList.contains('has-submenu')) {
+    const firstAction = item.querySelector('.ctx-sub [data-ctx-action]');
+    if (firstAction) {
+      event.preventDefault();
+      firstAction.focus();
+    }
+    return;
+  }
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  const action = item.dataset.ctxAction;
+  if (action && window._ctxTarget) dispatchCtxAction(action, window._ctxTarget);
+  window.closeCtxMenu();
+});
+
 document.addEventListener('click', (event) => {
   // ── Generic ctx-menu action handling ──
-  const ctxBtn = event.target.closest('#ctx-menu button.ctx-menu-item[data-ctx-action]');
+  const ctxBtn = event.target.closest('#ctx-menu [data-ctx-action]');
   if (ctxBtn && ctxMenu.classList.contains('open')) {
     if (!ctxBtn.classList.contains('disabled')) {
       const action = ctxBtn.dataset.ctxAction;
