@@ -51,7 +51,9 @@ export async function applyPreview({ indexPath, planPath, threadsRoot, backupRoo
   const heldForReview = new Set((plan.ambiguous || []).flatMap((item) => item.sessionIds || []));
   const assigned = new Set((plan.groups || []).flatMap((group) => group.sessionIds || []));
   const partition = new Set([...assigned, ...heldForReview, ...(plan.skippedAlreadyThreadedSessionIds || [])]);
-  const eligible = new Set(plan.eligibleSessionIds || []);
+  // eligibleSessionIds excludes already-threaded sessions (they are filtered out of
+  // `included`), so partition completeness compares against their union.
+  const eligible = new Set([...(plan.eligibleSessionIds || []), ...(plan.skippedAlreadyThreadedSessionIds || [])]);
   if (assigned.size !== plan.summary?.memberCount
       || [...assigned].some((id) => heldForReview.has(id))
       || partition.size !== eligible.size

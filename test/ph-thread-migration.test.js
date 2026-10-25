@@ -163,6 +163,61 @@ test('apply refuses stale plans before creating records or backup', async (t) =>
   await assert.rejects(readFile(path.join(fx.backupRoot, 'sessions-index.json')));
 });
 
+test('apply migrates clean groups while ambiguous components stay untouched', async (t) => {
+  const fx = await fixture(t, [
+    session('clean-root'),
+    session('clean-next', { resumeMode: 'compacted', sourceSessionId: 'clean-root' }),
+    session('fork-a', { resumeMode: 'compacted', sourceSessionId: 'amb-root' }),
+    session('fork-b', { resumeMode: 'compacted', sourceSessionId: 'amb-root' }),
+    session('amb-root'),
+  ]);
+  assert.deepEqual(fx.plan.groups.map((group) => group.sessionIds), [['clean-root', 'clean-next']]);
+  assert.equal(fx.plan.ambiguous.length, 1);
+  const result = await applyPreview({
+    indexPath: fx.indexPath, planPath: fx.planPath, threadsRoot: fx.threadsRoot,
+    backupRoot: fx.backupRoot, confirmHash: fx.plan.planHash,
+  });
+  assert.deepEqual(result.createdThreadIds, ['wt-test-1']);
+  const store = new ThreadStore({ rootDir: fx.threadsRoot });
+  const records = await Promise.all((await store.list()).map((entry) => store.get(entry.threadId)));
+  const migratedMembers = records.flatMap((record) => record.sessionChain.map((entry) => entry.sessionId));
+  assert.deepEqual(migratedMembers, ['clean-root', 'clean-next']);
+  for (const sessionId of ['amb-root', 'fork-a', 'fork-b']) {
+    assert.ok(!migratedMembers.includes(sessionId), `${sessionId} must not be written into any thread`);
+  }
+});
+
+test('apply migrates alongside pre-existing threads and leaves them untouched', async (t) => {
+  const sessions = [
+    session('existing-head'),
+    session('clean-root'),
+    session('clean-next', { resumeMode: 'compacted', sourceSessionId: 'clean-root' }),
+  ];
+  const index = { revision: 3, activeSessionId: null, sessions };
+  const fx = await fixture(t, sessions);
+  await writeFile(fx.indexPath, JSON.stringify(index));
+  const store = new ThreadStore({ rootDir: fx.threadsRoot });
+  const existingRecord = materializeThreadRecord(
+    { threadId: 'wt-preexisting', sessionIds: ['existing-head'], edges: [] },
+    index, { now: () => 555 },
+  );
+  await store.create(existingRecord);
+
+  const plan = await writePreview(fx.indexPath, fx.cliPlanPath, { threadsRoot: fx.threadsRoot });
+  assert.deepEqual(plan.skippedAlreadyThreadedSessionIds, ['existing-head']);
+  const result = await applyPreview({
+    indexPath: fx.indexPath, planPath: fx.cliPlanPath, threadsRoot: fx.threadsRoot,
+    backupRoot: fx.backupRoot, confirmHash: plan.planHash,
+  });
+  assert.deepEqual(result.createdThreadIds, plan.groups.map((group) => group.threadId));
+  const records = await Promise.all((await store.list()).map((entry) => store.get(entry.threadId)));
+  const existing = records.find((record) => record.threadId === 'wt-preexisting');
+  assert.deepEqual(existing, existingRecord);
+  const migratedMembers = records.filter((record) => record.threadId !== 'wt-preexisting')
+    .flatMap((record) => record.sessionChain.map((entry) => entry.sessionId));
+  assert.deepEqual(migratedMembers.sort(), ['clean-next', 'clean-root']);
+});
+
 test('apply requires explicit matching plan hash and rejects ambiguous lineage without writes', async (t) => {
   const fx = await fixture(t, [session('root'), session('next-a', { resumeMode: 'compacted', sourceSessionId: 'root' }), session('next-b', { resumeMode: 'compacted', sourceSessionId: 'root' })]);
   const options = { indexPath: fx.indexPath, planPath: fx.planPath, threadsRoot: fx.threadsRoot, backupRoot: fx.backupRoot };

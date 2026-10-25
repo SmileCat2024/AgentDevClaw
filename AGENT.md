@@ -43,7 +43,7 @@
    - 0029 模型调用超时治理：对话默认首段（首 token）120s / chunk 间隔 60s idle / 5 次重试，transform 预算 600s 经装配层实例分离，undici headersTimeout / bodyTimeout 双锚 TRANSFORM_MODEL_TIMEOUT_MS（保底层垫在最大可配预算之下），preset 级 timeoutMs/maxRetries 逃生门（timeoutMs 显式值管首段与间隔两段）
    - 0030 OS 通知投递面：统一出口、通知权限项与应用承接（notifications.* 权限族往 PERMISSION_ITEMS 加项；editingSurface 挂账落地、全局设置通知项只读审计；server 投递闸 + SSE app-notification + 前端哑呈现器；不建 OS 定时器服务）
    - [0031 后台工作的薄接入层与领域 Shell 的独立组合](docs/adr/0031-background-work-and-domain-shell.md)（代码已实施，在线冒烟待执行）：执行关联、`BackgroundAccess` / Bash 迁移、Coder 非阻塞监视、领域 Bash 基座（`local-features/capability-shell/src/bash-program.ts` / `bash-runtime.ts`，`just-bash` AST 预检与解释执行，支持变量/循环/条件，展开后再校验领域参数）与 Claw 面板协议接入已落地；Bash 语法不开放系统命令，`send` 返回提交回执后循环继续，`watch` 待命只在整次调用返回后生效；复用 pending-work / suspended，监控策略归领域，不建设脚本挂起续跑；[实施方案](docs/plans/2026-10-21-background-work-and-coder-monitoring.md)
-   - 0032 编程小助手线程驱动：对话身份从 Session 提升为 Thread（计划已确认并分批实施中）：`threadHost` 声明接入（目录/项目对话一并覆盖，与 projectId 正交）；手动 `/trim` `/summary` 改对话内 succession 事务（自动接续后话）；列表行=对话、历史以时间锚存档呈现（不用「代」）；存量迁移机制先行、独立批次全量终态（血缘口径 index 元数据，歧义人工确认，备份+预览+幂等；051 工具与只读预览已生成，真实数据执行待审核确认）；移动对话=整链移动；不声明线程配额；搜索 Thread 聚合独立后续（048–050 已完成，051 工具和只读预览已完成、真实数据执行待审核确认，052 后续；工单 048–052 见 [docs/tickets/2026-10-24-ph-thread-driven.md](docs/tickets/2026-10-24-ph-thread-driven.md)）
+   - 0032 编程小助手线程驱动：对话身份从 Session 提升为 Thread（048–051 已实施）：`threadHost` 声明接入（目录/项目对话一并覆盖，与 projectId 正交）；手动 `/trim` `/summary` 改对话内 succession 事务（自动接续后话）；列表行=对话、历史以时间锚存档呈现（不用「代」）；存量迁移按 index 血缘建线，歧义分量跳过，备份+预览+幂等；服务启动自动执行，失败告警不阻断；本机真实数据已迁移并验收；移动对话=整链移动；不声明线程配额；搜索 Thread 聚合独立后续（052；工单 048–052 见 [docs/tickets/2026-10-24-ph-thread-driven.md](docs/tickets/2026-10-24-ph-thread-driven.md)）
 
 实现层真实入口：
 

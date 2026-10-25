@@ -36,6 +36,7 @@ import { ensureAppPortAvailable } from './server/boot/port-recovery.js';
 import { migrateLegacyAppConfig } from './server/app-config-migration.js';
 import { runStudioFeatureMigration } from './server/routes/studio-feature-migration.js';
 import { runCoderIdentityRetirement } from './server/routes/coder-identity-retirement.js';
+import { runPhLegacyThreadMigration } from './server/thread-control/ph-legacy-migration.js';
 import { ensureCoderFeaturePresets } from './server/routes/coder-feature-presets.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
@@ -1689,6 +1690,15 @@ async function main() {
     await runStudioFeatureMigration();
   } catch (err) {
     console.warn('[studio-migration] startup migration failed:', err.message);
+  }
+
+  // 编程小助手旧 Session 血缘迁移（ADR-0032）：干净链自动建线，歧义分量
+  // 保持原样跳过；失败只告警、不阻断服务启动，计划与备份保留供下次恢复。
+  try {
+    const result = await runPhLegacyThreadMigration();
+    if (!result.skipped) console.log('[ph-thread-migration] completed:', result.summary);
+  } catch (err) {
+    console.warn('[ph-thread-migration] startup migration failed:', err.message);
   }
 
   // 线程宿主集合按 metadata 声明派生注册（ADR-0024 可拔插约束：公共代码
