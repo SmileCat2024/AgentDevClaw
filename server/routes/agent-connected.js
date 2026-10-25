@@ -16,6 +16,7 @@ import {
 } from './session-helpers-pure.js';
 import { readWorkspaceVisibilityOverrides } from './workspace-settings.js';
 import { getThreadControl } from '../thread-control/thread-controller.js';
+import { readThreadMembership } from '../shared/thread-membership.js';
 
 // ── Connected Agents Query ───────────────────────────────────────
 // Pure query logic: assembles the full connected-agents list from
@@ -33,7 +34,7 @@ import { getThreadControl } from '../thread-control/thread-controller.js';
 // 且绑定 Session 的 managed Runtime）以 sidebarVisible 下发，前端纯消费。
 const CONNECTED_PAGE_LIMIT = 60;
 
-export function buildWireSessionsSnapshot(agentId, workspaceSessions) {
+export async function buildWireSessionsSnapshot(agentId, workspaceSessions) {
   const sessions = Array.isArray(workspaceSessions?.sessions) ? workspaceSessions.sessions : [];
   const trimmed = sessions.map(trimSessionRecordForWire);
   if (!PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
@@ -41,7 +42,10 @@ export function buildWireSessionsSnapshot(agentId, workspaceSessions) {
   }
   // PH 回退（workspace_state 不可读）：仍带分页元信息（全量已加载），
   // 前端据 sessionTotal 字段存在性判定分页语义，不因缺字段回退混乱。
-  const counts = sliceSessionsForWire(sessions);
+  const counts = sliceSessionsForWire(sessions, {
+    // ADR-0032 列表口径：计数按线程归档状态，历史代成员不进入
+    threadMembership: await readThreadMembership(agentId),
+  });
   return {
     ...workspaceSessions,
     sessionProjectDir: null,
@@ -65,6 +69,8 @@ export async function buildPhProjectScopedSnapshot(agentId, workspaceSessions) {
   const page = sliceSessionsForWire(sessions, {
     projectDir,
     limit: CONNECTED_PAGE_LIMIT,
+    // ADR-0032 列表口径：计数/切片按线程归档状态，历史代成员不进入
+    threadMembership: await readThreadMembership(agentId),
   });
   return {
     ...workspaceSessions,
@@ -178,7 +184,7 @@ export function createConnectedAgentsQuery(deps) {
         })() : {}),
         workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agent.id))
           ? await buildPhProjectScopedSnapshot(agent.id, workspaceSessions)
-          : buildWireSessionsSnapshot(agent.id, workspaceSessions),
+          : await buildWireSessionsSnapshot(agent.id, workspaceSessions),
         workspace_data: {},
         workspace_state: isWorkGroup
           ? { forms: {}, openDirectory: '', updatedAt: null, gcChats }

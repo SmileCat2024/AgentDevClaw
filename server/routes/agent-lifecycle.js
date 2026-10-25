@@ -336,7 +336,7 @@ export function createAgentLifecycleModule(ctx) {
           // 项目切片 + 字段裁剪），消费方（dispatch 下拉）不读 sessions 明细。
           workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agent.id))
             ? await buildPhProjectScopedSnapshot(agent.id, agent.workspace_sessions)
-            : buildWireSessionsSnapshot(agent.id, agent.workspace_sessions),
+            : await buildWireSessionsSnapshot(agent.id, agent.workspace_sessions),
           workspace_data: agent.workspace_data || {},
           workspace_state: agent.workspace_state || { forms: {}, openDirectory: '', updatedAt: null },
           active_workspace_session_id: agent.workspace_sessions?.activeSessionId || null,
@@ -498,7 +498,7 @@ export function createAgentLifecycleModule(ctx) {
           // 其余 agent 全量走 wire 裁剪。
           workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))
             ? await buildPhProjectScopedSnapshot(agentId, enriched.workspace_sessions)
-            : buildWireSessionsSnapshot(agentId, enriched.workspace_sessions),
+            : await buildWireSessionsSnapshot(agentId, enriched.workspace_sessions),
           agents: enriched.agents,
           defaultAgentId: enriched.defaultAgentId,
           workspace_data: enriched.workspace_data || {},

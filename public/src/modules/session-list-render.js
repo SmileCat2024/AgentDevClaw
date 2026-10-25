@@ -373,6 +373,26 @@ window.phIsThreadArchivedMember = function (agentId, session) {
   return !!(thread && thread.headSessionId !== session?.id);
 };
 
+/**
+ * 列表分区（一行 = 一段对话，ADR-0032）：
+ *   - 我的对话：未归档对话的 head 行 + 无线程的未归档会话
+ *   - 已归档：已归档线程的 head 行 + 无线程的已归档会话
+ *   - 线程历史代成员（非 head）不进入任何分区——它们经 head 行的
+ *     「历史 · N」入口可达（旧「精简并归档原会话」产物带会话级
+ *     archived=true，线程活跃时该标志被覆盖，不能作为分区依据）
+ */
+window.phPartitionSessions = function (agentId, sessions) {
+  const source = Array.isArray(sessions) ? sessions : [];
+  const main = [];
+  const archived = [];
+  for (const session of source) {
+    if (window.phIsThreadArchivedMember(agentId, session)) continue;
+    if (window.phConversationArchived(agentId, session)) archived.push(session);
+    else main.push(session);
+  }
+  return { main, archived };
+};
+
 window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
   const isZh = currentLanguage === 'zh';
   const sType = opts.type || session.sessionType || 'main';
@@ -400,6 +420,15 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
     : ' draggable="true" ondragstart="onPhSessionDragStart(event, this)" data-ref-session-type="' + escapeHtml(session.sessionType || 'main') + '"';
   const metaHtml = '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt))
     + ' · ' + escapeHtml(String(session.messageCount ?? 0)) + ' ' + escapeHtml(isZh ? '条消息' : 'messages') + '</div>';
+  // 归档徽标按对话归档口径渲染（phConversationArchived，线程优先）：
+  // 线程 head 行的徽标跟随线程状态——旧时代会话级 archived 标志不再让
+  // 「我的对话」里的行错误显示「已归档」（徽标在搜索混排时用于辨别分区）。
+  const conversationArchived = typeof window.phConversationArchived === 'function'
+    ? window.phConversationArchived(agent.id, session)
+    : session.archived === true;
+  const archivedBadgeHtml = conversationArchived
+    ? renderSessionArchivedBadge({ ...session, archived: true })
+    : '';
   const defaultBodyHtml = (session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '')
     + renderSessionTokenBar(session, agent);
   const bodyHtml = opts.bodyHtml !== undefined ? opts.bodyHtml : defaultBodyHtml;
@@ -417,7 +446,7 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
     renderSessionResumeBadge(session),
     (typeof window.renderSessionThreadBadge === 'function' ? window.renderSessionThreadBadge(agent.id, session) : ''),
     renderSessionTodoBadge(session),
-    renderSessionArchivedBadge(session),
+    archivedBadgeHtml,
     renderSessionTitleAiButton(session),
     '</div>',
     metaHtml,
@@ -798,9 +827,11 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   }
 
   // Project is active - show its sessions with tabs
-  const mainSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => !window.phConversationArchived(agent.id, s)));
-  // 归档区线程收敛：历史代成员过滤（谓词定义见 phIsThreadArchivedMember）。
-  const archivedSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => window.phConversationArchived(agent.id, s) && !window.phIsThreadArchivedMember(agent.id, s)));
+  // 分区契约见 phPartitionSessions：历史代成员不进入任何分区（此前仅
+  // 归档区过滤，线程未归档时历史代会漏进「我的对话」）。
+  const { main: mainSessionsUnsorted, archived: archivedSessionsUnsorted } = window.phPartitionSessions(agent.id, currentProject.sessions);
+  const mainSessions = sortPhSessionsByMode(mainSessionsUnsorted);
+  const archivedSessions = sortPhSessionsByMode(archivedSessionsUnsorted);
   const needsTabs = true; // 始终显示分页器，不管每个类型有没有对话
 
   // 会话移动多选（本地 PH only）：远程会话不可选——移动是本地归属变更，

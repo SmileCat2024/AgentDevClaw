@@ -561,6 +561,10 @@ export function trimSessionRecordForWire(record) {
  *     收窄（项目身份是显式归属，目录此时只是物理位置），路由层已互斥校验
  *   - studioFeatureId: 会话绑定数组包含该 feature id（feature 详情页会话列表）
  *   - archived: 'main'（archived !== true）| 'archived'（=== true）| 缺省全部
+ *   - threadMembership: Map<sessionId, {isHead, archived}>（可选，ADR-0032
+ *     列表口径「一行 = 一段对话」）：线程会话非 head（历史代成员）不进入
+ *     切片与计数；head 的分桶按线程归档状态，会话级 archived 标志仅对
+ *     无线程会话生效（调用方经 shared/thread-membership.js 构造）
  *   - query: title / openDirectory 子串（大小写不敏感）
  *
  * 返回 { slice, total, mainTotal, archivedTotal }；total 为过滤后未切片
@@ -578,6 +582,7 @@ export function sliceSessionsForWire(sessions, options = {}) {
 
   let mainTotal = 0;
   let archivedTotal = 0;
+  const threadMembership = options.threadMembership instanceof Map ? options.threadMembership : null;
   const filtered = [];
   for (const session of source) {
     if (options.studioFeatureId !== undefined
@@ -589,10 +594,15 @@ export function sliceSessionsForWire(sessions, options = {}) {
       if (cleanSessionText(session?.projectId)) continue;
       if (normalizeProjectDirForCompare(session?.openDirectory) !== normalizedProject) continue;
     }
+    // ADR-0032 列表口径：线程历史代成员（非 head）不进入任何切片与计数
+    // （head 行的「历史 · N」入口可达）；head 的分桶按线程归档状态
+    const membership = threadMembership ? threadMembership.get(String(session?.id || '')) : null;
+    if (membership && !membership.isHead) continue;
+    const isArchived = membership ? membership.archived === true : session?.archived === true;
     // 徽标计数：当前项目内 main/archived 真实总数，不受 tab/query 过滤影响
-    if (session?.archived === true) archivedTotal += 1; else mainTotal += 1;
-    if (archivedFilter === 'main' && session?.archived === true) continue;
-    if (archivedFilter === 'archived' && session?.archived !== true) continue;
+    if (isArchived) archivedTotal += 1; else mainTotal += 1;
+    if (archivedFilter === 'main' && isArchived) continue;
+    if (archivedFilter === 'archived' && !isArchived) continue;
     if (query) {
       const title = String(session?.title || '').toLowerCase();
       const directory = String(session?.openDirectory || '').toLowerCase();

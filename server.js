@@ -36,7 +36,7 @@ import { ensureAppPortAvailable } from './server/boot/port-recovery.js';
 import { migrateLegacyAppConfig } from './server/app-config-migration.js';
 import { runStudioFeatureMigration } from './server/routes/studio-feature-migration.js';
 import { runCoderIdentityRetirement } from './server/routes/coder-identity-retirement.js';
-import { runPhLegacyThreadMigration } from './server/thread-control/ph-legacy-migration.js';
+import { runPhLegacyThreadMigration, runPhThreadArchiveBackfill } from './server/thread-control/ph-legacy-migration.js';
 import { ensureCoderFeaturePresets } from './server/routes/coder-feature-presets.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
@@ -1699,6 +1699,15 @@ async function main() {
     if (!result.skipped) console.log('[ph-thread-migration] completed:', result.summary);
   } catch (err) {
     console.warn('[ph-thread-migration] startup migration failed:', err.message);
+  }
+
+  // v2 归档补记（ADR-0032「已归档 = 线程归档」）：v1 建线时 head 已归档的
+  // 线程补写归档索引；失败只告警不阻断（与 v1 同模式）。
+  try {
+    const result = await runPhThreadArchiveBackfill();
+    if (!result.skipped) console.log('[ph-thread-archive-backfill] completed:', result.summary);
+  } catch (err) {
+    console.warn('[ph-thread-archive-backfill] startup migration failed:', err.message);
   }
 
   // 线程宿主集合按 metadata 声明派生注册（ADR-0024 可拔插约束：公共代码

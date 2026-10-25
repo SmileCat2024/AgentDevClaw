@@ -723,6 +723,38 @@ describe('wire session projection', () => {
     assert.deepEqual([archivedPage.mainTotal, archivedPage.archivedTotal], [1, 2]);
   });
 
+  // ADR-0032 列表口径（一行 = 一段对话）：threadMembership 存在时，
+  // 历史代成员（非 head）不进入任何切片与计数；head 分桶按线程归档
+  // 状态，会话级 archived 标志仅对无线程会话生效。
+  it('thread membership: history members never sliced or counted; head buckets by thread archive state', () => {
+    const sessions = [
+      record('s-active-head', { archived: false }),  // 活跃线程 head → main
+      record('s-active-old', { archived: true }),   // 活跃线程历史代（遗留标志）→ 无分区
+      record('s-arch-head', { archived: false }),   // 归档线程 head（标志未置位）→ archived
+      record('s-legacy-arch', { archived: true }),  // 无线程存量归档会话 → archived
+      record('s-plain', { archived: false }),       // 无线程普通会话 → main
+    ];
+    const threadMembership = new Map([
+      ['s-active-head', { isHead: true, archived: false }],
+      ['s-active-old', { isHead: false, archived: false }],
+      ['s-arch-head', { isHead: true, archived: true }],
+    ]);
+    const page = sliceSessionsForWire(sessions, { threadMembership });
+    assert.deepEqual(page.slice.map((s) => s.id), ['s-active-head', 's-arch-head', 's-legacy-arch', 's-plain']);
+    assert.deepEqual([page.mainTotal, page.archivedTotal], [2, 2], '历史代不计入，head 按线程状态分桶');
+    const mainPage = sliceSessionsForWire(sessions, { threadMembership, archived: 'main' });
+    assert.deepEqual(mainPage.slice.map((s) => s.id), ['s-active-head', 's-plain']);
+    const archivedPage = sliceSessionsForWire(sessions, { threadMembership, archived: 'archived' });
+    assert.deepEqual(archivedPage.slice.map((s) => s.id), ['s-arch-head', 's-legacy-arch']);
+  });
+
+  it('thread membership absent: session archived flag remains authoritative (legacy semantics)', () => {
+    const sessions = [record('a'), record('b', { archived: true })];
+    const page = sliceSessionsForWire(sessions);
+    assert.deepEqual([page.mainTotal, page.archivedTotal], [1, 1]);
+    assert.equal(page.total, 2);
+  });
+
   it('matches query against title and directory, case-insensitive', () => {
     const sessions = [
       record('a', { title: 'Fix login bug' }),

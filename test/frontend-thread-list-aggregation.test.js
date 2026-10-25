@@ -1,7 +1,9 @@
-// PH 列表线程聚合（ticket 050）：徽标（历史 · N）与归档区收敛谓词。
-// 行 = 一段对话（ADR-0032）：head 行挂历史入口；历史代成员从归档区
-// 过滤，只经入口可达。徽标契约：仅 head 且存在历史代时渲染，点击经
-// phOpenThreadHistory 打开；线程数据未加载保守不渲染（轮询到位自动补）。
+// PH 列表线程聚合（ticket 050）：徽标（历史 · N）与分区收敛谓词。
+// 行 = 一段对话（ADR-0032）：head 行挂历史入口；历史代成员从两个分区
+// （我的对话 / 已归档）同时过滤，只经入口可达。徽标契约：仅 head 且
+// 存在历史代时渲染，点击经 phOpenThreadHistory 打开；归档徽标按
+// phConversationArchived 口径（线程状态优先）；线程数据未加载保守
+// 不渲染 / 不过滤（轮询到位自动收敛）。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -102,7 +104,37 @@ test('对话归档状态：无线程 / 线程数据未就绪时回退 session.ar
 });
 
 test('归档区收敛：线程数据未加载时不过滤（保守渲染）', () => {
-  const ctx = loadModule({});
+  const ctx = loadModule({ });
   delete ctx.window.getThreadForSession;
   assert.equal(ctx.run(`window.phIsThreadArchivedMember('programming-helper', { id: 'sess-any' })`), false, '索引缺席：不过滤');
+});
+
+test('列表分区：五类会话形态各归其位，历史代成员不进入任何分区', () => {
+  // 线程摘要：活跃线程（head + 一份历史代）与归档线程各一条
+  const threads = {
+    'wt-active': { threadId: 'wt-active', headSessionId: 's-active-head', sessionIds: ['s-active-old', 's-active-head'], lifeState: 'active' },
+    'wt-archived': { threadId: 'wt-archived', headSessionId: 's-arch-head', sessionIds: ['s-arch-head'], lifeState: 'archived' },
+  };
+  const ctx = loadModule({});
+  ctx.window.getThreadForSession = (_agentId, sessionId) => {
+    for (const thread of Object.values(threads)) {
+      if (thread.sessionIds.includes(sessionId)) return thread;
+    }
+    return null;
+  };
+  const input = [
+    { id: 's-active-head', archived: false }, // 活跃线程 head → 我的对话
+    { id: 's-active-old', archived: true },  // 活跃线程历史代（遗留标志）→ 无分区
+    { id: 's-arch-head', archived: false },  // 归档线程 head（head 标志未置位）→ 已归档
+    { id: 's-legacy-arch', archived: true }, // 无线程存量归档会话 → 已归档
+    { id: 's-plain', archived: false },      // 无线程普通会话 → 我的对话
+  ];
+  const result = ctx.run(`window.phPartitionSessions('programming-helper', ${JSON.stringify(input)})`);
+  // ctx.run 返回 VM 沙箱对象（原型链在 VM 内），deepStrictEqual 会因原型
+  // 不同误报——先经 Array.from 转宿主数组再比较
+  const ids = (list) => Array.from(list).map((s) => s.id);
+  assert.deepEqual(ids(result.main), ['s-active-head', 's-plain'], '我的对话：活跃 head 与无线程未归档会话');
+  assert.deepEqual(ids(result.archived), ['s-arch-head', 's-legacy-arch'], '已归档：归档线程 head 与无线程归档会话');
+  const shown = [...ids(result.main), ...ids(result.archived)];
+  assert.ok(!shown.includes('s-active-old'), '历史代成员（含遗留 archived=true）不占据任何分区');
 });

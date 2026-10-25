@@ -72,11 +72,14 @@ export class ThreadArchiveIndex {
     return { code: 'thread_archived', status: 409 };
   }
 
-  /** 幂等：已归档时保留时间戳，并允许更新清理结果。 */
+  /** 幂等：已归档时保留时间戳，并允许更新清理结果。archivedAt 仅在
+   *  首次写入时生效（迁移补记历史归档时间；已存在条目不覆盖）。 */
   async archive(threadId, options = {}) {
     return this._mutate(async () => {
       const entries = await this._read();
-      const existing = entries[threadId] || { archivedAt: Date.now() };
+      const initialArchivedAt = Number(options.archivedAt);
+      const existing = entries[threadId]
+        || { archivedAt: Number.isFinite(initialArchivedAt) && initialArchivedAt > 0 ? initialArchivedAt : Date.now() };
       if (options.cleanup !== undefined) existing.cleanup = options.cleanup;
       entries[threadId] = existing;
       await this._write(entries);

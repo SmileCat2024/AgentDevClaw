@@ -19,6 +19,7 @@ import {
   normalizeSessionMetadata, buildSessionTitle, computeNextSessionNumber,
 } from '../shared/session-access.js';
 import { getAgentRuntime, isManagedRuntimeRunning } from '../shared/agent-access.js';
+import { readThreadMembership } from '../shared/thread-membership.js';
 import { resolveSessionModelInfo } from './model-config.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createSessionHandoffHelpers } from './session-handoff-helpers.js';
@@ -611,6 +612,8 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
     archived: options.sessionArchived,
     offset: options.sessionOffset,
     limit: options.sessionLimit,
+    // ADR-0032 列表口径：计数/切片按线程归档状态，历史代成员不进入
+    threadMembership: await readThreadMembership(agentId),
   };
   const richPageActive = options.sessionProjectDir !== undefined
     || options.sessionProjectId !== undefined
@@ -637,7 +640,9 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
   if (options.wireTrim === true) {
     wireSessions = wireSessions.map(trimSessionRecordForWire);
     if (!richPageActive) {
-      const counts = sliceSessionsForWire(sessions);
+      const counts = sliceSessionsForWire(sessions, {
+        threadMembership: await readThreadMembership(agentId),
+      });
       richPageMeta = { mainTotal: counts.mainTotal, archivedTotal: counts.archivedTotal };
     }
   }
