@@ -667,14 +667,29 @@ function pushOptimisticUserEcho({ text, images, sessionReferences, fromIndex = c
     + '<div class="message-content markdown-body">' + renderMarkdown(echoText) + '</div>'
     + renderUserImages(images)
     + renderSessionReferenceChips(sessionReferences);
+  // 时间分隔线预渲染（message-timeline.js）：回显气泡上屏的同时出线，
+  // 消除"消息先出现、分隔线随真实消息回流才插入把内容往下搓一下"的滞后
+  // 跳动。本地时钟近似 + 保守余量（resolveEchoTimeSeparator），真实行的
+  // 分隔线落地后由 reconcile 随回显气泡一并移除预渲染元素。
+  let separatorEl = null;
+  if (typeof resolveEchoTimeSeparator === 'function'
+    && typeof renderTimeSeparatorHtml === 'function') {
+    const echoTs = resolveEchoTimeSeparator(currentMessages, Date.now());
+    if (echoTs !== null) {
+      const holder = document.createElement('div');
+      holder.innerHTML = renderTimeSeparatorHtml(echoTs, 'time-separator--echo');
+      separatorEl = holder.firstElementChild;
+    }
+  }
   runWithSuppressedChatViewportObservers(() => {
     const emptyState = container.querySelector('.empty-state');
     if (emptyState) emptyState.remove();
+    if (separatorEl) container.appendChild(separatorEl);
     container.appendChild(row);
     enhanceMathInElement(row);
     enhanceMarkdownTables(row);
   });
-  _optimisticEchoes.push({ text: echoText, images: images || [], fromIndex, el: row });
+  _optimisticEchoes.push({ text: echoText, images: images || [], fromIndex, el: row, sepEl: separatorEl });
   // 真实消息可能先于 POST 回执抵达，不等下次消息变更就消除重复回显。
   reconcileOptimisticUserEchoes(currentMessages);
   updateFollowLatestButton();
@@ -704,6 +719,9 @@ function reconcileOptimisticUserEchoes(messages) {
       if (m && m.role === 'user' && m.content === echo.text
         && JSON.stringify(imagePaths(m.images)) === JSON.stringify(imagePaths(echo.images))) {
         consumed.add(i);
+        // 预渲染分隔线与回显气泡同生命周期：真实行自带分隔线，先移除
+        // 预渲染元素再移除气泡，避免残留第二条分隔线
+        if (echo.sepEl && echo.sepEl.isConnected) echo.sepEl.remove();
         echo.el.remove();
         echo.el = null;
         break;

@@ -123,6 +123,17 @@ describe('render separator html', () => {
     assert.match(html, /^<div class="time-separator"><span>下午 3:24<\/span><\/div>$/);
   });
 
+  it('appends a sanitized extra class when given', () => {
+    const ctx = loadTimeline();
+    const now = new Date();
+    const ts = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 15, 24).getTime();
+    const html = call(ctx, 'renderTimeSeparatorHtml', ts, 'time-separator--echo');
+    assert.match(html, /^<div class="time-separator time-separator--echo"><span>下午 3:24<\/span><\/div>$/);
+    // 非法字符被剥除，不进 class 属性
+    const dirty = call(ctx, 'renderTimeSeparatorHtml', ts, 'a"b c');
+    assert.ok(dirty.startsWith('<div class="time-separator abc">'));
+  });
+
   it('prepends to user rows only and passes others through', () => {
     const ctx = loadTimeline();
     const msgs = [{ role: 'assistant', content: 'a' }, { role: 'user', content: 'q', _ts: 1 }];
@@ -131,5 +142,54 @@ describe('render separator html', () => {
     const withSep = call(ctx, 'prependTimeSeparatorHtml', msgs, 1, '<row/>');
     assert.ok(withSep.startsWith('<div class="time-separator">'));
     assert.ok(withSep.endsWith('<row/>'));
+  });
+});
+
+describe('resolveEchoTimeSeparator（乐观回显分隔线预判）', () => {
+  const GAP = 5 * 60 * 1000;
+  const SLACK = 30 * 1000;
+  const mk = (role, _ts) => ({ role, content: 'x', ...(_ts !== undefined ? { _ts } : {}) });
+
+  it('shows for the first user message (no prior user row)', () => {
+    const ctx = loadTimeline();
+    assert.equal(call(ctx, 'resolveEchoTimeSeparator', [mk('assistant', 1)], 9000), 9000);
+    assert.equal(call(ctx, 'resolveEchoTimeSeparator', [], 9000), 9000);
+  });
+
+  it('shows when the gap exceeds GAP + slack (local clock approximation)', () => {
+    const ctx = loadTimeline();
+    const prev = 1000;
+    const now = prev + GAP + SLACK + 1;
+    assert.equal(call(ctx, 'resolveEchoTimeSeparator', [mk('user', prev)], now), now);
+  });
+
+  it('stays conservative inside the slack band (may lag, never flashes)', () => {
+    const ctx = loadTimeline();
+    const prev = 1000;
+    // 间隔已过 GAP 但未过 GAP + slack：预渲染会被真实判定撤回的窗口，不出线
+    assert.equal(call(ctx, 'resolveEchoTimeSeparator', [mk('user', prev)], prev + GAP + 1), null);
+    assert.equal(call(ctx, 'resolveEchoTimeSeparator', [mk('user', prev)], prev + GAP + SLACK), null);
+    assert.equal(call(ctx, 'resolveEchoTimeSeparator', [mk('user', prev)], prev + GAP - 1), null);
+  });
+
+  it('degrades silently when the previous user message has no stamp', () => {
+    const ctx = loadTimeline();
+    assert.equal(call(ctx, 'resolveEchoTimeSeparator', [mk('user')], 5000), null);
+  });
+
+  it('looks past non-user rows for the previous stamped user anchor', () => {
+    const ctx = loadTimeline();
+    // 前一条用户消息之后隔了 assistant / tool 行：锚仍是那条用户消息
+    const msgs = [mk('user', 1000), mk('assistant'), mk('tool')];
+    assert.equal(call(ctx, 'resolveEchoTimeSeparator', msgs, 1000 + GAP + SLACK + 1), 1000 + GAP + SLACK + 1);
+    // 最近用户锚隔着非用户行且无 _ts（旧数据）→ 同样不出线
+    const unstamped = [mk('user'), mk('assistant')];
+    assert.equal(call(ctx, 'resolveEchoTimeSeparator', unstamped, 9000), null);
+  });
+
+  it('rejects a non-finite now', () => {
+    const ctx = loadTimeline();
+    assert.equal(ctx.run('resolveEchoTimeSeparator([], NaN)'), null);
+    assert.equal(ctx.run('resolveEchoTimeSeparator([], "x")'), null);
   });
 });

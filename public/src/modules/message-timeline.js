@@ -12,6 +12,13 @@
 // 分隔线触发阈值：与上一条用户消息的最小时间间隔
 var TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000;
 
+// 乐观回显预判的保守余量：预渲染分隔线要求间隔超过 GAP + 本值。
+// 服务端入列时间恒晚于用户按下发送的本地时刻（发送延迟 + 消费排队），
+// 加上常见的本机时钟偏差，两侧判定在阈值附近可能不一致。预判从严，
+// 不一致只会退化为"分隔线随真实消息晚一点出现"（现状行为），绝不
+// 出现"预渲染后又被真实行判定撤回"的反向跳动。
+var ECHO_SEPARATOR_SLACK_MS = 30 * 1000;
+
 /**
  * 把 timestamps 平行表合并进消息对象副本（_ts 字段）。
  *
@@ -39,17 +46,38 @@ function attachMessagesTimestamps(messages, timestamps) {
  *   - 不存在（首条用户消息）→ 显示
  *   - 存在且带 _ts → 间隔 > 阈值才显示
  *   - 存在但无 _ts（旧数据）→ 不显示（无锚可比较，避免误导性间隔）
+ *
+ * gapMs 可选（默认 TIME_SEPARATOR_GAP_MS），供乐观回显预判复用语义。
  */
-function resolveUserTimeSeparator(messages, index) {
+function resolveUserTimeSeparator(messages, index, gapMs) {
+  var gap = typeof gapMs === 'number' ? gapMs : TIME_SEPARATOR_GAP_MS;
   var msg = messages[index];
   if (!msg || msg.role !== 'user' || typeof msg._ts !== 'number') return null;
   for (var i = index - 1; i >= 0; i--) {
     var prev = messages[i];
     if (!prev || prev.role !== 'user') continue;
     if (typeof prev._ts !== 'number') return null;
-    return (msg._ts - prev._ts) > TIME_SEPARATOR_GAP_MS ? msg._ts : null;
+    return (msg._ts - prev._ts) > gap ? msg._ts : null;
   }
   return msg._ts;
+}
+
+/**
+ * 乐观回显（optimistic user echo）的分隔线预判：发送瞬间消息尚无服务端
+ * _ts，用本地时钟 nowMs 近似。判定语义与 resolveUserTimeSeparator 完全
+ * 一致（虚拟追加一条 _ts=nowMs 的用户消息求值），仅阈值加保守余量。
+ *
+ * 返回应显示的时间戳（nowMs），不应显示时返回 null。真实消息回流后由
+ * 正常渲染路径的分隔线接管，预渲染元素随回显气泡一并移除。
+ */
+function resolveEchoTimeSeparator(messages, nowMs) {
+  if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) return null;
+  var msgs = Array.isArray(messages) ? messages : [];
+  return resolveUserTimeSeparator(
+    msgs.concat([{ role: 'user', _ts: nowMs }]),
+    msgs.length,
+    TIME_SEPARATOR_GAP_MS + ECHO_SEPARATOR_SLACK_MS
+  );
 }
 
 /**
@@ -79,11 +107,14 @@ function formatChatTimestamp(ts) {
 
 /**
  * 分隔线 html（两侧横线 + 低对比度文字）。时间格式化失败时返回空串。
+ * extraClass 可选（如乐观回显预渲染的标记类），追加到基础类后。
  */
-function renderTimeSeparatorHtml(ts) {
+function renderTimeSeparatorHtml(ts, extraClass) {
   var text = formatChatTimestamp(ts);
   if (!text) return '';
-  return '<div class="time-separator"><span>' + escapeHtml(text) + '</span></div>';
+  var cls = 'time-separator'
+    + (extraClass ? ' ' + String(extraClass).replace(/[^a-z0-9_-]/gi, '') : '');
+  return '<div class="' + cls + '"><span>' + escapeHtml(text) + '</span></div>';
 }
 
 /**
