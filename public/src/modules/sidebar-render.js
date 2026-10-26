@@ -1036,6 +1036,11 @@ function getAgentListRenderSignature() {
         calling: rid !== '' && _agentCallActive.get(rid) === true,
         suspended: rid !== '' && isRuntimeSuspended(rid) === true,
         activeSessionId: normalizeAgentIdentity(getActiveSessionId(agent)),
+        // Project and directory ownership determine the child runtime's sidebar
+        // group. Include both in the render signature so a same-runtime metadata
+        // refresh cannot be hidden by the render dedupe.
+        projectId: String(agent?.project_id || agent?.projectId || '').trim(),
+        openDirectory: String(agent?.open_directory || agent?.openDirectory || '').trim(),
         workspaceRevision: Number(agent?.workspace_sessions?.revision) || 0,
         sessions: (agent?.workspace_sessions?.sessions || []).map((session) => ({
           id: session.id, title: session.title, formId: session.formId, agentName: session.agentName,

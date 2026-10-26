@@ -329,6 +329,46 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
     assert.doesNotMatch(html, /class="project-collapse-label">发布整理</);
   });
 
+  test('侧栏渲染去重在同一运行时项目归属变化后重新投影', () => {
+    const live = loadFrontend({ realSidebarRenderer: true });
+    const host = hostFixture();
+    const runtime = { ...wireChildren[1] };
+    const agents = [host, runtime];
+    let html = '';
+    live.allAgents = agents;
+    live.focusedAgentId = 'programming-helper';
+    live.currentRuntimeAgentId = '';
+    live.pendingPrebuiltAgentIds = new Set();
+    live.restartingRuntimeIds = new Set();
+    live._recentlyFinishedRuntimes = new Set();
+    live._agentCallActive = new Map();
+    live.groupConnectedAgents = () => ({ external: [] });
+    live.getAgentRuntimeId = (agent) => agent.runtime_session_id || agent.id || '';
+    live.getParentAgentId = (agent) => agent.parent_id || '';
+    live.updateCurrentAgentChrome = () => {};
+    live.renderFeaturePanel = () => {};
+    live.externalAgentList = {};
+    live.externalGroup = { style: {} };
+    live.externalCount = {};
+    live.isRemoteNamespaceAgentId = () => false;
+    live.window.ClawSidebarLayout = {
+      signature: () => '',
+      isInteracting: () => false,
+      render() {
+        html = live.run('renderSidebarChildItems(collectRuntimeEntriesForPrebuilt(allAgents[0], allAgents), "programming-helper")');
+      },
+    };
+
+    live.run('renderAgentList()');
+    assert.ok(html.includes('data-project-key="prj:' + PROJECT_A + '"'));
+    assert.ok(html.includes('data-agent-id="rt-a1"'));
+
+    runtime.project_id = '';
+    live.run('renderAgentList()');
+    const groups = html.split('agent-runtime-project-group').slice(1);
+    assert.ok(groups.some((group) => group.includes('data-project-key="' + DIR_D + '"') && group.includes('data-agent-id="rt-a1"')));
+  });
+
   test('项目名称请求失败保留旧清单，下次侧栏加载可以重试', async () => {
     const named = loadFrontend();
     const store = named.window.ClawFW.phProjectEntities;
