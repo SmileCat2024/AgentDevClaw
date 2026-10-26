@@ -793,6 +793,12 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
     archived: options.sessionArchived,
     offset: options.sessionOffset,
     limit: options.sessionLimit,
+    // ADR-0032 列表口径：一行 = 一段对话，历史代成员不进入切片与计数、head
+    // 按线程归档状态分桶。PH 的列表请求走本函数（索引读模型），rich 降级路径
+    // 早已接入同一口径——此处漏接会让历史代成员以普通会话行返回，「我的对话」
+    // 混入 900+ 条只该经「历史 · N」入口到达的旧代记录，分页键位与计数同步
+    // 失真（实测 2116 vs 应有的 1717）。
+    threadMembership: await readThreadMembership(agentId),
   };
   const pageActive = options.sessionProjectDir !== undefined
     || options.sessionProjectId !== undefined
@@ -819,7 +825,9 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
   if (options.wireTrim === true) {
     wireSessions = wireSessions.map(trimSessionRecordForWire);
     if (!pageActive) {
-      const counts = sliceSessionsForWire(sessions);
+      const counts = sliceSessionsForWire(sessions, {
+        threadMembership: await readThreadMembership(agentId),
+      });
       pageMeta = { mainTotal: counts.mainTotal, archivedTotal: counts.archivedTotal };
     }
   }

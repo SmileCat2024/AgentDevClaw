@@ -74,7 +74,7 @@ import {
   getWorkspaceArtifactPath,
   getProjectDocsetDir, getProjectDocsetProjectPath, getProjectDocsetFormsDir,
   getProjectDocsetMaterialsDir, getProjectDocsetConversationsDir,
-  readSessionIndex, resolvePrebuiltSessionType,
+  readSessionIndex, readSessionIndexShared, resolvePrebuiltSessionType,
   writeSessionIndex, updateSessionIndex,
   buildSessionTitle, normalizeSessionMetadata, readSessionIndexSync,
 } from './server/shared/session-access.js';
@@ -734,6 +734,25 @@ setupThreadRoutes(app, express, {
   resolveSessionTitle: async (agentId, sessionId) => {
     const record = await findPrebuiltSessionRecordShared(agentId, sessionId);
     return cleanSessionText(record?.title) || null;
+  },
+  // 列表端点批量变体（热路径）：一次共享索引读建 Map，替代逐线程两次
+  // findPrebuiltSessionRecordShared。PH 线程化后列表有 1400+ 线程，逐线程
+  // 路径每请求会产生近 3000 次 ensureDir + stat 与两次全表 Map 构建，
+  // 是 GET /protoclaw/threads 秒级延迟的主要组成。返回 Map<sessionId, fields>。
+  resolveHeadSessionFields: async (agentId, sessionIds) => {
+    const index = await readSessionIndexShared(agentId);
+    const recordsById = new Map(index.sessions.map((session) => [session.id, session]));
+    const fields = new Map();
+    for (const sessionId of sessionIds || []) {
+      const wanted = cleanSessionText(sessionId);
+      if (!wanted) continue;
+      const record = recordsById.get(wanted) || null;
+      fields.set(wanted, {
+        openDirectory: cleanSessionText(record?.openDirectory) || null,
+        title: cleanSessionText(record?.title) || null,
+      });
+    }
+    return fields;
   },
   // 代际元数据批量解析（ticket 050 历史存档面板）：共享只读索引一次读全
   // 部代，缺省字段收敛为 null（索引查不到的代只保留链事实）。

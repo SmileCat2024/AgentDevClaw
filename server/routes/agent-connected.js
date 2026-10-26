@@ -42,19 +42,23 @@ export async function buildWireSessionsSnapshot(agentId, workspaceSessions) {
   }
   // PH 回退（workspace_state 不可读）：仍带分页元信息（全量已加载），
   // 前端据 sessionTotal 字段存在性判定分页语义，不因缺字段回退混乱。
-  const counts = sliceSessionsForWire(sessions, {
-    // ADR-0032 列表口径：计数按线程归档状态，历史代成员不进入
+  //
+  // 口径一致性（ADR-0032）：sessions / sessionTotal 必须与 mainTotal /
+  // archivedTotal 同源。此前 sessions 与 sessionTotal 用未过滤的全量，计数
+  // 却按线程成员口径——历史代成员既以普通行返回，又让「加载更多」的进度
+  // 分母虚高（已显示数永远追不上 sessionTotal），前端会持续提示还有更多。
+  const page = sliceSessionsForWire(sessions, {
     threadMembership: await readThreadMembership(agentId),
   });
   return {
     ...workspaceSessions,
     sessionProjectDir: null,
-    sessionTotal: trimmed.length,
+    sessionTotal: page.total,
     sessionOffset: 0,
     sessionHasMore: false,
-    mainTotal: counts.mainTotal,
-    archivedTotal: counts.archivedTotal,
-    sessions: trimmed,
+    mainTotal: page.mainTotal,
+    archivedTotal: page.archivedTotal,
+    sessions: page.slice.map(trimSessionRecordForWire),
   };
 }
 

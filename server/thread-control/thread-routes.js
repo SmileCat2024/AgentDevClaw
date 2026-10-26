@@ -47,8 +47,15 @@ import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-e
  *   updatedAt, messageCount, archived } | null>，按入参顺序返回，会话不存在为
  *   null。供详情端点组装 sessionChainMeta（历史存档面板的时间锚 / 标题 /
  *   规模）；不注入则详情响应不含该字段。
+ * @param {Function} [options.resolveHeadSessionFields] head 会话字段批量解析
+ *   （列表端点热路径）：async (agentId, sessionIds[]) =>
+ *   Map<string, { openDirectory: string|null, title: string|null }>。
+ *   列表逐线程解析 head 的目录 / 标题时按 agentId 分组一次取回——逐线程调用
+ *   resolveSessionOpenDirectory + resolveSessionTitle 会让每个请求按线程数
+ *   重复读索引（PH 线程化后 1400+ 线程 → 近 3000 次 mkdir+stat），是列表
+ *   延迟的主要组成。不注入时回退逐线程解析（保持既有注入方兼容）。
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, publishThreadEvent = publishThreadEventDefault, assertThreadQuota } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, publishThreadEvent = publishThreadEventDefault, assertThreadQuota } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -107,6 +114,61 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
   };
 
   const _getArchiveEntries = () => archive.list().catch(() => ({}));
+
+  const _headFieldKey = (agentId, sessionId) => `${agentId}::${sessionId}`;
+
+  /**
+   * 批量解析线程 head 的会话字段（目录 / 标题）。
+   *
+   * 注入 resolveHeadSessionFields 时按 agentId 分组一次取回；未注入时回退到
+   * 逐线程调用 resolveSessionOpenDirectory / resolveSessionTitle（既有注入方
+   * 与测试装配保持兼容）。返回 Map<`agentId::sessionId`, {openDirectory, title}>。
+   */
+  const _resolveHeadFieldsBulk = async (threads) => {
+    const out = new Map();
+    const grouped = new Map();
+    for (const thread of threads) {
+      const agent = String(thread?.agentId || '');
+      const head = String(thread?.headSessionId || '');
+      if (!agent || !head) continue;
+      if (!grouped.has(agent)) grouped.set(agent, new Set());
+      grouped.get(agent).add(head);
+    }
+    if (grouped.size === 0) return out;
+
+    if (typeof resolveHeadSessionFields === 'function') {
+      const entries = await Promise.all(
+        Array.from(grouped, async ([agent, heads]) => {
+          const fields = await resolveHeadSessionFields(agent, Array.from(heads)).catch(() => null);
+          return [agent, fields];
+        }),
+      );
+      for (const [agent, fields] of entries) {
+        if (!fields || typeof fields.forEach !== 'function') continue;
+        fields.forEach((value, sessionId) => {
+          out.set(_headFieldKey(agent, sessionId), value);
+        });
+      }
+      return out;
+    }
+
+    // 回退：逐线程解析（无批量注入方的兼容路径）。
+    const hasDir = typeof resolveSessionOpenDirectory === 'function';
+    const hasTitle = typeof resolveSessionTitle === 'function';
+    if (!hasDir && !hasTitle) return out;
+    await Promise.all(
+      Array.from(grouped, ([agent, heads]) => Promise.all(Array.from(heads, async (sessionId) => {
+        const openDirectory = hasDir
+          ? (await resolveSessionOpenDirectory(agent, sessionId).catch(() => null)) || null
+          : null;
+        const title = hasTitle
+          ? (await resolveSessionTitle(agent, sessionId).catch(() => null)) || null
+          : null;
+        out.set(_headFieldKey(agent, sessionId), { openDirectory, title });
+      }))),
+    );
+    return out;
+  };
 
   const _assertNotArchived = async (threadId) => {
     // 归档判定走 archive 单点（与 gateway / ACP resume 共享同一事实）
@@ -182,6 +244,12 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
       const agentId = String(req.query.agentId || '').trim();
       const threads = await core.listThreads({ agentId: agentId || undefined });
       const archiveEntries = await _getArchiveEntries();
+      // head 会话字段批量解析：按 agentId 分组一次取回该 agent 全部 head 的
+      // 目录 / 标题。注入方（server.js）走一次共享索引读 + Map 查找；此前
+      // 逐线程调 resolveSessionOpenDirectory / resolveSessionTitle 会让每个
+      // 请求按线程数重复读索引（PH 线程化后 1400+ 线程 ≈ 3000 次 mkdir+stat），
+      // 是列表端点秒级延迟的主要组成。
+      const headFields = await _resolveHeadFieldsBulk(threads);
       const withLife = await Promise.all(
         threads.map(async (thread) => {
           const withState = await _attachLifeState(thread, archiveEntries);
@@ -190,15 +258,12 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
           const headViewerAgentId = typeof control.resolveSessionViewerId === 'function'
             ? control.resolveSessionViewerId(withState.agentId, withState.headSessionId)
             : null;
-          // head 会话的项目目录：PH 项目卡片的 coder tab 按此归属线程
-          const headProjectDir = typeof resolveSessionOpenDirectory === 'function'
-            ? (await resolveSessionOpenDirectory(withState.agentId, withState.headSessionId).catch(() => null)) || null
-            : null;
-          // head 会话标题（会话索引事实）：侧栏线程条目跟随换代（如「(精简)A」），
-          // 不停在创建时的线程标题。解析缺席为 null，前端回退线程标题。
-          const headSessionTitle = typeof resolveSessionTitle === 'function'
-            ? (await resolveSessionTitle(withState.agentId, withState.headSessionId).catch(() => null)) || null
-            : null;
+          // head 会话的项目目录（PH 项目卡片的 coder tab 按此归属线程）与
+          // head 会话标题（会话索引事实：侧栏线程条目跟随换代，如「(精简)A」，
+          // 不停在创建时的线程标题）。解析缺席为 null，前端回退线程标题。
+          const fields = headFields.get(_headFieldKey(withState.agentId, withState.headSessionId)) || null;
+          const headProjectDir = fields?.openDirectory ?? null;
+          const headSessionTitle = fields?.title ?? null;
           return { ...withState, headViewerAgentId, headProjectDir, headSessionTitle };
         }),
       );

@@ -70,10 +70,22 @@ window.refreshThreads = async (force = false) => {
   const state = window.ClawThreads;
   if (state.refreshInFlight) {
     if (!force) return state.refreshInFlight;
-    // SSE handoff-started 触发的强制刷新不得被慢的周期请求短路：in-flight
-    // 拿到的还是旧数据（请求早于挡板立起发出），等它结束后必须再拉一次，
-    // 否则挡板新事实延迟到下个 20s 轮询周期（指示器/暂存气泡晚亮几十秒）。
-    await state.refreshInFlight.catch(() => {});
+    // SSE handoff-started / 发送消息 / 归档等事件触发的强制刷新不得被慢的
+    // 周期请求短路：in-flight 拿到的还是旧数据（请求早于事实变化发出），等
+    // 它结束后必须再拉一次，否则新事实延迟到下个 20s 轮询周期。
+    //
+    // 尾部合并：此前每个并发 force 调用都会各自 await 在途请求、再各自发起
+    // 一次全量拉取——一次发送 + 一次归档就可能排队 3~4 次重复聚合。这里把
+    // 「在途结束之后再拉」收敛为一个共享的补拉 promise，所有并发 force 共享
+    // 同一次结果；补拉进行中到达的 force 直接复用它（见下方 trailing 判断）。
+    if (state.refreshTrailing) return state.refreshTrailing;
+    state.refreshTrailing = (async () => {
+      await state.refreshInFlight.catch(() => {});
+      state.refreshTrailing = null;
+      // 下一个 refreshThreads 会重新走一次真实拉取（此时 refreshInFlight 已清空）
+      return window.refreshThreads(true);
+    })();
+    return state.refreshTrailing;
   }
   if (!force && state.initialLoadDone && Date.now() - state.lastRefreshAt < 5000) {
     return;

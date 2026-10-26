@@ -76,6 +76,17 @@ export function getWorkspaceArtifactPath(agentId, artifactId) {
 // 失效兜底同刻写入。命中返回 structuredClone，调用方可安全突变返回值。
 const _indexCache = new Map(); // indexPath → { mtimeMs, size, value }
 
+// 并发装载去重（cache stampede 防护）。线程列表等批量读路径会以 Promise.all
+// 并发解析同一个会话索引（PH 线程化后为 1400+ 个 head 会话各解析一次）；缓存
+// 一旦失效（会话活跃时每次 turn 都写索引），全部并发调用会各自完整执行
+// 「读 4.4MB + JSON.parse + 全量归一化」，单请求即可产生数十 GB 瞬时分配并
+// 打爆堆（V8 OOM / code 134）。这里把同一文件版本的装载收敛为一次，其余调用
+// 共享同一 promise。
+//
+// 键 = indexPath + mtimeMs + size：只合并「同一文件版本」的装载，写入后
+// mtime 改变的新调用不会被旧在途装载短路（正确性与缓存失效语义一致）。
+const _indexLoads = new Map(); // loadKey → Promise<index>
+
 function normalizeSessionIndexData(data) {
   const sessions = Array.isArray(data.sessions)
     ? data.sessions
@@ -145,15 +156,32 @@ export async function readSessionIndexShared(agentId) {
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     return cached.value;
   }
-  try {
-    const value = normalizeSessionIndexData(await readJson(indexPath));
-    _indexCache.set(indexPath, { mtimeMs: stat.mtimeMs, size: stat.size, value });
-    return value;
-  } catch {
-    // 索引损坏：与无缓存时的行为一致返回空索引，并清掉旧缓存避免下次命中陈旧值
-    _indexCache.delete(indexPath);
-    return { revision: 0, activeSessionId: null, sessions: [] };
-  }
+  // 并发装载去重：同一文件版本只解析一次（见 _indexLoads 注释）。缓存未命中
+  // 的并发调用是线程列表的主要形态，逐次完整解析会打爆堆。
+  const loadKey = `${indexPath}|${stat.mtimeMs}|${stat.size}`;
+  const inflight = _indexLoads.get(loadKey);
+  if (inflight) return inflight;
+  const load = (async () => {
+    try {
+      const value = normalizeSessionIndexData(await readJson(indexPath));
+      // 装载期间文件可能已被改写（mtime/size 变化）：此时不要把旧内容写进
+      // 缓存，否则会以旧版本覆盖下一次读取应得的新版本。直接返回本次结果
+      // 给已经在等的调用方，缓存留给后续读重新装载。
+      const latest = await fs.stat(indexPath).catch(() => null);
+      if (latest && latest.mtimeMs === stat.mtimeMs && latest.size === stat.size) {
+        _indexCache.set(indexPath, { mtimeMs: stat.mtimeMs, size: stat.size, value });
+      }
+      return value;
+    } catch {
+      // 索引损坏：与无缓存时的行为一致返回空索引，并清掉旧缓存避免下次命中陈旧值
+      _indexCache.delete(indexPath);
+      return { revision: 0, activeSessionId: null, sessions: [] };
+    } finally {
+      _indexLoads.delete(loadKey);
+    }
+  })();
+  _indexLoads.set(loadKey, load);
+  return load;
 }
 
 export async function resolvePrebuiltSessionType(agentId, sessionId) {
