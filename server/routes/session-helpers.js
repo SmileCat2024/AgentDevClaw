@@ -1431,13 +1431,21 @@ async function requirePrebuiltSessionRecord(agentId, sessionId) {
  * 列表逐线程解析 head 会话目录——每次 clone 数 MB 索引 × 线程数会打满事件循环）。
  * 契约：返回的 record 只读，不得修改。
  */
+const _sessionRecordMaps = new WeakMap();
+
 async function findPrebuiltSessionRecordShared(agentId, sessionId) {
   const index = await readSessionIndexShared(agentId);
-  // 目标 id 提到 find 外归一一次：此前每条记录比较都重复 cleanSessionText，
-  // 在线程列表逐线程解析 head 字段等批量路径上随会话数×线程数线性放大。
+  // 同一份共享索引对象会被大量只读解析复用（如线程列表每线程解析 head
+  // 目录与标题）。为索引对象惰性建一次 Map，避免每次都扫描全部会话；索引
+  // 变更后 readSessionIndexShared 返回新对象，自然创建对应的新 Map。
+  let recordsById = _sessionRecordMaps.get(index);
+  if (!recordsById) {
+    recordsById = new Map(index.sessions.map((session) => [session.id, session]));
+    _sessionRecordMaps.set(index, recordsById);
+  }
   const wanted = cleanSessionText(sessionId);
   if (!wanted) return null;
-  return index.sessions.find((session) => session.id === wanted) || null;
+  return recordsById.get(wanted) || null;
 }
 
 async function resolvePrebuiltSessionOwner(sessionId, preferredAgentId = '') {

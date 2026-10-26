@@ -15,19 +15,30 @@
 
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveSessionTarget } from '../server/shared/operation-target.js';
 import path from 'node:path';
 import os from 'node:os';
 import { promises as fs } from 'node:fs';
 
-import {
-  getAssemblyWorkspaceDir,
-  normalizeClientAgentId,
-} from '../server/shared/string-helpers.js';
+// 数据隔离（事故教训，2026-10-26）：项目模块一律经 env 设置后的动态 import
+// 引入。曾把 operation-target / string-helpers 写成静态 import——string-helpers
+// 传递加载 constants.js，USER_DATA_ROOT 在模块加载时绑定真实数据根，第 28 行
+// 的 env 赋值来不及生效；文件内首个 writeSessionIndex 调用因此把真实会话索引
+// 覆盖成测试夹具（lookup-contract-session 污染事故）。
 const isolatedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-session-extraction-'));
 process.env.AGENTDEV_DATA_DIR = isolatedRoot;
 after(() => fs.rm(isolatedRoot, { recursive: true, force: true }));
+const { writeSessionIndex } = await import('../server/shared/session-access.js');
+const { resolveSessionTarget } = await import('../server/shared/operation-target.js');
+const { getAssemblyWorkspaceDir, normalizeClientAgentId } = await import('../server/shared/string-helpers.js');
 const { createSessionHelpers, META_VERSION } = await import('../server/routes/session-helpers.js');
+// 隔离前置条件（失败即整文件失败，禁止任何用例在未隔离状态下运行）：
+// constants.js 若经静态 import 链提前加载，USER_DATA_ROOT 会绑定真实数据根，
+// 本断言当场变红——2026-10-26 的索引污染事故正是这个形态。
+const { USER_DATA_ROOT } = await import('../server/shared/constants.js');
+assert.ok(
+  USER_DATA_ROOT.startsWith(isolatedRoot),
+  `data root isolation broken: USER_DATA_ROOT=${USER_DATA_ROOT} expected under ${isolatedRoot}`,
+);
 const { setupSessionRoutes } = await import('../server/routes/session.js');
 const { createSessionHandoffHelpers } = await import('../server/routes/session-handoff-helpers.js');
 import { HANDOFF_SCHEMA_VERSION } from '@agentdevjs/core';
@@ -132,6 +143,32 @@ describe('createSessionHelpers', () => {
   it('should return exactly the expected number of keys', () => {
     const helpers = createSessionHelpers(makeMockHelpersCtx());
     assert.equal(Object.keys(helpers).length, EXPECTED_HELPER_KEYS.length);
+  });
+
+  it('resolves session records and observes index updates through the shared lookup', async () => {
+    const agentId = 'programming-helper';
+    const sessionId = 'lookup-contract-session';
+    const index = {
+      revision: 1,
+      activeSessionId: sessionId,
+      sessions: [{ id: sessionId, title: 'Initial title', openDirectory: 'D:/initial' }],
+    };
+    await writeSessionIndex(agentId, index);
+
+    const helpers = createSessionHelpers(makeMockHelpersCtx());
+    const first = await helpers.findPrebuiltSessionRecordShared(agentId, sessionId);
+    assert.equal(first?.title, 'Initial title');
+    assert.equal(first?.openDirectory, 'D:/initial');
+
+    await writeSessionIndex(agentId, {
+      ...index,
+      revision: 2,
+      sessions: [{ id: sessionId, title: 'Updated title', openDirectory: 'D:/updated' }],
+    });
+    const updated = await helpers.findPrebuiltSessionRecordShared(agentId, sessionId);
+    assert.equal(updated?.title, 'Updated title');
+    assert.equal(updated?.openDirectory, 'D:/updated');
+    assert.equal(await helpers.findPrebuiltSessionRecordShared(agentId, 'absent-session'), null);
   });
 
   it('should not throw when ctx functions are called (smoke)', async () => {
