@@ -239,6 +239,7 @@ Claw 装配点索引：trim 引擎与落盘在 `server/context-continuity/`（ha
 - **agent 运行时内部**（feature / agent.js 装配层）→ `createLogger()` → DebugHub → Web UI。ESLint `no-console: error`（存量文件在 ratchet 清单降 warn）。绕过 logger 直接 console.log 会丢等级与命名空间。
 - **非 agent 运行**（server.js 进程、scripts/、bin/）→ console / stdio，推荐 [server/shared/claw-logger.js](server/shared/claw-logger.js)
 - **前端 public/** → 浏览器 console，不在约束范围
+- **崩溃取证**：`logs/supervisor.log` 的 `child exited` 行携带 pid/uptime（与 V8 OOM dump 头部 `[pid:…] uptime_ms` 同构，可直接对表归因到哪一代实例）；server 每 30s（`CLAW_MEM_SAMPLE_MS=0` 关闭）采样自身内存与常驻计数到 `logs/memory-samples.jsonl`（5MB 轮转 .1 备份，实现 [server/shared/memory-diagnostics.js](server/shared/memory-diagnostics.js)）。OOM 崩溃后重启，凭 dump pid + 这两份文件即可还原崩溃前的增长轨迹
 
 stdio 分流（CLI 审计接口）：所有日志必须带等级；`AGENTDEV_LOG_STREAM=auto` 时 trace / debug / info → stdout、warn / error → stderr；无头模式全量 → stderr，stdout 只承载结果协议行（`ONE_SHOT_RESULT:` 等）。
 

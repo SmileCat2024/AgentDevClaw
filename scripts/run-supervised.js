@@ -42,6 +42,7 @@ const child = spawn(childCommand[0], childCommand.slice(1), {
   stdio: ['ignore', 'inherit', 'inherit'],
   env: { ...process.env, CLAW_SUPERVISED: '1' },
 });
+const childStartedAt = Date.now();
 persistEvent(`supervisor started: pid ${process.pid}, child pid ${child.pid}, cmd ${childCommand.join(' ')}`);
 
 let stopRequested = false;
@@ -116,7 +117,9 @@ healthWatcher.unref?.();
 child.on('exit', (code, signal) => {
   clearInterval(healthWatcher);
   if (reportTimer) clearTimeout(reportTimer);
-  persistEvent(`child exited: code ${code ?? 'null'} signal ${signal || 'none'}`);
+  // pid + uptime 与 V8 OOM dump 头部（[pid:…] uptime_ms: Mark-Compact …）同构，
+  // 崩溃后可直接对表确认是哪一代实例、跑了多久（如 134 退出即 OOM abort）。
+  persistEvent(`child exited: code ${code ?? 'null'} signal ${signal || 'none'} pid ${child.pid} uptime ${Date.now() - childStartedAt}ms`);
   process.exit(stopRequested ? 0 : (code ?? 0));
 });
 

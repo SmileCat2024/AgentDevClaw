@@ -223,6 +223,8 @@ test('supervisor persists lifecycle events to the log file', async (t) => {
   const logText = fs.readFileSync(logPath, 'utf8');
   assert.match(logText, /supervisor started: pid \d+, child pid \d+/);
   assert.match(logText, /child exited: code 5/);
+  // 崩溃取证契约：退出行携带 pid 与 uptime（与 OOM dump 头部同构，可对表归因）
+  assert.match(logText, /child exited: code 5 signal none pid \d+ uptime \d+ms/);
 });
 
 // launcher 消失不授予 supervisor 终止服务进程树的权限。

@@ -57,6 +57,7 @@ import {
   APP_ORIGIN, resolveInstanceUdsPath,
 } from './server/shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log, getAssemblyWorkspaceDir, normalizeClientAgentId, parseListField } from './server/shared/string-helpers.js';
+import { createMemorySampler, resolveSampleIntervalMs } from './server/shared/memory-diagnostics.js';
 import { compareSemver, uniqueStrings } from './server/shared/feature-utils.js';
 import { readJson, readJsonSafe, ensureDir } from './server/shared/fs-helpers.js';
 import { openDirectoryInSystem } from './server/shared/system-opener.js';
@@ -185,6 +186,18 @@ const __dirname = path.dirname(__filename);
 
 const serviceLifecycle = createServiceLifecycle();
 let httpServer = null;
+
+// OOM 崩溃取证（2026-10 连续 exit 134 事故）：周期采样本进程内存与常驻结构
+// 计数到 logs/memory-samples.jsonl（有界轮转）。崩溃后以 dump 头部 pid/uptime
+// 对表 supervisor.log 与该文件即可还原增长轨迹。CLAW_MEM_SAMPLE_MS=0 关闭。
+const memorySampler = createMemorySampler({
+  intervalMs: resolveSampleIntervalMs(),
+  counters: () => ({
+    runtimes: managedAgents.size,
+    assemblyRuntimes: assemblyRuntimeProcesses.size,
+  }),
+});
+memorySampler.start();
 
 const app = express();
 // 不暴露 Express 指纹；所有响应统一携带安全头（含 CSP / 点击劫持防护）。
@@ -1579,6 +1592,9 @@ function pickMobileRelayUrl(relayUrl) {
 async function shutdown(exitCode = 0) {
   try {
     await serviceLifecycle.shutdown(async () => {
+      // OOM 取证采样收尾：落最后一行（有序停机标记）并停表，排空写队列
+      memorySampler.record();
+      await memorySampler.stop();
       remoteClawConnector?.stop?.();
       connectionHealth.stop();
       await Promise.all([
