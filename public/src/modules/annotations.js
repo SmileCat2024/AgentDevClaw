@@ -5,10 +5,14 @@
  * - 选中捕获：#chat-container 内单条 user/assistant 消息的部分选中 → 浮动
  *   弹窗 → create 请求。锚位 = { turn, role, quote, occurrence }：框架消息
  *   无稳定 id，turn（轮次号）是唯一稳定锚，quote + occurrence 定位轮内文本。
+ *   选区与同消息已有标注的区间相交时以并集入账（supersedeIds 原子替换，
+ *   链式重叠滚动并入；相邻不重叠的标注保持独立）。feature 端没有消息全文，
+ *   重叠判定只在此处（DOM 文本模型）做。
  * - 高亮重放：对消息行渲染文本建"归一化空白文本模型"，全文搜索 quote 的第
  *   occurrence 次出现，跨文本节点用 <mark class="anno-highlight"> 包裹。
  *   创建与重放共用同一匹配口径（occurrenceFor / findOccurrence）。
- * - 删除：点已有高亮 → 删除弹窗 → remove 请求。
+ * - 删除：点已有高亮 → 同标注全部 mark 段联动亮起（anno-active）+ 删除
+ *   弹窗 → remove 请求。
  * - 会话同步：寻址变化时重置状态、拉取 list、（重）订阅 SSE
  *   （created / removed 事件驱动重放与面板缓存；远程会话降级不可用）。
  * - 面板数据：window.ClawAnnotations.getPanelHtml 供 rail 面板渲染
@@ -211,6 +215,18 @@
     return idx;
   }
 
+  /** quote 恰好落在 startPos 的那次出现是第几次（0 起）；找不到返回 -1。 */
+  function occurrenceAtPosition(text, quote, startPos) {
+    let count = 0;
+    let idx = text.indexOf(quote);
+    while (idx !== -1) {
+      if (idx === startPos) return count;
+      count++;
+      idx = text.indexOf(quote, idx + 1);
+    }
+    return -1;
+  }
+
   /** 选区区间与 quote 的哪一次出现相交（选区含前导/尾随空白时仍正确定位）。 */
   function occurrenceFor(text, quote, selStart, selEnd) {
     let idx = text.indexOf(quote);
@@ -270,20 +286,63 @@
     if (start < 0 || end < 0 || end <= start) return null;
     const quote = text.slice(start, end).trim();
     if (!quote) return null;
-    if (quote.length > QUOTE_MAX_CHARS) {
+    const occurrence = occurrenceFor(text, quote, start, end);
+    // 重叠合并：同 turn/role 已有标注的区间与选区相交 → 以并集入账一条
+    // （重叠高亮视觉上无法区分归属；相邻不重叠的标注保持独立）。区间滚动
+    // 扩展：A 与选区相交、B 与 A 相交时一并并入，不残留重叠对。
+    const overlap = { start: findOccurrence(text, quote, occurrence), end: 0, ids: [] };
+    overlap.end = overlap.start + quote.length;
+    if (overlap.start !== -1) {
+      for (const anno of annotations) {
+        if (anno.turn !== msg.turn || anno.role !== msg.role) continue;
+        const aStart = findOccurrence(text, anno.quote, anno.occurrence);
+        if (aStart === -1) continue; // 该标注锚点已失配（消息变化），不参与合并
+        const aEnd = aStart + anno.quote.length;
+        if (aStart < overlap.end && overlap.start < aEnd) {
+          overlap.ids.push(anno.id);
+          overlap.start = Math.min(overlap.start, aStart);
+          overlap.end = Math.max(overlap.end, aEnd);
+        }
+      }
+    }
+    let finalQuote = quote;
+    let finalOccurrence = occurrence;
+    if (overlap.ids.length) {
+      const merged = text.slice(overlap.start, overlap.end);
+      const mergedOccurrence = occurrenceAtPosition(text, merged, overlap.start);
+      if (mergedOccurrence === -1) {
+        overlap.ids.length = 0; // 防御：并集定位失败，退回原选区单独成标
+      } else if (merged.length > QUOTE_MAX_CHARS) {
+        toast('warning', t('选段过长', 'Selection too long'),
+          t(`与已有标注合并后超过 ${QUOTE_MAX_CHARS} 字符上限，请先删除该标注`,
+            `Merging with an existing annotation exceeds ${QUOTE_MAX_CHARS} chars; remove it first`));
+        return null;
+      } else {
+        finalQuote = merged;
+        finalOccurrence = mergedOccurrence;
+      }
+    }
+    if (finalQuote.length > QUOTE_MAX_CHARS) {
       toast('warning', t('选段过长', 'Selection too long'),
         t(`标注上限 ${QUOTE_MAX_CHARS} 字符，请缩小选区`, `Annotations cap at ${QUOTE_MAX_CHARS} chars`));
       return null;
     }
-    return { index, turn: msg.turn, role: msg.role, quote, occurrence: occurrenceFor(text, quote, start, end) };
+    return {
+      index, turn: msg.turn, role: msg.role,
+      quote: finalQuote, occurrence: finalOccurrence,
+      ...(overlap.ids.length ? { supersedeIds: overlap.ids } : {}),
+    };
   }
 
   async function createAnnotation(ctx) {
     const result = await channelRequest('create', {
       turn: ctx.turn, role: ctx.role, quote: ctx.quote, occurrence: ctx.occurrence,
+      ...(ctx.supersedeIds ? { supersedeIds: ctx.supersedeIds } : {}),
     });
     if (result.ok) {
-      annotations = [...annotations.filter(a => a.id !== result.annotation.id), result.annotation]
+      // 本地立即清掉被并入条目：不依赖 SSE removed 事件时序（事件到达后幂等对账）。
+      const merged = new Set(ctx.supersedeIds || []);
+      annotations = [...annotations.filter(a => a.id !== result.annotation.id && !merged.has(a.id)), result.annotation]
         .sort((a, b) => a.createdAt - b.createdAt);
       scheduleReplay();
       if (panelOpen) repaintPanel();
@@ -345,7 +404,11 @@
       mark.className = 'anno-highlight';
       mark.dataset.annoId = anno.id;
       mark.title = t('标注（点击删除）', 'Annotation (click to remove)');
-      try { rangeObj.surroundContents(mark); } catch { /* 段异常跳过，其余段仍生效 */ }
+      try { rangeObj.surroundContents(mark); } catch {
+        // 段跨越部分元素边界（如与既有标注重叠的嵌套区间）：surroundContents
+        // 不接受，退化为内容搬家包裹——重叠区间也能高亮（嵌套 mark，视觉一致）。
+        try { mark.appendChild(rangeObj.extractContents()); rangeObj.insertNode(mark); } catch { mark.remove(); }
+      }
     }
   }
 
@@ -390,6 +453,7 @@
   let popoverEl = null;
   let popoverCtx = null;
   let deletePopoverEl = null;
+  let activeAnnoId = '';
 
   function ensurePopover() {
     if (popoverEl) return popoverEl;
@@ -427,8 +491,16 @@
     popoverCtx = null;
   }
 
+  /** 同一条标注的全部 mark 段联动加/移除高亮反馈（跨文本类型拆成多段时保持一体感）。 */
+  function setActiveMarks(annoId, active) {
+    document.querySelectorAll(`mark.anno-highlight[data-anno-id="${annoId}"]`)
+      .forEach(m => m.classList.toggle('anno-active', active));
+  }
+
   function showDeletePopover(mark) {
     hideDeletePopover();
+    activeAnnoId = mark.dataset.annoId || '';
+    if (activeAnnoId) setActiveMarks(activeAnnoId, true);
     deletePopoverEl = document.createElement('div');
     deletePopoverEl.className = 'anno-popover anno-delete-popover';
     const btn = document.createElement('button');
@@ -460,6 +532,7 @@
 
   function hideDeletePopover() {
     if (deletePopoverEl) { deletePopoverEl.remove(); deletePopoverEl = null; }
+    if (activeAnnoId) { setActiveMarks(activeAnnoId, false); activeAnnoId = ''; }
   }
 
   // ── 事件绑定 ──────────────────────────────────────────────────────
@@ -472,6 +545,13 @@
     if (ctx) {
       ensureSession();
       showPopover(ctx, sel.getRangeAt(0).getBoundingClientRect());
+      // mousedown 落在已选文本内部时，浏览器为拖放判定保留选区，mouseup 之后
+      // 才清除——此刻选区仍"存活"，showPopover 会误保持弹窗。在默认行为完成后
+      // 复检：选区已消失（点击已选内容 = 放弃选择）则收起弹窗。
+      setTimeout(() => {
+        const after = window.getSelection();
+        if (popoverCtx === ctx && (!after || after.rangeCount === 0 || after.isCollapsed)) hidePopover();
+      }, 0);
     } else {
       hidePopover();
     }
@@ -529,12 +609,13 @@
       if (!idMatch) continue;
       const msg = Array.isArray(currentMessages) ? currentMessages[Number(idMatch[1])] : null;
       if (!msg || msg.turn !== anno.turn || msg.role !== anno.role) continue;
-      const mark = [...contentEl.querySelectorAll('mark.anno-highlight')].find(m => m.dataset.annoId === id);
-      const target = mark || contentEl;
+      const marks = [...contentEl.querySelectorAll('mark.anno-highlight')]
+        .filter(m => m.dataset.annoId === id);
+      const target = marks[0] || contentEl;
       target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      if (mark) {
-        mark.classList.add('anno-flash');
-        setTimeout(() => mark.classList.remove('anno-flash'), 1200);
+      for (const m of marks) {
+        m.classList.add('anno-flash');
+        setTimeout(() => m.classList.remove('anno-flash'), 1200);
       }
       return;
     }

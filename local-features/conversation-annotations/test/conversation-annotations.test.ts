@@ -201,6 +201,55 @@ describe('请求面', () => {
     assert.equal((list.annotations as AnnotationRecord[]).length, 2);
   });
 
+  it('create supersedeIds：重叠合并原子替换——删被并入条目、入账并集、removed/created 事件齐发', async () => {
+    const { client, feature } = makeFeature();
+    const a = await createVia(feature, { quote: '重点' });
+    const b = await createVia(feature, { quote: '其他轮' });
+    client.events.length = 0;
+    const merged = await feature.onHostRequest('create', {
+      turn: a.turn, role: a.role, quote: '重点内容扩展', occurrence: a.occurrence,
+      supersedeIds: [a.id, b.id],
+    });
+    assert.equal(merged.ok, true);
+    const mergedId = (merged.annotation as AnnotationRecord).id;
+    const list = await feature.onHostRequest('list', {});
+    const ids = (list.annotations as AnnotationRecord[]).map((x) => x.id).sort();
+    assert.deepEqual(ids, [mergedId], 'a / b 被并集条目替换');
+    const types = client.events.map((e) => `${e.eventType}:${(e.data as { id?: string }).id ?? ''}`);
+    assert.ok(types.includes(`removed:${a.id}`), `removed a 缺失: ${JSON.stringify(types)}`);
+    assert.ok(types.includes(`removed:${b.id}`), `removed b 缺失: ${JSON.stringify(types)}`);
+    assert.ok(types.includes(`created:${mergedId}`), `created merged 缺失: ${JSON.stringify(types)}`);
+  });
+
+  it('create supersedeIds：幂等命中时清理其他被并入条目，不误删命中条目自身', async () => {
+    const { feature } = makeFeature();
+    const a = await createVia(feature, { quote: '重点' });
+    const b = await createVia(feature, { quote: '重点内容' });
+    const result = await feature.onHostRequest('create', {
+      turn: b.turn, role: b.role, quote: b.quote, occurrence: b.occurrence,
+      supersedeIds: [a.id, b.id],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.duplicate, true);
+    assert.equal((result.annotation as AnnotationRecord).id, b.id);
+    const list = await feature.onHostRequest('list', {});
+    const ids = (list.annotations as AnnotationRecord[]).map((x) => x.id);
+    assert.deepEqual(ids, [b.id], 'a 并入清理，b 幂等命中保留');
+  });
+
+  it('create supersedeIds：未知 id 静默忽略，不影响入账；非法元素过滤', async () => {
+    const { client, feature } = makeFeature();
+    const merged = await feature.onHostRequest('create', {
+      turn: 1, role: 'user', quote: '重点', occurrence: 0,
+      supersedeIds: ['nope', 42, null, ''],
+    });
+    assert.equal(merged.ok, true);
+    const list = await feature.onHostRequest('list', {});
+    assert.equal((list.annotations as AnnotationRecord[]).length, 1);
+    const types = client.events.map((e) => e.eventType);
+    assert.deepEqual(types, ['created'], '未知 id 不产生 removed 事件');
+  });
+
   it('remove：不存在返回 annotation_not_found；存在删除并发布 removed 事件', async () => {
     const { client, feature } = makeFeature();
     const missing = await feature.onHostRequest('remove', { id: 'nope' });

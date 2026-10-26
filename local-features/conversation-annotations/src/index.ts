@@ -249,11 +249,23 @@ export class ConversationAnnotationsFeatureInner implements AgentFeature {
     if (!Number.isInteger(occurrence) || (occurrence as number) < 0) {
       return { ok: false, code: 'invalid_payload', error: 'occurrence must be a non-negative integer' };
     }
+    // 重叠合并（supersedeIds）：feature 没有消息全文，判不了区间重叠——前端在
+    // DOM 文本模型上判定选区与既有标注相交并算好并集锚位（quote / occurrence），
+    // 此处只做原子替换：删除被并入条目 + 入账并集条目，事件面 created / removed 齐发。
+    const supersedeRaw = Array.isArray(body.supersedeIds) ? body.supersedeIds : [];
+    const supersedeIds = [...new Set(supersedeRaw.filter((id): id is string =>
+      typeof id === 'string' && id.length > 0))];
     // 幂等：同锚位重复提交返回已有条目（弹窗双击防抖），不重复入账、不发事件。
+    // 被并入的其他条目仍要清理（并集锚位恰好与既有条目相同 = 合并收敛到它）。
     const existing = this.annotations.find((item) =>
       item.turn === turn && item.role === role && item.quote === quote && item.occurrence === occurrence);
-    if (existing) return { ok: true, annotation: { ...existing }, duplicate: true };
+    if (existing) {
+      this.applySupersedes(supersedeIds.filter((id) => id !== existing.id));
+      return { ok: true, annotation: { ...existing }, duplicate: true };
+    }
 
+    // 先替换腾位再查上限：被并入条目释放的名额可供合并条目使用。
+    this.applySupersedes(supersedeIds);
     if (this.annotations.length >= ANNOTATIONS_MAX) {
       return { ok: false, code: 'annotations_full', error: `annotations exceed ${ANNOTATIONS_MAX}` };
     }
@@ -269,6 +281,17 @@ export class ConversationAnnotationsFeatureInner implements AgentFeature {
     this.hydrated = true;
     void this.publishQuiet('created', { ...record });
     return { ok: true, annotation: { ...record } };
+  }
+
+  /** 删除被并入（supersede）的条目，逐条尽力发布 removed 事件；未知 id 静默忽略。 */
+  private applySupersedes(supersedeIds: string[]): void {
+    if (!supersedeIds.length) return;
+    const doomed = new Set(supersedeIds);
+    const before = this.annotations;
+    this.annotations = before.filter((item) => !doomed.has(item.id));
+    for (const id of supersedeIds) {
+      if (before.some((item) => item.id === id)) void this.publishQuiet('removed', { id });
+    }
   }
 
   private async declare(): Promise<void> {

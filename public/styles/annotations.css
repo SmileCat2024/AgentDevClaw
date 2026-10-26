@@ -35,6 +35,13 @@ mark.anno-highlight:hover {
     color-mix(in srgb, var(--warning-color) 24%, transparent) 0 55%, transparent 55%);
 }
 
+/* 删除确认打开时的联动态：同一标注跨文本类型拆成多个 mark，点击任一段全部段
+   一起亮起（42% 同 anno-flash 语言，强于 hover），表明它们属于同一条标注 */
+mark.anno-highlight.anno-active {
+  background: linear-gradient(0deg,
+    color-mix(in srgb, var(--warning-color) 42%, transparent) 0 58%, transparent 58%);
+}
+
 /* 浅色主题下 #ffc107 与白底对比不足，向文字色压暗一档 */
 body[data-theme="light"] mark.anno-highlight {
   text-decoration-color: color-mix(in srgb, var(--warning-color) 75%, var(--text-primary));
