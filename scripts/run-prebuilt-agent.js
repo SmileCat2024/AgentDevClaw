@@ -729,9 +729,11 @@ class SessionLifecycle {
 // 同一关闭 Promise 与同一次通知。
 const closingSessions = new Map();
 
-async function closeHostedSession(sessionId, { notify = true } = {}) {
+async function closeHostedSession(sessionId, { notify = true, expectedSession = null } = {}) {
   const session = sessions.get(sessionId);
-  if (!session) return false;
+  // Session ID survives restart; callbacks from a retired instance must not
+  // dispose the replacement instance now stored under the same persistent ID.
+  if (!session || (expectedSession && session !== expectedSession)) return false;
   const inFlight = closingSessions.get(sessionId);
   if (inFlight) return inFlight;
   const closePromise = (async () => {
@@ -1269,6 +1271,9 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
     try {
       response = await userInput.getUserInputEvent(inputPrompt, undefined, this.getNextTurnActions());
     } catch (error) {
+      // Disposing the instance aborts its input lease intentionally, not as a
+      // recoverable input failure. Do not schedule a retired loop to retry.
+      if (this.disposed || !this.inputLoopRunning) break;
       console.error('[ProtoClaw Runtime] 等待用户输入失败，稍后重试:', error);
       await sleep(500);
       continue;
@@ -1325,7 +1330,7 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
   }
 
   // Input loop ended — remove this session and notify the server.
-  await closeHostedSession(this.sessionId);
+  await closeHostedSession(this.sessionId, { expectedSession: this });
 };
 
 // ── Central IPC dispatcher ────────────────────────────────────

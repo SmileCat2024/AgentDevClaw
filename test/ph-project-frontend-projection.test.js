@@ -34,6 +34,9 @@ const {
 } = await import('../server/routes/session-helpers-pure.js');
 
 const { createFrontendSandbox } = await import('./helpers/frontend-vm.js');
+const { writeSessionIndex } = await import('../server/shared/session-access.js');
+const { createAgentDiscoveryModule } = await import('../server/routes/agent-discovery.js');
+const { createConnectedAgentsQuery } = await import('../server/routes/agent-connected.js');
 
 const DIR_D = 'D:/code/shared-dir';
 const PROJECT_A = 'prj_aaaaaaaa01';
@@ -81,6 +84,35 @@ function serverWireChild(sessionRecord, runtimeId) {
     sessionId: sessionRecord.id,
     sessionMeta: sessionRecordToWorkspaceMeta(sessionRecord),
   });
+}
+
+function attachSidebarRenderer(ctx, agents) {
+  let html = '';
+  Object.assign(ctx, {
+    allAgents: agents, focusedAgentId: 'programming-helper', currentRuntimeAgentId: '',
+    pendingPrebuiltAgentIds: new Set(), restartingRuntimeIds: new Set(),
+    _recentlyFinishedRuntimes: new Set(), _agentCallActive: new Map(),
+    groupConnectedAgents: () => ({ external: [] }),
+    getAgentRuntimeId: (agent) => agent.runtime_session_id || agent.id || '',
+    getParentAgentId: (agent) => agent.parent_id || '',
+    updateCurrentAgentChrome() {}, renderFeaturePanel() {},
+    externalAgentList: {}, externalGroup: { style: {} }, externalCount: {},
+    isRemoteNamespaceAgentId: () => false,
+  });
+  ctx.window.ClawSidebarLayout = {
+    load: async () => {}, signature: () => '', isInteracting: () => false,
+    render() {
+      html = ctx.run('renderSidebarChildItems(collectRuntimeEntriesForPrebuilt(allAgents[0], allAgents), "programming-helper")');
+    },
+  };
+  return () => html;
+}
+
+function assertRuntimeGroup(html, runtimeId, expectedKey) {
+  const groups = html.split('agent-runtime-project-group').slice(1);
+  const containing = groups.filter((group) => group.includes('data-agent-id="' + runtimeId + '"'));
+  assert.equal(containing.length, 1, '运行对话只出现在一个分组中');
+  assert.ok(containing[0].includes('data-project-key="' + expectedKey + '"'), '运行对话必须位于其归属分组');
 }
 
 function loadFrontend({ realSidebarRenderer = false, onSidebarClickListener } = {}) {
@@ -333,40 +365,186 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
     const live = loadFrontend({ realSidebarRenderer: true });
     const host = hostFixture();
     const runtime = { ...wireChildren[1] };
-    const agents = [host, runtime];
-    let html = '';
-    live.allAgents = agents;
-    live.focusedAgentId = 'programming-helper';
-    live.currentRuntimeAgentId = '';
-    live.pendingPrebuiltAgentIds = new Set();
-    live.restartingRuntimeIds = new Set();
-    live._recentlyFinishedRuntimes = new Set();
-    live._agentCallActive = new Map();
-    live.groupConnectedAgents = () => ({ external: [] });
-    live.getAgentRuntimeId = (agent) => agent.runtime_session_id || agent.id || '';
-    live.getParentAgentId = (agent) => agent.parent_id || '';
-    live.updateCurrentAgentChrome = () => {};
-    live.renderFeaturePanel = () => {};
-    live.externalAgentList = {};
-    live.externalGroup = { style: {} };
-    live.externalCount = {};
-    live.isRemoteNamespaceAgentId = () => false;
-    live.window.ClawSidebarLayout = {
-      signature: () => '',
-      isInteracting: () => false,
-      render() {
-        html = live.run('renderSidebarChildItems(collectRuntimeEntriesForPrebuilt(allAgents[0], allAgents), "programming-helper")');
-      },
-    };
-
+    const html = attachSidebarRenderer(live, [host, runtime]);
     live.run('renderAgentList()');
-    assert.ok(html.includes('data-project-key="prj:' + PROJECT_A + '"'));
-    assert.ok(html.includes('data-agent-id="rt-a1"'));
+    assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
 
     runtime.project_id = '';
     live.run('renderAgentList()');
-    const groups = html.split('agent-runtime-project-group').slice(1);
-    assert.ok(groups.some((group) => group.includes('data-project-key="' + DIR_D + '"') && group.includes('data-agent-id="rt-a1"')));
+    assertRuntimeGroup(html(), 'rt-a1', DIR_D);
+  });
+
+  test('线程轮询纠正旧目录分组，重启、项目改名和归属转移不再被缓存覆盖', async () => {
+    const live = loadFrontend({ realSidebarRenderer: true });
+    const thread = {
+      threadId: 'thread-a1', agentId: 'programming-helper',
+      headSessionId: 'a1', sessionIds: ['a1'], status: 'open',
+      headRuntimeRunning: true,
+    };
+    live.window.ClawThreads = { threads: [thread] };
+    const host = hostFixture();
+    const runtime = { ...wireChildren[1], project_id: '' };
+    let agents = [host, runtime];
+    const html = attachSidebarRenderer(live, []);
+    const projects = live.window.ClawFW.phProjectEntities;
+    projects.loaded = true;
+    projects.projects = [{ id: PROJECT_A, name: '项目 A' }, { id: PROJECT_B, name: '项目 B' }];
+    Object.assign(live, {
+      performance: { now: () => 0 }, loadAgentsInFlight: null,
+      loadedAgentDetailIds: new Set(), suppressSidebarRerender: false,
+      invoke: async () => agents,
+      fetch: async () => ({ ok: true, json: async () => ({ agents: [] }) }),
+      refreshAgentCallStates: async () => {},
+    });
+    const refresh = () => live.run('loadAgents()');
+    await refresh();
+    assertRuntimeGroup(html(), 'rt-a1', DIR_D);
+
+    runtime.project_id = PROJECT_A;
+    await refresh();
+    assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
+    assert.match(html(), /class="project-collapse-label">项目 A</);
+
+    projects.projects[0].name = '项目 A 改名';
+    await refresh();
+    assert.match(html(), /class="project-collapse-label">项目 A 改名</);
+    assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
+
+    // 重启空窗没有 child，由已确认的线程条目原位占位。
+    agents = [host];
+    await refresh();
+    assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
+
+    const restarted = { ...wireChildren[1], id: 'rt-a1-restarted', runtime_session_id: 'rt-a1-restarted' };
+    agents = [host, restarted];
+    await refresh();
+    assertRuntimeGroup(html(), restarted.id, 'prj:' + PROJECT_A);
+    assert.ok(!html().includes('data-agent-id="rt-a1"'), '旧运行时条目已被替换');
+
+    restarted.project_id = PROJECT_B;
+    await refresh();
+    assertRuntimeGroup(html(), restarted.id, 'prj:' + PROJECT_B);
+    restarted.project_id = '';
+    await refresh();
+    assertRuntimeGroup(html(), restarted.id, DIR_D);
+  });
+
+  test('重启期间只有宿主运行时快照且项目会话不在目录分页中，仍按项目分组', () => {
+    const live = loadFrontend();
+    const host = hostFixture();
+    host.workspace_sessions.sessions = [];
+    Object.assign(host, {
+      connected: true, runtime_session_id: 'rt-a1-restarted',
+      active_workspace_session_id: 'a1',
+      active_workspace_session_dir: DIR_D,
+      active_workspace_session_project_id: PROJECT_A,
+    });
+    live.host = host;
+    const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [])');
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].projectId, PROJECT_A);
+    assert.equal(entries[0].projectKey, 'prj:' + PROJECT_A);
+    assert.equal(entries[0].projectDir || '', '');
+  });
+
+  test('索引落盘后重新发现的运行时仍属于项目：真实 discovery → connected → 侧栏渲染', async () => {
+    await writeSessionIndex('programming-helper', {
+      activeSessionId: 'a1', sessions: [SESSIONS_D1, SESSIONS_A1, SESSIONS_B1],
+    });
+    // 新 discovery 实例从隔离的数据根读索引，不使用先前页面或进程内归属。
+    const discovery = createAgentDiscoveryModule({ sessionApi: {} });
+    const meta = await discovery.readWorkspaceSessionMeta('programming-helper', 'a1');
+    assert.equal(meta.project_id, PROJECT_A);
+    const host = hostFixture();
+    const query = createConnectedAgentsQuery({
+      getAgentsLight: async () => [{ ...host, status: {} }],
+      readActiveWorkspaceSessionMeta: async () => ({ workspaceSessions: { sessions: [] }, sessionMeta: {} }),
+      readWorkspaceSessionMeta: discovery.readWorkspaceSessionMeta,
+      readViewerJson: async (url) => url === '/api/agents'
+        ? { agents: [{ id: 'rt-recovered', parentAgentId: 'programming-helper', selectedSessionId: 'a1', connected: true }] }
+        : { callActive: false },
+      getPendingInputCount: async () => 0,
+      resolveAgentModelPresets: async () => [],
+    });
+    const agents = await query.getConnectedAgents();
+    assert.equal(agents.find((agent) => agent.id === 'rt-recovered').project_id, PROJECT_A);
+    const live = loadFrontend({ realSidebarRenderer: true });
+    const html = attachSidebarRenderer(live, agents);
+    live.run('renderAgentList()');
+    assertRuntimeGroup(html(), 'rt-recovered', 'prj:' + PROJECT_A);
+  });
+
+  test('线程宿主快照已含 head runtime 而 child 未到时只呈现一条项目对话', () => {
+    const live = loadFrontend({ realSidebarRenderer: true });
+    const host = hostFixture();
+    host.workspace_sessions.sessions = [];
+    Object.assign(host, { connected: true, runtime_session_id: 'rt-head', active_workspace_session_id: 'a1',
+      active_workspace_session_project_id: PROJECT_A, active_workspace_session_dir: DIR_D });
+    live.window.ClawThreads = { threads: [{ threadId: 'wt-host', agentId: 'programming-helper',
+      headSessionId: 'a1', sessionIds: ['a1'], headRuntimeRunning: true, headProjectId: PROJECT_A,
+      headProjectDir: DIR_D, status: 'open', title: '项目对话',
+    }] };
+    live.host = host;
+    const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [])');
+    assert.equal(entries.length, 1, '宿主合成 head 与线程占位不能各占一行');
+    assert.equal(entries[0].runtimeId, 'rt-head');
+    assert.equal(entries[0].threadId, 'wt-host');
+    assert.equal(entries[0].projectKey, 'prj:' + PROJECT_A);
+  });
+
+  test('接续中途首次打开页面时，线程占位也保留项目归属', () => {
+    const live = loadFrontend({ realSidebarRenderer: true });
+    const host = hostFixture();
+    host.workspace_sessions.sessions = [];
+    live.window.ClawThreads = { threads: [{
+      threadId: 'wt-cold', agentId: 'programming-helper', headSessionId: 'a1', sessionIds: ['a1'],
+      title: '项目对话', headProjectId: PROJECT_A, headProjectDir: DIR_D,
+      status: 'rotating', handoffStartedAt: Date.now(),
+    }] };
+    const html = attachSidebarRenderer(live, [host]);
+    live.run('renderAgentList()');
+    assertRuntimeGroup(html(), 'thread:wt-cold', 'prj:' + PROJECT_A);
+  });
+
+  test('接续血缘由索引经 discovery 与 wire 投影后只关联来源线程', async () => {
+    const successor = { ...wireSession('successor', PROJECT_A, '2026-10-05T00:00:00Z'), metadata: { sourceSessionId: 'a1' } };
+    await writeSessionIndex('programming-helper', { activeSessionId: 'successor', sessions: [SESSIONS_A1, successor] });
+    const discovery = createAgentDiscoveryModule({ sessionApi: {} });
+    const meta = await discovery.readWorkspaceSessionMeta('programming-helper', 'successor');
+    const wire = buildChildRuntimeAgent({ id: 'rt-successor', connected: true }, {
+      agentId: 'programming-helper', sessionId: 'successor', sessionMeta: meta,
+    });
+    assert.equal(wire.source_session_id, 'a1');
+    const live = loadFrontend();
+    live.window.ClawThreads = { threads: [{
+      threadId: 'wt-a', agentId: 'programming-helper', headSessionId: 'a1', sessionIds: ['a1'],
+      title: '来源线程', status: 'rotating', handoffStartedAt: Date.now(),
+    }] };
+    live.wire = wire;
+    live.host = hostFixture();
+    const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [wire])');
+    assert.equal(entries.some(e => e.runtimeId === 'rt-successor'), false, 'commit 前 successor 不应作为另一条对话');
+    assert.equal(entries.filter(e => e.threadId === 'wt-a').length, 1);
+  });
+
+  test('宿主快照补齐项目身份或目录后实际重绘，不依赖 session 分页或 runtime 变化', () => {
+    const live = loadFrontend({ realSidebarRenderer: true });
+    const host = hostFixture();
+    host.workspace_sessions.sessions = [];
+    Object.assign(host, {
+      connected: true, runtime_session_id: 'rt-host', active_workspace_session_id: 'a1',
+      active_workspace_session_dir: DIR_D, active_workspace_session_project_id: '',
+    });
+    const html = attachSidebarRenderer(live, [host]);
+    live.run('renderAgentList()');
+    assertRuntimeGroup(html(), 'rt-host', DIR_D);
+    host.active_workspace_session_project_id = PROJECT_A;
+    live.run('renderAgentList()');
+    assertRuntimeGroup(html(), 'rt-host', 'prj:' + PROJECT_A);
+    host.active_workspace_session_project_id = '';
+    host.active_workspace_session_dir = 'D:/other-dir';
+    live.run('renderAgentList()');
+    assertRuntimeGroup(html(), 'rt-host', 'D:/other-dir');
   });
 
   test('项目名称请求失败保留旧清单，下次侧栏加载可以重试', async () => {

@@ -816,7 +816,16 @@ describe('sessionRecordToWorkspaceMeta', () => {
       active_workspace_display_name: '',
       open_directory: 'D:\\code\\AgentDevClaw',
       project_id: '',
+      source_session_id: '',
     });
+  });
+
+  it('does not treat a branch of a compacted session as that ancestor\'s successor', () => {
+    const meta = sessionRecordToWorkspaceMeta({ id: 'branch', metadata: {
+      sourceSessionId: 'ancestor', branchSourceSessionId: 'compacted-head',
+    } });
+    assert.equal(meta.source_session_id, '');
+    assert.equal(sessionRecordToWorkspaceMeta({ id: 'successor', metadata: { sourceSessionId: 'ancestor' } }).source_session_id, 'ancestor');
   });
 
   it('resolves assembly display name from agentName or title', () => {

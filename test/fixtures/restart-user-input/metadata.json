@@ -1,0 +1,9 @@
+{
+  "id": "restart-user-input-fixture",
+  "name": "Restart input fixture",
+  "defaultAgentId": "main",
+  "agents": [
+    { "id": "main", "displayName": "Main helper" },
+    { "id": "reviewer", "displayName": "Review helper" }
+  ]
+}

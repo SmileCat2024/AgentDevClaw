@@ -256,6 +256,7 @@ export function createConnectedAgentsQuery(deps) {
           // 归属身份透传（ticket 044）：'' = 目录会话；非空 = 项目归属，
           // 前端侧栏据此把项目会话与同路径目录会话分组隔离。
           project_id: runtimeMeta.project_id || '',
+          source_session_id: runtimeMeta.source_session_id || '',
           connection_info: runtimeAgent.connectionInfo || 'viewer://127.0.0.1:2026',
           pid: runtimeAgent.pid || managedRuntime.process?.pid || null,
           runtime_session_id: runtimeAgent.id,
@@ -349,6 +350,7 @@ export function createConnectedAgentsQuery(deps) {
         project_id: exposeAsSeparateAssemblyRuntime
           ? ''
           : (childWorkspaceMeta?.project_id || ''),
+        source_session_id: exposeAsSeparateAssemblyRuntime ? '' : (childWorkspaceMeta?.source_session_id || ''),
         connection_info: runtimeAgent.connectionInfo || 'viewer://127.0.0.1:2026',
         pid: runtimeAgent.pid || null,
         runtime_session_id: runtimeAgent.id,
@@ -361,8 +363,25 @@ export function createConnectedAgentsQuery(deps) {
     }
 
     for (const managed of connectedAgents) {
+      if (managed.source !== 'prebuilt') continue;
       const status = buildStatus(managed.id);
       if (status.status === 'running') {
+        // Primary selection may change while metadata is being read. Switch
+        // the complete session identity projection, not just its ID: otherwise
+        // the synthetic runtime borrows the previous session's project/title.
+        if (status.selectedSessionId && status.selectedSessionId !== managed.active_workspace_session_id) {
+          const meta = await readWorkspaceSessionMeta(managed.id, status.selectedSessionId);
+          Object.assign(managed, {
+            active_workspace_session_id: status.selectedSessionId,
+            active_workspace_session_form_id: meta.active_workspace_session_form_id,
+            active_workspace_session_title: meta.active_workspace_session_title,
+            active_workspace_agent_name: meta.active_workspace_agent_name,
+            active_workspace_display_name: meta.active_workspace_display_name,
+            active_workspace_session_dir: meta.open_directory || '',
+            active_workspace_session_project_id: meta.project_id || '',
+          });
+          managed.workspace_sessions = { ...managed.workspace_sessions, activeSessionId: status.selectedSessionId };
+        }
         managed.status = 'running';
         managed.pid = status.pid;
         managed.active_workspace_session_id = status.selectedSessionId || managed.active_workspace_session_id;

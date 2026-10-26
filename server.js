@@ -749,6 +749,7 @@ setupThreadRoutes(app, express, {
       const record = recordsById.get(wanted) || null;
       fields.set(wanted, {
         openDirectory: cleanSessionText(record?.openDirectory) || null,
+        projectId: cleanSessionText(record?.projectId),
         title: cleanSessionText(record?.title) || null,
       });
     }

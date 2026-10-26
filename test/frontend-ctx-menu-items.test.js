@@ -92,6 +92,18 @@ function loadCtxMenuItems(overrides = {}) {
   return { ctx, calls };
 }
 
+describe('ctx-menu-items: explicit restart identity', () => {
+  it('uses the clicked child session even when the runtime catalog is stale', async () => {
+    const requests = [];
+    const { ctx } = loadCtxMenuItems({
+      getExternalRuntimeAgent: () => ({ id: 'rt-old', parent_id: 'programming-helper', active_workspace_session_id: 'directory-session' }),
+      invoke: async (command, payload) => { requests.push({ command, ...payload }); return {}; },
+    });
+    await ctx.run(`ctxRestartAgent({ ns: 'programming-helper', id: 'rt-old', sessionId: 'project-session', variant: 'child' })`);
+    assert.deepEqual(requests, [{ command: 'restart_agent', agentId: 'programming-helper', sessionId: 'project-session' }]);
+  });
+});
+
 // ── getCtxMenuItems: runtime role ───────────────────────────
 
 describe('ctx-menu-items: getCtxMenuItems (runtime)', () => {

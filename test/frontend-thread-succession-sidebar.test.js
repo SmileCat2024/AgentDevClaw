@@ -6,8 +6,8 @@
  * 的线程锚定 get(newHead) 未命中 → successor 作为普通新条目渲染，与旧
  * 占位条目平行——用户看到「一个会话变成两个」。
  *
- * 修复语义：锚定未命中时，若存在 fresh 接续挡板（handoffStartedAt 在窗
- * 口内）的同身份线程，则把该条目归到换头线程——非 head 成员不渲染叶子，
+ * 修复语义：锚定未命中时，只关联 source_session_id 指向当前 head 且存在
+ * fresh 接续挡板的线程；无关新对话不受影响——非 head 成员不渲染叶子，
  * 由占位条目兜底；commit 后 sessionChain 补上成员，锚定自然收敛。
  * 不变量：接续全程（挡板立起 → successor 上线 → head 推进）同一线程在
  * 侧栏只有一个条目。
@@ -45,6 +45,7 @@ function child(sessionId, runtimeId, name) {
     sidebar_entry_id: 'coder',
     runtime_session_id: runtimeId, active_workspace_session_id: sessionId,
     active_workspace_display_name: name, connected: true,
+    source_session_id: sessionId === 'new-head' ? 'old-head' : '',
     created_at: '2026-10-10T09:05:00.000Z',
   };
 }
@@ -214,6 +215,19 @@ describe('runtime-status: single sidebar entry across the succession window', ()
 
     const entries = runCollect(ctx, JSON.stringify([CHILD_OLD]));
     assert.ok(entries.some((entry) => entry.source === 'operation-pending'));
+  });
+
+  it('an unrelated new conversation remains visible while another thread is rotating', () => {
+    const ctx = loadRuntimeStatus();
+    ctx.window.ClawThreads = { threads: [{
+      threadId: 'wt-relay', agentId: 'coder', title: '接续中的对话',
+      headSessionId: 'old-head', sessionIds: ['old-head'], status: 'open',
+      handoffStartedAt: Date.now(),
+    }] };
+    const unrelated = { ...child('unrelated', 'unrelated-runtime', '新建对话'), source_session_id: '' };
+    const entries = runCollect(ctx, JSON.stringify([unrelated]));
+    assert.ok(entries.some(e => e.runtimeId === 'unrelated-runtime' && !e.threadId),
+      '不能仅因同工作空间有其他线程接续就吞掉新建对话');
   });
 
   it('non-thread coder session without an active barrier still renders as its own entry', () => {

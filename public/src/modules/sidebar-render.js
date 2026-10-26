@@ -995,6 +995,8 @@ function getAgentListRenderSignature() {
       headSessionId: thread.headSessionId,
       title: thread.title,
       headSessionTitle: thread.headSessionTitle,
+      headProjectId: thread.headProjectId,
+      headProjectDir: thread.headProjectDir,
       status: thread.status,
       archivedAt: thread.archivedAt,
       lifeState: thread.lifeState,
@@ -1040,7 +1042,11 @@ function getAgentListRenderSignature() {
         // group. Include both in the render signature so a same-runtime metadata
         // refresh cannot be hidden by the render dedupe.
         projectId: String(agent?.project_id || agent?.projectId || '').trim(),
+        sourceSessionId: String(agent?.source_session_id || '').trim(),
         openDirectory: String(agent?.open_directory || agent?.openDirectory || '').trim(),
+        // 宿主合成 runtime 与 child 使用不同 wire 字段，同样参与归属投影。
+        activeSessionProjectId: String(agent?.active_workspace_session_project_id || '').trim(),
+        activeSessionDirectory: String(agent?.active_workspace_session_dir || '').trim(),
         workspaceRevision: Number(agent?.workspace_sessions?.revision) || 0,
         sessions: (agent?.workspace_sessions?.sessions || []).map((session) => ({
           id: session.id, title: session.title, formId: session.formId, agentName: session.agentName,

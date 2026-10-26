@@ -264,7 +264,8 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
           const fields = headFields.get(_headFieldKey(withState.agentId, withState.headSessionId)) || null;
           const headProjectDir = fields?.openDirectory ?? null;
           const headSessionTitle = fields?.title ?? null;
-          return { ...withState, headViewerAgentId, headProjectDir, headSessionTitle };
+          const headProjectId = fields?.projectId ?? '';
+          return { ...withState, headViewerAgentId, headProjectDir, headProjectId, headSessionTitle };
         }),
       );
       // 条件刷新（20s 轮询路径）：threads 无天然整数 revision——数据源是线程

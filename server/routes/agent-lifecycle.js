@@ -439,25 +439,12 @@ export function createAgentLifecycleModule(ctx) {
           ready,
           viewerConnected,
           status,
+          // 与 start/restart 共用身份投影；就绪探测的条目会直接 upsert 到
+          // 前端，独立拼装会遗漏 project_id/open_directory 并覆盖正确归属。
           agent: viewerAgent ? {
-            id: viewerAgent.id,
-            workspaceAgentId: meta?.workspaceAgentId || 'main',
-            name: meta?.active_workspace_display_name
-              || meta?.active_workspace_agent_name
-              || meta?.active_workspace_session_title
-              || viewerAgent.name,
-            description: viewerAgent.description || '',
-            status: viewerConnected ? 'running' : 'stopped',
-            source: 'child',
-            parent_id: agentId,
-            active_workspace_session_id: sessionId,
-            active_workspace_session_form_id: meta?.active_workspace_session_form_id || null,
-            active_workspace_session_title: meta?.active_workspace_session_title || '',
-            active_workspace_agent_name: meta?.active_workspace_agent_name || '',
-            active_workspace_display_name: meta?.active_workspace_display_name || '',
+            ...buildChildRuntimeAgent(viewerAgent, { agentId, sessionId, sessionMeta: meta }),
             connection_info: viewerAgent.connectionInfo || 'viewer://127.0.0.1:2026',
             pid: viewerAgent.pid || runtime?.process?.pid || null,
-            runtime_session_id: viewerAgent.id,
             message_count: viewerAgent.messageCount ?? 0,
             created_at: viewerAgent.createdAt ?? runtime?.startedAt ?? null,
             connected: viewerConnected,

@@ -160,6 +160,30 @@ describe('GET /protoclaw/threads headSessionTitle wire projection', () => {
   });
 });
 
+describe('GET /protoclaw/threads project identity', () => {
+  it('returns project identity independently of the shared working directory', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, {
+      control,
+      resolveHeadSessionFields: async () => new Map([
+        ['project', { projectId: 'prj_123456abcdef', openDirectory: '/shared', title: '项目对话' }],
+        ['directory', { projectId: '', openDirectory: '/shared', title: '目录对话' }],
+      ]),
+    });
+    for (const sessionId of ['project', 'directory']) {
+      await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId }, identity: 'coder' });
+    }
+    const response = await callListRoute(app);
+    assert.equal(response.statusCode, 200);
+    const byHead = new Map(response.body.threads.map(t => [t.headSessionId, t]));
+    assert.equal(byHead.get('project').headProjectId, 'prj_123456abcdef');
+    assert.equal(byHead.get('directory').headProjectId, '');
+    assert.equal(byHead.get('project').headProjectDir, '/shared');
+    assert.equal(byHead.get('directory').headProjectDir, '/shared');
+  });
+});
+
 describe('threads/:id/commands route field passthrough', () => {
   it('carries capabilityActivations and metadata from the route body into the command and delivery', async () => {
     const delivered = [];

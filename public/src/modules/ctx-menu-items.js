@@ -328,7 +328,7 @@ async function ctxRestartAgent(target) {
       result = await restartSidebarExternalRuntime(agent);
     } else if (variant === 'child') {
       const hostId = window.NavigationCore.resolveHostAgentId(agent, serverAgentId);
-      const sId = agent?.active_workspace_session_id || null;
+      const sId = sessionId || agent?.active_workspace_session_id || null;
       result = await invoke('restart_agent', { agentId: hostId, sessionId: sId });
     } else {
       // managed-runtime / prebuilt

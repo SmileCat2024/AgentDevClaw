@@ -787,6 +787,10 @@ export function sessionRecordToWorkspaceMeta(record) {
     // 归属身份透传（ticket 044）：'' = 目录会话；非空 = 项目会话归属。
     // open_directory 只描述文件环境，消费方不得用它推断归属。
     project_id: cleanSessionText(record?.projectId),
+    // Branch records may retain their source's compacted metadata. They are
+    // independent conversations, never a pre-commit successor of that ancestor.
+    source_session_id: record?.metadata?.branchSourceSessionId
+      ? '' : cleanSessionText(record?.metadata?.sourceSessionId),
   };
 }
 
@@ -841,6 +845,7 @@ export function buildChildRuntimeAgent(viewerAgent, { agentId, sessionId = '', s
     // 归属身份补齐（ticket 044）：乐观 child 与轮询 child 同形，前端侧栏
     // 分组据此把项目会话与同路径目录会话分开；'' = 目录会话。
     project_id: cleanSessionText(meta.project_id),
+    source_session_id: cleanSessionText(meta.source_session_id),
   };
 }
 

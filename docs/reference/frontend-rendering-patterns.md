@@ -4,7 +4,7 @@
 > 每次遇到渲染层的新问题或提炼出新结论时，请更新对应章节，或在文末追加新章节。
 > 保持每个条目简短、有代码示例、有判断依据，便于后续 agent 直接复用。
 >
-> 最后更新：2026-10-26（PH 线程接续期间左栏保持单一对话行，不显示过程占位标签）
+> 最后更新：2026-10-26（会话重启与接续身份：完整 wire 投影、来源锚定、冷缓存占位与单叶子呈现）
 
 
 ---
@@ -949,6 +949,16 @@ const projectedEntries = [...visibleEntries, ...remoteEntries];
 
 禁止为远程内容新建平行 DOM 区（历史上存在过 `remote-agent-zone`，已删）：远程条目一律经投影函数并入统一渲染。
 
+### 线程分组缓存与宿主运行时投影
+
+- 存活 head 的项目/目录归属每次按最新 wire 快照投影，不能从 `_coderThreadLiveEntries` 回灌旧 `projectKey`、`projectDir` 或 `projectName`。线程缓存只保持排序时间锚，并在 head runtime 缺席的接续窗口提供占位；否则第一次误分组会持续覆盖正确快照，项目改名与归属转移也只能靠刷新页面纠正。
+- 宿主合成运行条目须透传 `active_workspace_session_project_id` 和 `active_workspace_session_dir`。宿主会话列表是分页切片，不能依赖该列表补齐活跃会话身份。两个宿主字段与 child 的 `project_id` / `open_directory` 都要进入 `getAgentListRenderSignature`，确保同一 runtime 的归属补齐能触发重绘。
+- `runtime_status` 的 `agent` 与 start/restart 响应共用 `buildChildRuntimeAgent`，不能另拼一份省略归属的条目。就绪返回会被前端直接 upsert，必须带 `project_id` / `open_directory` / `sidebar_entry_id`，否则正确索引也会被投影成目录对话。
+- 宿主 primary 在异步查询期间改变时，必须连同标题、目录和项目归属一起切换，不能只覆盖 `active_workspace_session_id` 与 runtime ID。
+- 未提交的 successor 只有其 `source_session_id` 对应正在接续的 head 时才能归入该线程；同工作空间存在接续挡板不是成员关系证据。该血缘字段从会话索引经 discovery / child wire 投递，不能靠线程遍历顺序猜测。
+- 无页面缓存的接续占位按线程列表的 `headProjectId` / `headProjectDir` 分组，两字段与血缘字段同样进入侧栏渲染签名，避免刷新中途归属丢失。
+- 回归：`test/ph-project-frontend-projection.test.js` 驱动真实轮询、线程投影与 HTML 渲染，覆盖归属纠正、重启空窗及新 runtime、项目改名与项目/目录转移；隔离落盘索引经 discovery / connected 查询回读后再投影，验证恢复读取链。`node --test test/ph-project-restart-runtime.mjs` 启动隔离 Viewer 与挂载真实 UserInputFeature 的共享 runtime，通过 Chromium 点击重启并检查新运行条目、退役输入循环收尾后的持续存活、同进程兄弟会话、刷新后分组及索引归属（需要 Playwright Chromium）。测试必须同时隔离数据根、HTTP 端口和 `AGENTDEV_UDS_PATH`，不使用默认 Viewer socket。
+
 ### 高亮谓词：isRuntimeItemActive 的空值守卫
 
 选中工作空间（surface）时 `selectWorkspaceSurface` 会清空 `currentRuntimeAgentId = null`。此时 `isRuntimeItemActive` 的两条比较都不得误判：
@@ -1041,7 +1051,7 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 线程宿主投影（`runtime-status.js collectRuntimeEntriesForPrebuilt`，按线程 `agentId` 归属 APP）把侧栏叶子从「每个存活 runtime 一条」升级为「每条线程一条」（[ADR-0024](../adr/0024-app-workspace-eternal-thread-model.md) 决策 4：稳定条目不随 successor 闪烁）：
 
 - **只由当前 head 会话的 runtime 呈现**：非 head 成员 runtime（换代已推进后的退役滞留 / 历史棒次）一律不渲染。否则换代窗口新旧 runtime 并存时同线程双条目并列，点击旧条目被解析到新 head，成为生硬跳转（历史 bug，2026-10-10）。
-- **身份锚定**：`_coderThreadLiveEntries` 缓存线程首见条目的 `createdAt` / `projectDir` / `projectName` / `projectKey`，head 换锚时沿用，条目不换位。
+- **身份锚定**：`_coderThreadLiveEntries` 保留线程首见条目的排序时间锚；存活 head 的归属每次按新快照解析，缓存分组只用于空窗占位。child 与宿主合成 runtime 必须走同一线程锚定路径，避免已知 head runtime 与占位各呈现一行。
 - **会话字段只读投影**：左栏叶子的存在性来自 runtime / thread，标题来自宿主按 revision 合并的会话索引；索引缺席时才取 runtime / thread 摘要，不从会话历史制造叶子。assembly 会话继续以 `agentName` 呈现，operation 条目保留操作文案。`applySessionMutationDelta` 提交后同时刷新左栏与主视图，重命名处理器不再分别写宿主、runtime、线程几份标题。编辑期间暂停左栏 DOM 替换，结束编辑后消费最新事实。
 - **归档约束**：归档或 closed 的线程成员不再呈现为运行条目，包含仍滞留在 agents 快照中的 child 与宿主合成条目；同一事实也清除接续占位。归档与 runtime 下线的先后顺序不应影响最终左栏。
 - **head 空窗补位**：head runtime 未上线（退役窗口 / successor 启动中）且线程活跃（handoff 进行 / 置换 operation / executing）时，以缓存条目 + `disconnected + transitionPending` 占位，不闪失；线程闭合 / 归档 / 不活跃则清缓存。PH 线程接续中不另投影 trim/summary 操作条目，保留原线程行身份；过程信息由聊天视图的接续提示承载，左栏不显示「接力中」或「正在精简」等状态文字。普通非线程会话创建以及失败态提示保持原行为。

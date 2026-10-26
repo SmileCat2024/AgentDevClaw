@@ -647,6 +647,36 @@ describe('agent-lifecycle', () => {
       assert.equal(agents.find((agent) => agent.id === 'external-viewer')?.source, 'external');
     });
 
+    it('keeps synthetic host session and ownership aligned when the primary runtime changes during metadata loading', async () => {
+      const first = injectRuntime('programming-helper', 'project-session', createMockChild());
+      first.viewerAgentId = 'viewer-project';
+      const mod = createAgentLifecycleModule(createMockCtx({
+        getAgentsLight: async () => [{
+          id: 'programming-helper', name: '智能编码空间', kind: 'workspace',
+          status: { pid: first.process.pid, viewerAgentId: first.viewerAgentId, selectedSessionId: first.selectedSessionId },
+        }],
+        readActiveWorkspaceSessionMeta: async () => {
+          first.stopped = true;
+          const next = injectRuntime('programming-helper', 'directory-session', createMockChild());
+          next.viewerAgentId = 'viewer-directory';
+          return { workspaceSessions: { sessions: [] }, sessionMeta: {
+            ...EMPTY_SESSION_META, active_workspace_session_id: 'project-session',
+            active_workspace_session_project_id: 'prj_123456abcdef', active_workspace_session_dir: '/project',
+          } };
+        },
+        readWorkspaceSessionMeta: async (_agentId, sessionId) => ({
+          ...EMPTY_SESSION_META, active_workspace_session_id: sessionId, project_id: '', open_directory: '/directory',
+        }),
+        readViewerJson: async () => ({ agents: [], currentAgentId: null }),
+      }));
+      const agents = await mod.getConnectedAgents();
+      const host = agents.find(a => a.id === 'programming-helper');
+      assert.equal(host.active_workspace_session_id, 'directory-session');
+      assert.equal(host.runtime_session_id, 'viewer-directory');
+      assert.equal(host.active_workspace_session_project_id, '', '目录会话不得借用旧 primary 的项目归属');
+      assert.equal(host.active_workspace_session_dir, '/directory');
+    });
+
     it('hides a shared session while its disposal acknowledgement is pending', async () => {
       const child = createMockChild();
       const runtime = injectRuntime('stopping-agent', 'stopping-session', child);
@@ -847,6 +877,8 @@ describe('agent-lifecycle', () => {
           active_workspace_session_id: 'session-target',
           active_workspace_session_title: 'Target Session',
           active_workspace_display_name: 'Target Session',
+          project_id: 'prj_123456abcdef',
+          open_directory: '/fixture/project',
         }),
       }));
       let handler = null;
@@ -869,6 +901,9 @@ describe('agent-lifecycle', () => {
       assert.equal(responseData.agent.id, 'viewer-target');
       assert.equal(responseData.agent.parent_id, 'programming-helper');
       assert.equal(responseData.agent.active_workspace_session_id, 'session-target');
+      assert.equal(responseData.agent.sidebar_entry_id, 'programming-helper');
+      assert.equal(responseData.agent.project_id, 'prj_123456abcdef');
+      assert.equal(responseData.agent.open_directory, '/fixture/project');
     });
 
     it('runtime_status does not scan session metadata while the Viewer runtime is still absent', async () => {

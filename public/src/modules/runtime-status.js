@@ -89,6 +89,8 @@ function buildSyntheticRuntimeEntry(prebuiltAgent) {
     status: prebuiltAgent.connected === false ? 'disconnected' : 'connected',
     source: 'managed-runtime',
     contextMenuEnabled: true,
+    openDirectory: String(prebuiltAgent.active_workspace_session_dir || '').trim(),
+    projectId: String(prebuiltAgent.active_workspace_session_project_id || '').trim(),
     createdAt: prebuiltAgent.created_at || null,
   };
 }
@@ -123,6 +125,7 @@ function buildChildRuntimeEntry(runtimeAgent) {
     // 归属身份（ticket 044）：项目会话带非空 projectId，分组走项目身份
     // （resolveSidebarChildProjectGroup），openDirectory 不再参与其分组。
     projectId: String(runtimeAgent.project_id || runtimeAgent.projectId || '').trim(),
+    sourceSessionId: String(runtimeAgent.source_session_id || '').trim(),
   };
 }
 
@@ -339,19 +342,26 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   childAgents.forEach((agent) => {
     const runtimeId = String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
     if (runtimeId) childRuntimeIds.add(runtimeId);
-    const coveredSessionId = String(agent.active_workspace_session_id || '').trim();
+  });
+  const runtimeEntries = childAgents.map(buildChildRuntimeEntry);
+  const syntheticEntry = buildSyntheticRuntimeEntry(prebuiltAgent);
+  if (syntheticEntry && !childRuntimeIds.has(syntheticEntry.runtimeId)) runtimeEntries.push(syntheticEntry);
+  runtimeEntries.forEach((childEntry) => {
+    if (!childEntry) return;
+    const runtimeId = String(childEntry.runtimeId || '').trim();
+    const coveredSessionId = String(childEntry.sessionId || '').trim();
     if (coveredSessionId) childCoveredSessionIds.add(coveredSessionId);
-    const childEntry = buildChildRuntimeEntry(agent);
     if (isThreadHostApp && childEntry && coveredSessionId) {
       let thread = threadBySessionId.get(coveredSessionId);
       if (!thread) {
-        // 换代窗口归并：successor 上线早于 commit（框架 advanceHead 才把
-        // successor session 写进 sessionChain），锚定未命中。存在 fresh
-        // 接续挡板的存活线程时，该 runtime 是换代 successor——归到线程
-        // 走下方非 head 过滤（不渲染普通条目），由占位条目兜底；否则才
-        // 是真正的新会话，照常独立渲染。
+        // A successor may register before advanceHead commits its membership.
+        // Match its persisted source session, never an arbitrary rotating thread:
+        // an unrelated new conversation can start in the same workspace then.
+        const sourceSessionId = String(childEntry.sourceSessionId || '').trim();
         thread = [...hostThreadsById.values()].find((candidate) => (
           candidate
+          && sourceSessionId
+          && String(candidate.headSessionId || '') === sourceSessionId
           && !candidate.archivedAt
           && Number(candidate.handoffStartedAt) > 0
           && Date.now() - Number(candidate.handoffStartedAt) < 5 * 60 * 1000
@@ -371,13 +381,12 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
         const headTitle = String(thread.headSessionTitle || '').trim();
         childEntry.name = headTitle || String(thread.title || childEntry.name || '').trim();
         childEntry.metaLabel = headTitle || String(thread.title || childEntry.metaLabel || '').trim();
-        // 稳定身份锚：createdAt / 项目归属沿用首次见到的条目，换头不换位。
+        // 保持线程排序锚，但存活 head 的归属必须按本次快照重新投影。
+        // 分组缓存仅供下方接续空窗占位；回灌到 live child 会锁住首次误分组，
+        // 连补齐 projectId、重启 runtime 或移动对话都无法纠正，直到刷新页面。
         const cached = _coderThreadLiveEntries.get(thread.threadId);
         if (cached?.entry) {
           childEntry.createdAt = cached.entry.createdAt ?? childEntry.createdAt;
-          childEntry.projectDir = cached.entry.projectDir || childEntry.projectDir;
-          childEntry.projectName = cached.entry.projectName || childEntry.projectName;
-          childEntry.projectKey = cached.entry.projectKey || childEntry.projectKey;
         }
         _coderThreadLiveEntries.set(thread.threadId, { runtimeId, entry: childEntry });
         renderedThreadIds.add(thread.threadId);
@@ -437,19 +446,12 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
           status: 'disconnected',
           source: 'thread-relay',
           contextMenuEnabled: false,
+          projectId: String(thread.headProjectId || '').trim(),
+          openDirectory: String(thread.headProjectDir || '').trim(),
           threadId,
           transitionPending: true,
         });
     }
-  }
-  // The host snapshot may point at whichever session was most recently started.
-  // If that runtime is already represented by a child entry, do not synthesize it
-  // again under the host row.
-  const syntheticRuntimeId = String(
-    prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId || ''
-  ).trim();
-  if (!syntheticRuntimeId || !childRuntimeIds.has(syntheticRuntimeId)) {
-    addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
   }
 
   // operation 按 agentId 归属（APP 级）——无并列身份后无需二次分流。
