@@ -1186,6 +1186,36 @@ describe('pendingSuccession handoff guard', () => {
     assert.equal(record.commands[1].status, ThreadCommandStatus.DELIVERED);
   });
 
+  test('beginSessionSuccession with seedContinuation=false plants the barrier without seeding the instruction', async () => {
+    // 手动接续（compact_and_resume 路由口径）：只立挡板，不播种接续恢复
+    // 指令——变换完成、head 推进后新 head 停住，等下一条真实输入；接续
+    // 期间暂存的 Inbox 指令仍照常投递（暂存语义与播种无关）。
+    const { core, integration } = makeFixture({
+      enabled: true,
+      resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'ms-s2' ? 'viewer-ms2' : null),
+      submitTurn: async ({ text }) => ({ success: true, delivery: 'delivered', text }),
+    });
+    const thread = await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ms-s1' } });
+    await core.appendCommand({ threadId: thread.threadId, text: '接续期间的用户输入' });
+
+    const begun = await integration.beginSessionSuccession({
+      agentId: 'programming-helper', sessionId: 'ms-s1', reason: 'trim', seedContinuation: false,
+    });
+    assert.equal(begun.applied, true);
+    let record = await core.getThread(thread.threadId);
+    assert.ok(record.pendingSuccession, '挡板照立（交接窗口 / Inbox 暂存语义不变）');
+    assert.equal(
+      (record.commands || []).filter((c) => c.kind === 'system_continuation').length, 0,
+      '不播种接续恢复指令',
+    );
+
+    const outcome = await integration.applySessionSuccession({
+      agentId: 'programming-helper', fromSessionId: 'ms-s1', toSessionId: 'ms-s2', reason: 'trim',
+    });
+    assert.equal(outcome.applied, true);
+    assert.equal(outcome.delivery.delivered, 1, '仅投递暂存用户输入，无恢复指令随行');
+  });
+
   test('failSessionSuccession converges the succession barrier (old head stays authoritative)', async () => {
     const { core, integration } = makeFixture({});
     await core.start({ sessionRef: { agentId: 'coder', sessionId: 'hf-s1' } });

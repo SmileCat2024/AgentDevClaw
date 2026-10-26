@@ -177,6 +177,11 @@ describe('T007 S1/S2: 生产路由与共享入口的接线契约', () => {
     assert.ok(route.split('commitSuccession({').length - 1 >= 2, 'detached 与同步分支都经 commitSuccession');
     assert.match(route, /successorReady:\s*result\?\.agent\s*!=\s*null/);
     assert.ok(route.split('beginSessionSuccession({').length - 1 >= 1, '接力开始写入交接挡板');
+    // 手动接续免播恢复指令（seedContinuation=false）：变换完成、head 推进后
+    // 停在精简产物上，不自动启动新一轮；自动接续（thread-rotation）在
+    // begin 处缺省播种，两路径以显式参数区分（reason 两边同为 'trim'，
+    // 不能按 reason 区分）。
+    assert.match(route, /seedContinuation:\s*false/, '手动接续显式免播恢复指令');
   });
 
   it('compact / summary / trim+summary 共享同一 successor 创建入口', () => {
@@ -192,5 +197,7 @@ describe('T007 S1/S2: 生产路由与共享入口的接线契约', () => {
   it('context guard rotation 也消费共享提交点（三条路径不各自实现继承逻辑）', () => {
     assert.match(rotationSrc, /commitSuccession/);
     assert.match(rotationSrc, /successorReady:\s*result\?\.agent\s*!=\s*null/);
+    // 自动接续保持播种（缺省，不传免播参数）：无人值守接力依赖恢复指令续跑
+    assert.doesNotMatch(rotationSrc, /seedContinuation:\s*false/, '自动接续不免播恢复指令');
   });
 });

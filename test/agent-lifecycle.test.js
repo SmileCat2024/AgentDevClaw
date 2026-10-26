@@ -311,9 +311,11 @@ describe('agent-lifecycle', () => {
       child.send = (message) => {
         assert.deepEqual(message, { type: 'remove-session', sessionId: 'slow-session' });
       };
+      const traceEvents = [];
+      const operationTrace = { mark: (phase, fields) => traceEvents.push({ phase, fields }) };
 
       let settled = false;
-      const stopping = mod.stopManagedAgent('shared-agent', 'slow-session', { waitForPersistence: true })
+      const stopping = mod.stopManagedAgent('shared-agent', 'slow-session', { waitForPersistence: true, operationTrace })
         .then((status) => {
           settled = true;
           return status;
@@ -328,6 +330,12 @@ describe('agent-lifecycle', () => {
       assert.equal(status.status, 'stopped');
       assert.equal(runtime.stopped, true);
       assert.equal(runtime.stopping, false);
+      assert.deepEqual(traceEvents.map((event) => event.phase), [
+        'source_runtime_close_requested',
+        'source_runtime_persistence_acknowledged',
+        'source_runtime_retirement_settled',
+      ]);
+      assert.equal(traceEvents[1].fields.persisted, true);
     });
 
     it('confirms the closing snapshot while automatic saves of the same session are pending', async () => {

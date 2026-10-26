@@ -433,7 +433,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
           runtimeId: `thread:${threadId}`,
           sessionId: String(thread.headSessionId || ''),
           name: String(thread.headSessionTitle || thread.title || '').trim()
-            || (currentLanguage === 'zh' ? '上下文接力中…' : 'Relaying context…'),
+            || (currentLanguage === 'zh' ? '新对话' : 'New conversation'),
           status: 'disconnected',
           source: 'thread-relay',
           contextMenuEnabled: false,
@@ -502,6 +502,17 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     // historical session, because either can belong to another project.
     // 项目会话的操作带 projectId（ticket 044），与 projectDir 同为合法身份。
     if (hostAgentId === 'programming-helper' && !operation.projectDir && !operation.projectId) continue;
+
+    // A thread succession replaces the current conversation head in place.
+    // Do not project its trim/summary operation as a second pending session row;
+    // the thread entry remains the sole sidebar identity throughout the handoff.
+    const isThreadSuccession = hostAgentId === 'programming-helper'
+      && operation.phase !== 'degraded'
+      && ['trim', 'summary'].includes(operation.kind)
+      && [...hostThreadsById.values()].some((thread) => (
+        thread.headSessionId === operation.sourceSessionId
+      ));
+    if (isThreadSuccession) continue;
 
     if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {
       addEntry({

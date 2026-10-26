@@ -49,7 +49,7 @@ describe('archive-and-replace contract', () => {
 
     // R8：线程域手动接力退役旧 head runtime（flush 语义），且只在挡板立起
     // 后执行——纯 session 的手动 compact 不得被动停 runtime
-    assert.match(route, /successionBegun\.applied[\s\S]*?stopManagedAgent\(preferredAgentId,\s*sessionId\)/);
+    assert.match(route, /successionBegun\.applied[\s\S]*?stopManagedAgent\(preferredAgentId,\s*sessionId,\s*\{\s*operationTrace:\s*trace\s*\}\)/);
 
     // K2：detached job 失败必须落 rotation_failed（挡板不得滞留至 stale）
     const detachedCatch = route.slice(route.indexOf('.catch(async (error) => {'));

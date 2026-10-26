@@ -102,9 +102,13 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
      * 在线程记录里写入 pendingSuccession（交接意图），使接力期间追加的
      * inbox 指令保持 pending、不被投向即将退役的旧 head；advanceHead
      * 推进时原子清除并统一投递给新 head。
+     * seedContinuation=false：同笔事务免播接续恢复指令（R3 per-call 开关）。
+     * 手动接续（用户发起的精简/摘要）免播——变换完成、head 推进后停在
+     * 产物上，等下一条真实输入；自动接续（context guard → thread-rotation）
+     * 缺省播种，新 head 以恢复指令续跑。挡板与 Inbox 暂存语义两者相同。
      * 纯 session 会话（无线程）：no-op（纯会话语义，行为与未接入线程一致）。
      */
-    async beginSessionSuccession({ agentId, sessionId, reason = 'manual' }) {
+    async beginSessionSuccession({ agentId, sessionId, reason = 'manual', seedContinuation = true }) {
       const normalizedAgentId = String(agentId || '').trim();
       const from = String(sessionId || '').trim();
       if (!from) return { applied: false, reason: 'invalid_session' };
@@ -129,6 +133,7 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
           threadId: thread.threadId,
           fromSessionId: from,
           reason,
+          seedContinuation,
         });
         // 交接开始的事实事件：前端活动线程订阅据此即时点亮「接力中」状态
         // （顶栏指示器 / 侧栏过渡占位），不等 20s contentHash 轮询。事件只

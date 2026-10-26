@@ -52,9 +52,9 @@ function child(sessionId, runtimeId, name) {
 const CHILD_OLD = child('old-head', 'old-runtime', '旧会话标题');
 const CHILD_NEW = child('new-head', 'new-runtime', '新会话标题');
 
-function runCollect(ctx, agentsLiteral) {
+function runCollect(ctx, agentsLiteral, host = HOST) {
   return ctx.run(`(() => {
-    const host = ${JSON.stringify(HOST)};
+    const host = ${JSON.stringify(host)};
     const agents = ${agentsLiteral};
     return collectRuntimeEntriesForPrebuilt(host, agents);
   })()`);
@@ -87,6 +87,7 @@ describe('runtime-status: single sidebar entry across the succession window', ()
     const placeholders = gap.filter((e) => e.transitionPending === true);
     assert.equal(placeholders.length, 1, '换代窗口由占位条目兜底');
     assert.equal(placeholders[0].threadId, 'wt-relay');
+    assert.equal(placeholders[0].name, '工作对话', '接续过程不把线程条目名称替换为过程状态标签');
   });
 
   it('after commit the successor renders as the anchored thread entry (converged single entry)', () => {
@@ -111,6 +112,108 @@ describe('runtime-status: single sidebar entry across the succession window', ()
     assert.equal(threadEntries.length, 1, 'commit 后收敛为单条目');
     assert.equal(threadEntries[0].runtimeId, 'new-runtime');
     assert.notEqual(threadEntries[0].transitionPending, true, '收敛后条目为实态');
+  });
+
+  it('ordinary trim operation without a matching thread still renders its pending row', () => {
+    const ctx = loadRuntimeStatus();
+    const thread = {
+      threadId: 'wt-other', agentId: 'programming-helper',
+      title: '其他对话', headSessionId: 'other-head', sessionIds: ['other-head'],
+      status: 'open', lifeState: 'idle', handoffStartedAt: 0,
+    };
+    ctx.window.ClawThreads = {
+      threads: [thread],
+      sessionIndex: { 'programming-helper::other-head': thread },
+    };
+    ctx.run(`beginSidebarOperation({
+      operationId: 'trim-ordinary', type: 'create', kind: 'trim', phase: 'generating',
+      agentId: 'programming-helper', sourceSessionId: 'ordinary-session',
+      projectDir: 'D:/project', projectName: 'project',
+    })`);
+
+    const host = { id: 'programming-helper', agentId: 'programming-helper', source: 'prebuilt', workspace_sessions: { sessions: [] } };
+    const entries = runCollect(ctx, '[]', host);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].source, 'operation-pending');
+  });
+
+  it('thread trim/summary operations do not create a second pending sidebar row', () => {
+    const ctx = loadRuntimeStatus();
+    const thread = {
+      threadId: 'wt-relay', agentId: 'programming-helper',
+      title: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
+      status: 'open', lifeState: 'executing', handoffStartedAt: Date.now(),
+    };
+    ctx.window.ClawThreads = {
+      threads: [thread],
+      sessionIndex: { 'programming-helper::old-head': thread },
+    };
+    ctx.run(`
+      beginSidebarOperation({
+        operationId: 'trim-1', type: 'create', kind: 'trim', phase: 'generating',
+        agentId: 'programming-helper', sourceSessionId: 'old-head',
+        projectDir: 'D:/project', projectName: 'project',
+      });
+      beginSidebarOperation({
+        operationId: 'summary-1', type: 'create', kind: 'summary', phase: 'generating',
+        agentId: 'programming-helper', sourceSessionId: 'old-head',
+        projectDir: 'D:/project', projectName: 'project',
+      });
+    `);
+
+    const host = { id: 'programming-helper', agentId: 'programming-helper', source: 'prebuilt', workspace_sessions: { sessions: [] } };
+    const entries = runCollect(ctx, JSON.stringify([
+      { ...child('old-head', 'old-runtime', '工作对话'), parent_id: 'programming-helper', sidebar_entry_id: 'programming-helper' },
+    ]), host);
+    assert.equal(entries.length, 1, '线程接续期间只保留原线程条目');
+    assert.equal(entries[0].threadId, 'wt-relay');
+    assert.notEqual(entries[0].source, 'operation-pending');
+  });
+
+  it('degraded thread succession remains visible as an actionable failure', () => {
+    const ctx = loadRuntimeStatus();
+    const thread = {
+      threadId: 'wt-relay', agentId: 'programming-helper',
+      title: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
+      status: 'open', lifeState: 'executing', handoffStartedAt: Date.now(),
+    };
+    ctx.window.ClawThreads = {
+      threads: [thread],
+      sessionIndex: { 'programming-helper::old-head': thread },
+    };
+    ctx.run(`beginSidebarOperation({
+      operationId: 'trim-1', type: 'create', kind: 'trim', phase: 'degraded',
+      agentId: 'programming-helper', sourceSessionId: 'old-head',
+      projectDir: 'D:/project', projectName: 'project',
+    })`);
+
+    const host = { id: 'programming-helper', agentId: 'programming-helper', source: 'prebuilt', workspace_sessions: { sessions: [] } };
+    const entries = runCollect(ctx, JSON.stringify([
+      { ...child('old-head', 'old-runtime', '工作对话'), parent_id: 'programming-helper', sidebar_entry_id: 'programming-helper' },
+    ]), host);
+    assert.ok(entries.some((entry) => entry.source === 'operation-degraded'),
+      '失败态需保留以便用户发现并处理');
+  });
+
+  it('coder trim operation keeps coder behavior unchanged', () => {
+    const ctx = loadRuntimeStatus();
+    const thread = {
+      threadId: 'wt-coder', agentId: 'coder',
+      title: 'Coder 工作', headSessionId: 'coder-head', sessionIds: ['coder-head'],
+      status: 'open', lifeState: 'executing', handoffStartedAt: Date.now(),
+    };
+    ctx.window.ClawThreads = {
+      threads: [thread],
+      sessionIndex: { 'coder::coder-head': thread },
+    };
+    ctx.run(`beginSidebarOperation({
+      operationId: 'coder-trim', type: 'create', kind: 'trim', phase: 'generating',
+      agentId: 'coder', sourceSessionId: 'coder-head',
+      projectDir: 'D:/project', projectName: 'project',
+    })`);
+
+    const entries = runCollect(ctx, JSON.stringify([CHILD_OLD]));
+    assert.ok(entries.some((entry) => entry.source === 'operation-pending'));
   });
 
   it('non-thread coder session without an active barrier still renders as its own entry', () => {

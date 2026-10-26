@@ -1625,10 +1625,15 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     // T003：上下文变换只能作用于 Thread 当前 head。目标是 Thread 历史 Session 时
     // 返回明确的 stale_session 过期目标错误（附 Thread ID 与当前 head），不静默
     // 改写成 head、不启动接力。非 Thread Session（standalone）保持原 Session 语义。
+    trace.mark('transformation_target_resolution_started');
     const transformTarget = await resolveTransformationTarget({
       agentId: preferredAgentId,
       sessionId,
       memberLookup: _memberLookup,
+    });
+    trace.mark('transformation_target_resolution_completed', {
+      targetType: transformTarget?.type || '',
+      targetCode: transformTarget?.code || '',
     });
     if (!transformTarget.ok && transformTarget.code === 'stale_session') {
       // 直接以 409 统一形状返回（不经全局错误处理器——那里会丢弃 target 附加块）：
@@ -1664,15 +1669,25 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     }
     console.log(`[compact_and_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId} detached=${detached} archive=${archiveOriginal} reason=${lineageReason} appendSummary=${appendSummary}`);
 
-    // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
+    // 线程交接意图（线程宿主）：接力期间 inbox 指令保持 pending，不被
     // 投向即将退役的旧 head。公共入口一处标记，detached / 同步分支共用；
     // 提交点（thread-succession）推进 head 时原子清除。非线程宿主 no-op。
     // 挡板写入失败即中断：放行会让交接窗口内的新指令直投即将退役的旧
     // head 并随其退役丢失——显式失败优于静默丢失。
+    // seedContinuation=false：手动接续（右键精简/摘要、slash /trim /summary、
+    // 精简页提交）不播种接续恢复指令——变换完成、head 推进后停在精简
+    // 产物上，不自动启动新一轮；自动接续（context guard → thread-rotation）
+    // 才需要恢复指令驱动无人值守续跑。接续期间的 Inbox 暂存投递不受影响。
+    trace.mark('thread_succession_gate_started');
     const successionBegun = await getThreadIntegration().beginSessionSuccession({
       agentId: preferredAgentId,
       sessionId,
       reason: lineageReason,
+      seedContinuation: false,
+    });
+    trace.mark('thread_succession_gate_completed', {
+      applied: successionBegun?.applied === true,
+      gateReason: successionBegun?.reason || '',
     });
     if (isSuccessionGateFailure(successionBegun)) {
       const error = new Error(`Thread handoff gate write failed for session=${sessionId}: ${successionBegun.error || 'unknown error'}`);
@@ -1684,7 +1699,12 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     // K14：线程历史棒次会话不是合法的 compact 源——begin/apply 对非 head
     // 全部静默 no-op，会产生线程无感知的孤儿 successor。入口显式拒绝，
     // 引导切到当前 head。
+    trace.mark('thread_head_validation_started');
     const memberThread = await getThreadIntegration().findThreadBySession(preferredAgentId, sessionId);
+    trace.mark('thread_head_validation_completed', {
+      threadFound: Boolean(memberThread),
+      isHead: !memberThread || memberThread.headSessionId === sessionId,
+    });
     if (memberThread && memberThread.headSessionId !== sessionId) {
       const error = new Error(`Session ${sessionId} is a historical thread generation; open the current head session to compact`);
       error.code = 'session_not_head';
@@ -1697,9 +1717,11 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     // 不该与旧 runtime 并存。只在挡板立起后执行（纯 session 的手动 compact
     // 不得被动停 runtime）；失败不阻断，与 rotation 的 stop 语义一致。
     if (successionBegun.applied) {
-      await stopManagedAgent(preferredAgentId, sessionId).catch((err) => {
+      trace.mark('source_runtime_retirement_started');
+      await stopManagedAgent(preferredAgentId, sessionId, { operationTrace: trace }).catch((err) => {
         console.warn(`[compact_and_resume] failed to retire pre-compact runtime for session=${sessionId}:`, err?.message || err);
       });
+      trace.mark('source_runtime_retirement_completed');
     }
 
     if (detached) {

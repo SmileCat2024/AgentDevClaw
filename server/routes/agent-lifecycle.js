@@ -125,7 +125,7 @@ export function createAgentLifecycleModule(ctx) {
     }
   }
 
-  async function removeSharedSession(runtime, { waitForExit = false } = {}) {
+  async function removeSharedSession(runtime, { waitForExit = false, operationTrace = null } = {}) {
     const sessionId = runtime?.selectedSessionId;
     const child = runtime?.process;
     if (!sessionId || !child || typeof child.send !== 'function' || typeof child.on !== 'function') {
@@ -153,6 +153,9 @@ export function createAgentLifecycleModule(ctx) {
     };
     const onMessage = (message) => {
       if (message?.type !== 'session-exited' || message.sessionId !== sessionId) return;
+      operationTrace?.mark('source_runtime_persistence_acknowledged', {
+        persisted: message.persisted === true,
+      });
       // The runtime reports persistence explicitly; callers that require a
       // snapshot barrier must reject an acknowledgement after a save failure.
       const persisted = message.persisted === true;
@@ -188,7 +191,10 @@ export function createAgentLifecycleModule(ctx) {
     child.once?.('exit', onExit);
     try {
       child.send({ type: 'remove-session', sessionId });
-      return await removalPromise;
+      operationTrace?.mark('source_runtime_close_requested');
+      const persisted = await removalPromise;
+      operationTrace?.mark('source_runtime_retirement_settled', { persisted });
+      return persisted;
     } catch {
       clearAcknowledgementListeners();
       runtime.stopping = false;
@@ -227,7 +233,7 @@ export function createAgentLifecycleModule(ctx) {
 
   // ── Stop managed agent ────────────────────────────────────────
 
-  async function stopManagedAgent(agentId, sessionId = undefined, { waitForPersistence = false } = {}) {
+  async function stopManagedAgent(agentId, sessionId = undefined, { waitForPersistence = false, operationTrace = null } = {}) {
     const runtimes = sessionId === undefined ? listAgentRuntimes(agentId) : [getAgentRuntime(agentId, sessionId)].filter(Boolean);
     if (runtimes.length === 0) {
       if (waitForPersistence && sessionId) {
@@ -262,7 +268,7 @@ export function createAgentLifecycleModule(ctx) {
       // for both shared and isolated processes. remove-session saves and disposes
       // the target session before reporting whether persistence succeeded.
       if (waitForPersistence && runtime.selectedSessionId) {
-        const persisted = await removeSharedSession(runtime, { waitForExit: true });
+        const persisted = await removeSharedSession(runtime, { waitForExit: true, operationTrace });
         if (!persisted) {
           throw new Error(`Failed to confirm session persistence before stopping: ${agentId}::${runtime.selectedSessionId}`);
         }

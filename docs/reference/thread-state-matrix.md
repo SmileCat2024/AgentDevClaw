@@ -22,7 +22,7 @@
 
 | 事件 | 入口 | 说明 |
 |---|---|---|
-| E1 begin | `core.beginSessionHandoff` | 接续开始：竖挡板 + status→rotating + R3 播种，同笔原子 |
+| E1 begin | `core.beginSessionHandoff` | 接续开始：竖挡板 + status→rotating + R3 播种，同笔原子。`seedContinuation=false` 免播（Claw 手动接续路径：精简/摘要变换后新 head 停住，不自动续跑；自动接续 thread-rotation 缺省播种）；免播时 continuationPolicy 不参与 |
 | E2 fail | `core.failSessionHandoff` | 接续失败落账：→rotation_failed，**挡板保留**（供 resume 查 stage） |
 | E3 complete | `core.advanceHead` | 提交点：head CAS 推进 + 清挡板 + 回 open |
 | E4 deliver | `core.deliverPendingCommands` | 投递 pending 指令（K20 逐条重读） |
@@ -48,7 +48,7 @@
 | M1-RF-∅ | rotation_failed, 挡板被懒清/abort | ✓ 正常 begin | 框架（隐含） |
 | M1-C-* | closed | ✗ `thread_closed`（硬终态） | 框架 391/401 |
 | M1-*-MM | head ≠ fromSessionId | ✗ `head_mismatch` | 框架 356/381 |
-| M1-R3 | begin 播种幂等键 `succession:<tid>:<from>` | 同一移交易重走不重复播种；跨移交易（head 换代后再接续）新播一条 | 框架 825；R3 语义 |
+| M1-R3 | begin 播种幂等键 `succession:<tid>:<from>` | 同一移交易重走不重复播种；跨移交易（head 换代后再接续）新播一条；`seedContinuation=false` 的 begin（Claw 手动接续）不占用也不产生播种 | 框架 825；R3 语义 |
 
 ### 3.2 E2 fail（守卫：closed 硬拒；无挡板 = 迟到者无立卷资格）
 

@@ -4,8 +4,10 @@
  * context-rotation-trigger 事件（会话上下文到达阈值并打断当前轮）后，
  * 由被触发的会话定位其所属线程并执行 trim+摘要接力：
  *   1. beginSessionSuccession：原子写入交接挡板并播种接续恢复指令（R3，
- *      框架 beginSessionHandoff 同笔事务，幂等键绑移交易）；接力期间
- *      新指令保持 pending；
+ *      框架 beginSessionHandoff 同笔事务，幂等键绑移交易）；播种是自动
+ *      接续专属——手动接续（compact_and_resume 路由）传
+ *      seedContinuation=false 免播，变换完成后新 head 停住等真实输入；
+ *      接力期间新指令保持 pending；
  *   2. 退役旧 head runtime：等待包含持久化结果的 session-exited 确认；成功保存后
  *      才允许读取 Session 快照，保存失败则接续失败；
  *   3. compactAndResumeCurrentSession：trim-transcript + 摘要 + 启动 successor
