@@ -22,7 +22,7 @@ describe('T006 coder-threads-ui: 归档取消结果与删除确认文案', () =>
     assert.equal(openedTarget?.threadId, 'wt-1');
   });
 
-  it('归档文案以 cleanup 事实为准，明确「恢复不复活已取消指令」', () => {
+  it('归档文案以 cleanup 事实为准，明确「取消归档不重发已取消消息」', () => {
     const ctx = loadCoderThreadsUI();
     const text = ctx.run(`window.CoderThreadsUI.archiveResultText({
       status: 'complete',
@@ -30,13 +30,13 @@ describe('T006 coder-threads-ui: 归档取消结果与删除确认文案', () =>
       handoffConverged: true,
       inflightDrain: { count: 1 },
     }, true)`);
-    assert.ok(text.includes('2 条未开始指令已取消'));
-    assert.ok(text.includes('新派发已拒绝'));
-    assert.ok(text.includes('1 条运行中调用已收尾'));
-    assert.ok(text.includes('不复活已取消的指令'));
+    assert.ok(text.includes('2 条排队中的消息已取消'));
+    assert.ok(text.includes('归档后不再接收新消息'));
+    assert.ok(text.includes('1 项进行中的任务正在收尾'));
+    assert.ok(text.includes('取消归档后这些消息不会自动重新发送'));
   });
 
-  it('无待投递指令 / 无运行中调用时文案如实省略，不编造', () => {
+  it('无取消事实时文案如实省略，不虚构也不制造无来由提醒', () => {
     const ctx = loadCoderThreadsUI();
     const text = ctx.run(`window.CoderThreadsUI.archiveResultText({
       status: 'complete',
@@ -44,10 +44,11 @@ describe('T006 coder-threads-ui: 归档取消结果与删除确认文案', () =>
       handoffConverged: false,
       inflightDrain: { count: 0 },
     }, true)`);
-    assert.ok(!text.includes('条未开始指令已取消'));
-    assert.ok(!text.includes('运行中调用已收尾'));
-    // 即使无取消，也保留「恢复不复活」的明确提醒
-    assert.ok(text.includes('不复活已取消的指令'));
+    assert.ok(!text.includes('条排队中的消息已取消'));
+    assert.ok(!text.includes('项进行中的任务正在收尾'));
+    // 提醒只在真的取消了消息时出现：空闲归档不提「已取消的消息」
+    assert.ok(!text.includes('不会自动重新发送'));
+    assert.ok(!text.includes('指令'), '文案不得残留「指令」这类内部术语');
   });
 
   it('删除确认展示级联影响范围（成员会话数 + 待投递指令数）', () => {

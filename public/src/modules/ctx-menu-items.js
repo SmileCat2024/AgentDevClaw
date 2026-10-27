@@ -1097,12 +1097,23 @@ function dispatchCtxAction(action, target) {
       if (!threadToArchive?.threadId) break;
       (async () => {
         try {
-          await ctxThreadRequest(threadToArchive.threadId, '/protoclaw/threads/' + encodeURIComponent(threadToArchive.threadId) + '/archive');
+          const payload = await ctxThreadRequest(threadToArchive.threadId, '/protoclaw/threads/' + encodeURIComponent(threadToArchive.threadId) + '/archive');
+          // 文案按归档事务实际发生的事实展示：只有真的取消了排队中的消息
+          // 才说明后果；空闲归档只报结果，避免「什么指令」式的无来由提醒。
+          const cleanup = payload?.cleanup;
+          const cancelled = Number(cleanup?.commandsCancelled) || 0;
+          const partial = cleanup?.status === 'partial';
           ClawToast.show({
             id: 'ctx-thread-archive-' + threadToArchive.threadId,
-            status: 'success',
-            title: isZh ? '已归档' : 'Archived',
-            description: isZh ? '恢复（取消归档）不复活已取消的指令。' : 'Unarchive will not revive cancelled commands.',
+            status: partial ? 'warning' : 'success',
+            title: isZh
+              ? (partial ? '已归档（部分收尾未确认）' : '已归档')
+              : (partial ? 'Archived (partial cleanup unconfirmed)' : 'Archived'),
+            description: cancelled > 0
+              ? (isZh
+                ? `${cancelled} 条排队中的消息已取消，取消归档后不会自动重新发送。`
+                : `${cancelled} queued message(s) cancelled; unarchiving won't resend them.`)
+              : undefined,
           });
           await afterThreadMutation();
           // 归档事务停掉整链 runtime：若被归档会话正停靠在前台，切回

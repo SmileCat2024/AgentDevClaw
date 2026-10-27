@@ -314,19 +314,21 @@ window.CoderThreadsUI = (() => {
   }
 
   /**
-   * 归档取消结果文案（纯函数，可测）：T006——不得提示「恢复后自动继续
-   * 已取消指令」。以服务端 cleanup 事实构建展示文案。
+   * 归档结果文案（纯函数，可测）：以服务端 cleanup 事实构建，只讲实际
+   * 发生的事。「已取消消息不随恢复重发」的提醒仅在真的取消了消息时出现
+   * ——空闲归档时无来由地提「指令」只会制造困惑（不得反向暗示「恢复后
+   * 自动继续已取消指令」，T006 底线不变）。
    */
   function archiveResultText(cleanup, zh = false) {
     const cancelled = Number(cleanup?.commandsCancelled) || 0;
     const inflight = Number(cleanup?.inflightDrain?.count) || 0;
     const converged = cleanup?.handoffConverged === true;
-    return [
-      converged ? (zh ? '新派发已拒绝，不再投往旧 head。' : 'New deliveries rejected; no longer routed to the old head.') : '',
-      cancelled > 0 ? (zh ? `${cancelled} 条未开始指令已取消。` : `${cancelled} pending command(s) cancelled.`) : (zh ? '无待投递指令。' : 'No queued commands.'),
-      inflight > 0 ? (zh ? `${inflight} 条运行中调用已收尾。` : `${inflight} running call(s) settled.`) : '',
-      (zh ? '恢复（取消归档）不复活已取消的指令。' : 'Unarchive will not revive cancelled commands.'),
-    ].filter(Boolean).join(zh ? '；' : ' ');
+    const parts = [];
+    if (cancelled > 0) parts.push(zh ? `${cancelled} 条排队中的消息已取消。` : `${cancelled} queued message(s) cancelled.`);
+    if (inflight > 0) parts.push(zh ? `${inflight} 项进行中的任务正在收尾。` : `${inflight} running task(s) finishing up.`);
+    if (converged) parts.push(zh ? '归档后不再接收新消息。' : 'No new messages while archived.');
+    if (cancelled > 0) parts.push(zh ? '取消归档后这些消息不会自动重新发送。' : 'Unarchiving won\'t resend them.');
+    return parts.join(zh ? '' : ' ');
   }
 
   /**
@@ -366,8 +368,8 @@ window.CoderThreadsUI = (() => {
     ClawToast.show({
       id: 'thread-archive-' + (payload?.threadId || ''),
       status: partial ? 'warning' : 'success',
-      title: zh ? (partial ? '归档完成（部分收尾未确认）' : '已归档') : (partial ? 'Archived (partial cleanup)' : 'Archived'),
-      description: archiveResultText(cleanup, zh),
+      title: zh ? (partial ? '已归档（部分收尾未确认）' : '已归档') : (partial ? 'Archived (partial cleanup unconfirmed)' : 'Archived'),
+      description: archiveResultText(cleanup, zh) || undefined,
     });
   }
 

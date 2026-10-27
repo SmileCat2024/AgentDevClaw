@@ -320,6 +320,44 @@ describe('ctx-menu-items: dispatchCtxAction (routing)', () => {
     assert.equal(calls[0].args[1], 's1');
   });
 
+  // 归档 toast 按服务端 cleanup 事实展示：空闲归档只报结果；真的取消了
+  // 排队消息才说明后果，且不得残留「指令」类内部术语。
+  describe('thread-archive toast follows cleanup facts', () => {
+    const archiveDispatch = async (cleanup) => {
+      const toasts = [];
+      const { ctx } = loadCtxMenuItems({
+        currentRuntimeAgentId: '',
+        ClawToast: { show: (opts) => toasts.push(opts), update() {} },
+        fetch: async () => ({
+          ok: true,
+          json: async () => ({ ok: true, threadId: 'wt-1', cleanup }),
+        }),
+      });
+      ctx.window.getThreadById = () => ({ threadId: 'wt-1', agentId: 'programming-helper', headViewerAgentId: 'rt-1' });
+      ctx.window.refreshThreads = async () => ({ ok: true });
+      await ctx.run(`dispatchCtxAction('thread-archive', { ns: 'programming-helper', id: 'rt-1', sessionId: 's1', threadId: 'wt-1' })`);
+      // thread-archive 经 async IIFE 提交（提交回执即返回），等宏任务让 toast 落地
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return toasts.filter((t) => String(t.id || '').startsWith('ctx-thread-archive'));
+    };
+
+    it('idle archive: reports the result without inventing cancelled-message reminders', async () => {
+      const toasts = await archiveDispatch({ status: 'complete', commandsCancelled: 0, handoffConverged: false, inflightDrain: { count: 0 } });
+      assert.equal(toasts.length, 1);
+      assert.equal(toasts[0].title, '已归档');
+      assert.equal(toasts[0].description, undefined, 'nothing was cancelled — no description');
+    });
+
+    it('archive with cancelled commands: explains the consequence in user language', async () => {
+      const toasts = await archiveDispatch({ status: 'complete', commandsCancelled: 2, handoffConverged: true, inflightDrain: { count: 1 } });
+      assert.equal(toasts.length, 1);
+      assert.equal(toasts[0].title, '已归档');
+      assert.ok(toasts[0].description.includes('2 条排队中的消息已取消'), `description: ${toasts[0].description}`);
+      assert.ok(toasts[0].description.includes('不会自动重新发送'), `description: ${toasts[0].description}`);
+      assert.ok(!toasts[0].description.includes('指令'), 'no internal jargon in user-facing copy');
+    });
+  });
+
   it('rename-session → window.phOpenRenameDialog(ns, sid)', () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.window.phOpenRenameDialog = (ns, sid) => { calls.push({ fn: 'phOpenRenameDialog', args: [ns, sid] }); };
