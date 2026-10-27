@@ -98,8 +98,17 @@ window.refreshThreads = async (force = false) => {
       const res = await fetch(`/protoclaw/threads${query}`);
       if (!res.ok) return;
       const data = await res.json();
-      // 内容未变（unchanged 短路）或旧服务端忽略参数外的异常形态：保持现状
-      if (data?.unchanged) return;
+      // 内容未变（unchanged 短路）或旧服务端忽略参数外的异常形态：线程事实
+      // 保持缓存现状，但视图对账不随之跳过——unchanged 只证明线程事实与缓存
+      // 一致，不证明视图已对齐缓存事实。重绑一次性错过 successor runtime 快
+      // 照（SSE 事件已消费、threads 内容此后不再变化）后，这里是对账的唯一
+      // 持续触发点；跳过它会让视图永久冻结在旧 head（历史事故：绿色「只读·
+      // 前往当前会话」常驻，用户必须手点才切到新 head）。对账仅消费本地缓存
+      // （activeConversation + byId），无网络开销。
+      if (data?.unchanged) {
+        _reconcileConversationWithThreadHead();
+        return;
+      }
       if (Array.isArray(data?.threads)) {
         state.threads = data.threads;
         if (typeof data.contentHash === 'string' && data.contentHash) {
@@ -715,7 +724,35 @@ function _syncActiveThreadSubscription() {
  * runtime 对账、宿主一致，任一失配静默退出（幂等，重复调用安全）。
  */
 let _rebindInFlight = false;
-async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessionId) {
+
+// 重绑瞬态失败的有界重试：successor runtime 尚未进入 allAgents 快照
+// （loadAgents in-flight 合并到旧请求 / viewer 注册竞态）时，`if (!runtime)`
+// 是唯一瞬态退出点——其余守卫失败都是事实失配（用户已离开等），不重试。
+// 不重试的话该窗口是重绑的最后一次性机会（SSE head-advanced 已消费、
+// threads 内容此后不再变化），冻结只能等周期轮询的 unchanged 对账兜底
+// （最长 20s）或用户手点；秒级重试把恢复压回接续「无缝」量级。
+const REBIND_RETRY_INTERVAL_MS = 2000;
+const REBIND_RETRY_MAX_ATTEMPTS = 5;
+let _rebindRetryTimer = null;
+
+function _scheduleRebindRetry(threadId, fromSessionId, toSessionId, attempt) {
+  if (attempt >= REBIND_RETRY_MAX_ATTEMPTS) return;
+  if (_rebindRetryTimer) return;
+  _rebindRetryTimer = setTimeout(() => {
+    _rebindRetryTimer = null;
+    void _rebindConversationToThreadHead(threadId, fromSessionId, toSessionId, attempt + 1)
+      .catch((error) => console.warn('[threads] rebind retry failed:', error));
+  }, REBIND_RETRY_INTERVAL_MS);
+}
+
+function _cancelRebindRetry() {
+  if (_rebindRetryTimer) {
+    clearTimeout(_rebindRetryTimer);
+    _rebindRetryTimer = null;
+  }
+}
+
+async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessionId, attempt = 0) {
   if (_rebindInFlight) return;
   _rebindInFlight = true;
   try {
@@ -747,7 +784,10 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
       && agent?.parent_id === ownerAgentId
       && String(agent?.active_workspace_session_id || '') === toSessionId
     ));
-    if (!runtime) return;
+    if (!runtime) {
+      _scheduleRebindRetry(threadId, fromSessionId, toSessionId, attempt);
+      return;
+    }
     const previousRuntimeId = String(currentRuntimeAgentId || '').trim();
     if (previousRuntimeId && typeof getRuntimeWorkspaceSessionId === 'function'
       && getRuntimeWorkspaceSessionId(previousRuntimeId) !== fromSessionId) return;
@@ -782,6 +822,7 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
     renderAgentList();
     loadAgentData(nextRuntimeId).catch((error) => console.warn('[threads] successor view rebind failed:', error));
     if (typeof window.refreshThreads === 'function') window.refreshThreads(true).catch(() => {});
+    _cancelRebindRetry();
     _syncActiveThreadSubscription();
   } finally {
     _rebindInFlight = false;
@@ -793,8 +834,9 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
  * 丢失（断连 / 后台标签）时 threads 轮询拉到 head 已推进的快照即是重绑的
  * 正当时刻。视图冻结在本线程旧 head（wasHead）且线程 head 已换代 → 经
  * _rebindConversationToThreadHead 唯一实现原地换绑。挂在 refreshThreads
- * 收尾：404 豁免块的强刷、20s 周期轮询、事件处理器的事实刷新都会经过
- * 这里，无需独立触发器。
+ * 收尾：404 豁免块的强刷、20s 周期轮询（含 unchanged 短路——线程内容不再
+ * 变化后它是冻结恢复的唯一周期触发点）、事件处理器的事实刷新都会经过这
+ * 里，无需独立触发器。
  *
  * 差值锚点：runtime viewer 绑定是「视图正在显示的会话」真相（记账
  * sessionId 会被 _syncActiveThreadSubscription 的跟随分支对齐 head，不能
