@@ -453,7 +453,6 @@
   let popoverEl = null;
   let popoverCtx = null;
   let deletePopoverEl = null;
-  let activeAnnoId = '';
 
   function ensurePopover() {
     if (popoverEl) return popoverEl;
@@ -491,16 +490,8 @@
     popoverCtx = null;
   }
 
-  /** 同一条标注的全部 mark 段联动加/移除高亮反馈（跨文本类型拆成多段时保持一体感）。 */
-  function setActiveMarks(annoId, active) {
-    document.querySelectorAll(`mark.anno-highlight[data-anno-id="${annoId}"]`)
-      .forEach(m => m.classList.toggle('anno-active', active));
-  }
-
   function showDeletePopover(mark) {
     hideDeletePopover();
-    activeAnnoId = mark.dataset.annoId || '';
-    if (activeAnnoId) setActiveMarks(activeAnnoId, true);
     deletePopoverEl = document.createElement('div');
     deletePopoverEl.className = 'anno-popover anno-delete-popover';
     const btn = document.createElement('button');
@@ -532,7 +523,6 @@
 
   function hideDeletePopover() {
     if (deletePopoverEl) { deletePopoverEl.remove(); deletePopoverEl = null; }
-    if (activeAnnoId) { setActiveMarks(activeAnnoId, false); activeAnnoId = ''; }
   }
 
   // ── 事件绑定 ──────────────────────────────────────────────────────
@@ -555,6 +545,24 @@
     } else {
       hidePopover();
     }
+  });
+
+  document.addEventListener('mouseover', (event) => {
+    const mark = event.target?.closest?.('mark.anno-highlight');
+    if (!mark) return;
+    // 已有底色由 CSS :hover 提供；通过任一段时让同一标注的其他拆分段
+    // 同步呈现 hover 状态，不额外叠加另一种点击/焦点高亮。
+    document.querySelectorAll(`mark.anno-highlight[data-anno-id="${mark.dataset.annoId}"]`)
+      .forEach(m => m.classList.add('anno-hover-peer'));
+  });
+
+  document.addEventListener('mouseout', (event) => {
+    const mark = event.target?.closest?.('mark.anno-highlight');
+    if (!mark) return;
+    const next = event.relatedTarget?.closest?.('mark.anno-highlight');
+    if (next?.dataset?.annoId === mark.dataset.annoId) return;
+    document.querySelectorAll(`mark.anno-highlight[data-anno-id="${mark.dataset.annoId}"]`)
+      .forEach(m => m.classList.remove('anno-hover-peer'));
   });
 
   document.addEventListener('click', (event) => {
