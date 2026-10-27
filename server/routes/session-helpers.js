@@ -789,6 +789,7 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
   const pageOptions = {
     projectDir: options.sessionProjectDir,
     projectId: options.sessionProjectId,
+    sessionId: cleanSessionText(options.sessionId),
     query: options.sessionQuery,
     archived: options.sessionArchived,
     offset: options.sessionOffset,
@@ -802,6 +803,7 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
   };
   const pageActive = options.sessionProjectDir !== undefined
     || options.sessionProjectId !== undefined
+    || options.sessionId !== undefined
     || options.sessionQuery !== undefined
     || options.sessionArchived !== undefined
     || options.sessionOffset !== undefined

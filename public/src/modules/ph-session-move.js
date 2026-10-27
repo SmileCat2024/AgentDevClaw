@@ -124,7 +124,62 @@ function _phResolveSessionOwnership(sessionId) {
   return null;
 }
 
-window.phOpenSessionMoveDialog = (sessionIds) => {
+/**
+ * 归属解析的权威兜底：切片缓存（当前浏览目标分页 60 条）与项目实体缓存
+ * 都不是归属事实源——单条 ctx 入口可从侧栏/搜索发起，会话不在当前切片、
+ * 或 projectId 有值但实体缓存未加载时，本地解析返回 null，不等于归属
+ * 不可解析。这里走既有列表接口的 sessionId 精确过滤（索引读模型），返回
+ * 记录与切片同一条 wire 投影管线产出，字段名（projectId / openDirectory）
+ * 与 workspace_sessions.sessions 一致。失败才返回 null（调用方显式报错，
+ * 不猜测页面焦点）。
+ */
+async function _phResolveSessionOwnershipFromServer(sessionId) {
+  try {
+    const agent = getCurrentAgentRecord();
+    const params = new URLSearchParams({
+      agentId: String(agent?.id || ''),
+      sessionId: String(sessionId || ''),
+    });
+    const response = await fetch('/protoclaw/prebuilt_sessions?' + params.toString());
+    if (!response.ok) return null;
+    const payload = await response.json().catch(() => null);
+    const record = Array.isArray(payload?.sessions) && payload.sessions.length > 0
+      ? payload.sessions[0] : null;
+    if (!record) return null;
+    const projectId = String(record.projectId || '').trim();
+    if (projectId) {
+      const projectDirectory = String(record.openDirectory || '').trim();
+      if (!projectDirectory) return null;
+      return { directory: projectDirectory, ownerKey: 'project:' + projectId };
+    }
+    const directory = String(record.openDirectory || '').trim();
+    if (!directory) return null;
+    return { directory, ownerKey: 'directory:' + directory.replace(/\\/g, '/').toLowerCase() };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 移动成功后按服务端 releasedSessionIds 事实注册侧栏乐观退场（与关闭/
+ * 归档链路共用 markPendingRuntimeStop）。releasedSessionIds 是服务端释放
+ * 事实（waitForPersistence 停妥才返回），注册后侧栏投影立即隐藏条目，不等
+ * 下一轮 loadAgents 重投影（快照一轮 ~3s，期间条目原样挂着，表现为
+ * 「移动后侧栏卡几秒」）。轮询快照到达后由 reconcilePendingRuntimeStops
+ * 收敛，TTL 兜底条目回可见。
+ */
+function _phApplyMoveReleasedSessions(releasedSessionIds, agentId, movingRuntimeIds) {
+  if (!Array.isArray(releasedSessionIds) || releasedSessionIds.length === 0) return false;
+  if (typeof markPendingRuntimeStop !== 'function') return false;
+  for (const releasedSid of releasedSessionIds) {
+    markPendingRuntimeStop(agentId, releasedSid, movingRuntimeIds.get(releasedSid) || '');
+  }
+  if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+  if (typeof renderAgentList === 'function') renderAgentList();
+  return true;
+}
+
+window.phOpenSessionMoveDialog = async (sessionIds) => {
   const agent = getCurrentAgentRecord();
   if (!agent || typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return;
   const isZh = currentLanguage === 'zh';
@@ -139,13 +194,21 @@ window.phOpenSessionMoveDialog = (sessionIds) => {
     return;
   }
   // 归属来源：单条（ctx 菜单）从会话记录冻结 owner 解析——可能来自侧栏/搜索
-  // 等其他上下文，不拿页面焦点当来源；批量全部来自当前视图，用当前目录。
+  // 等其他上下文，不拿页面焦点当来源；本地切片/实体缓存解析不到时按服务端
+  // 索引权威兜底。批量全部来自当前视图，用当前目录。
   let sourceDirectory = '';
   const ownerKeys = [];
   if (ids.length === 1) {
-    const ownership = _phResolveSessionOwnership(ids[0]);
+    let ownership = _phResolveSessionOwnership(ids[0]);
     if (!ownership) {
-      window.alert(isZh ? '无法确定该会话的归属目录，不能移动' : 'Cannot resolve the owning directory of this conversation to move it');
+      ownership = await _phResolveSessionOwnershipFromServer(ids[0]);
+      // 服务端解析是异步的：期间工作空间可能被切换，旧 agent 上下文不再
+      // 适合作弹窗宿主，静默放弃（不弹窗不报错，切换后的链路自洽）。
+      const agentNow = getCurrentAgentRecord();
+      if (!agentNow || agentNow.id !== agent.id) return;
+    }
+    if (!ownership) {
+      window.alert(isZh ? '无法确定该会话的归属目录，不能移动' : 'Cannot resolve the owning directory of this conversation to move');
       return;
     }
     sourceDirectory = ownership.directory;
@@ -281,6 +344,22 @@ window.phOpenSessionMoveDialog = (sessionIds) => {
     }
     submitBtn.disabled = true;
     errorEl.hidden = true;
+    // 提交前快照被移动会话的运行实例映射：成功响应携带的 releasedSessionIds
+    // 是服务端释放事实（waitForPersistence 停妥才返回），据此注册乐观退场需要
+    // sessionId → runtimeId 对应关系。会话不在运行则无条目，注册自然跳过。
+    const movingRuntimeIds = new Map();
+    if (Array.isArray(allAgents)) {
+      for (const runtimeItem of allAgents) {
+        if (String(runtimeItem?.parent_id || '') !== String(agent.id)) continue;
+        const runningSid = String(runtimeItem?.active_workspace_session_id || '').trim();
+        if (runningSid && ids.includes(runningSid)) {
+          movingRuntimeIds.set(
+            runningSid,
+            String(runtimeItem?.runtime_session_id || runtimeItem?.runtimeSessionId || runtimeItem?.id || '').trim(),
+          );
+        }
+      }
+    }
     try {
       const response = await fetch('/protoclaw/ph_project/sessions_move', {
         method: 'POST',
@@ -303,6 +382,26 @@ window.phOpenSessionMoveDialog = (sessionIds) => {
       }
       close();
       window.phSessionMoveReset();
+      // 乐观退场：见 _phApplyMoveReleasedSessions（released 事实 → 投影
+      // 立即隐藏，轮询收敛）。注册在竞态守卫之前——工作空间/浏览目标切走
+      // 时实例同样已停，退场事实与浏览上下文无关。
+      _phApplyMoveReleasedSessions(payload?.releasedSessionIds, agent.id, movingRuntimeIds);
+      // 被移动会话含当前停靠 runtime 时切回工作台面（对齐 thread-delete /
+      // thread-archive 回退口径）：移动释放了实例，停留在已无 runtime 的
+      // 对话视图上表现为消息流僵死、输入无响应。判定用同步全局
+      // currentRuntimeAgentId（stale check 只信同步值）。
+      for (const movingRuntimeId of movingRuntimeIds.values()) {
+        if (movingRuntimeId && String(currentRuntimeAgentId || '') === movingRuntimeId) {
+          if (typeof selectWorkspaceSurface === 'function') selectWorkspaceSurface(agent.id);
+          break;
+        }
+      }
+      // 线程视图缓存随移动事实刷新（对齐 delete 链路）：移动的会话可能属
+      // 线程（整链移动），历史时间锚 / 归档呈现依赖的线程数据重拉。
+      if (Array.isArray(payload?.movedSessionIds) && payload.movedSessionIds.length > 0
+          && typeof window.refreshThreads === 'function') {
+        window.refreshThreads(true).catch(() => {});
+      }
       // 异步竞态守卫：移动期间工作空间或浏览目标被切换，不再重拉/覆盖当前
       // 页面——侧栏与切片由切换后的正常链路负责。
       const agentNow = getCurrentAgentRecord();

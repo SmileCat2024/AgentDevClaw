@@ -187,7 +187,7 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
       const hostTarget = resolveForwardHostTarget(req.query.agentId);
       if (hostTarget.scope === 'remote') {
         const passthrough = new URLSearchParams({ agentId: bareId(req.query.agentId) });
-        for (const key of ['sinceRevision', 'projectDir', 'projectId', 'query', 'archived', 'offset', 'limit']) {
+        for (const key of ['sinceRevision', 'projectDir', 'projectId', 'sessionId', 'query', 'archived', 'offset', 'limit']) {
           if (typeof req.query[key] === 'string' && req.query[key] !== '') {
             passthrough.set(key, req.query[key]);
           }
@@ -238,7 +238,16 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
       listOptions.wireTrim = true;
       let projectDir = typeof req.query.projectDir === 'string' ? req.query.projectDir.trim() : '';
       const requestProjectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
-      if (requestProjectId) {
+      // sessionId（单会话精确查询）：前端按 id 解析正式归属的权威路径——
+      // 切片缓存与项目实体缓存都不是归属事实源。与 projectDir/projectId
+      // 互斥（单查不叠加归属过滤）。
+      const requestSessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId.trim() : '';
+      if (requestSessionId) {
+        if (projectDir || requestProjectId) {
+          return res.status(400).json({ error: 'sessionId 与 projectDir/projectId 是互斥的过滤参数，不能同时提供' });
+        }
+        listOptions.sessionId = requestSessionId;
+      } else if (requestProjectId) {
         if (projectDir) {
           return res.status(400).json({ error: 'projectDir 与 projectId 是互斥的归属过滤参数，不能同时提供' });
         }

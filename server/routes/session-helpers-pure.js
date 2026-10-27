@@ -582,9 +582,18 @@ export function sliceSessionsForWire(sessions, options = {}) {
 
   let mainTotal = 0;
   let archivedTotal = 0;
+  // 单会话精确查询：绕过归属过滤与线程分桶——调用方点名要这条记录，
+  // 历史代成员（非 head，ADR-0032 列表口径不进切片）同样返回，归属字段
+  // （projectId / openDirectory）以索引记录为准。
+  const exactSessionId = cleanSessionText(options.sessionId);
   const threadMembership = options.threadMembership instanceof Map ? options.threadMembership : null;
   const filtered = [];
   for (const session of source) {
+    if (exactSessionId) {
+      if (cleanSessionText(session?.id) !== exactSessionId) continue;
+      filtered.push(session);
+      continue;
+    }
     if (options.studioFeatureId !== undefined
       && !cleanStudioFeatureIds(session?.studioFeatureIds).includes(cleanSessionText(options.studioFeatureId))) continue;
     if (projectIdentity) {
