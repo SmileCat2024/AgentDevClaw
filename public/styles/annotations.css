@@ -4,47 +4,61 @@
  * 视觉规则（design-system.md）：
  * - 标注视觉 = 琥珀虚线下划线 + 下半部荧光带反馈（评审迭代定稿），颜色引用
  *   --warning-color 语义 token，双主题自动跟随（浅色主题向文字色压暗补偿）；
- * - 弹窗走玻璃三件套配方（--glass-bg / --glass-blur / --glass-border）；
- * - 控件圆角 10、字号 13 整档、间距 8 的倍数；
+ * - 选中工具条 = 有容器、无形按钮：容器是轻玻璃浮条（--glass-bg 三件套
+ *   + 轻影），按钮为纯文字动作项，hover 才给极轻底，全部按钮同款同色；
+ * - 控件圆角胶囊、字号 12 整档、间距 8 的倍数；
  * - 显隐用配对声明 .anno-popover.hidden（项目无通用 .hidden 工具类）。
  */
 
 /* ── 对话流内标注块 ─────────────────────────────────────────────── */
-/* 覆盖 UA mark 默认（黄底黑字）：无底色纯虚线，排版完全跟随所在文本；
-   一个标注跨格式边界拆成多个 mark 时，虚线首尾天然连续 */
+/* 覆盖 UA mark 默认（黄底黑字）：无底色连续下划线，排版完全跟随所在文本；
+   一个标注跨格式边界拆成多个 mark 时，下划线首尾天然连续 */
 
 mark.anno-highlight {
   background: transparent;
   color: inherit;
-  text-decoration: underline;
-  text-decoration-style: dashed;
-  text-decoration-color: var(--warning-color);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 5px;
-  text-decoration-skip-ink: none; /* 降部字符（g/y/p）不断线，虚线保持连续 */
-  /* 多行标注时荧光带按行独立绘制（clone），否则下半部渐变只出现在最后一行 */
+  --anno-underline-color: var(--warning-color);
+  text-decoration: none;
+  /* 用背景绘制连续下划线，避免 text-decoration 的浏览器间距差异。 */
+  background-image: linear-gradient(var(--anno-underline-color), var(--anno-underline-color));
+  background-size: 100% 1px;
+  background-repeat: repeat-x;
+  /* 额外留出下方绘制空间，虚线与文字分开且不越出背景盒。 */
+  padding-bottom: 5px;
+  background-position: left bottom;
+  /* 多行标注时每行独立绘制装饰，避免背景只落在最后一行 */
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background-color 0.15s ease;
 }
 
 /* 可点击反馈（评审定稿 STYLE/02 荧光带）：hover 下半部淡琥珀带，暗示可点删除 */
 mark.anno-highlight:hover {
-  background: linear-gradient(0deg,
-    color-mix(in srgb, var(--warning-color) 24%, transparent) 0 55%, transparent 55%);
+  background-image:
+    linear-gradient(0deg,
+      color-mix(in srgb, var(--warning-color) 14%, transparent) 0 55%, transparent 55%),
+    linear-gradient(var(--anno-underline-color), var(--anno-underline-color));
+  background-size: 100% 100%, 100% 1px;
+  background-position: left top, left bottom;
+  background-repeat: no-repeat, repeat-x;
 }
 
 /* 同一标注跨文本类型拆成多个 mark：鼠标悬停任一段时，其余段同步显示
    与真实 :hover 相同的淡琥珀反馈；点击本身不叠加额外高亮 */
 mark.anno-highlight.anno-hover-peer {
-  background: linear-gradient(0deg,
-    color-mix(in srgb, var(--warning-color) 24%, transparent) 0 55%, transparent 55%);
+  background-image:
+    linear-gradient(0deg,
+      color-mix(in srgb, var(--warning-color) 14%, transparent) 0 55%, transparent 55%),
+    linear-gradient(var(--anno-underline-color), var(--anno-underline-color));
+  background-size: 100% 100%, 100% 1px;
+  background-position: left top, left bottom;
+  background-repeat: no-repeat, repeat-x;
 }
 
-/* 浅色主题下 #ffc107 与白底对比不足，向文字色压暗一档 */
+/* 浅色主题下 warning 色与白底对比不足，向文字色压暗一档 */
 body[data-theme="light"] mark.anno-highlight {
-  text-decoration-color: color-mix(in srgb, var(--warning-color) 75%, var(--text-primary));
+  --anno-underline-color: color-mix(in srgb, var(--warning-color) 75%, var(--text-primary));
 }
 
 /* 面板定位命中时的闪烁提示：下半部荧光带脉冲（同 STYLE/02 半遮语言，终态透明） */
@@ -61,20 +75,21 @@ mark.anno-flash {
 }
 
 /* ── 浮动弹窗（选中工具条 / 删除确认）──────────────────────────── */
+/* 现代轻量选择器：容器是整体浮条，按钮无形（纯文字，hover 极轻底） */
 
 .anno-popover {
   position: fixed;
   z-index: 1200; /* 高于消息区与 composer（1000），低于全屏 overlay */
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px;
+  gap: 2px;
+  padding: 3px;
   border-radius: 10px;
   background: var(--glass-bg);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
   border: 1px solid var(--glass-border);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
 }
 
 .anno-popover.hidden {
@@ -83,32 +98,24 @@ mark.anno-flash {
 
 .anno-popover-btn {
   font: inherit;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   line-height: 1;
-  padding: 7px 14px;
+  padding: 6px 10px;
   border: none;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: 7px; /* hover 底的圆角，跟随容器内衬 */
+  background: transparent; /* 无形按钮：无底无边，纯文字动作项 */
   color: var(--text-primary);
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.12s ease;
 }
 
 .anno-popover-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-}
-
-body[data-theme="light"] .anno-popover-btn {
-  background: #f0f0f0;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 body[data-theme="light"] .anno-popover-btn:hover {
-  background: #e4e4e4;
-}
-
-.anno-delete-btn {
-  color: var(--error-color);
+  background: rgba(0, 0, 0, 0.06);
 }
 
 /* ── rail 面板列表 ──────────────────────────────────────────────── */
