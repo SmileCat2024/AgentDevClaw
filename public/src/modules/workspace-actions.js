@@ -757,17 +757,19 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       return;
     }
     if (!activeAgent?.id || !action.sessionId) return;
-    const sessionTitle = action.sessionId;
+    const targetAgent = allAgents.find((item) => item.id === activeAgent.id) || null;
+    const currentSessions = getWorkspaceSessions(targetAgent);
+    const deletedSession = currentSessions.find((session) => session?.id === action.sessionId) || null;
+    // 确认文案优先用会话标题：裸 session id（session-1793106357101-55ff00）对
+    // 用户没有辨识意义。找不到会话记录（竞态/列表滞后）时回退 id。
+    const sessionTitle = deletedSession?.title || action.sessionId;
     const confirmMsg = t('workspace_session_delete_confirm').replace('{{id}}', sessionTitle);
     const confirmed = window.confirm(confirmMsg);
     if (!confirmed) {
       return;
     }
 
-    const targetAgent = allAgents.find((item) => item.id === activeAgent.id) || null;
     const deletedWasActive = action.sessionId === (targetAgent?.active_workspace_session_id || targetAgent?.workspace_sessions?.activeSessionId || null);
-    const currentSessions = getWorkspaceSessions(targetAgent);
-    const deletedSession = currentSessions.find((session) => session?.id === action.sessionId) || null;
     const runtimeAgent = allAgents.find((item) => (
       item?.source !== 'prebuilt'
       && String(item?.parent_id || '') === String(activeAgent.id)

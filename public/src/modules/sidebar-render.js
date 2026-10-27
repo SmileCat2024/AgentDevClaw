@@ -963,6 +963,24 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
 
 let lastAgentListRenderSignature = '';
 
+// 右键 / ⋯ 菜单打开期间抑制全量重建（对齐布局拖拽 isInteracting 与重命名
+// .editing 守卫）：菜单锚定的条目被 innerHTML 替换会撤走锚点、丢 hover 内联
+// 状态，表现为菜单使用中的视觉闪动。抑制不是丢弃——置位 pending 标志，菜
+// 单关闭后的下一次 renderAgentList 调用（轮询 tick / SSE 事件，≤3s）立即
+// 补上被延迟的重建（签名机制会判定是否真的需要重建）。
+const CONTEXT_MENU_ELEMENT_IDS = [
+  'ctx-menu', 'agent-context-menu', 'session-context-menu',
+  'compact-context-menu', 'project-context-menu', 'feature-repo-context-menu',
+];
+let _sidebarRenderSuppressedByMenu = false;
+
+function anyContextMenuOpen() {
+  for (const id of CONTEXT_MENU_ELEMENT_IDS) {
+    if (document.getElementById(id)?.classList?.contains('open')) return true;
+  }
+  return false;
+}
+
 function getAgentListRenderSignature() {
   // 等待表面高亮事实：无 runtime 态的条目高亮与宿主让位按等待会话身份
   // 判定（isRuntimeItemActive / isAgentActive 的等待分支，依赖
@@ -1061,6 +1079,11 @@ function getAgentListRenderSignature() {
 function renderAgentList() {
   if (window.ClawSidebarLayout?.isInteracting()
     || document.querySelector('.agent-runtime-item.editing')) return;
+  if (anyContextMenuOpen()) {
+    _sidebarRenderSuppressedByMenu = true;
+    return;
+  }
+  _sidebarRenderSuppressedByMenu = false;
   const nextSignature = getAgentListRenderSignature();
   if (nextSignature === lastAgentListRenderSignature) {
     updateCurrentAgentChrome();

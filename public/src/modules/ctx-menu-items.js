@@ -357,12 +357,45 @@ async function ctxRestartAgent(target) {
 async function ctxStopAgent(target) {
   const { ns, id, sessionId, variant } = target;
 
+  // 与归档源清理（requestArchivedSourceRuntimeCleanup）共用乐观退场：提交即
+  // 注册隐藏，条目不等轮询快照摘除（快照一轮 ~3s，期间条目原样挂着，表现为
+  // 「点关闭后卡在那儿」）。远程条目不经本地投影过滤（isRuntimeStopPending
+  // 只覆盖本地投影），不注册。
+  let stopRegistry = null;
   try {
     const serverAgentId = (variant === 'managed-runtime') ? ns : id;
     const agent = getExternalRuntimeAgent(serverAgentId);
     const affectedRuntimeId = id || getRuntimeId(agent) || null;
     // Clear cached data — runtime is being stopped
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
+    if (variant !== 'remote' && typeof markPendingRuntimeStop === 'function') {
+      if (variant === 'child') {
+        const hostId = window.NavigationCore.resolveHostAgentId(agent, serverAgentId);
+        const sId = sessionId || agent?.active_workspace_session_id || null;
+        if (hostId && sId) stopRegistry = { agentId: hostId, sessionId: sId };
+      } else if (variant === 'external') {
+        if (affectedRuntimeId) stopRegistry = { agentId: '', sessionId: '', runtimeId: affectedRuntimeId };
+      } else {
+        stopRegistry = {
+          agentId: serverAgentId,
+          sessionId: sessionId || agent?.active_workspace_session_id || '',
+          runtimeId: affectedRuntimeId || '',
+        };
+      }
+      if (stopRegistry && (stopRegistry.agentId || stopRegistry.runtimeId)) {
+        if (!stopRegistry.runtimeId) stopRegistry.runtimeId = affectedRuntimeId || '';
+        // 注册/释放共用同一三元组（pendingRuntimeStopKey 按 runtimeId 优先），
+        // 任一侧自行拼 key 都可能与另一侧不对称，导致失败后无法释放。
+        markPendingRuntimeStop(
+          stopRegistry.agentId || '',
+          stopRegistry.sessionId || '',
+          stopRegistry.runtimeId,
+        );
+        if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+      } else {
+        stopRegistry = null;
+      }
+    }
     if (variant === 'external') {
       await closeSidebarExternalRuntime(agent);
     } else if (variant === 'remote') {
@@ -392,6 +425,16 @@ async function ctxStopAgent(target) {
       }
     }
   } catch (e) {
+    // stop 未被接受：解除乐观隐藏让条目回到可见，由轮询快照恢复呈现
+    // （与归档清理链路同款回滚）。
+    if (stopRegistry && typeof releasePendingRuntimeStop === 'function') {
+      releasePendingRuntimeStop(
+        stopRegistry.runtimeId || '',
+        stopRegistry.agentId || '',
+        stopRegistry.sessionId || '',
+      );
+      if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+    }
     window.alert(t('close_failed') + (e && e.message ? e.message : e));
   }
 }
@@ -1160,6 +1203,11 @@ function dispatchCtxAction(action, target) {
         try {
           await ctxThreadRequest(threadId, '/protoclaw/threads/' + encodeURIComponent(threadId) + '/delete');
           await afterThreadMutation();
+          // 与 thread-archive 同口径：删除事务停掉整链 runtime，若被删会话
+          // 正停靠在前台，切回工作台面，避免停留在一个已无 runtime 的对话上。
+          if (id && currentRuntimeAgentId === id) {
+            selectWorkspaceSurface(ns);
+          }
         } catch (error) {
           ClawToast.error(error?.message || 'Thread delete failed');
         }
