@@ -183,7 +183,7 @@ dev agent 注入技能：`agent-studio-workflow`（权威工作流）+ `agentdev
 - runtime 按需拉起：首开经首页「开始对话」事务（有活动线程恢复其 head，无则空会话等首条消息）；`/threads/:id/input` 的 `ensureHeadRuntime` 唤起闸共用
 - 线程宿主判定声明化：APP metadata 声明 `threadHost: true`，宿主启动按发现结果注册进 [host-agents.js](server/thread-control/host-agents.js) 派生集合（可拔插约束：公共代码不按 APP ID 硬编码）；测试用 `registerThreadHostAgents` 构造场景
 - 工作空间形态由 metadata `kind: "workspace"` 声明驱动：前端 `isWorkspaceHostUnit` 读 kind，点开进首页、不经 start_agent 拉起 runtime（纯 UI 壳由 `launchMode: "ui-only"` 另行表达）。新工作空间只需正确声明 kind；未声明的 prebuilt 条目会走「无会话 start_agent 直接跳对话」的普通 agent 路径
-- 线程宿主会话裁剪通用会话操作：slash /trim /summary 经命令 `applies` 谓词对线程宿主会话隐藏（线程事实驱动，coder 同口径）；ctx 会话操作菜单仍按 `CTX_SESSION_OPS_AGENTS` 白名单门控
+- 线程宿主会话裁剪通用会话操作：slash /trim /summary 经命令 `applies` 谓词对线程宿主会话隐藏（线程事实驱动，coder 同口径）；ctx 会话操作菜单仍按 `CTX_SESSION_OPS_AGENTS` 白名单门控；精简页「归档原会话」勾选与分支归档意图（`archiveOriginal`）对线程宿主会话隐藏/钳制（`window.isThreadHostAgentId` 同口径——Session 归档语义在线程下只给链中旧快照打不可见标志），非线程会话（agent-studio）与远程透传契约不变
 
 ## Plain Agent 与 claw CLI
 

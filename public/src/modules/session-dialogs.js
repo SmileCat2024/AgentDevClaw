@@ -40,6 +40,13 @@ function newIdempotencyKey() {
 }
 
 window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
+  // 线程宿主（ADR-0032）：分支即新线程，源会话留在原线程链内——「归档原
+  // 会话」只对链中旧快照打不可见标志，与用户「归档这条对话」的预期错位，
+  // 钳制关闭。远程会话不在本地线程索引（保守 false），归档透传契约不变。
+  if (archiveAfter && typeof window.isThreadHostAgentId === 'function'
+    && window.isThreadHostAgentId(agentId, sessionId)) {
+    archiveAfter = false;
+  }
   branchDialogState = { agentId, sessionId, rounds: [], preamblePercent: 0, selectedIdx: -1, archiveAfter };
   closeCompactMenu();
   // Update title and submit button to reflect archive behavior

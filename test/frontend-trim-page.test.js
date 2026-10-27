@@ -458,3 +458,62 @@ describe('trim page submit: thread succession vs session navigation', () => {
     assert.equal(calls.refreshThreads, 0, 'thread reconciliation must not run for plain sessions');
   });
 });
+
+describe('trim page archive option vs thread-carried sessions (ADR-0032)', () => {
+  // 契约：线程会话的精简是同对话内上下文接力，「归档原会话」是 Session
+  // 时代的列表语义（归档链中旧快照无可见效果）——选项不得出现，提交也
+  // 不得携带归档；非线程/索引未就绪会话保持原行为。
+  const archiveOptionDeps = (compactResult, captured) => ({
+    createCompactedResumeSession: async (_agentId, _sessionId, _strategy, _a, _b, _policy, options) => {
+      captured.options = options;
+      return compactResult;
+    },
+    markSessionLoading: () => {},
+    clearSessionLoading: () => {},
+    bumpNavigationGuard: () => {},
+    _navigationGuardEpoch: 1,
+    beginSidebarOperation: () => ({ operationId: 'op-1', title: '' }),
+    getSidebarOperation: () => ({ operationId: 'op-1', title: '' }),
+    updateSidebarOperation: () => {},
+    finishSidebarOperation: () => {},
+    renderCurrentMainView: () => {},
+    getCurrentAgentRecord: () => null,
+    loadAgents: async () => {},
+    allAgents: [],
+    getWorkspaceSessionById: () => null,
+    getPathLeaf: () => '',
+    currentRuntimeAgentId: '',
+  });
+
+  it('thread session: hides the archive row and never submits archiveOriginal', async () => {
+    const captured = {};
+    const overrides = archiveOptionDeps({ session: { id: 'session-B' }, threadSuccession: { applied: true }, revision: 1 }, captured);
+    const { ctx, elements } = createTrimPage(null, {}, overrides);
+    // thread-store 挂载形态：window.isThreadHostAgentId（真实前端全局）
+    ctx.window.isThreadHostAgentId = () => true;
+    ctx.window.refreshThreads = async () => ({ ok: true });
+
+    // 入口带归档意图（archiveAfter=true）也被钳制：初始不勾选
+    await ctx.window.openTrimPage('programming-helper', 'session-A', true);
+    assert.equal(elements.get('trim-page-archive-row').style.display, 'none', 'archive row must be hidden for thread sessions');
+    assert.equal(elements.get('trim-page-archive-toggle').checked, false, 'archive toggle starts unchecked');
+
+    // 线程索引在打开后才就绪的竞态：强行勾上，提交仍不得归档
+    elements.get('trim-page-archive-toggle').checked = true;
+    await ctx.window.submitTrimPage();
+    assert.equal(captured.options?.archiveOriginal, false, 'submit clamps archiveOriginal for thread sessions');
+  });
+
+  it('non-thread session: keeps the archive row and entry-provided initial state', async () => {
+    const overrides = archiveOptionDeps({ session: { id: 'session-B' }, revision: 1 }, {});
+    const { ctx, elements } = createTrimPage(null, {}, overrides);
+    ctx.window.isThreadHostAgentId = () => false;
+    ctx.window.refreshThreads = async () => ({ ok: true });
+
+    await ctx.window.openTrimPage('agent-studio', 'session-S');
+    assert.notEqual(elements.get('trim-page-archive-row').style.display, 'none', 'archive row stays visible for plain sessions');
+
+    await ctx.window.openTrimPage('agent-studio', 'session-S', true);
+    assert.equal(elements.get('trim-page-archive-toggle').checked, true, 'entry archive intent is honored for plain sessions');
+  });
+});

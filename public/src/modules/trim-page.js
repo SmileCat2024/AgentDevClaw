@@ -53,6 +53,7 @@ const trimPageRatioInput = document.getElementById('trim-page-ratio-input');
 const trimPageReadout = document.getElementById('trim-page-readout');
 const trimPageSummaryToggle = document.getElementById('trim-page-summary-toggle');
 const trimPageArchiveToggle = document.getElementById('trim-page-archive-toggle');
+const trimPageArchiveRow = document.getElementById('trim-page-archive-row');
 const trimPageKeepSkillToggle = document.getElementById('trim-page-keep-skill-toggle');
 const trimPageKeepSkillControl = document.getElementById('trim-page-keep-skill-control');
 const trimPageKeepSkillValue = document.getElementById('trim-page-keep-skill-value');
@@ -64,6 +65,17 @@ const SKILL_INVOKE_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, Infinity];
 
 function L(zh, en) {
   return currentLanguage === 'zh' ? zh : en;
+}
+
+/**
+ * 线程宿主判定（ADR-0032）：线程会话的精简是同一对话内的上下文接力，
+ * 「归档原会话」是 Session 时代的列表语义——归档链中旧快照对用户无可见
+ * 效果，与「归档这条对话」的预期错位。线程索引未就绪（首拉前）时保守
+ * 回落 Session 语义，与摘要确认文案（workspace-actions）同口径。
+ */
+function isThreadCarriedSession(agentId, sessionId) {
+  return typeof window.isThreadHostAgentId === 'function'
+    && window.isThreadHostAgentId(agentId, sessionId);
 }
 
 function fmtChars(n) {
@@ -152,6 +164,9 @@ function computeSafeCutSet() {
 /* ── Open / close ── */
 window.openTrimPage = async (agentId, sessionId, archiveAfter = false) => {
   const seq = ++trimPageSeq;
+  // 线程会话不展示「归档原会话」（见 isThreadCarriedSession 注释）
+  const onThread = isThreadCarriedSession(agentId, sessionId);
+  if (trimPageArchiveRow) trimPageArchiveRow.style.display = onThread ? 'none' : '';
   trimPageState = {
     agentId, sessionId,
     messages: [], rounds: [], preambleCharCount: 0, preamblePercent: 0,
@@ -162,7 +177,7 @@ window.openTrimPage = async (agentId, sessionId, archiveAfter = false) => {
   };
   trimPageKeepSkillToggle.checked = true;
   trimPageSummaryToggle.checked = false;
-  trimPageArchiveToggle.checked = Boolean(archiveAfter);
+  trimPageArchiveToggle.checked = onThread ? false : Boolean(archiveAfter);
   renderSkillStepper();
   closeCompactMenu();
 
@@ -591,8 +606,11 @@ function updateReadout() {
 window.submitTrimPage = async () => {
   const st = trimPageState;
   const { agentId, sessionId, keepSkillInvokes } = st;
-  // 归档与摘要跟随勾选框实时值——入口形态只决定初始勾选，不锁死行为
-  const archiveAfter = trimPageArchiveToggle.checked;
+  // 归档与摘要跟随勾选框实时值——入口形态只决定初始勾选，不锁死行为。
+  // 线程会话提交时重查一次：索引在打开后才就绪时，钳制勾选漏传服务端。
+  const archiveAfter = isThreadCarriedSession(agentId, sessionId)
+    ? false
+    : trimPageArchiveToggle.checked;
   if (!agentId || !sessionId || st.loading) return;
 
   let policy;

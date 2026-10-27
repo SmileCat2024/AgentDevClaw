@@ -489,4 +489,39 @@ describe('frontend session write request shapes (R2-02)', () => {
       operationId: 'op-branch',
     });
   });
+
+  // ADR-0032：线程会话的分支即新线程，「归档原会话」只对链中旧快照打
+  // 不可见标志——本地线程会话钳制关闭；非线程会话归档意图原样透传。
+  const branchWithThreadFlag = async (isThread) => {
+    const requests = [];
+    const { ctx } = dialogsSandbox({ requests });
+    await ctx.window.RemoteConnections.refresh();
+    ctx.run(`
+      window.RemoteConnections.waitForRuntimeForSession = async function () { return null; };
+      window.switchAgent = async function () {};
+      window.isThreadHostAgentId = function () { return ${isThread}; };
+      var getRuntimeId = function (agent) { return (agent && agent.id) || ''; };
+      var waitForSidebarTargetRuntime = function () { return Promise.resolve(null); };
+    `);
+    await ctx.run(`window.openBranchDialog('programming-helper', 'session-local-1', true)`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await ctx.run(`
+      branchDialogState.selectedIdx = 0;
+      window.submitBranch();
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const call = requests.find((r) => r.url === '/protoclaw/sessions/branch');
+    assert.ok(call, 'branch call fired');
+    return JSON.parse(call.init.body);
+  };
+
+  it('clamps archiveOriginal for thread-carried local sessions', async () => {
+    const body = await branchWithThreadFlag(true);
+    assert.notEqual(body.archiveOriginal, true, 'thread-carried session must not archive the original');
+  });
+
+  it('keeps archiveOriginal passthrough for non-thread local sessions', async () => {
+    const body = await branchWithThreadFlag(false);
+    assert.equal(body.archiveOriginal, true, 'plain session keeps the archive intent');
+  });
 });
