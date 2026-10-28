@@ -351,7 +351,7 @@ describe('getAgentListRenderSignature: 接续窗口事实进签名', () => {
       isRuntimeSuspended: () => false,
       isSseActive: () => false,
     });
-    ctx.allAgents = [];
+    ctx.allAgents = [{ id: 'coder', sidebar_threads: [{ threadId: 'wt-1', headSessionId: 'from', title: '工作对话', handoffStartedAt: 0 }] }];
     ctx.window.ClawThreads = {
       threads: [{
         threadId: 'wt-1', headSessionId: 'from', title: '工作对话',
@@ -382,13 +382,13 @@ describe('getAgentListRenderSignature: 接续窗口事实进签名', () => {
   it('挡板立起 / head 存活翻转改变签名（占位出现与退场都能触发重渲）', () => {
     const ctx = loadSignature();
     const base = ctx.run('getAgentListRenderSignature()');
-    ctx.window.ClawThreads.threads[0].handoffStartedAt = Date.now();
+    ctx.allAgents[0].sidebar_threads[0].handoffStartedAt = Date.now();
     const barrierUp = ctx.run('getAgentListRenderSignature()');
     assert.notEqual(barrierUp, base, '挡板立起必须改变签名');
     ctx.window.ClawThreads.threads[0].headRuntimeRunning = true;
     const headRunning = ctx.run('getAgentListRenderSignature()');
-    assert.notEqual(headRunning, barrierUp, 'head 存活翻转必须改变签名');
-    ctx.window.ClawThreads.threads[0].handoffStartedAt = 0;
+    assert.equal(headRunning, barrierUp, 'independent thread runtime observations do not own sidebar existence');
+    ctx.allAgents[0].sidebar_threads[0].handoffStartedAt = 0;
     ctx.window.ClawThreads.threads[0].headRuntimeRunning = false;
     const backToBase = ctx.run('getAgentListRenderSignature()');
     assert.equal(backToBase, base, '事实复原后签名复原（退场同样被感知）');

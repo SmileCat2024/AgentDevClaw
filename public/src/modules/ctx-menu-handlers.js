@@ -115,7 +115,7 @@ stopAgentAction.addEventListener('click', async () => {
       await invoke('stop_agent', { agentId: contextMenuAgentId });
     }
     closeAgentContextMenu();
-    await refreshSidebarRuntimeAfterMutation(500);
+    await refreshSidebarRuntimeAfterMutation();
     if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       const viaHostEntry = contextMenuAgentMode === 'external-runtime' || contextMenuAgentMode === 'child-runtime';
       const fallbackTarget = viaHostEntry

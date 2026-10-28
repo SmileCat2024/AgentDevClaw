@@ -36,6 +36,8 @@ import {
   GLOBAL_SHARED_AGENT_ID,
 } from '../shared/process-mode.js';
 import { releaseRuntimeState } from '../runtime-call-envelope.js';
+import { withSessionOperation } from '../shared/session-operation.js';
+import { getThreadIntegration } from '../thread-control/thread-integration.js';
 import { featureCommunicationStore } from './feature-communication.js';
 import {
   ensureAssemblyWorkspaceBase, ensureAssemblyWorkspaceDependencies,
@@ -216,6 +218,22 @@ export function createAgentStartupFns(deps) {
       ? requestedSessionId
       : (preferredSessionId || existing?.selectedSessionId || agent.workspace_sessions?.activeSessionId || null);
 
+    return withSessionOperation(agent.id, resolvedSessionId, 'start', () =>
+      startManagedSession(agent, resolvedSessionId, runtimeOptions));
+  }
+
+  async function startManagedSession(agent, resolvedSessionId, runtimeOptions) {
+    const existing = getAgentRuntime(agent.id, resolvedSessionId);
+    if (resolvedSessionId) {
+      await getThreadIntegration().assertSessionStartable(agent.id, resolvedSessionId);
+      const index = await readSessionIndex(agent.id);
+      const record = index.sessions.find(session => session.id === resolvedSessionId);
+      if (!record || record.archived) {
+        throw Object.assign(new Error(record ? 'Restore the archived session before starting it' : 'Session not found'), {
+          code: record ? 'session_archived' : 'session_not_found', status: record ? 409 : 404, statusCode: record ? 409 : 404,
+        });
+      }
+    }
     // ticket 046：PH 归属释放窗口（项目改绑 / 会话归属转移）先于一切复用与
     // 启动判定。下方 existing 复用会直接返回按旧归属装配的存活实例；spawn
     // 会按旧索引记录绑旧目录——两者都会在转移落盘后变成幽灵实例，必须在此
@@ -288,6 +306,12 @@ export function createAgentStartupFns(deps) {
       } catch {}
     }
 
+    if (existing?.stopping) {
+      const error = new Error('Session runtime is closing; wait for retirement before starting it again');
+      error.code = 'session_closing';
+      error.statusCode = 409;
+      throw error;
+    }
     if (isManagedRuntimeRunning(existing)) {
       if (!resolvedSessionId || existing.selectedSessionId === resolvedSessionId) {
         return buildStatus(agent.id, resolvedSessionId);
@@ -492,6 +516,16 @@ export function createAgentStartupFns(deps) {
 
     managedAgents.set(runtime.key, runtime);
     child.on('message', (message) => {
+      if (message?.type === 'session-exited') {
+        const retired = listRuntimesByProcess(child).find(rt => rt.selectedSessionId === message.sessionId);
+        if (retired) {
+          retired.persistenceConfirmed = message.persisted === true;
+          retired.stopped = true;
+          releaseRuntimeState(retired.key);
+          featureCommunicationStore.closeSession(retired.agentId, retired.selectedSessionId);
+        }
+        return;
+      }
       if (message?.type !== 'runtime-identity') return;
       if (message.agentId !== agent.id || message.sessionId !== (resolvedSessionId || null)) return;
       const viewerAgentId = cleanSessionText(message.viewerAgentId);

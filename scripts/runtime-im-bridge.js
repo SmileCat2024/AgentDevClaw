@@ -264,12 +264,12 @@ export function createIMBridge(ctx) {
    * Handle an IPC message for this session's IM bridge.
    * Called by the central IPC dispatcher (not registered on process directly).
    */
-  function handleIPCMessage(msg) {
+  async function handleIPCMessage(msg) {
       if (!msg || typeof msg !== 'object') return;
 
       if (msg.type === 'mount-im-carrier' && msg.carrier) {
         console.log(`[IM-Line] IPC received: mount carrier "${msg.carrier}"`);
-        mountCarrierFeature(msg.carrier).catch(err => {
+        await mountCarrierFeature(msg.carrier).catch(err => {
           console.error('[IM-Line] Dynamic mount failed:', err);
         });
       } else if (msg.type === 'unmount-im-carrier') {
@@ -280,12 +280,12 @@ export function createIMBridge(ctx) {
           const featureName = getIMChannel(carrier)?.featureName || '';
           const agent = ctx.agent;
           if (typeof agent?.removeFeature === 'function') {
-            agent.removeFeature(featureName);
+            await agent.removeFeature(featureName);
           } else {
             // fallback: 手动清理工具和 feature
             const feature = agent?.features?.get?.(featureName);
             if (feature && typeof feature.onDestroy === 'function') {
-              feature.onDestroy({ agent }).catch(err => {
+              await feature.onDestroy({ agent }).catch(err => {
                 console.warn(`[IM-Line] onDestroy error for ${featureName}:`, err.message);
               });
             }

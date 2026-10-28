@@ -13,10 +13,12 @@ import { readWorkspaceState } from './workspace.js';
 import {
   trimSessionRecordForWire,
   sliceSessionsForWire,
+  buildChildRuntimeAgent,
 } from './session-helpers-pure.js';
 import { readWorkspaceVisibilityOverrides } from './workspace-settings.js';
 import { getThreadControl } from '../thread-control/thread-controller.js';
 import { readThreadMembership } from '../shared/thread-membership.js';
+import { readSidebarSnapshot } from './sidebar-snapshot.js';
 
 // ── Connected Agents Query ───────────────────────────────────────
 // Pure query logic: assembles the full connected-agents list from
@@ -105,36 +107,21 @@ export function createConnectedAgentsQuery(deps) {
   // 存活 Runtime 或 rotating 接续挡板（持久化事务事实）保留 APP 入口；
   // 其余未归档线程资产（open/hold/rotation_failed 等）不代表运行态，
   // 不撑入口（ADR-0025 原始裁决，2026-10-18 回摆撤销资产驱动扩展）。
-  async function hasRunningSessions(agentId) {
+  async function hasRunningSessions(agentId, sidebarThreads) {
     const hasRuntime = listAgentRuntimes(agentId).some((runtime) => (
       isManagedRuntimeRunning(runtime) && Boolean(runtime.selectedSessionId)
     ));
     if (hasRuntime) return true;
 
-    try {
-      const control = resolveThreadControl();
-      const [threads, archiveEntries] = await Promise.all([
-        control.core.listThreads({ agentId }),
-        control.archive.list().catch(() => ({})),
-      ]);
-      // listThreads 是 index 摘要（无 deleting）：摘要初筛 rotating / 归档后，
-      // 按全量记录排除删除事务窗口——deleting 只写在记录文件上。
-      const candidates = threads.filter((thread) => (
-        String(thread?.agentId || '').trim() === agentId
-          && thread?.status === 'rotating'
-          && !Object.hasOwn(archiveEntries, thread?.threadId)
-      ));
-      for (const thread of candidates) {
-        const record = await control.core.getThread(thread?.threadId).catch(() => null);
-        if (record && record.deleting !== true) return true;
-      }
-      return false;
-    } catch {
-      return false;
-    }
+    return sidebarThreads.some(thread => thread.agentId === agentId
+      && thread.status === 'rotating' && !thread.archivedAt && !thread.deleting);
   }
 
   async function getConnectedAgents() {
+    return readSidebarSnapshot(resolveThreadControl(), projectConnectedAgents);
+  }
+
+  async function projectConnectedAgents(sidebarThreads) {
     const prebuiltAgents = await getAgentsLight();
     const viewerData = await readViewerJson('/api/agents').catch(() => ({ agents: [] }));
     const runtimeAgents = Array.isArray(viewerData.agents) ? viewerData.agents : [];
@@ -179,7 +166,7 @@ export function createConnectedAgentsQuery(deps) {
         ...(visibility === 'on-demand' ? await (async () => {
           const overrides = await readVisibilityOverrides();
           const visibilityPolicy = overrides[agent.id] === 'always' ? 'always' : 'auto';
-           const running = await hasRunningSessions(agent.id);
+          const running = await hasRunningSessions(agent.id, sidebarThreads);
           return {
             visibilityPolicy,
             hasRunningSessions: running,
@@ -189,6 +176,16 @@ export function createConnectedAgentsQuery(deps) {
         workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agent.id))
           ? await buildPhProjectScopedSnapshot(agent.id, workspaceSessions)
           : await buildWireSessionsSnapshot(agent.id, workspaceSessions),
+        // Thread identity and runtime presence share this read transaction.
+        // Do not join this with the independently polled thread board in the UI.
+        sidebar_threads: await Promise.all(sidebarThreads.filter(thread => thread.agentId === agent.id
+          && (thread.status === 'rotating' || listAgentRuntimes(agent.id).some(runtime =>
+            isManagedRuntimeRunning(runtime) && (thread.headSessionId === runtime.selectedSessionId
+              || thread.sessionIds.includes(runtime.selectedSessionId))))).map(async thread => {
+          const meta = await readWorkspaceSessionMeta(thread.agentId, thread.headSessionId);
+          return { ...thread, headSessionTitle: meta.active_workspace_session_title || thread.title,
+            headProjectId: meta.project_id || '', headProjectDir: meta.open_directory || '' };
+        })),
         workspace_data: {},
         workspace_state: isWorkGroup
           ? { forms: {}, openDirectory: '', updatedAt: null, gcChats }
@@ -219,19 +216,21 @@ export function createConnectedAgentsQuery(deps) {
     // its ID while the async APP/session projection above is in flight.
     const managedRuntimes = Array.from(managedAgents.values());
     const managedRuntimeByViewerId = new Map();
-    const stoppingViewerRuntimeIds = new Set();
+    const retiredViewerRuntimeIds = new Set();
     for (const runtime of managedRuntimes) {
       const viewerAgentId = cleanSessionText(runtime?.viewerAgentId);
       if (!viewerAgentId) continue;
-      if (runtime?.stopping) {
-        stoppingViewerRuntimeIds.add(viewerAgentId);
-      } else if (runtime.process && runtime.process.exitCode === null && !runtime.stopped) {
+      if (!isManagedRuntimeRunning(runtime)) {
+        // Viewer disconnect propagation is not the lifetime authority for hosted
+        // runtimes. A retired Session must not fall through as a viewer-only child.
+        retiredViewerRuntimeIds.add(viewerAgentId);
+      } else {
         managedRuntimeByViewerId.set(viewerAgentId, runtime);
       }
     }
 
     for (const runtimeAgent of runtimeAgents) {
-      if (stoppingViewerRuntimeIds.has(String(runtimeAgent.id || ''))) continue;
+      if (retiredViewerRuntimeIds.has(String(runtimeAgent.id || ''))) continue;
       const managedRuntime = managedRuntimeByViewerId.get(String(runtimeAgent.id || '')) || null;
       if (managedRuntime) {
         const runtimeMeta = await readWorkspaceSessionMeta(managedRuntime.agentId, managedRuntime.selectedSessionId);
@@ -362,6 +361,19 @@ export function createConnectedAgentsQuery(deps) {
       });
     }
 
+    // A READY successor may have registered after the Viewer list was read.
+    // Hosted readiness is direct evidence, not a placeholder inferred from a
+    // thread board. Include every ready instance, not only the host's primary.
+    const projectedIds = new Set(connectedAgents.filter(agent => agent.source !== 'prebuilt').map(agent => agent.runtime_session_id));
+    for (const [viewerId, runtime] of managedRuntimeByViewerId) {
+      if (!runtime.ready || projectedIds.has(viewerId)) continue;
+      const meta = await readWorkspaceSessionMeta(runtime.agentId, runtime.selectedSessionId);
+      connectedAgents.push(buildChildRuntimeAgent({ id: viewerId, connected: true,
+        pid: runtime.process?.pid, created_at: runtime.startedAt }, {
+        agentId: runtime.agentId, sessionId: runtime.selectedSessionId, sessionMeta: meta,
+      }));
+    }
+
     for (const managed of connectedAgents) {
       if (managed.source !== 'prebuilt') continue;
       const status = buildStatus(managed.id);
@@ -412,7 +424,18 @@ export function createConnectedAgentsQuery(deps) {
       })
     );
 
-    return connectedAgents;
+    // Metadata and notification reads above yield to lifecycle mutations. Recheck
+    // hosted ownership at publication so a close/restart during those reads
+    // cannot publish a retired instance. Viewer-only external agents are intact.
+    const currentRuntimes = new Set(managedAgents.values());
+    return connectedAgents.filter((agent) => {
+      const runtime = managedRuntimeByViewerId.get(String(agent.runtime_session_id || agent.id || ''));
+      if (!runtime || (isManagedRuntimeRunning(runtime) && currentRuntimes.has(runtime))) return true;
+      if (agent.source !== 'prebuilt') return false;
+      Object.assign(agent, { status: 'stopped', pid: null, runtime_session_id: null,
+        connected: false, callActive: false, message_count: 0, pending_input_count: null });
+      return true;
+    });
   }
 
   return { getConnectedAgents };

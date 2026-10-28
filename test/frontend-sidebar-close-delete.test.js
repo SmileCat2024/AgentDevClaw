@@ -334,6 +334,14 @@ describe('R4 ctxStopAgent optimistic runtime retirement', () => {
     );
   });
 
+  it('does not undo a successful stop when the following refresh fails', async () => {
+    const h = menuHarness();
+    h.ctx.refreshSidebarRuntimeAfterMutation = async () => { throw new Error('offline'); };
+    h.ctx.console = { ...console, warn() {} };
+    await h.ctx.run(`ctxStopAgent({ ns: 'programming-helper', id: 'runtime-1', sessionId: 's1', variant: 'managed-runtime' })`);
+    assert.equal(h.ctx.run(`isRuntimeStopPending('programming-helper', 's1', 'runtime-1')`), true);
+  });
+
   it('does not register for remote entries (outside the local projection filter)', async () => {
     const h = menuHarness({ currentRuntimeAgentId: 'other-runtime' });
     await h.ctx.run(`ctxStopAgent({

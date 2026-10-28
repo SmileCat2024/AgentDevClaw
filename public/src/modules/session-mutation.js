@@ -72,37 +72,28 @@ function clearSessionReplacementMutation(agentId, sessionId) {
   return finishSidebarOperation(current.operationId, 'settled');
 }
 
-// Session replacement and source-runtime cleanup have different completion
-// contracts. A replacement succeeds when the server commits the successor and
-// reports the requested archive outcome. Releasing the old runtime is a
-// separate resource-lifecycle command; it must never rewrite that committed
-// session operation into a failure when process disposal takes longer.
-function requestArchivedSourceRuntimeCleanup(agentId, sessionId, sourceRuntimeId = '') {
+// Archive success includes runtime retirement. This is presentation-only:
+// discard the retired runtime cache and reconcile the sidebar, never send a
+// second lifecycle command from the browser.
+function reconcileArchivedSourceRuntime(agentId, sessionId, sourceRuntimeId = '') {
   if (!agentId || !sessionId) return;
   if (sourceRuntimeId && typeof clearAgentRuntimeCache === 'function') {
     clearAgentRuntimeCache(sourceRuntimeId);
   }
-  // 归档已在服务端提交：源 runtime 只是待回收资源。注册乐观退场（侧栏条目
-  // 立即消失）并即刻发起 stop，与新会话导航并行——此前该调用停靠在导航之后，
-  // 老条目要等新会话页面完全加载完才开始关闭。
+  // The server has confirmed retirement; hide any stale polling projection.
   if (typeof markPendingRuntimeStop === 'function') {
     markPendingRuntimeStop(agentId, sessionId, sourceRuntimeId);
   }
   if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
   void (async () => {
     try {
-      await invoke('stop_agent', { agentId, sessionId });
-    } catch (error) {
-      console.warn('Failed to clean up archived session runtime:', error);
-      // stop 未被接受：解除隐藏让条目回到可见，由轮询快照恢复呈现。
-      if (typeof releasePendingRuntimeStop === 'function') {
-        releasePendingRuntimeStop(sourceRuntimeId, agentId, sessionId);
+      if (typeof refreshSidebarRuntimeAfterMutation === 'function') {
+        await refreshSidebarRuntimeAfterMutation();
       }
-      if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
-      return;
-    }
-    if (typeof refreshSidebarRuntimeAfterMutation === 'function') {
-      await refreshSidebarRuntimeAfterMutation(500);
+    } catch (error) {
+      console.warn('Failed to refresh archived session projection:', error);
+      // A failed read cannot undo the server's successful retirement receipt.
+      // Keep the intent until a later authoritative snapshot reconciles it.
     }
   })();
 }

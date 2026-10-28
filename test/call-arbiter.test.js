@@ -12,6 +12,39 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { CallArbiter } from '../server/call-arbiter.js';
 
+it('closing cancels queued work, rejects new input and waits for completion effects', async () => {
+  const running = Promise.withResolvers();
+  const listenerStarted = Promise.withResolvers();
+  const releaseListener = Promise.withResolvers();
+  const calls = [];
+  const agent = {
+    async onCall(text) { calls.push(text); return running.promise; },
+    async quiesce() { running.resolve('interrupted'); },
+  };
+  const arbiter = new CallArbiter(agent);
+  arbiter.on('callFinished', async () => {
+    listenerStarted.resolve();
+    await releaseListener.promise;
+  });
+  const active = arbiter.enqueue({ text: 'active' });
+  const queued = arbiter.enqueue({ text: 'queued' });
+  const queuedDone = arbiter.waitForCompletion(queued.id);
+  const activeDone = arbiter.waitForCompletion(active.id);
+  const closing = arbiter.close();
+  assert.equal(arbiter.close(), closing);
+  assert.throws(() => arbiter.enqueue({ text: 'late' }), { code: 'session_closing' });
+  assert.equal((await queuedDone).status, 'cancelled');
+  let settled = false;
+  closing.then(() => { settled = true; });
+  await listenerStarted.promise;
+  assert.equal(settled, false, 'close cannot acknowledge before completion writes settle');
+  releaseListener.resolve();
+  await closing;
+  assert.equal((await activeDone).status, 'cancelled');
+  assert.deepEqual(calls, ['active']);
+  assert.equal(arbiter.getStatus().status, 'idle');
+});
+
 // ── Helpers ──
 
 function makeSlowAgent(delayMs) {

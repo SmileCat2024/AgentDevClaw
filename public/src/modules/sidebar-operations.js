@@ -118,13 +118,10 @@ if (typeof navigator !== 'undefined' && typeof window?.addEventListener === 'fun
   });
 }
 
-// 已归档会话源 runtime 的乐观退场注册表：归档在服务端提交后，源 runtime 只是
-// 待回收资源（服务端归档只改索引、不停进程）。注册后侧栏投影立即隐藏该
-// runtime 条目，同时 stop_agent 与导航并行发起；轮询快照不再包含它时（服务端
-// 已标记 stopping 的条目不进快照）抑制自动解除。TTL 兜底：stop 迟迟未生效时
-// 条目回到可见，用户可以重试归档/关闭。
+// Pending close intents only bridge the request and the authoritative runtime
+// snapshot. Failure explicitly releases the intent; elapsed time is not evidence
+// of failure. Thread board snapshots must never recreate missing runtime leaves.
 const _pendingRuntimeStops = new Map();
-const PENDING_RUNTIME_STOP_TTL_MS = 30000;
 
 function pendingRuntimeStopKey(runtimeId, agentId = '', sessionId = '') {
   const rid = String(runtimeId || '').trim();
@@ -135,14 +132,12 @@ function pendingRuntimeStopKey(runtimeId, agentId = '', sessionId = '') {
 }
 
 function markPendingRuntimeStop(agentId, sessionId, runtimeId = '') {
-  if (!agentId || !sessionId) return;
   const key = pendingRuntimeStopKey(runtimeId, agentId, sessionId);
   if (!key) return;
   _pendingRuntimeStops.set(key, {
-    agentId: String(agentId).trim(),
-    sessionId: String(sessionId).trim(),
+    agentId: String(agentId || '').trim(),
+    sessionId: String(sessionId || '').trim(),
     runtimeId: String(runtimeId || '').trim(),
-    at: Date.now(),
   });
 }
 
@@ -152,24 +147,22 @@ function releasePendingRuntimeStop(runtimeId, agentId = '', sessionId = '') {
   _pendingRuntimeStops.delete(key);
 }
 
-// 投影过滤谓词：命中任一未过期注册（runtimeId 相同，或宿主+会话相同）即隐藏。
+// 投影过滤谓词：有 runtimeId 时仅隐藏该实例；不得误伤同一 Session 的新实例。
 // operation 合成条目（pending/degraded/tombstone）是操作反馈本身，不经此路径。
 function isRuntimeStopPending(agentId, sessionId, runtimeId) {
   if (_pendingRuntimeStops.size === 0) return false;
-  const now = Date.now();
   const rid = String(runtimeId || '').trim();
   const owner = String(agentId || '').trim();
   const sid = String(sessionId || '').trim();
   for (const entry of _pendingRuntimeStops.values()) {
-    if (now - entry.at > PENDING_RUNTIME_STOP_TTL_MS) continue;
-    if (rid && entry.runtimeId && entry.runtimeId === rid) return true;
-    if (owner && sid && entry.agentId === owner && entry.sessionId === sid) return true;
+    if (entry.runtimeId) {
+      if (entry.runtimeId === rid) return true;
+    } else if (owner && sid && entry.agentId === owner && entry.sessionId === sid) return true;
   }
   return false;
 }
 
-// 轮询快照到达时收敛注册表：快照已不含的 runtime（stop 已生效）解除抑制；
-// 超过 TTL 仍存在的（stop 卡死）也解除，让条目回到可见。
+// 权威运行时快照已不含该实例时解除抑制；不按时长猜测停止成败。
 function reconcilePendingRuntimeStops(snapshotAgents) {
   if (_pendingRuntimeStops.size === 0) return;
   const list = Array.isArray(snapshotAgents) ? snapshotAgents : [];
@@ -182,12 +175,11 @@ function reconcilePendingRuntimeStops(snapshotAgents) {
     const sid = String(agent?.active_workspace_session_id || '').trim();
     if (owner && sid) presentSessionKeys.add(`${owner}::${sid}`);
   }
-  const now = Date.now();
-  for (const [key, entry] of Array.from(_pendingRuntimeStops.entries())) {
-    const expired = now - entry.at > PENDING_RUNTIME_STOP_TTL_MS;
-    const stillPresent = (entry.runtimeId && presentRuntimeIds.has(entry.runtimeId))
-      || presentSessionKeys.has(`${entry.agentId}::${entry.sessionId}`);
-    if (expired || !stillPresent) _pendingRuntimeStops.delete(key);
+  for (const [key, entry] of _pendingRuntimeStops) {
+    const stillPresent = entry.runtimeId
+      ? presentRuntimeIds.has(entry.runtimeId)
+      : presentSessionKeys.has(`${entry.agentId}::${entry.sessionId}`);
+    if (!stillPresent) _pendingRuntimeStops.delete(key);
   }
 }
 

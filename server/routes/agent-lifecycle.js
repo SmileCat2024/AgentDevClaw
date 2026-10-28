@@ -1,11 +1,9 @@
 import path from 'path';
-import { promises as fsp } from 'fs';
 import {
   APP_PORT, VIEWER_PORT, PROJECT_ROOT,
 } from '../shared/constants.js';
 import { readJsonSafe } from '../shared/fs-helpers.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
-import { getPrebuiltSessionFilePath } from '../shared/session-access.js';
 import {
   listAgentRuntimes, getAgentRuntime, getRuntimeByViewerAgentId, buildStatus, isChildProcessRunning,
 } from '../shared/agent-access.js';
@@ -23,6 +21,7 @@ import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
 import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
 import { convergeThreadBoardOnDeliberateStop } from '../thread-control/deliberate-stop-convergence.js';
+import { assertSessionNotStarting } from '../shared/session-operation.js';
 
 // ADR-0011：远程写幂等闸。远程目标 + 无 idempotencyKey → 400 且请求不过隧道；
 // 本地路径保持现状不强制（session.js 同族契约）。
@@ -58,7 +57,6 @@ export function createAgentLifecycleModule(ctx) {
     readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
     readViewerJson, getPendingInputCount, resolveAgentModelPresets,
     serviceLifecycle = null,
-    readSessionSavedAt = null,
   } = ctx;
 
   const _exitCallbacks = [];
@@ -113,30 +111,17 @@ export function createAgentLifecycleModule(ctx) {
     });
   }
 
-  // 默认盘上核验：读会话文件的 savedAt（子进程 saveSession 写入的时间戳）。
-  // 屏障核验只认"落盘事实"——读不到（文件缺失/损坏/无时间戳）一律视为未确认。
-  async function readSessionSavedAtFromDisk(agentId, sessionId) {
-    try {
-      const raw = await fsp.readFile(getPrebuiltSessionFilePath(agentId, sessionId), 'utf8');
-      const parsed = JSON.parse(raw);
-      return typeof parsed?.savedAt === 'number' ? parsed.savedAt : null;
-    } catch {
-      return null;
-    }
-  }
-
-  async function removeSharedSession(runtime, { waitForExit = false, operationTrace = null } = {}) {
+  async function removeHostedSession(runtime, { operationTrace = null } = {}) {
     const sessionId = runtime?.selectedSessionId;
     const child = runtime?.process;
     if (!sessionId || !child || typeof child.send !== 'function' || typeof child.on !== 'function') {
       return false;
     }
     if (runtime.stopping) {
-      return waitForExit ? (runtime.stoppingPromise || false) : true;
+      return runtime.stoppingPromise || false;
     }
 
     runtime.stopping = true;
-    const requestedAt = Date.now();
     let resolveRemoval;
     const removalPromise = new Promise((resolve) => { resolveRemoval = resolve; });
     runtime.stoppingPromise = removalPromise;
@@ -144,9 +129,13 @@ export function createAgentLifecycleModule(ctx) {
       child.removeListener?.('message', onMessage);
       child.removeListener?.('exit', onExit);
     };
-    const settleRemoval = (removed) => {
+    let settled = false;
+    const settleRemoval = (removed, retired = true) => {
+      if (settled) return;
+      settled = true;
       clearAcknowledgementListeners();
-      runtime.stopped = true;
+      runtime.stopped = retired;
+      runtime.persistenceConfirmed = removed;
       runtime.stopping = false;
       runtime.stoppingPromise = null;
       resolveRemoval(removed);
@@ -171,35 +160,21 @@ export function createAgentLifecycleModule(ctx) {
       convergeThreadBoardOnDeliberateStop(runtime.agentId, sessionId)
         .catch(() => { /* 收敛失败不阻断停止善后 */ });
     };
-    // 早关闭竞态：子进程可能已自行关闭（保存落盘）并退出——session-exited 在
-    // 监听器注册前发出而丢失。屏障语义是"快照落盘确认"，不是握手确认：进程
-    // 死亡且无确认时核验盘上保存事实，落盘新鲜（>= 本次停止请求发起时刻，留
-    // 2s 时钟/调度容差）即通过。显式 persisted:false ack 不走此路径。
-    const confirmFromDisk = async () => {
-      const reader = readSessionSavedAt || readSessionSavedAtFromDisk;
-      try {
-        const savedAt = await reader(runtime.agentId || runtime.id, sessionId);
-        return typeof savedAt === 'number' && savedAt >= requestedAt - 2000;
-      } catch {
-        return false;
-      }
-    };
-    const onExit = () => {
-      void confirmFromDisk().then((confirmed) => settleRemoval(confirmed));
-    };
+    // A recent step-save does not prove final persistence. Early acknowledgements
+    // are retained by the process-level listener installed at startup.
+    const onExit = () => settleRemoval(runtime.persistenceConfirmed === true);
     child.on('message', onMessage);
     child.once?.('exit', onExit);
     try {
-      child.send({ type: 'remove-session', sessionId });
+      child.send({ type: 'remove-session', sessionId }, (error) => {
+        if (error) settleRemoval(false, false);
+      });
       operationTrace?.mark('source_runtime_close_requested');
       const persisted = await removalPromise;
       operationTrace?.mark('source_runtime_retirement_settled', { persisted });
       return persisted;
     } catch {
-      clearAcknowledgementListeners();
-      runtime.stopping = false;
-      runtime.stoppingPromise = null;
-      resolveRemoval(false);
+      settleRemoval(false, false);
       return false;
     }
   }
@@ -234,6 +209,7 @@ export function createAgentLifecycleModule(ctx) {
   // ── Stop managed agent ────────────────────────────────────────
 
   async function stopManagedAgent(agentId, sessionId = undefined, { waitForPersistence = false, operationTrace = null } = {}) {
+    if (sessionId !== undefined) assertSessionNotStarting(agentId, sessionId);
     const runtimes = sessionId === undefined ? listAgentRuntimes(agentId) : [getAgentRuntime(agentId, sessionId)].filter(Boolean);
     if (runtimes.length === 0) {
       if (waitForPersistence && sessionId) {
@@ -249,12 +225,15 @@ export function createAgentLifecycleModule(ctx) {
 
     for (const runtime of runtimes) {
       if (!isChildProcessRunning(runtime?.process) || runtime.stopped) {
-        if (waitForPersistence && runtime?.stoppingPromise) {
+        if (runtime.persistenceConfirmed === false) {
+          throw new Error(`Failed to confirm session persistence before stopping: ${agentId}::${runtime.selectedSessionId}`);
+        }
+        if (runtime?.stoppingPromise) {
           const persisted = await runtime.stoppingPromise;
           if (!persisted) {
             throw new Error(`Failed to confirm session persistence before stopping: ${agentId}::${runtime.selectedSessionId}`);
           }
-        } else if (waitForPersistence && runtime?.selectedSessionId) {
+        } else if (waitForPersistence && runtime?.selectedSessionId && runtime.persistenceConfirmed !== true) {
           throw new Error(`Session runtime is unavailable before persistence confirmation: ${agentId}::${runtime.selectedSessionId}`);
         }
         // Process already exited — still need to clean up the tracker
@@ -264,28 +243,24 @@ export function createAgentLifecycleModule(ctx) {
         continue;
       }
 
-      // A succession persistence barrier needs a session-scoped acknowledgement
-      // for both shared and isolated processes. remove-session saves and disposes
-      // the target session before reporting whether persistence succeeded.
-      if (waitForPersistence && runtime.selectedSessionId) {
-        const persisted = await removeSharedSession(runtime, { waitForExit: true, operationTrace });
+      // Every hosted Session uses the same close-and-save acknowledgement,
+      // independent of process placement or which business action requested it.
+      if (runtime.selectedSessionId) {
+        const persisted = await removeHostedSession(runtime, { operationTrace });
         if (!persisted) {
           throw new Error(`Failed to confirm session persistence before stopping: ${agentId}::${runtime.selectedSessionId}`);
         }
-      } else if (runtime.processGroupKey && runtime.selectedSessionId) {
-        const accepted = await removeSharedSession(runtime);
-        if (!accepted) {
-          console.warn(`[agent-lifecycle] failed to request shared-session stop: ${agentId}::${runtime.selectedSessionId}`);
-          continue;
-        }
       } else {
-        runtime.stopped = true;
+        // Assembly runtimes without Session storage only promise process exit.
         runtime.process.kill('SIGTERM');
+        await waitForProcessExit(runtime.process);
+        if (isChildProcessRunning(runtime.process)) {
+          throw new Error(`Failed to confirm runtime exit: ${agentId}`);
+        }
+        runtime.stopped = true;
       }
 
-      // Isolated processes have been signalled and can be removed from recovery
-      // tracking now. Shared sessions are removed only by their later
-      // `session-exited` acknowledgement in removeSharedSession().
+      // Hosted Session cleanup is confirmed by session-exited, not by signal delivery.
       if (!runtime.processGroupKey && runtime.selectedSessionId) {
         removeOpenSession(agentId, runtime.selectedSessionId).catch(e => console.warn(e));
       }

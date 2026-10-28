@@ -64,9 +64,9 @@ describe('runtime-status: coder live session projection', () => {
       const activeThread = {
         threadId: 'wt-1', agentId: 'coder',
         title: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head', 'new-head'],
-        status: 'open', lifeState: 'executing', handoffStartedAt: Date.now(),
+        status: 'rotating', lifeState: 'executing', handoffStartedAt: Date.now(),
       };
-      window.ClawThreads.threads = [activeThread, {
+      host.sidebar_threads = [activeThread, {
         threadId: 'wt-sleeping', agentId: 'coder',
         title: '休眠的不应展示', headSessionId: 'sleeping-head', sessionIds: ['sleeping-head'],
         status: 'open', lifeState: 'idle',
@@ -116,20 +116,15 @@ describe('runtime-status: coder live session projection', () => {
  * 侧栏接续占位状态矩阵（ADR-0024 零感知北极星 / ADR-0025 线程域）。
  *
  * 帧输入 = (threads 快照: headSessionId / handoffStartedAt / headRuntimeRunning,
- * allAgents 快照, 页面缓存 _coderThreadLiveEntries)。输出 = 该线程的侧栏呈现。
+ * allAgents 快照, 页面缓存 _threadSidebarEntries)。输出 = 该线程的侧栏呈现。
  * 服务端接续时序保证（rotation 链）：
  *   S0 稳态 → S1 挡板立起（旧 runtime 仍在）→ S2 退役窗口（旧死、无 successor）
  *   → S3 successor READY 未 commit（viewer 已绑 to，sessionChain 未含 to）
  *   → S4 advanceHead（挡板清、head=to、successor 进 getConnectedAgents）
  *   → S4' 快照错位（threads 已新、allAgents 尚旧）→ S5 稳态新代。
- * READY 门禁保证 advanceHead 时 successor 必已注册 viewer，故 headRuntimeRunning
- * 是区分「快照错位」（true）与「闲置」（false）的服务端权威事实。
- *
- * 占位四道续命门（命中任一即渲染，全 false 即退场）：
- *   门1 挡板新鲜（5min TTL）｜门2 手动 sidebar operation｜门3 看板活跃
- *   （executing / pending-commands）｜门4 head 无叶子且 headRuntimeRunning=true。
- * 无空窗：S2/S3 走门1，S4' 走门4，S4/S5 有 head 叶子。
- * 无幽灵：闲置与「successor READY 后死亡」四门全 false，正确退场。
+ * 占位仅由明确的接续挡板或启动操作驱动。线程列表的 headRuntimeRunning /
+ * lifeState 是独立快照，不能覆盖运行时列表的缺席事实。提交后的缺席与关闭
+ * 无法靠旧线程快照区分，必须等待实际 runtime 投影，不能伪造断连条目。
  */
 describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar continuity)', () => {
   const initThreads = (ctx) => { ctx.window.ClawThreads = { threads: [], sessionIndex: {} }; };
@@ -141,17 +136,17 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
     created_at: '2026-10-10T09:00:00.000Z',
   })`;
 
-  it('keeps exactly one thread entry across the full auto-rotation frame sequence S0→S5 (no flicker, no gap, no duplicate)', () => {
+  it('keeps one entry during explicit rotation and never invents a missing committed runtime', () => {
     const ctx = loadRuntimeStatus();
     initThreads(ctx);
     const frames = ctx.run(`(() => {
       const host = ${HOST};
       const fresh = Date.now();
       const setThread = (head, barrier, running, sessionIds) => {
-        window.ClawThreads.threads = [{
+        host.sidebar_threads = [{
           threadId: 'wt-1', agentId: 'coder', title: '工作对话',
           headSessionId: head, headSessionTitle: head + '标题', sessionIds,
-          status: 'open', lifeState: 'idle',
+          status: barrier ? 'rotating' : 'open', lifeState: 'idle',
           handoffStartedAt: barrier, headRuntimeRunning: running,
         }];
       };
@@ -174,7 +169,7 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
       // S4 advanceHead 落定：to 进 sessionChain，successor 成为 head 叶子
       setThread('to', 0, true, ['from', 'to']);
       out.S4 = collect([${child('to', 'new-runtime')}]);
-      // S4' 快照错位：threads 已新、allAgents 尚旧——门4 占位
+      // S4' 快照错位：threads 已新、allAgents 尚旧——不再凭线程旧快照占位
       setThread('to', 0, true, ['from', 'to']);
       out.S4x = collect([]);
       // S5 稳态新代：to 叶子
@@ -182,7 +177,7 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
       out.S5 = collect([${child('to', 'new-runtime')}]);
       return out;
     })()`);
-    for (const key of ['S0', 'S1', 'S2', 'S3', 'S4', 'S4x', 'S5']) {
+    for (const key of ['S0', 'S1', 'S2', 'S3', 'S4', 'S5']) {
       assert.equal(frames[key].length, 1, `frame ${key} must present exactly one wt-1 entry`);
       assert.equal(frames[key][0].threadId, 'wt-1');
     }
@@ -192,7 +187,7 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
     assert.equal(frames.S2[0].transitionPending, true);
     assert.equal(frames.S3[0].status, 'disconnected');
     assert.equal(frames.S4[0].runtimeId, 'new-runtime');
-    assert.equal(frames.S4x[0].status, 'disconnected');
+    assert.equal(frames.S4x.length, 0, 'an independent running observation cannot recreate a missing runtime');
     assert.equal(frames.S5[0].runtimeId, 'new-runtime');
   });
 
@@ -203,10 +198,10 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
       const host = ${HOST};
       const fresh = Date.now();
       const setThread = (head, barrier, running, sessionIds) => {
-        window.ClawThreads.threads = [{
+        host.sidebar_threads = [{
           threadId: 'wt-1', agentId: 'coder', title: '工作对话',
           headSessionId: head, headSessionTitle: head + '标题', sessionIds,
-          status: 'open', lifeState: 'idle',
+          status: barrier ? 'rotating' : 'open', lifeState: 'idle',
           handoffStartedAt: barrier, headRuntimeRunning: running,
         }];
       };
@@ -214,11 +209,11 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
         .filter((entry) => entry.threadId === 'wt-1');
       const out = {};
       // 接续中途刷新：缓存空（无页面记忆），S2 退役窗口仅凭挡板事实合成。
-      _coderThreadLiveEntries.clear();
+      _threadSidebarEntries.clear();
       setThread('from', fresh, false, ['from']);
       out.refreshedS2 = collect();
-      // 刷新落在快照错位窗口：缓存空，门4（headRunning=true 且 head 无叶子）合成。
-      _coderThreadLiveEntries.clear();
+      // 缓存空且没有接续挡板：headRunning 不能替代实际运行时投影。
+      _threadSidebarEntries.clear();
       setThread('to', 0, true, ['from', 'to']);
       out.refreshedS4x = collect();
       return out;
@@ -228,9 +223,7 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
     assert.equal(frames.refreshedS2[0].sessionId, 'from');
     assert.equal(frames.refreshedS2[0].name, 'from标题');
     assert.equal(frames.refreshedS2[0].contextMenuEnabled, false);
-    assert.equal(frames.refreshedS4x.length, 1);
-    assert.equal(frames.refreshedS4x[0].runtimeId, 'thread:wt-1');
-    assert.equal(frames.refreshedS4x[0].sessionId, 'to');
+    assert.equal(frames.refreshedS4x.length, 0, 'cold caches also require an explicit transition');
   });
 
   it('retires the entry when the successor dies after commit (no ghost) and stays hidden for idle threads', () => {
@@ -240,10 +233,10 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
       const host = ${HOST};
       const fresh = Date.now();
       const setThread = (head, barrier, running) => {
-        window.ClawThreads.threads = [{
+        host.sidebar_threads = [{
           threadId: 'wt-1', agentId: 'coder', title: '工作对话',
           headSessionId: head, headSessionTitle: head + '标题', sessionIds: ['from', 'to'],
-          status: 'open', lifeState: 'idle',
+          status: barrier ? 'rotating' : 'open', lifeState: 'idle',
           handoffStartedAt: barrier, headRuntimeRunning: running,
         }];
       };
@@ -268,23 +261,21 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
     assert.equal(frames.idle.length, 0);
   });
 
-  it('keeps the placeholder while the thread board reports executing even without barrier or head runtime', () => {
+  it('does not invent a runtime from an executing board without an explicit handoff', () => {
     const ctx = loadRuntimeStatus();
     initThreads(ctx);
     const frames = ctx.run(`(() => {
       const host = ${HOST};
-      window.ClawThreads.threads = [{
+      host.sidebar_threads = [{
         threadId: 'wt-1', agentId: 'coder', title: '工作对话',
         headSessionId: 'from', headSessionTitle: 'from标题', sessionIds: ['from'],
         status: 'open', lifeState: 'executing',
         handoffStartedAt: 0, headRuntimeRunning: false,
       }];
-      _coderThreadLiveEntries.clear();
+      _threadSidebarEntries.clear();
       return collectRuntimeEntriesForPrebuilt(host, []).filter((entry) => entry.threadId === 'wt-1');
     })()`);
-    // 门3：看板 executing 的线程 head 无叶子，占位兜底（无缓存则合成）。
-    assert.equal(frames.length, 1);
-    assert.equal(frames[0].status, 'disconnected');
+    assert.equal(frames.length, 0, 'board execution history does not prove a runtime exists');
   });
 });
 

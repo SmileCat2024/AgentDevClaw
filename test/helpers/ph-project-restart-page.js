@@ -1,9 +1,10 @@
 // Browser fixture: actual sidebar projection, data loading and context restart
 // handler. Only unrelated workspace navigation/chrome are inert.
-export function restartPage({ projectId, root }) {
+export function restartPage({ projectId, root, agentId = 'programming-helper' }) {
   return `<!doctype html><html lang="zh"><body>
   <div id="agent-list"></div><div id="external-agent-list"></div>
   <button id="restart" type="button">重启所选对话</button>
+  <button id="close" type="button">关闭所选对话</button>
   <output id="navigation"></output>
   <script>
   let allAgents=[], currentLanguage='zh', currentMessages=[], focusedAgentId='programming-helper', currentRuntimeAgentId='';
@@ -28,6 +29,8 @@ export function restartPage({ projectId, root }) {
   function isRemoteNamespaceAgentId(){return false}
   async function refreshAgentCallStates(){}
   function clearAgentRuntimeCache(){}
+  function resolveWorkspaceFallbackAgentId(){return 'programming-helper'}
+  function selectWorkspaceSurface(id){focusedAgentId=id;currentRuntimeAgentId='';renderAgentList()}
   function bumpNavigationGuard(){_navigationGuardEpoch++}
   async function requestSwitch(id){currentRuntimeAgentId=id;document.getElementById('navigation').textContent=id;renderAgentList()}
   async function invoke(command,payload){
@@ -58,7 +61,11 @@ export function restartPage({ projectId, root }) {
     await ctxRestartAgent(selectedTarget);
     document.body.dataset.restarted='true';
   };
+  document.getElementById('close').onclick=async()=>{
+    await ctxStopAgent(selectedTarget);
+    document.body.dataset.closed='true';
+  };
   window.ClawFW.phProjectEntities={loaded:true,projects:[{id:${JSON.stringify(projectId)},name:'测试项目',workDirectory:${JSON.stringify(root)}}]};
   loadAgents().then(()=>document.body.dataset.ready='true');
-  </script></body></html>`;
+  </script></body></html>`.replaceAll('programming-helper', agentId);
 }

@@ -499,6 +499,12 @@ async function loadAgents() {
       window.setTimeout(() => loadAgents().catch(e => console.warn(e)), 25);
       return { stale: true };
     }
+    if (connectedAgents.__sidebarDiagnostic) {
+      // A rejected read is not an empty snapshot. In particular a consistency
+      // conflict must retain the complete previous frame, not mix in Viewer data.
+      console.warn('[sidebar] retaining snapshot after failed authoritative read', connectedAgents.__sidebarDiagnostic);
+      return { unavailable: true };
+    }
     const runtimeAgents = data.agents || [];
     const runtimeById = new Map(runtimeAgents.map((agent) => [agent.id, agent]));
     const prevByAgentId = new Map(allAgents.map((a) => [a.id, a]));
@@ -1008,7 +1014,7 @@ function getAgentListRenderSignature() {
     restarting: Array.from(restartingRuntimeIds || []).sort(),
     recentlyFinished: Array.from(_recentlyFinishedRuntimes).sort(),
     sidebarOperationVersion: typeof getSidebarOperationVersion === 'function' ? getSidebarOperationVersion() : 0,
-    threadHeads: (window.ClawThreads?.threads || []).map((thread) => ({
+    threadHeads: allAgents.flatMap(agent => agent.sidebar_threads || []).map((thread) => ({
       threadId: thread.threadId,
       headSessionId: thread.headSessionId,
       title: thread.title,
@@ -1017,11 +1023,9 @@ function getAgentListRenderSignature() {
       headProjectDir: thread.headProjectDir,
       status: thread.status,
       archivedAt: thread.archivedAt,
-      lifeState: thread.lifeState,
-      // 接续窗口的侧栏事实：挡板立/清与 head runtime 存活翻转必须进签名，
-      // 否则交接占位条目的出现/退场不触发重渲（SSE 丢失时靠 20s 轮询驱动）。
+      deleting: thread.deleting,
+      sessionIds: thread.sessionIds,
       handoffStartedAt: Number(thread.handoffStartedAt) || 0,
-      headRuntimeRunning: thread.headRuntimeRunning === true,
     })),
     remoteSidebarProjectionVersion: typeof getRemoteSidebarProjectionVersion === 'function'
       ? getRemoteSidebarProjectionVersion()

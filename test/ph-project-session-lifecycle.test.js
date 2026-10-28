@@ -133,7 +133,7 @@ function writeSessionSnapshot(agentId, sessionId, messageCount = 2) {
   writeFileSync(filePath, JSON.stringify({
     sessionId,
     savedAt: Date.now(),
-    runtime: { context: { messages, enrichedMessages: [] }, featureStates: [] },
+    runtime: { callIndex: Math.max(-1, Math.ceil(messageCount / 2) - 1), callState: 'idle', context: { messages, enrichedMessages: [] }, featureStates: [] },
     rollbackHistory: [],
   }), 'utf8');
   return filePath;
@@ -315,7 +315,7 @@ describe('042 派生：分支与接续继承来源归属', () => {
 
     const handlers = captureHandlers(helpers);
     const res = await call(handlers['POST /protoclaw/sessions/branch'], {
-      body: { agentId: 'programming-helper', sourceSessionId: source.id, cutMsgIndexEnd: 0 },
+      body: { agentId: 'programming-helper', sourceSessionId: source.id, cutMsgIndexEnd: 1 },
     });
     assert.equal(res.statusCode, 200);
     assert.ok(res.jsonPayload.ok);

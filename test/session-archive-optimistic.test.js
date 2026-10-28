@@ -144,10 +144,10 @@ describe('session archive optimistic helper', () => {
       }];
       beginSessionReplacementMutation('programming-helper', 'session-1', 'summary');
       finishSidebarOperation(getSessionReplacementMutation('programming-helper', 'session-1').operationId, 'settled');
-      requestArchivedSourceRuntimeCleanup('programming-helper', 'session-1', 'runtime-1');
+      reconcileArchivedSourceRuntime('programming-helper', 'session-1', 'runtime-1');
     `);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(stopCalls, 1);
+    assert.equal(stopCalls, 0);
     assert.equal(ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1')`), null);
   });
 });

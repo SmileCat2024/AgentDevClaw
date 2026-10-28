@@ -55,6 +55,7 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { withSessionOperations } from '../shared/session-operation.js';
 
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
@@ -292,6 +293,7 @@ export function createThreadDeleteService({
         };
       }
       const thread = existing;
+      return withSessionOperations(thread.agentId, memberSessionIds(thread), 'thread-delete', async () => {
       const failures = [];
       const cleanup = {
         status: 'running',
@@ -361,6 +363,16 @@ export function createThreadDeleteService({
         cleanup.inflightDrain = { drained: false, forcedStopped: false, waitedMs: 0, startedCommandIds };
         cleanup.steps.drain = { ok: false, error: message };
         failures.push({ stage: 'drain', error: message });
+      }
+
+      // No destructive cleanup may cross an unconfirmed retirement. Keep the
+      // deleting/hold facts and all resources so retry has the same target.
+      if (!cleanup.steps.begin?.ok || !cleanup.steps.drain?.ok) {
+        cleanup.status = 'partial';
+        cleanup.completedAt = Date.now();
+        cleanup.failures = failures;
+        cleanup.steps.record = { skipped: true, note: 'retained_for_retry' };
+        return { threadId: normalizedThreadId, deleted: false, idempotent: false, status: 'partial', cleanup };
       }
 
       // ── seal 事务（closeThread 封锁锚点、取消指令；随后清除 deleting）──
@@ -470,6 +482,7 @@ export function createThreadDeleteService({
         status: cleanup.status,
         cleanup,
       };
+      });
     })().finally(() => {
       inflightDeletes.delete(normalizedThreadId);
     });

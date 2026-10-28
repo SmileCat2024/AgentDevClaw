@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import { createThreadRotationService } from '../server/thread-control/thread-rotation.js';
 
 function createHarness({ stopResult = 'success', retireError = null } = {}) {
@@ -157,6 +158,42 @@ describe('thread rotation session save barrier', () => {
     }
   });
 
+  it('host removal waits for execution, host mutations and final save before disposing', async () => {
+    // Execute the production class in a sandbox: omit executable CLI startup,
+    // replace only external resources, not the removal implementation.
+    const source = fs.readFileSync(new URL('../scripts/run-prebuilt-agent.js', import.meta.url), 'utf8');
+    const start = source.indexOf('class SessionLifecycle');
+    const end = source.indexOf('// 会话关闭单飞', start);
+    const Host = vm.runInNewContext(`${source.slice(start, end)}; SessionLifecycle`, {
+      console: { error() {}, warn() {} }, clearTimeout, sessionStore: {},
+    });
+    for (const saveFails of [false, true]) {
+      const quiesced = Promise.withResolvers();
+      const mutation = Promise.withResolvers();
+      const session = Object.create(Host.prototype);
+      const effects = [];
+      Object.assign(session, {
+        sessionId: 'target', _hostRequests: new Set([mutation.promise]),
+        _commsSaveChain: Promise.resolve(),
+        callArbiter: { close: () => quiesced.promise },
+        agent: {
+          async saveSession() { effects.push('saved'); if (saveFails) throw new Error('disk full'); },
+          async dispose() { effects.push('disposed'); throw new Error('cleanup failure'); },
+        },
+      });
+      const first = session.remove();
+      assert.equal(session.remove(), first, 'concurrent removal must share its actual result');
+      await Promise.resolve();
+      assert.deepEqual(effects, []);
+      quiesced.resolve();
+      await Promise.resolve();
+      assert.deepEqual(effects, [], 'in-flight mutations must finish before snapshot');
+      mutation.resolve();
+      assert.equal(await first, !saveFails);
+      assert.deepEqual(effects, ['saved', 'disposed']);
+    }
+  });
+
   it('runtime closes a session single-flight: concurrent close calls share one outcome and one notification', async () => {
     // 审核发现的并发关闭竞态：remove-session 与输入循环结束并发关闭同一
     // 会话时，第二次调用曾因 remove() 的 disposed 守卫立即返回 false，在
@@ -184,7 +221,7 @@ describe('thread rotation session save barrier', () => {
     // persisted 的语义是"快照落盘确认"，dispose 只释放资源、失败仅记日志。
     // remove() 不可导出，源码级断言锁定 catch 块不得否定保存事实。
     const source = fs.readFileSync(new URL('../scripts/run-prebuilt-agent.js', import.meta.url), 'utf8');
-    const removeStart = source.indexOf('async remove() {');
+    const removeStart = source.indexOf('async removeInternal() {');
     const removeEnd = source.indexOf('// 会话关闭单飞', removeStart);
     assert.notEqual(removeStart, -1, 'remove() 应存在');
     assert.notEqual(removeEnd, -1, 'remove() 结束标记应存在');

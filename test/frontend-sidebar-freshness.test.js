@@ -64,8 +64,8 @@ function harness(agentId = 'coder') {
     ctx, host, child, handlers,
     get html() { return html; },
     get renders() { return renders; },
-    async threads(value) { threads = value; await ctx.window.refreshThreads(true); },
-    setThreads(value) { threads = value; },
+    async threads(value) { threads = value; host.sidebar_threads = structuredClone(value); await ctx.window.refreshThreads(true); },
+    setThreads(value) { threads = value; host.sidebar_threads = structuredClone(value); },
   };
 }
 
@@ -81,13 +81,70 @@ function delta(title = 'New', revision = 2) {
   return { ok: true, sessionDelta: { revision, upsert: [{ id: 's1', title }] } };
 }
 
+test('a failed authoritative read preserves the entire sidebar frame despite conflicting Viewer data', async () => {
+  const h = harness('programming-helper');
+  Object.assign(h.ctx, { loadAgentsInFlight: null, performance: { now: () => 0 }, ensurePhProjectEntitiesLoaded: async () => {} });
+  h.ctx.window.ClawSidebarLayout.load = async () => {};
+  const failed = [];
+  Object.defineProperty(failed, '__sidebarDiagnostic', { value: { errorCode: 'connected-agents-http-409' } });
+  h.ctx.invoke = async () => failed;
+  h.ctx.fetch = async () => ({ ok: true, json: async () => ({ agents: [{ id: 'r1', connected: false }] }) });
+  const before = h.ctx.allAgents;
+  await h.ctx.run('loadAgents()');
+  assert.equal(h.ctx.allAgents, before);
+  assert.equal(h.ctx.allAgents[1].connected, true);
+});
+
+test('post-close refresh rejects an old in-flight poll and fetches a post-commit snapshot', async () => {
+  const h = harness('programming-helper');
+  h.ctx.window.setTimeout = () => 0;
+  h.ctx.getRuntimeId = agent => agent.runtime_session_id || '';
+  h.ctx.performance = { now: () => 0 };
+  h.ctx.suppressSidebarRerender = false;
+  h.ctx.loadAgentsInFlight = null;
+  h.ctx.loadedAgentDetailIds = new Set();
+  h.ctx.loadSource('public/src/modules/external-runtime.js');
+  h.ctx.window.ClawSidebarLayout.load = async () => {};
+  h.ctx.focusedAgentId = 'programming-helper';
+  h.ctx.isRemoteNamespaceAgentId = () => false;
+  h.ctx.refreshAgentCallStates = async () => {};
+  h.ctx.renderFeaturePanel = () => {};
+  h.ctx.ensurePhProjectEntitiesLoaded = async () => {};
+  h.ctx.fetch = async () => ({ ok: true, json: async () => ({ agents: [] }) });
+  const oldRead = Promise.withResolvers();
+  let reads = 0;
+  h.ctx.invoke = () => ++reads === 1 ? oldRead.promise : Promise.resolve([h.host]);
+  const before = h.ctx.run('loadAgents()');
+  const after = h.ctx.run('refreshSidebarRuntimeAfterMutation()');
+  oldRead.resolve([h.host, h.child]);
+  await Promise.all([before, after]);
+  assert.equal(reads, 2, 'joining a pre-close poll is not a post-close refresh');
+  assert.equal(h.html, '', 'late pre-close data must not recreate the closed leaf');
+  assert.equal(h.ctx.allAgents.length, 1);
+});
+
+test('closed runtime stays absent while the independent thread snapshot still says running', async () => {
+  const h = harness('programming-helper');
+  await h.threads([thread({ agentId: 'programming-helper' })]);
+  h.ctx.run('renderAgentList()');
+  assert.match(h.html, /data-thread-id="t1"/);
+  h.ctx.run("markPendingRuntimeStop('programming-helper', 's1', 'r1'); invalidateSidebarProjection()");
+  assert.equal(h.html, '');
+  // The runtime poll confirms retirement before the slower thread poll arrives.
+  h.ctx.allAgents = [h.host];
+  h.ctx.run('reconcilePendingRuntimeStops(allAgents); renderAgentList()');
+  assert.equal(h.html, '', 'a stale thread observation must not recreate a disconnected runtime');
+  await h.threads([thread({ agentId: 'programming-helper', lifeState: 'idle', headRuntimeRunning: false })]);
+  assert.equal(h.html, '');
+});
+
 test('thread refresh retires a ghost without a click or another render trigger', async () => {
   const h = harness();
   await h.threads([thread()]);
   h.ctx.run('renderAgentList()');
   h.ctx.allAgents = [h.host];
   h.ctx.run('renderAgentList()');
-  assert.match(h.html, /disconnected/);
+  assert.equal(h.html, '', 'missing runtimes are not reconstructed from stale thread activity');
   await h.threads([thread({ lifeState: 'archived', archivedAt: 1, headRuntimeRunning: false })]);
   assert.equal(h.html, '');
 });

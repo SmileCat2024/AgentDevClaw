@@ -696,6 +696,10 @@ function _syncActiveThreadSubscription() {
   if (typeof client?.subscribeThreadEvents !== 'function') return;
   const subscription = { unsubscribe: null };
   subscription.unsubscribe = client.subscribeThreadEvents('*', async (event) => {
+    if (['thread.created', 'thread.handoff-started', 'thread.head-advanced', 'thread.archived', 'thread.deleted'].includes(event?.type)
+      && typeof refreshSidebarRuntimeAfterMutation === 'function') {
+      await refreshSidebarRuntimeAfterMutation().catch(error => console.warn('Sidebar refresh failed:', error));
+    }
     if (['thread.created', 'thread.handoff-started', 'thread.archived', 'thread.deleted'].includes(event?.type)) {
       // Events discover changes; the shared refresh commits authoritative facts
       // for background sidebar entries as well as the selected conversation.

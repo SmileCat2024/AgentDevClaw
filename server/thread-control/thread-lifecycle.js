@@ -16,7 +16,7 @@
  *         响应：归档后 relay 不得继续提交消费旧 Inbox，提交点的
  *         thread_archived 预检是第二道门）
  *     → 停止成员 session runtime（graceful：remove-session / SIGTERM →
- *       agent dispose 收敛，不 SIGKILL；不预先 interrupt 当前调用）
+ *       agent dispose 收敛，不 SIGKILL；由框架 quiesce 中断并等待当前调用收敛）
  *     → 收尾 Board
  *     → 写 cleanup 结果（complete / partial 如实区分）
  *
@@ -26,6 +26,7 @@
  */
 
 import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
+import { withSessionOperations } from '../shared/session-operation.js';
 
 const LIFECYCLE_EVENT_CAP = 200;
 
@@ -142,14 +143,15 @@ export function createThreadLifecycleService({
       reason,
       headSessionId: sealed.headSessionId || null,
       commandsCancelled,
-      // 已开始的调用收尾事实：这些 command 对应已下沉到 runtime 的
-      // 调用，归档不取消、不强制中断，graceful stop 时收敛完成。
+      // 已开始的调用由宿主 quiesce 收敛，保留实际中断/结束事件；
+      // 不把已经投递的 command 伪装成尚未开始的取消项。
       inflightDrain: { count: inflightCommandIds.length, commandIds: inflightCommandIds },
       handoffConverged,
       sessions: [],
       failures: [],
     };
 
+    return withSessionOperations(thread.agentId, sessionIds, 'thread-archive', async () => {
     for (const sessionId of sessionIds) {
       try {
         if (typeof stopSession !== 'function') {
@@ -187,6 +189,7 @@ export function createThreadLifecycleService({
       cleanupStatus: cleanup.status,
     });
     return { threadId: normalizedThreadId, archivedAt: archiveEntry.archivedAt, cleanup };
+    });
   }
 
   async function unarchiveThread(threadId) {

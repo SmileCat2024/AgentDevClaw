@@ -1090,6 +1090,16 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 
 ---
 
+## 12h. 关闭对话后的侧栏存在性（2026-10-28）
+
+- `get_connected_agents` 同一响应携带运行时和宿主的 `sidebar_threads`（仅活跃实例关联线程及接续线程）；侧栏不读取独立的 `ClawThreads` 缓存来决定叶子存在性、head 或接续占位。普通 Session 路径不变；线程归属按 `agentId`，不特判 PH/Coder/Memo。
+- `sidebar-snapshot.js` 在投影前后核对线程呈现事实与托管运行时身份/存活事实。确有并发变化才重新读取，持续变化则显式拒绝本次读取，前端保留上一份完整快照。服务端以已确认 READY 的实例补齐晚于 Viewer 列表注册的 successor，避免提交 head 后空一帧；不是以线程看板猜测实例存在。
+- 接续期间由同一响应中的 `rotating` 挡板保持一条线程叶子，提交后由真实 successor 原位承接；不依赖页面缓存或前端 TTL。线程 SSE 只触发统一快照刷新，不直接修改侧栏存在性。
+- 服务端 `agent-connected.js` 合流时，托管 Runtime 的 `stopping`、`stopped` 与进程退出事实优先于 Viewer 连接缓存；已退役实例不能降级成 viewer-only child。异步元数据/通知读取完成后，发布前再次核对实例存活与归属。
+- 关闭意图按 Runtime 实例隐藏，不误伤同一 Session 的新实例；停止失败明确释放，权威运行时快照不再包含目标时解除。不得用 TTL 推断停止失败，也不得因列表刷新失败撤销已经确认的关闭。
+- `refreshSidebarRuntimeAfterMutation()` 在提交回执后推进既有 mutation epoch，拒绝提交前发起的快照，并在在途读取结束后发起新读取；不以固定延时充当完成屏障。
+- 回归：`frontend-sidebar-freshness.test.js` 复现独立快照错位及旧轮询晚到；`sidebar-projection-succession.test.js` 复现 Viewer 滞后与查询中途关闭；`ph-project-restart-runtime.mjs` 用隔离 Viewer、共享子进程、真实关闭 HTTP 和浏览器渲染验证关闭、后续轮询、页面刷新与兄弟会话。
+
 ## 13. 相关文件索引
 
 > 行号会随迭代漂移，定位时以 grep 为准，本表只给文件级归属（2026-08-23 复核）。

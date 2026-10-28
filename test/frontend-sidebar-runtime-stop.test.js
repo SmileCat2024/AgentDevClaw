@@ -4,10 +4,10 @@
  * 覆盖（精简/摘要/分支/归档共用链路）：
  *   - markPendingRuntimeStop 后侧栏投影立即隐藏源 runtime 条目（child 与宿主
  *     合成条目），兄弟条目与 operation 占位不受影响
- *   - reconcilePendingRuntimeStops：轮询快照不再包含该 runtime 时解除抑制；
- *     仍包含时保持隐藏；TTL 过期后不再隐藏（stop 卡死兜底）
- *   - requestArchivedSourceRuntimeCleanup：注册乐观退场并即刻发起 stop_agent；
- *     stop 被拒时解除隐藏让条目回到可见
+ *   - reconcilePendingRuntimeStops：权威快照不再包含该实例时解除抑制；
+ *     时间流逝不代表失败，同 Session 新实例不受旧关闭意图影响
+ *   - reconcileArchivedSourceRuntime：确认退役后协调呈现，不再补发 stop；
+ *     读取失败不能撤销已确认的关闭
  */
 
 import { describe, it } from 'node:test';
@@ -129,6 +129,14 @@ describe('sidebar: archived source runtime optimistic retirement', () => {
     assert.equal(entries.map((e) => e.runtimeId).join(','), 'runtime-1');
   });
 
+  it('closing one instance does not hide a newly started instance of the same session', () => {
+    const ctx = createStopSandbox();
+    ctx.run(`markPendingRuntimeStop('programming-helper', 'session-1', 'runtime-1')`);
+    assert.equal(ctx.run(`isRuntimeStopPending('programming-helper', 'session-1', 'runtime-new')`), false);
+    ctx.run(`reconcilePendingRuntimeStops([{ id: 'runtime-new', source: 'child', parent_id: 'programming-helper', active_workspace_session_id: 'session-1' }])`);
+    assert.equal(ctx.run(`isRuntimeStopPending('programming-helper', 'session-1', 'runtime-1')`), false);
+  });
+
   it('keeps the suppression while the snapshot still contains the runtime', () => {
     const ctx = createStopSandbox();
     ctx.run(`markPendingRuntimeStop('programming-helper', 'session-1', 'runtime-1')`);
@@ -138,22 +146,23 @@ describe('sidebar: archived source runtime optimistic retirement', () => {
     assert.equal(entries.length, 0);
   });
 
-  it('stops hiding the entry after the TTL expires even if stop never lands', () => {
+  it('keeps a pending close hidden until a receipt or authoritative snapshot, never a timer', () => {
     const ctx = createStopSandbox();
     ctx.run(`markPendingRuntimeStop('programming-helper', 'session-1', 'runtime-1')`);
     assert.equal(ctx.run(`isRuntimeStopPending('programming-helper', 'session-1', 'runtime-1')`), true);
     clockOffsetMs = 31000;
     try {
-      assert.equal(ctx.run(`isRuntimeStopPending('programming-helper', 'session-1', 'runtime-1')`), false);
+      assert.equal(ctx.run(`isRuntimeStopPending('programming-helper', 'session-1', 'runtime-1')`), true);
       ctx.run(`reconcilePendingRuntimeStops([{ id: 'runtime-1', source: 'child', parent_id: 'programming-helper', runtime_session_id: 'runtime-1', active_workspace_session_id: 'session-1' }])`);
-      const entries = ctx.run(`collectRuntimeEntriesForPrebuilt(${HOST}, [${SOURCE_CHILD}])`);
-      assert.equal(entries.map((e) => e.runtimeId).join(','), 'runtime-1');
+      assert.equal(ctx.run(`collectRuntimeEntriesForPrebuilt(${HOST}, [${SOURCE_CHILD}])`).length, 0);
+      ctx.run(`releasePendingRuntimeStop('runtime-1', 'programming-helper', 'session-1')`);
+      assert.equal(ctx.run(`collectRuntimeEntriesForPrebuilt(${HOST}, [${SOURCE_CHILD}])`).length, 1);
     } finally {
       clockOffsetMs = 0;
     }
   });
 
-  it('requestArchivedSourceRuntimeCleanup hides immediately and issues stop_agent once', async () => {
+  it('reconcileArchivedSourceRuntime hides retired entries without another stop request', async () => {
     const ctx = createStopSandbox();
     let stopCalls = 0;
     ctx.invoke = async (command, payload) => {
@@ -162,24 +171,23 @@ describe('sidebar: archived source runtime optimistic retirement', () => {
       assert.equal(payload.agentId, 'programming-helper');
       assert.equal(payload.sessionId, 'session-1');
     };
-    ctx.run(`requestArchivedSourceRuntimeCleanup('programming-helper', 'session-1', 'runtime-1')`);
+    ctx.run(`reconcileArchivedSourceRuntime('programming-helper', 'session-1', 'runtime-1')`);
     assert.equal(ctx.run(`isRuntimeStopPending('programming-helper', 'session-1', 'runtime-1')`), true);
     const entries = ctx.run(`collectRuntimeEntriesForPrebuilt(${HOST}, [${SOURCE_CHILD}])`);
     assert.equal(entries.length, 0);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(stopCalls, 1);
+    assert.equal(stopCalls, 0);
     // stop 成功返回后抑制保留，由轮询快照（reconcile）解除。
     assert.equal(ctx.run(`isRuntimeStopPending('programming-helper', 'session-1', 'runtime-1')`), true);
   });
 
-  it('requestArchivedSourceRuntimeCleanup releases the suppression when stop_agent is rejected', async () => {
+  it('a failed projection refresh cannot undo confirmed archive retirement', async () => {
     const ctx = createStopSandbox();
-    ctx.invoke = async () => { throw new Error('stop rejected'); };
+    ctx.refreshSidebarRuntimeAfterMutation = async () => { throw new Error('refresh failed'); };
     ctx.console = { ...console, warn() {} };
-    ctx.run(`requestArchivedSourceRuntimeCleanup('programming-helper', 'session-1', 'runtime-1')`);
+    ctx.run(`reconcileArchivedSourceRuntime('programming-helper', 'session-1', 'runtime-1')`);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(ctx.run(`isRuntimeStopPending('programming-helper', 'session-1', 'runtime-1')`), false);
-    const entries = ctx.run(`collectRuntimeEntriesForPrebuilt(${HOST}, [${SOURCE_CHILD}])`);
-    assert.equal(entries.map((e) => e.runtimeId).join(','), 'runtime-1');
+    assert.equal(ctx.run(`isRuntimeStopPending('programming-helper', 'session-1', 'runtime-1')`), true);
+    assert.equal(ctx.run(`collectRuntimeEntriesForPrebuilt(${HOST}, [${SOURCE_CHILD}])`).length, 0);
   });
 });

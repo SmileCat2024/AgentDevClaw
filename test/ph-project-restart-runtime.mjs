@@ -22,12 +22,15 @@ async function freePort() {
 // A real shared child process and Viewer: no model calls, real start/stop IPC,
 // real session index, real restart HTTP route and connected-agents projection.
 test('shared runtime restart preserves each sibling session and project ownership', async () => {
+  const agentId = process.env.SIDEBAR_TEST_HOST || 'programming-helper';
   const root = await mkdtemp(path.join(tmpdir(), 'claw-ph-restart-'));
   const viewerPort = await freePort();
   const appPort = await freePort();
   Object.assign(process.env, {
     AGENTDEV_DATA_DIR: root, PORT: String(appPort), AGENTDEV_VIEWER_PORT: String(viewerPort),
-    AGENTDEV_UDS_PATH: path.join(root, 'viewer.sock'),
+    AGENTDEV_UDS_PATH: process.platform === 'win32'
+      ? `\\\\.\\pipe\\claw-close-test-${process.pid}-${viewerPort}`
+      : path.join(root, 'viewer.sock'),
   });
   const { createAgentLifecycleModule } = await import('../server/routes/agent-lifecycle.js');
   const { createAgentDiscoveryModule } = await import('../server/routes/agent-discovery.js');
@@ -39,13 +42,14 @@ test('shared runtime restart preserves each sibling session and project ownershi
     { id: 'directory', title: '目录对话', openDirectory: root, workspaceAgentId: 'main' },
     { id: 'project', title: '项目对话', openDirectory: root, projectId, workspaceAgentId: 'reviewer' },
   ];
-  await writeSessionIndex('programming-helper', { activeSessionId: 'directory', sessions });
+  await writeSessionIndex(agentId, { activeSessionId: 'directory', sessions });
   await mkdir(path.join(root, 'workspaces/programming-helper'), { recursive: true });
   await writeFile(path.join(root, 'workspaces/programming-helper/projects.json'), JSON.stringify({ schemaVersion: 1, projects: [
     { id: projectId, name: '测试项目', workDirectory: root, directorySource: 'external', archived: false },
   ] }));
-  const agent = { id: 'programming-helper', name: '测试工作空间', kind: 'workspace', processMode: 'shared-global', relativeDir: 'test/fixtures/restart-user-input', status: {} };
+  const agent = { id: agentId, name: '测试工作空间', kind: 'workspace', processMode: 'shared-global', relativeDir: 'test/fixtures/restart-user-input', status: {} };
   const discovery = createAgentDiscoveryModule({ sessionApi: {
+    buildLightPrebuiltSessionRecord,
     listPrebuiltSessions: async () => {
       const index = await readSessionIndex(agent.id);
       return { ...index, sessions: index.sessions.map(s => buildLightPrebuiltSessionRecord(agent.id, s)) };
@@ -64,10 +68,14 @@ test('shared runtime restart preserves each sibling session and project ownershi
     readWorkspaceSessionMeta: discovery.readWorkspaceSessionMeta,
     readViewerJson, getPendingInputCount: async () => 0, resolveAgentModelPresets: async () => [],
   });
+  const { getThreadControl } = await import('../server/thread-control/thread-controller.js');
+  const { createThreadIntegration } = await import('../server/thread-control/thread-integration.js');
+  const control = getThreadControl();
+  const integration = createThreadIntegration({ control });
   const app = express();
   app.use(express.static('public'));
   app.get('/api/agents', async (_req, res) => res.json(await readViewerJson('/api/agents')));
-  app.get('/fixture', (_req, res) => res.type('html').send(restartPage({ projectId, root })));
+  app.get('/fixture', (_req, res) => res.type('html').send(restartPage({ projectId, root, agentId })));
   lifecycle.setupRoutes(app, express);
   const server = app.listen(appPort, '127.0.0.1');
   await once(server, 'listening');
@@ -108,7 +116,7 @@ test('shared runtime restart preserves each sibling session and project ownershi
     const second = await post('start_agent', { agentId: agent.id, sessionId: 'directory' });
     assert.ok(second.agent?.runtime_session_id);
     checkOwnership(await lifecycle.getConnectedAgents());
-    const readyResponse = await fetch(`http://127.0.0.1:${appPort}/protoclaw/runtime_status?agentId=programming-helper&sessionId=project`);
+    const readyResponse = await fetch(`http://127.0.0.1:${appPort}/protoclaw/runtime_status?agentId=${agentId}&sessionId=project`);
     const ready = await readyResponse.json();
     assert.equal(ready.ready, true);
     assert.equal(ready.agent.project_id, projectId, '就绪探测不能把项目身份洗成目录对话');
@@ -144,6 +152,41 @@ test('shared runtime restart preserves each sibling session and project ownershi
     await page.reload();
     await page.waitForSelector('body[data-ready="true"]');
     assert.equal(await projectGroup.locator(`[data-agent-id="${restarted.agent.runtime_session_id}"]`).count(), 1, '刷新前后分组一致');
+    const thread = await control.core.start({ sessionRef: { agentId: agent.id, sessionId: 'project' } });
+    await page.evaluate('loadAgents()');
+    assert.equal(await page.locator(`[data-thread-id="${thread.threadId}"]`).count(), 1);
+    await integration.beginSessionSuccession({ agentId: agent.id, sessionId: 'project', reason: 'trim' });
+    await lifecycle.stopManagedAgent(agent.id, 'project');
+    await page.evaluate('loadAgents()');
+    assert.equal(await page.locator(`[data-thread-id="${thread.threadId}"]`).count(), 1, 'explicit handoff retains the same conversation');
+    await writeSessionIndex(agent.id, { ...(await readSessionIndex(agent.id)), sessions: [
+      ...(await readSessionIndex(agent.id)).sessions,
+      { ...sessions[1], id: 'successor', sourceSessionId: 'project', title: '接续后对话' },
+    ] });
+    await post('start_agent', { agentId: agent.id, sessionId: 'successor' });
+    const committed = await integration.applySessionSuccession({ agentId: agent.id, fromSessionId: 'project', toSessionId: 'successor', reason: 'trim' });
+    assert.equal(committed.applied, true);
+    await page.evaluate('loadAgents()');
+    assert.equal(await page.locator(`[data-thread-id="${thread.threadId}"]`).count(), 1, 'head commit keeps exactly one conversation leaf');
+    assert.equal(await page.locator(`[data-thread-id="${thread.threadId}"]`).getAttribute('data-ctx-session-id'), 'successor');
+    // Closing through the actual browser action must stay closed even while the
+    // independent thread snapshot still reports headRuntimeRunning=true.
+    await projectGroup.locator('.agent-runtime-item').click();
+    const alerts = [];
+    page.on('dialog', async dialog => { alerts.push(dialog.message()); await dialog.dismiss(); });
+    await page.locator('#close').click();
+    await page.waitForSelector('body[data-closed="true"]');
+    assert.deepEqual(alerts, []);
+    assert.equal(await page.locator(`[data-thread-id="${thread.threadId}"]`).count(), 0);
+    for (let frame = 0; frame < 3; frame++) {
+      await page.evaluate('loadAgents()');
+      assert.equal(await page.locator(`[data-thread-id="${thread.threadId}"]`).count(), 0, 'polling must not resurrect a disconnected leaf');
+      assert.equal(await page.locator(`[data-agent-id="${second.agent.runtime_session_id}"]`).count(), 1, 'sibling stays visible');
+    }
+    await page.reload();
+    await page.waitForSelector('body[data-ready="true"]');
+    assert.equal(await page.locator(`[data-thread-id="${thread.threadId}"]`).count(), 0, 'cold-cache projection also stays closed');
+    assert.deepEqual(errors, []);
     const index = await readSessionIndex(agent.id);
     assert.equal(index.sessions.find(s => s.id === 'project').projectId, projectId);
   } finally {

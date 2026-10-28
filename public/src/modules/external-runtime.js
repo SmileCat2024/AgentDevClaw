@@ -156,9 +156,10 @@ async function restartSidebarExternalRuntime(agent) {
   return response.json().catch(() => ({}));
 }
 
-async function refreshSidebarRuntimeAfterMutation(delayMs = 0) {
-  if (delayMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
+async function refreshSidebarRuntimeAfterMutation() {
+  // A completed mutation invalidates reads started before its receipt. Joining
+  // the old in-flight poll is not a refresh; follow it with a post-commit read.
+  if (typeof markSidebarAuthoritativeMutation === 'function') markSidebarAuthoritativeMutation();
+  if (loadAgentsInFlight) await loadAgentsInFlight;
   await loadAgents();
 }

@@ -17,7 +17,7 @@ describe('archive-and-replace contract', () => {
     const end = sessionRoutes.indexOf("app.get('/protoclaw/session_summary'", start);
     const route = sessionRoutes.slice(start, end);
     assert.match(route, /const branchMessages = rawMessages\.slice\(0, cutMsgIndexEnd \+ 1\)/);
-    assert.match(route, /context:\s*\{[\s\S]*messages:\s*branchMessages,[\s\S]*enrichedMessages:\s*branchEnriched/);
+    assert.match(route, /buildBranchSnapshot\(sourceSnapshot, cutMsgIndexEnd/);
   });
 
   it('archives a branch source before sending the success response', () => {
@@ -135,11 +135,11 @@ describe('archive-and-replace contract', () => {
 
   it('settles a committed replacement before independently cleaning up its source runtime', () => {
     for (const client of [workspaceActions, sessionDialogs]) {
-      assert.match(client, /requestArchivedSourceRuntimeCleanup\(/);
+      assert.match(client, /reconcileArchivedSourceRuntime\(/);
       assert.doesNotMatch(client, /settleSessionReplacementMutation/);
       assert.doesNotMatch(client, /phase:\s*'source-stopping'/);
     }
-    assert.match(sessionMutation, /function requestArchivedSourceRuntimeCleanup/);
+    assert.match(sessionMutation, /function reconcileArchivedSourceRuntime/);
     assert.doesNotMatch(sidebarOperations, /source_stop_timeout/);
     assert.doesNotMatch(sidebarOperations, /settleSidebarSourceOperation/);
   });

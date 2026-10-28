@@ -129,7 +129,7 @@ test('real session creation persists, restores, derives and projects the binding
   const { exportHistoryOnlyHandoffPackage } = await import('../server/context-continuity/handoff-package.js');
   const { writeSummarizedHandoffPackage } = await import('../server/context-continuity/summarized-handoff.js');
   const snapshotPath = getPrebuiltSessionFilePath(metadata.id, first.id);
-  await writeFile(snapshotPath, JSON.stringify({ runtime: { context: { messages: [{ role: 'user', content: 'Hello', turn: 0 }] } } }));
+  await writeFile(snapshotPath, JSON.stringify({ runtime: { callIndex: 0, callState: 'idle', featureStates: [], context: { messages: [{ role: 'user', content: 'Hello', turn: 0 }] } } }));
   for (const exportHandoff of [
     () => exportHistoryOnlyHandoffPackage({ userDataRoot: root, agentId: metadata.id, sessionId: first.id, sessionPath: snapshotPath, sourceRecord: first }),
     () => writeSummarizedHandoffPackage({ userDataRoot: root, agentId: metadata.id, sessionId: first.id, sourceRecord: first, summaryText: 'Continue the task.' }),

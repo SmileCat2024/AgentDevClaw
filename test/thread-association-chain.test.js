@@ -92,7 +92,7 @@ async function makeEnv({ llmScript, hangFirstCall = false } = {}) {
   // 宿主上报契约（对齐 run-prebuilt-agent）：callStarted/callFinished → turn 事件 → board。
   // 上报 promise 纳入 waitIdle 追踪：board 落盘是异步 IO，测试必须等其收敛再读。
   const reports = [];
-  const trackReport = (promise) => { reports.push(promise); };
+  const trackReport = (promise) => { reports.push(promise); return promise; };
   const reportTurnEvent = async (event) => {
     const thread = await core.findThreadByHeadSession(AGENT_ID, HEAD_1);
     if (!thread) return;
@@ -103,7 +103,7 @@ async function makeEnv({ llmScript, hangFirstCall = false } = {}) {
     });
   };
   arbiter.on('callStarted', (envelope) => {
-    trackReport(reportTurnEvent({
+    return trackReport(reportTurnEvent({
       type: 'turn.started',
       turn: typeof agent._callIndex === 'number' ? agent._callIndex + 1 : null,
       source: envelope?.source || null,
@@ -112,7 +112,7 @@ async function makeEnv({ llmScript, hangFirstCall = false } = {}) {
   });
   arbiter.on('callFinished', (envelope) => {
     const turn = typeof agent._callIndex === 'number' ? agent._callIndex : null;
-    trackReport(reportTurnEvent(mapEnvelopeToTurnEvent(envelope, { turn })));
+    return trackReport(reportTurnEvent(mapEnvelopeToTurnEvent(envelope, { turn })));
   });
 
   // fetch stub：dequeue-input 供 react-loop drain；其余 URL 显式失败

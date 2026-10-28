@@ -67,6 +67,9 @@ export class CallArbiter {
     this._queue = [];
     this._active = false;
     this._activeEnvelope = null;
+    this._closing = false;
+    this._closePromise = null;
+    this._execution = null;
     // Interrupt events targeting the active envelope (C3): arbiter-owned
     // queue — interruptActive() never mutates the envelope; _runEnvelope
     // closes it via _drainInterrupts() at the checkpoint positions.
@@ -97,6 +100,7 @@ export class CallArbiter {
    * @returns {object} The envelope with assigned id and status
    */
   enqueue(envelope) {
+    if (this._closing) throw Object.assign(new Error('Session is closing'), { code: 'session_closing' });
     const hasImages = Array.isArray(envelope.images) && envelope.images.length > 0;
 
     const entry = {
@@ -207,6 +211,20 @@ export class CallArbiter {
     return { active: Boolean(envelope), cleared };
   }
 
+  /** Close admission synchronously; settle the logical turn and its listeners. */
+  close(reason = 'session closed') {
+    if (this._closePromise) return this._closePromise;
+    this._closing = true;
+    this.interruptActive(reason);
+    // Framework owns call cancellation; the arbiter owns continuation/queue admission.
+    const quiesced = this._agent.quiesce();
+    this._closePromise = (async () => {
+      await quiesced;
+      await this._execution;
+    })();
+    return this._closePromise;
+  }
+
   // -- Internal --
 
   /**
@@ -216,7 +234,7 @@ export class CallArbiter {
    * or post-completion queue checks (e.g., maxTurns reached, call errored).
    */
   async _drainViewerQueuedInputs() {
-    if (!this._agent?.agentId) return;
+    if (this._closing || !this._agent?.agentId) return;
     const viewerPort = process.env.AGENTDEV_VIEWER_PORT || '2026';
     const viewerUrl = `http://127.0.0.1:${viewerPort}`;
     let count = 0;
@@ -229,7 +247,7 @@ export class CallArbiter {
         );
         if (!res.ok) break;
         const data = await res.json();
-        if (!data.input) break;
+        if (!data.input || this._closing) break;
 
         this.enqueue({
           // source 透传原始来源（reminder 落地为 system 消息时它就是
@@ -264,15 +282,15 @@ export class CallArbiter {
   }
 
   _emit(event, envelope) {
-    for (const fn of this._listeners[event] || []) {
-      try { fn(envelope); } catch (err) {
+    return Promise.all((this._listeners[event] || []).map(async (fn) => {
+      try { await fn(envelope); } catch (err) {
         console.error(`[CallArbiter] ${event} listener error:`, err);
       }
-    }
+    }));
   }
 
   _kick() {
-    if (this._active || this._queue.length === 0) return;
+    if (this._closing || this._active || this._queue.length === 0) return;
     // Dequeue and run
     this._active = true;
     this._activeEnvelope = this._queue.shift();
@@ -287,25 +305,25 @@ export class CallArbiter {
     envelope._rollbackCount = 0;
 
     console.log(`[CallArbiter] executing ${envelope.id} (source=${envelope.source})`);
-    this._emit('callStarted', envelope);
+    const started = this._emit('callStarted', envelope);
 
     // Run asynchronously so enqueue() returns immediately
-    this._runEnvelope(envelope)
+    this._execution = this._runEnvelope(envelope)
       .catch((err) => {
         applyEnvelopeEvent(envelope, 'failed');
         envelope.error = err instanceof Error ? err.message : String(err);
         console.error(`[CallArbiter] envelope ${envelope.id} failed:`, err);
       })
-      .finally(() => {
+      .finally(async () => {
         if (envelope.status === 'running') {
           // _runEnvelope completed without setting status (normal completion)
           applyEnvelopeEvent(envelope, 'completed');
         }
-        this._active = false;
-
-        this._status = this._queue.length > 0 ? 'queued' : 'idle';
         console.log(`[CallArbiter] finished ${envelope.id} (status=${envelope.status}, segments=${envelope._segmentCount || 0}, remaining=${this._queue.length})`);
-        this._emit('callFinished', envelope);
+        await started;
+        await this._emit('callFinished', envelope);
+        this._active = false;
+        this._status = this._queue.length > 0 ? 'queued' : 'idle';
         // Resolve any waitForCompletion() promises for this envelope
         const cb = this._completionCallbacks.get(envelope.id);
         if (cb) {

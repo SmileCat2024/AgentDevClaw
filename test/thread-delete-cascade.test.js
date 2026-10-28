@@ -35,6 +35,8 @@ import { createThreadDeleteResources } from '../server/thread-control/thread-del
 import { getContextHandoffsRoot } from '../server/context-continuity/handoff-package.js';
 import { setupThreadRoutes } from '../server/thread-control/thread-routes.js';
 import { WorkThreadCommandStatus as ThreadCommandStatus } from '@agentdevjs/core';
+import { createAgentStartupFns } from '../server/routes/agent-startup.js';
+import { createThreadIntegration } from '../server/thread-control/thread-integration.js';
 
 // ─── 夹具 ─────────────────────────────────────────────────────────
 
@@ -232,6 +234,43 @@ describe('T005: 删除 Thread 清理全部关联数据', () => {
 // ─── 2. 收尾策略（等待 / 强制停止 / 成员 runtime 收敛）────────────
 
 describe('T005: 运行中调用收尾策略', () => {
+  it('runtime start eligibility follows thread archive, deleting and succession facts', async () => {
+    const control = makeControl();
+    const threadId = await startTwoLinkThread(control.core);
+    const integration = createThreadIntegration({ control });
+    await integration.assertSessionStartable(AGENT, 's2');
+    await control.archive.archive(threadId);
+    await assert.rejects(integration.assertSessionStartable(AGENT, 's2'), { code: 'thread_archived' });
+    await control.archive.unarchive(threadId);
+    await control.core.store.update(threadId, draft => ({ ...draft, deleting: true }));
+    await assert.rejects(integration.assertSessionStartable(AGENT, 's1'), { code: 'thread_deleting' });
+    await control.core.store.update(threadId, draft => ({ ...draft, deleting: false, pendingSuccession: { fromSessionId: 's2' } }));
+    await assert.rejects(integration.assertSessionStartable(AGENT, 's2'), { code: 'handoff_in_progress' });
+  });
+
+  for (const action of ['archive', 'delete']) {
+    it(`${action} prevents any member runtime restarting while retirement is pending`, async () => {
+      const control = makeControl();
+      const threadId = await startTwoLinkThread(control.core);
+      const entered = Promise.withResolvers();
+      const release = Promise.withResolvers();
+      const stopSession = async () => { entered.resolve(); await release.promise; return { status: 'stopped' }; };
+      const service = action === 'archive'
+        ? createThreadLifecycleService({ control, stopSession })
+        : createThreadDeleteService({ control, stopSession });
+      const operation = action === 'archive' ? service.archiveThread(threadId) : service.deleteThread(threadId, { forceWaitMs: 0 });
+      await entered.promise;
+      try {
+        const startup = createAgentStartupFns({});
+        for (const sessionId of ['s1', 's2']) {
+          await assert.rejects(startup.startManagedAgent({ id: AGENT }, sessionId), { code: 'session_operation_in_progress' });
+        }
+      } finally {
+        release.resolve();
+        await operation;
+      }
+    });
+  }
   it('prefers natural completion within budget and still settles member runtimes', async () => {
     const env = makeDeleteEnvironment();
     const threadId = await startTwoLinkThread(env.core);
@@ -288,9 +327,14 @@ describe('T005: 运行中调用收尾策略', () => {
     assert.equal(result.deleted, false);
     const drainFailure = result.cleanup.failures.find((f) => f.stage === 'drain');
     assert.ok(drainFailure, 'stop 失败必须进结构化残留列表');
-    // 记录保留（closed 终态）：重试仍可按 threadId 寻址
+    // Keep the deletion gate and all resources until execution is confirmed stopped.
     const retained = await env.core.getThread(threadId);
-    assert.equal(retained.status, 'closed');
+    assert.equal(retained.deleting, true);
+    assert.equal(retained.hold, true);
+    assert.deepEqual(env.observation.removedSessions, []);
+    assert.equal(env.observation.removedHandoffs, null);
+    assert.deepEqual(env.observation.clearedRuntimes, []);
+    assert.equal((await env.board.getState(threadId)).status, 'running');
   });
 });
 

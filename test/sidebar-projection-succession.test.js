@@ -60,14 +60,14 @@ function viewerAgent(id) {
   return { id, connected: true, name: 'coder-runtime' };
 }
 
-function createQuery({ viewerAgents = [], visibilityOverrides = {}, threadSummaries = [], archiveEntries = {} } = {}) {
+function createQuery({ viewerAgents = [], visibilityOverrides = {}, threadSummaries = [], archiveEntries = {}, readWorkspaceSessionMeta = async () => ({}) } = {}) {
   return createConnectedAgentsQuery({
     getAgentsLight: async () => [phAgentLight(), coderAgentLight()],
     readActiveWorkspaceSessionMeta: async () => ({
       workspaceSessions: { sessions: [] },
       sessionMeta: {},
     }),
-    readWorkspaceSessionMeta: async () => ({}),
+    readWorkspaceSessionMeta,
     readViewerJson: async (pathname) => (pathname === '/api/agents'
       ? { agents: viewerAgents }
       : {}),
@@ -102,6 +102,32 @@ function setManaged(...records) {
 
 afterEach(() => {
   managedAgents.clear();
+});
+
+it('retired hosted runtimes never re-enter as viewer-only children while Viewer lags', async () => {
+  const runtime = coderRuntimeRecord({ key: 'retired', viewerAgentId: 'agent-retired', stopping: true });
+  setManaged(runtime);
+  const viewerAgents = [{ ...viewerAgent('agent-retired'), parentAgentId: 'coder', selectedSessionId: runtime.selectedSessionId }];
+  const query = createQuery({ viewerAgents });
+  assert.equal((await query.getConnectedAgents()).some(a => a.id === 'agent-retired'), false);
+  runtime.stopping = false;
+  runtime.stopped = true;
+  // Shared-process siblings keep the OS process alive after session-exited.
+  assert.equal((await query.getConnectedAgents()).some(a => a.id === 'agent-retired'), false,
+    'a final stop receipt must outrank a stale connected Viewer record');
+});
+
+it('a close committed during async projection cannot leak the retired child in the response', async () => {
+  const runtime = coderRuntimeRecord({ key: 'closing', viewerAgentId: 'agent-closing' });
+  setManaged(runtime);
+  const result = await createQuery({
+    viewerAgents: [viewerAgent('agent-closing')],
+    readWorkspaceSessionMeta: async () => {
+      runtime.stopped = true;
+      return { active_workspace_session_id: runtime.selectedSessionId };
+    },
+  }).getConnectedAgents();
+  assert.equal(result.some(a => a.id === 'agent-closing'), false);
 });
 
 // ── 接续时序：默认 auto 下入口 = Runtime 存活 ∨ 接续挡板在途 ─────────────

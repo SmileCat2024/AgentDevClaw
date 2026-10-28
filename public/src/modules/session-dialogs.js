@@ -68,6 +68,7 @@ window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
     const res = await fetch('/protoclaw/session_trim_preview?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
     if (!res.ok) throw new Error(await res.text().catch(() => 'failed'));
     const data = await res.json();
+    branchDialogState.snapshotRevision = data.snapshotRevision;
     branchDialogState.rounds = data.rounds || [];
     branchDialogState.preamblePercent = typeof data.preamblePercent === 'number' ? data.preamblePercent : 0;
     if (branchDialogState.rounds.length === 0) {
@@ -162,7 +163,7 @@ function updateBranchFooterInfo() {
 branchRoundList.addEventListener('click', handleBranchRoundClick);
 
 window.submitBranch = async () => {
-  const { agentId, sessionId, rounds, selectedIdx, archiveAfter } = branchDialogState;
+  const { agentId, sessionId, rounds, selectedIdx, archiveAfter, snapshotRevision } = branchDialogState;
   if (!agentId || !sessionId || selectedIdx < 0 || !rounds.length) return;
   bumpNavigationGuard();
   const _navGuard = _navigationGuardEpoch;
@@ -209,6 +210,7 @@ window.submitBranch = async () => {
         agentId: requestAgentId,
         sourceSessionId: sessionId,
         cutMsgIndexEnd,
+        snapshotRevision,
         archiveOriginal: archiveAfter,
         responseMode: 'delta',
         operationId: branchOperation?.operationId || createSidebarOperationId('branch'),
@@ -229,7 +231,7 @@ window.submitBranch = async () => {
     // 归档已提交：源 runtime 处置与新会话导航解耦，立即发起（内部含侧栏条目
     // 的乐观退场）。停靠在导航之后会让老条目等新会话页面完全加载完才开始关闭。
     if (archiveAfter && archiveSucceeded && !isRemoteSession) {
-      requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
+      reconcileArchivedSourceRuntime(agentId, sessionId, _oldRuntimeId);
     }
 
     const targetSessionId = String(result?.newSessionId || '').trim();

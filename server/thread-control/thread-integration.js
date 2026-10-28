@@ -66,6 +66,17 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
     archive,
     findThreadBySession,
 
+    async assertSessionStartable(agentId, sessionId) {
+      const thread = await findThreadBySession(agentId, sessionId);
+      if (!thread) return;
+      const code = thread.deleting ? 'thread_deleting'
+        : thread.status === 'closed' ? 'thread_closed'
+        : await archive.isArchived(thread.threadId) ? 'thread_archived'
+        : thread.pendingSuccession && thread.headSessionId === sessionId ? 'handoff_in_progress'
+        : null;
+      if (code) throw Object.assign(new Error(`Session runtime cannot start: ${code}`), { code, status: 409, statusCode: 409 });
+    },
+
     /**
      * 会话创建钩子：线程宿主 APP 的新会话自动成为一条新线程。
      * 失败不阻断会话创建（线程是承接增强，不是会话存在的前提）。

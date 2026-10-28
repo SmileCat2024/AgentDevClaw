@@ -289,6 +289,7 @@ class SessionLifecycle {
     // 宿主统一在请求成功后去抖补一次 saveSession。
     this._commsSaveTimer = null;
     this._commsSaveChain = Promise.resolve();
+    this._hostRequests = new Set();
 
     // Per-session bridge contexts (shared by reference with extracted modules)
     this.imBridgeCtx = {
@@ -421,7 +422,26 @@ class SessionLifecycle {
     }, 2000);
   }
 
-  async handleIPC(msg) {
+  handleIPC(msg) {
+    if (!msg || typeof msg !== 'object') return Promise.resolve();
+    if (this.disposed) {
+      if (msg.requestId && process.connected) {
+        const type = msg.type === 'feature-comms-request' ? 'feature-comms-result'
+          : String(msg.type).startsWith('capability-') ? 'capability-result'
+          : String(msg.type).replace(/-(control|status|request)$/, '-result');
+        const error = { ok: false, code: 'session_closing', error: 'Session is closing' };
+        process.send({ type, requestId: msg.requestId, sessionId: this.sessionId,
+          ...error, ...(type === 'feature-comms-result' ? { result: error } : {}) });
+      }
+      return Promise.resolve();
+    }
+    const request = this.handleActiveIPC(msg);
+    this._hostRequests.add(request);
+    void request.finally(() => this._hostRequests.delete(request)).catch(() => {});
+    return request;
+  }
+
+  async handleActiveIPC(msg) {
     if (!msg || typeof msg !== 'object') return;
 
     // ── tool / feature / hook enable-disable ──
@@ -468,8 +488,7 @@ class SessionLifecycle {
 
     // ── IM bridge messages (carrier mount/unmount, todo-control) ──
     if (msg.type === 'mount-im-carrier' || msg.type === 'unmount-im-carrier' || msg.type === 'todo-control') {
-      this.imBridge.handleIPCMessage(msg);
-      return;
+      return this.imBridge.handleIPCMessage(msg);
     }
 
     if (msg.type === 'feature-comms-request') {
@@ -630,10 +649,13 @@ class SessionLifecycle {
     let persisted = true;
 
     if (this.agent) {
+      // Settle calls and admitted host mutations before the final snapshot. Both
+      // shared and isolated runtimes acknowledge only after this whole sequence.
+      if (this.callArbiter) await this.callArbiter.close();
+      else await this.agent.quiesce();
+      await Promise.allSettled([...this._hostRequests]);
+      await this._commsSaveChain;
       if (this.sessionId) {
-        if (typeof this.agent.disableStepAutoSave === 'function') {
-          this.agent.disableStepAutoSave();
-        }
         try {
           await this.agent.saveSession(this.sessionId, sessionStore);
         } catch (error) {
@@ -675,7 +697,9 @@ async function closeHostedSession(sessionId, { notify = true, expectedSession = 
       sessions.delete(sessionId);
       if (notify && process.connected) {
         try {
-          process.send({ type: 'session-exited', sessionId, persisted });
+          await new Promise((resolve, reject) => {
+            process.send({ type: 'session-exited', sessionId, persisted }, error => error ? reject(error) : resolve());
+          });
         } catch (error) {
           console.warn(`[ProtoClaw Runtime] session-exited 通知失败 (session=${sessionId}):`, error?.message || error);
         }
@@ -1049,7 +1073,7 @@ SessionLifecycle.prototype.start = async function () {
   // 故此处读到的 _callIndex 尚未递增，+1 对齐本次 call 号；callFinished
   // 时递增已完成，直接用 _callIndex。同一 turn 两事件同号。
   this.callArbiter.on('callStarted', (envelope) => {
-    void self.reportThreadEvent({
+    return self.reportThreadEvent({
       type: 'turn.started',
       turn: typeof self.agent?._callIndex === 'number' ? self.agent._callIndex + 1 : null,
       source: envelope?.source || null,
@@ -1060,7 +1084,7 @@ SessionLifecycle.prototype.start = async function () {
   });
 
   this.callArbiter.on('callFinished', (envelope) => {
-    void (async () => {
+    return (async () => {
       await self.reportSessionItemsForTurn();
       const usage = typeof self.agent.getUsage === 'function'
         ? self.agent.getUsage().toSnapshot()?.lastRequestUsage || null
@@ -1074,8 +1098,10 @@ SessionLifecycle.prototype.start = async function () {
         }),
       );
     })();
+  });
+  this.callArbiter.on('callFinished', () => {
     if (!self.sessionId) return;
-    self.agent.saveSession(self.sessionId, sessionStore).then(async () => {
+    return self.agent.saveSession(self.sessionId, sessionStore).then(async () => {
       try {
         const context = typeof self.agent.getContext === 'function' ? self.agent.getContext() : null;
         const messages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
@@ -1266,7 +1292,12 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
 
     let handled;
     try {
-      handled = await this.summaryHandlers.handleInputResponse(userInput, response);
+      if (this.disposed || !this.inputLoopRunning) break;
+      const action = this.summaryHandlers.handleInputResponse(userInput, response);
+      this._hostRequests.add(action);
+      try { handled = await action; }
+      finally { this._hostRequests.delete(action); }
+      if (this.disposed || !this.inputLoopRunning) break;
     } catch (error) {
       console.error('[ProtoClaw Runtime] 处理输入动作失败，已忽略本次请求:', error);
       console.error(error?.stack || error);

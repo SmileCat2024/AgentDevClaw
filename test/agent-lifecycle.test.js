@@ -13,8 +13,9 @@ process.env.AGENTDEV_DATA_DIR = DATA_DIR;
 
 const { createAgentLifecycleModule } = await import('../server/routes/agent-lifecycle.js');
 const { buildSessionWorkspaceEnv, buildSharedSessionStartMessage, resolveManagedProcessPlacement } = await import('../server/routes/agent-startup.js');
-const { managedAgents } = await import('../server/shared/agent-access.js');
+const { managedAgents, getManagedRuntimeKey } = await import('../server/shared/agent-access.js');
 const { FileSessionStore } = await import('@agentdevjs/core');
+const { updateSessionIndex } = await import('../server/shared/session-access.js');
 
 after(() => rmSync(DATA_DIR, { recursive: true, force: true }));
 
@@ -29,6 +30,12 @@ function createMockChild() {
     child.exitCode = 0;
     child.stopped = true;
     child.emit('exit', 0);
+  };
+  child.send = (message) => {
+    if (message.type === 'remove-session') queueMicrotask(() => {
+      child.stopped = true;
+      child.emit('message', { type: 'session-exited', sessionId: message.sessionId, persisted: true });
+    });
   };
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -70,7 +77,7 @@ function createMockCtx(overrides = {}) {
 
 function injectRuntime(agentId, sessionId, child) {
   const runtime = {
-    key: `${agentId}::${sessionId || '__NO_SESSION__'}`,
+    key: getManagedRuntimeKey(agentId, sessionId),
     agentId,
     id: agentId,
     process: child,
@@ -231,6 +238,23 @@ describe('agent-lifecycle', () => {
       assert.equal(runtime.stopped, true);
     });
 
+    it('rejects stop while startup is admitted but has not registered its runtime', async () => {
+      const entered = Promise.withResolvers();
+      const release = Promise.withResolvers();
+      const mod = createAgentLifecycleModule(createMockCtx({
+        resolveRuntimeDisplayName: async () => { entered.resolve(); await release.promise; throw new Error('fixture ends startup'); },
+      }));
+      await updateSessionIndex('starting-agent', index => ({ ...index, sessions: [{ id: 'target' }] }));
+      const starting = mod.startManagedAgent({ id: 'starting-agent' }, 'target').catch(error => error);
+      await entered.promise;
+      try {
+        await assert.rejects(mod.stopManagedAgent('starting-agent', 'target'), { code: 'session_operation_in_progress' });
+      } finally {
+        release.resolve();
+        assert.equal((await starting).message, 'fixture ends startup');
+      }
+    });
+
     it('returns stopped status when no runtime exists', async () => {
       const mod = createAgentLifecycleModule(createMockCtx());
       const status = await mod.stopManagedAgent('nonexistent-agent');
@@ -274,9 +298,9 @@ describe('agent-lifecycle', () => {
         child.signalCode = signal;
         child.emit('exit', null, signal);
       };
-      const runtime = injectRuntime('signal-agent', 'sess-signal', child);
+      const runtime = injectRuntime('signal-agent', null, child);
 
-      const status = await mod.stopManagedAgent('signal-agent', 'sess-signal');
+      const status = await mod.stopManagedAgent('signal-agent', null);
       assert.equal(runtime.stopped, true);
       assert.equal(child.exitCode, null);
       assert.equal(child.signalCode, 'SIGTERM');
@@ -293,7 +317,7 @@ describe('agent-lifecycle', () => {
       child.kill = () => { killCalled = true; };
       child.send = (message) => {
         assert.deepEqual(message, { type: 'remove-session', sessionId: 'shared-session' });
-        queueMicrotask(() => child.emit('message', { type: 'session-exited', sessionId: 'shared-session' }));
+        queueMicrotask(() => child.emit('message', { type: 'session-exited', sessionId: 'shared-session', persisted: true }));
       };
 
       const status = await mod.stopManagedAgent('shared-agent', 'shared-session');
@@ -376,6 +400,44 @@ describe('agent-lifecycle', () => {
       }
     });
 
+    it('ordinary isolated close waits for session acknowledgement and does not send SIGTERM', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const child = createMockChild();
+      injectRuntime('isolated', 'active', child);
+      child.send = () => {};
+      child.kill = () => assert.fail('Session close must not substitute a process signal');
+      let settled = false;
+      const stopping = mod.stopManagedAgent('isolated', 'active').then(result => { settled = true; return result; });
+      await Promise.resolve();
+      assert.equal(settled, false);
+      child.emit('message', { type: 'session-exited', sessionId: 'other', persisted: true });
+      await Promise.resolve();
+      assert.equal(settled, false);
+      child.emit('message', { type: 'session-exited', sessionId: 'active', persisted: true });
+      assert.equal((await stopping).status, 'stopped');
+    });
+
+    it('ordinary close reports save failure rather than successful stop', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const child = createMockChild();
+      injectRuntime('isolated', 'unsaved', child);
+      child.send = () => {};
+      const stopping = mod.stopManagedAgent('isolated', 'unsaved');
+      child.emit('message', { type: 'session-exited', sessionId: 'unsaved', persisted: false });
+      await assert.rejects(stopping, /Failed to confirm session persistence/);
+    });
+
+    it('reports asynchronous IPC send failure without pretending the runtime retired', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const child = createMockChild();
+      const runtime = injectRuntime('send-failure', 'session', child);
+      child.send = (_message, callback) => queueMicrotask(() => callback(new Error('IPC disconnected')));
+      await assert.rejects(mod.stopManagedAgent('send-failure', 'session'), /Failed to confirm session persistence/);
+      assert.equal(runtime.stopped, false);
+      assert.equal(runtime.stopping, false);
+      assert.equal(child.listenerCount('message'), 0);
+    });
+
     it('fails a persistence wait when no runtime can confirm the session save', async () => {
       const mod = createAgentLifecycleModule(createMockCtx());
       await assert.rejects(
@@ -413,13 +475,25 @@ describe('agent-lifecycle', () => {
       assert.equal(runtime.stopping, false);
     });
 
-    // ── 早关闭竞态（伪失败）：子进程自行关闭（保存已落盘）→ session-exited
-    // 发出时服务端尚未监听（消息丢失）→ process.exit(0) → 服务端 onExit 无确认。
-    // 保存屏障的语义是"快照落盘确认"，不是"握手确认"：进程死亡且未确认时，
-    // 必须核验盘上保存事实，而不是把落盘成功的关闭误判为失败（rotation 伪失败
-    // 的主路径，10-17/10-18 三次事故同签名）。
+    // A recent step snapshot cannot substitute for the final close acknowledgement.
     describe('early self-close persistence race', () => {
-      it('passes the barrier when the host exits after a fresh on-disk save', async () => {
+      it('retains a close acknowledgement received before stop is requested', async () => {
+        const mod = createAgentLifecycleModule(createMockCtx());
+        await updateSessionIndex('early-ack', index => ({ ...index, sessions: [{ id: 'early-session' }] }));
+        await mod.startManagedAgent({ id: 'early-ack', relativeDir: 'prebuilt-agents/__nonexistent__' }, 'early-session');
+        const runtime = managedAgents.get(getManagedRuntimeKey('early-ack', 'early-session'));
+        try {
+          // Exercise the production process-level listener, not a pre-filled result.
+          runtime.process.emit('message', { type: 'session-exited', sessionId: 'early-session', persisted: true });
+          const result = await mod.stopManagedAgent('early-ack', 'early-session', { waitForPersistence: true });
+          assert.equal(result.status, 'stopped');
+          assert.equal(runtime.persistenceConfirmed, true);
+        } finally {
+          runtime.process.kill('SIGTERM');
+          await mod.waitForProcessExit(runtime.process);
+        }
+      });
+      it('rejects unacknowledged exit even if a step snapshot was saved recently', async () => {
         const mod = createAgentLifecycleModule(createMockCtx({
           readSessionSavedAt: async () => Date.now() - 500,
         }));
@@ -434,8 +508,7 @@ describe('agent-lifecycle', () => {
           });
         };
 
-        const status = await mod.stopManagedAgent('shared-agent', 'raced-session', { waitForPersistence: true });
-        assert.equal(status.status, 'stopped');
+        await assert.rejects(mod.stopManagedAgent('shared-agent', 'raced-session', { waitForPersistence: true }), /Failed to confirm session persistence/);
         assert.equal(runtime.stopped, true);
       });
 
@@ -577,7 +650,7 @@ describe('agent-lifecycle', () => {
       const child = createMockChild();
       injectRuntime('running-agent', null, child);
       // Set ready and viewerAgentId
-      const runtime = managedAgents.get('running-agent::__NO_SESSION__');
+      const runtime = managedAgents.get(getManagedRuntimeKey('running-agent', null));
       runtime.ready = true;
       runtime.viewerAgentId = 'viewer-1';
 

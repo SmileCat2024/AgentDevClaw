@@ -19,7 +19,7 @@
  *   markSessionArchivedForMutation, beginSidebarOperation, getSidebarOperation,
  *   updateSidebarOperation, finishSidebarOperation,
  *   applySidebarMutationDeltaWithDiagnostics, applySessionMutationDelta,
- *   requestArchivedSourceRuntimeCleanup, upsertConnectedAgent, getRuntimeId,
+ *   reconcileArchivedSourceRuntime, upsertConnectedAgent, getRuntimeId,
  *   isRemoteNamespaceAgentId, beginChatLoadingSession, clearChatLoadingSession,
  *   requestSwitch, getWorkspaceSessionById, getPathLeaf,
  *   fmtPct (app-core.js，trim/branch 共用口径),
@@ -698,7 +698,7 @@ window.submitTrimPage = async () => {
     // 归档已提交：源 runtime 处置与新会话导航解耦，立即发起（内部含侧栏条目
     // 的乐观退场）。停靠在导航之后会让老条目等新会话页面完全加载完才开始关闭。
     if (archiveAfter && archiveSucceeded && !isRemoteTrim) {
-      requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
+      reconcileArchivedSourceRuntime(agentId, sessionId, _oldRuntimeId);
     }
     const targetSessionId = String(result?.session?.id || '').trim();
     trimSessionCommitted = Boolean(targetSessionId);

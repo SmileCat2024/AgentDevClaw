@@ -444,7 +444,7 @@ function dialogsSandbox({ requests = [] } = {}) {
     var beginChatLoadingSession = function () {};
     var clearChatLoadingSession = function () {};
     var requestSwitch = async function () {};
-    var requestArchivedSourceRuntimeCleanup = function () {};
+    var reconcileArchivedSourceRuntime = function () {};
     var loadAgents = async function () {};
     var createSidebarOperationId = function (kind) { return 'op-' + kind; };
     var escapeHtml = function (value) { return String(value ?? ''); };

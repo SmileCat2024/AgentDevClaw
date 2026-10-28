@@ -410,10 +410,10 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
     assert.match(html(), /class="project-collapse-label">项目 A 改名</);
     assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
 
-    // 重启空窗没有 child，由已确认的线程条目原位占位。
+    // 无 runtime 且无明确接续事务时，旧线程快照不能维持一个虚态叶子。
     agents = [host];
     await refresh();
-    assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
+    assert.ok(!html().includes('data-agent-id="rt-a1"'));
 
     const restarted = { ...wireChildren[1], id: 'rt-a1-restarted', runtime_session_id: 'rt-a1-restarted' };
     agents = [host, restarted];
@@ -439,6 +439,7 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
       active_workspace_session_dir: DIR_D,
       active_workspace_session_project_id: PROJECT_A,
     });
+    host.sidebar_threads = live.window.ClawThreads?.threads || [];
     live.host = host;
     const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [])');
     assert.equal(entries.length, 1);
@@ -484,6 +485,7 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
       headSessionId: 'a1', sessionIds: ['a1'], headRuntimeRunning: true, headProjectId: PROJECT_A,
       headProjectDir: DIR_D, status: 'open', title: '项目对话',
     }] };
+    host.sidebar_threads = live.window.ClawThreads?.threads || [];
     live.host = host;
     const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [])');
     assert.equal(entries.length, 1, '宿主合成 head 与线程占位不能各占一行');
@@ -501,6 +503,7 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
       title: '项目对话', headProjectId: PROJECT_A, headProjectDir: DIR_D,
       status: 'rotating', handoffStartedAt: Date.now(),
     }] };
+    host.sidebar_threads = live.window.ClawThreads.threads;
     const html = attachSidebarRenderer(live, [host]);
     live.run('renderAgentList()');
     assertRuntimeGroup(html(), 'thread:wt-cold', 'prj:' + PROJECT_A);
@@ -521,7 +524,7 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
       title: '来源线程', status: 'rotating', handoffStartedAt: Date.now(),
     }] };
     live.wire = wire;
-    live.host = hostFixture();
+    live.host = { ...hostFixture(), sidebar_threads: live.window.ClawThreads.threads };
     const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [wire])');
     assert.equal(entries.some(e => e.runtimeId === 'rt-successor'), false, 'commit 前 successor 不应作为另一条对话');
     assert.equal(entries.filter(e => e.threadId === 'wt-a').length, 1);

@@ -26,7 +26,7 @@
 let currentRuntimeConnected = true;
 let lastNotificationStatusPayload = null;
 const _runtimeStatusMemory = new Map();
-const _coderThreadLiveEntries = new Map();
+const _threadSidebarEntries = new Map();
 let _lastRenderedNotificationRuntime = null;
 let _notificationClockTimer = null;
 let _contextGuardToastKey = '';
@@ -307,9 +307,9 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // runtime as the prebuilt's primary), the child entry wins and its createdAt
   // is preserved instead of being shadowed by the synthetic's null createdAt.
   const childRuntimeIds = new Set();
-  // 线程宿主 APP（ADR-0025：coder）的线程域：归属 = 线程记录 agentId。
-  // 非线程宿主的 APP 此 Map 恒空，线程条目逻辑整体短路。
-  const hostThreadsById = new Map((window.ClawThreads?.threads || [])
+  // Same-response thread projection for every host. Independent thread-board
+  // polling is not an input to sidebar identity or presence.
+  const hostThreadsById = new Map((prebuiltAgent.sidebar_threads || [])
     .filter((thread) => thread?.agentId === hostAgentId)
     .map((thread) => [thread.threadId, thread]));
   const isThreadHostApp = hostThreadsById.size > 0;
@@ -320,9 +320,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     }
     if (thread.headSessionId) threadBySessionId.set(String(thread.headSessionId), thread);
   }
-  // Session ids already presented by a live child runtime. A pending
-  // sidebar operation for the same target session hands over to that
-  // child entry in place instead of rendering a second placeholder.
+  // Live target sessions replace their operation placeholders in place.
   const childCoveredSessionIds = new Set();
   const expectedSidebarEntryId = String(prebuiltAgent?.id || '').trim();
   const childAgents = agents.filter((agent) => {
@@ -363,8 +361,9 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
           && sourceSessionId
           && String(candidate.headSessionId || '') === sourceSessionId
           && !candidate.archivedAt
+          && candidate.status === 'rotating'
+          && !candidate.deleting
           && Number(candidate.handoffStartedAt) > 0
-          && Date.now() - Number(candidate.handoffStartedAt) < 5 * 60 * 1000
         )) || null;
       }
       if (thread && (thread.archivedAt || thread.status === 'closed')) return;
@@ -384,11 +383,11 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
         // 保持线程排序锚，但存活 head 的归属必须按本次快照重新投影。
         // 分组缓存仅供下方接续空窗占位；回灌到 live child 会锁住首次误分组，
         // 连补齐 projectId、重启 runtime 或移动对话都无法纠正，直到刷新页面。
-        const cached = _coderThreadLiveEntries.get(thread.threadId);
+        const cached = _threadSidebarEntries.get(thread.threadId);
         if (cached?.entry) {
           childEntry.createdAt = cached.entry.createdAt ?? childEntry.createdAt;
         }
-        _coderThreadLiveEntries.set(thread.threadId, { runtimeId, entry: childEntry });
+        _threadSidebarEntries.set(thread.threadId, { runtimeId, entry: childEntry });
         renderedThreadIds.add(thread.threadId);
       }
     }
@@ -400,32 +399,25 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     // 事实合成——侧栏连续性不依赖页面存活时间。
     for (const [threadId, thread] of hostThreadsById) {
       if (thread.archivedAt || thread.status === 'closed') {
-        _coderThreadLiveEntries.delete(threadId);
+        _threadSidebarEntries.delete(threadId);
         continue;
       }
       // head runtime 已在上面渲染为本线程条目，无需补位。
       if (renderedThreadIds.has(threadId)) continue;
-      const cached = _coderThreadLiveEntries.get(threadId);
+      const cached = _threadSidebarEntries.get(threadId);
       if (cached && seenRuntimeIds.has(cached.runtimeId)) continue;
-      const handoffInProgress = Number(thread.handoffStartedAt) > 0
-        && Date.now() - Number(thread.handoffStartedAt) < 5 * 60 * 1000;
+      const handoffInProgress = thread.status === 'rotating' && Number(thread.handoffStartedAt) > 0 && !thread.deleting;
       const replacementPending = typeof findSidebarOperation === 'function'
         && Boolean(findSidebarOperation((operation) => operation?.agentId === hostAgentId
           && operation?.type === 'create'
           && operation?.phase !== 'settled'
           && ((cached?.entry && operation?.sourceSessionId === cached.entry.sessionId)
             || operation?.targetSessionId === thread.headSessionId)));
-      const threadActive = thread.lifeState === 'executing' || thread.lifeState === 'pending-commands';
-      // 门4（快照错位占位）：服务端权威事实 headRuntimeRunning 说 head 进程
-      // 活着，但本帧 allAgents 没有覆盖 head 会话的叶子——threads 快照与
-      // agents 快照错位（换代落定后的下一次 loadAgents 之前）。READY 门禁
-      // 保证 advanceHead 时 successor 必已注册 viewer，故该门与闲置线程
-      // （headRunning=false）天然互斥，不产生幽灵条目。
-      const headUncoveredRunning = thread.headRuntimeRunning === true
-        && String(thread.headSessionId || '') !== ''
-        && !childCoveredSessionIds.has(String(thread.headSessionId));
-      if (!handoffInProgress && !replacementPending && !threadActive && !headUncoveredRunning) {
-        _coderThreadLiveEntries.delete(threadId);
+      // Only an explicit handoff/start operation owns a placeholder. Thread board
+      // state and headRuntimeRunning come from an independent polling snapshot:
+      // neither can recreate a runtime absent from the connected-agents snapshot.
+      if (!handoffInProgress && !replacementPending) {
+        _threadSidebarEntries.delete(threadId);
         continue;
       }
       // 交接占位：head runtime 尚未上线（退役窗口 / successor 启动中），

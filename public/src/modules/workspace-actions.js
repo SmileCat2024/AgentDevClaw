@@ -42,7 +42,7 @@
  *   getFeatureCreatorProjects, getAgentCreatorProjects,
  *   isAssemblySession, isAssemblySessionRunning,
  *   maybeWarnAssemblySessionDrift, markSessionArchivedForMutation,
- *   requestArchivedSourceRuntimeCleanup, clearAgentRuntimeCache,
+ *   reconcileArchivedSourceRuntime, clearAgentRuntimeCache,
  *   refreshSidebarRuntimeAfterMutation, ctxArchiveSession,
  *   getAgentWorkspaceState, getIMWorkspaceDraft, ensureIMWorkspaceLoaded (app-main.js / app-ui.js)
  *   renderCurrentMainView, updateAgentRecord (app-ui.js)
@@ -551,7 +551,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // 归档已提交：源 runtime 处置与新会话导航解耦，立即发起（内部含侧栏条目
       // 的乐观退场）。停靠在导航之后会让老条目等新会话页面完全加载完才开始关闭。
       if (action.archiveOriginal && archiveSucceeded && !_csIsRemote) {
-        requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
+        reconcileArchivedSourceRuntime(_csAgent.id, action.sessionId, _csOldRuntimeId);
       }
       if (result?.liveRuntime && result?.switched) {
         // Live-runtime shortcut path: session switch was already handled

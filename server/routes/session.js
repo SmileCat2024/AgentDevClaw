@@ -28,7 +28,7 @@ import {
   resolvePrebuiltSessionType,
   findMissingCheckpoints,
 } from '../shared/session-access.js';
-import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
+import { getAgentRuntime, isManagedRuntimeRunning, stopAssemblyRuntime } from '../shared/agent-access.js';
 import { renderConversationHtml, renderConversationMarkdown } from '../conversation-renderer.js';
 import { readWorkspaceState } from './workspace.js';
 import { getPhProject } from './ph-projects.js';
@@ -46,8 +46,10 @@ import { attachOperationMetadata, readOperationMetadata, buildLocalFailureRespon
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION, buildSessionDirectoryEntries } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
+import { buildBranchSnapshot, sessionSnapshotRevision } from './session-branch.js';
 import { exportFeatureContinuity, hasFeatureContinuity } from '../context-continuity/feature-continuity.js';
 import { getContextHandoffFilePath } from '../context-continuity/handoff-package.js';
+import { withSessionOperation } from '../shared/session-operation.js';
 import { assertThreadQuotaAllowed } from './thread-quota.js';
 import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
 import { getInternalAuthToken } from '../auth.js';
@@ -96,7 +98,7 @@ export function turnBelongsTo(turn, turnFilter) {
 export function setupSessionRoutes(app, express, ctx) {
   const {
     activatePrebuiltSession,
-    archivePrebuiltSession,
+    archivePrebuiltSession: persistSessionArchive,
     buildSessionTrimPreview,
     buildSessionTrimMessagePreview,
     estimatePreambleCharCount,
@@ -130,6 +132,15 @@ export function setupSessionRoutes(app, express, ctx) {
     threadSuccession,
     threadDelete,
   } = ctx;
+
+  // Every archive entry point (including branch/compact replacement) owns its
+  // runtime retirement on the server; the browser never completes the transaction.
+  async function archivePrebuiltSession(agentId, sessionId, archived, options) {
+    return withSessionOperation(agentId, sessionId, 'archive', async () => {
+      if (archived) await stopManagedAgent(agentId, sessionId);
+      return persistSessionArchive(agentId, sessionId, archived, options);
+    });
+  }
 
   // T003：统一目标解析的成员归属真相源——经 threadLifecycle.findThreadBySession
   // 绑定框架 WorkThread 的会话链记录（同源：input-gateway / acp），
@@ -573,6 +584,7 @@ app.get('/protoclaw/session_trim_preview', async (req, res, next) => {
     res.json({
       sessionId,
       sessionTitle: parsed.title || '',
+      snapshotRevision: sessionSnapshotRevision(raw),
       contextLength: null,
       preamblePercent: totalCharCount > 0 ? preambleCharCount / totalCharCount : 0,
       preambleCharCount,
@@ -644,6 +656,12 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     const sourcePath = getPrebuiltSessionFilePath(agentId, sourceSessionId);
     const sourceRaw = await fs.readFile(sourcePath, 'utf8');
     const sourceSnapshot = JSON.parse(sourceRaw);
+    if (req.body.snapshotRevision && req.body.snapshotRevision !== sessionSnapshotRevision(sourceRaw)) {
+      return res.status(409).json({ code: 'branch_preview_stale', error: '会话快照已变化，请重新打开分支预览。' });
+    }
+    const validatedBranch = buildBranchSnapshot(sourceSnapshot, cutMsgIndexEnd, {
+      live: isManagedRuntimeRunning(getAgentRuntime(agentId, sourceSessionId)),
+    });
     const rawMessages = Array.isArray(sourceSnapshot?.runtime?.context?.messages)
       ? sourceSnapshot.runtime.context.messages
       : [];
@@ -674,14 +692,6 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       cp => typeof cp.callIndex === 'number' && cp.callIndex <= maxUserTurn
     );
 
-    // Truncate enrichedMessages to match the branch message range.
-    const sourceEnriched = Array.isArray(sourceSnapshot.runtime?.context?.enrichedMessages)
-      ? sourceSnapshot.runtime.context.enrichedMessages
-      : [];
-    const branchEnriched = sourceEnriched.filter(
-      em => typeof em.turn !== 'number' || em.turn <= maxUserTurn
-    );
-
     // Read the source session index record early so its metadata (title, etc.)
     // is available when building the branch record. Previously sourceRecord was
     // only assigned inside the updateSessionIndex callback, which ran AFTER the
@@ -703,48 +713,7 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
 
     const newSessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
     const createdAt = new Date().toISOString();
-    const sourceRuntime = sourceSnapshot.runtime || {};
-
-    // 从 checkpoint 提取运行态（兼容 v1 runtime 和 v2 runtimeState）
-    const getCheckpointRuntimeState = (cp) => {
-      if (!cp) return null;
-      if (cp.kind === 'context-boundary' && cp.runtimeState) return cp.runtimeState;
-      if (cp.runtime) return cp.runtime;
-      return null;
-    };
-
-    const runtimeCheckpointAfterCut = getCheckpointRuntimeState(
-      sourceCheckpoints.find(
-        cp => typeof cp.callIndex === 'number' && cp.callIndex === maxUserTurn + 1
-      )
-    );
-    const runtimeCheckpointAtCut = getCheckpointRuntimeState(
-      [...sourceCheckpoints]
-        .reverse()
-        .find(cp => typeof cp.callIndex === 'number' && cp.callIndex <= maxUserTurn)
-    );
-    const runtimeForBranchState = runtimeCheckpointAfterCut || runtimeCheckpointAtCut || sourceRuntime;
-
-    const branchSnapshot = {
-      ...sourceSnapshot,
-      sessionId: newSessionId,
-      savedAt: Date.now(),
-      runtime: {
-        ...sourceRuntime,
-        initialized: true,
-        callIndex: maxUserTurn,
-        featureStates: Array.isArray(runtimeForBranchState?.featureStates)
-          ? runtimeForBranchState.featureStates
-          : (Array.isArray(sourceRuntime.featureStates) ? sourceRuntime.featureStates : []),
-        usageStats: runtimeForBranchState?.usageStats || sourceRuntime.usageStats,
-        context: {
-          ...(sourceRuntime.context || {}),
-          messages: branchMessages,
-          enrichedMessages: branchEnriched,
-        },
-      },
-      rollbackHistory: branchCheckpoints,
-    };
+    const branchSnapshot = { ...validatedBranch, sessionId: newSessionId };
     delete branchSnapshot.title;
 
     // branch continuity 注入（ADR-0034 决策 2 链级当前状态）：从源会话最新快照
@@ -1744,12 +1713,10 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     // R8：线程域手动接力同样退役旧 head runtime——export 镜像读 session
     // 文件，不先 stop/flush 会基于过期快照生成失真摘要，successor 接线也
     // 不该与旧 runtime 并存。只在挡板立起后执行（纯 session 的手动 compact
-    // 不得被动停 runtime）；失败不阻断，与 rotation 的 stop 语义一致。
+    // 不得被动停 runtime）；失败必须阻断，不能读取未确认的源快照。
     if (successionBegun.applied) {
       trace.mark('source_runtime_retirement_started');
-      await stopManagedAgent(preferredAgentId, sessionId, { operationTrace: trace }).catch((err) => {
-        console.warn(`[compact_and_resume] failed to retire pre-compact runtime for session=${sessionId}:`, err?.message || err);
-      });
+      await stopManagedAgent(preferredAgentId, sessionId, { operationTrace: trace });
       trace.mark('source_runtime_retirement_completed');
     }
 
@@ -2176,19 +2143,20 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
     // 在删除数据前做 head 守卫；Thread 成员正常已在上方重定向到级联删除。
     await getThreadIntegration().assertSessionDeletable(agent.id, sessionId);
     const deletedRuntime = getAgentRuntime(agent.id, sessionId);
-    const deleted = await deletePrebuiltSession(agent.id, sessionId, {
-      includeSessions: req.body.responseMode !== 'delta',
+    // A runtime may still own pending writes even after the UI stops showing it.
+    // The shared lifecycle contract must confirm retirement before any deletion.
+    trace.mark('source_stop_requested');
+    const deleted = await withSessionOperation(agent.id, sessionId, 'delete', async () => {
+      await stopManagedAgent(agent.id, sessionId);
+      return deletePrebuiltSession(agent.id, sessionId, {
+        includeSessions: req.body.responseMode !== 'delta',
+      });
     });
     if (deletedRuntime?.viewerAgentId && clearUISurfaces) {
       clearUISurfaces(deletedRuntime.viewerAgentId);
     }
     trace.mark('index_committed', { revision: deleted.revision });
     let connected = null;
-
-    if (deletedRuntime?.process && deletedRuntime.process.exitCode === null && !deletedRuntime.stopped) {
-      trace.mark('source_stop_requested');
-      await stopManagedAgent(agent.id, sessionId);
-    }
 
     const targetSessionId = deleted.wasActiveSession ? (deleted.activeSessionId || null) : null;
     let targetStatus = null;

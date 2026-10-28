@@ -357,11 +357,12 @@ async function ctxRestartAgent(target) {
 async function ctxStopAgent(target) {
   const { ns, id, sessionId, variant } = target;
 
-  // 与归档源清理（requestArchivedSourceRuntimeCleanup）共用乐观退场：提交即
+  // 与归档源清理（reconcileArchivedSourceRuntime）共用乐观退场：提交即
   // 注册隐藏，条目不等轮询快照摘除（快照一轮 ~3s，期间条目原样挂着，表现为
   // 「点关闭后卡在那儿」）。远程条目不经本地投影过滤（isRuntimeStopPending
   // 只覆盖本地投影），不注册。
   let stopRegistry = null;
+  let stopConfirmed = false;
   try {
     const serverAgentId = (variant === 'managed-runtime') ? ns : id;
     const agent = getExternalRuntimeAgent(serverAgentId);
@@ -413,7 +414,8 @@ async function ctxStopAgent(target) {
       const sId = sessionId || agent?.active_workspace_session_id || null;
       await invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
     }
-    await refreshSidebarRuntimeAfterMutation(500);
+    stopConfirmed = true;
+    await refreshSidebarRuntimeAfterMutation();
     if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       const fallbackTarget = variant === 'remote'
         ? (window.RemoteConnections?.getEntryHostAgentId?.(id) || null)
@@ -425,6 +427,11 @@ async function ctxStopAgent(target) {
       }
     }
   } catch (e) {
+    if (stopConfirmed) {
+      console.warn('Runtime closed, but sidebar refresh failed:', e);
+      window.alert(t('对话已关闭，但列表刷新失败，请刷新页面。', 'Conversation closed, but the list failed to refresh. Please refresh the page.'));
+      return;
+    }
     // stop 未被接受：解除乐观隐藏让条目回到可见，由轮询快照恢复呈现
     // （与归档清理链路同款回滚）。
     if (stopRegistry && typeof releasePendingRuntimeStop === 'function') {
@@ -613,7 +620,7 @@ async function ctxArchiveAndStopRuntime(target) {
     if (!result?.targetSessionId && affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       selectWorkspaceSurface(agentId);
     }
-    refreshSidebarRuntimeAfterMutation(500).catch(e => console.warn(e));
+    refreshSidebarRuntimeAfterMutation().catch(e => console.warn(e));
   } catch (e) {
     // The archive itself is already committed. Runtime cleanup is independent
     // and must not retroactively mark that session mutation as failed.
@@ -621,7 +628,7 @@ async function ctxArchiveAndStopRuntime(target) {
       releasePendingRuntimeStop(runtimeId, agentId, sessionId);
       if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
     }
-    refreshSidebarRuntimeAfterMutation(500).catch(e => console.warn(e));
+    refreshSidebarRuntimeAfterMutation().catch(e => console.warn(e));
     window.alert(t('close_failed') + (e && e.message ? e.message : e));
   }
 }
