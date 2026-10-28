@@ -234,6 +234,11 @@ async function _submitInputInner(requestId, targetRuntimeId, viewToken) {
         liveTextarea.value = '';
         autoResize(liveTextarea);
       }
+      // 图片桶与槽位/viewer 成功路径同语义清空（发送时刻捕获的 key）：
+      // 不清则缩略图滞留输入框，下次发送还会把残留附件重复带出
+      if (typeof clearPendingInputImages === 'function') {
+        clearPendingInputImages(targetImageKey);
+      }
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       poll();
       // 交接窗口内消息暂存 Thread Inbox：对话区不出现新消息，无提示即

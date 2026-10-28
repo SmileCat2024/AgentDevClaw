@@ -731,6 +731,7 @@ async function submitQueuedInput() {
         liveTextarea.value = '';
         autoResize(liveTextarea);
       }
+      clearPendingInputImages(targetImageKey);
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       _clearRecapForNewMessage();
       window.refreshThreads?.(true);
