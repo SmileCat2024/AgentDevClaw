@@ -625,8 +625,14 @@ export function createAgentLifecycleModule(ctx) {
         const onMessage = (msg) => {
           if (!msg || msg.type !== resultType) return;
           if (msg.requestId !== requestId || msg.sessionId !== sessionId) return;
-          if (msg.ok === true) finish({ ok: true, status: msg.status || null });
-          else finish({ ok: false, error: msg.error || `${resultType} request rejected` });
+          // feature-comms-result 回执的业务结果嵌套在 result（feature
+          // onHostRequest 的返回值）；顶层 ok/status 兼容旧回执形态。
+          const nested = msg.result && typeof msg.result === 'object' ? msg.result : null;
+          if (msg.ok === true || nested?.ok === true) {
+            finish({ ok: true, status: nested?.status ?? msg.status ?? null });
+          } else {
+            finish({ ok: false, error: nested?.error || msg.error || `${resultType} request rejected` });
+          }
         };
         child.on('message', onMessage);
         let sent = false;
@@ -639,9 +645,13 @@ export function createAgentLifecycleModule(ctx) {
       });
     }
 
-    function requestForceContinuationState(agentId, sessionId, message) {
-      return requestSessionRuntimeState(agentId, sessionId, message, 'force-continuation-result');
-    }
+    // force-continuation / context-guard 的本地路径统一走宿主通用
+    // feature-comms-request 分支（feature.onHostRequest 请求面）；旧专用
+    // IPC 消息类型已随宿主分支退役。远程转发（ADR-0011）保持不动——
+    // 转发的是同名 HTTP 路由，远端自行处理本地投递。
+    const featureCommsRequest = (featureId, requestType, payload) => ({
+      type: 'feature-comms-request', featureId, channelId: 'control', requestType, payload: payload ?? {},
+    });
 
     app.get('/protoclaw/force_continuation_status', async (req, res, next) => {
       try {
@@ -671,7 +681,8 @@ export function createAgentLifecycleModule(ctx) {
         } catch (error) {
           return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
-        const result = await requestForceContinuationState(agentId, sessionId, { type: 'force-continuation-status' });
+        const result = await requestSessionRuntimeState(agentId, sessionId,
+          featureCommsRequest('force-continuation', 'status'), 'feature-comms-result');
         if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
         res.json({ ok: true, agentId, sessionId, status: result.status });
       } catch (error) {
@@ -724,11 +735,11 @@ export function createAgentLifecycleModule(ctx) {
         }
         // Route to the exact (agentId, sessionId) runtime only — no primary-runtime
         // fallback: a shared process must never toggle another session's feature.
-        const result = await requestForceContinuationState(agentId, sessionId, {
-          type: 'force-continuation-control',
-          ...(triggers !== undefined ? { triggers } : {}),
-          ...(maxConsecutiveContinuations !== undefined ? { maxConsecutiveContinuations } : {}),
-        });
+        const result = await requestSessionRuntimeState(agentId, sessionId,
+          featureCommsRequest('force-continuation', 'configure', {
+            ...(triggers !== undefined ? { triggers } : {}),
+            ...(maxConsecutiveContinuations !== undefined ? { maxConsecutiveContinuations } : {}),
+          }), 'feature-comms-result');
         if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
         res.json({
           ok: true,
@@ -773,7 +784,8 @@ export function createAgentLifecycleModule(ctx) {
         } catch (error) {
           return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
-        const result = await requestSessionRuntimeState(agentId, sessionId, { type: 'context-guard-status' }, 'context-guard-result');
+        const result = await requestSessionRuntimeState(agentId, sessionId,
+          featureCommsRequest('context-guard', 'status'), 'feature-comms-result');
         if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
         res.json({ ok: true, agentId, sessionId, status: result.status });
       } catch (error) {
@@ -817,10 +829,10 @@ export function createAgentLifecycleModule(ctx) {
         } catch (error) {
           return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
-        const result = await requestSessionRuntimeState(agentId, sessionId, {
-          type: 'context-guard-control',
-          ...(armed !== undefined ? { armed } : {}),
-        }, 'context-guard-result');
+        const result = await requestSessionRuntimeState(agentId, sessionId,
+          featureCommsRequest('context-guard', 'arm', {
+            ...(armed !== undefined ? { armed } : {}),
+          }), 'feature-comms-result');
         if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
         res.json({ ok: true, agentId, sessionId, status: result.status });
       } catch (error) {

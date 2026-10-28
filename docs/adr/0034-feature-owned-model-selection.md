@@ -1,7 +1,7 @@
 # ADR 0034：模型选择由 Feature 管理，运行模型与宿主资产保持分层
 
 - 日期：2026-10-28
-- 状态：Proposed（产品行为、职责边界与文件级实施方案均已闭环；尚未实施）
+- 状态：Accepted（已实施：AgentDev `a176c6a` + AgentDevClaw `a18d5fdf`；凭证刷新编排收编进本 Feature，见决策 6a）
 - 关联：[ADR-0009 模型热切换](0009-model-hotswap-framework-api.md)、[ADR-0018 Feature-Panel 通信](0018-feature-panel-communication-transport.md)、[ADR-0028 凭证恢复与分层判据](0028-credential-recovery-and-layering-criteria.md)、[ADR-0002 会话连续性](0002-session-continuity-as-transformation.md)、[ADR-0011 远程写适配](0011-protoclaw-remote-write-adaptation.md)、[ADR-0032 编程小助手线程驱动](0032-programming-helper-thread-driven.md)
 
 ## 背景
@@ -87,6 +87,10 @@ Feature 应在初始化阶段取得窄的模型控制接口，复用 Agent 正�
 - 远程会话不保持模型切换：本次不为远程 feature-comms 投入适配，不制定旧端兼容期。远程会话的模型入口按通道不可达自然降级为不可操作，不报未处理错误；Feature 不认识远程连接。
 - 降级不放开安全边界：模型切换请求不得静默落到本机执行；declare/publish 保持 runtime 内部认证。
 - 不能在 Feature 通道失败后悄悄改走旧 swap 以掩盖错误。
+
+### 6a. server 发起的凭证刷新走同一请求面（修订）
+
+ADR-0028 修订一的凭证变更推送（重登 / 换 key / OpenCode 换档后运行中会话同 preset 重 resolve）原为宿主专用 IPC 分支，随本 ADR 收编：server 经 feature-comms 请求面广播（fire-and-forget 保持），由模型选择 Feature 的 `refresh-credentials` 请求类型承接。语义边界：凭证轮换是同一选择下的实例轮换（决策 3），不写选择状态、不写快照；档位按当前运行 meta 原样透传（键含显式 null 即透传）。宿主不再持有模型编排语义；未装配本 Feature 的 runtime 由宿主通用分支回 operation_unavailable，自然降级。
 
 ### 7. 接续期间的禁用必须有服务端保证
 

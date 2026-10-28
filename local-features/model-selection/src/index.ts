@@ -19,7 +19,9 @@
  *   （restoreState 先于 onInitiate，此时选择暂存为 pendingChoice）。
  *
  * 通信走 ADR-0018 feature-comms 通道（前端输入框模型切换控件的唯一链路）：
- * - onHostRequest 请求面：getStatus / selectModel / clearThinkingOverride；
+ * - onHostRequest 请求面：getStatus / selectModel / clearThinkingOverride /
+ *   refresh-credentials（凭证刷新，ADR-0028 修订一编排收编：同 preset 重
+ *   resolve 换新实例，选择状态不动——凭证轮换是实例轮换，不是用户改选）；
  * - 事件面：选择变化与恢复失败事实尽力广播（呈现以 Agent 实际模型
  *   getLLMMeta 为准，本 feature 不自算"当前模型"）。
  *
@@ -183,6 +185,8 @@ export class ModelSelectionFeatureInner implements AgentFeature {
         return this.selectModel(body);
       case 'clearThinkingOverride':
         return this.clearThinkingOverride();
+      case 'refresh-credentials':
+        return this.refreshCredentials();
       default:
         return { ok: false, code: 'operation_unavailable', error: `Unknown requestType: ${requestType}` };
     }
@@ -289,6 +293,36 @@ export class ModelSelectionFeatureInner implements AgentFeature {
         `model-selection restore failed: preset "${presetName}" unavailable and global default ("${DEFAULT_PRESET_NAME}") could not be resolved`,
       );
     }
+  }
+
+  /**
+   * 凭证刷新（ADR-0028 修订一的编排收编，ADR-0034 决策 3）：
+   * server 侧凭证变更（重登 / 换 key / OpenCode 换档）后对当前 preset
+   * 重 resolve——LLM 实例 = 参数快照，凭证轮换 = 实例轮换，不是用户改选：
+   * choice 与快照均不动。档位透传纪律与运行语义对齐：meta.thinkingEffort
+   * 键存在（含显式 null = 厂商默认档）即原样透传，保持用户运行档位。
+   * resolve 失败保留旧实例（旧凭证仍有效期间继续可用；401 → auth-recovery
+   * 反应式路径仍是兜底）；进行中的调用持有旧实例引用不受影响。
+   */
+  private refreshCredentials(): Record<string, unknown> {
+    const mc = this.modelControl;
+    if (!mc) {
+      return { ok: false, code: 'model_control_unavailable', error: 'model control not initialized' };
+    }
+    const meta = mc.getLLMMeta();
+    const presetName = meta.presetName;
+    if (!presetName) {
+      // 非 preset 锚定的模型（裸 setLLM 构造）：无重 resolve 语义可言。
+      return { ok: false, code: 'no_preset_anchor', error: 'current model is not preset-backed; nothing to re-resolve' };
+    }
+    const ok = mc.setModel(presetName, {
+      ...(meta.thinkingEffort !== undefined ? { thinkingEffort: meta.thinkingEffort } : {}),
+      source: 'credential-refresh',
+    });
+    if (!ok) {
+      return { ok: false, code: 'preset_resolve_failed', error: `preset "${presetName}" could not be re-resolved; keeping previous instance` };
+    }
+    return { ok: true, meta: mc.getLLMMeta() };
   }
 
   private async declare(): Promise<void> {

@@ -284,6 +284,62 @@ test('未知 requestType：operation_unavailable', async () => {
   assert.equal((await feature.onHostRequest('nope', {})).code, 'operation_unavailable');
 });
 
+// ========== refresh-credentials（凭证刷新收编，ADR-0034） ==========
+
+test('refresh-credentials：按当前 preset 重 resolve，choice 不变，不发布快照', async () => {
+  const { feature, mc, client } = await initiated();
+  await feature.onHostRequest('selectModel', { presetName: 'model-a' });
+  mc.calls.length = 0;
+  await flushMicrotasks();
+  const eventsBefore = client.events.length;
+
+  const result = await feature.onHostRequest('refresh-credentials', {});
+  assert.equal(result.ok, true);
+  const last = mc.lastCall();
+  assert.equal(last?.presetName, 'model-a');
+  assert.equal(last?.opts?.source, 'credential-refresh');
+  assert.equal('thinkingEffort' in (last?.opts ?? {}), false, '活 meta 无档位时不得透传');
+  // 同一选择下的实例轮换：不是改选——内存 choice 与快照事件都不得变化
+  const status = await feature.onHostRequest('getStatus', {});
+  assert.deepEqual(status.choice, { presetName: 'model-a' });
+  await flushMicrotasks();
+  assert.equal(client.events.length, eventsBefore, 'refresh 不得触发 snapshot 发布');
+});
+
+test('refresh-credentials：活 meta 携带档位时原样透传（含显式 null）', async () => {
+  const { feature, mc } = await initiated();
+  mc.meta = { ...mc.meta, presetName: 'model-a', thinkingEffort: 'high' };
+  await feature.onHostRequest('refresh-credentials', {});
+  assert.equal(mc.lastCall()?.opts?.thinkingEffort, 'high');
+  mc.meta = { ...mc.meta, thinkingEffort: null };
+  await feature.onHostRequest('refresh-credentials', {});
+  assert.strictEqual(mc.lastCall()?.opts?.thinkingEffort, null);
+});
+
+test('refresh-credentials：非 preset 锚点返回 no_preset_anchor，不触发 setModel', async () => {
+  const fixture = makeFixture();
+  fixture.mc.meta = { modelName: 'raw-model', modelRevision: 0 };
+  await fixture.feature.onInitiate(fixture.initCtx);
+  const result = await fixture.feature.onHostRequest('refresh-credentials', {});
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'no_preset_anchor');
+  assert.equal(fixture.mc.calls.length, 0);
+});
+
+test('refresh-credentials：重 resolve 失败返回业务错误，保留原实例与选择', async () => {
+  const { feature, mc } = await initiated();
+  await feature.onHostRequest('selectModel', { presetName: 'model-a' });
+  const metaBefore = { ...mc.meta };
+  mc.failPresets.add('model-a');
+  const result = await feature.onHostRequest('refresh-credentials', {});
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'preset_resolve_failed');
+  assert.deepEqual(mc.meta, metaBefore);
+  const status = await feature.onHostRequest('getStatus', {});
+  assert.deepEqual(status.choice, { presetName: 'model-a' });
+});
+
+
 // ========== 通道与 continuity 包装 ==========
 
 test('onInitiate 声明通道一次；选择变化与 onLLMSwap 广播 snapshot 事件', async () => {

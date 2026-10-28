@@ -1,8 +1,9 @@
 /**
- * 凭证变更 → refresh-credentials 广播（ADR-0028 修订）测试
+ * 凭证变更 → refresh-credentials 广播（ADR-0028 修订 → ADR-0034 收编）测试
  *
  * 覆盖：
- * - broadcastIPCToAllRuntimes：只投递存活 runtime，逐条盖 __targetSessionId
+ * - broadcastFeatureCommsRequest：只投递存活 runtime，逐条盖 __targetSessionId，
+ *   消息形态为宿主通用 feature-comms-request（featureId/channelId/requestType）
  * - PUT model_connections：OpenCode apiKey/tier 变更触发广播，未变更不触发
  * - PUT model_config：preset 连接字段 / defaultModel 凭证字段变更触发广播，
  *   非连接字段（档位等）变更不触发，新增 preset 不触发
@@ -27,7 +28,7 @@ const express = (await import('express')).default;
 const { setupModelConfigRoutes, presetsConnectionChanged, defaultModelConnectionChanged } =
   await import('../server/routes/model-config.js');
 const { setupOAuthCodexRoutes } = await import('../server/routes/oauth-codex.js');
-const { broadcastIPCToAllRuntimes } = await import('../server/shared/ipc.js');
+const { broadcastFeatureCommsRequest } = await import('../server/shared/ipc.js');
 const { managedAgents } = await import('../server/shared/agent-access.js');
 const {
   createLoginSession,
@@ -63,7 +64,7 @@ function withFakeRuntimes(entries) {
 }
 
 function credentialRefreshMessages(child) {
-  return child.sent.filter((m) => m.type === 'refresh-credentials');
+  return child.sent.filter((m) => m.type === 'feature-comms-request' && m.requestType === 'refresh-credentials');
 }
 
 async function withServer(handler) {
@@ -74,9 +75,9 @@ async function withServer(handler) {
   return { server, baseUrl: `http://127.0.0.1:${server.address().port}` };
 }
 
-// ── broadcastIPCToAllRuntimes（纯 IPC 单测）─────────────────────────
+// ── broadcastFeatureCommsRequest（纯 IPC 单测）──────────────────────
 
-describe('broadcastIPCToAllRuntimes', () => {
+describe('broadcastFeatureCommsRequest', () => {
   it('delivers only to live runtimes with per-runtime session scoping', () => {
     const alive = makeFakeChild();
     const dead = makeFakeChild(); dead.exitCode = 1;
@@ -87,10 +88,15 @@ describe('broadcastIPCToAllRuntimes', () => {
       ['b::s3', { process: stoppedChild, stopped: true, selectedSessionId: 's3' }],
     ]);
     try {
-      const delivered = broadcastIPCToAllRuntimes({ type: 'refresh-credentials' });
+      const delivered = broadcastFeatureCommsRequest('model-selection', 'selection', 'refresh-credentials');
       assert.equal(delivered, 1);
       assert.equal(alive.sent.length, 1);
-      assert.equal(alive.sent[0].__targetSessionId, 's1');
+      const msg = alive.sent[0];
+      assert.equal(msg.__targetSessionId, 's1');
+      assert.equal(msg.type, 'feature-comms-request');
+      assert.equal(msg.featureId, 'model-selection');
+      assert.equal(msg.channelId, 'selection');
+      assert.equal(msg.requestType, 'refresh-credentials');
       assert.equal(stoppedChild.sent.length, 0);
     } finally {
       restore();

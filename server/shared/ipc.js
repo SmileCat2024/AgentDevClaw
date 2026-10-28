@@ -61,17 +61,17 @@ export function sendIPCToAllSessions(agentId, message) {
 }
 
 /**
- * Broadcast a message to every running runtime, across all agents.
+ * Broadcast a feature-comms request to every running runtime (fire-and-forget).
  *
- * Used by credential-change pushes (ADR-0028 修订：refresh-credentials)：每个
- * managedAgents 记录独立投递并盖上各自的 selectedSessionId，共享进程模式下
- * 同一进程会收到多条消息、各自路由到对应会话的 agent 实例。LLM 实例 =
- * 参数快照，凭证变更不主动重 resolve 的话，旧凭证仍有效期间运行中会话会
- * 无限期继续用旧凭证（401 自愈只覆盖旧凭证已失效的形态）。
- *
- * Returns the number of runtimes that received the message.
+ * server 发起的运维事件投递面（凭证刷新 ADR-0028 修订一 → ADR-0034 收编为
+ * model-selection 的 onHostRequest）：消息走宿主通用 feature-comms-request
+ * 分支（按 featureId 寻址 feature 实例），不新增宿主专用 IPC 分支。未装配
+ * 目标 feature 的 runtime 由宿主回 operation_unavailable（装配事实驱动的
+ * 自然降级）；本函数不等待回执（旧广播语义保持，结果仅 runtime 日志可见）。
+ * featureId/channelId 是寻址参数而非业务分支——server 不解释请求内容。
  */
-export function broadcastIPCToAllRuntimes(message) {
+export function broadcastFeatureCommsRequest(featureId, channelId, requestType, payload = null) {
+  const message = { type: 'feature-comms-request', featureId, channelId, requestType, payload };
   let delivered = 0;
   for (const runtime of managedAgents.values()) {
     if (sendIPCToRuntime(runtime, message)) {
@@ -79,7 +79,7 @@ export function broadcastIPCToAllRuntimes(message) {
     }
   }
   if (delivered > 0) {
-    log('ProtoClaw IPC', `Broadcast to ${delivered} runtime(s): ${JSON.stringify(message)}`);
+    log('ProtoClaw IPC', `Broadcast feature-comms request to ${delivered} runtime(s): ${featureId}/${channelId} ${requestType}`);
   }
   return delivered;
 }

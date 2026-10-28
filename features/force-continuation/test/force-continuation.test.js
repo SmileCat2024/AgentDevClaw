@@ -96,3 +96,55 @@ describe('API retry', () => {
     assert.deepEqual(f.getStatus().triggers, { outputTruncation: true, apiErrorRetry: false });
   });
 });
+
+describe('host request surface (feature-comms)', () => {
+  it('status reflects live configuration', async () => {
+    const f = new ForceContinuation({ outputTruncation: false, maxConsecutiveContinuations: 3 });
+    const result = await f.onHostRequest('status', {});
+    assert.equal(result.ok, true);
+    assert.equal(result.status.triggers.outputTruncation, false);
+    assert.equal(result.status.maxConsecutiveContinuations, 3);
+  });
+
+  it('configure applies valid triggers and budget together', async () => {
+    const f = new ForceContinuation();
+    const result = await f.onHostRequest('configure', {
+      triggers: { outputTruncation: false, apiErrorRetry: true },
+      maxConsecutiveContinuations: 7,
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(f.getStatus().triggers, { outputTruncation: false, apiErrorRetry: true });
+    assert.equal(f.getStatus().maxConsecutiveContinuations, 7);
+  });
+
+  it('rejects invalid payloads without partial application', async () => {
+    const f = new ForceContinuation();
+    const before = f.getStatus();
+    // triggers 未知键 / 非布尔值 / 数组 / null；max 非整数与越界
+    const badPayloads = [
+      { triggers: { outputTruncation: true, unexpected: true } },
+      { triggers: { outputTruncation: 'yes' } },
+      { triggers: ['outputTruncation'] },
+      { triggers: null },
+      { maxConsecutiveContinuations: 0 },
+      { maxConsecutiveContinuations: 11 },
+      { maxConsecutiveContinuations: 2.5 },
+      // 合法 triggers 搭配非法 max：triggers 也不得生效（原子校验）
+      { triggers: { apiErrorRetry: false }, maxConsecutiveContinuations: 99 },
+    ];
+    for (const payload of badPayloads) {
+      const result = await f.onHostRequest('configure', payload);
+      assert.equal(result.ok, false, JSON.stringify(payload));
+      assert.equal(result.code, 'invalid_payload');
+    }
+    assert.deepEqual(f.getStatus().triggers, before.triggers);
+    assert.equal(f.getStatus().maxConsecutiveContinuations, before.maxConsecutiveContinuations);
+  });
+
+  it('rejects unknown request types', async () => {
+    const f = new ForceContinuation();
+    const result = await f.onHostRequest('nope', {});
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'operation_unavailable');
+  });
+});

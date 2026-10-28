@@ -520,8 +520,10 @@ class SessionLifecycle {
 
     // ── Generic capability IPC (request/ack) ──────────────────
     // Registry 传输面：server /protoclaw/capability_invoke 与 /protoclaw/commands
-    // 的子进程端点。宿主前端转发视为 slash 入口。后续可控 feature 的专用
-    // IPC 分支（force-continuation / context-guard 同构模式）由这里收编。
+    // 的子进程端点。宿主前端转发视为 slash 入口。原计划的"专用 IPC 分支由这
+    // 里收编"已改道：force-continuation / context-guard / model-selection 的
+    // 会话控制统一走上方 feature-comms-request 通用分支（onHostRequest
+    // 请求面，ADR-0018 / ADR-0034）。
     if (msg.type === 'capability-invoke' || msg.type === 'capability-list-request') {
       await handleCapabilityIPC(this, msg, (payload) => {
         try {
@@ -533,105 +535,12 @@ class SessionLifecycle {
           });
         } catch {}
       });
-      return;
     }
 
-    // ── Force-continuation session control (request/ack) ──
-    // The server route waits for a force-continuation-result reply carrying the
-    // same requestId + sessionId, so the panel can render the authoritative
-    // Feature state from this session runtime.
-    if (msg.type === 'force-continuation-control' || msg.type === 'force-continuation-status') {
-      const reply = (payload) => {
-        try {
-          process.send({
-            type: 'force-continuation-result',
-            requestId: msg.requestId,
-            sessionId: this.sessionId,
-            ...payload,
-          });
-        } catch {}
-      };
-      const feature = (this.agent?.features?.get?.('force-continuation'))
-        || (typeof this.agent?.getFeature === 'function' ? this.agent.getFeature('force-continuation') : null);
-      if (!feature) {
-        reply({ ok: false, error: 'force-continuation feature not mounted in this session' });
-        return;
-      }
-      try {
-        if (msg.type === 'force-continuation-control') {
-          if (msg.triggers && typeof msg.triggers === 'object') feature.setTriggers(msg.triggers);
-          if (typeof msg.maxConsecutiveContinuations === 'number' && typeof feature.setMaxConsecutive === 'function') {
-            feature.setMaxConsecutive(msg.maxConsecutiveContinuations);
-          }
-        }
-        reply({ ok: true, status: feature.getStatus() });
-      } catch (err) {
-        reply({ ok: false, error: String(err?.message || err) });
-      }
-      return;
-    }
-
-    // ── Context-guard session control (interactive fuse, request/ack) ──
-    // 会话控制面板的「上下文拦截」开关：与 force-continuation 同构的
-    // request/ack 链路，feature 仍是权威状态持有者。
-    if (msg.type === 'context-guard-control' || msg.type === 'context-guard-status') {
-      const reply = (payload) => {
-        try {
-          process.send({
-            type: 'context-guard-result',
-            requestId: msg.requestId,
-            sessionId: this.sessionId,
-            ...payload,
-          });
-        } catch {}
-      };
-      const feature = (this.agent?.features?.get?.('context-guard'))
-        || (typeof this.agent?.getFeature === 'function' ? this.agent.getFeature('context-guard') : null);
-      if (!feature) {
-        reply({ ok: false, error: 'context-guard feature not mounted in this session' });
-        return;
-      }
-      try {
-        if (msg.type === 'context-guard-control' && typeof msg.armed === 'boolean') {
-          feature.setArmed(msg.armed);
-        }
-        reply({ ok: true, status: feature.getStatus() });
-      } catch (err) {
-        reply({ ok: false, error: String(err?.message || err) });
-      }
-      return;
-    }
-
-    // ── credential refresh push（ADR-0028 修订）──
-    // server 侧凭证变更（重登 / 换 key / OpenCode 换档）后的主动重 resolve：
-    // 同 preset 换新实例，即拿到新凭证。fire-and-forget，无回执——失败保留
-    // 旧实例（401 → auth-recovery 反应式路径仍是兜底）；进行中的调用持有旧
-    // 实例引用不受影响，换实例只作用于下一次调用。
-    if (msg.type === 'refresh-credentials') {
-      try {
-        const meta = typeof this.agent?.getLLMMeta === 'function' ? this.agent.getLLMMeta() : null;
-        const presetName = meta?.presetName;
-        if (!presetName || typeof this.agent?.setModel !== 'function') return;
-        // 档位透传纪律与 auth-recovery 一致：meta 带 thinkingEffort 键（含显式
-        // null）原样透传，保持用户运行档位；键不存在则按 preset 默认档重造。
-        const swapped = this.agent.setModel(presetName, {
-          ...(meta.thinkingEffort !== undefined ? { thinkingEffort: meta.thinkingEffort } : {}),
-          source: 'credential-refresh',
-        });
-        if (swapped) {
-          console.log(`[ProtoClaw Runtime] Credentials refreshed for preset "${presetName}"`);
-        } else {
-          console.warn(`[ProtoClaw Runtime] Credential refresh could not re-resolve preset "${presetName}" — keeping previous instance`);
-        }
-      } catch (err) {
-        console.warn('[ProtoClaw Runtime] Credential refresh failed:', err?.message || err);
-      }
-      return;
-    }
-
-    // （model / thinking hot-swap IPC 分支已退役，ADR-0034：会话级切换改由
-    //  model-selection Feature 的 onHostRequest 请求面承接（feature-comms
-    //  通道投递，见 feature-communication.js 的 request 路由）。）
+    // （force-continuation-control / -status 与 context-guard-control / -status
+    //  专用 IPC 分支已收编退役：会话控制面板的本地路径改经 server 路由发
+    //  feature-comms-request 消息形态（上方通用分支按 featureId 寻址
+    //  feature.onHostRequest），宿主不再按 feature 名字写业务分支。）
   }
 
   // ── Dispose this session (does NOT exit the process) ────────

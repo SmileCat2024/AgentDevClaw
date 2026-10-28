@@ -138,6 +138,47 @@ export class ForceContinuation implements AgentFeature {
     }];
   }
 
+  /**
+   * 会话控制面板请求面（宿主通用 feature-comms-request 分支投递；server
+   * agent-lifecycle 路由的本地路径发此消息形态，远程保持 ADR-0011 转发）。
+   * 旧宿主专用 IPC 分支（force-continuation-control / -status）已收编退役。
+   * 校验语义与路由层对齐（triggers 仅两布尔键；上限 1–10 整数）。
+   */
+  async onHostRequest(requestType: string, payload: unknown): Promise<Record<string, unknown>> {
+    const body = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    switch (requestType) {
+      case 'status':
+        return { ok: true, status: this.getStatus() };
+      case 'configure': {
+        const { triggers, maxConsecutiveContinuations } = body;
+        if (triggers !== undefined) {
+          const valid = typeof triggers === 'object' && triggers !== null && !Array.isArray(triggers)
+            && Object.entries(triggers).every(([key, value]) =>
+              (key === 'outputTruncation' || key === 'apiErrorRetry') && typeof value === 'boolean');
+          if (!valid) {
+            return { ok: false, code: 'invalid_payload', error: 'triggers must contain only boolean outputTruncation and apiErrorRetry fields' };
+          }
+        }
+        if (maxConsecutiveContinuations !== undefined) {
+          const value = maxConsecutiveContinuations;
+          if (typeof value !== 'number' || !Number.isFinite(value) || Math.floor(value) !== value || value < 1 || value > 10) {
+            return { ok: false, code: 'invalid_payload', error: 'maxConsecutiveContinuations must be an integer between 1 and 10' };
+          }
+        }
+        // 先全量校验后应用：非法载荷不得部分生效。
+        if (triggers !== undefined) {
+          this.setTriggers(triggers as Partial<ForceContinuationTriggers>);
+        }
+        if (maxConsecutiveContinuations !== undefined) {
+          this.setMaxConsecutive(maxConsecutiveContinuations as number);
+        }
+        return { ok: true, status: this.getStatus() };
+      }
+      default:
+        return { ok: false, code: 'operation_unavailable', error: `Unknown requestType: ${requestType}` };
+    }
+  }
+
   setTriggers(triggers: Partial<ForceContinuationTriggers>): ForceContinuationStatus {
     this.config = parseConfig({ ...this.config, ...triggers });
     this.lastAction = 'idle';

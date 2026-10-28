@@ -193,6 +193,28 @@ export class ContextGuardFeature implements AgentFeature {
   }
 
   /**
+   * 会话控制面板请求面（宿主通用 feature-comms-request 分支投递；server
+   * agent-lifecycle 路由的本地路径发此消息形态，远程保持 ADR-0011 转发）。
+   * 旧宿主专用 IPC 分支（context-guard-control / -status）已收编退役。
+   */
+  async onHostRequest(requestType: string, payload: unknown): Promise<Record<string, unknown>> {
+    const body = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    switch (requestType) {
+      case 'status':
+        return { ok: true, status: this.getStatus() };
+      case 'arm': {
+        if (typeof body.armed !== 'boolean') {
+          return { ok: false, code: 'invalid_payload', error: 'armed must be a boolean' };
+        }
+        this.setArmed(body.armed);
+        return { ok: true, status: this.getStatus() };
+      }
+      default:
+        return { ok: false, code: 'operation_unavailable', error: `Unknown requestType: ${requestType}` };
+    }
+  }
+
+  /**
    * 阈值锚定到当前 LLM 的活元数据：挂载注入值只是初值，每个 CallStart
    * 重算一次。这覆盖两类漂移——会话首轮调用前热切换模型（onLLMSwap 时
    * _agent 尚未捕获）、以及 runtime 启动预设与会话实际模型不一致。

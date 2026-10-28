@@ -23,7 +23,7 @@ import {
 } from '../oauth-codex.js';
 import { getActiveProxyUrl } from '../shared/proxy-manager.js';
 import { openUrlInSystem } from '../shared/system-opener.js';
-import { broadcastIPCToAllRuntimes } from '../shared/ipc.js';
+import { broadcastFeatureCommsRequest } from '../shared/ipc.js';
 import {
   listCodexAccounts,
   registerCodexAccount,
@@ -47,7 +47,7 @@ export function setupOAuthCodexRoutes(app, express) {
         console.warn(`[OAuth/Codex] Failed to register account "${providerName}" in the account book:`, err?.message || err);
       }
     }
-    broadcastIPCToAllRuntimes({ type: 'refresh-credentials' });
+    broadcastFeatureCommsRequest('model-selection', 'selection', 'refresh-credentials');
   });
 
   // ── Start login (browser PKCE or device code) ──
@@ -228,7 +228,7 @@ export function setupOAuthCodexRoutes(app, express) {
       // 切换当前账号 = 全局换 token 来源：运行中会话经既有 refresh-credentials
       // 广播重 resolve（ADR-0028 通道复用，无新增热重载）；激活未变化不打扰。
       if (result.previous !== providerName) {
-        broadcastIPCToAllRuntimes({ type: 'refresh-credentials' });
+        broadcastFeatureCommsRequest('model-selection', 'selection', 'refresh-credentials');
       }
       res.json({ ok: true, providerName, previous: result.previous || null });
     } catch (error) { next(error); }
@@ -242,7 +242,7 @@ export function setupOAuthCodexRoutes(app, express) {
       const state = removeCodexAccount(providerName);
       // 当前账号被登出 → 回退账号接管；运行中会话重 resolve 到新账号
       if (before.activeProvider === providerName && state.activeProvider !== '') {
-        broadcastIPCToAllRuntimes({ type: 'refresh-credentials' });
+        broadcastFeatureCommsRequest('model-selection', 'selection', 'refresh-credentials');
       }
       res.json({ ok: true, providerName, accounts: state.accounts, activeProvider: state.activeProvider });
     } catch (error) { next(error); }

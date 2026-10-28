@@ -266,3 +266,43 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     assert.equal(posted.length, 2);
   });
 });
+
+describe('onHostRequest surface (feature-comms)', () => {
+  it('status reports live armed/trip state', async () => {
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = makeAgent();
+    feature.observeUsage({ inputTokens: 900 }, agent); // 越界触发，fuse 消耗
+    const result = await feature.onHostRequest('status', {});
+    assert.equal(result.ok, true);
+    const status = result.status as { armed: boolean; trip: { inputTokens: number } | null };
+    assert.equal(status.armed, false);
+    assert.equal(status.trip?.inputTokens, 900);
+  });
+
+  it('arm toggles the fuse and reports the resulting state', async () => {
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = makeAgent();
+    feature.observeUsage({ inputTokens: 900 }, agent); // 触发后 armed=false
+    const rearm = await feature.onHostRequest('arm', { armed: true });
+    assert.equal(rearm.ok, true);
+    assert.equal(feature.getStatus().armed, true);
+    // 装填后再过界会再拦一次
+    assert.equal(feature.observeUsage({ inputTokens: 950 }, agent), true);
+    const disarm = await feature.onHostRequest('arm', { armed: false });
+    assert.equal(disarm.ok, true);
+    assert.equal(feature.getStatus().armed, false);
+  });
+
+  it('rejects non-boolean arm payloads and unknown request types', async () => {
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    for (const payload of [{}, { armed: 'yes' }, { armed: 1 }, { armed: null }]) {
+      const result = await feature.onHostRequest('arm', payload);
+      assert.equal(result.ok, false, JSON.stringify(payload));
+      assert.equal(result.code, 'invalid_payload');
+    }
+    assert.equal(feature.getStatus().armed, true, '非法载荷不得改变装填状态');
+    const unknown = await feature.onHostRequest('nope', {});
+    assert.equal(unknown.ok, false);
+    assert.equal(unknown.code, 'operation_unavailable');
+  });
+});

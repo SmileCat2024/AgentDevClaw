@@ -5,7 +5,7 @@ import { spawn } from 'child_process';
 import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, MODEL_CONNECTIONS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS, AGENT_CONFIGS_ROOT, AGENT_USER_CONFIG_PATH } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
-import { broadcastIPCToAllRuntimes } from '../shared/ipc.js';
+import { broadcastFeatureCommsRequest } from '../shared/ipc.js';
 import { resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
 import { buildLocalFailureResponse } from '../shared/operation-contract.js';
 import { normalizeProgrammingHelperProcessMode, GLOBAL_SHARED_AGENT_ID } from '../shared/process-mode.js';
@@ -823,7 +823,7 @@ export function setupModelConfigRoutes(app, express) {
       // OpenCode 凭证/档位变更 → 广播重 resolve（tier 决定 catalog preset 的 baseUrl，同属连接字段）
       if (saved.opencode.apiKey !== current.opencode.apiKey
         || (saved.opencode.tier === 'go') !== (current.opencode.tier === 'go')) {
-        broadcastIPCToAllRuntimes({ type: 'refresh-credentials' });
+        broadcastFeatureCommsRequest('model-selection', 'selection', 'refresh-credentials');
       }
       res.json({ opencode: { hasApiKey: !!saved.opencode.apiKey, tier: saved.opencode.tier, apiKey: saved.opencode.apiKey || '' } });
     } catch (error) { next(error); }
@@ -924,7 +924,7 @@ export function setupModelConfigRoutes(app, express) {
       const defaultChanged = !!(config && typeof config === 'object')
         && defaultModelConnectionChanged(oldConfig?.defaultModel, config?.defaultModel);
       if (presetsChanged || defaultChanged) {
-        broadcastIPCToAllRuntimes({ type: 'refresh-credentials' });
+        broadcastFeatureCommsRequest('model-selection', 'selection', 'refresh-credentials');
       }
 
       res.json({
