@@ -15,6 +15,7 @@ import { resolveOpenCodeBaseUrl, parseZenModelsResponse } from '../zen-helpers.j
 import { fetchWithRetry } from '../shared/fetch-retry.js';
 import { resolveAccessTokenSync, buildCodexOAuthHeaders, DEFAULT_CLIENT_ID, DEFAULT_CODEX_BASE_URL } from '../oauth-codex.js';
 import { resolveActiveCodexProviderName } from '../codex-accounts.js';
+import { normalizeProviderOptions, normalizeCodexProviderOptions, validateProviderOptions } from '../shared/provider-options.js';
 
 export { normalizeProgrammingHelperProcessMode } from '../shared/process-mode.js';
 
@@ -59,6 +60,36 @@ function normalizeModelPresetsData(data) {
 function resolvePresetApiSurface(protocol, authType, apiSurface) {
   if (protocol === 'openai' && authType === 'oauth-codex') return 'responses';
   return cleanSessionText(apiSurface) || 'chat';
+}
+
+function prepareModelConfigForWrite(config) {
+  if (!config || typeof config !== 'object' || !config.defaultModel || typeof config.defaultModel !== 'object') return config;
+  const model = config.defaultModel;
+  const apiSurface = resolvePresetApiSurface(model.provider, model.authType, model.apiSurface);
+  return { ...config, defaultModel: { ...model, providerOptions: normalizeProviderOptions(model.providerOptions, model.provider, apiSurface) } };
+}
+
+function validatePresetProviderOptions(presets, config) {
+  const errors = [];
+  presets.forEach((preset, index) => {
+    const protocol = preset?.catalogProvider === 'codex'
+      ? 'openai-oauth'
+      : cleanSessionText(preset?.provider) || 'anthropic';
+    const apiSurface = resolvePresetApiSurface(protocol, preset?.authType, preset?.apiSurface);
+    const providerOptions = preset?.catalogProvider === 'codex'
+      ? normalizeCodexProviderOptions(preset?.providerOptions)
+      : preset?.providerOptions;
+    const result = validateProviderOptions(providerOptions, protocol, apiSurface);
+    if (!result.valid) errors.push(`Preset ${cleanSessionText(preset?.name) || index + 1}: ${result.error}`);
+  });
+  if (config?.defaultModel && typeof config.defaultModel === 'object') {
+    const model = config.defaultModel;
+    const protocol = model.authType === 'oauth-codex' ? 'openai-oauth' : cleanSessionText(model.provider) || '';
+    const apiSurface = resolvePresetApiSurface(protocol, model.authType, model.apiSurface);
+    const result = validateProviderOptions(model.providerOptions, protocol, apiSurface);
+    if (!result.valid) errors.unshift(`Default model: ${result.error}`);
+  }
+  return errors;
 }
 
 function providerSignature(protocol, provider) {
@@ -136,6 +167,7 @@ function flattenModelPresets(data) {
   const normalized = normalizeModelPresetsData(data);
   const mapped = normalized.presets.map((preset, index) => {
     const protocol = cleanSessionText(preset?.protocol || preset?.provider) || 'anthropic';
+    const optionsProtocol = preset?.catalogProvider === 'codex' ? 'openai-oauth' : protocol;
     const providerName = cleanSessionText(preset?.providerName);
     const catalogProvider = cleanSessionText(preset?.catalogProvider);
     const provider = catalogProvider ? null : resolveProviderForPreset(
@@ -173,8 +205,16 @@ function flattenModelPresets(data) {
       contextLength: Number.isFinite(Number(preset?.contextLength)) ? Number(preset.contextLength) : null,
       compressRatio: Number.isFinite(Number(preset?.compressRatio)) ? Math.max(1, Math.min(100, Number(preset.compressRatio))) : DEFAULT_COMPRESS_RATIO,
       countTokenPath: cleanSessionText(preset?.countTokenPath) || null,
-      customHeaders: Array.isArray(preset?.customHeaders) ? preset.customHeaders.filter(h => h && typeof h === 'object') : [],
-    };
+       customHeaders: Array.isArray(preset?.customHeaders) ? preset.customHeaders.filter(h => h && typeof h === 'object') : [],
+       providerOptions: normalizeProviderOptions(
+         catalogProvider === 'codex' ? normalizeCodexProviderOptions(preset?.providerOptions) : preset?.providerOptions,
+         optionsProtocol,
+         resolvePresetApiSurface(protocol, authType, preset?.apiSurface),
+       ),
+       ...(Array.isArray(preset?.serviceTiers) ? { serviceTiers: preset.serviceTiers } : {}),
+       ...(Object.hasOwn(preset || {}, 'defaultServiceTier') ? { defaultServiceTier: preset.defaultServiceTier } : {}),
+       ...(Array.isArray(preset?.additionalSpeedTiers) ? { additionalSpeedTiers: preset.additionalSpeedTiers } : {}),
+      };
   });
   // Starred presets float to the top (stable within each group) so every
   // consumer of the preset list — UI lists and dropdowns alike — shows them first.
@@ -217,6 +257,7 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
   flatPresets.forEach((rawPreset, index) => {
     if (!rawPreset || typeof rawPreset !== 'object') return;
     const protocol = cleanSessionText(rawPreset.provider) || 'anthropic';
+    const apiSurface = resolvePresetApiSurface(protocol, rawPreset.authType, rawPreset.apiSurface);
     const name = cleanSessionText(rawPreset.name) || cleanSessionText(rawPreset.model) || `Preset ${index + 1}`;
     const model = cleanSessionText(rawPreset.model);
     const requestedName = cleanSessionText(rawPreset.providerName);
@@ -224,6 +265,11 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
     const apiKey = cleanSessionText(rawPreset.apiKey);
     const authType = cleanSessionText(rawPreset.authType) || '';
     const clientId = cleanSessionText(rawPreset.clientId) || '';
+    const providerOptions = normalizeProviderOptions(
+      rawPreset.catalogProvider === 'codex' ? normalizeCodexProviderOptions(rawPreset.providerOptions) : rawPreset.providerOptions,
+      rawPreset.catalogProvider === 'codex' ? 'openai-oauth' : protocol,
+      apiSurface,
+    );
     // A save arriving with an empty baseUrl must not erase the endpoint already
     // stored under the same provider name + protocol (partial payloads from
     // clients that echo a blank field). Inherit the stored endpoint so the
@@ -268,7 +314,7 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
       ...(cleanSessionText(rawPreset.catalogProvider) ? { catalogProvider: cleanSessionText(rawPreset.catalogProvider) } : {}),
       ...(cleanSessionText(rawPreset.catalogProvider) ? { baseUrl, apiKey, authType, clientId } : {}),
       protocol,
-      apiSurface: resolvePresetApiSurface(protocol, authType, rawPreset.apiSurface),
+      apiSurface,
       vision: rawPreset?.vision === true,
       starred: rawPreset?.starred === true,
       model,
@@ -280,7 +326,11 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
       compressRatio: Number.isFinite(Number(rawPreset.compressRatio)) ? Math.max(1, Math.min(100, Number(rawPreset.compressRatio))) : DEFAULT_COMPRESS_RATIO,
       countTokenPath: cleanSessionText(rawPreset.countTokenPath) || null,
       customHeaders: Array.isArray(rawPreset.customHeaders) ? rawPreset.customHeaders.filter(h => h && typeof h === 'object') : [],
-    };
+      providerOptions,
+      ...(Array.isArray(rawPreset.serviceTiers) ? { serviceTiers: rawPreset.serviceTiers } : {}),
+      ...(Object.hasOwn(rawPreset, 'defaultServiceTier') ? { defaultServiceTier: rawPreset.defaultServiceTier } : {}),
+      ...(Array.isArray(rawPreset.additionalSpeedTiers) ? { additionalSpeedTiers: rawPreset.additionalSpeedTiers } : {}),
+     };
     presets.push(presetRecord);
   });
 
@@ -689,7 +739,8 @@ const CODEX_MODELS_CLIENT_VERSION = '99.0.0';
  * 用 OAuth token 拉取 Codex 模型目录并解析为目录条目。model_catalog 与
  * openai-auth/models 两条路由共用同一请求形态与解析口径。
  * @returns {Promise<{models: Array<{id: string, displayName: string, contextLength: number|null,
- *   thinkingEffort: string|null, supportedThinkingEfforts: string[]}>}
+ *   thinkingEffort: string|null, supportedThinkingEfforts: string[], serviceTiers?: Array<{id: string, name: string, description: string}>,
+ *   defaultServiceTier?: string|null, additionalSpeedTiers?: string[]}>}
  *   | {error: string, status: number}>}
  */
 export async function fetchCodexModelCatalog(accessToken, fetchImpl = globalThis.fetch) {
@@ -732,6 +783,20 @@ export async function fetchCodexModelCatalog(accessToken, fetchImpl = globalThis
         supportedThinkingEfforts: Array.isArray(model?.supported_reasoning_levels)
           ? model.supported_reasoning_levels.map((item) => cleanSessionText(item?.effort)).filter(Boolean)
           : [],
+        ...(Array.isArray(model?.service_tiers) ? {
+          serviceTiers: model.service_tiers.filter((tier) => tier && typeof tier === 'object' && cleanSessionText(tier.id))
+            .map((tier) => ({
+              id: cleanSessionText(tier.id),
+              name: cleanSessionText(tier.name) || cleanSessionText(tier.id),
+              description: cleanSessionText(tier.description),
+            })),
+        } : {}),
+        ...(Object.hasOwn(model || {}, 'default_service_tier')
+          ? { defaultServiceTier: cleanSessionText(model?.default_service_tier) || null }
+          : {}),
+        ...(Array.isArray(model?.additional_speed_tiers) ? {
+          additionalSpeedTiers: model.additional_speed_tiers.map((tier) => cleanSessionText(tier)).filter(Boolean),
+        } : {}),
       };
     })
     .filter(Boolean);
@@ -838,7 +903,10 @@ export function setupModelConfigRoutes(app, express) {
 
   app.put('/protoclaw/model_config', express.json(), async (req, res, next) => {
     try {
-      const { config, presets } = req.body || {};
+      const { config: incomingConfig, presets } = req.body || {};
+      const providerOptionsErrors = validatePresetProviderOptions(Array.isArray(presets) ? presets : [], incomingConfig);
+      if (providerOptionsErrors.length) return res.status(400).json({ error: providerOptionsErrors[0], details: providerOptionsErrors });
+      const config = prepareModelConfigForWrite(incomingConfig);
 
       // 写前快照连接字段，写后 diff 决定是否广播 refresh-credentials
       const oldConfig = await readModelConfig();

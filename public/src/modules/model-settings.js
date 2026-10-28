@@ -66,6 +66,43 @@ function closeSettings() {
   if (host) host.innerHTML = '';
 }
 
+function canonicalProviderOptions(value) {
+  const canonicalize = (input) => {
+    if (Array.isArray(input)) return input.map(canonicalize);
+    if (input && typeof input === 'object') {
+      return Object.fromEntries(Object.keys(input).sort().map((key) => [key, canonicalize(input[key])]));
+    }
+    return input;
+  };
+  return JSON.stringify(canonicalize(value || {}));
+}
+
+function modelConfigMatchesPreset(modelConfig, preset) {
+  if (modelConfig.model !== preset.model || modelConfig.provider !== preset.provider || modelConfig.baseUrl !== preset.baseUrl) return false;
+  return canonicalProviderOptions(modelConfig.providerOptions) === canonicalProviderOptions(preset.providerOptions);
+}
+
+function isCodexPreset(preset) {
+  return preset?.catalogProvider === 'codex' || preset?.authType === 'oauth-codex';
+}
+
+function selectedCodexTier(preset) {
+  const tier = preset?.providerOptions?.service_tier;
+  return tier === 'fast' ? 'priority' : (typeof tier === 'string' ? tier : '');
+}
+
+function getCodexServiceTiers(preset, catalogModel) {
+  const tiers = Array.isArray(catalogModel?.serviceTiers)
+    ? catalogModel.serviceTiers.filter((tier) => tier && tier.id)
+    : Array.isArray(preset?.serviceTiers) ? preset.serviceTiers.filter((tier) => tier && tier.id) : [];
+  const legacyFast = (catalogModel?.additionalSpeedTiers || preset?.additionalSpeedTiers || []).includes('fast');
+  if (legacyFast && !tiers.some((tier) => tier.id === 'priority')) {
+    tiers.push({ id: 'priority', name: 'Fast', description: '' });
+  }
+  return tiers;
+}
+
+
 function presetSourceLabel(preset) {
   if (!preset) return '—';
   if (preset.catalogProvider === 'codex' || preset.authType === 'oauth-codex') return 'Codex';
@@ -98,7 +135,7 @@ function renderOverviewContent(presets, dm, isZh) {
     { key: 'speech', title: isZh ? '配置语音输入' : 'Set up voice input', desc: isZh ? '选择语音识别ASR模型，将语音转换为文字' : 'Pick an ASR model to turn speech into text' },
   ];
   const cards = presets.map((p, idx) => {
-    const isActive = dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl;
+    const isActive = modelConfigMatchesPreset(dm, p);
     return [
       '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" onclick="applySettingsPreset(' + idx + ')">',
       '<div class="settings-preset-dot"></div>',
@@ -171,7 +208,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
     const customPresets = presets.map((p, idx) => ({ p, idx })).filter(({ p }) => !p.catalogProvider && p.authType !== 'oauth-codex' && !['OpenCode Zen', 'OpenCode Go'].includes(p.providerName));
     content = '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '自定义模型' : 'Custom models') + '</div>'
       + (customPresets.length
-        ? '<div class="settings-presets-grid">' + customPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, false, dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl)).join('') + '</div>'
+        ? '<div class="settings-presets-grid">' + customPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, false, modelConfigMatchesPreset(dm, p))).join('') + '</div>'
         : renderCatalogEmptyState(isZh ? '尚无自定义模型' : 'No custom models', isZh ? '点击右下角「添加模型」，接入任意 OpenAI 兼容端点' : 'Hit "Add model" in the corner to connect any OpenAI-compatible endpoint'))
       + '</div>';
   } else {
@@ -208,7 +245,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
       connectionCard = '<div class="settings-section settings-connection-card"><div class="settings-connection-row"><div><div class="settings-connection-title">OpenCode</div><div class="settings-connection-description">' + (isZh ? '配置 API Key 连接以发现可用模型，输入后自动保存' : 'Configure an API key to discover models; it saves as you type') + '</div></div><div class="settings-field settings-connection-inline"><label>API Key</label><div class="settings-key-field"><input class="settings-input" id="settings-opencode-key" type="password" autocomplete="new-password" value="' + escapeHtml(connections.opencode?.apiKey || '') + '" placeholder="' + (connections.opencode?.hasApiKey ? (isZh ? '已保存，留空保持不变' : 'Saved; leave blank to keep') : 'sk-…') + '" oninput="onOpenCodeKeyInput()" onblur="flushOpenCodeKeySave()"><button class="settings-key-visibility" type="button" aria-label="' + (isZh ? '显示或隐藏 API Key' : 'Show or hide API key') + '" title="' + (isZh ? '显示或隐藏' : 'Show or hide') + '" onclick="toggleOpenCodeKeyVisibility()"><svg id="opencode-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg id="opencode-eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button></div></div></div></div>';
     }
     const addedGrid = providerPresets.length
-      ? '<div class="settings-presets-grid">' + providerPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, catalog.loaded && !catalog.models.some((m) => m.id === p.model), dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl)).join('') + '</div>'
+      ? '<div class="settings-presets-grid">' + providerPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, catalog.loaded && !catalog.models.some((m) => m.id === p.model), modelConfigMatchesPreset(dm, p))).join('') + '</div>'
       : renderCatalogEmptyState(isZh ? '尚未添加模型' : 'No models added', isZh ? '从下方可添加列表中选择模型加入' : 'Pick models from the available list below');
     // 可添加行索引寻址（inline onclick 传索引而非模型 id，避免注入与转义问题）
     window.ClawFW.modelCatalogAvailable = available.map((m) => m.id);
@@ -370,6 +407,19 @@ async function addCatalogModels(provider, ids) {
     const protocolInfo = isCodex ? { protocol: 'openai', apiSurface: 'responses' } : resolveOpenCodeProtocolClient(model.id);
     const name = (isCodex ? 'Codex ' : 'OpenCode ') + model.id;
     if (data.presets.some((preset) => preset.catalogProvider === provider && preset.model === model.id)) continue;
+    const serviceTiers = Array.isArray(model.serviceTiers)
+      ? model.serviceTiers.filter((tier) => tier && tier.id)
+      : [];
+    if (isCodex && !serviceTiers.some((tier) => tier.id === 'priority')
+      && (model.additionalSpeedTiers || []).includes('fast')) {
+      serviceTiers.push({ id: 'priority', name: 'Fast', description: '' });
+    }
+    const defaultServiceTier = serviceTiers.some((tier) => tier.id === model.defaultServiceTier)
+      ? model.defaultServiceTier
+      : '';
+    const providerOptions = { ...(model.providerOptions || {}) };
+    if (defaultServiceTier) providerOptions.service_tier = defaultServiceTier;
+    else if (isCodex) delete providerOptions.service_tier;
     // 目录来源预设的生成参数分两类取值：
     //   Codex —— 上游 /models 回报真实能力，输出预算 0（不限）、温度 0、
     //            思考预算留空（用厂商默认）、窗口取 context_window。
@@ -392,6 +442,8 @@ async function addCatalogModels(provider, ids) {
       model: model.id, baseUrl: isCodex ? 'https://chatgpt.com/backend-api/codex' : (data.connections?.opencode?.tier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL),
       apiKey: '',
       ...generation,
+      providerOptions,
+      ...(isCodex ? { serviceTiers, additionalSpeedTiers: model.additionalSpeedTiers || [] } : {}),
       starred: false,
     });
   }
@@ -480,11 +532,14 @@ function closeCodexConnectionView() {
 function modelCatalogPresetCard(preset, idx, isZh, missing, isActive) {
   const providerLabel = preset.catalogProvider === 'codex' || preset.authType === 'oauth-codex' ? 'Codex' : (preset.catalogProvider === 'opencode' || ['OpenCode Zen', 'OpenCode Go'].includes(preset.providerName) ? 'OpenCode' : (preset.provider || 'Custom'));
   // 与总览/语音预设卡同构：圆点 + 名称/详情 + 编辑/删除图标按钮，整卡点击应用
+  const tier = isCodexPreset(preset) ? selectedCodexTier(preset) : '';
+  const tierMeta = Array.isArray(preset.serviceTiers) ? preset.serviceTiers.find((item) => item.id === tier) : null;
+  const tierLabel = tier === 'priority' ? (tierMeta?.name || 'Fast') : tierMeta?.name || tier;
   return '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" onclick="applySettingsPreset(' + idx + ')">'
     + '<div class="settings-preset-dot"></div>'
     + '<div class="settings-preset-info">'
     + '<div class="settings-preset-name">' + escapeHtml(preset.name || preset.model) + '</div>'
-    + '<div class="settings-preset-detail">' + escapeHtml(providerLabel + ' · ' + preset.model) + (missing ? ' <span class="preset-tag">' + (isZh ? '目录中不存在' : 'Not in catalog') + '</span>' : '') + '</div>'
+    + '<div class="settings-preset-detail">' + escapeHtml(providerLabel + ' · ' + preset.model) + (tier ? ' · ' + escapeHtml(tierLabel) : '') + (missing ? ' <span class="preset-tag">' + (isZh ? '目录中不存在' : 'Not in catalog') + '</span>' : '') + '</div>'
     + '</div>'
     + '<div class="settings-preset-actions">'
     + '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSettingsPreset(' + idx + ')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>'
@@ -659,9 +714,61 @@ function renderBaseEndpointField(preset, protocolValue, baseUrl, isZh) {
   ].join('');
 }
 
+function validateProviderOptionsDraft(raw, protocolValue, apiSurfaceValue = 'chat') {
+  let value;
+  try {
+    value = raw.trim() ? JSON.parse(raw) : {};
+  } catch {
+    return { valid: false, error: currentLanguage === 'zh' ? '额外请求体参数必须是有效 JSON。' : 'Additional request body parameters must be valid JSON.' };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { valid: false, error: currentLanguage === 'zh' ? '额外请求体参数必须是 JSON 对象。' : 'Additional request body parameters must be a JSON object.' };
+  }
+  if (Object.keys(value).length && !['anthropic', 'openai', 'openai-responses', 'openai-oauth', 'opencode'].includes(protocolValue)) {
+    return { valid: false, error: currentLanguage === 'zh' ? '当前协议不支持额外请求体参数。' : 'Additional parameters are not supported for this protocol.' };
+  }
+  const dangerous = new Set(['__proto__', 'prototype', 'constructor']);
+  const isResponses = protocolValue === 'openai-responses' || protocolValue === 'openai-oauth'
+    || protocolValue === 'openai' && apiSurfaceValue === 'responses';
+  const reserved = protocolValue === 'anthropic'
+    ? ['model', 'messages', 'tools', 'stream', 'max_tokens', 'system', 'thinking']
+    : isResponses
+      ? ['model', 'input', 'tools', 'tool_choice', 'stream', 'instructions', 'store', 'previous_response_id', 'max_output_tokens', 'reasoning', 'parallel_tool_calls']
+      : ['model', 'messages', 'tools', 'tool_choice', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens', 'reasoning_effort', 'parallel_tool_calls'];
+  const inspect = (node, depth = 0, visited = new Set()) => {
+    if (!node || typeof node !== 'object') return null;
+    if (depth >= 32) return currentLanguage === 'zh' ? '参数嵌套过深。' : 'Parameter nesting is too deep.';
+    if (visited.has(node)) return null;
+    visited.add(node);
+    for (const key of Object.getOwnPropertyNames(node)) {
+      const child = node[key];
+      if (dangerous.has(key)) return currentLanguage === 'zh' ? '参数中包含不安全的键：' + key : 'Unsafe parameter key: ' + key;
+      const nested = inspect(child, depth + 1, visited);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  const unsafe = inspect(value);
+  if (unsafe) return { valid: false, error: unsafe };
+  const conflict = Object.keys(value).find((key) => reserved.includes(key));
+  if (conflict) {
+    return { valid: false, error: currentLanguage === 'zh'
+      ? '字段“' + conflict + '”由运行时管理，不能放入额外请求体参数。'
+      : 'The runtime manages “' + conflict + '”; it cannot be overridden here.' };
+  }
+  return { valid: true, value };
+}
+
 function renderSettingsEditForm(editIdx, presets, isZh) {
   const preset = presets[editIdx] || {};
   let openCodeTier = preset.providerName === 'OpenCode Go' || preset.baseUrl === OPENCODE_GO_BASE_URL ? 'go' : 'zen';
+  const isCodex = isCodexPreset(preset);
+  const modelCatalog = isCodex
+    ? (window.ClawFW.modelCatalogs?.codex?.models || []).find((model) => model.id === preset.model)
+    : null;
+  const availableServiceTiers = isCodex ? getCodexServiceTiers(preset, modelCatalog) : [];
+  const selectedServiceTier = isCodex ? selectedCodexTier(preset) : '';
+  const unsupportedServiceTier = selectedServiceTier && !availableServiceTiers.some((tier) => tier.id === selectedServiceTier);
   let isOpenCodePreset = preset.providerName === 'OpenCode Zen' || preset.providerName === 'OpenCode Go'
     || preset.baseUrl === OPENCODE_ZEN_BASE_URL || preset.baseUrl === OPENCODE_GO_BASE_URL;
   let dropdownVal = preset.authType === 'oauth-codex' ? 'openai-oauth'
@@ -670,6 +777,10 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     : (preset.provider || 'anthropic')));
   let isOAuthMode = dropdownVal === 'openai-oauth';
   let isOpenCodeMode = dropdownVal === 'opencode';
+  const providerOptions = preset.providerOptions && typeof preset.providerOptions === 'object' && !Array.isArray(preset.providerOptions)
+    ? { ...preset.providerOptions }
+    : {};
+  if (isCodex) delete providerOptions.service_tier;
   const resolvedBaseUrl = preset.baseUrl || (isOAuthMode ? 'https://chatgpt.com/backend-api/codex' : (isOpenCodeMode ? (openCodeTier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL) : ''));
   // 目录来源（Codex / OpenCode）预设：连接身份只读展示，不提供 API 类型切换
   const isCatalogPreset = preset.catalogProvider === 'codex' || preset.catalogProvider === 'opencode' || isOAuthMode || isOpenCodePreset;
@@ -687,6 +798,24 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<label>Model</label>',
     '<div class="settings-static-value">' + escapeHtml(preset.model || '—') + '</div>',
     '</div>',
+    ...(isCodex ? [
+      '<div class="settings-field settings-service-tier-field">',
+      '<label for="settings-preset-service-tier">' + (isZh ? '倍率模式' : 'Speed mode') + '</label>',
+      '<select class="settings-input" data-claw-select id="settings-preset-service-tier">',
+      '<option value=""' + (!selectedServiceTier ? ' selected' : '') + '>' + (isZh ? '标准' : 'Standard') + '</option>',
+      availableServiceTiers.map((tier) => '<option value="' + escapeHtml(tier.id) + '"' + (selectedServiceTier === tier.id ? ' selected' : '') + '>'
+        + escapeHtml(tier.id === 'priority' ? 'Fast' : tier.name || tier.id) + '</option>').join(''),
+      ...(unsupportedServiceTier ? ['<option value="' + escapeHtml(selectedServiceTier) + '" selected>'
+        + escapeHtml(selectedServiceTier) + (isZh ? '（目录未提供，请选择支持的档位）' : ' (not in catalog; choose a supported tier)') + '</option>'] : []),
+      '</select>',
+      !availableServiceTiers.length ? '<div class="settings-static-value">' + escapeHtml(window.ClawFW.modelCatalogs?.codex?.error || (isZh
+        ? '尚无可用的加速档位信息。请在 Codex 页面刷新模型目录后重试。'
+        : 'No speed tiers available. Refresh the Codex model catalog and try again.')) + '</div>' : '',
+      unsupportedServiceTier ? '<div class="settings-service-tier-warning" role="alert">'
+        + (isZh ? '这个模型不支持当前模式，请重新选择。' : 'This tier is not listed for the loaded model. Choose a listed tier or Standard.')
+        + '</div>' : '',
+      '</div>',
+    ] : []),
     '</div>',
   ].join('') : [
     '<div class="settings-field">',
@@ -828,7 +957,13 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     // ── 高级 ──
     '<div class="settings-divider"></div>',
     '<div class="settings-subsection-label">' + (isZh ? '高级' : 'Advanced') + '</div>',
-    /* Custom Headers Section */
+    '<div class="settings-field">',
+    '<label for="settings-preset-provider-options">' + (isZh ? '额外请求体参数 (JSON 对象)' : 'Additional request body parameters (JSON object)') + '</label>',
+    '<textarea class="settings-input settings-provider-options" id="settings-preset-provider-options" rows="6" spellcheck="false">' + escapeHtml(JSON.stringify(providerOptions, null, 2)) + '</textarea>',
+
+    '<div id="settings-provider-options-error" class="settings-field-warning" role="alert" style="display:none"></div>',
+    '</div>',
+     /* Custom Headers Section */
     '<div class="settings-field">',
     '<label>' + (isZh ? '自定义请求头' : 'Custom Headers') + '</label>',
     '<div id="settings-headers-container">',
@@ -923,7 +1058,13 @@ function addSettingsPreset() {
   renderSettingsOverlay();
 }
 
-function editSettingsPreset(idx) {
+async function editSettingsPreset(idx) {
+  const preset = window.ClawFW.settingsData?.presets?.[idx];
+  // Load capabilities before opening the form: an async catalog refresh must not erase edits.
+  if (isCodexPreset(preset) && !window.ClawFW.modelCatalogs?.codex?.loaded) {
+    await refreshModelCatalog('codex');
+    if (window.ClawFW.settingsData?.presets?.[idx] !== preset) return;
+  }
   window.ClawFW.settingsEditing = idx;
   renderSettingsOverlay();
 }
@@ -1027,6 +1168,48 @@ async function saveSettingsPreset(idx, opts) {
   const existing = presets[idx] || {};
   const isCatalogPreset = existing.catalogProvider === 'codex' || existing.catalogProvider === 'opencode'
     || existing.authType === 'oauth-codex' || existing.providerName === 'OpenCode Zen' || existing.providerName === 'OpenCode Go';
+  const rawProviderOptions = el('settings-preset-provider-options')?.value;
+  const protocolForOptions = isCatalogPreset
+    ? (existing.authType === 'oauth-codex' ? 'openai-oauth' : existing.provider || 'anthropic')
+    : (el('settings-preset-provider')?.value || existing.provider || 'anthropic');
+  const apiSurfaceForOptions = existing.catalogProvider === 'codex' || protocolForOptions === 'openai-oauth'
+    ? 'responses'
+    : existing.apiSurface || (el('settings-preset-provider')?.value === 'openai-responses' ? 'responses' : 'chat');
+  const optionsValidation = validateProviderOptionsDraft(rawProviderOptions === undefined ? JSON.stringify(existing.providerOptions || {}) : rawProviderOptions, protocolForOptions, apiSurfaceForOptions);
+  const optionsError = document.getElementById('settings-provider-options-error');
+  if (!optionsValidation.valid) {
+    if (optionsError) {
+      optionsError.textContent = optionsValidation.error;
+      optionsError.style.display = '';
+    }
+    el('settings-preset-provider-options')?.classList.add('invalid');
+    return;
+  }
+  if (optionsError) optionsError.style.display = 'none';
+  el('settings-preset-provider-options')?.classList.remove('invalid');
+  const providerOptions = { ...optionsValidation.value };
+  const modelCatalog = (window.ClawFW.modelCatalogs?.codex?.models || []).find((model) => model.id === existing.model);
+  if (isCodexPreset(existing)) {
+     const newTier = el('settings-preset-service-tier')?.value ?? selectedCodexTier(existing);
+     const availableServiceTiers = getCodexServiceTiers(existing, modelCatalog);
+     if (newTier && !availableServiceTiers.some((tier) => tier.id === newTier)) {
+       if (optionsError) {
+         optionsError.textContent = isZh ? '这个模型不支持当前模式，请重新选择。' : 'The selected model does not support this service tier. Choose a listed tier or Standard.';
+         optionsError.style.display = '';
+       }
+       return;
+     }
+     if (rawProviderOptions !== undefined && Object.hasOwn(providerOptions, 'service_tier')) {
+       if (optionsError) {
+         optionsError.textContent = isZh ? '请使用上方“倍率模式”选择标准或 Fast，并从高级参数中移除 service_tier。' : 'Use Speed mode above and remove service_tier from advanced parameters.';
+         optionsError.style.display = '';
+       }
+       return;
+     }
+     if (newTier) providerOptions.service_tier = newTier;
+     else delete providerOptions.service_tier;
+
+  }
   const common = {
     name: (el('settings-preset-name')?.value || '').trim(),
     thinkingEffort: thinkingEffort,
@@ -1054,6 +1237,11 @@ async function saveSettingsPreset(idx, opts) {
       baseUrl: existing.baseUrl || '',
       apiKey: existing.apiKey || '',
       catalogProvider: existing.catalogProvider || '',
+      providerOptions,
+      ...(isCodexPreset(existing) ? {
+        serviceTiers: modelCatalog?.serviceTiers || existing.serviceTiers || [],
+        additionalSpeedTiers: modelCatalog?.additionalSpeedTiers || existing.additionalSpeedTiers || [],
+      } : {}),
     };
   } else {
     const protocolRaw = (el('settings-preset-provider')?.value || 'anthropic').trim();
@@ -1078,6 +1266,7 @@ async function saveSettingsPreset(idx, opts) {
         ? (openCodeTier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL)
         : normalizeModelBaseUrl(el('settings-preset-baseurl')?.value || ''),
       apiKey: isOAuth ? '' : (el('settings-preset-apikey')?.value || '').trim(),
+      providerOptions,
     };
   }
   presets[idx] = preset;
@@ -1087,9 +1276,10 @@ async function saveSettingsPreset(idx, opts) {
   let config = window.ClawFW.settingsData?.config || {};
   let dm = config.defaultModel || {};
   let hasActive = presets.some(function(p) {
-    return dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl;
+    return modelConfigMatchesPreset(dm, p);
   });
-  await saveSettingsConfig();
+  const saved = await saveSettingsConfig();
+  if (!saved) return;
   if (!hasActive) {
     await applySettingsPreset(idx);
   }
@@ -1108,9 +1298,11 @@ async function applySettingsPreset(idx) {
     provider: preset.provider || 'anthropic',
     apiSurface: preset.apiSurface || 'chat',
     model: preset.model || '',
+    presetName: preset.name || '',
     baseUrl: preset.baseUrl || '',
     apiKey: preset.apiKey || '',
-    authType: preset.authType || '',
+     authType: preset.authType || '',
+     providerOptions: { ...(preset.providerOptions || {}) },
   };
   if (preset.thinkingEffort) {
     defaultModel.thinkingEffort = preset.thinkingEffort;
@@ -1189,8 +1381,10 @@ async function saveSettingsConfig() {
       } catch {}
     }
     if (typeof updateChatContextBar === 'function') { updateChatContextBar(); }
+    return true;
   } catch (error) {
     console.error('Failed to save config:', error);
+    return false;
   }
 }
 

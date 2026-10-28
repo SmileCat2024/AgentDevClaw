@@ -125,7 +125,7 @@ describe('model-preset-resolver', () => {
           { name: 'fixture-openai-default-surface', providerName: 'Fixture OpenAI', protocol: 'openai', model: 'fixture-model-b2' },
           { name: 'fixture-thinking', providerName: 'Fixture Anthropic', protocol: 'anthropic', model: 'fixture-model-t', thinkingEffort: 'medium' },
           { name: 'fixture-oauth', providerName: 'Fixture OAuth', protocol: 'openai', model: 'fixture-model-o' },
-          { name: 'fixture-codex-catalog', providerName: 'Fixture OAuth', catalogProvider: 'codex', protocol: 'openai', model: 'fixture-model-codex' },
+          { name: 'fixture-codex-catalog', providerName: 'Fixture OAuth', catalogProvider: 'codex', protocol: 'openai', model: 'fixture-model-codex', providerOptions: { service_tier: 'priority', prompt_cache_retention: '24h' } },
           { name: 'fixture-orphan', providerName: 'No Such Provider', protocol: 'anthropic', model: 'fixture-model-x' },
           { name: 'fixture-incomplete', providerName: 'Fixture Anthropic', protocol: 'anthropic' },
           // OpenCode 存量形态：目录功能引入 catalogProvider 标记前创建，
@@ -224,6 +224,7 @@ describe('model-preset-resolver', () => {
         assert.equal(result.modelName, 'fixture-model-codex');
         assert.equal(result.baseUrl, 'https://chatgpt.com/backend-api/codex');
         assert.equal(result.apiSurface, 'responses');
+        assert.deepEqual(result.llm.providerOptions, { service_tier: 'priority', prompt_cache_retention: '24h' });
       });
 
       it('returns null for an oauth provider without a stored token', () => {
@@ -428,6 +429,7 @@ describe('model-preset-resolver', () => {
             baseUrl: 'https://fixture-default.example/api',
             apiKey: 'fixture-key',
             thinkingEffort: 'medium',
+            providerOptions: { service_tier: 'priority', prompt_cache_retention: '24h' },
           },
         }));
       });
@@ -440,6 +442,23 @@ describe('model-preset-resolver', () => {
         assert.equal(result.presetName, GLOBAL_DEFAULT_PRESET_NAME);
         assert.equal(result.thinkingEffort, 'medium');
         assert.equal(result.protocol, 'anthropic');
+        assert.deepEqual(result.llm.providerOptions, { service_tier: 'priority', prompt_cache_retention: '24h' });
+      });
+
+      it('resolves the selected preset by name when the same model has Normal and Fast presets', () => {
+        const namedPresetsPath = join(fixtureDir, 'named-default-presets.json');
+        const namedDefaultPath = join(fixtureDir, 'named-default.json');
+        writeFileSync(namedPresetsPath, JSON.stringify({
+          providers: [{ name: 'fixture', apiKey: 'test', endpoints: { openai: 'https://example.com/v1' } }],
+          presets: [
+            { name: 'Normal', providerName: 'fixture', protocol: 'openai', model: 'same-model' },
+            { name: 'Fast', providerName: 'fixture', protocol: 'openai', model: 'same-model', providerOptions: { service_tier: 'priority' } },
+          ],
+        }));
+        writeFileSync(namedDefaultPath, JSON.stringify({ defaultModel: { model: 'same-model', provider: 'openai', presetName: 'Fast' } }));
+        const result = resolveGlobalDefaultLLM(undefined, { configPath: namedDefaultPath, presetsPath: namedPresetsPath });
+        assert.ok(result);
+        assert.deepEqual(result.llm.providerOptions, { service_tier: 'priority' });
       });
 
       it('thinkingEffort override applies to the inline default (re-resolve for setThinkingEffort)', () => {

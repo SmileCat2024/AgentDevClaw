@@ -97,6 +97,21 @@ describe('新建模型预设的生成参数默认值', () => {
     assert.deepEqual(pickGeneration(opencodePreset), pickGeneration(customPreset));
   });
 
+  it('Codex 目录声明的 Fast 档位写入预设请求参数，标准默认不强制指定档位', async () => {
+    const ctx = createSettingsSandbox();
+    seedSettingsData(ctx, {
+      catalog: {
+        provider: 'codex',
+        value: { models: [{ id: 'gpt-6-luna', serviceTiers: [{ id: 'priority', name: 'Fast', description: 'Fast service' }], defaultServiceTier: null }], loaded: true },
+      },
+    });
+    await addCatalogModel(ctx, 'codex', ['gpt-6-luna']);
+    const preset = ctx.run('window.ClawFW.settingsData.presets[0]');
+    assert.equal(preset.providerOptions.service_tier, undefined);
+    assert.deepEqual(JSON.parse(JSON.stringify(preset.serviceTiers)), [{ id: 'priority', name: 'Fast', description: 'Fast service' }]);
+
+  });
+
   it('Codex 目录模型保留上游真实能力，不被通用默认值覆盖', async () => {
     const ctx = createSettingsSandbox();
     seedSettingsData(ctx, {

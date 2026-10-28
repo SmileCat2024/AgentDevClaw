@@ -12,6 +12,7 @@ import { createLLM } from '@agentdevjs/llm';
 import { buildCodexOAuthHeaders, resolveAccessTokenSync } from './oauth-codex.js';
 import { resolveActiveCodexProviderName } from './codex-accounts.js';
 import { MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, MODEL_CONNECTIONS_PATH, AGENT_USER_CONFIG_PATH } from './shared/constants.js';
+import { normalizeProviderOptions, normalizeCodexProviderOptions } from './shared/provider-options.js';
 
 /**
  * 目录功能引入 catalogProvider 标记之前创建的 OpenCode 存量 preset：providerName
@@ -150,6 +151,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
     const apiSurface = protocol === 'openai'
       ? (isOAuth ? 'responses' : (preset.apiSurface || 'chat'))
       : undefined;
+    const providerOptions = normalizeProviderOptions(isOAuth ? normalizeCodexProviderOptions(preset.providerOptions) : preset.providerOptions, protocol, apiSurface || 'chat');
     const customHeaders = isOAuth
       ? buildCodexOAuthHeaders(apiKey, preset.customHeaders)
       : (catalogProvider === 'opencode'
@@ -164,6 +166,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
       ...(apiSurface ? { apiSurface } : {}),
       ...(isOAuth ? { responsesProfile: 'codex' } : {}),
+      providerOptions,
       ...(preset.maxTokens ? { maxTokens: preset.maxTokens } : {}),
       ...(preset.vision === true ? { vision: true } : {}),
       ...(Array.isArray(customHeaders) && customHeaders.length > 0
@@ -293,7 +296,9 @@ export function resolveGlobalDefaultLLM(overrides, options = {}) {
       const effectiveThinkingEffort = (overrides && 'thinkingEffort' in overrides)
         ? (overrides.thinkingEffort || undefined)
         : (dm.thinkingEffort || undefined);
-      const llm = createLLM({ ...dm, thinkingEffort: effectiveThinkingEffort });
+      const llm = createLLM({ ...dm, thinkingEffort: effectiveThinkingEffort,
+        providerOptions: normalizeProviderOptions(dm.providerOptions, dm.provider, dm.apiSurface || 'chat'),
+      });
       // inline 形态天然只携带连接字段（apiKey/baseUrl/…），窗口元数据缺失时按
       // model 名从 presets.json 补齐——表条目是窗口元数据的权威来源。只补
       // contextLength/compressRatio 展示元数据，不碰连接字段；查不到保持
@@ -337,15 +342,17 @@ export function resolveGlobalDefaultLLM(overrides, options = {}) {
     const raw = JSON.parse(readFileSync(configPath, 'utf8'));
     const defaultModel = raw?.defaultModel;
     if (defaultModel?.model) {
-      const presetsRaw = JSON.parse(readFileSync(MODEL_PRESETS_PATH, 'utf8'));
+      const presetsPath = options.presetsPath || MODEL_PRESETS_PATH;
+      const presetsRaw = JSON.parse(readFileSync(presetsPath, 'utf8'));
       const presets = Array.isArray(presetsRaw?.presets) ? presetsRaw.presets : [];
       const candidates = presets.filter((p) => p.model === defaultModel.model);
-      const preset = candidates.find((p) => (p.protocol || 'anthropic') === (defaultModel.protocol || defaultModel.provider || 'anthropic'))
+      const preset = candidates.find((p) => p.name === defaultModel.presetName)
+        || candidates.find((p) => (p.protocol || 'anthropic') === (defaultModel.protocol || defaultModel.provider || 'anthropic'))
         || candidates[0];
       if (preset) {
         // 注意不透传 options：本函数的 configPath 指 default.json，
         // resolveModelPresetLLM 的 configPath 指 presets.json，语义不同。
-        const resolved = resolveModelPresetLLM(preset.name, overrides);
+        const resolved = resolveModelPresetLLM(preset.name, overrides, { configPath: presetsPath });
         if (resolved) {
           console.log(`[ModelPreset] global default model via preset "${preset.name}" => ${preset.model}`);
           return resolved;

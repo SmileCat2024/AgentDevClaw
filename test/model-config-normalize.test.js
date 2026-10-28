@@ -15,6 +15,7 @@ import {
   normalizeProgrammingHelperProcessMode,
   readAgentModelPresets,
 } from '../server/routes/model-config.js';
+import { normalizeProviderOptions, validateProviderOptions } from '../server/shared/provider-options.js';
 
 describe('model config host target boundary', () => {
   it('keeps global model configuration independent of page focus', () => {
@@ -22,6 +23,30 @@ describe('model config host target boundary', () => {
       scope: 'local-host',
       agentId: null,
     });
+  });
+});
+
+describe('providerOptions validation', () => {
+  it('accepts protocol-specific JSON objects without changing provider-owned values', () => {
+    assert.deepEqual(normalizeProviderOptions('{"temperature":0.4,"service_tier":"fast"}', 'openai', 'chat'), {
+      temperature: 0.4,
+      service_tier: 'fast',
+    });
+    assert.deepEqual(normalizeProviderOptions({ top_k: 10, service_tier: 'fast' }, 'anthropic', 'chat'), { top_k: 10, service_tier: 'fast' });
+    assert.deepEqual(normalizeProviderOptions({ top_k: 10, service_tier: 'priority' }, 'anthropic', 'chat'), { top_k: 10, service_tier: 'priority' });
+  });
+
+  it('rejects non-object JSON, dangerous keys, unsupported protocols, and runtime-owned fields', () => {
+    for (const [value, protocol, surface] of [
+      ['[]', 'openai', 'chat'],
+      ['{"nested":{"constructor":{"polluted":true}}}', 'openai', 'chat'],
+      [{ messages: [] }, 'openai', 'chat'],
+      [{ input: [] }, 'openai', 'responses'],
+      [{ stream: false }, 'anthropic', 'chat'],
+      [{ temperature: 0 }, 'opencode', 'chat'],
+    ]) {
+      assert.equal(validateProviderOptions(value, protocol, surface).valid, false);
+    }
   });
 });
 
@@ -114,6 +139,28 @@ describe('normalizeModelPresetsData', () => {
 // ── flattenModelPresets ─────────────────────────────────────────────
 
 describe('flattenModelPresets', () => {
+  it('preserves provider options and Codex service tier metadata through structured preset round trips', () => {
+    const source = [{
+      name: 'Codex Fast',
+      providerName: 'OpenAI Auth',
+      catalogProvider: 'codex',
+      provider: 'openai',
+      apiSurface: 'responses',
+      authType: 'oauth-codex',
+      model: 'gpt-6-luna',
+      providerOptions: { service_tier: 'fast', prompt_cache_retention: '24h' },
+      serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }],
+      defaultServiceTier: null,
+      additionalSpeedTiers: ['fast'],
+    }];
+    const structured = buildStructuredModelPresets(source);
+    const flattened = flattenModelPresets(structured);
+    assert.deepEqual(flattened[0].providerOptions, { service_tier: 'priority', prompt_cache_retention: '24h' });
+    assert.deepEqual(flattened[0].serviceTiers, source[0].serviceTiers);
+    assert.equal(flattened[0].defaultServiceTier, null);
+    assert.deepEqual(flattened[0].additionalSpeedTiers, ['fast']);
+  });
+
   it('flattens structured presets with provider endpoint lookup', () => {
     const flat = flattenModelPresets({
       providers: [

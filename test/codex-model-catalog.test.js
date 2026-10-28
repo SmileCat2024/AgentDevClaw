@@ -85,6 +85,20 @@ describe('fetchCodexModelCatalog parsing', () => {
     assert.ok(!models.some((m) => m.id === 'gpt-reserve'), 'hide models are dropped');
   });
 
+  it('preserves advertised service tiers and does not invent Fast for other models', async () => {
+    const { models } = await fetchCodexModelCatalog('opaque-token', async () => jsonResponse(200, {
+      models: [
+        { slug: 'fast-model', service_tiers: [{ id: 'priority', name: 'Fast', description: 'Provider quota notice' }, null, { id: '' }], default_service_tier: 'priority', additional_speed_tiers: ['fast'] },
+        { slug: 'ordinary-model', service_tiers: [], default_service_tier: null },
+      ],
+    }));
+    assert.deepEqual(models[0].serviceTiers, [{ id: 'priority', name: 'Fast', description: 'Provider quota notice' }]);
+    assert.equal(models[0].defaultServiceTier, 'priority');
+    assert.deepEqual(models[0].additionalSpeedTiers, ['fast']);
+    assert.deepEqual(models[1].serviceTiers, []);
+    assert.equal(models[1].defaultServiceTier, null);
+  });
+
   it('deduplicates repeated slugs and tolerates malformed entries', async () => {
     const fetchImpl = async () => jsonResponse(200, {
       models: [
