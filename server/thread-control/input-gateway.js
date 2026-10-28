@@ -107,6 +107,15 @@ export async function deliverUserInput(
     });
   }
 
+  // viewer 方言（ImageInput[] 对象数组）→ command 方言（string[] 路径数组）：
+  // 框架 appendCommand 只认字符串成员，对象原样传入会被整体滤成空数组——
+  // image-only 输入（空白占位 text）随即触发 K8 空文本拒绝，text + images
+  // 场景图片被静默丢弃（PH 线程宿主会话回归，2026-10-28）。缺 path 的对象
+  // 成员无法寻址，过滤后重新计数；全滤空按无附件入箱。
+  const commandImages = normalizedImages
+    .map((entry) => (typeof entry === 'string' ? entry : String(entry?.path || '').trim()))
+    .filter(Boolean);
+
   const { command, duplicate } = await integration.core.appendCommand({
     threadId: route.thread.threadId,
     // turn 身份槽位（ADR-0024 决策 3）：reminder 与用户消息同享线程行政
@@ -116,11 +125,11 @@ export async function deliverUserInput(
     source: String(source || '').trim() || 'gateway',
     idempotencyKey: sourceRef ? `gw-${sourceRef}` : '',
     // 来源侧引用（ADR-0031 步骤一）：携带 sourceRef 的输入进入线程域后换得
-    // 新 commandId，原始事件引用随指令记录持久化。宿主观察器结合来源、
+    // 新 commandId，原始事件引用随指令记录持久化。宿主观察者结合来源、
     // metadata 中的工作引用与 pendingWakeups 关联等待关系；事件引用本身
     // 不是后台工作 ID。框架只透传不解释。
     ...(sourceRef ? { originSourceRef: sourceRef } : {}),
-    ...(normalizedImages.length > 0 ? { images: normalizedImages } : {}),
+    ...(commandImages.length > 0 ? { images: commandImages } : {}),
     ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
     // Thread Inbox command 契约携带 user-turn 自由元数据：随指令持久化，
     // 投递时经 bridge.submitTurn 原样转发（消费方如 session-reference 引用

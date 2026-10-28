@@ -61,7 +61,15 @@ export function bridgeParamsToSubmitTurnArgs(params) {
     ...(Array.isArray(params.capabilityActivations) && params.capabilityActivations.length > 0
       ? { capabilityActivations: params.capabilityActivations }
       : {}),
-    ...(Array.isArray(params.images) && params.images.length > 0 ? { images: params.images } : {}),
+    ...(Array.isArray(params.images) && params.images.length > 0
+      // command 方言（string[] 路径）→ viewer 方言（ImageInput[] {path}）：
+      // 框架 bridge 转发的 images 是入箱时的路径数组；submitUserTurn 的消费
+      // 方（viewer → agent context → LLM 编译）期望对象形态，string 原样
+      // 透传会被当作无 path 的 ImageInput 丢弃。已是对象形态的成员原样保留
+      //（mediaType 兜底由 image-resolver 的 'image/png' 缺省承担，与 coder
+      // 域投递现状一致）。
+      ? { images: params.images.map((entry) => (typeof entry === 'string' ? { path: entry } : entry)) }
+      : {}),
     ...(params.metadata && typeof params.metadata === 'object' && Object.keys(params.metadata).length > 0
       ? { turnMetadata: params.metadata }
       : {}),
