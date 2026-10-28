@@ -7,6 +7,7 @@ import { setupFeatureCommunicationRoutes } from '../server/routes/feature-commun
 import { FeatureCommunicationStore } from '../server/feature-communication-store.js';
 import { managedAgents } from '../server/shared/agent-access.js';
 import { getInternalAuthToken, setAuthEnabledForTest } from '../server/auth.js';
+import { withSessionOperation } from '../server/shared/session-operation.js';
 
 function makeApp() {
   const routes = {};
@@ -203,6 +204,43 @@ describe('feature communication routes', () => {
       assert.ok(frames.startsWith(': connected'));
       assert.ok(frames.includes('event: resync'));
     } finally { controller.abort(); }
+  });
+
+  it('rejects feature requests while the Session writer is being replaced, then admits them after the operation', async () => {
+    const app = makeApp();
+    const child = new EventEmitter();
+    child.exitCode = null;
+    child.sent = [];
+    child.send = (message) => { child.sent.push(message); return true; };
+    managedAgents.set('comms-agent::comms-session', { agentId: 'comms-agent', selectedSessionId: 'comms-session', process: child, stopped: false });
+    try {
+      const store = setupFeatureCommunicationRoutes(app, { json: () => (_req, _res, next) => next() }, { communicationStore: new FeatureCommunicationStore({ requestTimeoutMs: 100 }) });
+      const target = { agentId: 'comms-agent', sessionId: 'comms-session', featureId: 'model-selection', channelId: 'selection' };
+      store.declareChannel(target);
+      const handler = app.routes['POST /protoclaw/feature-comms/request'].at(-1);
+      let releaseOperation;
+      const operation = withSessionOperation(target.agentId, target.sessionId, 'succession', () => new Promise(resolve => { releaseOperation = resolve; }));
+      try {
+        const rejected = res();
+        await handler(browserReq({ ...target, requestType: 'selectModel', payload: { presetName: 'model-b' } }), rejected);
+        assert.equal(rejected.statusCode, 409);
+        assert.equal(rejected.body.code, 'session_operation_in_progress');
+        assert.equal(child.sent.length, 0, 'rejected request must not reach the old runtime');
+      } finally {
+        releaseOperation();
+        await operation;
+      }
+
+      const admitted = res();
+      const request = handler(browserReq({ ...target, requestType: 'selectModel', payload: { presetName: 'model-b' } }), admitted);
+      assert.equal(child.sent.length, 1);
+      child.emit('message', { type: 'feature-comms-result', requestId: child.sent[0].requestId, sessionId: target.sessionId, result: { ok: true, meta: { presetName: 'model-b' } } });
+      await request;
+      assert.equal(admitted.statusCode, 200);
+      assert.deepEqual(admitted.body.result.meta, { presetName: 'model-b' });
+    } finally {
+      managedAgents.delete('comms-agent::comms-session');
+    }
   });
 
   it('routes panel requests only to the exact session runtime', async () => {

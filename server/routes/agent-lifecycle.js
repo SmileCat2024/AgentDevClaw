@@ -892,7 +892,7 @@ export function createAgentLifecycleModule(ctx) {
         // Priority 1: runtimeId (viewerAgentId) — same id space as the frontend's
         // poll source (GET /api/agents/:id/todo), so the toggle always targets
         // the exact runtime whose snapshot the UI is displaying. Mirrors the
-        // swap_model / tool_state IPC resolution pattern.
+        // tool_state IPC resolution pattern.
         if (runtimeId && typeof runtimeId === 'string') {
           const rt = getRuntimeByViewerAgentId(runtimeId);
           if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {

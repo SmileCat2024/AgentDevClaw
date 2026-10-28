@@ -6,6 +6,7 @@ import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { AgentStudioFeature } from '../../../local-features/dist/index.js';
 import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
+import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
@@ -48,6 +49,13 @@ export class AgentStudioAgent extends BasicAgent {
     });
 
     this.workspaceDir = workspaceDir;
+    // 会话级模型选择（ADR-0034）：dev agent 会话视图有持久输入框，
+    // 切换控件后端走 feature-comms selection 通道。
+    this.use(new ModelSelectionFeature({
+      agentId: config.runtime?.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'agent-studio',
+      sessionId: config.runtime?.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
+      serverOrigin: config.runtime?.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+    }));
     this.use(new TodoFeature({
       reminderThresholdWithTasks: config.reminderThresholdWithTasks,
       reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,

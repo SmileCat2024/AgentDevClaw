@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { getAgentRuntime } from '../shared/agent-access.js';
 import { isAuthEnabled, resolveRequestAuth } from '../auth.js';
+import { getSessionOperation } from '../shared/session-operation.js';
 import { FeatureCommunicationStore, normalizeFeatureCommunicationTarget } from '../feature-communication-store.js';
 
 export const featureCommunicationStore = new FeatureCommunicationStore();
@@ -148,6 +149,14 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
     try { target = normalizeFeatureCommunicationTarget(body); }
     catch (error) { return badRequest(res, error.message); }
     if (!communicationStore.isDeclared(target)) return notDeclared(res);
+    // 投递闸（ADR-0034 §4.2）：宿主会话操作（接续变换 / runtime 启动等写者
+    // 更替窗口）进行中时拒绝定向请求——旧 runtime 即将退役，落进去的变更语义
+    // 未定义。检查通过后的竞态窗口由保存屏障 + 变换读盘时机兜底（结果正确），
+    // 此闸把大概率窗口从静默接受变为明确拒绝。
+    const activeOperation = getSessionOperation(target.agentId, target.sessionId);
+    if (activeOperation) {
+      return res.status(409).json({ ok: false, code: 'session_operation_in_progress', error: `Session is busy with ${activeOperation}` });
+    }
     const runtime = getAgentRuntime(target.agentId, target.sessionId);
     if (!runtime || runtime.stopped || !runtime.process || runtime.process.exitCode !== null) return res.status(503).json({ ok: false, code: 'runtime_not_connected' });
     const requestId = randomUUID();

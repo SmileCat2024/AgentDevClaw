@@ -38,6 +38,7 @@ import { ImageReaderFeature } from '@agentdevjs/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { ContextRotationTriggerFeature } from '../../../local-features/dist/context-guard/src/index.js';
+import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { GitHubShellFeature } from '../../../local-features/dist/github/src/index.js';
 import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
 import { PlaywrightShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
@@ -105,6 +106,9 @@ export default class CoderAgent extends BasicAgent {
       sessionId: runtime.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
       serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
     };
+    // 会话级模型选择（ADR-0034）：链级当前状态随线程接续流转，
+    // 输入框切换控件的后端（feature-comms selection 通道）。
+    this.use(new ModelSelectionFeature(runtimeIdentity));
     // 上下文过界 → 自动线程接力：过界时打断并上报，由服务端 thread-rotation
     // 执行 trim+摘要接力。装配即确定、零配置——线程宿主的上下文管理方式
     // （自动接力）不依赖 Runtime 配置面板的交互式拦截开关。

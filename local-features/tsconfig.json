@@ -57,6 +57,8 @@
     "./scheduled-trigger/src/**/*.ts",
     "./scheduled-trigger/test/**/*.ts",
     "./memo-reminders/src/**/*.ts",
-    "./memo-reminders/test/**/*.ts"
+    "./memo-reminders/test/**/*.ts",
+    "./model-selection/src/**/*.ts",
+    "./model-selection/test/**/*.ts"
   ]
 }

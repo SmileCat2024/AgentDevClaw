@@ -31,6 +31,7 @@ import { GitHubShellFeature } from '../../../local-features/dist/github/src/inde
 import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
 import { ConversationAnnotationsFeature } from '../../../local-features/dist/conversation-annotations/src/index.js';
 import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
+import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { CraftAwarenessFeature } from '../../../local-features/dist/craft-awareness/src/index.js';
 import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import { PlaywrightShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
@@ -185,6 +186,9 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 时间感知：CallStart 按节奏注入系统时间（>4h 未汇报才汇报），距上一轮
     // call >24h 时额外提示长间隔。状态经框架会话快照（captureState）持久化。
     this.use(new TimeAwarenessFeature());
+    // 会话级模型选择（ADR-0034）：链级当前状态（快照 + continuity 流转），
+    // 输入框切换控件的后端（feature-comms selection 通道）。
+    this.use(new ModelSelectionFeature(runtimeIdentity));
     // 工程素养提醒：首次写出成规模文档（write ≥30 行 / edit 的 markdown/txt
     // 文件）后注入读者视角写法标准，每会话一次。状态经框架会话快照持久化。
     this.use(new CraftAwarenessFeature());

@@ -26,6 +26,7 @@ import { BasicAgent, TemplateComposer, UserInputFeature } from '@agentdevjs/core
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { ContextRotationTriggerFeature } from '../../../local-features/dist/context-guard/src/index.js';
+import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
 import { MemoNotesFeature } from '../../../local-features/dist/memo-notes/src/index.js';
 import { MemoRemindersFeature } from '../../../local-features/dist/memo-reminders/src/index.js';
@@ -55,6 +56,9 @@ export default class MemoAgent extends BasicAgent {
       sessionId: runtime.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
       serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
     };
+    // 会话级模型选择（ADR-0034）：唯一活动线程的链级当前状态，
+    // 输入框切换控件的后端（feature-comms selection 通道）。
+    this.use(new ModelSelectionFeature(runtimeIdentity));
     // 上下文过界 → 自动线程接力：过界时打断并上报，由服务端 thread-rotation
     // 执行 trim+摘要接力（与 coder 同构，装配即确定、零配置）。
     this.use(new ContextRotationTriggerFeature({

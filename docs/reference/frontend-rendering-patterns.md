@@ -663,7 +663,8 @@ renderInputRequests([]) → 重建前 _storeVisibleSessionInputDraft 读到 live
 
 ### 问题
 
-前端→agent 运行时控制 IPC（开关 / 中断 / 热切换类，如 `todo_control`、`tool_state`、`swap_model`）
+前端→agent 运行时控制 IPC（开关 / 中断 / 热切换类，如 `todo_control`、`tool_state`；
+模型热切换已改走 feature-comms 请求面，见 ADR-0034）
 存在两个 id 空间：
 
 | id 空间 | 例子 | 来源 | 稳定性 |
@@ -682,7 +683,7 @@ session 的 id 成功——错位不是理论风险。
 用户重点一次即可；"任务未完自动继续"（forceContinue，持续状态）失败则开关弹回、非常显眼。
 两条路径失败率相同，但用户会误判为"新功能选错了链路"。排查时先确认 id 空间，不要被表象带偏。
 
-### 修复模型：三级优先解析（对齐 swap_model / tool_state 已验证模式）
+### 修复模型：三级优先解析（对齐 todo_control / tool_state 已验证模式）
 
 ```js
 // server 路由（agent-lifecycle.js todo_control 为参考实现）

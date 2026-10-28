@@ -44,3 +44,7 @@ export {
 } from './memo-notes/src/index.js';
 export { ScheduledTrigger } from './scheduled-trigger/src/index.js';
 export { MemoRemindersFeature } from './memo-reminders/src/index.js';
+export {
+  ModelSelectionFeature,
+  ModelSelectionFeatureInner,
+} from './model-selection/src/index.js';

@@ -10,6 +10,7 @@
 
 import { BasicAgent, createTool, UserInputFeature } from '@agentdevjs/core';
 import { FlowFeature } from '../../../local-features/dist/flow/src/index.js';
+import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 
 // ========== MockCountingFeature ==========
 
@@ -86,6 +87,12 @@ export class FlowTestAgent extends BasicAgent {
 
     this.use(new MockCountingFeature());
     this.use(new FlowFeature());
+    // 会话级模型选择（ADR-0034）：隐藏工作空间统一装配（行为一致，无白名单）。
+    this.use(new ModelSelectionFeature({
+      agentId: config.runtime?.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'flow-test',
+      sessionId: config.runtime?.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
+      serverOrigin: config.runtime?.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+    }));
     this.use(new UserInputFeature());
   }
 }

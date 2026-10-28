@@ -58,6 +58,22 @@ describe('parseHandoffContent 共享解析器', () => {
     assert.deepEqual(parsed.fileRanges, { 'c.js': [3, 4] });
   });
 
+  test('branch continuity 注入包无摘要与 seed 消息时仍可解析', () => {
+    const raw = JSON.stringify({
+      mode: 'branch',
+      sourceSessionId: 'source-session',
+      featureContinuity: { states: [{ featureName: 'model-selection', snapshot: { presetName: 'current-choice' } }] },
+    });
+    const parsed = parseHandoffContent(raw, '/fake/branch-continuity.json');
+    assert.equal(parsed.mode, 'branch');
+    assert.equal(parsed.sourceSessionId, 'source-session');
+    assert.deepEqual(parsed.featureContinuity.states, [
+      { featureName: 'model-selection', snapshot: { presetName: 'current-choice' } },
+    ]);
+    assert.deepEqual(parsed.seedMessages, []);
+    assert.equal(parsed.sourceSummary, '');
+  });
+
   test('compactOutput 与 appendedSummary 并存时 compactOutput 优先（向后兼容）', () => {
     const raw = JSON.stringify({
       sourceSummary: 's',

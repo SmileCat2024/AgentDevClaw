@@ -18,7 +18,7 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 //   2. capability 矩阵（握手采集 → catalog 透传 → 前端门控）
 //   3. 代理闸写放行后的转发语义（隧道 origin + 裸 id + 幂等键透传）
 //   4. user-turn 远程转发基址（不再拼出 undefined URL）
-//   5. swap_model / model_config 命名空间分支（本地分支字节级不变的回归）
+//   5. retired model swap endpoints / model_config 命名空间分支
 
 const CONNECTIONS = [
   { id: 'server-a', name: 'Server A', enabled: true, mode: 'manual', localPort: 22101 },
@@ -692,7 +692,9 @@ describe('model-config remote namespace branches', () => {
           res.on('data', (chunk) => chunks.push(chunk));
           res.on('end', () => {
             const text = Buffer.concat(chunks).toString('utf8');
-            resolve({ status: res.statusCode, body: JSON.parse(text || 'null') });
+            let body;
+            try { body = JSON.parse(text || 'null'); } catch { body = text; }
+            resolve({ status: res.statusCode, body });
           });
         },
       );
@@ -703,39 +705,16 @@ describe('model-config remote namespace branches', () => {
     });
   }
 
-  it('forwards swap_model with a remote runtimeId to the remote route with bare ids', async () => {
+  it('does not expose or remotely forward the retired model swap endpoints', async () => {
     fetchMock.calls.length = 0;
-    fetchMock.handler = () => ({ status: 200, body: JSON.stringify({ ok: true, source: 'remote' }) });
-    const res = await request('POST', '/protoclaw/swap_model', {
-      agentId: NAMESPACE,
-      runtimeId: 'remote:server-a:rt-1',
-      presetName: 'gpt',
-    });
-    assert.equal(res.status, 200);
-    assert.deepEqual(res.body, { ok: true, source: 'remote' });
-    assert.equal(fetchMock.calls.length, 1);
-    assert.equal(fetchMock.calls[0].url, `${REMOTE_ORIGIN}/protoclaw/swap_model`);
-    const forwardedBody = JSON.parse(fetchMock.calls[0].init.body);
-    assert.equal(forwardedBody.runtimeId, 'rt-1');
-    assert.equal(forwardedBody.agentId, 'agent-9');
-    assert.equal(forwardedBody.presetName, 'gpt');
-    fetchMock.handler = null;
-  });
-
-  it('forwards swap_thinking_effort the same way', async () => {
-    fetchMock.calls.length = 0;
-    const res = await request('POST', '/protoclaw/swap_thinking_effort', {
-      agentId: NAMESPACE,
-      runtimeId: 'remote:server-a:rt-1',
-      thinkingEffort: 'high',
-    });
-    assert.equal(res.status, 200);
-    assert.equal(fetchMock.calls.length, 1);
-    assert.equal(fetchMock.calls[0].url, `${REMOTE_ORIGIN}/protoclaw/swap_thinking_effort`);
-    const forwardedBody = JSON.parse(fetchMock.calls[0].init.body);
-    assert.equal(forwardedBody.runtimeId, 'rt-1');
-    assert.equal(forwardedBody.agentId, 'agent-9');
-    assert.equal(forwardedBody.thinkingEffort, 'high');
+    for (const [path, body] of [
+      ['/protoclaw/swap_model', { agentId: NAMESPACE, runtimeId: 'remote:server-a:rt-1', presetName: 'gpt' }],
+      ['/protoclaw/swap_thinking_effort', { agentId: NAMESPACE, runtimeId: 'remote:server-a:rt-1', thinkingEffort: 'high' }],
+    ]) {
+      const res = await request('POST', path, body);
+      assert.equal(res.status, 404, `${path} must remain retired`);
+      assert.equal(fetchMock.calls.length, 0, 'retired model operations must not be forwarded remotely');
+    }
   });
 
   it('fetches the remote preset list for a namespaced model_config GET', async () => {
@@ -749,20 +728,8 @@ describe('model-config remote namespace branches', () => {
     fetchMock.handler = null;
   });
 
-  it('keeps local branches byte-identical: local swap uses the runtime table and model_config reads local files', async () => {
+  it('keeps local model_config reads local and never forwards', async () => {
     fetchMock.calls.length = 0;
-
-    // Local swap: runtime table is empty in the test process → 502 via the
-    // existing IPC path, never via HTTP forward.
-    const swapRes = await request('POST', '/protoclaw/swap_model', {
-      agentId: 'local-agent-1',
-      runtimeId: 'local-agent-1',
-      presetName: 'gpt',
-    });
-    assert.equal(swapRes.status, 502);
-    assert.equal(swapRes.body.ok, false);
-    assert.equal(swapRes.body.error, 'no reachable runtime for this target');
-    assert.equal(fetchMock.calls.length, 0);
 
     // Local model_config: served from the local config files, no remote call.
     const configRes = await request('GET', '/protoclaw/model_config');
@@ -771,21 +738,6 @@ describe('model-config remote namespace branches', () => {
     assert.equal(fetchMock.calls.length, 0);
   });
 
-  it('maps unknown remote connections onto the operation contract', async () => {
-    setProxyConnectionLookup(null);
-    try {
-      const res = await request('POST', '/protoclaw/swap_model', {
-        agentId: 'remote:ghost:agent-9',
-        runtimeId: 'remote:ghost:rt-1',
-        presetName: 'gpt',
-      });
-      assert.equal(res.status, 404);
-      assert.equal(res.body.ok, false);
-      assert.equal(res.body.code, 'target_not_found');
-    } finally {
-      setProxyConnectionLookup(FIND_CONNECTION);
-    }
-  });
 });
 
 // ── 7. state-control remote branches (todo_control / tool_state) ────────

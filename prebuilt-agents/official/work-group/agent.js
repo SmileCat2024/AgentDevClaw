@@ -8,6 +8,7 @@ import { BasicAgent, TemplateComposer } from '@agentdevjs/core';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { GroupAdminFeature } from '../../../local-features/dist/group-admin/src/index.js';
+import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
 import { ShellFeature } from '@agentdevjs/shell-feature';
 
@@ -24,6 +25,13 @@ export class WorkGroupAgent extends BasicAgent {
 
     this.use(new GroupAdminFeature());
     this.use(new GroupChatBridgeFeature());
+    // 会话级模型选择（ADR-0034）：群会话视图输入框切换控件的后端
+    //（群聊 @mention 派发不经模型控件，装配无副作用）。
+    this.use(new ModelSelectionFeature({
+      agentId: config.runtime?.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'work-group',
+      sessionId: config.runtime?.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
+      serverOrigin: config.runtime?.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+    }));
     this.use(new ShellFeature({ workspaceDir: config.workspaceDir }));
   }
 

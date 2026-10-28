@@ -249,17 +249,31 @@ export function createAgentStartupFns(deps) {
           // If the session file already exists and contains messages, the handoff
           // was already consumed on first boot and re-injecting would duplicate
           // seed messages with conflicting turn values.
+          //
+          // branch 注入包（ADR-0034 §4.1）例外：分支快照创建时本就带边界前的
+          // 历史消息，消息数守卫对它恒假；它传递的是 Feature continuity（非
+          // seed 消息），runtime 首启导入后自删注入文件，不会重复注入。
           let shouldInjectHandoff = true;
+          let handoffIsBranch = false;
           try {
-            const sessionPath = getPrebuiltSessionFilePath(agent.id, resolvedSessionId);
-            const raw = await fs.readFile(sessionPath, 'utf8');
-            const snapshot = JSON.parse(raw);
-            const messages = snapshot?.runtime?.context?.messages;
-            if (Array.isArray(messages) && messages.length > 0) {
-              shouldInjectHandoff = false;
-            }
+            const rawHandoff = await fs.readFile(sessionRecord.metadata.handoffPath, 'utf8');
+            handoffIsBranch = JSON.parse(rawHandoff)?.mode === 'branch';
           } catch {
-            // Session file doesn't exist or is unreadable — safe to inject
+            // handoff 文件缺失（已消费）或损坏：按非 branch 走消息数守卫——
+            // 分支会话有消息则不注入（消费侧 loadRuntimeHandoffFromPath 亦容错）。
+          }
+          if (!handoffIsBranch) {
+            try {
+              const sessionPath = getPrebuiltSessionFilePath(agent.id, resolvedSessionId);
+              const raw = await fs.readFile(sessionPath, 'utf8');
+              const snapshot = JSON.parse(raw);
+              const messages = snapshot?.runtime?.context?.messages;
+              if (Array.isArray(messages) && messages.length > 0) {
+                shouldInjectHandoff = false;
+              }
+            } catch {
+              // Session file doesn't exist or is unreadable — safe to inject
+            }
           }
           if (shouldInjectHandoff) {
             runtimeOptions = {

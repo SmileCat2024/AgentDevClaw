@@ -21,6 +21,12 @@
  * - currentRuntimeAgentId, getActiveWorkspaceSessionId,
  *   getRuntimeAwareAgentRecord, getCurrentHostAgentRecord, getCurrentAgentRecord (app-main.js)
  * - readCurrentSessionViewState / captureSessionViewToken / commitSessionViewPatch (session-view-state.js)
+ * - window.ClawFeatureCommunication (feature-communication.js)
+ *
+ * 投递路径（ADR-0034）：模型/思考档位切换统一走 model-selection Feature 的
+ * feature-comms 请求面（selectModel / clearThinkingOverride）；旧
+ * /protoclaw/swap_model、/protoclaw/swap_thinking_effort 路由已退役。
+ * 控件可用性 = 通道声明事实（未装配/远程/runtime 未起 → 不可用提示）。
  */
 
 // ── 输入框模型切换下拉 ──────────────────────────────────────────────
@@ -94,6 +100,56 @@ function _inputModelDropdownOutsideClick(e) {
   }
 }
 
+// ── 通道可用性（ADR-0034 §5.1）──────────────────────────────────────
+// 模型切换改走 model-selection Feature 的 feature-comms 请求面
+// （/protoclaw/feature-comms/request → runtime IPC → onHostRequest）。
+// 控件可用性 = 通道声明事实：未装配 Feature / 远程会话（本地 store 无声明）/
+// runtime 未起 → 不开下拉，toast 提示。只缓存"可用"结论（不可用时重查，
+// 避免 runtime 刚恢复阶段被失败缓存卡死）。
+
+let _modelSelectionChannelOk = false; // { key, ok }
+let _restoreFailureNotified = false; // per page session（会话切换重置）
+
+function _modelSelectionTarget(agentId) {
+  let sessionId = typeof getActiveWorkspaceSessionId === 'function'
+    ? getActiveWorkspaceSessionId()
+    : '';
+  return { agentId, sessionId, featureId: 'model-selection', channelId: 'selection' };
+}
+
+async function _ensureModelSelectionChannel(agentId) {
+  let sessionId = typeof getActiveWorkspaceSessionId === 'function'
+    ? getActiveWorkspaceSessionId()
+    : '';
+  if (!agentId || !sessionId) return false;
+  let key = agentId + '|' + sessionId;
+  if (_modelSelectionChannelOk && _modelSelectionChannelOk.key === key && _modelSelectionChannelOk.ok) return true;
+  if (!_modelSelectionChannelOk || _modelSelectionChannelOk.key !== key) _restoreFailureNotified = false;
+  try {
+    let channels = await window.ClawFeatureCommunication.listChannels(agentId, sessionId);
+    let declared = (channels || []).some(function(ch) {
+      return ch && ch.featureId === 'model-selection' && ch.channelId === 'selection';
+    });
+    _modelSelectionChannelOk = { key, ok: declared };
+    return declared;
+  } catch (e) {
+    // 查询失败（远程旧端 / server 不可达）按不可用呈现，不缓存
+    _modelSelectionChannelOk = false;
+    return false;
+  }
+}
+
+function _notifyModelSelectionUnavailable(isZh) {
+  if (typeof ClawToast !== 'undefined') {
+    ClawToast.show({
+      id: 'input-model-unavailable',
+      title: isZh ? '当前会话不支持模型切换' : 'Model switching unavailable for this session',
+      status: 'info',
+      autoDismiss: 3500,
+    });
+  }
+}
+
 async function _performInputModelSwap(agentId, presetName) {
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
   let toastId = 'input-model-swap';
@@ -108,18 +164,16 @@ async function _performInputModelSwap(agentId, presetName) {
   }
 
   try {
-    let sessionId = typeof getActiveWorkspaceSessionId === 'function'
-      ? getActiveWorkspaceSessionId()
-      : '';
     let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
     const viewToken = captureSessionViewToken(runtimeId);
-    const resp = await fetch('/protoclaw/swap_model', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, presetName, sessionId: sessionId || undefined, runtimeId: runtimeId || undefined }),
-    });
-    const result = await resp.json();
-    if (result.ok) {
+    // 会话级 Feature 请求面（ADR-0034）：精确四元组寻址会话 runtime，
+    // 回执 meta 为 Feature 端 getLLMMeta() 快照；代次拒绝机制沿用。
+    const result = await window.ClawFeatureCommunication.request(
+      _modelSelectionTarget(agentId),
+      'selectModel',
+      { presetName },
+    );
+    if (result && result.ok) {
       commitSessionViewPatch(viewToken, { model: result.meta }, () => {
         updateInputModelSwitcher();
         updateThinkingEffortSwitcher();
@@ -138,7 +192,7 @@ async function _performInputModelSwap(agentId, presetName) {
         });
       }
     } else {
-      throw new Error(result.error || 'Unknown error');
+      throw new Error((result && (result.error || result.code)) || 'Unknown error');
     }
   } catch (e) {
     console.error('[InputModelSwitch] Swap failed:', e);
@@ -172,10 +226,46 @@ window.toggleInputModelDropdown = function(event) {
   let agentId = _getInputAgentId();
   if (!agentId) return;
 
+  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+
   _inputModelDropdownLoading = true;
   // Fetch presets before creating the dropdown; keep the open action single-flight.
   (async function() {
     try {
+      // 通道声明事实 = 控件可用性（ADR-0034 §5.1）：未装配 / 远程 / runtime
+      // 未起均无 model-selection 声明 → 不可用提示，不打开下拉。
+      if (!await _ensureModelSelectionChannel(agentId)) {
+        _notifyModelSelectionUnavailable(isZh);
+        return;
+      }
+      // 恢复失败事实对账（§5.3）：每次打开下拉查一次 getStatus，
+      // 有 lastRestoreFailure 时 toast 呈现一次（per session）。
+      try {
+        const status = await window.ClawFeatureCommunication.request(
+          _modelSelectionTarget(agentId),
+          'getStatus',
+          {},
+        );
+        if (status?.ok && status.lastRestoreFailure && !_restoreFailureNotified) {
+          _restoreFailureNotified = true;
+          let presetLabel = status?.choice?.presetName || '';
+          if (typeof formatPresetDisplayName === 'function' && presetLabel) {
+            presetLabel = formatPresetDisplayName(presetLabel);
+          }
+          if (typeof ClawToast !== 'undefined') {
+            ClawToast.show({
+              id: 'model-restore-failure',
+              title: isZh ? '模型恢复失败' : 'Model restore failed',
+              description: isZh
+                ? `模型 ${presetLabel || '(未知)'} 恢复失败，已回退全局默认；原选择保留`
+                : `Model ${presetLabel || '(unknown)'} could not be restored; fell back to global default (choice kept)`,
+              status: 'warn',
+              autoDismiss: 8000,
+            });
+          }
+        }
+      } catch { /* 对账尽力而为，不打扰打开动作 */ }
+
       let presets;
       try {
         presets = await ensureClawModelPresetsForSession(
@@ -379,18 +469,30 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort) {
   }
 
   try {
-    let sessionId = typeof getActiveWorkspaceSessionId === 'function'
-      ? getActiveWorkspaceSessionId()
-      : '';
     let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
     const viewToken = captureSessionViewToken(runtimeId);
-    const resp = await fetch('/protoclaw/swap_thinking_effort', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, thinkingEffort, sessionId: sessionId || undefined, runtimeId: runtimeId || undefined }),
-    });
-    const result = await resp.json();
-    if (result.ok) {
+    // 两态契约（ADR-0034 §7）：显式档位 = selectModel（当前 preset + thinkingEffort）；
+    // "默认（预设）" = clearThinkingOverride（删除覆盖，回 preset 配置档——
+    // 修正旧行为：此前发送 null 实为"厂商默认"语义，与文案不符）。
+    let result;
+    if (thinkingEffort) {
+      let presetName = _getInputDefaultPresetName();
+      if (!presetName) {
+        throw new Error(isZh ? '当前模型无 preset 锚点，无法切换思考强度' : 'No preset anchor for thinking effort switch');
+      }
+      result = await window.ClawFeatureCommunication.request(
+        _modelSelectionTarget(agentId),
+        'selectModel',
+        { presetName, thinkingEffort },
+      );
+    } else {
+      result = await window.ClawFeatureCommunication.request(
+        _modelSelectionTarget(agentId),
+        'clearThinkingOverride',
+        {},
+      );
+    }
+    if (result && result.ok) {
       commitSessionViewPatch(viewToken, { model: result.meta }, () => {
         updateInputModelSwitcher();
         updateThinkingEffortSwitcher();
@@ -404,7 +506,7 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort) {
         });
       }
     } else {
-      throw new Error(result.error || 'Unknown error');
+      throw new Error((result && (result.error || result.code)) || 'Unknown error');
     }
   } catch (e) {
     console.error('[InputThinkingEffort] Swap failed:', e);
@@ -420,7 +522,7 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort) {
   }
 }
 
-window.toggleThinkingEffortDropdown = function(event) {
+window.toggleThinkingEffortDropdown = async function(event) {
   if (event) {
     event.preventDefault();
     event.stopPropagation();
@@ -436,6 +538,14 @@ window.toggleThinkingEffortDropdown = function(event) {
 
   let agentId = _getInputAgentId();
   if (!agentId) return;
+
+  let isZh0 = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+
+  // 与模型下拉同一可用性闸（ADR-0034 §5.1）：两控件同属 model-selection 通道。
+  if (!await _ensureModelSelectionChannel(agentId)) {
+    _notifyModelSelectionUnavailable(isZh0);
+    return;
+  }
 
   // Block switching if current model doesn't support thinking
   if (!_currentModelSupportsThinking()) {

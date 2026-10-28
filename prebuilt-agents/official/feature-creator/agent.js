@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { FeatureDevFeature } from '../../../local-features/dist/index.js';
+import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
@@ -69,6 +70,12 @@ export class FeatureCreatorAgent extends BasicAgent {
     this.use(new FeatureDevFeature({
       workspaceDir: resolvedWorkspaceDir,
       projectRoot: resolvedProjectRoot,
+    }));
+    // 会话级模型选择（ADR-0034）：隐藏工作空间统一装配（行为一致，无白名单）。
+    this.use(new ModelSelectionFeature({
+      agentId: config.runtime?.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'feature-creator',
+      sessionId: config.runtime?.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
+      serverOrigin: config.runtime?.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
     }));
     this.use(new UserInputFeature());
   }

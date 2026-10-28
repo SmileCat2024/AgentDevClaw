@@ -1299,6 +1299,7 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
 }
 
 async function deletePrebuiltSession(agentId, sessionId, options = {}) {
+  let deletedHandoffPath = '';
   const newIndex = await updateSessionIndex(agentId, (index) => {
     const existing = index.sessions.find((session) => session.id === sessionId);
     if (!existing) {
@@ -1312,10 +1313,18 @@ async function deletePrebuiltSession(agentId, sessionId, options = {}) {
     const nextActiveSessionId = wasActiveSession
       ? (selectFallbackSession(agentId, remainingSessions, existing)?.id ?? null)
       : index.activeSessionId;
+    deletedHandoffPath = typeof existing?.metadata?.handoffPath === 'string'
+      ? existing.metadata.handoffPath
+      : '';
     return { activeSessionId: nextActiveSessionId, sessions: remainingSessions, wasActiveSession };
   });
 
   await fs.rm(getPrebuiltSessionFilePath(agentId, sessionId), { force: true }).catch(e => console.warn(e));
+  // branch 注入文件（ADR-0034 §4.1）：未被消费（会话从未启动）时随会话一并清理；
+  // 已消费的注入文件由 runtime 首启导入后自删，此处 force 容忍缺失。
+  if (deletedHandoffPath) {
+    await fs.rm(deletedHandoffPath, { force: true }).catch(e => console.warn(e));
+  }
   invalidateSearchIndex(agentId);
   // Remove from open-sessions tracker
   removeOpenSession(agentId, sessionId).catch(e => console.warn(e));

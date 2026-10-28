@@ -46,6 +46,8 @@ import { attachOperationMetadata, readOperationMetadata, buildLocalFailureRespon
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION, buildSessionDirectoryEntries } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
+import { exportFeatureContinuity, hasFeatureContinuity } from '../context-continuity/feature-continuity.js';
+import { getContextHandoffFilePath } from '../context-continuity/handoff-package.js';
 import { assertThreadQuotaAllowed } from './thread-quota.js';
 import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
 import { getInternalAuthToken } from '../auth.js';
@@ -745,6 +747,21 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     };
     delete branchSnapshot.title;
 
+    // branch continuity 注入（ADR-0034 决策 2 链级当前状态）：从源会话最新快照
+    // 采集自声明 continuity 的 Feature 状态（即源会话当前值，非边界历史值），
+    // 经注入文件随分支会话传递，runtime 首启导入（origin=branch-import）后删除。
+    // server 不解析 continuity 内容（无 feature 白名单、无私有字段读取）。
+    const branchContinuity = exportFeatureContinuity(sourceSnapshot, { mode: 'branch' });
+    let branchHandoffPath = '';
+    if (hasFeatureContinuity(branchContinuity)) {
+      branchHandoffPath = getContextHandoffFilePath(USER_DATA_ROOT, agentId, `branch-${newSessionId}`);
+      await fs.writeFile(branchHandoffPath, `${JSON.stringify({
+        mode: 'branch',
+        sourceSessionId,
+        featureContinuity: branchContinuity,
+      }, null, 2)}\n`, 'utf8');
+    }
+
     const branchSessionPath = getPrebuiltSessionFilePath(agentId, newSessionId);
     await fs.writeFile(branchSessionPath, JSON.stringify(branchSnapshot, null, 2), 'utf8');
 
@@ -778,6 +795,9 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
         ...(sourceRecord?.metadata || {}),
         branchSourceSessionId: sourceSessionId,
         branchCutMsgIndexEnd: cutMsgIndexEnd,
+        // branch 注入文件路径（ADR-0034 §4.1）：首启消费（agent-startup 传递 →
+        // runtime 导入后删除）；会话删除时随 deletePrebuiltSession 一并清理。
+        ...(branchHandoffPath ? { handoffPath: branchHandoffPath } : {}),
       },
       createdAt,
       updatedAt: createdAt,

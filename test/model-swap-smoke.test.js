@@ -1,12 +1,12 @@
 /**
- * 模型热切换端到端冒烟测试（真实 runtime 子进程）。
+ * 模型热切换端到端冒烟测试（真实 runtime 子进程，ADR-0034 请求面链路）。
  *
- * spawn 真实 ViewerWorker + fork run-prebuilt-agent.js（BasicAgent 系 fixture），
- * 经 IPC 驱动 swap-model，断言回执语义与进程存活。这是 2026-08 闪退事故的
- * 回归防线：BasicAgent 白名单重组曾丢弃 modelResolver，setModel 抛错在 IPC
- * handler 内变成 uncaughtException 杀死 runtime，用户侧表现为"切一次模型
- * runtime 闪退 + session runtime not connected"。单元测试全部通过但无真实
- * 进程链路覆盖，本文件补的就是这条链。
+ * spawn 真实 ViewerWorker + fork run-prebuilt-agent.js（装配 model-selection
+ * Feature 的 fixture），经宿主 feature-comms 请求面（feature-comms-request
+ * IPC → onHostRequest selectModel）驱动切换，断言回执语义与进程存活。
+ * 这是 2026-08 闪退事故的回归防线在新链路上的延续：模型切换的任何失败
+ * （preset 缺失、resolver 异常）必须降级为失败回执，绝不能变成
+ * uncaughtException 杀死 runtime。旧 swap-model IPC 分支已随 ADR-0034 退役。
  *
  * 环境隔离：随机 TCP 端口 + 随机 UDS pipe，不触碰 2026 端口与默认
  * \\.\pipe\agentdev-viewer（可能与正在运行的 Claw server 冲突）。
@@ -72,23 +72,23 @@ function waitForStdout(child, marker, timeoutMs = 8000, acc = { text: '' }) {
   });
 }
 
-/** 发 swap-model IPC 并等待回执 */
-function swapModel(child, presetName, timeoutMs = 5000) {
+/** 发 feature-comms 请求（selectModel 等）并等待回执 */
+function featureRequest(child, requestType, payload, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const requestId = `smoke-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const timer = setTimeout(() => {
       child.removeListener('message', onMessage);
-      reject(new Error(`swap ack timeout for ${presetName}`));
+      reject(new Error(`feature-comms ack timeout for ${requestType}`));
     }, timeoutMs);
     const onMessage = (msg) => {
-      if (msg?.type === 'model-swap-result' && msg.requestId === requestId) {
+      if (msg?.type === 'feature-comms-result' && msg.requestId === requestId) {
         clearTimeout(timer);
         child.removeListener('message', onMessage);
-        resolve(msg);
+        resolve(msg.result);
       }
     };
     child.on('message', onMessage);
-    child.send({ type: 'swap-model', presetName, requestId });
+    child.send({ type: 'feature-comms-request', requestId, featureId: 'model-selection', requestType, payload });
   });
 }
 
@@ -125,22 +125,24 @@ describe('model hot-swap smoke (real runtime process)', () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
   });
 
-  it('swap-model to __default__ acks ok:true with meta and keeps the process alive', async () => {
-    const ack = await swapModel(child, '__default__');
+  it('selectModel __default__ acks ok:true with meta and keeps the process alive', async () => {
+    const ack = await featureRequest(child, 'selectModel', { presetName: '__default__' });
 
     assert.equal(ack.ok, true, `expected ok ack, got: ${JSON.stringify(ack)}`);
-    assert.equal(ack.meta?.presetName, '__default__');
+    // presetName 具体值取决于全局默认的配置形态（inline 直连 → '__default__'，
+    // preset 引用 → 真实 preset 名），冒烟只锁"非空 + 与 modelName 一致存在"。
+    assert.ok(ack.meta?.presetName, 'meta.presetName should be non-empty');
     assert.ok(ack.meta?.modelName, 'modelName should be non-empty');
     assert.ok(Number.isSafeInteger(ack.meta?.modelRevision) && ack.meta.modelRevision > 0, 'runtime ack must carry the framework model revision');
     assert.equal(child.exitCode, null, 'runtime process must stay alive after a successful swap');
   });
 
-  it('swap-model to unknown preset acks ok:false (failure reachable, no crash)', async () => {
-    const ack = await swapModel(child, '__definitely_not_a_preset__');
+  it('selectModel unknown preset acks ok:false (failure reachable, no crash)', async () => {
+    const ack = await featureRequest(child, 'selectModel', { presetName: '__definitely_not_a_preset__' });
 
     assert.equal(ack.ok, false, 'unknown preset must produce a failure ack');
     assert.ok(ack.error, 'failure ack must carry an error reason');
-    // 事故回归断言：修复前 uncaughtException 在这里杀死进程
+    // 事故回归断言：切换失败绝不变成 uncaughtException 杀死进程
     assert.equal(child.exitCode, null, 'runtime process must stay alive after a failed swap');
   });
 });

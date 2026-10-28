@@ -12,7 +12,7 @@
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
@@ -610,85 +610,18 @@ class SessionLifecycle {
       return;
     }
 
-    // ── model / thinking hot-swap ──
-    // 消费框架官方 API（agent.setModel / setThinkingEffort）：resolver 已在构造时
-    // 注入，宿主不再查表、不再私记状态；当前模型以 agent.getLLMMeta() 为唯一权威。
-    // request/reply：server 带 requestId 等待回执，前端的 ok 才表示"切换生效"。
-    if (msg.type !== 'swap-model' && msg.type !== 'swap-thinking') return;
-
-    const hasRequestId = typeof msg.requestId === 'string' && msg.requestId;
-    const reply = (payload) => {
-      if (!hasRequestId) return;
-      try {
-        process.send({
-          type: 'model-swap-result',
-          requestId: msg.requestId,
-          sessionId: this.sessionId,
-          ...payload,
-        });
-      } catch {}
-    };
-
-    if (typeof this.agent?.setModel !== 'function') {
-      reply({
-        ok: false,
-        error: 'agent.setModel 不可用：runtime 加载的 @agentdevjs/core 缺少该 API。'
-          + '开发模式请运行 npm run agentdev:local 重建链接后重启服务；发布模式请升级 @agentdevjs/core。',
-      });
-      return;
-    }
-
-    const isMidTurn = typeof this.agent.isRunning === 'function' && this.agent.isRunning();
-    const oldName = this.agent.getLLMMeta()?.modelName || 'unknown';
-    let swapped;
-    let detail;
-
-    // IPC 处理纪律：切换失败（resolver 缺席、框架抛错）必须降级为失败回执，
-    // 绝不能让异常变成 uncaughtException 杀死进程——那会带走整个会话 runtime。
-    try {
-      if (msg.type === 'swap-model') {
-        if (!msg.presetName || typeof msg.presetName !== 'string') {
-          reply({ ok: false, error: 'no presetName in IPC payload' });
-          return;
-        }
-        swapped = this.agent.setModel(msg.presetName, { source: 'user' });
-        detail = msg.presetName;
-      } else {
-        if (typeof this.agent.setThinkingEffort !== 'function') {
-          reply({
-            ok: false,
-            error: 'agent.setThinkingEffort 不可用：runtime 加载的 @agentdevjs/core 缺少该 API。'
-              + '开发模式请运行 npm run agentdev:local 重建链接后重启服务；发布模式请升级 @agentdevjs/core。',
-          });
-          return;
-        }
-        swapped = this.agent.setThinkingEffort(msg.thinkingEffort ?? null, { source: 'user' });
-        detail = `effort: ${msg.thinkingEffort || 'default'}`;
-      }
-    } catch (err) {
-      const error = String(err?.message || err);
-      reply({ ok: false, error });
-      console.error(`[ProtoClaw Runtime] ${msg.type} failed: ${error}`);
-      return;
-    }
-
-    if (!swapped) {
-      const reason = msg.type === 'swap-model'
-        ? `failed to resolve preset "${msg.presetName}" (missing preset or credentials)`
-        : 'failed to resolve current preset for thinking effort';
-      reply({ ok: false, error: reason });
-      console.error(`[ProtoClaw Runtime] ${msg.type}: ${reason}`);
-      return;
-    }
-
-    const meta = this.agent.getLLMMeta();
-    reply({ ok: true, meta });
-    console.log(`[ProtoClaw Runtime] ✓ ${msg.type === 'swap-model' ? 'Model' : 'Thinking'} swapped: ${oldName} -> ${meta?.modelName || 'unknown'} (${detail})${isMidTurn ? ' (mid-turn)' : ''}`);
+    // （model / thinking hot-swap IPC 分支已退役，ADR-0034：会话级切换改由
+    //  model-selection Feature 的 onHostRequest 请求面承接（feature-comms
+    //  通道投递，见 feature-communication.js 的 request 路由）。）
   }
 
   // ── Dispose this session (does NOT exit the process) ────────
-  async remove() {
-    if (this.disposed) return false;
+  remove() {
+    if (!this._removePromise) this._removePromise = this.removeInternal();
+    return this._removePromise;
+  }
+
+  async removeInternal() {
     this.disposed = true;
     this.inputLoopRunning = false;
     // 去抖窗口内的变更由下方 saveSession 覆盖；清掉 pending 定时器，
@@ -975,6 +908,7 @@ SessionLifecycle.prototype.start = async function () {
     console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${this.agent.agentId ?? 'unknown'}`);
   }
 
+  let sessionRestoreFailed = null;
   if (this.sessionId) {
     let sessionLoaded = false;
     try {
@@ -983,27 +917,62 @@ SessionLifecycle.prototype.start = async function () {
       const restoredMessages = this.agent.getContext?.()?.getAll?.();
       this.lastReportedMessageCount = Array.isArray(restoredMessages) ? restoredMessages.length : 0;
       console.log('[ProtoClaw Runtime] ✓ 已恢复会话: ' + this.sessionId);
-    } catch {
-      console.log('[ProtoClaw Runtime] 创建新会话: ' + this.sessionId);
+    } catch (error) {
+      // ADR-0034 决策 5：快照存在但损坏时禁止静默转新会话——原路径的
+      // preInjectCallStart + saveSession 会覆盖原快照（不可逆丢失）。
+      // 仅"快照不存在"（ENOENT）走新会话路径。
+      const snapshotMissing = error?.code === 'ENOENT' || /ENOENT/i.test(String(error?.message || ''));
+      if (snapshotMissing) {
+        console.log('[ProtoClaw Runtime] 创建新会话: ' + this.sessionId);
 
-      if (typeof this.agent['preInjectCallStart'] === 'function') {
-        try {
-          await this.agent['preInjectCallStart']();
-          await this.agent.saveSession(this.sessionId, sessionStore);
-          console.log('[ProtoClaw Runtime] ✓ preInjectCallStart 内容已落盘');
-        } catch (error) {
-          console.warn('[ProtoClaw Runtime] preInjectCallStart 失败:', error instanceof Error ? error.message : String(error));
+        if (typeof this.agent['preInjectCallStart'] === 'function') {
+          try {
+            await this.agent['preInjectCallStart']();
+            await this.agent.saveSession(this.sessionId, sessionStore);
+            console.log('[ProtoClaw Runtime] ✓ preInjectCallStart 内容已落盘');
+          } catch (error) {
+            console.warn('[ProtoClaw Runtime] preInjectCallStart 失败:', error instanceof Error ? error.message : String(error));
+          }
         }
+      } else {
+        sessionRestoreFailed = error;
+        console.error(
+          '[ProtoClaw Runtime] 会话快照恢复失败（保留原快照，将拒绝 READY）:',
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
-    if (!sessionLoaded && this.runtimeHandoff?.handoff?.featureContinuity) {
+    // branch 注入消费（ADR-0034 决策 2）：分支快照的 featureStates 是边界历史值，
+    // 源会话当前选择经注入文件（metadata.handoffPath，mode='branch'）传递——
+    // loadSession 成功后仍导入（continuity 覆盖历史值）。接续 handoff 保持
+    // 原条件（仅未 loadSession 时导入，避免覆盖已恢复快照中的会话自有状态）。
+    const handoffMode = this.runtimeHandoff?.handoff?.mode;
+    const shouldImportContinuity = this.runtimeHandoff?.handoff?.featureContinuity
+      && (!sessionLoaded || handoffMode === 'branch');
+    if (shouldImportContinuity) {
       try {
+        const sourceSessionId = this.runtimeHandoff.handoff.sourceSessionId;
+        const origin = {
+          kind: handoffMode === 'branch' ? 'branch-import' : 'continuity-import',
+          ...(sourceSessionId ? { sourceSessionId } : {}),
+        };
         const imported = await importFeatureContinuity(this.agent, this.runtimeHandoff.handoff.featureContinuity, {
-          sourceSessionId: this.runtimeHandoff.handoff.sourceSessionId,
+          sourceSessionId,
+          origin,
         });
         if (imported.length > 0) {
           await this.agent.saveSession(this.sessionId, sessionStore);
-          console.log(`[ProtoClaw Runtime] ✓ 已导入 continuity feature state: ${imported.join(', ')}`);
+          console.log(`[ProtoClaw Runtime] ✓ 已导入 continuity feature state (${origin.kind}): ${imported.join(', ')}`);
+          // branch 注入文件一次性消费（正确性要求，非清理美化）：不删除的话，
+          // 分支会话重启会再次按 branch-import 导入，把分支自己的当前选择
+          // 覆盖回创建时刻的源值。接续 handoff 文件保持既有生命周期，不在此删。
+          if (handoffMode === 'branch' && this.runtimeHandoff.source) {
+            try {
+              rmSync(this.runtimeHandoff.source, { force: true });
+            } catch (error) {
+              console.warn('[ProtoClaw Runtime] branch 注入文件删除失败:', error instanceof Error ? error.message : String(error));
+            }
+          }
         }
       } catch (error) {
         console.warn('[ProtoClaw Runtime] continuity feature state 导入失败:', error instanceof Error ? error.message : String(error));
@@ -1032,6 +1001,21 @@ SessionLifecycle.prototype.start = async function () {
     this.agent['pushOverviewSnapshot']?.();
   } catch (error) {
     console.warn('[ProtoClaw Runtime] 恢复会话后同步调试状态失败:', error);
+  }
+
+  // ── 阶段三：READY 门禁（ADR-0034 决策 5）──
+  // 快照损坏恢复失败：拒绝 READY（不覆盖任何会话文件），进程经 main catch
+  // 以非零码退出，server spawn 失败处理链接管。
+  if (sessionRestoreFailed) {
+    throw new Error(
+      `会话快照恢复失败，拒绝启动（原快照未改动）: ${sessionRestoreFailed instanceof Error ? sessionRestoreFailed.message : String(sessionRestoreFailed)}`,
+    );
+  }
+  // 无可用模型（启动 resolve 失败、agent 构造未注入默认、恢复也未绑定）：
+  // 会话无法服务，拒绝 READY。首页模式（无 sessionId）不拦——首页是零配置
+  // 用户进入设置配模型的入口，不消费模型。
+  if (this.sessionId && !this.agent.llm) {
+    throw new Error('No model available: 启动模型解析失败且会话恢复未绑定任何模型');
   }
 
   if (this.announceOnStdout) {

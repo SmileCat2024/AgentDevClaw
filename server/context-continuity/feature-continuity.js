@@ -213,6 +213,10 @@ function findAgentFeature(agent, featureName) {
  *
  * 这保证了：源会话打包了某 feature 的 continuity，但新 runtime 装配时换了
  * 不同 feature 实现（或没有包装），不会误把状态塞进去。
+ *
+ * options.origin（可选，框架 RestoreContext.origin）：恢复来源标记
+ * （'continuity-import' / 'branch-import' / 'hot-reload' 等），
+ * 透传给 feature.restoreState 供按来源区分恢复行为（ADR-0034）。
  */
 export async function importFeatureContinuity(agent, continuity, options = {}) {
   const states = Array.isArray(continuity?.states) ? continuity.states : [];
@@ -239,7 +243,8 @@ export async function importFeatureContinuity(agent, continuity, options = {}) {
       ? adapter.importAdapter(rawState, options)
       : rawState;
 
-    await feature.restoreState(state);
+    const restoreCtx = options.origin ? { origin: options.origin } : undefined;
+    await feature.restoreState(state, restoreCtx);
     imported.push(featureName);
   }
 

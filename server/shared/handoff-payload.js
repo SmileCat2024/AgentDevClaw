@@ -71,7 +71,12 @@ export function parseHandoffContent(raw, sourceLabel, { rawTextFallback = false 
         || parsed.handoffSummary
         || parsed.text,
       );
-      if (seedMessages.length === 0 && !sourceSummary) {
+      const featureContinuity = parsed.featureContinuity && typeof parsed.featureContinuity === 'object'
+        ? parsed.featureContinuity
+        : null;
+      // branch 注入包（ADR-0034 §4.1）：只有 mode/sourceSessionId/featureContinuity，
+      // 无摘要与种子消息——有 continuity 载荷即视为合法包。
+      if (seedMessages.length === 0 && !sourceSummary && !featureContinuity) {
         throw new Error('missing seedMessages/sourceSummary');
       }
       return {
@@ -90,9 +95,7 @@ export function parseHandoffContent(raw, sourceLabel, { rawTextFallback = false 
         fileRanges: pickObject(parsed.compactOutput?.fileRanges)
           ?? pickObject(parsed.appendedSummary?.fileRanges)
           ?? {},
-        featureContinuity: parsed.featureContinuity && typeof parsed.featureContinuity === 'object'
-          ? parsed.featureContinuity
-          : null,
+        featureContinuity,
       };
     }
   } catch (error) {

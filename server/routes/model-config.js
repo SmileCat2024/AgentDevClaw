@@ -5,10 +5,8 @@ import { spawn } from 'child_process';
 import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, MODEL_CONNECTIONS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS, AGENT_CONFIGS_ROOT, AGENT_USER_CONFIG_PATH } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
-import { requestRuntimeAck, broadcastIPCToAllRuntimes } from '../shared/ipc.js';
-import { getRuntimeByViewerAgentId, getAgentRuntime } from '../shared/agent-access.js';
-import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
-import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
+import { broadcastIPCToAllRuntimes } from '../shared/ipc.js';
+import { resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
 import { buildLocalFailureResponse } from '../shared/operation-contract.js';
 import { normalizeProgrammingHelperProcessMode, GLOBAL_SHARED_AGENT_ID } from '../shared/process-mode.js';
 import { resolveOpenCodeBaseUrl, parseZenModelsResponse } from '../zen-helpers.js';
@@ -1102,145 +1100,9 @@ export function setupModelConfigRoutes(app, express) {
     } catch (error) { next(error); }
   });
 
-  // ── Hot-swap request/ack ──
-  // swap 指令带 requestId 发送，等待 runtime 执行 setModel/setThinkingEffort 后的
-  // 回执（type 'model-swap-result'）再响应前端——ok 表示"切换已生效"而非"消息已
-  // 送达"。preset 不存在、OAuth token 缺失等失败对前端可见。requestId 全局唯一，
-  // type + requestId 足以匹配回执，无需 sessionId 三重匹配。
-  const requestModelSwapAck = (runtime, message) => requestRuntimeAck(runtime, message, 'model-swap-result');
-
-  // ── Hot-swap: switch thinking effort for one explicit runtime ──
-  // Runtime-only: updates the in-memory LLM instance without touching the
-  // preset definition in config/presets.json. The preset's thinkingEffort is
-  // the authoritative default at launch and must not be mutated by a
-  // mid-session adjustment.
-  // Per-session: when sessionId is provided, IPC is delivered only to that
-  // session's runtime — not broadcast to all sessions of the agent.
-  app.post('/protoclaw/swap_thinking_effort', express.json(), async (req, res, next) => {
-    try {
-      const { thinkingEffort } = req.body || {};
-      let target;
-      try {
-        target = resolveRuntimeControlTarget(req.body);
-      } catch (error) {
-        return res.status(error.status || 400).json({ error: error.message, code: error.code });
-      }
-      const { agentId, sessionId, runtimeId } = target;
-      // ADR-0011：远程命名空间身份 → 转发远程同名 swap 路由（裸 id，远程端做
-      // 自己的 IPC）；本地身份走下方既有 IPC 查表路径，行为字节级不动。
-      try {
-        const hostTarget = resolveForwardHostTarget(runtimeId, agentId, sessionId);
-        if (hostTarget.scope === 'remote') {
-          return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/swap_thinking_effort', {
-            method: 'POST',
-            body: {
-              ...(req.body || {}),
-              agentId: bareId(agentId),
-              runtimeId: bareId(runtimeId),
-              sessionId: bareId(sessionId),
-            },
-          });
-        }
-      } catch (error) {
-        return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
-      }
-      // thinkingEffort is null (clear → vendor default) or a non-empty string
-      const normalized = thinkingEffort === null
-        ? null
-        : (typeof thinkingEffort === 'string' && thinkingEffort ? thinkingEffort : null);
-
-      const message = { type: 'swap-thinking', thinkingEffort: normalized };
-      let result = { ok: false, error: 'no reachable runtime for this target' };
-
-      // Priority 1: runtimeId (viewerAgentId) — the most precise identifier.
-      if (runtimeId && typeof runtimeId === 'string') {
-        const rt = getRuntimeByViewerAgentId(runtimeId);
-        if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
-          result = await requestModelSwapAck(rt, message);
-        }
-      }
-      // Priority 2: agentId + sessionId — fallback when runtimeId is unavailable
-      if (!result.ok && sessionId && typeof sessionId === 'string') {
-        const rt = getAgentRuntime(agentId, sessionId);
-        if (rt) result = await requestModelSwapAck(rt, message);
-      }
-      // No broadcast fallback: an explicit runtime/session request must not
-      // change another session's in-memory model.
-
-      if (!result.ok) {
-        return res.status(502).json({ ok: false, agentId, thinkingEffort: normalized, error: result.error });
-      }
-      res.json({ ok: true, agentId, thinkingEffort: normalized, meta: result.meta });
-    } catch (error) { next(error); }
-  });
-
-  // ── Hot-swap: switch active model for one explicit runtime ──
-  // Runtime-only: updates the in-memory LLM instance without touching the
-  // agent's startup preset (用户数据目录 agent-configs)。 The preset file is the
-  // authoritative source for "what model to use at launch" and must not be
-  // mutated by a mid-session model switch.
-  // Per-session: when sessionId is provided, IPC is delivered only to that
-  // session's runtime — not broadcast to all sessions of the agent.
-  app.post('/protoclaw/swap_model', express.json(), async (req, res, next) => {
-    try {
-      const { presetName } = req.body || {};
-      let target;
-      try {
-        target = resolveRuntimeControlTarget(req.body);
-      } catch (error) {
-        return res.status(error.status || 400).json({ error: error.message, code: error.code });
-      }
-      const { agentId, sessionId, runtimeId } = target;
-      // ADR-0011：远程命名空间身份 → 转发远程同名 swap 路由（裸 id，远程端做
-      // 自己的 IPC）；本地身份走下方既有 IPC 查表路径，行为字节级不动。
-      try {
-        const hostTarget = resolveForwardHostTarget(runtimeId, agentId, sessionId);
-        if (hostTarget.scope === 'remote') {
-          return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/swap_model', {
-            method: 'POST',
-            body: {
-              ...(req.body || {}),
-              agentId: bareId(agentId),
-              runtimeId: bareId(runtimeId),
-              sessionId: bareId(sessionId),
-            },
-          });
-        }
-      } catch (error) {
-        return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
-      }
-      if (!presetName || typeof presetName !== 'string') {
-        return res.status(400).json({ error: 'presetName is required' });
-      }
-
-      const message = { type: 'swap-model', presetName };
-      let result = { ok: false, error: 'no reachable runtime for this target' };
-
-      // Priority 1: runtimeId (viewerAgentId) — the most precise identifier.
-      // The frontend always knows currentRuntimeAgentId, which uniquely
-      // identifies the session's runtime process.
-      if (runtimeId && typeof runtimeId === 'string') {
-        const rt = getRuntimeByViewerAgentId(runtimeId);
-        if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
-          result = await requestModelSwapAck(rt, message);
-        }
-      }
-
-      // Priority 2: agentId + sessionId — fallback when runtimeId is unavailable
-      if (!result.ok && sessionId && typeof sessionId === 'string') {
-        const rt = getAgentRuntime(agentId, sessionId);
-        if (rt) result = await requestModelSwapAck(rt, message);
-      }
-
-      // No broadcast fallback: an explicit runtime/session request must not
-      // change another session's in-memory model.
-
-      if (!result.ok) {
-        return res.status(502).json({ ok: false, agentId, presetName, error: result.error });
-      }
-      res.json({ ok: true, agentId, presetName, meta: result.meta });
-    } catch (error) { next(error); }
-  });
+  // （模型热切换路由已退役，ADR-0034：会话级切换改走 model-selection Feature
+  //  的 feature-comms 请求面 /protoclaw/feature-comms/request；远程会话随通道
+  //  无声明自然降级，不再保持远程转发。）
 
   // ── OpenAI Auth: list models from the Codex catalog using the stored OAuth token ──
   app.post('/protoclaw/openai-auth/models', express.json(), async (req, res, next) => {

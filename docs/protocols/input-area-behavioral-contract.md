@@ -37,7 +37,7 @@
 | `POST /protoclaw/images/upload` | POST | 附件上传 | base64 → `{ path, mediaType, url }` |
 | `POST /protoclaw/speech_to_text` | POST | ASR | 5xx/429 退避重试 2 次；4xx 直接报错 |
 | `GET /protoclaw/speech_model_config` | GET | ASR 配置检查 | |
-| `POST /protoclaw/swap_model` / `swap_thinking_effort` | POST | 模型/思考热切换 | 携带宿主 agentId + sessionId/runtimeId |
+| `POST /protoclaw/feature-comms/request` | POST | 模型/思考热切换 | model-selection Feature 请求面（ADR-0034）：四元组 `model-selection/selection`，selectModel / clearThinkingOverride |
 | `GET /protoclaw/model_config?agentId=` | GET | preset 列表 | 按会话命名空间（远程会话取远程自己的列表） |
 | `GET /protoclaw/commands` | GET | slash 清单 | 唤起时拉取一次，按 agentId/runtimeId/sessionId 三元组 |
 | `POST /protoclaw/capability_invoke` | POST | slash invoke 执行 | 控制动作，不构造 user-turn |
