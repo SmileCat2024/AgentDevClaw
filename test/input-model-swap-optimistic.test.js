@@ -29,12 +29,17 @@ function sandbox() {
     getActiveWorkspaceSessionId: () => 'sess-1',
     getRuntimeAwareAgentRecord: () => ({ id: 'host-agent' }),
     formatPresetDisplayName: (name) => name,
-    ClawToast: { show() {}, update() {} },
+    ClawToast: {
+      messages: [],
+      show(value) { this.messages.push(value); },
+      update(id, patch) { this.messages.push({ ...patch, id }); },
+    },
     ClawFeatureCommunication: {
       listChannels: async () => [{ featureId: 'model-selection', channelId: 'selection' }],
       calls: [],
       request: async (target, requestType, payload) => {
         ctx.ClawFeatureCommunication.calls.push({ target, requestType, payload });
+        if (ctx.requestError) throw ctx.requestError;
         return ctx.requestResult ?? { ok: true, meta: model(1, 'a') };
       },
     },
@@ -69,7 +74,7 @@ function sandbox() {
     await ctx.run(effort ? `_performThinkingEffortSwap('host-agent', payload.thinkingEffort)` : `_performInputModelSwap('host-agent', payload.presetName)`);
   };
   overview({ ...model(1, 'a'), usageStats: { lastRequestUsage: { inputTokens: 100000 }, totalUsage: { inputTokens: 250000 }, totalRequests: 3 } });
-  return { ctx, bar, modelLabel, effortLabel, overview, swap, render };
+  return { ctx, bar, modelLabel, effortLabel, modelButton, overview, swap, render };
 }
 
 describe('模型状态统一提交与呈现', () => {
@@ -78,6 +83,48 @@ describe('模型状态统一提交与呈现', () => {
     s.ctx.ClawFeatureCommunication.listChannels = async () => [{ featureId: 'shell', channelId: 'task-1' }];
     assert.equal(await s.ctx.run(`_ensureModelSelectionChannel('host-agent')`), false);
     assert.equal(s.ctx.ClawFeatureCommunication.calls.length, 0, '通道缺失时不得投递模型选择请求');
+  });
+
+  it('会话已选中但 runtime 尚未恢复时，提示加载中而非会话不支持', async () => {
+    const s = sandbox();
+    s.ctx.currentRuntimeAgentId = null;
+    const before = s.ctx.ClawToast.messages.length;
+    await s.ctx.window.toggleInputModelDropdown();
+    const message = s.ctx.ClawToast.messages.at(-1);
+    assert.equal(message?.title, '会话正在加载，请稍后再试');
+    assert.notEqual(message?.title, '当前会话不支持模型切换');
+    assert.equal(s.ctx.ClawFeatureCommunication.calls.length, 0, 'runtime 尚未就绪时不能投递模型请求');
+    assert.equal(s.ctx.ClawToast.messages.length, before + 1);
+  });
+
+  it('会话操作冲突时模型下拉提示稍后重试，不误报会话不支持', async () => {
+    const s = sandbox();
+    const error = Object.assign(new Error('Session is busy with open'), {
+      status: 409,
+      code: 'session_operation_in_progress',
+    });
+    s.ctx.requestError = error;
+    const pending = s.ctx.window.toggleInputModelDropdown();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(s.ctx.ClawFeatureCommunication.calls[0]?.requestType, 'getStatus', '菜单可用性检查应实际执行状态请求');
+    await pending;
+    assert.equal(s.ctx.run('_inputModelDropdown'), null, '被会话操作闸拒绝时不应展示可操作菜单');
+    assert.equal(s.ctx.ClawToast.messages.at(-1)?.title, '会话正在切换，请稍后重试');
+    assert.notEqual(s.ctx.ClawToast.messages.at(-1)?.title, '当前会话不支持模型切换');
+    assert.deepEqual(s.ctx.ClawFeatureCommunication.calls.map(call => call.requestType), ['getStatus']);
+  });
+
+  it('选择模型遇到会话操作冲突时提示稍后重试，且不显示模型已切换', async () => {
+    const s = sandbox();
+    s.ctx.requestError = Object.assign(new Error('Session is busy with open'), {
+      status: 409,
+      code: 'session_operation_in_progress',
+    });
+    await s.ctx.run(`_performInputModelSwap('host-agent', 'b')`);
+    const finalToast = s.ctx.ClawToast.messages.at(-1);
+    assert.equal(finalToast?.title, '会话正在切换，请稍后重试');
+    assert.notEqual(finalToast?.title, '模型已切换');
+    assert.equal(s.ctx.run('readCurrentSessionViewState().overview.presetName'), 'a');
   });
 
   it('切换通过声明通道向当前会话投递 selectModel 与目标 preset', async () => {

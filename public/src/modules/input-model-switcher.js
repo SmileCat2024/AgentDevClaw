@@ -119,9 +119,25 @@ function _modelSelectionTarget(agentId, viewToken = captureSessionViewToken()) {
   return { agentId: identity.agentId, sessionId: identity.sessionId, featureId: 'model-selection', channelId: 'selection' };
 }
 
+function _isModelSelectionTargetPending(agentId, viewToken) {
+  const identity = viewToken?.identity;
+  return !!identity?.sessionId
+    && identity.agentId === agentId
+    && !viewToken.runtimeId;
+}
+
+function _notifyModelSelectionTargetUnavailable(agentId, viewToken, isZh) {
+  if (_isModelSelectionTargetPending(agentId, viewToken)) {
+    _notifyModelSelectionNotReady(isZh);
+    return;
+  }
+  _notifyModelSelectionUnavailable(isZh);
+}
+
 async function _ensureModelSelectionChannel(agentId, viewToken = captureSessionViewToken()) {
   const target = _modelSelectionTarget(agentId, viewToken);
-  if (!target || !isSessionViewTokenCurrent(viewToken)) return false;
+  if (!target) return _isModelSelectionTargetPending(agentId, viewToken) ? null : false;
+  if (!isSessionViewTokenCurrent(viewToken)) return false;
   const { sessionId } = target;
   let key = agentId + '|' + sessionId + '|' + viewToken.runtimeId;
   if (_modelSelectionChannelOk && _modelSelectionChannelOk.key === key && _modelSelectionChannelOk.ok) return true;
@@ -135,9 +151,10 @@ async function _ensureModelSelectionChannel(agentId, viewToken = captureSessionV
     _modelSelectionChannelOk = { key, ok: declared };
     return declared;
   } catch (e) {
-    // 查询失败（远程旧端 / server 不可达）按不可用呈现，不缓存
+    // 查询失败不等于 Feature 缺席：所选对话正在重新打开时，runtime / 会话
+    // 操作会临时拒绝请求。此类情况按「尚未就绪」处理，不缓存为不可用。
     _modelSelectionChannelOk = false;
-    return false;
+    return null;
   }
 }
 
@@ -152,11 +169,56 @@ function _notifyModelSelectionUnavailable(isZh) {
   }
 }
 
+function _notifyModelSelectionNotReady(isZh) {
+  if (typeof ClawToast !== 'undefined') {
+    ClawToast.show({
+      id: 'input-model-not-ready',
+      title: isZh ? '会话正在加载，请稍后再试' : 'Session is loading. Try again shortly.',
+      status: 'info',
+      autoDismiss: 3500,
+    });
+  }
+}
+
+function _isSessionOperationConflict(error) {
+  return error?.status === 409 || error?.code === 'session_operation_in_progress';
+}
+
+function _notifySessionOperationInProgress(isZh, toastId = null) {
+  if (typeof ClawToast === 'undefined') return;
+  const notice = {
+    status: 'info',
+    title: isZh ? '会话正在切换，请稍后重试' : 'Session is changing. Try again shortly.',
+    description: '',
+    closable: true,
+    autoDismiss: 3500,
+  };
+  if (toastId) ClawToast.update(toastId, notice);
+  else ClawToast.show({ id: 'input-model-operation-in-progress', ...notice });
+}
+
+function _notifyModelSelectionRequestError(error, isZh, toastId) {
+  const busy = _isSessionOperationConflict(error);
+  if (busy) {
+    _notifySessionOperationInProgress(isZh, toastId);
+    return;
+  }
+  if (typeof ClawToast !== 'undefined') {
+    ClawToast.update(toastId, {
+      status: 'error',
+      title: isZh ? '切换失败' : 'Switch failed',
+      description: error?.message || String(error),
+      closable: true,
+      autoDismiss: 8000,
+    });
+  }
+}
+
 async function _performInputModelSwap(agentId, presetName, viewToken = captureSessionViewToken()) {
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
   if (!isSessionViewTokenCurrent(viewToken)) return;
   const target = _modelSelectionTarget(agentId, viewToken);
-  if (!target) { _notifyModelSelectionUnavailable(isZh); return; }
+  if (!target) { _notifyModelSelectionTargetUnavailable(agentId, viewToken, isZh); return; }
   let toastId = 'input-model-swap';
 
   if (typeof ClawToast !== 'undefined') {
@@ -195,19 +257,13 @@ async function _performInputModelSwap(agentId, presetName, viewToken = captureSe
         });
       }
     } else {
-      throw new Error((result && (result.error || result.code)) || 'Unknown error');
+      const error = new Error((result && (result.error || result.code)) || 'Unknown error');
+      error.code = result?.code;
+      throw error;
     }
   } catch (e) {
     console.error('[InputModelSwitch] Swap failed:', e);
-    if (typeof ClawToast !== 'undefined') {
-      ClawToast.update(toastId, {
-        status: 'error',
-        title: isZh ? '切换失败' : 'Switch failed',
-        description: e?.message || String(e),
-        closable: true,
-        autoDismiss: 8000,
-      });
-    }
+    _notifyModelSelectionRequestError(e, isZh, toastId);
   }
 }
 
@@ -232,7 +288,7 @@ window.toggleInputModelDropdown = function(event) {
   const target = _modelSelectionTarget(agentId, viewToken);
 
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-  if (!target) { _notifyModelSelectionUnavailable(isZh); return; }
+  if (!target) { _notifyModelSelectionTargetUnavailable(agentId, viewToken, isZh); return; }
 
   _inputModelDropdownLoading = true;
   // Fetch presets before creating the dropdown; keep the open action single-flight.
@@ -242,6 +298,10 @@ window.toggleInputModelDropdown = function(event) {
       // 未起均无 model-selection 声明 → 不可用提示，不打开下拉。
       const available = await _ensureModelSelectionChannel(agentId, viewToken);
       if (!isSessionViewTokenCurrent(viewToken)) return;
+      if (available === null) {
+        _notifyModelSelectionNotReady(isZh);
+        return;
+      }
       if (!available) {
         _notifyModelSelectionUnavailable(isZh);
         return;
@@ -273,7 +333,13 @@ window.toggleInputModelDropdown = function(event) {
             });
           }
         }
-      } catch { /* 对账尽力而为，不打扰打开动作 */ }
+      } catch (error) {
+        if (_isSessionOperationConflict(error)) {
+          _notifySessionOperationInProgress(typeof currentLanguage !== 'undefined' && currentLanguage === 'zh');
+          return;
+        }
+        // 状态对账失败不代表 Feature 不支持；非冲突错误不阻止打开菜单。
+      }
 
       if (!isSessionViewTokenCurrent(viewToken)) return;
       let presets;
@@ -468,7 +534,7 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort, viewToken = c
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
   if (!isSessionViewTokenCurrent(viewToken)) return;
   const target = _modelSelectionTarget(agentId, viewToken);
-  if (!target) { _notifyModelSelectionUnavailable(isZh); return; }
+  if (!target) { _notifyModelSelectionTargetUnavailable(agentId, viewToken, isZh); return; }
   let toastId = 'input-thinking-swap';
 
   if (typeof ClawToast !== 'undefined') {
@@ -516,19 +582,13 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort, viewToken = c
         });
       }
     } else {
-      throw new Error((result && (result.error || result.code)) || 'Unknown error');
+      const error = new Error((result && (result.error || result.code)) || 'Unknown error');
+      error.code = result?.code;
+      throw error;
     }
   } catch (e) {
     console.error('[InputThinkingEffort] Swap failed:', e);
-    if (typeof ClawToast !== 'undefined') {
-      ClawToast.update(toastId, {
-        status: 'error',
-        title: isZh ? '切换失败' : 'Switch failed',
-        description: e?.message || String(e),
-        closable: true,
-        autoDismiss: 8000,
-      });
-    }
+    _notifyModelSelectionRequestError(e, isZh, toastId);
   }
 }
 
@@ -555,6 +615,10 @@ window.toggleThinkingEffortDropdown = async function(event) {
   // 与模型下拉同一可用性闸（ADR-0034 §5.1）：两控件同属 model-selection 通道。
   const available = await _ensureModelSelectionChannel(agentId, viewToken);
   if (!isSessionViewTokenCurrent(viewToken)) return;
+  if (available === null) {
+    _notifyModelSelectionNotReady(isZh0);
+    return;
+  }
   if (!available) {
     _notifyModelSelectionUnavailable(isZh0);
     return;

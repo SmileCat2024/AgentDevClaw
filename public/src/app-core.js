@@ -1060,6 +1060,21 @@ function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(ag
   }
 }
 
+// 缓存上下文键 → 视图身份。键形如 `host:<hostId>|session:<sessionId>`；
+// `runtime:<runtimeId>` 是既没有宿主也没有会话时的退化形态，不含身份事实，
+// 返回 null 交由调用方决定。缓存恢复必须按本次命中的键恢复身份：同一个
+// runtime 可以被不同会话复用，键才是这次恢复的权威。
+function _sessionViewIdentityFromContextKey(contextKey) {
+  const match = /^host:([^|]+)\|session:(.+)$/.exec(String(contextKey || '').trim());
+  if (!match) return null;
+  const agentId = match[1].trim();
+  const sessionId = match[2].trim();
+  if (!agentId || !sessionId) return null;
+  return typeof normalizeSessionViewIdentity === 'function'
+    ? normalizeSessionViewIdentity({ agentId, sessionId })
+    : { agentId, sessionId };
+}
+
 function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agentId)) {
   if (!agentId || !contextKey) return false;
   const cached = _agentRuntimeCache.get(contextKey);
@@ -1076,7 +1091,12 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
   // followLatestEnabled 先于 patch 写入：applySessionViewPatch 写入
   // inputRequests 即声明输入面渲染（工单 037），视口通知须读取恢复后的值。
   followLatestEnabled = cached.followLatest !== undefined ? cached.followLatest : true;
-  applySessionViewPatch({
+  // 恢复内容即回到该会话：视图身份必须与缓存内容同源落地。身份权威是
+  // 命中的 context key（host:<hostId>|session:<sessionId>），不依赖
+  // cached.sessionMeta —— 它只是可选的展示元数据，会话元数据尚未加载时为
+  // 空；只恢复内容不恢复身份会让界面有对话、身份却停在空会话，输入面与
+  // 模型切换因此判定「当前会话不支持模型切换」。
+  const restorePatch = {
     messages: cached.messages,
     inputRequests: cached.inputRequests,
     toolRenderConfigs: cached.toolRenderConfigs,
@@ -1090,7 +1110,14 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
     ),
     sessionMeta: cached.sessionMeta,
     connected: cached.connected,
-  });
+  };
+  // 身份变更会触发内容清空（applySessionViewPatch 的既有语义），所以身份与
+  // 缓存内容分两次写入：先落身份（清掉的是上一会话内容），再落内容。
+  const restoredIdentity = _sessionViewIdentityFromContextKey(contextKey);
+  if (restoredIdentity) {
+    applySessionViewPatch({ identity: restoredIdentity });
+  }
+  applySessionViewPatch(restorePatch);
   _restoredScrollTop = typeof cached.scrollTop === 'number' ? cached.scrollTop : null;
   if (cached.scrollAnchor && typeof setPendingChatViewportAnchor === 'function') {
     setPendingChatViewportAnchor(cached.scrollAnchor);

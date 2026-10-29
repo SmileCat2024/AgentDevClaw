@@ -256,15 +256,21 @@ function applySessionViewPatch(patch) {
   // 未显式携带 identity 的写入路径（数据加载 / 缓存恢复）由 sessionMeta 推导
   // 会话身份：sessionId 是元数据的一部分，身份与数据必须同源落地，避免
   // loadAgentData 先后两次 patch 之间身份与内容错位。
+  // 空元数据不携带身份事实：缓存恢复等路径可能带有 sessionId 为空的元数据
+  // 快照，此时不得把已有的视图身份改写成空身份——否则切回会话后界面内容
+  // 已恢复，但输入面/模型切换读到的视图会话为空，表现为「当前会话不支持
+  // 模型切换」。身份更新只在元数据确实携带 sessionId 时发生。
   if (!has('identity') && has('sessionMeta')) {
     const sessionId = String(_sessionMeta.sessionId || '').trim();
-    const host = typeof getCurrentHostAgentRecord === 'function'
-      ? getCurrentHostAgentRecord()
-      : null;
-    const agentId = String(host?.id
-      || (typeof focusedAgentId !== 'undefined' ? focusedAgentId : '')
-      || '').trim();
-    _sessionViewIdentity = normalizeSessionViewIdentity({ agentId, sessionId });
+    if (sessionId) {
+      const host = typeof getCurrentHostAgentRecord === 'function'
+        ? getCurrentHostAgentRecord()
+        : null;
+      const agentId = String(host?.id
+        || (typeof focusedAgentId !== 'undefined' ? focusedAgentId : '')
+        || '').trim();
+      _sessionViewIdentity = normalizeSessionViewIdentity({ agentId, sessionId });
+    }
   }
   if (has('connected')) {
     currentRuntimeConnected = patch.connected !== false;

@@ -181,6 +181,32 @@ test('optimistic runtime cache restores data by session context', () => {
   assert.equal(context.currentInputRequests[0].requestId, 'request-a');
 });
 
+test('cache restore restores the session identity together with the transcript', () => {
+  // 缺陷现场：离开会话回工作空间首页会把视图身份清成空会话；切回已缓存的
+  // 会话时只恢复内容不恢复身份，界面上有对话、身份却停在空会话，模型切换
+  // 与输入面因此判定「当前会话不支持模型切换」。缓存条目里的 sessionMeta
+  // 在会话元数据尚未加载时本就是空值，不能作为身份来源。
+  const context = createCoreContext();
+  const api = context.__uiContext;
+
+  context.currentAgent.workspace_sessions.activeSessionId = 'session-a';
+  context.currentMessages = [{ role: 'assistant', content: 'session A' }];
+  api.saveCurrentRuntimeToCache('runtime-1');
+
+  // 回工作空间首页：身份被清成空会话
+  context.run?.('void 0');
+  vm.runInContext("applySessionViewPatch({ identity: { agentId: 'flow-workspace', sessionId: '' } })", context);
+  context.currentMessages = [];
+  context.currentAgent.workspace_sessions.activeSessionId = 'session-a';
+
+  assert.equal(api.restoreRuntimeFromCache('runtime-1'), true);
+  assert.equal(context.currentMessages[0].content, 'session A');
+  assert.equal(
+    vm.runInContext('readCurrentSessionViewState().identity.sessionId', context),
+    'session-a',
+  );
+});
+
 test('runtime cache retains the most recently visited views without holding every transcript', () => {
   const context = createCoreContext();
   const api = context.__uiContext;
