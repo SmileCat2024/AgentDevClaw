@@ -95,11 +95,156 @@ export async function deliverUserInput(
     }, { fetchImpl });
   }
 
+  return _stageThreadCommand({
+    thread: route.thread,
+    text: normalizedText,
+    images: normalizedImages,
+    source,
+    sourceRef,
+    isReminder,
+    capabilityActivations,
+    turnMetadata,
+  }, integration);
+}
+
+/**
+ * 线程寻址输入（threadId 为路由事实，ADR-0024 决策 3 的服务端一半）。
+ *
+ * 与 deliverUserInput 的区别只在「归属怎么证明」：本入口直接以 Thread 记录
+ * 作为路由事实，不需要 runtime 反查——接续窗口里旧 head runtime 已退役、
+ * 新 head 未 ready，runtime 不存在是**正常状态**，不该让输入无法被接住。
+ * 接受性判定（closed / 归档 / 删除中 / PH 归属释放 / 非空校验）与入箱后的
+ * 即时投递尝试，两条路径共用 _stageThreadCommand，不出现第二套语义。
+ *
+ * 送达与否是独立结果（返回 deliveryAttempt），不是接受与否的条件：
+ * 未送达的指令留在 Inbox，由既有触发点（runtime ready / head 推进 /
+ * 显式 deliver）补投。
+ *
+ * @param {object} input
+ * @param {object} [deps] 测试注入（生产调用不传，走默认单例）
+ * @throws UserTurnDeliveryError 线程不存在 / 终态 / 归档 / 删除中 / 参数问题
+ */
+export async function deliverThreadInput(
+  {
+    threadId,
+    text,
+    images,
+    source,
+    sourceRef,
+    kind,
+    capabilityActivations,
+    turnMetadata,
+  } = {},
+  { integration = getThreadIntegration() } = {},
+) {
+  const tid = String(threadId || '').trim();
+  if (!tid) {
+    throw new UserTurnDeliveryError('threadId is required', {
+      code: 'invalid_input',
+      status: 400,
+      retryable: false,
+    });
+  }
+  const thread = await integration.core.getThread(tid);
+  if (!thread) {
+    throw new UserTurnDeliveryError(`Thread ${tid} not found`, {
+      code: 'thread_not_found',
+      status: 404,
+      retryable: false,
+    });
+  }
+  const rejection = await _threadAcceptanceVerdict(thread, integration);
+  if (rejection) throw rejection;
+
+  return _stageThreadCommand({
+    thread,
+    text: typeof text === 'string' ? text : '',
+    images: Array.isArray(images) ? images : [],
+    source,
+    sourceRef,
+    // 身份词汇归一与 deliverUserInput 同源：'reminder' 保留，其余一律普通用户输入
+    isReminder: kind === 'reminder',
+    capabilityActivations,
+    turnMetadata,
+  }, integration);
+}
+
+/**
+ * 线程接受性判定（客观事实，与投递门禁分离）：线程不存在 / closed /
+ * deleting / 归档 / PH 归属释放窗口 → 拒绝；其余入箱。
+ *
+ * 「非 head」不在本判定内：线程寻址的收件人就是线程自身，head 由记录决定；
+ * 「是不是 head 会话」是 runtime 寻址路径才需要判的问题（见 _resolveThreadRoute）。
+ *
+ * @returns {UserTurnDeliveryError|null} 拒绝原因，可接受返回 null
+ */
+async function _threadAcceptanceVerdict(thread, integration) {
+  // ticket 046：PH 归属释放窗口（项目改绑 / 会话归属移动，会话失效 → 归属
+  // 落盘之间）拒绝新输入，杜绝输入落进即将按旧归属保存/执行的旧实例。
+  const headSessionId = String(thread?.headSessionId || '').trim();
+  const phOwnershipGate = headSessionId ? getPhSessionGateInfo(headSessionId) : null;
+  if (phOwnershipGate) {
+    return new UserTurnDeliveryError(phOwnershipGate.message, {
+      code: phOwnershipGate.code,
+      status: 409,
+      retryable: false,
+    });
+  }
+  // T005：删除中的线程拒绝新 send（begin 后 / seal 前线程未 closed，
+  // 框架 appendCommand 不拒绝——入口层显式拒绝才是第一道门）。
+  if (thread?.deleting === true) {
+    return new UserTurnDeliveryError('Thread is being deleted: new input is rejected', {
+      code: 'thread_deleting',
+      status: 409,
+      retryable: false,
+    });
+  }
+  // 终态线程禁入：删除事务封存后 head 不变，指令入箱只会在无投递触发的
+  // 状态下永久滞留。
+  if (thread?.status === 'closed') {
+    return new UserTurnDeliveryError(
+      'This thread is closed; start a new session to continue the work',
+      { code: 'thread_closed', status: 409, retryable: false },
+    );
+  }
+  // T004：归档线程拒绝新 send（判定经 archive 单点，与 commands / deliver /
+  // ACP resume 四入口共享同一事实）。
+  if (typeof integration.archive?.resolveCommandRejection === 'function') {
+    const rejection = await integration.archive.resolveCommandRejection(thread.threadId);
+    if (rejection) {
+      return new UserTurnDeliveryError(
+        'This thread is archived; unarchive it before sending new messages',
+        { code: rejection.code, status: rejection.status, retryable: false },
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * 线程域输入的单一实现：入箱 + 即时投递尝试。
+ *
+ * deliverUserInput（runtime 寻址）与 deliverThreadInput（线程寻址）都收束到
+ * 这里——「接受的判据」「入箱的形状」「投递尝试的时机」只有一份。
+ */
+async function _stageThreadCommand(
+  {
+    thread,
+    text,
+    images,
+    source,
+    sourceRef,
+    isReminder,
+    capabilityActivations,
+    turnMetadata,
+  },
+  integration,
+) {
   // 与 appendCommand 的 K8 同源：text / images / metadata 至少其一非空
   //（metadata-only 如仅携带会话引用；空文本占位 ' ' 由此放行）
   const hasTurnMetadata = !!(turnMetadata && typeof turnMetadata === 'object'
     && Object.keys(turnMetadata).length > 0);
-  if (!normalizedText.trim() && normalizedImages.length === 0 && !hasTurnMetadata) {
+  if (!String(text || '').trim() && images.length === 0 && !hasTurnMetadata) {
     throw new UserTurnDeliveryError('text or images must be provided', {
       code: 'invalid_input',
       status: 400,
@@ -112,16 +257,16 @@ export async function deliverUserInput(
   // image-only 输入（空白占位 text）随即触发 K8 空文本拒绝，text + images
   // 场景图片被静默丢弃（PH 线程宿主会话回归，2026-10-28）。缺 path 的对象
   // 成员无法寻址，过滤后重新计数；全滤空按无附件入箱。
-  const commandImages = normalizedImages
+  const commandImages = images
     .map((entry) => (typeof entry === 'string' ? entry : String(entry?.path || '').trim()))
     .filter(Boolean);
 
   const { command, duplicate } = await integration.core.appendCommand({
-    threadId: route.thread.threadId,
+    threadId: thread.threadId,
     // turn 身份槽位（ADR-0024 决策 3）：reminder 与用户消息同享线程行政
     // 检查（交接窗口暂存而非误投旧 head），投递时经 bridge 原样转发。
     kind: isReminder ? 'reminder' : 'user_message',
-    text: normalizedText,
+    text,
     source: String(source || '').trim() || 'gateway',
     idempotencyKey: sourceRef ? `gw-${sourceRef}` : '',
     // 来源侧引用（ADR-0031 步骤一）：携带 sourceRef 的输入进入线程域后换得
@@ -142,7 +287,7 @@ export async function deliverUserInput(
     const existingMeta = command?.metadata ?? null;
     if (JSON.stringify(existingMeta) !== JSON.stringify(turnMetadata)) {
       console.warn('[input-gateway] duplicate command carries different turn metadata; existing entry wins:', {
-        threadId: route.thread.threadId,
+        threadId: thread.threadId,
         commandId: command?.commandId,
       });
     }
@@ -154,13 +299,13 @@ export async function deliverUserInput(
   // 正好把刚落入的指令当场送达，不留无触发点的 pending。
   let deliveryAttempt = null;
   if (!duplicate && typeof integration.tryDeliver === 'function') {
-    deliveryAttempt = await integration.tryDeliver(route.thread.threadId);
+    deliveryAttempt = await integration.tryDeliver(thread.threadId);
   }
 
   return {
     success: true,
     delivery: 'thread_queued',
-    threadId: route.thread.threadId,
+    threadId: thread.threadId,
     commandId: command.commandId,
     duplicate,
     ...(deliveryAttempt ? { deliveryAttempt } : {}),
@@ -173,6 +318,9 @@ export async function deliverUserInput(
  *   - { route:'rejected', error }：终态线程（closed）或历史成员——显式拒绝；
  *   - { route:'direct' }：其余一切（无线程 / 非 host / 条目不存在）——直投。
  * 网关的介入必须以确定的事实为前提；线程域内不做第二重状态裁决（R6）。
+ *
+ * runtime 寻址独有的判定只有「非 head」一项（收件会话是历史分片）；其余
+ * 拒绝事实（删除中 / closed / 归档）与线程寻址路径共用 _threadAcceptanceVerdict。
  */
 async function _resolveThreadRoute(viewerAgentId, integration) {
   if (!viewerAgentId) return { route: 'direct' };
@@ -185,6 +333,8 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
   // 并触发前端刷新。无窗口进行中时短路返回（空表零成本），网关热路径不付出
   // 查询开销。code/message 取自窗口事实（改绑 ph_project_rebind_in_progress /
   // 移动 ph_sessions_move_in_progress）。
+  //
+  // 本判定在归属反查之前：纯会话（无线程）的 PH 输入同样受该窗口保护。
   const phOwnershipGate = sessionId ? getPhSessionGateInfo(sessionId) : null;
   if (phOwnershipGate) {
     throw new UserTurnDeliveryError(
@@ -202,28 +352,6 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
   }
   if (!thread) return { route: 'direct' };
 
-  // T004：归档线程拒绝新 send（与 routes 的 _assertNotArchived / ACP
-  // thread_resume 的 thread_archived 同源）。归档是取消性操作：新输入
-  // 不应落进已被取消的 Inbox；归档的 hold 只挡投递，挡不住 append，
-  // 入口层显式拒绝才是「拒绝新派发」的第一道门。
-  if (integration.archive && typeof integration.archive.isArchived === 'function'
-    && await integration.archive.isArchived(thread.threadId)) {
-    throw new UserTurnDeliveryError(
-      'Thread is archived: new input is rejected until it is unarchived',
-      { code: 'thread_archived', status: 409, retryable: false },
-    );
-  }
-
-  // T005：删除中的线程拒绝新 send（与 routes 的 _assertNotDeleting 同源）。
-  // deleting 窗口（begin 后 / seal 前）线程未 closed，框架 appendCommand 不
-  // 拒绝——入口层显式拒绝才是「停止新 command 写入」的第一道门。
-  if (thread.deleting === true) {
-    throw new UserTurnDeliveryError(
-      'Thread is being deleted: new input is rejected',
-      { code: 'thread_deleting', status: 409, retryable: false },
-    );
-  }
-
   // 非 head Session 仍可查看，但不能把新输入写入历史分片；不要静默转投
   // 当前 head，避免用户误以为自己仍在编辑历史现场。
   if (thread.headSessionId !== sessionId) {
@@ -236,34 +364,8 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
     };
   }
 
-  // 终态线程禁入：删除事务封存后 head 不变，历史链仍可查看，但工作已无
-  // 承接点——指令入箱只会在无投递触发的状态下永久滞留。
-  if (thread.status === 'closed') {
-    return {
-      route: 'rejected',
-      error: new UserTurnDeliveryError(
-        'This thread is closed; start a new session to continue the work',
-        { code: 'thread_closed', status: 409, retryable: false },
-      ),
-    };
-  }
-
-  // 归档线程禁入（与 closed 同理：runtime 已停，unarchive 前入箱只会滞留）。
-  // 归档事务窗口（hold 后、runtime 停止前）同样拦截，指令不落入 cancel
-  // 快照之外的盲区。判定经 archive 单点，与 commands / deliver / ACP
-  // resume 四入口共享同一事实。
-  if (typeof integration.archive?.resolveCommandRejection === 'function') {
-    const rejection = await integration.archive.resolveCommandRejection(thread.threadId);
-    if (rejection) {
-      return {
-        route: 'rejected',
-        error: new UserTurnDeliveryError(
-          'This thread is archived; unarchive it before sending new messages',
-          { code: rejection.code, status: rejection.status, retryable: false },
-        ),
-      };
-    }
-  }
+  const rejection = await _threadAcceptanceVerdict(thread, integration);
+  if (rejection) return { route: 'rejected', error: rejection };
 
   return { route: 'thread', thread };
 }

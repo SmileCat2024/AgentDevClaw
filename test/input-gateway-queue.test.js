@@ -16,7 +16,7 @@ import { createViewerUserTurnDeliver } from '@agentdevjs/shell-feature';
  *   - 纯 session（无线程 / 非 host / 解析失败）：原样直投 viewer user-turn。
  */
 
-const { deliverUserInput, UserTurnDeliveryError } = await import('../server/thread-control/input-gateway.js');
+const { deliverUserInput, deliverThreadInput, UserTurnDeliveryError } = await import('../server/thread-control/input-gateway.js');
 const { managedAgents } = await import('../server/shared/agent-access.js');
 const { registerThreadHostAgents } = await import('../server/thread-control/host-agents.js');
 
@@ -395,6 +395,132 @@ describe('input gateway thread-domain queueing (R6)', () => {
 
     assert.ok(result instanceof UserTurnDeliveryError);
     assert.deepEqual(submitted, ['attempted']);
+    assert.equal(integration.calls.append.length, 0);
+  });
+});
+
+/**
+ * 线程寻址输入（deliverThreadInput）：threadId 就是路由事实。
+ *
+ * 与 runtime 寻址的 deliverUserInput 共享同一套接受性判定与入箱实现，区别
+ * 只在归属怎么证明——因此**没有 head runtime 时依然能接受输入**，这正是
+ * 接续窗口（旧 head 已退役、新 head 未 ready）必备的能力。
+ */
+describe('thread-addressed input (deliverThreadInput)', () => {
+  const OPEN_THREAD = {
+    threadId: 'wt-1',
+    agentId: 'coder',
+    status: 'open',
+    headSessionId: 'session-head',
+    hold: false,
+    pendingSuccession: null,
+    commands: [],
+  };
+
+  function buildThreadIntegration(thread = OPEN_THREAD) {
+    const calls = { append: [], deliver: [] };
+    return {
+      calls,
+      core: {
+        getThread: async () => thread,
+        appendCommand: async (input) => {
+          calls.append.push(input);
+          return { command: { commandId: `cmd-${calls.append.length}` }, duplicate: false };
+        },
+      },
+      tryDeliver: async (threadId) => {
+        calls.deliver.push(threadId);
+        return { attempted: 0, delivered: 0, reason: 'runtime_not_accepting' };
+      },
+    };
+  }
+
+  it('accepts input with no head runtime in place (succession window) and keeps it pending', async () => {
+    // 没有任何 managed runtime 注册：runtime 寻址路径此时连归属都反查不出，
+    // 线程寻址路径必须仍能判定「这是 wt-1 的输入」并把指令放进 Inbox。
+    const integration = buildThreadIntegration();
+
+    const result = await deliverThreadInput(
+      { threadId: 'wt-1', text: '接续期间的输入', source: 'chat-composer' },
+      { integration },
+    );
+
+    assert.equal(result.delivery, 'thread_queued');
+    assert.equal(result.threadId, 'wt-1');
+    assert.equal(integration.calls.append.length, 1);
+    assert.equal(integration.calls.append[0].text, '接续期间的输入');
+    // 投递尝试发生了，但客观门禁（无承接 runtime）拦下：送达是独立结果，
+    // 不是接受的附加条件
+    assert.equal(result.deliveryAttempt.delivered, 0);
+    assert.deepEqual(integration.calls.deliver, ['wt-1']);
+  });
+
+  it('carries images and turn metadata into the inbox (same shape as the runtime-addressed path)', async () => {
+    const integration = buildThreadIntegration();
+
+    await deliverThreadInput(
+      {
+        threadId: 'wt-1',
+        text: '看这张图',
+        images: [{ path: '/uploads/a.png', mediaType: 'image/png' }],
+        turnMetadata: { 'session-reference': [{ sessionId: 's-7' }] },
+      },
+      { integration },
+    );
+
+    // 对象形式的附件在入箱前转成路径数组（框架 appendCommand 只认字符串）
+    assert.deepEqual(integration.calls.append[0].images, ['/uploads/a.png']);
+    assert.deepEqual(integration.calls.append[0].metadata, { 'session-reference': [{ sessionId: 's-7' }] });
+  });
+
+  it('rejects a missing thread with thread_not_found instead of silently accepting', async () => {
+    const integration = buildThreadIntegration(null);
+
+    await assert.rejects(
+      deliverThreadInput({ threadId: 'wt-gone', text: 'x' }, { integration }),
+      (error) => error instanceof UserTurnDeliveryError && error.code === 'thread_not_found',
+    );
+    assert.equal(integration.calls.append.length, 0);
+  });
+
+  it('rejects input for a closed thread (terminal state has no future delivery trigger)', async () => {
+    const integration = buildThreadIntegration({ ...OPEN_THREAD, status: 'closed' });
+
+    await assert.rejects(
+      deliverThreadInput({ threadId: 'wt-1', text: 'late' }, { integration }),
+      (error) => error instanceof UserTurnDeliveryError && error.code === 'thread_closed',
+    );
+    assert.equal(integration.calls.append.length, 0);
+  });
+
+  it('rejects input while the thread is being deleted', async () => {
+    const integration = buildThreadIntegration({ ...OPEN_THREAD, deleting: true });
+
+    await assert.rejects(
+      deliverThreadInput({ threadId: 'wt-1', text: 'x' }, { integration }),
+      (error) => error instanceof UserTurnDeliveryError && error.code === 'thread_deleting',
+    );
+    assert.equal(integration.calls.append.length, 0);
+  });
+
+  it('rejects input for an archived thread through the shared archive verdict', async () => {
+    const integration = buildThreadIntegration();
+    integration.archive = { resolveCommandRejection: async () => ({ code: 'thread_archived', status: 409 }) };
+
+    await assert.rejects(
+      deliverThreadInput({ threadId: 'wt-1', text: 'x' }, { integration }),
+      (error) => error instanceof UserTurnDeliveryError && error.code === 'thread_archived',
+    );
+    assert.equal(integration.calls.append.length, 0);
+  });
+
+  it('rejects empty input before appending anything', async () => {
+    const integration = buildThreadIntegration();
+
+    await assert.rejects(
+      deliverThreadInput({ threadId: 'wt-1', text: '   ' }, { integration }),
+      (error) => error instanceof UserTurnDeliveryError && error.code === 'invalid_input',
+    );
     assert.equal(integration.calls.append.length, 0);
   });
 });

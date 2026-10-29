@@ -736,71 +736,40 @@ async function submitQueuedInput() {
       _clearRecapForNewMessage();
       window.refreshThreads?.(true);
       updateQueueIndicator();
-      const delivered = Number(result?.delivery?.delivered) > 0;
-      window.ClawToast?.show?.({
-        id: `thread-input-${activeConversation.threadId}`,
-        status: delivered ? 'success' : 'info',
-        title: currentLanguage === 'zh'
-          ? (delivered ? '已发送' : '已发送，等待接续')
-          : (delivered ? 'Sent' : 'Sent, waiting for continuation'),
-        autoDismiss: 4000,
-      });
-      return;
-    }
-
-    // 线程路由快路径（coder 宿主）：交接窗口 / 非 head 会话时输入改走
-    // Thread Inbox（服务端 input-gateway 是兜底真相，此处拦截只为即时
-    // 暂存气泡反馈）。viewer 排队语义只对健康 runtime 有意义，不适用。
-    const threadRoute = (typeof window.resolveThreadInputRoute === 'function')
-      ? window.resolveThreadInputRoute()
-      : { route: 'direct' };
-    if (threadRoute.route === 'thread') {
-      if (images.length > 0) {
-        throw new Error(currentLanguage === 'zh'
-          ? '会话交接进行中：暂不支持图片输入，请在新会话就绪后重发'
-          : 'Session handoff in progress: image input is not supported yet');
-      }
-      // Thread Inbox command 契约已携带 user-turn metadata：会话引用随指令
-      // 入箱，投递时经 bridge 转发，与直投域行为一致
-      if (!text && (window.SessionReference?.peek?.() || []).length === 0) throw new Error('empty input');
-      sessionRefs = window.SessionReference?.consume?.() || [];
-      const threadTurnMetadata = sessionRefs.length > 0
-        ? { 'session-reference': sessionRefs }
-        : null;
-      capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
-      const threadResult = await window.submitThreadCommand(threadRoute.thread.threadId, text || ' ', {
-        ...(capabilityActivations?.length ? { capabilityActivations } : {}),
-        ...(threadTurnMetadata ? { metadata: threadTurnMetadata } : {}),
-      });
-      // await 期间 composer 端点可能翻转（textarea id 随模式切换），但节点
-      // 常驻不重建。定位当前 live textarea（优先 persistent 端点，端点已切换
-      // 时回落到容器内唯一 composer 输入框），并校验仍属同一会话：否则已发送
-      // 文本残留，且会话切换前的草稿写回会让它"复活"。
-      const liveTextarea0 = document.getElementById('input-persistent')
-        || document.querySelector('.user-input-textarea:not([disabled])');
-      if (liveTextarea0
-        && (liveTextarea0.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
-        liveTextarea0.value = '';
-        autoResize(liveTextarea0);
-      }
-      if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
-      _clearRecapForNewMessage();
-      window.refreshThreads?.(true);
-      updateQueueIndicator();
-      // 入箱后服务端会做即时投递尝试：已送达当前承接会话时如实反馈，
-      // 仅真滞留（交接挡板 / runtime 未就绪）才提示已暂存等接续。
-      if (Number(threadResult?.delivery?.delivered) > 0) {
-        window.ClawToast?.show?.({
-          id: `thread-delivered-${threadRoute.thread.threadId}`,
-          status: 'success',
-          title: currentLanguage === 'zh' ? '已投递到线程当前会话' : 'Delivered to the current thread session',
-          autoDismiss: 3200,
-        });
+      // 线程寻址端点只回答两件事：输入是否被接住（HTTP 成功 = 是），以及
+      // 本次投递尝试是否当场送达（deliveryAttempt.delivered）。交接挡板 /
+      // head runtime 未就绪时 delivered=0 是正常状态——指令已在 Thread Inbox，
+      // 由 runtime-ready / head 推进触发点补投。
+      //
+      // 因此：送达 = 安静成功（不弹常驻提示）；未送达 = 提示「已暂存」。
+      // 正常对话的成功发送不弹 toast。
+      const delivered = Number(result?.deliveryAttempt?.delivered) > 0;
+      if (delivered) {
+        // 与直投成功路径同构：清打断抑制、标记 call 已开始（发送按钮转停止）、
+        // 跟随最新。线程域投递经 bridge 转 viewer user-turn，无法区分 viewer
+        // 直投与忙时排队，故不做乐观回显（避免与排队气泡重复），消息由
+        // 立即轮询 / SSE 回流。
+        if (targetRuntimeId) {
+          clearInterruptSuppression(targetRuntimeId);
+          _markAgentCallStartedForNotify(targetRuntimeId);
+          _agentCallActive.set(targetRuntimeId, true);
+          _syncPersistentActionButton();
+          renderAgentList();
+        }
+        if (isSessionViewTokenCurrent(viewToken)) {
+          if (typeof beginFollowLatestEntryWindow === 'function') beginFollowLatestEntryWindow();
+          if (typeof requestFollowLatest === 'function') {
+            requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+          }
+          window.ClawFW?.requestImmediatePoll?.();
+        }
       } else {
         window.ClawToast?.show?.({
-          id: `thread-staged-${threadRoute.thread.threadId}`,
+          id: `thread-staged-input-${activeConversation.threadId}`,
           status: 'info',
-          title: currentLanguage === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
+          title: currentLanguage === 'zh'
+            ? '已暂存 · 新会话就绪后自动继续'
+            : 'Staged · will continue in the successor session',
           autoDismiss: 5000,
         });
       }

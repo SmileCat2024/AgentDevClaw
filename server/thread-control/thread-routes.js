@@ -4,9 +4,10 @@
  * 提供线程的创建 / 查询 / 指令追加 / head 推进 / 投递尝试 / 取消，
  * 以及归档（收纳语义：线程层标记，成员会话不动，拒绝新投递）。
  *
- * 线程寻址输入（POST /:threadId/input）：threadId → head runtime 的服务端
- * 解析 + 统一输入网关（ADR-0024 决策 3）；调用方不计算目标 session /
- * viewer id，发送竞态在服务端收敛。
+ * 线程寻址输入（POST /:threadId/input）：threadId 即路由事实，交给统一输入
+ * 网关（ADR-0024 决策 3）完成接受性判定与入箱，不看 head runtime 是否存在；
+ * 调用方不计算目标 session / viewer id。head runtime 的唤起与补投是接受之后
+ * 的承接点保障，成败只作为事实回报，不改变「输入已被接住」这一结果。
  *
  * 宿主判定是会话级的（host-agents.js：agent + sessionType 组合）；
  * 生命状态为推导值（thread-life-state.js 四态合成），随列表/详情响应附带。
@@ -20,7 +21,7 @@
 
 import { createHash } from 'node:crypto';
 import { synthesizeThreadLifeState } from './thread-life-state.js';
-import { deliverUserInput } from './input-gateway.js';
+import { deliverThreadInput } from './input-gateway.js';
 import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
 
 /**
@@ -34,8 +35,9 @@ import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-e
  *   由宿主唤起（startManagedAgent + ready 等待）；返回 { ok: true } 或 { ok: false, code, message }。
  *   就绪闸失败时指令仍入箱（等下一次触发点），但响应带 runtimeWake 失败事实。
  * @param {Function} [options.deliverInput] 线程寻址输入端点的投递入口（默认统一
- *   网关 deliverUserInput；测试注入替身）。生产语义：全部路由判定（head 健康 →
- *   直投；交接窗口 / 非 head → Inbox 暂存；终态 → 拒绝）由网关复用。
+ *   网关 deliverThreadInput；测试注入替身）。生产语义：接受性判定（closed /
+ *   归档 / 删除中 / 参数问题）与入箱由网关以 Thread 记录为路由事实完成，
+ *   不依赖 head runtime 是否存在——runtime 唤起的成败只是承接点事实。
  * @param {Function} [options.publishThreadEvent] thread 事件发布（DI；缺省模块级
  *   publishThreadEvent，无订阅者时 no-op）
  * @param {Function} [options.assertThreadQuota] 线程并发上限检查（ADR-0027 修订一）：
@@ -55,7 +57,7 @@ import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-e
  *   重复读索引（PH 线程化后 1400+ 线程 → 近 3000 次 mkdir+stat），是列表
  *   延迟的主要组成。不注入时回退逐线程解析（保持既有注入方兼容）。
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, deliverInput = deliverUserInput, publishThreadEvent = publishThreadEventDefault, assertThreadQuota } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, deliverInput = deliverThreadInput, publishThreadEvent = publishThreadEventDefault, assertThreadQuota } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -471,52 +473,22 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
     }
   });
 
-  // ── 线程寻址输入（ADR-0024 决策 3：threadId → head → 统一网关）──────
+  // ── 线程寻址输入（ADR-0024 决策 3：threadId → Thread → 统一网关）──────
+
+  /** head runtime 的 viewer id（运行中且当前绑定 head 会话）；无则 null。 */
+  const _resolveHeadViewerId = (thread) => (thread && typeof control.resolveSessionViewerId === 'function'
+    ? control.resolveSessionViewerId(thread.agentId, thread.headSessionId)
+    : null);
 
   app.post('/protoclaw/threads/:threadId/input', jsonMiddleware, async (req, res) => {
     try {
       const { text, images, source, sourceRef, kind, capabilityActivations, metadata } = req.body || {};
-      const thread = await core.getThread(req.params.threadId);
-      if (!thread) {
-        return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
-      }
-      // head runtime 解析与列表 / 详情的 headViewerAgentId 同源：运行中且当前
-      // 绑定 head 会话。未运行时先经就绪闸唤起（与 commands 端点同语义）——
-      // 网关以 viewer id 反查路由，无 runtime 即无投递承接点。
-      const _resolveHeadViewerId = () => (typeof control.resolveSessionViewerId === 'function'
-        ? control.resolveSessionViewerId(thread.agentId, thread.headSessionId)
-        : null);
-      let headViewerAgentId = _resolveHeadViewerId();
-      let runtimeWake = null;
-      if (!headViewerAgentId && typeof ensureHeadRuntime === 'function' && thread.headSessionId) {
-        const wake = await ensureHeadRuntime(thread.agentId, thread.headSessionId).catch((error) => ({
-          ok: false,
-          code: 'runtime_wake_failed',
-          message: String(error?.message || error),
-        }));
-        if (wake?.ok) {
-          headViewerAgentId = _resolveHeadViewerId();
-        } else {
-          runtimeWake = { ok: false, code: wake?.code || 'runtime_wake_failed', message: wake?.message || 'head runtime not available' };
-        }
-      }
-      // 唤起失败 / 未注入就绪闸且 runtime 不在：commands 端点此时仍入箱
-      // （appendCommand 不依赖 runtime，runtime-ready 触发点后续补投），本
-      // 端点不能伪装暂存——thread_queued 只在网关能判定线程域事实时出现，
-      // 这里显式失败并把唤起事实交还调用方（可重试 / 可修复）。
-      if (!headViewerAgentId) {
-        return res.status(503).json({
-          ok: false,
-          code: runtimeWake?.code || 'head_runtime_unavailable',
-          message: runtimeWake?.message || 'head runtime is not running and could not be woken',
-          ...(runtimeWake ? { runtimeWake } : {}),
-        });
-      }
-      // 投递的全部路由判定（head 健康 → 直投；交接窗口 → Inbox 暂存；终态 /
-      // 归档 / 非 head → 拒绝）复用统一网关；输入身份（user / reminder）由
-      // 网关归一映射为 command turn 身份槽位。
+      // 接受性判定与入箱在网关内、以 Thread 记录为路由事实完成：本端点不先
+      // 反查 head runtime 再决定收不收。接续窗口里旧 head 已退役、新 head 未
+      // ready 是正常状态，runtime 不存在不该让输入无法被接住——否则「暂存等
+      // 接续」的能力恰好在最需要它的时候失效。
       const result = await deliverInput({
-        viewerAgentId: headViewerAgentId,
+        threadId: req.params.threadId,
         text: typeof text === 'string' ? text : '',
         ...(Array.isArray(images) ? { images } : {}),
         ...(typeof source === 'string' ? { source } : {}),
@@ -529,15 +501,37 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
           ? { turnMetadata: metadata }
           : {}),
       });
+      // 接受之后的承接点保障（best-effort，不参与接受判定，也不同步等待）：
+      // head runtime 不在时把会话拉起来，就绪后由 runtime-ready 触发点补投。
+      //
+      // 不 await：ensureHeadRuntime 会等到 runtime READY（最长 20s），同步等待
+      // 会让「发送」按钮转 20s、输入框迟迟不清空——输入其实早已被接住。回应
+      // 立即返回送达事实（多为 delivered:0），前端据此提示「已暂存」，随后由
+      // 既有的 runtime-ready / head 推进触发点把指令送出去。
+      //
+      // 交接进行中（status='rotating'）跳过：此时 runtime 的更换由接力事务自己
+      // 编排，外部再拉起旧 head 只会产生一个即将退役的实例。
+      const thread = await core.getThread(req.params.threadId).catch(() => null);
+      if (thread && thread.status !== 'rotating' && !result.deliveryAttempt?.delivered
+        && typeof ensureHeadRuntime === 'function' && thread.headSessionId
+        && !_resolveHeadViewerId(thread)) {
+        void Promise.resolve()
+          .then(() => ensureHeadRuntime(thread.agentId, thread.headSessionId))
+          .catch((error) => {
+            console.warn(
+              `[thread-input] head runtime wake failed for thread=${thread.threadId} session=${thread.headSessionId}:`,
+              error?.message || error,
+            );
+          });
+      }
       res.json({
         ok: true,
         ...result,
-        // head 事实：本次服务端解析的投递目标基础，供调用方对账（成功响应
-        // 里网关结果自带 threadId / commandId 等线程域事实）
-        threadId: thread.threadId,
-        agentId: thread.agentId,
-        headSessionId: thread.headSessionId,
-        headViewerAgentId,
+        // head 事实：本次服务端判定的投递目标基础，供调用方对账（线程域
+        // 事实 threadId / commandId 由网关结果自带）
+        agentId: thread?.agentId,
+        headSessionId: thread?.headSessionId,
+        headViewerAgentId: _resolveHeadViewerId(thread),
       });
     } catch (err) {
       _errorResponse(res, err);

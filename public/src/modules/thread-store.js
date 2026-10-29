@@ -8,10 +8,9 @@
  *   - 会话列表项渲染线程徽标（无数据时输出空串，零视觉影响）；
  *   - 顶栏指示器：当前会话属于线程时显示承接状态；非 head 会话
  *     提供显式「前往当前承接会话」入口（浏览历史时不自动跳转）；
- *   - 输入路由守卫：当前会话不是线程 head 时，输入改走 Thread Inbox
- *     （防止消息被旧 runtime 消费而丢失在线程外）；
- *   - 提供线程模式提交（submitThreadCommand → Thread Inbox）与
- *     head 推进（threadAdvanceHead）入口。
+ *   - 提供线程寻址提交（submitThreadInput → 线程输入网关）与
+ *     head 推进（threadAdvanceHead）入口。输入走哪条端点在服务端判定：
+ *     前端只回答「我在哪个对话里发言」，不接受性、不挑端点。
  *
  * 当前消费方：声明 threadHost 的 APP（coder、memo，宿主判定由服务端发现
  * 派生）。其他工作空间无线程数据，本模块所有入口均为 no-op / 空输出。
@@ -464,50 +463,6 @@ window.updateThreadHeaderIndicator = () => {
 const THREAD_HANDOFF_STALE_MS = 5 * 60 * 1000;
 
 /**
- * 本地即时信号：当前 agent 是否有进行中的「创建接续会话」侧栏操作
- * （trim / summary 最终都是 type='create'）。覆盖本页面发起的交接窗口，
- * 弥补 20s 线程轮询对「交接刚开始」的感知滞后。
- */
-function _hasActiveHandoffOperation(agentId) {
-  if (typeof findSidebarOperation !== 'function') return false;
-  return Boolean(findSidebarOperation((op) => (
-    op?.agentId === agentId
-    && op?.type === 'create'
-    && op?.phase !== 'settled'
-  )));
-}
-
-/**
- * 判定当前激活会话的输入应走哪条路径。输入三层分工：
- *
- *   意图归属 = 工作    → Thread Inbox（持久，跨会话/跨重启）
- *                仅在目标 runtime 不可靠时使用（交接窗口 / 非 head）；
- *   意图归属 = runtime → viewer user-turn（忙时进 viewer 队列，call 间排队）
- *                runtime 健康、会话是 head 时永远直走（PH 纯会话零经过）。
- *
- * - 'direct'：当前会话是线程 head（或无线程）且无交接 → 现有输入契约；
- * - 'thread'：会话已被 successor 接续（非 head），或线程正在交接
- *   （head 即将退役，此时直投的执行结果会留在旧会话、不被 successor 带走）
- *   → 改走 Thread Inbox，交接完成后由服务端投向新 head。
- */
-window.resolveThreadInputRoute = () => {
-  const active = _currentActiveSession();
-  if (!active || !active.agentId || !active.sessionId) return { route: 'direct' };
-  const thread = window.getThreadForSession(active.agentId, active.sessionId);
-  if (!thread || thread.status === 'closed') return { route: 'direct' };
-  if (active.sessionId !== thread.headSessionId) {
-    return { route: 'thread', thread, reason: 'session_not_head' };
-  }
-  // 当前会话是 head：交接窗口内它即将退役，输入必须暂存
-  const handoffFresh = Number(thread.handoffStartedAt) > 0
-    && Date.now() - Number(thread.handoffStartedAt) < THREAD_HANDOFF_STALE_MS;
-  if (handoffFresh || _hasActiveHandoffOperation(active.agentId)) {
-    return { route: 'thread', thread, reason: 'handoff_in_progress' };
-  }
-  return { route: 'direct', thread };
-};
-
-/**
  * 当前激活会话所属线程的 pending 指令文本（暂存气泡数据源）。
  * 无线程 / 无 pending 返回空数组。
  */
@@ -574,33 +529,6 @@ window.submitThreadInput = async (threadId, payload = {}) => {
     });
   }
   void window.refreshThreads?.(true);
-  return data;
-};
-
-window.submitThreadCommand = async (threadId, text, options = {}) => {
-  const idempotencyKey =
-    options.idempotencyKey ||
-    `ui-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const res = await fetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/commands`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      kind: options.kind || 'user_message',
-      text: String(text || ''),
-      source: options.source || 'ui',
-      idempotencyKey,
-      ...(Array.isArray(options.capabilityActivations) && options.capabilityActivations.length > 0
-        ? { capabilityActivations: options.capabilityActivations }
-        : {}),
-      ...(options.metadata && typeof options.metadata === 'object' && !Array.isArray(options.metadata)
-        ? { metadata: options.metadata }
-        : {}),
-    }),
-  });
-  const data = await res.json().catch(() => null);
-  if (!res.ok || !data?.ok) {
-    throw new Error(data?.message || `submitThreadCommand failed (${res.status})`);
-  }
   return data;
 };
 

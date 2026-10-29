@@ -92,7 +92,7 @@
 | 12 | 会话草稿缓存 | **voice-input.js**（错位） | oninput 写入 / 重建回填 |
 | 13 | 焦点与光标保持 | input-render | 重建前后记录/恢复 |
 | 14 | 打断粘性状态机 | persistent-input + runtime-status 通知栏联动 | interrupt 请求发出 → 粘性到 call 终态 |
-| 15 | Thread Inbox 路由 | persistent-input / input-helpers | `resolveThreadInputRoute` 快路径 + 服务端兜底 |
+| 15 | 线程寻址输入 | persistent-input | 对话有 threadId 即走 `submitThreadInput`（服务端网关判接受性） |
 | 16 | follow-latest 视口联动 | 提交成功后强制开启 | chat-viewport mutation 通知 |
 | 17 | 侧栏 agent 列表副作用 | persistent-input 提交/打断后调 `renderAgentList()` | 乐观 calling 标记 |
 | 18 | 桌面通知权限申请 | persistent-input 提交时申请；desktop-notify 拥有状态 | 首次发送（用户手势内） |

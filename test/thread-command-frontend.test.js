@@ -4,34 +4,40 @@ import assert from 'node:assert/strict';
 import { createFrontendSandbox, sourceBetween } from './helpers/frontend-vm.js';
 
 /**
- * 线程域提交入口的字段透传与失败归还（frontend 沙箱）：
- * - submitThreadCommand：合法 metadata 进入序列化 body；数组形态不产生字段
+ * 线程寻址输入的前端契约（frontend 沙箱）：
+ * - submitThreadInput 的字段透传：合法 metadata / 激活进入序列化 body，非法形态不产生字段
  * - submitInput 线程分支失败：已 consume 的会话引用与激活归还（P1 回归锁）
  */
 
-function loadSubmitThreadCommand(ctx) {
+function loadSubmitThreadInput(ctx) {
   const source = fs.readFileSync('public/src/modules/thread-store.js', 'utf8');
-  ctx.run(sourceBetween(source, 'window.submitThreadCommand = async (threadId, text, options = {}) => {', 'window.threadAdvanceHead'));
+  ctx.run(sourceBetween(source, 'window.submitThreadInput = async (threadId, payload = {}) => {', 'window.threadAdvanceHead'));
 }
 
-describe('submitThreadCommand metadata passthrough (frontend sandbox)', () => {
-  it('serializes valid metadata into the commands route body', async () => {
+describe('submitThreadInput field passthrough (frontend sandbox)', () => {
+  it('serializes valid metadata and activations into the input route body', async () => {
     const bodies = [];
     const ctx = createFrontendSandbox({
       fetch: async (_url, init) => {
         bodies.push(JSON.parse(init.body));
-        return { ok: true, json: async () => ({ ok: true, command: { commandId: 'cmd-1' }, duplicate: false }) };
+        return { ok: true, json: async () => ({ ok: true, threadId: 'th-1', commandId: 'cmd-1', deliveryAttempt: { delivered: 1 } }) };
       },
     });
-    loadSubmitThreadCommand(ctx);
+    loadSubmitThreadInput(ctx);
 
     const metadata = { 'session-reference': [{ agentId: 'programming-helper', sessionId: 'session-1' }] };
-    await ctx.run(`window.submitThreadCommand('wt-1', '带引用', {
+    await ctx.run(`window.submitThreadInput('th-1', {
+      text: '带引用',
+      images: [{ path: '/uploads/a.png', mediaType: 'image/png' }],
+      source: 'chat-composer',
       capabilityActivations: ['skill.grill-me'],
       metadata: ${JSON.stringify(metadata)},
     })`);
 
     assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].text, '带引用');
+    assert.deepEqual(bodies[0].images, [{ path: '/uploads/a.png', mediaType: 'image/png' }],
+      'images must reach the thread input route (the commands route does not accept them)');
     assert.deepEqual(bodies[0].capabilityActivations, ['skill.grill-me']);
     assert.deepEqual(bodies[0].metadata, metadata);
   });
@@ -41,12 +47,12 @@ describe('submitThreadCommand metadata passthrough (frontend sandbox)', () => {
     const ctx = createFrontendSandbox({
       fetch: async (_url, init) => {
         bodies.push(JSON.parse(init.body));
-        return { ok: true, json: async () => ({ ok: true, command: { commandId: 'cmd-2' }, duplicate: false }) };
+        return { ok: true, json: async () => ({ ok: true, threadId: 'th-1', commandId: 'cmd-2' }) };
       },
     });
-    loadSubmitThreadCommand(ctx);
+    loadSubmitThreadInput(ctx);
 
-    await ctx.run(`window.submitThreadCommand('wt-1', '纯文本', { metadata: ['not', 'an', 'object'] })`);
+    await ctx.run(`window.submitThreadInput('th-1', { text: '纯文本', metadata: ['not', 'an', 'object'] })`);
 
     assert.equal(bodies.length, 1);
     assert.equal('metadata' in bodies[0], false);
