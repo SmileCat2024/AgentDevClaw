@@ -264,6 +264,20 @@ describe('042 创建：三组独立归属', () => {
     assert.equal(bNext.title, '新对话1');
   });
 
+  test('并发创建按提交顺序分配唯一连续编号', async () => {
+    const { helpers, dirD } = await setupCoexistenceFixture();
+    const created = await Promise.all(Array.from({ length: 8 }, () =>
+      helpers.createPrebuiltSession('programming-helper', {
+        returnSummary: false,
+        openDirectory: dirD,
+      }),
+    ));
+    assert.deepEqual(
+      created.map((session) => session.title).sort((a, b) => Number(a.slice(3)) - Number(b.slice(3))),
+      Array.from({ length: 8 }, (_, index) => `新对话${index + 1}`),
+    );
+  });
+
   test('computeNextSessionNumber 归属隔离纯函数：项目集合看 projectId，目录集合排除项目会话', () => {
     const sessions = [
       { title: '新对话2', openDirectory: '/proj' },

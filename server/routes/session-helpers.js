@@ -906,9 +906,10 @@ async function createPrebuiltSession(agentId, options = {}) {
   const startupForm = isPhStyleWorkspace ? {} : (currentState?.forms?.['startup-form'] || {});
   const sourceForm = currentState?.forms?.[requestedFormId] || startupForm;
   const sourceSessionId = cleanSessionText(options.sourceSessionId);
-  const preIndex = await readSessionIndex(agentId);
+  // 普通创建无需预读索引：标题编号在 updateSessionIndex 锁内基于最新记录
+  // 分配。只有派生创建需要读取来源记录，且使用共享只读快照避免深克隆。
   const sourceSession = sourceSessionId
-    ? preIndex.sessions.find((session) => session.id === sourceSessionId) || null
+    ? (await readSessionIndexShared(agentId)).sessions.find((session) => session.id === sourceSessionId) || null
     : null;
   const workspace = (await discoverAgents(AGENTS_ROOT)).find((entry) => entry.id === agentId);
   if (!workspace) throw Object.assign(new Error(`Unknown workspace: ${agentId}`), { statusCode: 404 });
@@ -1035,8 +1036,9 @@ async function createPrebuiltSession(agentId, options = {}) {
     ? nextAgentName
     : (normalizedAgentId === 'agent-studio' ? (nextProjectName || nextGoal) : (isPhStyleWorkspace ? '' : nextFeatureName));
   const explicitTitle = cleanSessionText(options.title);
+  const needsSequentialTitle = !explicitTitle && !nextTaskTitle && isPhStyleWorkspace;
   const nextTitle = explicitTitle || nextTaskTitle || (isPhStyleWorkspace
-    ? await getNextNewSessionTitle(agentId, nextOpenDirectory, nextProjectId)
+    ? ''
     : buildNamedSessionTitle(sessionDisplayName, createdAt));
   // 派生会话默认继承来源会话的身份；只有没有来源时才创建 main。
   // 这样 compact/summary 等 successor 路径即使未重复传参，也不会把 coder
@@ -1093,6 +1095,11 @@ async function createPrebuiltSession(agentId, options = {}) {
     updatedAt: createdAt,
   };
   const nextIndex = await updateSessionIndex(agentId, (index) => {
+    // 在写锁内使用最新索引分配编号，复用事务本来就要读取的快照；并发创建
+    // 会串行观察前一条记录，避免重复编号，也不需要创建前额外读一次索引。
+    if (needsSequentialTitle) {
+      record.title = `新对话${computeNextSessionNumber(index.sessions, nextOpenDirectory, { projectId: nextProjectId })}`;
+    }
     return {
       activeSessionId: sessionId,
       sessions: [record, ...index.sessions.filter((session) => session.id !== sessionId)],

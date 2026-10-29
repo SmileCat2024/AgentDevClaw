@@ -1082,11 +1082,8 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       studioFeatureIds: req.body.studioFeatureIds,
       targetDir: req.body.targetDir,
     });
-    // createPrebuiltSession 透传 commit 后的 index revision，免去紧随其后的
-    // readSessionIndex 全量读取。
-    const committedRevision = Number.isFinite(Number(session.indexRevision))
-      ? Number(session.indexRevision)
-      : Number((await readSessionIndex(agent.id)).revision) || 0;
+    // createPrebuiltSession 返回已提交的 index revision，避免重复读取全量索引。
+    const committedRevision = Number(session.indexRevision) || 0;
     trace.mark('index_committed', { revision: committedRevision });
     const status = await startManagedAgent(agent, session.id);
     trace.mark('target_runtime_started');
