@@ -236,6 +236,30 @@ describe('frontend renderPlanTaskList fold logic', () => {
   });
 });
 
+describe('frontend plan controls presentation', () => {
+  it('keeps run-to-here and cancellation actions on the same task', () => {
+    const ctx = createTodoSandbox();
+    const html = ctx.run(`renderPlanTask({ id: 'next', subject: 'Next', status: 'pending' })`);
+    assert.match(html, /data-action="set" data-task-id="next"/);
+    ctx.run(`currentRuntimeAgentId = 'runtime-test'; setInterruptTargetId('next')`);
+    const selected = ctx.run(`renderPlanTask({ id: 'next', subject: 'Next', status: 'pending' })`);
+    assert.match(selected, /is-interrupt-target/);
+    assert.match(selected, /data-action="cancel" data-task-id="next"/);
+  });
+
+  it('renders SVG disclosure controls with accessible expansion state', () => {
+    const ctx = createTodoSandbox();
+    const html = ctx.run(`renderPlanTask({ id: 'done', subject: 'Done', description: 'Details', status: 'completed' })`);
+    assert.match(html, /role="button" tabindex="0" aria-expanded="false"/);
+    assert.match(html, /<svg class="plan-task-check"/);
+    assert.match(html, /<svg class="plan-task-detail-chev/);
+    const fold = ctx.run('renderPlanFoldButton(3, 0, true)');
+    assert.match(fold, /aria-expanded="true"/);
+    assert.match(fold, /<svg class="plan-fold-chev"/);
+    assert.ok(!html.includes('▸') && !fold.includes('▸'));
+  });
+});
+
 describe('frontend terminal task detail expansion', () => {
   function mkTask(id, status, desc) {
     return { id, subject: 'T' + id, description: desc, status, metadata: {}, createdAt: 0, updatedAt: 0 };

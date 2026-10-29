@@ -101,7 +101,7 @@ function renderPlanTask(task) {
   const taskId = String(task?.id || '');
   const isInterruptTarget = !isTerminal && getInterruptTargetId() === taskId;
   const meta = [
-    '#' + escapeHtml(taskId),
+    '#' + taskId,
     getTodoStatusLabel(status),
   ].filter(Boolean).join(' · ');
   const desc = task?.description || '';
@@ -114,18 +114,20 @@ function renderPlanTask(task) {
   const detail = detailOpen ? desc : '';
   const marker = status === 'in_progress'
     ? '<div class="plan-task-spinner"></div>'
-    : '<div class="plan-task-dot"></div>';
+    : status === 'completed'
+      ? '<svg class="plan-task-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6"/></svg>'
+      : '<div class="plan-task-dot"></div>';
   const actionBtn = isTerminal ? '' : (isInterruptTarget
-    ? '<button class="plan-task-action" data-todo-interrupt data-action="cancel" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '取消执行' : 'Cancel') + '</button>'
-    : '<button class="plan-task-action" data-todo-interrupt data-action="set" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '执行到此处' : 'Run to here') + '</button>');
+    ? '<button type="button" class="plan-task-action" data-todo-interrupt data-action="cancel" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '取消执行' : 'Cancel') + '</button>'
+    : '<button type="button" class="plan-task-action" data-todo-interrupt data-action="set" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '执行到此处' : 'Run to here') + '</button>');
   const interruptLabel = isInterruptTarget ? '<span class="plan-task-interrupt-label">' + (currentLanguage === 'zh' ? '执行到此为止' : 'Stop here') + '</span>' : '';
   const detailChev = canToggleDetail
-    ? '<span class="plan-task-detail-chev' + (detailOpen ? ' is-open' : '') + '" aria-hidden="true">▸</span>'
+    ? '<svg class="plan-task-detail-chev' + (detailOpen ? ' is-open' : '') + '" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>'
     : '';
   return [
     '<article class="plan-task status-' + escapeHtml(status.replace(/[^a-z0-9_-]/gi, '-')) + (isTerminal ? ' is-terminal' : '') + (isInterruptTarget ? ' is-interrupt-target' : '') + '"'
-    + (canToggleDetail ? ' data-plan-task-detail="' + escapeHtml(taskId) + '"' : '') + '>',
-    '<div class="plan-task-marker">' + marker + '</div>',
+    + (canToggleDetail ? ' data-plan-task-detail="' + escapeHtml(taskId) + '" role="button" tabindex="0" aria-expanded="' + String(detailOpen) + '"' : '') + '>',
+    '<div class="plan-task-marker" aria-hidden="true">' + marker + '</div>',
     '<div class="plan-task-main">',
     '<div class="plan-task-title">' + escapeHtml(task?.subject || '') + interruptLabel + detailChev + '</div>',
     detail ? '<div class="plan-task-desc">' + escapeHtml(detail) + '</div>' : '',
@@ -164,8 +166,8 @@ function getTerminalRuns(tasks) {
 }
 
 function renderPlanFoldButton(foldCount, runStart, expanded) {
-  return '<button class="plan-fold' + (expanded ? ' is-open' : '') + '" data-plan-toggle-run="' + String(runStart) + '">'
-    + '<span class="plan-fold-chev" aria-hidden="true">▸</span>'
+  return '<button type="button" class="plan-fold' + (expanded ? ' is-open' : '') + '" data-plan-toggle-run="' + String(runStart) + '" aria-expanded="' + String(expanded) + '">'
+    + '<svg class="plan-fold-chev" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>'
     + '<span>' + escapeHtml(t(expanded ? 'plan_fold_collapse' : 'plan_fold_expand').replace('{n}', String(foldCount))) + '</span>'
     + '</button>';
 }
@@ -263,6 +265,15 @@ async function sendTodoControl(taskId) {
   }
 }
 
+// 终态行是轻量 disclosure，键盘与点击走同一条交互路径。
+featurePanelBody.addEventListener('keydown', (e) => {
+  const detailTarget = e.target.closest('[data-plan-task-detail]');
+  if (detailTarget && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    detailTarget.click();
+  }
+});
+
 featurePanelBody.addEventListener('click', (e) => {
   const detailTarget = e.target.closest('[data-plan-task-detail]');
   if (detailTarget) {
@@ -275,6 +286,9 @@ featurePanelBody.addEventListener('click', (e) => {
     _planTerminalDetailState.set(taskId, nowOpen);
     if (activeFeaturePanel === 'plan') {
       renderFeaturePanel();
+      const row = Array.from(featurePanelBody.querySelectorAll('[data-plan-task-detail]'))
+        .find(element => element.dataset.planTaskDetail === taskId);
+      if (row) row.focus({ preventScroll: true });
     }
     return;
   }
@@ -299,9 +313,9 @@ featurePanelBody.addEventListener('click', (e) => {
     }
     if (activeFeaturePanel === 'plan') {
       renderFeaturePanel();
-      // 展开态按钮固定在段首：锚定回按钮位置，阅读位置连续
+      // 只更新下方内容，不主动滚动；键盘操作后焦点仍留在原折叠入口。
       const btn = featurePanelBody.querySelector('[data-plan-toggle-run="' + String(runStart) + '"]');
-      if (btn) btn.scrollIntoView({ block: 'start' });
+      if (btn) btn.focus({ preventScroll: true });
     }
     return;
   }

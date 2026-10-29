@@ -5484,27 +5484,32 @@ body[data-theme="light"] .logf-json {
 }
 
 .plan-summary {
-  padding: 2px 2px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-}
-
-body[data-theme="light"] .plan-summary {
-  border-bottom-color: rgba(0,0,0,0.08);
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--glass-border);
 }
 
 .plan-summary-line {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 8px 16px;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.5;
+}
+
+.plan-summary-line > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
 }
 
 .plan-summary-line strong {
   color: var(--text-primary);
-  font-weight: 650;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .plan-task-list {
@@ -5512,48 +5517,39 @@ body[data-theme="light"] .plan-summary {
   padding: 2px 0 4px;
 }
 
-/* 折叠按钮：无边框胶囊、中性色阶（默认低调、hover 微升一档），无彩色 */
+/* 折叠入口沿用 rail 的轻量行内操作，不另叠胶囊容器。 */
 .plan-fold {
   display: flex;
   align-items: center;
-  gap: 6px;
-  width: fit-content;
+  gap: 8px;
+  width: 100%;
   max-width: 100%;
-  margin: 2px auto 6px;
-  padding: 4px 14px;
+  min-height: 28px;
+  margin: 0 0 6px;
+  padding: 4px 2px;
   border: none;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.05);
-  font-size: 11.5px;
-  line-height: 1.35;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
   color: var(--text-secondary);
   cursor: pointer;
-  user-select: none;
   transition: background 0.16s ease, color 0.16s ease;
 }
 
 .plan-fold:hover {
-  background: rgba(255,255,255,0.1);
   color: var(--text-primary);
 }
 
 .plan-fold-chev {
-  display: inline-block;
-  font-size: 10px;
-  line-height: 1;
+  flex-shrink: 0;
   transition: transform 0.18s ease;
 }
 
 .plan-fold.is-open .plan-fold-chev {
   transform: rotate(90deg);
-}
-
-body[data-theme="light"] .plan-fold {
-  background: rgba(0,0,0,0.045);
-}
-
-body[data-theme="light"] .plan-fold:hover {
-  background: rgba(0,0,0,0.08);
 }
 
 .plan-task {
@@ -5565,7 +5561,8 @@ body[data-theme="light"] .plan-fold:hover {
 }
 
 .plan-task.is-terminal {
-  padding: 4px 0 7px;
+  padding-top: 4px;
+  padding-bottom: 8px;
 }
 
 .plan-task-marker {
@@ -5576,27 +5573,23 @@ body[data-theme="light"] .plan-fold:hover {
 }
 
 .plan-task.is-terminal .plan-task-marker {
-  padding-top: 5px;
+  padding-top: 2px;
 }
 
 .plan-task-marker::after {
   content: "";
   position: absolute;
-  top: 18px;
-  bottom: -14px;
+  top: 24px;
+  bottom: -16px;
   left: 50%;
   width: 1px;
   transform: translateX(-50%);
-  background: rgba(255,255,255,0.12);
-}
-
-body[data-theme="light"] .plan-task-marker::after {
-  background: rgba(0,0,0,0.12);
+  background: var(--glass-border);
 }
 
 .plan-task.is-terminal .plan-task-marker::after {
-  top: 15px;
-  bottom: -9px;
+  top: 22px;
+  bottom: -8px;
 }
 
 .plan-task:last-child .plan-task-marker::after {
@@ -5604,39 +5597,33 @@ body[data-theme="light"] .plan-task-marker::after {
 }
 
 .plan-task-dot {
-  width: 9px;
-  height: 9px;
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  border: 1px solid var(--text-secondary);
   border-radius: 999px;
-  background: var(--text-secondary);
 }
 
 .plan-task-spinner {
-  width: 13px;
-  height: 13px;
-  border: 2px solid rgba(88,166,255,0.22);
-  border-top-color: #58a6ff;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--accent-bg);
+  border-top-color: var(--accent-text);
   border-radius: 999px;
   animation: spin 0.85s linear infinite;
 }
 
-.plan-task.status-in_progress .plan-task-dot {
-  background: #58a6ff;
-}
-
-.plan-task.status-pending .plan-task-dot {
-  background: var(--text-secondary);
-}
-
-.plan-task.status-completed .plan-task-dot {
-  background: #3fb950;
+.plan-task-check {
+  color: var(--text-secondary);
 }
 
 .plan-task.status-deleted .plan-task-dot {
+  width: 10px;
+  height: 1px;
+  margin-top: 8px;
+  border: none;
+  border-radius: 0;
   background: var(--text-secondary);
-}
-
-.plan-task.is-blocked .plan-task-dot {
-  background: #d29922;
 }
 
 .plan-task-main {
@@ -5646,19 +5633,19 @@ body[data-theme="light"] .plan-task-marker::after {
 .plan-task-title {
   color: var(--text-primary);
   font-size: 14px;
-  line-height: 1.35;
-  font-weight: 560;
+  line-height: 1.5;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .plan-task.is-terminal .plan-task-title {
   color: var(--text-secondary);
   font-size: 13px;
-  line-height: 1.2;
   font-weight: 500;
+}
+
+.plan-task.status-deleted .plan-task-title {
   text-decoration: line-through;
-  text-decoration-thickness: 1px;
-  text-decoration-color: currentColor;
 }
 
 .plan-task.is-terminal .plan-task-desc {
@@ -5671,41 +5658,36 @@ body[data-theme="light"] .plan-task-marker::after {
 }
 
 .plan-task-desc {
-  margin-top: 5px;
+  margin-top: 6px;
   color: var(--text-secondary);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.6;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .plan-task-meta {
-  margin-top: 7px;
+  margin-top: 8px;
   color: var(--text-secondary);
   font-size: 11px;
-  line-height: 1.2;
+  line-height: 1.5;
 }
 
 /* ── 已完成任务：点击展开详情 ── */
 
 .plan-task.is-terminal[data-plan-task-detail] {
   cursor: pointer;
-  border-radius: 6px;
 }
 
-.plan-task.is-terminal[data-plan-task-detail]:hover {
-  margin: 0 -6px;
-  padding-left: 6px;
-  padding-right: 6px;
-  background: var(--hover-bg);
+.plan-task.is-terminal[data-plan-task-detail]:hover .plan-task-title {
+  color: var(--text-primary);
 }
 
 .plan-task-detail-chev {
   display: inline-block;
   margin-left: 6px;
-  font-size: 10px;
-  line-height: 1;
+  vertical-align: -2px;
   color: var(--text-secondary);
-  opacity: 0.7;
   transition: transform 0.18s ease;
 }
 
@@ -5713,99 +5695,85 @@ body[data-theme="light"] .plan-task-marker::after {
   transform: rotate(90deg);
 }
 
-/* ── 完成后停止：hover 高亮 + 中断目标标记 ── */
-
-.plan-task:not(.is-terminal):hover {
-  margin: 0 -6px;
-  padding-left: 6px;
-  padding-right: 6px;
-  border-radius: 6px;
-  background: var(--hover-bg);
-}
-
+/* 停止位置的选择底包住时间轴节点与正文。
+   底层挂在整行而非正文上，不参与排版，选中前后坐标不变。 */
 .plan-task.is-interrupt-target {
-  margin: 0 -6px;
-  padding-left: 6px;
-  padding-right: 6px;
-  border-radius: 6px;
-  background: rgba(255, 193, 7, 0.06);
+  isolation: isolate;
 }
 
-body[data-theme="light"] .plan-task.is-interrupt-target {
-  background: rgba(255, 193, 7, 0.04);
+.plan-task.is-interrupt-target::before {
+  content: "";
+  position: absolute;
+  inset: 2px -8px 6px;
+  z-index: -1;
+  border-radius: 8px;
+  background: linear-gradient(110deg,
+    color-mix(in srgb, var(--text-primary) 4%, transparent),
+    transparent 90%);
+  pointer-events: none;
 }
 
 .plan-task.is-interrupt-target .plan-task-dot {
-  background: var(--warning-color) !important;
-  box-shadow: 0 0 6px rgba(255, 193, 7, 0.4);
+  border-color: var(--accent-text);
+  background: var(--accent-bg);
 }
 
 .plan-task-interrupt-label {
-  margin-left: 6px;
+  display: inline-block;
+  margin-left: 8px;
+  color: var(--accent-text);
   font-size: 11px;
   font-weight: 500;
-  color: var(--warning-color);
 }
 
-/* 按钮位于描述/元信息下方（原位置）、文档流内，不预留空白。
-   hover 时出现，卡片随之向下扩展（底部下移）。 */
+/* timeline 行内操作：与选中底同用中性微光，保持紧凑和固定几何。 */
 .plan-task-action {
-  display: none;
+  display: inline-flex;
   align-items: center;
-  width: fit-content;
-  margin-top: 6px;
-  padding: 3px 10px;
-  border: 1px solid var(--border-color);
+  max-width: 100%;
+  min-height: 24px;
+  margin: 8px 0 0;
+  padding: 2px 8px;
+  border: 1px solid var(--glass-border);
   border-radius: 6px;
-  background: rgba(255,255,255,0.04);
-  font-size: 11px;
-  line-height: 1.3;
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
   color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
   cursor: pointer;
-  white-space: nowrap;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  transition: color 0.16s ease, background 0.16s ease;
 }
 
 .plan-task-action:hover {
-  background: rgba(255,255,255,0.09);
-  border-color: rgba(255,255,255,0.25);
   color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
 }
 
 .plan-task.is-interrupt-target .plan-task-action {
-  display: inline-flex;
-  border-color: rgba(255,193,7,0.4);
-  background: rgba(255,193,7,0.08);
-  color: var(--warning-color);
+  color: var(--text-primary);
 }
 
-.plan-task.is-interrupt-target .plan-task-action:hover {
-  background: rgba(255,193,7,0.15);
-  color: var(--warning-color);
+.plan-fold:focus-visible,
+.plan-task[data-plan-task-detail]:focus-visible,
+.plan-task-action:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
 }
 
-.plan-task:not(.is-terminal):hover .plan-task-action {
-  display: inline-flex;
-}
+@media (prefers-reduced-motion: reduce) {
+  .plan-task,
+  .plan-fold,
+  .plan-task-action,
+  .plan-task-detail-chev,
+  .plan-fold-chev {
+    transition: none;
+  }
 
-body[data-theme="light"] .plan-task-action {
-  background: #ffffff;
-  border-color: #d0d0d0;
-}
-
-body[data-theme="light"] .plan-task-action:hover {
-  background: #f0f0f0;
-  border-color: #b0b0b0;
-}
-
-body[data-theme="light"] .plan-task.is-interrupt-target .plan-task-action {
-  border-color: rgba(210, 153, 34, 0.45);
-  background: rgba(210, 153, 34, 0.08);
-  color: var(--warning-color);
-}
-
-body[data-theme="light"] .plan-task.is-interrupt-target .plan-task-action:hover {
-  background: rgba(210, 153, 34, 0.16);
+  .plan-task-spinner {
+    animation: none;
+  }
 }
 
 .plan-empty {
