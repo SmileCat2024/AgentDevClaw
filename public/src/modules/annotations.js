@@ -452,15 +452,40 @@
 
   let popoverEl = null;
   let popoverCtx = null;
+  let popoverRawText = '';   // 弹工具条时的选区原始文本（复制用；点击按钮时选区已被浏览器清除）
   let deletePopoverEl = null;
+
+  /** 剪贴板写入（secure clipboard 优先，非安全上下文降级 execCommand；成功静默，失败才提示） */
+  async function copySelectionText(text) {
+    let ok = false;
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(text); ok = true; } catch { ok = false; }
+    }
+    if (!ok) {
+      // Fallback for non-secure contexts (e.g. accessing the UI via a LAN IP)
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch { ok = false; }
+    }
+    if (!ok) toast('error', t('复制失败', 'Copy failed'));
+  }
 
   function ensurePopover() {
     if (popoverEl) return popoverEl;
     popoverEl = document.createElement('div');
     popoverEl.className = 'anno-popover hidden';
     popoverEl.innerHTML =
-      `<button type="button" class="anno-popover-btn">${escapeHtml(t('标注', 'Annotate'))}</button>`;
-    popoverEl.querySelector('.anno-popover-btn').addEventListener('click', () => {
+      `<button type="button" class="anno-popover-btn" data-action="annotate">${escapeHtml(t('标注', 'Annotate'))}</button>`
+      + `<button type="button" class="anno-popover-btn" data-action="copy">${escapeHtml(t('复制', 'Copy'))}</button>`;
+    popoverEl.querySelector('[data-action="annotate"]').addEventListener('click', () => {
       const ctx = popoverCtx;
       hidePopover();
       if (ctx) {
@@ -468,19 +493,31 @@
         void createAnnotation(ctx);
       }
     });
+    // 复制用弹窗时保存的原始选区文本：mousedown 在按钮上时浏览器已清除选区，
+    // 且 quote 是空白归一化文本（代码缩进会丢），不等于用户所见所选。
+    popoverEl.querySelector('[data-action="copy"]').addEventListener('click', () => {
+      const text = popoverRawText;
+      hidePopover();
+      window.getSelection()?.removeAllRanges();
+      if (text) void copySelectionText(text);
+    });
     document.body.appendChild(popoverEl);
     return popoverEl;
   }
 
-  function showPopover(ctx, rect) {
+  /** 定位跟手：工具条水平居中于 mouseup 时的鼠标位置，悬于其上方；
+   * 鼠标贴近视口顶放不下时翻转到下方。 */
+  function showPopover(ctx, point, rawText) {
     const el = ensurePopover();
     popoverCtx = ctx;
+    popoverRawText = rawText;
     el.classList.remove('hidden');
     // 先显示再测量（hidden 状态下 offsetWidth 为 0）
     const { offsetWidth: w, offsetHeight: h } = el;
-    let left = rect.left + rect.width / 2 - w / 2;
+    let left = point.x - w / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
-    const top = rect.top - h - 8 > 8 ? rect.top - h - 8 : rect.bottom + 8;
+    const above = point.y - h - 24;
+    const top = above > 8 ? above : point.y + 16;
     el.style.left = `${Math.round(left)}px`;
     el.style.top = `${Math.round(top)}px`;
   }
@@ -488,6 +525,7 @@
   function hidePopover() {
     if (popoverEl) popoverEl.classList.add('hidden');
     popoverCtx = null;
+    popoverRawText = '';
   }
 
   function showDeletePopover(mark) {
@@ -496,7 +534,7 @@
     deletePopoverEl.className = 'anno-popover anno-delete-popover';
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'anno-popover-btn anno-delete-btn';
+    btn.className = 'anno-popover-btn';
     btn.textContent = t('删除标注', 'Remove annotation');
     btn.addEventListener('click', () => {
       const id = mark.dataset.annoId;
@@ -534,7 +572,8 @@
     const ctx = getSelectionContext(sel);
     if (ctx) {
       ensureSession();
-      showPopover(ctx, sel.getRangeAt(0).getBoundingClientRect());
+      // 定位锚 = mouseup 那一刻的鼠标位置（拖选终点），不依赖选区矩形
+      showPopover(ctx, { x: event.clientX, y: event.clientY }, sel.toString());
       // mousedown 落在已选文本内部时，浏览器为拖放判定保留选区，mouseup 之后
       // 才清除——此刻选区仍"存活"，showPopover 会误保持弹窗。在默认行为完成后
       // 复检：选区已消失（点击已选内容 = 放弃选择）则收起弹窗。
