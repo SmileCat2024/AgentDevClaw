@@ -18,9 +18,10 @@
  * - getClawModelPresets / ensureClawModelPresetsForSession /
  *   clawModelPresetsMatchSession (model-preset-cache.js)
  * - focusedAgentId (app-core.js / app-main.js)
- * - currentRuntimeAgentId, getActiveWorkspaceSessionId,
+ * - currentRuntimeAgentId,
  *   getRuntimeAwareAgentRecord, getCurrentHostAgentRecord, getCurrentAgentRecord (app-main.js)
- * - readCurrentSessionViewState / captureSessionViewToken / commitSessionViewPatch (session-view-state.js)
+ * - readCurrentSessionViewState / captureSessionViewToken / isSessionViewTokenCurrent /
+ *   commitSessionViewPatch (session-view-state.js)
  * - window.ClawFeatureCommunication (feature-communication.js)
  *
  * 投递路径（ADR-0034）：模型/思考档位切换统一走 model-selection Feature 的
@@ -110,23 +111,24 @@ function _inputModelDropdownOutsideClick(e) {
 let _modelSelectionChannelOk = false; // { key, ok }
 let _restoreFailureNotified = false; // per page session（会话切换重置）
 
-function _modelSelectionTarget(agentId) {
-  let sessionId = typeof getActiveWorkspaceSessionId === 'function'
-    ? getActiveWorkspaceSessionId()
-    : '';
-  return { agentId, sessionId, featureId: 'model-selection', channelId: 'selection' };
+function _modelSelectionTarget(agentId, viewToken = captureSessionViewToken()) {
+  // 请求目标与回执归属必须来自同一份视图身份。宿主 active 是跨标签页可变的
+  // 工作空间状态，不能用它补齐缺失身份，否则会切到另一个对话。
+  const identity = viewToken.identity;
+  if (!viewToken.runtimeId || !identity?.sessionId || identity.agentId !== agentId) return null;
+  return { agentId: identity.agentId, sessionId: identity.sessionId, featureId: 'model-selection', channelId: 'selection' };
 }
 
-async function _ensureModelSelectionChannel(agentId) {
-  let sessionId = typeof getActiveWorkspaceSessionId === 'function'
-    ? getActiveWorkspaceSessionId()
-    : '';
-  if (!agentId || !sessionId) return false;
-  let key = agentId + '|' + sessionId;
+async function _ensureModelSelectionChannel(agentId, viewToken = captureSessionViewToken()) {
+  const target = _modelSelectionTarget(agentId, viewToken);
+  if (!target || !isSessionViewTokenCurrent(viewToken)) return false;
+  const { sessionId } = target;
+  let key = agentId + '|' + sessionId + '|' + viewToken.runtimeId;
   if (_modelSelectionChannelOk && _modelSelectionChannelOk.key === key && _modelSelectionChannelOk.ok) return true;
   if (!_modelSelectionChannelOk || _modelSelectionChannelOk.key !== key) _restoreFailureNotified = false;
   try {
     let channels = await window.ClawFeatureCommunication.listChannels(agentId, sessionId);
+    if (!isSessionViewTokenCurrent(viewToken)) return false;
     let declared = (channels || []).some(function(ch) {
       return ch && ch.featureId === 'model-selection' && ch.channelId === 'selection';
     });
@@ -150,8 +152,11 @@ function _notifyModelSelectionUnavailable(isZh) {
   }
 }
 
-async function _performInputModelSwap(agentId, presetName) {
+async function _performInputModelSwap(agentId, presetName, viewToken = captureSessionViewToken()) {
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  if (!isSessionViewTokenCurrent(viewToken)) return;
+  const target = _modelSelectionTarget(agentId, viewToken);
+  if (!target) { _notifyModelSelectionUnavailable(isZh); return; }
   let toastId = 'input-model-swap';
 
   if (typeof ClawToast !== 'undefined') {
@@ -164,12 +169,10 @@ async function _performInputModelSwap(agentId, presetName) {
   }
 
   try {
-    let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
-    const viewToken = captureSessionViewToken(runtimeId);
     // 会话级 Feature 请求面（ADR-0034）：精确四元组寻址会话 runtime，
     // 回执 meta 为 Feature 端 getLLMMeta() 快照；代次拒绝机制沿用。
     const result = await window.ClawFeatureCommunication.request(
-      _modelSelectionTarget(agentId),
+      target,
       'selectModel',
       { presetName },
     );
@@ -225,16 +228,21 @@ window.toggleInputModelDropdown = function(event) {
 
   let agentId = _getInputAgentId();
   if (!agentId) return;
+  const viewToken = captureSessionViewToken();
+  const target = _modelSelectionTarget(agentId, viewToken);
 
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  if (!target) { _notifyModelSelectionUnavailable(isZh); return; }
 
   _inputModelDropdownLoading = true;
   // Fetch presets before creating the dropdown; keep the open action single-flight.
-  (async function() {
+  return (async function() {
     try {
       // 通道声明事实 = 控件可用性（ADR-0034 §5.1）：未装配 / 远程 / runtime
       // 未起均无 model-selection 声明 → 不可用提示，不打开下拉。
-      if (!await _ensureModelSelectionChannel(agentId)) {
+      const available = await _ensureModelSelectionChannel(agentId, viewToken);
+      if (!isSessionViewTokenCurrent(viewToken)) return;
+      if (!available) {
         _notifyModelSelectionUnavailable(isZh);
         return;
       }
@@ -242,10 +250,11 @@ window.toggleInputModelDropdown = function(event) {
       // 有 lastRestoreFailure 时 toast 呈现一次（per session）。
       try {
         const status = await window.ClawFeatureCommunication.request(
-          _modelSelectionTarget(agentId),
+          target,
           'getStatus',
           {},
         );
+        if (!isSessionViewTokenCurrent(viewToken)) return;
         if (status?.ok && status.lastRestoreFailure && !_restoreFailureNotified) {
           _restoreFailureNotified = true;
           let presetLabel = status?.choice?.presetName || '';
@@ -266,15 +275,15 @@ window.toggleInputModelDropdown = function(event) {
         }
       } catch { /* 对账尽力而为，不打扰打开动作 */ }
 
+      if (!isSessionViewTokenCurrent(viewToken)) return;
       let presets;
       try {
-        presets = await ensureClawModelPresetsForSession(
-          (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '');
+        presets = await ensureClawModelPresetsForSession(viewToken.runtimeId);
       } catch (e) {
         console.error('[InputModelSwitch] Failed to load presets:', e);
         return;
       }
-      if (!presets.length) return;
+      if (!isSessionViewTokenCurrent(viewToken) || !presets.length) return;
 
       let currentPreset = _getInputDefaultPresetName();
     let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
@@ -333,7 +342,7 @@ window.toggleInputModelDropdown = function(event) {
       if (!item) return;
       let presetName = item.dataset.preset;
       _closeInputModelDropdown();
-      _performInputModelSwap(agentId, presetName);
+      _performInputModelSwap(agentId, presetName, viewToken);
     });
 
     document.body.appendChild(dropdown);
@@ -455,8 +464,11 @@ function _inputThinkingDropdownOutsideClick(e) {
   }
 }
 
-async function _performThinkingEffortSwap(agentId, thinkingEffort) {
+async function _performThinkingEffortSwap(agentId, thinkingEffort, viewToken = captureSessionViewToken()) {
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  if (!isSessionViewTokenCurrent(viewToken)) return;
+  const target = _modelSelectionTarget(agentId, viewToken);
+  if (!target) { _notifyModelSelectionUnavailable(isZh); return; }
   let toastId = 'input-thinking-swap';
 
   if (typeof ClawToast !== 'undefined') {
@@ -469,8 +481,6 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort) {
   }
 
   try {
-    let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
-    const viewToken = captureSessionViewToken(runtimeId);
     // 两态契约（ADR-0034 §7）：显式档位 = selectModel（当前 preset + thinkingEffort）；
     // "默认（预设）" = clearThinkingOverride（删除覆盖，回 preset 配置档——
     // 修正旧行为：此前发送 null 实为"厂商默认"语义，与文案不符）。
@@ -481,13 +491,13 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort) {
         throw new Error(isZh ? '当前模型无 preset 锚点，无法切换思考强度' : 'No preset anchor for thinking effort switch');
       }
       result = await window.ClawFeatureCommunication.request(
-        _modelSelectionTarget(agentId),
+        target,
         'selectModel',
         { presetName, thinkingEffort },
       );
     } else {
       result = await window.ClawFeatureCommunication.request(
-        _modelSelectionTarget(agentId),
+        target,
         'clearThinkingOverride',
         {},
       );
@@ -540,9 +550,12 @@ window.toggleThinkingEffortDropdown = async function(event) {
   if (!agentId) return;
 
   let isZh0 = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  const viewToken = captureSessionViewToken();
 
   // 与模型下拉同一可用性闸（ADR-0034 §5.1）：两控件同属 model-selection 通道。
-  if (!await _ensureModelSelectionChannel(agentId)) {
+  const available = await _ensureModelSelectionChannel(agentId, viewToken);
+  if (!isSessionViewTokenCurrent(viewToken)) return;
+  if (!available) {
     _notifyModelSelectionUnavailable(isZh0);
     return;
   }
@@ -588,7 +601,7 @@ window.toggleThinkingEffortDropdown = async function(event) {
     if (!item) return;
     let effort = item.dataset.effort;
     _closeThinkingEffortDropdown();
-    _performThinkingEffortSwap(agentId, effort || null);
+    _performThinkingEffortSwap(agentId, effort || null, viewToken);
   });
 
   document.body.appendChild(_inputThinkingDropdown);
