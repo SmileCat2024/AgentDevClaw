@@ -8,7 +8,7 @@ const workspaceActions = fs.readFileSync(new URL('../public/src/modules/workspac
 describe('session resource identity contracts', () => {
   it('maps runtime child title requests to the logical workspace agent', () => {
     assert.match(autoTitle, /getLogicalAgentId\(runtimeAgent\)/);
-    assert.match(autoTitle, /return \{ agent: runtimeAgent, agentId: logicalAgentId \|\| runtimeAgent\.id, sessionId \}/);
+    assert.match(autoTitle, /return \{ agent: runtimeAgent, agentId: logicalAgentId \|\| runtimeAgent\.id, sessionId, title \}/);
     assert.match(autoTitle, /autoGenerateSessionTitle\(logicalAgentId \|\| agent\.id, sessionId/);
   });
 

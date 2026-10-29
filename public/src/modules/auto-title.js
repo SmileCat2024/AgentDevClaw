@@ -36,6 +36,9 @@ const _autoTitlePending = new Set();
 const _derivedBaseline = new Map();
 
 function getAutoTitleSessionInfo() {
+  // 线程会话的标题真源是 head Session 索引记录。connected-agents 快照在
+  // head 创建/接续时可能暂缺 active_workspace_session_title；使用 host 的
+  // session index 记录标题，不让空 runtime 投影屏蔽“新对话N”候选判断。
   // 当用户在查看某个 runtime 时，优先使用该 runtime agent 的 session 信息。
   // host agent 的 active_workspace_session_id 指向 "primary" runtime（通常是最近启动的），
   // 但用户可能正在查看另一个 runtime 的会话。
@@ -52,7 +55,14 @@ function getAutoTitleSessionInfo() {
         const logicalAgentId = typeof getLogicalAgentId === 'function'
           ? getLogicalAgentId(runtimeAgent)
           : String(runtimeAgent.parent_id || '').trim();
-        return { agent: runtimeAgent, agentId: logicalAgentId || runtimeAgent.id, sessionId };
+        const hostAgent = allAgents.find(function(a) {
+          return normalizeAgentIdentity(a && a.id) === logicalAgentId;
+        }) || null;
+        const session = hostAgent?.workspace_sessions?.sessions?.find(function(s) {
+          return s && String(s.id || '').trim() === sessionId;
+        });
+        const title = String(runtimeAgent.active_workspace_session_title || session?.title || '').trim();
+        return { agent: runtimeAgent, agentId: logicalAgentId || runtimeAgent.id, sessionId, title };
       }
     }
   }
@@ -66,7 +76,7 @@ function getAutoTitleSessionInfo() {
 function markAutoTitleCandidate(previousMessages, nextMessages) {
   const info = getAutoTitleSessionInfo();
   if (!info) return;
-  const currentTitle = String(info.agent.active_workspace_session_title || '').trim();
+  const currentTitle = info.title || String(info.agent.active_workspace_session_title || '').trim();
   const isDerivedSession = /^（/.test(currentTitle);
   if (currentTitle && !/^新对话\d+$/.test(currentTitle) && !isDerivedSession) return;
   const previousAssistantCount = previousMessages.filter(function(message) {
@@ -114,7 +124,7 @@ function recheckAutoTitleCandidate() {
   const info = getAutoTitleSessionInfo();
   if (!info) return;
   const { agent, sessionId } = info;
-  const currentTitle = String(agent.active_workspace_session_title || '').trim();
+  const currentTitle = info.title || String(agent.active_workspace_session_title || '').trim();
   const isDerivedSession = /^（/.test(currentTitle);
   const isNewConversation = /^新对话\d+$/.test(currentTitle);
   if (!isDerivedSession && !isNewConversation) return;
@@ -263,7 +273,7 @@ function tryAutoTitleGeneration(messages) {
 
   // 1. Try the currently-viewed session
   if (info && _autoTitlePending.has(info.sessionId)) {
-    const currentTitle = String(info.agent.active_workspace_session_title || '').trim();
+    const currentTitle = info.title || String(info.agent.active_workspace_session_title || '').trim();
     _tryTitleForSession(info.agent, info.sessionId, currentTitle, messages);
   }
 

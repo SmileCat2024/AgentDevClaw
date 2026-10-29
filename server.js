@@ -374,6 +374,7 @@ Object.assign(sessionApi, {
   listPrebuiltSessions,
   summarizePrebuiltSession,
   buildLightPrebuiltSessionRecord,
+  findPrebuiltSessionRecordShared,
 });
 
 const threadControl = getThreadControl();
