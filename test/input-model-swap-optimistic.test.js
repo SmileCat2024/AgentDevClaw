@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { readFileSync } from 'node:fs';
+import { BasicAgent } from '@agentdevjs/core';
+import { ModelSelectionFeature } from '../local-features/dist/model-selection/src/index.js';
+import { createFrontendSandbox, sourceBetween } from './helpers/frontend-vm.js';
 
 // 真实状态写入入口 + 切换请求 + 顶栏/详情渲染，隔离网络和用户数据。
 const model = (modelRevision, name, extra = {}) => ({
@@ -12,12 +15,14 @@ const model = (modelRevision, name, extra = {}) => ({
 function sandbox() {
   function element() {
     const classes = new Set();
-    return { innerHTML: '', textContent: '', style: {}, dataset: {}, title: '',
+    const listeners = {};
+    return { innerHTML: '', textContent: '', style: {}, dataset: {}, title: '', listeners,
       classList: { add: (v) => classes.add(v), remove: (v) => classes.delete(v), contains: (v) => classes.has(v) },
-      addEventListener() {}, getBoundingClientRect: () => ({ left: 100, bottom: 30 }),
+      addEventListener(type, listener) { listeners[type] = listener; },
+      remove() {}, getBoundingClientRect: () => ({ left: 100, top: 200, bottom: 230 }),
     };
   }
-  const bar = element(), modelLabel = element(), effortLabel = element(), effortButton = element();
+  const bar = element(), modelLabel = element(), effortLabel = element(), effortButton = element(), modelButton = element();
   const ctx = createFrontendSandbox({
     currentRuntimeAgentId: 'rt-1', focusedAgentId: 'host-agent', selectedFeatureName: null,
     getCurrentHostAgentRecord: () => ({ id: 'host-agent' }),
@@ -35,13 +40,14 @@ function sandbox() {
     },
     getClawModelPresets: () => ['a', 'b', '__default__'].map((name) => ({ name, thinkingEffort: 'low' })),
     clawModelPresetsMatchSession: () => true,
-    ensureClawModelPresetsForSession: async () => {},
+    ensureClawModelPresetsForSession: async () => [{ name: 'a' }, { name: 'b' }],
+    requestAnimationFrame() {},
     shouldRenderWorkspaceSurface: () => false,
     isChatSurfaceActive: () => true,
     notifyChatViewportMutation() {}, followLatestEnabled: false, container: { scrollTop: 0 },
     document: {
       querySelector: (s) => s === '.input-model-name' ? modelLabel : s === '.input-thinking-name' ? effortLabel : null,
-      getElementById: (id) => id === 'chat-context-bar' ? bar : id === 'input-thinking-btn' ? effortButton : null,
+      getElementById: (id) => id === 'chat-context-bar' ? bar : id === 'input-thinking-btn' ? effortButton : id === 'input-model-switch-btn' ? modelButton : null,
       createElement: element, addEventListener() {}, body: { appendChild() {} },
     },
   });
@@ -83,6 +89,142 @@ describe('模型状态统一提交与呈现', () => {
       requestType: 'selectModel',
       payload: { presetName: 'b' },
     });
+  });
+
+  it('模型、显式档位和默认档位均使用当前视图身份，不跟随宿主 active', async () => {
+    const s = sandbox();
+    s.ctx.getActiveWorkspaceSessionId = () => 'other-session';
+    await s.swap(model(2, 'b'));
+    await s.swap(model(3, 'b', { thinkingEffort: 'high' }), true);
+    await s.ctx.run(`_performThinkingEffortSwap('host-agent', null)`);
+    assert.deepEqual(s.ctx.ClawFeatureCommunication.calls.map(call => call.target.sessionId), ['sess-1', 'sess-1', 'sess-1']);
+  });
+
+  it('通道查询使用当前视图身份，不查询宿主 active', async () => {
+    const s = sandbox();
+    s.ctx.getActiveWorkspaceSessionId = () => 'other-session';
+    const queries = [];
+    s.ctx.ClawFeatureCommunication.listChannels = async (agentId, sessionId) => {
+      queries.push({ agentId, sessionId });
+      return [{ featureId: 'model-selection', channelId: 'selection' }];
+    };
+    assert.equal(await s.ctx.run(`_ensureModelSelectionChannel('host-agent')`), true);
+    assert.deepEqual(queries, [{ agentId: 'host-agent', sessionId: 'sess-1' }]);
+  });
+
+  it('视图身份缺失或宿主不匹配时不回退到 active，也不接受高版本回执', async () => {
+    const s = sandbox();
+    s.ctx.run(`applySessionViewPatch({ identity: { agentId: 'other-host', sessionId: 'sess-1' } })`);
+    await s.swap(model(100, 'b'));
+    s.ctx.run(`applySessionViewPatch({ identity: { agentId: 'host-agent', sessionId: '' } })`);
+    await s.swap(model(100, 'b'));
+    assert.equal(s.ctx.ClawFeatureCommunication.calls.length, 0);
+    assert.notEqual(s.ctx.run('readCurrentSessionViewState().overview.modelName'), 'b-model');
+  });
+
+  for (const kind of ['model', 'thinking']) {
+    const toggle = kind === 'model' ? 'toggleInputModelDropdown' : 'toggleThinkingEffortDropdown';
+    const dropdown = kind === 'model' ? '_inputModelDropdown' : '_inputThinkingDropdown';
+    it(`${kind} 下拉查询期间离开再返回，不创建旧菜单或向新身份发请求`, async () => {
+      const s = sandbox();
+      let resolve;
+      s.ctx.ClawFeatureCommunication.listChannels = () => new Promise(r => { resolve = r; });
+      const pending = s.ctx.window[toggle]();
+      s.ctx.run(`applySessionViewPatch({ identity: { agentId: 'host-agent', sessionId: 'sess-2' } });
+        applySessionViewPatch({ identity: { agentId: 'host-agent', sessionId: 'sess-1' } })`);
+      resolve([{ featureId: 'model-selection', channelId: 'selection' }]);
+      await pending;
+      assert.equal(s.ctx.run(dropdown), null);
+      assert.equal(s.ctx.ClawFeatureCommunication.calls.length, 0);
+    });
+
+    it(`${kind} 已打开菜单在切换会话后点击，不修改新旧任一会话`, async () => {
+      const s = sandbox();
+      await s.ctx.window[toggle]();
+      const menu = s.ctx.run(dropdown);
+      assert.ok(menu, '当前会话正常打开选择菜单');
+      s.ctx.ClawFeatureCommunication.calls.length = 0;
+      s.ctx.run(`applySessionViewPatch({ identity: { agentId: 'host-agent', sessionId: 'sess-2' } })`);
+      menu.listeners.click({ target: { closest: selector => selector === '.ccb-md-item' ? { dataset: { preset: 'b', effort: 'high' } } : null } });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(s.ctx.ClawFeatureCommunication.calls.length, 0);
+    });
+  }
+
+  it('预设目录加载期间切换会话，不把旧目录菜单挂到新会话', async () => {
+    const s = sandbox();
+    let resolvePresets;
+    let started;
+    const loading = new Promise(resolve => { started = resolve; });
+    s.ctx.ensureClawModelPresetsForSession = () => {
+      started();
+      return new Promise(resolve => { resolvePresets = resolve; });
+    };
+    const pending = s.ctx.window.toggleInputModelDropdown();
+    await loading;
+    s.ctx.run(`applySessionViewPatch({ identity: { agentId: 'host-agent', sessionId: 'sess-2' } })`);
+    resolvePresets([{ name: 'b' }]);
+    await pending;
+    assert.equal(s.ctx.run('_inputModelDropdown'), null);
+    assert.equal(s.ctx.ClawFeatureCommunication.calls.filter(call => call.requestType === 'selectModel').length, 0);
+  });
+
+  it('相同会话 runtime 更换后，旧实例的高版本回执不能污染新实例', async () => {
+    const s = sandbox();
+    let resolve;
+    s.ctx.ClawFeatureCommunication.request = () => new Promise(r => { resolve = r; });
+    const pending = s.ctx.run(`_performInputModelSwap('host-agent', 'b')`);
+    s.ctx.run(`currentRuntimeAgentId = 'rt-2'`);
+    s.overview(model(1, 'a'));
+    resolve({ ok: true, meta: model(100, 'b') });
+    await pending;
+    assert.equal(s.modelLabel.textContent, 'a');
+    assert.equal(s.ctx.run('readCurrentSessionViewState().overview.modelRevision'), 1);
+  });
+
+  it('当前视图与宿主 active 不同时，下一轮真正调用新模型且不改变另一个会话', async () => {
+    const s = sandbox();
+    // 身份派生使用生产代码，保留 host.active 与 viewer 绑定不一致的真实场景。
+    const core = readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
+    s.ctx.run(sourceBetween(core, 'function normalizeResourceIdentity(', 'function getRuntimeContextKey('));
+    s.ctx.getCurrentAgentRecord = () => ({ id: 'host-agent', workspace_sessions: { activeSessionId: 'sess-2' } });
+    s.ctx.run(`setViewerSessionBinding('rt-1', 'sess-1')`);
+    const calls = { 'sess-1': [], 'sess-2': [] };
+    const agents = new Map();
+    const features = new Map();
+    try {
+      for (const sessionId of Object.keys(calls)) {
+        const llm = (name, thinkingEffort = 'low') => ({
+          modelName: name + '-model',
+          async chat() { calls[sessionId].push({ name, thinkingEffort }); return { content: 'ok' }; },
+        });
+        const agent = new BasicAgent({ name: sessionId, llm: llm('a'), modelResolver: {
+          resolve(name, overrides) {
+            const thinkingEffort = overrides?.thinkingEffort ?? 'low';
+            return { llm: llm(name, thinkingEffort), meta: { ...model(0, name), thinkingEffort } };
+          },
+        } });
+        agents.set(sessionId, agent);
+        const feature = new ModelSelectionFeature({ agentId: 'host-agent', sessionId, serverOrigin: 'http://127.0.0.1:1',
+          client: { async declareChannel() {}, async publishEvent() {} },
+        });
+        agent.use(feature);
+        features.set(sessionId, feature);
+        await agent.onCall('before');
+      }
+      s.ctx.ClawFeatureCommunication.request = (target, type, payload) => features.get(target.sessionId).onHostRequest(type, payload);
+      await s.ctx.run(`_performInputModelSwap('host-agent', 'b')`);
+      await s.ctx.run(`_performThinkingEffortSwap('host-agent', 'high')`);
+      for (const agent of agents.values()) await agent.onCall('after');
+      assert.deepEqual(calls['sess-1'], [{ name: 'a', thinkingEffort: 'low' }, { name: 'b', thinkingEffort: 'high' }]);
+      assert.deepEqual(calls['sess-2'], [{ name: 'a', thinkingEffort: 'low' }, { name: 'a', thinkingEffort: 'low' }]);
+      assert.equal(s.modelLabel.textContent, 'b');
+      assert.equal(s.effortLabel.textContent, 'high');
+      s.overview(agents.get('sess-1').getLLMMeta());
+      assert.equal(s.modelLabel.textContent, 'b', '实际 Agent 状态与显示保持一致');
+    } finally {
+      for (const agent of agents.values()) await agent.dispose();
+    }
   });
 
   it('回执同时更新名称、窗口、阈值和协议，保留用量并立即重算占比', async () => {
