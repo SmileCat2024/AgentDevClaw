@@ -428,13 +428,13 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   text-overflow: ellipsis;
   white-space: nowrap;
   user-select: none;
-  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
 .project-collapse-arrow {
+  cursor: pointer;
   display: inline-block;
   flex-shrink: 0;
   width: 0;
@@ -452,6 +452,7 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
 }
 
 .project-collapse-label {
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

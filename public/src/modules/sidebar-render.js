@@ -1134,10 +1134,12 @@ agentList.addEventListener('click', async (event) => {
     return;
   }
 
-  // Handle project group collapse/expand toggle (programming-helper).
-  const projectHeader = event.target.closest('.agent-runtime-project-header');
-  if (projectHeader) {
-    const groupEl = projectHeader.closest('.agent-runtime-project-group');
+  // Only the project chevron and name toggle the group; the rest of the
+  // header row is intentionally inert so it does not act like a full-width tab.
+  const projectToggle = event.target.closest('.project-collapse-arrow, .project-collapse-label');
+  if (projectToggle) {
+    const projectHeader = projectToggle.closest('.agent-runtime-project-header');
+    const groupEl = projectHeader?.closest('.agent-runtime-project-group');
     if (groupEl) {
       const key = groupEl.dataset.projectKey;
       if (key) {
