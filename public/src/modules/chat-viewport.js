@@ -131,8 +131,8 @@ function updateFollowLatestButtonPosition() {
   if (!main || !inputHost) return;
 
   // 严格贴输入卡顶边：容器还包裹运行时长胶囊等更高元素，按容器测会使
-  // 按钮悬空在输入卡上方一个胶囊的高度。
-  // persistent / requests 是同一输入卡的提交模式，不是几何身份。
+  // 按钮悬空在输入卡上方一个胶囊的高度。常驻 composer 是唯一输入卡形态
+  // （lease 卡片渲染在独立容器，不参与这里的几何）。
   const inputCard = inputHost.querySelector('.user-input-card');
   const inputRect = inputCard?.getBoundingClientRect();
   const needsAvoid = main.classList.contains('panel-open')

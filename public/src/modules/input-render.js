@@ -1,12 +1,11 @@
 /**
  * input-render.js
  *
- * Input slot rendering — getInputRenderSignature + renderInputRequests.
+ * Input surface rendering — getInputRenderSignature + renderInputRequests.
  *
- * Extracted from app-main.js. Reworked by ticket 036: the input slot is now a
- * persistent composer (mounted once, updated in place; input-composer.js) plus
- * transient status cards. persistent ↔ requests flips only update attributes;
- * Ask User cards render in their own surface so they never take over the composer.
+ * The input slot is a persistent composer (mounted once, updated in place;
+ * input-composer.js) plus transient status cards. Choice cards render in their
+ * own surface and temporarily take over the input area.
  *
  * Exported global functions:
  *   getInputRenderSignature, notifyInputSurfaceChanged, renderInputRequests
@@ -22,7 +21,7 @@
  *   currentRuntimeAgentId, currentLanguage, readOnlyMode, followLatestEnabled
  * Dependencies (modules):
  *   resolveInputSurfaceMode, showPersistentComposerCard, hidePersistentComposerCard,
- *   detachTransientInputContent, syncPersistentComposerSessionCard, applyComposerMode,
+ *   detachTransientInputContent, syncPersistentComposerSessionCard,
  *   insertTransientInputCard, _restoreSessionInputDraft, _sessionInputCache
  *   (input-composer.js)
  *   renderPersistentInput, rebindQueueProjectionForRuntime, _renderLastCallElapsed,
@@ -40,6 +39,32 @@ let lastRenderedInputMode = null;
 // 已 toast 过动作失败的 lease（runtime 侧回退/压缩失败原因随 lease actions
 // 一次性携带；签名去重之外按 requestId 再去重，防止重复提示）。
 let _lastLeaseActionErrorToastedId = null;
+
+// 已回填过草稿的 lease（initialValue 一次性语义，读后即清）。
+let _lastLeaseDraftAppliedId = null;
+
+// rollback 草稿回填（ADR-0035 伴生反馈迁移）：宿主 setNextDraftInput 经下一
+// 轮 lease 的 initialValue 回传。按 requestId 去重；仅当前无草稿时写入缓存，
+// composer 在场且属当前会话时同步上屏，绝不覆盖用户已输入内容。
+function _applyLeaseInitialDraft(lease) {
+  if (!lease || typeof lease.initialValue !== 'string' || lease.initialValue.length === 0) return;
+  if (_lastLeaseDraftAppliedId === lease.requestId) return;
+  const cacheKey = _getSessionInputCacheKey();
+  if (!cacheKey) return;
+  const ta = document.getElementById('input-persistent');
+  // choice/frozen/readonly/compacting 面没有可编辑的普通发言 composer；
+  // 不消费草稿，待 composer 恢复后由后续渲染声明再应用。
+  const hasDraft = (typeof ta?.value === 'string' && ta.value.length > 0)
+    || (typeof _sessionInputCache[cacheKey] === 'string' && _sessionInputCache[cacheKey].length > 0);
+  if (!ta || ta.closest('[data-persistent-composer]')?.style.display === 'none') return;
+  _lastLeaseDraftAppliedId = lease.requestId;
+  if (hasDraft) return;
+  _sessionInputCache[cacheKey] = lease.initialValue;
+  if (ta && (ta.dataset?.sessionKey || _getSessionInputCacheKey()) === cacheKey) {
+    ta.value = lease.initialValue;
+    autoResize(ta);
+  }
+}
 
 // runtime 侧输入动作（回退/压缩）执行失败的一次性 toast：失败原因由下一
 // 次 lease 的 actions data 携带（run-prebuilt-agent.js getNextTurnActions
@@ -75,13 +100,6 @@ function getInputRenderSignature(requests, renderMode) {
       : `await:${String(window.getActiveThreadInputTarget?.()?.sessionId || '')}`;
     return `persistent|${contextKey}|${awaitSessionKey}|${readOnlyMode ? 'ro' : 'rw'}`;
   }
-  if (renderMode === 'requests') {
-    const contextKey = getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
-    // 精确 diff：渲染器防御性只消费单 lease（requests[0]），签名随之只含该
-    // lease 的关键字段；多 lease 是 worker 侧违例，不应放大渲染。
-    const lease = Array.isArray(requests) && requests.length > 0 ? requests[0] : null;
-    return `requests|${contextKey}|${JSON.stringify(lease || null)}`;
-  }
   // choice 模式：显示内容由 lease 身份 + 交互状态（选项/题号/折叠/上下文展开）
   // 共同决定（工单 037）。交互状态入签名后，choice 域的状态写入经声明入口
   // 即可重建选择卡，无需外部 reset。
@@ -109,7 +127,7 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   if (!inputContainer || !choiceContainer) return;
 
   // preserveTop 必须取聊天容器的滚动位置：非跟随模式下视口结算会把它回写。
-  // 历史上误读输入容器的 scrollTop（恒 0），导致输入面翻转时聊天视口跳回顶部。
+  // 历史上误读输入容器的 scrollTop（恒 0），导致输入面重渲染时聊天视口跳回顶部。
   const chatViewport = document.getElementById('chat-container');
   const chatViewportTopBefore = chatViewport ? chatViewport.scrollTop : null;
   const chatActive = isChatSurfaceActive();
@@ -129,6 +147,12 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   // 声明因签名差异自然触发恢复渲染，不再依赖外部手动 reset。
   lastRenderedInputSignature = signature;
   lastRenderedInputMode = renderMode;
+  // lease 伴生反馈查收（ADR-0035）：必须放在签名去重之前——persistent 签名
+  // 不含 lease 字段，lease 到达/消失不产生签名差异；查收自身按 requestId
+  // 去重，幂等。回退对话框接管期间同样查收（rollback 失败提示不应因对话框
+  // 在场而丢失）。
+  _notifyLeaseActionError(inputLease);
+  _applyLeaseInitialDraft(inputLease);
   if (unchanged || _rollbackDialogOpen) return;
 
   for (const child of Array.from(choiceContainer.children)) child.remove();
@@ -140,7 +164,7 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   syncPersistentComposerSessionCard(inputContainer);
 
   // MediaRecorder / ASR 属于语音操作本身，不属于某个短命 DOM 节点。
-  // composer 常驻后同会话模式翻转不再触碰 DOM，录音自然保留；跨会话或
+  // composer 常驻后同会话重渲染不再触碰 DOM，录音自然保留；跨会话或
   // 离开输入面时才取消仍在采集的录音。已经开始的 ASR 由其异步所有者收尾。
   const _currentVoiceCacheKey = _getSessionInputCacheKey();
   const _preserveVoiceInput = _shouldPreserveVoiceInputForRender(renderMode, _currentVoiceCacheKey);
@@ -243,7 +267,6 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   }
 
   // ── interactive 模式：常驻 composer 显示 ──────────────────────────────
-  const hasRequests = !!inputLease;
 
   // 级 5：choice 卡使用独立容器；显示时隐藏常驻 composer。
   if (renderMode === 'choice' && inputLease && isChoiceInputRequest(inputLease)) {
@@ -256,27 +279,13 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
     return;
   }
 
-  // 级 6 / 7 / 8：persistent 与 requests 共用同一常驻 composer，
-  // 翻转只更新提交端点与 footer 动作（applyComposerMode），不销毁元素。
+  // 文本 lease 不改变普通发言输入面：输入框始终 persistent，空闲发言经
+  // user-turn 由 viewer 转为 lease 应答（ADR-0035）。
   runSuppressed(() => detachTransientInputContent(inputContainer));
-  showPersistentComposerCard(inputContainer);
-  inputContainer.onclick = null;
-
-  if (renderMode === 'requests' && hasRequests) {
-    renderRequestComposer(inputContainer, inputLease);
-  } else if (renderMode === 'persistent' && (hasRuntimeSelected || hasThreadAwaitTarget())) {
-    // 常驻输入框：当前正在查看 runtime 聊天（无 pending input request），
-    // 或挂在接续等待会话（发送经 Thread Inbox 暂存，新 head 上线后投递）
+  if (hasRuntimeSelected || hasThreadAwaitTarget()) {
     renderPersistentInput(inputContainer);
   } else {
-    // 理论不可达（九级矩阵已保证 requests/persistent 有 runtime/请求/等待会话）：
-    // 兜底隐藏，保持容器空态可观察行为
     hidePersistentComposerCard();
-  }
-
-  // 录音跨模式端点切换同步（textarea id 变化 → data-target/_voiceTargetId 重绑）
-  if (_preserveVoiceInput) {
-    _reattachVoiceInputUi(inputContainer);
   }
 
   // Inject any pending voice ASR result that arrived while viewing another session
@@ -286,46 +295,6 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   _renderRecapHint();
 
   notifyInputViewportMutation(chatViewportTopBefore, chatActive);
-}
-
-// 请求卡端点的属性级更新：同一 composer 元素，仅提交端点 / placeholder /
-// footer 动作随 lease 变化；50ms 聚焦与 initialValue 回填保持契约 5.2 节奏。
-function renderRequestComposer(inputContainer, lease) {
-  const composer = showPersistentComposerCard(inputContainer);
-  const boundRuntimeId = String(currentRuntimeAgentId || '');
-  applyComposerMode(composer, 'requests', lease);
-  // 失败原因随 lease 到达（一次性）：placeholder 之外给出明确 toast。
-  _notifyLeaseActionError(lease);
-
-  const requestTextarea = document.getElementById(`input-${lease.requestId}`);
-  const requestCacheKey = _getSessionInputCacheKey();
-  if (requestTextarea) {
-    requestTextarea.dataset.sessionKey = requestCacheKey || '';
-    _restoreSessionInputDraft(requestTextarea, requestCacheKey);
-  }
-  _renderAttachmentPreview();
-  // Populate model switcher button with current preset name
-  if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
-  if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
-
-  // Auto-focus（契约 5.2：50ms 后自动聚焦、光标到末尾、无草稿时回填 initialValue）
-  setTimeout(() => {
-    const el = document.getElementById(`input-${lease.requestId}`);
-    if (el) {
-      const cachedDraft = el.dataset.sessionKey ? _sessionInputCache[el.dataset.sessionKey] : undefined;
-      const hasCachedDraft = typeof cachedDraft === 'string' && cachedDraft.length > 0;
-      if (!hasCachedDraft && !el.value && typeof lease.initialValue === 'string' && lease.initialValue.length > 0) {
-        el.value = lease.initialValue;
-        _cacheSessionInput(el);
-      }
-      el.focus();
-      const end = el.value.length;
-      if (typeof el.setSelectionRange === 'function') {
-        el.setSelectionRange(end, end);
-      }
-      autoResize(el);
-    }
-  }, 50);
 }
 
 function notifyInputViewportMutation(preserveTop, chatActive) {

@@ -216,7 +216,7 @@ window.AppChatInput = (() => {
   async function submit(agentId) {
     const cfg = configs[agentId];
     if (!cfg || inFlight[agentId]) return;
-    // 语音占用期（与对话视图 composer 同款语义，见 input-helpers.js submitInput）：
+    // 语音占用期（与对话视图 composer 同款语义，见 persistent-input.js submitQueuedInput）：
     // 转写中不可发送；录音中点发送 = 标记 pending、停止录音，转写完成自动发送
     if (typeof _voiceTranscribing !== 'undefined' && _voiceTranscribing) return;
     if (typeof _voiceRecording !== 'undefined' && (_voiceRecording || _voiceStopping)) {

@@ -16,7 +16,7 @@
  *   (app-core.js / app-main.js)
  * - isRuntimeCalling (runtime-status.js)
  * - renderAgentList (app-main.js)
- *   工单 037：模式翻转不再手动戳渲染——提交/队列同步声明
+ *   工单 037：状态变化不再手动戳渲染——提交/队列同步声明
  *   notifyInputSurfaceChanged (input-render.js)，签名去重由渲染器统一处理。
  * - isChatSurfaceActive, shouldRenderWorkspaceSurface (app-ui.js)
  * - autoResize (input-helpers.js)
@@ -434,7 +434,7 @@ function renderPersistentInput(container) {
   _renderQueueBubbles(container);
 
   const card = showPersistentComposerCard(container);
-  applyComposerMode(card, 'persistent');
+  applyComposerMode(card);
   syncPersistentComposerSessionCard(container);
   _syncPersistentInputUi();
   // Restore attachment preview if there are pending images (e.g. after re-render)
@@ -530,12 +530,12 @@ function _setActionBtnSending() {
   if (iconStop) iconStop.style.display = 'none';
 }
 
-// 提交窗口结束后，两种输入端点都恢复到当前运行态，而非固定恢复发送。
+// 提交窗口结束后恢复到当前运行态，而非固定恢复发送。
 function _restoreActionBtnAfterSubmit() {
   _syncPersistentActionButton();
 }
 
-// ── 发送反馈窗口（persistent 与 requests 两端点共用）──────────────────
+// ── 发送反馈窗口（所有提交路径共用）──────────────────────────────────
 //
 // 间歇性"点了没转圈、消息直接蹦出去"的根因是渲染时机：spinner 类设置后、
 // 浏览器绘制前，本地直投的 fetch 可能已落定并移除类（或点击后主线程被
@@ -798,9 +798,9 @@ async function submitQueuedInput() {
     });
     if (res.ok) {
       const delivery = await res.json().catch(() => ({}));
-      // await 期间输入面不再整块重建，但 composer 端点可能翻转：定位当前
-      // live textarea（端点已切换时回落到容器内唯一 composer 输入框），并校验
-      // 仍属同一会话——已发送文本不得残留或经草稿写回"复活"。
+      // await 期间输入面可能重渲染：定位当前 live textarea（回落到容器内
+      // 唯一 composer 输入框），并校验仍属同一会话——已发送文本不得残留或
+      // 经草稿写回"复活"。
       const liveTextarea = document.getElementById('input-persistent')
         || document.querySelector('.user-input-textarea:not([disabled])');
       if (liveTextarea
@@ -872,14 +872,20 @@ async function submitQueuedInput() {
         _syncPersistentActionButton();
         renderAgentList();
       }
-      // 排队乐观态/提交完成后的模式可能翻转（工单 037）：声明变更即可，
+      // 排队乐观态/提交完成后的状态变化（工单 037）：声明变更即可，
       // 渲染器按签名差异决定是否重建。
       notifyInputSurfaceChanged(currentInputRequests || []);
       // 削掉 0–300ms 轮询相位：立即取一轮状态/消息（in-flight 自守卫）
       window.ClawFW?.requestImmediatePoll?.();
     } else {
       const error = await res.json().catch(() => ({}));
-      throw new Error(error.error || `HTTP ${res.status}`);
+      const submissionError = new Error(error.error || error.message || `HTTP ${res.status}`);
+      // 服务端 operation-contract 把 viewer 的具体拒因归一成稳定码
+      // （input_mode_conflict → code=operation_rejected），原码进 legacyCode；
+      // 判定必须同时看两处，否则 choice 竞态窗口的 409 退化成通用失败提示。
+      submissionError.code = error.code || '';
+      submissionError.legacyCode = error.legacyCode || '';
+      throw submissionError;
     }
   } catch (e) {
     console.error('排队输入提交失败:', e);
@@ -890,11 +896,16 @@ async function submitQueuedInput() {
     if (sessionRefs?.length) {
       window.SessionReference?.restore?.(sessionRefs);
     }
+    const isChoiceConflict = e?.legacyCode === 'input_mode_conflict' || e?.code === 'input_mode_conflict';
     window.ClawToast?.show({
       id: `user-turn-failed-${targetRuntimeId}`,
-      status: 'error',
-      title: currentLanguage === 'zh' ? '消息发送失败' : 'Failed to send message',
-      description: e instanceof Error ? e.message : String(e),
+      status: isChoiceConflict ? 'info' : 'error',
+      title: isChoiceConflict
+        ? (currentLanguage === 'zh' ? '请先完成选择' : 'Please complete the pending choice first')
+        : (currentLanguage === 'zh' ? '消息发送失败' : 'Failed to send message'),
+      description: isChoiceConflict
+        ? (currentLanguage === 'zh' ? '输入内容已保留，完成选择后可继续发送。' : 'Your draft is preserved. Send it after completing the choice.')
+        : (e instanceof Error ? e.message : String(e)),
       autoDismiss: 6000,
     });
   } finally {

@@ -2,18 +2,16 @@
  * input-composer.js — 常驻 Composer 组件（工单 036）
  *
  * 职责：
- * - 常驻 composer 卡（textarea + 工具栏 + 请求 footer）：首次挂载后常驻 DOM，
- *   persistent ↔ requests 模式翻转只做属性级更新（提交端点 / textarea id /
- *   keydown 绑定 / placeholder / footer 动作），Ask User 卡片则处于独立渲染面。
+ * - 常驻 composer 卡（textarea + 工具栏）：首次挂载后常驻 DOM，普通文本 lease
+ *   不改变 composer 形态或提交端点；Ask User 卡片处于独立渲染面。
  *   焦点、IME 组合态、光标、选中态因此自然保留（行为契约 §7）。
  * - 会话草稿缓存（迁自 voice-input.js，工单 036 改动项 C）：语音模块不再
  *   拥有 composer 草稿状态；_pendingVoiceResults 留在 voice-input.js。
- * - 输入槽位显示模式判定：九级优先级矩阵纯函数（行为契约 §3）。
+ * - 输入槽位显示模式判定：优先级矩阵纯函数（行为契约 §3）。
  *
- * persistent 与 requests 只是同一 composer 的两种提交端点：
- *   - persistent：POST /user-turn（handlePersistentInputKey / onPersistentBtnClick）
- *   - requests：POST /input + requestId（handleInputKey / submitInput）
- * 工具栏（attach / 模型 / 思考 / 语音 / 发送-停止）两模式共用一份 DOM。
+ * 普通发言 composer 恒走 POST /user-turn（handlePersistentInputKey / onPersistentBtnClick）；
+ * lease 应答由 choice 卡与 submitInputAction 等专用交互承载。
+ * 工具栏（attach / 模型 / 思考 / 语音 / 发送-停止）属于常驻 composer。
  *
  * 导出全局函数：
  *   resolveInputSurfaceMode, readInputSurfaceModeState,
@@ -29,7 +27,7 @@
  * 依赖全局（运行时解析，加载顺序见 index.html）：
  *   t, currentLanguage (i18n.js / app-core.js)
  *   currentRuntimeAgentId, readOnlyMode (app-core.js)
- *   autoResize, handleInputKey, submitInput (input-helpers.js)
+ *   autoResize (input-helpers.js)
  *   submitInputAction (input-helpers.js)
  *   handlePersistentInputKey, onPersistentBtnClick, _syncPersistentActionButton,
  *   _localQueuedInputPending, _pendingQueuedCount, _queuedTexts,
@@ -48,7 +46,7 @@
 
 let _sessionInputCache = {};        // { cacheKey: text } — 每个会话 persistent 输入框内容缓存
 
-// Real-time cache shared by persistent and request text inputs per session.
+// Real-time cache for the persistent composer draft per session.
 function _cacheSessionInput(textarea) {
   const key = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
   if (!key) return;
@@ -151,8 +149,8 @@ function _attachMenuOutsideHandler(event) {
 
 // ── 显示模式判定（行为契约 §3 九级优先级矩阵）─────────────────────────────
 //
-// "什么状态决定什么模式"是契约，判定代码结构不是。本函数是九级优先级的
-// 纯函数实现：输入全部显式化，输出唯一模式，便于用例锁死矩阵。
+// "什么状态决定什么模式"是契约，判定代码结构不是。本函数按优先级给出
+// 唯一显示模式；普通文本 lease 不参与模式选择。
 
 function resolveInputSurfaceMode(state) {
   if (!state.chatActive) return 'hidden';                                          // 1 非 chat surface
@@ -161,7 +159,9 @@ function resolveInputSurfaceMode(state) {
   if (state.compactInFlight && state.compactRuntimeMatches) return 'compacting';   // 4 会话内压缩
   if (state.hasChoiceRequest) return 'choice';                                     // 5 choice 请求
   if (state.hasLocalQueuedInput) return 'persistent';                              // 6 本地排队乐观态
-  if (state.hasRequests) return 'requests';                                        // 7 非 choice 请求卡
+  // 级 7 requests 已退役（ADR-0035）：文本 lease 不再翻转 composer，
+  // 空闲发言恒走 user-turn 由 viewer 转 lease 回填；lease 快照仅供
+  // rollback 按钮可见性与伴生反馈（动作失败 toast / 草稿回填）消费。
   if (state.hasRuntimeSelected || state.hasThreadAwaitTarget) return 'persistent'; // 8 选中 runtime / 接续等待会话
   return 'hidden';                                                                 // 9 都不满足
 }
@@ -184,8 +184,6 @@ function readInputSurfaceModeState(requests, chatActive) {
       && currentRuntimeAgentId === _partialCompactRuntimeId,
     hasRuntimeSelected,
     hasThreadAwaitTarget,
-    hasRequests: Array.isArray(requests)
-      && requests.some(req => req && !isChoiceInputConsumed(req.requestId)),
     hasChoiceRequest: Array.isArray(requests)
       && requests.some(req => isChoiceInputRequest(req) && !isChoiceInputConsumed(req.requestId)),
     hasLocalQueuedInput: hasRuntimeSelected
@@ -203,17 +201,15 @@ const _COMPOSER_MIC_SVG = '<svg class="icon-mic" width="18" height="18" viewBox=
 const _COMPOSER_SEND_SVG = '<svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
 const _COMPOSER_STOP_SVG = '<svg class="icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="4" y="4" width="16" height="16" rx="3"></rect></svg>';
 
-// 常驻 composer 单例。模式翻转 / 会话切换都复用同一元素，只有属性级更新。
+// 常驻 composer 单例。会话切换复用同一元素，按需更新会话绑定。
 let _composerCard = null;
-let _composerMode = null;
-let _composerRequestId = null;
 
 function buildComposerCard() {
   const card = document.createElement('div');
   card.className = 'user-input-card persistent-input';
   card.dataset.persistentComposer = 'true';
 
-  // 附件预览（persistent 与 requests 共用；保留 legacy id 供销毁恢复查找）
+  // 附件预览
   const preview = document.createElement('div');
   preview.className = 'persistent-attachment-preview';
   preview.id = 'attachment-preview';
@@ -303,13 +299,8 @@ function buildComposerCard() {
   right.appendChild(sendBtn);
   toolbar.appendChild(right);
 
-  const footer = document.createElement('div');
-  footer.className = 'user-input-footer';
-  footer.style.display = 'none';
-
   body.appendChild(toolbar);
   card.appendChild(body);
-  card.appendChild(footer);
   return card;
 }
 
@@ -333,89 +324,35 @@ function ensurePersistentComposerCard(container) {
 }
 
 /**
- * 模式翻转的属性级更新（persistent ↔ requests 不重建元素）：
- * 仅切换提交端点（user-turn / input+requestId）、textarea id、keydown 绑定、
- * placeholder、footer 动作按钮与三态图标显隐。
+ * 为常驻 composer 绑定普通发言提交行为。
  */
-function applyComposerMode(card, mode, lease = null) {
+function applyComposerMode(card) {
   const ta = card.querySelector('.user-input-textarea');
-  const voiceBtn = card.querySelector('.voice-input-btn');
   const sendBtn = card.querySelector('.persistent-action-btn');
-  const footer = card.querySelector('.user-input-footer');
   if (!ta || !sendBtn) return;
 
-  const boundRuntimeId = String(currentRuntimeAgentId || '');
-  const requestId = mode === 'requests' && lease ? String(lease.requestId || '') : '';
-  const textareaId = mode === 'persistent' ? 'input-persistent' : `input-${requestId}`;
+  ta.id = 'input-persistent';
+  ta.placeholder = t('input_placeholder');
+  ta.onkeydown = handlePersistentInputKey;
+  card.dataset.composerMode = 'persistent';
+  card.classList.add('persistent-input');
 
-  card.dataset.composerMode = mode;
-  _composerMode = mode;
-  _composerRequestId = requestId;
-  // persistent-input 类是三态按钮域的选择器契约：只在 persistent 模式
-  // 持有，请求卡模式下保持与原请求卡等价。
-  card.classList.toggle('persistent-input', mode === 'persistent');
-
-  ta.id = textareaId;
-  // 属性赋值（非 HTML 拼接），placeholder 原样写入
-  ta.placeholder = mode === 'persistent'
-    ? t('input_placeholder')
-    : (lease?.placeholder || t('input_placeholder'));
-  ta.onkeydown = mode === 'persistent'
-    ? handlePersistentInputKey
-    : function(event) { handleInputKey(event, requestId, boundRuntimeId); };
-  if (voiceBtn) voiceBtn.dataset.target = ta.id;
-
-  if (mode === 'persistent') {
-    sendBtn.id = 'persistent-action-btn';
-    sendBtn.title = currentLanguage === 'zh' ? '发送' : 'Send';
-    sendBtn.onclick = function() {
-      const textarea = document.getElementById('input-persistent');
-      if (window.ClawSlash?.submitWithPendingPrompts && textarea) {
-        void window.ClawSlash.submitWithPendingPrompts(textarea, onPersistentBtnClick);
-      } else {
-        onPersistentBtnClick();
-      }
-    };
-    // 三态（send/stop/interrupting）交还 _syncPersistentActionButton 决定
-    _syncPersistentActionButton();
-  } else {
-    // 输入租约与 call 活动正交：后台唤醒时，等待真人输入的 lease 仍可能
-    // 存在。提交端点不决定按钮状态，两种模式都消费运行态/打断态。
-    sendBtn.id = 'persistent-action-btn';
-    _syncPersistentActionButton();
-    sendBtn.onclick = function() {
-      const textarea = card.querySelector('.user-input-textarea');
-      const submit = function() {
-        return onPersistentBtnClick(() => submitInput(requestId, boundRuntimeId));
-      };
-      if (window.ClawSlash?.submitWithPendingPrompts && textarea) {
-        void window.ClawSlash.submitWithPendingPrompts(textarea, submit);
-      } else {
-        return submit();
-      }
-    };
-  }
-
-  // footer 动作（requests 模式）：过滤内部回退/压缩动作（动作过滤契约）
-  if (mode === 'requests') {
-    const visibleActions = Array.isArray(lease?.actions)
-      ? lease.actions.filter(action => action && action.id !== 'rollback_to_call' && action.id !== 'compact_from_call')
-      : [];
-    footer.innerHTML = visibleActions.length > 0
-      ? '<div class="user-input-actions">' + visibleActions.map(action =>
-          '<button class="user-input-action ' + escapeHtml(action.variant || 'secondary') + '" onclick="submitInputAction(\'' + escapeHtml(lease.requestId) + '\', \'' + escapeHtml(action.id) + '\', {}, \'' + escapeHtml(boundRuntimeId) + '\')">' + escapeHtml(action.label) + '</button>'
-        ).join('') + '</div>'
-      : '';
-    footer.style.display = visibleActions.length > 0 ? '' : 'none';
-  } else {
-    footer.innerHTML = '';
-    footer.style.display = 'none';
-  }
+  sendBtn.id = 'persistent-action-btn';
+  sendBtn.title = currentLanguage === 'zh' ? '发送' : 'Send';
+  sendBtn.onclick = function() {
+    const textarea = document.getElementById('input-persistent');
+    if (window.ClawSlash?.submitWithPendingPrompts && textarea) {
+      void window.ClawSlash.submitWithPendingPrompts(textarea, onPersistentBtnClick);
+    } else {
+      onPersistentBtnClick();
+    }
+  };
+  _syncPersistentActionButton();
 }
 
 /**
  * 会话身份重绑（容器级）：旧 key 抢救草稿 → 更新 dataset.sessionKey →
- * 恢复新 key 草稿。同 key 调用是幂等 no-op（模式翻转不触碰草稿）。
+ * 恢复新 key 草稿。同 key 调用是幂等 no-op（同会话重渲染不触碰草稿）。
  * 返回是否发生了会话切换。
  */
 function syncPersistentComposerSessionCard(container) {

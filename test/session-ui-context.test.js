@@ -141,6 +141,8 @@ test('viewer session binding freezes context key against host active drift', () 
 test('submit success clears the live textarea, not a detached reference', () => {
   // await fetch 期间输入面可能整块重建；提交前抓取的 textarea 会脱离 DOM。
   // 成功分支必须重新解析 live 元素，否则已发送文本经草稿写回"复活"。
+  // ADR-0035 后普通发言只有一条提交路径（submitQueuedInput），此契约只剩
+  // 该处需要锁定；input-helpers 的 /input 文本编排已退役。
   const persistentInputSource = fs.readFileSync(
     new URL('../public/src/modules/persistent-input.js', import.meta.url),
     'utf8',
@@ -154,9 +156,10 @@ test('submit success clears the live textarea, not a detached reference', () => 
     new URL('../public/src/modules/input-helpers.js', import.meta.url),
     'utf8',
   );
-  assert.ok(
-    inputHelpersSource.includes('const liveTextarea = document.getElementById(`input-${requestId}`)'),
-    'submitInput should resolve the live textarea after await',
+  assert.equal(
+    /async function submitInput\b|_submitInputInner/.test(inputHelpersSource),
+    false,
+    'the retired /input text orchestration must not come back (ADR-0035)',
   );
 });
 
@@ -458,15 +461,26 @@ test('input renderer is a read-only consumer of session view state', () => {
   assert.match(renderBlock, /readCurrentSessionViewState\(\)\.inputRequests/);
 });
 
-test('request input controls keep the runtime they were rendered for', () => {
-  // 工单 036：双模板合一后请求卡端点在 composer 组件上切换，绑定渲染时
-  // runtime 的契约不变（keydown/发送按钮为 JS 属性绑定，footer 动作仍 inline）。
-  assert.ok(inputComposerSource.includes(
-    'function(event) { handleInputKey(event, requestId, boundRuntimeId); }',
-  ));
-  // Button routing is exercised at runtime in frontend-input-convergence.test.js;
-  // do not bind this contract to the submit callback's source spelling.
-  assert.match(inputComposerSource, /visibleActions\.map[\s\S]*?escapeHtml\(boundRuntimeId\)/);
+test('lease action responses stay bound to the runtime that rendered the lease', () => {
+  // ADR-0035：普通发言恒走 user-turn，composer 不再按 lease 绑定 requestId
+  // 端点。唯一残留的 requestId 端点消费方是 rollback / compact 的 action 应答。
+  // 该应答必须携带渲染时绑定的 runtimeId——lease 与运行态正交，用户可能在
+  // 应答前切走选中态，改用 currentRuntimeAgentId 会把动作投到错误会话。
+  const rollbackSource = fs.readFileSync(
+    new URL('../public/src/modules/rollback-dialog.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    rollbackSource,
+    /submitInputAction\(\s*lease\.requestId,\s*'rollback_to_call',[\s\S]{0,200}?boundRuntimeId\s*,\s*viewToken\)/,
+  );
+  assert.match(
+    rollbackSource,
+    /submitInputAction\(\s*lease\.requestId,\s*'compact_from_call',[\s\S]{0,200}?boundRuntimeId\s*,\s*viewToken\)/,
+  );
+  // composer 侧：不存在 requestId 绑定的键盘提交路径。
+  assert.equal(/handleInputKey/.test(inputComposerSource), false,
+    'composer must not bind a requestId text endpoint (ADR-0035)');
 });
 
 test('main render boundary consumes one captured session view', () => {

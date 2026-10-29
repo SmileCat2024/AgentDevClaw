@@ -244,7 +244,6 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
     _renderLastCallElapsed: () => {},
     _renderRecapHint: () => {},
     _injectPendingVoiceResult: () => {},
-    _reattachVoiceInputUi: () => {},
     _renderAttachmentPreview: () => {},
     updateInputModelSwitcher: () => {},
     updateThinkingEffortSwitcher: () => {},
@@ -255,12 +254,10 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
     _shouldPreserveVoiceInputForRender: () => false,
     readPartialCompactStartedAt: () => null,
     writePartialCompactStartedAt: () => {},
-    // composer 端点绑定的提交域 stub（用例不触发真实行为）
+    // composer 端点绑定（正常输入仅走 persistent user-turn；action 应答独立）
     handleInputPaste: () => {},
     handlePersistentInputKey: () => {},
     onPersistentBtnClick: () => {},
-    handleInputKey: () => {},
-    submitInput: () => {},
     submitInputAction: () => {},
     onImageFilesSelected: () => {},
     toggleVoiceRecording: () => {},
@@ -332,25 +329,22 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
 // ── 用例 1：状态写入自动触发（订阅生效，无需手动 poke） ─────────────────────
 
 describe('state-write auto-triggers input surface (ticket 037 acceptance #1)', () => {
-  it('applySessionViewPatch({inputRequests}) flips the composer with no manual poke', () => {
+  it('inputRequests state updates preserve the persistent composer and ordinary-send endpoint', () => {
     const ctx = createConvergenceSandbox();
     ctx.run('renderInputRequests([])');
-    const taA = ctx.run("document.getElementById('input-persistent')");
-    assert.ok(taA, 'persistent composer mounts on first render');
+    const textarea = ctx.run("document.getElementById('input-persistent')");
+    assert.ok(textarea, 'persistent composer mounts on first render');
 
-    // 状态写入即声明：patch 写入 inputRequests 后不调用任何手动 render/reset，
-    // 输入面必须已翻转到请求卡端点（同节点、属性级更新）。
     ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'r1', placeholder: 'Answer me' }] })`);
-    const taB = ctx.run("document.getElementById('input-r1')");
-    assert.ok(taB, 'requests endpoint rendered by the patch hook alone (no manual poke)');
-    assert.equal(taB, taA, 'persistent -> requests flip must reuse the same composer node');
-    assert.equal(composerMode(ctx), 'requests');
-
-    // 写回空请求：同一节点翻回 persistent
-    ctx.run('applySessionViewPatch({ inputRequests: [] })');
-    const taBack = ctx.run("document.getElementById('input-persistent')");
-    assert.equal(taBack, taA, 'requests -> persistent flip must reuse the same composer node');
+    assert.equal(ctx.run("document.getElementById('input-persistent')"), textarea,
+      'a pending text lease must not replace the ordinary-send composer');
+    assert.equal(ctx.run("document.getElementById('input-r1')"), null,
+      'ordinary text entry must not become requestId-bound');
     assert.equal(composerMode(ctx), 'persistent');
+
+    ctx.run('applySessionViewPatch({ inputRequests: [] })');
+    assert.equal(ctx.run("document.getElementById('input-persistent')"), textarea,
+      'clearing a lease keeps the same composer');
   });
 
   it('same-round duplicate declarations are idempotent (draft preserved, node stable)', () => {
@@ -371,46 +365,44 @@ describe('state-write auto-triggers input surface (ticket 037 acceptance #1)', (
     assert.equal(taAfter.value, 'draft preserved', 'deduped notifies must keep the draft');
   });
 
-  it('rollback-dialog freeze keeps renders as no-ops; close (state write) restores', () => {
+  it('rollback-dialog freeze keeps renders as no-ops; close preserves the persistent composer', () => {
     const ctx = createConvergenceSandbox();
     ctx.run('renderInputRequests([])');
-    const taA = ctx.run("document.getElementById('input-persistent')");
-    const cardA = ctx.run(composerQuery(ctx));
+    const textarea = ctx.run("document.getElementById('input-persistent')");
 
-    // 对话框接管（§3 级 3）：接管期间声明 no-op，DOM 不被触碰
     ctx._rollbackDialogOpen = true;
     ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'rb-1' }] })`);
     assert.equal(composerMode(ctx), 'persistent',
-      'render while frozen must be a no-op (stale endpoint stays hidden)');
-    assert.equal(ctx.run("document.getElementById('input-rb-1')"), null,
-      'frozen render must not touch the DOM');
+      'render while rollback dialog is open must not alter the composer');
+    assert.equal(ctx.run("document.getElementById('input-persistent')"), textarea);
 
-    // 关闭 = 状态写入 + 声明 → 恢复输入面（签名为冻结期间记录的 frozen，
-    // 关闭后的声明因模式差异自然触发恢复渲染）
     ctx.run(`
       _rollbackDialogOpen = false;
       notifyInputSurfaceChanged(currentInputRequests || []);
     `);
-    assert.equal(composerMode(ctx), 'requests',
-      'close restores the input surface for the pending lease');
-    assert.equal(ctx.run("document.getElementById('input-rb-1')"), taA,
-      'restore reuses the same composer node');
+    assert.equal(composerMode(ctx), 'persistent',
+      'closing the dialog restores the ordinary composer, not a lease answer endpoint');
+    assert.equal(ctx.run("document.getElementById('input-rb-1')"), null);
   });
 });
 
 // ── 契约 §8 事件→显示映射逐行锁死（收敛后覆盖面不得减少） ────────────────────
 
 describe('contract §8 event->display mapping after convergence (ticket 037)', () => {
-  it('§8 poll 行：inputRequests JSON 变化经 patch hook 重渲染', () => {
+  it('§8 poll 行：inputRequests lease change updates feedback state without changing the composer', () => {
     const ctx = createConvergenceSandbox();
     ctx.run('renderInputRequests([])');
-    // 模拟 poll metadata commit：inputChanged → patch → hook 渲染
+    const textarea = ctx.run("document.getElementById('input-persistent')");
+
     ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'poll-1', placeholder: 'P' }] })`);
-    assert.ok(ctx.run("document.getElementById('input-poll-1')"),
-      'poll-driven lease change renders the request endpoint');
+    assert.equal(ctx.run("document.getElementById('input-persistent')"), textarea,
+      'poll lease updates must preserve the persistent composer');
+    assert.equal(ctx.run("document.getElementById('input-poll-1')"), null,
+      'poll lease updates must not create a request-bound endpoint');
+
     ctx.run('applySessionViewPatch({ inputRequests: [] })');
-    assert.ok(ctx.run("document.getElementById('input-persistent')"),
-      'lease cleared -> optimistic persistent restore');
+    assert.equal(ctx.run("document.getElementById('input-persistent')"), textarea,
+      'lease cleared keeps the persistent composer');
   });
 
   it('§8 会话切换/加载：draft rebinds by sessionKey through the single entry', () => {
@@ -456,16 +448,17 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     assert.equal(ctx.run("document.getElementById('input-persistent')"), taA,
       'calling flip must not rebuild the composer');
     assert.equal(composerMode(ctx), 'persistent');
-    // calling 期间请求卡送达仍正常翻转（模式翻转由 patch 声明）
+    // calling 期间普通文本 lease 到达，不改变 composer 形态。
     ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'rc-1' }] })`);
-    assert.equal(composerMode(ctx), 'requests');
+    assert.equal(composerMode(ctx), 'persistent');
+    assert.ok(ctx.run("document.getElementById('input-persistent')"));
   });
 
   it('§8 提交成功（请求卡路径）：optimistic restore without waiting for poll', async () => {
     const ctx = createConvergenceSandbox({ contextKey: 'session-a' });
     ctx.run('renderInputRequests([])');
-    ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'r-act' }] })`);
-    assert.ok(ctx.run("document.getElementById('input-r-act')"), 'request endpoint rendered');
+    ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'r-act', actions: [{ id: 'proceed' }] }] })`);
+    assert.ok(ctx.run("document.getElementById('input-persistent')"), 'persistent composer remains mounted');
 
     // 真实 submitInputAction 路径（input-helpers.js）
     const helpersSource = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
@@ -690,9 +683,10 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
   it('§8 排队同步：level-6 optimistic queue pins persistent over a pending lease', () => {
     const ctx = createConvergenceSandbox();
     ctx.run('renderInputRequests([])');
-    // 请求卡在先
+    // 普通文本 lease 到达，但输入框仍是 user-turn composer。
     ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'q-1' }] })`);
-    assert.ok(ctx.run("document.getElementById('input-q-1')"), 'requests card shows for the lease');
+    assert.ok(ctx.run("document.getElementById('input-persistent')"));
+    assert.equal(ctx.run("document.getElementById('input-q-1')"), null);
     // 本地排队乐观态写入 + 声明（persistent-input 的队列同步收敛路径）
     ctx.run(`
       _localQueuedInputPending = true;
@@ -701,13 +695,14 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     `);
     // 级 6：本地排队乐观态 → persistent（请求卡被压住，不弹卡）
     assert.equal(composerMode(ctx), 'persistent');
-    // 排空后声明 → 请求卡恢复
+    // 排空只清理队列反馈，普通发言输入面仍不受文本 lease 影响。
     ctx.run(`
       _localQueuedInputPending = false;
       _pendingQueuedCount = 0;
       notifyInputSurfaceChanged(currentInputRequests || []);
     `);
-    assert.equal(composerMode(ctx), 'requests', 'drained queue reveals the request card again');
+    assert.equal(composerMode(ctx), 'persistent');
+    assert.equal(ctx.run("document.getElementById('input-q-1')"), null);
   });
 
   it('§6 会话隔离：切换 runtime 后旧会话的排队乐观态不劫持新会话输入面', () => {
@@ -732,8 +727,9 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     assert.equal(ctx.run('_queuedTexts.length'), 0, '旧会话排队文本被重绑清空');
     assert.equal(ctx.run('_localQueuedInputPending'), false);
     assert.equal(ctx.run('String(_queuedProjectionRuntimeId)'), 'agent-2');
-    assert.equal(composerMode(ctx), 'requests',
-      '投影重绑后级 6 失效，新会话的请求卡正常浮现');
+    assert.equal(composerMode(ctx), 'persistent',
+      '投影重绑不会让新会话输入面进入 lease 应答模式');
+    assert.equal(ctx.run("document.getElementById('input-q-1')"), null);
   });
 });
 
@@ -791,45 +787,34 @@ function loadWakeupButtonPaths(ctx) {
   }
 }
 
-it('background wakeup restores the interrupt button with an outstanding text lease', () => {
+it('background wakeup restores the interrupt button while the persistent composer remains mounted', () => {
   const ctx = createConvergenceSandbox();
   loadWakeupButtonPaths(ctx);
   ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'idle-lease' }] });
     updateNotificationStatus({ callActive: false, runtime: { callActive: false,
       lastOutcome: { status: 'continued', reason: 'suspended' } } });`);
-  const textarea = ctx.run("document.getElementById('input-idle-lease')");
+  const textarea = ctx.run("document.getElementById('input-persistent')");
   const button = ctx.state.container.querySelector('.persistent-action-btn');
+  assert.ok(textarea);
   assert.equal(button.classList.contains('is-stop'), false, 'waiting may show send');
   ctx.run(`updateNotificationStatus({ callActive: true,
     state: { type: 'call.start', timestamp: 100, data: {} },
     runtime: { callActive: true, callStartedAt: 100 } });`);
   assert.equal(ctx.run('isRuntimeCalling(currentRuntimeAgentId)'), true);
-  assert.equal(button.classList.contains('is-stop'), true, 'running must show interrupt, even in requests mode');
-  assert.equal(ctx.run("document.getElementById('input-idle-lease')"), textarea);
+  assert.equal(button.classList.contains('is-stop'), true, 'running must show interrupt');
+  assert.equal(ctx.run("document.getElementById('input-persistent')"), textarea);
   let interrupts = 0;
   ctx.interruptAgent = () => { interrupts++; };
   button.onclick();
-  assert.equal(interrupts, 1, 'empty running composer must interrupt, not submit an empty lease');
+  assert.equal(interrupts, 1, 'empty running composer must interrupt, not submit');
 });
 
-it('request send button retains its bound runtime even if selection changes before rerender', () => {
-  const ctx = createConvergenceSandbox();
-  loadWakeupButtonPaths(ctx);
-  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'bound-lease' }] });`);
-  const textarea = ctx.run("document.getElementById('input-bound-lease')");
-  textarea.value = 'message for the original session';
-  const submissions = [];
-  ctx.submitInput = (requestId, runtimeId) => submissions.push({ requestId, runtimeId });
-  ctx.currentRuntimeAgentId = 'agent-2';
-  ctx.state.container.querySelector('.persistent-action-btn').onclick();
-  assert.deepEqual(submissions, [{ requestId: 'bound-lease', runtimeId: 'agent-1' }],
-    'the callback must never target the newly selected runtime using the old lease');
-});
 
-it('running request composer keeps text submission and reports rejected input without a false echo', async () => {
+
+it('running composer uses user-turn, keeps rejected choice-conflict text, and explains the required action', async () => {
   const ctx = createConvergenceSandbox();
   loadWakeupButtonPaths(ctx);
-  ctx.loadSource('public/src/modules/input-helpers.js');
+  loadQueueSubmitPaths(ctx);
   ctx._nextPaint = async () => {};
   ctx._resolvePendingImagesForTarget = async () => ({ images: [], failedCount: 0 });
   ctx._imageBucketKey = () => 'images-a';
@@ -838,28 +823,37 @@ it('running request composer keeps text submission and reports rejected input wi
   const echoes = [];
   ctx.window.ClawToast = { show: (value) => toasts.push(value) };
   ctx.window.ClawFW = { ...ctx.window.ClawFW, pushOptimisticUserEcho: (value) => echoes.push(value) };
-  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'idle-lease' }] });
+  ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'choice-lease', mode: 'choices' }] });
     updateNotificationStatus({ callActive: true, runtime: { callActive: true, callStartedAt: 100 } });`);
-  const textarea = ctx.run("document.getElementById('input-idle-lease')");
-  textarea.value = 'follow-up during wakeup';
-  ctx.run('_cacheSessionInput(document.getElementById("input-idle-lease"))');
+  // 选择卡已接管输入面；模拟竞态：user-turn 在接管前已发出。
+  const textarea = ctx.run("document.getElementById('input-persistent')");
+  textarea.value = 'draft during choice race';
+  ctx.run('_cacheSessionInput(document.getElementById("input-persistent"))');
   const requests = [];
   ctx.fetch = async (url, init) => {
     requests.push({ url, body: JSON.parse(init.body) });
-    ctx.state.now += 301;
-    return { ok: false, status: 404, json: async () => ({ error: 'Request not found or expired' }) };
+    // 真实服务端形状：operation-contract 把 viewer 的 input_mode_conflict
+    // 归一成稳定码 operation_rejected，原码放 legacyCode。
+    return {
+      ok: false,
+      status: 409,
+      json: async () => ({
+        ok: false,
+        code: 'operation_rejected',
+        legacyCode: 'input_mode_conflict',
+        retryable: false,
+        error: 'A non-text interactive input request must be completed before submitting a new user turn',
+      }),
+    };
   };
-  await ctx.state.container.querySelector('.persistent-action-btn').onclick();
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, '/api/agents/agent-1/input');
-  assert.equal(requests[0].body.requestId, 'idle-lease');
-  assert.equal(requests[0].body.response.text, 'follow-up during wakeup');
-  assert.equal(textarea.value, 'follow-up during wakeup');
-  assert.equal(ctx.run('_sessionInputCache["session-a"]'), textarea.value);
-  assert.deepEqual(echoes, [], 'rejected input must not look sent');
-  assert.equal(toasts.some((toast) => toast.status === 'error'), true, 'rejection must be visible, not silently retained');
-  assert.equal(ctx.state.container.querySelector('.persistent-action-btn').classList.contains('is-stop'), true,
-    'submission feedback must restore the running button, not force send');
+  await ctx.run('submitQueuedInput()');
+  assert.equal(requests[0].url, '/api/agents/agent-1/user-turn');
+  assert.equal(textarea.value, 'draft during choice race');
+  assert.equal(ctx.run('_sessionInputCache["session-a"]'), 'draft during choice race');
+  assert.deepEqual(echoes, [], 'rejected turn must not appear as sent');
+  assert.equal(toasts[0].status, 'info');
+  assert.match(toasts[0].title, /请先完成选择/);
+  assert.match(toasts[0].description, /输入内容已保留/);
 });
 
 it('request composer keeps interrupting sticky through a stale running frame until call finish', async () => {
@@ -1062,19 +1056,23 @@ it('real message preceding the POST receipt does not leave a duplicate echo', ()
   assert.equal(chat.children.length, 0, 'the already visible real message is sufficient');
 });
 
-it('slot text submission provides immediate echo without waiting for a poll', async () => {
+it('idle text lease uses user-turn and preserves immediate echo without waiting for poll', async () => {
   const ctx = createConvergenceSandbox();
   ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'slot' }] })`);
   loadQueueSubmitPaths(ctx);
-  ctx.loadSource('public/src/modules/input-helpers.js');
   ctx.run(`function beginFollowLatestEntryWindow() {} function requestFollowLatest() {}
     function clearInterruptSuppression() {} function _markAgentCallStartedForNotify() {}
     function renderAgentList() {} function poll() {}`);
   const echoes = [];
   ctx.window.ClawFW.pushOptimisticUserEcho = (value) => echoes.push(value);
-  ctx.run("document.getElementById('input-slot').value = 'slot input'");
-  ctx.fetch = async () => ({ ok: true });
-  await ctx.run("submitInput('slot')");
+  ctx.run("document.getElementById('input-persistent').value = 'slot input'");
+  const requests = [];
+  ctx.fetch = async (url) => {
+    requests.push(url);
+    return { ok: true, json: async () => ({ delivery: 'input', requestId: 'slot' }) };
+  };
+  await ctx.run('submitQueuedInput()');
+  assert.deepEqual(requests, ['/api/agents/agent-1/user-turn']);
   assert.equal(echoes.length, 1);
   assert.equal(echoes[0].text, 'slot input');
   assert.equal(echoes[0].fromIndex, 0);
@@ -1204,8 +1202,7 @@ describe('manual poke protocol is retired (ticket 037)', () => {
   it('delayed action lease from session A cannot clear or rerender session B', async () => {
     const ctx = createConvergenceSandbox();
     ctx.run(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'A' }, inputRequests: [{ requestId: 'A-request' }] })`);
-    const source = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
-    ctx.run(source.slice(source.indexOf('function captureInputViewToken')));
+    ctx.loadSource('public/src/modules/input-helpers.js');
     ctx.run(`
       function clearInterruptSuppression() {}
       function _markAgentCallStartedForNotify() {}
@@ -1232,8 +1229,7 @@ describe('manual poke protocol is retired (ticket 037)', () => {
   it('same-session action lease still clears input requests optimistically', async () => {
     const ctx = createConvergenceSandbox();
     ctx.run(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'A' }, inputRequests: [{ requestId: 'A-request' }] })`);
-    const source = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
-    ctx.run(source.slice(source.indexOf('function captureInputViewToken')));
+    ctx.loadSource('public/src/modules/input-helpers.js');
     ctx.run(`
       function clearInterruptSuppression() {}
       function _markAgentCallStartedForNotify() {}
@@ -1250,57 +1246,45 @@ describe('manual poke protocol is retired (ticket 037)', () => {
   });
 });
 
-// ── 回归：输入面翻转的视口 preserveTop 来源（非跟随回合结束跳顶 bug） ────────
+// ── 回归：普通文本 lease 变化不再翻转或重建输入面（ADR-0035） ───────────
 
-describe('input surface flips preserve the chat viewport top (scroll-reset regression)', () => {
-  // 回归场景：回合结束（或开始）输入面 persistent ↔ requests 翻转时，
-  // renderInputRequests 向视口结算声明的 preserveTop 必须是聊天容器的
-  // scrollTop；历史上误读输入容器的 scrollTop（恒 0），非跟随模式下结算
-  // 将其回写导致聊天视口跳回顶部。
-  function mountChatViewport(ctx, scrollTop) {
-    const chatViewport = createMiniElement('div', ctx.state.doc);
-    chatViewport.id = 'chat-container';
-    chatViewport.scrollTop = scrollTop;
-    ctx.state.doc.body.appendChild(chatViewport);
-    return chatViewport;
-  }
-
-  it('finish-time input request (persistent → requests) carries the chat scrollTop, not the input container\'s', () => {
+describe('ordinary text lease updates leave the persistent composer untouched', () => {
+  it('arrival and clearing preserve the same composer node and deliver rollback draft feedback', () => {
     const ctx = createConvergenceSandbox();
-    mountChatViewport(ctx, 2200);
+    ctx.loadSource('public/src/modules/input-helpers.js');
+    ctx.run(`_sessionInputCache = {};
+      var autoResizeCalls = 0;
+      autoResize = () => { autoResizeCalls++; };
+      var leaseToasts = [];
+      ClawToast = { show: (toast) => leaseToasts.push(toast) };
+      currentLanguage = 'zh';`);
     ctx.run('renderInputRequests([])');
+    const composer = ctx.run(composerQuery(ctx));
+    assert.ok(composer, 'the chat surface has its persistent composer mounted');
 
-    const calls = [];
-    ctx.notifyChatViewportMutation = (opts) => { calls.push(opts); };
+    // Runtime announces an ordinary text lease: this is answer-routing state, not
+    // a reason to replace the user's speaking surface.
+    ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'text-lease', placeholder: '请输入', initialValue: 'rollback draft', actions: [{ id: 'rollback_to_call', data: { lastActionError: 'checkpoint missing' } }] }] })`);
+    assert.equal(composerMode(ctx), 'persistent');
+    assert.equal(ctx.run(composerQuery(ctx)), composer, 'lease arrival keeps the existing composer node');
+    assert.equal(ctx.run("document.getElementById('input-persistent').value"), 'rollback draft',
+      'lease initialValue restores the rollback draft in the ordinary composer');
+    assert.equal(ctx.run("_sessionInputCache['session-a']"), 'rollback draft',
+      'restored draft is also retained by the per-session cache');
+    assert.equal(ctx.run('leaseToasts.length'), 1, 'carried action failure is surfaced when the lease arrives');
+    assert.equal(ctx.run('leaseToasts[0].description'), 'checkpoint missing');
 
-    // 真实触发路径：回合结束 agent 发出输入请求 → 状态写入 → 输入面翻转
-    ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'fin-1', placeholder: '请输入' }] })`);
-    assert.equal(composerMode(ctx), 'requests', 'flip reached the requests endpoint');
-
-    const inputRenders = calls.filter((c) => c.reason === 'input-render');
-    assert.ok(inputRenders.length > 0, 'flip must notify a viewport mutation');
-    for (const call of inputRenders) {
-      assert.equal(call.shouldFollow, false, 'non-follow must be declared');
-      assert.equal(call.preserveTop, 2200,
-        'preserveTop must be the chat container scrollTop (0 = input container value → jump to top)');
-    }
-  });
-
-  it('turn-start dismiss (requests → persistent) also preserves the chat scrollTop', () => {
-    const ctx = createConvergenceSandbox();
-    mountChatViewport(ctx, 1800);
-    ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'fin-1', placeholder: '请输入' }] })`);
-
-    const calls = [];
-    ctx.notifyChatViewportMutation = (opts) => { calls.push(opts); };
     ctx.run('applySessionViewPatch({ inputRequests: [] })');
-    assert.equal(composerMode(ctx), 'persistent', 'flip restored the persistent endpoint');
+    assert.equal(composerMode(ctx), 'persistent');
+    assert.equal(ctx.run(composerQuery(ctx)), composer, 'lease clearing keeps the existing composer node');
 
-    const inputRenders = calls.filter((c) => c.reason === 'input-render');
-    assert.ok(inputRenders.length > 0);
-    for (const call of inputRenders) {
-      assert.equal(call.preserveTop, 1800);
-    }
+    ctx.run(`document.getElementById('input-persistent').value = 'user draft';
+      _cacheSessionInput(document.getElementById('input-persistent'));
+      applySessionViewPatch({ inputRequests: [{ requestId: 'next-lease', initialValue: 'older rollback draft' }] });`);
+    assert.equal(ctx.run("document.getElementById('input-persistent').value"), 'user draft',
+      'a later rollback draft never overwrites text the user has already entered');
+    assert.equal(ctx.run("_sessionInputCache['session-a']"), 'user draft',
+      'the session cache retains the user draft as well');
   });
 });
 

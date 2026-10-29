@@ -46,6 +46,7 @@
    - 0032 编程小助手线程驱动：对话身份从 Session 提升为 Thread（048–051 已实施）：`threadHost` 声明接入（目录/项目对话一并覆盖，与 projectId 正交）；手动 `/trim` `/summary` 改对话内 succession 事务（自动接续后话）；列表行=对话、历史以时间锚存档呈现（不用「代」）；存量迁移按 index 血缘建线，歧义分量跳过，备份+预览+幂等；服务启动自动执行，失败告警不阻断；本机真实数据已迁移并验收；移动对话=整链移动；不声明线程配额；搜索 Thread 聚合独立后续（052；工单 048–052 见 [docs/tickets/2026-10-24-ph-thread-driven.md](docs/tickets/2026-10-24-ph-thread-driven.md)）
    - 0033 会话崩溃恢复（Proposed）：journal 为唯一权威，记录工具批次意图、dispatch、进度、结果/未知及核验事实；完整 checkpoint 保存可回退的普通会话与 Feature 状态，`state.json` 不进入首版。明确并发工具的单写者提交、原始调用顺序、unknown 副作用与恢复可见性；实施前仍需完成工具入口、文件消费者盘点及故障注入验收。性能不是立项理由，当前活跃会话保存开销已实测在毫秒级。
    - [0034 模型选择 Feature 化](docs/adr/0034-feature-owned-model-selection.md)（Accepted，已实施）：Feature 持有选择与恢复策略，Agent 持有实际模型，Claw 管资产与通信；选择是链级当前状态——重启/接续保留、分支继承源对话当前选择（非边界快照历史值）、回滚不撤销；恢复失败提示并回退全局默认；远程会话不保持模型切换，入口降级不可操作。凭证刷新（ADR-0028 修订一推送）经 feature-comms 请求面收编为 Feature 的 `refresh-credentials` 请求类型（决策 6a），宿主不再持有模型编排语义。[文件级实施方案](docs/plans/2026-10-28-model-selection-feature-implementation.md)。
+   - [0035 正常输入与输入租约解耦](docs/adr/0035-input-channel-decoupling.md)（Proposed）：composer 单一 user-turn 通道，lease 专职请求应答（choice 选择、rollback/compact actions 回填）；宿主 inputLoop 与框架零改动（viewer `submitUserTurn` 三段式路由已备，空闲文本 lease 由 user-turn 自动回填），前端 requests 模式与 `submitInput` 文本编排退役、以删码为主；`submitInputAction` 与 choice 卡独立面不动。[实施计划](docs/plans/2026-10-29-input-channel-decoupling.md)
 
 实现层真实入口：
 

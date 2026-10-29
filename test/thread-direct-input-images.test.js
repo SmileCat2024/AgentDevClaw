@@ -6,13 +6,13 @@ import vm from 'node:vm';
 // 线程直投路径（window.submitThreadInput）发送成功后，图片桶必须与 viewer
 // 直投路径同语义清空（clearPendingInputImages），否则附件缩略图滞留输入框。
 // 回归背景：PH 线程宿主会话图片发出后缩略图卡在输入框（2026-10-28）。
+//
+// ADR-0035 后普通发言只有 submitQueuedInput 一条入口，线程直投分支在其内部；
+// 历史事故的另一份拷贝（input-helpers.js 的 slot 入口）已随 /input 文本编排
+// 一并退役，本文件只锁定剩下的唯一入口。
 
 const persistentInputSource = fs.readFileSync(
   new URL('../public/src/modules/persistent-input.js', import.meta.url),
-  'utf8',
-);
-const inputHelpersSource = fs.readFileSync(
-  new URL('../public/src/modules/input-helpers.js', import.meta.url),
   'utf8',
 );
 
@@ -111,73 +111,20 @@ test('thread direct-delivery submit clears pending images on success', async () 
     'pending image bucket must be cleared after successful thread submit');
 });
 
-test('slot-input thread direct-delivery clears pending images on success', async () => {
-  // slot 入口（input-helpers.js _submitInputInner）的线程直投分支与 persistent
-  // 入口同构：图片随 payload 发出后，桶必须同语义清空，否则缩略图滞留输入框、
-  // 且下次发送会把残留附件重复带出（2026-10-28 实测踩中）。
-  const innerBlock = sourceBetween(
-    inputHelpersSource,
-    'async function _submitInputInner(requestId, targetRuntimeId, viewToken) {',
-    '\nfunction _notifyInputSubmissionFailed',
-  );
-  const bucketBlock = sourceBetween(
-    persistentInputSource,
-    'const _pendingImageBuckets = new Map();',
-    '\nlet _lastCallFinishTime',
-  );
-  const clearBlock = sourceBetween(
-    persistentInputSource,
-    'function clearPendingInputImages(bucketKey) {',
-    '\n// ── window 导出',
-  );
+test('failed thread image upload aborts the submit and keeps the attachments', async () => {
+  // 线程直投的唯一入口失败语义：任一附件上传失败都必须显式中止，输入文本与
+  // 图片桶原样保留供重试——绝不静默丢弃附件，也不把半张图发进线程。
+  const { context, submitCalls, textarea } = await createThreadSubmitContext();
+  context._resolvePendingImagesForTarget = async () => ({
+    images: [],
+    failedCount: 1,
+  });
+  context.window.ClawToast = { show() {} };
 
-  const textarea = { value: 'slot 测试', dataset: { sessionKey: 'key-1' } };
-  const submitCalls = [];
-  const context = {
-    currentMessages: [],
-    currentLanguage: 'zh',
-    _sessionInputCache: {},
-    document: {
-      getElementById(id) { return id === 'input-req-1' ? textarea : null; },
-      querySelector() { return null; },
-    },
-    window: {
-      resolveThreadInputRoute: () => ({ route: 'direct' }),
-      getActiveThreadInputTarget: () => ({ threadId: 'th-1' }),
-      submitThreadInput: async (threadId, payload) => {
-        submitCalls.push({ threadId, payload });
-        return { delivery: { delivered: 1 } };
-      },
-      SessionReference: { peek: () => [], consume: () => [] },
-      ClawSlash: { consumeActivations: () => [] },
-    },
-    _getSessionInputCacheKey: () => 'key-1',
-    isInputViewTokenCurrent: () => true,
-    _nextPaint: async () => {},
-    _resolvePendingImagesForTarget: async () => ({
-      images: [{ path: '/uploads/attach.png', mediaType: 'image/png' }],
-      failedCount: 0,
-    }),
-    autoResize() {},
-    poll() {},
-  };
-  vm.createContext(context);
-  vm.runInContext(
-    `${bucketBlock}
-${clearBlock}
-${innerBlock}
-globalThis.__submitInner = _submitInputInner;
-globalThis.__bucket = _imageBucket;`,
-    context,
-  );
-  context.__bucket().push({ path: '/uploads/attach.png', mediaType: 'image/png', source: 'paste' });
+  await context.__submit();
 
-  await context.__submitInner('req-1', 'runtime-1', { runtimeId: 'runtime-1' });
-
-  assert.equal(submitCalls.length, 1, 'slot thread input should be submitted exactly once');
-  assert.ok(Array.isArray(submitCalls[0].payload.images) && submitCalls[0].payload.images.length === 1,
-    'image payload should reach the slot thread submit call');
-  assert.equal(context.__bucket().length, 0,
-    'pending image bucket must be cleared after successful slot thread submit');
+  assert.equal(submitCalls.length, 0, 'a failed attachment must abort the thread submit');
+  assert.equal(context.__bucket().length, 1, 'the pending image stays available for retry');
+  assert.equal(textarea.value, '看看这张图', 'the typed draft is preserved');
 });
 

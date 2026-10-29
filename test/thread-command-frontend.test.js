@@ -59,7 +59,7 @@ describe('submitThreadInput field passthrough (frontend sandbox)', () => {
   });
 });
 
-describe('submitInput thread-branch failure restores consumed pills (frontend sandbox)', () => {
+describe('thread direct delivery restores consumed pills on failure (frontend sandbox)', () => {
   function buildThreadRouteContext({ submitRejects }) {
     const restoredRefs = [];
     const restoredActivations = [];
@@ -67,7 +67,7 @@ describe('submitInput thread-branch failure restores consumed pills (frontend sa
     const textarea = { value: '继续', dataset: { sessionKey: 'sk-1' }, isConnected: true };
     const ctx = createFrontendSandbox({
       document: {
-        getElementById: (id) => (id === 'input-req-1' ? textarea : null),
+        getElementById: (id) => (id === 'input-persistent' ? textarea : null),
         querySelector: () => textarea,
       },
       currentLanguage: 'zh',
@@ -75,50 +75,60 @@ describe('submitInput thread-branch failure restores consumed pills (frontend sa
       _sessionInputCache: {},
       autoResize: () => {},
       _getSessionInputCacheKey: () => 'sk-1',
+      captureSessionViewToken: () => ({ runtimeId: 'rt-1' }),
+      isSessionViewTokenCurrent: () => true,
       window: {
-        resolveThreadInputRoute: () => ({ route: 'thread', thread: { threadId: 'wt-9' } }),
+        ClawToast: { show: (v) => toasts.push(v) },
+        getActiveThreadInputTarget: () => ({ threadId: 'wt-9' }),
         ClawSlash: {
           consumeActivations: () => ['skill.grill-me'],
           restoreActivations: (refs) => restoredActivations.push(refs),
         },
         SessionReference: {
+          peek: () => [{ agentId: 'programming-helper', sessionId: 'session-7', title: '引用' }],
           consume: () => [{ agentId: 'programming-helper', sessionId: 'session-7', title: '引用' }],
           restore: (refs) => restoredRefs.push(refs),
         },
-        submitThreadCommand: async () => {
-          if (submitRejects) throw new Error('thread inbox unavailable');
-          return { ok: true, delivery: { delivered: 1 } };
+        submitThreadInput: async () => {
+          if (submitRejects) throw new Error('thread input unavailable');
+          return { ok: true, deliveryAttempt: { delivered: 1 } };
         },
       },
       clearPendingInputImages: () => {},
-      beginFollowLatestEntryWindow: () => {},
-      requestFollowLatest: () => {},
-      applySessionViewPatch: () => {},
+      _renderAttachmentPreview: () => {},
       currentRuntimeAgentId: 'rt-1',
-      clearInterruptSuppression: () => {},
-      _markAgentCallStartedForNotify: () => {},
-      _agentCallActive: new Map(),
-      _syncPersistentActionButton: () => {},
-      renderAgentList: () => {},
-      poll: () => {},
-      _notifyThreadImageUnsupported: () => {},
+      updateQueueIndicator: () => {},
     });
     return { ctx, restoredRefs, restoredActivations, toasts, textarea };
   }
 
-  function loadSubmitInput(ctx) {
-    const source = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
-    // 覆盖 submitInput + _notifyThreadImageUnsupported + _submitInputViaThread 三个函数
-    ctx.run(sourceBetween(source, 'function captureInputViewToken(runtimeId) {', 'function getPrimaryInputRequest'));
-    ctx.run('var _submitInFlight = false; var _voiceTranscribing = false; var _voiceRecording = false;');
-    ctx.run('function _beginSubmitFeedbackWindow() {} function _endSubmitFeedbackWindow() {} async function _nextPaint() {} function autoResize() {}');
+  // ADR-0035：普通发言只有 submitQueuedInput 一条路径，线程直投分支在其内部。
+  function loadSubmitQueuedInput(ctx) {
+    const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+    ctx.run(sourceBetween(source, 'const _pendingImageBuckets = new Map();', '\nlet _lastCallFinishTime'));
+    ctx.run(sourceBetween(source, 'function clearPendingInputImages(bucketKey) {', '\n// ── window 导出'));
+    ctx.run(sourceBetween(source, 'async function submitQueuedInput() {', '\nfunction updateQueueIndicator'));
+    ctx.run(`var _submitInFlight = false;
+      function _requestNotifyPermission() {}
+      function _beginSubmitFeedbackWindow() {}
+      function _endSubmitFeedbackWindow() {}
+      async function _nextPaint() {}
+      async function _resolvePendingImagesForTarget() { return { images: [], failedCount: 0 }; }
+      function _clearRecapForNewMessage() {}
+      function clearInterruptSuppression() {}
+      function _markAgentCallStartedForNotify() {}
+      var _agentCallActive = new Map();
+      function _syncPersistentActionButton() {}
+      function renderAgentList() {}
+      function beginFollowLatestEntryWindow() {}
+      function requestFollowLatest() {}`);
   }
 
-  it('restores session references and activations when the thread command fails', async () => {
+  it('restores session references and activations when the thread delivery fails', async () => {
     const env = buildThreadRouteContext({ submitRejects: true });
-    loadSubmitInput(env.ctx);
+    loadSubmitQueuedInput(env.ctx);
 
-    await env.ctx.run('submitInput("req-1", "rt-1")');
+    await env.ctx.run('submitQueuedInput()');
 
     // 失败路径：引用与激活归还（P1 回归锁），输入保留
     assert.equal(env.restoredRefs.length, 1);
@@ -128,11 +138,11 @@ describe('submitInput thread-branch failure restores consumed pills (frontend sa
     assert.ok(env.toasts.some((t) => t.status === 'error'));
   });
 
-  it('keeps references consumed (no restore) when the thread command succeeds', async () => {
+  it('keeps references consumed (no restore) when the thread delivery succeeds', async () => {
     const env = buildThreadRouteContext({ submitRejects: false });
-    loadSubmitInput(env.ctx);
+    loadSubmitQueuedInput(env.ctx);
 
-    await env.ctx.run('submitInput("req-1", "rt-1")');
+    await env.ctx.run('submitQueuedInput()');
 
     assert.equal(env.restoredRefs.length, 0);
     assert.equal(env.restoredActivations.length, 0);

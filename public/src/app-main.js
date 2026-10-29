@@ -262,8 +262,8 @@ function toEpochMs(value) {
 }
 
 function getInputSurfaceMode(requests = readCurrentSessionViewState().inputRequests) {
-  // 九级优先级矩阵的唯一实现在 input-composer.js 的 resolveInputSurfaceMode
-  // （纯函数，行为契约 §3）；此处只负责组装当前全局状态。
+  // 输入面模式由 chat/runtime/choice 等显示状态决定；普通文本 lease
+  // 不参与 composer 形态判定。
   return resolveInputSurfaceMode(readInputSurfaceModeState(requests, isChatSurfaceActive()));
 }
 

@@ -5668,49 +5668,6 @@ body[data-theme="light"] .user-input-card:focus-within {
   line-height: 1.5;
 }
 
-.user-input-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 12px;
-  gap: 12px;
-}
-
-.user-input-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.user-input-action {
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 999px;
-  padding: 6px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 0.2s ease;
-}
-
-.user-input-action:hover {
-  color: var(--text-primary);
-  border-color: var(--text-secondary);
-  background: var(--hover-bg);
-}
-
-.user-input-action.danger {
-  color: #d9534f;
-  border-color: rgba(217, 83, 79, 0.35);
-}
-
-.user-input-action.primary {
-  color: var(--text-primary);
-  border-color: var(--text-primary);
-}
-
 .partial-compact-card {
   border-color: rgba(88, 166, 255, 0.34);
   background:

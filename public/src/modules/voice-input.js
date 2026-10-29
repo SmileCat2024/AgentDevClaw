@@ -8,8 +8,7 @@
  * 依赖全局函数:
  *   _getSessionInputCacheKey (app-main.js)
  *   autoResize (app-main.js)
- *   submitQueuedInput (app-main.js)
- *   submitInput (app-main.js)
+ *   submitQueuedInput (persistent-input.js)
  *   getRuntimeContextKey (app-core.js)
  *   _cacheSessionInput / _restoreSessionInputDraft / _storeSessionInputDraft /
  *   _storeVisibleSessionInputDraft, _sessionInputCache (input-composer.js, 工单 036)
@@ -177,25 +176,12 @@ function _shouldPreserveVoiceInputForRender(renderMode, cacheKey) {
   // 交互面 = composer 可见且可交互的模式（含压缩状态卡：录音与压缩互不依赖，
   // 转写结果按 sessionKey 注入）；hidden/readonly/冻结（回退对话框）视为离开。
   const isInteractiveInput = renderMode === 'persistent'
-    || renderMode === 'requests'
     || renderMode === 'choice'
     || renderMode === 'compacting';
   return hasOwnedVoiceOperation
     && isInteractiveInput
     && Boolean(_voiceCacheKey)
     && _voiceCacheKey === cacheKey;
-}
-
-function _reattachVoiceInputUi(root) {
-  if (!root?.querySelectorAll) return false;
-  const buttons = Array.from(root.querySelectorAll('.voice-input-btn'));
-  if (buttons.length === 0) return false;
-  const nextBtn = buttons.find((button) => button.dataset?.target === _voiceTargetId) || buttons[0];
-  _voiceTargetBtn = nextBtn;
-  _voiceTargetId = nextBtn.dataset?.target || _voiceTargetId;
-  nextBtn.classList.toggle('recording', _voiceRecording || _voiceStopping);
-  _updateVoiceUI();
-  return true;
 }
 
 function _markVoiceAutoSendAccepted(runtimeId) {
@@ -411,40 +397,6 @@ function _dispatchVoiceAutoSend(targetId) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: fullText, source: 'voice-input' })
-        }).then(async res => {
-          if (!res.ok) {
-            const error = await res.json().catch(() => ({}));
-            _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
-          } else {
-            _markVoiceAutoSendAccepted(originalAgentId);
-          }
-        }).catch(e => {
-          _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
-        });
-      }
-    }
-  } else if (targetId && targetId.startsWith('input-')) {
-    const requestId = targetId.slice('input-'.length);
-    if (_getSessionInputCacheKey() === _voiceCacheKey) {
-      submitInput(requestId, _voiceAgentId || currentRuntimeAgentId);
-    } else {
-      // Session switched — auto-submit to original agent's input request
-      const originalCacheKey = _voiceCacheKey;
-      const originalAgentId = _voiceAgentId;
-      let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
-      delete _pendingVoiceResults[_voiceCacheKey];
-      const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
-      delete _sessionInputCache[_voiceCacheKey];
-      fullText = cachedInput + fullText;
-      if (fullText.trim()) {
-        fetch(`/api/agents/${originalAgentId}/input`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            requestId,
-            input: fullText,
-            response: { kind: 'text', text: fullText },
-          })
         }).then(async res => {
           if (!res.ok) {
             const error = await res.json().catch(() => ({}));

@@ -1,11 +1,12 @@
 /**
- * frontend-input-composer.test.js — 工单 036 验收用例（输入区 Composer 常驻化）
+ * frontend-input-composer.test.js — 输入区 Composer 常驻化验收用例
  *
- * 覆盖工单验收节四条用例：
- *   1. 模式翻转不重建：persistent ↔ requests 切换时 composer 元素身份不变
+ * 覆盖：
+ *   1. lease 不翻转 composer：普通文本 lease 到达/清除时元素身份与端点不变
+ *      （ADR-0035 替代原「persistent ↔ requests 模式翻转」用例）
  *   2. 会话切换：草稿按 sessionKey 保存/恢复、不串会话；提交后草稿键删除
  *   3. 草稿迁移后 voice-input.js 的 re-export 与既有引用零行为变化
- *   4. 模式判定矩阵（行为契约 §3 九级优先级）纯函数用例锁死
+ *   4. 模式判定矩阵（行为契约 §3）纯函数用例锁死
  *
  * 参考 test/frontend-interrupt-voice-lifecycle.test.js 的沙箱与 overrides 方式。
  */
@@ -247,8 +248,6 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
     collapsePrimaryChoiceRequest: () => {},
     handlePersistentInputKey: () => {},
     onPersistentBtnClick: () => {},
-    handleInputKey: () => {},
-    submitInput: () => {},
     submitQueuedInput: () => {},
     toggleInputModelDropdown: () => {},
     toggleThinkingEffortDropdown: () => {},
@@ -269,7 +268,6 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
     _renderLastCallElapsed: () => {},
     _renderRecapHint: () => {},
     _injectPendingVoiceResult: () => {},
-    _reattachVoiceInputUi: () => {},
     _renderQueueBubbles: () => {},
     _syncPersistentInputUi: () => {},
     rebindQueueProjectionForRuntime: () => {},
@@ -308,7 +306,14 @@ function loadInputModules(ctx) {
   ctx.loadSource('public/src/modules/input-render.js');
 }
 
-function flipToRequests(ctx, lease) {
+// 输入面重渲染（会话切换 / lease 变化都经同一入口）。ADR-0035 后不存在
+// 「模式翻转」：普通文本 lease 只是一条状态，不改变 composer 形态与端点。
+function renderInputSurface(ctx) {
+  ctx.state.requests = [];
+  ctx.run('currentInputRequests = []; lastRenderedInputSignature = ""; renderInputRequests([])');
+}
+
+function renderInputSurfaceWithLease(ctx, lease) {
   ctx.state.requests = [lease];
   ctx.currentInputRequests = [lease];
   ctx.run(`
@@ -318,42 +323,27 @@ function flipToRequests(ctx, lease) {
   `);
 }
 
-function flipToPersistent(ctx) {
-  ctx.state.requests = [];
-  ctx.run('currentInputRequests = []; lastRenderedInputSignature = ""; renderInputRequests([])');
-}
+// ── 用例 1：lease 不翻转常驻 composer ────────────────────────────────────────
 
-// ── 用例 1：模式翻转不重建同一 DOM 节点 ─────────────────────────────────────
-
-describe('persistent composer DOM identity (ticket 036)', () => {
-  it('keeps the same composer node across persistent <-> requests flips', () => {
+describe('persistent composer DOM identity (ADR-0035)', () => {
+  it('keeps one persistent composer endpoint while a text lease is pending', () => {
     const ctx = createInputSandbox();
     loadInputModules(ctx);
 
-    // persistent 模式首次挂载
     ctx.run('renderInputRequests([])');
-    const taA = ctx.run("document.getElementById('input-persistent')");
-    assert.ok(taA, 'persistent composer textarea should exist after first render');
+    const textarea = ctx.run("document.getElementById('input-persistent')");
+    assert.ok(textarea, 'persistent composer textarea should exist after first render');
 
-    // 翻转到 requests：同一 composer 节点，仅端点属性更新
-    flipToRequests(ctx, { requestId: 'r1', placeholder: 'Answer me' });
-    const taB = ctx.run("document.getElementById('input-r1')");
-    assert.ok(taB, 'requests endpoint textarea should exist');
-    assert.equal(taB, taA, 'persistent -> requests flip must reuse the same composer node');
-    assert.equal(taB.closest('[data-persistent-composer]').dataset.composerMode, 'requests');
+    // 普通文本 lease 仍可用于 actions / rollback，但不再接管发言输入面。
+    ctx.state.requests = [{ requestId: 'r1', placeholder: 'Answer me' }];
+    ctx.currentInputRequests = ctx.state.requests;
+    ctx.run('lastRenderedInputSignature = ""; renderInputRequests(currentInputRequests)');
 
-    // 翻回 persistent：textarea id 切回且节点身份不变
-    flipToPersistent(ctx);
-    const taBack = ctx.run("document.getElementById('input-persistent')");
-    assert.equal(taBack, taB, 'flip back must reuse the same composer node');
-    assert.equal(ctx.run("card = document.getElementById('user-input-container').querySelector('[data-persistent-composer]'); card === document.getElementById('input-persistent').closest('[data-persistent-composer]')"), true);
-
-    // 发送按钮端点绑定随模式切换（persistent → user-turn，requests → submitInput）
-    ctx.run('lastRenderedInputSignature = ""; renderInputRequests([{ requestId: "r2" }])');
-    assert.ok(ctx.run("document.getElementById('persistent-action-btn')"),
-      'requests mode retains the same runtime-controlled action button');
+    assert.equal(ctx.run("document.getElementById('input-persistent')"), textarea,
+      'pending text lease must leave the persistent composer mounted');
     assert.equal(ctx.run("document.getElementById('input-r1')"), null,
-      'stale request endpoint id must be replaced');
+      'pending text lease must not create a request-bound text endpoint');
+    assert.equal(textarea.closest('[data-persistent-composer]').dataset.composerMode, 'persistent');
   });
 
   it('hides (but keeps) the composer in hidden/readonly/compacting modes and reuses it after', () => {
@@ -459,7 +449,7 @@ describe('composer session draft isolation (ticket 036)', () => {
     // 切换会话 B：旧 key 保存、新 key 无草稿 → 输入框清空（不串）
     ctx.state.liveKey = 'session-b';
     ctx.currentRuntimeAgentId = 'agent-2';
-    flipToPersistent(ctx);
+    renderInputSurface(ctx);
     assert.equal(ta.dataset.sessionKey, 'session-b');
     assert.equal(ta.value, '', 'new session without a draft must start empty');
     assert.equal(ctx.run(`_sessionInputCache['session-a']`), 'hello session a');
@@ -472,12 +462,12 @@ describe('composer session draft isolation (ticket 036)', () => {
     // 切回会话 A：恢复 A 的草稿，绝不串入 B 的文本
     ctx.state.liveKey = 'session-a';
     ctx.currentRuntimeAgentId = 'agent-1';
-    flipToPersistent(ctx);
+    renderInputSurface(ctx);
     const taRestore = ctx.run("document.getElementById('input-persistent')");
     assert.equal(taRestore.value, 'hello session a');
   });
 
-  it('routes send-button submits through pending prompt activation in both composer modes', () => {
+  it('routes the send button through pending prompt activation', () => {
     const ctx = createInputSandbox();
     loadInputModules(ctx);
     const calls = [];
@@ -488,13 +478,14 @@ describe('composer session draft isolation (ticket 036)', () => {
     };
     ctx.run('renderInputRequests([])');
     const textarea = ctx.run("document.getElementById('input-persistent')");
-    const persistentButton = ctx.run("document.getElementById('persistent-action-btn')");
-    persistentButton.onclick();
-    assert.equal(calls.length, 1, 'persistent send button delegates through prompt activation');
+    const sendButton = ctx.run("document.getElementById('persistent-action-btn')");
+    sendButton.onclick();
+    assert.equal(calls.length, 1, 'send button delegates through prompt activation');
     assert.equal(calls[0].textarea, textarea);
     assert.equal(typeof calls[0].submit, 'function');
 
-    flipToRequests(ctx, { requestId: 'r1' });
+    // 待应答 lease 在场时发送按钮仍是同一枚、同一路径：不做端点绑定切换。
+    renderInputSurfaceWithLease(ctx, { requestId: 'r1' });
     const requestButton = ctx.run("document.querySelector('.persistent-action-btn')");
     requestButton.onclick();
     assert.equal(calls.length, 2, 'request send button delegates through the same prompt activation');
@@ -547,13 +538,13 @@ describe('composer session draft isolation (ticket 036)', () => {
     // 会话 A → B：sessionKey 变化触发附件态收敛（pill bar 按新会话桶重渲染）
     ctx.state.liveKey = 'session-b';
     ctx.currentRuntimeAgentId = 'agent-2';
-    flipToPersistent(ctx);
+    renderInputSurface(ctx);
     assert.equal(rebound, 1, '会话切换必须重绑 slash prompt pill bar');
 
-    // 同会话的模式翻转不重复重绑
-    flipToRequests(ctx, { requestId: 'r1', placeholder: 'Answer me' });
-    flipToPersistent(ctx);
-    assert.equal(rebound, 1, '同会话的模式翻转不得触发 pill bar 重绑');
+    // 同会话的重渲染（含 lease 到达后清除）不重复重绑
+    renderInputSurfaceWithLease(ctx, { requestId: 'r1', placeholder: 'Answer me' });
+    renderInputSurface(ctx);
+    assert.equal(rebound, 1, '同会话的重渲染不得触发 pill bar 重绑');
   });
 
   it('deletes the draft key after a successful persistent submit', async () => {
@@ -648,7 +639,7 @@ describe('slash prompt pill session isolation (attachment buckets per session)',
   function switchSession(ctx, liveKey, runtimeId) {
     ctx.state.liveKey = liveKey;
     ctx.currentRuntimeAgentId = runtimeId;
-    flipToPersistent(ctx);
+    renderInputSurface(ctx);
   }
 
   it('keeps pills per session: no carry-over on switch, restored on switch back', async () => {
@@ -798,7 +789,6 @@ describe('input surface mode matrix (contract §3, ticket 036)', () => {
     compactInFlight: false,
     compactRuntimeMatches: false,
     hasRuntimeSelected: false,
-    hasRequests: false,
     hasChoiceRequest: false,
     hasLocalQueuedInput: false,
   };
@@ -818,8 +808,10 @@ describe('input surface mode matrix (contract §3, ticket 036)', () => {
     assert.equal(resolve({ ...baseState, hasChoiceRequest: true, hasLocalQueuedInput: true, hasRequests: true }), 'choice');
     // 级 6：本地排队乐观态优先于请求卡
     assert.equal(resolve({ ...baseState, hasLocalQueuedInput: true, hasRequests: true }), 'persistent');
-    // 级 7：非 choice 请求卡
-    assert.equal(resolve({ ...baseState, hasRequests: true, hasRuntimeSelected: true }), 'requests');
+    // 非 choice 文本 lease 不再改变输入面：有无 lease 都是 persistent
+    assert.equal(resolve({ ...baseState, hasRequests: true, hasRuntimeSelected: true }), 'persistent');
+    // choice 请求仍优先接管输入面
+    assert.equal(resolve({ ...baseState, hasChoiceRequest: true, hasRuntimeSelected: true }), 'choice');
     // 级 8：选中 runtime（calling / idle 同为 persistent）
     assert.equal(resolve({ ...baseState, hasRuntimeSelected: true }), 'persistent');
     // 级 8：接续等待表面（无 runtime 态，视图挂在等待会话）→ persistent

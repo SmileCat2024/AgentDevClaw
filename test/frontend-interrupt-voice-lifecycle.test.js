@@ -136,9 +136,13 @@ describe('voice input render lifecycle', () => {
     ctx.run(sourceBetween(source, 'function _shouldPreserveVoiceInputForRender', 'function _markVoiceAutoSendAccepted'));
 
     assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("persistent", "session-a")'), true);
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("requests", "session-a")'), true);
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("requests", "session-b")'), false);
+    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("choice", "session-a")'), true);
+    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("compacting", "session-a")'), true);
+    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("persistent", "session-b")'), false);
     assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("hidden", "session-a")'), false);
+    // requests 模式已退役（ADR-0035）：文本 lease 不再构成渲染模式，
+    // 传入旧枚举值不得被当成可保留录音的交互面。
+    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("requests", "session-a")'), false);
 
     ctx.run('_voiceRecording = false; _voiceStopping = true;');
     assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("persistent", "session-a")'), true);

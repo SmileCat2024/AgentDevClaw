@@ -51,7 +51,7 @@ try {
         'renderAgentList', '_markAgentCallStartedForNotify', '_clearRecapForNewMessage',
         '_requestNotifyPermission', 'updateInputModelSwitcher', 'updateThinkingEffortSwitcher',
         'notifyChatViewportMutation', 'beginFollowLatestEntryWindow', 'requestFollowLatest',
-        '_injectPendingVoiceResult', '_reattachVoiceInputUi', '_renderRecapHint', 'poll']) window[name] = () => {};
+        '_injectPendingVoiceResult', '_renderRecapHint', 'poll']) window[name] = () => {};
       window.runWithSuppressedChatViewportObservers = (fn) => fn();
       window._shouldPreserveVoiceInputForRender = () => false;
       window.isChoiceInputRequest = () => false;
