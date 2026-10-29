@@ -1097,7 +1097,7 @@ async function createPrebuiltSession(agentId, options = {}) {
       activeSessionId: sessionId,
       sessions: [record, ...index.sessions.filter((session) => session.id !== sessionId)],
     };
-  });
+  }, { skipContentComparison: true });
   // updateSessionIndex 返回的 index 已含推进后的 revision；透传给调用方，
   // 省去路由层随后的 readSessionIndex 重复读取。
   const committedRevision = Number(nextIndex.revision) || 0;

@@ -22,6 +22,7 @@ const {
   readSessionIndex,
   readSessionIndexShared,
   writeSessionIndex,
+  updateSessionIndex,
   upsertSessionIndexAt,
 } = await import('../server/shared/session-access.js');
 
@@ -98,6 +99,35 @@ describe('readSessionIndex 缓存', () => {
     utimesSync(indexPath, later, later);
     const idx = await readSessionIndex(AGENT_ID);
     assert.equal(idx.revision, 6);
+  });
+
+  test('updateSessionIndex 默认保留无变化不写盘；明确跳过比较时仍提交新增记录', async () => {
+    const agentId = 'update-comparison-test';
+    await writeSessionIndex(agentId, { revision: 4, activeSessionId: null, sessions: [] });
+
+    const unchanged = await updateSessionIndex(agentId, (index) => index);
+    assert.equal(unchanged.revision, 4, '普通更新器返回原索引时不推进 revision');
+    assert.deepEqual(await readSessionIndex(agentId), {
+      revision: 4,
+      activeSessionId: null,
+      sessions: [],
+    });
+
+    const created = { id: 'new-session', title: '新对话' };
+    const committed = await updateSessionIndex(agentId, (index) => ({
+      activeSessionId: created.id,
+      sessions: [created, ...index.sessions],
+    }), { skipContentComparison: true });
+    assert.equal(committed.revision, 5, '新增会话必须推进 revision');
+    assert.equal(committed.activeSessionId, created.id);
+    assert.deepEqual(committed.sessions, [created]);
+
+    const reread = await readSessionIndex(agentId);
+    assert.equal(reread.revision, 5);
+    assert.equal(reread.activeSessionId, created.id);
+    assert.equal(reread.sessions.length, 1, '新会话确实持久化到可回读索引');
+    assert.equal(reread.sessions[0].id, created.id);
+    assert.equal(reread.sessions[0].title, created.title);
   });
 
   test('writeSessionIndex 落盘后缓存立即失效', async () => {

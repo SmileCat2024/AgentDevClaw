@@ -318,7 +318,7 @@ export async function upsertSessionIndexAt(indexPath, record, { lockKey = indexP
   }
 }
 
-export async function updateSessionIndex(agentId, fn) {
+export async function updateSessionIndex(agentId, fn, { skipContentComparison = false } = {}) {
   const prev = _indexLocks.get(agentId) || Promise.resolve();
   let release;
   const next = new Promise(r => release = r);
@@ -326,13 +326,13 @@ export async function updateSessionIndex(agentId, fn) {
   await prev;
   try {
     const index = await readSessionIndex(agentId);
-    const before = sessionIndexContentSignature(index);
+    const before = skipContentComparison ? null : sessionIndexContentSignature(index);
     const proposedIndex = await fn(index);
     const comparableIndex = {
       ...(proposedIndex || index),
       revision: Math.max(0, Number(index.revision) || 0),
     };
-    if (sessionIndexContentSignature(comparableIndex) === before) {
+    if (!skipContentComparison && sessionIndexContentSignature(comparableIndex) === before) {
       return index;
     }
     const newIndex = {
