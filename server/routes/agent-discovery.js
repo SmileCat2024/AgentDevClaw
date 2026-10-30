@@ -6,7 +6,7 @@ import {
 import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe } from '../shared/fs-helpers.js';
 import { buildStatus } from '../shared/agent-access.js';
-import { readSessionIndex } from '../shared/session-access.js';
+import { readSessionIndex, findPrebuiltSessionRecordShared } from '../shared/session-access.js';
 import { resolveWorkspaceData, readWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './im.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
@@ -80,7 +80,7 @@ export function collectSidebarIdentityEntries(agent) {
 // dependency (agent-discovery → session-helpers → agent-discovery).
 
 export function createAgentDiscoveryModule(ctx) {
-  const { sessionApi } = ctx;
+  const { sessionApi, getInputRequestsSnapshot } = ctx;
 
   async function discoverAgents(rootDir, currentDir = rootDir) {
     const entries = await fs.readdir(currentDir, { withFileTypes: true });
@@ -191,6 +191,20 @@ export function createAgentDiscoveryModule(ctx) {
   }
 
   async function getPendingInputCount(runtimeSessionId) {
+    // In-process fast path: ViewerWorker lives in the same process as this
+    // server; its getInputRequestsSnapshot is the exact implementation behind
+    // the /input-requests HTTP handler. A per-runtime loop of self-fetches
+    // round-trips the event loop and amplifies wall time under load (ga-slow
+    // root cause, 2026-10-29). Null aligns with the fetch failure path.
+    if (typeof getInputRequestsSnapshot === 'function') {
+      try {
+        const items = getInputRequestsSnapshot(runtimeSessionId);
+        if (items === null || items === undefined) return null;
+        return Array.isArray(items) ? items.length : 0;
+      } catch {
+        return null;
+      }
+    }
     try {
       const items = await readViewerJson(`/api/agents/${encodeURIComponent(runtimeSessionId)}/input-requests`);
       return Array.isArray(items) ? items.length : 0;
@@ -373,10 +387,14 @@ export function createAgentDiscoveryModule(ctx) {
     if (!selectedSessionId) return emptyMeta;
 
     try {
-      const index = await readSessionIndex(agentId);
-      const record = Array.isArray(index?.sessions)
-        ? index.sessions.find((session) => cleanSessionText(session?.id) === selectedSessionId) || null
-        : null;
+      // 高频只读解析：ga 每轮对每个 runtime / 侧栏线程 head 调用本函数，
+      // 经共享索引 + 记录 Map 查找（session-access 存储层能力，返回只读
+      // record）；避免每次 structuredClone 全量索引再线性扫描——PH 索引
+      // 数千会话，clone × 调用次数曾实测打满事件循环（gaRuntime 段
+      // p50 ~166ms）。直接调用不经 sessionApi 注入：隔离装配的 discovery
+      // 实例（sessionApi 为空引用对象）也必须能解析（ph-project-frontend-
+      // projection 契约）。
+      const record = await findPrebuiltSessionRecordShared(agentId, selectedSessionId);
       if (!record) return emptyMeta;
       // record → meta 翻译收敛在 sessionRecordToWorkspaceMeta；此处只保留
       // qqbot 门户展示名的渠道级覆盖。

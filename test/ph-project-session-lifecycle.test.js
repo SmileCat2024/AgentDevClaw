@@ -31,7 +31,9 @@ process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
 
 const EXTERNAL_ROOTS = [];
 
-after(() => {
+after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rmSync 报 EBUSY
   rmSync(DATA_ROOT, { recursive: true, force: true });
   for (const dir of EXTERNAL_ROOTS) rmSync(dir, { recursive: true, force: true });
 });
@@ -489,10 +491,10 @@ describe('042 激活与保存：归属保留', () => {
       ],
     }));
 
-    // 落盘字节：新项目会话带字段，旧记录不被补字段
-    const raw = readFileSync(
-      join(DATA_ROOT, 'workspaces', 'programming-helper', 'sessions', 'index.json'), 'utf8');
-    const persisted = JSON.parse(raw);
+    // 落盘形态（ADR-0036：持久层 index.db；readSessionIndex 返回存储形态，
+    // 等价于 JSON 时代的读原始文件）：新项目会话带字段，旧记录不被补字段
+    const { readSessionIndex } = await import('../server/shared/session-access.js');
+    const persisted = await readSessionIndex('programming-helper');
     const legacy = persisted.sessions.find((s) => s.id === 'session-legacy-0001');
     assert.ok(legacy);
     assert.ok(!('projectId' in legacy), '不批量给历史记录补 projectId');
@@ -500,7 +502,6 @@ describe('042 激活与保存：归属保留', () => {
     assert.ok(projectRecord, '项目会话归属已落盘');
 
     // 重读归一：目录会话（旧/新）projectId === ''，项目会话保留
-    const { readSessionIndex } = await import('../server/shared/session-access.js');
     const reread = await readSessionIndex('programming-helper');
     assert.equal(getSessionProjectId(reread.sessions.find((s) => s.id === 'session-legacy-0001')), '');
     assert.equal(reread.sessions.find((s) => s.projectId === projectA.id).projectId, projectA.id);
@@ -512,8 +513,7 @@ describe('042 激活与保存：归属保留', () => {
       ...index,
       activeSessionId: index.sessions[0]?.id || null,
     }));
-    const rawAfterRewrite = JSON.parse(readFileSync(
-      join(DATA_ROOT, 'workspaces', 'programming-helper', 'sessions', 'index.json'), 'utf8'));
+    const rawAfterRewrite = await readSessionIndex('programming-helper');
     const legacyAfterRewrite = rawAfterRewrite.sessions.find((s) => s.id === 'session-legacy-0001');
     assert.ok(!('projectId' in legacyAfterRewrite), '索引写回不批量给历史记录补 projectId');
     assert.ok(rawAfterRewrite.sessions.find((s) => s.projectId === projectA.id), '项目会话归属写回保留');
@@ -614,7 +614,8 @@ describe('042 运行时：项目目录严格解析与装配传递', () => {
       { id: 'session-proj-0001', openDirectory: 'D:/stale', projectId: project.id },
       { id: 'session-dir-0001', openDirectory: dirD },
     ];
-    writeFileSync(join(sessionDir, 'index.json'), JSON.stringify({ revision: 1, activeSessionId: null, sessions }), 'utf8');
+    const { writeSessionIndex } = await import('../server/shared/session-access.js');
+    await writeSessionIndex('programming-helper', { revision: 1, activeSessionId: null, sessions });
 
     assert.equal(
       mirrorResolveWorkspaceCwd('programming-helper', 'D:/fallback-root', 'session-proj-0001'),
@@ -667,6 +668,7 @@ describe('042 旧目录回归', () => {
     assert.equal(session.workspaceAgentId, 'main');
     assert.equal(session.sessionType, 'main');
     assert.ok(session.id && session.createdAt && session.updatedAt);
-    assert.ok(existsSync(join(DATA_ROOT, 'workspaces', 'programming-helper', 'sessions', 'index.json')));
+    // ADR-0036：索引持久层为 index.db（index.json 是迁移前形态）
+    assert.ok(existsSync(join(DATA_ROOT, 'workspaces', 'programming-helper', 'sessions', 'index.db')));
   });
 });

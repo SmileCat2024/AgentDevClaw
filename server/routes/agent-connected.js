@@ -19,6 +19,7 @@ import { readWorkspaceVisibilityOverrides } from './workspace-settings.js';
 import { getThreadControl } from '../thread-control/thread-controller.js';
 import { readThreadMembership } from '../shared/thread-membership.js';
 import { readSidebarSnapshot } from './sidebar-snapshot.js';
+import { performance } from 'node:perf_hooks';
 
 // ── Connected Agents Query ───────────────────────────────────────
 // Pure query logic: assembles the full connected-agents list from
@@ -98,6 +99,10 @@ export function createConnectedAgentsQuery(deps) {
     readViewerJson,
     getPendingInputCount,
     resolveAgentModelPresets,
+    // In-process fast path (ga-slow fix 2026-10-29): ViewerWorker runs in the
+    // same process; its getNotificationSnapshot is the implementation behind
+    // the /notification HTTP handler. Optional — absent falls back to fetch.
+    getRuntimeNotification = null,
     // 测试缝：用户覆盖读取器（默认读用户数据根 workspace-settings.json）
     readVisibilityOverrides = readWorkspaceVisibilityOverrides,
     // 测试缝：线程控制面（默认单例）
@@ -211,7 +216,6 @@ export function createConnectedAgentsQuery(deps) {
         connected: false,
       };
     }));
-
     // Snapshot identity after workspace metadata loading. A runtime may publish
     // its ID while the async APP/session projection above is in flight.
     const managedRuntimes = Array.from(managedAgents.values());
@@ -416,7 +420,9 @@ export function createConnectedAgentsQuery(deps) {
       .filter((agent) => agent.connected && agent.runtime_session_id)
       .map(async (agent) => {
         try {
-          const notif = await readViewerJson(`/api/agents/${encodeURIComponent(agent.runtime_session_id)}/notification`);
+          const notif = getRuntimeNotification
+            ? getRuntimeNotification(agent.runtime_session_id)
+            : await readViewerJson(`/api/agents/${encodeURIComponent(agent.runtime_session_id)}/notification`);
           agent.callActive = notif?.callActive === true;
         } catch {
           agent.callActive = false;

@@ -45,6 +45,7 @@ const {
 const {
   readSessionIndex: readSessionIndexShared,
   updateSessionIndex: updateSessionIndexShared,
+  closeAllSessionDbs,
 } = await import('../server/shared/session-access.js');
 
 function writeLayer(filePath, content) {
@@ -198,6 +199,7 @@ test('real shared runtime: move A→B→dir reassembles target config per instan
   } finally {
     await stop(runtime);
     await stop(viewer);
+    closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rmSync 报 EPERM
     rmSync(DATA_ROOT, { recursive: true, force: true });
     for (const dir of EXTERNAL_ROOTS) rmSync(dir, { recursive: true, force: true });
   }

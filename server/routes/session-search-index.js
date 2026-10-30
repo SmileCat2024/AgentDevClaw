@@ -188,8 +188,8 @@ export async function ensureSearchIndex(agentId) {
     if (memCache && _searchIndexSources.get(memCache) === index) return memCache;
     const persistent = memCache ? null : await loadPersistentSearchIndex(agentId);
 
-    // Source of truth for valid entries: index.json session IDs. Persisted
-    // entries for deleted sessions are pruned on the next search rebuild.
+    // Source of truth for valid entries: session index (index.db, ADR-0036) session
+    // IDs. Persisted entries for deleted sessions are pruned on the next search rebuild.
     const validIds = new Set(index.sessions.map(s => s.id));
     const hasStaleEntries = memCache
       ? [...memCache.keys()].some((sessionId) => !validIds.has(sessionId))

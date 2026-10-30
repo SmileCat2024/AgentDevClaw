@@ -21,16 +21,16 @@ process.env.AGENTDEV_DATA_DIR = tmpDataDir;
 const { addOpenSession, getRecoverySessions, initRecoveryCache } = await import(
   '../server/shared/open-sessions-tracker.js'
 );
-const { getPrebuiltSessionIndexPath, getPrebuiltWorkspaceDir } = await import(
+const { writeSessionIndex, closeAllSessionDbs, getPrebuiltWorkspaceDir } = await import(
   '../server/shared/session-access.js'
 );
 
 const AGENT = 'ph-gate-test';
 
+// 索引夹具经 writeSessionIndex API 写入（ADR-0036：索引持久层为 index.db，
+// 直接落 index.json 文件只在首次访问前作为迁移源生效，运行期直写不可见）。
 function writeIndex(sessions) {
-  const indexPath = getPrebuiltSessionIndexPath(AGENT);
-  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
-  fs.writeFileSync(indexPath, JSON.stringify({ revision: 1, sessions, activeSessionId: null }), 'utf8');
+  return writeSessionIndex(AGENT, { revision: 1, sessions, activeSessionId: null });
 }
 
 function writeOpenSessionsFile(sessions) {
@@ -41,7 +41,7 @@ function writeOpenSessionsFile(sessions) {
 }
 
 test('T013c-1: addOpenSession 跳过 coder 会话，main 会话照常登记', async () => {
-  writeIndex([
+  await writeIndex([
     { id: 'sess-coder', sessionType: 'coder', title: 'coder 会话', openDirectory: 'D:\\proj' },
     { id: 'sess-main', sessionType: 'main', title: 'main 会话', openDirectory: 'D:\\proj' },
   ]);
@@ -56,7 +56,7 @@ test('T013c-1: addOpenSession 跳过 coder 会话，main 会话照常登记', as
 
 test('T013c-2: 恢复卡片读取过滤历史脏条目（coder 条目即便已在文件中也被丢弃）', async () => {
   // 模拟修复前已落盘的脏数据：coder successor 条目无 sessionType 字段
-  writeIndex([
+  await writeIndex([
     { id: 'sess-coder-dirty', sessionType: 'coder', title: 'coder 会话', openDirectory: 'D:\\proj' },
     { id: 'sess-main-dirty', sessionType: 'main', title: 'main 会话', openDirectory: 'D:\\proj' },
   ]);
@@ -72,5 +72,6 @@ test('T013c-2: 恢复卡片读取过滤历史脏条目（coder 条目即便已�
 });
 
 test.after(() => {
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rmSync 报 EBUSY
   fs.rmSync(tmpDataDir, { recursive: true, force: true });
 });

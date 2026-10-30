@@ -32,6 +32,7 @@ import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
 import { resolveWorkspaceAgent, resolveWorkspaceAgentClass, workspaceAgentDisplayName } from '../server/shared/workspace-agents.js';
 import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
+import { readSessionIndexSync } from '../server/shared/session-access.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -90,28 +91,17 @@ function getWorkspaceStatePath(agentId) {
   return join(USER_DATA_ROOT, 'workspaces', sanitizeSessionFragment(agentId), 'state.json');
 }
 
-function getSessionIndexPath(agentId) {
-  const normalizedAgentId = sanitizeSessionFragment(agentId);
-  const sessionRoot = WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)
-    ? join(USER_DATA_ROOT, 'workspaces', normalizedAgentId, 'sessions')
-    : join(USER_DATA_ROOT, 'prebuilt-sessions', normalizedAgentId);
-  return join(sessionRoot, 'index.json');
-}
-
 function resolveSessionWorkspaceCwd(agentId, sessionId) {
   const normalizedSessionId = cleanValue(sessionId);
   if (!normalizedSessionId || normalizedSessionId === NO_SESSION_TOKEN) {
     return null;
   }
 
-  const indexPath = getSessionIndexPath(agentId);
-  if (!existsSync(indexPath)) {
-    return null;
-  }
-
   let record = null;
   try {
-    const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
+    // ADR-0036：索引持久层为 index.db，同步读经 session-access（与 server
+    // 同源解析数据根；WAL 支持父子进程并发读）。
+    const parsed = readSessionIndexSync(agentId);
     const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
     record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId)) || null;
   } catch (error) {
@@ -671,7 +661,10 @@ SessionLifecycle.prototype.start = async function () {
   let boundAgentId;
   let sessionProjectId = '';
   if (this.sessionId) {
-    const index = JSON.parse(readFileSync(getSessionIndexPath(agentId), 'utf8'));
+    // ADR-0036：索引持久层 index.db，经 session-access 同步读（父进程写侧
+    // 同一存储；曾直读 index.json，迁移后 ENOENT）。记录缺失语义不变：
+    // "Session index record not found"。
+    const index = readSessionIndexSync(agentId);
     const record = index.sessions.find((entry) => entry.id === this.sessionId);
     if (!record) throw new Error(`Session index record not found: ${this.sessionId}`);
     boundAgentId = record.workspaceAgentId === undefined ? 'main' : record.workspaceAgentId;

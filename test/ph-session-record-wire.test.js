@@ -80,6 +80,9 @@ before(async () => {
 });
 
 after(async () => {
+  // 释放 SQLite 连接句柄，Windows 下未关闭句柄会让 rmSync 目录 EBUSY
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  await closeAllSessionDbs();
   await fs.rm(dataRoot, { recursive: true, force: true });
 });
 

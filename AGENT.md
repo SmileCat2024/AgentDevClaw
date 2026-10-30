@@ -47,6 +47,7 @@
    - 0033 会话崩溃恢复（Proposed）：journal 为唯一权威，记录工具批次意图、dispatch、进度、结果/未知及核验事实；完整 checkpoint 保存可回退的普通会话与 Feature 状态，`state.json` 不进入首版。明确并发工具的单写者提交、原始调用顺序、unknown 副作用与恢复可见性；实施前仍需完成工具入口、文件消费者盘点及故障注入验收。性能不是立项理由，当前活跃会话保存开销已实测在毫秒级。
    - [0034 模型选择 Feature 化](docs/adr/0034-feature-owned-model-selection.md)（Accepted，已实施）：Feature 持有选择与恢复策略，Agent 持有实际模型，Claw 管资产与通信；选择是链级当前状态——重启/接续保留、分支继承源对话当前选择（非边界快照历史值）、回滚不撤销；恢复失败提示并回退全局默认；远程会话不保持模型切换，入口降级不可操作。凭证刷新（ADR-0028 修订一推送）经 feature-comms 请求面收编为 Feature 的 `refresh-credentials` 请求类型（决策 6a），宿主不再持有模型编排语义。[文件级实施方案](docs/plans/2026-10-28-model-selection-feature-implementation.md)。
    - [0035 正常输入与输入租约解耦](docs/adr/0035-input-channel-decoupling.md)（Proposed）：composer 单一 user-turn 通道，lease 专职请求应答（choice 选择、rollback/compact actions 回填）；宿主 inputLoop 与框架零改动（viewer `submitUserTurn` 三段式路由已备，空闲文本 lease 由 user-turn 自动回填），前端 requests 模式与 `submitInput` 文本编排退役、以删码为主；`submitInputAction` 与 choice 卡独立面不动。[实施计划](docs/plans/2026-10-29-input-channel-decoupling.md)
+   - [0036 会话索引存储迁移到嵌入式 SQLite](docs/adr/0036-session-index-sqlite-storage.md)（Proposed，实施中）：`node:sqlite`（Node 24 内置，开发与桌面同钉 24.19.0）替换 index.json 单文件，每工作空间 `sessions/index.db`（WAL，meta 表存 revision/activeSessionId + sessions 表整条 record JSON 带冗余索引列与 position 顺序列）；`session-access.js` 五个导出契约不变、消费方零改动，归一化移到写侧，mtime 缓存/stampede 防护/原子改名写/文件锁约 200 行补偿机制退役；启动自迁移为主（失败告警不阻断）+ 访问兜底（index.json → index.migrated.json 留档，事务内幂等可重入），`sinceRevision` 契约与 ADR-0016 分区不变，engines 提到 >=24；plain agent 索引与 SQL 查询下推为范围外/后续阶段
 
 实现层真实入口：
 

@@ -17,7 +17,11 @@ const { managedAgents, getManagedRuntimeKey } = await import('../server/shared/a
 const { FileSessionStore } = await import('@agentdevjs/core');
 const { updateSessionIndex } = await import('../server/shared/session-access.js');
 
-after(() => rmSync(DATA_DIR, { recursive: true, force: true }));
+after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rmSync 报 EPERM
+  rmSync(DATA_DIR, { recursive: true, force: true });
+});
 
 // ── Helpers ────────────────────────────────────────────────
 

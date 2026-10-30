@@ -12,7 +12,6 @@ const DATA_ROOT = await fs.mkdtemp(path.join(tmpdir(), 'studio-migration-test-')
 process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
 
 const STUDIO_DIR = path.join(DATA_ROOT, 'workspaces', 'agent-studio');
-const SESSIONS_DIR = path.join(STUDIO_DIR, 'sessions');
 
 let runStudioFeatureMigration;
 
@@ -21,20 +20,23 @@ before(async () => {
 });
 
 after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rm 报 EBUSY
   await fs.rm(DATA_ROOT, { recursive: true, force: true });
 });
 
+// 索引读写经 session-access API（ADR-0036：持久层 index.db，直写 index.json
+// 只作为迁移源生效一次，运行期读写均走 API）。
+const AGENT = 'agent-studio';
+
 async function writeSessionIndex(sessions, revision = 1) {
-  await fs.mkdir(SESSIONS_DIR, { recursive: true });
-  await fs.writeFile(
-    path.join(SESSIONS_DIR, 'index.json'),
-    JSON.stringify({ revision, activeSessionId: sessions[0]?.id || null, sessions }),
-    'utf8',
-  );
+  const { writeSessionIndex: apiWrite } = await import('../server/shared/session-access.js');
+  await apiWrite(AGENT, { revision, activeSessionId: sessions[0]?.id || null, sessions });
 }
 
 async function readSessionIndex() {
-  return JSON.parse(await fs.readFile(path.join(SESSIONS_DIR, 'index.json'), 'utf8'));
+  const { readSessionIndex: apiRead } = await import('../server/shared/session-access.js');
+  return apiRead(AGENT);
 }
 
 function studioRecord(id, extra = {}) {

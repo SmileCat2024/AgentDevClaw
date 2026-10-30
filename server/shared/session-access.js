@@ -1,6 +1,7 @@
 import path from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync, renameSync, readdirSync } from 'fs';
 import { promises as fs } from 'fs';
+import { DatabaseSync } from 'node:sqlite';
 import {
   PREBUILT_SESSIONS_ROOT,
   PREBUILT_WORKSPACES_ROOT,
@@ -11,7 +12,7 @@ import {
   cleanSessionText,
   isWorkspaceSessionAgent,
 } from './string-helpers.js';
-import { readJson, ensureDir } from './fs-helpers.js';
+import { ensureDir } from './fs-helpers.js';
 
 // ── Path helpers ──────────────────────────────────────────────────
 
@@ -68,55 +69,275 @@ export function getWorkspaceArtifactPath(agentId, artifactId) {
 
 // ── Session index read/write ──────────────────────────────────────
 
-// readSessionIndex 进程内缓存。侧栏轮询（get_connected_agents / prebuilt_sessions
-// 条件刷新，每标签每 3s）与各路由都会反复读同一份索引；PH 工作空间的索引可累积
-// 到数 MB / 数千条会话，无缓存的重复 磁盘读+JSON.parse+全量归一化 是主进程事件
-// 循环停顿的主要来源（CPU profile 实测 readJson 占 self-time ~27%）。缓存以
-// mtime+size 失效保持对 CLI 等外部写者的正确性；writeSessionIndex 落盘后主动
-// 失效兜底同刻写入。命中返回 structuredClone，调用方可安全突变返回值。
-const _indexCache = new Map(); // indexPath → { mtimeMs, size, value }
-
-// 并发装载去重（cache stampede 防护）。线程列表等批量读路径会以 Promise.all
-// 并发解析同一个会话索引（PH 线程化后为 1400+ 个 head 会话各解析一次）；缓存
-// 一旦失效（会话活跃时每次 turn 都写索引），全部并发调用会各自完整执行
-// 「读 4.4MB + JSON.parse + 全量归一化」，单请求即可产生数十 GB 瞬时分配并
-// 打爆堆（V8 OOM / code 134）。这里把同一文件版本的装载收敛为一次，其余调用
-// 共享同一 promise。
+// ── Session index storage（SQLite，ADR-0036）────────────────────────
 //
-// 键 = indexPath + mtimeMs + size：只合并「同一文件版本」的装载，写入后
-// mtime 改变的新调用不会被旧在途装载短路（正确性与缓存失效语义一致）。
-const _indexLoads = new Map(); // loadKey → Promise<index>
+// 会话索引的持久层是每工作空间一个 index.db（node:sqlite，Node 24 内置，
+// 开发与桌面运行时同钉 24.19.0）。历史形态 index.json 在首次访问前由
+// 启动自迁移（migrateAllPrebuiltSessionIndexes）或访问兜底（ensureSessionDb）
+// 收敛为 db + index.migrated.json 留档，不保留 JSON 读写双链路。
+//
+// 读写契约与 JSON 时代完全一致（返回形状、revision 单调、sinceRevision
+// 条件刷新、readSessionIndex 返回可突变副本），消费方零改动。归一化时机
+// 从读侧移到写侧：库里存的 record 就是归一化形态，读路径直接返回存储形态。
 
+// agentId → DatabaseSync 长开连接。DatabaseSync 为同步 API，同一连接上
+// 语句天然串行；连接不跨进程（外部读者用只读连接，见 mirror-runtime）。
+const _dbConnections = new Map();
+
+// readSessionIndexShared 的进程内读缓存，键 = (meta.revision, PRAGMA data_version)。
+// revision 覆盖本进程与外部写者经 API 的变更；data_version 兜底探测绕过 API
+// 直连 db 改写 sessions 而不动 meta 的外部写。命中返回同一稳定对象（共享只读
+// 契约，findPrebuiltSessionRecordShared 等下游 WeakMap 身份键依赖此语义）。
+const _indexReadCache = new Map();
+
+// db → 预编译语句。高频读路径（侧栏轮询每秒多次）避免逐次 prepare。
+const _stmtCache = new WeakMap();
+
+function getSessionStatements(db) {
+  let stmts = _stmtCache.get(db);
+  if (!stmts) {
+    stmts = {
+      getMeta: db.prepare('SELECT value FROM meta WHERE key = ?'),
+      setMeta: db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)'),
+      listRecords: db.prepare('SELECT record FROM sessions ORDER BY position'),
+      clearSessions: db.prepare('DELETE FROM sessions'),
+      insertSession: db.prepare(`INSERT INTO sessions (
+        id, position, record, updated_at, archived, project_id,
+        open_directory, session_type, workspace_agent_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      updateSessionRecord: db.prepare(`UPDATE sessions SET
+        record = ?, updated_at = ?, archived = ?, project_id = ?,
+        open_directory = ?, session_type = ?, workspace_agent_id = ?, created_at = ?
+      WHERE id = ?`),
+      dataVersion: db.prepare('PRAGMA data_version'),
+    };
+    _stmtCache.set(db, stmts);
+  }
+  return stmts;
+}
+
+function getSessionDbPath(agentId) {
+  return path.join(getPrebuiltAgentSessionDir(agentId), 'index.db');
+}
+
+function openSessionDb(dbPath) {
+  const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA synchronous = NORMAL');
+  db.exec('PRAGMA busy_timeout = 5000');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      position INTEGER NOT NULL,
+      record TEXT NOT NULL,
+      updated_at TEXT,
+      archived INTEGER,
+      project_id TEXT,
+      open_directory TEXT,
+      session_type TEXT,
+      workspace_agent_id TEXT,
+      created_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
+  `);
+  return db;
+}
+
+// 冗余列与 position 由同一事务从 record 提取，不构成第二事实源；position 承载
+// 数组顺序（持久事实），读时 ORDER BY position 还原。
+function sessionRowValues(record, position) {
+  return [
+    String(record.id),
+    position,
+    JSON.stringify(record),
+    record.updatedAt ?? null,
+    record.archived === true ? 1 : 0,
+    record.projectId ?? null,
+    record.openDirectory ?? null,
+    record.sessionType ?? null,
+    record.workspaceAgentId ?? null,
+    record.createdAt ?? null,
+  ];
+}
+
+// JSON → db 一次性迁移（幂等）。事务内导入后 COMMIT，再把 index.json 改名留档：
+// COMMIT 前崩溃 db 无数据、JSON 原样，重试重新导入；COMMIT 后改名前崩溃，重试
+// 检测到 meta 已有 revision 即跳过导入、直接完成改名。JSON 损坏时不迁移不抛错，
+// 保持 JSON 原状（与 JSON 时代"索引损坏返回空索引"的容错语义一致）。
+function migrateJsonIndexIntoDb(agentId, db, jsonPath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(jsonPath, 'utf8'));
+  } catch {
+    return false;
+  }
+  const normalized = normalizeSessionIndexData(parsed);
+  const stmts = getSessionStatements(db);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const hasRevision = stmts.getMeta.get('revision');
+    if (!hasRevision) {
+      stmts.clearSessions.run();
+      normalized.sessions.forEach((record, i) => stmts.insertSession.run(...sessionRowValues(record, i)));
+      stmts.setMeta.run('revision', String(normalized.revision));
+      stmts.setMeta.run('activeSessionId', normalized.activeSessionId ?? '');
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  renameSync(jsonPath, `${jsonPath.slice(0, -'index.json'.length)}index.migrated.json`);
+  return true;
+}
+
+// 确保工作空间索引的 db 连接可用；返回 null 表示"无 db 且无遗留 JSON"的空索引
+// 语义（不建库——与 JSON 时代"无 index.json 不建文件"对齐，首次写时才建库）。
+function ensureSessionDb(agentId) {
+  let db = _dbConnections.get(agentId);
+  if (db) return db;
+  const dbPath = getSessionDbPath(agentId);
+  const jsonPath = getPrebuiltSessionIndexPath(agentId);
+  const dbExists = existsSync(dbPath);
+  const jsonExists = existsSync(jsonPath);
+  if (!dbExists && !jsonExists) return null;
+  db = openSessionDb(dbPath);
+  if (jsonExists) {
+    migrateJsonIndexIntoDb(agentId, db, jsonPath);
+  }
+  _dbConnections.set(agentId, db);
+  return db;
+}
+
+// 写路径用：无库时建库（目录由调用方 ensureDir）。
+function ensureOrCreateSessionDb(agentId) {
+  const db = ensureSessionDb(agentId);
+  if (db) return db;
+  const created = openSessionDb(getSessionDbPath(agentId));
+  _dbConnections.set(agentId, created);
+  return created;
+}
+
+// 关闭全部连接并清空读缓存。测试收尾（临时数据根 rmSync 前释放文件句柄）与
+// 进程级重置用；server 正常运行无需调用（进程退出自动释放）。
+export function closeAllSessionDbs() {
+  for (const db of _dbConnections.values()) {
+    try { db.close(); } catch { /* 已关闭 */ }
+  }
+  _dbConnections.clear();
+  _indexReadCache.clear();
+}
+
+// 服务启动全量自迁移（ADR-0036 决策 5）：扫描两个数据根下所有遗留 index.json，
+// 逐工作空间迁移；单工作空间失败按 ADR-0032 先例告警不阻断，保持 JSON 原状，
+// 下次启动或首次访问时重试。
+export function migrateAllPrebuiltSessionIndexes(warn = console.warn) {
+  const migrated = [];
+  // resolveAgentDir 返回该 agentId 的 sessions 目录；agentFilter 校验目录归属
+  //（workspaces/<id>/sessions 只对集合内 agent 成立，防止把不在集合的目录
+  // 错位迁移到 prebuilt-sessions/<id> 的寻址上）。
+  const visit = (root, agentFilter, resolveAgentDir) => {
+    let entries;
+    try {
+      entries = readdirSync(root, { withFileTypes: true });
+    } catch {
+      return; // 数据根不存在：全新安装
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !agentFilter(entry.name)) continue;
+      const agentId = entry.name;
+      const jsonPath = path.join(resolveAgentDir(agentId), 'index.json');
+      if (!existsSync(jsonPath)) continue;
+      try {
+        const db = ensureSessionDb(agentId);
+        if (!db) throw new Error('migration produced no db');
+        // 损坏 JSON 无法迁移也无需重试（migrateJsonIndexIntoDb 内部容错为空索引
+        // 语义）：文件保持原状但不计入 migrated，避免每次启动重复计入。
+        if (existsSync(jsonPath)) continue;
+        migrated.push(agentId);
+      } catch (err) {
+        warn(`[session-index] 迁移 ${agentId} 失败（保持 JSON 原状，下次重试）: ${err?.message || err}`);
+      }
+    }
+  };
+  // 非 workspace 型：sessions 根 = prebuilt-sessions/<agentId>/
+  visit(
+    PREBUILT_SESSIONS_ROOT,
+    (agentId) => !isWorkspaceSessionAgent(agentId),
+    (agentId) => path.join(PREBUILT_SESSIONS_ROOT, agentId),
+  );
+  // workspace 型：sessions 根 = workspaces/<agentId>/sessions/
+  visit(
+    PREBUILT_WORKSPACES_ROOT,
+    (agentId) => isWorkspaceSessionAgent(agentId),
+    (agentId) => path.join(PREBUILT_WORKSPACES_ROOT, agentId, 'sessions'),
+  );
+  return migrated;
+}
+
+function loadIndexFromDb(agentId, db) {
+  const stmts = getSessionStatements(db);
+  const revisionRow = stmts.getMeta.get('revision');
+  const revision = Number(revisionRow?.value);
+  const activeSessionId = stmts.getMeta.get('activeSessionId')?.value || null;
+  const sessions = stmts.listRecords.all().map((row) => JSON.parse(row.record));
+  return {
+    revision: Number.isSafeInteger(revision) && revision >= 0 ? revision : 0,
+    activeSessionId,
+    sessions,
+  };
+}
+
+function readMetaRevision(db) {
+  const value = Number(getSessionStatements(db).getMeta.get('revision')?.value);
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function readDataVersion(db) {
+  return getSessionStatements(db).dataVersion.get().data_version;
+}
+
+// 单条记录归一化：读侧（迁移导入）与写侧（updateSessionIndex / writeSessionIndex
+// 提交前）共用。字段语义见各行内注释；归一化后形态即 db 存储形态。
+function normalizeSessionRecord(session) {
+  return {
+    ...session,
+    id: String(session.id),
+    title: cleanSessionText(session.title),
+    featureName: cleanSessionText(session.featureName),
+    agentName: cleanSessionText(session.agentName),
+    taskTitle: cleanSessionText(session.taskTitle),
+    taskType: cleanSessionText(session.taskType),
+    goal: cleanSessionText(session.goal),
+    constraints: cleanSessionText(session.constraints),
+    expectedOutput: cleanSessionText(session.expectedOutput),
+    targetFiles: cleanSessionText(session.targetFiles),
+    referenceMaterials: cleanSessionText(session.referenceMaterials),
+    openDirectory: cleanSessionText(session.openDirectory),
+    // PH 项目会话归属（ticket 042）：只归一非空值，不给无此字段的历史记录补
+    // key——updateSessionIndex 是"读（归一形态）→ 改 → 写回"的 round-trip，
+    // 无条件归一会让任何一次索引写入（meta_sync/标题/激活）给全部旧记录批量
+    // 落上 projectId:''，违反"无历史批量补字段"验收。
+    // 目录会话旧记录保持字段缺席，消费方经 getSessionProjectId 读作 ''。
+    ...(cleanSessionText(session.projectId) ? { projectId: cleanSessionText(session.projectId) } : {}),
+    sessionType: cleanSessionText(session.sessionType) || 'main',
+    workspaceAgentId: session.workspaceAgentId === undefined ? 'main' : session.workspaceAgentId,
+    archived: session.archived === true,
+    todo: session.todo === true,
+    metadata: normalizeSessionMetadata(session.metadata),
+  };
+}
+
+// 全量索引形态归一化：legacy 记录过滤 + revision / activeSessionId 校验。
+// 仅用于迁移导入与整份写入（writeSessionIndex）；updateSessionIndex 的增量
+// 提交只对变更行调 normalizeSessionRecord。
 function normalizeSessionIndexData(data) {
   const sessions = Array.isArray(data.sessions)
     ? data.sessions
       .filter((session) => session && session.id && session.id !== 'legacy')
-      .map((session) => ({
-        ...session,
-        id: String(session.id),
-        title: cleanSessionText(session.title),
-        featureName: cleanSessionText(session.featureName),
-        agentName: cleanSessionText(session.agentName),
-        taskTitle: cleanSessionText(session.taskTitle),
-        taskType: cleanSessionText(session.taskType),
-        goal: cleanSessionText(session.goal),
-        constraints: cleanSessionText(session.constraints),
-        expectedOutput: cleanSessionText(session.expectedOutput),
-        targetFiles: cleanSessionText(session.targetFiles),
-        referenceMaterials: cleanSessionText(session.referenceMaterials),
-        openDirectory: cleanSessionText(session.openDirectory),
-        // PH 项目会话归属（ticket 042）：读取侧只归一非空值，不给无此字段的
-        // 历史记录补 key——updateSessionIndex 是"读（归一）→ 改 → 整写回"的
-        // round-trip，无条件归一会让任何一次索引写入（meta_sync/标题/激活）
-        // 给全部旧记录批量落上 projectId:''，违反"无历史批量补字段"验收。
-        // 目录会话旧记录保持字段缺席，消费方经 getSessionProjectId 读作 ''。
-        ...(cleanSessionText(session.projectId) ? { projectId: cleanSessionText(session.projectId) } : {}),
-        sessionType: cleanSessionText(session.sessionType) || 'main',
-        workspaceAgentId: session.workspaceAgentId === undefined ? 'main' : session.workspaceAgentId,
-        archived: session.archived === true,
-        todo: session.todo === true,
-        metadata: normalizeSessionMetadata(session.metadata),
-      }))
+      .map((session) => normalizeSessionRecord(session))
     : [];
   return {
     revision: Number.isSafeInteger(Number(data.revision)) && Number(data.revision) >= 0
@@ -132,56 +353,58 @@ export async function readSessionIndex(agentId) {
 }
 
 /**
- * readSessionIndex 的共享只读变体：命中缓存时直接返回缓存对象，不做
+ * readSessionIndex 的共享只读变体：命中读缓存时直接返回缓存对象，不做
  * structuredClone。面向高频批量只读路径（如线程列表逐线程解析 head 会话
- * 字段）——索引体积可达数 MB，逐调用 clone 整份索引的同步成本随线程数
- * 线性放大，会持续占据事件循环（server 周期性 health unreachable 的根因）。
+ * 字段）——逐调用 clone 整份索引的同步成本随线程数线性放大，会持续占据
+ * 事件循环。下游 findPrebuiltSessionRecordShared、投影缓存以对象身份为
+ * WeakMap 键，依赖"同一 revision 下返回同一稳定对象"的语义。
  *
  * 契约：调用方只读返回值，不得修改（会污染缓存）；需要可变副本时用
- * readSessionIndex。缓存装载 / mtime+size 失效语义与 readSessionIndex 一致。
+ * readSessionIndex。无索引数据（无 db 且无遗留 JSON）时返回全新空索引对象。
  */
 export async function readSessionIndexShared(agentId) {
-  const dirPath = getPrebuiltAgentSessionDir(agentId);
-  const indexPath = getPrebuiltSessionIndexPath(agentId);
-  await ensureDir(dirPath);
-
-  let stat = null;
-  try {
-    stat = await fs.stat(indexPath);
-  } catch { /* 索引文件不存在：走空索引语义 */ }
-  if (!stat) {
+  await ensureDir(getPrebuiltAgentSessionDir(agentId));
+  const db = ensureSessionDb(agentId);
+  if (!db) {
     return { revision: 0, activeSessionId: null, sessions: [] };
   }
-  const cached = _indexCache.get(indexPath);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+  const cached = _indexReadCache.get(agentId);
+  const revision = readMetaRevision(db);
+  const dataVersion = readDataVersion(db);
+  if (cached && cached.revision === revision && cached.dataVersion === dataVersion) {
     return cached.value;
   }
-  // 并发装载去重：同一文件版本只解析一次（见 _indexLoads 注释）。缓存未命中
-  // 的并发调用是线程列表的主要形态，逐次完整解析会打爆堆。
-  const loadKey = `${indexPath}|${stat.mtimeMs}|${stat.size}`;
-  const inflight = _indexLoads.get(loadKey);
-  if (inflight) return inflight;
-  const load = (async () => {
-    try {
-      const value = normalizeSessionIndexData(await readJson(indexPath));
-      // 装载期间文件可能已被改写（mtime/size 变化）：此时不要把旧内容写进
-      // 缓存，否则会以旧版本覆盖下一次读取应得的新版本。直接返回本次结果
-      // 给已经在等的调用方，缓存留给后续读重新装载。
-      const latest = await fs.stat(indexPath).catch(() => null);
-      if (latest && latest.mtimeMs === stat.mtimeMs && latest.size === stat.size) {
-        _indexCache.set(indexPath, { mtimeMs: stat.mtimeMs, size: stat.size, value });
-      }
-      return value;
-    } catch {
-      // 索引损坏：与无缓存时的行为一致返回空索引，并清掉旧缓存避免下次命中陈旧值
-      _indexCache.delete(indexPath);
-      return { revision: 0, activeSessionId: null, sessions: [] };
-    } finally {
-      _indexLoads.delete(loadKey);
-    }
-  })();
-  _indexLoads.set(loadKey, load);
-  return load;
+  const value = loadIndexFromDb(agentId, db);
+  _indexReadCache.set(agentId, { revision: value.revision, dataVersion, value });
+  return value;
+}
+
+// ── 共享记录查找（存储层能力）──────────────────────────────────────
+//
+// requirePrebuiltSessionRecord 的共享只读变体：找不到返回 null（不抛 404），
+// 且经 readSessionIndexShared 不 clone 索引。面向高频只读字段解析（ga 每轮
+// 逐 runtime 解析 head 会话字段、线程列表逐线程解析 head——每次 clone 数 MB
+// 索引 × 调用次数会打满事件循环）。
+// 契约：返回的 record 只读，不得修改（缓存对象的一部分）。
+// 归属存储层的原因：只依赖 readSessionIndexShared 与 cleanSessionText，且
+// agent-discovery 需要不经 sessionApi 注入直接调用（sessionApi 是打破
+// agent-discovery ↔ session-helpers 环的可变引用对象，注入空对象时方法
+// 缺失——见 ph-project-frontend-projection 的隔离 discovery 契约）。
+const _sessionRecordMaps = new WeakMap();
+
+export async function findPrebuiltSessionRecordShared(agentId, sessionId) {
+  const index = await readSessionIndexShared(agentId);
+  // 同一份共享索引对象会被大量只读解析复用。为索引对象惰性建一次 Map，
+  // 避免每次线性扫描；索引变更后 readSessionIndexShared 返回新对象，
+  // 自然创建对应的新 Map（身份键失效语义）。
+  let recordsById = _sessionRecordMaps.get(index);
+  if (!recordsById) {
+    recordsById = new Map(index.sessions.map((session) => [session.id, session]));
+    _sessionRecordMaps.set(index, recordsById);
+  }
+  const wanted = cleanSessionText(sessionId);
+  if (!wanted) return null;
+  return recordsById.get(wanted) || null;
 }
 
 export async function resolvePrebuiltSessionType(agentId, sessionId) {
@@ -213,8 +436,8 @@ export async function resolvePrebuiltSessionType(agentId, sessionId) {
 
 const _indexLocks = new Map();
 
-// 原子写核心（writeSessionIndex 与显式路径变体共用）：唯一临时名 + rename，
-// EPERM/EXDEV 兜底。临时名带 pid+随机——同 agent 并发进程写同一索引时，
+// 原子写核心（仅剩 plain agent 显式路径变体使用，JSON 形态）：唯一临时名 +
+// rename，EPERM/EXDEV 兜底。临时名带 pid+随机——同 agent 并发进程写同一索引时，
 // 固定 .tmp 名会让两个进程互相吞掉对方的 tmp 文件。
 async function writeIndexFileAt(indexPath, index) {
   await ensureDir(path.dirname(indexPath));
@@ -233,17 +456,31 @@ async function writeIndexFileAt(indexPath, index) {
       throw err;
     }
   }
-  // 同刻写入（mtime 粒度内）时 mtime+size 可能不变，主动失效兜底——
-  // 所有写路径（writeSessionIndex / upsertSessionIndexAt）经此核心，
-  // 缓存失效不再依赖各写方自觉。
-  _indexCache.delete(indexPath);
 }
 
+/**
+ * 全量替换写入：把传入索引整体归一化后写入 db（全量重建 sessions 行，revision
+ * 采用传入值，不额外自增）。生产代码无调用方；测试 fixture 与工具场景用它构造
+ * 任意索引状态。等价于 JSON 时代"裸写 index.json + 下次读取侧归一化"的组合：
+ * 写入后 readSessionIndex 读到的就是归一化形态。
+ */
 export async function writeSessionIndex(agentId, index) {
-  const dirPath = getPrebuiltAgentSessionDir(agentId);
-  const indexPath = getPrebuiltSessionIndexPath(agentId);
-  await ensureDir(dirPath);
-  await writeIndexFileAt(indexPath, index);
+  await ensureDir(getPrebuiltAgentSessionDir(agentId));
+  const normalized = normalizeSessionIndexData(index ?? {});
+  const db = ensureOrCreateSessionDb(agentId);
+  const stmts = getSessionStatements(db);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    stmts.clearSessions.run();
+    normalized.sessions.forEach((record, i) => stmts.insertSession.run(...sessionRowValues(record, i)));
+    stmts.setMeta.run('revision', String(normalized.revision));
+    stmts.setMeta.run('activeSessionId', normalized.activeSessionId ?? '');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  _indexReadCache.delete(agentId);
 }
 
 export function sessionIndexContentSignature(index = {}) {
@@ -318,6 +555,75 @@ export async function upsertSessionIndexAt(indexPath, record, { lockKey = indexP
   }
 }
 
+// updateSessionIndex 的提交核心：三分支写入策略。比较必须在归一化之前进行
+// （normalizeSessionRecord 会为所有行创建新对象，破坏引用可比性），归一化
+// 只作用于实际要写的行。
+// 1. mutator 产出数组与输入数组非同一引用、id 序列相同（turn 级 meta_sync 的
+//    `.map()` 形态：未变行保留原引用）→ 指针 diff，只归一化并 UPDATE 引用
+//    变化的行；
+// 2. mutator 返回了原数组引用（可能原地突变行）→ 归一化后与库内当前内容做
+//    行级比较，保证原地突变的行也被持久化；
+// 3. id 序列不同（头插新会话/删除/重排，均为低频操作）→ 全量重建行与 position。
+// 三分支都在同一 BEGIN IMMEDIATE 事务内，revision + 1 写 meta。
+function commitIndexToDb(agentId, newIndex, mutatorSessions) {
+  const rawList = Array.isArray(newIndex?.sessions) ? newIndex.sessions : [];
+  const oldList = Array.isArray(mutatorSessions) ? mutatorSessions : [];
+  const sameIds = rawList.length === oldList.length
+    && rawList.every((s, i) => s?.id === oldList[i]?.id);
+  const db = ensureOrCreateSessionDb(agentId);
+  const stmts = getSessionStatements(db);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!sameIds) {
+      stmts.clearSessions.run();
+      rawList
+        .filter((s) => s && s.id && s.id !== 'legacy')
+        .map((s) => normalizeSessionRecord(s))
+        .forEach((record, i) => stmts.insertSession.run(...sessionRowValues(record, i)));
+    } else if (newIndex.sessions === mutatorSessions) {
+      // 数组为同一引用：以库内当前内容为准做行级比较，覆盖原地突变。
+      const stored = new Map(
+        db.prepare('SELECT id, record FROM sessions').all().map((row) => [row.id, row.record]),
+      );
+      for (const raw of rawList) {
+        const record = normalizeSessionRecord(raw);
+        if (JSON.stringify(record) === stored.get(String(record.id))) continue;
+        stmts.updateSessionRecord.run(...sessionRowValues(record, 0).slice(2), String(record.id));
+      }
+    } else {
+      // 新数组：未变行引用相同，直接跳过；引用变化行归一化后 UPDATE（id 序列
+      // 不变，无插入删除）。行对象必须由 mutator 新建（契约见 updateSessionIndex）。
+      for (let i = 0; i < rawList.length; i++) {
+        if (oldList[i] === rawList[i]) continue;
+        const record = normalizeSessionRecord(rawList[i]);
+        stmts.updateSessionRecord.run(...sessionRowValues(record, 0).slice(2), String(record.id));
+      }
+    }
+    const normalizedActive = rawList.some((s) => s?.id === newIndex.activeSessionId)
+      ? newIndex.activeSessionId
+      : null;
+    stmts.setMeta.run('activeSessionId', normalizedActive ?? '');
+    stmts.setMeta.run('revision', String(Math.max(0, Number(newIndex.revision) || 0)));
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  _indexReadCache.delete(agentId);
+}
+
+/**
+ * 会话索引事务更新：锁内"读快照 → fn(mutator) → 提交"。
+ *
+ * mutator 契约：接收 readSessionIndex 的可突变副本；返回新 index 对象
+ * （或原地修改后返回原对象——此形态走内容比较兜底，可正确持久化，但每行
+ * 需全量比较，性能次于新建对象形态）。修改已存在的行时必须新建行对象
+ * （`{ ...record, changes }`），在 `.map()` 中原地改字段后返回原引用的行
+ * 不会被检测为变更。mutator 抛错时事务不发生，异常原样上抛。
+ *
+ * `{ skipContentComparison: true }`：跳过"内容无变化不提交"的短路（用于
+ * 明知有新增/变更的调用方，避免全量签名比对成本）。
+ */
 export async function updateSessionIndex(agentId, fn, { skipContentComparison = false } = {}) {
   const prev = _indexLocks.get(agentId) || Promise.resolve();
   let release;
@@ -326,6 +632,10 @@ export async function updateSessionIndex(agentId, fn, { skipContentComparison = 
   await prev;
   try {
     const index = await readSessionIndex(agentId);
+    // 必须在 fn 执行前捕获 sessions 数组引用：mutator 可能原地替换
+    // index.sessions（返回原 index 对象），fn 之后再取已是新数组，diff 会
+    // 误走"同引用兜底"分支——新 id 以 UPDATE 写入不存在的行，静默丢失。
+    const sessionsBefore = index.sessions;
     const before = skipContentComparison ? null : sessionIndexContentSignature(index);
     const proposedIndex = await fn(index);
     const comparableIndex = {
@@ -339,7 +649,7 @@ export async function updateSessionIndex(agentId, fn, { skipContentComparison = 
       ...comparableIndex,
       revision: Math.max(0, Number(index.revision) || 0) + 1,
     };
-    await writeSessionIndex(agentId, newIndex);
+    commitIndexToDb(agentId, newIndex, sessionsBefore);
     return newIndex;
   } finally {
     release();
@@ -431,14 +741,12 @@ export function normalizeSessionMetadata(raw = {}) {
   );
 }
 
+// 同步读：DatabaseSync 直查，返回与异步变体一致的归一化形态（库内存储即
+// 归一形态）。无索引数据时返回空索引。调用方（im.js、group-chat.js）零改动。
 export function readSessionIndexSync(agentId) {
-  const sessionDir = isWorkspaceSessionAgent(agentId)
-    ? path.join(PREBUILT_WORKSPACES_ROOT, agentId, 'sessions')
-    : path.join(PREBUILT_SESSIONS_ROOT, agentId);
-  const indexPath = path.join(sessionDir, 'index.json');
-  try {
-    return JSON.parse(readFileSync(indexPath, 'utf8'));
-  } catch {
-    return { revision: 0, sessions: [] };
+  const db = ensureSessionDb(agentId);
+  if (!db) {
+    return { revision: 0, activeSessionId: null, sessions: [] };
   }
+  return loadIndexFromDb(agentId, db);
 }

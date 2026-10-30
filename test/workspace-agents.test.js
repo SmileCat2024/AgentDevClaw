@@ -93,7 +93,11 @@ test('single Agent and derived sessions need no selection dialog', async () => {
 
 const root = await mkdtemp(join(tmpdir(), 'claw-workspace-agents-'));
 process.env.AGENTDEV_DATA_DIR = root;
-after(() => rm(root, { recursive: true, force: true }));
+after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rm 报 EBUSY
+  rm(root, { recursive: true, force: true });
+});
 const { createSessionHelpers } = await import('../server/routes/session-helpers.js');
 const { readSessionIndex } = await import('../server/shared/session-access.js');
 const { buildLightPrebuiltSessionRecord, sessionRecordToWorkspaceMeta, buildChildRuntimeAgent } = await import('../server/routes/session-helpers-pure.js');

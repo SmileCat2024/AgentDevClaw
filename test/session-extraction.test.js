@@ -26,7 +26,11 @@ import { promises as fs } from 'node:fs';
 // 覆盖成测试夹具（lookup-contract-session 污染事故）。
 const isolatedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-session-extraction-'));
 process.env.AGENTDEV_DATA_DIR = isolatedRoot;
-after(() => fs.rm(isolatedRoot, { recursive: true, force: true }));
+after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rm 报 EBUSY
+  fs.rm(isolatedRoot, { recursive: true, force: true });
+});
 const { writeSessionIndex } = await import('../server/shared/session-access.js');
 const { resolveSessionTarget } = await import('../server/shared/operation-target.js');
 const { getAssemblyWorkspaceDir, normalizeClientAgentId } = await import('../server/shared/string-helpers.js');

@@ -10,7 +10,11 @@ import {
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
-import { createConnectedAgentsQuery, buildPhProjectScopedSnapshot, buildWireSessionsSnapshot } from './agent-connected.js';
+import {
+  createConnectedAgentsQuery,
+  buildPhProjectScopedSnapshot,
+  buildWireSessionsSnapshot,
+} from './agent-connected.js';
 import { buildChildRuntimeAgent } from './session-helpers-pure.js';
 import { PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { createAgentStartupFns } from './agent-startup.js';
@@ -188,6 +192,9 @@ export function createAgentLifecycleModule(ctx) {
     readViewerJson,
     getPendingInputCount,
     resolveAgentModelPresets,
+    // In-process ViewerWorker notification snapshot (ga-slow fix 2026-10-29);
+    // absent falls back to per-runtime HTTP self-fetch inside agent-connected.
+    getRuntimeNotification: ctx.getRuntimeNotification || null,
   });
 
   // ── Startup & wait functions (delegated to agent-startup.js) ──
@@ -345,9 +352,25 @@ export function createAgentLifecycleModule(ctx) {
 
     app.get('/protoclaw/get_connected_agents', async (_req, res, next) => {
       const startedAt = Date.now();
+      let agents;
       try {
-        const agents = await getConnectedAgents();
-        res.json(agents);
+        agents = await getConnectedAgents();
+      } catch (error) {
+        void recordSidebarDiagnosticEvent({
+          kind: 'read_perf',
+          operation: 'get_connected_agents',
+          phase: 'failed',
+          durationMs: Date.now() - startedAt,
+          result: 'failed',
+          errorCode: error?.code || 'connected_agents_failed',
+        }, { source: 'server' });
+        return next(error);
+      }
+
+      // Diagnostic collection is best-effort and runs before committing the
+      // response. Keeping it outside the request-error catch ensures an
+      // instrumentation failure cannot call next(error) after res.json().
+      try {
         void recordSidebarDiagnosticEvent({
           kind: 'read_perf',
           operation: 'get_connected_agents',
@@ -358,16 +381,9 @@ export function createAgentLifecycleModule(ctx) {
           result: 'success',
         }, { source: 'server' });
       } catch (error) {
-        void recordSidebarDiagnosticEvent({
-          kind: 'read_perf',
-          operation: 'get_connected_agents',
-          phase: 'failed',
-          durationMs: Date.now() - startedAt,
-          result: 'failed',
-          errorCode: error?.code || 'connected_agents_failed',
-        }, { source: 'server' });
-        next(error);
+        console.warn('[get_connected_agents] diagnostics failed:', error?.message || error);
       }
+      res.json(agents);
     });
 
     // Targeted runtime readiness query. Unlike get_connected_agents this does

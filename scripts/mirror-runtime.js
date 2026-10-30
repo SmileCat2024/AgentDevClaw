@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
+import { DatabaseSync } from 'node:sqlite';
 import { Agent, FileSessionStore } from '@agentdevjs/core';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
 import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
@@ -84,23 +85,43 @@ export function getSessionStoreDir(agentId) {
   return join(USER_DATA_ROOT, 'prebuilt-sessions', normalizedAgentId);
 }
 
+// 会话索引记录查找（ADR-0036：索引持久层为 index.db，遗留 index.json 由服务
+// 启动迁移收敛；此处的 JSON 回退覆盖迁移未完成窗口与 id 宽容匹配）。只读
+// 连接，WAL 支持与 server 写连接并发读；找不到记录返回 null。
+function readSessionIndexRecord(sessionDir, sessionId) {
+  const dbPath = join(sessionDir, 'index.db');
+  if (existsSync(dbPath)) {
+    try {
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        const row = db.prepare('SELECT record FROM sessions WHERE id = ?').get(sessionId);
+        if (row) return JSON.parse(row.record);
+      } finally {
+        db.close();
+      }
+    } catch { /* db 损坏/占用异常：落到 JSON 回退 */ }
+  }
+  const indexPath = join(sessionDir, 'index.json');
+  if (!existsSync(indexPath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    return sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(sessionId)) || null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveSessionWorkspaceCwd(agentId, sessionId) {
   const normalizedSessionId = cleanValue(sessionId);
   if (!normalizedSessionId || normalizedSessionId === '__protoclaw-no-session__') {
     return null;
   }
 
-  const indexPath = join(getSessionStoreDir(agentId), 'index.json');
-  if (!existsSync(indexPath)) {
-    return null;
-  }
-
-  let record = null;
-  try {
-    const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
-    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
-    record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId)) || null;
-  } catch {
+  const record = readSessionIndexRecord(getSessionStoreDir(agentId), normalizedSessionId);
+  if (!record) {
     return null;
   }
   // PH 项目会话（ticket 042）：运行目录由项目表当前记录解析，失败直接抛错，

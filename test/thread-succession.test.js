@@ -46,6 +46,8 @@ const { getPrebuiltSessionIndexPath } = await import('../server/shared/session-a
 
 after(async () => {
   // DATA_ROOT 含恢复服务读取的隔离会话索引；进程退出前清理
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rm 报 EBUSY
   await fs.rm(DATA_ROOT, { recursive: true, force: true });
 });
 

@@ -25,7 +25,9 @@ process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
 
 const EXTERNAL_ROOTS = [];
 
-after(() => {
+after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rmSync 报 EBUSY
   rmSync(DATA_ROOT, { recursive: true, force: true });
   for (const dir of EXTERNAL_ROOTS) rmSync(dir, { recursive: true, force: true });
 });
@@ -165,6 +167,8 @@ describe('PH 独立项目路由（隔离数据根）', () => {
       index.sessions = [];
       return index;
     });
+    const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+    closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rmSync 报 EBUSY
     rmSync(join(DATA_ROOT, 'workspaces', 'programming-helper', 'sessions'), { recursive: true, force: true });
   });
 

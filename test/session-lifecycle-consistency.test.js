@@ -13,7 +13,11 @@ const { buildSessionTrimPreview, buildSessionTrimMessagePreview, estimatePreambl
 const { FileSessionStore } = await import('@agentdevjs/core');
 const { createAgentStartupFns } = await import('../server/routes/agent-startup.js');
 const startup = createAgentStartupFns({});
-after(() => rm(root, { recursive: true, force: true }));
+after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rm 报 EBUSY
+  rm(root, { recursive: true, force: true });
+});
 
 function routes(extra) {
   const captured = new Map();

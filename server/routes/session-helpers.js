@@ -17,6 +17,7 @@ import {
   readSessionIndex, readSessionIndexShared, updateSessionIndex,
   getPrebuiltSessionFilePath,
   normalizeSessionMetadata, buildSessionTitle, computeNextSessionNumber,
+  findPrebuiltSessionRecordShared,
 } from '../shared/session-access.js';
 import { getAgentRuntime, isManagedRuntimeRunning } from '../shared/agent-access.js';
 import { readThreadMembership } from '../shared/thread-membership.js';
@@ -158,7 +159,7 @@ function buildNamedSessionTitle(name, createdAtIso) {
 }
 
 async function getNextNewSessionTitle(agentId, openDirectory, projectId = '') {
-  const index = await readSessionIndex(agentId);
+  const index = await readSessionIndexShared(agentId);
   return `新对话${computeNextSessionNumber(index.sessions, openDirectory, { projectId })}`;
 }
 
@@ -604,7 +605,8 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
   // 降级读模型的响应面与索引读模型保持同一 wire 口径（coder 排除、分页切片、
   // 字段裁剪）：30s 降级窗口内分页请求若返回全量富列表，前端会看到 coder 混入
   // 与计数漂移。activeSessionId 取过滤前的 sessions[0]（active 会话与列表
-  // 过滤无关）。
+  // 过滤无关）。成员表读取一次复用（同文件版本同引用）。
+  const membership = await readThreadMembership(agentId);
   const richPageOptions = {
     projectDir: options.sessionProjectDir,
     projectId: options.sessionProjectId,
@@ -613,7 +615,7 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
     offset: options.sessionOffset,
     limit: options.sessionLimit,
     // ADR-0032 列表口径：计数/切片按线程归档状态，历史代成员不进入
-    threadMembership: await readThreadMembership(agentId),
+    threadMembership: membership,
   };
   const richPageActive = options.sessionProjectDir !== undefined
     || options.sessionProjectId !== undefined
@@ -641,7 +643,7 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
     wireSessions = wireSessions.map(trimSessionRecordForWire);
     if (!richPageActive) {
       const counts = sliceSessionsForWire(sessions, {
-        threadMembership: await readThreadMembership(agentId),
+        threadMembership: membership,
       });
       richPageMeta = { mainTotal: counts.mainTotal, archivedTotal: counts.archivedTotal };
     }
@@ -757,26 +759,61 @@ async function migrateSidebarSessionReadModel(agentId, initialIndex) {
   });
 }
 
+// 侧栏投影缓存：PH 索引可达数千会话，秒级轮询（get_connected_agents 与
+// prebuilt_sessions 条件刷新）每次重复「全量 buildLight + 排序」是主线程
+// CPU 停顿的主要来源之一（服务进程实测 readModelMs p50 134ms，单轮 ga 主
+// 线程 CPU 达数百 ms，且直接拖慢同进程创建请求的索引提交段）。以共享索引
+// 对象与共享线程成员表对象的身份作键（WeakMap，与 _sessionRecordMaps 同
+// 构）：任一文件变化 → readSessionIndexShared / readThreadMembership 返回
+// 新对象 → 缓存条目自然失效并被回收，无显式版本管理。
+//
+// 契约：projection.sessions 与本函数返回值共享（wireTrim / 分页未激活时
+// 原样透出），调用方只读，不得修改（readSessionIndexShared 同款契约）。
+const _sidebarProjectionCache = new WeakMap(); // index → Map<membership, projection>
+
 async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
   const startedAt = Date.now();
-  let index = await readSessionIndex(agentId);
+  let index = await readSessionIndexShared(agentId);
   const indexLoadedAt = Date.now();
   let migratedCount = 0;
   const incompleteCount = index.sessions.filter((record) => !isSidebarSessionReadModelReady(record)).length;
   if (incompleteCount > 0) {
+    // 迁移入参为共享只读索引（migrateSidebarSessionReadModel 只读消费，写回
+    // 经 updateSessionIndex 自行克隆），返回独立对象；迁移路径的投影不进缓
+    // 存——写回后文件版本变化，下一轮共享读取自然以新身份重建。
     index = await migrateSidebarSessionReadModel(agentId, index);
     migratedCount = incompleteCount;
-  }
-  const remainingIncomplete = index.sessions.filter((record) => !isSidebarSessionReadModelReady(record));
-  if (remainingIncomplete.length > 0) {
-    const error = new Error('Sidebar session read model is incomplete');
-    error.code = 'sidebar_read_model_incomplete';
-    throw error;
+    const remainingIncomplete = index.sessions.filter((record) => !isSidebarSessionReadModelReady(record));
+    if (remainingIncomplete.length > 0) {
+      const error = new Error('Sidebar session read model is incomplete');
+      error.code = 'sidebar_read_model_incomplete';
+      throw error;
+    }
   }
 
   const readModelStartedAt = Date.now();
-  const sessions = sortSidebarSessions(index.sessions.map((record) =>
-    buildLightPrebuiltSessionRecord(agentId, record)));
+  // 每索引只保留最新成员表版本的投影：成员表变化而索引不变时，旧投影对
+  // 之后的请求无意义，clear 防止极端场景下（高频线程操作不动会话索引）
+  // 内层条目无界积累。
+  let membership = await readThreadMembership(agentId);
+  let byMembership = migratedCount > 0 ? null : _sidebarProjectionCache.get(index);
+  if (!byMembership && migratedCount === 0) {
+    byMembership = new Map();
+    _sidebarProjectionCache.set(index, byMembership);
+  }
+  let projection = byMembership && byMembership.get(membership);
+  if (!projection) {
+    projection = {
+      revision: Number(index.revision) || 0,
+      sessions: sortSidebarSessions(index.sessions.map((record) =>
+        buildLightPrebuiltSessionRecord(agentId, record))),
+    };
+    if (byMembership) {
+      byMembership.clear();
+      byMembership.set(membership, projection);
+    }
+  }
+  const sessions = projection.sessions;
   const defaultModelInfo = options.includeModelDefaults === false
     ? null
     : await resolveSessionModelInfo(agentId);
@@ -798,8 +835,9 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
     // 按线程归档状态分桶。PH 的列表请求走本函数（索引读模型），rich 降级路径
     // 早已接入同一口径——此处漏接会让历史代成员以普通会话行返回，「我的对话」
     // 混入 900+ 条只该经「历史 · N」入口到达的旧代记录，分页键位与计数同步
-    // 失真（实测 2116 vs 应有的 1717）。
-    threadMembership: await readThreadMembership(agentId),
+    // 失真（实测 2116 vs 应有的 1717）。成员表复用上方已读取的共享实例
+    // （同文件版本同引用），不二次读取。
+    threadMembership: membership,
   };
   const pageActive = options.sessionProjectDir !== undefined
     || options.sessionProjectId !== undefined
@@ -828,7 +866,7 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
     wireSessions = wireSessions.map(trimSessionRecordForWire);
     if (!pageActive) {
       const counts = sliceSessionsForWire(sessions, {
-        threadMembership: await readThreadMembership(agentId),
+        threadMembership: membership,
       });
       pageMeta = { mainTotal: counts.mainTotal, archivedTotal: counts.archivedTotal };
     }
@@ -1449,29 +1487,6 @@ async function requirePrebuiltSessionRecord(agentId, sessionId) {
     throw error;
   }
   return existing;
-}
-
-/**
- * requirePrebuiltSessionRecord 的共享只读变体：找不到返回 null（不抛 404），
- * 且经 readSessionIndexShared 不 clone 索引。面向高频只读字段解析（如线程
- * 列表逐线程解析 head 会话目录——每次 clone 数 MB 索引 × 线程数会打满事件循环）。
- * 契约：返回的 record 只读，不得修改。
- */
-const _sessionRecordMaps = new WeakMap();
-
-async function findPrebuiltSessionRecordShared(agentId, sessionId) {
-  const index = await readSessionIndexShared(agentId);
-  // 同一份共享索引对象会被大量只读解析复用（如线程列表每线程解析 head
-  // 目录与标题）。为索引对象惰性建一次 Map，避免每次都扫描全部会话；索引
-  // 变更后 readSessionIndexShared 返回新对象，自然创建对应的新 Map。
-  let recordsById = _sessionRecordMaps.get(index);
-  if (!recordsById) {
-    recordsById = new Map(index.sessions.map((session) => [session.id, session]));
-    _sessionRecordMaps.set(index, recordsById);
-  }
-  const wanted = cleanSessionText(sessionId);
-  if (!wanted) return null;
-  return recordsById.get(wanted) || null;
 }
 
 async function resolvePrebuiltSessionOwner(sessionId, preferredAgentId = '') {

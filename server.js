@@ -75,7 +75,7 @@ import {
   getProjectDocsetDir, getProjectDocsetProjectPath, getProjectDocsetFormsDir,
   getProjectDocsetMaterialsDir, getProjectDocsetConversationsDir,
   readSessionIndex, readSessionIndexShared, resolvePrebuiltSessionType,
-  writeSessionIndex, updateSessionIndex,
+  writeSessionIndex, updateSessionIndex, migrateAllPrebuiltSessionIndexes,
   buildSessionTitle, normalizeSessionMetadata, readSessionIndexSync,
 } from './server/shared/session-access.js';
 import { sendIPCtoSession } from './server/shared/ipc.js';
@@ -255,7 +255,22 @@ setupFeatureCommunicationRoutes(app, express, { communicationStore: featureCommu
 // sessionApi is a mutable reference filled after session-helpers is created,
 // breaking the circular dependency (agent-discovery → session-helpers → agent-discovery).
 const sessionApi = {};
-const agentDiscoveryApi = createAgentDiscoveryModule({ sessionApi });
+// In-process ViewerWorker 快照（ga-slow 修复 2026-10-29）：ViewerWorker 与本
+// server 同进程，per-runtime 的 input-requests / notification 查询走 HTTP
+// self-fetch 会在事件循环上自排队、放大轮询端点 wall 时间；快照方法即各
+// HTTP handler 的实现本体（同构语义，null 对齐 fetch 失败路径）。
+const inProcessViewerInputRequests = (agentId) => {
+  const snapshot = viewerWorker.getInputRequestsSnapshot?.(agentId);
+  return snapshot === undefined ? null : snapshot;
+};
+const inProcessViewerNotification = (agentId) => {
+  const snapshot = viewerWorker.getNotificationSnapshot?.(agentId);
+  return snapshot === undefined ? null : snapshot;
+};
+const agentDiscoveryApi = createAgentDiscoveryModule({
+  sessionApi,
+  getInputRequestsSnapshot: inProcessViewerInputRequests,
+});
 const {
   discoverAgents, getAgentsLight, resolveAgentModelPresets, enrichAgent,
   getAgents, requireAgentLight, requireAgent,
@@ -283,6 +298,7 @@ const agentLifecycle = createAgentLifecycleModule({
   resolveRuntimeDisplayName,
   readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
   readViewerJson, getPendingInputCount, resolveAgentModelPresets,
+  getRuntimeNotification: inProcessViewerNotification,
 });
 const {
   getConnectedAgents, waitForProcessExit,
@@ -1745,6 +1761,19 @@ async function main() {
     if (!result.skipped) console.log('[ph-thread-archive-backfill] completed:', result.summary);
   } catch (err) {
     console.warn('[ph-thread-archive-backfill] startup migration failed:', err.message);
+  }
+
+  // 会话索引 SQLite 化启动自迁移（ADR-0036）：把遗留 index.json 收敛为
+  // index.db + index.migrated.json 留档。单工作空间失败告警不阻断（保持
+  // JSON 原状，访问时兜底重试）。置于裸读 index.json 的历史迁移（coder
+  // 退役 / PH 血缘建线）之后、一切索引 API 消费者之前。
+  try {
+    const migratedIndexes = migrateAllPrebuiltSessionIndexes();
+    if (migratedIndexes.length > 0) {
+      console.log(`[session-index] migrated to index.db: ${migratedIndexes.join(', ')}`);
+    }
+  } catch (err) {
+    console.warn('[session-index] startup migration failed:', err.message);
   }
 
   // 线程宿主集合按 metadata 声明派生注册（ADR-0024 可拔插约束：公共代码

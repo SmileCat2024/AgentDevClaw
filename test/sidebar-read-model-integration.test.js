@@ -22,8 +22,12 @@ function runIsolatedReadModelSmoke(homeDir) {
       waitForManagedRuntimeReady: async () => null,
     });
     const first = await helpers.listPrebuiltSessions('programming-helper');
-    const indexPath = path.join(process.env.USERPROFILE, '.agentdev', 'AgentDevClaw', 'workspaces', 'programming-helper', 'sessions', 'index.json');
-    const persisted = JSON.parse(await fs.readFile(indexPath, 'utf8'));
+    // 首次列表访问已把 fixture 的 index.json 迁入 index.db（ADR-0036）；
+    // 持久化形态经存储层 API 读取（与消费方同一读路径）。
+    const accessUrl = pathToFileURL(path.join(process.cwd(), 'server', 'shared', 'session-access.js')).href;
+    const { readSessionIndex } = await import(accessUrl);
+    const persisted = await readSessionIndex('programming-helper');
+    const indexPath = path.join(process.env.USERPROFILE, '.agentdev', 'AgentDevClaw', 'workspaces', 'programming-helper', 'sessions', 'index.db');
     const handoffPath = path.join(process.env.USERPROFILE, '.agentdev', 'AgentDevClaw', 'context-handoffs', 'programming-helper', 'handoff-old.json');
     await fs.unlink(handoffPath);
     const second = await helpers.listPrebuiltSessions('programming-helper');

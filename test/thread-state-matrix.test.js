@@ -30,6 +30,8 @@ const { createThreadLifecycleService } = await import('../server/thread-control/
 const { getPrebuiltSessionIndexPath } = await import('../server/shared/session-access.js');
 
 after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rm 报 EBUSY
   await fs.rm(DATA_ROOT, { recursive: true, force: true });
 });
 

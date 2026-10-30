@@ -28,6 +28,7 @@ process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
 const EXTERNAL_ROOTS = [];
 
 after(() => {
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rmSync 报 EBUSY
   rmSync(DATA_ROOT, { recursive: true, force: true });
   for (const dir of EXTERNAL_ROOTS) rmSync(dir, { recursive: true, force: true });
 });
@@ -59,7 +60,7 @@ const {
   invalidateSearchIndex,
   getSearchIndexPath,
 } = await import('../server/routes/session-search-index.js');
-const { getPrebuiltAgentSessionDir, getPrebuiltSessionFilePath } = await import('../server/shared/session-access.js');
+const { getPrebuiltAgentSessionDir, getPrebuiltSessionFilePath, writeSessionIndex, readSessionIndex, closeAllSessionDbs } = await import('../server/shared/session-access.js');
 const { managedAgents } = await import('../server/shared/agent-access.js');
 const { getSessionProjectId } = await import('../server/shared/session-project.js');
 
@@ -174,10 +175,10 @@ describe('044 列表归属过滤（sliceSessionsForWire）', () => {
 describe('044 列表读模型与路由', () => {
   const AGENT = 'programming-helper';
 
+  // 索引夹具经 writeSessionIndex API 写入（ADR-0036：运行期直写 index.json
+  // 对 API 读取不可见，持久层是 index.db）。
   async function writeIndex(records) {
-    mkdirSync(getPrebuiltAgentSessionDir(AGENT), { recursive: true });
-    writeFileSync(join(getPrebuiltAgentSessionDir(AGENT), 'index.json'),
-      JSON.stringify({ revision: 1, activeSessionId: null, sessions: records }), 'utf8');
+    await writeSessionIndex(AGENT, { revision: 1, activeSessionId: null, sessions: records });
   }
 
   function captureListRoute() {
@@ -305,13 +306,12 @@ describe('044 回选与删除隔离', () => {
       openDirectory: dirD,
       phProjects: [{ id: `dir:${dirD.replace(/\\/g, '/').toLowerCase()}`, openDirectory: dirD }],
     });
-    writeFileSync(join(getPrebuiltAgentSessionDir(AGENT), 'index.json'),
-      JSON.stringify({ revision: 1, activeSessionId: null, sessions: records }), 'utf8');
+    await writeSessionIndex(AGENT, { revision: 1, activeSessionId: null, sessions: records });
 
     const deleted = await helpers.deletePrebuiltProject(AGENT, `dir:${dirD.replace(/\\/g, '/').toLowerCase()}`);
     assert.deepEqual(deleted.deletedSessionIds.sort(), ['d1', 'd2', 'd3']);
 
-    const index = JSON.parse(readFileSync(join(getPrebuiltAgentSessionDir(AGENT), 'index.json'), 'utf8'));
+    const index = await readSessionIndex(AGENT);
     assert.deepEqual(index.sessions.map((s) => s.id).sort(), ['a1', 'a2', 'b1', 'b2']);
     for (const id of ['a1', 'a2', 'b1', 'b2']) {
       assert.equal(existsSync(getPrebuiltSessionFilePath(AGENT, id)), true, `${id} transcript must survive`);
@@ -397,14 +397,13 @@ describe('044 内容搜索归属', () => {
     return { runtime: { context: { messages } } };
   }
 
-  function writeSessionFiles(records, texts) {
+  async function writeSessionFiles(records, texts) {
     mkdirSync(getPrebuiltAgentSessionDir(AGENT), { recursive: true });
     for (const record of records) {
       writeFileSync(getPrebuiltSessionFilePath(AGENT, record.id),
         JSON.stringify(transcript([{ role: 'user', content: texts[record.id] || 'plain' }])), 'utf8');
     }
-    writeFileSync(join(getPrebuiltAgentSessionDir(AGENT), 'index.json'),
-      JSON.stringify({ revision: 1, activeSessionId: null, sessions: records }), 'utf8');
+    await writeSessionIndex(AGENT, { revision: 1, activeSessionId: null, sessions: records });
   }
 
   before(async () => {
@@ -414,7 +413,7 @@ describe('044 内容搜索归属', () => {
       projectSession('a1', projectA.id),
       projectSession('b1', projectB.id),
     ];
-    writeSessionFiles(records, { d1: 'needle in dir', a1: 'needle in project a', b1: 'needle in project b' });
+    await writeSessionFiles(records, { d1: 'needle in dir', a1: 'needle in project a', b1: 'needle in project b' });
   });
 
   test('目录过滤搜索排除 A/B；项目过滤只回本集合；结果透传归属', async () => {

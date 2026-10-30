@@ -24,7 +24,11 @@ import { join } from 'node:path';
 
 const DATA_ROOT = mkdtempSync(join(tmpdir(), 'claw-ph-fe-projection-'));
 process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
-after(() => rmSync(DATA_ROOT, { recursive: true, force: true }));
+after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rmSync 报 EBUSY
+  rmSync(DATA_ROOT, { recursive: true, force: true });
+});
 
 // 真实 server 投影链（042/044 实现）
 const {

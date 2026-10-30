@@ -17,7 +17,11 @@ process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
 
 const { searchSessionsContent, loadPersistentSearchIndex, ensureSearchIndex, invalidateSearchIndex } = await import('../server/routes/session-search-index.js');
 const { readSessionIndex, writeSessionIndex } = await import('../server/shared/session-access.js');
-after(() => fs.rm(DATA_ROOT, { recursive: true, force: true }));
+after(async () => {
+  const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
+  closeAllSessionDbs(); // Windows 下打开的 db 句柄会让 rm 报 EBUSY
+  fs.rm(DATA_ROOT, { recursive: true, force: true });
+});
 
 // ── Fixture helpers ───────────────────────────────────────────────
 

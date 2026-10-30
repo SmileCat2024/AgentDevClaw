@@ -73,7 +73,7 @@
     "advclaw": "./bin/advclaw.mjs"
   },
   "engines": {
-    "node": ">=20.19"
+    "node": ">=24"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
