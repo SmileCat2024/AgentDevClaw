@@ -61,7 +61,7 @@ describe('buildSessionTitle', () => {
   });
 });
 
-describe('getNextNewSessionTitle counter logic', () => {
+describe('新对话默认标题编号规则', () => {
   it('returns 1 when no sessions exist', () => {
     assert.equal(computeNextSessionNumber([], '/project'), 1);
   });
