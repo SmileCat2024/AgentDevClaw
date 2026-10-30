@@ -249,6 +249,9 @@ deleteSessionAction.addEventListener('click', async () => {
     projectName: deletedSession?.openDirectory ? getPathLeaf(deletedSession.openDirectory) : '',
     title: deletedSession?.title || pendingSessionId,
   });
+  if (affectedRuntimeId && typeof markPendingRuntimeStop === 'function') {
+    markPendingRuntimeStop(pendingAgentId, pendingSessionId, affectedRuntimeId);
+  }
   // Clear cached data for the deleted session's runtime
   if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
 
@@ -286,6 +289,9 @@ deleteSessionAction.addEventListener('click', async () => {
       throw new Error(await response.text().catch(() => 'delete session failed'));
     }
     const result = await response.json();
+    if (result?.ok === false || result?.status === 'partial') {
+      throw new Error(result?.code || 'delete_incomplete');
+    }
     if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(pendingAgentId, result);
 
     if (result?.deleted?.sessions) {
@@ -314,6 +320,9 @@ deleteSessionAction.addEventListener('click', async () => {
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
   } catch (e) {
+    if (affectedRuntimeId && typeof releasePendingRuntimeStop === 'function') {
+      releasePendingRuntimeStop(affectedRuntimeId, pendingAgentId, pendingSessionId);
+    }
     updateAgentRecord(pendingAgentId, {
       workspace_sessions: { ...(targetAgent?.workspace_sessions || {}), sessions: currentSessions, activeSessionId: targetAgent?.active_workspace_session_id },
       active_workspace_session_id: targetAgent?.active_workspace_session_id,

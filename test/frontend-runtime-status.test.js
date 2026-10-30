@@ -279,6 +279,35 @@ describe('runtime-status: relay placeholder state matrix (ADR-0024 sidebar conti
   });
 });
 
+describe('runtime-status: deleted thread runtime retirement', () => {
+  it('does not re-project a stale child as an ungrouped session after thread deletion', () => {
+    const ctx = loadRuntimeStatus();
+    const entries = ctx.run(`(() => {
+      const host = {
+        id: 'programming-helper', agentId: 'programming-helper', source: 'prebuilt',
+        workspace_sessions: { sessions: [] }, sidebar_threads: [],
+      };
+      // The thread is already absent from the authoritative snapshot, while the
+      // Viewer still briefly reports its retired child runtime.
+      markPendingRuntimeStop('programming-helper', 'deleted-session', 'runtime-deleting');
+      const staleChild = {
+        id: 'runtime-deleting', source: 'child', parent_id: 'programming-helper',
+        sidebar_entry_id: 'programming-helper', runtime_session_id: 'runtime-deleting',
+        active_workspace_session_id: 'deleted-session', connected: true,
+      };
+      const unrelatedChild = {
+        ...staleChild, id: 'runtime-sibling', runtime_session_id: 'runtime-sibling',
+        active_workspace_session_id: 'sibling-session', active_workspace_session_title: '保留对话',
+      };
+      return collectRuntimeEntriesForPrebuilt(host, [staleChild, unrelatedChild]);
+    })()`);
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].runtimeId, 'runtime-sibling');
+    assert.equal(entries[0].name, '保留对话');
+  });
+});
+
 describe('runtime-status: sidebar identity ownership', () => {
   it('routes a coder child runtime to the coder APP row via sidebar_entry_id, not the PH host row', () => {
     const ctx = loadRuntimeStatus();

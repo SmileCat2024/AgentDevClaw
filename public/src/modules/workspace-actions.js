@@ -790,6 +790,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       projectName: deletedSession?.openDirectory ? getPathLeaf(deletedSession.openDirectory) : '',
       title: deletedSession?.title || action.sessionId,
     });
+    // Deletion removes the authoritative Session/Thread before every Viewer
+    // snapshot has dropped its child entry. Suppress this exact runtime until a
+    // fresh snapshot confirms retirement; otherwise the stale child reappears
+    // as an ungrouped row named after its Session id.
+    if (affectedRuntimeId && typeof markPendingRuntimeStop === 'function') {
+      markPendingRuntimeStop(activeAgent.id, action.sessionId, affectedRuntimeId);
+    }
 
     if (deletedWasActive) {
       applyManagedPrebuiltAgent(activeAgent.id, null);
@@ -839,6 +846,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         throw new Error(await response.text().catch(() => 'delete session failed'));
       }
       const result = await response.json();
+      if (result?.ok === false || result?.status === 'partial') {
+        throw new Error(result?.code || 'delete_incomplete');
+      }
       if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
       // T006 / T005：Session 删除入口返回实际对象是 Thread（target shape，
       // 响应带 threadId + cleanup 级联清理事实）时，UI 刷新 Thread 而不是
@@ -871,6 +881,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       }
     } catch (error) {
       console.error('Failed to delete session:', error);
+      if (affectedRuntimeId && typeof releasePendingRuntimeStop === 'function') {
+        releasePendingRuntimeStop(affectedRuntimeId, activeAgent.id, action.sessionId);
+      }
       updateAgentRecord(activeAgent.id, {
         workspace_sessions: { ...(targetAgent?.workspace_sessions || {}), sessions: currentSessions, activeSessionId: targetAgent?.active_workspace_session_id },
         active_workspace_session_id: targetAgent?.active_workspace_session_id,
