@@ -221,6 +221,69 @@ describe('sidebar operation state machine', () => {
     assert.deepEqual(Array.from(merged.sessions, (session) => session.id), ['new']);
   });
 
+  // 归属识别（045 读侧：选项目后轮询不被目录切片覆盖）：项目切片与目录切片是不同的集合。
+  // 合并函数把目录切片当「更新的一版」patch 到项目列表上，项目会话会
+  // 整体消失、徽标却仍是目录口径——表现为「项目的对话加载不出来」。
+  it('replaces instead of patching when the projected ownership differs', () => {
+    const ctx = loadSidebarOperations();
+    const merged = ctx.run(`mergeWorkspaceSessionSnapshots(
+      { revision: 7, sessionProjectId: 'prj_aaaa', sessions: [{ id: 'a1', projectId: 'prj_aaaa' }] },
+      { revision: 7, sessionProjectDir: 'D:/code/shared', sessions: [{ id: 'd1' }, { id: 'd2' }] },
+      'programming-helper'
+    )`);
+    assert.deepEqual(Array.from(merged.sessions, (session) => session.id), ['d1', 'd2']);
+    assert.equal(merged.sessionProjectDir, 'D:/code/shared');
+    assert.equal(merged.sessionProjectId, undefined);
+  });
+
+  it('merges snapshots that describe the same ownership', () => {
+    const ctx = loadSidebarOperations();
+    const merged = ctx.run(`mergeWorkspaceSessionSnapshots(
+      { revision: 7, sessionProjectId: 'prj_aaaa', sessions: [{ id: 'a1', title: 'old' }] },
+      { revision: 8, sessionProjectId: 'prj_aaaa', sessions: [{ id: 'a1', title: 'new' }, { id: 'a2' }] },
+      'programming-helper'
+    )`);
+    assert.deepEqual(Array.from(merged.sessions, (session) => session.id), ['a1', 'a2']);
+    assert.equal(merged.sessions[0].title, 'new');
+    assert.equal(merged.revision, 8);
+  });
+
+  it('keeps legacy merge semantics when either snapshot declares no ownership', () => {
+    const ctx = loadSidebarOperations();
+    // 未声明归属（全量 / 富回退 / 非 PH agent）：沿用既有合并行为
+    const merged = ctx.run(`mergeWorkspaceSessionSnapshots(
+      { revision: 3, sessions: [{ id: 'x', title: 'old' }] },
+      { revision: 4, sessionProjectId: 'prj_aaaa', sessions: [{ id: 'x', title: 'new' }, { id: 'y' }] },
+      'programming-helper'
+    )`);
+    assert.deepEqual(Array.from(merged.sessions, (session) => session.id), ['x', 'y']);
+    assert.equal(merged.sessions[0].title, 'new');
+  });
+
+  // 服务端读不到 workspace_state 时会降级成未声明归属的全量列表；它是全部
+  // 归属的并集，不能拿来当当前视图的 membership 权威（否则视图里混入其他
+  // 归属的会话）。
+  it('does not let an ownership-less degraded snapshot replace an owned view', () => {
+    const ctx = loadSidebarOperations();
+    const merged = ctx.run(`mergeWorkspaceSessionSnapshots(
+      { revision: 9, sessionProjectId: 'prj_aaaa', sessions: [{ id: 'a1', projectId: 'prj_aaaa' }] },
+      { revision: 10, sessions: [{ id: 'a1' }, { id: 'd1' }, { id: 'b1' }] },
+      'programming-helper'
+    )`);
+    assert.deepEqual(Array.from(merged.sessions, (session) => session.id), ['a1']);
+    assert.equal(merged.sessionProjectId, 'prj_aaaa');
+  });
+
+  it('treats the same project directory name compared case-insensitively as one ownership', () => {
+    const ctx = loadSidebarOperations();
+    const merged = ctx.run(`mergeWorkspaceSessionSnapshots(
+      { revision: 3, sessionProjectDir: 'D:\\\\Code\\\\Proj', sessions: [{ id: 'x', title: 'old' }] },
+      { revision: 4, sessionProjectDir: 'd:/code/proj/', sessions: [{ id: 'x', title: 'new' }] },
+      'programming-helper'
+    )`);
+    assert.equal(merged.sessions[0].title, 'new');
+  });
+
   it('retains a committed upsert across lagging snapshots until the server echoes it', () => {
     const ctx = loadSidebarOperations();
     ctx.run(`allAgents = [{

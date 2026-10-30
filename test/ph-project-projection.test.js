@@ -63,6 +63,7 @@ const {
 const { getPrebuiltAgentSessionDir, getPrebuiltSessionFilePath, writeSessionIndex, readSessionIndex, closeAllSessionDbs } = await import('../server/shared/session-access.js');
 const { managedAgents } = await import('../server/shared/agent-access.js');
 const { getSessionProjectId } = await import('../server/shared/session-project.js');
+const { buildPhProjectScopedSnapshot } = await import('../server/routes/agent-connected.js');
 
 // ── 场景夹具：D 目录 + 同路径 A/B 项目，三组会话（目录/项目各 3 条） ─────
 
@@ -474,5 +475,53 @@ describe('044 内容搜索归属', () => {
     assert.deepEqual(aResults.results.map((r) => r.sessionId), ['a1']);
     const dirResults = await searchSessionsContent(AGENT, 'legacy', dirD, {});
     assert.deepEqual(dirResults.results.map((r) => r.sessionId), ['d1']);
+  });
+});
+
+// ── 4. 轮询/详情接口的切片归属（get_connected_agents / agent_detail）────
+// 契约：调用方显式给出浏览归属时，切片与计数必须按该归属产出，并在响应上
+// 声明同一个归属身份（sessionProjectId / sessionProjectDir）。此前一律按
+// workspace_state.openDirectory 做目录切片：用户浏览项目时轮询回的是目录
+// 集合（按契约排除项目会话），前端按项目身份过滤后列表归零、徽标却是目录
+// 口径——表现为「项目的对话加载不出来」「只显示某个运行中的对话」。
+
+describe('045 切片归属（buildPhProjectScopedSnapshot）', () => {
+  const AGENT = 'programming-helper';
+
+  function wireSnapshot() {
+    return { revision: 11, activeSessionId: 'd1', sessions: allRecords() };
+  }
+
+  test('projectId 归属：只回该项目的会话，计数同源', async () => {
+    await writeWorkspaceState(AGENT, { forms: {}, openDirectory: dirD, updatedAt: null });
+    const snapshot = await buildPhProjectScopedSnapshot(AGENT, wireSnapshot(), { projectId: projectA.id });
+    assert.deepEqual(snapshot.sessions.map((s) => s.id).sort(), ['a1', 'a2']);
+    assert.equal(snapshot.sessionTotal, 2);
+    assert.equal(snapshot.mainTotal, 1, 'a2 归档，不计入我的对话');
+    assert.equal(snapshot.archivedTotal, 1);
+    assert.equal(snapshot.sessionProjectId, projectA.id, '切片声明自己所属的项目');
+    assert.equal(snapshot.sessionProjectDir, null, '项目切片不能同时声称目录归属');
+  });
+
+  test('projectDir 归属：目录集合排除项目会话', async () => {
+    const snapshot = await buildPhProjectScopedSnapshot(AGENT, wireSnapshot(), { projectDir: dirD });
+    assert.deepEqual(snapshot.sessions.map((s) => s.id).sort(), ['d1', 'd2', 'd3']);
+    assert.equal(snapshot.sessionTotal, 3);
+    assert.equal(snapshot.sessionProjectDir, dirD);
+    assert.equal(snapshot.sessionProjectId, null);
+  });
+
+  test('缺省归属：回退 workspace_state.openDirectory 的目录语义（既有行为）', async () => {
+    await writeWorkspaceState(AGENT, { forms: {}, openDirectory: dirD, updatedAt: null });
+    const snapshot = await buildPhProjectScopedSnapshot(AGENT, wireSnapshot());
+    assert.equal(snapshot.sessionProjectDir, dirD);
+    assert.deepEqual(snapshot.sessions.map((s) => s.id).sort(), ['d1', 'd2', 'd3']);
+  });
+
+  test('显式归属优先于 workspace_state 的目录漂移', async () => {
+    // 工作区打开的目录被切走，但用户仍停留在项目 A 上
+    await writeWorkspaceState(AGENT, { forms: {}, openDirectory: makeExternalDir('claw-045-other-'), updatedAt: null });
+    const snapshot = await buildPhProjectScopedSnapshot(AGENT, wireSnapshot(), { projectId: projectA.id });
+    assert.deepEqual(snapshot.sessions.map((s) => s.id).sort(), ['a1', 'a2']);
   });
 });

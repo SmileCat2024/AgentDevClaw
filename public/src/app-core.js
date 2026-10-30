@@ -65,7 +65,15 @@ async function loadAgentDetail(agentId) {
     : null;
   let loaded = false;
   try {
-    const res = await fetch('/protoclaw/agent_detail?agentId=' + encodeURIComponent(agentId));
+    // 归属显式化：详情接口的会话随浏览目标（项目 / 目录）取切片，缺省时
+    // 服务端回退目录语义——用户正浏览项目时会拿回目录切片覆盖项目列表。
+    const ownership = typeof getPhSessionOwnershipParams === 'function'
+      ? getPhSessionOwnershipParams(allAgents.find((item) => item.id === agentId) || null)
+      : {};
+    const ownershipQuery = ownership.projectId
+      ? '&projectId=' + encodeURIComponent(ownership.projectId)
+      : (ownership.projectDir ? '&projectDir=' + encodeURIComponent(ownership.projectDir) : '');
+    const res = await fetch('/protoclaw/agent_detail?agentId=' + encodeURIComponent(agentId) + ownershipQuery);
     if (!res.ok) return;
     const detail = await res.json();
     // 载荷无论本地远程都留档；失败路径（!res.ok / 抛错）不触碰缓存。
@@ -319,7 +327,16 @@ async function invoke(command, payload = {}) {
   }
   if (isServerServedPage) {
     if (command === 'get_connected_agents') {
-      const res = await fetch('/protoclaw/get_connected_agents');
+      // 归属参数透传：PH 类工作空间的会话切片必须按调用方实际浏览的归属
+      // 返回（项目 / 目录）。缺省时服务端回退 workspace_state.openDirectory，
+      // 用户正在浏览项目时会拿到目录切片并覆盖项目列表。
+      const query = payload && typeof payload === 'object'
+        ? Object.entries(payload)
+          .filter(([, value]) => value !== undefined && value !== null && String(value) !== '')
+          .map(([key, value]) => encodeURIComponent(key) + '=' + encodeURIComponent(String(value)))
+          .join('&')
+        : '';
+      const res = await fetch('/protoclaw/get_connected_agents' + (query ? '?' + query : ''));
       if (!res.ok) {
         // Keep the array return shape for existing callers, while carrying the
         // source failure to loadAgents for one consolidated diagnostic event.

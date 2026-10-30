@@ -386,8 +386,16 @@ function renderAgentItems(agents, { prebuilt = false } = {}) {
 async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {}) {
   const expectedRuntimeId = normalizeAgentIdentity(options.previousRuntimeId);
   const expectedSessionId = String(options.expectedSessionId || '').trim();
+  // 归属透传：本探测只用来确认新 runtime 是否注册，但服务端会顺带投影
+  // workspace_sessions；不带归属时它会按目录语义回切片，合并进 allAgents
+  // 后把项目列表换掉。
+  const ownershipPayload = typeof getPhSessionOwnershipParams === 'function'
+    ? getPhSessionOwnershipParams(
+      (Array.isArray(allAgents) ? allAgents : []).find((agent) => agent.id === agentId) || null,
+    )
+    : {};
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const agents = await invoke('get_connected_agents');
+    const agents = await invoke('get_connected_agents', ownershipPayload);
     const findConnectedChild = (list) => list.find((agent) => {
       if (agent.source !== 'child' || getParentAgentId(agent) !== agentId) return false;
       const runtimeId = normalizeAgentIdentity(getAgentRuntimeId(agent));
@@ -404,7 +412,7 @@ async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {
     const matched = findConnectedChild(agents);
     if (matched) {
       await new Promise((resolve) => setTimeout(resolve, 600));
-      const verify = await invoke('get_connected_agents');
+      const verify = await invoke('get_connected_agents', ownershipPayload);
       const still = findConnectedChild(verify);
       if (still) {
         // Merge verify into allAgents without clobbering workspace data.
@@ -484,8 +492,15 @@ async function loadAgents() {
     : null;
   const task = (async () => {
   try {
+    // 归属显式化：PH 类工作空间的会话切片按当前浏览目标（项目 / 目录）
+    // 请求，与服务端切片口径一致；其他 agent 无归属参数，行为不变。
+    const ownershipPayload = typeof getPhSessionOwnershipParams === 'function'
+      ? getPhSessionOwnershipParams(
+        (Array.isArray(allAgents) ? allAgents : []).find((agent) => agent.id === 'programming-helper') || null,
+      )
+      : {};
     const [connectedAgents, res] = await Promise.all([
-      invoke('get_connected_agents'),
+      invoke('get_connected_agents', ownershipPayload),
       fetch('/api/agents'),
       window.ClawSidebarLayout?.load(),
     ]);
@@ -1167,22 +1182,22 @@ agentList.addEventListener('click', async (event) => {
     await window.handlePrebuiltAgentClick(agentId);
     // Re-entering the programming-helper workspace must load the persisted
     // browsing slice explicitly. Its cached workspace_sessions may still hold
-    // the default-directory slice, while the project target lives in local UI
-    // state and is not part of handlePrebuiltAgentClick's workspace navigation.
+    // another ownership's slice (default directory vs. the project the user
+    // left on), while the browsing target lives in local UI state and is not
+    // part of handlePrebuiltAgentClick's workspace navigation.
     if (agentId === 'programming-helper'
       && typeof ensurePhProjectEntitiesLoaded === 'function'
-      && typeof getPhBrowsingTarget === 'function'
+      && typeof getPhSessionOwnershipParams === 'function'
       && typeof phLoadProjectSessions === 'function') {
       await ensurePhProjectEntitiesLoaded();
       const host = (Array.isArray(allAgents) ? allAgents : [])
         .find((agent) => agent.id === 'programming-helper');
-      const target = getPhBrowsingTarget(host);
-      if (target?.type === 'project' && target.id) {
-        await phLoadProjectSessions({ projectId: target.id });
-      } else if (target?.openDirectory) {
-        await phLoadProjectSessions({ projectDir: target.openDirectory });
+      const ownership = getPhSessionOwnershipParams(host);
+      if (ownership.projectId) {
+        await phLoadProjectSessions({ projectId: ownership.projectId });
       } else {
-        const openDirectory = String(getAgentWorkspaceState(host)?.openDirectory || '').trim();
+        const openDirectory = ownership.projectDir
+          || String(getAgentWorkspaceState(host)?.openDirectory || '').trim();
         if (openDirectory) await phLoadProjectSessions({ projectDir: openDirectory });
       }
     }

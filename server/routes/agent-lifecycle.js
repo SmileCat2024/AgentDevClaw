@@ -350,11 +350,23 @@ export function createAgentLifecycleModule(ctx) {
       }
     });
 
-    app.get('/protoclaw/get_connected_agents', async (_req, res, next) => {
+    app.get('/protoclaw/get_connected_agents', async (req, res, next) => {
       const startedAt = Date.now();
       let agents;
+      // 归属显式化：前端浏览目标（项目 / 目录）由调用方携带，服务端据此
+      // 产出一致的切片；缺省时保持目录语义（既有行为）。项目与目录互斥，
+      // 同时出现视为调用方错误（与 prebuilt_sessions 同口径）。
+      const ownershipProjectId = String(req.query.projectId || '').trim();
+      const ownershipProjectDir = String(req.query.projectDir || '').trim();
+      let ownership = {};
+      if (ownershipProjectId && ownershipProjectDir) {
+        res.status(400).json({ error: 'projectId 与 projectDir 是互斥的归属过滤参数，不能同时提供' });
+        return;
+      }
+      if (ownershipProjectId) ownership = { projectId: ownershipProjectId };
+      else if (ownershipProjectDir) ownership = { projectDir: ownershipProjectDir };
       try {
-        agents = await getConnectedAgents();
+        agents = await getConnectedAgents(ownership);
       } catch (error) {
         void recordSidebarDiagnosticEvent({
           kind: 'read_perf',
@@ -476,12 +488,22 @@ export function createAgentLifecycleModule(ctx) {
           return;
         }
         const enriched = await enrichAgent(agent);
+        // 归属显式化：与 get_connected_agents 同一口径——调用方可带
+        // projectId / projectDir 指定切片归属，缺省仍回退目录语义。
+        const detailProjectId = String(req.query.projectId || '').trim();
+        const detailProjectDir = String(req.query.projectDir || '').trim();
+        if (detailProjectId && detailProjectDir) {
+          res.status(400).json({ error: 'projectId 与 projectDir 是互斥的归属过滤参数，不能同时提供' });
+          return;
+        }
         res.json({
           // workspace_sessions 响应投影与 get_connected_agents 一致：PH 类
-          // 只回当前项目首屏切片（服务端自解析 workspace_state.openDirectory），
-          // 其余 agent 全量走 wire 裁剪。
+          // 按归属回切片，其余 agent 全量走 wire 裁剪。
           workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))
-            ? await buildPhProjectScopedSnapshot(agentId, enriched.workspace_sessions)
+            ? await buildPhProjectScopedSnapshot(agentId, enriched.workspace_sessions, {
+              projectId: detailProjectId,
+              projectDir: detailProjectDir,
+            })
             : await buildWireSessionsSnapshot(agentId, enriched.workspace_sessions),
           agents: enriched.agents,
           defaultAgentId: enriched.defaultAgentId,

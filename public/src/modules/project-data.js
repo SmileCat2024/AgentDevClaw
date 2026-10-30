@@ -571,6 +571,49 @@ function clearPhBrowsingTarget(agentId) {
   try { localStorage.removeItem(_phBrowsingTargetStorageKey(agentId)); } catch { /* ignore */ }
 }
 
+/**
+ * 会话列表请求的归属参数（唯一出口）。
+ *
+ * 会话列表的归属由浏览目标（typed target）决定：项目目标按 projectId，
+ * 目录目标按 projectDir。服务端的切片接口（prebuilt_sessions /
+ * get_connected_agents / agent_detail）都接受这两个互斥参数，缺省时服务端
+ * 自行回退 workspace_state.openDirectory——那是「工作区当前打开的目录」，
+ * 与用户正在浏览的项目不是同一件事。
+ *
+ * 任何写 workspace_sessions 的读取都必须经本函数取归属，否则项目切片会被
+ * 目录切片覆盖：目录集合按契约排除项目会话，覆盖后项目列表归零。
+ *
+ * @returns {{projectId: string}|{projectDir: string}|{}}
+ */
+function getPhSessionOwnershipParams(agent = getCurrentAgentRecord()) {
+  if (typeof isPhStyleWorkspaceAgent === 'function' && !isPhStyleWorkspaceAgent(agent)) return {};
+  const target = typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
+  if (target?.type === 'project' && target.id) return { projectId: target.id };
+  if (target?.openDirectory) return { projectDir: target.openDirectory };
+  return {};
+}
+
+/**
+ * 当前浏览目标下的一次会话列表请求（带归属，不覆盖 workspace_sessions）。
+ * 供「只想刷新元数据/计数、不改变列表身份」的调用方使用：结果仍交给
+ * mergeWorkspaceSessionSnapshots 合并，保留已加载的深层分页段。
+ */
+async function phFetchSessionsWithOwnership(agent, extra = {}) {
+  if (!agent?.id) return null;
+  const params = new URLSearchParams({ agentId: agent.id });
+  const ownership = getPhSessionOwnershipParams(agent);
+  if (ownership.projectId) params.set('projectId', ownership.projectId);
+  else if (ownership.projectDir) params.set('projectDir', ownership.projectDir);
+  for (const [key, value] of Object.entries(extra || {})) {
+    if (value !== undefined && value !== null && String(value) !== '') {
+      params.set(key, String(value));
+    }
+  }
+  const response = await fetch('/protoclaw/prebuilt_sessions?' + params.toString());
+  if (!response.ok) return null;
+  return await response.json();
+}
+
 function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
   if (!isPhStyleWorkspaceAgent(agent)) return [];
 

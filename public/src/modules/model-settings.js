@@ -1341,8 +1341,16 @@ async function applySettingsPreset(idx) {
     const logicalAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(_agent) : _agent?.id;
     if (logicalAgentId) {
       try {
-        let freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(logicalAgentId));
-        if (freshRes.ok) { _agent.workspace_sessions = await freshRes.json(); }
+        // 元数据刷新不改变列表归属：按当前浏览目标取切片并合并，避免用
+        // 目录切片整体覆盖项目列表（并把已加载的深层分页段一并保住）。
+        const fresh = typeof phFetchSessionsWithOwnership === 'function'
+          ? await phFetchSessionsWithOwnership(_agent || { id: logicalAgentId })
+          : null;
+        if (fresh && fresh.unchanged !== true && _agent) {
+          _agent.workspace_sessions = typeof mergeWorkspaceSessionSnapshots === 'function'
+            ? mergeWorkspaceSessionSnapshots(_agent.workspace_sessions || {}, fresh, logicalAgentId)
+            : fresh;
+        }
       } catch {}
     }
     if (typeof updateChatContextBar === 'function') { updateChatContextBar(); }
@@ -1376,8 +1384,16 @@ async function saveSettingsConfig() {
     const logicalAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(_agent) : _agent?.id;
     if (logicalAgentId) {
       try {
-        let freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(logicalAgentId));
-        if (freshRes.ok) { _agent.workspace_sessions = await freshRes.json(); }
+        // 元数据刷新不改变列表归属：按当前浏览目标取切片并合并，避免用
+        // 目录切片整体覆盖项目列表（并把已加载的深层分页段一并保住）。
+        const fresh = typeof phFetchSessionsWithOwnership === 'function'
+          ? await phFetchSessionsWithOwnership(_agent || { id: logicalAgentId })
+          : null;
+        if (fresh && fresh.unchanged !== true && _agent) {
+          _agent.workspace_sessions = typeof mergeWorkspaceSessionSnapshots === 'function'
+            ? mergeWorkspaceSessionSnapshots(_agent.workspace_sessions || {}, fresh, logicalAgentId)
+            : fresh;
+        }
       } catch {}
     }
     if (typeof updateChatContextBar === 'function') { updateChatContextBar(); }

@@ -65,23 +65,35 @@ export async function buildWireSessionsSnapshot(agentId, workspaceSessions) {
   };
 }
 
-export async function buildPhProjectScopedSnapshot(agentId, workspaceSessions) {
+// 归属显式化（补 ticket 045 未落实的读侧）：045 要求「选项目后轮询不被覆盖」，
+// 但切片此前一律读 workspace_state.openDirectory 做目录切片。浏览目标是本地
+// UI 状态（typed target），服务端无从得知——用户浏览项目时轮询仍回目录切片，
+// 且目录集合按契约排除项目会话，前端按项目身份过滤后列表归零、徽标却是目录
+// 口径，表现为「对话加载不出来」。调用方可显式传 projectId / projectDir；
+// 缺省时回退目录语义（既有行为，纯目录用户不变）。
+export async function buildPhProjectScopedSnapshot(agentId, workspaceSessions, ownership = {}) {
   const sessions = Array.isArray(workspaceSessions?.sessions) ? workspaceSessions.sessions : [];
-  let projectDir = '';
-  try {
-    const wsState = await readWorkspaceState(agentId);
-    projectDir = String(wsState?.openDirectory || '').trim();
-  } catch { /* workspace state unavailable → unpaged trim */ }
-  if (!projectDir) return buildWireSessionsSnapshot(agentId, workspaceSessions);
+  const requestedProjectId = String(ownership?.projectId || '').trim();
+  let projectDir = String(ownership?.projectDir || '').trim();
+  if (!requestedProjectId && !projectDir) {
+    try {
+      const wsState = await readWorkspaceState(agentId);
+      projectDir = String(wsState?.openDirectory || '').trim();
+    } catch { /* workspace state unavailable → unpaged trim */ }
+  }
+  if (!requestedProjectId && !projectDir) return buildWireSessionsSnapshot(agentId, workspaceSessions);
   const page = sliceSessionsForWire(sessions, {
-    projectDir,
+    ...(requestedProjectId ? { projectId: requestedProjectId } : { projectDir }),
     limit: CONNECTED_PAGE_LIMIT,
     // ADR-0032 列表口径：计数/切片按线程归档状态，历史代成员不进入
     threadMembership: await readThreadMembership(agentId),
   });
   return {
     ...workspaceSessions,
-    sessionProjectDir: projectDir,
+    // 切片归属与计数同源：sessionProjectId / sessionProjectDir 必须描述
+    // 本切片的实际过滤口径，前端据此判定快照身份、避免跨归属合并。
+    sessionProjectDir: requestedProjectId ? null : projectDir,
+    sessionProjectId: requestedProjectId || null,
     sessionTotal: page.total,
     sessionOffset: 0,
     sessionHasMore: page.slice.length < page.total,
@@ -122,11 +134,13 @@ export function createConnectedAgentsQuery(deps) {
       && thread.status === 'rotating' && !thread.archivedAt && !thread.deleting);
   }
 
-  async function getConnectedAgents() {
-    return readSidebarSnapshot(resolveThreadControl(), projectConnectedAgents);
+  async function getConnectedAgents(ownership = {}) {
+    return readSidebarSnapshot(resolveThreadControl(), (sidebarThreads) => (
+      projectConnectedAgents(sidebarThreads, ownership)
+    ));
   }
 
-  async function projectConnectedAgents(sidebarThreads) {
+  async function projectConnectedAgents(sidebarThreads, ownership = {}) {
     const prebuiltAgents = await getAgentsLight();
     const viewerData = await readViewerJson('/api/agents').catch(() => ({ agents: [] }));
     const runtimeAgents = Array.isArray(viewerData.agents) ? viewerData.agents : [];
@@ -179,7 +193,7 @@ export function createConnectedAgentsQuery(deps) {
           };
         })() : {}),
         workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agent.id))
-          ? await buildPhProjectScopedSnapshot(agent.id, workspaceSessions)
+          ? await buildPhProjectScopedSnapshot(agent.id, workspaceSessions, ownership)
           : await buildWireSessionsSnapshot(agent.id, workspaceSessions),
         // Thread identity and runtime presence share this read transaction.
         // Do not join this with the independently polled thread board in the UI.

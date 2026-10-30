@@ -444,10 +444,42 @@ function retainPendingSessionUpserts(agentId, sessions) {
   return retained.length > 0 ? [...retained, ...sessions] : sessions;
 }
 
+// ── 切片归属身份（045 读侧：选项目后轮询不被目录切片覆盖）────────────
+// 会话列表快照是按归属过滤的切片（项目 / 目录），服务端在切片上声明
+// sessionProjectId 或 sessionProjectDir。两个不同归属的切片不能互相
+// 合并：目录集合按契约排除项目会话，把目录切片当「更新的一版」patch 到
+// 项目列表上，等于把项目列表整体清空（徽标却仍是目录口径）。因此合并前
+// 必须先判身份——同归属才合并，不同归属整体替换。
+function getWorkspaceSnapshotOwnership(snapshot) {
+  const projectId = String(snapshot?.sessionProjectId || '').trim();
+  const projectDir = String(snapshot?.sessionProjectDir || '').trim();
+  // 未声明归属（服务端全量/富回退/非 PH agent）→ 无身份，按旧行为合并
+  if (!projectId && !projectDir) return '';
+  if (projectId) return 'project:' + projectId;
+  return 'dir:' + projectDir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
 function mergeWorkspaceSessionSnapshots(previous = {}, fresh = {}, agentId = '') {
   const previousRevision = getWorkspaceRevision(previous);
   const freshRevision = getWorkspaceRevision(fresh);
   if (previousRevision > freshRevision) return previous;
+
+  // 归属身份不同：fresh 描述的是另一个归属的切片，membership 与计数都
+  // 不适用于 previous。整体替换（保留 pending 乐观条目），不做 patch。
+  const previousOwnership = getWorkspaceSnapshotOwnership(previous);
+  const freshOwnership = getWorkspaceSnapshotOwnership(fresh);
+  if (previousOwnership && freshOwnership && previousOwnership !== freshOwnership) {
+    return {
+      ...fresh,
+      revision: Math.max(previousRevision, freshRevision),
+      sessions: retainPendingSessionUpserts(agentId, Array.isArray(fresh?.sessions) ? fresh.sessions : []),
+    };
+  }
+  // fresh 未声明归属（服务端读不到 workspace_state 时的全量降级载荷）不能
+  // 作为有归属视图的 membership 权威：它有可能是全部归属的并集，替换进来
+  // 会让当前视图混入其他归属的会话。保留上一个有归属的快照，下一轮正常
+  // 轮询会带归属刷新。
+  if (previousOwnership && !freshOwnership) return previous;
 
   const previousSessions = Array.isArray(previous?.sessions) ? previous.sessions : [];
   const freshSessions = Array.isArray(fresh?.sessions) ? fresh.sessions : [];

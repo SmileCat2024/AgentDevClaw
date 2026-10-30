@@ -150,11 +150,17 @@ window.phAutoSaveModelConfig = async () => {
       const agent = getCurrentAgentRecord();
       if (agent) agent.modelPresets = modelPresets;
       try {
-        const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(agentId));
-        if (freshRes.ok) {
-          const fresh = await freshRes.json();
+        // 元数据刷新不能改写列表归属：按当前浏览目标取切片，并走合并语义
+        // （保留已加载的深层分页段）。此前不带归属直接整体覆盖，会把项目
+        // 列表换成目录切片。
+        const fresh = await phFetchSessionsWithOwnership(agent || { id: agentId });
+        if (fresh && fresh.unchanged !== true) {
           updateAgentRecord(agentId, {
-            workspace_sessions: fresh,
+            workspace_sessions: typeof mergeWorkspaceSessionSnapshots === 'function'
+              ? mergeWorkspaceSessionSnapshots(
+                (agent || {}).workspace_sessions || {}, fresh, agentId,
+              )
+              : fresh,
             active_workspace_session_id: fresh?.activeSessionId || null,
           });
         }
@@ -451,10 +457,12 @@ async function phFetchSessionsPage(agentId, { projectDir = '', projectId = '', o
 
 /** 当前浏览目标的归属过滤参数（typed target → 请求参数）。 */
 function _phBrowsingOwnershipParams(agent) {
-  const target = typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
-  if (!target) return {};
-  if (target.type === 'project') return { projectId: target.id };
-  return { projectDir: target.openDirectory || '' };
+  // 归属参数只有一个出处（project-data 的 getPhSessionOwnershipParams）：
+  // 分页加载、轮询、详情刷新必须用同一口径，否则同一批请求会落在不同归属
+  // 的切片上，列表在两次刷新之间来回被替换。
+  return typeof getPhSessionOwnershipParams === 'function'
+    ? getPhSessionOwnershipParams(agent)
+    : {};
 }
 
 async function phLoadProjectSessions(target) {
@@ -466,8 +474,9 @@ async function phLoadProjectSessions(target) {
     : { projectId: String(target?.projectId || '').trim(), projectDir: String(target?.projectDir || '').trim() };
   try {
     const fresh = await phFetchSessionsPage(agent.id, { ...ownership, offset: 0, limit: 60 });
+    // unchanged 短路响应不带切片内容，不能据此替换 membership
     if (fresh && fresh.unchanged !== true) {
-      // 项目切换 = membership 全量替换：不保留旧项目的乐观条目与已加载段
+      // 项目/目录切换 = membership 全量替换：不保留旧归属的乐观条目与已加载段
       updateAgentRecord(agent.id, {
         workspace_sessions: fresh,
         active_workspace_session_id: fresh?.activeSessionId || null,
