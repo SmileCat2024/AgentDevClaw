@@ -125,6 +125,7 @@ function openSessionDb(dbPath) {
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA synchronous = NORMAL');
   db.exec('PRAGMA busy_timeout = 5000');
+  db.function('session_contains', (value, query) => String(value || '').toLowerCase().includes(String(query || '')) ? 1 : 0);
   db.exec(`
     CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE IF NOT EXISTS sessions (
@@ -140,6 +141,7 @@ function openSessionDb(dbPath) {
       created_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_order ON sessions(updated_at DESC, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
   `);
   return db;
@@ -377,6 +379,215 @@ export async function readSessionIndexShared(agentId) {
   const value = loadIndexFromDb(agentId, db);
   _indexReadCache.set(agentId, { revision: value.revision, dataVersion, value });
   return value;
+}
+
+// ── 会话列表 SQL 查询（ADR-0036 后续）───────────────────────────────
+// 项目/目录/标题搜索过滤、线程 head/归档过滤、计数与分页在 SQLite 内完成。
+// 线程状态仍以 thread store 为权威；只读快照装入连接级 TEMP 表，成员表
+// 对象身份未变时跳过重装。同一只读事务保证计数与页面看到相同索引快照。
+//
+// 谓词全部 CASE 守卫：SQLite 不保证 OR 短路求值，空参数路径若仍逐行执行
+// json_extract（每行解析整条 record JSON）会引入毫秒级退化——CASE 只求值
+// 命中分支。目录归一化用内置 replace/lower/rtrim（C 实现），不经 JS 函数
+// 边界；session_contains 保留 JS 实现换取与旧路径 toLowerCase 一致的
+// Unicode 语义（只在搜索激活时逐行执行）。
+const SESSION_PAGE_MAX_LIMIT = 500;
+const _sessionListStatements = new WeakMap();
+
+function normalizeSessionProjectDir(value) {
+  let normalized = String(value || '').trim().replaceAll(String.fromCharCode(92), '/').toLowerCase();
+  while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+  return normalized;
+}
+
+// SQL 谓词片段（占位符顺序 = 绑定参数顺序）：
+//   project: [projectId, projectId]
+//   dir:     [projectDir]（裸式，目录过滤激活时）
+//   tab:     [archived, archived]
+//   query:   [query, query, query]
+// 目录谓词不用 CASE 守卫而是语句二分：CASE 包装会让规划器无法识别
+// 表达式等值约束，idx_sessions_dir_cover 不被采用退化成全表回表扫描。
+const SQL_PROJECT_PRED = `(CASE WHEN ? = '' THEN 1 ELSE s.project_id = ? END) = 1`;
+const SQL_DIR_PLAIN = `(
+    COALESCE(s.project_id, '') = ''
+    AND lower(rtrim(replace(s.open_directory, '\\', '/'), '/')) = ?
+  )`;
+const SQL_TAB_PRED = `(CASE WHEN ? = '' THEN 1 ELSE COALESCE(m.archived, s.archived) = ? END) = 1`;
+const SQL_QUERY_PRED = `(CASE WHEN ? = '' THEN 1 ELSE (
+    session_contains(json_extract(s.record, '$.title'), ?) = 1
+    OR session_contains(s.open_directory, ?) = 1
+  ) END) = 1`;
+const SQL_HEAD_PRED = `(m.session_id IS NULL OR m.is_head = 1)`;
+
+function getSessionListStatements(db) {
+  let statements = _sessionListStatements.get(db);
+  if (statements) return statements;
+  db.exec(`
+    CREATE TEMP TABLE IF NOT EXISTS session_thread_membership (
+      session_id TEXT PRIMARY KEY,
+      is_head INTEGER NOT NULL,
+      archived INTEGER NOT NULL
+    );
+  `);
+  statements = {
+    lastMembership: undefined,
+    clearMembership: db.prepare('DELETE FROM temp.session_thread_membership'),
+    insertMembership: db.prepare('INSERT INTO temp.session_thread_membership (session_id, is_head, archived) VALUES (?, ?, ?)'),
+    // 单次扫描同时产出：归属集 main/archived 真实总数（不受 tab/query 影响，
+    // 前端徽标）与 tab+query 过滤后的分页 total。目录激活/未激活两套变体。
+    aggregateNoDir: db.prepare(`
+      SELECT
+        SUM(CASE WHEN COALESCE(m.archived, s.archived) = 0 THEN 1 ELSE 0 END) AS main_total,
+        SUM(CASE WHEN COALESCE(m.archived, s.archived) = 1 THEN 1 ELSE 0 END) AS archived_total,
+        SUM(CASE WHEN ${SQL_TAB_PRED} AND ${SQL_QUERY_PRED} THEN 1 ELSE 0 END) AS filtered_total
+      FROM sessions s
+      LEFT JOIN temp.session_thread_membership m ON m.session_id = s.id
+      WHERE ${SQL_PROJECT_PRED} AND ${SQL_HEAD_PRED}
+    `),
+    aggregateDir: db.prepare(`
+      SELECT
+        SUM(CASE WHEN COALESCE(m.archived, s.archived) = 0 THEN 1 ELSE 0 END) AS main_total,
+        SUM(CASE WHEN COALESCE(m.archived, s.archived) = 1 THEN 1 ELSE 0 END) AS archived_total,
+        SUM(CASE WHEN ${SQL_TAB_PRED} AND ${SQL_QUERY_PRED} THEN 1 ELSE 0 END) AS filtered_total
+      FROM sessions s
+      LEFT JOIN temp.session_thread_membership m ON m.session_id = s.id
+      WHERE ${SQL_PROJECT_PRED} AND ${SQL_DIR_PLAIN} AND ${SQL_HEAD_PRED}
+    `),
+    pageNoDir: db.prepare(`
+      SELECT s.record, COALESCE(m.archived, s.archived) AS archived
+      FROM sessions s
+      LEFT JOIN temp.session_thread_membership m ON m.session_id = s.id
+      WHERE ${SQL_PROJECT_PRED} AND ${SQL_QUERY_PRED}
+        AND ${SQL_HEAD_PRED} AND ${SQL_TAB_PRED}
+      ORDER BY s.updated_at COLLATE BINARY DESC, s.created_at COLLATE BINARY DESC, s.id COLLATE BINARY DESC
+      LIMIT ? OFFSET ?
+    `),
+    pageDir: db.prepare(`
+      SELECT s.record, COALESCE(m.archived, s.archived) AS archived
+      FROM sessions s
+      LEFT JOIN temp.session_thread_membership m ON m.session_id = s.id
+      WHERE ${SQL_PROJECT_PRED} AND ${SQL_DIR_PLAIN} AND ${SQL_QUERY_PRED}
+        AND ${SQL_HEAD_PRED} AND ${SQL_TAB_PRED}
+      ORDER BY s.updated_at COLLATE BINARY DESC, s.created_at COLLATE BINARY DESC, s.id COLLATE BINARY DESC
+      LIMIT ? OFFSET ?
+    `),
+    exact: db.prepare('SELECT record, archived FROM sessions WHERE id = ?'),
+    indexMeta: db.prepare(`
+      SELECT
+        (SELECT value FROM meta WHERE key = 'revision') AS revision,
+        (SELECT value FROM meta WHERE key = 'activeSessionId') AS active_session_id
+    `),
+    fallbackActive: db.prepare(`
+      SELECT id FROM sessions
+      ORDER BY updated_at COLLATE BINARY DESC, created_at COLLATE BINARY DESC, id COLLATE BINARY DESC
+      LIMIT 1
+    `),
+  };
+  _sessionListStatements.set(db, statements);
+  return statements;
+}
+
+function sessionListPredParams(options = {}) {
+  const projectId = cleanSessionText(options.projectId);
+  const projectDir = projectId ? '' : normalizeSessionProjectDir(options.projectDir);
+  const query = String(options.query || '').trim().toLowerCase();
+  const archived = options.archived === 'main' ? 0 : options.archived === 'archived' ? 1 : '';
+  return {
+    projectId,
+    projectDir,
+    // 绑定顺序 = 语句文本中的占位符顺序：aggregate 的 SUM CASE 谓词
+    // （SELECT 内）先于 WHERE 谓词出现；page 全部在 WHERE。
+    // projectDir 非空时选用带目录谓词的语句变体（projectDir 单占位符，
+    // DIR_PLAIN 无 CASE 守卫以保索引可用）。
+    aggregateNoDir: [archived, archived, query, query, query, projectId, projectId],
+    aggregateDir: [archived, archived, query, query, query, projectId, projectId, projectDir],
+    pageNoDir: [projectId, projectId, query, query, query, archived, archived],
+    pageDir: [projectId, projectId, projectDir, query, query, query, archived, archived],
+  };
+}
+
+/**
+ * SQL-backed PH list query. Exact-session lookup preserves the existing bypass
+ * of ownership/archive/thread filtering. Normal listing filters before page
+ * selection, so historical thread members do not consume offsets or totals.
+ */
+export async function querySessionIndexPage(agentId, options = {}) {
+  const db = ensureSessionDb(agentId);
+  if (!db) return { slice: [], total: 0, mainTotal: 0, archivedTotal: 0, offset: 0, latestSessionId: null };
+  const offset = Number.isFinite(Number(options.offset)) && Number(options.offset) > 0
+    ? Math.floor(Number(options.offset)) : 0;
+  const rawLimit = Number.isFinite(Number(options.limit)) && Number(options.limit) > 0
+    ? Math.floor(Number(options.limit)) : 0;
+  const limit = rawLimit > 0 ? Math.min(rawLimit, SESSION_PAGE_MAX_LIMIT) : -1;
+  const statements = getSessionListStatements(db);
+
+  // 精确单查不走成员/分页谓词（绕过归属与线程分桶是既有契约），
+  // 也无需事务与成员表同步。
+  if (options.sessionId) {
+    const row = statements.exact.get(String(options.sessionId));
+    const matched = row ? [{ record: JSON.parse(row.record), archived: Number(row.archived) === 1 }] : [];
+    // 精确查询也遵守 offset/limit 切片（与 sliceSessionsForWire 的
+    // filtered.slice 行为对齐；正常调用方 offset=0 时不产生可见差异）。
+    const slice = limit > 0 ? matched.slice(offset, offset + limit) : matched.slice(offset);
+    return {
+      slice,
+      total: matched.length,
+      mainTotal: 0,
+      archivedTotal: 0,
+      offset,
+      activeSessionId: null,
+      fallbackActiveSessionId: null,
+      revision: 0,
+    };
+  }
+
+  const membership = options.threadMembership instanceof Map ? options.threadMembership : null;
+  const params = sessionListPredParams(options);
+
+  db.exec('BEGIN');
+  try {
+    // 成员表身份跳过：readThreadMembership 在文件版本不变时返回同一 Map
+    // 实例；本函数体无 await（同步驱动 SQLite），身份比较不存在交错窗口。
+    if (statements.lastMembership !== membership) {
+      statements.clearMembership.run();
+      if (membership) {
+        for (const [sessionId, entry] of membership) {
+          statements.insertMembership.run(
+            String(sessionId),
+            entry?.isHead === true ? 1 : 0,
+            entry?.archived === true ? 1 : 0,
+          );
+        }
+      }
+      statements.lastMembership = membership;
+    }
+    const meta = statements.indexMeta.get();
+    const withDir = params.projectDir !== '';
+    const counts = (withDir ? statements.aggregateDir : statements.aggregateNoDir)
+      .get(...(withDir ? params.aggregateDir : params.aggregateNoDir));
+    const rows = (withDir ? statements.pageDir : statements.pageNoDir)
+      .all(...(withDir ? params.pageDir : params.pageNoDir), limit, offset);
+    const slice = rows.map((row) => ({
+      record: JSON.parse(row.record),
+      archived: Number(row.archived) === 1,
+    }));
+    db.exec('COMMIT');
+    return {
+      slice,
+      total: Number(counts?.filtered_total) || 0,
+      mainTotal: Number(counts?.main_total) || 0,
+      archivedTotal: Number(counts?.archived_total) || 0,
+      offset,
+      activeSessionId: meta?.active_session_id || null,
+      // fallback 仅在 meta 缺席时才有意义（常态 activeSessionId 恒有值），
+      // 条件执行避免每次请求的全表排序。
+      fallbackActiveSessionId: meta?.active_session_id ? null : (statements.fallbackActive.get()?.id || null),
+      revision: Number(meta?.revision) || 0,
+    };
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* transaction may already be closed */ }
+    throw error;
+  }
 }
 
 // ── 共享记录查找（存储层能力）──────────────────────────────────────

@@ -14,7 +14,7 @@ import {
   getAssemblyWorkspaceDir, normalizeClientAgentId, log,
 } from '../shared/string-helpers.js';
 import {
-  readSessionIndex, readSessionIndexShared, updateSessionIndex,
+  readSessionIndex, readSessionIndexShared, querySessionIndexPage, updateSessionIndex,
   getPrebuiltSessionFilePath,
   normalizeSessionMetadata, buildSessionTitle, computeNextSessionNumber,
   findPrebuiltSessionRecordShared,
@@ -792,28 +792,42 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
   }
 
   const readModelStartedAt = Date.now();
-  // 每索引只保留最新成员表版本的投影：成员表变化而索引不变时，旧投影对
-  // 之后的请求无意义，clear 防止极端场景下（高频线程操作不动会话索引）
-  // 内层条目无界积累。
-  let membership = await readThreadMembership(agentId);
-  let byMembership = migratedCount > 0 ? null : _sidebarProjectionCache.get(index);
-  if (!byMembership && migratedCount === 0) {
-    byMembership = new Map();
-    _sidebarProjectionCache.set(index, byMembership);
-  }
-  let projection = byMembership && byMembership.get(membership);
-  if (!projection) {
-    projection = {
-      revision: Number(index.revision) || 0,
-      sessions: sortSidebarSessions(index.sessions.map((record) =>
-        buildLightPrebuiltSessionRecord(agentId, record))),
-    };
-    if (byMembership) {
-      byMembership.clear();
-      byMembership.set(membership, projection);
+  // activeSessionId 回退链保持旧语义：索引声明值 → （分页路径）db meta →
+  // 按 updated_at 排序的最新会话。index.sessions[0] 是 position 顺序（插入序），
+  // 不是旧实现的排序口径，不能进入回退链。
+  let activeSessionId = index.activeSessionId || null;
+  let pageRevision = null;
+  const pageActive = options.sessionProjectDir !== undefined
+    || options.sessionProjectId !== undefined
+    || options.sessionId !== undefined
+    || options.sessionQuery !== undefined
+    || options.sessionArchived !== undefined
+    || options.sessionOffset !== undefined
+    || options.sessionLimit !== undefined;
+  const membership = await readThreadMembership(agentId);
+  let sessions = [];
+  if (!pageActive) {
+    // 全量投影只供未分页的内部消费；分页列表由 SQLite 直接返回当前页，
+    // 避免查询下推后仍在 JS 全量 buildLight + sort。
+    let byMembership = migratedCount > 0 ? null : _sidebarProjectionCache.get(index);
+    if (!byMembership && migratedCount === 0) {
+      byMembership = new Map();
+      _sidebarProjectionCache.set(index, byMembership);
     }
+    let projection = byMembership && byMembership.get(membership);
+    if (!projection) {
+      projection = {
+        revision: Number(index.revision) || 0,
+        sessions: sortSidebarSessions(index.sessions.map((record) =>
+          buildLightPrebuiltSessionRecord(agentId, record))),
+      };
+      if (byMembership) {
+        byMembership.clear();
+        byMembership.set(membership, projection);
+      }
+    }
+    sessions = projection.sessions;
   }
-  const sessions = projection.sessions;
   const defaultModelInfo = options.includeModelDefaults === false
     ? null
     : await resolveSessionModelInfo(agentId);
@@ -839,19 +853,25 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
     // （同文件版本同引用），不二次读取。
     threadMembership: membership,
   };
-  const pageActive = options.sessionProjectDir !== undefined
-    || options.sessionProjectId !== undefined
-    || options.sessionId !== undefined
-    || options.sessionQuery !== undefined
-    || options.sessionArchived !== undefined
-    || options.sessionOffset !== undefined
-    || options.sessionLimit !== undefined
-    ;
   let wireSessions = sessions;
   let pageMeta = {};
   if (pageActive) {
-    const page = sliceSessionsForWire(sessions, pageOptions);
-    wireSessions = page.slice;
+    const page = await querySessionIndexPage(agentId, {
+      projectDir: pageOptions.projectDir,
+      projectId: pageOptions.projectId,
+      query: pageOptions.query,
+      archived: pageOptions.archived,
+      offset: pageOptions.offset,
+      limit: pageOptions.limit,
+      sessionId: pageOptions.sessionId,
+      threadMembership: membership,
+    });
+    if (!activeSessionId) activeSessionId = page.activeSessionId || page.fallbackActiveSessionId || null;
+    pageRevision = page.revision;
+    wireSessions = page.slice.map((entry) => ({
+      ...buildLightPrebuiltSessionRecord(agentId, entry.record),
+      archived: entry.archived,
+    }));
     pageMeta = {
       sessionTotal: page.total,
       sessionOffset: page.offset,
@@ -890,8 +910,8 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
     }, { source: 'server' });
   }
   return {
-    revision: Number(index.revision) || 0,
-    activeSessionId: index.activeSessionId || (sessions[0]?.id ?? null),
+    revision: pageActive && typeof pageRevision === 'number' ? pageRevision : (Number(index.revision) || 0),
+    activeSessionId: activeSessionId || sessions[0]?.id || null,
     ...(defaultModelInfo ? {
       contextLength: defaultModelInfo.contextLength || null,
       compressRatio: defaultModelInfo.compressRatio || 80,
