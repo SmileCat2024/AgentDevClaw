@@ -66,6 +66,102 @@ fn node_command() -> Command {
     Command::new("node")
 }
 
+/// Claw 数据根：与 server/shared/constants.js 的 resolveUserDataDir 同语义
+/// （AGENTDEV_DATA_DIR 覆盖，默认 ~/.agentdev/AgentDevClaw）。仅用于定位
+/// .env；注意定位发生在 .env 注入之前，.env 里写 AGENTDEV_DATA_DIR 只会
+/// 传给子进程，不改变 .env 自身的查找位置。
+fn claw_data_root() -> Option<PathBuf> {
+    if let Some(raw) = std::env::var_os("AGENTDEV_DATA_DIR") {
+        let trimmed = raw.to_string_lossy().trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
+    Some(PathBuf::from(home).join(".agentdev").join("AgentDevClaw"))
+}
+
+/// .env 文件查找候选（取第一个存在者）：
+///   1. CLAW_ENV_FILE 显式指定的路径
+///   2. Claw 数据根目录下的 .env（见 claw_data_root；用户数据目录随升级
+///      保留，不受安装目录覆盖影响）
+fn env_file_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("CLAW_ENV_FILE") {
+        let trimmed = path.to_string_lossy().trim().to_string();
+        if !trimmed.is_empty() {
+            candidates.push(PathBuf::from(trimmed));
+        }
+    }
+    if let Some(root) = claw_data_root() {
+        candidates.push(root.join(".env"));
+    }
+    candidates
+}
+
+/// 最小 .env 解析：每行 `KEY=VALUE`；空行与 `#` 开头的整行注释跳过
+/// （不支持行内注释，`#` 属于值的一部分）；支持 `export ` 前缀；值两侧
+/// 的空白剥除，成对的双引号或单引号包裹剥除；key 为空或含
+/// [A-Za-z0-9_] 之外字符的行忽略。
+fn parse_env_file(text: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    for raw_line in text.lines() {
+        let line = raw_line.trim().strip_prefix("export ").unwrap_or(raw_line.trim());
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let mut value = value.trim();
+        let bytes = value.as_bytes();
+        if bytes.len() >= 2 {
+            let first = bytes[0];
+            let last = bytes[value.len() - 1];
+            if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+                value = &value[1..value.len() - 1];
+            }
+        }
+        pairs.push((key.to_string(), value.to_string()));
+    }
+    pairs
+}
+
+/// 桌面壳进程启动最早期加载一次 .env：把文件中尚未存在于真实环境的
+/// 变量注入本进程（真实环境变量优先，.env 永不覆盖），使 service_port()
+/// 与随后 spawn 的 supervisor/server 子进程（环境继承）读到同一份配置。
+/// 典型用途：PORT / AGENTDEV_VIEWER_PORT 随文件持久生效，无需系统级
+/// 环境变量。改动 .env 后需完全退出旧实例再启动（单实例插件会把再次
+/// 启动转交给已运行实例，配置不会重读）。
+fn load_env_file() {
+    let Some(path) = env_file_candidates().into_iter().find(|p| p.is_file()) else {
+        return;
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let mut applied = 0usize;
+            for (key, value) in parse_env_file(&text) {
+                if std::env::var_os(&key).is_some() {
+                    continue; // 真实环境变量优先，保持一次性覆盖能力
+                }
+                std::env::set_var(&key, &value);
+                applied += 1;
+            }
+            eprintln!(
+                "[claw-desktop] loaded {applied} env var(s) from {}",
+                path.display()
+            );
+        }
+        Err(err) => {
+            eprintln!("[claw-desktop] failed to read {}: {err}", path.display());
+        }
+    }
+}
+
 fn service_port() -> u16 {
     std::env::var("PORT")
         .ok()
@@ -608,6 +704,10 @@ fn resolve_close_choice(app: tauri::AppHandle, window: tauri::WebviewWindow, cho
 }
 
 fn main() {
+    // .env 注入必须在任何 Tauri 初始化与线程创建之前完成：此刻进程仍是
+    // 单线程，set_var 无并发风险；service_port() 的读取与 supervisor 子
+    // 进程的环境继承都以注入后的状态为准。
+    load_env_file();
     // 右键唤起参数（首实例冷启动路径）：随窗口 URL query 交给前端。
     let open_request = parse_open_request(std::env::args());
     let app = tauri::Builder::default()
@@ -909,6 +1009,60 @@ mod tests {
         assert_eq!(center_in_rect((10, 20), (300, 100), (400, 200)), (10, 20));
         // 奇数差整数除法向下取整
         assert_eq!(center_in_rect((0, 0), (401, 203), (400, 200)), (0, 1));
+    }
+
+    #[test]
+    fn parse_env_file_reads_key_value_pairs() {
+        let text = "\
+# 端口配置
+PORT=1520
+AGENTDEV_VIEWER_PORT=2526
+";
+        assert_eq!(
+            parse_env_file(text),
+            vec![
+                ("PORT".to_string(), "1520".to_string()),
+                ("AGENTDEV_VIEWER_PORT".to_string(), "2526".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_env_file_skips_blank_and_invalid_lines() {
+        // key 校验是字符集语义（[A-Za-z0-9_]），数字开头不额外排除
+        let text = "\n\n#comment\nno-equals-sign\n=missing-key\nBAD-KEY=1\nBAD KEY=2\n";
+        assert!(parse_env_file(text).is_empty());
+    }
+
+    #[test]
+    fn parse_env_file_strips_export_prefix_and_quotes() {
+        let text = "\
+export PORT=1520
+QUOTED=\"1520 \"
+SINGLE='keep  spaces'
+";
+        assert_eq!(
+            parse_env_file(text),
+            vec![
+                ("PORT".to_string(), "1520".to_string()),
+                ("QUOTED".to_string(), "1520 ".to_string()),
+                ("SINGLE".to_string(), "keep  spaces".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_env_file_keeps_value_intact() {
+        // split_once 只切第一个 =；# 属于值，不做行内注释
+        assert_eq!(
+            parse_env_file("TOKEN=a=b=c#not-a-comment"),
+            vec![("TOKEN".to_string(), "a=b=c#not-a-comment".to_string())]
+        );
+        // 不成对包裹的引号原样保留
+        assert_eq!(
+            parse_env_file("EDGE=\"unbalanced"),
+            vec![("EDGE".to_string(), "\"unbalanced".to_string())]
+        );
     }
 
     #[test]
