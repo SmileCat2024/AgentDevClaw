@@ -129,6 +129,22 @@ async function closeSidebarExternalRuntime(agent) {
     return response.json().catch(() => ({}));
   }
 
+  // 平台注册的外部 runtime（ADR-0037 注册协议）：停止指令经 server →
+  // ViewerWorker 连接下发，runtime 自行优雅退出。
+  if (agent?.external_registered === true) {
+    const runtimeId = agent?.runtime_session_id || agent?.id;
+    const response = await fetch('/protoclaw/external_runtime/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runtimeId }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || 'stop external runtime failed');
+    }
+    return payload;
+  }
+
   throw new Error(currentLanguage === 'zh'
     ? '当前这个外部 Agent 还没有可用的关闭通道。'
     : 'This external agent does not currently expose a supported stop channel.');

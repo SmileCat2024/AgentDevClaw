@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -96,6 +96,35 @@ describe('session expiry policy', () => {
     const active = { absoluteExpiresAt: now + SESSION_TTL_MS, lastActiveAt: now + SESSION_TTL_MS - 1000 };
     assert.equal(sessionExpired(active, now + SESSION_TTL_MS - 500), false);
     assert.equal(sessionExpired(active, now + SESSION_TTL_MS), true);
+  });
+});
+
+describe('service token bootstrap persistence', () => {
+  let dataDir;
+  let authServer;
+
+  after(async () => {
+    authServer?.child.kill('SIGTERM');
+    await new Promise((resolve) => authServer?.child.once('exit', resolve));
+    if (dataDir) await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it('persists the generated service token on first boot and reuses it across restarts', async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'claw-auth-token-'));
+    authServer = startAuthServer(dataDir);
+    const first = await authServer.ready;
+
+    const authPath = join(dataDir, 'auth.json');
+    await waitForFile(authPath);
+    const persisted = JSON.parse(await readFile(authPath, 'utf8'));
+    assert.match(persisted.serviceToken, /^[a-f0-9]{64}$/);
+
+    authServer.child.kill('SIGTERM');
+    await new Promise((resolve) => authServer?.child.once('exit', resolve));
+    authServer = startAuthServer(dataDir);
+    const second = await authServer.ready;
+
+    assert.equal(second.token, first.token);
   });
 });
 

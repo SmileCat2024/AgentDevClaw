@@ -32,6 +32,8 @@ function newServiceToken() {
   return randomBytes(32).toString('hex');
 }
 
+let serviceTokenNeedsPersist = false;
+
 function loadAuthState() {
   let raw = {};
   if (existsSync(AUTH_CONFIG_PATH)) {
@@ -41,7 +43,8 @@ function loadAuthState() {
       raw = {};
     }
   }
-  const serviceToken = cleanText(raw.serviceToken) || newServiceToken();
+  const persistedToken = cleanText(raw.serviceToken);
+  const serviceToken = persistedToken || newServiceToken();
   const state = {
     enabled: raw.enabled === true,
     passwordHash: cleanText(raw.passwordHash),
@@ -49,11 +52,20 @@ function loadAuthState() {
     serviceToken,
   };
   process.env.PROTOCLAW_INTERNAL_TOKEN = serviceToken;
-  return state;
+  return { state, tokenPersisted: persistedToken.length > 0 };
 }
 
-const state = loadAuthState();
+const loaded = loadAuthState();
+const state = loaded.state;
 let writeChain = Promise.resolve();
+
+// serviceToken 无条件落盘（ADR-0037）：外部 runtime 从用户数据目录读取 token
+// 完成平台引导认证。只存在内存里会导致每次重启轮换，外部接入随重启断供。
+if (!loaded.tokenPersisted) {
+  persistState().catch((error) => {
+    console.warn('[auth] service token 初始落盘失败（下次启动重试）:', error?.message || error);
+  });
+}
 
 function publicState() {
   return {
@@ -451,6 +463,12 @@ export function registerAuthRoutes(app, express) {
 
 export function getInternalAuthToken() {
   return state.serviceToken;
+}
+
+// 机器对机器通道（外部 runtime 注册协议）鉴权：无条件要求 internal bearer
+// token，不受登录保护开关影响——与 ViewerWorker TCP 控制通道同口径。
+export function authenticateInternalToken(req) {
+  return authenticateInternal(req) !== null;
 }
 
 export function getAuthStateForTest() {

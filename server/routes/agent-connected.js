@@ -19,6 +19,7 @@ import { readWorkspaceVisibilityOverrides } from './workspace-settings.js';
 import { getThreadControl } from '../thread-control/thread-controller.js';
 import { readThreadMembership } from '../shared/thread-membership.js';
 import { readSidebarSnapshot } from './sidebar-snapshot.js';
+import { getExternalRuntime } from '../shared/external-runtime-registry.js';
 import { performance } from 'node:perf_hooks';
 
 // ── Connected Agents Query ───────────────────────────────────────
@@ -335,13 +336,21 @@ export function createConnectedAgentsQuery(deps) {
       const childWorkspaceMeta = !exposeAsSeparateAssemblyRuntime && runtimeAgent.parentAgentId
         ? await readWorkspaceSessionMeta(runtimeAgent.parentAgentId, runtimeAgent.selectedSessionId)
         : null;
+      // 平台注册的外部 runtime（ADR-0037 注册协议）：投影补注册声明带来的
+      // 归属字段与停止通道标志；未注册的外部 agent 维持既有呈现不变。
+      const externalSource = exposeAsSeparateAssemblyRuntime
+        ? 'external'
+        : (runtimeAgent.parentAgentId ? 'child' : 'external');
+      const externalRecord = externalSource === 'external'
+        ? getExternalRuntime(runtimeAgent.id)
+        : null;
       connectedAgents.push({
         id: runtimeAgent.id,
         workspaceAgentId: childWorkspaceMeta?.workspaceAgentId || 'main',
         name: runtimeAgent.name,
         description: runtimeAgent.description || '',
         status: runtimeAgent.connected ? 'running' : 'stopped',
-        source: exposeAsSeparateAssemblyRuntime ? 'external' : (runtimeAgent.parentAgentId ? 'child' : 'external'),
+        source: externalSource,
         parent_id: exposeAsSeparateAssemblyRuntime ? matched.id : (runtimeAgent.parentAgentId || null),
         sidebar_entry_id: exposeAsSeparateAssemblyRuntime
           ? matched.id
@@ -363,7 +372,7 @@ export function createConnectedAgentsQuery(deps) {
           : (childWorkspaceMeta?.active_workspace_display_name || null),
         open_directory: exposeAsSeparateAssemblyRuntime
           ? ''
-          : (childWorkspaceMeta?.open_directory || ''),
+          : (childWorkspaceMeta?.open_directory || externalRecord?.projectRoot || ''),
         project_id: exposeAsSeparateAssemblyRuntime
           ? ''
           : (childWorkspaceMeta?.project_id || ''),
@@ -376,6 +385,7 @@ export function createConnectedAgentsQuery(deps) {
         created_at: runtimeAgent.createdAt ?? null,
         connected: runtimeAgent.connected ?? false,
         input_accepted: runtimeAgent.inputAccepted !== false,
+        external_registered: Boolean(externalRecord),
       });
     }
 

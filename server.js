@@ -105,6 +105,7 @@ import { setupGroupChatRoutes } from './server/routes/group-chat.js';
 import { setupDispatchRoutes, getProjectAdapter, fireBootSchedules } from './server/routes/dispatch.js';
 import { createSseEventsModule, createSseCompressionFilter } from './server/routes/sse-events.js';
 import { setupAppNotificationRoutes, observeCallStatusSnapshot } from './server/routes/app-notification.js';
+import { setupRuntimeRegistrationRoutes } from './server/routes/runtime-registration.js';
 import { setupFeatureCommunicationRoutes, featureCommunicationStore } from './server/routes/feature-communication.js';
 import { setupIMRoutes, readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './server/routes/im.js';
 import { createSessionHelpers } from './server/routes/session-helpers.js';
@@ -283,6 +284,12 @@ agentDiscoveryApi.setupRoutes(app);
 // ADR-0030：APP 主动投递端点（internal 鉴权），requireAgentLight 校验
 // agentId 为已知 prebuilt/workspace agent 并提供作者默认值。
 setupAppNotificationRoutes(app, express, { requireAgent: requireAgentLight });
+// 外部 runtime 平台注册协议（ADR-0037 决策 4）：机器通道无条件 Bearer；
+// prebuilt 身份冲突拒绝复用发现模块的 agent 清单。
+setupRuntimeRegistrationRoutes(app, express, {
+  viewerOrigin: VIEWER_ORIGIN,
+  getPrebuiltAgentIds: async () => (await getAgentsLight()).map((agent) => agent.id),
+});
 
 // ── Project docset helpers extracted to server/routes/project-docset.js ──
 // ── Session helpers extracted to server/routes/session-helpers.js ──
