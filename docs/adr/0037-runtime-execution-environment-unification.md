@@ -134,11 +134,11 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 
 已知缺口与开放点：
 
-- **Claw 主界面可见性**：外部 agent 只出现在 ViewerWorker 连接表（DebugHub 查看器、debugger MCP、`/api/agents`），不进入 Claw 前端侧栏与工作空间——侧栏条目来自 server 托管 runtime 的归属记录（ADR-0010 修订一的 IPC 握手），外部 runtime 无此路径。这是决策 4（平台 HTTP 注册）的直接需求来源。
+- **外部 runtime 的注册与生命周期路由（决策 4 的实际内容，纯路由工作）**：侧栏呈现是既有能力，无需新工作——server `projectConnectedAgents` 把 viewer 注册、无托管记录且无 prebuilt 宿主的 runtime 以 `source: 'external'` 并入 `/api/agents`（`agent-connected.js`），前端 `groupConnectedAgents` 将其渲染进「外部代理」分组（`external-agent-list`），并配有关闭/重启菜单（`modules/external-runtime.js`）。与 ADR-0010 修订一的分工：托管归属模型约束的是托管 child 的工作空间→目录→会话投影；viewer-only runtime 走独立的外部组通道，两条通道并行、互不覆盖。真正缺的是路由层事实：外部 runtime 在 server 侧没有注册记录——关闭/重启菜单因无宿主通道而禁用、无会话归属元数据（目录/项目投影为空）、退出与崩溃只能靠 viewer 连接断开被动感知。决策 4 = 把注册/退出/停止通道协议化。
 - **token 分发**：`auth.json` 仅在启用登录保护时落盘，未启用时 `serviceToken` 只存在于 server 进程内存，外部 runtime 无从获得（本次验收以预置 `auth.json` 固定 token 规避）。平台注册面设计需一并解决 token 引导。
 - **嵌套启动 env 泄漏（既有问题，非本次引入）**：在托管 runtime 内启动 Claw server 时，宿主注入的 `AGENTDEV_UDS_PATH` 等变量会穿透 `resolveInstanceUdsPath()` 的 per-instance 派生（explicit 分支短路），隔离实例会抢占全局默认管道。验收时以 `env -u` 显式清理规避；是否在启动入口默认剥离这类宿主变量，另行小决策。
 
-下一步：HTTP 面地址配置化（决策 3，`AGENTDEV_VIEWER_ORIGIN`）→ 执行后端 seam 与平台 HTTP 注册（决策 4，同时消化可见性与 token 分发两个开放点）→ 容器执行后端与镜像（决策 E / F）。
+下一步：HTTP 面地址配置化（决策 3，`AGENTDEV_VIEWER_ORIGIN`）→ 执行后端 seam 与平台 HTTP 注册（决策 4）→ 容器执行后端与镜像（决策 E / F）。
 
 ### M2 — HTTP 面地址配置化（2026-10-31 已实施，测试验收通过）
 
@@ -151,4 +151,4 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 
 验收：框架 4 个测试文件 20 用例通过（`viewer-http-origin` 新增 4 例，含 `turn-source-association` / `call-turn-kind` dequeue 回归与 M1 TCP 回归），core 构建后 dist 含新寻址逻辑；Claw 15 用例通过（mailbox 既有 8 例回归 + 寻址/认证新增 4 例 + childProcessEnv 契约 3 例）。验收边界：origin 仅在 runtime 与平台分处不同网络命名空间时产生行为差异，本步证据 = 以注入 origin 驱动两条真实消费路径（react-loop step 边界探测、mailbox 轮询）并对 dequeue URL 与 Authorization 头断言；跨进程部署距离的实机验收留待执行后端步（首个真实非本机 runtime）。
 
-下一步：执行后端 seam 与平台 HTTP 注册（决策 4，同时消化可见性与 token 分发两个开放点）→ 容器执行后端与镜像（决策 E / F，届时落地非回环 HTTP 监听 + Bearer 强制）。
+下一步：执行后端 seam 与平台 HTTP 注册（决策 4：外部 runtime 的注册/退出/停止路由与生命周期通道；呈现层由既有外部代理分组承接，无新工作；同时消化 token 分发开放点）→ 容器执行后端与镜像（决策 E / F，届时落地非回环 HTTP 监听 + Bearer 强制）。
