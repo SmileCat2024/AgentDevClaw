@@ -1,6 +1,6 @@
 # 0037 — Runtime 执行环境统一：平台-runtime 分离与传输网络原生化
 
-- **Status**: Proposed（六项执行前调查已完成、结论在篇内；M1 TCP 传输、M2 HTTP 面地址化、M3 平台注册协议与停止通道已实施并验收，见「实施进展」；容器阶段方向决策已定（仅 runtime 容器化、实验形态、含托管 spawn 点、四场景端到端验收、本机 Docker Desktop），实施计划见 [docs/plans/2026-10-31-runtime-container-phase.md](../plans/2026-10-31-runtime-container-phase.md)；远程阶段待容器定型后另立决策）
+- **Status**: Proposed（六项执行前调查已完成、结论在篇内；M1 TCP 传输、M2 HTTP 面地址化、M3 平台注册协议与停止通道、M4 执行后端 seam 已实施并验收——M4 为测试验收，容器端到端归 M6，见「实施进展」；容器阶段方向决策已定（仅 runtime 容器化、实验形态、含托管 spawn 点、四场景端到端验收、本机 Docker Desktop），实施计划见 [docs/plans/2026-10-31-runtime-container-phase.md](../plans/2026-10-31-runtime-container-phase.md)；远程阶段待容器定型后另立决策）
 - **Date**: 2026-10-30
 - **来源**: 2026-10-30 容器化方向 grill 会话 + 同日代码级执行前调查（认证 / 传输 / HTTP 盘点 / 数据面 / 生命周期 / 镜像）
 
@@ -177,3 +177,20 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 - 注册协议依赖的 TCP 监听仍为 env 实验开关形态，产品化配置入口随容器 / 部署步一起做（与 M2 同口径）。
 
 下一步：容器执行后端与镜像（决策 E / F；届时落地非回环 HTTP 监听 + Bearer 强制、数据挂载供给，注册协议与停止通道零改动复用）。
+
+### M4 — 执行后端 seam 与本地平移（2026-10-31 已实施，测试验收通过）
+
+范围 = 决策 1「执行环境经配置选择」的机制本体 + 计划两项随行修复（M1 遗留嵌套 env 泄漏、D 节 cwd 注入通道通用化）。不依赖 Docker；本地后端逐字平移现状，目标零行为变化。
+
+实施（Claw 单仓）：
+
+- **执行后端 seam**（新 `server/runtime-executor/`）：`index.js` 选择器 + `local-backend.js` 本地后端。选择器：`CLAW_RUNTIME_EXECUTOR=local|container` 实验开关（container 在 M6 接入前显式报错，不静默回退）；`CLAW_RUNTIME_EXECUTOR_AGENTS` 逗号清单支持单 agent 试点；共享进程模式（shared-by-project / shared-global）回退 local 并记 warn——add-session IPC 跨不了容器边界。本地后端把承载差异收敛为契约事件：`output`（stdout/stderr 统一来源，宿主在它上面单处实现 READY / Viewer Agent ID 探测，容器后端复用同一解析）、`identity`（携 `accept()` 回执 runtime-identity-accepted）、`session-exited`；handle 即 ChildProcess（pid / kill / exit / `__runtimeOutputTail` 原样保留，managedAgents 记录与共享分组语义不变），原生 message 事件不吞（共享进程 join 依赖）。
+- **托管 spawn 点接入**（`server/routes/agent-startup.js`）：startManagedSession 经选择器取后端启动，消息 / stdout / stderr 接线改消费语义事件；startAssemblyRuntime 固定本地后端（同一 seam 形状，容器后端不接通）。`buildSessionWorkspaceEnv` 通用化：其余托管 agent 解析出运行目录时同样注入 `PROTOCLAW_SESSION_WORKSPACE_CWD`（PH 强约束不变，无目录不注入、runtime 侧维持原解析）。
+- **cwd 通道消费侧**（`scripts/run-prebuilt-agent.js`）：非 PH workspace agent 的初始 cwd 解析改为 env 显式值优先于索引 / state.json——容器执行环境把宿主绝对路径映射为 `/workspace` 后经同一通道下发（PH 原本即 env-only；assembly 分支不注入该 env，不受影响）。
+- **嵌套 env 剥离**（新 `server/shared/nested-runtime-env.js` + `scripts/run-supervised.js`）：宿主进程检测到嵌套特征（`PROTOCLAW_PREBUILT_AGENT_ID` 存在 = 自身跑在托管 runtime 内）时剥离宿主专属 env（UDS / TCP / origin 寻址与会话身份 / 装配形态共 13 键），per-instance 派生不再被宿主注入值短路（修 M1 遗留开放点）；正常启动与显式注入冒烟路径零改动。
+
+验收：`test/runtime-executor.test.js` 9 用例（选择逻辑 6 + 真实子进程契约 3：identity 回执端到端——accept 送达由子进程实证打印 ACK、session-exited 直通、output / tail 截断 / 原生 message 透传、kill）；`test/nested-runtime-env.test.js` 3 用例；回归 agent-lifecycle（buildSessionWorkspaceEnv 用例按通用化口径更新）/ ph-project-session-lifecycle / run-supervised / child-process-env 全绿；import 环 0 新增。全量 core 5310 例中 27 失败经 stash 对照确认全部为存量（HEAD 同败：前端 VM 族系 911ede48 ADR-0035 遗留 fallout，codex-accounts / oauth-codex / memory-sampler 为 server 侧存量），M4 影响面内零新增失败。
+
+开放点：run-prebuilt-agent.js 模块顶层即执行 argv 解析，cwd 优先级消费侧无法以导入方式单测——由注入侧用例 + M6 容器端到端（env 值映射 `/workspace`）补证；存量失败（7 文件 27 例，与本步无关）另行处理，不随本步扩大范围。
+
+下一步：M5 镜像与构建（路线一本地树直取）与框架非回环 HTTP 监听 + Bearer 强制（M4 / M5 无代码依赖，可并行）。

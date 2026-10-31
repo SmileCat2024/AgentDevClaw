@@ -116,7 +116,13 @@ describe('buildSessionWorkspaceEnv', () => {
     );
   });
 
-  it('does not add the programming workdir contract to other agents', () => {
+  it('injects the resolved run directory for other managed agents (ADR-0037 D cwd 通道通用化)', () => {
+    assert.deepEqual(buildSessionWorkspaceEnv('agent-studio', 'studio-session', 'D:/code/feature-x'), {
+      PROTOCLAW_SESSION_WORKSPACE_CWD: 'D:/code/feature-x',
+    });
+  });
+
+  it('does not inject when a non-PH agent has no resolved directory (runtime 侧维持原解析)', () => {
     assert.deepEqual(buildSessionWorkspaceEnv('qqbot', 'portal-session', ''), {});
   });
 });

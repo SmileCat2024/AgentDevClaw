@@ -1370,10 +1370,14 @@ async function preflightAgentOAuthRefresh(agentDir, userConfigPath) {
 
 // ── Main: process host ────────────────────────────────────────
 async function main() {
+  // ADR-0037 D（cwd 注入通道通用化）：宿主注入的显式值优先于索引 / state.json
+  // 解析——容器执行环境把宿主绝对路径映射为 /workspace 后经 env 下发，runtime
+  // 不再依赖宿主路径的可达性。assembly 形态不注入该 env（spawn 点不设置），
+  // 走 assembly 分支不受影响。
   const workspaceCwd = WORKSPACE_BOUND_AGENT_IDS.has(agentId)
     ? (agentId === 'programming-helper' && sessionId
       ? cleanValue(process.env.PROTOCLAW_SESSION_WORKSPACE_CWD)
-      : resolveWorkspaceCwd(agentId, sessionId))
+      : (cleanValue(process.env.PROTOCLAW_SESSION_WORKSPACE_CWD) || resolveWorkspaceCwd(agentId, sessionId)))
     : resolveDesktopWorkspace();
   const runtimeHandoff = loadRuntimeHandoff();
 

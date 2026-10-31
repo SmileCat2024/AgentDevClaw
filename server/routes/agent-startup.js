@@ -1,4 +1,3 @@
-import { spawn } from 'child_process';
 import { appendFileSync, mkdirSync, promises as fs } from 'fs';
 import path from 'path';
 import {
@@ -14,6 +13,7 @@ import {
   sanitizeSessionFragment, cleanSessionText, sanitizeSpawnEnv, childProcessEnv,
   getAssemblyWorkspaceDir, parseListField, log,
 } from '../shared/string-helpers.js';
+import { resolveRuntimeExecutor, localRuntimeBackend } from '../runtime-executor/index.js';
 import {
   managedAgents, assemblyRuntimeProcesses,
   getManagedRuntimeKey, listAgentRuntimes,
@@ -48,8 +48,6 @@ import { addOpenSession } from '../shared/open-sessions-tracker.js';
 import { resolveSessionRuntimeDirectory } from '../shared/session-project.js';
 import { getPhSessionGateInfo, getPhProjectGateInfo } from './ph-projects.js';
 
-const RUNTIME_DIAGNOSTIC_TAIL_CHARS = 8000;
-
 export function persistRuntimeDiagnostic({ agentId, sessionId, event, details = '' }) {
   const logPath = path.join(resolveUserDataDir(), 'logs', 'runtime.log');
   const header = `${new Date().toISOString()} [${event}] agent=${agentId} session=${sessionId || 'none'}`;
@@ -60,23 +58,25 @@ export function persistRuntimeDiagnostic({ agentId, sessionId, event, details = 
   } catch { /* diagnostics must not affect runtime lifecycle */ }
 }
 
-function appendProcessOutputTail(child, text) {
-  child.__runtimeOutputTail = `${child.__runtimeOutputTail || ''}${text}`.slice(-RUNTIME_DIAGNOSTIC_TAIL_CHARS);
-}
-
 /**
- * Resolve process placement without deriving a session workspace from the
- * process host. Shared-global is deliberately restricted to programming-helper
- * and still requires the session's explicit project directory: every hosted
- * Agent must receive its own workspaceCwd through add-session.
+ * Resolve the workspace-cwd env for a managed spawn. programming-helper keeps
+ * its strict requirement (session + explicit project directory, no fallback);
+ * every other managed agent gets the same env channel whenever a run directory
+ * is resolved (ADR-0037 D：cwd 注入通道通用化——容器执行环境把宿主绝对路径映射
+ * 为 /workspace 后经同一通道下发，runtime 侧 env 值优先于索引 / state.json
+ * 解析）。无目录（无会话 / 目录型 agent 未选目录）不注入，维持 runtime 侧
+ * 原解析行为。
  */
 export function buildSessionWorkspaceEnv(agentId, sessionId, projectDir) {
-  if (sanitizeSessionFragment(agentId) !== GLOBAL_SHARED_AGENT_ID || !sessionId) return {};
   const workspaceCwd = typeof projectDir === 'string' ? projectDir.trim() : '';
-  if (!workspaceCwd) {
-    throw new Error('Programming Helper sessions require an explicit session project directory');
+  if (sanitizeSessionFragment(agentId) === GLOBAL_SHARED_AGENT_ID) {
+    if (!sessionId) return {};
+    if (!workspaceCwd) {
+      throw new Error('Programming Helper sessions require an explicit session project directory');
+    }
+    return { PROTOCLAW_SESSION_WORKSPACE_CWD: workspaceCwd };
   }
-  return { PROTOCLAW_SESSION_WORKSPACE_CWD: workspaceCwd };
+  return workspaceCwd ? { PROTOCLAW_SESSION_WORKSPACE_CWD: workspaceCwd } : {};
 }
 
 export function buildSharedSessionStartMessage({ sessionId, agentName, projectDir, handoffPath, runtime }) {
@@ -480,9 +480,14 @@ export function createAgentStartupFns(deps) {
     const runtimeCwd = agent.id === 'agent-studio' && projectDir
       ? projectDir
       : (WORKSPACE_SESSION_AGENT_IDS.has(agent.id) ? PROJECT_ROOT : resolveDesktopWorkspace());
-    const child = spawn(process.execPath, [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN], {
+    // ADR-0037 M4：托管 spawn 经执行后端 seam（实验形态 env 开关选择，本地后端
+    // 为默认）。handle 即 ChildProcess（增补语义事件与 output tail），下游托管
+    // 记录与生命周期接线不变。
+    const backend = resolveRuntimeExecutor({ agentId: agent.id, processMode });
+    const child = backend.start({
+      argv: [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN],
       cwd: runtimeCwd,
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      ipc: true,
       env: sanitizeSpawnEnv({
         ...childProcessEnv(),
         AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
@@ -495,7 +500,6 @@ export function createAgentStartupFns(deps) {
         ...(runtimeOptions?.extraEnv && typeof runtimeOptions.extraEnv === 'object' ? runtimeOptions.extraEnv : {}),
         ...buildSessionWorkspaceEnv(agent.id, resolvedSessionId, projectDir),
       }),
-      windowsHide: true,
     });
 
     const runtime = {
@@ -515,37 +519,33 @@ export function createAgentStartupFns(deps) {
     };
 
     managedAgents.set(runtime.key, runtime);
-    child.on('message', (message) => {
-      if (message?.type === 'session-exited') {
-        const retired = listRuntimesByProcess(child).find(rt => rt.selectedSessionId === message.sessionId);
-        if (retired) {
-          retired.persistenceConfirmed = message.persisted === true;
-          retired.stopped = true;
-          releaseRuntimeState(retired.key);
-          featureCommunicationStore.closeSession(retired.agentId, retired.selectedSessionId);
-        }
-        return;
+    // 语义事件消费面（执行后端翻译；本地 IPC 与容器注册协议 M6 共用同一消费
+    // 面，tail 维护与消息翻译见 runtime-executor/local-backend.js）。
+    child.on('session-exited', ({ sessionId, persisted }) => {
+      const retired = listRuntimesByProcess(child).find(rt => rt.selectedSessionId === sessionId);
+      if (retired) {
+        retired.persistenceConfirmed = persisted === true;
+        retired.stopped = true;
+        releaseRuntimeState(retired.key);
+        featureCommunicationStore.closeSession(retired.agentId, retired.selectedSessionId);
       }
-      if (message?.type !== 'runtime-identity') return;
-      if (message.agentId !== agent.id || message.sessionId !== (resolvedSessionId || null)) return;
-      const viewerAgentId = cleanSessionText(message.viewerAgentId);
-      if (!viewerAgentId) return;
+    });
+
+    child.on('identity', (evt) => {
+      if (evt.agentId !== agent.id || evt.sessionId !== (resolvedSessionId || null)) return;
 
       // The child must publish its session ownership before registering with
       // ViewerWorker. Acknowledge only after the managed runtime record is
       // updated, making this the authoritative identity handoff boundary.
-      runtime.viewerAgentId = viewerAgentId;
-      child.send({
-        type: 'runtime-identity-accepted',
-        agentId: agent.id,
-        sessionId: resolvedSessionId || null,
-        viewerAgentId,
-      });
+      runtime.viewerAgentId = evt.viewerAgentId;
+      evt.accept();
     });
 
-    child.stdout.on('data', (chunk) => {
-      const text = String(chunk);
-      appendProcessOutputTail(child, text);
+    child.on('output', ({ stream, text }) => {
+      if (stream === 'stderr') {
+        log(agent.id, text.trim(), 'error');
+        return;
+      }
       const match = text.match(/Viewer Agent ID:\s*([^\s]+)/);
       if (match) {
         runtime.viewerAgentId = match[1];
@@ -560,12 +560,6 @@ export function createAgentStartupFns(deps) {
         }
       }
       log(agent.id, text.trim());
-    });
-
-    child.stderr.on('data', (chunk) => {
-      const text = String(chunk);
-      appendProcessOutputTail(child, text);
-      log(agent.id, text.trim(), 'error');
     });
 
     child.on('exit', (code, signal) => {
@@ -705,9 +699,12 @@ export function createAgentStartupFns(deps) {
       String(runtimeDisplayName || ''),
       String(normalizedSessionId || ''),
     ];
-    const child = spawn(process.execPath, spawnArgs, {
+    // ADR-0037 M4：assembly 路径经同一 seam 形状，固定本地后端（容器后端不接
+    // 通——agent-creator 已隐藏，低价值）。
+    const child = localRuntimeBackend.start({
+      argv: spawnArgs,
       cwd: PROJECT_ROOT,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      ipc: false,
       env: sanitizeSpawnEnv({
         ...childProcessEnv(),
         AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
@@ -719,7 +716,6 @@ export function createAgentStartupFns(deps) {
         PROTOCLAW_ASSEMBLY_RUNTIME: '1',
         PROTOCLAW_ASSEMBLY_WORKSPACE: runtimeWorkdir,
       }),
-      windowsHide: true,
     });
 
     const runtime = {
@@ -738,8 +734,11 @@ export function createAgentStartupFns(deps) {
     assemblyRuntimeProcesses.set(normalizedSessionId, runtime);
     console.log(`[PERF] startAssemblyRuntime process SPAWNED (${Date.now() - _t0}ms) pid=${child.pid}`);
 
-    child.stdout?.on('data', (chunk) => {
-      const text = chunk.toString();
+    child.on('output', ({ stream, text }) => {
+      if (stream === 'stderr') {
+        log(`assembly:${normalizedSessionId}`, text.trimEnd(), 'error');
+        return;
+      }
       log(`assembly:${normalizedSessionId}`, text.trimEnd());
       const viewerMatch = text.match(/Viewer Agent ID:\s*(\S+)/);
       if (viewerMatch) {
@@ -750,10 +749,6 @@ export function createAgentStartupFns(deps) {
         runtime.ready = true;
         console.log(`[PERF] startAssemblyRuntime READY (${Date.now() - _t0}ms)`);
       }
-    });
-
-    child.stderr?.on('data', (chunk) => {
-      log(`assembly:${normalizedSessionId}`, chunk.toString().trimEnd(), 'error');
     });
 
     child.on('exit', (code) => {
