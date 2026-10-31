@@ -78,6 +78,22 @@ const PER_SESSION_ENV_KEYS = [
   'PROTOCLAW_HANDOFF_PAYLOAD',
 ];
 
+/**
+ * 平台进程专属 env：只作用于 Claw server 进程自身，禁止泄漏给 spawn 出的
+ * agent runtime（ADR-0037）：
+ * - AGENTDEV_VIEWER_ADDR：ViewerWorker TCP 控制监听地址。托管 runtime 固定
+ *   走 UDS（agent-startup 显式注入 AGENTDEV_UDS_PATH），且 DebugHub 中 TCP
+ *   地址优先于 UDS 路径，泄漏会把托管连接整体切到 TCP。
+ * - AGENTDEV_VIEWER_ORIGIN：HTTP 面完整 origin，面向外部（容器/远程）runtime
+ *   的部署配置。托管本地 runtime 固定回环 + 注入端口（AGENTDEV_VIEWER_PORT），
+ *   该 origin 从平台视角书写，对同机 runtime 可能不可达，泄漏会破坏托管
+ *   dequeue。
+ */
+const PLATFORM_ONLY_ENV_KEYS = [
+  'AGENTDEV_VIEWER_ADDR',
+  'AGENTDEV_VIEWER_ORIGIN',
+];
+
 export function sanitizeSpawnEnv(inputEnv) {
   return Object.fromEntries(
     Object.entries(inputEnv || {}).filter(([key, value]) => {
@@ -87,12 +103,16 @@ export function sanitizeSpawnEnv(inputEnv) {
 }
 
 /**
- * Returns a shallow copy of process.env with per-session env vars stripped.
- * These vars must only be passed via explicit extraEnv to prevent leakage
- * when the server itself was started from a runtime that carried them.
+ * Returns a shallow copy of process.env with stripped vars:
+ * - per-session env vars: must only be passed via explicit extraEnv to prevent
+ *   leakage when the server itself was started from a runtime that carried them;
+ * - platform-only env vars: they configure this server process itself and must
+ *   never reach spawned agent runtimes (hosted runtimes stay on UDS).
  */
 export function childProcessEnv(env = process.env) {
   const copy = { ...env };
-  for (const key of PER_SESSION_ENV_KEYS) delete copy[key];
+  for (const key of [...PER_SESSION_ENV_KEYS, ...PLATFORM_ONLY_ENV_KEYS]) {
+    delete copy[key];
+  }
   return copy;
 }

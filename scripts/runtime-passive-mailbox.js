@@ -33,20 +33,38 @@ export const PASSIVE_MAILBOX_POLL_INTERVAL_MS = 1000;
  *   getStatus() / enqueue() / waitForCompletion()
  * @param {() => boolean} ctx.isDisposed - returns true once the session is removed
  * @param {number} [ctx.pollIntervalMs]
- * @param {number|string} [ctx.viewerPort]
+ * @param {string} [ctx.viewerOrigin] - full origin override (test injection)
+ * @param {number|string} [ctx.viewerPort] - loopback port fallback (host injects
+ *   the resolved ViewerWorker port; not an address decision)
  * @param {typeof fetch} [ctx.fetchImpl]
  */
 export function createPassiveMailboxLoop(ctx) {
   const pollIntervalMs = Number.isFinite(ctx.pollIntervalMs) && ctx.pollIntervalMs > 0
     ? ctx.pollIntervalMs
     : PASSIVE_MAILBOX_POLL_INTERVAL_MS;
-  const viewerUrl = `http://127.0.0.1:${ctx.viewerPort ?? (process.env.AGENTDEV_VIEWER_PORT || '2026')}`;
+  // runtime → 平台 HTTP 面寻址（ADR-0037 决策 3）：AGENTDEV_VIEWER_ORIGIN
+  // 是宿主/部署注入的完整 origin（容器/远程时 runtime 与平台不在同一网络
+  // 命名空间）；未注入时回退本机回环 + 端口。托管本地 runtime 由宿主剥
+  // 离该 env（childProcessEnv），固定走回环——不消费平台面向外部 runtime
+  // 的 origin 配置。
+  const viewerUrl = ctx.viewerOrigin
+    ?? process.env.AGENTDEV_VIEWER_ORIGIN
+    ?? `http://127.0.0.1:${ctx.viewerPort ?? (process.env.AGENTDEV_VIEWER_PORT || '2026')}`;
+  // 内部 token 存在时随请求携带 Bearer：回环模式服务端不校验（行为不变），
+  // 非回环监听启用后直接生效——与框架 react-loop dequeue 同一口径。
+  const internalToken = process.env.PROTOCLAW_INTERNAL_TOKEN;
   const fetchImpl = typeof ctx.fetchImpl === 'function' ? ctx.fetchImpl : fetch;
 
   async function dequeueInput(agentId) {
     const res = await fetchImpl(
       `${viewerUrl}/api/agents/${encodeURIComponent(agentId)}/dequeue-input`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(internalToken ? { Authorization: `Bearer ${internalToken}` } : {}),
+        },
+      },
     );
     if (!res.ok) return null;
     const data = await res.json();

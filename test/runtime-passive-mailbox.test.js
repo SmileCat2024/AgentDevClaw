@@ -241,3 +241,123 @@ describe('createPassiveMailboxLoop', () => {
     await running;
   });
 });
+
+describe('createPassiveMailboxLoop viewer HTTP face addressing (ADR-0037 decision 3)', () => {
+  const savedOrigin = process.env.AGENTDEV_VIEWER_ORIGIN;
+  const savedToken = process.env.PROTOCLAW_INTERNAL_TOKEN;
+
+  async function restoreEnv() {
+    if (savedOrigin === undefined) delete process.env.AGENTDEV_VIEWER_ORIGIN;
+    else process.env.AGENTDEV_VIEWER_ORIGIN = savedOrigin;
+    if (savedToken === undefined) delete process.env.PROTOCLAW_INTERNAL_TOKEN;
+    else process.env.PROTOCLAW_INTERNAL_TOKEN = savedToken;
+  }
+
+  it('dequeues from AGENTDEV_VIEWER_ORIGIN when the env is injected (deployment override)', async () => {
+    process.env.AGENTDEV_VIEWER_ORIGIN = 'http://192.0.2.10:2526';
+    delete process.env.PROTOCLAW_INTERNAL_TOKEN;
+    const dequeueUrls = [];
+    const arbiter = createMockArbiter();
+    const harness = createHarness({
+      arbiter,
+      fetchImpl: async (url) => {
+        dequeueUrls.push(String(url));
+        return jsonResponse({ input: { text: 'via-origin' } });
+      },
+    });
+    const running = harness.loop.run();
+
+    try {
+      assert.ok(await until(() => arbiter.calls.enqueued.length === 1));
+      assert.ok(
+        dequeueUrls[0].startsWith('http://192.0.2.10:2526/api/agents/'),
+        `dequeue must target the injected origin, got: ${dequeueUrls[0]}`,
+      );
+    } finally {
+      harness.dispose();
+      await running;
+      await restoreEnv();
+    }
+  });
+
+  it('explicit ctx.viewerOrigin wins over the env (test injection precedence)', async () => {
+    process.env.AGENTDEV_VIEWER_ORIGIN = 'http://192.0.2.10:2526';
+    delete process.env.PROTOCLAW_INTERNAL_TOKEN;
+    const dequeueUrls = [];
+    const arbiter = createMockArbiter();
+    // viewerOrigin 在工厂调用时求值，必须在构造 ctx 时就位
+    let disposed = false;
+    const loop = createPassiveMailboxLoop({
+      agent: { agentId: 'viewer-agent-1' },
+      callArbiter: arbiter,
+      isDisposed: () => disposed,
+      pollIntervalMs: 1,
+      viewerOrigin: 'http://198.51.100.7:3026',
+      fetchImpl: async (url) => {
+        dequeueUrls.push(String(url));
+        return jsonResponse({ input: { text: 'via-ctx-origin' } });
+      },
+    });
+    const running = loop.run();
+
+    try {
+      assert.ok(await until(() => arbiter.calls.enqueued.length === 1));
+      assert.ok(dequeueUrls[0].startsWith('http://198.51.100.7:3026/api/agents/'));
+    } finally {
+      disposed = true;
+      await running;
+      await restoreEnv();
+    }
+  });
+
+  it('sends Bearer from PROTOCLAW_INTERNAL_TOKEN when present, omits otherwise', async () => {
+    process.env.AGENTDEV_VIEWER_ORIGIN = 'http://192.0.2.10:2526';
+    process.env.PROTOCLAW_INTERNAL_TOKEN = 'tok-mailbox-internal';
+    const seenHeaders = [];
+    const arbiter = createMockArbiter();
+    const harness = createHarness({
+      arbiter,
+      fetchImpl: async (url, init) => {
+        seenHeaders.push(init?.headers);
+        return jsonResponse({ input: { text: 'auth-check' } });
+      },
+    });
+    const running = harness.loop.run();
+
+    try {
+      assert.ok(await until(() => arbiter.calls.enqueued.length === 1));
+      assert.equal(seenHeaders.length, 1);
+      assert.equal(seenHeaders[0].Authorization, 'Bearer tok-mailbox-internal');
+      assert.equal(seenHeaders[0]['Content-Type'], 'application/json');
+    } finally {
+      harness.dispose();
+      await running;
+      await restoreEnv();
+    }
+  });
+
+  it('omits the Authorization header when no internal token is set', async () => {
+    process.env.AGENTDEV_VIEWER_ORIGIN = 'http://192.0.2.10:2526';
+    delete process.env.PROTOCLAW_INTERNAL_TOKEN;
+    const seenHeaders = [];
+    const arbiter = createMockArbiter();
+    const harness = createHarness({
+      arbiter,
+      fetchImpl: async (url, init) => {
+        seenHeaders.push(init?.headers);
+        return jsonResponse({ input: { text: 'no-auth-check' } });
+      },
+    });
+    const running = harness.loop.run();
+
+    try {
+      assert.ok(await until(() => arbiter.calls.enqueued.length === 1));
+      assert.equal(seenHeaders.length, 1);
+      assert.equal('Authorization' in seenHeaders[0], false);
+    } finally {
+      harness.dispose();
+      await running;
+      await restoreEnv();
+    }
+  });
+});
