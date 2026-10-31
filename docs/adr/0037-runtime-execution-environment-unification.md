@@ -1,6 +1,6 @@
 # 0037 — Runtime 执行环境统一：平台-runtime 分离与传输网络原生化
 
-- **Status**: Proposed（六项执行前调查已完成、结论在篇内；M1 传输改造已实施并在隔离实例验收，见「实施进展」；容器与远程阶段待实施计划）
+- **Status**: Proposed（六项执行前调查已完成、结论在篇内；M1 TCP 传输、M2 HTTP 面地址化、M3 平台注册协议与停止通道已实施并验收，见「实施进展」；容器阶段方向决策已定（仅 runtime 容器化、实验形态、含托管 spawn 点、四场景端到端验收、本机 Docker Desktop），实施计划见 [docs/plans/2026-10-31-runtime-container-phase.md](../plans/2026-10-31-runtime-container-phase.md)；远程阶段待容器定型后另立决策）
 - **Date**: 2026-10-30
 - **来源**: 2026-10-30 容器化方向 grill 会话 + 同日代码级执行前调查（认证 / 传输 / HTTP 盘点 / 数据面 / 生命周期 / 镜像）
 
@@ -107,6 +107,8 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 
 设计结论：容器镜像内容直接复用 desktop-staging 组装产物作为镜像构建上下文——同一 tgz 清单 = 同一版本轨道，桌面与容器天然对齐；Linux 基础镜像 + 同 pin node。开发态 `file:` junction 永不进镜像（镜像只从 vendor tgz 构建，即发布形态）；调试本地框架改动走重建镜像或挂载 dist 覆盖，属实施细节。镜像入口冒烟复用 pack:desktop 的隔离端口冒烟思路。
 
+修订（2026-10-31，容器阶段实施计划）：本轮镜像构建只实施**本地树直接取材**路线（断网可构建：依赖复用本地 node_modules，开发态 `@agentdevjs/*` 经相邻仓库 `npm pack` 实体化，镜像内容 = 本地树现状，开发迭代形态）；原 staging 组装轨道（干净安装、可复现版本轨道，需 registry 网络）作为路线二**预留**——共用 Dockerfile，将来接入为小增量，正式分发、跨机一致与配置面 UI 归产品化里程碑。Linux 基础镜像 + 系统依赖（git）收敛为本地预烘焙 base 镜像（联网准备一次，此后树级构建不再联网）。见 [docs/plans/2026-10-31-runtime-container-phase.md](../plans/2026-10-31-runtime-container-phase.md)。
+
 ## Consequences
 
 - **正面**：三态一致由架构保证而非逐端点纪律；框架传输层缺陷被显式修正而非垫片掩盖；旧远程「每端点补一个远程分支」的模式不再复发。六项执行前调查全部落定，实施前无未知阻塞项；改动面收敛为：框架传输接口 + TCP 监听（数百行级）、两处 dequeue 地址化、agent-startup 执行后端 seam、镜像复用 pack 组装、容器数据以挂载供给。
@@ -152,3 +154,26 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 验收：框架 4 个测试文件 20 用例通过（`viewer-http-origin` 新增 4 例，含 `turn-source-association` / `call-turn-kind` dequeue 回归与 M1 TCP 回归），core 构建后 dist 含新寻址逻辑；Claw 15 用例通过（mailbox 既有 8 例回归 + 寻址/认证新增 4 例 + childProcessEnv 契约 3 例）。验收边界：origin 仅在 runtime 与平台分处不同网络命名空间时产生行为差异，本步证据 = 以注入 origin 驱动两条真实消费路径（react-loop step 边界探测、mailbox 轮询）并对 dequeue URL 与 Authorization 头断言；跨进程部署距离的实机验收留待执行后端步（首个真实非本机 runtime）。
 
 下一步：执行后端 seam 与平台 HTTP 注册（决策 4：外部 runtime 的注册/退出/停止路由与生命周期通道；呈现层由既有外部代理分组承接，无新工作；同时消化 token 分发开放点）→ 容器执行后端与镜像（决策 E / F，届时落地非回环 HTTP 监听 + Bearer 强制）。
+
+### M3 — 平台注册协议与停止通道（2026-10-31 已实施，隔离实例端到端验收通过）
+
+范围 = 决策 4：外部 runtime 的注册 / 退出 / 停止生命周期通道，及 token 磁盘引导（解决 M1 记录的 token 分发开放点）。呈现层零新工作：合并列表既有 viewer-only 外部分支直接承接。
+
+实施（两个仓库）：
+
+- **token 无条件落盘**（`server/auth.js`）：serviceToken 首次生成即持久化（原子写，与 auth 配置同文件），不再依赖登录保护配置触发。外部 runtime 从用户数据目录 `auth.json` 读取完成引导认证，跨重启稳定。
+- **注册协议**（新 `server/routes/runtime-registration.js` + `server/shared/external-runtime-registry.js`）：`POST /protoclaw/runtime/register` / `POST /protoclaw/runtime/exited` 为机器通道，**无条件要求 internal Bearer**（登录保护未启用时全局中间件放行 `/protoclaw` 域且 server 监听全部网卡，机器通道的信任不能依赖该开关；与 TCP 控制通道同口径）；`POST /protoclaw/external_runtime/stop` 为浏览器会话通道，转投 ViewerWorker。身份规则：viewerAgentId 占用运行中托管 runtime 或 prebuilt APP 身份时 409 结构化拒绝（防冒充托管身份混入侧栏投影），格式非法 400 拒绝不改写。注册表进程内不落盘——外部 runtime 生命周期权威在自身进程，服务重启后重新注册。注册次序与托管 IPC 握手一致：归属先于 Viewer 连接，等 accepted 再接入。
+- **停止下发**（框架）：ViewerWorker 新端点 `POST /api/agents/:id/stop`，与 interrupt 同一连接下发通路（TCP / UDS 认证客户端共用 clientId 注册表）；`DebugHub` 新增 `setStopHandler` 注册面与 `stop-agent` 分发——未注册回调只记录不动作，停止语义归宿主（持久化、收尾、断连由 runtime 自行决定），框架不代决定退出时机。
+- **呈现接线**（`server/routes/agent-connected.js` + `public/src/modules/external-runtime.js`）：合并列表外部条目经注册表 join 补 `external_registered` 标志与声明目录（`open_directory` 回退）；前端侧栏关闭对已注册外部 runtime 走新停止通道，重启通道维持既有语义（纯外部 runtime 无重启宿主，重启归其所有者）。
+
+验收：
+
+- 测试：Claw `test/runtime-registration.test.js` 10 用例（鉴权边界、身份规则、退出幂等、停止转发与记录收敛——真实 express app + ViewerWorker stub）；auth 6 用例（含首启落盘 + 跨重启复用，隔离子进程）；框架 viewer 全量 162、debug-hub 全量 8（含新增 stop 经 TCP 下发与 stop-agent 分发用例）；Claw 回归 mailbox / childProcessEnv 15 用例；import 环 0。
+- 隔离实例端到端（真实进程间）：首启 `auth.json` 自动落盘（无预置）→ 外部 Node 进程从磁盘读 token → 平台注册 accepted → TCP 认证接入 → 合并列表条目 `source: external / external_registered: true / open_directory: 声明目录` → `POST /protoclaw/external_runtime/stop` → 连接下发 stop-agent（runtime 日志实证「收到停止指令」）→ 退出上报 → 进程退出码 0 → 条目从合并列表消失、二次 stop 404（注册记录收敛）。
+
+开放点：
+
+- feature-comms 请求面（ADR-0018 `/protoclaw/feature-comms/request` → runtime `onHostRequest`）仍只投递托管 IPC 子进程，外部 runtime 收不到宿主请求——待外部 runtime 真实需要 Feature 面板交互时接入（同连接下发或注册协议扩展）。
+- 注册协议依赖的 TCP 监听仍为 env 实验开关形态，产品化配置入口随容器 / 部署步一起做（与 M2 同口径）。
+
+下一步：容器执行后端与镜像（决策 E / F；届时落地非回环 HTTP 监听 + Bearer 强制、数据挂载供给，注册协议与停止通道零改动复用）。
