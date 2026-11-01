@@ -451,6 +451,28 @@ class SessionLifecycle {
     }, 2000);
   }
 
+  /**
+   * feature-comms 定向请求的进程内分发：返回给发起方的 result 对象。
+   * 两条传输面共用——本地父子 IPC（handleActiveIPC）与容器/外部形态的
+   * viewer host-request 通道（main 的 setHostRequestHandler），行为保持
+   * 一致（含成功请求后的去抖补存：idle 期没有 callFinished 保存点）。
+   */
+  async dispatchFeatureCommsRequest(msg) {
+    const feature = this.agent?.features?.get?.(msg.featureId)
+      || this.agent?.getFeature?.(msg.featureId);
+    if (typeof feature?.onHostRequest !== 'function') {
+      return { ok: false, code: 'operation_unavailable', error: 'Feature does not handle host requests' };
+    }
+    try {
+      const result = await feature.onHostRequest(msg.requestType, msg.payload, { channelId: msg.channelId, sessionId: this.sessionId });
+      // ok:false 是 feature 明确的业务失败，无状态变更可言，不调度保存。
+      if (result?.ok !== false) this.scheduleCommsSave();
+      return result;
+    } catch (error) {
+      return { ok: false, code: 'operation_failed', error: String(error?.message || error) };
+    }
+  }
+
   handleIPC(msg) {
     if (!msg || typeof msg !== 'object') return Promise.resolve();
     if (this.disposed) {
@@ -521,29 +543,10 @@ class SessionLifecycle {
     }
 
     if (msg.type === 'feature-comms-request') {
-      const feature = this.agent?.features?.get?.(msg.featureId)
-        || this.agent?.getFeature?.(msg.featureId);
-      const reply = (result) => {
-        try {
-          process.send({ type: 'feature-comms-result', requestId: msg.requestId, sessionId: this.sessionId, result });
-        } catch {}
-      };
-      if (typeof feature?.onHostRequest !== 'function') {
-        reply({ ok: false, code: 'operation_unavailable', error: 'Feature does not handle host requests' });
-        return;
-      }
+      const result = await this.dispatchFeatureCommsRequest(msg);
       try {
-        const result = await feature.onHostRequest(msg.requestType, msg.payload, { channelId: msg.channelId, sessionId: this.sessionId });
-        reply(result);
-        // 请求面可能变更 feature 状态（如标注创建），而 callFinished / step
-        // auto-save 的保存点在 idle 期不会到来；宿主在成功请求后统一去抖补
-        // 一次保存，对所有走请求面的 feature 生效（bg kill 等瞬态请求触发
-        // 的保存幂等无害）。ok:false 是 feature 明确的业务失败，无状态变更
-        // 可言，不调度。
-        if (result?.ok !== false) this.scheduleCommsSave();
-      } catch (error) {
-        reply({ ok: false, code: 'operation_failed', error: String(error?.message || error) });
-      }
+        process.send({ type: 'feature-comms-result', requestId: msg.requestId, sessionId: this.sessionId, result });
+      } catch {}
       return;
     }
 
@@ -1441,6 +1444,28 @@ async function main() {
         });
     });
   }
+  // ADR-0037 开放点通道化：宿主定向请求回调。容器/外部 runtime 无父子
+  // IPC，宿主的定向请求（feature-comms 请求面）经 ViewerWorker 连接的
+  // host-request 通道下发到这里；本地 runtime 同样注册——宿主对本地
+  // handle 仍优先走 IPC，两轨语义一致由共用 dispatchFeatureCommsRequest
+  // 保证。
+  DebugHub.getInstance().setHostRequestHandler(async (payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, code: 'invalid_request', error: 'Malformed host request payload' };
+    }
+    if (payload.kind === 'feature-comms') {
+      const targetSessionId = String(payload.sessionId || '');
+      const target = sessions.get(targetSessionId);
+      if (!target) {
+        return { ok: false, code: 'session_not_found', error: `Session ${targetSessionId || '(empty)'} is not hosted by this runtime` };
+      }
+      if (target.disposed) {
+        return { ok: false, code: 'session_closing', error: 'Session is closing' };
+      }
+      return target.dispatchFeatureCommsRequest(payload);
+    }
+    return { ok: false, code: 'unsupported_host_request', error: `Unsupported host request kind: ${String(payload.kind)}` };
+  });
   // ADR-0037 D（cwd 注入通道通用化）：宿主注入的显式值优先于索引 / state.json
   // 解析——容器执行环境把宿主绝对路径映射为 /workspace 后经 env 下发，runtime
   // 不再依赖宿主路径的可达性。assembly 形态不注入该 env（spawn 点不设置），

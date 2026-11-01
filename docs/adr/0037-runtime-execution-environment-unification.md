@@ -1,6 +1,6 @@
 # 0037 — Runtime 执行环境统一：平台-runtime 分离与传输网络原生化
 
-- **Status**: Proposed（六项执行前调查已完成、结论在篇内；M1 TCP 传输、M2 HTTP 面地址化、M3 平台注册协议与停止通道、M4 执行后端 seam、M5 镜像与构建、M6 容器后端与端到端验收已实施——四场景 8/8 隔离实例验收通过，容器阶段实施收口，见「实施进展」；容器阶段方向决策（仅 runtime 容器化、实验形态、含托管 spawn 点、四场景端到端验收、本机 Docker Desktop）与实施计划见 [docs/plans/2026-10-31-runtime-container-phase.md](../plans/2026-10-31-runtime-container-phase.md)；断网 / 桌面树实测待补，宿主运行期索引读治理与产品化配置面为开放点；远程阶段待容器定型后另立决策）
+- **Status**: Proposed（六项执行前调查已完成、结论在篇内；M1 TCP 传输、M2 HTTP 面地址化、M3 平台注册协议与停止通道、M4 执行后端 seam、M5 镜像与构建、M6 容器后端与端到端验收已实施——四场景 8/8 隔离实例验收通过，容器阶段实施收口，见「实施进展」；M6 后续开放点治理已实施：feature-comms 经 viewer host-request 通道化、会话索引委托快照读（跨边界读写统一走显式协议）；容器阶段方向决策（仅 runtime 容器化、实验形态、含托管 spawn 点、四场景端到端验收、本机 Docker Desktop）与实施计划见 [docs/plans/2026-10-31-runtime-container-phase.md](../plans/2026-10-31-runtime-container-phase.md)；断网 / 桌面树实测待补，多会话同容器与产品化配置面为开放点；远程阶段待容器定型后另立决策）
 - **Date**: 2026-10-30
 - **来源**: 2026-10-30 容器化方向 grill 会话 + 同日代码级执行前调查（认证 / 传输 / HTTP 盘点 / 数据面 / 生命周期 / 镜像）
 
@@ -235,10 +235,23 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 
 开放点：
 
-- **宿主运行期读容器 agent 的 index.db 会撞锁**：容器 runtime 运行期间，宿主侧任何打开该 agent 会话索引的路径（会话列表 API、群聊调度读索引等）会触发同款 `SQLITE_IOERR_LOCK`。E2E 调用面（ACP 建线 / 输入 / 状态 / 停止）不触发，产品化前需治理：运行中投影改走内存 record，或低频读的容错策略。
-- **feature-comms 请求面（ADR-0018）对容器 runtime 不可达**：宿主→runtime 定向请求仍依赖父子 IPC，容器形态收不到（M3 开放点的外部 runtime 版本，现对容器同样成立；send 缺失已有守卫不再 500，但功能面缺通道）。
+- **宿主运行期读容器 agent 的 index.db 会撞锁** → 已由「M6 后续 — 开放点治理」收口（索引委托，快照读）。
+- **feature-comms 请求面（ADR-0018）对容器 runtime 不可达** → 已由「M6 后续 — 开放点治理」收口（viewer host-request 通道）。
 - **多会话同容器（add-session 跨容器边界）不支持**：共享进程模式 join 到容器共享进程显式 409；通道化（宿主中转 add-session）留待真实需求。
 - **配置入口仍为 env 实验开关**（`CLAW_RUNTIME_EXECUTOR` / `CLAW_RUNTIME_CONTAINER_IMAGE` / TCP 三监听 env），产品化配置面 / UI 另立里程碑（含路线二接入、镜像清单管理）。
 - M5 欠账顺延：断网构建实测、桌面树（pack:desktop staging 内运行 pack:container）实测。
 
 至此容器阶段（M4–M6）实施收口：三种执行环境（本地进程 / 容器 / 远程节点）中的前两种经同一 seam 与协议栈工作，远程阶段沿同一架构部署距离测试，待容器形态产品化定型后另立决策。
+
+### M6 后续 — 开放点治理：跨边界读写统一走显式协议（2026-11-01 已实施）
+
+范围 = 收口 M6 记录的前两个开放点。两个问题同源：宿主与容器 runtime 之间残留两处「同机隐式假设」（父子 IPC 通道、共享数据库文件锁），治理方向统一为收敛到既有 viewer 控制连接的显式协议。
+
+实施：
+
+- **feature-comms 请求面通道化**（跨仓：框架 + Claw）：宿主→runtime 定向请求不再依赖父子 IPC，走 viewer 控制连接（与 stop-agent 同模式）。框架侧（AgentDev）新增 `host-request`/`host-response` 帧类型——`DebugHub.setHostRequestHandler` 注册回调（同步 throw 也收口进 then 链，host-response 永不静默丢弃，定向单测抓到该缺陷）；`ViewerWorker` 新增 `POST /api/agents/:id/host-request` 端点（payload 不被 viewer 解释、60s 超时自结算、连接断开即 NAK、runtime 错误透传）。Claw 侧：runtime（run-prebuilt-agent）注册 host-request handler，IPC 分发的 feature-comms 逻辑提取为共享方法（本地 IPC 与网络通道同一实现）；宿主 `feature-communication.js` 对无 IPC handle 的 runtime 改走 viewer 通道（经 `viewerFetch` 携内部 token），两路超时语义一致（store 侧自结算 `request_timeout`）。外部 runtime（TCP 形态）同链路受益。
+- **会话索引委托（宿主读治理）**：关键设计事实——宿主是索引唯一写者（runtime 只经 `readSessionIndexSync` 同步读），容器运行期索引内容本就冻结，**驱逐前快照即完整真相，无需向 runtime 代理查询**。`session-access` 新增 `delegateSessionDb`/`resumeSessionDb`：spawn 前驱逐连接并缓存最后快照（替代 M6 的裸 evict）；委托期读返回快照（对象身份稳定，兼容共享只读契约）、写显式拒绝（code `session_db_delegated`，调用方可编程识别重试时机）、`querySessionIndexPage` 走 SQL 版的 JS 等价实现（排序/归档/范围/搜索/分页/精确单查/线程成员谓词逐条镜像）；容器进程 exit 时 resume 恢复宿主直连（幂等）。
+
+验收：框架 viewer 新增 5 例（往返/超时/断连/runtime 错误/输入校验）+ debug-hub 4 例（含同步 throw 收口缺陷）全绿，viewer 包全量 172/172；session-index-cache 29/29（委托 5 用例 + 分页等价性 8 参数组——**等价性测试在同一数据上比对 SQL 版与委托版，抓到 scope 谓词两处镜像缺陷**：无过滤条件时错误过滤空目录、projectId 过滤整体缺失，修复后逐参数组锁定）；E2E 扩展场景 ②b（容器运行期宿主调会话列表 → 委托快照返回、会话在列、不撞 `SQLITE_IOERR_LOCK`）。
+
+剩余开放点（见上方 M6 列表）：多会话同容器（add-session 通道化）、配置入口产品化、M5 断网/桌面树实测欠账。

@@ -216,6 +216,14 @@ async function main() {
     await waitForCount(S2_TOKEN, s2Base);
     record('② 完整一轮对话（输入 → 容器 dequeue → 模型回复 → 快照落盘）', true, `回复含 ${S2_TOKEN}`);
 
+    // ---- 场景 ②b：容器运行期宿主读会话索引（委托快照读，不撞 WAL 锁）----
+    // ADR-0037 开放点治理：容器独占 index.db 期间，宿主列表读走驱逐时缓存的
+    // 快照。撞锁（SQLITE_IOERR_LOCK → 500）或快照丢会话都判失败。
+    const listed = await fetchJson(`${platform.baseUrl}/protoclaw/prebuilt_sessions?agentId=${AGENT_ID}`);
+    const listedOk = Array.isArray(listed.sessions) && listed.sessions.some((s) => s.id === sessionId);
+    record('②b 容器运行期宿主读索引（委托快照，会话在列不撞锁）', listedOk,
+      listedOk ? undefined : '列表 200 但会话缺席（快照过期或丢行）');
+
     // ---- 场景 ③a：数据面写路径（/workspace → 宿主同目录）----
     log('S3a', '容器内 shell 写 /workspace，宿主目录可见');
     const s3Base = countIn(snapText(), 'WROTE-OK');

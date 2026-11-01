@@ -22,7 +22,7 @@ import {
   computeProcessGroupKey, findSharedProcessRuntime, listRuntimesByProcess,
 } from '../shared/agent-access.js';
 import {
-  readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex, evictSessionDb,
+  readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex, delegateSessionDb, resumeSessionDb,
 } from '../shared/session-access.js';
 import { notifyRuntimeReady } from '../shared/runtime-hooks.js';
 import { resolveDesktopWorkspace } from '../shared/desktop-workspace.js';
@@ -494,11 +494,13 @@ export function createAgentStartupFns(deps) {
     // 记录与生命周期接线不变。
     const backend = resolveRuntimeExecutor({ agentId: agent.id, processMode });
     if (backend.name === 'container') {
-      // ADR-0037 M6：WAL 锁跨 Windows 宿主 ↔ 容器 VM 边界不安全，宿主侧
-      // 长开连接会让容器 runtime 打开同一 index.db 时报 SQLITE_IOERR_LOCK。
-      // 容器运行期会话索引归容器独占；宿主重开发生在容器停止后（本地恢复
-      // 场景实测安全）。
-      evictSessionDb(agent.id);
+      // ADR-0037 M6 + 开放点治理：WAL 锁跨 Windows 宿主 ↔ 容器 VM 边界
+      // 不安全，宿主侧长开连接会让容器 runtime 打开同一 index.db 时报
+      // SQLITE_IOERR_LOCK。容器运行期会话索引归容器独占——delegate 在驱逐
+      // 连接的同时缓存最后快照：委托期宿主读返回快照（宿主是唯一写者，
+      // 运行期索引冻结，快照即完整真相），写显式拒绝；进程退出（exit 事件）
+      // 时 resume 恢复直连（本地恢复场景实测安全）。
+      delegateSessionDb(agent.id);
     }
     const child = backend.start({
       argv: [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN],
@@ -579,6 +581,8 @@ export function createAgentStartupFns(deps) {
     });
 
     child.on('exit', (code, signal) => {
+      // 容器形态：进程退出是索引独占的权威终点，恢复宿主直连（幂等）。
+      if (backend.name === 'container') resumeSessionDb(agent.id);
       // Mark ALL runtimes sharing this process as stopped
       const sharedRuntimes = listRuntimesByProcess(child);
       for (const rt of sharedRuntimes) {

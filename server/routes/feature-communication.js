@@ -3,9 +3,38 @@ import { getAgentRuntime } from '../shared/agent-access.js';
 import { isAuthEnabled, resolveRequestAuth } from '../auth.js';
 import { getSessionOperation } from '../shared/session-operation.js';
 import { FeatureCommunicationStore, normalizeFeatureCommunicationTarget } from '../feature-communication-store.js';
+import { VIEWER_ORIGIN } from '../shared/constants.js';
+import { viewerFetch } from '../shared/viewer-fetch.js';
 
 export const featureCommunicationStore = new FeatureCommunicationStore();
 const MAX_PAYLOAD_BYTES = 256 * 1024;
+
+/**
+ * 经 ViewerWorker 的 host-request 通道向 runtime 投递定向请求（容器/外部
+ * 形态：无父子 IPC）。返回 { ok, result | code/error }：ok=true 时 result
+ * 为 runtime 侧分发方法的返回值（与本地 IPC 的 feature-comms-result 同构），
+ * 传输层失败（断连/超时/viewer 不可达）携带 code 供调用方区分。
+ */
+async function deliverViaHostRequestChannel(viewerAgentId, payload) {
+  try {
+    const response = await viewerFetch(VIEWER_ORIGIN, `/api/agents/${encodeURIComponent(viewerAgentId)}/host-request`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json().catch(() => null);
+    if (response.ok && body?.success === true) {
+      return { ok: true, result: body.result ?? null };
+    }
+    return {
+      ok: false,
+      code: response.status === 504 ? 'runtime_request_timeout' : 'delivery_failed',
+      error: body?.error || `Viewer host-request failed (HTTP ${response.status})`,
+    };
+  } catch (error) {
+    return { ok: false, code: 'delivery_failed', error: String(error?.message || error) };
+  }
+}
 
 function badRequest(res, message) {
   return res.status(400).json({ ok: false, code: 'invalid_request', error: message });
@@ -170,11 +199,29 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
     const cleanup = () => runtime.process.removeListener('message', onMessage);
     try {
       if (typeof runtime.process.send !== 'function') {
-        // ADR-0037 M6 开放点：容器 handle 无父子 IPC，宿主请求面不可达——
-        // 显式失败而非 500（对齐 runtime_not_connected 语义，待真实需要接入）。
+        // 容器/外部 runtime：无父子 IPC，经 ViewerWorker 的 host-request
+        // 通道下发——runtime 侧与本地共用同一分发实现，两轨语义一致。
+        // 无 viewerAgentId 的 handle（异常形态）仍显式失败而非 500。
+        const viewerAgentId = runtime.viewerAgentId;
+        if (!viewerAgentId) {
+          cleanup();
+          communicationStore.resolveRequest(target, requestId, { ok: false, code: 'runtime_ipc_unavailable' });
+          return res.status(503).json({ ok: false, code: 'runtime_ipc_unavailable', error: 'Runtime transport does not support host requests' });
+        }
+        const delivery = await deliverViaHostRequestChannel(viewerAgentId, {
+          kind: 'feature-comms',
+          sessionId: target.sessionId,
+          featureId: target.featureId,
+          channelId: target.channelId,
+          requestType: body.requestType,
+          payload: body.payload ?? null,
+        });
+        communicationStore.resolveRequest(target, requestId, delivery.ok === true
+          ? delivery.result
+          : { ok: false, code: delivery.code, error: delivery.error });
+        const result = await pending;
         cleanup();
-        communicationStore.resolveRequest(target, requestId, { ok: false, code: 'runtime_ipc_unavailable' });
-        return res.status(503).json({ ok: false, code: 'runtime_ipc_unavailable', error: 'Runtime transport does not support host requests' });
+        return res.status(result?.ok === false ? 502 : 200).json({ ok: result?.ok !== false, result });
       }
       if (runtime.process.send(message) === false) communicationStore.resolveRequest(target, requestId, { ok: false, code: 'delivery_failed' });
       const result = await pending;
