@@ -95,7 +95,32 @@ function getWorkspaceStatePath(agentId) {
   return join(USER_DATA_ROOT, 'workspaces', sanitizeSessionFragment(agentId), 'state.json');
 }
 
-function resolveSessionWorkspaceCwd(agentId, sessionId) {
+// 容器形态（CLAW_SESSION_INDEX_REMOTE=1，容器后端注入）：索引读不直连
+// index.db——WAL 锁跨不过容器边界（宿主↔容器双向互斥，ADR-0037 容器修订），
+// 统一走平台 HTTP（写侧 session_meta_sync 已是 HTTP）；本地形态维持
+// session-access 同步直读（同内核文件锁有效）。
+const SESSION_INDEX_REMOTE = process.env.CLAW_SESSION_INDEX_REMOTE === '1';
+
+async function fetchSessionRecordRemote(agentId, sessionId) {
+  const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/session_record_lookup`, {
+    method: 'POST',
+    headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ agentId, sessionId }),
+  });
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`session record lookup failed: HTTP ${resp.status}`);
+  const data = await resp.json();
+  return data?.record || null;
+}
+
+async function lookupSessionRecord(agentId, sessionId) {
+  if (SESSION_INDEX_REMOTE) return fetchSessionRecordRemote(agentId, sessionId);
+  const parsed = readSessionIndexSync(agentId);
+  const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+  return sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(sessionId)) || null;
+}
+
+async function resolveSessionWorkspaceCwd(agentId, sessionId) {
   const normalizedSessionId = cleanValue(sessionId);
   if (!normalizedSessionId || normalizedSessionId === NO_SESSION_TOKEN) {
     return null;
@@ -103,11 +128,9 @@ function resolveSessionWorkspaceCwd(agentId, sessionId) {
 
   let record = null;
   try {
-    // ADR-0036：索引持久层为 index.db，同步读经 session-access（与 server
-    // 同源解析数据根；WAL 支持父子进程并发读）。
-    const parsed = readSessionIndexSync(agentId);
-    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
-    record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId)) || null;
+    // ADR-0036：索引持久层为 index.db，本地经 session-access 同步直读（WAL
+    // 支持父子进程并发读）；容器形态经 lookupSessionRecord 走平台 HTTP。
+    record = await lookupSessionRecord(agentId, normalizedSessionId);
   } catch (error) {
     console.warn('[ProtoClaw Runtime] 读取 session 工作目录失败:', error);
     return null;
@@ -125,7 +148,7 @@ function resolveSessionWorkspaceCwd(agentId, sessionId) {
   return openDirectory;
 }
 
-function resolveWorkspaceCwd(agentId, sessionId = '') {
+async function resolveWorkspaceCwd(agentId, sessionId = '') {
   if (!WORKSPACE_BOUND_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
     return null;
   }
@@ -164,7 +187,7 @@ function resolveWorkspaceCwd(agentId, sessionId = '') {
   }
 
   // --- Project mode: prefer the target session's own openDirectory ---
-  const sessionCwd = resolveSessionWorkspaceCwd(agentId, sessionId);
+  const sessionCwd = await resolveSessionWorkspaceCwd(agentId, sessionId);
   if (sessionCwd) {
     return sessionCwd;
   }
@@ -700,7 +723,7 @@ SessionLifecycle.prototype.start = async function () {
   const workspaceCwd = WORKSPACE_BOUND_AGENT_IDS.has(agentId)
     ? (agentId === 'programming-helper' && this.sessionId
       ? this.workspaceCwd
-      : (this.workspaceCwd || resolveWorkspaceCwd(agentId, this.sessionId)))
+      : (this.workspaceCwd || (await resolveWorkspaceCwd(agentId, this.sessionId))))
     : resolveDesktopWorkspace();
   if (agentId === 'programming-helper' && this.sessionId && !workspaceCwd) {
     throw new Error(`Programming Helper session ${this.sessionId} requires an explicit workspace directory`);
@@ -714,11 +737,11 @@ SessionLifecycle.prototype.start = async function () {
   let boundAgentId;
   let sessionProjectId = '';
   if (this.sessionId) {
-    // ADR-0036：索引持久层 index.db，经 session-access 同步读（父进程写侧
-    // 同一存储；曾直读 index.json，迁移后 ENOENT）。记录缺失语义不变：
+    // ADR-0036 + ADR-0037 容器修订：本地经 session-access 直读（父进程写侧
+    // 同一存储）；容器形态经 lookupSessionRecord 走平台 HTTP（WAL 锁跨不过
+    // 容器边界，容器不直连 index.db）。记录缺失语义不变：
     // "Session index record not found"。
-    const index = readSessionIndexSync(agentId);
-    const record = index.sessions.find((entry) => entry.id === this.sessionId);
+    const record = await lookupSessionRecord(agentId, this.sessionId);
     if (!record) throw new Error(`Session index record not found: ${this.sessionId}`);
     boundAgentId = record.workspaceAgentId === undefined ? 'main' : record.workspaceAgentId;
     // PH 项目会话归属（ticket 043）：逐实例注入，agent 构造函数据此选项目配置层
@@ -1469,12 +1492,19 @@ async function main() {
   // ADR-0037 D（cwd 注入通道通用化）：宿主注入的显式值优先于索引 / state.json
   // 解析——容器执行环境把宿主绝对路径映射为 /workspace 后经 env 下发，runtime
   // 不再依赖宿主路径的可达性。assembly 形态不注入该 env（spawn 点不设置），
-  // 走 assembly 分支不受影响。
-  const workspaceCwd = WORKSPACE_BOUND_AGENT_IDS.has(agentId)
-    ? (agentId === 'programming-helper' && sessionId
-      ? cleanValue(process.env.PROTOCLAW_SESSION_WORKSPACE_CWD)
-      : (cleanValue(process.env.PROTOCLAW_SESSION_WORKSPACE_CWD) || resolveWorkspaceCwd(agentId, sessionId)))
-    : resolveDesktopWorkspace();
+  // 走 assembly 分支不受影响。resolveWorkspaceCwd 已 async 化（索引读在容器
+  // 形态走平台 HTTP）。
+  let workspaceCwd;
+  if (WORKSPACE_BOUND_AGENT_IDS.has(agentId)) {
+    const injectedCwd = cleanValue(process.env.PROTOCLAW_SESSION_WORKSPACE_CWD);
+    if (agentId === 'programming-helper' && sessionId) {
+      workspaceCwd = injectedCwd;
+    } else {
+      workspaceCwd = injectedCwd || (await resolveWorkspaceCwd(agentId, sessionId));
+    }
+  } else {
+    workspaceCwd = resolveDesktopWorkspace();
+  }
   const runtimeHandoff = loadRuntimeHandoff();
 
   const initialSession = new SessionLifecycle({

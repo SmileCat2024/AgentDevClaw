@@ -8,12 +8,14 @@
  *   ① 托管容器 runtime 创建接入：ACP 建线（真实调度面）→ 容器 spawn →
  *      ticket 注册 → READY → viewerAgentId/threadId/sessionId 返回
  *   ② 完整一轮对话：线程输入 → 容器内 runtime 跨网络 dequeue → 模型回复
- *      落盘快照（AGENTDEV_VIEWER_ORIGIN 实机验收）
+ *      落盘快照（AGENTDEV_VIEWER_ORIGIN 实机验收）；容器运行期宿主直连
+ *      读写索引（容器索引读走平台 HTTP、写走 meta_sync——ADR-0037 容器
+ *      修订，委托/驱逐补偿机制退役）
  *   ③ 数据面写路径：容器内 shell 写 /workspace 宿主同目录可见；
- *      docker kill 崩溃后新容器恢复会话（引用历史证明快照恢复）；
- *      优雅停止后本地 executor 同数据目录恢复同一会话（跨执行环境一致）
+ *      docker kill 崩溃后新容器恢复会话（引用历史证明快照恢复）
  *   ④ 停止通道收敛：docker kill 强杀 → 容器实体自动清理；stop_agent 优雅
  *      停止 → 容器在宽限期内收敛消失
+ *   ⑤ 编程小助手入口容器模式 + 本地/容器会话并存（并存闸退役验证）
  *
  * 断言采用快照全文计数法（不依赖快照内部结构）：回复独有 token 的出现
  * 次数增长 = 新 assistant 回复落盘；引用历史题（答案只在历史记录中）=
@@ -263,13 +265,26 @@ async function main() {
     await waitForCount(S2_TOKEN, s2Base);
     record('② 完整一轮对话（输入 → 容器 dequeue → 模型回复 → 快照落盘）', true, `回复含 ${S2_TOKEN}`);
 
-    // ---- 场景 ②b：容器运行期宿主读会话索引（委托快照读，不撞 WAL 锁）----
-    // ADR-0037 开放点治理：容器独占 index.db 期间，宿主列表读走驱逐时缓存的
-    // 快照。撞锁（SQLITE_IOERR_LOCK → 500）或快照丢会话都判失败。
+    // ---- 场景 ②b：容器运行期宿主直连读写索引（ADR-0037 容器修订）----
+    // 容器内索引读走平台 HTTP（CLAW_SESSION_INDEX_REMOTE=1）、写走
+    // session_meta_sync——容器不打开 index.db，宿主与 db 的同内核连接无
+    // 跨界锁问题（委托/驱逐补偿机制已退役）。断言：宿主列表在列；独立宿主
+    // node 子进程真开新连接直读成功（证明宿主可随时新开连接）；容器侧
+    // meta_sync 已把对话统计写入宿主索引（messageCount 推进）。
     const listed = await fetchJson(`${platform.baseUrl}/protoclaw/prebuilt_sessions?agentId=${AGENT_ID}`);
     const listedOk = Array.isArray(listed.sessions) && listed.sessions.some((s) => s.id === sessionId);
-    record('②b 容器运行期宿主读索引（委托快照，会话在列不撞锁）', listedOk,
-      listedOk ? undefined : '列表 200 但会话缺席（快照过期或丢行）');
+    const directRead = sh('node', ['--input-type=module', '-e',
+      "import { readSessionIndex } from './server/shared/session-access.js'; const i=await readSessionIndex(process.env.TEST_AGENT); const s=i.sessions.find((x)=>x.id===process.env.TEST_SESSION_ID); console.log(JSON.stringify({ found: !!s, messageCount: s?.messageCount ?? 0 }));",
+    ], { env: { ...process.env, AGENTDEV_DATA_DIR: dataDir, TEST_AGENT: AGENT_ID, TEST_SESSION_ID: sessionId } });
+    const direct = JSON.parse(directRead);
+    const metaSynced = await waitFor('容器 meta_sync 推进宿主索引 messageCount', async () => {
+      const relisted = await fetchJson(`${platform.baseUrl}/protoclaw/prebuilt_sessions?agentId=${AGENT_ID}`).catch(() => null);
+      const row = Array.isArray(relisted?.sessions) ? relisted.sessions.find((s) => s.id === sessionId) : null;
+      return (row?.messageCount ?? 0) >= 1;
+    }, 30_000).then(() => true, () => false);
+    record('②b 容器运行期宿主直连读写索引（独立进程新开连接不撞锁 + meta_sync 写生效）',
+      listedOk && direct.found && direct.messageCount >= 1 && metaSynced,
+      `listed=${listedOk} direct=${directRead} metaSynced=${metaSynced}`);
 
     // ---- 场景 ③a：数据面写路径（/workspace → 宿主同目录）----
     log('S3a', '容器内 shell 写 /workspace，宿主目录可见');
@@ -347,6 +362,40 @@ async function main() {
       "import { readSessionIndex } from './server/shared/session-access.js'; const i=await readSessionIndex('programming-helper'); console.log(JSON.stringify(i.sessions.find(s=>s.id===process.env.TEST_SESSION_ID)?.metadata?.runtimeMode || null));",
     ], { env: { ...process.env, AGENTDEV_DATA_DIR: dataDir, TEST_SESSION_ID: phSessionId } });
     const phPersisted = JSON.parse(phModeOut);
+
+    // ---- 场景 ⑤b：本地/容器会话并存（ADR-0037 容器修订的直接受益）----
+    // PH 容器会话运行中创建同 agent 的 standard（本地）会话：索引读协议化后
+    // 锁问题域消失，创建应成功（并存闸已退役，原为 409 local_runtime_active
+    // / container_runtime_active）。本地 runtime 是真实 spawn 的 node 子进程
+    //（pid 数字形态；容器条目 pid 为容器名）。
+    log('S5b', '容器会话运行中创建本地（standard）会话');
+    const phLocalCreated = await fetchJson(`${platform.baseUrl}/protoclaw/prebuilt_sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: PH_ID, openDirectory: phWsDir }),
+    });
+    const phLocalId = phLocalCreated?.session?.id;
+    if (!phLocalId) throw new Error(`本地会话创建响应缺 session.id: ${JSON.stringify(phLocalCreated).slice(0, 300)}`);
+    // 观察点 = 平台日志锚：本地 runtime 就绪必打 ClawDispatch 轮询行（携带
+    // 本地 sessionId）。/api/agents 全量列表在 viewer 面（Bearer），app 端口
+    // 无该路由，不用作判定。
+    const platformLogPath = join(runDir, 'platform-container.log');
+    const localRuntimeUp = await waitFor('PH 本地 runtime 就绪（日志锚 sessionId）', () => {
+      try {
+        return readFileSync(platformLogPath, 'utf8').includes(`sessionId=${phLocalId}`);
+      } catch { return false; }
+    }, 60_000).then(() => true, () => false);
+    const containerStillUp = sh('docker', ['ps', '--filter', `name=${phContainerName}`, '--format', '{{.Names}}'], { stdio: ['ignore', 'pipe', 'ignore'] }).length > 0;
+    record('⑤b 本地/容器会话并存（容器运行中本地创建成功 + 双方共存）',
+      localRuntimeUp && containerStillUp,
+      `localRuntime=${localRuntimeUp} containerUp=${containerStillUp}`);
+    // 收尾：先停本地会话再停容器会话（避免遗留 runtime 占用平台通道）
+    await fetchJson(`${platform.baseUrl}/protoclaw/stop_agent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: PH_ID, sessionId: phLocalId }),
+    }).catch(() => {});
+
     const phStop = await fetchJson(`${platform.baseUrl}/protoclaw/stop_agent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

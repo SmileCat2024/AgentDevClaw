@@ -233,6 +233,9 @@ export function startContainerRuntime({ argv, env, cwd, ipc }) {
       AGENTDEV_VIEWER_ADDR: gateway.viewerAddr,
       AGENTDEV_VIEWER_ORIGIN: gateway.viewerOrigin,
       PROTOCLAW_SERVER_ORIGIN: gateway.serverOrigin,
+      // ADR-0037 容器修订：容器内索引读走平台 HTTP，禁止直连 index.db
+      // （WAL 锁跨不过容器边界）。session-access 检测该标志 fail fast。
+      CLAW_SESSION_INDEX_REMOTE: '1',
     });
     delete containerEnv.AGENTDEV_UDS_PATH; // 容器无 UDS；防宿主路径短路 TCP
 

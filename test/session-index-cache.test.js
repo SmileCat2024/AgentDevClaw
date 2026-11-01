@@ -28,9 +28,6 @@ const {
   readSessionIndexSync,
   migrateAllPrebuiltSessionIndexes,
   closeAllSessionDbs,
-  evictSessionDb,
-  delegateSessionDb,
-  resumeSessionDb,
   querySessionIndexPage,
 } = await import('../server/shared/session-access.js');
 
@@ -452,114 +449,29 @@ describe('upsertSessionIndexAt（plain agent 显式路径 upsert，JSON 形态�
   });
 });
 
-describe('evictSessionDb（容器执行环境的连接驱逐，ADR-0037 M6）', () => {
-  test('驱逐长开连接后数据完好且可重开（容器独占→宿主接管的语义基础）', async () => {
-    const agentId = 'evict-test-agent';
-    await writeSessionIndex(agentId, makeIndex(1));
-    assert.equal(evictSessionDb(agentId), true, '已建立的连接驱逐应返回 true');
-    assert.equal(evictSessionDb(agentId), false, '驱逐后缓存条目已删（连续第二次应 false——辨别空操作实现）');
-    // 驱逐后重开读：数据一致（连接重建，读缓存失效后从 db 读）
-    const idx = await readSessionIndex(agentId);
-    assert.equal(idx.revision, 1);
-    assert.ok(idx.sessions.some(s => s.id === 's1'));
-    // 二次写读循环正常（接管后宿主可继续维护索引）
-    await updateSessionIndex(agentId, (index) => {
-      const target = index.sessions.find(s => s.id === 's1');
-      if (target) target.title = '对话一改';
-    });
-    const after = await readSessionIndex(agentId);
-    assert.ok(after.sessions.some(s => s.title === '对话一改'));
-  });
+describe('容器形态防护（ADR-0037 容器修订：容器内禁直连 index.db）', () => {
+  const REMOTE_AGENT = 'remote-guard-test-agent';
 
-  test('无连接时驱逐幂等返回 false', () => {
-    assert.equal(evictSessionDb('evict-no-conn-agent'), false);
-  });
-});
-
-describe('delegateSessionDb / resumeSessionDb（容器执行期索引委托，ADR-0037 容器阶段）', () => {
-  const AGENT = 'delegate-test-agent';
-  // 用例自足：每条用例结束后解除委托，避免跨用例污染 seed 路径
-  afterEach(() => { resumeSessionDb(AGENT); });
-
-  // 五条记录覆盖排序（updatedAt 倒序 s2>s4>s1>s5>s3）、归档、目录归属与线程成员谓词
-  async function seedDelegateIndex() {
-    await updateSessionIndex(AGENT, (index) => {
-      index.activeSessionId = 's4';
-      index.sessions = [
-        { id: 's1', title: 'alpha plan', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-03T00:00:00.000Z', projectId: 'p1' },
-        { id: 's2', title: 'beta 旧档', createdAt: '2026-01-02T00:00:00.000Z', updatedAt: '2026-01-05T00:00:00.000Z', openDirectory: 'D:\\code\\demo', archived: true },
-        { id: 's3', title: 'gamma', createdAt: '2026-01-03T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
-        { id: 's4', title: 'alpha again', createdAt: '2026-01-04T00:00:00.000Z', updatedAt: '2026-01-04T00:00:00.000Z', openDirectory: 'D:\\code\\demo' },
-        { id: 's5', title: 'zeta 档', createdAt: '2026-01-05T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z', projectId: 'p1', archived: true },
-      ];
-    });
-  }
-
-  test('委托读返回委托时刻的快照（内容冻结，不触碰 db）', async () => {
-    await seedDelegateIndex();
-    const baseline = await readSessionIndex(AGENT);
-    assert.ok(baseline.sessions.length === 5);
-    delegateSessionDb(AGENT);
-    const during = await readSessionIndex(AGENT);
-    assert.deepEqual(
-      during.sessions.map((s) => s.id).sort(),
-      baseline.sessions.map((s) => s.id).sort(),
-      '委托期读应返回与委托前一致的会话集合',
-    );
-    assert.equal(during.revision, baseline.revision);
-    assert.equal(during.activeSessionId, 's4');
-    // Sync 读同走快照（runtime 恢复路径的读口径）
-    const sync = readSessionIndexSync(AGENT);
-    assert.equal(sync.activeSessionId, 's4');
-  });
-
-  test('委托期宿主写显式拒绝（session_db_delegated）', async () => {
-    delegateSessionDb(AGENT);
-    await assert.rejects(
-      updateSessionIndex(AGENT, (index) => { index.activeSessionId = 's1'; }),
-      (err) => err.code === 'session_db_delegated',
-      '写拒绝必须带可编程识别的 code（调用方据此决定重试/推迟）',
-    );
-  });
-
-  test('委托期分页查询与 SQL 版逐参数组等价（排序/归档/目录/搜索/分页/精确查/线程成员）', async () => {
-    await seedDelegateIndex();
-    const membership = new Map([
-      ['s4', { archived: true }],               // 成员行归档优先（COALESCE 语义）
-      ['s3', { archived: false, isHead: false }], // head 谓词：非 head 成员被过滤
-    ]);
-    const cases = [
-      { label: 'main 全量', options: {} },
-      { label: 'archived 页', options: { archived: 'archived' } },
-      { label: '目录归属', options: { projectDir: 'D:\\code\\demo' } },
-      { label: '项目归属', options: { projectId: 'p1' } },
-      { label: '标题搜索', options: { query: 'alpha' } },
-      { label: '分页', options: { limit: 2, offset: 1 } },
-      { label: '精确单查（绕过归档过滤）', options: { sessionId: 's2' } },
-      { label: '线程成员谓词', options: { threadMembership: membership } },
-    ];
-    const sqlBaseline = {};
-    for (const c of cases) sqlBaseline[c.label] = await querySessionIndexPage(AGENT, c.options);
-    delegateSessionDb(AGENT);
-    for (const c of cases) {
-      const delegated = await querySessionIndexPage(AGENT, c.options);
-      assert.deepEqual(delegated, sqlBaseline[c.label], `参数组「${c.label}」委托期查询应与 SQL 版等价`);
+  test('CLAW_SESSION_INDEX_REMOTE=1 时新开连接显式拒绝（错误码 session_index_remote_disabled），解除后恢复直读', async () => {
+    // 前置：防护挡的是"新开连接"（openSessionDb），已有连接不受影响——
+    // 容器是新进程必然新开连接，语义成立。测试先建库并清连接缓存。
+    await writeSessionIndex(REMOTE_AGENT, makeIndex(1));
+    closeAllSessionDbs();
+    process.env.CLAW_SESSION_INDEX_REMOTE = '1';
+    try {
+      assert.throws(
+        () => readSessionIndexSync(REMOTE_AGENT),
+        (err) => err.code === 'session_index_remote_disabled',
+        '同步读应显式拒绝而不是静默开库撞锁',
+      );
+      await assert.rejects(
+        readSessionIndex(REMOTE_AGENT),
+        (err) => err.code === 'session_index_remote_disabled',
+      );
+    } finally {
+      delete process.env.CLAW_SESSION_INDEX_REMOTE;
     }
-  });
-
-  test('resume 后宿主读写恢复（容器退出接管）', async () => {
-    delegateSessionDb(AGENT);
-    assert.equal(resumeSessionDb(AGENT), true, '委托中的 agent resume 应返回 true');
-    assert.equal(resumeSessionDb(AGENT), false, '重复 resume 幂等返回 false');
-    await updateSessionIndex(AGENT, (index) => { index.activeSessionId = 's1'; });
-    const after = await readSessionIndex(AGENT);
-    assert.equal(after.activeSessionId, 's1', 'resume 后宿主写应直落索引');
-  });
-
-  test('委托从未建库的 agent：读返回空快照不抛错', () => {
-    delegateSessionDb('delegate-unknown-agent');
-    const empty = readSessionIndexSync('delegate-unknown-agent');
-    assert.deepEqual(empty.sessions, []);
-    resumeSessionDb('delegate-unknown-agent');
+    const idx = await readSessionIndex(REMOTE_AGENT);
+    assert.equal(idx.revision, 1, '解除形态后本地直读恢复正常（防护不破坏本地路径）');
   });
 });

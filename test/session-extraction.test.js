@@ -306,6 +306,7 @@ const EXPECTED_ROUTES = [
   'POST /protoclaw/prebuilt_sessions/todo',
   'POST /protoclaw/context_guard_event',
   'POST /protoclaw/session_meta_sync',
+  'POST /protoclaw/session_record_lookup',
 ];
 
 describe('setupSessionRoutes', () => {

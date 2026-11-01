@@ -121,6 +121,16 @@ function getSessionDbPath(agentId) {
 }
 
 function openSessionDb(dbPath) {
+  // 容器形态防护（ADR-0037 容器修订）：WAL 锁跨不过容器边界，容器内直连
+  // index.db 会与宿主连接互撞（SQLITE_IOERR_LOCK）。容器 runtime 的索引
+  // 读写统一走平台 HTTP；该分支触发说明有代码绕过协议直连，立即显式失败。
+  if (process.env.CLAW_SESSION_INDEX_REMOTE === '1') {
+    const error = new Error(
+      'Direct index.db access is disabled in container runtimes (CLAW_SESSION_INDEX_REMOTE=1); use the platform HTTP API instead',
+    );
+    error.code = 'session_index_remote_disabled';
+    throw error;
+  }
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA synchronous = NORMAL');
@@ -230,71 +240,16 @@ export function closeAllSessionDbs() {
   }
   _dbConnections.clear();
   _indexReadCache.clear();
-  _delegatedIndexes.clear();
 }
 
-// 驱逐单个 agent 的长开连接（幂等；stmt 缓存为 WeakMap 随连接回收）。
-// 容器执行环境用（ADR-0037 M6）：WAL 的共享内存锁跨不过 Docker Desktop 的
-// Windows 宿主 ↔ Linux VM 边界，宿主与容器同时打开同一 index.db 会让容器侧
-// 报 SQLITE_IOERR_LOCK（disk I/O error，实测复现）。托管容器 runtime 启动前
-// 调用本函数释放宿主侧连接，会话索引交容器独占；容器停止后宿主可安全重开
-//（反向时序实测无冲突）。
-export function evictSessionDb(agentId) {
-  const db = _dbConnections.get(agentId);
-  if (!db) return false;
-  try { db.close(); } catch { /* 已关闭 */ }
-  _dbConnections.delete(agentId);
-  return true;
-}
-
-// ── 容器执行环境的数据面委托（ADR-0037 容器阶段开放点治理）───────────
+// ── 容器形态防护（ADR-0037 容器修订）───────────────────────────────────
 //
-// 事实模型：宿主是会话索引的唯一写者（runtime 只经 readSessionIndexSync
-// 同步读，见 run-prebuilt-agent），容器 runtime 运行期索引内容本就冻结。
-// 因此委托期读返回"驱逐前最后快照"即完整真相，无需向 runtime 代理查询；
-// 写显式拒绝（调用方语义上必须等 runtime 退出后重试——运行期宿主写与
-// 容器读连接在 WAL 锁边界外并发，双向都会撞 SQLITE_IOERR_LOCK）。
-// 快照对象身份稳定（同一 agent 委托期内每次读返回同一对象），满足
-// readSessionIndexShared 的共享只读契约（WeakMap 身份键下游）。
-const _delegatedIndexes = new Map(); // agentId → { snapshot, delegatedAt }
-
-export function delegateSessionDb(agentId) {
-  let snapshot;
-  try {
-    snapshot = readSessionIndexSync(agentId);
-  } catch (error) {
-    const cached = _indexReadCache.get(agentId);
-    snapshot = cached ? cached.value : { revision: 0, activeSessionId: null, sessions: [] };
-    console.warn(`[session-access] delegate 快照读取失败，回退读缓存快照: ${error?.message || error}`);
-  }
-  evictSessionDb(agentId);
-  _delegatedIndexes.set(agentId, { snapshot, delegatedAt: Date.now() });
-}
-
-/** 容器 runtime 退出后恢复宿主直连（幂等；返回是否存在委托态）。 */
-export function resumeSessionDb(agentId) {
-  const had = _delegatedIndexes.delete(agentId);
-  if (had) _indexReadCache.delete(agentId);
-  return had;
-}
-
-export function isSessionDbDelegated(agentId) {
-  return _delegatedIndexes.has(agentId);
-}
-
-function delegatedSnapshot(agentId) {
-  return _delegatedIndexes.get(agentId)?.snapshot || null;
-}
-
-function assertNotDelegated(agentId, operation) {
-  if (_delegatedIndexes.has(agentId)) {
-    const error = new Error(
-      `Session index for '${agentId}' is delegated to a container runtime; ${operation} rejected — retry after the runtime exits`,
-    );
-    error.code = 'session_db_delegated';
-    throw error;
-  }
-}
+// WAL 的共享内存锁跨不过 Docker Desktop 的 Windows 宿主 ↔ Linux VM 边界，
+// 宿主与容器同时打开同一 index.db 会让容器侧报 SQLITE_IOERR_LOCK（实测
+// 复现）。因此容器内禁止直连索引库：runtime 侧索引读写统一走平台 HTTP
+// （run-prebuilt-agent 的 lookupSessionRecord / session_meta_sync），容器
+// 后端以 CLAW_SESSION_INDEX_REMOTE=1 标注该形态。此防护让任何未来的直连
+// 调用立即显式失败，而不是静默撞锁损坏容器运行态。
 
 // 服务启动全量自迁移（ADR-0036 决策 5）：扫描两个数据根下所有遗留 index.json，
 // 逐工作空间迁移；单工作空间失败按 ADR-0032 先例告警不阻断，保持 JSON 原状，
@@ -429,8 +384,6 @@ export async function readSessionIndex(agentId) {
  * readSessionIndex。无索引数据（无 db 且无遗留 JSON）时返回全新空索引对象。
  */
 export async function readSessionIndexShared(agentId) {
-  const delegated = delegatedSnapshot(agentId);
-  if (delegated) return delegated; // 委托期快照：不触碰 db（不开连接、不建目录）
   await ensureDir(getPrebuiltAgentSessionDir(agentId));
   const db = ensureSessionDb(agentId);
   if (!db) {
@@ -572,98 +525,6 @@ function sessionListPredParams(options = {}) {
   };
 }
 
-/**
- * 委托期的 querySessionIndexPage 等价实现：谓词与排序是 SQL 版的 JS 镜像
- * （同源字段，见 sessionRowValues 列映射）。排序键 updatedAt/createdAt/id
- * 均为 ASCII（ISO 时间戳 / 会话 id），UTF-16 码元序与 SQLite BINARY 序在此
- * 取值域内一致。成员优先（COALESCE(m.archived, s.archived)）、head 谓词
- * （无成员行即 head）与 SQL 版逐条对齐；等价性由测试在同一数据上比对
- * 两个实现的结果锁定。
- */
-function queryDelegatedSessionPage(snapshot, options = {}) {
-  const offset = Number.isFinite(Number(options.offset)) && Number(options.offset) > 0
-    ? Math.floor(Number(options.offset)) : 0;
-  const rawLimit = Number.isFinite(Number(options.limit)) && Number(options.limit) > 0
-    ? Math.floor(Number(options.limit)) : 0;
-  const limit = rawLimit > 0 ? Math.min(rawLimit, SESSION_PAGE_MAX_LIMIT) : -1;
-
-  const projectId = cleanSessionText(options.projectId);
-  const projectDir = projectId ? '' : normalizeSessionProjectDir(options.projectDir);
-  const query = String(options.query || '').trim().toLowerCase();
-  const archivedFilter = options.archived === 'main' ? 0 : options.archived === 'archived' ? 1 : '';
-  const membership = options.threadMembership instanceof Map ? options.threadMembership : null;
-
-  // 精确单查：绕过归属/线程/归档过滤（既有契约）。
-  if (options.sessionId) {
-    const record = (snapshot.sessions || []).find((s) => String(s?.id) === String(options.sessionId));
-    const matched = record ? [{ record, archived: record.archived === true }] : [];
-    const slice = limit > 0 ? matched.slice(offset, offset + limit) : matched.slice(offset);
-    return {
-      slice,
-      total: matched.length,
-      mainTotal: 0,
-      archivedTotal: 0,
-      offset,
-      activeSessionId: null,
-      fallbackActiveSessionId: null,
-      revision: 0,
-    };
-  }
-
-  const rows = (snapshot.sessions || []).map((record) => {
-    const member = membership ? membership.get(String(record?.id)) : undefined;
-    const hasMemberRow = membership ? membership.has(String(record?.id)) : false;
-    return {
-      record,
-      id: String(record?.id),
-      projectId: cleanSessionText(record?.projectId),
-      openDirectory: normalizeSessionProjectDir(record?.openDirectory),
-      updatedAt: record?.updatedAt ?? '',
-      createdAt: record?.createdAt ?? '',
-      // COALESCE(m.archived, s.archived)：成员行在场以成员为准，缺席用记录自身
-      archived: hasMemberRow ? (member?.archived === true ? 1 : 0) : (record?.archived === true ? 1 : 0),
-      // head 谓词：m.session_id IS NULL OR m.is_head = 1
-      isHead: !hasMemberRow || member?.isHead === true,
-      title: record?.title,
-      rawOpenDirectory: String(record?.openDirectory || ''),
-    };
-  });
-
-  // 范围谓词镜像 SQL 版：projectId 非空 → 项目匹配（SQL_PROJECT_PRED）；
-  // 否则 projectDir 非空 → 无项目且目录归一匹配（SQL_DIR_PLAIN，仅 Dir 语句
-  // 变体携带）；两者皆空 → 无范围过滤（NoDir 变体没有目录谓词）。
-  const scopeMatches = (row) => {
-    if (projectId) return row.projectId === projectId;
-    if (projectDir) return row.projectId === '' && row.openDirectory === projectDir;
-    return true;
-  };
-  const queryMatches = (row) => (!query
-    || String(row.title || '').toLowerCase().includes(query)
-    || row.rawOpenDirectory.toLowerCase().includes(query));
-  const tabMatches = (row) => (archivedFilter === '' ? true : row.archived === archivedFilter);
-
-  // SQL 的 WHERE 顺序 = head 过滤是列表与计数的共同前提
-  const headRows = rows.filter((row) => row.isHead && scopeMatches(row));
-  const mainTotal = headRows.filter((row) => row.archived === 0).length;
-  const archivedTotal = headRows.filter((row) => row.archived === 1).length;
-  const filtered = headRows
-    .filter((row) => tabMatches(row) && queryMatches(row))
-    .sort((a, b) => (b.updatedAt < a.updatedAt ? -1 : b.updatedAt > a.updatedAt ? 1
-      : b.createdAt < a.createdAt ? -1 : b.createdAt > a.createdAt ? 1
-        : b.id < a.id ? -1 : b.id > a.id ? 1 : 0));
-  const slice = (limit > 0 ? filtered.slice(offset, offset + limit) : filtered.slice(offset))
-    .map((row) => ({ record: row.record, archived: row.archived === 1 }));
-  return {
-    slice,
-    total: filtered.length,
-    mainTotal,
-    archivedTotal,
-    offset,
-    activeSessionId: snapshot.activeSessionId ?? null,
-    fallbackActiveSessionId: snapshot.activeSessionId ? null : (filtered[0]?.record?.id ?? null),
-    revision: Number(snapshot.revision) || 0,
-  };
-}
 
 /**
  * SQL-backed PH list query. Exact-session lookup preserves the existing bypass
@@ -671,8 +532,6 @@ function queryDelegatedSessionPage(snapshot, options = {}) {
  * selection, so historical thread members do not consume offsets or totals.
  */
 export async function querySessionIndexPage(agentId, options = {}) {
-  const delegated = delegatedSnapshot(agentId);
-  if (delegated) return queryDelegatedSessionPage(delegated, options);
   const db = ensureSessionDb(agentId);
   if (!db) return { slice: [], total: 0, mainTotal: 0, archivedTotal: 0, offset: 0, latestSessionId: null };
   const offset = Number.isFinite(Number(options.offset)) && Number(options.offset) > 0
@@ -837,7 +696,6 @@ async function writeIndexFileAt(indexPath, index) {
  * 写入后 readSessionIndex 读到的就是归一化形态。
  */
 export async function writeSessionIndex(agentId, index) {
-  assertNotDelegated(agentId, 'writeSessionIndex');
   await ensureDir(getPrebuiltAgentSessionDir(agentId));
   const normalized = normalizeSessionIndexData(index ?? {});
   const db = ensureOrCreateSessionDb(agentId);
@@ -998,7 +856,6 @@ function commitIndexToDb(agentId, newIndex, mutatorSessions) {
  * 明知有新增/变更的调用方，避免全量签名比对成本）。
  */
 export async function updateSessionIndex(agentId, fn, { skipContentComparison = false } = {}) {
-  assertNotDelegated(agentId, 'updateSessionIndex');
   const prev = _indexLocks.get(agentId) || Promise.resolve();
   let release;
   const next = new Promise(r => release = r);
@@ -1119,8 +976,6 @@ export function normalizeSessionMetadata(raw = {}) {
 // 同步读：DatabaseSync 直查，返回与异步变体一致的归一化形态（库内存储即
 // 归一形态）。无索引数据时返回空索引。调用方（im.js、group-chat.js）零改动。
 export function readSessionIndexSync(agentId) {
-  const delegated = delegatedSnapshot(agentId);
-  if (delegated) return delegated; // 委托期快照：不开连接（WAL 锁不跨容器边界）
   const db = ensureSessionDb(agentId);
   if (!db) {
     return { revision: 0, activeSessionId: null, sessions: [] };

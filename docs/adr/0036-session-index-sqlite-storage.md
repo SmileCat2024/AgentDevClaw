@@ -82,6 +82,10 @@ CREATE INDEX idx_sessions_project ON sessions(project_id);
 | 崩溃留下 WAL 边车 | SQLite 崩溃恢复自校验；`index.db` 与边车同目录，随工作空间整体备份/删除 |
 | 外部直连 db 写绕过 revision | 声明唯一写者是 server（runtime 走 HTTP meta_sync）；外部写经 `data_version` 兜底探测弃缓存 |
 
+## 修订（2026-11-01）：容器形态索引访问协议化
+
+本决策的并发模型以「所有访问者共享同一内核的文件锁」为前提——本地形态下 server 与 runtime 子进程并发读写成立（WAL 同内核多进程并发）。容器执行环境（ADR-0037）打破该前提：WAL 的文件锁与共享内存跨不过 Windows 宿主 ↔ 容器 VM 边界，容器进程直连 index.db 会与宿主侧任何活跃连接互撞（`SQLITE_IOERR`，实测复现）。处置见 ADR-0037 容器修订（修订二）：容器内索引读改走平台 HTTP（`session_record_lookup`，与写侧 `session_meta_sync` 对称），本地形态直读不变；`session-access` 在容器形态下直连即抛错防回归。唯一写者契约（上表）由此在容器形态下闭合。
+
 ## 不变量
 
 - `session-access.js` 导出的签名与返回对象形状不变；除声明的旁路点外消费方零改动。

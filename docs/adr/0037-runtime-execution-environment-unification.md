@@ -255,3 +255,14 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 验收：框架 viewer 新增 5 例（往返/超时/断连/runtime 错误/输入校验）+ debug-hub 4 例（含同步 throw 收口缺陷）全绿，viewer 包全量 172/172；session-index-cache 29/29（委托 5 用例 + 分页等价性 8 参数组——**等价性测试在同一数据上比对 SQL 版与委托版，抓到 scope 谓词两处镜像缺陷**：无过滤条件时错误过滤空目录、projectId 过滤整体缺失，修复后逐参数组锁定）；E2E 扩展场景 ②b（容器运行期宿主调会话列表 → 委托快照返回、会话在列、不撞 `SQLITE_IOERR_LOCK`）。
 
 剩余开放点（见上方 M6 列表）：多会话同容器（add-session 通道化）、配置入口产品化、M5 断网/桌面树实测欠账。
+
+### 容器修订（2026-11-01 修订二）：索引读协议化，锁补偿机制退役
+
+真机暴露委托机制的边界：`delegateSessionDb` 只能驱逐宿主 **server 进程内**的连接，驱逐不了本地 runtime **子进程**长持的 db 连接（`readSessionIndexSync` 的模块级连接缓存，进程活着就持有）。因此本地 runtime 存活时创建容器会话，容器打开 index.db 必报 `SQLITE_IOERR`（实测复现；对照实验证明与文件状态无关——字节相同的副本无连接持有时容器可正常打开）；反向亦然。编程小助手同时具备本地与容器两种会话形态后，该并存成为真实使用场景，M6 后续的「快照委托 + 启动闸」只能把互撞变成 409，不能消除互斥本身。
+
+决策：**容器内索引访问整体协议化，锁问题域消除而非绕过**。
+
+- 容器后端注入 `CLAW_SESSION_INDEX_REMOTE=1`；`run-prebuilt-agent` 的索引读经 `lookupSessionRecord` 分流——本地形态维持 `readSessionIndexSync` 直读（同内核文件锁有效，零开销），容器形态走平台 `POST /protoclaw/session_record_lookup`（内部 token；写侧 `session_meta_sync` 本就是 HTTP）。`resolveWorkspaceCwd` / `resolveSessionWorkspaceCwd` 随之 async 化（全部调用点均在 async 上下文）。
+- `session-access` 在容器形态下 `openSessionDb` 直接抛 `session_index_remote_disabled`——未来任何直连调用立即显式失败，而不是静默撞锁损坏运行态。防护挡「新开连接」（容器是新进程必然新开），已开连接不受影响。
+- 挂载不变（会话本体 `<id>.json` 仍直写，容器内无任何代码路径打开 index.db）；`delegateSessionDb` / `resumeSessionDb` / 委托快照读 / `queryDelegatedSessionPage` JS 镜像 / 并存启动闸（409）全部退役删除。受益：本地与容器会话可并存、多容器（coder 多线程批量派发）天然无锁问题、宿主在容器运行期可随时直连读写索引。
+- E2E：②b 语义更新（独立宿主进程真开新连接直读 + 容器 meta_sync 推进宿主索引）；新增 ⑤b（容器会话运行中创建本地会话，双方共存——原 409 闸退役验证）。验收：E2E 11/11 隔离实例通过（含 ③b 崩溃恢复走容器内 HTTP 远程读）；session-index-cache 含容器防护用例（破坏校验：移除防护即失败）。

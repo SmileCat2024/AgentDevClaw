@@ -2379,4 +2379,31 @@ app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) 
     next(error);
   }
 });
+
+// ── Session record lookup: container runtime reads index via HTTP ──
+// ADR-0037 容器修订：容器形态不直连 index.db（WAL 锁跨不过容器边界），
+// 索引读写统一走平台（写已有 session_meta_sync，此为读）。本地 runtime
+// 仍直连（同内核文件锁有效）。
+app.post('/protoclaw/session_record_lookup', express.json(), async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.body?.agentId);
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    if (!agentId || !sessionId) {
+      res.status(400).json({ error: 'agentId and sessionId are required' });
+      return;
+    }
+    const index = await readSessionIndex(agentId);
+    const sessions = Array.isArray(index?.sessions) ? index.sessions : [];
+    const record = sessions.find(
+      (entry) => sanitizeSessionFragment(entry?.id) === sanitizeSessionFragment(sessionId),
+    ) || null;
+    if (!record) {
+      res.status(404).json({ error: `Session index record not found: ${sessionId}` });
+      return;
+    }
+    res.json({ ok: true, record });
+  } catch (error) {
+    next(error);
+  }
+});
 }
