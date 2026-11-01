@@ -48,8 +48,17 @@ export function getAgentRuntime(agentId, sessionId = undefined) {
 
 export function getRuntimeByViewerAgentId(viewerAgentId) {
   const normalized = sanitizeSessionFragment(viewerAgentId);
-  return Array.from(managedAgents.values())
-    .find((runtime) => sanitizeSessionFragment(runtime.viewerAgentId || '') === normalized) || null;
+  const matches = Array.from(managedAgents.values())
+    .filter((runtime) => sanitizeSessionFragment(runtime.viewerAgentId || '') === normalized);
+  if (matches.length === 0) return null;
+  // viewer 身份事件（runtime/exited 转发等）必须送达当前持有该身份的活跃
+  // runtime。已退出的 runtime 记录仍留在表里（供事后查询），Map 按插入序
+  // find 会先命中历史残留——新容器复用同一 viewer id 时，退出上报会发给
+  // 已退出 handle，停止持久化确认落空（容器停止 500 实测）。因此优先返回
+  // 进程仍存活者；全部已退出时按最新记录（幂等重报发到已 settle 的 handle
+  // 是 no-op，无害）。
+  return matches.find((runtime) => isChildProcessRunning(runtime.process))
+    || matches[matches.length - 1];
 }
 
 export function getAssemblyRuntime(sessionId) {
