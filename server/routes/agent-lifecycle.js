@@ -1,6 +1,6 @@
 import path from 'path';
 import {
-  APP_PORT, VIEWER_PORT, PROJECT_ROOT,
+  APP_PORT, VIEWER_PORT, VIEWER_ORIGIN, PROJECT_ROOT,
 } from '../shared/constants.js';
 import { readJsonSafe } from '../shared/fs-helpers.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
@@ -19,6 +19,7 @@ import { buildChildRuntimeAgent } from './session-helpers-pure.js';
 import { PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { createAgentStartupFns } from './agent-startup.js';
 import { releaseRuntimeState } from '../runtime-call-envelope.js';
+import { viewerFetchUrl } from '../shared/viewer-fetch.js';
 import { featureCommunicationStore } from './feature-communication.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
@@ -118,6 +119,51 @@ export function createAgentLifecycleModule(ctx) {
   async function removeHostedSession(runtime, { operationTrace = null } = {}) {
     const sessionId = runtime?.selectedSessionId;
     const child = runtime?.process;
+    // 容器 handle（无父子 IPC，ADR-0037 M6）：停止指令经 viewer stop-agent
+    //（M3 通道）下发；持久化回执经 handle 的 session-exited 语义事件（M6
+    // exited 上报转发，payload 与本地 IPC 同构）；容器进程退出为兜底收敛
+    //（与本地 onExit 同构——以已确认的 persistenceConfirmed 为准）。
+    if (sessionId && child?.__isContainerRuntime) {
+      if (runtime.stopping) return runtime.stoppingPromise || false;
+      runtime.stopping = true;
+      let resolveRemoval;
+      const removalPromise = new Promise((resolve) => { resolveRemoval = resolve; });
+      runtime.stoppingPromise = removalPromise;
+      let settled = false;
+      const settle = (removed, retired = true) => {
+        if (settled) return;
+        settled = true;
+        child.removeListener('session-exited', onSessionEvent);
+        child.removeListener('exit', onExit);
+        runtime.stopped = retired;
+        runtime.persistenceConfirmed = removed;
+        runtime.stopping = false;
+        runtime.stoppingPromise = null;
+        resolveRemoval(removed);
+      };
+      const onSessionEvent = ({ sessionId: reported, persisted }) => {
+        if (reported !== sessionId) return;
+        operationTrace?.mark('source_runtime_persistence_acknowledged', {
+          persisted: persisted === true,
+        });
+        releaseRuntimeState(runtime.key);
+        featureCommunicationStore.closeSession(runtime.agentId || runtime.id, sessionId);
+        removeOpenSession(runtime.agentId, sessionId).catch((error) => console.warn(error));
+        settle(persisted === true);
+        convergeThreadBoardOnDeliberateStop(runtime.agentId, sessionId)
+          .catch(() => { /* 收敛失败不阻断停止善后 */ });
+      };
+      const onExit = () => settle(runtime.persistenceConfirmed === true);
+      child.on('session-exited', onSessionEvent);
+      child.once?.('exit', onExit);
+      operationTrace?.mark('source_runtime_close_requested');
+      // 下发失败不阻断等待——容器退出事件兜底收敛。
+      viewerFetchUrl(
+        `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(runtime.viewerAgentId || '')}/stop`,
+        { method: 'POST' },
+      ).catch(() => {});
+      return removalPromise;
+    }
     if (!sessionId || !child || typeof child.send !== 'function' || typeof child.on !== 'function') {
       return false;
     }

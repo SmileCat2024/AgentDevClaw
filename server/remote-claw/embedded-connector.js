@@ -8,6 +8,7 @@ import {
 import {
   getPrebuiltSessionFilePath,
 } from '../shared/session-access.js';
+import { viewerFetch } from '../shared/viewer-fetch.js';
 import { submitUserTurn } from '../shared/user-turn.js';
 
 const DEFAULT_HEARTBEAT_MS = 15_000;
@@ -358,7 +359,7 @@ class EmbeddedRemoteClawConnector {
   async executeInterrupt(command) {
     const target = this.resolveCommandTarget(command);
     if (!target.viewerAgentId) return { noOp: true };
-    const response = await fetch(`${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(target.viewerAgentId)}/interrupt`, {
+    const response = await viewerFetch(VIEWER_ORIGIN, `/api/agents/${encodeURIComponent(target.viewerAgentId)}/interrupt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason: command.payload?.reason || 'remote-claw' }),

@@ -4,6 +4,7 @@ import {
   AGENTS_ROOT, HIDDEN_PREBUILT_AGENT_IDS, VIEWER_ORIGIN, PROJECT_ROOT, PH_STYLE_WORKSPACE_AGENT_IDS, AGENT_USER_CONFIG_PATH,
 } from '../shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
+import { viewerFetch } from '../shared/viewer-fetch.js';
 import { readJson, readJsonSafe } from '../shared/fs-helpers.js';
 import { buildStatus } from '../shared/agent-access.js';
 import { readSessionIndex, findPrebuiltSessionRecordShared } from '../shared/session-access.js';
@@ -183,7 +184,7 @@ export function createAgentDiscoveryModule(ctx) {
   }
 
   async function readViewerJson(pathname) {
-    const response = await fetch(`${VIEWER_ORIGIN}${pathname}`);
+    const response = await viewerFetch(VIEWER_ORIGIN, pathname);
     if (!response.ok) {
       throw new Error(`Viewer request failed: ${pathname} ${response.status}`);
     }

@@ -39,6 +39,10 @@ const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = resolve(__dirname, '..');
 const VIEWER_PORT = parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
 const SERVER_ORIGIN = cleanValue(process.env.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:1420';
+// ADR-0037 M6：托管容器形态（无父子 IPC 通道）经注册协议完成身份交接与
+// 退役上报；本地托管形态（process.connected）不走该分支。
+const REGISTER_MODE = cleanValue(process.env.PROTOCLAW_RUNTIME_REGISTER) === '1';
+const RUNTIME_REGISTER_TIMEOUT_MS = parseInt(process.env.PROTOCLAW_RUNTIME_REGISTER_TIMEOUT_MS || '20000', 10);
 const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
@@ -239,6 +243,41 @@ async function postJson(pathname, payload) {
     throw new Error(message);
   }
   return data;
+}
+
+// ── 托管容器身份交接（ADR-0037 M6）────────────────────────────
+// 容器 runtime 无父子 IPC：经 /protoclaw/runtime/register 携一次性 ticket
+// 完成与本地 runtime-identity → accepted 等价的握手（次序一致：注册
+// accepted 后才接入 Viewer）。平台暂未就绪（启动竞态）时退避重试；ticket
+// 被拒（无效 / 过期 / 不匹配）为确定性失败，不重试直接抛出。
+async function registerManagedRuntimeWithPlatform(viewerAgentId, identity) {
+  const payload = {
+    viewerAgentId,
+    agentId: identity.agentId,
+    sessionId: identity.sessionId,
+    ticket: cleanValue(process.env.PROTOCLAW_RUNTIME_TICKET),
+  };
+  const deadline = Date.now() + RUNTIME_REGISTER_TIMEOUT_MS;
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    attempt += 1;
+    try {
+      await postJson('/protoclaw/runtime/register', payload);
+      console.log('[ProtoClaw Runtime] ✓ 平台注册完成（ticket 身份交接）');
+      return;
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (/ticket/i.test(message)) {
+        throw new Error(`平台注册被拒（ticket 无效或身份不匹配）: ${message}`);
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`平台注册超时（${RUNTIME_REGISTER_TIMEOUT_MS}ms，尝试 ${attempt} 次）: ${message}`);
+      }
+      console.warn(`[ProtoClaw Runtime] 平台注册未就绪，重试 (第 ${attempt} 次): ${message}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, Math.min(500 * attempt, 3000)));
+  }
 }
 
 // ── SessionLifecycle ──────────────────────────────────────────
@@ -602,6 +641,17 @@ async function closeHostedSession(sessionId, { notify = true, expectedSession = 
         } catch (error) {
           console.warn(`[ProtoClaw Runtime] session-exited 通知失败 (session=${sessionId}):`, error?.message || error);
         }
+      } else if (notify && REGISTER_MODE) {
+        // ADR-0037 M6：容器形态的 session 级退役上报（平台转发为容器 handle
+        // 的 session-exited 语义事件，宿主消费面与本地 IPC 同构）。
+        const viewerAgentId = session.agent?.agentId ?? null;
+        if (viewerAgentId) {
+          try {
+            await postJson('/protoclaw/runtime/exited', { viewerAgentId, sessionId, persisted });
+          } catch (error) {
+            console.warn(`[ProtoClaw Runtime] session-exited 上报失败 (session=${sessionId}):`, error?.message || error);
+          }
+        }
       }
       if (sessions.size === 0) {
         console.log('[ProtoClaw Runtime] 最后一个 session 已退出，关闭进程');
@@ -825,6 +875,11 @@ SessionLifecycle.prototype.start = async function () {
         reject(error);
       });
     });
+  } else if (this.sessionId && this.managedRuntimeIdentity && REGISTER_MODE) {
+    // ADR-0037 M6：容器形态的身份交接经注册协议（本地为上方 IPC 握手）。
+    // viewerAgentId 已由框架分配（Agent 构造时），注册 accepted 即等价
+    // runtime-identity-accepted。
+    await registerManagedRuntimeWithPlatform(this.agent.agentId, this.managedRuntimeIdentity);
   }
   await this.agent.withViewer(this.agentName, VIEWER_PORT, false, {
     projectRoot: PROTOCLAW_ROOT,
@@ -1370,6 +1425,22 @@ async function preflightAgentOAuthRefresh(agentDir, userConfigPath) {
 
 // ── Main: process host ────────────────────────────────────────
 async function main() {
+  if (REGISTER_MODE) {
+    // ADR-0037 M6：容器形态的优雅停止通道——平台经 Viewer 连接下发
+    // stop-agent，宿主侧对齐本地 SIGTERM 语义。收尾必须经
+    // closeHostedSession（持久化 + 容器形态的 exited 上报 + 全部退出后
+    // 关闭进程），不能走 disposeAllSessions 的裸 session.remove()——
+    // 那条路不上报，宿主的停止持久化确认会失败（E2E S4b 实测）。
+    // 本地形态不经此通道（宿主直接发信号 / IPC remove-session），不注册。
+    DebugHub.getInstance().setStopHandler(() => {
+      console.log('[ProtoClaw Runtime] 收到 stop-agent 指令，优雅退出');
+      const active = Array.from(sessions.keys());
+      void Promise.allSettled(active.map(id => closeHostedSession(id)))
+        .finally(() => {
+          if (!process.exitCode) process.exit(0);
+        });
+    });
+  }
   // ADR-0037 D（cwd 注入通道通用化）：宿主注入的显式值优先于索引 / state.json
   // 解析——容器执行环境把宿主绝对路径映射为 /workspace 后经 env 下发，runtime
   // 不再依赖宿主路径的可达性。assembly 形态不注入该 env（spawn 点不设置），

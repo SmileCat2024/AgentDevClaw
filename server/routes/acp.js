@@ -39,6 +39,7 @@ import { promises as fs } from 'fs';
 import { AGENT_USER_CONFIG_PATH, MODEL_PRESETS_PATH } from '../shared/constants.js';
 import { readJsonSafe } from '../shared/fs-helpers.js';
 import { VIEWER_ORIGIN } from '../shared/constants.js';
+import { viewerFetch } from '../shared/viewer-fetch.js';
 import {
   getAgentRuntime,
   listAgentRuntimes,
@@ -636,8 +637,9 @@ export function setupAcpRoutes(app, express, ctx) {
       // clearQueue: true }——同时取消 active call 与已排队 user-turn）。
       let response;
       try {
-        response = await fetch(
-          `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/interrupt`,
+        response = await viewerFetch(
+          VIEWER_ORIGIN,
+          `/api/agents/${encodeURIComponent(viewerAgentId)}/interrupt`,
           { method: 'POST' },
         );
       } catch (error) {

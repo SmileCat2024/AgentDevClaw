@@ -3,6 +3,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 
 import { GROUP_CHATS_ROOT, VIEWER_ORIGIN, GROUP_CHAT_CALL_TIMEOUT_MS } from '../../shared/constants.js';
+import { viewerFetch } from '../../shared/viewer-fetch.js';
 import { log } from '../../shared/string-helpers.js';
 import { readSessionIndex } from '../../shared/session-access.js';
 import { composeDispatchPrompt, aggregateSessionPool, groupByLineage } from './pure-functions.js';
@@ -954,8 +955,9 @@ export function createDispatchCoreModule(deps) {
           });
           return;
         }
-        const res = await fetch(
-          `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(currentViewerId)}/running`
+        const res = await viewerFetch(
+          VIEWER_ORIGIN,
+          `/api/agents/${encodeURIComponent(currentViewerId)}/running`
         );
         if (!res.ok) return;
         const data = await res.json();
@@ -992,7 +994,7 @@ export function createDispatchCoreModule(deps) {
   async function seedCompletedTaskBaseline(viewerAgentId, knownCompletedTaskIds) {
     if (!viewerAgentId) return;
     try {
-      const res = await fetch(`${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/todo`);
+      const res = await viewerFetch(VIEWER_ORIGIN, `/api/agents/${encodeURIComponent(viewerAgentId)}/todo`);
       if (!res.ok) return;
       const todoPlan = await res.json();
       for (const task of (Array.isArray(todoPlan?.tasks) ? todoPlan.tasks : [])) {
@@ -1037,8 +1039,9 @@ export function createDispatchCoreModule(deps) {
    */
   async function pollTaskCompletion(chatId, viewerAgentId, sessionInfo, knownCompletedTaskIds) {
     try {
-      const res = await fetch(
-        `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/todo`
+      const res = await viewerFetch(
+        VIEWER_ORIGIN,
+        `/api/agents/${encodeURIComponent(viewerAgentId)}/todo`
       );
       if (!res.ok) return;
       const todoPlan = await res.json();

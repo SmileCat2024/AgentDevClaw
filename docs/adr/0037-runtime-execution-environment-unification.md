@@ -1,6 +1,6 @@
 # 0037 — Runtime 执行环境统一：平台-runtime 分离与传输网络原生化
 
-- **Status**: Proposed（六项执行前调查已完成、结论在篇内；M1 TCP 传输、M2 HTTP 面地址化、M3 平台注册协议与停止通道、M4 执行后端 seam 已实施并验收——M4 为测试验收，容器端到端归 M6，见「实施进展」；容器阶段方向决策已定（仅 runtime 容器化、实验形态、含托管 spawn 点、四场景端到端验收、本机 Docker Desktop），实施计划见 [docs/plans/2026-10-31-runtime-container-phase.md](../plans/2026-10-31-runtime-container-phase.md)；远程阶段待容器定型后另立决策）
+- **Status**: Proposed（六项执行前调查已完成、结论在篇内；M1 TCP 传输、M2 HTTP 面地址化、M3 平台注册协议与停止通道、M4 执行后端 seam、M5 镜像与构建、M6 容器后端与端到端验收已实施——四场景 8/8 隔离实例验收通过，容器阶段实施收口，见「实施进展」；容器阶段方向决策（仅 runtime 容器化、实验形态、含托管 spawn 点、四场景端到端验收、本机 Docker Desktop）与实施计划见 [docs/plans/2026-10-31-runtime-container-phase.md](../plans/2026-10-31-runtime-container-phase.md)；断网 / 桌面树实测待补，宿主运行期索引读治理与产品化配置面为开放点；远程阶段待容器定型后另立决策）
 - **Date**: 2026-10-30
 - **来源**: 2026-10-30 容器化方向 grill 会话 + 同日代码级执行前调查（认证 / 传输 / HTTP 盘点 / 数据面 / 生命周期 / 镜像）
 
@@ -214,3 +214,31 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 开放点：断网实测与桌面树（pack:desktop staging 内运行 pack:container）实测待补；镜像内容 = 本地树现状快照（路线一既定语义，见调查结论 F 修订），可复现轨道留待路线二。
 
 下一步：M6 容器后端接入 seam（注册握手 ticket、数据挂载供给）与四场景端到端验收。
+
+### M6 — 容器后端与端到端验收（2026-11-01 已实施，四场景 8/8 隔离实例验收通过）
+
+范围 = 计划 M6：容器后端接入 M4 seam、注册协议 ticket 化、runtime 侧注册客户端、四场景端到端验收。全部 Claw 仓改动。
+
+实施：
+
+- **注册协议 ticket 扩展**（新 `server/shared/runtime-spawn-tickets.js` + `server/routes/runtime-registration.js`）：一次性 spawn ticket——宿主创建 pending 托管记录时进程内签发（不落盘），经 env 注入容器；携 ticket 注册 = 托管身份交接（豁免防冒充 409、完成 managed 记录 identity 回执、不建外部 runtime 记录），无 ticket 的外部注册路径规则不变。身份不吻合、重复消费、过期（默认 5 分钟）均拒绝。exited 端点支持 session 级转发（容器 handle 上报按 agentId+sessionId 寻址托管记录）。
+- **runtime 侧注册客户端**（`scripts/run-prebuilt-agent.js`）：`PROTOCLAW_RUNTIME_REGISTER=1` 时走网络路径——携 ticket 注册 → accepted 后经 `AGENTDEV_VIEWER_ADDR` TCP 认证接入 → 注册优雅停止 handler；本地 IPC 握手形态不变（同一握手块二分支）。closeHostedSession 在网络形态上报 session-exited；stop handler 收尾改走 closeHostedSession（持久化 + 上报 + 进程退出语义完备，不再裸 disposeAllSessions——裸退出不上报，宿主的持久化确认会落空）。
+- **容器后端**（新 `server/runtime-executor/container-backend.js`，`index.js` 接入，dockerode 依赖）：经命名管道连 Docker daemon（纯 JS 无二进制）。env **白名单**透传（仅平台协议变量 + 平台寻址三址换 host.docker.internal——宿主全量 env 会以 Windows PATH 污染容器，`exec: "node": executable file not found` 实测）；数据挂载 = 会话存储（workspace-bound 整 `workspaces/<agentId>`、其余 `prebuilt-sessions/<agentId>`）+ 模型配置与凭证 + handoff + 会话工作目录 → `/workspace`（挂载源是 `PROTOCLAW_SESSION_WORKSPACE_CWD` 会话目录而非 seam cwd——后者是仓库根，实测文件落容器可写层）；退出监测经容器事件流；停止走宿主 stop-agent 通道 + 宽限强杀 + 容器实体清理兜底；镜像缺失显式报错不静默回退。
+- **宿主停止路径容器分支**（`server/routes/agent-lifecycle.js`）：removeHostedSession 对无父子 IPC 的 handle 经 viewer stop-agent 下发、以 session-exited 回执确认持久化完成，exit 事件兜底（容器形态停止语义与本地 IPC 收敛一致）。
+- **共享进程模式 executor 修订**（M4 回退语义修正）：join 路径（add-session）不经 executor、bootstrap spawn 与 isolated 同构可走容器——原「共享模式整体回退 local」覆盖过宽，实际只需守住 join 边界：join 到容器共享进程时显式 409 报错给出路，不静默回退。
+- **viewer Bearer 消费点补全**（M5-A 遗漏的第 8 处，新 `server/shared/viewer-fetch.js`）：server→viewer 的全部消费面统一经 helper（与校验端同源读 `PROTOCLAW_INTERNAL_TOKEN`）——readViewerJson、ACP interrupt、群聊 dispatch ×3、embedded-connector、本地代理转发、`user-turn.js` submitUserTurn（仅本地基址注入，远程隧道路径不注入——远程端 token 不同）。E2E 实证：漏掉 user-turn 时输入投递 401、指令永久滞留 pending。
+- **SQLite 会话索引锁驱逐**（`server/shared/session-access.js` 新 `evictSessionDb` + 容器分支调用）：**WAL 共享内存锁跨不过容器边界**（实验证明：Windows bind mount 上 node:sqlite 单侧正常；宿主与容器双开同一 index.db → `SQLITE_IOERR_LOCK` 4618 必炸）。容器 spawn 前驱逐宿主侧该 agent 长开连接——容器运行期索引归容器独占写，容器停止后宿主重开安全（跨执行环境恢复场景实测通过）。
+- **镜像依赖嵌套仲裁**（`scripts/pack-container.mjs`）：镜像扁平复制无版本仲裁——Claw 根 openai 6.x 劫持框架 4.x 解析（6.x `ResponseAccumulator.assertNever` 对 API 新事件 `response.metadata` 直接抛错，容器内模型调用全灭，本机因 junction 解析到框架仓 4.x 而不炸）。修复 = 与 npm 冲突解析同构的嵌套仲裁：框架包直接依赖与根已装版本 major 分叉时嵌套复制框架本机实测版本；仲裁包的传递依赖递归改用框架仓库源（根版本依赖树不同，openai 4.x 的 node-fetch 等 7 包靠此补全）。
+- **E2E 验收脚本**（`scripts/e2e-container-phase.mjs`）：隔离实例（独立数据根 / 三端口 / per-instance UDS）+ 真实容器 + 真实模型调用，四场景八断言全链驱动，自带环境净化（剥离 `AGENTDEV_UDS_PATH` 等宿主残留 env——工具链环境残留的显式管道名会短路隔离实例派生）。
+
+验收（隔离实例端到端，8/8 通过）：① 注册接入（ACP 建线 → ticket 身份交接 → READY 确认 → 容器运行）；② 完整一轮对话（输入 → 容器内 dequeue → 模型回复 → 快照落盘宿主可读）；③a 数据面写路径（容器内 shell 写 /workspace → 宿主同目录可见 + 回执落盘）；④a 崩溃收敛（docker kill → wait 收敛 → 容器实体移除）；③b 崩溃恢复（新容器唤起 + 快照恢复 + 历史引用正确）；④b 优雅停止（stop_agent → 容器收敛 + 线程记录完好）；③c 跨执行环境一致（容器写快照 → 本地 runtime 恢复并正确引用）。单元与回归：runtime-executor / runtime-registration / runtime-spawn-tickets / session-index-cache / child-process-env 55 例全绿。
+
+开放点：
+
+- **宿主运行期读容器 agent 的 index.db 会撞锁**：容器 runtime 运行期间，宿主侧任何打开该 agent 会话索引的路径（会话列表 API、群聊调度读索引等）会触发同款 `SQLITE_IOERR_LOCK`。E2E 调用面（ACP 建线 / 输入 / 状态 / 停止）不触发，产品化前需治理：运行中投影改走内存 record，或低频读的容错策略。
+- **feature-comms 请求面（ADR-0018）对容器 runtime 不可达**：宿主→runtime 定向请求仍依赖父子 IPC，容器形态收不到（M3 开放点的外部 runtime 版本，现对容器同样成立；send 缺失已有守卫不再 500，但功能面缺通道）。
+- **多会话同容器（add-session 跨容器边界）不支持**：共享进程模式 join 到容器共享进程显式 409；通道化（宿主中转 add-session）留待真实需求。
+- **配置入口仍为 env 实验开关**（`CLAW_RUNTIME_EXECUTOR` / `CLAW_RUNTIME_CONTAINER_IMAGE` / TCP 三监听 env），产品化配置面 / UI 另立里程碑（含路线二接入、镜像清单管理）。
+- M5 欠账顺延：断网构建实测、桌面树（pack:desktop staging 内运行 pack:container）实测。
+
+至此容器阶段（M4–M6）实施收口：三种执行环境（本地进程 / 容器 / 远程节点）中的前两种经同一 seam 与协议栈工作，远程阶段沿同一架构部署距离测试，待容器形态产品化定型后另立决策。

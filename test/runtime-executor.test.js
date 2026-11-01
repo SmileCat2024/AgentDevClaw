@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 const {
   resolveRuntimeExecutor,
   localRuntimeBackend,
+  containerRuntimeBackend,
 } = await import('../server/runtime-executor/index.js');
 const { startLocalRuntime } = await import('../server/runtime-executor/local-backend.js');
 
@@ -25,10 +26,10 @@ describe('resolveRuntimeExecutor（执行后端选择）', () => {
     );
   });
 
-  it('container 后端尚未实施：显式报错，不静默回退', () => {
-    assert.throws(
-      () => resolveRuntimeExecutor({ agentId: 'coder', processMode: 'isolated', env: { CLAW_RUNTIME_EXECUTOR: 'container' } }),
-      /尚未实施/,
+  it('container 选择返回容器后端（M6 接入；启动失败语义由后端报错，不静默回退）', () => {
+    assert.equal(
+      resolveRuntimeExecutor({ agentId: 'coder', processMode: 'isolated', env: { CLAW_RUNTIME_EXECUTOR: 'container' } }),
+      containerRuntimeBackend,
     );
   });
 
@@ -43,23 +44,23 @@ describe('resolveRuntimeExecutor（执行后端选择）', () => {
     );
   });
 
-  it('container + agent 清单命中时仍按 container 走（显式报错）', () => {
-    assert.throws(
-      () => resolveRuntimeExecutor({
+  it('container + agent 清单命中时仍按 container 走', () => {
+    assert.equal(
+      resolveRuntimeExecutor({
         agentId: 'coder',
         processMode: 'isolated',
         env: { CLAW_RUNTIME_EXECUTOR: 'container', CLAW_RUNTIME_EXECUTOR_AGENTS: 'coder' },
       }),
-      /尚未实施/,
+      containerRuntimeBackend,
     );
   });
 
-  it('container + 共享进程模式回退 local（add-session IPC 跨不了容器边界）', () => {
+  it('container + 共享进程模式 bootstrap spawn 走 container（join 边界在宿主层守卫，M6 修订）', () => {
     for (const processMode of ['shared-by-project', 'shared-global']) {
       assert.equal(
         resolveRuntimeExecutor({ agentId: 'programming-helper', processMode, env: { CLAW_RUNTIME_EXECUTOR: 'container' } }),
-        localRuntimeBackend,
-        `${processMode} 应回退 local`,
+        containerRuntimeBackend,
+        `${processMode} bootstrap spawn 应走 container`,
       );
     }
   });

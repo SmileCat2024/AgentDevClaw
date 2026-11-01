@@ -56,6 +56,7 @@
     "@playwright/cli": "0.1.19",
     "compression": "^1.8.2",
     "diff2html": "3.4.56",
+    "dockerode": "^5.0.1",
     "express": "^4.21.2",
     "github-markdown-css": "5.5.1",
     "just-bash": "3.6.0",

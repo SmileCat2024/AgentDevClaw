@@ -29,6 +29,7 @@ const {
   listExternalRuntimes,
 } = await import('../server/shared/external-runtime-registry.js');
 const { managedAgents } = await import('../server/shared/agent-access.js');
+const { issueManagedSpawnTicket } = await import('../server/shared/runtime-spawn-tickets.js');
 
 const PREBUILT_IDS = ['programming-helper', 'coder'];
 const MANAGED_KEY = 'spoofed-host::no-session';
@@ -202,5 +203,93 @@ describe('external runtime stop channel', () => {
     const response = await post('/protoclaw/external_runtime/stop', { runtimeId: 'vr-unknown-1' });
     assert.equal(response.status, 404);
     assert.equal((await response.json()).code, 'RUNTIME_NOT_REGISTERED');
+  });
+});
+
+describe('managed container identity handover (ticket path, ADR-0037 M6)', () => {
+  it('accepts a valid ticket as managed handover: exempt from impersonation rules, no external record', async () => {
+    const registered = [];
+    const ticket = issueManagedSpawnTicket({
+      agentId: 'coder',
+      sessionId: 's-ticket-1',
+      onRegister: (viewerAgentId) => registered.push(viewerAgentId),
+    });
+    // viewerAgentId 占用 prebuilt 保留名（无 ticket 时 409）——ticket 交接路径
+    // 的承诺：归属由 ticket 证明，不受冒充规则约束，且不写外部注册表。
+    const response = await post('/protoclaw/runtime/register', {
+      viewerAgentId: 'coder',
+      agentId: 'coder',
+      sessionId: 's-ticket-1',
+      ticket,
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, accepted: true, viewerAgentId: 'coder' });
+    assert.deepEqual(registered, ['coder'], 'onRegister receives the declared viewerAgentId');
+    assert.equal(getExternalRuntime('coder'), null, 'managed handover must not create an external record');
+  });
+
+  it('rejects a mismatched ticket payload (agentId / sessionId must match issuance)', async () => {
+    const ticket = issueManagedSpawnTicket({
+      agentId: 'coder',
+      sessionId: 's-ticket-2',
+      onRegister: () => {},
+    });
+    const response = await post('/protoclaw/runtime/register', {
+      viewerAgentId: 'agent-9-999',
+      agentId: 'coder',
+      sessionId: 's-other',
+      ticket,
+    });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, 'INVALID_RUNTIME_TICKET');
+    assert.equal(getExternalRuntime('agent-9-999'), null);
+  });
+
+  it('consumes a ticket exactly once: replay is rejected', async () => {
+    const ticket = issueManagedSpawnTicket({
+      agentId: 'coder',
+      sessionId: 's-ticket-3',
+      onRegister: () => {},
+    });
+    const first = await post('/protoclaw/runtime/register', {
+      viewerAgentId: 'agent-3-1', agentId: 'coder', sessionId: 's-ticket-3', ticket,
+    });
+    assert.equal(first.status, 200);
+    const replay = await post('/protoclaw/runtime/register', {
+      viewerAgentId: 'agent-3-1', agentId: 'coder', sessionId: 's-ticket-3', ticket,
+    });
+    assert.equal(replay.status, 409);
+    assert.equal((await replay.json()).code, 'INVALID_RUNTIME_TICKET');
+  });
+
+  it('forwards session-level exit reports to the container handle only', async () => {
+    const events = [];
+    const { EventEmitter } = await import('node:events');
+    const containerHandle = new EventEmitter();
+    containerHandle.emitHostEvent = (type, payload) => events.push({ type, payload });
+    const localHandle = new EventEmitter(); // 本地 handle 无 emitHostEvent
+
+    managedAgents.set('coder::s-fwd-1', { agentId: 'coder', viewerAgentId: 'vr-fwd-1', process: containerHandle });
+    managedAgents.set('coder::s-fwd-2', { agentId: 'coder', viewerAgentId: 'vr-fwd-2', process: localHandle });
+    try {
+      const response = await post('/protoclaw/runtime/exited', {
+        viewerAgentId: 'vr-fwd-1',
+        sessionId: 's-fwd-1',
+        persisted: true,
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(events, [{ type: 'session-exited', payload: { sessionId: 's-fwd-1', persisted: true } }]);
+
+      // 本地 handle（无 emitHostEvent）：不转发、不报错（幂等 exited 契约不变）
+      const localResponse = await post('/protoclaw/runtime/exited', {
+        viewerAgentId: 'vr-fwd-2',
+        sessionId: 's-fwd-2',
+        persisted: false,
+      });
+      assert.equal(localResponse.status, 200);
+    } finally {
+      managedAgents.delete('coder::s-fwd-1');
+      managedAgents.delete('coder::s-fwd-2');
+    }
   });
 });

@@ -213,11 +213,21 @@ function findInstalledDir(dep) {
 }
 
 // 收集镜像内会缺失的传递依赖（含递归）与全部 (dep, from) 关系（native 检测复用）
+// conflicts：框架包直接依赖与 Claw 根已装版本 major 分叉的清单（嵌套仲裁用）。
+// 预组装是扁平复制，没有 npm 的版本仲裁——根的 openai@6 会劫持框架 llm 声明
+// 的 ^4（实测容器内 SDK 6.x 对 API 新事件 response.metadata 直接 assertNever，
+// 模型调用全灭）。仲裁 = 把框架本机实测版本嵌套复制进 @agentdevjs/<pkg>/
+// node_modules/<dep>，与 npm 冲突解析行为一致。
+function extractMajor(rangeOrVersion) {
+  const m = /^[^0-9]*?(\d+)(?:[.\s]|$)/.exec(String(rangeOrVersion || '').trim());
+  return m ? Number(m[1]) : null;
+}
 function collectDepsGraph(names) {
   const pairs = []; // [dep, from]
   const seenPairs = new Set();
   const seenDeps = new Set();
   const missing = [];
+  const conflicts = []; // { owner, dep, range, rootVersion }
   const push = (dep, from) => {
     const key = `${dep}<-${from}`;
     if (seenPairs.has(key)) return;
@@ -229,17 +239,36 @@ function collectDepsGraph(names) {
     const pkgPath = join(frameworkRoot, 'packages', dirName, 'package.json');
     if (!existsSync(pkgPath)) fail(`框架仓库缺少包目录: ${pkgPath}`);
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-    for (const d of [...Object.keys(pkg.dependencies || {}), ...Object.keys(pkg.peerDependencies || {})]) {
+    for (const [d, range] of Object.entries(pkg.dependencies || {})) {
+      if (!d.startsWith('@agentdevjs/')) {
+        push(d, name);
+        const rootPkgPath = join(root, 'node_modules', d, 'package.json');
+        if (existsSync(rootPkgPath)) {
+          const rangeMajor = extractMajor(range);
+          const rootMajor = extractMajor(JSON.parse(readFileSync(rootPkgPath, 'utf8')).version);
+          if (rangeMajor != null && rootMajor != null && rangeMajor !== rootMajor) {
+            conflicts.push({ owner: name, dep: d, range, rootMajor });
+          }
+        }
+      }
+    }
+    for (const d of Object.keys(pkg.peerDependencies || {})) {
       if (!d.startsWith('@agentdevjs/')) push(d, name);
     }
   }
   // 索引遍历而非队列快照：push 进 pairs 的新依赖必须被后续迭代展开，
   // 否则递归在第二层腰斩（实测 axios：feishu-bot → node-sdk → axios 断链）。
+  // 嵌套仲裁的包（major 分叉）递归源固定为框架仓库版本——根占位版本（如
+  // openai 6.x）的依赖树与嵌套版本（4.x，依赖 node-fetch）不同，读错侧会
+  // 漏掉嵌套版本的运行时依赖（实测镜像自检 node-fetch 缺失）。
+  const nestedDeps = new Set(conflicts.map((c) => c.dep));
   for (let i = 0; i < pairs.length; i++) {
     const [dep] = pairs[i];
     if (seenDeps.has(dep)) continue;
     seenDeps.add(dep);
-    const dir = findInstalledDir(dep);
+    const dir = nestedDeps.has(dep)
+      ? join(frameworkRoot, 'node_modules', dep)
+      : findInstalledDir(dep);
     if (!dir) continue; // 上层复制时统一 fail
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
     // 平台绑定的 optional 子包（os/cpu 字段，如 @img/sharp-win32-x64）不复制
@@ -253,16 +282,18 @@ function collectDepsGraph(names) {
     }
     if (!existsSync(join(root, 'node_modules', dep, 'package.json'))) missing.push(dep);
   }
-  return { pairs, missing };
+  return { pairs, missing, conflicts };
 }
 
 // 平台绑定依赖检测：安装实体带 os/cpu 字段或含 *.node 二进制 → 其引入的
 // 外部包需容器内安装 Linux 版（Windows 装的平台二进制在 Linux 不可用）。
 // wasm 类资产跨平台，不触发。
-function detectNativeDeps(pairs) {
+function detectNativeDeps(pairs, nestedDeps = new Set()) {
   const native = new Map(); // pkg -> version
   for (const [dep, from] of pairs) {
-    const dir = findInstalledDir(dep);
+    const dir = nestedDeps.has(dep)
+      ? join(frameworkRoot, 'node_modules', dep)
+      : findInstalledDir(dep);
     if (!dir) continue;
     const pkgPath = join(dir, 'package.json');
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
@@ -289,7 +320,7 @@ function detectNativeDeps(pairs) {
 // 本体（平台无关纯 JS）已在骨架里，仅需按宿主包的 optionalDependencies
 // 拉取 linux 平台二进制子包解包进 nm。宿主 npm pack 需网络（或本地缓存），
 // 与原先容器内安装的网络需求等价，但失败点提前到准备阶段、报错更清晰。
-async function materializeNm(names, missing, form, nativeInstalls, npmArch) {
+async function materializeNm(names, missing, form, nativeInstalls, npmArch, conflicts = []) {
   rmSync(namedCtxNm, { recursive: true, force: true });
   const isDev = form === 'dev';
   if (isDev && !existsSync(join(frameworkRoot, 'package.json'))) {
@@ -343,6 +374,25 @@ async function materializeNm(names, missing, form, nativeInstalls, npmArch) {
         fail(`框架仓库 node_modules 缺少 ${dep}——框架仓库未完整安装，请先在其根目录 npm install。`);
       }
       cpSync(src, join(namedCtxNm, dep), { recursive: true });
+    }
+  }
+
+  // 4. 依赖版本 major 分叉的嵌套仲裁：框架包声明 ^4 而根占位 6.x 时，
+  // 把框架本机实测版本嵌套复制进框架包私有 node_modules（node 解析顺序：
+  // 包目录就近优先）。只仲裁一层直接依赖——嵌套包自身的依赖仍从根解析
+  //（深链 major 分叉概率低，出现时按本条日志定位再加条目）。
+  if (conflicts.length > 0) {
+    for (const { owner, dep, range, rootMajor } of conflicts) {
+      const fwSrc = join(frameworkRoot, 'node_modules', dep);
+      if (!existsSync(join(fwSrc, 'package.json'))) {
+        fail(`依赖分叉仲裁失败：框架仓库 node_modules 无 ${dep}（${owner} 声明 ${range}）`);
+      }
+      const fwVersion = JSON.parse(readFileSync(join(fwSrc, 'package.json'), 'utf8')).version;
+      const ownerShort = owner.slice('@agentdevjs/'.length);
+      const dest = join(namedCtxNm, owner, 'node_modules', dep);
+      mkdirSync(dirname(dest), { recursive: true });
+      cpSync(fwSrc, dest, { recursive: true });
+      log(`依赖分叉仲裁：${owner} 的 ${dep} 声明 ${range}，根占位 v${rootMajor} → 嵌套 ${fwVersion}`);
     }
   }
 
@@ -439,14 +489,14 @@ async function main() {
   const closureFiles = collectRuntimeClosure();
   buildMainContext(closureFiles);
 
-  const { pairs, missing } = collectDepsGraph(names);
-  const nativeInstalls = detectNativeDeps(pairs);
+  const { pairs, missing, conflicts } = collectDepsGraph(names);
+  const nativeInstalls = detectNativeDeps(pairs, new Set(conflicts.map((c) => c.dep)));
   if (nativeInstalls.length > 0) {
     log(`检出平台绑定依赖: ${nativeInstalls.join(', ')}——宿主侧补齐 Linux ${npmArch} 子包（npm pack 需网络或本地缓存）`);
   } else {
     log('依赖闭包为纯 JS，无额外准备步骤（镜像构建零联网）');
   }
-  await materializeNm(names, missing, form, nativeInstalls, npmArch);
+  await materializeNm(names, missing, form, nativeInstalls, npmArch, conflicts);
 
   const tag = computeTag(version);
   const imageTag = `${RUNTIME_REPO}:${tag}`;

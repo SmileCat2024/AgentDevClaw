@@ -169,6 +169,13 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
     runtime.process.on('message', onMessage);
     const cleanup = () => runtime.process.removeListener('message', onMessage);
     try {
+      if (typeof runtime.process.send !== 'function') {
+        // ADR-0037 M6 开放点：容器 handle 无父子 IPC，宿主请求面不可达——
+        // 显式失败而非 500（对齐 runtime_not_connected 语义，待真实需要接入）。
+        cleanup();
+        communicationStore.resolveRequest(target, requestId, { ok: false, code: 'runtime_ipc_unavailable' });
+        return res.status(503).json({ ok: false, code: 'runtime_ipc_unavailable', error: 'Runtime transport does not support host requests' });
+      }
       if (runtime.process.send(message) === false) communicationStore.resolveRequest(target, requestId, { ok: false, code: 'delivery_failed' });
       const result = await pending;
       cleanup();

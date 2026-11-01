@@ -1,4 +1,5 @@
 import { VIEWER_ORIGIN } from './constants.js';
+import { viewerFetchUrl } from './viewer-fetch.js';
 import {
   RequestTargetError,
   resolveHostTarget,
@@ -223,10 +224,12 @@ function readConnectionFromLookup(findConnection, connectionId) {
 // target 解析同源（per-call 注入优先），避免两条解析路径分叉。
 async function remoteFetch(target, findConnection, url, init) {
   if (!target || target.scope !== 'remote' || !_remoteAuthSessions) {
-    return fetch(url, init);
+    // 本地 viewer 目标：统一带内部 token（M5-A 非回环 Bearer 模式下浏览器
+    // 经此代理的消费面才可用；回环模式多余 header 无害）
+    return viewerFetchUrl(url, init);
   }
   const connection = readConnectionFromLookup(findConnection || _connectionLookup, target.connectionId);
-  if (!connection) return fetch(url, init);
+  if (!connection) return viewerFetchUrl(url, init);
   return _remoteAuthSessions.fetchWithAuth(connection, url, init);
 }
 

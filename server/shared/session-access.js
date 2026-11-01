@@ -232,6 +232,20 @@ export function closeAllSessionDbs() {
   _indexReadCache.clear();
 }
 
+// 驱逐单个 agent 的长开连接（幂等；stmt 缓存为 WeakMap 随连接回收）。
+// 容器执行环境用（ADR-0037 M6）：WAL 的共享内存锁跨不过 Docker Desktop 的
+// Windows 宿主 ↔ Linux VM 边界，宿主与容器同时打开同一 index.db 会让容器侧
+// 报 SQLITE_IOERR_LOCK（disk I/O error，实测复现）。托管容器 runtime 启动前
+// 调用本函数释放宿主侧连接，会话索引交容器独占；容器停止后宿主可安全重开
+//（反向时序实测无冲突）。
+export function evictSessionDb(agentId) {
+  const db = _dbConnections.get(agentId);
+  if (!db) return false;
+  try { db.close(); } catch { /* 已关闭 */ }
+  _dbConnections.delete(agentId);
+  return true;
+}
+
 // 服务启动全量自迁移（ADR-0036 决策 5）：扫描两个数据根下所有遗留 index.json，
 // 逐工作空间迁移；单工作空间失败按 ADR-0032 先例告警不阻断，保持 JSON 原状，
 // 下次启动或首次访问时重试。

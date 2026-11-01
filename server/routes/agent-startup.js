@@ -22,7 +22,7 @@ import {
   computeProcessGroupKey, findSharedProcessRuntime, listRuntimesByProcess,
 } from '../shared/agent-access.js';
 import {
-  readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex,
+  readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex, evictSessionDb,
 } from '../shared/session-access.js';
 import { notifyRuntimeReady } from '../shared/runtime-hooks.js';
 import { resolveDesktopWorkspace } from '../shared/desktop-workspace.js';
@@ -391,6 +391,15 @@ export function createAgentStartupFns(deps) {
       const existingShared = findSharedProcessRuntime(processGroupKey);
         if (existingShared) {
           // ── Join existing shared process via IPC ──
+          if (existingShared.process?.__isContainerRuntime) {
+            // ADR-0037 M6：容器共享进程无父子 IPC 通道，add-session join 不可用
+            // （bootstrap spawn 可走容器，但兄弟会话加入是本地 IPC 语义）。显式
+            // 报错给出出路，不静默降级。
+            throw Object.assign(
+              new Error('容器执行形态不支持共享进程加入新会话（add-session 需本地 IPC）。请停止该容器 runtime 后重试，或将该 agent 的执行环境切回 local。'),
+              { statusCode: 409, code: 'container_shared_join_unsupported' },
+            );
+          }
           const sharedRuntime = {
             key: getManagedRuntimeKey(agent.id, resolvedSessionId),
             agentId: agent.id,
@@ -484,6 +493,13 @@ export function createAgentStartupFns(deps) {
     // 为默认）。handle 即 ChildProcess（增补语义事件与 output tail），下游托管
     // 记录与生命周期接线不变。
     const backend = resolveRuntimeExecutor({ agentId: agent.id, processMode });
+    if (backend.name === 'container') {
+      // ADR-0037 M6：WAL 锁跨 Windows 宿主 ↔ 容器 VM 边界不安全，宿主侧
+      // 长开连接会让容器 runtime 打开同一 index.db 时报 SQLITE_IOERR_LOCK。
+      // 容器运行期会话索引归容器独占；宿主重开发生在容器停止后（本地恢复
+      // 场景实测安全）。
+      evictSessionDb(agent.id);
+    }
     const child = backend.start({
       argv: [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN],
       cwd: runtimeCwd,

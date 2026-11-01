@@ -28,6 +28,7 @@ const {
   readSessionIndexSync,
   migrateAllPrebuiltSessionIndexes,
   closeAllSessionDbs,
+  evictSessionDb,
 } = await import('../server/shared/session-access.js');
 
 const AGENT_ID = 'cache-test-agent';
@@ -445,5 +446,29 @@ describe('upsertSessionIndexAt（plain agent 显式路径 upsert，JSON 形态�
     assert.equal(record.updatedAt, '2026-09-10T00:00:00.000Z'); // updatedAt 正常推进
     assert.equal(record.lastError, 'x'); // 新字段正常合并
     assert.equal(raw.activeSessionId, 'p-created');
+  });
+});
+
+describe('evictSessionDb（容器执行环境的连接驱逐，ADR-0037 M6）', () => {
+  test('驱逐长开连接后数据完好且可重开（容器独占→宿主接管的语义基础）', async () => {
+    const agentId = 'evict-test-agent';
+    await writeSessionIndex(agentId, makeIndex(1));
+    assert.equal(evictSessionDb(agentId), true, '已建立的连接驱逐应返回 true');
+    assert.equal(evictSessionDb(agentId), false, '驱逐后缓存条目已删（连续第二次应 false——辨别空操作实现）');
+    // 驱逐后重开读：数据一致（连接重建，读缓存失效后从 db 读）
+    const idx = await readSessionIndex(agentId);
+    assert.equal(idx.revision, 1);
+    assert.ok(idx.sessions.some(s => s.id === 's1'));
+    // 二次写读循环正常（接管后宿主可继续维护索引）
+    await updateSessionIndex(agentId, (index) => {
+      const target = index.sessions.find(s => s.id === 's1');
+      if (target) target.title = '对话一改';
+    });
+    const after = await readSessionIndex(agentId);
+    assert.ok(after.sessions.some(s => s.title === '对话一改'));
+  });
+
+  test('无连接时驱逐幂等返回 false', () => {
+    assert.equal(evictSessionDb('evict-no-conn-agent'), false);
   });
 });

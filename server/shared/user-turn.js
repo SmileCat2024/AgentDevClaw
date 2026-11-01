@@ -1,4 +1,5 @@
 import { VIEWER_ORIGIN } from './constants.js';
+import { viewerAuthHeaders } from './viewer-fetch.js';
 import { RequestTargetError, resolveRuntimeTarget } from './request-target.js';
 import { forwardBase } from './remote-forward.js';
 import { getProxyConnectionLookup, getProxyRemoteAuthSessions } from './proxy.js';
@@ -117,11 +118,16 @@ export async function submitUserTurn({
     // 远程 target 的转发基址是隧道 origin（远程 target 上 viewerOrigin 为
     // undefined，直接拼接会产生 "undefined/…" URL，ADR-0011）；target.agentId
     // 已由 resolveRuntimeTarget 还原为裸 id。
-    const url = `${forwardBase(target)}/api/agents/${encodeURIComponent(target.agentId)}/user-turn`;
+    const base = forwardBase(target);
+    const url = `${base}/api/agents/${encodeURIComponent(target.agentId)}/user-turn`;
     const init = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        // 本地 viewer 基址补内部 token（非回环强制 Bearer 时必需，ADR-0037
+        // M5-A server 消费面——本调用点原为 M5-A 修复遗漏，S2 输入投递 401
+        // 滞留 pending 的根因）；远程隧道基址走隧道自身认证，不注入本地 token。
+        ...(base === VIEWER_ORIGIN ? viewerAuthHeaders() : {}),
         // 幂等键透传：远程端与本地代理闸共用同一套 operation 元数据头。
         ...(metadata.idempotencyKey ? { 'x-idempotency-key': metadata.idempotencyKey } : {}),
       },

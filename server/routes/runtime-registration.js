@@ -9,6 +9,10 @@
  *   POST /protoclaw/runtime/exited           外部 runtime 退出上报（机器通道）
  *   POST /protoclaw/external_runtime/stop    前端停止通道（浏览器会话）
  *
+ * register 携可选 ticket 时走托管容器身份交接路径（ADR-0037 M6，见
+ * runtime-spawn-tickets.js）：不建外部记录、不受冒充规则约束；exited 携
+ * sessionId 时向对应容器 handle 转发 session-exited 语义事件。
+ *
  * 机器通道无条件要求 internal bearer token（与 ViewerWorker TCP 控制通道
  * 同口径），不受登录保护开关影响——server 监听全部网卡，登录保护未启用时
  * 全局中间件放行 /protoclaw 域，机器通道的信任不能依赖该开关。注册应在
@@ -24,6 +28,7 @@ import {
   removeExternalRuntime,
   getExternalRuntime,
 } from '../shared/external-runtime-registry.js';
+import { consumeManagedSpawnTicket } from '../shared/runtime-spawn-tickets.js';
 
 // viewerAgentId 是 ViewerWorker 注册表的键与 URL 片段：限制为既有 fragment
 // 语法（agent-access 同一字符集），拒绝而不是静默改写，避免注册键与实际
@@ -60,6 +65,30 @@ export function setupRuntimeRegistrationRoutes(app, express, deps = {}) {
           error: 'viewerAgentId is required ([A-Za-z0-9_-], max 128 chars)',
           code: 'INVALID_RUNTIME_IDENTITY',
         });
+        return;
+      }
+      // ── 托管容器身份交接（ADR-0037 M6）──────────────────────
+      // 携 ticket = 托管 spawn 的容器 runtime：宿主启动容器前已签发 ticket 并
+      // 建 pending 交接回调，注册即身份交接（等价本地 IPC 的 runtime-identity
+      // + accepted），不占用外部 runtime 注册表、不受下方冒充规则约束——其
+      // viewerAgentId 是框架分配的唯一实例 id，归属由 ticket 证明。
+      const ticket = cleanSessionText(req.body?.ticket);
+      if (ticket) {
+        const handled = await consumeManagedSpawnTicket({
+          ticket,
+          agentId: cleanSessionText(req.body?.agentId),
+          sessionId: cleanSessionText(req.body?.sessionId),
+          viewerAgentId,
+        });
+        if (!handled) {
+          res.status(409).json({
+            ok: false,
+            error: 'Runtime ticket is invalid, expired, or mismatched',
+            code: 'INVALID_RUNTIME_TICKET',
+          });
+          return;
+        }
+        res.json({ ok: true, accepted: true, viewerAgentId });
         return;
       }
       // 身份冲突拒绝：viewerAgentId 不得占用运行中托管 runtime 或 prebuilt
@@ -104,6 +133,19 @@ export function setupRuntimeRegistrationRoutes(app, express, deps = {}) {
       return;
     }
     // 幂等：未注册的退出上报同样回 ok（runtime 可能在 server 重启后退出）。
+    // 托管容器形态的 session 级退役上报（ADR-0037 M6）：sessionId 附带时，
+    // 转发给对应容器 handle 的语义事件面（emitHostEvent 仅容器后端实现），
+    // 宿主消费面与本地 IPC 的 session-exited 完全同构。
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    if (sessionId) {
+      const runtime = getRuntimeByViewerAgentId(viewerAgentId);
+      if (typeof runtime?.process?.emitHostEvent === 'function') {
+        runtime.process.emitHostEvent('session-exited', {
+          sessionId,
+          persisted: req.body?.persisted === true,
+        });
+      }
+    }
     removeExternalRuntime(viewerAgentId);
     res.json({ ok: true });
   });
