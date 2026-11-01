@@ -54,6 +54,38 @@ async function pollProcessGone(pid, timeoutMs = 8000) {
   return false;
 }
 
+test('supervisor loads the user data .env for child and keeps process env precedence', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdev-supervised-env-'));
+  const envPath = path.join(dataDir, '.env');
+  fs.writeFileSync(envPath, [
+    '# test env',
+    'AGENTDEV_VIEWER_ADDR=0.0.0.0:2027',
+    'AGENTDEV_VIEWER_HTTP_BIND="0.0.0.0"',
+    'SUPERVISOR_ENV_PRECEDENCE=file-value',
+  ].join('\n'));
+  const fakeScript = path.join(dataDir, 'env-child.mjs');
+  fs.writeFileSync(fakeScript, [
+    "console.log(JSON.stringify({ addr: process.env.AGENTDEV_VIEWER_ADDR, bind: process.env.AGENTDEV_VIEWER_HTTP_BIND, precedence: process.env.SUPERVISOR_ENV_PRECEDENCE }));",
+    'process.exit(0);',
+  ].join('\n'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+
+  const sup = spawnSupervised({
+    AGENTDEV_DATA_DIR: dataDir,
+    CLAW_SUPERVISED_CMD: `node ${fakeScript}`,
+    PROTOCLAW_PREBUILT_AGENT_ID: '',
+    SUPERVISOR_ENV_PRECEDENCE: 'process-value',
+  });
+  let output = '';
+  sup.stdout.on('data', (chunk) => { output += chunk; });
+  sup.stderr.on('data', (chunk) => { output += chunk; });
+  const { code } = await waitExit(sup);
+  assert.equal(code, 0, output);
+  assert.match(output, /"addr":"0\.0\.0\.0:2027"/);
+  assert.match(output, /"bind":"0\.0\.0\.0"/);
+  assert.match(output, /"precedence":"process-value"/);
+});
+
 test('supervisor passes through child exit code', async () => {
   const sup = spawnSupervised({ CLAW_SUPERVISED_CMD: 'node -e process.exit(3)' });
   const { code } = await waitExit(sup);

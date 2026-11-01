@@ -9,9 +9,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripNestedRuntimeEnv } from '../server/shared/nested-runtime-env.js';
+import { loadClawEnv } from './env-file.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SERVER_ENTRY = path.join(__dirname, '..', 'server.js');
+
 const GRACE_MS = Number.parseInt(process.env.CLAW_SUPERVISOR_GRACE_MS || '', 10) || 10_000;
 
 // Lifecycle events survive terminal output loss; failures to write diagnostics
@@ -39,11 +41,12 @@ const childCommand = process.env.CLAW_SUPERVISED_CMD
   ? process.env.CLAW_SUPERVISED_CMD.split(' ').filter(Boolean)
   : [process.execPath, DEFAULT_SERVER_ENTRY];
 
+const runtimeEnv = loadClawEnv(process.env);
 const child = spawn(childCommand[0], childCommand.slice(1), {
   stdio: ['ignore', 'inherit', 'inherit'],
   // 嵌套启动（本进程跑在托管 runtime 内）时剥离宿主 runtime 专属 env，避免
   // per-instance UDS / 数据目录派生被宿主注入值短路（ADR-0037 M4）。
-  env: stripNestedRuntimeEnv({ ...process.env, CLAW_SUPERVISED: '1' }),
+  env: stripNestedRuntimeEnv({ ...runtimeEnv, CLAW_SUPERVISED: '1' }),
 });
 const childStartedAt = Date.now();
 persistEvent(`supervisor started: pid ${process.pid}, child pid ${child.pid}, cmd ${childCommand.join(' ')}`);
