@@ -20,13 +20,13 @@
 //   npm run pack:desktop                            # 完整组装（含框架仓库构建）
 //   npm run pack:desktop -- --skip-framework-build  # 复用相邻仓库现有 dist
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
-import { createHash } from 'crypto';
 import { dirname, join, resolve } from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { createServer } from 'net';
 import { fileURLToPath } from 'url';
 import { FEATURE_DIRS } from './prebuilt-feature-dirs.mjs';
 import { killProcessTree } from '../server/shared/process-tree.js';
+import { PACKAGE_DIR_OVERRIDES, tgzFileName, gunzipFileToBuffer, untarBufferToDir, sha256File } from './pack-tgz-lib.mjs';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..');
 const frameworkRoot = resolve(process.env.AGENTDEV_LOCAL_PATH || join(root, '..', 'AgentDev'));
@@ -40,9 +40,6 @@ const SKIP_FRAMEWORK_BUILD = process.argv.includes('--skip-framework-build');
 const PINNED_NODE_VERSION = '24.19.0';
 const PINNED_NPM_VERSION = '11.17.0';
 
-// 包名 ≠ 目录名的特例（与 use-agentdev-published.mjs 保持一致）
-const PACKAGE_DIR_OVERRIDES = { '@agentdevjs/rokid-bot': 'rokid-feature' };
-
 function log(msg) { console.log(`[pack:desktop] ${msg}`); }
 
 function runShell(command, cwd, label) {
@@ -51,10 +48,6 @@ function runShell(command, cwd, label) {
     console.error(`[pack:desktop] ${label}失败: ${command}${r.error ? `: ${r.error.message}` : ''}`);
     process.exit(r.status ?? 1);
   }
-}
-
-function tgzFileName(name, version) {
-  return `agentdevjs-${name.slice('@agentdevjs/'.length)}-${version}.tgz`;
 }
 
 // 工作区现状导出（替代 git archive）：清单 = 已跟踪文件（以工作区内容为准，
@@ -139,7 +132,7 @@ async function main() {
   // 同版本 tgz 重打包（字节变化）时环境缓存正确失效
   const manifest = {};
   for (const [name, info] of versions) {
-    const digest = createHash('sha256').update(readFileSync(join(vendorDir, info.tgz))).digest('hex');
+    const digest = sha256File(join(vendorDir, info.tgz));
     manifest[name] = { version: info.version, tgz: `vendor/${info.tgz}`, sha256: digest };
   }
   writeFileSync(join(vendorDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
@@ -257,65 +250,6 @@ async function provisionPinnedNode(runtimeDir) {
   copyFileSync(cached, nodeBin);
   log(`node runtime: v${PINNED_NODE_VERSION} (pinned) -> runtime/node.exe`);
   return nodeBin;
-}
-
-// 用 Node 内置 zlib 解 tgz（不用 tar CLI：MSYS tar 把 D:\ 的冒号当远程主机，
-// Windows bsdtar 又不支持 --force-local，跨 shell 环境不可靠）。npm 官方 tgz
-// 只含文件与目录（无 symlink/hardlink），遇到其他条目类型直接报错。
-import { createGunzip } from 'zlib';
-
-async function gunzipFileToBuffer(file) {
-  const { createReadStream } = await import('fs');
-  return await new Promise((resolve, reject) => {
-    const chunks = [];
-    createReadStream(file)
-      .pipe(createGunzip())
-      .on('data', (c) => chunks.push(c))
-      .on('end', () => resolve(Buffer.concat(chunks)))
-      .on('error', reject);
-  });
-}
-
-function untarBufferToDir(buffer, destDir, { strip = 0 } = {}) {
-  let offset = 0;
-  let longName = null;
-  let written = 0;
-  const destAbs = resolve(destDir);
-  while (offset + 512 <= buffer.length) {
-    const header = buffer.subarray(offset, offset + 512);
-    if (header.every((b) => b === 0)) break; // 结束块
-    let name = longName ?? header.subarray(0, 100).toString('utf8').replace(/\0.*$/s, '');
-    longName = null;
-    const sizeField = header.subarray(124, 136).toString('utf8').replace(/[\0 ]/g, '');
-    const size = parseInt(sizeField, 8) || 0;
-    const type = String.fromCharCode(header[156] || 0x30);
-    const dataStart = offset + 512;
-    offset = dataStart + Math.ceil(size / 512) * 512;
-    if (type === 'L') { // GNU 长名：内容是下一个条目的真实名字
-      longName = buffer.subarray(dataStart, dataStart + size).toString('utf8').replace(/\0.*$/s, '');
-      continue;
-    }
-    if (!name || name === '.' || name === './') continue;
-    if (strip > 0) name = name.split('/').slice(strip).join('/');
-    if (!name) continue;
-    const target = resolve(destDir, name);
-    if (target !== destAbs && !target.startsWith(destAbs + '\\') && !target.startsWith(destAbs + '/')) {
-      throw new Error(`tar 条目越界: ${name}`);
-    }
-    if (type === '5') {
-      mkdirSync(target, { recursive: true });
-      continue;
-    }
-    if (type === '0' || type === '\0') {
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, buffer.subarray(dataStart, dataStart + size));
-      written++;
-      continue;
-    }
-    throw new Error(`npm tgz 含不支持的条目类型 "${type}"（${name}）；需扩展解包器`);
-  }
-  if (written === 0) throw new Error('tar 解包结果为空');
-  return written;
 }
 
 async function provisionPinnedNpm(runtimeDir) {

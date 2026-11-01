@@ -10,6 +10,7 @@
     "build:features": "node scripts/build-features.mjs",
     "pack:features": "node scripts/pack-features.mjs",
     "pack:desktop": "node scripts/pack-desktop.mjs",
+    "pack:container": "node scripts/pack-container.mjs",
     "enrich:features": "node scripts/enrich-feature-packages.mjs",
     "predev": "node scripts/preflight.mjs",
     "dev": "node server.js",

@@ -193,4 +193,24 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 
 开放点：run-prebuilt-agent.js 模块顶层即执行 argv 解析，cwd 优先级消费侧无法以导入方式单测——由注入侧用例 + M6 容器端到端（env 值映射 `/workspace`）补证；存量失败（7 文件 27 例，与本步无关）另行处理，不随本步扩大范围。
 
-下一步：M5 镜像与构建（路线一本地树直取）与框架非回环 HTTP 监听 + Bearer 强制（M4 / M5 无代码依赖，可并行）。
+### M5 — 镜像与构建（2026-11-01 已实施，构建与镜像自检通过；断网 / 桌面树实测待补）
+
+范围 = 计划 M5 路线一（本地树直取，断网可构建；`--staging` 组装轨道预留未实施）+ M2 遗留的框架侧非回环监听与 Bearer 强制。跨两仓。
+
+实施：
+
+- **框架侧非回环 HTTP 监听**（AgentDev `packages/viewer/src/viewer-worker.ts`）：新 env `AGENTDEV_VIEWER_HTTP_BIND`（默认回环 `127.0.0.1` 行为不变）；绑定非回环时 `handleRequest` 入口统一拦截全端点 Bearer 校验（`PROTOCLAW_INTERNAL_TOKEN`，回环模式零校验）；无 token 且构造非回环绑定直接抛错（fail-fast）；openBrowser 始终走回环地址。runtime 消费侧零改动——M2 的两个 dequeue 消费点（react-loop 与宿主 `scripts/runtime-passive-mailbox.js`）自那时起即条件携带 Bearer。
+- **base 镜像预烘焙**（`container/base.Dockerfile`）：`agentdev-claw-base:24.19.0` = node:24.19.0-slim + git + ca-certificates、非 root。联网仅此一次（或 docker save/load 离线导入），此后应用构建不依赖网络。
+- **pack:container 构建器**（新 `scripts/pack-container.mjs` + `container/Dockerfile` + `scripts/container-selftest.js`，npm script `pack:container`）：
+  - **镜像内容 = Agent runtime 运行闭包，正向收集**：仅装 Agent 有关内容，平台物（server.js / public / 未被 runtime 引用的平台路由）不进镜像。主 context = 白名单树（闭包文件 + prebuilt-agents / local-features / features 整树 + resources/features + package.json，5.9MB 无敏感物）；闭包入口 = run-prebuilt-agent.js + 全部 prebuilt agent.js（agent.js 动态加载、不在宿主静态链，漏入口即漏 server 文件）。
+  - **nm 预组装**（`dist/container-nm`，单一 named context）：不依赖 BuildKit 排除特性——named-context 的 `<name>.dockerignore` 在 docker 29.0.1 Desktop 实测不可用（Dockerfile 旁与主 context 根均不生效），且 Windows junction 在 context tar 产生损坏条目（COPY 报 non-directory）。开发态 = 复制骨架（排除 @agentdevjs / typescript / .bin）+ 18 包 npm pack 实体化（安装目录名 = npm 包名短名，`PACKAGE_DIR_OVERRIDES` 仅用于定位框架仓库源目录）+ 传递依赖闭包补齐（83 个，从框架仓库 node_modules）；发布态 / 桌面树 = 复制时仅排除构建期包（`detectInstallForm` 一个探测点收敛四形态差异）。
+  - **构建纯 COPY、零 RUN**：不在容器内 npm install——它会按镜像内 package.json 的 file: 开发态声明重建依赖链接、覆盖 @agentdevjs 实体（实测致装配链断裂）。native 依赖（依赖图递归检出 os/cpu 或 *.node，含 optionalDependencies 平台子包）在宿主侧补齐：本体已随骨架（平台无关纯 JS），按宿主包 optionalDependencies 取 linux + 容器架构（docker daemon 实测）子包 npm pack 解包进 nm（sharp 检出实证：4 个 x64 子包，全架构变体不拉）。
+  - **镜像 tag**：`<version>-<git 短 hash>[-dirty]`；无 git 环境（桌面 staging 树）回退 `<version>-released`。
+  - **镜像自检**（`scripts/container-selftest.js`）= runtime 语义：容器内加载全部 10 条 prebuilt agent 装配链，import 成功即依赖闭包完整，native 二进制真实加载。
+- **tgz 工具共享**（`scripts/pack-tgz-lib.mjs`）：`PACKAGE_DIR_OVERRIDES` / tgzFileName / gunzip / untar 从 pack-desktop.mjs 提取共用，零逻辑变化。
+
+验收：构建端到端通过（6m27s）；镜像 `agentdev-claw-runtime:0.2.3-6b8afa15-dirty`（643MB）自检 10 条装配链全部加载成功。框架侧新增 5 例测试全绿（绑定解析 / 回环不变 / 非回环无 token 401 / 有 token 200 / 无 token 构造抛错），viewer 包全量 167 例全绿，框架 build 已生效。构建期实测修入注释的坑：闭包正则 lastIndex 跨文件污染（短文件整文件 import 漏抓）、依赖队列快照腰斩（递归断在第二层）、npm install 的 file: link 副作用、junction tar 损坏条目。
+
+开放点：断网实测与桌面树（pack:desktop staging 内运行 pack:container）实测待补；镜像内容 = 本地树现状快照（路线一既定语义，见调查结论 F 修订），可复现轨道留待路线二。
+
+下一步：M6 容器后端接入 seam（注册握手 ticket、数据挂载供给）与四场景端到端验收。
