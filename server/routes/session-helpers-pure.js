@@ -54,18 +54,23 @@ export function extractTokenUsage(parsed) {
 }
 
 /**
- * Extract a short preview from the last non-system message in a message list.
- * Whitespace is collapsed and content is truncated to 140 characters.
+ * Extract a short preview from the last assistant text, falling back to the
+ * last user message. Whitespace is collapsed and content is truncated to 140 characters.
  *
  * @param {Array} messages - messages from parsed session file
  * @returns {string}
  */
 export function extractLastMessagePreview(messages) {
   if (!Array.isArray(messages)) return '';
-  const lastMessage = [...messages].reverse().find(
-    (message) => message && typeof message.content === 'string' && message.role !== 'system',
-  ) || null;
-  return lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '';
+  const reversed = [...messages].reverse();
+  const lastMessage = reversed.find(
+    (message) => message?.role === 'assistant'
+      && typeof message.content === 'string'
+      && message.content.trim(),
+  ) || reversed.find(
+    (message) => message?.role === 'user' && typeof message.content === 'string',
+  );
+  return lastMessage?.content ? lastMessage.content.replace(/\s+/g, ' ').slice(0, 140) : '';
 }
 
 /**

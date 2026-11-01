@@ -452,13 +452,26 @@ describe('extractTokenUsage', () => {
 // ── extractLastMessagePreview ─────────────────────────────────────
 
 describe('extractLastMessagePreview', () => {
-  it('extracts preview from the last non-system message', () => {
+  it('prefers the last assistant text over a trailing tool result', () => {
     const messages = [
-      { role: 'system', content: 'System prompt' },
       { role: 'user', content: 'Hello world' },
-      { role: 'assistant', content: 'Hi there, how can I help?' },
+      { role: 'assistant', content: 'The result is ready.' },
+      { role: 'tool', content: '{"success":true,"result":"raw output"}' },
     ];
-    assert.equal(extractLastMessagePreview(messages), 'Hi there, how can I help?');
+    assert.equal(extractLastMessagePreview(messages), 'The result is ready.');
+  });
+
+  it('falls back to the last user message when there is no assistant text', () => {
+    assert.equal(extractLastMessagePreview([
+      { role: 'user', content: 'First request' },
+      { role: 'user', content: 'Latest request' },
+    ]), 'Latest request');
+  });
+
+  it('returns empty string when there is no assistant text or user message', () => {
+    assert.equal(extractLastMessagePreview([
+      { role: 'tool', content: '{"success":true,"result":"raw output"}' },
+    ]), '');
   });
 
   it('collapses whitespace and truncates to 140 characters', () => {
