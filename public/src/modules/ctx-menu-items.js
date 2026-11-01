@@ -973,6 +973,14 @@ function dispatchCtxAction(action, target) {
   const { ns, id, sessionId, variant, threadId } = target;
   // For session role, sessionId may not be set — fall back to id
   const sid = sessionId || id;
+  const resolveCtxThread = () => {
+    if (threadId && typeof window.getThreadById === 'function') {
+      const byId = window.getThreadById(threadId);
+      if (byId) return byId;
+    }
+    return (sid && typeof window.getThreadForSession === 'function')
+      ? window.getThreadForSession(ns, sid) : null;
+  };
 
   switch (action) {
     case 'activate':
@@ -1096,15 +1104,6 @@ function dispatchCtxAction(action, target) {
     // PH 统一菜单的归档/停止/取消归档同样落到这组端点；threadId 优先取
     // target 携带值（coder 线程叶子），缺省经会话归属解析（PH 会话叶子/
     // 主列表行——target 不带 threadId）。
-    function _resolveCtxThread() {
-      if (threadId && typeof window.getThreadById === 'function') {
-        const byId = window.getThreadById(threadId);
-        if (byId) return byId;
-      }
-      return (sid && typeof window.getThreadForSession === 'function')
-        ? window.getThreadForSession(ns, sid) : null;
-    }
-
     case 'copy-thread-id': {
       window.closeCtxMenu();
       const tid = String(threadId || '').trim();
@@ -1121,7 +1120,7 @@ function dispatchCtxAction(action, target) {
     case 'thread-interrupt': {
       window.closeCtxMenu();
       const isZh = currentLanguage === 'zh';
-      const threadToInterrupt = _resolveCtxThread();
+      const threadToInterrupt = resolveCtxThread();
       (async () => {
         try {
           if (!threadToInterrupt?.headViewerAgentId) {
@@ -1143,7 +1142,7 @@ function dispatchCtxAction(action, target) {
     case 'thread-archive': {
       window.closeCtxMenu();
       const isZh = currentLanguage === 'zh';
-      const threadToArchive = _resolveCtxThread();
+      const threadToArchive = resolveCtxThread();
       if (!threadToArchive?.threadId) break;
       (async () => {
         try {
@@ -1181,7 +1180,7 @@ function dispatchCtxAction(action, target) {
     case 'thread-unarchive': {
       window.closeCtxMenu();
       const isZh = currentLanguage === 'zh';
-      const threadToRestore = _resolveCtxThread();
+      const threadToRestore = resolveCtxThread();
       if (!threadToRestore?.threadId) break;
       (async () => {
         try {

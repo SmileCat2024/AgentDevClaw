@@ -300,7 +300,12 @@ describe('移动 — 弹窗目标与归属来源', () => {
       },
     });
     s.render();
-    s.ctx.run('window.phOpenSessionMoveDialog(["sGhost"])');
+    const opening = s.ctx.run('window.phOpenSessionMoveDialog(["sGhost"])');
+    await flush();
+    const lookup = s.requests.find((request) => request.url.includes('/protoclaw/prebuilt_sessions'));
+    assert.ok(lookup, 'unresolved cached ownership performs an authoritative session lookup');
+    await resolveAt(s, lookup, { sessions: [] });
+    await opening;
     assert.ok(s.alerts.some((m) => String(m).includes('无法确定')), 'unresolvable ownership fails visibly');
     assert.equal(s.moveDialog.created.length, 0, 'no dialog opens');
   });

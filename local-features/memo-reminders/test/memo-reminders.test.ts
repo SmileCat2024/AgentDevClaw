@@ -252,9 +252,9 @@ describe('computeNextFireAt 循环重算', () => {
     const base = new Date(baseIso).getTime();
     const next = computeNextFireAt('daily', baseIso, undefined, base + 60 * 60 * 1000);
     assert.ok(next);
-    const expect = new Date(baseIso);
-    expect.setDate(expect.getDate() + 1);
-    assert.equal(new Date(next!).getTime(), expect.getTime());
+    const expectedNext = new Date(baseIso);
+    expectedNext.setDate(expectedNext.getDate() + 1);
+    assert.equal(new Date(next!).getTime(), expectedNext.getTime());
   });
 
   it('daily：错过多个周期 → 严格未来的最近一天', () => {
@@ -262,9 +262,9 @@ describe('computeNextFireAt 循环重算', () => {
     const base = new Date(baseIso).getTime();
     const next = computeNextFireAt('daily', baseIso, undefined, base + 3 * 24 * 60 * 60 * 1000);
     assert.ok(next);
-    const expect = new Date(baseIso);
-    expect.setDate(expect.getDate() + 4);
-    assert.equal(new Date(next!).getTime(), expect.getTime());
+    const expectedNext = new Date(baseIso);
+    expectedNext.setDate(expectedNext.getDate() + 4);
+    assert.equal(new Date(next!).getTime(), expectedNext.getTime());
   });
 
   it('weekly：命中 weekdays 集合的下一个匹配日', () => {
@@ -272,9 +272,9 @@ describe('computeNextFireAt 循环重算', () => {
     const base = new Date(baseIso);
     const next = computeNextFireAt('weekly', baseIso, [base.getDay()], base.getTime() + 60_000);
     assert.ok(next);
-    const expect = new Date(baseIso);
-    expect.setDate(expect.getDate() + 7);
-    assert.equal(new Date(next!).getTime(), expect.getTime());
+    const expectedNext = new Date(baseIso);
+    expectedNext.setDate(expectedNext.getDate() + 7);
+    assert.equal(new Date(next!).getTime(), expectedNext.getTime());
   });
 
   it('monthly：31 号在 2 月 clamp 到月末', () => {
@@ -284,8 +284,8 @@ describe('computeNextFireAt 循环重算', () => {
     assert.ok(next);
     const got = new Date(next!);
     const { h, m, s } = localFields(baseIso);
-    const expect = new Date(2026, 1, 28, h, m, s); // 2026 非闰年
-    assert.equal(got.getTime(), expect.getTime());
+    const expectedNext = new Date(2026, 1, 28, h, m, s); // 2026 非闰年
+    assert.equal(got.getTime(), expectedNext.getTime());
   });
 
   it('monthly：错过当月 → 下月同日', () => {
@@ -295,8 +295,8 @@ describe('computeNextFireAt 循环重算', () => {
     assert.ok(next);
     const got = new Date(next!);
     const { h, m, s } = localFields(baseIso);
-    const expect = new Date(2026, 3, 15, h, m, s);
-    assert.equal(got.getTime(), expect.getTime());
+    const expectedNext = new Date(2026, 3, 15, h, m, s);
+    assert.equal(got.getTime(), expectedNext.getTime());
   });
 
   it('非法数据返回 null', () => {
@@ -444,15 +444,15 @@ describe('到点投递', () => {
     try {
       await feature.onInitiate({ logger: fakeLogger() } as any);
       mock.timers.tick(2_000);
-      const expect = new Date(fireAt);
-      expect.setDate(expect.getDate() + 1);
+      const expectedNext = new Date(fireAt);
+      expectedNext.setDate(expectedNext.getDate() + 1);
       await waitFor(async () => {
         const doc = JSON.parse(await fs.readFile(file, 'utf8'));
-        return new Date(doc.items[0].fire_at).getTime() === expect.getTime();
+        return new Date(doc.items[0].fire_at).getTime() === expectedNext.getTime();
       });
       let doc = JSON.parse(await fs.readFile(file, 'utf8'));
       assert.equal(doc.items[0].status, 'scheduled');
-      assert.equal(new Date(doc.items[0].fire_at).getTime(), expect.getTime());
+      assert.equal(new Date(doc.items[0].fire_at).getTime(), expectedNext.getTime());
       // 推进到重算后的下一次触发（1 天步进跨过粗步进段，waitFor 让链式重臂跟进）
       const expect2 = new Date(fireAt);
       expect2.setDate(expect2.getDate() + 2);

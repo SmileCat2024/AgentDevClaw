@@ -9,6 +9,7 @@ export default [
       'node_modules/**',
       'local-features/dist/**',
       'dist/**',
+      'desktop/target/**',
       'resources/**',
       'docs/**',
       '*.tgz',
@@ -176,6 +177,12 @@ export default [
     {
       files: ['local-features/**/*.ts'],
       extends: [...tseslint.configs.recommended],
+      languageOptions: {
+        parserOptions: {
+          tsconfigRootDir: import.meta.dirname,
+          project: ['./local-features/tsconfig.json'],
+        },
+      },
       rules: {
         // Disable base rule — use @typescript-eslint equivalent instead
         'no-unused-vars': 'off',

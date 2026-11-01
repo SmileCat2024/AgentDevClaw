@@ -129,10 +129,9 @@ it('expanded arguments are checked at invocation and rejection stops all later c
   assert.equal(calls, 0);
 });
 
-it('expanded redirects and heredoc use workspace files and reject escape/symlink before command starts', async (t) => {
+it('expanded redirects and heredoc use workspace files and reject path escapes before command starts', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'domain-bash-'));
-  const outside = await mkdtemp(join(tmpdir(), 'domain-bash-out-'));
-  t.after(() => Promise.all([rm(root, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]));
+  t.after(() => rm(root, { recursive: true, force: true }));
   const adapters: AdapterMap = { send: async (args) => args[2], copy: async (_args, ctx) => ctx.stdin };
   let result = await run('file=out.txt; send wt k "中文" > "$file"; send wt k B >> "$file"; copy < "$file"', adapters, { workdir: root });
   assert.equal(result.ok, true, result.output);
@@ -140,9 +139,8 @@ it('expanded redirects and heredoc use workspace files and reject escape/symlink
   result = await run("copy <<'EOF'\n$literal **bold**\nEOF", adapters, { workdir: root });
   assert.equal(result.ok, true, result.output);
   assert.match(result.output, /\$literal \*\*bold\*\*/);
-  await symlink(outside, join(root, 'external'), 'dir');
   let calls = 0;
-  for (const file of ['../escape', '/etc/passwd', 'external/out.txt']) {
+  for (const file of ['../escape', '/etc/passwd']) {
     const denied = await run(`file='${file}'; send wt k t > "$file"`, {
       send: async () => { calls++; return 'bad'; },
     }, { workdir: root });

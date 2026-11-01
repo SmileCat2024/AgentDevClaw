@@ -234,7 +234,7 @@ describe('046 — 归档项目的选择器语义', () => {
     const html = s.render();
     const orgMenu = html.slice(html.indexOf('ph-org-menu'), html.indexOf('ph-quick-add'));
     assert.match(orgMenu, /编辑项目/);
-    assert.ok(orgMenu.includes('onclick=\"window.phOpenManageProjectsDialog()\"'));
+    assert.ok(orgMenu.includes('onclick="window.phOpenManageProjectsDialog()"'));
     assert.ok(orgMenu.indexOf('编辑项目') < orgMenu.indexOf('ph-org-directory'));
     assert.doesNotMatch(html, /ph-quick-menu/);
   });

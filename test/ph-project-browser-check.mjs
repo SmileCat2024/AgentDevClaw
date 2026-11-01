@@ -105,7 +105,7 @@ try {
   assert.ok((await page.locator('.ph-dir-selector .ph-project-dropdown-new').innerText()).includes('打开目录'), 'open-directory entry on top');
   const scrollHidden = await page.evaluate(() => {
     const menu = document.querySelector('.ph-dir-selector .ph-project-dropdown-menu');
-    return menu ? getComputedStyle(menu).scrollbarWidth : '';
+    return menu ? window.getComputedStyle(menu).scrollbarWidth : '';
   });
   assert.equal(scrollHidden, 'none', 'directory menu scrollbar hidden');
   const directoryRow = page.locator('.ph-dir-selector .ph-dir-item[data-dir-id="dir:' + fixture.cwd.toLowerCase() + '"]');

@@ -198,7 +198,7 @@ describe('双选择器 — 纯目录无回归', () => {
     // 归属菜单顶部是添加/编辑动作；加号直接添加，不再展开快速菜单。
     const orgMenu = html.slice(html.indexOf('ph-org-menu'), html.indexOf('ph-quick-add'));
     assert.ok(orgMenu.includes('ph-org-menu-actions'));
-    assert.ok(orgMenu.includes('ph-org-menu-options\" role=\"group\" tabindex=\"0\"'));
+    assert.ok(orgMenu.includes('ph-org-menu-options" role="group" tabindex="0"'));
     assert.ok(orgMenu.indexOf('ph-org-menu-actions') < orgMenu.indexOf('ph-org-menu-options'));
     assert.ok(orgMenu.indexOf('添加项目') < orgMenu.indexOf('编辑项目'));
     assert.ok(orgMenu.indexOf('编辑项目') < orgMenu.indexOf('ph-org-menu-options'));
@@ -211,7 +211,7 @@ describe('双选择器 — 纯目录无回归', () => {
     // 左：打开目录…动作入口置顶（动作形态，非目录行结构）+ banner 文案；
     // 目录项包进独立滚动区（动作行固定不随列表滚动）
     assert.ok(html.indexOf('ph-open-dir-entry') < html.indexOf('ph-dir-menu-options'), 'open-directory action pinned above the directory options');
-    assert.ok(html.indexOf('ph-dir-menu-options\\\" role=\\\"group\\\" tabindex=\\\"0\\\"') < html.indexOf('ph-dir-item'), 'directory rows live inside the scrollable options region');
+    assert.ok(html.indexOf(['ph-dir-menu-options" role="group" tabindex="0"'].join('')) < html.indexOf('ph-dir-item'), 'directory rows live inside the scrollable options region');
     assert.ok(html.indexOf('ph-dir-menu-options') < html.indexOf('ph-dir-subprojects'), 'hover submenus stay outside the options region');
     // 键盘可达：可选择菜单项带 role=menuitem + tabindex；key handler 仅在
     // 目标为自身时响应（不吞行内 button 的 Space 原生激活）
@@ -611,7 +611,7 @@ describe('双选择器 — 新建项目对话框', () => {
     assert.equal(JSON.parse(stored).id, 'prj_new');
     // 空项目可见 + 双选择器同步（左=托管目录，右=Managed 项目 active）
     const html = s.render();
-    assert.match(html, /workspace_feature_no_sessions/);
+    assert.match(html, /还没有对话/);
     assert.match(html, /ph-dir-item active" data-dir-id="dir:d:\/managed\/prj_new"/);
     assert.match(html, /ph-org-item active" data-project-id="prj_new"/);
     const action = /data-workspace-action="([^"]+)"/.exec(html)[1];

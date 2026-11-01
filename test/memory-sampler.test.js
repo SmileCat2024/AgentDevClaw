@@ -26,7 +26,7 @@ test('record appends one JSONL line with memory fields and merged counters', asy
   await sampler.record();
   await sampler.flush();
   const filePath = path.join(dir, 'memory-samples.jsonl');
-  const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
+  const lines = fs.readFileSync(filePath, 'utf8').trim().split(/\r?\n/);
   assert.equal(lines.length, 1);
   const record = JSON.parse(lines[0]);
   assert.ok(!Number.isNaN(Date.parse(record.t)), 't 必须是可解析时间');
@@ -43,7 +43,7 @@ test('a throwing counters source never breaks sampling', async () => {
   const sampler = createMemorySampler({ logDir: dir, counters: () => { throw new Error('boom'); } });
   await sampler.record();
   await sampler.flush();
-  const lines = fs.readFileSync(path.join(dir, 'memory-samples.jsonl'), 'utf8').trim().split('\n');
+  const lines = fs.readFileSync(path.join(dir, 'memory-samples.jsonl'), 'utf8').trim().split(/\r?\n/);
   assert.equal(lines.length, 1);
   const record = JSON.parse(lines[0]);
   assert.equal(record.pid, process.pid);
@@ -55,8 +55,8 @@ test('active file rotates to .1 when exceeding maxFileBytes', async () => {
   const dir = tempLogDir('rotate');
   const maxFileBytes = 4096; // 模块强制下限即 4096
   const sampler = createMemorySampler({ logDir: dir, maxFileBytes });
-  // 单行约 200B；写到总量超限必然触发至少一次轮转
-  for (let i = 0; i < 30; i += 1) await sampler.record();
+  // 样本约 136B；40 行足以超过 4096B 的轮转阈值。
+  for (let i = 0; i < 40; i += 1) await sampler.record();
   await sampler.flush();
   const active = path.join(dir, 'memory-samples.jsonl');
   const backup = `${active}.1`;
@@ -83,7 +83,7 @@ test('start writes an immediate baseline and stop drains the queue', async () =>
   assert.equal(sampler.start(), true);
   assert.equal(sampler.describe().running, true);
   await sampler.stop();
-  const lines = fs.readFileSync(path.join(dir, 'memory-samples.jsonl'), 'utf8').trim().split('\n');
+  const lines = fs.readFileSync(path.join(dir, 'memory-samples.jsonl'), 'utf8').trim().split(/\r?\n/);
   assert.equal(lines.length, 1, 'start 立即落一行基线');
   const record = JSON.parse(lines[0]);
   assert.ok(record.upMs < 5_000, '基线行 upMs 应接近 0（实例边界）');

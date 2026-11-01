@@ -103,6 +103,7 @@ function createChatSandbox() {
   const noop = () => undefined;
   const base = {
     window: {},
+    ClawAnnotations: { scheduleReplay() {} },
     container,
     currentMessages: [],
     currentInputRequests: [],

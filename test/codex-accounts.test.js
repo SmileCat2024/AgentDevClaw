@@ -234,7 +234,12 @@ describe('codex accounts routes', () => {
     resetState();
   });
 
-  const refreshCount = () => child.sent.filter((m) => m.type === 'refresh-credentials').length;
+  const refreshCount = () => child.sent.filter((m) =>
+    m.type === 'feature-comms-request'
+      && m.featureId === 'model-selection'
+      && m.channelId === 'selection'
+      && m.requestType === 'refresh-credentials',
+  ).length;
 
   it('GET accounts merges orphan token files into the account list with token status', async () => {
     resetState();

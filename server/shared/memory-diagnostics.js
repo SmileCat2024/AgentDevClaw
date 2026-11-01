@@ -85,7 +85,7 @@ export function createMemorySampler(options = {}) {
 
   /** 采样一次并落盘（异步排队，返回写队列便于测试与收尾等待）。 */
   function record() {
-    const line = `${JSON.stringify(collectSnapshot())}\n`;
+    const line = JSON.stringify(collectSnapshot()) + String.fromCharCode(10);
     queue = queue.then(() => writeLine(line)).catch((error) => {
       console.warn('[memory-diagnostics] sample write failed:', error?.message || error);
     });

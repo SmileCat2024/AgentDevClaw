@@ -175,7 +175,7 @@ const goal = cleanValue(args.goal);
 const headless = args.headless || process.env.PROTOCLAW_HEADLESS === '1';
 
 if (!agentId || !goal) {
-  console.error('用法: node scripts/run-plain-agent.js <agent-name> --goal \"...\" [--session <id>] [--cwd <dir>] [--headless] [--debug] [--format result|text|json|quiet|jsonl] [--keep-alive]');
+  console.error('用法: node scripts/run-plain-agent.js <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--debug] [--format result|text|json|quiet|jsonl] [--keep-alive]');
   process.exit(1);
 }
 

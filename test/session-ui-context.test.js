@@ -349,6 +349,8 @@ function createChatMutationContext() {
     },
   };
   const context = {
+    window: {},
+    ClawAnnotations: { scheduleReplay() {} },
     followLatestEnabled: false,
     currentMessages: [{ role: 'user', content: 'existing' }],
     currentMessagesLength: 1,
@@ -405,6 +407,7 @@ globalThis.__chatMutation = { appendNewMessages, updateLastMessage };`, context)
 
 function createChatRenderSignatureContext() {
   const context = {
+    window: { ClawAnnotations: { scheduleReplay() {} } },
     toolRenderConfigs: {},
   };
   vm.createContext(context);

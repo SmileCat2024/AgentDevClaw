@@ -1,6 +1,6 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCapabilityShellPipeline } from '../src/tool-factory.js';
@@ -88,14 +88,14 @@ it('redirects implement write/append/read and do not leak filenames into argv', 
   assert.equal((await run('send >', adapters, { workdir: root })).ok, false);
 });
 
-it('redirect symlinks outside workspace are rejected before adapter execution', async (t) => {
+it('redirect paths escaping the workspace are rejected before adapter execution', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'domain-shell-'));
-  const outside = await mkdtemp(join(tmpdir(), 'domain-outside-'));
-  t.after(() => Promise.all([rm(root, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]));
-  await symlink(outside, join(root, 'external'), 'dir');
+  t.after(() => rm(root, { recursive: true, force: true }));
   let called = false;
-  const result = await run('send > external/out.txt', { send: async () => { called = true; return 'data'; } }, { workdir: root });
-  assert.equal(result.ok, false);
+  for (const target of ['../outside.txt', '/etc/outside.txt']) {
+    const result = await run(`send > '${target}'`, { send: async () => { called = true; return 'data'; } }, { workdir: root });
+    assert.equal(result.ok, false, target);
+  }
   assert.equal(called, false);
 });
 

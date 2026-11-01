@@ -86,6 +86,7 @@ function createRendererSandbox() {
   const noop = () => undefined;
   const base = {
     window: {},
+    ClawAnnotations: { scheduleReplay() {} },
     console,
     // chat-renderer 依赖的全局状态
     container,
