@@ -24,6 +24,7 @@ import {
 } from '../shared/agent-access.js';
 import {
   readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex, delegateSessionDb, resumeSessionDb,
+  isSessionDbDelegated,
 } from '../shared/session-access.js';
 import { notifyRuntimeReady } from '../shared/runtime-hooks.js';
 import { resolveDesktopWorkspace } from '../shared/desktop-workspace.js';
@@ -49,8 +50,39 @@ import { addOpenSession } from '../shared/open-sessions-tracker.js';
 import { resolveSessionRuntimeDirectory } from '../shared/session-project.js';
 import { getPhSessionGateInfo, getPhProjectGateInfo } from './ph-projects.js';
 
-export function persistRuntimeDiagnostic({ agentId, sessionId, event, details = '' }) {
-  const logPath = path.join(resolveUserDataDir(), 'logs', 'runtime.log');
+/**
+ * 会话索引的单一写者启动闸（索引 db 在本地与容器执行环境间互斥）。
+ *
+ * 事实模型：WAL 锁跨不过 Windows 宿主 ↔ 容器 VM 边界。本地 runtime 子进程
+ * 经 readSessionIndexSync 长持 db 连接（进程内缓存，宿主无法跨进程驱逐），
+ * 同 agent 的本地 runtime 存活时容器打开同一 index.db 必报 SQLITE_IOERR
+ * （实测复现）；容器运行期（委托态）本地 runtime 或第二个容器启动同样互撞。
+ * delegate 只能驱逐宿主 server 自己的连接，因此并存必须在启动闸结构化拒绝
+ * （409），而不是事后撞锁让 runtime 起来即死。
+ */
+export function assertSessionIndexExclusivity(agentId, displayName, backendName) {
+  const name = displayName || agentId || '该工作空间';
+  if (backendName === 'container') {
+    if (isSessionDbDelegated(agentId)) {
+      throw Object.assign(new Error(
+        `${name} 有容器会话正在运行，会话索引由容器独占；请先停止容器会话再启动其他会话`,
+      ), { code: 'container_runtime_active', statusCode: 409 });
+    }
+    const liveLocal = listAgentRuntimes(agentId)
+      .find((runtime) => isManagedRuntimeRunning(runtime) && !runtime.process?.__isContainerRuntime);
+    if (liveLocal) {
+      throw Object.assign(new Error(
+        `${name} 有本地（非容器）会话正在运行，两者共用同一会话索引、文件锁互斥；请先停止本地会话再以容器模式创建`,
+      ), { code: 'local_runtime_active', statusCode: 409 });
+    }
+  } else if (isSessionDbDelegated(agentId)) {
+    throw Object.assign(new Error(
+      `${name} 有容器会话正在运行，会话索引由容器独占；请先停止容器会话再启动本地会话`,
+    ), { code: 'container_runtime_active', statusCode: 409 });
+  }
+}
+
+export function persistRuntimeDiagnostic({ agentId, sessionId, event, details = '' }) {  const logPath = path.join(resolveUserDataDir(), 'logs', 'runtime.log');
   const header = `${new Date().toISOString()} [${event}] agent=${agentId} session=${sessionId || 'none'}`;
   const line = details ? `${header}\n${details}\n` : `${header}\n`;
   try {
@@ -508,6 +540,7 @@ export function createAgentStartupFns(deps) {
       ? resolveRuntimeExecutor({ agentId: agent.id, processMode, env: { CLAW_RUNTIME_EXECUTOR: forcedExecutor } })
       : resolveRuntimeExecutor({ agentId: agent.id, processMode });
     if (backend.name === 'container') {
+      assertSessionIndexExclusivity(agent.id, runtimeDisplayName, backend.name);
       // ADR-0037 M6 + 开放点治理：WAL 锁跨 Windows 宿主 ↔ 容器 VM 边界
       // 不安全，宿主侧长开连接会让容器 runtime 打开同一 index.db 时报
       // SQLITE_IOERR_LOCK。容器运行期会话索引归容器独占——delegate 在驱逐
@@ -515,6 +548,8 @@ export function createAgentStartupFns(deps) {
       // 运行期索引冻结，快照即完整真相），写显式拒绝；进程退出（exit 事件）
       // 时 resume 恢复直连（本地恢复场景实测安全）。
       delegateSessionDb(agent.id);
+    } else {
+      assertSessionIndexExclusivity(agent.id, runtimeDisplayName, backend.name);
     }
     const child = backend.start({
       argv: [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN],
