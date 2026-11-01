@@ -14,6 +14,7 @@ import {
   getAssemblyWorkspaceDir, parseListField, log,
 } from '../shared/string-helpers.js';
 import { resolveRuntimeExecutor, localRuntimeBackend } from '../runtime-executor/index.js';
+import { runtimeModeToExecutor } from '../shared/coder-runtime-policy.js';
 import {
   managedAgents, assemblyRuntimeProcesses,
   getManagedRuntimeKey, listAgentRuntimes,
@@ -224,10 +225,12 @@ export function createAgentStartupFns(deps) {
 
   async function startManagedSession(agent, resolvedSessionId, runtimeOptions) {
     const existing = getAgentRuntime(agent.id, resolvedSessionId);
+    let sessionRuntimeMode = runtimeOptions?.runtimeMode;
     if (resolvedSessionId) {
       await getThreadIntegration().assertSessionStartable(agent.id, resolvedSessionId);
       const index = await readSessionIndex(agent.id);
       const record = index.sessions.find(session => session.id === resolvedSessionId);
+      if (agent.id === 'coder') sessionRuntimeMode ||= record?.metadata?.runtimeMode || 'standard';
       if (!record || record.archived) {
         throw Object.assign(new Error(record ? 'Restore the archived session before starting it' : 'Session not found'), {
           code: record ? 'session_archived' : 'session_not_found', status: record ? 409 : 404, statusCode: record ? 409 : 404,
@@ -368,7 +371,11 @@ export function createAgentStartupFns(deps) {
       }
       const sessionProjectDir = resolveSessionRuntimeDirectory(sessionRecord, { sessionId: resolvedSessionId });
       sessionRecordType = cleanSessionText(sessionRecord?.sessionType) || null;
-      const placement = resolveManagedProcessPlacement(agent, sessionRecord, sessionProjectDir || undefined);
+      if (agent.id === 'coder') sessionRuntimeMode ||= sessionRecord?.metadata?.runtimeMode || 'standard';
+      const placementAgent = agent.id === 'coder' && sessionRuntimeMode === 'container'
+        ? { ...agent, processMode: PROCESS_MODE_ISOLATED }
+        : agent;
+      const placement = resolveManagedProcessPlacement(placementAgent, sessionRecord, sessionProjectDir || undefined);
       processMode = placement.processMode;
       projectDir = placement.projectDir;
       processGroupKey = placement.processGroupKey;
@@ -492,7 +499,10 @@ export function createAgentStartupFns(deps) {
     // ADR-0037 M4：托管 spawn 经执行后端 seam（实验形态 env 开关选择，本地后端
     // 为默认）。handle 即 ChildProcess（增补语义事件与 output tail），下游托管
     // 记录与生命周期接线不变。
-    const backend = resolveRuntimeExecutor({ agentId: agent.id, processMode });
+    const forcedExecutor = agent.id === 'coder' ? runtimeModeToExecutor(sessionRuntimeMode) : null;
+    const backend = forcedExecutor
+      ? resolveRuntimeExecutor({ agentId: agent.id, processMode, env: { CLAW_RUNTIME_EXECUTOR: forcedExecutor } })
+      : resolveRuntimeExecutor({ agentId: agent.id, processMode });
     if (backend.name === 'container') {
       // ADR-0037 M6 + 开放点治理：WAL 锁跨 Windows 宿主 ↔ 容器 VM 边界
       // 不安全，宿主侧长开连接会让容器 runtime 打开同一 index.db 时报

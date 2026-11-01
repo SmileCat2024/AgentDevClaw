@@ -27,13 +27,21 @@ Coder 是可以独立调查、修改代码和运行验证的编码智能体。�
 
 先查看目标仓库的分支和已有改动，避免把其他会话的工作当作本次任务的一部分。不要用 `reset --hard`、`clean` 或 `checkout -- .` 清理未知改动。
 
-### 2. 创建线程
+### 2. 查询用户批准的运行模式并创建线程
 
-在 `coder_shell` 的 `command` 参数中执行：
+每次创建 Coder 任务前，先用 `coder_shell` 查询用户批准的运行模式：
 
 ```bash
-new-session coder /home/dev/AgentDevClaw '修复工具进度显示'
+runtime-policy
 ```
+
+输出 `runtimeExecutionMode` 为 `standard` 或 `container` 时，只能使用该固定模式；输出 `agent-choice` 时，表示本次派遣可选择 `standard` 或 `container`。创建会话时必须显式指定本次执行模式：
+
+```bash
+new-session coder /path/to/your/AgentDevClaw '修复工具进度显示' --runtime-mode=standard
+```
+
+容器模式启动失败会让任务启动失败，不会自动切换到标准模式。
 
 将路径替换为本次任务的目标目录，必须是**已存在的绝对路径**；不要沿用上一项任务的目录。
 
@@ -177,7 +185,7 @@ tickets=(123 456 789)
 threads=()
 
 for ticket in "${tickets[@]}"; do
-  created=$(new-session coder /home/dev/AgentDevClaw "处理工单 #$ticket")
+  created=$(new-session coder /path/to/your/AgentDevClaw "处理工单 #$ticket" --runtime-mode=standard)
   thread=${created##*threadId=}
   if [[ "$thread" != wt-* ]]; then
     printf '工单 #%s 未取得线程 ID，请检查创建回执。\n' "$ticket"
@@ -272,7 +280,7 @@ done
 
 ```bash
 list coder
-list --dir=/home/dev/AgentDevClaw
+list --dir=/path/to/your/AgentDevClaw
 list --title=工具进度
 list --status=executing,pending-commands
 list --failed
@@ -283,7 +291,7 @@ list --all -n=0
 选项可以组合：
 
 ```bash
-list --dir=/home/dev/AgentDevClaw --status=executing
+list --dir=/path/to/your/AgentDevClaw --status=executing
 ```
 
 - `--dir` 包含该目录及子目录，路径分隔符和大小写会统一处理。

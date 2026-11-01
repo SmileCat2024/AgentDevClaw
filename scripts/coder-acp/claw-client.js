@@ -155,6 +155,11 @@ export function createClawClient(options = {}) {
   return {
     baseUrl,
 
+    async getCoderRuntimePolicy(context = {}) {
+      const { body } = await requestJson('GET', '/protoclaw/acp/coder/runtime-policy', undefined, context);
+      return body;
+    },
+
     /** 018 原子创建：{ clawSessionId, threadId, viewerAgentId, cwd } */
     async createCoderSession(cwd, context = {}, options = {}) {
       const { body } = await requestJson('POST', '/protoclaw/acp/coder/sessions', {
@@ -163,6 +168,7 @@ export function createClawClient(options = {}) {
         // 可选启动模型（对外语义为 model name；server 按
         // preset name → model 字段的顺序消歧解析并持久化）
         ...(options.model ? { model: options.model } : {}),
+        ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
       }, { ...context, cwd });
       return body;
     },

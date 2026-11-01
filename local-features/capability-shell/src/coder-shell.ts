@@ -71,7 +71,7 @@ export function createThreadsAdapters(deps: {
   access?: BackgroundAccess;
 }): Record<string, ThreadAdapter> {
   const adapter = createThreadsAdapter(deps).threads;
-  const verbs = ['new-session', 'create', 'send', 'watch', 'result', 'list', 'show', 'archive', 'unarchive', 'deliver'] as const;
+  const verbs = ['new-session', 'runtime-policy', 'create', 'send', 'watch', 'result', 'list', 'show', 'archive', 'unarchive', 'deliver'] as const;
   const map: Record<string, ThreadAdapter> = {};
   for (const verb of verbs) {
     map[`threads:${verb}`] = async (args, context) => {
@@ -303,6 +303,11 @@ export function createThreadsAdapter(deps: {
       return request(pathname, { ...init, signal: context?.signal });
     };
     switch (verb) {
+      case 'runtime-policy': {
+        const settings = await clawFetch('/protoclaw/acp/coder/runtime-policy');
+        const mode = (settings as any)?.runtimeMode || 'standard';
+        return `runtimeExecutionMode=${mode}; allowed=${mode === 'agent-choice' ? 'standard,container' : mode}`;
+      }
       // new-session <agentId> <目录> [title]：创建 Coder APP 会话（agentId=coder，
       // ADR-0025），线程宿主 APP 自动建线（标准路径；create 仅用于已存在会话加挂线程）。
       // 目录必填（服务端已禁止目录回退默认——workspace 最近目录随上次切换
@@ -311,7 +316,9 @@ export function createThreadsAdapter(deps: {
       // 契约参照 bin/claw.mjs handleSessions（--dir 映射 openDirectory；
       // coder APP 响应带 threadId）。
       case 'new-session': {
-        const [agentId, directory, title] = rest;
+        const runtimeMode = rest.find((token) => token.startsWith('--runtime-mode='))?.slice('--runtime-mode='.length);
+        const positional = rest.filter((token) => !token.startsWith('--runtime-mode='));
+        const [agentId, directory, title] = positional;
         // ADR-0025：coder 是独立 APP（agentId=coder 直接寻址）。本工具是
         // Coder 调度域，写动词锁定 coder 域——传宿主 APP id 会把会话建进
         // 编程小助手名下（绕过目录闸门且不自动建线），结构化拒绝。
@@ -358,9 +365,24 @@ export function createThreadsAdapter(deps: {
           if (error instanceof Error && error.message.startsWith('new-session 预检拒绝')) throw error;
           // 预检查询失败（server 瞬时不可达等）：继续派发，建线入口兜底。
         }
+        let runtimePolicy;
+        try {
+          runtimePolicy = await clawFetch('/protoclaw/acp/coder/runtime-policy');
+        } catch (error) {
+          throw new Error(`new-session 拒绝：无法核实用户批准的 Coder 运行模式，未创建会话。${error instanceof Error ? error.message : String(error)}`);
+        }
+        const policy = (runtimePolicy as any)?.runtimeMode || 'standard';
+        const expected = policy === 'agent-choice' ? undefined : policy;
+        if (!runtimeMode || !['standard', 'container'].includes(runtimeMode)) {
+          throw new Error(`new-session 拒绝：必须显式指定 --runtime-mode=standard|container；当前用户批准模式为 ${policy}。`);
+        }
+        if (expected && runtimeMode !== expected) {
+          throw new Error(`new-session 拒绝：用户固定模式为 ${expected}，不能请求 ${runtimeMode}。`);
+        }
         const body: Record<string, unknown> = {
           agentId,
           openDirectory: normalizedDirectory,
+          runtimeMode,
         };
         if (title) body.title = title;
         const payload = await clawFetch('/protoclaw/prebuilt_sessions', {

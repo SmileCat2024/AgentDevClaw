@@ -94,9 +94,9 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
 
   agent.onRequest(acp.methods.agent.session.new, async (ctx) => {
     trace?.record('acp.session.new.validate', { method: 'session/new' });
-    const { cwd, model } = validateNewSessionParams(ctx.params);
-    trace?.record('acp.session.new.request', { method: 'session/new', ...(model ? { model } : {}) });
-    const result = await sessionManager.createSession(cwd, { model });
+    const { cwd, model, runtimeMode } = validateNewSessionParams(ctx.params);
+    trace?.record('acp.session.new.request', { method: 'session/new', ...(model ? { model } : {}), ...(runtimeMode ? { runtimeMode } : {}) });
+    const result = await sessionManager.createSession(cwd, { model, runtimeMode });
     trace?.record('acp.session.new.response', { method: 'session/new', acpSessionId: result.sessionId });
     return result;
   });

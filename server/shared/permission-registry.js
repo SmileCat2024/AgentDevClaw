@@ -23,6 +23,9 @@ function isEnumValue(allowedValues) {
 /** coder 自动接续（上下文过界线程接力）的策略面取值。 */
 export const CONTEXT_ROTATION_STRATEGY_VALUES = Object.freeze(['adaptive', 'trim', 'summary']);
 
+/** Coder runtime execution mode selected by the user. */
+export const CODER_RUNTIME_MODE_VALUES = Object.freeze(['standard', 'container', 'agent-choice']);
+
 export const PERMISSION_ITEMS = Object.freeze({
   maxLiveThreads: Object.freeze({
     id: 'maxLiveThreads',
@@ -34,6 +37,12 @@ export const PERMISSION_ITEMS = Object.freeze({
     valueType: 'enum',
     values: CONTEXT_ROTATION_STRATEGY_VALUES,
     validate: isEnumValue(CONTEXT_ROTATION_STRATEGY_VALUES),
+  }),
+  runtimeExecutionMode: Object.freeze({
+    id: 'runtimeExecutionMode',
+    valueType: 'enum',
+    values: CODER_RUNTIME_MODE_VALUES,
+    validate: isEnumValue(CODER_RUNTIME_MODE_VALUES),
   }),
   'notifications.finish': Object.freeze({
     id: 'notifications.finish',

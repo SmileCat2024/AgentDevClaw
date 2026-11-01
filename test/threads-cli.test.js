@@ -10,6 +10,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -172,19 +174,23 @@ test('claw threads maps generic commands to Thread HTTP routes', async () => {
 
 test('claw sessions create maps to prebuilt session API and prints thread handle', async () => {
   const fake = await startFakeClawServer();
-
-  const result = await runCli(fake.port, [
-    'sessions', 'create', '--agent', 'coder',
-    '--title', '工单025', '--dir', 'D:/code/AgentDevClaw', '--format', 'json',
-  ]);
+  const workDir = await mkdtemp(path.join(os.tmpdir(), 'claw-cli-coder-'));
+  try {
+    const result = await runCli(fake.port, [
+      'sessions', 'create', '--agent', 'coder',
+      '--title', '工单025', '--dir', workDir, '--runtime-mode', 'standard', '--format', 'json',
+    ]);
   assert.equal(result.code, 0, result.stderr);
   const createRequest = fake.requests.find((request) => request.url === '/protoclaw/prebuilt_sessions');
-  assert.deepEqual(createRequest.body, {
-    agentId: 'coder', title: '工单025', openDirectory: 'D:/code/AgentDevClaw',
-  });
-  const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.threadId, 'wt-new-thread');
-  assert.equal(parsed.session.id, 'session-new');
+    assert.deepEqual(createRequest.body, {
+      agentId: 'coder', title: '工单025', openDirectory: workDir, runtimeMode: 'standard',
+    });
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.threadId, 'wt-new-thread');
+    assert.equal(parsed.session.id, 'session-new');
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
 });
 
 test('claw sessions create --agent coder 无 --dir → 本地拒绝，不触网（目录必填）', async () => {
@@ -201,13 +207,19 @@ test('claw sessions create --agent coder 无 --dir → 本地拒绝，不触网�
   );
 
   // 显式 --dir 时正常放行
-  const ok = await runCli(fake.port, [
-    'sessions', 'create', '--agent', 'coder',
-    '--dir', 'D:/code/AgentDevClaw', '--format', 'json',
-  ]);
-  assert.equal(ok.code, 0, ok.stderr);
-  const createRequest = fake.requests.find((request) => request.url === '/protoclaw/prebuilt_sessions');
-  assert.equal(createRequest.body.openDirectory, 'D:/code/AgentDevClaw');
+  const workDir = await mkdtemp(path.join(os.tmpdir(), 'claw-cli-coder-'));
+  try {
+    const ok = await runCli(fake.port, [
+      'sessions', 'create', '--agent', 'coder',
+      '--dir', workDir, '--runtime-mode', 'standard', '--format', 'json',
+    ]);
+    assert.equal(ok.code, 0, ok.stderr);
+    const createRequest = fake.requests.find((request) => request.url === '/protoclaw/prebuilt_sessions');
+    assert.equal(createRequest.body.openDirectory, workDir);
+    assert.equal(createRequest.body.runtimeMode, 'standard');
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
 });
 
 test('threads send --wait-started reports turn start and timeout via lifeState polling', async () => {

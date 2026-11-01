@@ -34,10 +34,10 @@ function stubFetch(routes: Array<{ match: (url: string, init?: RequestInit) => b
 }
 
 describe('coder_shell 动词表（ticket 034/035）', () => {
-  it('v1 动词表恰为 10 个：new-session/create/send/watch/result/list/show/archive/unarchive/deliver', () => {
+  it('动词表含 runtime-policy 查询，并保留受限的派遣动词', () => {
     assert.deepEqual(
       Object.keys(POLICY.verbs).sort(),
-      ['archive', 'create', 'deliver', 'list', 'new-session', 'result', 'send', 'show', 'unarchive', 'watch'],
+      ['archive', 'create', 'deliver', 'list', 'new-session', 'result', 'runtime-policy', 'send', 'show', 'unarchive', 'watch'],
     );
   });
 
@@ -346,6 +346,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
 
   it('契约映射：POST /protoclaw/prebuilt_sessions，body 含 agentId=coder、openDirectory 与 title，无 sessionType', async () => {
     const { fetchImpl, requests } = recordingFetch([
+      { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'standard', allowedModes: ['standard'] } },
       // 配额预检 GET（ADR-0027）：无配额 → 放行
       {
         match: (u) => u.endsWith('/protoclaw/workspace_settings'),
@@ -359,7 +360,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const targetDir = tmpdir();
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${targetDir}" '工单035 标题'`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${targetDir}" '工单035 标题' --runtime-mode=standard`, {
       adapters
     });
     assert.equal(r.ok, true, r.output);
@@ -371,6 +372,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     //（服务端对 sessionType≠main 直接 400，误发即失败）
     assert.equal(body.sessionType, undefined, 'body 不得携带 sessionType（ADR-0025 后无此字段）');
     assert.equal(body.openDirectory, targetDir, 'body 必透传显式目录（服务端禁止目录回退默认）');
+    assert.equal(body.runtimeMode, 'standard', '固定标准模式下派遣请求必须明确携带标准运行模式');
     assert.equal(body.title, '工单035 标题');
     // 响应解析：threadId 在 session 对象之前，输出两行
     assert.ok(r.output.includes('sessionId=session-abc'), r.output);
@@ -418,13 +420,14 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     const adapters = createThreadsAdapters({
       serverOrigin: 'http://test',
       fetchImpl: stubFetch([
+        { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'standard', allowedModes: ['standard'] } },
         {
           match: (u) => u.endsWith('/protoclaw/prebuilt_sessions'),
           body: { threadId: null, session: { id: 'session-null' }, targetSessionId: 'session-null' },
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}"`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}" --runtime-mode=standard`, {
       adapters
     });
     assert.equal(r.ok, true, r.output);
@@ -435,6 +438,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
 
   it('配额预检（ADR-0027）：满额 → 预检拒绝，不发出创建 POST', async () => {
     const { fetchImpl, requests } = recordingFetch([
+      { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'standard', allowedModes: ['standard'] } },
       {
         match: (u) => u.endsWith('/protoclaw/workspace_settings'),
         body: { resourcePolicy: { coder: { maxLiveThreads: 2 } }, liveThreads: { coder: 2 } },
@@ -445,7 +449,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       },
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}"`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}" --runtime-mode=standard`, {
       adapters
     });
     assert.equal(r.ok, false, r.output);
@@ -458,8 +462,26 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     );
   });
 
+  it('agent-choice 下可指定容器模式，创建请求明确携带该选择', async () => {
+    const { fetchImpl, requests } = recordingFetch([
+      { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'agent-choice', allowedModes: ['standard', 'container'] } },
+      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { workspaceVisibility: {}, resourcePolicy: {}, liveThreads: {} } },
+      {
+        match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
+        body: { threadId: 'wt-container', session: { id: 'session-container' }, targetSessionId: 'session-container' },
+      },
+    ]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder \"${tmpdir()}\" --runtime-mode=container`, { adapters });
+    assert.equal(r.ok, true, r.output);
+    const post = requests.find((req) => req.url.endsWith('/protoclaw/prebuilt_sessions') && req.init?.method === 'POST');
+    assert.ok(post, '应创建 Coder 会话');
+    assert.equal(JSON.parse(String(post.init?.body)).runtimeMode, 'container');
+  });
+
   it('配额预检：未满额 → 放行，POST 正常发出', async () => {
     const { fetchImpl, requests } = recordingFetch([
+      { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'standard', allowedModes: ['standard'] } },
       {
         match: (u) => u.endsWith('/protoclaw/workspace_settings'),
         body: { resourcePolicy: { coder: { maxLiveThreads: 3 } }, liveThreads: { coder: 2 } },
@@ -470,7 +492,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       },
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}"`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}" --runtime-mode=standard`, {
       adapters
     });
     assert.equal(r.ok, true, r.output);
@@ -481,20 +503,35 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     );
   });
 
-  it('配额预检：查询失败不阻塞派发（内核漏斗兜底，UX 层不承担强制）', async () => {
+  it('固定标准策略拒绝容器请求，且不发出创建 POST', async () => {
     const { fetchImpl, requests } = recordingFetch([
-      // workspace_settings 未命中 → 404 → 预检吞掉继续派发
+      { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'standard', allowedModes: ['standard'] } },
+      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { workspaceVisibility: {}, resourcePolicy: {}, liveThreads: {} } },
+    ]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder \"${tmpdir()}\" --runtime-mode=container`, { adapters });
+    assert.equal(r.ok, false, r.output);
+    assert.ok(r.output.includes('用户固定模式为 standard'), r.output);
+    assert.equal(requests.some((req) => req.url.endsWith('/protoclaw/prebuilt_sessions') && req.init?.method === 'POST'), false);
+  });
+
+  it('用户模式查询失败时拒绝派遣且不发创建请求', async () => {
+    const { fetchImpl, requests } = recordingFetch([
+      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { workspaceVisibility: {}, resourcePolicy: {}, liveThreads: {} } },
+      // runtime-policy 未命中 → 无法确认授权；不能猜测模式并创建会话
+
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
         body: { threadId: 'wt-fallback', session: { id: 'session-fb' }, targetSessionId: 'session-fb' },
       },
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
-    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}"`, {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session coder "${tmpdir()}" --runtime-mode=standard`, {
       adapters
     });
-    assert.equal(r.ok, true, r.output);
-    assert.ok(r.output.includes('threadId=wt-fallback'), r.output);
+    assert.equal(r.ok, false, r.output);
+    assert.ok(r.output.includes('无法核实用户批准的 Coder 运行模式'), r.output);
+    assert.equal(requests.some((req) => req.url.endsWith('/protoclaw/prebuilt_sessions') && req.init?.method === 'POST'), false);
   });
 
   it('new-session 缺 agentId → 参数校验道拒绝（title 可选，2 参可过个数道）', async () => {

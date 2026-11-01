@@ -1108,6 +1108,7 @@ export function normalizeSessionMetadata(raw = {}) {
     // （studio-feature-migration.js）换算为 studioFeatureIds 后删除；透传保证
     // 迁移能看到落盘的旧字段。新代码不再写入此字段，迁移完成后自然消亡。
     studioProjectId: cleanSessionText(raw.studioProjectId),
+    runtimeMode: cleanSessionText(raw.runtimeMode),
   };
 
   return Object.fromEntries(

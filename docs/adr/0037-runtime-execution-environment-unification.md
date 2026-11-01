@@ -238,7 +238,7 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 - **宿主运行期读容器 agent 的 index.db 会撞锁** → 已由「M6 后续 — 开放点治理」收口（索引委托，快照读）。
 - **feature-comms 请求面（ADR-0018）对容器 runtime 不可达** → 已由「M6 后续 — 开放点治理」收口（viewer host-request 通道）。
 - **多会话同容器（add-session 跨容器边界）不支持**：共享进程模式 join 到容器共享进程显式 409；通道化（宿主中转 add-session）留待真实需求。
-- **配置入口仍为 env 实验开关**（`CLAW_RUNTIME_EXECUTOR` / `CLAW_RUNTIME_CONTAINER_IMAGE` / TCP 三监听 env），产品化配置面 / UI 另立里程碑（含路线二接入、镜像清单管理）。
+- **Coder 执行环境产品设置**：Coder 策略页保存 `runtimeExecutionMode`（standard / container / agent-choice）。固定模式是硬限制；agent-choice 要求派遣入口显式选择 standard 或 container。会话索引 metadata 持久化已裁定模式，接力创建继承；启动按会话模式覆盖 executor 实验开关，容器初始化失败保持失败、不回退。本阶段未改变其他 agent 的 executor 实验开关和环境选择。
 - M5 欠账顺延：断网构建实测、桌面树（pack:desktop staging 内运行 pack:container）实测。
 
 至此容器阶段（M4–M6）实施收口：三种执行环境（本地进程 / 容器 / 远程节点）中的前两种经同一 seam 与协议栈工作，远程阶段沿同一架构部署距离测试，待容器形态产品化定型后另立决策。

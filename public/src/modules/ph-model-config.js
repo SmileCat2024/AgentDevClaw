@@ -599,10 +599,11 @@ async function _phLoadCoderPolicy() {
     const strategy = typeof strategyOverride === 'string' && strategyOverride
       ? strategyOverride
       : (typeof authorDefault === 'string' && authorDefault ? authorDefault : 'adaptive');
+    const runtimeMode = data?.resourcePolicy?.coder?.runtimeExecutionMode || 'standard';
     // 卡片形态照进程模式页（ph-pm-card 单选卡片），不另造控件。
-    const optionCard = (mode, active, title, desc) => {
+    const optionCard = (mode, active, title, desc, setter = 'phSetCoderRotationStrategy') => {
       return [
-        '<div class="ph-pm-card' + (active ? ' active' : '') + '" onclick="window.phSetCoderRotationStrategy(\'' + mode + '\')">',
+        '<div class="ph-pm-card' + (active ? ' active' : '') + '" onclick="window.' + setter + '(\'' + mode + '\')">',
         '<div class="ph-pm-radio' + (active ? ' checked' : '') + '"></div>',
         '<div class="ph-pm-card-body">',
         '<div class="ph-pm-card-title">' + escapeHtml(title) + '</div>',
@@ -654,12 +655,36 @@ async function _phLoadCoderPolicy() {
           ? '将整个会话浓缩为一份九段式摘要；上下文最小，保留细节最少。'
           : 'Condense the whole session into one nine-section summary. Smallest context, least detail.'),
       '</div>',
+      '<div class="ph-mc-row"><div class="ph-mc-role"><div class="ph-mc-role-name">' + (isZh ? '运行模式' : 'Runtime mode') + '</div><div class="ph-mc-role-desc">' + (isZh ? '选择 Coder 运行任务的执行环境。容器启动失败会明确报错，不会切回标准模式。' : 'Choose Coder execution environment. Container startup failures are reported; they never fall back to standard mode.') + '</div></div></div>',
+      '<div class="ph-pm-body">',
+      optionCard('standard', runtimeMode === 'standard', isZh ? '标准模式' : 'Standard', isZh ? '直接在当前主机运行。' : 'Run directly on this host.', 'phSetCoderRuntimeMode'),
+      optionCard('container', runtimeMode === 'container', isZh ? '容器模式' : 'Container', isZh ? '在容器中运行；环境不可用时任务启动失败。' : 'Run in a container; startup fails if the environment is unavailable.', 'phSetCoderRuntimeMode'),
+      optionCard('agent-choice', runtimeMode === 'agent-choice', isZh ? '让 Agent 自主选择' : 'Agent chooses', isZh ? '派遣方每次创建任务时明确指定标准或容器模式。' : 'The dispatcher explicitly selects standard or container for each task.', 'phSetCoderRuntimeMode'),
+      '</div>',
       '<div id="ph-coder-policy-status" style="margin:12px 24px 0;"></div>',
     ].join('');
   } catch (error) {
     host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml((isZh ? '读取 Coder 策略失败：' : 'Could not load Coder policy: ') + (error?.message || error)) + '</div>';
   }
 }
+
+window.phSetCoderRuntimeMode = async function(mode) {
+  if (!['standard', 'container', 'agent-choice'].includes(mode)) return;
+  const isZh = currentLanguage === 'zh';
+  const status = document.getElementById('ph-coder-policy-status');
+  try {
+    const response = await fetch('/protoclaw/workspace_settings/resource_policy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: 'coder', permissionId: 'runtimeExecutionMode', value: mode }),
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    if (status) status.textContent = isZh ? '已保存' : 'Saved';
+    await _phLoadCoderPolicy();
+  } catch (error) {
+    if (status) status.textContent = (isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error);
+  }
+};
 
 window.phSetCoderRotationStrategy = async function(strategy) {
   const isZh = currentLanguage === 'zh';

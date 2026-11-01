@@ -344,6 +344,22 @@ feature 集（`agent.js` 装配）：`skill` / `force-continuation` / `context-r
 - 交接（compact/summary 接力）期间写入 `pendingSuccession` 挡板，新指令保持 pending，不投给即将退役的旧 head；`advanceHead` 推进后统一投给新 head；
 - 指令以 `idempotencyKey` 幂等入队（重复提交不产生副作用）；终态指令保留 200 条上限。
 
+### Coder 运行模式（`claw sessions`）
+
+Coder 创建通过用户批准的运行模式约束。先查询：
+
+```bash
+claw sessions runtime-policy
+```
+
+返回 `runtimeMode` 与 `allowedModes`。固定模式只允许该值；`agent-choice` 允许派遣方对每个新任务指定 `standard` 或 `container`。创建必须显式传模式：
+
+```bash
+claw sessions create --agent coder --dir <绝对路径> --runtime-mode standard
+```
+
+容器启动失败直接失败，不回退到标准模式。接续创建的后继会话继承原线程模式。
+
 ### 10.3 `claw threads` 命令族
 
 `claw threads` 是线程的 **CLI 控制面**，通过 HTTP 调用运行中的 Claw server（默认 `http://127.0.0.1:1420`，可用 `PORT` 覆盖）。这些命令对应 `server/thread-control/thread-routes.js` 提供的 `/protoclaw/threads*` 接口。

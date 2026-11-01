@@ -729,7 +729,9 @@ function printLastReply(reply) {
 
 function printSessionsHelp() {
   console.log('用法:');
-  console.log('  claw sessions create --agent ID [--title T] [--dir D] [--format text|json]');
+  console.log('  claw sessions create --agent ID [--title T] [--dir D] [--runtime-mode standard|container] [--format text|json]');
+  console.log('  claw sessions runtime-policy [--format text|json]');
+  console.log('Coder 创建需显式 --runtime-mode=standard|container；先查询 runtime-policy。');
   console.log('');
   console.log('创建预制工作空间会话。线程宿主 APP（--agent coder）的响应');
   console.log('带 threadId（自动建立的线程），可直接用于 claw threads send。');
@@ -743,8 +745,16 @@ async function handleSessions(args = []) {
     printSessionsHelp();
     return;
   }
+  if (subcommand === 'runtime-policy') {
+    const policy = await clawServerFetch('/protoclaw/acp/coder/runtime-policy');
+    const mode = policy?.runtimeMode || 'standard';
+    const result = { runtimeMode: mode, allowedModes: mode === 'agent-choice' ? ['standard', 'container'] : [mode] };
+    if (threadFormat(args) === 'json') console.log(JSON.stringify(result, null, 2));
+    else console.log(`runtimeMode=${mode}; allowed=${result.allowedModes.join(',')}`);
+    return;
+  }
   if (subcommand !== 'create') {
-    throw new Error(`未知 sessions 子命令: ${subcommand}（可用: create）`);
+    throw new Error(`未知 sessions 子命令: ${subcommand}（可用: create / runtime-policy）`);
   }
   const format = threadFormat(args);
   const body = {
@@ -753,11 +763,18 @@ async function handleSessions(args = []) {
   const title = optionValue(args, '--title');
   if (title) body.title = title;
   const dir = optionValue(args, '--dir');
+  const runtimeMode = optionValue(args, '--runtime-mode');
+  if (runtimeMode) body.runtimeMode = runtimeMode;
   if (dir) body.openDirectory = dir;
   // coder 目录必填的本地前置校验（服务端是最终闸门）：fail-fast 给出可操作的
   // 错误文案，不等 server 400。
   if (body.agentId === 'coder' && !dir) {
     throw new Error('--agent coder 时 --dir 必填（已存在的绝对路径）：服务端拒绝目录回退默认——缺省会绑定 workspace 最近目录，几乎必然绑错项目');
+  }
+  if (body.agentId === 'coder') {
+    if (!runtimeMode) throw new Error('Coder 创建必须指定 --runtime-mode=standard|container；先运行 claw sessions runtime-policy 查询用户批准模式');
+    if (!['standard', 'container'].includes(runtimeMode)) throw new Error('--runtime-mode 仅支持 standard 或 container');
+    body.runtimeMode = runtimeMode;
   }
   const payload = await clawServerFetch('/protoclaw/prebuilt_sessions', {
     method: 'POST',
@@ -878,7 +895,8 @@ function printHelp() {
   console.log('  claw threads resume <thread-id> [--source S]');
   console.log('  claw threads archive <thread-id>');
   console.log('  claw threads unarchive <thread-id>');
-  console.log('  claw sessions create --agent coder --dir D [--title T]');
+  console.log('  claw sessions create --agent coder --dir D --runtime-mode standard|container [--title T]');
+  console.log('  claw sessions runtime-policy');
   console.log('                                         Create a workspace session; coder 响应带自动建立的 threadId（coder 必须显式 --dir）');
   console.log('  claw run <name> --goal "..." [...]     Run a plain agent (viewer-observable; --debug uses Studio source overrides)');
   console.log('  claw acp coder                         Start the coder ACP stdio adapter');

@@ -187,6 +187,29 @@ describe('createSessionHelpers', () => {
       'readWorkspaceState should have been called with flow-workspace');
   });
 
+  it('stores the selected Coder runtime mode and inherits it for derived sessions', async () => {
+    const root = path.join(isolatedRoot, 'coder-runtime-mode');
+    await fs.mkdir(root, { recursive: true });
+    const { updateSessionIndex } = await import('../server/shared/session-access.js');
+    await updateSessionIndex('coder', (index) => ({
+      ...index,
+      sessions: [{ id: 'source-coder-session', openDirectory: root, metadata: { runtimeMode: 'container' } }, ...index.sessions],
+    }));
+    const helpers = createSessionHelpers({
+      ...makeMockHelpersCtx(),
+      discoverAgents: async () => [{ id: 'coder', kind: 'workspace' }],
+    });
+    const initial = await helpers.createPrebuiltSession('coder', { openDirectory: root, runtimeMode: 'container', returnSummary: false });
+    const createdRecord = await helpers.requirePrebuiltSessionRecord('coder', initial.id);
+    assert.equal(createdRecord.metadata.runtimeMode, 'container');
+    const derived = await helpers.createPrebuiltSession('coder', { sourceSessionId: 'source-coder-session', returnSummary: false });
+    const derivedRecord = await helpers.requirePrebuiltSessionRecord('coder', derived.id);
+    assert.equal(derivedRecord.metadata.runtimeMode, 'container');
+    const ordinary = await helpers.createPrebuiltSession('coder', { openDirectory: root, returnSummary: false });
+    const ordinaryRecord = await helpers.requirePrebuiltSessionRecord('coder', ordinary.id);
+    assert.equal(ordinaryRecord.metadata.runtimeMode, undefined, 'undispatched Coder sessions do not invent a per-task mode');
+  });
+
   it('requires an existing project directory before creating a Studio session', async () => {
     const helpers = createSessionHelpers({
       ...makeMockHelpersCtx(),

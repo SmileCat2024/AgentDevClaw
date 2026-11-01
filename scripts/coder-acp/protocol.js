@@ -124,9 +124,14 @@ export function validateNewSessionParams(params) {
   if (metaModel !== undefined && typeof metaModel !== 'string') {
     throw invalidParamsError('model', '_meta.claw.model must be a string when provided');
   }
+  const runtimeMode = params?._meta?.claw?.runtimeMode;
+  if (runtimeMode !== undefined && !['standard', 'container'].includes(runtimeMode)) {
+    throw invalidParamsError('runtimeMode', '_meta.claw.runtimeMode must be "standard" or "container"');
+  }
   return {
     cwd,
     ...(typeof metaModel === 'string' && metaModel.trim() ? { model: metaModel.trim() } : {}),
+    ...(runtimeMode ? { runtimeMode } : {}),
   };
 }
 

@@ -212,6 +212,7 @@ describe('prebuilt metadata permission contracts', () => {
     assert.deepEqual(normalizePermissionDefaults(meta.permissionDefaults, meta.permissions), {
       'notifications.finish': false,
       contextRotationStrategy: 'adaptive',
+      runtimeExecutionMode: 'standard',
     });
   });
 

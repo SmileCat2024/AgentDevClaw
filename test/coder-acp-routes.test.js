@@ -160,6 +160,7 @@ function makeMockCtx(overrides = {}) {
       if (!(sessionId in ctx.sessionSnapshots)) return null;
       return ctx.sessionSnapshots[sessionId];
     },
+    readCoderRuntimePolicies: async () => overrides.runtimePolicies || { coder: { runtimeExecutionMode: 'standard' } },
     archiveEntries: overrides.archiveEntries || {},
   };
   ctx._calls = calls;
@@ -343,7 +344,7 @@ describe('ACP create — cwd validation', () => {
   for (const [label, buildCwd] of invalidCases) {
     it(`rejects cwd: ${label} (400, zero side effects)`, async () => {
       const { ctx, app } = setupAcpHarness();
-      const res = await callCreate(app, { agentId: 'coder', cwd: buildCwd() });
+      const res = await callCreate(app, { agentId: 'coder', cwd: buildCwd(), runtimeMode: 'standard' });
       assert.equal(res.statusCode, 400);
       assert.equal(res.body.ok, false);
       assert.equal(res.body.code, 'invalid_cwd');
@@ -359,7 +360,7 @@ describe('ACP create — cwd validation', () => {
 
   it('rejects non-string cwd', async () => {
     const { app } = setupAcpHarness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: 12345 });
+    const res = await callCreate(app, { agentId: 'coder', runtimeMode: 'standard', cwd: 12345 });
     assert.equal(res.statusCode, 400);
     assert.equal(res.body.code, 'invalid_cwd');
   });
@@ -376,7 +377,7 @@ describe('ACP create — happy path', () => {
   it('creates session + runtime + thread and returns the full id bundle', async () => {
     seedRuntime({ sessionId: 'sess-acp-1', viewerAgentId: 'viewer-acp-1' });
     const { ctx, app } = setupAcpHarness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard' });
 
     assert.equal(res.statusCode, 201);
     assert.deepEqual(
@@ -413,7 +414,7 @@ describe('ACP create — happy path', () => {
     try {
       assert.equal(resolveAcpReadyTimeoutMs(), 1500);
       const { ctx, app } = setupAcpHarness();
-      const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
+      const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard' });
       assert.equal(res.statusCode, 201);
       assert.equal(ctx._calls.waitForManagedRuntimeReady[0].timeoutMs, 1500);
     } finally {
@@ -444,7 +445,7 @@ describe('ACP create — rollback ladder', () => {
   it('READY timeout → stop runtime, cascade-delete thread and sessions', async () => {
     seedRuntime({ sessionId: 'sess-acp-1', viewerAgentId: 'viewer-acp-1' });
     const { ctx, app } = setupAcpHarness({ readyResult: null });
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard' });
 
     assert.equal(res.statusCode, 504);
     assert.equal(res.body.code, 'runtime_ready_timeout');
@@ -467,7 +468,7 @@ describe('ACP create — rollback ladder', () => {
       startManagedAgentThrow: 'spawn exploded',
       findThreadResult: null, // 现实：thread 钩子未执行，store 中无线程
     });
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard' });
 
     assert.equal(res.statusCode, 500);
     assert.equal(res.body.code, 'acp_session_creation_failed');
@@ -486,7 +487,7 @@ describe('ACP create — rollback ladder', () => {
       onSessionCreatedResult: null,
       findThreadResult: null,
     });
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard' });
 
     assert.equal(res.statusCode, 500);
     assert.equal(res.body.code, 'thread_missing');
@@ -504,7 +505,7 @@ describe('ACP create — rollback ladder', () => {
       deleteThreadThrow: 'close refused',
       deletePrebuiltSessionThrow: 'delete refused',
     });
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard' });
 
     assert.equal(res.statusCode, 504);
     const rollback = res.body.rollback;
@@ -1111,7 +1112,7 @@ describe('ACP create — model preset resolution', () => {
 
   it('rejects non-string model with 400 and zero side effects', async () => {
     const { ctx, app } = harness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 123 });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard', model: 123 });
     assert.equal(res.statusCode, 400);
     assert.equal(res.body.code, 'invalid_model');
     assert.equal(ctx._calls.createPrebuiltSession, undefined);
@@ -1119,7 +1120,7 @@ describe('ACP create — model preset resolution', () => {
 
   it('rejects unknown model with the full preset list (400, zero side effects)', async () => {
     const { ctx, app } = harness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'no-such-model' });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard', model: 'no-such-model' });
     assert.equal(res.statusCode, 400);
     assert.equal(res.body.code, 'model_preset_not_found');
     assert.match(res.body.message, /智谱 GLM-5.3-Flash/);
@@ -1129,7 +1130,7 @@ describe('ACP create — model preset resolution', () => {
 
   it('rejects ambiguous model name listing all matching presets', async () => {
     const { ctx, app } = harness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'glm-5.3-flash' });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard', model: 'glm-5.3-flash' });
     assert.equal(res.statusCode, 400);
     assert.equal(res.body.code, 'ambiguous_model');
     assert.match(res.body.message, /matches 2 presets/);
@@ -1140,7 +1141,7 @@ describe('ACP create — model preset resolution', () => {
 
   it('resolves a unique model field hit and persists the preset name to the coder config', async () => {
     const { app } = harness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'deepseek-v4-flash' });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard', model: 'deepseek-v4-flash' });
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.modelPreset, 'DeepSeek Local');
 
@@ -1150,7 +1151,7 @@ describe('ACP create — model preset resolution', () => {
 
   it('resolves a preset name (display name with spaces) exactly', async () => {
     const { app } = harness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: '智谱 GLM-5.3-Flash' });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard', model: '智谱 GLM-5.3-Flash' });
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.modelPreset, '智谱 GLM-5.3-Flash');
     const saved = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -1159,14 +1160,14 @@ describe('ACP create — model preset resolution', () => {
 
   it('resolves a case-insensitive preset name when unique', async () => {
     const { app } = harness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'deepseek local' });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard', model: 'deepseek local' });
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.modelPreset, 'DeepSeek Local');
   });
 
   it('omits modelPreset when model is not provided', async () => {
     const { app } = harness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard' });
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.modelPreset, undefined);
     assert.equal(existsSync(configPath), false);
@@ -1175,7 +1176,7 @@ describe('ACP create — model preset resolution', () => {
   it('rejects empty presets table', async () => {
     writeFileSync(presetsPath, JSON.stringify({ providers: [], presets: [] }));
     const { ctx, app } = harness();
-    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'anything' });
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), runtimeMode: 'standard', model: 'anything' });
     assert.equal(res.statusCode, 400);
     assert.equal(res.body.code, 'model_preset_unavailable');
     assert.equal(ctx._calls.createPrebuiltSession, undefined);

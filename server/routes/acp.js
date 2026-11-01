@@ -47,6 +47,9 @@ import {
   getRuntimeByViewerAgentId,
 } from '../shared/agent-access.js';
 import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
+import { resolveCoderRuntimeMode } from '../shared/coder-runtime-policy.js';
+import { CODER_RUNTIME_MODE_VALUES } from '../shared/permission-registry.js';
+import { readWorkspaceResourcePolicies } from './workspace-settings.js';
 
 /** 对外契约 ID：ACP adapter 请求体传 agentId="coder"，即 coder APP 真实 id。 */
 export const ACP_AGENT_ID = 'coder';
@@ -213,6 +216,9 @@ export async function validateAcpCwd(rawCwd) {
  * @param {Function} [ctx.readSessionSnapshotForContinuity] - 完整会话快照读取（history 端点消息来源）
  */
 export function setupAcpRoutes(app, express, ctx) {
+  const readCoderRuntimePolicies = typeof ctx.readCoderRuntimePolicies === 'function'
+    ? ctx.readCoderRuntimePolicies
+    : readWorkspaceResourcePolicies;
   const {
     requireAgentLight,
     createPrebuiltSession,
@@ -311,6 +317,20 @@ export function setupAcpRoutes(app, express, ctx) {
     return { steps, leftover };
   }
 
+  // ── 用户批准的运行模式查询 ───────────────────────────────────────
+  app.get('/protoclaw/acp/coder/runtime-policy', async (_req, res) => {
+    try {
+      const policy = await readCoderRuntimePolicies();
+      const mode = policy?.coder?.runtimeExecutionMode || 'standard';
+      if (!CODER_RUNTIME_MODE_VALUES.includes(mode)) {
+        throw Object.assign(new Error(`Invalid configured Coder runtime mode: ${mode}`), { statusCode: 500, code: 'coder_runtime_policy_invalid' });
+      }
+      res.json({ ok: true, runtimeMode: mode, allowedModes: mode === 'agent-choice' ? ['standard', 'container'] : [mode] });
+    } catch (error) {
+      res.status(500).json({ ok: false, code: 'coder_runtime_policy_read_failed', message: String(error?.message || error) });
+    }
+  });
+
   // ── 原子创建 ─────────────────────────────────────────────────────
 
   app.post('/protoclaw/acp/coder/sessions', express.json(), async (req, res) => {
@@ -326,6 +346,7 @@ export function setupAcpRoutes(app, express, ctx) {
       }
 
       const cwd = await validateAcpCwd(req.body?.cwd);
+      const runtimeMode = await resolveCoderRuntimeMode(req.body?.runtimeMode, { readPolicies: readCoderRuntimePolicies });
 
       // 可选 model 参数：解析为预设 name 并写入 coder 启动配置（持久化），
       // 随后 createPrebuiltSession → spawn 从该配置解析启动模型。解析失败
@@ -355,12 +376,13 @@ export function setupAcpRoutes(app, express, ctx) {
       try {
         const session = await createPrebuiltSession(agent.id, {
           openDirectory: cwd,
+          runtimeMode,
           returnSummary: false,
         });
         state.session = session;
 
         state.runtimeStartAttempted = true;
-        await startManagedAgent(agent, session.id);
+        await startManagedAgent(agent, session.id, { runtimeMode });
 
         // 线程宿主（coder）：新会话自动成为新线程初始 head（与既有
         // /protoclaw/prebuilt_sessions 同一钩子；失败不阻断，由下方

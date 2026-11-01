@@ -47,10 +47,12 @@ import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION, buildSessionDirectoryEntries } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
 import { buildBranchSnapshot, sessionSnapshotRevision } from './session-branch.js';
+import { resolveCoderRuntimeMode } from '../shared/coder-runtime-policy.js';
 import { exportFeatureContinuity, hasFeatureContinuity } from '../context-continuity/feature-continuity.js';
 import { getContextHandoffFilePath } from '../context-continuity/handoff-package.js';
 import { withSessionOperation } from '../shared/session-operation.js';
 import { assertThreadQuotaAllowed } from './thread-quota.js';
+import { readWorkspaceResourcePolicies } from './workspace-settings.js';
 import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
 import { getInternalAuthToken } from '../auth.js';
 import { resolveLifecycleTarget, resolveTransformationTarget, isBrowseOnlyMount, isHandoffBarrierActive } from '../thread-control/target-resolution.js';
@@ -1000,6 +1002,13 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
   trace.mark('server_received');
   try {
     const { agentId } = resolveAgentTarget(req.body);
+    const isLocalCoder = agentId === 'coder' && resolveForwardHostTarget(agentId).scope !== 'remote';
+    const coderRuntimeMode = isLocalCoder
+      ? await resolveCoderRuntimeMode(req.body?.runtimeMode, {
+        readPolicies: readWorkspaceResourcePolicies,
+        allowPolicyDefault: Boolean(req.body?.sourceSessionId),
+      })
+      : undefined;
     // ADR-0011：远程命名空间身份 → 转发远程同名创建路由（裸 id，远程端启动
     // 自己的 runtime）；本地身份走下方既有创建路径，行为字节级不动。远程写
     // 强制幂等键（本地路径保持现状不强制）。
@@ -1081,11 +1090,12 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       projectId: req.body.projectId,
       studioFeatureIds: req.body.studioFeatureIds,
       targetDir: req.body.targetDir,
+      ...(coderRuntimeMode ? { runtimeMode: coderRuntimeMode } : {}),
     });
     // createPrebuiltSession 返回已提交的 index revision，避免重复读取全量索引。
     const committedRevision = Number(session.indexRevision) || 0;
     trace.mark('index_committed', { revision: committedRevision });
-    const status = await startManagedAgent(agent, session.id);
+    const status = await startManagedAgent(agent, session.id, coderRuntimeMode ? { runtimeMode: coderRuntimeMode } : {});
     trace.mark('target_runtime_started');
     // 线程宿主工作空间（coder）：新会话自动成为一条新线程的初始 head。
     // 非 host 工作空间为 no-op；失败不阻断会话创建。返回值带 threadId

@@ -74,7 +74,7 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
   test('coder 裸创建（无 openDirectory 无 sourceSessionId）→ 400，未触发 createPrebuiltSession', async () => {
     const res = makeRes();
     let nextError = null;
-    await handler({ body: { agentId: 'coder' } }, res, (e) => { nextError = e; });
+    await handler({ body: { agentId: 'coder', runtimeMode: 'standard' } }, res, (e) => { nextError = e; });
     assert.equal(res.statusCode, 400);
     assert.match(res.jsonPayload.error, /openDirectory/);
     assert.match(res.jsonPayload.error, /回退默认/);
@@ -84,7 +84,7 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
 
   test('coder 相对路径 → 400', async () => {
     const res = makeRes();
-    await handler({ body: { agentId: 'coder', openDirectory: './relative/dir' } }, res, (e) => { throw e; });
+    await handler({ body: { agentId: 'coder', openDirectory: './relative/dir', runtimeMode: 'standard' } }, res, (e) => { throw e; });
     assert.equal(res.statusCode, 400);
     assert.match(res.jsonPayload.error, /绝对路径/);
   });
@@ -92,7 +92,7 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
   test('coder 不存在的目录 → 400', async () => {
     const res = makeRes();
     const missingDir = join(DATA_ROOT, 'missing', 'subdir');
-    await handler({ body: { agentId: 'coder', openDirectory: missingDir } }, res, (e) => { throw e; });
+    await handler({ body: { agentId: 'coder', openDirectory: missingDir, runtimeMode: 'standard' } }, res, (e) => { throw e; });
     assert.equal(res.statusCode, 400);
     assert.match(res.jsonPayload.error, /不存在或不是目录/);
   });
@@ -104,7 +104,7 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
     // 可观测事实 = stub 被调用且收到目录，错误经 next(error) 到达
     const stopError = await new Promise((resolve) => {
       handler(
-        { body: { agentId: 'coder', openDirectory: existingDir } },
+        { body: { agentId: 'coder', openDirectory: existingDir, runtimeMode: 'standard' } },
         res,
         (e) => resolve(e),
       );
@@ -120,7 +120,7 @@ describe('POST /protoclaw/prebuilt_sessions coder 目录闸门', () => {
     const res = makeRes();
     await new Promise((resolve) => {
       handler(
-        { body: { agentId: 'coder', sourceSessionId: 'session-src' } },
+        { body: { agentId: 'coder', sourceSessionId: 'session-src', runtimeMode: 'standard' } },
         res,
         (e) => resolve(e),
       );

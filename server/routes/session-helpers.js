@@ -1128,6 +1128,9 @@ async function createPrebuiltSession(agentId, options = {}) {
     workspaceAgentId,
     metadata: {
       ...sessionMetadata,
+      ...(normalizedAgentId === 'coder' && (options.runtimeMode || sourceSession?.metadata?.runtimeMode)
+        ? { runtimeMode: options.runtimeMode || sourceSession?.metadata?.runtimeMode }
+        : {}),
       // 会话 ↔ feature 绑定（ADR-0022）：创建参数直传 + 派生会话继承来源绑定。
       ...(normalizedAgentId === 'agent-studio'
         ? {

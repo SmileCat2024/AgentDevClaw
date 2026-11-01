@@ -259,7 +259,7 @@ export function createSessionManager(options = {}) {
   async function createSession(cwd, options = {}) {
     let body;
     try {
-      body = await clawClient.createCoderSession(cwd, { method: 'session/new' }, { model: options.model });
+      body = await clawClient.createCoderSession(cwd, { method: 'session/new' }, { model: options.model, runtimeMode: options.runtimeMode });
     } catch (error) {
       throw toAcpError(error);
     }
