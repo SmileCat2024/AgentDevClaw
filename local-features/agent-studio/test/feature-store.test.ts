@@ -17,7 +17,6 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   MANIFEST_FILE_NAME,
-  LEGACY_REGISTRY_FILE_NAME,
   getFeatureRegistryPaths,
   readFeatureRegistry,
   writeFeatureRegistry,

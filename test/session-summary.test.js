@@ -362,7 +362,7 @@ describe('summarizePrebuiltSession integration', () => {
       const result = await helpers.summarizePrebuiltSession(TEST_AGENT_ID, record);
 
       // _metaWriteback must not be enumerable (won't appear in JSON.stringify)
-      assert.equal(result.propertyIsEnumerable('_metaWriteback'), false);
+      assert.equal(Object.prototype.propertyIsEnumerable.call(result, '_metaWriteback'), false);
       const serialized = JSON.parse(JSON.stringify(result));
       assert.equal(serialized._metaWriteback, undefined);
 

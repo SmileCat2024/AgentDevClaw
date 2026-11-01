@@ -4,7 +4,7 @@
  * This script automatically copies files like .py, .mp3, .json, etc.
  */
 
-import { copyFileSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { copyFileSync, mkdirSync, readdirSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 
