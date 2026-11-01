@@ -118,27 +118,31 @@ function resolvePlatformGatewayContext(specEnv) {
  * （ADR-0036 分区不变）。文件级挂载仅挂存在的文件——Docker 对缺失宿主文件
  * 的 bind mount 会创建目录，造成 default.json 变目录的破坏性副作用。
  */
-function buildDataMounts(agentId, specEnv) {
+export function buildDataMounts(agentId, specEnv, dataRoot = USER_DATA_ROOT) {
   const binds = [];
   const workspaceBound = WORKSPACE_SESSION_AGENT_IDS.has(agentId);
   const sessionsHostDir = workspaceBound
-    ? join(USER_DATA_ROOT, 'workspaces', agentId)
-    : join(USER_DATA_ROOT, 'prebuilt-sessions', agentId);
+    ? join(dataRoot, 'workspaces', agentId, 'sessions')
+    : join(dataRoot, 'prebuilt-sessions', agentId);
   mkdirSync(sessionsHostDir, { recursive: true });
   binds.push(toBind(sessionsHostDir, workspaceBound
-    ? `${CONTAINER_DATA_ROOT}/workspaces/${agentId}`
+    ? `${CONTAINER_DATA_ROOT}/workspaces/${agentId}/sessions`
     : `${CONTAINER_DATA_ROOT}/prebuilt-sessions/${agentId}`));
 
+  // Runtime needs model configuration and per-agent settings for reads, but those
+  // files are owned by the host settings UI. Keep them read-only in the container;
+  // OAuth refresh is the exception: it rotates token files from the runtime.
   for (const file of ['default.json', 'presets.json', 'model-connections.json']) {
-    const host = join(USER_DATA_ROOT, file);
-    if (existsSync(host)) binds.push(toBind(host, `${CONTAINER_DATA_ROOT}/${file}`));
+    const host = join(dataRoot, file);
+    if (existsSync(host)) binds.push(toBind(host, `${CONTAINER_DATA_ROOT}/${file}`, 'ro'));
   }
-  const agentConfig = join(USER_DATA_ROOT, 'agent-configs', `${agentId}.json`);
+  const agentConfig = join(dataRoot, 'agent-configs', `${agentId}.json`);
   if (existsSync(agentConfig)) {
-    mkdirSync(join(USER_DATA_ROOT, 'agent-configs'), { recursive: true });
-    binds.push(toBind(agentConfig, `${CONTAINER_DATA_ROOT}/agent-configs/${agentId}.json`));
+    binds.push(toBind(agentConfig, `${CONTAINER_DATA_ROOT}/agent-configs/${agentId}.json`, 'ro'));
   }
-  const oauthDir = join(USER_DATA_ROOT, 'oauth-tokens');
+  const imageDir = join(dataRoot, 'images');
+  if (existsSync(imageDir)) binds.push(toBind(imageDir, `${CONTAINER_DATA_ROOT}/images`));
+  const oauthDir = join(dataRoot, 'oauth-tokens');
   if (existsSync(oauthDir)) binds.push(toBind(oauthDir, `${CONTAINER_DATA_ROOT}/oauth-tokens`));
 
   // handoff 注入文件：runtime 首启导入后自删（作用于挂载文件），按 ADR 契约
@@ -155,6 +159,14 @@ function buildDataMounts(agentId, specEnv) {
   // workspace-bound agent（coder 等）经 seam 传来的 cwd 是仓库根（本地 spawn
   // 的进程起始目录），挂它等于把仓库根挂进 /workspace，工具写盘全落错位
   // （E2E S3a 实测：容器内写入成功、宿主 ws 目录空）。
+  const globalLayer = join(dataRoot, 'feature-setup.json');
+  if (existsSync(globalLayer)) {
+    binds.push(toBind(globalLayer, `${CONTAINER_DATA_ROOT}/feature-setup.json`, 'ro'));
+  }
+  const coderAgentConfig = join(dataRoot, 'workspaces', agentId, 'feature-config', 'agent.json');
+  if (existsSync(coderAgentConfig)) {
+    binds.push(toBind(coderAgentConfig, `${CONTAINER_DATA_ROOT}/workspaces/${agentId}/feature-config/agent.json`, 'ro'));
+  }
   const workspaceHost = cleanSessionText(specEnv.PROTOCLAW_SESSION_WORKSPACE_CWD);
   if (workspaceHost) {
     mkdirSync(workspaceHost, { recursive: true });

@@ -25,7 +25,7 @@
  */
 
 import { spawn, execFileSync } from 'child_process';
-import { existsSync, mkdirSync, cpSync, createWriteStream, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, cpSync, createWriteStream, readFileSync, writeFileSync, rmSync } from 'fs';
 import { createServer } from 'net';
 import { homedir } from 'os';
 import { join, resolve, dirname } from 'path';
@@ -165,6 +165,25 @@ async function main() {
     const src = join(BASE_DATA, file);
     if (existsSync(src)) cpSync(src, join(dataDir, file));
   }
+  // A host-side canary in the isolated data root that is intentionally outside
+  // the container allowlist. The runtime must not see it, even though nearby
+  // model/session files are mounted for normal operation.
+  const forbiddenHostPath = join(dataDir, 'remote-connections.json');
+  writeFileSync(forbiddenHostPath, '{"marker":"host-only-canary"}');
+  // The ACP route enforces the isolated user's approved Coder mode just like
+  // production. Make this test fixture explicitly approve container execution.
+  const workspaceSettingsSrc = join(BASE_DATA, 'workspace-settings.json');
+  const workspaceSettings = existsSync(workspaceSettingsSrc)
+    ? JSON.parse(readFileSync(workspaceSettingsSrc, 'utf8'))
+    : { version: 1 };
+  workspaceSettings.resourcePolicy = {
+    ...(workspaceSettings.resourcePolicy || {}),
+    coder: {
+      ...(workspaceSettings.resourcePolicy?.coder || {}),
+      runtimeExecutionMode: 'container',
+    },
+  };
+  writeFileSync(join(dataDir, 'workspace-settings.json'), JSON.stringify(workspaceSettings, null, 2));
   const oauthSrc = join(BASE_DATA, 'oauth-tokens');
   if (existsSync(oauthSrc)) cpSync(oauthSrc, join(dataDir, 'oauth-tokens'), { recursive: true });
   const coderCfgSrc = join(BASE_DATA, 'agent-configs', `${AGENT_ID}.json`);
@@ -189,7 +208,7 @@ async function main() {
     const created = await fetchJson(`${platform.baseUrl}/protoclaw/acp/${AGENT_ID}/sessions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agentId: AGENT_ID, cwd: wsDir, ...(MODEL ? { model: MODEL } : {}) }),
+      body: JSON.stringify({ agentId: AGENT_ID, cwd: wsDir, runtimeMode: 'container', ...(MODEL ? { model: MODEL } : {}) }),
     });
     const { threadId, clawSessionId, viewerAgentId } = created;
     if (!threadId || !clawSessionId || !viewerAgentId) throw new Error(`ACP 建线响应缺字段: ${JSON.stringify(created).slice(0, 300)}`);
@@ -198,6 +217,32 @@ async function main() {
     await waitFor('容器运行', () => sh('docker', ['ps', '--filter', `name=${containerName}`, '--format', '{{.Names}}'], { stdio: ['ignore', 'pipe', 'ignore'] }).length > 0, 30_000);
     record('① 注册接入（ACP 建线 + ticket 注册 + READY + 容器运行）', true,
       `thread=${String(threadId).slice(0, 12)}… session=${String(sessionId).slice(0, 12)}… viewer=${viewerAgentId}`);
+    const mounts = JSON.parse(sh('docker', ['inspect', containerName, '--format', '{{json .Mounts}}']));
+    const mountAllows = mounts.every((mount) => {
+      const destination = String(mount.Destination || '').replaceAll('\\\\', '/');
+      const source = String(mount.Source || '').replaceAll('\\\\', '/');
+      const allowed = [
+        '/workspace', '/data/workspaces/coder/sessions',
+        '/data/agent-configs/coder.json', '/data/workspaces/coder/feature-config/agent.json',
+        '/data/default.json', '/data/presets.json', '/data/model-connections.json',
+        '/data/feature-setup.json', '/data/oauth-tokens', '/data/images',
+      ];
+      const isExpected = allowed.includes(destination)
+        || destination.startsWith('/data/context-handoffs/');
+      const isHostOnly = source === forbiddenHostPath.replaceAll('\\\\', '/');
+      return isExpected && !isHostOnly;
+    });
+    const forbiddenCheck = sh('docker', ['exec', containerName, 'node', '-e',
+      "const fs=require('node:fs'); const p='/data/remote-connections.json'; if(fs.existsSync(p)) process.exit(1); try { fs.accessSync('/data/remote-connections.json'); process.exit(2); } catch (e) { if (e.code !== 'ENOENT') process.exit(3); } console.log('FORBIDDEN_ABSENT');",
+    ]);
+    const readOnlyMounts = mounts.filter((mount) => [
+      '/data/default.json', '/data/presets.json', '/data/model-connections.json',
+      '/data/feature-setup.json', '/data/agent-configs/coder.json',
+      '/data/workspaces/coder/feature-config/agent.json',
+    ].includes(mount.Destination)).every((mount) => mount.RW === false);
+    record('①b 只挂载允许的数据路径（宿主 canary 不可见）',
+      mountAllows && forbiddenCheck === 'FORBIDDEN_ABSENT' && readOnlyMounts,
+      `mounts=${mounts.map((m) => `${m.Destination}${m.RW ? ':rw' : ':ro'}`).join(',')}`);
 
     const input = (text) => fetchJson(`${platform.baseUrl}/protoclaw/threads/${threadId}/input`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }),
@@ -261,21 +306,15 @@ async function main() {
     const threadOk = existsSync(threadFile) && (() => { try { JSON.parse(readFileSync(threadFile, 'utf8')); return true; } catch { return false; } })();
     record('④b 优雅停止（stop_agent → 容器收敛 + 线程记录完好）', threadOk, threadOk ? undefined : 'threads 记录缺失或损坏');
 
-    // ---- 场景 ③c：本地 executor 恢复容器写的会话（跨执行环境一致）----
-    log('S3c', '本地 executor 同数据目录恢复同一会话');
-    await platform.stop();
-    const ports2 = { app: await freePort(), viewerHttp: await freePort() };
-    const local = startPlatform({ mode: 'local', ports: ports2, dataDir, logFile: join(runDir, 'platform-local.log') });
-    cleanup.push(() => local.stop());
-    await waitFor('本地平台 health', () => fetchJson(`${local.baseUrl}/protoclaw/health`).then(() => true), 60_000);
-    // 答案 12345 当前 count = S2 输入 1 + S3b 回复 1 = 2；本地恢复后再引用则 > 该基线
-    const s3cBase = countIn(snapText(), '12345');
-    await fetchJson(`${local.baseUrl}/protoclaw/threads/${threadId}/input`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: '再确认一次：第一条消息里让你计算的乘法，被乘数是多少？只回复那个五位数本身。' }),
-    });
-    await waitFor('本地恢复回复落盘', () => countIn(snapText(), '12345') > s3cBase, TURN_TIMEOUT_MS);
-    record('③c 跨执行环境一致（容器写快照 → 本地 runtime 恢复引用）', true);
+     // The Coder task is explicitly pinned to container mode and its successor
+     // sessions inherit that mode. Switching this same task to local would violate
+     // the product contract; cross-executor recovery belongs in a separate policy.
+     const sessionIndex = sh('node', ['--input-type=module', '-e',
+       "import { readSessionIndex } from './server/shared/session-access.js'; const i=await readSessionIndex('coder'); console.log(JSON.stringify(i.sessions.find(s=>s.id===process.env.TEST_SESSION_ID)?.metadata?.runtimeMode || null));",
+     ], { env: { ...process.env, AGENTDEV_DATA_DIR: dataDir, TEST_SESSION_ID: sessionId } });
+      const persistedRuntimeMode = JSON.parse(sessionIndex);
+      record('③c Coder 会话固定容器模式（任务执行环境持久化）', persistedRuntimeMode === 'container',
+        persistedRuntimeMode === 'container' ? undefined : `runtimeMode=${persistedRuntimeMode}`);
   } catch (error) {
     failed = true;
     console.error(`\n[E2E 中断] ${error.message}`);
