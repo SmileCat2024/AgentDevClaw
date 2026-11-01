@@ -797,7 +797,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-project-bar-right">',
       modelSwitchHtml,
       // 新对话渲染查 workspaceCreate 能力（远程目录经服务端转发创建）。
-      (currentProject && canWorkspaceCreate ? '<button class="ph-banner-btn ph-new-chat-btn" type="button" data-runtime-mode-entry data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)" title="' + escapeHtml(isZh ? '长按选择运行模式（普通 / 容器）' : 'Hold to choose runtime mode (standard / container)') + '">' + (isZh ? '新建对话' : 'New Chat') + '</button>' : ''),
+      (currentProject && canWorkspaceCreate ? '<button class="ph-banner-btn ph-new-chat-btn" type="button" data-runtime-mode-entry data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)" title="' + escapeHtml(isZh ? '悬停选择运行模式（普通 / 容器）' : 'Hover to choose runtime mode (standard / container)') + '">' + (isZh ? '新建对话' : 'New Chat') + '</button>' : ''),
       '</div>',
       '</div>',
     ].join('');
@@ -873,7 +873,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     // 新对话渲染查 workspaceCreate 能力（R2-03）：remoteOnly 视图按宿主握手
     // 能力放开，本地视图恒渲染。空态走 gen-ui-empty / git-empty-card 同款
     // 空态卡配方（虚线卡 + 图标块 + 标题 + 描述 + 动作）。
-    const newChatBtnHtml = canWorkspaceCreate ? '<div class="ph-sessions-empty-actions"><button class="workspace-action" type="button" data-runtime-mode-entry data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)" title="' + escapeHtml(isZh ? '长按选择运行模式（普通 / 容器）' : 'Hold to choose runtime mode (standard / container)') + '">' + escapeHtml(t('workspace_new_chat')) + '</button></div>' : '';
+    const newChatBtnHtml = canWorkspaceCreate ? '<div class="ph-sessions-empty-actions"><button class="workspace-action" type="button" data-runtime-mode-entry data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)" title="' + escapeHtml(isZh ? '悬停选择运行模式（普通 / 容器）' : 'Hover to choose runtime mode (standard / container)') + '">' + escapeHtml(t('workspace_new_chat')) + '</button></div>' : '';
     const mainEmptyNote = renderPhSessionsEmptyCard(
       _PH_EMPTY_CHAT_ICON,
       isZh ? '还没有对话' : 'No conversations yet',
