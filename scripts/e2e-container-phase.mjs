@@ -188,6 +188,8 @@ async function main() {
   if (existsSync(oauthSrc)) cpSync(oauthSrc, join(dataDir, 'oauth-tokens'), { recursive: true });
   const coderCfgSrc = join(BASE_DATA, 'agent-configs', `${AGENT_ID}.json`);
   if (existsSync(coderCfgSrc)) cpSync(coderCfgSrc, join(dataDir, 'agent-configs', `${AGENT_ID}.json`));
+  const phCfgSrc = join(BASE_DATA, 'agent-configs', 'programming-helper.json');
+  if (existsSync(phCfgSrc)) cpSync(phCfgSrc, join(dataDir, 'agent-configs', 'programming-helper.json'));
   console.log(`  隔离目录: ${runDir}`);
 
   const ports = { app: await freePort(), viewerHttp: await freePort(), viewerTcp: await freePort() };
@@ -315,6 +317,50 @@ async function main() {
       const persistedRuntimeMode = JSON.parse(sessionIndex);
       record('③c Coder 会话固定容器模式（任务执行环境持久化）', persistedRuntimeMode === 'container',
         persistedRuntimeMode === 'container' ? undefined : `runtimeMode=${persistedRuntimeMode}`);
+
+    // ---- 场景 ⑤：编程小助手入口容器模式（POST prebuilt_sessions + runtimeMode）----
+    // 交互入口（无策略闸门）：入口显式选 container → 会话创建即拉起容器，
+    // metadata 持久化；挂载白名单与 coder 同构（仅自身数据路径）。
+    log('S5', '编程小助手入口容器模式创建会话');
+    const PH_ID = 'programming-helper';
+    const phWsDir = join(runDir, 'ws-ph');
+    mkdirSync(phWsDir, { recursive: true });
+    const phCreated = await fetchJson(`${platform.baseUrl}/protoclaw/prebuilt_sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: PH_ID, runtimeMode: 'container', openDirectory: phWsDir }),
+    });
+    const phSessionId = phCreated?.session?.id;
+    if (!phSessionId) throw new Error(`编程小助手创建响应缺 session.id: ${JSON.stringify(phCreated).slice(0, 300)}`);
+    const phContainerName = `claw-rt-${PH_ID}-${phSessionId}`;
+    await waitFor('PH 容器运行', () => sh('docker', ['ps', '--filter', `name=${phContainerName}`, '--format', '{{.Names}}'], { stdio: ['ignore', 'pipe', 'ignore'] }).length > 0, 30_000);
+    const phMounts = JSON.parse(sh('docker', ['inspect', phContainerName, '--format', '{{json .Mounts}}']));
+    const phAllowed = [
+      '/workspace', `/data/workspaces/${PH_ID}/sessions`,
+      `/data/agent-configs/${PH_ID}.json`,
+      '/data/default.json', '/data/presets.json', '/data/model-connections.json',
+      '/data/feature-setup.json', '/data/oauth-tokens', '/data/images',
+    ];
+    const phMountsOk = phMounts.every((mount) => phAllowed.includes(mount.Destination)
+      || String(mount.Destination || '').startsWith('/data/context-handoffs/'));
+    const phModeOut = sh('node', ['--input-type=module', '-e',
+      "import { readSessionIndex } from './server/shared/session-access.js'; const i=await readSessionIndex('programming-helper'); console.log(JSON.stringify(i.sessions.find(s=>s.id===process.env.TEST_SESSION_ID)?.metadata?.runtimeMode || null));",
+    ], { env: { ...process.env, AGENTDEV_DATA_DIR: dataDir, TEST_SESSION_ID: phSessionId } });
+    const phPersisted = JSON.parse(phModeOut);
+    const phStop = await fetchJson(`${platform.baseUrl}/protoclaw/stop_agent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: PH_ID, sessionId: phSessionId }),
+    }).then(
+      () => ({ ok: true }),
+      (error) => ({ ok: false, error: String(error?.message || error).slice(0, 200) }),
+    );
+    const phConverged = phStop.ok
+      ? await waitFor('PH 容器收敛', () => sh('docker', ['ps', '-a', '--filter', `name=${phContainerName}`, '--format', '{{.Names}}'], { stdio: ['ignore', 'pipe', 'ignore'] }).length === 0, 30_000).then(() => true).catch(() => false)
+      : false;
+    record('⑤ 编程小助手入口容器模式（创建 → 容器运行 → metadata 持久化 → 优雅停止）',
+      phMountsOk && phPersisted === 'container' && phConverged,
+      `mountsOk=${phMountsOk} runtimeMode=${phPersisted} stop=${JSON.stringify(phStop)} converged=${phConverged}`);
   } catch (error) {
     failed = true;
     console.error(`\n[E2E 中断] ${error.message}`);

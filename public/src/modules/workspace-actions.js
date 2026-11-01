@@ -974,6 +974,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             openDirectory: action.openDirectory,
             // 项目目标的新对话显式携带稳定 projectId（045）；目录目标为空
             projectId: String(action.projectId || '').trim() || undefined,
+            // 入口选择的运行模式（长按菜单）：standard / container；缺省不携带
+            runtimeMode: action.runtimeMode,
             targetDir: action.targetDir,
       };
       const runSessionOpen = async () => {

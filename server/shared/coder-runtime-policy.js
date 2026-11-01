@@ -30,3 +30,23 @@ export async function resolveCoderRuntimeMode(requestedMode, { readPolicies, con
   }
   return configured;
 }
+
+// 会话级运行模式（ADR-0037）：会话 metadata 持久化 runtimeMode，启动按它覆盖
+// executor。coder 走无人值守策略闸门（用户批准固定模式 / agent-choice 显式选择）；
+// programming-helper 是用户亲自操作的交互入口，入口选择即用户意愿，不设策略闸门
+// ——缺省不传 = 维持现状（本地 executor），显式传值只接受 standard / container。
+export const SESSION_RUNTIME_MODE_AGENTS = new Set(['coder', 'programming-helper']);
+
+export function supportsSessionRuntimeMode(agentId) {
+  return SESSION_RUNTIME_MODE_AGENTS.has(agentId);
+}
+
+/** Resolve a session runtime mode by agent dispatch semantics; undefined = unset. */
+export async function resolveSessionRuntimeMode(agentId, requestedMode, options = {}) {
+  if (agentId === 'coder') return resolveCoderRuntimeMode(requestedMode, options);
+  if (requestedMode === undefined) return undefined;
+  if (!CODER_RUNTIME_MODE_VALUES.slice(0, 2).includes(requestedMode)) {
+    throw Object.assign(new Error('runtimeMode must be "standard" or "container"'), { statusCode: 400, code: 'invalid_runtime_mode' });
+  }
+  return requestedMode;
+}

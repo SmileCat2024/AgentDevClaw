@@ -6930,6 +6930,47 @@ body[data-theme="light"] .user-choice-card:focus-within {
 .ph-banner-btn.secondary { background: transparent; border-color: rgba(255,255,255,0.08); box-shadow: none; }
 .ph-banner-btn.secondary:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.16); }
 
+/* ── 新建对话运行模式长按菜单（复用 ph-project-dropdown-menu 玻璃卡片配方，
+   fixed 锚定按钮下方——不依赖项目栏祖先定位链） ── */
+.ph-runtime-mode-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 248px;
+  max-width: min(320px, calc(100vw - 24px));
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px var(--shadow-color);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+}
+.ph-runtime-mode-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.ph-runtime-mode-item:hover,
+.ph-runtime-mode-item:focus-visible { background: rgba(255, 255, 255, 0.08); outline: none; }
+.ph-runtime-mode-item-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  margin-top: 1px;
+}
+.ph-runtime-mode-item-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ph-runtime-mode-item-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.ph-runtime-mode-item-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+
 /* ── PH Project Settings Panel (IDE-style) ── */
 /* 尺寸对标用量信息卡片（usage-info-window：1040 × 820） */
 .ph-settings-window {

@@ -351,6 +351,7 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
         // 项目会话显式声明稳定归属（045）：服务端按项目解析工作目录，
         // 不做目录回退；目录会话不携带该字段
         ...(String(action.projectId || '').trim() ? { projectId: String(action.projectId).trim() } : {}),
+        ...(String(action.runtimeMode || '').trim() ? { runtimeMode: String(action.runtimeMode).trim() } : {}),
         studioFeatureIds: Array.isArray(action.studioFeatureIds) ? action.studioFeatureIds : [],
         targetDir: action.targetDir || '',
         operationId: action.operationId || '',

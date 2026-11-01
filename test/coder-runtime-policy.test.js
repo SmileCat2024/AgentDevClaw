@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveCoderRuntimeMode, runtimeModeToExecutor } from '../server/shared/coder-runtime-policy.js';
+import {
+  resolveCoderRuntimeMode, resolveSessionRuntimeMode, runtimeModeToExecutor,
+  supportsSessionRuntimeMode,
+} from '../server/shared/coder-runtime-policy.js';
 import { CODER_RUNTIME_MODE_VALUES, PERMISSION_ITEMS } from '../server/shared/permission-registry.js';
 
 const policies = (runtimeExecutionMode) => async () => ({ coder: { runtimeExecutionMode } });
@@ -39,5 +42,36 @@ describe('Coder runtime execution mode', () => {
     assert.equal(runtimeModeToExecutor('standard'), 'local');
     assert.equal(runtimeModeToExecutor('container'), 'container');
     assert.equal(runtimeModeToExecutor('agent-choice'), null);
+  });
+});
+
+describe('Session runtime mode beyond coder (programming-helper entry)', () => {
+  it('lists exactly the session-runtime-mode agents', () => {
+    assert.equal(supportsSessionRuntimeMode('coder'), true);
+    assert.equal(supportsSessionRuntimeMode('programming-helper'), true);
+    assert.equal(supportsSessionRuntimeMode('agent-studio'), false);
+    assert.equal(supportsSessionRuntimeMode('memo'), false);
+  });
+
+  it('treats an interactive entry without a selection as unset (no policy gate)', async () => {
+    // 短按新建 = 现状：不携带 runtimeMode 的创建既不报错也不固定模式。
+    assert.equal(await resolveSessionRuntimeMode('programming-helper', undefined), undefined);
+  });
+
+  it('accepts explicit standard and container selections from the entry', async () => {
+    assert.equal(await resolveSessionRuntimeMode('programming-helper', 'standard'), 'standard');
+    assert.equal(await resolveSessionRuntimeMode('programming-helper', 'container'), 'container');
+  });
+
+  it('rejects any other value at the entry', async () => {
+    await assert.rejects(resolveSessionRuntimeMode('programming-helper', 'agent-choice'), { code: 'invalid_runtime_mode' });
+    await assert.rejects(resolveSessionRuntimeMode('programming-helper', 'vm'), { code: 'invalid_runtime_mode' });
+  });
+
+  it('keeps the coder policy gate for coder sessions', async () => {
+    await assert.rejects(
+      resolveSessionRuntimeMode('coder', 'container', { readPolicies: policies('standard') }),
+      { code: 'coder_runtime_mode_forbidden' },
+    );
   });
 });
