@@ -9,6 +9,7 @@
  */
 
 import { getAgentRuntime } from '../shared/agent-access.js';
+import { deliverViaHostRequestChannel } from '../shared/viewer-host-request.js';
 import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
 import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
@@ -38,15 +39,30 @@ const HOST_COMMANDS = [
   { name: 'summary', destination: 'host' },
 ];
 
-function requestCapabilityState(agentId, sessionId, message, { timeoutMs = 15000 } = {}) {
-  return new Promise((resolve) => {
-    const runtime = getAgentRuntime(agentId, sessionId);
-    const child = runtime?.process;
-    if (!runtime || runtime.stopped || !child || child.exitCode !== null
-      || typeof child.send !== 'function' || typeof child.on !== 'function') {
-      resolve({ ok: false, error: 'session runtime not connected' });
-      return;
+async function requestCapabilityState(agentId, sessionId, message, { timeoutMs = 15000, deliverHostRequest = deliverViaHostRequestChannel } = {}) {
+  const runtime = getAgentRuntime(agentId, sessionId);
+  const child = runtime?.process;
+  if (!runtime || runtime.stopped || !child || child.exitCode !== null) {
+    return { ok: false, error: 'session runtime not connected' };
+  }
+  if (typeof child.send !== 'function' || typeof child.on !== 'function') {
+    if (typeof runtime.viewerAgentId !== 'string' || !runtime.viewerAgentId) {
+      return { ok: false, error: 'session runtime has no capability transport' };
     }
+    const delivery = await deliverHostRequest(runtime.viewerAgentId, {
+      kind: 'capability',
+      sessionId,
+      type: message.type,
+      ...(message.ref !== undefined ? { ref: message.ref } : {}),
+      ...(message.args !== undefined ? { args: message.args } : {}),
+      ...(message.entryPoint !== undefined ? { entryPoint: message.entryPoint } : {}),
+    });
+    if (!delivery.ok) return { ok: false, error: delivery.error || delivery.code || 'capability delivery failed' };
+    return delivery.result && typeof delivery.result === 'object'
+      ? delivery.result
+      : { ok: false, error: 'invalid capability response from runtime' };
+  }
+  return new Promise((resolve) => {
     const requestId = `capability-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let settled = false;
     const finish = (result) => {
@@ -88,7 +104,7 @@ function requestCapabilityState(agentId, sessionId, message, { timeoutMs = 15000
   });
 }
 
-export function setupCapabilityRoutes(app, express) {
+export function setupCapabilityRoutes(app, express, { deliverHostRequest = deliverViaHostRequestChannel } = {}) {
   app.get('/protoclaw/commands', async (req, res, next) => {
     try {
       const { agentId, runtimeId, sessionId } = req.query || {};
@@ -128,7 +144,7 @@ export function setupCapabilityRoutes(app, express) {
       const result = await requestCapabilityState(target.agentId, effectiveSessionId, {
         type: 'capability-list-request',
         entryPoint: 'slash',
-      }, { timeoutMs: 3000 });
+      }, { timeoutMs: 3000, deliverHostRequest });
       if (!result.ok) {
         // A disconnected runtime still yields host commands; the slash menu
         // simply shows the host subset until the session runtime is back.
@@ -185,7 +201,7 @@ export function setupCapabilityRoutes(app, express) {
         type: 'capability-invoke',
         ref: ref.trim(),
         args: args || {},
-      });
+      }, { deliverHostRequest });
       if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
       res.json({ ok: true, agentId: target.agentId, sessionId: target.sessionId, result: result.result ?? null });
     } catch (error) {

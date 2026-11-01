@@ -23,7 +23,7 @@ import { buildCallUsageEvents, reportUsageEvent } from './usage-report.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { CallArbiter } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
-import { handleCapabilityIPC } from './capability-ipc.js';
+import { dispatchCapabilityRequest, handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH, MODEL_PRESETS_PATH } from '../server/shared/constants.js';
@@ -1468,7 +1468,7 @@ async function main() {
     });
   }
   // ADR-0037 开放点通道化：宿主定向请求回调。容器/外部 runtime 无父子
-  // IPC，宿主的定向请求（feature-comms 请求面）经 ViewerWorker 连接的
+  // IPC，宿主的定向请求（feature-comms 与 capability 请求面）经 ViewerWorker 连接的
   // host-request 通道下发到这里；本地 runtime 同样注册——宿主对本地
   // handle 仍优先走 IPC，两轨语义一致由共用 dispatchFeatureCommsRequest
   // 保证。
@@ -1476,17 +1476,16 @@ async function main() {
     if (!payload || typeof payload !== 'object') {
       return { ok: false, code: 'invalid_request', error: 'Malformed host request payload' };
     }
-    if (payload.kind === 'feature-comms') {
-      const targetSessionId = String(payload.sessionId || '');
-      const target = sessions.get(targetSessionId);
-      if (!target) {
-        return { ok: false, code: 'session_not_found', error: `Session ${targetSessionId || '(empty)'} is not hosted by this runtime` };
-      }
-      if (target.disposed) {
-        return { ok: false, code: 'session_closing', error: 'Session is closing' };
-      }
-      return target.dispatchFeatureCommsRequest(payload);
+    const targetSessionId = String(payload.sessionId || '');
+    const target = sessions.get(targetSessionId);
+    if (!target) {
+      return { ok: false, code: 'session_not_found', error: `Session ${targetSessionId || '(empty)'} is not hosted by this runtime` };
     }
+    if (target.disposed) {
+      return { ok: false, code: 'session_closing', error: 'Session is closing' };
+    }
+    if (payload.kind === 'feature-comms') return target.dispatchFeatureCommsRequest(payload);
+    if (payload.kind === 'capability') return dispatchCapabilityRequest(target, payload);
     return { ok: false, code: 'unsupported_host_request', error: `Unsupported host request kind: ${String(payload.kind)}` };
   });
   // ADR-0037 D（cwd 注入通道通用化）：宿主注入的显式值优先于索引 / state.json

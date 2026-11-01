@@ -88,9 +88,9 @@ describe('capability routes', () => {
   let app;
   const injectedKeys = [];
 
-  function setup() {
+  function setup(options) {
     app = makeMockApp();
-    setupCapabilityRoutes(app, makeMockExpress());
+    setupCapabilityRoutes(app, makeMockExpress(), options);
     return app;
   }
 
@@ -174,6 +174,40 @@ describe('capability routes', () => {
     assert.equal(runtime.process.sent[0].type, 'capability-invoke');
     assert.equal(runtime.process.sent[0].ref, 'force-continuation.continue');
     assert.deepEqual(runtime.process.sent[0].args, {});
+  });
+
+  it('routes capability listing and invocation for container handles through host-request transport', async () => {
+    const containerHandle = new EventEmitter();
+    containerHandle.exitCode = null;
+    const runtime = injectRuntime(AGENT_ID, SESSION_ID, containerHandle);
+    runtime.viewerAgentId = 'viewer-container-1';
+    injectedKeys.push(`${AGENT_ID}::${SESSION_ID}`);
+    const requests = [];
+    setup({ deliverHostRequest: async (viewerAgentId, payload) => {
+      requests.push({ viewerAgentId, payload });
+      if (payload.type === 'capability-list-request') {
+        return { ok: true, result: { ok: true, commands: [{ name: 'example.run' }] } };
+      }
+      return { ok: true, result: { ok: true, result: { ran: true } } };
+    } });
+
+    const listing = makeMockRes();
+    await app._routes['GET /protoclaw/commands'][0](
+      { query: { agentId: AGENT_ID, sessionId: SESSION_ID } }, listing,
+    );
+    assert.equal(listing.statusCode, 200);
+    assert.deepEqual(listing.body.commands, [{ name: 'example.run' }]);
+
+    const invocation = makeMockRes();
+    await app._routes['POST /protoclaw/capability_invoke'].at(-1)(
+      { body: { ref: 'example.run', args: { value: 7 }, agentId: AGENT_ID, sessionId: SESSION_ID } }, invocation,
+    );
+    assert.equal(invocation.statusCode, 200);
+    assert.deepEqual(invocation.body.result, { ran: true });
+    assert.deepEqual(requests.map(({ viewerAgentId, payload }) => ({ viewerAgentId, payload })), [
+      { viewerAgentId: 'viewer-container-1', payload: { kind: 'capability', sessionId: SESSION_ID, type: 'capability-list-request', entryPoint: 'slash' } },
+      { viewerAgentId: 'viewer-container-1', payload: { kind: 'capability', sessionId: SESSION_ID, type: 'capability-invoke', ref: 'example.run', args: { value: 7 } } },
+    ]);
   });
 
   it('POST /capability_invoke maps runtime rejection to 503', async () => {

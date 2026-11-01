@@ -15,24 +15,24 @@
  * @param {(payload: object) => void} reply sends the capability-result payload
  *   (caller adds type/requestId/sessionId envelope fields)
  */
-export async function handleCapabilityIPC(session, msg, reply) {
+export async function dispatchCapabilityRequest(session, msg) {
   const agent = session?.agent;
   if (typeof agent?.invokeCapability !== 'function' || typeof agent?.getCapabilitySnapshot !== 'function') {
-    reply({ ok: false, error: 'capability registry not available in this session' });
-    return;
+    return { ok: false, error: 'capability registry not available in this session' };
   }
   try {
     if (msg.type === 'capability-list-request') {
       const entryPoint = typeof msg.entryPoint === 'string' ? msg.entryPoint : 'slash';
-      const commands = await agent.getCapabilitySnapshot({ entryPoint });
-      reply({ ok: true, commands });
-    } else {
-      // Host-forwarded user triggers enter as the slash entry point; the
-      // registry enforces the entryPoints contract from there.
-      const result = await agent.invokeCapability(msg.ref, msg.args, 'slash');
-      reply(result);
+      return { ok: true, commands: await agent.getCapabilitySnapshot({ entryPoint }) };
     }
+    // Host-forwarded user triggers enter as the slash entry point; the
+    // registry enforces the entryPoints contract from there.
+    return await agent.invokeCapability(msg.ref, msg.args, 'slash');
   } catch (err) {
-    reply({ ok: false, error: String(err?.message || err) });
+    return { ok: false, error: String(err?.message || err) };
   }
+}
+
+export async function handleCapabilityIPC(session, msg, reply) {
+  reply(await dispatchCapabilityRequest(session, msg));
 }

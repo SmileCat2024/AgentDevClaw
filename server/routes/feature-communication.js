@@ -3,38 +3,10 @@ import { getAgentRuntime } from '../shared/agent-access.js';
 import { isAuthEnabled, resolveRequestAuth } from '../auth.js';
 import { getSessionOperation } from '../shared/session-operation.js';
 import { FeatureCommunicationStore, normalizeFeatureCommunicationTarget } from '../feature-communication-store.js';
-import { VIEWER_ORIGIN } from '../shared/constants.js';
-import { viewerFetch } from '../shared/viewer-fetch.js';
+import { deliverViaHostRequestChannel } from '../shared/viewer-host-request.js';
 
 export const featureCommunicationStore = new FeatureCommunicationStore();
 const MAX_PAYLOAD_BYTES = 256 * 1024;
-
-/**
- * 经 ViewerWorker 的 host-request 通道向 runtime 投递定向请求（容器/外部
- * 形态：无父子 IPC）。返回 { ok, result | code/error }：ok=true 时 result
- * 为 runtime 侧分发方法的返回值（与本地 IPC 的 feature-comms-result 同构），
- * 传输层失败（断连/超时/viewer 不可达）携带 code 供调用方区分。
- */
-async function deliverViaHostRequestChannel(viewerAgentId, payload) {
-  try {
-    const response = await viewerFetch(VIEWER_ORIGIN, `/api/agents/${encodeURIComponent(viewerAgentId)}/host-request`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = await response.json().catch(() => null);
-    if (response.ok && body?.success === true) {
-      return { ok: true, result: body.result ?? null };
-    }
-    return {
-      ok: false,
-      code: response.status === 504 ? 'runtime_request_timeout' : 'delivery_failed',
-      error: body?.error || `Viewer host-request failed (HTTP ${response.status})`,
-    };
-  } catch (error) {
-    return { ok: false, code: 'delivery_failed', error: String(error?.message || error) };
-  }
-}
 
 function badRequest(res, message) {
   return res.status(400).json({ ok: false, code: 'invalid_request', error: message });
