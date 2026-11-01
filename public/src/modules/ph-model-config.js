@@ -616,6 +616,7 @@ async function _phLoadCoderPolicy() {
       // 行式布局照模型配置页（ph-mc-row）：左标题列（名称 + 解释副标题）+
       // 右定宽控件列，避免 settings-input 满宽拉伸（width:100%）在 flex
       // 行里被拉成通栏。
+      '<section class="ph-coder-policy-section">',
       '<div class="ph-mc-row">',
       '<div class="ph-mc-role">',
       '<div class="ph-mc-role-name">' + (isZh ? '线程并发上限' : 'Thread concurrency limit') + '</div>',
@@ -628,6 +629,16 @@ async function _phLoadCoderPolicy() {
       '<input id="ph-coder-thread-limit" type="number" min="1" step="1" class="settings-input" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" onchange="window.phSaveCoderThreadLimit(this.value)">',
       '</div>',
       '</div>',
+      '</section>',
+      '<section class="ph-coder-policy-section">',
+      '<div class="ph-mc-row"><div class="ph-mc-role"><div class="ph-mc-role-name">' + (isZh ? '运行模式' : 'Runtime mode') + '</div><div class="ph-mc-role-desc">' + (isZh ? '选择任务运行的位置。' : 'Choose where Coder tasks run.') + '</div></div></div>',
+      '<div class="ph-pm-body ph-coder-runtime-options">',
+      optionCard('standard', runtimeMode === 'standard', isZh ? '标准模式' : 'Standard', isZh ? '直接在本机运行。' : 'Run directly on this machine.', 'phSetCoderRuntimeMode'),
+      optionCard('container', runtimeMode === 'container', isZh ? '容器模式' : 'Container', isZh ? '在容器环境中运行。' : 'Run in a container environment.', 'phSetCoderRuntimeMode'),
+      optionCard('agent-choice', runtimeMode === 'agent-choice', isZh ? '让 Agent 自主选择' : 'Agent chooses', isZh ? '每次创建任务时选择标准模式或容器模式。' : 'Choose standard or container each time a task is created.', 'phSetCoderRuntimeMode'),
+      '</div>',
+      '</section>',
+      '<section class="ph-coder-policy-section">',
       // 接续策略行与并发上限行同形态（ph-mc-row + role 名称/解释），
       // 策略卡片区随行展开。
       '<div class="ph-mc-row">',
@@ -655,12 +666,7 @@ async function _phLoadCoderPolicy() {
           ? '将整个会话浓缩为一份九段式摘要；上下文最小，保留细节最少。'
           : 'Condense the whole session into one nine-section summary. Smallest context, least detail.'),
       '</div>',
-      '<div class="ph-mc-row"><div class="ph-mc-role"><div class="ph-mc-role-name">' + (isZh ? '运行模式' : 'Runtime mode') + '</div><div class="ph-mc-role-desc">' + (isZh ? '选择 Coder 运行任务的执行环境。容器启动失败会明确报错，不会切回标准模式。' : 'Choose Coder execution environment. Container startup failures are reported; they never fall back to standard mode.') + '</div></div></div>',
-      '<div class="ph-pm-body">',
-      optionCard('standard', runtimeMode === 'standard', isZh ? '标准模式' : 'Standard', isZh ? '直接在当前主机运行。' : 'Run directly on this host.', 'phSetCoderRuntimeMode'),
-      optionCard('container', runtimeMode === 'container', isZh ? '容器模式' : 'Container', isZh ? '在容器中运行；环境不可用时任务启动失败。' : 'Run in a container; startup fails if the environment is unavailable.', 'phSetCoderRuntimeMode'),
-      optionCard('agent-choice', runtimeMode === 'agent-choice', isZh ? '让 Agent 自主选择' : 'Agent chooses', isZh ? '派遣方每次创建任务时明确指定标准或容器模式。' : 'The dispatcher explicitly selects standard or container for each task.', 'phSetCoderRuntimeMode'),
-      '</div>',
+      '</section>',
       '<div id="ph-coder-policy-status" style="margin:12px 24px 0;"></div>',
     ].join('');
   } catch (error) {
