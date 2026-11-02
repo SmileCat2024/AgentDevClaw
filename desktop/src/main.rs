@@ -541,11 +541,18 @@ const CLOSE_DIALOG_HTML: &str = r##"<!doctype html>
     user-select: none; cursor: default;
   }
   .card {
+    position: relative;
     width: 400px; padding: 24px 28px 20px; border-radius: 10px;
     background: #ffffff; color: #1f2329;
     box-shadow: 0 16px 48px rgba(0, 0, 0, .35), 0 0 0 1px rgba(0, 0, 0, .05);
   }
-  .title { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+  .title { font-size: 16px; font-weight: 600; margin-bottom: 10px; padding-right: 24px; }
+  .close-button {
+    position: absolute; top: 12px; right: 12px;
+    width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px;
+    background: transparent; color: #6b7280; font-size: 20px; line-height: 1;
+  }
+  .close-button:hover { background: rgba(127, 127, 127, .12); color: inherit; }
   .desc { font-size: 13px; line-height: 1.7; color: #6b7280; margin-bottom: 24px; }
   .actions { display: flex; gap: 10px; justify-content: flex-end; }
   button {
@@ -567,6 +574,7 @@ const CLOSE_DIALOG_HTML: &str = r##"<!doctype html>
       background: #26262a; color: #e9e9ec;
       box-shadow: 0 16px 48px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .08);
     }
+    .close-button { color: #a6a6ad; }
     .desc { color: #a6a6ad; }
     .minimize { background: #3b76e0; }
     .minimize:hover { background: #4c84e6; }
@@ -575,6 +583,7 @@ const CLOSE_DIALOG_HTML: &str = r##"<!doctype html>
 </head>
 <body>
 <main class="card" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title">
+  <button class="close-button" type="button" aria-label="取消并关闭此对话框" title="取消">×</button>
   <h1 class="title" id="close-confirm-title">您要退出 AgentDevClaw 吗？</h1>
   <p class="desc">选择「最小化到系统托盘」，AgentDevClaw 将继续在后台运行，会话与任务不会中断。</p>
   <div class="actions">
@@ -592,6 +601,7 @@ const CLOSE_DIALOG_HTML: &str = r##"<!doctype html>
   for (const button of document.querySelectorAll('button[data-choice]')) {
     button.addEventListener('click', () => choose(button.dataset.choice));
   }
+  document.querySelector('.close-button').addEventListener('click', () => choose('cancel'));
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') choose('cancel');
   });
