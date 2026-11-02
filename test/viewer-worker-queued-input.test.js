@@ -32,6 +32,7 @@ const AGENT_ID = 'test-queued-input-agent';
 const CLIENT_ID = 'fake-client-id';
 
 let viewerWorker = null;
+const savedHttpBind = process.env.AGENTDEV_VIEWER_HTTP_BIND;
 
 async function httpPost(path, body) {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -54,6 +55,10 @@ async function queueViaUserTurn(text, images) {
 
 describe('ViewerWorker user-turn queued mailbox', () => {
   before(async () => {
+    // These HTTP endpoints are loopback-only in this test; an inherited
+    // non-loopback bind from the developer's .env must not turn the test into
+    // an unauthenticated cross-network request (or make it fail with 401).
+    process.env.AGENTDEV_VIEWER_HTTP_BIND = '127.0.0.1';
     const { ViewerWorker } = await import('@agentdevjs/viewer');
     viewerWorker = new ViewerWorker(TEST_PORT, false, TEST_UDS_PATH);
     await viewerWorker.start();
@@ -77,6 +82,8 @@ describe('ViewerWorker user-turn queued mailbox', () => {
       viewerWorker.udsClients.delete(CLIENT_ID);
       await viewerWorker.stop();
     }
+    if (savedHttpBind === undefined) delete process.env.AGENTDEV_VIEWER_HTTP_BIND;
+    else process.env.AGENTDEV_VIEWER_HTTP_BIND = savedHttpBind;
   });
 
   // ── user-turn queued delivery ──
