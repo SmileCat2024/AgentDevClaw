@@ -1,6 +1,9 @@
 // 容器镜像自检（ADR-0037 M5）：以 runtime 语义验证 Agent 运行环境完整性。
 // 在镜像内执行：node scripts/container-selftest.js
 //
+// 镜像按 agent 构建（一 agent 一镜像）：本脚本扫描镜像内实际存在的
+// prebuilt agent 装配链（应当恰好是目标 agent；一个都没有 = FAIL）。
+//
 // 验证内容（与镜像的使用方式一致——runtime 的全部工作就是加载装配链）：
 //   1. 加载全部 prebuilt agent 装配链（agent.js → @agentdevjs/* / local-features
 //      / features dist / skills 资产），import 成功 = 依赖闭包完整；
@@ -49,6 +52,10 @@ for (const { id, file } of discoverAgentEntries()) {
 
 if (failures.length > 0) {
   console.error('[container-selftest] FAIL\n  ' + failures.join('\n  '));
+  process.exit(1);
+}
+if (loaded.length === 0) {
+  console.error('[container-selftest] FAIL: 镜像内未发现任何 agent 装配链（按 agent 构建的镜像必须恰好包含目标 agent）');
   process.exit(1);
 }
 console.log(`[container-selftest] OK: ${loaded.length} agent 装配链加载成功（${loaded.join(', ')}）`);

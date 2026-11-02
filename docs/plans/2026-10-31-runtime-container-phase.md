@@ -1,7 +1,7 @@
 # ADR-0037 容器阶段实施计划（M4–M6）
 
 - **关联**: [ADR-0037](../adr/0037-runtime-execution-environment-unification.md)（决策 1 / 调查结论 D / E / F；M1–M3 已实施）
-- **Status**: 方向性决策已定（2026-10-31 grill 会话，结论见第一节）；待本计划评审确认后实施
+- **Status**: M4–M6 已实施。M5 镜像构建于 2026-11-02 修订为**按 agent 最小依赖镜像**（一 agent 一镜像；路线二 staging 轨道不接入容器构建，版本对齐经镜像 label 归产品层），见 ADR-0037 修订。
 - **前置**: M1 TCP 传输、M2 `AGENTDEV_VIEWER_ORIGIN`、M3 注册协议与停止通道均已落地并验收
 
 ## 一、已定决策（方向层，grill 会话结论）

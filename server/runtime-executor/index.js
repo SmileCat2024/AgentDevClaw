@@ -14,8 +14,10 @@ export { containerRuntimeBackend };
  * 执行后端选择（ADR-0037 M4，实验形态 env 开关；配置入口产品化归后续里程碑）：
  *
  * - CLAW_RUNTIME_EXECUTOR：local（默认）| container。container 经 dockerode
- *   运行 pack:container 预构建镜像（运行时不构建；镜像缺失 / Docker 不可用
- *   / 平台未开启 TCP 与非回环 HTTP 绑定时启动报错，不静默回退 local）。
+ *   运行 pack:container 预构建的按 agent 镜像（默认 tag
+ *   agentdev-claw-runtime:<agentId>，CLAW_RUNTIME_CONTAINER_IMAGE 可整体覆盖；
+ *   运行时不构建；镜像缺失 / Docker 不可用 / 平台未开启 TCP 与非回环 HTTP
+ *   绑定时启动报错，不静默回退 local）。
  * - CLAW_RUNTIME_EXECUTOR_AGENTS：逗号分隔的 agentId 清单；空 = 全部托管 spawn。
  *   清单外的 agent 落回 local，支持单 agent 试点。
  *

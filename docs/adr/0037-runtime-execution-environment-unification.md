@@ -109,6 +109,8 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 
 修订（2026-10-31，容器阶段实施计划）：本轮镜像构建只实施**本地树直接取材**路线（断网可构建：依赖复用本地 node_modules，开发态 `@agentdevjs/*` 经相邻仓库 `npm pack` 实体化，镜像内容 = 本地树现状，开发迭代形态）；原 staging 组装轨道（干净安装、可复现版本轨道，需 registry 网络）作为路线二**预留**——共用 Dockerfile，将来接入为小增量，正式分发、跨机一致与配置面 UI 归产品化里程碑。Linux 基础镜像 + 系统依赖（git）收敛为本地预烘焙 base 镜像（联网准备一次，此后树级构建不再联网）。见 [docs/plans/2026-10-31-runtime-container-phase.md](../plans/2026-10-31-runtime-container-phase.md)。
 
+修订（2026-11-02，按 agent 最小依赖镜像）：镜像从"全局单镜像"改为**一 agent 一镜像**——`pack:container [-- --agent=<id>]` 按 agent 构建，内容 = run-prebuilt-agent 宿主闭包 + 该 agent 的 agent.js 闭包（含其引用的 local-features / features 子包）+ bare import 依赖的递归闭包，node_modules 只含闭包集合；全局镜像与 `latest` tag 退役，容器后端按 agentId 选 `agentdev-claw-runtime:<agentId>` 主 tag（`CLAW_RUNTIME_CONTAINER_IMAGE` 保留为显式整体覆盖）。构建持续本地树直取，**不引入 npm install / registry 耦合**（路线二 staging 组装轨道不作为容器构建路径）；版本对齐归产品层——镜像副 tag `<agentId>-<版本>-<hash>[-dirty]` 与 OCI revision label 记录来源，供运行时核对。
+
 ## Consequences
 
 - **正面**：三态一致由架构保证而非逐端点纪律；框架传输层缺陷被显式修正而非垫片掩盖；旧远程「每端点补一个远程分支」的模式不再复发。六项执行前调查全部落定，实施前无未知阻塞项；改动面收敛为：框架传输接口 + TCP 监听（数百行级）、两处 dequeue 地址化、agent-startup 执行后端 seam、镜像复用 pack 组装、容器数据以挂载供给。
@@ -193,7 +195,7 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 
 开放点：run-prebuilt-agent.js 模块顶层即执行 argv 解析，cwd 优先级消费侧无法以导入方式单测——由注入侧用例 + M6 容器端到端（env 值映射 `/workspace`）补证；存量失败（7 文件 27 例，与本步无关）另行处理，不随本步扩大范围。
 
-### M5 — 镜像与构建（2026-11-01 已实施，构建与镜像自检通过；断网 / 桌面树实测待补）
+### M5 — 镜像与构建（2026-11-01 已实施，构建与镜像自检通过；2026-11-02 修订为按 agent 最小依赖镜像，见本节末）
 
 范围 = 计划 M5 路线一（本地树直取，断网可构建；`--staging` 组装轨道预留未实施）+ M2 遗留的框架侧非回环监听与 Bearer 强制。跨两仓。
 
@@ -212,6 +214,8 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 验收：构建端到端通过（6m27s）；镜像 `agentdev-claw-runtime:0.2.3-6b8afa15-dirty`（643MB）自检 10 条装配链全部加载成功。框架侧新增 5 例测试全绿（绑定解析 / 回环不变 / 非回环无 token 401 / 有 token 200 / 无 token 构造抛错），viewer 包全量 167 例全绿，框架 build 已生效。构建期实测修入注释的坑：闭包正则 lastIndex 跨文件污染（短文件整文件 import 漏抓）、依赖队列快照腰斩（递归断在第二层）、npm install 的 file: link 副作用、junction tar 损坏条目。
 
 开放点：断网实测与桌面树（pack:desktop staging 内运行 pack:container）实测待补；镜像内容 = 本地树现状快照（路线一既定语义，见调查结论 F 修订），可复现轨道留待路线二。
+
+修订（2026-11-02，按 agent 最小依赖镜像，替代上述全局单镜像形态）：一 agent 一镜像，`pack:container [-- --agent=<id>]` 产出 `agentdev-claw-runtime:<agentId>`。主 context = run-prebuilt-agent 宿主闭包 + 该 agent 目录整树 + 其引用的 local-features / features 子包（resources/features 仅当闭包引用 server/feature-runtime 时携带）；nm named context = 该闭包 bare import 的递归依赖闭包（package.json 声明驱动展开，开发态 @agentdevjs 实体化 + 版本分叉嵌套仲裁语义不变；声明但本机未安装的 optional 平台变体 / optional peer 跳过复制，真实缺失由镜像自检兜底）。纯 COPY 零 RUN 零 npm install 不变；原路线二（staging 组装轨道）不接入容器构建，版本对齐归产品层（副 tag + OCI revision label）。自检改为"镜像内应恰好包含目标 agent"（零 agent 即失败）；e2e 预检改为按 agent 校验镜像存在。
 
 下一步：M6 容器后端接入 seam（注册握手 ticket、数据挂载供给）与四场景端到端验收。
 
@@ -237,6 +241,7 @@ runtime 经平台 HTTP 注册与心跳替代 `process.send` 握手，承载改�
 
 - **宿主运行期读容器 agent 的 index.db 会撞锁** → 已由「M6 后续 — 开放点治理」收口（索引委托，快照读）。
 - **feature-comms 请求面（ADR-0018）对容器 runtime 不可达** → 已由「M6 后续 — 开放点治理」收口（viewer host-request 通道）。
+- **Feature 模板资产对容器 runtime 不可达**（`/tpl/` 挂载路径是容器内路径，宿主 ViewerWorker 读不到）→ 已由 [ADR-0038 资源读取协议](0038-resource-fetch-protocol.md) 收口（`/res/` 回源模式，worker 经 host-request 向 runtime 取内容）。
 - **多会话同容器（add-session 跨容器边界）不支持**：共享进程模式 join 到容器共享进程显式 409；通道化（宿主中转 add-session）留待真实需求。
 - **Coder 执行环境产品设置**：Coder 策略页保存 `runtimeExecutionMode`（standard / container / agent-choice）。固定模式是硬限制；agent-choice 要求派遣入口显式选择 standard 或 container。会话索引 metadata 持久化已裁定模式，接力创建继承；启动按会话模式覆盖 executor 实验开关，容器初始化失败保持失败、不回退。本阶段未改变其他 agent 的 executor 实验开关和环境选择。
 - M5 欠账顺延：断网构建实测、桌面树（pack:desktop staging 内运行 pack:container）实测。

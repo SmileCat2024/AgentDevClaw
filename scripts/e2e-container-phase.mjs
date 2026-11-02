@@ -22,7 +22,7 @@
  * 快照恢复成功。
  *
  * 用法：node scripts/e2e-container-phase.mjs [--image <tag>] [--keep] [--model <preset>]
- *   --image  容器镜像 tag（默认取 agentdev-claw-runtime 最新构建）
+ *   --image  容器镜像（显式覆盖；默认走按 agent 镜像 agentdev-claw-runtime:<agentId>）
  *   --keep   保留隔离目录与平台日志（失败时自动保留）
  */
 
@@ -120,7 +120,9 @@ function startPlatform({ mode, ports, dataDir, logFile, image }) {
     env.AGENTDEV_VIEWER_ADDR = `0.0.0.0:${ports.viewerTcp}`;
     env.AGENTDEV_VIEWER_HTTP_BIND = '0.0.0.0';
     env.CLAW_RUNTIME_EXECUTOR_AGENTS = AGENT_ID;
-    env.CLAW_RUNTIME_CONTAINER_IMAGE = image;
+    // 不设 CLAW_RUNTIME_CONTAINER_IMAGE：走后端按 agent 默认镜像
+    // agentdev-claw-runtime:<agentId>（显式覆盖仅在 --image 时注入）
+    if (image) env.CLAW_RUNTIME_CONTAINER_IMAGE = image;
   }
   const child = spawn(process.execPath, ['server.js'], {
     cwd: REPO_ROOT,
@@ -144,17 +146,23 @@ async function main() {
   sh('docker', ['version', '--format', '{{.Server.Version}}']);
   const IMAGE = (IMAGE_ARG
     ? (IMAGE_ARG.includes(':') ? IMAGE_ARG : `agentdev-claw-runtime:${IMAGE_ARG}`)
-    : (() => {
-      const tag = sh('docker', ['images', 'agentdev-claw-runtime', '--format', '{{.Tag}}'])
-        .split('\n').map((s) => s.trim()).filter(Boolean)[0];
-      return tag ? `agentdev-claw-runtime:${tag}` : null;
-    })());
-  if (!IMAGE) throw new Error('无 agentdev-claw-runtime 镜像（先 npm run pack:container）');
-  sh('docker', ['image', 'inspect', IMAGE]);
+    : null);
+  if (IMAGE) {
+    // 显式覆盖：两 agent 共用同一镜像（调试副 tag 等）
+    sh('docker', ['image', 'inspect', IMAGE]);
+    console.log(`  镜像（显式覆盖）: ${IMAGE}`);
+  } else {
+    // 默认走按 agent 镜像（后端默认 agentdev-claw-runtime:<agentId>）：
+    // 本脚本拉起 coder 与 programming-helper 两个容器，镜像各自预检。
+    for (const id of [AGENT_ID, 'programming-helper']) {
+      const img = `agentdev-claw-runtime:${id}`;
+      sh('docker', ['image', 'inspect', img]);
+      console.log(`  镜像: ${img}`);
+    }
+  }
   if (!existsSync(join(BASE_DATA, 'presets.json'))) {
     throw new Error(`真实数据目录缺 presets.json（${BASE_DATA}），无可用模型配置`);
   }
-  console.log(`  镜像: ${IMAGE}`);
   console.log(`  模型配置源: ${BASE_DATA}`);
 
   // ---- 隔离环境 ----

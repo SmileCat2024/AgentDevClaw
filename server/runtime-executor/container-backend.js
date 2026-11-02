@@ -184,8 +184,11 @@ export function startContainerRuntime({ argv, env, cwd, ipc }) {
   void ipc; // 容器无父子 IPC；共享进程模式已在 executor 选择层回退 local
   const agentId = sanitizeSessionFragment(env.PROTOCLAW_PREBUILT_AGENT_ID);
   const sessionId = sanitizeSessionFragment(env.PROTOCLAW_PREBUILT_SESSION_ID);
+  // 镜像按 agent 构建（pack:container -- --agent=<id>）：默认主 tag
+  // agentdev-claw-runtime:<agentId>；CLAW_RUNTIME_CONTAINER_IMAGE 为显式整体
+  // 覆盖（调试副 tag 等）。镜像缺失由 docker create 报错，不静默回退。
   const image = cleanSessionText(process.env.CLAW_RUNTIME_CONTAINER_IMAGE)
-    || 'agentdev-claw-runtime:latest';
+    || `agentdev-claw-runtime:${agentId}`;
   const docker = new Docker(process.env.CLAW_DOCKER_SOCKET
     ? { socketPath: process.env.CLAW_DOCKER_SOCKET }
     : undefined);
