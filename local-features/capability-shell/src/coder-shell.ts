@@ -25,8 +25,6 @@
  * 故障表一致）：模型调用时得到 unknown_verb + 结构化指引。
  */
 
-import { stat } from 'node:fs/promises';
-import { isAbsolute, normalize } from 'node:path';
 import type { BackgroundAccess } from '@agentdevjs/core';
 import type { CoderMonitor } from './coder-monitor.js';
 
@@ -311,8 +309,9 @@ export function createThreadsAdapter(deps: {
       // new-session <agentId> <目录> [title]：创建 Coder APP 会话（agentId=coder，
       // ADR-0025），线程宿主 APP 自动建线（标准路径；create 仅用于已存在会话加挂线程）。
       // 目录必填（服务端已禁止目录回退默认——workspace 最近目录随上次切换
-      // 漂移，裸创建几乎必然绑错项目），本地先校验绝对路径与存在性，
-      // 错误在派发侧即出，不等 server 400。
+      // 漂移，裸创建几乎必然绑错项目）。路径语义与存在性由 Claw 宿主校验：
+      // 本 adapter 可能运行在不同 OS / filesystem 的容器里，不能用本地路径
+      // 规则判断宿主路径（例如 Linux runtime 不能解析 Windows D:\\...）。
       // 契约参照 bin/claw.mjs handleSessions（--dir 映射 openDirectory；
       // coder APP 响应带 threadId）。
       case 'new-session': {
@@ -334,14 +333,6 @@ export function createThreadsAdapter(deps: {
             `new-session 拒绝：必须显式指定目标工作目录（coder 会话不接受目录回退默认，缺省时服务端会绑定到 workspace 最近目录）。`
             + ` 用法：new-session <agentId> <目标工作目录> [标题]`,
           );
-        }
-        const normalizedDirectory = normalize(directory);
-        if (!isAbsolute(normalizedDirectory)) {
-          throw new Error(`new-session 拒绝：目录必须是绝对路径: ${directory}`);
-        }
-        const directoryStat = await stat(normalizedDirectory).catch(() => null);
-        if (!directoryStat?.isDirectory()) {
-          throw new Error(`new-session 拒绝：目标工作目录不存在或不是目录: ${directory}`);
         }
         // ── 线程配额预检（ADR-0027 修订一调度方 UX 层，不承担强制）──────
         // 读配额与非终态线程计数（同一 GET 一次拿齐），满额时提前给可读
@@ -381,7 +372,7 @@ export function createThreadsAdapter(deps: {
         }
         const body: Record<string, unknown> = {
           agentId,
-          openDirectory: normalizedDirectory,
+          openDirectory: directory,
           runtimeMode,
         };
         if (title) body.title = title;

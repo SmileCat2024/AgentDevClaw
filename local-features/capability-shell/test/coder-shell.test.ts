@@ -393,27 +393,38 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     assert.equal(requests.length, 0, '域校验拒绝不得发出任何 HTTP 请求');
   });
 
-  it('目录缺失 / 不存在 / 相对路径 → 本地结构化拒绝，不发出任何请求', async () => {
+  it('目录参数缺失 → 本地结构化拒绝，不发出任何请求', async () => {
     const { fetchImpl, requests } = recordingFetch([]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
-    // 缺目录参数
     const rMissing = await runCapabilityShellPipeline(POLICY, 'new-session coder', {
       adapters
     });
     assert.equal(rMissing.ok, false, rMissing.output);
     assert.ok(rMissing.output.includes('目标工作目录'), rMissing.output);
-    // 目录不存在
-    const rGhost = await runCapabilityShellPipeline(POLICY, 'new-session coder /nonexistent/dir-xyz', {
-      adapters
-    });
-    assert.equal(rGhost.ok, false, rGhost.output);
-    // 相对路径（存在目录但非绝对路径）
-    const rRelative = await runCapabilityShellPipeline(POLICY, `new-session coder ${basename(tmpdir())}`, {
-      adapters
-    });
-    assert.equal(rRelative.ok, false, rRelative.output);
-    assert.ok(rRelative.output.includes('绝对路径'), rRelative.output);
-    assert.equal(requests.length, 0, '本地校验拒绝不得发出任何 HTTP 请求');
+    assert.equal(requests.length, 0, '缺少目录参数时不得发出任何 HTTP 请求');
+  });
+
+  it('Windows 宿主绝对路径由 adapter 原样提交，不用容器本地路径规则预检', async () => {
+    const { fetchImpl, requests } = recordingFetch([
+      { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'container' } },
+      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { resourcePolicy: {}, liveThreads: {} } },
+      {
+        match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
+        body: { threadId: 'wt-windows-path', session: { id: 'session-windows-path' } },
+      },
+    ]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const hostDirectory = `D:${String.fromCharCode(92)}__claw_host_workspace_${process.pid}_${Date.now()}`;
+    const result = await runCapabilityShellPipeline(
+      POLICY,
+      `new-session coder '${hostDirectory}' --runtime-mode=container`,
+      { adapters },
+    );
+
+    assert.equal(result.ok, true, result.output);
+    const post = requests.find((req) => req.url.endsWith('/protoclaw/prebuilt_sessions') && req.init?.method === 'POST');
+    assert.ok(post, 'Windows 宿主路径应到达 Claw 创建端点，由服务端验证宿主文件系统');
+    assert.equal(JSON.parse(String(post.init?.body)).openDirectory, hostDirectory);
   });
 
   it('响应解析：threadId 前置（session 缺失也能解析），null threadId 附手动建线提示', async () => {
