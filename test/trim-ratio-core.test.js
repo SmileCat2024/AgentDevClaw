@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
-const NOTE_PREFIX = '[Folded tool activity]\nassistant tool calls: ';
+const NOTE_PREFIX = '[Folded tool activity]\nTool calls since user input above, through here:\nassistant tool calls: ';
 
 function loadCore() {
   const ctx = createFrontendSandbox();
@@ -81,29 +81,32 @@ describe('TrimRatioCore.safeCutCandidates', () => {
 });
 
 describe('TrimRatioCore.estimateFoldResidue', () => {
-  it('keeps dialogue text, folds tool activity into one note per run', () => {
+  it('estimates one call-scoped note after assistant prose and before the next user input', () => {
     const core = loadCore();
     const messages = [
       msg('user', { charCount: 10, contentCharCount: 10 }),
-      msg('assistant', { charCount: 40, toolCalls: [{ id: 't1', name: 'read', summary: 'read(a.js)' }] }),
+      msg('assistant', { charCount: 40, contentCharCount: 10, toolCalls: [{ id: 't1', name: 'read', summary: 'read(a.js)' }] }),
       msg('tool', { charCount: 500, toolCallId: 't1' }),
       msg('assistant', { charCount: 7, contentCharCount: 7 }),
+      msg('user', { charCount: 3, contentCharCount: 3 }),
     ];
-    // residue = user text 10 + note(read(a.js)) + assistant text 7
-    const expected = 10 + (NOTE_PREFIX + 'read(a.js)').length + 7;
-    assert.equal(core.estimateFoldResidue(messages, 4), expected);
+    // 一次 call：两段 assistant 正文仍保留，合并注记排在下一条 user 之前。
+    const expected = 10 + 10 + 7 + 3 + (NOTE_PREFIX + 'read(a.js)').length;
+    assert.equal(core.estimateFoldResidue(messages, 5), expected);
   });
 
-  it('merges consecutive tool runs but splits them at dialogue text', () => {
+  it('ends a call summary at the next user input, not at assistant prose', () => {
     const core = loadCore();
     const messages = [
+      msg('user', { charCount: 5, contentCharCount: 5 }),
       ...toolPair('t1', 'a.js', 40, 500),
-      msg('user', { charCount: 6, contentCharCount: 6 }),
+      msg('assistant', { charCount: 12, contentCharCount: 12 }),
       ...toolPair('t2', 'b.js', 40, 500),
+      msg('user', { charCount: 6, contentCharCount: 6 }),
     ];
-    // 两段工具块各出一条注记，user 文本打断
-    const expected = (NOTE_PREFIX + 'read(a.js)').length + 6 + (NOTE_PREFIX + 'read(b.js)').length;
-    assert.equal(core.estimateFoldResidue(messages, 5), expected);
+    // 同一 call 中的正文不拆注记；下一条 user 开始时才结算这一块。
+    const expected = 5 + 12 + (NOTE_PREFIX + 'read(a.js); read(b.js)').length;
+    assert.equal(core.estimateFoldResidue(messages, 6), expected);
   });
 
   it('dedupes identical summaries with ×N like the engine', () => {

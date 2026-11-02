@@ -191,22 +191,28 @@ describe('trim-compact fixes', () => {
       assert.equal(stats.foldedToolCallCount, 4, 'all 4 tool calls folded');
     });
 
-    it('still separates folds when assistant text appears between tool calls', () => {
+    it('groups tool calls across assistant prose until the next user input', () => {
       const messages = [
         { role: 'user', content: 'do task', turn: 0 },
         { role: 'assistant', content: 'Step 1.', turn: 0, toolCalls: [{ name: 'grep', arguments: '{}' }] },
         { role: 'tool', toolCallId: 'tc1', content: '{}', turn: 0 },
         { role: 'assistant', content: 'Step 2.', turn: 0, toolCalls: [{ name: 'bash', arguments: '{}' }] },
         { role: 'tool', toolCallId: 'tc2', content: '{}', turn: 0 },
-        { role: 'user', content: 'ok', turn: 1 },
+        { role: 'assistant', content: 'Finished this request.', turn: 0 },
+        { role: 'user', content: 'next request', turn: 1 },
         { role: 'assistant', content: 'done', turn: 1 },
       ];
       const policy = normalizeExportPolicy({ preservedTurns: [1] });
       const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
 
       const foldNotes = seedMessages.filter(m => m.content.includes('[Folded tool activity]'));
-      // "Step 1." and "Step 2." are real text, so each should flush the previous fold
-      assert.equal(foldNotes.length, 2, 'text between tool calls should produce separate folds');
+      assert.equal(foldNotes.length, 1, 'one user-input call produces one folded activity note');
+      assert.match(foldNotes[0].content, /Tool calls since user input above, through here:/);
+      assert.match(foldNotes[0].content, /assistant tool calls: grep; bash/);
+      assert.deepEqual(seedMessages.filter(m => m.role === 'assistant' && m.turn === 0).map(m => m.content),
+        ['Step 1.', 'Step 2.', 'Finished this request.']);
+      assert.equal(seedMessages.indexOf(foldNotes[0]),
+        seedMessages.findIndex(m => m.role === 'user' && m.content === 'next request') - 1);
     });
   });
 

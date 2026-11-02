@@ -13,11 +13,9 @@
  * 折叠残留估算对齐框架 trim-transcript 引擎（assistantToolCallMode /
  * toolMessageMode = 'fold'，foldConsecutiveToolActivity = true）：
  *   - 精简区内 user / assistant 的对话文本保留（估算取 contentCharCount）
- *   - 工具活动折叠为注记 "[Folded tool activity]\nassistant tool calls: s1; s2 ×N"
- *     （同名摘要去重计数 ×N；摘要为引擎括号格式 read(a.js)，服务端投影已按
- *     该格式生成，本模块直接拼接）
- *   - 连续工具块被对话文本（user / 有文本 assistant / system）打断时分段出注记
- *   - 纯工具 assistant（无文本）不打断工具块
+ *   - 一个 user-input call 内的工具活动折叠为一条注记，位置在下一条 user 之前
+ *   - assistant 正文不打断工具块；同名摘要去重计数 ×N
+ *   - 注记带简短区间说明；摘要格式为引擎括号版 read(a.js)，服务端投影可直接拼接
  * 已知偏差（UI 读数标注「估算」）：不含 keepRecentSkillInvokes 技能保护与
  * 摘要生成长度；maxFoldedToolChars 只作用于引擎 args 截断（默认关闭），不影响。
  *
@@ -27,7 +25,7 @@
   'use strict';
 
   // 引擎 flushPendingToolFold 的注记前缀（trim-transcript.ts lines 数组拼接）
-  var FOLD_NOTE_PREFIX = '[Folded tool activity]\nassistant tool calls: ';
+  var FOLD_NOTE_PREFIX = '[Folded tool activity]\nTool calls since user input above, through here:\nassistant tool calls: ';
 
   function normalizeMessages(messages) {
     return Array.isArray(messages) ? messages : [];
@@ -107,17 +105,16 @@
   }
 
   /**
-   * 精简区 [0, cutIndex) 的折叠残留估算（字符）。分派对齐引擎：
-   * user → flush 后保留文本；有文本 assistant → flush 后保留文本、calls 入
-   * 折叠；纯工具 assistant → 不 flush、calls 入折叠；tool → 入折叠不留文本；
-   * system / 脏消息 → flush（打断工具块）但不保留（includeSystemMessages=false）。
-   * 区尾未 flush 的 pending 强制结算（引擎循环后 flushPendingToolFold）。
+   * 精简区 [0, cutIndex) 的折叠残留估算（字符）。user 开启 call；下一条 user
+   * 结算摘要。assistant 正文与 system 消息不切断汇总；tool 结果不保留文本。
+   * 区尾 pending 按引擎行为结算。
    */
   function estimateFoldResidue(messages, cutIndex) {
     var msgs = normalizeMessages(messages);
     var end = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
     var residue = 0;
     var pendingSummaries = [];
+    var sawUserInput = false;
     var flush = function () {
       if (pendingSummaries.length === 0) return;
       residue += foldNoteLength(pendingSummaries);
@@ -137,10 +134,9 @@
             pendingSummaries.push(calls[t].summary);
           }
         }
-        if (!(contentChars === 0 && calls.length > 0)) flush();
         residue += contentChars;
       } else if (m.role === 'system') {
-        flush();
+        // System messages may occur within a call and do not close its tool summary.
       }
       // role='tool' 与空 role：引擎丢弃/折叠，不 flush、不贡献
     }
