@@ -16,6 +16,8 @@
  *   ④ 停止通道收敛：docker kill 强杀 → 容器实体自动清理；stop_agent 优雅
  *      停止 → 容器在宽限期内收敛消失
  *   ⑤ 编程小助手入口容器模式 + 本地/容器会话并存（并存闸退役验证）
+ *   ⑥ 资源读取协议（ADR-0038）：容器模板 /res/ 回源成功 + 未注册根与
+ *      穿越路径拒绝（宿主读不到容器内包根，回源是唯一通路）
  *
  * 断言采用快照全文计数法（不依赖快照内部结构）：回复独有 token 的出现
  * 次数增长 = 新 assistant 回复落盘；引用历史题（答案只在历史记录中）=
@@ -403,6 +405,55 @@ async function main() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agentId: PH_ID, sessionId: phLocalId }),
     }).catch(() => {});
+
+    // ---- 场景 ⑥：资源读取协议（ADR-0038）——容器模板 /res/ 跨边界回源 ----
+    // 容器 runtime 的 feature 包根是容器内路径，宿主 ViewerWorker 的文件系统
+    // 不可达；模板资产现按 /res/{agentId}/{rootId}/{rel} 寻址，viewer 经
+    // host-request 向 runtime 回源取字节。断言：模板映射产出 /res/ URL 且经
+    // 平台端口取回非空字节（跨边界回源成功）；未注册 rootId 与穿越路径均被
+    // 拒绝且不泄漏文件内容。
+    log('S6', '资源读取协议：容器模板 /res/ 回源 + 越根拒绝');
+    // 容器形态下 viewerAgentId 经 ticket 身份交接异步到达（创建响应不带；
+    // viewer id 槽位会跨 agent 复用，如 agent-1-1）。从平台日志按
+    // 「Viewer Agent ID: <id> → 创建新会话: <phSessionId>」就近配对解析。
+    const phLogText = () => { try { return readFileSync(platformLogPath, 'utf8'); } catch { return ''; } };
+    const phViewerAgentId = phCreated?.status?.viewerAgentId
+      || phCreated?.viewerAgentId
+      || await waitFor('PH 容器 viewerAgentId 解析（日志配对）', () => {
+        const text = phLogText();
+        const sessionIdx = text.indexOf(`创建新会话: ${phSessionId}`);
+        if (sessionIdx < 0) return false;
+        const matches = [...text.slice(0, sessionIdx).matchAll(/Viewer Agent ID: (agent-[\w-]+)/g)];
+        return matches.length > 0 ? matches.at(-1)[1] : false;
+      }, 60_000).catch(() => null);
+    const s6 = { mapOk: false, bytesOk: false, rootRejected: false, traversalRejected: false, detail: '' };
+    if (phViewerAgentId) {
+      const templateMap = await waitFor('容器 runtime 模板映射就绪', () => fetchJson(
+        `${platform.baseUrl}/api/templates/feature?agentId=${encodeURIComponent(phViewerAgentId)}`,
+      ).then((m) => (m && Object.keys(m).length > 0 ? m : false)).catch(() => false), 60_000).catch(() => null);
+      const resUrl = templateMap
+        ? Object.values(templateMap).find((u) => String(u).startsWith('/res/'))
+        : undefined;
+      s6.mapOk = Boolean(resUrl);
+      if (resUrl) {
+        const assetResp = await fetch(`${platform.baseUrl}${resUrl}`);
+        const assetBody = await assetResp.text();
+        s6.bytesOk = assetResp.ok && assetBody.length > 0;
+        const probeRoot = await fetch(`${platform.baseUrl}/res/${encodeURIComponent(phViewerAgentId)}/99/nope.js`);
+        s6.rootRejected = probeRoot.status === 404;
+        // WHATWG URL 会折叠明文 .. 段，用百分号编码探测服务端解码后的拒绝
+        const probeTraversal = await fetch(`${platform.baseUrl}/res/${encodeURIComponent(phViewerAgentId)}/0/%2e%2e/%2e%2e/etc/passwd`);
+        const traversalBody = await probeTraversal.text();
+        s6.traversalRejected = probeTraversal.status === 404 && !traversalBody.includes('root:');
+        s6.detail = `map=${resUrl} bytes=${assetBody.length} rootProbe=${probeRoot.status} traversalProbe=${probeTraversal.status}`;
+      } else {
+        s6.detail = `模板映射无 /res/ 条目: ${JSON.stringify(templateMap).slice(0, 160)}`;
+      }
+    } else {
+      s6.detail = '创建响应与平台日志均未解析到 viewerAgentId';
+    }
+    record('⑥ 资源读取协议（容器模板 /res/ 回源 + 未注册根/穿越路径拒绝）',
+      s6.mapOk && s6.bytesOk && s6.rootRejected && s6.traversalRejected, s6.detail);
 
     const phStop = await fetchJson(`${platform.baseUrl}/protoclaw/stop_agent`, {
       method: 'POST',

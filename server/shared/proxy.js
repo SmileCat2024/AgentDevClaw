@@ -55,14 +55,16 @@ const REMOTE_WRITE_RESOURCES = new Set([
   'user-turn',
 ]);
 
-// Template mount assets live under /tpl/{mountId}/… — the mount layout also
-// carries tsup shared chunks and sourcemaps. The remaining prefixes cover the
-// standalone URL forms (npm-workspace roots, bare chunk files, legacy
-// /template/ paths) so every whitelist-shaped asset stays routable.
-// /protoclaw/images/ additionally carries remote message attachments: the
-// bytes live in the remote host's image store, so history rendering and
-// attachment previews must fetch them through the same connection.
-const REMOTE_STATIC_PREFIXES = ['/tpl/', '/template/', '/features/', '/npm/', '/protoclaw/images/'];
+// Resource-fetch assets live under /res/{agentId}/{rootId}/… (ADR-0038) and
+// carry tsup shared chunks and sourcemaps via relative imports. /tpl/ is kept
+// only so frozen legacy remote hosts (ADR-0008) still route; the remaining
+// prefixes cover the standalone URL forms (npm-workspace roots, bare chunk
+// files, legacy /template/ paths) so every whitelist-shaped asset stays
+// routable. /protoclaw/images/ additionally carries remote message
+// attachments: the bytes live in the remote host's image store, so history
+// rendering and attachment previews must fetch them through the same
+// connection.
+const REMOTE_STATIC_PREFIXES = ['/res/', '/tpl/', '/template/', '/features/', '/npm/', '/protoclaw/images/'];
 
 function isStaticAssetPath(pathname) {
   return REMOTE_STATIC_PREFIXES.some((prefix) => pathname.startsWith(prefix))

@@ -37,9 +37,9 @@ const RENDER_TEMPLATES = {
 const templateCache = new Map();
 
 // 焦点 runtime 切换时清空模板缓存（agent-data-loader.js 调用）：
-// FEATURE_TEMPLATE_MAP 按焦点 agent 重新拉取，同名模板可能指向不同 mount。
-// /tpl/ URL 本身按注册事实寻址（跨 agent 同 mount 的 URL 相同），此清空属防御性，
-// 避免任何残留映射错误。内置模板（RENDER_TEMPLATES）随后按需重建，无副作用。
+// FEATURE_TEMPLATE_MAP 按焦点 agent 重新拉取，/res/ URL 按 agentId 寻址
+// （ADR-0038，同名模板在不同 runtime 指向不同 URL），切换即整体失效。
+// 内置模板（RENDER_TEMPLATES）随后按需重建，无副作用。
 function clearFeatureTemplateCache() {
   templateCache.clear();
 }
@@ -197,7 +197,7 @@ function parseToolResult(content, display) {
 
 /**
  * 根据模板名解析文件路径
- * 模板 URL 由 ViewerWorker 从注册事实生成（/tpl/{mountId}/{rel}），不透明、不含布局知识。
+ * 模板 URL 由 ViewerWorker 从注册事实生成（/res/{agentId}/{rootId}/{rel}，ADR-0038），不透明、不含布局知识。
  * 未注册的模板名一律等待 FEATURE_TEMPLATE_MAP 加载，不做任何本地路径推断。
  */
 const self = this;

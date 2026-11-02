@@ -34,7 +34,7 @@ const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const SERVER_ORIGIN = `http://127.0.0.1:${process.env.PORT || 1420}`;
 
 // IM 接线员工具的渲染模板资产随 local-features 构建（dist/templates/im-*.render.js），
-// 经 IMOperatorFeature.getTemplateNames() 声明后由 ViewerWorker 以 /tpl/ URL 提供。
+// 经 IMOperatorFeature.getTemplateNames() 声明后由 ViewerWorker 以 /res/ 资源 URL（ADR-0038）提供。
 const LOCAL_FEATURES_ROOT = join(dirname(dirname(dirname(__dirname))), 'local-features');
 
 // 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离

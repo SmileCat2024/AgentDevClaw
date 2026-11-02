@@ -283,6 +283,21 @@ test('asset route forwards relative chunk imports without any query identity', a
       fetchMock.calls[1].url,
       `${REMOTE_ORIGIN}/npm/shell-feature/render.js?v=2`,
     );
+
+    // Resource-fetch assets (ADR-0038) ride the same static whitelist; their
+    // relative chunk imports resolve against /res/{agentId}/{rootId}/… and
+    // stay on the connection through the path prefix alone.
+    const resAssetRes = makeRes();
+    await proxyToViewer(
+      makeReq('/r/server-a/res/agent-3-22040/0/dist/features/foo/templates/tool.render.js'),
+      resAssetRes,
+      { findConnection: FIND_CONNECTION },
+    );
+    assert.equal(resAssetRes.statusCode, 200);
+    assert.equal(
+      fetchMock.calls[2].url,
+      `${REMOTE_ORIGIN}/res/agent-3-22040/0/dist/features/foo/templates/tool.render.js`,
+    );
   } finally {
     fetchMock.restore();
   }
