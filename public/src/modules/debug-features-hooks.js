@@ -327,6 +327,14 @@ function renderFeaturesPanel() {
 const FEATURE_DETAIL_PORTAL_ID = 'feature-detail-portal';
 
 const SVG_TOOL_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;opacity:0.6;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
+// 二级页返回图标：与 MCP 网关详情页、设置弹窗同一图形（弹窗统一返回/关闭配方）。
+const SVG_BACK_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>';
+
+// 详情分页空态图标：沿用 .gen-ui-empty-icon 的 18px 内联 SVG 规格，
+// currentColor 随图标块着色。三个图形与各自内容对应（工具 / 技能 / 钩子）。
+const SVG_EMPTY_TOOLS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
+const SVG_EMPTY_SKILLS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>';
+const SVG_EMPTY_HOOKS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path></svg>';
 
 // Feature 详情页分页器（身份切换时重置；详情轮询重绘时保持）。
 const FEATURE_DETAIL_TABS = ['tools', 'skills', 'hooks'];
@@ -340,6 +348,12 @@ let _featureDetailTabOwner = null;
 const _skillContentCache = new Map();
 const _skillContentPending = new Map();
 
+// 技能阅读页：null 表示停在技能列表。切 Feature、切分页、关弹窗时复位。
+let _skillView = null;
+// 列表与阅读页各有自己的滚动位置，互跳时接管一次恢复。
+let _pendingScrollRestore = null;
+let _skillListScroll = 0;
+
 window.setFeatureDetailTab = function (tab, featureName) {
   if (!FEATURE_DETAIL_TABS.includes(tab)) return;
   if (featureName && selectedFeatureName !== featureName) return;
@@ -347,6 +361,8 @@ window.setFeatureDetailTab = function (tab, featureName) {
   if (_featureDetailTab === tab && _featureDetailTabOwner === owner) return;
   _featureDetailTab = tab;
   _featureDetailTabOwner = owner;
+  // 离开技能分页时退出阅读页：否则下次回到技能分页会落在上一份文档上。
+  _skillView = null;
   try { localStorage.setItem(FEATURE_DETAIL_TAB_STORAGE_KEY, tab); } catch (e) { /* ignore */ }
   const feature = currentHookInspector.features.find(item => item.name === selectedFeatureName) || null;
   if (!feature) return;
@@ -382,6 +398,36 @@ window.retryFeatureSkill = function (featureName, skillName) {
   _lastDetailSignature = '';
   renderFeatureDetailOverlay(feature);
   ensureSkillContent(featureName, skill, url);
+};
+
+/**
+ * 打开技能阅读页。文档只在这一页面加载与呈现——列表页只保留名称与描述。
+ */
+window.openFeatureSkill = function (featureName, skillName) {
+  if (selectedFeatureName !== featureName || _featureDetailTab !== 'skills') return;
+  const feature = currentHookInspector.features.find(item => item.name === featureName);
+  const skill = feature?.skills?.find(item => item.name === skillName);
+  if (!feature || !skill) return;
+  // 记下列表页的滚动位置，返回时原样还原（列表与阅读页位置互不覆盖）。
+  const listScroll = document.getElementById(FEATURE_DETAIL_PORTAL_ID)?.querySelector('.settings-tab-content');
+  _skillListScroll = listScroll ? listScroll.scrollTop : 0;
+  _skillView = skillName;
+  _pendingScrollRestore = 'top';
+  _lastDetailSignature = '';
+  renderFeatureDetailOverlay(feature);
+  ensureSkillContent(featureName, skill, resourceUrlForSkill(feature, skill));
+};
+
+/**
+ * 从阅读页返回技能列表，并回到离开列表时的滚动位置。
+ */
+window.closeFeatureSkill = function () {
+  if (_skillView === null) return;
+  const feature = currentHookInspector.features.find(item => item.name === selectedFeatureName) || null;
+  _skillView = null;
+  _pendingScrollRestore = 'skillList';
+  _lastDetailSignature = '';
+  renderFeatureDetailOverlay(feature);
 };
 
 function resourceUrlForSkill(feature, skill) {
@@ -423,10 +469,11 @@ function ensureSkillContent(featureName, skill, url) {
 }
 
 function loadVisibleFeatureSkills(feature) {
-  if (_featureDetailTab !== 'skills' || !feature || !Array.isArray(feature.skills)) return;
-  for (const skill of feature.skills) {
-    ensureSkillContent(feature.name, skill, resourceUrlForSkill(feature, skill));
-  }
+  // 技能列表只显示名称与描述，不必预取文档；正文由阅读页按需加载。
+  if (_featureDetailTab !== 'skills' || _skillView === null) return;
+  if (!feature || !Array.isArray(feature.skills)) return;
+  const skill = feature.skills.find(item => item.name === _skillView);
+  if (skill) ensureSkillContent(feature.name, skill, resourceUrlForSkill(feature, skill));
 }
 
 /**
@@ -438,6 +485,8 @@ function ensureFeatureDetailTabOwner(featureName) {
   if (_featureDetailTabOwner === featureName) return;
   _featureDetailTabOwner = featureName;
   _featureDetailTab = 'tools';
+  _skillView = null;
+  _skillListScroll = 0;
 }
 
 function computeFeatureDetailTabs(feature) {
@@ -498,10 +547,11 @@ function syncFeatureDetailTabBar(bar, feature) {
 function renderFeatureDetailContent(feature) {
   const tab = FEATURE_DETAIL_TABS.includes(_featureDetailTab) ? _featureDetailTab : 'tools';
   if (tab === 'tools') {
-    return '<div class="settings-section feature-detail-tab-content" role="tabpanel">'
-      + '<div class="settings-section-title">' + escapeHtml(t('panel_loaded_tools')) + ' (' + String(feature.tools?.length || 0) + ')</div>'
-      + (feature.tools?.length ? '<div class="gateway-tool-grid">' + feature.tools.map(renderFeatureToolCard).join('') + '</div>'
-        : '<div class="gateway-list-empty">' + escapeHtml(t('panel_no_tools')) + '</div>') + '</div>';
+    return '<div class="feature-detail-tab-content" role="tabpanel">'
+      + (feature.tools?.length
+        ? '<div class="gateway-tool-grid">' + feature.tools.map(renderFeatureToolCard).join('') + '</div>'
+        : renderFeatureDetailEmpty(SVG_EMPTY_TOOLS, t('feature_detail_no_tools'), t('feature_detail_no_tools_desc')))
+      + '</div>';
   }
   if (tab === 'hooks') {
     const entries = currentHookInspector.hooks.flatMap(group => (group.entries || [])
@@ -519,29 +569,94 @@ function renderFeatureDetailContent(feature) {
         + '</div>'
         + (entry.description ? '<div class="feature-hook-desc">' + escapeHtml(entry.description) + '</div>' : '')
         + '</div>').join('') + '</div>'
-        : '<div class="gateway-list-empty">' + escapeHtml(t('feature_detail_no_hooks')) + '</div>')
+        : renderFeatureDetailEmpty(SVG_EMPTY_HOOKS, t('feature_detail_no_hooks'), t('feature_detail_no_hooks_desc')))
       + '</div>';
   }
 
   const skills = Array.isArray(feature.skills) ? feature.skills : [];
-  if (!skills.length) return '<div class="feature-detail-tab-content" role="tabpanel"><div class="gateway-list-empty">'
-    + escapeHtml(t('feature_detail_no_skills')) + '</div></div>';
-  return '<div class="feature-detail-tab-content feature-skill-list" role="tabpanel">' + skills.map(skill => {
-    const url = resourceUrlForSkill(feature, skill);
-    const cacheKey = String(currentRuntimeAgentId || '') + '::' + feature.name + '::' + skill.name + '::' + url;
-    const cached = _skillContentCache.get(cacheKey);
-    if (!url || !Number.isInteger(skill.root)) return '<article class="feature-skill-card"><div class="feature-skill-head"><div class="feature-skill-name">' + escapeHtml(skill.name)
-      + '</div><div class="feature-skill-description">' + escapeHtml(skill.description || '') + '</div></div><div class="feature-skill-error">' + escapeHtml(t('feature_detail_skill_error')) + '</div></article>';
-    const body = cached?.content !== undefined
-      ? '<div class="markdown-body feature-skill-markdown">' + renderMarkdown(cached.content) + '</div>'
-      : cached?.error
-        ? '<div class="feature-skill-error">' + escapeHtml(t('feature_detail_skill_error')) + ' (' + escapeHtml(cached.error) + ')'
-          + (cached.retryable ? ' <button type="button" class="feature-skill-retry" onclick="window.retryFeatureSkill(&quot;' + escapeHtml(feature.name) + '&quot;,&quot;' + escapeHtml(skill.name) + '&quot;)">' + escapeHtml(t('feature_detail_retry')) + '</button>' : '')
-          + '</div>'
-        : '<div class="feature-skill-loading">' + escapeHtml(t('feature_detail_loading_skill')) + '</div>';
-    return '<article class="feature-skill-card"><div class="feature-skill-head"><div class="feature-skill-name">' + escapeHtml(skill.name)
-      + '</div><div class="feature-skill-description">' + escapeHtml(skill.description || '') + '</div></div>' + body + '</article>';
-  }).join('') + '</div>';
+  if (!skills.length) {
+    return '<div class="feature-detail-tab-content" role="tabpanel">'
+      + renderFeatureDetailEmpty(SVG_EMPTY_SKILLS, t('feature_detail_no_skills'), t('feature_detail_no_skills_desc'))
+      + '</div>';
+  }
+  // 停在阅读页时只呈现这一份文档；其余情况回到列表。
+  const viewing = _skillView !== null ? skills.find(skill => skill.name === _skillView) : null;
+  if (viewing) return renderSkillReader(feature, viewing);
+  // 列表只呈现名称与描述，不再挂操作提示行——卡片本身的去向由悬停与箭头表达。
+  return '<div class="feature-detail-tab-content feature-skill-list" role="tabpanel">'
+    + skills.map(skill => renderSkillCard(feature, skill)).join('') + '</div>';
+}
+
+/**
+ * 详情分页的空态卡：直接复用「交互页面」空态族（.gen-ui-empty），
+ * 项目内会话空态、挂载空态、git 面板与后台任务面板都是这套虚线卡配方。
+ */
+function renderFeatureDetailEmpty(iconHtml, title, description, extraHtml) {
+  return '<div class="gen-ui-empty">'
+    + '<div class="gen-ui-empty-icon" aria-hidden="true">' + iconHtml + '</div>'
+    + '<div class="gen-ui-empty-title">' + escapeHtml(title) + '</div>'
+    + (description ? '<div class="gen-ui-empty-description">' + escapeHtml(description) + '</div>' : '')
+    + (extraHtml || '')
+    + '</div>';
+}
+
+/**
+ * 技能卡只显示名称与描述。正文按需在阅读页加载，避免把整份文档铺进列表。
+ */
+function renderSkillCard(feature, skill) {
+  const clickable = Boolean(resourceUrlForSkill(feature, skill));
+  const onclick = clickable
+    ? ' onclick="window.openFeatureSkill(&quot;' + escapeHtml(feature.name) + '&quot;,&quot;' + escapeHtml(skill.name) + '&quot;)"'
+    : '';
+  return '<article class="feature-skill-card' + (clickable ? ' is-clickable' : '') + '"'
+    + (clickable ? ' role="button" tabindex="0"' : '')
+    + onclick + ' title="' + escapeHtml(skill.name) + '">'
+    + '<div class="feature-skill-head">'
+    + '<div class="feature-skill-name">' + escapeHtml(skill.name) + '</div>'
+    + '<div class="feature-skill-description">' + escapeHtml(skill.description || '') + '</div>'
+    + '</div>'
+    + (clickable
+      ? '<span class="feature-skill-open" aria-hidden="true">›</span>'
+      // 资源地址不可用时卡片保持不可点，说明文字复用空态卡的描述样式，
+      // 不为这一条兜底路径新增独立样式。
+      : '<div class="gen-ui-empty-description">' + escapeHtml(t('feature_detail_skill_error')) + '</div>')
+    + '</article>';
+}
+
+/**
+ * 技能阅读页：完整文档在这里呈现。返回按钮沿用弹窗统一的圆形图标配方。
+ */
+function renderSkillReader(feature, skill) {
+  const url = resourceUrlForSkill(feature, skill);
+  const cacheKey = String(currentRuntimeAgentId || '') + '::' + feature.name + '::' + skill.name + '::' + url;
+  const cached = _skillContentCache.get(cacheKey);
+  // 加载与失败同样走空态卡族：旋转环替代图标块，失败时卡内追加重试按钮
+  // （与 git 面板 renderEmpty 的 loading / extra 用法一致）。
+  let body;
+  if (!url || !Number.isInteger(skill.root)) {
+    body = renderFeatureDetailEmpty(SVG_EMPTY_SKILLS, t('feature_detail_skill_error'), '');
+  } else if (cached?.content !== undefined) {
+    body = '<div class="markdown-body feature-skill-markdown">' + renderMarkdown(cached.content) + '</div>';
+  } else if (cached?.error) {
+    body = renderFeatureDetailEmpty(
+      SVG_EMPTY_SKILLS,
+      t('feature_detail_skill_error'),
+      cached.error,
+      cached.retryable
+        ? '<div class="feature-detail-empty-actions"><button type="button" class="settings-btn settings-btn-secondary"'
+          + ' onclick="window.retryFeatureSkill(&quot;' + escapeHtml(feature.name) + '&quot;,&quot;' + escapeHtml(skill.name) + '&quot;)">'
+          + escapeHtml(t('feature_detail_retry')) + '</button></div>'
+        : '',
+    );
+  } else {
+    body = '<div class="gen-ui-empty">'
+      + '<div class="gen-ui-spinner spinner-md" role="status"><span class="gen-ui-spinner-icon"></span></div>'
+      + '<div class="gen-ui-empty-title">' + escapeHtml(t('feature_detail_loading_skill')) + '</div>'
+      + '</div>';
+  }
+  return '<div class="feature-detail-tab-content feature-skill-reader" role="tabpanel">'
+    + body
+    + '</div>';
 }
 
 function renderFeatureToolCard(tool) {
@@ -692,6 +807,9 @@ function renderFeatureDetailOverlay(feature) {
   if (!feature) {
     if (portal.innerHTML) portal.innerHTML = '';
     _lastDetailSignature = '';
+    // 弹窗关闭也退到列表：下次打开同一 Feature 不应落在上次读到的那份文档上。
+    _skillView = null;
+    _pendingScrollRestore = null;
     return;
   }
 
@@ -726,6 +844,7 @@ function renderFeatureDetailOverlay(feature) {
   // the pointer is down cancels the browser's click sequence before onclick runs.
   const existingTabBar = portal.querySelector('[role="tablist"][aria-label]');
   const signature = feature.name + '|tab:' + _featureDetailTab
+    + '|sv:' + (_skillView === null ? '' : _skillView)
     + '|tools:' + (feature.tools || []).map(t => t.name + ':' + t.state + ':' + (t.enabled ? 1 : 0)).join(',')
     + '|skills:' + JSON.stringify(feature.skills || []) + '|skillCache:' + Array.from(_skillContentCache.entries())
       .filter(([key]) => key.startsWith(String(currentRuntimeAgentId || '') + '::' + feature.name + '::'))
@@ -737,33 +856,55 @@ function renderFeatureDetailOverlay(feature) {
   if (signature === _lastDetailSignature && portal.innerHTML) return;
   _lastDetailSignature = signature;
 
-  // 保存滚动位置（settings-tab-content 是滚动容器）
+  // 保存滚动位置（settings-tab-content 是滚动容器）。
+  // 技能列表与阅读页各有独立位置：跳转时接管一次，轮询重绘仍沿用当前页位置。
   const prevScroll = portal.querySelector('.settings-tab-content');
   const savedScroll = prevScroll ? prevScroll.scrollTop : 0;
+  const scrollTarget = _pendingScrollRestore === 'top'
+    ? 0
+    : _pendingScrollRestore === 'skillList'
+      ? _skillListScroll
+      : savedScroll;
+  if (_pendingScrollRestore === 'top' || _pendingScrollRestore === 'skillList') _pendingScrollRestore = null;
 
   const showNameId = feature.mapped && displayName !== feature.name;
+  // 技能阅读页的返回按钮放在弹窗头部左侧（与 MCP 网关详情页同一先例），
+  // 标题同时换成技能名，避免二级页与列表页看起来是同一个视图。
+  const readingSkill = _featureDetailTab === 'skills' && _skillView !== null
+    ? (feature.skills || []).find(skill => skill.name === _skillView) || null
+    : null;
+  const headBack = readingSkill
+    ? '<button class="feature-detail-close feature-skill-back" type="button" title="' + escapeHtml(t('feature_detail_skill_back')) + '"'
+      + ' onclick="window.closeFeatureSkill()">' + SVG_BACK_ICON + '</button>'
+    : '';
 
   portal.innerHTML = [
     '<div class="feature-detail-overlay" onclick="window.closeFeatureDetails()">',
     '<div class="feature-detail-window" onclick="event.stopPropagation()" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;display:flex;flex-direction:column;">',
     '<div class="feature-detail-head">',
+    '<div class="feature-detail-head-left">',
+    headBack,
     '<div>',
-    '<div class="feature-detail-title">' + escapeHtml(displayName)
-      + (showNameId ? ' <span class="feature-detail-id">' + escapeHtml(feature.name) + '</span>' : '')
+    '<div class="feature-detail-title">' + escapeHtml(readingSkill ? readingSkill.name : displayName)
+      + (readingSkill ? '' : (showNameId ? ' <span class="feature-detail-id">' + escapeHtml(feature.name) + '</span>' : ''))
       + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(feature.description || '') + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(readingSkill ? (readingSkill.description || '') : (feature.description || '')) + '</div>',
+    '</div>',
     '</div>',
     '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="window.closeFeatureDetails()">×</button>',
     '</div>',
     '<div class="settings-tab-content">',
-    '<div class="feature-detail-stats">',
-    '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_hooks')) + '</div><div class="feature-detail-stat-value">' + String(feature.hookCount) + '</div></div>',
-    '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_active_tools')) + '</div><div class="feature-detail-stat-value">' + String(feature.enabledToolCount) + '/' + String(feature.toolCount) + '</div></div>',
-    '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(getFeatureStatusLabel(getFeatureStatus(feature))) + '</div></div>',
-    '</div>',
-    '<div class="feature-detail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + provHtml + '</div>',
-    capsBlock,
-    existingTabBar ? '<div class="feature-detail-tabs-placeholder"></div>' : renderFeatureDetailTabBar(feature),
+    // 阅读页隐藏概览块与分页器：二级页只承担这一份文档。
+    readingSkill ? '' : [
+      '<div class="feature-detail-stats">',
+      '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_hooks')) + '</div><div class="feature-detail-stat-value">' + String(feature.hookCount) + '</div></div>',
+      '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_active_tools')) + '</div><div class="feature-detail-stat-value">' + String(feature.enabledToolCount) + '/' + String(feature.toolCount) + '</div></div>',
+      '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(getFeatureStatusLabel(getFeatureStatus(feature))) + '</div></div>',
+      '</div>',
+      '<div class="feature-detail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + provHtml + '</div>',
+      capsBlock,
+      existingTabBar ? '<div class="feature-detail-tabs-placeholder"></div>' : renderFeatureDetailTabBar(feature),
+    ].join(''),
     renderFeatureDetailContent(feature),
     '</div>',
     '</div>',
@@ -797,7 +938,7 @@ function renderFeatureDetailOverlay(feature) {
 
   // 恢复滚动位置
   const newScroll = portal.querySelector('.settings-tab-content');
-  if (newScroll) newScroll.scrollTop = savedScroll;
+  if (newScroll) newScroll.scrollTop = scrollTarget;
 }
 
 // 生命周期分组的展开偏好（跨轮询重渲染保持状态）。

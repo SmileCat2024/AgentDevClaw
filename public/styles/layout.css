@@ -4227,6 +4227,16 @@ body[data-theme="light"] .settings-group-meta {
   gap: 16px;
 }
 
+/* 头部左侧组：二级页返回按钮与标题同行，与 MCP 网关详情页的头部结构一致。 */
+.feature-detail-head-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.feature-skill-back { margin-top: 2px; }
+
 .feature-detail-title {
   font-size: 20px;
   font-weight: 700;

@@ -2715,13 +2715,30 @@ undefined
 .feature-detail-tabs .ph-session-tab { flex-shrink: 0; }
 .feature-detail-tab-content { min-width: 0; }
 .feature-skill-list { display: flex; flex-direction: column; gap: 12px; }
-.feature-skill-card { padding: 14px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--panel-bg); }
+/* 技能卡只承载名称与描述，正文进阅读页；整卡可点，右侧箭头示意去向。 */
+.feature-skill-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--panel-bg);
+  min-width: 0;
+}
+.feature-skill-card.is-clickable { cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+/* hover 取 .feature-card 同一配方：可点卡片在项目里只有这一种悬停表现。 */
+.feature-skill-card.is-clickable:hover { border-color: rgba(255, 255, 255, 0.15); background: linear-gradient(180deg, rgba(255,255,255,0.05), transparent); }
+body[data-theme="light"] .feature-skill-card.is-clickable:hover { background: #fdfdfd; border-color: #c0c0c0; }
+.feature-skill-card.is-clickable:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.35); outline-offset: 2px; }
+.feature-skill-card .feature-skill-head { min-width: 0; flex: 1 1 auto; }
+.feature-skill-open { flex-shrink: 0; color: var(--text-muted); font-size: 16px; line-height: 1; }
+body[data-theme="light"] .feature-skill-card { background: rgba(0, 0, 0, 0.012); }
 .feature-skill-name { color: var(--text-primary); font-size: 14px; font-weight: 600; }
 .feature-skill-description { margin-top: 4px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
 .feature-skill-markdown { margin-top: 12px; color: var(--text-secondary); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
-.feature-skill-loading,
-.feature-skill-error { margin-top: 12px; color: var(--text-muted); font-size: 12px; }
-.feature-skill-error { color: var(--error-color); }
+/* 空态卡内动作区（如技能文档读取失败的重试按钮）：按钮沿用设置弹窗次级配方。 */
+.feature-detail-empty-actions { display: flex; gap: 8px; margin-top: 14px; }
 
 /* 详情弹窗钩子行：生命周期标签 + 方法名 + 种类徽标 + 开关。
    不复用面板时间线的 .rh-item（其负外边距会超出弹窗宽度、.rh-ord 圆点

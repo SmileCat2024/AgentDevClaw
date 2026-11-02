@@ -208,6 +208,198 @@ describe('window.setFeatureDetailTab', () => {
   });
 });
 
+describe('skills tab: cards + reader sub-page', () => {
+  const SKILLS = [
+    { name: 'grill-me', description: 'Grill the plan', root: 0, path: 'skills/grill-me/SKILL.md' },
+    { name: 'claw-help', description: 'Usage help', root: 0, path: 'skills/claw-help/SKILL.md' },
+  ];
+  const FEATURE = { name: 'shell', tools: [], skills: SKILLS, hookCount: 0, toolCount: 0, enabledToolCount: 0 };
+
+  function loadSkillsModule() {
+    const ctx = createFrontendSandbox({
+      document: { getElementById() { return null; }, createElement() { return {}; } },
+      window: {},
+      selectedFeatureName: 'shell',
+      activeFeaturePanel: 'hooks',
+      currentRuntimeAgentId: 'runtime-1',
+      currentHookInspector: { features: [FEATURE], hooks: [] },
+      t(key) { return key; },
+      shortenSourcePath(value) { return value; },
+      getFeatureStatus() { return 'enabled'; },
+      getFeatureStatusLabel() { return 'enabled'; },
+      getStatusBadgeClass() { return ''; },
+      renderMarkdown(value) { return 'MD:' + value; },
+    });
+    ctx.loadSource('public/src/modules/debug-features-hooks.js');
+    return ctx;
+  }
+
+  function enterSkillsTab(ctx) {
+    ctx.run(`(() => {
+      ensureFeatureDetailTabOwner('shell');
+      window.setFeatureDetailTab('skills', 'shell');
+    })()`);
+  }
+
+  it('renders one card per skill carrying only name and description', () => {
+    // 列表页只呈现描述摘要，完整文档进阅读页——整份 SKILL.md 铺进列表会把
+    // 技能分页撑成一篇长文，多个技能叠在一起几乎无法浏览。
+    const ctx = loadSkillsModule();
+    enterSkillsTab(ctx);
+    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
+    assert.equal((html.match(/class="feature-skill-card is-clickable"/g) || []).length, 2);
+    assert.match(html, /Grill the plan/);
+    assert.match(html, /Usage help/);
+    assert.doesNotMatch(html, /feature-skill-markdown/, 'list must not embed the document body');
+    assert.doesNotMatch(html, /feature-skill-loading/, 'list must not prefetch document bodies');
+  });
+
+  it('makes each card open the reader for that skill', () => {
+    const ctx = loadSkillsModule();
+    enterSkillsTab(ctx);
+    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
+    assert.match(html, /window\.openFeatureSkill\(&quot;shell&quot;,&quot;grill-me&quot;\)/);
+    assert.match(html, /window\.openFeatureSkill\(&quot;shell&quot;,&quot;claw-help&quot;\)/);
+  });
+
+  it('shows the document only in the reader, and only after it is fetched', () => {
+    const ctx = loadSkillsModule();
+    enterSkillsTab(ctx);
+    ctx.run(`_skillView = 'grill-me'`);
+    const pending = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
+    assert.match(pending, /feature-skill-reader/);
+    assert.match(pending, /feature_detail_loading_skill/);
+    assert.doesNotMatch(pending, /feature-skill-list/, 'reader replaces the list, it does not append to it');
+
+    ctx.run(`_skillContentCache.set(
+      'runtime-1::shell::grill-me::' + resourceUrlForSkill(${JSON.stringify(FEATURE)}, ${JSON.stringify(SKILLS[0])}),
+      { content: '# Grill' })`);
+    const loaded = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
+    assert.match(loaded, /MD:# Grill/);
+  });
+
+  it('leaves the reader when switching tabs or features', () => {
+    // 否则下次回到技能分页会直接落在上一份文档上，且阅读页归属已对不上。
+    const ctx = loadSkillsModule();
+    enterSkillsTab(ctx);
+    ctx.run(`_skillView = 'grill-me'`);
+    ctx.run(`window.setFeatureDetailTab('tools', 'shell')`);
+    assert.equal(ctx.run('_skillView'), null, 'leaving the skills tab must close the reader');
+    enterSkillsTab(ctx);
+    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
+    assert.match(html, /feature-skill-list/);
+
+    ctx.run(`_skillView = 'grill-me'`);
+    ctx.run(`ensureFeatureDetailTabOwner('other-feature')`);
+    assert.equal(ctx.run('_skillView'), null, 'switching feature must close the reader');
+  });
+});
+
+describe('feature detail empty states', () => {
+  // 详情分页的空态不再是一行灰字（.gateway-list-empty），而是项目统一的
+  // 「交互页面」空态卡族：虚线卡 + 图标块 + 标题 + 描述。
+  function loadEmptyModule(feature) {
+    const ctx = createFrontendSandbox({
+      document: { getElementById() { return null; }, createElement() { return {}; } },
+      window: {},
+      selectedFeatureName: feature.name,
+      activeFeaturePanel: 'hooks',
+      currentRuntimeAgentId: 'runtime-1',
+      currentHookInspector: { features: [feature], hooks: [] },
+      t(key) { return key; },
+      shortenSourcePath(value) { return value; },
+      getFeatureStatus() { return 'enabled'; },
+      getFeatureStatusLabel() { return 'enabled'; },
+      getStatusBadgeClass() { return ''; },
+      renderMarkdown(value) { return 'MD:' + value; },
+    });
+    ctx.loadSource('public/src/modules/debug-features-hooks.js');
+    ctx.run(`ensureFeatureDetailTabOwner('${feature.name}')`);
+    return ctx;
+  }
+
+  function openTab(ctx, tab, feature) {
+    return ctx.run(`(() => {
+      window.setFeatureDetailTab('${tab}', '${feature.name}');
+      return renderFeatureDetailContent(${JSON.stringify(feature)});
+    })()`);
+  }
+
+  for (const tab of ['tools', 'skills', 'hooks']) {
+    it(`${tab} tab renders the shared empty card when there is nothing to show`, () => {
+      const feature = { name: 'bare', tools: [], skills: [], hookCount: 0, toolCount: 0, enabledToolCount: 0 };
+      const ctx = loadEmptyModule(feature);
+      const html = openTab(ctx, tab, feature);
+      assert.match(html, /class="gen-ui-empty"/, 'empty state must reuse the project empty-card recipe');
+      assert.match(html, /class="gen-ui-empty-icon"/);
+      assert.match(html, /class="gen-ui-empty-title"/);
+      assert.match(html, /class="gen-ui-empty-description"/);
+      assert.doesNotMatch(html, /gateway-list-empty/, 'the single grey line must be gone');
+    });
+  }
+
+  it('drops the redundant tools section heading and its count', () => {
+    // 「已加载工具 (N)」既重复分页器上的计数，也是页内多余的一级标题。
+    const feature = { name: 'with-tools', tools: [{ name: 'run', state: 'enabled', enabled: true }], skills: [], hookCount: 0, toolCount: 1, enabledToolCount: 1 };
+    const ctx = loadEmptyModule(feature);
+    const html = openTab(ctx, 'tools', feature);
+    assert.doesNotMatch(html, /settings-section-title/, 'tools tab must not repeat a heading');
+    assert.match(html, /gateway-tool-grid/);
+  });
+
+  it('drops the skill list hint line', () => {
+    const feature = { name: 'sk', tools: [], skills: [{ name: 'a', description: 'A', root: 0, path: 'skills/a/SKILL.md' }], hookCount: 0 };
+    const ctx = loadEmptyModule(feature);
+    const html = openTab(ctx, 'skills', feature);
+    assert.doesNotMatch(html, /feature-skill-hint/, 'the hint line above the cards must be gone');
+  });
+});
+
+describe('skill reader states', () => {
+  const FEATURE = { name: 'shell', tools: [], skills: [{ name: 'guide', description: 'Guide', root: 0, path: 'skills/guide/SKILL.md' }], hookCount: 0 };
+  const load = () => {
+    const ctx = createFrontendSandbox({
+      document: { getElementById() { return null; }, createElement() { return {}; } },
+      window: {},
+      selectedFeatureName: 'shell',
+      activeFeaturePanel: 'hooks',
+      currentRuntimeAgentId: 'runtime-1',
+      currentHookInspector: { features: [FEATURE], hooks: [] },
+      t(key) { return key; },
+      shortenSourcePath(value) { return value; },
+      getFeatureStatus() { return 'enabled'; },
+      getFeatureStatusLabel() { return 'enabled'; },
+      getStatusBadgeClass() { return ''; },
+      renderMarkdown(value) { return 'MD:' + value; },
+    });
+    ctx.loadSource('public/src/modules/debug-features-hooks.js');
+    ctx.run(`ensureFeatureDetailTabOwner('shell'); window.setFeatureDetailTab('skills', 'shell'); _skillView = 'guide'`);
+    return ctx;
+  };
+
+  it('uses the spinner variant of the empty card while the document loads', () => {
+    const ctx = load();
+    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
+    assert.match(html, /class="gen-ui-empty"/);
+    assert.match(html, /gen-ui-spinner/);
+    assert.match(html, /feature_detail_loading_skill/);
+    assert.doesNotMatch(html, /feature-skill-loading/, 'the bare loading line must be gone');
+  });
+
+  it('offers retry inside the card when the document fails to load', () => {
+    const ctx = load();
+    ctx.run(`_skillContentCache.set(
+      'runtime-1::shell::guide::' + resourceUrlForSkill(${JSON.stringify(FEATURE)}, ${JSON.stringify(FEATURE.skills[0])}),
+      { error: 'Skill resource unavailable (500)', retryable: true })`);
+    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
+    assert.match(html, /class="gen-ui-empty"/);
+    assert.match(html, /feature-detail-empty-actions/);
+    assert.match(html, /settings-btn settings-btn-secondary/);
+    assert.match(html, /window\.retryFeatureSkill\(&quot;shell&quot;,&quot;guide&quot;\)/);
+    assert.doesNotMatch(html, /feature-skill-retry/, 'the bare retry button style must be gone');
+  });
+});
+
 describe('renderFeatureDetailContent hooks tab', () => {
   function renderHooksTab() {
     const ctx = createFrontendSandbox({
