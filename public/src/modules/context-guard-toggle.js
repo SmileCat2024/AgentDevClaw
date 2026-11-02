@@ -2,7 +2,7 @@
  * context-guard-toggle.js — 超阈值自动打断开关（上边栏 badge 形态）
  *
  * ContextGuardFeature 的会话级控制（armed 布防 → 上下文超阈值时打断本轮并
- * 提醒精简 → 触发一次后自动解除，可重新布防；仅当前会话生效）。控制入口
+ * 提醒精简 → 界面回到不打断，但后台唤醒等人工接管；可重新布防；仅当前会话生效）。控制入口
  * 从 session-controls-panel 的「上下文保护」区迁来：badge 内嵌在
  * chat-context-bar 的 token 进度条组内——开关管的阈值与进度条是同一个
  * （contextLength × compressRatio%），读数与守卫放在一起；详情行并入

@@ -15,7 +15,8 @@ import { CONTINUATION_BUDGET } from './shared/constants.js';
 /**
  * Envelope 状态转换表（ADR-0021 阶段 1）：envelope.status 的唯一求值来源。
  *
- * 词汇 queued / running / completed / failed / cancelled，后三者为终态。
+ * 词汇 queued / deferred / running / completed / failed / cancelled，后三者为终态；
+ * deferred 表示准入暂缓，不是完成状态。
  * `enqueued` 不设转换行——envelope 在构造前不存在，entry 字面量
  * `status: 'queued'` 是初始状态而非转换。
  *
@@ -30,12 +31,15 @@ const envelopeMachine = defineStateMachine({
   states: {
     queued: {},
     running: {},
+    deferred: {},
     completed: { terminal: true },
     failed: { terminal: true },
     cancelled: { terminal: true },
   },
   transitions: [
     { event: 'started', from: ['queued'], to: 'running' },
+    { event: 'deferred', from: ['queued'], to: 'deferred' },
+    { event: 'resumed', from: ['deferred'], to: 'queued' },
     { event: 'completed', from: ['running'], to: 'completed' },
     { event: 'failed', from: ['running'], to: 'failed' },
     // from '*' = 全部非终态（queued | running）；终态由内核先行拦截
@@ -65,6 +69,7 @@ export class CallArbiter {
   constructor(agentInstance) {
     this._agent = agentInstance;
     this._queue = [];
+    this._deferred = [];
     this._active = false;
     this._activeEnvelope = null;
     this._closing = false;
@@ -150,7 +155,7 @@ export class CallArbiter {
   }
 
   /**
-   * Wait for a specific envelope to complete (status = completed or failed).
+   * Wait for a specific envelope to reach a terminal status (completed, failed, or cancelled).
    * Returns a promise that resolves with the finished envelope.
    *
    * @param {string} envelopeId
@@ -170,14 +175,33 @@ export class CallArbiter {
   /** Get current arbiter status */
   getStatus() {
     return {
-      status: this._status,
-      queueLength: this._queue.length,
+      status: this._status === 'idle' && this._deferred.length > 0 ? 'queued' : this._status,
+      queueLength: this._queue.length + this._deferred.length,
+      deferredCount: this._deferred.length,
       activeEnvelopeId: this._activeEnvelope?.id || null,
     };
   }
 
+  defer(envelopeId, reason = 'call admission denied') {
+    const index = this._queue.findIndex((item) => item.id === envelopeId);
+    if (index < 0) return false;
+    const [envelope] = this._queue.splice(index, 1);
+    applyEnvelopeEvent(envelope, 'deferred');
+    envelope.error = reason;
+    this._deferred.push(envelope);
+    this._status = this._active || this._queue.length > 0 ? (this._active ? 'running' : 'queued') : 'idle';
+    return true;
+  }
+
+  _resumeDeferred() {
+    if (this._deferred.length === 0) return;
+    const resumed = this._deferred.splice(0, this._deferred.length);
+    for (const envelope of resumed) applyEnvelopeEvent(envelope, 'resumed');
+    this._queue.unshift(...resumed);
+  }
+
   clearQueued(reason = 'cancelled by interrupt') {
-    const removed = this._queue.splice(0, this._queue.length);
+    const removed = [...this._queue.splice(0, this._queue.length), ...this._deferred.splice(0, this._deferred.length)];
     for (const envelope of removed) {
       applyEnvelopeEvent(envelope, 'cancelled');
       envelope.error = reason;
@@ -297,24 +321,47 @@ export class CallArbiter {
     this._status = 'running';
 
     const envelope = this._activeEnvelope;
-    applyEnvelopeEvent(envelope, 'started');
 
     // Track continuation counters for this envelope
     envelope._segmentCount = 0;
     envelope._checkpointCount = 0;
     envelope._rollbackCount = 0;
 
-    console.log(`[CallArbiter] executing ${envelope.id} (source=${envelope.source})`);
-    const started = this._emit('callStarted', envelope);
+    console.log(`[CallArbiter] preparing ${envelope.id} (source=${envelope.source})`);
+    let started = Promise.resolve();
+    const onAdmitted = async () => {
+      if (envelope.status === 'running') return;
+      applyEnvelopeEvent(envelope, 'started');
+      if (envelope.kind !== 'reminder') this._resumeDeferred();
+      started = this._emit('callStarted', envelope);
+      await started;
+    };
 
     // Run asynchronously so enqueue() returns immediately
-    this._execution = this._runEnvelope(envelope)
+    this._execution = this._runEnvelope(envelope, onAdmitted)
       .catch((err) => {
+        if (err?.code === 'call_admission_denied') {
+          envelope._segmentCount = Math.max(0, envelope._segmentCount - 1);
+          applyEnvelopeEvent(envelope, 'deferred');
+          envelope.error = err.reason || err.message;
+          this._deferred.push(envelope);
+          console.log(`[CallArbiter] deferred ${envelope.id} by PreCallStart admission`);
+          return;
+        }
         applyEnvelopeEvent(envelope, 'failed');
         envelope.error = err instanceof Error ? err.message : String(err);
         console.error(`[CallArbiter] envelope ${envelope.id} failed:`, err);
       })
       .finally(async () => {
+        if (envelope.status === 'deferred') {
+          // 被拒 reminder 继续留在 deferred；若人工输入已经排队，
+          // 让它先走。人工输入获准时 onAdmitted 才恢复 deferred。
+          this._status = this._queue.length > 0 ? 'queued' : 'idle';
+          this._active = false;
+          this._activeEnvelope = null;
+          this._drainViewerQueuedInputs().catch(() => {}).finally(() => this._kick());
+          return;
+        }
         if (envelope.status === 'running') {
           // _runEnvelope completed without setting status (normal completion)
           applyEnvelopeEvent(envelope, 'completed');
@@ -352,7 +399,7 @@ export class CallArbiter {
    * The envelope is only "done" when a segment completes without registering
    * a continuation request, or when the continuation budget is exhausted.
    */
-  async _runEnvelope(envelope) {
+  async _runEnvelope(envelope, onAdmitted = async () => {}) {
     let input = envelope.text;
 
     while (true) {
@@ -379,8 +426,12 @@ export class CallArbiter {
         ...(isResume ? { kind: 'resume' } : {}),
       };
       envelope._resume = false;
-      const result = await this._agent.onCall(input, envelope.images, activations, turnMetadata,
-        Object.keys(turnOptions).length > 0 ? turnOptions : undefined);
+      const result = typeof this._agent.onCallDetailed === 'function'
+        ? await this._agent.onCallDetailed(input, envelope.images, activations, turnMetadata,
+          Object.keys(turnOptions).length > 0 ? turnOptions : undefined, { onAdmitted })
+        : (await onAdmitted(), await this._agent.onCall(input, envelope.images, activations, turnMetadata,
+          Object.keys(turnOptions).length > 0 ? turnOptions : undefined));
+      await onAdmitted();
       envelope.result = typeof result === 'string' ? result : '';
 
       // ── Observe the structured call outcome ──

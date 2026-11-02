@@ -48,6 +48,22 @@ describe('ContextGuardFeature (interactive shell)', () => {
     assert.deepEqual(agent.calls, ['interrupt']);
   });
 
+  it('holds reminders after trip and releases the hold on human input', async () => {
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = makeAgent();
+    feature.observeUsage({ inputTokens: 800 }, agent);
+
+    assert.equal(await feature.admitAfterTrip({ options: { kind: 'reminder' } }), 'deny');
+    assert.equal(feature.getStatus().armed, false);
+
+    assert.equal(await feature.admitAfterTrip({ options: { kind: 'user' } }), 'continue');
+    assert.equal(await feature.admitAfterTrip({ options: { kind: 'reminder' } }), 'continue');
+
+    feature.setArmed(true);
+    feature.observeUsage({ inputTokens: 900 }, agent);
+    assert.equal(await feature.admitAfterTrip({ options: { kind: 'reminder' } }), 'deny');
+  });
+
   it('re-arms via setArmed and trips again', async () => {
     const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
     const agent = makeAgent();

@@ -1229,6 +1229,75 @@ describe('CallArbiter interrupt event queue (C3)', () => {
   });
 });
 
+describe('CallArbiter PreCallStart admission', () => {
+  function createAdmissionTestAgent({ blockReminderUntil } = {}) {
+    const calls = [];
+    let holdReminders = true;
+    const agent = {
+      onCallDetailed: async (text, images, activations, metadata, options, callbacks) => {
+        if (holdReminders && options?.kind === 'reminder') {
+          if (blockReminderUntil) await blockReminderUntil();
+          const error = new Error('human takeover required');
+          error.code = 'call_admission_denied';
+          error.reason = 'human takeover required';
+          throw error;
+        }
+        await callbacks?.onAdmitted?.();
+        calls.push({ text, kind: options?.kind });
+        return { response: 'ok', status: 'completed', reason: 'completed', steps: 0 };
+      },
+    };
+    return { agent, calls, releaseReminders() { holdReminders = false; } };
+  }
+
+  it('defers a denied reminder without starting it, then runs it after a human call is admitted', async () => {
+    const { agent, calls, releaseReminders } = createAdmissionTestAgent();
+    const arbiter = new CallArbiter(agent);
+    const started = [];
+    arbiter.on('callStarted', (entry) => started.push(entry.text));
+
+    const reminder = arbiter.enqueue({ source: 'shell', kind: 'reminder', text: 'background result' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reminder.status, 'deferred');
+    assert.deepEqual(calls, []);
+    assert.deepEqual(started, []);
+    assert.equal(arbiter.getStatus().deferredCount, 1);
+
+    releaseReminders();
+    const human = arbiter.enqueue({ source: 'viewer-input', kind: 'user', text: 'continue manually' });
+    await arbiter.waitForCompletion(human.id);
+    await arbiter.waitForCompletion(reminder.id);
+
+    assert.deepEqual(calls, [
+      { text: 'continue manually', kind: undefined },
+      { text: 'background result', kind: 'reminder' },
+    ]);
+    assert.deepEqual(started, ['continue manually', 'background result']);
+  });
+
+  it('keeps a denied reminder deferred when human input queues before denial returns', async () => {
+    let releaseDenial;
+    const denialStarted = new Promise(resolve => { releaseDenial = resolve; });
+    const { agent, calls, releaseReminders } = createAdmissionTestAgent({
+      blockReminderUntil: () => denialStarted,
+    });
+    const arbiter = new CallArbiter(agent);
+
+    const reminder = arbiter.enqueue({ source: 'shell', kind: 'reminder', text: 'background result' });
+    await new Promise(resolve => setImmediate(resolve));
+    const human = arbiter.enqueue({ source: 'viewer-input', kind: 'user', text: 'take over now' });
+    releaseReminders();
+    releaseDenial();
+
+    await arbiter.waitForCompletion(human.id);
+    await arbiter.waitForCompletion(reminder.id);
+    assert.deepEqual(calls, [
+      { text: 'take over now', kind: undefined },
+      { text: 'background result', kind: 'reminder' },
+    ]);
+  });
+});
+
 describe('CallArbiter source identity passthrough (ADR-0031 step 1)', () => {
   it('forwards envelope sourceRef to onCall turn options on the first segment', async () => {
     const onCallArgs = [];

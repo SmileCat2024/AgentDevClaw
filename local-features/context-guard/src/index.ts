@@ -110,8 +110,9 @@ function tripReason(crossing: ThresholdCrossing): string {
  * 过界（inputTokens ≥ 压缩阈值）时退回排队消息并挂起打断，保险丝随之消耗；
  * 已发出的工具调用先执行完、结果写入上下文（StepFinish guard），此时才中断
  * 本轮——打断时机不再落在工具执行中途（终态语义与立即打断一致：cancelled，
- * 以最后一条 assistant 正文收尾）。之后输入完全放行（继续对话的上下文开销由
- * 用户自负）。触发一次后可在会话控制面板重新装填。状态只存 feature 内存：
+ * 以最后一条 assistant 正文收尾）。之后继续拦截机器唤醒；下一条人工输入通过
+ * PreCallStart 时解除拦截，之后用户全权参与。触发一次后可在会话控制面板重新装填。
+ * 状态只存 feature 内存：
  * 会话精简/分支产生的 successor runtime 天然回到 manifest 初值，不参与
  * continuity 转移。
  */
@@ -120,17 +121,20 @@ export class ContextGuardFeature implements AgentFeature {
   static hooks: HookDeclarations = {
     installUsageGuard: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
     tripAtStepFinish: { lifecycle: CoreLifecycle.StepFinish, kind: 'guard' as const, role: 'advisor' as const },
+    admitAfterTrip: { lifecycle: CoreLifecycle.PreCallStart, kind: 'guard' as const },
   };
   readonly name = 'context-guard';
   readonly dependencies: string[] = [];
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = 'Interrupts a session once when its context reaches the compression threshold; the fuse is re-armed from the session control panel.';
+  readonly description = 'Interrupts a session once when its context reaches the compression threshold; after the trip, machine wakeups wait for explicit human takeover.';
 
   private readonly core: ContextGuardCore;
   private armed: boolean;
   private trip: ContextGuardTrip | null = null;
   /** 过界已挂起、待 StepFinish（本轮已发出的工具结果落地后）触发的打断 */
   private pendingTripInterrupt = false;
+  /** 超限后持续阻断后台唤醒；人工输入在 PreCallStart 放行时解除。 */
+  private holdMachineWakeups = false;
   private logger?: FeatureInitContext['logger'];
   private packageInfo: PackageInfo | null = null;
   private callArbiter: any = null;
@@ -158,7 +162,7 @@ export class ContextGuardFeature implements AgentFeature {
           enabled: {
             type: 'boolean',
             title: '上下文保护',
-            description: '开启后，上下文超过压缩阈值时自动打断当前会话并提醒精简；触发后自动关闭，可在会话控制面板重新开启。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
+            description: '开启后，上下文超过压缩阈值时自动打断当前会话并提醒精简；触发后界面回到不打断，但后台唤醒会等下一条人工消息接管；可在会话控制面板重新开启。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
             default: true,
           },
         },
@@ -187,9 +191,10 @@ export class ContextGuardFeature implements AgentFeature {
     };
   }
 
-  /** 会话控制面板开关：装填/卸下保险丝。装填后再过界会再拦一次。 */
+  /** 会话控制面板开关：装填/卸下保险丝。显式操作也结束等待人工接管的状态。 */
   setArmed(armed: boolean): void {
     this.armed = armed === true;
+    this.holdMachineWakeups = false;
   }
 
   /**
@@ -251,6 +256,7 @@ export class ContextGuardFeature implements AgentFeature {
     if (!crossing) return false;
 
     this.armed = false;
+    this.holdMachineWakeups = true;
     this.trip = {
       at: Date.now(),
       thresholdTokens: crossing.thresholdTokens,
@@ -269,11 +275,24 @@ export class ContextGuardFeature implements AgentFeature {
   }
 
   /**
+   * PreCallStart guard：超限后阻止机器唤醒，人工输入是接管边界。
    * StepFinish guard：过界打断的触发点。此刻本轮 step 已发出的工具调用均已
    * 执行完毕、结果已写入上下文。触发 interrupt 后由下一个 step 头部的信号
    * 检查收尾（终态 cancelled）；若本步本就是无工具调用的自然收尾步，信号
    * 不被消费、本轮照常自然结束（与既有过界竞态行为一致）。
    */
+  async admitAfterTrip(ctx: any): Promise<Decision> {
+    if (!this.holdMachineWakeups) return Decision.Continue;
+    const kind = ctx?.options?.kind;
+    if (kind === 'reminder') {
+      return Decision.Deny;
+    }
+    // A user input is the explicit handoff boundary: after it is admitted,
+    // the user owns the decision whether to continue despite the context size.
+    if (kind !== 'resume') this.holdMachineWakeups = false;
+    return Decision.Continue;
+  }
+
   async tripAtStepFinish(_ctx: any): Promise<Decision> {
     if (!this.pendingTripInterrupt) return Decision.Continue;
     this.pendingTripInterrupt = false;

@@ -193,7 +193,8 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 文件）后注入读者视角写法标准，每会话一次。状态经框架会话快照持久化。
     this.use(new CraftAwarenessFeature());
     // 一次性过界拦截：manifest（Runtime 配置面板）决定会话启动初值，
-    // 会话控制面板可实时装填/卸下。触发一次即消耗，之后输入完全放行。
+    // 会话控制面板可实时装填/卸下。触发后 UI 回到“不打断”，但机器唤醒
+    // 仍需等下一条人工输入明确接管。
     this.use(new ContextGuardFeature({
       ...(merged['context-guard'] && typeof merged['context-guard'] === 'object'
         ? merged['context-guard'] : {}),
