@@ -36,6 +36,7 @@ function normalizeTodoPlan(snapshot) {
     id: String(task?.id || ''),
     subject: String(task?.subject || ''),
     description: String(task?.description || ''),
+    deliver: String(task?.deliver || ''),
     status: ['pending', 'in_progress', 'completed', 'deleted'].includes(task?.status) ? task.status : 'pending',
     metadata: task?.metadata && typeof task.metadata === 'object' ? task.metadata : {},
     createdAt: typeof task?.createdAt === 'number' ? task.createdAt : 0,
@@ -105,6 +106,7 @@ function renderPlanTask(task) {
     getTodoStatusLabel(status),
   ].filter(Boolean).join(' · ');
   const desc = task?.description || '';
+  const deliver = task?.deliver || '';
   // 所有终态任务默认收起详情，手动操作记录在
   // _planTerminalDetailState 中覆盖默认态（有描述才可交互）。
   const detailOpen = isTerminal
@@ -131,6 +133,7 @@ function renderPlanTask(task) {
     '<div class="plan-task-main">',
     '<div class="plan-task-title">' + escapeHtml(task?.subject || '') + interruptLabel + detailChev + '</div>',
     detail ? '<div class="plan-task-desc">' + escapeHtml(detail) + '</div>' : '',
+    deliver ? '<div class="plan-task-desc">' + escapeHtml((currentLanguage === 'zh' ? '交付' : 'Deliver') + ': ' + deliver) + '</div>' : '',
     (isTerminal && !detailOpen) ? '' : '<div class="plan-task-meta">' + escapeHtml(meta) + '</div>',
     actionBtn,
     '</div>',
