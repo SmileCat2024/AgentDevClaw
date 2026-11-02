@@ -20,6 +20,8 @@ import { mountUserConfiguredFeatures } from '../server/feature-runtime/user-moun
 import { preflightRefreshTokens } from '../server/oauth-codex.js';
 import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { buildCallUsageEvents, reportUsageEvent } from './usage-report.js';
+import { enqueueOrderedProjection } from './post-call-sync.js';
+
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { CallArbiter } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
@@ -341,6 +343,9 @@ class SessionLifecycle {
     // 宿主统一在请求成功后去抖补一次 saveSession。
     this._commsSaveTimer = null;
     this._commsSaveChain = Promise.resolve();
+    // Post-call server projections are ordered per runtime but never hold the
+    // CallArbiter gate; an unreachable viewer must not block the next user turn.
+    this._postCallSyncChain = Promise.resolve();
     this._hostRequests = new Set();
 
     // Per-session bridge contexts (shared by reference with extracted modules)
@@ -398,11 +403,13 @@ class SessionLifecycle {
     }
   }
 
-  async reportSessionItemsForTurn() {
+  async reportSessionItemsForTurn(messagesSnapshot) {
     if (!this.sessionId) return;
-    const messages = Array.isArray(this.agent?.getContext?.()?.getAll?.())
-      ? this.agent.getContext().getAll()
-      : [];
+    const messages = Array.isArray(messagesSnapshot)
+      ? messagesSnapshot
+      : (Array.isArray(this.agent?.getContext?.()?.getAll?.())
+          ? this.agent.getContext().getAll()
+          : []);
     const pending = messages.slice(this.lastReportedMessageCount);
     for (const message of pending) {
       // 插话锚点的 turn 是分数（N.5/N.75…，见 captureInterjectionCheckpoint），
@@ -1067,85 +1074,78 @@ SessionLifecycle.prototype.start = async function () {
   });
 
   this.callArbiter.on('callFinished', (envelope) => {
-    return (async () => {
-      await self.reportSessionItemsForTurn();
-      const usage = typeof self.agent.getUsage === 'function'
-        ? self.agent.getUsage().toSnapshot()?.lastRequestUsage || null
-        : null;
-      // envelope → turn.* 的映射契约集中在 turn-event-mapping.js（宿主策略：
-      // completed+content_filter/refusal 改判不可重试失败；cancelled 是生命周期信号）
-      await self.reportThreadEvent(
-        mapEnvelopeToTurnEvent(envelope, {
-          turn: typeof self.agent?._callIndex === 'number' ? self.agent._callIndex : null,
-          usage,
-        }),
-      );
-    })();
-  });
-  this.callArbiter.on('callFinished', () => {
     if (!self.sessionId) return;
-    return self.agent.saveSession(self.sessionId, sessionStore).then(async () => {
-      try {
-        const context = typeof self.agent.getContext === 'function' ? self.agent.getContext() : null;
-        const messages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
-        const lastMessage = [...messages].reverse().find((m) => m && typeof m.content === 'string' && m.role !== 'system') || null;
-        const preview = lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '';
-        const usageStats = typeof self.agent.getUsage === 'function' ? self.agent.getUsage().toSnapshot() : null;
-        const totalUsage = usageStats?.totalUsage;
-        const callIndex = typeof self.agent?._callIndex === 'number' ? self.agent._callIndex : null;
-        const callSummary = Array.isArray(usageStats?.calls)
-          ? usageStats.calls.find((call) => call?.callIndex === callIndex)
-          : null;
-        // 当前模型状态唯一权威在 agent meta（宿主小抄已退役）
-        const llmMeta = typeof self.agent?.getLLMMeta === 'function' ? self.agent.getLLMMeta() : {};
-        if (callSummary?.totalUsage && callIndex !== null) {
-          const usageEvents = buildCallUsageEvents({
-            agentId,
-            sessionId: self.sessionId,
-            runtimeInstanceId,
-            callIndex,
-            callSummary,
-            llmMeta,
-            context: {
-              contextInputTokens: usageStats?.lastRequestUsage?.inputTokens || 0,
-              messageCount: messages.length,
-            },
-          });
-          for (const event of usageEvents) {
-            if (reportedUsageEventIds.has(event.eventId)) continue;
-            reportedUsageEventIds.add(event.eventId);
-            const usageResult = await reportUsageEvent(SERVER_ORIGIN, event);
-            if (usageResult?.ok === false) {
-              console.warn('[ProtoClaw Runtime] usage event sync failed:', usageResult.error || usageResult.status);
-            }
-          }
-        }
-        await fetch(`${SERVER_ORIGIN}/protoclaw/session_meta_sync`, {
-          method: 'POST',
-          headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({
-            agentId,
-            sessionId: self.sessionId,
+
+    // Capture the completed call's data before the next call mutates context.
+    const context = typeof self.agent.getContext === 'function' ? self.agent.getContext() : null;
+    const messages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
+    const lastMessage = [...messages].reverse().find((m) => m && typeof m.content === 'string' && m.role !== 'system') || null;
+    const preview = lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '';
+    const usageStats = typeof self.agent.getUsage === 'function' ? self.agent.getUsage().toSnapshot() : null;
+    const totalUsage = usageStats?.totalUsage;
+    const callIndex = typeof self.agent?._callIndex === 'number' ? self.agent._callIndex : null;
+    const callSummary = Array.isArray(usageStats?.calls)
+      ? usageStats.calls.find((call) => call?.callIndex === callIndex)
+      : null;
+    const llmMeta = typeof self.agent?.getLLMMeta === 'function' ? self.agent.getLLMMeta() : {};
+    const usageEvents = callSummary?.totalUsage && callIndex !== null
+      ? buildCallUsageEvents({
+          agentId,
+          sessionId: self.sessionId,
+          runtimeInstanceId,
+          callIndex,
+          callSummary,
+          llmMeta,
+          context: {
+            contextInputTokens: usageStats?.lastRequestUsage?.inputTokens || 0,
             messageCount: messages.length,
-            preview,
-            tokenUsage: {
-              inputTokens: totalUsage?.inputTokens || 0,
-              outputTokens: totalUsage?.outputTokens || 0,
-              totalTokens: totalUsage?.totalTokens || 0,
-              lastRequestUsage: usageStats?.lastRequestUsage || null,
-            },
-            ...(llmMeta.modelName ? { modelName: llmMeta.modelName } : {}),
-            contextLength: llmMeta.contextLength ?? undefined,
-            compressRatio: llmMeta.compressRatio ?? undefined,
-            savedAt: Date.now(),
-          }),
-        });
-      } catch (metaErr) {
-        console.warn('[ProtoClaw Runtime] session meta sync failed (will auto-heal on next list):', metaErr.message);
-      }
-    }).catch(e => {
-      console.warn('[ProtoClaw Runtime] 保存 session 失败:', e.message);
+          },
+        })
+      : [];
+    const metaPayload = {
+      agentId,
+      sessionId: self.sessionId,
+      messageCount: messages.length,
+      preview,
+      tokenUsage: {
+        inputTokens: totalUsage?.inputTokens || 0,
+        outputTokens: totalUsage?.outputTokens || 0,
+        totalTokens: totalUsage?.totalTokens || 0,
+        lastRequestUsage: usageStats?.lastRequestUsage || null,
+      },
+      ...(llmMeta.modelName ? { modelName: llmMeta.modelName } : {}),
+      contextLength: llmMeta.contextLength ?? undefined,
+      compressRatio: llmMeta.compressRatio ?? undefined,
+      savedAt: Date.now(),
+    };
+    const turnEvent = mapEnvelopeToTurnEvent(envelope, {
+      turn: callIndex,
+      usage: usageStats?.lastRequestUsage || null,
     });
+    const barrier = self.agent.saveSession(self.sessionId, sessionStore).catch((error) => {
+      console.warn('[ProtoClaw Runtime] 保存 session 失败:', error.message);
+    });
+
+    enqueueOrderedProjection(self, '_postCallSyncChain', async () => {
+      await self.reportSessionItemsForTurn(messages);
+      await self.reportThreadEvent(turnEvent);
+      for (const event of usageEvents) {
+        if (reportedUsageEventIds.has(event.eventId)) continue;
+        reportedUsageEventIds.add(event.eventId);
+        const usageResult = await reportUsageEvent(SERVER_ORIGIN, event);
+        if (usageResult?.ok === false) {
+          console.warn('[ProtoClaw Runtime] usage event sync failed:', usageResult.error || usageResult.status);
+        }
+      }
+      await fetch(`${SERVER_ORIGIN}/protoclaw/session_meta_sync`, {
+        method: 'POST',
+        headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(metaPayload),
+      });
+    }, (error) => {
+      console.warn('[ProtoClaw Runtime] post-call projection sync failed:', error?.message || error);
+    });
+    return barrier;
   });
 
   this.callArbiter.on('callFinished', (envelope) => {
