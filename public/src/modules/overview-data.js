@@ -194,6 +194,17 @@ function normalizeHookInspector(snapshot) {
     features: (raw.features || []).map(feature => ({
       ...feature,
       tools: feature.tools || [],
+      skills: Array.isArray(feature.skills) ? feature.skills.filter(skill => skill
+        && typeof skill.name === 'string' && typeof skill.path === 'string'
+        && Number.isInteger(skill.root) && skill.root >= 0
+        && !skill.path.startsWith('/') && !skill.path.includes('\\') && !/^[A-Za-z]:/.test(skill.path)
+        && !skill.path.split('/').some(part => /^[A-Za-z]:/.test(part))
+        && !skill.path.split('/').some(part => part === '..' || part === '.' || !part)).map(skill => ({
+        name: skill.name,
+        description: typeof skill.description === 'string' ? skill.description : '',
+        path: skill.path,
+        root: skill.root,
+      })) : [],
     })),
     hooks: FULL_HOOK_LIFECYCLE_ORDER.map((lifecycle) => {
       const existing = hookMap.get(lifecycle);

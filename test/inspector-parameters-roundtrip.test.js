@@ -35,6 +35,7 @@ function buildSnapshotWithParameters() {
         enabledToolCount: 2,
         source: 'ShellFeature',
         description: 'Shell execution',
+        skills: [{ name: 'shell-help', description: 'Shell usage', root: 0, path: 'skills/shell-help/SKILL.md' }],
         tools: [
           {
             name: 'bash',
@@ -85,12 +86,15 @@ function buildSnapshotWithParameters() {
   };
 }
 
-describe('normalizeHookInspector: parameters field round-trip', () => {
-  it('preserves parameters on feature tools', () => {
+describe('normalizeHookInspector: parameters and skill resource metadata round-trip', () => {
+  it('preserves skill resource metadata and tool parameters through normalization', () => {
     const ctx = loadOverviewData();
     const input = buildSnapshotWithParameters();
     const output = ctx.run(`normalizeHookInspector(${JSON.stringify(input)})`);
 
+    assert.deepEqual(JSON.parse(JSON.stringify(output.features[0].skills)), [{
+      name: 'shell-help', description: 'Shell usage', root: 0, path: 'skills/shell-help/SKILL.md',
+    }]);
     const tool = output.features[0].tools[0];
     assert.equal(tool.name, 'bash');
     assert.ok(tool.parameters, 'parameters must be preserved');
@@ -102,6 +106,20 @@ describe('normalizeHookInspector: parameters field round-trip', () => {
       },
       required: ['command'],
     });
+  });
+
+  it('drops invalid skill paths that could escape the registered package root', () => {
+    const ctx = loadOverviewData();
+    const input = buildSnapshotWithParameters();
+    input.features[0].skills.push(
+      { name: 'traversal', description: 'bad', root: 0, path: '../secret/SKILL.md' },
+      { name: 'absolute', description: 'bad', root: 0, path: '/etc/passwd' },
+      { name: 'windows', description: 'bad', root: 0, path: 'C:/Windows/secret' },
+    );
+    const output = ctx.run(`normalizeHookInspector(${JSON.stringify(input)})`);
+    assert.deepEqual(JSON.parse(JSON.stringify(output.features[0].skills)), [{
+      name: 'shell-help', description: 'Shell usage', root: 0, path: 'skills/shell-help/SKILL.md',
+    }]);
   });
 
   it('preserves undefined parameters gracefully (tool without schema)', () => {

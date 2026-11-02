@@ -328,6 +328,243 @@ const FEATURE_DETAIL_PORTAL_ID = 'feature-detail-portal';
 
 const SVG_TOOL_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;opacity:0.6;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
 
+// Feature 详情页分页器（身份切换时重置；详情轮询重绘时保持）。
+const FEATURE_DETAIL_TABS = ['tools', 'skills', 'hooks'];
+const FEATURE_DETAIL_TAB_STORAGE_KEY = 'claw_feature_detail_tab';
+let _featureDetailTab = 'tools';
+try {
+  const saved = localStorage.getItem(FEATURE_DETAIL_TAB_STORAGE_KEY);
+  if (FEATURE_DETAIL_TABS.includes(saved)) _featureDetailTab = saved;
+} catch (e) { /* localStorage 不可用时保持默认 */ }
+let _featureDetailTabOwner = null;
+const _skillContentCache = new Map();
+const _skillContentPending = new Map();
+
+window.setFeatureDetailTab = function (tab, featureName) {
+  if (!FEATURE_DETAIL_TABS.includes(tab)) return;
+  if (featureName && selectedFeatureName !== featureName) return;
+  const owner = featureName || selectedFeatureName;
+  if (_featureDetailTab === tab && _featureDetailTabOwner === owner) return;
+  _featureDetailTab = tab;
+  _featureDetailTabOwner = owner;
+  try { localStorage.setItem(FEATURE_DETAIL_TAB_STORAGE_KEY, tab); } catch (e) { /* ignore */ }
+  const feature = currentHookInspector.features.find(item => item.name === selectedFeatureName) || null;
+  if (!feature) return;
+
+  // Keep the tab buttons mounted while switching panels. A full portal innerHTML
+  // replacement during pointerdown detaches the pressed button before click fires.
+  const portal = document.getElementById(FEATURE_DETAIL_PORTAL_ID);
+  const panel = portal?.querySelector('[role="tabpanel"]');
+  if (!portal || !panel) return;
+  const nextPanel = renderFeatureDetailContent(feature);
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = nextPanel;
+  panel.replaceWith(wrapper.firstElementChild);
+  if (portal) {
+    portal.querySelectorAll('[data-feature-detail-tab]').forEach(button => {
+      const selected = button.dataset.featureDetailTab === tab;
+      if (selected) button.classList.add('active');
+      else button.classList.remove('active');
+      button.setAttribute('aria-selected', String(selected));
+    });
+  }
+  loadVisibleFeatureSkills(feature);
+};
+
+window.retryFeatureSkill = function (featureName, skillName) {
+  if (selectedFeatureName !== featureName || _featureDetailTab !== 'skills') return;
+  const feature = currentHookInspector.features.find(item => item.name === featureName);
+  const skill = feature?.skills?.find(item => item.name === skillName);
+  if (!feature || !skill) return;
+  const url = resourceUrlForSkill(feature, skill);
+  const cacheKey = String(currentRuntimeAgentId || '') + '::' + featureName + '::' + skill.name + '::' + url;
+  _skillContentCache.delete(cacheKey);
+  _lastDetailSignature = '';
+  renderFeatureDetailOverlay(feature);
+  ensureSkillContent(featureName, skill, url);
+};
+
+function resourceUrlForSkill(feature, skill) {
+  if (!skill || typeof skill.path !== 'string' || !Number.isInteger(skill.root)) return '';
+  const agentId = currentRuntimeAgentId;
+  if (!agentId) return '';
+  const path = skill.path.split('/').map(encodeURIComponent).join('/');
+  return '/res/' + encodeURIComponent(agentId) + '/' + skill.root + '/' + path;
+}
+
+function ensureSkillContent(featureName, skill, url) {
+  const cacheKey = String(currentRuntimeAgentId || '') + '::' + featureName + '::' + skill.name + '::' + url;
+  if (!url || _skillContentCache.has(cacheKey) || _skillContentPending.has(cacheKey)) return;
+  const runtimeId = currentRuntimeAgentId;
+  const pending = fetch(url).then(async response => {
+    if (!response.ok) {
+      const error = new Error('Skill resource unavailable (' + response.status + ')');
+      error.status = response.status;
+      throw error;
+    }
+    return response.text();
+  }).then(content => {
+    _skillContentCache.set(cacheKey, { content });
+  }).catch(error => {
+    _skillContentCache.set(cacheKey, {
+      error: error.message || 'Skill resource unavailable',
+      retryable: !(error.status >= 400 && error.status < 500),
+    });
+  }).finally(() => {
+    _skillContentPending.delete(cacheKey);
+    if (currentRuntimeAgentId === runtimeId
+      && activeFeaturePanel === 'hooks' && selectedFeatureName === featureName) {
+      _lastDetailSignature = '';
+      const current = currentHookInspector.features.find(item => item.name === featureName) || null;
+      renderFeatureDetailOverlay(current);
+    }
+  });
+  _skillContentPending.set(cacheKey, pending);
+}
+
+function loadVisibleFeatureSkills(feature) {
+  if (_featureDetailTab !== 'skills' || !feature || !Array.isArray(feature.skills)) return;
+  for (const skill of feature.skills) {
+    ensureSkillContent(feature.name, skill, resourceUrlForSkill(feature, skill));
+  }
+}
+
+/**
+ * Feature 身份切换时把分页状态复位到"工具"。这是纯状态操作，与渲染分离：
+ * 渲染路径与轮询签名都先归一，避免同一次重绘里签名按旧分页算、内容按新分页
+ * 出，导致页签高亮与内容区不一致。
+ */
+function ensureFeatureDetailTabOwner(featureName) {
+  if (_featureDetailTabOwner === featureName) return;
+  _featureDetailTabOwner = featureName;
+  _featureDetailTab = 'tools';
+}
+
+function computeFeatureDetailTabs(feature) {
+  const skills = Array.isArray(feature.skills) ? feature.skills : [];
+  const hooks = currentHookInspector.hooks.reduce((count, group) =>
+    count + (group.entries || []).filter(entry => entry.featureName === feature.name).length, 0);
+  return [
+    { key: 'tools', label: t('feature_detail_tab_tools'), count: feature.tools?.length || 0 },
+    { key: 'skills', label: t('feature_detail_tab_skills'), count: skills.length },
+    { key: 'hooks', label: t('feature_detail_tab_hooks'), count: hooks },
+  ];
+}
+
+function renderFeatureDetailTabBar(feature) {
+  ensureFeatureDetailTabOwner(feature.name);
+  return '<div class="feature-detail-tabs" role="tablist" aria-label="' + escapeHtml(rhLoc('Feature 详情', 'Feature details')) + '"'
+    + ' data-feature-detail-tabs-for="' + escapeHtml(feature.name) + '">'
+    + computeFeatureDetailTabs(feature).map(tab => '<button type="button" role="tab" aria-selected="' + (_featureDetailTab === tab.key) + '"'
+      + ' class="ph-session-tab' + (_featureDetailTab === tab.key ? ' active' : '') + '"'
+      + ' data-feature-detail-tab="' + tab.key + '"'
+      + ' onclick="' + escapeHtml(featureDetailTabOnclick(tab.key, feature.name)) + '"'
+      + '>' + escapeHtml(tab.label) + '<span class="ph-tab-count">' + tab.count + '</span></button>').join('')
+    + '</div>';
+}
+
+/**
+ * 生成页签点击回调。onclick 属性值经 escapeHtml 后写入 HTML，
+ * 因此这里用单引号包裹参数：属性以双引号定界，单引号无需实体转义，
+ * 同一份字符串也能直接用于 setAttribute（复用路径）。
+ */
+function featureDetailTabOnclick(tabKey, featureName) {
+  const safeName = String(featureName).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return "window.setFeatureDetailTab('" + tabKey + "','" + safeName + "')";
+}
+
+/**
+ * 原地同步页签条的标签、计数与回调，返回 false 表示结构不符需整条重建。
+ * 只改文本节点与属性、不替换按钮节点：指针按下到 click 之间按钮一旦脱离
+ * DOM，浏览器会取消整串点击事件。
+ */
+function syncFeatureDetailTabBar(bar, feature) {
+  const tabs = computeFeatureDetailTabs(feature);
+  const buttons = Array.from(bar.querySelectorAll('[data-feature-detail-tab]'));
+  if (buttons.length !== tabs.length) return false;
+  bar.setAttribute('data-feature-detail-tabs-for', feature.name);
+  for (const tab of tabs) {
+    const button = buttons.find(item => item.dataset.featureDetailTab === tab.key);
+    if (!button) return false;
+    const labelNode = Array.from(button.childNodes).find(node => node.nodeType === 3);
+    if (labelNode) labelNode.nodeValue = tab.label;
+    const countNode = button.querySelector('.ph-tab-count');
+    if (countNode) countNode.textContent = String(tab.count);
+    button.setAttribute('onclick', featureDetailTabOnclick(tab.key, feature.name));
+  }
+  return true;
+}
+
+function renderFeatureDetailContent(feature) {
+  const tab = FEATURE_DETAIL_TABS.includes(_featureDetailTab) ? _featureDetailTab : 'tools';
+  if (tab === 'tools') {
+    return '<div class="settings-section feature-detail-tab-content" role="tabpanel">'
+      + '<div class="settings-section-title">' + escapeHtml(t('panel_loaded_tools')) + ' (' + String(feature.tools?.length || 0) + ')</div>'
+      + (feature.tools?.length ? '<div class="gateway-tool-grid">' + feature.tools.map(renderFeatureToolCard).join('') + '</div>'
+        : '<div class="gateway-list-empty">' + escapeHtml(t('panel_no_tools')) + '</div>') + '</div>';
+  }
+  if (tab === 'hooks') {
+    const entries = currentHookInspector.hooks.flatMap(group => (group.entries || [])
+      .filter(entry => entry.featureName === feature.name).map(entry => ({ ...entry, lifecycle: group.lifecycle })));
+    // 不复用面板时间线的 .rh-item：它的负外边距会撑破弹窗宽度、.rh-ord 是
+    // 15px 圆点装不下生命周期名。详情里改用标签 + 方法名的横向行。
+    return '<div class="feature-detail-tab-content" role="tabpanel">'
+      + (entries.length ? '<div class="feature-hook-list">' + entries.map(entry =>
+        '<div class="feature-hook-item">'
+        + '<div class="feature-hook-head">'
+        + '<span class="feature-hook-lifecycle" title="' + escapeHtml(rhLifecycleHint(entry.lifecycle)) + '">' + escapeHtml(entry.lifecycle) + '</span>'
+        + '<span class="feature-hook-method">' + escapeHtml(entry.methodName) + '()</span>'
+        + '<span class="rh-kind k-' + escapeHtml(entry.kind) + '" title="' + escapeHtml(rhKindHint(entry.kind)) + '">' + escapeHtml(entry.kind) + '</span>'
+        + '<span class="feature-hook-toggle">' + buildHookToggleHtml(entry.lifecycle, entry.featureName, entry.methodName, entry.enabled !== false) + '</span>'
+        + '</div>'
+        + (entry.description ? '<div class="feature-hook-desc">' + escapeHtml(entry.description) + '</div>' : '')
+        + '</div>').join('') + '</div>'
+        : '<div class="gateway-list-empty">' + escapeHtml(t('feature_detail_no_hooks')) + '</div>')
+      + '</div>';
+  }
+
+  const skills = Array.isArray(feature.skills) ? feature.skills : [];
+  if (!skills.length) return '<div class="feature-detail-tab-content" role="tabpanel"><div class="gateway-list-empty">'
+    + escapeHtml(t('feature_detail_no_skills')) + '</div></div>';
+  return '<div class="feature-detail-tab-content feature-skill-list" role="tabpanel">' + skills.map(skill => {
+    const url = resourceUrlForSkill(feature, skill);
+    const cacheKey = String(currentRuntimeAgentId || '') + '::' + feature.name + '::' + skill.name + '::' + url;
+    const cached = _skillContentCache.get(cacheKey);
+    if (!url || !Number.isInteger(skill.root)) return '<article class="feature-skill-card"><div class="feature-skill-head"><div class="feature-skill-name">' + escapeHtml(skill.name)
+      + '</div><div class="feature-skill-description">' + escapeHtml(skill.description || '') + '</div></div><div class="feature-skill-error">' + escapeHtml(t('feature_detail_skill_error')) + '</div></article>';
+    const body = cached?.content !== undefined
+      ? '<div class="markdown-body feature-skill-markdown">' + renderMarkdown(cached.content) + '</div>'
+      : cached?.error
+        ? '<div class="feature-skill-error">' + escapeHtml(t('feature_detail_skill_error')) + ' (' + escapeHtml(cached.error) + ')'
+          + (cached.retryable ? ' <button type="button" class="feature-skill-retry" onclick="window.retryFeatureSkill(&quot;' + escapeHtml(feature.name) + '&quot;,&quot;' + escapeHtml(skill.name) + '&quot;)">' + escapeHtml(t('feature_detail_retry')) + '</button>' : '')
+          + '</div>'
+        : '<div class="feature-skill-loading">' + escapeHtml(t('feature_detail_loading_skill')) + '</div>';
+    return '<article class="feature-skill-card"><div class="feature-skill-head"><div class="feature-skill-name">' + escapeHtml(skill.name)
+      + '</div><div class="feature-skill-description">' + escapeHtml(skill.description || '') + '</div></div>' + body + '</article>';
+  }).join('') + '</div>';
+}
+
+function renderFeatureToolCard(tool) {
+  const props = tool.parameters?.properties ? Object.keys(tool.parameters.properties) : [];
+  const hasSchema = tool.parameters && Object.keys(tool.parameters).length > 0;
+  const toolKey = (selectedFeatureName || '') + ':' + tool.name;
+  const isExpanded = _expandedToolNames.has(toolKey);
+  const metaPills = [
+    tool.renderCall ? '<span class="feature-tool-pill">call/' + escapeHtml(tool.renderCall) + '</span>' : '',
+    tool.renderResult ? '<span class="feature-tool-pill">result/' + escapeHtml(tool.renderResult) + '</span>' : '',
+  ].filter(Boolean).join('');
+  const isSuper = tool.state === 'superseded';
+  return '<div class="feature-tool-card"><div class="feature-tool-top"><div class="feature-tool-name">' + SVG_TOOL_ICON + escapeHtml(tool.name)
+    + '</div><div class="feature-tool-actions">' + (isSuper ? '<div class="' + getStatusBadgeClass('superseded') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>' : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled')) + '</div></div>'
+    + (tool.description ? '<div class="feature-tool-desc">' + escapeHtml(tool.description) + '</div>' : '')
+    + (props.length ? '<div class="gateway-tool-params">' + props.map(prop => '<span class="gateway-tool-tag">' + escapeHtml(prop) + '</span>').join('') + '</div>' : '')
+    + (metaPills ? '<div class="feature-tool-meta">' + metaPills + '</div>' : '')
+    + (hasSchema ? '<div class="fdetail-schema-toggle" onclick="event.stopPropagation();window.toggleToolSchema(&quot;' + escapeHtml(toolKey) + '&quot;)">'
+      + (isExpanded ? '▾ ' : '▸ ') + escapeHtml(t(isExpanded ? 'feature_tool_schema_expanded' : 'feature_tool_schema')) + '</div>' : '')
+    + (hasSchema && isExpanded ? '<div class="fdetail-schema-block"><pre>' + escapeHtml(JSON.stringify(tool.parameters, null, 2)) + '</pre></div>' : '')
+    + '</div>';
+}
+
 // 记录已展开 schema 的工具（跨轮询重渲染保持状态）
 const _expandedToolNames = new Set();
 // 上次渲染签名，避免轮询时无谓的 innerHTML 全量替换导致滚动卡顿
@@ -462,8 +699,12 @@ function renderFeatureDetailOverlay(feature) {
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
   const provKey = fc && feature.provenance ? fc.provenanceI18nKey(feature.provenance, catalog && catalog.provenances) : null;
+  // 能力标签只列页签覆盖不到的形态：tools / skills / policy(钩子) 已在分页器上，
+  // 重复一遍是纯噪声；commands / mcp 在弹窗内别处看不到，保留。
+  const CAPS_SHOWN_BY_TABS = ['tools', 'skills', 'policy'];
   const capsHtml = (fc && Array.isArray(feature.capabilities) && catalog && Array.isArray(catalog.capabilities))
     ? feature.capabilities
+      .filter(cap => !CAPS_SHOWN_BY_TABS.includes(cap))
       .filter(cap => catalog.capabilities.some(c => c.id === cap))
       .map(cap => '<span class="feature-cap-badge">' + escapeHtml(t('feature_cap_' + cap)) + '</span>')
       .join('')
@@ -475,61 +716,26 @@ function renderFeatureDetailOverlay(feature) {
     ? '<span class="feature-prov-badge">' + escapeHtml(t(provKey)) + '</span>'
     : '';
 
-  // 计算签名：feature 名 + 工具数据 + 展开状态 + 语言 + catalog 派生 displayName/provenance/capabilities
-  // （catalog 后到时 signature 变化，弹窗标题与标签随之修正）
-  // 如果签名未变则跳过 innerHTML 替换，避免轮询导致的滚动卡顿
+  // 计算签名：快照、当前分页、Skill 正文缓存及 catalog 派生信息变化时更新。
+  ensureFeatureDetailTabOwner(feature.name);
   const displayName = (fc && feature.mapped) ? fc.resolveDisplayName(feature, currentLanguage) : feature.name;
-  const signature = feature.name + '|'
-    + (feature.tools || []).map(t => t.name + ':' + t.state + ':' + (t.enabled ? 1 : 0)).join(',')
+  const featureHookSignature = currentHookInspector.hooks.flatMap(group => (group.entries || [])
+    .filter(entry => entry.featureName === feature.name)
+    .map(entry => [group.lifecycle, entry.methodName, entry.kind, entry.enabled !== false, entry.description || ''].join(':'))).join('|');
+  // Keep tab buttons alive across inspector refreshes. Replacing the button while
+  // the pointer is down cancels the browser's click sequence before onclick runs.
+  const existingTabBar = portal.querySelector('[role="tablist"][aria-label]');
+  const signature = feature.name + '|tab:' + _featureDetailTab
+    + '|tools:' + (feature.tools || []).map(t => t.name + ':' + t.state + ':' + (t.enabled ? 1 : 0)).join(',')
+    + '|skills:' + JSON.stringify(feature.skills || []) + '|skillCache:' + Array.from(_skillContentCache.entries())
+      .filter(([key]) => key.startsWith(String(currentRuntimeAgentId || '') + '::' + feature.name + '::'))
+      .map(([key, value]) => key + ':' + (value.content || value.error || '')).join('|')
+    + '|hooks:' + featureHookSignature
     + '|exp:' + Array.from(_expandedToolNames).sort().join(',')
     + '|lang:' + currentLanguage
-    + '|dn:' + displayName
-    + '|pv:' + (provKey || '')
-    + '|caps:' + (Array.isArray(feature.capabilities) ? feature.capabilities.join(',') : '');
+    + '|dn:' + displayName + '|pv:' + (provKey || '');
   if (signature === _lastDetailSignature && portal.innerHTML) return;
   _lastDetailSignature = signature;
-
-  const toolRowsHtml = (feature.tools && feature.tools.length > 0)
-    ? '<div class="gateway-tool-grid">' + feature.tools.map(tool => {
-        const metaPills = [
-          tool.renderCall ? '<span class="feature-tool-pill">call/' + escapeHtml(tool.renderCall) + '</span>' : '',
-          tool.renderResult ? '<span class="feature-tool-pill">result/' + escapeHtml(tool.renderResult) + '</span>' : '',
-        ].filter(Boolean).join('');
-        const props = tool.parameters?.properties ? Object.keys(tool.parameters.properties) : [];
-        const hasSchema = tool.parameters && Object.keys(tool.parameters).length > 0;
-        const toolKey = feature.name + ':' + tool.name;
-        const isExpanded = _expandedToolNames.has(toolKey);
-        const paramsHtml = props.length > 0
-          ? '<div class="gateway-tool-params">' + props.map(p => '<span class="gateway-tool-tag">' + escapeHtml(p) + '</span>').join('') + '</div>'
-          : '';
-        const toggleHtml = hasSchema
-          ? '<div class="fdetail-schema-toggle" onclick="event.stopPropagation();window.toggleToolSchema(&quot;' + escapeHtml(toolKey) + '&quot;)">'
-            + (isExpanded ? '▾ ' : '▸ ') + escapeHtml(t(isExpanded ? 'feature_tool_schema_expanded' : 'feature_tool_schema')) + '</div>'
-          : '';
-        const schemaHtml = (hasSchema && isExpanded)
-          ? '<div class="fdetail-schema-block"><pre>' + escapeHtml(JSON.stringify(tool.parameters, null, 2)) + '</pre></div>'
-          : '';
-        const isSuper = tool.state === 'superseded';
-        const actionHtml = isSuper
-          ? '<div class="' + getStatusBadgeClass('superseded') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>'
-          : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled');
-        return [
-          '<div class="feature-tool-card">',
-          '<div class="feature-tool-top">',
-          '<div class="feature-tool-name">' + SVG_TOOL_ICON + escapeHtml(tool.name) + '</div>',
-          '<div class="feature-tool-actions">',
-          actionHtml,
-          '</div>',
-          '</div>',
-          tool.description ? '<div class="feature-tool-desc">' + escapeHtml(tool.description) + '</div>' : '',
-          paramsHtml,
-          metaPills ? '<div class="feature-tool-meta">' + metaPills + '</div>' : '',
-          toggleHtml,
-          schemaHtml,
-          '</div>',
-        ].join('');
-      }).join('') + '</div>'
-    : '<div class="gateway-list-empty">' + escapeHtml(t('panel_no_tools')) + '</div>';
 
   // 保存滚动位置（settings-tab-content 是滚动容器）
   const prevScroll = portal.querySelector('.settings-tab-content');
@@ -557,14 +763,37 @@ function renderFeatureDetailOverlay(feature) {
     '</div>',
     '<div class="feature-detail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + provHtml + '</div>',
     capsBlock,
-    '<div class="settings-section">',
-    '<div class="settings-section-title">' + escapeHtml(t('panel_loaded_tools')) + ' (' + String(feature.tools?.length || 0) + ')</div>',
-    toolRowsHtml,
-    '</div>',
+    existingTabBar ? '<div class="feature-detail-tabs-placeholder"></div>' : renderFeatureDetailTabBar(feature),
+    renderFeatureDetailContent(feature),
     '</div>',
     '</div>',
     '</div>',
   ].join('');
+
+  if (existingTabBar) {
+    // 复用只对同一个 Feature 成立：页签的标签、计数与 onclick 都绑定
+    // featureName，跨 Feature 复用会让新弹窗沿用上一个 Feature 的页签内容与
+    // 回调（onclick 名字对不上，切换会被 setFeatureDetailTab 的归属校验静默
+    // 拒绝，表现为"分页器在那儿点了不动"）。切换 Feature 走卡片点击、没有
+    // 按下中的页签，整条重建不存在"按下即脱离 DOM"的风险。同一 Feature 的
+    // 轮询重绘才走原地同步，保住按钮节点不被打断。
+    const sameFeature = existingTabBar.dataset.featureDetailTabsFor === feature.name;
+    const placeholder = portal.querySelector('.feature-detail-tabs-placeholder');
+    if (placeholder) {
+      if (sameFeature && syncFeatureDetailTabBar(existingTabBar, feature)) {
+        placeholder.replaceWith(existingTabBar);
+      } else {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = renderFeatureDetailTabBar(feature);
+        placeholder.replaceWith(wrapper.firstElementChild);
+      }
+    }
+    portal.querySelectorAll('[data-feature-detail-tab]').forEach(button => {
+      const selected = button.dataset.featureDetailTab === _featureDetailTab;
+      button.classList.toggle('active', selected);
+      button.setAttribute('aria-selected', String(selected));
+    });
+  }
 
   // 恢复滚动位置
   const newScroll = portal.querySelector('.settings-tab-content');
