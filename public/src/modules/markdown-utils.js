@@ -118,6 +118,109 @@ function extractDisplayMathBlocks(text) {
   return { markdown, blocks };
 }
 
+// ── YAML frontmatter（SKILL.md 等文档开头的元数据）────────────────
+// marked 会把开头的 `---` 解析成 <hr>，再把 name/description 并进一个
+// <h2>（breaks:true 时中间还夹 <br>）：阅读页上表现为一条无意义分隔线
+// 加一个巨型标题，属性内容被淹没。这里在渲染前摘出 frontmatter，改为
+// 键值卡片，正文仍走 marked。
+// 只认文档开头、且块内确有 YAML 键行的 `---`——普通文档开头的分隔线
+// 不能被吞掉（looksLikeFrontmatterBlock 负责这条判定）。
+// 与 server/conversation-renderer.js 的同名逻辑同源，改动需两侧同步。
+const FRONTMATTER_MAX_LINES = 80;
+const FRONTMATTER_MAX_CHARS = 8000;
+
+/** 块内是否像 YAML：至少一个顶层键行，且没有散文行。 */
+function looksLikeFrontmatterBlock(lines) {
+  let keyCount = 0;
+  for (const raw of lines) {
+    const text = String(raw);
+    if (!text.trim() || /^\s*#/.test(text)) continue;
+    if (/^\s/.test(text)) continue; // 缩进续行 / 嵌套映射
+    if (/^[A-Za-z0-9_][A-Za-z0-9_.-]*\s*:(\s|$)/.test(text)) { keyCount++; continue; }
+    if (/^-(\s|$)/.test(text)) continue; // 顶层列表项
+    return false;
+  }
+  return keyCount > 0;
+}
+
+function unquoteYamlValue(value) {
+  const text = String(value || '').trim();
+  const quoted = text.match(/^(['"])([\s\S]*)\1$/);
+  return quoted ? quoted[2] : text;
+}
+
+/**
+ * YAML 片段 → [{ key, value }]。顶层的键值行开新行，缩进续行与列表项
+ * 追加到上一个值（`>` 折叠成空格，`|` 保留换行）。只求呈现可用，不做
+ * 完整 YAML 解析。
+ */
+function parseFrontmatterRows(lines) {
+  const rows = [];
+  let current = null;
+  const append = (text) => {
+    if (!current || !text) return;
+    current.value = current.value ? current.value + (current.folded ? ' ' : '\n') + text : text;
+  };
+  for (const raw of lines) {
+    const text = String(raw).replace(/\s+$/, '');
+    if (!text.trim()) continue;
+    const keyMatch = /^\s/.test(text)
+      ? null
+      : text.match(/^([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*:\s*([\s\S]*)$/);
+    if (!keyMatch) {
+      append(text.trim());
+      continue;
+    }
+    let value = keyMatch[2].trim();
+    const folded = /^>(?:[+-])?$/.test(value);
+    if (folded || /^\|(?:[+-])?$/.test(value)) value = '';
+    current = { key: keyMatch[1], value: unquoteYamlValue(value), folded };
+    rows.push(current);
+  }
+  return rows.filter((row) => row.key);
+}
+
+/**
+ * 摘出文档开头的 YAML frontmatter。
+ * 命中返回 { rows, head, body }：head 为原文中的 frontmatter 切片（含收尾
+ * 分隔行与换行），body 为之后正文——两者拼回即原文，分块重组不失真。
+ * 未命中返回 null。
+ */
+function splitMarkdownFrontmatter(text) {
+  const source = String(text ?? '').replace(/^\uFEFF/, '');
+  // 允许文档开头有空行；只认第一条 `---` 起始、由 `---`/`...` 收尾的块。
+  const match = source.match(/^(?:[ \t]*\r?\n)*---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
+  if (!match) return null;
+  const block = match[1];
+  if (block.length > FRONTMATTER_MAX_CHARS) return null;
+  const blockLines = block.split(/\r?\n/);
+  if (blockLines.length > FRONTMATTER_MAX_LINES) return null;
+  if (!looksLikeFrontmatterBlock(blockLines)) return null;
+  const head = source.slice(0, match[0].length);
+  return {
+    rows: parseFrontmatterRows(blockLines),
+    head,
+    body: source.slice(match[0].length),
+  };
+}
+
+/** 键值卡片：键走次级色，值按行内 markdown 渲染（描述里的反引号、链接可用）。 */
+function renderFrontmatterHtml(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  const body = rows.map(({ key, value }) => '<div class="md-frontmatter-row">'
+    + '<span class="md-frontmatter-key">' + escapeHtml(key) + '</span>'
+    + '<span class="md-frontmatter-value">' + renderFrontmatterValue(value) + '</span>'
+    + '</div>').join('');
+  return '<div class="md-frontmatter">' + body + '</div>\n';
+}
+
+/** 值渲染走 marked 的行内解析（沿用同一 renderer，行内 HTML 仍被转义）。 */
+function renderFrontmatterValue(value) {
+  if (!value) return '';
+  if (typeof marked.parseInline !== 'function') return escapeHtml(value);
+  return marked.parseInline(value);
+}
+
 function renderDisplayMathLatex(latex) {
   if (window.katex?.renderToString) {
     try {
@@ -141,10 +244,19 @@ function renderDisplayMathLatex(latex) {
 
 /** 整篇 markdown → 顶层块数组 [{ raw, type }]。raw 是该块的原文切片。 */
 function splitMarkdownBlocks(text) {
-  return marked.lexer(String(text ?? '')).map((token) => ({
-    raw: token.raw,
-    type: token.type,
-  }));
+  const frontmatter = splitMarkdownFrontmatter(text);
+  if (!frontmatter) {
+    return marked.lexer(String(text ?? '')).map((token) => ({
+      raw: token.raw,
+      type: token.type,
+    }));
+  }
+  // frontmatter 单列一块：raw 是原文切片（拼回无损），类型独立，渲染时走
+  // 键值卡片，不会被 marked 误判成 hr + heading。
+  return [
+    { raw: frontmatter.head, type: 'frontmatter', rows: frontmatter.rows },
+    ...splitMarkdownBlocks(frontmatter.body),
+  ];
 }
 
 /** space token（块间空行）不是可编辑块，其余（标题/段落/列表/代码块/表格/引用/分隔线…）都是。 */
@@ -183,7 +295,11 @@ function replaceMarkdownBlock(text, blockIndex, newRaw) {
 }
 
 function renderMarkdown(text) {
-  const { markdown, blocks } = extractDisplayMathBlocks(text);
+  // frontmatter 必须在 marked 之前摘出：否则开头 `---` 被当成分隔线、
+  // name/description 被并成一个大标题（SKILL.md 阅读页的典型表现）。
+  const frontmatter = splitMarkdownFrontmatter(text);
+  const source = frontmatter ? frontmatter.body : text;
+  const { markdown, blocks } = extractDisplayMathBlocks(source);
   let html = marked.parse(markdown);
   blocks.forEach(({ token, latex }) => {
     const rendered = `<div class="katex-display-block">${renderDisplayMathLatex(latex)}</div>`;
@@ -192,7 +308,7 @@ function renderMarkdown(text) {
     html = html.replace(wrappedTagPattern, rendered);
     html = html.replace(tagPattern, rendered);
   });
-  return wrapMarkdownTables(html);
+  return renderFrontmatterHtml(frontmatter?.rows) + wrapMarkdownTables(html);
 }
 
 // marked 输出的表格不嵌套，非贪婪标签配对即可安全包裹。

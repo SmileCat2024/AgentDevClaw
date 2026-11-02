@@ -52,6 +52,7 @@
 | 区段标题 | `.settings-section-title` | 13px/600 / `text-transform: uppercase` / `letter-spacing: 0.5px` / 次级色 | **uppercase + letter-spacing 只用于英文标签**。中文标题禁用这两个属性——中文会被逐字撑开，项目里没有这种风格 |
 | 子级标签 | `.settings-subsection-label` | 11px/600 / uppercase / 0.4px / opacity 0.7 | 同上，仅限英文短标签 |
 | 消息列宽 | `.message-row` 等 | `max-width: 800px; margin: 0 auto` | 对话流所有行级元素的统一列宽，新元素跟随 |
+| 文档元数据（frontmatter） | `.md-frontmatter`（components.css Markdown 区段） | radius 12 / padding 10×14 / 12px / 键列 11px 等宽 + 次级色 / 值沿用容器文字色 / 半透明染色 + 描边（与 `.md-table-wrap` 同档） | 文档开头 YAML frontmatter 的键值卡片，由 `markdown-utils.js` 的 `renderFrontmatterHtml` 产出（`server/conversation-renderer.js` 有同源副本供导出使用）。**不要在调用方另行解析或另造样式**：`renderMarkdown` 已统一处理，直接拿它的输出 |
 
 ### 2.4 输入框
 

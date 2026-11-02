@@ -301,6 +301,36 @@ body {
 }
 .markdown-body a { color: var(--accent); text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
+/* Markdown frontmatter（SKILL.md 等文档开头的 YAML 元数据）→ 键值表。
+   与 public/styles/components.css 的同名配方同一档视觉。 */
+.md-frontmatter {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.md-frontmatter-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.md-frontmatter-row + .md-frontmatter-row { margin-top: 6px; }
+.md-frontmatter-key {
+  flex: 0 0 auto;
+  min-width: 6.5em;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.md-frontmatter-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
 .markdown-body table {
   width: 100%;
   border-collapse: collapse;

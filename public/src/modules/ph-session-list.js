@@ -108,7 +108,13 @@ function _phReadableExcerpt(source) {
     if (token.type === 'image') return token.text || '';
     return token.tokens ? inline(token.tokens) : (token.text || token.raw || '');
   }).join('');
-  return marked.lexer(String(source || '')).map((token) => {
+  // 片段的开头若是 YAML frontmatter（消息里常整段贴 SKILL.md），元数据
+  // 不该进检索摘要：只保留正文。判定复用同一套 frontmatter 规则。
+  const frontmatter = typeof splitMarkdownFrontmatter === 'function'
+    ? splitMarkdownFrontmatter(source)
+    : null;
+  const body = frontmatter ? frontmatter.body : source;
+  return marked.lexer(String(body || '')).map((token) => {
     if (token.type === 'space') return '\n';
     if (token.type === 'list') return token.items.map((item) => inline(item.tokens)).join('\n');
     if (token.type === 'table') return [token.header, ...token.rows].map((row) => row.map((cell) => inline(cell.tokens)).join(' | ')).join('\n');

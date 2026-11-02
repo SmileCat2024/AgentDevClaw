@@ -100,10 +100,84 @@ function getToolDisplayName(toolName) {
   return TOOL_DISPLAY_NAMES[toolName] || toolName || 'Unknown';
 }
 
+// ── YAML frontmatter（与 public/src/modules/markdown-utils.js 同源）──
+// 导出文件里若引用到 SKILL.md 这类带 frontmatter 的文档全文，marked 会把
+// 首尾 `---` 当分隔线、把 name/description 并成大标题。摘出来改成键值表，
+// 正文照常渲染。改动需与前端实现同步。
+
+function looksLikeFrontmatterBlock(lines) {
+  let keyCount = 0;
+  for (const raw of lines) {
+    const text = String(raw);
+    if (!text.trim() || /^\s*#/.test(text)) continue;
+    if (/^\s/.test(text)) continue;
+    if (/^[A-Za-z0-9_][A-Za-z0-9_.-]*\s*:(\s|$)/.test(text)) { keyCount += 1; continue; }
+    if (/^-(\s|$)/.test(text)) continue;
+    return false;
+  }
+  return keyCount > 0;
+}
+
+function unquoteYamlValue(value) {
+  const text = String(value || '').trim();
+  const quoted = text.match(/^(['"])([\s\S]*)\1$/);
+  return quoted ? quoted[2] : text;
+}
+
+function parseFrontmatterRows(lines) {
+  const rows = [];
+  let current = null;
+  const append = (text) => {
+    if (!current || !text) return;
+    current.value = current.value ? current.value + (current.folded ? ' ' : '\n') + text : text;
+  };
+  for (const raw of lines) {
+    const text = String(raw).replace(/\s+$/, '');
+    if (!text.trim()) continue;
+    const keyMatch = /^\s/.test(text)
+      ? null
+      : text.match(/^([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*:\s*([\s\S]*)$/);
+    if (!keyMatch) {
+      append(text.trim());
+      continue;
+    }
+    let value = keyMatch[2].trim();
+    const folded = /^>(?:[+-])?$/.test(value);
+    if (folded || /^\|(?:[+-])?$/.test(value)) value = '';
+    current = { key: keyMatch[1], value: unquoteYamlValue(value), folded };
+    rows.push(current);
+  }
+  return rows.filter((row) => row.key);
+}
+
+/** 文档开头是 YAML frontmatter 时返回 { rows, body }，否则返回 null。 */
+function splitMarkdownFrontmatter(text) {
+  const source = String(text ?? '').replace(/^\uFEFF/, '');
+  const match = source.match(/^(?:[ \t]*\r?\n)*---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
+  if (!match) return null;
+  const block = match[1];
+  if (block.length > 8000) return null;
+  const blockLines = block.split(/\r?\n/);
+  if (blockLines.length > 80) return null;
+  if (!looksLikeFrontmatterBlock(blockLines)) return null;
+  return { rows: parseFrontmatterRows(blockLines), body: source.slice(match[0].length) };
+}
+
+function renderFrontmatterHtml(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  const body = rows.map(({ key, value }) => '<div class="md-frontmatter-row">'
+    + '<span class="md-frontmatter-key">' + escapeHtml(key) + '</span>'
+    + '<span class="md-frontmatter-value">' + escapeHtml(value) + '</span>'
+    + '</div>').join('');
+  return `<div class="md-frontmatter">${body}</div>\n`;
+}
+
 function renderMarkdown(text) {
   if (!text) return '';
   try {
-    return marked.parse(text);
+    const frontmatter = splitMarkdownFrontmatter(text);
+    return renderFrontmatterHtml(frontmatter?.rows)
+      + marked.parse(frontmatter ? frontmatter.body : text);
   } catch {
     return `<p>${escapeHtml(text)}</p>`;
   }
@@ -632,5 +706,7 @@ export {
   getToolDisplayName,
   buildToolCallIndex,
   formatToolError,
+  renderMarkdown,
+  splitMarkdownFrontmatter,
   TOOL_DISPLAY_NAMES,
 };

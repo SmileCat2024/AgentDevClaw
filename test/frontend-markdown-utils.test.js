@@ -5,10 +5,12 @@
  *   - escapeHtml (XSS-critical, extensive boundary tests)
  *   - extractDisplayMathBlocks (LaTeX $$ ... $$ extraction)
  *   - renderMarkdown (end-to-end with mocked marked)
+ *   - YAML frontmatter 摘出与呈现（SKILL.md 阅读页，用真实 marked 锚定）
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { marked } from 'marked';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 /**
@@ -278,5 +280,107 @@ describe('markdown-utils: renderMarkdown', () => {
     const result = ctx.run('renderMarkdown(null)');
     // null → extractDisplayMathBlocks converts to '' → marked.parse('') → ''
     assert.equal(result, '');
+  });
+});
+
+// ── YAML frontmatter（SKILL.md 文档开头）────────────────────────────
+// marked 的默认行为是：开头 `---` 渲染成分隔线、name/description 并进同一
+// 个标题。阅读页因此出现无名分隔线 + 巨型标题。这里锁定摘出后的键值卡片
+// 形态，以及「不是 frontmatter 的分隔线不能误吞」。
+
+describe('markdown-utils: splitMarkdownFrontmatter', () => {
+  // 沙箱内返回的对象属于另一个 realm，deepEqual 会因原型不同而失败；
+  // 统一在沙箱里取值，只比较纯数据。
+  const rowsOf = (ctx, src) =>
+    ctx.run(`JSON.parse(JSON.stringify(splitMarkdownFrontmatter(${JSON.stringify(src)}).rows))`);
+
+  it('摘出 name/description，正文从分隔行之后开始', () => {
+    const ctx = loadMarkdownUtils();
+    const src = '---\nname: demo\ndescription: 一句话说明\n---\n\n# 标题\n';
+    const rows = rowsOf(ctx, src);
+    assert.deepEqual(rows.map((row) => [row.key, row.value]), [['name', 'demo'], ['description', '一句话说明']]);
+    assert.equal(ctx.run(`splitMarkdownFrontmatter(${JSON.stringify(src)}).body`), '\n# 标题\n');
+    // head + body 必须还原原文：分块重组（memo 便签回写）依赖这一点
+    assert.equal(
+      ctx.run(`(() => { const fm = splitMarkdownFrontmatter(${JSON.stringify(src)}); return fm.head + fm.body; })()`),
+      src,
+    );
+  });
+
+  it('去掉值两端的引号，保留引号内的冒号', () => {
+    const ctx = loadMarkdownUtils();
+    const src = '---\ndescription: "使用 a: b 的形式"\nsingle: \'x\'\n---\n';
+    assert.deepEqual(rowsOf(ctx, src).map((row) => row.value), ['使用 a: b 的形式', 'x']);
+  });
+
+  it('折叠标量（>）与列表项归入同一键', () => {
+    const ctx = loadMarkdownUtils();
+    const src = '---\ndescription: >\n  第一行\n  第二行\ntags:\n  - a\n  - b\n---\n';
+    const rows = rowsOf(ctx, src);
+    assert.equal(rows[0].value, '第一行 第二行');
+    assert.equal(rows[1].value, '- a\n- b');
+  });
+
+  it('普通文档开头的分隔线不算 frontmatter', () => {
+    const ctx = loadMarkdownUtils();
+    const src = '---\n\n正文第一段。\n\n---\n\n第二段。\n';
+    assert.equal(ctx.run(`splitMarkdownFrontmatter(${JSON.stringify(src)})`), null);
+  });
+
+  it('未闭合的 --- 不算 frontmatter', () => {
+    const ctx = loadMarkdownUtils();
+    assert.equal(ctx.run('splitMarkdownFrontmatter("---\\nname: x\\n")'), null);
+  });
+
+  it('无 frontmatter 的文档返回 null', () => {
+    const ctx = loadMarkdownUtils();
+    assert.equal(ctx.run('splitMarkdownFrontmatter("# 标题\\n")'), null);
+    assert.equal(ctx.run('splitMarkdownFrontmatter("")'), null);
+  });
+});
+
+describe('markdown-utils: renderMarkdown 的 frontmatter 呈现', () => {
+  function loadWithMarked() {
+    const ctx = createFrontendSandbox({
+      marked,
+      hljs: { getLanguage: () => null, highlight: (code) => ({ value: code }) },
+    });
+    ctx.loadSource('public/src/modules/markdown-utils.js');
+    return ctx;
+  }
+
+  it('渲染为键值卡片，不再出现分隔线与元数据标题', () => {
+    const ctx = loadWithMarked();
+    const src = '---\nname: demo\ndescription: 一句话说明\n---\n\n# 正文标题\n';
+    const html = ctx.run(`renderMarkdown(${JSON.stringify(src)})`);
+    assert.ok(html.startsWith('<div class="md-frontmatter">'));
+    assert.ok(html.includes('<span class="md-frontmatter-key">name</span>'));
+    assert.ok(html.includes('<span class="md-frontmatter-value">demo</span>'));
+    assert.ok(!html.includes('<hr>'));
+    assert.ok(!html.includes('<h2>name:'));
+    assert.ok(html.includes('<h1>正文标题</h1>'));
+  });
+
+  it('值里的行内代码与链接按行内 markdown 渲染', () => {
+    const ctx = loadWithMarked();
+    const src = '---\ndescription: 见 `SKILL.md` 与 [文档](https://example.com)\n---\n';
+    const html = ctx.run(`renderMarkdown(${JSON.stringify(src)})`);
+    assert.ok(html.includes('<code class="inline-code-accent">SKILL.md</code>'));
+    assert.ok(html.includes('href="https://example.com"'));
+  });
+
+  it('值里的 HTML 仍被转义（不引入注入面）', () => {
+    const ctx = loadWithMarked();
+    const src = '---\nname: <img src=x onerror=alert(1)>\n---\n';
+    const html = ctx.run(`renderMarkdown(${JSON.stringify(src)})`);
+    assert.ok(!html.includes('<img'));
+    assert.ok(html.includes('&lt;img'));
+  });
+
+  it('普通文档开头的分隔线照旧渲染成 <hr>', () => {
+    const ctx = loadWithMarked();
+    const html = ctx.run('renderMarkdown("---\\n\\n正文。\\n")');
+    assert.ok(html.includes('<hr>'));
+    assert.ok(!html.includes('md-frontmatter'));
   });
 });

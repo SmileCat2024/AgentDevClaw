@@ -23,6 +23,9 @@ function setup() {
     fetch(url) { return new Promise((resolve) => requests.push({ url, resolve })); },
   });
   ctx.document.querySelector = (s) => s === '.ph-session-tabs' ? root : s === '.ph-search-panel' ? panel : null;
+  // index.html 先加载 markdown-utils（检索摘要复用其 frontmatter 判定），
+  // 这里保持同一加载顺序。
+  ctx.loadSource('public/src/modules/markdown-utils.js');
   ctx.loadSource('public/src/modules/session-list-render.js');
   ctx.loadSource('public/src/modules/ph-session-list.js');
   const input = (q) => { ctx.window.phOnSearchInput(q); for (const [id, fn] of tasks) { tasks.delete(id); fn(); } };
@@ -114,6 +117,13 @@ describe('history search UI', () => {
     const s = setup();
     assert.equal(s.ctx.run('_phReadableExcerpt("**重点**与 `code`\\n\\n- 第一项\\n- 第二项")'), '重点与 code\n\n\n第一项\n第二项');
     assert.equal(s.ctx.run('_phReadableExcerpt("<img src=x onerror=alert(1)>")'), '<img src=x onerror=alert(1)>');
+  });
+  it('drops YAML frontmatter metadata from the excerpt, keeping the body', () => {
+    const s = setup();
+    // 消息里整段贴 SKILL.md 时，摘要只应出现正文，不应出现 name/description 元数据
+    const src = '---\nname: demo-skill\ndescription: 一句话说明\n---\n\n# 正文标题\n\n正文段落。';
+    // 摘要按「块间补一个换行」拼接（与上一条样例同规则）：正文照常，元数据不出现。
+    assert.equal(s.ctx.run(`_phReadableExcerpt(${JSON.stringify(src)})`), '正文标题\n\n\n正文段落。');
   });
   it('highlights literal metacharacters without breaking escaped HTML entities', () => {
     const s = setup();

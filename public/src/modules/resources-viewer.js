@@ -323,9 +323,12 @@
 
     let contentAreaHtml;
     if (showPreview) {
-      const mdHtml = typeof marked !== 'undefined'
-        ? marked.parse(_viewerContent || '')
-        : escapeHtml(_viewerContent || '');
+      // 走统一渲染管线：frontmatter 键值卡片、表格横向滚动壳、公式等
+      // 与对话/指南同一套处理；裸 marked.parse 会把开头的 `---` 渲染成
+      // 分隔线并把元数据并成巨型标题。
+      const mdHtml = typeof renderMarkdown === 'function'
+        ? renderMarkdown(_viewerContent || '')
+        : (typeof marked !== 'undefined' ? marked.parse(_viewerContent || '') : escapeHtml(_viewerContent || ''));
       contentAreaHtml = `<div class="markdown-body" data-files-role="preview">${mdHtml}</div>`;
     } else {
       contentAreaHtml = `<textarea class="rv-editor" data-files-role="editor" oninput="window._viewerAutoSave()" placeholder="在此编辑文件内容...">${escapeHtml(_viewerContent)}</textarea>`;

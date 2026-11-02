@@ -18,6 +18,7 @@ import {
   renderConversationHtml,
   renderConversationMarkdown,
   applyExportFilters,
+  renderMarkdown,
 } from '../server/conversation-renderer.js';
 
 const MESSAGES = [
@@ -149,4 +150,44 @@ test('renderConversation: 工程痕迹不进入导出内容（token 用量、Tur
   assert.ok(!html.includes('↑10'));
   const md = renderConversationMarkdown(messages);
   assert.ok(!md.includes('Turn '));
+});
+
+// ── SKILL.md 一类带 YAML frontmatter 的文档正文 ────────────────────
+// 导出走的是服务端自带渲染器（自包含 HTML，不依赖 Claw 前端）；
+// frontmatter 若交给 marked，会变成一条分隔线 + 把 name/description
+// 并进标题，导出文件里尤其刺眼。
+
+test('renderMarkdown: 开头 YAML frontmatter 渲染为键值表而非标题', () => {
+  const doc = '---\nname: demo-skill\ndescription: 一句话说明\n---\n\n# 正文标题\n';
+  const html = renderMarkdown(doc);
+  assert.ok(html.startsWith('<div class="md-frontmatter">'));
+  assert.ok(html.includes('<span class="md-frontmatter-key">name</span>'));
+  assert.ok(html.includes('<span class="md-frontmatter-value">demo-skill</span>'));
+  assert.ok(!html.includes('<hr>'));
+  assert.ok(!html.includes('<h2>name:'));
+  assert.ok(html.includes('<h1>正文标题</h1>'));
+});
+
+test('renderMarkdown: frontmatter 值里的 HTML 被转义', () => {
+  const html = renderMarkdown('---\nname: <img src=x onerror=alert(1)>\n---\n');
+  assert.ok(!html.includes('<img'));
+  assert.ok(html.includes('&lt;img'));
+});
+
+test('renderMarkdown: 普通分隔线不被当作 frontmatter', () => {
+  const html = renderMarkdown('---\n\n正文\n');
+  assert.ok(html.includes('<hr>'));
+  assert.ok(!html.includes('md-frontmatter'));
+});
+
+test('renderConversationHtml: 带 frontmatter 的文档正文按键值表导出', () => {
+  const doc = '---\nname: demo-skill\ndescription: 一句话说明\n---\n\n正文段落。\n';
+  const html = renderConversationHtml([
+    { role: 'system', content: 'you are an agent', turn: 0 },
+    { role: 'user', content: '读一下技能文档', turn: 1 },
+    { role: 'assistant', content: doc, turn: 1 },
+  ]);
+  assert.ok(html.includes('class="md-frontmatter"'));
+  assert.ok(html.includes('正文段落。'));
+  assert.ok(!html.includes('<h2>name: demo-skill'));
 });

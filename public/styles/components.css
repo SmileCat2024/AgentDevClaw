@@ -811,6 +811,51 @@ body[data-theme="light"] .markdown-body tr:nth-child(2n) {
   background-color: rgba(148, 163, 184, 0.12) !important;
 }
 
+/* ── Markdown frontmatter（SKILL.md 等文档开头的 YAML 元数据）───
+   结构由 markdown-utils.js 的 renderFrontmatterHtml 产出：一行一对
+   键值，键定宽次级色、值可换行。原文的 name/description 里常有长句，
+   不折叠、不截断，靠左对齐的定宽键列保持可扫读。
+   底色与 .md-table-wrap 同一档（半透明染色 + 描边），不另造玻璃配方。 */
+.md-frontmatter {
+  margin: 0 0 1rem;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.04);
+  /* 元数据是次级内容：字号取节奏表的 12px 档，不跟随正文缩放的相对值 */
+  font-size: 12px;
+  line-height: 1.6;
+}
+.md-frontmatter-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+}
+.md-frontmatter-row + .md-frontmatter-row { margin-top: 6px; }
+.md-frontmatter-key {
+  flex: 0 0 auto;
+  min-width: 6.5em;
+  color: var(--text-secondary);
+  font-family: "Fira Code", "Cascadia Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+/* 值沿用容器文字色：对话流是正文色，技能阅读页（.feature-skill-markdown）
+   是次级色——同一份文档在两处保持各自的层级，靠字号与键列区分。 */
+.md-frontmatter-value {
+  flex: 1 1 12em;
+  min-width: 0;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+.md-frontmatter-value > :first-child { margin-top: 0 !important; }
+.md-frontmatter-value > :last-child { margin-bottom: 0 !important; }
+.md-frontmatter-value p { margin: 0 !important; }
+body[data-theme="light"] .md-frontmatter {
+  border-color: rgba(15, 23, 42, 0.14);
+  background-color: rgba(255, 255, 255, 0.55);
+}
+
 /* ── Markdown 代码块：块壳 + 右下角复制动作条 ───────────────────
     结构由 markdown-utils.js 的 renderer.code 产出（对齐 md-table-block
     模式）：block 承载块级间距与动作条，pre 自身 margin 已是 0
