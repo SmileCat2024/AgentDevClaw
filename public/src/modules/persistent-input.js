@@ -67,6 +67,19 @@ function _imageBucket() {
   return bucket;
 }
 
+// 接续会替换 Session 身份，但用户仍在同一条 Thread 对话中。将未发送附件
+// 随视图身份迁移到 successor；只由 thread-store 在确认同线程换头时调用。
+function migratePendingInputImages(fromKey, toKey) {
+  if (typeof fromKey !== 'string' || !fromKey || typeof toKey !== 'string' || !toKey || fromKey === toKey) return;
+  const source = _pendingImageBuckets.get(fromKey);
+  if (!Array.isArray(source) || source.length === 0) return;
+  const destination = _pendingImageBuckets.get(toKey);
+  _pendingImageBuckets.set(toKey, Array.isArray(destination) ? destination.concat(source) : source);
+  _pendingImageBuckets.delete(fromKey);
+  _renderAttachmentPreview();
+}
+window.migratePendingInputImages = migratePendingInputImages;
+
 // ── 上次对话结束时间显示 ──────────────────────────────────────────
 let _lastCallFinishTime = 0;
 let _callFinishTimerInterval = null;

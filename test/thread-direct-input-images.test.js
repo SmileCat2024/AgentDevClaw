@@ -29,6 +29,11 @@ const bucketBlock = sourceBetween(
   'const _pendingImageBuckets = new Map();',
   '\nlet _lastCallFinishTime',
 );
+const migrationBlock = sourceBetween(
+  persistentInputSource,
+  'function migratePendingInputImages(fromKey, toKey) {',
+  '\nwindow.migratePendingInputImages',
+);
 const clearBlock = sourceBetween(
   persistentInputSource,
   'function clearPendingInputImages(bucketKey) {',
@@ -51,11 +56,13 @@ async function createThreadSubmitContext() {
     currentInputRequests: [],
     _submitInFlight: false,
     _sessionInputCache: {},
+    _attachmentKey: 'runtime-1::session-old',
     document: {
       getElementById(id) { return id === 'input-persistent' ? textarea : null; },
       querySelector() { return null; },
     },
     window: {
+      SessionReference: { activeKey: () => context._attachmentKey },
       getActiveThreadInputTarget: () => ({ threadId: 'th-1' }),
       submitThreadInput: async (threadId, payload) => {
         submitCalls.push({ threadId, payload });
@@ -86,17 +93,32 @@ async function createThreadSubmitContext() {
   vm.createContext(context);
   vm.runInContext(
     `${bucketBlock}
+${migrationBlock}
 ${clearBlock}
 ${submitBlock}
 globalThis.__submit = submitQueuedInput;
 globalThis.__bucket = _imageBucket;
-globalThis.__bucketKey = _imageBucketKey;`,
+globalThis.__bucketKey = _imageBucketKey;
+globalThis.__migrate = migratePendingInputImages;
+globalThis.__hasBucket = key => _pendingImageBuckets.has(key);`,
     context,
   );
   // 预置一张待发图片（模拟用户粘贴后未发送状态）
   context.__bucket().push({ path: '/uploads/attach.png', mediaType: 'image/png', source: 'paste' });
   return { context, textarea, submitCalls };
 }
+
+test('unsent images move with the conversation when its thread advances to a successor', async () => {
+  const { context } = await createThreadSubmitContext();
+  context._attachmentKey = 'runtime-2::session-new';
+
+  context.__migrate('runtime-1::session-old', context._attachmentKey);
+
+  assert.equal(context.__bucket().length, 1, 'the successor composer must still show the unsent image');
+  assert.equal(context.__bucket()[0].source, 'paste', 'the original image entry is preserved');
+  assert.equal(context.__hasBucket('runtime-1::session-old'), false,
+    'the attachment is no longer stranded under the retired session identity');
+});
 
 test('thread direct-delivery submit clears pending images on success', async () => {
   const { context, submitCalls } = await createThreadSubmitContext();

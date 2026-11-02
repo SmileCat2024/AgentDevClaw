@@ -724,8 +724,16 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
     if (previousRuntimeId && typeof getRuntimeWorkspaceSessionId === 'function'
       && getRuntimeWorkspaceSessionId(previousRuntimeId) !== fromSessionId) return;
     _storeVisibleSessionInputDraft();
+    const previousRuntimeIdForDraft = String(currentRuntimeAgentId || selectedConversation?.runtimeId || '').trim();
+    const previousAttachmentKey = window.SessionReference?.activeKey?.() || '';
     const nextRuntimeId = String(runtime.runtime_session_id || runtime.runtimeSessionId || runtime.id || '').trim();
     if (!nextRuntimeId) return;
+    const successorSessionKey = `${nextRuntimeId}::${toSessionId}`;
+    if (previousAttachmentKey) {
+      window.migratePendingInputImages?.(previousAttachmentKey, successorSessionKey);
+    }
+    window.ClawToast?.dismiss?.(`thread-staged-input-${threadId}`);
+    window.ClawToast?.dismiss?.(`thread-staged-gw-${previousRuntimeIdForDraft || selectedConversation?.runtimeId || ''}`);
     if (previousRuntimeId && typeof saveCurrentRuntimeToCache === 'function') {
       saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId));
     }

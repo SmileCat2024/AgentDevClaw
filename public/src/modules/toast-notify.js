@@ -429,10 +429,13 @@
       createdAt: Date.now(),
     };
 
-    // Auto-dismiss for success and warning
+    // Explicit autoDismiss applies to every status; defaults remain limited to
+    // success/warning so loading and error notices stay visible unless requested.
     let status = opts.status || 'loading';
-    if ((status === 'success' || status === 'warning') && opts.autoDismiss !== 0) {
-      scheduleAutoDismiss(id, opts.autoDismiss || (status === 'warning' ? 8000 : 3500));
+    if (Number(opts.autoDismiss) > 0) {
+      scheduleAutoDismiss(id, Number(opts.autoDismiss));
+    } else if ((status === 'success' || status === 'warning') && opts.autoDismiss !== 0) {
+      scheduleAutoDismiss(id, status === 'warning' ? 8000 : 3500);
     }
   }
 
@@ -457,9 +460,12 @@
     if (changes.title !== undefined) entry.title = changes.title;
     if (changes.description !== undefined) entry.description = changes.description;
 
-    // Auto-dismiss when transitioning to success or warning
-    if ((changes.status === 'success' || changes.status === 'warning') && changes.autoDismiss !== 0) {
-      scheduleAutoDismiss(id, changes.autoDismiss || (changes.status === 'warning' ? 8000 : 3500));
+    // An explicit duration applies regardless of status; defaults remain limited
+    // to success/warning so loading and error notices stay visible by default.
+    if (Number(changes.autoDismiss) > 0) {
+      scheduleAutoDismiss(id, Number(changes.autoDismiss));
+    } else if ((changes.status === 'success' || changes.status === 'warning') && changes.autoDismiss !== 0) {
+      scheduleAutoDismiss(id, changes.status === 'warning' ? 8000 : 3500);
     }
   }
 

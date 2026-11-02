@@ -37,6 +37,8 @@ function makeRebindSandbox({
   const loads = [];
   let renderAgentListCalls = 0;
   let refreshCalls = 0;
+  const migratedImages = [];
+  const dismissedToasts = [];
 
   const ctx = createFrontendSandbox({
     currentLanguage: 'zh',
@@ -65,6 +67,9 @@ function makeRebindSandbox({
     setTimeout: (fn, ms) => unrefTimer(globalThis.setTimeout(fn, ms)),
     setInterval: (fn, ms) => unrefTimer(globalThis.setInterval(fn, ms)),
   });
+  ctx.window.ClawToast = { dismiss: (id) => dismissedToasts.push(id) };
+  ctx.window.SessionReference = { activeKey: () => 'runtime-old::session-old' };
+  ctx.window.migratePendingInputImages = (from, to) => migratedImages.push([from, to]);
   ctx.window.ClawFW = { SseClient: { subscribeThreadEvents: (id, handler) => {
     assert.equal(id, '*', 'sidebar and viewed-thread discovery share a bounded subscription');
     eventHandler = handler;
@@ -92,6 +97,8 @@ function makeRebindSandbox({
     ctx, bindings, loads, get refreshCalls() { return refreshCalls; },
     get renderAgentListCalls() { return renderAgentListCalls; },
     get eventHandler() { return eventHandler; },
+    migratedImages,
+    dismissedToasts,
     installFacts,
   };
 }
@@ -123,6 +130,10 @@ describe('thread-store: head-advanced rebind across the succession gap', () => {
     assert.equal(kit.ctx.window.ClawThreads.activeConversation.sessionId, 'session-new');
     assert.equal(kit.ctx.window.ClawThreads.activeConversation.runtimeId, 'runtime-new');
     assert.equal(kit.ctx.focusedAgentId, 'coder');
+    assert.deepEqual(kit.migratedImages, [['runtime-old::session-old', 'runtime-new::session-new']],
+      'unsent attachments must follow the viewed thread to its successor session');
+    assert.deepEqual(kit.dismissedToasts, ['thread-staged-input-wt-viewed', 'thread-staged-gw-runtime-old'],
+      'a pending-input notice must close when the successor becomes the active conversation');
   });
 
   it('keeps the thread subscription alive when runtime state is cleared by the 404 cleanup', async () => {
