@@ -201,7 +201,7 @@ JSONL 是合适候选，因为可 append、便于检查且支持 torn-tail 恢�
 ## 关联
 
 - [ADR-0002](0002-session-continuity-as-transformation.md)：Session 接续与 successor 变换。
-- [ADR-0005](0005-tool-termination-semantics.md)：工具中断即结果；本 ADR 扩展到进程死亡后的执行事实恢复。
+- [ADR-0005](0005-tool-termination-as-result.md)：工具中断即结果；本 ADR 扩展到进程死亡后的执行事实恢复。
 - [ADR-0019](0019-turn-suspension-semantics.md)：pending-work / suspended 事实与工具事务恢复的边界。
 - [ADR-0026](0026-session-view-identity-and-data-sources.md)：Session 内容、Runtime 观测与 Thread 连续性的数据归属。
 - [ADR-0031](0031-background-work-and-domain-shell.md)：后台工作与领域工具运行边界。

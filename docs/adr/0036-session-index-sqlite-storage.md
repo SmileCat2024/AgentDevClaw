@@ -2,7 +2,7 @@
 
 - 日期：2026-10-29
 - 状态：Proposed
-- 关联：[ADR-0013 消息轮询的增量探测](0013-message-polling-incremental-probing.md)、[ADR-0016 用户数据存储分区治理](0016-user-data-storage-partitioning.md)、[ADR-0032 编程小助手线程驱动](0032-programming-helper-thread-driven.md)
+- 关联：[ADR-0013 消息轮询的增量探测](0013-message-poll-probe-tail.md)、[ADR-0016 用户数据存储分区治理](0016-user-data-storage-partitioning.md)、[ADR-0032 编程小助手线程驱动](0032-programming-helper-thread-driven.md)
 
 ## 背景
 

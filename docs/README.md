@@ -11,7 +11,7 @@
 
 ## 改代码前
 
-- [AGENT.md](../AGENT.md) — agent 认知地图（入口，含 ADR 索引与协作纪律）
+- [AGENT.md](../AGENT.md) — agent 认知地图（入口，含 ADR 导航与协作纪律）
 - [前端渲染机制与常见陷阱](reference/frontend-rendering-patterns.md) — 涉及前端 UI / workspace 切换必读（活文档）
 - [线程状态矩阵与测试体系](reference/thread-state-matrix.md) — 改 WorkThread 状态机、接续、归档、投递、重启收敛前必读；测试按矩阵格子对齐（活文档）
 - [前端设计系统](reference/design-system.md) — 修改样式 / 新增 UI 控件前必读：配方清单、节奏表、场景参照系（活文档）
@@ -26,7 +26,7 @@
 
 ## 查设计决策
 
-- [adr/](adr/) — 架构决策记录（编号递增；改动相关领域前先读对应篇）
+- [ADR 索引](adr/README.md) — 架构决策记录：分组索引、领域定位与状态（编号递增；改动相关领域前先读对应篇，各篇正文为唯一权威）
 - [模型选择 Feature 化](adr/0034-feature-owned-model-selection.md)（Accepted，已实施）— 选择意图与运行模型分层；选择为链级当前状态（接续/分支继承源当前值、回滚不撤销）、恢复失败回退全局默认、远程降级不可操作、凭证刷新经 feature-comms 请求面收编（决策 6a），以及框架生命周期改造约束；[文件级实施方案](plans/2026-10-28-model-selection-feature-implementation.md)
 - [后台接入与领域 Shell 分层](adr/0031-background-work-and-domain-shell.md) — 执行关联、Bash 薄接入与 Coder 监视已实现，领域 Bash 变量/循环/条件解释执行已实现（`just-bash` + 领域动词/参数约束）；面板协议接入已实现；[实施方案](plans/2026-10-21-background-work-and-coder-monitoring.md)：先验证 Bash/Coder 后台接入，再独立扩展 Shell 命令组合
 - [运行中对话生命周期一致性](plans/2026-10-28-session-lifecycle-consistency.md) — 关闭与最终保存确认、归档/删除的启动互斥、分支完整快照边界及验证记录

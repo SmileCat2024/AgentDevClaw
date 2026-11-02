@@ -72,6 +72,6 @@
 ## 关联
 
 - [ADR-0027](0027-agent-os-consent-governance-and-runtime-quota.md)：直接父——立项条件由本 ADR 触发，三层结构与 editingSurface 挂账在此落地。
-- [ADR-0024](0024-app-workspace-eternal-thread.md)、[ADR-0025](0025-coder-workspace-promotion.md)、[ADR-0022](0022-agent-studio-feature-first-model.md)：应用化主线——通知是 APP 型工作空间的触达面配套。
+- [ADR-0024](0024-app-workspace-eternal-thread-model.md)、[ADR-0025](0025-coder-workspace-promotion.md)、[ADR-0022](0022-agent-studio-feature-first-model.md)：应用化主线——通知是 APP 型工作空间的触达面配套。
 - [ADR-0018](0018-feature-panel-communication-transport.md)：声明制授权记录的先例。
 - [ADR-0013](0013-message-poll-probe-tail.md)：SSE / 轮询通道契约，通知帧复用其重放语义。

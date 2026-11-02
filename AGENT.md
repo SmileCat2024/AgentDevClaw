@@ -11,45 +11,7 @@
 5. [docs/reference/dev-context-index.md](docs/reference/dev-context-index.md) — AgentDev 框架与 Claw 的跨仓库连接关系速查
 6. 涉及前端 UI 渲染、workspace 切换、数据加载时序 → 必读 [docs/reference/frontend-rendering-patterns.md](docs/reference/frontend-rendering-patterns.md)
 7. 修改前端样式、新增 UI 控件 → 必读 [docs/reference/design-system.md](docs/reference/design-system.md)：视觉配方清单与节奏表，先复用既有配方，禁止自造同类控件
-8. 架构决策记录（ADR），改动相关领域前先读对应篇（[docs/adr/](docs/adr/)）：
-   - 0001 导出面治理：Runtime 双类型拆分与按引用导出
-   - 0002 Session Continuity as Transformation：会话接续的框架化原则
-   - 0003 AgentDev 包结构破坏性拆分：无伞包、core 零重依赖
-   - 0004 ACP 适配器外置为独立 stdio 进程
-   - 0005 工具终止语义：中断即结果
-   - 0006 本地显式资源寻址优先
-   - 0007 Capability Registry as the Unified Control Plane
-   - 0008 远程 Claw 连接架构
-   - 0009 模型热切换框架 API：资产归应用层，状态由 agent 自持
-   - 0010 侧栏统一投影：工作空间 → 项目目录 → 运行中会话，连接不产生侧栏层级；修订一：托管 runtime 归属先于 Viewer 可见性（子进程注册前 IPC 握手 runtime-identity，服务端记录后 ack；查询在元数据加载后取归属快照）
-   - 0011 ProtoClaw 远程写适配
-   - 0012 远程会话历史统一呈现
-   - 0013 消息轮询的增量探测：probe + tail
-   - 0014 会话导航事务：导航生命周期的统一封装（Proposed）
-   - 0015 内嵌浏览器 viewer：浏览器所有权翻转（Archived，调查完成暂不实施）
-   - 0016 用户数据存储分区治理与 feature 持久资产收敛
-   - 0017 Feature Manifest v2 与宿主侧 Feature Registry
-   - 0018 Feature-Panel 通信基座：feature-comms 通道
-   - 0019 轮次挂起语义：suspended 与 pending-work 事实层（实施计划见 [docs/plans/2026-09-27-turn-suspension-semantics.md](docs/plans/2026-09-27-turn-suspension-semantics.md)）
-   - 0020 Feature 配置累加型多值字段的跨层叠加
-   - 0021 状态机统一内核 state-kernel（框架 core 纯函数转换求值器，WorkThread / CallArbiter 先行迁移；实施计划见 [docs/plans/2026-10-06-state-kernel-implementation.md](docs/plans/2026-10-06-state-kernel-implementation.md)）
-   - 0022 Agent Studio Feature-First 模式：feature 一级实体、目录降级为运行环境、会话多对多绑定（实施记录见 [docs/plans/2026-10-07-agent-studio-feature-first-refactor.md](docs/plans/2026-10-07-agent-studio-feature-first-refactor.md)）
-   - 0023 工具调用历史改写：工具自声明生效调用、框架零语义判断、双视图与单轨快照（实施计划见 [docs/plans/2026-10-07-tool-call-history-rewrite.md](docs/plans/2026-10-07-tool-call-history-rewrite.md)）
-   - 0024 APP 型工作空间：业务单对话、WorkThread 可选连续性与接续硬切换视图（实施计划见 [docs/plans/2026-10-10-app-workspace-eternal-thread.md](docs/plans/2026-10-10-app-workspace-eternal-thread.md)）
-   - 0025 coder 升格独立工作空间：会话身份投影机制退役（实施计划见 [docs/plans/2026-10-11-coder-workspace-promotion.md](docs/plans/2026-10-11-coder-workspace-promotion.md)）
-   - 0026 Session 视图统一：Session 身份为锚，Runtime 为运行态数据源，Thread 为连续性与输入控制投影
-   - 0027 Agent OS 治理面：同意模型与 per-workspace 线程配额；修订一：计数改非终态线程数（未归档占名额，归档释放），权限项 `maxLiveThreads`（原 `maxLiveRuntimes` 不迁移），强制点迁至建线入口前置检查（会话落盘之前，实现 `server/routes/thread-quota.js`），spawn 闸与 rotation 豁免（spawnIntent）退役；权限模型独立后行
-   - 0028 凭证失效恢复与分层判据：llm auth 错误语义 + core setModel 恢复编排，LLM 实例=参数快照、凭证轮换=实例轮换；修订一：凭证变更（重登/换 key/连接字段变更）server 主动广播 refresh-credentials，运行中会话同 preset 重 resolve（旧凭证仍有效时无 401 可触发反应式恢复）；修订二：存量 OpenCode preset（无 catalogProvider 标记、providerName 为 'OpenCode Go/Zen'）resolver 读时归一到登录凭证（与前端归类口径对齐）+ opencode 路径自动注入 x-opencode-session（go tier 端点强制要求）
-   - 0029 模型调用超时治理：对话默认首段（首 token）120s / chunk 间隔 60s idle / 5 次重试，transform 预算 600s 经装配层实例分离，undici headersTimeout / bodyTimeout 双锚 TRANSFORM_MODEL_TIMEOUT_MS（保底层垫在最大可配预算之下），preset 级 timeoutMs/maxRetries 逃生门（timeoutMs 显式值管首段与间隔两段）
-   - 0030 OS 通知投递面：统一出口、通知权限项与应用承接（notifications.* 权限族往 PERMISSION_ITEMS 加项；editingSurface 挂账落地、全局设置通知项只读审计；server 投递闸 + SSE app-notification + 前端哑呈现器；不建 OS 定时器服务）
-   - [0031 后台工作的薄接入层与领域 Shell 的独立组合](docs/adr/0031-background-work-and-domain-shell.md)（代码已实施，在线冒烟待执行）：执行关联、`BackgroundAccess` / Bash 迁移、Coder 非阻塞监视、领域 Bash 基座（`local-features/capability-shell/src/bash-program.ts` / `bash-runtime.ts`，`just-bash` AST 预检与解释执行，支持变量/循环/条件，展开后再校验领域参数）与 Claw 面板协议接入已落地；Bash 语法不开放系统命令，`send` 返回提交回执后循环继续，`watch` 待命只在整次调用返回后生效；复用 pending-work / suspended，监控策略归领域，不建设脚本挂起续跑；[实施方案](docs/plans/2026-10-21-background-work-and-coder-monitoring.md)
-   - 0032 编程小助手线程驱动：对话身份从 Session 提升为 Thread（048–051 已实施）：`threadHost` 声明接入（目录/项目对话一并覆盖，与 projectId 正交）；手动 `/trim` `/summary` 改对话内 succession 事务（自动接续后话）；列表行=对话、历史以时间锚存档呈现（不用「代」）；存量迁移按 index 血缘建线，歧义分量跳过，备份+预览+幂等；服务启动自动执行，失败告警不阻断；本机真实数据已迁移并验收；移动对话=整链移动；不声明线程配额；搜索 Thread 聚合独立后续（052；工单 048–052 见 [docs/tickets/2026-10-24-ph-thread-driven.md](docs/tickets/2026-10-24-ph-thread-driven.md)）
-   - 0033 会话崩溃恢复（Proposed）：journal 为唯一权威，记录工具批次意图、dispatch、进度、结果/未知及核验事实；完整 checkpoint 保存可回退的普通会话与 Feature 状态，`state.json` 不进入首版。明确并发工具的单写者提交、原始调用顺序、unknown 副作用与恢复可见性；实施前仍需完成工具入口、文件消费者盘点及故障注入验收。性能不是立项理由，当前活跃会话保存开销已实测在毫秒级。
-   - [0034 模型选择 Feature 化](docs/adr/0034-feature-owned-model-selection.md)（Accepted，已实施）：Feature 持有选择与恢复策略，Agent 持有实际模型，Claw 管资产与通信；选择是链级当前状态——重启/接续保留、分支继承源对话当前选择（非边界快照历史值）、回滚不撤销；恢复失败提示并回退全局默认；远程会话不保持模型切换，入口降级不可操作。凭证刷新（ADR-0028 修订一推送）经 feature-comms 请求面收编为 Feature 的 `refresh-credentials` 请求类型（决策 6a），宿主不再持有模型编排语义。[文件级实施方案](docs/plans/2026-10-28-model-selection-feature-implementation.md)。
-   - [0035 正常输入与输入租约解耦](docs/adr/0035-input-channel-decoupling.md)（Proposed）：composer 单一 user-turn 通道，lease 专职请求应答（choice 选择、rollback/compact actions 回填）；宿主 inputLoop 与框架零改动（viewer `submitUserTurn` 三段式路由已备，空闲文本 lease 由 user-turn 自动回填），前端 requests 模式与 `submitInput` 文本编排退役、以删码为主；`submitInputAction` 与 choice 卡独立面不动。[实施计划](docs/plans/2026-10-29-input-channel-decoupling.md)
-   - [0036 会话索引存储迁移到嵌入式 SQLite](docs/adr/0036-session-index-sqlite-storage.md)（Proposed，实施中）：`node:sqlite`（Node 24 内置，开发与桌面同钉 24.19.0）替换 index.json 单文件，每工作空间 `sessions/index.db`（WAL，meta 表存 revision/activeSessionId + sessions 表整条 record JSON 带冗余索引列与 position 顺序列）；`session-access.js` 五个导出契约不变、消费方零改动，归一化移到写侧，mtime 缓存/stampede 防护/原子改名写/文件锁约 200 行补偿机制退役；启动自迁移为主（失败告警不阻断）+ 访问兜底（index.json → index.migrated.json 留档，事务内幂等可重入），`sinceRevision` 契约与 ADR-0016 分区不变，engines 提到 >=24；plain agent 索引与 SQL 查询下推为范围外/后续阶段
-   - [0037 Runtime 执行环境统一](docs/adr/0037-runtime-execution-environment-unification.md)（Proposed，六项执行前调查已完成、结论在篇内；M1 外部 agent TCP 接入、M2 HTTP 面 `AGENTDEV_VIEWER_ORIGIN` 地址化、M3 平台注册协议与停止通道、M4 执行后端 seam、M5 镜像与构建、M6 容器后端与端到端验收已实施——四场景 8/8 隔离实例验收通过，容器阶段实施收口，见篇内实施进展与 [docs/plans/2026-10-31-runtime-container-phase.md](docs/plans/2026-10-31-runtime-container-phase.md)）：平台-runtime 分离——Claw 平台唯一权威与监听方、runtime 永远出站连接、执行环境（本地/容器/远程）经配置选择，容器与远程是同一架构的两次部署距离测试；传输网络原生化在框架层完成（DebugHub/ViewerWorker 收敛传输接口，UDS 降为本机优化特例，禁止 Claw 侧垫片；Claw 托管 runtime 只用 UDS，框架 `claw` HTTP 适配对接独立 Claw Runtime 并保持其契约）；HTTP 面地址配置化（新增 `AGENTDEV_VIEWER_ORIGIN`，硬编码消费点仅 react-loop 与 runtime-passive-mailbox 两处）；认证复用 `PROTOCLAW_INTERNAL_TOKEN`（TCP auth 帧 + 非回环 Bearer，回环模式行为不变；serviceToken 无条件落盘 auth.json 供外部 runtime 引导；server→viewer 消费面统一经 `server/shared/viewer-fetch.js` 携带内部 token）；外部 runtime 经平台 HTTP 注册协议接入（`server/routes/runtime-registration.js`，机器通道无条件 Bearer，停止指令经 viewer 连接下发 stop-agent、`DebugHub.setStopHandler` 承接）；执行后端 seam `server/runtime-executor/`（`CLAW_RUNTIME_EXECUTOR` 实验开关，本地/容器同契约，容器后端 dockerode 经命名管道、env 白名单透传、镜像缺失显式报错不回退）；托管容器 runtime 经一次性 spawn ticket 注册（`server/shared/runtime-spawn-tickets.js`，env 注入、豁免外部注册防冒充规则）；容器数据挂载供给（会话存储/模型配置/handoff + 会话工作目录 → `/workspace`，`AGENTDEV_DATA_DIR` 指向；远程数据面归属另立决策）；**SQLite WAL 锁跨不过容器边界（容器修订，修订二）**——容器内索引读走平台 HTTP（`CLAW_SESSION_INDEX_REMOTE=1` + `session_record_lookup` 端点，写侧 `session_meta_sync` 本就 HTTP；`session-access` 容器形态直连即抛 `session_index_remote_disabled` 防回归），本地/容器会话可并存、多容器无锁问题，委托快照（`delegateSessionDb`/`resumeSessionDb`）与本地↔容器并存启动闸已退役；跨边界读写统一走显式协议：feature-comms 定向请求经 viewer host-request 通道（`DebugHub.setHostRequestHandler` + viewer `POST /api/agents/:id/host-request`，容器/外部 runtime 同链路）；镜像构建路线一（`npm run pack:container`：Agent 运行闭包正向收集 + nm 预组装 + native 依赖宿主侧补齐 + 嵌套版本仲裁，纯 COPY 零 RUN 断网可构建；`--staging` 轨道预留）；E2E 验收脚本 `scripts/e2e-container-phase.mjs`；ADR-0008 平台-平台远程模型实质退役，存量 remote-connections/proxy 冻结待处置
-   - [0038 资源读取协议](docs/adr/0038-resource-fetch-protocol.md)（Accepted，已实施并经容器 E2E 12/12 验收）：runtime 持有资产的跨边界只读资源面——URL `/res/{agentId}/{rootId}/{rel}`，ViewerWorker 经 host-request `resource.fetch` 回源取内容（60s 超时/断连 NAK 复用；回源帧拍平载荷 `{requestType, rootId, rel}`，`requestType` 为类型化分发保留键），本地/容器/外部同链路无双路径；资源根限于 feature 包根（realpath），路径穿越防护在 runtime 侧；DebugHub host-request 分发新增类型化层（按 `payload.requestType`，先于 per-agent/全局，Claw 宿主全局 handler 不受影响）；`/tpl/` 退役不留别名，两套前端按不透明 URL 消费零改动；本轮只接模板消费者，Skill 展示等按同一模型后续接入。[实施计划与验收记录](docs/plans/2026-11-02-resource-fetch-protocol.md)
+8. 架构决策记录（ADR）：改动相关领域前先读对应篇，分组索引与状态见 [docs/adr/README.md](docs/adr/README.md)。已有决策覆盖的领域包括但不限于：会话连续性与线程（trim / summary / 接续、导航、崩溃恢复、轮次挂起）、会话与消息存储（SQLite 索引、快照、工具调用历史）、运行时与执行环境（本地 / 容器 / 远程统一、runtime 注册与停止、模型热切换与调用超时、凭证恢复）、Feature 体系（manifest、装配解析、capability 控制面、面板通信、模型选择、资源读取）、前端呈现（侧栏投影、渲染管线）、远程与外部协议（ACP、远程连接、ProtoClaw 读写）、工程治理（包结构与导出面、数据分区、线程配额、通知投递、后台工作与领域 Shell）。未列出的领域也可能已有决策，动手前查索引确认，避免与既定决策冲突。
 
 实现层真实入口：
 
@@ -73,7 +35,7 @@
 - **工作群**（`work-group`，Beta）— 群聊形式指挥与协调多 Agent
 - **Memo 智能备忘录**（`memo`，壳）— 备忘录 APP：首页内容门户 + 唯一活动线程承接连续对话，新建对话即换代归档（ADR-0024）
 
-预制 agent 完整清单以 `prebuilt-agents/official/*/metadata.json` 为准；已下线（隐藏但按 ID 可寻址，清单在 `HIDDEN_PREBUILT_AGENT_IDS`）的工作空间：`flow-workspace`、`feature-creator`、`agent-creator`、`feature-repository`、`dispatch-console`、`flow-test`，代码保留但不再积极迭代；涉及这些区域时以"读懂现有代码、不引入新复杂度"为原则。
+预制 agent 完整清单以 `prebuilt-agents/official/*/metadata.json` 为准；已下线工作空间（隐藏但按 ID 可寻址）清单以 `HIDDEN_PREBUILT_AGENT_IDS` 为准，代码保留但不再积极迭代，涉及这些区域时以"读懂现有代码、不引入新复杂度"为原则。
 
 全局 Feature 参数配置已并入前端设置菜单（多作用域三态编辑器），不再是独立工作空间。
 
@@ -143,7 +105,7 @@ feature 三类来源（严格区分，改错层 = 白改）：
 
 **预制 agent runtime**（[scripts/run-prebuilt-agent.js](scripts/run-prebuilt-agent.js)）：动态加载 `prebuilt-agents/*/*/agent.js`、挂到本地 ViewerWorker、管理会话恢复与附加启动逻辑（如 IM gateway）。会话数据落在用户目录 `~/.agentdev/AgentDevClaw/prebuilt-sessions/<agentId>`，不污染仓库。`metadata.json` 的 `ui` 声明（entry / tabs / home blocks）是首页 block 渲染的基础壳能力。
 
-**本地 feature**（[local-features](local-features)）：顶层 `index.ts` barrel 聚合导出。活跃域：dispatch（调度）、group-admin（群聊管理）、checkpoint、context-compaction-mirror / context-guard（上下文精简与守卫）、continuity-participant（连续性参与方）、conversation-export（对话导出）、conversation-annotations（会话标注：用户在对话消息上选中文本创建高亮标注，前端 `modules/annotations.js` 经 ADR-0018 annotations 通道读写；存储走框架快照契约——feature 只持内存态，restoreState 实现按消息边界合并（回滚只删目标消息已消失的标注），declareContinuity 透传随 trim/branch 流转；宿主 `run-prebuilt-agent.js` 在 onHostRequest 成功后去抖补存；挂载于编程小助手）、time-awareness（时间感知：按节奏注入系统时间与长间隔提示，节奏可装配覆盖——memo 传 reportIntervalMs: 0 每次 call 都注入，状态经框架会话快照持久化）、craft-awareness（工程素养：条目化动态写法知识库，每会话每条目一次；条目一：首次写出成规模文档后注入读者视角写法标准，条目二：同一文档修改跨越两个用户输入边界——以 context 中最近一条用户消息为界，含 busy 排队插话——后的编辑注入协作/交付阶段判断；测试文件按文件名模式识别成功 write/edit，同文件持续修改时依次注入行为契约、辨别能力、验证交付；后两层限定 edit，模型在同一用户输入内的修改也可推进，文件进度与条目冷却随快照恢复；注入文案外置于 feature 的 knowledge/ 目录，md 维护，触发规则见 `local-features/craft-awareness/src/index.ts`；同时是 grill-me 技能载具——设计树拷问访谈，随 feature 的 skills/ 目录经 collectFeatureSkills 投递，挂载于编程小助手）、claw-help（使用帮助技能载具：`agentdevclaw-help` 技能经 collectFeatureSkills 投递，面向终端用户的使用问答——模型 / MCP / 技能配置、界面导览、上下文接续、故障排查、源码参与引导；挂载于编程小助手，路由与事实速查见 `local-features/claw-help/skills/agentdevclaw-help/SKILL.md`，界面入口与机制事实随 UI 演进需同步维护）、feature-wrappers（框架 feature 的 Claw 协议薄包装，含后台任务实时面板镜像 PanelShellFeature，ADR-0018 首个通道接入）、agent-studio、generative-ui、github、agent-dev、memo-notes（memo 便签存储：runtime 侧工具面 + server 侧首页便签墙数据面）。`flow` 与 `feature-dev` 已悬置。
+**本地 feature**（[local-features](local-features)）：顶层 `index.ts` barrel 聚合导出，`npm run build:local-features` 构建。活跃域：dispatch（调度）、group-admin（群聊管理）、checkpoint、context-compaction-mirror / context-guard（上下文精简与守卫）、continuity-participant（连续性字段读写）、conversation-export（对话导出）、conversation-annotations（会话标注，前端 `modules/annotations.js` 经 ADR-0018 通道读写，存储走框架快照契约）、time-awareness（时间感知注入，节奏可装配覆盖，状态经会话快照持久化）、craft-awareness（工程素养条目化知识注入 + grill-me 技能载具，触发规则与文案外置于 feature 源码与 knowledge/ 目录）、claw-help（使用帮助技能载具，路由与事实速查见其 SKILL.md，界面事实随 UI 演进需同步维护）、feature-wrappers（框架 feature 的 Claw 协议薄包装，含后台任务实时面板镜像 PanelShellFeature）、agent-studio、generative-ui、github、agent-dev、memo-notes（memo 便签存储：runtime 工具面 + server 便签墙数据面）。`flow` 与 `feature-dev` 已悬置。feature 行为细节以各自源码与 SKILL.md 为权威，本文件不展开。
 
 app-core.js 全局状态纪律：全局状态区只减不增。新增前端状态放所属 modules 文件的局部作用域；确需跨模块共享用 `window.ClawFW` 命名空间。
 
@@ -153,11 +115,11 @@ app-core.js 全局状态纪律：全局状态区只减不增。新增前端状�
 
 入口 `prebuilt-agents/official/programming-helper/`。用户交互式编程 Agent：Shell / Web 搜索 / MCP 完整工具链（LSP 与 Playwright 浏览器为官方可选插件，在设置里装配），会话分支、trim / compact / summary 精简、checkpoint / rollback、AI 标题、语音输入。
 
-目录与项目：目录决定工作位置，项目提供稳定的对话与配置归属；默认项是目录对话集合，不是项目实体。两种归属共用对话操作，项目按绑定目录导航但不以目录为身份；项目链不继承目录配置，同路径不隔离工作文件。关键入口：`server/routes/ph-projects.js`（项目存储、生命周期与会话归属转移 `sessions_move`）、`server/shared/session-project.js`（有效运行目录）、`public/src/modules/project-data.js` / `session-list-render.js` / `ph-project-actions.js`（归属导航）/ `ph-session-move.js`（对话整理弹窗与多选）。项目会话仍是普通 Session，不自动线程化；线程驱动改造（对话身份升级为 Thread）计划已确认，见 [ADR-0032](docs/adr/0032-programming-helper-thread-driven.md)。概念边界见 [CONTEXT.md](CONTEXT.md) 的“编程小助手的对话归属”。
+目录与项目：目录决定工作位置，项目提供稳定的对话与配置归属；默认项是目录对话集合，不是项目实体。两种归属共用对话操作，项目按绑定目录导航但不以目录为身份；项目链不继承目录配置，同路径不隔离工作文件。关键入口：`server/routes/ph-projects.js`（项目存储、生命周期与会话归属转移 `sessions_move`）、`server/shared/session-project.js`（有效运行目录）、`public/src/modules/project-data.js` / `session-list-render.js` / `ph-project-actions.js`（归属导航）/ `ph-session-move.js`（对话整理弹窗与多选）。对话身份与线程化语义（目录/项目对话一并覆盖）见 [ADR-0032](docs/adr/0032-programming-helper-thread-driven.md)。概念边界见 [CONTEXT.md](CONTEXT.md) 的“编程小助手的对话归属”。
 
 ### Coder（coder）★
 
-入口 `prebuilt-agents/official/coder/`（`agent.js` + `metadata.json`，`host: programming-helper` / `visibility: on-demand`）。无人值守自主编码 APP（[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)，升格自原编程小助手的 coder 身份，旧数据经服务端启动搬移模块 [server/routes/coder-identity-retirement.js](server/routes/coder-identity-retirement.js) 迁入 `workspaces/coder/`）。配置层 `workspaces/coder/feature-config/agent.json`（`readAgentLayer('coder')`）。关键行为：线程宿主（自动建 WorkThread，`workspaceId=coder`，上下文过阈值自动接力）；接续策略声明驱动三选一（自适应 / 纯 trim / 纯摘要，`metadata.json` 权限项 `contextRotationStrategy` + `permissionDefaults: adaptive`，智能编码空间设置窗 Coder 策略分页配置，`rotate()` 时现读即时生效；未声明宿主维持组合语义，实现见 [docs/plans/2026-10-18-coder-adaptive-rotation.md](docs/plans/2026-10-18-coder-adaptive-rotation.md)）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），用户不能在 UI 直接创建；Web UI 左侧 coder 入口（紧随智能编码空间，同在工具与效率组）是其线程列表投影，on-demand 可见性由服务端合流（有存活且绑定 Session 的 Runtime，或 rotating 接续挡板在途，删除事务窗口内除外，见 `hasRunningSessions`；未归档线程资产不撑入口，ADR-0025 2026-10-18 回摆；+ 用户覆盖，设置 → 工作空间，见 [server/routes/workspace-settings.js](server/routes/workspace-settings.js)）；线程归档是生命周期事务（执行中归档直接打断当前轮并收纳，任何状态不拒绝归档；已归档拒绝新指令）。会话身份投影机制（sessionType 寻址、sidebar_entry_id 会话级身份）已退役：coder 会话直接以 `agentId=coder` 寻址。
+入口 `prebuilt-agents/official/coder/`（`agent.js` + `metadata.json`，`host: programming-helper` / `visibility: on-demand`）。无人值守自主编码 APP（权威：[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)，含旧身份迁入与入口可见性合流规则）。配置层 `workspaces/coder/feature-config/agent.json`（`readAgentLayer('coder')`）。关键行为：线程宿主（自动建 WorkThread，`workspaceId=coder`，上下文过阈值自动接力）；接续策略声明驱动三选一（自适应 / 纯 trim / 纯摘要，声明式配置、`rotate()` 时现读生效，见 [docs/plans/2026-10-18-coder-adaptive-rotation.md](docs/plans/2026-10-18-coder-adaptive-rotation.md)）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），UI 不能直接创建；Web UI 左侧入口是其线程列表投影（on-demand 可见性服务端合流 + 用户覆盖，规则见 ADR-0025）；线程归档是生命周期事务（执行中归档打断当前轮并收纳，任何状态不拒绝归档；已归档拒绝新指令）。coder 会话直接以 `agentId=coder` 寻址（会话身份投影机制已退役）。
 
 ### Agent Studio（agent-studio）★
 
@@ -183,13 +145,11 @@ dev agent 注入技能：`agent-studio-workflow`（权威工作流）+ `agentdev
 
 ### Memo（memo）壳
 
-入口 `prebuilt-agents/official/memo/`。备忘录 APP，APP 型工作空间的第一个实体（[ADR-0024](docs/adr/0024-app-workspace-eternal-thread-model.md)）：首页是内容门户（hero 按钮承载「开始/新建对话」，action type `start_app_conversation`，服务端端点由 block 声明携带，公共分发器不按 APP ID 分支），对话从侧栏会话栏点开（叶子 = runtime 投影，threadId 锚点击）。空壳装配：UserInputFeature + ContextRotationTriggerFeature（与 coder 同构的阈值触发接续）；TimeAwarenessFeature 以每次输入注入的细粒度节奏装配（默认 4 小时节奏对提醒的相对时间解析太粗）。
+入口 `prebuilt-agents/official/memo/`。备忘录 APP，APP 型工作空间的第一个实体（权威：[ADR-0024](docs/adr/0024-app-workspace-eternal-thread-model.md)）：首页是内容门户（「开始/新建对话」hero 按钮），对话从侧栏会话栏点开；唯一活动线程是 memo 的业务状态，权威持有方在服务端 [server/routes/memo-app.js](server/routes/memo-app.js)（start/new 事务串行互斥，新建换代先落新引用再 best-effort 归档旧线程），状态文件 `workspaces/memo/app-state.json`；runtime 按需拉起（首开经首页事务，`ensureHeadRuntime` 唤起闸共用）。
 
-- 唯一活动线程是 memo 的业务状态，权威持有方在服务端 [server/routes/memo-app.js](server/routes/memo-app.js)（start/new 事务经 in-flight 互斥串行；创建链失败回滚与 ACP 原子创建同构；新建换代 = 先落新引用再 best-effort 归档旧线程），状态文件 `workspaces/memo/app-state.json`
-- runtime 按需拉起：首开经首页「开始对话」事务（有活动线程恢复其 head，无则空会话等首条消息）；`/threads/:id/input` 的 `ensureHeadRuntime` 唤起闸共用
-- 线程宿主判定声明化：APP metadata 声明 `threadHost: true`，宿主启动按发现结果注册进 [host-agents.js](server/thread-control/host-agents.js) 派生集合（可拔插约束：公共代码不按 APP ID 硬编码）；测试用 `registerThreadHostAgents` 构造场景
-- 工作空间形态由 metadata `kind: "workspace"` 声明驱动：前端 `isWorkspaceHostUnit` 读 kind，点开进首页、不经 start_agent 拉起 runtime（纯 UI 壳由 `launchMode: "ui-only"` 另行表达）。新工作空间只需正确声明 kind；未声明的 prebuilt 条目会走「无会话 start_agent 直接跳对话」的普通 agent 路径
-- 线程宿主会话裁剪通用会话操作：slash /trim /summary 经命令 `applies` 谓词对线程宿主会话隐藏（线程事实驱动，coder 同口径）；ctx 会话操作菜单仍按 `CTX_SESSION_OPS_AGENTS` 白名单门控；精简页「归档原会话」勾选与分支归档意图（`archiveOriginal`）对线程宿主会话隐藏/钳制（`window.isThreadHostAgentId` 同口径——Session 归档语义在线程下只给链中旧快照打不可见标志），非线程会话（agent-studio）与远程透传契约不变
+- 线程宿主判定声明化：APP metadata 声明 `threadHost: true`，宿主启动按发现结果注册进 [host-agents.js](server/thread-control/host-agents.js) 派生集合（公共代码不按 APP ID 硬编码）；测试用 `registerThreadHostAgents` 构造场景
+- 工作空间形态由 metadata `kind: "workspace"` 声明驱动：前端 `isWorkspaceHostUnit` 读 kind，点开进首页、不经 start_agent 拉起 runtime（纯 UI 壳由 `launchMode: "ui-only"` 另行表达）。新工作空间只需正确声明 kind；未声明的 prebuilt 条目走普通 agent 路径
+- 线程宿主会话的通用裁剪：slash /trim /summary 与精简页「归档原会话」勾选按线程事实隐藏/钳制（`window.isThreadHostAgentId`，coder 同口径——Session 归档在线程下只给链中旧快照打不可见标志）；非线程会话（agent-studio）与远程透传契约不变
 
 ## Plain Agent 与 claw CLI
 
