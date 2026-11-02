@@ -250,7 +250,7 @@ window.MemoNotesUI = (() => {
     const top =
       '<div class="memo-note-reader-top">'
       // 返回按钮走项目统一的 feature-detail-close 图标形态（详情页返回先例）：
-      // feature-store / mcp-gateway / codex 连接页 / ph-model-config 同款
+      // feature-store / mcp-gateway / codex 连接页 / ph-settings 同款
       + '<button class="feature-detail-close" type="button" title="' + esc(isZh() ? '返回' : 'Back') + '" onclick="window.MemoNotesUI.closeNote()" style="margin-right:8px;font-size:16px;">'
       + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>'
       + '</button>'

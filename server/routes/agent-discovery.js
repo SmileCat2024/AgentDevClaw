@@ -80,47 +80,51 @@ export function collectSidebarIdentityEntries(agent) {
 // filled after session-helpers is created, breaking the circular
 // dependency (agent-discovery → session-helpers → agent-discovery).
 
-export function createAgentDiscoveryModule(ctx) {
-  const { sessionApi, getInputRequestsSnapshot } = ctx;
+// ── Agent Discovery（名册发现的唯一实现，文件级共享） ──────────────
+// 供本模块工厂与按名册消费的路由（如容器镜像面）共用同一份发现事实，
+// 避免各路由 readdir 出第二份名册。返回完整 metadata（含 host 同域声明）。
 
-  async function discoverAgents(rootDir, currentDir = rootDir) {
-    const entries = await fs.readdir(currentDir, { withFileTypes: true });
-    const results = [];
+export async function discoverAgents(rootDir, currentDir = rootDir) {
+  const entries = await fs.readdir(currentDir, { withFileTypes: true });
+  const results = [];
 
-    for (const entry of entries) {
-      const entryPath = path.join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        results.push(...await discoverAgents(rootDir, entryPath));
-        continue;
-      }
-
-      if (entry.isFile() && entry.name === 'metadata.json') {
-        const metadata = await readJson(entryPath);
-        const agentDir = path.dirname(entryPath);
-        const permissions = normalizePermissionDeclarations(metadata.permissions);
-        results.push({
-          ...metadata,
-          ...normalizeWorkspaceAgents(metadata),
-          permissions,
-          // 作者默认值（ADR-0030）：键必须 ∈ permissions 声明集且值合法，
-          // 否则启动扫描报错（与 permissions 声明同等级校验）。
-          permissionDefaults: normalizePermissionDefaults(metadata.permissionDefaults, permissions),
-          id: metadata.id ?? path.basename(agentDir),
-          relativeDir: path.relative(PROJECT_ROOT, agentDir).replace(/\\/g, '/'),
-          agentPath: agentDir,
-        });
-      }
+  for (const entry of entries) {
+    const entryPath = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...await discoverAgents(rootDir, entryPath));
+      continue;
     }
 
-    return results.sort((left, right) => {
-      const leftOrder = typeof left.sortOrder === 'number' ? left.sortOrder : null;
-      const rightOrder = typeof right.sortOrder === 'number' ? right.sortOrder : null;
-      if (leftOrder !== null && rightOrder !== null) return leftOrder - rightOrder;
-      if (leftOrder !== null) return -1;
-      if (rightOrder !== null) return 1;
-      return (left.name || left.id).localeCompare(right.name || right.id, 'zh-CN');
-    });
+    if (entry.isFile() && entry.name === 'metadata.json') {
+      const metadata = await readJson(entryPath);
+      const agentDir = path.dirname(entryPath);
+      const permissions = normalizePermissionDeclarations(metadata.permissions);
+      results.push({
+        ...metadata,
+        ...normalizeWorkspaceAgents(metadata),
+        permissions,
+        // 作者默认值（ADR-0030）：键必须 ∈ permissions 声明集且值合法，
+        // 否则启动扫描报错（与 permissions 声明同等级校验）。
+        permissionDefaults: normalizePermissionDefaults(metadata.permissionDefaults, permissions),
+        id: metadata.id ?? path.basename(agentDir),
+        relativeDir: path.relative(PROJECT_ROOT, agentDir).replace(/\\/g, '/'),
+        agentPath: agentDir,
+      });
+    }
   }
+
+  return results.sort((left, right) => {
+    const leftOrder = typeof left.sortOrder === 'number' ? left.sortOrder : null;
+    const rightOrder = typeof right.sortOrder === 'number' ? right.sortOrder : null;
+    if (leftOrder !== null && rightOrder !== null) return leftOrder - rightOrder;
+    if (leftOrder !== null) return -1;
+    if (rightOrder !== null) return 1;
+    return (left.name || left.id).localeCompare(right.name || right.id, 'zh-CN');
+  });
+}
+
+export function createAgentDiscoveryModule(ctx) {
+  const { sessionApi, getInputRequestsSnapshot } = ctx;
 
   async function readAgentUserConfig(agentId) {
     const userConfigPath = AGENT_USER_CONFIG_PATH(agentId);

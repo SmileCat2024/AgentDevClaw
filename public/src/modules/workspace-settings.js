@@ -46,7 +46,7 @@ function renderWorkspaceSettingsOverlay() {
   const isZh = currentLanguage === 'zh';
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
-    '<div class="feature-detail-window" style="width:min(100%,520px);max-height:min(100%,640px);">',
+    '<div class="feature-detail-window" style="width:min(100%,520px);max-height:min(100%,80vh);">',
     '<div class="feature-detail-head">',
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '工作空间' : 'Workspaces') + '</div>',

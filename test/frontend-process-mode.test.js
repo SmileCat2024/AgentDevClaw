@@ -5,13 +5,13 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 describe('programming-helper workspace process mode UI', () => {
   it('renders Coder policy as a host-workspace setting tab without adding quota policy to Programming Helper', () => {
     const ctx = createFrontendSandbox();
-    ctx.window.phModelConfigAgentId = 'programming-helper';
-    ctx.loadSource('public/src/modules/ph-model-config.js');
+    ctx.window.phSettingsAgentId = 'programming-helper';
+    ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '' };
     ctx.document.getElementById = () => host;
     ctx.run(`(() => {
       _phSettingsTab = 'coder-policy';
-      renderPhModelConfigOverlay({ id: 'programming-helper' }, []);
+      renderPhSettingsOverlay({ id: 'programming-helper' }, []);
     })()`);
     assert.match(host.innerHTML, /Coder 策略/);
     assert.match(host.innerHTML, /ph-coder-policy-host/);
@@ -19,7 +19,7 @@ describe('programming-helper workspace process mode UI', () => {
   });
   it('renders the server-provided workspace mode without consulting a project key', () => {
     const ctx = createFrontendSandbox();
-    ctx.loadSource('public/src/modules/ph-model-config.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
 
     const html = ctx.run(`_renderProcessModeContent({
       id: 'programming-helper',
@@ -39,7 +39,7 @@ describe('programming-helper workspace process mode UI', () => {
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
-    ctx.loadSource('public/src/modules/ph-model-config.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
 
     await ctx.run("window.phSaveCoderThreadLimit('4')");
 
@@ -83,7 +83,7 @@ describe('programming-helper workspace process mode UI', () => {
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
-    ctx.loadSource('public/src/modules/ph-model-config.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
 
     await ctx.run("window.phSaveCoderThreadLimit('1.5')");
 
@@ -98,7 +98,7 @@ describe('programming-helper workspace process mode UI', () => {
       }),
     });
     ctx.window.allAgents = [{ id: 'coder', permissionDefaults: { contextRotationStrategy: 'adaptive' } }];
-    ctx.loadSource('public/src/modules/ph-model-config.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
@@ -136,7 +136,7 @@ describe('programming-helper workspace process mode UI', () => {
       }),
     });
     ctx.window.allAgents = [{ id: 'coder', permissionDefaults: { contextRotationStrategy: 'adaptive' } }];
-    ctx.loadSource('public/src/modules/ph-model-config.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
@@ -154,7 +154,7 @@ describe('programming-helper workspace process mode UI', () => {
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
-    ctx.loadSource('public/src/modules/ph-model-config.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
@@ -181,7 +181,7 @@ describe('programming-helper workspace process mode UI', () => {
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
-    ctx.loadSource('public/src/modules/ph-model-config.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
@@ -205,7 +205,7 @@ describe('programming-helper workspace process mode UI', () => {
           json: async () => ({ ok: true, agentId: 'programming-helper', processMode: 'shared-global' }),
         };
       },
-      renderPhModelConfigOverlay() {},
+      renderPhSettingsOverlay() {},
       renderCurrentMainView() {},
       invoke: async () => ({}),
       updateAgentRecord() {},

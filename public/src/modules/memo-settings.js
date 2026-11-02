@@ -2,7 +2,7 @@
  * memo-settings.js — Memo 工作空间设置弹窗
  *
  * 形态：单列设置区（不分左右栏），首个区块为模型设置。与智能编码空间
- * （ph-model-config.js）的差异是刻意的——memo 只配一个模型（无备选模型、
+ * （ph-settings.js）的差异是刻意的——memo 只配一个模型（无备选模型、
  * 无身份分层），设置区按区块纵向追加，不引入左侧分页导航。
  * 「通知」区块承接 ADR-0030 notifications.reminder（到点提醒系统通知）。
  *

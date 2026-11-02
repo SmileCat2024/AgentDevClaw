@@ -8,7 +8,7 @@
  * 依赖全局函数:
  *   getCurrentAgentRecord (app-main.js)
  *   renderCurrentMainView (app-ui.js)
- *   renderPhModelConfigOverlay (modules/ph-model-config.js)
+ *   renderPhSettingsOverlay (modules/ph-settings.js)
  *   updateAgentRecord (app-ui.js)
  *   updateAgentWorkspaceState (app-ui.js)
  *   invoke (app-core.js)
@@ -17,12 +17,12 @@
  *   lastRenderedWorkspaceHtml (app-ui.js)
  *   phSearchQuery, _phSearchTimer (app-core.js)
  * window 函数:
- *   phOpenModelConfig, phCloseModelConfig, phAutoSaveModelConfig,
+ *   phOpenSettings, phCloseSettings, phAutoSaveModelConfig,
  *   phOpenProject, phOpenProjectDirectory, phSwitchProject, phToggleProjectDropdown,
  *   phOpenInExplorer, phToggleModelSlot
  * HTML onclick 引用:
- *   onclick="phOpenModelConfig()"
- *   onclick="phCloseModelConfig()"
+ *   onclick="phOpenSettings()"
+ *   onclick="phCloseSettings()"
  *   onchange="phAutoSaveModelConfig()"
  *   onclick="phOpenProject()"
  *   onclick="phSwitchProject(...)"
@@ -31,14 +31,14 @@
  *   onclick="phToggleModelSlot()"
  */
 
-window.phOpenModelConfig = async () => {
+window.phOpenSettings = async () => {
   const agent = getCurrentAgentRecord();
   if (!agent) return;
   let presets = getClawModelPresets();
-  window.phModelConfigAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id;
+  window.phSettingsAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id;
   // 先渲染（已有缓存或空态），模型预置属补数据——点击到弹窗出现不等网络
-  renderPhModelConfigOverlay(agent, presets);
-  const stillOpen = () => Boolean(document.getElementById('ph-model-config-host')?.querySelector('.feature-detail-overlay'));
+  renderPhSettingsOverlay(agent, presets);
+  const stillOpen = () => Boolean(document.getElementById('ph-settings-host')?.querySelector('.feature-detail-overlay'));
   if (!presets.length) {
     try {
       const resp = await fetch('/protoclaw/model_config');
@@ -47,11 +47,11 @@ window.phOpenModelConfig = async () => {
     } catch (e) {
       console.error('Failed to load presets:', e);
     }
-    if (presets.length && stillOpen()) renderPhModelConfigOverlay(agent, presets);
+    if (presets.length && stillOpen()) renderPhSettingsOverlay(agent, presets);
   }
   // coder APP 的模型配置存 agent-configs/coder.json（agentId=coder 寻址），
   // 与主 APP 分开拉取；面板渲染与保存共用这份缓存。
-  if (window.phModelConfigAgentId === 'programming-helper'
+  if (window.phSettingsAgentId === 'programming-helper'
     && !(window.ClawFW && window.ClawFW._coderModelPresets)) {
     try {
       const resp = await fetch('/protoclaw/agent_model_presets?agentId=coder');
@@ -59,25 +59,25 @@ window.phOpenModelConfig = async () => {
       if (window.ClawFW) {
         window.ClawFW._coderModelPresets = (data && data.modelPresets) || {};
       }
-      if (stillOpen()) renderPhModelConfigOverlay(agent, presets);
+      if (stillOpen()) renderPhSettingsOverlay(agent, presets);
     } catch (e) {
       console.error('Failed to load coder presets:', e);
     }
   }
 };
 
-window.phCloseModelConfig = () => {
+window.phCloseSettings = () => {
   // Feature 设置二级页持有共享配置编辑器实例，关闭弹窗时一并释放；
   // 身份落点与页内细节态全部重置——只记忆一级分页（模型配置/进程模式/Feature 设置）
   if (typeof _closePhFeatureEditor === 'function') _closePhFeatureEditor();
   if (typeof window._phResetFeaturePageState === 'function') window._phResetFeaturePageState();
-  const host = document.getElementById('ph-model-config-host');
+  const host = document.getElementById('ph-settings-host');
   if (host) host.innerHTML = '';
 };
 
 window.phModelSlotChanged = (select) => {
   if (!select) return;
-  const effortSelect = document.querySelector('#ph-model-config-host .ph-mc-effort[data-preset-role="' + select.dataset.presetRole + '"][data-slot="' + select.dataset.slot + '"]');
+  const effortSelect = document.querySelector('#ph-settings-host .ph-mc-effort[data-preset-role="' + select.dataset.presetRole + '"][data-slot="' + select.dataset.slot + '"]');
   if (effortSelect) {
     const preset = getClawModelPresets().find(function(item) { return item.name === select.value; });
     const options = preset && window.ClawFW?.getThinkingEffortOptions?.(preset.provider || preset.protocol) || [];
@@ -94,10 +94,10 @@ window.phModelSlotChanged = (select) => {
 };
 
 window.phAutoSaveModelConfig = async () => {
-  const agentId = window.phModelConfigAgentId;
+  const agentId = window.phSettingsAgentId;
   if (!agentId) return;
-  const selects = document.querySelectorAll('#ph-model-config-host .ph-mc-select');
-  const effortSelects = document.querySelectorAll('#ph-model-config-host .ph-mc-effort');
+  const selects = document.querySelectorAll('#ph-settings-host .ph-mc-select');
+  const effortSelects = document.querySelectorAll('#ph-settings-host .ph-mc-effort');
   const modelPresets = { default: null, system: null };
 
   // 收集所有模型和思考强度槽位值。
@@ -184,7 +184,7 @@ window.phAutoSaveModelConfig = async () => {
     // 刷新覆层以更新 info 文本
     const presets = getClawModelPresets();
     const agent = getCurrentAgentRecord();
-    if (agent) renderPhModelConfigOverlay(agent, presets);
+    if (agent) renderPhSettingsOverlay(agent, presets);
     renderCurrentMainView();
   } catch (e) {
     console.error('Failed to save model preset:', e);
@@ -1007,7 +1007,7 @@ window.phToggleModelSlot = async () => {
   
   // 如果没有备选模型，打开配置面板
   if (!secondaryModel) {
-    window.phOpenModelConfig();
+    window.phOpenSettings();
     return;
   }
   
@@ -1093,7 +1093,7 @@ window.phSetProcessMode = async (processMode) => {
     }
     agent.processMode = result.processMode;
     const presets = getClawModelPresets();
-    renderPhModelConfigOverlay(agent, presets);
+    renderPhSettingsOverlay(agent, presets);
     renderCurrentMainView();
   } catch (error) {
     console.error('Failed to save process mode:', error);

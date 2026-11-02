@@ -363,7 +363,7 @@ function getRuntimeAwareAgentName() {
 
 // 域 C (updateChatContextBar + CCB popup + Title popup) -> modules/chat-context-bar.js
 
-// 域 D (ensurePhModelConfigHost, renderPhModelConfigOverlay) -> modules/ph-model-config.js
+// 域 D (ensurePhSettingsHost, renderPhSettingsOverlay) -> modules/ph-settings.js
 
 // 域 E 纯函数 (isAssemblySession ~ buildAutoSavedAssemblyConfigs) -> modules/assembly-data.js
 // 域 E 状态管理 (getWorkspaceFormDraft ~ resetWorkspaceFormDraft) -> modules/assembly-data.js

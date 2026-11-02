@@ -112,6 +112,7 @@ import { createSessionHelpers } from './server/routes/session-helpers.js';
 import { setupSessionRoutes } from './server/routes/session.js';
 import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnostics.js';
 import { setupCapabilityRoutes } from './server/routes/capability.js';
+import { setupContainerImagesRoutes } from './server/routes/container-images.js';
 import { setupOAuthCodexRoutes } from './server/routes/oauth-codex.js';
 import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
 import { setupWorkspaceSettingsRoutes, readWorkspaceResourcePolicies } from './server/routes/workspace-settings.js';
@@ -533,6 +534,8 @@ setupSidebarDiagnosticsRoutes(app, express);
 
 // ── Capability control plane (slash / feature command registry transport) ──
 setupCapabilityRoutes(app, express);
+
+setupContainerImagesRoutes(app, express);
 
 // ── Sessions → server/routes/session.js ─────────────────────────────────────
 setupSessionRoutes(app, express, {

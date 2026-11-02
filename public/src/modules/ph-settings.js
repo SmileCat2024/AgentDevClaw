@@ -1,17 +1,19 @@
 /**
- * ph-model-config.js — 编程小助手项目设置面板
+ * ph-settings.js — 编程小助手「工作空间设置」面板（UI 标题：工作空间设置）
  *
- * IDE 式布局：左侧分类列表 + 右侧配置区域
+ * IDE 式布局：左侧分类列表 + 右侧配置区域。
  * 分类页：模型配置（含 coder 身份行）、进程模式、Feature 设置
- * （一级：身份入口列表；二级：编程小助手 agent 层 / coder 层配置编辑器）
+ * （一级：身份入口列表；二级：编程小助手 agent 层 / coder 层配置编辑器）、
+ * Coder 策略、通知、容器镜像——后三页仅 programming-helper 显示。
+ * 历史名 ph-model-config：面板早期只有模型选择器，职责扩张后更名，勿再回用旧名。
  *
  * 外部依赖（通过全局作用域）：
  *   - escapeHtml (app-ui.js)
  *   - currentLanguage (app-core.js)
  *   - createFeatureConfigEditor (feature-config-editor.js)
  *
- * 入口：window.phOpenModelConfig() → renderPhModelConfigOverlay()
- * 关闭：window.phCloseModelConfig()
+ * 入口：window.phOpenSettings() → renderPhSettingsOverlay()
+ * 关闭：window.phCloseSettings()
  * 模型自动保存：window.phAutoSaveModelConfig()
  * 进程模式切换：window.phSetProcessMode()
  */
@@ -28,11 +30,11 @@ function _closePhFeatureEditor() {
   }
 }
 
-function ensurePhModelConfigHost() {
-  let host = document.getElementById('ph-model-config-host');
+function ensurePhSettingsHost() {
+  let host = document.getElementById('ph-settings-host');
   if (!host) {
     host = document.createElement('div');
-    host.id = 'ph-model-config-host';
+    host.id = 'ph-settings-host';
     document.body.appendChild(host);
   }
   return host;
@@ -45,7 +47,7 @@ function _renderModelConfigContent(agent, presets) {
   const current = agent.modelPresets || {};
   // coder APP（独立工作空间，ADR-0025）的模型配置存 agent-configs/coder.json，
   // 与主 APP 分文件；编程小助手面板代管展示，打开时单独 fetch 缓存。
-  const showCoderRow = window.phModelConfigAgentId === 'programming-helper';
+  const showCoderRow = window.phSettingsAgentId === 'programming-helper';
   const coderCurrent = (window.ClawFW && window.ClawFW._coderModelPresets) || {};
   const roles = [
     { key: 'default', label: isZh ? '编程小助手' : 'Programming Helper', desc: isZh ? '对话和编码任务' : 'Chat & coding tasks' },
@@ -169,7 +171,7 @@ const PH_FEATURE_PAGES = {
 function _renderFeatureEntryList() {
   const isZh = currentLanguage === 'zh';
   const chevron = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-left:12px;"><path d="m9 18 6-6-6-6"></path></svg>';
-  const showCoder = window.phModelConfigAgentId === 'programming-helper';
+  const showCoder = window.phSettingsAgentId === 'programming-helper';
 
   const entries = [{
     key: 'feature-main',
@@ -828,13 +830,16 @@ window._phToggleNotificationFinish = async function(agentId, checked) {
 
 // ── Main panel render ─────────────────────────────────────────
 
-function renderPhModelConfigOverlay(agent, presets) {
-  const host = ensurePhModelConfigHost();
+function renderPhSettingsOverlay(agent, presets) {
+  const host = ensurePhSettingsHost();
   if (!agent) { host.innerHTML = ''; _closePhFeatureEditor(); return; }
-  if (_phSettingsTab === 'coder-policy' && window.phModelConfigAgentId !== 'programming-helper') {
+  if (_phSettingsTab === 'coder-policy' && window.phSettingsAgentId !== 'programming-helper') {
     _phSettingsTab = 'model';
   }
-  if (_phSettingsTab === 'notification' && window.phModelConfigAgentId !== 'programming-helper') {
+  if (_phSettingsTab === 'notification' && window.phSettingsAgentId !== 'programming-helper') {
+    _phSettingsTab = 'model';
+  }
+  if (_phSettingsTab === 'container-images' && window.phSettingsAgentId !== 'programming-helper') {
     _phSettingsTab = 'model';
   }
   const isZh = currentLanguage === 'zh';
@@ -855,7 +860,7 @@ function renderPhModelConfigOverlay(agent, presets) {
       window._phFeatureBack = () => {
         _closePhFeatureEditor();
         _phSettingsTab = 'feature';
-        renderPhModelConfigOverlay(agent, presets);
+        renderPhSettingsOverlay(agent, presets);
       };
 
       const identityLabel = featurePage.identityKey === 'coder'
@@ -894,7 +899,7 @@ function renderPhModelConfigOverlay(agent, presets) {
           : (isZh ? featurePage.subtitleZh : featurePage.subtitleEn)) + '</div>',
         '</div>',
         '</div>',
-        '<button class="feature-detail-close" type="button" onclick="window.phCloseModelConfig()">&times;</button>',
+        '<button class="feature-detail-close" type="button" onclick="window.phCloseSettings()">&times;</button>',
         '</div>',
         // 行左右 10px + tab 自身 14px 内边距 = 文字与正文 24px 左右缘对齐
         '<div style="display:flex;align-items:flex-end;padding:0 10px;border-bottom:1px solid var(--border-color,#2a2a35);">' + subTabItems + '</div>',
@@ -923,7 +928,7 @@ function renderPhModelConfigOverlay(agent, presets) {
     { key: 'model', label: isZh ? '模型配置' : 'Model Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
     { key: 'process', label: isZh ? '进程模式' : 'Process Mode', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>' },
     { key: 'feature', label: isZh ? 'Feature 设置' : 'Feature Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M2 14h4"/><path d="M10 8h4"/><path d="M18 16h4"/></svg>' },
-    ...(window.phModelConfigAgentId === 'programming-helper' ? [{
+    ...(window.phSettingsAgentId === 'programming-helper' ? [{
       key: 'coder-policy',
       label: isZh ? 'Coder 策略' : 'Coder Policy',
       icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>',
@@ -931,6 +936,10 @@ function renderPhModelConfigOverlay(agent, presets) {
       key: 'notification',
       label: isZh ? '通知' : 'Notifications',
       icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
+    }, {
+      key: 'container-images',
+      label: isZh ? '容器镜像' : 'Container Images',
+      icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
     }] : []),
   ];
 
@@ -955,6 +964,12 @@ function renderPhModelConfigOverlay(agent, presets) {
     contentHtml = '<div class="ph-mc-list" id="ph-notification-host">'
       + '<div class="ph-settings-empty">' + escapeHtml(isZh ? '正在读取通知设置…' : 'Loading notifications…') + '</div>'
       + '</div>';
+  } else if (_phSettingsTab === 'container-images') {
+    // 观测页：主体是环境状态卡与镜像/容器列表，不是配置行，故用页级容器
+    // （分区间距 16、内容缘 24，见 settings-catalog-page 同一节奏）
+    contentHtml = '<div class="ci-page" id="ph-container-images-host">'
+      + '<div class="ph-settings-empty">' + escapeHtml(isZh ? '正在读取容器镜像信息…' : 'Loading container images…') + '</div>'
+      + '</div>';
   } else {
     contentHtml = _renderProcessModeContent(agent);
   }
@@ -967,7 +982,9 @@ function renderPhModelConfigOverlay(agent, presets) {
         ? (isZh ? '配置关联工作空间 Coder 的运行数量与接续策略' : 'Configure concurrency and rotation strategy for the linked Coder workspace')
         : _phSettingsTab === 'notification'
           ? (isZh ? '编程小助手与 Coder 运行完成时是否弹出系统通知' : 'Run-finished toasts for Programming Helper and Coder')
-          : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
+          : _phSettingsTab === 'container-images'
+            ? (isZh ? '容器运行环境连接检查与按 agent 的镜像管理' : 'Docker connection & per-agent image management')
+            : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
@@ -977,7 +994,7 @@ function renderPhModelConfigOverlay(agent, presets) {
     '<div class="feature-detail-title">' + (isZh ? '工作空间设置' : 'Workspace Settings') + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(subtitle) + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" onclick="window.phCloseModelConfig()">&times;</button>',
+    '<button class="feature-detail-close" type="button" onclick="window.phCloseSettings()">&times;</button>',
     '</div>',
     '<div class="ph-settings-layout">',
     '<div class="ph-settings-sidebar">',
@@ -992,6 +1009,12 @@ function renderPhModelConfigOverlay(agent, presets) {
   ].join('');
 
   if (_phSettingsTab === 'coder-policy') _phLoadCoderPolicy();
+  if (_phSettingsTab === 'container-images') {
+    // 容器镜像页：声明域宿主（服务端按名册 host 关系圈定本工作空间 + 子应用），
+    // 模块内部以 host 元素是否在 DOM 判断活跃
+    window.registerContainerImagesHost?.('ph-container-images-host', window.phSettingsAgentId || 'programming-helper');
+    window.loadContainerImagesPanel?.();
+  }
   if (_phSettingsTab === 'notification') _phLoadNotificationSettings();
 
   // Enhance native selects with custom dropdown
@@ -1008,7 +1031,7 @@ window._phSwitchSettingsTab = (tab) => {
   const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
   if (agent) {
     const presets = getClawModelPresets();
-    renderPhModelConfigOverlay(agent, presets);
+    renderPhSettingsOverlay(agent, presets);
   }
 };
 
@@ -1018,6 +1041,6 @@ window._phSwitchFeatureSubTab = (sub) => {
   const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
   if (agent) {
     const presets = getClawModelPresets();
-    renderPhModelConfigOverlay(agent, presets);
+    renderPhSettingsOverlay(agent, presets);
   }
 };

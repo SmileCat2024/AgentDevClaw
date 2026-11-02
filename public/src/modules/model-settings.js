@@ -174,7 +174,7 @@ function renderOverviewContent(presets, dm, isZh) {
 }
 
 // ── 通知设置（ADR-0030 editingSurface）已迁往智能编码空间 APP 设置面板
-// （ph-model-config.js 的「通知」页签：宿主集中承接自身与 coder）。
+// （ph-settings.js 的「通知」页签：宿主集中承接自身与 coder）。
 // 全局模型配置面板不承载工作空间策略。
 
 function renderModelCatalogSettingsOverlay(host, data) {
@@ -292,7 +292,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
     selStart: opencodeKeyEl.selectionStart,
     selEnd: opencodeKeyEl.selectionEnd,
   } : null;
-  // 配置子页：head 左侧返回按钮（项目既有形态：feature-detail-close + 左箭头，同 ph-model-config / feature-store）
+  // 配置子页：head 左侧返回按钮（项目既有形态：feature-detail-close + 左箭头，同 ph-settings / feature-store）
   const isCodexAuthPage = tab === 'codex' && window.ClawFW.codexConnectionView;
   const headLeftHtml = isCodexAuthPage
     ? '<div style="display:flex;align-items:center;gap:4px;">'

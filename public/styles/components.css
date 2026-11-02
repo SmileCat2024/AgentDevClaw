@@ -7332,6 +7332,117 @@ body[data-theme="light"] .user-choice-card:focus-within {
 .ph-mc-select:focus { border-color: var(--accent-text); }
 .ph-mc-info { font-size: 11px; color: var(--text-secondary); }
 
+/* ── PH Container Images 页（工作空间设置） ──
+   本页主体是环境观测与镜像清单，不是配置项：环境结论用状态卡（rc-status-card
+   结构：指示点 + 结论/细节 + 状态徽标），镜像与容器用列表行（gateway-list 族，
+   与同一设置窗的 MCP 网关页同配方），诊断事实用 gateway-detail-row。
+   页面专属的只有「分组标题 + 空态 + 构建日志」三处结构，其余全复用。 */
+
+/* 状态点：与 .status-dot 同几何（8px 圆），扩展 info/中性档与语义色 */
+.ci-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.ci-dot.ok { background: var(--success-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success-color) 15%, transparent); }
+.ci-dot.bad { background: var(--error-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--error-color) 15%, transparent); }
+.ci-dot.info { background: var(--accent-text); }
+
+/* 状态徽标：几何与配色照 .remote-status-badge（描边 + currentColor，
+   11px 胶囊）。语义色只描边不填充，避免色块喧宾夺主（§1 克制基调）。
+   颜色必须走类而不是行内 style——否则浅色主题无法覆盖（§6.2）。 */
+.ci-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.ci-badge.ok { color: var(--success-color); }
+.ci-badge.bad { color: var(--error-color); }
+.ci-badge.warn { color: var(--warning-color); }
+
+/* 浅色主题：warning 的 #ffc107 在白底上对比不足（§6.2 典型坑），
+   压到琥珀色；success/error 同步加深一档 */
+body[data-theme="light"] .ci-badge.ok { color: #15803d; }
+body[data-theme="light"] .ci-badge.bad { color: #b91c1c; }
+body[data-theme="light"] .ci-badge.warn { color: #b45309; }
+
+/* 页级容器：与 settings-catalog-page 同节奏（分区间 16、左右缘 24） */
+.ci-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 24px 16px;
+}
+
+/* 分组标题行：标签吃满剩余宽度、动作按钮靠右（同 settings-catalog-toolbar 的
+   节奏，但标签是中文，故不带 uppercase / letter-spacing——§2.3） */
+.ci-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ci-group-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ci-group-label .ci-group-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--text-secondary);
+  background: var(--hover-bg);
+}
+
+.ci-group + .ci-group { margin-top: 18px; }
+
+/* 构建日志：与 bg 面板的 tail 同形态（等宽、可滚、次级色） */
+.ci-build-tail {
+  margin: 8px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/* 页内提示条（删除结果 / 构建进度），与 ph-settings 页注释同层级 */
+.ci-status-line {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ci-status-line.error { color: var(--error-color); }
+
 /* ── PH Model Switch (操作条模型切换) ── */
 .ph-model-switch {
   display: inline-flex;

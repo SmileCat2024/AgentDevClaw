@@ -729,7 +729,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '<div class="ph-banner-desc">' + escapeHtml(desc) + '</div>',
     '</div>',
     '<div class="ph-banner-actions">',
-    '<button class="ph-banner-btn secondary" type="button" onclick="window.phOpenModelConfig()">' + (isZh ? '工作空间设置' : 'Settings') + '</button>',
+    '<button class="ph-banner-btn secondary" type="button" onclick="window.phOpenSettings()">' + (isZh ? '工作空间设置' : 'Settings') + '</button>',
     '<button class="ph-banner-btn" type="button" onclick="window.phOpenProject()">' + (isZh ? '打开目录' : 'Open Directory') + '</button>',
     '</div>',
     '</div>',

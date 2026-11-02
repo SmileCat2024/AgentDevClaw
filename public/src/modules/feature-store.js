@@ -16,7 +16,7 @@
  * 外部依赖（通过全局作用域）：
  *   - escapeHtml (app-ui.js)
  *   - currentLanguage (app-core.js)
- *   - window._phRefreshMountsView (ph-model-config.js，写操作后刷新挂载管理页)
+ *   - window._phRefreshMountsView (ph-settings.js，写操作后刷新挂载管理页)
  */
 
 const _FS_IDENTITY_SCOPES = {
@@ -433,7 +433,7 @@ function _fsRender() {
   ].join('');
 }
 
-// ── 面板开关（ph-model-config 的入口卡片调用）────────────────
+// ── 面板开关（ph-settings 的入口卡片调用）────────────────
 
 window.phOpenFeatureStore = async function(identity) {
   _fsState.open = true;
