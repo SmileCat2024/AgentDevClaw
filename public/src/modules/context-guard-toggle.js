@@ -1,8 +1,10 @@
 /**
  * context-guard-toggle.js — 超阈值自动打断开关（上边栏 badge 形态）
  *
- * ContextGuardFeature 的会话级控制（armed 布防 → 上下文超阈值时打断本轮并
- * 提醒精简 → 界面回到不打断，但后台唤醒等人工接管；可重新布防；仅当前会话生效）。控制入口
+ * ContextGuardFeature 的会话级控制（armed 手动总开关：触发过界打断不翻转
+ * 它，badge 恒显示手动状态 → 越界触发时打断本轮并拦截机器唤醒（reminder
+ * 类 call）→ 人工输入即视为批准继续，解除拦截，本次越界期间维持放行 →
+ * 用量回落阈值下方后再次越界会重新触发；仅当前会话生效）。控制入口
  * 从 session-controls-panel 的「上下文保护」区迁来：badge 内嵌在
  * chat-context-bar 的 token 进度条组内——开关管的阈值与进度条是同一个
  * （contextLength × compressRatio%），读数与守卫放在一起；详情行并入

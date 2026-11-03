@@ -66,8 +66,8 @@ export class AgentStudioAgent extends BasicAgent {
       ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
         ? config.features['force-continuation'] : {}),
     }));
-    // 一次性过界拦截：manifest 决定会话启动初值，会话控制面板可实时装填；
-    // 触发后 UI 回到“不打断”，机器唤醒等人工输入接管。
+    // 过界自动打断（按越界事件的一次性保险丝）：manifest 决定会话启动初值，
+    // badge 可实时开关；触发后拦截机器唤醒直到人工输入（= 批准继续）。
     this.use(new ContextGuardFeature({
       ...(systemFeatureConfig['context-guard'] && typeof systemFeatureConfig['context-guard'] === 'object'
         ? systemFeatureConfig['context-guard'] : {}),

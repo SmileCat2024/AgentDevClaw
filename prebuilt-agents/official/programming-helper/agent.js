@@ -192,9 +192,10 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 工程素养提醒：首次写出成规模文档（write ≥30 行 / edit 的 markdown/txt
     // 文件）后注入读者视角写法标准，每会话一次。状态经框架会话快照持久化。
     this.use(new CraftAwarenessFeature());
-    // 一次性过界拦截：manifest（Runtime 配置面板）决定会话启动初值，
-    // 会话控制面板可实时装填/卸下。触发后 UI 回到“不打断”，但机器唤醒
-    // 仍需等下一条人工输入明确接管。
+    // 过界自动打断（按越界事件的一次性保险丝）：manifest（Runtime 配置面板）
+    // 决定会话启动初值，上边栏 badge 可实时开关（触发不翻转它）。触发后拦截
+    // 机器唤醒直到人工输入——那条输入即视为批准继续，本次越界期间维持放行，
+    // 用量回落阈值下方后再次越界会重新触发。
     this.use(new ContextGuardFeature({
       ...(merged['context-guard'] && typeof merged['context-guard'] === 'object'
         ? merged['context-guard'] : {}),

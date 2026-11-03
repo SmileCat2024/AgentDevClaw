@@ -20,7 +20,7 @@ function makeArbiter() {
 }
 
 describe('ContextGuardFeature (interactive shell)', () => {
-  it('trips once when input tokens cross the threshold, interrupting at step finish (after tool results land)', async () => {
+  it('trips at the threshold, interrupting at step finish (after tool results land); armed stays on', async () => {
     const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
     const agent = makeAgent();
     const arbiter = makeArbiter();
@@ -31,7 +31,8 @@ describe('ContextGuardFeature (interactive shell)', () => {
     assert.equal(feature.observeUsage({ inputTokens: 800 }, agent), true);
 
     const status = feature.getStatus();
-    assert.equal(status.armed, false);
+    // 触发不消耗 armed：badge 恒显示手动开关，只有用户点击才翻转
+    assert.equal(status.armed, true);
     assert.equal(status.trip?.inputTokens, 800);
     assert.equal(status.trip?.thresholdTokens, 800);
     // 过界瞬间不打断：排队消息立即退回，interrupt 等到 StepFinish（本轮已发出的
@@ -42,9 +43,54 @@ describe('ContextGuardFeature (interactive shell)', () => {
     assert.equal(await feature.tripAtStepFinish({ toolCallsCount: 1 }), 'continue');
     assert.deepEqual(agent.calls, ['interrupt']);
 
-    // fuse consumed: crossing again does nothing
+    // 同一越界事件已尽职：再次过界观测不重复触发（等待人工或回落）
     assert.equal(feature.observeUsage({ inputTokens: 900 }, agent), false);
     assert.equal(await feature.tripAtStepFinish({ toolCallsCount: 1 }), 'continue');
+    assert.deepEqual(agent.calls, ['interrupt']);
+  });
+
+  it('re-trips only after usage falls back below the threshold (new overage episode)', async () => {
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = makeAgent();
+    const arbiter = makeArbiter();
+    feature.setCallArbiter(arbiter);
+
+    feature.observeUsage({ inputTokens: 800 }, agent);
+    await feature.tripAtStepFinish({});
+    // 人工输入 = 批准继续：解除拦截
+    assert.equal(await feature.admitAfterTrip({ options: { kind: 'user' } }), 'continue');
+    // 批准后本次越界期间维持不拦截：继续越界不再触发
+    assert.equal(feature.observeUsage({ inputTokens: 900 }, agent), false);
+    // 无读数的观测没有新事实，不得复位闩锁：随后的越界观测仍不触发
+    assert.equal(feature.observeUsage({}, agent), false);
+    assert.equal(feature.observeUsage({ inputTokens: 950 }, agent), false);
+
+    // 用量回落阈值下方：本次越界事件结束
+    assert.equal(feature.observeUsage({ inputTokens: 400 }, agent), false);
+    // 新的越界事件重新触发完整尽职
+    assert.equal(feature.observeUsage({ inputTokens: 850 }, agent), true);
+    await feature.tripAtStepFinish({});
+    assert.deepEqual(agent.calls, ['interrupt', 'interrupt']);
+    // 新一轮尽职包含拦截机器唤醒
+    assert.equal(await feature.admitAfterTrip({ options: { kind: 'reminder' } }), 'deny');
+  });
+
+  it('manual toggle stays authoritative: off stops everything, on re-arms even while still over', async () => {
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = makeAgent();
+
+    feature.observeUsage({ inputTokens: 800 }, agent);
+    // 手动关闭 = 全停：解除拦截，且不再触发
+    feature.setArmed(false);
+    assert.equal(feature.getStatus().armed, false);
+    assert.equal(await feature.admitAfterTrip({ options: { kind: 'reminder' } }), 'continue');
+    assert.equal(feature.observeUsage({ inputTokens: 900 }, agent), false);
+
+    // 手动重新开启 = 重新武装：仍越界时下一次过界观测立即再触发
+    feature.setArmed(true);
+    assert.equal(feature.getStatus().armed, true);
+    assert.equal(feature.observeUsage({ inputTokens: 850 }, agent), true);
+    await feature.tripAtStepFinish({});
     assert.deepEqual(agent.calls, ['interrupt']);
   });
 
@@ -54,28 +100,16 @@ describe('ContextGuardFeature (interactive shell)', () => {
     feature.observeUsage({ inputTokens: 800 }, agent);
 
     assert.equal(await feature.admitAfterTrip({ options: { kind: 'reminder' } }), 'deny');
-    assert.equal(feature.getStatus().armed, false);
+    // 触发不翻转 armed：badge 仍显示自动打断
+    assert.equal(feature.getStatus().armed, true);
 
     assert.equal(await feature.admitAfterTrip({ options: { kind: 'user' } }), 'continue');
     assert.equal(await feature.admitAfterTrip({ options: { kind: 'reminder' } }), 'continue');
 
+    // 手动重新武装（复位事件闩锁）后再越界，重新进入尽职拦截
     feature.setArmed(true);
     feature.observeUsage({ inputTokens: 900 }, agent);
     assert.equal(await feature.admitAfterTrip({ options: { kind: 'reminder' } }), 'deny');
-  });
-
-  it('re-arms via setArmed and trips again', async () => {
-    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
-    const agent = makeAgent();
-    feature.observeUsage({ inputTokens: 800 }, agent);
-    await feature.tripAtStepFinish({});
-    assert.equal(feature.getStatus().armed, false);
-
-    feature.setArmed(true);
-    assert.equal(feature.getStatus().armed, true);
-    assert.equal(feature.observeUsage({ inputTokens: 850 }, agent), true);
-    assert.equal(await feature.tripAtStepFinish({}), 'continue');
-    assert.deepEqual(agent.calls, ['interrupt', 'interrupt']);
   });
 
   it('resets a stale pending interrupt on the next CallStart', async () => {
@@ -145,7 +179,8 @@ describe('ContextGuardFeature (interactive shell)', () => {
     feature.onLLMSwap(agent.llm, oldLLM);
     // swap 后没有新的 CallStart（单轮 ReAct 会话），新 llm 的过界响应仍要被观察到
     await agent.llm.chat();
-    assert.equal(feature.getStatus().armed, false);
+    // 触发被观察到；armed 保持手动开关状态
+    assert.equal(feature.getStatus().armed, true);
     assert.equal(feature.getStatus().trip?.inputTokens, 900);
   });
 
@@ -287,26 +322,27 @@ describe('onHostRequest surface (feature-comms)', () => {
   it('status reports live armed/trip state', async () => {
     const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
     const agent = makeAgent();
-    feature.observeUsage({ inputTokens: 900 }, agent); // 越界触发，fuse 消耗
+    feature.observeUsage({ inputTokens: 900 }, agent); // 越界触发，armed 保持手动开关
     const result = await feature.onHostRequest('status', {});
     assert.equal(result.ok, true);
     const status = result.status as { armed: boolean; trip: { inputTokens: number } | null };
-    assert.equal(status.armed, false);
+    assert.equal(status.armed, true);
     assert.equal(status.trip?.inputTokens, 900);
   });
 
-  it('arm toggles the fuse and reports the resulting state', async () => {
+  it('arm toggles the manual switch and reports the resulting state', async () => {
     const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
     const agent = makeAgent();
-    feature.observeUsage({ inputTokens: 900 }, agent); // 触发后 armed=false
+    feature.observeUsage({ inputTokens: 900 }, agent); // 触发（armed 不变，事件闩锁已置）
     const rearm = await feature.onHostRequest('arm', { armed: true });
     assert.equal(rearm.ok, true);
     assert.equal(feature.getStatus().armed, true);
-    // 装填后再过界会再拦一次
+    // 手动重新武装复位事件闩锁：仍越界时下一次过界观测会再触发
     assert.equal(feature.observeUsage({ inputTokens: 950 }, agent), true);
     const disarm = await feature.onHostRequest('arm', { armed: false });
     assert.equal(disarm.ok, true);
     assert.equal(feature.getStatus().armed, false);
+    assert.equal(feature.observeUsage({ inputTokens: 950 }, agent), false);
   });
 
   it('rejects non-boolean arm payloads and unknown request types', async () => {

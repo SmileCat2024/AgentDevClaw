@@ -21,7 +21,7 @@ export interface ContextGuardTrip {
 }
 
 export interface ContextGuardStatus {
-  /** 保险丝是否装填：true 时下一次过界会拦截并消耗。 */
+  /** 手动总开关（badge）：触发不改变它，只有用户手动切换或 enabled:false 影响。 */
   armed: boolean;
   /** 最近一次拦截事实；null 表示本会话从未触发。 */
   trip: ContextGuardTrip | null;
@@ -105,16 +105,22 @@ function tripReason(crossing: ThresholdCrossing): string {
 }
 
 /**
- * 交互式工作空间的一次性过界拦截。
+ * 交互式工作空间的过界自动打断（按越界事件的一次性保险丝）。
  *
- * 过界（inputTokens ≥ 压缩阈值）时退回排队消息并挂起打断，保险丝随之消耗；
- * 已发出的工具调用先执行完、结果写入上下文（StepFinish guard），此时才中断
- * 本轮——打断时机不再落在工具执行中途（终态语义与立即打断一致：cancelled，
- * 以最后一条 assistant 正文收尾）。之后继续拦截机器唤醒；下一条人工输入通过
- * PreCallStart 时解除拦截，之后用户全权参与。触发一次后可在会话控制面板重新装填。
- * 状态只存 feature 内存：
- * 会话精简/分支产生的 successor runtime 天然回到 manifest 初值，不参与
- * continuity 转移。
+ * 过界（inputTokens ≥ 压缩阈值）时退回排队消息并挂起打断，已发出的工具调用
+ * 先执行完、结果写入上下文（StepFinish guard），此时才中断本轮——打断时机
+ * 不落在工具执行中途（终态语义与立即打断一致：cancelled，以最后一条
+ * assistant 正文收尾）。
+ *
+ * 触发后保险丝继续尽职：拦截机器唤醒（reminder 类 call），直到人工输入——
+ * 那条输入本身就是「人批准继续」的表达，放行并解除拦截；此后本次越界期间
+ * 不再打断、不再拦截（维持不拦截）。上下文用量回落到阈值下方后，越界事件
+ * 结束，再次越界会重新触发一轮完整尽职。
+ *
+ * armed 是手动总开关（badge 恒显示它，触发不翻转）：手动关闭 = 全停；
+ * 手动重新开启 = 重新武装（即使当前仍越界，下一次过界观测会再触发）。
+ * 状态只存 feature 内存：会话精简/分支产生的 successor runtime 天然回到
+ * manifest 初值，不参与 continuity 转移。
  */
 export class ContextGuardFeature implements AgentFeature {
 
@@ -126,15 +132,21 @@ export class ContextGuardFeature implements AgentFeature {
   readonly name = 'context-guard';
   readonly dependencies: string[] = [];
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = 'Interrupts a session once when its context reaches the compression threshold; after the trip, machine wakeups wait for explicit human takeover.';
+  readonly description = 'Interrupts a session when its context reaches the compression threshold and holds machine wakeups until a human input approves continuing; re-trips after usage falls back below the threshold and crosses again.';
 
   private readonly core: ContextGuardCore;
   private armed: boolean;
   private trip: ContextGuardTrip | null = null;
   /** 过界已挂起、待 StepFinish（本轮已发出的工具结果落地后）触发的打断 */
   private pendingTripInterrupt = false;
-  /** 超限后持续阻断后台唤醒；人工输入在 PreCallStart 放行时解除。 */
+  /** 触发后拦截机器唤醒；人工输入在 PreCallStart 放行时解除（= 批准继续）。 */
   private holdMachineWakeups = false;
+  /**
+   * 越界事件闩锁：本次越界已触发过完整尽职（打断 + 拦截唤醒）。同一事件内
+   * （人工批准后维持不拦截）不再重复触发；usage 回落阈值下方时复位，下一次
+   * 越界重新触发。armed 不因触发改变——它只属于手动开关。
+   */
+  private overageHandled = false;
   private logger?: FeatureInitContext['logger'];
   private packageInfo: PackageInfo | null = null;
   private callArbiter: any = null;
@@ -162,7 +174,7 @@ export class ContextGuardFeature implements AgentFeature {
           enabled: {
             type: 'boolean',
             title: '上下文保护',
-            description: '开启后，上下文超过压缩阈值时自动打断当前会话并提醒精简；触发后界面回到不打断，但后台唤醒会等下一条人工消息接管；可在会话控制面板重新开启。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
+            description: '开启后，上下文超过压缩阈值时自动打断当前会话并提醒精简，同时拦截机器唤醒直到人工输入——那条输入即视为批准继续，本次越界期间不再拦截；上下文回落后再次越界会重新触发。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
             default: true,
           },
         },
@@ -191,10 +203,15 @@ export class ContextGuardFeature implements AgentFeature {
     };
   }
 
-  /** 会话控制面板开关：装填/卸下保险丝。显式操作也结束等待人工接管的状态。 */
+  /**
+   * 会话控制面板开关（手动总开关）：关闭 = 全停（解除拦截）；重新开启 =
+   * 重新武装——越界事件闩锁一并复位，即使当前仍越界，下一次过界观测会
+   * 再触发一轮完整尽职。
+   */
   setArmed(armed: boolean): void {
     this.armed = armed === true;
     this.holdMachineWakeups = false;
+    this.overageHandled = false;
   }
 
   /**
@@ -253,9 +270,21 @@ export class ContextGuardFeature implements AgentFeature {
     if (!this._agent && agent) this._agent = agent;
     if (!this.armed) return false;
     const crossing = this.core.evaluate(usage);
-    if (!crossing) return false;
+    if (!crossing) {
+      // 用量回落到阈值下方：本次越界事件结束，闩锁复位——下一次越界会
+      // 重新触发一轮完整尽职。无读数或无阈值时没有新事实，不动闩锁。
+      const inputTokens = Number((usage as { inputTokens?: unknown } | null)?.inputTokens);
+      const thresholdTokens = this.core.getThresholdTokens();
+      if (this.overageHandled && thresholdTokens !== null
+        && Number.isFinite(inputTokens) && inputTokens > 0 && inputTokens < thresholdTokens) {
+        this.overageHandled = false;
+      }
+      return false;
+    }
+    // 同一越界事件已尽职过（人工已批准或尚未接管）：维持不拦截，不再触发。
+    if (this.overageHandled) return false;
 
-    this.armed = false;
+    this.overageHandled = true;
     this.holdMachineWakeups = true;
     this.trip = {
       at: Date.now(),
@@ -268,7 +297,7 @@ export class ContextGuardFeature implements AgentFeature {
       thresholdTokens: crossing.thresholdTokens,
     });
     // 排队消息立即退回；打断延后到 StepFinish，避免把本轮已发出的工具调用
-    // 中途 abort 成无结果调用。
+    // 中途 abort 成无结果调用。armed 不变：它只属于手动开关（badge 恒显示）。
     this.callArbiter?.interruptActive?.(this.trip.reason);
     this.pendingTripInterrupt = true;
     return true;

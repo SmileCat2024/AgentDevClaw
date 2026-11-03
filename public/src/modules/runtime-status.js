@@ -65,8 +65,8 @@ function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
     status: 'warning',
     title: zh ? '上下文已超过阈值，本轮已打断' : 'Context threshold exceeded — turn interrupted',
     description: zh
-      ? `用量 ${usage}。建议通过精简 / 摘要 / 分支降低上下文后继续；也可以直接继续发送（开销自负）。`
-      : `Usage ${usage}. Consider trimming, summarizing, or branching before continuing; sending anyway is at your own cost.`,
+      ? `用量 ${usage}。机器唤醒已拦截，直到你发送下一条消息；建议通过精简 / 摘要 / 分支降低上下文，直接发送即视为批准继续（本次越界期间不再拦截，开销自负）。`
+      : `Usage ${usage}. Machine wakeups are held until your next message; consider trimming, summarizing, or branching — sending anyway approves continuing for this overage (at your own cost).`,
     autoDismiss: 8000,
   });
 }
