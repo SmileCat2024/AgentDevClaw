@@ -226,6 +226,9 @@ function _phResultRowHtml(result, identity, agent) {
     bodyHtml: _phSearchSnippetHtml(result, queryTrimmed),
     openActionExtra: {
       ...(identity.remoteOnly ? { agentId: identity.identity } : {}),
+      // 归档事实随动作下发：搜索结果可召回当前列表尚未加载的归档会话，
+      // 消费端据此直接走只读浏览，不依赖会话是否已在内存列表中。
+      ...(result.archived === true ? { archived: true } : {}),
       ...(Number.isInteger(primaryIndex) ? { messageIndex: primaryIndex } : {}),
     },
     extraClasses: 'ph-search-result-item',

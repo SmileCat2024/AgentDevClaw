@@ -640,6 +640,9 @@
   <script src="./src/modules/ctx-menu-handlers.js"></script>
   <script src="./src/modules/chat-nav-timeline.js"></script>
   <script src="./src/modules/thread-store.js"></script>
+  <!-- 会话只读浏览（归档对话 / 线程历史存档 / 工作群记录的唯一入口）：
+       依赖 thread-store 的线程索引，须在其后加载。 -->
+  <script src="./src/modules/session-readonly-view.js"></script>
   <script src="./src/modules/sse-client.js"></script>
   <script src="./src/modules/feature-communication.js"></script>
   <!-- 桌面右键唤起（冷启动 URL query / webview eval 统一消费），app-main.js boot 引用 -->

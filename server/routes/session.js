@@ -506,24 +506,46 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
     }
     const parsed = JSON.parse(raw);
     const allMessages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
-    const messages = applyTurnFilter
-      ? allMessages.filter((m) => turnBelongsTo(m?.turn, turnFilter))
-      : allMessages;
+    // 只读浏览与存活 runtime 的 /messages 必须同形：前端聊天渲染器消费
+    // display（diff 等富数据）/ images / thinkingBlocks / source 等字段，
+    // 只回 role+content 会让归档与历史记录的卡片、图片、思考块整体消失。
+    // 时间锚与 /messages 一致取 enrichedMessages 的平行投影（等长对齐）。
+    const enriched = Array.isArray(parsed?.runtime?.context?.enrichedMessages)
+      ? parsed.runtime.context.enrichedMessages
+      : [];
+    const allTimestamps = allMessages.map((_, index) => {
+      const ts = enriched[index]?.timestamp;
+      return Number.isFinite(ts) ? ts : null;
+    });
+    const selectedIndexes = applyTurnFilter
+      ? allMessages.map((m, index) => (turnBelongsTo(m?.turn, turnFilter) ? index : -1)).filter((index) => index >= 0)
+      : allMessages.map((_, index) => index);
     const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);
+    const sessionRecord = (await readSessionIndex(agentId)).sessions.find((item) => item.id === sessionId) || null;
     res.json({
       sessionId,
       sessionType: sessionType || null,
+      archived: sessionRecord?.archived === true,
+      title: cleanSessionText(sessionRecord?.title) || '',
       goal: parsed.goal || null,
-      messages: messages.map(m => ({
-        role: m.role,
-        turn: Number.isFinite(m.turn) ? m.turn : null,
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-        ...(Array.isArray(m.toolCalls) ? { toolCalls: m.toolCalls } : {}),
-        ...(typeof m.reasoning === 'string' && m.reasoning ? { reasoning: m.reasoning } : {}),
-        ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
-        ...(m.usage ? { usage: m.usage } : {}),
-        ...(m.execution ? { execution: m.execution } : {}),
-      })),
+      timestamps: selectedIndexes.map((index) => allTimestamps[index]),
+      messages: selectedIndexes.map((index) => {
+        const m = allMessages[index] || {};
+        return {
+          role: m.role,
+          turn: Number.isFinite(m.turn) ? m.turn : null,
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+          ...(Array.isArray(m.toolCalls) ? { toolCalls: m.toolCalls } : {}),
+          ...(typeof m.reasoning === 'string' && m.reasoning ? { reasoning: m.reasoning } : {}),
+          ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+          ...(m.usage ? { usage: m.usage } : {}),
+          ...(m.execution ? { execution: m.execution } : {}),
+          ...(m.display !== undefined ? { display: m.display } : {}),
+          ...(Array.isArray(m.images) && m.images.length > 0 ? { images: m.images } : {}),
+          ...(Array.isArray(m.thinkingBlocks) && m.thinkingBlocks.length > 0 ? { thinkingBlocks: m.thinkingBlocks } : {}),
+          ...(m.source ? { source: m.source } : {}),
+        };
+      }),
     });
   } catch (error) {
     next(error);

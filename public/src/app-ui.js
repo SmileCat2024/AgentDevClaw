@@ -1,6 +1,8 @@
 
 function selectWorkspaceSurface(agentId, options = {}) {
   bumpNavigationGuard();
+  // 回工作空间首页 = 离开只读浏览：清视图身份之外的只读标记与指示器。
+  if (typeof window.closeReadOnlySession === 'function') window.closeReadOnlySession();
   if (agentId && !loadedAgentDetailIds.has(agentId)) {
     loadAgentDetail(agentId).then(() => {
       renderCurrentMainView();
@@ -1303,6 +1305,10 @@ function syncAppChatInputSlot(agent) {
 }
 
 function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
+  // 只读浏览指示器与主视图同频刷新：视图切走（读档目标失效）自然消失。
+  if (typeof window.updateReadOnlySessionIndicator === 'function') {
+    window.updateReadOnlySessionIndicator();
+  }
   const agent = getCurrentAgentRecord();
   // ── 根据表面类型控制 rail button 可见性 ──
   const isWorkGroup = !!(agent && agent.id === 'work-group');

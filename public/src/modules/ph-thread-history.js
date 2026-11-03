@@ -61,6 +61,9 @@
       type: 'view_session_record',
       agentId: window.__phThreadHistoryAgentId,
       sessionId: entry.sessionId,
+      // 线程身份显式带上：只读浏览据此冻结在历史成员上（不参与接续重绑），
+      // 线程索引尚未就绪时也不必反查。
+      threadId: window.__phThreadHistoryThreadId || '',
     }));
     return [
       '<div class="ph-history-card" data-history-session="' + escapeHtml(entry.sessionId) + '">',

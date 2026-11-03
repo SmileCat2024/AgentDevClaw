@@ -728,6 +728,15 @@ window.switchAgent = async (newAgentId, options = {}) => {
         // 只认运行时 ID。无运行时（未启动/降级）保持原 ID，让请求显式失败。
         ? (window.RemoteConnections?.resolveRuntimeRef?.(newAgentId) || newAgentId)
         : newAgentId));
+  // 切到具体会话 = 离开只读浏览。必须前置于下方全部早退分支：只读浏览下
+  // currentRuntimeAgentId 为空，点同一宿主首页会命中「已在宿主首页」早退，
+  // 若清理留在后面，只读标记与指示器会残留并压痛随后的正常会话。
+  // 重新打开同一条归档记录会经 openReadOnlySession 重设状态，无副作用。
+  if (typeof window.getReadOnlySessionTarget === 'function'
+    && window.getReadOnlySessionTarget()
+    && typeof window.closeReadOnlySession === 'function') {
+    window.closeReadOnlySession();
+  }
   // workspace surface 宿主分支必须先于 runtimeAgentId 守卫：on-demand 宿主
   // （如 coder）无 runtime 是常态而非异常，switchAgent('coder') 应进入其
   // 工作空间首页（线程视图），而不是在守卫处静默返回（历史 bug：接续窗口

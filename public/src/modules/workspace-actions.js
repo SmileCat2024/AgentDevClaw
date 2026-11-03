@@ -687,33 +687,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
 
   if (action.type === 'view_session_record') {
     if (!action.agentId || !action.sessionId) return;
-    const recordNavigationEpoch = _navigationGuardEpoch;
-    readOnlyMode = true;
-    const agentId = action.agentId;
-    const sessionId = action.sessionId;
-    try {
-      const res = await fetch('/protoclaw/session_record?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      if (recordNavigationEpoch !== _navigationGuardEpoch) return;
-      // 历史记录浏览同样绑定视图身份（ADR-0026）：只读挂载的会话数据必须
-      // 让后续迟到生产者（轮询 / SSE）按身份被拒，不能覆盖历史视图。
-      applySessionViewPatch({
-        identity: { agentId, sessionId },
-        messages: (data.messages || []).map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-        inputRequests: [],
-      });
-      // patch 写入即声明（工单 037），此处结构性渲染由 renderCurrentMainView 承担。
-      setPreferredUnitMode('chat', allAgents.find(a => a.id === agentId) || activeAgent);
-      renderCurrentMainView();
-    } catch (error) {
-      console.error('Failed to load session record:', error);
-      window.alert('Failed to load session record: ' + (error?.message || error));
-      readOnlyMode = false;
-    }
+    // 只读浏览唯一实现（归档对话 / 线程历史存档 / 工作群记录共用）：
+    // 读会话自身记录渲染、不启动也不绑定 runtime，视图冻结在该 Session。
+    await window.openReadOnlySession({
+      agentId: String(action.agentId),
+      sessionId: String(action.sessionId),
+      threadId: action.threadId,
+      title: action.title,
+      archived: action.archived === true,
+    });
     return;
   }
 
@@ -919,6 +901,27 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
 
 
   if ((action.type === 'show_chat' || action.type === 'resume_session') && !hasSessions) {
+    return;
+  }
+
+  // ── 归档对话：只读浏览，不启动 runtime ────────────────────────────────
+  // 归档禁止的是「重新启动运行」（归档事务要求停运行、确认最终保存，避免新
+  // 写入者覆盖快照），不是「查看内容」。打开动作因此改走只读读档路径：
+  // 服务端 activate 对 archived 会话返回 session_archived，直接送到启动入口
+  // 必然报错。判定与列表分区同源（phConversationArchived：线程 lifeState
+  // 优先，无线程会话读 archived 标志），避免列表显示已归档而这里仍按可运行
+  // 打开。执行位置必须在受管会话分支之前——那里会真正调 activate。
+  if (action.type === 'open_session' && activeAgent?.id && action.sessionId
+    && (action.archived === true
+      || (typeof window.phConversationArchived === 'function'
+        && window.phConversationArchived(activeAgent.id,
+          getWorkspaceSessionById(activeAgent, action.sessionId))))) {
+    await window.openReadOnlySession({
+      agentId: activeAgent.id,
+      sessionId: action.sessionId,
+      title: getWorkspaceSessionById(activeAgent, action.sessionId)?.title || '',
+      archived: true,
+    });
     return;
   }
 

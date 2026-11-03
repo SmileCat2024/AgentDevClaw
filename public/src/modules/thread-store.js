@@ -556,6 +556,9 @@ window.threadAdvanceHead = async (threadId, toSessionId, options = {}) => {
 let _activeThreadSubscription = null;
 
 function _syncActiveThreadSubscription() {
+  // 只读浏览（归档对话 / 历史存档）不参与线程跟随：视图冻结在目标 Session
+  // 上，既不是 head 也不等待重绑，线程指向不得被对齐或重建。
+  if (window.ClawThreads.activeConversation?.readOnly === true) return;
   const active = _currentActiveSession();
   const thread = active ? window.getThreadForSession(active.agentId, active.sessionId) : null;
   const selected = window.ClawThreads.activeConversation;
@@ -686,6 +689,10 @@ function _cancelRebindRetry() {
 
 async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessionId, attempt = 0) {
   if (_rebindInFlight) return;
+  // 只读浏览（归档对话 / 历史存档）不参与接续重绑：视图是用户显式选定的
+  // 历史会话，head 推进不得把它拉走（历史事故：点开存档后被接续自动跳到
+  // 最新 head）。
+  if (window.ClawThreads.activeConversation?.readOnly === true) return;
   _rebindInFlight = true;
   try {
     const current = _currentActiveSession();

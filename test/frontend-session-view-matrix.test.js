@@ -127,13 +127,16 @@ test('explicit identity equal to current identity does not wipe; null identity c
 
 test('direct apply callers are synchronous navigation transactions; async message producers are guarded', () => {
   const threadStore = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
-  const actions = fs.readFileSync(new URL('../public/src/modules/workspace-actions.js', import.meta.url), 'utf8');
+  // 历史记录浏览（只读浏览唯一实现）：异步读档必须带导航代次守卫，并有
+  // 请求期间目标漂移的二次校验；提交走 SessionView token。
+  const readonlySource = fs.readFileSync(new URL('../public/src/modules/session-readonly-view.js', import.meta.url), 'utf8');
   const awaitLoader = threadStore.slice(threadStore.indexOf('function _loadAwaitSurfaceMessages'), threadStore.indexOf('window.openConversationTarget'));
-  const historyLoader = actions.slice(actions.indexOf("if (action.type === 'view_session_record')"), actions.indexOf("if (action.type === 'open_summary')"));
   assert.match(awaitLoader, /captureSessionViewToken\('', \{ agentId, sessionId \}\)/);
   assert.match(awaitLoader, /commitSessionViewPatch\(viewToken, \{ messages: data\.messages \}/);
-  assert.match(historyLoader, /recordNavigationEpoch !== _navigationGuardEpoch/);
-  assert.match(historyLoader, /applySessionViewPatch\(\{\s*identity: \{ agentId, sessionId \}/);
+  assert.match(readonlySource, /navigationEpoch !== _navigationEpoch\(\)/);
+  assert.match(readonlySource, /_state\.agentId !== agentId \|\| _state\.sessionId !== sessionId/);
+  assert.match(readonlySource, /applySessionViewPatch\(\{ identity: \{ agentId, sessionId \} \}\)/);
+  assert.match(readonlySource, /commitSessionViewPatch\(viewToken, patch, commit\)/);
 });
 
 test('initial loading and polling paths guard responses and commit through SessionView', () => {

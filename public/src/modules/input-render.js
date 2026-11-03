@@ -192,7 +192,7 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
     return;
   }
 
-  // ── 级 2：readonly（远程只读 / workspace 只读）────────────────────────
+  // ── 级 2：readonly（远程只读 / workspace 只读 / 归档浏览）──────────────
   if (renderMode === 'readonly') {
     runSuppressed(() => {
       detachTransientInputContent(inputContainer);
@@ -200,9 +200,18 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
       // 远程会话是 Phase 1 明确的只读面：整体替换为禁用提示，不是假交互输入框。
       const card = document.createElement('div');
       card.className = 'user-input-card';
+      // 只读浏览（归档对话 / 历史存档）说明为何不能输入，以及怎样恢复可写：
+      // 归档禁止重新启动运行是运行约束，不是内容不可读。
+      const readonlyTarget = typeof window.getReadOnlySessionTarget === 'function'
+        ? window.getReadOnlySessionTarget()
+        : null;
       const readonlyPlaceholder = isRemoteNamespaceAgentId(currentRuntimeAgentId)
         ? t('rcon_readonly_placeholder')
-        : t('workspace_readonly_mode');
+        : (readonlyTarget
+          ? (readonlyTarget.archived
+            ? t('workspace_readonly_archived_hint')
+            : t('workspace_readonly_history_hint'))
+          : t('workspace_readonly_mode'));
       card.innerHTML = `
         <textarea class="user-input-textarea" rows="1" disabled
           placeholder="${escapeHtml(readonlyPlaceholder)}"

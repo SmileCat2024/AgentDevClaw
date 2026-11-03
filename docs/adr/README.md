@@ -19,6 +19,7 @@
 - [0033 会话崩溃恢复](0033-session-journal-persistence.md) — journal 为唯一权威 + checkpoint 回退（Proposed）
 - [0035 正常输入与输入租约解耦](0035-input-channel-decoupling.md) — composer 单一 user-turn 通道，lease 专职请求应答（Proposed）
 - [0036 会话索引存储迁移 SQLite](0036-session-index-sqlite-storage.md) — node:sqlite 替换 index.json 单文件（Proposed，实施中）
+- [0039 归档对话只读浏览](0039-archived-session-readonly-browsing.md) — 启动与浏览分离，只读浏览唯一实现与视图冻结
 
 ## 运行时与执行环境
 

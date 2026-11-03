@@ -120,6 +120,14 @@ window.CoderThreadsUI = (() => {
         + (zh ? '打开 head' : 'Open head') + '</button>',
       );
     }
+    // 已归档线程：可经只读浏览查看 head 会话内容（归档禁止启动 runtime，
+    // 不禁止查看）。与「取消归档」并列，语义是读历史而非恢复运行。
+    if (archived && thread.headSessionId) {
+      actions.push(
+        '<button class="coder-btn secondary" type="button" onclick="window.CoderThreadsUI.openArchived(\'' + esc(thread.threadId) + '\')">'
+        + (zh ? '查看内容' : 'View content') + '</button>',
+      );
+    }
     if (!archived && busy && thread.headViewerAgentId) {
       actions.push(
         '<button class="coder-btn danger" type="button" title="' + esc(zh ? '中断当前 head 会话正在执行的 turn' : 'Interrupt the turn running on the current head session') + '" onclick="window.CoderThreadsUI.interrupt(\'' + esc(thread.threadId) + '\')">'
@@ -290,6 +298,24 @@ window.CoderThreadsUI = (() => {
     }
   }
 
+  /**
+   * 已归档线程的只读查看：读 head 会话的持久记录，不启动 runtime。
+   * 归档会话经 activate 会被服务端以 thread_archived 拒绝，这里是唯一
+   * 可用的查看入口（与侧栏归档对话同一实现）。
+   */
+  async function openArchived(threadId) {
+    const thread = getThread(threadId);
+    if (!thread?.headSessionId) return;
+    if (typeof window.openReadOnlySession !== 'function') return;
+    await window.openReadOnlySession({
+      agentId: thread.agentId,
+      sessionId: thread.headSessionId,
+      threadId: thread.threadId,
+      title: thread.title || '',
+      archived: true,
+    });
+  }
+
   /** 中断此线程：路由到当前 head 会话 runtime 的 turn 中断通道 */
   async function interrupt(threadId) {
     try {
@@ -433,5 +459,5 @@ window.CoderThreadsUI = (() => {
     if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
   }
 
-  return { render, refresh, openHead, interrupt, archive, unarchive, resume, remove, switchTab, archiveResultText, deleteConfirmText };
+  return { render, refresh, openHead, openArchived, interrupt, archive, unarchive, resume, remove, switchTab, archiveResultText, deleteConfirmText };
 })();
