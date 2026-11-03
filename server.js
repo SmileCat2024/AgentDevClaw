@@ -551,6 +551,8 @@ setupSessionRoutes(app, express, {
   startManagedAgent,
   stopManagedAgent,
   waitForManagedRuntimeReady,
+  // 创建就绪闸门回滚用（冷 spawn 超时残留进程的退出等待）
+  waitForProcessExit,
   // Group chat lineage callback
   notifySessionLineage,
   notifySessionArchived,

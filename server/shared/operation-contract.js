@@ -23,6 +23,10 @@ const LEGACY_CODE_MAP = new Map([
   ['invalid_input', LOCAL_OPERATION_ERROR_CODES.OPERATION_REJECTED],
   ['thread_handoff_images_unsupported', LOCAL_OPERATION_ERROR_CODES.OPERATION_REJECTED],
   ['timeout', LOCAL_OPERATION_ERROR_CODES.REQUEST_TIMEOUT],
+  // 创建就绪闸门（session.js create）：启动失败（模型解析失败/快照损坏/崩溃）
+  // 重试无意义 → 拒绝桶；超时未就绪重试可能成功（慢启动）→ runtime 未就绪桶。
+  ['runtime_start_failed', LOCAL_OPERATION_ERROR_CODES.OPERATION_REJECTED],
+  ['runtime_start_timeout', LOCAL_OPERATION_ERROR_CODES.RUNTIME_NOT_READY],
 ]);
 
 const RETRYABLE_CODES = new Set([

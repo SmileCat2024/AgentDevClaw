@@ -10,6 +10,7 @@ import {
   MIRROR_SCRIPT_TIMEOUT_MS,
   SESSION_TRANSFORMATION_TIMEOUT_MS,
   PH_STYLE_WORKSPACE_AGENT_IDS,
+  RUNTIME_READY_WAIT_MS,
   THREADS_ROOT,
   USER_DATA_ROOT,
 } from '../shared/constants.js';
@@ -28,7 +29,14 @@ import {
   resolvePrebuiltSessionType,
   findMissingCheckpoints,
 } from '../shared/session-access.js';
-import { getAgentRuntime, isManagedRuntimeRunning, stopAssemblyRuntime } from '../shared/agent-access.js';
+import {
+  buildStatus,
+  getAgentRuntime,
+  isChildProcessRunning,
+  isManagedRuntimeRunning,
+  managedAgents,
+  stopAssemblyRuntime,
+} from '../shared/agent-access.js';
 import { renderConversationHtml, renderConversationMarkdown } from '../conversation-renderer.js';
 import { readWorkspaceState } from './workspace.js';
 import { getPhProject } from './ph-projects.js';
@@ -97,6 +105,35 @@ export function turnBelongsTo(turn, turnFilter) {
   return typeof turn === 'number' && Number.isFinite(turn) && Math.floor(turn) === turnFilter;
 }
 
+/**
+ * 创建就绪闸门（假成功修复）：等待托管 runtime 记录落定——ready / 进程退出 /
+ * 超时，三者先到者。只看 runtime 记录本身，不做 viewer 探测：create 只需要
+ * runtime 自身的事实，connected-agent 投影由既有轮询接管。
+ *
+ * - ok:true — runtime 已 READY 且仍在运行。join 路径 startManagedAgent 返回
+ *   前已置 ready（等 session-ready IPC），首轮即过；冷 spawn 由 READY stdout
+ *   行异步置位。
+ * - ok:false（无 timedOut）— 进程已退出（启动失败：模型解析失败 / 快照损坏
+ *   拒绝 READY / 崩溃），ready 永不再来，立即返回而非等满窗口。
+ * - timedOut:true — 窗口内未就绪且进程仍活（挂死 / 极慢启动）。
+ */
+export async function waitForCreatedRuntimeSettled(agentId, sessionId, timeoutMs = RUNTIME_READY_WAIT_MS, pollMs = 200) {
+  const start = Date.now();
+  for (;;) {
+    const runtime = getAgentRuntime(agentId, sessionId);
+    if (runtime?.ready && isManagedRuntimeRunning(runtime)) {
+      return { ok: true, runtime };
+    }
+    if (!runtime || runtime.stopped || !isChildProcessRunning(runtime?.process)) {
+      return { ok: false, runtime: runtime || null };
+    }
+    if (Date.now() - start >= timeoutMs) {
+      return { ok: false, runtime, timedOut: true };
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
 export function setupSessionRoutes(app, express, ctx) {
   const {
     activatePrebuiltSession,
@@ -126,6 +163,10 @@ export function setupSessionRoutes(app, express, ctx) {
     startManagedAgent,
     stopManagedAgent,
     waitForManagedRuntimeReady,
+    waitForProcessExit,
+    // 创建就绪闸门的等待窗口（缺省 RUNTIME_READY_WAIT_MS，与共享 join 路径
+    // 同一水位）；测试可注入短窗以驱动超时路径。
+    runtimeReadyWaitMs,
     notifySessionLineage,
     notifySessionArchived,
     clearUISurfaces,
@@ -991,7 +1032,37 @@ setupTokenRefreshRoute(app, express);
 // ═══ Block C (server.js L4048-4595) ═══
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
-app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) => {
+  // ── 创建就绪闸门与回滚（假成功修复）───────────────────────────────────
+  // 冷 spawn 曾在进程拉起即返回 200：初始会话随后启动失败（模型解析失败、
+  // 快照损坏拒绝 READY、进程崩溃）时，用户拿到"已创建但打不开"的死会话且
+  // 无任何错误信号。现在 create 在响应前等待 runtime 记录落定；任何失败
+  // （含共享进程 add-session 被拒）都整体回滚本次创建的会话并报错——200
+  // 保持原语义：会话已创建且 runtime 已就绪。
+  async function rollbackCreatedSession(agentId, sessionId) {
+    const runtime = getAgentRuntime(agentId, sessionId);
+    if (runtime && !runtime.stopped) {
+      if (runtime.processGroupKey) {
+        // 共享进程 join 记录：绝不杀共享进程（兄弟会话不受本次失败牵连）。
+        // add-session 失败路径 runtime 侧已自清（newSession.remove + 退出
+        // sessions 表），此处只收敛本侧记录。
+        managedAgents.delete(runtime.key);
+      } else if (isChildProcessRunning(runtime.process)) {
+        // 冷 spawn 超时残留：杀掉未就绪进程并等待退出，exit 处理器负责
+        // 记录收敛（stopped 标记先行，善后走"人为停止"分支）。
+        runtime.stopped = true;
+        runtime.process.kill('SIGTERM');
+        await waitForProcessExit(runtime.process);
+      }
+    }
+    try {
+      await deletePrebuiltSession(agentId, sessionId, { includeSessions: false });
+    } catch (error) {
+      // 回滚失败不吞原始错误：记录现场即可（并发删除等场景下 404 属预期）。
+      console.error(`[create-rollback] failed to delete session ${agentId}/${sessionId}:`, error?.message || error);
+    }
+  }
+
+  app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) => {
   const requestMetadata = readOperationMetadata(req);
   const trace = createOperationTrace({
     ...requestMetadata,
@@ -1095,8 +1166,36 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
     // createPrebuiltSession 返回已提交的 index revision，避免重复读取全量索引。
     const committedRevision = Number(session.indexRevision) || 0;
     trace.mark('index_committed', { revision: committedRevision });
-    const status = await startManagedAgent(agent, session.id, sessionRuntimeMode ? { runtimeMode: sessionRuntimeMode } : {});
-    trace.mark('target_runtime_started');
+    let status;
+    try {
+      status = await startManagedAgent(agent, session.id, sessionRuntimeMode ? { runtimeMode: sessionRuntimeMode } : {});
+      trace.mark('target_runtime_started');
+      // 假成功修复：等待 runtime 记录落定再响应。冷 spawn 曾在此立即返回，
+      // 后续启动失败表现为无错误信号的死会话；共享 join 路径本就同步等待
+      // session-ready，此处对两种路径统一收口（rollbackCreatedSession 注释）。
+      const settled = await waitForCreatedRuntimeSettled(agent.id, session.id, runtimeReadyWaitMs ?? RUNTIME_READY_WAIT_MS);
+      trace.mark(settled.ok
+        ? 'target_runtime_ready'
+        : (settled.timedOut ? 'target_runtime_timeout' : 'target_runtime_failed'));
+      if (!settled.ok) {
+        const tail = String(settled.runtime?.process?.getOutputTail?.() || '').trim();
+        const reason = settled.timedOut
+          ? `runtime ${runtimeReadyWaitMs ?? RUNTIME_READY_WAIT_MS}ms 内未就绪`
+          : 'runtime 启动失败（进程已提前退出）';
+        throw Object.assign(
+          new Error(`${reason}，本次创建已回滚${tail ? `。runtime 输出尾部:\n${tail.slice(-1200)}` : ''}`),
+          { statusCode: 502, code: settled.timedOut ? 'runtime_start_timeout' : 'runtime_start_failed' },
+        );
+      }
+      // 就绪后重读状态：viewerAgentId 等字段此刻才完整。
+      status = buildStatus(agent.id, session.id);
+    } catch (error) {
+      // 索引已为本次请求提交：此后任何失败（add-session 被拒 / runtime 未就绪
+      // 或退出）都意味着会话不可用——整体回滚后原样上抛，不给用户留死会话。
+      trace.mark('create_rolled_back', { errorCode: error?.code || 'unknown' });
+      await rollbackCreatedSession(agent.id, session.id);
+      throw error;
+    }
     // 线程宿主工作空间（coder）：新会话自动成为一条新线程的初始 head。
     // 非 host 工作空间为 no-op；失败不阻断会话创建。返回值带 threadId
     // 供调度方直接投递，省去创建后从列表反查。
