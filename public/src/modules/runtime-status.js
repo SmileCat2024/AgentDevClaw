@@ -456,9 +456,20 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       (operation.sourceRuntimeId && entry.runtimeId === operation.sourceRuntimeId)
       || (operation.sourceSessionId && entry.sessionId === operation.sourceSessionId)
     ));
-    if (operation.type === 'delete' || operation.type === 'archive-close') {
+    if (operation.type === 'delete') {
+      // 删除进行中：源条目一律不再投影。ctx-menu 的乐观移除已表达退场，
+      // 这里再标记/合成（sourceEntry.deleting / operation-tombstone）会在
+      // 下个轮询周期把已消失的条目以「正在删除」形态重新投回（幽灵重现）；
+      // 与服务端 list_sessions 的 in-flight 删除过滤同一语义。失败反馈由
+      // 操作失败路径承担（alert + 轮询回填恢复条目）。
       if (sourceEntry) {
-        sourceEntry.deleting = operation.type === 'delete';
+        const index = entries.indexOf(sourceEntry);
+        if (index >= 0) entries.splice(index, 1);
+      }
+      continue;
+    }
+    if (operation.type === 'archive-close') {
+      if (sourceEntry) {
         sourceEntry.sidebarOperation = operation;
         sourceEntry.contextMenuEnabled = false;
         if (!sourceEntry.projectDir && operation.projectDir) {
@@ -475,7 +486,6 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
           status: 'pending',
           source: 'operation-tombstone',
           contextMenuEnabled: false,
-          deleting: operation.type === 'delete',
           sidebarOperation: operation,
           projectId: operation.projectId,
           projectDir: operation.projectDir,

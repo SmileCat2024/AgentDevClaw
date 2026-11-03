@@ -483,7 +483,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
     assert.equal(result.coder[0].source, 'operation-pending');
   });
 
-  it('marks a coder delete operation on its own child entry and never tombstones it on the PH row', () => {
+  it('retires a coder child entry while its delete operation is in flight (no ghost re-projection)', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run(`(() => {
       ${PH_HOST}
@@ -505,9 +505,47 @@ describe('runtime-status: sidebar operation identity routing', () => {
     })()`);
     // PH 行：child 归属 coder APP，operation 也按 agentId 路由到 coder → 无镜像
     assert.equal(result.host.length, 0);
-    // coder APP 行：child entry 保留并挂上删除标记
-    assert.equal(result.coder.length, 1);
-    assert.equal(result.coder[0].deleting, true);
+    // coder APP 行：删除进行中的源条目不再投影（乐观移除已表达退场，
+    // 重投会以「正在删除」形态幽灵重现）
+    assert.equal(result.coder.length, 0);
+  });
+
+  it('does not synthesize an operation-tombstone for an in-flight delete without a live source entry', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run(`(() => {
+      ${PH_HOST}
+      // 乐观移除后源条目已不在（无 runtime、无列表条目），删除仍在进行。
+      beginSidebarOperation({
+        operationId: 'delete:ph-1', type: 'delete', kind: 'delete', phase: 'committing',
+        agentId: 'programming-helper', sourceSessionId: 'session-1',
+        sourceRuntimeId: 'runtime-1'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, []);
+    })()`);
+    assert.equal(result.length, 0);
+  });
+
+  it('re-projects the source entry after a delete operation failed (failure recovery)', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run(`(() => {
+      ${PH_HOST}
+      // 删除失败：operation 已 failed，轮询回填的会话条目必须正常显示，
+      // 否则用户丢失会话入口且无恢复路径。
+      beginSidebarOperation({
+        operationId: 'delete:ph-fail', type: 'delete', kind: 'delete', phase: 'failed',
+        agentId: 'programming-helper', sourceSessionId: 'session-1',
+        sourceRuntimeId: 'runtime-1'
+      });
+      const child = {
+        id: 'runtime-1', source: 'child', parent_id: 'programming-helper',
+        sidebar_entry_id: 'programming-helper',
+        runtime_session_id: 'runtime-1', active_workspace_session_id: 'session-1',
+        active_workspace_session_title: '删除失败的会话', connected: true
+      };
+      return collectRuntimeEntriesForPrebuilt(host, [child]);
+    })()`);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].name, '删除失败的会话');
   });
 
   it('keeps the PH projectDir guard PH-specific: coder APP renders dir-less placeholders', () => {
