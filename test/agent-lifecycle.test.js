@@ -2,6 +2,7 @@ import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'events';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -15,7 +16,7 @@ const { createAgentLifecycleModule } = await import('../server/routes/agent-life
 const { buildSessionWorkspaceEnv, buildSharedSessionStartMessage, resolveManagedProcessPlacement } = await import('../server/routes/agent-startup.js');
 const { managedAgents, getManagedRuntimeKey } = await import('../server/shared/agent-access.js');
 const { FileSessionStore } = await import('@agentdevjs/core');
-const { updateSessionIndex } = await import('../server/shared/session-access.js');
+const { updateSessionIndex, getPrebuiltSessionFilePath } = await import('../server/shared/session-access.js');
 
 after(async () => {
   const { closeAllSessionDbs } = await import('../server/shared/session-access.js');
@@ -572,6 +573,101 @@ describe('agent-lifecycle', () => {
 
         await assert.rejects(stopping, /Failed to confirm session persistence/);
       });
+    });
+  });
+
+  // ── startManagedAgent：handoff 注入与单次记录读取 ────────
+  // 共享进程加入路径把校验 / handoff 注入 / placement 三段对会话索引的读取
+  // 收敛为一次共享快照；用捕获 add-session 消息验证三段事实同源且不回退。
+
+  describe('startManagedAgent handoff injection via shared-process join', () => {
+    const WORK_DIR = path.join(DATA_DIR, 'handoff-workdir');
+    const AGENT = { id: 'programming-helper', processMode: 'shared-global', name: 'PH Test' };
+
+    function injectSharedHost(mod, sessionId, respond) {
+      const child = createMockChild();
+      const runtime = injectRuntime('programming-helper', sessionId, child);
+      runtime.processGroupKey = 'programming-helper::__global__';
+      child.send = (message) => {
+        if (message?.type === 'add-session') respond(message);
+      };
+      return { child, runtime };
+    }
+
+    function replyReady(child, message) {
+      queueMicrotask(() => {
+        child.emit('message', { type: 'runtime-identity', agentId: 'programming-helper', sessionId: message.sessionId, viewerAgentId: 'viewer-handoff' });
+        child.emit('message', { type: 'session-ready', sessionId: message.sessionId, viewerAgentId: 'viewer-handoff' });
+      });
+    }
+
+    it('passes the indexed handoffPath through to the add-session IPC message', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handoffFile = path.join(DATA_DIR, 'handoff-pending.json');
+      await fs.mkdir(path.dirname(handoffFile), { recursive: true });
+      await fs.writeFile(handoffFile, JSON.stringify({ mode: 'trim' }), 'utf8');
+      await updateSessionIndex('programming-helper', (index) => ({
+        ...index,
+        sessions: [{
+          id: 'handoff-join-1',
+          openDirectory: WORK_DIR,
+          metadata: { handoffPath: handoffFile },
+        }],
+      }));
+
+      let sent = null;
+      const host = injectSharedHost(mod, 'handoff-host-1', (message) => {
+        sent = message;
+        replyReady(host.child, message);
+      });
+
+      try {
+        await mod.startManagedAgent(AGENT, 'handoff-join-1');
+        assert.ok(sent, 'add-session message must be sent to the shared host');
+        assert.equal(sent.type, 'add-session');
+        assert.equal(sent.sessionId, 'handoff-join-1');
+        // 记录未消费（无消息快照）：注入 handoff，交给 runtime 首启导入。
+        assert.equal(sent.handoffPath, handoffFile);
+        assert.equal(sent.workspaceCwd, WORK_DIR);
+      } finally {
+        managedAgents.delete(getManagedRuntimeKey('programming-helper', 'handoff-join-1'));
+        managedAgents.delete(getManagedRuntimeKey('programming-helper', 'handoff-host-1'));
+      }
+    });
+
+    it('omits the handoff injection when the session snapshot already has messages', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handoffFile = path.join(DATA_DIR, 'handoff-consumed.json');
+      await fs.writeFile(handoffFile, JSON.stringify({ mode: 'trim' }), 'utf8');
+      await updateSessionIndex('programming-helper', (index) => ({
+        ...index,
+        sessions: [{
+          id: 'handoff-join-2',
+          openDirectory: WORK_DIR,
+          metadata: { handoffPath: handoffFile },
+        }],
+      }));
+      // 会话快照已有消息：handoff 已在首启消费，重复注入会复制 seed 消息。
+      const snapshotPath = getPrebuiltSessionFilePath('programming-helper', 'handoff-join-2');
+      await fs.mkdir(path.dirname(snapshotPath), { recursive: true });
+      await fs.writeFile(snapshotPath, JSON.stringify({
+        runtime: { context: { messages: [{ role: 'user', content: 'already here' }] } },
+      }), 'utf8');
+
+      let sent = null;
+      const host = injectSharedHost(mod, 'handoff-host-2', (message) => {
+        sent = message;
+        replyReady(host.child, message);
+      });
+
+      try {
+        await mod.startManagedAgent(AGENT, 'handoff-join-2');
+        assert.ok(sent, 'add-session message must be sent to the shared host');
+        assert.equal(sent.handoffPath, null, 'consumed handoff must not be re-injected');
+      } finally {
+        managedAgents.delete(getManagedRuntimeKey('programming-helper', 'handoff-join-2'));
+        managedAgents.delete(getManagedRuntimeKey('programming-helper', 'handoff-host-2'));
+      }
     });
   });
 

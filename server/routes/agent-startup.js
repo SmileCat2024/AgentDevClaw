@@ -23,7 +23,7 @@ import {
   computeProcessGroupKey, findSharedProcessRuntime, listRuntimesByProcess,
 } from '../shared/agent-access.js';
 import {
-  readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex,
+  getPrebuiltSessionFilePath, updateSessionIndex, findPrebuiltSessionRecordShared,
 } from '../shared/session-access.js';
 import { notifyRuntimeReady } from '../shared/runtime-hooks.js';
 import { resolveDesktopWorkspace } from '../shared/desktop-workspace.js';
@@ -225,17 +225,22 @@ export function createAgentStartupFns(deps) {
   async function startManagedSession(agent, resolvedSessionId, runtimeOptions) {
     const existing = getAgentRuntime(agent.id, resolvedSessionId);
     let sessionRuntimeMode = runtimeOptions?.runtimeMode;
+    // 会话记录一次读取、全程复用：下方校验 / handoff 注入 / placement 三段
+    // 都只需要本会话这一条记录。此前三段各调一次 readSessionIndex——创建/
+    // 提交刚让读缓存失效，第一次是全量 DB 载入，后两次还要各付一次全量
+    // structuredClone。共享快照返回只读 record（缓存对象的一部分），本函数
+    // 内不得改写。
+    let sessionRecord = null;
     if (resolvedSessionId) {
       await getThreadIntegration().assertSessionStartable(agent.id, resolvedSessionId);
-      const index = await readSessionIndex(agent.id);
-      const record = index.sessions.find(session => session.id === resolvedSessionId);
+      sessionRecord = await findPrebuiltSessionRecordShared(agent.id, resolvedSessionId);
       // coder：策略要求固定模式，无记录回退 standard（含改造前的老会话）。
       // programming-helper：未选择的会话不强制（保持 env 实验开关 / 默认本地现状）。
-      if (agent.id === 'coder') sessionRuntimeMode ||= record?.metadata?.runtimeMode || 'standard';
-      else if (record?.metadata?.runtimeMode) sessionRuntimeMode ||= record.metadata.runtimeMode;
-      if (!record || record.archived) {
-        throw Object.assign(new Error(record ? 'Restore the archived session before starting it' : 'Session not found'), {
-          code: record ? 'session_archived' : 'session_not_found', status: record ? 409 : 404, statusCode: record ? 409 : 404,
+      if (agent.id === 'coder') sessionRuntimeMode ||= sessionRecord?.metadata?.runtimeMode || 'standard';
+      else if (sessionRecord?.metadata?.runtimeMode) sessionRuntimeMode ||= sessionRecord.metadata.runtimeMode;
+      if (!sessionRecord || sessionRecord.archived) {
+        throw Object.assign(new Error(sessionRecord ? 'Restore the archived session before starting it' : 'Session not found'), {
+          code: sessionRecord ? 'session_archived' : 'session_not_found', status: sessionRecord ? 409 : 404, statusCode: sessionRecord ? 409 : 404,
         });
       }
     }
@@ -265,8 +270,6 @@ export function createAgentStartupFns(deps) {
 
     if (resolvedSessionId && !runtimeOptions?.extraEnv?.PROTOCLAW_HANDOFF_PATH) {
       try {
-        const idx = await readSessionIndex(agent.id);
-        const sessionRecord = idx.sessions.find(s => s.id === resolvedSessionId);
         if (sessionRecord?.metadata?.handoffPath) {
           // Only pass handoff env when the session has no persisted messages yet.
           // If the session file already exists and contains messages, the handoff
@@ -344,15 +347,9 @@ export function createAgentStartupFns(deps) {
     let processGroupKey = null;
     let projectDir = '';
     let sessionRecordType = null;
-    let sessionRecord = null;
-    if (resolvedSessionId) {
-      try {
-        const idx = await readSessionIndex(agent.id);
-        sessionRecord = (idx?.sessions || []).find(s => s.id === resolvedSessionId) || null;
-      } catch {
-        // Session index unreadable — retain the agent-level default.
-      }
-    }
+    // sessionRecord 复用函数开头的共享只读快照，此处不再重读索引。
+    // （原实现此处重读失败时静默回退 agent 级默认形态；快照读取失败在上方
+    // 校验段就会抛出，语义只收窄了"两次读取间索引恰好变不可读"的瞬态。）
     // ticket 042：项目会话的运行目录以项目表当前记录为权威（改绑后跟随新
     // 目录），openDirectory 只是创建时的目录记录。项目身份无法解析时直接
     // 报错——绝不退回 openDirectory 旧记录或 workspace 当前目录继续运行。

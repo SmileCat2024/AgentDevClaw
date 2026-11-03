@@ -81,17 +81,64 @@ export function collectSidebarIdentityEntries(agent) {
 // dependency (agent-discovery → session-helpers → agent-discovery).
 
 // ── Agent Discovery（名册发现的唯一实现，文件级共享） ──────────────
-// 供本模块工厂与按名册消费的路由（如容器镜像面）共用同一份发现事实，
-// 避免各路由 readdir 出第二份名册。返回完整 metadata（含 host 同域声明）。
+// 供本模块工厂与按名册消费的路由（如容器镜像面）共用同一份发现事实，避免
+// 各路由 readdir 出第二份名册。返回完整 metadata（含 host 同域声明）。
+//
+// 名册缓存（短 TTL + in-flight 合并）：discoverAgents 是 prebuilt-agents
+// 全树 readdir + 逐 metadata.json 解析；热路径反复重扫——一次创建请求内
+// requireAgentLight 与 createPrebuiltSession 各扫一遍（顺序调用，仅靠
+// in-flight 合并去不掉），/api/agents 轮询也周期性重扫。名册只随
+// prebuilt-agents/ 源码变更（运行时无写入方，调用方已审计为只读），短 TTL
+// 把重复扫描收敛为每 TTL 一次。
+//
+// 契约：命中缓存时返回共享只读数组与条目（对齐 readSessionIndexShared
+// 的只读共享对象模式）；调用方不得修改，需要可变副本时自行浅拷贝。
+// 扫描失败不缓存——下一次调用重扫并重新报错，与无缓存行为一致。
+
+const DISCOVER_AGENTS_TTL_MS = 5000;
+const _discoverAgentsCache = new Map();
+const _discoverAgentsInFlight = new Map();
+
+/** 测试钩子：清空名册缓存（修改名册夹具后需要立即重扫时使用）。 */
+export function resetDiscoverAgentsCache() {
+  _discoverAgentsCache.clear();
+  _discoverAgentsInFlight.clear();
+}
 
 export async function discoverAgents(rootDir, currentDir = rootDir) {
+  if (currentDir !== rootDir) {
+    // 递归子目录调用：直接扫描，不走缓存（只有根调用才有缓存语义）。
+    return scanAgentsTree(rootDir, currentDir);
+  }
+  const cached = _discoverAgentsCache.get(rootDir);
+  if (cached && Date.now() - cached.at < DISCOVER_AGENTS_TTL_MS) {
+    return cached.agents;
+  }
+  const inFlight = _discoverAgentsInFlight.get(rootDir);
+  if (inFlight) return inFlight;
+
+  const pending = scanAgentsTree(rootDir, rootDir).then((agents) => {
+    _discoverAgentsCache.set(rootDir, { at: Date.now(), agents });
+    return agents;
+  });
+  _discoverAgentsInFlight.set(rootDir, pending);
+  try {
+    return await pending;
+  } finally {
+    if (_discoverAgentsInFlight.get(rootDir) === pending) {
+      _discoverAgentsInFlight.delete(rootDir);
+    }
+  }
+}
+
+async function scanAgentsTree(rootDir, currentDir) {
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   const results = [];
 
   for (const entry of entries) {
     const entryPath = path.join(currentDir, entry.name);
     if (entry.isDirectory()) {
-      results.push(...await discoverAgents(rootDir, entryPath));
+      results.push(...await scanAgentsTree(rootDir, entryPath));
       continue;
     }
 
