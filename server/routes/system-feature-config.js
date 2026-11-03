@@ -12,14 +12,31 @@ const CONTEXT_GUARD_MANIFEST = {
     sections: [{
       id: 'context-guard',
       title: '上下文保护',
-      properties: ['enabled'],
+      properties: ['mode', 'strategy'],
     }],
     properties: {
-      enabled: {
-        type: 'boolean',
-        default: true,
+      mode: {
+        type: 'select',
+        default: 'interrupt',
         title: '上下文保护',
-        description: '开启后，上下文超过压缩阈值时自动打断当前会话并提醒精简，同时拦截机器唤醒直到人工输入——那条输入即视为批准继续，本次越界期间不再拦截；上下文回落后再次越界会重新触发。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
+        options: [
+          { label: '关闭', value: 'off' },
+          { label: '自动打断', value: 'interrupt' },
+          { label: '自动接续', value: 'rotate' },
+        ],
+        description: '关闭 = 全停；自动打断 = 过界打断本轮并拦截机器唤醒直到人工输入——那条输入即视为批准继续，本次越界期间不再拦截；自动接续 = 过界打断后立即走线程接力（coder 同构）。自动接续档仅线程宿主工作空间（编程小助手）生效，其他工作空间启动时钳制为自动打断。旧布尔配置（enabled: true/false）兼容读取。仅交互式工作空间；coder / memo 线程自动接力不受此配置影响。',
+      },
+      strategy: {
+        type: 'select',
+        default: 'adaptive',
+        title: '接续策略',
+        options: [
+          { label: '自适应', value: 'adaptive' },
+          { label: '纯精简', value: 'trim' },
+          { label: '纯摘要', value: 'summary' },
+        ],
+        showWhen: { property: 'mode', values: ['rotate'] },
+        description: '自动接续采用的精简方式（会话内可随时经会话控制面板切换，下一次接力生效）。',
       },
     },
   },

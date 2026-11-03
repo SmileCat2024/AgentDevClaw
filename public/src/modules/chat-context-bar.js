@@ -200,7 +200,14 @@ function _buildCcbPopupHtml(d) {
   }
   // 超阈值自动打断：badge 的只读详情（开关在进度条组末端的盾牌图标）
   if (d.guard) {
-    ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '超阈值自动打断' : 'Auto-interrupt') + '</span><span class="ccb-popup-value">' + (d.guard.armed ? (isZh ? '开' : 'On') : (isZh ? '关' : 'Off')) + '</span></div>');
+    ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '超阈值守卫' : 'Context guard') + '</span><span class="ccb-popup-value">'
+      + (d.guard.mode === 'interrupt' ? (isZh ? '自动打断' : 'Auto-interrupt')
+        : d.guard.mode === 'rotate' ? (isZh ? '自动接续' : 'Auto-rotate') : (isZh ? '关闭' : 'Off'))
+      + (d.guard.mode === 'rotate' && d.guard.strategy
+        ? ' · ' + (d.guard.strategy === 'trim' ? (isZh ? '纯精简' : 'Trim')
+          : d.guard.strategy === 'summary' ? (isZh ? '纯摘要' : 'Summary') : (isZh ? '自适应' : 'Adaptive'))
+        : '')
+      + '</span></div>');
     if (d.guard.trip && d.guard.trip.inputTokens && d.guard.trip.thresholdTokens) {
       ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '最近触发' : 'Last trigger') + '</span><span class="ccb-popup-value ccb-popup-mono">' + _formatTokens(d.guard.trip.inputTokens) + ' / ' + _formatTokens(d.guard.trip.thresholdTokens) + '</span></div>');
     }

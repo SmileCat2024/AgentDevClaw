@@ -879,9 +879,17 @@ export function createAgentLifecycleModule(ctx) {
 
     app.post('/protoclaw/context_guard_control', express.json(), async (req, res, next) => {
       try {
-        const { armed } = req.body || {};
-        if (armed !== undefined && typeof armed !== 'boolean') {
-          return res.status(400).json({ ok: false, error: 'armed must be a boolean' });
+        // 三态控制载荷（ADR-0032 预留条目落地）：mode 三态 + 会话级接续策略。
+        // 旧字段 armed 不再接受，前端 badge 已同步换发 {mode, strategy}。
+        const { mode, strategy } = req.body || {};
+        if (mode !== undefined && !['off', 'interrupt', 'rotate'].includes(mode)) {
+          return res.status(400).json({ ok: false, error: 'mode must be one of off | interrupt | rotate' });
+        }
+        if (strategy !== undefined && !['adaptive', 'trim', 'summary'].includes(strategy)) {
+          return res.status(400).json({ ok: false, error: 'strategy must be one of adaptive | trim | summary' });
+        }
+        if (mode === undefined && strategy === undefined) {
+          return res.status(400).json({ ok: false, error: 'mode or strategy is required' });
         }
         let target;
         try {
@@ -914,8 +922,9 @@ export function createAgentLifecycleModule(ctx) {
           return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
         const result = await requestSessionRuntimeState(agentId, sessionId,
-          featureCommsRequest('context-guard', 'arm', {
-            ...(armed !== undefined ? { armed } : {}),
+          featureCommsRequest('context-guard', 'set', {
+            ...(mode !== undefined ? { mode } : {}),
+            ...(strategy !== undefined ? { strategy } : {}),
           }), 'feature-comms-result');
         if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
         res.json({ ok: true, agentId, sessionId, status: result.status });

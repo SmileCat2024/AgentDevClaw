@@ -253,6 +253,84 @@
       + '</div></div>';
   }
 
+  // ── 上下文接续策略（会话级，随守卫自动接续的接力事件生效）──────────
+  // 数据源与写路由都是 context-guard 的（badge 同源）：可见性 = 守卫挂载
+  // 且装配声明 allowRotation；策略值是会话级事实，badge 恒显示当前模式，
+  // 策略行只在面板中呈现。选择器复用 trim-page-mode 三选一 segmented 配方。
+
+  const GUARD_STRATEGY_OPTIONS = [
+    { value: 'adaptive', zh: '自适应', en: 'Adaptive', zhDesc: '先精简，不足再逐级升级摘要', enDesc: 'Trim first; escalate to summary only if needed' },
+    { value: 'trim', zh: '纯精简', en: 'Trim', zhDesc: '折叠工具活动，保留对话与最近工具调用', enDesc: 'Fold tool activity; keep dialogue and recent tool calls' },
+    { value: 'summary', zh: '纯摘要', en: 'Summary', zhDesc: '整会话浓缩为一份摘要', enDesc: 'Condense the whole session into one summary' },
+  ];
+
+  let _guardStrategyPending = false;
+  let _guardStrategyError = '';
+
+  function guardStrategyVisible() {
+    const detail = window.ContextGuardToggle?.getDetail?.();
+    return window.ContextGuardToggle?.isAvailable?.() === true && detail?.allowRotation === true;
+  }
+
+  function renderGuardStrategySection({ zh, writeEnabled = true }) {
+    if (!guardStrategyVisible()) return '';
+    const detail = window.ContextGuardToggle.getDetail();
+    const current = detail.strategy === 'trim' || detail.strategy === 'summary' ? detail.strategy : 'adaptive';
+    const disabled = _guardStrategyPending || !writeEnabled;
+    // 卡片形态对标 Coder 策略页的运行模式三栏切换（ph-pm-card 单选卡片）
+    const cards = GUARD_STRATEGY_OPTIONS.map((option) => {
+      const active = option.value === current;
+      return '<div class="ph-pm-card' + (active ? ' active' : '') + (disabled ? ' is-locked' : '') + '"'
+        + ' data-guard-strategy="' + option.value + '"'
+        + ' aria-pressed="' + (active ? 'true' : 'false') + '"'
+        + (disabled ? ' aria-disabled="true"' : '') + '>'
+        + '<div class="ph-pm-radio' + (active ? ' checked' : '') + '"></div>'
+        + '<div class="ph-pm-card-body">'
+        + '<div class="ph-pm-card-title">' + esc(zh ? option.zh : option.en) + '</div>'
+        + '<div class="ph-pm-card-desc">' + esc(zh ? option.zhDesc : option.enDesc) + '</div>'
+        + '</div>'
+        + '</div>';
+    }).join('');
+    const rows = [];
+    if (_guardStrategyError) rows.push('<div class="session-controls-guard-error">' + esc(_guardStrategyError) + '</div>');
+    return [
+      '<section class="force-continuation-candidates session-controls-guard-strategy">',
+      '<div class="force-continuation-group-label">', zh ? '上下文接续' : 'CONTEXT ROTATION', '</div>',
+      ...rows,
+      '<div class="ph-pm-body ph-coder-runtime-options session-controls-guard-strategy-options">', cards, '</div>',
+      '<div class="force-continuation-candidate-desc">', zh
+        ? '触发线程接力时使用的策略；仅当前会话生效。'
+        : 'Strategy applied when the thread relays; this session only.', '</div>',
+      '</section>',
+    ].join('');
+  }
+
+  async function updateGuardStrategy(strategy) {
+    if (strategy !== 'adaptive' && strategy !== 'trim' && strategy !== 'summary') return;
+    if (!guardStrategyVisible() || !panelWriteEnabled()) return;
+    const sessionId = currentSessionId();
+    if (!sessionId || !focusedAgentId || _guardStrategyPending) return;
+    _guardStrategyPending = true;
+    _guardStrategyError = '';
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    try {
+      const response = await fetch('/protoclaw/context_guard_control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+        body: JSON.stringify({ agentId: panelAgentId(), sessionId, strategy }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
+      // 应答携带最新守卫状态：直接回填 badge 缓存（策略选择器与 badge 同源）
+      window.ContextGuardToggle?.applyStatus?.(payload, currentRuntimeAgentId);
+      if (typeof window._scheduleInspectorRefresh === 'function') window._scheduleInspectorRefresh(120);
+    } catch (error) {
+      _guardStrategyError = String(error?.message || error);
+    }
+    _guardStrategyPending = false;
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+  }
+
   function renderAutoResumeSection({ item, zh, writeEnabled = true }) {
     const disabled = item.pending || !writeEnabled;
     const triggers = getTriggers(item);
@@ -306,7 +384,7 @@
         zh,
       );
     }
-    if (!caps.fc && !caps.rot && !caps.style) {
+    if (!caps.fc && !caps.rot && !caps.style && !guardStrategyVisible()) {
       return renderEmpty(
         zh ? '此控制在当前工作空间不可用。' : 'This control is not available in the current workspace.',
         zh,
@@ -325,7 +403,12 @@
       void refreshStatus({ renderWhenDone: true });
     }
 
+    // 上下文守卫（badge 三态的上边栏数据源）：仅守卫挂载且装配开通自动接续
+    // 的会话显示策略选择器；状态真值经 ContextGuardToggle 缓存（poll 收口）。
+    const guardSection = renderGuardStrategySection({ zh, writeEnabled });
+
     const sections = [];
+    if (guardSection) sections.push(guardSection);
     if (caps.fc) sections.push(renderAutoResumeSection({ item, zh, writeEnabled: writeEnabled }));
     if (caps.rot) sections.push(renderRotationSection({ zh, writeEnabled }));
     if (caps.style) sections.push(renderStyleSection({ zh, writeEnabled }));
@@ -423,6 +506,11 @@
   // 轮转模型/档位下拉：触发按钮打开 body 级浮层（ccb-model-dropdown 同款），
   // 选中项在浮层内直接提交，见 openRotationMenu。输出风格下拉同配方（openStyleMenu）。
   featurePanelBody.addEventListener('click', (event) => {
+    const guardStrategy = event.target?.closest?.('[data-guard-strategy]');
+    if (guardStrategy && guardStrategy.getAttribute('aria-disabled') !== 'true') {
+      void updateGuardStrategy(guardStrategy.dataset.guardStrategy);
+      return;
+    }
     const menuBtn = event.target?.closest?.('[data-rotation-menu]');
     if (menuBtn && !menuBtn.disabled) openRotationMenu(menuBtn);
     const styleMenuBtn = event.target?.closest?.('[data-style-menu]');
@@ -982,6 +1070,7 @@
     updateRotationConfig,
     refreshStyleStatus,
     updateStyleSelection,
+    updateGuardStrategy,
     // 消费方按已探明的挂载集决定是否发请求；探测未决时返回 false，避免对
     // 不支持的 runtime 打出 503。
     isAvailable: () => {

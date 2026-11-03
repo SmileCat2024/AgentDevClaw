@@ -381,3 +381,138 @@ describe('SessionControlsPanel output style (stylized-output)', () => {
     assert.deepEqual(body.args, { styleName: null });
   });
 });
+describe('SessionControlsPanel: guard rotation strategy selector', () => {
+  const GUARD_STATUS = { mode: 'rotate', strategy: 'adaptive', allowRotation: true, trip: null, thresholdTokens: 160000 };
+
+  function guardPanelSandbox(overrides = {}) {
+    const calls = [];
+    const guardState = { status: { ...GUARD_STATUS } };
+    const ctx = createFrontendSandbox({
+      focusedAgentId: 'programming-helper',
+      currentRuntimeAgentId: 'runtime-a',
+      currentLanguage: 'zh',
+      URLSearchParams,
+      featurePanelBody: { addEventListener() {} },
+      activeFeaturePanel: 'session-controls',
+      getRuntimeWorkspaceSessionId: () => 'session-a',
+      getActiveWorkspaceSessionId: () => 'session-a',
+      renderFeaturePanel() {},
+      newIdempotencyKey: () => 'test-idem-key',
+      currentHookInspector: {
+        lifecycleOrder: [],
+        features: [
+          { name: 'force-continuation' },
+          { name: 'step-rotating-model' },
+          { name: 'context-guard' },
+        ],
+        hooks: [],
+      },
+      fetch: async (url, options = {}) => {
+        calls.push({ url, options });
+        if (String(url) === '/protoclaw/context_guard_control') {
+          const body = options.body ? JSON.parse(options.body) : null;
+          if (body && body.strategy) guardState.status = { ...guardState.status, strategy: body.strategy };
+          return { ok: true, status: 200, json: async () => ({ ok: true, status: { ...guardState.status } }) };
+        }
+        if (String(url).includes('force_continuation_status')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              status: {
+                enabled: false,
+                triggers: { outputTruncation: true, apiErrorRetry: true },
+                maxConsecutiveContinuations: 3,
+              },
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      },
+      ...overrides,
+    });
+    ctx.window.setInterval = () => 0;
+    ctx.loadSource('public/src/modules/context-guard-toggle.js');
+    ctx.loadSource('public/src/modules/session-controls-panel.js');
+    ctx.run(`window.ContextGuardToggle.applyStatus({ status: ${JSON.stringify(GUARD_STATUS)} }, "runtime-a")`);
+    return { ctx, calls, guardState };
+  }
+
+  it('renders the segmented selector first with the current strategy active', async () => {
+    const { ctx } = guardPanelSandbox();
+    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
+    const html = ctx.run('window.SessionControlsPanel.render()');
+    const selectorAt = html.indexOf('data-guard-strategy');
+    assert.ok(selectorAt > -1, 'strategy selector rendered');
+    assert.ok(selectorAt < html.indexOf('API 重试'), 'selector sits at the top of the panel');
+    // 卡片形态对标 Coder 策略页运行模式三栏切换（ph-pm-card 单选卡片）
+    assert.match(html, /ph-coder-runtime-options/);
+    assert.match(html, /data-guard-strategy="adaptive"[^>]*aria-pressed="true"/);
+    assert.match(html, /class="ph-pm-card active" data-guard-strategy="adaptive"/);
+    assert.match(html, /data-guard-strategy="adaptive"[^>]*>\s*<div class="ph-pm-radio checked"/);
+    assert.match(html, /data-guard-strategy="trim"[^>]*aria-pressed="false"/);
+    assert.match(html, /data-guard-strategy="summary"[^>]*aria-pressed="false"/);
+    assert.match(html, /自适应/);
+    assert.match(html, /纯精简/);
+    assert.match(html, /纯摘要/);
+    // 说明句只保留核心语义（触发线程接力时使用的策略）
+    assert.match(html, /触发线程接力时使用的策略/);
+    assert.doesNotMatch(html, /上边栏守卫第三档/);
+  });
+
+  it('hides the selector when rotation is not allowed for the assembly', async () => {
+    const { ctx } = guardPanelSandbox();
+    ctx.run('window.ContextGuardToggle.applyStatus({ status: { mode: "interrupt", strategy: "adaptive", allowRotation: false, trip: null, thresholdTokens: 160000 } }, "runtime-a")');
+    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
+    const html = ctx.run('window.SessionControlsPanel.render()');
+    assert.doesNotMatch(html, /data-guard-strategy/);
+    assert.match(html, /API 重试/, 'the rest of the panel still renders');
+  });
+
+  it('posts the chosen strategy through context_guard_control and syncs the badge cache', async () => {
+    const { ctx, calls } = guardPanelSandbox();
+    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
+
+    await ctx.run('window.SessionControlsPanel.updateGuardStrategy("summary")');
+
+    const write = calls.find((c) => c.url === '/protoclaw/context_guard_control');
+    assert.ok(write, 'guard control write posted');
+    assert.equal(write.options.method, 'POST');
+    assert.deepEqual(JSON.parse(write.options.body), {
+      agentId: 'programming-helper',
+      sessionId: 'session-a',
+      strategy: 'summary',
+    });
+    // 应答回填 badge 缓存（策略选择器与 badge 同源）：detail 反映新策略
+    assert.equal(ctx.run('window.ContextGuardToggle.getDetail()').strategy, 'summary');
+    const html = ctx.run('window.SessionControlsPanel.render()');
+    assert.match(html, /data-guard-strategy="summary"[^>]*aria-pressed="true"/);
+  });
+
+  it('shows the write error inline without disturbing the badge cache', async () => {
+    const { ctx } = guardPanelSandbox({
+      fetch: async (url) => {
+        if (String(url) === '/protoclaw/context_guard_control') {
+          return { ok: false, status: 503, json: async () => ({ ok: false, error: 'not mounted' }) };
+        }
+        if (String(url).includes('force_continuation_status')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, status: { enabled: false, triggers: {}, maxConsecutiveContinuations: 3 } }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      },
+    });
+    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
+
+    await ctx.run('window.SessionControlsPanel.updateGuardStrategy("trim")');
+
+    const html = ctx.run('window.SessionControlsPanel.render()');
+    assert.match(html, /session-controls-guard-error/);
+    assert.match(html, /not mounted/);
+    assert.equal(ctx.run('window.ContextGuardToggle.getDetail()').strategy, 'adaptive', 'badge cache untouched on failure');
+  });
+});

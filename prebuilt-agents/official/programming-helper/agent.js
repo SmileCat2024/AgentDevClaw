@@ -192,15 +192,19 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 工程素养提醒：首次写出成规模文档（write ≥30 行 / edit 的 markdown/txt
     // 文件）后注入读者视角写法标准，每会话一次。状态经框架会话快照持久化。
     this.use(new CraftAwarenessFeature());
-    // 过界自动打断（按越界事件的一次性保险丝）：manifest（Runtime 配置面板）
-    // 决定会话启动初值，上边栏 badge 可实时开关（触发不翻转它）。触发后拦截
-    // 机器唤醒直到人工输入——那条输入即视为批准继续，本次越界期间维持放行，
-    // 用量回落阈值下方后再次越界会重新触发。
+    // 过界守卫（三态 badge：关闭 / 自动打断 / 自动接续）：manifest（Runtime
+    // 配置面板）决定会话启动初值，上边栏 badge 循环点击实时切换（触发不
+    // 翻转它）。interrupt = 按越界事件的一次性保险丝：触发后拦截机器唤醒
+    // 直到人工输入——那条输入即视为批准继续，本次越界期间维持放行；rotate
+    // = coder 同构的自动接续：过界打断后经服务端 thread-rotation 执行线程
+    // 接力（策略经会话控制面板选择，随事件载荷送达）。allowRotation 是
+    // 装配能力声明（编程小助手是线程宿主），显式放末位防配置覆盖。
     this.use(new ContextGuardFeature({
       ...(merged['context-guard'] && typeof merged['context-guard'] === 'object'
         ? merged['context-guard'] : {}),
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
+      allowRotation: true,
     }));
 
     // 工具输出安全网：截断超限的工具结果，防止上下文溢出。

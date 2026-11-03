@@ -28,7 +28,7 @@
 
 - `/trim` `/summary` 与精简配置页**保留**，行为改为**对话内接续**：触发线程 succession 事务（挡板 → 变换 → successor → head 推进），不再产生「新会话 + 导航切换」的体验。变换参数（模式 / 比例 / 摘要选项）沿用现有精简页。
 - slash 命令 `applies` 谓词调整：现状对线程宿主会话一刀切隐藏手动命令（coder 口径，因其有自动接续）；编程小助手保留手动入口——谓词按「是否装配自动接续」或 APP 声明显式区分。
-- 上下文阈值自动接续（coder 的 ContextRotationTriggerFeature 同构）与 adaptive 轮换策略为后续独立决策；本 ADR 期间上下文提醒沿用 context-guard 既有提示。
+- 上下文阈值自动接续（coder 的 ContextRotationTriggerFeature 同构）与 adaptive 轮换策略为后续独立决策；本 ADR 期间上下文提醒沿用 context-guard 既有提示。（已由 [ADR-0040](0040-context-guard-tri-state-auto-rotation.md) 关闭：守卫三态化，自动接续档落地。）
 
 ### 3. 前端：对话锚 + 时间锚历史存档
 

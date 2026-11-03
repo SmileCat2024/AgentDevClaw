@@ -47,6 +47,9 @@ function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
   const trip = payload && typeof payload === 'object' && payload.status && typeof payload.status === 'object'
     ? payload.status.trip : null;
   if (!trip || typeof trip !== 'object') return;
+  // rotate 触发的 trip 由线程接力承载（前端有「上下文接力中…」既有提示），
+  // 打断 toast 只属于 interrupt 态；mode 缺席（远程旧版）按 interrupt 提示。
+  if (trip.mode === 'rotate') return;
   // 只提醒页面加载之后发生的 trip：刷新页面或切回已触发过的会话不再打扰。
   const tripAt = Number(trip.at);
   if (Number.isFinite(tripAt) && tripAt > 0 && tripAt < _contextGuardPageLoadedAt) return;

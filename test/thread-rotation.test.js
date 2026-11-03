@@ -286,4 +286,33 @@ describe('thread rotation strategy dispatch (声明驱动三选一)', () => {
     assert.equal(calls.compact[0].appendSummary, true);
     assert.equal(calls.strategy.length, 0);
   });
+
+  it('session strategy payload wins and skips the app-level resolver', async () => {
+    // 交互守卫自动接续态：事件载荷携带会话级策略，判定链不应再被现读。
+    const { service, calls } = buildDeps({ thread, strategy: 'summary' });
+    const result = await service.handleContextGuard('programming-helper', 'session-1', 'trim');
+    assert.equal(result.applied, true);
+    assert.deepEqual(calls.compact, [{
+      preferredAgentId: 'programming-helper',
+      sessionId: 'session-1',
+      policy: { strategy: 'trim-transcript', keepRecentToolCalls: 5 },
+      appendSummary: false,
+      startRuntime: true,
+    }]);
+    assert.equal(calls.strategy.length, 0, 'payload present → resolver must not be consulted');
+  });
+
+  it('non-enum session payload falls back to the app-level resolver', async () => {
+    const { service, calls } = buildDeps({ thread, strategy: 'adaptive' });
+    const result = await service.handleContextGuard('programming-helper', 'session-1', 'bogus');
+    assert.equal(result.applied, true);
+    assert.equal(calls.strategy.length, 1, 'invalid payload → app-level chain resolves');
+    assert.deepEqual(calls.compact, [{
+      preferredAgentId: 'programming-helper',
+      sessionId: 'session-1',
+      policy: { strategy: 'adaptive', keepRecentToolCalls: 5 },
+      appendSummary: false,
+      startRuntime: true,
+    }]);
+  });
 });

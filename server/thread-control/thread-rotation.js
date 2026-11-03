@@ -108,7 +108,15 @@ export function createThreadRotationService({
     return { policy: { strategy: 'trim-transcript' }, appendSummary: true };
   }
 
-  async function rotate(agentId, sessionId) {
+  /**
+   * 会话级接续策略载荷（context_guard_event 携带）：仅接受三个枚举值，
+   * 其他值（含 undefined / 旧版未携带）一律视为未声明，回落 APP 级判定链。
+   */
+  function normalizeSessionStrategy(strategy) {
+    return strategy === 'trim' || strategy === 'summary' || strategy === 'adaptive' ? strategy : null;
+  }
+
+  async function rotate(agentId, sessionId, sessionStrategy = null) {
     const thread = await threadCore.findThreadByHeadSession(agentId, sessionId);
     if (!thread || thread.status === 'closed') return null;
     // T005：删除中的线程不启动接力（与 integration.beginSessionSuccession /
@@ -140,8 +148,11 @@ export function createThreadRotationService({
         //   'adaptive' → 自适应阶梯（试探 trim 定档，见 adaptive-rotation.js）
         //   null（未声明，如 memo 等未声明权限项的线程宿主）→ 维持组合
         //   trim+追加摘要（现状语义，试验不波及其他宿主）。
-        // 策略每次接力现读（用户覆盖 > 作者默认），改配置对下一次接力即时生效。
-        ...buildRotationHandoffOptions(await resolveRotationStrategyOption(agentId)),
+        // 策略每次接力现读：会话级载荷（交互守卫的自动接续态随事件上报）优先，
+        // 无载荷回落 APP 级判定链（用户覆盖 > 作者默认），改配置对下一次接力即时生效。
+        ...buildRotationHandoffOptions(
+          normalizeSessionStrategy(sessionStrategy) ?? await resolveRotationStrategyOption(agentId),
+        ),
         startRuntime: true,
       });
       const nextSessionId = cleanSessionText(result?.session?.id);
@@ -217,14 +228,16 @@ export function createThreadRotationService({
   /**
    * context guard 事件入口：被阻断的会话是某活跃线程的 head 时执行接力。
    * 纯 session 会话（无线程）：no-op，保持纯会话语义不变。
+   * sessionStrategy：会话级接续策略载荷（交互守卫的自动接续态上报），
+   * 有效值优先于 APP 级判定链，无效/未携带回落。
    */
-  async function handleContextGuard(agentId, sessionId) {
+  async function handleContextGuard(agentId, sessionId, sessionStrategy = null) {
     const normalizedAgentId = String(agentId || '').trim();
     const normalizedSessionId = String(sessionId || '').trim();
     if (!normalizedAgentId || !normalizedSessionId) return null;
 
     if (inflight.has(normalizedSessionId)) return inflight.get(normalizedSessionId);
-    const task = rotate(normalizedAgentId, normalizedSessionId)
+    const task = rotate(normalizedAgentId, normalizedSessionId, sessionStrategy)
       .finally(() => inflight.delete(normalizedSessionId));
     inflight.set(normalizedSessionId, task);
     return task;

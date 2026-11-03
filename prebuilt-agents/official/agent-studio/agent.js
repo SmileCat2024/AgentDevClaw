@@ -66,8 +66,10 @@ export class AgentStudioAgent extends BasicAgent {
       ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
         ? config.features['force-continuation'] : {}),
     }));
-    // 过界自动打断（按越界事件的一次性保险丝）：manifest 决定会话启动初值，
-    // badge 可实时开关；触发后拦截机器唤醒直到人工输入（= 批准继续）。
+    // 过界守卫（两态：关闭 / 自动打断——agent-studio 会话非线程宿主，
+    // 装配不声明 allowRotation，自动接续档与策略项从 manifest 摘除）：
+    // manifest 决定会话启动初值，badge 循环点击实时切换；触发后拦截
+    // 机器唤醒直到人工输入（= 批准继续）。
     this.use(new ContextGuardFeature({
       ...(systemFeatureConfig['context-guard'] && typeof systemFeatureConfig['context-guard'] === 'object'
         ? systemFeatureConfig['context-guard'] : {}),

@@ -190,7 +190,7 @@ describe('panel endpoint remote namespace branches (R2-04)', () => {
       const res = silentRes();
       await handler(
         {
-          body: { agentId: NAMESPACE, sessionId: NS_SESSION, armed: true, idempotencyKey: 'idem-guard' },
+          body: { agentId: NAMESPACE, sessionId: NS_SESSION, mode: 'interrupt', idempotencyKey: 'idem-guard' },
           headers: {},
         },
         res,
@@ -200,7 +200,7 @@ describe('panel endpoint remote namespace branches (R2-04)', () => {
       assert.deepEqual(res.jsonPayload, { ok: true, via: 'remote' });
       const sent = JSON.parse(fetchMock.calls[0].init.body);
       assert.deepEqual(sent, {
-        armed: true,
+        mode: 'interrupt',
         idempotencyKey: 'idem-guard',
         agentId: 'agent-9',
         runtimeId: null,
@@ -295,7 +295,7 @@ describe('remote write idempotency gate for panel controls', () => {
       const guardControl = captureLifecycleHandler('/protoclaw/context_guard_control', 'post');
       const guardRes = silentRes();
       await guardControl(
-        { body: { agentId: NAMESPACE, sessionId: NS_SESSION, armed: true }, headers: {} },
+        { body: { agentId: NAMESPACE, sessionId: NS_SESSION, mode: 'interrupt' }, headers: {} },
         guardRes,
         (e) => { throw e; },
       );
@@ -326,7 +326,7 @@ describe('remote write idempotency gate for panel controls', () => {
       const handler = captureLifecycleHandler('/protoclaw/context_guard_control', 'post');
       const res = silentRes();
       await handler(
-        { body: { agentId: NAMESPACE, sessionId: NS_SESSION, armed: true }, headers: { 'x-idempotency-key': 'idem-header' } },
+        { body: { agentId: NAMESPACE, sessionId: NS_SESSION, mode: 'interrupt' }, headers: { 'x-idempotency-key': 'idem-header' } },
         res,
         (e) => { throw e; },
       );
@@ -344,7 +344,7 @@ describe('remote write idempotency gate for panel controls', () => {
       const handler = captureLifecycleHandler('/protoclaw/context_guard_control', 'post');
       const res = silentRes();
       await handler(
-        { body: { agentId: 'local-agent', sessionId: 'local-session', armed: true }, headers: {} },
+        { body: { agentId: 'local-agent', sessionId: 'local-session', mode: 'interrupt' }, headers: {} },
         res,
         (e) => { throw e; },
       );
@@ -490,7 +490,7 @@ describe('local panel branches stay off the wire', () => {
       const guardControl = captureLifecycleHandler('/protoclaw/context_guard_control', 'post');
       const guardControlRes = silentRes();
       await guardControl(
-        { body: { agentId: 'local-agent', sessionId: 'local-session', armed: true }, headers: {} },
+        { body: { agentId: 'local-agent', sessionId: 'local-session', mode: 'interrupt' }, headers: {} },
         guardControlRes,
         (e) => { throw e; },
       );
@@ -627,7 +627,7 @@ describe('frontend session-controls-panel identity (R2-04)', () => {
     assert.equal(JSON.parse(invoke.init.body).runtimeId, 'remote:server-a:rt-1', 'invoke forwards the runtime ref for bare-id rewrite');
     assert.equal(JSON.parse(invoke.init.body).ref, 'stylized-output.configure');
     const guardWrite = writes.find((c) => c.url === '/protoclaw/context_guard_control');
-    assert.equal(JSON.parse(guardWrite.init.body).armed, true, 'badge toggle posts the next armed value');
+    assert.equal(JSON.parse(guardWrite.init.body).mode, 'interrupt', 'badge toggle posts the next cycle mode');
   });
 });
 

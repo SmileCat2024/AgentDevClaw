@@ -1456,15 +1456,22 @@ describe('runtime-status: context guard trip toast', () => {
     return ctx;
   }
 
-  it('toasts once for a fresh trip and stays silent for repeats', () => {
+  it('toasts once for a fresh interrupt trip and stays silent for repeats', () => {
     const ctx = loadWithToastSpy();
-    const trip = { at: Date.now() + 5000, thresholdTokens: 800, inputTokens: 820, reason: 'x' };
+    const trip = { at: Date.now() + 5000, thresholdTokens: 800, inputTokens: 820, reason: 'x', mode: 'interrupt' };
     ctx.run(`applyContextGuardStatus({ status: { armed: false, trip: ${JSON.stringify(trip)} } }, 'rt-1')`);
     ctx.run(`applyContextGuardStatus({ status: { armed: false, trip: ${JSON.stringify(trip)} } }, 'rt-1')`);
     const shown = ctx.run('window.ClawToast.shown');
     assert.equal(shown.length, 1);
     assert.equal(shown[0].status, 'warning');
     assert.match(shown[0].description, /820/);
+  });
+
+  it('stays silent for rotate trips: the thread relay indicator carries the process', () => {
+    const ctx = loadWithToastSpy();
+    const trip = { at: Date.now() + 5000, thresholdTokens: 800, inputTokens: 820, reason: 'x', mode: 'rotate' };
+    ctx.run(`applyContextGuardStatus({ status: { mode: 'rotate', trip: ${JSON.stringify(trip)} } }, 'rt-1')`);
+    assert.equal(ctx.run('window.ClawToast.shown.length'), 0);
   });
 
   it('ignores trips from before the page loaded (reload / session switch back)', () => {
