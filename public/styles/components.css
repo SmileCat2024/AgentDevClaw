@@ -12863,6 +12863,9 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 .wg-thread-task.cancelled { opacity: .62; }
 .wg-thread-task.cancelled > span:nth-child(2) { text-decoration: line-through; }
 .wg-thread-task-result { margin-left: auto; font-size: 10px; white-space: nowrap; }
+/* deliver 副行：inline-block 使其脱离父级 text-decoration 传播，
+   终态行删除线只落在任务标题上。 */
+.wg-thread-task-deliver { display: inline-block; width: 100%; margin-top: 1px; font-style: normal; font-size: 11px; color: var(--text-secondary); }
 
 .wg-thread-task-icon {
   width: 9px;

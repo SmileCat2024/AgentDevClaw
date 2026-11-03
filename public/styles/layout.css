@@ -5663,7 +5663,8 @@ body[data-theme="light"] .logf-json {
 }
 
 .plan-task.status-deleted .plan-task-title,
-.plan-task.status-deleted .plan-task-desc {
+.plan-task.status-deleted .plan-task-desc,
+.plan-task.status-deleted .plan-task-deliver {
   opacity: 0.72;
 }
 
@@ -5673,6 +5674,20 @@ body[data-theme="light"] .logf-json {
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 交付物：一行文字，与 meta 同档（11px / 次级色），比描述正文小一级。
+   超长时截断为两行，完整内容经 title 悬停查看，不引入第二层展开交互。 */
+.plan-task-deliver {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   overflow-wrap: anywhere;
 }
 

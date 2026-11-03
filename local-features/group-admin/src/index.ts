@@ -482,7 +482,8 @@ export class GroupAdminFeature implements AgentFeature {
               const icon = task.status === 'completed' ? '✓'
                 : ['deleted', 'cancelled', 'canceled'].includes(task.status) ? '×'
                   : task.status === 'in_progress' ? '◐' : '○';
-              lines.push(`  ${icon} ${task.activeForm || task.subject || '(未命名)'}`);
+              const deliver = typeof task.deliver === 'string' && task.deliver ? `（交付：${task.deliver}）` : '';
+              lines.push(`  ${icon} ${task.activeForm || task.subject || '(未命名)'}${deliver}`);
             }
             if ((thread.lineage || []).length > 1) {
               lines.push('', '会话脉络：');
@@ -837,7 +838,8 @@ export class GroupAdminFeature implements AgentFeature {
             };
             const lines = tasks.map((t: any) => {
               const icon = statusIcons[t.status] || '?';
-              return `  ${icon} ${t.subject || '(未命名)'}`;
+              const deliver = t.deliver ? `（交付：${t.deliver}）` : '';
+              return `  ${icon} ${t.subject || '(未命名)'}${deliver}`;
             });
             const header = tasks.length > 0
               ? `会话 ${sessionId} 的任务 (${summary.completed || 0}/${summary.total || 0} 完成)：`

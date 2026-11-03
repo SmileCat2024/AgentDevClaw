@@ -140,6 +140,17 @@ describe('frontend normalizeTodoPlan round-trip', () => {
     assert.equal(output.interruptTargetId, null);
   });
 
+  it('preserves deliver through normalize', () => {
+    const ctx = createTodoSandbox();
+    const plan = buildFullPlan();
+    plan.tasks[0].deliver = 'test/foo.test.js 通过';
+    ctx.run(`globalThis.__testInput = ${JSON.stringify(plan)}`);
+    const output = ctx.run('normalizeTodoPlan(globalThis.__testInput)');
+
+    // 交付物是面板副行的唯一数据来源，normalize 重建任务对象时不能丢
+    assert.equal(output.tasks[0].deliver, 'test/foo.test.js 通过');
+  });
+
   it('round-trip stability: normalize(normalize(x)) deep-equals normalize(x)', () => {
     const ctx = createTodoSandbox();
     ctx.run(`globalThis.__testInput = ${JSON.stringify(buildFullPlan())}`);
@@ -306,6 +317,65 @@ describe('frontend terminal task detail expansion', () => {
 
     assert.ok(html.includes('D-a'));
     assert.ok(!html.includes('data-plan-task-detail'));
+  });
+
+  it('renders deliver on its own line, still weaker than the description', () => {
+    const ctx = createTodoSandbox();
+    const withDeliver = (status) => {
+      const task = { ...mkTask('a', status, 'D-a'), deliver: 'src/a.ts 已提交' };
+      return ctx.run(`renderPlanTask(${JSON.stringify(task)})`);
+    };
+
+    // 非终态：交付物是描述之外的独立一行，单节点无嵌套
+    const inline = withDeliver('in_progress');
+    assert.match(inline, /class="plan-task-deliver"[^>]*>交付 · src\/a\.ts 已提交</);
+    assert.match(inline, /class="plan-task-desc">D-a</);
+    assert.ok(!inline.includes('plan-task-deliver-label'));
+
+    // 终态默认收起详情，交付物随之折叠（与描述同一折叠口径）
+    const collapsed = withDeliver('completed');
+    assert.ok(!collapsed.includes('src/a.ts 已提交'));
+    assert.ok(!collapsed.includes('D-a'));
+    assert.ok(collapsed.includes('data-plan-task-detail="a"'));
+  });
+
+  it('expands deliver together with description for terminal tasks', () => {
+    const ctx = createTodoSandbox();
+    ctx.run('_planTerminalDetailState.set("a", true)');
+    const task = { ...mkTask('a', 'completed', 'D-a'), deliver: 'src/a.ts 已提交' };
+    const html = ctx.run(`renderPlanTask(${JSON.stringify(task)})`);
+
+    assert.ok(html.includes('D-a'));
+    assert.match(html, /class="plan-task-deliver"[^>]*>交付 · src\/a\.ts 已提交</);
+    assert.match(html, /aria-expanded="true"/);
+  });
+
+  it('keeps the full deliver text reachable when the line is clamped', () => {
+    const ctx = createTodoSandbox();
+    const long = 'src/a.ts 与 src/b.ts 都已提交，附三条回归用例';
+    const task = { ...mkTask('a', 'in_progress', ''), deliver: long };
+    const html = ctx.run(`renderPlanTask(${JSON.stringify(task)})`);
+
+    // 视觉上截断为两行，完整内容仍在 title 里，不丢失信息
+    assert.match(html, new RegExp(`title="${long}"`));
+    assert.ok(html.includes(long));
+  });
+
+  it('makes a terminal task expandable when only deliver exists', () => {
+    const ctx = createTodoSandbox();
+    const task = { ...mkTask('a', 'completed', ''), deliver: 'src/a.ts 已提交' };
+    const html = ctx.run(`renderPlanTask(${JSON.stringify(task)})`);
+
+    // 无描述但有交付物：仍可展开查看结果
+    assert.match(html, /data-plan-task-detail="a"/);
+    assert.ok(!html.includes('src/a.ts 已提交'));
+  });
+
+  it('omits the deliver line when the task has none', () => {
+    const ctx = createTodoSandbox();
+    const html = ctx.run(`renderPlanTask(${JSON.stringify(mkTask('a', 'in_progress', 'D-a'))})`);
+
+    assert.ok(!html.includes('交付'));
   });
 
   it('keeps every terminal task detail collapsed when a fold run is expanded', () => {

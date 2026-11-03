@@ -60,6 +60,7 @@ function normalizeTodoTask(task) {
     id,
     subject: cleanText(task.subject),
     description: cleanText(task.description),
+    deliver: cleanText(task.deliver) || undefined,
     status,
     metadata: task.metadata && typeof task.metadata === 'object' ? cloneJson(task.metadata) : undefined,
     createdAt: typeof task.createdAt === 'number' ? task.createdAt : 0,

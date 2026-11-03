@@ -78,6 +78,17 @@ describe('work-thread panel semantics', () => {
     assert.ok(html.includes('1 分钟前'));
   });
 
+  it('renders the deliver line when the Task carries one', () => {
+    const ctx = loadPanel();
+    const withDeliver = ctx.run(`_renderTask({
+      status: 'completed', subject: '修复登录', deliver: 'src/auth.ts 已提交'
+    })`);
+    const withoutDeliver = ctx.run(`_renderTask({ status: 'pending', subject: '修复登出' })`);
+
+    assert.ok(withDeliver.includes('交付: src/auth.ts 已提交'));
+    assert.ok(!withoutDeliver.includes('交付'));
+  });
+
   it('offers archive and unarchive as direct thread actions', () => {
     const ctx = loadPanel();
     const activeHtml = ctx.run(`_renderCardActions({

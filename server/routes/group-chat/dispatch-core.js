@@ -588,8 +588,10 @@ export function createDispatchCoreModule(deps) {
           break;
         case 'task_completed': {
           const taskTitle = message.event?.taskTitle || '';
+          const taskDeliver = message.event?.taskDeliver || '';
           const threadTitle = message.event?.threadTitle || message.event?.sessionTitle || '未命名工作';
-          activityDesc = `系统事件：${evtName} · 工作线程「${threadTitle}」Task 完成：${taskTitle}`;
+          activityDesc = `系统事件：${evtName} · 工作线程「${threadTitle}」Task 完成：${taskTitle}`
+            + (taskDeliver ? `（交付：${taskDeliver}）` : '');
           break;
         }
         default:
@@ -1093,6 +1095,7 @@ export function createDispatchCoreModule(deps) {
             sessionTitle: sessionInfo.sessionTitle,
             taskId,
             taskTitle: task.subject || task.description || `Task #${taskId}`,
+            taskDeliver: typeof task.deliver === 'string' ? task.deliver : '',
             idempotencyKey: `task_completed:${sessionInfo.sessionId}:${taskId}`,
             workspaceId: sessionInfo.identityRef.split(':')[0],
           },

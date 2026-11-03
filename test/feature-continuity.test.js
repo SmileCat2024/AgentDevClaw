@@ -48,6 +48,7 @@ describe('feature continuity protocol (descriptor-driven)', () => {
                   id: '1',
                   subject: 'Keep the plan',
                   description: 'This should survive compact/trim.',
+                  deliver: 'test/plan.test.js 通过',
                   status: 'in_progress',
                   createdAt: 10,
                   updatedAt: 20,
@@ -70,6 +71,8 @@ describe('feature continuity protocol (descriptor-driven)', () => {
     assert.equal(continuity.states[0].featureName, 'todo');
     assert.equal(continuity.states[0].protocol, TODO_PROTOCOL);
     assert.equal(continuity.states[0].state.tasks[0].subject, 'Keep the plan');
+    // 交付物属于任务状态本身：精简/接续后新 runtime 要继续展示，不能丢
+    assert.equal(continuity.states[0].state.tasks[0].deliver, 'test/plan.test.js 通过');
     // export adapter 应剥离 __claw_continuity__ 字段，state 内不应再见 descriptor
     assert.equal(continuity.states[0].state[CONTINUITY_FIELD_KEY], undefined);
     assert.ok(continuity.toolPolicy.preserveToolNames.length === 0 ||

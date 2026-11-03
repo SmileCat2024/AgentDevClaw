@@ -479,12 +479,16 @@ function _renderTask(task) {
     : ['deleted', 'cancelled', 'canceled'].includes(task.status) ? 'cancelled'
       : task.status === 'in_progress' ? 'running' : 'pending';
   const label = task.subject;
+  const deliver = typeof task.deliver === 'string' ? task.deliver : '';
   const finished = task.finishedAt ? _formatRelativeTime(task.finishedAt) : '';
   const resultLabel = status === 'cancelled' ? '已取消' : status === 'completed' ? '已完成' : '';
   const suffix = resultLabel
     ? `<span class="wg-thread-task-result" title="${wgEsc(_formatExactTime(task.finishedAt))}">${wgEsc(resultLabel)}${finished ? ` · ${wgEsc(finished)}` : ''}</span>`
     : '';
-  return `<div class="wg-thread-task ${status}"><span class="wg-thread-task-icon"></span><span>${wgEsc(label || '')}</span>${suffix}</div>`;
+  // deliver 作为副行嵌在标题 span 内，保持 .wg-thread-task 的直接子元素结构不变
+  // （终态文本装饰与图标定位都按 icon / 标题 / 结果三段选择器定位）。
+  const deliverLine = deliver ? `<em class="wg-thread-task-deliver">${wgEsc('交付: ' + deliver)}</em>` : '';
+  return `<div class="wg-thread-task ${status}"><span class="wg-thread-task-icon"></span><span>${wgEsc(label || '')}${deliverLine}</span>${suffix}</div>`;
 }
 
 function _loadingHtml() {

@@ -304,7 +304,8 @@ export function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
         const evtName = m.event.identityName || m.event.identityRef || '';
         const threadTitle = m.event.threadTitle || m.event.sessionTitle || '未命名工作';
         const taskTitle = m.event.taskTitle || '';
-        return `[${time}] [系统事件] ${evtName} · 工作线程「${threadTitle}」Task 完成：${taskTitle}`;
+        const taskDeliver = m.event.taskDeliver ? `（交付：${m.event.taskDeliver}）` : '';
+        return `[${time}] [系统事件] ${evtName} · 工作线程「${threadTitle}」Task 完成：${taskTitle}${taskDeliver}`;
       }
       const evtName = m.event.identityName || m.event.identityRef || '';
       const evtSession = formatSessionLabel(m.event.sessionTitle, m.event.sessionId);

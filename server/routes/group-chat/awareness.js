@@ -346,6 +346,7 @@ export function createAwarenessModule(deps) {
       tasks: tasks.map((task) => ({
         id: task.id,
         subject: task.subject || '',
+        deliver: typeof task.deliver === 'string' ? task.deliver : '',
         status: task.status || 'pending',
         createdAt: Number(task.createdAt) || null,
         updatedAt: Number(task.updatedAt) || null,

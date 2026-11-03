@@ -106,13 +106,13 @@ function renderPlanTask(task) {
     getTodoStatusLabel(status),
   ].filter(Boolean).join(' · ');
   const desc = task?.description || '';
-  const deliver = task?.deliver || '';
+  const deliver = String(task?.deliver || '').trim();
   // 所有终态任务默认收起详情，手动操作记录在
-  // _planTerminalDetailState 中覆盖默认态（有描述才可交互）。
+  // _planTerminalDetailState 中覆盖默认态（有描述或交付物才可交互）。
   const detailOpen = isTerminal
     ? (_planTerminalDetailState.has(taskId) ? _planTerminalDetailState.get(taskId) : false)
     : true;
-  const canToggleDetail = isTerminal && desc;
+  const canToggleDetail = isTerminal && Boolean(desc || deliver);
   const detail = detailOpen ? desc : '';
   const marker = status === 'in_progress'
     ? '<div class="plan-task-spinner"></div>'
@@ -133,7 +133,10 @@ function renderPlanTask(task) {
     '<div class="plan-task-main">',
     '<div class="plan-task-title">' + escapeHtml(task?.subject || '') + interruptLabel + detailChev + '</div>',
     detail ? '<div class="plan-task-desc">' + escapeHtml(detail) + '</div>' : '',
-    deliver ? '<div class="plan-task-desc">' + escapeHtml((currentLanguage === 'zh' ? '交付' : 'Deliver') + ': ' + deliver) + '</div>' : '',
+    // 交付物：描述之外独立一行，靠字号与颜色降一级区分，随详情一起折叠
+    (detailOpen && deliver)
+      ? '<div class="plan-task-deliver" title="' + escapeHtml(deliver) + '">' + escapeHtml((currentLanguage === 'zh' ? '交付 · ' : 'Deliver · ') + deliver) + '</div>'
+      : '',
     (isTerminal && !detailOpen) ? '' : '<div class="plan-task-meta">' + escapeHtml(meta) + '</div>',
     actionBtn,
     '</div>',
