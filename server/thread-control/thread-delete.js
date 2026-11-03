@@ -108,6 +108,12 @@ function memberSessionIds(thread) {
  *   T003 统一目标解析同源；缺省用 core.findThreadBySession）
  * @param {Function} [deps.stopSession] - 停止成员 runtime（生产装配为幂等
  *   graceful 停止：remove-session 确认 / SIGTERM，(agentId, sessionId) => Promise）
+ * @param {Function} [deps.hasLiveRuntime] - (agentId, sessionId) => boolean，
+ *   同步判定成员 session 是否仍有活 runtime（生产 = managedAgents 记录表）。
+ *   注入后 drain 等待增加前置事实：成员全部无活 runtime 时，board 的
+ *   running 只能是陈旧观测（turn.completed 未回写 / runtime 早已不在），
+ *   「优先等待自然完成」无可等对象，跳过等待直接收敛。未注入时保持
+ *   仅按 board 判定的原语义（测试最小装配）。
  * @param {Function} [deps.removeSessions] - (agentId, sessionIds[]) => Promise，
  *   删除全部成员 Session 数据（index 记录 / 会话文件 / 运行恢复 / search index）
  * @param {Function} [deps.removeHandoffs] - (agentId, sessionIds[]) => Promise，
@@ -122,6 +128,7 @@ export function createThreadDeleteService({
   control,
   locateBySession = null,
   stopSession = null,
+  hasLiveRuntime = null,
   removeSessions = null,
   removeHandoffs = null,
   clearRuntimes = null,
@@ -145,6 +152,11 @@ export function createThreadDeleteService({
 
   /** 同一线程的并发删除去重（幂等入口）。 */
   const inflightDeletes = new Map();
+  // 删除事务进行中的成员快照（threadId → { agentId, sessionIds }）。
+  // 供侧栏/会话列表读路径过滤「正在删除」的成员：删除事务（drain 等待 +
+  // 级联清理）完成前，会话索引里成员仍在——不过滤的话，前端乐观移除后
+  // 轮询会把已删会话重新投回（幽灵重现）。事务结束（finally）即失效。
+  const inflightDeleteMembers = new Map();
 
   /**
    * 从任意 Thread 成员目标解析到所属 Thread（T005 实施要求 1）。
@@ -164,9 +176,12 @@ export function createThreadDeleteService({
    * 判定线程是否仍有运行中调用（drain 退出条件）。事实源：
    *   - 看板 running（runtime turn 事件流的「调用进行中」真相：
    *     turn.started → running / turn.completed → idle / turn.failed → failed）。
-   * 刻意不用进程存活判定（coder runtime 是长活进程，调用结束后进程不退出，
-   * 进程存活不是「调用进行中」事实）；也不用 in_flight / delivered 命令
-   * 状态（投递后无完成回写，永久驻留，不是运行中事实）。
+   *   刻意不用进程存活做肯定判定（coder runtime 是长活进程，调用结束后
+   *   进程不退出，进程存活不是「调用进行中」事实）；但活 runtime 可作
+   *   否定方向快速通道（hasLiveRuntime 注入时）：成员全部无活 runtime ⇒
+   *   running 必为陈旧观测，跳过 drain 等待（见 threadHasRunningCall）。
+   *   也不用 in_flight / delivered 命令状态做判定（投递后无完成回写，
+   *   永久驻留，不是运行中事实）。
    *
    * 关键约束：drain 必须在 seal（status=closed）之前执行。closed 会让框架
    * board 拒绝后续 runtime 事件（isTerminal → thread_closed），board 的
@@ -176,7 +191,16 @@ export function createThreadDeleteService({
    */
   async function threadHasRunningCall(thread) {
     const boardState = await board.getState(thread.threadId).catch(() => null);
-    return boardState?.status === 'running';
+    if (boardState?.status !== 'running') return false;
+    // board running 只是观测态：turn.completed 未回写 / runtime 早已不在时
+    // 会永久驻留 running。成员全部无活 runtime ⇒ 等待自然完成没有对象，
+    // 该 running 必然陈旧，直接判「无运行中调用」（跳过 drain 等待）。
+    if (typeof hasLiveRuntime === 'function') {
+      const memberIds = memberSessionIds(thread);
+      const anyLive = memberIds.some((sessionId) => hasLiveRuntime(thread.agentId, sessionId));
+      if (!anyLive) return false;
+    }
+    return true;
   }
 
   /**
@@ -293,6 +317,11 @@ export function createThreadDeleteService({
         };
       }
       const thread = existing;
+      // 成员快照先于任务异步推进登记（读路径立即可见），finally 统一清理。
+      inflightDeleteMembers.set(normalizedThreadId, {
+        agentId: thread.agentId,
+        sessionIds: memberSessionIds(thread),
+      });
       return withSessionOperations(thread.agentId, memberSessionIds(thread), 'thread-delete', async () => {
       const failures = [];
       const cleanup = {
@@ -485,9 +514,26 @@ export function createThreadDeleteService({
       });
     })().finally(() => {
       inflightDeletes.delete(normalizedThreadId);
+      inflightDeleteMembers.delete(normalizedThreadId);
     });
     inflightDeletes.set(normalizedThreadId, task);
     return task;
+  }
+
+  /**
+   * 读取某 APP 当前「删除事务进行中」的线程成员 sessionId 集合（快照）。
+   * 供会话列表/侧栏读路径过滤：删除事务完成前索引仍含成员，不过滤会被
+   * 前端轮询投回（乐观移除后的幽灵重现）。返回新数组，调用方可安全持有。
+   */
+  function listInflightDeleteMemberSessions(agentId) {
+    const normalizedAgentId = cleanText(agentId);
+    if (!normalizedAgentId) return [];
+    const sessionIds = [];
+    for (const members of inflightDeleteMembers.values()) {
+      if (members.agentId !== normalizedAgentId) continue;
+      sessionIds.push(...members.sessionIds);
+    }
+    return sessionIds;
   }
 
   /**
@@ -513,5 +559,6 @@ export function createThreadDeleteService({
     resolveThreadTarget,
     deleteThread,
     deleteBySessionTarget,
+    listInflightDeleteMemberSessions,
   };
 }

@@ -373,6 +373,11 @@ const sessionHelpers = createSessionHelpers({
   // 路由的 onSessionDeleted 同一事实；thread-integration 内部判定非 head /
   // 无线程为 no-op，纯会话零影响）
   onSessionDeleted: (agentId, sessionId) => getThreadIntegration().onSessionDeleted(agentId, sessionId),
+  // 删除事务进行中的线程成员过滤（幽灵重现修复）：sessionHelpers 装配先
+  // 于 threadDelete，请求期才调用，闭包引用安全。
+  getInflightDeleteSessionIds: (agentId) => (
+    threadDelete?.listInflightDeleteMemberSessions?.(agentId) || []
+  ),
 });
 const {
   buildFeatureSessionTitle, buildNamedSessionTitle, getNextNewSessionTitle,
@@ -429,6 +434,10 @@ const threadDelete = createThreadDeleteService({
   control: threadControl,
   locateBySession: (agentId, sessionId) => threadLifecycle.findThreadBySession(agentId, sessionId),
   stopSession: stopManagedAgent,
+  // drain 快速通道：成员全部无活 runtime 时，board running 必为陈旧观测
+  // （turn.completed 未回写 / runtime 早已不在），跳过「等待自然完成」，
+  // 消除空闲线程删除的 5s 白等（历史会话删除 7.9s 的主因）。
+  hasLiveRuntime: (agentId, sessionId) => isManagedRuntimeRunning(getAgentRuntime(agentId, sessionId)),
   ...createThreadDeleteResources(),
 });
 const threadRotation = createThreadRotationService({

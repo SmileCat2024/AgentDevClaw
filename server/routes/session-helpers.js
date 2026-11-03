@@ -125,6 +125,30 @@ export function selectFallbackSession(agentId, sessions, sourceSession) {
   ))[0] || null;
 }
 
+/**
+ * 会话列表出口过滤「删除事务进行中」的线程成员（幽灵重现修复）。
+ * 删除事务（drain 等待 + 级联清理，秒级）完成前，会话索引里成员仍在：
+ * 不过滤的话，前端乐观移除后侧栏轮询会把已删会话重新投回（先消失、
+ * 再以「正在删除」虚状态重现的闪烁）。activeSessionId 指向被过滤成员时
+ * 回退到剩余首个（与索引读路径的既有回退语义一致）。
+ * 分页计数（sessionTotal 等）保持原值：瞬时偏 1 在事务完成即恢复，
+ * 逐桶修正需要成员归档事实，得不偿失。
+ */
+export function excludeInflightDeleteSessions(result, inflightSessionIds) {
+  if (!result || !Array.isArray(inflightSessionIds) || inflightSessionIds.length === 0) return result;
+  const sessions = Array.isArray(result.sessions) ? result.sessions : [];
+  const excluded = new Set(
+    inflightSessionIds.map((id) => String(id || '').trim()).filter(Boolean),
+  );
+  if (excluded.size === 0) return result;
+  const kept = sessions.filter((session) => !excluded.has(String(session?.id || '').trim()));
+  if (kept.length === sessions.length) return result;
+  const activeSessionId = excluded.has(String(result.activeSessionId || '').trim())
+    ? (kept[0]?.id ?? null)
+    : result.activeSessionId;
+  return { ...result, sessions: kept, activeSessionId };
+}
+
 export function createSessionHelpers(ctx) {
   const {
     readWorkspaceState,
@@ -137,6 +161,9 @@ export function createSessionHelpers(ctx) {
     // 路由——head 会话属于某活跃线程时不能单独删除；删除服务会明确拒绝，
     // 避免线程失去 head 后成为孤儿。
     assertSessionDeletable = null,
+    // 「删除事务进行中」的线程成员查询（生产 = threadDelete 服务）：
+    // 会话列表出口过滤用（见 excludeInflightDeleteSessions）。
+    getInflightDeleteSessionIds = null,
   } = ctx;
   const sidebarReadModelRetryAfter = new Map();
 
@@ -925,13 +952,19 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
 async function listPrebuiltSessions(agentId, options = {}) {
   const useIndexReadModel = PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))
     && options.forceRich !== true;
-  if (!useIndexReadModel) return listPrebuiltSessionsRich(agentId, options);
+  const settle = (result) => excludeInflightDeleteSessions(
+    result,
+    typeof getInflightDeleteSessionIds === 'function'
+      ? getInflightDeleteSessionIds(agentId)
+      : [],
+  );
+  if (!useIndexReadModel) return settle(await listPrebuiltSessionsRich(agentId, options));
   const retryAfter = Number(sidebarReadModelRetryAfter.get(agentId)) || 0;
-  if (retryAfter > Date.now()) return listPrebuiltSessionsRich(agentId, options);
+  if (retryAfter > Date.now()) return settle(await listPrebuiltSessionsRich(agentId, options));
   try {
     const result = await listPrebuiltSessionsFromIndex(agentId, options);
     sidebarReadModelRetryAfter.delete(agentId);
-    return result;
+    return settle(result);
   } catch (error) {
     // A corrupt legacy record or a concurrent write must not make every
     // connected-agents poll repeat both migration and rich fallback work.
@@ -945,7 +978,7 @@ async function listPrebuiltSessions(agentId, options = {}) {
       result: 'degraded',
       errorCode: error?.code || 'sidebar_read_model_failed',
     }, { source: 'server' });
-    return listPrebuiltSessionsRich(agentId, options);
+    return settle(await listPrebuiltSessionsRich(agentId, options));
   }
 }
 

@@ -59,7 +59,7 @@ function makeControl() {
  *   - failRemoveSessions: 第一次调用 removeSessions 抛错（部分失败场景）
  *   - failStopSession: 指定 sessionId 的 stop 抛错（drain 失败场景）
  */
-function makeDeleteEnvironment({ failRemoveSessions = false, failRemoveSessionsMode = 'once', failStopSession = null } = {}) {
+function makeDeleteEnvironment({ failRemoveSessions = false, failRemoveSessionsMode = 'once', failStopSession = null, hasLiveRuntime = null } = {}) {
   const control = makeControl();
   const observation = {
     stopped: [],
@@ -86,6 +86,7 @@ function makeDeleteEnvironment({ failRemoveSessions = false, failRemoveSessionsM
   });
   const deleteService = createThreadDeleteService({
     control,
+    hasLiveRuntime: hasLiveRuntime || null,
     stopSession: async (agentId, sessionId) => {
       if (failStopSession && sessionId === failStopSession) {
         throw new Error('stop refused');
@@ -557,5 +558,75 @@ describe('T005: 命令状态事实', () => {
     await env.core.appendCommand({ threadId, text: 'x', source: 'ui' });
     await env.deleteService.deleteThread(threadId, { forceWaitMs: 50 });
     // 已删线程无记录可读；状态词汇断言在 seal 前由 thread-control 测试覆盖
+  });
+});
+
+// ─── 8. drain 快速通道与 in-flight 成员可见性（幽灵重现修复）────────
+
+describe('drain fast path & inflight member visibility', () => {
+  it('skips the drain wait when the board running state is stale (no live runtime)', async () => {
+    // 场景：turn.completed 未回写（runtime 早已不在），board 永久驻留
+    // running。成员全部无活 runtime ⇒「等待自然完成」没有对象。
+    // 承诺：不消耗等待预算（历史上此处白等 forceWaitMs=5000），且这不
+    // 构成「运行中调用」事实——forcedStopped 必须为 false（走无事可等
+    // 路径，不是强停路径），删除照常完成。
+    const env = makeDeleteEnvironment({ hasLiveRuntime: () => false });
+    const threadId = await startTwoLinkThread(env.core);
+    await env.board.setStatus(threadId, 'running');
+
+    const result = await env.deleteService.deleteThread(threadId, { forceWaitMs: 1000 });
+
+    assert.equal(result.status, 'complete');
+    assert.equal(result.cleanup.inflightDrain.drained, true);
+    assert.equal(result.cleanup.inflightDrain.forcedStopped, false);
+    assert.ok(result.cleanup.inflightDrain.waitedMs < 200,
+      `stale board running must not burn the wait budget, waitedMs=${result.cleanup.inflightDrain.waitedMs}`);
+    assert.equal(await env.core.getThread(threadId), null);
+  });
+
+  it('keeps the wait semantics when a member runtime is live', async () => {
+    // 承诺：有活 runtime 时 board running 仍按「可能的真实调用」处理，
+    // 等待预算内不 preempt；超时后强停（既有 T005 语义不变）。
+    const env = makeDeleteEnvironment({ hasLiveRuntime: () => true });
+    const threadId = await startTwoLinkThread(env.core);
+    await env.board.setStatus(threadId, 'running');
+
+    const result = await env.deleteService.deleteThread(threadId, { forceWaitMs: 150 });
+
+    assert.equal(result.status, 'complete');
+    assert.equal(result.cleanup.inflightDrain.forcedStopped, true);
+    assert.ok(result.cleanup.inflightDrain.waitedMs >= 100,
+      `live runtime must keep the natural-completion wait, waitedMs=${result.cleanup.inflightDrain.waitedMs}`);
+  });
+
+  it('exposes member session ids while the delete transaction is running, and clears after', async () => {
+    // 契约：删除事务进行中 listInflightDeleteMemberSessions 返回全部
+    // 成员（供会话列表过滤），事务结束（含失败收尾）后清空；其他 APP
+    // 的查询不受影响。观察点：用受控 stopSession 阻塞事务窗口。
+    let releaseStop = null;
+    const stopGate = new Promise((resolve) => { releaseStop = resolve; });
+    const control = makeControl();
+    const deleteService = createThreadDeleteService({
+      control,
+      stopSession: async () => { await stopGate; return { status: 'stopped' }; },
+    });
+    const threadId = await startTwoLinkThread(control.core);
+    await control.board.setStatus(threadId, 'running');
+
+    const task = deleteService.deleteThread(threadId, { forceWaitMs: 50 });
+    // 事务已过 begin、停在 drain 后的 stop 收敛处（等待自然完成超时 50ms
+    // + stopSession 门）。轮询 flush 让任务推进到 gate。
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const duringIds = deleteService.listInflightDeleteMemberSessions(AGENT);
+    assert.deepEqual([...duringIds].sort(), ['s1', 's2'],
+      'members must be visible to list filtering while the transaction runs');
+    assert.deepEqual(deleteService.listInflightDeleteMemberSessions('other-agent'), [],
+      'other agents must not see unrelated members');
+
+    releaseStop();
+    const result = await task;
+    assert.equal(result.status, 'complete');
+    assert.deepEqual(deleteService.listInflightDeleteMemberSessions(AGENT), [],
+      'member visibility must clear after the transaction settles');
   });
 });
