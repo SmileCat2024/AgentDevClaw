@@ -1,7 +1,7 @@
 # 前端插件化改造规划
 
 > 创建日期：2026-11-04
-> 状态：进行中（A / A2 / B 已落地：宿主底座 + memo / claw-guide / agent-studio / coder 四个插件迁移完成；APP 插件化剩余 qqbot 暂缓，Phase C 未开始）
+> 状态：进行中（A / A2 / B 已落地：宿主底座 + memo / claw-guide / agent-studio / coder 四个插件迁移完成；APP 插件化已收口——qqbot 转入线程化工程、home 转入门户小组件工程，均不做载体迁移；当前阶段 Phase C）
 > 背景：Claw 向前端插件化扩展演进——工作空间应用化（随时挂上/卸载）、扩展点持续打通而非硬编码。本规划基于对 public/ 前端的深度调研，数据全部来自源码实测。
 
 ## 一、调研结论：现状全景
@@ -91,7 +91,10 @@ window.ClawHost = {
 
 ### Phase B：第一个完整插件化试点
 
-已完成的迁移：memo（f9c8e104，A2/B 合并落地）→ claw-guide（5e7ef89b）→ agent-studio（a789afaf）→ coder-threads（`plugins/coder/`；迁移同时修复了 f9c8e104 查表化时丢失 coder-threads 分发的存量回归——此前 coder 首页渲染「未知区块类型」，因 on-demand 无活跃线程时入口不显示而漏测）。APP 插件化剩余：qqbot（im-ui / im-actions，1345 行、真实全局状态与设置系统交叉，暂缓，随 Phase C 状态收编一并处理）。
+已完成的迁移：memo（f9c8e104，A2/B 合并落地）→ claw-guide（5e7ef89b）→ agent-studio（a789afaf）→ coder-threads（`plugins/coder/`；迁移同时修复了 f9c8e104 查表化时丢失 coder-threads 分发的存量回归——此前 coder 首页渲染「未知区块类型」，因 on-demand 无活跃线程时入口不显示而漏测）。APP 插件化到此收口。剩余两个 APP 不做载体迁移，转入各自的大工程重做（2026-11-04 决定）：
+
+- qqbot（im-ui / im-actions，1345 行、真实全局状态与设置系统交叉）：等待自身线程化（诞生于线程概念之前，会话模型要换代）与渠道绑定其他 agent 的跨线程通信（涉及工作空间应用化与 agent os 底层建设）。界面随新会话模型重建。
+- home（home-dashboard，441 行）：等待「门户小组件」契约设计——首页消费各工作空间提供的小组件（类移动 OS widget），现在的 dashboard 是该愿景的锁死静态版；契约落地后渲染模型与数据链路按「宿主消费外部组件 + 隔离」重写。可复用 ClawHost 已验证的机制（两层注册表、mount(host) 能力注入、unmount 兜底、data-* 参数编码纪律）；新增设计点是提供方与宿主分离后的声明方式、隔离边界与通信通道。
 验收（从第一天机器化）：
 - 装配不新增 index.html 标签；
 - 挂载/卸载前后全局键 diff 断言零残留（复用 A1 扫描器）；
@@ -99,7 +102,8 @@ window.ClawHost = {
 
 ### Phase C：按扩展面收编存量
 
-顺序（由小到大）：右栏面板实现去全局化 → home blocks 内联事件收编（613 处按面分批）→ fw-config-panel 状态回模块 → work-group 接管型 surface 声明化（`surface provider` 注册，4356 行单体拆解的前置）→ script 标签清单化清尾。
+范围（2026-11-04 实测复核）：悬置工作空间（work-group / flow / dispatch-console）与转入大工程的 qqbot / home 的模块不收编，其内联事件与全局函数随各自工程重做时消亡。
+顺序（由小到大）：右栏面板实现去全局化（15 个面板集中在 app-ui.js 注册，5 个活跃面板经 `window.XxxPanel` 间接寻址：git / bg / annotations / genui / session-controls）→ 内联事件收编（现存 513 处，规划时 613，四次迁移已消化约 100）→ fw-config-panel 状态回模块（占用 12 个 `ClawFW.*` 键，跨模块读者：app-ui、model-settings）→ script 标签清单化清尾（index.html 现 137 个标签：src/ 129 + vendor 5 + 根目录 1 + inline 2）。原计划的 work-group surface 声明化随 work-group 悬置取消。
 每面收编完成即修剪 A1 基线，behavior 消退曲线是进度指标。
 
 ### 挂起项
