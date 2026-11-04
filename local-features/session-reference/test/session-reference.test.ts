@@ -11,10 +11,14 @@ import {
   extractTodoEvents,
   renderTurnDetail,
   renderReferenceReminder,
+  renderLedgerReminder,
   renderThreadOverview,
+  extractTimeRange,
   isThreadId,
   SessionReferenceFeature,
+  SESSION_REFERENCE_CONTINUITY_PROTOCOL,
   type VerifiedSessionReference,
+  type VerifiedLedgerEntry,
 } from '../src/index.js';
 
 // ── renderSeedOverview（trim 视图概览） ───────────────────────────
@@ -617,6 +621,257 @@ describe('thread navigation (dual-mode session_read_overview)', () => {
       const plainLine = result.text.split('\n').find((line: string) => line.includes('s-7'))!;
       assert.ok(plainLine, '普通会话条目应存在');
       assert.doesNotMatch(plainLine, /— 线程/, '无线程归属的条目不应带线程标注');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+// ── 引用账本（轮转接续） ───────────────────────────────────────────
+
+describe('reference ledger (rotation continuity)', () => {
+  const realFetch = globalThis.fetch;
+
+  function okFetch() {
+    globalThis.fetch = (async () => ({
+      ok: true, status: 200, json: async () => ({ messages: [] }),
+    })) as any;
+  }
+
+  function makeCallStartContext(metadata: Record<string, unknown> | undefined, injected: Array<{ content: string; turn?: number }>) {
+    return {
+      metadata,
+      agent: { _callIndex: 1 },
+      context: {
+        addSystemMessage(content: string, turn: number) { injected.push({ content, turn }); },
+      },
+    } as any;
+  }
+
+  it('recordLedger dedupes by (agentId, sessionId) and rolls forward the latest interaction', () => {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    feature.recordLedger({ agentId: 'a', sessionId: 's-1', title: '', sessionType: 'main' }, 'agent-read');
+    feature.recordLedger({ agentId: 'a', sessionId: 's-1', title: '补齐的标题', sessionType: 'main' }, 'user-reference');
+    const references = (feature.captureState() as any).references;
+    assert.equal(references.length, 1, '同一会话重复交互只保留一条');
+    assert.equal(references[0].origin, 'user-reference', '来源滚动到最近一次交互');
+    assert.equal(references[0].title, '补齐的标题', '新元数据覆盖旧值');
+  });
+
+  it('recordLedger evicts the least recently seen entry beyond the cap', () => {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    for (let index = 0; index <= 20; index++) {
+      feature.recordLedger({ agentId: 'a', sessionId: `s-${index}` }, 'agent-read');
+    }
+    const references = (feature.captureState() as any).references;
+    assert.equal(references.length, 20, '账本条目数封顶');
+    assert.ok(!references.some((entry: any) => entry.sessionId === 's-0'), '最早交互的条目被挤出');
+    assert.ok(references.some((entry: any) => entry.sessionId === 's-20'), '最新条目存活');
+  });
+
+  it('CallStart injects the ledger once per generation, excluding entries referenced this turn', async () => {
+    okFetch();
+    try {
+      const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      feature.recordLedger({ agentId: 'a', sessionId: 's-old', title: '历史引用', sessionType: 'main' }, 'agent-read');
+      const injected: Array<{ content: string; turn: number }> = [];
+
+      // 第一次 CallStart：本条消息引用 s-new（有自己的专属 reminder），
+      // 账本 reminder 只列 s-old（同轮不双份）。
+      await feature.injectSessionReferences(makeCallStartContext(
+        { 'session-reference': [{ agentId: 'a', sessionId: 's-new', title: '本条引用' }] },
+        injected,
+      ));
+      assert.equal(injected.length, 2, '账本 reminder + 本条引用 reminder 各一条');
+      assert.match(injected[0].content, /^\[会话引用账本\]/);
+      assert.ok(injected[0].content.includes('s-old'), '账本列出历史条目');
+      assert.ok(!injected[0].content.includes('s-new'), '本条刚引用的会话不与账本重复');
+      assert.match(injected[1].content, /^\[会话引用\]/);
+      assert.ok(injected[1].content.includes('s-new'));
+
+      // 第二次 CallStart（本代已注入过）：不再重复注入账本。
+      await feature.injectSessionReferences(makeCallStartContext(undefined, injected));
+      assert.equal(injected.length, 2, '同代不重复注入账本');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('restoreState re-arms ledger injection for the new generation', async () => {
+    okFetch();
+    try {
+      const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      feature.recordLedger({ agentId: 'a', sessionId: 's-1', title: '', sessionType: 'main' }, 'agent-read');
+      const injected: Array<{ content: string }> = [];
+
+      // 本代已注入过一次账本。
+      await feature.injectSessionReferences(makeCallStartContext(undefined, injected));
+      assert.equal(injected.length, 1);
+
+      // 接续换代：restoreState 恢复账本并复位注入标志 → 新代第一次 CallStart 重新注入。
+      await feature.restoreState(feature.captureState());
+      await feature.injectSessionReferences(makeCallStartContext(undefined, injected));
+      assert.equal(injected.length, 2, '换代后账本重新注入');
+      assert.match(injected[1].content, /s-1/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('missing references are excluded from the ledger (no re-read value)', async () => {
+    globalThis.fetch = (async (url: any) => {
+      if (String(url).includes('s-gone')) {
+        return { ok: false, status: 404, json: async () => ({ error: 'not found' }) } as any;
+      }
+      return { ok: true, status: 200, json: async () => ({ messages: [] }) } as any;
+    }) as any;
+    try {
+      const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      const injected: Array<{ content: string }> = [];
+      await feature.injectSessionReferences(makeCallStartContext(
+        { 'session-reference': [{ agentId: 'a', sessionId: 's-gone' }] },
+        injected,
+      ));
+      assert.match(injected[0].content, /s-gone.*已不存在/, 'reminder 标注已删除');
+      assert.equal((feature.captureState() as any).references.length, 0, '已删除的会话不入账本');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('read tools record agent-read ledger entries; thread navigation does not', async () => {
+    const sessionRecord = {
+      messages: [{ role: 'user', content: 'q', turn: 0 }],
+      title: '被读会话',
+      sessionType: 'main',
+      timestamps: [Date.UTC(2026, 9, 1)],
+    };
+    globalThis.fetch = (async (url: any) => {
+      if (String(url).includes('/protoclaw/threads/')) {
+        return {
+          ok: true, status: 200,
+          json: async () => ({ thread: { threadId: 'wt-x', agentId: 'a', title: 'T' }, sessionChainMeta: [{ sessionId: 's-9', messageCount: 1 }] }),
+        } as any;
+      }
+      return { ok: true, status: 200, json: async () => sessionRecord } as any;
+    }) as any;
+    try {
+      const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      const tools = new Map(feature.getTools().map((tool) => [tool.name, tool]));
+
+      // 线程导航：定位视图，不产生会话账目。
+      await (tools.get('session_read_overview')!.execute as any)({ sessionId: 'wt-x' });
+      assert.equal((feature.captureState() as any).references.length, 0, '线程导航不入账');
+
+      // 会话读取：成功读取即入账，携带 server 返回的真实标题。
+      await (tools.get('session_read_overview')!.execute as any)({ agentId: 'a', sessionId: 's-1' });
+      const references = (feature.captureState() as any).references;
+      assert.equal(references.length, 1);
+      assert.equal(references[0].origin, 'agent-read');
+      assert.equal(references[0].title, '被读会话');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('ledger reminder renders verbatim agentId, origin labels and the disclaimer', () => {
+    const entries: VerifiedLedgerEntry[] = [
+      { agentId: 'programming-helper', sessionId: 's-1', title: '修复登录超时', sessionType: 'main', origin: 'user-reference', lastSeenAt: '2026-10-01T00:00:00Z', availability: 'ok' },
+      { agentId: 'agent-studio', sessionId: 's-2', title: '', sessionType: 'main', origin: 'agent-read', lastSeenAt: '2026-10-02T00:00:00Z', availability: 'missing' },
+    ];
+    const text = renderLedgerReminder(entries);
+    assert.match(text, /^\[会话引用账本\]/);
+    // 契约沿用 renderReferenceReminder：agentId 标注是可原样填参的纯值（历史
+    // bug：复合 token 被 AI 整串当 agentId 传入导致下游 404）。
+    assert.ok(text.includes('agentId: programming-helper（'));
+    assert.ok(text.includes('agentId: agent-studio（'));
+    assert.doesNotMatch(text, /agentId: [^（\s]+\/[^\s）]/);
+    assert.match(text, /s-1「修复登录超时」.*用户引用/);
+    assert.match(text, /s-2.*已读取.*已不存在/);
+    assert.match(text, /标题由 AI 自动生成/);
+  });
+
+  it('declareContinuity wrapper keeps hooks and exposes the continuity descriptor', () => {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    // importFeatureContinuity 按 protocol 匹配转移账本：descriptor 与静态
+    // hooks（CallStart 消费入口）都不能因包装丢失。
+    assert.equal(
+      (feature as any).getContinuityDescriptor().protocol,
+      SESSION_REFERENCE_CONTINUITY_PROTOCOL,
+    );
+    const state = feature.captureState() as Record<string, any>;
+    assert.equal(state.__agentdev_continuity__.protocol, SESSION_REFERENCE_CONTINUITY_PROTOCOL);
+    assert.ok((SessionReferenceFeature as any).hooks.injectSessionReferences);
+  });
+});
+
+// ── 概览背景元数据（session_record 响应补齐） ──────────────────────
+
+describe('overview background metadata', () => {
+  it('extractTimeRange picks first/last valid timestamps and rejects empty input', () => {
+    assert.deepEqual(extractTimeRange([null, 5, undefined, 10]), { firstAt: 5, lastAt: 10 });
+    assert.equal(extractTimeRange([]), null);
+    assert.equal(extractTimeRange([null]), null);
+    assert.equal(extractTimeRange('not-array'), null);
+  });
+
+  it('header includes title/goal/time range/archived/type/message count when present', () => {
+    const { text } = renderSeedOverview([], [], {
+      agentId: 'ph', sessionId: 's-1',
+      title: '修复登录超时',
+      goal: '修复生产环境登录超时问题',
+      sessionType: 'main',
+      archived: true,
+      messageCount: 47,
+      firstAt: Date.UTC(2026, 8, 30, 6, 22),
+      lastAt: Date.UTC(2026, 9, 2, 1, 15),
+    });
+    assert.match(text, /\[会话转录概览\] ph\/s-1「修复登录超时」/);
+    assert.match(text, /类型: main/);
+    assert.match(text, /已归档/);
+    assert.match(text, /原始消息 47 条/);
+    // 时间范围渲染为本地友好格式（具体值随时区漂移，锁定形态与区间语义）。
+    assert.match(text, /\d{4}-\d{2}-\d{2} \d{2}:\d{2} ~ \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+    assert.match(text, /目标: 修复生产环境登录超时问题/);
+  });
+
+  it('header omits absent background fields (old sessions without metadata)', () => {
+    const { text } = renderSeedOverview(
+      [{ role: 'user', content: 'hi', turn: 1 }] as any,
+      [{ role: 'user', content: 'hi', turn: 1 }] as any,
+      { agentId: 'a', sessionId: 's' },
+    );
+    assert.match(text, /\[会话转录概览\] a\/s\n/);
+    assert.doesNotMatch(text, /类型:|已归档|原始消息|目标:|~|\d{4}-\d{2}-\d{2}/);
+    assert.match(text, /（trim 视图：/);
+  });
+
+  it('renderTurnDetail includes the turn time anchor from aligned timestamps', () => {
+    const messages = [
+      { role: 'user', content: '第一轮', turn: 0 },
+      { role: 'assistant', content: '第二轮', turn: 1 },
+    ];
+    const detail = renderTurnDetail(
+      messages as any, 1, { agentId: 'a', sessionId: 's' },
+      [Date.UTC(2026, 9, 1, 6, 30), Date.UTC(2026, 9, 1, 6, 35)],
+    );
+    assert.match(detail!.text, /T1（全量，共 1 条消息 ｜ \d{4}-\d{2}-\d{2} \d{2}:\d{2}）/);
+  });
+
+  it('session_list renders friendly local timestamps instead of raw ISO strings', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true, status: 200,
+      json: async () => ({
+        sessions: [{ agentId: 'ph', sessionId: 's-1', title: 't', updatedAt: '2026-10-08T00:00:00Z', messageCount: 1 }],
+      }),
+    })) as any;
+    try {
+      const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      const tools = new Map(feature.getTools().map((tool) => [tool.name, tool]));
+      const result = await (tools.get('session_list')!.execute as any)({});
+      assert.doesNotMatch(result.text, /T00:00:00Z/, 'ISO 原文不应直接出现');
+      assert.match(result.text, /\d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
     } finally {
       globalThis.fetch = realFetch;
     }
