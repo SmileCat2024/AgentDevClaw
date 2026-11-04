@@ -1563,13 +1563,12 @@ function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
 
 
 // ── Feature Panels 注册 ──────────────────────────────────────────
-
-const featurePanels = Object.create(null);
+// 唯一注册表是 ClawPanels（claw-host）；渲染寻址（debug-panel-host 的
+// renderFeaturePanel）与可见性过滤（renderCurrentMainView）都从它读，
+// 不维护平行清单。中央注册块与 resources-viewer 经此包装器注册。
 
 function registerFeaturePanel(panelId, panel) {
-  const registered = window.ClawPanels.register(panelId, panel);
-  featurePanels[registered.id] = registered;
-  return registered;
+  return window.ClawPanels.register(panelId, panel);
 }
 window.registerFeaturePanel = registerFeaturePanel;
 
@@ -1642,14 +1641,6 @@ registerFeaturePanel('mcp', {
   label: { zh: 'MCP', en: 'MCP' },
   description: { zh: 'MCP 服务端', en: 'MCP servers' },
   render: () => renderMcpPanel(),
-});
-registerFeaturePanel('genui', {
-  when: { surfaces: ['chat'] },
-  title: () => '交互页面',
-  label: { zh: '交互页面', en: 'Interactive Pages' },
-  description: { zh: 'UI 交互页面', en: 'Interactive UI pages' },
-  render: () => window.GenUIPanel ? window.GenUIPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-  preserveOnReRender: true,
 });
 registerFeaturePanel('session-controls', {
   when: { surfaces: ['chat'] },

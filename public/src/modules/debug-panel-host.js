@@ -3,7 +3,7 @@
  *
  * 从 debug-panels.js 拆出。必须在所有 debug-*.js 子模块之后加载。
  * 包含：
- *   - renderFeaturePanel（通过 featurePanels 注册表调用各面板 render）
+ *   - renderFeaturePanel（经 ClawPanels 注册表调用各面板 render）
  *   - toggleFeaturePanel
  *
  * 依赖（全局变量，声明于 app-core.js）：
@@ -14,7 +14,7 @@
  *   - t (app-core.js)
  *   - enhanceMathInElement (markdown-utils.js)
  *   - getFeaturePanelEmptyHtml (app-ui.js)
- *   - featurePanels (app-ui.js，运行时注册表，箭头函数延迟解析)
+ *   - window.ClawPanels（唯一注册表：渲染寻址与可见性过滤同源）
  */
 
 // ═══════════════════════════════════════════════════════════════
@@ -43,7 +43,7 @@ const _panelBodyHtmlCache = new Map();
  */
 function syncPanelBodyHtmlCache() {
   const panelId = activeFeaturePanel;
-  const panel = panelId && featurePanels[panelId];
+  const panel = panelId && window.ClawPanels.get(panelId);
   if (!panel || featurePanelBody.dataset.panel !== panelId) return;
   try {
     _panelBodyHtmlCache.set(panelId, panel.render());
@@ -85,7 +85,7 @@ function renderFeaturePanel(options = {}) {
     }
   }
 
-  if (!activeFeaturePanel || !featurePanels[activeFeaturePanel]) {
+  if (!activeFeaturePanel || !window.ClawPanels.get(activeFeaturePanel)) {
     featurePanelRenderVersion += 1;
     _panelBodyHtmlCache.clear();
     featurePanel.classList.remove('open');
@@ -101,7 +101,7 @@ function renderFeaturePanel(options = {}) {
     return;
   }
 
-  const panel = featurePanels[activeFeaturePanel];
+  const panel = window.ClawPanels.get(activeFeaturePanel);
   const panelId = activeFeaturePanel;
   // 切换到非 hooks 面板时，清理 Feature 详情弹窗
   if (panelId !== 'hooks' && typeof renderFeatureDetailOverlay === 'function') {

@@ -29,6 +29,7 @@ describe('Generative UI panel submit adapter', () => {
         return rendered;
       },
     });
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/generative-ui-panel.js');
 
     ctx.run(`window.GenUIPanel._internal._applyRegistryUpdate({ surfaces: [
@@ -57,6 +58,7 @@ describe('Generative UI panel submit adapter', () => {
 
   it('keeps only explicit user overrides when a surface spec is refreshed', () => {
     const ctx = createFrontendSandbox({ setInterval: _trackedSetInterval });
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/generative-ui-panel.js');
     const merged = ctx.run(`window.GenUIPanel._internal._mergeViewState(
       {
@@ -97,6 +99,7 @@ describe('Generative UI panel submit adapter', () => {
       poll() {},
       lastRenderedInputSignature: 'old',
     });
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/generative-ui-panel.js');
     ctx.run(`window.GenUIPanel._internal._registry.set('settings', {
       revision: 7,
@@ -139,6 +142,7 @@ describe('Generative UI panel submit adapter', () => {
       }),
       ClawToast: { show: (value) => toasts.push(value) },
     });
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/generative-ui-panel.js');
     ctx.run(`window.GenUIPanel._internal._registry.set('settings', {
       revision: 1,
@@ -179,6 +183,7 @@ describe('Generative UI panel submit adapter', () => {
         return select;
       },
     });
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/generative-ui-panel.js');
     ctx.run(`window.GenUIPanel._internal._applyRegistryUpdate({ surfaces: [
       { surfaceId: 'release', revision: 1, title: 'Release', spec: { title: 'Release' }, closed: false }

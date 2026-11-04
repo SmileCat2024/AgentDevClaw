@@ -51,6 +51,14 @@ const REGISTRATION_HOMES = [
     prefix: '',
     suffix: '',
   },
+  {
+    id: 'genui 自注册',
+    file: 'public/src/modules/generative-ui-panel.js',
+    start: "window.ClawHost.panels.register('genui'",
+    end: 'window.GenUIPanel = {',
+    prefix: '',
+    suffix: '',
+  },
 ];
 
 /** 在沙箱里执行全部注册面，返回序列化后的注册表快照。 */
