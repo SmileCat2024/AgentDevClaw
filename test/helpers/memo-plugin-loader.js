@@ -67,7 +67,8 @@ export function installMinimalWindow(extra = {}) {
 }
 
 /** 供插件 mount(host) 的 presenter：语言、转义、markdown、宿主动作。 */
-export function makePresenter({ language = 'zh', workspace, markdown } = {}) {
+export function makePresenter({ language = 'zh', workspace, markdown, modelPresets, thinkingOptions } = {}) {
+  const presetStore = { list: modelPresets || [] };
   return {
     getLanguage: () => language,
     escapeHtml: (v) => String(v ?? '').replace(/[&<>"']/g, (m) => ({
@@ -81,6 +82,17 @@ export function makePresenter({ language = 'zh', workspace, markdown } = {}) {
       ...markdown,
     },
     workspace: workspace || { runAction() {} },
+    // settings 子模块的面（其余子模块不消费）；默认值让 settings 用例
+    // 只需覆盖关心的槽位
+    modelPresets: {
+      get: () => presetStore.list,
+      set: (list) => { presetStore.list = list; return list; },
+    },
+    getThinkingEffortOptions: (protocol) => (thinkingOptions ? thinkingOptions(protocol) : []),
+    enhanceSelect() {},
+    enhanceSelectAll() {},
+    // 测试可挂断言钩子（记录 enhance 调用等）
+    presetStore,
   };
 }
 

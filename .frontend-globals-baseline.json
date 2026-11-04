@@ -1864,34 +1864,6 @@
       "renderGatewayOverlay"
     ]
   },
-  "public/src/modules/memo-settings.js": {
-    "state": [
-      "MEMO_SETTINGS_AGENT_ID",
-      "_memoDefaultPreset",
-      "_memoReminderState",
-      "_memoSettingsLoaded",
-      "_memoSettingsOpen"
-    ],
-    "behavior": [
-      "ClawFW",
-      "_memoEnsurePresets",
-      "_memoEsc",
-      "_memoIsZh",
-      "_memoLoadDefaultPreset",
-      "_memoLoadReminderState",
-      "_memoRenderBody",
-      "_memoRenderModelSection",
-      "_memoRenderNotificationSection",
-      "_memoRenderOverlay",
-      "_memoSetStatus",
-      "closeMemoSettings",
-      "ensureMemoSettingsHost",
-      "memoAutoSaveModel",
-      "memoModelSlotChanged",
-      "memoToggleReminderNotification",
-      "openMemoSettings"
-    ]
-  },
   "public/src/modules/message-timeline.js": {
     "state": [
       "ECHO_SEPARATOR_SLACK_MS",
@@ -3754,6 +3726,12 @@
       "openWorkspaceSettings",
       "renderNotificationAuditSection",
       "renderWorkspaceSettingsOverlay"
+    ]
+  },
+  "public/src/plugins/memo/settings.js": {
+    "state": [],
+    "behavior": [
+      "ClawFW"
     ]
   }
 }

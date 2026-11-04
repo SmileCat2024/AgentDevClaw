@@ -13,9 +13,11 @@
 import MemoNotes from './notes.js';
 import MemoReminders from './reminders.js';
 import MemoOverview from './overview.js';
+import MemoSettings from './settings.js';
 import { MemoNotesUI } from './notes.js';
 import { MemoRemindersUI } from './reminders.js';
 import { MemoOverviewUI } from './overview.js';
+import { MemoSettingsUI } from './settings.js';
 
 let host = null;
 
@@ -40,6 +42,11 @@ export default {
     'memo.overviewOpenNote': (el, ev, filename) => MemoOverviewUI.openNote(filename),
     'memo.completeReminder': (el, ev, id) => MemoRemindersUI.complete(id),
     'memo.removeReminder': (el, ev, id) => MemoRemindersUI.remove(id),
+    // 设置弹窗（原 memo-settings.js 的内联 onchange，改经分发器）
+    'memoSettings.modelChanged': (el) => MemoSettingsUI.modelChanged(el),
+    'memoSettings.autoSave': () => MemoSettingsUI.autoSave(),
+    'memoSettings.toggleReminder': (el) => MemoSettingsUI.toggleReminder(el),
+    'memoSettings.close': () => MemoSettingsUI.close(),
   },
 
   mount(api) {
@@ -54,18 +61,37 @@ export default {
         isEditableMarkdownBlock: (block) => api.env.markdown.isEditableBlock(block),
         replaceMarkdownBlock: (src, idx, text) => api.env.markdown.replaceBlock(src, idx, text),
       },
-      // 子模块经 presenter 转调宿主能力，不各自持有 host 实例
+      // 子模块经 presenter 转调宿主能力，不各自持有 host 实例。
+      // 下列宿主服务在 classic script 侧（模型预设缓存 / 思考强度选项 /
+      // ClawSelect 增强），window 读取收敛在此一处，子模块不碰裸全局。
       workspace: api.workspace,
+      modelPresets: {
+        get: () => (typeof window.getClawModelPresets === 'function'
+          ? window.getClawModelPresets() : []),
+        set: (list) => {
+          if (typeof window.setClawModelPresets === 'function') return window.setClawModelPresets(list);
+          return list;
+        },
+      },
+      getThinkingEffortOptions: (protocol) => window.ClawFW?.getThinkingEffortOptions?.(protocol),
+      enhanceSelect: (el) => window.ClawSelect?.enhance?.(el),
+      enhanceSelectAll: (root) => {
+        if (window.ClawSelect) {
+          requestAnimationFrame(() => window.ClawSelect.enhanceAll(root));
+        }
+      },
     };
     MemoNotes.mount(presenter);
     MemoReminders.mount(presenter);
     MemoOverview.mount(presenter);
+    MemoSettings.mount(presenter);
   },
 
   unmount() {
     MemoNotes.unmount();
     MemoReminders.unmount();
     MemoOverview.unmount();
+    MemoSettings.unmount();
     host = null;
   },
 
