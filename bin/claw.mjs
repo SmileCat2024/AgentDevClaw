@@ -259,7 +259,10 @@ function threadFormat(args, fallback = 'text') {
 
 function printThreadText(thread) {
   console.log(`Thread ${thread.threadId || '(unknown)'}`);
-  if (thread.title) console.log(`  title: ${thread.title}`);
+  // ADR-0041：对话标题取当前 head Session 的索引标题（线程记录的 title
+  // 是历史实现残留，不再展示）。
+  const threadTitle = thread.headSessionTitle || '';
+  if (threadTitle) console.log(`  title: ${threadTitle}`);
   if (thread.agentId) console.log(`  agent: ${thread.agentId}`);
   if (thread.workspaceId) console.log(`  workspace: ${thread.workspaceId}`);
   if (thread.status) console.log(`  status: ${thread.status}`);
@@ -311,7 +314,7 @@ function writeThreadPayload(payload, format = 'text') {
     console.log(`Threads (${threads.length}):`);
     for (const thread of threads) {
       const life = thread.lifeState ? `|${thread.lifeState}` : '';
-      const title = thread.title ? `  "${thread.title}"` : '';
+      const title = thread.headSessionTitle ? `  "${thread.headSessionTitle}"` : '';
       console.log(`  ${thread.threadId}  [${thread.status || 'unknown'}${life}]  agent=${thread.agentId || '?'}  head=${thread.headSessionId || 'none'}${title}`);
     }
     return;

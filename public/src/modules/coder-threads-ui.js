@@ -109,7 +109,9 @@ window.CoderThreadsUI = (() => {
       + (Array.isArray(thread.commands)
         ? thread.commands.filter((c) => c?.status === 'pending' || c?.status === 'in_flight').length
         : 0);
-    const title = String(thread.title || '').trim()
+    // ADR-0041：标题只认当前 head Session 的索引标题；线程记录里的 title
+    // 是历史实现残留，不参与展示（否则接续换头后会出现双真相回退）。
+    const title = String(thread.headSessionTitle || '').trim()
       || headSessionTitle(thread.agentId, thread.headSessionId)
       || shortId(thread.threadId);
 
@@ -311,7 +313,7 @@ window.CoderThreadsUI = (() => {
       agentId: thread.agentId,
       sessionId: thread.headSessionId,
       threadId: thread.threadId,
-      title: thread.title || '',
+      title: String(thread.headSessionTitle || '').trim(),
       archived: true,
     });
   }

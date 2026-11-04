@@ -88,7 +88,8 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
       try {
         const thread = await core.start({
           sessionRef: { agentId, sessionId },
-          title: String(session?.title || '').trim(),
+          // ADR-0041：建线不再写入 title。对话名称的唯一来源是 Session 索引，
+          // 线程记录的 title 字段保留但停止写入与消费，避免双真相回退。
         });
         console.log(`[thread-integration] thread created: ${thread.threadId} head=${sessionId}`);
         // 创建事务落定后发布事实事件（无订阅者时 no-op）。重启恢复不经过

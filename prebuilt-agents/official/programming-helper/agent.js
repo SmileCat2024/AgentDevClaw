@@ -31,6 +31,7 @@ import { GitHubShellFeature } from '../../../local-features/dist/github/src/inde
 import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
 import { ConversationAnnotationsFeature } from '../../../local-features/dist/conversation-annotations/src/index.js';
 import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
+import { AutoTitlePolicyFeature } from '../../../local-features/dist/auto-title-policy/src/index.js';
 import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { CraftAwarenessFeature } from '../../../local-features/dist/craft-awareness/src/index.js';
 import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
@@ -186,6 +187,13 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 时间感知：CallStart 按节奏注入系统时间（>4h 未汇报才汇报），距上一轮
     // call >24h 时额外提示长间隔。状态经框架会话快照（captureState）持久化。
     this.use(new TimeAwarenessFeature());
+    // 会话标题策略（ADR-0041）：订阅轮次事件，在首次成功交付后自动起名。
+    // 触发时机、提示词、模型都由本应用决定；Claw 只提供生成能力与事件面。
+    // 标题文本不再由前端轮询推断（旧 auto-title.js 触发路径已移除）。
+    this.use(new AutoTitlePolicyFeature({
+      serverOrigin: runtimeIdentity.serverOrigin,
+      agentId: runtimeIdentity.agentId,
+    }));
     // 会话级模型选择（ADR-0034）：链级当前状态（快照 + continuity 流转），
     // 输入框切换控件的后端（feature-comms selection 通道）。
     this.use(new ModelSelectionFeature(runtimeIdentity));
@@ -283,6 +291,20 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 经 $mount kind:'builtin' 声明后由宿主钩子按 builtinOptionalFeatures
     // 工厂挂载（见文件尾部导出）。浏览器资产与登录档案仍按 ADR-0016 经装配
     // 注入数据根分区。
+  }
+
+  /**
+   * 宿主在 CallArbiter 就绪后转交轮次事件总线（ADR-0041 决策 3）。
+   * 总线由宿主创建，本 Agent 只负责把它转交给需要订阅的应用 Feature——
+   * 订阅什么、收到后做什么由 Feature 自己的策略决定，Agent 不介入判定。
+   */
+  setTurnEventBus(bus) {
+    this.turnEventBus = bus;
+    for (const feature of this.features?.values?.() ?? []) {
+      if (typeof feature?.setTurnEventBus === 'function') {
+        feature.setTurnEventBus(bus);
+      }
+    }
   }
 
   async onInitiate(ctx) {

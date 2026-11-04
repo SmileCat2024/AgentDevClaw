@@ -21,6 +21,7 @@
 - [0036 会话索引存储迁移 SQLite](0036-session-index-sqlite-storage.md) — node:sqlite 替换 index.json 单文件（Proposed，实施中）
 - [0039 归档对话只读浏览](0039-archived-session-readonly-browsing.md) — 启动与浏览分离，只读浏览唯一实现与视图冻结
 - [0040 上下文守卫三态与过界自动接续](0040-context-guard-tri-state-auto-rotation.md) — badge 三态 + coder 同构接力链路复用，关闭 0032 预留条目
+- [0041 标题属于 Session，生成策略属于应用](0041-title-generation-as-app-capability.md) — 标题状态结构化、OS 提供能力与应用自持策略、接续继承去前缀（Accepted）
 
 ## 运行时与执行环境
 

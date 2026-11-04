@@ -24,6 +24,11 @@ export {
   LONG_GAP_MS,
 } from './time-awareness/src/index.js';
 export {
+  AutoTitlePolicyFeature,
+  shouldGenerateTitle,
+  ENGINEERING_TITLE_INSTRUCTIONS,
+} from './auto-title-policy/src/index.js';
+export {
   CraftAwarenessFeature,
   shouldRemindDocCraft,
   loadKnowledgeDir,

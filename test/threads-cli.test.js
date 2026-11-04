@@ -35,7 +35,9 @@ function startFakeClawServer() {
 
     let payload = { ok: true };
     if (req.url === '/protoclaw/threads?agentId=coder') {
-      payload = { ok: true, threads: [{ threadId: 'wt-1', agentId: 'coder', status: 'idle', lifeState: 'executing', title: '工单025', headSessionId: 's-1' }] };
+      // ADR-0041：列表标题来自 head Session 的索引标题（headSessionTitle），
+      // 线程记录自身的 title 不再参与展示。
+      payload = { ok: true, threads: [{ threadId: 'wt-1', agentId: 'coder', status: 'idle', lifeState: 'executing', headSessionTitle: '工单025', headSessionId: 's-1' }] };
     } else if (req.url === '/protoclaw/threads' && req.method === 'POST') {
       payload = { ok: true, thread: { threadId: 'wt-new', agentId: 'coder', status: 'idle', headSessionId: 's-1' } };
     } else if (req.url === '/protoclaw/prebuilt_sessions' && req.method === 'POST') {
@@ -134,7 +136,7 @@ test('claw threads maps generic commands to Thread HTTP routes', async () => {
   const listed = await runCli(fake.port, ['threads', 'list', '--agent', 'coder', '--format', 'json']);
   assert.equal(listed.code, 0, listed.stderr);
   assert.deepEqual(JSON.parse(listed.stdout).threads[0], {
-    threadId: 'wt-1', agentId: 'coder', status: 'idle', lifeState: 'executing', title: '工单025', headSessionId: 's-1',
+    threadId: 'wt-1', agentId: 'coder', status: 'idle', lifeState: 'executing', headSessionTitle: '工单025', headSessionId: 's-1',
   });
 
   const created = await runCli(fake.port, [

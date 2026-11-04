@@ -456,6 +456,8 @@ export interface ThreadChainEntry {
 export interface ThreadDetailRecord {
   threadId?: string;
   agentId?: string;
+  /** head Session 的索引标题（ADR-0041：线程记录自身的 title 不再消费）。 */
+  headSessionTitle?: string | null;
   title?: string;
   status?: string;
   lifeState?: string;
@@ -490,7 +492,9 @@ export function renderThreadOverview(
 ): string {
   const threadId = cleanText(thread.threadId);
   const agentId = cleanText(thread.agentId);
-  const title = cleanText(thread.title) || '(无标题)';
+  // ADR-0041：对话标题只取当前 head Session 的索引标题。线程记录里的 title
+  // 是历史实现残留（也仍可能存在于旧数据里），不作为对话名称使用。
+  const title = cleanText(thread.headSessionTitle) || '(无标题)';
   const lifeState = cleanText(thread.lifeState);
   const lifeLabel = THREAD_LIFE_STATE_LABELS[lifeState] || lifeState || cleanText(thread.status) || 'unknown';
 

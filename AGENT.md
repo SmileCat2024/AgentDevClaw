@@ -115,6 +115,8 @@ app-core.js 全局状态纪律：全局状态区只减不增。新增前端状�
 
 入口 `prebuilt-agents/official/programming-helper/`。用户交互式编程 Agent：Shell / Web 搜索 / MCP 完整工具链（LSP 与 Playwright 浏览器为官方可选插件，在设置里装配），会话分支、trim / compact / summary 精简、checkpoint / rollback、AI 标题、语音输入。
 
+AI 标题是**应用职责**（[ADR-0041](docs/adr/0041-title-generation-as-app-capability.md)）：标题是 Session 的属性（`titleState` 三态），应用在 metadata 声明 `titlePolicy: 'app'` 并在 `agent.js` 装配 `local-features/auto-title-policy` 的 `AutoTitlePolicyFeature`，由它订阅轮次事件决定何时生成。壳层 `public/src/modules/auto-title.js` 的旧触发已硬屏蔽（`isShellTitleTriggerDisabled()` 恒真），**不会兜底**——新增对话型应用漏装配就没有自动标题。Claw 只提供按会话生成 / 直接写入能力与轮次事件面。
+
 目录与项目：目录决定工作位置，项目提供稳定的对话与配置归属；默认项是目录对话集合，不是项目实体。两种归属共用对话操作，项目按绑定目录导航但不以目录为身份；项目链不继承目录配置，同路径不隔离工作文件。关键入口：`server/routes/ph-projects.js`（项目存储、生命周期与会话归属转移 `sessions_move`）、`server/shared/session-project.js`（有效运行目录）、`public/src/modules/project-data.js` / `session-list-render.js` / `ph-project-actions.js`（归属导航）/ `ph-session-move.js`（对话整理弹窗与多选）。对话身份与线程化语义（目录/项目对话一并覆盖）见 [ADR-0032](docs/adr/0032-programming-helper-thread-driven.md)。概念边界见 [CONTEXT.md](CONTEXT.md) 的“编程小助手的对话归属”。
 
 ### Coder（coder）★

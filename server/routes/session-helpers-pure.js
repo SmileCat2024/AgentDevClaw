@@ -10,6 +10,8 @@ import { cleanSessionText } from '../shared/string-helpers.js';
 import {
   normalizeSessionMetadata,
   getPrebuiltSessionFilePath,
+  isPlaceholderTitledSession,
+  normalizeSessionTitleState,
 } from '../shared/session-access.js';
 
 /**
@@ -100,8 +102,11 @@ export function resolveSessionModelFromRecord(record, modelInfoMap) {
 
 /**
  * Determine which sessions are eligible for cleanup.
- * Only targets default "新对话N" titled sessions that have zero messages
- * or whose session file is missing/corrupt.
+ *
+ * Only targets sessions still in the placeholder title state that have zero
+ * messages or whose session file is missing/corrupt. The state comes from the
+ * structured `titleState` field (ADR-0041) — the placeholder text itself is
+ * display-only and never a business condition.
  *
  * Extracted from cleanupEmptySessions for testability.
  *
@@ -113,7 +118,7 @@ export function resolveSessionModelFromRecord(record, modelInfoMap) {
 export function selectEmptySessions(sessions, sessionMessageCounts) {
   const toDelete = [];
   for (const record of sessions) {
-    if (!/^新对话\d+$/.test(cleanSessionText(record.title))) continue;
+    if (!isPlaceholderTitledSession(record)) continue;
     const info = sessionMessageCounts.get(record.id);
     if (!info) {
       toDelete.push(record.id);
@@ -450,6 +455,7 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
   return {
     id: cleanSessionText(record?.id),
     title: cleanSessionText(record?.title),
+    titleState: normalizeSessionTitleState(record?.titleState),
     featureName: cleanSessionText(record?.featureName),
     agentName: cleanSessionText(record?.agentName),
     taskTitle: cleanSessionText(record?.taskTitle),
@@ -636,7 +642,7 @@ export function sliceSessionsForWire(sessions, options = {}) {
 }
 
 const SIDEBAR_READ_MODEL_FIELDS = [
-  'title', 'featureName', 'agentName', 'taskTitle', 'sessionType', 'status',
+  'title', 'titleState', 'featureName', 'agentName', 'taskTitle', 'sessionType', 'status',
   'archived', 'todo', 'formId', 'openDirectory', 'createdAt', 'updatedAt',
   'messageCount', 'preview', 'hasSummary', 'contextLength', 'compressRatio',
   'modelName', 'tokenUsage',

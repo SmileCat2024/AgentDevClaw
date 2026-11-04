@@ -511,7 +511,10 @@ describe('thread navigation (dual-mode session_read_overview)', () => {
     const thread = {
       threadId: 'wt-x',
       agentId: 'coder',
-      title: '审查最近更改',
+      // ADR-0041：对话标题取 head Session 的索引标题；线程记录的 title
+      // 不再参与展示，这里让它与 headSessionTitle 不同以证明前者不被读取。
+      headSessionTitle: '审查最近更改',
+      title: '线程记录的旧标题不参与展示',
       lifeState: 'archived',
       rootSessionId: 's-1',
       headSessionId: 's-3',

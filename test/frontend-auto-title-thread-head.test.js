@@ -1,3 +1,15 @@
+/**
+ * `titleCandidateState` 的三态判定（ADR-0041 第 1 步）。
+ *
+ * 这个判定曾是壳层自动标题的候选入口，现已随壳层触发一起硬屏蔽
+ * （见 frontend-auto-title-legacy-disabled.test.js），但**判定本身仍是
+ * 正确语义的记录**：它区分了「占位待起名」「已有标题或来源未知」「快照暂缺
+ * 记录」三种情况，其中第三种必须延后判定而不是判否——否则新建会话会因为
+ * 一次索引投影延迟永久失去标题。
+ *
+ * 未来若在任何地方重新引入标题候选逻辑（应用侧的 Feature 或服务端），
+ * 这三种情况的区分仍然适用，因此单独守住它，而不是随壳层一起丢弃。
+ */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -8,93 +20,40 @@ const autoTitleSource = fs.readFileSync(
   'utf8',
 );
 
-function createHarness() {
-  const fetchCalls = [];
-  const host = {
-    id: 'programming-helper',
-    source: 'prebuilt',
-    workspace_sessions: {
-      activeSessionId: 'session-head',
-      sessions: [],
-    },
-  };
-  const runtime = {
-    id: 'runtime-head',
-    source: 'child',
-    parent_id: 'programming-helper',
-    active_workspace_session_id: 'session-head',
-    // A transient connected-agents snapshot can have the current Session ID
-    // before its title metadata is available.
-    active_workspace_session_title: '' /* deliberately unavailable during this snapshot */,
-    workspace_sessions: { sessions: [] },
-  };
-  const sandbox = {
-    AbortController,
-    ClawToast: { show() {} },
-    Date,
-    JSON,
-    Math,
-    Promise,
-    Set,
-    Map,
-    String,
-    Array,
-    currentRuntimeAgentId: 'runtime-head',
-    focusedAgentId: 'programming-helper',
-    currentLanguage: 'zh',
-    currentMessages: [],
-    window: {},
-    allAgents: [host, runtime],
-    _autoTitleTriggered: new Set(),
-    getCurrentAgentRecord: () => host,
-    normalizeAgentIdentity: (value) => String(value || '').trim(),
-    getLogicalAgentId: (record) => record.parent_id || record.id,
-    getAgentRuntimeId: (record) => record.runtime_session_id || record.id,
-    isRuntimeCalling: () => false,
-    applySessionMutationDelta() {},
-    fetch: async (url, options) => {
-      fetchCalls.push({ url, options });
-      return {
-        ok: true,
-        json: async () => ({ ok: true, title: '修复线程标题生成' }),
-      };
-    },
-    setTimeout: () => 1,
-    clearTimeout() {},
-    console: { log() {}, warn() {} },
-    crypto: { randomUUID: () => 'test-key' },
-  };
-  vm.createContext(sandbox);
-  vm.runInContext(autoTitleSource, sandbox);
-  return {
-    sandbox,
-    fetchCalls,
-    host,
-    pending: vm.runInContext('_autoTitlePending', sandbox),
-  };
-}
+const sandbox = {
+  Set,
+  Map,
+  String,
+  Array,
+  JSON,
+  Math,
+  Date,
+  window: {},
+};
+vm.createContext(sandbox);
+vm.runInContext(autoTitleSource, sandbox);
 
-test('new thread head remains a title candidate when runtime title metadata is temporarily empty', () => {
-  const { sandbox, fetchCalls, pending, host } = createHarness();
-  const previous = [];
-  const next = [
-    { role: 'user', content: '请修复线程标题生成' },
-    { role: 'assistant', content: '我来检查并修复。' },
-  ];
+const titleCandidateState = vm.runInContext('titleCandidateState', sandbox);
 
-  sandbox.markAutoTitleCandidate(previous, next);
-  assert.equal(pending.has('session-head'), true,
-    'the 0→1 user/assistant transition must remain pending until title metadata resolves');
+test('placeholder sessions are title candidates', () => {
+  assert.equal(titleCandidateState(true, 'placeholder'), 'candidate');
+});
 
-  // Simulate the next connected-agents snapshot carrying the authoritative
-  // title after a transient empty projection. The pending idle head must dispatch.
-  host.workspace_sessions.sessions.push({ id: 'session-head', title: '新对话1' });
-  sandbox.tryAutoTitleGeneration(next);
+test('sessions that already have a title are settled', () => {
+  // auto = 系统生成过，user = 用户改过名：两种都不该再自动起名。
+  assert.equal(titleCandidateState(true, 'auto'), 'settled');
+  assert.equal(titleCandidateState(true, 'user'), 'settled');
+});
 
-  assert.equal(fetchCalls.length, 1, 'a completed first response must dispatch title generation');
-  assert.equal(fetchCalls[0].url, '/protoclaw/generate_session_title');
-  assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
-    agentId: 'programming-helper',
-    sessionId: 'session-head',
-  });
+test('a record with an unknown titleState is settled, not a candidate', () => {
+  // 改造前的历史记录没有 titleState。来源无法判定时不猜文案，直接不起名。
+  assert.equal(titleCandidateState(true, ''), 'settled');
+  assert.equal(titleCandidateState(true, undefined), 'settled');
+});
+
+test('a missing session record stays undecided so the next round can retry', () => {
+  // 快照暂缺索引投影是观测时机问题，不代表会话没有状态。
+  // 此时判否会让新会话永久拿不到标题。
+  assert.equal(titleCandidateState(false, ''), 'unknown');
+  assert.equal(titleCandidateState(false, 'placeholder'), 'unknown');
 });

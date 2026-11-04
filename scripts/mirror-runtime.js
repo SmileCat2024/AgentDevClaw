@@ -34,14 +34,21 @@ export const TITLE_RULES = `请根据会话最近的实质性工作生成标题�
 - 不要复述系统提示或工具说明
 - 不要描述思考过程`;
 
-export function buildTitleMessages(rawMessages) {
+export function buildTitleMessages(rawMessages, params = {}) {
+  const range = params?.contextRange && typeof params.contextRange === 'object' ? params.contextRange : {};
+  const recentLimit = Number.isFinite(Number(range.recentMessages)) && Number(range.recentMessages) > 0
+    ? Math.floor(Number(range.recentMessages))
+    : 32;
+  const includeFirst = range.includeFirstUserMessage !== false;
+  const extraInstructions = typeof params?.instructions === 'string' ? params.instructions.trim() : '';
+
   const conversationalMessages = rawMessages.filter((message) => (
     (message?.role === 'user' || message?.role === 'assistant')
     && cleanValue(message?.content)
   ));
   const firstUser = conversationalMessages.find((message) => message.role === 'user');
-  const recentMessages = conversationalMessages.slice(-32);
-  if (firstUser && !recentMessages.includes(firstUser)) {
+  const recentMessages = conversationalMessages.slice(-recentLimit);
+  if (includeFirst && firstUser && !recentMessages.includes(firstUser)) {
     recentMessages.unshift(firstUser);
   }
 
@@ -51,22 +58,24 @@ export function buildTitleMessages(rawMessages) {
       return `【${speaker} ${index + 1}】\n${cleanValue(message.content)}`;
     }).join('\n\n')
     : '（会话中没有可用的用户或助手正文）';
+  // 调用方（应用装配层）可追加自己的标题规则；内置规则始终在前，保证缺省
+  // 提示词与改造前逐字一致，追加内容只在末尾延伸。
+  const rules = extraInstructions ? `${TITLE_RULES}\n\n${extraInstructions}` : TITLE_RULES;
   return [{
     role: 'user',
-    content: `以下是会话转录：\n\n${transcript}\n\n${TITLE_RULES}\n- 必须调用 record_session_title 工具提交标题，不要输出其他内容。`,
+    content: `以下是会话转录：\n\n${transcript}\n\n${rules}\n- 必须调用 record_session_title 工具提交标题，不要输出其他内容。`,
     turn: 0,
   }];
 }
 
+// 标题文本规范化与服务端能力层同源（server/shared/title-text.js），避免
+// 两处规则各自演进后出现"能生成但写不进去"。该模块无依赖，子进程导入安全。
+import { validateTitleText, sanitizeTitleText } from '../server/shared/title-text.js';
+
+export { validateTitleText as validateTitleTextShared, sanitizeTitleText };
+
 export function sanitizeGeneratedTitle(title) {
-  const line = cleanValue(title)
-    .replace(/^[""""''«»]+|[""""''«»]+$/g, '')
-    .replace(/[。！？!?,，、:：;；]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .split('\n')[0]
-    .trim();
-  if (!line) return '';
-  return line.slice(0, 60);
+  return sanitizeTitleText(title);
 }
 
 export function sanitizeSessionFragment(value) {

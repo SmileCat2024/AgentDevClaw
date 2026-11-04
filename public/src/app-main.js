@@ -1321,6 +1321,9 @@ async function runMessagesProbeCycle(pollToken, msgProbe) {
     // (status refresh, call states, queue sync) that add visible latency.
     const previousMessages = previous.messages;
     const nextMessages = current.messages;
+    // ADR-0041：壳层自动标题已硬屏蔽，此处调用是空操作（no-op）。
+    // 保留调用点只为记录历史触发位置；标题由应用自己的 AutoTitlePolicyFeature
+    // 订阅轮次事件生成。不要在此处恢复触发逻辑。
     markAutoTitleCandidate(previousMessages, nextMessages);
     const firstChangedIndex = findFirstChangedMessageIndex(nextMessages, previousMessages);
     if (nextMessages.length !== previousMessages.length) {
@@ -1708,6 +1711,7 @@ async function runPollCycle() {
         schedulePoll(POLL_FAST_INTERVAL_MS);
         return;
       }
+      // ADR-0041：壳层自动标题已硬屏蔽，调用为空操作（no-op）。
       commitSessionViewState(pollToken, () => {
         if (!isRuntimeCalling(pollRuntimeId)) {
           tryAutoTitleGeneration(currentMessages);
@@ -1804,7 +1808,8 @@ async function runPollCycle() {
       return;
     }
 
-    // Generate only after this session's first assistant response was newly observed and completed.
+    // ADR-0041：壳层自动标题已硬屏蔽，此处调用为空操作（no-op）。
+    // 标题由应用自己的 AutoTitlePolicyFeature 订阅轮次事件生成；不要在此恢复触发逻辑。
     commitSessionViewState(pollToken, () => {
       if (!isRuntimeCalling(pollRuntimeId)) {
         tryAutoTitleGeneration(currentMessages);

@@ -1,7 +1,14 @@
 /**
- * auto-title.js — 自动标题生成
+ * auto-title.js — 壳层自动标题（历史实现，已硬屏蔽）＋ 会话视图工具
  * 从 app-main.js 拆出（Phase A-3）
  * 拆出日期：2026-07-03
+ *
+ * 本文件现在包含两类内容，命运不同：
+ *
+ *   1. 会话视图工具 —— 仍在用。`_messagesEqual`、`findFirstChangedMessageIndex`
+ *      服务于消息增量渲染；`checkGlobalChoiceAlerts` 服务于跨会话选择告警。
+ *   2. 自动标题生成 —— 历史实现，被 isShellTitleTriggerDisabled() 硬屏蔽，
+ *      入口不可达。**标题由应用自己的 AutoTitlePolicyFeature 生成**（ADR-0041）。
  *
  * 依赖全局状态（定义在 app-core.js）:
  *   currentRuntimeAgentId, focusedAgentId, currentLanguage,
@@ -17,6 +24,21 @@
  *   autoGenerateSessionTitle, checkGlobalChoiceAlerts
  * 导出全局变量:
  *   _autoTitlePending
+ *
+ * ══════════════════════════════════════════════════════════════════════════
+ * 重要：本文件下半部分的「自动标题生成」是 ADR-0041 之前的历史实现，已被
+ * 硬屏蔽（hard-disabled）。代码保留只作为历史行为参照，不参与运行。
+ *
+ * 现行归属：标题策略属于应用。应用在 metadata 声明 `titlePolicy: 'app'`，
+ * 并在 agent.js 装配 AutoTitlePolicyFeature 订阅轮次事件，自行决定何时、
+ * 用什么提示词、选什么模型。壳层若同时触发，同一会话会被两条链路各起一次名。
+ *
+ * 所有对外入口都在产生任何副作用之前返回，判定见
+ * isShellTitleTriggerDisabled()。不要为了「让某个应用也能自动命名」而改
+ * 那里的开关——正确做法是给该应用装配 AutoTitlePolicyFeature
+ * （local-features/auto-title-policy）。契约由
+ * test/frontend-auto-title-legacy-disabled.test.js 守住。
+ * ══════════════════════════════════════════════════════════════════════════
  */
 
 // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
@@ -29,16 +51,58 @@ function newIdempotencyKey() {
 }
 
 // ── Auto session title generation ──────────────────────────────────────────
+
+/**
+ * 壳层自动标题的**硬屏蔽开关**（ADR-0041）。
+ *
+ * 值恒为 true。它不是配置项、不是 feature flag：没有环境变量、没有 window
+ * 开关、没有 metadata 声明可以让它变回 false。要恢复壳层触发必须是显式改动
+ * 这里的返回值——那是一次可见的代码改动，而不是一次「配置一下就悄悄回来了」。
+ *
+ * 三个导出入口（markAutoTitleCandidate / recheckAutoTitleCandidate /
+ * tryAutoTitleGeneration）以及真正产生副作用的 autoGenerateSessionTitle，
+ * 都在任何副作用之前调用它并直接返回，因此即便有调用方残留或新增，也不会
+ * 登记候选、不会发请求、不会写标题。
+ */
+function isShellTitleTriggerDisabled() {
+  return true;
+}
+
 const _autoTitlePending = new Set();
-// 衍生会话（trim/summary/branch）基线 assistant 数量。
-// 首次观测到非空消息时记录，之后只有 assistant 数量超过基线才触发标题生成。
-// 这样既能跳过初始 seed 注入，又不会因 currentMessages 被临时重置为 [] 而误判。
-const _derivedBaseline = new Map();
+
+/**
+ * 标题候选判定（ADR-0041）：是否还需要起名，只看结构化 titleState，不再匹配
+ * 标题文案。三种情况必须区分，混为一谈会造成两类错误：
+ *
+ *   placeholder           — 占位，等应用策略起名 → 候选
+ *   auto / user           — 已有标题（生成 / 用户改名）→ 不再自动生成
+ *   字段在、值未知        — 改造前的历史记录，来源无法判定 → 不生成（不猜文案）
+ *   连索引记录都还没拿到  — 快照暂缺，不代表会话没有状态 → 保留候选，等下一轮
+ *
+ * 最后一种只是观测时机问题：connected-agents 快照可能在 head 创建/接续时暂缺
+ * 该会话的索引投影。此时按"未知"直接判否会让新会话永久拿不到标题，因此延后
+ * 判定而不是放弃。
+ */
+function isPlaceholderTitleState(titleState) {
+  return String(titleState || '').trim() === 'placeholder';
+}
+
+/**
+ * 候选三态判定：'candidate' | 'settled' | 'unknown'。
+ *   candidate — 占位，等待生成
+ *   settled   — 已有标题或来源未知，不再自动生成
+ *   unknown   — 快照里还没有该会话记录，保持待判，下一轮再试
+ */
+function titleCandidateState(sessionKnown, titleState) {
+  if (!sessionKnown) return 'unknown';
+  return isPlaceholderTitleState(titleState) ? 'candidate' : 'settled';
+}
 
 function getAutoTitleSessionInfo() {
   // 线程会话的标题真源是 head Session 索引记录。connected-agents 快照在
   // head 创建/接续时可能暂缺 active_workspace_session_title；使用 host 的
-  // session index 记录标题，不让空 runtime 投影屏蔽“新对话N”候选判断。
+  // session index 记录标题与 titleState（正文不用它做判定，仅供展示），不让
+  // 空 runtime 投影屏蔽占位会话的候选判断。
   // 当用户在查看某个 runtime 时，优先使用该 runtime agent 的 session 信息。
   // host agent 的 active_workspace_session_id 指向 "primary" runtime（通常是最近启动的），
   // 但用户可能正在查看另一个 runtime 的会话。
@@ -62,7 +126,16 @@ function getAutoTitleSessionInfo() {
           return s && String(s.id || '').trim() === sessionId;
         });
         const title = String(runtimeAgent.active_workspace_session_title || session?.title || '').trim();
-        return { agent: runtimeAgent, agentId: logicalAgentId || runtimeAgent.id, sessionId, title };
+        return {
+          agent: runtimeAgent,
+          agentId: logicalAgentId || runtimeAgent.id,
+          sessionId,
+          title,
+          // sessionKnown=false 表示快照里还没有该会话的索引记录（标题与状态都
+          // 未知），与"记录在但 titleState 缺失"是两回事，调用方要分开处理。
+          sessionKnown: !!session,
+          titleState: session?.titleState || '',
+        };
       }
     }
   }
@@ -70,46 +143,64 @@ function getAutoTitleSessionInfo() {
   const agent = getCurrentAgentRecord();
   if (!agent) return null;
   const sessionId = String(agent.active_workspace_session_id || agent.workspace_sessions?.activeSessionId || '').trim();
-  return sessionId ? { agent, agentId: agent.id, sessionId } : null;
+  if (!sessionId) return null;
+  const hostSessions = agent.workspace_sessions?.sessions;
+  const hostSession = Array.isArray(hostSessions)
+    ? hostSessions.find(function(s) { return s && String(s.id || '').trim() === sessionId; })
+    : null;
+  return {
+    agent,
+    agentId: agent.id,
+    sessionId,
+    title: String(agent.active_workspace_session_title || hostSession?.title || '').trim(),
+    sessionKnown: !!hostSession,
+    titleState: hostSession?.titleState || '',
+  };
+}
+
+/**
+ * 该应用是否已自行接管标题策略（ADR-0041）—— **历史实现，已不参与运行**。
+ *
+ * 曾用于让壳层对已声明 `titlePolicy: 'app'` 的应用让位。现在壳层整体硬屏蔽
+ * （见 isShellTitleTriggerDisabled），本判定与 isValidTitleEvent 都不可达，
+ * 保留仅为理解迁移过程。
+ *
+ * 不要用「只对未声明应用生效」的方式复活这段逻辑：迁移已全部完成，
+ * 三个对话型应用都装配了 AutoTitlePolicyFeature；新应用应同样装配，
+ * 而不是回落到壳层触发。
+ */
+function isAppOwnedTitlePolicy(agentRecord) {
+  if (!agentRecord || typeof agentRecord !== 'object') return false;
+  return String(agentRecord.titlePolicy || '').trim() === 'app';
+}
+
+function isValidTitleEvent(info) {
+  const agentRecord = (info && info.agent) || {};
+  const hostAgent = allAgents.find(function(a) {
+    return normalizeAgentIdentity(a && a.id) === normalizeAgentIdentity(info.agentId);
+  });
+  return !isAppOwnedTitlePolicy(agentRecord) && !isAppOwnedTitlePolicy(hostAgent);
 }
 
 function markAutoTitleCandidate(previousMessages, nextMessages) {
+  // ADR-0041：壳层自动标题已硬屏蔽，不再登记任何候选。
+  if (isShellTitleTriggerDisabled()) return;
   const info = getAutoTitleSessionInfo();
   if (!info) return;
-  const currentTitle = info.title || String(info.agent.active_workspace_session_title || '').trim();
-  const isDerivedSession = /^（/.test(currentTitle);
-  if (currentTitle && !/^新对话\d+$/.test(currentTitle) && !isDerivedSession) return;
+  if (!isValidTitleEvent(info)) return;
+  // 状态未知（快照暂缺记录）时也登记候选：待下一轮标题状态可见再定去留，
+  // 否则新会话会因一次投影延迟永久失去自动标题。
+  if (titleCandidateState(info.sessionKnown, info.titleState) === 'settled') return;
   const previousAssistantCount = previousMessages.filter(function(message) {
     return message && message.role === 'assistant';
   }).length;
   const nextAssistantCount = nextMessages.filter(function(message) {
     return message && message.role === 'assistant';
   }).length;
-  // [DEBUG-AUTO-TITLE]
-  console.log('[AutoTitle][mark] session:', info.sessionId, 'title:', JSON.stringify(currentTitle),
-    'prevMsgs:', previousMessages.length, 'nextMsgs:', nextMessages.length,
-    'prevAC:', previousAssistantCount, 'nextAC:', nextAssistantCount,
-    'isDerived:', isDerivedSession);
-  if (isDerivedSession) {
-    if (!_derivedBaseline.has(info.sessionId)) {
-      if (nextMessages.length > 0) {
-        _derivedBaseline.set(info.sessionId, nextAssistantCount);
-        console.log('[AutoTitle][mark] → recorded baseline:', nextAssistantCount);
-      }
-      return;
-    }
-    if (nextAssistantCount > _derivedBaseline.get(info.sessionId)) {
-      console.log('[AutoTitle][mark] → ADD TO PENDING (derived, exceeded baseline)');
+  if (previousAssistantCount === 0 && nextAssistantCount > 0) {
+    const hasUserMessage = nextMessages.some(function(m) { return m && m.role === 'user'; });
+    if (hasUserMessage) {
       _autoTitlePending.add(info.sessionId);
-    }
-  } else {
-    if (previousAssistantCount === 0 && nextAssistantCount > 0) {
-      const hasUserMessage = nextMessages.some(function(m) { return m && m.role === 'user'; });
-      console.log('[AutoTitle][mark] → new conv 0→1 check, hasUser:', hasUserMessage);
-      if (hasUserMessage) {
-        console.log('[AutoTitle][mark] → ADD TO PENDING (new conv)');
-        _autoTitlePending.add(info.sessionId);
-      }
     }
   }
 }
@@ -121,42 +212,21 @@ function markAutoTitleCandidate(previousMessages, nextMessages) {
  * (page refresh, session switch with cached data).
  */
 function recheckAutoTitleCandidate() {
+  // ADR-0041：壳层自动标题已硬屏蔽，不再登记任何候选。
+  if (isShellTitleTriggerDisabled()) return;
   const info = getAutoTitleSessionInfo();
   if (!info) return;
-  const { agent, sessionId } = info;
-  const currentTitle = info.title || String(agent.active_workspace_session_title || '').trim();
-  const isDerivedSession = /^（/.test(currentTitle);
-  const isNewConversation = /^新对话\d+$/.test(currentTitle);
-  if (!isDerivedSession && !isNewConversation) return;
+  if (!isValidTitleEvent(info)) return;
+  if (titleCandidateState(info.sessionKnown, info.titleState) === 'settled') return;
+  const { sessionId } = info;
 
   const currentAC = Array.isArray(currentMessages)
     ? currentMessages.filter(function(m) { return m && m.role === 'assistant'; }).length
     : 0;
-  const currentMsgLen = Array.isArray(currentMessages) ? currentMessages.length : 0;
-
-  // [DEBUG-AUTO-TITLE]
-  console.log('[AutoTitle][recheck] session:', sessionId, 'title:', JSON.stringify(currentTitle),
-    'msgLen:', currentMsgLen, 'AC:', currentAC, 'isDerived:', isDerivedSession, 'isNew:', isNewConversation);
-
-  if (isDerivedSession) {
-    if (!_derivedBaseline.has(sessionId)) {
-      if (currentMsgLen > 0) {
-        _derivedBaseline.set(sessionId, currentAC);
-        console.log('[AutoTitle][recheck] → recorded baseline:', currentAC);
-      }
-      return;
-    }
-    if (currentAC > _derivedBaseline.get(sessionId)) {
-      console.log('[AutoTitle][recheck] → ADD TO PENDING (derived, exceeded baseline)');
-      _autoTitlePending.add(sessionId);
-    }
-    return;
-  }
 
   const hasUserMessage = Array.isArray(currentMessages)
     && currentMessages.some(function(m) { return m && m.role === 'user'; });
   if (currentAC > 0 && hasUserMessage) {
-    console.log('[AutoTitle][recheck] → ADD TO PENDING (new conv, AC>0 & hasUser)');
     _autoTitlePending.add(sessionId);
   }
 }
@@ -213,6 +283,7 @@ function _findSessionOwner(sessionId) {
         sessionId: sessionId,
         runtimeId: typeof getAgentRuntimeId === 'function' ? getAgentRuntimeId(agent) : (agent.runtime_session_id || agent.id),
         title: String(session.title || '').trim(),
+        titleState: session.titleState || '',
       };
     }
   }
@@ -223,16 +294,18 @@ function _findSessionOwner(sessionId) {
  * Attempt title generation for a single session after all guard checks pass.
  * @param agent  - agent record (must have .id)
  * @param sessionId
- * @param sessionTitle - current title string (checked against /^新对话\d+$/)
+ * @param sessionTitle - current title text (display only, never a condition)
+ * @param titleState - structured title state from the session index (ADR-0041)
  * @param messages - current session's messages array (null for non-current sessions)
  */
-function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
-  // 匹配新对话 或 衍生会话前缀（（精简）（摘要）（分支）等）
-  if (!/^新对话\d+$/.test(sessionTitle) && !/^（/.test(sessionTitle)) {
+function _tryTitleForSession(agent, sessionId, sessionTitle, titleState, sessionKnown, messages) {
+  const state = titleCandidateState(sessionKnown, titleState);
+  if (state === 'settled') {
     _autoTitlePending.delete(sessionId);
-    _derivedBaseline.delete(sessionId);
     return;
   }
+  // 'unknown' 时保留候选，等索引投影到达后由下一轮 tryAutoTitleGeneration 处理。
+  if (state !== 'candidate') return;
 
   // For the current session, verify there is at least one assistant message
   // with non-empty content to generate a title from.
@@ -250,9 +323,6 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
 
   _autoTitleTriggered.add(sessionId);
 
-  // [DEBUG-AUTO-TITLE]
-  console.log('[AutoTitle][FIRE] → autoGenerateSessionTitle for session:', sessionId, 'agent:', agent.id);
-
   // Fire and forget — don't block the poll loop
   const logicalAgentId = typeof getLogicalAgentId === 'function'
     ? getLogicalAgentId(agent)
@@ -261,20 +331,25 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
 }
 
 function tryAutoTitleGeneration(messages) {
+  // ADR-0041：壳层自动标题已硬屏蔽——不扫候选、不发请求。
+  // 应用自行装配 AutoTitlePolicyFeature 决定何时生成。
+  if (isShellTitleTriggerDisabled()) return;
   if (!currentRuntimeAgentId || !focusedAgentId) return;
 
-  // [DEBUG-AUTO-TITLE]
-  if (_autoTitlePending.size > 0) {
-    console.log('[AutoTitle][try] pending set:', Array.from(_autoTitlePending),
-      'currentRuntime:', currentRuntimeAgentId);
-  }
-
   const info = getAutoTitleSessionInfo();
+
+  // 已自行接管标题策略的应用（metadata `titlePolicy: 'app'`）由它自己的
+  // Feature 触发生成，壳层不再介入；这里也清掉可能残留的候选登记。
+  if (info && !isValidTitleEvent(info)) {
+    _autoTitlePending.delete(info.sessionId);
+    _autoTitleTriggered.delete(info.sessionId);
+    return;
+  }
 
   // 1. Try the currently-viewed session
   if (info && _autoTitlePending.has(info.sessionId)) {
     const currentTitle = info.title || String(info.agent.active_workspace_session_title || '').trim();
-    _tryTitleForSession(info.agent, info.sessionId, currentTitle, messages);
+    _tryTitleForSession(info.agent, info.sessionId, currentTitle, info.titleState, info.sessionKnown, messages);
   }
 
   // 2. Scan other pending sessions whose runtimes are idle.
@@ -290,14 +365,13 @@ function tryAutoTitleGeneration(messages) {
       // Session no longer exists in any agent — clean up
       _autoTitlePending.delete(pendingId);
       _autoTitleTriggered.delete(pendingId);
-      _derivedBaseline.delete(pendingId);
       continue;
     }
 
     // Only trigger if the owning runtime is idle (assistant finished responding)
     if (typeof isRuntimeCalling === 'function' && isRuntimeCalling(owner.runtimeId)) continue;
 
-    _tryTitleForSession(owner.agent, pendingId, owner.title, null);
+    _tryTitleForSession(owner.agent, pendingId, owner.title, owner.titleState, true, null);
   }
 }
 
@@ -312,6 +386,9 @@ const AUTO_TITLE_FETCH_TIMEOUT_MS = 125000;
  * Background sessions generate silently — only success/failure toast is shown.
  */
 async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
+  // ADR-0041：真正的副作用（网络请求 + 标题落盘）在这里，同样硬屏蔽。
+  // 三个上游入口已返回，这里是第二道闸，覆盖直接调用本函数的情况。
+  if (isShellTitleTriggerDisabled()) return;
   let succeeded = false;
   let lastError = null;
   const isZh = currentLanguage === 'zh';
@@ -356,7 +433,11 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
         if (agent) {
           const sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
           const target = sessions.find(function(s) { return s.id === sessionId; });
-          if (target) target.title = result.title;
+          if (target) {
+            target.title = result.title;
+            // 服务端拒绝覆盖用户改名时回传用户的名字，此时状态仍是 user。
+            target.titleState = result.titleUnchanged === true ? 'user' : 'auto';
+          }
           if (String(agent.active_workspace_session_id || '') === String(sessionId)) {
             agent.active_workspace_session_title = result.title;
           }
@@ -403,7 +484,6 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
 
   _autoTitleTriggered.delete(sessionId);
   _autoTitlePending.delete(sessionId);
-  _derivedBaseline.delete(sessionId);
 }
 
 /**

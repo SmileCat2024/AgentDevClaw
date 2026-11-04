@@ -928,7 +928,9 @@ describe('ThreadIntegration (coder host gating)', () => {
     const coderThread = await integration.onSessionCreated('coder', { id: 'cs-1', title: '修复登录' });
     assert.ok(coderThread);
     assert.equal(coderThread.headSessionId, 'cs-1');
-    assert.equal(coderThread.title, '修复登录');
+    // ADR-0041：建线不再把会话标题写进线程记录。对话名称的唯一来源是
+    // Session 索引，线程 title 字段保留但停止写入。
+    assert.equal(String(coderThread.title || ''), '');
 
     const phThread = await integration.onSessionCreated('programming-helper', { id: 'ph-1' });
     assert.equal(phThread, null);

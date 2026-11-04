@@ -70,6 +70,7 @@ async function loadAgentData(agentId) {
       commitSessionViewPatch(loadToken, {
         messages: attachMessagesTimestamps(data.messages || [], data.timestamps),
       }, ({ current }) => {
+        // ADR-0041：壳层自动标题已硬屏蔽，此处为空操作（no-op）。
         recheckAutoTitleCandidate();
         if (current.messages.length > 0) clearChatLoadingSession();
         updateRollbackActionVisibility();

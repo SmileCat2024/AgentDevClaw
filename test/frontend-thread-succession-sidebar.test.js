@@ -67,7 +67,7 @@ describe('runtime-status: single sidebar entry across the succession window', ()
     ctx.window.ClawThreads = {
       threads: [{
         threadId: 'wt-relay', agentId: 'coder',
-        title: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
+        headSessionTitle: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
         status: 'rotating', lifeState: 'executing', handoffStartedAt: Date.now(),
       }],
       sessionIndex: {},
@@ -95,7 +95,7 @@ describe('runtime-status: single sidebar entry across the succession window', ()
     const ctx = loadRuntimeStatus();
     const thread = {
       threadId: 'wt-relay', agentId: 'coder',
-      title: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
+      headSessionTitle: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
       status: 'rotating', lifeState: 'executing', handoffStartedAt: Date.now(),
     };
     ctx.window.ClawThreads = { threads: [thread], sessionIndex: { 'coder::old-head': thread } };
@@ -142,7 +142,7 @@ describe('runtime-status: single sidebar entry across the succession window', ()
     const ctx = loadRuntimeStatus();
     const thread = {
       threadId: 'wt-relay', agentId: 'programming-helper',
-      title: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
+      headSessionTitle: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
       status: 'rotating', lifeState: 'executing', handoffStartedAt: Date.now(),
     };
     ctx.window.ClawThreads = {
@@ -175,7 +175,7 @@ describe('runtime-status: single sidebar entry across the succession window', ()
     const ctx = loadRuntimeStatus();
     const thread = {
       threadId: 'wt-relay', agentId: 'programming-helper',
-      title: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
+      headSessionTitle: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head'],
       status: 'rotating', lifeState: 'executing', handoffStartedAt: Date.now(),
     };
     ctx.window.ClawThreads = {

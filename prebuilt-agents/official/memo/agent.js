@@ -30,6 +30,7 @@ import { ModelSelectionFeature } from '../../../local-features/dist/model-select
 import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
 import { MemoNotesFeature } from '../../../local-features/dist/memo-notes/src/index.js';
 import { MemoRemindersFeature } from '../../../local-features/dist/memo-reminders/src/index.js';
+import { AutoTitlePolicyFeature } from '../../../local-features/dist/auto-title-policy/src/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -83,6 +84,32 @@ export default class MemoAgent extends BasicAgent {
       sessionId: runtimeIdentity.sessionId,
       serverOrigin: runtimeIdentity.serverOrigin,
     }));
+
+    // 会话标题策略（ADR-0041）：memo 的唯一活动线程也要有可识别的名称，
+    // 但标题内容与「工程任务」不同——这里是用户的备忘主题。触发时机同样
+    // 由本应用决定（首次成功交付后一次），Claw 只提供生成能力。
+    this.use(new AutoTitlePolicyFeature({
+      serverOrigin: runtimeIdentity.serverOrigin,
+      agentId: runtimeIdentity.agentId,
+      instructions: [
+        '这是个人备忘录会话，标题应体现用户在记的具体事情：',
+        '要办的事项、要记住的信息、想继续跟进的主题。',
+        '使用用户自己的说法，不要改写成正式的任务名；不要臆测未提到的内容。',
+      ].join('\n'),
+    }));
+  }
+
+  /**
+   * 宿主在 CallArbiter 就绪后转交轮次事件总线（ADR-0041）。
+   * 与 coder / 编程小助手同构：Agent 只转交，订阅与判定在 Feature 内部。
+   */
+  setTurnEventBus(bus) {
+    this.turnEventBus = bus;
+    for (const feature of this.features?.values?.() ?? []) {
+      if (typeof feature?.setTurnEventBus === 'function') {
+        feature.setTurnEventBus(bus);
+      }
+    }
   }
 
   async onInitiate(ctx) {

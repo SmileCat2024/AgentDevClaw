@@ -47,6 +47,8 @@
     "./capability-shell/test/**/*.ts",
     "./time-awareness/src/**/*.ts",
     "./time-awareness/test/**/*.ts",
+    "./auto-title-policy/src/**/*.ts",
+    "./auto-title-policy/test/**/*.ts",
     "./craft-awareness/src/**/*.ts",
     "./craft-awareness/test/**/*.ts",
     "./memo-notes/src/**/*.ts",

@@ -26,8 +26,11 @@ import {
   readSessionIndex,
   updateSessionIndex,
   getPrebuiltSessionFilePath,
+  findPrebuiltSessionRecordShared,
   resolvePrebuiltSessionType,
   findMissingCheckpoints,
+  SESSION_TITLE_STATE,
+  normalizeSessionTitleState,
 } from '../shared/session-access.js';
 import {
   buildStatus,
@@ -63,12 +66,45 @@ import { assertThreadQuotaAllowed } from './thread-quota.js';
 import { readWorkspaceResourcePolicies } from './workspace-settings.js';
 import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
 import { getInternalAuthToken } from '../auth.js';
+import {
+  createSessionTitleService,
+  createDefaultSessionTitleDeps,
+  TITLE_SOURCE,
+} from '../shared/session-title-service.js';
 import { resolveLifecycleTarget, resolveTransformationTarget, isBrowseOnlyMount, isHandoffBarrierActive } from '../thread-control/target-resolution.js';
 
 // server.js lives at project root; this module is at server/routes/session.js
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+
+// 标题能力（ADR-0041 决策 3）：生成与直接写入都在 session-title-service，
+// 路由只负责身份解析、远程转发与响应封装。延迟到首次使用时构造，避免模块
+// 加载期就牵起 session-access 的索引连接。
+let _sessionTitleService = null;
+function getSessionTitleService() {
+  if (_sessionTitleService) return _sessionTitleService;
+  _sessionTitleService = createSessionTitleService(createDefaultSessionTitleDeps({
+    projectRoot: PROJECT_ROOT,
+    mirrorScriptPath: path.join(PROJECT_ROOT, 'scripts', 'run-title-mirror.js'),
+    timeoutMs: MIRROR_SCRIPT_TIMEOUT_MS,
+    sessionAccess: {
+      findPrebuiltSessionRecordShared,
+      updateSessionIndex,
+      getPrebuiltSessionFilePath,
+    },
+    childEnv: () => ({
+      ...childProcessEnv(),
+      PROTOCLAW_INTERNAL_TOKEN: getInternalAuthToken(),
+    }),
+    resolveAgentDir: (agentId) => requirePrebuiltAgentForRuntimeRef(agentId),
+  }));
+  return _sessionTitleService;
+}
+
+// requirePrebuiltAgentForRuntime 由 setupSessionRoutes 注入（ctx），模块级
+// 能力装配经这个引用取用。
+let requirePrebuiltAgentForRuntimeRef = null;
 
 // ADR-0011：远程写幂等闸。远程目标 + 无 idempotencyKey → 400 且请求不过隧道；
 // 本地路径保持现状不强制（proxy.js:244-250 同族契约）。
@@ -135,6 +171,8 @@ export async function waitForCreatedRuntimeSettled(agentId, sessionId, timeoutMs
 }
 
 export function setupSessionRoutes(app, express, ctx) {
+  // 标题能力在首次使用时构造，需要路由注入的 agent 解析器（见上方装配）。
+  requirePrebuiltAgentForRuntimeRef = ctx.requirePrebuiltAgentForRuntime;
   const {
     activatePrebuiltSession,
     archivePrebuiltSession: persistSessionArchive,
@@ -806,13 +844,18 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     await fs.writeFile(branchSessionPath, JSON.stringify(branchSnapshot, null, 2), 'utf8');
 
     const sourceTitle = sourceRecord?.title || '';
+    // 分支保留「（分支）」前缀（ADR-0041 决策 4），标题来源状态原样继承：
+    // 来源是占位则分支仍是占位，来源是用户改名则分支同样受用户接管保护。
     const branchTitle = sourceTitle
       ? `（分支）${sourceTitle}`
       : `（分支）新对话 · ${createdAt.replace(/[TZ]/g, ' ').trim()}`;
+    const branchTitleState = normalizeSessionTitleState(sourceRecord?.titleState)
+      || SESSION_TITLE_STATE.AUTO;
 
     const branchRecord = {
       id: newSessionId,
       title: branchTitle,
+      titleState: branchTitleState,
       featureName: sourceRecord?.featureName || '',
       agentName: sourceRecord?.agentName || '',
       taskTitle: sourceRecord?.taskTitle || '',
@@ -1270,8 +1313,8 @@ app.put('/protoclaw/prebuilt_sessions/:sessionId/title', express.json(), async (
       return res.status(400).json({ error: 'title is required and must be non-empty' });
     }
     // ADR-0011：远程命名空间身份 → 转发远程同名改名路由（裸 id，远程端做
-    // 自己的索引更新）；本地身份走下方既有索引更新路径，行为字节级不动。
-    // 远程写强制幂等键（本地路径保持现状不强制）。
+    // 自己的索引更新）；本地身份走标题能力的直接写入。远程写强制幂等键
+    // （本地路径保持现状不强制）。
     try {
       const hostTarget = resolveForwardHostTarget(agentId, sessionId);
       if (hostTarget.scope === 'remote') {
@@ -1289,26 +1332,31 @@ app.put('/protoclaw/prebuilt_sessions/:sessionId/title', express.json(), async (
     } catch (error) {
       return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
-    if (containsReplacementChar(title)) {
-      return res.status(400).json({ error: 'title 含无效编码字符（U+FFFD），通常由控制台代码页转码（如原生 curl）造成；请改用 claw CLI 传参' });
-    }
 
-    const updatedIndex = await updateSessionIndex(agentId, (index) => {
-      const sessionIndex = index.sessions.findIndex(s => s.id === sessionId);
-      if (sessionIndex === -1) {
-        throw Object.assign(new Error('Session not found'), { statusCode: 404 });
-      }
-      index.sessions[sessionIndex].title = title.trim();
-      index.sessions[sessionIndex].updatedAt = new Date().toISOString();
-      return index;
+    // 本端点语义是用户手动改名，因此写入来源为用户（titleState=user），
+    // 同时也允许覆盖自己——用户改名不受自动生成那层接管保护阻挡。
+    const result = await getSessionTitleService().writeSessionTitle({
+      agentId,
+      sessionId,
+      title,
+      source: TITLE_SOURCE.USER,
+      allowUserOverride: true,
     });
 
+    if (!result.ok) {
+      if (result.reason === 'session_not_found') {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+      return res.status(400).json({ error: result.reason });
+    }
+
+    const updatedIndex = await readSessionIndex(agentId);
     const updatedSession = updatedIndex.sessions.find((session) => session.id === sessionId) || null;
     res.json({
       protocolVersion: 2,
       ok: true,
       sessionId,
-      title: title.trim(),
+      title: result.title,
       revision: Number(updatedIndex.revision) || 0,
       sessionDelta: {
         revision: Number(updatedIndex.revision) || 0,
@@ -1322,11 +1370,7 @@ app.put('/protoclaw/prebuilt_sessions/:sessionId/title', express.json(), async (
   }
 });
 
-// 会话 ↔ feature 绑定追加（ADR-0022）：agent-studio 运行时 feature 在
-// studio_create_feature / studio_add_feature 落地后，把 feature id 追加到
-// 当前会话记录。窄口径端点——只允许 append studioFeatureIds，不接受任意
-// 元数据写入。调用方是本机 runtime 子进程（PROTOCLAW_SERVER_ORIGIN），
-// 不走远程转发路径。
+
 app.post('/protoclaw/prebuilt_sessions/:sessionId/studio_feature_binding', express.json(), async (req, res, next) => {
   try {
     const agentId = cleanSessionText(req.body?.agentId);
@@ -1376,8 +1420,8 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
       return res.status(400).json({ error: 'agentId and sessionId are required' });
     }
     // ADR-0011：远程命名空间身份 → 转发远程同名 AI 标题路由（裸 id，LLM 调用
-    // 与索引更新都发生在远程端，用远程模型配置）；本地身份走下方既有 title
-    // mirror 路径，行为字节级不动。远程写强制幂等键。
+    // 与索引更新都发生在远程端，用远程模型配置）；本地身份走下方能力层。
+    // 远程写强制幂等键。
     try {
       const hostTarget = resolveForwardHostTarget(agentId, sessionId);
       if (hostTarget.scope === 'remote') {
@@ -1400,99 +1444,48 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
-    const agentRelativeDir = agent.relativeDir;
-    if (!agentRelativeDir) {
-      return res.status(500).json({ error: 'Agent directory not resolved' });
-    }
-
-    // 防御：检查 session JSON 文件是否已落盘。
-    // 新创建的会话（尤其是 trim/summary 衍生会话）在 runtime 首次保存前
-    // 磁盘上不存在 JSON 文件，title mirror 子进程加载时会 ENOENT。
-    try {
-      await fs.access(getPrebuiltSessionFilePath(ownerAgentId, sessionId));
-    } catch {
-      return res.status(404).json({ error: 'Session file not yet written to disk' });
-    }
-
-    const titleMirrorScript = path.join(PROJECT_ROOT, 'scripts', 'run-title-mirror.js');
-    const resultDir = path.join(os.tmpdir(), `title-mirror-${Date.now()}-${randomUUID().slice(0, 8)}`);
-    const resultPath = path.join(resultDir, 'result.json');
-    await fs.mkdir(resultDir, { recursive: true });
-
-    const child = spawn(process.execPath, [titleMirrorScript, agentRelativeDir, ownerAgentId, sessionId, JSON.stringify({ maxAttempts: 3 }), resultPath], {
-      cwd: __dirname,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      env: { ...childProcessEnv(), PROTOCLAW_INTERNAL_TOKEN: getInternalAuthToken() },
+    // 生成策略来自调用方（ADR-0041 决策 3）：提示词追加规则、模型角色、上下文
+    // 范围都在 req.body.params 里，缺省值等于改造前的硬编码行为。
+    const result = await getSessionTitleService().generateSessionTitle({
+      agentId: ownerAgentId,
+      sessionId,
+      params: req.body?.params,
+      allowUserOverride: req.body?.allowUserOverride === true,
     });
 
-    let stderr = '';
-    const timeoutMs = MIRROR_SCRIPT_TIMEOUT_MS;
-    let timedOut = false;
-    let exitCode = null;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-    }, timeoutMs);
-
-    child.stderr.on('data', (chunk) => {
-      const text = String(chunk);
-      stderr += text;
-      for (const line of text.split('\n')) {
-        if (line.trim()) console.log(`[title-mirror] ${line.trimEnd()}`);
+    if (!result.ok) {
+      if (result.reason === 'session_not_found') {
+        return res.status(404).json({ error: 'Session not found' });
       }
-    });
+      if (result.reason === 'Session file not yet written to disk') {
+        return res.status(404).json({ error: result.reason });
+      }
+      if (result.reason === 'Agent directory not resolved') {
+        return res.status(500).json({ error: result.reason });
+      }
+      return res.status(500).json({ error: result.reason });
+    }
 
-    await new Promise((resolve, reject) => {
-      child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
+    // 被用户接管挡下时是"主动跳过"而非失败：报 skipped 并回报实际生效标题，
+    // 前端不会乐观写入一个没保存的值。
+    if (result.skipped) {
+      return res.json({
+        protocolVersion: 2,
+        ok: true,
+        skipped: result.skipped,
+        sessionId,
+        title: result.title,
       });
-      child.on('exit', (code) => {
-        clearTimeout(timer);
-        exitCode = code;
-        resolve();
-      });
-    });
-
-    // 成败以落盘的 result.json 为准：writeFileSync 在子进程任何退出路径之前
-    // 同步完成。Windows 上进程退出阶段可能因 libuv 与 keep-alive socket 的
-    // 竞态 fail-fast（uv_async 断言，退出码非零），但标题结果此时已完整写盘，
-    // 不能按退出码判失败。
-    let result;
-    try {
-      const raw = await fs.readFile(resultPath, 'utf8');
-      result = JSON.parse(raw.trim());
-    } catch {
-      if (timedOut) {
-        throw new Error(`Title generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`);
-      }
-      throw new Error(stderr.trim() || `run-title-mirror exited with code ${exitCode}`);
-    } finally {
-      await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
     }
 
-    const title = typeof result?.title === 'string' ? result.title.trim() : '';
-    if (!title) {
-      return res.status(500).json({ error: 'Title generation returned empty result' });
-    }
-
-    const updatedIndex = await updateSessionIndex(ownerAgentId, (index) => {
-      const sessionIndex = index.sessions.findIndex(s => s.id === sessionId);
-      if (sessionIndex !== -1) {
-        index.sessions[sessionIndex].title = title;
-        index.sessions[sessionIndex].updatedAt = new Date().toISOString();
-      }
-      return index;
-    });
-
+    const updatedIndex = await readSessionIndex(ownerAgentId);
     const updatedSession = updatedIndex.sessions.find((session) => session.id === sessionId) || null;
     res.json({
       protocolVersion: 2,
       ok: true,
       sessionId,
-      title,
+      title: result.title,
+      titleUnchanged: result.changed === false,
       revision: Number(updatedIndex.revision) || 0,
       sessionDelta: {
         revision: Number(updatedIndex.revision) || 0,

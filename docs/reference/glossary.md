@@ -58,6 +58,16 @@
   _Avoid_: 把旧 thread record 的 `executionEvents` / `mode` 当看板事实（惰性数据，事件从 `boards/` 重新累积）。
 - **Trim / Summary / Compact** — 精简三语义：Trim = 裁剪早期历史；Summary = 压缩为摘要；Compact 在口语上泛指精简操作。
 
+## 会话标题（ADR-0041）
+
+- **标题归属** — 标题是 Session 索引记录的属性，不是 Thread 的属性。列表行显示当前 head Session 的标题；Thread 记录的 `title` 字段保留但停写停读。
+  _Avoid_: 给 WorkThread 增加或恢复标题语义；用 `headSessionTitle` 之外的回退来源拼标题。
+- **`titleState`** — 标题来源三态：`placeholder`（占位待起名）/ `auto`（系统生成）/ `user`（用户改名）。接续与分支一并继承。
+  _Avoid_: 用标题文案（`新对话N`、`（精简）` 前缀）推断"是否占位""是否衍生会话"——展示文本不是状态。
+- **标题策略归应用** — 应用在 metadata 声明 `titlePolicy: 'app'` 并装配 `AutoTitlePolicyFeature`，自行决定触发时机、提示词、模型。
+  _Avoid_: 让壳层对未声明应用兜底生成；应用各写一套标题请求与落盘逻辑（能力由 `server/shared/session-title-service.js` 统一提供）。
+
+
 ## Feature 生态（三类来源，改错层 = 白改）
 
 - **生态 feature 包** — `@agentdevjs/*` 发布包，权威源码在 `AgentDev/packages/<name>`。

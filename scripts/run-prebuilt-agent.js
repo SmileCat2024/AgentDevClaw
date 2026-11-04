@@ -23,6 +23,7 @@ import { buildCallUsageEvents, reportUsageEvent } from './usage-report.js';
 import { enqueueOrderedProjection } from './post-call-sync.js';
 
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
+import { createTurnEventBus } from '../server/shared/turn-event-bus.js';
 import { CallArbiter } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
 import { dispatchCapabilityRequest, handleCapabilityIPC } from './capability-ipc.js';
@@ -330,6 +331,15 @@ class SessionLifecycle {
     // Populated during start()
     this.agent = null;
     this.callArbiter = null;
+    // 轮次事件总线（ADR-0041 决策 3）：把 turn.* 事实广播给应用订阅者。
+    // 与 thread_events 上报并行且互不依赖——上报失败不影响总线分发，
+    // 总线订阅者抛错也不影响上报与回合本身。
+    this.turnEvents = createTurnEventBus({
+      onListenerError: (error, event) => {
+        console.warn(`[ProtoClaw Runtime] turn event listener failed (${event?.type}):`,
+          error?.message || error);
+      },
+    });
     this.disposed = false;
     this.inputLoopRunning = false;
     this.passiveMailboxLoop = null;
@@ -1063,14 +1073,22 @@ SessionLifecycle.prototype.start = async function () {
   // 故此处读到的 _callIndex 尚未递增，+1 对齐本次 call 号；callFinished
   // 时递增已完成，直接用 _callIndex。同一 turn 两事件同号。
   this.callArbiter.on('callStarted', (envelope) => {
-    return self.reportThreadEvent({
+    const startEvent = {
       type: 'turn.started',
       turn: typeof self.agent?._callIndex === 'number' ? self.agent._callIndex + 1 : null,
       source: envelope?.source || null,
       // 输入身份（ADR-0031 步骤一）：观察器把本回合关联回触发它的提交；
       // 身份未知时为 null，消费端不得据空值猜测
       sourceRef: envelope?.sourceRef || null,
+    };
+    // 应用订阅面同样收到开始事件（ADR-0041 决策 3），与终态事件同构。
+    self.turnEvents.emit({
+      ...startEvent,
+      agentId,
+      sessionId: self.sessionId,
+      runtimeInstanceId,
     });
+    return self.reportThreadEvent(startEvent);
   });
 
   this.callArbiter.on('callFinished', (envelope) => {
@@ -1122,6 +1140,16 @@ SessionLifecycle.prototype.start = async function () {
       turn: callIndex,
       usage: usageStats?.lastRequestUsage || null,
     });
+    // 应用订阅面（ADR-0041 决策 3）：在终态确定的同一时刻同步广播，带上
+    // 完整身份。刻意放在上报链之外——上报链受服务端可达性影响，应用订阅者
+    // 不应因为 viewer 不可达而收不到回合事实；反过来，订阅者抛错也不会
+    // 影响保存与上报（总线内部逐订阅者隔离）。
+    self.turnEvents.emit({
+      ...turnEvent,
+      agentId,
+      sessionId: self.sessionId,
+      runtimeInstanceId,
+    });
     const barrier = self.agent.saveSession(self.sessionId, sessionStore).catch((error) => {
       console.warn('[ProtoClaw Runtime] 保存 session 失败:', error.message);
     });
@@ -1156,6 +1184,12 @@ SessionLifecycle.prototype.start = async function () {
 
   if (typeof this.agent.setCallArbiter === 'function') {
     this.agent.setCallArbiter(this.callArbiter);
+  }
+  // 应用订阅入口（ADR-0041 决策 3）：Agent 宿主可选实现 setTurnEventBus，
+  // 装配层据此把总线转交给 Feature。不实现时总线只服务宿主自身的观测，
+  // 现有 agent.js 无需改动。总线只报告事实，订不订阅、订阅后做什么由应用决定。
+  if (typeof this.agent.setTurnEventBus === 'function') {
+    this.agent.setTurnEventBus(this.turnEvents);
   }
 
   this.callArbiter.sessionSaveFn = async () => {

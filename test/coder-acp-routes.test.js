@@ -709,7 +709,9 @@ describe('ACP list — GET /protoclaw/acp/coder/sessions', () => {
         threadId: 'thread-A',
         sessionId: 'sess-a',
         cwd: projADir,
-        title: '工作 A',
+        // ADR-0041：ACP 列表标题取 head Session 的索引标题，不用线程记录
+        // 的 title（后者是历史实现残留）。
+        title: '会话标题 A',
         updatedAt: new Date(1000).toISOString(),
       },
     );

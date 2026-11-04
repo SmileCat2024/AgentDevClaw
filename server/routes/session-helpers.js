@@ -18,6 +18,7 @@ import {
   getPrebuiltSessionFilePath,
   normalizeSessionMetadata, buildSessionTitle, computeNextSessionNumber,
   findPrebuiltSessionRecordShared,
+  SESSION_TITLE_STATE, normalizeSessionTitleState, isPlaceholderTitledSession,
 } from '../shared/session-access.js';
 import { getAgentRuntime, isManagedRuntimeRunning } from '../shared/agent-access.js';
 import { readThreadMembership } from '../shared/thread-membership.js';
@@ -498,10 +499,10 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
 async function cleanupEmptySessions(agentId) {
   const index = await readSessionIndex(agentId);
 
-  // Build message count map for sessions with default titles
+  // Build message count map for sessions still in the placeholder title state
   const sessionMessageCounts = new Map();
   for (const record of index.sessions) {
-    if (!/^新对话\d+$/.test(cleanSessionText(record.title))) continue;
+    if (!isPlaceholderTitledSession(record)) continue;
     const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
     try {
       const raw = await fs.readFile(sessionPath, 'utf8');
@@ -1132,6 +1133,16 @@ async function createPrebuiltSession(agentId, options = {}) {
   const nextTitle = explicitTitle || nextTaskTitle || (isPhStyleWorkspace
     ? ''
     : buildNamedSessionTitle(sessionDisplayName, createdAt));
+  // 标题来源（ADR-0041）：状态始终跟随实际写入的标题。
+  // - 需要分配编号 → 写占位标题，状态 placeholder；
+  // - 派生会话继承来源标题 → 原样继承来源状态（占位仍占位、用户改名仍受
+  //   保护、来源未知则保持未知，不替它猜）；
+  // - 其余（显式标题、表单派生标题）属于创建方写入 → auto。
+  const nextTitleState = needsSequentialTitle
+    ? SESSION_TITLE_STATE.PLACEHOLDER
+    : (sourceSessionId
+      ? normalizeSessionTitleState(sourceSession?.titleState)
+      : SESSION_TITLE_STATE.AUTO);
   // 派生会话默认继承来源会话的身份；只有没有来源时才创建 main。
   // 这样 compact/summary 等 successor 路径即使未重复传参，也不会把 coder
   // 静默降级成普通用户会话。
@@ -1143,6 +1154,7 @@ async function createPrebuiltSession(agentId, options = {}) {
   const record = {
     id: sessionId,
     title: nextTitle,
+    titleState: nextTitleState,
     featureName: nextFeatureName,
     agentName: nextAgentName,
     projectName: nextProjectName,

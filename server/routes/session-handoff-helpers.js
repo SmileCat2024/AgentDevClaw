@@ -188,18 +188,10 @@ export function createSessionHandoffHelpers(deps) {
       await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
     }
 
-    // 根据操作类型确定标题前缀
-    const handoffMode = cleanSessionText(handoff?.mode);
+    // 接续创建的新 Session 继承来源标题，不附加任何前缀（ADR-0041 决策 4）：
+    // 接续只是更换承载内容的 Session，不代表用户换了正在处理的事项，对话名称
+    // 不应因此改变。标题来源状态由 createPrebuiltSession 按来源继承。
     const sourceTitle = cleanSessionText(handoff?.sourceRecord?.title);
-    let derivedTitle = '';
-    if (sourceTitle) {
-      if (handoffMode === 'summarized-nine-section') {
-        derivedTitle = `（摘要）${sourceTitle}`;
-      } else {
-        // trim-transcript 或其他模式默认为精简
-        derivedTitle = `（精简）${sourceTitle}`;
-      }
-    }
 
     const session = await createPrebuiltSession(agent.id, {
       sourceSessionId,
@@ -207,7 +199,7 @@ export function createSessionHandoffHelpers(deps) {
       // 回读旧 handoff 对应的 Session，兼容没有该字段的历史 handoff。
       sessionType: cleanSessionText(handoff?.sourceRecord?.sessionType) || undefined,
       goal: goal || undefined,
-      title: derivedTitle || undefined,
+      title: sourceTitle || undefined,
       metadata: {
         resumeMode: 'compacted',
         sourceAgentId,

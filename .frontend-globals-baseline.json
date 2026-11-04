@@ -537,8 +537,7 @@
       "AUTO_TITLE_FETCH_TIMEOUT_MS",
       "AUTO_TITLE_MAX_ATTEMPTS",
       "AUTO_TITLE_RETRY_BACKOFF_MS",
-      "_autoTitlePending",
-      "_derivedBaseline"
+      "_autoTitlePending"
     ],
     "behavior": [
       "_findSessionOwner",
@@ -548,9 +547,14 @@
       "checkGlobalChoiceAlerts",
       "findFirstChangedMessageIndex",
       "getAutoTitleSessionInfo",
+      "isAppOwnedTitlePolicy",
+      "isPlaceholderTitleState",
+      "isShellTitleTriggerDisabled",
+      "isValidTitleEvent",
       "markAutoTitleCandidate",
       "newIdempotencyKey",
       "recheckAutoTitleCandidate",
+      "titleCandidateState",
       "tryAutoTitleGeneration"
     ]
   },

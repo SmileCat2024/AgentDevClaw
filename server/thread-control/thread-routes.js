@@ -289,7 +289,9 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
 
   app.post('/protoclaw/threads', jsonMiddleware, async (req, res) => {
     try {
-      const { agentId, sessionId, title, mode, workspaceId } = req.body || {};
+      // ADR-0041：建线请求的 title 不再写入线程记录（标题的唯一来源是
+      // Session 索引）。保留解构以避免调用方误以为可以省略，但值被忽略。
+      const { agentId, sessionId, mode, workspaceId } = req.body || {};
       // 线程并发上限（ADR-0027 修订一）：满配额拒绝建线（会话创建路径的
       // 检查在 session.js 落盘之前，这里覆盖 create 动词的独立建线）。
       if (typeof assertThreadQuota === 'function') {
@@ -299,7 +301,6 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
       // mode 归看板（board.setMode）。
       const thread = await core.start({
         sessionRef: { agentId, sessionId },
-        title,
         workspaceId,
       });
       if (mode) {
@@ -330,6 +331,13 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
         return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
       }
       const withState = await _attachLifeState(thread, await _getArchiveEntries());
+      // head Session 标题（ADR-0041）：对话名称的唯一来源是当前 head 的会话
+      // 索引标题。线程记录自带的 title 是历史实现残留，不再对外消费。
+      let headSessionTitle = null;
+      if (typeof resolveSessionTitle === 'function' && withState.headSessionId) {
+        headSessionTitle = await resolveSessionTitle(withState.agentId, withState.headSessionId)
+          .catch(() => null) ?? null;
+      }
       // 代际元数据（ticket 050 历史存档面板）：sessionChain 事实（时间锚 /
       // 触发方式来自线程记录）合并会话索引元数据（标题 / 规模 / 归档态），
       // 索引查不到的代保留链事实、其余字段为 null。按代倒序（最新在前）
@@ -352,7 +360,7 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
           };
         }).reverse();
       }
-      res.json({ ok: true, thread: withState, ...(sessionChainMeta ? { sessionChainMeta } : {}) });
+      res.json({ ok: true, thread: { ...withState, headSessionTitle }, ...(sessionChainMeta ? { sessionChainMeta } : {}) });
     } catch (err) {
       _errorResponse(res, err);
     }

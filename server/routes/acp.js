@@ -471,7 +471,9 @@ export function setupAcpRoutes(app, express, ctx) {
           threadId: thread.threadId,
           sessionId: headSessionId,
           cwd: openDirectory,
-          title: thread.title || record?.title || null,
+          // ADR-0041：对话标题取 head Session 的索引标题；线程记录的 title
+          // 是历史残留，不再作为名称来源。
+          title: record?.title || null,
           updatedAt: Number(thread.updatedAt)
             ? new Date(Number(thread.updatedAt)).toISOString()
             : (record?.updatedAt || null),

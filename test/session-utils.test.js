@@ -66,28 +66,28 @@ describe('新对话默认标题编号规则', () => {
     assert.equal(computeNextSessionNumber([], '/project'), 1);
   });
 
-  it('returns max+1 from existing 新对话N titles', () => {
+  it('returns max+1 from existing placeholder sessions', () => {
     const sessions = [
-      { title: '新对话1', openDirectory: '/project' },
-      { title: '新对话2', openDirectory: '/project' },
+      { title: '新对话1', titleState: 'placeholder', openDirectory: '/project' },
+      { title: '新对话2', titleState: 'placeholder', openDirectory: '/project' },
     ];
     assert.equal(computeNextSessionNumber(sessions, '/project'), 3);
   });
 
-  it('ignores non-default titles', () => {
+  it('ignores sessions that are no longer placeholders', () => {
     const sessions = [
-      { title: '新对话1', openDirectory: '/project' },
-      { title: '数据库优化', openDirectory: '/project' },
-      { title: '新对话5', openDirectory: '/project' },
+      { title: '新对话1', titleState: 'placeholder', openDirectory: '/project' },
+      { title: '数据库优化', titleState: 'auto', openDirectory: '/project' },
+      { title: '新对话5', titleState: 'user', openDirectory: '/project' },
     ];
-    assert.equal(computeNextSessionNumber(sessions, '/project'), 6);
+    assert.equal(computeNextSessionNumber(sessions, '/project'), 2);
   });
 
   it('only counts sessions with matching openDirectory', () => {
     const sessions = [
-      { title: '新对话1', openDirectory: '/project-a' },
-      { title: '新对话2', openDirectory: '/project-b' },
-      { title: '新对话3', openDirectory: '/project-a' },
+      { title: '新对话1', titleState: 'placeholder', openDirectory: '/project-a' },
+      { title: '新对话2', titleState: 'placeholder', openDirectory: '/project-b' },
+      { title: '新对话3', titleState: 'placeholder', openDirectory: '/project-a' },
     ];
     assert.equal(computeNextSessionNumber(sessions, '/project-a'), 4);
     assert.equal(computeNextSessionNumber(sessions, '/project-b'), 3);
@@ -95,15 +95,15 @@ describe('新对话默认标题编号规则', () => {
 
   it('counts all sessions when openDirectory is empty', () => {
     const sessions = [
-      { title: '新对话1', openDirectory: '/project-a' },
-      { title: '新对话2', openDirectory: '/project-b' },
+      { title: '新对话1', titleState: 'placeholder', openDirectory: '/project-a' },
+      { title: '新对话2', titleState: 'placeholder', openDirectory: '/project-b' },
     ];
     assert.equal(computeNextSessionNumber(sessions, ''), 3);
   });
 
   it('normalizes backslashes in directory comparison', () => {
     const sessions = [
-      { title: '新对话1', openDirectory: 'C:\\Users\\test\\project' },
+      { title: '新对话1', titleState: 'placeholder', openDirectory: 'C:\\Users\\test\\project' },
     ];
     assert.equal(computeNextSessionNumber(sessions, 'C:/Users/test/project'), 2);
   });

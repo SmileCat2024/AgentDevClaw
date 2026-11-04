@@ -244,13 +244,25 @@ describe('042 创建：三组独立归属', () => {
 
   test('项目下的新对话编号独立，不与同目录其他集合混用', async () => {
     const { helpers, dirD, projectA, projectB } = await setupCoexistenceFixture();
-    // 预置：D 目录已有 新对话2；A 项目已有 新对话1（同一路径 dirD）
+    // 预置两个集合，编号故意错开，让"是否混用"能被断言分辨：
+    //   D 目录（无 projectId，同路径）已有 新对话1、新对话2；
+    //   A 项目（同路径 dirD）已有 新对话1..4。
+    // 项目集合的编号高于目录集合，因此项目会话若被算进目录集合，dNext 会从 3
+    // 跳到 5。反方向（目录会话算进项目集合）由下方 computeNextSessionNumber
+    // 纯函数用例覆盖——单个 fixture 无法同时让两个集合各自成为较大的一方。
+    // 占位编号只由 titleState=placeholder 的会话占用（ADR-0041），所以这里必须
+    // 走真实占位创建路径：显式标题写的是 auto 状态，不占编号，预置会静默失效。
     await helpers.createPrebuiltSession('programming-helper', {
-      returnSummary: false, openDirectory: dirD, title: '新对话2',
+      returnSummary: false, openDirectory: dirD,
     });
     await helpers.createPrebuiltSession('programming-helper', {
-      returnSummary: false, projectId: projectA.id, title: '新对话1',
+      returnSummary: false, openDirectory: dirD,
     });
+    for (let i = 0; i < 4; i += 1) {
+      await helpers.createPrebuiltSession('programming-helper', {
+        returnSummary: false, projectId: projectA.id,
+      });
+    }
 
     const dNext = await helpers.createPrebuiltSession('programming-helper', {
       returnSummary: false, openDirectory: dirD,
@@ -261,8 +273,10 @@ describe('042 创建：三组独立归属', () => {
     const bNext = await helpers.createPrebuiltSession('programming-helper', {
       returnSummary: false, projectId: projectB.id,
     });
+    // D 目录接着 2 号排到 3；A 项目接着 4 号排到 5（若把同路径的两个目录占位
+    // 会话算进来则会得到 3，说明项目集合没有混入目录会话）；B 项目独立从 1 开始。
     assert.equal(dNext.title, '新对话3');
-    assert.equal(aNext.title, '新对话2');
+    assert.equal(aNext.title, '新对话5');
     assert.equal(bNext.title, '新对话1');
   });
 
@@ -282,9 +296,9 @@ describe('042 创建：三组独立归属', () => {
 
   test('computeNextSessionNumber 归属隔离纯函数：项目集合看 projectId，目录集合排除项目会话', () => {
     const sessions = [
-      { title: '新对话2', openDirectory: '/proj' },
-      { title: '新对话1', openDirectory: '/proj', projectId: 'prj_aaaaaaaaaaaa' },
-      { title: '新对话5', openDirectory: '/other', projectId: 'prj_bbbbbbbbbbbb' },
+      { title: '新对话2', titleState: 'placeholder', openDirectory: '/proj' },
+      { title: '新对话1', titleState: 'placeholder', openDirectory: '/proj', projectId: 'prj_aaaaaaaaaaaa' },
+      { title: '新对话5', titleState: 'placeholder', openDirectory: '/other', projectId: 'prj_bbbbbbbbbbbb' },
     ];
     assert.equal(computeNextSessionNumber(sessions, '/proj'), 3);
     assert.equal(computeNextSessionNumber(sessions, '/proj', { projectId: 'prj_aaaaaaaaaaaa' }), 2);
@@ -651,8 +665,8 @@ describe('042 运行时：项目目录严格解析与装配传递', () => {
 describe('042 旧目录回归', () => {
   test('computeNextSessionNumber 两参调用（旧签名）行为不变', () => {
     const sessions = [
-      { title: '新对话2', openDirectory: '/project' },
-      { title: '新对话5', openDirectory: '/project-a' },
+      { title: '新对话2', titleState: 'placeholder', openDirectory: '/project' },
+      { title: '新对话5', titleState: 'placeholder', openDirectory: '/project-a' },
     ];
     assert.equal(computeNextSessionNumber(sessions, '/project'), 3);
     assert.equal(computeNextSessionNumber(sessions, '/project-a'), 6);

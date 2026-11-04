@@ -161,6 +161,10 @@ export function createConnectedAgentsQuery(deps) {
         description: agent.description,
         kind: agent.kind || 'agent',
         launchMode: agent.launchMode || null,
+        // 标题策略归属声明（ADR-0041）：'app' 表示该应用用自己的 Feature
+        // 决定触发时机，Web 壳层的旧自动标题触发必须让位，否则同一会话会
+        // 被两条链路各起一次名。未声明 = 仍由壳层负责（迁移期状态）。
+        titlePolicy: agent.titlePolicy === 'app' ? 'app' : null,
         processMode: agent.processMode || 'isolated',
         ui: agent.ui || null,
         agents: agent.agents,

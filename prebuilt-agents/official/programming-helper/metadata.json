@@ -2,6 +2,7 @@
   "id": "programming-helper",
   "kind": "workspace",
   "threadHost": true,
+  "titlePolicy": "app",
   "name": "智能编码空间",
   "defaultAgentId": "main",
   "agents": [{ "id": "main", "displayName": "编程小助手" }],

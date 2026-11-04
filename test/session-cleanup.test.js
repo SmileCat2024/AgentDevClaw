@@ -19,9 +19,9 @@ import { selectEmptySessions, resolvePostCleanupState } from '../server/routes/s
 // ── Tests ──
 
 describe('selectEmptySessions', () => {
-  it('selects empty session with default title', () => {
+  it('selects empty session still in placeholder title state', () => {
     const sessions = [
-      { id: 's1', title: '新对话1' },
+      { id: 's1', title: '新对话1', titleState: 'placeholder' },
     ];
     const counts = new Map([
       ['s1', { messageCount: 0, fileExists: true }],
@@ -29,9 +29,9 @@ describe('selectEmptySessions', () => {
     assert.deepEqual(selectEmptySessions(sessions, counts), ['s1']);
   });
 
-  it('skips session with messages even if default title', () => {
+  it('skips session with messages even if still placeholder', () => {
     const sessions = [
-      { id: 's1', title: '新对话1' },
+      { id: 's1', title: '新对话1', titleState: 'placeholder' },
     ];
     const counts = new Map([
       ['s1', { messageCount: 5, fileExists: true }],
@@ -39,9 +39,9 @@ describe('selectEmptySessions', () => {
     assert.deepEqual(selectEmptySessions(sessions, counts), []);
   });
 
-  it('skips session with custom title even if empty', () => {
+  it('skips session whose title was set by the user', () => {
     const sessions = [
-      { id: 's1', title: '数据库优化' },
+      { id: 's1', title: '数据库优化', titleState: 'user' },
     ];
     const counts = new Map([
       ['s1', { messageCount: 0, fileExists: true }],
@@ -49,9 +49,19 @@ describe('selectEmptySessions', () => {
     assert.deepEqual(selectEmptySessions(sessions, counts), []);
   });
 
-  it('selects session when file is missing', () => {
+  it('skips session with a generated title', () => {
     const sessions = [
-      { id: 's1', title: '新对话1' },
+      { id: 's1', title: '重构标题生成', titleState: 'auto' },
+    ];
+    const counts = new Map([
+      ['s1', { messageCount: 0, fileExists: true }],
+    ]);
+    assert.deepEqual(selectEmptySessions(sessions, counts), []);
+  });
+
+  it('selects placeholder session when file is missing', () => {
+    const sessions = [
+      { id: 's1', title: '新对话1', titleState: 'placeholder' },
     ];
     // No entry in counts → file missing
     assert.deepEqual(selectEmptySessions(sessions, new Map()), ['s1']);
@@ -59,10 +69,10 @@ describe('selectEmptySessions', () => {
 
   it('selects only matching sessions from mixed set', () => {
     const sessions = [
-      { id: 's1', title: '新对话1' },       // default title, empty → delete
-      { id: 's2', title: '新对话2' },       // default title, has messages → keep
-      { id: 's3', title: 'API重构' },        // custom title, empty → keep
-      { id: 's4', title: '新对话3' },       // default title, empty → delete
+      { id: 's1', title: '新对话1', titleState: 'placeholder' }, // empty → delete
+      { id: 's2', title: '新对话2', titleState: 'placeholder' }, // has messages → keep
+      { id: 's3', title: 'API重构', titleState: 'user' },         // user named → keep
+      { id: 's4', title: '新对话3', titleState: 'placeholder' }, // empty → delete
     ];
     const counts = new Map([
       ['s1', { messageCount: 0, fileExists: true }],
@@ -73,18 +83,18 @@ describe('selectEmptySessions', () => {
     assert.deepEqual(selectEmptySessions(sessions, counts), ['s1', 's4']);
   });
 
-  it('does not match non-default title patterns', () => {
+  it('does not treat placeholder-looking text as state when the field is missing', () => {
+    // 升级前的历史记录没有 titleState：来源未知，不猜它是占位标题——
+    // 否则这里会把用户手写的「新对话」误删。
     const sessions = [
-      { id: 's1', title: '新对话' },         // no number suffix → skip
-      { id: 's2', title: '新对话abc' },      // not a number → skip
-      { id: 's3', title: '对话1' },           // wrong prefix → skip
-      { id: 's4', title: '' },                // empty title → skip
+      { id: 's1', title: '新对话1' },
+      { id: 's2', title: '新对话' },
+      { id: 's3', title: '' },
     ];
     const counts = new Map([
       ['s1', { messageCount: 0, fileExists: true }],
       ['s2', { messageCount: 0, fileExists: true }],
       ['s3', { messageCount: 0, fileExists: true }],
-      ['s4', { messageCount: 0, fileExists: true }],
     ]);
     assert.deepEqual(selectEmptySessions(sessions, counts), []);
   });

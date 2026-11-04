@@ -2,6 +2,7 @@
   "id": "memo",
   "kind": "workspace",
   "threadHost": true,
+  "titlePolicy": "app",
   "name": "Memo 智能备忘录",
   "description": "随聊随记的备忘与提醒应用：说一句就记下，到点主动找你",
   "version": "0.4.0",

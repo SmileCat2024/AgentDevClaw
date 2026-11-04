@@ -378,11 +378,12 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       }
       if (threadAlive) {
         childEntry.threadId = thread.threadId;
-        // 条目名跟随 head 会话（换代后如「(精简)A」），线程标题仅作索引
-        // 缺席时的回退——侧栏不得停在创建时的标题。
+        // 条目名跟随 head 会话。ADR-0041：标题只认当前 head Session 的索引
+        // 标题；线程记录自带的 title 是历史实现残留，不回退（否则换代后会
+        // 停在创建时的标题，形成双真相）。
         const headTitle = String(thread.headSessionTitle || '').trim();
-        childEntry.name = headTitle || String(thread.title || childEntry.name || '').trim();
-        childEntry.metaLabel = headTitle || String(thread.title || childEntry.metaLabel || '').trim();
+        childEntry.name = headTitle || String(childEntry.name || '').trim();
+        childEntry.metaLabel = headTitle || String(childEntry.metaLabel || '').trim();
         // 保持线程排序锚，但存活 head 的归属必须按本次快照重新投影。
         // 分组缓存仅供下方接续空窗占位；回灌到 live child 会锁住首次误分组，
         // 连补齐 projectId、重启 runtime 或移动对话都无法纠正，直到刷新页面。
@@ -436,7 +437,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
           ownerId: hostAgentId,
           runtimeId: `thread:${threadId}`,
           sessionId: String(thread.headSessionId || ''),
-          name: String(thread.headSessionTitle || thread.title || '').trim()
+          name: String(thread.headSessionTitle || '').trim()
             || (currentLanguage === 'zh' ? '新对话' : 'New conversation'),
           status: 'disconnected',
           source: 'thread-relay',

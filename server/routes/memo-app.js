@@ -22,7 +22,7 @@
 
 import path from 'path';
 import { promises as fs } from 'fs';
-import { getPrebuiltWorkspaceDir } from '../shared/session-access.js';
+import { getPrebuiltWorkspaceDir, findPrebuiltSessionRecordShared } from '../shared/session-access.js';
 import { readJson, ensureDir } from '../shared/fs-helpers.js';
 import { listMemoNotes, readMemoNote, writeMemoNote, sanitizeMemoFilename } from '../shared/memo-notes.js';
 import { resolveSessionViewerAgentId } from './acp.js';
@@ -205,6 +205,15 @@ export function setupMemoAppRoutes(app, express, {
     thread: await threadControl.core.getThread(conversation.threadId).catch(() => null),
   });
 
+/** head Session 的索引标题（ADR-0041：对话名称的唯一来源）。 */
+async function resolveThreadHeadTitle(thread) {
+  const headSessionId = String(thread?.headSessionId || '').trim();
+  const agentId = String(thread?.agentId || '').trim();
+  if (!headSessionId || !agentId) return '';
+  const record = await findPrebuiltSessionRecordShared(agentId, headSessionId).catch(() => null);
+  return String(record?.title || '').trim();
+}
+
   app.get('/protoclaw/memo-app/state', async (_req, res, next) => {
     try {
       const thread = await resolveActiveThread();
@@ -215,7 +224,9 @@ export function setupMemoAppRoutes(app, express, {
             threadId: thread.threadId,
             agentId: thread.agentId,
             headSessionId: thread.headSessionId,
-            title: thread.title || '',
+            // ADR-0041：对话标题取当前 head Session 的索引标题；线程记录
+            // 自带的 title 是历史实现残留，不再作为名称来源。
+            title: await resolveThreadHeadTitle(thread),
             status: thread.status,
             viewerAgentId: resolveSessionViewerAgentId(thread.agentId, thread.headSessionId) || null,
           }

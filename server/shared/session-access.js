@@ -323,7 +323,11 @@ function readDataVersion(db) {
 // 单条记录归一化：读侧（迁移导入）与写侧（updateSessionIndex / writeSessionIndex
 // 提交前）共用。字段语义见各行内注释；归一化后形态即 db 存储形态。
 function normalizeSessionRecord(session) {
-  return {
+  // 标题来源（ADR-0041）：只归一合法值，且不给旧记录补 key——索引写入是
+  // "读（归一）→改→写回"的 round-trip，无条件补 titleState 会把全部历史
+  // 记录批量标成某个状态，抹掉"来源未知"这一真实语义（同 projectId 约定）。
+  const titleState = normalizeSessionTitleState(session.titleState);
+  const record = {
     ...session,
     id: String(session.id),
     title: cleanSessionText(session.title),
@@ -349,6 +353,10 @@ function normalizeSessionRecord(session) {
     todo: session.todo === true,
     metadata: normalizeSessionMetadata(session.metadata),
   };
+  // 非法值（含旧版残留）一律丢弃，合法的才落盘。
+  delete record.titleState;
+  if (titleState) record.titleState = titleState;
+  return record;
 }
 
 // 全量索引形态归一化：legacy 记录过滤 + revision / activeSessionId 校验。
@@ -888,6 +896,53 @@ export async function updateSessionIndex(agentId, fn, { skipContentComparison = 
   }
 }
 
+// ── 标题状态（ADR-0041）────────────────────────────────────────────
+// 标题来源是结构化字段，不由标题文案推导。取值：
+//   placeholder — 尚未起名，显示系统占位文案
+//   auto        — 由生成能力或创建方（应用/CLI/调度）写入
+//   user        — 用户手动改名
+// 历史记录缺该字段时返回 null（来源未知），消费方按"已有标题但来源未知"
+// 处理，不猜它是占位还是用户标题。
+export const SESSION_TITLE_STATE = Object.freeze({
+  PLACEHOLDER: 'placeholder',
+  AUTO: 'auto',
+  USER: 'user',
+});
+
+const PLACEHOLDER_TITLE_PATTERN = /^新对话(\d+)$/;
+
+export function normalizeSessionTitleState(value) {
+  const state = String(value ?? '').trim();
+  return state === SESSION_TITLE_STATE.PLACEHOLDER
+    || state === SESSION_TITLE_STATE.AUTO
+    || state === SESSION_TITLE_STATE.USER
+    ? state
+    : null;
+}
+
+/**
+ * 会话是否处于占位标题状态（唯一判据是结构化字段）。
+ *
+ * 缺 `titleState` 的历史记录一律返回 false（来源未知）：它们的标题可能是旧版
+ * 系统写入的占位文案，也可能是用户改过的名字，靠文本无法区分，因此不参与
+ * 自动生成、不参与占位编号分配、不进入空会话清理。代价是升级前的遗留空会话
+ * 不会被自动清理、目录内编号可能从 1 重新开始；这是"不猜"的确定代价，好过
+ * 误删或误改用户的标题。
+ */
+export function isPlaceholderTitledSession(record) {
+  return normalizeSessionTitleState(record?.titleState) === SESSION_TITLE_STATE.PLACEHOLDER;
+}
+
+/**
+ * 标题是否已被用户接管（ADR-0041 决策 5）。
+ *
+ * 用户手动改名后，后台自动生成不得覆盖，除非用户显式要求重新生成。判定只看
+ * 结构化状态，不看标题文本。
+ */
+export function isTitleUserOwned(record) {
+  return normalizeSessionTitleState(record?.titleState) === SESSION_TITLE_STATE.USER;
+}
+
 export function buildSessionTitle(createdAtIso) {
   const date = new Date(createdAtIso);
   const parts = [
@@ -908,11 +963,13 @@ export function buildSessionTitle(createdAtIso) {
  *   目录/其他项目会话不混入编号）；
  * - projectId 空：目录集合 = 无 projectId 且 openDirectory 匹配的会话
  *   （原目录语义，项目会话即使同路径也不占用目录编号）。
+ *
+ * 只统计占位标题的会话（ADR-0041）：用户标题与生成标题不占用编号，即便
+ * 它们恰好是「新对话N」字样。
  */
 export function computeNextSessionNumber(sessions, openDirectory, { projectId = '' } = {}) {
   const normalizedDir = String(openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
   const normalizedProjectId = String(projectId || '').trim();
-  const newSessionPattern = /^新对话(\d+)$/;
   let maxN = 0;
   for (const session of (sessions || [])) {
     const sessionProjectId = String(session?.projectId || '').trim();
@@ -923,7 +980,8 @@ export function computeNextSessionNumber(sessions, openDirectory, { projectId = 
       const sessionDir = String(session?.openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
       if (normalizedDir && sessionDir !== normalizedDir) continue;
     }
-    const m = cleanSessionText(session?.title).match(newSessionPattern);
+    if (!isPlaceholderTitledSession(session)) continue;
+    const m = cleanSessionText(session?.title).match(PLACEHOLDER_TITLE_PATTERN);
     if (m) {
       const n = parseInt(m[1], 10);
       if (n > maxN) maxN = n;

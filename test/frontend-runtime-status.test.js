@@ -63,7 +63,7 @@ describe('runtime-status: coder live session projection', () => {
       });
       const activeThread = {
         threadId: 'wt-1', agentId: 'coder',
-        title: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head', 'new-head'],
+        headSessionTitle: '工作对话', headSessionId: 'old-head', sessionIds: ['old-head', 'new-head'],
         status: 'rotating', lifeState: 'executing', handoffStartedAt: Date.now(),
       };
       host.sidebar_threads = [activeThread, {

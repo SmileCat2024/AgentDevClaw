@@ -41,6 +41,7 @@ import { ContextRotationTriggerFeature } from '../../../local-features/dist/cont
 import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { GitHubShellFeature } from '../../../local-features/dist/github/src/index.js';
 import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
+import { AutoTitlePolicyFeature } from '../../../local-features/dist/auto-title-policy/src/index.js';
 import { PlaywrightShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import {
   readGlobalLayer,
@@ -152,6 +153,35 @@ export default class CoderAgent extends BasicAgent {
       agentId: runtimeIdentity.agentId,
       serverOrigin: runtimeIdentity.serverOrigin,
     }));
+
+    // 会话标题策略（ADR-0041）：coder 是无人值守 APP，标题同样由本应用
+    // 决定触发时机与规则，Claw 只提供生成能力与轮次事件面。coder 的会话
+    // 由调度面创建，用户看不到创建过程，标题是它在侧栏里被识别的唯一线索。
+    this.use(new AutoTitlePolicyFeature({
+      serverOrigin: runtimeIdentity.serverOrigin,
+      agentId: runtimeIdentity.agentId,
+      // 无人值守场景的补充规则：coder 的会话围绕工单任务展开，标题需要
+      // 让用户在工作线程列表里分辨不同任务，而不是区分"在聊什么"。
+      instructions: [
+        '这是无人值守编码任务（工单）的会话，标题应体现具体交付目标：',
+        '要修的具体缺陷、要实现的具体能力、要改的模块或文件。',
+        '避免「执行任务」「处理工单」「开始工作」这类无法区分并行线程的表述。',
+        '如果任务尚未聚焦，用用户给出的原始诉求命名，不要臆测。',
+      ].join('\n'),
+    }));
+  }
+
+  /**
+   * 宿主在 CallArbiter 就绪后转交轮次事件总线（ADR-0041）。
+   * 与编程小助手同构：Agent 只负责转交，订阅与判定在 Feature 内部。
+   */
+  setTurnEventBus(bus) {
+    this.turnEventBus = bus;
+    for (const feature of this.features?.values?.() ?? []) {
+      if (typeof feature?.setTurnEventBus === 'function') {
+        feature.setTurnEventBus(bus);
+      }
+    }
   }
 
   async onInitiate(ctx) {

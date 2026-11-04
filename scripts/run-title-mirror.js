@@ -13,7 +13,6 @@ import {
   resolveWorkspaceCwd,
   createTextOnlyMirrorAgent,
   loadMirrorSession,
-  TITLE_RULES,
   buildTitleMessages,
   sanitizeGeneratedTitle,
 } from './mirror-runtime.js';
@@ -82,9 +81,9 @@ async function chatWithRetry(llm, messages, tools, phaseLogger) {
   throw lastError;
 }
 
-async function runTitleGeneration({ agentDir, agentId, sessionId }) {
+async function runTitleGeneration({ agentDir, agentId, sessionId, params }) {
   logPhase(`load title context agent=${agentId} session=${sessionId}`);
-  const modelRole = 'system';
+  const modelRole = cleanValue(params?.modelRole) || 'system';
   const resolvedModel = resolveAgentModelLLM(agentDir, modelRole);
   if (!resolvedModel?.llm) {
     throw new Error(`Model preset not resolved for agent: ${agentId} role=${modelRole}`);
@@ -110,7 +109,7 @@ async function runTitleGeneration({ agentDir, agentId, sessionId }) {
     throw new Error('Mirror agent restored an empty session context');
   }
 
-  const compactMessages = buildTitleMessages(rawMessages);
+  const compactMessages = buildTitleMessages(rawMessages, params);
   const compiledTools = [TITLE_TOOL];
 
     logPhase(`chat begin role=${modelRole} messages=${compactMessages.length} tools=${compiledTools.length}`);
@@ -163,13 +162,20 @@ async function main() {
     throw new Error('Usage: node scripts/run-title-mirror.js <agent-dir> <agent-id> <session-id> [optionsJson] [resultFilePath]');
   }
 
-  const maxAttempts = (() => {
-    if (!rawOptions) return 3;
+  // optionsJson 承载 maxAttempts 与生成参数（modelRole / instructions /
+  // contextRange）。缺省时各项按内置值处理，旧调用方不传或只传 maxAttempts
+  // 的行为不变。
+  const options = (() => {
+    if (!rawOptions) return {};
     try {
       const parsed = JSON.parse(String(rawOptions));
-      const n = Number(parsed?.maxAttempts);
-      return Number.isFinite(n) && n > 0 ? Math.min(n, 5) : 3;
-    } catch { return 3; }
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch { return {}; }
+  })();
+
+  const maxAttempts = (() => {
+    const n = Number(options?.maxAttempts);
+    return Number.isFinite(n) && n > 0 ? Math.min(n, 5) : 3;
   })();
 
   const agentPath = resolve(PROTOCLAW_ROOT, agentDir);
@@ -183,6 +189,7 @@ async function main() {
         agentDir: agentPath,
         agentId,
         sessionId,
+        params: options?.params,
       });
 
       if (!cleanValue(result.title)) {
