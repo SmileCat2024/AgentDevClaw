@@ -9,6 +9,8 @@ import test from 'node:test';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 const source = fs.readFileSync(new URL('../public/src/modules/ph-thread-history.js', import.meta.url), 'utf8');
+// 模块尾部经分发器注册面板动作；按真实加载序先载 action-dispatcher。
+const dispatcherSource = fs.readFileSync(new URL('../public/src/modules/action-dispatcher.js', import.meta.url), 'utf8');
 
 function makeElement() {
   return {
@@ -36,6 +38,7 @@ function loadModule({ fetchImpl } = {}) {
   ctx.document.createElement = () => { const el = makeElement(); created.push(el); return el; };
   // overrides 只注入 vm 裸全局；面板模块经 window.runWorkspaceAction 访问
   ctx.window.runWorkspaceAction = (action) => actions.push(action);
+  ctx.run(dispatcherSource);
   ctx.run(source);
   return { ctx, toasts, actions, created };
 }

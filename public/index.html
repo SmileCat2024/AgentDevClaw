@@ -462,11 +462,11 @@
   </div>
 
   <div id="branch-dialog" class="trim-dialog" style="display:none;">
-    <div class="trim-overlay" onclick="window.closeBranchDialog()"></div>
+    <div class="trim-overlay" data-action="sessionDialogs.closeBranch"></div>
     <div class="trim-panel">
       <div class="trim-header">
         <div class="trim-title">分支</div>
-        <button class="trim-close" type="button" onclick="window.closeBranchDialog()">×</button>
+        <button class="trim-close" type="button" data-action="sessionDialogs.closeBranch">×</button>
       </div>
       <div class="trim-hint">点击选择分支截止点。该轮及之前的对话将保留到新分支，之后的对话将被截断。</div>
       <div class="trim-body">
@@ -475,8 +475,8 @@
       <div class="trim-footer">
         <div class="trim-footer-info" id="branch-footer-info"></div>
         <div class="trim-footer-actions">
-          <button class="workspace-action secondary" type="button" onclick="window.closeBranchDialog()">取消</button>
-          <button class="workspace-action" type="button" id="branch-submit" onclick="window.submitBranch()" disabled>创建分支</button>
+          <button class="workspace-action secondary" type="button" data-action="sessionDialogs.closeBranch">取消</button>
+          <button class="workspace-action" type="button" id="branch-submit" data-action="sessionDialogs.submitBranch" disabled>创建分支</button>
         </div>
       </div>
     </div>

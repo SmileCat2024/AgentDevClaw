@@ -14,8 +14,10 @@
  *   markSessionLoading, clearSessionLoading, window.switchAgent,
  *   fmtPct (app-core.js，trim/branch 共用口径)
  * 导出全局函数 (window.*):
- *   openBranchDialog, closeBranchDialog, submitBranch,
- *   phOpenRenameDialog, phCloseRenameDialog（重命名对话框，动态 overlay）
+ *   openBranchDialog, phOpenRenameDialog（重命名对话框，动态 overlay）
+ * 分发器动作 (ClawFW.actions):
+ *   sessionDialogs.closeBranch / submitBranch（index.html 分支弹窗按钮）
+ *   sessionDialogs.closeRename（重命名对话框取消/关闭）
  */
 
 /* ── Branch dialog state ── */
@@ -83,10 +85,10 @@ window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
   }
 };
 
-window.closeBranchDialog = () => {
+function closeBranchDialog() {
   branchDialog.style.display = 'none';
   branchDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, selectedIdx: -1, archiveAfter: false };
-};
+}
 
 function renderBranchRoundList() {
   const rounds = branchDialogState.rounds;
@@ -162,7 +164,7 @@ function updateBranchFooterInfo() {
 
 branchRoundList.addEventListener('click', handleBranchRoundClick);
 
-window.submitBranch = async () => {
+async function submitBranch() {
   const { agentId, sessionId, rounds, selectedIdx, archiveAfter, snapshotRevision } = branchDialogState;
   if (!agentId || !sessionId || selectedIdx < 0 || !rounds.length) return;
   bumpNavigationGuard();
@@ -170,9 +172,8 @@ window.submitBranch = async () => {
 
   const cutMsgIndexEnd = rounds[selectedIdx].msgIndexEnd;
 
-  window.closeBranchDialog();
-  markSessionLoading(agentId, sessionId);
-  const _oldRuntimeId = currentRuntimeAgentId;
+  closeBranchDialog();
+  markSessionLoading(agentId, sessionId);  const _oldRuntimeId = currentRuntimeAgentId;
   let archiveRollback = null;
   let branchSessionCommitted = false;
   if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
@@ -347,7 +348,7 @@ window.submitBranch = async () => {
     clearSessionLoading(agentId);
     clearChatLoadingSession();
   }
-};
+}
 
 /* ════════════════════════════════════════════════════════════
    Rename dialog（统一对话菜单的主列表「重命名」入口）
@@ -364,8 +365,6 @@ function _closeRenameDialog() {
   _renameOverlay = null;
 }
 
-window.phCloseRenameDialog = _closeRenameDialog;
-
 window.phOpenRenameDialog = async function (agentId, sessionId) {
   _closeRenameDialog();
   if (!agentId || !sessionId) return;
@@ -378,17 +377,17 @@ window.phOpenRenameDialog = async function (agentId, sessionId) {
   const overlay = document.createElement('div');
   overlay.className = 'feature-detail-overlay';
   overlay.innerHTML = [
-    '<form class="feature-detail-window" role="dialog" aria-modal="true" onsubmit="return false" style="max-width:420px">',
+    '<form class="feature-detail-window" role="dialog" aria-modal="true" style="max-width:420px">',
     '<div class="feature-detail-header">',
     '<div class="feature-detail-title">' + (isZh ? '重命名对话' : 'Rename Conversation') + '</div>',
-    '<button type="button" class="feature-detail-close" onclick="window.phCloseRenameDialog()" aria-label="' + (isZh ? '关闭' : 'Close') + '">&times;</button>',
+    '<button type="button" class="feature-detail-close" data-action="sessionDialogs.closeRename" aria-label="' + (isZh ? '关闭' : 'Close') + '">&times;</button>',
     '</div>',
     '<div style="display:flex;flex-direction:column;gap:12px;padding:16px">',
     '<input type="text" class="agent-name-edit-input" data-rename-input value="' + escapeHtml(currentTitle) + '"',
     ' maxlength="120" placeholder="' + (isZh ? '输入标题' : 'Enter title') + '"',
     ' style="width:100%;box-sizing:border-box;padding:8px 10px"> ',
     '<div style="display:flex;justify-content:flex-end;gap:8px">',
-    '<button type="button" class="workspace-action secondary" onclick="window.phCloseRenameDialog()">' + (isZh ? '取消' : 'Cancel') + '</button>',
+    '<button type="button" class="workspace-action secondary" data-action="sessionDialogs.closeRename">' + (isZh ? '取消' : 'Cancel') + '</button>',
     '<button type="button" class="workspace-action" data-rename-save>' + (isZh ? '保存' : 'Save') + '</button>',
     '</div>',
     '</div>',
@@ -397,6 +396,8 @@ window.phOpenRenameDialog = async function (agentId, sessionId) {
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) _closeRenameDialog();
   });
+  // Enter 触发隐式提交时只阻止默认行为（原表单 onsubmit 阻断的局部等价）。
+  overlay.addEventListener('submit', (event) => event.preventDefault());
 
   const input = overlay.querySelector('[data-rename-input]');
   const saveBtn = overlay.querySelector('[data-rename-save]');
@@ -447,5 +448,11 @@ window.phOpenRenameDialog = async function (agentId, sessionId) {
   input.focus();
   input.select();
 };
+
+window.ClawFW.actions.registerMany({
+  'sessionDialogs.closeBranch': () => closeBranchDialog(),
+  'sessionDialogs.submitBranch': () => submitBranch(),
+  'sessionDialogs.closeRename': () => _closeRenameDialog(),
+});
 
 // ── End Session Dialogs ────────────────────────────────────────────

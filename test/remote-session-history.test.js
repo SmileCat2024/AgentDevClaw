@@ -453,6 +453,8 @@ function dialogsSandbox({ requests = [] } = {}) {
   // 远程目录 accessor（getHostNamespaceIdForSession 等）从 remote-connections.js
   // 加载；catalog 身份来自上方 mock 的 remote_catalog 响应。
   ctx.loadSource('public/src/modules/remote-connections.js');
+  // session-dialogs 顶层经分发器注册弹窗按钮动作（真实加载序在模块之前）。
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/session-dialogs.js');
   return { ctx, requests };
 }
@@ -472,7 +474,7 @@ describe('frontend session write request shapes (R2-02)', () => {
     // 模拟轮次选中（selectedIdx=0，msgIndexEnd=5）后提交。
     await ctx.run(`
       branchDialogState.selectedIdx = 0;
-      window.submitBranch();
+      window.ClawFW.actions.invoke('sessionDialogs.submitBranch');
     `);
     await new Promise((resolve) => setTimeout(resolve, 0));
     const branchCalls = requests.filter((r) => r.url === '/protoclaw/sessions/branch');
@@ -507,7 +509,7 @@ describe('frontend session write request shapes (R2-02)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await ctx.run(`
       branchDialogState.selectedIdx = 0;
-      window.submitBranch();
+      window.ClawFW.actions.invoke('sessionDialogs.submitBranch');
     `);
     await new Promise((resolve) => setTimeout(resolve, 0));
     const call = requests.find((r) => r.url === '/protoclaw/sessions/branch');

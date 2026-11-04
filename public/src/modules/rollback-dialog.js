@@ -26,8 +26,9 @@
  * 导出全局变量:
  *   _partialCompactInFlight, _partialCompactRuntimeId,
  *   _partialCompactContextKey, _compactTimerInterval, _rollbackDialogOpen
- * HTML onclick 引用:
- *   onclick="requestRollbackEdit(...)"
+ * HTML 引用（chat-renderer 模板内联、input-helpers setAttribute 注入，
+ * 均待第二面后续批次收编）:
+ *   requestRollbackEdit(...)
  */
 
 let _partialCompactInFlight = false;

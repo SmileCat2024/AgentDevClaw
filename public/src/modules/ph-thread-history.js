@@ -75,8 +75,8 @@
       '</div>',
       '</div>',
       '<div class="ph-history-card-actions">',
-      '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.PhThreadHistory.viewOriginal(this.dataset.workspaceAction)">' + (isZh ? '查看原文' : 'View') + '</button>',
-      '<button class="workspace-action secondary" type="button" onclick="window.PhThreadHistory.continueFrom(\'' + escapeHtml(entry.sessionId) + '\', this)">' + (isZh ? '从这段继续' : 'Continue from here') + '</button>',
+      '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" data-action="phHistory.viewOriginal">' + (isZh ? '查看原文' : 'View') + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="phHistory.continueFrom" data-session-id="' + escapeHtml(entry.sessionId) + '">' + (isZh ? '从这段继续' : 'Continue from here') + '</button>',
       '</div>',
       '</div>',
     ].join('');
@@ -88,10 +88,10 @@
       .map((entry) => _archiveCardHtml(entry, isZh))
       .join('');
     return [
-      '<form class="feature-detail-window ph-history-window" role="dialog" aria-modal="true" onsubmit="return false">',
+      '<form class="feature-detail-window ph-history-window" role="dialog" aria-modal="true">',
       '<div class="feature-detail-header">',
       '<div class="feature-detail-title">' + (isZh ? '历史记录' : 'History') + '</div>',
-      '<button type="button" class="feature-detail-close" onclick="window.PhThreadHistory.close()" aria-label="' + (isZh ? '关闭' : 'Close') + '">&times;</button>',
+      '<button type="button" class="feature-detail-close" data-action="phHistory.close" aria-label="' + (isZh ? '关闭' : 'Close') + '">&times;</button>',
       '</div>',
       '<div class="ph-history-desc">' + (isZh
         ? '每次精简或摘要发生前，这段对话当时的完整记录都会原样存档。'
@@ -130,64 +130,75 @@
     overlay.className = 'feature-detail-overlay';
     overlay.innerHTML = _panelHtml(agentId, threadId, meta, isZh);
     overlay.addEventListener('click', (event) => {
-      if (event.target === overlay) window.PhThreadHistory.close();
+      if (event.target === overlay) _closePanel();
     });
+    // 面板无输入控件，submit 只可能来自浏览器隐式行为；阻止默认提交
+    // （原表单 onsubmit 阻断的局部等价）。
+    overlay.addEventListener('submit', (event) => event.preventDefault());
     host.appendChild(overlay);
     _openOverlay = overlay;
   };
 
+  function viewOriginal(actionJson) {
+    _closePanel();
+    if (typeof window.runWorkspaceAction === 'function') {
+      window.runWorkspaceAction(actionJson);
+    }
+  }
+
+  /** 在该存档末尾创建分支（新对话）：整代保留（cut 到最后一条消息），
+   * threadHost 下分支自动建新线；分支会话异步启动，经 open_session
+   * 既有等待路径打开。 */
+  async function continueFrom(sourceSessionId, btn) {
+    const isZh = currentLanguage === 'zh';
+    const agentId = window.__phThreadHistoryAgentId || '';
+    if (!agentId || !sourceSessionId) return;
+    if (btn) btn.disabled = true;
+    try {
+      const recordRes = await fetch('/protoclaw/session_record?agentId=' + encodeURIComponent(agentId)
+        + '&sessionId=' + encodeURIComponent(sourceSessionId));
+      if (!recordRes.ok) throw new Error('record request failed: ' + recordRes.status);
+      const record = await recordRes.json();
+      const messageCount = Array.isArray(record?.messages) ? record.messages.length : 0;
+      if (messageCount === 0) throw new Error(isZh ? '该存档没有可保留的消息' : 'Archive has no messages');
+      const branchRes = await fetch('/protoclaw/sessions/branch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId,
+          sourceSessionId,
+          cutMsgIndexEnd: messageCount - 1,
+        }),
+      });
+      if (!branchRes.ok) {
+        const text = await branchRes.text().catch(() => '');
+        throw new Error(text || ('branch request failed: ' + branchRes.status));
+      }
+      const branch = await branchRes.json();
+      _closePanel();
+      ClawToast.show({
+        title: isZh ? '已从历史存档创建新对话' : 'New conversation created from archive',
+        status: 'success',
+        autoDismiss: 3000,
+      });
+      if (typeof window.runWorkspaceAction === 'function' && branch?.newSessionId) {
+        window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId: branch.newSessionId }));
+      }
+    } catch (error) {
+      if (btn) btn.disabled = false;
+      ClawToast.show({ title: (isZh ? '创建分支失败：' : 'Branch failed: ') + (error?.message || error), status: 'error' });
+    }
+  }
+
   window.PhThreadHistory = {
     close: _closePanel,
-
-    viewOriginal(actionJson) {
-      _closePanel();
-      if (typeof window.runWorkspaceAction === 'function') {
-        window.runWorkspaceAction(actionJson);
-      }
-    },
-
-    /** 在该存档末尾创建分支（新对话）：整代保留（cut 到最后一条消息），
-     * threadHost 下分支自动建新线；分支会话异步启动，经 open_session
-     * 既有等待路径打开。 */
-    async continueFrom(sourceSessionId, btn) {
-      const isZh = currentLanguage === 'zh';
-      const agentId = window.__phThreadHistoryAgentId || '';
-      if (!agentId || !sourceSessionId) return;
-      if (btn) btn.disabled = true;
-      try {
-        const recordRes = await fetch('/protoclaw/session_record?agentId=' + encodeURIComponent(agentId)
-          + '&sessionId=' + encodeURIComponent(sourceSessionId));
-        if (!recordRes.ok) throw new Error('record request failed: ' + recordRes.status);
-        const record = await recordRes.json();
-        const messageCount = Array.isArray(record?.messages) ? record.messages.length : 0;
-        if (messageCount === 0) throw new Error(isZh ? '该存档没有可保留的消息' : 'Archive has no messages');
-        const branchRes = await fetch('/protoclaw/sessions/branch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            agentId,
-            sourceSessionId,
-            cutMsgIndexEnd: messageCount - 1,
-          }),
-        });
-        if (!branchRes.ok) {
-          const text = await branchRes.text().catch(() => '');
-          throw new Error(text || ('branch request failed: ' + branchRes.status));
-        }
-        const branch = await branchRes.json();
-        _closePanel();
-        ClawToast.show({
-          title: isZh ? '已从历史存档创建新对话' : 'New conversation created from archive',
-          status: 'success',
-          autoDismiss: 3000,
-        });
-        if (typeof window.runWorkspaceAction === 'function' && branch?.newSessionId) {
-          window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId: branch.newSessionId }));
-        }
-      } catch (error) {
-        if (btn) btn.disabled = false;
-        ClawToast.show({ title: (isZh ? '创建分支失败：' : 'Branch failed: ') + (error?.message || error), status: 'error' });
-      }
-    },
+    viewOriginal,
+    continueFrom,
   };
+
+  window.ClawFW.actions.registerMany({
+    'phHistory.viewOriginal': (el) => viewOriginal(el.dataset.workspaceAction),
+    'phHistory.continueFrom': (el) => continueFrom(el.dataset.sessionId, el),
+    'phHistory.close': () => _closePanel(),
+  });
 })();

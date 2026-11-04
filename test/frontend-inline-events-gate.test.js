@@ -59,6 +59,8 @@ function collectSourceFiles(dir, out = []) {
 }
 
 const INLINE_HANDLER_RE = /on(?:click|change|input|keydown|keyup|dblclick|mousedown|mouseup|blur|submit)="[^"]*"/g;
+/** setAttribute('onclick', 'fn(...)') 是同一依赖的第二种注入形态，一并计数。 */
+const SET_ATTRIBUTE_HANDLER_RE = /setAttribute\(\s*['"]on(?:click|change|input|keydown|keyup|dblclick|mousedown|mouseup|blur|submit)['"]\s*,/g;
 const DOTTED_ACTION_RE = /data-action="([a-zA-Z][\w-]*\.[\w-]+)"/g;
 
 /** 返回 { files, excluded }：files = 收编范围文件路径列表。 */
@@ -69,7 +71,8 @@ function scopedFiles() {
 }
 
 function countInlineHandlers(source) {
-  return [...source.matchAll(INLINE_HANDLER_RE)].length;
+  return [...source.matchAll(INLINE_HANDLER_RE)].length
+    + [...source.matchAll(SET_ATTRIBUTE_HANDLER_RE)].length;
 }
 
 function readSync(file) {
