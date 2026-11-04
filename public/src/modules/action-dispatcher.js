@@ -117,11 +117,21 @@ window.ClawFW = window.ClawFW || {};
   bindEventType('dblclick');
   bindEventType('keydown');
 
+  /** 按名触发已注册的 action（供宿主把通用动作转交给插件，不经 DOM 事件）。 */
+  function invoke(name, el, event, ...args) {
+    const handler = handlers.get(String(name));
+    if (!handler) return false;
+    handler(el ?? null, event ?? null, ...args);
+    return true;
+  }
+
   window.ClawFW.actions = {
     register,
     registerMany,
     unregisterOwner,
     bindEventType,
     dispatch,
+    invoke,
+    has: (name) => handlers.has(String(name)),
   };
 })();

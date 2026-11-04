@@ -307,10 +307,11 @@ server.js 主进程（Express 1420 + ViewerWorker 2026 + DebugHub）+ per-runtim
 - **分层心智**：`blocks.registerPrimitive` 是宿主基础组件（启动即注册、全生命周期可用、插件不可覆盖）；`blocks.register` 是 APP 组件（插件装载时注册、随卸载移除）。两者寿命不同，存两张表，卸载只清插件层。
 - **插件协议**：模块 default 导出 `{ id, blocks?, refreshers?, actions?, mount?(host), unmount?() }`；`loadPlugin(id, url)` 经动态 `import()` 装载并调用 `mount(host)`，`unloadPlugin(id)` 先调插件 `unmount()`，再按 owner 兜底摘除它注册的 block / refresher / action——插件自己漏清理也不留悬空项。
 - **清单**：[modules/plugin-manifest.js](public/src/modules/plugin-manifest.js) 声明 `agentId → 模块 URL`（URL 相对站点根，不随调用点漂移）。新增 APP 插件在此登记；装载失败有显式错误态且不自动重试（渲染是高频路径，重试会造成请求风暴），恢复靠刷新页面。
-- **宿主能力注入**：classic script 的顶层 `let`（如 `currentLanguage`）不会成为 `window` 属性，ES 模块作用域也看不到。插件只能经 `host.env`（语言、escapeHtml、markdown 工具）与 `host.workspace.runAction` 取用，不得裸引用宿主全局——`typeof xxx !== 'undefined'` 在模块里不会抛错而是静默返回 false，这类写法会退化成无声失效。
-- **已接入**：memo（[src/plugins/memo/](public/src/plugins/memo/)，三个业务块 + overview 跨页导航）、claw-guide（[src/plugins/claw-guide/](public/src/plugins/claw-guide/)，指南阅读器）。两者分别验证了「APP 独占模块直迁」与「宿主能力注入面完整」两种形态。宿主侧 27 个 block type 的渲染分发已改为注册表查表，不再走 `renderWorkspaceBlock` 的 if 链。
+- **宿主能力注入**：插件一律经 `host.env`（语言、escapeHtml、markdown 工具）与 `host.workspace.*` 取用宿主能力，不裸引用宿主内部实现。为什么仍要注入而不是裸用全局：classic script 的顶层 `let`/`const`（如 `currentLanguage`）**可以被模块的裸标识符解析到**（全局词法环境在模块作用域链上），但**不会成为 `window` 属性**，所以 `window.currentLanguage` 恒为 `undefined`；顶层 `function`/`var` 两者都可见。裸引用因此能得到值，却把插件耦合到宿主内部符号名，宿主改名即静默失效；注入把这个面固定在一处，宿主实现变更只改 claw-host.js。实测（Chrome）：模块内裸写 `probeLet`（classic script 顶层 `let`）得值，`window.probeLet` 为 `undefined`。
+- **已接入**：memo（[src/plugins/memo/](public/src/plugins/memo/)，三个业务块 + overview 跨页导航）、claw-guide（[src/plugins/claw-guide/](public/src/plugins/claw-guide/)，指南阅读器）、agent-studio（[src/plugins/agent-studio/](public/src/plugins/agent-studio/)，Feature 首页与仓库视图）。分别验证 APP 独占模块迁移、宿主能力注入、共享 workspace-blocks 中按职责分离迁移。宿主侧 block 渲染分发由 `ClawHost.blocks` 注册表处理，不再在 `renderWorkspaceBlock` 中按类型分支。
 - **迁移已有 APP 的检查清单**（claw-guide 实践得出）：
-  1. 模块内不残留裸全局引用——`typeof someGlobal !== 'undefined'` 在 ES 模块里恒为 `false`（不抛错），功能会无声失效；逐个换成注入封装。
+  1. 模块内不残留裸全局引用——宿主符号缺失时，裸调用会抛 `ReferenceError`（吵闹但发生在运行期），
+     而 `typeof x !== 'undefined'` 一类守卫会静默跳过，退化成功能无声失效。逐个换成注入封装。
   2. `document` 级监听必须能在 `unmount` 时按句柄摘除，否则重新装载会累积重复委托（一次点击触发多次）。
   3. 纯函数测试不要再用 vm 沙箱 `loadSource` 加载——ES 模块无法被 `eval` 进沙箱。插件导出纯函数、测试用真实 ESM 导入，注入面用 stub 覆盖。
   4. 删除旧模块文件后跑 `check:frontend-globals --update-baseline` 修剪基线，否则门禁会持续报告已消失的键。

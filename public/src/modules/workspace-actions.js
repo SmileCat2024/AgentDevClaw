@@ -889,13 +889,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     return;
   }
 
+  // Studio 详情开关：宿主不直接持有插件实现，按统一动作名转交给已装载的
+  // 插件（未装载时静默跳过，与「功能不可用」同义）。
   if (action.type === 'open_studio_feature' && action.featureId) {
-    window.openStudioFeature(action.featureId);
+    window.ClawFW.actions.invoke('agent-studio.openFeatureById', null, null, action.featureId);
     return;
   }
 
   if (action.type === 'close_studio_feature') {
-    window.closeStudioFeature();
+    window.ClawFW.actions.invoke('agent-studio.closeFeature', null, null);
     return;
   }
 

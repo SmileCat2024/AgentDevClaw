@@ -310,7 +310,7 @@
       runAction(rawAction, triggerButton) {
         return window.runWorkspaceAction(rawAction, triggerButton);
       },
-      // 当前选中的 agent 记录（经典脚本里是顶层函数，模块内看不到）
+      // 当前选中的 agent 记录（宿主封装；插件不直接依赖该全局实现）
       currentAgent() {
         return typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
       },
@@ -318,10 +318,29 @@
       rerender() {
         if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
       },
+      // 切换首页/对话等视图模式（setPreferredUnitMode 是 app-ui 的顶层函数，
+      // 插件不裸引用：宿主签名变更时只改此处）
+      setUnitMode(mode, agent) {
+        if (typeof setPreferredUnitMode === 'function') setPreferredUnitMode(mode, agent);
+      },
+      // 工作空间状态（服务端下发的 workspace_state，插件按需读取）
+      workspaceState(agent) {
+        return typeof getAgentWorkspaceState === 'function' ? getAgentWorkspaceState(agent) : null;
+      },
+      // 该工作空间的会话列表（按目录/项目聚合，插件做只读投影）
+      sessions(agent) {
+        return typeof getWorkspaceSessions === 'function' ? getWorkspaceSessions(agent) : [];
+      },
+      // Feature 仓库数据（宿主侧多处复用：配置面板、装配台、Studio 首页）
+      featureRepository(agent, block) {
+        return typeof getFeatureRepositoryData === 'function'
+          ? getFeatureRepositoryData(agent, block)
+          : null;
+      },
     },
-    // 宿主能力：经典脚本的顶层 let（currentLanguage、escapeHtml 等）不会成为
-    // window 属性，ES 模块作用域也看不到它们，插件只能经注入取用。
-    // 这里集中暴露，宿主实现变更时只改此处。
+    // 宿主能力统一经注入暴露，插件避免绑定到宿主内部符号名。
+    // 顶层 let/const 可由模块按裸标识符解析，但不会成为 window 属性；
+    // 注入面使宿主改名或替换实现时只需调整此处。
     env: {
       get language() {
         return (typeof currentLanguage === 'string' ? currentLanguage : 'zh');
@@ -339,6 +358,10 @@
       // 图片缩放层（指南正文里点击图片复用对话页行为）
       openImageZoom(src) {
         return typeof openImageZoom === 'function' ? openImageZoom(src) : undefined;
+      },
+      // 工作空间日期格式化（统一口径，避免插件各写一份）
+      formatDate(value) {
+        return typeof formatWorkspaceDate === 'function' ? formatWorkspaceDate(value) : '';
       },
       markdown: {
         render: (text) => (window.renderMarkdown ? window.renderMarkdown(text) : String(text ?? '')),

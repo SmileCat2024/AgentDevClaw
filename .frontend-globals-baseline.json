@@ -3673,7 +3673,6 @@
     "behavior": [
       "applyAssemblyPreset",
       "buildAssemblyGeneratedPrompt",
-      "closeStudioFeature",
       "formatAssemblyFeatureToken",
       "formatRepoFileSize",
       "getAssemblyFeatureLabel",
@@ -3688,10 +3687,7 @@
       "getFeatureRepositoryData",
       "getFeatureTypeLabel",
       "getRepoLocaleText",
-      "getSessionFeatureIds",
-      "getStudioViewState",
       "normalizeRepoUrl",
-      "openStudioFeature",
       "parseWorkspaceListField",
       "renderActionButton",
       "renderAssemblyWorkbenchBlock",
@@ -3699,11 +3695,6 @@
       "renderFeatureRepositoryBlock",
       "renderFlowEditorBlock",
       "renderRepoLink",
-      "renderStudioEmptyCta",
-      "renderStudioFeatureDetailBlock",
-      "renderStudioFeaturesBlock",
-      "renderStudioRepositoryBlock",
-      "renderStudioTabBar",
       "renderWorkspaceActionGroup",
       "renderWorkspaceField",
       "renderWorkspaceForm",
@@ -3712,9 +3703,7 @@
       "renderWorkspaceStatusGrid",
       "serializeWorkspaceListField",
       "setBundleFilter",
-      "setStudioViewState",
-      "shouldRenderBlock",
-      "studioFeatureStatusLabel"
+      "shouldRenderBlock"
     ]
   },
   "public/src/modules/workspace-docset.js": {
