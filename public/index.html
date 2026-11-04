@@ -76,6 +76,7 @@
       return String(text ?? '').replace(/[&<>]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
     }
   </script>
+  <script src="./src/modules/action-dispatcher.js"></script>
   <script src="./src/modules/auth-client.js"></script>
   <link rel="stylesheet" href="./styles/base.css">
   <link rel="stylesheet" href="./styles/layout.css">

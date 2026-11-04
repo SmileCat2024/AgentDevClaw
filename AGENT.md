@@ -107,7 +107,7 @@ feature 三类来源（严格区分，改错层 = 白改）：
 
 **本地 feature**（[local-features](local-features)）：顶层 `index.ts` barrel 聚合导出，`npm run build:local-features` 构建。活跃域：dispatch（调度）、group-admin（群聊管理）、checkpoint、context-compaction-mirror / context-guard（上下文精简与守卫）、continuity-participant（连续性字段读写）、conversation-export（对话导出）、conversation-annotations（会话标注，前端 `modules/annotations.js` 经 ADR-0018 通道读写，存储走框架快照契约）、time-awareness（时间感知注入，节奏可装配覆盖，状态经会话快照持久化）、craft-awareness（工程素养条目化知识注入 + grill-me 技能载具，触发规则与文案外置于 feature 源码与 knowledge/ 目录）、claw-help（使用帮助技能载具，路由与事实速查见其 SKILL.md，界面事实随 UI 演进需同步维护）、feature-wrappers（框架 feature 的 Claw 协议薄包装，含后台任务实时面板镜像 PanelShellFeature）、agent-studio、generative-ui、github、agent-dev、memo-notes（memo 便签存储：runtime 工具面 + server 便签墙数据面）。`flow` 与 `feature-dev` 已悬置。feature 行为细节以各自源码与 SKILL.md 为权威，本文件不展开。
 
-app-core.js 全局状态纪律：全局状态区只减不增。新增前端状态放所属 modules 文件的局部作用域；确需跨模块共享用 `window.ClawFW` 命名空间。
+app-core.js 全局状态纪律：全局状态区只减不增。新增前端状态放所属 modules 文件的局部作用域；确需跨模块共享用 `window.ClawFW` 命名空间。该纪律由 `check:frontend-globals` 门禁机器强制（见下文），不再只靠记性。
 
 ## 当前工作空间
 
@@ -292,6 +292,12 @@ server.js 主进程（Express 1420 + ViewerWorker 2026 + DebugHub）+ per-runtim
 ## import 循环依赖检查（ratchet）
 
 `npm run check:cycles`（[scripts/check-import-cycles.mjs](scripts/check-import-cycles.mjs)）：扫描 server/、scripts/、prebuilt-agents/、local-features/、bin/ 的相对导入图，报告值级循环依赖（`import type` 不算边；动态 import 与 export-from 算边）。public/src 无静态 import 图（script 全局共享模式），不适用。存量环指纹固化在 [.import-cycles-baseline.json](.import-cycles-baseline.json)，`--update-baseline` 显式更新（修复存量环后应修剪），新增环 exit 1。
+
+## 前端全局暴露门禁（ratchet）
+
+`npm run check:frontend-globals`（[scripts/check-frontend-globals.mjs](scripts/check-frontend-globals.mjs)，挂在 `pretest:core` 自动执行）：扫描 public/ 下 classic script 的全局暴露面，与 [.frontend-globals-baseline.json](.frontend-globals-baseline.json) 对比。暴露键分两层——**state**（顶层 var/let/const 声明、`window._*` 赋值）新增直接 exit 1，是「全局状态区只减不增」纪律的机器化；**behavior**（顶层 function/class、非下划线 `window.*` 赋值）进台账提示不阻塞，随各域 ESM 化/注册表化从基线消退。两层新增都需显式 `--update-baseline` 固化并在提交说明写明理由；存量收敛后应修剪基线。`window.ClawFW` 下划线键直写仍由 ESLint 规则治理（owner 模块 + ratchet 清单），两者分工不重叠。
+
+事件委托分发器（[modules/action-dispatcher.js](public/src/modules/action-dispatcher.js)，`window.ClawFW.actions`）：模板以 `data-action="域.动作"` + `data-args`（JSON 数组）声明行为，处理函数经注册表按名分发（click/change/input 默认绑定），替代内联 `onclick="fn()"` 的全局函数依赖。新代码优先用分发器注册处理器；存量内联处理器随各域改造收编。与内联 `return false` 的语义差异：分发器层只做 preventDefault（stopPropagation 在 document 委托层无意义），头注有完整协议。
 
 ## 协作纪律（负面清单）
 

@@ -10,7 +10,8 @@
 //
 // 扫描域：server/、scripts/、prebuilt-agents/、local-features/（ts，排除 dist）、
 // bin/。public/src 不在列——它是 <script> 顺序加载 + 全局共享模式，没有静态
-// import 图，无从检测（其治理由 ESLint ClawFW 下划线键规则承担）。
+// import 图，无从检测（其治理由 ESLint ClawFW 下划线键规则与
+// check-frontend-globals.mjs 全局暴露门禁承担）。
 //
 // 用法：
 //   node scripts/check-import-cycles.mjs                 检查（新增环 → exit 1）

@@ -27,7 +27,9 @@
     "lint": "eslint .",
     "check:cycles": "node scripts/check-import-cycles.mjs",
     "adv-docs:sync": "node scripts/sync-adv-docs.mjs",
-    "build": "node scripts/build-all.mjs"
+    "build": "node scripts/build-all.mjs",
+    "check:frontend-globals": "node scripts/check-frontend-globals.mjs",
+    "pretest:core": "node scripts/check-frontend-globals.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
