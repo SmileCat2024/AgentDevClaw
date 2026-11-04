@@ -40,7 +40,7 @@ const selectSurfaceSource = sourceBetween(
 );
 const refresherSource = sourceBetween(
   uiSource,
-  'const WORKSPACE_PANEL_REFRESHERS = {',
+  'function refreshVisibleWorkspacePanelData(agent = getCurrentAgentRecord()) {',
   'function getPassiveWorkspaceSurfaceMode(',
 );
 const shouldRenderBlockSource = sourceBetween(
@@ -85,11 +85,8 @@ function createHarness({
     loadedAgentDetailIds: loadedDetailIds,
     allAgents,
     _recentlyFinishedRuntimes: new Set(),
-    window: {
-      MemoOverviewUI: { refresh: () => refreshCalls.push('memo-overview') },
-      MemoNotesUI: { refresh: () => refreshCalls.push('memo-notes') },
-      MemoRemindersUI: { refresh: () => refreshCalls.push('memo-reminders') },
-    },
+    // 刷新分发经 ClawHost 注册表：加载时登记 refresher，渲染路径按 block type 查表调用。
+    window: {},
     // 编排依赖 stub：本测试关注 selectWorkspaceSurface 的导航编排与
     // refreshVisibleWorkspacePanelData 的分发（均为真实源码），其余按
     // 最小语义打桩。
@@ -122,6 +119,11 @@ function createHarness({
     renderFeaturePanel: () => {},
   };
   vm.createContext(sandbox);
+  // 真实 ClawHost 注册表：refreshVisibleWorkspacePanelData 经它查 table_type → refresher。
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/claw-host.js', import.meta.url), 'utf8'), sandbox);
+  sandbox.window.ClawHost.blocks.registerRefresher('memo-overview', () => refreshCalls.push('memo-overview'), 'memo');
+  sandbox.window.ClawHost.blocks.registerRefresher('memo-notes', () => refreshCalls.push('memo-notes'), 'memo');
+  sandbox.window.ClawHost.blocks.registerRefresher('memo-reminders', () => refreshCalls.push('memo-reminders'), 'memo');
   vm.runInContext(
     `${shouldRenderBlockSource}\n${refresherSource}\n${selectSurfaceSource}`,
     sandbox,

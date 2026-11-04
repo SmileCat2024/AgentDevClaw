@@ -19,13 +19,19 @@
  * 只读聚合），server 零改动。
  *
  * 依赖全局（运行时调用，加载顺序无关）：
- *   - currentLanguage, escapeHtml (app-core.js)
+ *   host.escapeHtml / host.getLanguage()（经 mount 注入）
+ *   ./notes.js 与 ./reminders.js（同插件内 ES 模块互引，不再经 window）
  *   - MemoRemindersUI.fmtRelativeBadge (modules/memo-reminders-ui.js)
  *   - MemoNotesUI.openNote (modules/memo-notes-ui.js)
  *   - runWorkspaceAction (workspace-actions.js)
  */
 
-window.MemoOverviewUI = (() => {
+import { MemoNotesUI } from './notes.js';
+import { MemoRemindersUI } from './reminders.js';
+
+let pluginHost = null;
+
+const MemoOverviewUI = (() => {
   const LIMIT = 6;
 
   let remindersCache = []; // 未完成提醒（按 fire_at 升序，前 LIMIT 条）
@@ -36,11 +42,11 @@ window.MemoOverviewUI = (() => {
   let fetchInFlight = false; // 在途去重：导航重取与渲染兜底并发时只发一次
 
   function isZh() {
-    return typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+    return pluginHost.getLanguage() === 'zh';
   }
 
   function esc(value) {
-    if (typeof escapeHtml === 'function') return escapeHtml(value);
+    if (typeof pluginHost.escapeHtml === 'function') return pluginHost.escapeHtml(value);
     return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
@@ -117,21 +123,21 @@ window.MemoOverviewUI = (() => {
   /** 分节标题即入口：整行可点（分页栏已移除，这是总览到子页面的唯一导航面）。 */
   function entryHead(tab, zh, en) {
     return '<button class="memo-overview-entry" type="button" data-workspace-action="' + tabAction(tab)
-      + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">'
+      + '" data-action="memo.workspaceAction">'
       + '<span class="memo-overview-entry-title">' + esc(isZh() ? zh : en) + '</span>'
       + '<span class="memo-overview-entry-arrow" aria-hidden="true">→</span>'
       + '</button>';
   }
 
   function reminderRow(entry) {
-    const badge = window.MemoRemindersUI?.fmtRelativeBadge?.(entry);
+    const badge = MemoRemindersUI?.fmtRelativeBadge?.(entry);
     const badgeHtml = badge && badge.text
       ? '<span class="memo-reminder-chip' + (badge.overdue ? ' is-overdue' : '') + '">'
         + esc(badge.text) + '</span>'
       : '';
     return '<li class="memo-overview-reminder-item">'
       + '<button type="button" title="' + esc(isZh() ? '查看提醒' : 'View reminders')
-      + '" onclick="MemoOverviewUI.goReminders()">'
+      + '" data-action="memo.goReminders">'
       + '<span class="memo-overview-reminder-main">'
       + '<span class="memo-overview-reminder-content">' + esc(entry.content || '') + '</span>'
       + '<span class="memo-reminder-meta">' + badgeHtml
@@ -167,7 +173,7 @@ window.MemoOverviewUI = (() => {
       });
     })();
     return '<button class="memo-note-card" type="button" data-note-filename="' + esc(filename) + '"'
-      + ' onclick="MemoOverviewUI.openNote(this.dataset.noteFilename)">'
+      + ' data-action="memo.overviewOpenNote" data-args="[&quot;' + esc(filename) + '&quot;]">'
       + '<div class="memo-note-title">' + esc(note?.title || filename) + '</div>'
       + '<div class="memo-note-preview">' + esc(note?.preview || '') + '</div>'
       + '<div class="memo-note-meta">' + esc(stamp) + '</div>'
@@ -217,18 +223,14 @@ window.MemoOverviewUI = (() => {
   // ── 跳页动作 ─────────────────────────────────────────────────────
 
   function goReminders() {
-    if (typeof runWorkspaceAction === 'function') {
-      runWorkspaceAction({ type: 'show_workspace_tab', tab: 'reminders' });
-    }
+    pluginHost?.workspace?.runAction({ type: 'show_workspace_tab', tab: 'reminders' });
   }
 
   /** 跳笔记页并打开阅读态：tab 切换重建 surface 后 openNote 落进便签墙；
    *  顺序颠倒也自愈（openNote 先置 currentNote，随后的重渲染自然带出阅读态）。 */
   function openNote(filename) {
-    if (typeof runWorkspaceAction === 'function') {
-      runWorkspaceAction({ type: 'show_workspace_tab', tab: 'notes' });
-    }
-    window.MemoNotesUI?.openNote?.(String(filename || ''));
+    pluginHost?.workspace?.runAction({ type: 'show_workspace_tab', tab: 'notes' });
+    MemoNotesUI?.openNote?.(String(filename || ''));
   }
 
   // 窗口重新聚焦时刷新一次（对话内新增 / 编辑后的兜底；导航刷新走 app-ui
@@ -239,3 +241,14 @@ window.MemoOverviewUI = (() => {
 
   return { render, refresh, goReminders, openNote };
 })();
+
+export default {
+  id: 'memo',
+  blocks: {
+    'memo-overview': () => MemoOverviewUI.render(),
+  },
+  mount(h) { pluginHost = h; },
+  unmount() { pluginHost = null; },
+};
+
+export { MemoOverviewUI };

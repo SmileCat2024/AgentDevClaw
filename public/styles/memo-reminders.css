@@ -132,7 +132,7 @@ body[data-theme="light"] .memo-reminders-panel {
 }
 
 /* 相对时间徽标：accent 弱底胶囊，已过期转 danger（提醒分页与总览行共用，
-   口径见 memo-reminders-ui.js 的 fmtRelativeBadge） */
+   口径见 public/src/plugins/memo/reminders.js 的 fmtRelativeBadge） */
 .memo-reminder-chip {
   display: inline-flex;
   align-items: center;

@@ -19,15 +19,15 @@
  * 数据面：/protoclaw/memo-app/reminders（GET 列表 / POST complete、delete），
  * server 侧 memo-app.js 持有，与 runtime 侧 memo-reminders 工具面同域。
  *
- * 依赖全局（运行时调用，加载顺序无关）：
- *   - escapeHtml, currentLanguage (app-core.js)
- *   - ClawToast (modules/toast-notify.js)
- * 消费方：
- *   app-ui.js renderWorkspaceBlock（block.type === 'memo-reminders'）
- *   memo-overview-ui.js（fmtRelativeBadge）
+ * 依赖（经 mount(host) 注入，不读全局作用域）：
+ *   - host.escapeHtml, host.getLanguage()
+ *   window.ClawToast 属宿主提供的 DOM 能力，仍从 window 读取。
+ * 对外：export default 插件描述（id/blocks/mount），供 ClawHost.loadPlugin 装载。
  */
 
-window.MemoRemindersUI = (() => {
+let pluginHost = null;
+
+const MemoRemindersUI = (() => {
   let cache = []; // 最近一次成功拉取的提醒条目
   let loaded = false; // 区分「加载中」与「空态」
   let fetchSeq = 0; // 过期响应丢弃
@@ -35,19 +35,19 @@ window.MemoRemindersUI = (() => {
   let actionSeq = 0; // 过期动作响应丢弃
 
   function isZh() {
-    return typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+    return pluginHost.getLanguage() === 'zh';
   }
 
   function esc(value) {
-    if (typeof escapeHtml === 'function') return escapeHtml(value);
+    if (typeof pluginHost.escapeHtml === 'function') return pluginHost.escapeHtml(value);
     return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
   }
 
   function toastError(id, title, desc) {
-    if (typeof ClawToast !== 'undefined') {
-      ClawToast.show({ id, status: 'error', title, desc: String(desc || '') });
+    if (window.ClawToast) {
+      window.ClawToast.show({ id, status: 'error', title, desc: String(desc || '') });
     }
   }
 
@@ -207,14 +207,14 @@ window.MemoRemindersUI = (() => {
       + '<input type="checkbox" class="memo-reminder-check" title="'
       + esc(isZh() ? '标记完成' : 'Mark done') + '"'
       + (fired ? ' checked' : '')
-      + ' onclick="MemoRemindersUI.complete(\'' + esc(entry.id) + '\')">'
+      + ' data-action="memo.completeReminder" data-args="[&quot;' + esc(entry.id) + '&quot;]">'
       + '<div class="memo-reminder-main">'
       + '<div class="memo-reminder-content">' + esc(entry.content || '') + '</div>'
       + '<div class="memo-reminder-meta">' + metaHtml(entry) + '</div>'
       + '</div>'
       + '<button type="button" class="memo-reminder-delete" title="'
       + esc(isZh() ? '删除' : 'Delete') + '"'
-      + ' onclick="MemoRemindersUI.remove(\'' + esc(entry.id) + '\')">✕</button>'
+      + ' data-action="memo.removeReminder" data-args="[&quot;' + esc(entry.id) + '&quot;]">✕</button>'
       + '</li>';
   }
 
@@ -262,7 +262,7 @@ window.MemoRemindersUI = (() => {
     return '<div class="memo-subpage-head">'
       + '<button class="memo-back-link" type="button" data-workspace-action="'
       + esc(JSON.stringify({ type: 'show_home' }))
-      + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">'
+      + '" data-action="memo.workspaceAction">'
       + esc(isZh() ? '← 总览' : '← Overview') + '</button>'
       + '<div class="memo-subpage-title">' + esc(isZh() ? '提醒事项' : 'Reminders') + esc(countSuffix) + '</div>'
       + '</div>'
@@ -340,3 +340,14 @@ window.MemoRemindersUI = (() => {
 
   return { render, refresh, complete, remove, fmtRelativeBadge, groupOf };
 })();
+
+export default {
+  id: 'memo',
+  blocks: {
+    'memo-reminders': () => MemoRemindersUI.render(),
+  },
+  mount(h) { pluginHost = h; },
+  unmount() { pluginHost = null; },
+};
+
+export { MemoRemindersUI };

@@ -25,13 +25,15 @@
  * （im-ui ensure 先例），此后纯投影。
  *
  * 依赖全局（运行时调用，加载顺序无关）：
- *   - escapeHtml, currentLanguage (app-core.js)
- *   - renderMarkdown, splitMarkdownBlocks, isEditableMarkdownBlock,
- *     replaceMarkdownBlock (markdown-utils.js)
+ *   经 mount(host) 注入：host.escapeHtml / host.getLanguage() /
+ *   host.markdown.{renderMarkdown, splitMarkdownBlocks,
+ *   isEditableMarkdownBlock, replaceMarkdownBlock}
  *   - .chat-loading-spinner (components.css)
  */
 
-window.MemoNotesUI = (() => {
+let pluginHost = null;
+
+const MemoNotesUI = (() => {
   let cache = []; // 最近一次成功拉取的便签索引
   let loaded = false; // 区分「加载中」与「空态」
   let fetchSeq = 0; // 过期响应丢弃
@@ -48,11 +50,11 @@ window.MemoNotesUI = (() => {
   let saveSeq = 0; // 过期保存响应丢弃
 
   function isZh() {
-    return typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+    return pluginHost.getLanguage() === 'zh';
   }
 
   function esc(value) {
-    if (typeof escapeHtml === 'function') return escapeHtml(value);
+    if (typeof pluginHost.escapeHtml === 'function') return pluginHost.escapeHtml(value);
     return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
@@ -119,8 +121,8 @@ window.MemoNotesUI = (() => {
         entry.updatedAt = data.note.updatedAt;
       }
     } catch (err) {
-      if (typeof ClawToast !== 'undefined') {
-        ClawToast.show({
+      if (window.ClawToast) {
+        window.ClawToast.show({
           id: 'memo-note-save',
           status: 'error',
           title: isZh() ? '便签保存失败' : 'Failed to save note',
@@ -133,7 +135,7 @@ window.MemoNotesUI = (() => {
   function card(note) {
     const filename = String(note?.filename || '');
     return '<button class="memo-note-card" type="button" data-note-filename="' + esc(filename) + '"'
-      + ' onclick="window.MemoNotesUI.openNote(this.dataset.noteFilename)">'
+      + ' data-action="memo.openNote" data-args="["' + esc(filename) + '"]">'
       + '<div class="memo-note-title">' + esc(note?.title || filename) + '</div>'
       + '<div class="memo-note-preview">' + esc(note?.preview || '') + '</div>'
       + '<div class="memo-note-meta">' + esc(formatStamp(note?.updatedAt)) + '</div>'
@@ -213,32 +215,32 @@ window.MemoNotesUI = (() => {
   function editorHtml(draft, metrics) {
     return '<textarea class="memo-note-block-editor" spellcheck="false"'
       + editorStyleHtml(metrics)
-      + ' oninput="window.MemoNotesUI.onEditorInput(this)"'
-      + ' onblur="window.MemoNotesUI.commitEditBlock()"'
-      + ' onkeydown="window.MemoNotesUI.onEditorKeydown(event)">'
+      + ' data-action="memo.onEditorInput"'
+      + ' data-action="memo.commitEditBlock"'
+      + ' data-action="memo.onEditorKeydown" data-event="keydown">'
       + esc(draft) + '</textarea>';
   }
 
   /** 正文按顶层块渲染；正在编辑的块换成源码 textarea。块容器不加内衬（保住 markdown-body 的 margin 折叠）。 */
   function noteBodyHtml(entry) {
-    const blocks = splitMarkdownBlocks(entry.content || '');
+    const blocks = pluginHost.markdown.splitMarkdownBlocks(entry.content || '');
     let html = '';
     let hasEditable = false;
     for (let i = 0; i < blocks.length; i++) {
-      if (!isEditableMarkdownBlock(blocks[i])) continue;
+      if (!pluginHost.markdown.isEditableMarkdownBlock(blocks[i])) continue;
       hasEditable = true;
       if (editing && editing.blockIndex === i) {
         html += editorHtml(editing.draft, editing.metrics);
       } else {
         html += '<div class="memo-note-block" data-block-index="' + i + '"'
-          + ' ondblclick="window.MemoNotesUI.startEditBlock(' + i + ', event)">'
-          + renderMarkdown(blocks[i].raw) + '</div>';
+          + ' data-action="memo.startEditBlock" data-args="[' + i + ']" data-event="dblclick">'
+          + pluginHost.markdown.renderMarkdown(blocks[i].raw) + '</div>';
       }
     }
     if (!hasEditable) {
       if (editing && editing.blockIndex === -1) return editorHtml(editing.draft, editing.metrics);
       return '<div class="memo-note-block is-empty" data-block-index="-1"'
-        + ' ondblclick="window.MemoNotesUI.startEditBlock(-1, event)">'
+        + ' data-action="memo.startEditBlock" data-args="[-1]" data-event="dblclick">'
         + esc(isZh() ? '空便签——双击开始写' : 'Empty note — double-click to write')
         + '</div>';
     }
@@ -251,7 +253,7 @@ window.MemoNotesUI = (() => {
       '<div class="memo-note-reader-top">'
       // 返回按钮走项目统一的 feature-detail-close 图标形态（详情页返回先例）：
       // feature-store / mcp-gateway / codex 连接页 / ph-settings 同款
-      + '<button class="feature-detail-close" type="button" title="' + esc(isZh() ? '返回' : 'Back') + '" onclick="window.MemoNotesUI.closeNote()" style="margin-right:8px;font-size:16px;">'
+      + '<button class="feature-detail-close" type="button" title="' + esc(isZh() ? '返回' : 'Back') + '" data-action="memo.closeNote" style="margin-right:8px;font-size:16px;">'
       + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>'
       + '</button>'
       + '<span class="memo-note-reader-meta">' + esc(currentNote)
@@ -285,7 +287,7 @@ window.MemoNotesUI = (() => {
     return '<div class="memo-subpage-head">'
       + '<button class="memo-back-link" type="button" data-workspace-action="'
       + esc(JSON.stringify({ type: 'show_home' }))
-      + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">'
+      + '" data-action="memo.workspaceAction">'
       + esc(isZh() ? '← 总览' : '← Overview') + '</button>'
       + '<div class="memo-subpage-title">' + esc(isZh() ? '便签' : 'Notes') + esc(countSuffix) + '</div>'
       + '</div>'
@@ -352,8 +354,8 @@ window.MemoNotesUI = (() => {
     const baseContent = entry.content || '';
     let draft = '';
     if (blockIndex !== -1) {
-      const blocks = splitMarkdownBlocks(baseContent);
-      if (!isEditableMarkdownBlock(blocks[blockIndex])) return;
+      const blocks = pluginHost.markdown.splitMarkdownBlocks(baseContent);
+      if (!pluginHost.markdown.isEditableMarkdownBlock(blocks[blockIndex])) return;
       draft = blocks[blockIndex].raw;
     }
     // 先采集排版度量（此刻原渲染块还在 DOM），再替换
@@ -373,7 +375,7 @@ window.MemoNotesUI = (() => {
       editing.timer = null;
       const next = editing.blockIndex === -1
         ? editing.draft
-        : replaceMarkdownBlock(editing.baseContent, editing.blockIndex, editing.draft);
+        : pluginHost.markdown.replaceMarkdownBlock(editing.baseContent, editing.blockIndex, editing.draft);
       if (next !== editing.baseContent) saveNote(currentNote, next);
     }, 800);
   }
@@ -401,7 +403,7 @@ window.MemoNotesUI = (() => {
       paint();
       return;
     }
-    const next = blockIndex === -1 ? draft : replaceMarkdownBlock(baseContent, blockIndex, draft);
+    const next = blockIndex === -1 ? draft : pluginHost.markdown.replaceMarkdownBlock(baseContent, blockIndex, draft);
     if (next !== (entry.content || '')) {
       entry.content = next;
       entry.updatedAt = Date.now();
@@ -436,3 +438,14 @@ window.MemoNotesUI = (() => {
     startEditBlock, onEditorInput, onEditorKeydown, commitEditBlock,
   };
 })();
+
+export default {
+  id: 'memo',
+  blocks: {
+    'memo-notes': () => MemoNotesUI.render(),
+  },
+  mount(h) { pluginHost = h; },
+  unmount() { pluginHost = null; },
+};
+
+export { MemoNotesUI };

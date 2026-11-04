@@ -122,23 +122,15 @@ function setPreferredUnitMode(mode, agent = getCurrentAgentRecord()) {
   }
 }
 
-/** 自刷新面板分发表（与 renderWorkspaceBlock 的 block 分发同构）：
- *  block.type → 后台重取入口。新面板接入时在此登记。 */
-const WORKSPACE_PANEL_REFRESHERS = {
-  'memo-overview': () => window.MemoOverviewUI?.refresh?.(),
-  'memo-notes': () => window.MemoNotesUI?.refresh?.(),
-  'memo-reminders': () => window.MemoRemindersUI?.refresh?.(),
-};
-
-/** 导航进入工作空间单元时，对当前模式下可见的自刷新面板发起后台重取。
- *  数据驱动（按目标 agent 的 blocks 与可见性判定），blocks 里没有登记
- *  类型的工作空间空转，不按 agent id 硬编码。 */
+/** 自刷新面板分发表：block.type → 后台重取入口。
+ *  插件块的刷新器由插件在 loadPlugin 时经 ClawHost 注册；宿主基础块的
+ *  自刷新入口在此登记。 */
 function refreshVisibleWorkspacePanelData(agent = getCurrentAgentRecord()) {
   const ui = getCurrentUnitUi(agent);
   const blocks = Array.isArray(ui?.home?.blocks) ? ui.home.blocks : [];
   for (const block of blocks) {
-    const refresher = WORKSPACE_PANEL_REFRESHERS[block?.type];
-    if (refresher && shouldRenderBlock(block)) refresher();
+    if (!shouldRenderBlock(block)) continue;
+    window.ClawHost.blocks.refresh(block?.type);
   }
 }
 
@@ -1225,31 +1217,35 @@ function _ensureWorkGroupEventDelegation() {
 
 function renderWorkspaceBlock(agent, block) {
   if (!shouldRenderBlock(block)) return '';
-  if (block.type === 'hero') return renderWorkspaceHero(agent, block);
-  if (block.type === 'launcher-grid') return renderWorkspaceLauncherGrid(agent, block);
-  if (block.type === 'action-group') return renderWorkspaceActionGroup(block);
-  if (block.type === 'session-list') return renderWorkspaceSessionList(agent, block);
-  if (block.type === 'studio-features') return renderStudioFeaturesBlock(agent, block);
-  if (block.type === 'studio-repository') return renderStudioRepositoryBlock(agent, block);
-  if (block.type === 'coder-threads') return window.CoderThreadsUI?.render?.() || '';
-  if (block.type === 'memo-notes') return window.MemoNotesUI?.render?.() || '';
-  if (block.type === 'memo-reminders') return window.MemoRemindersUI?.render?.() || '';
-  if (block.type === 'memo-overview') return window.MemoOverviewUI?.render?.() || '';
-  if (block.type === 'app-chat-input') return ''; // 快记输入框改挂主内容列底部槽位（syncAppChatInputSlot），不进 surface 内容流
-  if (block.type === 'form') return renderWorkspaceForm(agent, block);
-  if (block.type === 'status-grid') return renderWorkspaceStatusGrid(agent, block);
-  if (block.type === 'assembly-library') return renderAssemblyLibraryBlock(agent, block);
-  if (block.type === 'assembly-workbench') return renderAssemblyWorkbenchBlock(agent, block);
-  if (block.type === 'project-list') return renderProjectListBlock(agent, block);
-  if (block.type === 'feature-repository') return renderFeatureRepositoryBlock(agent, block);
-  if (block.type === 'workspace-artifacts') return renderWorkspaceArtifactsBlock(agent, block);
-  if (block.type === 'project-docset') return renderProjectDocsetBlock(agent, block);
-  if (block.type === 'guide-docset') return renderGuideDocsetBlock(agent, block);
-  if (block.type === 'config-editor') return isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : isDispatchConfigEditor(block) ? renderDispatchConfigEditor(block) : '';
-  if (block.type === 'flow-editor') return renderFlowEditorBlock(agent, block);
-  if (block.type === 'work-group-chat') return renderWorkGroupChatBlock(agent, block);
-  return '';
+  return window.ClawHost.blocks.render(agent, block);
 }
+
+// ── 宿主基础组件的 block 渲染器注册 ─────────────────────────────────
+// 分层：这些是系统提供的通用 block，常驻可用、插件不可覆盖。
+// APP 自定义 block（coder-threads / memo-* / work-group-chat 等）由各自
+// 插件模块在自己的装载时机经 ClawHost.blocks.register 注册，随卸载移除。
+window.ClawHost.blocks.registerPrimitive('hero', (agent, block) => renderWorkspaceHero(agent, block));
+window.ClawHost.blocks.registerPrimitive('launcher-grid', (agent, block) => renderWorkspaceLauncherGrid(agent, block));
+window.ClawHost.blocks.registerPrimitive('action-group', (agent, block) => renderWorkspaceActionGroup(block));
+window.ClawHost.blocks.registerPrimitive('session-list', (agent, block) => renderWorkspaceSessionList(agent, block));
+window.ClawHost.blocks.registerPrimitive('form', (agent, block) => renderWorkspaceForm(agent, block));
+window.ClawHost.blocks.registerPrimitive('status-grid', (agent, block) => renderWorkspaceStatusGrid(agent, block));
+window.ClawHost.blocks.registerPrimitive('app-chat-input', () => '');
+window.ClawHost.blocks.registerPrimitive('studio-features', (agent, block) => renderStudioFeaturesBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('studio-repository', (agent, block) => renderStudioRepositoryBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('assembly-library', (agent, block) => renderAssemblyLibraryBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('assembly-workbench', (agent, block) => renderAssemblyWorkbenchBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('project-list', (agent, block) => renderProjectListBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('feature-repository', (agent, block) => renderFeatureRepositoryBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('workspace-artifacts', (agent, block) => renderWorkspaceArtifactsBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('project-docset', (agent, block) => renderProjectDocsetBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('guide-docset', (agent, block) => renderGuideDocsetBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('config-editor', (agent, block) => (
+  isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block)
+    : isDispatchConfigEditor(block) ? renderDispatchConfigEditor(block) : ''
+));
+window.ClawHost.blocks.registerPrimitive('flow-editor', (agent, block) => renderFlowEditorBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('work-group-chat', (agent, block) => renderWorkGroupChatBlock(agent, block));
 
 function renderWorkspaceSurface(agent = getCurrentAgentRecord()) {
   // Home agent — render the new Dashboard instead of legacy blocks
@@ -1262,6 +1258,13 @@ function renderWorkspaceSurface(agent = getCurrentAgentRecord()) {
     return getEmptyStateHtml();
   }
 
+  // APP 前端界面按需装载：清单里有该 agent 且尚未装载时，先起装载并在完成
+  // 后重渲染。装载失败显示显式错误态而非静默空白（见 renderBlockError）。
+  const plugin = window.resolveAgentPlugin?.(agent.id);
+  if (plugin && !window.ClawHost.isPluginLoaded(plugin.id)) {
+    ensureAgentPlugin(plugin);
+  }
+
   const blocks = Array.isArray(ui.home?.blocks) ? ui.home.blocks : [];
   const content = blocks.map((block) => renderWorkspaceBlock(agent, block)).filter(Boolean).join('');
   const hasAssemblyWorkbench = blocks.some((block) => block?.type === 'assembly-workbench');
@@ -1269,6 +1272,18 @@ function renderWorkspaceSurface(agent = getCurrentAgentRecord()) {
   shouldAnimateWorkspaceSurface = false;
 
   return '<div class="workspace-surface' + animateClass + '">' + content + '</div>';
+}
+
+// ── APP 插件装载 ────────────────────────────────────────────────────
+// 装载状态由 ClawHost 持有（插件生命周期是宿主职责）；这里只负责触发，
+// 并在装载落定后重渲染当前视图，把占位或错误态换成真实内容。
+window.ClawHost.setPluginResolver((agent) => window.resolveAgentPlugin?.(agent?.id)?.id || null);
+window.ClawHost.onPluginLoadSettled(() => {
+  if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+});
+
+function ensureAgentPlugin(plugin) {
+  window.ClawHost.ensurePlugin(plugin.id, plugin.url);
 }
 
 function isEditingWorkspaceForm() {

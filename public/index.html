@@ -76,6 +76,8 @@
       return String(text ?? '').replace(/[&<>]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
     }
   </script>
+  <script src="./src/modules/claw-host.js"></script>
+  <script src="./src/modules/plugin-manifest.js"></script>
   <script src="./src/modules/action-dispatcher.js"></script>
   <script src="./src/modules/auth-client.js"></script>
   <link rel="stylesheet" href="./styles/base.css">
@@ -574,9 +576,8 @@
   <script src="./src/modules/debug-panel-host.js"></script>
   <script src="./src/modules/workspace-blocks.js"></script>
   <script src="./src/modules/coder-threads-ui.js"></script>
-  <script src="./src/modules/memo-notes-ui.js"></script>
-  <script src="./src/modules/memo-reminders-ui.js"></script>
-  <script src="./src/modules/memo-overview-ui.js"></script>
+  <!-- memo APP 界面改为按需动态装载（src/plugins/memo/index.js），
+       不再静态挂载，卸载后无残留 -->
   <script src="./src/modules/app-chat-input.js"></script>
   <script src="./src/modules/memo-settings.js"></script>
   <script src="./src/modules/assembly-data.js"></script>

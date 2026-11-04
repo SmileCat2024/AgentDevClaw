@@ -327,7 +327,6 @@
       "CENTRAL_MIN_WIDTH",
       "SIDEBAR_MAX_WIDTH",
       "SIDEBAR_MIN_WIDTH",
-      "WORKSPACE_PANEL_REFRESHERS",
       "_centralAdaptRaf",
       "_ctxTarget",
       "_fpNarrowObserver",
@@ -352,6 +351,7 @@
       "_sidebarDragCeiling",
       "_updateSidebarBackdrop",
       "closeCtxMenu",
+      "ensureAgentPlugin",
       "ensureCentralMinWidth",
       "ensureUnitMode",
       "escapeHtmlCtx",
@@ -809,6 +809,12 @@
       "selectChoiceOption",
       "toggleChoiceContext",
       "updateChoiceCustomText"
+    ]
+  },
+  "public/src/modules/claw-host.js": {
+    "state": [],
+    "behavior": [
+      "ClawHost"
     ]
   },
   "public/src/modules/claw-select.js": {
@@ -1922,24 +1928,6 @@
       "renderGatewayOverlay"
     ]
   },
-  "public/src/modules/memo-notes-ui.js": {
-    "state": [],
-    "behavior": [
-      "MemoNotesUI"
-    ]
-  },
-  "public/src/modules/memo-overview-ui.js": {
-    "state": [],
-    "behavior": [
-      "MemoOverviewUI"
-    ]
-  },
-  "public/src/modules/memo-reminders-ui.js": {
-    "state": [],
-    "behavior": [
-      "MemoRemindersUI"
-    ]
-  },
   "public/src/modules/memo-settings.js": {
     "state": [
       "MEMO_SETTINGS_AGENT_ID",
@@ -2346,6 +2334,13 @@
     "behavior": [
       "PhThreadHistory",
       "phOpenThreadHistory"
+    ]
+  },
+  "public/src/modules/plugin-manifest.js": {
+    "state": [],
+    "behavior": [
+      "ClawPluginManifest",
+      "resolveAgentPlugin"
     ]
   },
   "public/src/modules/project-data.js": {

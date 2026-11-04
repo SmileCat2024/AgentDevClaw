@@ -29,6 +29,8 @@ function buildRailDom(panelIds) {
 
 function createRailSandbox(harness, overrides = {}) {
   const ctx = createFrontendSandbox({ document: harness.document, ...overrides });
+  // ClawPanels 委托给 ClawHost.panels（同一份注册表），必须先装载宿主
+  ctx.loadSource('public/src/modules/claw-host.js');
   ctx.loadSource('public/src/modules/right-panel-registry.js');
   ctx.run(`
     window.ClawPanels.register('workspace', {

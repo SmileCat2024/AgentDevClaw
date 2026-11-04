@@ -283,7 +283,10 @@ server.js 主进程（Express 1420 + ViewerWorker 2026 + DebugHub）+ per-runtim
 - 服务端纯逻辑 → 新建 `test/<name>.test.js`
 - local-feature 功能 → `local-features/<name>/test/<name>.test.ts`，并加入 [local-features/tsconfig.json](local-features/tsconfig.json) 的 include；`test:features` 自动发现（pretest 钩子自动构建）
 - 测试代码中 inline 复刻的 server 逻辑，需在 server 对应逻辑变更时同步更新
-- 前端 JS 目前仅 frontend-vm.js 沙箱测试覆盖纯函数
+- 前端 classic script → `frontend-vm.js` 沙箱测试（`ctx.loadSource` 按顺序执行源码）；
+  ES 模块插件（如 `public/src/plugins/memo/*.js`）不能走沙箱，用 [test/helpers/memo-plugin-loader.js](test/helpers/memo-plugin-loader.js)
+  动态 `import()` + 注入 presenter（`mount(host)`），每个用例唯一 query 绕开模块缓存
+- 加载顺序是真实依赖：`ClawPanels` 委托给 `ClawHost.panels`，测右栏注册表必须先 `loadSource('claw-host.js')`
 
 时长预算（超预算当 bug 排查，不要调大预算）：单用例 < 100ms（真实 IO / 子进程放宽到 2s）、单文件墙钟 < 1.5s（硬上限 10s）、全量 `test:core` ~15s（上限 30s）。已知合理慢文件（生产语义决定，不要"修复"）：`oauth-codex`（设备码 interval 下限 + 网络退避）、`feature-runtime`（真实子进程生命周期）、`session-summary`（扫描真实 context-handoffs 目录，已知待办：注入隔离）。
 
@@ -297,7 +300,15 @@ server.js 主进程（Express 1420 + ViewerWorker 2026 + DebugHub）+ per-runtim
 
 `npm run check:frontend-globals`（[scripts/check-frontend-globals.mjs](scripts/check-frontend-globals.mjs)，挂在 `pretest:core` 自动执行）：扫描 public/ 下 classic script 的全局暴露面，与 [.frontend-globals-baseline.json](.frontend-globals-baseline.json) 对比。暴露键分两层——**state**（顶层 var/let/const 声明、`window._*` 赋值）新增直接 exit 1，是「全局状态区只减不增」纪律的机器化；**behavior**（顶层 function/class、非下划线 `window.*` 赋值）进台账提示不阻塞，随各域 ESM 化/注册表化从基线消退。两层新增都需显式 `--update-baseline` 固化并在提交说明写明理由；存量收敛后应修剪基线。`window.ClawFW` 下划线键直写仍由 ESLint 规则治理（owner 模块 + ratchet 清单），两者分工不重叠。
 
-事件委托分发器（[modules/action-dispatcher.js](public/src/modules/action-dispatcher.js)，`window.ClawFW.actions`）：模板以 `data-action="域.动作"` + `data-args`（JSON 数组）声明行为，处理函数经注册表按名分发（click/change/input 默认绑定），替代内联 `onclick="fn()"` 的全局函数依赖。新代码优先用分发器注册处理器；存量内联处理器随各域改造收编。与内联 `return false` 的语义差异：分发器层只做 preventDefault（stopPropagation 在 document 委托层无意义），头注有完整协议。
+事件委托分发器（[modules/action-dispatcher.js](public/src/modules/action-dispatcher.js)，`window.ClawFW.actions`）：模板以 `data-action="域.动作"` + `data-args`（JSON 数组）声明行为，处理函数经注册表按名分发（click/change/input/dblclick/keydown 默认绑定），替代内联 `onclick="fn()"` 的全局函数依赖；`data-event` 属性限定元素响应的事件类型，避免 click 与 dblclick 双触发。新代码优先用分发器注册处理器；存量内联处理器随各域改造收编。与内联 `return false` 的语义差异：分发器层只做 preventDefault（stopPropagation 在 document 委托层无意义），头注有完整协议。
+
+前端插件宿主（[modules/claw-host.js](public/src/modules/claw-host.js)，`window.ClawHost`）：APP 界面以 ES 模块插件形式按需装载，不再依赖 index.html 静态标签。
+
+- **分层心智**：`blocks.registerPrimitive` 是宿主基础组件（启动即注册、全生命周期可用、插件不可覆盖）；`blocks.register` 是 APP 组件（插件装载时注册、随卸载移除）。两者寿命不同，存两张表，卸载只清插件层。
+- **插件协议**：模块 default 导出 `{ id, blocks?, refreshers?, actions?, mount?(host), unmount?() }`；`loadPlugin(id, url)` 经动态 `import()` 装载并调用 `mount(host)`，`unloadPlugin(id)` 先调插件 `unmount()`，再按 owner 兜底摘除它注册的 block / refresher / action——插件自己漏清理也不留悬空项。
+- **清单**：[modules/plugin-manifest.js](public/src/modules/plugin-manifest.js) 声明 `agentId → 模块 URL`（URL 相对站点根，不随调用点漂移）。新增 APP 插件在此登记；装载失败有显式错误态且不自动重试（渲染是高频路径，重试会造成请求风暴），恢复靠刷新页面。
+- **宿主能力注入**：classic script 的顶层 `let`（如 `currentLanguage`）不会成为 `window` 属性，ES 模块作用域也看不到。插件只能经 `host.env`（语言、escapeHtml、markdown 工具）与 `host.workspace.runAction` 取用，不得裸引用宿主全局——`typeof xxx !== 'undefined'` 在模块里不会抛错而是静默返回 false，这类写法会退化成无声失效。
+- 首个接入：memo（[src/plugins/memo/](public/src/plugins/memo/)，三个业务块 + overview 跨页导航）。宿主侧 27 个 block type 的渲染分发已改为注册表查表，不再走 `renderWorkspaceBlock` 的 if 链。
 
 ## 协作纪律（负面清单）
 

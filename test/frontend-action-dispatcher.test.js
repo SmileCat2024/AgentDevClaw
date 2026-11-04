@@ -45,10 +45,10 @@ function makeEvent(ctx, target, name) {
 }
 
 describe('action-dispatcher 加载与默认绑定', () => {
-  it('挂载 window.ClawFW.actions 并默认绑定 click/change/input', () => {
+  it('挂载 window.ClawFW.actions 并默认绑定 click/change/input/dblclick/keydown', () => {
     const { ctx, boundTypes } = makeSandbox();
     assert.ok(ctx.window.ClawFW?.actions?.register);
-    assert.deepEqual(boundTypes.sort(), ['change', 'click', 'input']);
+    assert.deepEqual(boundTypes.sort(), ['change', 'click', 'dblclick', 'input', 'keydown']);
   });
 });
 

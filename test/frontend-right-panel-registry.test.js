@@ -8,6 +8,8 @@ const appUiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.me
 describe('right panel registry', () => {
   it('registers panels and filters by all declared context dimensions', () => {
     const ctx = createFrontendSandbox();
+    // ClawPanels 是 ClawHost 的薄委托入口，实现与存储都在 claw-host.js
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/right-panel-registry.js');
 
     ctx.run(`
@@ -39,6 +41,8 @@ describe('right panel registry', () => {
 
   it('rejects duplicate IDs rather than silently replacing a panel', () => {
     const ctx = createFrontendSandbox();
+    // ClawPanels 是 ClawHost 的薄委托入口，实现与存储都在 claw-host.js
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/right-panel-registry.js');
     ctx.run(`window.ClawPanels.register('stable-id', { title: 'First', render: () => '' })`);
 
@@ -51,6 +55,8 @@ describe('right panel registry', () => {
 
   it('getAll returns every registered panel in registration order', () => {
     const ctx = createFrontendSandbox();
+    // ClawPanels 是 ClawHost 的薄委托入口，实现与存储都在 claw-host.js
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/right-panel-registry.js');
     ctx.run(`
       window.ClawPanels.register('b-panel', { title: () => 'B', render: () => '' });
@@ -65,6 +71,8 @@ describe('right panel registry', () => {
 
   it('treats absent context values as non-matching for constrained panels', () => {
     const ctx = createFrontendSandbox();
+    // ClawPanels 是 ClawHost 的薄委托入口，实现与存储都在 claw-host.js
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/right-panel-registry.js');
     ctx.run(`window.ClawPanels.register('agent-only', {
       title: 'Agent only', when: { agentIds: ['work-group'] }, render: () => ''

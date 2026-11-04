@@ -37,8 +37,22 @@ const SCAN_IGNORE_DIRS = new Set(['node_modules', 'vendor', 'dist']);
  * IIFE/函数体内的声明不算顶层；window 赋值任意深度都算（模块 API 挂载
  * 的主流形态就是 IIFE 内部 window.x = …）。
  */
-export function collectGlobalsFromSource(source) {
-  const ast = espreeParse(source, { ecmaVersion: 'latest', sourceType: 'script' });
+export function collectGlobalsFromSource(source, sourceType = 'script') {
+  let ast;
+  try {
+    ast = espreeParse(source, { ecmaVersion: 'latest', sourceType });
+  } catch (err) {
+    // 判定错源类型时按另一类型重试一次：.js 里既有 classic script 也有 ESM 插件
+    if (sourceType === 'script') {
+      ast = espreeParse(source, { ecmaVersion: 'latest', sourceType: 'module' });
+    } else {
+      throw err;
+    }
+  }
+  // ESM 的顶层声明属于模块作用域，不是全局暴露，必须排除；否则插件源码里
+  // 每个模块级 let/const 都会被误报成「新增全局状态」。window.* 赋值仍然
+  // 算暴露（模块里写 window.x = … 确实污染全局）。
+  const isModule = ast.sourceType === 'module';
   const state = new Set();
   const behavior = new Set();
 
@@ -70,6 +84,7 @@ export function collectGlobalsFromSource(source) {
   walk(ast);
 
   for (const stmt of ast.body) {
+    if (isModule) break;
     if (stmt.type === 'VariableDeclaration') {
       for (const decl of stmt.declarations) {
         if (decl.id.type === 'Identifier') state.add(decl.id.name);

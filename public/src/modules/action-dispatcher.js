@@ -23,6 +23,7 @@ window.ClawFW = window.ClawFW || {};
 
 (function () {
   const handlers = new Map();     // name -> fn（全事件类型共用一个名字空间）
+  const owners = new Map();       // name -> owner（插件归属，卸载时按其精确摘除）
   const boundTypes = new Set();   // 已在 document 绑定监听的事件类型
 
   function parseArgs(el) {
@@ -41,6 +42,10 @@ window.ClawFW = window.ClawFW || {};
   /**
    * 在事件 target 链上解析 data-action 并调用处理器。
    * 返回 true 表示已分发（无论 handler 返回什么），false 表示无匹配。
+   *
+   * data-event 属性声明该元素期望的事件类型（dblclick/keydown 等）。
+   * 委托监听在 document 层，同一元素可能同时收到 click 与 dblclick，
+   * 因此声明了 data-event 的元素只响应匹配类型，避免双触发。
    */
   function dispatch(event) {
     let node = event.target;
@@ -48,6 +53,8 @@ window.ClawFW = window.ClawFW || {};
       if (typeof node.getAttribute !== 'function') { node = node.parentNode; continue; }
       const name = node.getAttribute('data-action');
       if (name) {
+        const declared = node.getAttribute('data-event');
+        if (declared && declared !== event.type) return false;
         const handler = handlers.get(name);
         if (!handler) {
           console.error('[action-dispatcher] 未注册的 action：', name);
@@ -70,7 +77,7 @@ window.ClawFW = window.ClawFW || {};
     document.addEventListener(type, dispatch);
   }
 
-  function register(name, handler) {
+  function register(name, handler, owner) {
     if (typeof handler !== 'function') {
       console.error('[action-dispatcher] register 拒绝非函数 handler：', name);
       return;
@@ -80,21 +87,40 @@ window.ClawFW = window.ClawFW || {};
       return;
     }
     handlers.set(name, handler);
+    if (owner) owners.set(name, String(owner));
   }
 
-  function registerMany(map) {
-    for (const [name, handler] of Object.entries(map || {})) register(name, handler);
+  function registerMany(map, owner) {
+    for (const [name, handler] of Object.entries(map || {})) register(name, handler, owner);
   }
 
-  // click/change/input 覆盖存量内联处理器的绝大多数；keydown 等复杂快捷键
-  // 场景留给消费方按需 bindEventType。
+  /** 按 owner 精确摘除该插件注册的全部 action，返回摘除数量。 */
+  function unregisterOwner(owner) {
+    const key = String(owner || '');
+    if (!key) return 0;
+    let removed = 0;
+    for (const [name, nameOwner] of owners) {
+      if (nameOwner === key) {
+        handlers.delete(name);
+        owners.delete(name);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  // click/change/input 覆盖存量内联处理器的绝大多数；dblclick 与 keydown
+  // 由 data-event 声明触发，分发器必须为它们绑定委托（否则永不派发）。
   bindEventType('click');
   bindEventType('change');
   bindEventType('input');
+  bindEventType('dblclick');
+  bindEventType('keydown');
 
   window.ClawFW.actions = {
     register,
     registerMany,
+    unregisterOwner,
     bindEventType,
     dispatch,
   };
