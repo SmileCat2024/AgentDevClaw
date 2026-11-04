@@ -21,7 +21,10 @@ export type ContextGuardMode = 'off' | 'interrupt' | 'rotate';
 export type ContextRotationStrategy = 'adaptive' | 'trim' | 'summary';
 
 export interface ContextGuardConfig {
-  /** 布尔旧值兼容（配置层遗留 enabled）：false → off；true/缺省且无 mode → interrupt。 */
+  /**
+   * 布尔旧值兼容（配置层遗留 enabled）：false → off；true / 缺省且无 mode
+   * 按装配能力取缺省档（allowRotation → rotate，否则 interrupt）。
+   */
   enabled?: boolean;
   mode?: ContextGuardMode;
   strategy?: ContextRotationStrategy;
@@ -162,7 +165,9 @@ function normalizeGuardStrategy(value: unknown): ContextRotationStrategy | null 
  * mode 是用户选择（badge 循环点击 + 会话控制面板策略行）：触发不改变它；
  * 手动切换即复位本轮尽职状态（闩锁 / 拦截 / 待上报），新模式从下一次过界
  * 观测重新开始。allowRotation 是装配能力（线程宿主工作空间才传 true），
- * 非线程工作空间不提供 rotate 选项。
+ * 非线程工作空间不提供 rotate 选项。新对话的缺省档随装配能力：线程宿主
+ * 默认 rotate（自动接续），其余默认 interrupt；会话内切换经快照随会话
+ * 持久化，配置层显式 mode 优先于缺省档。
  *
  * {mode, strategy} 经 declareContinuity 随会话快照持久化、随 trim / rotate
  * 接续与 branch 注入流转（同 model-selection 模式）；触发事实 / 闩锁 /
@@ -210,9 +215,13 @@ export class ContextGuardFeatureInner implements AgentFeature {
     this.core = new ContextGuardCore(config.contextLength, config.compressRatio);
     this.allowRotation = config.allowRotation === true;
     const configuredMode = normalizeGuardMode(config.mode);
+    // 缺省档按装配能力自适应：线程宿主（allowRotation，新对话无快照无配置时）
+    // 默认自动接续（ADR-0040 修订），非线程宿主保持自动打断——与 rotate 钳制
+    // 语义同向，配置层显式 mode 始终优先于缺省。
+    const fallbackMode: ContextGuardMode = this.allowRotation ? 'rotate' : 'interrupt';
     this.mode = configuredMode === 'rotate' && !this.allowRotation
       ? 'interrupt'
-      : (configuredMode ?? (config.enabled === false ? 'off' : 'interrupt'));
+      : (configuredMode ?? (config.enabled === false ? 'off' : fallbackMode));
     this.strategy = normalizeGuardStrategy(config.strategy) ?? 'adaptive';
     this.agentId = typeof config.agentId === 'string' ? config.agentId.trim() : '';
     this.sessionId = typeof config.sessionId === 'string' ? config.sessionId.trim() : '';
@@ -248,8 +257,8 @@ export class ContextGuardFeatureInner implements AgentFeature {
           mode: {
             type: 'select',
             title: '上下文保护',
-            description: '关闭 = 全停；自动打断 = 过界打断本轮并拦截机器唤醒直到人工输入（那条输入即视为批准继续），本次越界期间不再拦截；自动接续 = 过界打断后立即走线程接力（coder 同构）。仅交互式工作空间；coder / memo 线程自动接力不受此配置影响。',
-            default: 'interrupt',
+            description: '关闭 = 全停；自动打断 = 过界打断本轮并拦截机器唤醒直到人工输入（那条输入即视为批准继续），本次越界期间不再拦截；自动接续 = 过界打断后立即走线程接力（coder 同构）。缺省档按装配能力取自动接续（非线程宿主两态时为自动打断）。仅交互式工作空间；coder / memo 线程自动接力不受此配置影响。',
+            default: this.allowRotation ? 'rotate' : 'interrupt',
             options: modeOptions,
           },
           ...(this.allowRotation

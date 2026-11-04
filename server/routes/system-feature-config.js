@@ -17,14 +17,14 @@ const CONTEXT_GUARD_MANIFEST = {
     properties: {
       mode: {
         type: 'select',
-        default: 'interrupt',
+        default: 'rotate',
         title: '上下文保护',
         options: [
           { label: '关闭', value: 'off' },
           { label: '自动打断', value: 'interrupt' },
           { label: '自动接续', value: 'rotate' },
         ],
-        description: '关闭 = 全停；自动打断 = 过界打断本轮并拦截机器唤醒直到人工输入——那条输入即视为批准继续，本次越界期间不再拦截；自动接续 = 过界打断后立即走线程接力（coder 同构）。自动接续档仅线程宿主工作空间（编程小助手）生效，其他工作空间启动时钳制为自动打断。旧布尔配置（enabled: true/false）兼容读取。仅交互式工作空间；coder / memo 线程自动接力不受此配置影响。',
+        description: '关闭 = 全停；自动打断 = 过界打断本轮并拦截机器唤醒直到人工输入——那条输入即视为批准继续，本次越界期间不再拦截；自动接续 = 过界打断后立即走线程接力（coder 同构）。缺省档为自动接续（线程宿主装配语境）；自动接续档仅线程宿主工作空间（编程小助手）生效，其他工作空间启动时钳制为自动打断。旧布尔配置（enabled: true/false）兼容读取。仅交互式工作空间；coder / memo 线程自动接力不受此配置影响。',
       },
       strategy: {
         type: 'select',

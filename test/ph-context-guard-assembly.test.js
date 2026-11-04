@@ -56,6 +56,14 @@ describe('PH context-guard 装配 wiring（rotate 上报身份）', () => {
     assert.equal(guard.allowRotation, true);
   });
 
+  test('缺省档（ADR-0040 修订）：新对话无快照无配置时默认自动接续', () => {
+    // 构造期未传 mode / enabled（配置层无 context-guard 键），初值由装配
+    // 能力决定：allowRotation: true → rotate。这是「新对话默认自动接续」
+    // 的装配层验收点；会话内切换与快照继承由 feature 层测试覆盖。
+    assert.equal(guard.getStatus().mode, 'rotate');
+    assert.equal(guard.getStatus().strategy, 'adaptive');
+  });
+
   test('行为层：rotate 态过界上报携带完整身份与会话级策略（fetch 可达验证）', async () => {
     // 经真实控制面切到 rotate（上报的 mode 守卫只放行 rotate 态——默认
     // interrupt 下被拦截不是缺陷，是 mode 守卫语义，此处前置为 rotate）

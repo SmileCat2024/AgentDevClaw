@@ -206,7 +206,8 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 直到人工输入——那条输入即视为批准继续，本次越界期间维持放行；rotate
     // = coder 同构的自动接续：过界打断后经服务端 thread-rotation 执行线程
     // 接力（策略经会话控制面板选择，随事件载荷送达）。allowRotation 是
-    // 装配能力声明（编程小助手是线程宿主），显式放末位防配置覆盖。
+    // 装配能力声明（编程小助手是线程宿主），显式放末位防配置覆盖；缺省档
+    // 随能力取 rotate（新对话无快照无配置时默认自动接续，ADR-0040 修订）。
     // runtimeIdentity（rotate 上报必需）：缺失时 feature 在上报处静默跳过，
     // 表现为「过界打断但不轮转」——身份与 allowRotation 同样放末位防覆盖。
     this.use(new ContextGuardFeature({

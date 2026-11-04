@@ -247,16 +247,21 @@ describe('ContextGuardFeature (interactive shell)', () => {
     // 坏快照防御：非法字段保持当前值，不抛错
     const defensive = new ContextGuardFeature({ allowRotation: true });
     await defensive.restoreState({ mode: 'nonsense', strategy: 42 });
-    assert.equal(defensive.getStatus().mode, 'interrupt');
+    assert.equal(defensive.getStatus().mode, 'rotate');
     assert.equal(defensive.getStatus().strategy, 'adaptive');
   });
 
-  it('legacy enabled boolean maps to modes; explicit mode wins', () => {
+  it('legacy enabled boolean maps to modes; explicit mode wins; default follows assembly capability', () => {
     assert.equal(new ContextGuardFeature({ enabled: false }).getStatus().mode, 'off');
     assert.equal(new ContextGuardFeature({ enabled: true }).getStatus().mode, 'interrupt');
     assert.equal(new ContextGuardFeature({}).getStatus().mode, 'interrupt');
     assert.equal(new ContextGuardFeature({ enabled: false, mode: 'interrupt' }).getStatus().mode, 'interrupt');
     assert.equal(new ContextGuardFeature({ mode: 'rotate', allowRotation: true }).getStatus().mode, 'rotate');
+    // 缺省档随装配能力：线程宿主（allowRotation）新对话默认自动接续，
+    // 旧布尔 enabled: true 在线程宿主语境同样落到 rotate（开守卫即接续）
+    assert.equal(new ContextGuardFeature({ allowRotation: true }).getStatus().mode, 'rotate');
+    assert.equal(new ContextGuardFeature({ allowRotation: true, enabled: true }).getStatus().mode, 'rotate');
+    assert.equal(new ContextGuardFeature({ allowRotation: true, enabled: false }).getStatus().mode, 'off');
   });
 
   it('resets a stale pending interrupt on the next CallStart', async () => {
@@ -343,8 +348,9 @@ describe('ContextGuardFeature (interactive shell)', () => {
 
     const rotating = new ContextGuardFeature({ allowRotation: true }).getFeatureManifest();
     const rotatingMode = rotating.settings.properties.mode as {
-      options: Array<{ value: string }>;
+      default: string; options: Array<{ value: string }>;
     };
+    assert.equal(rotatingMode.default, 'rotate');
     assert.deepEqual(rotatingMode.options.map((option) => option.value), ['off', 'interrupt', 'rotate']);
     const strategy = rotating.settings.properties.strategy as {
       type: string; default: string; options: Array<{ value: string }>;
@@ -527,7 +533,7 @@ describe('onHostRequest surface (feature-comms)', () => {
       assert.equal(result.ok, false, JSON.stringify(payload));
       assert.equal(result.code, 'invalid_payload');
     }
-    assert.equal(feature.getStatus().mode, 'interrupt', '非法载荷不得改变模式');
+    assert.equal(feature.getStatus().mode, 'rotate', '非法载荷不得改变模式');
     const unknown = await feature.onHostRequest('nope', {});
     assert.equal(unknown.ok, false);
     assert.equal(unknown.code, 'operation_unavailable');
