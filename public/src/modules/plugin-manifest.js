@@ -9,6 +9,7 @@
 window.ClawPluginManifest = {
   // url 相对站点根解析（不是相对某个模块文件），避免随调用点漂移
   memo: { id: 'memo', url: '/src/plugins/memo/index.js' },
+  'claw-guide': { id: 'claw-guide', url: '/src/plugins/claw-guide/guide-docset.js' },
 };
 
 /** 返回该 agent 需要的插件描述，没有则返回 null。 */

@@ -310,6 +310,14 @@
       runAction(rawAction, triggerButton) {
         return window.runWorkspaceAction(rawAction, triggerButton);
       },
+      // 当前选中的 agent 记录（经典脚本里是顶层函数，模块内看不到）
+      currentAgent() {
+        return typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+      },
+      // 整屏重渲染（插件改了自己的导航状态后由宿主重建视图）
+      rerender() {
+        if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+      },
     },
     // 宿主能力：经典脚本的顶层 let（currentLanguage、escapeHtml 等）不会成为
     // window 属性，ES 模块作用域也看不到它们，插件只能经注入取用。
@@ -323,6 +331,14 @@
       },
       escapeHtml(value) {
         return window.escapeHtml ? window.escapeHtml(value) : String(value ?? '');
+      },
+      // KaTeX 排版增强（指南正文用；对话页同款）
+      enhanceMathInElement(el) {
+        return typeof enhanceMathInElement === 'function' ? enhanceMathInElement(el) : undefined;
+      },
+      // 图片缩放层（指南正文里点击图片复用对话页行为）
+      openImageZoom(src) {
+        return typeof openImageZoom === 'function' ? openImageZoom(src) : undefined;
       },
       markdown: {
         render: (text) => (window.renderMarkdown ? window.renderMarkdown(text) : String(text ?? '')),

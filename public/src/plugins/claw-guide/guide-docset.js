@@ -9,15 +9,33 @@
  *   - md 之间相对链接（含锚点）在阅读器内跳转，联动目录高亮。
  *   - 页内大纲（h2/h3）、上/下篇导航、阅读位置记忆（localStorage）。
  *
- * 依赖（全局作用域，运行时解析）：
- *   - markdown-utils.js: escapeHtml, renderMarkdown, enhanceMathInElement
- *   - app-core.js: currentLanguage, localizeWorkspaceValue, getCurrentAgentRecord
- *   - app-ui.js: renderCurrentMainView
+ * 形态：ES 模块插件（public/src/plugins/claw-guide/）。装载时经 ClawHost 注册
+ * guide-docset block，卸载时随 owner 一并摘除。宿主能力经 mount(host) 注入：
+ *   - host.env.escapeHtml / host.env.language / host.env.markdown.render
+ *   - host.env.enhanceMathInElement（KaTeX 排版增强）
+ *   - host.env.openImageZoom（对话页同款图片缩放层）
+ *   - host.workspace.currentAgent() / host.workspace.rerender()
+ * 模块作用域隔离后，经典脚本的顶层变量在模块内不可见，一律经注入取用。
  *
  * 数据来源：
  *   - workspace_data[block.id]（server/routes/workspace.js → guide.js 聚合目录树）
  *   - GET /protoclaw/guide_doc、GET /protoclaw/guide_asset
  */
+
+// ══════════════════════════════════════════════════════════════
+//  宿主注入（mount 赋值，unmount 清空）
+// ══════════════════════════════════════════════════════════════
+
+let pluginHost = null;
+
+// 薄封装：注入缺失时给安全默认值，模块内不出现对宿主标识符的裸引用
+const escapeHtml = (value) => (pluginHost ? pluginHost.env.escapeHtml(value) : String(value ?? ''));
+const renderMarkdown = (text) => (pluginHost ? pluginHost.env.markdown.render(text) : String(text ?? ''));
+const isZh = () => !pluginHost || pluginHost.env.language !== 'en';
+const enhanceMathInElement = (el) => pluginHost?.env?.enhanceMathInElement?.(el);
+const getCurrentAgentRecord = () => pluginHost?.workspace?.currentAgent?.() || null;
+const rerender = () => pluginHost?.workspace?.rerender?.();
+const openImageZoom = (src) => pluginHost?.env?.openImageZoom?.(src);
 
 // ══════════════════════════════════════════════════════════════
 //  状态（模块局部；遵循 app-core 全局状态纪律：新增状态放模块作用域）
@@ -61,7 +79,7 @@ function guideText(key) {
     prev: 'Previous',
     next: 'Next',
   };
-  return (currentLanguage === 'en' ? en : zh)[key] || zh[key] || key;
+  return (isZh() ? zh : en)[key] || zh[key] || key;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -795,7 +813,7 @@ async function guideLoadDoc(agentId, docPath) {
 }
 
 function guideCurrentBlockData(agentId, blockId) {
-  const agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+  const agent = getCurrentAgentRecord();
   if (agent?.id !== agentId) return null;
   return getGuideData(agent, { id: blockId });
 }
@@ -824,7 +842,7 @@ function guidePatchArticle(agentId) {
     article.innerHTML = renderGuideArticleInner(entry);
     article.dataset.guidePath = docPath;
     article.dataset.guideFetchedAt = String(entry.fetchedAt);
-    if (typeof enhanceMathInElement === 'function') {
+    if (enhanceMathInElement) {
       enhanceMathInElement(article);
     }
   }
@@ -864,13 +882,14 @@ function guideRenderPager(shell) {
   ].join('');
 }
 
-let guideDelegated = false;
+// 委托监听器句柄：卸载时按句柄精确摘除（document 级监听不随 DOM 消失）
+let guideClickHandler = null;
+let guideScrollHandler = null;
 
 function guideEnsureDelegated() {
-  if (guideDelegated) return;
-  guideDelegated = true;
+  if (guideClickHandler) return;
 
-  document.addEventListener('click', (event) => {
+  guideClickHandler = (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target || !target.closest('.guide-shell')) return;
 
@@ -878,18 +897,18 @@ function guideEnsureDelegated() {
     // 不用 inline onclick —— 文件名可携带 JS 逃逸字符）
     const jumpButton = target.closest('[data-guide-doc-jump]');
     if (jumpButton) {
-      window.guideOpenDoc(jumpButton.dataset.guideDocJump || '', '');
+      guideOpenDoc(jumpButton.dataset.guideDocJump || '', '');
       return;
     }
     const dirButton = target.closest('[data-guide-toggle-dir]');
     if (dirButton) {
-      window.guideToggleDir(dirButton.dataset.guideToggleDir || '');
+      guideToggleDir(dirButton.dataset.guideToggleDir || '');
       return;
     }
     const docLink = target.closest('a[data-guide-doc]');
     if (docLink) {
       event.preventDefault();
-      window.guideOpenDoc(docLink.dataset.guideDoc || '', docLink.dataset.guideAnchor || '');
+      guideOpenDoc(docLink.dataset.guideDoc || '', docLink.dataset.guideAnchor || '');
       return;
     }
     const anchorLink = target.closest('a[data-guide-anchor]');
@@ -902,17 +921,35 @@ function guideEnsureDelegated() {
     const image = target.closest('.guide-image-block img[data-guide-src]');
     if (image) {
       event.preventDefault();
-      window.openImageZoom(image.dataset.guideSrc || '');
+      openImageZoom(image.dataset.guideSrc || '');
     }
-  });
+  };
+  document.addEventListener('click', guideClickHandler);
 
   // 阅读位置持续记录：scroll 不冒泡，用 document 捕获监听各滚动容器
-  document.addEventListener('scroll', (event) => {
+  guideScrollHandler = (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target || !target.classList?.contains('guide-article-scroll')) return;
     if (!guideState.currentDoc) return;
     guideState.scrollMemory.set(guideState.currentDoc, target.scrollTop || 0);
-  }, { capture: true, passive: true });
+  };
+  document.addEventListener('scroll', guideScrollHandler, { capture: true, passive: true });
+}
+
+/** 摘除委托监听与状态（卸载时调用；下次装载会按需重新挂载）。 */
+function guideTeardown() {
+  if (guideClickHandler) document.removeEventListener('click', guideClickHandler);
+  if (guideScrollHandler) document.removeEventListener('scroll', guideScrollHandler, { capture: true });
+  guideClickHandler = null;
+  guideScrollHandler = null;
+  guideState.agentId = '';
+  guideState.blockId = '';
+  guideState.currentDoc = '';
+  guideState.pendingAnchor = '';
+  guideState.cache = new Map();
+  guideState.loadingDoc = '';
+  guideState.collapsedDirs = new Set();
+  guideState.scrollMemory = new Map();
 }
 
 /**
@@ -1019,10 +1056,10 @@ function guideDecorateMedia(article) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  Window handlers
+//  动作处理器（经事件分发器按 data-action 调用，不再挂 window）
 // ══════════════════════════════════════════════════════════════
 
-window.guideOpenDoc = (docPath, anchor) => {
+function guideOpenDoc(docPath, anchor) {
   if (!docPath) return;
   const scrollContainer = document.querySelector('.guide-article-scroll');
   if (scrollContainer && guideState.currentDoc) {
@@ -1031,12 +1068,49 @@ window.guideOpenDoc = (docPath, anchor) => {
   guideState.currentDoc = docPath;
   guideState.pendingAnchor = String(anchor || '');
   guideSaveLastDoc(guideState.agentId, docPath);
-  if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
-};
+  rerender();
+}
 
-window.guideToggleDir = (dirId) => {
+function guideToggleDir(dirId) {
   if (!dirId) return;
   if (guideState.collapsedDirs.has(dirId)) guideState.collapsedDirs.delete(dirId);
   else guideState.collapsedDirs.add(dirId);
-  if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+  rerender();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  插件协议
+// ══════════════════════════════════════════════════════════════
+
+export default {
+  id: 'claw-guide',
+
+  blocks: {
+    'guide-docset': (agent, block) => renderGuideDocsetBlock(agent, block),
+  },
+
+  actions: {
+    'claw-guide.openDoc': (el) => guideOpenDoc(
+      el.dataset.guideDoc || el.dataset.guideDocJump || '', el.dataset.guideAnchor || '',
+    ),
+    'claw-guide.toggleDir': (el) => guideToggleDir(el.dataset.guideToggleDir || ''),
+  },
+
+  mount(h) { pluginHost = h; },
+
+  unmount() {
+    guideTeardown();
+    pluginHost = null;
+  },
+};
+// 纯函数导出：供测试直接验证解析/提取/排版契约（不依赖 DOM 与宿主注入）。
+// 生产路径走上面的 block 渲染；导出只扩大可测面，不改变运行行为。
+export {
+  resolveGuideHref,
+  guideSlugify,
+  parseGuideCalloutMarker,
+  collectGuideCallouts,
+  buildGuideArticleHtml,
+  collectGuideImages,
+  parseGuideImageTokens,
 };

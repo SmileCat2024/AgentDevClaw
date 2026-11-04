@@ -1239,7 +1239,6 @@ window.ClawHost.blocks.registerPrimitive('project-list', (agent, block) => rende
 window.ClawHost.blocks.registerPrimitive('feature-repository', (agent, block) => renderFeatureRepositoryBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('workspace-artifacts', (agent, block) => renderWorkspaceArtifactsBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('project-docset', (agent, block) => renderProjectDocsetBlock(agent, block));
-window.ClawHost.blocks.registerPrimitive('guide-docset', (agent, block) => renderGuideDocsetBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('config-editor', (agent, block) => (
   isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block)
     : isDispatchConfigEditor(block) ? renderDispatchConfigEditor(block) : ''
