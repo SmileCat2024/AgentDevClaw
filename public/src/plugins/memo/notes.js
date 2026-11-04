@@ -134,8 +134,10 @@ const MemoNotesUI = (() => {
 
   function card(note) {
     const filename = String(note?.filename || '');
+    // 文件名走 data-note-filename + handler 读 dataset，不经 data-args：
+    // 属性值本身用双引号包裹，裸写 JSON 双引号会在第一个引号处截断属性值。
     return '<button class="memo-note-card" type="button" data-note-filename="' + esc(filename) + '"'
-      + ' data-action="memo.openNote" data-args="["' + esc(filename) + '"]">'
+      + ' data-action="memo.openNote">'
       + '<div class="memo-note-title">' + esc(note?.title || filename) + '</div>'
       + '<div class="memo-note-preview">' + esc(note?.preview || '') + '</div>'
       + '<div class="memo-note-meta">' + esc(formatStamp(note?.updatedAt)) + '</div>'

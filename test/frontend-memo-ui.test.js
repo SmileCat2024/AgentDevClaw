@@ -152,3 +152,46 @@ describe('memo 便签 fetch discipline', () => {
     } finally { cleanup(); }
   });
 });
+
+/**
+ * 卡片点击动作的编码契约。
+ *
+ * 回归背景：便签墙卡片曾把文件名塞进 data-args 的 JSON 字符串，而属性值本身
+ * 用双引号包裹——裸写的 JSON 双引号在第一个引号处就截断了属性值，浏览器解析
+ * 出的 data-args 是残缺的 "[，dispatch 放弃分发，表现为「点便签没反应」。
+ * 总览卡片当时用的是 &quot; 转义因而正常，两个面板行为不一致。
+ *
+ * 断言口径：渲染出的 HTML 里，带 data-action 的元素其属性值必须整体被双引号
+ * 包裹且内部不再出现裸双引号——用真实 HTML 解析器看不到，这里用正则近似。
+ */
+describe('memo 卡片动作属性编码', () => {
+  it('便签墙卡片：data-action 存在且属性值不被裸引号截断', async () => {
+    const { api, respondNext, cleanup } = await createMemoHarness('notes');
+    try {
+      api.render();
+      await respondNext({ notes: [{ filename: 'plan.md', title: 'plan', preview: '', updatedAt: 1 }] });
+      const html = api.render();
+      const card = html.match(/<button class="memo-note-card"[^>]*>/);
+      assert.ok(card, '便签墙应渲染出卡片');
+      assert.match(card[0], /data-action="memo\.openNote"/);
+      assert.match(card[0], /data-note-filename="plan\.md"/);
+      // 若这里出现裸 JSON（data-args="["plan.md"]"），说明属性值已被截断
+      assert.doesNotMatch(card[0], /data-args="\["/, 'data-args 不得以裸双引号开头');
+    } finally { cleanup(); }
+  });
+
+  it('总览卡片：data-args 用 &quot; 转义，JSON 可解码', async () => {
+    const { api, respondNext, cleanup } = await createMemoHarness('overview');
+    try {
+      api.render();
+      await respondNext({ reminders: [] });
+      await respondNext({ notes: [{ filename: 'plan.md', title: 'plan', preview: '', updatedAt: 1 }] });
+      const html = api.render();
+      const card = html.match(/<button class="memo-note-card"[^>]*>/);
+      assert.ok(card, '总览应渲染出便签卡');
+      const args = card[0].match(/data-args="([^"]*)"/);
+      assert.ok(args, 'data-args 属性值应完整闭合');
+      assert.deepEqual(JSON.parse(args[1].replace(/&quot;/g, '"')), ['plan.md']);
+    } finally { cleanup(); }
+  });
+});
