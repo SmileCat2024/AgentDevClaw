@@ -57,6 +57,9 @@ Thumbs.db
 # local link-diagnosis scripts against a running instance
 .smoke/
 
+# local prompt research archive (phistory.cc downloads)
+.tmp-phistory/
+
 # TypeScript cache
 *.tsbuildinfo
 dist/
