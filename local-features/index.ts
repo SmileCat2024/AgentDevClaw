@@ -1,9 +1,7 @@
 export { FeatureCommunicationClient } from './shared/src/feature-communication.js';
-export { FeatureDevFeature } from './feature-dev/src/index.js';
 export { AgentDevFeature } from './agent-dev/src/index.js';
 export { AgentStudioFeature } from './agent-studio/src/index.js';
 export { ClawHelpFeature } from './claw-help/src/index.js';
-export { FlowFeature, FlowAwareFeature } from './flow/src/index.js';
 export { ContextCompactionMirrorFeature } from './context-compaction-mirror/src/index.js';
 export { ContextGuardFeature, ContextRotationTriggerFeature } from './context-guard/src/index.js';
 export { ClawDispatchFeature } from './dispatch/src/index.js';

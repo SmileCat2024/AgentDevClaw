@@ -75,8 +75,12 @@ if (!existsSync(localFeaturesDir) || !existsSync(distDir)) {
   process.exit(0);
 }
 
+// 悬置 feature：源码保留作参考，但已移出 local-features/tsconfig.json 构建清单，
+// 运行时资产（skills/knowledge）不再拷贝进 dist。
+const EXCLUDED_FEATURES = new Set(['flow', 'feature-dev']);
+
 const featureDirs = readdirSync(localFeaturesDir, { withFileTypes: true })
-  .filter((entry) => entry.isDirectory() && entry.name !== 'dist')
+  .filter((entry) => entry.isDirectory() && entry.name !== 'dist' && !EXCLUDED_FEATURES.has(entry.name))
   .map((entry) => entry.name);
 
 let copiedCount = 0;
