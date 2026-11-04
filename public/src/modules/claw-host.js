@@ -314,6 +314,12 @@
       currentAgent() {
         return typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
       },
+      // 按 id 查 agent 条目（含 workspace_sessions 投影；找不到返回 null）
+      agentById(agentId) {
+        const id = String(agentId || '');
+        if (!id || !Array.isArray(allAgents)) return null;
+        return allAgents.find((item) => item?.id === id) || null;
+      },
       // 整屏重渲染（插件改了自己的导航状态后由宿主重建视图）
       rerender() {
         if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
@@ -362,6 +368,10 @@
       // 工作空间日期格式化（统一口径，避免插件各写一份）
       formatDate(value) {
         return typeof formatWorkspaceDate === 'function' ? formatWorkspaceDate(value) : '';
+      },
+      // 幂等键（与宿主请求通道同一生成实现；coder 插件的 interrupt 等直连请求用）
+      newIdempotencyKey() {
+        return typeof newIdempotencyKey === 'function' ? newIdempotencyKey() : '';
       },
       markdown: {
         render: (text) => (window.renderMarkdown ? window.renderMarkdown(text) : String(text ?? '')),

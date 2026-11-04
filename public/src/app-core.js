@@ -1495,7 +1495,7 @@ function isTablessHostSurface(agent) {
 }
 
 // PH 风格工作区（项目列表 / 会话列表首页）：编程小助手本体。Coder APP
-// 不在此列——其首页是线程视图（coder-threads-ui.js，经 ui.home blocks 渲染）。
+// 不在此列——其首页是线程视图（plugins/coder 前端插件，经 ui.home blocks 渲染）。
 const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper']);
 
 function isPhStyleWorkspaceAgent(agent = getCurrentAgentRecord()) {

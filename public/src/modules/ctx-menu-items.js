@@ -49,7 +49,7 @@ function newIdempotencyKey() {
 // Agents whose session items get the full session-ops ctx menu
 // (summary / trim / branch). Server routes are agentId-parameterized;
 // this list only gates the frontend menu surface.
-// coder APP 的会话在线程视图内承接（CoderThreadsUI 自带动作），不经过
+// coder APP 的会话在线程视图内承接（coder 前端插件自带动作），不经过
 // 此处会话 ctx 菜单——不把 'coder' 列作会话操作 agent。
 const CTX_SESSION_OPS_AGENTS = new Set(['programming-helper', 'agent-studio']);
 
@@ -70,7 +70,7 @@ function ctxSessionOpsAllowed(ns) {
 
 function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
   // 线程宿主的侧栏线程叶子：自动接续 APP（coder / memo）走线程语义菜单
-  // （与线程视图行动作同源——coder-threads-ui）。中断只在执行/待投递时
+  // （与线程视图行动作同源——plugins/coder 前端插件）。中断只在执行/待投递时
   // 有对象；归档任何状态都可用——生产 lifecycle（thread-lifecycle.js）
   // 归档即打断收纳（seal 取消 pending + 收敛接续挡板 + 停全链 runtime），
   // 不做 busy 拒绝（thread_busy 仅 thread-routes.js 测试兜底 lifecycle 的
@@ -717,7 +717,7 @@ async function _copyTextWithToast(text, { okTitle, failTitle }) {
   });
 }
 
-/** 线程生命周期动作（侧栏右键 → 与 coder-threads-ui 行动作同一组端点） */
+/** 线程生命周期动作（侧栏右键 → 与 coder 前端插件行动作同一组端点） */
 async function ctxThreadRequest(threadId, path) {
   const response = await fetch(path, {
     method: 'POST',

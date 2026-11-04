@@ -1,7 +1,7 @@
 # 前端插件化改造规划
 
 > 创建日期：2026-11-04
-> 状态：进行中（Phase A 已落地）
+> 状态：进行中（A / A2 / B 已落地：宿主底座 + memo / claw-guide / agent-studio / coder 四个插件迁移完成；APP 插件化剩余 qqbot 暂缓，Phase C 未开始）
 > 背景：Claw 向前端插件化扩展演进——工作空间应用化（随时挂上/卸载）、扩展点持续打通而非硬编码。本规划基于对 public/ 前端的深度调研，数据全部来自源码实测。
 
 ## 一、调研结论：现状全景
@@ -87,11 +87,11 @@ window.ClawHost = {
 1. `ClawHost` 骨架落地（四命名空间 + 版本号）；
 2. `ClawPanels` 收编为 `ClawHost.panels`（旧入口保留别名，注册方零改动）；
 3. `renderWorkspaceBlock` 注册化：25 个 if 改为启动期注册调用，存量渲染器原地注册（行为不变，单点验证：全部 workspace 首页渲染输出与改造前一致）；
-4. 装载机制 v1：APP UI 模块（`coder-threads-ui` / `memo-notes-ui` / memo 系）从 index.html 静态标签改为清单驱动 `import()` 动态装载（清单 = 服务端已知 APP 集合，非插件自报）。
+4. 装载机制 v1：APP UI 模块从 index.html 静态标签改为清单驱动 `import()` 动态装载（清单 = 服务端已知 APP 集合，非插件自报）。（已落地：memo 系 f9c8e104；coder-threads 见 Phase B）
 
 ### Phase B：第一个完整插件化试点
 
-候选：下一个新 APP 直接按插件形态做（零迁移风险）；或复刻 coder-threads（463 行、形态标准）。
+已完成的迁移：memo（f9c8e104，A2/B 合并落地）→ claw-guide（5e7ef89b）→ agent-studio（a789afaf）→ coder-threads（`plugins/coder/`；迁移同时修复了 f9c8e104 查表化时丢失 coder-threads 分发的存量回归——此前 coder 首页渲染「未知区块类型」，因 on-demand 无活跃线程时入口不显示而漏测）。APP 插件化剩余：qqbot（im-ui / im-actions，1345 行、真实全局状态与设置系统交叉，暂缓，随 Phase C 状态收编一并处理）。
 验收（从第一天机器化）：
 - 装配不新增 index.html 标签；
 - 挂载/卸载前后全局键 diff 断言零残留（复用 A1 扫描器）；

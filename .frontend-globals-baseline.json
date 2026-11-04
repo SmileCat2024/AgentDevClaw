@@ -827,12 +827,6 @@
       "ClawSelect"
     ]
   },
-  "public/src/modules/coder-threads-ui.js": {
-    "state": [],
-    "behavior": [
-      "CoderThreadsUI"
-    ]
-  },
   "public/src/modules/container-images.js": {
     "state": [
       "CI_DELETE_ARM_MS",

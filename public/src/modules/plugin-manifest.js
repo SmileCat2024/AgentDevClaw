@@ -11,6 +11,7 @@ window.ClawPluginManifest = {
   memo: { id: 'memo', url: '/src/plugins/memo/index.js' },
   'claw-guide': { id: 'claw-guide', url: '/src/plugins/claw-guide/guide-docset.js' },
   'agent-studio': { id: 'agent-studio', url: '/src/plugins/agent-studio/index.js' },
+  coder: { id: 'coder', url: '/src/plugins/coder/index.js' },
 };
 
 /** 返回该 agent 需要的插件描述，没有则返回 null。 */
