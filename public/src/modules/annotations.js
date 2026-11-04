@@ -678,6 +678,18 @@
     if (id) scrollToAnnotation(id);
   });
 
+  // 面板注册（Claw 宿主注册表）：直接函数引用，不经 window 晚绑定寻址。
+  // 注册与实现同址，rail 只认注册表条目；本模块缺失时面板随之缺席，
+  // 由金样本测试（frontend-rail-panels-golden）钉住注册表全集。
+  window.ClawHost.panels.register('annotations', {
+    when: { agentIds: ['programming-helper'], surfaces: ['chat'] },
+    title: () => currentLanguage === 'zh' ? '标注' : 'Annotations',
+    label: { zh: '标注', en: 'Annotations' },
+    description: { zh: '对话内容高亮标注', en: 'Highlights on conversation text' },
+    render: () => getPanelHtml(),
+    preserveOnReRender: true,
+  });
+
   window.ClawAnnotations = {
     scheduleReplay,
     getPanelHtml,
