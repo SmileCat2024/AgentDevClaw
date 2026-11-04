@@ -106,6 +106,8 @@ window.ClawHost = {
 顺序（由小到大）：右栏面板实现去全局化（15 个面板集中在 app-ui.js 注册，5 个活跃面板经 `window.XxxPanel` 间接寻址：git / bg / annotations / genui / session-controls）→ 内联事件收编（现存 513 处，规划时 613，四次迁移已消化约 100）→ fw-config-panel 状态回模块（占用 12 个 `ClawFW.*` 键，跨模块读者：app-ui、model-settings）→ script 标签清单化清尾（index.html 现 137 个标签：src/ 129 + vendor 5 + 根目录 1 + inline 2）。原计划的 work-group surface 声明化随 work-group 悬置取消。
 每面收编完成即修剪 A1 基线，behavior 消退曲线是进度指标。
 
+进度：**右栏面已完成**（2026-11-04）。5 个 window 寻址面板（git / bg / annotations / genui / session-controls）全部迁移为模块自注册（`window.ClawHost.panels.register`，与 resources-viewer 先例同型）；app-ui.js 中央注册块只保留实现本就在 app-ui.js 内的面板。迁移中砍除了只写不读的 `featurePanels` 平行映射——渲染寻址（debug-panel-host `renderFeaturePanel`）与可见性过滤统一从 `ClawPanels` 读，落实 ADR-0010「不维护平行清单」纪律。行为等价由 `frontend-rail-panels-golden` 金样本钉住（注册面全集 + 元数据快照，搬家不许改变快照，变异验证过鉴别力）。`window.GitPanel` / `BgPanel` / `SessionControlsPanel` 命名空间仍在（生命周期钩子 onOpen/onClose 经 debug-panel-host if 链调用、badge 经 agent-data-loader 调用）——调用面收编属内联事件面与后续清理，不在本面范围。
+
 ### 挂起项
 
 - React / Vite：不重启。重启条件（写明）：滚动类 bug 密集复发且事件收编后仍压不住。

@@ -1570,4 +1570,14 @@
     },
     refresh,
   };
+
+  // 面板注册（Claw 宿主注册表）：直接函数引用，不经 window 晚绑定寻址。
+  // 注册表全集由 frontend-rail-panels-golden 金样本钉住。
+  window.ClawHost.panels.register('git', {
+    when: { surfaces: ['chat'] },
+    title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
+    label: { zh: '源代码管理', en: 'Source Control' },
+    description: { zh: 'Git 状态与操作', en: 'Git status and actions' },
+    render: () => render(),
+  });
 })();

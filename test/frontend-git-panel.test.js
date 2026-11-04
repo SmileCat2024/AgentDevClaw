@@ -69,6 +69,7 @@ function makeSandbox({ fetchImpl, agentRecord = record } = {}) {
   ctx.__fireBody = (type, event) => (bodyListeners[type] || []).forEach((fn) => fn(event));
   ctx.__fireDocBody = (type, event) => (docBodyListeners[type] || []).forEach((fn) => fn(event));
   ctx.loadSource('public/src/modules/git-graph.js');
+  ctx.loadSource('public/src/modules/claw-host.js');
   ctx.loadSource('public/src/modules/git-panel.js');
   return ctx;
 }

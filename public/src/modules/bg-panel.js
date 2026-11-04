@@ -911,6 +911,17 @@
     refreshBadge: () => { void _pollBadge(); },
   };
 
+  // 面板注册（Claw 宿主注册表）：直接函数引用，不经 window 晚绑定寻址。
+  // 注册表全集由 frontend-rail-panels-golden 金样本钉住。
+  window.ClawHost.panels.register('bg', {
+    when: { agentIds: ['programming-helper'], surfaces: ['chat'] },
+    title: () => currentLanguage === 'zh' ? '后台任务' : 'Background',
+    label: { zh: '后台任务', en: 'Background' },
+    description: { zh: 'bash_bg 后台任务实时状态', en: 'Live bash_bg task status' },
+    render: () => getHtml(),
+    preserveOnReRender: true,
+  });
+
   // 启动徽标轮询 — badge 需要在面板未打开时也持续更新
   _ensureBadgePolling();
 })();

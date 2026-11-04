@@ -107,6 +107,7 @@ function makeHarness() {
     renderFeaturePanel: () => { ctx.__lastHtml = ctx.window.GitPanel.render(); },
   });
   ctx.loadSource('public/src/modules/git-graph.js');
+  ctx.loadSource('public/src/modules/claw-host.js');
   ctx.loadSource('public/src/modules/git-panel.js');
   ctx.run(`
     const origBuild = window.GitGraph.buildGraphSvg;

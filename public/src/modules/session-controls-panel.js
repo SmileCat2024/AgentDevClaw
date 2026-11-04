@@ -1079,4 +1079,14 @@
     },
     isStyleAvailable: () => resolveCaps()?.style === true,
   };
+
+  // 面板注册（Claw 宿主注册表）：直接函数引用，不经 window 晚绑定寻址。
+  // 注册表全集由 frontend-rail-panels-golden 金样本钉住。
+  window.ClawHost.panels.register('session-controls', {
+    when: { surfaces: ['chat'] },
+    title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
+    label: { zh: '会话控制', en: 'Session Controls' },
+    description: { zh: 'API 重试与输出风格', en: 'API retries and output styles' },
+    render: () => render(),
+  });
 }());

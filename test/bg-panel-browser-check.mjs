@@ -38,6 +38,7 @@ try {
         : { id: 'same', command: request.featureId + ' build', status: 'running', outputTail: 'fixture output', startedAt: Date.now() }] } }) };
     };
   });
+  await page.addScriptTag({ content: await readFile(new URL('../public/src/modules/claw-host.js', import.meta.url), 'utf8') });
   await page.addScriptTag({ content: await readFile(new URL('../public/src/modules/bg-panel.js', import.meta.url), 'utf8') });
   await page.evaluate(() => window.BgPanel.onOpen());
   await page.waitForFunction(() => document.querySelectorAll('.bgp-card').length === 3);
@@ -64,12 +65,14 @@ try {
     body.append(root);
     Object.assign(window, {
       featurePanel: panel, featurePanelBody: body, featurePanelTitle: document.createElement('h2'),
-      featurePanelWidth: 420, railButtons: [], featurePanels: {},
-      registerFeaturePanel: (id, definition) => { window.featurePanels[id] = definition; },
+      featurePanelWidth: 420, railButtons: [],
+      t: (key) => `t:${key}`,
+      getFeaturePanelEmptyHtml: () => '',
     });
   });
-  const ui = await readFile(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
-  await page.addScriptTag({ content: ui.slice(ui.indexOf("registerFeaturePanel('bg', {"), ui.indexOf("registerFeaturePanel('monitor', {")) });
+  // bg 的面板注册来自 bg-panel.js 顶层自注册（经 ClawHost.panels，真实生产链路），
+  // 不再从 app-ui.js 截取中央注册块注入。ClawPanels 旧入口由 right-panel-registry 提供。
+  await page.addScriptTag({ content: await readFile(new URL('../public/src/modules/right-panel-registry.js', import.meta.url), 'utf8') });
   await page.addScriptTag({ content: await readFile(new URL('../public/src/modules/debug-panel-host.js', import.meta.url), 'utf8') });
   await page.evaluate(() => window.renderFeaturePanel());
   const scrollChecks = await page.evaluate(() => {

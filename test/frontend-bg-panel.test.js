@@ -53,6 +53,8 @@ function harness({ listChannels } = {}) {
   ctx.clearInterval = id => timers.delete(id);
   ctx.CSS = ctx.window.CSS = { escape: value => value };
   const source = fs.readFileSync(new URL('../public/src/modules/bg-panel.js', import.meta.url), 'utf8');
+  // claw-host 前置：bg-panel.js 顶层经 ClawHost.panels 自注册（真实生产顺序第一位）
+  ctx.loadSource('public/src/modules/claw-host.js');
   vm.runInContext(source.replace('window.BgPanel = {', 'window.BgPanel = { __testStreams: () => [...channels.values()].map(channel => channel.stream).filter(Boolean), __testSource: () => source, __testTasks: () => tasks,'), ctx);
   const stream = () => ctx.window.BgPanel.__testSource();
   const ids = () => [...ctx.window.BgPanel.__testTasks().values()].map(task => task.taskId);

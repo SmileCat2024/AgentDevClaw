@@ -574,6 +574,7 @@ async function panelSandbox({ catalog = REMOTE_CATALOG, currentRuntimeAgentId = 
     fetch: fetchStub,
   });
   ctx.loadSource('public/src/modules/remote-connections.js');
+  ctx.loadSource('public/src/modules/claw-host.js');
   ctx.loadSource('public/src/modules/session-controls-panel.js');
   // 目录条目先入位：面板身份解析依赖 catalog（getEntryRuntimeSessionId /
   // getEntryHostNamespaceId / capabilityFor 均消费 ingest 后的可见分区）。

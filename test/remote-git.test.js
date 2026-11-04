@@ -328,6 +328,7 @@ function makePanelSandbox({ focusedAgentId = null, sessionId = 'sess-1', remoteM
   }
   ctx.__disposeTimers = () => { for (const t of timers) trackedClear(t); timers.clear(); };
   ctx.loadSource('public/src/modules/git-graph.js');
+  ctx.loadSource('public/src/modules/claw-host.js');
   ctx.loadSource('public/src/modules/git-panel.js');
   ctx.__calls = calls;
   // 事件委托驱动：模块在 featurePanelBody 上注册 click/mousedown/input/keydown

@@ -59,6 +59,30 @@ const REGISTRATION_HOMES = [
     prefix: '',
     suffix: '',
   },
+  {
+    id: 'git 自注册',
+    file: 'public/src/modules/git-panel.js',
+    start: "window.ClawHost.panels.register('git'",
+    end: '})();',
+    prefix: '',
+    suffix: '',
+  },
+  {
+    id: 'bg 自注册',
+    file: 'public/src/modules/bg-panel.js',
+    start: "window.ClawHost.panels.register('bg'",
+    end: '// 启动徽标轮询',
+    prefix: '',
+    suffix: '',
+  },
+  {
+    id: 'session-controls 自注册',
+    file: 'public/src/modules/session-controls-panel.js',
+    start: "window.ClawHost.panels.register('session-controls'",
+    end: '}());',
+    prefix: '',
+    suffix: '',
+  },
 ];
 
 /** 在沙箱里执行全部注册面，返回序列化后的注册表快照。 */

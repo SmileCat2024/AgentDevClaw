@@ -404,6 +404,7 @@ function loadPanelSandbox(currentRuntimeAgentId) {
       };
     },
   });
+  ctx.loadSource('public/src/modules/claw-host.js');
   ctx.loadSource('public/src/modules/generative-ui-panel.js');
   return { ctx, fetchCalls };
 }

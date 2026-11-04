@@ -1586,21 +1586,6 @@ registerFeaturePanel('plan', {
   description: { zh: '任务与计划列表', en: 'Tasks and plan list' },
   render: () => renderPlanPanel(),
 });
-registerFeaturePanel('git', {
-  when: { surfaces: ['chat'] },
-  title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
-  label: { zh: '源代码管理', en: 'Source Control' },
-  description: { zh: 'Git 状态与操作', en: 'Git status and actions' },
-  render: () => window.GitPanel ? window.GitPanel.render() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-});
-registerFeaturePanel('bg', {
-  when: { agentIds: ['programming-helper'], surfaces: ['chat'] },
-  title: () => currentLanguage === 'zh' ? '后台任务' : 'Background',
-  label: { zh: '后台任务', en: 'Background' },
-  description: { zh: 'bash_bg 后台任务实时状态', en: 'Live bash_bg task status' },
-  render: () => window.BgPanel ? window.BgPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-  preserveOnReRender: true,
-});
 registerFeaturePanel('monitor', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_monitor'),
@@ -1641,15 +1626,6 @@ registerFeaturePanel('mcp', {
   label: { zh: 'MCP', en: 'MCP' },
   description: { zh: 'MCP 服务端', en: 'MCP servers' },
   render: () => renderMcpPanel(),
-});
-registerFeaturePanel('session-controls', {
-  when: { surfaces: ['chat'] },
-  title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
-  label: { zh: '会话控制', en: 'Session Controls' },
-  description: { zh: 'API 重试与输出风格', en: 'API retries and output styles' },
-  render: () => window.SessionControlsPanel
-    ? window.SessionControlsPanel.render()
-    : '<div class="feature-panel-empty"><div>加载中...</div></div>',
 });
 registerFeaturePanel('settings', {
   title: () => '群聊设置',

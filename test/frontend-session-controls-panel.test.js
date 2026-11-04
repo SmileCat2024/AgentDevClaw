@@ -48,6 +48,7 @@ function panelSandbox(overrides = {}) {
     ...overrides,
   });
   ctx.window.setInterval = () => 0;
+  ctx.loadSource('public/src/modules/claw-host.js');
   ctx.loadSource('public/src/modules/session-controls-panel.js');
   return { ctx, fetchCalls };
 }
@@ -329,6 +330,7 @@ describe('SessionControlsPanel output style (stylized-output)', () => {
       },
     });
     ctx.window.setInterval = () => 0;
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/session-controls-panel.js');
     return { ctx, invokeCalls };
   }
@@ -434,6 +436,7 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
     });
     ctx.window.setInterval = () => 0;
     ctx.loadSource('public/src/modules/context-guard-toggle.js');
+    ctx.loadSource('public/src/modules/claw-host.js');
     ctx.loadSource('public/src/modules/session-controls-panel.js');
     ctx.run(`window.ContextGuardToggle.applyStatus({ status: ${JSON.stringify(GUARD_STATUS)} }, "runtime-a")`);
     return { ctx, calls, guardState };
