@@ -173,6 +173,23 @@ export function operatorCarrierOf(config) {
   return line ? line.carrier.trim() : '';
 }
 
+/**
+ * 门户 runtime 启动/重启的前置闸：没接线就不起（ADR-0042 决策 1）。
+ *
+ * 判定只有这一处。历史教训：start_agent、restart_agent、dispatch-engine
+ * 三处各自抄了一遍「门户当前渠道」的判断，切片 B 把字段从 selectedChannel
+ * 换成「接线员线路的 carrier」时漏改一处，重启就此恒定只停不起——而三处
+ * 测试都各自构造自己那份配置，谁也没发现。新增消费方一律调本函数。
+ *
+ * @param {string} agentId 目标工作空间
+ * @param {object} config normalizeIMWorkspaceConfig 的输出
+ * @returns {boolean} true = 拦下（不应启动门户 runtime）
+ */
+export function blocksPortalRuntimeStart(agentId, config) {
+  if (sanitizeSessionFragment(agentId) !== 'qqbot') return false;
+  return !operatorCarrierOf(config);
+}
+
 // ── Config readers / writers ──────────────────────────────────────
 
 export async function readProjectQQBotConfig() {

@@ -19,7 +19,6 @@ import {
   EnvelopeStatus,
 } from '../runtime-call-envelope.js';
 import { USER_DATA_ROOT, LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC, DISPATCH_IDLE_THRESHOLD_DEFAULT_SEC, DISPATCH_IDLE_POLL_MIN_MS } from '../shared/constants.js';
-import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { resolveSessionTarget } from '../shared/operation-target.js';
@@ -179,9 +178,15 @@ class QqbotProjectAdapter {
         name: '门户代理',
         type: 'im-portal',
         workspaceId: this.workspaceId,
-        config: { selectedChannel: config.selectedChannel || getDefaultIMChannelId() },
+        // ADR-0042：门户没有「项目配置」可继承——渠道归线路、接线员上下文归
+        // 线程，两者都不是会话创建参数。此前塞进去的 selectedChannel 与
+        // receptionistSessionId 均已退役（归一后恒空），留着只会被
+        // dispatch-engine 当 createOpts 展开。
+        config: {},
         sessionIds: [],
-        latestSessionId: config.receptionistSessionId || null,
+        // 接线员上下文是线程（operatorThreadId），不是某条固定会话；调度
+        // 侧按 __latest__ 解析 head 会话即可，适配器不再自报 latestSessionId。
+        latestSessionId: null,
         createdAt: null,
         updatedAt: null,
       };
@@ -193,7 +198,7 @@ class QqbotProjectAdapter {
 
   getProjectConfig(projectId) {
     if (projectId !== 'qqbot') return {};
-    return { selectedChannel: getDefaultIMChannelId() };
+    return {};
   }
 
   async activateProject(_projectId) {

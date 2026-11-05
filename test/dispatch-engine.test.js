@@ -38,6 +38,23 @@ import { resetAllInboxes } from '../server/runtime-call-envelope.js';
 
 // ── Test helpers (mirrors dispatch-routes.test.js helpers) ─────────
 
+/**
+ * ADR-0042：门户渠道 = 接线员线路的 carrier（selectedChannel 已退役，归一后
+ * 该字段恒不存在）。测试桩按新形状构造：接线员线路 = boundTarget 指向
+ * operatorThreadId 的线路，其 carrier 即门户 gateway 渠道。
+ */
+function imConfigWithOperatorCarrier(carrier) {
+  return {
+    operatorThreadId: carrier ? 'wt-operator' : '',
+    lines: [{
+      id: 'line1',
+      label: '通道 1',
+      carrier: carrier || '',
+      boundTarget: carrier ? { agentId: 'qqbot', threadId: 'wt-operator' } : null,
+    }],
+  };
+}
+
 function makeMockCtx(overrides = {}) {
   const calls = {};
   const ctx = {
@@ -49,7 +66,7 @@ function makeMockCtx(overrides = {}) {
     writeWorkspaceState: async () => {},
     readProjectIMWorkspaceConfig: async () => {
       calls.readProjectIMWorkspaceConfig = (calls.readProjectIMWorkspaceConfig || 0) + 1;
-      return overrides.readProjectIMWorkspaceConfig?.() ?? { selectedChannel: null };
+      return overrides.readProjectIMWorkspaceConfig?.() ?? imConfigWithOperatorCarrier(null);
     },
     listPrebuiltSessions: async (agentId) => {
       calls.listPrebuiltSessions = calls.listPrebuiltSessions || [];
@@ -289,7 +306,7 @@ describe('Dispatch engine — fireDispatchNow', () => {
 
   it('start_agent: calls requirePrebuiltAgentForRuntime and marks completed for non-boot', async () => {
     ctx = makeMockCtx({
-      readProjectIMWorkspaceConfig: async () => ({ selectedChannel: 'qq' }),
+      readProjectIMWorkspaceConfig: async () => imConfigWithOperatorCarrier('qq'),
     });
     setDispatchCtx(ctx);
 
@@ -311,7 +328,7 @@ describe('Dispatch engine — fireDispatchNow', () => {
 
   it('start_agent with on-boot trigger stays pending', async () => {
     ctx = makeMockCtx({
-      readProjectIMWorkspaceConfig: async () => ({ selectedChannel: 'qq' }),
+      readProjectIMWorkspaceConfig: async () => imConfigWithOperatorCarrier('qq'),
     });
     setDispatchCtx(ctx);
 
@@ -329,7 +346,7 @@ describe('Dispatch engine — fireDispatchNow', () => {
 
   it('start_agent for qqbot skips when no IM channel selected', async () => {
     ctx = makeMockCtx({
-      readProjectIMWorkspaceConfig: async () => ({ selectedChannel: null }),
+      readProjectIMWorkspaceConfig: async () => imConfigWithOperatorCarrier(null),
     });
     setDispatchCtx(ctx);
 

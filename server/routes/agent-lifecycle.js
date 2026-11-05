@@ -28,7 +28,7 @@ import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTar
 import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
 import { convergeThreadBoardOnDeliberateStop } from '../thread-control/deliberate-stop-convergence.js';
 import { assertSessionNotStarting } from '../shared/session-operation.js';
-import { operatorCarrierOf } from './im-config.js';
+import { blocksPortalRuntimeStart } from './im-config.js';
 
 // ADR-0011：远程写幂等闸。远程目标 + 无 idempotencyKey → 400 且请求不过隧道；
 // 本地路径保持现状不强制（session.js 同族契约）。
@@ -625,16 +625,13 @@ export function createAgentLifecycleModule(ctx) {
           res.json({ status: buildStatus(agent.id), agent: connected });
           return;
         }
-        // Block qqbot from starting when no IM channel is selected
-        if (sanitizeSessionFragment(agent.id) === 'qqbot') {
-          const wsConfig = await readProjectIMWorkspaceConfig();
-          // ADR-0042：门户 gateway 渠道 = 接线员线路 carrier（selectedChannel 已并入线路模型）
-          if (!operatorCarrierOf(wsConfig)) {
-            const connectedAgents = await getConnectedAgents();
-            const connected = connectedAgents.find((item) => item.id === agent.id) || null;
-            res.json({ status: buildStatus(agent.id), agent: connected, warning: '无接线员线路（未选渠道），门户代理不会启动' });
-            return;
-          }
+        // Block qqbot from starting when no operator line holds a carrier.
+        // 判定收敛在 blocksPortalRuntimeStart（start / restart 同源，见头注）
+        if (blocksPortalRuntimeStart(agent.id, await readProjectIMWorkspaceConfig())) {
+          const connectedAgents = await getConnectedAgents();
+          const connected = connectedAgents.find((item) => item.id === agent.id) || null;
+          res.json({ status: buildStatus(agent.id), agent: connected, warning: '无接线员线路（未选渠道），门户代理不会启动' });
+          return;
         }
         const selectedSessionId = req.body.sessionId || null;
         const status = await startManagedAgent(agent, selectedSessionId);
@@ -691,16 +688,15 @@ export function createAgentLifecycleModule(ctx) {
           return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
         const agent = await requireAgentLight(req.body.agentId);
-        // Block qqbot from restarting when no IM channel is selected
-        if (sanitizeSessionFragment(agent.id) === 'qqbot') {
-          const wsConfig = await readProjectIMWorkspaceConfig();
-          if (!wsConfig.selectedChannel) {
-            await stopManagedAgent(agent.id, req.body.sessionId || null);
-            const connectedAgents = await getConnectedAgents();
-            const connected = connectedAgents.find((item) => item.id === agent.id) || null;
-            res.json({ status: buildStatus(agent.id), agent: connected, warning: '未选择 IM 渠道，门户代理不会启动' });
-            return;
-          }
+        // Block qqbot from restarting when no operator line holds a carrier.
+        // 与 start_agent 同一判定（此前这里仍判 selectedChannel，该字段归一后
+        // 恒空，重启因此恒定只停不起）
+        if (blocksPortalRuntimeStart(agent.id, await readProjectIMWorkspaceConfig())) {
+          await stopManagedAgent(agent.id, req.body.sessionId || null);
+          const connectedAgents = await getConnectedAgents();
+          const connected = connectedAgents.find((item) => item.id === agent.id) || null;
+          res.json({ status: buildStatus(agent.id), agent: connected, warning: '无接线员线路（未选渠道），门户代理不会启动' });
+          return;
         }
         const selectedSessionId = req.body.sessionId || null;
         await stopManagedAgent(agent.id, selectedSessionId);

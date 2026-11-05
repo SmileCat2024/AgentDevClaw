@@ -20,14 +20,14 @@ import {
   EnvelopeStatus,
 } from '../runtime-call-envelope.js';
 import { DISPATCH_FIRED_TIMEOUT_MS } from '../shared/constants.js';
-import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
+import { cleanSessionText } from '../shared/string-helpers.js';
 import {
   getManagedRuntimeKey,
   getAgentRuntime,
   listAgentRuntimes,
 } from '../shared/agent-access.js';
 import { readSessionIndex } from '../shared/session-access.js';
-import { operatorCarrierOf } from './im-config.js';
+import { blocksPortalRuntimeStart } from './im-config.js';
 
 // ── Shared dependency wiring ──────────────────────────────────────
 
@@ -220,14 +220,11 @@ async function fireDispatchNow(schedule) {
       let sessionId = target.sessionId || s.targetSessionId;
       try {
         const agent = await _ctx.requirePrebuiltAgentForRuntime(agentId);
-        // Skip qqbot auto-start when no IM channel is selected
-        if (sanitizeSessionFragment(agentId) === 'qqbot') {
-          const wsConfig = await _ctx.readProjectIMWorkspaceConfig();
-          // ADR-0042：门户 gateway 渠道 = 接线员线路 carrier（selectedChannel 已并入线路模型）
-          if (!operatorCarrierOf(wsConfig)) {
-            console.log(`[Dispatch] start_agent skipped for ${agentId}: 无接线员线路（未选渠道）`);
-            continue;
-          }
+        // Skip qqbot auto-start when no operator line holds a carrier.
+        // 判定与 start_agent / restart_agent 同源（im-config 单一入口）。
+        if (blocksPortalRuntimeStart(agentId, await _ctx.readProjectIMWorkspaceConfig())) {
+          console.log(`[Dispatch] start_agent skipped for ${agentId}: 无接线员线路（未选渠道）`);
+          continue;
         }
         // Resolve __latest__ to the actual latest session from the session index
         if (!sessionId || sessionId === '__latest__') {
