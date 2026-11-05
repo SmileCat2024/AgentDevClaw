@@ -5,6 +5,7 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 function createSettingsSandbox() {
   const ctx = createFrontendSandbox({ alert: () => {} });
   ctx.run("let currentLanguage = 'en'; window.ClawFW = {};");
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/model-settings.js');
   return ctx;
 }

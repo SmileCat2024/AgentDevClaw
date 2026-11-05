@@ -33,6 +33,7 @@ function createSettingsSandbox(overrides = {}) {
   });
   // OpenCode 目录添加依赖 oauth-flow.js 的 resolveOpenCodeProtocolClient（协议归类）
   ctx.loadSource('public/src/modules/oauth-flow.js');
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/model-settings.js');
   ctx.run('window.ClawFW = window.ClawFW || {}');
   return ctx;

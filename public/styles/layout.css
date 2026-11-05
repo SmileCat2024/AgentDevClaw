@@ -2239,6 +2239,28 @@ body[data-theme="light"] .base-url-combo.base-url-duplicate:focus-within {
   box-shadow: 0 0 0 3px rgba(99, 145, 255, 0.12);
 }
 
+/* API Key 可见性切换按钮（编辑表单内，绝对定位在输入框右侧）。
+   原 hover 变色是模板内联 onmouseover/onmouseout，迁 CSS :hover。 */
+.settings-key-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: color 0.2s;
+}
+
+.settings-key-toggle:hover {
+  color: var(--text-primary);
+}
+
 body[data-theme="light"] .settings-input {
   border-color: #d0d5dd;
   background: #fff;

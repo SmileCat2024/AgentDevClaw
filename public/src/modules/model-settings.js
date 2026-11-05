@@ -137,7 +137,7 @@ function renderOverviewContent(presets, dm, isZh) {
   const cards = presets.map((p, idx) => {
     const isActive = modelConfigMatchesPreset(dm, p);
     return [
-      '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" onclick="applySettingsPreset(' + idx + ')">',
+      '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" data-action="modelSettings.applyPreset" data-args="[' + idx + ']">',
       '<div class="settings-preset-dot"></div>',
       '<div class="settings-preset-info">',
       '<div class="settings-preset-name">' + escapeHtml(p.name || p.model || ('Preset ' + (idx + 1))) + '</div>',
@@ -148,13 +148,13 @@ function renderOverviewContent(presets, dm, isZh) {
         + '</div>',
       '</div>',
       '<div class="settings-preset-actions">',
-      '<button class="settings-icon-btn star-btn' + (p.starred ? ' starred' : '') + '" type="button" title="' + (isZh ? (p.starred ? '取消星标' : '设为星标') : (p.starred ? 'Unstar' : 'Star')) + '" onclick="event.stopPropagation();toggleSettingsPresetStar(' + idx + ')">',
+      '<button class="settings-icon-btn star-btn' + (p.starred ? ' starred' : '') + '" type="button" title="' + (isZh ? (p.starred ? '取消星标' : '设为星标') : (p.starred ? 'Unstar' : 'Star')) + '" data-action="modelSettings.toggleStar" data-args="[' + idx + ']">',
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="' + (p.starred ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
       '</button>',
-      '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSettingsPreset(' + idx + ')">',
+      '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" data-action="modelSettings.editPreset" data-args="[' + idx + ']">',
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
       '</button>',
-      '<button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" onclick="event.stopPropagation();deleteSettingsPreset(' + idx + ')">',
+      '<button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" data-action="modelSettings.deletePreset" data-args="[' + idx + ']">',
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
       '</button>',
       '</div>',
@@ -163,7 +163,7 @@ function renderOverviewContent(presets, dm, isZh) {
   }).join('');
   return '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '快速配置' : 'Quick setup') + '</div>'
       + '<div class="settings-overview-nav">' + navItems.map((item) =>
-        '<button type="button" class="settings-overview-nav-item" onclick="switchSettingsTab(\'' + item.key + '\')">'
+        '<button type="button" class="settings-overview-nav-item" data-action="modelSettings.switchTab" data-tab="' + escapeHtml(item.key) + '">'
         + '<span class="settings-overview-nav-icon">' + navIcons[item.key] + '</span>'
         + '<span><span class="settings-overview-nav-title">' + item.title + '</span><div class="settings-overview-nav-desc">' + item.desc + '</div></span>'
         + '</button>').join('') + '</div></div>'
@@ -186,7 +186,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
   const labels = { overview: isZh ? '总览' : 'Overview', custom: isZh ? '自定义模型' : 'Custom', codex: 'Codex', opencode: 'OpenCode', speech: isZh ? '语音识别' : 'Speech' };
   // 侧栏分组：核心四项直排，「其他」之下放语音识别
   const tabButton = (key) =>
-    '<button class="ph-settings-tab' + (tab === key ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'' + key + '\')">'
+    '<button class="ph-settings-tab' + (tab === key ? ' active' : '') + '" type="button" data-action="modelSettings.switchTab" data-tab="' + escapeHtml(key) + '">'
     + '<span class="ph-settings-tab-label">' + labels[key] + '</span></button>';
   const nav = ['overview', 'codex', 'opencode', 'custom'].map(tabButton).join('')
     + '<div class="ph-settings-tab-group">' + (isZh ? '其他' : 'Other') + '</div>'
@@ -231,18 +231,18 @@ function renderModelCatalogSettingsOverlay(host, data) {
         // 反馈仍由 #oauth-status-display 承载（轮询期间独占）
         connectionCard = '<div class="settings-section settings-connection-card settings-codex-auth">'
           + '<div class="settings-connection-row">' + cardIntro
-          + '<div class="oauth-action-row"><button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin(\'browser\')">' + (isZh ? '添加账号 · 浏览器授权' : 'Add · Browser') + '</button><button class="settings-btn settings-btn-secondary" type="button" onclick="startOAuthLogin(\'device\')">' + (isZh ? '添加账号 · 设备码' : 'Add · Device Code') + '</button></div></div>'
+          + '<div class="oauth-action-row"><button class="settings-btn settings-btn-primary" type="button" data-action="modelSettings.startOAuth" data-mode="browser">' + (isZh ? '添加账号 · 浏览器授权' : 'Add · Browser') + '</button><button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.startOAuth" data-mode="device">' + (isZh ? '添加账号 · 设备码' : 'Add · Device Code') + '</button></div></div>'
           + '<div id="codex-accounts-list" class="oauth-accounts-list"></div>'
           + '<div id="oauth-status-display" class="oauth-status-text settings-codex-auth-status"></div></div>';
       } else {
-        connectionCard = '<div class="settings-section settings-connection-card settings-connection-entry" role="button" tabindex="0" onclick="openCodexConnectionView()" onkeydown="if(event.key===\'Enter\'&&event.target===this)openCodexConnectionView()">'
+        connectionCard = '<div class="settings-section settings-connection-card settings-connection-entry" role="button" tabindex="0" data-action="modelSettings.openCodexConnections">'
           + '<div class="settings-connection-row">' + cardIntro
-          + '<button class="settings-btn settings-btn-secondary" type="button" onclick="event.stopPropagation();openCodexConnectionView()">' + (isZh ? '管理账号' : 'Manage Accounts') + '</button>'
+          + '<button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.openCodexConnections">' + (isZh ? '管理账号' : 'Manage Accounts') + '</button>'
           + '</div></div>';
       }
     } else {
       // OpenCode 连接：标题与 API Key 输入同行，输入即自动保存；不做状态徽章提升，保存失败反馈走目录状态区
-      connectionCard = '<div class="settings-section settings-connection-card"><div class="settings-connection-row"><div><div class="settings-connection-title">OpenCode</div><div class="settings-connection-description">' + (isZh ? '配置 API Key 连接以发现可用模型，输入后自动保存' : 'Configure an API key to discover models; it saves as you type') + '</div></div><div class="settings-field settings-connection-inline"><label>API Key</label><div class="settings-key-field"><input class="settings-input" id="settings-opencode-key" type="password" autocomplete="new-password" value="' + escapeHtml(connections.opencode?.apiKey || '') + '" placeholder="' + (connections.opencode?.hasApiKey ? (isZh ? '已保存，留空保持不变' : 'Saved; leave blank to keep') : 'sk-…') + '" oninput="onOpenCodeKeyInput()" onblur="flushOpenCodeKeySave()"><button class="settings-key-visibility" type="button" aria-label="' + (isZh ? '显示或隐藏 API Key' : 'Show or hide API key') + '" title="' + (isZh ? '显示或隐藏' : 'Show or hide') + '" onclick="toggleOpenCodeKeyVisibility()"><svg id="opencode-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg id="opencode-eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button></div></div></div></div>';
+      connectionCard = '<div class="settings-section settings-connection-card"><div class="settings-connection-row"><div><div class="settings-connection-title">OpenCode</div><div class="settings-connection-description">' + (isZh ? '配置 API Key 连接以发现可用模型，输入后自动保存' : 'Configure an API key to discover models; it saves as you type') + '</div></div><div class="settings-field settings-connection-inline"><label>API Key</label><div class="settings-key-field"><input class="settings-input" id="settings-opencode-key" type="password" autocomplete="new-password" value="' + escapeHtml(connections.opencode?.apiKey || '') + '" placeholder="' + (connections.opencode?.hasApiKey ? (isZh ? '已保存，留空保持不变' : 'Saved; leave blank to keep') : 'sk-…') + '" data-action="modelSettings.openCodeKeyField"><button class="settings-key-visibility" type="button" aria-label="' + (isZh ? '显示或隐藏 API Key' : 'Show or hide API key') + '" title="' + (isZh ? '显示或隐藏' : 'Show or hide') + '" data-action="modelSettings.toggleOpenCodeKeyVisibility"><svg id="opencode-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg id="opencode-eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button></div></div></div></div>';
     }
     const addedGrid = providerPresets.length
       ? '<div class="settings-presets-grid">' + providerPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, catalog.loaded && !catalog.models.some((m) => m.id === p.model), modelConfigMatchesPreset(dm, p))).join('') + '</div>'
@@ -252,17 +252,17 @@ function renderModelCatalogSettingsOverlay(host, data) {
     const selectedCount = available.filter((m) => selected[m.id]).length;
     const modelInfoSpan = (m) => '<span class="settings-catalog-info"><strong>' + escapeHtml(m.displayName || m.id) + '</strong></span>';
     const availableHtml = available.length ? '<div class="settings-catalog-list">' + available.map((m, i) => multi
-      ? '<label class="settings-catalog-model"><input type="checkbox" value="' + escapeHtml(m.id) + '" onchange="setCatalogModelSelection(this)" ' + (selected[m.id] ? 'checked' : '') + '>' + modelInfoSpan(m) + '</label>'
-      : '<div class="settings-catalog-model" onclick="addCatalogModel(\'' + tab + '\', ' + i + ')">' + modelInfoSpan(m) + '<span class="settings-catalog-add"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span></div>'
+      ? '<label class="settings-catalog-model"><input type="checkbox" value="' + escapeHtml(m.id) + '" data-action="modelSettings.catalogModelSelection" ' + (selected[m.id] ? 'checked' : '') + '>' + modelInfoSpan(m) + '</label>'
+      : '<div class="settings-catalog-model" data-action="modelSettings.addCatalogModel" data-provider="' + escapeHtml(tab) + '" data-row="' + i + '">' + modelInfoSpan(m) + '<span class="settings-catalog-add"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span></div>'
     ).join('') + '</div>'
       : renderCatalogEmptyState(
           catalog.loading ? (isZh ? '正在刷新模型目录…' : 'Refreshing catalog…') : catalog.loaded ? (isZh ? '没有可添加的模型' : 'Nothing to add') : (isZh ? '目录尚未加载' : 'Catalog not loaded'),
           catalog.loading ? '' : catalog.loaded ? (isZh ? '目录中的模型均已添加' : 'All catalog models are already added') : (isZh ? '点击上方刷新获取可添加的模型' : 'Use Refresh above to discover models'));
-    const tierSelect = '<select class="settings-input settings-catalog-tier" id="settings-opencode-tier" data-claw-select data-claw-compact="true" onchange="onOpenCodeServiceChange()"><option value="zen"' + (connections.opencode?.tier !== 'go' ? ' selected' : '') + '>Zen</option><option value="go"' + (connections.opencode?.tier === 'go' ? ' selected' : '') + '>Go</option></select>';
+    const tierSelect = '<select class="settings-input settings-catalog-tier" id="settings-opencode-tier" data-claw-select data-claw-compact="true" data-action="modelSettings.onOpenCodeServiceChange"><option value="zen"' + (connections.opencode?.tier !== 'go' ? ' selected' : '') + '>Zen</option><option value="go"' + (connections.opencode?.tier === 'go' ? ' selected' : '') + '>Go</option></select>';
     const toolbarActions = (!isCodex ? tierSelect : '')
-      + '<button class="settings-btn settings-btn-secondary" type="button" onclick="toggleCatalogMultiSelect()">' + (multi ? (isZh ? '退出多选' : 'Exit multi-select') : (isZh ? '多选' : 'Multi-select')) + '</button>'
-      + (multi ? '<button class="settings-btn settings-btn-primary" type="button" id="settings-catalog-add-selected" onclick="addSelectedCatalogModels(\'' + tab + '\')">' + (isZh ? '添加所选' + (selectedCount ? '（' + selectedCount + '）' : '') : 'Add selected' + (selectedCount ? ' (' + selectedCount + ')' : '')) + '</button>' : '')
-      + '<button class="settings-btn settings-btn-secondary" type="button" onclick="refreshModelCatalog(\'' + tab + '\')">' + (isZh ? '刷新' : 'Refresh') + '</button>';
+      + '<button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.toggleCatalogMultiSelect">' + (multi ? (isZh ? '退出多选' : 'Exit multi-select') : (isZh ? '多选' : 'Multi-select')) + '</button>'
+      + (multi ? '<button class="settings-btn settings-btn-primary" type="button" id="settings-catalog-add-selected" data-action="modelSettings.addSelectedCatalogModels" data-provider="' + escapeHtml(tab) + '">' + (isZh ? '添加所选' + (selectedCount ? '（' + selectedCount + '）' : '') : 'Add selected' + (selectedCount ? ' (' + selectedCount + ')' : '')) + '</button>' : '')
+      + '<button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.refreshCatalog" data-provider="' + escapeHtml(tab) + '">' + (isZh ? '刷新' : 'Refresh') + '</button>';
     // 间距节奏由 .settings-catalog-page 统一控制：区块间 16px，标题到内容 12px
     content = connectionCard
       + (isCodex && window.ClawFW.codexConnectionView ? '' : ''
@@ -273,15 +273,15 @@ function renderModelCatalogSettingsOverlay(host, data) {
   const body = editing !== null ? renderSettingsEditForm(editing, presets, isZh) : content;
   let footer = '';
   if (editing !== null) {
-    footer = '<div class="settings-footer"><div class="settings-actions"><button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSettingsEdit()">' + (isZh ? '取消' : 'Cancel') + '</button><button class="settings-btn settings-btn-primary" type="button" onclick="saveSettingsPreset(' + editing + ')">' + (isZh ? '保存' : 'Save') + '</button></div></div>';
+    footer = '<div class="settings-footer"><div class="settings-actions"><button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.cancelEdit">' + (isZh ? '取消' : 'Cancel') + '</button><button class="settings-btn settings-btn-primary" type="button" data-action="modelSettings.savePreset" data-args="[' + editing + ']">' + (isZh ? '保存' : 'Save') + '</button></div></div>';
   } else if (tab === 'speech' && speechEditing !== null) {
-    footer = '<div class="settings-footer"><div class="settings-actions"><button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSpeechPresetEdit()">' + (isZh ? '取消' : 'Cancel') + '</button><button class="settings-btn settings-btn-primary" type="button" data-edit="' + speechEditing + '" onclick="saveSpeechPreset(this.dataset.edit)">' + (isZh ? '保存' : 'Save') + '</button></div></div>';
+    footer = '<div class="settings-footer"><div class="settings-actions"><button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.cancelSpeechEdit">' + (isZh ? '取消' : 'Cancel') + '</button><button class="settings-btn settings-btn-primary" type="button" data-edit="' + speechEditing + '" data-action="modelSettings.saveSpeechPreset">' + (isZh ? '保存' : 'Save') + '</button></div></div>';
   }
   // 右下角悬浮按钮：自定义模型页「添加模型」、语音识别页「配置模型」（编辑态由 settings-footer 接管，互斥不叠加）
-  const fabAction = tab === 'custom' ? { fn: 'addSettingsPreset()', label: isZh ? '添加模型' : 'Add model' }
-    : tab === 'speech' ? { fn: 'addSpeechPreset()', label: isZh ? '配置模型' : 'Configure model' } : null;
+  const fabAction = tab === 'custom' ? { action: 'modelSettings.addPreset', label: isZh ? '添加模型' : 'Add model' }
+    : tab === 'speech' ? { action: 'modelSettings.addSpeechPreset', label: isZh ? '配置模型' : 'Configure model' } : null;
   const fab = editing === null && speechEditing === null && fabAction
-    ? '<button class="settings-fab" type="button" onclick="' + fabAction.fn + '"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>' + fabAction.label + '</button>'
+    ? '<button class="settings-fab" type="button" data-action="' + fabAction.action + '"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>' + fabAction.label + '</button>'
     : '';
   // 连接卡片输入状态跨渲染保留：自动保存/目录刷新等重渲染不打断正在输入的 API Key
   const opencodeKeyEl = document.getElementById('settings-opencode-key');
@@ -296,15 +296,20 @@ function renderModelCatalogSettingsOverlay(host, data) {
   const isCodexAuthPage = tab === 'codex' && window.ClawFW.codexConnectionView;
   const headLeftHtml = isCodexAuthPage
     ? '<div style="display:flex;align-items:center;gap:4px;">'
-      + '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" onclick="closeCodexConnectionView()" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>'
+      + '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" data-action="modelSettings.closeCodexConnections" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>'
       + '<div><div class="feature-detail-title">' + (isZh ? '设置 · Codex 登录' : 'Settings · Codex Login') + '</div><div class="feature-detail-subtitle">' + (isZh ? '连接 OpenAI 账户以使用 Codex 模型' : 'Connect your OpenAI account to use Codex models') + '</div></div></div>'
     : '<div><div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div><div class="feature-detail-subtitle">' + (isZh ? '管理模型连接与模型' : 'Manage model connections and models') + '</div></div>';
   host.innerHTML = '<div class="feature-detail-overlay"><div class="feature-detail-window ph-settings-window">'
-    + '<div class="feature-detail-head">' + headLeftHtml + '<button class="feature-detail-close" type="button" onclick="closeSettings()">×</button></div>'
+    + '<div class="feature-detail-head">' + headLeftHtml + '<button class="feature-detail-close" type="button" data-action="modelSettings.close">×</button></div>'
     + '<div class="ph-settings-layout"><div class="ph-settings-sidebar">' + nav + '</div><div class="ph-settings-content settings-catalog-page' + (tab === 'codex' || tab === 'opencode' ? ' settings-scroll-quiet' : '') + '">' + body + '</div></div>'
     + footer
     + fab
     + '</div></div>';
+  // API Key 失焦即落盘：blur 不冒泡且委托 focusout 会与 innerHTML 替换的
+  // 移除时序冲突（重入渲染抛 NotFoundError），故用元素级监听。元素随每次
+  // innerHTML 重建，监听随之消亡，无累积。
+  const keyInput = document.getElementById('settings-opencode-key');
+  if (keyInput) keyInput.addEventListener('blur', () => { flushOpenCodeKeySave(); });
   if (opencodeKeySnapshot) {
     const restoredKey = document.getElementById('settings-opencode-key');
     if (restoredKey) {
@@ -535,15 +540,15 @@ function modelCatalogPresetCard(preset, idx, isZh, missing, isActive) {
   const tier = isCodexPreset(preset) ? selectedCodexTier(preset) : '';
   const tierMeta = Array.isArray(preset.serviceTiers) ? preset.serviceTiers.find((item) => item.id === tier) : null;
   const tierLabel = tier === 'priority' ? (tierMeta?.name || 'Fast') : tierMeta?.name || tier;
-  return '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" onclick="applySettingsPreset(' + idx + ')">'
+  return '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" data-action="modelSettings.applyPreset" data-args="[' + idx + ']">'
     + '<div class="settings-preset-dot"></div>'
     + '<div class="settings-preset-info">'
     + '<div class="settings-preset-name">' + escapeHtml(preset.name || preset.model) + '</div>'
     + '<div class="settings-preset-detail">' + escapeHtml(providerLabel + ' · ' + preset.model) + (tier ? ' · ' + escapeHtml(tierLabel) : '') + (missing ? ' <span class="preset-tag">' + (isZh ? '目录中不存在' : 'Not in catalog') + '</span>' : '') + '</div>'
     + '</div>'
     + '<div class="settings-preset-actions">'
-    + '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSettingsPreset(' + idx + ')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>'
-    + '<button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" onclick="event.stopPropagation();deleteSettingsPreset(' + idx + ')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>'
+    + '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" data-action="modelSettings.editPreset" data-args="[' + idx + ']"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>'
+    + '<button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" data-action="modelSettings.deletePreset" data-args="[' + idx + ']"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>'
     + '</div></div>';
 }
 
@@ -560,7 +565,7 @@ function renderSettingsOverlay() {
   }
   const isZh = currentLanguage === 'zh';
   host.innerHTML = '<div class="feature-detail-overlay"><div class="feature-detail-window ph-settings-window">'
-    + '<div class="feature-detail-head"><div><div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div><div class="feature-detail-subtitle">' + (isZh ? '管理模型连接与模型' : 'Manage model connections and models') + '</div></div><button class="feature-detail-close" type="button" onclick="closeSettings()">×</button></div>'
+    + '<div class="feature-detail-head"><div><div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div><div class="feature-detail-subtitle">' + (isZh ? '管理模型连接与模型' : 'Manage model connections and models') + '</div></div><button class="feature-detail-close" type="button" data-action="modelSettings.close">×</button></div>'
     + '<div class="ph-settings-empty">' + (isZh ? '正在加载…' : 'Loading…') + '</div>'
     + '</div></div>';
 }
@@ -576,7 +581,7 @@ function renderThinkingEffortSelect(preset, isZh) {
     + '</select>';
 }
 
-window.onThinkingToggleChange = function() {
+const onThinkingToggleChange = function() {
   let cb = document.getElementById('settings-preset-thinking-enabled');
   let config = document.getElementById('settings-thinking-config');
   if (!cb || !config) return;
@@ -585,7 +590,7 @@ window.onThinkingToggleChange = function() {
   if (errEl) errEl.style.display = 'none';
 };
 
-window.onThinkingBudgetInput = function() {
+const onThinkingBudgetInput = function() {
   let input = document.getElementById('settings-preset-thinking-budget');
   let errEl = document.getElementById('settings-thinking-budget-error');
   if (!input || !errEl) return;
@@ -607,7 +612,7 @@ window.onThinkingBudgetInput = function() {
   }
 };
 
-window.populateThinkingEffortOptions = function() {
+const populateThinkingEffortOptions = function() {
   const select = document.getElementById('settings-preset-thinking-effort');
   if (!select) return;
   const provider = select.dataset.provider || 'anthropic';
@@ -825,7 +830,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>' + (isZh ? '接口协议' : 'Protocol') + '</label>',
-    '<select class="settings-input" data-claw-select id="settings-preset-provider" onchange="onProtocolChange()">',
+    '<select class="settings-input" data-claw-select id="settings-preset-provider" data-action="modelSettings.onProtocolChange">',
     '<option value="anthropic"' + (dropdownVal === 'anthropic' ? ' selected' : '') + '>Anthropic</option>',
     '<option value="openai"' + (dropdownVal === 'openai' ? ' selected' : '') + '>OpenAI Chat</option>',
     '<option value="openai-responses"' + (dropdownVal === 'openai-responses' ? ' selected' : '') + '>OpenAI Responses</option>',
@@ -845,7 +850,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<label>API Key</label>',
     '<div style="position:relative;display:flex;align-items:stretch;">',
     '<input class="settings-input" id="settings-preset-apikey" type="password" value="' + escapeHtml(preset.apiKey || '') + '" placeholder="sk-..." style="padding-right:40px;">',
-    '<button type="button" onclick="toggleApiKeyVisibility()" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:color 0.2s;" onmouseover="this.style.color=\'var(--text-primary)\'" onmouseout="this.style.color=\'var(--text-secondary)\'" title="' + (isZh ? '显示/隐藏' : 'Show/Hide') + '">',
+    '<button type="button" class="settings-key-toggle" data-action="modelSettings.toggleApiKeyVisibility" title="' + (isZh ? '显示/隐藏' : 'Show/Hide') + '">',
     '<svg id="apikey-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">',
     '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>',
     '<circle cx="12" cy="12" r="3"></circle>',
@@ -873,7 +878,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div id="opencode-section"' + (isOpenCodeMode ? '' : ' style="display:none;"') + '>',
     '<div class="settings-field">',
     '<label>' + (isZh ? 'OpenCode 服务' : 'OpenCode service') + '</label>',
-    '<select class="settings-input" data-claw-select id="settings-preset-opencode-tier" onchange="onOpenCodeTierChange()">',
+    '<select class="settings-input" data-claw-select id="settings-preset-opencode-tier" data-action="modelSettings.onOpenCodeTierChange">',
     '<option value="zen"' + (openCodeTier === 'zen' ? ' selected' : '') + '>Zen</option>',
     '<option value="go"' + (openCodeTier === 'go' ? ' selected' : '') + '>Go</option>',
     '</select>',
@@ -881,11 +886,11 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-field">',
     '<label>' + (isZh ? 'OpenCode 模型' : 'OpenCode model') + '</label>',
     '<div style="display:flex;gap:6px;align-items:flex-start;">',
-    '<select class="settings-input" data-claw-select id="settings-preset-opencode-model" style="flex:1;min-width:0;" onchange="onOpenCodeModelSelect()">',
+    '<select class="settings-input" data-claw-select id="settings-preset-opencode-model" style="flex:1;min-width:0;" data-action="modelSettings.onOpenCodeModelSelect">',
     '<option value="">' + (isZh ? '— 点击加载模型列表 —' : '— Click Load Models —') + '</option>',
     (preset.model ? '<option value="' + escapeHtml(preset.model) + '" selected>' + escapeHtml(preset.model) + '</option>' : ''),
     '</select>',
-    '<button class="settings-btn settings-btn-secondary" type="button" style="flex-shrink:0;" onclick="fetchOpenCodeModels()">' + (isZh ? '加载' : 'Load') + '</button>',
+    '<button class="settings-btn settings-btn-secondary" type="button" style="flex-shrink:0;" data-action="modelSettings.fetchOpenCodeModels">' + (isZh ? '加载' : 'Load') + '</button>',
     '</div>',
     '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">' + (isZh
       ? '在 OpenCode Console 创建 API Key；Go 订阅及其额度由 OpenCode 官方管理。'
@@ -905,7 +910,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<div class="settings-checkbox">',
-    '<input type="checkbox" id="settings-preset-thinking-enabled" ' + (preset.thinkingEffort && preset.thinkingEffort !== 'none' && preset.thinkingEffort !== '' ? 'checked' : '') + ' onchange="onThinkingToggleChange()">',
+    '<input type="checkbox" id="settings-preset-thinking-enabled" ' + (preset.thinkingEffort && preset.thinkingEffort !== 'none' && preset.thinkingEffort !== '' ? 'checked' : '') + ' data-action="modelSettings.onThinkingToggleChange">',
     '<label for="settings-preset-thinking-enabled">' + (isZh ? '启用思考' : 'Enable Thinking') + '</label>',
     '</div>',
     '</div>',
@@ -924,7 +929,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '</div>',
     '<div class="settings-field">',
     '<label>' + (isZh ? '思考预算 (tokens)' : 'Thinking Budget (tokens)') + '</label>',
-    '<input class="settings-input" id="settings-preset-thinking-budget" type="number" min="512" value="' + (preset.thinkingBudgetTokens || '') + '" placeholder="' + (isZh ? '留空自动分配' : 'Leave empty for auto') + '" oninput="onThinkingBudgetInput()">',
+    '<input class="settings-input" id="settings-preset-thinking-budget" type="number" min="512" value="' + (preset.thinkingBudgetTokens || '') + '" placeholder="' + (isZh ? '留空自动分配' : 'Leave empty for auto') + '" data-action="modelSettings.onThinkingBudgetInput">',
     '<div id="settings-thinking-budget-error" style="font-size:11px;color:#e57373;margin-top:2px;display:none;"></div>',
     '</div>',
     '</div>',
@@ -971,7 +976,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
       return createSettingsHeaderRowHTML(i, h.key || '', h.value || '', h.valueMode || 'static', isZh);
     }).join(''),
     '</div>',
-    '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;margin-top:4px;" onclick="addSettingsHeaderRow()">+ ' + (isZh ? '添加 Header' : 'Add Header') + '</button>',
+    '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;margin-top:4px;" data-action="modelSettings.addHeaderRow">+ ' + (isZh ? '添加 Header' : 'Add Header') + '</button>',
     '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">' + (isZh ?
       'UUID v4 / 随机数模式会在每次 API 请求时自动生成新值' :
       'UUID v4 / random mode generates a new value on each API request') + '</div>',
@@ -990,16 +995,16 @@ function createSettingsHeaderRowHTML(idx, key, value, mode, isZh) {
   return [
     '<div data-header-row style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">',
     '<input class="settings-input" data-header-key type="text" value="' + escapeHtml(key) + '" placeholder="' + (isZh ? 'Header 名' : 'Header name') + '" style="flex:1;min-width:0;">',
-    '<select class="settings-input" data-claw-select data-claw-compact="true" data-header-mode style="width:90px;flex-shrink:0;" onchange="onSettingsHeaderModeChange(this)">' + modeOptions + '</select>',
+    '<select class="settings-input" data-claw-select data-claw-compact="true" data-header-mode style="width:90px;flex-shrink:0;" data-action="modelSettings.onHeaderModeChange">' + modeOptions + '</select>',
     '<input class="settings-input" data-header-value type="text" value="' + escapeHtml(value) + '" placeholder="' + (isDynamic ? '(auto)' : (isZh ? 'Header 值' : 'Header value')) + '" style="flex:1;min-width:0;' + (isDynamic ? 'opacity:0.4;' : '') + '"' + (isDynamic ? ' disabled' : '') + '>',
-    '<button type="button" onclick="this.closest(\'[data-header-row]\').remove()" style="background:none;border:none;cursor:pointer;padding:6px;color:var(--text-secondary);flex-shrink:0;" title="' + (isZh ? '删除' : 'Delete') + '">',
+    '<button type="button" data-action="modelSettings.removeHeaderRow" style="background:none;border:none;cursor:pointer;padding:6px;color:var(--text-secondary);flex-shrink:0;" title="' + (isZh ? '删除' : 'Delete') + '">',
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
     '</button>',
     '</div>',
   ].join('');
 }
 
-window.addSettingsHeaderRow = function() {
+const addSettingsHeaderRow = function() {
   let container = document.getElementById('settings-headers-container');
   if (!container) return;
   let isZh = currentLanguage === 'zh';
@@ -1008,7 +1013,7 @@ window.addSettingsHeaderRow = function() {
   if (window.ClawSelect) window.ClawSelect.enhanceAll(container);
 };
 
-window.onSettingsHeaderModeChange = function(select) {
+const onSettingsHeaderModeChange = function(select) {
   let row = select.closest('[data-header-row]');
   let valueInput = row ? row.querySelector('[data-header-value]') : null;
   if (!valueInput) return;
@@ -1405,9 +1410,13 @@ async function saveSettingsConfig() {
 }
 
 // ── window 导出 ──────────────────────────────────────────────
+// openSettings / closeSettings：app-ui 设置入口与 escape 路径调用；
+// saveSettingsPreset / refreshModelCatalog：oauth-flow 程序化调用；
+// onProviderChangeUpdateThinking / syncBaseEndpointBadge：oauth-flow 守卫调用。
+// 面板内交互已全部走 data-action="modelSettings.*" 分发，不再需要逐一导出。
 window.openSettings = openSettings;
 window.closeSettings = closeSettings;
-window.switchSettingsTab = function(tab) {
+const switchSettingsTab = function(tab) {
   // 重渲染前先落盘输入中的 OpenCode API Key（同步捕获 DOM 值后再替换）
   flushOpenCodeKeySave();
   window.ClawFW.settingsTab = ['overview', 'custom', 'codex', 'opencode', 'speech'].includes(tab) ? tab : 'overview';
@@ -1423,20 +1432,46 @@ window.switchSettingsTab = function(tab) {
   }
 };
 window.refreshModelCatalog = refreshModelCatalog;
-window.addSelectedCatalogModels = addSelectedCatalogModels;
-window.addCatalogModel = addCatalogModel;
-window.toggleCatalogMultiSelect = toggleCatalogMultiSelect;
-window.onOpenCodeServiceChange = onOpenCodeServiceChange;
-window.toggleOpenCodeKeyVisibility = toggleOpenCodeKeyVisibility;
-window.onOpenCodeKeyInput = onOpenCodeKeyInput;
-window.flushOpenCodeKeySave = flushOpenCodeKeySave;
-window.saveModelConnection = saveModelConnection;
-window.openCodexConnectionView = openCodexConnectionView;
-window.closeCodexConnectionView = closeCodexConnectionView;
-window.addSettingsPreset = addSettingsPreset;
-window.editSettingsPreset = editSettingsPreset;
-window.deleteSettingsPreset = deleteSettingsPreset;
-window.toggleSettingsPresetStar = toggleSettingsPresetStar;
 window.saveSettingsPreset = saveSettingsPreset;
-window.applySettingsPreset = applySettingsPreset;
-window.cancelSettingsEdit = cancelSettingsEdit;
+
+window.ClawFW.actions.registerMany({
+  'modelSettings.applyPreset': (el, event, idx) => applySettingsPreset(idx),
+  'modelSettings.toggleStar': (el, event, idx) => toggleSettingsPresetStar(idx),
+  'modelSettings.editPreset': (el, event, idx) => editSettingsPreset(idx),
+  'modelSettings.deletePreset': (el, event, idx) => deleteSettingsPreset(idx),
+  'modelSettings.switchTab': (el) => switchSettingsTab(el.dataset.tab),
+  'modelSettings.startOAuth': (el) => window.startOAuthLogin(el.dataset.mode),
+  'modelSettings.openCodexConnections': (el, event) => {
+    // 原 click + keydown 双挂：键盘路径限 Enter 且目标为卡片本身（内部按钮的 Enter 不触发）
+    if (event.type === 'keydown') {
+      if (event.key !== 'Enter' || event.target !== el) return;
+    }
+    openCodexConnectionView();
+  },
+  'modelSettings.openCodeKeyField': () => onOpenCodeKeyInput(),
+  'modelSettings.toggleOpenCodeKeyVisibility': () => toggleOpenCodeKeyVisibility(),
+  'modelSettings.catalogModelSelection': (el) => setCatalogModelSelection(el),
+  'modelSettings.addCatalogModel': (el) => addCatalogModel(el.dataset.provider, Number(el.dataset.row)),
+  'modelSettings.onOpenCodeServiceChange': () => onOpenCodeServiceChange(),
+  'modelSettings.toggleCatalogMultiSelect': () => toggleCatalogMultiSelect(),
+  'modelSettings.addSelectedCatalogModels': (el) => addSelectedCatalogModels(el.dataset.provider),
+  'modelSettings.refreshCatalog': (el) => refreshModelCatalog(el.dataset.provider),
+  'modelSettings.cancelEdit': () => cancelSettingsEdit(),
+  'modelSettings.savePreset': (el, event, idx) => saveSettingsPreset(idx),
+  'modelSettings.cancelSpeechEdit': () => window.cancelSpeechPresetEdit(),
+  'modelSettings.saveSpeechPreset': (el) => window.saveSpeechPreset(el.dataset.edit),
+  'modelSettings.addPreset': () => addSettingsPreset(),
+  'modelSettings.addSpeechPreset': () => window.addSpeechPreset(),
+  'modelSettings.closeCodexConnections': () => closeCodexConnectionView(),
+  'modelSettings.close': () => closeSettings(),
+  'modelSettings.onProtocolChange': () => window.onProtocolChange(),
+  'modelSettings.toggleApiKeyVisibility': () => toggleApiKeyVisibility(),
+  'modelSettings.onOpenCodeTierChange': () => window.onOpenCodeTierChange(),
+  'modelSettings.onOpenCodeModelSelect': () => window.onOpenCodeModelSelect(),
+  'modelSettings.fetchOpenCodeModels': () => window.fetchOpenCodeModels(),
+  'modelSettings.onThinkingToggleChange': () => onThinkingToggleChange(),
+  'modelSettings.onThinkingBudgetInput': () => onThinkingBudgetInput(),
+  'modelSettings.addHeaderRow': () => addSettingsHeaderRow(),
+  'modelSettings.onHeaderModeChange': (el) => onSettingsHeaderModeChange(el),
+  'modelSettings.removeHeaderRow': (el) => el.closest('[data-header-row]')?.remove(),
+});
