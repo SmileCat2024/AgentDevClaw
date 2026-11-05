@@ -432,7 +432,13 @@ export class CallArbiter {
         : (await onAdmitted(), await this._agent.onCall(input, envelope.images, activations, turnMetadata,
           Object.keys(turnOptions).length > 0 ? turnOptions : undefined));
       await onAdmitted();
-      envelope.result = typeof result === 'string' ? result : '';
+      // 交付文本：onCallDetailed 返回的是 CallOutcome 对象，最终文本在
+      // outcome.response；只有旧 onCall 路径直接返回字符串。两条路径统一
+      // 落到 envelope.result，供 IM 网关 / 结果镜像 / 线程轮次事件消费。
+      const deliveredText = typeof result === 'string'
+        ? result
+        : (result && typeof result.response === 'string' ? result.response : '');
+      envelope.result = deliveredText;
 
       // ── Observe the structured call outcome ──
       // onCall() does not throw for in-call terminal states (model request

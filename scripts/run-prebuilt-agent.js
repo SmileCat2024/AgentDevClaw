@@ -25,7 +25,7 @@ import { enqueueOrderedProjection } from './post-call-sync.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { createTurnEventBus } from '../server/shared/turn-event-bus.js';
 import { CallArbiter } from '../server/call-arbiter.js';
-import { createIMBridge } from './runtime-im-bridge.js';
+import { createRuntimeIPC } from './runtime-im-bridge.js';
 import { dispatchCapabilityRequest, handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
@@ -360,13 +360,7 @@ class SessionLifecycle {
     this._hostRequests = new Set();
 
     // Per-session bridge contexts (shared by reference with extracted modules)
-    this.imBridgeCtx = {
-      agentId,
-      sessionId: this.sessionId,
-      SERVER_ORIGIN,
-      agent: null,
-      callArbiter: null,
-    };
+    this.ipcCtx = { agent: null };
     this.summaryCtx = {
       agentId,
       sessionId: this.sessionId,
@@ -375,7 +369,7 @@ class SessionLifecycle {
       sessionStore,
       postJson,
     };
-    this.imBridge = createIMBridge(this.imBridgeCtx);
+    this.runtimeIPC = createRuntimeIPC(this.ipcCtx);
     this.summaryHandlers = createSummaryHandlers(this.summaryCtx);
   }
 
@@ -578,9 +572,21 @@ class SessionLifecycle {
       return;
     }
 
-    // ── IM bridge messages (carrier mount/unmount, todo-control) ──
-    if (msg.type === 'mount-im-carrier' || msg.type === 'unmount-im-carrier' || msg.type === 'todo-control') {
-      return this.imBridge.handleIPCMessage(msg);
+    // ── Runtime IPC（todo-control / IM 线路热更新）──
+    // ADR-0042：mount-im-carrier / unmount-im-carrier 已退役（载体挂载随
+    // 线程寻址取消）。线路配置变更改由 reload-im-lines 触发门户按配置对账：
+    // 只重连变化的线路，不重启 runtime、不打断进行中的轮次。
+    if (msg.type === 'todo-control') {
+      return this.runtimeIPC.handleIPCMessage(msg);
+    }
+    if (msg.type === 'reload-im-lines' && typeof this.agent?.reloadPortalLines === 'function') {
+      try {
+        const connected = await this.agent.reloadPortalLines();
+        console.log('[ProtoClaw Runtime] ✓ IM 线路已按新配置对账:', JSON.stringify(connected));
+      } catch (error) {
+        console.error('[ProtoClaw Runtime] IM 线路对账失败:', error?.message || error);
+      }
+      return;
     }
 
     if (msg.type === 'feature-comms-request') {
@@ -805,7 +811,7 @@ SessionLifecycle.prototype.start = async function () {
     modelResolver: modelPresetResolver,
   });
   // Propagate agent reference to extracted module contexts
-  this.imBridgeCtx.agent = this.agent;
+  this.ipcCtx.agent = this.agent;
   this.summaryCtx.agent = this.agent;
   if (resolved) {
     if (typeof this.agent.setLLM === 'function') {
@@ -1056,7 +1062,6 @@ SessionLifecycle.prototype.start = async function () {
       guardFeature.setCallArbiter(this.callArbiter);
     }
   }
-  this.imBridgeCtx.callArbiter = this.callArbiter;
 
   // 插话时序修复 v3（2026-11-05）：call 启动即撤销已武装的输入 lease，
   // 维持不变式「call 运行 ⇒ 无武装 lease」。非 lease 来源（rotation 接续
@@ -1197,12 +1202,6 @@ SessionLifecycle.prototype.start = async function () {
     return barrier;
   });
 
-  this.callArbiter.on('callFinished', (envelope) => {
-    self.imBridge.dispatchIMCallFinish(envelope).catch(err => {
-      console.error('[ProtoClaw Runtime] IM callfinish delivery error:', err);
-    });
-  });
-
   if (typeof this.agent.setCallArbiter === 'function') {
     this.agent.setCallArbiter(this.callArbiter);
   }
@@ -1220,31 +1219,24 @@ SessionLifecycle.prototype.start = async function () {
 
   console.log('[ProtoClaw Runtime] ✓ CallArbiter 已初始化');
 
-  // ── IM Gateway ──
+  // ── IM Gateway（ADR-0042 决策 2：门户线路）──
+  //
+  // 门户 runtime 是全部线路渠道连接的持有者：按配置对账启动每条线路，随后
+  // 订阅线程轮次事件作为出站通道。旧单渠道入口（startSelectedIMGateway）与
+  // 「目标会话 runtime 挂载体」（mountIMLineCarrierIfBound）已退役——绑定是
+  // 线程寻址，runtime 换头不该让平台连接跟着断。
   try {
-    if (typeof this.agent.startSelectedIMGateway === 'function') {
-      const channel = await this.agent.startSelectedIMGateway();
-      if (channel === 'none') {
-        console.log('[ProtoClaw Runtime] • IM Gateway 未启动（未选择渠道），仅调试模式运行');
+    if (typeof this.agent.startPortalLines === 'function') {
+      const carriers = await this.agent.startPortalLines();
+      if (Array.isArray(carriers) && carriers.length === 0) {
+        console.log('[ProtoClaw Runtime] • IM Gateway 未启动（无已配置渠道的线路），仅调试模式运行');
       } else {
-        console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
-      }
-    } else if (typeof this.agent.startQQBotGateway === 'function') {
-      await this.agent.startQQBotGateway();
-      console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
-    } else {
-      const qqbotFeature = this.agent.features?.get?.('qqbot');
-      if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
-        await qqbotFeature.startGateway(this.agent);
-        console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+        console.log(`[ProtoClaw Runtime] ✓ 已启动门户线路 (${carriers.join(', ')})`);
       }
     }
   } catch (error) {
     console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
   }
-
-  // If this session is bound to an IM line, mount the carrier feature + gateway
-  await this.imBridge.mountIMLineCarrierIfBound();
 
   try {
     const dispatchFeature = this.agent.features?.get?.('claw-dispatch');

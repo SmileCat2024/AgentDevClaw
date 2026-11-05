@@ -1410,3 +1410,56 @@ describe('CallArbiter source identity passthrough (ADR-0031 step 1)', () => {
     assert.deepEqual(finished.outcome.consumedSourceRefs, ['cmd-2']);
   });
 });
+
+// ── 交付文本落到 envelope.result ──
+//
+// 真实 agent（走 onCallDetailed）返回的是 CallOutcome 对象，最终文本在
+// outcome.response；只有旧 onCall 路径直接返回字符串。两条路径都必须让
+// envelope.result 拿到交付文本——IM 网关、结果镜像、线程轮次事件的
+// resultText 全依赖它。曾因只判 typeof result === 'string' 让真实路径
+// 恒为空串，端到端实测才发现（turn.completed 缺 resultText）。
+describe('CallArbiter delivered text (envelope.result)', () => {
+  it('reads outcome.response when onCallDetailed returns a CallOutcome', async () => {
+    const agent = {
+      async onCallDetailed() {
+        return {
+          status: 'completed',
+          reason: 'completed',
+          response: 'SECOND_OK',
+          steps: 1,
+          startedAt: Date.now(),
+          finishedAt: Date.now(),
+        };
+      },
+      getLastCallOutcome: () => ({ status: 'completed', reason: 'completed', steps: 1 }),
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'thread', text: 'ping' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'completed');
+    assert.equal(finished.result, 'SECOND_OK', '交付文本必须来自 outcome.response');
+  });
+
+  it('still reads the plain string when the agent only implements onCall', async () => {
+    const agent = { onCall: async () => 'legacy-result' };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'ping' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.result, 'legacy-result', '旧路径语义不变');
+  });
+
+  it('empty outcome.response yields empty string, not undefined', async () => {
+    const agent = {
+      async onCallDetailed() {
+        return { status: 'completed', reason: 'completed', response: '', steps: 0 };
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'thread', text: 'silent' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.result, '', '空交付是空串，消费端据空串判无结果');
+  });
+});

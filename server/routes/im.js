@@ -6,8 +6,12 @@
  * Bundle aggregation & weixin binding    → im-workspace-bundle.js
  *
  * Dependencies injected via ctx (only needed inside setupIMRoutes):
- *   stopManagedAgent, requireAgentLight, startManagedAgent,
- *   waitForProcessExit, getAgentsLight, readViewerJson
+ *   getAgentsLight, readViewerJson
+ *
+ * ADR-0042 里程碑 1 之后本文件的职责变化：
+ *  - 线路绑定是线程寻址（boundTarget），不再是 boundSession；
+ *  - 配置变更热对账（notifyPortalReload），不再重启门户 runtime；
+ *  - 可绑目标是线程投影（threads 全局库派生），project adapter 路径退役。
  *
  * Exports for server.js consumption:
  *   readProjectIMWorkspaceConfig (re-export), getPortalAgentDisplayName (re-export),
@@ -19,11 +23,8 @@
 
 import { APP_QQBOT_CONFIG_PATH } from '../shared/constants.js';
 import { listAgentRuntimes } from '../shared/agent-access.js';
-import { readSessionIndex, readSessionIndexSync } from '../shared/session-access.js';
+import { readSessionIndex } from '../shared/session-access.js';
 import { sendIPCtoSession } from '../shared/ipc.js';
-import { resolveSessionModelInfo } from './model-config.js';
-import { getProjectAdapter } from './dispatch.js';
-import { getRuntimeExecutionState } from '../runtime-call-envelope.js';
 
 import {
   readProjectQQBotConfig,
@@ -58,15 +59,41 @@ export { getUsageContextTokens, findLine, resolveLineTransferConflict, resolveCa
 
 // ── Route setup ───────────────────────────────────────────────────
 
+/**
+ * 线路配置的规范化摘要——只保留影响「连哪条、绑到哪」的字段，用于判断
+ * 配置是否真的变了（名称、备注等纯展示字段的变化不该触发重连）。
+ */
+function describeLines(config) {
+  const lines = Array.isArray(config?.lines) ? config.lines : [];
+  return lines
+    .map((l) => ({
+      id: String(l?.id || ''),
+      carrier: String(l?.carrier || ''),
+      agentId: String(l?.boundTarget?.agentId || ''),
+      threadId: String(l?.boundTarget?.threadId || ''),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * 通知运行中的门户按新配置对账（热更新，不重启 runtime）。
+ * 返回收到消息的 runtime 数；门户未运行时为 0（下次启动自然按配置对账）。
+ */
+function notifyPortalReload() {
+  const runtimes = listAgentRuntimes('qqbot');
+  let delivered = 0;
+  for (const rt of runtimes) {
+    if (sendIPCtoSession('qqbot', rt?.selectedSessionId ?? null, { type: 'reload-im-lines' })) {
+      delivered += 1;
+    }
+  }
+  return delivered;
+}
+
 export function setupIMRoutes(app, express, ctx) {
-  const {
-    stopManagedAgent,
-    requireAgentLight,
-    startManagedAgent,
-    waitForProcessExit,
-    getAgentsLight,
-    readViewerJson,
-  } = ctx;
+  // ADR-0042 切片 E：runtime 重启路径已退役（线路热对接），ctx 里只剩这两个
+  // 仍被使用的依赖——routable targets 的运行时状态投影用到它们。
+  const { getAgentsLight, readViewerJson } = ctx;
 
   // ── QQBot Config ────────────────────────────────────────────────
 
@@ -117,11 +144,11 @@ export function setupIMRoutes(app, express, ctx) {
       const wecomConfig = await writeProjectWecomConfig(req.body?.wecomConfig || {});
       const rokidConfig = await writeProjectRokidConfig(req.body?.rokidConfig || {});
 
-      // ADR-0042：门户渠道 = 接线员线路 carrier。重启触发条件从 selectedChannel
-      // 变化改为首要接线员 carrier 变化（多线路并发连接到位前的过渡语义）。
-      const prevCarrier = operatorCarrierOf(prevConfig);
-      const newCarrier = operatorCarrierOf(workspaceConfig);
-      const channelChanged = newCarrier !== prevCarrier;
+      // 触发条件：任一路线的 carrier 或绑定目标发生变化（多线路并发下不再
+      // 只看接线员一条）。对账本身由门户 syncLines 幂等处理，这里只判断
+      // 「要不要通知它」。
+      const linesChanged = JSON.stringify(describeLines(prevConfig))
+        !== JSON.stringify(describeLines(workspaceConfig));
       let portalRestarted = false;
 
       // Carrier 互斥：保存的配置里线路间 carrier 冲突统一清理（接线员线路也是线路）
@@ -129,28 +156,16 @@ export function setupIMRoutes(app, express, ctx) {
         await writeProjectIMWorkspaceConfig(workspaceConfig);
       }
 
-      if (channelChanged) {
-        const runtimes = listAgentRuntimes('qqbot');
-        const running = runtimes.filter((rt) => rt?.process && rt.process.exitCode === null && !rt.stopped);
-        if (running.length > 0) {
-          await stopManagedAgent('qqbot');
-          for (const rt of running) {
-            await waitForProcessExit(rt.process);
-          }
-          if (newCarrier) {
-            // 接线员 carrier 切换到非空渠道: restart
-            try {
-              const agent = await requireAgentLight('qqbot');
-              await startManagedAgent(agent);
-              portalRestarted = true;
-              console.log(`[ProtoClaw IM] 接线员渠道切换: ${prevCarrier || '(空)'} → ${newCarrier}，门户代理已重启`);
-            } catch (restartErr) {
-              console.error('[ProtoClaw IM] 门户代理重启失败:', restartErr);
-            }
-          } else {
-            // 接线员线路清空: stop without restart
-            console.log('[ProtoClaw IM] 接线员线路已清空，门户代理已停止');
-          }
+      // ADR-0042 切片 E：线路是门户持有的多路平台连接，配置变更走热对账，
+      // 不再重启 runtime——重启会打断正在处理的轮次，也会让接线员对话断代。
+      // 门户不在运行时无需处理：下次启动按配置对账（配置即事实）。
+      if (linesChanged) {
+        const reloaded = notifyPortalReload();
+        if (reloaded > 0) {
+          portalRestarted = true;
+          console.log('[ProtoClaw IM] 线路配置已变更，门户按新配置对账');
+        } else {
+          console.log('[ProtoClaw IM] 线路配置已变更，门户未运行（下次启动生效）');
         }
       }
 
@@ -355,12 +370,45 @@ export function setupIMRoutes(app, express, ctx) {
             threadId: bound.threadId,
             threadTitle: t?.title || bound.threadId,
             status: t?.status || 'unknown',
+            updatedAt: typeof t?.updatedAt === 'number' ? t.updatedAt : null,
           };
         }
         return { id: l.id, name: l.name || l.id, carrier: l.carrier || null, boundThread };
       });
 
-      res.json({ workspaces: activeWorkspaces, lines });
+      // ADR-0042 决策 1：可绑目标 = 活跃线程投影（原 project adapter 路径退役）。
+      // workspaces 是接线员工具 im_browse 的消费形状——按 APP 分组成线程列表：
+      // 每个 APP 一个条目，threads[] 承载可绑的线程（含 head 会话的运行时状态）。
+      const runtimeBySession = new Map();
+      for (const agent of agents) {
+        const sid = String(agent.active_workspace_session_id || agent.runtimeSessionId || '').trim();
+        if (!sid) continue;
+        runtimeBySession.set(`${agent.id}::${sid}`, {
+          execStatus: agent.exec_status || agent.execStatus || 'idle',
+          modelName: agent.modelName || agent.model_name || '',
+        });
+      }
+      const grouped = new Map();
+      for (const t of threads) {
+        if (!grouped.has(t.agentId)) {
+          grouped.set(t.agentId, {
+            agentId: t.agentId,
+            agentName: t.agentName,
+            threads: [],
+          });
+        }
+        const runtime = runtimeBySession.get(`${t.agentId}::${t.headSessionId}`) || {};
+        grouped.get(t.agentId).threads.push({
+          ...t,
+          execStatus: runtime.execStatus || 'idle',
+          modelName: runtime.modelName || '',
+        });
+      }
+      const workspaces = [...grouped.values()]
+        .filter(ws => ws.threads.length > 0)
+        .sort((a, b) => (b.threads[0]?.updatedAt || 0) - (a.threads[0]?.updatedAt || 0));
+
+      res.json({ workspaces, lines });
     } catch (error) {
       next(error);
     }

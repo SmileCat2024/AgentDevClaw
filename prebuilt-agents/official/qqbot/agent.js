@@ -19,6 +19,7 @@ import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { ConversationExportFeature } from '../../../local-features/dist/conversation-export/src/index.js';
+import { createPortalLines } from './portal-lines.js';
 import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
 import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { getIMChannelLabel } from '../../../server/shared/im-channels.js';
@@ -175,7 +176,6 @@ class IMOperatorFeature {
             if (lines.length === 0) {
               return { text: `当前没有配置任何 IM 线路。\n（当前时间: ${now}）`, lines: [] };
             }
-            const fmtTokens = (n) => n != null ? n.toLocaleString() : '?';
             const fmtAgo = (ms) => {
               if (!ms) return '?';
               const diff = Date.now() - ms;
@@ -184,33 +184,19 @@ class IMOperatorFeature {
               if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
               return `${Math.floor(diff / 86_400_000)}天前`;
             };
-            const execLabel = (s) => {
-              if (s === 'running') return '忙（处理中）';
-              if (s === 'queued') return '排队中';
-              return '空闲';
-            };
+            // ADR-0042 决策 1：线路投影为 boundThread（线程寻址）。运行时状态
+            // 在 im_browse 的线程投影里给出，线路摘要只报绑定事实与线程状态。
             const summary = lines.map(l => {
               const carrierLabel = l.carrier ? getIMChannelLabel(l.carrier) : '未配置';
-              const bound = l.boundSession;
+              const bound = l.boundThread;
               if (!bound) {
                 return `- **${l.name}** [${carrierLabel}]: 空闲（未连接）`;
               }
-              const model = bound.modelName || '未知';
-              const ctxPct = bound.contextUsagePct != null ? `${bound.contextUsagePct}%` : '?';
-              const ctxDetail = bound.contextTokens != null && bound.contextLength
-                ? `${fmtTokens(bound.contextTokens)}/${fmtTokens(bound.contextLength)}`
-                : '?';
-              const threshold = bound.compressRatio != null ? `${bound.compressRatio}%` : '?';
-              const warn = bound.contextUsagePct != null && bound.compressRatio != null
-                && bound.contextUsagePct >= bound.compressRatio ? ' ⚠️已达压缩阈值' : '';
-              const exec = execLabel(bound.execStatus);
-              const lastActive = fmtAgo(bound.savedAt);
-              const workdirLine = bound.workdir ? `\n  工作目录: ${bound.workdir}` : '';
+              const lastActive = fmtAgo(bound.updatedAt);
+              const statusLabel = bound.status === 'closed' ? '已关闭' : '进行中';
               return (
-                `- **${l.name}** [${carrierLabel}]: 已连接 → ${bound.sessionTitle || bound.sessionId} (${bound.agentId})\n` +
-                `  状态: ${exec} | 最后活动: ${lastActive}\n` +
-                `  模型: ${model} | 上下文: ${ctxDetail} (${ctxPct}) | 压缩阈值: ${threshold}${warn}` +
-                workdirLine
+                `- **${l.name}** [${carrierLabel}]: 已连接 → ${bound.threadTitle || bound.threadId} (${bound.agentId})\n` +
+                `  线程状态: ${statusLabel} | 最后活动: ${lastActive} | threadId: ${bound.threadId}`
               );
             });
             return {
@@ -226,7 +212,7 @@ class IMOperatorFeature {
         name: 'im_browse',
         parallelizable: true,
         render: { call: 'im-browse', result: 'im-browse' },
-        description: '列出所有可连接的工作空间会话。返回每个工作空间下的项目和在线会话，包含模型名称、上下文用量、压缩阈值等运行时状态，以及 im_connect_line 所需的 agentId 和 sessionId。',
+        description: '列出所有可连接的线程。按工作空间分组返回非终态线程（含模型、运行状态、最后活动时间），以及 im_connect_line 所需的 agentId 和 threadId。',
         parameters: {
           type: 'object',
           properties: {},
@@ -239,9 +225,8 @@ class IMOperatorFeature {
             const data = await resp.json();
             const workspaces = data.workspaces || [];
             if (workspaces.length === 0) {
-              return { text: '当前没有在线的工作空间会话。', sessions: [] };
+              return { text: '当前没有可连接的线程。', sessions: [] };
             }
-            const fmtTokens = (n) => n != null ? n.toLocaleString() : '?';
             const fmtAgo = (ms) => {
               if (!ms) return '?';
               const diff = Date.now() - ms;
@@ -257,52 +242,34 @@ class IMOperatorFeature {
             };
             const lines = [];
             const flatSessions = [];
+            // ADR-0042 决策 1：可绑目标是线程（workspaces[].threads），不再是
+            // 「项目 → 运行中会话」。运行时状态按 head 会话投影给出。
             for (const ws of workspaces) {
-              for (const project of ws.projects) {
-                for (const session of (project.runningSessions || [])) {
-                  const model = session.modelName || '未知';
-                  const ctxPct = session.contextUsagePct != null ? `${session.contextUsagePct}%` : '?';
-                  const ctxDetail = session.contextTokens != null && session.contextLength
-                    ? `${fmtTokens(session.contextTokens)}/${fmtTokens(session.contextLength)}`
-                    : '?';
-                  const threshold = session.compressRatio != null ? `${session.compressRatio}%` : '?';
-                  const msgCount = session.messageCount != null ? session.messageCount : '?';
-                  const warn = session.contextUsagePct != null && session.compressRatio != null
-                    && session.contextUsagePct >= session.compressRatio ? ' ⚠️已达压缩阈值' : '';
-                  const exec = execLabel(session.execStatus);
-                  const lastActive = fmtAgo(session.savedAt);
-                  const queueInfo = session.execQueueLength > 0 ? ` | 队列: ${session.execQueueLength}` : '';
-                  const workdirLine = session.workdir ? `\n  工作目录: ${session.workdir}` : '';
-                  lines.push(
-                    `- 工作空间: ${ws.name} | agentId: ${ws.agentId}\n` +
-                    `  会话: ${session.title} | sessionId: ${session.id}\n` +
-                    `  状态: ${exec}${queueInfo} | 最后活动: ${lastActive}\n` +
-                    `  模型: ${model} | 上下文: ${ctxDetail} (${ctxPct}) | 压缩阈值: ${threshold} | 消息数: ${msgCount}${warn}` +
-                    workdirLine
-                  );
-                  flatSessions.push({
-                    agentId: ws.agentId,
-                    agentName: ws.name,
-                    sessionId: session.id,
-                    sessionTitle: session.title,
-                    modelName: model,
-                    contextTokens: session.contextTokens ?? null,
-                    contextLength: session.contextLength ?? null,
-                    contextUsagePct: session.contextUsagePct ?? null,
-                    compressRatio: session.compressRatio ?? null,
-                    messageCount: session.messageCount ?? null,
-                    tokenUsage: session.tokenUsage ?? null,
-                    sessionType: session.sessionType ?? null,
-                    execStatus: session.execStatus ?? null,
-                    execQueueLength: session.execQueueLength ?? 0,
-                    workdir: session.workdir ?? null,
-                    savedAt: session.savedAt ?? null,
-                  });
-                }
+              for (const thread of (ws.threads || [])) {
+                const model = thread.modelName || '未知';
+                const exec = execLabel(thread.execStatus);
+                const lastActive = fmtAgo(thread.updatedAt);
+                lines.push(
+                  `- 工作空间: ${ws.agentName} | agentId: ${ws.agentId}\n` +
+                  `  线程: ${thread.title} | threadId: ${thread.threadId}\n` +
+                  `  状态: ${exec} | 线程状态: ${thread.status === 'closed' ? '已关闭' : '进行中'} | 最后活动: ${lastActive}\n` +
+                  `  模型: ${model} | head 会话: ${thread.headSessionId}`
+                );
+                flatSessions.push({
+                  agentId: ws.agentId,
+                  agentName: ws.agentName,
+                  threadId: thread.threadId,
+                  title: thread.title,
+                  headSessionId: thread.headSessionId,
+                  status: thread.status,
+                  modelName: model,
+                  execStatus: thread.execStatus ?? null,
+                  updatedAt: thread.updatedAt ?? null,
+                });
               }
             }
             return {
-              text: `可连接的在线会话（${IMOperatorFeature.nowStr()}）：\n${lines.join('\n')}\n\n使用 im_connect_line 并传入 lineId、agentId、sessionId 即可接线。`,
+              text: `可连接的线程（${IMOperatorFeature.nowStr()}）：\n${lines.join('\n')}\n\n使用 im_connect_line 并传入 lineId、agentId、threadId 即可接线。`,
               sessions: flatSessions,
             };
           } catch (err) {
@@ -313,20 +280,20 @@ class IMOperatorFeature {
       {
         name: 'im_connect_line',
         render: { call: 'im-line', result: 'im-line' },
-        description: '将指定线路连接到目标会话。连接后该线路的 IM 消息将由目标会话处理。先用 im_overview 获取 lineId，用 im_browse 获取 agentId 和 sessionId。',
+        description: '将指定线路连接到目标线程。连接后该线路的 IM 消息将由目标线程处理，线程接续时绑定不失效。先用 im_overview 获取 lineId，用 im_browse 获取 agentId 和 threadId。',
         parameters: {
           type: 'object',
           properties: {
             lineId: { type: 'string', description: '线路 ID，来自 im_overview 返回的 lines[].id（如 line1、line2）' },
             agentId: { type: 'string', description: '目标工作空间 ID，来自 im_browse 返回的 agentId（如 programming-helper）' },
-            sessionId: { type: 'string', description: '目标会话 ID，来自 im_browse 返回的 sessionId' },
+            threadId: { type: 'string', description: '目标线程 ID，来自 im_browse 返回的 threadId' },
           },
-          required: ['lineId', 'agentId', 'sessionId'],
+          required: ['lineId', 'agentId', 'threadId'],
         },
         execute: async (args) => {
-          const { lineId, agentId, sessionId } = args || {};
-          if (!lineId || !agentId || !sessionId) {
-            return { error: '参数不完整，需要 lineId、agentId、sessionId。' };
+          const { lineId, agentId, threadId } = args || {};
+          if (!lineId || !agentId || !threadId) {
+            return { error: '参数不完整，需要 lineId、agentId、threadId。' };
           }
           try {
             const targetsResp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_routable_targets`, { headers: internalAuthHeaders() });
@@ -339,13 +306,13 @@ class IMOperatorFeature {
             const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_line_transfer`, {
               method: 'POST',
               headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
-              body: JSON.stringify({ lineId, carrier: line.carrier, agentId, sessionId }),
+              body: JSON.stringify({ lineId, carrier: line.carrier, agentId, threadId }),
             });
             const result = await resp.json();
             if (!resp.ok) {
               return { error: result.error || `连接失败 (${resp.status})` };
             }
-            return { text: `线路「${line.name}」已连接到 ${agentId}::${sessionId}。\n（操作时间: ${IMOperatorFeature.nowStr()}）`, success: true };
+            return { text: `线路「${line.name}」已连接到线程 ${threadId}（${agentId}）。\n（操作时间: ${IMOperatorFeature.nowStr()}）`, success: true };
           } catch (err) {
             return { error: `连接失败: ${err.message}` };
           }
@@ -396,8 +363,9 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
   weixinBotFeature;
   imWorkspaceConfigPath;
   _callArbiter = null;
-  _activeIMChannel = null;
-  _lastIMTarget = null;
+  /** ADR-0042 决策 2：线路状态按线路记账，由 _portalLines 持有；
+   *  单值 _activeIMChannel / _lastIMTarget 已退役（多线路并发会互相覆盖）。 */
+  _portalLines = null;
 
   constructor(config = {}) {
     const systemConfig = readSystemFeatureConfig();
@@ -479,6 +447,21 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
       this.use(new IMOperatorFeature());
       this.use(new ConversationExportFeature());
+
+      // ADR-0042 决策 2：门户线路运行时——多线路并发连接、按线路入站分发、
+      // 轮次事件出站。构造期只装配依赖，连接在 startPortalLines 里按配置对账。
+      this._portalLines = createPortalLines({
+        agent: this,
+        serverOrigin: SERVER_ORIGIN,
+        portalAgentId: config.runtime?.agentId
+          || process.env.PROTOCLAW_PREBUILT_AGENT_ID
+          || 'qqbot',
+        logger: (message, level) => {
+          if (level === 'error') console.error(`[PortalAgent] ${message}`);
+          else if (level === 'warn') console.warn(`[PortalAgent] ${message}`);
+          else console.log(`[PortalAgent] ${message}`);
+        },
+      });
     }
   }
 
@@ -486,284 +469,44 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     this._callArbiter = arbiter;
   }
 
-  async sendIMMessage(text) {
-    if (!this._activeIMChannel) {
-      console.warn('[PortalAgent] sendIMMessage: no active IM channel');
-      return false;
-    }
-
-    if (!this._lastIMTarget?.userId) {
-      console.warn('[PortalAgent] sendIMMessage: no known IM peer');
-      return false;
-    }
-
-    try {
-      if (this._activeIMChannel === 'weixin' && this.weixinBotFeature) {
-        const apiClient = this.weixinBotFeature.apiClient;
-        if (apiClient && typeof apiClient.sendTextMessage === 'function') {
-          await apiClient.sendTextMessage(
-            this._lastIMTarget.userId,
-            text,
-            this._lastIMTarget.contextToken || '',
-          );
-          return true;
-        }
-        return false;
-      }
-
-      if (this._activeIMChannel === 'qq' && this.qqbotFeature) {
-        console.log(`[PortalAgent] IM result (qq, user=${this._lastIMTarget.userId}): ${text.slice(0, 100)}`);
-        return false;
-      }
-
-      if (this._activeIMChannel === 'feishu' && this.feishuBotFeature) {
-        await this.feishuBotFeature.sendTextMessage(
-          this._lastIMTarget.userId,
-          this._lastIMTarget.receiveIdType || 'open_id',
-          text,
-        );
-        return true;
-      }
-
-      if (this._activeIMChannel === 'wecom' && this.wecomBotFeature) {
-        await this.wecomBotFeature.sendTextMessage(this._lastIMTarget.userId, text);
-        return true;
-      }
-
-      if (this._activeIMChannel === 'rokid' && this.rokidBotFeature) {
-        return await this.rokidBotFeature.sendTextMessage(this._lastIMTarget.userId, text);
-      }
-
-      return false;
-    } catch (err) {
-      console.error('[PortalAgent] sendIMMessage failed:', err);
-      return false;
-    }
+  /** 当前门户线路运行时（懒建于首次启动，见 startPortalLines）。 */
+  getPortalLines() {
+    return this._portalLines;
   }
 
-  setLastIMTarget(userId, contextToken) {
-    this._lastIMTarget = { userId, contextToken: contextToken || '' };
+  /**
+   * 启动门户 IM 线路（ADR-0042 决策 2/3/4）。
+   *
+   * 门户持有全部线路的平台连接，不再向目标 runtime 挂载体。启动即按配置
+   * 对账：连上每条配了 carrier 的线路，随后开始订阅线程轮次事件作为出站
+   * 通道。返回已连接的 carrier 列表（空数组表示没有任何线路配置）。
+   */
+  async startPortalLines() {
+    if (!this._portalLines) return [];
+    const config = readIMWorkspaceConfig(this.imWorkspaceConfigPath);
+    const lines = (config.lines || []).filter((l) => l && String(l.carrier || '').trim());
+    if (lines.length === 0) {
+      console.log('[PortalAgent] 无已配置渠道的线路，跳过 Gateway 启动（仅调试模式运行）');
+      return [];
+    }
+    const { connected } = await this._portalLines.syncLines(lines);
+    this._portalLines.startOutboundListener();
+    const carriers = connected.map((c) => c.carrier);
+    console.log(`[PortalAgent] 门户线路已启动: ${carriers.join(', ') || 'none'}`);
+    return carriers;
   }
 
-  getActiveIMChannel() {
-    return this._activeIMChannel || null;
-  }
-
-  async startQQBotGateway() {
-    await this.qqbotFeature.startGateway(this);
-    this._activeIMChannel = 'qq';
-    if (this._callArbiter && this.qqbotFeature) {
-      // agentRef.onCall 签名须与框架 Agent.onCall(input, images, activations, metadata) 对齐：
-      // feature 侧统一以第 4 参传 turn metadata（兼容 agentRef 即 Agent 实例的直连路径），
-      // 宿主闭包以第 4 形参接收，忽略中间两个占位参数。
-      this.qqbotFeature.agentRef = {
-        onCall: async (text, _images, _activations, metadata) => {
-          const entry = this._callArbiter.enqueue({
-            source: 'qq',
-            sourceRef: metadata?.qqbot?.senderId || '',
-            text,
-            ...(metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0
-              ? { metadata }
-              : {}),
-          });
-          const finished = await this._callArbiter.waitForCompletion(entry.id);
-          if (finished.status === 'failed') {
-            throw new Error(finished.error || 'unknown error');
-          }
-          return finished.result || '处理完成';
-        },
-      };
-    }
-  }
-
-  async startWeixinBotGateway() {
-    const weixinBot = this.weixinBotFeature;
-    if (weixinBot && typeof weixinBot.handleMessage === 'function') {
-      const originalHandleMessage = weixinBot.handleMessage.bind(weixinBot);
-      weixinBot.handleMessage = async (msg) => {
-        if (msg && msg.from_user_id) {
-          this.setLastIMTarget(msg.from_user_id, msg.context_token);
-        }
-        if (!this._callArbiter) {
-          return originalHandleMessage(msg);
-        }
-        if (!msg || msg.message_type !== 1) {
-          return;
-        }
-        const text = WeixinApiClient.extractText(msg);
-        if (!text) {
-          return;
-        }
-
-        // CallStart 上下文由 turn metadata（buildTurnMetadata）派生，这里只重置待发送媒体
-        weixinBot._pendingMedia = [];
-
-        try {
-          const turnMetadata = weixinBot.buildTurnMetadata(msg);
-          const entry = this._callArbiter.enqueue({
-            source: 'weixin',
-            sourceRef: msg.from_user_id || '',
-            text,
-            ...(turnMetadata && typeof turnMetadata === 'object' && Object.keys(turnMetadata).length > 0
-              ? { metadata: turnMetadata }
-              : {}),
-          });
-          const finished = await this._callArbiter.waitForCompletion(entry.id);
-          const responseText = finished.status === 'failed'
-            ? `处理失败: ${finished.error || '未知错误'}`
-            : (finished.result || '');
-
-          // 发送文本回复
-          if (responseText) {
-            await weixinBot.apiClient.sendTextMessage(
-              msg.from_user_id,
-              responseText,
-              msg.context_token,
-            );
-          }
-
-          // flush 所有待发送的媒体附件
-          await weixinBot.flushPendingMedia();
-        } finally {
-          weixinBot._pendingMedia = [];
-        }
-      };
-    }
-
-    await weixinBot.startGateway(this);
-    this._activeIMChannel = 'weixin';
-  }
-
-  async startFeishuBotGateway() {
-    const feishuBot = this.feishuBotFeature;
-    await feishuBot.startGateway(this);
-    this._activeIMChannel = 'feishu';
-    if (this._callArbiter && feishuBot) {
-      feishuBot.agentRef = {
-        onCall: async (text, _images, _activations, metadata) => {
-          // 捕获当前 IM 目标，供 sendIMMessage（调度结果投递）使用
-          if (feishuBot._currentTurnCtx) {
-            this._lastIMTarget = {
-              userId: feishuBot._currentTurnCtx.receiveId,
-              contextToken: '',
-              receiveIdType: feishuBot._currentTurnCtx.receiveIdType,
-            };
-          }
-          const entry = this._callArbiter.enqueue({
-            source: 'feishu',
-            sourceRef: metadata?.['feishu-bot']?.senderId || '',
-            text,
-            ...(metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0
-              ? { metadata }
-              : {}),
-          });
-          const finished = await this._callArbiter.waitForCompletion(entry.id);
-          if (finished.status === 'failed') {
-            throw new Error(finished.error || 'unknown error');
-          }
-          return finished.result || '处理完成';
-        },
-      };
-    }
-  }
-
-  async startWecomBotGateway() {
-    const wecomBot = this.wecomBotFeature;
-    await wecomBot.startGateway(this);
-    this._activeIMChannel = 'wecom';
-    if (this._callArbiter && wecomBot) {
-      wecomBot.agentRef = {
-        onCall: async (text, _images, _activations, metadata) => {
-          // 捕获当前 IM 目标，供 sendIMMessage（调度结果投递）使用
-          if (wecomBot._currentTurnCtx) {
-            this._lastIMTarget = {
-              userId: wecomBot._currentTurnCtx.chatId,
-              contextToken: '',
-            };
-          }
-          const entry = this._callArbiter.enqueue({
-            source: 'wecom',
-            sourceRef: metadata?.['wecom-bot']?.senderId || '',
-            text,
-            ...(metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0
-              ? { metadata }
-              : {}),
-          });
-          const finished = await this._callArbiter.waitForCompletion(entry.id);
-          if (finished.status === 'failed') {
-            throw new Error(finished.error || 'unknown error');
-          }
-          return finished.result || '处理完成';
-        },
-      };
-    }
-  }
-
-  async startRokidBotGateway() {
-    const rokidBot = this.rokidBotFeature;
-    // Rokid 设备没有"carrier 配置就绪"的预检，但 linkCode/linkSecret 缺失时
-    // startGateway 会抛错。这里允许抛出，由上层调用方决定降级策略。
-    await rokidBot.startGateway(this);
-    this._activeIMChannel = 'rokid';
-    if (this._callArbiter && rokidBot) {
-      rokidBot.agentRef = {
-        onCall: async (text, _images, _activations, metadata) => {
-          // 捕获当前 turn 上下文，供 sendIMMessage（调度结果投递）使用
-          if (rokidBot._currentTurnCtx) {
-            this._lastIMTarget = {
-              userId: rokidBot._currentTurnCtx.accountId,
-              contextToken: '',
-            };
-          }
-          const entry = this._callArbiter.enqueue({
-            source: 'rokid',
-            sourceRef: metadata?.['rokid-bot']?.senderId || '',
-            text,
-            ...(metadata && typeof metadata === 'object' && Object.keys(metadata).length > 0
-              ? { metadata }
-              : {}),
-          });
-          const finished = await this._callArbiter.waitForCompletion(entry.id);
-          if (finished.status === 'failed') {
-            throw new Error(finished.error || 'unknown error');
-          }
-          return finished.result || '处理完成';
-        },
-      };
-    }
-  }
-
-  async startSelectedIMGateway() {
-    const workspaceConfig = readIMWorkspaceConfig(this.imWorkspaceConfigPath);
-    const carrier = workspaceConfig.operatorCarrier;
-    if (!carrier) {
-      console.log('[PortalAgent] 无接线员线路（未选渠道），跳过 Gateway 启动（仅调试模式运行）');
-      return 'none';
-    }
-    // ADR-0042：门户渠道 = 接线员线路的 carrier。多线路并发连接在投递切换
-    // （里程碑 1 切片 E）落地，当前取首要接线员 carrier。
-    if (carrier === 'weixin') {
-      await this.startWeixinBotGateway();
-      return 'weixin';
-    }
-
-    if (carrier === 'feishu') {
-      await this.startFeishuBotGateway();
-      return 'feishu';
-    }
-
-    if (carrier === 'wecom') {
-      await this.startWecomBotGateway();
-      return 'wecom';
-    }
-
-    if (carrier === 'rokid') {
-      await this.startRokidBotGateway();
-      return 'rokid';
-    }
-
-    await this.startQQBotGateway();
-    return 'qq';
+  /**
+   * 运行期线路变更后的对账入口（改完配置调用）。只重连变化，已连线路的
+   * 平台连接不重建。
+   */
+  async reloadPortalLines() {
+    if (!this._portalLines) return null;
+    const config = readIMWorkspaceConfig(this.imWorkspaceConfigPath);
+    const lines = (config.lines || []).filter((l) => l && String(l.carrier || '').trim());
+    const { connected } = await this._portalLines.syncLines(lines);
+    this._portalLines.startOutboundListener();
+    return connected;
   }
 
   async onInitiate(ctx) {
@@ -819,13 +562,16 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
         required: ['path'],
       },
       execute: async (args) => {
-        if (this._activeIMChannel === 'weixin' && wxUploadTool) {
+        // ADR-0042：多线路并发下不再有单一活跃渠道——按已连接的线路找可用
+        // 的上传入口（QQ 是默认渠道，未连时仍回落它，与历史行为一致）。
+        const connectedCarriers = (this._portalLines?.snapshot() || []).map((line) => line.carrier);
+        if (connectedCarriers.includes('weixin') && wxUploadTool) {
           return wxUploadTool.execute(args);
         }
-        if (this._activeIMChannel === 'feishu' && fsUploadTool) {
+        if (connectedCarriers.includes('feishu') && fsUploadTool) {
           return fsUploadTool.execute(args);
         }
-        if (this._activeIMChannel === 'wecom' && wcUploadTool) {
+        if (connectedCarriers.includes('wecom') && wcUploadTool) {
           return wcUploadTool.execute(args);
         }
         if (qqUploadTool) {

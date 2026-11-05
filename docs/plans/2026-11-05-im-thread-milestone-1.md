@@ -1,7 +1,7 @@
 # IM 渠道线程化 — 里程碑 1 实施计划
 
 日期：2026-11-05
-状态：进行中（A–D 已落地待评审，E/F 未开工）
+状态：A–E 已落地；F 端到端已在隔离实例跑通，待真实 IM 平台侧手测
 决策依据：[ADR-0042](../adr/0042-im-channel-thread-binding.md) 里程碑 1（两个线程化 + 通路切换，联合交付锁死形态）
 
 ## 实施进度（2026-11-05）
@@ -10,7 +10,8 @@
 - **B 线路模型**：完成。`boundTarget` 替换 `boundSession`；`selectedChannel` 归一并入门户线路（固定 id `portal`）；`resolveLineTransferConflict` 单一互斥；prune 改按线程事实。消费方（agent-discovery / agent-lifecycle / dispatch-engine / im-workspace-bundle / im.js）全部切换。
 - **C 线程投影与校验**：完成。`im_routable_targets` 改 `core.listThreads()` 线程投影（剔终态/归档/删除中）；`im_line_transfer` 线程寻址 + 接受性同源校验（`_threadAcceptanceVerdict`），mount/unmount IPC 副作用删除；`im_line_binding` 死端点删除；qqbot `agent.js` 配置读取切新模型（多线路并发留 E）；`im-data-pipelines.test.js` 按新契约更新。
 - **D 轮次结果事件**：完成。`turn-event-mapping` 加法式 `resultText`（envelope.result）；`thread-routes` 落板后发布 `thread.turn-*` SSE 帧 + `onTurnTerminalFact` 订阅钩子（DI）；OS 通知出口接入（`observeThreadTurnFact`：completed/failed 投递带线程身份与 200 字交付摘要，cancelled 跳过，轮次级 dedupe；快照路径对线程宿主 finish 让位防双通知）；3 个测试文件 66 用例 + 4 组变异验证。
-- **E 门户投递切换与载体退役 / F 联合验收**：未开工（等 A–D 评审）。
+- **E 门户投递切换与载体退役**：完成。新建 `prebuilt-agents/official/qqbot/portal-lines.js`（门户线路运行时：多线路并发连接、按 boundTarget 入站分发、SSE 轮次事件出站、线路级对端记账）；qqbot `agent.js` 以 `startPortalLines` / `reloadPortalLines` 取代单渠道 `startSelectedIMGateway` 与五个 `start<Carrier>BotGateway`；`runtime-im-bridge.js` 缩为 `createRuntimeIPC`（只留 todo-control），`mountCarrierFeature` / `mountIMLineCarrierIfBound` / `dispatchIMCallFinish` 与 mount/unmount-im-carrier IPC 全部退役；`run-prebuilt-agent.js` 接 `startPortalLines` 与 `reload-im-lines` 热对账；`im.js` 的 PUT 从「重启 runtime」改为「通知门户对账」；接线员工具 `im_overview` / `im_browse` / `im_connect_line` 全部切线程词汇；`metadata.json` 临时声明 `contextRotationStrategy: adaptive`。19 条新单测 + 4 组变异验证。
+- **F 联合验收**：端到端已跑通（见下节实测记录）；剩余为真实 IM 平台侧实测（需在 QQ/飞书客户端发消息）。
 
 实施中发现并修复：server.js 重复 import `readProjectIMWorkspaceConfig`（B/C 期间引入，node --check 暴露）。
 
@@ -77,15 +78,19 @@
 
 ### E. 门户投递切换、出站与载体退役（任务 #15）
 
-改动：
-- qqbot agent.js：
-  - `startSelectedIMGateway` → `startLineGateways`：读 lines（含 portal 线路），逐线路启动载体 gateway（同载体互斥由配置归一保证）。出站状态 `_activeIMChannel`/`_lastIMTarget` 单值 → 按线路 Map（lineId → {carrier, peer}）。
-  - 入站分发：gateway 消息回调按载体定位线路 → 解析 boundTarget。目标为 operatorThreadId（接线员线程）→ 门户 CallArbiter（现状路径）；外部线程 → `POST /protoclaw/threads/:threadId/input`（internalAuthHeaders，source=载体 id，sourceRef=**消息级唯一标识**，见幂等键基线）。
-  - 出站：`handleIPCMessage` 增 `im-thread-turn` 分支——按 {lineId, resultText, status} 经该线路载体 gateway 发送；截断与错误文案 IM_REPLY_POLICY 从 runtime-im-bridge.js 搬到门户侧。`sendIMMessage` 单值语义并入按线路发送。
-- server：新建 im-thread-relay（挂 thread_events 归并发布处）——turn 终态事件 → 匹配 boundTarget.threadId 的线路 → `sendIPCtoSession` 到门户 runtime `{type:'im-thread-turn', lineId, threadId, status, resultText}`。
-- 退役：runtime-im-bridge.js 删 `mountCarrierFeature` / `mountIMLineCarrierIfBound` / `dispatchIMCallFinish` 与 mount/unmount-im-carrier IPC 分支（todo-control 保留）；im.js 删对应 IPC 调用与重试；`/protoclaw/im_line_binding` 仅保留前端显示用途。
+实现（与初稿设计的差异已注明）：
+- qqbot `portal-lines.js`（新建）：门户线路运行时。
+  - 连接管理：`syncLines(lines)` 按配置对账——连新增/变更线路、断已移除线路；同线路重复对账不重连平台连接，改绑目标只更新 `boundTarget`。
+  - 入站分发：按 carrier 定位线路 → `boundTarget` 是接线员线程（agentId === 门户自身）或未绑定时交门户 CallArbiter，结果作为回调返回值同步回平台（与历史单渠道行为一致）；外部线程则 `POST /protoclaw/threads/:threadId/input`，回「已收到，处理中…」，结果稍后经出站送达。
+  - 幂等键：`sourceRef` 取消息级唯一 ID（QQ/飞书 `messageId`、微信 `msg_id`），缺失时合成「发送者+时间戳+文本摘要」。**不能用 senderId**——框架 `appendCommand` 命中 pending 或 delivered 同键都判重复，同对端连发第二条会被静默吞掉。
+  - 出站：门户自建 SSE 订阅（`GET /protoclaw/events?threads=*`，带 `Last-Event-ID` 断线续传），命中本门户绑定的**外部**线程时经该线路发回。**与原设计的差异**：没有新建 server 侧 relay + IPC 推送，直接用切片 D 已发布的线程轮次事件面——少一个模块、少一条 IPC 路径，且 SSE 的环形缓冲 + Last-Event-ID 天然覆盖「出站时门户短暂离线」的重连补帧。截断与错误文案 `PORTAL_REPLY_POLICY` 从 runtime-im-bridge 迁入门户。
+  - 接线员线程不出站：结果已在入站同步返回，再发一次是重复（`handleTurnFact` 的 portalAgentId 守卫，已被变异验证覆盖）。
+- qqbot `agent.js`：`startPortalLines` / `reloadPortalLines` 取代 `startSelectedIMGateway` 与五个 `start<Carrier>BotGateway`；`_activeIMChannel` / `_lastIMTarget` 单值退役为 `_portalLines`；上传工具按已连接线路判定渠道。
+- `runtime-im-bridge.js` → `createRuntimeIPC`：只留 `todo-control`；`mountCarrierFeature` / `mountIMLineCarrierIfBound` / `dispatchIMCallFinish` 与 mount/unmount-im-carrier IPC 全部删除。
+- `run-prebuilt-agent.js`：接 `startPortalLines`，新增 `reload-im-lines` IPC 分支做配置热对账。
+- `im.js`：PUT bundle 的「重启 runtime」改为「通知门户对账」（`notifyPortalReload`），重启 4 个依赖随之从解构中移除；`im_routable_targets` 补齐 `workspaces` 线程投影（修复此前替换时漏定义的 `activeWorkspaces`）。
 
-验收：外部线程绑定线路上发消息，消息入 Thread Inbox 并触发处理（runtime 未起时唤醒）；轮次完成后结果文本回到 IM 对端；接线员线路行为与现状一致；仓库内无 mount-im-carrier 残留引用。
+验收（单测已覆盖；端到端见下节实测记录）：外部线程绑定线路上发消息入 Thread Inbox 并触发处理（runtime 未起时唤醒）；轮次完成后结果文本回到 IM 对端；接线员线路行为与现状一致；仓库内无 mount-im-carrier 残留引用（已确认）。
 
 ### F. 联合验收（任务 #16）
 
@@ -94,6 +99,26 @@
 2. 接线员对话以线程身份呈现（侧栏、裁剪、接续与 coder 同口径），门户 runtime 重启后接线员线程引用稳定。
 3. 目标线程接续窗口（trim/换代中）内到达的 IM 消息经 Inbox 暂存，换头后补投不丢。
 4. 相关单测全绿：im-config / im 路由 / turn-event / input-gateway 既有测试按新形状更新，新增接线员线程事务与 relay 测试。
+
+## 端到端实测记录（2026-11-05，隔离实例）
+
+方法：`AGENTDEV_DATA_DIR=D:/tmp/claw-exp PORT=1521 AGENTDEV_VIEWER_PORT=2031` 起独立实例，与在用实例的数据和端口完全隔离；复制 `default.json` / `presets.json` / `model-connections.json` 以获得真实模型（不复制任何会话与线程数据）。全部经真实 HTTP 端点驱动，未 stub。
+
+已验证的事实：
+
+1. **建会话自动建线程**：`POST /protoclaw/prebuilt_sessions {agentId:qqbot}` 响应直接返回 `threadId: wt-…`，`/protoclaw/threads` 同步出现 `agentId=qqbot` 的 open 线程。`threadHost` 声明生效。
+2. **可绑定目标是线程**：`/protoclaw/im_routable_targets` 返回 `workspaces[].threads[]` 投影（含 title/status/headSessionId/execStatus），qqbot 线程在列——不再受 ProjectAdapter 白名单限制。
+3. **线路绑定线程寻址**：`POST /protoclaw/im_line_transfer {lineId, carrier, agentId, threadId}` 落盘为 `boundTarget:{agentId,threadId}`。注意契约要求 `carrier` 与 `agentId/threadId` 同时给，只给后者会走清除分支。
+4. **线程投递与幂等**：`POST /protoclaw/threads/:id/input` 返回 `delivery: thread_queued`；同 `sourceRef` 重发判 `duplicate: true`，不同 `sourceRef` 正常入箱。证实门户必须以消息级 ID 作 `sourceRef`。
+5. **换代窗口不丢消息**：服务重启后投递返回 `delivered: 0, reason: runtime_not_accepting`，命令留在 Inbox；head runtime 拉起后自动补投，终态 `delivered`。
+6. **轮次交付文本回流**：`turn.completed` 事件与 `thread.turn-completed` SSE 帧均携带 `resultText`，值等于模型真实回复（`SECOND_OK` / `THIRD_OK` / `FOURTH_OK`），`sourceRef` 对应投递指令。门户出站消费的正是这一帧。
+
+实测暴露并修复的两个缺陷（单测均已补，变异验证通过）：
+
+- **`envelope.result` 恒为空串**：`CallArbiter` 在引入 `onCallDetailed` 后仍用 `typeof result === 'string'` 取交付文本，而该路径返回 `CallOutcome` 对象（文本在 `outcome.response`），导致真实 agent 的 `resultText` 永远缺席——切片 D 的功能对 IM 完全无效。修复：两条路径统一落到 `envelope.result`。既有桩 agent 只实现 `onCall` 返回字符串，故旧测试全绿却漏掉了真实路径。
+- **空 `receptionistSessionId` 被兜底成 `'default'`**：`sanitizeSessionFragment` 对空串返回 `'default'`，升级迁移会拿它当真实旧会话去归档。修复：先判空再 slug 化，空保持空。
+
+未覆盖：真实 IM 平台侧（QQ/飞书客户端发消息 → 门户入站 → 出站回到客户端）需在配置了平台凭证的实例上手测；隔离实例无 feishu/qq 凭证，`line2 [feishu] 连接失败: 缺少 appId 或 appSecret` 即此项。
 
 ## 实施时确认点（不阻塞开工）
 

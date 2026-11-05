@@ -78,6 +78,15 @@ describe('normalizeIMWorkspaceConfig', () => {
     assert.equal(config.receptionistSessionId, 'my-custom-session');
   });
 
+  // 空值必须保持空：sanitizeSessionFragment 对空串兜底成 'default'，而升级
+  // 迁移会把非空的 receptionistSessionId 当作真实旧会话去归档。兜底成
+  // 'default' 会指向一个不存在的会话（端到端实测踩到）。
+  it('keeps an absent receptionistSessionId empty instead of the slug fallback', () => {
+    assert.equal(normalizeIMWorkspaceConfig({}).receptionistSessionId, '');
+    assert.equal(normalizeIMWorkspaceConfig({ receptionistSessionId: '' }).receptionistSessionId, '');
+    assert.equal(normalizeIMWorkspaceConfig({ receptionistSessionId: '   ' }).receptionistSessionId, '');
+  });
+
   it('normalizes existing lines (boundTarget 线程寻址，boundSession 读到即丢弃)', () => {
     const config = normalizeIMWorkspaceConfig({
       lines: [

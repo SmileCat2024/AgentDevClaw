@@ -116,8 +116,14 @@ export function normalizeIMWorkspaceConfig(raw = {}) {
   // ADR-0042 决策 1：selectedChannel 并入线路模型——门户渠道线路 = 绑定接线员
   // 线程的线路（boundTarget 指向 operatorThreadId 的线路），渠道取该线路的
   // carrier。配置文件残留的 selectedChannel 读到即丢弃，归一化写盘后消失。
-  const receptionistSessionId = typeof raw.receptionistSessionId === 'string'
-    ? sanitizeSessionFragment(raw.receptionistSessionId)
+  // 空值必须先判空再 slug 化：sanitizeSessionFragment 对空串兜底返回
+  // 'default'，会把「没有旧会话」变成字面量会话 ID，升级迁移据此去归档一个
+  // 不存在的会话。非空值仍走 slug（真实 ID 形如 session-<ts>-<hex>，不受影响）。
+  const rawReceptionistSessionId = typeof raw.receptionistSessionId === 'string'
+    ? raw.receptionistSessionId.trim()
+    : '';
+  const receptionistSessionId = rawReceptionistSessionId
+    ? sanitizeSessionFragment(rawReceptionistSessionId)
     : '';
   // receptionistSessionId 保留归一仅供升级迁移读取（im-operator-thread 归档
   // 旧会话后清除）；runtime 会话解析只认 operatorThreadId。

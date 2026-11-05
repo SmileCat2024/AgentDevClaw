@@ -2,6 +2,10 @@
   "id": "qqbot",
   "kind": "workspace",
   "threadHost": true,
+  "permissions": ["contextRotationStrategy"],
+  "permissionDefaults": {
+    "contextRotationStrategy": "adaptive"
+  },
   "name": "IM 渠道",
   "description": "为不同身份配置 IM 渠道与上下文，当前先支持门户代理身份",
   "version": "1.0.0",
