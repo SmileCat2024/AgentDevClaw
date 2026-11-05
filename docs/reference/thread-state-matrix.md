@@ -45,7 +45,7 @@
 | M1-R-S | rotating, 挡板stale | ✓ 覆写重开（stale 视为无交接，恢复重走） | 框架 811 |
 | **M1-RF-F** | **rotation_failed, 挡板fresh** | **✓ 覆写**（R8 只拦 `status==='rotating'`，**F2 锁定：反直觉，严禁顺手修正**） | 框架 958（RF→rotating）；Claw `thread-state-matrix` G1 |
 | M1-RF-S | rotation_failed, 挡板stale | ✓ 覆写 | 同上 |
-| M1-RF-∅ | rotation_failed, 挡板被懒清/abort | ✓ 正常 begin | 框架（隐含） |
+| M1-RF-∅ | rotation_failed, 挡板被懒清/abort | ✓ 正常 begin | 框架（隐含）；作业面入口 `test/thread-rotation-resume.test.js`（手动恢复重做接力：head 换代、status 回 open） |
 | M1-C-* | closed | ✗ `thread_closed`（硬终态） | 框架 391/401 |
 | M1-*-MM | head ≠ fromSessionId | ✗ `head_mismatch` | 框架 356/381 |
 | M1-R3 | begin 播种幂等键 `succession:<tid>:<from>` | 同一移交易重走不重复播种；跨移交易（head 换代后再接续）新播一条；`seedContinuation=false` 的 begin（Claw 手动接续）不占用也不产生播种 | 框架 825；R3 语义 |

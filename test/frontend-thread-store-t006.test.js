@@ -300,6 +300,9 @@ describe('T014b thread-store: wasHead 冻结事实写入', () => {
   it('handoff 窗口本地挂线程等待视图（openConversationTarget）→ wasHead=true', async () => {
     const ctx = baseSandbox({ currentRuntimeAgentId: '' });
     const thread = installThread(ctx);
+    // 接续窗口的两个投影成对出现（服务端仅在 status='rotating' 时补读
+    // handoffStartedAt）；只给 startedAt 的夹具有不出的状态。
+    thread.status = 'rotating';
     thread.handoffStartedAt = Date.now();
     ctx.window.switchAgent = async () => {};
     const result = await ctx.window.openConversationTarget({ agentId: 'coder', threadId: 'wt-was' });

@@ -177,7 +177,21 @@ export class CoderMonitor {
       return;
     }
     if (thread.status === 'rotation_failed') {
-      this.finish(target, 'rotation_failed', '会话接力失败，需要人工介入；不要重发施工指令。');
+      // 带上失败阶段：调度方据此判断是模型/摘要侧（compact_or_successor）
+      // 还是 successor 未就绪（successor_runtime_not_ready），而不是只知道
+      // 「失败了」还需要回查服务端日志。
+      const events: Array<Record<string, any>> = Array.isArray(thread.lifecycleEvents)
+        ? thread.lifecycleEvents : [];
+      let stage = '';
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index];
+        if (event?.type === 'handoff_failed' || event?.type === 'handoff_aborted') {
+          stage = String(event.stage || '').trim();
+          break;
+        }
+      }
+      this.finish(target, 'rotation_failed',
+        `会话接力失败${stage ? `（阶段：${stage}）` : ''}，需要人工介入；不要重发施工指令。`);
       return;
     }
 

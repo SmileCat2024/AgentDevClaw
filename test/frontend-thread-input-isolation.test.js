@@ -38,11 +38,14 @@ function loadThreadStore({ hostAgentId = 'programming-helper', runtimeId = 'rt-p
   return ctx;
 }
 
+// 接续窗口形态：服务端只在 status='rotating' 时补读 handoffStartedAt
+// （thread-routes 的 _attachLifeState），两者在真实投影中始终成对出现。
+// 不要写成 status='open' + 非零 startedAt——那不是任何真实状态。
 const WT = {
   threadId: 'wt-1',
   agentId: 'coder',
   headSessionId: 'sess-head',
-  status: 'open',
+  status: 'rotating',
   handoffStartedAt: Date.now(),
   headViewerAgentId: 'viewer-1',
   sessionIds: ['sess-head', 'sess-old'],

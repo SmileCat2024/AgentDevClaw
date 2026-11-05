@@ -123,16 +123,26 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
         usage: 'deliver <threadId>',
         adapter: { key: 'threads:deliver' },
       },
+      'resume-rotation': {
+        description: '对会话接力失败（rotation_failed）的线程重做一次上下文接续：'
+          + '执行体与自动接续同一链路（策略解析一致），成功后线程回到 open；'
+          + '接续本身可能再次失败，返回 applied=false 并带 reason/stage',
+        params: [
+          { name: 'threadId', kind: 'literal' },
+        ],
+        usage: 'resume-rotation <threadId>',
+        adapter: { key: 'threads:resume-rotation' },
+      },
     },
     // 不同线程的控制面操作允许并行；监视按指令身份隔离。
     parallelizable: true,
-    // 显式排除动词的结构化指引（rotation_failed 残局需人工介入，与技能故障表一致）
+    // 显式排除动词的结构化指引
     unknownVerbHints: {
-      'advance': 'advance / resume 不在 coder_shell 动词表内：会话接力（head 推进）失败'
-        + '（rotation_failed）的残局需人工介入——先 show 查看当前 head 与 pending 指令，'
-        + '按技能故障表的 rotation_failed 行恢复；恢复前不要重发施工指令。',
-      'resume': 'advance / resume 不在 coder_shell 动词表内：rotation_failed 场景的'
-        + '接力恢复需人工介入（与技能故障表一致），不要在 shell 内重试。',
+      'advance': 'advance 不在 coder_shell 动词表内：head 推进由接续链路独占。'
+        + '接续失败（rotation_failed）用 resume-rotation 重做一次接力，'
+        + '先 show 查看 stage 判断卡点，不要重发施工指令。',
+      'resume': 'resume 不在 coder_shell 动词表内：看板执行域的 resume 不经 shell 派发。'
+        + '会话接力失败（rotation_failed）请用 resume-rotation <threadId>。',
     },
   };
 }

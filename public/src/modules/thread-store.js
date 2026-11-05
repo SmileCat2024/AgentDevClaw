@@ -226,6 +226,30 @@ async function enterThreadAwaitSurface(agentId, thread, sessionId) {
   return { ok: true, target: window.ClawThreads.activeConversation };
 }
 
+/**
+ * 按 threadId 进入等待表面（供「服务端已判定接续中」的调用方使用）。
+ *
+ * 与 openConversationTarget 的区别：本入口不做前置判定、不再发起 activate
+ * 请求。调用方（如 open_session 的 409 分支）已经拿到服务端权威结论，再走
+ * openConversationTarget 会先读本地线程缓存判断挡板，构成「请求 → 409 →
+ * 再请求」的可循环路径。此处只负责挂视图。
+ *
+ * 命名必须区别于内部 enterThreadAwaitSurface：classic script 的顶层函数
+ * 声明本身是 window 属性，同名赋值会把这个函数覆盖成包装器，内部调用点
+ * （openConversationTarget / 本包装器自身）随之变成自递归——实参按 target
+ * 解析得到空 threadId，表现为点击线程后 thread_missing。
+ */
+window.enterThreadAwaitView = async (target) => {
+  const threadId = String(target?.threadId || '').trim();
+  const thread = threadId ? window.getThreadById(threadId) : null;
+  if (!thread) return { ok: false, reason: 'thread_missing' };
+  const agentId = String(target?.agentId || thread.agentId || '').trim();
+  if (!agentId) return { ok: false, reason: 'agent_missing' };
+  const sessionId = String(thread.headSessionId || target?.sessionId || '').trim();
+  if (!sessionId) return { ok: false, reason: 'session_missing' };
+  return enterThreadAwaitSurface(agentId, thread, sessionId);
+};
+
 function _loadAwaitSurfaceMessages(agentId, sessionId) {
   // This read is Session-owned and remains valid while no runtime is bound during rotation.
   const viewToken = captureSessionViewToken('', { agentId, sessionId });
@@ -263,7 +287,7 @@ window.openConversationTarget = async (target) => {  const threadId = String(tar
   // 即时可见，head-advanced 事件原地重绑后自动接上。awaitSessionId 让
   // 切换落在该会话的聊天加载表面（等待视图）而不是工作空间首页——用户
   // 点的导航目标是这条线程，不是首页。
-  if (thread && _handoffFresh(thread)) {
+  if (thread && _handoffActive(thread)) {
     return enterThreadAwaitSurface(agentId, thread, sessionId);
   }
 
@@ -365,10 +389,17 @@ window.isThreadHostAgentId = (agentId, sessionId) => {
     && window.ClawThreads.sessionIndex[`${id}::${sessionId}`]);
 };
 
-/** 交接意图是否仍在窗口内（与服务端 isHandoffActive 同一派生规则） */
-function _handoffFresh(thread) {
-  return Number(thread?.handoffStartedAt) > 0
-    && Date.now() - Number(thread.handoffStartedAt) < THREAD_HANDOFF_STALE_MS;
+/**
+ * 交接挡板是否立起（与服务端 isHandoffBarrierActive 同一派生规则）。
+ *
+ * 判定只读线程记录的 status，不设本地时间窗：挡板的立起与收敛完全由
+ * 服务端持久化事务决定（beginSessionHandoff 置 rotating，commit / fail /
+ * 陈旧兜底收敛）。前端再叠一层「超过 N 分钟即视为无交接」的本地规则，
+ * 会与服务端产生两个真相——服务端仍按 rotating 拒绝挂载（409），前端
+ * 却已当窗口结束去发起 open_session，两侧各说各话，触发无界重试。
+ */
+function _handoffActive(thread) {
+  return String(thread?.status || '') === 'rotating';
 }
 
 /**
@@ -421,7 +452,7 @@ window.updateThreadHeaderIndicator = () => {
 
   // 接续对用户不可感知：正常工作态（非交接窗口）不显示任何线程指示器；
   // 顶栏只保留交接窗口内的「上下文接力中…」一个提示。
-  if (isHead && !_handoffFresh(thread)) {
+  if (isHead && !_handoffActive(thread)) {
     if (el) el.remove();
     return;
   }
@@ -455,12 +486,6 @@ window.updateThreadHeaderIndicator = () => {
 };
 
 // ── 输入路由守卫 ──────────────────────────────────────────────────
-
-/**
- * 交接意图陈旧线（与服务端 thread-controller HANDOFF_STALE_MS 一致）：
- * handoffStartedAt 超过该时长视为无交接。两侧派生规则必须同步维护。
- */
-const THREAD_HANDOFF_STALE_MS = 5 * 60 * 1000;
 
 /**
  * 当前激活会话所属线程的 pending 指令文本（暂存气泡数据源）。
@@ -802,15 +827,19 @@ function _reconcileConversationWithThreadHead() {
     : '';
   const viewedSessionId = boundSessionId || String(selected.sessionId || '').trim();
   if (!viewedSessionId) return;
-  // 挡板死收敛：等待表面挂着、挡板已过新鲜窗、head 未推进、无 runtime——
-  // rotation 失败收敛后的形态（旧 head 已退役、successor 未起来、线程回
-  // open），没有任何可以等待的对象。终结等待态：已渲染的上一棒消息保留
-  // 可读，提示接续失败。恢复路径：再点线程条目 → open_session → activate
-  // 拉起旧 head（挡板已收敛，无竞态）。
+  // 挡板已收敛的等待表面：等待表面挂着、线程不再处于接续中、head 未推进、
+  // 无 runtime——rotation 失败收敛后的形态（旧 head 已退役、successor 未
+  // 起来、线程落 rotation_failed / open），没有任何可以等待的对象。终结
+  // 等待态：已渲染的上一棒消息保留可读，提示接续失败。恢复路径：再点线程
+  // 条目 → open_session → activate 拉起旧 head（挡板已收敛，无竞态）。
+  //
+  // 判定依据只用记录里的 status（服务端权威），不叠加本地时间窗：挡板该
+  // 不该算结束由服务端事务决定（commit / fail / 陈旧兜底都会收敛 status）。
+  // 前端若自设过期线，会在服务端仍拒绝挂载时当窗口已结束，制造两侧分歧。
   if (selected.awaitSurface === true
     && headSessionId === viewedSessionId
     && !runtimeId
-    && !_handoffFresh(thread)) {
+    && !_handoffActive(thread)) {
     window.ClawThreads.activeConversation = null;
     window.updateThreadHeaderIndicator();
     window.ClawToast?.show?.({

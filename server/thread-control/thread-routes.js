@@ -70,7 +70,7 @@ const TURN_TERMINAL_FACT_STATUS = Object.freeze({
  *   重复读索引（PH 线程化后 1400+ 线程 → 近 3000 次 mkdir+stat），是列表
  *   延迟的主要组成。不注入时回退逐线程解析（保持既有注入方兼容）。
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, deliverInput = deliverThreadInput, publishThreadEvent = publishThreadEventDefault, onTurnTerminalFact, assertThreadQuota } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, rotationService, deliverInput = deliverThreadInput, publishThreadEvent = publishThreadEventDefault, onTurnTerminalFact, assertThreadQuota } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -677,6 +677,86 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
         source: req.body?.source || 'api',
       });
       res.json({ ok: true, board: boardState });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  /**
+   * 线程接续恢复：对一条接续失败（rotation_failed / 挡板已收敛）的线程
+   * 重做一次接力。执行体是宿主接力的 rotate()，与自动接续同一条链路、
+   * 同一套策略解析，因此「手动触发一次」与自动接续结果一致。
+   *
+   * 与上面 resume 的分工：resume 收拾看板执行域（failed / waiting_input），
+   * 本端点收拾锚点接续域（rotation_failed）。两者互不替代——接续失败时
+   * 看板通常停在 idle，board.resume 会以 board_not_resumable 拒绝。
+   *
+   * 前置：旧 head 会话存在且可启动；接力进行中（挡板未收敛）返 409，
+   * 由调用方等待既有接续完成，不在此重入。
+   */
+  app.post('/protoclaw/threads/:threadId/resume-rotation', jsonMiddleware, async (req, res) => {
+    try {
+      if (!rotationService || typeof rotationService.resumeRotation !== 'function') {
+        return res.status(503).json({
+          ok: false,
+          code: 'rotation_resume_unavailable',
+          message: 'Thread rotation service is not wired on this host',
+        });
+      }
+      const thread = await core.getThread(req.params.threadId);
+      if (!thread) {
+        return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
+      }
+      if (thread.deleting === true) {
+        return res.status(409).json({
+          ok: false,
+          code: 'thread_deleting',
+          message: `Thread ${thread.threadId} is being deleted`,
+        });
+      }
+      if (thread.status === 'closed') {
+        return res.status(409).json({
+          ok: false,
+          code: 'thread_closed',
+          message: `Thread ${thread.threadId} is closed`,
+        });
+      }
+      if (thread.status === 'rotating') {
+        return res.status(409).json({
+          ok: false,
+          code: 'thread_handoff_in_progress',
+          message: `Thread ${thread.threadId} 正在接续，无需重复发起`,
+          threadId: thread.threadId,
+          headSessionId: thread.headSessionId,
+        });
+      }
+      const headSessionId = String(thread.headSessionId || '').trim();
+      if (!headSessionId) {
+        return res.status(409).json({
+          ok: false,
+          code: 'head_session_missing',
+          message: `Thread ${thread.threadId} has no head session`,
+        });
+      }
+      const result = await rotationService.resumeRotation({
+        agentId: thread.agentId,
+        sessionId: headSessionId,
+        strategy: typeof req.body?.strategy === 'string' ? req.body.strategy : null,
+        ensureHeadRuntime,
+      });
+      // applied=false 是「接续未完成」的业务结果，不是请求错误：调用方需要
+      // 拿到 reason / stage 才能判断是条件不满足（head 起不来）还是接续本身
+      // 失败。HTTP 层保持 200，让读取方按结构消费。
+      res.json({
+        ok: true,
+        threadId: thread.threadId,
+        applied: result?.applied === true,
+        ...(result?.headSessionId ? { headSessionId: result.headSessionId } : {}),
+        ...(result?.reason ? { reason: result.reason } : {}),
+        ...(result?.stage ? { stage: result.stage } : {}),
+        ...(result?.code ? { code: result.code } : {}),
+        ...(result?.error ? { error: result.error } : {}),
+      });
     } catch (err) {
       _errorResponse(res, err);
     }

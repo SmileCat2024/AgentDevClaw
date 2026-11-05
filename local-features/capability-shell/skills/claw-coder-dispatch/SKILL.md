@@ -267,12 +267,13 @@ done
 | `list [agentId] [选项]` | 查找线程 |
 | `show <threadId>` | 查看线程详情、待发送指令数量和最近事件 |
 | `deliver <threadId>` | 再次尝试投递线程中尚未送达的指令，不另建一条指令 |
+| `resume-rotation <threadId>` | 会话接力失败后重做一次接续，与自动接续同一链路 |
 | `archive <threadId>` | 归档线程；正在执行时会被打断 |
 | `unarchive <threadId>` | 取消归档；之后发送指令才会重新开始工作 |
 
 `new-session` 和 `create` 的第一个参数固定为 `coder`。通常只需 `new-session`；仅在已有会话确实缺少线程，或创建回执提示需要补建时使用 `create`，不能给不存在的会话建立线程。
 
-`advance`、`resume` 不可用，不要用它们尝试恢复失败的线程。
+`advance` 不可用：head 推进由接续链路独占，通过 `resume-rotation` 触发。`resume` 也不可用，它属看板执行域，对 `rotation_failed` 会以 `board_not_resumable` 拒绝。
 
 ### 查找线程
 
@@ -370,7 +371,15 @@ Coder 工作较长时可能自动换一个会话继续原任务。**继续使用
 
 只有出现明确失败，或有证据表明任务上下文丢失、重复修改、执行不再推进时才调查。`show` 中的 `head` 变化和 `handoff_*` 事件可用于确认是否发生了接续。
 
-出现 `status=rotation_failed`、`failed=true` 且事件显示接续失败时，报告阻塞并请求恢复处理，不要重发任务，也不要尝试不存在的 `advance/resume` 命令。
+出现 `status=rotation_failed`、`failed=true` 时，先用 `show <threadId>` 读失败事实行（`stage` / `reason` / `error`），据此判断卡在哪一步：`compact_or_successor` 指向摘要或精简环节，`successor_runtime_not_ready` 指向新会话未就绪。然后可以主动重做一次接续：
+
+```
+resume-rotation <threadId>
+```
+
+这个动作与自动接续走同一条链路（同一套策略解析），成功后线程回到 `open`，`applied=true` 并给出新 `head`。接续本身可能再次失败，此时返回 `applied=false` 及新的 `reason`/`stage`；同一 `stage` 反复出现通常说明问题是稳定复现的，应报告阻塞而不是继续重试。判断任务是否仍未完成，以 `status` 当前值和最新一次接续结果为准，不要依据早前的失败记录。
+
+不要重发施工指令：接力失败时旧 head 的上下文已过阈值，重发只会让新会话在同样条件下再触发一次接续。不要尝试 `advance` / `resume`——`advance` 是接续链路的内部动作，不对外暴露；`resume` 属看板执行域，对 `rotation_failed` 会以 `board_not_resumable` 拒绝。
 
 ### 工作区出现意外变化
 

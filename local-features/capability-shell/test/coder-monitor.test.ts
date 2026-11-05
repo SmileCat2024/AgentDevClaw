@@ -128,6 +128,20 @@ describe('Coder execution observation (ADR-0031)', () => {
     assert.match(await monitor.observe(identity), /^monitoring/);
   });
 
+  it('rotation_failed 通知带出失败阶段（调度方据此判断卡点）', async (t) => {
+    const { monitor } = harness(t, async () => snapshot([], {
+      status: 'rotation_failed',
+      lifecycleEvents: [
+        { type: 'handoff_started', status: 'rotating', at: 1 },
+        { type: 'handoff_failed', status: 'rotation_failed', at: 2,
+          stage: 'successor_runtime_not_ready', reason: 'successor_runtime_not_ready' },
+      ],
+    }));
+    const notice = await monitor.observe(identity);
+    assert.match(notice, /reason=rotation_failed/);
+    assert.match(notice, /successor_runtime_not_ready/, notice);
+  });
+
   for (const [overrides, expected] of [
     [{ status: 'rotation_failed' }, 'rotation_failed'],
     [{ headRuntimeRunning: false }, 'runtime_unavailable'],

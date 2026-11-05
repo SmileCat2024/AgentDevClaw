@@ -1,6 +1,7 @@
 import path from 'path';
 import {
   APP_PORT, VIEWER_PORT, VIEWER_ORIGIN, PROJECT_ROOT,
+  SESSION_PERSISTENCE_ACK_TIMEOUT_MS,
 } from '../shared/constants.js';
 import { readJsonSafe } from '../shared/fs-helpers.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
@@ -131,9 +132,11 @@ export function createAgentLifecycleModule(ctx) {
       const removalPromise = new Promise((resolve) => { resolveRemoval = resolve; });
       runtime.stoppingPromise = removalPromise;
       let settled = false;
+      let ackTimer = null;
       const settle = (removed, retired = true) => {
         if (settled) return;
         settled = true;
+        if (ackTimer) { clearTimeout(ackTimer); ackTimer = null; }
         child.removeListener('session-exited', onSessionEvent);
         child.removeListener('exit', onExit);
         runtime.stopped = retired;
@@ -158,6 +161,17 @@ export function createAgentLifecycleModule(ctx) {
       child.on('session-exited', onSessionEvent);
       child.once?.('exit', onExit);
       operationTrace?.mark('source_runtime_close_requested');
+      // 回执兜底（与本地 IPC 路径同源）：回执永不到达时不得无限挂起。
+      ackTimer = setTimeout(() => {
+        ackTimer = null;
+        if (settled) return;
+        operationTrace?.mark('source_runtime_persistence_acknowledgement_timeout', {
+          timeoutMs: SESSION_PERSISTENCE_ACK_TIMEOUT_MS,
+        });
+        console.warn(`[agent-lifecycle] persistence acknowledgement timed out after ${SESSION_PERSISTENCE_ACK_TIMEOUT_MS}ms for ${runtime.agentId || runtime.id}::${sessionId}; treating the retirement as unconfirmed`);
+        settle(false);
+      }, SESSION_PERSISTENCE_ACK_TIMEOUT_MS);
+      ackTimer.unref?.();
       // 下发失败不阻断等待——容器退出事件兜底收敛。
       viewerFetchUrl(
         `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(runtime.viewerAgentId || '')}/stop`,
@@ -181,9 +195,11 @@ export function createAgentLifecycleModule(ctx) {
       child.removeListener?.('exit', onExit);
     };
     let settled = false;
+    let ackTimer = null;
     const settleRemoval = (removed, retired = true) => {
       if (settled) return;
       settled = true;
+      if (ackTimer) { clearTimeout(ackTimer); ackTimer = null; }
       clearAcknowledgementListeners();
       runtime.stopped = retired;
       runtime.persistenceConfirmed = removed;
@@ -221,6 +237,23 @@ export function createAgentLifecycleModule(ctx) {
         if (error) settleRemoval(false, false);
       });
       operationTrace?.mark('source_runtime_close_requested');
+      // 回执兜底：remove-session 已下发但 session-exited 永不到达（IPC 断、
+      // 子进程卡在关闭序列）时，此前这里会永久挂起——接续因此停在
+      // 「退役旧 head」这一行，既不走成功也不走失败，挡板一直立着
+      // （wt-728c0e10：handoff_started 后 44 分钟无 handoff_failed）。
+      // 超时按「未确认持久化」收敛：retired=false 保留 runtime 的运行事实
+      // （进程可能还活着，标成已停会让后续 spawn 与它并存），由调用方按
+      // persisted=false 走失败路径。
+      ackTimer = setTimeout(() => {
+        ackTimer = null;
+        if (settled) return;
+        operationTrace?.mark('source_runtime_persistence_acknowledgement_timeout', {
+          timeoutMs: SESSION_PERSISTENCE_ACK_TIMEOUT_MS,
+        });
+        console.warn(`[agent-lifecycle] persistence acknowledgement timed out after ${SESSION_PERSISTENCE_ACK_TIMEOUT_MS}ms for ${runtime.agentId || runtime.id}::${sessionId}; treating the retirement as unconfirmed`);
+        settleRemoval(false, false);
+      }, SESSION_PERSISTENCE_ACK_TIMEOUT_MS);
+      ackTimer.unref?.();
       const persisted = await removalPromise;
       operationTrace?.mark('source_runtime_retirement_settled', { persisted });
       return persisted;

@@ -243,5 +243,56 @@ export function createThreadRotationService({
     return task;
   }
 
-  return { handleContextGuard };
+  /**
+   * 手动恢复入口：对一条接续失败的线程重做一次接力。
+   *
+   * 执行体就是 rotate() 本身——恢复与自动接续走同一条链路（同一份
+   * beginSessionSuccession / compactAndResumeCurrentSession / commitSuccession），
+   * 策略解析链也一致（会话级载荷 → 用户覆盖 → 作者默认 → 组合语义），
+   * 因此「手动触发一次」产生的行为与自动接续完全相同。
+   *
+   * 不引入状态复位语义：框架 beginSessionHandoff 的守卫只拦 closed 与
+   * head_mismatch，不拦 rotation_failed；失败路径已由 abortPendingSuccession
+   * 清掉挡板。所以 rotation_failed → rotating → open 这条路径本就通，
+   * 重试成功经 handoff_completed 自然把 status 带回 open，失败事实保留在
+   * lifecycleEvents 供审计。
+   *
+   * 前置条件只有一项：旧 head runtime 必须可被退役。失败路径已把旧 head
+   * 退役，此时 stopManagedAgent({waitForPersistence:true}) 会抛
+   * 「runtime is unavailable before persistence confirmation」。自动接续
+   * 天然具备的前置在这里补上——先经 ensureHeadRuntime 拉起旧 head（与
+   * /commands、重启恢复共用同一闸），再走 rotate()。
+   *
+   * @param {object} opts
+   * @param {string} opts.agentId
+   * @param {string} opts.sessionId - 线程当前 head 会话
+   * @param {string|null} [opts.strategy] - 会话级策略载荷（同自动接续语义）
+   * @param {Function} [opts.ensureHeadRuntime] - head runtime 就绪闸
+   */
+  async function resumeRotation({ agentId, sessionId, strategy = null, ensureHeadRuntime } = {}) {
+    const normalizedAgentId = String(agentId || '').trim();
+    const normalizedSessionId = String(sessionId || '').trim();
+    if (!normalizedAgentId || !normalizedSessionId) {
+      return { applied: false, reason: 'invalid_session' };
+    }
+    // 同一线程的接力进行中：不重复发起（手点两次 / 与自动接续竞态）。
+    if (inflight.has(normalizedSessionId)) {
+      return { applied: false, reason: 'rotation_in_flight' };
+    }
+    if (typeof ensureHeadRuntime === 'function') {
+      const wake = await ensureHeadRuntime(normalizedAgentId, normalizedSessionId)
+        .catch((error) => ({ ok: false, code: 'runtime_wake_failed', message: error?.message || String(error) }));
+      if (wake && wake.ok === false) {
+        return {
+          applied: false,
+          reason: 'head_runtime_unavailable',
+          code: wake.code || 'runtime_wake_failed',
+          error: wake.message || null,
+        };
+      }
+    }
+    return handleContextGuard(normalizedAgentId, normalizedSessionId, normalizeSessionStrategy(strategy));
+  }
+
+  return { handleContextGuard, resumeRotation };
 }

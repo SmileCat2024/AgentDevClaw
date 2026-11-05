@@ -1206,10 +1206,23 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // 刷新）：不是失败——转入线程等待表面（挂上一棒消息 + 接力指示），
       // 由 head-advanced 重绑接管。服务端 409 响应设计即为此（携带目标
       // thread 与 head 会话）。
+      //
+      // 处理顺序有讲究：
+      //   1. 先结算本次侧栏操作。409 是「目标已在本线程接续中」的权威
+      //      事实，本次 activate 不会再成立，占位必须收口——滞留的
+      //      operation 会一直渲染成「正在启动新会话…」。
+      //   2. 再直接进等待表面（enterThreadAwaitSurface），不再经
+      //      openConversationTarget。后者会先读本地线程缓存判挡板，
+      //      挡板判定与请求构成一条可自我循环的路径（点一次 → 409 →
+      //      再发起 → 再 409），一次点击就能堆出大量占位。服务端 409
+      //      已是结论，前端不需要再试一次来确认。
       if (error?.handoff?.threadId) {
+        if (sidebarOperation?.operationId) {
+          finishSidebarOperation(sidebarOperation.operationId, 'settled');
+        }
         try {
           if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
-          await window.openConversationTarget?.({
+          await window.enterThreadAwaitView?.({
             threadId: error.handoff.threadId,
             sessionId: error.handoff.sessionId,
           });

@@ -157,7 +157,7 @@ test('SessionView 身份已切换时拒绝旧等待会话的迟到消息', async
 });
 
 test('挡板死收敛：等待表面 + head 未推进 + 挡板过窗 + 无 runtime → 终结等待 + 失败提示', async () => {
-  // 挡板早已死：handoffStartedAt 远超 5min，线程回 open，head 仍是等待的旧会话
+  // 挡板已收敛：线程记录落 open（服务端事务结论），head 仍是等待的旧会话
   const deadThread = {
     threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'open',
     handoffStartedAt: Date.now() - 6 * 60 * 1000, sessionIds: ['sess-head'],
@@ -194,4 +194,54 @@ test('挡板仍在新鲜窗（慢接续）→ 不误杀，继续等待', async (
   const selected = ctx.run('window.ClawThreads.activeConversation');
   assert.ok(selected && selected.awaitSurface === true, '新鲜窗内等待保持');
   assert.equal(ctx.__toastsRef.length, 0);
+});
+
+test('挡板长时间未收敛（status 仍 rotating）→ 继续等待，不得判成失败', async () => {
+  // 这是「接续卡住」在线程记录上的实际形态：挡板立起后服务端迟迟没有
+  // commit / fail，status 一直是 rotating。前端曾按本地 5 分钟窗口判
+  // 「窗口已过」：视图终结等待态 + 提示失败，而服务端仍按 rotating 拒绝
+  // 挂载（409），用户再点又进同一路径——判定分歧本身就是循环的来源。
+  // 挡板该不该算结束只有服务端事务能决定，前端只读 status。
+  const stuckThread = {
+    threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
+    handoffStartedAt: Date.now() - 45 * 60 * 1000, sessionIds: ['sess-head'],
+  };
+  const ctx = loadThreadStore({
+    threads: [stuckThread],
+    fetchImpl: async () => okJson({ threads: [stuckThread], contentHash: 'h2' }),
+  });
+  ctx.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true, awaitSurface: true })};`);
+  ctx.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
+
+  await ctx.run('window.refreshThreads(true)');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const selected = ctx.run('window.ClawThreads.activeConversation');
+  assert.ok(selected && selected.awaitSurface === true, '挡板未收敛时等待表面保持');
+  assert.equal(ctx.__toastsRef.length, 0, '不得因本地时间窗误报接续失败');
+});
+
+test('enterThreadAwaitView：按 threadId 直接挂等待表面，不发起 activate 请求', async () => {
+  // 409 分支的专用入口：服务端已判定接续中，前端只挂视图。若此处再走
+  // openConversationTarget，会重新读本地线程缓存判挡板并再次发起请求，
+  // 与 409 构成循环（一次点击堆出大量「正在启动新会话…」占位）。
+  const thread = {
+    threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
+    handoffStartedAt: Date.now(), sessionIds: ['sess-head'],
+  };
+  const ctx = loadThreadStore({
+    threads: [thread],
+    fetchImpl: async () => okJson({ ok: true, messages: HANDOFF_MSGS }),
+  });
+  let runWorkspaceActionCalls = 0;
+  ctx.window.runWorkspaceAction = () => { runWorkspaceActionCalls += 1; return Promise.resolve(); };
+
+  const result = await ctx.run('window.enterThreadAwaitView({ threadId: "wt-1" })');
+  assert.equal(result.ok, true);
+
+  const selected = ctx.run('window.ClawThreads.activeConversation');
+  assert.equal(selected.awaitSurface, true, '进入等待表面');
+  assert.equal(selected.threadId, 'wt-1');
+  assert.equal(selected.sessionId, 'sess-head');
+  assert.equal(runWorkspaceActionCalls, 0, '不得触发 open_session（再次请求会与 409 循环）');
 });

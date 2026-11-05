@@ -148,6 +148,32 @@ export function createThreadsAdapter(deps: {
   }
 
   /**
+   * 最近一次接续失败的事实行（无失败返回空串）。
+   *
+   * 接续失败属锚点域（status=rotation_failed），证据在 lifecycleEvents 的
+   * handoff_failed / handoff_aborted 事件里；执行事件流（/events）是看板域，
+   * 不含这些事实。调度方要判断「该不该重试、卡在哪一步」，需要 stage 与
+   * 错误原文——只说「失败」不足以决策。
+   */
+  function handoffFailureLine(thread: Record<string, any>): string {
+    const events = Array.isArray(thread?.lifecycleEvents) ? thread.lifecycleEvents : [];
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event?.type !== 'handoff_failed' && event?.type !== 'handoff_aborted') continue;
+      const parts = [
+        `at=${event.at ? new Date(Number(event.at)).toISOString() : '(unknown)'}`,
+        `stage=${event.stage || 'unknown'}`,
+        `reason=${event.reason || 'unknown'}`,
+      ];
+      if (event.error != null && String(event.error).trim()) {
+        parts.push(`error=${String(event.error).trim()}`);
+      }
+      return `接力失败：${parts.join('  ')}`;
+    }
+    return '';
+  }
+
+  /**
    * list 行摘要（信息面比 threadLine 全，调度一屏可读）：
    * 标题 + 项目目录 + 创建/最近活动时间 + pending 指令数；异常标记按需
    * 出现（failed=true / status≠open 时才打印，pending>0 才打印），行短且
@@ -601,8 +627,10 @@ export function createThreadsAdapter(deps: {
           .slice(-TAIL_EVENT_COUNT);
         const commands = Array.isArray(thread.commands) ? thread.commands : [];
         const pendingCount = commands.filter((command: any) => command?.status === 'pending').length;
+        const failureLine = handoffFailureLine(thread);
         return [
           threadLine(thread),
+          ...(failureLine ? [failureLine] : []),
           ...(commands.length > 0 ? [`commands=${commands.length} (${pendingCount} pending)`] : []),
           ...(tail.length > 0 ? ['事件尾：', ...tail.map(eventLine)] : []),
         ].join('\n');
@@ -645,6 +673,29 @@ export function createThreadsAdapter(deps: {
         if (runtimeWake && runtimeWake.ok === false) {
           lines.push(`runtimeWake=failed (${runtimeWake.code}): ${runtimeWake.message}`);
           lines.push('runtime 唤起失败：按技能故障表处置。');
+        }
+        return lines.join('\n');
+      }
+
+      // resume-rotation <threadId>：会话接力失败后重做一次接续。
+      // 执行体与服务端自动接续同一条链路（策略解析一致），本动词只做触发，
+      // 判定与状态推进全在服务端——shell 不自行解释线程是否「该恢复」。
+      case 'resume-rotation': {
+        const [threadId] = rest;
+        const payload = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/resume-rotation`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const lines = [
+          `resume-rotation threadId=${payload?.threadId || rest[0]} applied=${payload?.applied === true}`,
+        ];
+        if (payload?.headSessionId) lines.push(`head=${payload.headSessionId}`);
+        if (payload?.reason) lines.push(`reason=${payload.reason}`);
+        if (payload?.stage) lines.push(`stage=${payload.stage}`);
+        if (payload?.error) lines.push(`error=${payload.error}`);
+        if (payload?.applied !== true) {
+          lines.push('接续未完成：用 show 查看 stage 判断卡点；不要重发施工指令。');
         }
         return lines.join('\n');
       }

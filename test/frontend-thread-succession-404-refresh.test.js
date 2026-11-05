@@ -66,11 +66,16 @@ function createSandbox({ threadForSession, refreshImpl } = {}) {
 }
 
 test('T013a-1: 404 时线程缓存过期 → 强制刷新线程事实后豁免，不踢出', async () => {
-  const store = { 'sess-old-head': { id: 'wt-1', handoffStartedAt: 0 } };
+  // 挡板事实以 status 表达（服务端 isHandoffBarrierActive 同口径）：
+  // 刷新前缓存里的线程还是 open，刷新后拉到 rotating。
+  const store = { 'sess-old-head': { id: 'wt-1', status: 'open', handoffStartedAt: 0 } };
   const { sandbox, calls } = createSandbox({
     threadForSession: (_agentId, sid) => store[sid] || null,
-    // 强制刷新拉到服务端挡板事实（刷新前缓存过期，刷新后挡板新鲜）
-    refreshImpl: () => { store['sess-old-head'].handoffStartedAt = Date.now(); },
+    // 强制刷新拉到服务端挡板事实（刷新前缓存过期，刷新后挡板立起）
+    refreshImpl: () => {
+      store['sess-old-head'].status = 'rotating';
+      store['sess-old-head'].handoffStartedAt = Date.now();
+    },
   });
   vm.runInContext(extractNotFoundHandler(), sandbox);
   const handled = await vm.runInContext('handleCoreResponsesNotFound({ runtimeId: "rt-old" })', sandbox);
@@ -80,10 +85,10 @@ test('T013a-1: 404 时线程缓存过期 → 强制刷新线程事实后豁免�
 });
 
 test('T013a-2: 刷新后仍无挡板 → 正常踢出（真实会话死亡语义不变）', async () => {
-  const store = { 'sess-old-head': { id: 'wt-1', handoffStartedAt: 0 } };
+  const store = { 'sess-old-head': { id: 'wt-1', status: 'open', handoffStartedAt: 0 } };
   const { sandbox, calls } = createSandbox({
     threadForSession: (_agentId, sid) => store[sid] || null,
-    refreshImpl: () => { store['sess-old-head'].handoffStartedAt = 0; },
+    refreshImpl: () => { store['sess-old-head'].status = 'open'; store['sess-old-head'].handoffStartedAt = 0; },
   });
   vm.runInContext(extractNotFoundHandler(), sandbox);
   await vm.runInContext('handleCoreResponsesNotFound({ runtimeId: "rt-old" })', sandbox);

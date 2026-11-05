@@ -574,6 +574,86 @@ describe('agent-lifecycle', () => {
         await assert.rejects(stopping, /Failed to confirm session persistence/);
       });
     });
+
+    // 回执缺失曾经让 stopManagedAgent 永久挂起：接续停在「退役旧 head」这一行，
+    // 既不成功也不失败，挡板一直立着（wt-728c0e10：handoff_started 后 44 分钟
+    // 才被框架陈旧线被动清掉，其间没有任何 handoff_failed）。兜底超时把无限
+    // 挂起变成可判定的失败，让上层接续走既有的失败收敛路径。
+    describe('missing persistence acknowledgement', () => {
+      it('settles an unacknowledged shared-session retirement as unconfirmed', async (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const mod = createAgentLifecycleModule(createMockCtx());
+        const child = createMockChild();
+        const runtime = injectRuntime('shared-agent', 'silent-session', child);
+        runtime.processGroupKey = 'shared-agent::/project';
+        child.send = () => {};
+        const traceEvents = [];
+        const operationTrace = { mark: (phase, fields) => traceEvents.push({ phase, fields }) };
+
+        const stopping = mod.stopManagedAgent('shared-agent', 'silent-session', {
+          waitForPersistence: true,
+          operationTrace,
+        });
+        let settled = false;
+        stopping.then(() => { settled = true; }, () => { settled = true; });
+        await Promise.resolve();
+        assert.equal(settled, false, 'the retirement wait must not settle without an acknowledgement');
+
+        t.mock.timers.tick(30_000);
+        await assert.rejects(stopping, /Failed to confirm session persistence/);
+        // 进程可能仍存活：不得伪标成已停，只落「未确认」事实。
+        assert.equal(runtime.stopped, false);
+        assert.equal(runtime.persistenceConfirmed, false);
+        assert.equal(runtime.stopping, false);
+        assert.equal(child.listenerCount('message'), 0, 'acknowledgement listeners must be released');
+        assert.ok(
+          traceEvents.some((event) => event.phase === 'source_runtime_persistence_acknowledgement_timeout'),
+          'the timeout must leave a diagnostic fact',
+        );
+      });
+
+      it('ignores a late acknowledgement after the timeout already settled', async (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const mod = createAgentLifecycleModule(createMockCtx());
+        const child = createMockChild();
+        const runtime = injectRuntime('shared-agent', 'late-ack-session', child);
+        runtime.processGroupKey = 'shared-agent::/project';
+        child.send = () => {};
+
+        const stopping = mod.stopManagedAgent('shared-agent', 'late-ack-session', { waitForPersistence: true });
+        t.mock.timers.tick(30_000);
+        await assert.rejects(stopping, /Failed to confirm session persistence/);
+        assert.equal(runtime.stopping, false);
+
+        // 迟到回执：监听器已摘除，不得把已落定的失败结果改写成成功。
+        child.emit('message', { type: 'session-exited', sessionId: 'late-ack-session', persisted: true });
+        await Promise.resolve();
+        assert.equal(runtime.persistenceConfirmed, false);
+        assert.equal(runtime.stopped, false);
+      });
+
+      it('lets a subsequent retirement wait proceed after the previous one timed out', async (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const mod = createAgentLifecycleModule(createMockCtx());
+        const child = createMockChild();
+        const runtime = injectRuntime('shared-agent', 'retry-session', child);
+        runtime.processGroupKey = 'shared-agent::/project';
+        child.send = () => {};
+
+        const first = mod.stopManagedAgent('shared-agent', 'retry-session', { waitForPersistence: true });
+        t.mock.timers.tick(30_000);
+        await assert.rejects(first, /Failed to confirm session persistence/);
+
+        // stopping / stoppingPromise 已复位：第二次拒不得复用一个永不结算的 promise。
+        child.send = (message) => queueMicrotask(() => {
+          child.emit('message', { type: 'session-exited', sessionId: message.sessionId, persisted: true });
+        });
+        const second = await mod.stopManagedAgent('shared-agent', 'retry-session', { waitForPersistence: true });
+        assert.equal(second.status, 'stopped');
+        assert.equal(runtime.stopped, true);
+        assert.equal(runtime.persistenceConfirmed, true);
+      });
+    });
   });
 
   // ── startManagedAgent：handoff 注入与单次记录读取 ────────

@@ -2,7 +2,7 @@
  * coder 领域 shell 测试 — 动词表 + threads adapter（ticket 034）
  *
  * 覆盖工单验收要点：
- * - 8 个动词声明齐备，advance / resume 不入表且 unknown_verb 报文附结构化指引
+ * - 动词表声明齐备（含接续恢复 resume-rotation），advance / resume 不入表且 unknown_verb 报文附结构化指引
  * - send 缺幂等键被参数校验道拒绝
  * - adapter 直调 /protoclaw/threads*（请求形态与参数参照 bin/claw.mjs）
  * - send 返回提交回执；监视与待命由 CoderMonitor/Feature 的独立测试覆盖
@@ -37,7 +37,7 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
   it('动词表含 runtime-policy 查询，并保留受限的派遣动词', () => {
     assert.deepEqual(
       Object.keys(POLICY.verbs).sort(),
-      ['archive', 'create', 'deliver', 'list', 'new-session', 'result', 'runtime-policy', 'send', 'show', 'unarchive', 'watch'],
+      ['archive', 'create', 'deliver', 'list', 'new-session', 'result', 'resume-rotation', 'runtime-policy', 'send', 'show', 'unarchive', 'watch'],
     );
   });
 
@@ -89,8 +89,8 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
       assert.ok(r.output.includes('可用动词'), r.output);
       if (verb === 'advance' || verb === 'resume') {
         assert.ok(
-          r.output.includes('人工介入'),
-          `advance/resume 报文应附结构化指引: ${r.output}`,
+          r.output.includes('resume-rotation'),
+          `advance/resume 指引应指向接续恢复动词 resume-rotation: ${r.output}`,
         );
       }
     }
@@ -116,6 +116,66 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
     const r = await runCapabilityShellPipeline(POLICY, 'show wt-1', { adapters });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('commands=3 (2 pending)'), r.output);
+  });
+
+  it('show：接续失败带出 stage / reason / error（调度方要能判断卡在哪一步）', async () => {
+    // 接续失败的事实只在锚点域 lifecycleEvents（handoff_failed），执行事件
+    // 流不含它。只报「失败」不足以让调度方决策，因此 show 必须带出阶段。
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.endsWith('/threads/wt-1') && !u.includes('/events'),
+          body: {
+            ok: true,
+            thread: {
+              threadId: 'wt-1', lifeState: 'idle', status: 'rotation_failed', failed: true,
+              commands: [],
+              lifecycleEvents: [
+                { type: 'handoff_started', status: 'rotating', at: 1 },
+                {
+                  type: 'handoff_failed',
+                  status: 'rotation_failed',
+                  at: 1700000000000,
+                  stage: 'compact_or_successor',
+                  reason: 'context_rotation_failed',
+                  error: 'summary timed out',
+                },
+              ],
+            },
+          },
+        },
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 0 } },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'show wt-1', { adapters });
+    assert.equal(r.ok, true, r.output);
+    assert.match(r.output, /stage=compact_or_successor/, r.output);
+    assert.match(r.output, /reason=context_rotation_failed/, r.output);
+    assert.match(r.output, /error=summary timed out/, r.output);
+  });
+
+  it('show：无接续失败时不多打失败行', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.endsWith('/threads/wt-1') && !u.includes('/events'),
+          body: {
+            ok: true,
+            thread: {
+              threadId: 'wt-1', lifeState: 'executing', status: 'open', failed: false,
+              commands: [],
+              lifecycleEvents: [{ type: 'handoff_started', status: 'rotating', at: 1 }],
+            },
+          },
+        },
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 0 } },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'show wt-1', { adapters });
+    assert.equal(r.ok, true, r.output);
+    assert.doesNotMatch(r.output, /接力失败/, r.output);
   });
 
   it('help：裸 help 输出策略声明的动词表用法（管线级，不占动词表）', async () => {

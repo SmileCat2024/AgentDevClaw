@@ -164,9 +164,20 @@ function renderThread(thread) {
     }));
   }
   if (!archived && failed) {
+    // 恢复动作按域分流（failed 是合并信号：看板 failed || 锚点 rotation_failed）：
+    //   - 锚点接续失败 → 重做一次接力（resume-rotation），执行体与自动接续同链路；
+    //   - 看板执行失败 → 看板域 resume（board.resume 只接受 failed / waiting_input）。
+    // 两者不可互换：接续失败时看板通常停在 idle，走 board.resume 必然 409
+    // board_not_resumable，用户点了会报错却什么也没修好。
+    const rotationFailed = thread.status === 'rotation_failed';
     actions.push(actionButton({
-      cls: '', action: 'coderThreads.resume', threadId: thread.threadId,
+      cls: '',
+      action: rotationFailed ? 'coderThreads.resumeRotation' : 'coderThreads.resume',
+      threadId: thread.threadId,
       label: zh ? '恢复' : 'Resume',
+      ...(rotationFailed
+        ? { title: zh ? '重做一次上下文接续（与自动接续同一链路）' : 'Retry the context handoff' }
+        : {}),
     }));
   }
 
@@ -480,6 +491,36 @@ async function resume(threadId) {
   }
 }
 
+/**
+ * 锚点接续域恢复：重做一次上下文接续（与自动接续同一链路）。
+ * 与服务端 keep 200 的约定一致：applied=false 是「接续未完成」的业务结果，
+ * 不能当作请求失败静默吞掉——带着 reason / stage 提示出来，用户才知道
+ * 是 head 起不来还是接续本身又失败了。
+ */
+async function resumeRotation(threadId) {
+  try {
+    const payload = await request(
+      '/protoclaw/threads/' + encodeURIComponent(threadId) + '/resume-rotation',
+      { source: 'ui' },
+    );
+    await refresh();
+    const zh = isZh();
+    if (payload?.applied !== true) {
+      const detail = [payload?.reason, payload?.stage].filter(Boolean).join(' / ');
+      if (typeof window.ClawToast !== 'undefined') {
+        window.ClawToast.show({
+          id: 'thread-resume-rotation-' + threadId,
+          status: 'warning',
+          title: zh ? '接续未完成' : 'Handoff not completed',
+          description: detail || (zh ? '接续没有成功，可查看线程详情后重试' : 'Handoff did not succeed; check thread details and retry'),
+        });
+      }
+    }
+  } catch (error) {
+    toastError(error);
+  }
+}
+
 function switchTab(tab) {
   activeTab = tab === 'archived' ? 'archived' : 'threads';
   if (host) host.workspace.rerender();
@@ -502,6 +543,7 @@ export default {
     'coderThreads.remove': (el) => remove(el.dataset.threadId),
     'coderThreads.unarchive': (el) => unarchive(el.dataset.threadId),
     'coderThreads.resume': (el) => resume(el.dataset.threadId),
+    'coderThreads.resumeRotation': (el) => resumeRotation(el.dataset.threadId),
     'coderThreads.switchTab': (el) => switchTab(el.dataset.tab),
   },
 

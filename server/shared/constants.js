@@ -90,6 +90,11 @@ export const GROUP_CHAT_CALL_TIMEOUT_MS = 15 * 60 * 1000; // 群聊管理员调�
 export const DISPATCH_FIRED_TIMEOUT_MS  = 5 * 60 * 1000;  // fired schedule 超时阈值
 export const PROCESS_EXIT_WAIT_MS       = 5000;    // 子进程退出等待
 export const RUNTIME_READY_WAIT_MS      = 10000;   // runtime READY 等待超时
+// 会话退役的持久化回执兜底：子进程收到 remove-session 后正常在秒级回执
+// session-exited；本超时只在回执永不到达（IPC 断、子进程卡在关闭序列）时
+// 兜底，把「无限挂起」变成可判定的失败。取值须显著大于大会话保存耗时，
+// 否则会把仍在正常保存的退役误判为失败（后果是接续无谓失败，可重试）。
+export const SESSION_PERSISTENCE_ACK_TIMEOUT_MS = 30000;
 export const ASSEMBLY_EXIT_WAIT_MS      = 2500;     // assembly runtime 退出等待
 export const TUNNEL_RECONNECT_INITIAL_MS = 1000;    // managed SSH 首次重连退避
 export const TUNNEL_RECONNECT_MAX_MS     = 30000;   // managed SSH 重连退避上限

@@ -1113,11 +1113,10 @@ async function handleCoreResponsesNotFound(pollToken) {
   // 接续窗口豁免：旧 head 退役是预期事实（挡板已立、successor 尚未
   // ready），此间的 /responses 404 不是会话消失——保持视图与选中不动，
   // 等待 head-advanced 事件原地重绑到 successor（thread-store）。窗口判
-  // 定以 threads 挡板事实为准（5 分钟过期规则与 THREAD_HANDOFF_STALE_MS
-  // 同步维护）；挡板超时或无线程时落回原 404 处理。
+  // 定只读服务端记录的 status（与 isHandoffBarrierActive 同一派生规则）；
+  // 无线程或挡板已收敛时落回原 404 处理。
   {
-    const isFreshBarrier = (thread) => !!thread && Number(thread.handoffStartedAt) > 0
-      && Date.now() - Number(thread.handoffStartedAt) < 5 * 60 * 1000;
+    const isBarrierActive = (thread) => !!thread && String(thread.status || '') === 'rotating';
     const runtimeSessionId = typeof getRuntimeWorkspaceSessionId === 'function'
       ? String(getRuntimeWorkspaceSessionId(pollRuntimeId) || '').trim() : '';
     const hostRecord = typeof getCurrentHostAgentRecord === 'function' ? getCurrentHostAgentRecord() : null;
@@ -1126,16 +1125,16 @@ async function handleCoreResponsesNotFound(pollToken) {
       ? window.getThreadForSession(hostRecord.id, runtimeSessionId) : null);
     let handoffThread = lookupThread();
     // 豁免判定不得建立在可能过期的线程缓存上（SSE 丢失 / 刷新竞态会把
-    // 预期退役误判成会话消失）：会话映射到线程但挡板不新鲜时，先强制
+    // 预期退役误判成会话消失）：会话映射到线程但挡板未立起时，先强制
     // 刷新线程事实再重判。刷新后的线程事实同时驱动接力指示器与暂存气
     // 泡渲染（refreshThreads 收尾统一刷新），404 本身即接续信号。
-    if (handoffThread && !isFreshBarrier(handoffThread)
+    if (handoffThread && !isBarrierActive(handoffThread)
       && typeof window.refreshThreads === 'function') {
       await window.refreshThreads(true).catch(() => {});
       if (!isSessionViewTokenCurrent(pollToken)) return true;
       handoffThread = lookupThread();
     }
-    if (isFreshBarrier(handoffThread)) {
+    if (isBarrierActive(handoffThread)) {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return true;
     }

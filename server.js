@@ -771,6 +771,7 @@ setupThreadRoutes(app, express, {
     observeThreadTurnFact(fact, { requireAgent: requireAgentLight });
   },
   ensureHeadRuntime,
+  rotationService: threadRotation,
   threadDelete,
   // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null。
   // 线程列表逐线程调用（~百线程 × 5s/20s 轮询）：走共享只读索引查询，

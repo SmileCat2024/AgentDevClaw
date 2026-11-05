@@ -108,6 +108,7 @@ test('coder 插件协议：coder-threads block 与行动作声明齐全', async 
         'coderThreads.openHead',
         'coderThreads.remove',
         'coderThreads.resume',
+        'coderThreads.resumeRotation',
         'coderThreads.switchTab',
         'coderThreads.unarchive',
       ],
@@ -227,4 +228,75 @@ test('卸载契约：自动刷新定时器被清除，视图状态复位', async
       assert.equal(calls.rerender, 1);
     } finally { reloaded.unmount(); }
   } finally { plugin?.unmount(); restore(); }
+});
+
+test('恢复按钮按域分流：rotation_failed 走 resume-rotation，看板失败走 resume', async () => {
+  const restore = installMinimalWindow();
+  const prevFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url: String(url), body: init?.body });
+    return { ok: true, status: 200, json: async () => ({ ok: true, applied: true }) };
+  };
+  let plugin;
+  try {
+    plugin = await loadPlugin(makeHost().host);
+    withThreads([
+      { threadId: 'wt-rot', agentId: 'coder', lifeState: 'idle', headSessionId: 'h1',
+        status: 'rotation_failed', failed: true },
+      { threadId: 'wt-board', agentId: 'coder', lifeState: 'idle', headSessionId: 'h1',
+        status: 'open', failed: true },
+    ]);
+    const html = plugin.blocks['coder-threads']({ id: 'coder' }, { type: 'coder-threads' });
+    // 契约：两个域的「恢复」不能互换——接续失败时看板通常停在 idle，
+    // 走 board.resume 必然 409 board_not_resumable。
+    assert.match(html, /data-action="coderThreads\.resumeRotation" data-thread-id="wt-rot"/);
+    assert.match(html, /data-action="coderThreads\.resume" data-thread-id="wt-board"/);
+
+    // 处理器必须真实存在（否则按钮点击静默无反应），且打到接续恢复端点。
+    plugin.actions['coderThreads.resumeRotation']({ dataset: { threadId: 'wt-rot' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(
+      requests.some((r) => r.url.includes('/protoclaw/threads/wt-rot/resume-rotation')),
+      `恢复按钮应请求接续恢复端点：${JSON.stringify(requests)}`,
+    );
+  } finally {
+    plugin?.unmount();
+    globalThis.fetch = prevFetch;
+    restore();
+  }
+});
+
+test('恢复按钮：接续未完成（applied=false）时向用户提示原因，不静默成功', async () => {
+  const restore = installMinimalWindow();
+  const prevFetch = globalThis.fetch;
+  const toasts = [];
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, applied: false, reason: 'head_runtime_unavailable', stage: 'wake_head' }),
+  });
+  let plugin;
+  try {
+    const { host } = makeHost();
+    plugin = await loadPlugin(host);
+    globalThis.window.ClawToast = {
+      show: (payload) => toasts.push(payload),
+      error: (msg) => toasts.push({ status: 'error', description: msg }),
+    };
+    withThreads([{ threadId: 'wt-rot', agentId: 'coder', lifeState: 'idle', headSessionId: 'h1',
+      status: 'rotation_failed', failed: true }]);
+
+    plugin.actions['coderThreads.resumeRotation']({ dataset: { threadId: 'wt-rot' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 服务端保持 200 表达「接续未完成」，前端若不看 applied 会把失败当成功。
+    assert.equal(toasts.length, 1, `应提示一次：${JSON.stringify(toasts)}`);
+    assert.equal(toasts[0].status, 'warning');
+    assert.ok(String(toasts[0].description).includes('head_runtime_unavailable'), '提示带出 reason');
+  } finally {
+    plugin?.unmount();
+    globalThis.fetch = prevFetch;
+    restore();
+  }
 });
