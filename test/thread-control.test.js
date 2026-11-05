@@ -1019,8 +1019,84 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal((await integration.handleRuntimeReady('programming-helper', 'coder-s2')).reason, 'no_thread_for_session');
   });
 
-  test('applySessionSuccession is no-op for non-host agents and non-head sessions', async () => {    const { core, integration } = makeIntegration();
+  // 指令在「被这一棒收下、该轮尚未产出终态事件」时遭遇接力，会永久停在
+  // delivered（框架把它当终态，后续补投递只投 pending）。不回收就等于静默
+  // 丢弃：新 head 收不到，调度方永远等不到通知。此处锁定回收契约。
+  test('接力回收上一棒收到却未执行的指令，已执行的指令不重投', async () => {
+    const turns = [];
+    const { control, core, integration } = makeIntegration({
+      enabled: true,
+      resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'coder-s2' ? 'viewer-s2' : null),
+      submitTurn: async (params) => { turns.push(params); return { success: true }; },
+    });
+    const strandThread = await integration.onSessionCreated('coder', { id: 'coder-s1' });
 
+    // 两条指令都在旧 head 上「已投递」。
+    await core.appendCommand({ threadId: strandThread.threadId, text: '被接力打断的指令' });
+    await core.appendCommand({ threadId: strandThread.threadId, text: '已经跑完的指令' });
+    let record = await core.getThread(strandThread.threadId);
+    const [stranded, finished] = record.commands.map((c) => c.commandId);
+    await core.store.update(strandThread.threadId, (draft) => {
+      for (const command of draft.commands) {
+        command.status = 'delivered';
+        command.deliveredAt = Date.now();
+      }
+      return draft;
+    });
+
+    // 只给「已跑完」那条补终态事件；另一条只有 turn.started，说明这一棒没跑完。
+    await control.board.recordRuntimeEvent({
+      agentId: 'coder', sessionId: 'coder-s1', runtimeInstanceId: 'r1',
+      event: { type: 'turn.started', turn: 1, sourceRef: finished },
+    });
+    await control.board.recordRuntimeEvent({
+      agentId: 'coder', sessionId: 'coder-s1', runtimeInstanceId: 'r1',
+      event: { type: 'turn.completed', turn: 1, sourceRef: finished },
+    });
+
+    const outcome = await integration.applySessionSuccession({
+      agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
+    });
+    assert.equal(outcome.applied, true);
+    assert.deepEqual(outcome.requeued, [stranded]);
+    // 回收的那条回到待投递并被新 head 收到；已跑完的那条不重投。
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].text, '被接力打断的指令');
+
+    record = await core.getThread(strandThread.threadId);
+    const strandedAfter = record.commands.find((c) => c.commandId === stranded);
+    const finishedAfter = record.commands.find((c) => c.commandId === finished);
+    assert.equal(strandedAfter.status, ThreadCommandStatus.DELIVERED);
+    assert.equal(finishedAfter.status, ThreadCommandStatus.DELIVERED);
+  });
+
+  test('接力保留窗口里看不到上一棒事件时保守跳过，不误投已完成指令', async () => {
+    const turns = [];
+    const { core, integration } = makeIntegration({
+      enabled: true,
+      resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'coder-s2' ? 'viewer-s2' : null),
+      submitTurn: async (params) => { turns.push(params); return { success: true }; },
+    });
+    const silentThread = await integration.onSessionCreated('coder', { id: 'coder-s1' });
+    await core.appendCommand({ threadId: silentThread.threadId, text: '没有事件记录的指令' });
+    await core.store.update(silentThread.threadId, (draft) => {
+      for (const command of draft.commands) {
+        command.status = 'delivered';
+        command.deliveredAt = Date.now();
+      }
+      return draft;
+    });
+
+    // 该会话在保留事件里一条都没有：无从判断，保持 delivered。
+    const outcome = await integration.applySessionSuccession({
+      agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
+    });
+    assert.equal(outcome.applied, true);
+    assert.deepEqual(outcome.requeued, []);
+    assert.equal(turns.length, 0);
+  });
+
+  test('applySessionSuccession is no-op for non-host agents and non-head sessions', async () => {    const { core, integration } = makeIntegration();
     const phOutcome = await integration.applySessionSuccession({
       agentId: 'programming-helper',
       fromSessionId: 'a',

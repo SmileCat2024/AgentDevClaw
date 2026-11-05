@@ -254,6 +254,8 @@ describe('scenario A: adaptive default rotates a tool-heavy thread end-to-end (t
     assert.equal(record.pendingSuccession, null);
     const predecessor = record.sessionChain.find((e) => e.sessionId === sessionId);
     assert.equal(predecessor.role, 'predecessor');
+    // 作者默认声明的是 adaptive，但这组 tool-heavy 上下文试探定档为 trim：
+    // endKind 必须记实际档（trim），记成 adaptive 就分不清真正走了哪条路径。
     assert.equal(predecessor.endKind, 'trim');
 
     // R3 恢复指令：播种 + 投递给新 head 的 viewer runtime

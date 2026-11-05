@@ -46,6 +46,15 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
     assert.ok(!('resume' in POLICY.verbs));
   });
 
+  it('adapter 注册面与策略动词表逐一对齐（resume-rotation 断链回归）', () => {
+    // 历史缺陷：策略声明了 resume-rotation（help 可见），但 createThreadsAdapters
+    // 的 verbs 数组漏注册，执行时 fallback 到外部命令 spawn 报 ENOENT。本断言锁
+    // 死两面同源：策略面新增动词而执行面漏注册时在此失败。
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test' });
+    const registered = Object.keys(adapters).map((k) => k.replace(/^threads:/, '')).sort();
+    assert.deepEqual(registered, Object.keys(POLICY.verbs).sort());
+  });
+
   it('工具声明 parallelizable：派发语义批次可并发（同线程冲突由服务端 409 仲裁）', () => {
     const tool = createCapabilityShellTool(POLICY, {}, { });
     assert.equal(tool.parallelizable, true);

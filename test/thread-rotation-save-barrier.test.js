@@ -6,6 +6,7 @@ import { createThreadRotationService } from '../server/thread-control/thread-rot
 
 function createHarness({ stopResult = 'success', retireError = null } = {}) {
   let releaseStop;
+  const stopStarted = Promise.withResolvers();
   let stopCalls = 0;
   let snapshotReads = 0;
   let failCalls = 0;
@@ -24,6 +25,7 @@ function createHarness({ stopResult = 'success', retireError = null } = {}) {
     },
     stopManagedAgent: async (_agentId, _sessionId, options) => {
       stopCalls += 1;
+      stopStarted.resolve();
       if (options?.waitForPersistence) {
         assert.deepEqual(options, { waitForPersistence: true });
         return stopGate;
@@ -45,6 +47,7 @@ function createHarness({ stopResult = 'success', retireError = null } = {}) {
   return {
     service,
     releaseStop,
+    stopStarted: stopStarted.promise,
     get stopCalls() { return stopCalls; },
     get snapshotReads() { return snapshotReads; },
     get failCalls() { return failCalls; },
@@ -56,8 +59,9 @@ describe('thread rotation session save barrier', () => {
   it('does not read the old snapshot until save confirmation succeeds', async () => {
     const harness = createHarness();
     const rotating = harness.service.handleContextGuard('coder', 'head-1');
-    await Promise.resolve();
-    await Promise.resolve();
+    // 等确定状态（退役已发起），不数微任务拍数：接力开始前多了策略解析的
+    // 一次 await，拍数会随实现细节漂移，条件等待只关心事实。
+    await harness.stopStarted;
 
     assert.equal(harness.stopCalls, 1);
     assert.equal(harness.snapshotReads, 0, 'snapshot read must stay behind the persistence barrier');
@@ -83,8 +87,7 @@ describe('thread rotation session save barrier', () => {
       const error = new Error(`${scenario.outcome}: persistence not confirmed`);
       const harness = createHarness({ stopResult: error });
       const rotating = harness.service.handleContextGuard('coder', 'head-1');
-      await Promise.resolve();
-      await Promise.resolve();
+      await harness.stopStarted;
       assert.equal(harness.snapshotReads, 0);
       harness.releaseStop();
 
@@ -101,8 +104,7 @@ describe('thread rotation session save barrier', () => {
     const harness = createHarness();
     const first = harness.service.handleContextGuard('coder', 'head-1');
     const duplicate = harness.service.handleContextGuard('coder', 'head-1');
-    await Promise.resolve();
-    await Promise.resolve();
+    await harness.stopStarted;
     assert.equal(harness.stopCalls, 1);
     assert.equal(harness.snapshotReads, 0);
 
@@ -122,8 +124,7 @@ describe('thread rotation session save barrier', () => {
       stopResult: new Error('Session runtime is unavailable before persistence confirmation'),
     });
     const rotating = harness.service.handleContextGuard('coder', 'head-1');
-    await Promise.resolve();
-    await Promise.resolve();
+    await harness.stopStarted;
     harness.releaseStop();
     const result = await rotating;
     assert.equal(result.applied, false);
@@ -144,8 +145,7 @@ describe('thread rotation session save barrier', () => {
         retireError: new Error('kill failed'),
       });
       const rotating = harness.service.handleContextGuard('coder', 'head-1');
-      await Promise.resolve();
-      await Promise.resolve();
+      await harness.stopStarted;
       harness.releaseStop();
       const result = await rotating;
 

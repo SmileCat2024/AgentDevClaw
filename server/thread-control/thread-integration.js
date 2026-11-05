@@ -58,6 +58,82 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
   // 三个触发点（apply 后 / runtime ready / gateway append 后）共享同一消费面
   const deliveryConsumer = createDeliveryConsumer(core);
 
+  /**
+   * 把上一棒里「已投递但从未被执行」的指令放回待投递队列。
+   *
+   * `delivered` 在框架里是终态（TERMINAL_STATUSES），只表示「已交给 runtime」，
+   * 不表示「已执行出结果」。接力恰好发生在指令被接收、该轮尚未产出终态事件时，
+   * 这条指令就会永久停在 delivered：后续每次补投递只投 pending，它再也不会被
+   * 送达新 head——指令静默丢失，调度方永远等不到通知，表现为「干完活没通知」
+   * （实际是指令没被执行）。
+   *
+   * 判定依据是看板事件流：该指令若已有 turn.completed，说明它确实执行完了；
+   * 没有则说明这一棒只消费了它、没跑完。只看事件事实，不做时间或内容猜测。
+   *
+   * 归属判定用 sessionChain 的存续时间窗（deliveredAt ∈ [startedAt, endedAt]），
+   * 而不是 deliveryRef——后者是 runtime 标识，与 sessionId 不同源。
+   * 若退役这一棒在保留事件里一条都没有（被裁剪），无法证明也未能否定，
+   * 保守跳过，宁可少回收也不重复执行已完成的指令。
+   *
+   * 接续指令（system_continuation）由接续链路独占，不在此列。
+   */
+  async function requeueUnfinishedCommands(threadId, retiredSessionId) {
+    if (!retiredSessionId || typeof board?.getState !== 'function') return [];
+    let state;
+    try {
+      state = await board.getState(threadId);
+    } catch {
+      return [];
+    }
+    const entries = Array.isArray(state?.executionEvents) ? state.executionEvents : [];
+    // 事件流按会话记录：收集这一棒里「已产出 turn.completed」的指令引用。
+    const settled = new Set();
+    let touched = false;
+    for (const entry of entries) {
+      if (entry?.sessionId !== retiredSessionId) continue;
+      touched = true;
+      if (entry?.event?.type !== 'turn.completed') continue;
+      for (const ref of [entry.event.sourceRef, ...(entry.event.consumedSourceRefs || [])]) {
+        if (typeof ref === 'string' && ref) settled.add(ref);
+      }
+    }
+    // 保留窗口里看不到这一棒的任何事件：可能整棒被裁剪，无从判断，保守跳过。
+    if (!touched) return [];
+
+    const thread = await core.getThread(threadId);
+    const bar = (thread?.sessionChain || []).find((entry) => entry?.sessionId === retiredSessionId);
+    const barStart = Number(bar?.startedAt) || 0;
+    const barEnd = Number(bar?.endedAt) || Infinity;
+
+    const requeued = [];
+    for (const command of thread?.commands || []) {
+      if (command?.status !== 'delivered') continue;
+      if (command.kind === 'system_continuation') continue;
+      // 已有终态事件：这一棒确实把它跑完了，不得重投。
+      if (settled.has(command.commandId)) continue;
+      // 必须落在退役这一棒的存续期内，才算「这一棒收下但没跑完」。
+      const deliveredAt = Number(command.deliveredAt) || 0;
+      if (!deliveredAt || deliveredAt < barStart || deliveredAt > barEnd) continue;
+      requeued.push(command.commandId);
+    }
+    if (requeued.length === 0) return [];
+    const ids = new Set(requeued);
+    await core.store.update(threadId, (record) => {
+      for (const command of record?.commands || []) {
+        if (!ids.has(command?.commandId)) continue;
+        // 回到待投递：清掉本轮投递引用与终态标记，让新 head 重新接收。
+        command.status = 'pending';
+        command.deliveryRef = null;
+        command.deliveredAt = null;
+        command.lastReason = null;
+        command.updatedAt = Date.now();
+      }
+      return record;
+    });
+    console.log(`[thread-integration] requeued ${requeued.length} unfinished command(s) after succession: ${threadId} retired=${retiredSessionId}`);
+    return requeued;
+  }
+
   return {
     core,
     board,
@@ -189,6 +265,12 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
         thread = await core.findThreadByHeadSession(normalizedAgentId, from);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
 
+        // 换棒前先把「上一棒收到却始终没跑出结果」的指令放回待投递：这类指令
+        // 停在 delivered 终态，之后的每次补投递（只投 pending）都不会再送它，
+        // 不回收就等于静默丢弃。必须在 advanceHead 之前完成，随后的 consume
+        // 才会把它们连同接续档的暂存指令一起投给新 head。
+        const requeued = await requeueUnfinishedCommands(thread.threadId, from);
+
         const advanced = await core.advanceHead({
           threadId: thread.threadId,
           toSessionId: to,
@@ -211,7 +293,7 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
           toSessionId: to,
           reason: String(reason || 'manual').trim() || 'manual',
         });
-        return { applied: true, thread: advanced, delivery };
+        return { applied: true, thread: advanced, delivery, requeued };
       } catch (error) {
         if (error instanceof ThreadNotFoundError) {
           return { applied: false, reason: 'thread_not_found' };

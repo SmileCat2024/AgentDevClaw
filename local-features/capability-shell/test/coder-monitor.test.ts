@@ -97,6 +97,23 @@ describe('Coder execution observation (ADR-0031)', () => {
     assert.match(await monitor.observe(identity), /reason=completed/);
   });
 
+  it('指令被接力接管、回收后在新 head 执行完，监视能收到完成', async (t) => {
+    // 事故形态：指令在 s1 被收下但该轮没跑完就接力，服务端把它回收为 pending，
+    // 随后在新 head s2 重新投递并执行完成。监视必须沿着同一条 commandId 收到终态，
+    // 而不是永远等一个 s1 上不会到来的事件。
+    let state = snapshot([{ type: 'turn.started', sourceRef: 'cmd-1' }],
+      { status: 'rotating', sessionChain: [{ sessionId: 's1' }] });
+    const { monitor } = harness(t, async () => state);
+    assert.match(await monitor.observe(identity), /^monitoring/);
+
+    state = { ...snapshot([completed('cmd-1', { sessionId: 's2' })], {
+      headSessionId: 's2',
+      sessionChain: [{ sessionId: 's1' }, { sessionId: 's2' }],
+      commands: [{ commandId: 'cmd-1', source: 'coder_shell', status: 'delivered' }],
+    }), cursor: 2 };
+    assert.match(await monitor.observe(identity), /reason=completed/);
+  });
+
   it('ordinary interruption is not completed and does not wait forever', async (t) => {
     const { monitor } = harness(t, async () => snapshot([{ type: 'turn.cancelled', sourceRef: 'cmd-1' }]));
     assert.match(await monitor.observe(identity), /reason=execution_cancelled/);

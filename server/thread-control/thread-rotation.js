@@ -125,7 +125,15 @@ export function createThreadRotationService({
     // 产生孤儿 successor。
     if (thread.deleting === true) return null;
 
-    const begun = await threadIntegration.beginSessionSuccession({ agentId, sessionId, reason: 'trim' });
+    // 声明档在接力开始时解析：begin 事件与产物构造共用它。此处只知道配置
+    // 声明了什么，还不知道 adaptive 会定档到哪一档（那要等试探结果），所以
+    // begin 事件记声明档。'combined' 表示未声明的组合语义。
+    // 解析只读工作空间配置（readWorkspaceResourcePolicies 有内存缓存），不触碰
+    // 线程状态；挡板（beginSessionSuccession）仍是所有线程副作用之前的唯一闸口。
+    const resolvedStrategy = normalizeSessionStrategy(sessionStrategy) ?? await resolveRotationStrategyOption(agentId);
+    const declaredReason = resolvedStrategy || 'combined';
+
+    const begun = await threadIntegration.beginSessionSuccession({ agentId, sessionId, reason: declaredReason });
     if (!begun?.applied) {
       // 挡板未立（gate 拒绝 / 无线程竞态 / 存储失败）：本流程未开始，
       // 零副作用退出。gate 场景在办状态归其属主，退役 runtime 或写
@@ -150,9 +158,7 @@ export function createThreadRotationService({
         //   trim+追加摘要（现状语义，试验不波及其他宿主）。
         // 策略每次接力现读：会话级载荷（交互守卫的自动接续态随事件上报）优先，
         // 无载荷回落 APP 级判定链（用户覆盖 > 作者默认），改配置对下一次接力即时生效。
-        ...buildRotationHandoffOptions(
-          normalizeSessionStrategy(sessionStrategy) ?? await resolveRotationStrategyOption(agentId),
-        ),
+        ...buildRotationHandoffOptions(resolvedStrategy),
         startRuntime: true,
       });
       const nextSessionId = cleanSessionText(result?.session?.id);
@@ -162,6 +168,11 @@ export function createThreadRotationService({
           { code: 'compact_or_successor' },
         );
       }
+      // 实际执行档位：adaptive 由试探结果定档（adaptive.tier，取 trim /
+      // trim-summary / summary），其余档声明即实际。endKind 记的是「这一棒
+      // 以什么方式结束」，所以这里必须是实际档而非声明档——否则 adaptive
+      // 定档到 trim 的接力会被记成 adaptive，审计看不出真正走了哪条路径。
+      const executedTier = cleanSessionText(result?.adaptive?.tier) || resolvedStrategy || 'combined';
       // T002 接力提交点：successor READY（result.agent 为 ready 证据）
       // 之前不得成为有效 head；失败由提交点落阶段与原因。
       const commit = commitHead
@@ -169,14 +180,14 @@ export function createThreadRotationService({
           agentId,
           fromSessionId: sessionId,
           toSessionId: nextSessionId,
-          reason: 'trim',
+          reason: executedTier,
           successorReady: result?.agent != null,
         })
         : await threadIntegration.applySessionSuccession({
           agentId,
           fromSessionId: sessionId,
           toSessionId: nextSessionId,
-          reason: 'trim',
+          reason: executedTier,
         });
       if (!commit.applied) {
         // 提交失败（未 READY / 身份门 / 并发 void）：线程未推进，本棒

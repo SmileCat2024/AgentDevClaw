@@ -69,7 +69,7 @@ export function createThreadsAdapters(deps: {
   access?: BackgroundAccess;
 }): Record<string, ThreadAdapter> {
   const adapter = createThreadsAdapter(deps).threads;
-  const verbs = ['new-session', 'runtime-policy', 'create', 'send', 'watch', 'result', 'list', 'show', 'archive', 'unarchive', 'deliver'] as const;
+  const verbs = ['new-session', 'runtime-policy', 'create', 'send', 'watch', 'result', 'list', 'show', 'archive', 'unarchive', 'deliver', 'resume-rotation'] as const;
   const map: Record<string, ThreadAdapter> = {};
   for (const verb of verbs) {
     map[`threads:${verb}`] = async (args, context) => {

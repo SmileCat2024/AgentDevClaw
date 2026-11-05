@@ -152,6 +152,7 @@ export function createSessionHandoffHelpers(deps) {
     goal = '',
     startRuntime = true,
     trace = null,
+    adaptiveTier = null,
   }) {
     const normalizedAgentId = normalizeClientAgentId(preferredAgentId);
     if (!handoffPath && (!normalizedAgentId || !handoffId)) {
@@ -246,6 +247,9 @@ export function createSessionHandoffHelpers(deps) {
           sessionMeta: sessionRecordToWorkspaceMeta(session),
         })
         : null,
+      // adaptive 档的试探定档结果（{ tier, ratio }）；其他档为 null。
+      // endKind 要记实际档位，故由产物入口一路透传给接力编排。
+      ...(adaptiveTier ? { adaptive: adaptiveTier } : {}),
     };
   }
 
@@ -266,12 +270,17 @@ export function createSessionHandoffHelpers(deps) {
     trace?.mark('handoff_exported');
     const handoffPath = cleanSessionText(exportResult?.handoffPath);
     const handoffId = cleanSessionText(exportResult?.handoff?.handoffId);
+    // adaptive 档的试探定档结果（tier / ratio）随产物带给接力编排：sessionChain
+    // 的 endKind 要记实际档位，审计才能区分 adaptive 究竟走了哪条路径
+    // （trim / trim-summary / summary），见 createCompactedResumeFromHandoff 的
+    // adaptiveTier 参数。
     return createCompactedResumeFromHandoff({
       preferredAgentId,
       handoffId,
       handoffPath,
       startRuntime,
       trace,
+      adaptiveTier: exportResult?.adaptive || null,
     });
   }
 

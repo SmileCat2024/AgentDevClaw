@@ -104,11 +104,14 @@ describe('thread rotation (context guard relay)', () => {
     const result = await service.handleContextGuard('coder', 'session-1');
 
     assert.deepEqual(result, { applied: true, threadId: 'wt-1', headSessionId: 'session-next' });
-    assert.deepEqual(calls.begin, [{ agentId: 'coder', sessionId: 'session-1', reason: 'trim' }]);
+    // begin 事件记声明档（此时还不知 adaptive 会定到哪一档）；未声明策略的
+    // 宿主回落组合语义，标注 'combined'（不再是硬编码的 'trim'）。
+    assert.deepEqual(calls.begin, [{ agentId: 'coder', sessionId: 'session-1', reason: 'combined' }]);
     // pre-rotation retire happens exactly once on success
     assert.equal(calls.stop.length, 1);
+    // apply 的 reason 落成 endKind（这一棒以什么方式结束），用实际执行档位。
     assert.deepEqual(calls.apply, [{
-      agentId: 'coder', fromSessionId: 'session-1', toSessionId: 'session-next', reason: 'trim',
+      agentId: 'coder', fromSessionId: 'session-1', toSessionId: 'session-next', reason: 'combined',
     }]);
     // R3：恢复指令随 begin 挡板由框架原子播种（source=thread-succession），
     // rotation 不再在 apply 后手动追加。
@@ -314,5 +317,48 @@ describe('thread rotation strategy dispatch (声明驱动三选一)', () => {
       appendSummary: false,
       startRuntime: true,
     }]);
+  });
+
+  it('begin records the declared tier while endKind records the executed tier', async () => {
+    // 观测性契约分两处、两种语义：
+    //   begin  —— 声明档（配置声明了什么；此时 adaptive 尚未定档）
+    //   apply  —— 实际执行档，落成 sessionChain 的 endKind（这一棒以什么结束）
+    for (const [sessionPayload, expectedReason] of [
+      ['summary', 'summary'],
+      ['trim', 'trim'],
+      ['adaptive', 'adaptive'],
+    ]) {
+      const { service, calls } = buildDeps({ thread, strategy: 'adaptive' });
+      await service.handleContextGuard('programming-helper', 'session-1', sessionPayload);
+      assert.equal(calls.begin[0].reason, expectedReason,
+        `begin 事件 reason 应为声明档 ${expectedReason}`);
+      assert.equal(calls.apply[0].reason, expectedReason,
+        `apply 事件 reason 应为声明档 ${expectedReason}（无 adaptive 定档结果时回落声明档）`);
+    }
+  });
+
+  it('endKind records the tier adaptive actually settled on, not the declared adaptive', async () => {
+    // 承诺：adaptive 只是声明，实际可能定档到 trim / trim-summary / summary。
+    // endKind 记的是「这一棒以什么方式结束」，必须取实际定档结果，否则审计
+    // 无法区分「实际精简」与「实际摘要」这两条完全不同的路径。
+    const { service, calls } = buildDeps({
+      thread,
+      strategy: 'adaptive',
+      // 真实 helper 在 adaptive 档把定档结果挂在返回值上（adaptive.tier）。
+      compactResult: { session: { id: 'session-next' }, adaptive: { tier: 'trim', ratio: 0.013 } },
+    });
+    const result = await service.handleContextGuard('programming-helper', 'session-1', 'adaptive');
+
+    assert.equal(result.applied, true);
+    assert.equal(calls.begin[0].reason, 'adaptive', 'begin 只知声明档');
+    assert.equal(calls.apply[0].reason, 'trim',
+      'endKind 必须记实测定档结果 trim，而非声明的 adaptive');
+  });
+
+  it('undeclared strategy labels events as combined', async () => {
+    const { service, calls } = buildDeps({ thread, strategy: null });
+    await service.handleContextGuard('programming-helper', 'session-1');
+    assert.equal(calls.begin[0].reason, 'combined');
+    assert.equal(calls.apply[0].reason, 'combined');
   });
 });
