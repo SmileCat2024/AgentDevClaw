@@ -9,7 +9,7 @@ import { readJson, readJsonSafe } from '../shared/fs-helpers.js';
 import { buildStatus } from '../shared/agent-access.js';
 import { readSessionIndex, findPrebuiltSessionRecordShared } from '../shared/session-access.js';
 import { resolveWorkspaceData, readWorkspaceState } from './workspace.js';
-import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './im.js';
+import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName, operatorCarrierOf } from './im.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { resolveAgentProcessMode } from '../shared/process-mode.js';
 import { normalizePermissionDeclarations, normalizePermissionDefaults } from '../shared/permission-registry.js';
@@ -301,7 +301,7 @@ export function createAgentDiscoveryModule(ctx) {
     if (sanitizeSessionFragment(agent?.id) === 'qqbot') {
       try {
         const imConfig = await readProjectIMWorkspaceConfig();
-        return getPortalAgentDisplayName(imConfig.selectedChannel);
+        return getPortalAgentDisplayName(operatorCarrierOf(imConfig));
       } catch {}
       return getPortalAgentDisplayName(getDefaultIMChannelId());
     }
@@ -351,7 +351,7 @@ export function createAgentDiscoveryModule(ctx) {
       if (sanitizeSessionFragment(agent.id) === 'qqbot') {
         try {
           const imConfig = await readProjectIMWorkspaceConfig();
-          noSessionDisplayName = getPortalAgentDisplayName(imConfig.selectedChannel);
+          noSessionDisplayName = getPortalAgentDisplayName(operatorCarrierOf(imConfig));
         } catch {}
       }
       return {
@@ -397,7 +397,7 @@ export function createAgentDiscoveryModule(ctx) {
     if (!displayName && sanitizeSessionFragment(agent.id) === 'qqbot') {
       try {
         const imConfig = await readProjectIMWorkspaceConfig();
-        displayName = getPortalAgentDisplayName(imConfig.selectedChannel);
+        displayName = getPortalAgentDisplayName(operatorCarrierOf(imConfig));
       } catch {}
     }
 
@@ -455,7 +455,7 @@ export function createAgentDiscoveryModule(ctx) {
       if (!displayName && sanitizeSessionFragment(agentId) === 'qqbot') {
         try {
           const imConfig = await readProjectIMWorkspaceConfig();
-          displayName = getPortalAgentDisplayName(imConfig.selectedChannel);
+          displayName = getPortalAgentDisplayName(operatorCarrierOf(imConfig));
         } catch {}
       }
       return {

@@ -236,6 +236,11 @@ export async function observeCallStatusSnapshot(kind, agentId, snapshot, opts = 
     }
     if (!targetAgentId) return;
     if (kind === 'notification') {
+      // 线程宿主（coder / qqbot 接线员等）的完成事实由线程轮次事实承载
+      // （下方 observeThreadTurnFact——带线程身份与交付文本，与
+      // thread_events 同一事实源）；快照路径在此让位，避免同一轮次双通知。
+      // input-requests 不受影响：轮次事实不覆盖输入请求。
+      if (typeof opts.isThreadHostAgentId === 'function' && opts.isThreadHostAgentId(targetAgentId)) return;
       const finishTs = extractFinishTimestamp(snapshot);
       if (!finishTs) return; // 非结束态快照（call.start / calling 中）：无结束事实
       if (isSuspendedFinish(snapshot)) return; // 挂起等待唤醒，不是完成
@@ -267,6 +272,40 @@ export async function observeCallStatusSnapshot(kind, agentId, snapshot, opts = 
     }
   } catch (error) {
     console.warn(`[app-notification] observe ${kind}:${agentId} failed:`, error?.message || error);
+  }
+}
+
+/**
+ * 线程轮次终态事实感知（ADR-0042 决策 4 的非 IM 首订阅者）：thread_events
+ * 落板后的 turn 终态事实 → finish 通知（带线程身份与交付文本摘要）。
+ * cancelled 不是完成新闻（用户/宿主自己打断的），跳过；completed 与
+ * failed 照 finish 语义投递。dedupe 键绑定轮次事实（agentId + threadId +
+ * 状态 + 轮次号），同一轮次只投一次；权限判定与三层判定链同源
+ * （notifications.finish）。fact 形状见 thread-routes.js onTurnTerminalFact
+ * 注释。自捕获错误：感知失败只留痕，绝不打断上报链。
+ */
+export async function observeThreadTurnFact(fact, opts = {}) {
+  try {
+    const agentId = String(fact?.agentId || '').trim();
+    const threadId = String(fact?.threadId || '').trim();
+    if (!agentId || !threadId) return;
+    if (fact.status === 'cancelled') return;
+    const turnKey = Number.isInteger(fact.turn) ? String(fact.turn) : 'none';
+    await deliverAppNotification({
+      agentId,
+      type: 'finish',
+      threadId,
+      // 交付事实摘要（呈现级截断；完整文本在线程事件流里）
+      ...(typeof fact.resultText === 'string' && fact.resultText
+        ? { body: String(fact.resultText).slice(0, 200) }
+        : {}),
+      outcomeStatus: fact.status === 'failed' ? 'failed' : 'completed',
+      ...(fact?.error?.message ? { errorMessage: String(fact.error.message) } : {}),
+      dedupeKey: `${agentId}:${threadId}:${fact.status}:${turnKey}`,
+      ...opts,
+    });
+  } catch (error) {
+    console.warn('[app-notification] observeThreadTurnFact failed:', error?.message || error);
   }
 }
 

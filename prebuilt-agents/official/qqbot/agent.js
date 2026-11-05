@@ -94,17 +94,29 @@ function readIMWorkspaceConfig(configPath) {
   try {
     const raw = JSON.parse(readFileSync(configPath, 'utf8'));
     const channels = raw && typeof raw.channels === 'object' && raw.channels ? raw.channels : {};
-    const rawChannel = typeof raw.selectedChannel === 'string' ? raw.selectedChannel.trim() : '';
-    const selectedChannel = rawChannel && channels[rawChannel] ? rawChannel : '';
+    // ADR-0042：线路统一线程寻址。接线员线路 = boundTarget 指向 operatorThreadId
+    // 的线路；门户渠道 = 接线员线路的 carrier（selectedChannel 已并入线路模型，
+    // 此处读到旧字段会被忽略——配置经 server 归一化写盘后残留自然消失）。
+    const operatorThreadId = typeof raw.operatorThreadId === 'string' ? raw.operatorThreadId.trim() : '';
+    const rawLines = Array.isArray(raw.lines) ? raw.lines : [];
+    const operatorLines = operatorThreadId
+      ? rawLines.filter((l) => l && typeof l === 'object'
+        && l.boundTarget && l.boundTarget.agentId === 'qqbot'
+        && typeof l.boundTarget.threadId === 'string'
+        && l.boundTarget.threadId.trim() === operatorThreadId)
+      : [];
+    const operatorCarrier = (operatorLines.find((l) => typeof l.carrier === 'string' && l.carrier.trim()) || {}).carrier || '';
     return {
-      selectedChannel,
-      receptionistSessionId: typeof raw.receptionistSessionId === 'string' ? raw.receptionistSessionId.trim() : '',
+      operatorThreadId,
+      operatorCarrier: operatorCarrier.trim(),
+      lines: rawLines,
       channels,
     };
   } catch {
     return {
-      selectedChannel: '',
-      receptionistSessionId: '',
+      operatorThreadId: '',
+      operatorCarrier: '',
+      lines: [],
       channels: {},
     };
   }
@@ -723,26 +735,29 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
 
   async startSelectedIMGateway() {
     const workspaceConfig = readIMWorkspaceConfig(this.imWorkspaceConfigPath);
-    if (!workspaceConfig.selectedChannel) {
-      console.log('[PortalAgent] 未选择 IM 渠道，跳过 Gateway 启动（仅调试模式运行）');
+    const carrier = workspaceConfig.operatorCarrier;
+    if (!carrier) {
+      console.log('[PortalAgent] 无接线员线路（未选渠道），跳过 Gateway 启动（仅调试模式运行）');
       return 'none';
     }
-    if (workspaceConfig.selectedChannel === 'weixin') {
+    // ADR-0042：门户渠道 = 接线员线路的 carrier。多线路并发连接在投递切换
+    // （里程碑 1 切片 E）落地，当前取首要接线员 carrier。
+    if (carrier === 'weixin') {
       await this.startWeixinBotGateway();
       return 'weixin';
     }
 
-    if (workspaceConfig.selectedChannel === 'feishu') {
+    if (carrier === 'feishu') {
       await this.startFeishuBotGateway();
       return 'feishu';
     }
 
-    if (workspaceConfig.selectedChannel === 'wecom') {
+    if (carrier === 'wecom') {
       await this.startWecomBotGateway();
       return 'wecom';
     }
 
-    if (workspaceConfig.selectedChannel === 'rokid') {
+    if (carrier === 'rokid') {
       await this.startRokidBotGateway();
       return 'rokid';
     }

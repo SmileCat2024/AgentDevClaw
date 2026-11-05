@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import {
   normalizeIMWorkspaceConfig,
   resolveLineTransferConflict,
-  resolvePortalChannelConflict,
+  resolveCarrierConflicts,
   createConfigSerializer,
   getUsageContextTokens,
   findLine,
@@ -35,7 +35,8 @@ describe('normalizeIMWorkspaceConfig', () => {
     assert.equal(config.channels.wecom.label, '企业微信');
     assert.equal(config.channels.rokid.label, 'Rokid 眼镜');
     assert.equal(config.lines.length, 2);
-    assert.equal(config.selectedChannel, '');
+    // ADR-0042：selectedChannel 已并入线路模型（归一不再输出该字段）
+    assert.equal(config.operatorThreadId, '');
     assert.equal(config.receptionistSessionId, '');
   });
 
@@ -53,18 +54,19 @@ describe('normalizeIMWorkspaceConfig', () => {
     assert.ok(config.channels.wecom);
   });
 
-  it('validates selectedChannel against known channels', () => {
+  it('normalizes operatorThreadId (trim) and drops legacy selectedChannel', () => {
+    // ADR-0042 决策 5：接线员线程引用；决策 6：selectedChannel 读到即丢弃
+    assert.equal(
+      normalizeIMWorkspaceConfig({ operatorThreadId: '  wt-abc  ' }).operatorThreadId,
+      'wt-abc',
+    );
     assert.equal(
       normalizeIMWorkspaceConfig({ selectedChannel: 'qq' }).selectedChannel,
-      'qq',
+      undefined,
     );
     assert.equal(
-      normalizeIMWorkspaceConfig({ selectedChannel: 'telegram' }).selectedChannel,
+      normalizeIMWorkspaceConfig({ operatorThreadId: 42 }).operatorThreadId,
       '',
-    );
-    assert.equal(
-      normalizeIMWorkspaceConfig({ selectedChannel: '  weixin  ' }).selectedChannel,
-      'weixin',
     );
   });
 
@@ -76,25 +78,32 @@ describe('normalizeIMWorkspaceConfig', () => {
     assert.equal(config.receptionistSessionId, 'my-custom-session');
   });
 
-  it('normalizes existing lines', () => {
+  it('normalizes existing lines (boundTarget 线程寻址，boundSession 读到即丢弃)', () => {
     const config = normalizeIMWorkspaceConfig({
       lines: [
         { id: 'line-a', label: 'Hotline', carrier: 'qq',
-          boundSession: { agentId: 'helper', sessionId: 'sess-1', sessionTitle: 'Helper' } },
-        { id: 'line-b', label: '', carrier: '', boundSession: null },
+          boundSession: { agentId: 'helper', sessionId: 'sess-1' },
+          boundTarget: { agentId: 'helper', threadId: 'wt-1' } },
+        { id: 'line-b', label: '', carrier: '', boundTarget: null },
+        { id: 'line-c', label: 'Legacy', carrier: 'feishu',
+          boundSession: { agentId: 'helper', sessionId: 'sess-2' } },
       ],
     });
 
-    assert.equal(config.lines.length, 2);
+    assert.equal(config.lines.length, 3);
     assert.equal(config.lines[0].id, 'line-a');
     assert.equal(config.lines[0].label, 'Hotline');
     assert.equal(config.lines[0].carrier, 'qq');
-    assert.equal(config.lines[0].boundSession.agentId, 'helper');
-    assert.equal(config.lines[0].boundSession.sessionId, 'sess-1');
+    assert.equal(config.lines[0].boundTarget.agentId, 'helper');
+    assert.equal(config.lines[0].boundTarget.threadId, 'wt-1');
+    assert.equal(config.lines[0].boundSession, undefined);
     // empty label → default label
     assert.ok(config.lines[1].label);
     assert.equal(config.lines[1].carrier, '');
-    assert.equal(config.lines[1].boundSession, null);
+    assert.equal(config.lines[1].boundTarget, null);
+    // 旧 boundSession 绑定被清空不迁移（ADR-0042 决策 6），boundTarget 缺省 null
+    assert.equal(config.lines[2].boundTarget, null);
+    assert.equal(config.lines[2].boundSession, undefined);
   });
 
   it('handles non-object / array input gracefully', () => {
@@ -110,16 +119,15 @@ describe('normalizeIMWorkspaceConfig', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────
-// Pipeline 2A: Three-Way Exclusivity — Line Transfer Direction
+// Pipeline 2A: Carrier Exclusivity — Line Transfer Direction
 // ───────────────────────────────────────────────────────────────────
 
 describe('resolveLineTransferConflict', () => {
-  it('clears other lines holding the same carrier', () => {
+  it('clears other lines holding the same carrier (claim 者清占线)', () => {
     const config = {
-      selectedChannel: 'feishu',
       lines: [
-        { id: 'line-0', carrier: 'qq', boundSession: { agentId: 'a', sessionId: 's1' } },
-        { id: 'line-1', carrier: 'qq', boundSession: { agentId: 'b', sessionId: 's2' } },
+        { id: 'line-0', carrier: 'qq', boundTarget: { agentId: 'a', threadId: 'wt-1' } },
+        { id: 'line-1', carrier: 'qq', boundTarget: { agentId: 'b', threadId: 'wt-2' } },
       ],
     };
 
@@ -127,53 +135,38 @@ describe('resolveLineTransferConflict', () => {
 
     assert.equal(changed, true);
     assert.equal(config.lines[0].carrier, 'qq');       // the claiming line keeps its carrier
+    assert.equal(config.lines[0].boundTarget.threadId, 'wt-1');
     assert.equal(config.lines[1].carrier, '');          // conflicting line cleared
-    assert.equal(config.lines[1].boundSession, null);
+    assert.equal(config.lines[1].boundTarget, null);
   });
 
-  it('re-assigns portal selectedChannel when it conflicts', () => {
+  it('接线员线路与其他线路同为线路：claim 者清占线，无门户让路方向', () => {
+    // ADR-0042：selectedChannel 并入线路模型后，接线员线路（绑定接线员线程的
+    // 线路）不再有特殊优先级——carrier 冲突统一由 claim 方向解决。
+    // 调用序列同 transfer 端点：先写 claim 者的 carrier/boundTarget，再解析冲突。
     const config = {
-      selectedChannel: 'qq',
       lines: [
-        { id: 'line-0', carrier: '', boundSession: null },
-        { id: 'line-1', carrier: 'weixin', boundSession: null },
+        { id: 'line-operator', carrier: '', boundTarget: null },
+        { id: 'line-1', carrier: 'weixin', boundTarget: { agentId: 'x', threadId: 'wt-9' } },
       ],
     };
+    config.lines[0].carrier = 'weixin';
+    config.lines[0].boundTarget = { agentId: 'qqbot', threadId: 'wt-op' };
 
-    const changed = resolveLineTransferConflict(config, { lineId: 'line-0', carrier: 'qq' });
+    const changed = resolveLineTransferConflict(config, { lineId: 'line-operator', carrier: 'weixin' });
 
     assert.equal(changed, true);
-    assert.notEqual(config.selectedChannel, 'qq');       // portal kicked off 'qq'
-    assert.notEqual(config.selectedChannel, 'weixin');   // can't take 'weixin' either (line-1 holds it)
-    // Should fall back to feishu or wecom (first available)
-    assert.ok(['feishu', 'wecom'].includes(config.selectedChannel));
-  });
-
-  it('re-assigns portal selectedChannel to rokid when only rokid is left available', () => {
-    // After adding rokid as the 5th channel, the previous "all carriers taken"
-    // scenario now falls back to rokid (the only unbound carrier).
-    const config = {
-      selectedChannel: 'qq',
-      lines: [
-        { id: 'line-0', carrier: '', boundSession: null },
-        { id: 'line-1', carrier: 'weixin', boundSession: null },
-        { id: 'line-extra-1', carrier: 'feishu', boundSession: null },
-        { id: 'line-extra-2', carrier: 'wecom', boundSession: null },
-      ],
-    };
-
-    resolveLineTransferConflict(config, { lineId: 'line-0', carrier: 'qq' });
-
-    // qq/weixin/feishu/wecom are all taken; rokid is the only available fallback
-    assert.equal(config.selectedChannel, 'rokid');
+    assert.equal(config.lines[0].carrier, 'weixin');
+    assert.equal(config.lines[0].boundTarget.threadId, 'wt-op');
+    assert.equal(config.lines[1].carrier, '');
+    assert.equal(config.lines[1].boundTarget, null);
   });
 
   it('returns false when no conflicts exist', () => {
     const config = {
-      selectedChannel: 'feishu',
       lines: [
-        { id: 'line-0', carrier: 'qq', boundSession: null },
-        { id: 'line-1', carrier: '', boundSession: null },
+        { id: 'line-0', carrier: 'qq', boundTarget: null },
+        { id: 'line-1', carrier: '', boundTarget: null },
       ],
     };
 
@@ -183,53 +176,51 @@ describe('resolveLineTransferConflict', () => {
 
   it('handles empty carrier (no-op when carrier is empty string)', () => {
     const config = {
-      selectedChannel: 'qq',
       lines: [
-        { id: 'line-0', carrier: 'qq', boundSession: null },
-        { id: 'line-1', carrier: 'feishu', boundSession: null },
+        { id: 'line-0', carrier: 'qq', boundTarget: null },
+        { id: 'line-1', carrier: 'feishu', boundTarget: null },
       ],
     };
 
     // When carrier is empty, no line should match empty carrier
     const changed = resolveLineTransferConflict(config, { lineId: 'line-0', carrier: '' });
-    // line-1.carrier ('feishu') !== '' so no clearing; selectedChannel !== '' so no portal change
     assert.equal(changed, false);
   });
 });
 
 // ───────────────────────────────────────────────────────────────────
-// Pipeline 2B: Three-Way Exclusivity — Portal Channel Direction
+// Pipeline 2B: Carrier Exclusivity — Bundle PUT Direction
 // ───────────────────────────────────────────────────────────────────
 
-describe('resolvePortalChannelConflict', () => {
-  it('clears lines holding the same carrier as the portal new channel', () => {
+describe('resolveCarrierConflicts', () => {
+  it('clears duplicate carriers keeping the first occurrence', () => {
     const config = {
       lines: [
-        { id: 'line-0', carrier: 'qq', boundSession: { agentId: 'a', sessionId: 's1' } },
-        { id: 'line-1', carrier: 'qq', boundSession: { agentId: 'b', sessionId: 's2' } },
-        { id: 'line-2', carrier: 'feishu', boundSession: null },
+        { id: 'line-0', carrier: 'qq', boundTarget: { agentId: 'a', threadId: 'wt-1' } },
+        { id: 'line-1', carrier: 'qq', boundTarget: { agentId: 'b', threadId: 'wt-2' } },
+        { id: 'line-2', carrier: 'feishu', boundTarget: null },
       ],
     };
 
-    const changed = resolvePortalChannelConflict(config, 'qq');
+    const changed = resolveCarrierConflicts(config);
 
     assert.equal(changed, true);
-    assert.equal(config.lines[0].carrier, '');
-    assert.equal(config.lines[0].boundSession, null);
-    assert.equal(config.lines[1].carrier, '');
-    assert.equal(config.lines[1].boundSession, null);
+    assert.equal(config.lines[0].carrier, 'qq');        // first occurrence keeps
+    assert.equal(config.lines[0].boundTarget.threadId, 'wt-1');
+    assert.equal(config.lines[1].carrier, '');           // duplicate cleared with binding
+    assert.equal(config.lines[1].boundTarget, null);
     assert.equal(config.lines[2].carrier, 'feishu');   // untouched
   });
 
   it('returns false when no line conflicts', () => {
     const config = {
       lines: [
-        { id: 'line-0', carrier: 'feishu', boundSession: null },
-        { id: 'line-1', carrier: '', boundSession: null },
+        { id: 'line-0', carrier: 'feishu', boundTarget: null },
+        { id: 'line-1', carrier: '', boundTarget: null },
       ],
     };
 
-    const changed = resolvePortalChannelConflict(config, 'qq');
+    const changed = resolveCarrierConflicts(config);
     assert.equal(changed, false);
   });
 });

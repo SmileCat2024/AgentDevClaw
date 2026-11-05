@@ -45,6 +45,7 @@ import {
 } from './assembly-helpers.js';
 import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
+import { resolveOperatorHeadSessionId } from './im-operator-thread.js';
 import { addOpenSession } from '../shared/open-sessions-tracker.js';
 import { resolveSessionRuntimeDirectory } from '../shared/session-project.js';
 import { getPhSessionGateInfo, getPhProjectGateInfo } from './ph-projects.js';
@@ -211,7 +212,13 @@ export function createAgentStartupFns(deps) {
       : (selectedSessionId === null ? null : undefined);
     let preferredSessionId = null;
     if (requestedSessionId === undefined && sanitizeSessionFragment(agent?.id) === 'qqbot') {
-      preferredSessionId = (await readProjectIMWorkspaceConfig().catch(() => ({ receptionistSessionId: '' })))?.receptionistSessionId || null;
+      // ADR-0042：接线员线程唯一引用解析（operatorThreadId → head 会话）。
+      // 不回退 receptionistSessionId——存量接线员会话不换算线程身份，升级后
+      // 首次 conversation/start 建立首代接线员线程。
+      preferredSessionId = await resolveOperatorHeadSessionId({
+        integration: getThreadIntegration(),
+        readConfig: () => readProjectIMWorkspaceConfig(),
+      });
     }
     const existing = getAgentRuntime(agent.id, requestedSessionId);
     const resolvedSessionId = requestedSessionId !== undefined

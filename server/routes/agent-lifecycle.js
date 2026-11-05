@@ -27,6 +27,7 @@ import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTar
 import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
 import { convergeThreadBoardOnDeliberateStop } from '../thread-control/deliberate-stop-convergence.js';
 import { assertSessionNotStarting } from '../shared/session-operation.js';
+import { operatorCarrierOf } from './im-config.js';
 
 // ADR-0011：远程写幂等闸。远程目标 + 无 idempotencyKey → 400 且请求不过隧道；
 // 本地路径保持现状不强制（session.js 同族契约）。
@@ -594,10 +595,11 @@ export function createAgentLifecycleModule(ctx) {
         // Block qqbot from starting when no IM channel is selected
         if (sanitizeSessionFragment(agent.id) === 'qqbot') {
           const wsConfig = await readProjectIMWorkspaceConfig();
-          if (!wsConfig.selectedChannel) {
+          // ADR-0042：门户 gateway 渠道 = 接线员线路 carrier（selectedChannel 已并入线路模型）
+          if (!operatorCarrierOf(wsConfig)) {
             const connectedAgents = await getConnectedAgents();
             const connected = connectedAgents.find((item) => item.id === agent.id) || null;
-            res.json({ status: buildStatus(agent.id), agent: connected, warning: '未选择 IM 渠道，门户代理不会启动' });
+            res.json({ status: buildStatus(agent.id), agent: connected, warning: '无接线员线路（未选渠道），门户代理不会启动' });
             return;
           }
         }

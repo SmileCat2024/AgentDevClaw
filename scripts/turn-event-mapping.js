@@ -31,7 +31,7 @@
 const FILTER_STOP_REASONS = new Set(['content_filter', 'refusal']);
 
 /**
- * @param {{ status?: string, error?: string, source?: string, sourceRef?: string, outcome?: {
+ * @param {{ status?: string, error?: string, result?: string, source?: string, sourceRef?: string, outcome?: {
  *   status?: string, reason?: string,
  *   sourceRef?: string,
  *   consumedSourceRefs?: string[],
@@ -42,6 +42,7 @@ const FILTER_STOP_REASONS = new Set(['content_filter', 'refusal']);
  * @param {{ turn?: number | null, usage?: object | null }} [extra]
  * @returns {{ type: string, turn: number | null, usage?: object,
  *   source?: string, sourceRef?: string, consumedSourceRefs?: string[],
+ *   resultText?: string,
  *   error?: { message: string, reason: string, category: string, retryable?: boolean } }}
  */
 export function mapEnvelopeToTurnEvent(envelope, { turn = null, usage = null } = {}) {
@@ -67,6 +68,14 @@ export function mapEnvelopeToTurnEvent(envelope, { turn = null, usage = null } =
     ...(consumedSourceRefs ? { consumedSourceRefs } : {}),
   };
 
+  // 本回合交付文本（ADR-0042 决策 4）：completed envelope 的 result 是
+  // CallArbiter 交付给触发方的最终文本（IM 网关 waitForCompletion、
+  // dispatchIMCallFinish 等消费的同一字段）。加法式字段：无 result
+  // （空回合 / suspended 中转）不加，消费端不得据缺席猜测。
+  const resultText = typeof envelope?.result === 'string' && envelope.result
+    ? envelope.result
+    : null;
+
   if (envelope?.status === 'completed') {
     if (providerStopReason && FILTER_STOP_REASONS.has(providerStopReason)) {
       return {
@@ -85,6 +94,7 @@ export function mapEnvelopeToTurnEvent(envelope, { turn = null, usage = null } =
       type: 'turn.completed',
       turn: turnNumber,
       ...identity,
+      ...(resultText ? { resultText } : {}),
       ...(usage ? { usage } : {}),
       ...(outcome?.reason === 'suspended' ? {
         suspended: true,

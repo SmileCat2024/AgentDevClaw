@@ -104,10 +104,10 @@ import {
 import { setupGroupChatRoutes } from './server/routes/group-chat.js';
 import { setupDispatchRoutes, getProjectAdapter, fireBootSchedules } from './server/routes/dispatch.js';
 import { createSseEventsModule, createSseCompressionFilter } from './server/routes/sse-events.js';
-import { setupAppNotificationRoutes, observeCallStatusSnapshot } from './server/routes/app-notification.js';
+import { setupAppNotificationRoutes, observeCallStatusSnapshot, observeThreadTurnFact } from './server/routes/app-notification.js';
 import { setupRuntimeRegistrationRoutes } from './server/routes/runtime-registration.js';
 import { setupFeatureCommunicationRoutes, featureCommunicationStore } from './server/routes/feature-communication.js';
-import { setupIMRoutes, readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './server/routes/im.js';
+import { setupIMRoutes, getPortalAgentDisplayName } from './server/routes/im.js';
 import { createSessionHelpers } from './server/routes/session-helpers.js';
 import { setupSessionRoutes } from './server/routes/session.js';
 import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnostics.js';
@@ -126,8 +126,10 @@ import { getThreadControl } from './server/thread-control/thread-controller.js';
 import { getThreadIntegration } from './server/thread-control/thread-integration.js';
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
-import { registerThreadHostAgents } from './server/thread-control/host-agents.js';
+import { registerThreadHostAgents, isThreadHostSession } from './server/thread-control/host-agents.js';
 import { setupMemoAppRoutes } from './server/routes/memo-app.js';
+import { setupIMOperatorThreadRoutes } from './server/routes/im-operator-thread.js';
+import { readProjectIMWorkspaceConfig, withIMWorkspaceConfig } from './server/routes/im-config.js';
 import { createThreadLifecycleService } from './server/thread-control/thread-lifecycle.js';
 import { createThreadDeleteService } from './server/thread-control/thread-delete.js';
 import { createThreadDeleteResources } from './server/thread-control/thread-delete-resources.js';
@@ -248,6 +250,9 @@ const sseEvents = createSseEventsModule({
       const runtime = getRuntimeByViewerAgentId(runtimeId);
       return runtime?.agentId || runtimeId;
     },
+    // 线程宿主的 finish 让位给线程轮次事实（ADR-0042 决策 4）：快照路径
+    // 跳过 notification 分支，避免同一轮次双通知；input-requests 不受影响。
+    isThreadHostAgentId: isThreadHostSession,
   }),
 });
 sseEvents.setupRoutes(app);
@@ -758,6 +763,13 @@ setupThreadRoutes(app, express, {
   },
   // commands 端点的即时投递走 integration 的 consumer 消费面（退避 / 水位同源）
   tryDeliver: (threadId) => threadIntegration.tryDeliver(threadId),
+  // 轮次终态事实订阅（ADR-0042 决策 4）：SSE 事实帧（thread.turn-*）由
+  // thread-routes 落板后直接发布；此处接 OS 通知出口——非 IM 首订阅者，
+  // 证明该事实面是通用线程能力。fire-and-forget（订阅方自捕获错误），
+  // 不阻塞 runtime 的上报响应。
+  onTurnTerminalFact: (fact) => {
+    observeThreadTurnFact(fact, { requireAgent: requireAgentLight });
+  },
   ensureHeadRuntime,
   threadDelete,
   // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null。
@@ -837,6 +849,24 @@ const memoAppController = setupMemoAppRoutes(app, express, {
   threadIntegration,
   threadLifecycle,
   threadDelete,
+});
+// ── IM 接线员线程事务（ADR-0042：唯一接线员线程，memo 单对话事务同构）──
+// 配置读写注入 im-workspace.config.json 的共享串行器，与线路模型同文件互斥。
+const imOperatorController = setupIMOperatorThreadRoutes(app, express, {
+  requireAgentLight,
+  createPrebuiltSession,
+  startManagedAgent,
+  stopManagedAgent,
+  waitForManagedRuntimeReady,
+  threadControl,
+  threadIntegration,
+  threadLifecycle,
+  threadDelete,
+  readConfig: readProjectIMWorkspaceConfig,
+  mutateConfig: withIMWorkspaceConfig,
+  // ADR-0042 决策 6：换代时归档旧 receptionist 会话（只读保留，不换算线程）
+  archiveLegacySession: (agentId, sessionId, archived) =>
+    archivePrebuiltSession(agentId, sessionId, archived, { includeSessions: false }),
 });
 // runtime 就绪补投：succession 时刻 runtime 未就绪而保持 pending 的指令，
 // 在 head runtime 真正 ready 时重试（设计 §5 的最后一个投递触发点）。
@@ -1901,6 +1931,9 @@ async function main() {
   // memo boot 自启（工单 039）：定时器住 runtime，是提醒刚性的前提。
   // 内部自捕获失败（尽力而为，不阻断服务就绪）。
   memoAppController.bootMemoAppOnServerReady();
+  // IM 接线员 boot 自启（ADR-0042）：引用存在才唤起（IM gateway 常驻前提），
+  // 无引用不凭空建会话（按需拉起，见 im-operator-thread.js 头注）。
+  imOperatorController.bootIMOperatorOnServerReady();
 }
 
 main().catch(async (error) => {

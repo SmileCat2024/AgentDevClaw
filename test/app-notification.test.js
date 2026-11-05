@@ -32,6 +32,7 @@ const {
   resolveNotificationPermissionValue,
   deliverAppNotification,
   observeCallStatusSnapshot,
+  observeThreadTurnFact,
   extractFinishTimestamp,
   extractCallOutcome,
   isSuspendedFinish,
@@ -485,6 +486,118 @@ describe('observeCallStatusSnapshot', () => {
     await observeCallStatusSnapshot('input-requests', agentId, leases, { requireAgent, settingsPath: sp });
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(parseFrames(sse.streamText).filter((f) => f.event === 'app-notification').length, before);
+  });
+
+  it('yields finish to thread-turn facts for thread-host agents; input requests unaffected (ADR-0042)', async () => {
+    // 线程宿主（coder / qqbot 接线员等）的完成事实由 observeThreadTurnFact
+    // 承载（带线程身份与交付文本）；快照路径对 host 的 finish 让位，避免
+    // 同一轮次双通知。选择请求（input）不经轮次事实，照常投递。
+    const hostId = 'coder';
+    const isThreadHostAgentId = (id) => id === 'coder';
+    const sp = settingsPath();
+
+    // host 的 finish 快照：不发帧
+    await observeCallStatusSnapshot('notification', hostId, finishSnapshot(1710000000111), {
+      requireAgent, settingsPath: sp, isThreadHostAgentId,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(parseFrames(sse.streamText)
+      .filter((f) => f.event === 'app-notification' && f.data.agentId === hostId && f.data.type === 'finish').length, 0);
+
+    // 非 host 的 finish 快照：照常发帧（让位只作用于线程宿主）
+    const plainId = 'observe-nonhost';
+    await observeCallStatusSnapshot('notification', plainId, finishSnapshot(1710000000222), {
+      requireAgent, settingsPath: sp, isThreadHostAgentId,
+    });
+    const plainFrame = await waitAppNotificationFrame((f) => f.data.agentId === plainId && f.data.type === 'finish');
+    assert.ok(plainFrame);
+
+    // host 的 choice 请求：仍走快照路径（轮次事实不覆盖输入请求）
+    await observeCallStatusSnapshot('input-requests', hostId, [
+      { requestId: 'req-host-1', mode: 'choices', questions: [{ prompt: 'pick' }] },
+    ], { requireAgent, settingsPath: sp, isThreadHostAgentId });
+    const hostInputFrame = await waitAppNotificationFrame((f) => f.data.agentId === hostId && f.data.type === 'input');
+    assert.ok(hostInputFrame);
+    assert.equal(hostInputFrame.data.requestId, 'req-host-1');
+  });
+});
+
+// ── 5b. 线程轮次终态事实感知（ADR-0042 决策 4 非 IM 首订阅者）────────
+
+describe('observeThreadTurnFact', () => {
+  const settingsPath = () => path.join(mkdtempSync(path.join(tmpdir(), 'claw-appnotif-tt-')), 'workspace-settings.json');
+  const requireAgent = async (agentId) => ({
+    id: agentId,
+    permissionDefaults: { 'notifications.finish': true },
+  });
+
+  it('delivers finish with thread identity and delivery excerpt for completed turns', async () => {
+    const fact = {
+      threadId: 'wt-abc', agentId: 'coder', sessionId: 's1', status: 'completed',
+      turn: 7, resultText: '修复完成：新增 3 条测试',
+    };
+    await observeThreadTurnFact(fact, { requireAgent, settingsPath: settingsPath() });
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === 'coder' && f.data.type === 'finish');
+    assert.ok(frame);
+    assert.equal(frame.data.threadId, 'wt-abc');
+    assert.equal(frame.data.outcomeStatus, 'completed');
+    assert.equal(frame.data.body, '修复完成：新增 3 条测试');
+  });
+
+  it('caps the delivery excerpt at 200 chars (frame payload sanity)', async () => {
+    const longText = 'x'.repeat(300);
+    await observeThreadTurnFact({
+      threadId: 'wt-long', agentId: 'tt-long', sessionId: 's1', status: 'completed',
+      turn: 1, resultText: longText,
+    }, { requireAgent, settingsPath: settingsPath() });
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === 'tt-long' && f.data.type === 'finish');
+    assert.ok(frame);
+    assert.equal(frame.data.body.length, 200);
+  });
+
+  it('delivers failed turns with error message; skips cancelled (not finish news)', async () => {
+    await observeThreadTurnFact({
+      threadId: 'wt-f', agentId: 'tt-failed', sessionId: 's1', status: 'failed',
+      turn: 2, error: { message: 'provider disconnected', reason: 'error', category: 'runtime' },
+    }, { requireAgent, settingsPath: settingsPath() });
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === 'tt-failed' && f.data.type === 'finish');
+    assert.ok(frame);
+    assert.equal(frame.data.outcomeStatus, 'failed');
+    assert.equal(frame.data.errorMessage, 'provider disconnected');
+
+    // 用户/宿主自己打断的轮次不是完成新闻：不投递
+    const before = parseFrames(sse.streamText).filter((f) => f.event === 'app-notification').length;
+    await observeThreadTurnFact({
+      threadId: 'wt-c', agentId: 'tt-cancelled', sessionId: 's1', status: 'cancelled', turn: 3,
+    }, { requireAgent, settingsPath: settingsPath() });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(parseFrames(sse.streamText)
+      .filter((f) => f.event === 'app-notification' && f.data.agentId === 'tt-cancelled').length, 0);
+    assert.ok(parseFrames(sse.streamText).filter((f) => f.event === 'app-notification').length >= before);
+  });
+
+  it('dedupes per turn fact: same thread+turn+status delivers once', async () => {
+    const fact = {
+      threadId: 'wt-d', agentId: 'tt-dedupe', sessionId: 's1', status: 'completed', turn: 9,
+    };
+    const base = { requireAgent, settingsPath: settingsPath() };
+    await observeThreadTurnFact(fact, base);
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === 'tt-dedupe' && f.data.type === 'finish');
+    assert.ok(frame);
+    const before = parseFrames(sse.streamText).filter((f) => f.event === 'app-notification').length;
+    await observeThreadTurnFact(fact, base); // 同一轮次事实重放：不再发帧
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(parseFrames(sse.streamText).filter((f) => f.event === 'app-notification').length, before);
+  });
+
+  it('silently skips when the permission gate blocks (thread facts follow the same gate)', async () => {
+    const strictRequire = async (agentId) => ({ id: agentId, permissionDefaults: {} });
+    await observeThreadTurnFact({
+      threadId: 'wt-np', agentId: 'tt-noperm', sessionId: 's1', status: 'completed', turn: 1,
+    }, { requireAgent: strictRequire, settingsPath: settingsPath() });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(parseFrames(sse.streamText)
+      .filter((f) => f.event === 'app-notification' && f.data.agentId === 'tt-noperm').length, 0);
   });
 });
 

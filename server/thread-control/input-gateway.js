@@ -124,6 +124,29 @@ export async function deliverUserInput(
  * @param {object} [deps] 测试注入（生产调用不传，走默认单例）
  * @throws UserTurnDeliveryError 线程不存在 / 终态 / 归档 / 删除中 / 参数问题
  */
+/**
+ * 线程可绑定校验（ADR-0042：IM 线路绑定的目标判定与投递接受性同源）。
+ * 与 deliverThreadInput 共用同一条判定路径：不存在 / 归属释放窗口 /
+ * deleting / closed / 归档 → 抛 UserTurnDeliveryError；可绑定返回线程记录。
+ */
+export async function assertThreadBindable(threadId, { integration = getThreadIntegration() } = {}) {
+  const tid = String(threadId || '').trim();
+  if (!tid) {
+    throw new UserTurnDeliveryError('threadId is required', {
+      code: 'invalid_input', status: 400, retryable: false,
+    });
+  }
+  const thread = await integration.core.getThread(tid).catch(() => null);
+  if (!thread) {
+    throw new UserTurnDeliveryError(`Thread ${tid} not found`, {
+      code: 'thread_not_found', status: 404, retryable: false,
+    });
+  }
+  const rejection = await _threadAcceptanceVerdict(thread, integration);
+  if (rejection) throw rejection;
+  return thread;
+}
+
 export async function deliverThreadInput(
   {
     threadId,

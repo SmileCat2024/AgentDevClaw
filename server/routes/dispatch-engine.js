@@ -27,6 +27,7 @@ import {
   listAgentRuntimes,
 } from '../shared/agent-access.js';
 import { readSessionIndex } from '../shared/session-access.js';
+import { operatorCarrierOf } from './im-config.js';
 
 // ── Shared dependency wiring ──────────────────────────────────────
 
@@ -222,8 +223,9 @@ async function fireDispatchNow(schedule) {
         // Skip qqbot auto-start when no IM channel is selected
         if (sanitizeSessionFragment(agentId) === 'qqbot') {
           const wsConfig = await _ctx.readProjectIMWorkspaceConfig();
-          if (!wsConfig.selectedChannel) {
-            console.log(`[Dispatch] start_agent skipped for ${agentId}: 未选择 IM 渠道`);
+          // ADR-0042：门户 gateway 渠道 = 接线员线路 carrier（selectedChannel 已并入线路模型）
+          if (!operatorCarrierOf(wsConfig)) {
+            console.log(`[Dispatch] start_agent skipped for ${agentId}: 无接线员线路（未选渠道）`);
             continue;
           }
         }

@@ -16,9 +16,8 @@ import {
   APP_IM_WORKSPACE_CONFIG_PATH,
 } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
-import { getAgentRuntime, listAgentRuntimes, getManagedRuntimeKey } from '../shared/agent-access.js';
 import { readSessionIndex } from '../shared/session-access.js';
-import { getIMChannelIds } from '../shared/im-channels.js';
+import { getThreadIntegration } from '../thread-control/thread-integration.js';
 
 import {
   readProjectIMWorkspaceConfig,
@@ -69,32 +68,20 @@ function serializeWeixinBindingState(state = null) {
 
 export async function buildIMWorkspaceBundle(agentId = 'qqbot') {
   let workspaceConfig = await readProjectIMWorkspaceConfig();
-  const [qqConfig, weixinConfig, feishuConfig, wecomConfig, rokidConfig, index, phIndex] = await Promise.all([
+  const [qqConfig, weixinConfig, feishuConfig, wecomConfig, rokidConfig, index] = await Promise.all([
     readProjectQQBotConfig(),
     readProjectWeixinConfig(),
     readProjectFeishuConfig(),
     readProjectWecomConfig(),
     readProjectRokidConfig(),
     readSessionIndex(agentId).catch(() => ({ sessions: [], activeSessionId: null })),
-    readSessionIndex('programming-helper').catch(() => ({ sessions: [], activeSessionId: null })),
   ]);
 
-  // Detect stale line bindings for display, and fire background pruning
-  // through the serializer (non-blocking). This replaces the old inline
-  // read-modify-write that raced with concurrent transfers.
-  let hasStaleBindings = false;
-  for (const line of (workspaceConfig.lines || [])) {
-    if (!line.boundSession?.agentId || !line.boundSession?.sessionId) continue;
-    const rt = getAgentRuntime(line.boundSession.agentId, line.boundSession.sessionId);
-    if (!rt?.process || rt.process.exitCode !== null || rt.stopped) {
-      hasStaleBindings = true;
-    }
-  }
-  if (hasStaleBindings) {
-    pruneStaleIMLineBindings().catch((e) =>
-      console.error('[ProtoClaw IM] Background prune failed:', e)
-    );
-  }
+  // Background pruning through the serializer (non-blocking). ADR-0042：
+  // 悬空判定（线程终态/归档）在 prune 内部，bundle 不再重复 runtime 检查。
+  pruneStaleIMLineBindings().catch((e) =>
+    console.error('[ProtoClaw IM] Background prune failed:', e)
+  );
 
   const sessions = Array.isArray(index?.sessions)
     ? index.sessions.map((session) => ({
@@ -103,15 +90,25 @@ export async function buildIMWorkspaceBundle(agentId = 'qqbot') {
         updatedAt: cleanSessionText(session?.updatedAt),
       })).filter((session) => session.id)
     : [];
-  const selectedSessionId = workspaceConfig.receptionistSessionId || cleanSessionText(index?.activeSessionId);
-  const receptionistSession = sessions.find((session) => session.id === selectedSessionId) || null;
   const binding = serializeWeixinBindingState(weixinBindingSessions.get(agentId) || null);
 
+  // ADR-0042：接线员线程投影（receptionistSession 时代结束——接线员是线程，
+  // head 会话随接续演进，引用经 threads 全局库解析）。
+  const operatorThreadId = String(workspaceConfig.operatorThreadId || '').trim();
+  const operatorThreadRecord = operatorThreadId
+    ? await getThreadIntegration().core.getThread(operatorThreadId).catch(() => null)
+    : null;
+  const operatorThread = operatorThreadRecord
+    ? {
+        threadId: operatorThreadRecord.threadId,
+        headSessionId: operatorThreadRecord.headSessionId,
+        title: operatorThreadRecord.title || operatorThreadRecord.headSessionId,
+        status: operatorThreadRecord.status,
+      }
+    : null;
+
   return {
-    workspaceConfig: {
-      ...workspaceConfig,
-      receptionistSessionId: selectedSessionId || '',
-    },
+    workspaceConfig,
     qqConfig,
     weixinConfig: {
       configured: !!weixinConfig.botToken,
@@ -140,32 +137,10 @@ export async function buildIMWorkspaceBundle(agentId = 'qqbot') {
     },
     binding,
     sessions,
-    receptionistSession,
+    operatorThread,
     qqSourcePath: APP_QQBOT_CONFIG_PATH,
     workspaceSourcePath: APP_IM_WORKSPACE_CONFIG_PATH,
-    connectableSessions: buildConnectableSessions(phIndex),
   };
-}
-
-function buildConnectableSessions(phIndex) {
-  if (!phIndex?.sessions) return [];
-  const liveKeys = new Set(
-    listAgentRuntimes('programming-helper')
-      .filter(rt => rt?.process && rt.process.exitCode === null && !rt.stopped)
-      .map(rt => getManagedRuntimeKey('programming-helper', rt.selectedSessionId))
-  );
-  return phIndex.sessions
-    .filter(s => s.sessionType === 'main')
-    .filter(s => {
-      const key = getManagedRuntimeKey('programming-helper', s.id);
-      return liveKeys.has(key);
-    })
-    .map(s => ({
-      id: s.id,
-      title: s.title || s.id,
-      updatedAt: s.updatedAt || null,
-    }))
-    .filter(s => s.id);
 }
 
 export async function startWeixinBinding(agentId = 'qqbot') {
@@ -272,9 +247,11 @@ export function findLine(config, lineId) {
 }
 
 /**
- * Three-way exclusivity: when a line claims a carrier, clear all other lines
- * that held the same carrier, and re-assign the portal's selectedChannel if it
- * conflicted (falls back to the first available non-conflicting carrier).
+ * Carrier exclusivity: when a line claims a carrier, clear all other lines
+ * that held the same carrier (carrier is exclusive across lines).
+ *
+ * ADR-0042 决策 1：selectedChannel 并入线路模型后不再存在"门户让路"方向——
+ * 接线员线路也是普通线路，carrier 冲突统一按"claim 者清占线"解决。
  *
  * Mutates config in-place. Returns true if any conflict was resolved.
  */
@@ -283,33 +260,33 @@ export function resolveLineTransferConflict(config, { lineId, carrier }) {
   for (const otherLine of (config.lines || [])) {
     if (otherLine.id !== lineId && otherLine.carrier === carrier) {
       otherLine.carrier = '';
-      otherLine.boundSession = null;
+      otherLine.boundTarget = null;
       changed = true;
     }
-  }
-  if (config.selectedChannel === carrier) {
-    const available = getIMChannelIds().find(c =>
-      c !== carrier && !(config.lines || []).some(l => l.carrier === c)
-    );
-    config.selectedChannel = available || '';
-    changed = true;
   }
   return changed;
 }
 
 /**
- * Three-way exclusivity (reverse direction): when the portal agent switches to
- * a new channel, clear all lines that held the same carrier.
+ * Carrier exclusivity (bundle PUT direction): when a line claims a carrier,
+ * clear all other lines that held the same carrier.
+ *
+ * 接替退役的 resolvePortalChannelConflict（ADR-0042：门户渠道并入线路模型，
+ * "门户换渠道"方向不存在了，bundle 保存时统一按线路间 carrier 互斥清理）。
  *
  * Mutates config in-place. Returns true if any line was cleared.
  */
-export function resolvePortalChannelConflict(config, newChannel) {
+export function resolveCarrierConflicts(config) {
   let changed = false;
+  const seen = new Set();
   for (const line of (config.lines || [])) {
-    if (line.carrier === newChannel) {
+    if (!line.carrier) continue;
+    if (seen.has(line.carrier)) {
       line.carrier = '';
-      line.boundSession = null;
+      line.boundTarget = null;
       changed = true;
+    } else {
+      seen.add(line.carrier);
     }
   }
   return changed;

@@ -38,6 +38,38 @@ describe('mapEnvelopeToTurnEvent', () => {
     assert.deepEqual(event.pendingWakeups, wakeups);
   });
 
+  it('carries delivered result text on completion (ADR-0042 decision 4)', () => {
+    // envelope.result 是 CallArbiter 交付给触发方的最终文本（IM 网关 /
+    // dispatch 镜像消费的同一字段）——服务端轮次事实据此携带交付文本
+    const event = mapEnvelopeToTurnEvent(
+      { status: 'completed', result: '修复完成：新增 3 条测试', outcome: { status: 'completed', reason: 'completed' } },
+      { turn: 5 },
+    );
+    assert.equal(event.type, 'turn.completed');
+    assert.equal(event.resultText, '修复完成：新增 3 条测试');
+  });
+
+  it('omits resultText when completed envelope has no result (additive field)', () => {
+    const event = mapEnvelopeToTurnEvent(
+      { status: 'completed', outcome: { status: 'continued', reason: 'suspended' } },
+      { turn: 4 },
+    );
+    assert.equal(event.type, 'turn.completed');
+    assert.equal(event.resultText, undefined);
+  });
+
+  it('failed and cancelled terminal states never carry resultText', () => {
+    const failed = mapEnvelopeToTurnEvent(
+      { status: 'failed', result: '不应出现', error: 'boom' },
+      { turn: 6 },
+    );
+    assert.equal(failed.type, 'turn.failed');
+    assert.equal(failed.resultText, undefined);
+    const cancelled = mapEnvelopeToTurnEvent({ status: 'cancelled', result: '不应出现' }, { turn: 7 });
+    assert.equal(cancelled.type, 'turn.cancelled');
+    assert.equal(cancelled.resultText, undefined);
+  });
+
   it('suspended completion without wakeups carries flag only', () => {
     const event = mapEnvelopeToTurnEvent(
       { status: 'completed', outcome: { status: 'continued', reason: 'suspended' } },

@@ -14,11 +14,11 @@
  *   setupIMRoutes
  * Re-exports for backward compatibility (tests, other consumers):
  *   normalizeIMWorkspaceConfig, createConfigSerializer,
- *   getUsageContextTokens, findLine, resolveLineTransferConflict, resolvePortalChannelConflict
+ *   getUsageContextTokens, findLine, resolveLineTransferConflict, resolveCarrierConflicts
  */
 
-import { APP_QQBOT_CONFIG_PATH, IM_IPC_MOUNT_RETRY_MS } from '../shared/constants.js';
-import { getAgentRuntime, listAgentRuntimes, getManagedRuntimeKey } from '../shared/agent-access.js';
+import { APP_QQBOT_CONFIG_PATH } from '../shared/constants.js';
+import { listAgentRuntimes } from '../shared/agent-access.js';
 import { readSessionIndex, readSessionIndexSync } from '../shared/session-access.js';
 import { sendIPCtoSession } from '../shared/ipc.js';
 import { resolveSessionModelInfo } from './model-config.js';
@@ -30,11 +30,14 @@ import {
   writeProjectQQBotConfig,
   readProjectIMWorkspaceConfig,
   writeProjectIMWorkspaceConfig,
+  operatorCarrierOf,
   writeProjectFeishuConfig,
   writeProjectWecomConfig,
   writeProjectRokidConfig,
   withIMWorkspaceConfig,
 } from './im-config.js';
+import { assertThreadBindable } from '../thread-control/input-gateway.js';
+import { getThreadIntegration } from '../thread-control/thread-integration.js';
 
 import {
   buildIMWorkspaceBundle,
@@ -44,14 +47,14 @@ import {
   getUsageContextTokens,
   findLine,
   resolveLineTransferConflict,
-  resolvePortalChannelConflict,
+  resolveCarrierConflicts,
 } from './im-workspace-bundle.js';
 
 // Re-exports for backward compatibility — allows existing imports from
 // './server/routes/im.js' to continue working after the split.
-export { normalizeIMWorkspaceConfig, getPortalAgentDisplayName, createConfigSerializer } from './im-config.js';
+export { normalizeIMWorkspaceConfig, getPortalAgentDisplayName, createConfigSerializer, findOperatorLines, operatorCarrierOf } from './im-config.js';
 export { readProjectIMWorkspaceConfig } from './im-config.js';
-export { getUsageContextTokens, findLine, resolveLineTransferConflict, resolvePortalChannelConflict } from './im-workspace-bundle.js';
+export { getUsageContextTokens, findLine, resolveLineTransferConflict, resolveCarrierConflicts } from './im-workspace-bundle.js';
 
 // ── Route setup ───────────────────────────────────────────────────
 
@@ -114,16 +117,16 @@ export function setupIMRoutes(app, express, ctx) {
       const wecomConfig = await writeProjectWecomConfig(req.body?.wecomConfig || {});
       const rokidConfig = await writeProjectRokidConfig(req.body?.rokidConfig || {});
 
-      const newChannel = workspaceConfig.selectedChannel || '';
-      const channelChanged = newChannel !== (prevConfig.selectedChannel || '');
+      // ADR-0042：门户渠道 = 接线员线路 carrier。重启触发条件从 selectedChannel
+      // 变化改为首要接线员 carrier 变化（多线路并发连接到位前的过渡语义）。
+      const prevCarrier = operatorCarrierOf(prevConfig);
+      const newCarrier = operatorCarrierOf(workspaceConfig);
+      const channelChanged = newCarrier !== prevCarrier;
       let portalRestarted = false;
 
-      // Enforce three-way exclusivity: if portal's new channel conflicts with a line, clear that line
-      if (channelChanged && newChannel) {
-        const conflicted = resolvePortalChannelConflict(workspaceConfig, newChannel);
-        if (conflicted) {
-          await writeProjectIMWorkspaceConfig(workspaceConfig);
-        }
+      // Carrier 互斥：保存的配置里线路间 carrier 冲突统一清理（接线员线路也是线路）
+      if (resolveCarrierConflicts(workspaceConfig)) {
+        await writeProjectIMWorkspaceConfig(workspaceConfig);
       }
 
       if (channelChanged) {
@@ -134,19 +137,19 @@ export function setupIMRoutes(app, express, ctx) {
           for (const rt of running) {
             await waitForProcessExit(rt.process);
           }
-          if (newChannel) {
-            // Channel switched to a different non-empty channel: restart
+          if (newCarrier) {
+            // 接线员 carrier 切换到非空渠道: restart
             try {
               const agent = await requireAgentLight('qqbot');
               await startManagedAgent(agent);
               portalRestarted = true;
-              console.log(`[ProtoClaw IM] 渠道切换: ${prevConfig.selectedChannel || '(空)'} → ${newChannel}，门户代理已重启`);
+              console.log(`[ProtoClaw IM] 接线员渠道切换: ${prevCarrier || '(空)'} → ${newCarrier}，门户代理已重启`);
             } catch (restartErr) {
               console.error('[ProtoClaw IM] 门户代理重启失败:', restartErr);
             }
           } else {
-            // Channel set to empty: stop without restart
-            console.log('[ProtoClaw IM] 渠道已置空，门户代理已停止');
+            // 接线员线路清空: stop without restart
+            console.log('[ProtoClaw IM] 接线员线路已清空，门户代理已停止');
           }
         }
       }
@@ -212,105 +215,64 @@ export function setupIMRoutes(app, express, ctx) {
   // carrier binding via `selectedChannel`; these endpoints manage the
   // additional logical lines.
 
-  app.get('/protoclaw/im_line_binding', async (req, res) => {
-    const { agentId: qAgentId, sessionId: qSessionId } = req.query || {};
-    if (!qAgentId || !qSessionId) {
-      return res.json({ carrier: null });
-    }
-    try {
-      const config = await readProjectIMWorkspaceConfig();
-      const match = (config.lines || []).find(
-        l => l.carrier && l.boundSession && l.boundSession.agentId === qAgentId && l.boundSession.sessionId === qSessionId
-      );
-      if (match) {
-        const rt = getAgentRuntime(qAgentId, qSessionId);
-        if (!rt?.process || rt.process.exitCode !== null || rt.stopped) {
-          res.json({ carrier: null });
-          return;
-        }
-      }
-      res.json(match ? { carrier: match.carrier, lineId: match.id } : { carrier: null });
-    } catch {
-      res.json({ carrier: null });
-    }
-  });
-
   app.post('/protoclaw/im_line_transfer', express.json(), async (req, res, next) => {
     try {
-      const { lineId, carrier, agentId, sessionId } = req.body || {};
+      // ADR-0042 决策 1：线路绑定线程寻址（agentId + threadId 成对出现）。
+      // 接线员线程（agentId=qqbot）是合法目标——门户渠道线路就是绑定接线员
+      // 线程的线路。
+      const { lineId, carrier, agentId, threadId } = req.body || {};
       if (!lineId) {
         return res.status(400).json({ error: 'lineId is required' });
       }
-      if (carrier && agentId === 'qqbot') {
-        return res.status(400).json({ error: 'Portal agent sessions cannot be used as IM transfer targets' });
+      if (carrier && (agentId || threadId) && !(agentId && threadId)) {
+        return res.status(400).json({ error: 'agentId and threadId must be provided together' });
       }
 
-      // Validate runtime BEFORE mutating config (fail fast, outside serializer)
-      if (carrier && agentId && sessionId) {
-        const runtime = getAgentRuntime(agentId, sessionId);
-        if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
-          return res.status(409).json({ error: 'Target runtime is not running' });
+      // Validate thread BEFORE mutating config (fail fast, outside serializer).
+      // 判定与 input-gateway 投递接受性同源（assertThreadBindable）。
+      if (carrier && agentId && threadId) {
+        try {
+          const thread = await assertThreadBindable(threadId);
+          if (String(thread.agentId || '').trim() !== String(agentId).trim()) {
+            return res.status(400).json({ error: 'threadId does not belong to agentId' });
+          }
+        } catch (verdict) {
+          return res.status(verdict.status || 409).json({
+            error: verdict.message || 'Target thread is not accepting bindings',
+            code: verdict.code || 'thread_not_bindable',
+          });
         }
       }
 
       // Serialized read-modify-write: prevents concurrent transfers (or
       // concurrent bundle reads that prune stale bindings) from interleaving
       // their file writes and silently overwriting each other's results.
-      let prevBinding = null;
       await withIMWorkspaceConfig((config) => {
         const line = findLine(config, lineId);
         if (!line) {
           throw new Error(`Unknown line: ${lineId}`);
         }
 
-        prevBinding = line.boundSession ? { ...line.boundSession } : null;
-
         // If clearing the line (no carrier)
         if (!carrier) {
           line.carrier = '';
-          line.boundSession = null;
+          line.boundTarget = null;
           return true;
         }
 
-        if (agentId && sessionId) {
-          line.carrier = carrier;
-          line.boundSession = { agentId, sessionId };
-        } else {
-          line.carrier = carrier;
-          line.boundSession = null;
-        }
+        line.carrier = carrier;
+        line.boundTarget = (agentId && threadId)
+          ? { agentId, threadId }
+          : null;
 
-        // Enforce three-way exclusivity: clear conflicting entities
+        // Enforce carrier exclusivity: clear conflicting lines
         resolveLineTransferConflict(config, { lineId, carrier });
 
         return true;
       });
 
-      // After config write: handle IPC side-effects
-      // Unmount from the OLD session (if different from new)
-      if (prevBinding?.agentId && prevBinding?.sessionId) {
-        const isSameSession = (agentId && sessionId
-          && prevBinding.agentId === agentId && prevBinding.sessionId === sessionId);
-        if (!isSameSession) {
-          sendIPCtoSession(prevBinding.agentId, prevBinding.sessionId, { type: 'unmount-im-carrier' });
-        }
-      }
-
-      // Dynamically mount carrier on the TARGET session via IPC (no restart)
-      if (carrier && agentId && sessionId) {
-        const mountOK = sendIPCtoSession(agentId, sessionId, { type: 'mount-im-carrier', carrier });
-        if (!mountOK) {
-          // Retry once after a short delay — the target runtime might still
-          // be starting up and its IPC channel not yet ready.
-          console.warn(`[ProtoClaw IM] IPC mount to ${agentId}::${sessionId} failed, retrying in 1.5s...`);
-          setTimeout(() => {
-            const retryOK = sendIPCtoSession(agentId, sessionId, { type: 'mount-im-carrier', carrier });
-            if (!retryOK) {
-              console.error(`[ProtoClaw IM] IPC mount retry also failed for ${agentId}::${sessionId}`);
-            }
-          }, IM_IPC_MOUNT_RETRY_MS);
-        }
-      }
+      // ADR-0042：载体挂载（mount-im-carrier IPC）已随线程寻址退役——投递
+      // 改走线程 Inbox（deliverThreadInput），不再向目标 runtime 挂渠道载体。
 
       const bundle = await buildIMWorkspaceBundle('qqbot');
       res.json({ success: true, bundle });
@@ -337,19 +299,11 @@ export function setupIMRoutes(app, express, ctx) {
           throw new Error(`Unknown line: ${lineId}`);
         }
 
-        prevBinding = line.boundSession || null;
-        line.boundSession = null;
+        line.boundTarget = null;
         return true;
       });
 
-      // Notify the previously bound session to unmount its carrier via IPC
-      if (prevBinding?.agentId && prevBinding?.sessionId) {
-        try {
-          sendIPCtoSession(prevBinding.agentId, prevBinding.sessionId, { type: 'unmount-im-carrier' });
-        } catch (ipcErr) {
-          console.error('[ProtoClaw IM] IPC unmount failed:', ipcErr);
-        }
-      }
+      // ADR-0042：载体挂载退役，断开不再有 unmount IPC 副作用。
 
       const bundle = await buildIMWorkspaceBundle('qqbot');
       res.json({ success: true, bundle });
@@ -363,234 +317,48 @@ export function setupIMRoutes(app, express, ctx) {
 
   // ── IM Routable Targets ─────────────────────────────────────────
   //
-  // Aggregated view for the operator feature: workspaces → projects → running
-  // sessions, plus current line bindings.
+  // ADR-0042：可绑定线程投影（threads 全局库派生）+ 当前线路绑定。
 
   app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
     try {
-      const [agents, imConfig] = await Promise.all([
+      const integration = getThreadIntegration();
+      const [allThreads, archivedMap, agents] = await Promise.all([
+        integration.core.listThreads({}),
+        integration.archive.list().catch(() => ({})),
         getAgentsLight(),
-        readProjectIMWorkspaceConfig(),
       ]);
+      const archived = new Set(Object.keys(archivedMap || {}));
+      const agentNameById = new Map(agents.map(a => [a.id, a.name || a.id]));
+      const threads = allThreads
+        .filter(t => t.status !== 'closed' && !archived.has(t.threadId))
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        .map(t => ({
+          threadId: t.threadId,
+          agentId: t.agentId,
+          agentName: agentNameById.get(t.agentId) || t.agentId,
+          title: t.title || t.headSessionId,
+          status: t.status,
+          updatedAt: typeof t.updatedAt === 'number' ? t.updatedAt : null,
+          headSessionId: t.headSessionId,
+        }));
 
-      // Build workspace → project → session tree
-      const workspaces = [];
-      for (const agent of agents) {
-        if (agent.id === 'qqbot') continue;
-        const adapter = getProjectAdapter(agent.id);
-
-        let projects;
-        if (adapter) {
-          try {
-            projects = await adapter.listProjects();
-          } catch {
-            projects = [];
-          }
-        } else if (agent.id === 'work-group') {
-          projects = [{
-            id: 'work-group-admin',
-            name: '管理员会话',
-            type: 'workspace',
-            config: {},
-            sessionIds: listAgentRuntimes(agent.id)
-              .filter(rt => rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId)
-              .map(rt => rt.selectedSessionId),
-            latestSessionId: null,
-            createdAt: null,
-            updatedAt: null,
-          }];
-        } else {
-          continue;
-        }
-        if (!projects || projects.length === 0) continue;
-
-        // Enrich each project with running sessions
-        const runtimes = listAgentRuntimes(agent.id);
-        const liveSessionKeys = new Set(
-          runtimes
-            .filter(rt => rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId)
-            .map(rt => getManagedRuntimeKey(agent.id, rt.selectedSessionId))
-        );
-
-        // Batch-query ViewerWorker callActive + collect workdir for live runtimes.
-        // The envelope-based getRuntimeExecutionState() only tracks the dispatch
-        // path; normal messages (viewer-input, IM) bypass it entirely, so we must
-        // ask the ViewerWorker for the real busy state.
-        const callActiveMap = new Map();   // sessionId → boolean
-        const workdirMap = new Map();      // sessionId → workdir string
-        await Promise.all(
-          runtimes
-            .filter(rt => rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId)
-            .map(async (rt) => {
-              const sid = rt.selectedSessionId;
-              if (rt.workspaceDir) {
-                workdirMap.set(sid, rt.workspaceDir);
-              }
-              if (rt.viewerAgentId) {
-                try {
-                  const notif = await readViewerJson(`/api/agents/${encodeURIComponent(rt.viewerAgentId)}/notification`);
-                  callActiveMap.set(sid, notif?.callActive === true);
-                } catch {
-                  callActiveMap.set(sid, false);
-                }
-              } else {
-                callActiveMap.set(sid, false);
-              }
-            })
-        );
-
-        // Get session metadata from the session index
-        let sessionIndex;
-        try {
-          sessionIndex = await readSessionIndex(agent.id);
-        } catch {
-          sessionIndex = { sessions: [] };
-        }
-        const sessionMetaMap = new Map(
-          (sessionIndex.sessions || []).map(s => [s.id, s])
-        );
-
-        // Resolve model info once per agent
-        const agentModelInfo = await resolveSessionModelInfo(agent.id);
-
-        for (const project of projects) {
-          const projectSessionIds = project.sessionIds || [];
-          const projectSessions = [];
-
-          const buildSessionEntry = async (sid) => {
-            const meta = sessionMetaMap.get(sid);
-            const tokenUsage = meta?.tokenUsage || null;
-            const contextTokens = getUsageContextTokens(tokenUsage);
-            const contextLength = agentModelInfo.contextLength || null;
-            const contextUsagePct = (contextTokens && contextLength)
-              ? Math.round(contextTokens / contextLength * 100) : null;
-            // Execution state: ViewerWorker callActive is the primary signal;
-            // envelope system (dispatch-only) supplements for queue length.
-            const rtKey = getManagedRuntimeKey(agent.id, sid);
-            const execState = getRuntimeExecutionState(rtKey);
-            const callActive = callActiveMap.get(sid) ?? false;
-            const savedAt = typeof meta?.savedAt === 'number' ? meta.savedAt : null;
-            const sessionWorkdir = workdirMap.get(sid)
-              || (typeof meta?.openDirectory === 'string' ? meta.openDirectory.trim() : '')
-              || null;
-            const realExecStatus = callActive ? 'running'
-              : (execState.queueLength > 0 ? 'queued' : execState.status);
-            return {
-              id: sid,
-              title: meta?.title || sid,
-              running: true,
-              modelName: agentModelInfo.modelName || '',
-              contextLength,
-              compressRatio: agentModelInfo.compressRatio || 80,
-              messageCount: typeof meta?.messageCount === 'number' ? meta.messageCount : null,
-              sessionType: meta?.sessionType || null,
-              tokenUsage: tokenUsage ? {
-                inputTokens: tokenUsage.inputTokens || 0,
-                outputTokens: tokenUsage.outputTokens || 0,
-                totalTokens: tokenUsage.totalTokens || 0,
-              } : null,
-              contextTokens,
-              contextUsagePct,
-              updatedAt: meta?.updatedAt || null,
-              savedAt,
-              workdir: sessionWorkdir,
-              execStatus: realExecStatus,
-              execQueueLength: execState.queueLength,
-              execLastActiveAt: execState.lastActiveAt,
-            };
+      // 线路投影：绑定信息按 boundTarget（线程寻址）
+      const config = await readProjectIMWorkspaceConfig();
+      const threadById = new Map(allThreads.map(t => [t.threadId, t]));
+      const lines = (config.lines || []).map(l => {
+        const bound = l.boundTarget;
+        let boundThread = null;
+        if (bound?.threadId) {
+          const t = threadById.get(bound.threadId);
+          boundThread = {
+            agentId: bound.agentId,
+            threadId: bound.threadId,
+            threadTitle: t?.title || bound.threadId,
+            status: t?.status || 'unknown',
           };
-
-          if (projectSessionIds.length > 0) {
-            for (const sid of projectSessionIds) {
-              const key = getManagedRuntimeKey(agent.id, sid);
-              if (liveSessionKeys.has(key)) {
-                projectSessions.push(await buildSessionEntry(sid));
-              }
-            }
-          } else {
-            // When project has no explicit sessionIds, associate all live runtimes
-            for (const rt of runtimes) {
-              if (rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId) {
-                projectSessions.push(await buildSessionEntry(rt.selectedSessionId));
-              }
-            }
-          }
-          project.runningSessions = projectSessions;
         }
-
-        workspaces.push({
-          agentId: agent.id,
-          name: agent.name || agent.id,
-          icon: agent.icon || null,
-          projects,
-        });
-      }
-
-      const activeWorkspaces = workspaces;
-
-      // Build current lines snapshot
-      const lines = await Promise.all((imConfig.lines || []).map(async l => {
-        const bound = l.boundSession;
-        let boundSessionInfo = null;
-        if (bound?.agentId && bound?.sessionId) {
-          try {
-            if (bound.agentId === 'qqbot') {
-              return {
-                id: l.id,
-                name: l.name || l.id,
-                carrier: l.carrier || null,
-                boundSession: null,
-              };
-            }
-            const idx = readSessionIndexSync(bound.agentId);
-            const match = (idx?.sessions || []).find(s => s.id === bound.sessionId);
-            const sessionTitle = match?.title || bound.sessionId;
-            const tokenUsage = match?.tokenUsage || null;
-            const boundModelInfo = await resolveSessionModelInfo(bound.agentId);
-            const contextLength = boundModelInfo.contextLength || null;
-            const contextTokens = getUsageContextTokens(tokenUsage);
-            const contextUsagePct = (contextTokens && contextLength)
-              ? Math.round(contextTokens / contextLength * 100) : null;
-            const boundRtKey = getManagedRuntimeKey(bound.agentId, bound.sessionId);
-            const boundExecState = getRuntimeExecutionState(boundRtKey);
-            const boundRuntime = getAgentRuntime(bound.agentId, bound.sessionId);
-            let boundCallActive = false;
-            if (boundRuntime?.viewerAgentId) {
-              try {
-                const boundNotif = await readViewerJson(`/api/agents/${encodeURIComponent(boundRuntime.viewerAgentId)}/notification`);
-                boundCallActive = boundNotif?.callActive === true;
-              } catch {}
-            }
-            const boundWorkdir = boundRuntime?.workspaceDir
-              || (typeof match?.openDirectory === 'string' ? match.openDirectory.trim() : '')
-              || null;
-            const boundExecStatus = boundCallActive ? 'running'
-              : (boundExecState.queueLength > 0 ? 'queued' : boundExecState.status);
-            boundSessionInfo = {
-              agentId: bound.agentId,
-              sessionId: bound.sessionId,
-              sessionTitle,
-              modelName: boundModelInfo.modelName || '',
-              contextLength,
-              compressRatio: boundModelInfo.compressRatio || 80,
-              contextTokens,
-              contextUsagePct,
-              workdir: boundWorkdir,
-              execStatus: boundExecStatus,
-              execQueueLength: boundExecState.queueLength,
-              savedAt: typeof match?.savedAt === 'number' ? match.savedAt : null,
-            };
-          } catch {
-            boundSessionInfo = { agentId: bound.agentId, sessionId: bound.sessionId, sessionTitle: bound.sessionId };
-          }
-        }
-        return {
-          id: l.id,
-          name: l.name || l.id,
-          carrier: l.carrier || null,
-          boundSession: boundSessionInfo,
-        };
-      }));
+        return { id: l.id, name: l.name || l.id, carrier: l.carrier || null, boundThread };
+      });
 
       res.json({ workspaces: activeWorkspaces, lines });
     } catch (error) {

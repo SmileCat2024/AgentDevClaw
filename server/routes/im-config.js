@@ -17,8 +17,8 @@ import {
 } from '../shared/constants.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import { readJson, ensureDir } from '../shared/fs-helpers.js';
-import { getAgentRuntime } from '../shared/agent-access.js';
 import { IM_CHANNELS, getIMChannelLabel } from '../shared/im-channels.js';
+import { getThreadIntegration } from '../thread-control/thread-integration.js';
 
 // ── Config normalizers ────────────────────────────────────────────
 
@@ -77,12 +77,12 @@ function normalizeIMChannelConfig(raw = {}, defaults = {}) {
   };
 }
 
-function normalizeBoundSession(raw) {
+function normalizeBoundTarget(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const agentId = typeof raw.agentId === 'string' ? raw.agentId.trim() : '';
-  const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId.trim() : '';
-  if (!agentId || !sessionId) return null;
-  return { agentId, sessionId };
+  const threadId = typeof raw.threadId === 'string' ? raw.threadId.trim() : '';
+  if (!agentId || !threadId) return null;
+  return { agentId, threadId };
 }
 
 function normalizeIMLine(raw, index) {
@@ -91,7 +91,9 @@ function normalizeIMLine(raw, index) {
     id: typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `line${index + 1}`,
     label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : `通道 ${index + 1}`,
     carrier: typeof raw.carrier === 'string' ? raw.carrier.trim() : '',
-    boundSession: normalizeBoundSession(raw.boundSession),
+    // ADR-0042 决策 1：线路统一线程寻址。旧 boundSession（会话寻址）读到即
+    // 丢弃——清空不迁移（决策 6），用户按新模型重新接线。
+    boundTarget: normalizeBoundTarget(raw.boundTarget),
   };
 }
 
@@ -111,10 +113,16 @@ export function normalizeIMWorkspaceConfig(raw = {}) {
     }
   }
 
-  const rawChannel = typeof raw.selectedChannel === 'string' ? raw.selectedChannel.trim() : '';
-  const selectedChannel = rawChannel && channels[rawChannel] ? rawChannel : '';
+  // ADR-0042 决策 1：selectedChannel 并入线路模型——门户渠道线路 = 绑定接线员
+  // 线程的线路（boundTarget 指向 operatorThreadId 的线路），渠道取该线路的
+  // carrier。配置文件残留的 selectedChannel 读到即丢弃，归一化写盘后消失。
   const receptionistSessionId = typeof raw.receptionistSessionId === 'string'
     ? sanitizeSessionFragment(raw.receptionistSessionId)
+    : '';
+  // receptionistSessionId 保留归一仅供升级迁移读取（im-operator-thread 归档
+  // 旧会话后清除）；runtime 会话解析只认 operatorThreadId。
+  const operatorThreadId = typeof raw.operatorThreadId === 'string'
+    ? raw.operatorThreadId.trim()
     : '';
 
   const rawLines = Array.isArray(raw.lines) ? raw.lines : [];
@@ -123,8 +131,8 @@ export function normalizeIMWorkspaceConfig(raw = {}) {
     : [normalizeIMLine({}, 0), normalizeIMLine({}, 1)];
 
   return {
-    selectedChannel,
     receptionistSessionId,
+    operatorThreadId,
     channels,
     lines,
   };
@@ -133,6 +141,30 @@ export function normalizeIMWorkspaceConfig(raw = {}) {
 export function getPortalAgentDisplayName(channelId) {
   const label = getIMChannelLabel(channelId) || '未接渠道';
   return `门户代理（${label}）`;
+}
+
+/**
+ * 接线员线路（ADR-0042 决策 1）：boundTarget 指向接线员线程的线路。
+ * 门户渠道 = 接线员线路的 carrier；接线员线路不存在即门户未接渠道。
+ * server 侧唯一判定入口，消费方（discovery / lifecycle / dispatch / bundle）
+ * 一律从这里取，禁止各自内联比较。
+ */
+export function findOperatorLines(config) {
+  const operatorThreadId = String(config?.operatorThreadId || '').trim();
+  if (!operatorThreadId) return [];
+  const lines = Array.isArray(config?.lines) ? config.lines : [];
+  return lines.filter((line) => line?.boundTarget
+    && line.boundTarget.agentId === 'qqbot'
+    && String(line.boundTarget.threadId).trim() === operatorThreadId);
+}
+
+/**
+ * 接线员线路的首要 carrier：门户 gateway 的启动渠道（ADR-0042 决策 1，
+ * selectedChannel 的继任语义）。无接线员线路或线路均未选渠道 → ''（未接线）。
+ */
+export function operatorCarrierOf(config) {
+  const line = findOperatorLines(config).find((l) => l.carrier && l.carrier.trim());
+  return line ? line.carrier.trim() : '';
 }
 
 // ── Config readers / writers ──────────────────────────────────────
@@ -266,18 +298,24 @@ export const withIMWorkspaceConfig = createConfigSerializer({
 });
 
 /**
- * Prune line bindings whose target runtime is no longer alive.
- * Runs through the serializer to avoid racing with concurrent transfers.
- * Returns the number of pruned lines.
+ * Prune line bindings whose target thread is no longer bindable
+ * (closed / archived / record gone). Runs through the serializer to avoid
+ * racing with concurrent transfers. Returns the number of pruned lines.
+ *
+ * ADR-0042：绑定目标线程化后，悬空判定与投递接受性同一组事实——线程终态或
+ * 归档即清（runtime 是否存活不再相关，消息经线程 Inbox 兜底）。
  */
 export function pruneStaleIMLineBindings() {
-  return withIMWorkspaceConfig((config) => {
+  return withIMWorkspaceConfig(async (config) => {
+    const integration = getThreadIntegration();
+    const archived = new Set(Object.keys(await integration.archive.list().catch(() => ({})) || {}));
     let pruned = 0;
     for (const line of (config.lines || [])) {
-      if (!line.boundSession?.agentId || !line.boundSession?.sessionId) continue;
-      const rt = getAgentRuntime(line.boundSession.agentId, line.boundSession.sessionId);
-      if (!rt?.process || rt.process.exitCode !== null || rt.stopped) {
-        line.boundSession = null;
+      if (!line.boundTarget?.agentId || !line.boundTarget?.threadId) continue;
+      const thread = await integration.core
+        .getThread(line.boundTarget.threadId).catch(() => null);
+      if (!thread || thread.status === 'closed' || archived.has(line.boundTarget.threadId)) {
+        line.boundTarget = null;
         pruned++;
       }
     }

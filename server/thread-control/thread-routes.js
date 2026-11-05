@@ -24,6 +24,13 @@ import { synthesizeThreadLifeState } from './thread-life-state.js';
 import { deliverThreadInput } from './input-gateway.js';
 import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
 
+/** 轮次终态事件 type → 事实状态（ADR-0042 决策 4；仅终态，item.* 与 turn.started 不发布）。 */
+const TURN_TERMINAL_FACT_STATUS = Object.freeze({
+  'turn.completed': 'completed',
+  'turn.failed': 'failed',
+  'turn.cancelled': 'cancelled',
+});
+
 /**
  * @param {import('express').Express} app
  * @param {typeof import('express').json} express
@@ -40,6 +47,12 @@ import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-e
  *   不依赖 head runtime 是否存在——runtime 唤起的成败只是承接点事实。
  * @param {Function} [options.publishThreadEvent] thread 事件发布（DI；缺省模块级
  *   publishThreadEvent，无订阅者时 no-op）
+ * @param {Function} [options.onTurnTerminalFact] 轮次终态事实订阅钩子（ADR-0042
+ *   决策 4）：async (fact) => void，fact 携带 {threadId, agentId, sessionId,
+ *   runtimeInstanceId, status: completed|failed|cancelled, turn, source?,
+ *   sourceRef?, resultText?, error?, usage?, suspended?, pendingWakeups?}。
+ *   SSE 事实帧（thread.turn-*）由本模块直接发布；领域订阅方（OS 通知、IM
+ *   relay）经此钩子接入，同步调用（订阅方自管理异步与错误），不传则无订阅方。
  * @param {Function} [options.assertThreadQuota] 线程并发上限检查（ADR-0027 修订一）：
  *   async (agentId) => void，满配额抛结构化 429；由装配层闭包 agent 声明与
  *   线程控制面（server.js 注入）。不传则不检查（测试装配）。
@@ -57,7 +70,7 @@ import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-e
  *   重复读索引（PH 线程化后 1400+ 线程 → 近 3000 次 mkdir+stat），是列表
  *   延迟的主要组成。不注入时回退逐线程解析（保持既有注入方兼容）。
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, deliverInput = deliverThreadInput, publishThreadEvent = publishThreadEventDefault, assertThreadQuota } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, deliverInput = deliverThreadInput, publishThreadEvent = publishThreadEventDefault, onTurnTerminalFact, assertThreadQuota } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -221,6 +234,49 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
 
   const jsonMiddleware = express.json({ limit: '256kb' });
 
+  // ── 轮次终态事实发布（ADR-0042 决策 4）──────────────────────────
+  // 落板成功后把 turn 终态广播为两类消费：SSE 事实帧（thread.turn-*，只
+  // 报告事实不触发行为）与 onTurnTerminalFact 订阅钩子（OS 通知现在接入，
+  // IM relay 随里程碑 1 切片 E 接入）。事实身份 = 看板落定结果携带的
+  // workThreadId（board 内部 session→thread 解析，此处不二次解析）；
+  // applied=false（无线程 / closed / 非终态事件）不发布。
+  const _publishTurnTerminalFact = ({ agentId, sessionId, runtimeInstanceId, event }, result) => {
+    try {
+      const status = result?.applied ? TURN_TERMINAL_FACT_STATUS[String(event?.type || '')] : null;
+      const threadId = status ? result?.state?.workThreadId : null;
+      if (!status || !threadId) return;
+      const fact = {
+        threadId,
+        agentId: String(agentId || '').trim(),
+        sessionId: String(sessionId || '').trim(),
+        runtimeInstanceId: typeof runtimeInstanceId === 'string' && runtimeInstanceId ? runtimeInstanceId : null,
+        status,
+        turn: Number.isInteger(event?.turn) ? event.turn : null,
+        ...(typeof event?.source === 'string' && event.source ? { source: event.source } : {}),
+        ...(typeof event?.sourceRef === 'string' && event.sourceRef ? { sourceRef: event.sourceRef } : {}),
+        ...(typeof event?.resultText === 'string' && event.resultText ? { resultText: event.resultText } : {}),
+        ...(event?.suspended === true ? { suspended: true } : {}),
+        ...(Array.isArray(event?.pendingWakeups) && event.pendingWakeups.length > 0 ? { pendingWakeups: event.pendingWakeups } : {}),
+        ...(event?.usage && typeof event.usage === 'object' ? { usage: event.usage } : {}),
+        ...(event?.error && typeof event.error === 'object' ? {
+          error: {
+            message: String(event.error.message || ''),
+            reason: String(event.error.reason || ''),
+            category: String(event.error.category || ''),
+            ...(typeof event.error.retryable === 'boolean' ? { retryable: event.error.retryable } : {}),
+          },
+        } : {}),
+      };
+      // SSE 事实帧：帧名与 payload.kind 同源（publishThreadEvent 合入 threadId）
+      publishThreadEvent(threadId, { kind: `thread.turn-${status}`, ...fact });
+      // 订阅钩子：同步调用（订阅方自管理异步与错误），不阻塞上报响应
+      if (typeof onTurnTerminalFact === 'function') onTurnTerminalFact(fact);
+    } catch (err) {
+      // 发布永不打断上报链：丢这一帧只留痕
+      console.warn('[thread-routes] publishTurnTerminalFact failed:', err?.message || err);
+    }
+  };
+
   const _errorResponse = (res, err) => {
     const status = Number(err?.status) || 500;
     const body = {
@@ -380,6 +436,9 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
         event,
       });
       res.json({ ok: true, ...result });
+      // 轮次终态事实发布在响应之后：观测扇出（SSE 帧 + 订阅钩子）不得
+      // 阻塞上报响应，也不得上报失败的反向路径。
+      _publishTurnTerminalFact({ agentId, sessionId, runtimeInstanceId, event }, result);
     } catch (err) {
       _errorResponse(res, err);
     }
