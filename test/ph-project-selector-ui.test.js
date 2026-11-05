@@ -138,6 +138,7 @@ function createSetup({ entities = [], target = null, openDirectory = '', phProje
   ctx.window.phLoadOpenSessionsCard = (...args) => { cardCalls.push(args); };
   ctx.loadSource('public/src/modules/project-data.js');
   ctx.loadSource('public/src/modules/ph-project-actions.js');
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/session-list-render.js');
   ctx.loadSource('public/src/modules/ph-session-list.js');
   // 实体缓存预置（真实 normalize 语义）：loaded=true 后 ensure 短路
@@ -203,7 +204,7 @@ describe('双选择器 — 纯目录无回归', () => {
     assert.ok(orgMenu.indexOf('添加项目') < orgMenu.indexOf('编辑项目'));
     assert.ok(orgMenu.indexOf('编辑项目') < orgMenu.indexOf('ph-org-menu-options'));
     assert.ok(html.includes('class="ph-quick-add-btn" aria-label="添加项目"'));
-    assert.ok(html.includes('onclick="window.phOpenNewProjectDialog()"'));
+    assert.ok(html.includes('data-action="sessions.newProjectDialog"'));
     assert.doesNotMatch(html, /ph-quick-menu|管理项目…/);
     assert.doesNotMatch(html, /目录设置/);
     assert.ok(html.includes('data-dir-config="D:/alpha"'), 'default-project row carries a settings gear');
@@ -215,7 +216,7 @@ describe('双选择器 — 纯目录无回归', () => {
     assert.ok(html.indexOf('ph-dir-menu-options') < html.indexOf('ph-dir-subprojects'), 'hover submenus stay outside the options region');
     // 键盘可达：可选择菜单项带 role=menuitem + tabindex；key handler 仅在
     // 目标为自身时响应（不吞行内 button 的 Space 原生激活）
-    assert.match(html, /role="menuitem" tabindex="0" onkeydown="if\(event\.target===this/);
+    assert.match(html, /role="menuitem" tabindex="0" data-key-activate data-event="click keydown"/);
     assert.match(html, /ph-dir-item[^>]*role="menuitem"/);
     assert.match(html, /ph-org-item[^>]*role="menuitem"/);
     assert.match(html, /ph-banner-btn[^>]*>打开目录</);
@@ -301,7 +302,7 @@ describe('双选择器 — 同目录 D/A/B', () => {
     assert.doesNotMatch(quickAdd, /ph-quick-menu|phOpenManageProjectsDialog/);
     // 加号是直接添加入口，不再充当下拉触发器；设置仍由归属行内齿轮负责。
     assert.match(html, /ph-org-pill-label">Alpha</);
-    assert.match(html, /class="ph-quick-add-btn"[^>]*aria-label="添加项目"[^>]*onclick="window\.phOpenNewProjectDialog\(\)"/);
+    assert.match(html, /class="ph-quick-add-btn"[^>]*aria-label="添加项目"[^>]*data-action="sessions.newProjectDialog"/);
     assert.match(orgSeg, /data-project-config="prj_A"/, 'project row carries its own settings gear');
     assert.match(orgSeg, /data-project-config="prj_B"/);
     assert.match(orgSeg, /data-dir-config="D:\/shared"/, 'default-project row carries a dir-scope settings gear');

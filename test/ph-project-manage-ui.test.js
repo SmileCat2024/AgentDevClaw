@@ -166,6 +166,7 @@ function createSetup({ entities = [], target = null, openDirectory = '', phProje
   ctx.window.phLoadOpenSessionsCard = (...args) => { cardCalls.push(args); };
   ctx.loadSource('public/src/modules/project-data.js');
   ctx.loadSource('public/src/modules/ph-project-actions.js');
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/session-list-render.js');
   ctx.loadSource('public/src/modules/ph-session-list.js');
 
@@ -234,7 +235,7 @@ describe('046 — 归档项目的选择器语义', () => {
     const html = s.render();
     const orgMenu = html.slice(html.indexOf('ph-org-menu'), html.indexOf('ph-quick-add'));
     assert.match(orgMenu, /编辑项目/);
-    assert.ok(orgMenu.includes('onclick="window.phOpenManageProjectsDialog()"'));
+    assert.ok(orgMenu.includes('data-action="sessions.manageProjects"'));
     assert.ok(orgMenu.indexOf('编辑项目') < orgMenu.indexOf('ph-org-directory'));
     assert.doesNotMatch(html, /ph-quick-menu/);
   });

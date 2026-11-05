@@ -10,6 +10,7 @@ import test from 'node:test';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 const source = fs.readFileSync(new URL('../public/src/modules/session-list-render.js', import.meta.url), 'utf8');
+const dispatcherSource = fs.readFileSync(new URL('../public/src/modules/action-dispatcher.js', import.meta.url), 'utf8');
 
 function loadModule({ sessionThread = null, language = 'zh' } = {}) {
   const ctx = createFrontendSandbox({
@@ -24,6 +25,8 @@ function loadModule({ sessionThread = null, language = 'zh' } = {}) {
       return inChain ? sessionThread : null;
     };
   }
+  // 模块尾部 registerMany 依赖分发器（真实加载顺序 action-dispatcher 在前）
+  ctx.run(dispatcherSource);
   ctx.run(source);
   return ctx;
 }
@@ -39,7 +42,7 @@ test('head 行（1 份存档）：渲染「历史 · 1」入口，点击指向 p
   const ctx = loadModule({ sessionThread: HEAD_THREAD });
   const html = ctx.run(`window.renderSessionThreadBadge('programming-helper', { id: 'sess-head' })`);
   assert.ok(html.includes('历史 · 1'), `徽标文案含存档数：${html}`);
-  assert.ok(html.includes("phOpenThreadHistory('programming-helper', 'wt-1')"), '点击经线程身份打开历史面板');
+  assert.ok(html.includes('data-action="sessions.threadHistory" data-agent-id="programming-helper" data-thread-id="wt-1"'), '点击经线程身份打开历史面板');
 });
 
 test('多代线程：存档数跟随链成员数（不含 head）', () => {

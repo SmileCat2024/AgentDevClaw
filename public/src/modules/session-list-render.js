@@ -138,7 +138,7 @@ function _renderFeatureCreatorSessionList(agent, block, ctx) {
                 '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
                 '<div class="workspace-history-main">',
                 '<div class="workspace-history-title-row">',
-                '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
+                '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
                 renderSessionResumeBadge(session),
                 session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
                 renderSessionArchivedBadge(session),
@@ -151,7 +151,7 @@ function _renderFeatureCreatorSessionList(agent, block, ctx) {
                 '<div class="workspace-history-side">',
                 '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
                 '<div class="workspace-actions stacked">',
-                '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+                '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" data-action="sessions.workspaceAction">' + escapeHtml(t('workspace_open_chat')) + '</button>',
                 '</div>',
                 '</div>',
                 '</div>',
@@ -175,7 +175,7 @@ function _renderFeatureCreatorSessionList(agent, block, ctx) {
           '</div>',
           '<div class="feature-project-side">',
           '<div class="feature-project-head-actions">',
-          (viewCapabilityEnabled(agent.id, 'workspaceCreate') ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>' : ''),
+          (viewCapabilityEnabled(agent.id, 'workspaceCreate') ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" data-action="sessions.workspaceActionEvent">' + escapeHtml(t('workspace_new_chat')) + '</button>' : ''),
           '</div>',
           '<div class="feature-project-toggle" data-label-collapsed="' + escapeHtml(t('workspace_expand_records')) + '" data-label-expanded="' + escapeHtml(t('workspace_collapse_records')) + '" aria-hidden="true"><span class="feature-project-count">' + escapeHtml(String(project.conversationCount || 0)) + '</span></div>',
           '</div>',
@@ -231,7 +231,7 @@ function _renderAgentCreatorSessionList(agent, block, ctx) {
                 '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
                 '<div class="workspace-history-main">',
                 '<div class="workspace-history-title-row">',
-                '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
+                '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
                 renderSessionResumeBadge(session),
                 session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
                 renderSessionArchivedBadge(session),
@@ -244,7 +244,7 @@ function _renderAgentCreatorSessionList(agent, block, ctx) {
                 '<div class="workspace-history-side">',
                 '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
                 '<div class="workspace-actions stacked">',
-                '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+                '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" data-action="sessions.workspaceAction">' + escapeHtml(t('workspace_open_chat')) + '</button>',
                 '</div>',
                 '</div>',
                 '</div>',
@@ -268,7 +268,7 @@ function _renderAgentCreatorSessionList(agent, block, ctx) {
           '</div>',
           '<div class="feature-project-side">',
           '<div class="feature-project-head-actions">',
-          (viewCapabilityEnabled(agent.id, 'workspaceCreate') ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>' : ''),
+          (viewCapabilityEnabled(agent.id, 'workspaceCreate') ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" data-action="sessions.workspaceActionEvent">' + escapeHtml(t('workspace_new_chat')) + '</button>' : ''),
           '</div>',
           '<div class="feature-project-toggle" data-label-collapsed="' + escapeHtml(t('workspace_expand_records')) + '" data-label-expanded="' + escapeHtml(t('workspace_collapse_records')) + '" aria-hidden="true"><span class="feature-project-count">' + escapeHtml(String(project.conversationCount || 0)) + '</span></div>',
           '</div>',
@@ -338,7 +338,7 @@ window.renderSessionThreadBadge = function (agentId, session) {
     ? window.getThreadForSession(agentId, session?.id) : null;
   if (!thread) return '';
   const isZh = currentLanguage === 'zh';
-  return '<button type="button" class="session-thread-badge" onclick="event.stopPropagation();window.phOpenThreadHistory(\'' + escapeHtml(agentId) + '\', \'' + escapeHtml(thread.threadId) + '\')"'
+  return '<button type="button" class="session-thread-badge" data-action="sessions.threadHistory" data-agent-id="' + escapeHtml(agentId) + '" data-thread-id="' + escapeHtml(thread.threadId) + '"'
     + ' title="' + escapeHtml(isZh ? '查看本对话的精简前存档' : 'View pre-trim archives of this conversation') + '">'
     + escapeHtml(isZh ? '历史 · ' + archiveCount : 'History · ' + archiveCount)
     + '</button>';
@@ -405,8 +405,8 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
     ...(opts.openActionExtra || {}),
   };
   const openAction = escapeHtml(JSON.stringify(openActionJson));
-  const primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>';
-  const moreBtn = '<button class="workspace-action secondary session-more-btn" type="button" onclick="window.phShowSessionCtxMenu(event, this, \'' + escapeHtml(sessionNsId) + '\', \'' + escapeHtml(session.id) + '\', \'' + escapeHtml(sType) + '\')"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>';
+  const primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" data-action="sessions.workspaceAction">' + escapeHtml(t('workspace_open_chat')) + '</button>';
+  const moreBtn = '<button class="workspace-action secondary session-more-btn" type="button" data-action="sessions.ctxMenu" data-ctx-ns="' + escapeHtml(sessionNsId) + '" data-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>';
   const buttonsHtml = [primaryBtn, moreBtn].join('');
   // Build compact time indicator for title-row left side (only within this week)
   let shortTime = getSessionShortTime(session.updatedAt);
@@ -434,7 +434,7 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
   const bodyHtml = opts.bodyHtml !== undefined ? opts.bodyHtml : defaultBodyHtml;
   // 多选模式（移动到…）：本地 PH 会话前置复选框（远程会话不进入多选）
   const selectCheckboxHtml = opts.selectMode
-    ? '<label class="ph-session-select" onclick="event.stopPropagation()"><input type="checkbox" data-select-session-id="' + escapeHtml(session.id) + '"' + (opts.selected ? ' checked' : '') + ' onchange="window.phToggleSessionSelection(\'' + escapeHtml(session.id) + '\', this.checked)"></label>'
+    ? '<label class="ph-session-select"><input type="checkbox" data-select-session-id="' + escapeHtml(session.id) + '"' + (opts.selected ? ' checked' : '') + ' data-action="sessions.toggleSelect" data-event="change"></label>'
     : '';
   return [
     '<div class="feature-project-session-item workspace-history-item' + (opts.selected ? ' ph-session-item-selected' : '') + (opts.extraClasses ? ' ' + escapeHtml(opts.extraClasses) : '') + '" data-prebuilt-session-agent-id="' + escapeHtml(sessionNsId) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(sessionNsId) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '"' + dragAttrs + '>',
@@ -442,7 +442,7 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
     selectCheckboxHtml,
     '<div class="workspace-history-title-row">',
     indicatorHtml,
-    '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(isZh ? '双击编辑标题' : 'Double-click to edit title') + '">' + (opts.titleHtml || escapeHtml(session.title || session.id)) + '</div>',
+    '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(isZh ? '双击编辑标题' : 'Double-click to edit title') + '">' + (opts.titleHtml || escapeHtml(session.title || session.id)) + '</div>',
     renderSessionResumeBadge(session),
     (typeof window.renderSessionThreadBadge === 'function' ? window.renderSessionThreadBadge(agent.id, session) : ''),
     renderSessionTodoBadge(session),
@@ -574,9 +574,10 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   // 菜单项键盘可达：div 菜单项以 role=menuitem + tabindex 进入 Tab 序列，
   // Enter/Space 触发既有 onclick（与触发器原生 button 的行为对齐；展开
   // 按钮本就是 button + aria-expanded，不走此路径）。仅当事件目标就是
-  // 菜单项自身时响应——行内的 button（展开/打开目录）按键冒泡到这里时
-  // 不得吞掉原生激活（preventDefault 会取消 button 的 Space click）。
-  const menuItemKbd = ' role="menuitem" tabindex="0" onkeydown="if(event.target===this&&(event.key===\'Enter\'||event.key===\' \')){event.preventDefault();this.click();}"';
+  // 键盘可达性：声明式（分发器 data-key-activate，仅元素自身聚焦时 Enter/Space
+  // 激活并 preventDefault）——行内 button（展开/打开目录）按键冒泡到这里时
+  // 不会被吞掉原生激活（Space click）。
+  const menuItemKbd = ' role="menuitem" tabindex="0" data-key-activate data-event="click keydown"';
   const dirTriggerName = projectPending ? pendingLabel
     : (dirEntryActive ? dirEntryActive.name : (isZh ? '未打开目录' : 'No Directory'));
   const dirTriggerPath = projectPending ? '' : (dirEntryActive ? dirEntryActive.openDirectory : '');
@@ -586,7 +587,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
 
   // 子菜单项不显示路径：面板已由目录行锚定范围，重复同一路径是噪音。
   const renderDirSubprojectItem = (entity) => [
-    '<div class="ph-project-dropdown-item ph-dir-subproject-item' + (entity.id === currentProject?.id ? ' active' : '') + '" data-project-id="' + escapeHtml(entity.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(entity.id) + '\')"' + menuItemKbd + '>',
+    '<div class="ph-project-dropdown-item ph-dir-subproject-item' + (entity.id === currentProject?.id ? ' active' : '') + '" data-project-id="' + escapeHtml(entity.id) + '" data-action="sessions.switchProject"' + menuItemKbd + '>',
     '<div class="ph-project-dropdown-avatar">' + escapeHtml((entity.name || '?')[0].toUpperCase()) + '</div>',
     '<div class="ph-project-dropdown-info">',
     '<div class="ph-project-dropdown-name">' + escapeHtml(entity.name) + '</div>',
@@ -599,7 +600,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   // 采用轻量菜单动作行（图标 + 单行文字），避免整块卡片打断目录清单；与目录项
   // 的头像和路径双行结构仍有区分。
   const openDirEntryHtml =
-    '<div class="ph-open-dir-entry" onclick="window.phOpenProject()"' + menuItemKbd
+    '<div class="ph-open-dir-entry" data-action="sessions.openProject"' + menuItemKbd
     + ' title="' + escapeHtml(isZh ? '选择一个本地文件夹作为工作目录' : 'Pick a local folder as the working directory') + '">'
     + '<span class="ph-open-dir-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4.5C2 3.67 2.67 3 3.5 3H6.5L8 4.5H12.5C13.33 4.5 14 5.17 14 6V11.5C14 12.33 13.33 13 12.5 13H3.5C2.67 13 2 12.33 2 11.5V4.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 7v4M6 9h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span>'
     + '<span class="ph-open-dir-label">' + (isZh ? '打开目录…' : 'Open Directory…') + '</span>'
@@ -608,9 +609,11 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const dirSubmenuItems = [];
   for (const entry of dirNavEntries) {
     const isActive = entry.id === currentDirId;
-      dirMenuItems.push('<div class="ph-dir-nav-group" data-dir-group="' + escapeHtml(entry.id) + '" onmouseenter="window.phOpenDirectorySubmenu(this)" onmouseleave="window.phScheduleDirectorySubmenuClose()">');
+      // 悬停展开由 ph-project-actions.js 的 document 级 pointerover/pointerout/
+      // focusin 委托驱动，元素上不再挂内联 mouseenter/mouseleave（历史双路径已收敛）。
+      dirMenuItems.push('<div class="ph-dir-nav-group" data-dir-group="' + escapeHtml(entry.id) + '">');
     dirMenuItems.push(
-      '<div class="ph-project-dropdown-item ph-dir-item' + (isActive ? ' active' : '') + '" data-dir-id="' + escapeHtml(entry.id) + '" data-project-id="' + escapeHtml(entry.id) + '" aria-haspopup="menu" aria-expanded="false" onclick="window.phSwitchProject(\'' + escapeHtml(entry.id) + '\')"' + menuItemKbd + '>',
+      '<div class="ph-project-dropdown-item ph-dir-item' + (isActive ? ' active' : '') + '" data-dir-id="' + escapeHtml(entry.id) + '" data-project-id="' + escapeHtml(entry.id) + '" aria-haspopup="menu" aria-expanded="false" data-action="sessions.switchProject"' + menuItemKbd + '>',
       '<div class="ph-project-dropdown-avatar">' + escapeHtml((entry.name || '?')[0].toUpperCase()) + '</div>',
       '<div class="ph-project-dropdown-info">',
       '<div class="ph-project-dropdown-name">' + escapeHtml(entry.name) + '</div>',
@@ -623,7 +626,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     // 每个目录都有右侧项目面板：无项目目录的面板只含「默认项目」，
     // 悬停切换时行为统一（不会出现有的行展开、有的行不展开）。
     const defaultSubItem =
-      '<div class="ph-project-dropdown-item ph-dir-subproject-item ph-dir-sub-default' + (isActive && !viewingProject ? ' active' : '') + '" data-dir-id="' + escapeHtml(entry.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(entry.id) + '\')"' + menuItemKbd + '>' +
+      '<div class="ph-project-dropdown-item ph-dir-subproject-item ph-dir-sub-default' + (isActive && !viewingProject ? ' active' : '') + '" data-dir-id="' + escapeHtml(entry.id) + '" data-action="sessions.switchProject"' + menuItemKbd + '>' +
       '<div class="ph-project-dropdown-avatar">&#9638;</div>' +
       '<div class="ph-project-dropdown-info">' +
       '<div class="ph-project-dropdown-name">' + (isZh ? '默认项目' : 'Default Project') + '</div>' +
@@ -634,7 +637,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       + defaultSubItem + entry.projects.map(renderDirSubprojectItem).join('') + '</div>');
   }
   const dirSelectorHtml = '<div class="ph-project-dropdown ph-dir-selector">' +
-    '<button type="button" class="ph-project-dropdown-trigger" aria-haspopup="menu" aria-expanded="false" onclick="window.phToggleProjectDropdown(event)">' +
+    '<button type="button" class="ph-project-dropdown-trigger" aria-haspopup="menu" aria-expanded="false" data-action="sessions.toggleProjectDropdown">' +
     '<div class="ph-project-header-avatar ph-dir-header-icon">' + dirAvatar + '</div>' +
     '<div class="ph-project-header-info">' +
     '<div class="ph-project-header-name">' + escapeHtml(dirTriggerName) + '</div>' +
@@ -660,7 +663,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h16v13H4z"/><path d="M8 9h8M8 12h8M8 15h5"/></svg>');
 
   const renderOrgProjectItem = (entity) => [
-    '<div class="ph-project-dropdown-item ph-org-item' + (entity.id === currentProject?.id ? ' active' : '') + '" data-project-id="' + escapeHtml(entity.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(entity.id) + '\')"' + menuItemKbd + '>',
+    '<div class="ph-project-dropdown-item ph-org-item' + (entity.id === currentProject?.id ? ' active' : '') + '" data-project-id="' + escapeHtml(entity.id) + '" data-action="sessions.switchProject"' + menuItemKbd + '>',
     '<div class="ph-project-dropdown-avatar">' + escapeHtml((entity.name || '?')[0].toUpperCase()) + '</div>',
     '<div class="ph-project-dropdown-info">',
     '<div class="ph-project-dropdown-name">' + escapeHtml(entity.name) + '</div>',
@@ -675,11 +678,11 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
 
   const orgMenuActions = [
     // 管理动作固定显示在项目列表上方；加号按钮另作添加项目的快速入口。
-    '<div class="ph-open-dir-entry ph-org-action" onclick="window.phOpenNewProjectDialog()"' + menuItemKbd + '>' +
+    '<div class="ph-open-dir-entry ph-org-action" data-action="sessions.newProjectDialog"' + menuItemKbd + '>' +
       '<span class="ph-open-dir-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>' +
       '<span class="ph-open-dir-label">' + (isZh ? '添加项目' : 'Add Project') + '</span>' +
     '</div>' +
-    '<div class="ph-open-dir-entry ph-org-action" onclick="window.phOpenManageProjectsDialog()"' + menuItemKbd + '>' +
+    '<div class="ph-open-dir-entry ph-org-action" data-action="sessions.manageProjects"' + menuItemKbd + '>' +
       '<span class="ph-open-dir-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3.5h10v9H3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5.5 6h5M5.5 8h5M5.5 10h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>' +
       '<span class="ph-open-dir-label">' + (isZh ? '编辑项目' : 'Edit Projects') + '</span>' +
     '</div>',
@@ -687,7 +690,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const orgMenuOptions = [
     // 胶囊菜单：默认项目 + 当前同目录项目（项目不跨目录）；行内齿轮直达各项设置。
     '<div class="ph-project-dropdown-item ph-org-item ph-org-directory' + (!isOrgProject && !projectPending ? ' active' : '') + '"' +
-      (currentDirId ? ' data-dir-id="' + escapeHtml(currentDirId) + '" onclick="window.phSwitchProject(\'' + escapeHtml(currentDirId) + '\')"' : '') + menuItemKbd + '>' +
+      (currentDirId ? ' data-dir-id="' + escapeHtml(currentDirId) + '" data-action="sessions.switchProject"' : '') + menuItemKbd + '>' +
     '<div class="ph-project-dropdown-avatar">&#9638;</div>' +
     '<div class="ph-project-dropdown-info">' +
     '<div class="ph-project-dropdown-name">' + (isZh ? '默认项目' : 'Default Project') + '</div>' +
@@ -710,7 +713,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     ? escapeHtml((getProgrammingHelperProjectDisplayName(currentProject) || '?')[0].toUpperCase())
     : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h16v13H4z"/><path d="M8 9h8M8 12h8M8 15h5"/></svg>');
   const orgSelectorHtml = '<div class="ph-project-dropdown ph-org-selector">' +
-    '<button type="button" class="ph-org-pill-trigger" aria-haspopup="menu" aria-expanded="false" onclick="window.phToggleProjectDropdown(event)">' +
+    '<button type="button" class="ph-org-pill-trigger" aria-haspopup="menu" aria-expanded="false" data-action="sessions.toggleProjectDropdown">' +
     '<span class="ph-org-pill-badge' + (isOrgProject ? ' project' : '') + '">' + orgPillBadge + '</span>' +
     '<span class="ph-org-pill-label">' + orgTriggerName + '</span>' +
     '<svg class="ph-org-pill-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
@@ -729,8 +732,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '<div class="ph-banner-desc">' + escapeHtml(desc) + '</div>',
     '</div>',
     '<div class="ph-banner-actions">',
-    '<button class="ph-banner-btn secondary" type="button" onclick="window.phOpenSettings()">' + (isZh ? '工作空间设置' : 'Settings') + '</button>',
-    '<button class="ph-banner-btn" type="button" onclick="window.phOpenProject()">' + (isZh ? '打开目录' : 'Open Directory') + '</button>',
+    '<button class="ph-banner-btn secondary" type="button" data-action="sessions.openSettings">' + (isZh ? '工作空间设置' : 'Settings') + '</button>',
+    '<button class="ph-banner-btn" type="button" data-action="sessions.openProject">' + (isZh ? '打开目录' : 'Open Directory') + '</button>',
     '</div>',
     '</div>',
   ].join('');
@@ -762,7 +765,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const viewIdentity = projectViewIdentity(agent, currentProject);
   const canWorkspaceCreate = viewCapabilityEnabled(viewIdentity, 'workspaceCreate');
   const modelSwitchHtml = currentProject && viewCapabilityEnabled(viewIdentity, 'write') && modelDisplayName ? [
-    '<div class="ph-model-switch' + (hasSecondary ? ' has-secondary' : '') + '" onclick="window.phToggleModelSlot()" title="' + escapeHtml(isZh ? (hasSecondary ? '点击切换到: ' + secondaryModel : '点击配置备选模型') : (hasSecondary ? 'Click to switch to: ' + secondaryModel : 'Click to configure secondary model')) + '">',
+    '<div class="ph-model-switch' + (hasSecondary ? ' has-secondary' : '') + '" data-action="sessions.toggleModelSlot" title="' + escapeHtml(isZh ? (hasSecondary ? '点击切换到: ' + secondaryModel : '点击配置备选模型') : (hasSecondary ? 'Click to switch to: ' + secondaryModel : 'Click to configure secondary model')) + '">',
     '<span class="ph-model-switch-name">' + escapeHtml(modelDisplayName) + '</span>',
     (hasSecondary ? '<svg class="ph-model-switch-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3l4 4-4 4"/><line x1="20" y1="7" x2="8" y2="7"/><path d="M8 21l-4-4 4-4"/><line x1="4" y1="17" x2="16" y2="17"/></svg>' : ''),
     '</div>',
@@ -782,7 +785,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
 
     // + 是添加项目的快速入口；编辑项目入口位于归属菜单顶部。
     const quickAddHtml = '<div class="ph-quick-add">' +
-      '<button type="button" class="ph-quick-add-btn" aria-label="' + (isZh ? '添加项目' : 'Add Project') + '" title="' + (isZh ? '添加项目' : 'Add Project') + '" onclick="window.phOpenNewProjectDialog()"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>' +
+      '<button type="button" class="ph-quick-add-btn" aria-label="' + (isZh ? '添加项目' : 'Add Project') + '" title="' + (isZh ? '添加项目' : 'Add Project') + '" data-action="sessions.newProjectDialog"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>' +
       '</div>';
     const orgControlsHtml = '<div class="ph-org-controls">' + orgSelectorHtml + quickAddHtml + '</div>';
 
@@ -797,7 +800,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-project-bar-right">',
       modelSwitchHtml,
       // 新对话渲染查 workspaceCreate 能力（远程目录经服务端转发创建）。
-      (currentProject && canWorkspaceCreate ? '<button class="ph-banner-btn ph-new-chat-btn" type="button" data-runtime-mode-entry data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)" title="' + escapeHtml(isZh ? '悬停选择运行模式（普通 / 容器）' : 'Hover to choose runtime mode (standard / container)') + '">' + (isZh ? '新建对话' : 'New Chat') + '</button>' : ''),
+      (currentProject && canWorkspaceCreate ? '<button class="ph-banner-btn ph-new-chat-btn" type="button" data-runtime-mode-entry data-workspace-action="' + newChatAction + '" data-action="sessions.workspaceActionEvent" title="' + escapeHtml(isZh ? '悬停选择运行模式（普通 / 容器）' : 'Hover to choose runtime mode (standard / container)') + '">' + (isZh ? '新建对话' : 'New Chat') + '</button>' : ''),
       '</div>',
       '</div>',
     ].join('');
@@ -873,7 +876,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     // 新对话渲染查 workspaceCreate 能力（R2-03）：remoteOnly 视图按宿主握手
     // 能力放开，本地视图恒渲染。空态走 gen-ui-empty / git-empty-card 同款
     // 空态卡配方（虚线卡 + 图标块 + 标题 + 描述 + 动作）。
-    const newChatBtnHtml = canWorkspaceCreate ? '<div class="ph-sessions-empty-actions"><button class="workspace-action" type="button" data-runtime-mode-entry data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)" title="' + escapeHtml(isZh ? '悬停选择运行模式（普通 / 容器）' : 'Hover to choose runtime mode (standard / container)') + '">' + escapeHtml(t('workspace_new_chat')) + '</button></div>' : '';
+    const newChatBtnHtml = canWorkspaceCreate ? '<div class="ph-sessions-empty-actions"><button class="workspace-action" type="button" data-runtime-mode-entry data-workspace-action="' + newChatAction + '" data-action="sessions.workspaceActionEvent" title="' + escapeHtml(isZh ? '悬停选择运行模式（普通 / 容器）' : 'Hover to choose runtime mode (standard / container)') + '">' + escapeHtml(t('workspace_new_chat')) + '</button></div>' : '';
     const mainEmptyNote = renderPhSessionsEmptyCard(
       _PH_EMPTY_CHAT_ICON,
       isZh ? '还没有对话' : 'No conversations yet',
@@ -894,7 +897,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     const archivedTabCount = Number.isFinite(Number(wsMeta.archivedTotal)) ? Number(wsMeta.archivedTotal) : archivedSessions.length;
     const hasMore = Number.isFinite(sessionTotal) && loadedCount < sessionTotal;
     const loadMoreBtnHtml = hasMore
-      ? '<div class="ph-load-more-wrap"><button class="workspace-action secondary ph-load-more-btn" type="button" onclick="window.phLoadMoreSessions()">' + escapeHtml(isZh ? '加载更多（已显示 ' + loadedCount + ' / ' + sessionTotal + '）' : 'Load more (' + loadedCount + ' / ' + sessionTotal + ')') + '</button></div>'
+      ? '<div class="ph-load-more-wrap"><button class="workspace-action secondary ph-load-more-btn" type="button" data-action="sessions.loadMore">' + escapeHtml(isZh ? '加载更多（已显示 ' + loadedCount + ' / ' + sessionTotal + '）' : 'Load more (' + loadedCount + ' / ' + sessionTotal + ')') + '</button></div>'
       : '';
     const searchIdentity = {
       identity: viewIdentity,
@@ -912,28 +915,28 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '<div class="ph-session-tabs' + (isSearching ? ' searching' : '') + '" data-tab-group="' + tabId + '"' + searchData + '>';
     sessionsHtml += '<div class="ph-session-tab-bar">';
     sessionsHtml += '<div class="ph-session-tabs-row">';
-    sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainTabCount)) + '</span></button>';
-    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="archived" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_archived_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(archivedTabCount)) + '</span></button>';
+    sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" data-action="sessions.switchTab">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainTabCount)) + '</span></button>';
+    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="archived" data-action="sessions.switchTab">' + escapeHtml(t('workspace_archived_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(archivedTabCount)) + '</span></button>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-toolbar">';
     sessionsHtml += '<div class="ph-session-search-inline">';
     sessionsHtml += '<svg class="ph-search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M9.5 9.5L12.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
-    sessionsHtml += '<input type="text" class="ph-search-input" placeholder="' + escapeHtml(isZh ? '搜索对话内容...' : 'Search conversations...') + '" value="' + escapeHtml(phSearchQuery) + '" oninput="window.phOnSearchInput(this.value)" onkeydown="if(event.key===\'Escape\'){window.phClearSearch()}">';
-    sessionsHtml += '<button class="ph-search-clear-btn" type="button" onclick="window.phClearSearch()" title="' + escapeHtml(isZh ? '清除搜索' : 'Clear search') + '"' + (isSearching ? '' : ' style="display:none"') + '><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>';
+    sessionsHtml += '<input type="text" class="ph-search-input" placeholder="' + escapeHtml(isZh ? '搜索对话内容...' : 'Search conversations...') + '" value="' + escapeHtml(phSearchQuery) + '" data-action="sessions.searchInput" data-event="input keydown">';
+    sessionsHtml += '<button class="ph-search-clear-btn" type="button" data-action="sessions.clearSearch" title="' + escapeHtml(isZh ? '清除搜索' : 'Clear search') + '"' + (isSearching ? '' : ' style="display:none"') + '><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>';
     sessionsHtml += '</div>';
-    sessionsHtml += '<div class="ph-session-sort-toggle"><button type="button" onclick="window.phToggleSessionSort(this)" title="' + escapeHtml(isZh ? '切换排序方式' : 'Toggle sort order') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2v8M3 10L1.5 8.5M3 10l1.5-1.5M9 10V2M9 2L7.5 3.5M9 2l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' + escapeHtml(phSessionSortMode === 'createdAt' ? t('workspace_sort_created') : t('workspace_sort_updated')) + '</button></div>';
+    sessionsHtml += '<div class="ph-session-sort-toggle"><button type="button" data-action="sessions.toggleSort" title="' + escapeHtml(isZh ? '切换排序方式' : 'Toggle sort order') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2v8M3 10L1.5 8.5M3 10l1.5-1.5M9 10V2M9 2L7.5 3.5M9 2l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' + escapeHtml(phSessionSortMode === 'createdAt' ? t('workspace_sort_created') : t('workspace_sort_updated')) + '</button></div>';
     // 会话多选入口（「移动到…」批量路径，本地 PH only）
     if (agent.id === 'programming-helper' && currentProject && !currentProject.remoteOnly) {
       if (moveState?.selectMode === true) {
         const selectedIds = Array.from(moveState.selected);
         sessionsHtml += '<div class="ph-session-select-controls active">'
           + '<span class="ph-select-count">' + escapeHtml(String(selectedIds.length)) + ' ' + escapeHtml(isZh ? '已选' : 'selected') + '</span>'
-          + '<button type="button" class="ph-select-move-btn" onclick="window.phOpenSessionMoveDialog()">' + escapeHtml(isZh ? '移动到…' : 'Move to…') + '</button>'
-          + '<button type="button" class="ph-select-exit-btn" onclick="window.phToggleSessionSelectMode()">' + escapeHtml(isZh ? '退出多选' : 'Done') + '</button>'
+          + '<button type="button" class="ph-select-move-btn" data-action="sessions.openMoveDialog">' + escapeHtml(isZh ? '移动到…' : 'Move to…') + '</button>'
+          + '<button type="button" class="ph-select-exit-btn" data-action="sessions.toggleSelectMode">' + escapeHtml(isZh ? '退出多选' : 'Done') + '</button>'
           + '</div>';
       } else {
         sessionsHtml += '<div class="ph-session-select-controls">'
-          + '<button type="button" class="ph-select-toggle-btn" onclick="window.phToggleSessionSelectMode()">' + escapeHtml(isZh ? '多选' : 'Select') + '</button>'
+          + '<button type="button" class="ph-select-toggle-btn" data-action="sessions.toggleSelectMode">' + escapeHtml(isZh ? '多选' : 'Select') + '</button>'
           + '</div>';
       }
     }
@@ -948,7 +951,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '</div>';
     sessionsHtml += '</div>';
   } else {
-    const emptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
+    const emptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" data-action="sessions.workspaceActionEvent">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
     sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? renderPhSessionsWithGroups(mainSessions, 'main') : emptyNote) + '</div></div>';
   }
 
@@ -998,7 +1001,7 @@ function _renderGenericSessionList(agent, block, ctx) {
         '<div class="workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(ctxVariant) + '">',
         '<div class="workspace-history-main">',
         '<div class="workspace-history-title-row">',
-        '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(primaryTitle) + '</div>',
+        '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(primaryTitle) + '</div>',
         renderSessionResumeBadge(session),
         (typeof window.renderSessionThreadBadge === 'function' ? window.renderSessionThreadBadge(agent.id, session) : ''),
         session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
@@ -1015,12 +1018,12 @@ function _renderGenericSessionList(agent, block, ctx) {
         (session.openDirectory ? '<br>' + escapeHtml(session.openDirectory) : ''),
         '</div>',
         '<div class="workspace-actions stacked">',
-        '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+        '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" data-action="sessions.workspaceAction">' + escapeHtml(t('workspace_open_chat')) + '</button>',
         (allowCompactedResume
-          ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + compactedResumeAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_light_resume')) + '</button>'
+          ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + compactedResumeAction + '" data-action="sessions.workspaceAction">' + escapeHtml(t('workspace_light_resume')) + '</button>'
           : ''),
         (isFeatureCreator && viewCapabilityEnabled(agent.id, 'workspaceCreate')
-          ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_new_chat')) + '</button>'
+          ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" data-action="sessions.workspaceAction">' + escapeHtml(t('workspace_new_chat')) + '</button>'
           : ''),
         '</div>',
         '</div>',
@@ -1042,3 +1045,37 @@ function _renderGenericSessionList(agent, block, ctx) {
     '</section>',
   ].join('');
 }
+
+// 会话列表动作（原内联 onclick 经分发器寻址；实现分布在各宿主模块，
+// 此处只做转发——session-ui / workspace-actions / ph-thread-history /
+// ph-session-list / ph-project-actions / ph-session-move / app-main）
+window.ClawFW.actions.registerMany({
+  'sessions.titleDblClick': (el, event) => window.handleSessionTitleDoubleClick(event),
+  'sessions.workspaceAction': (el) => window.runWorkspaceAction(el.dataset.workspaceAction, el),
+  'sessions.workspaceActionEvent': (el, event) => {
+    // 原 runWorkspaceActionFromEvent：preventDefault 由 handler 返回 false 统一触发
+    if (event) event.preventDefault();
+    window.runWorkspaceAction(el.dataset.workspaceAction, el.closest('button[data-workspace-action]') || undefined);
+    return false;
+  },
+  'sessions.threadHistory': (el) => window.phOpenThreadHistory(el.dataset.agentId, el.dataset.threadId),
+  'sessions.ctxMenu': (el, event) => window.phShowSessionCtxMenu(event, el, el.dataset.ctxNs, el.dataset.sessionId, el.dataset.sessionType),
+  'sessions.toggleSelect': (el) => window.phToggleSessionSelection(el.dataset.selectSessionId, el.checked),
+  'sessions.switchProject': (el) => window.phSwitchProject(el.dataset.projectId || el.dataset.dirId),
+  'sessions.openProject': () => window.phOpenProject(),
+  'sessions.newProjectDialog': () => window.phOpenNewProjectDialog(),
+  'sessions.manageProjects': () => window.phOpenManageProjectsDialog(),
+  'sessions.toggleProjectDropdown': (el, event) => window.phToggleProjectDropdown(event),
+  'sessions.openSettings': () => window.phOpenSettings(),
+  'sessions.toggleModelSlot': () => window.phToggleModelSlot(),
+  'sessions.loadMore': () => window.phLoadMoreSessions(),
+  'sessions.switchTab': (el) => window.switchPhSessionTab(el),
+  'sessions.searchInput': (el, event) => {
+    if (event.type === 'keydown') { if (event.key === 'Escape') window.phClearSearch(); return; }
+    window.phOnSearchInput(el.value);
+  },
+  'sessions.clearSearch': () => window.phClearSearch(),
+  'sessions.toggleSort': (el) => window.phToggleSessionSort(el),
+  'sessions.openMoveDialog': () => window.phOpenSessionMoveDialog(),
+  'sessions.toggleSelectMode': () => window.phToggleSessionSelectMode(),
+});

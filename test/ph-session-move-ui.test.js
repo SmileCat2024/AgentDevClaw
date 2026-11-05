@@ -140,6 +140,7 @@ function createSetup({ entities = [], target = null, openDirectory = 'D:/shared'
   ctx.loadSource('public/src/modules/project-data.js');
   ctx.loadSource('public/src/modules/ph-project-actions.js');
   ctx.loadSource('public/src/modules/ph-session-move.js');
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/session-list-render.js');
   ctx.loadSource('public/src/modules/ph-session-list.js');
   // 模块加载后挂观测桩（ph-session-list.js 等会定义同名 window 成员，先挂会被覆盖）

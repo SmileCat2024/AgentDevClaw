@@ -43,9 +43,13 @@ window.ClawFW = window.ClawFW || {};
    * 在事件 target 链上解析 data-action 并调用处理器。
    * 返回 true 表示已分发（无论 handler 返回什么），false 表示无匹配。
    *
-   * data-event 属性声明该元素期望的事件类型（dblclick/keydown 等）。
+   * data-event 属性声明该元素期望的事件类型（空格分隔多个，如 "click keydown"）。
    * 委托监听在 document 层，同一元素可能同时收到 click 与 dblclick，
    * 因此声明了 data-event 的元素只响应匹配类型，避免双触发。
+   *
+   * data-key-activate（配合含 keydown 的 data-event）：Enter / Space 是激活键，
+   * 其余按键不分发；激活键分发时 preventDefault（与原生 button 键盘行为一致），
+   * handler 无需逐个判断键值——用于 div 菜单项等非原生可聚焦元素的键盘可达。
    */
   function dispatch(event) {
     let node = event.target;
@@ -54,7 +58,14 @@ window.ClawFW = window.ClawFW || {};
       const name = node.getAttribute('data-action');
       if (name) {
         const declared = node.getAttribute('data-event');
-        if (declared && declared !== event.type) return false;
+        if (declared && !declared.trim().split(/\s+/).includes(event.type)) return false;
+        if (event.type === 'keydown' && node.hasAttribute('data-key-activate')) {
+          // 仅元素自身聚焦时激活：内部可聚焦子元素（如行内 button）的按键
+          // 不得触发菜单项动作，preventDefault 也不得吞掉其原生 Space click。
+          if (event.target !== node) return false;
+          if (event.key !== 'Enter' && event.key !== ' ') return false;
+          event.preventDefault();
+        }
         const handler = handlers.get(name);
         if (!handler) {
           console.error('[action-dispatcher] 未注册的 action：', name);
