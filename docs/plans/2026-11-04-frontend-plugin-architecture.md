@@ -93,8 +93,8 @@ window.ClawHost = {
 
 已完成的迁移：memo（f9c8e104，A2/B 合并落地）→ claw-guide（5e7ef89b）→ agent-studio（a789afaf）→ coder-threads（`plugins/coder/`；迁移同时修复了 f9c8e104 查表化时丢失 coder-threads 分发的存量回归——此前 coder 首页渲染「未知区块类型」，因 on-demand 无活跃线程时入口不显示而漏测）。APP 插件化到此收口。剩余两个 APP 不做载体迁移，转入各自的大工程重做（2026-11-04 决定）：
 
-- qqbot（im-ui / im-actions，1345 行、真实全局状态与设置系统交叉）：等待自身线程化（诞生于线程概念之前，会话模型要换代）与渠道绑定其他 agent 的跨线程通信（涉及工作空间应用化与 agent os 底层建设）。界面随新会话模型重建。
-- home（home-dashboard，441 行）：等待「门户小组件」契约设计——首页消费各工作空间提供的小组件（类移动 OS widget），现在的 dashboard 是该愿景的锁死静态版；契约落地后渲染模型与数据链路按「宿主消费外部组件 + 隔离」重写。可复用 ClawHost 已验证的机制（两层注册表、mount(host) 能力注入、unmount 兜底、data-* 参数编码纪律）；新增设计点是提供方与宿主分离后的声明方式、隔离边界与通信通道。
+- qqbot（im-ui / im-actions，1345 行、真实全局状态与设置系统交叉）：方向已定（[ADR-0042](../adr/0042-im-channel-thread-binding.md)，Proposed）——线路绑定与接线员自身均线程化、平台连接归门户、轮次结果事件回流，两个线程化与通路切换作为一个里程碑联合交付锁死形态。界面随新会话模型重建。
+- home（home-dashboard，441 行）：契约已立项（[ADR-0043](../adr/0043-home-portal-widgets.md)，Proposed）——首页消费各工作空间提供的只读 widget（类移动 OS widget），现在的 dashboard 是该愿景的静态版。契约要点：提供方自治模块（渲染与数据同源）、宿主清单驱动装载、ClawHost widgets 注册面、三层隔离（渲染 / 数据 / 生命周期）、第一版不做沙箱。
 验收（从第一天机器化）：
 - 装配不新增 index.html 标签；
 - 挂载/卸载前后全局键 diff 断言零残留（复用 A1 扫描器）；

@@ -22,6 +22,7 @@
 - [0039 归档对话只读浏览](0039-archived-session-readonly-browsing.md) — 启动与浏览分离，只读浏览唯一实现与视图冻结
 - [0040 上下文守卫三态与过界自动接续](0040-context-guard-tri-state-auto-rotation.md) — badge 三态 + coder 同构接力链路复用，关闭 0032 预留条目
 - [0041 标题属于 Session，生成策略属于应用](0041-title-generation-as-app-capability.md) — 标题状态结构化、OS 提供能力与应用自持策略、接续继承去前缀（Accepted）
+- [0042 IM 渠道线程化](0042-im-channel-thread-binding.md) — 线路绑定与接线员均线程化，平台连接归门户，轮次结果事件回流（Proposed）
 
 ## 运行时与执行环境
 
@@ -53,6 +54,7 @@
 
 - [0010 侧栏统一投影](0010-sidebar-unified-projection.md) — 工作空间 → 项目目录 → 运行中会话；连接不产生侧栏层级
 - [0015 内嵌浏览器 viewer](0015-embedded-browser-viewer.md) — 浏览器所有权翻转（Archived，调查完成暂不实施）
+- [0043 home 门户小组件契约](0043-home-portal-widgets.md) — 工作空间向首页提供只读 widget 的模块协议与隔离边界（Proposed）
 
 ## 工程治理
 
