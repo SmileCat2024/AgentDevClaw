@@ -403,11 +403,11 @@
   <div id="ctx-menu" class="ctx-menu"></div>
 
   <div id="trim-page" class="trim-dialog" style="display:none;">
-    <div class="trim-overlay" onclick="window.closeTrimPage()"></div>
+    <div class="trim-overlay" data-action="trimPage.close"></div>
     <div class="trim-panel">
       <div class="trim-page-title-row">
         <div class="trim-title" id="trim-page-title">精简对话</div>
-        <button class="trim-close" type="button" onclick="window.closeTrimPage()">×</button>
+        <button class="trim-close" type="button" data-action="trimPage.close">×</button>
       </div>
       <div class="trim-page-body">
         <div class="trim-page-left">
@@ -453,8 +453,8 @@
           </div>
           <div class="trim-page-readout" id="trim-page-readout"></div>
           <div class="trim-page-actions">
-            <button class="workspace-action secondary" type="button" onclick="window.closeTrimPage()">取消</button>
-            <button class="workspace-action" type="button" id="trim-page-submit" onclick="window.submitTrimPage()">确认精简</button>
+            <button class="workspace-action secondary" type="button" data-action="trimPage.close">取消</button>
+            <button class="workspace-action" type="button" id="trim-page-submit" data-action="trimPage.submit">确认精简</button>
           </div>
         </div>
       </div>
@@ -483,11 +483,11 @@
   </div>
 
   <div id="feature-upload-dialog" class="feature-upload-dialog" style="display:none;">
-    <div class="feature-upload-overlay" onclick="window.closeFeatureUploadDialog()"></div>
+    <div class="feature-upload-overlay" data-action="featureUpload.close"></div>
     <div class="feature-upload-window">
       <div class="feature-upload-header">
         <div class="feature-upload-title">上传 Feature tgz 包</div>
-        <button class="feature-upload-close" type="button" onclick="window.closeFeatureUploadDialog()">×</button>
+        <button class="feature-upload-close" type="button" data-action="featureUpload.close">×</button>
       </div>
       <div class="feature-upload-body">
         <div class="feature-upload-dropzone" id="feature-upload-dropzone">
@@ -501,8 +501,8 @@
         <div id="feature-upload-status" class="feature-upload-status" style="display:none;"></div>
       </div>
       <div class="feature-upload-footer">
-        <button class="workspace-action secondary" type="button" onclick="window.closeFeatureUploadDialog()">取消</button>
-        <button class="workspace-action" type="button" id="feature-upload-submit" disabled onclick="window.submitFeatureUpload()">上传</button>
+        <button class="workspace-action secondary" type="button" data-action="featureUpload.close">取消</button>
+        <button class="workspace-action" type="button" id="feature-upload-submit" disabled data-action="featureUpload.submit">上传</button>
       </div>
     </div>
   </div>

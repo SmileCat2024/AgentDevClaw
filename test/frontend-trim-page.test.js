@@ -42,6 +42,8 @@ function createTrimPage(fetchImpl, coreOverrides = {}, extraGlobals = {}) {
       if (!elements.has(id)) elements.set(id, makeElement());
       return elements.get(id);
     },
+    // 真实 document 形状：action-dispatcher 加载期在 document 上绑委托监听。
+    addEventListener() {},
   };
   const ctx = createFrontendSandbox({
     document,
@@ -83,7 +85,9 @@ function createTrimPage(fetchImpl, coreOverrides = {}, extraGlobals = {}) {
     fmtPct: (frac) => (frac * 100).toFixed(1) + '%', // app-core 全局的沙箱替身
     ...extraGlobals,
   });
-  ctx.loadSource('public/src/modules/trim-page.js');
+    // 真实按钮路径：close/submit 走分发器动作（trim-page 顶层注册需先载分发器）。
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
+    ctx.loadSource('public/src/modules/trim-page.js');
   return { ctx, elements };
 }
 
@@ -322,7 +326,7 @@ describe('trim page keep-zone dialogue guard', () => {
     await ctx.window.openTrimPage('programming-helper', 'session-1');
     elements.get('trim-page-mode').dispatch('click', clickEvent('.trim-page-mode-btn', { dataset: { mode: 'ratio' } }));
     const callsAfterOpen = fetchCalls;
-    await ctx.window.submitTrimPage();
+    await ctx.window.ClawFW.actions.invoke('trimPage.submit');
     assert.ok(alerts.some((m) => m.includes('对话')), `expected a dialogue-guard alert, got: ${alerts.join(' | ')}`);
     assert.equal(fetchCalls, callsAfterOpen, 'submission must not fire any request past the guard');
   });
@@ -378,7 +382,7 @@ describe('trim page stale response guard', () => {
     const { impl, respond } = deferredFetch();
     const { ctx, elements } = createTrimPage(impl);
     const openA = ctx.window.openTrimPage('programming-helper', 'session-A');
-    ctx.window.closeTrimPage();
+    ctx.window.ClawFW.actions.invoke('trimPage.close');
     respond(true, payloadOf('A-round'));
     await openA;
 
@@ -422,7 +426,7 @@ describe('trim page submit: thread succession vs session navigation', () => {
 
   const openAndSubmit = async (ctx) => {
     await ctx.window.openTrimPage('programming-helper', 'session-A');
-    await ctx.window.submitTrimPage();
+    await ctx.window.ClawFW.actions.invoke('trimPage.submit');
   };
 
   it('thread succession: stays on the view, reconciles via refreshThreads, never navigates', async () => {
@@ -500,7 +504,7 @@ describe('trim page archive option vs thread-carried sessions (ADR-0032)', () =>
 
     // 线程索引在打开后才就绪的竞态：强行勾上，提交仍不得归档
     elements.get('trim-page-archive-toggle').checked = true;
-    await ctx.window.submitTrimPage();
+    await ctx.window.ClawFW.actions.invoke('trimPage.submit');
     assert.equal(captured.options?.archiveOriginal, false, 'submit clamps archiveOriginal for thread sessions');
   });
 

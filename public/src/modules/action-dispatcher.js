@@ -117,12 +117,18 @@ window.ClawFW = window.ClawFW || {};
   bindEventType('dblclick');
   bindEventType('keydown');
 
-  /** 按名触发已注册的 action（供宿主把通用动作转交给插件，不经 DOM 事件）。 */
+  /** 按名触发已注册的 action（供宿主把通用动作转交给插件，不经 DOM 事件）。
+   *  同步 handler 返回 true 表示已分发；async handler 的 Promise 原样透传，
+   *  程序化调用方（宿主转发、测试驱动）才能 await 到动作完成。
+   *  判定用 thenable 鸭子检查而非 instanceof Promise：测试沙箱（frontend-vm）
+   *  会注入宿主 realm 的 Promise 遮蔽沙箱 realm 的同名全局，async 函数产生的
+   *  沙箱 Promise 跨 realm instanceof 恒为 false，instanceof 写法会在沙箱里
+   *  静默退化为「不等动作完成」。thenable 检查与 await 语义一致，跨 realm 安全。 */
   function invoke(name, el, event, ...args) {
     const handler = handlers.get(String(name));
     if (!handler) return false;
-    handler(el ?? null, event ?? null, ...args);
-    return true;
+    const result = handler(el ?? null, event ?? null, ...args);
+    return result && typeof result.then === 'function' ? result : true;
   }
 
   window.ClawFW.actions = {

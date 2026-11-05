@@ -130,12 +130,12 @@ function updateSummaryOverlayDOM(data) {
     '<div class="feature-detail-window summary-popup-window">' +
     '<div class="feature-detail-head">' +
     '<div><div class="feature-detail-title">' + escapeHtml(t('workspace_summary_title')) + '</div></div>' +
-    '<button class="feature-detail-close" type="button" onclick="window.closeSummaryPopup()">×</button>' +
+    '<button class="feature-detail-close" type="button" data-action="summaryPopup.close">×</button>' +
     '</div>' +
     '<div class="summary-popup-body">' +
     renderSummaryBodyContent(data) +
     '</div>' +
-    (hasData ? '<div class="summary-popup-footer"><button class="summary-regenerate-btn" type="button" onclick="window.regenerateSummary()">' + escapeHtml(t('workspace_regenerate_summary')) + '</button></div>' : '') +
+    (hasData ? '<div class="summary-popup-footer"><button class="summary-regenerate-btn" type="button" data-action="summaryPopup.regenerate">' + escapeHtml(t('workspace_regenerate_summary')) + '</button></div>' : '') +
     '</div>';
   // Post-render: enhance math in summary markdown
   if (hasData) {
@@ -222,7 +222,6 @@ function closeSummaryPopup() {
 }
 
 window.openSummaryPopup = openSummaryPopup;
-window.closeSummaryPopup = closeSummaryPopup;
 
 function regenerateSummary() {
   if (!summaryPopupData) return;
@@ -273,7 +272,6 @@ function regenerateSummary() {
     });
 }
 
-window.regenerateSummary = regenerateSummary;
 
 // ═══════════════════════════════════════════════════════════════
 // Repo 搜索/过滤
@@ -420,5 +418,10 @@ async function submitFeatureUpload() {
 }
 
 window.openFeatureUploadDialog = openFeatureUploadDialog;
-window.closeFeatureUploadDialog = closeFeatureUploadDialog;
-window.submitFeatureUpload = submitFeatureUpload;
+
+window.ClawFW.actions.registerMany({
+  'summaryPopup.close': () => closeSummaryPopup(),
+  'summaryPopup.regenerate': () => regenerateSummary(),
+  'featureUpload.close': () => closeFeatureUploadDialog(),
+  'featureUpload.submit': () => submitFeatureUpload(),
+});

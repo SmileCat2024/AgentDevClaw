@@ -25,7 +25,8 @@
  *   fmtPct (app-core.js，trim/branch 共用口径),
  *   window.RemoteConnections (远程精简切换)
  * 依赖模块: TrimRatioCore (trim-ratio-core.js, window 挂载)
- * 导出全局函数 (window.*): openTrimPage, closeTrimPage, submitTrimPage
+ * 导出全局函数 (window.*): openTrimPage
+ * 分发器动作 (ClawFW.actions): trimPage.close / trimPage.submit（弹窗按钮）
  */
 
 /* ── Page state ── */
@@ -223,7 +224,7 @@ window.openTrimPage = async (agentId, sessionId, archiveAfter = false) => {
   }
 };
 
-window.closeTrimPage = () => {
+function closeTrimPage() {
   trimPageSeq++;
   trimPageEl.style.display = 'none';
   trimPageState = {
@@ -603,7 +604,7 @@ function updateReadout() {
 }
 
 /* ── Submit（编排自 session-dialogs.js submitTrimCompact 原样迁移） ── */
-window.submitTrimPage = async () => {
+async function submitTrimPage() {
   const st = trimPageState;
   const { agentId, sessionId, keepSkillInvokes } = st;
   // 归档与摘要跟随勾选框实时值——入口形态只决定初始勾选，不锁死行为。
@@ -651,7 +652,7 @@ window.submitTrimPage = async () => {
   bumpNavigationGuard();
   const _navGuard = _navigationGuardEpoch;
 
-  window.closeTrimPage();
+  closeTrimPage();
   markSessionLoading(agentId, sessionId);
   const _oldRuntimeId = currentRuntimeAgentId;
   let archiveRollback = null;
@@ -789,4 +790,9 @@ window.submitTrimPage = async () => {
     clearSessionLoading(agentId);
     clearChatLoadingSession();
   }
-};
+}
+
+window.ClawFW.actions.registerMany({
+  'trimPage.close': () => closeTrimPage(),
+  'trimPage.submit': () => submitTrimPage(),
+});
