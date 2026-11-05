@@ -49,19 +49,6 @@
     return next;
   }
 
-  function announce(message, error = false) {
-    let status = document.getElementById('sidebar-layout-status');
-    if (!status) {
-      status = document.createElement('div');
-      status.id = 'sidebar-layout-status';
-      status.className = 'sidebar-layout-status';
-      status.setAttribute('role', 'status');
-      document.getElementById('sidebar').appendChild(status);
-    }
-    status.textContent = message;
-    status.classList.toggle('is-error', error);
-  }
-
   async function load(refresh = false) {
     if (loading || saving || gesture || (loaded && !refresh)) return loading;
     loading = (async () => {
@@ -71,11 +58,9 @@
         if (!response.ok || data.ok !== true) throw new Error(data.error || 'Layout load failed');
         layout = data.sidebarLayout;
         loaded = true;
-        announce('');
         renderAgentList();
       } catch (error) {
         loaded = false;
-        announce(zh() ? '左栏布局读取失败；重新聚焦窗口后重试。' : 'Layout could not load. Refocus the window to retry.', true);
         console.warn('[sidebar-layout] load failed', error);
       } finally { loading = null; }
     })();
@@ -88,7 +73,6 @@
     layout = next;
     saving = true;
     renderAgentList();
-    announce(zh() ? '正在保存左栏布局…' : 'Saving sidebar layout…');
     try {
       const response = await fetch(endpoint, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -97,11 +81,9 @@
       const data = await response.json();
       if (!response.ok || data.ok !== true) throw new Error(data.error || 'Layout save failed');
       layout = data.sidebarLayout;
-      announce('');
       return true;
     } catch (error) {
       layout = previous;
-      announce(zh() ? '左栏布局保存失败，已恢复原布局；请再次整理。' : 'Layout could not save. Original layout restored; please try again.', true);
       console.warn('[sidebar-layout] save failed', error);
       return false;
     } finally {
@@ -220,7 +202,6 @@
     handle.classList.add('layout-picked');
     handle.setAttribute('aria-pressed', 'true');
     if (pointerId !== null) root.setPointerCapture(pointerId);
-    announce('');
     return true;
   }
 
@@ -235,7 +216,6 @@
     old.handle.removeAttribute('aria-pressed');
     if (old.pointerId !== null && root.hasPointerCapture(old.pointerId)) root.releasePointerCapture(old.pointerId);
     if (old.active) suppressClickUntil = Date.now() + 400;
-    announce('');
     if (commit && old.active && old.target) {
       const value = current();
       const next = moved(value, old.source, old.target);

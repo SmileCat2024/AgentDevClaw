@@ -35,7 +35,7 @@ try {
   await page.reload();
   await page.waitForSelector('body[data-ready="true"]');
   await assert.rejects(fs.access(settingsPath), { code: 'ENOENT' });
-  assert.equal(await page.locator('#sidebar-layout-status').isVisible(), false);
+  assert.equal(await page.locator('#sidebar-layout-status').count(), 0);
   console.log('PASS upgrade without settings file renders defaults across reload without writing');
   const legacySettings = { version: 1, workspaceVisibility: { coder: 'always' }, resourcePolicy: { coder: { maxLiveThreads: 3 } } };
   await fs.writeFile(settingsPath, JSON.stringify(legacySettings));
@@ -54,7 +54,7 @@ try {
   await page.mouse.down();
   await page.waitForSelector('.layout-arranging');
   const rootDuring = await page.locator('#agent-list').boundingBox();
-  assert.equal(await page.locator('#sidebar-layout-status').isVisible(), false, 'starting a drag shows no bottom instructions');
+  assert.equal(await page.locator('#sidebar-layout-status').count(), 0, 'starting a drag shows no bottom instructions');
   const feedback = () => page.locator('.layout-drop-before, .layout-drop-after, .layout-drop-inside').evaluateAll(els => els.map(el => ({
     id: el.dataset.layoutHandle || el.dataset.layoutId || el.id,
     inside: el.classList.contains('layout-drop-inside'),
@@ -77,7 +77,7 @@ try {
   for (let y = header.y + 1; y < header.y + header.height; y++) {
     await page.mouse.move(header.x + 60, y);
     assert.equal((await feedback())[0]?.inside, true, 'entire folder header offers one consistent action');
-    assert.equal(await page.locator('#sidebar-layout-status').isVisible(), false, 'folder destination shows no bottom instructions');
+    assert.equal(await page.locator('#sidebar-layout-status').count(), 0, 'folder destination shows no bottom instructions');
   }
   await page.screenshot({ path: '.tmp/sidebar-drag-folder-dark.png' });
   await page.locator('#theme').dispatchEvent('click');
@@ -90,7 +90,7 @@ try {
     assert.equal(marks.length, 1);
     assert.equal(marks[0].inside, false, 'application gap remains an insertion line');
     assert.equal(marks[0].id, 'app:memo', 'one logical slot keeps one visual anchor');
-    assert.equal(await page.locator('#sidebar-layout-status').isVisible(), false, 'insertion destination shows no bottom instructions');
+    assert.equal(await page.locator('#sidebar-layout-status').count(), 0, 'insertion destination shows no bottom instructions');
   }
   await page.screenshot({ path: '.tmp/sidebar-drag-insertion-dark.png' });
   await page.locator('#theme').dispatchEvent('click');
@@ -204,9 +204,9 @@ try {
   await folder('prebuilt-group').click();
   await waitSaved();
   assert.equal(await folder('prebuilt-group').getAttribute('aria-expanded'), 'true');
-  assert.match(await page.locator('#sidebar-layout-status').textContent(), /保存失败/);
+  assert.equal(await page.locator('#sidebar-layout-status').count(), 0);
   await page.request.post(fixture.url.replace('/fixture', '/fixture/fail-save/false'));
-  console.log('PASS failed save visibly rolls back');
+  console.log('PASS failed save rolls back without a status bar');
 
   await app('memo').focus();
   await page.keyboard.press('Space');

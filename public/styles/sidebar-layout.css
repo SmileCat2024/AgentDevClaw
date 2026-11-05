@@ -44,21 +44,4 @@
   pointer-events: none;
   z-index: 2;
 }
-.sidebar-layout-status {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
-  z-index: 3;
-  pointer-events: none;
-  background: var(--panel-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-.sidebar-layout-status:empty { display: none; }
-.sidebar-layout-status.is-error { color: var(--error-color); }
 .layout-arranging .agent-item { transition: none; }
