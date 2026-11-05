@@ -590,6 +590,46 @@ describe('observeThreadTurnFact', () => {
     assert.equal(parseFrames(sse.streamText).filter((f) => f.event === 'app-notification').length, before);
   });
 
+  it('enriches fact frames with session-granularity material (runtimeAgentId / title / finishTs)', async () => {
+    // 帧只带工作空间粒度 agentId 会把「哪个会话完成」抹平成「哪个工作空间
+    // 完成」（2026-11-05 回归：PH 完成通知只剩兜底文案）。resolve 注入把
+    // fact.sessionId 解析回会话粒度：runtimeAgentId（前端焦点判定 / 条目
+    // 查找 / messages 预览 / 导航）+ title（降级时的会话标题）+ finishTs
+    // （前端事件级去重键：不同轮次不同帧，重放同帧同值）。
+    const fact = {
+      threadId: 'wt-enrich', agentId: 'tt-enrich', sessionId: 's-42', status: 'completed', turn: 1,
+      resultText: '修复完成',
+    };
+    await observeThreadTurnFact(fact, {
+      requireAgent, settingsPath: settingsPath(),
+      resolveRuntimeAgentId: async () => 'agent-7-9000',
+      resolveSessionTitle: async () => '修复登录超时',
+    });
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === 'tt-enrich' && f.data.type === 'finish');
+    assert.ok(frame);
+    assert.equal(frame.data.runtimeAgentId, 'agent-7-9000');
+    assert.equal(frame.data.title, '修复登录超时');
+    assert.ok(Number.isFinite(frame.data.finishTs) && frame.data.finishTs > 0);
+  });
+
+  it('delivers degraded frames when resolvers miss or throw (body/threadId still present)', async () => {
+    await observeThreadTurnFact({
+      threadId: 'wt-deg', agentId: 'tt-degraded', sessionId: 's-404', status: 'completed', turn: 2,
+      resultText: '部分交付文本',
+    }, {
+      requireAgent, settingsPath: settingsPath(),
+      resolveRuntimeAgentId: async () => { throw new Error('registry miss'); },
+      resolveSessionTitle: async () => null,
+    });
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === 'tt-degraded' && f.data.type === 'finish');
+    assert.ok(frame);
+    assert.equal('runtimeAgentId' in frame.data, false);
+    assert.equal('title' in frame.data, false);
+    assert.equal(frame.data.body, '部分交付文本');
+    assert.equal(frame.data.threadId, 'wt-deg');
+    assert.ok(frame.data.finishTs > 0);
+  });
+
   it('silently skips when the permission gate blocks (thread facts follow the same gate)', async () => {
     const strictRequire = async (agentId) => ({ id: agentId, permissionDefaults: {} });
     await observeThreadTurnFact({

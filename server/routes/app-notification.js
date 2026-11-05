@@ -283,6 +283,16 @@ export async function observeCallStatusSnapshot(kind, agentId, snapshot, opts = 
  * 状态 + 轮次号），同一轮次只投一次；权限判定与三层判定链同源
  * （notifications.finish）。fact 形状见 thread-routes.js onTurnTerminalFact
  * 注释。自捕获错误：感知失败只留痕，绝不打断上报链。
+ *
+ * 呈现素材补齐（fact 只有工作空间粒度 agentId + 框架 sessionId，而快照
+ * 路径的帧带 runtimeAgentId 会话粒度定位）：前端呈现器的焦点判定 / 会话
+ * 条目查找 / messages 预览 / 点击导航全部按 runtimeAgentId 设计，丢失它
+ * 会把「哪个会话完成」抹平成「哪个工作空间完成」（deliverAppNotification
+ * 头注同一教训）。opts.resolveRuntimeAgentId / resolveSessionTitle 由
+ * server.js 装配注入（进程内注册表 + 共享会话索引，零跨进程 IO）；解析
+ * 失败或未注入不阻塞投递——帧仍带 title/body/threadId，前端走帧内素材
+ * 兜底。finishTs 在投递时打点：同一帧重放值相同（前端事件级去重挡住）、
+ * 不同轮次值不同（连续完成的两轮各自成帧，不被 30s 窗口吞掉）。
  */
 export async function observeThreadTurnFact(fact, opts = {}) {
   try {
@@ -291,10 +301,24 @@ export async function observeThreadTurnFact(fact, opts = {}) {
     if (!agentId || !threadId) return;
     if (fact.status === 'cancelled') return;
     const turnKey = Number.isInteger(fact.turn) ? String(fact.turn) : 'none';
+    const sessionId = String(fact?.sessionId || '').trim();
+    let runtimeAgentId = null;
+    let sessionTitle = null;
+    if (sessionId) {
+      if (typeof opts.resolveRuntimeAgentId === 'function') {
+        try { runtimeAgentId = String(await opts.resolveRuntimeAgentId(agentId, sessionId) || '') || null; } catch { /* 解析失败不阻塞投递 */ }
+      }
+      if (typeof opts.resolveSessionTitle === 'function') {
+        try { sessionTitle = String(await opts.resolveSessionTitle(agentId, sessionId) || '') || null; } catch { /* 同上 */ }
+      }
+    }
     await deliverAppNotification({
       agentId,
       type: 'finish',
       threadId,
+      finishTs: Date.now(),
+      ...(runtimeAgentId ? { runtimeAgentId } : {}),
+      ...(sessionTitle ? { title: sessionTitle } : {}),
       // 交付事实摘要（呈现级截断；完整文本在线程事件流里）
       ...(typeof fact.resultText === 'string' && fact.resultText
         ? { body: String(fact.resultText).slice(0, 200) }

@@ -768,7 +768,21 @@ setupThreadRoutes(app, express, {
   // 证明该事实面是通用线程能力。fire-and-forget（订阅方自捕获错误），
   // 不阻塞 runtime 的上报响应。
   onTurnTerminalFact: (fact) => {
-    observeThreadTurnFact(fact, { requireAgent: requireAgentLight });
+    observeThreadTurnFact(fact, {
+      requireAgent: requireAgentLight,
+      // 会话粒度定位与标题（呈现素材）：fact 只带框架 sessionId，前端呈现
+      // 器按 viewer runtime id 定位会话。进程内注册表解析，失败不阻塞投递。
+      resolveRuntimeAgentId: (agentId, sessionId) => {
+        const runtime = getAgentRuntime(agentId, sessionId)
+          || listAgentRuntimes(agentId).find((rt) => isManagedRuntimeRunning(rt) && rt.selectedSessionId === sessionId)
+          || null;
+        return runtime?.viewerAgentId || null;
+      },
+      resolveSessionTitle: async (agentId, sessionId) => {
+        const record = await findPrebuiltSessionRecordShared(agentId, sessionId);
+        return cleanSessionText(record?.title) || null;
+      },
+    });
   },
   ensureHeadRuntime,
   rotationService: threadRotation,

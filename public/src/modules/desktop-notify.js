@@ -15,7 +15,11 @@
  *
  * 帧语义（server 侧已保证）：type=finish 的完成事实已排除挂起（ADR-0019）
  * 与接续移交（cancelled + interruptedBy=context_rotation，轮次由 successor
- * 的 finish 通知承载完成事实）且按 agentId+finishTs 事件级去重；type=input 的 choice 请求按
+ * 的 finish 通知承载完成事实）且按 agentId+finishTs 事件级去重。finish 帧
+ * 有两条来源：runtime 状态快照（带会话粒度 runtimeAgentId）与线程轮次
+ * 事实（ADR-0042，线程宿主走此路径；帧带 threadId + title + body 交付
+ * 文本，server 补 runtimeAgentId / finishTs；呈现器以条目/消息接口为主、
+ * 帧内素材兜底）。type=input 的 choice 请求按
  * agentId+requestId 去重；type=reminder 等主动投递类透传 APP 文案，server
  * 逐条投不做事件级去重（每次 POST 都是新事实）。
  * SSE 断连重连的 Last-Event-ID 重放会再次投递同帧，由本模块呈现级去重
@@ -197,7 +201,10 @@ async function _presentAgentFinishedNotification(payload) {
 
   const agent = _findAgentByRuntimeId(normId);
   const agentName = (agent?.name || agent?.id || normId).trim();
-  const sessionTitle = (agent?.active_workspace_session_title || '').trim();
+  // 会话标题：会话条目优先（快照路径帧）；轮次事实帧（线程宿主的 finish
+  // 走 ADR-0042 轮次事实路径，server 已补 runtimeAgentId）在条目查找落空
+  // 时（runtime 已停止等降级）用帧携带的 title 兜底。
+  const sessionTitle = (agent?.active_workspace_session_title || String(payload?.title || '')).trim();
   const isZh = currentLanguage === 'zh';
   const outcomeStatus = String(payload?.outcomeStatus || '').trim();
   const titleSuffix = {
@@ -207,8 +214,11 @@ async function _presentAgentFinishedNotification(payload) {
     continued: isZh ? '已移交' : 'handed off',
   }[outcomeStatus] || (isZh ? '运行已结束' : 'run ended');
 
-  // 尝试获取最后一条 assistant 回复
-  let replyPreview = '';
+  // 尝试获取最后一条 assistant 回复。预览初值取帧携带的交付文本（轮次
+  // 事实帧的 body，server 截 200 字）：messages 取回成功则覆盖为完整回复，
+  // 取回失败 / 无 assistant 消息 / 工作空间粒度帧（runtime 已停止等降级，
+  // normId 不是 viewer runtime id）时保留帧内文本——不再退到空预览。
+  let replyPreview = _truncateForNotification(String(payload?.body || ''));
   try {
     const res = await fetch(`/api/agents/${encodeURIComponent(normId)}/messages`);
     if (res.ok) {
@@ -221,7 +231,7 @@ async function _presentAgentFinishedNotification(payload) {
         }
       }
     }
-  } catch (e) { /* ignore — 通知照常发出，只是没有预览 */ }
+  } catch (e) { /* ignore — 通知照常发出，用帧内交付文本兜底 */ }
 
   // 构建通知正文
   const bodyParts = [];
@@ -236,16 +246,24 @@ async function _presentAgentFinishedNotification(payload) {
       : (isZh ? 'Agent 运行已结束，点击查看' : 'Agent run ended. Click to view.'));
 
   // 持久性按页面焦点判定：失焦（用户不在）常驻挂起；前台（看着别的
-  // 会话）轻提示，自动收进通知中心。navPayload 供原生 toast 点击后
-  // 定位会话（runtimeId 切会话）。
+  // 会话）轻提示，自动收进通知中心。navPayload 供原生 toast 点击后定位
+  // 会话：threadId 优先（轮次事实帧携带，精确到会话；__clawConsume-
+  // NotificationActivation 与 generic 路径同语义），否则按 runtimeId 切
+  // 会话（快照路径帧）。
+  const threadId = String(payload?.threadId || '').trim();
+  const navigateFromNotification = () => {
+    window.focus();
+    if (threadId && typeof window.openConversationTarget === 'function') {
+      window.openConversationTarget({ threadId, agentId: agent?.id || payload?.agentId });
+      return;
+    }
+    _navigateToAgent(agent);
+  };
   _showPersistentNotification(
     isZh ? `${agentName} ${titleSuffix}` : `${agentName} ${titleSuffix}`,
     { body, tag: 'claw-agent-finished-' + normId, requireInteraction: _shouldPersistNotification() },
-    () => {
-      window.focus();
-      _navigateToAgent(agent);
-    },
-    { runtimeId: normId, agentId: agent?.id }
+    navigateFromNotification,
+    { runtimeId: normId, agentId: agent?.id, ...(threadId ? { threadId } : {}) }
   );
 }
 
