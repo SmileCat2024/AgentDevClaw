@@ -13,9 +13,11 @@
  *   - createFeatureConfigEditor (feature-config-editor.js)
  *
  * 入口：window.phOpenSettings() → renderPhSettingsOverlay()
- * 关闭：window.phCloseSettings()
- * 模型自动保存：window.phAutoSaveModelConfig()
- * 进程模式切换：window.phSetProcessMode()
+ * 面板内交互经 data-action="phSettings.*" 分发（action-dispatcher.js），
+ * 处理器收敛在本模块局部；跨模块动作（关闭 phCloseSettings、模型槽位
+ * phModelSlotChanged、进程模式 phSetProcessMode、Feature 仓库
+ * phOpenFeatureStore / _fsRemoveFor）由 handler 经 window 转调，
+ * 其收敛随各自模块批次处理。
  */
 'use strict';
 
@@ -89,7 +91,7 @@ function _renderModelConfigContent(agent, presets) {
       return '<option value="' + escapeHtml(effort) + '"' + (effort === selected ? ' selected' : '') + '>' + escapeHtml(effort) + '</option>';
     }).join('');
     return '<select class="ph-mc-effort" data-claw-select data-preset-role="' + roleKey + '" data-slot="' + slot + '"'
-      + ' onchange="window.phAutoSaveModelConfig()"' + (disabled ? ' disabled' : '') + '>'
+      + ' data-action="phSettings.autoSaveModel"' + (disabled ? ' disabled' : '') + '>'
       + '<option value="">' + escapeHtml(isZh ? '默认' : 'Default') + '</option>'
       + optionHtml
       + '</select>';
@@ -102,7 +104,7 @@ function _renderModelConfigContent(agent, presets) {
     const secondaryVal = typeof roleConfig === 'string' ? '' : (roleConfig.secondary || '');
     const isDefaultRole = role.key === 'default';
 
-    const primarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="primary" onchange="window.phModelSlotChanged(this)">'
+    const primarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="primary" data-action="phSettings.modelSlotChanged">'
       + '<option value=""' + (!primaryVal ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
       + buildOptions(primaryVal)
       + '</select>';
@@ -111,7 +113,7 @@ function _renderModelConfigContent(agent, presets) {
     const labelCol = '<div class="ph-mc-role"><div class="ph-mc-role-name">' + escapeHtml(role.label) + '</div><div class="ph-mc-role-desc">' + escapeHtml(role.desc) + '</div></div>';
 
     if (isDefaultRole) {
-      const secondarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="secondary" onchange="window.phModelSlotChanged(this)">'
+      const secondarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="secondary" data-action="phSettings.modelSlotChanged">'
         + '<option value=""' + (!secondaryVal ? ' selected' : '') + '>' + (isZh ? '(不设置)' : '(Not set)') + '</option>'
         + buildOptions(secondaryVal)
         + '</select>';
@@ -187,7 +189,7 @@ function _renderFeatureEntryList() {
   }
 
   const cards = entries.map(function(entry) {
-    return '<div class="ph-pm-card" onclick="window._phSwitchSettingsTab(\'' + entry.key + '\')">'
+    return '<div class="ph-pm-card" data-action="phSettings.switchTab" data-tab="' + escapeHtml(entry.key) + '">'
       + '<div class="ph-pm-card-body">'
       + '<div class="ph-pm-card-title">' + escapeHtml(entry.title) + '</div>'
       + '<div class="ph-pm-card-desc">' + escapeHtml(entry.desc) + '</div>'
@@ -303,15 +305,14 @@ function _phRenderMountsBody(host) {
   const seg = '<div class="usage-info-segment feature-src-seg" role="tablist">'
     + ['all', 'bundled', 'installed'].map(function(f) {
       return '<button type="button" role="tab" class="' + (f === _phMountSrcFilter ? 'active' : '') + '"'
-        + ' onpointerdown="window._phSetMountSrcFilter(\'' + f + '\')"'
-        + ' onclick="window._phSetMountSrcFilter(\'' + f + '\')">'
+        + ' data-action="phSettings.setMountSrcFilter" data-filter="' + f + '">'
         + escapeHtml(t(srcKeys[f])) + '<span class="feature-src-n">' + String(srcCounts[f]) + '</span></button>';
     }).join('')
     + '</div>';
 
   const capSelect = (fc && catalog && Array.isArray(catalog.capabilities) && catalog.capabilities.length > 0)
     ? '<select class="feature-cap-select" data-claw-select data-claw-compact="true" data-claw-no-scroll="true"'
-      + ' onchange="window._phSetMountCapFilter(this.value)">'
+      + ' data-action="phSettings.setMountCapFilter">'
       + ['all'].concat(catalog.capabilities.map(function(c) { return typeof c === 'string' ? c : c.id; }))
         .map(function(id) {
           return '<option value="' + escapeHtml(id) + '"' + (id === capFilter ? ' selected' : '') + '>'
@@ -320,7 +321,7 @@ function _phRenderMountsBody(host) {
       + '</select>'
     : '';
 
-  const addButton = '<button type="button" class="ph-mount-add" style="margin-left:auto;" onclick="window.phOpenFeatureStore(\'' + escapeHtml(_phMountData.identityKey) + '\')">'
+  const addButton = '<button type="button" class="ph-mount-add" style="margin-left:auto;" data-action="phSettings.openFeatureStore" data-identity="' + escapeHtml(_phMountData.identityKey) + '">'
     + escapeHtml(isZh ? '+ 添加 Feature' : '+ Add Feature') + '</button>';
 
   const buildCard = function(f) {
@@ -331,7 +332,7 @@ function _phRenderMountsBody(host) {
       provHtml = '<span class="feature-prov-badge">' + escapeHtml(isZh ? '默认' : 'default') + '</span>';
     } else if (e.mount) {
       const removeBtn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(isZh ? '移除' : 'Remove') + '"'
-        + ' onclick="window._fsRemoveFor(\'' + escapeHtml(_phMountData.identityKey) + '\', \'' + escapeHtml(f.name) + '\')">&#215;</button>';
+        + ' data-action="phSettings.removeMountFeature" data-identity="' + escapeHtml(_phMountData.identityKey) + '" data-name="' + escapeHtml(f.name) + '">&#215;</button>';
       if (e.mount.missing) {
         badgesHtml = '<span class="feature-badge status-removed">' + escapeHtml(isZh ? '包已不在仓库' : 'missing') + '</span>' + removeBtn;
       } else if (e.mount.kind === 'builtin') {
@@ -357,7 +358,7 @@ function _phRenderMountsBody(host) {
       ? _phMountGroupOpenPref.get(group.id)
       : !(fc && fc.typeCollapsedByDefault(group.id, catalog));
     return '<details class="feature-group"' + (isOpen ? ' open' : '')
-      + ' ontoggle="window._phMountGroupToggled(&quot;' + escapeHtml(group.id) + '&quot;, this.open)">'
+      + ' data-action="phSettings.mountGroupToggled" data-group="' + escapeHtml(group.id) + '">'
       + '<summary class="feature-group-bar">'
       + '<span class="feature-group-chev" aria-hidden="true"></span>'
       + '<span class="feature-group-title">' + escapeHtml(t(group.id === '_unmapped' ? 'feature_cat_unmapped' : 'feature_type_' + group.id)) + '</span>'
@@ -421,12 +422,12 @@ function _phEnvNoticeHtml() {
     + '<span style="flex:1;color:var(--text-secondary);">' + escapeHtml(isZh
       ? '插件环境需要恢复：下次启动时自动完成，不影响已装配声明。'
       : 'Plugin environment needs restoring: it will be rebuilt automatically on next launch.') + '</span>'
-    + '<button type="button" class="fs-list-add" onclick="window._phRebuildEnv()">'
+    + '<button type="button" class="fs-list-add" data-action="phSettings.rebuildEnv">'
     + escapeHtml(isZh ? '立即恢复' : 'Restore now') + '</button>'
     + '</div>';
 }
 
-window._phRebuildEnv = async function() {
+const _phRebuildEnv = async function() {
   if (_phRebuildBusy || !_phMountData) return;
   _phRebuildBusy = true;
   const host = document.getElementById('ph-feature-mounts-host');
@@ -450,21 +451,21 @@ window._phRebuildEnv = async function() {
   }
 };
 
-window._phSetMountSrcFilter = function(f) {
+const _phSetMountSrcFilter = function(f) {
   if (['all', 'bundled', 'installed'].indexOf(f) === -1 || f === _phMountSrcFilter) return;
   _phMountSrcFilter = f;
   const host = document.getElementById('ph-feature-mounts-host');
   if (_phMountData && host) _phRenderMountsBody(host);
 };
 
-window._phSetMountCapFilter = function(v) {
+const _phSetMountCapFilter = function(v) {
   if (typeof v !== 'string' || !v || v === _phMountCapFilter) return;
   _phMountCapFilter = v;
   const host = document.getElementById('ph-feature-mounts-host');
   if (_phMountData && host) _phRenderMountsBody(host);
 };
 
-window._phMountGroupToggled = function(groupId, open) {
+const _phMountGroupToggled = function(groupId, open) {
   _phMountGroupOpenPref.set(groupId, open);
 };
 
@@ -548,7 +549,7 @@ function _renderProcessModeContent(agent) {
 
   const optionCard = (mode, active, title, desc) => {
     return [
-      '<div class="ph-pm-card' + (active ? ' active' : '') + '" onclick="window.phSetProcessMode(\'' + mode + '\')">',
+      '<div class="ph-pm-card' + (active ? ' active' : '') + '" data-action="phSettings.setProcessMode" data-mode="' + mode + '">',
       '<div class="ph-pm-radio' + (active ? ' checked' : '') + '"></div>',
       '<div class="ph-pm-card-body">',
       '<div class="ph-pm-card-title">' + escapeHtml(title) + '</div>',
@@ -603,9 +604,9 @@ async function _phLoadCoderPolicy() {
       : (typeof authorDefault === 'string' && authorDefault ? authorDefault : 'adaptive');
     const runtimeMode = data?.resourcePolicy?.coder?.runtimeExecutionMode || 'standard';
     // 卡片形态照进程模式页（ph-pm-card 单选卡片），不另造控件。
-    const optionCard = (mode, active, title, desc, setter = 'phSetCoderRotationStrategy') => {
+    const optionCard = (mode, active, title, desc, action = 'setCoderRotationStrategy') => {
       return [
-        '<div class="ph-pm-card' + (active ? ' active' : '') + '" onclick="window.' + setter + '(\'' + mode + '\')">',
+        '<div class="ph-pm-card' + (active ? ' active' : '') + '" data-action="phSettings.' + action + '" data-mode="' + mode + '">',
         '<div class="ph-pm-radio' + (active ? ' checked' : '') + '"></div>',
         '<div class="ph-pm-card-body">',
         '<div class="ph-pm-card-title">' + escapeHtml(title) + '</div>',
@@ -628,16 +629,16 @@ async function _phLoadCoderPolicy() {
       (live > 0 ? '<div class="ph-mc-role-desc">' + (isZh ? '当前 ' + live + ' 条未归档线程' : live + ' live threads') + '</div>' : ''),
       '</div>',
       '<div style="flex:0 0 140px;display:flex;justify-content:flex-end;padding-top:7px;">',
-      '<input id="ph-coder-thread-limit" type="number" min="1" step="1" class="settings-input" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" onchange="window.phSaveCoderThreadLimit(this.value)">',
+      '<input id="ph-coder-thread-limit" type="number" min="1" step="1" class="settings-input" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" data-action="phSettings.saveCoderThreadLimit">',
       '</div>',
       '</div>',
       '</section>',
       '<section class="ph-coder-policy-section">',
       '<div class="ph-mc-row"><div class="ph-mc-role"><div class="ph-mc-role-name">' + (isZh ? '运行模式' : 'Runtime mode') + '</div><div class="ph-mc-role-desc">' + (isZh ? '选择任务运行的位置。' : 'Choose where Coder tasks run.') + '</div></div></div>',
       '<div class="ph-pm-body ph-coder-runtime-options">',
-      optionCard('standard', runtimeMode === 'standard', isZh ? '标准模式' : 'Standard', isZh ? '直接在本机运行。' : 'Run directly on this machine.', 'phSetCoderRuntimeMode'),
-      optionCard('container', runtimeMode === 'container', isZh ? '容器模式' : 'Container', isZh ? '在容器环境中运行。' : 'Run in a container environment.', 'phSetCoderRuntimeMode'),
-      optionCard('agent-choice', runtimeMode === 'agent-choice', isZh ? '让 Agent 自主选择' : 'Agent chooses', isZh ? '每次创建任务时选择标准模式或容器模式。' : 'Choose standard or container each time a task is created.', 'phSetCoderRuntimeMode'),
+      optionCard('standard', runtimeMode === 'standard', isZh ? '标准模式' : 'Standard', isZh ? '直接在本机运行。' : 'Run directly on this machine.', 'setCoderRuntimeMode'),
+      optionCard('container', runtimeMode === 'container', isZh ? '容器模式' : 'Container', isZh ? '在容器环境中运行。' : 'Run in a container environment.', 'setCoderRuntimeMode'),
+      optionCard('agent-choice', runtimeMode === 'agent-choice', isZh ? '让 Agent 自主选择' : 'Agent chooses', isZh ? '每次创建任务时选择标准模式或容器模式。' : 'Choose standard or container each time a task is created.', 'setCoderRuntimeMode'),
       '</div>',
       '</section>',
       '<section class="ph-coder-policy-section">',
@@ -676,7 +677,7 @@ async function _phLoadCoderPolicy() {
   }
 }
 
-window.phSetCoderRuntimeMode = async function(mode) {
+const phSetCoderRuntimeMode = async function(mode) {
   if (!['standard', 'container', 'agent-choice'].includes(mode)) return;
   const isZh = currentLanguage === 'zh';
   const status = document.getElementById('ph-coder-policy-status');
@@ -694,7 +695,7 @@ window.phSetCoderRuntimeMode = async function(mode) {
   }
 };
 
-window.phSetCoderRotationStrategy = async function(strategy) {
+const phSetCoderRotationStrategy = async function(strategy) {
   const isZh = currentLanguage === 'zh';
   const status = document.getElementById('ph-coder-policy-status');
   const setStatus = (message) => { if (status) status.textContent = message; };
@@ -717,7 +718,7 @@ window.phSetCoderRotationStrategy = async function(strategy) {
   }
 };
 
-window.phSaveCoderThreadLimit = async function(rawValue) {
+const phSaveCoderThreadLimit = async function(rawValue) {
   const isZh = currentLanguage === 'zh';
   const status = document.getElementById('ph-coder-policy-status');
   const setStatus = (message) => { if (status) status.textContent = message; };
@@ -793,7 +794,7 @@ async function _phLoadNotificationSettings() {
       '</div>',
       '<div style="display:flex;justify-content:flex-end;align-items:center;padding-top:7px;">',
       '<label class="proxy-switch">',
-      '<input type="checkbox" ' + (effective ? 'checked' : '') + ' onchange="window._phToggleNotificationFinish(\'' + escapeHtml(a.id) + '\', this.checked)" />',
+      '<input type="checkbox" ' + (effective ? 'checked' : '') + ' data-action="phSettings.toggleNotifyFinish" data-agent="' + escapeHtml(a.id) + '" />',
       '<span class="proxy-switch-slider"></span>',
       '</label>',
       '</div>',
@@ -806,7 +807,7 @@ async function _phLoadNotificationSettings() {
   ].join('');
 }
 
-window._phToggleNotificationFinish = async function(agentId, checked) {
+const _phToggleNotificationFinish = async function(agentId, checked) {
   const isZh = currentLanguage === 'zh';
   const status = document.getElementById('ph-notification-status');
   const setStatus = (message) => { if (status) status.textContent = message; };
@@ -856,12 +857,6 @@ function renderPhSettingsOverlay(agent, presets) {
       _phSettingsTab = 'model';
     } else {
       _closePhFeatureEditor();
-      // 返回一级页（head 左侧返回按钮）
-      window._phFeatureBack = () => {
-        _closePhFeatureEditor();
-        _phSettingsTab = 'feature';
-        renderPhSettingsOverlay(agent, presets);
-      };
 
       const identityLabel = featurePage.identityKey === 'coder'
         ? (isZh ? 'Coder' : 'Coder')
@@ -874,7 +869,7 @@ function renderPhSettingsOverlay(agent, presets) {
         { key: 'mounts', label: isZh ? '挂载管理' : 'Mounts' },
       ];
       const subTabItems = subTabs.map((t) =>
-        '<button type="button" class="ph-session-tab' + (_phFeatureSubTab === t.key ? ' active' : '') + '" onclick="window._phSwitchFeatureSubTab(\'' + t.key + '\')">' + escapeHtml(t.label) + '</button>'
+        '<button type="button" class="ph-session-tab' + (_phFeatureSubTab === t.key ? ' active' : '') + '" data-action="phSettings.switchFeatureSubTab" data-sub="' + escapeHtml(t.key) + '">' + escapeHtml(t.label) + '</button>'
       ).join('');
 
       let bodyHtml;
@@ -891,7 +886,7 @@ function renderPhSettingsOverlay(agent, presets) {
         '<div class="feature-detail-window ph-settings-window">',
         '<div class="feature-detail-head">',
         '<div style="display:flex;align-items:center;gap:4px;">',
-        '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" onclick="window._phFeatureBack()" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>',
+        '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" data-action="phSettings.featureBack" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>',
         '<div>',
         '<div class="feature-detail-title">' + escapeHtml((isZh ? '工作空间设置 · ' : 'Workspace Settings · ') + identityLabel + ' ' + pageName) + '</div>',
         '<div class="feature-detail-subtitle">' + escapeHtml(_phFeatureSubTab === 'mounts'
@@ -899,7 +894,7 @@ function renderPhSettingsOverlay(agent, presets) {
           : (isZh ? featurePage.subtitleZh : featurePage.subtitleEn)) + '</div>',
         '</div>',
         '</div>',
-        '<button class="feature-detail-close" type="button" onclick="window.phCloseSettings()">&times;</button>',
+        '<button class="feature-detail-close" type="button" data-action="phSettings.close">&times;</button>',
         '</div>',
         // 行左右 10px + tab 自身 14px 内边距 = 文字与正文 24px 左右缘对齐
         '<div style="display:flex;align-items:flex-end;padding:0 10px;border-bottom:1px solid var(--border-color,#2a2a35);">' + subTabItems + '</div>',
@@ -945,7 +940,7 @@ function renderPhSettingsOverlay(agent, presets) {
 
   const tabItems = tabs.map(t => {
     const active = _phSettingsTab === t.key;
-    return '<div class="ph-settings-tab' + (active ? ' active' : '') + '" onclick="window._phSwitchSettingsTab(\'' + t.key + '\')">'
+    return '<div class="ph-settings-tab' + (active ? ' active' : '') + '" data-action="phSettings.switchTab" data-tab="' + escapeHtml(t.key) + '">'
       + '<span class="ph-settings-tab-icon">' + t.icon + '</span>'
       + '<span class="ph-settings-tab-label">' + escapeHtml(t.label) + '</span>'
       + '</div>';
@@ -994,7 +989,7 @@ function renderPhSettingsOverlay(agent, presets) {
     '<div class="feature-detail-title">' + (isZh ? '工作空间设置' : 'Workspace Settings') + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(subtitle) + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" onclick="window.phCloseSettings()">&times;</button>',
+    '<button class="feature-detail-close" type="button" data-action="phSettings.close">&times;</button>',
     '</div>',
     '<div class="ph-settings-layout">',
     '<div class="ph-settings-sidebar">',
@@ -1024,7 +1019,7 @@ function renderPhSettingsOverlay(agent, presets) {
     });
   }
 }
-window._phSwitchSettingsTab = (tab) => {
+const _phSwitchSettingsTab = (tab) => {
   // 进入身份页时重置页内分页器（身份落点变化，回到默认页）
   if (PH_FEATURE_PAGES[tab]) _phFeatureSubTab = 'config';
   _phSettingsTab = tab;
@@ -1035,7 +1030,7 @@ window._phSwitchSettingsTab = (tab) => {
   }
 };
 
-window._phSwitchFeatureSubTab = (sub) => {
+const _phSwitchFeatureSubTab = (sub) => {
   if (sub !== 'config' && sub !== 'mounts') return;
   _phFeatureSubTab = sub;
   const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
@@ -1044,3 +1039,39 @@ window._phSwitchFeatureSubTab = (sub) => {
     renderPhSettingsOverlay(agent, presets);
   }
 };
+
+// 返回 Feature 一级页（二级页 head 左侧返回按钮）。agent 现取，与 _phSwitchSettingsTab 同构
+// （设置弹窗模态期间当前 agent 不变；原为渲染闭包捕获，收敛全局时改模块级）。
+const _phFeatureBack = () => {
+  _closePhFeatureEditor();
+  _phSettingsTab = 'feature';
+  const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
+  if (agent) {
+    const presets = getClawModelPresets();
+    renderPhSettingsOverlay(agent, presets);
+  }
+};
+
+// details 的 toggle 不冒泡，分发器必须以 capture 绑定（与 debug-features-hooks
+// 各自声明，bindEventType 幂等，不依赖加载顺序）。
+window.ClawFW.actions.bindEventType('toggle', { capture: true });
+
+window.ClawFW.actions.registerMany({
+  'phSettings.autoSaveModel': () => window.phAutoSaveModelConfig(),
+  'phSettings.modelSlotChanged': (el) => window.phModelSlotChanged(el),
+  'phSettings.switchTab': (el) => _phSwitchSettingsTab(el.dataset.tab),
+  'phSettings.setMountSrcFilter': (el) => _phSetMountSrcFilter(el.dataset.filter),
+  'phSettings.setMountCapFilter': (el) => _phSetMountCapFilter(el.value),
+  'phSettings.openFeatureStore': (el) => window.phOpenFeatureStore(el.dataset.identity),
+  'phSettings.removeMountFeature': (el) => window._fsRemoveFor(el.dataset.identity, el.dataset.name),
+  'phSettings.rebuildEnv': () => _phRebuildEnv(),
+  'phSettings.setProcessMode': (el) => window.phSetProcessMode(el.dataset.mode),
+  'phSettings.setCoderRotationStrategy': (el) => phSetCoderRotationStrategy(el.dataset.mode),
+  'phSettings.setCoderRuntimeMode': (el) => phSetCoderRuntimeMode(el.dataset.mode),
+  'phSettings.saveCoderThreadLimit': (el) => phSaveCoderThreadLimit(el.value),
+  'phSettings.toggleNotifyFinish': (el) => _phToggleNotificationFinish(el.dataset.agent, el.checked),
+  'phSettings.switchFeatureSubTab': (el) => _phSwitchFeatureSubTab(el.dataset.sub),
+  'phSettings.mountGroupToggled': (el) => _phMountGroupToggled(el.dataset.group, el.open),
+  'phSettings.featureBack': () => _phFeatureBack(),
+  'phSettings.close': () => window.phCloseSettings(),
+});

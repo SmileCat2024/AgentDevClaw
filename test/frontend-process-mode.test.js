@@ -6,6 +6,7 @@ describe('programming-helper workspace process mode UI', () => {
   it('renders Coder policy as a host-workspace setting tab without adding quota policy to Programming Helper', () => {
     const ctx = createFrontendSandbox();
     ctx.window.phSettingsAgentId = 'programming-helper';
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '' };
     ctx.document.getElementById = () => host;
@@ -19,6 +20,7 @@ describe('programming-helper workspace process mode UI', () => {
   });
   it('renders the server-provided workspace mode without consulting a project key', () => {
     const ctx = createFrontendSandbox();
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/ph-settings.js');
 
     const html = ctx.run(`_renderProcessModeContent({
@@ -26,7 +28,7 @@ describe('programming-helper workspace process mode UI', () => {
       processMode: 'shared-global',
     })`);
 
-    assert.match(html, /ph-pm-card active[^>]*onclick="window\.phSetProcessMode\('shared-global'\)"/);
+    assert.match(html, /ph-pm-card active[^>]*data-action="phSettings\.setProcessMode" data-mode="shared-global"/);
     assert.doesNotMatch(html, /localStorage/);
   });
 
@@ -39,9 +41,10 @@ describe('programming-helper workspace process mode UI', () => {
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/ph-settings.js');
 
-    await ctx.run("window.phSaveCoderThreadLimit('4')");
+    await ctx.run("window.ClawFW.actions.invoke('phSettings.saveCoderThreadLimit', { value: '4' })");
 
     const write = requests.find((request) => request.options?.method === 'PUT');
     assert.ok(write);
@@ -83,9 +86,10 @@ describe('programming-helper workspace process mode UI', () => {
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/ph-settings.js');
 
-    await ctx.run("window.phSaveCoderThreadLimit('1.5')");
+    await ctx.run("window.ClawFW.actions.invoke('phSettings.saveCoderThreadLimit', { value: '1.5' })");
 
     assert.equal(requests.length, 0);
   });
@@ -98,6 +102,7 @@ describe('programming-helper workspace process mode UI', () => {
       }),
     });
     ctx.window.allAgents = [{ id: 'coder', permissionDefaults: { contextRotationStrategy: 'adaptive' } }];
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
@@ -105,11 +110,11 @@ describe('programming-helper workspace process mode UI', () => {
     await ctx.run(`(async () => { _phSettingsTab = 'coder-policy'; await _phLoadCoderPolicy(); })()`);
 
     // 三张策略卡齐全（形态照进程模式页的 ph-pm-card 单选卡片）
-    assert.match(host.innerHTML, /ph-pm-card active[^>]*onclick="window\.phSetCoderRotationStrategy\('trim'\)"/);
-    assert.match(host.innerHTML, /window\.phSetCoderRotationStrategy\('adaptive'\)/);
-    assert.match(host.innerHTML, /window\.phSetCoderRotationStrategy\('summary'\)/);
+    assert.match(host.innerHTML, /ph-pm-card active[^>]*data-action="phSettings\.setCoderRotationStrategy" data-mode="trim"/);
+    assert.match(host.innerHTML, /data-mode="adaptive"/);
+    assert.match(host.innerHTML, /data-mode="summary"/);
     // 用户覆盖（trim）压过作者默认（adaptive）
-    assert.doesNotMatch(host.innerHTML, /ph-pm-card active[^>]*phSetCoderRotationStrategy\('adaptive'\)/);
+    assert.doesNotMatch(host.innerHTML, /ph-pm-card active[^>]*data-mode="adaptive"/);
     assert.match(host.innerHTML, /自适应/);
     assert.match(host.innerHTML, /纯精简/);
     assert.match(host.innerHTML, /纯摘要/);
@@ -136,13 +141,14 @@ describe('programming-helper workspace process mode UI', () => {
       }),
     });
     ctx.window.allAgents = [{ id: 'coder', permissionDefaults: { contextRotationStrategy: 'adaptive' } }];
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
     await ctx.run(`(async () => { _phSettingsTab = 'coder-policy'; await _phLoadCoderPolicy(); })()`);
 
-    assert.match(host.innerHTML, /ph-pm-card active[^>]*onclick="window\.phSetCoderRotationStrategy\('adaptive'\)"/);
+    assert.match(host.innerHTML, /ph-pm-card active[^>]*data-action="phSettings\.setCoderRotationStrategy" data-mode="adaptive"/);
   });
 
   it('saves the rotation strategy through the workspace resource-policy endpoint', async () => {
@@ -154,11 +160,12 @@ describe('programming-helper workspace process mode UI', () => {
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
-    await ctx.run(`(async () => { _phSettingsTab = 'coder-policy'; await window.phSetCoderRotationStrategy('summary'); })()`);
+    await ctx.run(`(async () => { _phSettingsTab = 'coder-policy'; await window.ClawFW.actions.invoke('phSettings.setCoderRotationStrategy', { dataset: { mode: 'summary' } }); })()`);
 
     const write = requests.find((request) => request.options?.method === 'PUT');
     assert.ok(write);
@@ -181,11 +188,12 @@ describe('programming-helper workspace process mode UI', () => {
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/ph-settings.js');
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
-    await ctx.run(`(async () => { await window.phSetCoderRotationStrategy('bogus'); })()`);
+    await ctx.run(`(async () => { await window.ClawFW.actions.invoke('phSettings.setCoderRotationStrategy', { dataset: { mode: 'bogus' } }); })()`);
 
     assert.equal(requests.length, 0);
   });
