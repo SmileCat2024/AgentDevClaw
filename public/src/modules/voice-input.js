@@ -20,9 +20,9 @@
  *   _voiceRecording, _voiceStarting, _voiceStopping, _voiceTranscribing, _voiceMediaRecorder, _voiceAudioChunks,
  *   _voiceTargetBtn, _voiceTargetId, _voiceCancelled, _voicePendingSend, _voiceAgentId,
  *   _voiceCacheKey, _pendingVoiceResults
- * HTML onclick 引用:
- *   onclick="toggleVoiceRecording(...)"
- *   oninput="_cacheSessionInput(this)"
+ * 分发器动作引用（voice 按钮动作在各输入面模板声明）:
+ *   data-action 指向 toggleVoiceRecording（对话视图 composer 为属性绑定，
+ *   APP 快记条为 appChatInput.voice 动作）
  */
 
 // ── Voice Input / ASR ──────────────────────────────────────────────────────

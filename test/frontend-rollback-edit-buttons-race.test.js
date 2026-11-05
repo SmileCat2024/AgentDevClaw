@@ -45,6 +45,8 @@ function makeRowEl(html) {
   const mkButton = () => ({
     _removed: false,
     setAttribute() {},
+    // syncRollbackActionButtons 经 dataset 重写动作指向（data-action / data-args）
+    dataset: {},
     style: {},
     remove() { this._removed = true; row._meta._button = null; },
   });
@@ -104,6 +106,15 @@ function createChatSandbox() {
   const base = {
     window: {},
     ClawAnnotations: { scheduleReplay() {} },
+    // 真实 document 形状：dispatcher 装载要绑委托监听，渲染路径要用 createElement
+    document: {
+      addEventListener() {},
+      removeEventListener() {},
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      createElement: () => ({ classList: { add() {}, remove() {}, toggle() {}, contains: () => false }, appendChild() {}, style: {}, dataset: {}, id: '' }),
+    },
     container,
     currentMessages: [],
     currentInputRequests: [],
@@ -172,6 +183,8 @@ function createChatSandbox() {
   });
   base.window = sandbox;
   vm.createContext(sandbox);
+  // 真实生产加载顺序第一位：分发器先于一切声明 data-action 的模块装载
+  vm.runInContext(load('public/src/modules/action-dispatcher.js'), sandbox, { filename: 'action-dispatcher.js' });
   vm.runInContext(load('public/src/modules/session-view-state.js'), sandbox, { filename: 'session-view-state.js' });
   vm.runInContext(load('public/src/modules/input-helpers.js'), sandbox, { filename: 'input-helpers.js' });
   vm.runInContext(load('public/src/modules/chat-renderer.js'), sandbox, { filename: 'chat-renderer.js' });

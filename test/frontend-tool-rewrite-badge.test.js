@@ -31,7 +31,8 @@ function harness() {
   const source = fs.readFileSync(
     new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
   vm.runInContext(
-    sourceBetween(source, 'function getRewrittenCall(', 'window.toggleRewriteDetail = '),
+    // 切片尾标记跟随收敛：toggleRewriteDetail 已是模块级 const（原 window 导出）
+    sourceBetween(source, 'function getRewrittenCall(', 'const toggleRewriteDetail = '),
     ctx,
     { filename: 'chat-renderer-rewrite.js' },
   );
@@ -54,7 +55,8 @@ test('renderRewriteBadge: emits the badge with class, i18n text and toggle handl
   const badge = ctx.run('renderRewriteBadge("rw-call-1", ' + JSON.stringify(REWRITTEN) + ')');
   assert.match(badge, /tool-rewrite-badge/);
   assert.match(badge, /tool_rewritten/);
-  assert.match(badge, /toggleRewriteDetail\('rw-call-1'\)/);
+  assert.match(badge, /data-action="chat\.toggleRewriteDetail"/);
+  assert.match(badge, /data-args='\["rw-call-1"\]'/);
   assert.equal(ctx.run('renderRewriteBadge("rw-call-1", null)'), '');
 });
 

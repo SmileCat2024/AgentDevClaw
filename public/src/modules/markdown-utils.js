@@ -30,7 +30,7 @@ renderer.code = function(code, langArg) {
     + codeHtml
     + '</code></pre>'
     + '<div class="md-code-actions">'
-    + '<button type="button" class="message-icon-action is-icon-copy" title="复制代码" onclick="copyMarkdownCode(this)"></button>'
+    + '<button type="button" class="message-icon-action is-icon-copy" title="复制代码" data-action="markdown.copyCode"></button>'
     + '</div></div>\n';
 };
 
@@ -323,8 +323,8 @@ function wrapMarkdownTables(html) {
     .replace(/<table>/g, '<div class="md-table-block"><div class="md-table-wrap"><table>')
     .replace(/<\/table>/g, '</table></div>'
       + '<div class="md-table-actions">'
-      + '<button type="button" class="message-icon-action is-icon-copy" title="复制表格" onclick="copyMarkdownTable(this)"></button>'
-      + '<button type="button" class="message-icon-action is-icon-expand" title="放大查看" onclick="openTableZoom(this)"></button>'
+      + '<button type="button" class="message-icon-action is-icon-copy" title="复制表格" data-action="markdown.copyTable"></button>'
+      + '<button type="button" class="message-icon-action is-icon-expand" title="放大查看" data-action="markdown.openTableZoom"></button>'
       + '</div></div>');
 }
 
@@ -437,8 +437,9 @@ function findTableFromActionButton(btn) {
   return btn?.closest('.md-table-block')?.querySelector('table') || null;
 }
 
-// 复制表格为 Markdown（剪贴板模式对齐 chat-renderer.js 的 copyMessageContent）
-window.copyMarkdownTable = async function(btn) {
+// 复制表格为 Markdown（剪贴板模式对齐 chat-renderer.js 的 copyMessageContent；
+// 已收敛为模块级：全仓无其他消费面，动作经 markdown.copyTable 触发）
+const copyMarkdownTable = async function(btn) {
   const table = findTableFromActionButton(btn);
   const text = table ? tableToMarkdown(table) : '';
   if (!text) return;
@@ -477,8 +478,9 @@ window.copyMarkdownTable = async function(btn) {
 };
 
 // 表格放大查看（lightbox 交互对齐 chat-renderer.js 的 openImageZoom：
-// 点背景关闭、Esc 关闭；面板 overflow:auto 长表上下滚动，长列上限放宽）
-window.openTableZoom = function(btn) {
+// 点背景关闭、Esc 关闭；面板 overflow:auto 长表上下滚动，长列上限放宽；
+// 已收敛为模块级：全仓无其他消费面，动作经 markdown.openTableZoom 触发）
+const openTableZoom = function(btn) {
   const table = findTableFromActionButton(btn);
   if (!table) return;
 
@@ -512,8 +514,9 @@ window.openTableZoom = function(btn) {
 // ── 代码块动作条：复制 ────────────────────────────────────────────
 
 // 复制代码块原文（hljs 高亮 span 不改变 textContent，读出的即源码原文；
-// 剪贴板模式对齐 copyMarkdownTable）
-window.copyMarkdownCode = async function(btn) {
+// 剪贴板模式对齐 copyMarkdownTable；已收敛为模块级：全仓无其他消费面，
+// 动作经 markdown.copyCode 触发）
+const copyMarkdownCode = async function(btn) {
   const code = btn?.closest('.md-code-block')?.querySelector('code');
   // 去掉 renderer 统一补的尾部换行，复制内容与源码一致
   const text = code ? code.textContent.replace(/\n+$/, '') : '';
@@ -625,6 +628,13 @@ function enhanceMathInElement(root) {
     }
   });
 }
+
+// ── 分发器动作（原模板内联事件收编，命名空间 markdown.*）──────────
+window.ClawFW.actions.registerMany({
+  'markdown.copyCode': (el) => copyMarkdownCode(el),
+  'markdown.copyTable': (el) => copyMarkdownTable(el),
+  'markdown.openTableZoom': (el) => openTableZoom(el),
+});
 
 window.addEventListener('load', () => {
   enhanceMathInElement(document.body);

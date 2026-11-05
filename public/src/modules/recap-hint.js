@@ -23,8 +23,8 @@
  *   RECAP_DISABLED, _recapLastSeenBySession, _recapShownForSession,
  *   _recapDismissedForSession, _currentRecapText, _recapFetchInFlight,
  *   _recapPendingTrigger, RECAP_AWAY_THRESHOLD_MS
- * HTML onclick 引用:
- *   onclick="_dismissRecap()"
+ * 分发器动作:
+ *   data-action="recap.dismiss" → _dismissRecap（注册见文件尾部）
  */
 
 // ── Recap (离开摘要) ──────────────────────────────────────────────
@@ -156,7 +156,7 @@ function _renderRecapHint() {
   el.innerHTML = `
     <span class="recap-hint-icon">#</span>
     <span class="recap-hint-text">${escapeHtml(_currentRecapText)}</span>
-    <button class="recap-hint-close" onclick="_dismissRecap()" title="${currentLanguage === 'zh' ? '关闭' : 'Dismiss'}">
+    <button class="recap-hint-close" data-action="recap.dismiss" title="${currentLanguage === 'zh' ? '关闭' : 'Dismiss'}">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
     </button>
   `;
@@ -199,3 +199,8 @@ function _trackRecapSessionPresence() {
 
   _recapLastSeenBySession[sessionKey] = now;
 }
+
+// ── 分发器动作（原模板内联事件收编，命名空间 recap.*）─────────────
+window.ClawFW.actions.registerMany({
+  'recap.dismiss': () => _dismissRecap(),
+});

@@ -32,6 +32,7 @@ function loadMarkdownUtils() {
       highlightAuto(code) { return { value: code }; },
     },
   });
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/markdown-utils.js');
   return ctx;
 }
@@ -345,6 +346,7 @@ describe('markdown-utils: renderMarkdown 的 frontmatter 呈现', () => {
       marked,
       hljs: { getLanguage: () => null, highlight: (code) => ({ value: code }) },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/markdown-utils.js');
     return ctx;
   }

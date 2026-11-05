@@ -217,7 +217,7 @@ function sessionReferenceChipsHtml() {
     return '<div class="session-ref-chip" title="' + escapeHtml(`${ref.agentId}/${ref.sessionType} · ${ref.sessionId}`) + '">'
       + '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>'
       + '<span class="session-ref-chip-label">' + escapeHtml(label) + '</span>'
-      + '<button class="session-ref-chip-remove" type="button" onclick="SessionReference.remove(' + idx + ')" title="'
+      + '<button class="session-ref-chip-remove" type="button" data-action="sessionRef.removeChip" data-args="[' + idx + ']" title="'
       + escapeHtml(typeof currentLanguage !== 'undefined' && currentLanguage === 'zh' ? '移除' : 'Remove')
       + '">×</button>'
       + '</div>';
@@ -501,3 +501,10 @@ window.SessionReference = {
   // dragover 据此在悬停期禁止「拖到自己身上」
   setDragSource,
 };
+
+// ── 分发器动作（原模板内联事件收编，命名空间 sessionRef.*）────────
+// pill 移除走模块内 removeSessionReference；window.SessionReference.remove
+// 保留（程序化消费面经命名空间调用）。
+window.ClawFW.actions.registerMany({
+  'sessionRef.removeChip': (el, event, idx) => removeSessionReference(idx),
+});

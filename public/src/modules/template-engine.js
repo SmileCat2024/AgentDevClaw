@@ -93,7 +93,7 @@ function renderJsonHighlight(data) {
     const id = 'trunc-' + (++_highlightIdCounter);
     _fullHighlightData.set(id, data);
     const remaining = lines.length - MAX_HIGHLIGHT_LINES;
-    html += '<div class="code-read-truncated" data-expand-id="' + id + '" onclick="expandTruncatedResult(this)">'
+    html += '<div class="code-read-truncated" data-expand-id="' + id + '" data-action="templates.expandTruncated">'
       + '&hellip; ' + remaining + ' more lines (click to expand)</div>';
   }
 
@@ -378,3 +378,9 @@ function getAgentDisplayId(agent) {
   }
   return getAgentRuntimeId(agent);
 }
+
+// ── 分发器动作（原模板内联事件收编，命名空间 templates.*）─────────
+window.ClawFW.actions.registerMany({
+  // 截断 JSON 结果展开：按钮自带 data-expand-id，处理器复用同名函数
+  'templates.expandTruncated': (el) => expandTruncatedResult(el),
+});

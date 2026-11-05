@@ -18,6 +18,8 @@ function loadBlocksModule() {
     marked,
     hljs: { getLanguage: () => null, highlight: (c) => ({ value: c }) },
   });
+  // 真实生产加载顺序第一位：分发器先于 markdown-utils 顶层动作注册
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/markdown-utils.js');
   return ctx;
 }

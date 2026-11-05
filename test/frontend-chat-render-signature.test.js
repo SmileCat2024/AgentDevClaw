@@ -88,6 +88,15 @@ function createRendererSandbox() {
     window: {},
     ClawAnnotations: { scheduleReplay() {} },
     console,
+    // 真实 document 形状：dispatcher 装载要绑委托监听，渲染路径要用 createElement
+    document: {
+      addEventListener() {},
+      removeEventListener() {},
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      createElement: () => ({ classList: { add() {}, remove() {}, toggle() {}, contains: () => false }, appendChild() {}, style: {}, dataset: {}, id: '' }),
+    },
     // chat-renderer 依赖的全局状态
     container,
     currentMessages: [],
@@ -140,6 +149,8 @@ function createRendererSandbox() {
   });
   base.window = sandbox;
   vm.createContext(sandbox);
+  // 真实生产加载顺序第一位：分发器先于一切声明 data-action 的模块装载
+  vm.runInContext(load('public/src/modules/action-dispatcher.js'), sandbox, { filename: 'action-dispatcher.js' });
   vm.runInContext(load('public/src/modules/chat-renderer.js'), sandbox, { filename: 'chat-renderer.js' });
   // appendNewMessages 的 user 分支走 renderMessage；覆盖为最小行模板
   sandbox.renderMessage = () => '<div class="message-row user"></div>';

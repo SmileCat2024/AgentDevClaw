@@ -19,17 +19,18 @@
  *   getEmptyStateHtml, escapeHtml, t (app-core.js)
  *   renderCurrentMainView, isChatSurfaceActive (app-ui.js)
  *   requestRollbackEdit (modules/rollback-dialog.js)
- *   switchAgent (app-main.js — onclick 字符串引用)
+ *   switchAgent (app-main.js — data-action 转调)
  * 导出全局函数:
  *   renderMessage, appendNewMessages, updateLastMessage, renderChatEmptyState,
  *   getCollapseThresholdForRow, syncRowCollapseState, syncCollapseStates,
  *   applyCollapseLogic, restoreUserCollapseState, render
  * 导出全局 window 函数:
- *   toggleMessage, toggleReasoning, toggleRewriteDetail
- * HTML onclick 引用:
- *   onclick="toggleMessage(...)", onclick="toggleReasoning(...)"
- *   onclick="requestRollbackEdit(...)", onclick="switchAgent(...)"
- *   onclick="copyMessageContent(...)", onclick="toggleRewriteDetail(...)"
+ *   toggleMessage, toggleErrorGroup, openImageZoom
+ * 模块级收敛（原 window 导出，全仓消费面为零）:
+ *   toggleReasoning, toggleRewriteDetail, copyMessageContent
+ * 分发器动作（data-action 命名空间 chat.*，注册见文件尾部）:
+ *   toggleMessage / toggleReasoning / requestRollbackEdit / switchAgent
+ *   copyMessageContent / toggleRewriteDetail / toggleErrorGroup / openImageZoom
  */
 
 /**
@@ -73,13 +74,13 @@ function renderChatEmptyState() {
 // / .copied 三种形态），节点预算从每按钮 4 节点降到 1 节点。
 // 注意：复制按钮只带 .message-icon-action，不带 .message-action——
 // syncRollbackActionButtons（input-helpers.js）用 .message-action 定位
-// 编辑按钮，复制按钮混入该类会被误改 onclick。
+// 编辑按钮，复制按钮混入该类会被误改动作指向。
 function getMessageCopyActionHtml(index) {
-  return `<button type="button" class="message-icon-action is-icon-copy" title="复制" onclick="copyMessageContent(${index}, this)"></button>`;
+  return `<button type="button" class="message-icon-action is-icon-copy" title="复制" data-action="chat.copyMessage" data-args="[${index}]"></button>`;
 }
 
 function getMessageRollbackEditActionHtml(index) {
-  return `<button type="button" class="message-action message-icon-action" title="编辑此轮" onclick="requestRollbackEdit(${index})"></button>`;
+  return `<button type="button" class="message-action message-icon-action" title="编辑此轮" data-action="chat.rollbackEdit" data-args="[${index}]"></button>`;
 }
 
 // user / assistant 消息复制原始文本，tool 消息复制原始工具输出 JSON；
@@ -172,7 +173,7 @@ function renderAssistantErrorBlock(msg) {
   if (meta.retryable) facts.push(t('error_fact_retryable'));
   const titleAttr = facts.length > 0 ? ` title="${escapeHtml(facts.join(' · '))}"` : '';
   const authAction = meta.category === 'auth_required'
-    ? `<span class="tool-error-action" onclick="openSettings()">${escapeHtml(t('error_action_reconfigure'))}</span>`
+    ? `<span class="tool-error-action" data-action="chat.openSettings">${escapeHtml(t('error_action_reconfigure'))}</span>`
     : '';
   return `<div class="tool-error"${titleAttr}>${escapeHtml(meta.message)}${authAction}</div>`;
 }
@@ -271,7 +272,7 @@ function renderErrorGroupBlock(messages, group) {
     + ' · ' + escapeHtml(t('error_group_count').replace('{n}', String(group.count)));
   return `
     <div class="message-content">
-      <div class="tool-error error-group-head${expanded ? ' expanded' : ''}" id="${gid}" onclick="toggleErrorGroup('${gid}')">
+      <div class="tool-error error-group-head${expanded ? ' expanded' : ''}" id="${gid}" data-action="chat.toggleErrorGroup">
         <span class="error-group-head-text">${headLabel}</span>
         <span class="error-group-toggle">${escapeHtml(t(expanded ? 'error_group_collapse' : 'error_group_expand'))}</span>
       </div>
@@ -328,7 +329,7 @@ function renderMessage(msg, index) {
     if (msg.reasoning) {
       innerContent += `
         <div class="reasoning-block" id="reasoning-${msgId}">
-            <div class="reasoning-header" onclick="toggleReasoning('reasoning-${msgId}')">
+            <div class="reasoning-header" data-action="chat.toggleReasoning">
             <span>${escapeHtml(t('thinking_process'))}</span>
           </div>
           <div class="reasoning-content markdown-body">
@@ -346,7 +347,7 @@ function renderMessage(msg, index) {
       // 查找子代理对应的 agentId（使用前端的 allAgents 数组）
       const subAgent = allAgents.find(a => a.name === agentName);
       const subAgentId = subAgent ? subAgent.id : null;
-      const clickAttr = subAgentId ? `onclick="switchAgent('${subAgentId}')"` : '';
+      const clickAttr = subAgentId ? `data-action="chat.switchAgent" data-agent-id="${escapeHtml(subAgentId)}"` : '';
       const linkHtml = subAgentId
         ? `<div style="font-size:11px; color:var(--text-secondary); margin-left:4px; cursor:pointer;" ${clickAttr}>${escapeHtml(t('subagent_view_messages'))}</div>`
         : '';
@@ -476,7 +477,7 @@ function retrofitRewriteBadgeOnCallBlock(toolCallId, rewritten) {
 
 function renderRewriteBadge(detailId, rewritten) {
   if (!rewritten) return '';
-  return `<span class="tool-rewrite-badge" onclick="toggleRewriteDetail('${detailId}')" title="${escapeHtml(t('tool_rewrite_original'))}">${escapeHtml(t('tool_rewritten'))}</span>`;
+  return `<span class="tool-rewrite-badge" data-action="chat.toggleRewriteDetail" data-args='["${detailId}"]' title="${escapeHtml(t('tool_rewrite_original'))}">${escapeHtml(t('tool_rewritten'))}</span>`;
 }
 
 function renderRewriteDetail(detailId, rewritten) {
@@ -488,7 +489,8 @@ function renderRewriteDetail(detailId, rewritten) {
     </div>`;
 }
 
-window.toggleRewriteDetail = function(id) {
+// 已收敛为模块级（全仓无其他消费面；展开状态切换经 chat.toggleRewriteDetail 动作）
+const toggleRewriteDetail = function(id) {
   const el = document.getElementById(id);
   if (el) el.classList.toggle('expanded');
 };
@@ -1017,7 +1019,7 @@ function applyRowCollapsePlan(row, plan) {
   const desiredCls = isCollapsed ? 'is-collapsed' : 'is-expanded';
   const btn = nextBtnBar.querySelector('.expand-toggle-btn');
   if (!btn || btn.textContent !== desiredLabel || !btn.classList.contains(desiredCls)) {
-    nextBtnBar.innerHTML = '<button class="expand-toggle-btn ' + desiredCls + '" onclick="toggleMessage(&quot;' + el.id + '&quot;)">' + desiredLabel + '</button>';
+    nextBtnBar.innerHTML = '<button class="expand-toggle-btn ' + desiredCls + '" data-action="chat.toggleMessage">' + desiredLabel + '</button>';
   }
 }
 
@@ -1172,7 +1174,7 @@ function render(messages) {
       if (msg.reasoning) {
         innerContent += `
           <div class="reasoning-block" id="reasoning-${msgId}">
-            <div class="reasoning-header" onclick="toggleReasoning('reasoning-${msgId}')">
+            <div class="reasoning-header" data-action="chat.toggleReasoning">
               <span>${escapeHtml(t('thinking_process'))}</span>
             </div>
             <div class="reasoning-content markdown-body">
@@ -1190,7 +1192,7 @@ function render(messages) {
         // 查找子代理对应的 agentId（使用前端的 allAgents 数组）
         const subAgent = allAgents.find(a => a.name === agentName);
         const subAgentId = subAgent ? subAgent.id : null;
-        const clickAttr = subAgentId ? `onclick="switchAgent('${subAgentId}')"` : '';
+        const clickAttr = subAgentId ? `data-action="chat.switchAgent" data-agent-id="${escapeHtml(subAgentId)}"` : '';
         const linkHtml = subAgentId
           ? `<div style="font-size:11px; color:var(--text-secondary); margin-left:4px; cursor:pointer;" ${clickAttr}>${escapeHtml(t('subagent_view_messages'))}</div>`
           : '';
@@ -1440,7 +1442,8 @@ window.toggleMessage = function(id) {
   }
 };
 
-window.toggleReasoning = function(id) {
+// 已收敛为模块级（全仓无其他消费面；展开状态切换经 chat.toggleReasoning 动作）
+const toggleReasoning = function(id) {
   const el = document.getElementById(id);
   if (el) {
     const chatViewportTopBefore = container.scrollTop;
@@ -1468,7 +1471,8 @@ window.toggleReasoning = function(id) {
 };
 
 // 复制一条消息的原始文本（复制模式对齐 chat-context-bar.js 的会话 ID 复制）
-window.copyMessageContent = async function(index, btn) {
+// 已收敛为模块级（全仓无其他消费面；复制动作经 chat.copyMessage 触发）
+const copyMessageContent = async function(index, btn) {
   const msg = currentMessages[index];
   let text = msg ? String(msg.content || '') : '';
   if (!text) return;
@@ -1541,7 +1545,7 @@ function renderUserImages(images) {
   let thumbs = images.map(function(img) {
     let url = imageUrlFromImage(img);
     if (!url) return '';
-    return '<div class="message-img-thumb" onclick="openImageZoom(\'' + url.replace(/'/g, "\\'") + '\')">' +
+    return '<div class="message-img-thumb" data-action="chat.openImageZoom" data-zoom-src="' + escapeHtml(url) + '">' +
       '<img src="' + url + '" alt="' + escapeHtml(img.source || '') + '" loading="lazy" decoding="async">' +
       '</div>';
   }).join('');
@@ -1598,6 +1602,31 @@ window.openImageZoom = function(src) {
 
   document.body.appendChild(overlay);
 };
+
+// ── 分发器动作（原模板内联事件收编，命名空间 chat.*）──────────────
+window.ClawFW.actions.registerMany({
+  // 复制消息原文（copyMessageContent 已收敛为模块级）
+  'chat.copyMessage': (el, event, index) => copyMessageContent(index, el),
+  // 编辑此轮（requestRollbackEdit 定义域：rollback-dialog.js，window 转调）
+  'chat.rollbackEdit': (el, event, index) => window.requestRollbackEdit(index),
+  // 红框「重新配置凭证」直达设置（openSettings 定义域：model-settings.js）
+  'chat.openSettings': () => window.openSettings(),
+  // 错误聚合组展开/收起：head 元素自身 id 即组 id
+  'chat.toggleErrorGroup': (el) => window.toggleErrorGroup(el.id),
+  // 思考块展开/收起：header 所在 reasoning-block 的 id 即目标 id
+  'chat.toggleReasoning': (el) => toggleReasoning(el.closest('.reasoning-block')?.id),
+  // 子代理消息跳转（switchAgent 定义域：app-main.js）
+  'chat.switchAgent': (el) => window.switchAgent(el.dataset.agentId),
+  // 改写徽章展开/收起（toggleRewriteDetail 已收敛为模块级）
+  'chat.toggleRewriteDetail': (el, event, detailId) => toggleRewriteDetail(detailId),
+  // 行折叠切换：按钮所在行的 message-content id 即目标 id
+  'chat.toggleMessage': (el) => {
+    const content = el.closest('.message-row')?.querySelector('.message-content');
+    if (content) window.toggleMessage(content.id);
+  },
+  // 图片缩放（openImageZoom 保留 window 导出：claw-host.js env 转调消费）
+  'chat.openImageZoom': (el) => window.openImageZoom(el.dataset.zoomSrc),
+});
 
 // 跨模块 API 走 window.ClawFW 命名空间（app-core 全局状态纪律）。
 // 注意：本文件源码块会被前端 vm 测试按函数标记切取执行，导出语句必须放在

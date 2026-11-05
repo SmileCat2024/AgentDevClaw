@@ -339,7 +339,7 @@ function _renderAttachmentPreview() {
   const html = pendingImages.map(function(img, idx) {
     return '<div class="attachment-thumb">' +
       '<img src="' + img._previewUrl + '" alt="' + escapeHtml(img.source || '') + '">' +
-      '<button class="attachment-remove" type="button" onclick="removePendingImage(' + idx + ')" title="' +
+      '<button class="attachment-remove" type="button" data-action="composer.removePendingImage" data-args="[' + idx + ']" title="' +
         (currentLanguage === 'zh' ? '移除' : 'Remove') + '">×</button>' +
       '</div>';
   }).join('') + refChipsHtml;
@@ -433,7 +433,8 @@ window.onImageFilesSelected = function(input) {
   input.value = ''; // reset so same file can be re-selected
 };
 
-window.removePendingImage = function(idx) {
+// 已收敛为模块级（全仓无其他消费面；移除动作经 composer.removePendingImage 触发）
+const removePendingImage = function(idx) {
   _imageBucket().splice(idx, 1);
   _renderAttachmentPreview();
 };
@@ -1115,3 +1116,8 @@ async function interruptAgent() {
 // ── 启动上次对话结束时间计时器 ───
 
 _callFinishTimerInterval = setInterval(_renderLastCallElapsed, 1000);
+
+// ── 分发器动作（原模板内联事件收编，命名空间 composer.*）──────────
+window.ClawFW.actions.registerMany({
+  'composer.removePendingImage': (el, event, idx) => removePendingImage(idx),
+});

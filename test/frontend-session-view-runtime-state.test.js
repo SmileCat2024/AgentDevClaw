@@ -93,6 +93,8 @@ describe('SessionView runtime status ownership', () => {
   it('clears elapsed state at the switch boundary, before a new snapshot or timer tick', () => {
     const ctx = loadRuntimeState();
     ctx.setInterval = () => 0;
+    // 真实生产加载顺序第一位：分发器先于 persistent-input 顶层动作注册
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/persistent-input.js');
     ctx.run(`
       _lastCallFinishTime = 1234;

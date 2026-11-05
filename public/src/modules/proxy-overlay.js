@@ -43,7 +43,7 @@ function renderProxyOverlay() {
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '网络代理' : 'Network Proxy') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeProxySettings()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" data-action="proxy.close">×</button>',
     '</div>',
     '<div id="settings-proxy-container" class="settings-tab-content"></div>',
     '</div>',
@@ -232,4 +232,9 @@ function _proxyStatus(type, text, detail) {
 
 // ── window 导出 ──────────────────────────────────────────────
 window.openProxySettings = openProxySettings;
-window.closeProxySettings = closeProxySettings;
+// closeProxySettings 无其他消费面，已收敛为模块内函数（关闭动作经 proxy.close）
+
+// ── 分发器动作（原模板内联事件收编，命名空间 proxy.*）─────────────
+window.ClawFW.actions.registerMany({
+  'proxy.close': () => closeProxySettings(),
+});

@@ -23,10 +23,10 @@ function setup() {
     fetch(url) { return new Promise((resolve) => requests.push({ url, resolve })); },
   });
   ctx.document.querySelector = (s) => s === '.ph-session-tabs' ? root : s === '.ph-search-panel' ? panel : null;
-  // index.html 先加载 markdown-utils（检索摘要复用其 frontmatter 判定），
-  // 这里保持同一加载顺序。
-  ctx.loadSource('public/src/modules/markdown-utils.js');
+  // markdown-utils 顶层注册分发器动作（markdown.*），action-dispatcher
+  // 需在其前预载（真实 index.html 加载顺序即如此）。
   ctx.loadSource('public/src/modules/action-dispatcher.js');
+  ctx.loadSource('public/src/modules/markdown-utils.js');
   ctx.loadSource('public/src/modules/session-list-render.js');
   ctx.loadSource('public/src/modules/ph-session-list.js');
   const input = (q) => { ctx.window.phOnSearchInput(q); for (const [id, fn] of tasks) { tasks.delete(id); fn(); } };

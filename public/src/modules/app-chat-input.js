@@ -96,21 +96,20 @@ window.AppChatInput = (() => {
       ' data-agent-id="' + escapeHtml(agentId) + '"',
       ' data-session-key="' + escapeHtml(draftKey(agentId)) + '"',
       ' placeholder="' + placeholder + '"',
-      ' oninput="window.AppChatInput.onInput(this)"',
-      ' onkeydown="window.AppChatInput.onKeydown(event, this)">',
+      ' data-action="appChatInput.input" data-event="input keydown">',
       escapeHtml(draft),
       '</textarea>',
       '<div class="app-chat-input-actions">',
       '<button class="voice-input-btn app-chat-voice-btn" type="button" data-target="' + taId + '"',
       ' title="' + (isZh() ? '语音输入' : 'Voice input') + '"',
-      ' onclick="toggleVoiceRecording(this)">',
+      ' data-action="appChatInput.voice">',
       MIC_SVG,
       '</button>',
       '<button id="app-chat-input-send-' + escapeHtml(agentId) + '"',
       ' class="persistent-action-btn app-chat-send-btn" type="button"',
       ' data-agent-id="' + escapeHtml(agentId) + '"',
       ' title="' + (isZh() ? '发送' : 'Send') + '"',
-      ' onclick="window.AppChatInput.onSendClick(this)">',
+      ' data-action="appChatInput.send">',
       SEND_SVG,
       '</button>',
       '</div>',
@@ -269,6 +268,19 @@ window.AppChatInput = (() => {
       setSending(agentId, false);
     }
   }
+
+  // ── 分发器动作（原模板内联事件收编，命名空间 appChatInput.*）───────────────
+  // 分发器（action-dispatcher.js）在生产加载顺序中先于本模块装载。
+  window.ClawFW.actions.registerMany({
+    // 文本框 input / keydown 双事件共用一个声明（同 choice-input 的 customInput 先例）
+    'appChatInput.input': (el, event) => {
+      if (event.type === 'keydown') { onKeydown(event, el); return; }
+      onInput(el);
+    },
+    // 语音开录/停录（toggleVoiceRecording 定义域：voice-input.js，window 转调）
+    'appChatInput.voice': (el) => window.toggleVoiceRecording(el),
+    'appChatInput.send': (el) => onSendClick(el),
+  });
 
   return { render, submit, onInput, onKeydown, onSendClick, openConversation };
 })();

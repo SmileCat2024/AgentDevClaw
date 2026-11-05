@@ -88,7 +88,10 @@ function syncRollbackActionButtons() {
     }
 
     if (existingButton) {
-      existingButton.setAttribute('onclick', 'requestRollbackEdit(' + index + ')');
+      // 动作指向随当前消息下标重写（原内联事件 setAttribute 注入形态收编；
+      // 按钮本体由 chat-renderer 渲染时即带 data-action）
+      existingButton.dataset.action = 'chat.rollbackEdit';
+      existingButton.dataset.args = JSON.stringify([index]);
       existingButton.style.display = '';
       return;
     }

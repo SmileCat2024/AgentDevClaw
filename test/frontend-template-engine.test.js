@@ -23,6 +23,8 @@ function loadTemplateEngine(toolNames = {}) {
     toolRenderConfigs: {},
     templateWarmupToken: 0,
   });
+  // 真实生产加载顺序第一位：分发器先于 template-engine 顶层动作注册
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/template-engine.js');
   return ctx;
 }

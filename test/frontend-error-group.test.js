@@ -128,6 +128,7 @@ function createHarness({ messages } = {}) {
       }),
       body: { contains: () => true },
       activeElement: null,
+      addEventListener() {}, // action-dispatcher 装载时绑定委托监听
     },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
 
@@ -193,6 +194,8 @@ function createHarness({ messages } = {}) {
   sandbox.window = sandbox;
 
   vm.createContext(sandbox);
+  // 真实生产加载顺序第一位：分发器先于一切声明 data-action 的模块装载
+  vm.runInContext(src('modules/action-dispatcher.js'), sandbox, { filename: 'action-dispatcher.js' });
   vm.runInContext(src('modules/chat-viewport.js'), sandbox, { filename: 'chat-viewport.js' });
   vm.runInContext(src('modules/input-helpers.js'), sandbox, { filename: 'input-helpers.js' });
   vm.runInContext(src('modules/lazy-tool-content.js'), sandbox, { filename: 'lazy-tool-content.js' });
@@ -251,7 +254,7 @@ test('红框携带机器事实 title 与 auth_required 动作链接', () => {
   h.sandbox.render(h.sandbox.currentMessages);
   assert.match(h.container._html, /title="auth_required/);
   assert.match(h.container._html, /error_action_reconfigure/);
-  assert.match(h.container._html, /openSettings\(\)/);
+  assert.match(h.container._html, /data-action="chat.openSettings"/);
 });
 
 // ── 聚合纯函数 ───────────────────────────────────────────────
