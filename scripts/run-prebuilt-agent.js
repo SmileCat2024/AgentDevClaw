@@ -29,6 +29,7 @@ import { createIMBridge } from './runtime-im-bridge.js';
 import { dispatchCapabilityRequest, handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
+import { postUserTurnToViewerMailbox, waitForArbiterIdle } from './runtime-interjection-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH, MODEL_PRESETS_PATH } from '../server/shared/constants.js';
 import { resolveDesktopWorkspace } from '../server/shared/desktop-workspace.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
@@ -1057,6 +1058,26 @@ SessionLifecycle.prototype.start = async function () {
   }
   this.imBridgeCtx.callArbiter = this.callArbiter;
 
+  // 插话时序修复 v3（2026-11-05）：call 启动即撤销已武装的输入 lease，
+  // 维持不变式「call 运行 ⇒ 无武装 lease」。非 lease 来源（rotation 接续
+  // 通报经邮箱、IM/调度 envelope）启动的 call 运行期间，若输入循环的
+  // lease 仍武装，viewer 的 lease 转交路径会把忙时插话截给陈旧 lease——
+  // 输入循环把它回投邮箱时，会被直接入队的后续插话越过，FIFO 倒置
+  //（实测 1.5/1.75 倒序）。撤销后忙时插话只落队列一条路，顺序由队列
+  // 保证。lease 来源的 call 启动时其 lease 已被应答消费，无挂起请求，
+  // 此处为 no-op；ask_user_choice 等工具级输入只在 call 内部挂起，而
+  // arbiter 串行保证 callStarted 时不存在 call 内挂起请求，不会被误撤。
+  this.callArbiter.on('callStarted', () => {
+    try {
+      DebugHub.getInstance().cancelInputRequests(
+        this.agent?.agentId,
+        'call started; input lease retired while call is running',
+      );
+    } catch {
+      // 无 viewer 连接（无头/一shot）时无 lease 可撤，静默。
+    }
+  });
+
   // Per-agent interrupt handler
   const self = this;
   DebugHub.getInstance().setInterruptHandler(this.agent?.agentId, (_targetAgentId, clearQueue) => {
@@ -1294,6 +1315,19 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
   let inputPrompt = INPUT_PROMPT;
 
   while (this.inputLoopRunning) {
+    // 忙时不武装新的输入 lease（插话时序修复 v2，2026-11-05）：call 运行
+    // 期间（无论由 lease 应答、rotation 接续通报还是 IM/调度 envelope 启动）
+    // 用户输入的正确通道是 viewer 邮箱——react-loop 步边界注入（插话锚点）
+    // 与 arbiter 安全网兜底。此期间若武装 lease，viewer 的「lease 转交」
+    // 路径会把邮箱队首（正是刚回投的插话）立刻转回 lease，形成应答→回投
+    // →转交→应答的毫秒级热循环；等回 idle 再武装，循环在源头不存在。
+    if (this.callArbiter) {
+      const gate = await waitForArbiterIdle({
+        getStatus: () => this.callArbiter.getStatus(),
+        isCancelled: () => this.disposed || !this.inputLoopRunning,
+      });
+      if (gate === 'cancelled') break;
+    }
     let response;
     try {
       response = await userInput.getUserInputEvent(inputPrompt, undefined, this.getNextTurnActions());
@@ -1301,6 +1335,12 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
       // Disposing the instance aborts its input lease intentionally, not as a
       // recoverable input failure. Do not schedule a retired loop to retry.
       if (this.disposed || !this.inputLoopRunning) break;
+      // 插话时序修复 v3：call 启动撤销武装 lease（见 callStarted 钩子）与
+      // interrupt/unregister 都以 AbortError 结算挂起的输入请求——属预期
+      // 生命周期事件，静默回到顶部闸门（忙则等空闲，闲则重新武装）。
+      if (error?.name === 'AbortError') {
+        continue;
+      }
       console.error('[ProtoClaw Runtime] 等待用户输入失败，稍后重试:', error);
       await sleep(500);
       continue;
@@ -1341,6 +1381,42 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
     }
 
     try {
+      // 竞态安全网（插话时序修复，2026-11-05）：idle 等待放行到 lease 应答
+      // 之间，call 可能恰好由非 lease 来源启动（rotation 接续通报落邮箱后经
+      // passive 循环、IM/调度 envelope）。此时直接 enqueue 会被 AgentBase
+      // 串行化排在活跃 call 之后，消息直到 call 结束才落地（整数下一轮），
+      // 且与邮箱路径的后续消息倒序。改投 viewer 邮箱，由步边界注入；本循环
+      // 顶部随后停在 idle 等待，不会形成回投热循环。投递失败退回原路径
+      // （延迟到 call 结束但不丢失）。
+      if (this.callArbiter.getStatus().status !== 'idle') {
+        const agentIdForMailbox = this.agent?.agentId;
+        if (agentIdForMailbox) {
+          const routed = await postUserTurnToViewerMailbox({
+            agentId: agentIdForMailbox,
+            viewerPort: VIEWER_PORT,
+            turn: {
+              text: handled.text,
+              source: 'viewer-input',
+              ...(handled.sourceRef ? { sourceRef: handled.sourceRef } : {}),
+              ...(Array.isArray(handled.images) && handled.images.length > 0 ? { images: handled.images } : {}),
+              ...(Array.isArray(handled.capabilityActivations) && handled.capabilityActivations.length > 0
+                ? { capabilityActivations: handled.capabilityActivations }
+                : {}),
+              ...(handled.metadata && typeof handled.metadata === 'object' && Object.keys(handled.metadata).length > 0
+                ? { metadata: handled.metadata }
+                : {}),
+            },
+          });
+          if (routed.ok) {
+            if (routed.delivery !== 'queued') {
+              console.warn(`[ProtoClaw Runtime] 忙时插话回投邮箱得到非预期 delivery=${routed.delivery}（消息不丢，时序语义待查）`);
+            }
+            continue;
+          }
+          console.error('[ProtoClaw Runtime] 忙时插话回投邮箱失败，退回 envelope 排队（将延迟到 call 结束）:',
+            routed.status ?? '', routed.error ?? '');
+        }
+      }
       const entry = this.callArbiter.enqueue({
         source: 'viewer-input',
         text: handled.text,
