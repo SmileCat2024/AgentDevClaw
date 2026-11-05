@@ -7,7 +7,7 @@ function makeAgent() {
   return {
     calls,
     llm: { chat: async () => ({ content: 'ok' }) },
-    interrupt() { calls.push('interrupt'); },
+    interrupt(cause?: string) { calls.push(cause ? `interrupt:${cause}` : 'interrupt'); },
   };
 }
 
@@ -155,7 +155,9 @@ describe('ContextGuardFeature (interactive shell)', () => {
     assert.equal(posted.length, 0);
 
     assert.equal(await feature.tripAtStepFinish({ toolCallsCount: 1 }), 'continue');
-    assert.deepEqual(agent.calls, ['interrupt']);
+    // rotate 态打断申报接续原因：轮次终态携带 interruptedBy 供通知出口分类
+    // （interrupt 态是等待人工的暂停，不申报——见首个用例的 ['interrupt'] 断言）
+    assert.deepEqual(agent.calls, ['interrupt:context_rotation']);
 
     await feature.reportRotationOnCallFinish({});
     await new Promise((resolve) => setImmediate(resolve));
@@ -399,9 +401,9 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(posted.length, 0);
 
-    // 工具结果落地（StepFinish）→ 打断本轮
+    // 工具结果落地（StepFinish）→ 打断本轮（申报接续原因，供通知出口分类）
     assert.equal(await feature.tripAtStepFinish({ toolCallsCount: 1 }), 'continue');
-    assert.deepEqual(agent.calls, ['interrupt']);
+    assert.deepEqual(agent.calls, ['interrupt:context_rotation']);
 
     // 本轮完全结束（CallFinish）→ 上报接力事件
     await feature.reportRotationOnCallFinish({});
@@ -414,7 +416,7 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     // one-shot lock: no further triggers, interrupts, or reports
     assert.equal(feature.observeUsage({ inputTokens: 950 }, agent), false);
     assert.equal(await feature.tripAtStepFinish({}), 'continue');
-    assert.deepEqual(agent.calls, ['interrupt']);
+    assert.deepEqual(agent.calls, ['interrupt:context_rotation']);
     await feature.reportRotationOnCallFinish({});
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(posted.length, 1);
@@ -441,7 +443,7 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     // 过界被观察到：排队消息立即退回，打断延后到 StepFinish
     assert.equal(arbiter.calls.length, 1);
     assert.equal(await feature.tripAtStepFinish({ toolCallsCount: 1 }), 'continue');
-    assert.deepEqual(agent.calls, ['interrupt']);
+    assert.deepEqual(agent.calls, ['interrupt:context_rotation']);
   });
 
   it('invokes the local onTrip callback at call finish without breaking the HTTP report', async () => {

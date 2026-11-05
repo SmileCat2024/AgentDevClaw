@@ -8,6 +8,15 @@ import { declareContinuity } from '../../continuity-participant/src/index.js';
 const __filename = fileURLToPath(import.meta.url);
 
 /**
+ * 接续打断的原因标识：经 Agent.interrupt(cause) → CallOutcome.interruptedBy
+ * 透传到轮次终态；通知出口（server/routes/app-notification.js 的
+ * isRotationHandoffFinish）据此把「接续打断」从用户关心的完成事实中排除
+ * （避免桌面通知误导性的「已取消」）。框架只运输不解释；词汇归 Claw 所有，
+ * 变更需两侧同步。
+ */
+export const CONTEXT_ROTATION_INTERRUPT_CAUSE = 'context_rotation';
+
+/**
  * 守卫模式：
  * - off        全停（不观测、不打断、不拦截）；
  * - interrupt  一次性保险丝：过界打断本轮 + 拦截机器唤醒，直到人工输入
@@ -461,7 +470,10 @@ export class ContextGuardFeatureInner implements AgentFeature {
     this.pendingTripInterrupt = false;
     this.logger?.info?.('Context guard: interrupting the call after tool results landed');
     if (typeof this._agent?.interrupt === 'function') {
-      this._agent.interrupt();
+      // rotate 态的打断是接续移交的一部分：申报原因供观察者区分「用户手动
+      // 打断」与「接续打断」（interrupt 态是等待人工的暂停，不申报——轮次
+      // 终态对用户而言确实停在那里，「已取消」反馈是诚实的）。
+      this._agent.interrupt(this.mode === 'rotate' ? CONTEXT_ROTATION_INTERRUPT_CAUSE : undefined);
     }
     return Decision.Continue;
   }
@@ -712,7 +724,9 @@ export class ContextRotationTriggerFeature implements AgentFeature {
       sessionId: this.sessionId || null,
     });
     if (typeof this._agent?.interrupt === 'function') {
-      this._agent.interrupt();
+      // 触发器本身就是「该会话的上下文管理方式是自动接力」的装配表达，
+      // 打断恒申报接续原因（观察者据此区分用户手动打断）。
+      this._agent.interrupt(CONTEXT_ROTATION_INTERRUPT_CAUSE);
     }
     return Decision.Continue;
   }

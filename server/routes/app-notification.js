@@ -25,6 +25,7 @@
 import { resolveRequestAuth } from '../auth.js';
 import { readWorkspaceResourcePolicies } from './workspace-settings.js';
 import { publishAppNotification } from './sse-events.js';
+import { CONTEXT_ROTATION_INTERRUPT_CAUSE } from '../../local-features/dist/context-guard/src/index.js';
 
 /** 通知 type → 权限项 ID。枚举外的自定义 type 不允许（工单裁决）。 */
 export const APP_NOTIFICATION_TYPES = Object.freeze({
@@ -177,6 +178,22 @@ export function isSuspendedFinish(notifData) {
   return suspended(notifData?.runtime?.lastOutcome);
 }
 
+/**
+ * 接续打断不是完成（与挂起排除同构）：cancelled + interruptedBy 为接续原因
+ * 标识（守卫过界打断时经 Agent.interrupt(cause) 申报）时，轮次已移交
+ * successor 接力，工作在继续——用户关心的完成事实由 successor 的 finish
+ * 通知承载，此处跳过，避免误导性的「已取消」。用户手动打断（无申报原因）
+ * 不在此列，finish 通知照常。
+ */
+export function isRotationHandoffFinish(notifData) {
+  const handoff = (data) => !!(data && typeof data === 'object'
+    && String(data.status || '').trim() === 'cancelled'
+    && String(data.interruptedBy || '').trim() === CONTEXT_ROTATION_INTERRUPT_CAUSE);
+  const action = notificationAction(notifData);
+  if (String(action?.type || '').trim() === 'call.finish' && handoff(action.data)) return true;
+  return handoff(notifData?.runtime?.lastOutcome);
+}
+
 /** 只透传运行时明确记录的 CallOutcome，绝不从断连或 active=false 猜结果。 */
 export function extractCallOutcome(notifData) {
   const action = notificationAction(notifData);
@@ -222,6 +239,7 @@ export async function observeCallStatusSnapshot(kind, agentId, snapshot, opts = 
       const finishTs = extractFinishTimestamp(snapshot);
       if (!finishTs) return; // 非结束态快照（call.start / calling 中）：无结束事实
       if (isSuspendedFinish(snapshot)) return; // 挂起等待唤醒，不是完成
+      if (isRotationHandoffFinish(snapshot)) return; // 接续打断：已移交 successor 接力，不是完成
       const outcome = extractCallOutcome(snapshot);
       await deliverAppNotification({
         agentId: targetAgentId,

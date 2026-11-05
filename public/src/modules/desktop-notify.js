@@ -14,7 +14,8 @@
  * 内置 Web Worker 心跳保留前台时钟刷新（事件路径刷新钩子）。
  *
  * 帧语义（server 侧已保证）：type=finish 的完成事实已排除挂起（ADR-0019）
- * 且按 agentId+finishTs 事件级去重；type=input 的 choice 请求按
+ * 与接续移交（cancelled + interruptedBy=context_rotation，轮次由 successor
+ * 的 finish 通知承载完成事实）且按 agentId+finishTs 事件级去重；type=input 的 choice 请求按
  * agentId+requestId 去重；type=reminder 等主动投递类透传 APP 文案，server
  * 逐条投不做事件级去重（每次 POST 都是新事实）。
  * SSE 断连重连的 Last-Event-ID 重放会再次投递同帧，由本模块呈现级去重

@@ -35,6 +35,7 @@ const {
   extractFinishTimestamp,
   extractCallOutcome,
   isSuspendedFinish,
+  isRotationHandoffFinish,
   setupAppNotificationRoutes,
 } = await import('../server/routes/app-notification.js');
 const { writeWorkspacePermissionValue } = await import('../server/routes/workspace-settings.js');
@@ -369,6 +370,34 @@ describe('observeCallStatusSnapshot', () => {
     assert.ok(parseFrames(sse.streamText).filter((f) => f.event === 'app-notification').length >= before);
   });
 
+  it('does not publish for rotation-handoff interrupts (cancelled + interruptedBy cause)', async () => {
+    // 自动接续过界打断的轮次：工作移交 successor 继续，本会话的「已取消」
+    // 对用户是误导（历史 bug：桌面通知在接续时弹「已取消」）
+    const agentId = 'observe-rotation-handoff';
+    const snapshot = finishSnapshot(1710000000666);
+    snapshot.event.data = { status: 'cancelled', reason: 'cancelled', interruptedBy: 'context_rotation' };
+    snapshot.runtime.lastOutcome = { status: 'cancelled', reason: 'cancelled', interruptedBy: 'context_rotation' };
+    snapshot.runtime.stage = 'cancelled';
+    const before = parseFrames(sse.streamText).filter((f) => f.event === 'app-notification').length;
+    await observeCallStatusSnapshot('notification', agentId, snapshot, { requireAgent, settingsPath: settingsPath() });
+    await new Promise((r) => setTimeout(r, 20));
+    const frames = parseFrames(sse.streamText).filter((f) => f.event === 'app-notification');
+    assert.equal(frames.filter((f) => f.data.agentId === agentId).length, 0);
+    assert.ok(frames.length >= before);
+  });
+
+  it('still publishes cancelled finishes without a rotation cause (user interrupts keep feedback)', async () => {
+    const agentId = 'observe-cancelled-plain';
+    const snapshot = finishSnapshot(1710000000555);
+    snapshot.event.data = { status: 'cancelled', reason: 'cancelled' };
+    snapshot.runtime.lastOutcome = { status: 'cancelled', reason: 'cancelled' };
+    snapshot.runtime.stage = 'cancelled';
+    await observeCallStatusSnapshot('notification', agentId, snapshot, { requireAgent, settingsPath: settingsPath() });
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === agentId && f.data.type === 'finish');
+    assert.ok(frame);
+    assert.equal(frame.data.outcomeStatus, 'cancelled');
+  });
+
   it('ignores non-finish snapshots (call.start / calling state)', async () => {
     assert.equal(extractFinishTimestamp({ state: { type: 'call.start', timestamp: 9 } }), 0);
     assert.equal(extractFinishTimestamp(null), 0);
@@ -420,6 +449,24 @@ describe('observeCallStatusSnapshot', () => {
   it('flags suspended outcomes', () => {
     assert.equal(isSuspendedFinish({ runtime: { lastOutcome: { status: 'continued', reason: 'suspended' } } }), true);
     assert.equal(isSuspendedFinish({ event: { type: 'call.finish', data: { status: 'completed' } } }), false);
+  });
+
+  it('flags rotation-handoff finishes (cancelled + interruptedBy, both snapshot paths)', () => {
+    // 字面量 'context_rotation' 是跨层词汇（守卫申报 → CallOutcome 携带 →
+    // 出口匹配），测试用字面量锁定线上值：改名时此处强制两侧同步
+    assert.equal(isRotationHandoffFinish({
+      runtime: { lastOutcome: { status: 'cancelled', reason: 'cancelled', interruptedBy: 'context_rotation' } },
+    }), true);
+    assert.equal(isRotationHandoffFinish({
+      event: { type: 'call.finish', data: { status: 'cancelled', reason: 'cancelled', interruptedBy: 'context_rotation' } },
+    }), true);
+    // 用户手动打断（无申报原因）与 completed 自然收尾都不是接续移交
+    assert.equal(isRotationHandoffFinish({
+      runtime: { lastOutcome: { status: 'cancelled', reason: 'cancelled' } },
+    }), false);
+    assert.equal(isRotationHandoffFinish({
+      event: { type: 'call.finish', data: { status: 'completed', interruptedBy: 'context_rotation' } },
+    }), false);
   });
 
   it('publishes input notifications for choice leases only, dedup by requestId', async () => {
