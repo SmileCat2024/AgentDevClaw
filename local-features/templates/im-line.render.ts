@@ -1,8 +1,10 @@
 /**
  * im_connect_line / im_disconnect_line 渲染模板 — IM 线路接线操作
  *
- * call 卡展示接线意图（lineId → 目标会话）；结果为 { text, success } 回执，
- * 状态 chip + 首行文案（操作时间戳行是给人看时间轴的冗余，聊天卡不重复）。
+ * call 卡展示接线意图（lineId → agentId → threadId）；结果为 { text, success }
+ * 回执，状态 chip + 首行文案（操作时间戳行是给人看时间轴的冗余，聊天卡不重复）。
+ *
+ * ADR-0042 决策 1：接线目标是线程，(agentId, threadId) 成对寻址。
  */
 
 import type { InlineRenderTemplate } from '@agentdevjs/core';
@@ -21,9 +23,13 @@ function stripTimestampLines(text: string): string {
 export default {
   call: (args: Record<string, unknown>) => {
     const lineId = String(args?.lineId ?? '');
+    // 接线目标按线程寻址（agentId + threadId）。旧模板判 args.sessionId，
+    // 而 im_connect_line 的参数早已换成 threadId——调用卡只显示 lineId，
+    // 用户看不出这条线路要绑到哪条线程。
     let html: string;
-    if (args?.agentId || args?.sessionId) {
-      const target = [String(args?.agentId ?? ''), String(args?.sessionId ?? '')].filter(Boolean).join('::');
+    const threadId = String(args?.threadId ?? args?.sessionId ?? '');
+    if (args?.agentId || threadId) {
+      const target = [String(args?.agentId ?? ''), threadId].filter(Boolean).join(' → ');
       html = `<div class="bash-command">${escapeHtml(lineId)} → ${escapeHtml(target)}</div>`;
     } else {
       html = `<div class="bash-command">${escapeHtml(lineId)}</div>`;
