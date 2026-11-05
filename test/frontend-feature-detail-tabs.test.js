@@ -47,6 +47,8 @@ function createOverlayHarness(existingTabBar) {
   };
   const document = {
     getElementById(id) { return id === 'feature-detail-portal' ? portal : null; },
+    // 真实 document 形状：action-dispatcher 加载期在 document 上绑委托监听。
+    addEventListener() {},
     createElement() {
       const wrapper = {
         firstElementChild: { outerHTML: '', dataset: {}, attributes: {}, children: [] },
@@ -78,12 +80,13 @@ function loadModule(document) {
 
 describe('Feature detail tab bar identity', () => {
   it('does not reuse another feature\'s tab bar when switching features', () => {
-    // 页签条上的 onclick 与 data-feature-detail-tabs-for 都绑定 featureName。
+    // 页签条上的 data-action 参数与 data-feature-detail-tabs-for 都绑定 featureName。
     // 跨 Feature 复用会让新弹窗沿用旧回调：setFeatureDetailTab 的归属校验
     // 会静默拒绝，用户看到的就是"分页器在那儿但点了不动"。
     const otherBar = createTabBar('previous-feature');
     const harness = createOverlayHarness(otherBar);
     const ctx = loadModule(harness.document);
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/debug-features-hooks.js');
 
     ctx.run(`renderFeatureDetailOverlay({
@@ -101,9 +104,9 @@ describe('Feature detail tab bar identity', () => {
     assert.ok(replaced, 'placeholder must be filled with a tab bar');
     assert.notEqual(replaced, otherBar, 'tab bar of another feature must not be reused');
     assert.match(replaced.outerHTML, /data-feature-detail-tabs-for="next-feature"/);
-    // 单引号在 HTML 属性里成为 &#39;，浏览器解析属性值时会解回 '，
-    // 因此断言编码后的形态即可代表"浏览器实际拿到的回调"。
-    assert.match(replaced.outerHTML, /setFeatureDetailTab\(&#39;skills&#39;,&#39;next-feature&#39;\)/);
+    // 动作参数绑定 featureName：跨 Feature 复用旧页签时，setFeatureDetailTab
+    // 的归属校验会静默拒绝（分页器点了不动）。
+    assert.match(replaced.outerHTML, /data-tab-key="skills" data-feature-name="next-feature"/);
   });
 
   it('keeps the same tab bar node when re-rendering the same feature', () => {
@@ -112,6 +115,7 @@ describe('Feature detail tab bar identity', () => {
     const sameBar = createTabBar('same-feature');
     const harness = createOverlayHarness(sameBar);
     const ctx = loadModule(harness.document);
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/debug-features-hooks.js');
 
     ctx.run(`renderFeatureDetailOverlay({
@@ -128,15 +132,6 @@ describe('Feature detail tab bar identity', () => {
     assert.equal(harness.placeholder.replacedWith, sameBar, 'same-feature refresh must reuse the live tab bar');
     // 复用路径同样要刷新计数：工具数从 0 变成 1
     assert.equal(sameBar.buttons[0].querySelector('.ph-tab-count').textContent, '1');
-  });
-});
-
-describe('featureDetailTabOnclick', () => {
-  it('escapes quotes so the attribute value survives round-tripping', () => {
-    const ctx = loadModule(createOverlayHarness(null).document);
-    ctx.loadSource('public/src/modules/debug-features-hooks.js');
-    const value = ctx.run(`featureDetailTabOnclick('skills', "a'b")`);
-    assert.equal(value, "window.setFeatureDetailTab('skills','a\\'b')");
   });
 });
 
@@ -165,6 +160,8 @@ describe('window.setFeatureDetailTab', () => {
     };
     const document = {
       getElementById(id) { return id === 'feature-detail-portal' ? portal : null; },
+    // 真实 document 形状：action-dispatcher 加载期在 document 上绑委托监听。
+    addEventListener() {},
       createElement() {
         const wrapper = {
           firstElementChild: { outerHTML: '' },
@@ -197,6 +194,7 @@ describe('window.setFeatureDetailTab', () => {
       getStatusBadgeClass() { return ''; },
       renderMarkdown(value) { return value; },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/debug-features-hooks.js');
 
     ctx.run('window.setFeatureDetailTab("skills", "with-skills")');
@@ -217,7 +215,7 @@ describe('skills tab: cards + reader sub-page', () => {
 
   function loadSkillsModule() {
     const ctx = createFrontendSandbox({
-      document: { getElementById() { return null; }, createElement() { return {}; } },
+      document: { getElementById() { return null; }, createElement() { return {}; }, addEventListener() {} },
       window: {},
       selectedFeatureName: 'shell',
       activeFeaturePanel: 'hooks',
@@ -230,6 +228,7 @@ describe('skills tab: cards + reader sub-page', () => {
       getStatusBadgeClass() { return ''; },
       renderMarkdown(value) { return 'MD:' + value; },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/debug-features-hooks.js');
     return ctx;
   }
@@ -258,8 +257,8 @@ describe('skills tab: cards + reader sub-page', () => {
     const ctx = loadSkillsModule();
     enterSkillsTab(ctx);
     const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
-    assert.match(html, /window\.openFeatureSkill\(&quot;shell&quot;,&quot;grill-me&quot;\)/);
-    assert.match(html, /window\.openFeatureSkill\(&quot;shell&quot;,&quot;claw-help&quot;\)/);
+    assert.match(html, /data-action="features.openSkill" data-feature-name="shell" data-skill-name="grill-me"/);
+    assert.match(html, /data-action="features.openSkill" data-feature-name="shell" data-skill-name="claw-help"/);
   });
 
   it('shows the document only in the reader, and only after it is fetched', () => {
@@ -300,7 +299,7 @@ describe('feature detail empty states', () => {
   // 「交互页面」空态卡族：虚线卡 + 图标块 + 标题 + 描述。
   function loadEmptyModule(feature) {
     const ctx = createFrontendSandbox({
-      document: { getElementById() { return null; }, createElement() { return {}; } },
+      document: { getElementById() { return null; }, createElement() { return {}; }, addEventListener() {} },
       window: {},
       selectedFeatureName: feature.name,
       activeFeaturePanel: 'hooks',
@@ -313,6 +312,7 @@ describe('feature detail empty states', () => {
       getStatusBadgeClass() { return ''; },
       renderMarkdown(value) { return 'MD:' + value; },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/debug-features-hooks.js');
     ctx.run(`ensureFeatureDetailTabOwner('${feature.name}')`);
     return ctx;
@@ -359,7 +359,7 @@ describe('skill reader states', () => {
   const FEATURE = { name: 'shell', tools: [], skills: [{ name: 'guide', description: 'Guide', root: 0, path: 'skills/guide/SKILL.md' }], hookCount: 0 };
   const load = () => {
     const ctx = createFrontendSandbox({
-      document: { getElementById() { return null; }, createElement() { return {}; } },
+      document: { getElementById() { return null; }, createElement() { return {}; }, addEventListener() {} },
       window: {},
       selectedFeatureName: 'shell',
       activeFeaturePanel: 'hooks',
@@ -372,6 +372,7 @@ describe('skill reader states', () => {
       getStatusBadgeClass() { return ''; },
       renderMarkdown(value) { return 'MD:' + value; },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/debug-features-hooks.js');
     ctx.run(`ensureFeatureDetailTabOwner('shell'); window.setFeatureDetailTab('skills', 'shell'); _skillView = 'guide'`);
     return ctx;
@@ -395,7 +396,7 @@ describe('skill reader states', () => {
     assert.match(html, /class="gen-ui-empty"/);
     assert.match(html, /feature-detail-empty-actions/);
     assert.match(html, /settings-btn settings-btn-secondary/);
-    assert.match(html, /window\.retryFeatureSkill\(&quot;shell&quot;,&quot;guide&quot;\)/);
+    assert.match(html, /data-action="features.retrySkill" data-feature-name="shell" data-skill-name="guide"/);
     assert.doesNotMatch(html, /feature-skill-retry/, 'the bare retry button style must be gone');
   });
 });
@@ -403,7 +404,7 @@ describe('skill reader states', () => {
 describe('renderFeatureDetailContent hooks tab', () => {
   function renderHooksTab() {
     const ctx = createFrontendSandbox({
-      document: { getElementById() { return null; }, createElement() { return {}; } },
+      document: { getElementById() { return null; }, createElement() { return {}; }, addEventListener() {} },
       window: {},
       selectedFeatureName: 'shell',
       activeFeaturePanel: 'hooks',
@@ -425,6 +426,7 @@ describe('renderFeatureDetailContent hooks tab', () => {
       getStatusBadgeClass() { return ''; },
       renderMarkdown(value) { return value; },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/debug-features-hooks.js');
     // 分页状态是模块私有变量，经公开入口切换到钩子分页再取内容。
     return ctx.run(`(() => {

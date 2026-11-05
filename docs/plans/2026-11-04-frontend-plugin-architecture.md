@@ -103,10 +103,12 @@ window.ClawHost = {
 ### Phase C：按扩展面收编存量
 
 范围（2026-11-04 实测复核）：悬置工作空间（work-group / flow / dispatch-console）与转入大工程的 qqbot / home 的模块不收编，其内联事件与全局函数随各自工程重做时消亡。
-顺序（由小到大）：右栏面板实现去全局化（15 个面板集中在 app-ui.js 注册，5 个活跃面板经 `window.XxxPanel` 间接寻址：git / bg / annotations / genui / session-controls）→ 内联事件收编（现存 513 处，规划时 613，四次迁移已消化约 100）→ fw-config-panel 状态回模块（占用 12 个 `ClawFW.*` 键，跨模块读者：app-ui、model-settings）→ script 标签清单化清尾（index.html 现 137 个标签：src/ 129 + vendor 5 + 根目录 1 + inline 2）。原计划的 work-group surface 声明化随 work-group 悬置取消。
-每面收编完成即修剪 A1 基线，behavior 消退曲线是进度指标。
+顺序（由小到大）：右栏面板实现去全局化（15 个面板集中在 app-ui.js 注册，5 个活跃面板经 `window.XxxPanel` 间接寻址：git / bg / annotations / genui / session-controls）→ 内联事件收编（规划时 613，2026-11-04 实测 513；防线基线建好后从 427 起算）→ fw-config-panel 状态回模块（占用 12 个 `ClawFW.*` 键，跨模块读者：app-ui、model-settings）→ script 标签清单化清尾（index.html 现 137 个标签：src/ 129 + vendor 5 + 根目录 1 + inline 2）。原计划的 work-group surface 声明化随 work-group 悬置取消。
+每面收编完成即修剪 A1 基线，behavior 消退曲线是进度指标。内联事件面另有两道机器防线（`frontend-inline-events-gate`，变异验证过鉴别力）：ratchet——模板内联处理器（attribute 形态 + `setAttribute('on*', …)` 动态注入形态）计数只许降不许升，基线 `.inline-events-baseline.json`；覆盖——源码全部 `data-action` 字面量必须能对上注册点（分发器 `actions.registerMany/register`、插件 `actions: {}` 声明、局部 addEventListener 三种路径），丢分发（f9c8e104 同型）在测试期拦截。
 
 进度：**右栏面已完成**（2026-11-04）。5 个 window 寻址面板（git / bg / annotations / genui / session-controls）全部迁移为模块自注册（`window.ClawHost.panels.register`，与 resources-viewer 先例同型）；app-ui.js 中央注册块只保留实现本就在 app-ui.js 内的面板。迁移中砍除了只写不读的 `featurePanels` 平行映射——渲染寻址（debug-panel-host `renderFeaturePanel`）与可见性过滤统一从 `ClawPanels` 读，落实 ADR-0010「不维护平行清单」纪律。行为等价由 `frontend-rail-panels-golden` 金样本钉住（注册面全集 + 元数据快照，搬家不许改变快照，变异验证过鉴别力）。`window.GitPanel` / `BgPanel` / `SessionControlsPanel` 命名空间仍在（生命周期钩子 onOpen/onClose 经 debug-panel-host if 链调用、badge 经 agent-data-loader 调用）——调用面收编属内联事件面与后续清理，不在本面范围。
+
+进度：**内联事件面进行中**（2026-11-05）。防线测试先行落地（ratchet + 覆盖双断言，含 `setAttribute('on*', …)` 动态注入形态；基线从 427 起算）。收编按模块分批、每批一个提交：会话管理簇（session-dialogs / ph-thread-history / index.html 分支弹窗，11 处）与静态壳弹窗簇（trim / feature-upload / summary 弹窗，10 处，index.html 内联事件清零）已落地，基线 409。剩余大头按批推进：session-list-render（44）/ model-settings（41）/ fw-config-panel（28）/ workspace-blocks（23）/ app-ui.js（77，拆子批殿后）。配套改动：分发器 `invoke` 透传 async handler 的 Promise（thenable 鸭子判定——`instanceof Promise` 在 frontend-vm 沙箱会因宿主 realm Promise 遮蔽沙箱同名全局而恒 false，跨 realm 判定不可依赖）。
 
 ### 挂起项
 

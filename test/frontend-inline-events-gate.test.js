@@ -58,7 +58,7 @@ function collectSourceFiles(dir, out = []) {
   return out;
 }
 
-const INLINE_HANDLER_RE = /on(?:click|change|input|keydown|keyup|dblclick|mousedown|mouseup|blur|submit)="[^"]*"/g;
+const INLINE_HANDLER_RE = /on(?:click|change|input|keydown|keyup|dblclick|mousedown|mouseup|blur|submit|focus|toggle|pointerdown|pointerup|pointermove|pointerenter|pointerleave|pointerover|pointerout|mouseover|mouseout|mouseenter|mouseleave|dragstart|wheel|contextmenu)="[^"]*"/g;
 /** setAttribute('onclick', 'fn(...)') 是同一依赖的第二种注入形态，一并计数。 */
 const SET_ATTRIBUTE_HANDLER_RE = /setAttribute\(\s*['"]on(?:click|change|input|keydown|keyup|dblclick|mousedown|mouseup|blur|submit)['"]\s*,/g;
 const DOTTED_ACTION_RE = /data-action="([a-zA-Z][\w-]*\.[\w-]+)"/g;

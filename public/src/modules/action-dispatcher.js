@@ -71,10 +71,13 @@ window.ClawFW = window.ClawFW || {};
     return false;
   }
 
-  function bindEventType(type) {
+  /** 绑定一种事件类型的委托分发。非冒泡事件（如 details 的 toggle）必须
+   *  以 capture 绑定，document 冒泡阶段监听不到它们；capture 对冒泡事件的
+   *  closest 寻址与 event.target 无影响，仅分发时机提前到捕获阶段。 */
+  function bindEventType(type, { capture = false } = {}) {
     if (boundTypes.has(type)) return;
     boundTypes.add(type);
-    document.addEventListener(type, dispatch);
+    document.addEventListener(type, dispatch, capture);
   }
 
   function register(name, handler, owner) {

@@ -61,7 +61,7 @@ const _openLogJson = new Set();
 // 点击行/箭头切换展开。不用原生 <details>：summary 必须是 details 首个子元素，
 // JSON 会被迫排在 message 上方；click + class 切换可自由控制 DOM 阅读顺序
 // （行 → message → meta → 展开的 JSON）。
-window.logJsonToggle = (id, entryEl) => {
+function logJsonToggle(id, entryEl) {
   if (!entryEl) return;
   if (_openLogJson.has(id)) {
     _openLogJson.delete(id);
@@ -70,7 +70,7 @@ window.logJsonToggle = (id, entryEl) => {
     _openLogJson.add(id);
     entryEl.classList.add('json-open');
   }
-};
+}
 
 // 列表改为内部滚动（.logf-list）后，body 不再滚动，
 // 底部渐隐遮罩（.feature-panel.scrollable）改由列表滚动事件驱动。
@@ -123,10 +123,10 @@ function buildLogStatsHtml(filteredCount) {
   }
   const badges = [
     errorCount > 0
-      ? '<button type="button" class="logf-badge is-error" title="' + escapeHtml(t('logs_level_error')) + '" onclick="window.updateLogFilter(&quot;level&quot;,&quot;error&quot;)">' + String(errorCount) + ' error</button>'
+      ? '<button type="button" class="logf-badge is-error" title="' + escapeHtml(t('logs_level_error')) + '" data-action="debugLogs.filterLevelError">' + String(errorCount) + ' error</button>'
       : '',
     warnCount > 0
-      ? '<button type="button" class="logf-badge is-warn" title="' + escapeHtml(t('logs_level_warn')) + '" onclick="window.updateLogFilter(&quot;level&quot;,&quot;warn&quot;)">' + String(warnCount) + ' warn</button>'
+      ? '<button type="button" class="logf-badge is-warn" title="' + escapeHtml(t('logs_level_warn')) + '" data-action="debugLogs.filterLevelWarn">' + String(warnCount) + ' warn</button>'
       : '',
   ].filter(Boolean).join('');
   return '<span class="logf-count">' + String(filteredCount) + ' ' + escapeHtml(t('logs_total')) + '</span>' + badges;
@@ -195,7 +195,7 @@ function buildLogEntryHtml(entry) {
     : '';
   const entryId = entry.id != null ? String(entry.id) : '';
   const clickAttr = hasData && entryId
-    ? ' onclick="window.logJsonToggle(&quot;' + escapeHtml(entryId) + '&quot;, this.closest(&quot;.logf-entry&quot;))"'
+    ? ' data-action="debugLogs.toggleJson" data-entry-id="' + escapeHtml(entryId) + '"'
     : '';
   const lineInner = [
     '<span class="logf-level">' + escapeHtml(entry.level) + '</span>',
@@ -274,23 +274,23 @@ function renderLogsPanel() {
     '<div class="logf-stats">' + buildLogStatsHtml(filteredLogs.length) + '</div>',
     '</div>',
     '<div class="logf-row logf-row-filters">',
-    '<input class="logf-search" type="text" value="' + escapeHtml(logFilters.search) + '" placeholder="' + escapeHtml(t('logs_search_placeholder')) + '" oninput="window.updateLogFilter(&quot;search&quot;, this.value)">',
-    '<select class="logf-select"' + selectAttrs + ' onchange="window.updateLogFilter(&quot;level&quot;, this.value)">',
+    '<input class="logf-search" type="text" value="' + escapeHtml(logFilters.search) + '" placeholder="' + escapeHtml(t('logs_search_placeholder')) + '" data-action="debugLogs.search">',
+    '<select class="logf-select"' + selectAttrs + ' data-action="debugLogs.filter" data-filter-key="level">',
     '<option value="all"' + (logFilters.level === 'all' ? ' selected' : '') + '>' + escapeHtml(t('logs_level_all')) + '</option>',
     '<option value="debug"' + (logFilters.level === 'debug' ? ' selected' : '') + '>' + escapeHtml(t('logs_level_debug')) + '</option>',
     '<option value="info"' + (logFilters.level === 'info' ? ' selected' : '') + '>' + escapeHtml(t('logs_level_info')) + '</option>',
     '<option value="warn"' + (logFilters.level === 'warn' ? ' selected' : '') + '>' + escapeHtml(t('logs_level_warn')) + '</option>',
     '<option value="error"' + (logFilters.level === 'error' ? ' selected' : '') + '>' + escapeHtml(t('logs_level_error')) + '</option>',
     '</select>',
-    '<select class="logf-select"' + selectAttrs + ' onchange="window.updateLogFilter(&quot;feature&quot;, this.value)">',
+    '<select class="logf-select"' + selectAttrs + ' data-action="debugLogs.filter" data-filter-key="feature">',
     '<option value="all"' + (logFilters.feature === 'all' ? ' selected' : '') + '>' + escapeHtml(t('logs_feature_all')) + '</option>',
     featureOptions.map((feature) => '<option value="' + escapeHtml(feature) + '"' + (logFilters.feature === feature ? ' selected' : '') + '>' + escapeHtml(feature) + '</option>').join(''),
     '</select>',
-    '<select class="logf-select"' + selectAttrs + ' onchange="window.updateLogFilter(&quot;lifecycle&quot;, this.value)">',
+    '<select class="logf-select"' + selectAttrs + ' data-action="debugLogs.filter" data-filter-key="lifecycle">',
     '<option value="all"' + (logFilters.lifecycle === 'all' ? ' selected' : '') + '>' + escapeHtml(t('logs_lifecycle_all')) + '</option>',
     lifecycleOptions.map((lifecycle) => '<option value="' + escapeHtml(lifecycle) + '"' + (logFilters.lifecycle === lifecycle ? ' selected' : '') + '>' + escapeHtml(lifecycle) + '</option>').join(''),
     '</select>',
-    '<select class="logf-select logf-call"' + selectAttrs + ' onchange="window.updateLogFilter(&quot;call&quot;, this.value)">',
+    '<select class="logf-select logf-call"' + selectAttrs + ' data-action="debugLogs.filter" data-filter-key="call">',
     '<option value="all"' + (logFilters.call === 'all' ? ' selected' : '') + '>' + escapeHtml(t('logf_call_all')) + '</option>',
     callOptions.map((idx) => '<option value="' + String(idx) + '"' + (logFilters.call === String(idx) ? ' selected' : '') + '>R' + String(idx) + '</option>').join(''),
     '</select>',
@@ -367,3 +367,13 @@ async function loadLogs(forceRender = false) {
     }
   }
 }
+
+// 日志面板动作（data-action 分发）。updateLogFilter 实现与 logFilters 状态
+// 暂住 app-ui.js / app-core.js（状态收编面处理），这里经 window 调用。
+window.ClawFW.actions.registerMany({
+  'debugLogs.filterLevelError': () => window.updateLogFilter('level', 'error'),
+  'debugLogs.filterLevelWarn': () => window.updateLogFilter('level', 'warn'),
+  'debugLogs.toggleJson': (el) => logJsonToggle(el.dataset.entryId, el.closest('.logf-entry')),
+  'debugLogs.search': (el) => window.updateLogFilter('search', el.value),
+  'debugLogs.filter': (el) => window.updateLogFilter(el.dataset.filterKey, el.value),
+});

@@ -28,7 +28,6 @@ const _featureGroupOpenPref = new Map();
 function featureGroupToggled(typeId, open) {
   _featureGroupOpenPref.set(typeId, open);
 }
-window.featureGroupToggled = featureGroupToggled;
 
 // 功能类型分组头文案（能力/会话与行为/渠道与交互/系统组件；兜底组独立 key）
 function featureGroupLabel(typeId) {
@@ -71,14 +70,14 @@ function _refreshPanelAfterFilterChange() {
   }
 }
 
-window.setFeaturePanelFilter = function (filter) {
+function setFeaturePanelFilter(filter) {
   if (!FEATURE_FILTERS.includes(filter) || filter === _featurePanelFilter) return;
   _featurePanelFilter = filter;
   _persistPanelFilters();
   _refreshPanelAfterFilterChange();
 };
 
-window.setFeaturePanelCapFilter = function (cap) {
+function setFeaturePanelCapFilter(cap) {
   if (typeof cap !== 'string' || !cap || cap === _featurePanelCapFilter) return;
   _featurePanelCapFilter = cap;
   _persistPanelFilters();
@@ -161,10 +160,11 @@ function _runtimeSignals() {
 function buildFeatureFilterSegment(counts) {
   const keys = { all: 'feature_filter_all', bundled: 'feature_filter_bundled', installed: 'feature_filter_installed' };
   return '<div class="usage-info-segment feature-src-seg" role="tablist">'
+    // 原为 onpointerdown + onclick 双挂求即时反馈；分发器委托模型下每事件
+    // 只命中最近 data-action，双挂会双触发，收敛为 click（setter 同值短路，语义不变）。
     + FEATURE_FILTERS.map(f => [
       '<button type="button" role="tab" class="' + (f === _featurePanelFilter ? 'active' : '') + '"'
-        + ' onpointerdown="window.setFeaturePanelFilter(\'' + f + '\')"'
-        + ' onclick="window.setFeaturePanelFilter(\'' + f + '\')">'
+        + ' data-action="features.setFilter" data-filter="' + f + '">'
         + escapeHtml(t(keys[f]))
         + '<span class="feature-src-n">' + String(counts ? counts[f] : 0) + '</span>'
         + '</button>',
@@ -187,7 +187,7 @@ function buildFeatureCapSelect(catalog) {
   const current = fc.normalizeCapFilter(_featurePanelCapFilter, catalog);
   const options = ['all'].concat(catalog.capabilities.map(c => (typeof c === 'string' ? c : c.id)));
   return '<select class="feature-cap-select" data-claw-select data-claw-compact="true" data-claw-no-scroll="true"'
-    + ' onchange="window.setFeaturePanelCapFilter(this.value)">'
+    + ' data-action="features.setCapFilter">'
     + options.map(id => '<option value="' + escapeHtml(id) + '"' + (id === current ? ' selected' : '') + '>'
       + escapeHtml(t(id === 'all' ? 'feature_filter_all' : 'feature_cap_' + id)) + '</option>').join('')
     + '</select>';
@@ -229,7 +229,7 @@ function renderFeaturesPanel() {
     // slash 命令数：_commandFeatures 为 null（数据不可用）时省略该项，不显示误导性的 0
     const commandCount = _commandFeatures ? (_commandFeatures.get(feature.name) || 0) : null;
     return [
-      '<div class="feature-card" role="button" tabindex="0" onclick="window.openFeatureDetails(&quot;' + escapeHtml(feature.name) + '&quot;)" title="' + escapeHtml(feature.name) + '">',
+      '<div class="feature-card" role="button" tabindex="0" data-action="features.openDetails" data-feature-name="' + escapeHtml(feature.name) + '" title="' + escapeHtml(feature.name) + '">',
       '<div class="feature-card-top">',
       '<div class="feature-card-main">',
       '<span class="feature-card-dot"></span>',
@@ -260,7 +260,7 @@ function renderFeaturesPanel() {
       : !(fc && fc.typeCollapsedByDefault(group.id, catalog));
     return [
       '<details class="feature-group"' + (isOpen ? ' open' : '')
-        + ' ontoggle="window.featureGroupToggled(&quot;' + escapeHtml(group.id) + '&quot;, this.open)">',
+        + ' data-action="features.groupToggle" data-group-id="' + escapeHtml(group.id) + '">',
       '<summary class="feature-group-bar">',
       '<span class="feature-group-chev" aria-hidden="true"></span>',
       '<span class="feature-group-title">' + escapeHtml(featureGroupLabel(group.id)) + '</span>',
@@ -387,7 +387,7 @@ window.setFeatureDetailTab = function (tab, featureName) {
   loadVisibleFeatureSkills(feature);
 };
 
-window.retryFeatureSkill = function (featureName, skillName) {
+function retryFeatureSkill(featureName, skillName) {
   if (selectedFeatureName !== featureName || _featureDetailTab !== 'skills') return;
   const feature = currentHookInspector.features.find(item => item.name === featureName);
   const skill = feature?.skills?.find(item => item.name === skillName);
@@ -403,7 +403,7 @@ window.retryFeatureSkill = function (featureName, skillName) {
 /**
  * 打开技能阅读页。文档只在这一页面加载与呈现——列表页只保留名称与描述。
  */
-window.openFeatureSkill = function (featureName, skillName) {
+function openFeatureSkill(featureName, skillName) {
   if (selectedFeatureName !== featureName || _featureDetailTab !== 'skills') return;
   const feature = currentHookInspector.features.find(item => item.name === featureName);
   const skill = feature?.skills?.find(item => item.name === skillName);
@@ -421,7 +421,7 @@ window.openFeatureSkill = function (featureName, skillName) {
 /**
  * 从阅读页返回技能列表，并回到离开列表时的滚动位置。
  */
-window.closeFeatureSkill = function () {
+function closeFeatureSkill() {
   if (_skillView === null) return;
   const feature = currentHookInspector.features.find(item => item.name === selectedFeatureName) || null;
   _skillView = null;
@@ -507,23 +507,13 @@ function renderFeatureDetailTabBar(feature) {
     + computeFeatureDetailTabs(feature).map(tab => '<button type="button" role="tab" aria-selected="' + (_featureDetailTab === tab.key) + '"'
       + ' class="ph-session-tab' + (_featureDetailTab === tab.key ? ' active' : '') + '"'
       + ' data-feature-detail-tab="' + tab.key + '"'
-      + ' onclick="' + escapeHtml(featureDetailTabOnclick(tab.key, feature.name)) + '"'
+      + ' data-action="features.setDetailTab" data-tab-key="' + escapeHtml(tab.key) + '" data-feature-name="' + escapeHtml(feature.name) + '"'
       + '>' + escapeHtml(tab.label) + '<span class="ph-tab-count">' + tab.count + '</span></button>').join('')
     + '</div>';
 }
 
 /**
- * 生成页签点击回调。onclick 属性值经 escapeHtml 后写入 HTML，
- * 因此这里用单引号包裹参数：属性以双引号定界，单引号无需实体转义，
- * 同一份字符串也能直接用于 setAttribute（复用路径）。
- */
-function featureDetailTabOnclick(tabKey, featureName) {
-  const safeName = String(featureName).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  return "window.setFeatureDetailTab('" + tabKey + "','" + safeName + "')";
-}
-
-/**
- * 原地同步页签条的标签、计数与回调，返回 false 表示结构不符需整条重建。
+ * 原地同步页签条的标签、计数与动作参数，返回 false 表示结构不符需整条重建。
  * 只改文本节点与属性、不替换按钮节点：指针按下到 click 之间按钮一旦脱离
  * DOM，浏览器会取消整串点击事件。
  */
@@ -539,7 +529,8 @@ function syncFeatureDetailTabBar(bar, feature) {
     if (labelNode) labelNode.nodeValue = tab.label;
     const countNode = button.querySelector('.ph-tab-count');
     if (countNode) countNode.textContent = String(tab.count);
-    button.setAttribute('onclick', featureDetailTabOnclick(tab.key, feature.name));
+    button.dataset.tabKey = tab.key;
+    button.dataset.featureName = feature.name;
   }
   return true;
 }
@@ -605,12 +596,12 @@ function renderFeatureDetailEmpty(iconHtml, title, description, extraHtml) {
  */
 function renderSkillCard(feature, skill) {
   const clickable = Boolean(resourceUrlForSkill(feature, skill));
-  const onclick = clickable
-    ? ' onclick="window.openFeatureSkill(&quot;' + escapeHtml(feature.name) + '&quot;,&quot;' + escapeHtml(skill.name) + '&quot;)"'
+  const clickAttr = clickable
+    ? ' data-action="features.openSkill" data-feature-name="' + escapeHtml(feature.name) + '" data-skill-name="' + escapeHtml(skill.name) + '"'
     : '';
   return '<article class="feature-skill-card' + (clickable ? ' is-clickable' : '') + '"'
     + (clickable ? ' role="button" tabindex="0"' : '')
-    + onclick + ' title="' + escapeHtml(skill.name) + '">'
+    + clickAttr + ' title="' + escapeHtml(skill.name) + '">'
     + '<div class="feature-skill-head">'
     + '<div class="feature-skill-name">' + escapeHtml(skill.name) + '</div>'
     + '<div class="feature-skill-description">' + escapeHtml(skill.description || '') + '</div>'
@@ -644,7 +635,7 @@ function renderSkillReader(feature, skill) {
       cached.error,
       cached.retryable
         ? '<div class="feature-detail-empty-actions"><button type="button" class="settings-btn settings-btn-secondary"'
-          + ' onclick="window.retryFeatureSkill(&quot;' + escapeHtml(feature.name) + '&quot;,&quot;' + escapeHtml(skill.name) + '&quot;)">'
+          + ' data-action="features.retrySkill" data-feature-name="' + escapeHtml(feature.name) + '" data-skill-name="' + escapeHtml(skill.name) + '">'
           + escapeHtml(t('feature_detail_retry')) + '</button></div>'
         : '',
     );
@@ -674,7 +665,7 @@ function renderFeatureToolCard(tool) {
     + (tool.description ? '<div class="feature-tool-desc">' + escapeHtml(tool.description) + '</div>' : '')
     + (props.length ? '<div class="gateway-tool-params">' + props.map(prop => '<span class="gateway-tool-tag">' + escapeHtml(prop) + '</span>').join('') + '</div>' : '')
     + (metaPills ? '<div class="feature-tool-meta">' + metaPills + '</div>' : '')
-    + (hasSchema ? '<div class="fdetail-schema-toggle" onclick="event.stopPropagation();window.toggleToolSchema(&quot;' + escapeHtml(toolKey) + '&quot;)">'
+    + (hasSchema ? '<div class="fdetail-schema-toggle" data-action="features.toggleSchema" data-tool-key="' + escapeHtml(toolKey) + '">'
       + (isExpanded ? '▾ ' : '▸ ') + escapeHtml(t(isExpanded ? 'feature_tool_schema_expanded' : 'feature_tool_schema')) + '</div>' : '')
     + (hasSchema && isExpanded ? '<div class="fdetail-schema-block"><pre>' + escapeHtml(JSON.stringify(tool.parameters, null, 2)) + '</pre></div>' : '')
     + '</div>';
@@ -697,7 +688,6 @@ function toggleToolSchema(toolKey) {
   renderFeatureDetailOverlay(selectedFeature);
 }
 
-window.toggleToolSchema = toggleToolSchema;
 
 // ═══════════════════════════════════════════════════════════════
 // Tool / Feature enable-disable toggle
@@ -733,7 +723,6 @@ async function toggleToolState(scope, name, checkbox) {
     checkbox.checked = !checkbox.checked;
   }
 }
-window.toggleToolState = toggleToolState;
 
 /**
  * 发送 hook enable/disable IPC 请求。
@@ -760,7 +749,6 @@ async function toggleHookState(lifecycle, featureName, methodName, checkbox) {
     checkbox.checked = !checkbox.checked;
   }
 }
-window.toggleHookState = toggleHookState;
 
 /**
  * 生成 toggle switch HTML。
@@ -770,23 +758,25 @@ window.toggleHookState = toggleHookState;
  * @returns HTML string（空字符串如果不适用）
  */
 function buildToolToggleHtml(scope, name, isChecked) {
-  return '<label class="tool-toggle" onclick="event.stopPropagation()" title="' + escapeHtml(t('feature_toggle_hint')) + '">'
+  // label 挂 noop 挡板：点 label 文字区不得冒泡命中外层卡片/弹窗的动作
+  // （委托模型每事件只命中最近 data-action，挡板即旧 stopPropagation 的等价物）。
+  return '<label class="tool-toggle" data-action="features.noop" title="' + escapeHtml(t('feature_toggle_hint')) + '">'
     + '<input type="checkbox" class="tool-toggle-input"'
     + (isChecked ? ' checked' : '')
-    + ' onchange="window.toggleToolState(&quot;' + scope + '&quot;,&quot;' + escapeHtml(name) + '&quot;,this)" />'
+    + ' data-action="features.toggleTool" data-scope="' + scope + '" data-name="' + escapeHtml(name) + '" />'
     + '<span class="tool-toggle-slider"></span>'
     + '</label>';
 }
 
 /**
  * 生成 hook toggle switch HTML。
- * data 属性编码在 onchange 回调字符串中。
+ * 动作参数经 data-* 属性传递（change 事件走分发器）。
  */
 function buildHookToggleHtml(lifecycle, featureName, methodName, isChecked) {
-  return '<label class="tool-toggle" onclick="event.stopPropagation()" title="' + escapeHtml(t('feature_toggle_hint')) + '">'
+  return '<label class="tool-toggle" data-action="features.noop" title="' + escapeHtml(t('feature_toggle_hint')) + '">'
     + '<input type="checkbox" class="tool-toggle-input"'
     + (isChecked ? ' checked' : '')
-    + ' onchange="window.toggleHookState(&quot;' + escapeHtml(lifecycle) + '&quot;,&quot;' + escapeHtml(featureName) + '&quot;,&quot;' + escapeHtml(methodName) + '&quot;,this)" />'
+    + ' data-action="features.toggleHook" data-lifecycle="' + escapeHtml(lifecycle) + '" data-feature-name="' + escapeHtml(featureName) + '" data-method-name="' + escapeHtml(methodName) + '" />'
     + '<span class="tool-toggle-slider"></span>'
     + '</label>';
 }
@@ -875,12 +865,14 @@ function renderFeatureDetailOverlay(feature) {
     : null;
   const headBack = readingSkill
     ? '<button class="feature-detail-close feature-skill-back" type="button" title="' + escapeHtml(t('feature_detail_skill_back')) + '"'
-      + ' onclick="window.closeFeatureSkill()">' + SVG_BACK_ICON + '</button>'
+      + ' data-action="features.closeSkill">' + SVG_BACK_ICON + '</button>'
     : '';
 
   portal.innerHTML = [
-    '<div class="feature-detail-overlay" onclick="window.closeFeatureDetails()">',
-    '<div class="feature-detail-window" onclick="event.stopPropagation()" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;display:flex;flex-direction:column;">',
+    '<div class="feature-detail-overlay" data-action="features.closeDetails">',
+    // window 挂 noop 挡板：弹窗内容区的点击不得命中 overlay 的关闭动作
+    // （等价于旧内联 stopPropagation 挡板的防误关语义）。
+    '<div class="feature-detail-window" data-action="features.noop" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;display:flex;flex-direction:column;">',
     '<div class="feature-detail-head">',
     '<div class="feature-detail-head-left">',
     headBack,
@@ -891,7 +883,7 @@ function renderFeatureDetailOverlay(feature) {
     '<div class="feature-detail-subtitle">' + escapeHtml(readingSkill ? (readingSkill.description || '') : (feature.description || '')) + '</div>',
     '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="window.closeFeatureDetails()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="features.closeDetails">×</button>',
     '</div>',
     '<div class="settings-tab-content">',
     // 阅读页隐藏概览块与分页器：二级页只承担这一份文档。
@@ -952,7 +944,6 @@ const _lifecycleOpenPref = new Map();
 function rhGroupToggled(lifecycle, open) {
   _lifecycleOpenPref.set(lifecycle, open);
 }
-window.rhGroupToggled = rhGroupToggled;
 
 // 双语短文案（currentLanguage 声明于 app-core.js）
 function rhLoc(zh, en) {
@@ -1037,7 +1028,7 @@ function renderReverseHooksPanel() {
         : !isEmpty;
       return [
         '<details class="rh-group' + (isEmpty ? ' is-empty' : '') + '"' + (isOpen ? ' open' : '')
-          + ' ontoggle="window.rhGroupToggled(&quot;' + escapeHtml(group.lifecycle) + '&quot;, this.open)">',
+          + ' data-action="features.rhGroupToggle" data-lifecycle="' + escapeHtml(group.lifecycle) + '">',
         '<summary class="rh-head">',
         '<span class="rh-name" title="' + escapeHtml(rhLifecycleHint(group.lifecycle)) + '">' + escapeHtml(group.lifecycle) + '</span>',
         '<span class="rh-count" title="' + escapeHtml(rhLoc('同一生命周期内按注册顺序执行，序号即执行顺序', 'Handlers run in registration order within a lifecycle')) + '">' + String(group.entries.length) + ' ' + escapeHtml(t('panel_attached')) + '</span>',
@@ -1054,3 +1045,25 @@ function renderReverseHooksPanel() {
   // 面板标题栏已标注"反向钩子"，正文直接呈现分组列表，不再重复大标题
   return '<div class="hooks-panel"><div class="rh-list">' + lifecycleCards + '</div></div>';
 }
+
+// 功能特性 / 反向钩子面板动作（data-action 分发）。openFeatureDetails /
+// closeFeatureDetails 实现住 debug-overview.js，经 window 调用；
+// setFeatureDetailTab 保留 window 导出（测试契约）。
+// details 的 toggle 不冒泡，bindEventType 必须走 capture（见分发器注释）。
+window.ClawFW.actions.bindEventType('toggle', { capture: true });
+window.ClawFW.actions.registerMany({
+  'features.noop': () => {},
+  'features.setFilter': (el) => setFeaturePanelFilter(el.dataset.filter),
+  'features.setCapFilter': (el) => setFeaturePanelCapFilter(el.value),
+  'features.groupToggle': (el) => featureGroupToggled(el.dataset.groupId, el.open),
+  'features.rhGroupToggle': (el) => rhGroupToggled(el.dataset.lifecycle, el.open),
+  'features.openDetails': (el) => window.openFeatureDetails(el.dataset.featureName),
+  'features.setDetailTab': (el) => setFeatureDetailTab(el.dataset.tabKey, el.dataset.featureName),
+  'features.openSkill': (el) => openFeatureSkill(el.dataset.featureName, el.dataset.skillName),
+  'features.retrySkill': (el) => retryFeatureSkill(el.dataset.featureName, el.dataset.skillName),
+  'features.toggleSchema': (el) => toggleToolSchema(el.dataset.toolKey),
+  'features.toggleTool': (el) => toggleToolState(el.dataset.scope, el.dataset.name, el),
+  'features.toggleHook': (el) => toggleHookState(el.dataset.lifecycle, el.dataset.featureName, el.dataset.methodName, el),
+  'features.closeSkill': () => closeFeatureSkill(),
+  'features.closeDetails': () => window.closeFeatureDetails(),
+});
