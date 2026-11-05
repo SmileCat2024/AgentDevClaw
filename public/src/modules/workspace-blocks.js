@@ -63,7 +63,7 @@ function renderActionButton(action, options = {}) {
   const label = localizeWorkspaceValue(action?.label, '');
   const encoded = escapeHtml(JSON.stringify(action?.action || {}));
   const btnClass = options.className || 'workspace-action';
-  return '<button class="' + escapeHtml(btnClass) + '" type="button" data-workspace-action="' + encoded + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (options.disabled ? ' disabled' : '') + '>' + escapeHtml(label) + '</button>';
+  return '<button class="' + escapeHtml(btnClass) + '" type="button" data-workspace-action="' + encoded + '" data-action="wsBlocks.workspaceAction"' + (options.disabled ? ' disabled' : '') + '>' + escapeHtml(label) + '</button>';
 }
 
 function renderWorkspaceHero(agent, block) {
@@ -76,7 +76,7 @@ function renderWorkspaceHero(agent, block) {
     : 'workspace-hero' + (block?.variant === 'bar' ? ' bar' : '');
   const isIM = agent?.id === 'qqbot';
   const actionsHtml = isIM
-    ? '<div class="workspace-hero-actions"><button class="ph-banner-btn secondary im-channel-config-btn" type="button" onclick="window.openIMChannelConfig()">' + (currentLanguage === 'zh' ? '配置渠道' : 'Channel Config') + '</button></div>'
+    ? '<div class="workspace-hero-actions"><button class="ph-banner-btn secondary im-channel-config-btn" type="button" data-action="wsBlocks.openIMChannelConfig">' + (currentLanguage === 'zh' ? '配置渠道' : 'Channel Config') + '</button></div>'
     : (Array.isArray(block?.actions) && block.actions.length > 0
       ? '<div class="workspace-hero-actions">' + block.actions.map((action) => renderActionButton(action, {
         className: action?.className
@@ -147,7 +147,7 @@ function renderWorkspaceLauncherGrid(agent, block) {
         shouldRenderNote
           ? '<div class="workspace-launch-note">' + escapeHtml(note) + '</div>'
           : '',
-        '<button class="workspace-action" type="button" data-workspace-action="' + action + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(actionLabel) + '</button>',
+        '<button class="workspace-action" type="button" data-workspace-action="' + action + '" data-action="wsBlocks.workspaceAction"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(actionLabel) + '</button>',
         '</div>',
       ].join('');
     }).join(''),
@@ -172,7 +172,7 @@ function renderWorkspaceField(agent, field, draft, formId) {
     return [
       '<label class="workspace-form-field">',
       '<span class="workspace-form-label">' + escapedLabel + '</span>',
-      '<textarea class="workspace-form-textarea" placeholder="' + escapedPlaceholder + '" oninput="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapedName + '&quot;, this.value)">' + escapedValue + '</textarea>',
+      '<textarea class="workspace-form-textarea" placeholder="' + escapedPlaceholder + '" data-action="wsBlocks.formDraft" data-event="input" data-form-id="' + escapeHtml(formId) + '" data-field-name="' + escapedName + '">' + escapedValue + '</textarea>',
       '</label>',
     ].join('');
   }
@@ -188,7 +188,7 @@ function renderWorkspaceField(agent, field, draft, formId) {
     return [
       '<label class="workspace-form-field">',
       '<span class="workspace-form-label">' + escapedLabel + '</span>',
-      '<select class="workspace-form-select" onchange="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapedName + '&quot;, this.value)">',
+      '<select class="workspace-form-select" data-action="wsBlocks.formDraft" data-event="change" data-form-id="' + escapeHtml(formId) + '" data-field-name="' + escapedName + '">',
       optionsHtml,
       '</select>',
       '</label>',
@@ -203,7 +203,7 @@ function renderWorkspaceField(agent, field, draft, formId) {
         '<span class="workspace-form-label">' + escapedLabel + '</span>',
         '<div class="workspace-form-directory-picker">',
         '<input class="workspace-form-input" type="text" value="' + escapeHtml(displayedValue || t('workspace_directory_not_selected')) + '" readonly data-workspace-form-display="' + escapeHtml(formId + ':' + escapedName) + '">',
-        '<button class="workspace-action" type="button" onclick="window.chooseWorkspaceDirectory(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapedName + '&quot;)">' + escapeHtml(t('workspace_pick_directory')) + '</button>',
+        '<button class="workspace-action" type="button" data-action="wsBlocks.chooseDirectory" data-form-id="' + escapeHtml(formId) + '" data-field-name="' + escapedName + '">' + escapeHtml(t('workspace_pick_directory')) + '</button>',
         '</div>',
         '<div class="workspace-form-note">' + escapeHtml(t('workspace_pick_directory_hint')) + '</div>',
         '</label>',
@@ -220,7 +220,7 @@ function renderWorkspaceField(agent, field, draft, formId) {
         '<span class="workspace-form-label">' + escapedLabel + '</span>',
         '<div class="workspace-form-directory-picker">',
         '<input class="workspace-form-input" type="text" value="' + escapeHtml(displayedValue || t('workspace_directory_not_selected')) + '" readonly data-workspace-form-display="' + escapeHtml(formId + ':' + escapedName) + '">',
-        '<button class="workspace-action" type="button" onclick="window.chooseWorkspaceDirectory(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapedName + '&quot;)">' + escapeHtml(t('workspace_pick_directory')) + '</button>',
+        '<button class="workspace-action" type="button" data-action="wsBlocks.chooseDirectory" data-form-id="' + escapeHtml(formId) + '" data-field-name="' + escapedName + '">' + escapeHtml(t('workspace_pick_directory')) + '</button>',
         '</div>',
         '<div class="workspace-form-note">' + escapeHtml(t('workspace_pick_directory_hint')) + '</div>',
         outputDir ? '<div class="workspace-form-note" data-workspace-output-note="' + escapeHtml(formId) + '">' + escapeHtml(t('feature_creator_output_dir')) + ': ' + escapeHtml(outputDir) + '</div>' : '',
@@ -240,7 +240,7 @@ function renderWorkspaceField(agent, field, draft, formId) {
   return [
     '<label class="workspace-form-field">',
     '<span class="workspace-form-label">' + escapedLabel + '</span>',
-    '<input class="workspace-form-input" type="' + escapeHtml(field.type || 'text') + '" value="' + escapedValue + '" placeholder="' + escapedPlaceholder + '" oninput="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapedName + '&quot;, this.value)">',
+    '<input class="workspace-form-input" type="' + escapeHtml(field.type || 'text') + '" value="' + escapedValue + '" placeholder="' + escapedPlaceholder + '" data-action="wsBlocks.formDraft" data-event="input" data-form-id="' + escapeHtml(formId) + '" data-field-name="' + escapedName + '">',
     '</label>',
   ].join('');
 }
@@ -270,8 +270,8 @@ function renderWorkspaceForm(agent, block) {
     '<div class="workspace-form-actions' + (backAction ? ' spread' : '') + '">',
     backAction ? '<div>' + backAction + '</div>' : '',
     '<div class="workspace-actions">',
-    '<button class="workspace-action" type="button" data-workspace-form-id="' + escapeHtml(formId) + '" data-workspace-submit-action="' + submitAction + '" onclick="window.saveWorkspaceForm(this.dataset.workspaceFormId, this.dataset.workspaceSubmitAction)">' + escapeHtml(t('workspace_form_save')) + '</button>',
-    '<button class="workspace-action" type="button" data-workspace-form-id="' + escapeHtml(formId) + '" onclick="window.resetWorkspaceForm(this.dataset.workspaceFormId)">' + escapeHtml(t('workspace_form_reset')) + '</button>',
+    '<button class="workspace-action" type="button" data-workspace-form-id="' + escapeHtml(formId) + '" data-workspace-submit-action="' + submitAction + '" data-action="wsBlocks.saveForm">' + escapeHtml(t('workspace_form_save')) + '</button>',
+    '<button class="workspace-action" type="button" data-workspace-form-id="' + escapeHtml(formId) + '" data-action="wsBlocks.resetForm">' + escapeHtml(t('workspace_form_reset')) + '</button>',
     '</div>',
     '</div>',
     '<div class="workspace-form-note">' + escapeHtml(t('workspace_form_saved')) + '</div>',
@@ -397,7 +397,7 @@ function renderWorkspaceStatusGrid(agent, block) {
     '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
     '<div class="workspace-section-desc">' + escapeHtml(desc) + '</div>',
     '</div>',
-    '<button class="workspace-action" type="button" data-workspace-action="{&quot;type&quot;:&quot;show_chat&quot;}" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (canOpenChat ? '' : ' disabled') + '>' + escapeHtml(t('workspace_open_chat')) + '</button>',
+    '<button class="workspace-action" type="button" data-workspace-action="{&quot;type&quot;:&quot;show_chat&quot;}" data-action="wsBlocks.workspaceAction"' + (canOpenChat ? '' : ' disabled') + '>' + escapeHtml(t('workspace_open_chat')) + '</button>',
     '</div>',
     '<div class="workspace-grid">' + cardsHtml + '</div>',
     directorySummary ? renderDirectorySummaryPanel(agent, block) : '',
@@ -746,7 +746,7 @@ function renderFeatureRepositoryBlock(agent, block) {
     ];
 
     return [
-      '<article class="workspace-repo-card" role="button" tabindex="0" data-feature-repo-package-id="' + escapeHtml(item.id) + '" onclick="window.openRepositoryPackageDetails(&quot;' + escapeHtml(item.id) + '&quot;)" title="' + escapeHtml(getRepoLocaleText('查看详情', 'View Details')) + '">',
+      '<article class="workspace-repo-card" role="button" tabindex="0" data-feature-repo-package-id="' + escapeHtml(item.id) + '" data-action="wsBlocks.repoDetails" data-package-id="' + escapeHtml(item.id) + '" title="' + escapeHtml(getRepoLocaleText('查看详情', 'View Details')) + '">',
       '<div class="workspace-repo-head">',
       '<div class="workspace-repo-title-wrap">',
       '<div class="workspace-repo-title">' + escapeHtml(item.name || item.id) + '</div>',
@@ -765,7 +765,7 @@ function renderFeatureRepositoryBlock(agent, block) {
       '<div class="workspace-repo-preview">' + escapeHtml(getRepoLocaleText('归档', 'Archives')) + ': ' + escapeHtml(String(item.archiveCount || versions.length || 0)) + ' · ' + escapeHtml(getRepoLocaleText('更新', 'Updated')) + ': ' + escapeHtml(formatWorkspaceDate(item.updatedAt)) + '</div>',
       previewTags.length > 0 ? '<div class="workspace-tag-list">' + previewTags.map((tag) => '<span class="workspace-tag">' + escapeHtml(tag) + '</span>').join('') + '</div>' : '',
       (selectionFormId && selectionField)
-        ? '<div class="workspace-repo-actions"><button class="workspace-action' + (isSelected ? ' secondary' : '') + '" type="button" onclick="event.stopPropagation(); window.toggleWorkspaceSelection(&quot;' + escapeHtml(selectionFormId) + '&quot;, &quot;' + escapeHtml(selectionField) + '&quot;, &quot;' + escapeHtml(packageToken) + '&quot;)">' + escapeHtml(isSelected ? getRepoLocaleText('停用', 'Disable') : getRepoLocaleText('启用', 'Enable')) + '</button></div>'
+        ? '<div class="workspace-repo-actions"><button class="workspace-action' + (isSelected ? ' secondary' : '') + '" type="button" data-action="wsBlocks.toggleSelection" data-selection-form-id="' + escapeHtml(selectionFormId) + '" data-selection-field="' + escapeHtml(selectionField) + '" data-selection-token="' + escapeHtml(packageToken) + '">' + escapeHtml(isSelected ? getRepoLocaleText('停用', 'Disable') : getRepoLocaleText('启用', 'Enable')) + '</button></div>'
         : '',
       '</article>',
     ].join('');
@@ -796,14 +796,14 @@ function renderFeatureRepositoryBlock(agent, block) {
     const isSelected = selectedValues ? selectedValues.has(selectedToken) || selectedValues.has(selectedPackage.packageName || '') : false;
 
     return [
-      '<div class="feature-detail-overlay" role="presentation" onclick="if (event.target === this) window.closeRepositoryPackageDetails()">',
+      '<div class="feature-detail-overlay" role="presentation" data-action="wsBlocks.repoDetailsClose">',
       '<div class="feature-detail-window" role="dialog" aria-modal="true">',
       '<div class="feature-detail-head">',
       '<div>',
       '<div class="feature-detail-title">' + escapeHtml(selectedPackage.name || selectedPackage.id) + '</div>',
       '<div class="feature-detail-subtitle">' + escapeHtml(selectedPackage.packageName || selectedPackage.id) + '</div>',
       '</div>',
-      '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="window.closeRepositoryPackageDetails()">×</button>',
+      '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="wsBlocks.repoDetailsCloseBtn">×</button>',
       '</div>',
       '<div class="feature-detail-stats">',
       '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(getRepoLocaleText('来源', 'Source')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(selectedPackage.source === 'official' ? getRepoLocaleText('官方', 'Official') : getRepoLocaleText('自定义', 'Custom')) + '</div></div>',
@@ -827,7 +827,7 @@ function renderFeatureRepositoryBlock(agent, block) {
       versions.length > 0 ? '<div class="feature-panel-section"><div class="feature-panel-section-title">' + escapeHtml(getRepoLocaleText('版本', 'Versions')) + '</div><div class="workspace-tag-list">' + versions.map((version) => '<span class="workspace-tag">' + escapeHtml(`v${version.version || '-'} · ${version.fileName}`) + '</span>').join('') + '</div></div>' : '',
       warnings.length > 0 ? '<div class="feature-panel-section"><div class="feature-panel-section-title">' + escapeHtml(getRepoLocaleText('警告', 'Warnings')) + '</div><div class="workspace-repo-warning">' + warnings.map((warning) => escapeHtml(warning)).join('<br>') + '</div></div>' : '',
       (selectionFormId && selectionField)
-        ? '<div class="feature-panel-section"><div class="feature-panel-section-title">' + escapeHtml(getRepoLocaleText('装配动作', 'Assembly Action')) + '</div><div class="workspace-repo-actions"><button class="workspace-action' + (isSelected ? ' secondary' : '') + '" type="button" onclick="window.toggleWorkspaceSelection(&quot;' + escapeHtml(selectionFormId) + '&quot;, &quot;' + escapeHtml(selectionField) + '&quot;, &quot;' + escapeHtml(selectedToken) + '&quot;)">' + escapeHtml(isSelected ? getRepoLocaleText('从当前装配移除', 'Remove From Assembly') : getRepoLocaleText('挂到当前装配', 'Enable For Assembly')) + '</button></div></div>'
+        ? '<div class="feature-panel-section"><div class="feature-panel-section-title">' + escapeHtml(getRepoLocaleText('装配动作', 'Assembly Action')) + '</div><div class="workspace-repo-actions"><button class="workspace-action' + (isSelected ? ' secondary' : '') + '" type="button" data-action="wsBlocks.toggleSelection" data-selection-form-id="' + escapeHtml(selectionFormId) + '" data-selection-field="' + escapeHtml(selectionField) + '" data-selection-token="' + escapeHtml(selectedToken) + '">' + escapeHtml(isSelected ? getRepoLocaleText('从当前装配移除', 'Remove From Assembly') : getRepoLocaleText('挂到当前装配', 'Enable For Assembly')) + '</button></div></div>'
         : '',
       linksHtml ? '<div class="feature-panel-section"><div class="feature-panel-section-title">' + escapeHtml(getRepoLocaleText('链接', 'Links')) + '</div><div class="workspace-repo-actions">' + linksHtml + '</div></div>' : '',
       '</div>',
@@ -845,13 +845,13 @@ function renderFeatureRepositoryBlock(agent, block) {
     '</div>',
     '<div class="workspace-repo-summary">' + summaryHtml + '</div>',
     '<div class="assembly-source-tabs">',
-    '<button class="assembly-source-tab' + (repoSourceFilter === 'all' ? ' active' : '') + '" type="button" onclick="window.setRepoSourceFilter(&quot;all&quot;)">' + escapeHtml(getRepoLocaleText('全部', 'All')) + ' (' + (officialCount + customCount) + ')</button>',
-    '<button class="assembly-source-tab' + (repoSourceFilter === 'official' ? ' active' : '') + '" type="button" onclick="window.setRepoSourceFilter(&quot;official&quot;)">' + escapeHtml(getRepoLocaleText('官方', 'Official')) + ' (' + officialCount + ')</button>',
-    '<button class="assembly-source-tab' + (repoSourceFilter === 'custom' ? ' active' : '') + '" type="button" onclick="window.setRepoSourceFilter(&quot;custom&quot;)">' + escapeHtml(getRepoLocaleText('自定义', 'Custom')) + ' (' + customCount + ')</button>',
+    '<button class="assembly-source-tab' + (repoSourceFilter === 'all' ? ' active' : '') + '" type="button" data-action="wsBlocks.repoFilter" data-source="all">' + escapeHtml(getRepoLocaleText('全部', 'All')) + ' (' + (officialCount + customCount) + ')</button>',
+    '<button class="assembly-source-tab' + (repoSourceFilter === 'official' ? ' active' : '') + '" type="button" data-action="wsBlocks.repoFilter" data-source="official">' + escapeHtml(getRepoLocaleText('官方', 'Official')) + ' (' + officialCount + ')</button>',
+    '<button class="assembly-source-tab' + (repoSourceFilter === 'custom' ? ' active' : '') + '" type="button" data-action="wsBlocks.repoFilter" data-source="custom">' + escapeHtml(getRepoLocaleText('自定义', 'Custom')) + ' (' + customCount + ')</button>',
     '</div>',
     '<div class="assembly-capability-topbar" style="margin-bottom:14px;">',
-    '<input class="assembly-search-input" style="flex:1 1 280px;min-height:40px;" type="text" value="' + escapeHtml(repoSearchQuery) + '" placeholder="' + escapeHtml(getRepoLocaleText('按名称、说明或标签搜索', 'Search by name, description, or tags')) + '" oninput="repoSearchQuery=this.value.trim().toLowerCase()" onblur="window.setRepoSearchQuery(this.value)" onkeydown="if(event.key===&quot;Enter&quot;){event.preventDefault();window.setRepoSearchQuery(this.value);}" >',
-    '<button class="workspace-action" type="button" onclick="window.openFeatureUploadDialog()">' + escapeHtml(getRepoLocaleText('上传 tgz', 'Upload tgz')) + '</button>',
+    '<input class="assembly-search-input" style="flex:1 1 280px;min-height:40px;" type="text" value="' + escapeHtml(repoSearchQuery) + '" placeholder="' + escapeHtml(getRepoLocaleText('按名称、说明或标签搜索', 'Search by name, description, or tags')) + '" data-action="wsBlocks.repoSearch" data-event="input keydown focusout" >',
+    '<button class="workspace-action" type="button" data-action="wsBlocks.openFeatureUpload">' + escapeHtml(getRepoLocaleText('上传 tgz', 'Upload tgz')) + '</button>',
     '</div>',
     '<div class="workspace-repo-list">' + packagesHtml + '</div>',
     detailHtml,
@@ -866,3 +866,35 @@ function renderFeatureRepositoryBlock(agent, block) {
 function renderAssemblyWorkbenchBlock(agent, block) {
   return renderAssemblyWorkbenchStageFlow(agent, block);
 }
+
+// 工作空间表单与功能仓库动作（原内联 onclick/oninput/onchange/onblur/onkeydown，统一经分发器）。
+// 跨模块函数仍经 window 转调：定义域在 app-main / app-ui / debug-overview / im-actions，
+// 随各自模块的批次收敛。
+window.ClawFW.actions.registerMany({
+  'wsBlocks.workspaceAction': (el) => window.runWorkspaceAction(el.dataset.workspaceAction, el),
+  'wsBlocks.openIMChannelConfig': () => window.openIMChannelConfig(),
+  'wsBlocks.formDraft': (el) => window.updateWorkspaceFormDraft(el.dataset.formId, el.dataset.fieldName, el.value),
+  'wsBlocks.chooseDirectory': (el) => window.chooseWorkspaceDirectory(el.dataset.formId, el.dataset.fieldName),
+  'wsBlocks.saveForm': (el) => window.saveWorkspaceForm(el.dataset.workspaceFormId, el.dataset.workspaceSubmitAction),
+  'wsBlocks.resetForm': (el) => window.resetWorkspaceForm(el.dataset.workspaceFormId),
+  'wsBlocks.repoDetails': (el) => window.openRepositoryPackageDetails(el.dataset.packageId),
+  'wsBlocks.toggleSelection': (el) => window.toggleWorkspaceSelection(el.dataset.selectionFormId, el.dataset.selectionField, el.dataset.selectionToken),
+  'wsBlocks.repoDetailsClose': (el, event) => {
+    // 原 overlay 内联守卫：仅点击背景自身时关闭，内部内容冒泡不触发。
+    if (event.target === el) window.closeRepositoryPackageDetails();
+  },
+  'wsBlocks.repoDetailsCloseBtn': () => window.closeRepositoryPackageDetails(),
+  'wsBlocks.repoFilter': (el) => window.setRepoSourceFilter(el.dataset.source),
+  'wsBlocks.repoSearch': (el, event) => {
+    // 输入即时过滤（写 app-core 全局过滤词）；Enter 与失焦提交（经 setter 触发重渲染）。
+    if (event.type === 'keydown') {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      window.setRepoSearchQuery(el.value);
+      return;
+    }
+    if (event.type === 'focusout') { window.setRepoSearchQuery(el.value); return; }
+    repoSearchQuery = el.value.trim().toLowerCase();
+  },
+  'wsBlocks.openFeatureUpload': () => window.openFeatureUploadDialog(),
+});

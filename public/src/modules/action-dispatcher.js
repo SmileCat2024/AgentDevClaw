@@ -59,6 +59,10 @@ window.ClawFW = window.ClawFW || {};
       if (name) {
         const declared = node.getAttribute('data-event');
         if (declared && !declared.trim().split(/\s+/).includes(event.type)) return false;
+        // focusout 是失焦补充时机（blur 不冒泡的委托替代），只服务显式声明
+        // 了 data-event 含 focusout 的元素。未声明的元素响应它会复现「渲染
+        // 替换 DOM → 焦点元素失焦 → 委托重入渲染」的循环（历史事故）。
+        if (event.type === 'focusout' && !declared) return false;
         if (event.type === 'keydown' && node.hasAttribute('data-key-activate')) {
           // 仅元素自身聚焦时激活：内部可聚焦子元素（如行内 button）的按键
           // 不得触发菜单项动作，preventDefault 也不得吞掉其原生 Space click。

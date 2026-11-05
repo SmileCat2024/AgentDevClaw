@@ -525,6 +525,7 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
       function poll() {}
       function newIdempotencyKey() { return 'k'; }
     `);
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/choice-input.js');
     // 真实模块以 window.* 注册 choice 判定；vm 沙箱的 bare-name 解析走
     // 上下文全局，这里把真实实现接管回来（浏览器里 window 即全局）。
@@ -544,18 +545,18 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     assert.equal(choiceRenders, 0, 'renderChoiceInputRequest is stubbed for counting');
 
     // 选项交互：状态写入 + 声明 → 选择卡重建（经唯一入口）
-    ctx.run(`window.selectChoiceOption('choice-1', 1)`);
+    ctx.run(`window.ClawFW.actions.invoke('choice.selectOption', { dataset: { requestId: 'choice-1', optionIndex: '1' } })`);
     assert.ok(choiceRenders >= 1, 'option interaction re-renders the choice card');
     assert.equal(ctx.run(`choiceInputState['choice-1'].selectedIndex`), 1);
 
     // 展开/收起：状态入签名，声明即重建
     const rendersBeforeCollapse = choiceRenders;
-    ctx.run(`window.toggleChoiceContext('choice-1')`);
+    ctx.run(`window.ClawFW.actions.invoke('choice.toggleContext', { dataset: { requestId: 'choice-1' } })`);
     assert.ok(choiceRenders > rendersBeforeCollapse, 'context toggle re-renders via the single entry');
 
     // 拒绝（跳过并打断）：本地立即恢复普通输入面，不等网络。
     ctx.fetch = async () => { throw new Error('reject must restore input before any network'); };
-    await ctx.run(`window.rejectChoiceRequest('choice-1')`);
+    await ctx.run(`window.ClawFW.actions.invoke('choice.reject', { dataset: { requestId: 'choice-1' } })`);
     assert.equal(ctx.run(
       "document.getElementById('user-input-container').querySelector('[data-persistent-composer]') !== null",
     ), true, 'reject restores the persistent composer immediately');
@@ -569,6 +570,7 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
       function poll() {}
       function newIdempotencyKey() { return 'k'; }
     `);
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/choice-input.js');
     ctx.run(`
       isChoiceInputRejected = window.isChoiceInputRejected;
@@ -584,7 +586,7 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
 
     // 提交答案（单题即最后一题）：POST 成功后交互状态清理、lease 登记 consumed。
     ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
-    await ctx.run(`window.confirmChoiceQuestion('choice-2')`);
+    await ctx.run(`window.ClawFW.actions.invoke('choice.confirm', { dataset: { requestId: 'choice-2' } })`);
     assert.equal(ctx.run(`choiceInputState['choice-2']`), undefined, 'interaction state cleared on submit');
     assert.equal(ctx.run(`window.isChoiceInputConsumed('choice-2')`), true, 'submitted lease registered as consumed');
     assert.equal(composerMode(ctx), 'persistent', 'choice card closes immediately after submit success');

@@ -16,20 +16,10 @@
  *   renderChoiceInputRequest, rerenderChoiceRequest, collapsePrimaryChoiceRequest,
  *   getChoiceInteractionSignature
  * window 函数:
- *   isChoiceInputConsumed, selectChoiceOption, collapseChoiceRequest,
- *   expandChoiceRequest, updateChoiceCustomText, handleChoiceKey,
- *   handleChoiceCustomKey, confirmChoiceQuestion, toggleChoiceContext,
- *   rejectChoiceRequest
- * HTML onclick 引用:
- *   onclick="selectChoiceOption(...)"
- *   onclick="collapseChoiceRequest(...)"
- *   onclick="expandChoiceRequest(...)"
- *   onclick="confirmChoiceQuestion(...)"
- *   onclick="toggleChoiceContext(...)"
- *   onclick="rejectChoiceRequest(...)"
- *   onkeydown="handleChoiceKey(...)"
- *   onkeydown="handleChoiceCustomKey(...)"
- *   oninput="updateChoiceCustomText(...)"
+ *   isChoiceInputConsumed（input-composer / input-render 消费）
+ * 事件接线（data-action=choice.*，经 ClawFW.actions 分发）:
+ *   selectOption / customInput / cardKey / toggleContext /
+ *   collapse / expand / reject / confirm —— 注册见文件尾部
  */
 
 const _rejectedRequests = new Set();
@@ -122,7 +112,8 @@ function renderChoiceInputRequest(container, req) {
     const mini = document.createElement('button');
     mini.className = 'user-choice-mini';
     mini.type = 'button';
-    mini.setAttribute('onclick', `expandChoiceRequest('${req.requestId}')`);
+    mini.dataset.action = 'choice.expand';
+    mini.dataset.requestId = req.requestId;
     mini.innerHTML = `
       <span class="user-choice-mini-title">${escapeHtml(req.prompt || '等待你的选择')}</span>
       <span class="user-choice-mini-meta">${Math.min((state.questionIndex || 0) + 1, questions.length)} / ${questions.length}</span>
@@ -147,10 +138,11 @@ function renderChoiceInputRequest(container, req) {
   card.className = 'user-input-card user-choice-card' + (contextOpen ? ' context-open' : '');
   card.tabIndex = 0;
   card.dataset.requestId = req.requestId;
-  card.setAttribute('onkeydown', `handleChoiceKey(event, '${req.requestId}')`);
+  card.dataset.action = 'choice.cardKey';
+  card.dataset.event = 'keydown';
 
   const optionHtml = options.map((option, index) => `
-    <button class="user-choice-option ${index === state.selectedIndex ? 'active' : ''}" type="button" onclick="selectChoiceOption('${req.requestId}', ${index})">
+    <button class="user-choice-option ${index === state.selectedIndex ? 'active' : ''}" type="button" data-action="choice.selectOption" data-request-id="${escapeHtml(req.requestId)}" data-option-index="${index}">
       <span class="user-choice-key">${index + 1}</span>
       <span>
         <span class="user-choice-label">${escapeHtml(option.label || option.id || ('选项 ' + (index + 1)))}</span>
@@ -163,7 +155,7 @@ function renderChoiceInputRequest(container, req) {
   const customActive = hasCustom && state.selectedIndex === customIndex;
   const customText = state.customTextByQuestion[question.id] || '';
   const customHtml = hasCustom ? `
-    <button class="user-choice-option ${customActive ? 'active' : ''}" type="button" onclick="selectChoiceOption('${req.requestId}', ${customIndex})">
+    <button class="user-choice-option ${customActive ? 'active' : ''}" type="button" data-action="choice.selectOption" data-request-id="${escapeHtml(req.requestId)}" data-option-index="${customIndex}">
       <span class="user-choice-key">${customIndex + 1}</span>
       <span>
         <span class="user-choice-label">${escapeHtml(question.customLabel || '其他，我想补充')}</span>
@@ -172,8 +164,7 @@ function renderChoiceInputRequest(container, req) {
     </button>
     <div class="user-choice-custom ${customActive ? 'active' : ''}">
       <textarea id="choice-custom-${req.requestId}" rows="2"
-        oninput="updateChoiceCustomText('${req.requestId}', this.value); autoResize(this)"
-        onkeydown="handleChoiceCustomKey(event, '${req.requestId}')"
+        data-action="choice.customInput" data-event="input keydown" data-request-id="${escapeHtml(req.requestId)}"
         placeholder="${escapeHtml(question.customPlaceholder || '输入你的补充内容')}">${escapeHtml(customText)}</textarea>
     </div>
   ` : '';
@@ -184,7 +175,7 @@ function renderChoiceInputRequest(container, req) {
       <aside class="user-choice-context">
         <div class="user-choice-context-head">
           <span class="user-choice-context-label">决策背景</span>
-          <button class="user-choice-context-hide" type="button" onclick="toggleChoiceContext('${req.requestId}')">◀ 收起</button>
+          <button class="user-choice-context-hide" type="button" data-action="choice.toggleContext" data-request-id="${escapeHtml(req.requestId)}">◀ 收起</button>
         </div>
         <div class="user-choice-context-body">${escapeHtml(promptText)}</div>
       </aside>
@@ -192,14 +183,14 @@ function renderChoiceInputRequest(container, req) {
       <div class="user-choice-main">
         <div class="user-choice-head">
           ${hasContext && !contextOpen ? `
-            <button class="user-choice-context-btn" type="button" onclick="toggleChoiceContext('${req.requestId}')">
+            <button class="user-choice-context-btn" type="button" data-action="choice.toggleContext" data-request-id="${escapeHtml(req.requestId)}">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
               <span>查看背景</span>
             </button>
           ` : '<span></span>'}
           <div class="user-choice-head-actions">
             <span class="user-choice-progress">${questionIndex + 1} / ${questions.length}</span>
-            <button class="user-choice-close" type="button" title="临时收起" onclick="collapseChoiceRequest('${req.requestId}')">×</button>
+            <button class="user-choice-close" type="button" title="临时收起" data-action="choice.collapse" data-request-id="${escapeHtml(req.requestId)}">×</button>
           </div>
         </div>
         <div class="user-choice-question">${escapeHtml(question.question || '')}</div>
@@ -209,10 +200,10 @@ function renderChoiceInputRequest(container, req) {
         </div>
         <div class="user-choice-footer">
           <div class="user-choice-footer-left">
-            <button class="user-choice-reject" type="button" onclick="rejectChoiceRequest('${req.requestId}')">跳过并打断</button>
+            <button class="user-choice-reject" type="button" data-action="choice.reject" data-request-id="${escapeHtml(req.requestId)}">跳过并打断</button>
             <span class="user-choice-hint">↑↓ 选项，←→ 题目，Enter 确认</span>
           </div>
-          <button class="user-choice-submit" type="button" onclick="confirmChoiceQuestion('${req.requestId}')">${questionIndex + 1 === questions.length ? '提交' : '下一题'}</button>
+          <button class="user-choice-submit" type="button" data-action="choice.confirm" data-request-id="${escapeHtml(req.requestId)}">${questionIndex + 1 === questions.length ? '提交' : '下一题'}</button>
         </div>
       </div>
     </div>
@@ -242,7 +233,7 @@ function rerenderChoiceRequest(requestId) {
   notifyInputSurfaceChanged(currentInputRequests || []);
 }
 
-window.selectChoiceOption = function(requestId, optionIndex) {
+function selectChoiceOption(requestId, optionIndex) {
   const req = getChoiceRequestById(requestId);
   const state = getChoiceState(requestId);
   state.selectedIndex = optionIndex;
@@ -253,13 +244,13 @@ window.selectChoiceOption = function(requestId, optionIndex) {
   rerenderChoiceRequest(requestId);
 };
 
-window.toggleChoiceContext = function(requestId) {
+function toggleChoiceContext(requestId) {
   const state = getChoiceState(requestId);
   state.contextExpanded = !state.contextExpanded;
   rerenderChoiceRequest(requestId);
 };
 
-window.rejectChoiceRequest = async function(requestId) {
+async function rejectChoiceRequest(requestId) {
   _rejectedRequests.add(requestId);
   const card = document.querySelector(`.user-choice-card[data-request-id="${requestId}"]`);
   if (card) card.classList.add('is-rejecting');
@@ -289,7 +280,7 @@ window.rejectChoiceRequest = async function(requestId) {
   poll();
 };
 
-window.collapseChoiceRequest = function(requestId) {
+function collapseChoiceRequest(requestId) {
   const state = getChoiceState(requestId);
   const req = getChoiceRequestById(requestId);
   rememberCurrentChoice(req, state);
@@ -297,7 +288,7 @@ window.collapseChoiceRequest = function(requestId) {
   rerenderChoiceRequest(requestId);
 };
 
-window.expandChoiceRequest = function(requestId) {
+function expandChoiceRequest(requestId) {
   const state = getChoiceState(requestId);
   state.collapsed = false;
   rerenderChoiceRequest(requestId);
@@ -306,11 +297,11 @@ window.expandChoiceRequest = function(requestId) {
 function collapsePrimaryChoiceRequest() {
   const request = (currentInputRequests || []).find(isChoiceInputRequest);
   if (request) {
-    window.collapseChoiceRequest(request.requestId);
+    collapseChoiceRequest(request.requestId);
   }
 }
 
-window.updateChoiceCustomText = function(requestId, value) {
+function updateChoiceCustomText(requestId, value) {
   const req = getChoiceRequestById(requestId);
   const state = getChoiceState(requestId);
   const question = req?.questions?.[state.questionIndex];
@@ -319,7 +310,7 @@ window.updateChoiceCustomText = function(requestId, value) {
   }
 };
 
-window.handleChoiceKey = function(event, requestId) {
+function handleChoiceKey(event, requestId) {
   const req = getChoiceRequestById(requestId);
   if (!req) return;
   // Smart boundary: only intercept arrow keys when cursor is at the edge of textarea content
@@ -373,14 +364,14 @@ window.handleChoiceKey = function(event, requestId) {
   }
 };
 
-window.handleChoiceCustomKey = function(event, requestId) {
+function handleChoiceCustomKey(event, requestId) {
   if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey) {
     event.preventDefault();
     confirmChoiceQuestion(requestId);
   }
 };
 
-window.confirmChoiceQuestion = async function(requestId) {
+async function confirmChoiceQuestion(requestId) {
   const req = getChoiceRequestById(requestId);
   if (!req) return;
   const state = getChoiceState(requestId);
@@ -435,3 +426,19 @@ window.confirmChoiceQuestion = async function(requestId) {
     console.error('提交选择失败:', e);
   }
 };
+
+// 选择卡动作（原内联 onclick/onkeydown/oninput 与 setAttribute 注入，统一经分发器）
+window.ClawFW.actions.registerMany({
+  'choice.selectOption': (el) => selectChoiceOption(el.dataset.requestId, Number(el.dataset.optionIndex)),
+  'choice.customInput': (el, event) => {
+    if (event.type === 'keydown') { handleChoiceCustomKey(event, el.dataset.requestId); return; }
+    updateChoiceCustomText(el.dataset.requestId, el.value);
+    autoResize(el);
+  },
+  'choice.cardKey': (el, event) => handleChoiceKey(event, el.dataset.requestId),
+  'choice.toggleContext': (el) => toggleChoiceContext(el.dataset.requestId),
+  'choice.collapse': (el) => collapseChoiceRequest(el.dataset.requestId),
+  'choice.expand': (el) => expandChoiceRequest(el.dataset.requestId),
+  'choice.reject': (el) => rejectChoiceRequest(el.dataset.requestId),
+  'choice.confirm': (el) => confirmChoiceQuestion(el.dataset.requestId),
+});
