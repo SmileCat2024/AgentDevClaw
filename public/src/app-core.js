@@ -679,6 +679,10 @@ let imWorkspaceState = {
   error: '',
   savedAt: null,
   weixinQrDialogOpen: false,
+  // 可绑定线程清单（/protoclaw/im_routable_targets 的派生投影）。线路的
+  // 目标下拉从这里取，不是配置事实；请求句柄同域存放。
+  routableTargets: null,
+  routableTargetsRequest: null,
 };
 let imWorkspaceRequest = null;
 let imWorkspaceAutoSaveTimer = null;

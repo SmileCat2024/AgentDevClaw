@@ -7,16 +7,19 @@
  * 依赖全局函数 (定义在 app-ui.js / modules):
  *   normalizeQQBotConfigData, getQQBotConfigDraft, ensureQQBotConfigLoaded,
  *   normalizeIMWorkspaceBundleData, getIMWorkspaceDraft, renderCurrentMainView,
- *   loadAgents
+ *   loadAgents, ensureIMWorkspaceLoaded, ensureIMRoutableTargetsLoaded,
+ *   imParseLineTargetValue
+ * 依赖全局能力（thread-store.js）:
+ *   refreshThreads, openConversationTarget
  * 导出全局函数 (window.*):
  *   updateQQBotConfigDraft, updateIMWorkspaceField, updateIMQQConfigDraft,
  *   updateIMFeishuConfigDraft,
  *   scheduleIMWorkspaceAutoSave, reloadIMWorkspaceConfig, saveIMWorkspaceConfig,
- *   createReceptionistSession, handleLineCarrierChange, handleLineSessionChange,
- *   launchReceptionistSession, startWeixinBinding, refreshWeixinBinding,
+ *   launchOperatorConversation, handleLineCarrierChange, handleLineTargetChange,
+ *   startWeixinBinding, refreshWeixinBinding,
  *   logoutWeixinBinding, showWeixinQrCodeDialog, closeWeixinQrCodeDialog,
  *   openIMChannelConfig, closeIMChannelConfig, openIMChannelDetail,
- *   closeIMChannelDetail, toggleIMDropdown, imSelectChannel, imSelectLine,
+ *   closeIMChannelDetail, toggleIMDropdown, imSelectLine,
  *   togglePortalAgentAutostart, reloadQQBotConfig, saveQQBotConfig
  */
 
@@ -166,31 +169,72 @@ window.saveIMWorkspaceConfig = async () => {
 
 window._creatingReceptionistSession = false;
 
-window.createReceptionistSession = async (triggerButton) => {
+/**
+ * 门户接线员对话入口（ADR-0042 决策 5）：start = 复用现有接线员线程
+ * （必要时建首代），new = 新建一代并归档旧线程。
+ *
+ * 为什么不再走 create_session + 回写 receptionistSessionId：qqbot 声明了
+ * threadHost，create_session 本身就会建线程，与 im_operator/conversation/*
+ * 成为两套并存入口——同一次点击多造一条线程。这里统一交给服务端事务，
+ * 拿到 threadId 后以线程锚导航（与 memo 首页同一条 start_app_conversation
+ * 通道的导航语义）。
+ */
+window.launchOperatorConversation = async (isNew, triggerButton) => {
+  if (window._creatingReceptionistSession) return;
   window._creatingReceptionistSession = true;
   if (triggerButton) markActionLoading(triggerButton);
+  renderCurrentMainView();
   try {
-    await window.saveIMWorkspaceConfig();
-    const agent = getCurrentAgentRecord();
-    await window.runWorkspaceAction(JSON.stringify({ type: 'create_session' }), triggerButton);
-    // Update receptionistSessionId to the newly created session
-    if (agent?.id) {
-      const updated = allAgents.find(a => a.id === agent.id);
-      const newActiveId = updated?.active_workspace_session_id || updated?.workspace_sessions?.activeSessionId;
-      if (newActiveId) {
-        window.updateIMWorkspaceField('workspaceConfig.receptionistSessionId', newActiveId);
-        window.saveIMWorkspaceConfig().catch(e => console.warn(e));
-      }
+    const endpoint = isNew
+      ? '/protoclaw/im_operator/conversation/new'
+      : '/protoclaw/im_operator/conversation/start';
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !result?.ok || !result.threadId) {
+      throw new Error(result?.message || result?.code || `HTTP ${response.status}`);
     }
+
+    // 线程事实与 agent 投影先行刷新：openConversationTarget 从 allAgents
+    // 解析 runtime 绑定，新建会话的 child 条目此刻往往尚未被轮询拉到。
+    if (typeof window.refreshThreads === 'function') {
+      await window.refreshThreads(true).catch(() => {});
+    }
+    if (typeof loadAgents === 'function') {
+      await loadAgents().catch(() => {});
+    }
+    // 接线员线程引用可能刚被服务端改写（首代建立 / 换代），重新拉 bundle
+    // 让门户卡与线路显示立即反映新引用。
+    await ensureIMWorkspaceLoaded(true).catch(() => {});
+
+    const opened = await window.openConversationTarget({
+      agentId: String(result.thread?.agentId || 'qqbot').trim(),
+      threadId: result.threadId,
+    });
+    if (!opened?.ok) throw new Error(opened?.reason || 'navigation_failed');
+  } catch (error) {
+    console.error('Failed to launch operator conversation:', error);
+    window.alert((currentLanguage === 'zh' ? '对话启动失败：' : 'Failed to start conversation: ')
+      + (error?.message || error));
   } finally {
     window._creatingReceptionistSession = false;
-    const btn = document.querySelector('.im-new-chat-btn');
-    if (btn) btn.classList.remove('action-loading');
+    if (triggerButton) triggerButton.classList.remove('action-loading');
+    renderCurrentMainView();
   }
 };
 
 window.handleLineCarrierChange = async (lineId, carrier) => {
   if (!lineId) return;
+
+  // 渠道变更必须连带现有绑定一起提交：im_line_transfer 在「只给 carrier
+  // 不给 agentId/threadId」时会把 boundTarget 清成 null，用户换个渠道就
+  // 静默丢绑定。这里把当前绑定原样带上，让服务端只改 carrier。
+  const draft = getIMWorkspaceDraft();
+  const line = (draft.workspaceConfig?.lines || []).find(l => l.id === lineId);
+  const bound = carrier ? (line?.boundTarget || null) : null;
 
   imWorkspaceState.saving = true;
   renderCurrentMainView();
@@ -198,7 +242,11 @@ window.handleLineCarrierChange = async (lineId, carrier) => {
     const response = await fetch('/protoclaw/im_line_transfer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lineId, carrier: carrier || '' }),
+      body: JSON.stringify({
+        lineId,
+        carrier: carrier || '',
+        ...(bound ? { agentId: bound.agentId, threadId: bound.threadId } : {}),
+      }),
     });
     if (!response.ok) throw new Error(await response.text().catch(() => 'Line update failed'));
     const payload = await response.json();
@@ -216,7 +264,14 @@ window.handleLineCarrierChange = async (lineId, carrier) => {
   }
 };
 
-window.handleLineSessionChange = async (lineId, sessionId) => {
+/**
+ * 线路目标变更（ADR-0042 决策 1）：目标是一条线程，寻址为
+ * (agentId, threadId)。空值 = 断开绑定。
+ *
+ * 旧实现把目标当会话（固定 agentId=programming-helper + sessionId），
+ * 服务端要求 agentId + threadId 成对，于是绑定必然 400。
+ */
+window.handleLineTargetChange = async (lineId, targetValue) => {
   if (!lineId) return;
 
   const draft = getIMWorkspaceDraft();
@@ -224,51 +279,44 @@ window.handleLineSessionChange = async (lineId, sessionId) => {
   const carrier = line?.carrier || '';
   if (!carrier) return;
 
+  const { agentId, threadId } = imParseLineTargetValue(targetValue);
+
   imWorkspaceState.saving = true;
   renderCurrentMainView();
   try {
-    if (!sessionId) {
-      // Disconnect session from line
-      const response = await fetch('/protoclaw/im_line_disconnect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineId }),
-      });
-      if (!response.ok) throw new Error(await response.text().catch(() => 'Disconnect failed'));
-      const payload = await response.json();
-      if (payload.bundle) {
-        const bundle = normalizeIMWorkspaceBundleData(payload.bundle);
-        imWorkspaceState.data = bundle;
-        imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
-      }
-    } else {
-      // Transfer line to session
-      const response = await fetch('/protoclaw/im_line_transfer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineId, carrier, agentId: 'programming-helper', sessionId }),
-      });
-      if (!response.ok) throw new Error(await response.text().catch(() => 'Transfer failed'));
-      const payload = await response.json();
-      if (payload.bundle) {
-        const bundle = normalizeIMWorkspaceBundleData(payload.bundle);
-        imWorkspaceState.data = bundle;
-        imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
-      }
+    const request = (!agentId || !threadId)
+      ? fetch('/protoclaw/im_line_disconnect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lineId }),
+        })
+      : fetch('/protoclaw/im_line_transfer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lineId, carrier, agentId, threadId }),
+        });
+    const response = await request;
+    if (!response.ok) {
+      // 服务端在这里会给出可读原因（线程已归档 / 不属于该工作空间等），
+      // 直接透出，不用笼统文案盖掉。
+      const detail = await response.json().catch(() => null);
+      throw new Error(detail?.error || detail?.message || `HTTP ${response.status}`);
     }
+    const payload = await response.json();
+    if (payload.bundle) {
+      const bundle = normalizeIMWorkspaceBundleData(payload.bundle);
+      imWorkspaceState.data = bundle;
+      imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+    }
+    // 绑定变更会影响后续可绑清单的运行时状态标注，刷新一次。
+    await ensureIMRoutableTargetsLoaded(true).catch(() => {});
   } catch (error) {
-    console.error('Failed to update line session:', error);
+    console.error('Failed to update line target:', error);
     imWorkspaceState.error = error && error.message ? error.message : String(error);
   } finally {
     imWorkspaceState.saving = false;
     renderCurrentMainView();
   }
-};
-
-window.launchReceptionistSession = async (sessionId, triggerButton) => {
-  window.updateIMWorkspaceField('workspaceConfig.receptionistSessionId', sessionId);
-  await window.saveIMWorkspaceConfig();
-  await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }), triggerButton);
 };
 
 window.startWeixinBinding = async () => {
@@ -403,29 +451,14 @@ window.toggleIMDropdown = (trigger) => {
   const dropdownType = dropdown.dataset?.dropdownType || '';
   window._imOpenDropdownKey = lineId + ':' + dropdownType;
 
-  // When opening a session dropdown, refresh the bundle to get the latest
-  // connectable sessions (new sessions, runtime state changes, etc.)
-  // Use a soft fetch that doesn't clear existing data, so the dropdown
-  // stays open and populated during the refresh.
-  if (dropdownType === 'session') {
-    fetch('/protoclaw/im_workspace_bundle')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((payload) => {
-        if (!payload) return;
-        const bundle = normalizeIMWorkspaceBundleData(payload);
-        imWorkspaceState.data = bundle;
-        imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
-        renderCurrentMainView();
-      })
-      .catch((e) => console.error('Failed to refresh connectable sessions:', e));
+// When opening a target dropdown, refresh the routable thread list so new
+// threads and runtime state changes show up. Use a soft fetch that keeps the
+// existing draft, so the dropdown stays open and populated during the refresh.
+  if (dropdownType === 'target') {
+    ensureIMRoutableTargetsLoaded(true)
+      .then(() => renderCurrentMainView())
+      .catch((e) => console.error('Failed to refresh routable targets:', e));
   }
-};
-
-window.imSelectChannel = (item, value) => {
-  const dropdown = item.closest('.im-dropdown');
-  if (!dropdown) return;
-  dropdown.classList.remove('open');
-  window.updateIMWorkspaceField('workspaceConfig.selectedChannel', value);
 };
 
 window.imSelectLine = (item, type, lineId) => {
@@ -436,8 +469,8 @@ window.imSelectLine = (item, type, lineId) => {
   const value = item.dataset.value;
   if (type === 'carrier') {
     window.handleLineCarrierChange(lineId, value);
-  } else if (type === 'session') {
-    window.handleLineSessionChange(lineId, value);
+  } else if (type === 'target') {
+    window.handleLineTargetChange(lineId, value);
   }
 };
 

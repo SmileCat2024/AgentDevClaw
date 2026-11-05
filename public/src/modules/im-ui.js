@@ -21,10 +21,17 @@ let IM_CHANNEL_ICONS = {
  * 导出全局函数:
  *   normalizeQQBotConfigData, isQQBotConfigEditor, getQQBotConfigDraft,
  *   ensureQQBotConfigLoaded, normalizeIMWorkspaceBundleData, isIMWorkspaceConfigEditor,
- *   getIMWorkspaceDraft, ensureIMWorkspaceLoaded, renderQQBotConfigField,
- *   renderIMWorkspaceTextField, renderIMWorkspaceSelectField, renderIMWorkspaceInlineSelect,
+ *   getIMWorkspaceDraft, ensureIMWorkspaceLoaded, ensureIMRoutableTargetsLoaded,
+ *   renderQQBotConfigField, renderIMWorkspaceTextField, renderIMWorkspaceSelectField,
  *   renderLineConnectionSection, renderIMWorkspaceConfigEditor,
- *   renderIMChannelConfigDialog, renderWeixinQrCodeDialog
+ *   renderIMChannelConfigDialog, renderWeixinQrCodeDialog,
+ *   imLineTargetValue, imParseLineTargetValue, imOperatorThreadIdOf, isOperatorLine,
+ *   imPortalCarrierOf, imChannelLabel, imChannelConfigured
+ *
+ * 线路与门户的数据形状（ADR-0042）：线路绑定的是线程 boundTarget
+ * (agentId, threadId)，门户渠道 = 绑定接线员线程那条线路的 carrier。
+ * selectedChannel / boundSession / connectableSessions 均已退役，前端不再
+ * 持有或回写——保存时的 PUT 必须原样带上 operatorThreadId 与每行 boundTarget。
  */
 
 function normalizeQQBotConfigData(raw = {}) {
@@ -88,6 +95,121 @@ async function ensureQQBotConfigLoaded(force = false) {
 
   return qqbotConfigRequest;
 }
+/**
+ * 线路绑定的目标（ADR-0042 决策 1）：线程寻址 (agentId, threadId)。
+ * 旧 boundSession（会话寻址）服务端读到即丢弃，前端同样不认——读到就返回
+ * null，避免旧配置在界面上显示成「已连接」而服务端认为未绑。
+ */
+function normalizeIMBoundTarget(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const agentId = typeof raw.agentId === 'string' ? raw.agentId.trim() : '';
+  const threadId = typeof raw.threadId === 'string' ? raw.threadId.trim() : '';
+  if (!agentId || !threadId) return null;
+  return { agentId, threadId };
+}
+
+function normalizeIMBundleLine(line) {
+  return {
+    id: typeof line?.id === 'string' ? line.id : '',
+    label: typeof line?.label === 'string' ? line.label : '',
+    carrier: typeof line?.carrier === 'string' ? line.carrier : '',
+    boundTarget: normalizeIMBoundTarget(line?.boundTarget),
+  };
+}
+
+/** bundle 的 operatorThread 投影（服务端已解析引用，此处只做形状收敛）。 */
+function normalizeOperatorThread(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const threadId = typeof raw.threadId === 'string' ? raw.threadId.trim() : '';
+  if (!threadId) return null;
+  return {
+    threadId,
+    headSessionId: typeof raw.headSessionId === 'string' ? raw.headSessionId : '',
+    title: typeof raw.title === 'string' ? raw.title : '',
+    status: typeof raw.status === 'string' ? raw.status : '',
+  };
+}
+
+/**
+ * 可绑定线程清单（/protoclaw/im_routable_targets）：按工作空间分组的活跃
+ * 线程。线路的第二个下拉从这里选目标——它的形状是线程，不是会话。
+ */
+function normalizeIMRoutableTargets(raw = {}) {
+  const workspaces = Array.isArray(raw?.workspaces) ? raw.workspaces : [];
+  return workspaces.map((ws) => ({
+    agentId: typeof ws?.agentId === 'string' ? ws.agentId : '',
+    agentName: typeof ws?.agentName === 'string' ? ws.agentName : '',
+    threads: (Array.isArray(ws?.threads) ? ws.threads : []).map((t) => ({
+      threadId: typeof t?.threadId === 'string' ? t.threadId : '',
+      agentId: typeof t?.agentId === 'string' ? t.agentId : (typeof ws?.agentId === 'string' ? ws.agentId : ''),
+      title: typeof t?.title === 'string' ? t.title : '',
+      status: typeof t?.status === 'string' ? t.status : '',
+      execStatus: typeof t?.execStatus === 'string' ? t.execStatus : 'idle',
+      updatedAt: typeof t?.updatedAt === 'number' ? t.updatedAt : null,
+    })).filter((t) => t.threadId),
+  })).filter((ws) => ws.agentId && ws.threads.length > 0);
+}
+
+/** 当前草稿里的接线员线程 id（线路「是否接线员线路」的唯一判据）。 */
+function imOperatorThreadIdOf(draft) {
+  return String(draft?.workspaceConfig?.operatorThreadId || '').trim();
+}
+
+/** 该线路是否即接线员线路：boundTarget 指向 operatorThreadId。 */
+function isOperatorLine(draft, line) {
+  const operatorThreadId = imOperatorThreadIdOf(draft);
+  if (!operatorThreadId) return false;
+  return String(line?.boundTarget?.threadId || '') === operatorThreadId;
+}
+
+/**
+ * 门户当前渠道（ADR-0042 决策 1）：接线员线路里第一条选了 carrier 的渠道。
+ * 服务端 operatorCarrierOf 的前端同构——界面所有「门户在哪个渠道工作」的
+ * 显示都从这里取，不再有独立的 selectedChannel 概念。
+ */
+function imPortalCarrierOf(draft) {
+  const lines = Array.isArray(draft?.workspaceConfig?.lines) ? draft.workspaceConfig.lines : [];
+  const operatorLine = lines.find((line) => isOperatorLine(draft, line)
+    && typeof line?.carrier === 'string' && line.carrier.trim());
+  return operatorLine ? operatorLine.carrier.trim() : '';
+}
+
+/**
+ * 渠道显示名（无草稿依赖，供状态卡等轻量消费方使用）。
+ * 映射写在函数内而非模块顶层：顶层 let/const 会被 check:frontend-globals
+ * 记为新增全局状态，而「全局状态区只减不增」是机器强制的纪律。
+ */
+function imChannelLabel(carrierId) {
+  const labels = { qq: 'QQ', weixin: '微信', feishu: '飞书', wecom: '企业微信', rokid: 'Rokid 眼镜' };
+  const id = String(carrierId || '').trim();
+  if (!id) return '';
+  return labels[id] || id;
+}
+
+/**
+ * 该渠道的凭据是否已配置完整。每个渠道的必填项不同（微信走扫码绑定），
+ * 集中一处判断，避免调用点各写一份分支。
+ */
+function imChannelConfigured(draft, carrierId) {
+  const id = String(carrierId || '').trim();
+  if (!id) return false;
+  if (id === 'weixin') return !!draft?.weixinConfig?.configured;
+  if (id === 'feishu') {
+    return !!(draft?.feishuConfig?.configured
+      || (draft?.feishuConfig?.appId && draft?.feishuConfig?.appSecret));
+  }
+  if (id === 'wecom') {
+    return !!(draft?.wecomConfig?.configured
+      || (draft?.wecomConfig?.botId && draft?.wecomConfig?.secret));
+  }
+  if (id === 'rokid') {
+    return !!(draft?.rokidConfig?.configured
+      || (draft?.rokidConfig?.linkCode && draft?.rokidConfig?.linkSecret));
+  }
+  // qq 是默认渠道：appId + clientSecret 齐全才算配置完成
+  return !!(draft?.qqConfig?.appId && draft?.qqConfig?.clientSecret);
+}
+
 function normalizeIMWorkspaceBundleData(raw = {}) {
   const workspaceConfig = raw?.workspaceConfig || {};
   const channels = workspaceConfig?.channels && typeof workspaceConfig.channels === 'object'
@@ -95,46 +217,51 @@ function normalizeIMWorkspaceBundleData(raw = {}) {
     : {};
   return {
     workspaceConfig: {
-      selectedChannel: typeof workspaceConfig.selectedChannel === 'string' && workspaceConfig.selectedChannel
-        ? workspaceConfig.selectedChannel
-        : 'qq',
+      // ADR-0042 决策 1：门户渠道不再是独立字段——它是「绑定接线员线程的
+      // 线路」的 carrier。selectedChannel 已从服务端归一化中移除，前端不得
+      // 再持有或回写，否则整份 PUT 会把它的缺失当成「改动」。
+      // operatorThreadId 是接线员对话的唯一引用（决策 5），保存时必须原样
+      // 回传，否则用户点一次保存就把绑定清空。
+      operatorThreadId: typeof workspaceConfig.operatorThreadId === 'string'
+        ? workspaceConfig.operatorThreadId
+        : '',
+      // receptionistSessionId 只供升级迁移读取（决策 6）：前端原样透传，
+      // 由 im-operator-thread 归档旧会话后清除，不做本地语义。
       receptionistSessionId: typeof workspaceConfig.receptionistSessionId === 'string'
         ? workspaceConfig.receptionistSessionId
         : '',
       channels: {
         qq: {
           label: typeof channels?.qq?.label === 'string' ? channels.qq.label : '',
+          role: typeof channels?.qq?.role === 'string' ? channels.qq.role : '',
           note: typeof channels?.qq?.note === 'string' ? channels.qq.note : '',
         },
         weixin: {
           label: typeof channels?.weixin?.label === 'string' ? channels.weixin.label : '',
+          role: typeof channels?.weixin?.role === 'string' ? channels.weixin.role : '',
           note: typeof channels?.weixin?.note === 'string' ? channels.weixin.note : '',
         },
         feishu: {
           label: typeof channels?.feishu?.label === 'string' ? channels.feishu.label : '',
+          role: typeof channels?.feishu?.role === 'string' ? channels.feishu.role : '',
           note: typeof channels?.feishu?.note === 'string' ? channels.feishu.note : '',
         },
         wecom: {
           label: typeof channels?.wecom?.label === 'string' ? channels.wecom.label : '',
+          role: typeof channels?.wecom?.role === 'string' ? channels.wecom.role : '',
           note: typeof channels?.wecom?.note === 'string' ? channels.wecom.note : '',
         },
         rokid: {
           label: typeof channels?.rokid?.label === 'string' ? channels.rokid.label : '',
+          role: typeof channels?.rokid?.role === 'string' ? channels.rokid.role : '',
           note: typeof channels?.rokid?.note === 'string' ? channels.rokid.note : '',
         },
       },
       lines: Array.isArray(workspaceConfig.lines)
-        ? workspaceConfig.lines.map(l => ({
-            id: typeof l?.id === 'string' ? l.id : '',
-            label: typeof l?.label === 'string' ? l.label : '',
-            carrier: typeof l?.carrier === 'string' ? l.carrier : '',
-            boundSession: l?.boundSession && typeof l.boundSession === 'object'
-              ? { agentId: String(l.boundSession.agentId || ''), sessionId: String(l.boundSession.sessionId || '') }
-              : null,
-          }))
+        ? workspaceConfig.lines.map(normalizeIMBundleLine)
         : [
-            { id: 'line1', label: '通道 1', carrier: '', boundSession: null },
-            { id: 'line2', label: '通道 2', carrier: '', boundSession: null },
+            { id: 'line1', label: '通道 1', carrier: '', boundTarget: null },
+            { id: 'line2', label: '通道 2', carrier: '', boundTarget: null },
           ],
     },
     qqConfig: normalizeQQBotConfigData(raw?.qqConfig || {}),
@@ -176,25 +303,11 @@ function normalizeIMWorkspaceBundleData(raw = {}) {
       confirmedAt: raw?.binding?.confirmedAt || null,
       sourcePath: typeof raw?.binding?.sourcePath === 'string' ? raw.binding.sourcePath : '',
     },
-    sessions: Array.isArray(raw?.sessions) ? raw.sessions.map((session) => ({
-      id: typeof session?.id === 'string' ? session.id : '',
-      title: typeof session?.title === 'string' ? session.title : (typeof session?.id === 'string' ? session.id : ''),
-      updatedAt: session?.updatedAt || null,
-    })).filter((session) => session.id) : [],
-    receptionistSession: raw?.receptionistSession && typeof raw.receptionistSession === 'object'
-      ? {
-          id: typeof raw.receptionistSession.id === 'string' ? raw.receptionistSession.id : '',
-          title: typeof raw.receptionistSession.title === 'string' ? raw.receptionistSession.title : '',
-          updatedAt: raw.receptionistSession.updatedAt || null,
-        }
-      : null,
-    connectableSessions: Array.isArray(raw?.connectableSessions)
-      ? raw.connectableSessions.map(s => ({
-          id: typeof s?.id === 'string' ? s.id : '',
-          title: typeof s?.title === 'string' ? s.title : '',
-          updatedAt: s?.updatedAt || null,
-        })).filter(s => s.id)
-      : [],
+    // ADR-0042 决策 5：接线员是一个线程，不是某条固定会话。bundle 由服务端
+    // 解析 operatorThreadId → 线程记录（threadId / headSessionId / title /
+    // status），悬空引用时为 null。conversation/start 前它可能为 null——那是
+    // 「尚未建立」而不是「配置错误」。
+    operatorThread: normalizeOperatorThread(raw?.operatorThread),
     qqSourcePath: typeof raw?.qqSourcePath === 'string' ? raw.qqSourcePath : '',
     workspaceSourcePath: typeof raw?.workspaceSourcePath === 'string' ? raw.workspaceSourcePath : '',
     savedAt: raw?.savedAt || null,
@@ -233,12 +346,15 @@ async function ensureIMWorkspaceLoaded(force = false) {
       }
       return response.json();
     })
-    .then((payload) => {
+    .then(async (payload) => {
       const bundle = normalizeIMWorkspaceBundleData(payload || {});
       imWorkspaceState.data = bundle;
       imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
       imWorkspaceState.savedAt = bundle.savedAt || null;
       imWorkspaceState.error = '';
+      // 可绑定线程清单与 bundle 并行拉取：线路的目标下拉需要它，但它是
+      // 派生投影（线程库）而非配置事实，拉取失败不阻断配置编辑。
+      const targetsPromise = ensureIMRoutableTargetsLoaded();
       let schedPromise = Promise.resolve();
       if (!window._dispatchSchedulesLoaded && typeof window.loadDispatchSchedules === 'function') {
         // Await the actual fetch - loadDispatchSchedules resolves only after data is loaded
@@ -247,7 +363,7 @@ async function ensureIMWorkspaceLoaded(force = false) {
         // Already loaded; fire-and-forget staleness refresh with render:true
         window.refreshDispatchConsoleData({ force: false, render: true }).catch(e => console.warn(e));
       }
-      return schedPromise.then(() => bundle);
+      return Promise.all([targetsPromise, schedPromise]).then(() => bundle);
     })
     .catch((error) => {
       imWorkspaceState.error = error && error.message ? error.message : String(error);
@@ -261,6 +377,41 @@ async function ensureIMWorkspaceLoaded(force = false) {
 
   return imWorkspaceRequest;
 }
+/**
+ * 可绑定线程清单的拉取（/protoclaw/im_routable_targets）。
+ * 存放位置遵循「全局状态区只减不增」：结果挂在既有 imWorkspaceState 下，
+ * 不新增顶层全局变量。
+ */
+async function ensureIMRoutableTargetsLoaded(force = false) {
+  if (!force && Array.isArray(imWorkspaceState.routableTargets)) {
+    return imWorkspaceState.routableTargets;
+  }
+  if (!force && imWorkspaceState.routableTargetsRequest) {
+    return imWorkspaceState.routableTargetsRequest;
+  }
+  imWorkspaceState.routableTargetsRequest = fetch('/protoclaw/im_routable_targets')
+    .then((response) => {
+      if (!response.ok) throw new Error('Failed to load routable targets');
+      return response.json();
+    })
+    .then((payload) => {
+      const targets = normalizeIMRoutableTargets(payload || {});
+      imWorkspaceState.routableTargets = targets;
+      return targets;
+    })
+    .catch((error) => {
+      // 派生投影失败不阻断配置编辑：保持已有清单（首轮为空），由下次
+      // 展开下拉或手动刷新重试。
+      console.warn('Failed to load IM routable targets:', error);
+      if (!Array.isArray(imWorkspaceState.routableTargets)) imWorkspaceState.routableTargets = [];
+      return imWorkspaceState.routableTargets;
+    })
+    .finally(() => {
+      imWorkspaceState.routableTargetsRequest = null;
+    });
+  return imWorkspaceState.routableTargetsRequest;
+}
+
 function renderQQBotConfigField(field, draft, updateHandler = 'window.updateQQBotConfigDraft') {
   const name = String(field?.name || '').trim();
   if (!name) return '';
@@ -315,50 +466,93 @@ function renderIMWorkspaceSelectField(label, value, options, onChange) {
   ].join('');
 }
 
-function renderIMWorkspaceInlineSelect(value, options, onChange) {
-  const hasIcons = options.some((o) => o.icon);
-
-  if (!hasIcons) {
-    const optionsHtml = options.map((option) => {
-      const optionValue = String(option?.value ?? '');
-      const optionLabel = String(option?.label ?? optionValue);
-      const selected = String(value || '') === optionValue ? ' selected' : '';
-      return '<option value="' + escapeHtml(optionValue) + '"' + selected + '>' + escapeHtml(optionLabel) + '</option>';
-    }).join('');
-    return '<select class="workspace-form-select im-inline-select" onchange="' + onChange + '">' + optionsHtml + '</select>';
-  }
-
-  // Custom dropdown with icons
-  const itemsHtml = options.map((option) => {
-    const optionValue = String(option?.value ?? '');
-    const optionLabel = String(option?.label ?? optionValue);
-    const isActive = String(value || '') === optionValue;
-    return '<div class="im-dropdown-item' + (isActive ? ' active' : '') + '" data-value="' + escapeHtml(optionValue) + '" onclick="window.imSelectChannel(this, &quot;' + escapeHtml(optionValue) + '&quot;)">' + (option.icon || '') + '<span>' + escapeHtml(optionLabel) + '</span></div>';
-  }).join('');
-
-  const current = options.find((o) => String(o.value) === String(value || '')) || options[0];
-  const currentLabel = String(current?.label ?? '');
-  const currentIcon = current?.icon || '';
-
-  return [
-    '<div class="im-dropdown" data-onchange="' + escapeHtml(onChange) + '">',
-    '<div class="im-dropdown-trigger" onclick="window.toggleIMDropdown(this)">',
-    currentIcon + '<span>' + escapeHtml(currentLabel) + '</span>',
-    '<svg class="im-dropdown-arrow" viewBox="0 0 12 12" fill="currentColor"><path d="M2 4l4 4 4-4"/></svg>',
-    '</div>',
-    '<div class="im-dropdown-menu">' + itemsHtml + '</div>',
-    '</div>',
-  ].join('');
+/**
+ * 线路目标下拉的选项值编码：boundTarget 是 (agentId, threadId) 成对寻址，
+ * 而 <option>/data-value 只能承载一个字符串。用 `agentId::threadId` 组合，
+ * 解析集中在本函数与 imParseLineTargetValue，避免调用点各自拼装。
+ */
+function imLineTargetValue(boundTarget) {
+  if (!boundTarget?.agentId || !boundTarget?.threadId) return '';
+  return boundTarget.agentId + '::' + boundTarget.threadId;
 }
+
+function imParseLineTargetValue(value) {
+  const raw = String(value || '');
+  if (!raw) return { agentId: '', threadId: '' };
+  const index = raw.indexOf('::');
+  if (index <= 0) return { agentId: '', threadId: '' };
+  return { agentId: raw.slice(0, index), threadId: raw.slice(index + 2) };
+}
+
 function renderLineConnectionSection(draft) {
   const lines = draft.workspaceConfig?.lines || [];
-  const sessions = draft.connectableSessions || [];
-  const portalCarrier = draft.workspaceConfig?.selectedChannel || 'qq';
+  const operatorThreadId = imOperatorThreadIdOf(draft);
+  const portalCarrier = imPortalCarrierOf(draft);
+  const targets = Array.isArray(imWorkspaceState.routableTargets) ? imWorkspaceState.routableTargets : [];
 
-  const carrierIconMap = IM_CHANNEL_ICONS;
+  // 接线员线程的自描述：能绑到它自己（门户渠道线路就是它），因此需要
+  // 出现在目标清单里，而不是只出现在「当前已绑定」的显示位。
+  const operatorThreadTitle = draft.operatorThread?.title || '';
+  const operatorThreadAgentId = 'qqbot';
+
+  function buildCarrierOptions(line, otherCarrierValue) {
+    return [
+      { value: '', label: '-- 未使用 --' },
+      { value: 'qq', label: 'QQ', icon: IM_CHANNEL_ICONS.qq },
+      { value: 'weixin', label: '微信', icon: IM_CHANNEL_ICONS.weixin },
+      { value: 'feishu', label: '飞书', icon: IM_CHANNEL_ICONS.feishu },
+      { value: 'wecom', label: '企业微信', icon: IM_CHANNEL_ICONS.wecom },
+      { value: 'rokid', label: 'Rokid 眼镜', icon: IM_CHANNEL_ICONS.rokid },
+    ].filter(function(o) {
+      if (o.value === '') return true;
+      if (o.value === line.carrier) return true;
+      // 门户渠道不可被其他线路抢占：它由接线员线路持有。
+      if (o.value === portalCarrier) return false;
+      if (o.value === otherCarrierValue) return false;
+      return true;
+    });
+  }
+
+  /**
+   * 目标下拉选项：未连接 → 接线员线程 → 各工作空间的活跃线程。
+   * 与旧实现的关键差异是「绑定对象是线程」：选项值不再是一个 sessionId，
+   * 而是组合后的 (agentId, threadId)。
+   */
+  function buildTargetOptions(line) {
+    if (!line.carrier) return [{ value: '', label: '请先选择渠道' }];
+
+    const options = [{ value: '', label: '-- 未连接 --' }];
+    if (operatorThreadId) {
+      options.push({
+        value: imLineTargetValue({ agentId: operatorThreadAgentId, threadId: operatorThreadId }),
+        label: '接线员线程' + (operatorThreadTitle ? ' · ' + operatorThreadTitle : ''),
+      });
+    }
+    targets.forEach(function(ws) {
+      if (ws.agentId === operatorThreadAgentId) {
+        // 接线员线程已单列；qqbot 的其他线程是普通目标，需排除已列过的
+        // 接线员条目，避免同一 threadId 出现两次。
+        ws.threads
+          .filter(function(t) { return t.threadId !== operatorThreadId; })
+          .forEach(function(t) {
+            options.push({
+              value: imLineTargetValue({ agentId: ws.agentId, threadId: t.threadId }),
+              label: (ws.agentName || ws.agentId) + ' · ' + (t.title || t.threadId),
+            });
+          });
+        return;
+      }
+      ws.threads.forEach(function(t) {
+        options.push({
+          value: imLineTargetValue({ agentId: ws.agentId, threadId: t.threadId }),
+          label: (ws.agentName || ws.agentId) + ' · ' + (t.title || t.threadId),
+        });
+      });
+    });
+    return options;
+  }
 
   function renderLineDropdown(line, lineId, type, options, currentVal) {
-    let hasIcons = options.some(function(o) { return !!o.icon; });
     let itemsHtml = options.map(function(opt) {
       let optVal = String(opt.value);
       let optLabel = String(opt.label);
@@ -376,7 +570,7 @@ function renderLineConnectionSection(draft) {
 
     return [
       '<div class="im-dropdown im-line-' + type + (shouldOpen ? ' open' : '') + '" data-line-id="' + escapeHtml(lineId) + '" data-dropdown-type="' + escapeHtml(type) + '">',
-      '<div class="im-dropdown-trigger' + (type === 'session' && !line.carrier ? ' im-dropdown-disabled' : '') + '" onclick="window.toggleIMDropdown(this)">',
+      '<div class="im-dropdown-trigger' + (type === 'target' && !line.carrier ? ' im-dropdown-disabled' : '') + '" onclick="window.toggleIMDropdown(this)">',
       currentIcon + '<span>' + escapeHtml(currentLabel) + '</span>',
       '<svg class="im-dropdown-arrow" viewBox="0 0 12 12" fill="currentColor"><path d="M2 4l4 4 4-4"/></svg>',
       '</div>',
@@ -388,54 +582,40 @@ function renderLineConnectionSection(draft) {
   function renderLineRow(line) {
     let otherCarrier = lines.find(function(l) { return l.id !== line.id && l.carrier; });
     let otherCarrierValue = otherCarrier ? otherCarrier.carrier : '';
-    let carrierOptions = [
-      { value: '', label: '-- 未使用 --' },
-      { value: 'qq', label: 'QQ', icon: IM_CHANNEL_ICONS.qq },
-      { value: 'weixin', label: '微信', icon: IM_CHANNEL_ICONS.weixin },
-      { value: 'feishu', label: '飞书', icon: IM_CHANNEL_ICONS.feishu },
-      { value: 'wecom', label: '企业微信', icon: IM_CHANNEL_ICONS.wecom },
-      { value: 'rokid', label: 'Rokid 眼镜', icon: IM_CHANNEL_ICONS.rokid },
-    ].filter(function(o) {
-      if (o.value === '') return true;
-      if (o.value === line.carrier) return true;
-      if (o.value === portalCarrier) return false;
-      if (o.value === otherCarrierValue) return false;
-      return true;
-    });
+    let carrierOptions = buildCarrierOptions(line, otherCarrierValue);
 
     let hasCarrier = !!line.carrier;
+    let targetOptions = buildTargetOptions(line);
 
-    let sessionOptions = hasCarrier
-      ? [{ value: '', label: '-- 未连接对话 --' }].concat(
-          sessions.map(function(s) {
-            return { value: s.id, label: s.title || s.id };
-          })
-        )
-      : [{ value: '', label: '请先选择渠道' }];
-
-    let statusHtml = line.boundSession
+    // 状态判定按「线路当前事实」：绑定线程 = 已连接；只有渠道 = 已绑定渠道。
+    let statusHtml = line.boundTarget
       ? '<span class="im-binding-status bound">已连接</span>'
       : hasCarrier
         ? '<span class="im-binding-status idle">已绑定渠道</span>'
         : '<span class="im-binding-status unbound">未使用</span>';
 
+    let operatorBadge = isOperatorLine(draft, line)
+      ? '<span class="im-binding-status operator">门户</span>'
+      : '';
+
     let carrierDropdown = renderLineDropdown(
       line, line.id, 'carrier', carrierOptions, line.carrier || ''
     );
 
-    let sessionDropdown = renderLineDropdown(
-      line, line.id, 'session', sessionOptions, (line.boundSession && line.boundSession.sessionId) || ''
+    let targetDropdown = renderLineDropdown(
+      line, line.id, 'target', targetOptions, imLineTargetValue(line.boundTarget)
     );
 
     return [
       '<div class="im-line-row">',
       '<div class="im-line-row-header">',
       '<span class="im-line-label">' + escapeHtml(line.label || line.id) + '</span>',
+      operatorBadge,
       statusHtml,
       '</div>',
       '<div class="im-line-row-controls">',
       carrierDropdown,
-      sessionDropdown,
+      targetDropdown,
       '</div>',
       '</div>',
     ].join('');
@@ -446,7 +626,7 @@ function renderLineConnectionSection(draft) {
     '<div class="workspace-section-header">',
     '<div>',
     '<div class="workspace-section-title">通道配置</div>',
-    '<div class="workspace-section-desc">每个通道绑定一个 IM 渠道，并可连接到编程小助手的活跃对话。</div>',
+    '<div class="workspace-section-desc">每条通道绑定一个 IM 渠道，并把消息投递到指定的线程。绑定接线员线程的通道就是门户当前使用的渠道。</div>',
     '</div>',
     '</div>',
     '<div class="im-line-grid">',
@@ -459,7 +639,8 @@ function renderLineConnectionSection(draft) {
 function renderIMWorkspaceConfigEditor(block) {
   const editor = block?.configEditor || {};
   const draft = getIMWorkspaceDraft();
-  const selectedChannel = draft.workspaceConfig?.selectedChannel || 'qq';
+  const portalCarrier = imPortalCarrierOf(draft);
+  const operatorThreadId = imOperatorThreadIdOf(draft);
   const qqConfigured = !!(draft.qqConfig?.appId && draft.qqConfig?.clientSecret);
   const weixinConfigured = !!draft.weixinConfig?.configured;
   const feishuConfigured = !!(draft.feishuConfig?.configured || (draft.feishuConfig?.appId && draft.feishuConfig?.appSecret));
@@ -467,20 +648,6 @@ function renderIMWorkspaceConfigEditor(block) {
   const rokidConfigured = !!(draft.rokidConfig?.configured || (draft.rokidConfig?.linkCode && draft.rokidConfig?.linkSecret));
   const bindingStatus = draft.binding?.status || 'idle';
   const hasQrCode = !!draft.binding?.qrcodeDataUrl;
-  const lineCarriers = new Set(
-    (draft.workspaceConfig?.lines || []).map(function(l) { return l.carrier; }).filter(Boolean)
-  );
-  const receptionistOptions = [
-    { value: 'qq', label: 'QQ', icon: IM_CHANNEL_ICONS.qq },
-    { value: 'weixin', label: '微信', icon: IM_CHANNEL_ICONS.weixin },
-    { value: 'feishu', label: '飞书', icon: IM_CHANNEL_ICONS.feishu },
-    { value: 'wecom', label: '企业微信', icon: IM_CHANNEL_ICONS.wecom },
-    { value: 'rokid', label: 'Rokid 眼镜', icon: IM_CHANNEL_ICONS.rokid },
-  ].filter(function(o) {
-    if (o.value === selectedChannel) return true;
-    if (lineCarriers.has(o.value)) return false;
-    return true;
-  });
   const fields = Array.isArray(editor.fields) ? editor.fields : [];
 
   if (!imWorkspaceState.data && !imWorkspaceState.loading && !imWorkspaceState.error) {
@@ -514,33 +681,43 @@ function renderIMWorkspaceConfigEditor(block) {
     return actions.join('');
   })();
 
-  const activeAgent = getCurrentAgentRecord();
-  const sessionsHtml = draft.sessions.length > 0
-    ? '<div class="workspace-history-list">' + draft.sessions.map((session) => {
-        const isActive = String(draft.workspaceConfig?.receptionistSessionId || '') === String(session.id);
-        const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
-        const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id }));
-        return [
-          '<div class="workspace-history-item' + (isActive ? ' active' : '') + '" data-prebuilt-session-agent-id="' + escapeHtml(activeAgent?.id || '') + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
-          '<div class="workspace-history-main">',
-          '<div class="workspace-history-title-row">',
-          '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
-          (isActive ? '<span class="workspace-history-active">当前</span>' : ''),
-          '</div>',
-          '<div class="workspace-history-meta">' + escapeHtml(session.updatedAt ? formatWorkspaceDate(session.updatedAt) : session.id) + '</div>',
-          '</div>',
-          '<div class="workspace-history-side">',
-          '<div class="workspace-actions stacked">',
-          '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.launchReceptionistSession(&quot;' + escapeHtml(session.id) + '&quot;, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
-          '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
-          '</div>',
-          '</div>',
-          '</div>',
-        ].join('');
-      }).join('') + '</div>'
-    : '<div class="workspace-form-note">' + escapeHtml(t('im_workspace_no_session')) + '</div>';
-
   const isZh = currentLanguage === 'zh';
+
+  // ── 接线员线程（ADR-0042 决策 5）─────────────────────────────────
+  // 门户只有「一个线程」这一个事实，不再是会话列表：head 会话随接续演进，
+  // 换代后旧线程归档。引用悬空（尚未建立 / 线程已终态）时显示未建立状态，
+  // 由「打开对话」负责建立首代。
+  const operatorThread = draft.operatorThread;
+  const hasOperatorThread = !!operatorThread;
+  const operatorStatusText = hasOperatorThread
+    ? (operatorThread.status === 'closed'
+        ? (isZh ? '已结束' : 'Closed')
+        : (isZh ? '在线' : 'Active'))
+    : (isZh ? '未建立' : 'Not started');
+  const operatorThreadHtml = [
+    '<div class="workspace-history-list">',
+    '<div class="workspace-history-item' + (hasOperatorThread ? ' active' : '') + '">',
+    '<div class="workspace-history-main">',
+    '<div class="workspace-history-title-row">',
+    '<div class="workspace-history-title">' + escapeHtml(operatorThread?.title || (isZh ? '尚未建立接线员对话' : 'No operator conversation yet')) + '</div>',
+    (hasOperatorThread ? '<span class="workspace-history-active">' + escapeHtml(operatorStatusText) + '</span>' : ''),
+    '</div>',
+    '<div class="workspace-history-meta">' + escapeHtml(
+      hasOperatorThread
+        ? (operatorThread.threadId + (operatorThread.headSessionId ? ' · ' + operatorThread.headSessionId : ''))
+        : (isZh ? '点击「打开对话」创建首代接线员线程' : 'Click "Open chat" to create the first operator thread')
+    ) + '</div>',
+    '</div>',
+    '<div class="workspace-history-side">',
+    '<div class="workspace-actions stacked">',
+    hasOperatorThread
+      ? '<button class="workspace-action" type="button" onclick="window.launchOperatorConversation(false, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>'
+      : '',
+    '</div>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
 
   // Fire a background staleness refresh (no render:true — the checkbox uses
   // whatever data is already available and never blocks on this fetch).
@@ -572,20 +749,31 @@ function renderIMWorkspaceConfigEditor(block) {
     '<div class="workspace-section-header">',
     '<div>',
     '<div class="workspace-section-title">' + (isZh ? '门户代理' : 'Portal Agent') + '</div>',
-    '<div class="workspace-section-desc">' + (isZh ? '选择渠道并创建或进入对话' : 'Select channel and start or enter a conversation') + '</div>',
+    '<div class="workspace-section-desc">' + (isZh ? '门户渠道由绑定接线员线程的通道决定' : 'The portal channel is whichever line is bound to the operator thread') + '</div>',
     '</div>',
     '</div>',
     '<div class="im-portal-body">',
     '<div class="im-portal-field">',
     '<span class="im-portal-label">' + (isZh ? '当前渠道' : 'Channel') + '</span>',
-    renderIMWorkspaceInlineSelect(
-      selectedChannel,
-      receptionistOptions,
-      'window.updateIMWorkspaceField(&quot;workspaceConfig.selectedChannel&quot;, this.value)',
-    ),
+    '<span class="im-portal-value">'
+      + (portalCarrier
+          ? escapeHtml(imChannelLabel(portalCarrier))
+          : '<span class="dim">' + escapeHtml(isZh ? '未接线' : 'Not connected') + '</span>')
+      + '</span>',
+    '</div>',
+    '<div class="im-portal-field">',
+    '<span class="im-portal-label">' + (isZh ? '接线员线程' : 'Operator thread') + '</span>',
+    '<span class="im-portal-value">'
+      + (operatorThreadId
+          ? escapeHtml(operatorThreadId)
+          : '<span class="dim">' + escapeHtml(isZh ? '未建立' : 'Not started') + '</span>')
+      + '</span>',
     '</div>',
     autostartCheckboxHtml,
-    '<button class="workspace-action im-new-chat-btn' + (window._creatingReceptionistSession ? ' action-loading' : '') + '" type="button" onclick="window.createReceptionistSession(this)">' + escapeHtml(t('im_workspace_new_chat')) + '</button>',
+    '</div>',
+    '<div class="im-portal-actions">',
+    '<button class="workspace-action im-open-chat-btn' + (window._creatingReceptionistSession ? ' action-loading' : '') + '" type="button" onclick="window.launchOperatorConversation(false, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+    '<button class="workspace-action secondary im-new-chat-btn' + (window._creatingReceptionistSession ? ' action-loading' : '') + '" type="button" onclick="window.launchOperatorConversation(true, this)">' + escapeHtml(t('im_workspace_new_chat')) + '</button>',
     '</div>',
     '</section>',
     renderLineConnectionSection(draft),
@@ -593,11 +781,11 @@ function renderIMWorkspaceConfigEditor(block) {
     '<section class="workspace-section">',
     '<div class="workspace-section-header">',
     '<div>',
-    '<div class="workspace-section-title">' + (isZh ? '门户对话记录' : 'Portal Sessions') + '</div>',
-    '<div class="workspace-section-desc">' + (isZh ? '门户代理的历史对话' : 'Portal agent conversation history') + '</div>',
+    '<div class="workspace-section-title">' + (isZh ? '接线员对话' : 'Operator Conversation') + '</div>',
+    '<div class="workspace-section-desc">' + (isZh ? '门户消息都进入这条线程；新建对话会归档当前线程' : 'All portal messages enter this thread; starting a new one archives it') + '</div>',
     '</div>',
     '</div>',
-    sessionsHtml,
+    operatorThreadHtml,
     '</section>',
     renderIMChannelConfigDialog(draft, fields, qqConfigured, weixinConfigured, feishuConfigured, wecomConfigured, rokidConfigured, weixinBadge, weixinActionsHtml),
   ].join('');

@@ -9344,7 +9344,9 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .im-portal-body { display: flex; flex-direction: column; gap: 12px; }
 .im-portal-field { display: flex; flex-direction: column; gap: 4px; }
 .im-portal-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
-.im-portal-card .im-new-chat-btn { width: 100%; }
+.im-portal-value { font-size: 13px; color: var(--text-primary); }
+.im-portal-actions { display: flex; flex-direction: column; gap: 8px; }
+.im-portal-actions .workspace-action { width: 100%; }
 .im-portal-card .im-portal-autostart {
   flex-direction: row;
   justify-content: space-between;
@@ -9391,7 +9393,7 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .im-line-row-controls .im-line-carrier {
   flex: 0 0 140px;
 }
-.im-line-row-controls .im-line-session {
+.im-line-row-controls .im-line-target {
   flex: 1;
 }
 .im-dropdown-disabled {
@@ -9414,6 +9416,10 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .im-binding-status.unbound {
   background: rgba(100, 116, 139, 0.15);
   color: #64748b;
+}
+.im-binding-status.operator {
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
 }
 .im-line-session[disabled] {
   opacity: 0.5;

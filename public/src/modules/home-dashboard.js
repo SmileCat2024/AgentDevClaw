@@ -130,18 +130,46 @@ function hdGetPHSessions() {
   return [];
 }
 
+/**
+ * 门户当前渠道（ADR-0042 决策 1）：接线员线路里第一条选了 carrier 的渠道。
+ * 与 server 的 operatorCarrierOf 同构——首页不再读已退役的 selectedChannel
+ * （该字段归一后恒不存在，读它只会恒显示默认值）。
+ */
 function hdGetIMChannelLabel() {
   let labels = { qq: 'QQ', weixin: '微信', feishu: '飞书', wecom: '企业微信', rokid: 'Rokid 眼镜' };
   if (!hdState.imBundle) return '';
   let wc = hdState.imBundle.workspaceConfig || {};
-  let selected = wc.selectedChannel || 'qq';
-  return labels[selected] || selected;
+  let operatorThreadId = String(wc.operatorThreadId || '').trim();
+  if (!operatorThreadId) return '';
+  let operatorLine = (Array.isArray(wc.lines) ? wc.lines : []).find(function (line) {
+    return String(line?.boundTarget?.threadId || '') === operatorThreadId
+      && typeof line?.carrier === 'string' && line.carrier.trim();
+  });
+  if (!operatorLine) return '';
+  let carrier = operatorLine.carrier.trim();
+  return labels[carrier] || carrier;
 }
 
 function hdGetIMLines() {
   if (!hdState.imBundle) return [];
   let wc = hdState.imBundle.workspaceConfig || {};
   return Array.isArray(wc.lines) ? wc.lines : [];
+}
+
+/**
+ * 线程标题解析：优先用线程 store（本模块先于 thread-store.js 加载，因此只在
+ * 渲染时按函数存在性取用，不在模块顶部捕获），取不到时退回 threadId——
+ * 首页卡片只需要「绑到哪」，不因线程清单未就绪而显示空白。
+ */
+function hdFindThreadLabel(agentId, threadId) {
+  if (!threadId) return '';
+  if (typeof window.getThreadById === 'function') {
+    let thread = window.getThreadById(threadId);
+    if (thread && (thread.title || thread.headSessionTitle)) {
+      return thread.title || thread.headSessionTitle;
+    }
+  }
+  return String(threadId);
 }
 
 function hdGetGroupChats() {
@@ -277,10 +305,13 @@ function renderIMCard() {
   let bigStatus = isActive ? (channelLabel ? channelLabel + ' 门户运行中' : '门户运行中') : '门户未启动';
 
   let linesHtml = lines.map(function (line) {
-    let bound = line.boundSession;
+    let bound = line.boundTarget;
     let value;
     if (bound && bound.agentId) {
-      value = '绑定 ' + escapeHtml(agentLabels[bound.agentId] || bound.agentId);
+      // 线路绑定的是线程（ADR-0042），不是会话；标题取自可绑线程清单，
+      // 清单尚未拉到的时候退回 threadId，避免整行显示成空白。
+      let label = hdFindThreadLabel(bound.agentId, bound.threadId);
+      value = '绑定 ' + escapeHtml(label || agentLabels[bound.agentId] || bound.agentId);
     } else {
       value = '<span class="dim">空闲</span>';
     }

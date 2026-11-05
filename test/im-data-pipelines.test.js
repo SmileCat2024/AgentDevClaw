@@ -18,6 +18,7 @@ import {
   createConfigSerializer,
   getUsageContextTokens,
   findLine,
+  operatorCarrierOf,
 } from '../server/routes/im.js';
 
 // ───────────────────────────────────────────────────────────────────
@@ -124,6 +125,46 @@ describe('normalizeIMWorkspaceConfig', () => {
 
     const c3 = normalizeIMWorkspaceConfig([1, 2, 3]);
     assert.equal(c3.lines.length, 2);
+  });
+
+  /**
+   * 里程碑 2 的回归锚：前端保存走「整份 PUT → normalizeIMWorkspaceConfig」。
+   * 归一化若丢弃 PUT 载荷里的字段，用户点一次保存就等于解绑。
+   *
+   * 覆盖范围说明：本用例验证**服务端**归一不丢弃这两项（前端 draft 是否
+   * 携带它们由 test/frontend-im-thread-shape.test.js 验证）。两段合起来才
+   * 是完整往返；单看任何一侧都发现不了另一半的丢失。
+   */
+  it('服务端归一保真：PUT 载荷里的 operatorThreadId 与 boundTarget 不被丢弃', () => {
+    const bundlePayload = {
+      operatorThreadId: 'wt-operator-1',
+      channels: { qq: { label: 'QQ', note: '' } },
+      lines: [
+        { id: 'line1', label: '通道 1', carrier: 'qq', boundTarget: { agentId: 'qqbot', threadId: 'wt-operator-1' } },
+        { id: 'line2', label: '通道 2', carrier: 'feishu', boundTarget: { agentId: 'coder', threadId: 'wt-coder-9' } },
+      ],
+    };
+    const roundTripped = normalizeIMWorkspaceConfig(bundlePayload);
+
+    assert.equal(roundTripped.operatorThreadId, 'wt-operator-1');
+    assert.deepEqual(roundTripped.lines[0].boundTarget,
+      { agentId: 'qqbot', threadId: 'wt-operator-1' });
+    assert.deepEqual(roundTripped.lines[1].boundTarget,
+      { agentId: 'coder', threadId: 'wt-coder-9' });
+    assert.equal(operatorCarrierOf(roundTripped), 'qq',
+      '门户渠道在往返后仍应解析为接线员线路的 carrier');
+  });
+
+  it('往返保真：线路 carrier 变更时带上原 boundTarget 不会被清空', () => {
+    // 对应前端 handleLineCarrierChange：传 carrier + 既有 agentId/threadId，
+    // 服务端只改 carrier，绑定保留（旧实现只传 carrier，绑定被清成 null）
+    const config = normalizeIMWorkspaceConfig({
+      operatorThreadId: 'wt-op',
+      lines: [{ id: 'line1', carrier: 'qq', boundTarget: { agentId: 'qqbot', threadId: 'wt-op' } }],
+    });
+    const line = config.lines.find((l) => l.id === 'line1');
+    assert.equal(line.carrier, 'qq');
+    assert.deepEqual(line.boundTarget, { agentId: 'qqbot', threadId: 'wt-op' });
   });
 });
 

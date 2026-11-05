@@ -792,26 +792,23 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       active_workspace_session_id: nextActiveId,
     });
 
-    // Precise DOM removal for IM workspace sessions — avoid full re-render
-    const imDraft = getIMWorkspaceDraft ? getIMWorkspaceDraft() : null;
-    const isIMSession = Array.isArray(imDraft?.sessions);
-    if (isIMSession) {
-      const idx = imDraft.sessions.findIndex((s) => s.id === action.sessionId);
-      if (idx !== -1) imDraft.sessions.splice(idx, 1);
-      if (String(imDraft.workspaceConfig?.receptionistSessionId) === String(action.sessionId)) {
-        imDraft.workspaceConfig.receptionistSessionId = '';
+    // ADR-0042：IM 工作空间不再有「门户会话列表」——接线员是一个线程，
+    // 门户消息进入该线程的 head 会话，会话级删除只可能从通用入口（侧栏 /
+    // 线程视图）发生，因此这里不再有 IM 专属的 DOM 精修分支。
+    //
+    // 保留的清理：若删除的正是升级前遗留的接线员会话，顺手清掉
+    // receptionistSessionId。该字段只供升级迁移读取，残留会让每次换代都
+    // 重复尝试归档一个已不存在的会话（best-effort 失败会一直重试）。
+    const staleImDraft = typeof getIMWorkspaceDraft === 'function' ? getIMWorkspaceDraft() : null;
+    if (staleImDraft?.workspaceConfig
+      && String(staleImDraft.workspaceConfig.receptionistSessionId) === String(action.sessionId)) {
+      staleImDraft.workspaceConfig.receptionistSessionId = '';
+      if (typeof window.saveIMWorkspaceConfig === 'function') {
+        window.saveIMWorkspaceConfig().catch((e) => console.warn('IM legacy reference cleanup failed:', e));
       }
-      const el = document.querySelector('[data-prebuilt-session-id="' + CSS.escape(action.sessionId) + '"]');
-      if (el) {
-        el.style.transition = 'opacity 0.2s, transform 0.2s';
-        el.style.opacity = '0';
-        el.style.transform = 'translateX(-10px)';
-        setTimeout(() => el.remove(), 200);
-      }
-    } else {
-      shouldAnimateWorkspaceSurface = false;
-      renderCurrentMainView();
     }
+    shouldAnimateWorkspaceSurface = false;
+    renderCurrentMainView();
 
     try {
       const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
@@ -855,8 +852,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (targetSessionId) {
         await navigateToSessionMutationTarget(activeAgent.id, result, affectedRuntimeId);
       }
-      // Refresh IM workspace draft in background — no re-render needed if DOM already updated
-      if (isIMSession) {
+      // IM 工作空间删除会话后仍需刷新 IM 草稿（归一化后的形状），其余走
+      // Agent 列表刷新。判定按「当前是否正在编辑 IM 配置」，不再依赖已退役
+      // 的门户会话列表字段。
+      if (typeof getIMWorkspaceDraft === 'function' && activeAgent.id === 'qqbot') {
         ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));
       } else {
         loadAgents().catch(e => console.warn(e));
@@ -871,8 +870,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         active_workspace_session_id: targetAgent?.active_workspace_session_id,
       });
       finishSidebarOperation(deleteOperation.operationId, 'failed', { errorCode: 'delete_failed' });
-      // Restore IM draft and re-render on failure
-      if (isIMSession) {
+      // 失败回滚后 IM 草稿需要重新对齐服务端事实
+      if (typeof getIMWorkspaceDraft === 'function' && activeAgent.id === 'qqbot') {
         ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));
       }
       lastRenderedWorkspaceHtml = '';

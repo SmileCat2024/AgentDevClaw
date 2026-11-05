@@ -28,7 +28,8 @@
  *                repoSourceFilter, repoSearchQuery, selectedRepositoryPackageId
  *   project-data.js: getFeatureCreatorProjects, getAgentCreatorProjects, getWorkspaceSessions,
  *                    canEnterWorkspaceChat, getAgentWorkspaceState, updateAgentWorkspaceState
- *   im-ui.js: getIMWorkspaceDraft, isIMWorkspaceConfigEditor, renderIMWorkspaceConfigEditor
+ *   im-ui.js: getIMWorkspaceDraft, isIMWorkspaceConfigEditor, renderIMWorkspaceConfigEditor,
+ *   imPortalCarrierOf, imChannelLabel, imChannelConfigured
  *   app-ui.js (壳): renderCurrentMainView, renderAssemblyWorkbenchStageFlow
  *   app-ui.js (域 E): getWorkspaceFormDraft, saveWorkspaceFormDraft, persistWorkspaceState,
  *                     getFeatureCreatorOutputDirectory
@@ -364,27 +365,27 @@ function renderWorkspaceStatusGrid(agent, block) {
         }
       : null,
     isIMWorkspaceConfigEditor(block)
-      ? {
-          label: t('workspace_live_config'),
-          value: imDraft.workspaceConfig?.selectedChannel === 'weixin'
-            ? (imDraft.weixinConfig?.configured ? t('im_workspace_bound') : t('im_workspace_not_bound'))
-            : imDraft.workspaceConfig?.selectedChannel === 'feishu'
-              ? (imDraft.feishuConfig?.configured ? t('im_workspace_bound') : t('im_workspace_not_bound'))
-              : imDraft.workspaceConfig?.selectedChannel === 'wecom'
-                ? (imDraft.wecomConfig?.configured ? t('im_workspace_bound') : t('im_workspace_not_bound'))
-                : imDraft.workspaceConfig?.selectedChannel === 'rokid'
-                  ? (imDraft.rokidConfig?.configured ? t('im_workspace_bound') : t('im_workspace_not_bound'))
-                  : (imDraft.qqConfig?.appId && imDraft.qqConfig?.clientSecret ? t('qqbot_config_ready') : t('qqbot_config_incomplete')),
-          note: imDraft.workspaceConfig?.selectedChannel === 'weixin'
-            ? (imDraft.workspaceConfig?.channels?.weixin?.label || t('im_workspace_weixin_section'))
-            : imDraft.workspaceConfig?.selectedChannel === 'feishu'
-              ? (imDraft.workspaceConfig?.channels?.feishu?.label || '飞书')
-              : imDraft.workspaceConfig?.selectedChannel === 'wecom'
-                ? (imDraft.workspaceConfig?.channels?.wecom?.label || '企业微信')
-                : imDraft.workspaceConfig?.selectedChannel === 'rokid'
-                  ? (imDraft.workspaceConfig?.channels?.rokid?.label || 'Rokid 眼镜')
-                  : (imDraft.workspaceConfig?.channels?.qq?.label || t('im_workspace_qq_section')),
-        }
+      ? (function () {
+          // 门户渠道 = 接线员线路的 carrier（ADR-0042 决策 1）。旧实现按
+          // selectedChannel 分支，该字段归一后恒不存在——卡片会永远落到
+          // 「QQ」分支，无论用户实际接的是哪个渠道。
+          const portalCarrier = imPortalCarrierOf(imDraft);
+          const carrierLabel = portalCarrier
+            ? (imDraft.workspaceConfig?.channels?.[portalCarrier]?.label
+                || imChannelLabel(portalCarrier))
+            : '';
+          return {
+            label: t('workspace_live_config'),
+            value: portalCarrier
+              ? imChannelConfigured(imDraft, portalCarrier)
+                ? t('im_workspace_bound')
+                : t('im_workspace_not_bound')
+              : t('im_workspace_not_bound'),
+            note: carrierLabel
+              || imDraft.workspaceConfig?.channels?.qq?.label
+              || t('im_workspace_qq_section'),
+          };
+        })()
       : null,
   ].filter(Boolean).map((card) => (
     '<div class="workspace-card"><div class="workspace-card-label">' + escapeHtml(card.label) + '</div><div class="workspace-card-value">' + escapeHtml(card.value) + '</div><div class="workspace-card-note">' + escapeHtml(card.note) + '</div></div>'
