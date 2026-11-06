@@ -7,10 +7,11 @@
 //     仓库构建后各包 npm pack 出 tgz，staging 以 file:vendor/*.tgz 实体安装
 //     （npm 对 tgz 无 junction 语义，与 registry 实体等价）。
 //
-// 组装步骤：框架构建 → 工作区现状导出 → 18 包 tgz + 声明改写
-// （根 dependencies 与 features/* 子包的 core devDep）→ 干净 install →
-// 构建 local-features / features → 无损瘦身（剥离构建期依赖）→ 拷贝
-// node.exe → 隔离端口冒烟（health ready → POST shutdown → 进程退出）。
+//   组装步骤：框架构建 → 工作区现状导出（排除 test/、desktop/ 等运行时
+//   不需要的仓库目录）→ 18 包 tgz + 声明改写（根 dependencies 与
+//   features/* 子包的 core devDep）→ 干净 install → 构建 local-features /
+//   features → 无损瘦身（剥离构建期依赖与 node_modules 装饰文件）→ 拷贝
+//   node.exe → 隔离端口冒烟（health ready → POST shutdown → 进程退出）。
 //
 // staging 必须位于本仓库内部深层目录：features 构建的 linkLocalCore 与
 // check-agentdev-local 都按 <root>/../AgentDev 探测相邻框架仓库，staging
@@ -53,6 +54,11 @@ function runShell(command, cwd, label) {
 // 工作区现状导出（替代 git archive）：清单 = 已跟踪文件（以工作区内容为准，
 // 已删除的跳过）+ 未被 .gitignore 排除的未跟踪文件。node_modules / 开发
 // lock / dist 等 ignore 内容天然不进包（staging 自身在 dist/ 下，无自拷风险）。
+// staging 不需要的仓库目录前缀：test/ 是 node:test 开发测试；desktop/ 是
+// Tauri 壳源码（bundler 在源码树读取 tauri.conf.json 与 staging，包内副本
+// 是纯死重）。git ls-files 输出以 / 分隔，前缀带斜杠不会误伤 testxxx/ 类目录。
+const STAGING_EXCLUDE_PREFIXES = ['test/', 'desktop/'];
+
 function exportWorkingTree(destDir) {
   const res = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     cwd: root,
@@ -64,7 +70,9 @@ function exportWorkingTree(destDir) {
   }
   const files = res.stdout.toString('utf8').split('\0').filter(Boolean);
   let copied = 0;
+  let excluded = 0;
   for (const rel of files) {
+    if (STAGING_EXCLUDE_PREFIXES.some((p) => rel.startsWith(p))) { excluded += 1; continue; }
     const src = join(root, rel);
     if (!existsSync(src)) continue;
     const dest = join(destDir, rel);
@@ -76,7 +84,7 @@ function exportWorkingTree(destDir) {
     console.error('[pack:desktop] 工作区导出结果为空，疑似不在仓库根执行');
     process.exit(1);
   }
-  log(`源码树导出: ${copied} 个文件（工作区现状，含未提交改动）`);
+  log(`源码树导出: ${copied} 个文件（工作区现状，含未提交改动；排除 ${excluded} 个开发目录文件）`);
 }
 
 async function main() {
@@ -168,14 +176,17 @@ async function main() {
   runShell('npm run build:local-features', stagingDir, 'local-features 构建');
   runShell('npm run build:features', stagingDir, 'features 构建');
 
-  // 9. 无损瘦身：剥离纯构建期依赖（dist 已产出，发布树只读永不重建）。
-  //    冒烟在 pruned 树上执行，剥离破坏运行时会被当场抓获。
+  // 9. 无损瘦身：剥离纯构建期依赖与运行时装饰文件（dist 已产出，发布树只读
+  //    永不重建）。冒烟在 pruned 树上执行，剥离破坏运行时会被当场抓获。
   for (const name of FEATURE_DIRS) {
     rmSync(join(stagingDir, 'features', name, 'node_modules'), { recursive: true, force: true });
   }
   log('已删除 features/*/node_modules（构建期依赖，~200MB）');
   // typescript 声明在 dependencies 但只服务于本地构建：从声明移除后经
   // npm prune 一并清出（extraneous），devDependencies 同批清除。
+  // 注：just-bash 声明性依赖 typescript 会把它拉回安装树——其 js-exec 的
+  // TS 处理是内置 type stripping，从不 require 编译器（3.6.0 实测无模块引用），
+  // 包体经下方装饰剥离收缩，无需豁免。
   const builtPkgPath = join(stagingDir, 'package.json');
   const builtPkg = JSON.parse(readFileSync(builtPkgPath, 'utf8'));
   if (builtPkg.dependencies?.typescript) {
@@ -184,6 +195,7 @@ async function main() {
   }
   runShell('npm prune --omit=dev --no-audit --no-fund', stagingDir, 'prune 构建期依赖');
   assertVendorEntities(stagingDir, agentdevDeps, versions);
+  stripNodeModulesDecorations(stagingDir);
 
   // 10. 运行时 pinned 分发（node + npm，下载缓存在 dist/pack-cache，首次联网后离线可重跑）。
   //     npm 落 runtime/npm/（registry tgz 原生结构，bin/npm-cli.js 为入口），
@@ -220,6 +232,31 @@ function assertVendorEntities(stagingDir, agentdevDeps, versions) {
     process.exit(1);
   }
   log(`实体自检通过（${agentdevDeps.length} 包均为 vendor 实体）`);
+}
+
+// node_modules 装饰文件剥离：sourcemap / 类型声明 / 包内 markdown 运行时
+// 永不加载（Node 只解析 .js/.json/.node；.d.ts 属编译期产物）。LICENSE /
+// COPYING / NOTICE 前缀豁免——分发物保留许可文本，避免法务瑕疵。在 prune
+// 后的最终形态上执行，其后无 npm 操作，随后的冒烟即在该形态上验证。
+function stripNodeModulesDecorations(stagingDir) {
+  const STRIP_SUFFIXES = ['.map', '.d.ts', '.d.mts', '.d.cts', '.md', '.mdx'];
+  const KEEP_PREFIXES = ['license', 'licence', 'copying', 'notice'];
+  let removed = 0;
+  let bytes = 0;
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(p); continue; }
+      const lower = entry.name.toLowerCase();
+      if (!STRIP_SUFFIXES.some((s) => lower.endsWith(s))) continue;
+      if (KEEP_PREFIXES.some((s) => lower.startsWith(s))) continue;
+      bytes += statSync(p).size;
+      rmSync(p, { force: true });
+      removed += 1;
+    }
+  };
+  walk(join(stagingDir, 'node_modules'));
+  log(`剥离 node_modules 装饰文件（sourcemap/.d.ts/markdown）: ${removed} 个，约 ${(bytes / 1048576).toFixed(1)}MB`);
 }
 
 // pinned 运行时下载（缓存在 dist/pack-cache；首次联网，之后离线可重跑）
