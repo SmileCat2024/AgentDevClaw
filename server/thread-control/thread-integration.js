@@ -61,14 +61,12 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
   /**
    * 把上一棒里「已投递但从未被执行」的指令放回待投递队列。
    *
-   * `delivered` 在框架里是终态（TERMINAL_STATUSES），只表示「已交给 runtime」，
-   * 不表示「已执行出结果」。接力恰好发生在指令被接收、该轮尚未产出终态事件时，
-   * 这条指令就会永久停在 delivered：后续每次补投递只投 pending，它再也不会被
-   * 送达新 head——指令静默丢失，调度方永远等不到通知，表现为「干完活没通知」
-   * （实际是指令没被执行）。
-   *
-   * 判定依据是看板事件流：该指令若已有 turn.completed，说明它确实执行完了；
-   * 没有则说明这一棒只消费了它、没跑完。只看事件事实，不做时间或内容猜测。
+   * `delivered` 在框架里表示已交给 runtime，接续时还需区分两种情况：
+   * 尚无执行事件的输入可能仍在旧 runtime 队列里，旧 runtime 退役后需由新 head
+   * 承接；已关联到旧轮次的输入则已进入旧会话上下文，不能作为新输入重放。
+   * 后者从 turn.started 的 sourceRef 或轮次终态的 sourceRef /
+   * consumedSourceRefs 识别。completed、cancelled、failed 描述轮次结果，均不
+   * 改变其关联输入已经被消费的事实。
    *
    * 归属判定用 sessionChain 的存续时间窗（deliveredAt ∈ [startedAt, endedAt]），
    * 而不是 deliveryRef——后者是 runtime 标识，与 sessionId 不同源。
@@ -86,15 +84,21 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
       return [];
     }
     const entries = Array.isArray(state?.executionEvents) ? state.executionEvents : [];
-    // 事件流按会话记录：收集这一棒里「已产出 turn.completed」的指令引用。
-    const settled = new Set();
+    // 与执行轮次关联的输入已被旧 runtime 消费，不再作为新输入重放。
+    // 这同时覆盖当前轮次的 sourceRef、忙时注入到当前轮的 consumedSourceRefs，
+    // 以及 completed / cancelled / failed 等终态：终态只描述轮次结果，不会
+    // 撤销输入已经进入旧会话上下文这一事实。
+    const consumed = new Set();
     let touched = false;
     for (const entry of entries) {
       if (entry?.sessionId !== retiredSessionId) continue;
       touched = true;
-      if (entry?.event?.type !== 'turn.completed') continue;
-      for (const ref of [entry.event.sourceRef, ...(entry.event.consumedSourceRefs || [])]) {
-        if (typeof ref === 'string' && ref) settled.add(ref);
+      const event = entry?.event;
+      if (event?.type !== 'turn.started' && event?.type !== 'turn.completed'
+        && event?.type !== 'turn.continued' && event?.type !== 'turn.cancelled'
+        && event?.type !== 'turn.failed') continue;
+      for (const ref of [event.sourceRef, ...(event.consumedSourceRefs || [])]) {
+        if (typeof ref === 'string' && ref) consumed.add(ref);
       }
     }
     // 保留窗口里看不到这一棒的任何事件：可能整棒被裁剪，无从判断，保守跳过。
@@ -109,8 +113,8 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
     for (const command of thread?.commands || []) {
       if (command?.status !== 'delivered') continue;
       if (command.kind === 'system_continuation') continue;
-      // 已有终态事件：这一棒确实把它跑完了，不得重投。
-      if (settled.has(command.commandId)) continue;
+      // 已被旧 head 轮次消费的输入不得作为新输入重放。
+      if (consumed.has(command.commandId)) continue;
       // 必须落在退役这一棒的存续期内，才算「这一棒收下但没跑完」。
       const deliveredAt = Number(command.deliveredAt) || 0;
       if (!deliveredAt || deliveredAt < barStart || deliveredAt > barEnd) continue;

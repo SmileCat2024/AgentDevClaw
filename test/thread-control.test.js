@@ -1031,11 +1031,15 @@ describe('ThreadIntegration (coder host gating)', () => {
     });
     const strandThread = await integration.onSessionCreated('coder', { id: 'coder-s1' });
 
-    // 两条指令都在旧 head 上「已投递」。
-    await core.appendCommand({ threadId: strandThread.threadId, text: '被接力打断的指令' });
+    // 四条指令都已交给旧 head：一条尚无执行事件、一条是当前回合输入、
+    // 一条在当前回合忙时被消费、最后一条已完成。忙时消费项只出现在
+    // 当前回合的 consumedSourceRefs，不会有自己的 turn.started。
+    await core.appendCommand({ threadId: strandThread.threadId, text: '尚未开始的指令' });
+    await core.appendCommand({ threadId: strandThread.threadId, text: '接续时已开始执行的指令' });
+    await core.appendCommand({ threadId: strandThread.threadId, text: '忙时已消费的输入' });
     await core.appendCommand({ threadId: strandThread.threadId, text: '已经跑完的指令' });
     let record = await core.getThread(strandThread.threadId);
-    const [stranded, finished] = record.commands.map((c) => c.commandId);
+    const [notStarted, interrupted, consumedWhileBusy, finished] = record.commands.map((c) => c.commandId);
     await core.store.update(strandThread.threadId, (draft) => {
       for (const command of draft.commands) {
         command.status = 'delivered';
@@ -1044,29 +1048,41 @@ describe('ThreadIntegration (coder host gating)', () => {
       return draft;
     });
 
-    // 只给「已跑完」那条补终态事件；另一条只有 turn.started，说明这一棒没跑完。
+    // 接续中断正在执行的轮次；该轮同时已消费另一条忙时排队输入。
     await control.board.recordRuntimeEvent({
       agentId: 'coder', sessionId: 'coder-s1', runtimeInstanceId: 'r1',
-      event: { type: 'turn.started', turn: 1, sourceRef: finished },
+      event: { type: 'turn.started', turn: 1, sourceRef: interrupted },
     });
     await control.board.recordRuntimeEvent({
       agentId: 'coder', sessionId: 'coder-s1', runtimeInstanceId: 'r1',
-      event: { type: 'turn.completed', turn: 1, sourceRef: finished },
+      event: { type: 'turn.cancelled', turn: 1, sourceRef: interrupted, consumedSourceRefs: [consumedWhileBusy] },
+    });
+    await control.board.recordRuntimeEvent({
+      agentId: 'coder', sessionId: 'coder-s1', runtimeInstanceId: 'r1',
+      event: { type: 'turn.started', turn: 2, sourceRef: finished },
+    });
+    await control.board.recordRuntimeEvent({
+      agentId: 'coder', sessionId: 'coder-s1', runtimeInstanceId: 'r1',
+      event: { type: 'turn.completed', turn: 2, sourceRef: finished },
     });
 
     const outcome = await integration.applySessionSuccession({
       agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
     });
     assert.equal(outcome.applied, true);
-    assert.deepEqual(outcome.requeued, [stranded]);
-    // 回收的那条回到待投递并被新 head 收到；已跑完的那条不重投。
+    assert.deepEqual(outcome.requeued, [notStarted]);
+    // 仅无执行关联的输入转交新 head；当前输入、忙时消费项及已完成项不重投。
     assert.equal(turns.length, 1);
-    assert.equal(turns[0].text, '被接力打断的指令');
+    assert.equal(turns[0].text, '尚未开始的指令');
 
     record = await core.getThread(strandThread.threadId);
-    const strandedAfter = record.commands.find((c) => c.commandId === stranded);
+    const notStartedAfter = record.commands.find((c) => c.commandId === notStarted);
+    const interruptedAfter = record.commands.find((c) => c.commandId === interrupted);
+    const consumedAfter = record.commands.find((c) => c.commandId === consumedWhileBusy);
     const finishedAfter = record.commands.find((c) => c.commandId === finished);
-    assert.equal(strandedAfter.status, ThreadCommandStatus.DELIVERED);
+    assert.equal(notStartedAfter.status, ThreadCommandStatus.DELIVERED);
+    assert.equal(interruptedAfter.status, ThreadCommandStatus.DELIVERED);
+    assert.equal(consumedAfter.status, ThreadCommandStatus.DELIVERED);
     assert.equal(finishedAfter.status, ThreadCommandStatus.DELIVERED);
   });
 
