@@ -446,7 +446,7 @@ function renderFWList(agent, block, formId) {
   html += '<div class="fw-banner-title">' + escapeHtml(currentLanguage === 'zh' ? 'Agent 工作空间' : 'Agent Workspace') + '</div>';
   html += '<div class="fw-banner-desc">' + escapeHtml(currentLanguage === 'zh' ? '创建 Agent 项目、配置能力、编排工作流、启动测试。' : 'Create Agent projects, configure capabilities, orchestrate workflows, and launch tests.') + '</div>';
   html += '</div>';
-  html += '<button class="fw-btn" onclick="window.fwCreateNewAgent()">' + escapeHtml(currentLanguage === 'zh' ? '新建 Agent' : 'New Agent') + '</button>';
+  html += '<button class="fw-btn" data-action="fw.createNewAgent">' + escapeHtml(currentLanguage === 'zh' ? '新建 Agent' : 'New Agent') + '</button>';
   html += '</div>';
 
   if (configs.length) {
@@ -455,21 +455,21 @@ function renderFWList(agent, block, formId) {
     configs.forEach(item => {
       const summary = getAssemblySavedConfigSummary(agent, item);
       const running = summary.runningCount > 0;
-      html += '<div class="fw-card' + (running ? ' fw-live' : '') + '" data-prebuilt-project-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-project-id="' + escapeHtml(item.id) + '" onclick="window.fwOpenProjectDetail(\'' + escapeHtml(item.id) + '\')">';
+      html += '<div class="fw-card' + (running ? ' fw-live' : '') + '" data-prebuilt-project-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-project-id="' + escapeHtml(item.id) + '" data-action="fw.openProjectDetail" data-agent-id="' + escapeHtml(item.id) + '">';
       html += '<div class="fw-card-name">' + escapeHtml(item.name) + '</div>';
       html += '<div class="fw-card-desc">' + escapeHtml(item.goal || getAssemblyPresetLabel(item.preset) || '-') + '</div>';
       html += '<div class="fw-card-meta"><span>' + item.features.length + (currentLanguage === 'zh' ? ' Feature' : ' Features') + '</span>';
       if (running) html += '<span class="fw-green">' + escapeHtml(currentLanguage === 'zh' ? '运行中' : 'Running') + '</span>';
       html += '</div>';
       html += '<div class="fw-card-act">';
-      html += '<button class="fw-btn fw-btn-primary" onclick="event.stopPropagation();window.fwLaunchConfig(\'' + escapeHtml(item.id) + '\',this)">' + escapeHtml(currentLanguage === 'zh' ? '启动' : 'Launch') + '</button>';
-      html += '<button class="fw-btn" onclick="event.stopPropagation();window.fwOpenProjectDetail(\'' + escapeHtml(item.id) + '\')">' + escapeHtml(currentLanguage === 'zh' ? '编辑' : 'Edit') + '</button>';
+      html += '<button class="fw-btn fw-btn-primary" data-action="fw.launchConfig" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(currentLanguage === 'zh' ? '启动' : 'Launch') + '</button>';
+      html += '<button class="fw-btn" data-action="fw.openProjectDetail" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(currentLanguage === 'zh' ? '编辑' : 'Edit') + '</button>';
       html += '</div></div>';
     });
     html += '</div></div>';
   } else {
     html += '<div class="fw-section"><h3>' + escapeHtml(currentLanguage === 'zh' ? '项目' : 'Projects') + '</h3><div class="fw-empty"><div>' + escapeHtml(currentLanguage === 'zh' ? '还没有项目' : 'No projects yet') + '</div>';
-    html += '<button class="fw-btn" onclick="window.fwCreateNewAgent()">' + escapeHtml(currentLanguage === 'zh' ? '创建第一个' : 'Create first') + '</button></div></div>';
+    html += '<button class="fw-btn" data-action="fw.createNewAgent">' + escapeHtml(currentLanguage === 'zh' ? '创建第一个' : 'Create first') + '</button></div></div>';
   }
 
   if (runs.length) {
@@ -488,8 +488,8 @@ function renderFWList(agent, block, formId) {
         html += '<div><div class="fw-run-item-title">' + escapeHtml(item.title || item.agentName || item.id) + '</div>';
         html += '<div class="fw-run-item-meta">' + escapeHtml([running ? (currentLanguage === 'zh' ? '运行中' : 'Running') : (currentLanguage === 'zh' ? '已停止' : 'Stopped'), formatWorkspaceDate(item.updatedAt || item.createdAt), item.openDirectory || ''].filter(Boolean).join(' · ')) + '</div></div>';
         html += '<div class="fw-card-act">';
-        html += '<button class="fw-btn fw-btn-primary" onclick="window.fwResumeRun(\'' + escapeHtml(item.id) + '\',this)">' + escapeHtml(currentLanguage === 'zh' ? '继续' : 'Continue') + '</button>';
-        if (running) html += '<button class="fw-btn" onclick="window.stopAssemblySessionRuntime(\'' + escapeHtml(item.id) + '\');setTimeout(fwRerender,200)">' + escapeHtml(currentLanguage === 'zh' ? '停止' : 'Stop') + '</button>';
+        html += '<button class="fw-btn fw-btn-primary" data-action="fw.resumeRun" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(currentLanguage === 'zh' ? '继续' : 'Continue') + '</button>';
+        if (running) html += '<button class="fw-btn" data-action="assembly.stopRuntime" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(currentLanguage === 'zh' ? '停止' : 'Stop') + '</button>';
         html += '</div></div>';
       });
       html += '</div></details>';
@@ -516,20 +516,20 @@ function renderFWDetail(agent, block, formId, st) {
 
   html += '<div class="fw-detail-head">';
   html += '<div class="fw-detail-nav">';
-  html += '<button class="fw-btn fw-btn-ghost fw-back-btn" title="' + escapeHtml(currentLanguage === 'zh' ? '返回项目列表' : 'Back to projects') + '" onclick="fwBackToList()">&lt;</button>';
-  html += '<button class="fw-btn fw-project-switch" type="button" onclick="fwOpenProjectPicker()">' + escapeHtml(currentLanguage === 'zh' ? '切换项目' : 'Switch Project') + '</button>';
+  html += '<button class="fw-btn fw-btn-ghost fw-back-btn" title="' + escapeHtml(currentLanguage === 'zh' ? '返回项目列表' : 'Back to projects') + '" data-action="fw.backToList">&lt;</button>';
+  html += '<button class="fw-btn fw-project-switch" type="button" data-action="fw.openProjectPicker">' + escapeHtml(currentLanguage === 'zh' ? '切换项目' : 'Switch Project') + '</button>';
   html += '</div>';
   html += '<div class="fw-detail-toggle">';
-  html += '<button class="fw-toggle' + (section === 'features' ? ' active' : '') + '" onclick="fwSwitchSection(\'features\')">' + escapeHtml(currentLanguage === 'zh' ? '通用设置' : 'General') + '</button>';
-  html += '<button class="fw-toggle' + (isConfig ? ' active' : '') + '" onclick="fwSwitchSection(\'config\')">' + escapeHtml(currentLanguage === 'zh' ? '能力配置' : 'Features') + '</button>';
-  html += '<button class="fw-toggle' + (isOrchestrate ? ' active' : '') + '" onclick="fwSwitchSection(\'orchestrate\')">' + escapeHtml(currentLanguage === 'zh' ? '协作蓝图' : 'Blueprint') + '</button>';
+  html += '<button class="fw-toggle' + (section === 'features' ? ' active' : '') + '" data-action="fw.switchSection" data-section="features">' + escapeHtml(currentLanguage === 'zh' ? '通用设置' : 'General') + '</button>';
+  html += '<button class="fw-toggle' + (isConfig ? ' active' : '') + '" data-action="fw.switchSection" data-section="config">' + escapeHtml(currentLanguage === 'zh' ? '能力配置' : 'Features') + '</button>';
+  html += '<button class="fw-toggle' + (isOrchestrate ? ' active' : '') + '" data-action="fw.switchSection" data-section="orchestrate">' + escapeHtml(currentLanguage === 'zh' ? '协作蓝图' : 'Blueprint') + '</button>';
   html += '</div>';
   html += '<div class="fw-detail-actions">';
   const _launchBusy = ['creating', 'installing', 'starting'].includes(String(draft.env_status || ''));
   const _launchLabel = _launchBusy
     ? (currentLanguage === 'zh' ? '启动中...' : 'Launching...')
     : (currentLanguage === 'zh' ? '启动' : 'Launch');
-  html += '<button class="fw-btn fw-btn-primary' + (_launchBusy ? ' fw-btn-busy' : '') + '"' + (_launchBusy ? ' disabled' : '') + ' onclick="window.launchAssemblyInstance()">' + escapeHtml(_launchLabel) + '</button>';
+  html += '<button class="fw-btn fw-btn-primary' + (_launchBusy ? ' fw-btn-busy' : '') + '"' + (_launchBusy ? ' disabled' : '') + ' data-action="assembly.launch">' + escapeHtml(_launchLabel) + '</button>';
   html += '</div>';
   html += '</div>';
 
@@ -591,17 +591,17 @@ function renderFWFeatures(agent, block, formId, draft) {
   if (draft.env_created === '1') {
     html += '<input class="fw-input" value="' + escapeHtml(draft.assembly_name || '') + '" readonly>';
   } else {
-    html += '<input class="fw-input" value="' + escapeHtml(draft.assembly_name || '') + '" placeholder="my-agent" oninput="window.updateAssemblyDraftField(\'' + formId + '\',\'assembly_name\',this.value)" onblur="window.commitAssemblyDraftField(\'' + formId + '\',\'assembly_name\',this.value)">';
+    html += '<input class="fw-input" value="' + escapeHtml(draft.assembly_name || '') + '" placeholder="my-agent" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="assembly_name">';
   }
   html += '</div>';
   html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '名称' : 'Name') + '</label>';
-  html += '<input class="fw-input" value="' + escapeHtml(draft.display_name || '') + '" placeholder="' + escapeHtml(draft.assembly_name || 'My Agent') + '" oninput="window.updateAssemblyDraftField(\'' + formId + '\',\'display_name\',this.value)" onblur="window.commitAssemblyDraftField(\'' + formId + '\',\'display_name\',this.value)">';
+  html += '<input class="fw-input" value="' + escapeHtml(draft.display_name || '') + '" placeholder="' + escapeHtml(draft.assembly_name || 'My Agent') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="display_name">';
   html += '</div>';
   html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '目标' : 'Goal') + '</label>';
-  html += '<textarea class="fw-textarea" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '这个 Agent 帮用户做什么？' : 'What does this Agent do?') + '" oninput="window.updateAssemblyDraftField(\'' + formId + '\',\'goal\',this.value)" onblur="window.commitAssemblyDraftField(\'' + formId + '\',\'goal\',this.value)">' + escapeHtml(draft.goal || '') + '</textarea></div>';
+  html += '<textarea class="fw-textarea" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '这个 Agent 帮用户做什么？' : 'What does this Agent do?') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="goal">' + escapeHtml(draft.goal || '') + '</textarea></div>';
   html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? 'LLM 预设' : 'LLM Preset') + '</label>';
   const _modelPresets = getClawModelPresets();
-  html += '<select class="flow-editor-select" onchange="window.updateAssemblyDraftField(\'' + formId + '\',\'model_preset\',this.value);window.commitAssemblyDraftField(\'' + formId + '\',\'model_preset\',this.value)">';
+  html += '<select class="flow-editor-select" data-action="assembly.draftField" data-event="change focusout" data-form-id="' + escapeHtml(formId) + '" data-field="model_preset">';
   html += '<option value="">' + escapeHtml(currentLanguage === 'zh' ? '使用全局默认模型' : 'Use global default model') + '</option>';
   _modelPresets.forEach(function(p) {
     html += '<option value="' + escapeHtml(p.name || '') + '"' + (draft.model_preset === p.name ? ' selected' : '') + '>' + escapeHtml(p.name + ' (' + (p.model || '—') + ')') + '</option>';
@@ -609,10 +609,10 @@ function renderFWFeatures(agent, block, formId, draft) {
   html += '</select></div>';
   html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '工作目录' : 'Workdir') + '</label>';
   html += '<div style="display:flex;gap:8px;align-items:center;">';
-  html += '<input class="fw-input" style="flex:1;" value="' + escapeHtml(draft.workdir || '') + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '留空沿用运行环境目录' : 'Use environment directory by default') + '" oninput="window.updateAssemblyDraftField(\'' + formId + '\',\'workdir\',this.value)" onblur="window.commitAssemblyDraftField(\'' + formId + '\',\'workdir\',this.value)">';
-  html += '<button class="fw-btn fw-btn-subtle" type="button" onclick="window.chooseWorkspaceDirectory(\'' + formId + '\',\'workdir\')">' + escapeHtml(currentLanguage === 'zh' ? '选择' : 'Browse') + '</button>';
+  html += '<input class="fw-input" style="flex:1;" value="' + escapeHtml(draft.workdir || '') + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '留空沿用运行环境目录' : 'Use environment directory by default') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="workdir">';
+  html += '<button class="fw-btn fw-btn-subtle" type="button" data-action="assembly.chooseDirectory" data-form-id="' + escapeHtml(formId) + '" data-field="workdir">' + escapeHtml(currentLanguage === 'zh' ? '选择' : 'Browse') + '</button>';
   html += '</div></div>';
-  html += '<button class="fw-prompt-card" type="button" onclick="fwOpenPromptEditor()">';
+  html += '<button class="fw-prompt-card" type="button" data-action="fw.openPromptEditor">';
   html += '<span class="fw-prompt-title">' + escapeHtml(currentLanguage === 'zh' ? '系统提示词' : 'System Prompt') + '</span>';
   html += '<span class="fw-prompt-preview">' + escapeHtml(draft.custom_system_prompt || (currentLanguage === 'zh' ? '使用自动生成的系统提示词。点击打开大编辑器。' : 'Use the generated system prompt. Click to open the large editor.')) + '</span>';
   html += '</button>';
@@ -622,16 +622,16 @@ function renderFWFeatures(agent, block, formId, draft) {
   if (env.status === 'ready') {
     if (env.directory) html += '<div class="fw-env-dir"><code>' + escapeHtml(env.directory) + '</code></div>';
     html += '<div class="fw-env-note">' + escapeHtml(currentLanguage === 'zh' ? '环境已就绪，可直接启动。' : 'Environment ready. You can launch directly.') + '</div>';
-    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-subtle" onclick="window.createAssemblyEnvironment();setTimeout(fwRerender,300)">' + escapeHtml(currentLanguage === 'zh' ? '重建环境' : 'Rebuild') + '</button></div>';
+    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-subtle" data-action="assembly.ensureEnv" data-rerender="300">' + escapeHtml(currentLanguage === 'zh' ? '重建环境' : 'Rebuild') + '</button></div>';
   } else if (env.status === 'missing' || env.status === 'missing-name') {
     html += '<div class="fw-env-note">' + escapeHtml(env.status === 'missing-name'
       ? (currentLanguage === 'zh' ? '填写标识后创建运行环境。' : 'Set an ID first, then create the environment.')
       : (currentLanguage === 'zh' ? '尚未创建运行环境，首次启动前需要准备。' : 'No runtime environment yet. Create one before launch.')) + '</div>';
-    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-primary" onclick="window.createAssemblyEnvironment();setTimeout(fwRerender,300)"' + (env.status === 'missing-name' ? ' disabled' : '') + '>' + escapeHtml(currentLanguage === 'zh' ? '创建环境' : 'Create') + '</button></div>';
+    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-primary" data-action="assembly.ensureEnv" data-rerender="300"' + (env.status === 'missing-name' ? ' disabled' : '') + '>' + escapeHtml(currentLanguage === 'zh' ? '创建环境' : 'Create') + '</button></div>';
   } else if (env.status === 'stale') {
     if (env.directory) html += '<div class="fw-env-dir"><code>' + escapeHtml(env.directory) + '</code></div>';
     html += '<div class="fw-env-note">' + escapeHtml(env.message || (currentLanguage === 'zh' ? '能力配置已变更，需要更新环境。' : 'Capabilities changed. Update the environment to match.')) + '</div>';
-    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-accent" onclick="window.createAssemblyEnvironment();setTimeout(fwRerender,300)">' + escapeHtml(currentLanguage === 'zh' ? '更新环境' : 'Update') + '</button></div>';
+    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-accent" data-action="assembly.ensureEnv" data-rerender="300">' + escapeHtml(currentLanguage === 'zh' ? '更新环境' : 'Update') + '</button></div>';
   } else {
     if (env.directory) html += '<div class="fw-env-dir"><code>' + escapeHtml(env.directory) + '</code></div>';
     if (env.message) html += '<div class="fw-env-note">' + escapeHtml(env.message) + '</div>';
@@ -648,11 +648,11 @@ function renderFWFeatures(agent, block, formId, draft) {
     ['official', currentLanguage === 'zh' ? '官方' : 'Official', officialCount],
     ['custom', currentLanguage === 'zh' ? '自定义' : 'Custom', customCount],
   ].forEach(tab => {
-    html += '<button class="fw-feat-tab' + (sourceFilter === tab[0] ? ' active' : '') + '" type="button" onclick="fwSetFeatureFilter(\'' + escapeHtml(formId) + '\',\'' + escapeHtml(tab[0]) + '\')">' + escapeHtml(tab[1] + ' ' + tab[2]) + '</button>';
+    html += '<button class="fw-feat-tab' + (sourceFilter === tab[0] ? ' active' : '') + '" type="button" data-action="fw.setFeatureFilter" data-form-id="' + escapeHtml(formId) + '" data-filter="' + escapeHtml(tab[0]) + '">' + escapeHtml(tab[1] + ' ' + tab[2]) + '</button>';
   });
   html += '</div>';
-  html += '<input class="fw-feat-search" value="' + escapeHtml(searchValue) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '搜索 Feature' : 'Search Features') + '" oninput="fwSetFeatureQuery(\'' + escapeHtml(formId) + '\', this.value)" onblur="fwCommitFeatureQuery(\'' + escapeHtml(formId) + '\', this.value)">';
-  html += '<button class="fw-btn" type="button" onclick="fwOpenFeatureImport(\'' + escapeHtml(formId) + '\')">' + escapeHtml(currentLanguage === 'zh' ? '上传 tgz' : 'Upload tgz') + '</button>';
+  html += '<input class="fw-feat-search" value="' + escapeHtml(searchValue) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '搜索 Feature' : 'Search Features') + '" data-action="fw.featureSearch" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '">';
+  html += '<button class="fw-btn" type="button" data-action="fw.openFeatureImport" data-form-id="' + escapeHtml(formId) + '">' + escapeHtml(currentLanguage === 'zh' ? '上传 tgz' : 'Upload tgz') + '</button>';
   html += '</div>';
   html += '<div class="fw-feat-head" data-fw-feature-count data-total="' + escapeHtml(String(sourcePackages.length)) + '" data-mounted="' + escapeHtml(String(selected.length)) + '">' + escapeHtml((currentLanguage === 'zh' ? '当前显示 ' : 'Showing ') + visiblePackages.length + ' / ' + sourcePackages.length + (currentLanguage === 'zh' ? `，已挂载 ${selected.length}` : `, mounted ${selected.length}`)) + '</div>';
   html += '<div class="fw-feat-list">';
@@ -668,7 +668,7 @@ function renderFWFeatures(agent, block, formId, draft) {
       const featureTypes = Array.isArray(pkg.featureTypes) ? pkg.featureTypes : [];
       const searchText = getFeatureSearchText(pkg);
       const matched = !searchQuery || searchText.toLowerCase().includes(searchQuery);
-      html += '<div class="fw-feat' + (enabled ? ' on' : '') + '" data-fw-feature-search="' + escapeHtml(searchText) + '" onclick="fwToggleFeature(\'' + escapeHtml(formId) + '\',\'' + escapeHtml(token) + '\')"' + (matched ? '' : ' hidden') + '>';
+      html += '<div class="fw-feat' + (enabled ? ' on' : '') + '" data-fw-feature-search="' + escapeHtml(searchText) + '" data-action="fw.toggleFeature" data-form-id="' + escapeHtml(formId) + '" data-token="' + escapeHtml(token) + '"' + (matched ? '' : ' hidden') + '>';
       html += '<div class="fw-feat-top"><div class="fw-feat-name">' + escapeHtml(shortName) + '</div>';
       html += '<span class="fw-feat-badge mount">' + escapeHtml(enabled ? (currentLanguage === 'zh' ? '已挂载' : 'Mounted') : (currentLanguage === 'zh' ? '未挂载' : 'Off')) + '</span></div>';
       html += '<div class="fw-feat-desc">' + escapeHtml(pkg.description || (currentLanguage === 'zh' ? '暂无说明。' : 'No description.')) + '</div>';
@@ -730,10 +730,10 @@ function renderFlowWorkspaceProjectHero(agent, options = {}) {
     '</div>',
     '</div>',
     '<div class="flow-project-actions">',
-    '<button class="workspace-action' + (active === 'projects' ? ' secondary' : '') + '" type="button" onclick="window.runWorkspaceAction(JSON.stringify({type: \'show_workspace_tab\', tab: \'projects\'}))">' + escapeHtml(currentLanguage === 'zh' ? '项目总览' : 'Overview') + '</button>',
-    '<button class="workspace-action' + (active === 'assemble' ? ' secondary' : '') + '" type="button" onclick="window.runWorkspaceAction(JSON.stringify({type: \'show_workspace_tab\', tab: \'assemble\'}))">' + escapeHtml(currentLanguage === 'zh' ? '能力配置' : 'Features') + '</button>',
-    '<button class="workspace-action' + (active === 'orchestrate' ? ' secondary' : '') + '" type="button" onclick="window.runWorkspaceAction(JSON.stringify({type: \'show_workspace_tab\', tab: \'orchestrate\'}))">' + escapeHtml(currentLanguage === 'zh' ? '协作蓝图' : 'Blueprint') + '</button>',
-    '<button class="workspace-action" type="button" onclick="window.launchAssemblyInstance()">' + escapeHtml(currentLanguage === 'zh' ? '快速运行测试' : 'Quick Test Run') + '</button>',
+    '<button class="workspace-action' + (active === 'projects' ? ' secondary' : '') + '" type="button" data-action="wsAction.showTab" data-tab="projects">' + escapeHtml(currentLanguage === 'zh' ? '项目总览' : 'Overview') + '</button>',
+    '<button class="workspace-action' + (active === 'assemble' ? ' secondary' : '') + '" type="button" data-action="wsAction.showTab" data-tab="assemble">' + escapeHtml(currentLanguage === 'zh' ? '能力配置' : 'Features') + '</button>',
+    '<button class="workspace-action' + (active === 'orchestrate' ? ' secondary' : '') + '" type="button" data-action="wsAction.showTab" data-tab="orchestrate">' + escapeHtml(currentLanguage === 'zh' ? '协作蓝图' : 'Blueprint') + '</button>',
+    '<button class="workspace-action" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '快速运行测试' : 'Quick Test Run') + '</button>',
     '</div>',
     '</section>',
   ].join('');
@@ -801,7 +801,7 @@ function renderAssemblyLibraryBlock(agent, block) {
 
 function renderAssemblyStageHeader(formId, activeStage, stageKey, index, summary) {
   return [
-    '<button class="assembly-stage-header" type="button" onclick="window.toggleAssemblyStage(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapeHtml(stageKey) + '&quot;)">',
+    '<button class="assembly-stage-header" type="button" data-action="assembly.toggleStage" data-form-id="' + escapeHtml(formId) + '" data-stage="' + escapeHtml(stageKey) + '">',
     '<span class="assembly-stage-number">' + escapeHtml(String(index)) + '</span>',
     '<span><div class="assembly-stage-title">' + escapeHtml(getAssemblyStageLabel(stageKey)) + '</div><div class="assembly-stage-summary">' + escapeHtml(summary) + '</div></span>',
     '<span class="assembly-stage-indicator">' + escapeHtml(activeStage === stageKey ? (currentLanguage === 'zh' ? '当前阶段' : 'Current Step') : (currentLanguage === 'zh' ? '展开' : 'Expand')) + '</span>',
@@ -820,7 +820,7 @@ function renderAssemblyFeatureCards(featuredPackages, selectedFeatures, formId, 
     const packageToken = item.id || item.packageName || item.name || '';
     const enabled = selectedFeatures.includes(packageToken) || selectedFeatures.includes(item.packageName || '');
     return [
-      '<article class="assembly-feature-card' + (enabled ? ' active' : '') + '" onclick="window.toggleWorkspaceSelection(&quot;' + escapeHtml(formId) + '&quot;, &quot;selected_features&quot;, &quot;' + escapeHtml(packageToken) + '&quot;)">',
+      '<article class="assembly-feature-card' + (enabled ? ' active' : '') + '" data-action="assembly.toggleFeature" data-form-id="' + escapeHtml(formId) + '" data-token="' + escapeHtml(packageToken) + '">',
       '<div class="assembly-feature-head">',
       '<div>',
       '<div class="assembly-feature-title">' + escapeHtml(item.name || item.id || getAssemblyFeatureLabel(packageToken, packages)) + '</div>',
@@ -837,8 +837,8 @@ function renderAssemblyFeatureCards(featuredPackages, selectedFeatures, formId, 
       item.description ? '<div class="workspace-repo-desc">' + escapeHtml(item.description) + '</div>' : '',
       '<div class="assembly-pill-row">' + (Array.isArray(item.featureTypes) ? item.featureTypes.map((tag) => '<span class="workspace-tag">' + escapeHtml(getFeatureTypeLabel(tag)) + '</span>').join('') : '') + '</div>',
       '<div class="workspace-repo-actions">',
-      '<button class="workspace-action' + (enabled ? ' secondary' : '') + '" type="button" onclick="event.stopPropagation(); window.toggleWorkspaceSelection(&quot;' + escapeHtml(formId) + '&quot;, &quot;selected_features&quot;, &quot;' + escapeHtml(packageToken) + '&quot;)">' + escapeHtml(enabled ? getRepoLocaleText('停用', 'Disable') : getRepoLocaleText('启用', 'Enable')) + '</button>',
-      '<button class="workspace-action secondary" type="button" onclick="event.stopPropagation(); window.openRepositoryPackageDetails(&quot;' + escapeHtml(item.id || packageToken) + '&quot;)">' + escapeHtml(getRepoLocaleText('详情', 'Details')) + '</button>',
+      '<button class="workspace-action' + (enabled ? ' secondary' : '') + '" type="button" data-action="assembly.toggleFeature" data-form-id="' + escapeHtml(formId) + '" data-token="' + escapeHtml(packageToken) + '">' + escapeHtml(enabled ? getRepoLocaleText('停用', 'Disable') : getRepoLocaleText('启用', 'Enable')) + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="assembly.openPackageDetails" data-package-id="' + escapeHtml(item.id || packageToken) + '">' + escapeHtml(getRepoLocaleText('详情', 'Details')) + '</button>',
       '</div>',
       '</article>',
     ].join('');
@@ -960,12 +960,12 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     ...savedConfigs.map((item) => '<option value="' + escapeHtml(item.id) + '"' + (switcherValue === item.id ? ' selected' : '') + '>' + escapeHtml(item.name) + '</option>'),
   ].join('');
   const targetListHtml = [
-    '<button class="assembly-target-item' + (editorMode !== 'editing-saved' ? ' active' : '') + '" type="button" onclick="window.switchAssemblyEditingTarget(&quot;__new__&quot;)">',
+    '<button class="assembly-target-item' + (editorMode !== 'editing-saved' ? ' active' : '') + '" type="button" data-action="assembly.switchEditingTarget" data-target-id="__new__">',
     '<span class="assembly-target-item-title">' + escapeHtml(currentLanguage === 'zh' ? '新建配置' : 'New Setup') + '</span>',
     '<span class="assembly-target-item-meta">' + escapeHtml(currentLanguage === 'zh' ? '开始一个新的 chatbot 配置。' : 'Start a fresh chatbot setup.') + '</span>',
     '</button>',
     ...savedConfigs.map((item) => (
-      '<button class="assembly-target-item' + (switcherValue === item.id ? ' active' : '') + '" type="button" onclick="window.switchAssemblyEditingTarget(&quot;' + escapeHtml(item.id) + '&quot;)">' +
+      '<button class="assembly-target-item' + (switcherValue === item.id ? ' active' : '') + '" type="button" data-action="assembly.switchEditingTarget" data-target-id="' + escapeHtml(item.id) + '">' +
       '<span class="assembly-target-item-title">' + escapeHtml(item.name) + '</span>' +
       '<span class="assembly-target-item-meta">' + escapeHtml(item.goal || getAssemblyPresetLabel(item.preset)) + '</span>' +
       '</button>'
@@ -977,7 +977,7 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     { key: 'environment', title: currentLanguage === 'zh' ? '环境' : 'Environment', meta: environmentStageSummary },
     { key: 'review', title: currentLanguage === 'zh' ? '启动' : 'Launch', meta: reviewStageSummary },
   ].map((item, index) => (
-    '<button class="assembly-target-item' + (stage === item.key ? ' active' : '') + '" type="button" onclick="window.jumpAssemblyStage(&quot;' + escapeHtml(item.key) + '&quot;)">' +
+    '<button class="assembly-target-item' + (stage === item.key ? ' active' : '') + '" type="button" data-action="assembly.jumpStage" data-stage="' + escapeHtml(item.key) + '">' +
     '<span class="assembly-target-item-title">' + escapeHtml(`${index + 1}. ${item.title}`) + '</span>' +
     '<span class="assembly-target-item-meta">' + escapeHtml(item.meta) + '</span>' +
     '</button>'
@@ -987,10 +987,10 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     'tool-operator',
     'workflow-assistant',
   ].map((item) => [
-    '<div class="assembly-preset-card' + (preset === item ? ' active' : '') + '" onclick="window.applyAssemblyPreset(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapeHtml(item) + '&quot;)">',
+    '<div class="assembly-preset-card' + (preset === item ? ' active' : '') + '" data-action="assembly.applyPreset" data-form-id="' + escapeHtml(formId) + '" data-preset="' + escapeHtml(item) + '">',
     '<div class="assembly-card-title">' + escapeHtml(getAssemblyPresetLabel(item)) + '</div>',
     '<div class="assembly-card-body">' + escapeHtml(getAssemblyPresetDescription(item)) + '</div>',
-    '<button class="workspace-action' + (preset === item ? ' secondary' : '') + '" type="button" onclick="event.stopPropagation(); window.applyAssemblyPreset(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapeHtml(item) + '&quot;)">' + escapeHtml(preset === item ? getRepoLocaleText('当前预设', 'Current Preset') : getRepoLocaleText('切换到此预设', 'Use This Preset')) + '</button>',
+    '<button class="workspace-action' + (preset === item ? ' secondary' : '') + '" type="button" data-action="assembly.applyPreset" data-form-id="' + escapeHtml(formId) + '" data-preset="' + escapeHtml(item) + '">' + escapeHtml(preset === item ? getRepoLocaleText('当前预设', 'Current Preset') : getRepoLocaleText('切换到此预设', 'Use This Preset')) + '</button>',
     '</div>',
   ].join('')).join('');
 
@@ -1011,10 +1011,10 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
       body: currentLanguage === 'zh' ? 'shell + lsp + websearch' : 'shell + lsp + websearch',
     },
   ].map((item) => [
-    '<div class="assembly-bundle-card' + (bundleFilter === item.key ? ' active' : '') + '" onclick="window.setBundleFilter(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapeHtml(item.key) + '&quot;)">',
+    '<div class="assembly-bundle-card' + (bundleFilter === item.key ? ' active' : '') + '" data-action="assembly.setBundleFilter" data-form-id="' + escapeHtml(formId) + '" data-filter="' + escapeHtml(item.key) + '">',
     '<div class="assembly-card-title">' + escapeHtml(item.title) + '</div>',
     '<div class="assembly-card-body">' + escapeHtml(item.body) + '</div>',
-    '<button class="workspace-action' + (bundleFilter === item.key ? '' : ' secondary') + '" type="button" onclick="event.stopPropagation(); window.setBundleFilter(&quot;' + escapeHtml(formId) + '&quot;, &quot;' + escapeHtml(item.key) + '&quot;)">' + escapeHtml(bundleFilter === item.key ? getRepoLocaleText('显示全部', 'Show All') : getRepoLocaleText('筛选', 'Filter')) + '</button>',
+    '<button class="workspace-action' + (bundleFilter === item.key ? '' : ' secondary') + '" type="button" data-action="assembly.setBundleFilter" data-form-id="' + escapeHtml(formId) + '" data-filter="' + escapeHtml(item.key) + '">' + escapeHtml(bundleFilter === item.key ? getRepoLocaleText('显示全部', 'Show All') : getRepoLocaleText('筛选', 'Filter')) + '</button>',
     '</div>',
   ].join('')).join('');
 
@@ -1037,28 +1037,28 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
           : (currentLanguage === 'zh' ? '新建配置' : 'New Setup'),
         `${currentLanguage === 'zh' ? '步骤' : 'Step'} ${stage === 'goal' ? '1' : stage === 'capabilities' ? '2' : stage === 'environment' ? '3' : '4'}`,
         envStatusLabel,
-      ].filter(Boolean).join(' · ')) + '</div></div><div class="assembly-quick-dock-actions"><button class="assembly-quick-dock-action" type="button" onclick="window.launchAssemblyInstance()">' + escapeHtml(currentLanguage === 'zh' ? '启动' : 'Launch') + '</button><button class="assembly-quick-dock-action" type="button" onclick="window.toggleAssemblyControlPanel()">' + escapeHtml(assemblyControlPanelOpen ? (currentLanguage === 'zh' ? '收起' : 'Close') : (currentLanguage === 'zh' ? '更多' : 'More')) + '</button></div></div></section>',
+      ].filter(Boolean).join(' · ')) + '</div></div><div class="assembly-quick-dock-actions"><button class="assembly-quick-dock-action" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '启动' : 'Launch') + '</button><button class="assembly-quick-dock-action" type="button" data-action="assembly.toggleControlPanel">' + escapeHtml(assemblyControlPanelOpen ? (currentLanguage === 'zh' ? '收起' : 'Close') : (currentLanguage === 'zh' ? '更多' : 'More')) + '</button></div></div></section>',
     assemblyControlPanelOpen ? '<section class="assembly-floating-panel"><div class="assembly-floating-head"><div><div class="assembly-floating-title">' + escapeHtml(editorMode === 'editing-saved'
       ? (currentLanguage === 'zh' ? `正在编辑 ${assemblyName || '未命名配置'}` : `Editing ${assemblyName || 'Untitled Setup'}`)
       : (currentLanguage === 'zh' ? `新建 ${assemblyName || '未命名 Agent'}` : `New ${assemblyName || 'Untitled Agent'}`)) + '</div><div class="assembly-floating-subtitle">' + escapeHtml(currentLanguage === 'zh'
       ? '切换当前编辑对象，常用动作也放在这里。'
-      : 'Switch the current editing target here, with the most common actions close by.') + '</div></div><button class="workspace-action secondary" type="button" onclick="window.toggleAssemblyControlPanel()">' + escapeHtml(currentLanguage === 'zh' ? '关闭' : 'Close') + '</button></div><section class="assembly-editor-panel"><div class="assembly-editor-panel-title">' + escapeHtml(currentLanguage === 'zh' ? '步骤导航' : 'Step Navigation') + '</div><div class="assembly-target-list">' + stageListHtml + '</div></section><section class="assembly-editor-panel"><div class="assembly-editor-panel-title">' + escapeHtml(currentLanguage === 'zh' ? '编辑目标' : 'Editing Target') + '</div><div class="assembly-target-list">' + targetListHtml + '</div></section><div class="assembly-floating-actions"><button class="workspace-action" type="button" onclick="window.launchAssemblyInstance()">' + escapeHtml(currentLanguage === 'zh' ? '启动实例' : 'Launch Instance') + '</button></div></section>' : '',
+      : 'Switch the current editing target here, with the most common actions close by.') + '</div></div><button class="workspace-action secondary" type="button" data-action="assembly.toggleControlPanel">' + escapeHtml(currentLanguage === 'zh' ? '关闭' : 'Close') + '</button></div><section class="assembly-editor-panel"><div class="assembly-editor-panel-title">' + escapeHtml(currentLanguage === 'zh' ? '步骤导航' : 'Step Navigation') + '</div><div class="assembly-target-list">' + stageListHtml + '</div></section><section class="assembly-editor-panel"><div class="assembly-editor-panel-title">' + escapeHtml(currentLanguage === 'zh' ? '编辑目标' : 'Editing Target') + '</div><div class="assembly-target-list">' + targetListHtml + '</div></section><div class="assembly-floating-actions"><button class="workspace-action" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '启动实例' : 'Launch Instance') + '</button></div></section>' : '',
     '</aside>',
     '<section class="assembly-stage' + (stage === 'goal' ? ' active' : '') + '">',
     renderAssemblyStageHeader(formId, stage, 'goal', 1, goalStageSummary),
     stage === 'goal' ? [
       '<div class="assembly-stage-body">',
       '<div class="assembly-form-grid">',
-      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '目标 Agent 名称' : 'Target Agent Name') + '</span><input class="assembly-inline-input" data-assembly-field="assembly_name" type="text" value="' + escapeHtml(String(draft.assembly_name || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '例如 support-chatbot' : 'For example support-chatbot') + '" oninput="window.updateAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;assembly_name&quot;, this.value)" onblur="window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;assembly_name&quot;, this.value)"></label>',
-      '<label class="assembly-inline-field full"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '主要目标' : 'Goal') + '</span><textarea class="assembly-inline-textarea" data-assembly-field="goal" oninput="window.updateAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;goal&quot;, this.value)" onblur="window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;goal&quot;, this.value)">' + escapeHtml(String(draft.goal || '')) + '</textarea></label>',
+      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '目标 Agent 名称' : 'Target Agent Name') + '</span><input class="assembly-inline-input" data-assembly-field="assembly_name" type="text" value="' + escapeHtml(String(draft.assembly_name || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '例如 support-chatbot' : 'For example support-chatbot') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="assembly_name"></label>',
+      '<label class="assembly-inline-field full"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '主要目标' : 'Goal') + '</span><textarea class="assembly-inline-textarea" data-assembly-field="goal" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="goal">' + escapeHtml(String(draft.goal || '')) + '</textarea></label>',
       '</div>',
-      '<details class="assembly-prompt-panel"' + (String(draft.advanced_prompt_open || '') === '1' ? ' open' : '') + ' ontoggle="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;advanced_prompt_open&quot;, this.open ? &quot;1&quot; : &quot;0&quot;)">',
+      '<details class="assembly-prompt-panel"' + (String(draft.advanced_prompt_open || '') === '1' ? ' open' : '') + ' data-action="assembly.promptPanelToggle" data-event="toggle" data-form-id="' + escapeHtml(formId) + '">',
       '<summary class="assembly-card-title">' + escapeHtml(currentLanguage === 'zh' ? '高级：自定义系统提示词' : 'Advanced: Custom System Prompt') + '</summary>',
       '<div class="assembly-workbench-note">' + escapeHtml(currentLanguage === 'zh' ? '默认会根据目标、预设和已启用 Feature 自动生成系统提示词。只有你想强行微调行为时才需要覆盖。' : 'By default the system prompt is generated from the goal, preset, and enabled features. Override it only when you need to force behavior.') + '</div>',
       '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '自动生成版本' : 'Generated Prompt') + '</span><div class="assembly-generated-prompt">' + escapeHtml(generatedPrompt) + '</div></label>',
-      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '自定义覆盖内容（可留空）' : 'Custom Override (Optional)') + '</span><textarea class="assembly-inline-textarea" data-assembly-field="custom_system_prompt" oninput="window.updateAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;custom_system_prompt&quot;, this.value)" onblur="window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;custom_system_prompt&quot;, this.value)">' + escapeHtml(String(draft.custom_system_prompt || '')) + '</textarea></label>',
+      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '自定义覆盖内容（可留空）' : 'Custom Override (Optional)') + '</span><textarea class="assembly-inline-textarea" data-assembly-field="custom_system_prompt" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="custom_system_prompt">' + escapeHtml(String(draft.custom_system_prompt || '')) + '</textarea></label>',
       '</details>',
-      '<div class="assembly-stage-actions"><button class="workspace-action" type="button" onclick="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;assembly_stage&quot;, &quot;capabilities&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '下一步：选择能力' : 'Next: Choose Capabilities') + '</button></div>',
+      '<div class="assembly-stage-actions"><button class="workspace-action" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="capabilities">' + escapeHtml(currentLanguage === 'zh' ? '下一步：选择能力' : 'Next: Choose Capabilities') + '</button></div>',
       '</div>',
     ].join('') : '',
     '</section>',
@@ -1067,11 +1067,11 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     stage === 'capabilities' ? [
       '<div class="assembly-stage-body">',
       '<div class="assembly-source-tabs">',
-      '<button class="assembly-source-tab' + (sourceFilter === 'all' ? ' active' : '') + '" type="button" onclick="window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;feature_source_filter&quot;, &quot;all&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '全部' : 'All') + '</button>',
-      '<button class="assembly-source-tab' + (sourceFilter === 'preset' ? ' active' : '') + '" type="button" onclick="window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;feature_source_filter&quot;, &quot;preset&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '预设' : 'Preset') + '</button>',
-      '<button class="assembly-source-tab' + (sourceFilter === 'bundle' ? ' active' : '') + '" type="button" onclick="window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;feature_source_filter&quot;, &quot;bundle&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '套件' : 'Bundle') + '</button>',
-      '<button class="assembly-source-tab' + (sourceFilter === 'official' ? ' active' : '') + '" type="button" onclick="window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;feature_source_filter&quot;, &quot;official&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '官方' : 'Official') + '</button>',
-      '<button class="assembly-source-tab' + (sourceFilter === 'custom' ? ' active' : '') + '" type="button" onclick="window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;feature_source_filter&quot;, &quot;custom&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '自定义' : 'Custom') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'all' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="all">' + escapeHtml(currentLanguage === 'zh' ? '全部' : 'All') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'preset' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="preset">' + escapeHtml(currentLanguage === 'zh' ? '预设' : 'Preset') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'bundle' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="bundle">' + escapeHtml(currentLanguage === 'zh' ? '套件' : 'Bundle') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'official' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="official">' + escapeHtml(currentLanguage === 'zh' ? '官方' : 'Official') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'custom' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="custom">' + escapeHtml(currentLanguage === 'zh' ? '自定义' : 'Custom') + '</button>',
       '</div>',
       sourceFilter === 'preset' ? [
         '<div class="assembly-workbench-grid">' + presetCards + '</div>',
@@ -1084,13 +1084,13 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
       ].join('') : '',
       sourceFilter !== 'preset' && sourceFilter !== 'bundle' ? [
         '<div class="assembly-capability-topbar">',
-        '<input class="assembly-search-input" style="flex:1 1 280px;min-height:40px;" type="text" value="' + escapeHtml(String(draft.feature_query || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '按名称、说明或标签搜索' : 'Search by name, description, or tags') + '" oninput="window.updateAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;feature_query&quot;, this.value)" onblur="window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;, &quot;feature_query&quot;, this.value)" onkeydown="if(event.key===&quot;Enter&quot;){event.preventDefault();window.commitAssemblyDraftField(&quot;' + escapeHtml(formId) + '&quot;,&quot;feature_query&quot;,this.value);}">',
-        '<button class="workspace-action secondary" type="button" onclick="window.launchAssemblyInstance()">' + escapeHtml(currentLanguage === 'zh' ? '快速启动' : 'Quick Launch') + '</button>',
+        '<input class="assembly-search-input" style="flex:1 1 280px;min-height:40px;" type="text" value="' + escapeHtml(String(draft.feature_query || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '按名称、说明或标签搜索' : 'Search by name, description or tags') + '" data-action="assembly.draftField" data-event="input keydown focusout" data-form-id="' + escapeHtml(formId) + '" data-field="feature_query">',
+        '<button class="workspace-action secondary" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '快速启动' : 'Quick Launch') + '</button>',
         '</div>',
         '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '当前已启用 Feature' : 'Enabled Features') + '</div><div class="assembly-summary-row">' + selectedFeatureChips + '</div></div>',
         '<div class="assembly-feature-grid">' + featureCards + '</div>',
       ].join('') : '',
-      '<div class="assembly-stage-actions"><button class="workspace-action secondary" type="button" onclick="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;assembly_stage&quot;, &quot;goal&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '返回：修改目标' : 'Back: Edit Goal') + '</button><button class="workspace-action" type="button" onclick="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;assembly_stage&quot;, &quot;environment&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '下一步：环境准备' : 'Next: Environment Setup') + '</button></div>',
+      '<div class="assembly-stage-actions"><button class="workspace-action secondary" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="goal">' + escapeHtml(currentLanguage === 'zh' ? '返回：修改目标' : 'Back: Edit Goal') + '</button><button class="workspace-action" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="environment">' + escapeHtml(currentLanguage === 'zh' ? '下一步：环境准备' : 'Next: Environment Setup') + '</button></div>',
       '</div>',
     ].join('') : '',
     '</section>',
@@ -1111,12 +1111,12 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
         ? '1. 先检查并准备用户目录环境。 2. 然后在该目录执行 npm install，安装 agentdev 和你选中的 Features。 3. 最后启动 chatbot runtime。'
         : '1. Prepare the user environment directory. 2. Run npm install there for agentdev and the selected features. 3. Launch the chatbot runtime.') + '</div></div>',
       '<div class="assembly-summary-actions">',
-      '<button class="workspace-action" type="button" onclick="window.createAssemblyEnvironment()">' + escapeHtml(envState.isReady ? (currentLanguage === 'zh' ? '重新配置环境' : 'Reconfigure Environment') : (currentLanguage === 'zh' ? '创建环境' : 'Create Environment')) + '</button>',
+      '<button class="workspace-action" type="button" data-action="assembly.createEnvironment">' + escapeHtml(envState.isReady ? (currentLanguage === 'zh' ? '重新配置环境' : 'Reconfigure Environment') : (currentLanguage === 'zh' ? '创建环境' : 'Create Environment')) + '</button>',
       '</div>',
       '</div>',
       '<div class="assembly-stage-actions">',
-      '<button class="workspace-action secondary" type="button" onclick="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;assembly_stage&quot;, &quot;capabilities&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '返回：修改能力' : 'Back: Edit Capabilities') + '</button>',
-      '<button class="workspace-action" type="button" onclick="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;assembly_stage&quot;, &quot;review&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '下一步：确认与启动' : 'Next: Review And Launch') + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="capabilities">' + escapeHtml(currentLanguage === 'zh' ? '返回：修改能力' : 'Back: Edit Capabilities') + '</button>',
+      '<button class="workspace-action" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="review">' + escapeHtml(currentLanguage === 'zh' ? '下一步：确认与启动' : 'Next: Review And Launch') + '</button>',
       '</div>',
       '</div>',
     ].join('') : '',
@@ -1136,10 +1136,10 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
       envStatusMessage ? '<div class="assembly-summary-block"><div class="assembly-summary-copy" style="color:' + escapeHtml(envStatusTone) + ';">' + escapeHtml(envStatusMessage) + '</div></div>' : '',
       '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '最终系统提示词' : 'Effective System Prompt') + '</div><div class="assembly-generated-prompt">' + escapeHtml(effectivePrompt) + '</div></div>',
       '<div class="assembly-summary-actions">',
-      '<button class="workspace-action" type="button" onclick="window.launchAssemblyInstance()">' + escapeHtml(currentLanguage === 'zh' ? '启动测试 Agent' : 'Launch Test Agent') + '</button>',
-      '<button class="workspace-action secondary" type="button" onclick="window.updateWorkspaceFormDraft(&quot;' + escapeHtml(formId) + '&quot;, &quot;assembly_stage&quot;, &quot;environment&quot;)">' + escapeHtml(currentLanguage === 'zh' ? '返回：环境准备' : 'Back: Environment') + '</button>',
-      '<button class="workspace-action secondary" type="button" onclick="window.runWorkspaceAction(JSON.stringify({type: \'show_workspace_tab\', tab: \'projects\'}))">' + escapeHtml(currentLanguage === 'zh' ? '查看项目总览' : 'View Project') + '</button>',
-      '<button class="workspace-action secondary" type="button" onclick="window.runWorkspaceAction(JSON.stringify({type: \'show_workspace_tab\', tab: \'project\'}))">' + escapeHtml(currentLanguage === 'zh' ? '升级到项目开发' : 'Promote To Project') + '</button>',
+      '<button class="workspace-action" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '启动测试 Agent' : 'Launch Test Agent') + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="environment">' + escapeHtml(currentLanguage === 'zh' ? '返回：环境准备' : 'Back: Environment') + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="wsAction.showTab" data-tab="projects">' + escapeHtml(currentLanguage === 'zh' ? '查看项目总览' : 'View Project') + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="wsAction.showTab" data-tab="project">' + escapeHtml(currentLanguage === 'zh' ? '升级到项目开发' : 'Promote To Project') + '</button>',
       '</div>',
       '</div>',
       '</div>',
@@ -1528,7 +1528,7 @@ function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
         : (tab.id === 'home'
           ? { type: 'show_home' }
           : { type: 'show_workspace_tab', tab: tab.id }))
-    )) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (tab.id === 'chat' && !canOpenChat ? ' disabled' : '') + '>' +
+    )) + '" data-action="wsBlocks.workspaceAction"' + (tab.id === 'chat' && !canOpenChat ? ' disabled' : '') + '>' +
     escapeHtml(getUnitTabLabel(tab)) +
     '</button>'
   )).join('');
@@ -2226,3 +2226,67 @@ function closeCtxMenu() {
 
 window.showCtxMenu = showCtxMenu;
 window.closeCtxMenu = closeCtxMenu;
+
+
+// ── 内联事件收编（Phase C）：app-ui 模板的动作注册 ──────────────────────────
+// 本文件是模板层，动作函数的定义域在 fw-config-panel.js（fw.* 簇，函数本体随
+// fw-config-panel 批次收敛）与 assembly-actions.js / assembly-data.js /
+// workspace-blocks.js / debug-overview.js（assembly.* 簇）。handler 一律经
+// window 转调，不改变定义域归属。
+// 草稿字段的 blur 提交（commitAssemblyDraftField 触发全量重渲染）走
+// focusout 委托 + data-event 显式声明（协议守卫防未声明元素误触发，
+// 与批 7 repoSearch 同型）；details 的 toggle 不冒泡，走 capture 委托。
+
+window.ClawFW.actions.bindEventType('toggle', { capture: true });
+
+window.ClawFW.actions.registerMany({
+  'fw.switchSection': (el) => window.fwSwitchSection(el.dataset.section),
+  'fw.openPromptEditor': () => window.fwOpenPromptEditor(),
+  'fw.openProjectPicker': () => window.fwOpenProjectPicker(),
+  'fw.backToList': () => window.fwBackToList(),
+  'fw.createNewAgent': () => window.fwCreateNewAgent(),
+  'fw.toggleFeature': (el) => window.fwToggleFeature(el.dataset.formId, el.dataset.token),
+  'fw.setFeatureFilter': (el) => window.fwSetFeatureFilter(el.dataset.formId, el.dataset.filter),
+  'fw.openFeatureImport': (el) => window.fwOpenFeatureImport(el.dataset.formId),
+  'fw.openProjectDetail': (el) => window.fwOpenProjectDetail(el.dataset.agentId),
+  'fw.resumeRun': (el) => window.fwResumeRun(el.dataset.agentId, el),
+  'fw.launchConfig': (el) => window.fwLaunchConfig(el.dataset.agentId, el),
+  'fw.featureSearch': (el, ev) => {
+    if (ev.type === 'focusout') { window.fwCommitFeatureQuery(el.dataset.formId, el.value); return; }
+    window.fwSetFeatureQuery(el.dataset.formId, el.value);
+  },
+  'assembly.draftField': (el, ev) => {
+    const formId = el.dataset.formId;
+    const field = el.dataset.field;
+    if (ev.type === 'focusout') { window.commitAssemblyDraftField(formId, field, el.value); return; }
+    if (ev.type === 'keydown') {
+      if (ev.key === 'Enter') { ev.preventDefault(); window.commitAssemblyDraftField(formId, field, el.value); }
+      return;
+    }
+    window.updateAssemblyDraftField(formId, field, el.value);
+    if (ev.type === 'change') window.commitAssemblyDraftField(formId, field, el.value);
+  },
+  'assembly.setSourceFilter': (el) => window.commitAssemblyDraftField(el.dataset.formId, 'feature_source_filter', el.dataset.source),
+  'assembly.promptPanelToggle': (el) => window.updateWorkspaceFormDraft(el.dataset.formId, 'advanced_prompt_open', el.open ? '1' : '0'),
+  'assembly.chooseDirectory': (el) => window.chooseWorkspaceDirectory(el.dataset.formId, el.dataset.field),
+  'assembly.toggleControlPanel': () => window.toggleAssemblyControlPanel(),
+  'assembly.createEnvironment': () => window.createAssemblyEnvironment(),
+  'assembly.toggleFeature': (el) => window.toggleWorkspaceSelection(el.dataset.formId, 'selected_features', el.dataset.token),
+  'assembly.toggleStage': (el) => window.toggleAssemblyStage(el.dataset.formId, el.dataset.stage),
+  'assembly.switchEditingTarget': (el) => window.switchAssemblyEditingTarget(el.dataset.targetId),
+  'assembly.stopRuntime': (el) => {
+    window.stopAssemblySessionRuntime(el.dataset.agentId);
+    setTimeout(window.fwRerender, 200);
+  },
+  'assembly.setBundleFilter': (el) => window.setBundleFilter(el.dataset.formId, el.dataset.filter),
+  'assembly.jumpStage': (el) => window.jumpAssemblyStage(el.dataset.stage),
+  'assembly.applyPreset': (el) => window.applyAssemblyPreset(el.dataset.formId, el.dataset.preset),
+  'assembly.launch': () => window.launchAssemblyInstance(),
+  'assembly.ensureEnv': (el) => {
+    window.createAssemblyEnvironment();
+    setTimeout(window.fwRerender, Number(el.dataset.rerender) || 300);
+  },
+  'wsAction.showTab': (el) => window.runWorkspaceAction(JSON.stringify({ type: 'show_workspace_tab', tab: el.dataset.tab })),
+  'assembly.setStage': (el) => window.updateWorkspaceFormDraft(el.dataset.formId, 'assembly_stage', el.dataset.stage),
+  'assembly.openPackageDetails': (el) => window.openRepositoryPackageDetails(el.dataset.packageId),
+});

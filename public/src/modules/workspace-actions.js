@@ -50,8 +50,8 @@
  * window 函数:
  *   handlePrebuiltAgentClick, applyWorkspaceBundle, launchAssemblyInstance,
  *   openTrimPage, openSummaryPopup, confirm
- * HTML onclick 引用:
- *   onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"
+ * 分发器动作引用（data-action="wsBlocks.workspaceAction"，handler 在
+ *   modules/workspace-blocks.js，按 dataset.workspaceAction 分发到本文件函数）
  */
 
 // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────

@@ -45,10 +45,12 @@ function makeEvent(ctx, target, name) {
 }
 
 describe('action-dispatcher 加载与默认绑定', () => {
-  it('挂载 window.ClawFW.actions 并默认绑定 click/change/input/dblclick/keydown', () => {
+  it('挂载 window.ClawFW.actions 并默认绑定 click/change/input/dblclick/keydown/focusout', () => {
     const { ctx, boundTypes } = makeSandbox();
     assert.ok(ctx.window.ClawFW?.actions?.register);
-    assert.deepEqual(boundTypes.sort(), ['change', 'click', 'dblclick', 'input', 'keydown']);
+    // focusout 是失焦提交的委托载体（blur 不冒泡），协议守卫确保只服务
+    // 显式声明 data-event 的元素（app-ui 批补绑，修复批 7 的死声明）。
+    assert.deepEqual(boundTypes.sort(), ['change', 'click', 'dblclick', 'focusout', 'input', 'keydown']);
   });
 });
 

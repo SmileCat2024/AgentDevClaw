@@ -129,11 +129,14 @@ window.ClawFW = window.ClawFW || {};
 
   // click/change/input 覆盖存量内联处理器的绝大多数；dblclick 与 keydown
   // 由 data-event 声明触发，分发器必须为它们绑定委托（否则永不派发）。
+  // focusout 会冒泡（blur 不会），作为失焦提交的委托载体；上面的守卫确保
+  // 它只服务显式声明了 focusout 的元素，未声明元素不响应。
   bindEventType('click');
   bindEventType('change');
   bindEventType('input');
   bindEventType('dblclick');
   bindEventType('keydown');
+  bindEventType('focusout');
 
   /** 按名触发已注册的 action（供宿主把通用动作转交给插件，不经 DOM 事件）。
    *  同步 handler 返回 true 表示已分发；async handler 的 Promise 原样透传，
