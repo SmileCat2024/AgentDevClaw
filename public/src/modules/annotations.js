@@ -678,6 +678,10 @@
     if (id) scrollToAnnotation(id);
   });
 
+  // 生命周期（经注册表元数据分发，ADR-0044 P2；与 window.ClawAnnotations 共用引用）
+  function onOpen() { panelOpen = true; ensureSession(); void loadList(); }
+  function onClose() { panelOpen = false; }
+
   // 面板注册（Claw 宿主注册表）：直接函数引用，不经 window 晚绑定寻址。
   // 注册与实现同址，rail 只认注册表条目；本模块缺失时面板随之缺席，
   // 由金样本测试（frontend-rail-panels-golden）钉住注册表全集。
@@ -688,13 +692,16 @@
     description: { zh: '对话内容高亮标注', en: 'Highlights on conversation text' },
     render: () => getPanelHtml(),
     preserveOnReRender: true,
+    // 惰性引用：金样本沙箱只执行注册块，onOpen/onClose 定义在块外
+    onOpen: () => onOpen(),
+    onClose: () => onClose(),
   });
 
   window.ClawAnnotations = {
     scheduleReplay,
     getPanelHtml,
     refresh: () => { ensureSession(); void loadList(); },
-    onOpen: () => { panelOpen = true; ensureSession(); void loadList(); },
-    onClose: () => { panelOpen = false; },
+    onOpen,
+    onClose,
   };
 })();

@@ -1,7 +1,7 @@
 # 右栏面板插件化实施计划
 
 > 创建日期：2026-11-07
-> 状态：**进行中**（P0、P1 已完成；P2 起未开工）
+> 状态：**进行中**（P0、P1、P2 已完成；P3 起未开工）
 > 关联：[ADR-0044 右栏面板插件化与效果归属](../adr/0044-frontend-panel-plugins-and-effect-ownership.md)（决策依据，本计划不重复论证）；上游 [前端插件化规划](2026-11-04-frontend-plugin-architecture.md)（已结项，Phase C 完成了注册面去全局化）
 > 背景与目标：新增一个右栏面板 = 一个插件文件 + plugin-manifest 一行登记，宿主 git diff 为零。总验收口径三段：挂上即用、卸了即净、坏了即显。
 
@@ -47,17 +47,6 @@ ADR-0044 决策 2 落地，实际修复三处（第三处为核实中发现的�
 
 ### P2 生命周期与 rail 按钮注册表派生
 
-1. `panels.register` 增加 owner 与 `unregister`。插件注册的面板随 `unloadPlugin` 按 owner 摘除；**正打开的面板被摘除时关闭面板并清空 body**（debug-panel-host 需暴露关闭清理入口供 claw-host 回调）；
-2. `slots.mount` 同理带 owner，随卸载摘除；
-3. api 注册面（`blocks.register` / `panels.register` / `slots.mount` / `registerRefresher` / `registerActions`）在 `activatePlugin` 执行期间隐式绑定当前插件 owner，解决 P0 遗留的"mount 内动态注册无 owner"；
-4. 新增 `host.effect(disposer)`：插件在 mount 里登记任意副作用清理（定时器、SSE、observer），卸载时宿主统一执行。
-
-验收：通用卸载断言测试——装载任意插件（含 mount 内动态注册与 effect 登记）再卸载，注册面与 effect 清单双断言零残留。变异验证过鉴别力。
-
-接触面：`claw-host.js`（主）、`debug-panel-host.js`（关闭清理入口）、`test/frontend-claw-host.test.js`。
-
-### P2 生命周期与 rail 按钮注册表派生
-
 内容：
 
 1. 注册元数据扩展：`onOpen` / `onClose`（生命周期）、`icon`（SVG 字符串）、`order`（数字权重）；`toggleFeaturePanel` 的 if 链删除，生命周期统一经注册表调用；`window.GitPanel` 一类全局寻址随迁移消亡，bg badge 经 agent-data-loader 的调用面一并收编；
@@ -67,6 +56,13 @@ ADR-0044 决策 2 落地，实际修复三处（第三处为核实中发现的�
 验收：index.html 只留 rail 容器无手写按钮；金样本快照加入 icon / order / 生命周期字段；开关面板行为等价；拖拽排序与长按手势手动整体验证（排序读自 DOM 天然兼容，applyConfig 的 insertBefore 锚点逻辑是重点回归项）。
 
 接触面：`debug-panel-host.js`、`rail-customize.js`、`app-core.js`（`railButtons` 消灭，全局区净收缩）、`app-ui.js`、五个面板模块、`index.html`、金样本测试。
+
+完成（2026-11-07）：
+
+- 生命周期（P2a）：`notifyPanelLifecycle` 统一经注册表元数据分发 onOpen / onClose；`toggleFeaturePanel` 三段 if 链与 app-ui click 处理器的 logs/mcp/resources 加载链全部删除；git / bg / annotations / genui / logs / mcp / settings / threads / resources 九个面板的钩子挂入注册元数据（模块内函数惰性引用——金样本沙箱只执行注册块，shorthand 会立即求值，此为既有约束）。`window.XxxPanel` 导出暂保留（面板测试仍引用，P5 存量迁移时收编）。
+- 按钮派生（P2b）：注册元数据新增 `icon`（SVG 字符串）/ `order`（可自定义排序权重）/ `badge`（徽标 span）；`syncRailButtons` 按 [order 序 customizable + 注册序其余] 生成按钮到 rail-spacer 前，摘除面板按钮随之清理；`CUSTOMIZABLE_PANEL_ORDER` 删除（order 非空 = 可自定义）；`railButtons` 启动快照消灭（消费方全部动态查询）；index.html 15 个手写按钮删除；theme-lang 的逐按钮平行翻译清单收编为 label 元数据派生。
+- 测试：新增 `frontend-panel-lifecycle.test.js` 6 用例（开关/切换生命周期分发、钩子缺失/抛错容错、按钮生成/摘除清理/语言切换 title 重算；含一个变异验证记录）；金样本快照加 onOpenHas/onCloseHas/iconHas/order 四字段，"index.html 含手写面板按钮"断言反转为守门拒绝；rail-customize 测试注册元数据补 order/icon。dom-harness 补 `contains` 与 remove 后 id 注销（与真实 DOM 对齐）。
+- 验证：定向 28+13+2 全绿；浏览器冒烟——首页按钮隐藏（surface 过滤）、chat 下 8+3 按钮按序生成、plan 徽标链路通、开关面板 active/标题/内容正常、自定义弹窗清单与元数据渲染完整；check:frontend-globals 基线已更新（state 层净减 railButtons 一键）。
 
 ### P3 容器型渲染
 

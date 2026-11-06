@@ -27,23 +27,22 @@
 
   // ── 面板清单（单一真相：Claw 面板注册表） ─────────────
 
-  // 产品定义的可配置面板清单（顺序即默认相对顺序）。
-  // 清单外面板（workspace / monitor / mcp / settings / threads / resources /
-  // viewer 等）被彻底屏蔽：既不出现在自定义弹窗，也不出现在边栏。
-  var CUSTOMIZABLE_PANEL_ORDER = [
-    'plan', 'session-controls', 'git', 'bg', 'genui', 'hooks', 'inspector', 'logs',
-  ];
-
-  /** 可自定义面板仅限右侧栏主面板清单，并按默认顺序排列。 */
+  // 可自定义面板 = 注册元数据带 order 的面板（order 即默认相对顺序，
+  // ADR-0044 P2b 取代此前的硬编码 CUSTOMIZABLE_PANEL_ORDER）。无 order
+  // 的面板（workspace / monitor / mcp / resources / viewer / threads /
+  // settings 等）被彻底屏蔽：既不出现在自定义弹窗，也不出现在边栏。
   function getCustomizableIds() {
     var panels = (window.ClawPanels && typeof window.ClawPanels.getAll === 'function')
       ? window.ClawPanels.getAll()
       : [];
-    var registered = {};
-    panels.forEach(function (panel) { registered[panel.id] = true; });
-    return CUSTOMIZABLE_PANEL_ORDER.filter(function (id) {
-      return registered[id] && !!document.querySelector('.rail-button[data-panel="' + id + '"]');
-    });
+    return panels
+      .filter(function (panel) {
+        return typeof panel.order === 'number'
+          && !!panel.icon
+          && !!document.querySelector('.rail-button[data-panel="' + panel.id + '"]');
+      })
+      .sort(function (a, b) { return a.order - b.order; })
+      .map(function (panel) { return panel.id; });
   }
 
   // ── 辅助函数 ──────────────────────────────────────────
@@ -112,10 +111,10 @@
   }
 
   function getPanelIconHTML(panelId) {
-    var btn = document.querySelector('.rail-button[data-panel="' + panelId + '"]');
-    if (!btn) return '';
-    var svg = btn.querySelector('svg');
-    return svg ? svg.outerHTML : '';
+    // 图标来自注册元数据（ADR-0044 P2b）；旧实现从按钮 DOM 提取 SVG，
+    // 按钮动态生成后元数据是唯一权威来源。
+    var panel = window.ClawPanels ? window.ClawPanels.get(panelId) : null;
+    return panel && typeof panel.icon === 'string' ? panel.icon : '';
   }
 
   // ── DOM 引用 ──────────────────────────────────────────

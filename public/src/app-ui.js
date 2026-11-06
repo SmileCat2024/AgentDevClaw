@@ -1322,6 +1322,8 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
     window.updateReadOnlySessionIndicator();
   }
   const agent = getCurrentAgentRecord();
+  // ── rail 按钮按注册表同步（面板注册/摘除/语言切换后自愈）──
+  if (typeof syncRailButtons === 'function') syncRailButtons();
   // ── 根据表面类型控制 rail button 可见性 ──
   const isWorkGroup = !!(agent && agent.id === 'work-group');
   const inChat = isChatSurfaceActive(agent);
@@ -1330,7 +1332,7 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
     surface: isWorkGroup ? 'workspace' : (inChat ? 'chat' : 'workspace'),
   }).map((panel) => panel.id));
   let activePanelBecameUnavailable = false;
-  railButtons.forEach(btn => {
+  document.querySelectorAll('.rail-button[data-panel]').forEach(btn => {
     const panelId = btn.dataset.panel;
     if (!panelId) return; // 工具按钮（语言/主题/设置）始终显示
     const available = availablePanelIds.has(panelId);
@@ -1578,42 +1580,55 @@ registerFeaturePanel('workspace', {
   label: { zh: '文件结构', en: 'Structure' },
   description: { zh: '项目文件树', en: 'Project file tree' },
   render: () => renderStructurePanel(),
-});
+    icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <rect x="3" y="4" width="18" height="16" rx="2"></rect> <path d="M9 4v16"></path> </svg>',
+  });
 registerFeaturePanel('plan', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_plan'),
   label: { zh: '计划', en: 'Plan' },
   description: { zh: '任务与计划列表', en: 'Tasks and plan list' },
   render: () => renderPlanPanel(),
-});
+    icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M8 6h13"></path> <path d="M8 12h13"></path> <path d="M8 18h13"></path> <path d="m3 6 1 1 2-2"></path> <path d="m3 12 1 1 2-2"></path> <path d="m3 18 1 1 2-2"></path> </svg>',
+    order: 10,
+    badge: true,
+  });
 registerFeaturePanel('monitor', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_monitor'),
   label: { zh: '监控', en: 'Monitor' },
   description: { zh: '运行状态监控', en: 'Runtime status monitor' },
   render: () => renderMonitorPanel(),
-});
+    icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M4 19h16"></path> <path d="M7 16V9"></path> <path d="M12 16V5"></path> <path d="M17 16v-4"></path> </svg>',
+  });
 registerFeaturePanel('hooks', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_features'),
   label: { zh: '功能', en: 'Features' },
   description: { zh: 'Feature 功能面板', en: 'Feature panel' },
   render: () => renderFeaturesPanel(),
-});
+    icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M8 7a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"></path> <path d="M22 7a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"></path> <path d="M15 17a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"></path> <path d="M8 7h8"></path> <path d="M11 10v4"></path> </svg>',
+    order: 60,
+  });
 registerFeaturePanel('inspector', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_reverse_hooks'),
   label: { zh: '反向钩子', en: 'Reverse Hooks' },
   description: { zh: 'Hook 检查器', en: 'Hook inspector' },
   render: () => renderReverseHooksPanel(),
-});
+    icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="11" cy="11" r="6"></circle> <path d="m20 20-3.5-3.5"></path> </svg>',
+    order: 70,
+  });
 registerFeaturePanel('logs', {
   when: { surfaces: ['chat'] },
   title: () => t('panel_logs'),
   label: { zh: '日志', en: 'Logs' },
   description: { zh: '运行日志', en: 'Runtime logs' },
   render: () => renderLogsPanel(),
-});
+  // 打开即拉取日志（生命周期经注册表元数据分发，ADR-0044 P2）
+  onOpen: () => { loadLogs(true).catch((error) => console.error('Failed to load logs:', error)); },
+    icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M4 19h16"></path> <path d="M7 15h3"></path> <path d="M7 11h10"></path> <path d="M7 7h7"></path> </svg>',
+    order: 80,
+  });
 registerFeaturePanel('preflight', {
   when: { surfaces: ['chat'] },
   title: () => '装配预检',
@@ -1626,19 +1641,28 @@ registerFeaturePanel('mcp', {
   label: { zh: 'MCP', en: 'MCP' },
   description: { zh: 'MCP 服务端', en: 'MCP servers' },
   render: () => renderMcpPanel(),
-});
+  // 打开即拉取 MCP 状态
+  onOpen: () => { loadMcpInfo(true).catch((error) => console.error('Failed to load MCP info:', error)); },
+    icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <rect x="3" y="5" width="18" height="14" rx="3"></rect> <path d="M7 12h4"></path> <path d="M13 12h4"></path> <path d="M12 9v6"></path> </svg>',
+  });
 registerFeaturePanel('settings', {
   title: () => '群聊设置',
   when: { agentIds: ['work-group'] },
   label: { zh: '群聊设置', en: 'Group Settings' },
   render: () => window._wgGetSettingsHtml ? window._wgGetSettingsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-});
+  // 首次打开加载异步数据；_wgSettingsInit 由 wg 模块后加载定义，保持晚绑定
+  onOpen: () => { if (typeof window._wgSettingsInit === 'function') window._wgSettingsInit(); },
+    icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="12" cy="12" r="3"></circle> <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path> </svg>',
+  });
 registerFeaturePanel('threads', {
   title: () => '工作线程',
   when: { agentIds: ['work-group'] },
   label: { zh: '工作线程', en: 'Work Threads' },
   render: () => window._wgGetThreadsHtml ? window._wgGetThreadsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-});
+  // 首次打开拉取数据；_wgThreadsInit 由 wg 模块后加载定义，保持晚绑定
+  onOpen: () => { if (typeof window._wgThreadsInit === 'function') window._wgThreadsInit(); },
+    icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M3 3v18h18"></path> <rect x="7" y="6" width="3" height="3" rx="0.5"></rect> <rect x="7" y="13" width="3" height="3" rx="0.5"></rect> <path d="M8.5 9v4"></path> <rect x="14" y="4" width="3" height="3" rx="0.5"></rect> <rect x="14" y="15" width="3" height="3" rx="0.5"></rect> <path d="M15.5 7v8"></path> </svg>',
+  });
 
 // Sidebar Toggle + narrow-width drawer backdrop
 let _sidebarBackdrop = null;
@@ -1928,19 +1952,8 @@ window.loadPreflight = loadPreflight;
 
 // Domain P (context-menu functions) → modules/context-menu.js
 
-railButtons.forEach(button => {
-  if (!button.dataset.panel) return; // 工具按钮（语言/主题/设置）不参与面板切换
-  button.addEventListener('click', () => {
-    toggleFeaturePanel(button.dataset.panel);
-    if (button.dataset.panel === 'logs' && activeFeaturePanel === 'logs') {
-      loadLogs(true).catch((error) => console.error('Failed to load logs:', error));
-    } else if (button.dataset.panel === 'mcp' && activeFeaturePanel === 'mcp') {
-      loadMcpInfo(true).catch((error) => console.error('Failed to load MCP info:', error));
-    } else if (button.dataset.panel === 'resources' && activeFeaturePanel === 'resources') {
-      window._rvLoadData().catch((error) => console.error('Failed to load resources:', error));
-    }
-  });
-});
+// 面板按钮由 debug-panel-host 的 syncRailButtons 生成并在创建时绑定 click
+// （ADR-0044 P2b）；此处不再集中绑定。
 
 themeToggle.addEventListener('click', () => {
   applyTheme(currentTheme === 'light' ? 'dark' : 'light');

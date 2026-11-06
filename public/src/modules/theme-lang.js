@@ -20,26 +20,10 @@ function applyLanguage() {
   document.title = t('page_title');
 
   const sidebarToggleEl = document.getElementById('sidebar-toggle');
-  const workspaceButton = document.getElementById('rail-workspace');
-  const planButton = document.getElementById('rail-plan');
-  const monitorButton = document.getElementById('rail-monitor');
-  const hooksButton = document.getElementById('rail-hooks');
-  const inspectorButton = document.getElementById('rail-inspector');
-  const logsButton = document.getElementById('rail-logs');
-  const mcpButton = document.getElementById('rail-mcp');
-  const resourcesButton = document.getElementById('rail-resources');
-  const viewerButton = document.getElementById('rail-viewer');
-
   if (sidebarToggleEl) sidebarToggleEl.title = t('sidebar_toggle');
-  if (workspaceButton) workspaceButton.title = t('structure_tooltip');
-  if (planButton) planButton.title = t('plan_tooltip');
-  if (monitorButton) monitorButton.title = t('monitor_tooltip');
-  if (hooksButton) hooksButton.title = t('features_tooltip');
-  if (inspectorButton) inspectorButton.title = t('reverse_hooks_tooltip');
-  if (logsButton) logsButton.title = t('logs_tooltip');
-  if (mcpButton) mcpButton.title = t('mcp_tooltip');
-  if (resourcesButton) resourcesButton.title = '资料';
-  if (viewerButton) viewerButton.title = '文档';
+  // rail 面板按钮 title 从注册元数据 label 派生（ADR-0044 P2b）；
+  // 此前是这里逐按钮 getElementById 的平行翻译清单。
+  if (typeof syncRailButtons === 'function') syncRailButtons();
   const settingsConfigItem = document.getElementById('settings-flyout-config');
   const settingsAuthItem = document.getElementById('settings-flyout-auth');
   const settingsRemoteItem = document.getElementById('settings-flyout-remote');

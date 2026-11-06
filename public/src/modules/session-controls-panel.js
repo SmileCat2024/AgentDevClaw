@@ -1088,5 +1088,7 @@
     label: { zh: '会话控制', en: 'Session Controls' },
     description: { zh: 'API 重试与输出风格', en: 'API retries and output styles' },
     render: () => render(),
+      icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M21 12a9 9 0 1 1-2.64-6.36"></path> <path d="M21 3v6h-6"></path> </svg>',
+    order: 20,
   });
 }());

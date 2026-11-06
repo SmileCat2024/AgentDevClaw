@@ -379,14 +379,20 @@
       description: { zh: '群聊共享资料文件', en: 'Shared resource files' },
       title: () => '资料',
       render: () => renderResourcesPanel(),
-    });
+      // 打开即拉取资料列表（生命周期经注册表元数据分发，ADR-0044 P2）
+      onOpen: () => {
+        loadResourcesPanelData().catch((error) => console.error('Failed to load resources:', error));
+      },
+        icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"></path> </svg>',
+  });
     window.registerFeaturePanel('viewer', {
       when: { agentIds: ['work-group'] },
       label: { zh: '文档', en: 'Documents' },
       description: { zh: '群聊文档查看', en: 'Document viewer' },
       title: () => '文档',
       render: () => renderViewerPanel(),
-    });
+        icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path> <path d="M14 2v6h6"></path> <path d="M16 13H8"></path> <path d="M16 17H8"></path> <path d="M10 9H8"></path> </svg>',
+  });
   }
 
   // ════════════════════════════════════════════════════════════════

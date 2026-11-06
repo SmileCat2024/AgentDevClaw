@@ -50,6 +50,8 @@ function createRailSandbox(harness, overrides = {}) {
       label: { zh: '交互页面', en: 'Interactive Pages' },
       description: { zh: 'UI 交互页面', en: 'Interactive UI pages' },
       render: () => '',
+      icon: '<svg viewBox="0 0 24 24"></svg>',
+      order: 50,
     });
     window.ClawPanels.register('preflight', {
       // 已注册但没有 rail 按钮的面板（程序化打开），不进入自定义清单
@@ -61,6 +63,8 @@ function createRailSandbox(harness, overrides = {}) {
       when: { surfaces: ['chat'] },
       label: { zh: '会话控制', en: 'Session Controls' },
       render: () => '',
+      icon: '<svg viewBox="0 0 24 24"></svg>',
+      order: 20,
     });
     window.ClawPanels.register('unlisted', {
       label: { zh: '不进入自定义清单', en: 'Not customizable' },

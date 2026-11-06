@@ -155,7 +155,6 @@
       "projectDocsetToggle",
       "qqbotConfigRequest",
       "qqbotConfigState",
-      "railButtons",
       "readOnlyMode",
       "repoSearchQuery",
       "repoSourceFilter",
@@ -1064,9 +1063,13 @@
       "featurePanelRenderVersion"
     ],
     "behavior": [
+      "createRailButton",
+      "notifyPanelLifecycle",
+      "railButtonTitle",
       "renderFeaturePanel",
       "runAfterPanelOpenFrame",
       "syncPanelBodyHtmlCache",
+      "syncRailButtons",
       "toggleFeaturePanel"
     ]
   },

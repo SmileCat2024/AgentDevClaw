@@ -685,6 +685,7 @@
 
   // 面板注册（Claw 宿主注册表）：直接函数引用，不经 window 晚绑定寻址。
   // 注册表全集由 frontend-rail-panels-golden 金样本钉住。
+  // 生命周期（经注册表元数据分发，ADR-0044 P2；与 window.GenUIPanel 共用引用）
   window.ClawHost.panels.register('genui', {
     when: { surfaces: ['chat'] },
     title: () => '交互页面',
@@ -692,6 +693,12 @@
     description: { zh: 'UI 交互页面', en: 'Interactive UI pages' },
     render: () => getHtml(),
     preserveOnReRender: true,
+    // 惰性引用：金样本沙箱只执行注册块，onOpen/onClose 定义在块外
+    onOpen: () => onOpen(),
+    onClose: () => onClose(),
+      icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <rect x="3" y="3" width="18" height="18" rx="2"></rect> <path d="M3 9h18"></path> <path d="M9 21V9"></path> </svg>',
+    order: 50,
+    badge: true,
   });
 
   window.GenUIPanel = {

@@ -119,6 +119,18 @@ export function createDomHarness() {
 
     remove() {
       if (this.parentNode) this.parentNode.removeChild(this);
+      // 与真实 DOM 语义对齐：脱离文档后 getElementById 不再命中。
+      // （重挂回文档不恢复 id 注册——现有测试无此消费路径。）
+      if (this._id) elementsById.delete(this._id);
+    }
+
+    contains(node) {
+      let cur = node;
+      while (cur) {
+        if (cur === this) return true;
+        cur = cur.parentNode;
+      }
+      return false;
     }
 
     focus() {}

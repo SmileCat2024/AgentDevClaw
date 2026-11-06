@@ -477,7 +477,8 @@ const projectDocsetToggle = document.getElementById('project-docset-toggle');
 const chatProcessToggle = document.getElementById('chat-process-toggle');
 const projectDocsetOverlay = document.getElementById('project-docset-overlay');
 const projectDocsetSheet = document.getElementById('project-docset-sheet');
-const railButtons = Array.from(document.querySelectorAll('.rail-button'));
+// rail 面板按钮不再启动快照（ADR-0044 P2b：由 syncRailButtons 按注册表
+// 动态生成，消费方动态查询）；工具按钮仍静态声明于 index.html。
 const languageToggle = document.getElementById('language-toggle');
 const themeToggle = document.getElementById('theme-toggle');
 const settingsToggle = document.getElementById('settings-toggle');

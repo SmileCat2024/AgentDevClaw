@@ -619,7 +619,7 @@
       const previous = cacheAddressKey;
       syncAddress();
       if (previous !== cacheAddressKey) void discover();
-      if (panelOpen && activeFeaturePanel !== 'bg') window.BgPanel.onClose();
+      if (panelOpen && activeFeaturePanel !== 'bg') onPanelClose();
     }, REFRESH_SESSION_WATCH_MS);
   }
 
@@ -895,17 +895,21 @@
   styleElement.textContent = STYLE;
   document.head.appendChild(styleElement);
 
+  // 生命周期（经注册表元数据分发，ADR-0044 P2；与 window.BgPanel 共用引用）：
+  // onOpen 订阅当前会话的 feature-comms 通道；onClose 停轮询、断通道、保徽标轮询。
+  function onPanelClose() {
+    panelOpen = false;
+    if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+    badgeSource = source;
+    // Same protocol streams keep the cache and badge fresh without a second subscription.
+    void _pollBadge();
+  }
+
   window.BgPanel = {
     __testBadgeStream: () => badgeSource,
     getHtml,
     onOpen: startChannel,
-    onClose: () => {
-      panelOpen = false;
-      if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
-      badgeSource = source;
-      // Same protocol streams keep the cache and badge fresh without a second subscription.
-      void _pollBadge();
-    },
+    onClose: onPanelClose,
     refresh: refreshList,
     /** 立即触发一次徽标发现（runtime 切换时让红点及时出现，与 GenUI 同款）。 */
     refreshBadge: () => { void _pollBadge(); },
@@ -920,6 +924,12 @@
     description: { zh: 'bash_bg 后台任务实时状态', en: 'Live bash_bg task status' },
     render: () => getHtml(),
     preserveOnReRender: true,
+    // 惰性引用：金样本沙箱只执行注册块，实现函数定义在块外
+    onOpen: () => startChannel(),
+    onClose: () => onPanelClose(),
+      icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="5" cy="6" r="1.6"></circle> <path d="M9.5 6h9"></path> <circle cx="5" cy="12" r="1.6"></circle> <path d="M9.5 12h9"></path> <circle cx="5" cy="18" r="1.6"></circle> <path d="M9.5 18h9"></path> </svg>',
+    order: 40,
+    badge: true,
   });
 
   // 启动徽标轮询 — badge 需要在面板未打开时也持续更新

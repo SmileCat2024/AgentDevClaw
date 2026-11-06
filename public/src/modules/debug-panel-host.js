@@ -8,7 +8,8 @@
  *
  * 依赖（全局变量，声明于 app-core.js）：
  *   - activeFeaturePanel, featurePanelWidth
- *   - featurePanel, featurePanelBody, featurePanelTitle, railButtons
+ *   - featurePanel, featurePanelBody, featurePanelTitle
+ *   （rail 面板按钮由 syncRailButtons 动态生成，不再启动快照）
  *
  * 依赖（全局函数 / 注册表）：
  *   - t (app-core.js)
@@ -93,7 +94,7 @@ function renderFeaturePanel(options = {}) {
     document.querySelector('.main-content')?.classList.remove('panel-open');
     featurePanelTitle.textContent = t('panel_structure');
     featurePanelBody.innerHTML = getFeaturePanelEmptyHtml();
-    railButtons.forEach(button => button.classList.remove('active'));
+    document.querySelectorAll('.rail-button[data-panel]').forEach(button => button.classList.remove('active'));
     // 清理可能残留的 Feature 详情弹窗 portal
     if (typeof renderFeatureDetailOverlay === 'function') {
       renderFeatureDetailOverlay(null);
@@ -120,7 +121,7 @@ function renderFeaturePanel(options = {}) {
     featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
   }
   featurePanelTitle.textContent = typeof panel.title === 'function' ? panel.title() : panel.title;
-  railButtons.forEach(button => {
+  document.querySelectorAll('.rail-button[data-panel]').forEach(button => {
     button.classList.toggle('active', button.dataset.panel === activeFeaturePanel);
   });
 
@@ -206,6 +207,23 @@ function renderFeaturePanel(options = {}) {
   commitPanelBody();
 }
 
+/**
+ * 面板生命周期统一经注册表元数据分发（ADR-0044 P2）：onOpen / onClose
+ * 声明在 panels.register 的元数据上，编排层按事件名取钩子调用。
+ * 钩子抛错只记录不中断——面板生命周期的失败不应拖垮开关面板本身。
+ */
+function notifyPanelLifecycle(panelId, hookName) {
+  if (!panelId) return;
+  const meta = window.ClawPanels.get(panelId);
+  const hook = meta && typeof meta[hookName] === 'function' ? meta[hookName] : null;
+  if (!hook) return;
+  try {
+    hook();
+  } catch (err) {
+    console.error(`[panel:${panelId}] ${hookName} failed`, err);
+  }
+}
+
 function toggleFeaturePanel(panelId) {
   // 捕获滚动锚点：panel 开/关是一次重大宽度突变，需要在布局应用后
   // 恢复阅读位置（跟随模式锁底 / 非跟随锚定到正在读的行）。
@@ -221,15 +239,9 @@ function toggleFeaturePanel(panelId) {
   const shouldDeferBody = !activeFeaturePanel && !wasOpen;
   const previousPanel = activeFeaturePanel;
 
-  // Lifecycle: close previous panel
-  if (previousPanel && previousPanel !== panelId && window.GenUIPanel && previousPanel === 'genui') {
-    window.GenUIPanel.onClose();
-  }
-  if (previousPanel && previousPanel !== panelId && previousPanel === 'bg' && window.BgPanel) {
-    window.BgPanel.onClose();
-  }
-  if (previousPanel && previousPanel !== panelId && previousPanel === 'annotations' && window.ClawAnnotations) {
-    window.ClawAnnotations.onClose();
+  // Lifecycle: 切换面板时关闭前一个面板
+  if (previousPanel && previousPanel !== panelId) {
+    notifyPanelLifecycle(previousPanel, 'onClose');
   }
 
   activeFeaturePanel = wasOpen ? null : panelId;
@@ -241,41 +253,11 @@ function toggleFeaturePanel(panelId) {
     _cascadeCentralWidth();
   }
 
-  // Lifecycle: open new panel
-  if (!wasOpen && panelId === 'genui' && window.GenUIPanel) {
-    window.GenUIPanel.onOpen();
-  }
-
-  // Lifecycle: close when toggling off
-  if (wasOpen && panelId === 'genui' && window.GenUIPanel) {
-    window.GenUIPanel.onClose();
-  }
-  if (wasOpen && panelId === 'bg' && window.BgPanel) {
-    window.BgPanel.onClose();
-  }
-  if (wasOpen && panelId === 'annotations' && window.ClawAnnotations) {
-    window.ClawAnnotations.onClose();
-  }
-
-  // 初始化钩子：settings 面板首次打开时加载异步数据
-  if (!wasOpen && panelId === 'settings' && window._wgSettingsInit) {
-    window._wgSettingsInit();
-  }
-  // 初始化钩子：threads 面板首次打开时拉取数据
-  if (!wasOpen && panelId === 'threads' && window._wgThreadsInit) {
-    window._wgThreadsInit();
-  }
-  // 初始化钩子：git 面板每次打开时刷新当前会话目录的仓库状态
-  if (!wasOpen && panelId === 'git' && window.GitPanel) {
-    window.GitPanel.onOpen();
-  }
-  // 后台任务面板：打开即订阅当前会话的 feature-comms 通道
-  if (!wasOpen && panelId === 'bg' && window.BgPanel) {
-    window.BgPanel.onOpen();
-  }
-  // 会话标注面板：打开即同步当前会话列表
-  if (!wasOpen && panelId === 'annotations' && window.ClawAnnotations) {
-    window.ClawAnnotations.onOpen();
+  // Lifecycle: 打开新面板 / 关闭当前面板
+  if (!wasOpen) {
+    notifyPanelLifecycle(panelId, 'onOpen');
+  } else {
+    notifyPanelLifecycle(panelId, 'onClose');
   }
 
   // 面板 class 已切换（宽度变化写入样式），下一帧布局应用新宽度后恢复滚动位置。
@@ -293,6 +275,75 @@ function toggleFeaturePanel(panelId) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// rail 按钮注册表派生（ADR-0044 P2b）
+// ═══════════════════════════════════════════════════════════════
+//
+// 右栏按钮不再手写于 index.html：注册元数据带 icon 的面板在此生成按钮。
+// id 约定 rail-<panelId>、徽标 rail-<panelId>-badge（todo-plan / bg-panel /
+// generative-ui-panel 经 getElementById 引用，不可破坏）。order 字段标记
+// 可自定义面板（进自定义弹窗、可拖拽排序），无 order 的面板按钮生成但由
+// rail-customize 强制隐藏（行为等价此前的 CUSTOMIZABLE_PANEL_ORDER 屏蔽）。
+
+function railButtonTitle(panel) {
+  const lang = (typeof currentLanguage !== 'undefined' && currentLanguage === 'en') ? 'en' : 'zh';
+  const meta = panel.label;
+  if (meta && typeof meta === 'object') return meta[lang] || meta.en || panel.id;
+  return typeof panel.title === 'function' ? panel.title() : panel.title;
+}
+
+function createRailButton(panel) {
+  const btn = document.createElement('button');
+  btn.className = 'rail-button';
+  btn.id = 'rail-' + panel.id;
+  btn.type = 'button';
+  btn.title = railButtonTitle(panel);
+  btn.dataset.panel = panel.id;
+  btn.innerHTML = panel.icon + (panel.badge
+    ? '<span class="rail-badge" id="rail-' + panel.id + '-badge"></span>'
+    : '');
+  btn.addEventListener('click', () => toggleFeaturePanel(panel.id));
+  return btn;
+}
+
+/**
+ * 按注册表同步 rail 按钮（幂等，轻量，可高频调用）：
+ *   - 注册面板带 icon 且按钮缺席 → 生成并按序插入（customizable 的 order
+ *     在前，其余按注册序垫底，统一插到 rail-spacer 之前）
+ *   - 按钮指向的面板已不在注册表（或不再有 icon）→ 移除按钮
+ * 面板可用性（when 过滤）不在此处管——renderCurrentMainView 对按钮
+ * display 的控制照旧。语言切换后 title 重算经再次调用本函数完成。
+ */
+function syncRailButtons() {
+  const rail = document.getElementById('right-rail');
+  if (!rail) return;
+  const panels = window.ClawPanels.getAll().filter((p) => p.icon);
+  const panelById = new Map(panels.map((p) => [p.id, p]));
+
+  // 孤儿按钮清理：面板被摘除（如插件卸载）时按钮随之消失
+  rail.querySelectorAll('.rail-button[data-panel]').forEach((btn) => {
+    const meta = panelById.get(btn.dataset.panel);
+    if (!meta || btn.id !== 'rail-' + meta.id) btn.remove();
+  });
+
+  const anchor = rail.querySelector('.rail-spacer');
+  const insertAt = (el) => rail.insertBefore(el, anchor || null);
+
+  // 生成序：order 升序（customizable），无 order 的按注册序垫底
+  const ordered = [...panels].sort((a, b) =>
+    (a.order ?? Infinity) - (b.order ?? Infinity) || 0);
+  for (const panel of ordered) {
+    let btn = document.getElementById('rail-' + panel.id);
+    if (!btn || !rail.contains(btn)) {
+      btn = createRailButton(panel);
+      insertAt(btn);
+      continue;
+    }
+    // 已存在的按钮刷新 title（语言切换）
+    btn.title = railButtonTitle(panel);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 面板摘除联动（ADR-0044 效果归属）
 // ═══════════════════════════════════════════════════════════════
 
@@ -306,3 +357,5 @@ if (window.ClawHost && typeof window.ClawHost.setPanelTeardownHook === 'function
     renderFeaturePanel();
   });
 }
+
+window.syncRailButtons = syncRailButtons;

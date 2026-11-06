@@ -1561,13 +1561,17 @@
     if (root) selectRepo(root, { persist: true });
   });
 
+  // 面板打开时刷新当前会话目录的仓库状态（生命周期经注册表元数据分发，
+  // ADR-0044 P2；与 window.GitPanel.onOpen 共用同一函数引用）。
+  function onOpen() {
+    ensureLoaded(0);
+    startAutoRefresh();
+    if (state.dir && !state.loading) loadAll();
+  }
+
   window.GitPanel = {
     render,
-    onOpen() {
-      ensureLoaded(0);
-      startAutoRefresh();
-      if (state.dir && !state.loading) loadAll();
-    },
+    onOpen,
     refresh,
   };
 
@@ -1579,5 +1583,9 @@
     label: { zh: '源代码管理', en: 'Source Control' },
     description: { zh: 'Git 状态与操作', en: 'Git status and actions' },
     render: () => render(),
+    // 惰性引用：金样本沙箱只执行注册块，onOpen 定义在块外（与 render 同款约束）
+    onOpen: () => onOpen(),
+      icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="6" cy="6" r="2.6"></circle> <circle cx="6" cy="18" r="2.6"></circle> <circle cx="18" cy="8" r="2.6"></circle> <path d="M6 8.6v6.8"></path> <path d="M18 10.6c0 4-4.5 3.4-8 4.5"></path> </svg>',
+    order: 30,
   });
 })();
