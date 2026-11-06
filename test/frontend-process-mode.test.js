@@ -65,6 +65,7 @@ describe('programming-helper workspace process mode UI', () => {
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/workspace-settings.js');
 
     await ctx.run("window.onWorkspaceQuotaChange('coder', '4')");

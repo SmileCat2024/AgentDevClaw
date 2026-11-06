@@ -20,15 +20,8 @@
  *   phOpenSettings, phCloseSettings, phAutoSaveModelConfig,
  *   phOpenProject, phOpenProjectDirectory, phSwitchProject, phToggleProjectDropdown,
  *   phOpenInExplorer, phToggleModelSlot
- * HTML onclick 引用:
- *   onclick="phOpenSettings()"
- *   onclick="phCloseSettings()"
- *   onchange="phAutoSaveModelConfig()"
- *   onclick="phOpenProject()"
- *   onclick="phSwitchProject(...)"
- *   onclick="phToggleProjectDropdown(...)"
- *   onclick="phOpenInExplorer(...)"
- *   onclick="phToggleModelSlot()"
+ * 模板交互: 上述函数的入口控件已由 session-list-render.js 等批次的
+ * data-action 注册块承接（经 window 转调本模块），本文件不再有内联事件。
  */
 
 window.phOpenSettings = async () => {

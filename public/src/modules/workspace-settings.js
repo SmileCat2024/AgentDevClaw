@@ -13,6 +13,8 @@
  * 后侧栏即时生效。
  *
  * 依赖（全局）：escapeHtml, currentLanguage, allAgents, loadAgents, renderAgentList
+ * 控件动作：模板声明 data-action="wsSettings.*"，处理器在文件尾部集中注册
+ * （action-dispatcher.js）。
  */
 
 function ensureWorkspaceSettingsHost() {
@@ -52,7 +54,7 @@ function renderWorkspaceSettingsOverlay() {
     '<div class="feature-detail-title">' + (isZh ? '工作空间' : 'Workspaces') + '</div>',
     '<div class="feature-detail-subtitle">' + (isZh ? '附属工作空间的显示与资源策略' : 'Visibility & resource policies for on-demand workspaces') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeWorkspaceSettings()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" data-action="wsSettings.close">×</button>',
     '</div>',
     '<div id="workspace-settings-container" class="settings-tab-content"></div>',
     '</div>',
@@ -107,7 +109,7 @@ async function loadWorkspaceSettingsPanel() {
       '<div>' + escapeHtml(agent.name || agent.id) + '</div>',
       '<div style="font-size:12px;color:var(--text-secondary);">' + escapeHtml(agent.description || agent.id) + '</div>',
       '</div>',
-      '<select class="settings-input" data-claw-select style="min-width:140px;" onchange="onWorkspaceVisibilityChange(\'' + escapeHtml(agent.id) + '\', this.value)">',
+      '<select class="settings-input" data-claw-select style="min-width:140px;" data-action="wsSettings.visibilityChange" data-event="change" data-agent-id="' + escapeHtml(agent.id) + '">',
       '<option value="auto"' + (policy === 'auto' ? ' selected' : '') + '>' + (isZh ? '自动（有会话运行时显示）' : 'Auto (visible while running)') + '</option>',
       '<option value="always"' + (policy === 'always' ? ' selected' : '') + '>' + (isZh ? '始终显示' : 'Always visible') + '</option>',
       '</select>',
@@ -126,7 +128,7 @@ async function loadWorkspaceSettingsPanel() {
               : liveCount + ' live threads · empty for unlimited'))
           + '</div>',
         '</div>',
-        '<input type="number" min="1" step="1" class="settings-input" style="min-width:110px;" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + quotaValue + '" onchange="onWorkspaceQuotaChange(\'' + escapeHtml(agent.id) + '\', this.value)">',
+        '<input type="number" min="1" step="1" class="settings-input" style="min-width:110px;" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + quotaValue + '" data-action="wsSettings.quotaChange" data-event="change" data-agent-id="' + escapeHtml(agent.id) + '">',
         '</div>',
       ].join('') : '',
     ].join('');
@@ -198,7 +200,7 @@ function renderNotificationAuditSection(isZh, resourcePolicies) {
   ].join('');
 }
 
-window.onWorkspaceVisibilityChange = async function(agentId, policy) {
+async function onWorkspaceVisibilityChange(agentId, policy) {
   const isZh = currentLanguage === 'zh';
   const statusEl = document.getElementById('workspace-settings-status');
   const setStatus = (text) => {
@@ -223,7 +225,7 @@ window.onWorkspaceVisibilityChange = async function(agentId, policy) {
     console.error('[workspace-settings] save failed:', error);
     setStatus((isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error));
   }
-};
+}
 
 // ADR-0027 修订一配额保存：空 = 清除（不限制），正整数 = 上限；其他值就地
 // 报错不提交。配额不影响侧栏显示（不刷新 wire），只影响后续建线判定。
@@ -263,5 +265,16 @@ window.onWorkspaceQuotaChange = async function(agentId, rawValue) {
 };
 
 // ── window 导出 ──────────────────────────────────────────────
+// openWorkspaceSettings：面板入口，由 app-ui.js 调用。
+// onWorkspaceQuotaChange：保留 window 导出（test/frontend-process-mode 直调），
+// 定义在其上方保持 window 赋值形态。
 window.openWorkspaceSettings = openWorkspaceSettings;
-window.closeWorkspaceSettings = closeWorkspaceSettings;
+
+// ── 动作注册（data-action="wsSettings.*"）────────────────────
+// 模板内联事件收编：面板控件声明 data-action，处理器集中在此经
+// action-dispatcher 委托分发。
+window.ClawFW.actions.registerMany({
+  'wsSettings.close': () => closeWorkspaceSettings(),
+  'wsSettings.visibilityChange': (el) => onWorkspaceVisibilityChange(el.dataset.agentId, el.value),
+  'wsSettings.quotaChange': (el) => onWorkspaceQuotaChange(el.dataset.agentId, el.value),
+});

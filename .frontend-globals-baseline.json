@@ -527,8 +527,7 @@
       "ClawAuth",
       "closeAuthSettings",
       "fetch",
-      "openAuthSettings",
-      "saveAuthSettings"
+      "openAuthSettings"
     ]
   },
   "public/src/modules/auto-title.js": {
@@ -1283,6 +1282,20 @@
   "public/src/modules/feature-config.js": {
     "state": [],
     "behavior": [
+      "ClawFW",
+      "_fwAddConfigDirectory",
+      "_fwAddConfigFile",
+      "_fwCommitFeatureConfigValue",
+      "_fwControlTarget",
+      "_fwPickFeatureConfigDirectory",
+      "_fwPickFeatureConfigFile",
+      "_fwRefreshFeatureCapabilities",
+      "_fwRemoveConfigDirectory",
+      "_fwRemoveConfigFile",
+      "_fwResetFeatureConfig",
+      "_fwSyncManifestRange",
+      "_fwUpdateConfigDirectoryPath",
+      "_fwUpdateConfigFilePath",
       "buildFeatureConfigLookupKeys",
       "coerceFeatureManifestValue",
       "featureConfigKeyMatches",
@@ -1290,18 +1303,6 @@
       "findFeatureConfigMapEntry",
       "findFeatureManifestForSelection",
       "formatManifestDefaultValue",
-      "fwAddConfigDirectory",
-      "fwAddConfigFile",
-      "fwCommitFeatureConfigValue",
-      "fwPickFeatureConfigDirectory",
-      "fwPickFeatureConfigFile",
-      "fwRefreshFeatureCapabilities",
-      "fwRemoveConfigDirectory",
-      "fwRemoveConfigFile",
-      "fwResetFeatureConfig",
-      "fwSyncManifestRange",
-      "fwUpdateConfigDirectoryPath",
-      "fwUpdateConfigFilePath",
       "getFeatureConfig",
       "getFeatureConfigStatusMeta",
       "getFeatureManifestDisplayName",
@@ -3183,6 +3184,7 @@
       "_usageInfoMenuCleanup"
     ],
     "behavior": [
+      "bindUsageInfoSearchCommit",
       "bindUsageInfoTooltip",
       "closeUsageInfo",
       "closeUsageInfoMenu",

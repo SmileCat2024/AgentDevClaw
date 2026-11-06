@@ -77,6 +77,9 @@ function createLocateSandbox() {
     querySelector: (selector) => (selector === '.ph-session-tabs' ? phTabsEl : null),
     createElement: () => makeElement(),
     body: makeElement(),
+    // action-dispatcher 装载时在 document 绑定委托监听（真实形状补齐）。
+    addEventListener() {},
+    removeEventListener() {},
   };
   const containerEl = makeElement({ scrollTop: 0, scrollHeight: 5000 });
   containerEl.getBoundingClientRect = () => ({ top: 0 });
@@ -136,6 +139,7 @@ function createLocateSandbox() {
   // 真实生产模块：错误组权威判定（chat-renderer.js 源码块）+ 定位模块全文。
   sandbox.run(sourceBetween(CHAT_RENDERER_SRC, 'function getAssistantErrorMeta(', '// 红框本体'));
   sandbox.run(sourceBetween(CHAT_RENDERER_SRC, 'function computeAssistantErrorGroups(', '// index 处的失败消息是否参与成组'));
+  sandbox.loadSource('public/src/modules/action-dispatcher.js');
   sandbox.loadSource('public/src/modules/ph-search-locate.js');
 
   return {
@@ -417,8 +421,8 @@ test('定位超时/索引失效不静默：显示可关闭失败说明并支持�
     ctx.flushTimers(8000); // 推进 8s 兜底（不真实等待）
     const bar = ctx.sandbox.run('_locateBarEl');
     assert.ok(bar.classList.contains('show'));
-    assert.ok(String(bar.innerHTML).includes('phSearchLocateBack()'));
-    assert.ok(String(bar.innerHTML).includes('phSearchLocateDismiss()'));
+    assert.ok(String(bar.innerHTML).includes('data-action="phSearch.back"'));
+    assert.ok(String(bar.innerHTML).includes('data-action="phSearch.dismiss"'));
     // 返回搜索可用且收起失败说明。
     ctx.sandbox.run('window.phSearchLocateBack()');
     assert.ok(!bar.classList.contains('show'));

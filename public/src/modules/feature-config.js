@@ -7,7 +7,9 @@
  *   - Feature config lookup/matching (buildFeatureConfigLookupKeys, featureConfigKeyMatches, ...)
  *   - Feature manifest resolution (resolveFeaturePackageRecord, findFeatureManifestForSelection, ...)
  *   - Feature settings UI rendering (renderFWFeatureSettings, renderFeatureConfigControl, ...)
- *   - Window event handlers for fw* feature config interactions
+ *   - 配置控件交互：模板声明 data-action="featureConfig.*"，处理器在文件尾部
+ *     集中注册（action-dispatcher.js）；原 window.fw* 导出零外部消费面，
+ *     已收敛为模块级函数
  *
  * Depends on (global scope):
  *   - getAgentWorkspaceState, updateAgentWorkspaceState (app-ui.js)
@@ -358,11 +360,11 @@ function renderFeatureConfigControl(featureKey, field, property, currentValue) {
   const type = String(property?.type || 'string');
   const displayValue = currentValue !== undefined && currentValue !== null ? String(currentValue) : '';
   if (type === 'boolean') {
-    return '<label class="fw-setting-boolean"><input type="checkbox"' + (currentValue === true || currentValue === 'true' ? ' checked' : '') + ' onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'boolean\', this.checked)" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '"><span>' + escapeHtml(currentLanguage === 'zh' ? '启用此项' : 'Enabled') + '</span></label>';
+    return '<label class="fw-setting-boolean"><input type="checkbox"' + (currentValue === true || currentValue === 'true' ? ' checked' : '') + ' data-action="featureConfig.commitValue" data-event="change" data-field-type="boolean" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '"><span>' + escapeHtml(currentLanguage === 'zh' ? '启用此项' : 'Enabled') + '</span></label>';
   }
   if (type === 'select') {
     const options = Array.isArray(property?.options) ? property.options : [];
-    let html = '<select class="fw-setting-select" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'select\', this.value)">';
+    let html = '<select class="fw-setting-select" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-action="featureConfig.commitValue" data-event="change" data-field-type="select">';
     html += '<option value="">' + escapeHtml(currentLanguage === 'zh' ? '使用默认值' : 'Use default') + '</option>';
     options.forEach((option) => {
       const optionValue = option && Object.prototype.hasOwnProperty.call(option, 'value') ? option.value : '';
@@ -384,12 +386,10 @@ function renderFeatureConfigControl(featureKey, field, property, currentValue) {
         '<div class="fw-setting-range-row">',
         '<input class="fw-setting-range" id="' + escapeHtml(rangeId) + '" type="range" min="' + escapeHtml(String(min)) + '" max="' + escapeHtml(String(max)) + '" step="' + escapeHtml(String(step)) + '" value="' + escapeHtml(rawCurrent) + '"',
         ' data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '"',
-        ' oninput="window.fwSyncManifestRange(' + escapeHtml(JSON.stringify(numberId)) + ', this.value)"',
-        ' onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'number\', this.value)">',
+        ' data-action="featureConfig.rangeChanged" data-event="input change" data-target-id="' + escapeHtml(numberId) + '">',
         '<input class="fw-setting-input fw-setting-number" id="' + escapeHtml(numberId) + '" type="number" min="' + escapeHtml(String(min)) + '" max="' + escapeHtml(String(max)) + '" step="' + escapeHtml(String(step)) + '" value="' + escapeHtml(rawCurrent) + '"',
         ' data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '"',
-        ' oninput="window.fwSyncManifestRange(' + escapeHtml(JSON.stringify(rangeId)) + ', this.value)"',
-        ' onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'number\', this.value)">',
+        ' data-action="featureConfig.rangeChanged" data-event="input change" data-target-id="' + escapeHtml(rangeId) + '">',
         '</div>',
       ].join('');
     }
@@ -402,21 +402,21 @@ function renderFeatureConfigControl(featureKey, field, property, currentValue) {
       let html = '<div class="fw-setting-directory-list">';
       files.forEach((filePath, index) => {
         html += '<div class="fw-setting-dir-item">';
-        html += '<input class="fw-setting-input" value="' + escapeHtml(String(filePath || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '文件路径' : 'File path') + '" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-file-index="' + index + '" onchange="window.fwUpdateConfigFilePath(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), Number(this.dataset.fileIndex), this.value)">';
-        html += '<button class="workspace-action secondary" type="button" onclick="window.fwPickFeatureConfigFile(this)" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-file-index="' + index + '" data-accept="' + acceptValue + '">' + escapeHtml(currentLanguage === 'zh' ? '选择文件' : 'Browse') + '</button>';
-        html += '<button class="fw-setting-dir-remove" type="button" onclick="window.fwRemoveConfigFile(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), Number(this.dataset.fileIndex))" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-file-index="' + index + '">&times;</button>';
+        html += '<input class="fw-setting-input" value="' + escapeHtml(String(filePath || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '文件路径' : 'File path') + '" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-file-index="' + index + '" data-action="featureConfig.updateFilePath" data-event="change">';
+        html += '<button class="workspace-action secondary" type="button" data-action="featureConfig.pickFile" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-file-index="' + index + '" data-accept="' + acceptValue + '">' + escapeHtml(currentLanguage === 'zh' ? '选择文件' : 'Browse') + '</button>';
+        html += '<button class="fw-setting-dir-remove" type="button" data-action="featureConfig.removeFile" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-file-index="' + index + '">&times;</button>';
         html += '</div>';
       });
       if (files.length < maxItems) {
-        html += '<button class="fw-setting-dir-add workspace-action" type="button" onclick="window.fwAddConfigFile(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName))" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '">+ ' + escapeHtml(currentLanguage === 'zh' ? '添加文件' : 'Add file') + '</button>';
+        html += '<button class="fw-setting-dir-add workspace-action" type="button" data-action="featureConfig.addFile" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '">+ ' + escapeHtml(currentLanguage === 'zh' ? '添加文件' : 'Add file') + '</button>';
       }
       html += '</div>';
       return html;
     }
     return [
       '<div class="fw-setting-file-row">',
-      '<input class="fw-setting-input" value="' + escapeHtml(displayValue) + '" placeholder="' + escapeHtml(property?.placeholder || (currentLanguage === 'zh' ? '留空则使用默认路径' : 'Leave blank to use the default path')) + '" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'file\', this.value)">',
-      '<button class="workspace-action secondary" type="button" onclick="window.fwPickFeatureConfigFile(this)" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-accept="' + acceptValue + '">' + escapeHtml(currentLanguage === 'zh' ? '选择文件' : 'Browse') + '</button>',
+      '<input class="fw-setting-input" value="' + escapeHtml(displayValue) + '" placeholder="' + escapeHtml(property?.placeholder || (currentLanguage === 'zh' ? '留空则使用默认路径' : 'Leave blank to use the default path')) + '" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-action="featureConfig.commitValue" data-event="change" data-field-type="file">',
+      '<button class="workspace-action secondary" type="button" data-action="featureConfig.pickFile" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-accept="' + acceptValue + '">' + escapeHtml(currentLanguage === 'zh' ? '选择文件' : 'Browse') + '</button>',
       '</div>',
     ].join('');
   }
@@ -426,18 +426,18 @@ function renderFeatureConfigControl(featureKey, field, property, currentValue) {
     let html = '<div class="fw-setting-directory-list">';
     dirs.forEach((dir, index) => {
       html += '<div class="fw-setting-dir-item">';
-      html += '<input class="fw-setting-input" value="' + escapeHtml(String(dir || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '目录路径' : 'Directory path') + '" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-dir-index="' + index + '" onchange="window.fwUpdateConfigDirectoryPath(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), Number(this.dataset.dirIndex), this.value)">';
-      html += '<button class="workspace-action secondary" type="button" onclick="window.fwPickFeatureConfigDirectory(this)" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-dir-index="' + index + '">' + escapeHtml(currentLanguage === 'zh' ? '选择目录' : 'Browse') + '</button>';
-      html += '<button class="fw-setting-dir-remove" type="button" onclick="window.fwRemoveConfigDirectory(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), Number(this.dataset.dirIndex))" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-dir-index="' + index + '">&times;</button>';
+      html += '<input class="fw-setting-input" value="' + escapeHtml(String(dir || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '目录路径' : 'Directory path') + '" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-dir-index="' + index + '" data-action="featureConfig.updateDirectoryPath" data-event="change">';
+      html += '<button class="workspace-action secondary" type="button" data-action="featureConfig.pickDirectory" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-dir-index="' + index + '">' + escapeHtml(currentLanguage === 'zh' ? '选择目录' : 'Browse') + '</button>';
+      html += '<button class="fw-setting-dir-remove" type="button" data-action="featureConfig.removeDirectory" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-dir-index="' + index + '">&times;</button>';
       html += '</div>';
     });
     if (dirs.length < maxItems) {
-      html += '<button class="fw-setting-dir-add workspace-action" type="button" onclick="window.fwAddConfigDirectory(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName))" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '">+ ' + escapeHtml(currentLanguage === 'zh' ? '添加目录' : 'Add directory') + '</button>';
+      html += '<button class="fw-setting-dir-add workspace-action" type="button" data-action="featureConfig.addDirectory" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '">+ ' + escapeHtml(currentLanguage === 'zh' ? '添加目录' : 'Add directory') + '</button>';
     }
     html += '</div>';
     return html;
   }
-  return '<input class="fw-setting-input" type="' + (type === 'number' ? 'number' : 'text') + '" value="' + escapeHtml(displayValue) + '" placeholder="' + escapeHtml(property?.placeholder || (currentLanguage === 'zh' ? '留空则使用默认值' : 'Leave blank to use the default value')) + '"' + (type === 'number' && Number.isFinite(Number(property?.min)) ? ' min="' + escapeHtml(String(property.min)) + '"' : '') + (type === 'number' && Number.isFinite(Number(property?.max)) ? ' max="' + escapeHtml(String(property.max)) + '"' : '') + (type === 'number' && Number.isFinite(Number(property?.step)) ? ' step="' + escapeHtml(String(property.step)) + '"' : '') + ' data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'' + escapeHtml(type) + '\', this.value)">';
+  return '<input class="fw-setting-input" type="' + (type === 'number' ? 'number' : 'text') + '" value="' + escapeHtml(displayValue) + '" placeholder="' + escapeHtml(property?.placeholder || (currentLanguage === 'zh' ? '留空则使用默认值' : 'Leave blank to use the default value')) + '"' + (type === 'number' && Number.isFinite(Number(property?.min)) ? ' min="' + escapeHtml(String(property.min)) + '"' : '') + (type === 'number' && Number.isFinite(Number(property?.max)) ? ' max="' + escapeHtml(String(property.max)) + '"' : '') + (type === 'number' && Number.isFinite(Number(property?.step)) ? ' step="' + escapeHtml(String(property.step)) + '"' : '') + ' data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-action="featureConfig.commitValue" data-event="change" data-field-type="' + escapeHtml(type) + '">';
 }
 
 // ---------------------------------------------------------------------------
@@ -512,7 +512,7 @@ function renderFWFeatureSettings(agent, draft, packages) {
     const status = getFeatureConfigStatusMeta(group.manifest, group.currentConfig);
     html += '<div class="fw-setting-group">';
     html += '<div class="fw-setting-group-head"><div class="fw-setting-group-title">' + escapeHtml(group.name) + '</div>';
-    html += '<div class="fw-setting-group-actions"><span class="fw-setting-status' + (status.customized ? ' customized' : '') + '">' + escapeHtml(status.label) + '</span><button class="workspace-action secondary" type="button" onclick="window.fwResetFeatureConfig(' + escapeHtml(JSON.stringify(group.featureKey)) + ')">' + escapeHtml(currentLanguage === 'zh' ? '恢复默认' : 'Reset') + '</button></div></div>';
+    html += '<div class="fw-setting-group-actions"><span class="fw-setting-status' + (status.customized ? ' customized' : '') + '">' + escapeHtml(status.label) + '</span><button class="workspace-action secondary" type="button" data-action="featureConfig.reset" data-feature-key="' + escapeHtml(JSON.stringify(group.featureKey)) + '">' + escapeHtml(currentLanguage === 'zh' ? '恢复默认' : 'Reset') + '</button></div></div>';
     html += '<div class="fw-setting-grid">';
     entries.forEach(([field, property]) => {
       const currentValue = Object.prototype.hasOwnProperty.call(group.currentConfig, field)
@@ -542,10 +542,13 @@ function renderFWFeatureSettings(agent, draft, packages) {
 }
 
 // ---------------------------------------------------------------------------
-// Window event handlers for fw* feature config interactions
+// 配置控件动作（data-action="featureConfig.*"，处理器收敛在本模块局部）
 // ---------------------------------------------------------------------------
+// 原 window.fw* 导出全仓消费面为零（仅本模块模板的处理器字符串引用），
+// 遂收敛为模块级 const；控件改为 data-action 声明后经 action-dispatcher
+// 委托分发。
 
-window.fwRefreshFeatureCapabilities = async () => {
+async function _fwRefreshFeatureCapabilities() {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = normalizeAssemblyDraft(getWorkspaceFormDraft(agent)?.['assembly-form'] || {});
@@ -553,9 +556,9 @@ window.fwRefreshFeatureCapabilities = async () => {
   if (window.ClawFlowEditor && typeof window.ClawFlowEditor.refreshCapabilities === 'function') {
     window.ClawFlowEditor.refreshCapabilities().catch(e => console.warn(e));
   }
-};
+}
 
-window.fwCommitFeatureConfigValue = async (featureKey, field, type, rawValue) => {
+async function _fwCommitFeatureConfigValue(featureKey, field, type, rawValue) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   try {
@@ -567,9 +570,9 @@ window.fwCommitFeatureConfigValue = async (featureKey, field, type, rawValue) =>
     console.error('Failed to save feature config field:', error);
     window.alert((currentLanguage === 'zh' ? '保存 Feature 配置失败：' : 'Failed to save feature config: ') + (error?.message || error));
   }
-};
+}
 
-window.fwResetFeatureConfig = async (featureKey) => {
+async function _fwResetFeatureConfig(featureKey) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   try {
@@ -580,16 +583,17 @@ window.fwResetFeatureConfig = async (featureKey) => {
     console.error('Failed to reset feature config:', error);
     window.alert((currentLanguage === 'zh' ? '恢复默认配置失败：' : 'Failed to reset feature config: ') + (error?.message || error));
   }
-};
+}
 
-window.fwSyncManifestRange = (targetId, value) => {
+/** 数字区间控件与数值输入框联动：一侧输入即时同步另一侧显示值。 */
+function _fwSyncManifestRange(targetId, value) {
   const target = document.getElementById(String(targetId || ''));
   if (target) {
     target.value = String(value ?? '');
   }
-};
+}
 
-window.fwPickFeatureConfigFile = async (button) => {
+async function _fwPickFeatureConfigFile(button) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id || !(button instanceof HTMLElement)) return;
   try {
@@ -597,7 +601,6 @@ window.fwPickFeatureConfigFile = async (button) => {
     const parsedField = parseInlineDataValue(button.dataset.fieldName);
     const parsedAccept = parseInlineDataValue(button.dataset.accept || '');
     const fileIndex = button.dataset.fileIndex == null ? null : Number(button.dataset.fileIndex);
-    const previousLabel = button.textContent || (currentLanguage === 'zh' ? '选择文件' : 'Browse');
     button.disabled = true;
     button.textContent = currentLanguage === 'zh' ? '打开中…' : 'Opening…';
     const selected = await invoke('select_files');
@@ -627,9 +630,9 @@ window.fwPickFeatureConfigFile = async (button) => {
     button.disabled = false;
     button.textContent = currentLanguage === 'zh' ? '选择文件' : 'Browse';
   }
-};
+}
 
-window.fwAddConfigFile = async (featureKey, field) => {
+async function _fwAddConfigFile(featureKey, field) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   try {
@@ -643,9 +646,9 @@ window.fwAddConfigFile = async (featureKey, field) => {
   } catch (error) {
     console.error('Failed to add config file:', error);
   }
-};
+}
 
-window.fwRemoveConfigFile = async (featureKey, field, index) => {
+async function _fwRemoveConfigFile(featureKey, field, index) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   try {
@@ -663,9 +666,9 @@ window.fwRemoveConfigFile = async (featureKey, field, index) => {
   } catch (error) {
     console.error('Failed to remove config file:', error);
   }
-};
+}
 
-window.fwUpdateConfigFilePath = async (featureKey, field, index, value) => {
+async function _fwUpdateConfigFilePath(featureKey, field, index, value) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   const trimmed = String(value || '').trim();
@@ -688,16 +691,15 @@ window.fwUpdateConfigFilePath = async (featureKey, field, index, value) => {
   } catch (error) {
     console.error('Failed to update config file path:', error);
   }
-};
+}
 
-window.fwPickFeatureConfigDirectory = async (button) => {
+async function _fwPickFeatureConfigDirectory(button) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id || !(button instanceof HTMLElement)) return;
   try {
     const parsedFeatureKey = parseInlineDataValue(button.dataset.featureKey);
     const parsedField = parseInlineDataValue(button.dataset.fieldName);
     const dirIndex = Number(button.dataset.dirIndex);
-    const previousLabel = button.textContent || (currentLanguage === 'zh' ? '选择目录' : 'Browse');
     button.disabled = true;
     button.textContent = currentLanguage === 'zh' ? '打开中…' : 'Opening…';
     const selected = await invoke('select_directory');
@@ -720,9 +722,9 @@ window.fwPickFeatureConfigDirectory = async (button) => {
     button.disabled = false;
     button.textContent = currentLanguage === 'zh' ? '选择目录' : 'Browse';
   }
-};
+}
 
-window.fwAddConfigDirectory = async (featureKey, field) => {
+async function _fwAddConfigDirectory(featureKey, field) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   try {
@@ -736,9 +738,9 @@ window.fwAddConfigDirectory = async (featureKey, field) => {
   } catch (error) {
     console.error('Failed to add config directory:', error);
   }
-};
+}
 
-window.fwRemoveConfigDirectory = async (featureKey, field, index) => {
+async function _fwRemoveConfigDirectory(featureKey, field, index) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   try {
@@ -756,9 +758,9 @@ window.fwRemoveConfigDirectory = async (featureKey, field, index) => {
   } catch (error) {
     console.error('Failed to remove config directory:', error);
   }
-};
+}
 
-window.fwUpdateConfigDirectoryPath = async (featureKey, field, index, value) => {
+async function _fwUpdateConfigDirectoryPath(featureKey, field, index, value) {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   const trimmed = String(value || '').trim();
@@ -781,4 +783,60 @@ window.fwUpdateConfigDirectoryPath = async (featureKey, field, index, value) => 
   } catch (error) {
     console.error('Failed to update config directory path:', error);
   }
-};
+}
+
+/** 控件的 featureKey / field 以 JSON 字符串写入 data-*（含引号，经 HTML
+ *  转义），读取端统一 parseInlineDataValue 还原。 */
+function _fwControlTarget(el) {
+  return {
+    featureKey: parseInlineDataValue(el.dataset.featureKey),
+    field: parseInlineDataValue(el.dataset.fieldName),
+  };
+}
+
+window.ClawFW = window.ClawFW || {};
+
+window.ClawFW.actions.registerMany({
+  'featureConfig.commitValue': (el) => {
+    const { featureKey, field } = _fwControlTarget(el);
+    const type = el.dataset.fieldType || 'string';
+    return _fwCommitFeatureConfigValue(featureKey, field, type, type === 'boolean' ? el.checked : el.value);
+  },
+  // 区间滑块与数值框互为镜像：input 只同步另一侧显示（原 oninput 语义，
+  // 拖动过程不落库），change 才提交（原 onchange 语义）。
+  'featureConfig.rangeChanged': (el, event) => {
+    if (event?.type === 'input') {
+      _fwSyncManifestRange(el.dataset.targetId, el.value);
+      return undefined;
+    }
+    const { featureKey, field } = _fwControlTarget(el);
+    return _fwCommitFeatureConfigValue(featureKey, field, 'number', el.value);
+  },
+  'featureConfig.reset': (el) => _fwResetFeatureConfig(_fwControlTarget(el).featureKey),
+  'featureConfig.pickFile': (el) => _fwPickFeatureConfigFile(el),
+  'featureConfig.addFile': (el) => {
+    const { featureKey, field } = _fwControlTarget(el);
+    return _fwAddConfigFile(featureKey, field);
+  },
+  'featureConfig.removeFile': (el) => {
+    const { featureKey, field } = _fwControlTarget(el);
+    return _fwRemoveConfigFile(featureKey, field, Number(el.dataset.fileIndex));
+  },
+  'featureConfig.updateFilePath': (el) => {
+    const { featureKey, field } = _fwControlTarget(el);
+    return _fwUpdateConfigFilePath(featureKey, field, Number(el.dataset.fileIndex), el.value);
+  },
+  'featureConfig.pickDirectory': (el) => _fwPickFeatureConfigDirectory(el),
+  'featureConfig.addDirectory': (el) => {
+    const { featureKey, field } = _fwControlTarget(el);
+    return _fwAddConfigDirectory(featureKey, field);
+  },
+  'featureConfig.removeDirectory': (el) => {
+    const { featureKey, field } = _fwControlTarget(el);
+    return _fwRemoveConfigDirectory(featureKey, field, Number(el.dataset.dirIndex));
+  },
+  'featureConfig.updateDirectoryPath': (el) => {
+    const { featureKey, field } = _fwControlTarget(el);
+    return _fwUpdateConfigDirectoryPath(featureKey, field, Number(el.dataset.dirIndex), el.value);
+  },
+});

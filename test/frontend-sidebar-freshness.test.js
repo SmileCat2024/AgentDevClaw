@@ -26,6 +26,7 @@ function harness(agentId = 'coder') {
     lastRenderedWorkspaceHtml: '',
   });
   ctx.window.setInterval = () => 0;
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/project-data.js');
   ctx.loadSource('public/src/modules/session-ui.js');
   ctx.loadSource('public/src/modules/sidebar-operations.js');

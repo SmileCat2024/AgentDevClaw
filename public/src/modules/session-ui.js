@@ -15,7 +15,10 @@
  *   getWorkspaceSessions, getWorkspaceSessionById, isCompactedResumeSession,
  *   renderSessionResumeBadge, renderSessionTitleAiButton, getSessionContextLength,
  *   getSessionCompressRatio, renderSessionTokenBar, refreshSessionTokenCount,
- *   window.handleSessionTitleDoubleClick, window.generateSessionTitle
+ *   window.handleSessionTitleDoubleClick
+ * 控件动作: 模板声明 data-action="sessionUi.*"，处理器在文件尾部集中注册
+ * （action-dispatcher.js）；generateSessionTitle / phRestore* / phDismiss*
+ * 已收敛为模块级函数
  * 注意: renderWorkspaceSessionList 已迁移到 session-list-render.js
  */
 
@@ -81,7 +84,10 @@ function renderSessionTodoBadge(session) {
 
 function renderSessionTitleAiButton(session) {
   let isZh = currentLanguage === 'zh';
-  return '<button class="session-title-ai-btn session-title-ai-btn-hidden" type="button" title="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '" onmousedown="if(this._setGenerating)this._setGenerating(true);" onclick="event.stopPropagation();window.generateSessionTitle(\'' + escapeHtml(session.id) + '\',this)" aria-label="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '"><span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + escapeHtml(isZh ? 'AI生成' : 'AI Generate') + '</span></button>';
+  // onmousedown 保留内联（mousedown 不在 action-dispatcher 默认绑定，bindEventType
+  // 新类型属禁区）：按下即置 generating 标志，必须先于 input blur 触发，否则
+  // saveTitle 抢先保存替换 DOM、click 落在脱离文档的按钮上。click 走委托。
+  return '<button class="session-title-ai-btn session-title-ai-btn-hidden" type="button" title="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '" onmousedown="if(this._setGenerating)this._setGenerating(true);" data-action="sessionUi.titleAiGenerate" data-session-id="' + escapeHtml(session.id) + '" aria-label="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '"><span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + escapeHtml(isZh ? 'AI生成' : 'AI Generate') + '</span></button>';
 }
 
 // ── Historical session token-bar cache ──────────────────────────────
@@ -238,7 +244,7 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
   }
 }
 
-window.generateSessionTitle = async function(sessionId, btnElement) {
+async function generateSessionTitle(sessionId, btnElement) {
   if (!btnElement) return;
   
   let isZh = currentLanguage === 'zh';
@@ -329,7 +335,7 @@ window.generateSessionTitle = async function(sessionId, btnElement) {
       btnElement.classList.add('session-title-ai-btn-hidden');
     }
   }
-};
+}
 
 // ── Session Title Double-Click Edit ──────────────────────────────────────────
 
@@ -528,7 +534,7 @@ window._buildPhOpenSessionsCardHtml = function(sessions, isZh, agentId) {
       '<div class="ph-open-session-title">' + escapeHtml(title) + '</div>',
       (timeStr ? '<div class="ph-open-session-meta">' + escapeHtml(timeStr) + '</div>' : ''),
       '</div>',
-      '<button class="ph-open-session-enter" type="button" onclick="window.phRestoreOneOpenSession(\'' + escapeHtml(agentId) + '\', \'' + escapeHtml(s.sessionId) + '\', this)">' + escapeHtml(isZh ? '进入对话' : 'Open') + '</button>',
+      '<button class="ph-open-session-enter" type="button" data-action="sessionUi.openSessionRestore" data-agent-id="' + escapeHtml(agentId) + '" data-session-id="' + escapeHtml(s.sessionId) + '">' + escapeHtml(isZh ? '进入对话' : 'Open') + '</button>',
       '</div>',
     ].join('');
   }).join('');
@@ -543,8 +549,8 @@ window._buildPhOpenSessionsCardHtml = function(sessions, isZh, agentId) {
     '<span>' + escapeHtml(isZh ? '上次未关闭的会话 (' + count + ')' : 'Unclosed sessions (' + count + ')') + '</span>',
     '</div>',
     '<div class="ph-open-sessions-actions">',
-    (count > 1 ? '<button class="ph-open-sessions-restore-all" type="button" onclick="window.phRestoreAllOpenSessions(\'' + escapeHtml(agentId) + '\', ' + escapeHtml(JSON.stringify(allIds)) + ', this)">' + escapeHtml(isZh ? '全部恢复' : 'Restore All') + '</button>' : ''),
-    '<button class="ph-open-sessions-dismiss" type="button" title="' + escapeHtml(isZh ? '关闭' : 'Dismiss') + '" onclick="window.phDismissOpenSessions(\'' + escapeHtml(agentId) + '\', this)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>',
+    (count > 1 ? '<button class="ph-open-sessions-restore-all" type="button" data-action="sessionUi.openSessionRestoreAll" data-agent-id="' + escapeHtml(agentId) + '" data-session-ids="' + escapeHtml(JSON.stringify(allIds)) + '">' + escapeHtml(isZh ? '全部恢复' : 'Restore All') + '</button>' : ''),
+    '<button class="ph-open-sessions-dismiss" type="button" title="' + escapeHtml(isZh ? '关闭' : 'Dismiss') + '" data-action="sessionUi.openSessionDismiss" data-agent-id="' + escapeHtml(agentId) + '"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>',
     '</div>',
     '</div>',
     '<div class="ph-open-sessions-body">',
@@ -554,7 +560,7 @@ window._buildPhOpenSessionsCardHtml = function(sessions, isZh, agentId) {
   ].join('');
 };
 
-window.phRestoreOneOpenSession = async function(agentId, sessionId, btnEl) {
+async function phRestoreOneOpenSession(agentId, sessionId, btnEl) {
   if (btnEl) {
     btnEl.disabled = true;
     btnEl.textContent = '...';
@@ -580,9 +586,9 @@ window.phRestoreOneOpenSession = async function(agentId, sessionId, btnEl) {
       btnEl.textContent = currentLanguage === 'zh' ? '进入对话' : 'Open';
     }
   }
-};
+}
 
-window.phRestoreAllOpenSessions = async function(agentId, sessionIds, btnEl) {
+async function phRestoreAllOpenSessions(agentId, sessionIds, btnEl) {
   if (btnEl) {
     btnEl.disabled = true;
     btnEl.textContent = currentLanguage === 'zh' ? '恢复中...' : 'Restoring...';
@@ -610,9 +616,9 @@ window.phRestoreAllOpenSessions = async function(agentId, sessionIds, btnEl) {
       btnEl.textContent = currentLanguage === 'zh' ? '全部恢复' : 'Restore All';
     }
   }
-};
+}
 
-window.phDismissOpenSessions = async function(agentId, btnEl) {
+async function phDismissOpenSessions(agentId, btnEl) {
   try {
     await fetch('/protoclaw/open_sessions/dismiss', {
       method: 'POST',
@@ -625,4 +631,17 @@ window.phDismissOpenSessions = async function(agentId, btnEl) {
   // Clear cache so workspace rebuilds don't bring the card back
   _phOpenSessionsCache.html = '';
   _phOpenSessionsCache.sig = null;
-};
+}
+
+// ── 动作注册（data-action="sessionUi.*"）────────────────────
+// 模板内联事件收编：处理器集中在此经 action-dispatcher 委托分发。
+// 原 window 导出（generateSessionTitle / phRestore* / phDismiss*）全仓
+// 消费面为零，已收敛为模块级函数。
+window.ClawFW.actions.registerMany({
+  // AI 标题按钮的 onmousedown 保留内联（见 renderSessionTitleAiButton 注释），
+  // click 生成动作走此委托。
+  'sessionUi.titleAiGenerate': (el) => generateSessionTitle(el.dataset.sessionId, el),
+  'sessionUi.openSessionRestore': (el) => phRestoreOneOpenSession(el.dataset.agentId, el.dataset.sessionId, el),
+  'sessionUi.openSessionRestoreAll': (el) => phRestoreAllOpenSessions(el.dataset.agentId, JSON.parse(el.dataset.sessionIds), el),
+  'sessionUi.openSessionDismiss': (el) => phDismissOpenSessions(el.dataset.agentId, el),
+});

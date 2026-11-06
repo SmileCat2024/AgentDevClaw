@@ -52,6 +52,7 @@ function loadContextBar({ overview, agent, runtimeRecord }) {
     notifyChatViewportMutation: () => {},
   });
   // session-ui.js provides getSessionContextLength / getSessionCompressRatio
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/session-ui.js');
   ctx.loadSource('public/src/modules/chat-context-bar.js');
   return ctx;

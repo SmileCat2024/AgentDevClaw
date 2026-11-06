@@ -118,7 +118,7 @@ function renderWorkspaceArtifactsBlock(agent, block) {
           preview ? '<div class="workspace-docset-row-preview">' + escapeHtml(preview) + '</div>' : '',
           '<div class="workspace-docset-row-meta"><span>' + escapeHtml(kind) + '</span><span>' + escapeHtml(formatWorkspaceDate(item.updatedAt)) + '</span>' + (relatedDir ? '<span>' + escapeHtml(relatedDir) + '</span>' : '') + (sourceWorkspace ? '<span>' + escapeHtml(getWorkspaceLabelFromId(sourceWorkspace)) + '</span>' : '') + '</div>',
           '</div>',
-          '<div class="workspace-actions"><button class="workspace-action secondary" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">查看</button></div>',
+          '<div class="workspace-actions"><button class="workspace-action secondary" type="button" data-workspace-action="' + openAction + '" data-action="wsDocset.runAction">>查看</button></div>',
           '</div>',
         ].join('');
       }).join('') + '</div></div></div>'
@@ -130,9 +130,9 @@ function renderWorkspaceArtifactsBlock(agent, block) {
         '<div class="workspace-docset-panel">',
         '<div class="workspace-docset-panel-head"><div class="workspace-docset-panel-title">' + escapeHtml(selectedItem.title || selectedItem.id || 'artifact') + '</div><div class="workspace-actions">',
         selectedItem?.source?.workspace
-          ? '<button class="workspace-action" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'navigate_unit', targetAgentId: String(selectedItem.source.workspace) })) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">进入来源工作空间</button>'
+          ? '<button class="workspace-action" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'navigate_unit', targetAgentId: String(selectedItem.source.workspace) })) + '" data-action="wsDocset.runAction">>进入来源工作空间</button>'
           : '',
-        '<button class="workspace-action secondary" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'close_artifact_preview', blockId: String(block?.id || '') })) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">关闭预览</button>',
+        '<button class="workspace-action secondary" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'close_artifact_preview', blockId: String(block?.id || '') })) + '" data-action="wsDocset.runAction">>关闭预览</button>',
         '</div></div>',
         '<div class="workspace-docset-panel-body">',
         '<div class="workspace-docset-chip-row"><span class="workspace-docset-chip">' + escapeHtml(getArtifactKindLabel(selectedItem.kind)) + '</span><span class="workspace-docset-chip">' + escapeHtml(formatWorkspaceDate(selectedItem.updatedAt)) + '</span>' + (selectedItem?.relatedTo?.openDirectory ? '<span class="workspace-docset-chip">' + escapeHtml(String(selectedItem.relatedTo.openDirectory)) + '</span>' : '') + '</div>',
@@ -257,7 +257,7 @@ function renderProjectDocsetSidebarItem(title, preview, meta, section, itemId, b
     itemId,
   }));
   return [
-    '<button class="project-docset-item' + (active ? ' active' : '') + '" type="button" data-workspace-action="' + action + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">',
+    '<button class="project-docset-item' + (active ? ' active' : '') + '" type="button" data-workspace-action="' + action + '" data-action="wsDocset.runAction">',
     '<div class="project-docset-item-top">',
     '<div class="project-docset-item-title">' + escapeHtml(title) + '</div>',
     tag,
@@ -434,8 +434,8 @@ function renderProjectDocsetContent(agent, block, data) {
         (Array.isArray(requirementBlock?.fields) ? requirementBlock.fields : []).map((field) => renderWorkspaceField(agent, field, requirementDraft, 'startup-form')).join(''),
         '</div>',
         '<div class="project-docset-requirement-actions">',
-        '<button class="workspace-action secondary" type="button" onclick="window.cancelProjectRequirementEdit()">取消</button>',
-        '<button class="workspace-action" type="button" onclick="window.saveProjectRequirementForm()">保存需求</button>',
+        '<button class="workspace-action secondary" type="button" data-action="wsDocset.cancelRequirementEdit">取消</button>',
+        '<button class="workspace-action" type="button" data-action="wsDocset.saveRequirementForm">保存需求</button>',
         '</div>',
       ].join('')
     : renderProjectRequirementCards(agent, requirementBlock, effectiveRequirement);
@@ -445,7 +445,7 @@ function renderProjectDocsetContent(agent, block, data) {
     { id: 'log', label: '推进记录' },
     { id: 'materials', label: '资料' },
   ].map((item) => (
-    '<button class="project-docset-tab' + (page === item.id ? ' active' : '') + '" type="button" onclick="window.setProjectDocsetPage(&quot;' + escapeHtml(item.id) + '&quot;)">' + escapeHtml(item.label) + '</button>'
+    '<button class="project-docset-tab' + (page === item.id ? ' active' : '') + '" type="button" data-action="wsDocset.setPage" data-page-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.label) + '</button>'
   )).join('');
 
   const requirementPageHtml = [
@@ -458,8 +458,8 @@ function renderProjectDocsetContent(agent, block, data) {
     '</div>',
     '<div class="workspace-actions">' + (
       editingRequirement
-        ? '<button class="workspace-action secondary" type="button" onclick="window.cancelProjectRequirementEdit()">退出编辑</button>'
-        : '<button class="workspace-action secondary" type="button" onclick="window.startProjectRequirementEdit()">编辑需求</button>'
+        ? '<button class="workspace-action secondary" type="button" data-action="wsDocset.cancelRequirementEdit">退出编辑</button>'
+        : '<button class="workspace-action secondary" type="button" data-action="wsDocset.startRequirementEdit">编辑需求</button>'
     ) + '</div>',
     '</div>',
     requirementBody,
@@ -483,8 +483,8 @@ function renderProjectDocsetContent(agent, block, data) {
     '<div class="project-docset-page-head">',
     '<div class="project-docset-page-note">这里放可复用的资料引用：AI 方案书、外部文档、参考目录或本地文件路径。</div>',
     '<div class="workspace-actions">',
-    '<button class="workspace-action secondary" type="button" onclick="window.openProjectMaterialImport(&quot;files&quot;)">导入文件</button>',
-    '<button class="workspace-action secondary" type="button" onclick="window.openProjectMaterialImport(&quot;folder&quot;)">导入文件夹</button>',
+    '<button class="workspace-action secondary" type="button" data-action="wsDocset.materialImport" data-import-mode="files">导入文件</button>',
+    '<button class="workspace-action secondary" type="button" data-action="wsDocset.materialImport" data-import-mode="folder">导入文件夹</button>',
     '</div>',
     '</div>',
     '<div class="project-docset-browser">',
@@ -566,15 +566,17 @@ function updateProjectDocsetChrome(agent = getCurrentAgentRecord()) {
     '<div class="project-docset-sheet-title">' + escapeHtml(localizeWorkspaceValue(block.title, 'Project Docset')) + '</div>',
     '<div class="project-docset-sheet-subtitle">' + escapeHtml(String(docset?.projectDir || '')) + '</div>',
     '</div>',
-    '<div class="workspace-actions"><button class="workspace-action secondary" type="button" onclick="window.toggleProjectDocsetOverlay(false)">关闭</button></div>',
+    '<div class="workspace-actions"><button class="workspace-action secondary" type="button" data-action="wsDocset.overlayClose">关闭</button></div>',
     '</div>',
     '<div class="project-docset-sheet-body">',
     renderProjectDocsetContent(agent, block, docset),
     '</div>',
   ].join('');
 }
-
 // ── Docset & material action handlers (from app-main.js) ──
+// toggleProjectDocsetOverlay 保留 window 导出（app-core.js 元素监听调用），
+// 其余 handler 全仓消费面为零，收敛为模块级函数。
+
 window.toggleProjectDocsetOverlay = (force) => {
   if (typeof force === 'boolean') {
     currentProjectDocsetOpen = force;
@@ -584,28 +586,28 @@ window.toggleProjectDocsetOverlay = (force) => {
   updateProjectDocsetChrome(getCurrentAgentRecord());
 };
 
-window.setProjectDocsetPage = (page) => {
+function setProjectDocsetPage(page) {
   currentProjectDocsetPage = ['requirement', 'log', 'materials'].includes(page) ? page : 'requirement';
   renderCurrentMainView();
-};
+}
 
-window.startProjectRequirementEdit = () => {
+function startProjectRequirementEdit() {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   currentProjectDocsetPage = 'requirement';
   currentProjectRequirementEdit = { agentId: agent.id };
   renderCurrentMainView();
-};
+}
 
-window.cancelProjectRequirementEdit = () => {
+function cancelProjectRequirementEdit() {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   resetProjectRequirementDraft(agent);
   currentProjectRequirementEdit = null;
   renderCurrentMainView();
-};
+}
 
-window.saveProjectRequirementForm = async () => {
+async function saveProjectRequirementForm() {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
   const forms = getWorkspaceFormDraft(agent);
@@ -619,15 +621,15 @@ window.saveProjectRequirementForm = async () => {
   } catch (error) {
     console.error('Failed to save project requirement form:', error);
   }
-};
+}
 
-window.openProjectMaterialImport = (mode = 'files') => {
-  window.importProjectMaterialsByPath(mode).catch((error) => {
+function openProjectMaterialImport(mode = 'files') {
+  importProjectMaterialsByPath(mode).catch((error) => {
     console.error('Failed to open project material import:', error);
   });
-};
+}
 
-window.importProjectMaterialsByPath = async (mode = 'files') => {
+async function importProjectMaterialsByPath(mode = 'files') {
   const agent = getCurrentAgentRecord();
   const docset = getCurrentProjectDocset(agent);
   if (!agent?.id || !docset?.projectDir) return;
@@ -674,4 +676,18 @@ window.importProjectMaterialsByPath = async (mode = 'files') => {
   } catch (error) {
     console.error('Failed to import project materials:', error);
   }
-};
+}
+
+// ── 动作注册（data-action="wsDocset.*"）────────────────────
+// 模板内联事件收编：处理器集中在此经 action-dispatcher 委托分发。
+window.ClawFW.actions.registerMany({
+  // workspace-action 按钮与 wsBlocks.workspaceAction 同款语义（该注册名
+  // 属 workspace-blocks，本模块模板复用同名 dataset、另注册本域动作）。
+  'wsDocset.runAction': (el) => window.runWorkspaceAction(el.dataset.workspaceAction, el),
+  'wsDocset.overlayClose': () => window.toggleProjectDocsetOverlay(false),
+  'wsDocset.setPage': (el) => setProjectDocsetPage(el.dataset.pageId),
+  'wsDocset.startRequirementEdit': () => startProjectRequirementEdit(),
+  'wsDocset.cancelRequirementEdit': () => cancelProjectRequirementEdit(),
+  'wsDocset.saveRequirementForm': () => saveProjectRequirementForm(),
+  'wsDocset.materialImport': (el) => openProjectMaterialImport(el.dataset.importMode),
+});

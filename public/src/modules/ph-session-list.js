@@ -20,14 +20,11 @@
  *   switchPhSessionTab, phToggleSessionSort,
  *   _buildPhSearchPanelHtml, _updatePhSearchPanelDom,
  *   phOnSearchInput, phClearSearch, phShowSessionCtxMenu,
- *   phSetSearchScope, phToggleSearchSort, phSearchLoadMore,
+ *   phToggleSearchSort, phSearchLoadMore,
  *   phSearchRetry, phSearchToggleExpand, phSearchResetState
- * HTML onclick 引用:
- *   onclick="window.switchPhSessionTab(this)"
- *   onclick="window.phToggleSessionSort(this)"
- *   oninput="window.phOnSearchInput(this.value)"
- *   onclick="window.phClearSearch()"
- *   onclick="window.phShowSessionCtxMenu(event, this, ...)"
+ * 模板交互: 搜索面板控件声明 data-action="phSessions.*"，处理器在文件
+ * 尾部集中注册（action-dispatcher.js）；列表主模板的会话行动作由
+ * session-list-render.js 的 sessions.* 注册块承接（经 window 转调本模块）。
  */
 
 window.switchPhSessionTab = (btn) => {
@@ -170,11 +167,11 @@ function _phSearchSnippetHtml(result, queryTrimmed) {
   let html = shown.map((match) => '<div class="ph-search-passage">'
     + _phMatchHtml(match, queryTrimmed, expanded) + '</div>').join('');
   if (!expanded) {
-    html += '<button class="ph-search-expand-btn" type="button" onclick="window.phSearchToggleExpand(\'' + escapeHtml(result.sessionId) + '\')">'
+    html += '<button class="ph-search-expand-btn" type="button" data-action="phSessions.searchToggleExpand" data-session-id="' + escapeHtml(result.sessionId) + '">'
       + escapeHtml(isZh ? '展开上下文' + (result.matchCount > 1 ? ' · ' + result.matchCount + ' 条匹配消息' : '') : 'Show context' + (result.matchCount > 1 ? ' · ' + result.matchCount + ' matching messages' : ''))
       + '</button>';
   } else {
-    html += '<button class="ph-search-expand-btn" type="button" onclick="window.phSearchToggleExpand(\'' + escapeHtml(result.sessionId) + '\')">'
+    html += '<button class="ph-search-expand-btn" type="button" data-action="phSessions.searchToggleExpand" data-session-id="' + escapeHtml(result.sessionId) + '">'
       + escapeHtml(isZh ? '收起' : 'Collapse') + '</button>';
   }
   if (expanded && result.matchCount > result.matches.length) {
@@ -194,14 +191,14 @@ function _phScopeTabsHtml() {
   const scopes = ['all', 'main', 'archived'];
   return '<div class="ph-search-tabs">' + scopes.map((scope) => {
     const active = _phSearch.scope === scope;
-    return '<button class="ph-search-scope-tab' + (active ? ' active' : '') + '" type="button" data-scope="' + escapeHtml(scope) + '" onclick="window.phSetSearchScope(this)">' + escapeHtml(_phScopeLabel(scope)) + '</button>';
+    return '<button class="ph-search-scope-tab' + (active ? ' active' : '') + '" type="button" data-scope="' + escapeHtml(scope) + '" data-action="phSessions.searchSetScope">' + escapeHtml(_phScopeLabel(scope)) + '</button>';
   }).join('') + '</div>';
 }
 
 function _phSortToggleHtml() {
   const isZh = currentLanguage === 'zh';
   const label = _phSearch.sort === 'relevance' ? (isZh ? '相关度' : 'Relevance') : (isZh ? '最近更新' : 'Recently updated');
-  return '<button class="ph-search-sort-btn" type="button" onclick="window.phToggleSearchSort()" title="' + escapeHtml(isZh ? '切换排序方式' : 'Toggle sort order') + '">'
+  return '<button class="ph-search-sort-btn" type="button" data-action="phSessions.searchToggleSort" title="' + escapeHtml(isZh ? '切换排序方式' : 'Toggle sort order') + '">'
     + '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2v8M3 10L1.5 8.5M3 10l1.5-1.5M9 10V2M9 2L7.5 3.5M9 2l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     + escapeHtml(label) + '</button>';
 }
@@ -252,7 +249,7 @@ window._buildPhSearchPanelHtml = (viewIdentity) => {
     return [
       '<div class="ph-search-status ph-search-error">',
       escapeHtml(isZh ? '搜索失败' : 'Search failed'),
-      '<button class="workspace-action secondary ph-search-retry-btn" type="button" onclick="window.phSearchRetry()">' + escapeHtml(isZh ? '重试' : 'Retry') + '</button>',
+      '<button class="workspace-action secondary ph-search-retry-btn" type="button" data-action="phSessions.searchRetry">' + escapeHtml(isZh ? '重试' : 'Retry') + '</button>',
       '</div>',
     ].join('');
   }
@@ -282,7 +279,7 @@ window._buildPhSearchPanelHtml = (viewIdentity) => {
   html += '<div class="feature-project-session-list">';
   html += _phSearch.results.map((r) => _phResultRowHtml(r, identity, agent)).join('');
   if (shown < _phSearch.total) {
-    html += '<div class="ph-load-more-wrap"><button class="workspace-action secondary ph-load-more-btn" type="button" onclick="window.phSearchLoadMore()"' + (_phSearch.loading ? ' disabled' : '') + '>'
+    html += '<div class="ph-load-more-wrap"><button class="workspace-action secondary ph-load-more-btn" type="button" data-action="phSessions.searchLoadMore"' + (_phSearch.loading ? ' disabled' : '') + '>'
       + escapeHtml(_phSearch.loading ? (isZh ? '加载中...' : 'Loading...') : (isZh ? '加载更多（已显示 ' + shown + ' / ' + _phSearch.total + '）' : 'Load more (' + shown + ' / ' + _phSearch.total + ')'))
       + '</button></div>';
   }
@@ -420,9 +417,10 @@ window.phSetSearchScopeByValue = (scope) => {
   }
 };
 
-window.phSetSearchScope = (btn) => {
+/** 范围 tab 的 btn 适配器（模板 data-action 专用；ByValue 版保留 window 供测试直调）。 */
+function phSetSearchScope(btn) {
   if (btn?.dataset?.scope) window.phSetSearchScopeByValue(btn.dataset.scope);
-};
+}
 
 window.phToggleSearchSort = () => {
   _phSearch.sort = _phSearch.sort === 'relevance' ? 'recency' : 'relevance';
@@ -503,3 +501,15 @@ window.phShowSessionCtxMenu = (event, button, agentId, sessionId, variant) => {
   closeProjectContextMenu();
   window.showCtxMenu(rect.right, rect.bottom, items, { role: 'session', ns: agentId, id: sessionId, variant, sessionId });
 };
+
+// ── 搜索面板动作（data-action="phSessions.*"）───────────────
+// 搜索结果片段按钮的内联事件收编。目标函数均有跨模块 / 测试消费面
+// （session-list-render 注册块与 ph-session-move 转调、frontend-ph-search
+// 直调），保留 window 导出，handler 经 window 转调。
+window.ClawFW.actions.registerMany({
+  'phSessions.searchToggleExpand': (el) => window.phSearchToggleExpand(el.dataset.sessionId),
+  'phSessions.searchSetScope': (el) => phSetSearchScope(el),
+  'phSessions.searchToggleSort': () => window.phToggleSearchSort(),
+  'phSessions.searchRetry': () => window.phSearchRetry(),
+  'phSessions.searchLoadMore': () => window.phSearchLoadMore(),
+});

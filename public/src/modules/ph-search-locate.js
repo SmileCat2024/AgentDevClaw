@@ -282,9 +282,9 @@ function _showLocateBar(anchor) {
   const bar = _ensureLocateBar();
   bar.innerHTML = [
     '<span class="ph-locate-bar-label">' + escapeHtml(isZh ? '已定位到匹配消息' : 'Located match') + '</span>',
-    '<button class="ph-locate-bar-btn" type="button" onclick="window.phSearchLocateBack()">' + escapeHtml(isZh ? '返回搜索' : 'Back to search') + '</button>',
-    '<button class="ph-locate-bar-btn" type="button" onclick="window.phSearchLocateLatest()">' + escapeHtml(isZh ? '回最新' : 'Latest') + '</button>',
-    '<button class="ph-locate-bar-close" type="button" onclick="window.phSearchLocateDismiss()" title="' + escapeHtml(isZh ? '关闭' : 'Close') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>',
+    '<button class="ph-locate-bar-btn" type="button" data-action="phSearch.back">' + escapeHtml(isZh ? '返回搜索' : 'Back to search') + '</button>',
+    '<button class="ph-locate-bar-btn" type="button" data-action="phSearch.latest">' + escapeHtml(isZh ? '回最新' : 'Latest') + '</button>',
+    '<button class="ph-locate-bar-close" type="button" data-action="phSearch.dismiss" title="' + escapeHtml(isZh ? '关闭' : 'Close') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>',
   ].join('');
   bar.classList.add('show');
   _watchLocateBar(anchor);
@@ -301,8 +301,8 @@ function _showLocateFailedBar() {
   const bar = _ensureLocateBar();
   bar.innerHTML = [
     '<span class="ph-locate-bar-label">' + escapeHtml(isZh ? '未定位到匹配消息，会话内容可能已更新或精简' : 'Match not located; conversation may have changed') + '</span>',
-    '<button class="ph-locate-bar-btn" type="button" onclick="window.phSearchLocateBack()">' + escapeHtml(isZh ? '返回搜索' : 'Back to search') + '</button>',
-    '<button class="ph-locate-bar-close" type="button" onclick="window.phSearchLocateDismiss()" title="' + escapeHtml(isZh ? '关闭' : 'Close') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>',
+    '<button class="ph-locate-bar-btn" type="button" data-action="phSearch.back">' + escapeHtml(isZh ? '返回搜索' : 'Back to search') + '</button>',
+    '<button class="ph-locate-bar-close" type="button" data-action="phSearch.dismiss" title="' + escapeHtml(isZh ? '关闭' : 'Close') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>',
   ].join('');
   bar.classList.add('show');
 }
@@ -361,3 +361,12 @@ window.phSearchLocateBack = () => {
     });
   }
 };
+
+// ── 浮动条动作（data-action="phSearch.*"）──────────────────
+// 浮条按钮的内联事件收编。Back / Latest / Dismiss 保留 window 导出
+// （test/frontend-ph-search-locate 直调），handler 经 window 转调。
+window.ClawFW.actions.registerMany({
+  'phSearch.back': () => window.phSearchLocateBack(),
+  'phSearch.latest': () => window.phSearchLocateLatest(),
+  'phSearch.dismiss': () => window.phSearchLocateDismiss(),
+});

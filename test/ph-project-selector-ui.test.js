@@ -828,6 +828,7 @@ describe('045 — 恢复卡片按完整归属过滤', () => {
     });
     // 入口屏蔽位是产品现状（功能整体保留但停用）；测试解锁以驱动真实过滤逻辑
     ctx.loadSourceInline = (src) => ctx.run(src);
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     const patched = sessionUiSource.replace(
       'const PH_OPEN_SESSIONS_CARD_DISABLED = true',
       'const PH_OPEN_SESSIONS_CARD_DISABLED = false',

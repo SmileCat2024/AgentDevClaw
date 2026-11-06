@@ -231,6 +231,7 @@ describe('R2 renderAgentList guard while context menus are open', () => {
       return originalGetElementById(id);
     };
     ctx.fetch = async () => ({ ok: true, json: async () => ({ threads: [] }) });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/project-data.js');
     ctx.loadSource('public/src/modules/session-ui.js');
     ctx.loadSource('public/src/modules/sidebar-operations.js');

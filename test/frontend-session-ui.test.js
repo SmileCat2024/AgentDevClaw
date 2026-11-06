@@ -26,6 +26,7 @@ function loadSessionUi(overrides = {}) {
     phSessionSortMode: 'updatedAt',
   };
   const ctx = createFrontendSandbox({ ...defaults, ...overrides });
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/session-ui.js');
   return ctx;
 }

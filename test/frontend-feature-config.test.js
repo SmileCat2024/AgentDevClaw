@@ -20,6 +20,7 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 function loadFeatureConfig() {
   const ctx = createFrontendSandbox({ currentLanguage: 'en' });
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/feature-config.js');
   return ctx;
 }
