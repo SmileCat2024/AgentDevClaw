@@ -27,19 +27,28 @@
 
 // ClawFW 是跨模块共享命名空间（见 AGENT.md 全局状态纪律），只能合并初始化，
 // 整体重建会抹掉其他模块先挂上去的属性（如 feature-catalog.js 的 featureCatalog）
+(function() {
+"use strict";
+
+// fw 面板状态收敛为模块局部（Phase C 状态面批）：曾经借宿在 window.ClawFW 的
+// 11 个 UI 状态键不再上袋，跨模块读经显式函数导出（fwGetFeatureQuery）。
+// settingsOpen/settingsData/settingsEditing 与 _modelPresets 是其他模块的
+// 借宿键（model-settings / model-preset-cache 域），初始化保留在此以维持
+// 加载顺序兼容，不属本模块状态。
+let mode = 'list';
+let section = 'features';
+let projectPickerOpen = false;
+let createDialogOpen = false;
+let promptEditorOpen = false;
+let confirmDialog = null;
+let featureImport = null;
+let featureQuery = null;
+let driftDialog = null;
+let featureCapabilities = { key: '', loading: false, error: '', data: null };
+let fwSlashPicker = { open: false, query: '', startIndex: 0, activeIndex: 0, category: 'all', formId: '' };
+let _projectId = null; // detail 模式锚定的项目 id（list 模式为 null）
 window.ClawFW = window.ClawFW || {};
 Object.assign(window.ClawFW, {
-  mode: 'list',
-  section: 'features',
-  projectPickerOpen: false,
-  createDialogOpen: false,
-  promptEditorOpen: false,
-  confirmDialog: null,
-  featureImport: null,
-  featureQuery: null,
-  driftDialog: null,
-  featureCapabilities: { key: '', loading: false, error: '', data: null },
-  fwSlashPicker: { open: false, query: '', startIndex: 0, activeIndex: 0, category: 'all', formId: '' },
   settingsOpen: false,
   settingsData: null,
   settingsEditing: null,
@@ -47,10 +56,7 @@ Object.assign(window.ClawFW, {
 });
 
 function getFWFeatureCapabilityState() {
-  if (!window.ClawFW.featureCapabilities || typeof window.ClawFW.featureCapabilities !== 'object') {
-    window.ClawFW.featureCapabilities = { key: '', loading: false, error: '', data: null };
-  }
-  return window.ClawFW.featureCapabilities;
+  return featureCapabilities;
 }
 
 function buildFWFeatureCapabilityKey(agent, draft = {}) {
@@ -182,13 +188,13 @@ function ensureAssemblyDriftDialogHost() {
 }
 
 function closeAssemblyDriftDialog() {
-  window.ClawFW.driftDialog = null;
+  driftDialog = null;
   const host = document.getElementById('assembly-drift-dialog-host');
   if (host) host.innerHTML = '';
 }
 
 async function confirmAssemblyDriftDialogProceed() {
-  const pending = window.ClawFW.driftDialog;
+  const pending = driftDialog;
   closeAssemblyDriftDialog();
   if (typeof pending?.onConfirm === 'function') {
     try {
@@ -201,7 +207,7 @@ async function confirmAssemblyDriftDialogProceed() {
 }
 
 function renderAssemblyDriftDialog() {
-  const pending = window.ClawFW.driftDialog;
+  const pending = driftDialog;
   const host = ensureAssemblyDriftDialogHost();
   if (!pending) {
     host.innerHTML = '';
@@ -218,7 +224,7 @@ function renderAssemblyDriftDialog() {
       ? '你正在打开一个较早保存的对话。当前项目的装配或编排图在此之后被修改过，恢复时可能继续沿用旧的运行时状态。'
       : 'You are opening an older saved conversation. The project assembly or flow graph changed after it was saved, so the resumed runtime may carry stale state.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="closeAssemblyDriftDialog()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closeDriftDialog">×</button>',
     '</div>',
     reasons.length ? '<div class="fw-switch-modal-list">' + reasons.map((item) => [
       '<div class="fw-switch-modal-card active" style="cursor:default;">',
@@ -230,8 +236,8 @@ function renderAssemblyDriftDialog() {
       ? '这不是阻止项，但如果后续行为异常，优先考虑重启运行时或重置流程状态。'
       : 'This is not a blocker, but if behavior looks off, restart the runtime or reset the flow state first.') + '</div>',
     '<div class="workspace-actions" style="justify-content:flex-end;">',
-    '<button class="workspace-action secondary" type="button" onclick="closeAssemblyDriftDialog()">' + escapeHtml(currentLanguage === 'zh' ? '先不打开' : 'Not now') + '</button>',
-    '<button class="workspace-action" type="button" onclick="confirmAssemblyDriftDialogProceed()">' + escapeHtml(currentLanguage === 'zh' ? '继续打开旧对话' : 'Open anyway') + '</button>',
+    '<button class="workspace-action secondary" type="button" data-action="fw.closeDriftDialog">' + escapeHtml(currentLanguage === 'zh' ? '先不打开' : 'Not now') + '</button>',
+    '<button class="workspace-action" type="button" data-action="fw.driftProceed">' + escapeHtml(currentLanguage === 'zh' ? '继续打开旧对话' : 'Open anyway') + '</button>',
     '</div>',
     '</div>',
     '</div>',
@@ -244,7 +250,7 @@ async function maybeWarnAssemblySessionDrift(agent, sessionId, onConfirm) {
     await onConfirm();
     return;
   }
-  window.ClawFW.driftDialog = {
+  driftDialog = {
     ...pending,
     onConfirm,
   };
@@ -254,12 +260,18 @@ async function maybeWarnAssemblySessionDrift(agent, sessionId, onConfirm) {
 /* ── Settings Overlay ────────────────────────────────────────────────────────── */
 
 // settings-overlay extracted to modules/settings-overlay.js
+/** 搜索框回显值的显式读接口（app-ui renderFWFeatures 渲染期读取未提交的
+ *  输入态；null 表示用户未输入，调用方回退草稿值）。 */
+function fwGetFeatureQuery() {
+  return featureQuery;
+}
+
 function renderProjectListBlock(agent, block) {
-  const st = window.ClawFW;
   const formId = String(block?.assemblySelection?.formId || 'assembly-form');
 
-  if (st.mode === 'detail' && st._projectId) {
-    return renderFWDetail(agent, block, formId, st);
+  if (mode === 'detail' && _projectId) {
+    // renderFWDetail（app-ui.js）经参数接收状态快照，不共享本模块局部状态
+    return renderFWDetail(agent, block, formId, { section });
   }
   return renderFWList(agent, block, formId);
 }
@@ -268,28 +280,27 @@ function fwRerender() {
   currentWorkspaceTab = 'workspace';
   // When the prompt editor contentEditable dialog is open, skip full re-render
   // to preserve cursor position and input state.
-  if (window.ClawFW.promptEditorOpen && document.querySelector('.fw-prompt-editor.fe-prompt-ce')) {
+  if (promptEditorOpen && document.querySelector('.fw-prompt-editor.fe-prompt-ce')) {
     return;
   }
   if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
 }
 
-function fwEnterDetail(projectId, section) {
-  const st = window.ClawFW;
-  st.mode = 'detail';
-  st._projectId = projectId;
-  st.section = section || 'features';
+function fwEnterDetail(projectId, nextSection) {
+  mode = 'detail';
+  _projectId = projectId;
+  section = nextSection || 'features';
   fwRerender();
 }
 
 function fwBackToList() {
-  window.ClawFW.mode = 'list';
-  window.ClawFW.section = 'features';
+  mode = 'list';
+  section = 'features';
   fwRerender();
 }
 
-function fwSwitchSection(section) {
-  window.ClawFW.section = section;
+function fwSwitchSection(nextSection) {
+  section = nextSection;
   const isOrchestrate = section === 'orchestrate';
   const root = document.querySelector('.fw-detail, .fw-detail-orchestrate');
   if (root) {
@@ -311,9 +322,9 @@ function fwSwitchSection(section) {
 }
 
 function fwOpenPromptEditor() {
-  const sp = window.ClawFW.fwSlashPicker;
+  const sp = fwSlashPicker;
   sp.open = false; sp.query = ''; sp.activeIndex = 0; sp.category = 'all';
-  window.ClawFW.promptEditorOpen = true;
+  promptEditorOpen = true;
   fwRerender();
 }
 
@@ -329,9 +340,9 @@ function fwClosePromptEditor() {
       window.commitAssemblyDraftField(formId, 'custom_system_prompt', rawText);
     }
   }
-  window.ClawFW.promptEditorOpen = false;
-  window.ClawFW.fwSlashPicker.open = false;
-  window.ClawFW.fwSlashPicker.query = '';
+  promptEditorOpen = false;
+  fwSlashPicker.open = false;
+  fwSlashPicker.query = '';
   fwRerender();
 }
 
@@ -381,7 +392,7 @@ function fwFilterPickerItems(items, query) {
 }
 
 function fwApplyCategoryFilter(items) {
-  const cat = window.ClawFW.fwSlashPicker.category || 'all';
+  const cat = fwSlashPicker.category || 'all';
   if (cat === 'all') return items;
   if (cat === 'template') return items.filter(it => it.type === 'template' || it.type === 'fragment');
   if (cat === 'variable') return items.filter(it => it.type === 'variable');
@@ -391,7 +402,7 @@ function fwApplyCategoryFilter(items) {
 function fwRenderPickerDropdown() {
   const host = document.getElementById('fw-prompt-picker-host');
   if (!host) return;
-  const sp = window.ClawFW.fwSlashPicker;
+  const sp = fwSlashPicker;
   if (!sp.open) { host.innerHTML = ''; return; }
   const U = window.PromptEditorUtils;
   const query = sp.query || '';
@@ -401,7 +412,7 @@ function fwRenderPickerDropdown() {
   let searchEl = host.querySelector('.fw-picker-search');
   if (!host.querySelector('.fw-prompt-picker')) {
     host.innerHTML = '<div class="fw-prompt-picker">'
-      + '<div class="fw-picker-search-wrap"><input class="fw-picker-search" value="' + escapeHtml(query) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '搜索变量或片段…' : 'Search…') + '" oninput="window.fwSetPickerSearch(this.value)" onkeydown="window.fwHandlePromptKeydown(event)"></div>'
+      + '<div class="fw-picker-search-wrap"><input class="fw-picker-search" value="' + escapeHtml(query) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '搜索变量或片段…' : 'Search…') + '" data-action="fw.pickerSearch" data-event="input keydown"></div>'
       + '<div class="fw-picker-tabs"></div>'
       + '<div class="fw-picker-list"></div>'
       + '</div>';
@@ -417,7 +428,7 @@ function fwRenderPickerDropdown() {
     allItems.forEach(it => { if (it.type === 'variable') tabCounts.variable++; else tabCounts.template++; });
     let tabsHtml = '';
     FW_PICKER_CATEGORIES.forEach(cat => {
-      tabsHtml += '<button type="button" class="fw-picker-tab' + (cat === curCat ? ' active' : '') + '" onmousedown="event.preventDefault()" onclick="window.fwSetPickerCategory(\'' + cat + '\')">'
+      tabsHtml += '<button type="button" class="fw-picker-tab' + (cat === curCat ? ' active' : '') + '" onmousedown="event.preventDefault()" data-action="fw.pickerCategory" data-category="' + cat + '">'
         + FW_PICKER_CAT_LABELS[cat] + ' <span class="fw-picker-tab-count">' + tabCounts[cat] + '</span></button>';
     });
     tabsEl.innerHTML = tabsHtml;
@@ -440,7 +451,7 @@ function fwRenderPickerDropdown() {
       const label = isVar ? (currentLanguage === 'zh' ? '变量' : 'Var') : (isTpl ? (currentLanguage === 'zh' ? '模板' : 'Tpl') : (currentLanguage === 'zh' ? '片段' : 'Snip'));
       const titleHtml = U.highlightMatch(item.title, query);
       const descHtml = item.description ? '<div class="fw-picker-item-preview">' + U.highlightMatch(item.description, query) + '</div>' : '';
-      html += '<div class="fw-picker-item' + (i === sp.activeIndex ? ' active' : '') + '" data-picker-index="' + i + '" onmousedown="event.preventDefault()" onclick="window.fwClickPickerItem(' + i + ')">'
+      html += '<div class="fw-picker-item' + (i === sp.activeIndex ? ' active' : '') + '" data-picker-index="' + i + '" onmousedown="event.preventDefault()" data-action="fw.pickerItem" data-args="[' + i + ']">'
         + '<div class="fw-picker-item-main">'
         + '<span class="fw-picker-item-icon' + (isVar ? ' var-icon' : ' frag-icon') + '">' + icon + '</span>'
         + '<div class="fw-picker-item-text"><div class="fw-picker-item-title">' + titleHtml + '</div>' + descHtml + '</div>'
@@ -466,7 +477,7 @@ window.fwHandlePromptInput = (e) => {
   if (formId) window.updateFWPromptDraft(formId, rawText);
   const cursorOffset = U.getPromptCursorOffset(ce);
   const trigger = U.detectSlashTrigger(rawText, cursorOffset >= 0 ? cursorOffset : rawText.length);
-  const sp = window.ClawFW.fwSlashPicker;
+  const sp = fwSlashPicker;
   sp.formId = formId;
   if (trigger) {
     sp.open = true; sp.query = trigger.query; sp.startIndex = trigger.startIndex; sp.activeIndex = 0;
@@ -479,7 +490,7 @@ window.fwHandlePromptInput = (e) => {
 window.fwHandlePromptKeydown = (e) => {
   const U = window.PromptEditorUtils;
   if (!U) return;
-  const sp = window.ClawFW.fwSlashPicker;
+  const sp = fwSlashPicker;
   // Backspace: delete variable chip
   if (e.key === 'Backspace' && !sp.open) {
     const ce = document.querySelector('.fw-prompt-editor.fe-prompt-ce');
@@ -536,7 +547,7 @@ function fwInsertPickerItem(item) {
   const newText = before + item.insertText + after;
   const formId = ce.getAttribute('data-fw-form-id');
   if (formId) window.updateFWPromptDraft(formId, newText);
-  const sp = window.ClawFW.fwSlashPicker;
+  const sp = fwSlashPicker;
   sp.open = false; sp.query = '';
   const savedOffset = before.length + item.insertText.length;
   ce.innerHTML = U.promptToHTML(newText);
@@ -545,7 +556,7 @@ function fwInsertPickerItem(item) {
 }
 
 window.fwClickPickerItem = (index) => {
-  const sp = window.ClawFW.fwSlashPicker;
+  const sp = fwSlashPicker;
   const allItems = fwFilterPickerItems(fwCollectPickerItems(), sp.query);
   const items = fwApplyCategoryFilter(allItems);
   const item = items[index];
@@ -553,14 +564,14 @@ window.fwClickPickerItem = (index) => {
 };
 
 window.fwSetPickerCategory = (cat) => {
-  window.ClawFW.fwSlashPicker.category = cat;
-  window.ClawFW.fwSlashPicker.activeIndex = 0;
+  fwSlashPicker.category = cat;
+  fwSlashPicker.activeIndex = 0;
   fwRenderPickerDropdown();
 };
 
 window.fwSetPickerSearch = (value) => {
-  window.ClawFW.fwSlashPicker.query = value || '';
-  window.ClawFW.fwSlashPicker.activeIndex = 0;
+  fwSlashPicker.query = value || '';
+  fwSlashPicker.activeIndex = 0;
   fwRenderPickerDropdown();
 };
 
@@ -575,11 +586,11 @@ window.updateFWPromptDraft = (formId, value) => {
 
 function rememberFWFeatureScroll() {
   const list = document.querySelector('.fw-feat-list');
-  window.ClawFW.featureScrollTop = list ? list.scrollTop : 0;
+  featureScrollTop = list ? list.scrollTop : 0;
 }
 
 function restoreFWFeatureScroll() {
-  const top = Number(window.ClawFW.featureScrollTop || 0);
+  const top = Number(featureScrollTop || 0);
   requestAnimationFrame(() => {
     const list = document.querySelector('.fw-feat-list');
     if (list) list.scrollTop = top;
@@ -597,13 +608,13 @@ function fwSetFeatureFilter(formId, value) {
 }
 
 function fwSetFeatureQuery(formId, value) {
-  window.ClawFW.featureQuery = String(value || '');
+  featureQuery = String(value || '');
   fwFilterFeatureList();
 }
 
 function fwCommitFeatureQuery(formId, value) {
   const query = String(value || '');
-  window.ClawFW.featureQuery = query;
+  featureQuery = query;
   updateAssemblyDraftWithoutRender(formId, 'feature_query', query);
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
@@ -614,7 +625,7 @@ function fwCommitFeatureQuery(formId, value) {
 }
 
 function fwFilterFeatureList() {
-  const query = String(window.ClawFW.featureQuery || '').trim().toLowerCase();
+  const query = String(featureQuery || '').trim().toLowerCase();
   const list = document.querySelector('.fw-feat-list');
   const head = document.querySelector('[data-fw-feature-count]');
   if (!list) return;
@@ -649,7 +660,7 @@ async function fwOpenFeatureImport(formId) {
       const response = await fetch('/protoclaw/feature_repository/parse_upload', { method: 'POST', body: formData });
       if (!response.ok) throw new Error(await response.text().catch(() => 'parse upload failed'));
       const parsed = await response.json();
-      window.ClawFW.featureImport = { ...parsed, formId };
+      featureImport = { ...parsed, formId };
       fwRerender();
     } catch (error) {
       window.alert((currentLanguage === 'zh' ? '解析 tgz 失败：' : 'Failed to parse tgz: ') + (error?.message || error));
@@ -659,8 +670,8 @@ async function fwOpenFeatureImport(formId) {
 }
 
 async function fwCancelFeatureImport() {
-  const uploadId = window.ClawFW.featureImport?.uploadId;
-  window.ClawFW.featureImport = null;
+  const uploadId = featureImport?.uploadId;
+  featureImport = null;
   if (uploadId) {
     await fetch('/protoclaw/feature_repository/cancel_import', {
       method: 'POST',
@@ -672,7 +683,7 @@ async function fwCancelFeatureImport() {
 }
 
 async function fwConfirmFeatureImport(mode) {
-  const pending = window.ClawFW.featureImport;
+  const pending = featureImport;
   if (!pending?.uploadId) return;
   try {
     const response = await fetch('/protoclaw/feature_repository/confirm_import', {
@@ -683,7 +694,7 @@ async function fwConfirmFeatureImport(mode) {
     if (!response.ok) throw new Error(await response.text().catch(() => 'import failed'));
     const result = await response.json();
     const token = result?.summary?.packageName || result?.summary?.id || pending?.summary?.packageName || pending?.summary?.id || '';
-    window.ClawFW.featureImport = null;
+    featureImport = null;
     await loadAgents().catch(e => console.warn(e));
     if (mode === 'mount' && token) {
       await fwToggleFeature(pending.formId || 'assembly-form', token);
@@ -696,18 +707,18 @@ async function fwConfirmFeatureImport(mode) {
 }
 
 function fwOpenProjectPicker() {
-  window.ClawFW.projectPickerOpen = true;
+  projectPickerOpen = true;
   fwRerender();
 }
 
 function fwCloseProjectPicker() {
-  window.ClawFW.projectPickerOpen = false;
+  projectPickerOpen = false;
   fwRerender();
 }
 
 function fwSelectProject(projectId) {
-  window.ClawFW.projectPickerOpen = false;
-  window.loadSavedAssemblyConfig(projectId).then(function() { fwEnterDetail(projectId, window.ClawFW.section || 'features'); });
+  projectPickerOpen = false;
+  window.loadSavedAssemblyConfig(projectId).then(function() { fwEnterDetail(projectId, section || 'features'); });
 }
 
 window.fwCreateNewAgent = function() {
@@ -720,13 +731,13 @@ window.fwOpenProjectDetail = async function(projectId) {
 };
 
 function renderFWSwitchProjectDialog(agent, currentName) {
-  if (!window.ClawFW.projectPickerOpen) return '';
+  if (!projectPickerOpen) return '';
   const configs = getSavedAssemblyConfigs(agent);
   const cards = configs.length
     ? configs.map(item => {
       const active = item.id === currentName;
       return [
-        '<button class="fw-switch-modal-card' + (active ? ' active' : '') + '" type="button" onclick="fwSelectProject(\'' + escapeHtml(item.id) + '\')">',
+        '<button class="fw-switch-modal-card' + (active ? ' active' : '') + '" type="button" data-action="fw.selectProject" data-agent-id="' + escapeHtml(item.id) + '">',
         '<strong>' + escapeHtml(item.name || item.id) + '</strong>',
         '<span>' + escapeHtml([item.features.length + (currentLanguage === 'zh' ? ' 个 Feature' : ' Features'), item.goal || getAssemblyPresetLabel(item.preset) || ''].filter(Boolean).join(' · ')) + '</span>',
         '</button>',
@@ -741,7 +752,7 @@ function renderFWSwitchProjectDialog(agent, currentName) {
     '<div class="feature-detail-title">' + escapeHtml(currentLanguage === 'zh' ? '切换 Agent 项目' : 'Switch Agent Project') + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh' ? '选择一个项目继续配置能力或编辑编排图。' : 'Choose a project to configure capabilities or edit its graph.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="fwCloseProjectPicker()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closeProjectPicker">×</button>',
     '</div>',
     '<div class="fw-switch-modal-list">' + cards + '</div>',
     '</div>',
@@ -750,7 +761,7 @@ function renderFWSwitchProjectDialog(agent, currentName) {
 }
 
 function fwOpenCreateDialog() {
-  window.ClawFW.createDialogOpen = true;
+  createDialogOpen = true;
   fwRerender();
   requestAnimationFrame(() => {
     const input = document.getElementById('fw-create-folder-name');
@@ -759,7 +770,7 @@ function fwOpenCreateDialog() {
 }
 
 function fwCloseCreateDialog() {
-  window.ClawFW.createDialogOpen = false;
+  createDialogOpen = false;
   fwRerender();
 }
 
@@ -780,7 +791,7 @@ window.fwConfirmCreateAgent = async function() {
       return;
     }
   }
-  window.ClawFW.createDialogOpen = false;
+  createDialogOpen = false;
   await window.resetAssemblyDraft();
   const draft = getWorkspaceFormDraft(getCurrentAgentRecord());
   draft['assembly-form'] = normalizeAssemblyDraft({
@@ -799,7 +810,7 @@ window.fwConfirmCreateAgent = async function() {
 };
 
 function renderFWCreateDialog() {
-  if (!window.ClawFW.createDialogOpen) return '';
+  if (!createDialogOpen) return '';
   return [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window" style="width:min(100%,480px);">',
@@ -808,23 +819,23 @@ function renderFWCreateDialog() {
     '<div class="feature-detail-title">' + escapeHtml(currentLanguage === 'zh' ? '创建新 Agent 项目' : 'Create New Agent Project') + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh' ? '设置项目标识和显示名称后进入配置界面。标识创建后不可修改。' : 'Set the project ID and display name before entering the editor. The ID cannot be changed after creation.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="fwCloseCreateDialog()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closeCreateDialog">×</button>',
     '</div>',
     '<div class="fw-create-fields">',
     '<div class="fw-field">',
     '<label>' + escapeHtml(currentLanguage === 'zh' ? '项目标识' : 'Project ID') + '</label>',
-    '<input id="fw-create-folder-name" class="fw-input" placeholder="my-agent" pattern="[a-z][a-z0-9-]*" onkeydown="if(event.key===\'Enter\')window.fwConfirmCreateAgent()">',
+    '<input id="fw-create-folder-name" class="fw-input" placeholder="my-agent" pattern="[a-z][a-z0-9-]*" data-action="fw.confirmCreateAgent" data-event="keydown">',
     '<span class="fw-name-lock-hint">' + escapeHtml(currentLanguage === 'zh' ? '用于文件夹名和环境绑定，创建后不可修改' : 'Used for directory and environment binding. Cannot be changed.') + '</span>',
     '</div>',
     '<div class="fw-field">',
     '<label>' + escapeHtml(currentLanguage === 'zh' ? '显示名称' : 'Display Name') + '</label>',
-    '<input id="fw-create-display-name" class="fw-input" placeholder="My Agent" onkeydown="if(event.key===\'Enter\')window.fwConfirmCreateAgent()">',
+    '<input id="fw-create-display-name" class="fw-input" placeholder="My Agent" data-action="fw.confirmCreateAgent" data-event="keydown">',
     '<span class="fw-name-lock-hint">' + escapeHtml(currentLanguage === 'zh' ? '在对话和界面中展示，可随时修改' : 'Shown in conversations and UI. Can be changed anytime.') + '</span>',
     '</div>',
     '</div>',
     '<div class="workspace-actions" style="margin-top:16px;justify-content:flex-end;">',
-    '<button class="workspace-action secondary" type="button" onclick="fwCloseCreateDialog()">' + escapeHtml(currentLanguage === 'zh' ? '取消' : 'Cancel') + '</button>',
-    '<button class="workspace-action" type="button" onclick="window.fwConfirmCreateAgent()">' + escapeHtml(currentLanguage === 'zh' ? '创建并继续' : 'Create & Continue') + '</button>',
+    '<button class="workspace-action secondary" type="button" data-action="fw.closeCreateDialog">' + escapeHtml(currentLanguage === 'zh' ? '取消' : 'Cancel') + '</button>',
+    '<button class="workspace-action" type="button" data-action="fw.confirmCreateAgent">' + escapeHtml(currentLanguage === 'zh' ? '创建并继续' : 'Create & Continue') + '</button>',
     '</div>',
     '</div>',
     '</div>',
@@ -832,7 +843,7 @@ function renderFWCreateDialog() {
 }
 
 function fwOpenConfirmDialog(opts) {
-  window.ClawFW.confirmDialog = {
+  confirmDialog = {
     title: opts.title || '',
     message: opts.message || '',
     confirmLabel: opts.confirmLabel || (currentLanguage === 'zh' ? '确认' : 'Confirm'),
@@ -844,20 +855,20 @@ function fwOpenConfirmDialog(opts) {
 }
 
 function fwCloseConfirmDialog() {
-  window.ClawFW.confirmDialog = null;
+  confirmDialog = null;
   fwRerender();
 }
 
 function fwHandleConfirm() {
-  const dialog = window.ClawFW.confirmDialog;
+  const dialog = confirmDialog;
   const callback = dialog?.onConfirm || null;
-  window.ClawFW.confirmDialog = null;
+  confirmDialog = null;
   fwRerender();
   if (typeof callback === 'function') callback();
 }
 
 function renderFWConfirmDialog() {
-  const dialog = window.ClawFW.confirmDialog;
+  const dialog = confirmDialog;
   if (!dialog) return '';
   return [
     '<div class="feature-detail-overlay">',
@@ -867,11 +878,11 @@ function renderFWConfirmDialog() {
     '<div class="feature-detail-title">' + escapeHtml(dialog.title) + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(dialog.message) + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="fwCloseConfirmDialog()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closeConfirmDialog">×</button>',
     '</div>',
     '<div class="workspace-actions" style="margin-top:16px;justify-content:flex-end;">',
-    '<button class="workspace-action secondary" type="button" onclick="fwCloseConfirmDialog()">' + escapeHtml(dialog.cancelLabel) + '</button>',
-    '<button class="' + (dialog.danger ? 'workspace-action danger' : 'workspace-action') + '" type="button" onclick="fwHandleConfirm()">' + escapeHtml(dialog.confirmLabel) + '</button>',
+    '<button class="workspace-action secondary" type="button" data-action="fw.closeConfirmDialog">' + escapeHtml(dialog.cancelLabel) + '</button>',
+    '<button class="' + (dialog.danger ? 'workspace-action danger' : 'workspace-action') + '" type="button" data-action="fw.handleConfirm">' + escapeHtml(dialog.confirmLabel) + '</button>',
     '</div>',
     '</div>',
     '</div>',
@@ -879,7 +890,7 @@ function renderFWConfirmDialog() {
 }
 
 function renderFWPromptDialog(agent, formId, draft) {
-  if (!window.ClawFW.promptEditorOpen) return '';
+  if (!promptEditorOpen) return '';
   const U = window.PromptEditorUtils;
   if (!U) return '';
   const caps = U.getCapabilities();
@@ -899,10 +910,10 @@ function renderFWPromptDialog(agent, formId, draft) {
     '<div class="feature-detail-title">' + escapeHtml(currentLanguage === 'zh' ? '编辑系统提示词' : 'Edit System Prompt') + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh' ? '输入 / 插入变量或模板片段。变量以块显示，模板与片段插入后展开为纯文本。' : 'Type / to insert variables or template fragments. Variables appear as blocks, templates expand to plain text.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="fwClosePromptEditor()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closePromptEditor">×</button>',
     '</div>',
     '<div class="fw-prompt-editor-wrap">',
-    '<div class="fw-prompt-editor fe-prompt-ce" contenteditable="true" autofocus data-fw-form-id="' + escapeHtml(formId) + '" oninput="window.fwHandlePromptInput(event)" onkeydown="window.fwHandlePromptKeydown(event)">' + htmlContent + '</div>',
+    '<div class="fw-prompt-editor fe-prompt-ce" contenteditable="true" autofocus data-fw-form-id="' + escapeHtml(formId) + '" data-action="fw.promptEditor" data-event="input keydown">' + htmlContent + '</div>',
     '<div id="fw-prompt-picker-host"></div>',
     '</div>',
     '<div class="fe-prompt-footer">',
@@ -911,7 +922,7 @@ function renderFWPromptDialog(agent, formId, draft) {
     '<span class="fe-prompt-footer-sep">·</span>',
     '<span class="fe-prompt-footer-count">' + tplCount + '</span><span>' + escapeHtml(currentLanguage === 'zh' ? ' 个模板/片段' : ' templates/fragments') + '</span>',
     '</div>',
-    '<button class="fe-prompt-footer-done" type="button" onclick="fwClosePromptEditor()">' + escapeHtml(currentLanguage === 'zh' ? '完成编辑' : 'Done') + '</button>',
+    '<button class="fe-prompt-footer-done" type="button" data-action="fw.closePromptEditor">' + escapeHtml(currentLanguage === 'zh' ? '完成编辑' : 'Done') + '</button>',
     '</div>',
     '</div>',
     '</div>',
@@ -919,7 +930,7 @@ function renderFWPromptDialog(agent, formId, draft) {
 }
 
 function renderFWFeatureImportDialog() {
-  const pending = window.ClawFW.featureImport;
+  const pending = featureImport;
   if (!pending) return '';
   const summary = pending.summary || {};
   const warnings = Array.isArray(summary.warnings) ? summary.warnings : [];
@@ -932,7 +943,7 @@ function renderFWFeatureImportDialog() {
     '<div class="feature-detail-title">' + escapeHtml(currentLanguage === 'zh' ? '解析 Feature 包' : 'Parsed Feature Package') + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh' ? '确认解析结果后再决定是否导入。' : 'Review the parsed metadata before importing.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="fwCancelFeatureImport()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.cancelFeatureImport">×</button>',
     '</div>',
     '<div class="fw-import-result">',
     '<div class="fw-import-card">',
@@ -943,12 +954,63 @@ function renderFWFeatureImportDialog() {
     '</div>',
     warnings.length ? '<div class="fw-import-warning">' + warnings.map(item => escapeHtml(item)).join('<br>') + '</div>' : '',
     '<div class="workspace-actions" style="justify-content:flex-end;">',
-    '<button class="workspace-action secondary" type="button" onclick="fwCancelFeatureImport()">' + escapeHtml(currentLanguage === 'zh' ? '取消' : 'Cancel') + '</button>',
-    '<button class="workspace-action" type="button" onclick="fwConfirmFeatureImport(\'mount\')">' + escapeHtml(currentLanguage === 'zh' ? '导入' : 'Import') + '</button>',
-    '<button class="workspace-action secondary" type="button" onclick="fwConfirmFeatureImport(\'repo\')">' + escapeHtml(currentLanguage === 'zh' ? '导入并添加到仓库' : 'Import to Repository') + '</button>',
+    '<button class="workspace-action secondary" type="button" data-action="fw.cancelFeatureImport">' + escapeHtml(currentLanguage === 'zh' ? '取消' : 'Cancel') + '</button>',
+    '<button class="workspace-action" type="button" data-action="fw.confirmFeatureImport" data-mode="mount">' + escapeHtml(currentLanguage === 'zh' ? '导入' : 'Import') + '</button>',
+    '<button class="workspace-action secondary" type="button" data-action="fw.confirmFeatureImport" data-mode="repo">' + escapeHtml(currentLanguage === 'zh' ? '导入并添加到仓库' : 'Import to Repository') + '</button>',
     '</div>',
     '</div>',
     '</div>',
     '</div>',
   ].join('');
 }
+
+// ── 内联事件收编（Phase C）：fw 面板动作注册 ────────────────────────────────
+// 语义豁免保留原生的 3 处：picker 分类 tab 与条目的 mousedown 阻止默认行为
+// （防点击抢焦点，交互语义而非动作）、prompt overlay 的 keydown 冒泡拦截
+// （防 overlay 内按键触发外层 data-action 容器）。见 L428/L451/L903。
+window.ClawFW.actions.registerMany({
+  'fw.closeDriftDialog': () => closeAssemblyDriftDialog(),
+  'fw.driftProceed': () => confirmAssemblyDriftDialogProceed(),
+  'fw.pickerSearch': (el, ev) => {
+    if (ev.type === 'input') { fwSetPickerSearch(el.value); return; }
+    fwHandlePromptKeydown(ev);
+  },
+  'fw.pickerCategory': (el) => fwSetPickerCategory(el.dataset.category),
+  'fw.pickerItem': (el, ev, index) => fwClickPickerItem(index),
+  'fw.selectProject': (el) => fwSelectProject(el.dataset.agentId),
+  'fw.closeProjectPicker': () => fwCloseProjectPicker(),
+  'fw.closeCreateDialog': () => fwCloseCreateDialog(),
+  // 弹窗内输入框 Enter 提交（data-event="keydown"）与按钮点击共用动作：
+  // 键盘路径只在 Enter 时确认，其余键位忽略（原内联 if 语义）。
+  'fw.confirmCreateAgent': (el, ev) => {
+    if (ev.type === 'keydown' && ev.key !== 'Enter') return;
+    window.fwConfirmCreateAgent();
+  },
+  'fw.closeConfirmDialog': () => fwCloseConfirmDialog(),
+  'fw.handleConfirm': () => fwHandleConfirm(),
+  'fw.closePromptEditor': () => fwClosePromptEditor(),
+  'fw.promptEditor': (el, ev) => {
+    if (ev.type === 'input') { fwHandlePromptInput(ev); return; }
+    fwHandlePromptKeydown(ev);
+  },
+  'fw.cancelFeatureImport': () => fwCancelFeatureImport(),
+  'fw.confirmFeatureImport': (el) => fwConfirmFeatureImport(el.dataset.mode),
+});
+
+
+// ── 显式导出面（IIFE 内部实现不进全局词法环境）──────────────────────────────
+// 消费方：app-ui 注册块的 window 转调（fw.* 动作）与 blocks.registerPrimitive。
+window.fwSwitchSection = fwSwitchSection;
+window.fwOpenPromptEditor = fwOpenPromptEditor;
+window.fwOpenProjectPicker = fwOpenProjectPicker;
+window.fwBackToList = fwBackToList;
+window.fwToggleFeature = fwToggleFeature;
+window.fwSetFeatureFilter = fwSetFeatureFilter;
+window.fwOpenFeatureImport = fwOpenFeatureImport;
+window.fwSetFeatureQuery = fwSetFeatureQuery;
+window.fwCommitFeatureQuery = fwCommitFeatureQuery;
+window.fwGetFeatureQuery = fwGetFeatureQuery;
+window.fwRerender = fwRerender;
+window.renderProjectListBlock = renderProjectListBlock;
+
+})();

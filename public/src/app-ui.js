@@ -559,7 +559,7 @@ function renderFWFeatures(agent, block, formId, draft) {
   const selected = parseWorkspaceListField(draft.selected_features);
   const selectedSet = new Set(selected);
   const sourceFilter = String(draft.feature_source_filter || 'all');
-  const searchValue = window.ClawFW.featureQuery == null ? String(draft.feature_query || '') : String(window.ClawFW.featureQuery || '');
+  const searchValue = window.fwGetFeatureQuery() == null ? String(draft.feature_query || '') : String(window.fwGetFeatureQuery() || '');
   const searchQuery = searchValue.trim().toLowerCase();
   const env = getAssemblyEnvironmentState(draft);
   const sourcePackages = packages
@@ -1233,7 +1233,7 @@ window.ClawHost.blocks.registerPrimitive('status-grid', (agent, block) => render
 window.ClawHost.blocks.registerPrimitive('app-chat-input', () => '');
 window.ClawHost.blocks.registerPrimitive('assembly-library', (agent, block) => renderAssemblyLibraryBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('assembly-workbench', (agent, block) => renderAssemblyWorkbenchBlock(agent, block));
-window.ClawHost.blocks.registerPrimitive('project-list', (agent, block) => renderProjectListBlock(agent, block));
+window.ClawHost.blocks.registerPrimitive('project-list', (agent, block) => window.renderProjectListBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('feature-repository', (agent, block) => renderFeatureRepositoryBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('workspace-artifacts', (agent, block) => renderWorkspaceArtifactsBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('project-docset', (agent, block) => renderProjectDocsetBlock(agent, block));
