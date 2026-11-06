@@ -148,6 +148,7 @@ export async function startPhProjectFixture(port = 0) {
     function capturedActionsPush(action){ window.__capturedActions.push(action); }
     window.__capturedActions=[];
     </script>
+    <script src="/src/modules/action-dispatcher.js"></script>
     <script src="/src/modules/project-data.js"></script>
     <script src="/src/modules/ph-project-actions.js"></script>
     <script src="/src/modules/ph-session-move.js"></script>

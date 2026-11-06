@@ -31,9 +31,11 @@ function createSettingsSandbox(overrides = {}) {
     alert: () => {},
     ...overrides,
   });
+  // 分发器必须先于任何经 ClawFW.actions 注册动作的模块装载（生产加载顺序
+  // 第一位），否则模块尾部的 registerMany 在 window.ClawFW.actions 缺席时抛错。
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   // OpenCode 目录添加依赖 oauth-flow.js 的 resolveOpenCodeProtocolClient（协议归类）
   ctx.loadSource('public/src/modules/oauth-flow.js');
-  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/model-settings.js');
   ctx.run('window.ClawFW = window.ClawFW || {}');
   return ctx;

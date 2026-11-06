@@ -19,6 +19,10 @@
  * 页面激活（切 tab / 关弹窗会移除元素），轮询与删除确认态据此判断活跃。
  *
  * 依赖（全局）：escapeHtml, currentLanguage
+ *
+ * 事件接线：模板经 data-action="containerImages.*" 声明，处理器集中在文件尾部
+ * 注册；面板生命周期入口（registerContainerImagesHost / loadContainerImagesPanel /
+ * stopContainerImagesPanel）仍经 window 供 ph-settings 调用。
  */
 
 let _ciData = null;
@@ -231,10 +235,12 @@ function ciImageRow(image, agentId) {
       + ciEscape(deleteTitle) + '">' + CI_ICON_DELETE + '</button>'
     : armed
       ? '<button class="settings-btn settings-btn-secondary" type="button" style="padding:5px 10px;font-size:11px;min-height:30px;color:var(--error-color);" title="'
-        + ciEscape(deleteTitle) + '" onclick="onCiDeleteClick(\'' + ciEscape(image.id) + '\', \'' + ciEscape(mainTag || image.id) + '\')">'
+        + ciEscape(deleteTitle) + '" data-action="containerImages.delete" data-image-id="' + ciEscape(image.id)
+        + '" data-image-ref="' + ciEscape(mainTag || image.id) + '">'
         + ciEscape(isZh ? '确认删除' : 'Delete') + '</button>'
       : '<button class="settings-icon-btn danger" type="button" title="' + ciEscape(deleteTitle)
-        + '" onclick="onCiDeleteClick(\'' + ciEscape(image.id) + '\', \'' + ciEscape(mainTag || image.id) + '\')">'
+        + '" data-action="containerImages.delete" data-image-id="' + ciEscape(image.id)
+        + '" data-image-ref="' + ciEscape(mainTag || image.id) + '">'
         + CI_ICON_DELETE + '</button>';
 
   return [
@@ -281,7 +287,7 @@ function ciRenderAgentGroup(group, data) {
       + (data.buildJob?.running ? ' disabled style="opacity:0.5;cursor:not-allowed;"' : '')
       + ' style="min-height:28px;padding:4px 12px;font-size:12px;"'
       + ' title="npm run pack:container -- --agent=' + ciEscape(group.id) + '"'
-      + ' onclick="onCiBuildClick(\'' + ciEscape(group.id) + '\')">'
+      + ' data-action="containerImages.build" data-agent-id="' + ciEscape(group.id) + '">'
       + ciEscape(building ? (isZh ? '构建中…' : 'Building…') : (isZh ? '构建镜像' : 'Build image')) + '</button>');
   }
 
@@ -389,7 +395,7 @@ function ciRender(container) {
       + ciEscape(isZh ? '运行环境' : 'Runtime environment') + '</div>',
     canRefresh
       ? '<button class="settings-icon-btn" type="button" title="' + ciEscape(isZh ? '刷新' : 'Refresh')
-        + '" onclick="onCiRefresh()">' + CI_ICON_REFRESH + '</button>'
+        + '" data-action="containerImages.refresh">' + CI_ICON_REFRESH + '</button>'
       : '',
     '</div>',
     ciRenderEnvironmentSection(data),
@@ -490,11 +496,11 @@ window.stopContainerImagesPanel = function () {
   ciDisarmDelete();
 };
 
-window.onCiRefresh = function () {
+function onCiRefresh() {
   void ciFetchOverview(true);
-};
+}
 
-window.onCiDeleteClick = async function (imageId, displayRef) {
+async function onCiDeleteClick(imageId, displayRef) {
   const isZh = ciIsZh();
   if (!_ciDeleteArmed || _ciDeleteArmed.imageId !== imageId) {
     ciDisarmDelete();
@@ -533,9 +539,9 @@ window.onCiDeleteClick = async function (imageId, displayRef) {
     ciSetStatus((isZh ? '删除失败：' : 'Delete failed: ') + (error?.message || error), true);
   }
   await ciFetchOverview(true);
-};
+}
 
-window.onCiBuildClick = async function (agentId) {
+async function onCiBuildClick(agentId) {
   const isZh = ciIsZh();
   if (!agentId) return;
   ciSetStatus(isZh ? '正在启动构建（' + agentId + '）…' : 'Starting build (' + agentId + ')…');
@@ -558,4 +564,12 @@ window.onCiBuildClick = async function (agentId) {
   } catch (error) {
     ciSetStatus((isZh ? '构建启动失败：' : 'Build failed to start: ') + (error?.message || error), true);
   }
-};
+}
+
+// ── 事件接线（data-action="containerImages.*"）────────────────────
+
+window.ClawFW.actions.registerMany({
+  'containerImages.refresh': () => onCiRefresh(),
+  'containerImages.delete': (el) => onCiDeleteClick(el.dataset.imageId, el.dataset.imageRef),
+  'containerImages.build': (el) => onCiBuildClick(el.dataset.agentId),
+});

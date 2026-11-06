@@ -17,6 +17,9 @@
  *
  * 入口：归属菜单行内齿轮（session-list-render.js 渲染按钮 + ph-project-actions.js
  * 捕获阶段委托调用）；window.phOpenGlobalFeatureConfig
+ *
+ * 事件接线：弹窗骨架的关闭钮经 data-action="dirConfig.*" 声明（调用方传入动作名，
+ * 原先靠字符串拼 window 函数名）；window 导出只剩三个打开入口。
  */
 
 let _dirConfigEditor = null;
@@ -39,8 +42,8 @@ function _dirConfigCurrentDir() {
   return typeof dir === 'string' && dir.trim() ? dir.trim() : '';
 }
 
-/** 通用 Feature 配置弹窗骨架（head + 编辑器挂载点）。 */
-function _featureConfigDialogShell(hostId, titleHtml, subtitleHtml, closeFnName) {
+/** 通用 Feature 配置弹窗骨架（head + 编辑器挂载点）。closeAction 为分发器动作名。 */
+function _featureConfigDialogShell(hostId, titleHtml, subtitleHtml, closeAction) {
   return [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window ph-settings-window">',
@@ -49,7 +52,7 @@ function _featureConfigDialogShell(hostId, titleHtml, subtitleHtml, closeFnName)
     '<div class="feature-detail-title">' + titleHtml + '</div>',
     '<div class="feature-detail-subtitle">' + subtitleHtml + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" onclick="window.' + closeFnName + '()">&times;</button>',
+    '<button class="feature-detail-close" type="button" data-action="' + closeAction + '">&times;</button>',
     '</div>',
     '<div class="ph-settings-feature-wrap" id="' + hostId + '"></div>',
     '</div>',
@@ -73,7 +76,7 @@ window.phOpenDirConfig = function (dir) {
     'ph-dir-config-mount',
     escapeHtml(isZh ? '项目设置 · 默认项目' : 'Project Settings · Default Project'),
     escapeHtml(dir),
-    'phCloseDirConfig'
+    'dirConfig.close'
   );
   _dirConfigEditor = createFeatureConfigEditor({
     host: document.getElementById('ph-dir-config-mount'),
@@ -82,14 +85,14 @@ window.phOpenDirConfig = function (dir) {
   _dirConfigEditor.open();
 };
 
-window.phCloseDirConfig = function () {
+function phCloseDirConfig() {
   if (_dirConfigEditor) {
     _dirConfigEditor.close();
     _dirConfigEditor = null;
   }
   const host = document.getElementById('ph-dir-config-host');
   if (host) host.innerHTML = '';
-};
+}
 
 // ── 项目层配置入口（ticket 045，project:<prj_id> scope）────────────
 // 归属菜单项目行的设置齿轮（捕获阶段委托调用）：编辑项目层（project:<id>），
@@ -118,7 +121,7 @@ window.phOpenProjectConfig = function (projectId) {
     'ph-dir-config-mount',
     escapeHtml(isZh ? '项目设置 · ' : 'Project Settings · ') + escapeHtml(entity.name),
     escapeHtml(entity.openDirectory || (isZh ? '托管目录' : 'Managed directory')),
-    'phCloseDirConfig'
+    'dirConfig.close'
   );
   _dirConfigEditor = createFeatureConfigEditor({
     host: document.getElementById('ph-dir-config-mount'),
@@ -140,7 +143,7 @@ window.phOpenGlobalFeatureConfig = function () {
     'ph-global-config-mount',
     escapeHtml(isZh ? '全局 Feature 设置' : 'Global Feature Config'),
     escapeHtml(isZh ? '对所有工作空间生效的 Feature 配置' : 'Feature config applied to all workspaces'),
-    'phCloseGlobalFeatureConfig'
+    'dirConfig.closeGlobal'
   );
   _globalConfigEditor = createFeatureConfigEditor({
     host: document.getElementById('ph-global-config-mount'),
@@ -149,11 +152,19 @@ window.phOpenGlobalFeatureConfig = function () {
   _globalConfigEditor.open();
 };
 
-window.phCloseGlobalFeatureConfig = function () {
+function phCloseGlobalFeatureConfig() {
   if (_globalConfigEditor) {
     _globalConfigEditor.close();
     _globalConfigEditor = null;
   }
   const host = document.getElementById('ph-dir-config-host');
   if (host) host.innerHTML = '';
-};
+}
+
+// ── 事件接线（data-action="dirConfig.*"）──────────────────────────
+// 关闭动作的消费面只有弹窗骨架按钮，window 导出随本批次收敛。
+
+window.ClawFW.actions.registerMany({
+  'dirConfig.close': () => phCloseDirConfig(),
+  'dirConfig.closeGlobal': () => phCloseGlobalFeatureConfig(),
+});

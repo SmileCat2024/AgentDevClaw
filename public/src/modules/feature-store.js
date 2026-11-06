@@ -105,7 +105,7 @@ async function _fsReloadOverview() {
   }
 }
 
-// ── 动作（inline onclick 入口）─────────────────────────────────
+// ── 动作 ───────────────────────────────────────────────────────
 
 /** 身份层的读改写（sparse 整层写回）；商店与挂载管理页共用。 */
 async function _fsMutateLayer(identity, mutator) {
@@ -147,7 +147,7 @@ function _fsServerInstalling() {
     : null;
 }
 
-window._fsInstall = async function(packageName, version) {
+const _fsInstall = async function(packageName, version) {
   if (_fsState.busy) return;
   _fsState.busy = true;
   _fsState.error = '';
@@ -173,7 +173,7 @@ window._fsInstall = async function(packageName, version) {
   }
 };
 
-window._fsInstallBuiltin = async function(runtimeName) {
+const _fsInstallBuiltin = async function(runtimeName) {
   if (_fsState.busy) return;
   _fsState.busy = true;
   try {
@@ -207,7 +207,7 @@ window._fsRemoveFor = async function(identity, runtimeName) {
   }
 };
 
-window._fsSelectVersion = function(packageName, selectEl) {
+const _fsSelectVersion = function(packageName, selectEl) {
   const card = selectEl.closest('[data-fs-package]');
   if (card) card.dataset.fsVersion = selectEl.value;
 };
@@ -265,7 +265,7 @@ function _fsRenderMountedSection(mountedMap) {
       : (mount.kind === 'builtin'
         ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('扩展', 'extension')) + '</span>'
         : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>');
-    const btn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除', 'Remove')) + '" onclick="window._fsRemoveFor(\'' + escapeHtml(_fsState.identity) + '\', \'' + escapeHtml(runtimeName) + '\')">&#215;</button>';
+    const btn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除', 'Remove')) + '" data-action="featureStore.removeMount" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
     // displayName 与可安装区同源（builtin title / 包 displayName），查不到落回 runtime 名
     const pkg = packageNames.get(runtimeName);
     const displayName = (mount.kind === 'builtin' ? builtinItems.get(runtimeName)?.title : pkg?.displayName) || runtimeName;
@@ -298,7 +298,7 @@ function _fsRenderInstallSections(mountedMap, mountedByPackage) {
       displayName: item.title || item.runtimeName,
       description: item.description || '',
       surface: item.surface || null,
-      control: '<button type="button" class="fs-list-add" onclick="window._fsInstallBuiltin(\'' + escapeHtml(item.runtimeName) + '\')">' + escapeHtml(_fsT('+ 添加', '+ Add')) + '</button>',
+      control: '<button type="button" class="fs-list-add" data-action="featureStore.installBuiltin" data-name="' + escapeHtml(item.runtimeName) + '">' + escapeHtml(_fsT('+ 添加', '+ Add')) + '</button>',
     });
   }
   for (const pkg of (_fsState.overview?.packages || [])) {
@@ -316,10 +316,10 @@ function _fsRenderInstallSections(mountedMap, mountedByPackage) {
       ? '<button type="button" class="fs-list-add" disabled style="opacity:0.7;">'
         + escapeHtml(_fsT('安装中… ' + _fsInstallSeconds() + 's', 'Installing… ' + _fsInstallSeconds() + 's')) + '</button>'
       : '<button type="button" class="fs-list-add"' + (busyPkg ? ' disabled style="opacity:0.7;"' : '')
-        + ' onclick="window._fsInstall(\'' + escapeHtml(pkg.package) + '\', (this.closest(\'[data-fs-package]\')?.dataset.fsVersion || \'' + escapeHtml(latest) + '\'))">'
+        + ' data-action="featureStore.install" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">'
         + escapeHtml(_fsT('+ 添加', '+ Add')) + '</button>';
     const control = (pkg.versions?.length > 1
-      ? '<select class="fs-select"' + (busyPkg ? ' disabled' : '') + ' onchange="window._fsSelectVersion(\'' + escapeHtml(pkg.package) + '\', this)">' + versionOptions + '</select>'
+      ? '<select class="fs-select"' + (busyPkg ? ' disabled' : '') + ' data-action="featureStore.selectVersion" data-event="change" data-package="' + escapeHtml(pkg.package) + '">' + versionOptions + '</select>'
       : '<span style="font-size:12px;color:var(--text-secondary);">' + escapeHtml(latest) + '</span>')
       + addButton;
     items.push({
@@ -402,8 +402,8 @@ function _fsRender() {
   const errorBanner = (_fsState.error && _fsState.overview)
     ? '<div class="fs-error-banner">' + escapeHtml(_fsState.error)
       + (_fsState.lastFailed
-        ? ' <button type="button" class="fs-list-add" style="margin-left:8px;" onclick="window._fsInstall(\''
-          + escapeHtml(_fsState.lastFailed.packageName) + '\', \'' + escapeHtml(_fsState.lastFailed.version) + '\')">'
+        ? ' <button type="button" class="fs-list-add" style="margin-left:8px;" data-action="featureStore.install"'
+          + ' data-package="' + escapeHtml(_fsState.lastFailed.packageName) + '" data-version="' + escapeHtml(_fsState.lastFailed.version) + '">'
           + escapeHtml(_fsT('重试', 'Retry')) + '</button>'
         : '')
       + '</div>'
@@ -414,7 +414,7 @@ function _fsRender() {
     '<div class="feature-detail-window ph-settings-window" style="position:relative;">',
     '<div class="feature-detail-head">',
     '<div style="display:flex;align-items:center;gap:4px;">',
-    '<button class="feature-detail-close" type="button" title="' + _fsT('返回', 'Back') + '" onclick="window.phCloseFeatureStore()" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>',
+    '<button class="feature-detail-close" type="button" title="' + _fsT('返回', 'Back') + '" data-action="featureStore.close" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>',
     '<div>',
       '<div class="feature-detail-title">' + escapeHtml(_fsT('添加 Feature', 'Add Feature')) + '</div>',
       '<div class="feature-detail-subtitle">' + escapeHtml(_fsT(
@@ -423,7 +423,7 @@ function _fsRender() {
       )) + '</div>',
     '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" onclick="window.phCloseFeatureStore()">&times;</button>',
+    '<button class="feature-detail-close" type="button" data-action="featureStore.close">&times;</button>',
     '</div>',
     errorBanner,
     // 复用挂载管理页同款主体容器（24px 左右缘 + flex gap 14px 分组间距）
@@ -456,7 +456,7 @@ window.phOpenFeatureStore = async function(identity) {
   _fsRender();
 };
 
-window.phCloseFeatureStore = function() {
+function phCloseFeatureStore() {
   _fsState.open = false;
   _fsState.busy = false;
   _fsState.installingPkg = null;
@@ -464,4 +464,21 @@ window.phCloseFeatureStore = function() {
   // 本地发起的安装不中断：服务端单飞队列继续跑完，重开面板时经
   // overview.installing 显示进行中状态，完成结果由 overview 自然呈现
   _fsRender();
-};
+}
+
+// ── 事件接线（data-action="featureStore.*"）───────────────────────
+// phOpenFeatureStore / _fsRemoveFor 另被 ph-settings.js 与配置编辑器的
+// 注册块经 window 转调，保留导出；其余动作的消费面仅本模块模板。
+
+window.ClawFW.actions.registerMany({
+  // 版本取卡片上的当前选择（版本下拉改动落 data-fs-version），重试按钮不在
+  // 卡片内，回落到按钮自身携带的版本
+  'featureStore.install': (el) => _fsInstall(
+    el.dataset.package,
+    el.closest('[data-fs-package]')?.dataset.fsVersion || el.dataset.version,
+  ),
+  'featureStore.installBuiltin': (el) => _fsInstallBuiltin(el.dataset.name),
+  'featureStore.removeMount': (el) => _fsRemoveFor(el.dataset.identity, el.dataset.name),
+  'featureStore.selectVersion': (el) => _fsSelectVersion(el.dataset.package, el),
+  'featureStore.close': () => phCloseFeatureStore(),
+});

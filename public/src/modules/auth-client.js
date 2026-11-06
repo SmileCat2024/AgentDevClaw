@@ -135,7 +135,7 @@
       '<div class="feature-detail-title">' + (isZh ? '访问保护' : 'Access protection') + '</div>',
       '<div class="feature-detail-subtitle">' + (isZh ? '配置此 Claw 的单密码访问保护' : 'Configure single-password access protection for this Claw') + '</div>',
       '</div>',
-      '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeAuthSettings()">×</button>',
+      '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" data-action="authClient.close">×</button>',
       '</div>',
       '<div class="settings-tab-content auth-settings-content">',
       '<div class="settings-section">',
@@ -155,9 +155,9 @@
       '</div>',
       '<div class="settings-footer">',
       '<div class="settings-actions">',
-      auth.enabled ? '<button class="settings-btn settings-btn-secondary" type="button" onclick="ClawAuth.logout()">' + (isZh ? '退出登录' : 'Sign out') + '</button>' : '',
-      '<button class="settings-btn settings-btn-secondary" type="button" onclick="closeAuthSettings()">' + (isZh ? '取消' : 'Cancel') + '</button>',
-      '<button class="settings-btn settings-btn-primary" type="button" id="auth-settings-save" onclick="saveAuthSettings()">' + (isZh ? '保存保护设置' : 'Save protection settings') + '</button>',
+      auth.enabled ? '<button class="settings-btn settings-btn-secondary" type="button" data-action="authClient.logout">' + (isZh ? '退出登录' : 'Sign out') + '</button>' : '',
+      '<button class="settings-btn settings-btn-secondary" type="button" data-action="authClient.close">' + (isZh ? '取消' : 'Cancel') + '</button>',
+      '<button class="settings-btn settings-btn-primary" type="button" id="auth-settings-save" data-action="authClient.save">' + (isZh ? '保存保护设置' : 'Save protection settings') + '</button>',
       '</div>',
       '</div>',
       '</div>',
@@ -200,9 +200,18 @@
     }
   }
 
+  // closeAuthSettings / openAuthSettings：app-ui.js 设置 flyout 入口调用。
+  // saveAuthSettings 的消费面只有本模块模板，不导出。
   window.closeAuthSettings = closeAuthSettings;
   window.openAuthSettings = openAuthSettings;
-  window.saveAuthSettings = saveAuthSettings;
+
+  // ── 事件接线（data-action="authClient.*"）─────────────────────────
+  window.ClawFW.actions.registerMany({
+    'authClient.close': () => closeAuthSettings(),
+    'authClient.save': () => saveAuthSettings(),
+    // 登出走模块公开 API（ClawAuth.logout 内含 reload），不复制其实现
+    'authClient.logout': () => window.ClawAuth.logout(),
+  });
 
   window.fetch = function(input, init) {
     return nativeFetch(input, init).then((response) => {

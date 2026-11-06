@@ -5,6 +5,10 @@
  * 依赖（全局）：escapeHtml, currentLanguage
  * 依赖（跨文件）：renderSettingsOverlay（model-settings.js）、saveSettingsPreset（model-settings.js）、
  *   OPENCODE_ZEN_BASE_URL / OPENCODE_GO_BASE_URL（model-settings.js）
+ *
+ * 事件接线：本模块模板经 data-action="oauthFlow.*" 声明，处理器集中在文件尾部注册。
+ * window 导出：startOAuthLogin / onProtocolChange / onOpenCodeTierChange /
+ *   fetchOpenCodeModels / onOpenCodeModelSelect（model-settings.js 的注册块经 window 转调）。
  */
 
 function checkOAuthProxy(isZh) {
@@ -30,12 +34,12 @@ function renderOAuthLoginArea(preset, isZh) {
   return [
     '<div id="oauth-status-display" class="oauth-status-text" style="padding:2px 0;"></div>',
     '<div class="oauth-action-row">',
-    '<button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin(\'browser\')">'
+    '<button class="settings-btn settings-btn-primary" type="button" data-action="oauthFlow.startLogin" data-mode="browser">'
       + (isZh ? '浏览器授权登录' : 'Login in Browser') + '</button>',
-    '<button class="settings-btn settings-btn-secondary" type="button" onclick="startOAuthLogin(\'device\')">'
+    '<button class="settings-btn settings-btn-secondary" type="button" data-action="oauthFlow.startLogin" data-mode="device">'
       + (isZh ? '设备码登录' : 'Device Code Login') + '</button>',
     providerName
-      ? '<button class="settings-btn settings-btn-secondary" type="button" onclick="logoutOAuth()">'
+      ? '<button class="settings-btn settings-btn-secondary" type="button" data-action="oauthFlow.logout">'
         + (isZh ? '登出' : 'Logout') + '</button>'
       : '<div style="font-size:11px;color:var(--text-secondary);">' + (isZh ? '预设尚未保存，点击登录时会自动保存' : 'Preset not saved yet — it will be saved automatically on login') + '</div>',
     '</div>',
@@ -308,7 +312,7 @@ function pollOAuthLogin(sessionId) {
       html = sess.userCode
         ? '<div class="oauth-code-row">'
           + '<div class="oauth-user-code">' + escapeHtml(sess.userCode) + '</div>'
-          + '<button class="settings-btn settings-btn-secondary oauth-copy-btn" type="button" data-copy-code="' + escapeHtml(sess.userCode) + '" onclick="copyOAuthUserCode(this)" title="' + (isZh ? '复制设备码' : 'Copy device code') + '">' + (isZh ? '复制' : 'Copy') + '</button>'
+          + '<button class="settings-btn settings-btn-secondary oauth-copy-btn" type="button" data-copy-code="' + escapeHtml(sess.userCode) + '" data-action="oauthFlow.copyUserCode" title="' + (isZh ? '复制设备码' : 'Copy device code') + '">' + (isZh ? '复制' : 'Copy') + '</button>'
           + '</div>'
           + '<div class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '在任意设备的浏览器打开 ' : 'Open ') + '<a href="' + escapeHtml(sess.verificationUrl) + '" target="_blank">' + escapeHtml(sess.verificationUrl) + '</a>' + (isZh ? ' 并输入上方代码，完成授权后自动继续（本机无需打开浏览器）' : ' on any device and enter the code; login continues automatically after approval') + '</div>'
         : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
@@ -358,7 +362,7 @@ function pollOAuthLogin(sessionId) {
   _oauthPollTimer = setInterval(poll, 3000);
 }
 
-window.copyOAuthUserCode = async function(btn) {
+async function copyOAuthUserCode(btn) {
   let code = btn?.dataset?.copyCode || '';
   if (!code) return;
   let isZh = currentLanguage === 'zh';
@@ -384,14 +388,14 @@ window.copyOAuthUserCode = async function(btn) {
   btn.textContent = ok ? (isZh ? '已复制' : 'Copied') : (isZh ? '复制失败' : 'Copy failed');
   if (btn._copyTimer) clearTimeout(btn._copyTimer);
   btn._copyTimer = setTimeout(function() { btn.textContent = label; }, 1500);
-};
+}
 
-window.logoutOAuth = function() {
+function logoutOAuth() {
   let providerName = getEditingProviderName();
   if (!providerName) return;
   fetch('/protoclaw/oauth/codex/tokens/' + encodeURIComponent(providerName), { method: 'DELETE' })
     .then(function() { refreshOAuthStatus(); });
-};
+}
 
 function refreshOAuthStatus() {
   // While a device-code login poll is running, it owns the status display
@@ -472,10 +476,10 @@ function codexAccountRowHtml(a, isZh) {
   let providerAttr = escapeHtml(a.providerName);
   let actions = ''
     + (a.hasToken && !a.active
-      ? '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" onclick="activateCodexAccountBtn(this)">' + (isZh ? '设为当前' : 'Set Active') + '</button>'
+      ? '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" data-action="oauthFlow.activateAccount">' + (isZh ? '设为当前' : 'Set Active') + '</button>'
       : '')
-    + '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" data-name="' + escapeHtml(a.displayName || '') + '" onclick="renameCodexAccountBtn(this)">' + (isZh ? '重命名' : 'Rename') + '</button>'
-    + '<button class="settings-btn settings-btn-secondary settings-btn-quiet" type="button" data-provider="' + providerAttr + '" onclick="logoutCodexAccountBtn(this)">' + (isZh ? '登出' : 'Logout') + '</button>';
+    + '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" data-name="' + escapeHtml(a.displayName || '') + '" data-action="oauthFlow.renameAccount">' + (isZh ? '重命名' : 'Rename') + '</button>'
+    + '<button class="settings-btn settings-btn-secondary settings-btn-quiet" type="button" data-provider="' + providerAttr + '" data-action="oauthFlow.logoutAccount">' + (isZh ? '登出' : 'Logout') + '</button>';
   return '<div class="settings-preset-card oauth-account-row' + (a.active ? ' active' : '') + '">'
     + '<div class="settings-preset-dot"></div>'
     + '<div class="settings-preset-info">'
@@ -488,7 +492,7 @@ function codexAccountRowHtml(a, isZh) {
     + '</div>';
 }
 
-window.activateCodexAccountBtn = function(btn) {
+function activateCodexAccountBtn(btn) {
   let providerName = btn?.dataset?.provider;
   if (!providerName) return;
   let isZh = currentLanguage === 'zh';
@@ -506,9 +510,9 @@ window.activateCodexAccountBtn = function(btn) {
     .catch(function(err) {
       alert((isZh ? '切换失败: ' : 'Switch failed: ') + (err?.message || err));
     });
-};
+}
 
-window.renameCodexAccountBtn = function(btn) {
+function renameCodexAccountBtn(btn) {
   let providerName = btn?.dataset?.provider;
   if (!providerName) return;
   let isZh = currentLanguage === 'zh';
@@ -532,9 +536,9 @@ window.renameCodexAccountBtn = function(btn) {
       alert((isZh ? '重命名失败: ' : 'Rename failed: ') + (err?.message || err));
       renderCodexAccountsList();
     });
-};
+}
 
-window.logoutCodexAccountBtn = function(btn) {
+function logoutCodexAccountBtn(btn) {
   let providerName = btn?.dataset?.provider;
   if (!providerName) return;
   let isZh = currentLanguage === 'zh';
@@ -547,4 +551,15 @@ window.logoutCodexAccountBtn = function(btn) {
     .catch(function(err) {
       alert((isZh ? '登出失败: ' : 'Logout failed: ') + (err?.message || err));
     });
-};
+}
+
+// ── 事件接线（data-action="oauthFlow.*"）─────────────────────────
+
+window.ClawFW.actions.registerMany({
+  'oauthFlow.startLogin': (el) => window.startOAuthLogin(el.dataset.mode),
+  'oauthFlow.logout': () => logoutOAuth(),
+  'oauthFlow.copyUserCode': (el) => copyOAuthUserCode(el),
+  'oauthFlow.activateAccount': (el) => activateCodexAccountBtn(el),
+  'oauthFlow.renameAccount': (el) => renameCodexAccountBtn(el),
+  'oauthFlow.logoutAccount': (el) => logoutCodexAccountBtn(el),
+});

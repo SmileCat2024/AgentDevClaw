@@ -6,7 +6,8 @@
  *     getUsageBreakdown, renderTokenBar, renderRateRing, renderUsageCard,
  *     renderCacheCard, renderContextChip
  *   - lifecycleDocs 常量（生命周期文档）
- *   - 选择器函数: selectOverviewLifecycle, openFeatureDetails, closeFeatureDetails,
+ *   - 选择器函数: selectOverviewLifecycle（模板经 data-action="debugOverview.selectLifecycle"）、
+ *     openFeatureDetails, closeFeatureDetails,
  *     openRepositoryPackageDetails, closeRepositoryPackageDetails
  *   - 面板渲染: renderStructurePanel, renderMonitorPanel
  *
@@ -424,8 +425,6 @@ function selectOverviewLifecycle(lifecycle) {
   }
 }
 
-window.selectOverviewLifecycle = selectOverviewLifecycle;
-
 function openFeatureDetails(featureName) {
   selectedFeatureName = featureName;
   if (activeFeaturePanel === 'hooks') {
@@ -475,7 +474,7 @@ function renderStructurePanel() {
   }, { enabled: 0, partial: 0, disabled: 0, removed: 0 });
   const selectedDoc = lifecycleDocs[selectedOverviewLifecycle] || lifecycleDocs.StepFinish;
   const flowChips = currentHookInspector.lifecycleOrder
-    .map(name => '<button class="hooks-chip' + (name === selectedOverviewLifecycle ? ' active' : '') + '" type="button" onclick="window.selectOverviewLifecycle(&quot;' + escapeHtml(name) + '&quot;)"><strong>' + escapeHtml(name) + '</strong></button>')
+    .map(name => '<button class="hooks-chip' + (name === selectedOverviewLifecycle ? ' active' : '') + '" type="button" data-action="debugOverview.selectLifecycle" data-lifecycle="' + escapeHtml(name) + '"><strong>' + escapeHtml(name) + '</strong></button>')
     .join('');
   return [
     '<div class="hooks-panel">',
@@ -557,3 +556,13 @@ function renderMonitorPanel() {
     '</div>',
   ].join('');
 }
+
+// ── 事件接线（data-action="debugOverview.*"）──────────────────────
+// selectOverviewLifecycle 的 window 导出随本批次收敛（模板是唯一消费面）；
+// openFeatureDetails / closeFeatureDetails / openRepositoryPackageDetails /
+// closeRepositoryPackageDetails 另被 debug-features-hooks.js 与
+// workspace-blocks.js / app-ui.js 经 window 调用，导出保留。
+
+window.ClawFW.actions.registerMany({
+  'debugOverview.selectLifecycle': (el) => selectOverviewLifecycle(el.dataset.lifecycle),
+});

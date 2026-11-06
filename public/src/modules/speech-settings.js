@@ -3,6 +3,11 @@
  *
  * 包含：语音模型预设的渲染、增删改、应用、持久化。
  * 依赖（全局）：escapeHtml, currentLanguage, renderSettingsOverlay
+ *
+ * 事件接线：模板经 data-action="speech.*" 声明，处理器集中在文件尾部注册。
+ * window 导出只剩 addSpeechPreset / cancelSpeechPresetEdit / saveSpeechPreset
+ * （model-settings.js 注册块经 window 转调）；applySpeechPreset 另被保存流程
+ * 模块内直调，消费面仅本模块，随本批次收敛。
  */
 
 function speechApiTypeLabel(apiType) {
@@ -62,17 +67,17 @@ function renderSpeechModelSection(isZh) {
         const isActive = p.baseUrl === sc.baseUrl && p.apiKey === sc.apiKey && p.model === sc.model
           && (p.apiType || 'chat') === (sc.apiType || 'chat');
         return [
-          '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" onclick="applySpeechPreset(' + idx + ')">',
+          '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" data-action="speech.applyPreset" data-args="[' + idx + ']">',
           '<div class="settings-preset-dot"></div>',
           '<div class="settings-preset-info">',
           '<div class="settings-preset-name">' + escapeHtml(p.name || p.model || ('Preset ' + (idx + 1))) + '</div>',
           '<div class="settings-preset-detail">' + escapeHtml(speechApiTypeLabel(p.apiType) + ' · ' + (p.model || '—') + (p.language ? ' · ' + p.language : '')) + '</div>',
           '</div>',
           '<div class="settings-preset-actions">',
-          '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSpeechPreset(' + idx + ')">',
+          '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" data-action="speech.editPreset" data-args="[' + idx + ']">',
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
           '</button>',
-          '<button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" onclick="event.stopPropagation();deleteSpeechPreset(' + idx + ')">',
+          '<button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" data-action="speech.deletePreset" data-args="[' + idx + ']">',
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
           '</button>',
           '</div>',
@@ -112,7 +117,7 @@ function renderSpeechPresetEditForm(preset, editIdx, isZh) {
     '<label>API Key</label>',
     '<div style="position:relative;display:flex;align-items:stretch;">',
     '<input class="settings-input" id="speech-preset-apikey" type="password" value="' + escapeHtml(preset.apiKey || '') + '" placeholder="sk-..." style="padding-right:40px;">',
-    '<button type="button" onclick="toggleSpeechApiKeyVisibility()" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:color 0.2s;" onmouseover="this.style.color=\'var(--text-primary)\'" onmouseout="this.style.color=\'var(--text-secondary)\'" title="' + (isZh ? '显示/隐藏' : 'Show/Hide') + '">',
+    '<button type="button" class="settings-key-toggle" data-action="speech.toggleApiKeyVisibility" title="' + (isZh ? '显示/隐藏' : 'Show/Hide') + '">',
     '<svg id="speech-apikey-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">',
     '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>',
     '<circle cx="12" cy="12" r="3"></circle>',
@@ -160,32 +165,30 @@ function toggleSpeechApiKeyVisibility() {
   }
 }
 
-window.toggleSpeechApiKeyVisibility = toggleSpeechApiKeyVisibility;
-
 window.addSpeechPreset = function() {
   window.ClawFW._speechEditing = 'new';
   renderSettingsOverlay();
 };
 
-window.editSpeechPreset = function(idx) {
+function editSpeechPreset(idx) {
   window.ClawFW._speechEditing = idx;
   renderSettingsOverlay();
-};
+}
 
 window.cancelSpeechPresetEdit = function() {
   window.ClawFW._speechEditing = null;
   renderSettingsOverlay();
 };
 
-window.deleteSpeechPreset = async function(idx) {
+async function deleteSpeechPreset(idx) {
   const presets = getClawSpeechPresets();
   presets.splice(idx, 1);
   setClawSpeechPresets(presets);
   window.ClawFW._speechEditing = null;
   await saveSpeechFullConfig();
-};
+}
 
-window.applySpeechPreset = async function(idx) {
+async function applySpeechPreset(idx) {
   const presets = getClawSpeechPresets();
   const preset = presets[idx];
   if (!preset) return;
@@ -198,7 +201,7 @@ window.applySpeechPreset = async function(idx) {
     apiType: normalizeSpeechApiTypeValue(preset.apiType),
   });
   await saveSpeechFullConfig();
-};
+}
 
 window.saveSpeechPreset = async function(editIdx) {
   const el = (id) => document.getElementById(id);
@@ -224,7 +227,7 @@ window.saveSpeechPreset = async function(editIdx) {
   window.ClawFW._speechEditing = null;
   await saveSpeechFullConfig();
   if (!wasActive) {
-    await window.applySpeechPreset(editIdx);
+    await applySpeechPreset(editIdx);
   }
 };
 
@@ -245,3 +248,12 @@ async function saveSpeechFullConfig() {
     console.error('Failed to save speech model config:', error);
   }
 }
+
+// ── 事件接线（data-action="speech.*"）─────────────────────────────
+
+window.ClawFW.actions.registerMany({
+  'speech.applyPreset': (el, event, idx) => applySpeechPreset(idx),
+  'speech.editPreset': (el, event, idx) => editSpeechPreset(idx),
+  'speech.deletePreset': (el, event, idx) => deleteSpeechPreset(idx),
+  'speech.toggleApiKeyVisibility': () => toggleSpeechApiKeyVisibility(),
+});

@@ -20,6 +20,9 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 function loadUsageInfo() {
   const ctx = createFrontendSandbox({});
+  // 分发器必须先于模块装载（生产加载顺序第一位）：模块尾部注册
+  // data-action="usageInfo.*" 处理器，ClawFW.actions 缺席会抛错。
+  ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/modules/usage-info-overlay.js');
   return ctx;
 }

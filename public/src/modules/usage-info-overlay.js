@@ -3,6 +3,12 @@
  *
  * 包含：用量仪表盘（趋势图、柱状图、日历热力、分组排行、事件列表）。
  * 依赖（全局）：escapeHtml, currentLanguage
+ *
+ * 事件接线：模板经 data-action="usageInfo.*" 声明，处理器集中在文件尾部注册。
+ * 菜单触发钮把自身元素传给处理器作为弹层锚点（委托层 event.currentTarget 恒为
+ * document）。搜索框失焦提交走渲染后的元素级 blur 监听——分发器未绑定 focusout
+ * 事件类型（见 bindEventType 清单），冒泡委托拿不到失焦时机。
+ * window 导出只剩 openUsageInfo（app-ui.js 设置菜单与 home-dashboard 调用）。
  */
 
 function ensureUsageInfoHost() {
@@ -551,8 +557,8 @@ function renderUsageInfoChartControls(events) {
       ];
   return [
     '<div class="usage-info-chart-controls">',
-    chartViewOptions.map(([value, label]) => '<button class="' + (state.chartView === value ? 'active' : '') + '" type="button" onclick="setUsageInfoChartView(\'' + value + '\')">' + escapeHtml(label) + '</button>').join(''),
-    '<button class="usage-info-model-trigger" type="button" onclick="toggleUsageInfoChartModelMenu(event)">',
+    chartViewOptions.map(([value, label]) => '<button class="' + (state.chartView === value ? 'active' : '') + '" type="button" data-action="usageInfo.setChartView" data-view="' + escapeHtml(value) + '">' + escapeHtml(label) + '</button>').join(''),
+    '<button class="usage-info-model-trigger" type="button" data-action="usageInfo.toggleChartModelMenu">',
     '<span class="usage-info-model-trigger-name">' + escapeHtml(selectedLabel) + '</span>',
     USAGE_INFO_CHEVRON_SVG,
     '</button>',
@@ -636,11 +642,11 @@ function renderUsageInfoEvents(events) {
 function renderUsageInfoGroupControls(state, isZh) {
   return [
     '<div class="usage-info-group-controls">',
-    '<button class="usage-info-model-trigger" type="button" onclick="toggleUsageInfoGroupMenu(event)">',
+    '<button class="usage-info-model-trigger" type="button" data-action="usageInfo.toggleGroupMenu">',
     '<span class="usage-info-model-trigger-name">' + escapeHtml(usageInfoLabel(state.groupBy)) + '</span>',
     USAGE_INFO_CHEVRON_SVG,
     '</button>',
-    '<input class="settings-input usage-info-search" value="' + escapeHtml(state.search || '') + '" placeholder="' + (isZh ? '搜索分组' : 'Search breakdown') + '" oninput="queueUsageInfoSearch(this.value)" onblur="setUsageInfoSearch(this.value)" onkeydown="if(event.key===\'Enter\') setUsageInfoSearch(this.value)">',
+    '<input class="settings-input usage-info-search" value="' + escapeHtml(state.search || '') + '" placeholder="' + (isZh ? '搜索分组' : 'Search breakdown') + '" data-action="usageInfo.search" data-event="input keydown">',
     '</div>',
   ].join('');
 }
@@ -673,13 +679,13 @@ function renderUsageInfoOverlay() {
     '<div class="feature-detail-window usage-info-window">',
     '<div class="feature-detail-head">',
     '<div class="feature-detail-title">' + (isZh ? '用量信息' : 'Usage') + '</div>',
-    '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeUsageInfo()">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" data-action="usageInfo.close">×</button>',
     '</div>',
 
     '<div class="usage-info-toolbar">',
     '<div class="usage-info-segment">',
     rangeOptions.map(([value, label]) => (
-      '<button class="' + (state.range === value ? 'active' : '') + '" type="button" onclick="setUsageInfoRange(\'' + value + '\')">' + escapeHtml(label) + '</button>'
+      '<button class="' + (state.range === value ? 'active' : '') + '" type="button" data-action="usageInfo.setRange" data-range="' + escapeHtml(value) + '">' + escapeHtml(label) + '</button>'
     )).join(''),
     '</div>',
     '<span class="usage-info-range-label">' + escapeHtml((state.from || '') + ' ~ ' + (state.to || '')) + '</span>',
@@ -725,14 +731,15 @@ function renderUsageInfoOverlay() {
     '</div>',
   ].join('');
   bindUsageInfoTooltip(host);
+  bindUsageInfoSearchCommit(host);
   scrollUsageInfoCalendarToLatest(host);
 }
 
-window.setUsageInfoRange = async function(range) {
+async function setUsageInfoRange(range) {
   const state = getUsageInfoState();
   state.range = range;
   await loadUsageInfoData();
-};
+}
 
 // ── body 挂载式下拉（同输入框模型切换配方：透明触发钮 + fixed 弹层，参照 git 分支下拉） ──
 
@@ -792,13 +799,11 @@ function openUsageInfoMenu(anchor, items, onPick) {
   requestAnimationFrame(() => menu.classList.add('visible'));
 }
 
-window.toggleUsageInfoChartModelMenu = function(event) {
-  if (event) event.stopPropagation();
+function toggleUsageInfoChartModelMenu(anchor) {
   if (_usageInfoMenu) {
     closeUsageInfoMenu();
     return;
   }
-  const anchor = event?.currentTarget;
   if (!anchor) return;
   const state = getUsageInfoState();
   const isZh = currentLanguage === 'zh';
@@ -812,13 +817,11 @@ window.toggleUsageInfoChartModelMenu = function(event) {
   });
 };
 
-window.toggleUsageInfoGroupMenu = function(event) {
-  if (event) event.stopPropagation();
+function toggleUsageInfoGroupMenu(anchor) {
   if (_usageInfoMenu) {
     closeUsageInfoMenu();
     return;
   }
-  const anchor = event?.currentTarget;
   if (!anchor) return;
   const state = getUsageInfoState();
   const items = ['model', 'preset', 'agent', 'source', 'date'].map((value) => ({
@@ -832,16 +835,26 @@ window.toggleUsageInfoGroupMenu = function(event) {
   });
 };
 
-window.setUsageInfoSearch = async function(search) {
+async function setUsageInfoSearch(search) {
   const state = getUsageInfoState();
   state.search = String(search || '').trim();
   await loadUsageInfoData();
-};
+}
 
-window.queueUsageInfoSearch = function(search) {
+function queueUsageInfoSearch(search) {
   const state = getUsageInfoState();
   state.search = String(search || '').trim();
-};
+}
+
+/**
+ * 搜索框失焦提交（原内联 onblur）：替换 innerHTML 的重渲染路径下，元素级监听
+ * 随节点一起丢弃，不累积；分发器未绑定 focusout，故不走 data-event 声明。
+ */
+function bindUsageInfoSearchCommit(host) {
+  const input = host.querySelector('.usage-info-search');
+  if (!input) return;
+  input.addEventListener('blur', (event) => setUsageInfoSearch(event.target.value));
+}
 
 function bindUsageInfoTooltip(host) {
   const tooltip = host.querySelector('#usage-info-tooltip');
@@ -884,13 +897,32 @@ function moveUsageInfoTooltip(event, tooltip) {
   tooltip.style.top = Math.max(8, event.clientY - rect.top - 12) + 'px';
 }
 
-window.setUsageInfoChartView = function(chartView) {
+function setUsageInfoChartView(chartView) {
   const state = getUsageInfoState();
   state.chartView = chartView;
   renderUsageInfoOverlay();
-};
+}
 
 // ── window 导出 ──────────────────────────────────────────────
+// openUsageInfo：app-ui.js 设置菜单与 home-dashboard 首页入口调用。
+// 其余动作的消费面仅本模块模板，收敛为模块级函数。
 window.openUsageInfo = openUsageInfo;
-window.closeUsageInfo = closeUsageInfo;
-window.loadUsageInfoData = loadUsageInfoData;
+
+// ── 事件接线（data-action="usageInfo.*"）─────────────────────────
+
+window.ClawFW.actions.registerMany({
+  'usageInfo.setRange': (el) => setUsageInfoRange(el.dataset.range),
+  'usageInfo.setChartView': (el) => setUsageInfoChartView(el.dataset.view),
+  'usageInfo.toggleChartModelMenu': (el) => toggleUsageInfoChartModelMenu(el),
+  'usageInfo.toggleGroupMenu': (el) => toggleUsageInfoGroupMenu(el),
+  'usageInfo.search': (el, event) => {
+    // 输入即时写状态（不重拉）；Enter 提交重拉。失焦提交见 bindUsageInfoSearchCommit。
+    if (event.type === 'keydown') {
+      if (event.key === 'Enter') return setUsageInfoSearch(el.value);
+      return undefined;
+    }
+    queueUsageInfoSearch(el.value);
+    return undefined;
+  },
+  'usageInfo.close': () => closeUsageInfo(),
+});

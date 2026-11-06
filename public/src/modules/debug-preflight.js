@@ -33,7 +33,7 @@ function renderPreflightPanel() {
   const toolbar = [
     '<section class="log-panel">',
     '<div class="log-filter-row">',
-    '<button type="button" class="log-chip" onclick="window.loadPreflight(true)">重新检查</button>',
+    '<button type="button" class="log-chip" data-action="debugPreflight.reload">重新检查</button>',
     state.loading
       ? '<span class="preflight-status">检查中…</span>'
       : renderPreflightStatusPill(state.data),
@@ -133,3 +133,9 @@ async function loadPreflight(forceRender = false) {
     if (typeof renderFeaturePanel === 'function') renderFeaturePanel();
   }
 }
+
+// ── 事件接线（data-action="debugPreflight.*"）────────────────────
+
+window.ClawFW.actions.registerMany({
+  'debugPreflight.reload': () => loadPreflight(true),
+});
