@@ -78,6 +78,23 @@ export class GitHubClient {
     return resp.text();
   }
 
+  /**
+   * 上传 Release 资产。uploadUrl 是 Release 响应里的 upload_url 模板
+   * （形如 https://uploads.github.com/.../assets{?name,label}），剥掉模板段后
+   * 追加 ?name= 直传二进制；主机名（github.com / GHE）由 GitHub 返回值决定。
+   */
+  async uploadReleaseAsset<T = any>(uploadUrl: string, name: string, data: Buffer, contentType: string): Promise<T> {
+    const url = `${uploadUrl.replace(/\{[^}]*\}$/, '')}?name=${encodeURIComponent(name)}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: this.headers({ 'Content-Type': contentType }),
+      body: new Uint8Array(data),
+    });
+    const asset = await resp.json().catch(() => null);
+    if (!resp.ok) throw this.formatHttpError(resp, asset);
+    return asset as T;
+  }
+
   // ── GraphQL v4 ───────────────────────────────────────────
 
   async graphql<T = any>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
