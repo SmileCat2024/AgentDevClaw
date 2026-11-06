@@ -55,6 +55,7 @@
 - [0010 侧栏统一投影](0010-sidebar-unified-projection.md) — 工作空间 → 项目目录 → 运行中会话；连接不产生侧栏层级
 - [0015 内嵌浏览器 viewer](0015-embedded-browser-viewer.md) — 浏览器所有权翻转（Archived，调查完成暂不实施）
 - [0043 home 门户小组件契约](0043-home-portal-widgets.md) — 工作空间向首页提供只读 widget 的模块协议与隔离边界（Proposed）
+- [0044 右栏面板插件化与效果归属](0044-frontend-panel-plugins-and-effect-ownership.md) — panels 进插件协议、装载/按钮/生命周期注册表派生、host.effect 撤销面（Proposed）
 
 ## 工程治理
 
