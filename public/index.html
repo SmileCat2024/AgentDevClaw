@@ -507,6 +507,12 @@
     </div>
   </div>
 
+  <!-- 装载清单纪律（frontend-script-tags-gate 防线，Phase C 收尾固化）：
+       ① 新模块不进静态预载——APP 界面走 ClawHost 插件（plugin-manifest 登记），
+         宿主底座新增需在测试更新基线并说明理由；
+       ② 删模块必须同步删标签（死标签检测）；
+       ③ 悬置/大工程域（wg-* / im-* / dispatch-* / flow-editor / home-dashboard /
+         resources-viewer）标签只许整体删除，随各自工程重做消亡，不许新增。 -->
   <script src="./flow-editor.js"></script>
   <script src="./src/i18n.js"></script>
   <script src="./src/app-core.js"></script>

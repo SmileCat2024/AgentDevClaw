@@ -1,7 +1,7 @@
 # 前端插件化改造规划
 
 > 创建日期：2026-11-04
-> 状态：进行中（A / A2 / B 已落地：宿主底座 + memo / claw-guide / agent-studio / coder 四个插件迁移完成；APP 插件化已收口——qqbot 转入线程化工程、home 转入门户小组件工程，均不做载体迁移；当前阶段 Phase C）
+> 状态：**已结项**（2026-11-06）。A / A2 / B 落地宿主底座与四个插件迁移；APP 插件化收口（qqbot 转线程化工程、home 转门户小组件工程）；Phase C 四面全部完成——右栏面板自注册、内联事件收编（427 → 11，终态全部为记录在案的语义豁免）、fw-config-panel 状态收敛、script 标签清单防线。结项后新工作（home 小组件契约、qqbot 线程化）另立规划。
 > 背景：Claw 向前端插件化扩展演进——工作空间应用化（随时挂上/卸载）、扩展点持续打通而非硬编码。本规划基于对 public/ 前端的深度调研，数据全部来自源码实测。
 
 ## 一、调研结论：现状全景
@@ -108,12 +108,16 @@ window.ClawHost = {
 
 进度：**右栏面已完成**（2026-11-04）。5 个 window 寻址面板（git / bg / annotations / genui / session-controls）全部迁移为模块自注册（`window.ClawHost.panels.register`，与 resources-viewer 先例同型）；app-ui.js 中央注册块只保留实现本就在 app-ui.js 内的面板。迁移中砍除了只写不读的 `featurePanels` 平行映射——渲染寻址（debug-panel-host `renderFeaturePanel`）与可见性过滤统一从 `ClawPanels` 读，落实 ADR-0010「不维护平行清单」纪律。行为等价由 `frontend-rail-panels-golden` 金样本钉住（注册面全集 + 元数据快照，搬家不许改变快照，变异验证过鉴别力）。`window.GitPanel` / `BgPanel` / `SessionControlsPanel` 命名空间仍在（生命周期钩子 onOpen/onClose 经 debug-panel-host if 链调用、badge 经 agent-data-loader 调用）——调用面收编属内联事件面与后续清理，不在本面范围。
 
-进度：**内联事件面进行中**（2026-11-05）。防线测试先行落地（ratchet + 覆盖双断言，含 `setAttribute('on*', …)` 动态注入形态；基线从 427 起算）。收编按模块分批、每批一个提交：会话管理簇（session-dialogs / ph-thread-history / index.html 分支弹窗，11 处）与静态壳弹窗簇（trim / feature-upload / summary 弹窗，10 处，index.html 内联事件清零）已落地，基线 409。剩余大头按批推进：session-list-render（44）/ model-settings（41）/ fw-config-panel（28）/ workspace-blocks（23）/ app-ui.js（77，拆子批殿后）。配套改动：分发器 `invoke` 透传 async handler 的 Promise（thenable 鸭子判定——`instanceof Promise` 在 frontend-vm 沙箱会因宿主 realm Promise 遮蔽沙箱同名全局而恒 false，跨 realm 判定不可依赖）。
+进度：**内联事件面已完成**（2026-11-06）。防线测试先行落地（ratchet + 覆盖双断言，含 `setAttribute('on*', …)` 动态注入形态；基线从 427 起算）。按模块分批、每批一个提交全部完成：会话管理簇、静态壳弹窗（index.html 内联清零）、调试域面板、ph-settings、model-settings、session-list-render、workspace-blocks + choice-input、聊天渲染与输入系统、ph 域与工作空间 UI、配置认证、设置用量杂项、app-ui 殿后批、fw-config-panel。终态基线 11，全部为记录在案的语义豁免（2 处 mousedown 防焦点抢占、1 处 keydown 挡板、session-ui / sidebar-render 各若干处语义保留）。执行形态：线 1/线 2 由 Coder 线程并行完成（4 线工单 + 转换配方文档 [inline-events-migration-playbook.md](inline-events-migration-playbook.md)），主助手逐线验收（diff 审读 + 全家回归 + 浏览器冒烟 + 基线统一修剪）。配套改动：分发器 `invoke` 透传 async handler 的 Promise（thenable 鸭子判定——`instanceof Promise` 在 frontend-vm 沙箱会因宿主 realm Promise 遮蔽沙箱同名全局而恒 false，跨 realm 判定不可依赖）；`data-event` 支持空格分隔多类型；`data-key-activate` 声明式键盘激活（Enter/Space，保留内部按钮守卫语义）；`bindEventType` 支持 capture（`<details>` 的 toggle 不冒泡）；focusout 默认绑定 + 未声明 `data-event` 元素不响应的协议守卫。
+
+进度：**fw-config-panel 状态面已完成**（2026-11-06）。12 个 UI 状态键（mode / section / _projectId / 弹窗开关 ×5 / 搜索态 / drift 对话框 / 能力缓存 / slash 选择器）从 ClawFW 袋收敛为 IIFE 模块局部；跨模块读改显式接口（app-ui renderFWFeatures 经 `fwGetFeatureQuery()` 读未提交搜索态，renderFWDetail 经参数快照接收分区）；settings* / _modelPresets 是 model-settings / model-preset-cache 域借宿键，保留初始化维持加载顺序兼容。行为验证：沙箱契约测试（状态键消失 / 他域键保留 / 导出面 / 动作链路 / 显式接口读写，变异验证过辨别力）；fw 面板消费工作空间在隐藏清单，浏览器不可达。
+
+进度：**script 标签清单化已完成**（2026-11-06）。实测零死标签（历次迁移删模块同步删标签已是事实纪律）；`frontend-script-tags-gate` 三道防线固化（死标签检测、总数 ratchet 基线 `.script-tags-baseline.json`、悬置/大工程域 15 标签集合固化——只许整体删除随工程消亡，不许新增），变异验证过三道防线各自捕获目标变异。index.html 装载清单纪律注释就位。
 
 ### 挂起项
 
 - React / Vite：不重启。重启条件（写明）：滚动类 bug 密集复发且事件收编后仍压不住。
-- 第三方插件契约：C 阶段完成前不对外承诺 host API 稳定性。
+- 第三方插件契约：host API 对外稳定性承诺随 Phase C 完成解锁评估——是否冻结版本、何时对外，由后续独立决策，不在本规划内定。
 
 ## 四、风险与对策
 
