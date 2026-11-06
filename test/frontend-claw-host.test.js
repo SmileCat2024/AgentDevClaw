@@ -236,6 +236,206 @@ describe('ClawHost 卸载契约', () => {
     assert.equal(ctx.run('globalThis.__ping || 0'), 1, '卸载后 action 不应再执行');
     assert.ok(errors.some((line) => line.includes('未注册的 action')), '应留下可诊断的未注册日志');
   });
+
+  it('mount 抛错时回滚本轮注册项，不留半激活插件', async () => {
+    const ctx = makeCtx();
+    const host = ctx.window.ClawHost;
+
+    await assert.rejects(
+      () => registerAsLoadPlugin(host, pluginFixture({
+        mount() { throw new Error('mount boom'); },
+      })),
+      /mount boom/,
+    );
+    assert.equal(host.blocks.has('demo-a'), false, '回滚后插件块不得残留');
+    assert.equal(host.blocks.has('demo-b'), false, '回滚后插件块不得残留');
+    assert.equal(host.blocks.refresh('demo-a'), false, '回滚后 refresher 不得残留');
+    assert.equal(host.isPluginLoaded('demo'), false, '失败插件不得进入 loaded 表');
+
+    // 回滚干净后同 owner 可重新装载（注册无冲突）
+    await registerAsLoadPlugin(host, pluginFixture());
+    assert.equal(host.blocks.has('demo-a'), true, '回滚后应可重新装载');
+  });
+
+  it('unmount 抛错时摘除仍必达，插件不僵尸化', async () => {
+    const ctx = makeCtx();
+    const host = ctx.window.ClawHost;
+
+    await registerAsLoadPlugin(host, pluginFixture({
+      unmount() { throw new Error('unmount boom'); },
+    }));
+    assert.equal(await host.unloadPlugin('demo'), true, 'unmount 抛错不影响卸载返回值');
+    assert.equal(host.blocks.has('demo-a'), false, 'unmount 抛错不得跳过摘除');
+    assert.equal(host.blocks.refresh('demo-a'), false, 'unmount 抛错不得跳过 refresher 摘除');
+    assert.equal(host.isPluginLoaded('demo'), false, 'loaded 表必须清理');
+
+    // 摘除干净后同 owner 可重新装载（否则僵尸插件会挡住重装）
+    await registerAsLoadPlugin(host, pluginFixture());
+    assert.equal(host.blocks.has('demo-a'), true, '僵尸化不得阻止重新装载');
+  });
+
+  it('只注册 refresher（无同名 block）的项也随卸载摘除', async () => {
+    const ctx = makeCtx();
+    const host = ctx.window.ClawHost;
+
+    await registerAsLoadPlugin(host, pluginFixture({
+      blocks: {},
+      refreshers: { 'solo-refresh': () => {} },
+    }));
+    assert.equal(host.blocks.refresh('solo-refresh'), true, '装载后 refresher 应可调用');
+
+    await host.unloadPlugin('demo');
+    assert.equal(host.blocks.refresh('solo-refresh'), false, '无同名 block 的 refresher 不得残留');
+  });
+});
+
+/**
+ * 归属与 effect 面（ADR-0044 决策 3）：
+ * 插件经绑定 api（mount 参数）注册的一切与登记的副作用清理，都归属该插件
+ * 生命周期；卸载与激活失败回滚时宿主统一撤销，不依赖插件自觉。
+ */
+describe('ClawHost 归属与 effect 面', () => {
+  /** 每个 slotId 独立的元素 stub（innerHTML 可回读，验证卸载清空 DOM）。
+   *  document 覆盖须保留默认 stub 的方法面（action-dispatcher 顶层绑事件
+   *  依赖 addEventListener），仅 getElementById 换为按 id 缓存的独立元素。 */
+  function makeSlotCtx() {
+    const elements = new Map();
+    const ctx = createFrontendSandbox({
+      document: {
+        getElementById(id) {
+          if (!elements.has(id)) elements.set(id, { innerHTML: '' });
+          return elements.get(id);
+        },
+        querySelector() { return null; },
+        querySelectorAll() { return []; },
+        createElement() { return null; },
+        createTextNode(text) { return { textContent: text }; },
+        addEventListener() {},
+        body: {},
+        head: {},
+        documentElement: {},
+        readyState: 'complete',
+      },
+    });
+    ctx.loadSource('public/src/modules/claw-host.js');
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
+    return { ctx, elements };
+  }
+
+  it('mount 内动态注册（block/panel/slot/refresher）与 effect 登记随卸载零残留', async () => {
+    const { ctx, elements } = makeSlotCtx();
+    const host = ctx.window.ClawHost;
+    const disposed = [];
+
+    await host.activatePlugin('dyn', {
+      id: 'dyn',
+      mount(h) {
+        h.blocks.register('dyn-a', () => '<a/>');
+        h.blocks.registerRefresher('dyn-r', () => {});
+        h.panels.register('dyn-panel', { render: () => '<p/>' });
+        h.slots.mount('dyn-slot', 's1', () => '<slot/>');
+        h.effect(() => { disposed.push(1); });
+        h.effect(() => { disposed.push(2); });
+      },
+    });
+
+    assert.equal(host.blocks.has('dyn-a'), true, '装载后动态注册 block 应可见');
+    assert.equal(host.panels.has('dyn-panel'), true, '装载后动态注册 panel 应可见');
+    assert.equal(elements.get('dyn-slot').innerHTML, '<slot/>', '装载后 slot DOM 应写入');
+
+    assert.equal(await host.unloadPlugin('dyn'), true);
+    assert.equal(host.blocks.has('dyn-a'), false, '卸载后动态注册 block 必须消失');
+    assert.equal(host.blocks.refresh('dyn-r'), false, '卸载后动态注册 refresher 必须消失');
+    assert.equal(host.panels.has('dyn-panel'), false, '卸载后动态注册 panel 必须消失');
+    assert.equal(elements.get('dyn-slot').innerHTML, '', '卸载后 slot DOM 必须清空');
+    assert.deepEqual(disposed, [1, 2], 'effect 清单必须全部执行');
+    assert.equal(host.isPluginLoaded('dyn'), false);
+  });
+
+  it('声明式 panels 字段随卸载摘除，并经 teardown 钩子通知编排层', async () => {
+    const { ctx } = makeSlotCtx();
+    const host = ctx.window.ClawHost;
+    const tornDown = [];
+    host.setPanelTeardownHook((panelId) => tornDown.push(panelId));
+
+    await host.activatePlugin('pnl', {
+      id: 'pnl',
+      panels: { 'pnl-main': { render: () => '' }, 'pnl-side': { render: () => '' } },
+    });
+    assert.equal(host.panels.has('pnl-main'), true);
+
+    await host.unloadPlugin('pnl');
+    assert.equal(host.panels.has('pnl-main'), false, '声明式面板必须随卸载摘除');
+    assert.equal(host.panels.has('pnl-side'), false);
+    assert.deepEqual(tornDown.sort(), ['pnl-main', 'pnl-side'], '每个被摘面板都要通知编排层');
+  });
+
+  it('无主面板（宿主静态注册）不受插件卸载波及', async () => {
+    const { ctx } = makeSlotCtx();
+    const host = ctx.window.ClawHost;
+    host.panels.register('host-panel', { render: () => '' }); // 无 owner：宿主静态注册形态
+
+    await host.activatePlugin('p2', { id: 'p2', panels: { 'p2-x': { render: () => '' } } });
+    await host.unloadPlugin('p2');
+
+    assert.equal(host.panels.has('p2-x'), false);
+    assert.equal(host.panels.has('host-panel'), true, '无主面板不得被插件卸载摘除');
+  });
+
+  it('mount 抛错时回滚覆盖动态注册与 effect 清单', async () => {
+    const { ctx, elements } = makeSlotCtx();
+    const host = ctx.window.ClawHost;
+    const disposed = [];
+
+    await assert.rejects(
+      () => host.activatePlugin('bad', {
+        id: 'bad',
+        mount(h) {
+          h.blocks.register('bad-a', () => '<a/>');
+          h.panels.register('bad-panel', { render: () => '' });
+          h.slots.mount('bad-slot', 's', () => '<x/>');
+          h.effect(() => { disposed.push('ran'); });
+          throw new Error('boom');
+        },
+      }),
+      /boom/,
+    );
+
+    assert.equal(host.blocks.has('bad-a'), false, '回滚后动态注册 block 不得残留');
+    assert.equal(host.panels.has('bad-panel'), false, '回滚后动态注册 panel 不得残留');
+    assert.equal(elements.get('bad-slot').innerHTML, '', '回滚后 slot DOM 不得残留');
+    assert.deepEqual(disposed, ['ran'], '回滚也要执行 mount 半途登记的 effect');
+  });
+
+  it('disposer 抛错不阻断其余 effect 清理与卸载', async () => {
+    const { ctx } = makeSlotCtx();
+    const host = ctx.window.ClawHost;
+    const errors = [];
+    ctx.window.console.error = (...a) => errors.push(a.join(' '));
+    const ran = [];
+
+    await host.activatePlugin('fx', {
+      id: 'fx',
+      mount(h) {
+        h.effect(() => { throw new Error('dispose boom'); });
+        h.effect(() => { ran.push('second'); });
+      },
+    });
+
+    assert.equal(await host.unloadPlugin('fx'), true, 'disposer 抛错不影响卸载结果');
+    assert.deepEqual(ran, ['second'], '其余 disposer 必须照常执行');
+    assert.ok(errors.some((line) => line.includes('effect 清理异常')), '应留下可诊断日志');
+  });
+
+  it('teardown 钩子自身抛错不阻断面板摘除', async () => {
+    const { ctx } = makeSlotCtx();
+    const host = ctx.window.ClawHost;
+    host.setPanelTeardownHook(() => { throw new Error('hook boom'); });
+
+    await host.activatePlugin('p3', { id: 'p3', panels: { 'p3-x': { render: () => '' } } });
+    assert.equal(await host.unloadPlugin('p3'), true, '钩子异常不影响卸载结果');
+    assert.equal(host.panels.has('p3-x'), false, '面板必须照样摘除');
+  });
 });
 
 /**

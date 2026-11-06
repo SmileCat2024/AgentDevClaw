@@ -12,8 +12,10 @@
  *   slots    底部槽位挂载（app-chat-input 模式泛化，按签名比对避免重建 DOM）
  *
  * 装载与卸载见 loadPlugin / unloadPlugin：插件模块约定导出
- *   { id, blocks?: {type: renderer}, mount?(host), unmount?() }
- * 模块装载后由宿主调用 mount(host)，卸载前调用 unmount() 再摘除其注册项。
+ *   { id, blocks?, refreshers?, actions?, panels?, mount?(host), unmount?() }
+ * 模块装载后由宿主调用 mount(host)——host 是绑定该插件 owner 的 api（注册
+ * 方法自动归属，另提供 host.effect(disposer) 登记副作用清理）；卸载前调用
+ * unmount() 再按 owner 摘除其注册项与 effect 清单。
  */
 (function () {
   'use strict';
@@ -79,6 +81,19 @@
     return removed;
   }
 
+  /** refresher 可独立于 block 注册（refresher-only），摘除必须独立遍历，
+   *  不能只依赖 unregisterBlocksOf 里按同名 block 的连带删除。 */
+  function unregisterRefreshersOf(owner) {
+    let removed = 0;
+    for (const [type, entry] of refreshers) {
+      if (entry.owner === owner) {
+        refreshers.delete(type);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
   function registerRefresher(type, fn, owner) {
     const key = String(type || '').trim();
     if (!key) throw new TypeError('block type is required');
@@ -130,7 +145,7 @@
     return values === null || (actual != null && values.includes(String(actual)));
   }
 
-  function registerPanel(id, panel) {
+  function registerPanel(id, panel, owner) {
     const key = String(id || '').trim();
     if (!key) throw new TypeError('Panel ID is required');
     if (!panel || typeof panel.render !== 'function') {
@@ -141,9 +156,50 @@
     panels.set(key, {
       ...panel,
       id: key,
+      owner: owner || null,
       when: { agentIds: normalizeValues(when.agentIds), surfaces: normalizeValues(when.surfaces) },
     });
     return panels.get(key);
+  }
+
+  /**
+   * 面板摘除钩子：宿主编排层（debug-panel-host）注入。面板从注册表消失时
+   * 若它正打开，需要走一次空面板渲染把 body 清空、按钮态复位——注册表
+   * 不知道打开状态，这个清理只能由编排层完成（对齐 setPluginResolver 的注入模式）。
+   */
+  let panelTeardownHook = null;
+  function setPanelTeardownHook(fn) {
+    panelTeardownHook = typeof fn === 'function' ? fn : null;
+  }
+
+  function teardownPanel(key) {
+    if (typeof panelTeardownHook !== 'function') return;
+    try {
+      panelTeardownHook(key);
+    } catch (err) {
+      // 钩子异常不得阻断摘除：面板照样从注册表消失，只是编排层清理可能不完整。
+      console.error('[claw-host] 面板摘除钩子异常（继续摘除）：', key, err);
+    }
+  }
+
+  function unregisterPanel(id) {
+    const key = String(id || '').trim();
+    if (!panels.has(key)) return false;
+    panels.delete(key);
+    teardownPanel(key);
+    return true;
+  }
+
+  function unregisterPanelsOf(owner) {
+    const removed = [];
+    for (const [key, panel] of panels) {
+      if (panel.owner === owner) {
+        panels.delete(key);
+        removed.push(key);
+      }
+    }
+    for (const key of removed) teardownPanel(key);
+    return removed.length;
   }
 
   function getAvailablePanels(context = {}) {
@@ -155,9 +211,9 @@
   // ── slots ─────────────────────────────────────────────────────────
   // 槽位挂载：宿主提供位置，APP 决定放什么。按签名比对，语义不变不动 DOM，
   // 避免轮询重渲染重建正在输入的输入框。
-  const slots = new Map(); // slotId -> { signature, html }
+  const slots = new Map(); // slotId -> { signature, html, owner }
 
-  function mountSlot(slotId, signature, render) {
+  function mountSlot(slotId, signature, render, owner) {
     const key = String(slotId || '').trim();
     if (!key) throw new TypeError('slotId is required');
     if (typeof render !== 'function') throw new TypeError(`slot "${key}" needs a render function`);
@@ -170,7 +226,7 @@
     const prev = slots.get(key);
     if (prev && prev.signature === sig) return false;
     el.innerHTML = render() || '';
-    slots.set(key, { signature: sig, html: el.innerHTML });
+    slots.set(key, { signature: sig, html: el.innerHTML, owner: owner || null });
     return true;
   }
 
@@ -179,6 +235,50 @@
     const el = document.getElementById(key);
     if (el) el.innerHTML = '';
     slots.delete(key);
+  }
+
+  /** 按插件摘除槽位：DOM 清空与记录删除一起做（卸载即界面消失）。 */
+  function unregisterSlotsOf(owner) {
+    const keys = [];
+    for (const [key, entry] of slots) {
+      if (entry.owner === owner) keys.push(key);
+    }
+    for (const key of keys) clearSlot(key);
+    return keys.length;
+  }
+
+  // ── effect 撤销面 ─────────────────────────────────────────────────
+  // 插件在 mount 里把超出注册面的副作用清理（定时器、事件源、observer）登记
+  // 进来；卸载与激活失败回滚时宿主统一执行。注册面兜底由此升级为对任意
+  // 副作用的契约（ADR-0044 决策 3）。effect 只在绑定 owner 的 api 上暴露
+  // （makeOwnerBoundApi），无主 effect 无人执行，顶层不提供。
+  const effects = new Map(); // owner -> Set<disposer>
+
+  function registerEffect(owner, disposer) {
+    if (typeof disposer !== 'function') return false;
+    let set = effects.get(owner);
+    if (!set) {
+      set = new Set();
+      effects.set(owner, set);
+    }
+    set.add(disposer);
+    return true;
+  }
+
+  async function runEffectsOf(owner) {
+    const set = effects.get(owner);
+    if (!set) return 0;
+    effects.delete(owner); // 先取走清单再执行：disposer 重入登记的进下一轮，天然幂等
+    for (const dispose of set) {
+      try {
+        const result = dispose();
+        if (result && typeof result.then === 'function') await result;
+      } catch (err) {
+        // 单个 disposer 抛错不得阻断其余清理（与 unmount 抛错误摘除必达同语义）。
+        console.error('[claw-host] effect 清理异常（继续其余清理）：', owner, err);
+      }
+    }
+    return set.size;
   }
 
   // ── 插件装载与卸载 ─────────────────────────────────────────────────
@@ -198,6 +298,32 @@
    * 与动态 import 分开，是因为注册步骤本身不依赖模块来源；
    * loadPlugin 取到模块后即调用它。
    */
+  /**
+   * 绑定 owner 的宿主 api：插件 mount(host) 拿到的是这份——其中的注册方法
+   * （blocks / panels / slots / effect）自动带上当前插件 owner，插件不必显式
+   * 传参，宿主内部也无「当前激活插件」可变全局（async mount 交织下会串）。
+   * 显式传 owner 参数的调用方优先（宿主内部与测试）。
+   */
+  function makeOwnerBoundApi(owner) {
+    return {
+      ...api,
+      blocks: {
+        ...api.blocks,
+        register: (type, renderer, explicit) => api.blocks.register(type, renderer, explicit ?? owner),
+        registerRefresher: (type, fn, explicit) => api.blocks.registerRefresher(type, fn, explicit ?? owner),
+      },
+      panels: {
+        ...api.panels,
+        register: (id, panel, explicit) => api.panels.register(id, panel, explicit ?? owner),
+      },
+      slots: {
+        ...api.slots,
+        mount: (slotId, signature, render, explicit) => api.slots.mount(slotId, signature, render, explicit ?? owner),
+      },
+      effect: (disposer) => registerEffect(owner, disposer),
+    };
+  }
+
   async function activatePlugin(key, mod) {
     const owner = mod.id || key;
     for (const [type, renderer] of Object.entries(mod.blocks || {})) {
@@ -207,7 +333,27 @@
       registerRefresher(type, fn, owner);
     }
     if (mod.actions) registerActions(mod.actions, owner);
-    if (typeof mod.mount === 'function') await mod.mount(api);
+    if (mod.panels) {
+      for (const [panelId, panel] of Object.entries(mod.panels)) {
+        registerPanel(panelId, panel, owner);
+      }
+    }
+    if (typeof mod.mount === 'function') {
+      try {
+        await mod.mount(makeOwnerBoundApi(owner));
+      } catch (err) {
+        // mount 抛错时回滚本轮注册项（声明式 + mount 内经绑定 api 动态注册的
+        // 都带 owner，一并可摘）：半激活插件不在 loaded 表里，unloadPlugin
+        // 够不着，不回滚就泄漏到刷新页面。
+        unregisterBlocksOf(owner);
+        unregisterRefreshersOf(owner);
+        unregisterActionsOf(owner);
+        unregisterPanelsOf(owner);
+        unregisterSlotsOf(owner);
+        await runEffectsOf(owner);
+        throw err;
+      }
+    }
     loaded.set(key, { module: mod, owner });
     return mod;
   }
@@ -265,17 +411,29 @@
   }
 
   /**
-   * 卸载插件：先给插件自身清理机会（unmount），再由宿主按 owner 摘除它注册的一切
-   * （blocks / refreshers / actions）。插件忘记清理也不能留下悬空注册项——
-   * 这是「随时挂上、卸载」承诺的兜底。
+   * 卸载插件：先给插件自身清理机会（unmount），再由宿主按 owner 摘除它注册的
+   * 一切——blocks / refreshers / actions / panels / slots 与 effect 清单。
+   * 摘除顺序：注册项先消失（DOM 面即刻撤下），effect 清单最后执行（定时器、
+   * 订阅收尾）。插件忘记清理也不能留下悬空注册项——这是「随时挂上、卸载」
+   * 承诺的兜底。
    */
   async function unloadPlugin(pluginId) {
     const key = String(pluginId || '').trim();
     const entry = loaded.get(key);
     if (!entry) return false;
-    if (typeof entry.module.unmount === 'function') await entry.module.unmount();
+    try {
+      if (typeof entry.module.unmount === 'function') await entry.module.unmount();
+    } catch (err) {
+      // 插件 unmount 抛错不得跳过宿主摘除：否则插件僵尸化——loaded 表与
+      // 注册表都残留，重装同名 type 直接报错。记录后继续，清理必达。
+      console.error('[claw-host] 插件 unmount 异常（继续摘除注册项）：', key, err);
+    }
     unregisterBlocksOf(entry.owner);
+    unregisterRefreshersOf(entry.owner);
     unregisterActionsOf(entry.owner);
+    unregisterPanelsOf(entry.owner);
+    unregisterSlotsOf(entry.owner);
+    await runEffectsOf(entry.owner);
     loaded.delete(key);
     return true;
   }
@@ -298,6 +456,7 @@
     },
     panels: {
       register: registerPanel,
+      unregister: unregisterPanel,
       get: (id) => panels.get(String(id)),
       getAll: () => Array.from(panels.values()),
       getAvailable: getAvailablePanels,
@@ -389,6 +548,7 @@
     onPluginLoadSettled,
     getPluginLoadState,
     setPluginResolver,
+    setPanelTeardownHook,
     unloadPlugin,
     isPluginLoaded,
   };

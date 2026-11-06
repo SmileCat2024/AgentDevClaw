@@ -291,3 +291,18 @@ function toggleFeaturePanel(panelId) {
     });
   }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 面板摘除联动（ADR-0044 效果归属）
+// ═══════════════════════════════════════════════════════════════
+
+// 面板从注册表被摘除（如所属插件卸载）时，若它正打开，走空面板渲染把
+// body 清空、open class 撤下、按钮 active 态复位。注册表不知道打开状态，
+// 这层清理只能由编排层完成，经 setPanelTeardownHook 注入给 claw-host。
+if (window.ClawHost && typeof window.ClawHost.setPanelTeardownHook === 'function') {
+  window.ClawHost.setPanelTeardownHook((panelId) => {
+    if (activeFeaturePanel !== panelId) return;
+    activeFeaturePanel = null;
+    renderFeaturePanel();
+  });
+}
