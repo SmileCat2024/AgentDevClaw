@@ -328,7 +328,10 @@ function renderModelCatalogSettingsOverlay(host, data) {
     }
   }
   // 编辑表单：先填充思考强度选项，再交给 ClawSelect 增强原生下拉
-  if (editing !== null && typeof window.populateThinkingEffortOptions === 'function') window.populateThinkingEffortOptions();
+  // （注意：populateThinkingEffortOptions 是模块级 const，不挂 window——
+  //  d9783e39 收敛导出时这里曾残留 window. 前缀调用，守卫静默失败导致
+  //  下拉空壳、保存把 thinkingEffort 写成 null。必须裸标识符调用。）
+  if (editing !== null) populateThinkingEffortOptions();
   if (window.ClawSelect) window.ClawSelect.enhanceAll(host);
   if (editing !== null) {
     const protocolSelect = document.getElementById('settings-preset-provider');
@@ -636,7 +639,7 @@ window.onProviderChangeUpdateThinking = function() {
   select.dataset.provider = raw.startsWith('openai') ? 'openai' : 'anthropic';
   const selectedValue = select.value || '';
   select.dataset.current = selectedValue;
-  if (typeof window.populateThinkingEffortOptions === 'function') window.populateThinkingEffortOptions();
+  populateThinkingEffortOptions();
 };
 
 function syncBaseEndpointBadge() {
@@ -830,12 +833,12 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>' + (isZh ? '接口协议' : 'Protocol') + '</label>',
+    // 自定义模型仅提供 OpenAI / Anthropic 两族协议；OpenCode 与 OpenAI Auth
+    // (OAuth) 各有专门配置页，不在此提供（目录类预设编辑走静态"来源"分支）
     '<select class="settings-input" data-claw-select id="settings-preset-provider" data-action="modelSettings.onProtocolChange">',
     '<option value="anthropic"' + (dropdownVal === 'anthropic' ? ' selected' : '') + '>Anthropic</option>',
     '<option value="openai"' + (dropdownVal === 'openai' ? ' selected' : '') + '>OpenAI Chat</option>',
     '<option value="openai-responses"' + (dropdownVal === 'openai-responses' ? ' selected' : '') + '>OpenAI Responses</option>',
-    '<option value="opencode"' + (dropdownVal === 'opencode' ? ' selected' : '') + '>OpenCode</option>',
-    '<option value="openai-oauth"' + (dropdownVal === 'openai-oauth' ? ' selected' : '') + '>' + (isZh ? 'OpenAI Auth (OAuth 设备码登录)' : 'OpenAI Auth (OAuth Device Login)') + '</option>',
     '</select>',
     '</div>',
     '<div class="settings-field">',
