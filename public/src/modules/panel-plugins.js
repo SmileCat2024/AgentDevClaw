@@ -44,9 +44,24 @@
         when: { surfaces: ['chat'] },
         title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
         label: { zh: '源代码管理', en: 'Source Control' },
-        description: { zh: 'Git 状态与操作', en: 'Git status and actions' },
+        description: { zh: 'Git 状态与操作', en: 'Git status and operations' },
         icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="6" cy="6" r="2.6"></circle> <circle cx="6" cy="18" r="2.6"></circle> <circle cx="18" cy="8" r="2.6"></circle> <path d="M6 8.6v6.8"></path> <path d="M18 10.6c0 4-4.5 3.4-8 4.5"></path> </svg>',
         order: 30,
+      },
+    },
+    {
+      // Agentero 文献库（ADR-0044 P6 样本）：React 容器型面板，产物经
+      // npm run build:react-panels 生成（src/index.tsx → dist/index.js）。
+      // when 不限 surface：vault 配置与 agent 无关，任意界面可查文献。
+      id: 'agentero-library',
+      pluginId: 'agentero-library',
+      url: '/src/plugins/agentero-library/dist/index.js',
+      meta: {
+        title: () => currentLanguage === 'zh' ? '文献' : 'Library',
+        label: { zh: '文献', en: 'Library' },
+        description: { zh: 'Agentero 研究 vault 论文库（只读）', en: 'Agentero vault papers (read-only)' },
+        icon: '<svg width="18" height="18" viewBox="0 0 36 36" fill="none"> <rect x="8" y="7" width="20" height="22" rx="2" stroke="#8AB4F8" stroke-width="2"></rect> <path d="M13 14h10M13 19h10M13 24h6" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round"></path> </svg>',
+        order: 92,
       },
     },
   ];

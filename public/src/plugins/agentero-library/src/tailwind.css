@@ -1,0 +1,96 @@
+/* Agentero library panel is an independently designed Claw surface. */
+.agentero-library {
+  --al-surface: var(--panel-bg);
+  --al-raised: var(--input-card-bg);
+  --al-hover: var(--hover-bg);
+  --al-border: var(--border-color);
+  --al-text: var(--text-primary);
+  --al-secondary: var(--text-secondary);
+  --al-muted: var(--text-muted);
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--al-text);
+  background: var(--al-surface);
+  font-family: inherit;
+}
+.agentero-library *, .agentero-library *::before, .agentero-library *::after { box-sizing: border-box; }
+.agentero-library button, .agentero-library input, .agentero-library a { font: inherit; }
+.agentero-library-page { display: flex; flex-direction: column; padding: 24px; gap: 20px; }
+.agentero-library-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex:0 0 auto; }
+.agentero-kicker { display:block; color:var(--accent-text); font-size:11px; font-weight:600; letter-spacing:.04em; }
+.agentero-library-heading h1 { margin:5px 0 0; font-size:22px; line-height:1.25; font-weight:650; letter-spacing:-.02em; }
+.agentero-library-heading p { margin:6px 0 0; color:var(--al-secondary); font-size:12px; overflow-wrap:anywhere; }
+.agentero-icon-button { display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:1px solid var(--al-border); border-radius:10px; color:var(--al-secondary); background:var(--glass-bg); cursor:pointer; transition:background .15s,color .15s,border-color .15s; }
+.agentero-icon-button:hover { color:var(--al-text); background:var(--al-hover); border-color:color-mix(in srgb,var(--al-border),var(--al-text) 18%); }
+.agentero-icon-button:focus-visible,.agentero-paper-card:focus-visible,.agentero-search input:focus-visible,.agentero-secondary-button:focus-visible { outline:2px solid #6391ff; outline-offset:2px; }
+.agentero-icon-button:disabled { opacity:.5; cursor:default; }
+.agentero-library-toolbar { display:flex; align-items:center; gap:12px; flex:0 0 auto; }
+.agentero-search { display:flex; align-items:center; gap:10px; width:min(100%,560px); min-width:0; height:42px; padding:0 12px; color:var(--al-muted); border:1px solid var(--al-border); border-radius:10px; background:var(--input-card-bg); }
+.agentero-search:focus-within { border-color:color-mix(in srgb,#6391ff 65%,var(--al-border)); box-shadow:0 0 0 3px color-mix(in srgb,#6391ff 13%,transparent); }
+.agentero-search input { width:100%; min-width:0; height:100%; padding:0; border:0; outline:0; color:var(--al-text); background:transparent; font-size:13px; }
+.agentero-search input::placeholder { color:var(--al-muted); }
+.agentero-search input::-webkit-search-cancel-button { display:none; }
+.agentero-search button { display:flex; align-items:center; justify-content:center; width:26px; height:26px; flex:0 0 auto; border:0; border-radius:7px; color:var(--al-secondary); background:transparent; cursor:pointer; }
+.agentero-search button:hover { color:var(--al-text); background:var(--al-hover); }
+.agentero-result-count { margin-left:auto; color:var(--al-secondary); font-size:12px; white-space:nowrap; }
+.agentero-paper-list { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; gap:10px; overflow:auto; padding:2px 4px 8px 2px; scrollbar-width:thin; scrollbar-color:var(--scrollbar-thumb) transparent; }
+.agentero-paper-card { display:grid; grid-template-columns:34px minmax(0,1fr) auto; align-items:start; gap:14px; width:100%; min-width:0; padding:16px 18px; border:1px solid var(--al-border); border-radius:12px; text-align:left; color:var(--al-text); background:var(--glass-bg); cursor:pointer; transition:background .15s,border-color .15s,transform .15s; }
+.agentero-paper-card:hover { background:var(--al-hover); border-color:color-mix(in srgb,var(--al-border),var(--text-secondary) 25%); transform:translateY(-1px); }
+.agentero-paper-index { padding-top:2px; color:var(--accent-text); font-size:11px; font-variant-numeric:tabular-nums; }
+.agentero-paper-card-content { display:flex; flex-direction:column; min-width:0; gap:7px; }
+.agentero-paper-card-content strong { overflow:hidden; color:var(--al-text); font-size:14px; font-weight:600; line-height:1.45; text-overflow:ellipsis; }
+.agentero-paper-card-authors { overflow:hidden; color:var(--al-secondary); font-size:12px; line-height:1.5; text-overflow:ellipsis; white-space:nowrap; }
+.agentero-paper-card-tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:2px; }
+.agentero-paper-card-tags i,.agentero-paper-tags span { display:inline-flex; max-width:100%; overflow:hidden; padding:3px 8px; border:1px solid color-mix(in srgb,var(--accent-text) 16%,var(--al-border)); border-radius:999px; color:var(--accent-text); background:var(--accent-bg); font-size:10px; font-style:normal; line-height:1.3; text-overflow:ellipsis; white-space:nowrap; }
+.agentero-paper-card-year { padding:3px 0 0 8px; color:var(--al-secondary); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.agentero-library-empty { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:12px; min-height:180px; color:var(--al-secondary); font-size:13px; text-align:center; }
+.agentero-secondary-button { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:34px; padding:0 12px; border:1px solid var(--al-border); border-radius:9px; color:var(--al-text); background:var(--glass-bg); font-size:12px; text-decoration:none; cursor:pointer; }
+.agentero-secondary-button:hover { background:var(--al-hover); }
+.agentero-spin { animation:agentero-spin 1s linear infinite; }
+@keyframes agentero-spin { to { transform:rotate(360deg); } }
+
+ .agentero-library.agentero-reader-host { position:fixed; inset:0; z-index:5000; width:100vw; height:100dvh; }
+.agentero-reader-topbar { display:flex; flex:0 0 auto; align-items:center; gap:14px; min-height:70px; padding:12px 24px; border-bottom:1px solid var(--border-color); background:var(--glass-bg); -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(1.2); backdrop-filter:blur(var(--glass-blur)) saturate(1.2); }
+.agentero-reader-heading { flex:1; min-width:0; }
+.agentero-reader-heading h1 { overflow:hidden; margin:4px 0 0; color:var(--text-primary); font-size:16px; font-weight:600; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
+.agentero-reader-close { display:none; }
+.agentero-reader-main { display:grid; grid-template-columns:minmax(250px,330px) minmax(0,1fr); flex:1 1 auto; min-width:0; min-height:0; gap:20px; padding:20px 24px 24px; }
+.agentero-paper-info { display:flex; flex-direction:column; align-items:flex-start; min-width:0; min-height:0; gap:16px; overflow:auto; padding:20px; border:1px solid var(--border-color); border-radius:14px; background:var(--glass-bg); }
+.agentero-paper-meta { color:var(--text-secondary); font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
+.agentero-paper-meta span { padding:0 6px; color:var(--text-muted); }
+.agentero-paper-identifiers { display:flex; flex-direction:column; gap:6px; color:var(--accent-text); font-size:12px; overflow-wrap:anywhere; }
+.agentero-paper-info h2 { margin:4px 0 -8px; color:var(--text-primary); font-size:13px; font-weight:600; }
+.agentero-paper-info p { margin:0; color:var(--text-secondary); font-size:13px; line-height:1.8; white-space:pre-wrap; overflow-wrap:anywhere; }
+.agentero-paper-tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:auto; padding-top:6px; }
+.agentero-pdf-stage { display:flex; min-width:0; min-height:0; overflow:hidden; border:1px solid var(--border-color); border-radius:14px; background:var(--panel-bg); box-shadow:0 12px 36px var(--shadow-color); }
+.agentero-pdf-stage iframe { display:block; width:100%; height:100%; min-width:0; min-height:0; border:0; background:var(--panel-bg); }
+.agentero-reader-message { display:flex; flex:1; align-items:center; justify-content:center; min-width:0; padding:24px; color:var(--text-secondary); font-size:13px; text-align:center; }
+.agentero-reader-error { color:var(--error-color); }
+
+@media (max-width:760px) {
+  .agentero-library-page { padding:18px; gap:16px; }
+  .agentero-paper-card { grid-template-columns:24px minmax(0,1fr) auto; gap:10px; padding:14px; }
+  .agentero-reader-topbar { min-height:62px; gap:10px; padding:10px 14px; }
+  .agentero-reader-heading h1 { font-size:14px; }
+  .agentero-reader-main { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(110px,30dvh) minmax(0,1fr); gap:12px; padding:12px; }
+  .agentero-paper-info { gap:10px; padding:14px; }
+  .agentero-paper-info p { font-size:12px; line-height:1.65; }
+  .agentero-paper-tags { margin-top:0; }
+  .agentero-pdf-stage { border-radius:10px; }
+  .agentero-reader-close { display:inline-flex; }
+  .agentero-reader-topbar > .agentero-secondary-button { display:none; }
+}
+@media (max-width:430px) {
+  .agentero-library-page { padding:14px; gap:14px; }
+  .agentero-library-heading h1 { font-size:20px; }
+  .agentero-search { height:40px; }
+  .agentero-paper-card { grid-template-columns:22px minmax(0,1fr) auto; gap:8px; padding:12px; }
+  .agentero-paper-card-content strong { font-size:13px; }
+  .agentero-result-count { font-size:11px; }
+  .agentero-reader-main { grid-template-rows:minmax(96px,27dvh) minmax(0,1fr); gap:10px; padding:10px; }
+  .agentero-paper-info { gap:8px; padding:12px; }
+}

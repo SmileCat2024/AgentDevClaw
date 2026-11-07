@@ -6,6 +6,7 @@
   "description": "A visual, extensible AI agent workspace powered by AgentDev.",
   "scripts": {
     "build:local-features": "tsc -p local-features/tsconfig.json && node scripts/copy-local-feature-skills.mjs",
+    "build:react-panels": "node scripts/build-react-panels.mjs",
     "check:agentdev": "node scripts/check-agentdev-local.mjs",
     "build:features": "node scripts/build-features.mjs",
     "pack:features": "node scripts/pack-features.mjs",
@@ -81,9 +82,22 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tailwindcss/cli": "^4.3.5",
     "@types/node": "^20.11.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "esbuild": "^0.28.2",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",
+    "lucide-react": "^1.70.0",
+    "radix-ui": "^1.8.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.5",
     "typescript-eslint": "^8.65.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }

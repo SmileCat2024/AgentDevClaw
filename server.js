@@ -128,6 +128,7 @@ import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { registerThreadHostAgents, isThreadHostSession } from './server/thread-control/host-agents.js';
 import { setupMemoAppRoutes } from './server/routes/memo-app.js';
+import { setupAgenteroRoutes } from './server/routes/agentero.js';
 import { setupIMOperatorThreadRoutes } from './server/routes/im-operator-thread.js';
 import { readProjectIMWorkspaceConfig, withIMWorkspaceConfig } from './server/routes/im-config.js';
 import { createThreadLifecycleService } from './server/thread-control/thread-lifecycle.js';
@@ -851,6 +852,9 @@ setupAcpRoutes(app, express, {
   requirePrebuiltSessionRecord,
   readSessionSnapshotForContinuity,
 });
+
+// ── Agentero 数据面（只读，ADR-0044 P6 对接样本）──
+setupAgenteroRoutes(app);
 
 // ── Memo APP 对话事务（单活动线程 + 新建换代归档，ADR-0024 APP 业务状态）──
 const memoAppController = setupMemoAppRoutes(app, express, {

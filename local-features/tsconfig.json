@@ -58,6 +58,8 @@
     "./memo-reminders/src/**/*.ts",
     "./memo-reminders/test/**/*.ts",
     "./model-selection/src/**/*.ts",
-    "./model-selection/test/**/*.ts"
+    "./model-selection/test/**/*.ts",
+    "./agentero/src/**/*.ts",
+    "./agentero/test/**/*.ts"
   ]
 }

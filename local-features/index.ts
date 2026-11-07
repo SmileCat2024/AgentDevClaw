@@ -51,3 +51,10 @@ export {
   ModelSelectionFeature,
   ModelSelectionFeatureInner,
 } from './model-selection/src/index.js';
+export {
+  AgenteroFeature,
+  AgenteroCliError,
+  runAgenteroCli,
+  spawnAgenteroCli,
+} from './agentero/src/index.js';
+export type { AgenteroCliExecutor } from './agentero/src/index.js';

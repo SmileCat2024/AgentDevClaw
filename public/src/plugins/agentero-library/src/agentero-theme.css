@@ -1,0 +1,267 @@
+/* Agentero surface tokens for the dsh plugin. Utilities inherit these variables. */
+
+/*
+ * The host does not provide Tailwind Preflight. Keep the required control
+ * defaults inside plugin surfaces (including portals), below utility styles.
+ * Unlayered resets would override border/background/focus utilities.
+ */
+@layer base {
+	.agentero-surface,
+	.agentero-surface *,
+	.agentero-surface::before,
+	.agentero-surface::after,
+	.agentero-surface *::before,
+	.agentero-surface *::after {
+		box-sizing: border-box;
+		border: 0 solid;
+	}
+
+	.agentero-surface button,
+	.agentero-surface input,
+	.agentero-surface select,
+	.agentero-surface textarea,
+	.agentero-surface fieldset {
+		margin: 0;
+		padding: 0;
+		font: inherit;
+		letter-spacing: inherit;
+		color: inherit;
+		background-color: transparent;
+	}
+
+	/*
+	 * Surface defaults live in the base layer so `text-*` / `font-*` utilities
+	 * still win. Unlayered here, `color: var(--foreground)` would beat
+	 * `text-background` on portalled tooltips and paint the label in the same
+	 * ink as its own background.
+	 */
+	.agentero-surface {
+		color: var(--foreground);
+		font-family: var(--agentero-font-sans);
+		font-size: 0.8125rem;
+		line-height: 1.3846;
+	}
+}
+
+/*
+ * `dark:` utilities follow the same signal as the token blocks below: the
+ * harness toggles `data-ds-dark-theme` on <body>. Tailwind's default dark
+ * variant is `prefers-color-scheme`, which ignores the in-app theme and would
+ * flip rings/borders against the wrong background.
+ */
+@custom-variant dark (&:where(body[data-ds-dark-theme] *));
+
+:root {
+	/*
+	 * Default chrome = platform UI sans (SF Pro / Segoe UI + CJK). Geist stays
+	 * available via Appearance → Fonts → Geist. Keep rem root at 16×uiScale so
+	 * Windows 125% DPR does not shrink spacing tokens with the type scale.
+	 */
+	--agentero-font-sans:
+		system-ui, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto,
+		"Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB",
+		"Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+	--agentero-font-heading: var(--agentero-font-sans);
+	--agentero-font-mono:
+		ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", Consolas,
+		"Liberation Mono", "Courier New", monospace;
+}
+
+@theme inline {
+	--font-heading: var(--agentero-font-heading);
+	--font-sans: var(--agentero-font-sans);
+	--font-mono: var(--agentero-font-mono);
+	/*
+	 * Apple UI type scale at 16px rem root (Windows-safe rem, not px).
+	 * Hierarchy is size + leading + tracking as a set (WWDC typography):
+	 *   caption 11 → slight +tracking, open leading
+	 *   callout 12 → slight +tracking
+	 *   body    13 → tracking ~0, comfortable leading
+	 *   title3  15 → −tracking, tighter leading
+	 *   title2  17 → more −tracking, tight leading
+	 * Weight stays on utilities (medium/semibold) — do not bake weight into
+	 * size tokens or every `text-base` cell becomes bold.
+	 */
+	--text-caption: 0.6875rem;
+	--text-caption--line-height: 1.35;
+	--text-caption--letter-spacing: 0.012em;
+	--text-xs: 0.75rem;
+	--text-xs--line-height: 1.35;
+	--text-xs--letter-spacing: 0.006em;
+	--text-sm: 0.8125rem;
+	--text-sm--line-height: 1.3846; /* ≈18/13 — Body, was 1.25 (too dense) */
+	--text-sm--letter-spacing: 0em;
+	--text-base: 0.9375rem;
+	--text-base--line-height: 1.25;
+	--text-base--letter-spacing: -0.012em;
+	--text-lg: 1.0625rem; /* 17 — Title 2 */
+	--text-lg--line-height: 1.2;
+	--text-lg--letter-spacing: -0.018em;
+	/* Display tracking: tighten large type; body stays near 0. */
+	--tracking-tighter: -0.04em;
+	--tracking-tight: -0.02em;
+	--tracking-normal: 0em;
+	--tracking-wide: 0.012em;
+	--tracking-wider: 0.03em;
+	--tracking-widest: 0.08em;
+	/* Emphasize with medium/semibold; avoid bold 700 in chrome. */
+	--font-weight-medium: 510;
+	--font-weight-semibold: 590;
+	--font-weight-bold: 680;
+	--color-sidebar-ring: var(--sidebar-ring);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar: var(--sidebar);
+	--color-chart-5: var(--chart-5);
+	--color-chart-4: var(--chart-4);
+	--color-chart-3: var(--chart-3);
+	--color-chart-2: var(--chart-2);
+	--color-chart-1: var(--chart-1);
+	--color-ring: var(--ring);
+	--color-input: var(--input);
+	--color-border: var(--border);
+	--color-destructive: var(--destructive);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-accent: var(--accent);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-muted: var(--muted);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-secondary: var(--secondary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-primary: var(--primary);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-popover: var(--popover);
+	--color-card-foreground: var(--card-foreground);
+	--color-card: var(--card);
+	--color-foreground: var(--foreground);
+	--color-background: var(--background);
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) * 1.4);
+	--radius-2xl: calc(var(--radius) * 1.8);
+	--radius-3xl: calc(var(--radius) * 2.2);
+	--radius-4xl: calc(var(--radius) * 2.6);
+	--color-brand: var(--brand);
+	--color-highlight: var(--highlight);
+	/*
+	 * Built-in neutral ink. tweakcn themes restyle --primary / --ring; image
+	 * selection rings and PDF visual-region frames read these copies instead.
+	 */
+	--color-default-primary: var(--default-primary);
+	--color-default-ring: var(--default-ring);
+}
+
+.agentero-surface {
+	--background: oklch(0.995 0.002 260);
+	--foreground: oklch(0.21 0.008 260);
+	--card: oklch(1 0.001 260);
+	--card-foreground: oklch(0.21 0.008 260);
+	--popover: oklch(1 0.001 260);
+	--popover-foreground: oklch(0.21 0.008 260);
+	--primary: oklch(0.25 0.012 260);
+	--primary-foreground: oklch(0.99 0.001 260);
+	--default-primary: oklch(0.25 0.012 260);
+	--default-ring: oklch(0.62 0.02 260);
+	--secondary: oklch(0.96 0.006 260);
+	--secondary-foreground: oklch(0.25 0.012 260);
+	--muted: oklch(0.962 0.006 260);
+	--muted-foreground: oklch(0.48 0.014 260);
+	--accent: oklch(0.952 0.008 260);
+	--accent-foreground: oklch(0.25 0.012 260);
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: oklch(0.905 0.008 260);
+	--input: oklch(0.905 0.008 260);
+	--ring: oklch(0.62 0.02 260);
+	--chart-1: oklch(0.87 0.01 260);
+	--chart-2: oklch(0.556 0.014 260);
+	--chart-3: oklch(0.439 0.014 260);
+	--chart-4: oklch(0.371 0.012 260);
+	--chart-5: oklch(0.269 0.01 260);
+	/* 8px base — denser macOS control corners than 10px. */
+	--radius: 0.5rem;
+	--sidebar: oklch(0.965 0.007 260);
+	--sidebar-foreground: oklch(0.21 0.008 260);
+	--sidebar-primary: oklch(0.25 0.012 260);
+	--sidebar-primary-foreground: oklch(0.99 0.001 260);
+	--sidebar-accent: oklch(0.935 0.01 260);
+	--sidebar-accent-foreground: oklch(0.25 0.012 260);
+	--sidebar-border: oklch(0.9 0.008 260);
+	--sidebar-ring: oklch(0.62 0.02 260);
+	--brand: oklch(0.623 0.214 259.815);
+	--highlight: oklch(0.852 0.199 91.936);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  color-scheme: light;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+/*
+ * Dark palette. The harness paints its theme on <body data-ds-dark-theme>;
+ * the standalone app used html.dark / html[data-theme='dark']. Match both so
+ * the surface never keeps light ink over a dark host background.
+ */
+body[data-theme='dark'] .agentero-surface,
+body[data-ds-dark-theme] .agentero-surface,
+html.dark .agentero-surface,
+html[data-theme='dark'] .agentero-surface {
+	--background: oklch(0.155 0.006 260);
+	--foreground: oklch(0.98 0.004 260);
+	--card: oklch(0.215 0.008 260);
+	--card-foreground: oklch(0.98 0.004 260);
+	--popover: oklch(0.215 0.008 260);
+	--popover-foreground: oklch(0.98 0.004 260);
+	--primary: oklch(0.94 0.006 260);
+	--primary-foreground: oklch(0.22 0.01 260);
+	--default-primary: oklch(0.94 0.006 260);
+	--default-ring: oklch(0.58 0.02 260);
+	--secondary: oklch(0.255 0.008 260);
+	--secondary-foreground: oklch(0.98 0.004 260);
+	--muted: oklch(0.255 0.008 260);
+	--muted-foreground: oklch(0.72 0.012 260);
+	--accent: oklch(0.27 0.01 260);
+	--accent-foreground: oklch(0.98 0.004 260);
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: oklch(0.98 0.004 260 / 12%);
+	--input: oklch(0.98 0.004 260 / 16%);
+	--ring: oklch(0.58 0.02 260);
+	--chart-1: oklch(0.87 0.01 260);
+	--chart-2: oklch(0.556 0.014 260);
+	--chart-3: oklch(0.439 0.014 260);
+	--chart-4: oklch(0.371 0.012 260);
+	--chart-5: oklch(0.269 0.01 260);
+	--sidebar: oklch(0.18 0.007 260);
+	--sidebar-foreground: oklch(0.98 0.004 260);
+	--sidebar-primary: oklch(0.62 0.18 255);
+	--sidebar-primary-foreground: oklch(0.99 0.001 260);
+	--sidebar-accent: oklch(0.27 0.01 260);
+	--sidebar-accent-foreground: oklch(0.98 0.004 260);
+	--sidebar-border: oklch(0.98 0.004 260 / 12%);
+	--sidebar-ring: oklch(0.58 0.02 260);
+	--brand: oklch(0.707 0.165 254.624);
+	--highlight: oklch(0.852 0.199 91.936);
+	color-scheme: dark;
+}
+

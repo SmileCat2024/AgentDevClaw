@@ -60,6 +60,7 @@ try {
   // 两种形态都必须构建的 Claw 本地部分
   runNpm(['run', 'build:local-features'], root, 'local-features 构建');
   runNpm(['run', 'build:features'], root, 'features 构建');
+  runNpm(['run', 'build:react-panels'], root, 'React 面板插件构建');
 
   console.log('\n[build] 全部构建完成。可以直接 npm start。');
 } catch (err) {
