@@ -4,7 +4,8 @@
  * 从 debug-panels.js 拆出。必须在所有 debug-*.js 子模块之后加载。
  * 包含：
  *   - renderFeaturePanel（经 ClawPanels 注册表调用各面板 render；
- *     mountBody 型容器面板经挂载/卸载通道，不走 innerHTML）
+ *     mountBody 型容器面板经挂载/卸载通道，不走 innerHTML；
+ *     stub 型懒面板显示装载态并触发按需装载，ADR-0044 P3）
  *   - toggleFeaturePanel
  *   - syncRailButtons（rail 按钮注册表派生，ADR-0044 P2b）
  *
@@ -48,6 +49,7 @@ function syncPanelBodyHtmlCache() {
   const panelId = activeFeaturePanel;
   const panel = panelId && window.ClawPanels.get(panelId);
   if (!panel || featurePanelBody.dataset.panel !== panelId) return;
+  if (panel.stub) return; // 懒面板无 render 可求值，签名缓存不适用
   if (typeof panel.mountBody === 'function') return; // 容器型面板不参与签名缓存
   try {
     _panelBodyHtmlCache.set(panelId, panel.render());
@@ -175,6 +177,26 @@ function renderFeaturePanel(options = {}) {
 
   const commitPanelBody = () => {
     if (renderVersion !== featurePanelRenderVersion || activeFeaturePanel !== panelId) {
+      return;
+    }
+
+    // ── 懒面板（ADR-0044 P3）：stub 占位，真实现随插件按需装载 ──
+    // 加载中显示占位并发起 ensurePlugin；失败显式错误态（不自动重试，
+    // 恢复靠刷新页面——与 APP 插件装载失败同口径）。装载落定后
+    // onPluginLoadSettled 订阅触发重渲染，real 已替换 stub，走正常路径。
+    if (panel.stub) {
+      unmountContainerPanel('stub'); // 防御：stub 面板不应有挂载中的容器
+      const loadState = window.ClawHost && window.ClawHost.getPluginLoadState(panel.stub.pluginId);
+      if (loadState === 'failed') {
+        featurePanelBody.innerHTML =
+          '<div class="feature-panel-empty"><div>' + escapeHtml(t('panel_lazy_failed')) + '</div></div>';
+        featurePanel.classList.add('body-ready');
+        return;
+      }
+      featurePanelBody.innerHTML =
+        '<div class="feature-panel-empty"><div>' + escapeHtml(t('panel_lazy_loading')) + '</div></div>';
+      featurePanel.classList.add('body-ready');
+      if (window.ClawHost) window.ClawHost.ensurePlugin(panel.stub.pluginId, panel.stub.url);
       return;
     }
 
@@ -436,6 +458,21 @@ if (window.ClawHost && typeof window.ClawHost.setPanelTeardownHook === 'function
     if (activeFeaturePanel !== panelId) return;
     activeFeaturePanel = null;
     renderFeaturePanel();
+  });
+}
+
+// 懒面板装载落定联动（ADR-0044 P3）：打开中的面板若由刚落定的插件提供，
+// 重渲染一次——成功落定时 stub 已被 real 替换（real.owner === pluginId），
+// 切真面板内容；失败落定时 stub 仍在（stub.pluginId === pluginId），进错误态。
+// 其他插件的装载落定与当前面板无关，不触发。
+if (window.ClawHost && typeof window.ClawHost.onPluginLoadSettled === 'function') {
+  window.ClawHost.onPluginLoadSettled((pluginId) => {
+    if (!activeFeaturePanel) return;
+    const panel = window.ClawPanels.get(activeFeaturePanel);
+    if (!panel) return;
+    if ((panel.stub && panel.stub.pluginId === pluginId) || panel.owner === pluginId) {
+      renderFeaturePanel();
+    }
   });
 }
 

@@ -136,6 +136,11 @@
   // 不改变注册方行为；旧入口 window.ClawPanels 继续可用。
   const panels = new Map();
 
+  // 懒面板声明（ADR-0044 P3）：清单侧先注册元数据占位（stub），rail 按钮与
+  // 自定义清单立即可用；真实现（render/mountBody）随插件模块按需装载后
+  // 经 registerPanel 替换 stub。插件卸载时 stub 恢复，可再次装载。
+  const panelStubs = new Map(); // panelId -> { meta, pluginId, url }
+
   function normalizeValues(values) {
     if (values == null) return null;
     return (Array.isArray(values) ? values : [values]).map((value) => String(value));
@@ -154,7 +159,13 @@
         || (typeof panel.render !== 'function' && typeof panel.mountBody !== 'function')) {
       throw new TypeError(`Panel "${key}" must provide a render or mountBody function`);
     }
-    if (panels.has(key)) throw new Error(`Panel "${key}" is already registered`);
+    const existing = panels.get(key);
+    if (existing) {
+      // stub → real 是唯一的受控替换路径：懒声明占位等到了它的实现。
+      // real → real 仍是冲突（两个插件抢同一面板）。
+      if (!existing.stub) throw new Error(`Panel "${key}" is already registered`);
+      if (!panelStubs.has(key)) throw new Error(`Panel "${key}" has no lazy declaration`);
+    }
     const when = panel.when || {};
     panels.set(key, {
       ...panel,
@@ -163,6 +174,40 @@
       when: { agentIds: normalizeValues(when.agentIds), surfaces: normalizeValues(when.surfaces) },
     });
     return panels.get(key);
+  }
+
+  /**
+   * 懒面板声明：清单侧启动即调用，注册元数据占位（stub）。stub 不带
+   * render/mountBody，按钮与显隐过滤照常工作；打开时由编排层触发
+   * ensurePlugin 装载真实现，registerPanel 把 stub 替换为 real。
+   * loader = { pluginId, url } 指明实现所在的插件模块。
+   */
+  function declarePanel(id, meta, loader) {
+    const key = String(id || '').trim();
+    if (!key) throw new TypeError('Panel ID is required');
+    if (!loader || !loader.pluginId || !loader.url) {
+      throw new TypeError(`Panel "${key}" lazy declaration needs { pluginId, url }`);
+    }
+    if (panels.has(key)) throw new Error(`Panel "${key}" is already registered`);
+    const when = (meta && meta.when) || {};
+    const stub = {
+      ...(meta || {}),
+      id: key,
+      owner: null,
+      stub: { pluginId: String(loader.pluginId), url: loader.url },
+      when: { agentIds: normalizeValues(when.agentIds), surfaces: normalizeValues(when.surfaces) },
+    };
+    panelStubs.set(key, { meta: stub, pluginId: stub.stub.pluginId, url: stub.stub.url });
+    panels.set(key, stub);
+    return stub;
+  }
+
+  /** real 摘除后恢复对应 stub（若该面板有懒声明），面板可再次按需装载。 */
+  function restorePanelStub(key) {
+    const stubEntry = panelStubs.get(key);
+    if (!stubEntry) return false;
+    if (!panels.has(key)) panels.set(key, stubEntry.meta);
+    return true;
   }
 
   /**
@@ -189,6 +234,8 @@
     const key = String(id || '').trim();
     if (!panels.has(key)) return false;
     panels.delete(key);
+    // 懒声明面板摘除 real 后恢复 stub 占位（按钮不消失，可再次装载）
+    restorePanelStub(key);
     teardownPanel(key);
     return true;
   }
@@ -201,7 +248,10 @@
         removed.push(key);
       }
     }
-    for (const key of removed) teardownPanel(key);
+    for (const key of removed) {
+      restorePanelStub(key);
+      teardownPanel(key);
+    }
     return removed.length;
   }
 
@@ -382,11 +432,13 @@
     loadState.set(key, 'loading');
     loadPlugin(key, url)
       .then(() => {
-        loadState.set(key, 'loaded');
+        // 落定时插件可能已被显式卸载（loadState 被清空）：过期落定不得回写，
+        // 否则恢复的 stub 会被 failed/loaded 态拦截，懒面板卡死在占位。
+        if (loadState.get(key) === 'loading') loadState.set(key, 'loaded');
         notifyLoadSettled(key);
       })
       .catch((err) => {
-        loadState.set(key, 'failed');
+        if (loadState.get(key) === 'loading') loadState.set(key, 'failed');
         console.error('[claw-host] 插件装载失败：', key, url, err);
         notifyLoadSettled(key);
       });
@@ -438,6 +490,9 @@
     unregisterSlotsOf(entry.owner);
     await runEffectsOf(entry.owner);
     loaded.delete(key);
+    // 卸载后允许渲染路径重新拉起（懒面板 stub 恢复后再点开走 ensurePlugin）。
+    // loadState 只拦幂等渲染触发，不影响 loadPlugin 的显式重装载路径。
+    loadState.delete(key);
     return true;
   }
 
@@ -459,6 +514,7 @@
     },
     panels: {
       register: registerPanel,
+      declare: declarePanel,
       unregister: unregisterPanel,
       get: (id) => panels.get(String(id)),
       getAll: () => Array.from(panels.values()),

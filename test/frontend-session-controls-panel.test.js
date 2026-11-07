@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
 
 function panelSandbox(overrides = {}) {
   const fetchCalls = [];
@@ -49,7 +50,7 @@ function panelSandbox(overrides = {}) {
   });
   ctx.window.setInterval = () => 0;
   ctx.loadSource('public/src/modules/claw-host.js');
-  ctx.loadSource('public/src/modules/session-controls-panel.js');
+  loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/session-controls.js');
   return { ctx, fetchCalls };
 }
 
@@ -57,8 +58,8 @@ describe('SessionControlsPanel', () => {
   it('reads authoritative session status when the panel is opened', async () => {
     const { ctx, fetchCalls } = panelSandbox();
 
-    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
+    const html = ctx.run('window.__pluginModule.render()');
 
     const urls = fetchCalls.map((c) => c.url);
     assert.ok(urls.some((u) => /^\/protoclaw\/force_continuation_status\?/.test(u)));
@@ -94,8 +95,8 @@ describe('SessionControlsPanel', () => {
       },
     });
 
-    await ctx.run('window.SessionControlsPanel.updateTrigger("apiErrorRetry", true)');
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    await ctx.run('window.__pluginModule.updateTrigger("apiErrorRetry", true)');
+    const html = ctx.run('window.__pluginModule.render()');
 
     const fcCall = calls.find((c) => c.url === '/protoclaw/force_continuation_control');
     assert.ok(fcCall);
@@ -130,8 +131,8 @@ describe('SessionControlsPanel', () => {
       },
     });
 
-    await ctx.run('window.SessionControlsPanel.updateTrigger("outputTruncation", false)');
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    await ctx.run('window.__pluginModule.updateTrigger("outputTruncation", false)');
+    const html = ctx.run('window.__pluginModule.render()');
 
     const fcCall = calls.find((c) => c.url === '/protoclaw/force_continuation_control');
     assert.deepEqual(JSON.parse(fcCall.options.body), {
@@ -162,8 +163,8 @@ describe('SessionControlsPanel', () => {
       },
     });
 
-    await ctx.run('window.SessionControlsPanel.updateLimit(8)');
-    let html = ctx.run('window.SessionControlsPanel.render()');
+    await ctx.run('window.__pluginModule.updateLimit(8)');
+    let html = ctx.run('window.__pluginModule.render()');
     const fcCall = calls.find((c) => c.url === '/protoclaw/force_continuation_control');
     assert.deepEqual(JSON.parse(fcCall.options.body), {
       agentId: 'programming-helper',
@@ -173,10 +174,10 @@ describe('SessionControlsPanel', () => {
     assert.match(html, /data-force-continuation-limit[^>]*value="8"/);
 
     // Out-of-range input is rejected client-side without a request.
-    await ctx.run('window.SessionControlsPanel.updateLimit(42)');
-    await ctx.run('window.SessionControlsPanel.updateLimit("NaN")');
+    await ctx.run('window.__pluginModule.updateLimit(42)');
+    await ctx.run('window.__pluginModule.updateLimit("NaN")');
     assert.equal(calls.filter((c) => c.url === '/protoclaw/force_continuation_control').length, 1);
-    html = ctx.run('window.SessionControlsPanel.render()');
+    html = ctx.run('window.__pluginModule.render()');
     assert.match(html, /data-force-continuation-limit[^>]*value="8"/);
   });
 
@@ -190,12 +191,12 @@ describe('SessionControlsPanel', () => {
         hooks: [],
       },
     });
-    const first = ctx.run('window.SessionControlsPanel.render()');
+    const first = ctx.run('window.__pluginModule.render()');
     // 名单里没有受控 feature：先探测确证「确实没挂载」，再下结论
     assert.match(first, /正在读取本会话的控制能力/);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    const html = ctx.run('window.__pluginModule.render()');
 
     // 不可用时返回与 hooks 面板一致的通用空态（无开关控件）
     assert.match(html, /feature-panel-empty/);
@@ -213,7 +214,7 @@ describe('SessionControlsPanel', () => {
         hooks: [],
       },
     });
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    const html = ctx.run('window.__pluginModule.render()');
 
     assert.match(html, /data-force-continuation-trigger="outputTruncation"/);
     // 迁移回归：context-guard 的开关已迁至上边栏 badge，面板不再渲染任何 guard 控件
@@ -236,7 +237,7 @@ describe('SessionControlsPanel', () => {
         hooks: [],
       },
     });
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    const html = ctx.run('window.__pluginModule.render()');
 
     assert.match(html, /data-force-continuation-trigger="outputTruncation"/);
     assert.doesNotMatch(html, /data-rotation-enabled/);
@@ -265,12 +266,12 @@ describe('SessionControlsPanel', () => {
       },
     });
 
-    const first = ctx.run('window.SessionControlsPanel.render()');
+    const first = ctx.run('window.__pluginModule.render()');
     // 快照未决：先给等待态，不误判为「工作空间不支持」
     assert.match(first, /正在读取本会话的控制能力/);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    const html = ctx.run('window.__pluginModule.render()');
 
     assert.match(html, /data-force-continuation-trigger="outputTruncation"/);
     assert.doesNotMatch(html, /data-guard-armed/);
@@ -283,8 +284,8 @@ describe('SessionControlsPanel', () => {
       currentRuntimeAgentId: 'runtime-studio',
     });
 
-    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
+    const html = ctx.run('window.__pluginModule.render()');
 
     assert.match(fetchCalls[0].url, /agentId=agent-studio/);
     assert.match(html, /data-force-continuation-trigger="outputTruncation"/);
@@ -331,15 +332,15 @@ describe('SessionControlsPanel output style (stylized-output)', () => {
     });
     ctx.window.setInterval = () => 0;
     ctx.loadSource('public/src/modules/claw-host.js');
-    ctx.loadSource('public/src/modules/session-controls-panel.js');
+    loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/session-controls.js');
     return { ctx, invokeCalls };
   }
 
   it('renders the style trigger from stylized-output.configure status', async () => {
     const { ctx, invokeCalls } = stylePanelSandbox();
 
-    await ctx.run('window.SessionControlsPanel.refreshStyleStatus({ renderWhenDone: false })');
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    await ctx.run('window.__pluginModule.refreshStyleStatus({ renderWhenDone: false })');
+    const html = ctx.run('window.__pluginModule.render()');
 
     assert.match(html, /session-controls-style-row/);
     assert.match(html, /data-style-menu/);
@@ -359,7 +360,7 @@ describe('SessionControlsPanel output style (stylized-output)', () => {
   it('switches the active style through capability_invoke', async () => {
     const { ctx, invokeCalls } = stylePanelSandbox();
 
-    await ctx.run('window.SessionControlsPanel.updateStyleSelection("正式汇报")');
+    await ctx.run('window.__pluginModule.updateStyleSelection("正式汇报")');
 
     const writes = invokeCalls.filter(
       (c) => String(c.url).includes('capability_invoke') && c.options && c.options.method === 'POST',
@@ -373,7 +374,7 @@ describe('SessionControlsPanel output style (stylized-output)', () => {
   it('clearing the selection posts styleName null', async () => {
     const { ctx, invokeCalls } = stylePanelSandbox();
 
-    await ctx.run('window.SessionControlsPanel.updateStyleSelection("")');
+    await ctx.run('window.__pluginModule.updateStyleSelection("")');
 
     const writes = invokeCalls.filter(
       (c) => String(c.url).includes('capability_invoke') && c.options && c.options.method === 'POST',
@@ -437,15 +438,15 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
     ctx.window.setInterval = () => 0;
     ctx.loadSource('public/src/modules/context-guard-toggle.js');
     ctx.loadSource('public/src/modules/claw-host.js');
-    ctx.loadSource('public/src/modules/session-controls-panel.js');
+    loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/session-controls.js');
     ctx.run(`window.ContextGuardToggle.applyStatus({ status: ${JSON.stringify(GUARD_STATUS)} }, "runtime-a")`);
     return { ctx, calls, guardState };
   }
 
   it('renders the segmented selector first with the current strategy active', async () => {
     const { ctx } = guardPanelSandbox();
-    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
+    const html = ctx.run('window.__pluginModule.render()');
     const selectorAt = html.indexOf('data-guard-strategy');
     assert.ok(selectorAt > -1, 'strategy selector rendered');
     assert.ok(selectorAt < html.indexOf('API 重试'), 'selector sits at the top of the panel');
@@ -467,17 +468,17 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
   it('hides the selector when rotation is not allowed for the assembly', async () => {
     const { ctx } = guardPanelSandbox();
     ctx.run('window.ContextGuardToggle.applyStatus({ status: { mode: "interrupt", strategy: "adaptive", allowRotation: false, trip: null, thresholdTokens: 160000 } }, "runtime-a")');
-    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
+    const html = ctx.run('window.__pluginModule.render()');
     assert.doesNotMatch(html, /data-guard-strategy/);
     assert.match(html, /API 重试/, 'the rest of the panel still renders');
   });
 
   it('posts the chosen strategy through context_guard_control and syncs the badge cache', async () => {
     const { ctx, calls } = guardPanelSandbox();
-    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
+    await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
 
-    await ctx.run('window.SessionControlsPanel.updateGuardStrategy("summary")');
+    await ctx.run('window.__pluginModule.updateGuardStrategy("summary")');
 
     const write = calls.find((c) => c.url === '/protoclaw/context_guard_control');
     assert.ok(write, 'guard control write posted');
@@ -489,7 +490,7 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
     });
     // 应答回填 badge 缓存（策略选择器与 badge 同源）：detail 反映新策略
     assert.equal(ctx.run('window.ContextGuardToggle.getDetail()').strategy, 'summary');
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    const html = ctx.run('window.__pluginModule.render()');
     assert.match(html, /data-guard-strategy="summary"[^>]*aria-pressed="true"/);
   });
 
@@ -509,11 +510,11 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
         return { ok: true, status: 200, json: async () => ({ ok: true }) };
       },
     });
-    await ctx.run('window.SessionControlsPanel.refreshStatus({ renderWhenDone: false })');
+    await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
 
-    await ctx.run('window.SessionControlsPanel.updateGuardStrategy("trim")');
+    await ctx.run('window.__pluginModule.updateGuardStrategy("trim")');
 
-    const html = ctx.run('window.SessionControlsPanel.render()');
+    const html = ctx.run('window.__pluginModule.render()');
     assert.match(html, /session-controls-guard-error/);
     assert.match(html, /not mounted/);
     assert.equal(ctx.run('window.ContextGuardToggle.getDetail()').strategy, 'adaptive', 'badge cache untouched on failure');

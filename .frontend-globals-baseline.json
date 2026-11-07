@@ -1060,17 +1060,20 @@
   "public/src/modules/debug-panel-host.js": {
     "state": [
       "_panelBodyHtmlCache",
-      "featurePanelRenderVersion"
+      "featurePanelRenderVersion",
+      "mountedContainer"
     ],
     "behavior": [
       "createRailButton",
+      "mountContainerPanel",
       "notifyPanelLifecycle",
       "railButtonTitle",
       "renderFeaturePanel",
       "runAfterPanelOpenFrame",
       "syncPanelBodyHtmlCache",
       "syncRailButtons",
-      "toggleFeaturePanel"
+      "toggleFeaturePanel",
+      "unmountContainerPanel"
     ]
   },
   "public/src/modules/debug-preflight.js": {
@@ -2501,12 +2504,6 @@
       "summarizeRuntimeToolNames",
       "summarizeToolCall",
       "updateNotificationStatus"
-    ]
-  },
-  "public/src/modules/session-controls-panel.js": {
-    "state": [],
-    "behavior": [
-      "SessionControlsPanel"
     ]
   },
   "public/src/modules/session-dialogs.js": {

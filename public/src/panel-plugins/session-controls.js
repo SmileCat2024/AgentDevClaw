@@ -1,5 +1,12 @@
 /**
- * session-controls-panel.js — 会话控制面板（session-local control plane）
+ * session-controls.js — 会话控制面板插件（session-local control plane）
+ *
+ * ADR-0044 P4：由 classic script（modules/session-controls-panel.js）迁为
+ * ES 模块插件，经 panel-plugins.js 清单懒声明、打开面板时按需装载。
+ * 宿主全局（focusedAgentId / currentRuntimeAgentId / currentLanguage 等）
+ * 保留裸引用——一等面板永远运行在 Claw 前端环境（全局词法环境可解析），
+ * 与第三方面板的 host.env 注入约定（ADR-0044）区分。
+ * 事件监听收进 mount(host) + host.effect：装载时挂、卸载时摘。
  *
  * 三个 section 对应三个可能挂载的 Feature，均以 runtime 内 Feature 为权威
  * 状态持有者，浏览器只是乐观 UI 缓存（请求-应答式 IPC，经 /protoclaw/*_status
@@ -24,10 +31,7 @@
  * hairlines (no hero header, no card stack), a strong/label summary line,
  * and the shared .tool-toggle component for every switch row.
  */
-(function () {
-  'use strict';
-
-  const stateByRuntime = new Map();
+const stateByRuntime = new Map();
 
   function esc(value) {
     return typeof escapeHtml === 'function'
@@ -485,7 +489,10 @@
     return updateControl({ maxConsecutiveContinuations: next });
   }
 
-  featurePanelBody.addEventListener('change', (event) => {
+  // 面板内交互的委托监听：挂常驻 body 容器（关闭面板只清 innerHTML，容器
+  // 不销毁），装载时挂、卸载时摘（host.effect），不再依赖 classic script 的
+  // 「加载即挂、永不摘」模式。
+  function onPanelBodyChange(event) {
     const trigger = event.target?.closest?.('[data-force-continuation-trigger]');
     if (trigger) {
       updateTrigger(trigger.dataset.forceContinuationTrigger, trigger.checked);
@@ -501,11 +508,11 @@
     if (rotStrongSteps) { void updateRotationConfig({ strongSteps: Number(rotStrongSteps.value) }); return; }
     const rotCheapSteps = event.target?.closest?.('[data-rotation-cheap-steps]');
     if (rotCheapSteps) { void updateRotationConfig({ cheapSteps: Number(rotCheapSteps.value) }); }
-  });
+  }
 
   // 轮转模型/档位下拉：触发按钮打开 body 级浮层（ccb-model-dropdown 同款），
   // 选中项在浮层内直接提交，见 openRotationMenu。输出风格下拉同配方（openStyleMenu）。
-  featurePanelBody.addEventListener('click', (event) => {
+  function onPanelBodyClick(event) {
     const guardStrategy = event.target?.closest?.('[data-guard-strategy]');
     if (guardStrategy && guardStrategy.getAttribute('aria-disabled') !== 'true') {
       void updateGuardStrategy(guardStrategy.dataset.guardStrategy);
@@ -515,11 +522,11 @@
     if (menuBtn && !menuBtn.disabled) openRotationMenu(menuBtn);
     const styleMenuBtn = event.target?.closest?.('[data-style-menu]');
     if (styleMenuBtn && !styleMenuBtn.disabled) openStyleMenu(styleMenuBtn);
-  });
+  }
 
   // 外部入口（如 slash 菜单经 capability_invoke）修改了本面板对应的
   // Feature 状态时，刷新本地缓存——面板自身只覆盖自己的开关操作闭环。
-  window.addEventListener('claw:capability-invoked', (event) => {
+  function onCapabilityInvoked(event) {
     const detail = event.detail || {};
     if (detail.ref === 'step-rotating-model.configure') {
       if (resolveCaps()?.rot && detail.agentId === focusedAgentId && detail.sessionId === currentSessionId()) {
@@ -536,7 +543,7 @@
     if (detail.ref !== 'force-continuation.configure') return;
     if (!resolveCaps()?.fc || detail.agentId !== focusedAgentId || detail.sessionId !== currentSessionId()) return;
     void refreshStatus({ renderWhenDone: true });
-  });
+  }
 
   // == 模型轮转（step-rotating-model）====================================
   // 走通用 capability_invoke 通路（ADR-0007 收编方向）：无专属 IPC 分支、
@@ -1061,34 +1068,47 @@
       .join('');
   }
 
-  window.SessionControlsPanel = {
-    render,
-    updateTrigger,
-    updateLimit,
-    refreshStatus,
-    refreshRotationStatus,
-    updateRotationConfig,
-    refreshStyleStatus,
-    updateStyleSelection,
-    updateGuardStrategy,
-    // 消费方按已探明的挂载集决定是否发请求；探测未决时返回 false，避免对
-    // 不支持的 runtime 打出 503。
-    isAvailable: () => {
-      const caps = resolveCaps();
-      return !!(caps && (caps.fc || caps.rot || caps.style));
+export default {
+  id: 'panel-session-controls',
+  panels: {
+    'session-controls': {
+      when: { surfaces: ['chat'] },
+      title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
+      label: { zh: '会话控制', en: 'Session Controls' },
+      description: { zh: 'API 重试与输出风格', en: 'API retries and output styles' },
+      render: () => render(),
+        icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M21 12a9 9 0 1 1-2.64-6.36"></path> <path d="M21 3v6h-6"></path> </svg>',
+      order: 20,
     },
-    isStyleAvailable: () => resolveCaps()?.style === true,
-  };
+  },
+  mount(host) {
+    featurePanelBody.addEventListener('change', onPanelBodyChange);
+    featurePanelBody.addEventListener('click', onPanelBodyClick);
+    window.addEventListener('claw:capability-invoked', onCapabilityInvoked);
+    host.effect(() => {
+      featurePanelBody.removeEventListener('change', onPanelBodyChange);
+      featurePanelBody.removeEventListener('click', onPanelBodyClick);
+      window.removeEventListener('claw:capability-invoked', onCapabilityInvoked);
+    });
+  },
+};
 
-  // 面板注册（Claw 宿主注册表）：直接函数引用，不经 window 晚绑定寻址。
-  // 注册表全集由 frontend-rail-panels-golden 金样本钉住。
-  window.ClawHost.panels.register('session-controls', {
-    when: { surfaces: ['chat'] },
-    title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
-    label: { zh: '会话控制', en: 'Session Controls' },
-    description: { zh: 'API 重试与输出风格', en: 'API retries and output styles' },
-    render: () => render(),
-      icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M21 12a9 9 0 1 1-2.64-6.36"></path> <path d="M21 3v6h-6"></path> </svg>',
-    order: 20,
-  });
-}());
+// 命名导出：测试与宿主侧诊断入口（原 window.SessionControlsPanel 的公共面）。
+// 消费方按已探明的挂载集决定是否发请求；探测未决时 isAvailable 返回 false，
+// 避免对不支持的 runtime 打出 503。
+export {
+  render,
+  updateTrigger,
+  updateLimit,
+  refreshStatus,
+  refreshRotationStatus,
+  updateRotationConfig,
+  refreshStyleStatus,
+  updateStyleSelection,
+  updateGuardStrategy,
+};
+export const isAvailable = () => {
+  const caps = resolveCaps();
+  return !!(caps && (caps.fc || caps.rot || caps.style));
+};
+export const isStyleAvailable = () => resolveCaps()?.style === true;

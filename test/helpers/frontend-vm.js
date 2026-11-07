@@ -178,8 +178,10 @@ export function createFrontendSandbox(overrides = {}) {
  */
 export function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start);
   if (start === -1) throw new Error(`Missing start marker: ${startMarker}`);
+  // endMarker 为 null/undefined 时取到文件尾（ESM 插件的 export default 块在文件尾部）
+  if (endMarker == null) return source.slice(start);
+  const end = source.indexOf(endMarker, start);
   if (end === -1) throw new Error(`Missing end marker: ${endMarker}`);
   return source.slice(start, end);
 }

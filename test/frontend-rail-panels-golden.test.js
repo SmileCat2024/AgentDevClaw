@@ -76,10 +76,11 @@ const REGISTRATION_HOMES = [
     suffix: '',
   },
   {
-    id: 'session-controls 自注册',
-    file: 'public/src/modules/session-controls-panel.js',
-    start: "window.ClawHost.panels.register('session-controls'",
-    end: '}());',
+    id: 'session-controls 插件声明',
+    file: 'public/src/panel-plugins/session-controls.js',
+    start: 'export default {',
+    end: null, // 至文件尾
+    esm: true, // export default → 赋值，panels 声明按 activatePlugin 同语义注册
     prefix: '',
     suffix: '',
   },
@@ -92,7 +93,20 @@ function captureRegistrySnapshot() {
   ctx.loadSource('public/src/modules/right-panel-registry.js');
 
   for (const home of REGISTRATION_HOMES) {
-    const block = sourceBetween(readModule(home.file), home.start, home.end);
+    let block = sourceBetween(readModule(home.file), home.start, home.end);
+    if (home.esm) {
+      // 插件形态：只取 default 导出的 panels 声明（命名导出引用块外实现，
+      // 与注册面无关，剥掉）；按 activatePlugin 的声明式注册同语义落进
+      // 注册表（含 owner），金样本钉住同一份元数据。
+      block = block
+        .replace(/export\s*\{[^}]*\};?/gs, '')
+        .replace(/export\s+const\s+/g, 'const ')
+        .replace('export default', 'window.__pluginDecl =');
+      block += `
+        for (const [pid, p] of Object.entries(window.__pluginDecl.panels)) {
+          window.ClawHost.panels.register(pid, p, window.__pluginDecl.id);
+        }`;
+    }
     ctx.run(home.prefix + block + home.suffix);
   }
 

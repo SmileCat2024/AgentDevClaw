@@ -356,3 +356,137 @@ test('mountBody 抛错不僵尸化：不挂幽灵 unmount，面板状态可继�
   `);
   assert.equal(ctx.run('featurePanelBody.innerHTML'), '<div data-recovered></div>');
 });
+
+// ═══════════════════════════════════════════════════════════════
+// 懒面板按需装载（ADR-0044 P3）
+// ═══════════════════════════════════════════════════════════════
+
+test('懒面板声明后 stub 立即可寻址（按钮与显隐过滤在实现装载前可用）', () => {
+  const ctx = createPanelHostSandbox();
+  ctx.run(`
+    window.ClawHost.panels.declare('lazy-demo', {
+      when: { surfaces: ['chat'] },
+      title: () => '懒面板',
+      icon: '<svg></svg>', order: 30,
+    }, { pluginId: 'panel-lazy-demo', url: '/src/panel-plugins/lazy-demo.js' });
+  `);
+  assert.ok(ctx.run('window.ClawPanels.has("lazy-demo")'), 'stub 应已注册');
+  const stub = ctx.run('window.ClawPanels.get("lazy-demo")');
+  assert.ok(stub.stub, 'stub 条目应带 stub 标记');
+  assert.equal(stub.stub.pluginId, 'panel-lazy-demo');
+  assert.ok(!stub.render && !stub.mountBody, 'stub 不带实现');
+  const available = ctx.run('window.ClawPanels.getAvailable({ surface: "chat" })');
+  assert.ok(available.some((p) => p.id === 'lazy-demo'), 'stub 进可用面板清单（按钮可生成）');
+});
+
+test('打开懒面板显示装载占位；装载失败显式错误态且不自动重试', async () => {
+  const ctx = createSyncPanelHostSandbox();
+  ctx.run(`
+    window.ClawHost.panels.declare('lazy-fail', {
+      when: { surfaces: ['chat'] },
+      title: () => '会失败',
+    }, { pluginId: 'panel-lazy-fail', url: '/definitely/missing.js' });
+    toggleFeaturePanel('lazy-fail');
+  `);
+  assert.match(ctx.run('featurePanelBody.innerHTML'), /panel_lazy_loading/,
+    '打开时应显示装载占位');
+  // ensurePlugin 异步落定（import 失败）→ failed；等微任务池排空
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ctx.run('window.ClawHost.getPluginLoadState("panel-lazy-fail")'), 'failed');
+  ctx.run('renderFeaturePanel();');
+  assert.match(ctx.run('featurePanelBody.innerHTML'), /panel_lazy_failed/,
+    '失败后重渲染应显示显式错误态');
+  // 不自动重试：failed 态下 ensurePlugin 返回 false
+  assert.equal(
+    ctx.run('window.ClawHost.ensurePlugin("panel-lazy-fail", "/definitely/missing.js")'),
+    false,
+    'failed 后不得自动重试',
+  );
+});
+
+test('实现装载后 real 替换 stub，渲染切真内容；卸载后 stub 恢复可再装载', async () => {
+  const ctx = createSyncPanelHostSandbox();
+  ctx.run(`
+    window.ClawHost.panels.declare('lazy-ok', {
+      when: { surfaces: ['chat'] },
+      title: () => '懒面板',
+    }, { pluginId: 'panel-lazy-ok', url: '/src/panel-plugins/lazy-ok.js' });
+    toggleFeaturePanel('lazy-ok');
+  `);
+  assert.match(ctx.run('featurePanelBody.innerHTML'), /panel_lazy_loading/);
+  // 模拟模块装载落定（activatePlugin 是 ensurePlugin 内部同一条注册路径）
+  await ctx.run(`
+    window.ClawHost.activatePlugin('panel-lazy-ok', {
+      id: 'panel-lazy-ok',
+      panels: {
+        'lazy-ok': {
+          when: { surfaces: ['chat'] },
+          title: () => '真实面板',
+          render: () => '<div data-lazy-real>已装载</div>',
+        },
+      },
+    });
+  `);
+  const real = ctx.run('window.ClawPanels.get("lazy-ok")');
+  assert.ok(!real.stub && typeof real.render === 'function', 'real 应替换 stub');
+  assert.equal(real.owner, 'panel-lazy-ok', 'real 归属插件 owner');
+  ctx.run('renderFeaturePanel();');
+  assert.match(ctx.run('featurePanelBody.innerHTML'), /data-lazy-real/,
+    '装载落定后渲染切真内容');
+  // 卸载：real 摘除、stub 恢复、loadState 清空（可再次装载）
+  await ctx.run('window.ClawHost.unloadPlugin("panel-lazy-ok");');
+  const restored = ctx.run('window.ClawPanels.get("lazy-ok")');
+  assert.ok(restored && restored.stub, '卸载后 stub 应回到占位态');
+  assert.equal(ctx.run('window.ClawHost.getPluginLoadState("panel-lazy-ok")'), null,
+    '卸载后 loadState 应清空（渲染路径可重新拉起）');
+  // 再次装载成功（loadState 清空使 ensurePlugin 可再发起）
+  await ctx.run(`
+    window.ClawHost.activatePlugin('panel-lazy-ok', {
+      id: 'panel-lazy-ok',
+      panels: { 'lazy-ok': { render: () => '<div data-lazy-real-2></div>' } },
+    });
+  `);
+  assert.ok(!ctx.run('window.ClawPanels.get("lazy-ok")').stub, 'stub 面板可再次装载');
+});
+
+test('real 之间的注册冲突保护不变（stub→real 是唯一替换路径）', () => {
+  const ctx = createPanelHostSandbox();
+  ctx.run(`
+    window.ClawPanels.register('dup', { render: () => '' });
+  `);
+  assert.throws(
+    () => ctx.run('window.ClawPanels.register("dup", { render: () => "" })'),
+    /already registered/,
+    '两个 real 抢同一面板仍是冲突',
+  );
+  // 声明已注册 real 的 id 为懒面板也应被拒
+  assert.throws(
+    () => ctx.run('window.ClawHost.panels.declare("dup", {}, { pluginId: "p", url: "/u.js" })'),
+    /already registered/,
+  );
+});
+
+test('过期装载落定不得污染已卸载插件的 loadState（懒面板卸载后再打开不卡死）', async () => {
+  const ctx = createSyncPanelHostSandbox();
+  ctx.run(`
+    window.ClawHost.panels.declare('lazy-race', {
+      when: { surfaces: ['chat'] },
+      title: () => '竞态',
+    }, { pluginId: 'panel-lazy-race', url: '/missing-race.js' });
+    toggleFeaturePanel('lazy-race');
+  `);
+  // loading 中插件被显式装载又卸载（loadState 已清空），import 失败才姗姗来迟
+  await ctx.run(`
+    window.ClawHost.activatePlugin('panel-lazy-race', {
+      id: 'panel-lazy-race',
+      panels: { 'lazy-race': { render: () => '<div></div>' } },
+    });
+  `);
+  await ctx.run('window.ClawHost.unloadPlugin("panel-lazy-race");');
+  await new Promise((resolve) => setImmediate(resolve)); // 过期落定在此之后到达
+  assert.notEqual(
+    ctx.run('window.ClawHost.getPluginLoadState("panel-lazy-race")'),
+    'failed',
+    '卸载后的过期失败落定不得写入 failed（否则 stub 被拦截、懒面板卡死）',
+  );
+});

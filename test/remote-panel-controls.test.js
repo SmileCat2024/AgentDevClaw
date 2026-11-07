@@ -5,6 +5,7 @@ import { createAgentLifecycleModule } from '../server/routes/agent-lifecycle.js'
 import { setupCapabilityRoutes } from '../server/routes/capability.js';
 import { setProxyConnectionLookup } from '../server/shared/proxy.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
 
 // R2-04：面板资源远程扩列——会话控制面板（force continuation / context guard /
 // capability）。覆盖工单最低测试集：
@@ -575,7 +576,7 @@ async function panelSandbox({ catalog = REMOTE_CATALOG, currentRuntimeAgentId = 
   });
   ctx.loadSource('public/src/modules/remote-connections.js');
   ctx.loadSource('public/src/modules/claw-host.js');
-  ctx.loadSource('public/src/modules/session-controls-panel.js');
+  loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/session-controls.js');
   // 目录条目先入位：面板身份解析依赖 catalog（getEntryRuntimeSessionId /
   // getEntryHostNamespaceId / capabilityFor 均消费 ingest 后的可见分区）。
   await ctx.window.RemoteConnections.refresh();
@@ -585,7 +586,7 @@ async function panelSandbox({ catalog = REMOTE_CATALOG, currentRuntimeAgentId = 
 describe('frontend session-controls-panel identity (R2-04)', () => {
   it('addresses a remote session with the host-level namespace id and the catalog session id', async () => {
     const { ctx, calls } = await panelSandbox();
-    await ctx.window.SessionControlsPanel.refreshStatus();
+    await ctx.window.__pluginModule.refreshStatus();
     const statusCall = calls.find((c) => c.url.startsWith('/protoclaw/force_continuation_status'));
     assert.ok(statusCall, 'status refresh must fire for a remote session');
     assert.equal(statusCall.url,
@@ -598,7 +599,7 @@ describe('frontend session-controls-panel identity (R2-04)', () => {
       focusedAgentId: 'programming-helper',
       viewerSessionId: 'local-session-1',
     });
-    await ctx.window.SessionControlsPanel.refreshStatus();
+    await ctx.window.__pluginModule.refreshStatus();
     const statusCall = calls.find((c) => c.url.startsWith('/protoclaw/force_continuation_status'));
     assert.ok(statusCall);
     assert.equal(statusCall.url,
@@ -611,10 +612,10 @@ describe('frontend session-controls-panel identity (R2-04)', () => {
     // 剩余两条写路径共用同一身份纪律
     ctx.newIdempotencyKey = () => 'test-idem-key';
     ctx.loadSource('public/src/modules/context-guard-toggle.js');
-    await ctx.window.SessionControlsPanel.updateTrigger('apiErrorRetry', true);
+    await ctx.window.__pluginModule.updateTrigger('apiErrorRetry', true);
     await ctx.window.ContextGuardToggle.toggleGuard();
     // 第三条写路径走 capability_invoke 通用路由（模型轮转已卸载，由输出风格承接）
-    await ctx.window.SessionControlsPanel.updateStyleSelection('正式汇报');
+    await ctx.window.__pluginModule.updateStyleSelection('正式汇报');
 
     const writes = calls.filter((c) => c.init.method === 'POST');
     assert.equal(writes.length, 3, 'fc control + guard control + capability invoke');
@@ -642,14 +643,14 @@ describe('frontend session-controls-panel capability gating (ADR-0011 #5)', () =
     await ctx.window.ContextGuardToggle.toggleGuard();
     assert.equal(calls.filter((c) => c.url === '/protoclaw/context_guard_control').length, 0,
       'no-write remote must not dispatch panel writes');
-    const html = ctx.window.SessionControlsPanel.render();
+    const html = ctx.window.__pluginModule.render();
     assert.match(html, / disabled/, 'switches render disabled (read-only degradation, no remote marker)');
     assert.ok(!html.includes('remote:'), 'no remote namespace id leaks into the panel markup');
   });
 
   it('keeps the panel writable for capable remotes and for local sessions', async () => {
     const remote = await panelSandbox();
-    const remoteHtml = remote.ctx.window.SessionControlsPanel.render();
+    const remoteHtml = remote.ctx.window.__pluginModule.render();
     assert.ok(!remoteHtml.includes(' disabled'), 'write-capable remote keeps switches enabled');
 
     const local = await panelSandbox({
@@ -657,7 +658,7 @@ describe('frontend session-controls-panel capability gating (ADR-0011 #5)', () =
       focusedAgentId: 'programming-helper',
       viewerSessionId: 'local-session-1',
     });
-    const localHtml = local.ctx.window.SessionControlsPanel.render();
+    const localHtml = local.ctx.window.__pluginModule.render();
     assert.ok(!localHtml.includes(' disabled'), 'local sessions always stay writable');
     local.ctx.newIdempotencyKey = () => 'test-idem-key';
     local.ctx.loadSource('public/src/modules/context-guard-toggle.js');
