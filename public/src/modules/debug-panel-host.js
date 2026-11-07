@@ -319,10 +319,15 @@ function syncRailButtons() {
   const panels = window.ClawPanels.getAll().filter((p) => p.icon);
   const panelById = new Map(panels.map((p) => [p.id, p]));
 
+  let domChanged = false;
+
   // 孤儿按钮清理：面板被摘除（如插件卸载）时按钮随之消失
   rail.querySelectorAll('.rail-button[data-panel]').forEach((btn) => {
     const meta = panelById.get(btn.dataset.panel);
-    if (!meta || btn.id !== 'rail-' + meta.id) btn.remove();
+    if (!meta || btn.id !== 'rail-' + meta.id) {
+      btn.remove();
+      domChanged = true;
+    }
   });
 
   const anchor = rail.querySelector('.rail-spacer');
@@ -336,10 +341,20 @@ function syncRailButtons() {
     if (!btn || !rail.contains(btn)) {
       btn = createRailButton(panel);
       insertAt(btn);
+      domChanged = true;
       continue;
     }
     // 已存在的按钮刷新 title（语言切换）
     btn.title = railButtonTitle(panel);
+  }
+
+  // 按钮集合变化后重放 rail-customize 配置：用户的自定义排序与可见性
+  // （localStorage）只作用于 DOM 里的按钮，而 rail-customize 的初始化
+  // 早于首次按钮生成，新生成的按钮不经 applyConfig 处理——否则会出现
+  // 「用户隐藏的面板重新显示」与「自定义面板按钮滞留 rail 顶部」两类
+  // 回归（applyConfig 同时负责 custBtn 在面板区末尾的归位）。
+  if (domChanged && typeof window.applyRailConfig === 'function') {
+    window.applyRailConfig();
   }
 }
 

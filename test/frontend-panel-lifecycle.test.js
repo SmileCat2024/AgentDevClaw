@@ -223,3 +223,28 @@ test('面板从注册表摘除后按钮消失，语言切换后 title 重算', (
   ctx.run('window.ClawHost.panels.unregister("git"); syncRailButtons();');
   assert.ok(!ctx.run(`document.getElementById('rail-git')`), '面板摘除后其 rail 按钮应被清理');
 });
+
+test('syncRailButtons 按钮集合变化后重放 rail-customize 配置，无变化不重放', () => {
+  // 回归锚：按钮动态化后，rail-customize 的初始化早于首次按钮生成，
+  // 用户自定义排序/可见性与 custBtn 归位若不重放，会出现「用户隐藏的
+  // 面板重新显示」「自定义面板按钮滞留 rail 顶部」两类回归。
+  const { ctx } = createRailHostSandbox();
+  ctx.run(`
+    window.__applyCalls = 0;
+    window.applyRailConfig = () => { window.__applyCalls++; };
+    window.ClawPanels.register('git', {
+      when: { surfaces: ['chat'] },
+      label: { zh: '源代码管理', en: 'Source Control' },
+      title: () => '源代码管理',
+      render: () => '',
+      icon: '<svg></svg>',
+      order: 30,
+    });
+  `);
+  ctx.run('syncRailButtons();');
+  assert.equal(ctx.run('window.__applyCalls'), 1, '首次生成按钮（集合变化）应重放 rail 配置');
+  ctx.run('syncRailButtons(); syncRailButtons();');
+  assert.equal(ctx.run('window.__applyCalls'), 1, '集合无变化（幂等调用）不应重放');
+  ctx.run('window.ClawHost.panels.unregister("git"); syncRailButtons();');
+  assert.equal(ctx.run('window.__applyCalls'), 2, '按钮摘除（集合变化）应再次重放');
+});
