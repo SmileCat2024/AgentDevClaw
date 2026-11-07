@@ -17,6 +17,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
 
 function makeCommits(n, salt) {
   const tag = salt ? salt : '';
@@ -104,11 +105,13 @@ function makeHarness() {
     getRuntimeWorkspaceSessionId: () => 'sess-1',
     getActiveWorkspaceSessionId: () => 'sess-1',
     getCurrentAgentRecord: () => record,
-    renderFeaturePanel: () => { ctx.__lastHtml = ctx.window.GitPanel.render(); },
+    renderFeaturePanel: () => { ctx.__lastHtml = ctx.__gitPanel.render(); },
   });
   ctx.loadSource('public/src/modules/git-graph.js');
   ctx.loadSource('public/src/modules/claw-host.js');
-  ctx.loadSource('public/src/modules/git-panel.js');
+  const mod = loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/git.js');
+  ctx.__gitPanel = mod;
+  mod.__pluginDefault.mount({ effect() {} }); // 监听挂载（本套测试断言渲染输出，不触发监听）
   ctx.run(`
     const origBuild = window.GitGraph.buildGraphSvg;
     window.__counters = { builds: 0, lanes: 0 };
@@ -132,13 +135,13 @@ describe('git 面板图形区渲染 churn 守卫', () => {
   it('数据与行几何未变时，重复 render 零 canvas 写入、零泳道重算', async () => {
     const ctx = makeHarness();
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       assert.equal(ctx.__counts.canvasWrites, 1, '首次加载恰好一次画布替换');
       let c = counters(ctx);
       assert.equal(c.lanes, 1, '首次加载恰好一次泳道计算');
 
-      for (let i = 0; i < 5; i++) ctx.window.GitPanel.render();
+      for (let i = 0; i < 5; i++) ctx.__gitPanel.render();
       assert.equal(ctx.__counts.canvasWrites, 1, '未变数据重复 render 不得替换画布 DOM');
       c = counters(ctx);
       assert.equal(c.lanes, 1, '未变数据重复 render 不得重算泳道（memo）');
@@ -151,19 +154,19 @@ describe('git 面板图形区渲染 churn 守卫', () => {
   it('行几何与数据同时变化恰好触发一次度量重绘，随后恢复零 churn', async () => {
     const ctx = makeHarness();
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       assert.equal(ctx.__counts.canvasWrites, 1);
 
       // 模拟布局后行位置漂移 + 图形数据变化（真实场景：body 替换后重新度量）
       for (let i = 10; i < ctx.__rows.length; i++) ctx.__rows[i].offsetTop += 37;
       ctx.__setGraphCommits(makeCommits(301, 'm'));
-      ctx.window.GitPanel.refresh();
+      ctx.__gitPanel.refresh();
       await tick(); await tick();
       assert.equal(ctx.__counts.canvasWrites, 2, '几何变化恰好一次替换');
 
-      ctx.window.GitPanel.render();
-      ctx.window.GitPanel.render();
+      ctx.__gitPanel.render();
+      ctx.__gitPanel.render();
       assert.equal(ctx.__counts.canvasWrites, 2, '替换后未变 render 不再写画布');
     } finally {
       ctx.__dispose();
@@ -173,18 +176,18 @@ describe('git 面板图形区渲染 churn 守卫', () => {
   it('数据变化（新 commits 数组）恰好触发一次泳道重算与画布替换', async () => {
     const ctx = makeHarness();
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       assert.equal(ctx.__counts.canvasWrites, 1);
 
       ctx.__setGraphCommits(makeCommits(301)); // 新提交到达：数组身份变化
-      ctx.window.GitPanel.refresh();
+      ctx.__gitPanel.refresh();
       await tick(); await tick();
       let c = counters(ctx);
       assert.equal(c.lanes, 2, '新数据恰好一次泳道重算');
       assert.equal(ctx.__counts.canvasWrites, 2, '新数据恰好一次画布替换');
 
-      ctx.window.GitPanel.render();
+      ctx.__gitPanel.render();
       assert.equal(ctx.__counts.canvasWrites, 2, '数据稳定后 render 不再写画布');
     } finally {
       ctx.__dispose();
@@ -194,7 +197,7 @@ describe('git 面板图形区渲染 churn 守卫', () => {
   it('status 变化的静默刷新走定向 patch：上区恰好替换一次、图形区零 churn', async () => {
     const ctx = makeHarness();
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       assert.equal(ctx.__counts.canvasWrites, 1);
 
@@ -222,7 +225,7 @@ describe('git 面板图形区渲染 churn 守卫', () => {
   it('HEAD 变化的静默刷新仍走全量重绘：图形区恰好替换一次', async () => {
     const ctx = makeHarness();
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       assert.equal(ctx.__counts.canvasWrites, 1);
 

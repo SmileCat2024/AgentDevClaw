@@ -36,6 +36,19 @@
         order: 20,
       },
     },
+    {
+      id: 'git',
+      pluginId: 'panel-git',
+      url: '/src/panel-plugins/git.js',
+      meta: {
+        when: { surfaces: ['chat'] },
+        title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
+        label: { zh: '源代码管理', en: 'Source Control' },
+        description: { zh: 'Git 状态与操作', en: 'Git status and actions' },
+        icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="6" cy="6" r="2.6"></circle> <circle cx="6" cy="18" r="2.6"></circle> <circle cx="18" cy="8" r="2.6"></circle> <path d="M6 8.6v6.8"></path> <path d="M18 10.6c0 4-4.5 3.4-8 4.5"></path> </svg>',
+        order: 30,
+      },
+    },
   ];
 
   for (const d of DECLARATIONS) {

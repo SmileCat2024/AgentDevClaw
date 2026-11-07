@@ -1478,12 +1478,6 @@
       "GitGraph"
     ]
   },
-  "public/src/modules/git-panel.js": {
-    "state": [],
-    "behavior": [
-      "GitPanel"
-    ]
-  },
   "public/src/modules/home-dashboard.js": {
     "state": [
       "HD_TTL",

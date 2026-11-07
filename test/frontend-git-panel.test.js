@@ -11,6 +11,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
 
 const okStatus = (dir) => ({
   ok: true, isRepo: true, root: dir,
@@ -62,7 +63,7 @@ function makeSandbox({ fetchImpl, agentRecord = record } = {}) {
     getRuntimeWorkspaceSessionId: () => 'sess-1',
     getActiveWorkspaceSessionId: () => 'sess-1',
     getCurrentAgentRecord: () => agentRecord,
-    renderFeaturePanel: () => { ctx.__dom = ctx.window.GitPanel.render(); },
+    renderFeaturePanel: () => { ctx.__dom = ctx.__gitPanel.render(); },
   });
   ctx.__disposeTimers = () => { for (const t of timers) trackedClear(t); timers.clear(); };
   ctx.__autoTick = () => { if (autoTickFn) autoTickFn(); };
@@ -70,7 +71,9 @@ function makeSandbox({ fetchImpl, agentRecord = record } = {}) {
   ctx.__fireDocBody = (type, event) => (docBodyListeners[type] || []).forEach((fn) => fn(event));
   ctx.loadSource('public/src/modules/git-graph.js');
   ctx.loadSource('public/src/modules/claw-host.js');
-  ctx.loadSource('public/src/modules/git-panel.js');
+  const mod = loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/git.js');
+  ctx.__gitPanel = mod; // render / onOpen / refresh 命名导出面（原 window.GitPanel）
+  mod.__pluginDefault.mount({ effect() {} }); // 常驻监听随插件挂载（ADR-0044 P4；沙箱用例不卸载）
   return ctx;
 }
 
@@ -86,18 +89,18 @@ describe('git-panel 刷新链路稳定性', () => {
   it('目录暂态丢失时保留已加载面板，不清空', async () => {
     const ctx = makeSandbox({ fetchImpl: goodFetch() });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       assert.ok((ctx.__dom || '').includes('git-panel'), '预置：面板已渲染');
 
       // agent record 轮询替换瞬间 sessions 为空 → 目录暂态丢失
       ctx.getCurrentAgentRecord = () => ({ workspace_sessions: { sessions: [] } });
-      const html = ctx.window.GitPanel.render();
+      const html = ctx.__gitPanel.render();
       assert.ok(html.includes('git-panel'), '面板骨架保留');
       assert.ok(!html.includes('未绑定项目目录'), '不清空成空态');
 
       ctx.getCurrentAgentRecord = () => record;
-      assert.ok(ctx.window.GitPanel.render().includes('git-panel'));
+      assert.ok(ctx.__gitPanel.render().includes('git-panel'));
     } finally {
       ctx.__disposeTimers();
     }
@@ -114,16 +117,16 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       assert.ok(repoFalse >= 1);
-      assert.ok(!ctx.window.GitPanel.render().includes('不是 git 仓库'), '首次 isRepo:false 不切换');
+      assert.ok(!ctx.__gitPanel.render().includes('不是 git 仓库'), '首次 isRepo:false 不切换');
 
-      ctx.window.GitPanel.refresh();
+      ctx.__gitPanel.refresh();
       await tick(); await tick();
       assert.ok(repoFalse >= 2);
       assert.ok(discoverCalls >= 1, '确认非仓库后发起子目录仓库发现');
-      assert.ok(ctx.window.GitPanel.render().includes('不是 git 仓库'), '连续两次确认后切换');
+      assert.ok(ctx.__gitPanel.render().includes('不是 git 仓库'), '连续两次确认后切换');
     } finally {
       ctx.__disposeTimers();
     }
@@ -153,13 +156,13 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       dirByOp.length = 0; // 丢弃确认非仓库阶段的请求记录
-      ctx.window.GitPanel.refresh(); // 第二次确认非仓库 → discover
+      ctx.__gitPanel.refresh(); // 第二次确认非仓库 → discover
       await tick(); await tick();
 
-      const html = ctx.window.GitPanel.render();
+      const html = ctx.__gitPanel.render();
       // 自动选中持久化的 repoB（而非列表第一个 repoA），直接进入仓库视图
       assert.ok(html.includes('data-gp-action="repo-menu"'), '标题区提供仓库切换下拉');
       assert.ok(html.includes('repoB'), '下拉显示当前仓库名');
@@ -208,17 +211,17 @@ describe('git-panel 刷新链路稳定性', () => {
       target: { closest: (sel) => (sel === '#git-repo-menu [data-gp-root]' ? { dataset: { gpRoot: root } } : null) },
     });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
-      ctx.window.GitPanel.refresh();
+      ctx.__gitPanel.refresh();
       await tick(); await tick();
-      assert.ok(ctx.window.GitPanel.render().includes('repoA'), '预置：自动选中第一个仓库 repoA');
+      assert.ok(ctx.__gitPanel.render().includes('repoA'), '预置：自动选中第一个仓库 repoA');
 
       // 下拉主动切换到 repoB
       dirByOp.length = 0;
       clickMenuItem('/work/repoB');
       await tick(); await tick();
-      const html = ctx.window.GitPanel.render();
+      const html = ctx.__gitPanel.render();
       assert.ok(html.includes('repoB'), '切换后显示新仓库名');
       assert.ok(dirByOp.length > 0 && dirByOp.every(([, dir]) => dir === '/work/repoB'),
         '请求发往新选中仓库 ' + JSON.stringify(dirByOp));
@@ -257,20 +260,20 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
-      ctx.window.GitPanel.refresh(); // 确认非仓库 → discover → 自动选中 repoA
+      ctx.__gitPanel.refresh(); // 确认非仓库 → discover → 自动选中 repoA
       await tick(); await tick();
-      assert.ok(ctx.window.GitPanel.render().includes('repoA'), '预置：已进入 repoA 视图');
+      assert.ok(ctx.__gitPanel.render().includes('repoA'), '预置：已进入 repoA 视图');
 
       // repoA 失效（仓库被删）：两次确认后自动重扫并回退到 repoB
       repoAGone = true;
       dirByOp.length = 0;
-      ctx.window.GitPanel.refresh(); // 第一次 miss（selectRepo 那轮确认的是 true，repoMiss 已归零）
+      ctx.__gitPanel.refresh(); // 第一次 miss（selectRepo 那轮确认的是 true，repoMiss 已归零）
       await tick(); await tick();
-      ctx.window.GitPanel.refresh(); // 第二次确认 → 清选中 + force 重扫 → 自动选中 repoB
+      ctx.__gitPanel.refresh(); // 第二次确认 → 清选中 + force 重扫 → 自动选中 repoB
       await tick(); await tick(); await tick();
-      const html = ctx.window.GitPanel.render();
+      const html = ctx.__gitPanel.render();
       assert.ok(!html.includes('读取中'), '不停留在读取中死端');
       assert.ok(html.includes('repoB'), '重扫后自动回退到可用仓库');
       assert.ok(html.includes('data-gp-action="repo-menu"'), '仓库视图正常渲染');
@@ -300,19 +303,19 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
-      ctx.window.GitPanel.refresh(); // 第二次确认非仓库 → discover 发起并失败
+      ctx.__gitPanel.refresh(); // 第二次确认非仓库 → discover 发起并失败
       await tick(); await tick();
       assert.equal(discoverCalls, 1, 'discover 已发起一次');
-      let html = ctx.window.GitPanel.render();
+      let html = ctx.__gitPanel.render();
       assert.ok(html.includes('route not found'), '失败错误可见');
       assert.ok(html.includes('rediscover'), '提供手动重试入口');
 
       // 多轮静默轮询周期内不重复发起（失败冷却）
       for (let i = 0; i < 3; i++) { ctx.__autoTick(); await tick(); }
       assert.equal(discoverCalls, 1, '冷却期内静默轮询不重试 discover');
-      html = ctx.window.GitPanel.render();
+      html = ctx.__gitPanel.render();
       assert.ok(html.includes('route not found'), '错误提示不被扫描态覆盖');
     } finally {
       ctx.__disposeTimers();
@@ -344,19 +347,19 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
-      ctx.window.GitPanel.refresh(); // 确认非仓库 → discover → 自动选中 repoX（列表第一个）
+      ctx.__gitPanel.refresh(); // 确认非仓库 → discover → 自动选中 repoX（列表第一个）
       await tick(); await tick();
       // repoX 半损坏：其 loadAll 的 status 否决一次（miss=1），视图停在读取中
       assert.ok(statusDirs.includes('/work/repoX'), '预置：自动选中了半损坏的 repoX');
 
       // repoX 第二次否决 → 记忆否决 + force 重扫（discover 仍返回它）→
       // 自动选中必须跳过 repoX 改选 repoB；此后不得再有第三轮重扫（收敛）
-      ctx.window.GitPanel.refresh();
+      ctx.__gitPanel.refresh();
       await tick(); await tick(); await tick();
       const discoverCount = discoverCalls;
-      const html = ctx.window.GitPanel.render();
+      const html = ctx.__gitPanel.render();
       assert.ok(html.includes('repoB'), '否决后半损坏仓库被跳过，自动选中 repoB');
       assert.ok(html.includes('data-gp-action="repo-menu"'), '仓库视图正常渲染');
 
@@ -389,13 +392,13 @@ describe('git-panel 刷新链路稳定性', () => {
       target: { closest: (sel) => (sel === '[data-gp-action]' ? { dataset: { gpAction: action } } : null) },
     });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
-      ctx.window.GitPanel.refresh(); // 确认非仓库 → discover → 选中 repoX → miss=1
+      ctx.__gitPanel.refresh(); // 确认非仓库 → discover → 选中 repoX → miss=1
       await tick(); await tick();
-      ctx.window.GitPanel.refresh(); // miss=2 → 否决 repoX → force 重扫 → 过滤后无可用 → 全否决空态
+      ctx.__gitPanel.refresh(); // miss=2 → 否决 repoX → force 重扫 → 过滤后无可用 → 全否决空态
       await tick(); await tick();
-      let html = ctx.window.GitPanel.render();
+      let html = ctx.__gitPanel.render();
       assert.ok(html.includes('子目录仓库不可用'), '全否决空态文案');
       assert.ok(html.includes('data-gp-action="rediscover"'), '空态提供重扫入口（非死端）');
 
@@ -419,10 +422,10 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick();
-      ctx.window.GitPanel.refresh(); // loading 中 → pending
-      ctx.window.GitPanel.refresh();
+      ctx.__gitPanel.refresh(); // loading 中 → pending
+      ctx.__gitPanel.refresh();
       await tick(); await tick(); await tick(); await tick();
       assert.ok(statusCalls >= 2, '补跑已触发（statusCalls=' + statusCalls + '）');
       assert.ok((ctx.__dom || '').includes('git-panel'), '补跑完成后面板正常');
@@ -434,16 +437,16 @@ describe('git-panel 刷新链路稳定性', () => {
   it('render 周期不形成 loadAll 自激励循环（git 命令风暴根因）', async () => {
     const ctx = makeSandbox({ fetchImpl: goodFetch() });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       // isRepo:false 形态（status 缺字段）曾是触发循环的形态；正常数据下
       // 多轮 render 周期也不得重复发起 loadAll
       const before = 3; // onOpen 一轮 = 3 端点
-      for (let i = 0; i < 5; i++) ctx.window.GitPanel.render();
+      for (let i = 0; i < 5; i++) ctx.__gitPanel.render();
       await tick(); await tick();
       // render 不触发新 loadAll：无法直接读计数，用 fetch 副作用近似——
       // 这里断言渲染稳定且不报错即可，精确计数由 isRepo:false 场景覆盖
-      assert.ok(ctx.window.GitPanel.render().includes('git-panel'));
+      assert.ok(ctx.__gitPanel.render().includes('git-panel'));
       assert.ok(before >= 3);
     } finally {
       ctx.__disposeTimers();
@@ -459,14 +462,14 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
-      assert.ok(ctx.window.GitPanel.render().includes('失败'), 'graph 失败时错误可见');
+      assert.ok(ctx.__gitPanel.render().includes('失败'), 'graph 失败时错误可见');
 
       graphFail = false;
-      ctx.window.GitPanel.refresh();
+      ctx.__gitPanel.refresh();
       await tick(); await tick();
-      const html = ctx.window.GitPanel.render();
+      const html = ctx.__gitPanel.render();
       assert.ok(!html.includes('失败'), '恢复后错误清除');
       assert.ok(html.includes('git-history'), '图形区恢复渲染');
     } finally {
@@ -483,16 +486,16 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
-      let html = ctx.window.GitPanel.render();
+      let html = ctx.__gitPanel.render();
       assert.ok(html.includes('rev-parse') || html.includes('失败'), 'status 失败时顶部错误可见');
 
       // 恢复后刷新（与 silentRefresh 清错为同一状态路径）
       statusFail = false;
-      ctx.window.GitPanel.refresh();
+      ctx.__gitPanel.refresh();
       await tick(); await tick();
-      html = ctx.window.GitPanel.render();
+      html = ctx.__gitPanel.render();
       assert.ok(!html.includes('rev-parse'), '恢复后顶部错误清除');
       assert.ok(html.includes('git-panel'), '面板正常');
     } finally {
@@ -518,7 +521,7 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       const afterLoad = graphCalls; // onOpen 首轮 loadAll 含 graph
       assert.equal(afterLoad, 1, '预置：首轮已拉取图形');
@@ -531,7 +534,7 @@ describe('git-panel 刷新链路稳定性', () => {
       ctx.__autoTick();
       await tick(); await tick();
       assert.equal(graphCalls, afterLoad + 1, 'HEAD 变化触发补拉');
-      assert.ok(ctx.window.GitPanel.render().includes('git-panel'), '补拉后面板正常');
+      assert.ok(ctx.__gitPanel.render().includes('git-panel'), '补拉后面板正常');
     } finally {
       ctx.__disposeTimers();
     }
@@ -553,7 +556,7 @@ describe('git-panel 刷新链路稳定性', () => {
     };
     const ctx = makeSandbox({ fetchImpl });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       assert.equal(graphCalls, 1, '预置：首轮已拉图形');
       // mock 恒返回 120 条 = limit 上限，即"还有更早内容"形态

@@ -30,6 +30,7 @@ import { execSync } from 'child_process';
 import { setupGitRoutes } from '../server/routes/git.js';
 import { setProxyConnectionLookup } from '../server/shared/proxy.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
 
 const CONNECTIONS = [
   { id: 'server-a', name: 'Server A', enabled: true, mode: 'manual', localPort: 22101 },
@@ -321,7 +322,7 @@ function makePanelSandbox({ focusedAgentId = null, sessionId = 'sess-1', remoteM
     getCurrentAgentRecord: () => localRecord,
     // 当前会话富元数据留档（远程 = agent_detail 经命名空间转发返回的路径）
     readCurrentSessionViewState: () => ({ sessionMeta: { openDirectory: remoteMeta } }),
-    renderFeaturePanel: () => { ctx.__dom = ctx.window.GitPanel.render(); },
+    renderFeaturePanel: () => { ctx.__dom = ctx.__gitPanel.render(); },
   });
   if (capabilityFor) {
     ctx.window.RemoteConnections = { capabilityFor };
@@ -329,7 +330,9 @@ function makePanelSandbox({ focusedAgentId = null, sessionId = 'sess-1', remoteM
   ctx.__disposeTimers = () => { for (const t of timers) trackedClear(t); timers.clear(); };
   ctx.loadSource('public/src/modules/git-graph.js');
   ctx.loadSource('public/src/modules/claw-host.js');
-  ctx.loadSource('public/src/modules/git-panel.js');
+  const mod = loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/git.js');
+  ctx.__gitPanel = mod;
+  mod.__pluginDefault.mount({ effect() {} }); // 事件委托随插件挂载（ctx.__click 驱动）
   ctx.__calls = calls;
   // 事件委托驱动：模块在 featurePanelBody 上注册 click/mousedown/input/keydown
   ctx.__click = (action, file = '') => listeners.click?.({
@@ -349,7 +352,7 @@ describe('git-panel remote adaptation (R2-06)', () => {
   it('local requests carry the plain host agentId; reads stay keyless', async () => {
     const ctx = makePanelSandbox({ focusedAgentId: 'programming-helper' });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       const statusCall = ctx.__calls.find((c) => opOf(c.url) === 'status');
       assert.ok(statusCall, 'status called');
@@ -371,7 +374,7 @@ describe('git-panel remote adaptation (R2-06)', () => {
       remoteMeta: REMOTE_DIR,
     });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       const statusCall = ctx.__calls.find((c) => opOf(c.url) === 'status');
       assert.ok(statusCall, 'status called for remote dir');
@@ -387,7 +390,7 @@ describe('git-panel remote adaptation (R2-06)', () => {
   it('write ops carry an idempotency key header (local sessions included)', async () => {
     const ctx = makePanelSandbox({ focusedAgentId: 'programming-helper' });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       ctx.__calls.length = 0;
       // stage-all（写）经 featurePanelBody click 委托触发（与真实交互同链路）
@@ -415,10 +418,10 @@ describe('git-panel remote adaptation (R2-06)', () => {
       capabilityFor: (agentId, action) => agentId === HOST_NS && action === 'write' ? false : true,
     });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
       ctx.__calls.length = 0;
-      ctx.__dom = ctx.window.GitPanel.render();
+      ctx.__dom = ctx.__gitPanel.render();
       // 读视图照常渲染（降级只禁写），无任何远程连接标识（面板不加远程徽标，
       // 呈现与本地会话同一套语言）
       assert.ok(ctx.__dom.includes('git-panel'), 'panel renders');
@@ -431,7 +434,7 @@ describe('git-panel remote adaptation (R2-06)', () => {
       ctx.__click('stage-all');
       await tick(); await tick();
       assert.ok(!ctx.__calls.some((c) => opOf(c.url) === 'stage'), 'gated write never hits the endpoint');
-      const gatedHtml = ctx.window.GitPanel.render();
+      const gatedHtml = ctx.__gitPanel.render();
       assert.ok(gatedHtml.includes('写能力'), 'capability guard error is visible');
     } finally {
       ctx.__disposeTimers();
@@ -446,9 +449,9 @@ describe('git-panel remote adaptation (R2-06)', () => {
       capabilityFor: (agentId, action) => agentId === HOST_NS && action === 'write',
     });
     try {
-      ctx.window.GitPanel.onOpen();
+      ctx.__gitPanel.onOpen();
       await tick(); await tick();
-      const html = ctx.window.GitPanel.render();
+      const html = ctx.__gitPanel.render();
       // 写能力齐备：与本地一致（同一套控件语言，无禁用降级、无远程连接标识）
       assert.ok(html.includes('data-gp-action="stage-all"'), 'stage-all present');
       assert.ok(!html.includes('data-gp-action="stage-all" disabled'), 'not degraded with write capability');

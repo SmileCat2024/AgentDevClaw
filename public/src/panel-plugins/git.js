@@ -29,14 +29,17 @@
  *
  * 交互模式对齐 todo-plan.js：featurePanelBody 事件委托 + data-gp-* 属性。
  *
- * 依赖（全局，声明于 app-core.js / app-main.js / debug-panel-host.js / git-graph.js）：
+ * ESM 面板插件（ADR-0044 P4，自 modules/git-panel.js 迁移）：宿主经
+ * panel-plugins.js 清单懒装载（点开面板时 import）；常驻监听在 mount(host)
+ * 集中挂载并经 host.effect 登记卸载；生命周期经注册表元数据分发。
+ *
+ * 依赖（全局，声明于 app-core.js / app-main.js / debug-panel-host.js / git-graph.js，
+ * 模块函数体内裸引用，装载时已就绪）：
  *   - featurePanelBody, activeFeaturePanel, currentRuntimeAgentId, currentLanguage
  *   - renderFeaturePanel, escapeHtml, GitGraph
  *   - getRuntimeWorkspaceSessionId, getActiveWorkspaceSessionId, getCurrentAgentRecord,
  *     getCurrentRuntimeRecord
  */
-(function () {
-  'use strict';
 
   const state = {
     dir: '',            // 当前会话绑定目录（面板视图身份）
@@ -1422,8 +1425,7 @@
   }
 
   // ── 事件委托（对齐 todo-plan.js 的 featurePanelBody 模式）────────
-
-  featurePanelBody.addEventListener('mousedown', onSplitterDown);
+  // 常驻监听统一在 mount(host) 挂载并经 host.effect 登记卸载（ADR-0044 P4）。
 
   // 图形区滚动到底自动加载更早提交（无限滚动）。scroll 不冒泡，用捕获阶段
   // 委托；面板 DOM 每次 repaint 重建，监听必须挂在宿主上而非滚动容器。
@@ -1478,9 +1480,7 @@
     if (typeof syncPanelBodyHtmlCache === 'function') syncPanelBodyHtmlCache();
   }
 
-  featurePanelBody.addEventListener('scroll', onGraphScroll, true);
-
-  featurePanelBody.addEventListener('click', (e) => {
+  function onPanelBodyClick(e) {
     // 分区头折叠（自管状态，不经原生 details）
     const subHead = e.target.closest('.git-sub-head');
     if (subHead && !e.target.closest('button')) {
@@ -1536,10 +1536,10 @@
       state.rejectedRoots.clear(); // 用户显式重扫：清否决记忆，坏仓库给重试机会
       discoverRepos(true);
     }
-  });
+  }
 
   // 分支弹层菜单项点击（菜单挂在 body 上，面板委托覆盖不到，独立监听）
-  document.body.addEventListener('click', (e) => {
+  function onBranchMenuClick(e) {
     const item = e.target.closest('#git-branch-menu [data-gp-branch]');
     if (!item) return;
     e.preventDefault();
@@ -1549,43 +1549,62 @@
     state.expandedCommit = '';
     closeBranchMenu();
     loadAll();
-  });
+  }
 
   // 仓库弹层菜单项点击（同上，body 级独立监听）；主动选择写回默认仓库偏好
-  document.body.addEventListener('click', (e) => {
+  function onRepoMenuClick(e) {
     const item = e.target.closest('#git-repo-menu [data-gp-root]');
     if (!item) return;
     e.preventDefault();
     const root = item.dataset.gpRoot || '';
     closeRepoMenu();
     if (root) selectRepo(root, { persist: true });
-  });
+  }
 
   // 面板打开时刷新当前会话目录的仓库状态（生命周期经注册表元数据分发，
-  // ADR-0044 P2；与 window.GitPanel.onOpen 共用同一函数引用）。
+  // ADR-0044 P2；与命名导出的 onOpen 共用同一函数引用）。
   function onOpen() {
     ensureLoaded(0);
     startAutoRefresh();
     if (state.dir && !state.loading) loadAll();
   }
 
-  window.GitPanel = {
-    render,
-    onOpen,
-    refresh,
-  };
+  // 插件挂载：常驻监听集中登记（ADR-0044 P4，host.effect 保障卸载即净）。
+  function mountPanel(host) {
+    featurePanelBody.addEventListener('mousedown', onSplitterDown);
+    featurePanelBody.addEventListener('scroll', onGraphScroll, true);
+    featurePanelBody.addEventListener('click', onPanelBodyClick);
+    document.body.addEventListener('click', onBranchMenuClick);
+    document.body.addEventListener('click', onRepoMenuClick);
+    host.effect(() => {
+      featurePanelBody.removeEventListener('mousedown', onSplitterDown);
+      featurePanelBody.removeEventListener('scroll', onGraphScroll, true);
+      featurePanelBody.removeEventListener('click', onPanelBodyClick);
+      document.body.removeEventListener('click', onBranchMenuClick);
+      document.body.removeEventListener('click', onRepoMenuClick);
+    });
+  }
 
-  // 面板注册（Claw 宿主注册表）：直接函数引用，不经 window 晚绑定寻址。
-  // 注册表全集由 frontend-rail-panels-golden 金样本钉住。
-  window.ClawHost.panels.register('git', {
-    when: { surfaces: ['chat'] },
-    title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
-    label: { zh: '源代码管理', en: 'Source Control' },
-    description: { zh: 'Git 状态与操作', en: 'Git status and actions' },
-    render: () => render(),
-    // 惰性引用：金样本沙箱只执行注册块，onOpen 定义在块外（与 render 同款约束）
-    onOpen: () => onOpen(),
+// 命名导出：测试与宿主侧诊断入口（原 window.GitPanel 的公共面）。
+export { render, onOpen, refresh };
+
+// 面板插件声明（ADR-0044 P4）：宿主经 panel-plugins 清单懒装载，mount 时
+// 挂常驻监听（host.effect 登记卸载），生命周期经注册表元数据分发。
+export default {
+  id: 'git',
+  // 惰性引用：金样本沙箱只执行声明块，mountPanel 定义在块外（与 onOpen 同款约束）
+  mount(host) { return mountPanel(host); },
+  panels: {
+    git: {
+      when: { surfaces: ['chat'] },
+      title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
+      label: { zh: '源代码管理', en: 'Source Control' },
+      description: { zh: 'Git 状态与操作', en: 'Git status and actions' },
+      render: () => render(),
+      // 惰性引用：金样本沙箱只执行声明块，onOpen 定义在块外（与 render 同款约束）
+      onOpen: () => onOpen(),
       icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="6" cy="6" r="2.6"></circle> <circle cx="6" cy="18" r="2.6"></circle> <circle cx="18" cy="8" r="2.6"></circle> <path d="M6 8.6v6.8"></path> <path d="M18 10.6c0 4-4.5 3.4-8 4.5"></path> </svg>',
-    order: 30,
-  });
-})();
+      order: 30,
+    },
+  },
+};

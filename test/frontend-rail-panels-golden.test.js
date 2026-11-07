@@ -60,10 +60,11 @@ const REGISTRATION_HOMES = [
     suffix: '',
   },
   {
-    id: 'git 自注册',
-    file: 'public/src/modules/git-panel.js',
-    start: "window.ClawHost.panels.register('git'",
-    end: '})();',
+    id: 'git 插件声明',
+    file: 'public/src/panel-plugins/git.js',
+    start: 'export default {',
+    end: null, // 至文件尾
+    esm: true, // export default → 赋值，panels 声明按 activatePlugin 同语义注册
     prefix: '',
     suffix: '',
   },
