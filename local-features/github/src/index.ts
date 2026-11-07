@@ -10,13 +10,12 @@ import { execSync } from 'child_process';
 import type { AgentFeature, FeatureInitContext, Tool, PackageInfo, FeatureManifestDefinition } from '@agentdevjs/core';
 import { getPackageInfoFromSource } from '@agentdevjs/core';
 import { GitHubClient } from './client.js';
-import { createGitHubTools, type GitHubToolDefaults } from './tools.js';
 import { createCapabilityShellTool } from '../../capability-shell/src/tool-factory.js';
-import { createGitHubShellAdapters, createGitHubShellPolicy } from './github-shell.js';
+import { createGitHubShellAdapters, createGitHubShellPolicy, type GitHubToolDefaults } from './github-shell.js';
 
 const __filename = fileURLToPath(import.meta.url);
 
-const ALL_TOOLSETS = ['context', 'repo', 'issues', 'pr', 'actions', 'notifications'] as const;
+const ALL_TOOLSETS = ['context', 'repo', 'issues', 'pr', 'actions', 'releases', 'notifications'] as const;
 type ToolsetId = typeof ALL_TOOLSETS[number];
 
 export interface GitHubFeatureConfig {
@@ -32,7 +31,7 @@ export class GitHubShellFeature implements AgentFeature {
   readonly name = 'github';
   readonly dependencies: string[] = [];
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = 'GitHub 平台集成：仓库浏览、Issue/PR 管理、CI 日志分析。直接调用 GitHub API，无需 MCP。';
+  readonly description = 'GitHub 平台集成：仓库浏览、Issue/PR 管理、CI 日志分析、Release 发布。直接调用 GitHub API，无需 MCP。';
 
   private _packageInfo: PackageInfo | null = null;
   private _token: string | null = null;
@@ -120,7 +119,13 @@ export class GitHubShellFeature implements AgentFeature {
           enableActions: {
             type: 'boolean',
             title: 'CI / Actions',
-            description: '启用后，Agent 可以查看 CI 运行状态、获取失败日志并分析构建失败原因。',
+            description: '启用后，Agent 可以查看 CI 运行状态、获取失败日志、重跑或取消运行并分析构建失败原因。',
+            default: true,
+          },
+          enableReleases: {
+            type: 'boolean',
+            title: 'Release 发布',
+            description: '启用后，Agent 可以创建和查看 Release（含资产上传）、更新发布说明、删除误发的 Release。',
             default: true,
           },
           enableNotifications: {
@@ -131,7 +136,7 @@ export class GitHubShellFeature implements AgentFeature {
           },
         },
         sections: [
-          { id: 'main', title: 'GitHub', properties: ['token', 'apiBaseUrl', 'defaultOwner', 'defaultRepo', 'enableContext', 'enableRepo', 'enableIssues', 'enablePr', 'enableActions', 'enableNotifications'] },
+          { id: 'main', title: 'GitHub', properties: ['token', 'apiBaseUrl', 'defaultOwner', 'defaultRepo', 'enableContext', 'enableRepo', 'enableIssues', 'enablePr', 'enableActions', 'enableReleases', 'enableNotifications'] },
         ],
       },
     };
@@ -157,6 +162,7 @@ export class GitHubShellFeature implements AgentFeature {
         enableIssues: 'issues',
         enablePr: 'pr',
         enableActions: 'actions',
+        enableReleases: 'releases',
         enableNotifications: 'notifications',
       };
       const newToolsets = new Set<string>();
@@ -220,10 +226,9 @@ export class GitHubShellFeature implements AgentFeature {
       apiBaseUrl: this._apiBaseUrl,
     });
 
-    const domainTools = createGitHubTools(client, this._defaults, this._enabledToolsets);
     return [createCapabilityShellTool(
-      createGitHubShellPolicy(domainTools),
-      createGitHubShellAdapters(domainTools),
+      createGitHubShellPolicy(this._enabledToolsets),
+      createGitHubShellAdapters(client, this._defaults, this._enabledToolsets),
     )];
   }
 }
