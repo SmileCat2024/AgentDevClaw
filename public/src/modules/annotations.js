@@ -32,6 +32,7 @@
   let annotations = [];        // 当前会话标注缓存（feature list 请求面为准）
   let addressing = null;       // { agentId, sessionId }
   let sessionKey = '';         // 寻址键（变化检测）
+  let boundRuntimeRef = '';    // 当前订阅绑定的 runtime（同会话换代检测）
   let stream = null;           // EventSource（SSE latest=1）
   let listSeq = 0;             // list 请求竞态守卫
   let panelOpen = false;
@@ -95,9 +96,18 @@
 
   function ensureSession() {
     const next = currentAddressing();
+    const runtimeRef = typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '';
     const nextKey = next ? `${next.agentId}/${next.sessionId}` : '';
-    if (nextKey === sessionKey) return;
+    // 关闭对话再重开：sessionId 不变但 runtime 已换代（新 runtime id）。旧的
+    // SSE closed 事件在停止时就清空了缓存与流，若只按 agentId/sessionId 去重，
+    // ensureSession 会因键相同而永远跳过重同步——标注再也拉不回来（历史 bug；
+    // 接续场景 sessionId 变化走键差异路径，不受影响）。runtimeRef 为空（runtime
+    // 不在位）不触发：已关闭的会话不重订阅，等新 runtime 在位再换绑重同步。
+    const runtimeReplaced = nextKey !== '' && nextKey === sessionKey
+      && runtimeRef !== '' && runtimeRef !== boundRuntimeRef;
+    if (nextKey === sessionKey && !runtimeReplaced) return;
     sessionKey = nextKey;
+    boundRuntimeRef = runtimeRef;
     addressing = next;
     closeStream();
     annotations = [];
