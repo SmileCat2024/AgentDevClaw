@@ -922,8 +922,12 @@
     title: () => currentLanguage === 'zh' ? '后台任务' : 'Background',
     label: { zh: '后台任务', en: 'Background' },
     description: { zh: 'bash_bg 后台任务实时状态', en: 'Live bash_bg task status' },
-    render: () => getHtml(),
-    preserveOnReRender: true,
+    // 容器型（ADR-0044 P2c 试点）：body 渲染权移交面板，宿主轮询重渲染对
+    // 本面板是 no-op；刷新由 repaint 自管（两级更新，经 #bg-panel-root 寻址）。
+    // SSE/徽标流生命周期与开关面板绑定（onOpen/onClose），与 body 挂载/卸载正交——
+    // 面板关闭后徽标流故意存活（重开保暖），unmountBody 只清重绘签名。
+    mountBody(bodyEl) { bodyEl.innerHTML = getHtml(); },
+    unmountBody() { lastHtml = ''; lastSkeleton = ''; },
     // 惰性引用：金样本沙箱只执行注册块，实现函数定义在块外
     onOpen: () => startChannel(),
     onClose: () => onPanelClose(),

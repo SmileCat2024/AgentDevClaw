@@ -65,6 +65,14 @@ function createPanelHostSandbox() {
   return ctx;
 }
 
+/** createPanelHostSandbox 的 rAF 同步化变体：toggle 打开走 deferBody 路径时
+ *  commitPanelBody（含容器型 mountBody）同步提交，body 挂载可同步断言。 */
+function createSyncPanelHostSandbox() {
+  const ctx = createPanelHostSandbox();
+  ctx.run('window.requestAnimationFrame = (fn) => fn();');
+  return ctx;
+}
+
 /** 注册带生命周期钩子的面板；调用日志挂 window.__panelCalls（按序记录）。 */
 function registerTracedPanels(ctx, ids) {
   ctx.run('window.__panelCalls = [];');
@@ -247,4 +255,104 @@ test('syncRailButtons 按钮集合变化后重放 rail-customize 配置，无变
   assert.equal(ctx.run('window.__applyCalls'), 1, '集合无变化（幂等调用）不应重放');
   ctx.run('window.ClawHost.panels.unregister("git"); syncRailButtons();');
   assert.equal(ctx.run('window.__applyCalls'), 2, '按钮摘除（集合变化）应再次重放');
+});
+
+// ── 容器型面板（ADR-0044 P2c）──────────────────────────────────────
+// 钉什么：mountBody 型面板的 body 渲染权移交——打开挂载、轮询重渲染
+// no-op、切换/关闭卸载且 unmountBody 必被调用、innerHTML 路径不触碰
+// 其 DOM；卸载回调抛错不阻断容器收回。这是 React 类插件进右栏的通道。
+
+function registerContainerPanels(ctx) {
+  ctx.run('window.__clog = [];');
+  ctx.run(`
+    window.ClawPanels.register('island', {
+      when: { surfaces: ['chat'] },
+      title: () => '容器面板',
+      // 注意：无 render —— 容器型面板不提供 HTML 字符串
+      mountBody(bodyEl, ctxInfo) {
+        window.__clog.push('mount:' + ctxInfo.panelId);
+        bodyEl.innerHTML = '<div data-island></div>';
+      },
+      unmountBody() { window.__clog.push('unmount'); },
+    });
+    window.ClawPanels.register('plain', {
+      when: { surfaces: ['chat'] },
+      title: () => '字符串面板',
+      render: () => '<div data-plain></div>',
+    });
+  `);
+}
+
+test('容器面板打开时 mountBody 收到 body 容器与 panelId，轮询重渲染不重复挂载', () => {
+  const ctx = createSyncPanelHostSandbox();
+  registerContainerPanels(ctx);
+  ctx.run('toggleFeaturePanel("island");');
+  assert.equal(ctx.run('window.__clog.join(",")'), 'mount:island');
+  assert.equal(ctx.run('featurePanelBody.innerHTML'), '<div data-island></div>',
+    'body DOM 由 mountBody 全权构建');
+  // 轮询触发的重渲染（同面板）：mountBody 不再调用，DOM 不被触碰
+  ctx.run('renderFeaturePanel(); renderFeaturePanel();');
+  assert.equal(ctx.run('window.__clog.join(",")'), 'mount:island', '重渲染不得重复挂载或卸载');
+  assert.equal(ctx.run('featurePanelBody.innerHTML'), '<div data-island></div>',
+    '重渲染不得触碰容器面板的 DOM');
+});
+
+test('容器面板切换到字符串面板：unmountBody 先清理，body 随后被 render HTML 接管', () => {
+  const ctx = createSyncPanelHostSandbox();
+  registerContainerPanels(ctx);
+  ctx.run('toggleFeaturePanel("island"); toggleFeaturePanel("plain");');
+  assert.equal(ctx.run('window.__clog.join(",")'), 'mount:island,unmount',
+    '切换时容器面板必须收到 unmountBody（innerHTML 路径会销毁其 DOM，先给清理机会）');
+  assert.equal(ctx.run('featurePanelBody.innerHTML'), '<div data-plain></div>');
+});
+
+test('容器面板关闭：unmountBody 被调用，body 收回回空态', () => {
+  const ctx = createSyncPanelHostSandbox();
+  registerContainerPanels(ctx);
+  ctx.run('toggleFeaturePanel("island"); toggleFeaturePanel("island");');
+  assert.equal(ctx.run('window.__clog.join(",")'), 'mount:island,unmount');
+  assert.equal(ctx.run('featurePanelBody.innerHTML'), '', '关闭后宿主收回容器');
+  assert.equal(ctx.run('featurePanel.classList.contains("open")'), false);
+});
+
+test('unmountBody 抛错不阻断容器收回与后续面板状态', () => {
+  const ctx = createSyncPanelHostSandbox();
+  ctx.run(`
+    window.__clog = [];
+    window.ClawPanels.register('bad', {
+      when: { surfaces: ['chat'] },
+      title: () => '坏面板',
+      mountBody(bodyEl) { window.__clog.push('mount'); bodyEl.innerHTML = '<div></div>'; },
+      unmountBody() { window.__clog.push('unmount-throw'); throw new Error('cleanup boom'); },
+    });
+  `);
+  ctx.run('toggleFeaturePanel("bad");');
+  assert.doesNotThrow(() => ctx.run('toggleFeaturePanel("bad");'), '卸载回调抛错不得炸面板编排');
+  assert.equal(ctx.run('window.__clog.join(",")'), 'mount,unmount-throw');
+  assert.equal(ctx.run('featurePanelBody.innerHTML'), '', '抛错后宿主仍收回容器');
+});
+
+test('mountBody 抛错不僵尸化：不挂幽灵 unmount，面板状态可继续流转', () => {
+  const ctx = createSyncPanelHostSandbox();
+  ctx.run(`
+    window.__clog = [];
+    window.ClawPanels.register('boom', {
+      when: { surfaces: ['chat'] },
+      title: () => '挂载失败',
+      mountBody() { window.__clog.push('mount-throw'); throw new Error('mount boom'); },
+      unmountBody() { window.__clog.push('unmount-should-not-run'); },
+    });
+  `);
+  ctx.run('toggleFeaturePanel("boom");');
+  assert.equal(ctx.run('window.__clog.join(",")'), 'mount-throw', '挂载失败后不得调幽灵 unmount');
+  // 状态可继续流转：切到字符串面板正常渲染
+  ctx.run(`
+    window.ClawPanels.register('plain2', {
+      when: { surfaces: ['chat'] },
+      title: () => '恢复',
+      render: () => '<div data-recovered></div>',
+    });
+    toggleFeaturePanel('plain2');
+  `);
+  assert.equal(ctx.run('featurePanelBody.innerHTML'), '<div data-recovered></div>');
 });

@@ -112,7 +112,7 @@ describe('ClawHost panels', () => {
 
   it('缺少 render 或重复 ID 被拒绝', () => {
     const host = makeHost();
-    assert.throws(() => host.panels.register('x', {}), /must provide a render function/);
+    assert.throws(() => host.panels.register('x', {}), /must provide a render or mountBody function/);
     assert.throws(() => host.panels.register('', { render: () => '' }), /Panel ID is required/);
     host.panels.register('x', { render: () => '' });
     assert.throws(() => host.panels.register('x', { render: () => '' }), /already registered/);

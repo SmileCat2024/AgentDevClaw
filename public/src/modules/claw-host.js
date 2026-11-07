@@ -148,8 +148,11 @@
   function registerPanel(id, panel, owner) {
     const key = String(id || '').trim();
     if (!key) throw new TypeError('Panel ID is required');
-    if (!panel || typeof panel.render !== 'function') {
-      throw new TypeError(`Panel "${key}" must provide a render function`);
+    // 双轨渲染（ADR-0044 P2c）：render（HTML 字符串型）或
+    // mountBody（容器型，body 渲染权移交面板）至少提供其一
+    if (!panel
+        || (typeof panel.render !== 'function' && typeof panel.mountBody !== 'function')) {
+      throw new TypeError(`Panel "${key}" must provide a render or mountBody function`);
     }
     if (panels.has(key)) throw new Error(`Panel "${key}" is already registered`);
     const when = panel.when || {};

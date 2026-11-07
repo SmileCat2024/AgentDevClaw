@@ -3,8 +3,10 @@
  *
  * 从 debug-panels.js 拆出。必须在所有 debug-*.js 子模块之后加载。
  * 包含：
- *   - renderFeaturePanel（经 ClawPanels 注册表调用各面板 render）
+ *   - renderFeaturePanel（经 ClawPanels 注册表调用各面板 render；
+ *     mountBody 型容器面板经挂载/卸载通道，不走 innerHTML）
  *   - toggleFeaturePanel
+ *   - syncRailButtons（rail 按钮注册表派生，ADR-0044 P2b）
  *
  * 依赖（全局变量，声明于 app-core.js）：
  *   - activeFeaturePanel, featurePanelWidth
@@ -46,6 +48,7 @@ function syncPanelBodyHtmlCache() {
   const panelId = activeFeaturePanel;
   const panel = panelId && window.ClawPanels.get(panelId);
   if (!panel || featurePanelBody.dataset.panel !== panelId) return;
+  if (typeof panel.mountBody === 'function') return; // 容器型面板不参与签名缓存
   try {
     _panelBodyHtmlCache.set(panelId, panel.render());
   } catch (_) { /* 求值失败保留旧签名，下一次 repaint 全量替换自愈 */ }
@@ -56,6 +59,50 @@ function runAfterPanelOpenFrame(callback) {
     ? window.requestAnimationFrame.bind(window)
     : (fn) => setTimeout(fn, 0);
   raf(() => raf(callback));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 容器型面板（ADR-0044 P2c）
+// ═══════════════════════════════════════════════════════════════
+//
+// 面板元数据声明 mountBody(bodyEl, ctx) 时，body 的渲染权移交面板：
+// 打开时宿主给出容器（featurePanelBody）调 mountBody，轮询重渲染对它
+// 是 no-op，关闭/切换时调 unmountBody 后宿主收回容器。innerHTML 路径
+// 永远不触碰它的 DOM——这是 React 等自管渲染库挂进右栏的通道。
+// 与字符串型面板的关键区别：不参与内容签名去重/preserveOnReRender
+//（天然保留），刷新节奏由面板自管（onOpen 里启动，unmountBody 里清理）。
+
+let mountedContainer = null; // { id, unmount }：unmountBody 引用在挂载时缓存，面板被摘除后仍可卸载
+
+function unmountContainerPanel(reason) {
+  if (!mountedContainer) return;
+  const { id, unmount } = mountedContainer;
+  mountedContainer = null;
+  if (typeof unmount === 'function') {
+    try {
+      unmount();
+    } catch (err) {
+      console.error(`[panel:${id}] unmountBody failed (${reason})`, err);
+    }
+  }
+  featurePanelBody.innerHTML = '';
+  delete featurePanelBody.dataset.panel;
+}
+
+function mountContainerPanel(panel, panelId) {
+  mountedContainer = { id: panelId, unmount: panel.unmountBody || null };
+  try {
+    panel.mountBody(featurePanelBody, { panelId });
+  } catch (err) {
+    console.error(`[panel:${panelId}] mountBody failed`, err);
+    mountedContainer = null; // 挂载失败视作未挂载，防幽灵 unmount
+  }
+  featurePanel.classList.add('body-ready');
+  // 底部渐变与字符串面板同口径（内层滚动容器同样检查）
+  const innerScroll = featurePanelBody.querySelector('.logf-list');
+  featurePanel.classList.toggle('scrollable',
+    featurePanelBody.scrollHeight > featurePanelBody.clientHeight + 4
+    || (innerScroll && innerScroll.scrollHeight > innerScroll.clientHeight + 4));
 }
 
 function renderFeaturePanel(options = {}) {
@@ -89,6 +136,7 @@ function renderFeaturePanel(options = {}) {
   if (!activeFeaturePanel || !window.ClawPanels.get(activeFeaturePanel)) {
     featurePanelRenderVersion += 1;
     _panelBodyHtmlCache.clear();
+    unmountContainerPanel('close'); // 容器型面板随面板关闭卸载（无挂载时幂等 no-op）
     featurePanel.classList.remove('open');
     featurePanel.classList.remove('body-ready');
     document.querySelector('.main-content')?.classList.remove('panel-open');
@@ -127,6 +175,23 @@ function renderFeaturePanel(options = {}) {
 
   const commitPanelBody = () => {
     if (renderVersion !== featurePanelRenderVersion || activeFeaturePanel !== panelId) {
+      return;
+    }
+
+    // ── 容器型面板（ADR-0044 P2c）──
+    // 挂载中的容器面板与当前面板不一致时先卸载：覆盖「容器→容器」切换，
+    // 也覆盖「容器→字符串」切换（innerHTML 路径会销毁其 DOM，必须先给
+    // unmountBody 清理定时器/订阅的机会）。「字符串→容器」无挂载，直挂。
+    if (mountedContainer && mountedContainer.id !== panelId) {
+      unmountContainerPanel('switch');
+    }
+    if (typeof panel.mountBody === 'function') {
+      if (!mountedContainer) {
+        mountContainerPanel(panel, panelId);
+      } else {
+        // 已挂载的重渲染（轮询触发）：容器面板自管刷新，宿主 no-op
+        featurePanel.classList.add('body-ready');
+      }
       return;
     }
 
@@ -199,6 +264,7 @@ function renderFeaturePanel(options = {}) {
 
   if (options.deferBody === true) {
     featurePanel.classList.remove('body-ready');
+    unmountContainerPanel('defer'); // 幂等：defer 打开时无挂载，防御 defer 语义将来扩展
     featurePanelBody.innerHTML = '';
     runAfterPanelOpenFrame(commitPanelBody);
     return;
