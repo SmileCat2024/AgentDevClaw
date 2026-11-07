@@ -90,12 +90,19 @@ ADR-0044 决策 2 落地，实际修复三处（第三处为核实中发现的�
 
 顺序与理由（由简到繁）：
 
-| 批次 | 面板 | 规模与要点 |
-|---|---|---|
-| 5.1 | session-controls | 最简单，纯注册搬家 |
-| 5.2 | git | 生命周期钩子 + badge 全局寻址收编 |
-| 5.3 | annotations | ADR-0018 通道订阅（SSE）挂到面板级生命周期 |
-| 5.4 | genui | 最复杂：跨进程通道 + 交互密集，`preserveOnReRender` 退役 |
+| 批次 | 面板 | 规模与要点 | 状态 |
+|---|---|---|---|
+| 5.1 | session-controls | 最简单，纯注册搬家 | 已迁移（P3 验收同批） |
+| 5.2 | git | 生命周期钩子 + badge 全局寻址收编 | 已迁移 |
+| 5.3 | annotations | ~~ADR-0018 通道订阅（SSE）挂到面板级生命周期~~ | **裁决不迁**（见下） |
+| 5.4 | genui | ~~最复杂：跨进程通道 + 交互密集~~ | **裁决不迁**（见下） |
+
+**5.3 / 5.4 不迁裁决（2026-11-07，迁移前调查得出）**：判据是"面板外消费方"——模块 API 在面板关闭时仍被宿主链路消费的面板，懒装载会造成产品语义损失，不属于可迁移的纯面板：
+
+- `annotations`：`window.ClawAnnotations.scheduleReplay` 被 chat-renderer.js 消息渲染主链路调用（3 处，带守卫）。懒装载后模块在面板首开前缺席，会话消息上的标注高亮回放随之消失，违背"标注应一直在"的产品语义。
+- `genui`：`window.GenUIPanel.submitToAgent / resetSurface / forceRefresh` 分别被消息流渲染器与 runtime 切换链路消费。模块缺席时 agent 发来的生成式 UI 在消息流中无交互，徽标也不更新。
+
+两者保留 classic script 静态加载（`preserveOnReRender` 亦保留）。它们的 P2 收益（生命周期经注册表、效果归属经 host.effect）不依赖迁移形态，已在此前阶段兑现。若未来要把它们变纯面板，先把渲染增强面从面板模块剥离（scheduleReplay 前置宿主、genui block 渲染走独立通道），另立工程。
 
 每批次动作：模块化（default export panels 声明）→ manifest 登记 → 删 index.html script 标签 → 删全局对象 → 修剪 `.script-tags-baseline.json` 与 `.frontend-globals-baseline.json` → 更新金样本 REGISTRATION_HOMES 住址 → 该面板行为等价验证（含浏览器冒烟）。
 
