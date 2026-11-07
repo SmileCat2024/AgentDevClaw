@@ -1600,6 +1600,8 @@ export default {
       title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
       label: { zh: '源代码管理', en: 'Source Control' },
       description: { zh: 'Git 状态与操作', en: 'Git status and actions' },
+      // 全幅面板（容器无留白契约）：上下双区自带 --git-edge 边距体系，不吃内容层 padding
+      fullBleed: true,
       render: () => render(),
       // 惰性引用：金样本沙箱只执行声明块，onOpen 定义在块外（与 render 同款约束）
       onOpen: () => onOpen(),

@@ -303,7 +303,24 @@ test('容器面板切换到字符串面板：unmountBody 先清理，body 随后
   ctx.run('toggleFeaturePanel("island"); toggleFeaturePanel("plain");');
   assert.equal(ctx.run('window.__clog.join(",")'), 'mount:island,unmount',
     '切换时容器面板必须收到 unmountBody（innerHTML 路径会销毁其 DOM，先给清理机会）');
-  assert.equal(ctx.run('featurePanelBody.innerHTML'), '<div data-plain></div>');
+  // 容器无留白契约：字符串面板内容由宿主包在 .feature-panel-content 内容层
+  assert.equal(ctx.run('featurePanelBody.innerHTML'),
+    '<div class="feature-panel-content"><div data-plain></div></div>');
+});
+
+test('fullBleed 字符串面板不吃内容层包装（自带边距设计的全幅面板）', () => {
+  const ctx = createSyncPanelHostSandbox();
+  ctx.run(`
+    window.ClawPanels.register('edge', {
+      when: { surfaces: ['chat'] },
+      title: () => '全幅',
+      fullBleed: true,
+      render: () => '<div data-edge></div>',
+    });
+  `);
+  ctx.run('toggleFeaturePanel("edge");');
+  assert.equal(ctx.run('featurePanelBody.innerHTML'), '<div data-edge></div>',
+    'fullBleed 面板直接占用 body，不包 .feature-panel-content');
 });
 
 test('容器面板关闭：unmountBody 被调用，body 收回回空态', () => {
@@ -311,7 +328,10 @@ test('容器面板关闭：unmountBody 被调用，body 收回回空态', () => 
   registerContainerPanels(ctx);
   ctx.run('toggleFeaturePanel("island"); toggleFeaturePanel("island");');
   assert.equal(ctx.run('window.__clog.join(",")'), 'mount:island,unmount');
-  assert.equal(ctx.run('featurePanelBody.innerHTML'), '', '关闭后宿主收回容器');
+  // 容器无留白契约：关闭后 body 由宿主空态接管（空态经内容层展示；沙箱
+  // stub 的空态为空串，故 body 只余空内容层）。面板 DOM 必须清除。
+  assert.equal(ctx.run('featurePanelBody.innerHTML'), '<div class="feature-panel-content"></div>',
+    '关闭后宿主收回容器，body 只余空态内容层');
   assert.equal(ctx.run('featurePanel.classList.contains("open")'), false);
 });
 
@@ -329,7 +349,19 @@ test('unmountBody 抛错不阻断容器收回与后续面板状态', () => {
   ctx.run('toggleFeaturePanel("bad");');
   assert.doesNotThrow(() => ctx.run('toggleFeaturePanel("bad");'), '卸载回调抛错不得炸面板编排');
   assert.equal(ctx.run('window.__clog.join(",")'), 'mount,unmount-throw');
-  assert.equal(ctx.run('featurePanelBody.innerHTML'), '', '抛错后宿主仍收回容器');
+  assert.equal(ctx.run('featurePanel.classList.contains("open")'), false, '抛错后宿主仍收回容器');
+  // 收回的容器可被后续面板正常接管（状态可继续流转）
+  ctx.run(`
+    window.ClawPanels.register('plain-after-bad', {
+      when: { surfaces: ['chat'] },
+      title: () => '恢复',
+      render: () => '<div data-recovered-from-bad></div>',
+    });
+    toggleFeaturePanel('plain-after-bad');
+  `);
+  assert.equal(ctx.run('featurePanelBody.innerHTML'),
+    '<div class="feature-panel-content"><div data-recovered-from-bad></div></div>',
+    '抛错后容器仍可被后续面板接管');
 });
 
 test('mountBody 抛错不僵尸化：不挂幽灵 unmount，面板状态可继续流转', () => {
@@ -354,7 +386,9 @@ test('mountBody 抛错不僵尸化：不挂幽灵 unmount，面板状态可继�
     });
     toggleFeaturePanel('plain2');
   `);
-  assert.equal(ctx.run('featurePanelBody.innerHTML'), '<div data-recovered></div>');
+  // 容器无留白契约：恢复渲染同样包内容层
+  assert.equal(ctx.run('featurePanelBody.innerHTML'),
+    '<div class="feature-panel-content"><div data-recovered></div></div>');
 });
 
 // ═══════════════════════════════════════════════════════════════

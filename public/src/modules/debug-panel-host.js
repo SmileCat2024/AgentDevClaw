@@ -38,6 +38,28 @@ featurePanelBody.addEventListener('scroll', () => {
 // ClawSelect 增强层与输入焦点（防打断的关键）。
 const _panelBodyHtmlCache = new Map();
 
+// ═══════════════════════════════════════════════════════════════
+// 内容层契约：容器（.feature-panel-body）是无留白的通用滚动壳，
+// 字符串面板默认包一层 .feature-panel-content（24px / 窄屏 16px 留白），
+// 与容器瘦身前的视觉等价。全幅面板（threads / git 这类自带边距设计的）
+// 在元数据上声明 fullBleed:true 豁免；容器型面板（mountBody）天然全幅，
+// 不经 innerHTML 路径。面板侧自刷内容时应写入内容层而不是 body 本身
+// （宿主提供 panelBodyContentEl() 定位）。
+// ═══════════════════════════════════════════════════════════════
+
+function wrapPanelContent(html) {
+  return '<div class="feature-panel-content">' + html + '</div>';
+}
+
+/** 定位当前面板应写入的内容层（字符串面板在位时为 .feature-panel-content）。 */
+function panelBodyContentEl() {
+  return featurePanelBody.querySelector('.feature-panel-content') || featurePanelBody;
+}
+
+// 面板自刷后重算签名缓存用（内容层形态对调用方透明）。
+window.ClawFW = window.ClawFW || {};
+window.ClawFW.panelBodyContentEl = panelBodyContentEl;
+
 /**
  * 面板自行原地更新了 body 内的部分内容（不经 renderFeaturePanel 全量替换）
  * 之后调用：重新求值当前面板的 render() 并记入签名缓存，使下一次
@@ -143,7 +165,7 @@ function renderFeaturePanel(options = {}) {
     featurePanel.classList.remove('body-ready');
     document.querySelector('.main-content')?.classList.remove('panel-open');
     featurePanelTitle.textContent = t('panel_structure');
-    featurePanelBody.innerHTML = getFeaturePanelEmptyHtml();
+    featurePanelBody.innerHTML = wrapPanelContent(getFeaturePanelEmptyHtml());
     document.querySelectorAll('.rail-button[data-panel]').forEach(button => button.classList.remove('active'));
     // 清理可能残留的 Feature 详情弹窗 portal
     if (typeof renderFeatureDetailOverlay === 'function') {
@@ -188,13 +210,13 @@ function renderFeaturePanel(options = {}) {
       unmountContainerPanel('stub'); // 防御：stub 面板不应有挂载中的容器
       const loadState = window.ClawHost && window.ClawHost.getPluginLoadState(panel.stub.pluginId);
       if (loadState === 'failed') {
-        featurePanelBody.innerHTML =
-          '<div class="feature-panel-empty"><div>' + escapeHtml(t('panel_lazy_failed')) + '</div></div>';
+        featurePanelBody.innerHTML = wrapPanelContent(
+          '<div class="feature-panel-empty"><div>' + escapeHtml(t('panel_lazy_failed')) + '</div></div>');
         featurePanel.classList.add('body-ready');
         return;
       }
-      featurePanelBody.innerHTML =
-        '<div class="feature-panel-empty"><div>' + escapeHtml(t('panel_lazy_loading')) + '</div></div>';
+      featurePanelBody.innerHTML = wrapPanelContent(
+        '<div class="feature-panel-empty"><div>' + escapeHtml(t('panel_lazy_loading')) + '</div></div>');
       featurePanel.classList.add('body-ready');
       if (window.ClawHost) window.ClawHost.ensurePlugin(panel.stub.pluginId, panel.stub.url);
       return;
@@ -243,7 +265,7 @@ function renderFeaturePanel(options = {}) {
     }
     _panelBodyHtmlCache.set(panelId, nextHtml);
 
-    featurePanelBody.innerHTML = nextHtml;
+    featurePanelBody.innerHTML = panel.fullBleed ? nextHtml : wrapPanelContent(nextHtml);
     if (featurePanelBody.querySelector('.markdown-body')) {
       enhanceMathInElement(featurePanelBody);
     }

@@ -740,8 +740,9 @@
 
   const MONO = '"Fira Code", "Cascadia Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace';
   const STYLE = `
-    /* 宿主 .feature-panel-body 已有 24px padding（genui 同款做法），根容器不再留边 */
-    .bgp-root { display: flex; flex-direction: column; gap: 8px; }
+    /* 容器无留白契约（2026-11 迁移）：bg 为容器型面板（mountBody），根容器自持 24px 留白，
+       与字符串面板的内容层 .feature-panel-content 视觉等价 */
+    .bgp-root { display: flex; flex-direction: column; gap: 8px; padding: 24px; }
     .bgp-card {
       padding: 10px 12px;
       border: 1px solid rgba(255, 255, 255, 0.07);

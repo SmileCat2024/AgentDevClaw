@@ -1011,7 +1011,9 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 
 **贡献边界**：注册表面向 Claw 内置模块；Feature 不直接注册右栏面板（未来经宿主 API 贡献，见右侧面板演进共识）。
 
-回归测试：`test/frontend-right-panel-registry.test.js`（注册、上下文筛选、宿主接线源码断言）、`test/frontend-rail-customize.test.js`（清单派生、legacy 容忍、隐藏清理、加载顺序）。
+**容器几何契约（2026-11-07 起）**：`.feature-panel-body` 是无留白的通用滚动壳（不含 padding；桌面保留 `min-width: var(--feature-panel-width)` 拖窄防护，窄屏断点解除为 0）。留白责任按面板类型分担：字符串面板（`render()`）由宿主统一包一层 `.feature-panel-content`（24px / 窄屏 16px），面板零成本获得留白；自带边距设计的全幅面板在元数据声明 `fullBleed: true`（如 threads、git）直接占用 body；容器型面板（`mountBody`）天然全幅，自行设计留白（如 bg 根节点自持 padding、React 插件自持布局）。**面板自刷内容必须写入内容层**（`window.ClawFW.panelBodyContentEl()`，或 `body.querySelector('.feature-panel-content')`）而不是覆写 body 的 innerHTML——覆写 body 会吹掉内容层导致贴边。历史事故：React 面板曾用内联样式覆盖容器 padding 并在卸载时恢复，恢复条件依赖 `dataset.panel`，而宿主切换面板时先改 `dataset.panel` 再调 `unmountBody`，恢复恒不触发、内联覆盖残留，误伤所有后续面板——全幅需求一律走 `fullBleed` 声明或自持布局，禁止面板改写容器几何。
+
+回归测试：`test/frontend-right-panel-registry.test.js`（注册、上下文筛选、宿主接线源码断言）、`test/frontend-rail-customize.test.js`（清单派生、legacy 容忍、隐藏清理、加载顺序）、`test/frontend-panel-lifecycle.test.js`（内容层包装、fullBleed 豁免、容器面板生命周期）。
 
 ---
 

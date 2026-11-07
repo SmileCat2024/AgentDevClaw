@@ -1654,13 +1654,15 @@ registerFeaturePanel('settings', {
   onOpen: () => { if (typeof window._wgSettingsInit === 'function') window._wgSettingsInit(); },
     icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="12" cy="12" r="3"></circle> <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path> </svg>',
   });
-registerFeaturePanel('threads', {
-  title: () => '工作线程',
-  when: { agentIds: ['work-group'] },
-  label: { zh: '工作线程', en: 'Work Threads' },
-  render: () => window._wgGetThreadsHtml ? window._wgGetThreadsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
-  // 首次打开拉取数据；_wgThreadsInit 由 wg 模块后加载定义，保持晚绑定
-  onOpen: () => { if (typeof window._wgThreadsInit === 'function') window._wgThreadsInit(); },
+  registerFeaturePanel('threads', {
+    title: () => '工作线程',
+    when: { agentIds: ['work-group'] },
+    label: { zh: '工作线程', en: 'Work Threads' },
+    // 全幅面板（容器无留白契约）：线程看板自带边距设计，不吃内容层 padding
+    fullBleed: true,
+    render: () => window._wgGetThreadsHtml ? window._wgGetThreadsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+    // 首次打开拉取数据；_wgThreadsInit 由 wg 模块后加载定义，保持晚绑定
+    onOpen: () => { if (typeof window._wgThreadsInit === 'function') window._wgThreadsInit(); },
     icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M3 3v18h18"></path> <rect x="7" y="6" width="3" height="3" rx="0.5"></rect> <rect x="7" y="13" width="3" height="3" rx="0.5"></rect> <path d="M8.5 9v4"></path> <rect x="14" y="4" width="3" height="3" rx="0.5"></rect> <rect x="14" y="15" width="3" height="3" rx="0.5"></rect> <path d="M15.5 7v8"></path> </svg>',
   });
 

@@ -640,10 +640,15 @@
     return `<div class="anno-panel-list">${items}</div>`;
   }
 
-  /** 面板重绘：rail 宿主容器以 data-panel 标识当前面板，仅当前面板在位时替换。 */
+  /** 面板重绘：rail 宿主容器以 data-panel 标识当前面板，仅当前面板在位时替换。
+   * 字符串面板内容由宿主包在 .feature-panel-content 内容层（容器无留白契约），
+   * 自刷覆写内容层而不是 body 本身，避免把内容层吹掉导致贴边。 */
   function repaintPanel() {
     const host = document.getElementById('feature-panel-body');
-    if (host?.dataset?.panel === 'annotations') host.innerHTML = getPanelHtml();
+    if (host?.dataset?.panel !== 'annotations') return;
+    const content = host.querySelector('.feature-panel-content');
+    if (content) content.innerHTML = getPanelHtml();
+    else host.innerHTML = getPanelHtml();
   }
 
   function scrollToAnnotation(id) {

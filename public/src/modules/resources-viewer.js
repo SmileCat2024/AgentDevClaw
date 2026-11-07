@@ -128,13 +128,15 @@
   function _showFilesPanelError(msg) {
     const body = document.getElementById('feature-panel-body');
     if (!body) return;
-    const existing = body.querySelector('.files-panel-error');
+    // 字符串面板内容在 .feature-panel-content 内容层（容器无留白契约），提示跟随内容层
+    const scope = body.querySelector('.feature-panel-content') || body;
+    const existing = scope.querySelector('.files-panel-error');
     if (existing) existing.remove();
     const div = document.createElement('div');
     div.className = 'files-panel-error';
     div.textContent = msg;
     div.style.cssText = 'padding:8px 12px;background:#f44336;color:#fff;font-size:13px;border-radius:4px;margin:8px 12px;';
-    body.prepend(div);
+    scope.prepend(div);
     setTimeout(() => div.remove(), 5000);
   }
 
