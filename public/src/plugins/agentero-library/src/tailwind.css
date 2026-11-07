@@ -53,7 +53,8 @@
 .agentero-spin { animation:agentero-spin 1s linear infinite; }
 @keyframes agentero-spin { to { transform:rotate(360deg); } }
 
- .agentero-library.agentero-reader-host { position:fixed; inset:0; z-index:5000; width:100vw; height:100dvh; }
+.agentero-library.agentero-reader-host { position:fixed; inset:0; z-index:5000; display:flex; flex-direction:column; width:100vw; height:100dvh; background:var(--panel-bg); }
+.agentero-reader-portal { display:flex; flex:1 1 auto; flex-direction:column; min-width:0; min-height:0; width:100%; }
 .agentero-reader-topbar { display:flex; flex:0 0 auto; align-items:center; gap:14px; min-height:70px; padding:12px 24px; border-bottom:1px solid var(--border-color); background:var(--glass-bg); -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(1.2); backdrop-filter:blur(var(--glass-blur)) saturate(1.2); }
 .agentero-reader-heading { flex:1; min-width:0; }
 .agentero-reader-heading h1 { overflow:hidden; margin:4px 0 0; color:var(--text-primary); font-size:16px; font-weight:600; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }

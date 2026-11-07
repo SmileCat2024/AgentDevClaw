@@ -61,8 +61,11 @@ export function LibraryPanel({ t, loadPapers, loadPaper, notifyError, loadVault 
   }, [loadPaper, t])
 
   const detail = (selectedPaper !== null || detailLoading || detailError !== '') ? createPortal(
-    <div className='agentero-library agentero-surface agentero-reader-host'>
-      <div className='agentero-reader-portal' role='dialog' aria-modal='true' aria-label={t('paperDetails')}>
+    <div
+      className='agentero-library agentero-surface agentero-reader-host'
+      style={{ position: 'fixed', inset: 0, zIndex: 2147483000, display: 'flex', flexDirection: 'column', width: '100vw', height: '100dvh', background: 'var(--panel-bg)' }}
+    >
+      <div className='agentero-reader-portal' role='dialog' aria-modal='true' aria-label={t('paperDetails')} style={{ display: 'flex', flex: '1 1 auto', flexDirection: 'column', minWidth: 0, minHeight: 0, width: '100%' }}>
       <header className='agentero-reader-topbar'>
         <button type='button' className='agentero-icon-button' onClick={closeDetail} aria-label={t('backToLibrary')} title={t('backToLibrary')}><ArrowLeft size={18} /></button>
         <div className='agentero-reader-heading'>
@@ -87,7 +90,7 @@ export function LibraryPanel({ t, loadPapers, loadPaper, notifyError, loadVault 
         </section>
       </main> : null}
       </div>
-    </div>, document.documentElement,
+    </div>, document.body,
   ) : null
 
   return <div className='agentero-library agentero-surface agentero-library-page'>
