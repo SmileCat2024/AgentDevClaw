@@ -68,7 +68,9 @@ function inferFeatureTypes(pkg, baseId) {
 
 export function normalizeClawManifestV2(pkg) {
   const raw = pkg?.agentdev;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.schemaVersion !== 2) return null;
+  // v3 = v2 + 插件三面声明（export/ui/server，ADR-0045）：v2 校验字段全部
+  // 沿用；三面字段不在此透出（catalog 直接读 tgz 顶层 manifest）。
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || (raw.schemaVersion !== 2 && raw.schemaVersion !== 3)) return null;
   if (typeof raw.id !== 'string' || !raw.id.trim()) return null;
   const displayName = raw.displayName && typeof raw.displayName === 'object'
     ? raw.displayName
@@ -160,6 +162,18 @@ export async function ensureFeatureProjectManifest(projectDir) {
   const pkg = await readJson(packageJsonPath);
   const existingManifest = await readJson(manifestPath).catch(() => null);
   const inferred = inferFeatureManifest(pkg, `${path.basename(projectDir)}.tgz`);
+  // package.json.agentdev（studio_create_feature 写入的 v2/v3 声明）是顶层
+  // manifest 的第二来源：studio 项目不手工维护顶层文件，三面静态声明
+  //（export / ui / server / settings）只能经此处进入 tgz——历史缺口：
+  // studio 制造的包 settings/ui/server 全部丢失（AGENTER.md ADR-0045 P4）。
+  const agentdevMeta = pkg?.agentdev && typeof pkg.agentdev === 'object' && !Array.isArray(pkg.agentdev)
+    ? pkg.agentdev
+    : {};
+  const metaSource = (field) => {
+    const fromExisting = existingManifest?.[field];
+    if (fromExisting !== undefined && fromExisting !== null) return fromExisting;
+    return agentdevMeta[field];
+  };
   const featureTypes = normalizeFeatureTypes(existingManifest?.featureTypes || inferred.featureTypes);
   const manifest = {
     schemaVersion: 1,
@@ -188,6 +202,20 @@ export async function ensureFeatureProjectManifest(projectDir) {
     compatibility: normalizeFeatureCompatibility(existingManifest?.compatibility, featureTypes),
     requirements: normalizeFeatureRequirements(existingManifest?.requirements || inferred.requirements),
   };
+  // v3 插件声明面（export / ui / server / settings）透传，优先级：顶层
+  // manifest 文件 > package.json.agentdev > 丢弃。export 丢失使 $mount 装配
+  // 后 runtime 启动炸（入口多命名导出时 loader 无法唯一确定），ui / server /
+  // settings 丢失使面板声明、数据面声明与配置面板渲染失效。
+  const exportName = typeof metaSource('export') === 'string' && metaSource('export').trim()
+    ? metaSource('export').trim()
+    : '';
+  if (exportName) manifest.export = exportName;
+  for (const v3Field of ['ui', 'server', 'settings']) {
+    const value = metaSource(v3Field);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      manifest[v3Field] = value;
+    }
+  }
 
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 

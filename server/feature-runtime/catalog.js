@@ -40,6 +40,12 @@ export async function summarizeArchive(archivePath, source) {
     entry: typeof manifest?.entry === 'string' && manifest.entry.trim()
       ? manifest.entry.trim()
       : (typeof pkg.main === 'string' ? pkg.main.trim() : ''),
+    // Feature class 的显式导出名（manifest 顶层，与 entry 同级）。入口多命名导出
+    // 且无 default 时，loader 的猜测链无法唯一确定——声明位在此透传（历史事故：
+    // agentero 入口 6 个命名导出，$mount 装配后 runtime 启动炸）。
+    export: typeof manifest?.export === 'string' && manifest.export.trim()
+      ? manifest.export.trim()
+      : '',
     manifestPresent: !!manifest,
     manifestName: typeof manifest?.name === 'string' && manifest.name.trim() ? manifest.name.trim() : '',
     manifestDescription: typeof manifest?.description === 'string' && manifest.description.trim()

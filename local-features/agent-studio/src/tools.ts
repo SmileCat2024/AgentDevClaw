@@ -162,7 +162,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
     }),
     createTool({
       name: 'studio_create_feature',
-      description: '在当前目录下创建、安装并注册标准 AgentDev Feature npm 项目，并绑定到当前会话。必须依据已确认的功能范围填写 Claw Manifest v2 元数据；不要留用脚手架默认描述，也不要按包名猜 capabilities / type / requirements。',
+      description: '在当前目录下创建、安装并注册标准 AgentDev Feature npm 项目，并绑定到当前会话。必须依据已确认的功能范围填写 Claw Manifest v3 元数据；不要留用脚手架默认描述，也不要按包名猜 capabilities / type / requirements。插件三面声明（featureExport / uiPanels / serverFace）只在有对应实现时填写。',
       parameters: {
         type: 'object',
         properties: {
@@ -177,6 +177,32 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
           depends: { type: 'array', items: { type: 'object' }, description: 'Feature 的 static inject 依赖，使用 { id, range }。' },
           requirements: { type: 'object', description: '实际 requirements：platforms、node、external、services。' },
           rollback: { type: 'boolean', description: '是否支持回滚；依据实际状态/副作用语义填写。' },
+          featureExport: { type: 'string', description: '可选（Claw Manifest v3）：Feature class 的导出名。入口除 Feature class 外还有其他导出且无 default 导出时必填，否则装配后 runtime 启动会失败。' },
+          uiPanels: {
+            type: 'array',
+            description: '可选（Claw Manifest v3）：插件包的 UI 面声明。仅在实现并构建了 client/ 目录（预构建 ESM 面板模块）时填写。',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: '面板 id（全局唯一）与 pluginId（ClawHost 插件装载 id）。' },
+                entry: { type: 'string', description: 'client/ 目录下的入口文件相对路径，如 index.js。' },
+                scope: { type: 'string', enum: ['assembly', 'global'], description: 'assembly=仅装配了此插件的工作空间可见（默认）；global=所有界面可见。' },
+                labelZh: { type: 'string', description: '面板中文标题（右栏按钮文案）。' },
+                labelEn: { type: 'string', description: '面板英文标题。' },
+                order: { type: 'number', description: '右栏排序权重（小靠前）。' },
+              },
+              required: ['id', 'entry', 'labelZh', 'labelEn'],
+            },
+          },
+          serverFace: {
+            type: 'object',
+            description: '可选（Claw Manifest v3）：插件包的数据面声明。仅在实现并构建了 server/ 目录（导出 registerRoutes 的 ESM 模块）时填写。',
+            properties: {
+              entry: { type: 'string', description: 'server/ 目录下的入口文件相对路径，默认 index.js。' },
+              prefix: { type: 'string', description: '路由前缀（单段小写，如 agentero）；最终挂载在 /protoclaw/plugin/<prefix>/ 下。' },
+            },
+            required: ['prefix'],
+          },
         },
         required: ['name', 'displayNameZh', 'displayNameEn', 'description', 'type', 'capabilities', 'provides', 'depends', 'requirements', 'rollback'],
       },
@@ -235,8 +261,8 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
           if (!id || !range) throw new Error('depends 每项都必须提供 id 与 range。');
           return { id, range };
         });
-        const agentdev = {
-          schemaVersion: 2,
+        const agentdev: Record<string, unknown> = {
+          schemaVersion: 3,
           id: name,
           displayName: { zh: displayNameZh, en: displayNameEn },
           type,
@@ -246,6 +272,44 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
           requirements,
           compatibility: { rollback: args.rollback },
         };
+        // v3 三面静态声明（ADR-0045）：快照链路（ensureFeatureProjectManifest）
+        // 从 package.json.agentdev 提取到 tgz 顶层 manifest。没有对应实现不填，
+        // 声明与实现不符会在装配或加载时 fail fast。
+        const featureExport = cleanValue(args.featureExport);
+        if (featureExport) agentdev.export = featureExport;
+        const uiPanelsRaw: unknown[] = Array.isArray(args.uiPanels) ? args.uiPanels : [];
+        const uiPanels: Record<string, unknown>[] = [];
+        for (const raw of uiPanelsRaw) {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+          const panel = raw as Record<string, unknown>;
+          const id = cleanValue(panel.id);
+          const entry = cleanValue(panel.entry);
+          const labelZh = cleanValue(panel.labelZh);
+          const labelEn = cleanValue(panel.labelEn);
+          if (!id || !entry || !labelZh || !labelEn) continue;
+          uiPanels.push({
+            id,
+            pluginId: id,
+            entry,
+            ...(cleanValue(panel.scope) ? { scope: cleanValue(panel.scope) } : {}),
+            label: { zh: labelZh, en: labelEn },
+            ...(typeof panel.order === 'number' ? { order: panel.order } : {}),
+          });
+        }
+        if (uiPanels.length > 0) agentdev.ui = { panels: uiPanels };
+        const serverFaceRaw = args.serverFace && typeof args.serverFace === 'object' && !Array.isArray(args.serverFace)
+          ? args.serverFace as Record<string, unknown>
+          : null;
+        if (serverFaceRaw) {
+          const prefix = cleanValue(serverFaceRaw.prefix);
+          if (!/^[a-z][a-z0-9-]*$/.test(prefix)) {
+            throw new Error('serverFace.prefix 必须是单段小写字母/数字/连字符（如 agentero）。');
+          }
+          agentdev.server = {
+            entry: cleanValue(serverFaceRaw.entry) || 'index.js',
+            prefix,
+          };
+        }
         const parentDir = resolve(dir, cleanValue(args.parentDir) || 'features');
         const cliPath = findCreateFeatureCliPath();
         await fs.mkdir(parentDir, { recursive: true });

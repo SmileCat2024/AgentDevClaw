@@ -128,6 +128,7 @@ import { getThreadIntegration } from './server/thread-control/thread-integration
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { registerThreadHostAgents, isThreadHostSession } from './server/thread-control/host-agents.js';
+import { IDENTITY_SCOPES, registerIdentityScopes } from './server/feature-runtime/install-service.js';
 import { setupMemoAppRoutes } from './server/routes/memo-app.js';
 import { setupIMOperatorThreadRoutes } from './server/routes/im-operator-thread.js';
 import { readProjectIMWorkspaceConfig, withIMWorkspaceConfig } from './server/routes/im-config.js';
@@ -1867,13 +1868,36 @@ async function main() {
   // 不按 APP ID 硬编码；coder / memo 等宿主在各自 metadata 声明 threadHost）。
   // 注册先于任何会话创建 / 线程恢复，保证 onSessionCreated 与 input-gateway
   // 的宿主闸门从首个请求起即按声明集合判定。
+  let declaredAgents = [];
   try {
-    const declaredAgents = await discoverAgents(AGENTS_ROOT);
+    declaredAgents = await discoverAgents(AGENTS_ROOT);
     registerThreadHostAgents(declaredAgents
       .filter((agent) => agent?.threadHost === true && agent?.enabled !== false)
       .map((agent) => agent.id));
   } catch (err) {
     console.warn('[thread-host] register from metadata failed:', err.message);
+  }
+
+  // 装配身份按 metadata 声明派生注册（ADR-0045：声明 `featureMounts: true`
+  // 的 APP 可成为 $mount 装配目标；main/coder 兼容键在 install-service
+  // 缺省注册，此处只补发现的新身份，identity 主键 = agentId）。
+  try {
+    const mountable = declaredAgents
+      .filter((agent) => agent?.featureMounts === true && agent?.enabled !== false && agent?.id);
+    if (mountable.length > 0) {
+      const extra = mountable
+        .filter((agent) => !Object.values(IDENTITY_SCOPES).some((scope) => scope.agentId === agent.id))
+        .map((agent) => ({ identity: agent.id, agentId: agent.id, layerId: 'agent' }));
+      if (extra.length > 0) {
+        registerIdentityScopes([
+          ...Object.entries(IDENTITY_SCOPES).map(([identity, scope]) => ({ identity, ...scope })),
+          ...extra,
+        ]);
+        console.log(`[install-service] featureMounts identities registered: ${extra.map((e) => e.identity).join(', ')}`);
+      }
+    }
+  } catch (err) {
+    console.warn('[install-service] register featureMounts identities failed:', err.message);
   }
 
   // One-time cleanup of stale empty sessions from previous runs.

@@ -95,6 +95,30 @@ try {
     return Boolean(result?.ok || result?.installed || result?.mounts);
   });
 
+  await step('启动挂载链真实 import FeatureClass（历史盲区：入口多命名导出）', async () => {
+    // 复现 run-prebuilt-agent 的启动路径：读声明 → provision 复用 → 真实 import
+    // → 挂载。agentero 入口 6 个命名导出，manifest export 声明缺失或链路断
+    // 裂时此步先于 runtime 炸出（历史事故：冒烟只到 provision，import 炸在
+    // 用户启动时）。
+    const { mountUserConfiguredFeatures } = await import('../server/feature-runtime/user-mount.js');
+    const { readDeclaredMounts, IDENTITY_SCOPES } = await import('../server/feature-runtime/install-service.js');
+    const mounts = readDeclaredMounts(IDENTITY_SCOPES.main).mounts;
+    const agent = {
+      features: new Map(),
+      config: { features: {} },
+      async mountFeature(feature) { this.features.set(feature.name, feature); },
+    };
+    const mounted = await mountUserConfiguredFeatures(agent, mounts, { agentId: 'smoke-main' });
+    const instance = agent.features.get('agentero');
+    const isFeatureInstance = Boolean(instance) && typeof instance.getTools === 'function';
+    if (!isFeatureInstance) {
+      console.error('  mounted:', JSON.stringify(mounted.map((m) => m.name)), '| agentero instance:', String(instance));
+      return false;
+    }
+    console.log(`  挂载 ${mounted.length} 项，agentero 实例 tools:`, (instance.getTools() || []).length);
+    return true;
+  });
+
   await step('declarations 下发 agentero-library 面板（scope=global）', async () => {
     const res = await fetch(`${base}/api/feature-ui/declarations`);
     const body = await res.json();

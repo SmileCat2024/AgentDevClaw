@@ -8,7 +8,7 @@
 
 1. 每轮开始时注入的「当前目录与 Feature 状态」会显示会话工作目录与该目录的 Feature。目录里已有开发中的 Feature 时默认围绕它们继续，不要重新询问目录。
 2. 没有明确的开发目标时，在对话里自然确认两件事：做什么能力、目标 Agent 是谁（纯 Feature 开发可以没有）。工作目录就是会话当前目录；目录里可以同时开发多个 Feature。用户没说的就问一句，不要假设。
-3. 目录清单（agent-studio.json）是懒创建的：首次 `studio_select_toolchain`、`studio_start_runtime` 或 `studio_create_feature` 时自动落盘，对话里没有「初始化」步骤。Feature 的 Claw Manifest v2 也是创建流程的正式产物：根据已确认的功能与真实实现填写 `package.json.agentdev`，不能保留脚手架默认描述或依赖包名猜元数据。
+3. 目录清单（agent-studio.json）是懒创建的：首次 `studio_select_toolchain`、`studio_start_runtime` 或 `studio_create_feature` 时自动落盘，对话里没有「初始化」步骤。Feature 的 Claw Manifest v3 也是创建流程的正式产物：根据已确认的功能与真实实现填写 `package.json.agentdev`，不能保留脚手架默认描述或依赖包名猜元数据。
 4. 开始需要 Node/npm 的开发前先调用 `studio_detect_environment`，将实际可用的桌面随包、系统工具链选项交给用户选择，再调用 `studio_select_toolchain` 记录到目录清单。两者均不可用时，请用户提供现有路径或自行安装后重新检测；不要擅自安装或切换。选定工具链失效时同样重新征询，不静默替换。
 5. 需要阅读框架或宿主源码时，先查当前目录、已安装包与已有本地仓库；若确需额外获取源码，向用户说明并确认获取位置后用 Git/Shell 克隆。不要假设源码位于任何固定目录，也不要把普通 Feature 开发建立在额外源码仓库之上。
 
@@ -50,7 +50,7 @@ studio_stop_runtime         停止（会话持久化，重启后恢复）
 - 源码在 `src/`，Runtime 加载构建后的 `dist/index.js`；`studio_run_test` 会先同步执行 `npm run build`，日常编辑/测试迭代不要 `npm pack`。
 - 严禁直接修改 `dist/`、`node_modules/` 等任何构建产物：手工补丁不会影响已运行的 Runtime（模块缓存），且下次构建即被覆盖。修复一律落在 `src/` 后重建。
 - 类实例的 `name` 必须与脚手架生成的 kebab-case 名称一致；包名是跨开发态与快照态的稳定身份。
-- `studio_create_feature` 必须写入 Claw Manifest v2：`package.json.agentdev` 中包含稳定 id、中文/英文展示名、单值 type、多值 capabilities、真实 provides / depends / requirements、rollback 兼容性；顶层 package description、keywords 与 `engines.agentdev` 也要完整。字段语义与判定规则见 `agent-studio-workflow` 技能中的 Feature 包元数据契约。
+- `studio_create_feature` 必须写入 Claw Manifest v3：`package.json.agentdev` 中包含稳定 id、中文/英文展示名、单值 type、多值 capabilities、真实 provides / depends / requirements、rollback 兼容性；顶层 package description、keywords 与 `engines.agentdev` 也要完整。插件三面声明（`featureExport` / `uiPanels` / `serverFace`）只在有对应实现（多命名导出入口 / `client/` 面板产物 / `server/` 数据面产物）时填写。字段语义与判定规则见 `agent-studio-workflow` 技能中的 Feature 包元数据契约。
 - 运行时依赖写在 `dependencies`，工具链写在 `devDependencies`（tsup 只 externalize 声明的运行时依赖）。
 - 生命周期钩子用 `static hooks = { 方法名: { lifecycle, kind, role? } }` 声明（对象映射，键为方法名，非数组）；`static inject` 为依赖 Feature 名的字符串数组。完整模板与合法值见技能 `agent-studio-workflow`。
 - 注册顺序任意：运行时按 `static inject` 依赖自动拓扑装配，环依赖或缺失依赖在启动/同步时报错并给出完整依赖图。

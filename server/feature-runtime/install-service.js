@@ -22,10 +22,30 @@ import { extractFeatureMounts } from '../shared/feature-mount.js';
 import { buildUserMountPlan } from './user-mount.js';
 import { computeRuntimeDependencyHash, getRuntimeEnvironmentRoot, provisionRuntimeEnvironment } from './provisioner.js';
 
+/**
+ * 装配身份注册表（替换式）：identity 键 → 配置层寻址 {agentId, layerId}。
+ *
+ * 声明驱动派生（ADR-0045：公共代码不按 APP ID 硬编码）：APP 在 metadata.json
+ * 声明 `featureMounts: true`（runtime 消费 $mount 装配），宿主启动发现后经
+ * registerIdentityScopes 注册；identity 主键用 agentId，历史键 main 是
+ * programming-helper 的兼容别名（前端商店 API 已用）。测试可直接注册构造
+ * 场景。消费方经 Object.entries(IDENTITY_SCOPES) 读当前注册集。
+ */
 export const IDENTITY_SCOPES = {
   main: { agentId: 'programming-helper', layerId: 'agent' },
   coder: { agentId: 'coder', layerId: 'agent' },
 };
+
+export function registerIdentityScopes(entries) {
+  for (const key of Object.keys(IDENTITY_SCOPES)) delete IDENTITY_SCOPES[key];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry || typeof entry !== 'object') continue;
+    const identity = String(entry.identity || '').trim();
+    const agentId = String(entry.agentId || '').trim();
+    if (!identity || !agentId) continue;
+    IDENTITY_SCOPES[identity] = { agentId, layerId: String(entry.layerId || 'agent').trim() };
+  }
+}
 
 /** $mount 声明键 = 包 basename（与前端商店 _fsRuntimeKey 同规则） */
 function mountKeyFor(packageName) {

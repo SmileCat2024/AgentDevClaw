@@ -211,6 +211,102 @@ describe('mountUserConfiguredFeatures（真实装配链）', () => {
     }
   }, { timeout: 120000 });
 
+  it('多命名导出入口经 manifest export 声明唯一确定 Feature class', async () => {
+    // 真实形态回归：入口除 Feature class 外还有多个辅助导出且无 default 时，
+    // loader 猜测链无法唯一确定——manifest 顶层 export 声明是唯一可靠路径
+    //（历史事故：agentero 入口 6 个命名导出，$mount 装配后 runtime 启动炸）。
+    const root = await mkdtemp(path.join(os.tmpdir(), 'user-feature-mount-'));
+    try {
+      const projectDir = path.join(root, 'multi');
+      const repositoryDir = path.join(root, 'repository');
+      await mkdir(path.join(projectDir, 'dist'), { recursive: true });
+      await writeFile(path.join(projectDir, 'package.json'), JSON.stringify({
+        name: '@agentdevjs/multi-export-feature',
+        version: '1.0.0',
+        type: 'module',
+        main: 'dist/index.js',
+        files: ['dist', 'agentdev-feature.json'],
+        scripts: { build: 'node -e ""' },
+      }));
+      await writeFile(
+        path.join(projectDir, 'agentdev-feature.json'),
+        JSON.stringify({ schemaVersion: 3, id: 'multi-export', entry: 'dist/index.js', export: 'MultiExportFeature' })
+      );
+      await writeFile(
+        path.join(projectDir, 'dist', 'index.js'),
+        'export function helperA() { return 1; }\n'
+          + 'export const helperB = () => 2;\n'
+          + 'export class MultiExportFeature { constructor() { this.name = "multi-export"; } }\n'
+      );
+      await packageFeatureProject({ projectDir, repositoryDir });
+
+      const agent = {
+        features: new Map(),
+        config: { features: {} },
+        async mountFeature(feature) { this.features.set(feature.name, feature); },
+      };
+      const mounts = new Map([
+        ['multi-export', { package: '@agentdevjs/multi-export-feature', version: '1.0.0', layerId: 'agent' }],
+      ]);
+      const output = await mountUserConfiguredFeatures(agent, mounts, {
+        agentId: 'test-agent',
+        catalogRoots: { officialRoot: repositoryDir, userRoot: path.join(root, 'no-user-repo') },
+        environmentRoot: path.join(root, 'runtime-envs'),
+      });
+      assert.equal(output.length, 1);
+      assert.equal(output[0].name, 'multi-export');
+      // 实例经 agent.mountFeature 落进 features Map；确认挂的是 manifest 声明的
+      // MultiExportFeature，而不是某个 helper 导出
+      const instance = agent.features.get('multi-export');
+      assert.equal(instance?.constructor?.name, 'MultiExportFeature');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, { timeout: 120000 });
+
+  it('多命名导出且无 default 无 manifest 声明时 fail fast（不猜）', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'user-feature-mount-'));
+    try {
+      const projectDir = path.join(root, 'multi-nodecl');
+      const repositoryDir = path.join(root, 'repository');
+      await mkdir(path.join(projectDir, 'dist'), { recursive: true });
+      await writeFile(path.join(projectDir, 'package.json'), JSON.stringify({
+        name: '@agentdevjs/multi-nodecl-feature',
+        version: '1.0.0',
+        type: 'module',
+        main: 'dist/index.js',
+        files: ['dist', 'agentdev-feature.json'],
+        scripts: { build: 'node -e ""' },
+      }));
+      await writeFile(
+        path.join(projectDir, 'agentdev-feature.json'),
+        JSON.stringify({ schemaVersion: 3, id: 'multi-nodecl', entry: 'dist/index.js' })
+      );
+      await writeFile(
+        path.join(projectDir, 'dist', 'index.js'),
+        'export function helperA() { return 1; }\n'
+          + 'export class SomeFeature { constructor() { this.name = "multi-nodecl"; } }\n'
+          + 'export class OtherFeature { constructor() { this.name = "other"; } }\n'
+      );
+      await packageFeatureProject({ projectDir, repositoryDir });
+
+      const agent = { features: new Map(), config: { features: {} }, async mountFeature() {} };
+      const mounts = new Map([
+        ['multi-nodecl', { package: '@agentdevjs/multi-nodecl-feature', version: '1.0.0', layerId: 'agent' }],
+      ]);
+      await assert.rejects(
+        () => mountUserConfiguredFeatures(agent, mounts, {
+          agentId: 'test-agent',
+          catalogRoots: { officialRoot: repositoryDir, userRoot: path.join(root, 'no-user-repo') },
+          environmentRoot: path.join(root, 'runtime-envs'),
+        }),
+        /无法唯一确定 Feature 导出/
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, { timeout: 120000 });
+
   it('仓库缺包时 fail fast（不静默降级）', async () => {
     const agent = { features: new Map(), config: { features: {} }, async mountFeature() {} };
     const mounts = new Map([['missing', { package: '@scope/missing', version: '1.0.0', layerId: 'agent' }]]);
@@ -465,6 +561,35 @@ describe('feature-store 数据面', () => {
       assert.deepEqual(result.manifests, [{ featureName: 'settings-demo', manifest: { settings } }]);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('装配身份注册表（声明驱动派生）', () => {
+  it('registerIdentityScopes 替换式注册，派生身份立即可装配寻址', async () => {
+    const { registerIdentityScopes, IDENTITY_SCOPES } = await import('../server/feature-runtime/install-service.js');
+    const snapshot = Object.entries(IDENTITY_SCOPES).map(([identity, scope]) => ({ identity, ...scope }));
+    try {
+      registerIdentityScopes([
+        ...snapshot,
+        { identity: 'memo', agentId: 'memo', layerId: 'agent' },
+      ]);
+      assert.equal(IDENTITY_SCOPES.memo.agentId, 'memo');
+      assert.equal(IDENTITY_SCOPES.main.agentId, 'programming-helper');
+    } finally {
+      registerIdentityScopes(snapshot); // 恢复缺省，不泄漏到其他用例
+    }
+  });
+
+  it('非法条目（缺 identity/agentId）被跳过，不破坏其余注册', async () => {
+    const { registerIdentityScopes, IDENTITY_SCOPES } = await import('../server/feature-runtime/install-service.js');
+    const snapshot = Object.entries(IDENTITY_SCOPES).map(([identity, scope]) => ({ identity, ...scope }));
+    try {
+      registerIdentityScopes([...snapshot, { identity: '', agentId: 'x' }, null, { agentId: 'y' }]);
+      assert.equal('y' in IDENTITY_SCOPES, false);
+      assert.equal(IDENTITY_SCOPES.coder.agentId, 'coder');
+    } finally {
+      registerIdentityScopes(snapshot);
     }
   });
 });

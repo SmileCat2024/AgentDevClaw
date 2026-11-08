@@ -211,3 +211,73 @@ describe('summarizeFeatureArchive manifest v3 surfaces', () => {
     }
   });
 });
+
+describe('ensureFeatureProjectManifest（v3 三面提取）', () => {
+  it('package.json.agentdev 的 export/ui/server/settings 进入顶层 manifest', async () => {
+    const { ensureFeatureProjectManifest } = await import('../server/routes/feature-repository.js');
+    const { mkdtempSync, rmSync, writeFileSync, readFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const root = mkdtempSync(join(tmpdir(), 'efpm-v3-'));
+    try {
+      const agentdev = {
+        schemaVersion: 3,
+        id: 'demo-plugin',
+        displayName: { zh: '演示', en: 'Demo' },
+        type: 'ability',
+        capabilities: ['tools'],
+        provides: { tools: ['demo_tool'], skills: [], commands: [], hooks: false, mcp: false },
+        depends: [],
+        requirements: { platforms: [], node: '', external: [], services: [] },
+        compatibility: { rollback: false },
+        export: 'DemoPluginFeature',
+        ui: { panels: [{ id: 'demo-panel', entry: 'index.js', label: { zh: '演示', en: 'Demo' } }] },
+        server: { entry: 'index.js', prefix: 'demo' },
+        settings: { vaultPath: { type: 'string' } },
+      };
+      writeFileSync(join(root, 'package.json'), JSON.stringify({
+        name: 'demo-plugin', version: '0.2.0', type: 'module', main: 'dist/index.js',
+        files: ['dist'], agentdev,
+      }));
+      await ensureFeatureProjectManifest(root);
+      const manifest = JSON.parse(readFileSync(join(root, 'agentdev-feature.json'), 'utf8'));
+      assert.equal(manifest.export, 'DemoPluginFeature');
+      assert.equal(manifest.ui.panels[0].id, 'demo-panel');
+      assert.equal(manifest.server.prefix, 'demo');
+      assert.deepEqual(manifest.settings, agentdev.settings);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('顶层 manifest 文件优先于 package.json.agentdev（手工声明胜出）', async () => {
+    const { ensureFeatureProjectManifest } = await import('../server/routes/feature-repository.js');
+    const { mkdtempSync, rmSync, writeFileSync, readFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const root = mkdtempSync(join(tmpdir(), 'efpm-prio-'));
+    try {
+      writeFileSync(join(root, 'package.json'), JSON.stringify({
+        name: 'prio-plugin', version: '0.1.0', type: 'module', main: 'dist/index.js',
+        files: ['dist', 'agentdev-feature.json'],
+        agentdev: { schemaVersion: 3, export: 'FromPkgJson' },
+      }));
+      writeFileSync(join(root, 'agentdev-feature.json'), JSON.stringify({
+        schemaVersion: 3, id: 'prio-plugin', entry: 'dist/index.js', export: 'FromTopLevel',
+      }));
+      await ensureFeatureProjectManifest(root);
+      const manifest = JSON.parse(readFileSync(join(root, 'agentdev-feature.json'), 'utf8'));
+      assert.equal(manifest.export, 'FromTopLevel');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('normalizeClawManifestV2 接受 schemaVersion 2 与 3，拒绝其他', () => {
+    const base = { name: 'x' };
+    assert.notEqual(normalizeClawManifestV2({ ...base, agentdev: { schemaVersion: 2, id: 'a' } }), null);
+    assert.notEqual(normalizeClawManifestV2({ ...base, agentdev: { schemaVersion: 3, id: 'a' } }), null);
+    assert.equal(normalizeClawManifestV2({ ...base, agentdev: { schemaVersion: 1, id: 'a' } }), null);
+    assert.equal(normalizeClawManifestV2({ ...base, agentdev: { schemaVersion: 4, id: 'a' } }), null);
+  });
+});

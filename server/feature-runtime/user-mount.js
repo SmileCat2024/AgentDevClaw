@@ -41,6 +41,7 @@ export async function buildUserMountPlan({ mounts, agentId, catalogRoots }) {
       archivePath: archive.archivePath,
       archiveDigest: archive.archiveDigest,
       entry: archive.entry,
+      ...(archive.export ? { export: archive.export } : {}),
       source: archive.source,
     });
   }

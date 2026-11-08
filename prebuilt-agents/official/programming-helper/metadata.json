@@ -5,14 +5,22 @@
   "titlePolicy": "app",
   "name": "智能编码空间",
   "defaultAgentId": "main",
-  "agents": [{ "id": "main", "displayName": "编程小助手" }],
+  "agents": [
+    {
+      "id": "main",
+      "displayName": "编程小助手"
+    }
+  ],
   "description": "面向真实编码任务的编程工作空间，支持理解代码、实现功能、排障和重构",
   "version": "2.0.0",
   "icon": "code",
   "category": "development",
   "processMode": "shared-by-project",
   "enabled": true,
-  "permissions": ["notifications.finish", "notifications.input"],
+  "permissions": [
+    "notifications.finish",
+    "notifications.input"
+  ],
   "permissionDefaults": {
     "notifications.finish": true,
     "notifications.input": true
@@ -93,5 +101,6 @@
         }
       ]
     }
-  }
+  },
+  "featureMounts": true
 }
