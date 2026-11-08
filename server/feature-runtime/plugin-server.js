@@ -61,7 +61,8 @@ export async function buildPluginServerMounts({ catalogRoots, resolvers, serverR
     );
     if (withServer.length === 0) continue;
 
-    const mounted = assemblyFacts.get(packageName) || [];
+    // 禁用事实（enabled:false）等同未装配：数据面整体摘除（三态处置）
+    const mounted = (assemblyFacts.get(packageName) || []).filter((fact) => fact.enabled !== false);
     if (mounted.length === 0) continue; // 未装配不挂载（global 层装配同样生效）
 
     // 版本钉装配：取装配版本里最高者；catalog 更高版本不跟随

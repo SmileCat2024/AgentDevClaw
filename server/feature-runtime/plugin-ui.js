@@ -83,10 +83,11 @@ export function collectAssemblyFacts(resolvers) {
     facts.set(packageName, list);
   };
 
-  // 全局级装配（ADR-0046）：global 层 $mount，面板处处可见
+  // 全局级装配（ADR-0046）：global 层 $mount，面板处处可见；
+  // enabled:false = 禁用（装配保留、面板不下发），与身份层同口径
   for (const mount of readGlobalDeclaredMounts(resolvers).mounts.values()) {
     if (mount.kind === 'builtin' || !mount.package) continue;
-    record(mount.package, { identity: 'global', agentId: null, version: mount.version, layerId: 'global' });
+    record(mount.package, { identity: 'global', agentId: null, version: mount.version, layerId: 'global', enabled: mount.enabled !== false });
   }
 
   // 身份源：显式注入 resolvers（测试隔离）时以注入的 agentId 集合为准——
@@ -100,7 +101,7 @@ export function collectAssemblyFacts(resolvers) {
       const { mounts } = readDeclaredMounts(scope, resolvers);
       for (const mount of mounts.values()) {
         if (mount.kind === 'builtin' || !mount.package) continue;
-        record(mount.package, { identity, agentId: scope.agentId, version: mount.version, layerId: 'agent' });
+        record(mount.package, { identity, agentId: scope.agentId, version: mount.version, layerId: 'agent', enabled: mount.enabled !== false });
       }
     } catch (err) {
       // 身份层读取失败（层文件损坏等）不阻塞其他身份的声明合成；错误上抛
@@ -133,8 +134,9 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
     if (archivesWithUi.length === 0) continue;
 
     // 可见性 = 装配事实（ADR-0046 决策 2）：未装配不下发——含作者标注
-    // scope=global 的面板（scope 是装配建议，不参与可见性裁决）
-    const mounted = assemblyFacts.get(packageName) || [];
+    // scope=global 的面板（scope 是装配建议，不参与可见性裁决）；
+    // 禁用事实（enabled:false）等同未装配（三态处置：装配保留、面板下线）
+    const mounted = (assemblyFacts.get(packageName) || []).filter((fact) => fact.enabled !== false);
     if (mounted.length === 0) continue;
 
     // 版本钉装配：取装配版本里最高者；catalog 存在更高版本不跟随

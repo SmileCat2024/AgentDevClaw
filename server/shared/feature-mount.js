@@ -33,11 +33,16 @@ function isPlainObject(value) {
  * 两种形态：
  * - repository（缺省）：{ package, version }，从 Feature tgz 仓库装配
  * - builtin：{ kind: 'builtin' }，官方可选插件（local-feature 工厂，无包版本概念）
+ * 可选字段 enabled（boolean，缺省 true）：false = 禁用（装配保留、三面整体
+ * 下线、配置保留——启用即恢复，null 卸载才是移除）。
  * 不接受 null（null 是卸载语义，仅在 extractFeatureMounts 的层序合并中处理）。
  */
 export function validateMountEntry(value, { featureName = '(unknown)' } = {}) {
   if (!isPlainObject(value)) {
     return `feature '${featureName}' 的 $mount 必须是 { package, version } 或 { kind: 'builtin' } 对象`;
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+    return `feature '${featureName}' 的 $mount.enabled 必须是布尔值（缺省 true）`;
   }
   if (value.kind === 'builtin') {
     return null;
@@ -83,12 +88,15 @@ export function extractFeatureMounts(layers) {
       } else {
         const error = validateMountEntry(mount, { featureName });
         if (error) throw new Error(`层 '${id}' 中 ${error}`);
+        // enabled 归一：缺省 true；false = 禁用（装配保留、三面下线）
+        const enabled = mount.enabled !== false;
         mounts.set(featureName, mount.kind === 'builtin'
-          ? { kind: 'builtin', layerId: id }
+          ? { kind: 'builtin', enabled, layerId: id }
           : {
             kind: 'repository',
             package: String(mount.package).trim(),
             version: String(mount.version).trim(),
+            enabled,
             layerId: id,
           });
       }

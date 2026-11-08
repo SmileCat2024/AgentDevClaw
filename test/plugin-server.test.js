@@ -132,6 +132,20 @@ describe('buildPluginServerMounts', () => {
     assert.equal(mounts.length, 0);
   });
 
+  it('禁用装配（enabled:false）→ server 面不挂载（三态处置：数据面整体下线）', async () => {
+    const fixture = makeServerPluginTgz();
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    const { mounts, warnings } = await buildPluginServerMounts({
+      catalogRoots: { userRoot: root, officialRoot: join(root, 'official-empty') },
+      resolvers: makeResolvers({
+        'disabled-srv': { $mount: { package: 'srv-demo', version: '1.0.0', enabled: false } },
+      }),
+      serverRoot: join(root, 'server-env'),
+    });
+    assert.equal(mounts.length, 0);
+    assert.deepEqual(warnings, [], '禁用是显式处置，静默摘除');
+  });
+
   it('全局级装配（global 层 $mount）同样挂载，identities 标记 agentId=null', async () => {
     const fixture = makeServerPluginTgz();
     await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });

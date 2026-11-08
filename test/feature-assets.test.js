@@ -329,6 +329,61 @@ describe('composePanelDeclarations', async () => {
     assert.deepEqual(declarations.find((d) => d.panelId === 'mixed-panel')?.meta.when, {});
   });
 
+  it('禁用装配（enabled:false）→ 面板不下发；启用装配并存时仍下发', async () => {
+    const disabled = makePluginTgz({
+      packageName: 'disabled-plugin',
+      version: '1.0.0',
+      manifest: uiManifest([{ id: 'disabled-panel', entry: 'index.js' }]),
+    });
+    const enabledFixture = makePluginTgz({
+      packageName: 'enabled-plugin',
+      version: '1.0.0',
+      manifest: uiManifest([{ id: 'enabled-panel', entry: 'index.js' }]),
+    });
+    const assetsRoot = join(root, 'assets');
+    await extractClientAssets(
+      { archivePath: disabled.archivePath, packageName: 'disabled-plugin', version: '1.0.0', archiveDigest: disabled.digest },
+      { expectClient: true, assetsRoot },
+    );
+    await extractClientAssets(
+      { archivePath: enabledFixture.archivePath, packageName: 'enabled-plugin', version: '1.0.0', archiveDigest: enabledFixture.digest },
+      { expectClient: true, assetsRoot },
+    );
+    const { declarations, warnings } = await composePanelDeclarations({
+      catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
+      resolvers: makeLayerTable({
+        'programming-helper': {
+          'disabled-plugin': { $mount: { package: 'disabled-plugin', version: '1.0.0', enabled: false } },
+          'enabled-plugin': { $mount: { package: 'enabled-plugin', version: '1.0.0' } },
+        },
+      }),
+      assetsRoot,
+    });
+    assert.equal(declarations.find((d) => d.panelId === 'disabled-panel'), undefined, '禁用装配的面板不下发');
+    assert.deepEqual(warnings, [], '禁用是显式处置，不是告警形态');
+    const panel = declarations.find((d) => d.panelId === 'enabled-panel');
+    assert.deepEqual(panel?.meta.when, { agentIds: ['programming-helper'] }, '启用装配不受禁用条目影响');
+  });
+
+  it('global 层禁用装配 → 全局面板不下发', async () => {
+    const fixture = makePluginTgz({
+      packageName: 'global-disabled-plugin',
+      version: '1.0.0',
+      manifest: uiManifest([{ id: 'gd-panel', entry: 'index.js' }]),
+    });
+    const assetsRoot = join(root, 'assets');
+    await extractClientAssets(
+      { archivePath: fixture.archivePath, packageName: 'global-disabled-plugin', version: '1.0.0', archiveDigest: fixture.digest },
+      { expectClient: true, assetsRoot },
+    );
+    const { declarations } = await composePanelDeclarations({
+      catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
+      resolvers: makeLayerTable({}, { 'global-disabled-plugin': { $mount: { package: 'global-disabled-plugin', version: '1.0.0', enabled: false } } }),
+      assetsRoot,
+    });
+    assert.equal(declarations.find((d) => d.panelId === 'gd-panel'), undefined);
+  });
+
   it('未装配不下发：含作者标注 scope=global 的面板（导入 ≠ 可用，ADR-0046）', async () => {
     const fixture = makePluginTgz({
       packageName: 'unmounted-plugin',

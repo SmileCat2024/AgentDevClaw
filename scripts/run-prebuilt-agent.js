@@ -856,6 +856,12 @@ SessionLifecycle.prototype.start = async function () {
     const builtinFactories = agentModule.builtinOptionalFeatures || {};
     const repositoryMounts = new Map();
     for (const [name, mount] of this.agent.pendingFeatureMounts) {
+      // 禁用三态（ADR-0046）：enabled:false = 装配保留、三面整体下线——
+      // 启动链不挂载 feature 面（UI 面/数据面由 server 侧同口径过滤）
+      if (mount.enabled === false) {
+        console.log(`[ProtoClaw Runtime] ⊘ 装配 '${name}' 已禁用（enabled:false），跳过挂载`);
+        continue;
+      }
       if (mount.kind !== 'builtin') {
         repositoryMounts.set(name, mount);
         continue;

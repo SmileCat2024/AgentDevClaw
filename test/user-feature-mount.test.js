@@ -31,7 +31,7 @@ describe('extractFeatureMounts', () => {
       { id: 'agent', config: { 'demo-feature': { ...mount('@scope/demo', '1.0.0'), strict: true } } },
     ]);
     assert.equal(mounts.size, 1);
-    assert.deepEqual(mounts.get('demo-feature'), { kind: 'repository', package: '@scope/demo', version: '1.0.0', layerId: 'agent' });
+    assert.deepEqual(mounts.get('demo-feature'), { kind: 'repository', package: '@scope/demo', version: '1.0.0', enabled: true, layerId: 'agent' });
     assert.deepEqual(configLayers[0], { shell: { allowDangerous: true } });
     assert.deepEqual(configLayers[1], { 'demo-feature': { strict: true } });
   });
@@ -49,7 +49,7 @@ describe('extractFeatureMounts', () => {
     const { mounts, configLayers } = extractFeatureMounts([
       { id: 'agent', config: { 'playwright-shell': { [MOUNT_KEY]: { kind: 'builtin' }, extra: 1 } } },
     ]);
-    assert.deepEqual(mounts.get('playwright-shell'), { kind: 'builtin', layerId: 'agent' });
+    assert.deepEqual(mounts.get('playwright-shell'), { kind: 'builtin', enabled: true, layerId: 'agent' });
     assert.deepEqual(configLayers[0], { 'playwright-shell': { extra: 1 } });
   });
 
@@ -102,6 +102,24 @@ describe('extractFeatureMounts', () => {
     assert.throws(() => extractFeatureMounts([{ id: 'agent', config: { demo: mount('Not Valid!', '1.0.0') } }]), /包名/);
     assert.throws(() => extractFeatureMounts([{ id: 'agent', config: { demo: mount('@scope/demo', '^1.0.0') } }]), /精确 semver/);
     assert.throws(() => extractFeatureMounts([{ id: 'agent', config: { demo: mount('@scope/demo', '') } }]), /精确 semver/);
+  });
+
+  it('禁用三态：enabled 布尔归一传播，非布尔 fail fast', () => {
+    const { mounts } = extractFeatureMounts([
+      { id: 'agent', config: {
+        'off-feature': { [MOUNT_KEY]: { package: '@scope/demo', version: '1.0.0', enabled: false } },
+        'on-feature': { [MOUNT_KEY]: { package: '@scope/demo', version: '1.0.0', enabled: true } },
+        'off-builtin': { [MOUNT_KEY]: { kind: 'builtin', enabled: false } },
+      } },
+    ]);
+    assert.equal(mounts.get('off-feature').enabled, false);
+    assert.equal(mounts.get('on-feature').enabled, true);
+    assert.equal(mounts.get('off-builtin').enabled, false, 'builtin 同样支持禁用');
+    assert.equal(mounts.get('on-feature').enabled, true, '显式 enabled:true 与缺省（首个用例）同为启用');
+    assert.throws(
+      () => extractFeatureMounts([{ id: 'agent', config: { demo: { [MOUNT_KEY]: { package: '@scope/demo', version: '1.0.0', enabled: 'off' } } } }]),
+      /enabled 必须是布尔/,
+    );
   });
 
   it('无 $mount 时 configLayers 与输入一致（存量行为等价）', () => {
@@ -421,11 +439,11 @@ describe('feature-store 数据面', () => {
       };
       const mounts = await collectScopeMounts('test-store-scope', catalog);
       assert.deepEqual(mounts['demo-mount'], {
-        kind: 'repository', package: '@user/demo', version: '1.0.0', layerId: 'agent', missing: false,
+        kind: 'repository', package: '@user/demo', version: '1.0.0', enabled: true, layerId: 'agent', missing: false,
       });
       assert.equal(mounts['gone-mount'].missing, true);
       // builtin 不查 tgz 仓库，永不误报 missing
-      assert.deepEqual(mounts['playwright-shell'], { kind: 'builtin', layerId: 'agent', missing: false });
+      assert.deepEqual(mounts['playwright-shell'], { kind: 'builtin', enabled: true, layerId: 'agent', missing: false });
       assert.equal('shell' in mounts, false);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -454,7 +472,7 @@ describe('feature-store 数据面', () => {
       };
       const mounts = await collectGlobalMounts(catalog, resolvers);
       assert.deepEqual(mounts['global-mount'], {
-        kind: 'repository', package: '@user/demo', version: '1.0.0', layerId: 'global', missing: false,
+        kind: 'repository', package: '@user/demo', version: '1.0.0', enabled: true, layerId: 'global', missing: false,
       });
       assert.equal(mounts['gone-mount'].missing, true);
       assert.equal('someConfig' in mounts, false);

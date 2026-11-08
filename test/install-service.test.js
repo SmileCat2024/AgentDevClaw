@@ -437,3 +437,110 @@ test('未知身份拒绝：既非 global 也未注册 → 明确报错', async (
     );
   } finally { scope.dispose(); }
 });
+
+// ── 禁用三态（enabled:false：装配保留、三面下线、配置保留） ──────────
+
+test('installFeature enabled:false → 不 provision、声明带禁用标记、返回 disabled', async () => {
+  const scope = makeScope();
+  const { calls, provision } = okProvision();
+  try {
+    const result = await installFeature(
+      { identity: 'main', packageName: '@user/demo-feature', version: '1.0.0', enabled: false },
+      { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.declared, true);
+    assert.equal(result.disabled, true);
+    assert.equal(result.installed, false);
+    assert.equal(calls.length, 0, '禁用装配不 provision（环境由启用后制备）');
+    assert.deepEqual(scope.readLayer()['demo-feature'], {
+      $mount: { package: '@user/demo-feature', version: '1.0.0', enabled: false },
+    });
+  } finally { scope.dispose(); }
+});
+
+test('installFeature enabled 非布尔拒绝', async () => {
+  const scope = makeScope();
+  const { provision } = okProvision();
+  try {
+    await assert.rejects(
+      installFeature({ identity: 'main', packageName: '@user/demo-feature', version: '1.0.0', enabled: 'yes' },
+        { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision }),
+      /enabled 必须是布尔/,
+    );
+    assert.deepEqual(scope.readLayer(), {}, '拒绝时不写声明');
+  } finally { scope.dispose(); }
+});
+
+test('rebuild：禁用条目不进 plan（与启动链 hash 同口径）', async () => {
+  const scope = makeScope();
+  scope.writeLayer({
+    'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0' } },
+    'other-feature': { $mount: { package: '@user/other-feature', version: '2.0.0', enabled: false } },
+  });
+  const { calls, provision } = okProvision();
+  try {
+    await rebuildEnvironment({ identity: 'main' }, { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision });
+    const pkgs = calls[0].plan.features.map((feature) => feature.package);
+    assert.deepEqual(pkgs, ['@user/demo-feature'], '禁用声明不参与环境组合');
+  } finally { scope.dispose(); }
+});
+
+test('readiness：全部声明禁用 → 无环境需求恒 ready', async () => {
+  const scope = makeScope();
+  scope.writeLayer({
+    'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0', enabled: false } },
+  });
+  try {
+    assert.deepEqual(
+      await computeScopeEnvReadiness('main', { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, environmentRoot: join(scope.root, 'envs') }),
+      { ready: true, hasEnv: false },
+    );
+  } finally { scope.dispose(); }
+});
+
+test('installFeature 翻转语义：已装启用 → enabled:false 翻转为禁用（非幂等跳过）', async () => {
+  const scope = makeScope();
+  scope.writeLayer({ 'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0' }, myConfig: 1 } });
+  const { calls, provision } = okProvision();
+  try {
+    const result = await installFeature(
+      { identity: 'main', packageName: '@user/demo-feature', version: '1.0.0', enabled: false },
+      { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.declared, true, 'enabled 态不同 → 声明重写（翻转），不是幂等跳过');
+    assert.equal(result.disabled, true);
+    assert.equal(calls.length, 0, '翻转到禁用不 provision');
+    const layer = scope.readLayer()['demo-feature'];
+    assert.deepEqual(layer.$mount, { package: '@user/demo-feature', version: '1.0.0', enabled: false });
+    assert.equal(layer.myConfig, 1, '配置保留（三态处置：声明与配置都不丢）');
+  } finally { scope.dispose(); }
+});
+
+test('installFeature 翻转语义：已禁用 → enabled:true 恢复启用并 provision', async () => {
+  const scope = makeScope();
+  scope.writeLayer({ 'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0', enabled: false } } });
+  const { calls, provision } = okProvision();
+  try {
+    const result = await installFeature(
+      { identity: 'main', packageName: '@user/demo-feature', version: '1.0.0', enabled: true },
+      { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.installed, true, '恢复启用需要环境，走 provision');
+    assert.deepEqual(scope.readLayer()['demo-feature'].$mount, { package: '@user/demo-feature', version: '1.0.0' }, '启用态不写 enabled 键（声明形态最小）');
+  } finally { scope.dispose(); }
+});
+
+test('installFeature enabled 缺省：已禁用声明保持禁用（重装不静默翻转）', async () => {
+  const scope = makeScope();
+  scope.writeLayer({ 'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0', enabled: false } } });
+  const { calls, provision } = okProvision();
+  try {
+    const result = await installFeature(
+      { identity: 'main', packageName: '@user/demo-feature', version: '1.0.0' },
+      { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.declared, false, 'enabled 态一致 → 幂等跳过声明写入');
+    assert.equal(calls.length, 0, '禁用态重装仍不 provision');
+    assert.equal(scope.readLayer()['demo-feature'].$mount.enabled, false);
+  } finally { scope.dispose(); }
+});

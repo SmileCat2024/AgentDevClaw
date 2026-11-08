@@ -350,10 +350,11 @@ export function setupFeatureStoreRoutes(app, express) {
 
   // 安装（provision + 成功才写声明）。同步等待：provision 首次可能数十秒
   // （联网拉传递依赖），桌面本地服务长连接可靠；进度流留待使用反馈再评估。
+  // enabled:false = 禁用装配（只写声明不 provision；三态处置 API 面，暂无 UI）。
   app.post('/api/feature-store/install', express.json(), async (req, res) => {
-    const { identity, packageName, version } = req.body || {};
+    const { identity, packageName, version, enabled } = req.body || {};
     try {
-      const result = await installFeature({ identity, packageName, version });
+      const result = await installFeature({ identity, packageName, version, enabled });
       // 装配变化改变数据面挂载集合（global/身份装配、版本升级），成功后自动重建
       notifyPluginServerDirty(`安装 ${packageName}@${version} → ${identity}`);
       res.json({ ok: true, ...result });

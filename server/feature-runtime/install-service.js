@@ -180,10 +180,11 @@ function acquireInstallSlot(meta) {
 
 // ── 声明写回（与 PUT /protoclaw/feature_config/layer 同一权威链）────
 
-function writeDeclaration(scope, sparse, key, packageName, version, resolvers) {
+function writeDeclaration(scope, sparse, key, packageName, version, resolvers, enabled) {
   sparse[key] = {
     ...(sparse[key] && typeof sparse[key] === 'object' ? sparse[key] : {}),
-    $mount: { package: packageName, version },
+    // enabled:false 写入声明（禁用态；缺省不写 = 启用，保持既有声明形态最小）
+    $mount: { package: packageName, version, ...(enabled === false ? { enabled: false } : {}) },
   };
   const validationError = validateLayerContent(sparse, { layerId: scope.layerId });
   if (validationError) {
@@ -210,7 +211,7 @@ function writeDeclaration(scope, sparse, key, packageName, version, resolvers) {
  * 权威函数；provision 替换执行链，单测不跑真 npm）。生产调用不传。
  * @returns {{ installed: boolean, dependencyHash: string, durationMs: number, declared: boolean }}
  */
-export async function installFeature({ identity, packageName, version }, {
+export async function installFeature({ identity, packageName, version, enabled }, {
   catalogRoots,
   environmentRoot,
   provision = provisionRuntimeEnvironment,
@@ -218,6 +219,7 @@ export async function installFeature({ identity, packageName, version }, {
 } = {}) {
   const scope = resolveScopeFor(identity);
   if (!packageName || !version) throw new Error('packageName 与 version 必填');
+  if (enabled !== undefined && typeof enabled !== 'boolean') throw new Error('enabled 必须是布尔值（缺省 true）');
 
   acquireInstallSlot({ identity, packageName, version, kind: 'install', startedAt: Date.now() });
   try {
@@ -225,7 +227,13 @@ export async function installFeature({ identity, packageName, version }, {
     const { mounts: effectiveMounts, targetSparse } = readEffectiveMounts(scope, resolvers);
     const key = mountKeyFor(packageName);
     const existing = effectiveMounts.get(key);
-    const alreadyDeclared = existing?.package === packageName && existing?.version === version;
+    // 幂等 = 同包同版本且 enabled 态一致。显式 enabled 与现有态不同 → 翻转
+    // （install({enabled:false}) 对已装启用的包是禁用动作，不是无操作）；
+    // enabled 缺省（undefined）保持现有态（重装语义，不静默翻转）。
+    const sameVersion = existing?.package === packageName && existing?.version === version;
+    const existingEnabled = existing ? existing.enabled !== false : true;
+    const targetEnabled = enabled === undefined ? existingEnabled : enabled;
+    const alreadyDeclared = sameVersion && existingEnabled === targetEnabled;
 
     // builtin 挂载是静态装配开关，不参与仓库装配 plan（与 rebuild/readiness 同口径）；
     // 不过滤会让 plan 解析器拿到无 package 字段的条目，报"包不存在：undefined"
@@ -241,12 +249,13 @@ export async function installFeature({ identity, packageName, version }, {
       catalogRoots,
     });
 
-    if (scope.isGlobal) {
-      // 全局装配不做即时 provision：环境按消费身份分区（plan.agent.id per-identity），
-      // 此刻 provision 会建出一个没有任何启动链消费的孤儿环境。plan 校验（包坐标
-      // 可解析）已过，声明写入；各身份环境在启动自愈 / rebuild / readiness 就绪链制备。
+    // global 装配不做即时 provision：环境按消费身份分区（plan.agent.id
+    // per-identity），此刻 provision 会建出没有启动链消费的孤儿环境；
+    // 禁用装配（enabled:false）无环境需求。两者只做 plan 校验（包坐标可解析）
+    // 与声明写入；环境由启用后 rebuild / 启动自愈 / 就绪链制备。
+    if (scope.isGlobal || targetEnabled === false) {
       if (!alreadyDeclared) {
-        writeDeclaration(scope, targetSparse, key, packageName, version, resolvers);
+        writeDeclaration(scope, targetSparse, key, packageName, version, resolvers, targetEnabled);
       }
       return {
         installed: false,
@@ -254,13 +263,14 @@ export async function installFeature({ identity, packageName, version }, {
         dependencyHash: null,
         durationMs: Date.now() - started,
         declared: !alreadyDeclared,
+        ...(enabled === false ? { disabled: true } : {}),
       };
     }
 
     const environment = await provision({ plan, root: environmentRoot });
 
     if (!alreadyDeclared) {
-      writeDeclaration(scope, targetSparse, key, packageName, version, resolvers);
+      writeDeclaration(scope, targetSparse, key, packageName, version, resolvers, targetEnabled);
     }
     return {
       installed: environment.installed,
@@ -293,7 +303,9 @@ export async function rebuildEnvironment({ identity }, {
   acquireInstallSlot({ identity, packageName: '(rebuild)', version: '', kind: 'rebuild', startedAt: Date.now() });
   try {
     const { mounts: effectiveMounts } = readEffectiveMounts(scope, resolvers);
-    const repository = new Map([...effectiveMounts].filter(([, mount]) => mount.kind !== 'builtin'));
+    // 与启动链同口径：builtin 与禁用条目不进 plan（禁用不消费环境；混入会让
+    // 组合 hash 与启动链实际消费的 hash 失配，环境永远判 not ready）
+    const repository = new Map([...effectiveMounts].filter(([, mount]) => mount.kind !== 'builtin' && mount.enabled !== false));
     if (repository.size === 0) {
       const error = new Error('该身份没有仓库装配声明，无需重建');
       error.installErrorCode = 'nothing_to_rebuild';
@@ -355,7 +367,8 @@ export async function computeScopeEnvReadiness(identity, { catalogRoots, resolve
     return { ready, hasEnv };
   }
   const { mounts: effectiveMounts } = readEffectiveMounts(scope, resolvers);
-  const repository = new Map([...effectiveMounts].filter(([, mount]) => mount.kind !== 'builtin'));
+  // 与启动链同口径：builtin 与禁用条目不进 plan（禁用不消费环境）
+  const repository = new Map([...effectiveMounts].filter(([, mount]) => mount.kind !== 'builtin' && mount.enabled !== false));
   if (repository.size === 0) return { ready: true, hasEnv: false };
   const { plan } = await buildUserMountPlan({ mounts: repository, agentId: scope.agentId, catalogRoots });
   const hash = computeRuntimeDependencyHash(plan);
