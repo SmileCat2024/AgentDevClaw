@@ -43,12 +43,12 @@
 
 ## P4 收尾
 
-状态（2026-11-08 第三批禁用三态落地后）：可见性三级体系主体、全局装配（服务面 + 插件管理器入口）、数据面自动重建、资产懒解出自愈、呈现配置服务端持久化 + localStorage 一次性迁移 + panelPrefs API 面、禁用三态服务端层（`enabled:false` 装配保留三面下线，install API 与层文件声明均支持，含翻转语义；builtin 声明 `{kind:'builtin', enabled:false}` 同链生效——服务端语义已就位，前端开关呈现待 UI 产品方案）已完成并验证（agentero 面板侧 panelPrefs 消费示例随其插件项目自身迭代接入，源码已出仓）。
+状态（2026-11-08 第二批补「插件设置弹窗」落地后）：可见性三级体系主体、全局装配（服务面 + 插件管理器入口）、数据面自动重建、资产懒解出自愈、呈现配置服务端持久化 + localStorage 一次性迁移 + panelPrefs API 面、禁用三态服务端层（`enabled:false` 装配保留三面下线，install API 与层文件声明均支持，含翻转语义；builtin 声明 `{kind:'builtin', enabled:false}` 同链生效——服务端语义已就位，前端开关呈现待 UI 产品方案）、插件设置弹窗（tgz 装配项卡片 ⚙ 就地打开，manifest 表单 + 「全局默认 | 本空间」层 tab，跟随/接管两态与 Feature 配置编辑器同源；插件管理器全局卡无身份上下文只编辑全局层）已完成并验证（agentero 面板侧 panelPrefs 消费示例随其插件项目自身迭代接入，源码已出仓）。
 
 - studio 契约同步：`feature-package-metadata.md` 升 v3、`studio_create_feature` / 快照校验支持 ui/server 声明。（未动，与"Studio 数据源统一 catalog"一并挂起，等第一个真实需求）
 - 装配身份泛化：`install-service.js` 的 `IDENTITY_SCOPES` 从硬编码 main/coder 改为按工作空间注册表派生（任意有 runtime 的工作空间可装配）。（**服务面已完成**：注册表机制 + 运行时 `registerIdentityScopes` + global 身份 install/rebuild/readiness，消费方现读注册表；**商店面剩余**：`server/routes/feature-store.js` 的 `STORE_SCOPES` 是模块加载时快照、`AGENT_MODULE_SOURCES` 写死 main/coder，后注册身份能装配但商店 overview 不显示其装配状态）
 - 呈现配置：工作空间身份层新增 sparse 呈现配置（`{ panelId: { visible, order } }`）+ 读写 API；rail 渲染消费（素材 × 装配事实 × 呈现配置合成）；rail-customize localStorage 一次性迁移后废弃。（第二批；迁移归属已定：每空间首次打开时服务端无配置且浏览器有旧值则拷贝，打一次性迁移标记）
-- 插件卡片视觉分层：商店货架卡片与右侧 Features 面板条目样式解耦（复用 feature-card 结构的做法废止），先查 design-system 配方再定卡片配方。（并入第二批插件设置弹窗批）
+- 插件卡片视觉分层：已装配卡片信息层完成（设置入口 + 版本/来源徽章 + 描述，随设置弹窗批落地）；商店货架卡片与右侧 Features 面板条目的独立卡片配方解耦未做（原"复用 feature-card 结构"仍现状，等 UI 打磨需求再动）。
 - 禁用动作：$mount 声明支持 `enabled: false`，卡片三态，三面联动下线。（第三批；与官方 builtin 开关升级三态同期，同一条处置链——ADR-0046 后果节要求，落地顺序原漏排已补）
 - 术语收口：AGENT.md 词汇表登记 Plugin/feature 分层，前端 i18n 文案 feature 商店 → 插件，`server/feature-runtime/` 模块名不强制重命名。（本批完成）
 

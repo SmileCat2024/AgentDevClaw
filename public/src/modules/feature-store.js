@@ -283,6 +283,12 @@ function _fsRenderMountedSection(mountedMap) {
     const btn = isGlobal
       ? '<button type="button" class="fs-list-remove" disabled style="opacity:0.35;" title="' + escapeHtml(_fsT('来自全局装配，在 设置 → 插件管理 中移除', 'From global assembly; remove via Settings → Plugin Manager')) + '">&#215;</button>'
       : '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除', 'Remove')) + '" data-action="featureStore.removeMount" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
+    // tgz 装配项的配置参数入口（ADR-0046 落地第 1 步）：就地打开设置弹窗，
+    // 层 tab 提供「全局默认 | 本空间」两级编辑。builtin 的配置家在 Feature
+    // 配置编辑器（官方清单面板），不在此重复提供入口。
+    const settingsBtn = mount.kind !== 'builtin' && !mount.missing
+      ? '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('设置', 'Settings')) + '" data-action="featureStore.openSettings" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>'
+      : '';
     // displayName 与可安装区同源（builtin title / 包 displayName），查不到落回 runtime 名
     const pkg = packageNames.get(runtimeName);
     const displayName = (mount.kind === 'builtin' ? builtinItems.get(runtimeName)?.title : pkg?.displayName) || runtimeName;
@@ -291,7 +297,7 @@ function _fsRenderMountedSection(mountedMap) {
       displayName,
       description: '',
       surface: mount.kind === 'builtin' ? (builtinItems.get(runtimeName)?.surface || null) : null,
-    }, status + btn);
+    }, settingsBtn + status + btn);
   }).join('');
   return '<div class="fs-mounted-section"><div class="fs-section-title">' + escapeHtml(_fsT('已装配', 'Installed')) + '</div>'
     + '<div class="feature-grid ph-mount-grid">' + items + '</div></div>';
@@ -518,6 +524,68 @@ let _pmState = {
   import: null,
 };
 
+// ── 插件设置弹窗（ADR-0046 落地第 1 步：配置入口从 Feature 配置编辑器归位）──
+//
+// 服务对象是 tgz 仓库包装配项（如 agentero 的 vaultPath）：配置参数在插件
+// 卡片就地打开，层 tab 提供「全局默认 | 本空间」两级编辑（数据面全复用
+// resolved API + PUT layer，两态语义复用 feature-setup-core 的跟随/接管
+// 模型，与 Feature 配置编辑器同源）。builtin（官方可选插件）的配置面板
+// 本就是 Feature 配置编辑器的官方清单，语义无错位，不在此重复提供入口。
+let _fsSettings = {
+  open: false,
+  busy: false,
+  runtimeName: '',
+  displayName: '',
+  manifest: null,   // { settings: { properties } } | null（无配置参数）
+  resolved: null,   // resolved API 缓存（layers + merged）
+  scopeId: 'global', // 'global' | 'agent'
+  agentId: '',       // scope agentId（resolved/PUT 寻址用）
+  hasIdentity: false, // true = 商店卡片（有身份上下文，显示两层 tab）
+  error: '',
+};
+
+/**
+ * 设置弹窗的字段行视图数据（纯函数，测试锚点）。
+ * manifestEntry 形如 system_feature_manifests 的 { featureName, manifest }；
+ * resolved 为 resolved API 响应；scopeId 为当前编辑层。返回行数组：
+ * { key, prop, state, controlValue, showReset, upstreamLabel, groupLabel }。
+ */
+function _fsSettingsRows(manifestEntry, resolved, scopeId) {
+  const properties = manifestEntry?.manifest?.settings?.properties;
+  if (!properties || typeof properties !== 'object') return null;
+  const sections = [{ featureName: manifestEntry.featureName, props: properties, propKeys: Object.keys(properties) }];
+  const layers = Array.isArray(resolved?.layers) ? resolved.layers : [];
+  const states = fsFieldStates(sections, layers, scopeId);
+  const rows = [];
+  for (const [key, prop] of Object.entries(properties)) {
+    if (prop?.type === 'group') {
+      for (const [subKey, subProp] of Object.entries(prop.properties || {})) {
+        const fullKey = `${manifestEntry.featureName}.${key}.${subKey}`;
+        rows.push(_fsSettingsRow(fullKey, subProp, states.get(fullKey), scopeId, key));
+      }
+      continue;
+    }
+    const fullKey = `${manifestEntry.featureName}.${key}`;
+    rows.push(_fsSettingsRow(fullKey, prop, states.get(fullKey), scopeId, null));
+  }
+  return rows;
+}
+
+/** 单行组装：控件值（接管→本层；跟随→上游最近层值，无则 manifest 默认）。 */
+function _fsSettingsRow(fullKey, prop, state, scopeId, groupLabel) {
+  return {
+    key: fullKey,
+    prop,
+    state: state || { status: 'follow', upstream: { kind: 'default' } },
+    controlValue: fsControlValue(state, prop),
+    showReset: fsShowReset(scopeId, state, prop),
+    upstreamLabel: state?.upstream?.kind === 'layer'
+      ? (state.upstream.label || '') + (state.status === 'takeover' ? '' : '')
+      : '',
+    groupLabel: groupLabel || null,
+  };
+}
+
 function _pmHost() {
   let host = document.getElementById('claw-plugin-manager-host');
   if (!host) {
@@ -707,12 +775,16 @@ function _pmRenderGlobalSection(mountedMap) {
       ? '<span class="feature-badge status-removed">' + escapeHtml(_fsT('包已不在仓库', 'missing')) + '</span>'
       : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>';
     const btn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除全局装配', 'Remove global assembly')) + '" data-action="pluginManager.removeGlobal" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
+    // 设置入口（无身份上下文：弹窗只编辑全局默认层，本空间覆盖在各自商店）
+    const settingsBtn = mount.kind !== 'builtin' && !mount.missing
+      ? '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('设置', 'Settings')) + '" data-action="featureStore.openSettings" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>'
+      : '';
     const pkg = packageNames.get(runtimeName);
     return _fsCard({
       name: runtimeName,
       displayName: pkg?.displayName || runtimeName,
       description: pkg?.description || '',
-    }, status + btn);
+    }, settingsBtn + status + btn);
   }).join('');
   return '<div class="fs-mounted-section"><div class="fs-section-title">' + escapeHtml(_fsT('全局装配', 'Global Assembly')) + '</div>'
     + '<div class="feature-grid ph-mount-grid">' + items + '</div></div>';
@@ -849,4 +921,188 @@ window.ClawFW.actions.registerMany({
     }
   },
   'pluginManager.close': () => _pmClosePluginManager(),
+});
+
+// ── 插件设置弹窗：打开 / 渲染 / 写入 ──────────────────────────────
+
+/**
+ * 打开设置弹窗。runtimeName 为 $mount 声明键；identityContext 传身份键
+ * （'main' | 'coder'）时提供「全局默认 | 本空间」两层 tab，插件管理器的
+ * 全局装配卡片无身份上下文（不传），只编辑全局默认层。
+ */
+window._fsOpenSettings = async function(runtimeName, identityContext) {
+  const scope = identityContext && _FS_IDENTITY_SCOPES[identityContext];
+  _fsSettings = {
+    open: true,
+    busy: true,
+    runtimeName: String(runtimeName || ''),
+    displayName: String(runtimeName || ''),
+    manifest: null,
+    resolved: null,
+    scopeId: 'global',
+    agentId: scope ? scope.agentId : 'programming-helper',
+    hasIdentity: !!scope,
+    identityLabel: scope ? (currentLanguage === 'zh' ? scope.labelZh : scope.labelEn) : '',
+    error: '',
+  };
+  _fsSettingsRender();
+  try {
+    const agentId = encodeURIComponent(_fsSettings.agentId);
+    const [manifestsRes, resolvedRes] = await Promise.all([
+      _fsFetchJson(`/protoclaw/system_feature_manifests?agentId=${agentId}`),
+      _fsFetchJson(`/protoclaw/feature_config/resolved?agentId=${agentId}`),
+    ]);
+    const entry = (manifestsRes.features || []).find((f) => f.featureName === runtimeName) || null;
+    // resolved 无 layers 视为加载失败（两态判定依赖层队列）
+    if (!Array.isArray(resolvedRes?.layers)) throw new Error(_fsT('配置层读取失败', 'failed to load config layers'));
+    _fsSettings.manifest = entry;
+    _fsSettings.resolved = resolvedRes;
+    _fsSettings.displayName = entry?.manifest?.name || runtimeName;
+  } catch (err) {
+    _fsSettings.error = String(err?.message || err);
+  } finally {
+    _fsSettings.busy = false;
+    _fsSettingsRender();
+  }
+};
+
+/** 弹窗宿主：挂在 body 下的独立 overlay（叠加在商店/插件管理器弹窗之上）。 */
+function _fsSettingsHost() {
+  let host = document.getElementById('ph-plugin-settings-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'ph-plugin-settings-host';
+    document.body.appendChild(host);
+  }
+  return host;
+}
+
+/** 当前编辑层的 sparse（resolved 缓存中取，PUT 整层写回的基底）。 */
+function _fsSettingsTargetSparse() {
+  const layer = (_fsSettings.resolved?.layers || []).find((l) => l.id === _fsSettings.scopeId);
+  return layer?.sparse && typeof layer.sparse === 'object' ? layer.sparse : {};
+}
+
+/** 字段行 HTML：label/description 双语取 manifest 声明，控件按 type 分发。 */
+function _fsSettingsRowHtml(row) {
+  const prop = row.prop || {};
+  const isZh = currentLanguage === 'zh';
+  const label = (prop.label && (isZh ? prop.label.zh : prop.label.en)) || row.key.split('.').pop();
+  const desc = prop.description && (isZh ? prop.description.zh : prop.description.en);
+  const takeover = row.state?.status === 'takeover';
+  const controlValue = row.controlValue == null ? '' : String(row.controlValue);
+  let control = '';
+  if (prop.type === 'boolean') {
+    control = '<input type="checkbox" data-action="featureStore.settingsField" data-event="change" data-key="'
+      + escapeHtml(row.key) + '"' + (row.controlValue ? ' checked' : '') + '>';
+  } else if (prop.type === 'number') {
+    control = '<input type="number" class="fs-settings-input" data-action="featureStore.settingsField" data-event="change" data-key="'
+      + escapeHtml(row.key) + '" value="' + escapeHtml(controlValue) + '">';
+  } else {
+    control = '<input type="text" class="fs-settings-input" data-action="featureStore.settingsField" data-event="change" data-key="'
+      + escapeHtml(row.key) + '" value="' + escapeHtml(controlValue) + '">';
+  }
+  const followHint = takeover
+    ? '<span class="fs-settings-state">' + escapeHtml(_fsT('本层已接管', 'overridden here')) + '</span>'
+    : (row.upstreamLabel
+      ? '<span class="fs-settings-state fs-settings-follow">' + escapeHtml(_fsT('跟随 ', 'follows ') + row.upstreamLabel) + '</span>'
+      : '<span class="fs-settings-state fs-settings-follow">' + escapeHtml(_fsT('默认值', 'default')) + '</span>');
+  const resetBtn = row.showReset
+    ? '<button type="button" class="fs-settings-reset" data-action="featureStore.settingsReset" data-key="'
+      + escapeHtml(row.key) + '" title="' + escapeHtml(_fsT('恢复为上级配置', 'Reset to upstream value')) + '">'
+      + escapeHtml(_fsT('重置', 'Reset')) + '</button>'
+    : '';
+  return '<div class="fs-settings-row' + (takeover ? ' fs-settings-row-takeover' : '') + '">'
+    + '<div class="fs-settings-row-label">'
+    + '<div class="fs-settings-name">' + escapeHtml(label) + '</div>'
+    + (desc ? '<div class="fs-settings-desc">' + escapeHtml(desc) + '</div>' : '')
+    + '</div>'
+    + '<div class="fs-settings-row-control">' + control + followHint + resetBtn + '</div>'
+    + '</div>';
+}
+
+function _fsSettingsRender() {
+  const host = _fsSettingsHost();
+  if (!_fsSettings.open) { host.innerHTML = ''; return; }
+  const rows = _fsSettings.manifest ? _fsSettingsRows(_fsSettings.manifest, _fsSettings.resolved, _fsSettings.scopeId) : null;
+  const tabs = _fsSettings.hasIdentity
+    ? '<div class="fs-settings-tabs">'
+      + '<button type="button" class="fs-settings-tab' + (_fsSettings.scopeId === 'global' ? ' active' : '') + '" data-action="featureStore.settingsTab" data-scope="global">' + escapeHtml(_fsT('全局默认', 'Global default')) + '</button>'
+      + '<button type="button" class="fs-settings-tab' + (_fsSettings.scopeId === 'agent' ? ' active' : '') + '" data-action="featureStore.settingsTab" data-scope="agent">' + escapeHtml(_fsT('本空间（' + _fsSettings.identityLabel + '）', 'This workspace (' + _fsSettings.identityLabel + ')')) + '</button>'
+      + '</div>'
+    : '<div class="fs-settings-hint">' + escapeHtml(_fsT('全局默认配置，对所有工作空间生效；单个工作空间的覆盖在对应空间的插件商店卡片中设置', 'Global defaults for all workspaces; per-workspace overrides are edited in that workspace\'s plugin store')) + '</div>';
+  let bodyHtml = '';
+  if (_fsSettings.busy) {
+    bodyHtml = '<div class="fs-spinner-wrap"><div class="fs-spinner"></div></div>';
+  } else if (_fsSettings.error) {
+    bodyHtml = '<div class="fs-error-banner">' + escapeHtml(_fsSettings.error) + '</div>';
+  } else if (_fsSettings.manifest == null) {
+    bodyHtml = '<div class="fs-settings-empty">' + escapeHtml(_fsT('该插件没有声明可配置参数', 'This plugin declares no configurable settings')) + '</div>';
+  } else if (!rows || !rows.length) {
+    bodyHtml = '<div class="fs-settings-empty">' + escapeHtml(_fsT('该插件没有声明可配置参数', 'This plugin declares no configurable settings')) + '</div>';
+  } else {
+    bodyHtml = rows.map(_fsSettingsRowHtml).join('');
+  }
+  host.innerHTML = '<div class="feature-detail-overlay" data-fs-settings-overlay>'
+    + '<div class="feature-detail-window ph-settings-window" style="position:relative;max-width:560px;">'
+    + '<div class="ph-settings-header">'
+    + '<div class="ph-settings-title">' + escapeHtml(_fsSettings.displayName)
+    + ' <span class="feature-detail-id">' + escapeHtml(_fsSettings.runtimeName) + '</span></div>'
+    + '<button type="button" class="ph-settings-close" data-action="featureStore.closeSettings" title="' + escapeHtml(_fsT('关闭', 'Close')) + '">&#215;</button>'
+    + '</div>'
+    + tabs
+    + '<div class="fs-settings-body">' + bodyHtml + '</div>'
+    + '</div>'
+    + '</div>';
+}
+
+/** 层 tab 切换：重渲染（resolved 已缓存，无网络往返）。 */
+function _fsSettingsSwitchTab(scopeId) {
+  if (scopeId !== 'global' && scopeId !== 'agent') return;
+  if (scopeId === 'agent' && !_fsSettings.hasIdentity) return;
+  _fsSettings.scopeId = scopeId;
+  _fsSettingsRender();
+}
+
+/**
+ * 即时保存（与 Feature 配置编辑器同模型）：单字段写入 → 以当前层 sparse
+ * 为底构造整层内容 → PUT layer → 重拉 resolved（上游状态变化会联动其他行）。
+ * value === null 为重置（删除本层字段，恢复跟随）。
+ */
+const _fsSettingsSave = async function(fullKey, value) {
+  const content = fsWithField(_fsSettingsTargetSparse(), fullKey, value);
+  try {
+    const res = await fetch('/protoclaw/feature_config/layer', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: _fsSettings.agentId, layerId: _fsSettings.scopeId, content }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(payload.error || `${res.status} ${res.statusText}`);
+    const agentId = encodeURIComponent(_fsSettings.agentId);
+    _fsSettings.resolved = await _fsFetchJson(`/protoclaw/feature_config/resolved?agentId=${agentId}`);
+  } catch (err) {
+    _fsSettings.error = String(err?.message || err);
+  }
+  _fsSettingsRender();
+};
+
+window._fsCloseSettings = function() {
+  _fsSettings.open = false;
+  _fsSettingsRender();
+};
+
+window.ClawFW.actions.registerMany({
+  'featureStore.openSettings': (el) => window._fsOpenSettings(el.dataset.name, el.dataset.identity || null),
+  'featureStore.closeSettings': () => window._fsCloseSettings(),
+  'featureStore.settingsTab': (el) => _fsSettingsSwitchTab(el.dataset.scope),
+  'featureStore.settingsReset': (el) => _fsSettingsSave(el.dataset.key, null),
+  'featureStore.settingsField': (el) => {
+    let value;
+    if (el.type === 'checkbox') value = !!el.checked;
+    else if (el.type === 'number') value = el.value === '' ? null : Number(el.value);
+    else value = el.value;
+    if (value === null) { el.classList.add('fs-input-error'); return; }
+    _fsSettingsSave(el.dataset.key, value);
+  },
 });

@@ -10588,6 +10588,152 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   background: rgba(229,85,85,0.08);
 }
 
+/* 插件设置弹窗（feature-store.js 设置入口，ADR-0046 落地第 1 步） */
+.fs-settings-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  background: var(--input-bg, rgba(255,255,255,0.06));
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.fs-settings-btn:hover {
+  border-color: var(--accent-text, var(--accent, #5b8def));
+  color: var(--accent-text, var(--accent, #5b8def));
+}
+
+.fs-settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 18px 0;
+}
+
+.fs-settings-tab {
+  padding: 6px 14px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.fs-settings-tab.active {
+  background: var(--panel-bg, rgba(255,255,255,0.04));
+  color: var(--text-primary, #e8ecf1);
+}
+
+.fs-settings-hint {
+  padding: 10px 18px 0;
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fs-settings-body {
+  max-height: 56vh;
+  overflow-y: auto;
+  padding: 14px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fs-settings-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.fs-settings-row-takeover {
+  border-color: var(--border-color, rgba(255,255,255,0.12));
+  background: var(--panel-bg, rgba(255,255,255,0.03));
+}
+
+.fs-settings-row-label { min-width: 0; flex: 1; }
+
+.fs-settings-name {
+  font-size: 13px;
+  color: var(--text-primary, #e8ecf1);
+  font-weight: 500;
+}
+
+.fs-settings-desc {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-secondary, #9aa3b2);
+  line-height: 1.45;
+}
+
+.fs-settings-row-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.fs-settings-input {
+  width: 220px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  background: var(--input-bg, rgba(255,255,255,0.06));
+  color: var(--text-primary, #e8ecf1);
+  font-size: 12px;
+}
+
+.fs-settings-input:focus {
+  outline: none;
+  border-color: var(--accent-text, var(--accent, #5b8def));
+}
+
+.fs-settings-state {
+  font-size: 11px;
+  color: var(--text-secondary, #9aa3b2);
+  white-space: nowrap;
+}
+
+.fs-settings-follow { opacity: 0.75; }
+
+.fs-settings-reset {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.fs-settings-reset:hover {
+  color: var(--text-primary, #e8ecf1);
+  border-color: var(--accent-text, var(--accent, #5b8def));
+}
+
+.fs-settings-empty {
+  padding: 28px 0;
+  text-align: center;
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 13px;
+}
+
 .fs-list-add {
   align-self: flex-start;
   padding: 5px 14px;
