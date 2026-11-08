@@ -14,10 +14,10 @@
  * 归档形态），不读真实用户数据目录。
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, renameSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, relative as pathRelative } from 'path';
 import { Writable } from 'node:stream';
@@ -26,9 +26,13 @@ import crypto from 'crypto';
 import {
   extractClientAssets,
   resolveClientAsset,
+  resolveClientAssetWithHeal,
+  ensureFacetExtracted,
+  resetAssetHealCachesForTest,
   assetMimeFor,
   streamClientAsset,
   versionAssetDir,
+  versionServerDir,
 } from '../server/feature-runtime/feature-assets.js';
 import { composePanelDeclarations } from '../server/feature-runtime/plugin-ui.js';
 
@@ -48,6 +52,7 @@ function makePluginTgz({
   version = '1.0.0',
   manifest = null,
   clientFiles = { 'index.js': 'export default {}' },
+  serverFiles = null,
 } = {}) {
   const src = join(root, 'pack-src');
   const pkgDir = join(src, 'package');
@@ -58,6 +63,11 @@ function makePluginTgz({
   }
   for (const [name, content] of Object.entries(clientFiles)) {
     const file = join(pkgDir, 'client', name);
+    mkdirSync(join(file, '..'), { recursive: true });
+    writeFileSync(file, content);
+  }
+  for (const [name, content] of Object.entries(serverFiles || {})) {
+    const file = join(pkgDir, 'server', name);
     mkdirSync(join(file, '..'), { recursive: true });
     writeFileSync(file, content);
   }
@@ -388,7 +398,7 @@ describe('composePanelDeclarations', async () => {
     assert.ok(warnings.some((w) => w.includes('ghost-plugin') && w.includes('不在仓库')));
   });
 
-  it('skips panels whose client assets were never extracted (tgz 手拷未走导入)', async () => {
+  it('tgz 手拷未走导入：声明合成的自愈解出后正常下发面板（#9）', async () => {
     makePluginTgz({
       packageName: 'no-asset-plugin',
       manifest: uiManifest([{ id: 'no-asset-panel', entry: 'index.js' }]),
@@ -398,10 +408,37 @@ describe('composePanelDeclarations', async () => {
       resolvers: makeLayerTable({
         'programming-helper': { 'no-asset-plugin': { $mount: { package: 'no-asset-plugin', version: '1.0.0' } } },
       }),
+      assetsRoot: join(root, 'assets'), // 从未解出
+    });
+    assert.deepEqual(warnings, []);
+    assert.equal(declarations.length, 1);
+    assert.equal(declarations[0].panelId, 'no-asset-panel');
+    // 自愈解出的资产可被 serve 层直接解析（URL 链路闭环）
+    const served = await resolveClientAssetWithHeal(
+      { packageName: 'no-asset-plugin', version: '1.0.0', file: 'index.js' },
+      { catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') }, assetsRoot: join(root, 'assets') },
+    );
+    assert.ok(served);
+    assert.equal(readFileSync(served, 'utf8'), 'export default {}');
+  });
+
+  it('client 面解出自愈不可达（tgz 声明了 ui 面但无 client/）：面板跳过下发并警告', async () => {
+    // manifest 带 ui 面声明、tgz 内却无 client/ 目录：自愈解出必然无产物
+    // （extractClientAssets 无该面返回 extracted:false），面板级检查按缺失跳过。
+    makePluginTgz({
+      packageName: 'broken-no-client',
+      clientFiles: {},
+      manifest: uiManifest([{ id: 'p-no-client', entry: 'index.js' }]),
+    });
+    const { declarations, warnings } = await composePanelDeclarations({
+      catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
+      resolvers: makeLayerTable({
+        'programming-helper': { 'broken-no-client': { $mount: { package: 'broken-no-client', version: '1.0.0' } } },
+      }),
       assetsRoot: join(root, 'assets'),
     });
     assert.equal(declarations.length, 0);
-    assert.ok(warnings.some((w) => w.includes('no-asset-plugin') && w.includes('未解出')));
+    assert.ok(warnings.some((w) => w.includes('broken-no-client') && w.includes('未解出')));
   });
 
   it('collects warnings for invalid declarations instead of failing the whole catalog', async () => {
@@ -431,5 +468,115 @@ describe('composePanelDeclarations', async () => {
     assert.equal(warnings.filter((w) => w.includes('broken-plugin')).length, 3);
     assert.equal(declarations[0].meta.order, 5);
     assert.deepEqual(declarations[0].meta.label, { zh: '正常', en: 'OK' });
+  });
+});
+
+// ── 资产自愈（懒解出）──────────────────────────────────────────────
+
+describe('资产自愈（ensureFacetExtracted / resolveClientAssetWithHeal）', () => {
+  beforeEach(() => {
+    resetAssetHealCachesForTest();
+  });
+
+  /** 把 fixture tgz 挪进"仓库"，返回 catalogRoots（隔离注入）。 */
+  function seedRepository(tgzPath, fileName) {
+    const repoRoot = join(root, 'repo');
+    mkdirSync(repoRoot, { recursive: true });
+    renameSync(tgzPath, join(repoRoot, fileName));
+    return { userRoot: repoRoot, officialRoot: join(root, 'official-empty') };
+  }
+
+  it('client 面：解出目录缺失时从仓库 tgz 现场解出，资产可读（URL 目录段名形态）', async () => {
+    const { archivePath } = makePluginTgz({
+      packageName: '@adv/demo',
+      version: '0.2.0',
+      manifest: uiManifest([{ id: 'p1', entry: 'index.js' }]),
+    });
+    const catalogRoots = seedRepository(archivePath, 'adv!demo-0.2.0.tgz');
+    const assetsRoot = join(root, 'assets'); // 从未解出
+    const filePath = await resolveClientAssetWithHeal(
+      { packageName: 'adv!demo', version: '0.2.0', file: 'index.js' }, // URL 段名形态（@ 不保留）
+      { catalogRoots, assetsRoot },
+    );
+    assert.ok(filePath, '自愈后应解析出资产路径');
+    assert.equal(readFileSync(filePath, 'utf8'), 'export default {}');
+  });
+
+  it('catalog 查无时降级 404 语义；60s 负缓存内补上 tgz 仍不自愈；TTL 过期后恢复', async (t) => {
+    const catalogRoots = { userRoot: join(root, 'repo'), officialRoot: join(root, 'official-empty') };
+    mkdirSync(catalogRoots.userRoot, { recursive: true });
+    const opts = { catalogRoots, assetsRoot: join(root, 'assets') };
+    const params = { packageName: 'ghost-plugin', version: '1.0.0', file: 'index.js' };
+
+    // 仓库为空：自愈不可达，按缺失处理（null，不抛错）
+    assert.equal(await resolveClientAssetWithHeal(params, opts), null);
+
+    // 补上 tgz：负缓存仍在有效期，不重扫 catalog，结果不变。
+    // 若没有负缓存，这次调用会重扫并自愈成功（返回非 null）——断言因此有区分度。
+    const { archivePath } = makePluginTgz({ packageName: 'ghost-plugin', version: '1.0.0' });
+    renameSync(archivePath, join(catalogRoots.userRoot, 'ghost-plugin-1.0.0.tgz'));
+    assert.equal(await resolveClientAssetWithHeal(params, opts), null);
+
+    // 快进 61s（锚定真实时钟，避免 mock 从 0 起算导致负缓存永不过期）：缓存过期，自愈成功
+    t.mock.timers.enable({ time: ['Date'], now: Date.now() });
+    t.mock.timers.tick(61_000);
+    assert.ok(await resolveClientAssetWithHeal(params, opts));
+  });
+
+  it('server 面：ensureFacetExtracted(facet=server) 从仓库 tgz 解出，目录按 versionServerDir 可寻址', async () => {
+    const { archivePath } = makePluginTgz({
+      packageName: 'srv-heal',
+      version: '0.1.0',
+      manifest: { schemaVersion: 3, id: 'srv-heal', entry: 'dist/index.js', server: { entry: 'index.js', prefix: 'srv-heal' } },
+      clientFiles: {},
+      serverFiles: { 'index.js': 'export default { registerRoutes() {} };\n' },
+    });
+    const catalogRoots = seedRepository(archivePath, 'srv-heal-0.1.0.tgz');
+    const serverRoot = join(root, 'srv'); // 从未解出
+    const result = await ensureFacetExtracted(
+      { packageName: 'srv-heal', version: '0.1.0', facet: 'server' },
+      { catalogRoots, serverRoot },
+    );
+    assert.equal(result.healed, true);
+    assert.equal(result.fileCount, 2); // index.js + 自动补写的 package.json ESM 标记
+    const entryPath = join(versionServerDir({ packageName: 'srv-heal', version: '0.1.0' }, serverRoot), 'index.js');
+    assert.ok(existsSync(entryPath), 'server 入口应已解出到版本目录');
+  });
+
+  it('同坐标并发自愈不互踩：两个并发调用都成功且产物完整', async () => {
+    const { archivePath } = makePluginTgz({ packageName: 'par-heal', version: '1.0.0', manifest: uiManifest([{ id: 'p1', entry: 'index.js' }]) });
+    const catalogRoots = seedRepository(archivePath, 'par-heal-1.0.0.tgz');
+    const opts = { catalogRoots, assetsRoot: join(root, 'assets') };
+    const args = { packageName: 'par-heal', version: '1.0.0', facet: 'client' };
+    const [first, second] = await Promise.all([
+      ensureFacetExtracted(args, opts),
+      ensureFacetExtracted(args, opts),
+    ]);
+    // rm+untar 非原子：无 inflight 去重时并发重入会互踩（目录半写/ENOENT）。
+    // 此处断言并发正确性（都成功、产物完整可读）；"只解出一次"由 inflight 共享保证。
+    assert.equal(first.healed, true);
+    assert.equal(second.healed, true);
+    const filePath = await resolveClientAsset({ packageName: 'par-heal', version: '1.0.0', file: 'index.js' }, opts.assetsRoot);
+    assert.ok(filePath);
+    assert.equal(readFileSync(filePath, 'utf8'), 'export default {}');
+  });
+
+  it('目录存在但文件缺失（包损坏）不触发自愈，保持 404 如实', async () => {
+    const { archivePath } = makePluginTgz({
+      packageName: 'damaged-plugin',
+      version: '1.0.0',
+      manifest: uiManifest([{ id: 'p1', entry: 'index.js' }]),
+      clientFiles: { 'index.js': 'export default {}', 'extra.css': 'body{}' },
+    });
+    const catalogRoots = seedRepository(archivePath, 'damaged-plugin-1.0.0.tgz');
+    const assetsRoot = join(root, 'assets');
+    // 正常解出后删掉其中一个文件：目录仍在，内容残缺
+    await ensureFacetExtracted({ packageName: 'damaged-plugin', version: '1.0.0', facet: 'client' }, { catalogRoots, assetsRoot });
+    rmSync(join(versionAssetDir({ packageName: 'damaged-plugin', version: '1.0.0' }, assetsRoot), 'extra.css'));
+    // 请求已删除的文件：目录存在 → 不自愈（否则会掩盖包损坏），null 如实
+    assert.equal(
+      await resolveClientAssetWithHeal({ packageName: 'damaged-plugin', version: '1.0.0', file: 'extra.css' }, { catalogRoots, assetsRoot }),
+      null,
+    );
   });
 });

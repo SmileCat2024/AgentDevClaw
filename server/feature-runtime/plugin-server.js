@@ -32,7 +32,7 @@ import { pathToFileURL } from 'url';
 import { scanFeatureCatalog } from './catalog.js';
 import { collectAssemblyFacts } from './plugin-ui.js';
 import { readGlobalDeclaredMounts } from './install-service.js';
-import { versionServerDir } from './feature-assets.js';
+import { versionServerDir, ensureFacetExtracted } from './feature-assets.js';
 import { resolveScopeConfig } from '../routes/feature-config.js';
 import { createClawLogger as createLogger } from '../shared/claw-logger.js';
 
@@ -94,7 +94,17 @@ export async function buildPluginServerMounts({ catalogRoots, resolvers, serverR
       entryRel,
     );
     if (!existsSync(entryPath)) {
-      warnings.push(`插件 ${packageName}@${versionChoice.version} 的 server 面未解出（${entryPath} 不存在；重新导入该 tgz 可解出）：跳过挂载`);
+      // 自愈：解出物缺失（目录被清 / tgz 未经导入链路直放入库）时从仓库
+      // tgz 现场解出（digest 幂等）。失败只记 warning，不阻塞其他包。
+      await ensureFacetExtracted(
+        { packageName, version: versionChoice.version, facet: 'server' },
+        { catalog, catalogRoots, serverRoot },
+      ).catch((error) => {
+        warnings.push(`插件 ${packageName}@${versionChoice.version} server 面自愈解出失败：${error?.message || error}`);
+      });
+    }
+    if (!existsSync(entryPath)) {
+      warnings.push(`插件 ${packageName}@${versionChoice.version} 的 server 面未解出且自愈未成（${entryPath} 不存在；重新导入该 tgz 可解出）：跳过挂载`);
       continue;
     }
 

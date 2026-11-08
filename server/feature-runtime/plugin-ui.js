@@ -24,11 +24,11 @@ import path from 'path';
 
 import { scanFeatureCatalog } from './catalog.js';
 import { IDENTITY_SCOPES, readDeclaredMounts, readGlobalDeclaredMounts } from './install-service.js';
-import { versionAssetDir } from './feature-assets.js';
+import { versionAssetDir, ensureFacetExtracted } from './feature-assets.js';
 
 const SCOPE_VALUES = new Set(['global', 'assembly']);
 
-/** URL / 资产目录共用的包目录段（@scope/name → @scope!name，避免路径分隔）。 */
+/** URL / 资产目录共用的包目录段（@scope/name → scope!name，避免路径分隔；@ 不保留）。 */
 function packageDirName(packageName) {
   return String(packageName).replace(/^@([^\/]+)\//, '$1!');
 }
@@ -149,6 +149,14 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
       warnings.push(`插件 ${packageName} 装配版本 ${targetVersion} 已不在仓库（面板跳过下发；重装该版本或调整装配声明）`);
       continue;
     }
+
+    // 资产就绪自愈（#9）：client 面解出物缺失（tgz 手拷入库 / 解出目录丢失）
+    // 时从仓库 tgz 现场解出（幂等）。自愈不可达（catalog 查无 / digest 冲突）
+    // 不在此报警——面板级 .digest 检查按缺失跳过并给既有 warning。
+    await ensureFacetExtracted(
+      { packageName, version: versionChoice.version, facet: 'client' },
+      { catalog, catalogRoots, assetsRoot },
+    ).catch(() => {});
 
     // 全局级装配在列 → 面板处处可见（when 不设 agentIds 限制）
     const globalMounted = mounted.some((fact) => fact.agentId === null);

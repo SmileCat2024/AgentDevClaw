@@ -21,6 +21,7 @@ import { existsSync, promises as fs, readdirSync, createReadStream, realpathSync
 
 import { USER_FEATURE_REPOSITORY_ROOT } from '../shared/constants.js';
 import { gunzipFileToBuffer, listTarEntryNames, untarBufferToDir } from '../shared/tgz-archive.js';
+import { scanFeatureCatalog, resolveCatalogPackage } from './catalog.js';
 
 /** UI 资产根：用户 feature 仓库下的 assets/（与 tgz 同区，便于整体备份清理）。 */
 export function clientAssetsRoot(assetsRoot) {
@@ -32,9 +33,9 @@ export function serverEnvRoot(root) {
   return root || path.join(USER_FEATURE_REPOSITORY_ROOT, 'server-env');
 }
 
-/** 包目录名：@scope/name → @scope!name（避免嵌套目录与 Windows 非法字符）。 */
+/** 包目录名：@scope/name → scope!name（避免嵌套目录与 Windows 非法字符；@ 不保留）。 */
 function packageDirName(packageName) {
-  return String(packageName).replace(/^@([^/]+)\//, '$1!');
+  return String(packageName).replace(/^@([^\/]+)\//, '$1!');
 }
 
 export function versionAssetDir({ packageName, version }, assetsRoot) {
@@ -208,4 +209,107 @@ export function streamClientAsset(res, filePath) {
     if (!res.headersSent) res.status(404).json({ error: 'asset read failed' });
     else res.destroy();
   }).pipe(res);
+}
+
+// ── 资产自愈（解出物缺失时从仓库 tgz 现场解出）──────────────────────
+//
+// 背景：解出原本只发生在 confirm_import 时刻（导入即解出），两个路径会让
+// 解出物缺失——直接把 tgz 放进仓库目录（未走导入链路）、解出目录被清理或
+// 丢失。此前无自愈路径，面板资产 404、数据面跳过挂载，唯一恢复手段是
+// 重新导入。自愈把"按需解出"补在两个消费面上：serve 路由 404 前、数据面
+// 挂载目录缺失时。幂等性由 extractArchiveFacet 的 .digest 纪律保证
+// （一致跳过 / 冲突拒绝 / 残缺重建），内容寻址目录不变。
+
+/**
+ * URL 目录段名反解为规范包名：scope!name → @scope/name（npm 包名不含 !，
+ * 替换无歧义；无 ! 的普通包名原样通过。段名形态见 packageDirName：@ 在
+ * 转义时被吃掉，产物不带 @）。
+ */
+function packageNameFromDirName(name) {
+  return String(name).replace(/^([^!@]+)!(.+)$/, '@$1/$2');
+}
+
+/** 同坐标并发自愈共享同一 inflight promise（rm+untar 非原子，并发重入会互踩）。 */
+const healInflight = new Map();
+
+/**
+ * 负结果短缓存：catalog 查无 / 包损坏（digest 冲突）的自愈失败记 60s，
+ * 防止 404 路径反复触发全量 catalog 扫描（每个 tgz gunzip+sha256，被恶意
+ * URL 刷动会成为放大点）。成功自愈不缓存（此后 existsSync 短路）。
+ */
+const HEAL_MISS_TTL_MS = 60_000;
+const healMissCache = new Map();
+
+function healMissRecent(key) {
+  const at = healMissCache.get(key);
+  if (!at) return false;
+  if (Date.now() - at > HEAL_MISS_TTL_MS) {
+    healMissCache.delete(key);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * 自愈解出：按 catalog 定位 package@version 的仓库 tgz，解出指定面。
+ * catalog 查无该包@版本 → { healed: false, reason: 'not-in-catalog' }（不抛错，
+ * 调用方按"缺失"处理）；解出过程抛错向上传（digest 冲突等包级损坏）。
+ * 两类失败均记入负缓存，60s 内同坐标不再重试。
+ * @param {object} args { packageName, version, facet: 'client' | 'server' }
+ *   packageName 接受规范名或 URL 目录段名（@scope!name）两种形态
+ * @param {object} options catalog 传入现成实例（避免重扫）；否则按
+ *   catalogRoots 现扫。assetsRoot / serverRoot 测试隔离注入口。
+ * @returns {Promise<{healed: boolean, extracted?: boolean, fileCount?: number, reason?: string}>}
+ */
+export async function ensureFacetExtracted({ packageName, version, facet }, { catalog, catalogRoots, assetsRoot, serverRoot } = {}) {
+  const canonicalName = packageNameFromDirName(packageName);
+  const key = `${facet}|${canonicalName}@${version}`;
+  if (healMissRecent(key)) return { healed: false, reason: 'recently-failed' };
+  const inflight = healInflight.get(key);
+  if (inflight) return inflight;
+  const task = (async () => {
+    let archive;
+    try {
+      const resolvedCatalog = catalog || await scanFeatureCatalog(catalogRoots);
+      archive = resolveCatalogPackage(resolvedCatalog, { packageName: canonicalName, version });
+    } catch {
+      healMissCache.set(key, Date.now());
+      return { healed: false, reason: 'not-in-catalog' };
+    }
+    try {
+      const result = facet === 'server'
+        ? await extractServerAssets(archive, { serverRoot })
+        : await extractClientAssets(archive, { assetsRoot });
+      return { healed: true, extracted: result.extracted, fileCount: result.fileCount };
+    } catch (error) {
+      healMissCache.set(key, Date.now());
+      throw error;
+    }
+  })().finally(() => healInflight.delete(key));
+  healInflight.set(key, task);
+  return task;
+}
+
+/** 测试隔离：清空自愈 inflight 与负缓存（生产代码不应调用）。 */
+export function resetAssetHealCachesForTest() {
+  healInflight.clear();
+  healMissCache.clear();
+}
+
+/**
+ * client 资产解析（带自愈）：resolveClientAsset 未命中且版本目录整体缺失时，
+ * 从仓库 tgz 现场解出后重试。自愈失败降级为原 404 行为（warn 日志，不上抛）
+ * ——serve 路由不能因自愈异常崩溃。目录存在而文件缺失属于包损坏，不治，
+ * 保持 404 如实。
+ */
+export async function resolveClientAssetWithHeal(params, options = {}) {
+  const filePath = resolveClientAsset(params, options.assetsRoot);
+  if (filePath) return filePath;
+  if (!existsSync(versionAssetDir(params, options.assetsRoot))) {
+    await ensureFacetExtracted({ ...params, facet: 'client' }, options).catch((error) => {
+      console.warn('[feature-assets] client 面自愈解出失败（按缺失处理）：', error?.message || error);
+    });
+    return resolveClientAsset(params, options.assetsRoot);
+  }
+  return null;
 }

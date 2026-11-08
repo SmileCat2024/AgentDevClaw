@@ -11,7 +11,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, relative as pathRelative } from 'path';
 import http from 'node:http';
@@ -180,15 +180,27 @@ describe('buildPluginServerMounts', () => {
     assert.equal(warnings.length, 2);
   });
 
-  it('声明了 server 面但未解出的包跳过（tgz 手拷未走导入）', async () => {
+  it('解出物缺失但 tgz 在仓库：自愈解出后正常挂载（tgz 手拷未走导入的场景）', async () => {
     makeServerPluginTgz();
     const { mounts, warnings } = await buildPluginServerMounts({
       catalogRoots: { userRoot: root, officialRoot: join(root, 'official-empty') },
       resolvers: makeResolvers(mountedLayer('srv-demo', '1.0.0')),
+      serverRoot: join(root, 'server-env'), // 从未解出
+    });
+    assert.deepEqual(warnings, []);
+    assert.equal(mounts.length, 1);
+    assert.equal(mounts[0].prefix, 'srv-demo');
+    assert.ok(existsSync(mounts[0].entryPath), 'server 入口应已自愈解出');
+  });
+
+  it('装配引用悬空（包不在仓库）：不挂载、不抛错', async () => {
+    const { mounts, warnings } = await buildPluginServerMounts({
+      catalogRoots: { userRoot: root, officialRoot: join(root, 'official-empty') },
+      resolvers: makeResolvers(mountedLayer('ghost-srv', '9.9.9')),
       serverRoot: join(root, 'server-env'),
     });
     assert.equal(mounts.length, 0);
-    assert.ok(warnings.some((w) => w.includes('未解出')));
+    assert.ok(Array.isArray(warnings));
   });
 });
 
