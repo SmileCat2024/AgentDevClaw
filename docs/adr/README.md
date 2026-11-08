@@ -42,7 +42,8 @@
 - [0022 Agent Studio Feature-First 模式](0022-agent-studio-feature-first-model.md) — feature 一级实体、目录降级为运行环境、会话多对多绑定
 - [0034 模型选择 Feature 化](0034-feature-owned-model-selection.md) — Feature 持有选择与恢复策略，Agent 持有实际模型
 - [0038 资源读取协议](0038-resource-fetch-protocol.md) — runtime 持有资产的跨边界只读资源面 `/res/`
-- [0045 外部插件包与工作空间装配](0045-external-plugin-package-and-workspace-assembly.md) — Plugin/feature 两层、单 tgz 三面、仓库导入与工作空间装配分离、呈现配置权威（Proposed）
+- [0045 外部插件包与工作空间装配](0045-external-plugin-package-and-workspace-assembly.md) — Plugin/feature 两层、单 tgz 三面、仓库导入与工作空间装配分离、呈现配置权威（Accepted，P1–P3 已实施；scope 语义经 0046 修订为装配建议）
+- [0046 插件管理产品体系](0046-plugin-management-product-system.md) — 三级装配（全局/工作空间/对话，装配层级=可见性层级）、配置三层（插件参数/面板偏好 panelPrefs/呈现配置，按面寻址）、版本钉精确版、面板协议 minor 冻结承诺、保守优先通用原则、Studio 过渡与插件化工作空间愿景
 
 ## 远程与外部协议
 
