@@ -10,9 +10,9 @@ import {
   FEATURE_MANIFEST_NAME,
 } from '../shared/constants.js';
 import { ensureDir, readJson } from '../shared/fs-helpers.js';
-import { runCommand } from './fs-operations.js';
 import { compareSemver, uniqueStrings } from '../shared/feature-utils.js';
 import { summarizeArchive } from '../feature-runtime/catalog.js';
+import { gunzipFileToBuffer, readTarEntry } from '../shared/tgz-archive.js';
 import { extractClientAssets, extractServerAssets } from '../feature-runtime/feature-assets.js';
 
 /* ── feature metadata helpers ─────────────────────────────────────── */
@@ -207,21 +207,15 @@ export async function ensureFeatureProjectManifest(projectDir) {
 /* ── archive & repository summarization ───────────────────────────── */
 
 async function readArchiveJson(archivePath, archiveEntryPath) {
-  // Windows 下 GNU tar 把 "C:\..." 的盘符冒号当作远程主机分隔符（与 catalog.js
-  // 同源的历史问题）：仓库内归档改传 POSIX 风格相对路径绕开；仓库外归档
-  // （用户仓库 / 上传临时目录）在 win32 追加 --force-local 禁用远程主机解释。
-  const relative = path.relative(PROJECT_ROOT, archivePath).replace(/\\/g, '/');
-  const insideRepo = !relative.startsWith('..') && !path.isAbsolute(relative);
-  const target = insideRepo ? relative : archivePath.replace(/\\/g, '/');
-  const tarArgs = !insideRepo && process.platform === 'win32'
-    ? ['--force-local', '-xOf', target, archiveEntryPath]
-    : ['-xOf', target, archiveEntryPath];
-  const { stdout } = await runCommand('tar', tarArgs, { cwd: PROJECT_ROOT });
-  const raw = stdout.trim();
-  if (!raw) {
+  // 纯 Node 读取（shared/tgz-archive，与 catalog.js 同步收口）：Windows 双 tar
+  // 并存导致 spawn tar CLI 的 PATH 解析因启动环境而异（GNU 需 --force-local、
+  // bsdtar 不支持），彻底移除 CLI 依赖。
+  const tarBuffer = await gunzipFileToBuffer(archivePath);
+  const data = readTarEntry(tarBuffer, archiveEntryPath);
+  if (!data || data.length === 0) {
     throw new Error(`Archive entry is empty: ${archiveEntryPath}`);
   }
-  return JSON.parse(raw);
+  return JSON.parse(data.toString('utf8'));
 }
 
 export async function summarizeFeatureArchive(archivePath, archiveName, source = 'custom') {
