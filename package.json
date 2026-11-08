@@ -6,7 +6,6 @@
   "description": "A visual, extensible AI agent workspace powered by AgentDev.",
   "scripts": {
     "build:local-features": "tsc -p local-features/tsconfig.json && node scripts/copy-local-feature-skills.mjs",
-    "build:react-panels": "node scripts/build-react-panels.mjs",
     "check:agentdev": "node scripts/check-agentdev-local.mjs",
     "build:features": "node scripts/build-features.mjs",
     "pack:features": "node scripts/pack-features.mjs",

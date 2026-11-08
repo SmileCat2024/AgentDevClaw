@@ -1,0 +1,3 @@
+# 行尾敏感的测试 fixture：内容被断言逐字节比较（github-shell create-release
+# 的 notes body），必须钉 LF，防 autocrlf 开发机检出成 CRLF 后断言漂移。
+local-features/github/test/fixtures/** text eol=lf

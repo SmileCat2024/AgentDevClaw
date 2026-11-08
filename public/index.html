@@ -460,6 +460,9 @@
     <script src="./src/modules/generative-ui-panel.js"></script>
   <script src="./src/modules/debug-panel-host.js"></script>
   <script src="./src/modules/panel-plugins.js"></script>
+  <!-- 动态插件面板声明（ADR-0045 P1）：从 server 声明 API 拉取外部插件包
+       的面板声明（素材 × 装配事实合成），与上方静态清单互补 -->
+  <script src="./src/modules/feature-ui-registry.js"></script>
   <script src="./src/modules/workspace-blocks.js"></script>
   <!-- coder APP 界面改为按需动态装载（src/plugins/coder/index.js），
        不再静态挂载，卸载后无残留 -->

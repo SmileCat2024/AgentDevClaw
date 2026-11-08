@@ -211,6 +211,20 @@
   }
 
   /**
+   * declarePanel 的逆操作：懒声明本身退场（stub 与注册项一起移除）。
+   * 用于动态声明源（feature-ui-registry）：插件卸载/禁用后 server 不再
+   * 下发该面板声明时，把按钮占位一并撤掉。已装载的 real 面板同样摘除。
+   */
+  function undeclarePanel(id) {
+    const key = String(id || '').trim();
+    panelStubs.delete(key);
+    if (!panels.has(key)) return false;
+    panels.delete(key);
+    teardownPanel(key);
+    return true;
+  }
+
+  /**
    * 面板摘除钩子：宿主编排层（debug-panel-host）注入。面板从注册表消失时
    * 若它正打开，需要走一次空面板渲染把 body 清空、按钮态复位——注册表
    * 不知道打开状态，这个清理只能由编排层完成（对齐 setPluginResolver 的注入模式）。
@@ -515,6 +529,7 @@
     panels: {
       register: registerPanel,
       declare: declarePanel,
+      undeclare: undeclarePanel,
       unregister: unregisterPanel,
       get: (id) => panels.get(String(id)),
       getAll: () => Array.from(panels.values()),

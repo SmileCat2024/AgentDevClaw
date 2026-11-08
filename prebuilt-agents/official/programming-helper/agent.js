@@ -31,9 +31,8 @@ import { GitHubShellFeature } from '../../../local-features/dist/github/src/inde
 import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
 import { ConversationAnnotationsFeature } from '../../../local-features/dist/conversation-annotations/src/index.js';
 import { TimeAwarenessFeature } from '../../../local-features/dist/time-awareness/src/index.js';
-import { AgenteroFeature } from '../../../local-features/dist/agentero/src/index.js';
-import { AutoTitlePolicyFeature } from '../../../local-features/dist/auto-title-policy/src/index.js';
 import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
+import { AutoTitlePolicyFeature } from '../../../local-features/dist/auto-title-policy/src/index.js';
 import { CraftAwarenessFeature } from '../../../local-features/dist/craft-awareness/src/index.js';
 import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import { PlaywrightShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
@@ -201,11 +200,9 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 工程素养提醒：首次写出成规模文档（write ≥30 行 / edit 的 markdown/txt
     // 文件）后注入读者视角写法标准，每会话一次。状态经框架会话快照持久化。
     this.use(new CraftAwarenessFeature());
-    // Agentero 文献库工具面（ADR-0044 P6 样本三件套之一）：spawn agentero CLI
-    // --json 薄包装（papers / paper_get / set_read / vault_info）。vault 路径
-    // 走 feature 配置 agentero.vaultPath（四层作用域 merge 后的 merged 段）；
-    // 数据面路由在 server/routes/agentero.js（面板消费，与工具面互不依赖）。
-    this.use(new AgenteroFeature(merged.agentero));
+    // Agentero 文献库（ADR-0045 三面单包）已出仓为外部插件包：工具面经
+    // $mount 装配（feature-store install / 商店），UI 面与数据面随包走，
+    // 不再静态装配。vault 路径仍走 feature 配置 agentero.vaultPath。
     // 过界守卫（三态 badge：关闭 / 自动打断 / 自动接续）：manifest（Runtime
     // 配置面板）决定会话启动初值，上边栏 badge 循环点击实时切换（触发不
     // 翻转它）。interrupt = 按越界事件的一次性保险丝：触发后拦截机器唤醒

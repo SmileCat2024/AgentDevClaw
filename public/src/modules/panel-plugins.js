@@ -49,21 +49,9 @@
         order: 30,
       },
     },
-    {
-      // Agentero 文献库（ADR-0044 P6 样本）：React 容器型面板，产物经
-      // npm run build:react-panels 生成（src/index.tsx → dist/index.js）。
-      // when 不限 surface：vault 配置与 agent 无关，任意界面可查文献。
-      id: 'agentero-library',
-      pluginId: 'agentero-library',
-      url: '/src/plugins/agentero-library/dist/index.js',
-      meta: {
-        title: () => currentLanguage === 'zh' ? '文献' : 'Library',
-        label: { zh: '文献', en: 'Library' },
-        description: { zh: 'Agentero 研究 vault 论文库（只读）', en: 'Agentero vault papers (read-only)' },
-        icon: '<svg width="18" height="18" viewBox="0 0 36 36" fill="none"> <rect x="8" y="7" width="20" height="22" rx="2" stroke="#8AB4F8" stroke-width="2"></rect> <path d="M13 14h10M13 19h10M13 24h6" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round"></path> </svg>',
-        order: 92,
-      },
-    },
+    // agentero-library 已出仓为外部插件包（ADR-0045 P1）：面板声明改由
+    // server 声明 API 下发（feature-ui-registry.js），实现模块经导入的
+    // tgz 资产 URL 装载，不再走本静态清单。
   ];
 
   for (const d of DECLARATIONS) {

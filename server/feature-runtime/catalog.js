@@ -61,6 +61,16 @@ export async function summarizeArchive(archivePath, source) {
       && !Array.isArray(manifest.settings)
       ? manifest.settings
       : null,
+    // manifest v3（ADR-0045）：ui 面（panels 声明）与 server 面（entry/prefix）
+    // 原样保留；逐项校验与语义合成在 plugin-ui.js 的声明合成处做（catalog
+    // 层保持宽容提取，无 v3 声明的包字段为 null，行为与 v2 完全一致）。
+    manifestSchemaVersion: typeof manifest?.schemaVersion === 'number' ? manifest.schemaVersion : null,
+    manifestUi: manifest?.ui && typeof manifest.ui === 'object' && !Array.isArray(manifest.ui)
+      ? manifest.ui
+      : null,
+    manifestServer: manifest?.server && typeof manifest.server === 'object' && !Array.isArray(manifest.server)
+      ? manifest.server
+      : null,
   };
 }
 

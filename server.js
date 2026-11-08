@@ -119,6 +119,7 @@ import { setupWorkspaceSettingsRoutes, readWorkspaceResourcePolicies } from './s
 import { setupToolStateRoutes } from './server/routes/tool-state.js';
 import { setupFeatureCatalogRoutes } from './server/routes/feature-catalog.js';
 import { setupFeatureStoreRoutes } from './server/routes/feature-store.js';
+import { setupFeatureAssetRoutes } from './server/routes/feature-assets.js';
 import { setupImageRoutes } from './server/routes/images.js';
 import { getUISurfaceStore, setupUISurfaceRoutes } from './server/routes/ui-surfaces.js';
 import { projectLayerPath } from './server/shared/feature-config-layers.js';
@@ -128,7 +129,6 @@ import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { registerThreadHostAgents, isThreadHostSession } from './server/thread-control/host-agents.js';
 import { setupMemoAppRoutes } from './server/routes/memo-app.js';
-import { setupAgenteroRoutes } from './server/routes/agentero.js';
 import { setupIMOperatorThreadRoutes } from './server/routes/im-operator-thread.js';
 import { readProjectIMWorkspaceConfig, withIMWorkspaceConfig } from './server/routes/im-config.js';
 import { createThreadLifecycleService } from './server/thread-control/thread-lifecycle.js';
@@ -704,7 +704,25 @@ setupWorkspaceSettingsRoutes(app, express, {
 setupToolStateRoutes(app);
 setupFeatureCatalogRoutes(app);
 setupFeatureStoreRoutes(app, express);
+setupFeatureAssetRoutes(app);
 setupFeatureRepositoryRoutes(app, express);
+// 插件数据面挂载（ADR-0045 P2）：server 面随装配事实挂载到
+// /protoclaw/plugin/<prefix>/*；导入/装配/禁用变化后经 remount 整体重建。
+{
+  const { mountPluginServerRoutes, remountPluginServerRoutes } = await import('./server/feature-runtime/plugin-server.js');
+  const mountResult = await mountPluginServerRoutes(app);
+  if (mountResult.mounted.length > 0 || mountResult.warnings.length > 0) {
+    console.log(`[plugin-server] 数据面挂载：${mountResult.mounted.map((m) => `${m.packageName}→/${m.prefix}`).join(', ') || '无'}${mountResult.warnings.length > 0 ? `（警告 ${mountResult.warnings.length} 条）` : ''}`);
+  }
+  app.post('/protoclaw/plugin/remount', async (_req, res, next) => {
+    try {
+      const result = await remountPluginServerRoutes(app);
+      res.json({ ok: true, mounted: result.mounted, warnings: result.warnings });
+    } catch (error) {
+      next(error);
+    }
+  });
+}
 setupFlowRoutes(app, express, { readWorkspaceState, resolveAssemblyFeatureArchives });
 setupUsageRoutes(app, express);
 setupUISurfaceRoutes(app, express);
@@ -854,7 +872,6 @@ setupAcpRoutes(app, express, {
 });
 
 // ── Agentero 数据面（只读，ADR-0044 P6 对接样本）──
-setupAgenteroRoutes(app);
 
 // ── Memo APP 对话事务（单活动线程 + 新建换代归档，ADR-0024 APP 业务状态）──
 const memoAppController = setupMemoAppRoutes(app, express, {

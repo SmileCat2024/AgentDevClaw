@@ -12,6 +12,8 @@ import {
 import { ensureDir, readJson } from '../shared/fs-helpers.js';
 import { runCommand } from './fs-operations.js';
 import { compareSemver, uniqueStrings } from '../shared/feature-utils.js';
+import { summarizeArchive } from '../feature-runtime/catalog.js';
+import { extractClientAssets, extractServerAssets } from '../feature-runtime/feature-assets.js';
 
 /* ── feature metadata helpers ─────────────────────────────────────── */
 
@@ -629,8 +631,47 @@ export function setupFeatureRepositoryRoutes(app, express) {
         targetPath = path.join(USER_FEATURE_REPOSITORY_ROOT, `${parsed.name}-${Date.now()}${parsed.ext || '.tgz'}`);
       }
       await fs.rename(pending.tempPath, targetPath);
+
+      // 插件面资产解出（ADR-0045 P1/P2）：manifest v3 带 ui.panels 的包
+      // 解出 client/（浏览器资产），带 server 声明的包解出 server/（主进程
+      // 数据面，含 ESM 标记）。digest 冲突 / 声明面缺失视为包损坏：回滚
+      // 删除已落盘 tgz，导入整体失败（不留半可用状态）。
+      let assets = null;
+      try {
+        const archiveSummary = await summarizeArchive(targetPath, 'custom');
+        const expectsUi = Array.isArray(archiveSummary.manifestUi?.panels)
+          && archiveSummary.manifestUi.panels.length > 0;
+        if (expectsUi) {
+          const result = await extractClientAssets({
+            archivePath: targetPath,
+            packageName: archiveSummary.packageName,
+            version: archiveSummary.version,
+            archiveDigest: archiveSummary.archiveDigest,
+          });
+          assets = { ...result, packageName: archiveSummary.packageName, version: archiveSummary.version };
+        }
+        const expectsServer = archiveSummary.manifestServer
+          && typeof archiveSummary.manifestServer.entry === 'string'
+          && typeof archiveSummary.manifestServer.prefix === 'string';
+        if (expectsServer) {
+          await extractServerAssets({
+            archivePath: targetPath,
+            packageName: archiveSummary.packageName,
+            version: archiveSummary.version,
+            archiveDigest: archiveSummary.archiveDigest,
+          }, { expectServer: true });
+        }
+      } catch (error) {
+        await fs.unlink(targetPath).catch(() => {});
+        console.error('[feature-repository] 插件资产解出失败，导入回滚：', error?.message || error);
+        res.status(400).json({
+          error: `插件 UI 面资产解出失败，已回滚导入：${error instanceof Error ? error.message : String(error)}`,
+        });
+        return;
+      }
+
       const summary = await summarizeFeatureArchive(targetPath, path.basename(targetPath), 'custom');
-      res.json({ success: true, fileName: path.basename(targetPath), summary });
+      res.json({ success: true, fileName: path.basename(targetPath), summary, assets });
     } catch (error) {
       next(error);
     }

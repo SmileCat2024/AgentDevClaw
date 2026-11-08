@@ -32,8 +32,12 @@ function mountKeyFor(packageName) {
   return packageName.replace(/^@[^/]+\//, '');
 }
 
-/** 读身份配置层：返回 sparse 与其中全部 $mount 声明（含 builtin）。resolvers 为测试隔离注入口。 */
-function readDeclaredMounts(scope, resolvers) {
+/**
+ * 读身份配置层：返回 sparse 与其中全部 $mount 声明（含 builtin）。resolvers 为测试隔离注入口。
+ * 导出供 plugin-ui（声明合成）与 plugin-routes（server 面挂载）复用装配事实，
+ * 避免各写一份层读取逻辑漂移。
+ */
+export function readDeclaredMounts(scope, resolvers) {
   const { layers } = buildScopeLayers({ agentId: scope.agentId }, resolvers);
   const layer = (layers || []).find((entry) => entry.id === scope.layerId);
   const sparse = (layer && typeof layer.sparse === 'object' && layer.sparse !== null) ? layer.sparse : {};
