@@ -77,7 +77,7 @@ Agent Studio 产出的 Feature 会被 Claw 仓库浏览、筛选和装配。元�
 
 ## Agent Studio 打包检查
 
-`studio_create_snapshot` 会从源码目录调用 Claw 的 packager。packager 从 `package.json` 生成 tgz 顶层 `agentdev-feature.json`（供 Claw 仓库/catalog 读取），其中 `export` / `ui` / `server` / `settings` 直接提取自 `package.json.agentdev`。创建快照前应检查：
+`studio_create_snapshot` 会从源码目录调用 Claw 的 packager。packager 从 `package.json` 生成 tgz 顶层 `agentdev-feature.json`（供 Claw 仓库/catalog 读取），其中 `export` / `ui` / `server` / `settings` 直接提取自 `package.json.agentdev`。 `settings` 必须是 JSON Schema object 形态（字段声明在 `settings.properties.<字段名>` 下，与框架 `getFeatureManifest()` 产出一致）；扁平直挂的形态会被配置聚合链判为无配置项。创建快照前应检查：
 
 1. `package.json.agentdev.schemaVersion` 为 `3`，元数据与实现一致；三面声明（`export` / `ui` / `server`）与实际构建产物（`dist/` / `client/` / `server/`）对应；
 2. `package.json.description`、`keywords`、`main`、`engines.agentdev` 已填写；
