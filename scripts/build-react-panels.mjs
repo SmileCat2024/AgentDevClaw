@@ -19,13 +19,18 @@
  *      `declare const __clawPanelCss: string` 后在 mount/unmount 里自行
  *      注入 <style> / 移除（插件协议生命周期自治，宿主零改动）。
  *
- * 构建器与插件源码的显式约定只有一条：banner 的 __clawPanelCss 常量
- * （无 tailwind.css 时为空字符串）。
+ * 构建器与插件源码的显式约定有两条：
+ *   1. banner 的 __clawPanelCss 常量（无 tailwind.css 时为空字符串）；
+ *   2. `?asset` 导入约定：`import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?asset'`
+ *      被解析的文件或目录整体拷贝到 dist/assets/，默认导出其相对 URL 字符串
+ *      （'assets/<name>'，装载时相对 dist/index.js 解析，与产物同源）。
+ *      用于版本必须与主库精确对齐的运行时资产（PDF.js worker / cMaps 等），
+ *      拷贝源是根仓库 node_modules，天然随依赖版本走。
  */
 import * as esbuild from 'esbuild';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const PLUGINS_DIR = join(ROOT, 'public', 'src', 'plugins');
@@ -126,6 +131,52 @@ function compileTailwind(pluginDir) {
   return scope === undefined ? compiled.stdout : scopeSelectors(compiled.stdout, scope);
 }
 
+/** ── `?asset` 导入约定（文件/目录 → dist/assets/，默认导出相对 URL） ── */
+
+const ASSET_SUFFIX = '?asset';
+
+/**
+ * esbuild 插件：onResolve 拦截 `...?asset` 导入，构建时把解析到的文件或
+ * 目录整体拷贝到 dist/assets/ 下，onLoad 返回 `export default "<相对URL>"`。
+ *
+ * URL 形如 'assets/<name>'（相对产物根）：装载后相对 dist/index.js 的
+ * import.meta.url 解析。同名冲突以先到为准并 warn（不同包同名资产应带
+ * 包名前缀导入，如 'pdfjs-dist/cmaps?asset' 得 assets/cmaps）。
+ */
+function assetImportPlugin(pluginDir, report) {
+  return {
+    name: 'claw-panel-asset',
+    setup(build) {
+      build.onResolve({ filter: /\?asset$/ }, (args) => {
+        const spec = args.path.slice(0, -ASSET_SUFFIX.length);
+        const resolved = spec.startsWith('.')
+          ? join(args.resolveDir, spec)
+          : resolve(pluginDir, 'node_modules', ...spec.split('/'));
+        const candidate = existsSync(resolved) ? resolved
+          : existsSync(join(ROOT, 'node_modules', ...spec.split('/')))
+            ? join(ROOT, 'node_modules', ...spec.split('/')) : null;
+        if (candidate === null) {
+          return { errors: [{ text: `?asset 目标不存在: ${spec}（相对导入或根 node_modules 均未命中）` }] };
+        }
+        const name = basename(candidate);
+        const dest = join(pluginDir, 'dist', 'assets', name);
+        if (!existsSync(dest)) {
+          mkdirSync(dirname(dest), { recursive: true });
+          cpSync(candidate, dest, { recursive: true });
+          report.push(name);
+        } else {
+          console.warn(`[build-react-panels] ?asset 同名已存在，复用: assets/${name}（${spec}）`);
+        }
+        return { path: candidate, namespace: 'claw-panel-asset' };
+      });
+      build.onLoad({ filter: /.*/, namespace: 'claw-panel-asset' }, (args) => ({
+        contents: `export default ${JSON.stringify(`assets/${basename(args.path)}`)}`,
+        loader: 'js',
+      }));
+    },
+  };
+}
+
 /** ── 插件发现与构建 ── */
 
 /**
@@ -165,6 +216,7 @@ async function buildPlugin(name) {
 
   const banner = `const __clawPanelCss = ${JSON.stringify(css)};`;
 
+  const assetReport = [];
   const result = await esbuild.build({
     absWorkingDir: pluginDir,
     entryPoints: [entry],
@@ -178,6 +230,7 @@ async function buildPlugin(name) {
     logLevel: 'warning',
     banner: { js: banner },
     alias: readShimAliases(pluginDir),
+    plugins: [assetImportPlugin(pluginDir, assetReport)],
   });
 
   const bundled = result.outputFiles[0]?.text;
@@ -189,7 +242,8 @@ async function buildPlugin(name) {
   mkdirSync(dirname(outfile), { recursive: true });
   writeFileSync(outfile, bundled);
   const cssNote = css ? `css ${fmtKb(Buffer.byteLength(css))}（scope 注入）` : '无 css';
-  console.log(`[build-react-panels] ${name}: ${fmtKb(Buffer.byteLength(bundled))}｜${cssNote}`);
+  const assetNote = assetReport.length > 0 ? `｜assets: ${assetReport.join(', ')}` : '';
+  console.log(`[build-react-panels] ${name}: ${fmtKb(Buffer.byteLength(bundled))}｜${cssNote}${assetNote}`);
 }
 
 const plugins = discoverReactPlugins();

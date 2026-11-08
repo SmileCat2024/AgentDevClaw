@@ -3,11 +3,12 @@ import { ArrowLeft, ExternalLink, FileText, Maximize2, Minimize2, RefreshCw, Sea
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { PdfReader } from './pdf-reader'
 import { papersFrom, shown, type LibraryFace, type PaperDetail, type PaperRow, type VaultInfo } from './papers'
 
 type LibraryPanelProps = PropsRuntime<'sidebar.right.pane.tab'> & PropsLocale<'agentero.library'> & LibraryFace
 
-export function LibraryPanel({ t, loadPapers, loadPaper, notifyError, loadVault }: LibraryPanelProps): ReactNode {
+export function LibraryPanel({ t, loadPapers, loadPaper, askAgent, notifyError, loadVault }: LibraryPanelProps): ReactNode {
   const [vault, setVault] = useState<VaultInfo | null>(null)
   const [papers, setPapers] = useState<PaperRow[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -61,33 +62,42 @@ export function LibraryPanel({ t, loadPapers, loadPaper, notifyError, loadVault 
       .finally(() => setDetailLoading(false))
   }, [loadPaper, t])
 
+  /** 划词提问投递：失败走 notice（输入已不可恢复，提示用户重试）。 */
+  const handleAsk = useCallback((request: { quote: string, page: number, question: string }) => {
+    if (selectedPaper === null) return
+    void askAgent({ paperId: selectedPaper.id, title: selectedPaper.title, ...request })
+      .then(() => notifyError(t('askSent')))
+      .catch((error: unknown) => notifyError(shown(error instanceof Error ? error.message : '', t)))
+  }, [askAgent, notifyError, selectedPaper, t])
+
   const detailActive = selectedPaper !== null || detailLoading || detailError !== ''
   const detailMeta = selectedPaper
     ? [selectedPaper.year ? String(selectedPaper.year) : '', selectedPaper.authors.join(', ')].filter(Boolean).join(' · ') || '—'
     : ''
 
   /**
-   * 详情视图骨架：panel 内嵌与全屏 Portal 共用。
-   * 顶栏 = 返回/退出全屏 + 标题与元信息行 + 全屏切换 + 新标签页打开；
-   * 内容 = PDF 占满剩余空间（panel 窄栏不设摘要/标签侧栏）。
+   * 详情视图骨架：panel 内嵌与全屏共用同一 React 子树（条件 Portal：全屏
+   * 时 Portal 到 body，panel 时留在面板容器）——切换模式只移动 DOM 宿主，
+   * PdfReader 不卸载、PDF 不重载（此前两分支渲染导致 iframe 重挂载）。
+   * 顶栏 = 返回/退出全屏 + 标题与元信息行 + 全屏切换 + 新标签页打开。
    */
-  const detailBody = (fullscreen: boolean): ReactNode => (
+  const detailBody = (
     <div
-      className={fullscreen ? 'agentero-library agentero-surface agentero-reader agentero-reader-fullscreen' : 'agentero-reader agentero-reader-panel'}
+      className={detailFullscreen ? 'agentero-library agentero-surface agentero-reader agentero-reader-fullscreen' : 'agentero-reader agentero-reader-panel'}
       role='dialog'
-      aria-modal={fullscreen ? 'true' : undefined}
+      aria-modal={detailFullscreen ? 'true' : undefined}
       aria-label={t('paperDetails')}
-      style={fullscreen ? { position: 'fixed', inset: 0, zIndex: 2147483000, display: 'flex', flexDirection: 'column', width: '100vw', height: '100dvh' } : undefined}
+      style={detailFullscreen ? { position: 'fixed', inset: 0, zIndex: 2147483000, display: 'flex', flexDirection: 'column', width: '100vw', height: '100dvh' } : undefined}
     >
       <header className='agentero-reader-topbar'>
-        {fullscreen
+        {detailFullscreen
           ? <button type='button' className='agentero-icon-button' onClick={() => setDetailFullscreen(false)} aria-label={t('exitFullscreen')} title={t('exitFullscreen')}><Minimize2 size={18} /></button>
           : <button type='button' className='agentero-icon-button' onClick={closeDetail} aria-label={t('backToLibrary')} title={t('backToLibrary')}><ArrowLeft size={18} /></button>}
         <div className='agentero-reader-heading'>
           <h1 title={selectedPaper?.title}>{selectedPaper?.title || t('loading')}</h1>
           {detailMeta ? <div className='agentero-reader-meta' title={detailMeta}>{detailMeta}</div> : null}
         </div>
-        {!fullscreen && selectedPaper?.pdfAvailable
+        {!detailFullscreen && selectedPaper?.pdfAvailable
           ? <button type='button' className='agentero-icon-button' onClick={() => setDetailFullscreen(true)} aria-label={t('openFullscreen')} title={t('openFullscreen')}><Maximize2 size={18} /></button>
           : null}
         {selectedPaper?.pdfAvailable
@@ -105,12 +115,7 @@ export function LibraryPanel({ t, loadPapers, loadPaper, notifyError, loadVault 
         <main className='agentero-reader-main'>
           <section className='agentero-pdf-stage' aria-label={selectedPaper.title}>
             {selectedPaper.pdfAvailable
-              ? (
-                // panel 与全屏用不同 query 区分 URL：iframe 跨模式重新挂载时，
-                // 同 URL 导航会让 Chromium PDF viewer 复用会话缩放、忽略
-                // #zoom fragment（退回 100%）；两模式各自首次导航才能应用 page-width。
-                <iframe src={`${selectedPaper.pdfUrl}?view=${fullscreen ? 'full' : 'panel'}#zoom=page-width`} title={selectedPaper.title} />
-              )
+              ? <PdfReader url={selectedPaper.pdfUrl} onAsk={handleAsk} />
               : <div className='agentero-reader-message'>{t('pdfMissing')}</div>}
           </section>
         </main>
@@ -144,8 +149,9 @@ export function LibraryPanel({ t, loadPapers, loadPaper, notifyError, loadVault 
 
   return (
     <>
-      {detailActive && !detailFullscreen ? detailBody(false) : libraryPage}
-      {detailActive && detailFullscreen ? createPortal(detailBody(true), document.body) : null}
+      {detailActive
+        ? (detailFullscreen ? createPortal(detailBody, document.body) : detailBody)
+        : libraryPage}
     </>
   )
 }

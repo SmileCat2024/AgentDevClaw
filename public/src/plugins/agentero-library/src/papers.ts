@@ -10,12 +10,23 @@ export interface VaultInfo {
   canPick: boolean
 }
 
+/** 划词提问请求（面板 → 当前会话的 user turn）。 */
+export interface PanelAskRequest {
+  paperId: string
+  title: string
+  page: number
+  quote: string
+  question: string
+}
+
 export interface LibraryFace {
   notifyError(message: string): void
   loadVault(): Promise<VaultInfo>
   loadPapers(): Promise<unknown>
   openPaper(id: string): boolean
   loadPaper(id: string): Promise<PaperDetail>
+  /** 划词提问：把引文 + 问题投递到当前聚焦会话（user-turn API）。 */
+  askAgent(request: PanelAskRequest): Promise<void>
   importId(text: string): Promise<void>
   importBib(text: string): Promise<void>
   exportBib(): Promise<string>

@@ -532,6 +532,11 @@
       currentAgent() {
         return typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
       },
+      // 当前聚焦会话的 runtime 寻址键（user-turn 等会话输入 API 的路径参数）；
+      // 无运行中会话时返回 ''。同步读取（stale check 同源 currentRuntimeAgentId）。
+      focusedRuntimeId() {
+        return String(currentRuntimeAgentId || '').trim();
+      },
       // 按 id 查 agent 条目（含 workspace_sessions 投影；找不到返回 null）
       agentById(agentId) {
         const id = String(agentId || '');

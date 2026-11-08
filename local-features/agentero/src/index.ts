@@ -14,12 +14,19 @@
  * 工具面偏读：list / get / vault_info 只读；写操作第一版仅 set-read（幂等、
  * 无破坏），经 CLI 官方契约执行。正文检索（vault.search）与整页阅读
  * （page.read）是 MCP surface 独有能力，CLI 无对应子命令，不在本工具面。
+ *
+ * 划词提问消费（metadata.agentero）：文献面板把引文提问投递为 user turn
+ * （source='agentero-panel'），metadata 以本 feature 名为 key 随消息流动。
+ * 消息落地的两个互斥入口（框架保证一条消息只走其一）：空闲投递走 CallStart
+ * 钩子（ctx.metadata 自取），agent 忙时排队走 onTurnMetadata（call 内注入
+ * 点派发）。feature 在此补全论文上下文 reminder——面板只发最小载荷，元
+ * 数据查证归 feature（与 session-reference 同构的模式）。
  */
 
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import type { AgentFeature, PackageInfo, Tool } from '@agentdevjs/core';
-import { getPackageInfoFromSource } from '@agentdevjs/core';
+import type { AgentFeature, CallStartContext, Context, HookDeclarations, PackageInfo, Tool } from '@agentdevjs/core';
+import { CoreLifecycle, getPackageInfoFromSource } from '@agentdevjs/core';
 
 const CLI_TIMEOUT_MS = 30_000;
 /** list 行在 id/path/title 基础上补充的字段（CLI --fields 语义）。 */
@@ -173,7 +180,72 @@ const NOT_CONFIGURED_HINT =
   '（AGENTERO_VAULT 环境变量 / walk-up / config）定位 vault；若本错误重复出现，' +
   '请在设置菜单的 feature 配置里填写 agentero.vaultPath 指向 vault 根目录。';
 
+/** 文献面板划词提问载荷（user turn 的 metadata.agentero）。 */
+export interface AgenteroPanelAsk {
+  paperId: string;
+  page?: number;
+  quote?: string;
+}
+
+/**
+ * 宽容解析 metadata['agentero']：非对象或缺 paperId 返回 null（面板未装配 /
+ * 结构漂移时静默忽略，不污染会话）。
+ */
+export function parsePanelAsk(raw: unknown): AgenteroPanelAsk | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const paperId = cleanPaperRef(record.paperId);
+  if (paperId === null) return null;
+  const page = typeof record.page === 'number' && Number.isFinite(record.page) && record.page > 0
+    ? Math.floor(record.page)
+    : undefined;
+  const quote = typeof record.quote === 'string' && record.quote.trim() !== '' ? record.quote : undefined;
+  return { paperId, page, quote };
+}
+
+interface PanelAskPaperMeta {
+  title?: string;
+  authors?: string[];
+  year?: number | string | null;
+  pdfPath?: string;
+  pdfAvailable?: boolean;
+}
+
+/**
+ * 渲染论文上下文 reminder：面板 user turn 只带最小载荷，这里补全 LLM 回答
+ * 所需的论文身份与工具指引。元数据查证失败时降级为仅载荷信息（提问不因
+ * CLI 失败而失效）。
+ */
+export function renderPanelAskReminder(ask: AgenteroPanelAsk, meta: PanelAskPaperMeta | null): string {
+  const lines: string[] = ['[agentero] 用户在文献面板对论文划线提问，本条 reminder 补全论文上下文。'];
+  if (meta) {
+    const authors = Array.isArray(meta.authors) && meta.authors.length > 0 ? meta.authors.join(', ') : '未知作者';
+    const year = meta.year != null && meta.year !== '' ? `，${meta.year}` : '';
+    lines.push(`论文：《${meta.title || ask.paperId}》（${authors}${year}），id=${ask.paperId}。`);
+  } else {
+    lines.push(`论文 id=${ask.paperId}（元数据暂不可得，可自行用 agentero_paper_get 查证）。`);
+  }
+  if (ask.page !== undefined) lines.push(`提问位置：第 ${ask.page} 页。`);
+  if (ask.quote !== undefined) {
+    const clipped = ask.quote.length > 1200 ? `${ask.quote.slice(0, 1200)}…（截断）` : ask.quote;
+    lines.push(`引文：「${clipped}」`);
+  }
+  const pdfNote = meta?.pdfPath
+    ? `PDF 全文路径：${meta.pdfPath}。`
+    : meta?.pdfAvailable
+      ? 'vault 内有 PDF 资产。'
+      : '';
+  lines.push(
+    `回答时结合引文与论文全貌；需要摘要 / 资产路径 / 相邻论文时可用 agentero 工具（agentero_paper_get、agentero_papers）。${pdfNote}`,
+  );
+  return lines.join('\n');
+}
+
 export class AgenteroFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    onPanelAsk: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+  };
   readonly name = 'agentero';
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
 
@@ -205,6 +277,65 @@ export class AgenteroFeature implements AgentFeature {
       return { error: `agentero CLI 失败（${err.code}）: ${err.message}${detail}` };
     }
     return { error: `agentero 工具执行失败: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  /**
+   * 划词提问落地注入（两入口共享）：查论文元数据（失败降级）→
+   * addSystemMessage reminder。注入失败只吞日志——user turn 已在会话中，
+   * 提问本身不因上下文补全失败而失效。
+   */
+  private async injectPanelAskContext(
+    ask: AgenteroPanelAsk,
+    context: Context,
+    turn: number,
+  ): Promise<void> {
+    let meta: PanelAskPaperMeta | null = null;
+    try {
+      const data = await this.run<{ assets?: Record<string, unknown>; paper?: Record<string, unknown> }>(
+        ['paper', 'get', ask.paperId, '--json'],
+      );
+      const paper = (data?.paper ?? data ?? {}) as Record<string, unknown>;
+      const assets = (data?.assets ?? {}) as Record<string, unknown>;
+      meta = {
+        title: typeof paper.title === 'string' ? paper.title : undefined,
+        authors: Array.isArray(paper.authors)
+          ? paper.authors.filter((item): item is string => typeof item === 'string')
+          : undefined,
+        year: (typeof paper.year === 'number' || typeof paper.year === 'string') ? paper.year : null,
+        pdfPath: typeof assets.pdf === 'string' ? assets.pdf : undefined,
+        pdfAvailable: assets.pdf !== undefined,
+      };
+    } catch {
+      meta = null;
+    }
+    try {
+      context.addSystemMessage(renderPanelAskReminder(ask, meta), turn, this.name, 'reminder');
+    } catch {
+      // addSystemMessage 失败属框架层异常，静默不阻断（提问消息本身已落地）
+    }
+  }
+
+  /** 空闲投递路径：user turn 进 call 边界，metadata 经 CallStartContext 自取。 */
+  async onPanelAsk(ctx: CallStartContext): Promise<void> {
+    const ask = parsePanelAsk((ctx.metadata as Record<string, unknown> | undefined)?.['agentero']);
+    if (ask === null) return;
+    const turn = typeof (ctx.agent as { _callIndex?: unknown })?._callIndex === 'number'
+      ? (ctx.agent as { _callIndex: number })._callIndex
+      : 0;
+    await this.injectPanelAskContext(ask, ctx.context, turn);
+  }
+
+  /** 忙时排队路径：消息在 call 内注入点落地，经 dispatchTurnMetadata 派发。 */
+  async onTurnMetadata(
+    value: unknown,
+    { context, agent }: { context: Context; agent?: unknown },
+  ): Promise<void> {
+    const ask = parsePanelAsk(value);
+    if (ask === null) return;
+    const turn = typeof (agent as { _callIndex?: unknown })?._callIndex === 'number'
+      ? (agent as { _callIndex: number })._callIndex
+      : 0;
+    await this.injectPanelAskContext(ask, context, turn);
   }
 
   getTools(): Tool[] {

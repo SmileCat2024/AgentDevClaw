@@ -16,7 +16,11 @@
  *     信封与 CLI --json 同构，papers.ts 的宽容解析直接吃）；写操作
  *     （import/export/discover/tags/delete/download）按对接决策不开放，
  *     reject 带 message 经组件 catch → Toast 提示
- *   - openPaper：详情在 panel 内打开（顶栏可切全屏 Portal 阅读 PDF）
+ *   - openPaper：详情在 panel 内打开（顶栏可切全屏 Portal 阅读 PDF；panel
+ *     与全屏共用同一 React 子树，模式切换不重载 PDF）
+ *   - PDF.js 自渲染阅读器（pdf-reader.tsx，worker/cMaps 经构建器 ?asset
+ *     约定拷贝），划词提问经 askAgent 投递 user-turn（metadata.agentero
+ *     随消息流动，agent 侧 AgenteroFeature 消费并注入论文上下文 reminder）
  *   - CSS：__clawPanelCss（构建器 banner 注入，tailwind scope .agentero-library）
  *     在 mountBody 注入、unmountBody 移除（插件协议生命周期自治）
  */
@@ -34,7 +38,6 @@ import {
   type PaperDetail,
   type VaultInfo,
 } from './papers'
-
 /** 构建器 banner 注入的 scoped CSS。 */
 declare const __clawPanelCss: string
 
@@ -78,6 +81,7 @@ const zh = {
   paperCount: '{count} 篇文献',
   filteredCount: '{count} / {total} 篇文献',
   clearResults: '关闭发现结果',
+  askSent: '已发送到当前会话',
 }
 
 const en = {
@@ -120,6 +124,7 @@ const en = {
   paperCount: '{count} papers',
   filteredCount: '{count} of {total} papers',
   clearResults: 'Close discovery results',
+  askSent: 'Sent to the current session',
 }
 
 type Dict = typeof zh
@@ -209,6 +214,46 @@ function makeFace(notice: ObservableSnapshot<LibraryNotice>): LibraryFace {
     removeTag: readonly,
     deletePaper: readonly,
     download: readonly,
+    /**
+     * 划词提问：投递一条 user turn 到当前聚焦会话（框架 UserTurnInput 面，
+     * 与主输入框同通道）。text 是人可读正文；metadata.agentero 随消息流动，
+     * agent 侧 AgenteroFeature（onTurnMetadata / CallStart）消费它注入论文
+     * 上下文 reminder——面板不打包完整元数据，上下文补全归 feature。
+     */
+    // 参数名不可叫 request：会遮蔽 makeFace 顶部的 fetch 助手 request，
+    // 方法体内的 request(url, init) 将拿到载荷对象而抛 "request is not a
+    // function"（构建产物里经 esbuild 重命名为 request2，即曾出现的报错）。
+    async askAgent(ask) {
+      const runtimeId = window.ClawHost?.workspace?.focusedRuntimeId?.() || ''
+      if (!runtimeId) {
+        throw new Error('当前没有正在对话的会话，先在主视图打开或新建一个会话再提问')
+      }
+      const quoteLines = ask.quote.split('\n').map(line => '> ' + line).join('\n')
+      const text = [
+        `[文献面板提问] 《${ask.title}》第 ${ask.page} 页划线：`,
+        '',
+        quoteLines,
+        '',
+        ask.question,
+      ].join('\n')
+      const response = await request(`/api/agents/${encodeURIComponent(runtimeId)}/user-turn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          source: 'agentero-panel',
+          metadata: { agentero: { paperId: ask.paperId, page: ask.page, quote: ask.quote } },
+          operationId: `agentero-ask:${Date.now()}`,
+        }),
+      })
+      // 成功判定与主输入框（persistent-input.js）同口径：只看 HTTP 状态。
+      // 成功体是 viewer 契约 { success:true, delivery }，没有 ok 字段；失败体
+      // { ok:false, error } 由 errorText 提取。
+      const body = await readJson(response)
+      if (!response.ok) {
+        throw new Error(errorText(body) || '提问投递失败')
+      }
+    },
   }
 }
 

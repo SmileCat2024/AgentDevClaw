@@ -255,3 +255,125 @@ test('feature exposes name and four tools', () => {
     'agentero_vault_info',
   ]);
 });
+
+// ── 划词提问消费（metadata.agentero → 论文上下文 reminder） ────
+
+import {
+  parsePanelAsk,
+  renderPanelAskReminder,
+} from '../src/index.js';
+
+type InjectedMessage = { text: string; turn: number; source: string; tag: string | undefined };
+
+function mockCallContext() {
+  const injected: InjectedMessage[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const context: any = {
+    addSystemMessage: (text: string, turn: number, source: string, tag?: string) => {
+      injected.push({ text, turn, source, tag });
+    },
+  };
+  return { context, injected };
+}
+
+const PAPER_GET_ENVELOPE = okEnvelope({
+  paper: {
+    id: 'arxiv-1706.03762',
+    title: 'Attention Is All You Need',
+    year: 2017,
+    authors: ['Ashish Vaswani', 'Noam Shazeer'],
+  },
+  assets: { pdf: 'C:\\vault\\fixture\\papers\\arxiv-1706.03762\\assets\\paper.pdf' },
+});
+
+test('parsePanelAsk accepts valid payload and normalizes page/quote', () => {
+  const ask = parsePanelAsk({ paperId: 'arxiv-1706.03762', page: 3.0, quote: '  we propose the Transformer ' });
+  assert.ok(ask);
+  assert.equal(ask.paperId, 'arxiv-1706.03762');
+  assert.equal(ask.page, 3);
+  assert.equal(ask.quote, '  we propose the Transformer ');
+  // page 非法 / 缺 quote 为可选；flag 注入拒收
+  assert.equal(parsePanelAsk({ paperId: '--vault' }), null);
+  assert.equal(parsePanelAsk({ page: 2 }), null);
+  assert.equal(parsePanelAsk('nope'), null);
+  assert.equal(parsePanelAsk(null), null);
+  const askNoPage = parsePanelAsk({ paperId: 'x' });
+  assert.ok(askNoPage);
+  assert.equal(askNoPage.page, undefined);
+  assert.equal(askNoPage.quote, undefined);
+});
+
+test('renderPanelAskReminder embeds meta, page, quote and tool hint', () => {
+  const text = renderPanelAskReminder(
+    { paperId: 'arxiv-1706.03762', page: 5, quote: 'the Transformer, based solely on attention mechanisms' },
+    {
+      title: 'Attention Is All You Need',
+      authors: ['Ashish Vaswani', 'Noam Shazeer'],
+      year: 2017,
+      pdfPath: 'C:/papers/a.pdf',
+    },
+  );
+  assert.match(text, /Attention Is All You Need/);
+  assert.match(text, /第 5 页/);
+  assert.match(text, /attention mechanisms/);
+  assert.match(text, /agentero_paper_get/);
+  assert.match(text, /C:\/papers\/a\.pdf/);
+});
+
+test('renderPanelAskReminder degrades gracefully without meta', () => {
+  const text = renderPanelAskReminder({ paperId: 'x-id' }, null);
+  assert.match(text, /x-id/);
+  assert.match(text, /元数据暂不可得/);
+  assert.doesNotMatch(text, /PDF 全文路径/);
+});
+
+test('onPanelAsk (CallStart path) injects reminder with fetched meta', async () => {
+  const { exec, calls } = mockExecutor(PAPER_GET_ENVELOPE);
+  const feature = makeFeature(exec);
+  const { context, injected } = mockCallContext();
+  await feature.onPanelAsk({
+    metadata: { agentero: { paperId: 'arxiv-1706.03762', page: 1, quote: 'q' } },
+    context,
+    agent: { _callIndex: 7 },
+  } as never);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args.slice(0, 3), ['paper', 'get', 'arxiv-1706.03762']);
+  assert.equal(injected.length, 1);
+  assert.equal(injected[0].turn, 7);
+  assert.equal(injected[0].source, 'agentero');
+  assert.equal(injected[0].tag, 'reminder');
+  assert.match(injected[0].text, /Attention Is All You Need/);
+});
+
+test('onPanelAsk ignores turns without agentero metadata', async () => {
+  const { exec, calls } = mockExecutor(PAPER_GET_ENVELOPE);
+  const feature = makeFeature(exec);
+  const { context, injected } = mockCallContext();
+  await feature.onPanelAsk({ metadata: undefined, context } as never);
+  await feature.onPanelAsk({ metadata: { other: {} }, context } as never);
+  assert.equal(calls.length, 0);
+  assert.equal(injected.length, 0);
+});
+
+test('onTurnMetadata (busy-queue path) injects with agent turn', async () => {
+  const { exec } = mockExecutor(PAPER_GET_ENVELOPE);
+  const feature = makeFeature(exec);
+  const { context, injected } = mockCallContext();
+  await feature.onTurnMetadata(
+    { paperId: 'arxiv-1706.03762', page: 2, quote: 'encoders and decoders' },
+    { context, agent: { _callIndex: 3 } },
+  );
+  assert.equal(injected.length, 1);
+  assert.equal(injected[0].turn, 3);
+  assert.match(injected[0].text, /encoders and decoders/);
+});
+
+test('CLI failure degrades to minimal reminder, not an error', async () => {
+  const { exec } = mockExecutor('', { fail: 'spawn' });
+  const feature = makeFeature(exec);
+  const { context, injected } = mockCallContext();
+  await feature.onTurnMetadata({ paperId: 'missing-id', page: 9, quote: 'q' }, { context });
+  assert.equal(injected.length, 1);
+  assert.match(injected[0].text, /missing-id/);
+  assert.match(injected[0].text, /元数据暂不可得/);
+});
