@@ -33,6 +33,9 @@ let _fsState = {
   installingPkg: null,  // 本地发起安装中的包（卡片安装中态）
   installingSince: 0,   // 安装开始时间戳（秒计时显示）
   lastFailed: null,     // 最近一次安装失败的包（错误横幅重试入口）
+  // tgz 上传导入的待确认状态（parse_upload 的 { uploadId, summary }）。
+  // 导入只入仓库，装配仍走货架卡片——与 ADR-0045「导入与装配分离」一致
+  import: null,
 };
 
 let _fsTickTimer = null;
@@ -133,6 +136,103 @@ function _fsStartTick() {
 
 function _fsStopTick() {
   if (_fsTickTimer) { clearInterval(_fsTickTimer); _fsTickTimer = null; }
+}
+
+// ── tgz 上传导入（parse → 确认 → 入仓库；装配走货架卡片）────────────
+
+function _fsOpenUpload() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.tgz';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const resp = await fetch('/protoclaw/feature_repository/parse_upload', { method: 'POST', body: formData });
+      if (!resp.ok) throw new Error(await resp.text().catch(() => 'parse upload failed'));
+      _fsState.import = await resp.json();
+      _fsRender();
+    } catch (error) {
+      window.alert((currentLanguage === 'zh' ? '解析 tgz 失败：' : 'Failed to parse tgz: ') + (error?.message || error));
+    }
+  };
+  input.click();
+}
+
+async function _fsCancelImport() {
+  const uploadId = _fsState.import?.uploadId;
+  _fsState.import = null;
+  _fsRender();
+  if (uploadId) {
+    await fetch('/protoclaw/feature_repository/cancel_import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadId }),
+    }).catch(e => console.warn(e));
+  }
+}
+
+async function _fsConfirmImport() {
+  const pending = _fsState.import;
+  if (!pending?.uploadId) return;
+  try {
+    const resp = await fetch('/protoclaw/feature_repository/confirm_import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadId: pending.uploadId }),
+    });
+    if (!resp.ok) throw new Error(await resp.text().catch(() => 'import failed'));
+    _fsState.import = null;
+    await _fsAfterChange();
+  } catch (error) {
+    window.alert((currentLanguage === 'zh' ? '导入失败：' : 'Import failed: ') + (error?.message || error));
+  } finally {
+    _fsRender();
+  }
+}
+
+/** 导入确认对话框：三面摘要（工具类型 / 面板 / 数据服务）如实展示 */
+function _fsRenderImportDialog() {
+  const pending = _fsState.import;
+  if (!pending) return '';
+  const s = pending.summary || {};
+  const warnings = Array.isArray(s.warnings) ? s.warnings : [];
+  const featureTypes = Array.isArray(s.featureTypes) ? s.featureTypes : [];
+  const panels = Array.isArray(s.ui?.panels) ? s.ui.panels : [];
+  const serverPrefix = typeof s.server?.prefix === 'string' ? s.server.prefix : '';
+  const sizeText = typeof s.size === 'number' ? (s.size > 1048576 ? (s.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(s.size / 1024)) + ' KB') : '';
+  return [
+    '<div class="feature-detail-overlay">',
+    '<div class="feature-detail-window">',
+    '<div class="feature-detail-head">',
+    '<div>',
+    '<div class="feature-detail-title">' + escapeHtml(_fsT('解析插件包', 'Parsed Plugin Package')) + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(_fsT('确认解析结果后导入到仓库；导入后可在下方货架安装。', 'Review the parsed metadata, then import to the repository; install from the shelf below.')) + '</div>',
+    '</div>',
+    '<button class="feature-detail-close" type="button" data-action="featureStore.cancelImport">&times;</button>',
+    '</div>',
+    '<div class="fw-import-result">',
+    '<div class="fw-import-card">',
+    '<div class="fw-import-title">' + escapeHtml(s.name || s.id || s.fileName || '-') + '</div>',
+    '<div class="fw-import-meta">' + escapeHtml([s.packageName, s.version, s.fileName, sizeText].filter(Boolean).join(' · ')) + '</div>',
+    s.description ? '<div class="fw-import-meta">' + escapeHtml(s.description) + '</div>' : '',
+    '<div class="workspace-tag-list">'
+    + featureTypes.map((type) => '<span class="workspace-tag">' + escapeHtml(type) + '</span>').join('')
+    + (panels.length ? '<span class="workspace-tag">' + escapeHtml(_fsT('面板 × ' + panels.length, 'UI panels × ' + panels.length)) + '</span>' : '')
+    + (serverPrefix ? '<span class="workspace-tag">' + escapeHtml(_fsT('数据服务 /' + serverPrefix, 'data service /' + serverPrefix)) + '</span>' : '')
+    + '</div>',
+    '</div>',
+    warnings.length ? '<div class="fw-import-warning">' + warnings.map((item) => escapeHtml(item)).join('<br>') + '</div>' : '',
+    '<div class="workspace-actions" style="justify-content:flex-end;">',
+    '<button class="workspace-action secondary" type="button" data-action="featureStore.cancelImport">' + escapeHtml(_fsT('取消', 'Cancel')) + '</button>',
+    '<button class="workspace-action" type="button" data-action="featureStore.confirmImport">' + escapeHtml(_fsT('导入到仓库', 'Import to Repository')) + '</button>',
+    '</div>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
 }
 
 function _fsInstallSeconds() {
@@ -423,6 +523,7 @@ function _fsRender() {
       )) + '</div>',
     '</div>',
     '</div>',
+    '<button class="feature-detail-close" type="button" style="font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--border-color,#3a3a3a);" title="' + _fsT('从本地 tgz 文件导入插件包到仓库', 'Import a plugin package (.tgz) from local file into the repository') + '" data-action="featureStore.openUpload">' + _fsT('上传 tgz', 'Upload tgz') + '</button>',
     '<button class="feature-detail-close" type="button" data-action="featureStore.close">&times;</button>',
     '</div>',
     errorBanner,
@@ -430,6 +531,7 @@ function _fsRender() {
     '<div class="ph-mounts-body" style="overflow-y:auto;flex:1;">' + body + '</div>',
     '</div>',
     '</div>',
+    _fsRenderImportDialog(),
   ].join('');
 }
 
@@ -444,6 +546,7 @@ window.phOpenFeatureStore = async function(identity) {
   _fsState.busy = false;
   _fsState.installingPkg = null;
   _fsState.lastFailed = null;
+  _fsState.import = null;
   _fsStopTick();
   _fsRender();
   // catalog 与 overview 并行预载；catalog 失败不阻断（分组落待归类兜底组）
@@ -460,6 +563,7 @@ function phCloseFeatureStore() {
   _fsState.open = false;
   _fsState.busy = false;
   _fsState.installingPkg = null;
+  // 待确认导入留在 pending（服务端 10 分钟过期）；关面板不取消，重新打开可继续确认
   _fsStopTick();
   // 本地发起的安装不中断：服务端单飞队列继续跑完，重开面板时经
   // overview.installing 显示进行中状态，完成结果由 overview 自然呈现
@@ -480,5 +584,8 @@ window.ClawFW.actions.registerMany({
   'featureStore.installBuiltin': (el) => _fsInstallBuiltin(el.dataset.name),
   'featureStore.removeMount': (el) => _fsRemoveFor(el.dataset.identity, el.dataset.name),
   'featureStore.selectVersion': (el) => _fsSelectVersion(el.dataset.package, el),
+  'featureStore.openUpload': () => _fsOpenUpload(),
+  'featureStore.cancelImport': () => _fsCancelImport(),
+  'featureStore.confirmImport': () => _fsConfirmImport(),
   'featureStore.close': () => phCloseFeatureStore(),
 });

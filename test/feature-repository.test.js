@@ -8,6 +8,7 @@ import {
   inferFeatureTypes,
   inferFeatureManifest,
   normalizeClawManifestV2,
+  summarizeFeatureArchive,
 } from '../server/routes/feature-repository.js';
 
 // ── normalizeFeatureRequirements ────────────────────────────────────
@@ -149,5 +150,64 @@ describe('normalizeClawManifestV2', () => {
   it('does not treat incomplete or wrong-version metadata as v2', () => {
     assert.equal(normalizeClawManifestV2({ name: '@agentdevjs/ticket-feature', agentdev: { schemaVersion: 1 } }), null);
     assert.equal(normalizeClawManifestV2({ agentdev: { schemaVersion: 2 } }), null);
+  });
+});
+
+// ── summarizeFeatureArchive：manifest v3 三面摘要透出（ADR-0045）──────
+
+describe('summarizeFeatureArchive manifest v3 surfaces', () => {
+  it('透出 ui/server 声明与 v2 字段并存（导入确认页三面摘要的数据源）', async () => {
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const { execFileSync } = await import('child_process');
+    const root = mkdtempSync(join(tmpdir(), 'fs-v3-summary-'));
+    try {
+      const pkgDir = join(root, 'package');
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({
+        name: 'demo-plugin', version: '1.0.0',
+        agentdev: { schemaVersion: 2, id: 'demo-plugin', displayName: { zh: '演示', en: 'Demo' }, type: 'ability', capabilities: ['tools'] },
+      }));
+      writeFileSync(join(pkgDir, 'agentdev-feature.json'), JSON.stringify({
+        schemaVersion: 3,
+        id: 'demo-plugin',
+        entry: 'dist/index.js',
+        ui: { panels: [{ id: 'demo-panel', entry: 'index.js', scope: 'global', label: { zh: '演示面板', en: 'Demo' } }] },
+        server: { entry: 'index.js', prefix: 'demo' },
+      }));
+      // 相对路径 + cwd：Windows GNU tar 把盘符冒号当远程主机分隔符
+      execFileSync('tar', ['-czf', 'demo-plugin-1.0.0.tgz', 'package'], { cwd: root });
+      const summary = await summarizeFeatureArchive(join(root, 'demo-plugin-1.0.0.tgz'), 'demo-plugin-1.0.0.tgz', 'custom');
+      assert.equal(summary.ui.panels.length, 1);
+      assert.equal(summary.ui.panels[0].id, 'demo-panel');
+      assert.equal(summary.ui.panels[0].scope, 'global');
+      assert.equal(summary.server.prefix, 'demo');
+      assert.equal(summary.server.entry, 'index.js');
+      // v2 字段不受影响（displayName 经 normalizeClawManifestV2 常规透出）
+      assert.deepEqual(summary.displayName, { zh: '演示', en: 'Demo' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('v2 包（无 v3 声明）ui/server 均为 null，行为与升级前一致', async () => {
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const { execFileSync } = await import('child_process');
+    const root = mkdtempSync(join(tmpdir(), 'fs-v3-none-'));
+    try {
+      const pkgDir = join(root, 'package');
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'plain-plugin', version: '0.1.0' }));
+      writeFileSync(join(pkgDir, 'agentdev-feature.json'), JSON.stringify({ schemaVersion: 2, id: 'plain-plugin' }));
+      execFileSync('tar', ['-czf', 'plain-plugin-0.1.0.tgz', 'package'], { cwd: root });
+      const summary = await summarizeFeatureArchive(join(root, 'plain-plugin-0.1.0.tgz'), 'plain-plugin-0.1.0.tgz', 'custom');
+      assert.equal(summary.ui, null);
+      assert.equal(summary.server, null);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

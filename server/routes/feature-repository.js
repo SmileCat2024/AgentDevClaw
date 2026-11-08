@@ -224,7 +224,7 @@ async function readArchiveJson(archivePath, archiveEntryPath) {
   return JSON.parse(raw);
 }
 
-async function summarizeFeatureArchive(archivePath, archiveName, source = 'custom') {
+export async function summarizeFeatureArchive(archivePath, archiveName, source = 'custom') {
   const stat = await fs.stat(archivePath);
   let pkg = null;
   let manifest = null;
@@ -252,6 +252,8 @@ async function summarizeFeatureArchive(archivePath, archiveName, source = 'custo
       entry: '',
       agentdev: {},
       manifestPresent: false,
+      ui: null,
+      server: null,
       warningCount: 1,
       source,
       warnings: [`无法读取 package.json: ${error instanceof Error ? error.message : String(error)}`],
@@ -297,6 +299,10 @@ async function summarizeFeatureArchive(archivePath, archiveName, source = 'custo
     entry: typeof normalizedManifest.entry === 'string' ? normalizedManifest.entry.trim() : '',
     agentdev: typeof normalizedManifest.agentdev === 'object' && normalizedManifest.agentdev ? normalizedManifest.agentdev : {},
     manifestPresent: !!manifest,
+    // manifest v3（ADR-0045）：ui/server 面从原始 manifest 原样透出（v2 规范化
+    // 不携带），导入确认页据此展示三面摘要；无 v3 声明的包两个字段为 null
+    ui: manifest?.ui && typeof manifest.ui === 'object' && !Array.isArray(manifest.ui) ? manifest.ui : null,
+    server: manifest?.server && typeof manifest.server === 'object' && !Array.isArray(manifest.server) ? manifest.server : null,
     warningCount: warnings.length,
     source,
     warnings,
