@@ -708,13 +708,28 @@ setupFeatureStoreRoutes(app, express);
 setupFeatureAssetRoutes(app);
 setupFeatureRepositoryRoutes(app, express);
 // 插件数据面挂载（ADR-0045 P2）：server 面随装配事实挂载到
-// /protoclaw/plugin/<prefix>/*；导入/装配/禁用变化后经 remount 整体重建。
+// /protoclaw/plugin/<prefix>/*；导入/装配/禁用变化经 plugin-server-bus
+// 自动重建（手动 remount 端点保留作调试入口）。
 {
   const { mountPluginServerRoutes, remountPluginServerRoutes } = await import('./server/feature-runtime/plugin-server.js');
+  const { onPluginServerDirty } = await import('./server/shared/plugin-server-bus.js');
   const mountResult = await mountPluginServerRoutes(app);
   if (mountResult.mounted.length > 0 || mountResult.warnings.length > 0) {
     console.log(`[plugin-server] 数据面挂载：${mountResult.mounted.map((m) => `${m.packageName}→/${m.prefix}`).join(', ') || '无'}${mountResult.warnings.length > 0 ? `（警告 ${mountResult.warnings.length} 条）` : ''}`);
   }
+  // 自动重建：串行链防并发 remount 竞态（mountedRouteRegistry 无锁），
+  // 失败不阻断链路后续通知，也不拖垮触发它的路由响应
+  let remountChain = Promise.resolve();
+  onPluginServerDirty((reason) => {
+    remountChain = remountChain
+      .then(() => remountPluginServerRoutes(app))
+      .then((result) => {
+        console.log(`[plugin-server] 装配/导入变更（${reason}）数据面已重建：${result.mounted.length} 个前缀`);
+      })
+      .catch((error) => {
+        console.warn('[plugin-server] 数据面自动重建失败（下次变更重试）：', error?.message || error);
+      });
+  });
   app.post('/protoclaw/plugin/remount', async (_req, res, next) => {
     try {
       const result = await remountPluginServerRoutes(app);

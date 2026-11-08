@@ -18,7 +18,7 @@ import path from 'path';
 import { extractFeatureMounts, MOUNT_KEY } from '../server/shared/feature-mount.js';
 import { validateLayerContent, registerScopeResolver } from '../server/routes/feature-config.js';
 import { mountUserConfiguredFeatures } from '../server/feature-runtime/user-mount.js';
-import { buildStorePackages, buildBuiltinShowcase, collectScopeMounts, collectScopeMountManifests, summarizeInstanceSurface } from '../server/routes/feature-store.js';
+import { buildStorePackages, buildBuiltinShowcase, collectScopeMounts, collectGlobalMounts, collectScopeMountManifests, summarizeInstanceSurface } from '../server/routes/feature-store.js';
 import { packageFeatureProject } from '../server/feature-runtime/packager.js';
 import { runCommand } from '../server/routes/fs-operations.js';
 
@@ -427,6 +427,37 @@ describe('feature-store 数据面', () => {
       // builtin 不查 tgz 仓库，永不误报 missing
       assert.deepEqual(mounts['playwright-shell'], { kind: 'builtin', layerId: 'agent', missing: false });
       assert.equal('shell' in mounts, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('collectGlobalMounts 提取 global 层 $mount 并标记 missing（layerId 恒为 global）', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'feature-store-global-'));
+    try {
+      const globalLayerPath = path.join(root, 'global-layer.json');
+      await writeFile(globalLayerPath, JSON.stringify({
+        'global-mount': { [MOUNT_KEY]: { package: '@user/demo', version: '1.0.0' } },
+        'gone-mount': { [MOUNT_KEY]: { package: '@user/gone', version: '9.9.9' } },
+        someConfig: { enabled: true }, // 非 $mount 键不进清单
+      }));
+      // readGlobalDeclaredMounts 借道任一注册身份的层清单解析 global 层；
+      // 注入表的层清单只含 global 层即可（隔离生产路径）
+      const resolvers = new Map([
+        ['programming-helper', () => ({ layers: [{ id: 'global', label: 'global', path: globalLayerPath }] })],
+      ]);
+      const catalog = {
+        packages: new Map([
+          ['@user/demo', [{ version: '1.0.0', source: 'custom', archiveDigest: 'x' }]],
+        ]),
+        invalid: [],
+      };
+      const mounts = await collectGlobalMounts(catalog, resolvers);
+      assert.deepEqual(mounts['global-mount'], {
+        kind: 'repository', package: '@user/demo', version: '1.0.0', layerId: 'global', missing: false,
+      });
+      assert.equal(mounts['gone-mount'].missing, true);
+      assert.equal('someConfig' in mounts, false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

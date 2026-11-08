@@ -1,30 +1,30 @@
 /**
- * plugin-ui.js — 插件 UI 面声明合成（ADR-0045 P1）
+ * plugin-ui.js — 插件 UI 面声明合成（ADR-0045 P1 / ADR-0046 可见性合成）
  *
- * 权威链（ADR-0045）：插件 manifest 的 ui.panels 只是素材（label/icon/
- * order/scope 为默认呈现建议），合成时叠加装配事实：
- *   - scope=global：面板随包导入即可用（vault 类全局工具），when 不设
- *     agentIds 限制（保留 manifest 的 surfaces 限定）。
- *   - scope=assembly（缺省）：面板只在装配了该插件的工作空间身份视图出
- *     现——when.agentIds = 装配身份的 agentId 集合；无任何身份装配时该
- *     面板不下发。
- *   - 呈现层最终裁决（显隐/排序）在前端工作空间呈现配置（P4），本层只
- *     产出素材 + 装配合成结果。
+ * 权威链（ADR-0046 决策 2）：装配层级 = 可见性层级，manifest 的 ui.panels
+ * scope 只是作者给的装配建议，不参与可见性裁决：
+ *   - 全局级装配（global 层 $mount）：面板处处可见，when 不设 agentIds。
+ *   - 仅工作空间级装配（agent 层 $mount）：when.agentIds = 装配身份集合。
+ *   - 未装配：面板不下发（含作者标注 scope=global 的面板——导入不等于
+ *     可用，与 ADR-0045 决策 5 的旧语义相反，经 0046 修订）。
  *
  * 资产就绪检查：版本目录内 .digest 存在才下发（tgz 手工拷入仓库但未走
  * 导入链路解出 client/ 的包不下发，避免面板按钮指向 404 资产）。
  *
- * 同包多版本跨身份装配属边缘情况：面板按最高装配版本下发一次，when 合并
- * 全部装配身份，warnings 说明。同面板 id 被多个包提供：先到先得 + warning
- * （面板 id 是前端注册表键，必须全局唯一）。
+ * 版本选择钉装配版本：多身份/多层级装配不同版本时取装配版本里最高者
+ * （catalog 中存在更高版本不跟随——版本策略为精确钉版 + 显式升级，ADR-0046
+ * 决策 5），warning 说明多版本并存。
+ *
+ * 同面板 id 被多个包提供：先到先得 + warning（面板 id 是前端注册表键，
+ * 必须全局唯一）。
  */
 
 import { existsSync } from 'fs';
 import path from 'path';
 
 import { scanFeatureCatalog } from './catalog.js';
-import { IDENTITY_SCOPES, readDeclaredMounts } from './install-service.js';
-import { clientAssetsRoot, versionAssetDir } from './feature-assets.js';
+import { IDENTITY_SCOPES, readDeclaredMounts, readGlobalDeclaredMounts } from './install-service.js';
+import { versionAssetDir } from './feature-assets.js';
 
 const SCOPE_VALUES = new Set(['global', 'assembly']);
 
@@ -69,24 +69,42 @@ function normalizePanelDeclaration(raw, packageName, version) {
 }
 
 /**
- * 读取全部身份的装配事实：Map<packageName, Array<{ identity, agentId, version }>>。
+ * 读取全部装配事实（global 层 + 各身份 agent 层）：Map<packageName,
+ * Array<{ identity, agentId, version, layerId }>>。global 层装配的条目
+ * agentId 为 null、layerId 为 'global'（消费方据此判定"处处可见"）。
  * builtin 挂载无包坐标，不参与（UI 面只能来自仓库包）。
  * 导出供 plugin-server.js（数据面挂载）复用同一装配事实源。
  */
 export function collectAssemblyFacts(resolvers) {
   const facts = new Map();
-  for (const [identity, scope] of Object.entries(IDENTITY_SCOPES)) {
+  const record = (packageName, fact) => {
+    const list = facts.get(packageName) || [];
+    list.push(fact);
+    facts.set(packageName, list);
+  };
+
+  // 全局级装配（ADR-0046）：global 层 $mount，面板处处可见
+  for (const mount of readGlobalDeclaredMounts(resolvers).mounts.values()) {
+    if (mount.kind === 'builtin' || !mount.package) continue;
+    record(mount.package, { identity: 'global', agentId: null, version: mount.version, layerId: 'global' });
+  }
+
+  // 身份源：显式注入 resolvers（测试隔离）时以注入的 agentId 集合为准——
+  // 未注入的身份不是本次合成的数据源，遍历它只会撞上"未注册的 scope"告警；
+  // 未注入时遍历全部注册身份（生产路径）。
+  const identityEntries = resolvers
+    ? Object.entries(IDENTITY_SCOPES).filter(([, scope]) => resolvers.has(scope.agentId))
+    : Object.entries(IDENTITY_SCOPES);
+  for (const [identity, scope] of identityEntries) {
     try {
       const { mounts } = readDeclaredMounts(scope, resolvers);
       for (const mount of mounts.values()) {
         if (mount.kind === 'builtin' || !mount.package) continue;
-        const list = facts.get(mount.package) || [];
-        list.push({ identity, agentId: scope.agentId, version: mount.version });
-        facts.set(mount.package, list);
+        record(mount.package, { identity, agentId: scope.agentId, version: mount.version, layerId: 'agent' });
       }
     } catch (err) {
       // 身份层读取失败（层文件损坏等）不阻塞其他身份的声明合成；错误上抛
-      // 会连 global 面板一起灭掉，降级为跳过该身份。
+      // 会连全局面板一起灭掉，降级为跳过该身份。
       console.warn(`[plugin-ui] 读取身份 ${identity} 装配声明失败（跳过）：`, err?.message || err);
     }
   }
@@ -105,7 +123,6 @@ export function collectAssemblyFacts(resolvers) {
 export async function composePanelDeclarations({ catalogRoots, resolvers, assetsRoot } = {}) {
   const catalog = await scanFeatureCatalog(catalogRoots);
   const assemblyFacts = collectAssemblyFacts(resolvers);
-  const root = clientAssetsRoot(assetsRoot);
 
   const warnings = [];
   const declarations = [];
@@ -115,17 +132,26 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
     const archivesWithUi = versions.filter((entry) => entry.manifestUi && Array.isArray(entry.manifestUi.panels));
     if (archivesWithUi.length === 0) continue;
 
-    // 下发版本选择：装配版本里最高者（跨版本装配的边缘情况合并处理）
+    // 可见性 = 装配事实（ADR-0046 决策 2）：未装配不下发——含作者标注
+    // scope=global 的面板（scope 是装配建议，不参与可见性裁决）
     const mounted = assemblyFacts.get(packageName) || [];
-    const versionChoice = mounted.length > 0
-      ? archivesWithUi.reduce((best, entry) => (entry.version > best.version ? entry : best))
-      : archivesWithUi[0]; // 未装配：仍需合成（global 面板不依赖装配）
-    if (mounted.length > 1) {
-      const distinctVersions = new Set(mounted.map((fact) => fact.version));
-      if (distinctVersions.size > 1) {
-        warnings.push(`插件 ${packageName} 被多个身份装配了不同版本（${[...distinctVersions].join(', ')}），面板按最高版本 ${versionChoice.version} 下发`);
-      }
+    if (mounted.length === 0) continue;
+
+    // 版本钉装配：取装配版本里最高者；catalog 存在更高版本不跟随
+    // （精确钉版 + 显式升级，ADR-0046 决策 5）
+    const mountedVersions = [...new Set(mounted.map((fact) => fact.version))];
+    const targetVersion = mountedVersions.reduce((a, b) => (b > a ? b : a));
+    if (mountedVersions.length > 1) {
+      warnings.push(`插件 ${packageName} 被多个层级/身份装配了不同版本（${mountedVersions.join(', ')}），面板按最高装配版本 ${targetVersion} 下发`);
     }
+    const versionChoice = archivesWithUi.find((entry) => entry.version === targetVersion);
+    if (!versionChoice) {
+      warnings.push(`插件 ${packageName} 装配版本 ${targetVersion} 已不在仓库（面板跳过下发；重装该版本或调整装配声明）`);
+      continue;
+    }
+
+    // 全局级装配在列 → 面板处处可见（when 不设 agentIds 限制）
+    const globalMounted = mounted.some((fact) => fact.agentId === null);
 
     for (const raw of versionChoice.manifestUi.panels) {
       const { panel, error } = normalizePanelDeclaration(raw, packageName, versionChoice.version);
@@ -143,17 +169,13 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
       // 资产就绪检查（.digest 由导入链路写入）
       const assetDir = versionAssetDir({ packageName, version: versionChoice.version }, assetsRoot);
       if (!existsSync(path.join(assetDir, '.digest'))) {
-        if (mounted.length > 0 || panel.scope === 'global') {
-          warnings.push(`插件 ${packageName}@${versionChoice.version} 面板 ${panel.id} 的 client 资产未解出（跳过下发；重新导入该 tgz 可解出）`);
-        }
+        warnings.push(`插件 ${packageName}@${versionChoice.version} 面板 ${panel.id} 的 client 资产未解出（跳过下发；重新导入该 tgz 可解出）`);
         continue;
       }
 
       const when = {};
-      if (panel.scope === 'assembly') {
-        const agentIds = mounted.map((fact) => fact.agentId);
-        if (agentIds.length === 0) continue; // 无身份装配：面板不可用
-        when.agentIds = [...new Set(agentIds)];
+      if (!globalMounted) {
+        when.agentIds = [...new Set(mounted.map((fact) => fact.agentId).filter(Boolean))];
       }
       if (panel.surfaces) when.surfaces = panel.surfaces;
 

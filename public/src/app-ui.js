@@ -2000,6 +2000,13 @@ document.getElementById('settings-flyout-feature-config')?.addEventListener('cli
   }
 });
 
+document.getElementById('settings-flyout-plugins')?.addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (typeof window.clawOpenPluginManager === 'function') {
+    window.clawOpenPluginManager();
+  }
+});
+
 document.getElementById('settings-flyout-workspace')?.addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
   if (typeof window.closeSettings === 'function' && window.ClawFW?.settingsOpen) window.closeSettings();

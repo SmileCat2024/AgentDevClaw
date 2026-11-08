@@ -219,12 +219,20 @@ describe('resolveClientAsset', async () => {
 
 // ── composePanelDeclarations ───────────────────────────────────────
 
-function makeLayerTable(agentLayerConfig) {
+function makeLayerTable(agentLayerConfig, globalLayerConfig) {
   const table = new Map();
+  // global 层文件对全部身份共享（与生产 scope 层清单一致：global 是公共首层）
+  const globalFile = join(root, 'layer-global.json');
+  writeFileSync(globalFile, JSON.stringify(globalLayerConfig || {}, null, 2));
   const writeLayer = (agentId, sparse) => {
     const file = join(root, `layer-${agentId}.json`);
     writeFileSync(file, JSON.stringify(sparse, null, 2));
-    return { layers: [{ id: 'agent', label: 'agent', path: file }] };
+    return {
+      layers: [
+        { id: 'global', label: '全局', path: globalFile },
+        { id: 'agent', label: 'agent', path: file },
+      ],
+    };
   };
   table.set('programming-helper', () => writeLayer('programming-helper', agentLayerConfig?.['programming-helper'] || {}));
   table.set('coder', () => writeLayer('coder', agentLayerConfig?.coder || {}));
@@ -232,7 +240,7 @@ function makeLayerTable(agentLayerConfig) {
 }
 
 describe('composePanelDeclarations', async () => {
-  it('emits assembly panel scoped to mounted identities and global panel unrestricted', async () => {
+  it('可见性由装配层级决定：空间装配 → when 限定装配身份（scope 不参与裁决）', async () => {
     const mounted = makePluginTgz({
       packageName: 'mounted-plugin',
       version: '1.0.0',
@@ -261,16 +269,60 @@ describe('composePanelDeclarations', async () => {
     assert.deepEqual(warnings, []);
     const mountedPanel = declarations.find((d) => d.panelId === 'mounted-panel');
     const globalPanel = declarations.find((d) => d.panelId === 'global-panel');
+    // ADR-0046：scope 降级为装配建议，两个面板都按装配层级（空间级）限可见性
     assert.deepEqual(mountedPanel?.meta.when, { agentIds: ['programming-helper'] });
-    assert.deepEqual(globalPanel?.meta.when, {});
+    assert.deepEqual(globalPanel?.meta.when, { agentIds: ['programming-helper'] });
     assert.equal(mountedPanel.url, '/protoclaw/feature-assets/mounted-plugin/1.0.0/index.js');
     assert.equal(mountedPanel.pluginId, 'mounted-panel');
   });
 
-  it('hides assembly panel when no identity mounted the package', async () => {
+  it('全局级装配（global 层 $mount）→ 面板处处可见，when 不设 agentIds', async () => {
+    const fixture = makePluginTgz({
+      packageName: 'global-mounted-plugin',
+      version: '1.0.0',
+      manifest: uiManifest([{ id: 'anywhere-panel', entry: 'index.js' }]),
+    });
+    const assetsRoot = join(root, 'assets');
+    await extractClientAssets(
+      { archivePath: fixture.archivePath, packageName: 'global-mounted-plugin', version: '1.0.0', archiveDigest: fixture.digest },
+      { expectClient: true, assetsRoot },
+    );
+    const { declarations, warnings } = await composePanelDeclarations({
+      catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
+      resolvers: makeLayerTable({}, { 'global-mounted-plugin': { $mount: { package: 'global-mounted-plugin', version: '1.0.0' } } }),
+      assetsRoot,
+    });
+    assert.deepEqual(warnings, []);
+    const panel = declarations.find((d) => d.panelId === 'anywhere-panel');
+    assert.deepEqual(panel?.meta.when, {});
+  });
+
+  it('混合装配：global + 空间身份并存 → 按全局级处理（处处可见）', async () => {
+    const fixture = makePluginTgz({
+      packageName: 'mixed-plugin',
+      version: '1.0.0',
+      manifest: uiManifest([{ id: 'mixed-panel', entry: 'index.js' }]),
+    });
+    const assetsRoot = join(root, 'assets');
+    await extractClientAssets(
+      { archivePath: fixture.archivePath, packageName: 'mixed-plugin', version: '1.0.0', archiveDigest: fixture.digest },
+      { expectClient: true, assetsRoot },
+    );
+    const { declarations } = await composePanelDeclarations({
+      catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
+      resolvers: makeLayerTable(
+        { coder: { 'mixed-plugin': { $mount: { package: 'mixed-plugin', version: '1.0.0' } } } },
+        { 'mixed-plugin': { $mount: { package: 'mixed-plugin', version: '1.0.0' } } },
+      ),
+      assetsRoot,
+    });
+    assert.deepEqual(declarations.find((d) => d.panelId === 'mixed-panel')?.meta.when, {});
+  });
+
+  it('未装配不下发：含作者标注 scope=global 的面板（导入 ≠ 可用，ADR-0046）', async () => {
     const fixture = makePluginTgz({
       packageName: 'unmounted-plugin',
-      manifest: uiManifest([{ id: 'gone-panel', entry: 'index.js' }]),
+      manifest: uiManifest([{ id: 'gone-panel', entry: 'index.js' }, { id: 'gone-global', entry: 'index.js', scope: 'global' }]),
     });
     const assetsRoot = join(root, 'assets');
     await extractClientAssets(
@@ -283,16 +335,69 @@ describe('composePanelDeclarations', async () => {
       assetsRoot,
     });
     assert.equal(declarations.find((d) => d.panelId === 'gone-panel'), undefined);
+    assert.equal(declarations.find((d) => d.panelId === 'gone-global'), undefined);
+  });
+
+  it('版本钉装配：catalog 存在更高版本不跟随，按装配版本下发', async () => {
+    const old = makePluginTgz({
+      packageName: 'pinned-plugin',
+      version: '1.0.0',
+      manifest: uiManifest([{ id: 'pinned-panel', entry: 'index.js' }]),
+    });
+    const newer = makePluginTgz({
+      packageName: 'pinned-plugin',
+      version: '1.1.0',
+      manifest: uiManifest([{ id: 'pinned-panel', entry: 'index.js' }]),
+    });
+    const assetsRoot = join(root, 'assets');
+    await extractClientAssets(
+      { archivePath: old.archivePath, packageName: 'pinned-plugin', version: '1.0.0', archiveDigest: old.digest },
+      { expectClient: true, assetsRoot },
+    );
+    await extractClientAssets(
+      { archivePath: newer.archivePath, packageName: 'pinned-plugin', version: '1.1.0', archiveDigest: newer.digest },
+      { expectClient: true, assetsRoot },
+    );
+    const { declarations } = await composePanelDeclarations({
+      catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
+      resolvers: makeLayerTable({
+        'programming-helper': { 'pinned-plugin': { $mount: { package: 'pinned-plugin', version: '1.0.0' } } },
+      }),
+      assetsRoot,
+    });
+    const panel = declarations.find((d) => d.panelId === 'pinned-panel');
+    assert.equal(panel?.version, '1.0.0');
+    assert.ok(panel?.url.includes('/1.0.0/'));
+  });
+
+  it('装配版本已不在仓库：跳过下发并出警告', async () => {
+    makePluginTgz({
+      packageName: 'ghost-plugin',
+      version: '1.0.0',
+      manifest: uiManifest([{ id: 'ghost-panel', entry: 'index.js' }]),
+    });
+    // 包仍在仓库（1.0.0），装配声明指向不存在的 1.1.0
+    const { declarations, warnings } = await composePanelDeclarations({
+      catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
+      resolvers: makeLayerTable({
+        'programming-helper': { 'ghost-plugin': { $mount: { package: 'ghost-plugin', version: '1.1.0' } } },
+      }),
+      assetsRoot: join(root, 'assets'),
+    });
+    assert.equal(declarations.length, 0);
+    assert.ok(warnings.some((w) => w.includes('ghost-plugin') && w.includes('不在仓库')));
   });
 
   it('skips panels whose client assets were never extracted (tgz 手拷未走导入)', async () => {
     makePluginTgz({
       packageName: 'no-asset-plugin',
-      manifest: uiManifest([{ id: 'no-asset-panel', entry: 'index.js', scope: 'global' }]),
+      manifest: uiManifest([{ id: 'no-asset-panel', entry: 'index.js' }]),
     });
     const { declarations, warnings } = await composePanelDeclarations({
       catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
-      resolvers: makeLayerTable({}),
+      resolvers: makeLayerTable({
+        'programming-helper': { 'no-asset-plugin': { $mount: { package: 'no-asset-plugin', version: '1.0.0' } } },
+      }),
       assetsRoot: join(root, 'assets'),
     });
     assert.equal(declarations.length, 0);
@@ -316,7 +421,9 @@ describe('composePanelDeclarations', async () => {
     );
     const { declarations, warnings } = await composePanelDeclarations({
       catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
-      resolvers: makeLayerTable({}),
+      resolvers: makeLayerTable({
+        'programming-helper': { 'broken-plugin': { $mount: { package: 'broken-plugin', version: '1.0.0' } } },
+      }),
       assetsRoot,
     });
     const ids = declarations.map((d) => d.panelId);

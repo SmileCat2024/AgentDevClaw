@@ -52,6 +52,8 @@ async function buildTgzRepository(root, name, version) {
 const SHARED_ROOT = mkdtempSync(join(tmpdir(), 'install-service-shared-'));
 const CATALOG_ROOTS = await (async () => {
   const repositoryDir = await buildTgzRepository(SHARED_ROOT, '@user/demo-feature', '1.0.0');
+  // 第二个包进同一仓库目录：合并口径用例需要两个不同包验证 plan 并集
+  await buildTgzRepository(SHARED_ROOT, '@user/other-feature', '2.0.0');
   return { officialRoot: repositoryDir, userRoot: join(SHARED_ROOT, 'no-user') };
 })();
 
@@ -264,4 +266,174 @@ test('installFeature：层文件与父目录均不存在的全新数据目录首
     const written = JSON.parse(readFileSync(layerPath, 'utf8'));
     assert.deepEqual(written['demo-feature'].$mount, { package: '@user/demo-feature', version: '1.0.0' });
   } finally { void provision; }
+});
+
+// ── 全局装配（ADR-0046 全局级装配：identity='global'，$mount 写 global 层）──
+
+/** 层清单含 global+agent 两层的隔离 fixture（global 层文件独立）。 */
+function makeScopeWithGlobal(globalContent = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'install-service-global-'));
+  const layerPath = join(root, 'agent-layer.json');
+  const globalPath = join(root, 'global-layer.json');
+  writeFileSync(layerPath, '{}');
+  writeFileSync(globalPath, JSON.stringify(globalContent));
+  const resolvers = new Map([
+    ['programming-helper', () => ({
+      layers: [
+        { id: 'global', label: '全局', path: globalPath },
+        { id: 'agent', label: 'test', path: layerPath },
+      ],
+    })],
+  ]);
+  return {
+    root,
+    layerPath,
+    globalPath,
+    resolvers,
+    readAgent: () => JSON.parse(readFileSync(layerPath, 'utf8')),
+    readGlobal: () => JSON.parse(readFileSync(globalPath, 'utf8')),
+    dispose: () => { /* tmp 由 OS 回收 */ },
+  };
+}
+
+test('全局安装：写 global 层声明、不 provision（环境归属消费身份）、agent 层不动', async () => {
+  const scope = makeScopeWithGlobal();
+  const { calls, provision } = okProvision();
+  try {
+    const result = await installFeature(
+      { identity: 'global', packageName: '@user/demo-feature', version: '1.0.0' },
+      { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.declared, true);
+    assert.equal(result.installed, false, '全局装配不做即时环境制备');
+    assert.equal(result.provisionDeferred, true);
+    assert.equal(calls.length, 0, 'provision 不执行（各消费身份启动自愈/就绪链制备）');
+    assert.deepEqual(
+      scope.readGlobal()['demo-feature'],
+      { $mount: { package: '@user/demo-feature', version: '1.0.0' } },
+    );
+    assert.deepEqual(scope.readAgent(), {}, 'agent 层不动（全局声明不落身份层）');
+  } finally { scope.dispose(); }
+});
+
+test('全局安装：已声明同版本幂等，配置值保留', async () => {
+  const scope = makeScopeWithGlobal({
+    'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0' }, vaultPath: '/v' },
+  });
+  const { provision } = okProvision();
+  try {
+    const result = await installFeature(
+      { identity: 'global', packageName: '@user/demo-feature', version: '1.0.0' },
+      { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.declared, false);
+    assert.equal(scope.readGlobal()['demo-feature'].vaultPath, '/v', '既有配置值保留');
+  } finally { scope.dispose(); }
+});
+
+test('全局安装：仓库无此包 → 失败且 global 层保持原样（原子性）', async () => {
+  const scope = makeScopeWithGlobal({ existing: 'untouched' });
+  const { provision } = okProvision();
+  try {
+    await assert.rejects(
+      installFeature({ identity: 'global', packageName: '@user/ghost', version: '2.0.0' },
+        { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision }),
+      (err) => { assert.equal(classifyInstallError(err).code, 'package_missing'); return true; },
+    );
+    assert.deepEqual(scope.readGlobal(), { existing: 'untouched' });
+  } finally { scope.dispose(); }
+});
+
+test('身份安装的环境 plan 含 global 层装配（与启动链 hash 同口径）', async () => {
+  // 契约依据：user-mount.js——启动链/安装链 plan 严格同构，环境 hash 才一致。
+  // global 层声明 X、身份层空，身份安装 Y → provision 收到的 plan 必须同时含 X 与 Y，
+  // 否则产出的环境启动链认不出（hash 失配）。
+  const scope = makeScopeWithGlobal({
+    'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0' } },
+  });
+  const { calls, provision } = okProvision();
+  try {
+    const result = await installFeature(
+      { identity: 'main', packageName: '@user/other-feature', version: '2.0.0' },
+      { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.declared, true);
+    const packages = calls[0].plan.features.map((f) => f.package);
+    assert.ok(packages.includes('@user/demo-feature'), 'global 层装配进身份环境 plan');
+    assert.ok(packages.includes('@user/other-feature'), '新装包进 plan');
+    assert.equal(calls[0].plan.agent.id, 'programming-helper:user-mounts');
+    // 声明只写身份层（Y）；global 层声明不被身份安装触碰
+    assert.deepEqual(
+      scope.readAgent()['other-feature'],
+      { $mount: { package: '@user/other-feature', version: '2.0.0' } },
+    );
+    assert.ok(!scope.readGlobal()['other-feature'], '身份安装不写 global 层');
+  } finally { scope.dispose(); }
+});
+
+test('global 已声明同版本时身份再装：不写冗余声明（合并层已生效），plan 单包', async () => {
+  const scope = makeScopeWithGlobal({
+    'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0' } },
+  });
+  const { calls, provision } = okProvision({ installed: false });
+  try {
+    const result = await installFeature(
+      { identity: 'main', packageName: '@user/demo-feature', version: '1.0.0' },
+      { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.declared, false, '合并层已含同版本声明，幂等');
+    assert.deepEqual(scope.readAgent(), {}, '身份层不写冗余声明');
+    assert.equal(calls[0].plan.features.length, 1, '同 key 层序合并不重复进 plan');
+  } finally { scope.dispose(); }
+});
+
+test('全局重建：遍历已注册身份，按合并口径重建（global 声明 + 空 agent 层可重建）', async () => {
+  const scope = makeScopeWithGlobal({
+    'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0' } },
+  });
+  const { calls, provision } = okProvision();
+  try {
+    const result = await rebuildEnvironment(
+      { identity: 'global' },
+      { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision },
+    );
+    assert.equal(result.rebuilt.length, 1, '注入隔离内只有 main 一个身份');
+    assert.equal(result.rebuilt[0].identity, 'main');
+    assert.equal(calls[0].plan.agent.id, 'programming-helper:user-mounts');
+    assert.deepEqual(
+      calls[0].plan.features.map((f) => f.package),
+      ['@user/demo-feature'],
+      'global 声明进身份重建的 plan（旧单层口径会 nothing_to_rebuild）',
+    );
+    // 声明不被 rebuild 触碰
+    assert.deepEqual(
+      scope.readGlobal()['demo-feature'],
+      { $mount: { package: '@user/demo-feature', version: '1.0.0' } },
+    );
+  } finally { scope.dispose(); }
+});
+
+test('全局就绪探测：聚合各身份（global 声明 → 身份 hasEnv，无环境 lock → not ready）', async () => {
+  const scope = makeScopeWithGlobal({
+    'demo-feature': { $mount: { package: '@user/demo-feature', version: '1.0.0' } },
+  });
+  try {
+    assert.deepEqual(
+      await computeScopeEnvReadiness('global',
+        { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, environmentRoot: join(scope.root, 'envs') }),
+      { ready: false, hasEnv: true },
+    );
+  } finally { scope.dispose(); }
+});
+
+test('未知身份拒绝：既非 global 也未注册 → 明确报错', async () => {
+  const scope = makeScopeWithGlobal();
+  const { provision } = okProvision();
+  try {
+    await assert.rejects(
+      installFeature({ identity: 'nope', packageName: '@user/demo-feature', version: '1.0.0' },
+        { resolvers: scope.resolvers, catalogRoots: CATALOG_ROOTS, provision }),
+      /未知身份/,
+    );
+  } finally { scope.dispose(); }
 });

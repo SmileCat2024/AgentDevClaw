@@ -14,6 +14,7 @@ import { compareSemver, uniqueStrings } from '../shared/feature-utils.js';
 import { summarizeArchive } from '../feature-runtime/catalog.js';
 import { gunzipFileToBuffer, readTarEntry } from '../shared/tgz-archive.js';
 import { extractClientAssets, extractServerAssets } from '../feature-runtime/feature-assets.js';
+import { notifyPluginServerDirty } from '../shared/plugin-server-bus.js';
 
 /* ── feature metadata helpers ─────────────────────────────────────── */
 
@@ -603,6 +604,8 @@ export function setupFeatureRepositoryRoutes(app, express) {
       }
 
       const deleted = await deleteFeaturePackage(packageId);
+      // 包删除：装配引用悬空的数据面前缀应摘除
+      notifyPluginServerDirty(`删除 ${packageId}`);
       res.json({ deleted });
     } catch (error) {
       next(error);
@@ -699,6 +702,8 @@ export function setupFeatureRepositoryRoutes(app, express) {
       }
 
       const summary = await summarizeFeatureArchive(targetPath, path.basename(targetPath), 'custom');
+      // 导入成功：装配引用悬空的版本可能就位（ghost 装配自动挂上），数据面重建
+      notifyPluginServerDirty(`导入 ${archiveSummary?.packageName || path.basename(targetPath)}`);
       res.json({ success: true, fileName: path.basename(targetPath), summary, assets });
     } catch (error) {
       next(error);

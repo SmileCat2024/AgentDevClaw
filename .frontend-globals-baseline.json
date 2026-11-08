@@ -1064,16 +1064,19 @@
       "mountedContainer"
     ],
     "behavior": [
+      "ClawFW",
       "createRailButton",
       "mountContainerPanel",
       "notifyPanelLifecycle",
+      "panelBodyContentEl",
       "railButtonTitle",
       "renderFeaturePanel",
       "runAfterPanelOpenFrame",
       "syncPanelBodyHtmlCache",
       "syncRailButtons",
       "toggleFeaturePanel",
-      "unmountContainerPanel"
+      "unmountContainerPanel",
+      "wrapPanelContent"
     ]
   },
   "public/src/modules/debug-preflight.js": {
@@ -1347,12 +1350,17 @@
   "public/src/modules/feature-store.js": {
     "state": [
       "_FS_IDENTITY_SCOPES",
+      "_PM_GLOBAL_SCOPE",
       "_fsInstall",
       "_fsInstallBuiltin",
       "_fsRemoveFor",
       "_fsSelectVersion",
       "_fsState",
-      "_fsTickTimer"
+      "_fsTickTimer",
+      "_pmInstallGlobal",
+      "_pmRemoveGlobal",
+      "_pmSelectVersion",
+      "_pmState"
     ],
     "behavior": [
       "_fsAfterChange",
@@ -1375,8 +1383,26 @@
       "_fsStartTick",
       "_fsStopTick",
       "_fsT",
+      "_pmCancelImport",
+      "_pmClosePluginManager",
+      "_pmConfirmImport",
+      "_pmGlobalMountedMap",
+      "_pmHost",
+      "_pmOpenUpload",
+      "_pmReloadOverview",
+      "_pmRender",
+      "_pmRenderGlobalSection",
+      "_pmRenderImportDialog",
+      "_pmRenderPackageSections",
+      "clawOpenPluginManager",
       "phCloseFeatureStore",
       "phOpenFeatureStore"
+    ]
+  },
+  "public/src/modules/feature-ui-registry.js": {
+    "state": [],
+    "behavior": [
+      "ClawFW"
     ]
   },
   "public/src/modules/fw-config-panel.js": {

@@ -30,6 +30,7 @@ import {
   collapseAccumulatedFields,
 } from '../shared/feature-config-accumulate.js';
 import { findPhProjectSync } from './ph-projects.js';
+import { notifyPluginServerDirty } from '../shared/plugin-server-bus.js';
 
 // ── scope → queue 解析注册表（server 进程内存态，不做热更新） ──────────
 
@@ -297,6 +298,10 @@ export function setupFeatureConfigRoutes(app, express) {
       const dir = pathDirname(targetPath);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       writeFileSync(targetPath, JSON.stringify(content, null, 2), 'utf8');
+      // 层编辑是 $mount 装配声明的主通道（装配/卸载/版本调整）：数据面按装配
+      // 事实挂载，成功后广播重建。配置值-only 的编辑也会触发（remount 幂等
+      // 毫秒级，无行为副作用）——getConfig 每请求现读，无需精确区分。
+      notifyPluginServerDirty(`层编辑 ${agentId}/${layerId}`);
       res.json({ ok: true, layerId, path: targetPath });
     } catch (error) {
       res.status(500).json({ error: error.message });

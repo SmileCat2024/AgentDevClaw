@@ -7,15 +7,17 @@
  *   - 挂载点选择：`/protoclaw/plugin/<prefix>/*`——prefix 是包声明的路由
  *     前缀，全局唯一（冲突时后挂载者拒绝 + 警告）。prefix 即审计面：
  *     listMountedPluginServerPrefixes() 列出当前全部生效前缀与归属包。
- *   - 触发条件：包被至少一个工作空间身份装配（装配事实与 UI 面同源，
- *     collectAssemblyFacts）；未装配的包不挂载。多版本装配取最高版本。
+ *   - 触发条件：包被装配（global 层或任一工作空间身份，装配事实与 UI 面同源，
+ *     collectAssemblyFacts）；未装配的包不挂载。多版本装配取装配版本里最高
+ *     者（catalog 更高版本不跟随，与面板下发同款钉版语义）。
  *   - 受控 router：只暴露 get/post/put/delete，注册路径必须是以 / 开头
  *     的相对子路径（无 .. 、无绝对段）；宿主包装 handler 做异常计数
  *     熔断（同一包连续 5 次未捕获异常 → 摘除该包全部路由并显式警告，
  *     remountPluginServerRoutes() 可整体重建）。
  *   - context.getConfig()：每次请求现读该包的四层作用域合成配置
- *     （resolveScopeConfig），配置修改无需重启；取装配身份中第一个
- *     （agent 层是 $mount 与插件配置的权威层）。
+ *     （resolveScopeConfig），配置修改无需重启。身份选择取装配事实中第一个
+ *     工作空间身份（agent 层是 $mount 与插件配置的权威层）；纯全局装配时
+ *     无空间身份，配置取 global 层值（ADR-0046：数据面读 global + 装配层）。
  *
  * 信任与依赖模型（ADR-0045）：server 面在主 server.js 进程内执行，与
  * 工具面同级的信任（本机代码）；依赖约束为 node 内置模块 + 相对导入
@@ -29,7 +31,8 @@ import { pathToFileURL } from 'url';
 
 import { scanFeatureCatalog } from './catalog.js';
 import { collectAssemblyFacts } from './plugin-ui.js';
-import { versionServerDir, serverEnvRoot } from './feature-assets.js';
+import { readGlobalDeclaredMounts } from './install-service.js';
+import { versionServerDir } from './feature-assets.js';
 import { resolveScopeConfig } from '../routes/feature-config.js';
 import { createClawLogger as createLogger } from '../shared/claw-logger.js';
 
@@ -59,9 +62,16 @@ export async function buildPluginServerMounts({ catalogRoots, resolvers, serverR
     if (withServer.length === 0) continue;
 
     const mounted = assemblyFacts.get(packageName) || [];
-    if (mounted.length === 0) continue; // 未装配不挂载（与 assembly 面板同语义）
+    if (mounted.length === 0) continue; // 未装配不挂载（global 层装配同样生效）
 
-    const versionChoice = withServer.reduce((best, entry) => (entry.version > best.version ? entry : best));
+    // 版本钉装配：取装配版本里最高者；catalog 更高版本不跟随
+    const mountedVersions = [...new Set(mounted.map((fact) => fact.version))];
+    const targetVersion = mountedVersions.reduce((a, b) => (b > a ? b : a));
+    const versionChoice = withServer.find((entry) => entry.version === targetVersion);
+    if (!versionChoice) {
+      warnings.push(`插件 ${packageName} 装配版本 ${targetVersion} 已不在仓库（server 面跳过挂载）`);
+      continue;
+    }
     const prefix = versionChoice.manifestServer.prefix.trim();
     if (!PREFIX_PATTERN.test(prefix)) {
       warnings.push(`插件 ${packageName}@${versionChoice.version} 的 server.prefix 非法（${prefix}，仅小写字母/数字/连字符）：跳过挂载`);
@@ -199,13 +209,20 @@ export async function mountPluginServerRoutes(app, options = {}) {
     };
 
     const router = makeRouter();
-    const identity = mount.identities[0];
+    // 配置合成身份：第一个工作空间身份（agent 层是插件配置的权威层）；
+    // 纯全局装配时无空间身份，getConfig 回落 global 层值
+    const contextIdentity = mount.identities.find((fact) => fact.agentId) || null;
     const context = {
       // 每次调用现读：配置修改后无需重启（与工具面构造期一次合成不同，
       // 数据面生命周期跨配置变更）
       getConfig() {
         try {
-          const { merged } = resolveScopeConfig({ agentId: identity.agentId }, options.resolvers);
+          if (!contextIdentity) {
+            const { sparse } = readGlobalDeclaredMounts(options.resolvers);
+            const raw = sparse[mount.packageName];
+            return raw && typeof raw === 'object' ? raw : {};
+          }
+          const { merged } = resolveScopeConfig({ agentId: contextIdentity.agentId }, options.resolvers);
           return (merged && merged[mount.packageName]) || {};
         } catch {
           return {};

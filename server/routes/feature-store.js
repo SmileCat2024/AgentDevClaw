@@ -28,7 +28,9 @@ import {
   computeScopeEnvReadiness,
   getInstallState,
   classifyInstallError,
+  readGlobalDeclaredMounts,
 } from '../feature-runtime/install-service.js';
+import { notifyPluginServerDirty } from '../shared/plugin-server-bus.js';
 
 // 与 install-service 共享身份定义（agentId/layerId/sessionType 单一权威）
 const STORE_SCOPES = Object.entries(IDENTITY_SCOPES).map(([identity, scope]) => ({
@@ -233,6 +235,28 @@ export async function collectScopeMounts(agentId, catalog) {
 }
 
 /**
+ * 全局级装配清单（ADR-0046）：global 层 $mount，形状与 collectScopeMounts 同构
+ * （layerId 恒为 'global'）。全局装配无环境概念（provision 延迟到消费身份），
+ * 不参与 envReady。
+ */
+export async function collectGlobalMounts(catalog, resolvers) {
+  const { mounts } = readGlobalDeclaredMounts(resolvers);
+  const result = {};
+  for (const [runtimeName, mount] of mounts) {
+    if (mount.kind === 'builtin') {
+      result[runtimeName] = { ...mount, missing: false };
+      continue;
+    }
+    const versions = catalog.packages.get(mount.package) || [];
+    result[runtimeName] = {
+      ...mount,
+      missing: !versions.some((entry) => entry.version === mount.version),
+    };
+  }
+  return result;
+}
+
+/**
  * 某身份未装配的官方可选插件名清单（身份配置页过滤官方 manifest 清单用）。
  * 可选面由 agent.js 的 builtinOptionalFeatures 声明；装配事实在配置层
  * $mount。未注册的身份（非 main/coder 的 agentId）返回空——不过滤。
@@ -316,6 +340,8 @@ export function setupFeatureStoreRoutes(app, express) {
         mounts[scope.identity] = await collectScopeMounts(scope.agentId, catalog);
         envReady[scope.identity] = await computeScopeEnvReadiness(scope.identity);
       }
+      // 全局级装配清单（ADR-0046）：插件管理器消费；无 envReady（环境随消费身份）
+      mounts.global = await collectGlobalMounts(catalog);
       res.json({ builtin, base, packages: buildStorePackages(catalog), mounts, envReady, installing: getInstallState() });
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -328,6 +354,8 @@ export function setupFeatureStoreRoutes(app, express) {
     const { identity, packageName, version } = req.body || {};
     try {
       const result = await installFeature({ identity, packageName, version });
+      // 装配变化改变数据面挂载集合（global/身份装配、版本升级），成功后自动重建
+      notifyPluginServerDirty(`安装 ${packageName}@${version} → ${identity}`);
       res.json({ ok: true, ...result });
     } catch (error) {
       const { code, message } = classifyInstallError(error);

@@ -70,12 +70,22 @@ export default {
   return { archivePath, digest, packageName, version };
 }
 
-/** 身份层 fixture：agent 层写 $mount + 插件配置（vaultPath）。 */
-function makeResolvers(agentLayerSparse) {
+/**
+ * 身份层 fixture：agent 层与 global 层各一份文件（与生产 scope 层清单一致，
+ * global 是公共首层）。globalLayerSparse 缺省为空（无全局级装配）。
+ */
+function makeResolvers(agentLayerSparse, globalLayerSparse) {
   const resolvers = new Map();
+  const globalFile = join(root, 'layer-global.json');
+  writeFileSync(globalFile, JSON.stringify(globalLayerSparse || {}, null, 2));
   const file = join(root, 'layer-agent.json');
   writeFileSync(file, JSON.stringify(agentLayerSparse, null, 2));
-  resolvers.set('programming-helper', () => ({ layers: [{ id: 'agent', label: 'agent', path: file }] }));
+  resolvers.set('programming-helper', () => ({
+    layers: [
+      { id: 'global', label: '全局', path: globalFile },
+      { id: 'agent', label: 'agent', path: file },
+    ],
+  }));
   return resolvers;
 }
 
@@ -120,6 +130,39 @@ describe('buildPluginServerMounts', () => {
       serverRoot: join(root, 'server-env'),
     });
     assert.equal(mounts.length, 0);
+  });
+
+  it('全局级装配（global 层 $mount）同样挂载，identities 标记 agentId=null', async () => {
+    const fixture = makeServerPluginTgz();
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    const { mounts, warnings } = await buildPluginServerMounts({
+      catalogRoots: { userRoot: root, officialRoot: join(root, 'official-empty') },
+      resolvers: makeResolvers({}, mountedLayer('srv-demo', '1.0.0')),
+      serverRoot: join(root, 'server-env'),
+    });
+    assert.deepEqual(warnings, []);
+    assert.equal(mounts.length, 1);
+    assert.equal(mounts[0].identities.length, 1);
+    assert.equal(mounts[0].identities[0].identity, 'global');
+    assert.equal(mounts[0].identities[0].agentId, null);
+  });
+
+  it('版本钉装配：catalog 有更高版本不跟随，按装配版本挂载', async () => {
+    const old = makeServerPluginTgz({ packageName: 'pinned-srv', version: '1.0.0', prefix: 'pinned-srv' });
+    makeServerPluginTgz({ packageName: 'pinned-srv', version: '1.1.0', prefix: 'pinned-srv' });
+    await extractServerAssets(old, { serverRoot: join(root, 'server-env') });
+    await extractServerAssets(
+      { archivePath: join(root, 'pinned-srv-1.1.0.tgz'), packageName: 'pinned-srv', version: '1.1.0', archiveDigest: 'sha256:unused' },
+      { serverRoot: join(root, 'server-env') },
+    );
+    const { mounts } = await buildPluginServerMounts({
+      catalogRoots: { userRoot: root, officialRoot: join(root, 'official-empty') },
+      resolvers: makeResolvers(mountedLayer('pinned-srv', '1.0.0')),
+      serverRoot: join(root, 'server-env'),
+    });
+    assert.equal(mounts.length, 1);
+    assert.equal(mounts[0].version, '1.0.0');
+    assert.ok(mounts[0].entryPath.includes(join('1.0.0')));
   });
 
   it('prefix 非法与 entry 穿越拒绝并出警告', async () => {
@@ -289,5 +332,25 @@ describe('extractServerAssets ESM 标记', () => {
     // 动态 import 真实可用（ESM 契约的执行证据）
     const mod = await import(`file://${join(versionServerDir(fixture, join(root, 'server-env')), 'index.js').replace(/\\/g, '/')}`);
     assert.equal(typeof mod.default.registerRoutes, 'function');
+  });
+});
+
+// ── plugin-server-bus（数据面自动重建信号桥）────────────────────────
+
+describe('plugin-server-bus（数据面自动重建信号桥）', () => {
+  it('notify 后监听者收到 reason；退订后不再收到', async () => {
+    const { notifyPluginServerDirty, onPluginServerDirty } = await import('../server/shared/plugin-server-bus.js');
+    const received = [];
+    const off = onPluginServerDirty((reason) => received.push(reason));
+    notifyPluginServerDirty('导入 demo');
+    notifyPluginServerDirty('安装 pkg@1.0.0 → global');
+    off();
+    notifyPluginServerDirty('删除 pkg');
+    assert.deepEqual(received, ['导入 demo', '安装 pkg@1.0.0 → global'], '退订前的两条送达，退订后不再收到');
+  });
+
+  it('无监听时 notify 安全（宿主未接线不抛错）', async () => {
+    const { notifyPluginServerDirty } = await import('../server/shared/plugin-server-bus.js');
+    notifyPluginServerDirty('no-listener');
   });
 });
