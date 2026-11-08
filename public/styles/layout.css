@@ -8183,6 +8183,9 @@ body[data-theme="light"] .git-file-action:hover {
 .git-empty-card {
   display: flex;
   min-height: 176px;
+  /* 空态/加载态不经 .git-panel 双区骨架（无 --git-edge 体系），而面板声明了
+     fullBleed（宿主不再包内容层留白）——卡片自带边距，取面板边缘同值 16px */
+  margin: 16px;
   flex-direction: column;
   align-items: center;
   justify-content: center;

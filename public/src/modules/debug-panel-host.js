@@ -493,6 +493,12 @@ if (window.ClawHost && typeof window.ClawHost.onPluginLoadSettled === 'function'
     const panel = window.ClawPanels.get(activeFeaturePanel);
     if (!panel) return;
     if ((panel.stub && panel.stub.pluginId === pluginId) || panel.owner === pluginId) {
+      // stub→real 落定：打开时的 onOpen 落在 stub 元数据上（无钩子，no-op），
+      // 真实现就位后补发一次——auto-refresh 等随打开启动的资源由此启动
+      // （行为等价迁移的关键一环；失败落定 panel 仍是 stub，不补发）
+      if (panel.owner === pluginId) {
+        notifyPanelLifecycle(activeFeaturePanel, 'onOpen');
+      }
       renderFeaturePanel();
     }
   });

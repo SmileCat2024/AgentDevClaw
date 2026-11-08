@@ -1591,7 +1591,10 @@ export { render, onOpen, refresh };
 // 面板插件声明（ADR-0044 P4）：宿主经 panel-plugins 清单懒装载，mount 时
 // 挂常驻监听（host.effect 登记卸载），生命周期经注册表元数据分发。
 export default {
-  id: 'git',
+  // id 必须与清单（panel-plugins.js）声明的 pluginId 一致：宿主 activatePlugin
+  // 以 mod.id 作为注册项 owner，装载落定回调按 owner === pluginId 匹配后才会
+  // 重渲染——不一致时首开永远卡在 loading 占位（历史事故，测试钉住该契约）。
+  id: 'panel-git',
   // 惰性引用：金样本沙箱只执行声明块，mountPanel 定义在块外（与 onOpen 同款约束）
   mount(host) { return mountPanel(host); },
   panels: {

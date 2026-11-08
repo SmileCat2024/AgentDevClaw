@@ -524,3 +524,90 @@ test('过期装载落定不得污染已卸载插件的 loadState（懒面板卸�
     '卸载后的过期失败落定不得写入 failed（否则 stub 被拦截、懒面板卡死）',
   );
 });
+
+// ═══════════════════════════════════════════════════════════════
+// 懒面板装载落定联动（ADR-0044 P3 / P4 迁移事故回归）
+// ═══════════════════════════════════════════════════════════════
+// 背景：git 面板模块导出 id:'git' 与清单 pluginId 'panel-git' 不一致——
+// activatePlugin 以 mod.id 作 owner，落定回调按 owner===pluginId 匹配失败，
+// 首开永远卡在 loading 占位；且 stub 期 onOpen 是 no-op，落定后无人补发。
+// 下面两测试分别钉住「清单契约」与「落定链路」。
+
+test('清单声明的 pluginId 必须与实现模块 default export 的 id 一致', () => {
+  const manifest = fs.readFileSync(
+    new URL('../public/src/modules/panel-plugins.js', import.meta.url), 'utf8');
+  const entries = [...manifest.matchAll(/pluginId:\s*'([^']+)'\s*,\s*url:\s*'([^']+)'/g)];
+  assert.ok(entries.length >= 2, '至少应有两个已迁移的懒面板声明');
+  for (const [, pluginId, url] of entries) {
+    // 只核对手写实现模块（panel-plugins/）；React 等构建产物是打包格式，
+    // 模块 id 无法用源码字面量核对，其一致性由装载后的运行行为保证
+    if (!url.startsWith('/src/panel-plugins/')) continue;
+    const filePath = new URL('../public' + url, import.meta.url);
+    const src = fs.readFileSync(filePath, 'utf8');
+    const decl = src.indexOf('export default {');
+    assert.ok(decl >= 0, `${url} 应有 default export 声明块`);
+    const head = src.slice(decl, decl + 600);
+    const idMatch = head.match(/id:\s*'([^']+)'/);
+    assert.ok(idMatch, `${url} default export 应声明 id`);
+    assert.equal(idMatch[1], pluginId,
+      `${url} 模块 id '${idMatch[1]}' 与清单 pluginId '${pluginId}' 不一致`
+      + '——owner 匹配失败会让懒面板首开卡在 loading 占位');
+  }
+});
+
+/** 打开懒面板并同步激活真实现：vm 里动态 import 必然失败（Node 门禁），
+ *  但 toggle 的 import 拒绝只挂在微任务队列——在其落定前同步 activatePlugin
+ *  注册 real（loaded 表就位），落定（catch 分支）驱动同一条
+ *  notifyLoadSettled → 编排层回调链。回调对 then/catch 落定无分支差异，
+ *  成功装载的真实链路在此等价驱动。moduleId 与 pluginId 不一致即事故形态。 */
+function openLazyPanelWithRealModule(ctx, { pluginId, panelId, moduleId, realHtml, onOpen }) {
+  ctx.run(`
+    window.__panelCalls = [];
+    window.ClawHost.panels.declare(${JSON.stringify(panelId)}, {
+      when: { surfaces: ['chat'] },
+      title: () => '懒面板',
+    }, { pluginId: ${JSON.stringify(pluginId)}, url: '/src/panel-plugins/${panelId}.js' });
+    toggleFeaturePanel(${JSON.stringify(panelId)});
+    window.ClawHost.activatePlugin(${JSON.stringify(pluginId)}, {
+      id: ${JSON.stringify(moduleId)},
+      panels: {
+        ${JSON.stringify(panelId)}: {
+          when: { surfaces: ['chat'] },
+          title: () => '真实面板',
+          render: () => ${JSON.stringify(realHtml)},${onOpen ? `
+          onOpen: () => window.__panelCalls.push(${JSON.stringify(panelId + ':onOpen')}),` : ''}
+        },
+      },
+    });
+  `);
+  // activatePlugin 是异步函数但 happy path 无 await：同步段内完成 stub→real
+}
+
+test('装载落定自动切真内容并补发 onOpen（owner 匹配是重渲染前提）', async () => {
+  const ctx = createSyncPanelHostSandbox();
+  openLazyPanelWithRealModule(ctx, {
+    pluginId: 'panel-lazy-live', panelId: 'lazy-live', moduleId: 'panel-lazy-live',
+    realHtml: '<div data-lazy-live-real>已装载</div>', onOpen: true,
+  });
+  // toggle 打开：stub 无 onOpen 钩子，此时不得有生命周期调用
+  assert.match(ctx.run('featurePanelBody.innerHTML'), /panel_lazy_loading/);
+  assert.deepEqual([...ctx.run('window.__panelCalls')], [],
+    'stub 期 onOpen 落在占位元数据上，必须是 no-op');
+  // 装载落定（微任务排空后 notifyLoadSettled → 编排层回调）
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(ctx.run('featurePanelBody.innerHTML'), /data-lazy-live-real/,
+    '落定后无需再 toggle，回调应自动把占位换成真内容（首开卡占位回归）');
+  assert.deepEqual([...ctx.run('window.__panelCalls')], ['lazy-live:onOpen'],
+    'stub→real 落定应补发一次 onOpen（auto-refresh 等随打开启动的资源）');
+});
+
+test('模块 id 与 pluginId 不一致时落定回调不认领（该形态被清单契约测试拦截）', async () => {
+  const ctx = createSyncPanelHostSandbox();
+  openLazyPanelWithRealModule(ctx, {
+    pluginId: 'panel-lazy-wrong', panelId: 'lazy-wrong', moduleId: 'wrong-owner',
+    realHtml: '<div data-lazy-wrong-real></div>',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(ctx.run('featurePanelBody.innerHTML'), /panel_lazy_loading/,
+    'owner 不匹配时回调不重渲染——占位滞留即首开卡死形态');
+});
