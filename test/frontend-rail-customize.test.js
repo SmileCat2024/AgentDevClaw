@@ -26,7 +26,6 @@ function buildRailDom(panelIds) {
   harness.document.body.appendChild(rail);
   return harness;
 }
-
 function createRailSandbox(harness, overrides = {}) {
   const ctx = createFrontendSandbox({ document: harness.document, ...overrides });
   // ClawPanels 委托给 ClawHost.panels（同一份注册表），必须先装载宿主
@@ -75,6 +74,25 @@ function createRailSandbox(harness, overrides = {}) {
   return ctx;
 }
 
+// ── 服务端呈现配置路径（fetch stub 驱动真实异步链） ────────────────
+
+/** 等待 sandbox 内的异步链（fetch → json → remote.config 落定 → applyConfig 重放）完成。 */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** 记录调用的 fetch stub：GET 返回预设 prefs，PUT 记录 body 到 puts。 */
+function stubUiPrefsFetch({ presentation = {}, panelPrefs = {} } = {}) {
+  const calls = [];
+  const fetchStub = async (url, options) => {
+    const method = (options && options.method) || 'GET';
+    calls.push({ url: String(url), method, body: options?.body ? JSON.parse(options.body) : null });
+    if (method === 'GET') {
+      return { ok: true, status: 200, json: async () => ({ prefs: { presentation, panelPrefs } }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  return { fetchStub, calls };
+}
+
 describe('rail customize derives its panel list from the registry', () => {
   it('lists only allowed registered panels in the defined default order', () => {
     const harness = buildRailDom(['genui', 'session-controls', 'workspace', 'unlisted', null]);
@@ -99,13 +117,16 @@ describe('rail customize derives its panel list from the registry', () => {
     );
   });
 
-  it('keeps blocked and unknown ids out when loading a legacy config', () => {
+  it('drops blocked and unknown ids from the server-side sparse presentation', async () => {
     const harness = buildRailDom(['workspace', 'monitor', 'genui', 'session-controls']);
-    const ctx = createRailSandbox(harness);
-    ctx.run(`localStorage.setItem('agentdev-rail-config', JSON.stringify([
-      { id: 'monitor', visible: false },
-      { id: 'no-such-panel', visible: true },
-    ]))`);
+    const { fetchStub } = stubUiPrefsFetch({
+      presentation: {
+        monitor: { visible: false, order: 0 },        // 清单外（注册无 order）
+        'no-such-panel': { visible: true, order: 1 },  // 未注册面板
+      },
+    });
+    const ctx = createRailSandbox(harness, { fetch: fetchStub });
+    await settle();
 
     assert.deepEqual(
       JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
@@ -116,27 +137,37 @@ describe('rail customize derives its panel list from the registry', () => {
     );
   });
 
-  it('maps legacy panel ids onto their renamed successors', () => {
+  it('migrates legacy localStorage ids onto renamed successors once per workspace', async () => {
     const harness = buildRailDom(['workspace', 'session-controls']);
-    const ctx = createRailSandbox(harness);
+    const { fetchStub, calls } = stubUiPrefsFetch({}); // 服务端无配置 → 触发迁移
+    const ctx = createRailSandbox(harness, { fetch: fetchStub });
+    // 初始化 GET 已同步发出、回调在 microtask 消费：此刻写入迁移源仍可被读到
     ctx.run(`localStorage.setItem('agentdev-rail-config', JSON.stringify([
       { id: 'force-continuation', visible: false },
     ]))`);
+    await settle();
 
+    const put = calls.find((c) => c.method === 'PUT');
+    assert.ok(put, '迁移应 PUT 服务端');
+    assert.deepEqual(put.body.presentation['session-controls'], { visible: false, order: 0 });
+    assert.equal(
+      ctx.run(`localStorage.getItem('agentdev-rail-config-migrated:programming-helper')`),
+      '1',
+      '迁移完成后打一次性标记',
+    );
     assert.deepEqual(
       JSON.parse(JSON.stringify(ctx.run('window.RailCustomize.loadConfig()'))),
-      [
-        { id: 'session-controls', visible: false },
-      ],
+      [{ id: 'session-controls', visible: false }],
     );
   });
 
-  it('hides a hidden panel button and clears the active panel through the host renderer', () => {
+  it('hides a hidden panel button and clears the active panel through the host renderer', async () => {
     const harness = buildRailDom(['genui', 'monitor']);
-    const ctx = createRailSandbox(harness);
-    ctx.run(`localStorage.setItem('agentdev-rail-config', JSON.stringify([
-      { id: 'genui', visible: false },
-    ]))`);
+    const { fetchStub } = stubUiPrefsFetch({
+      presentation: { genui: { visible: false, order: 0 } },
+    });
+    const ctx = createRailSandbox(harness, { fetch: fetchStub });
+    await settle();
     ctx.run(`
       activeFeaturePanel = 'genui';
       var _renderCalls = 0;
@@ -187,13 +218,16 @@ describe('rail customize derives its panel list from the registry', () => {
 });
 
 describe('rail long-press drag reorder', () => {
-  it('persists a new order through the shared rail config, keeping visibility', () => {
+  it('persists a new order through the shared rail config, keeping visibility', async () => {
     const harness = buildRailDom(['workspace', 'genui', 'session-controls', 'unlisted']);
-    const ctx = createRailSandbox(harness);
-    ctx.run(`localStorage.setItem('agentdev-rail-config', JSON.stringify([
-      { id: 'session-controls', visible: true },
-      { id: 'genui', visible: false },
-    ]))`);
+    const { fetchStub, calls } = stubUiPrefsFetch({
+      presentation: {
+        'session-controls': { visible: true, order: 0 },
+        genui: { visible: false, order: 1 },
+      },
+    });
+    const ctx = createRailSandbox(harness, { fetch: fetchStub });
+    await settle();
 
     ctx.run(`window.RailCustomize.commitRailOrder(['genui', 'session-controls'])`);
 
@@ -204,6 +238,10 @@ describe('rail long-press drag reorder', () => {
         { id: 'session-controls', visible: true },
       ],
     );
+    const put = calls.find((c) => c.method === 'PUT');
+    assert.ok(put, '顺序变更应落盘服务端');
+    assert.deepEqual(put.body.presentation.genui, { visible: false, order: 0 });
+    assert.deepEqual(put.body.presentation['session-controls'], { visible: true, order: 1 });
   });
 
   it('reorders rail buttons to the committed order, blocked panels stay after the group', () => {
@@ -219,13 +257,16 @@ describe('rail long-press drag reorder', () => {
     assert.deepEqual(panels, ['session-controls', 'genui', 'workspace', 'unlisted']);
   });
 
-  it('keeps entries missing from the submitted order at the tail in their prior order', () => {
+  it('keeps entries missing from the submitted order at the tail in their prior order', async () => {
     const harness = buildRailDom(['workspace', 'genui', 'session-controls']);
-    const ctx = createRailSandbox(harness);
-    ctx.run(`localStorage.setItem('agentdev-rail-config', JSON.stringify([
-      { id: 'session-controls', visible: false },
-      { id: 'genui', visible: true },
-    ]))`);
+    const { fetchStub, calls } = stubUiPrefsFetch({
+      presentation: {
+        'session-controls': { visible: false, order: 0 },
+        genui: { visible: true, order: 1 },
+      },
+    });
+    const ctx = createRailSandbox(harness, { fetch: fetchStub });
+    await settle();
 
     ctx.run(`window.RailCustomize.commitRailOrder(['genui'])`);
 
@@ -235,6 +276,39 @@ describe('rail long-press drag reorder', () => {
         { id: 'genui', visible: true },
         { id: 'session-controls', visible: false },
       ],
+    );
+    assert.ok(calls.some((c) => c.method === 'PUT'), '顺序变更落盘服务端');
+  });
+});
+
+describe('rail customize switches presentation with the focused workspace', () => {
+  it('refetches and re-applies when the focused workspace changes', async () => {
+    const harness = buildRailDom(['genui', 'session-controls']);
+    const fetchStub = async (url, options) => {
+      const method = (options && options.method) || 'GET';
+      if (method === 'GET') {
+        const agentId = String(url).endsWith('agentId=coder') ? 'coder' : 'programming-helper';
+        const presentation = agentId === 'coder'
+          ? { genui: { visible: true, order: 1 } }
+          : { genui: { visible: false, order: 0 } };
+        return { ok: true, status: 200, json: async () => ({ prefs: { presentation, panelPrefs: {} } }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+    const ctx = createRailSandbox(harness, { fetch: fetchStub });
+    await settle();
+    // programming-helper：服务端配置 genui 隐藏
+    assert.equal(
+      ctx.run(`document.querySelector('.rail-button[data-panel="genui"]').classList.contains('rail-custom-hidden')`),
+      true,
+    );
+
+    // 切换到 coder：重拉后 genui 恢复可见
+    ctx.run('focusedAgentId = "coder"; window.applyRailConfig()');
+    await settle();
+    assert.equal(
+      ctx.run(`document.querySelector('.rail-button[data-panel="genui"]').classList.contains('rail-custom-hidden')`),
+      false,
     );
   });
 });

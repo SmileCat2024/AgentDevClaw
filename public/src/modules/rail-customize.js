@@ -21,7 +21,8 @@
 
   // ── 常量 ──────────────────────────────────────────────
 
-  var STORAGE_KEY = 'agentdev-rail-config';
+  var STORAGE_KEY = 'agentdev-rail-config';                 // 旧形态（迁移源，只读）
+  var MIGRATED_KEY_PREFIX = 'agentdev-rail-config-migrated:'; // 按空间的迁移标记
   var HIDDEN_CLASS = 'rail-custom-hidden';
   var MODAL_ID = 'rail-cust-overlay';
 
@@ -75,39 +76,143 @@
     'force-continuation': 'session-controls',
   };
 
-  function loadConfig() {
+  // ── 服务端持久化（ADR-0046 决策 3：呈现配置随工作空间走） ──
+  //
+  // 内存态是渲染唯一依据（applyConfig / 拖拽 / 弹窗全部同步读内存），
+  // 持久化异步收敛到服务端 sparse 形态（{panelId:{visible,order}}）：
+  //   - 初始化：GET 拉取 → 服务端无配置且浏览器有旧值时一次性迁移
+  //   - 写操作：内存先更（乐观）+ PUT 异步落盘
+  //   - localStorage 旧键保留不删（回滚安全），迁移标记后不再读
+
+  var remote = { agentId: null, config: null }; // config = 数组形态（沿用既有消费逻辑）
+
+  function currentUiAgentId() {
+    // 聚焦工作空间（app-core 顶层 let，模块作用域链可见）；无聚焦时用主空间
+    try {
+      if (typeof focusedAgentId === 'string' && focusedAgentId) return focusedAgentId;
+    } catch (e) { /* 未声明（加载顺序异常）时走 fallback */ }
+    return 'programming-helper';
+  }
+
+  /** 数组形态 → 服务端 sparse 形态（order = 数组下标，稳定相对序）。 */
+  function arrayToSparse(config) {
+    var sparse = {};
+    (config || []).forEach(function (entry, index) {
+      sparse[entry.id] = { visible: entry.visible !== false, order: index };
+    });
+    return sparse;
+  }
+
+  /** 服务端 sparse 形态 → 数组形态（order 升序；清单外条目剔除，缺失项由补齐逻辑垫默认）。 */
+  function sparseToArray(sparse, customizable) {
+    var entries = [];
+    Object.keys(sparse || {}).forEach(function (id) {
+      var item = sparse[id];
+      if (!item || typeof item !== 'object') return;
+      entries.push({ id: id, visible: item.visible !== false, order: typeof item.order === 'number' ? item.order : 99 });
+    });
+    entries.sort(function (a, b) { return a.order - b.order; });
+    var known = {};
+    customizable.forEach(function (id) { known[id] = true; });
+    var seen = {};
+    var valid = [];
+    entries.forEach(function (entry) {
+      if (!known[entry.id] || seen[entry.id]) return;
+      seen[entry.id] = true;
+      valid.push({ id: entry.id, visible: entry.visible });
+    });
+    customizable.forEach(function (id) {
+      if (!seen[id]) valid.push({ id: id, visible: true });
+    });
+    return valid;
+  }
+
+  /** 读旧 localStorage（迁移源；LEGACY_ID_MAP 映射 + 清单校验后返回数组形态）。 */
+  function readLegacyConfig() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return getDefaultConfig();
+      if (!raw) return null;
       var parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return getDefaultConfig();
-      parsed = parsed.map(function (item) {
-        if (item && LEGACY_ID_MAP[item.id]) {
-          return { id: LEGACY_ID_MAP[item.id], visible: item.visible !== false };
-        }
-        return item;
-      });
+      if (!Array.isArray(parsed) || parsed.length === 0) return null;
       var customizable = getCustomizableIds();
       var known = {};
       customizable.forEach(function (id) { known[id] = true; });
-      var valid = [];
+      var mapped = [];
       var seen = {};
       parsed.forEach(function (item) {
-        if (!item || !known[item.id] || seen[item.id]) return;
-        seen[item.id] = true;
-        valid.push({ id: item.id, visible: item.visible !== false });
+        if (!item || typeof item.id !== 'string') return;
+        var id = LEGACY_ID_MAP[item.id] || item.id;
+        if (!known[id] || seen[id]) return;
+        seen[id] = true;
+        mapped.push({ id: id, visible: item.visible !== false });
       });
-      customizable.forEach(function (id) {
-        if (!seen[id]) valid.push({ id: id, visible: true });
-      });
-      return valid;
+      return mapped.length > 0 ? mapped : null;
     } catch (e) {
-      return getDefaultConfig();
+      return null;
     }
   }
 
+  function fetchUiPrefs(agentId) {
+    return fetch('/api/feature-ui/ui-prefs?agentId=' + encodeURIComponent(agentId))
+      .then(function (res) { return res.ok ? res.json() : Promise.reject(new Error('HTTP ' + res.status)); })
+      .then(function (body) { return (body && body.prefs) || {}; });
+  }
+
+  function persistPresentation(agentId, config) {
+    return fetch('/api/feature-ui/ui-prefs', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: agentId, presentation: arrayToSparse(config) }),
+    }).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+    }).catch(function (err) {
+      // 落盘失败不回滚 UI（乐观态优先，下一次写操作整块重 PUT 自愈）
+      console.warn('[rail-customize] 呈现配置落盘失败（下次操作重试）：', err);
+    });
+  }
+
+  /** 拉取当前空间的呈现配置；服务端无配置且浏览器有旧值时执行一次性迁移。 */
+  function loadRemote(agentId) {
+    return fetchUiPrefs(agentId).then(function (prefs) {
+      var presentation = prefs && prefs.presentation && Object.keys(prefs.presentation).length > 0
+        ? prefs.presentation
+        : null;
+      if (!presentation) {
+        var markKey = MIGRATED_KEY_PREFIX + agentId;
+        var legacy = localStorage.getItem(markKey) ? null : readLegacyConfig();
+        if (legacy) {
+          localStorage.setItem(markKey, '1');
+          persistPresentation(agentId, legacy);
+          return legacy;
+        }
+        return getDefaultConfig();
+      }
+      return sparseToArray(presentation, getCustomizableIds());
+    });
+  }
+
+  /** 空间切换感知：聚焦身份变了则重拉并重放（异步，不阻塞本次 apply）。 */
+  function reloadIfAgentChanged() {
+    var agentId = currentUiAgentId();
+    if (remote.agentId === agentId) return;
+    remote.agentId = agentId;
+    loadRemote(agentId).then(function (config) {
+      remote.config = config;
+      applyConfig();
+    }).catch(function (err) {
+      console.warn('[rail-customize] 呈现配置拉取失败（沿用内存态）：', err);
+    });
+  }
+
+  function loadConfig() {
+    if (remote.config) return remote.config;
+    // 服务端配置未落定（初始化竞态）：默认配置先行，落定后 applyConfig 修正
+    return getDefaultConfig();
+  }
+
   function saveConfig(config) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(config)); } catch (e) { /* ignore */ }
+    remote.config = config;
+    persistPresentation(currentUiAgentId(), config);
   }
 
   function getPanelIconHTML(panelId) {
@@ -178,6 +283,8 @@
     var rail = document.getElementById('right-rail');
     if (!rail) return;
     ensureButton();
+    // 空间切换感知：身份变化时后台重拉（异步），本次仍按内存态应用
+    reloadIfAgentChanged();
 
     var config = loadConfig();
     var anchor = findAnchor(rail);
@@ -700,7 +807,7 @@
   // ── 初始化 ────────────────────────────────────────────
 
   ensureButton();
-  applyConfig();
+  applyConfig();       // 同步先行（默认配置），服务端配置落定后修正
   bindRailDragGesture();
   updateLang();
 
@@ -720,5 +827,8 @@
     label: label,
     description: desc,
     commitRailOrder: commitRailOrder,
+    // 形态互转纯函数（服务端 sparse ↔ 前端数组；测试与诊断用）
+    arrayToSparse: arrayToSparse,
+    sparseToArray: sparseToArray,
   };
 })();

@@ -465,3 +465,62 @@ describe('ClawPluginManifest 解析', () => {
     assert.equal(ctx.window.resolveAgentPlugin(undefined), null);
   });
 });
+
+/**
+ * 面板偏好（ADR-0046 决策 3）：host.panelPrefs(panelId) 是面板作者的
+ * 按 panelId 命名空间 KV，随工作空间持久化。get 走服务端读取，
+ * set 合并内存态后整块 PUT；落盘失败保留乐观态不回滚。
+ */
+describe('ClawHost panelPrefs', () => {
+  function stubPanelPrefsFetch(serverPrefs) {
+    const calls = [];
+    const fetchStub = async (url, options) => {
+      const method = (options && options.method) || 'GET';
+      calls.push({ url: String(url), method, body: options?.body ? JSON.parse(options.body) : null });
+      if (method === 'GET') {
+        return { ok: true, status: 200, json: async () => ({ prefs: { presentation: {}, panelPrefs: serverPrefs } }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+    return { fetchStub, calls };
+  }
+
+  it('get 从服务端读取面板命名空间内的键', async () => {
+    const { fetchStub } = stubPanelPrefsFetch({ 'agentero-library': { pageSize: 30 } });
+    const host = makeHost({ fetch: fetchStub });
+    const prefs = host.panelPrefs('agentero-library');
+    assert.equal(await prefs.get('pageSize'), 30);
+    assert.equal(await prefs.get('unknown-key'), undefined);
+  });
+
+  it('set 合并已有键并 PUT 到 panel-prefs 端点', async () => {
+    const { fetchStub, calls } = stubPanelPrefsFetch({ 'agentero-library': { pageSize: 30 } });
+    const host = makeHost({ fetch: fetchStub });
+    const prefs = host.panelPrefs('agentero-library');
+    await prefs.set('viewMode', 'compact');
+
+    const put = calls.find((c) => c.method === 'PUT');
+    assert.equal(put.url, '/api/feature-ui/panel-prefs');
+    assert.deepEqual(put.body, {
+      agentId: 'programming-helper',
+      panelId: 'agentero-library',
+      prefs: { pageSize: 30, viewMode: 'compact' },
+    });
+    // 内存缓存生效：后续 get 不再发起请求
+    const getCallsBefore = calls.filter((c) => c.method === 'GET').length;
+    assert.equal(await prefs.get('viewMode'), 'compact');
+    assert.equal(calls.filter((c) => c.method === 'GET').length, getCallsBefore);
+  });
+
+  it('服务端不可达时 get 返回空对象语义，不抛错', async () => {
+    const host = makeHost(); // 默认 fetch stub：ok:false
+    const prefs = host.panelPrefs('agentero-library');
+    assert.equal(await prefs.get('pageSize'), undefined);
+  });
+
+  it('空 panelId 显式抛错', () => {
+    const host = makeHost();
+    assert.throws(() => host.panelPrefs(''), /panelId/);
+    assert.throws(() => host.panelPrefs(null), /panelId/);
+  });
+});

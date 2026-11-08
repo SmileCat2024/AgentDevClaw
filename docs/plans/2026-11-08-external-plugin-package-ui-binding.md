@@ -43,7 +43,7 @@
 
 ## P4 收尾
 
-状态（2026-11-08 第一批落地后）：可见性三级体系主体、全局装配（服务面 + 插件管理器入口）、数据面自动重建、资产懒解出自愈已完成并验证；呈现配置、禁用三态、builtin 升级按 ADR-0046 落地顺序第二/三批推进。
+状态（2026-11-08 第二批呈现配置落地后）：可见性三级体系主体、全局装配（服务面 + 插件管理器入口）、数据面自动重建、资产懒解出自愈已完成并验证；呈现配置服务端持久化 + localStorage 一次性迁移 + panelPrefs API 面已完成并验证（agentero 面板侧消费示例随其插件项目自身迭代接入，源码已出仓）；禁用三态、builtin 升级按 ADR-0046 落地顺序第三批推进。
 
 - studio 契约同步：`feature-package-metadata.md` 升 v3、`studio_create_feature` / 快照校验支持 ui/server 声明。（未动，与"Studio 数据源统一 catalog"一并挂起，等第一个真实需求）
 - 装配身份泛化：`install-service.js` 的 `IDENTITY_SCOPES` 从硬编码 main/coder 改为按工作空间注册表派生（任意有 runtime 的工作空间可装配）。（**服务面已完成**：注册表机制 + 运行时 `registerIdentityScopes` + global 身份 install/rebuild/readiness，消费方现读注册表；**商店面剩余**：`server/routes/feature-store.js` 的 `STORE_SCOPES` 是模块加载时快照、`AGENT_MODULE_SOURCES` 写死 main/coder，后注册身份能装配但商店 overview 不显示其装配状态）

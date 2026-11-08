@@ -26,6 +26,9 @@
   const primitives = new Map(); // type -> renderer（宿主，不可覆盖）
   const pluginBlocks = new Map(); // type -> { renderer, owner }
   const refreshers = new Map(); // type -> refresh fn（插件声明，随卸载移除）
+  // 面板偏好内存缓存：agentId -> Map(panelId -> prefs 对象)；
+  // 同页面会话内 get 免二次请求，set 乐观更新 + 整块 PUT（幂等自愈）
+  const panelPrefsCacheByAgent = new Map();
 
   function registerPrimitive(type, renderer) {
     const key = String(type || '').trim();
@@ -537,6 +540,55 @@
       has: (id) => panels.has(String(id)),
     },
     slots: { mount: mountSlot, clear: clearSlot },
+    // 面板偏好（ADR-0046 决策 3）：按 panelId 命名空间的服务端 KV，随工作空间走。
+    // 面板作者经 host.panelPrefs(panelId) 拿 { get, set }；存储与多空间隔离由宿主
+    // 负责（api：/api/feature-ui/panel-prefs，与呈现配置同一份工作空间文件）。
+    panelPrefs(panelId) {
+      const id = String(panelId || '').trim();
+      if (!id) throw new Error('panelPrefs(panelId): panelId 不能为空');
+      // 聚焦工作空间（顶层 let 裸读，与 workspace.focusedRuntimeId 同模式）；
+      // 无聚焦时落主空间。读发生在面板交互时（非渲染关键路径），暂态空值可接受。
+      const prefsAgentId = () => (String(focusedAgentId || '').trim() || 'programming-helper');
+      // 面板级内存缓存：同页面会话内 get 免二次请求；set 合并整块 PUT（幂等）
+      const cache = () => {
+        panelPrefsCacheByAgent.set(prefsAgentId(), panelPrefsCacheByAgent.get(prefsAgentId()) || new Map());
+        return panelPrefsCacheByAgent.get(prefsAgentId());
+      };
+      const ensureLoaded = () => {
+        const agentCache = cache();
+        if (agentCache.has(id)) return Promise.resolve(agentCache.get(id));
+        return fetch('/api/feature-ui/ui-prefs?agentId=' + encodeURIComponent(prefsAgentId()))
+          .then((res) => (res.ok ? res.json() : Promise.reject(new Error('HTTP ' + res.status))))
+          .then((body) => {
+            const prefs = (body?.prefs?.panelPrefs && body.prefs.panelPrefs[id]) || {};
+            agentCache.set(id, prefs);
+            return prefs;
+          })
+          .catch(() => { agentCache.set(id, {}); return {}; });
+      };
+      return {
+        get(key) {
+          return ensureLoaded().then((prefs) => prefs[key]);
+        },
+        set(key, value) {
+          const agentId = prefsAgentId();
+          return ensureLoaded().then((prefs) => {
+            const next = { ...prefs, [String(key)]: value };
+            cache().set(id, next);
+            return fetch('/api/feature-ui/panel-prefs', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ agentId, panelId: id, prefs: next }),
+            }).then((res) => {
+              if (!res.ok) throw new Error('HTTP ' + res.status);
+            }).catch((err) => {
+              // 落盘失败保留乐观态，下次 set 整块重 PUT 自愈
+              console.warn('[claw-host] panelPrefs.set 落盘失败（下次写入重试）：', err);
+            });
+          });
+        },
+      };
+    },
     // 工作空间动作：插件不该直接引用宿主全局函数（runWorkspaceAction 等），
     // 统一经此入口调用。宿主实现变更时只改这里，插件不受影响。
     workspace: {

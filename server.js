@@ -120,6 +120,7 @@ import { setupToolStateRoutes } from './server/routes/tool-state.js';
 import { setupFeatureCatalogRoutes } from './server/routes/feature-catalog.js';
 import { setupFeatureStoreRoutes } from './server/routes/feature-store.js';
 import { setupFeatureAssetRoutes } from './server/routes/feature-assets.js';
+import { setupFeatureUiPrefsRoutes } from './server/routes/feature-ui-prefs.js';
 import { setupImageRoutes } from './server/routes/images.js';
 import { getUISurfaceStore, setupUISurfaceRoutes } from './server/routes/ui-surfaces.js';
 import { projectLayerPath } from './server/shared/feature-config-layers.js';
@@ -706,6 +707,7 @@ setupToolStateRoutes(app);
 setupFeatureCatalogRoutes(app);
 setupFeatureStoreRoutes(app, express);
 setupFeatureAssetRoutes(app);
+setupFeatureUiPrefsRoutes(app);
 setupFeatureRepositoryRoutes(app, express);
 // 插件数据面挂载（ADR-0045 P2）：server 面随装配事实挂载到
 // /protoclaw/plugin/<prefix>/*；导入/装配/禁用变化经 plugin-server-bus
