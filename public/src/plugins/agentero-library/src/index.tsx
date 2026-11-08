@@ -16,7 +16,7 @@
  *     信封与 CLI --json 同构，papers.ts 的宽容解析直接吃）；写操作
  *     （import/export/discover/tags/delete/download）按对接决策不开放，
  *     reject 带 message 经组件 catch → Toast 提示
- *   - openPaper：无 PDF 阅读插件，返回 false（组件走 pdfDisabled 文案）
+ *   - openPaper：详情在 panel 内打开（顶栏可切全屏 Portal 阅读 PDF）
  *   - CSS：__clawPanelCss（构建器 banner 注入，tailwind scope .agentero-library）
  *     在 mountBody 注入、unmountBody 移除（插件协议生命周期自治）
  */
@@ -49,6 +49,8 @@ const zh = {
   empty: '没有文献',
   noMatches: '没有匹配的文献',
   backToLibrary: '返回文献列表',
+  openFullscreen: '全屏阅读',
+  exitFullscreen: '退出全屏',
   pdfUnavailable: '这篇论文没有可用的 PDF 文件',
   openPdfNewTab: '新标签页打开 PDF',
   paperAbstract: '摘要',
@@ -89,6 +91,8 @@ const en = {
   empty: 'No papers',
   noMatches: 'No matching papers',
   backToLibrary: 'Back to library',
+  openFullscreen: 'Fullscreen reading',
+  exitFullscreen: 'Exit fullscreen',
   pdfUnavailable: 'No PDF is available for this paper',
   openPdfNewTab: 'Open PDF in new tab',
   paperAbstract: 'Abstract',
