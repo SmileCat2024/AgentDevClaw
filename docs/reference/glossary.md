@@ -76,6 +76,10 @@
   _Avoid_: 把框架修复只留在 Claw 侧 `node_modules`（会被安装冲掉，不回流源码）；开发流程手工 pack / 拷贝 tgz。
 - **Capability** — feature 经 `getCapabilities()` 声明；两类命令：`invoke`（表单 + 执行）与 `prompt`（挂 pill，随消息以 `capabilityActivations` 流动）。
   _Avoid_: 期待 CapabilityRegistry 共享状态或提供 bind / reactive / watch-state——负面清单，永不提供。
+- **插件（plugin package）** — 以 tgz 分发的扩展包（ADR-0045），manifest 声明三面：feature 面（runtime 工具）、ui 面（面板）、server 面（数据路由）；服务端实现域 `server/feature-runtime/`。UI 用语统一"插件"（插件管理器 / 全局装配）；代码域 feature 一词继续指 agent 装配的能力单元。
+  _Avoid_: 把"插件"与"feature"当同义词——生态包 / 本地 feature 是 feature 的两类源码来源，插件是包化分发形态；改插件实现出仓或走用户仓库 tgz，不进 `local-features/`。
+- **导入 vs 装配** — 插件生效的两级动作：导入（上传 tgz 入插件仓库，解析三面内容，不激活任何东西）；装配（`$mount` 声明写入作用域层，层级决定可见性——global 层装配处处可见，agent 层装配限该工作空间，ADR-0046）。
+  _Avoid_: 期待导入即生效；用 manifest scope 裁决可见性——scope 已降为装配建议（ADR-0045 决策 5 修订）。
 
 ## 渲染与前端状态
 

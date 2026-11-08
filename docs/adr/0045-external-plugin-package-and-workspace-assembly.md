@@ -51,6 +51,8 @@ package/
 
 scope 语义相应收敛：`assembly`（默认）= 装配后默认只在该工作空间视图出现；`global` = 装配后默认全局出现（agentero 场景：vault 与工作空间无关）。两者都可被工作空间呈现配置覆盖。
 
+> **修订（ADR-0046，2026-11-08）**：scope 进一步降格为纯装配建议，不参与可见性裁决。可见性只由装配层级决定——全局级（global 层）装配的面板处处可见，工作空间级装配的只在装配它的视图可见；未装配一律不下发。上文"`global` = 装配后默认全局出现"按此读作"建议装配到全局层级"。实现见 `plugin-ui.js` 的 `composePanelDeclarations`（装配事实 × 版本钉精确合成，scope 仅作归档字段保留）。
+
 ### 6. 面板注册与可见性链路
 
 rail 按钮是三层叠加的结果，链路四步：manifest 素材声明 → server 按"已装配 + 未禁用"合成下发 → 前端 feature-ui-registry 转为 `ClawHost.panels.declare()` stub（rail 按 order 插入按钮，此时未加载实现代码）→ 用户打开时 `ensurePlugin` 经资产 URL 装载实现模块接管渲染（容器型面板 mountBody 通道，ADR-0044 机制原样复用）。可见性 = 插件 scope（作者建议）× 装配事实（哪个工作空间挂了）× 工作空间呈现配置（显隐排序）。卸载/禁用 → stub 移除 → 打开中的面板按 owner 关闭。`panel-plugins.js` 与 `plugin-manifest.js` 的存量条目随声明下发迁移后删除。

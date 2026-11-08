@@ -322,7 +322,7 @@ function _phRenderMountsBody(host) {
     : '';
 
   const addButton = '<button type="button" class="ph-mount-add" style="margin-left:auto;" data-action="phSettings.openFeatureStore" data-identity="' + escapeHtml(_phMountData.identityKey) + '">'
-    + escapeHtml(isZh ? '+ 添加 Feature' : '+ Add Feature') + '</button>';
+    + escapeHtml(isZh ? '+ 添加插件' : '+ Add Plugins') + '</button>';
 
   const buildCard = function(f) {
     const e = f._entry;
@@ -384,10 +384,10 @@ function _phRenderMountsBody(host) {
       + '<path d="M12 8v8"></path>'
       + '<path d="M8 12h8"></path>'
       + '</svg></div>'
-      + '<div class="ph-mount-empty-title">' + escapeHtml(t('feature_filter_empty_installed')) + '</div>'
+      + '<div class="ph-mount-empty-title">' + escapeHtml(t('plugin_filter_empty_installed')) + '</div>'
       + '<div class="ph-mount-empty-desc">' + escapeHtml(isZh
-        ? '从 Feature 商店为该身份装配扩展，对新会话生效。'
-        : 'Install extensions for this identity from the feature store; takes effect on new sessions.')
+        ? '从插件商店为该身份装配扩展，对新会话生效。'
+        : 'Install extensions for this identity from the plugin store; takes effect on new sessions.')
       + '</div>'
       + '</div>';
   }

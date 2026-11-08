@@ -228,7 +228,7 @@ function createFeatureConfigEditor(options = {}) {
     const storeIdentity = scopeId === 'agent' ? (scopeAgentId === 'coder' ? 'coder' : 'main') : null;
     if (storeIdentity) {
       navEl.insertAdjacentHTML('beforeend', `
-        <div class="ph-settings-tab" data-fce-action="open-store" title="${_fceT('从 Feature 仓库添加插件', 'Add plugins from the feature repository')}">
+        <div class="ph-settings-tab" data-fce-action="open-store" title="${_fceT('从插件仓库添加', 'Add plugins from the plugin repository')}">
           <span class="ph-settings-tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 12h8"></path><path d="M12 8v8"></path></svg></span>
           <span class="ph-settings-tab-label">${_fceT('添加 Feature', 'Add Feature')}</span>
         </div>

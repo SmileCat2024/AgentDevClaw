@@ -643,7 +643,7 @@ function getCompatibilityTagLabel(value) {
 }
 
 function renderFeatureRepositoryBlock(agent, block) {
-  const title = localizeWorkspaceValue(block.title, getRepoLocaleText('Feature 仓库', 'Feature Repository'));
+  const title = localizeWorkspaceValue(block.title, getRepoLocaleText('插件仓库', 'Plugin Repository'));
   const desc = localizeWorkspaceValue(block.description, '');
   const repository = getFeatureRepositoryData(agent, block);
   const packages = Array.isArray(repository?.packages) ? repository.packages : [];

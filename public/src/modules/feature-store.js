@@ -433,9 +433,9 @@ function _fsRender() {
     '<div style="display:flex;align-items:center;gap:4px;">',
     '<button class="feature-detail-close" type="button" title="' + _fsT('返回', 'Back') + '" data-action="featureStore.close" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>',
     '<div>',
-      '<div class="feature-detail-title">' + escapeHtml(_fsT('添加 Feature', 'Add Feature')) + '</div>',
+      '<div class="feature-detail-title">' + escapeHtml(_fsT('添加插件', 'Add Plugins')) + '</div>',
       '<div class="feature-detail-subtitle">' + escapeHtml(_fsT(
-        '从 Feature 仓库为 ' + _fsT(scope.labelZh, scope.labelEn) + ' 安装插件（首次需联网），对新会话生效',
+        '从插件仓库为 ' + _fsT(scope.labelZh, scope.labelEn) + ' 安装（首次需联网），对新会话生效',
         'Install plugins for ' + _fsT(scope.labelZh, scope.labelEn) + ' from the feature repository (first install needs internet); takes effect on new sessions'
       )) + '</div>',
     '</div>',

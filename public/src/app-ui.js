@@ -657,7 +657,7 @@ function renderFWFeatures(agent, block, formId, draft) {
   html += '<div class="fw-feat-head" data-fw-feature-count data-total="' + escapeHtml(String(sourcePackages.length)) + '" data-mounted="' + escapeHtml(String(selected.length)) + '">' + escapeHtml((currentLanguage === 'zh' ? '当前显示 ' : 'Showing ') + visiblePackages.length + ' / ' + sourcePackages.length + (currentLanguage === 'zh' ? `，已挂载 ${selected.length}` : `, mounted ${selected.length}`)) + '</div>';
   html += '<div class="fw-feat-list">';
   if (!packages.length) {
-    html += '<div style="padding:20px;color:var(--text-secondary);font-size:13px;">' + escapeHtml(currentLanguage === 'zh' ? 'Feature 仓库加载中...' : 'Loading...') + '</div>';
+    html += '<div style="padding:20px;color:var(--text-secondary);font-size:13px;">' + escapeHtml(currentLanguage === 'zh' ? '插件仓库加载中...' : 'Loading plugins...') + '</div>';
   } else if (!sourcePackages.length) {
     html += '<div style="padding:20px;color:var(--text-secondary);font-size:13px;">' + escapeHtml(currentLanguage === 'zh' ? '没有匹配的 Feature。' : 'No matching Features.') + '</div>';
   } else {
@@ -813,7 +813,7 @@ function renderAssemblyFeatureCards(featuredPackages, selectedFeatures, formId, 
   if (featuredPackages.length === 0) {
     return '<div class="assembly-empty-note">' + escapeHtml(searchQuery
       ? getRepoLocaleText('没有匹配当前搜索的 Feature。', 'No features matched the current search.')
-      : getRepoLocaleText('Feature 仓库暂时为空。', 'The feature repository is currently empty.')) + '</div>';
+      : getRepoLocaleText('插件仓库暂时为空。', 'The plugin repository is currently empty.')) + '</div>';
   }
 
   return featuredPackages.map((item) => {
