@@ -11,7 +11,8 @@
 5. [docs/reference/dev-context-index.md](docs/reference/dev-context-index.md) — AgentDev 框架与 Claw 的跨仓库连接关系速查
 6. 涉及前端 UI 渲染、workspace 切换、数据加载时序 → 必读 [docs/reference/frontend-rendering-patterns.md](docs/reference/frontend-rendering-patterns.md)
 7. 修改前端样式、新增 UI 控件 → 必读 [docs/reference/design-system.md](docs/reference/design-system.md)：视觉配方清单与节奏表，先复用既有配方，禁止自造同类控件
-8. 架构决策记录（ADR）：改动相关领域前先读对应篇，分组索引与状态见 [docs/adr/README.md](docs/adr/README.md)。已有决策覆盖的领域包括但不限于：会话连续性与线程（trim / summary / 接续、导航、崩溃恢复、轮次挂起、IM 渠道线程化）、会话与消息存储（SQLite 索引、快照、工具调用历史）、归档与只读浏览（启动与浏览分离）、运行时与执行环境（本地 / 容器 / 远程统一、runtime 注册与停止、模型热切换与调用超时、凭证恢复）、Feature 体系（manifest、装配解析、capability 控制面、面板通信、模型选择、资源读取）、前端呈现（侧栏投影、渲染管线、home 门户小组件契约）、远程与外部协议（ACP、远程连接、ProtoClaw 读写）、工程治理（包结构与导出面、数据分区、线程配额、通知投递、后台工作与领域 Shell）。未列出的领域也可能已有决策，动手前查索引确认，避免与既定决策冲突。
+8. 启动测试或诊断用的隔离 Claw 服务实例 → 必读项目 Skill [claw-test-isolation](.agentdev/skills/claw-test-isolation/SKILL.md)：独立数据目录、HTTP 端口和 Viewer UDS / 命名管道；检查继承环境，避免占用正式服务资源。
+9. 架构决策记录（ADR）：改动相关领域前先读对应篇，分组索引与状态见 [docs/adr/README.md](docs/adr/README.md)。已有决策覆盖的领域包括但不限于：会话连续性与线程（trim / summary / 接续、导航、崩溃恢复、轮次挂起、IM 渠道线程化）、会话与消息存储（SQLite 索引、快照、工具调用历史）、归档与只读浏览（启动与浏览分离）、运行时与执行环境（本地 / 容器 / 远程统一、runtime 注册与停止、模型热切换与调用超时、凭证恢复）、Feature 体系（manifest、装配解析、capability 控制面、面板通信、模型选择、资源读取）、前端呈现（侧栏投影、渲染管线、home 门户小组件契约）、远程与外部协议（ACP、远程连接、ProtoClaw 读写）、工程治理（包结构与导出面、数据分区、线程配额、通知投递、后台工作与领域 Shell）。未列出的领域也可能已有决策，动手前查索引确认，避免与既定决策冲突。
 
 实现层真实入口：
 

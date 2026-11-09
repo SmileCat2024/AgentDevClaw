@@ -3,6 +3,13 @@ node_modules/
 
 # Session data (user data, should not be in repo)
 /.agentdev/
+!/.agentdev/
+/.agentdev/*
+!/.agentdev/skills/
+/.agentdev/skills/*
+!/.agentdev/skills/claw-test-isolation/
+/.agentdev/skills/claw-test-isolation/*
+!/.agentdev/skills/claw-test-isolation/SKILL.md
 .playwright-mcp/
 .playwright-cli/
 *docs/
