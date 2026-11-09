@@ -125,6 +125,7 @@ describe('model-preset-resolver', () => {
           { name: 'fixture-openai-default-surface', providerName: 'Fixture OpenAI', protocol: 'openai', model: 'fixture-model-b2' },
           { name: 'fixture-thinking', providerName: 'Fixture Anthropic', protocol: 'anthropic', model: 'fixture-model-t', thinkingEffort: 'medium' },
           { name: 'fixture-oauth', providerName: 'Fixture OAuth', protocol: 'openai', model: 'fixture-model-o' },
+          { name: 'fixture-oauth-legacy-codex', providerName: 'Fixture OAuth', authType: 'oauth-codex', protocol: 'openai', model: 'fixture-model-legacy-codex' },
           { name: 'fixture-codex-catalog', providerName: 'Fixture OAuth', catalogProvider: 'codex', protocol: 'openai', model: 'fixture-model-codex', providerOptions: { service_tier: 'priority', prompt_cache_retention: '24h' } },
           { name: 'fixture-orphan', providerName: 'No Such Provider', protocol: 'anthropic', model: 'fixture-model-x' },
           { name: 'fixture-incomplete', providerName: 'Fixture Anthropic', protocol: 'anthropic' },
@@ -171,12 +172,29 @@ describe('model-preset-resolver', () => {
       it('forces oauth-codex providers onto the responses transport', () => {
         const result = resolveModelPresetLLM('fixture-oauth', undefined, {
           configPath,
+          resolveActiveProvider: () => null,
           resolveAccessToken: () => 'fixture-access-token',
         });
         assert.ok(result);
         assert.equal(result.authType, 'oauth-codex');
         assert.equal(result.apiSurface, 'responses');
         assert.equal(result.llm.constructor.name, 'OpenAIResponsesLLM');
+      });
+
+      it('resolves a legacy Codex OAuth preset with the active account before its provider slot', () => {
+        const seen = [];
+        const result = resolveModelPresetLLM('fixture-oauth-legacy-codex', undefined, {
+          configPath,
+          resolveActiveProvider: () => 'codex-account-1',
+          resolveAccessToken: (providerName) => {
+            seen.push(providerName);
+            return providerName === 'codex-account-1' ? 'active-account-token' : 'legacy-provider-token';
+          },
+        });
+        assert.ok(result);
+        assert.deepEqual(seen, ['codex-account-1']);
+        assert.equal(result.providerName, 'codex-account-1');
+        assert.equal(result.apiSurface, 'responses');
       });
 
       it('uses the catalog preset provider token before the shared Codex connection token', () => {

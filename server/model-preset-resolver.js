@@ -109,6 +109,9 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
 
     // OAuth provider: resolve access_token from token store
     const isOAuth = isCatalogProvider ? catalogProvider === 'codex' : provider.authType === 'oauth-codex';
+    // 存量 Codex OAuth preset 没有 catalogProvider 标记，但仍应使用账号簿当前账号，
+    // 否则它会一直绑定 providerName 对应的旧 token 槽位，与 Codex 目录预设行为分叉。
+    const usesCodexAccountBook = catalogProvider === 'codex' || (!isCatalogProvider && isOAuth);
     let apiKey;
     let tokenProviderName = '';
     if (isOAuth) {
@@ -118,10 +121,10 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       // 回退到第一个有 token 的槽位）优先于一切静态引用；无账号簿数据时返回
       // null，查找链退回存量顺序（preset.providerName → 'OpenAI Auth' → 任意
       // oauth provider），未启用多账号的环境行为不变。
-      const activeProvider = catalogProvider === 'codex'
+      const activeProvider = usesCodexAccountBook
         ? (options.resolveActiveProvider ? options.resolveActiveProvider() : resolveActiveCodexProviderName(connectionsPath))
         : null;
-      const tokenProviderNames = isCatalogProvider
+      const tokenProviderNames = usesCodexAccountBook
         ? [...new Set([
           activeProvider,
           preset.providerName,
@@ -182,9 +185,9 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
       thinkingEffort: effectiveThinkingEffort || null,
       // 显示与上游对账用的 providerName：codex 透传实际命中的 token 槽位名
       //（多账号下即当前账号），OpenCode 维持目录归类名，非 catalog 用 provider.name。
-      providerName: (isCatalogProvider
-        ? (catalogProvider === 'codex' ? (tokenProviderName || preset.providerName || 'OpenAI Auth') : 'OpenCode')
-        : provider.name) || preset.providerName || '',
+      providerName: (usesCodexAccountBook
+        ? (tokenProviderName || preset.providerName || 'OpenAI Auth')
+        : (isCatalogProvider ? 'OpenCode' : provider.name)) || preset.providerName || '',
       provider: protocol,
       protocol,
       authType: isOAuth ? 'oauth-codex' : '',
