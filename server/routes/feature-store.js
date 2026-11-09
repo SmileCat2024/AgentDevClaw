@@ -31,6 +31,9 @@ import {
   readGlobalDeclaredMounts,
 } from '../feature-runtime/install-service.js';
 import { notifyPluginServerDirty } from '../shared/plugin-server-bus.js';
+import { createClawLogger } from '../shared/claw-logger.js';
+
+const log = createClawLogger('feature-store');
 
 // 与 install-service 共享身份定义（agentId/layerId/sessionType 单一权威）
 const STORE_SCOPES = Object.entries(IDENTITY_SCOPES).map(([identity, scope]) => ({
@@ -146,7 +149,10 @@ export async function collectBaseFeatures(identity) {
   const AgentClass = mod.default;
   // BasicAgent 构造要求 llm 必传；总览只读静态装配的 features Map，
   // 不跑会话，占位模型名即可。
-  const agent = new AgentClass({ llm: { modelName: 'overview' } });
+  const agent = new AgentClass({
+    llm: { modelName: 'overview' },
+    runtime: { mode: 'overview', agentId: identity, sessionId: '__feature-store-overview__' },
+  });
   const list = [];
   for (const [name, instance] of agent.features) {
     list.push({
@@ -333,7 +339,14 @@ export function setupFeatureStoreRoutes(app, express) {
         for (const scope of STORE_SCOPES) {
           base[scope.identity] = await collectBaseFeatures(scope.identity);
         }
-      } catch { /* agent.js 加载失败时货架与底座置空，不阻断仓库包与已装配数据 */ }
+      } catch (error) {
+        // agent.js 加载/构造失败时货架与底座置空，不阻断仓库包与已装配数据。
+        // 记录错误：静默置空会让前端"默认内置"计数无声归零，无从排查。
+        log.error('overview: builtin/base 收集失败', {
+          message: error?.message,
+          stack: error?.stack,
+        });
+      }
       const mounts = {};
       const envReady = {};
       for (const scope of STORE_SCOPES) {

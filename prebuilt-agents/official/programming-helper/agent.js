@@ -289,7 +289,8 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // coder 领域 shell（ticket 034）：线程调度收编为受管线约束的 feature 工具。
     // 仅 main 身份挂载；CoderAgent 不挂（不自派工单，避免递归调度）。
     // runtimeIdentity 模式同 ClawDispatchFeature（serverOrigin 三级解析）。
-    this.use(new CapabilityShellFeature({ ...runtimeIdentity, panel: true }));
+    // 商店概览仅实例化静态装配清单，不应声明运行时 feature-comms 面板。
+    this.use(new CapabilityShellFeature({ ...runtimeIdentity, panel: runtime.mode !== 'overview' }));
 
     // playwright 领域 shell（ticket 036）已改为官方可选插件：不再静态装配，
     // 经 $mount kind:'builtin' 声明后由宿主钩子按 builtinOptionalFeatures
