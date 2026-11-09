@@ -3,7 +3,7 @@ const TOOL_CALL_PREAMBLE = `你必须调用 record_compaction_context 工具，�
 参数说明：
 - summary：完整摘要文本，按下方摘要结构输出
 - important_files：恢复工作所需的文件路径列表
-- important_skills：实际使用invoke_skill工具激活的技能名称列表
+- important_skills：实际通过 invoke_skill 或斜杠命令激活的技能名称列表
 
 不要调用其他工具。`;
 
@@ -37,34 +37,9 @@ const BASE_SUMMARY_PROMPT = `你的任务是为当前对话创建一份详细摘
 
 摘要控制在 3000 个词以内，优先使用要点而非段落。`;
 
-export function scanFilesAndSkills(rawMessages) {
-  const files = new Set();
-  const skills = new Set();
-  const fileRanges = {};
-  for (const message of rawMessages) {
-    if (message.role !== 'assistant' || !Array.isArray(message.toolCalls)) continue;
-    for (const tc of message.toolCalls) {
-      const name = typeof tc?.name === 'string' ? tc.name : '';
-      const args = tc?.arguments && typeof tc.arguments === 'object' ? tc.arguments : {};
-      if ((name === 'read' || name === 'write' || name === 'edit') && typeof args.filePath === 'string') {
-        files.add(args.filePath);
-      }
-      if (name === 'read' && typeof args.filePath === 'string') {
-        const offset = typeof args.offset === 'number' ? args.offset : (typeof args.line === 'number' ? args.line : 0);
-        const limit = typeof args.limit === 'number' ? args.limit : 0;
-        if (offset > 0 || limit > 0) {
-          const start = Math.max(1, offset || 1);
-          const end = limit > 0 ? start + limit - 1 : start;
-          fileRanges[args.filePath] = `${start}-${end}`;
-        }
-      }
-      if (name === 'invoke_skill' && typeof args.skill === 'string') {
-        skills.add(args.skill);
-      }
-    }
-  }
-  return { files: [...files], skills: [...skills], fileRanges };
-}
+// Full and partial summaries share the framework scanner and its structured
+// skill-activation contract; do not maintain a second skill detector here.
+export { scanFilesAndSkills } from '@agentdevjs/core';
 
 const PARTIAL_COMPACT_PROMPT = `你的任务是为当前对话的最近部分创建一份详细摘要——即从用户选定的某条消息开始、到对话结束之间的内容。更早的消息已被保留，不需要被摘要。
 

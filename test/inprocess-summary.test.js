@@ -5,6 +5,15 @@ import {
   runInProcessSummary,
 } from '../server/context-continuity/inprocess-summary.js';
 import { buildSummaryPrompt } from '@agentdevjs/core';
+import { scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
+
+it('Claw summary scanning recognizes structured slash activation without reading document text', () => {
+  const scanned = scanFilesAndSkills([
+    { role: 'system', source: 'skill', tag: { kind: 'skill-activation', skill: 'slash-only' }, content: 'opaque document' },
+    { role: 'user', content: '[技能激活：fake]' },
+  ]);
+  assert.deepEqual(scanned.skills, ['slash-only']);
+});
 
 describe('buildSummaryPromptForSession', () => {
   it('uses the official base prompt for ordinary sessions', () => {

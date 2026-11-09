@@ -51,6 +51,16 @@ function runWith(snapshot, extra = {}) {
 }
 
 describe('runTrimTranscriptWithSummary', () => {
+  it('preserves slash skill documents and forwards their names for summary reinjection', async () => {
+    const snapshot = buildSnapshot();
+    snapshot.runtime.context.messages.splice(1, 0, {
+      role: 'system', source: 'skill', tag: { kind: 'skill-activation', skill: 'slash-only' }, content: 'SLASH-DOC',
+    });
+    const seed = await runWith(snapshot, { policy: { keepRecentSkillInvokes: 1 } });
+    assert.deepEqual(seed.importantSkills, ['slash-only']);
+    assert.deepEqual(seed.meta.appendedSummary.importantSkills, ['slash-only']);
+    assert.ok(seed.seedMessages.some(m => m.content === 'SLASH-DOC' && m.tag.skill === 'slash-only'));
+  });
   it('produces a SuccessorSeed with framework combination semantics', async () => {
     const seed = await runWith(buildSnapshot());
 
