@@ -1,12 +1,11 @@
 /**
- * dir-config-dialog.js — Feature 配置弹窗（项目层 / 默认项目层 / 全局层）
+ * dir-config-dialog.js — 编程小助手的项目层与默认项目层 Feature 配置弹窗。
  *
- * 三个入口，均为弹窗形式，内嵌共享配置编辑器（feature-config-editor.js）：
+ * 两个入口均为弹窗形式，内嵌共享配置编辑器（feature-config-editor.js）：
  *   - 项目层（project:<prj_id>）：归属菜单项目行的设置齿轮；
  *   - 默认项目层（dir:<path>）：归属菜单默认项目行的设置齿轮——目录桶的
  *     会话配置层，用户面统一呈现为「项目设置」（目录是内部 scope 概念，
- *     不再作为设置命名出现在界面上）；
- *   - 全局层：左下角设置 flyout 菜单"全局 Feature 设置"（scopeId='global'）。
+ *     不再作为设置命名出现在界面上）。
  *
  * 配置队列位置：出厂默认 → 全局层 → agent 层 → 目录层（默认项目层）。
  *
@@ -16,14 +15,13 @@
  *   - createFeatureConfigEditor (feature-setup-core / editor)
  *
  * 入口：归属菜单行内齿轮（session-list-render.js 渲染按钮 + ph-project-actions.js
- * 捕获阶段委托调用）；window.phOpenGlobalFeatureConfig
+ * 捕获阶段委托调用）。
  *
  * 事件接线：弹窗骨架的关闭钮经 data-action="dirConfig.*" 声明（调用方传入动作名，
  * 原先靠字符串拼 window 函数名）；window 导出只剩三个打开入口。
  */
 
 let _dirConfigEditor = null;
-let _globalConfigEditor = null;
 
 function _dirConfigHost() {
   let host = document.getElementById('ph-dir-config-host');
@@ -130,41 +128,9 @@ window.phOpenProjectConfig = function (projectId) {
   _dirConfigEditor.open();
 };
 
-// ── 全局 Feature 设置（设置 flyout 菜单入口，编辑全局层）──────
-
-window.phOpenGlobalFeatureConfig = function () {
-  if (typeof createFeatureConfigEditor !== 'function') return;
-  if (_globalConfigEditor) {
-    _globalConfigEditor.close();
-    _globalConfigEditor = null;
-  }
-  const isZh = currentLanguage === 'zh';
-  _dirConfigHost().innerHTML = _featureConfigDialogShell(
-    'ph-global-config-mount',
-    escapeHtml(isZh ? '全局 Feature 设置' : 'Global Feature Config'),
-    escapeHtml(isZh ? '对所有工作空间生效的 Feature 配置' : 'Feature config applied to all workspaces'),
-    'dirConfig.closeGlobal'
-  );
-  _globalConfigEditor = createFeatureConfigEditor({
-    host: document.getElementById('ph-global-config-mount'),
-    scopeId: 'global',
-  });
-  _globalConfigEditor.open();
-};
-
-function phCloseGlobalFeatureConfig() {
-  if (_globalConfigEditor) {
-    _globalConfigEditor.close();
-    _globalConfigEditor = null;
-  }
-  const host = document.getElementById('ph-dir-config-host');
-  if (host) host.innerHTML = '';
-}
-
 // ── 事件接线（data-action="dirConfig.*"）──────────────────────────
 // 关闭动作的消费面只有弹窗骨架按钮，window 导出随本批次收敛。
 
 window.ClawFW.actions.registerMany({
   'dirConfig.close': () => phCloseDirConfig(),
-  'dirConfig.closeGlobal': () => phCloseGlobalFeatureConfig(),
 });

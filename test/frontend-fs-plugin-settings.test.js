@@ -244,7 +244,33 @@ describe('插件设置弹窗 — 打开与即时保存', () => {
     assert.equal(put.body.content.agentero, undefined);
   });
 
-  it('层 tab 守卫：无身份上下文（插件管理器）不能切到 agent 层', async () => {
+  it('插件管理器只显示仓库与全局装配，不再另造全局 Feature 参数入口', async () => {
+    const baseFetch = makeFetch();
+    const fetchStub = async (url, options) => {
+      if (String(url) === '/api/feature-store/overview') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            packages: [{ package: 'agentero', displayName: 'Agentero', description: 'Library', versions: [{ version: '1.0.0' }] }],
+            mounts: { global: { agentero: { package: 'agentero', version: '1.0.0' } } },
+          }),
+        };
+      }
+      return baseFetch(url, options);
+    };
+    const ctx = loadModule(fetchStub);
+    const managerHost = { innerHTML: '' };
+    ctx.document.getElementById = (id) => id === 'claw-plugin-manager-host' ? managerHost : null;
+    await ctx.run('window.clawOpenPluginManager()');
+    const managerHtml = managerHost.innerHTML;
+    assert.match(managerHtml, /仓库插件/);
+    assert.match(managerHtml, /全局装配/);
+    assert.doesNotMatch(managerHtml, /打开全局配置|Global Defaults/);
+    assert.equal(ctx.run("window.ClawFW.actions.handlers?.['pluginManager.openGlobalConfig']"), undefined);
+  });
+
+  it('层 tab 守卫：无身份上下文（插件管理器全局装配卡）不能切到 agent 层', async () => {
     const fetchStub = makeFetch();
     const ctx = loadModule(fetchStub);
     // 不传 identityContext（插件管理器全局卡）

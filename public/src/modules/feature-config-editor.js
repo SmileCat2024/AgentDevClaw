@@ -221,19 +221,7 @@ function createFeatureConfigEditor(options = {}) {
         <span class="ph-settings-tab-label">${escapeHtml(s.title)}</span>
       </div>`
     ).join('');
-    // 身份层（agent）左列底部提供"添加 Feature"入口：打开插件商店
-    // 面板并定位到当前编辑的身份（scopeAgentId 区分 main 与 coder APP，
-    // ADR-0025 后两者都是标准 APP 的 agent 层）。global / dir 层不允许
-    // $mount 装配，不显示。
-    const storeIdentity = scopeId === 'agent' ? (scopeAgentId === 'coder' ? 'coder' : 'main') : null;
-    if (storeIdentity) {
-      navEl.insertAdjacentHTML('beforeend', `
-        <div class="ph-settings-tab" data-fce-action="open-store" title="${_fceT('从插件仓库添加', 'Add plugins from the plugin repository')}">
-          <span class="ph-settings-tab-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 12h8"></path><path d="M12 8v8"></path></svg></span>
-          <span class="ph-settings-tab-label">${_fceT('添加 Feature', 'Add Feature')}</span>
-        </div>
-      `);
-    }
+    // Feature 参数编辑器只配置已经装配的能力，不负责插件导入或装配。
   }
 
   function selectSection(id) {
@@ -787,13 +775,6 @@ function createFeatureConfigEditor(options = {}) {
       case 'nav':
         selectSection(actionEl.getAttribute('data-id'));
         break;
-      case 'open-store': {
-        const identity = scopeId === 'agent' ? (scopeAgentId === 'coder' ? 'coder' : 'main') : null;
-        if (identity && typeof window.phOpenFeatureStore === 'function') {
-          window.phOpenFeatureStore(identity);
-        }
-        break;
-      }
       case 'reset': {
         const fullKey = actionEl.getAttribute('data-key');
         state.pending.set(fullKey, null);

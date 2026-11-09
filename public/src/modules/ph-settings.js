@@ -142,9 +142,9 @@ function _renderModelConfigContent(agent, presets) {
 
 // ── Feature 设置：身份入口列表 + 二级身份页（分页器）──────────
 //
-// 一级页只有两个身份入口（心智：身份落点在一级确定）；
-// 二级页左上角分页器切换「Feature 配置」与「挂载管理」；
-// Feature 仓库选择面板是全局通用弹窗（feature-store.js），由打开处传入身份。
+// 一级页按身份进入工作空间插件设置；
+// 二级页左上角切换「参数配置」与「插件与能力」；
+// 插件仓库是全局管理入口，添加动作由当前工作空间上下文启动。
 //
 // coder 白名单与 coder-agent.js 的挂载清单对齐（有配置 manifest 的部分）：
 // shell / memory / skill / github / force-continuation。coder 不挂 mcp、
@@ -178,13 +178,13 @@ function _renderFeatureEntryList() {
   const entries = [{
     key: 'feature-main',
     title: isZh ? '配置编程小助手' : 'Configure Programming Helper',
-    desc: isZh ? 'Feature 配置与挂载管理，对所有项目目录生效' : 'Feature config and mount management; applies to all project directories',
+    desc: isZh ? '管理插件装配与参数；Feature 是插件提供给 Agent 的运行时能力' : 'Manage plugin assembly and settings; features are the runtime capabilities plugins provide to agents',
   }];
   if (showCoder) {
     entries.push({
       key: 'feature-coder',
       title: isZh ? '配置 Coder' : 'Configure Coder',
-      desc: isZh ? 'Coder 自主编码身份的 Feature 配置与挂载管理' : 'Feature config and mount management for the Coder identity',
+      desc: isZh ? '管理 Coder 的插件装配与参数；Feature 是插件提供给 Agent 的运行时能力' : 'Manage Coder plugin assembly and settings; features are the runtime capabilities plugins provide to agents',
     });
   }
 
@@ -865,8 +865,8 @@ function renderPhSettingsOverlay(agent, presets) {
 
       // 页内分页器（左上角）：复用会话列表同款 ph-session-tab 样式
       const subTabs = [
-        { key: 'config', label: isZh ? 'Feature 配置' : 'Feature Config' },
-        { key: 'mounts', label: isZh ? '挂载管理' : 'Mounts' },
+        { key: 'config', label: isZh ? '插件参数' : 'Plugin Settings' },
+        { key: 'mounts', label: isZh ? '插件与能力' : 'Plugins & Features' },
       ];
       const subTabItems = subTabs.map((t) =>
         '<button type="button" class="ph-session-tab' + (_phFeatureSubTab === t.key ? ' active' : '') + '" data-action="phSettings.switchFeatureSubTab" data-sub="' + escapeHtml(t.key) + '">' + escapeHtml(t.label) + '</button>'
@@ -972,7 +972,7 @@ function renderPhSettingsOverlay(agent, presets) {
   const subtitle = _phSettingsTab === 'model'
     ? (isZh ? '为主代理设置主模型和备选模型，其他角色设置单个模型' : 'Set primary and secondary models for main agent, single model for other roles')
     : _phSettingsTab === 'feature'
-      ? (isZh ? '选择身份的 Feature 配置层' : 'Choose the feature config layer for an identity')
+      ? (isZh ? '按插件设置参数；全局默认可由各工作空间覆盖' : 'Configure plugin settings; workspaces can override global defaults')
       : _phSettingsTab === 'coder-policy'
         ? (isZh ? '配置关联工作空间 Coder 的运行数量与接续策略' : 'Configure concurrency and rotation strategy for the linked Coder workspace')
         : _phSettingsTab === 'notification'

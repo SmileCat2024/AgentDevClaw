@@ -3,13 +3,13 @@
  *
  * 两个入口（同一数据面 GET /api/feature-store/overview）：
  * - 身份商店 phOpenFeatureStore('main' | 'coder')：按身份装配，面板内不切换身份。
- * - 插件管理器 window.clawOpenPluginManager()：全局级治理（设置菜单 → 插件管理）。
- *   tgz 上传导入、全局装配/卸载（identity 'global'，对所有插件化身份生效）、
- *   全局默认配置入口都在此入口（ADR-0046 三级装配体系）。
+ * - 插件管理器 window.clawOpenPluginManager()：Claw 级插件仓库与全局装配
+ *   （设置菜单 → 插件仓库与全局装配）。负责 tgz 导入及全局装配/卸载；
+ *   插件参数统一从工作空间插件卡片的「设置」进入，再选择全局默认或本空间覆盖。
  *
  * 数据面：
- *   GET /api/feature-store/overview —— 包列表 + 两身份已装配清单（含 missing）+
- *   mounts.global（全局装配清单）+ envReady（身份级环境就绪）+ installing
+ *   GET /api/feature-store/overview —— 包列表 + 各装配层清单（含 missing）+
+ *   mounts.global（全局装配清单）+ envReady（工作空间级环境就绪）+ installing
  *   （服务端进行中的安装，关弹窗后台继续时的可见性来源）
  * 安装（repository 包）：
  *   POST /api/feature-store/install —— provision + 成功才写声明；同步等待并
@@ -24,8 +24,7 @@
  * 外部依赖（通过全局作用域）：
  *   - escapeHtml (app-ui.js)
  *   - currentLanguage (app-core.js)
- *   - window._phRefreshMountsView (ph-settings.js，写操作后刷新挂载管理页)
- *   - window.phOpenGlobalFeatureConfig (dir-config-dialog.js，全局默认配置入口)
+ *   - window._phRefreshMountsView (ph-settings.js，写操作后刷新工作空间插件页)
  */
 
 const _FS_IDENTITY_SCOPES = {
@@ -775,16 +774,12 @@ function _pmRenderGlobalSection(mountedMap) {
       ? '<span class="feature-badge status-removed">' + escapeHtml(_fsT('包已不在仓库', 'missing')) + '</span>'
       : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>';
     const btn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除全局装配', 'Remove global assembly')) + '" data-action="pluginManager.removeGlobal" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
-    // 设置入口（无身份上下文：弹窗只编辑全局默认层，本空间覆盖在各自商店）
-    const settingsBtn = mount.kind !== 'builtin' && !mount.missing
-      ? '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('设置', 'Settings')) + '" data-action="featureStore.openSettings" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>'
-      : '';
     const pkg = packageNames.get(runtimeName);
     return _fsCard({
       name: runtimeName,
       displayName: pkg?.displayName || runtimeName,
       description: pkg?.description || '',
-    }, settingsBtn + status + btn);
+    }, status + btn);
   }).join('');
   return '<div class="fs-mounted-section"><div class="fs-section-title">' + escapeHtml(_fsT('全局装配', 'Global Assembly')) + '</div>'
     + '<div class="feature-grid ph-mount-grid">' + items + '</div></div>';
@@ -871,11 +866,6 @@ function _pmRender() {
     '<button class="feature-detail-close" type="button" data-action="pluginManager.close">&times;</button>',
     '</div>',
     errorBanner,
-    // 全局默认配置入口行（配置值与 $mount 同层，编辑器经 dir-config-dialog 打开）
-    '<div class="fs-section-title" style="display:flex;align-items:center;justify-content:space-between;">',
-    '<span>' + escapeHtml(_fsT('全局默认配置', 'Global Defaults')) + '</span>',
-    '<button type="button" class="fs-list-add" data-action="pluginManager.openGlobalConfig">' + escapeHtml(_fsT('打开全局配置', 'Open Global Config')) + '</button>',
-    '</div>',
     // 复用挂载管理页同款主体容器
     '<div class="ph-mounts-body" style="overflow-y:auto;flex:1;">' + body + '</div>',
     '</div>',
@@ -915,11 +905,6 @@ window.ClawFW.actions.registerMany({
   'pluginManager.openUpload': () => _pmOpenUpload(),
   'pluginManager.cancelImport': () => _pmCancelImport(),
   'pluginManager.confirmImport': () => _pmConfirmImport(),
-  'pluginManager.openGlobalConfig': () => {
-    if (typeof window.phOpenGlobalFeatureConfig === 'function') {
-      window.phOpenGlobalFeatureConfig();
-    }
-  },
   'pluginManager.close': () => _pmClosePluginManager(),
 });
 

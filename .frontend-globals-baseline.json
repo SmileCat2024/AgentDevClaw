@@ -1158,17 +1158,14 @@
   },
   "public/src/modules/dir-config-dialog.js": {
     "state": [
-      "_dirConfigEditor",
-      "_globalConfigEditor"
+      "_dirConfigEditor"
     ],
     "behavior": [
       "_dirConfigCurrentDir",
       "_dirConfigHost",
       "_featureConfigDialogShell",
       "phCloseDirConfig",
-      "phCloseGlobalFeatureConfig",
       "phOpenDirConfig",
-      "phOpenGlobalFeatureConfig",
       "phOpenProjectConfig"
     ]
   },

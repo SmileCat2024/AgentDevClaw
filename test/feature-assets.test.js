@@ -365,6 +365,30 @@ describe('composePanelDeclarations', async () => {
     assert.deepEqual(panel?.meta.when, { agentIds: ['programming-helper'] }, '启用装配不受禁用条目影响');
   });
 
+  it('工作空间装配 + chat surfaces → 仅声明到指定身份的聊天面，不含工作空间首页', async () => {
+    const fixture = makePluginTgz({
+      packageName: 'chat-only-plugin',
+      version: '1.0.0',
+      manifest: uiManifest([{ id: 'chat-only-panel', entry: 'index.js', when: { surfaces: ['chat'] } }]),
+    });
+    const assetsRoot = join(root, 'assets');
+    await extractClientAssets(
+      { archivePath: fixture.archivePath, packageName: 'chat-only-plugin', version: '1.0.0', archiveDigest: fixture.digest },
+      { expectClient: true, assetsRoot },
+    );
+    const { declarations } = await composePanelDeclarations({
+      catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
+      resolvers: makeLayerTable({
+        'programming-helper': { 'chat-only-plugin': { $mount: { package: 'chat-only-plugin', version: '1.0.0' } } },
+      }),
+      assetsRoot,
+    });
+    assert.deepEqual(declarations.find((d) => d.panelId === 'chat-only-panel')?.meta.when, {
+      agentIds: ['programming-helper'],
+      surfaces: ['chat'],
+    });
+  });
+
   it('global 层禁用装配 → 全局面板不下发', async () => {
     const fixture = makePluginTgz({
       packageName: 'global-disabled-plugin',
