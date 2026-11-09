@@ -24,9 +24,8 @@ import {
 
 function makeHttpApp() {
   const app = express();
-  app.use(express.json());
   const store = new Map(); // agentId -> prefs 对象（测试隔离的"文件系统"）
-  setupFeatureUiPrefsRoutes(app, {
+  setupFeatureUiPrefsRoutes(app, express, {
     readFile: (agentId) => store.get(agentId) || { presentation: {}, panelPrefs: {} },
     writeFile: (agentId, prefs) => { store.set(agentId, JSON.parse(JSON.stringify(prefs))); },
   });

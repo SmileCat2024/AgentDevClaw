@@ -36,6 +36,7 @@
 
   function applyDeclarations(declarations) {
     const next = new Map();
+    let changed = false;
     for (const decl of declarations) {
       if (decl && decl.panelId && decl.url && decl.pluginId) next.set(decl.panelId, decl);
     }
@@ -44,7 +45,7 @@
     for (const id of lastSnapshot.keys()) {
       if (!next.has(id)) {
         try {
-          window.ClawHost.panels.undeclare(id);
+          changed = window.ClawHost.panels.undeclare(id) || changed;
         } catch (err) {
           console.error('[feature-ui-registry] 面板声明退场失败：', id, err);
         }
@@ -57,17 +58,22 @@
       if (prev && prev.url === decl.url) continue;
       if (prev) {
         try {
-          window.ClawHost.panels.undeclare(id);
+          changed = window.ClawHost.panels.undeclare(id) || changed;
         } catch (err) { /* 退场失败不阻塞重声明 */ }
       }
       try {
         window.ClawHost.panels.declare(id, toHostMeta(decl), { pluginId: decl.pluginId, url: decl.url });
+        changed = true;
       } catch (err) {
         console.error('[feature-ui-registry] 面板声明失败：', id, err);
       }
     }
 
     lastSnapshot = new Map(Array.from(next.entries()).map(([id, decl]) => [id, { panelId: id, url: decl.url }]));
+    if (changed) {
+      if (typeof window.syncRailButtons === 'function') window.syncRailButtons();
+      if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+    }
   }
 
   async function refresh() {

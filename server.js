@@ -707,7 +707,7 @@ setupToolStateRoutes(app);
 setupFeatureCatalogRoutes(app);
 setupFeatureStoreRoutes(app, express);
 setupFeatureAssetRoutes(app);
-setupFeatureUiPrefsRoutes(app);
+setupFeatureUiPrefsRoutes(app, express);
 setupFeatureRepositoryRoutes(app, express);
 // 插件数据面挂载（ADR-0045 P2）：server 面随装配事实挂载到
 // /protoclaw/plugin/<prefix>/*；导入/装配/禁用变化经 plugin-server-bus

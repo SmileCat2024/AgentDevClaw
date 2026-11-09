@@ -6,7 +6,8 @@
  *   - 点击弹出模态弹窗（样式仿照项目内 feature-detail-overlay 弹窗）
  *   - 每个面板项含拖拽手柄、图标、名称、描述、开关
  *   - 支持拖拽排序
- *   - 边栏图标本身支持长按后拖动排序（与弹窗内拖拽等价，写同一份配置）
+ *   - 边栏图标本身支持拖动排序（鼠标按下移动即拖动；触摸长按后拖动），
+ *     与弹窗内拖拽等价，写同一份配置
  *   - 配置持久化到 localStorage
  *   - 清单外面板彻底屏蔽：不进自定义弹窗，边栏按钮强制隐藏
  *
@@ -84,14 +85,29 @@
   //   - 写操作：内存先更（乐观）+ PUT 异步落盘
   //   - localStorage 旧键保留不删（回滚安全），迁移标记后不再读
 
-  var remote = { agentId: null, config: null }; // config = 数组形态（沿用既有消费逻辑）
+  // remote.sparse 保留服务端 sparse 原文：初始 GET 可能在 chat 面板按钮
+  // 渲染前返回（刷新后停在首页），一次性解析会把保存的条目全部当清单外
+  // 丢弃；之后进会话按钮出现也不再重拉，表现为"刷新后自定义顺序丢失"。
+  // 解析推迟到每次应用时（loadConfig 按当前清单现算），按钮集合后到也能恢复。
+  var remote = { agentId: null, config: null, sparse: null }; // config = 数组形态（沿用既有消费逻辑）
+  var configRevisionByAgent = Object.create(null);
+  var persistQueueByAgent = Object.create(null);
 
   function currentUiAgentId() {
-    // 聚焦工作空间（app-core 顶层 let，模块作用域链可见）；无聚焦时用主空间
+    // 聚焦工作空间（app-core 顶层 let，模块作用域链可见）
     try {
-      if (typeof focusedAgentId === 'string' && focusedAgentId) return focusedAgentId;
+      if (typeof focusedAgentId === 'string' && focusedAgentId) {
+        // 远程空间：呈现配置属于远端服务，本地不读不写（返回 null，调用方跳过请求）
+        if (typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(focusedAgentId)) {
+          return null;
+        }
+        return focusedAgentId;
+      }
     } catch (e) { /* 未声明（加载顺序异常）时走 fallback */ }
-    return 'programming-helper';
+    // 全局首页 / 身份未落定的过渡态：home 是独立身份域（服务端按需懒建目录）。
+    // 绝不回退主空间——那会让全局首页与其他过渡态界面共用编程小助手的
+    // 呈现配置（跨工作空间读写，违反 ADR-0046"配置随工作空间走"）。
+    return 'home';
   }
 
   /** 数组形态 → 服务端 sparse 形态（order = 数组下标，稳定相对序）。 */
@@ -159,16 +175,24 @@
   }
 
   function persistPresentation(agentId, config) {
-    return fetch('/api/feature-ui/ui-prefs', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: agentId, presentation: arrayToSparse(config) }),
-    }).then(function (res) {
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-    }).catch(function (err) {
-      // 落盘失败不回滚 UI（乐观态优先，下一次写操作整块重 PUT 自愈）
+    var snapshot = arrayToSparse(config);
+    var send = function () {
+      return fetch('/api/feature-ui/ui-prefs', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: agentId, presentation: snapshot }),
+      }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+      });
+    };
+    // 首次写立即发出；后续写等待前一请求完成，避免网络乱序让旧顺序最后落盘。
+    var previous = persistQueueByAgent[agentId];
+    var write = (previous ? previous.catch(function () {}).then(send) : send()).catch(function (err) {
+      // 落盘失败不回滚 UI；下一次操作重试完整快照。
       console.warn('[rail-customize] 呈现配置落盘失败（下次操作重试）：', err);
     });
+    persistQueueByAgent[agentId] = write;
+    return write;
   }
 
   /** 拉取当前空间的呈现配置；服务端无配置且浏览器有旧值时执行一次性迁移。 */
@@ -183,21 +207,35 @@
         if (legacy) {
           localStorage.setItem(markKey, '1');
           persistPresentation(agentId, legacy);
-          return legacy;
+          return { sparse: arrayToSparse(legacy), config: legacy };
         }
-        return getDefaultConfig();
+        return { sparse: null, config: null };
       }
-      return sparseToArray(presentation, getCustomizableIds());
+      // 不在这里解析成数组：解析依赖当时的面板清单，按钮未渲染时会失真
+      return { sparse: presentation, config: null };
     });
   }
 
   /** 空间切换感知：聚焦身份变了则重拉并重放（异步，不阻塞本次 apply）。 */
   function reloadIfAgentChanged() {
     var agentId = currentUiAgentId();
-    if (remote.agentId === agentId) return;
-    remote.agentId = agentId;
-    loadRemote(agentId).then(function (config) {
-      remote.config = config;
+    // 远程身份（null）用哨兵比对，避免与初始 null 相等而跳过清理
+    var scopeKey = agentId || '(remote)';
+    if (remote.agentId === scopeKey) return;
+    remote.agentId = scopeKey;
+    if (!agentId) {
+      // 远程空间：不读本地文件，清掉上一空间的配置回默认呈现
+      remote.sparse = null;
+      remote.config = null;
+      applyConfig();
+      return;
+    }
+    var revision = configRevisionByAgent[agentId] || 0;
+    loadRemote(agentId).then(function (loaded) {
+      // GET 期间发生本地写入时，旧响应不能覆盖新顺序。
+      if ((configRevisionByAgent[agentId] || 0) !== revision || remote.agentId !== agentId) return;
+      remote.sparse = loaded.sparse;
+      remote.config = loaded.config;
       applyConfig();
     }).catch(function (err) {
       console.warn('[rail-customize] 呈现配置拉取失败（沿用内存态）：', err);
@@ -205,14 +243,38 @@
   }
 
   function loadConfig() {
+    // sparse 存在时按当前清单现算：面板按钮集合后到（进会话）也能恢复
+    // 服务端保存的顺序，而不是被 GET 时刻的空清单固化。
+    if (remote.sparse) return sparseToArray(remote.sparse, getCustomizableIds());
     if (remote.config) return remote.config;
     // 服务端配置未落定（初始化竞态）：默认配置先行，落定后 applyConfig 修正
     return getDefaultConfig();
   }
 
+  /** 插件面板可在初始偏好 GET 之后才注册；把新面板并入当前空间顺序，避免被误判为清单外。 */
+  function reconcileConfigPanels(config) {
+    var ids = getCustomizableIds();
+    var next = (config || []).slice();
+    var present = Object.create(null);
+    next.forEach(function (entry) { present[entry.id] = true; });
+    ids.forEach(function (id) {
+      if (!present[id]) next.push({ id: id, visible: true });
+    });
+    return next;
+  }
+
   function saveConfig(config) {
+    var agentId = currentUiAgentId();
     remote.config = config;
-    persistPresentation(currentUiAgentId(), config);
+    if (!agentId) {
+      // 远程空间：内存态生效（当次会话内排序可用），不写本地文件
+      remote.sparse = null;
+      return;
+    }
+    remote.agentId = agentId;
+    remote.sparse = arrayToSparse(config);
+    configRevisionByAgent[agentId] = (configRevisionByAgent[agentId] || 0) + 1;
+    persistPresentation(agentId, config);
   }
 
   function getPanelIconHTML(panelId) {
@@ -286,7 +348,7 @@
     // 空间切换感知：身份变化时后台重拉（异步），本次仍按内存态应用
     reloadIfAgentChanged();
 
-    var config = loadConfig();
+    var config = reconcileConfigPanels(loadConfig());
     var anchor = findAnchor(rail);
     var activeCleared = false;
     var allowed = {};
@@ -415,7 +477,7 @@
         '<div class="rail-cust-list">' + items + '</div>' +
         '<div class="rail-cust-footer">' +
           '<button class="rail-cust-reset" type="button">' + (isZh ? '恢复默认' : 'Reset to Default') + '</button>' +
-          '<span class="rail-cust-hint">' + (isZh ? '拖拽排序 · 点击开关切换显示 · 边栏图标可长按拖动' : 'Drag to reorder · Toggle to show/hide · Long-press rail icons to drag') + '</span>' +
+          '<span class="rail-cust-hint">' + (isZh ? '拖拽排序 · 点击开关切换显示 · 边栏图标可直接拖动（触屏长按）' : 'Drag to reorder · Toggle to show/hide · Drag rail icons (long-press on touch)') + '</span>' +
         '</div>' +
       '</div>';
 
@@ -431,7 +493,7 @@
     checkboxes.forEach(function (cb) {
       cb.addEventListener('change', function () {
         var id = cb.dataset.panelId;
-        var config = loadConfig();
+        var config = reconcileConfigPanels(loadConfig());
         for (var i = 0; i < config.length; i++) {
           if (config[i].id === id) {
             config[i].visible = cb.checked;
@@ -530,14 +592,18 @@
     });
   }
 
-  // ── 边栏图标长按拖动排序 ──────────────────────────────
+  // ── 边栏图标拖动排序 ──────────────────────────────────
   //
-  // 与弹窗内拖拽排序等价：提交时写同一份 localStorage 配置。
-  // 按住可自定义面板图标 LONG_PRESS_MS 进入拖动态（此前位移超过 slop
-  // 视为普通点击/滚动意图，取消计时）。动效分四段提示手势状态：
-  // 按压缓慢放大（蓄力）→ 激活抬升脉冲 → 拖拽本体 translateY 逐帧跟手、
-  // 其余图标压暗并 FLIP 让位 → 松手回弹滑入最终槽位；
-  // pointercancel 按已存配置恢复原状。
+  // 与弹窗内拖拽排序等价：提交时写同一份配置。
+  // 激活语义按指针类型分流：鼠标拖动没有滚动歧义，按下后位移超过 slop
+  // 立即进入拖动态（"按下就拖"的自然手势）；触摸/笔保留长按激活（与滚动
+  // 手势区分，长按前位移超过 slop 视为普通点击/滚动意图，取消计时）。
+  // 松手时按最终指针位置做一次确定性归位：实时换位依赖兄弟按钮的矩形，
+  // 快速甩动时矩形可能还处在 FLIP 让位动画中途，仅靠逐帧判定会漏判，
+  // 漏判的松手会把拖动前的旧顺序提交落盘（表现为"拖了但没保存"）。
+  // 动效分四段提示手势状态：按压缓慢放大（蓄力）→ 激活抬升脉冲 →
+  // 拖拽本体 translateY 逐帧跟手、其余图标压暗并 FLIP 让位 →
+  // 松手回弹滑入最终槽位；pointercancel 按已存配置恢复原状。
 
   var LONG_PRESS_MS = 500;
   var LONG_PRESS_SLOP = 8; // px，触发前允许的位移
@@ -577,7 +643,7 @@
 
   /** 提交新顺序：保留各项 visible，清单外/未渲染条目按原顺序垫底。 */
   function commitRailOrder(orderedIds) {
-    var config = loadConfig();
+    var config = reconcileConfigPanels(loadConfig());
     var byId = {};
     config.forEach(function (entry) { byId[entry.id] = entry; });
     var next = [];
@@ -590,7 +656,13 @@
     config.forEach(function (entry) {
       if (!seen[entry.id]) next.push(entry);
     });
-    saveConfig(next);
+    // 顺序与可见性均未变化（visible 全部沿用 config 原值）：不落盘。
+    // 亚阈值松手（未跨过相邻按钮中点）会走到这里，无效 PUT 会把
+    // 旧快照写回服务端并污染文件修改时间，掩盖真实问题的取证。
+    var unchanged = config.length === next.length && config.every(function (entry, i) {
+      return entry.id === next[i].id && entry.visible === next[i].visible;
+    });
+    if (!unchanged) saveConfig(next);
     applyConfig();
   }
 
@@ -606,7 +678,10 @@
   function beginRailDrag() {
     if (!lpDrag) return;
     var rect = lpDrag.btn.getBoundingClientRect();
-    lpDrag.grabOffsetY = lpDrag.clientY - rect.top;
+    // 抓取点取按下时指针相对按钮的偏移，而不是激活时刻：鼠标路径在
+    // 移动途中激活（指针已离开按钮原位），用激活时刻位置会让按钮
+    // 视觉中心整体滞后指针，松手归位的槽位随之偏移。
+    lpDrag.grabOffsetY = lpDrag.startY - rect.top;
     lpDrag.height = rect.height;
     lpDrag.shiftY = 0;
     lpDrag.active = true;
@@ -623,6 +698,10 @@
   function finishRailDrag(commit) {
     var drag = lpDrag;
     if (!drag) return;
+    // 松手按最终指针位置做一次确定性归位：实时换位读的兄弟矩形可能处于
+    // FLIP 让位动画中途，逐帧判定漏掉跨槽位时，这里兜住——否则提交的是
+    // 拖动前的旧顺序（lpDrag 此刻仍指向 drag，reorderRailDrag 可用）。
+    if (commit && drag.active) reorderRailDrag();
     lpDrag = null;
     clearTimeout(drag.timer);
     document.removeEventListener('touchmove', suppressTouchMove);
@@ -741,6 +820,7 @@
     lpDrag = {
       btn: btn,
       pointerId: e.pointerId,
+      pointerType: e.pointerType || '',
       startX: e.clientX,
       startY: e.clientY,
       clientY: e.clientY,
@@ -758,7 +838,10 @@
       var dx = e.clientX - lpDrag.startX;
       var dy = e.clientY - lpDrag.startY;
       if (dx * dx + dy * dy > LONG_PRESS_SLOP * LONG_PRESS_SLOP) {
-        cancelLongPress();
+        // 位移语义按指针类型分流：鼠标按下即有拖动意图（无滚动歧义），
+        // 位移越过 slop 立即激活；触摸/笔保留长按模型（区分滚动手势）。
+        if (lpDrag.pointerType === 'mouse') beginRailDrag();
+        else cancelLongPress();
       }
       return;
     }
@@ -824,6 +907,17 @@
   window.RailCustomize = {
     getCustomizableIds: getCustomizableIds,
     loadConfig: loadConfig,
+    reconcileConfigPanels: function (panels) {
+      // 保持现有空间配置，只用声明顺序补充新装配面板的默认项。
+      var ids = getCustomizableIds();
+      var prior = loadConfig();
+      var present = Object.create(null);
+      prior.forEach(function (entry) { present[entry.id] = true; });
+      ids.forEach(function (id) {
+        if (!present[id]) prior.push({ id: id, visible: true });
+      });
+      return prior;
+    },
     label: label,
     description: desc,
     commitRailOrder: commitRailOrder,

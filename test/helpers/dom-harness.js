@@ -135,6 +135,29 @@ export function createDomHarness() {
 
     focus() {}
 
+    get previousElementSibling() {
+      if (!this.parentNode) return null;
+      const index = this.parentNode.children.indexOf(this);
+      return index > 0 ? this.parentNode.children[index - 1] : null;
+    }
+
+    closest(selector) {
+      let current = this;
+      while (current) {
+        if (matchesSelector(current, selector)) return current;
+        current = current.parentNode;
+      }
+      return null;
+    }
+
+    getBoundingClientRect() {
+      const index = this.parentNode ? this.parentNode.children.indexOf(this) : 0;
+      const height = 40;
+      return { top: index * height, bottom: (index + 1) * height, height, left: 0, right: 40, width: 40 };
+    }
+
+    setPointerCapture() {}
+
     addEventListener(type, listener) {
       const listeners = this.listeners.get(type) || [];
       listeners.push(listener);
@@ -148,10 +171,24 @@ export function createDomHarness() {
       if (name === 'class') this.className = String(value);
     }
 
-    dispatch(type) {
-      for (const listener of this.listeners.get(type) || []) {
-        listener({ target: this, preventDefault() {} });
+    dispatch(type, event = {}) {
+      const dispatched = {
+        type,
+        target: this,
+        currentTarget: this,
+        bubbles: true,
+        preventDefault() {},
+        stopPropagation() { this.bubbles = false; },
+        ...event,
+      };
+      let current = this;
+      while (current) {
+        dispatched.currentTarget = current;
+        for (const listener of current.listeners.get(type) || []) listener(dispatched);
+        if (!dispatched.bubbles) break;
+        current = current.parentNode;
       }
+      return dispatched;
     }
 
     querySelector(selector) {
@@ -183,6 +220,7 @@ export function createDomHarness() {
       return [...this.body.querySelectorAll(selector), ...this.head.querySelectorAll(selector)];
     },
     addEventListener() {},
+    removeEventListener() {},
     contains(node) {
       const visit = (element) => {
         if (element === node) return true;

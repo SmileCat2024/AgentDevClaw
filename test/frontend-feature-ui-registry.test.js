@@ -55,8 +55,17 @@ describe('feature-ui-registry', () => {
     ctx.window.ClawFW.featureUi.stop();
   });
 
-  it('声明下发后注册为懒 stub，meta 纯数据补齐 title 语言函数', async () => {
+  it('声明首次异步到达后立即同步 rail 按钮与主视图', async () => {
+    let syncs = 0;
+    let renders = 0;
+    pending[0] = { ok: true, declarations: [] };
     await ctx.window.ClawFW.featureUi.refresh();
+    ctx.window.syncRailButtons = () => { syncs += 1; };
+    ctx.renderCurrentMainView = () => { renders += 1; };
+    pending.push({ ok: true, declarations: [decl('demo-panel', '/protoclaw/feature-assets/demo-plugin/1.0.0/index.js')] });
+    await ctx.window.ClawFW.featureUi.refresh();
+    assert.equal(syncs, 1, '新声明应立即生成对应的右栏按钮');
+    assert.equal(renders, 1, '新声明应立即重新计算按钮可见性');
     const panel = ctx.window.ClawHost.panels.get('demo-panel');
     assert.ok(panel, 'stub 应已注册');
     assert.equal(panel.stub.url, '/protoclaw/feature-assets/demo-plugin/1.0.0/index.js');

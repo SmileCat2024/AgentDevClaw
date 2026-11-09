@@ -93,7 +93,7 @@ function requireRegisteredAgentId(agentId) {
   return agentId;
 }
 
-export function setupFeatureUiPrefsRoutes(app, { readFile, writeFile } = {}) {
+export function setupFeatureUiPrefsRoutes(app, express, { readFile, writeFile } = {}) {
   // IO 注入面（测试隔离）；缺省生产实现。readFile(agentId) → prefs 对象，
   // writeFile(agentId, prefs) 持久化。
   const load = readFile || ((agentId) => readUiPrefs(agentId));
@@ -110,7 +110,7 @@ export function setupFeatureUiPrefsRoutes(app, { readFile, writeFile } = {}) {
   });
 
   // 呈现配置整块覆写（rail 自定义弹窗提交；sparse 形态，未含 panelId = 回默认）
-  app.put('/api/feature-ui/ui-prefs', (req, res, next) => {
+  app.put('/api/feature-ui/ui-prefs', express.json(), (req, res, next) => {
     try {
       const agentId = requireRegisteredAgentId(req.body?.agentId);
       const presentation = sanitizePresentation(req.body?.presentation);
@@ -124,7 +124,7 @@ export function setupFeatureUiPrefsRoutes(app, { readFile, writeFile } = {}) {
   });
 
   // 面板偏好按 panelId 整块覆写（host.panelPrefs.set 的落点；高频小写）
-  app.put('/api/feature-ui/panel-prefs', (req, res, next) => {
+  app.put('/api/feature-ui/panel-prefs', express.json(), (req, res, next) => {
     try {
       const agentId = requireRegisteredAgentId(req.body?.agentId);
       const panelId = typeof req.body?.panelId === 'string' ? req.body.panelId.trim() : '';

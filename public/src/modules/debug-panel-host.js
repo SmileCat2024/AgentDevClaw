@@ -443,7 +443,7 @@ function syncRailButtons() {
   const anchor = rail.querySelector('.rail-spacer');
   const insertAt = (el) => rail.insertBefore(el, anchor || null);
 
-  // 生成序：order 升序（customizable），无 order 的按注册序垫底
+  // 生成顺序先按插件默认 order；applyRailConfig 随后依据工作空间服务端配置重放用户排序。
   const ordered = [...panels].sort((a, b) =>
     (a.order ?? Infinity) - (b.order ?? Infinity) || 0);
   for (const panel of ordered) {

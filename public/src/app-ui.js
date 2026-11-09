@@ -1324,6 +1324,10 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
   const agent = getCurrentAgentRecord();
   // ── rail 按钮按注册表同步（面板注册/摘除/语言切换后自愈）──
   if (typeof syncRailButtons === 'function') syncRailButtons();
+  // 主视图渲染是工作空间身份变化的单点时机（进会话/切空间/回首页都经过这里）：
+  // rail-customize 在此感知身份切换并重拉该空间的呈现配置。没有这一步，
+  // 首页拉取的配置会跨空间沿用（历史缺陷：身份回退主空间掩盖了重拉缺失）。
+  if (typeof window.applyRailConfig === 'function') window.applyRailConfig();
   // ── 根据表面类型控制 rail button 可见性 ──
   const isWorkGroup = !!(agent && agent.id === 'work-group');
   const inChat = isChatSurfaceActive(agent);
@@ -1990,13 +1994,6 @@ document.getElementById('settings-flyout-auth')?.addEventListener('click', () =>
   if (typeof window.closeSettings === 'function' && window.ClawFW?.settingsOpen) window.closeSettings();
   if (typeof window.openAuthSettings === 'function') {
     window.openAuthSettings();
-  }
-});
-
-document.getElementById('settings-flyout-feature-config')?.addEventListener('click', () => {
-  settingsFlyout.classList.remove('open');
-  if (typeof window.phOpenGlobalFeatureConfig === 'function') {
-    window.phOpenGlobalFeatureConfig();
   }
 });
 
