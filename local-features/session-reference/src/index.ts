@@ -682,7 +682,7 @@ class SessionReferenceFeatureInner implements AgentFeature {
   }
 
   getTemplateNames(): string[] {
-    return ['session-list', 'session-read'];
+    return ['session-list', 'session-read', 'thread-transcript', 'session-search'];
   }
 
   /**
@@ -919,14 +919,19 @@ class SessionReferenceFeatureInner implements AgentFeature {
               type: 'boolean',
               description: '是否包含已归档会话（可选，默认不包含）',
             },
+            from: { type: 'string', description: '更新时间起点（ISO 日期/时间；仅包含该时刻及之后）' },
+            to: { type: 'string', description: '更新时间终点（ISO 日期/时间；仅包含该时刻及之前；只给日期时包含整天）' },
           },
         },
         execute: async (args: any) => {
-          const limit = typeof args?.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : 50;
+          const requestedLimit = typeof args?.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : 50;
+          const limit = requestedLimit;
           const offset = typeof args?.offset === 'number' && args.offset > 0 ? Math.floor(args.offset) : 0;
-          const params = new URLSearchParams({ limit: String(limit) });
+          const params = new URLSearchParams({ limit: String(Math.min(limit, 50)) });
           if (offset > 0) params.set('offset', String(offset));
           if (args?.includeArchived === true) params.set('includeArchived', '1');
+          if (typeof args?.from === 'string' && args.from.trim()) params.set('from', args.from.trim());
+          if (typeof args?.to === 'string' && args.to.trim()) params.set('to', args.to.trim());
           try {
             const resp = await fetch(`${this.serverOrigin}/protoclaw/session_directory?${params}`, {
               headers: internalAuthHeaders(),
@@ -936,18 +941,259 @@ class SessionReferenceFeatureInner implements AgentFeature {
               return { error: data?.error || `session_directory 请求失败 (${resp.status})` };
             }
             const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+            const limitCapped = requestedLimit > 50 || data?.limitCapped === true;
+            const capNote = limitCapped ? `请求 ${requestedLimit} 条，单次最多展示 ${data?.maxResults ?? 50} 条；可用 offset 继续翻页。` : '';
             if (sessions.length === 0) {
-              return { text: '没有可参考的会话。', total: 0 };
+              return { text: `没有可参考的会话。${capNote}`, total: data.total ?? 0, sessions, requestedLimit, maxResults: data?.maxResults ?? 50, limitCapped };
             }
             const lines = sessions.flatMap(formatDirectoryEntryText);
             const rangeNote = offset > 0 ? `，第 ${offset + 1} 条起` : '';
             return {
-              text: `共 ${sessions.length} 个会话（按更新时间倒序${rangeNote}）：\n${lines.join('\n')}`,
-              total: sessions.length,
+              text: `共 ${data.total ?? sessions.length} 个会话（按更新时间倒序${rangeNote}）。${capNote}\n${lines.join('\n')}`,
+              total: data.total ?? sessions.length,
               sessions,
+              requestedLimit,
+              maxResults: data?.maxResults ?? 50,
+              limitCapped,
             };
           } catch (err: any) {
             return { error: `会话目录获取失败: ${err?.message || err}` };
+          }
+        },
+      },
+      {
+        name: 'thread_list',
+        parallelizable: true,
+        render: { call: 'session-list', result: 'session-list' },
+        description: '按更新时间倒序列出线程，每条线程只出现一次。支持时间范围、工作空间和归档过滤；最多返回 50 条，超出请求会明确标注上限，可用 offset 继续翻页。',
+        parameters: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: '限定工作空间 agentId（可选）' },
+            from: { type: 'string', description: '更新时间起点（ISO 日期/时间；包含起点）' },
+            to: { type: 'string', description: '更新时间终点（ISO 日期/时间；只给日期时包含整天）' },
+            includeArchived: { type: 'boolean', description: '是否包含已归档线程（默认不包含）' },
+            limit: { type: 'number', description: '最多返回线程数，默认 50，单次上限 50' },
+            offset: { type: 'number', description: '跳过前 N 条，用于翻页' },
+          },
+        },
+        execute: async (args: any) => {
+          const requestedLimit = typeof args?.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : 50;
+          const params = new URLSearchParams({ limit: String(Math.min(requestedLimit, 50)) });
+          for (const key of ['agentId', 'from', 'to'] as const) {
+            if (typeof args?.[key] === 'string' && args[key].trim()) params.set(key, args[key].trim());
+          }
+          if (Number.isFinite(args?.offset) && args.offset > 0) params.set('offset', String(Math.floor(args.offset)));
+          if (args?.includeArchived === true) params.set('includeArchived', '1');
+          try {
+            const resp = await fetch(`${this.serverOrigin}/protoclaw/thread_directory?${params}`, { headers: internalAuthHeaders() });
+            const data = await resp.json().catch(() => null);
+            if (!resp.ok) return { error: data?.error || `thread_directory 请求失败 (${resp.status})` };
+            const threads = Array.isArray(data?.threads) ? data.threads : [];
+            const note = requestedLimit > 50 || data?.limitCapped
+              ? `请求 ${requestedLimit} 条，单次最多展示 ${data?.maxResults ?? 50} 条；可用 offset 继续翻页。`
+              : '';
+            const lines = threads.map((thread: any) =>
+              `[${thread.agentId}] ${thread.threadId}「${thread.title || '(无标题)'}」(${thread.generationCount} 代, ${thread.updatedAt || '时间未知'}${thread.archived ? ', 已归档' : ''}) head=${thread.headSessionId || '?'}`);
+            const limitCapped = requestedLimit > 50 || data?.limitCapped === true;
+            return {
+              text: threads.length ? `共 ${data.total ?? threads.length} 个线程，展示 ${threads.length} 个。${note}\\n${lines.join('\\n')}` : `没有匹配的线程。${note}`,
+              threads,
+              total: data.total ?? threads.length,
+              requestedLimit,
+              maxResults: data?.maxResults ?? 50,
+              limitCapped,
+            };
+          } catch (err: any) { return { error: `线程目录获取失败: ${err?.message || err}` }; }
+        },
+      },
+      {
+        name: 'session_read_thread',
+        parallelizable: true,
+        render: { call: 'thread-transcript', result: 'thread-transcript' },
+        description: '读取线程聚合后的连续对话时间线（账目驱动）：每代附代卡（标题/时间/消息数/接续方式）；Trim 重放的前代对话按 handoff 账目折叠为单行，接续注记与摘要显式呈现；用户与助手正文保留、系统注入与工具活动折叠为一行。每条消息带来源 sessionId/turn/messageIndex，原文用 session_read_turn 回读。',
+        parameters: {
+          type: 'object',
+          properties: { threadId: { type: 'string', description: '线程 ID（wt- 前缀）' } },
+          required: ['threadId'],
+        },
+        execute: async (args: any) => {
+          const threadId = cleanText(args?.threadId);
+          if (!isThreadId(threadId)) return { error: 'threadId 必须是 wt- 前缀的线程 ID' };
+          try {
+            const params = new URLSearchParams({ threadId });
+            const resp = await fetch(`${this.serverOrigin}/protoclaw/thread_transcript?${params}`, { headers: internalAuthHeaders() });
+            const data = await resp.json().catch(() => null);
+            if (!resp.ok) return { error: data?.error || `thread_transcript 请求失败 (${resp.status})` };
+            // ── 渲染分级（账目驱动）──
+            // 锚点（代卡/接续边界/重放折叠行/注入项/用户消息）优先保留；
+            // 助手/工具/系统消息为可压缩项。预算从尾部（最新代）向前分配，
+            // 早期代在剩余预算内回捞锚点：最新状态完整、旧代脉络骨架在场。
+            const fmtTime = (ts: any) => {
+              const n = Number(ts);
+              if (!Number.isFinite(n) || n <= 0) return '?';
+              const d = new Date(n);
+              const pad = (v: number) => String(v).padStart(2, '0');
+              return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+            };
+            const clip = (text: unknown, max: number) => {
+              const s = String(text ?? '');
+              return s.length > max ? `${s.slice(0, max)}…（共 ${s.length} 字，已截断）` : s;
+            };
+            const argSummary = (call: any) => clip(JSON.stringify(call?.args ?? call?.arguments ?? {}), 160);
+            const addr = (source: any) => `${source?.sessionId || '?'} / T${source?.turn ?? '?'} / 消息 ${source?.messageIndex ?? '?'}`;
+            const BOUNDARY_NOTE_CN: Record<string, string> = {
+              'handoff-missing': '无接续账目',
+              'seed-empty': '账目种子为空',
+              'seed-not-located': '账目与快照不匹配',
+              'injection-undeclared': '注入项未声明',
+            };
+            type Item = { text: string; anchor: boolean; gen: number };
+            const items: Item[] = [];
+            let gen = 0;
+            for (const event of data.events || []) {
+              if (event.kind === 'generation-header') {
+                gen += 1;
+                const notes: string[] = [];
+                if (event.replayCount > 0) notes.push(`重放 ${event.replayCount} 条已折叠`);
+                if (event.boundary === 'unknown') {
+                  const rawNotes = (Array.isArray(event.notes) ? event.notes : []).map((n: string) => BOUNDARY_NOTE_CN[n] || n);
+                  notes.push(`边界未知${rawNotes.length ? `（${rawNotes.join('、')}）` : ''}：种子与新增未区分`);
+                }
+                const noteText = notes.length ? ` · ${notes.join(' · ')}` : '';
+                items.push({
+                  anchor: true,
+                  gen,
+                  text: `═══ 第 ${gen} 代「${cleanText(event.title) || '(无标题)'}」${fmtTime(event.startedAt)} ~ ${event.endedAt ? fmtTime(event.endedAt) : '进行中'} · 消息 ${event.messageCount ?? '?'}${noteText} ═══`,
+                });
+              } else if (event.kind === 'succession') {
+                items.push({ anchor: true, gen, text: `── 接续：${cleanText(event.endKind) || '?'}（${event.fromSessionId} → ${event.toSessionId}）──` });
+              } else if (event.kind === 'replay') {
+                items.push({ anchor: true, gen, text: `[重放｜${event.sessionId} 消息 ${event.fromMessageIndex}..${event.toMessageIndex}] 上代经接续保留的 ${event.count} 条对话已折叠，原文按此地址回读` });
+              } else if (event.kind === 'injection') {
+                const label = event.injectionKind === 'summary' ? '接续摘要' : event.injectionKind === 'trim-notice' ? '接续注记' : `接续注入·${event.injectionKind}`;
+                const limit = event.injectionKind === 'summary' ? 4000 : 2000;
+                items.push({ anchor: true, gen, text: `[${label}｜${addr(event.source)}] ${clip(event.content, limit)}` });
+              } else if (event.kind === 'generation-unavailable') {
+                items.push({ anchor: true, gen, text: `[该代记录暂不可读｜${event.sessionId}] ${event.reason}` });
+              } else if (event.kind === 'message') {
+                const a = addr(event.source);
+                if (event.role === 'user') {
+                  items.push({ anchor: true, gen, text: `[用户｜${a}] ${clip(event.content, 2000)}` });
+                } else if (event.role === 'assistant') {
+                  let text = `[助手｜${a}] ${clip(event.content, 2000)}`;
+                  for (const call of event.toolCalls || []) text += `\n  → 调用 ${cleanText(call.name) || 'unknown'}(${argSummary(call)})`;
+                  items.push({ anchor: false, gen, text });
+                } else if (event.role === 'tool') {
+                  items.push({ anchor: false, gen, text: `[工具结果｜${a}] ${clip(event.content, 120)}` });
+                } else {
+                  items.push({ anchor: false, gen, text: `[系统注入｜${a}] ${String(event.content ?? '').length} 字（身份/技能/风格/提醒类注入，原文回读见地址）` });
+                }
+              }
+            }
+
+            const TOTAL_BUDGET = 26_000;
+            const TAIL_SHARE = 0.8;
+            let tailUsed = 0;
+            let cut = 0;
+            for (let i = items.length - 1; i >= 0; i--) {
+              const cost = items[i].text.length + 1;
+              if (tailUsed + cost > TOTAL_BUDGET * TAIL_SHARE) { cut = i + 1; break; }
+              tailUsed += cost;
+            }
+            const rescued: string[] = [];
+            const skippedByGen = new Map<number, number>();
+            let rescueUsed = 0;
+            if (cut > 0) {
+              for (let i = cut - 1; i >= 0; i--) {
+                const item = items[i];
+                if (!item.anchor) { skippedByGen.set(item.gen, (skippedByGen.get(item.gen) || 0) + 1); continue; }
+                const cost = item.text.length + 1;
+                if (rescueUsed + cost > TOTAL_BUDGET - tailUsed) break;
+                rescueUsed += cost;
+                rescued.unshift(item.text);
+              }
+            }
+            const tailCount = items.length - cut;
+            const omitted = items.length - rescued.length - tailCount;
+            const lines: string[] = [`[线程连续对话] ${threadId}${cleanText(data?.title) ? `「${cleanText(data.title)}」` : ''} · ${gen} 代 · ${data.events?.length || 0} 条事件`];
+            lines.push(...rescued);
+            if (skippedByGen.size) {
+              const skipNotes = [...skippedByGen.entries()].sort((a, b) => a[0] - b[0])
+                .map(([g, n]) => `第 ${g} 代省略 ${n} 条`);
+              lines.push(`[早期代的过程消息已折叠：${skipNotes.join('、')}；回读见各行地址]`);
+            }
+            if (omitted > 0) {
+              lines.push(`[为控制篇幅，前段另有 ${omitted} 条事件未展开；可按代卡与各行地址用 session_read_turn 回读]`);
+            }
+            lines.push(...items.slice(cut).map((item) => item.text));
+            return { text: lines.join('\n'), threadId, eventCount: data.events?.length || 0, omittedEvents: omitted, generations: data.generations || [] };
+          } catch (err: any) {
+            return { error: `线程对话读取失败: ${err?.message || err}` };
+          }
+        },
+      },
+      {
+        name: 'session_search',
+        parallelizable: true,
+        render: { call: 'session-search', result: 'session-search' },
+        description: '搜索历史对话内容，跨工作空间按线程聚合，按域分流：搜对话正文（用户/助手消息）或搜工具调用（工具名+参数、工具结果）。空格分隔多词 AND。接续重放副本不重复命中（前代索引已可搜）。结果带原始消息来源地址（agentId/sessionId/T轮次/消息号），可用 session_read_turn 回读全文。',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: '查询词；多个词以空格分隔，所有词都须命中同一条消息' },
+            domain: { type: 'string', enum: ['conversation', 'tooling'], description: '搜索域，必传分流：conversation=对话正文（用户/助手消息），tooling=工具调用（工具名+参数与工具结果）' },
+            agents: { type: 'array', items: { type: 'string' }, description: '限定搜索的工作空间 agentId 列表（如 ["programming-helper"]）；缺省搜全部工作空间' },
+            scope: { type: 'string', enum: ['all', 'main', 'archived'], description: '会话范围，默认 all' },
+            from: { type: 'string', description: '更新时间起点（ISO 日期/时间）' },
+            to: { type: 'string', description: '更新时间终点（ISO 日期/时间）' },
+            limit: { type: 'number', description: '最多返回线程数，默认 50，单次上限 50' },
+            offset: { type: 'number', description: '跳过前 N 条，用于翻页' },
+          },
+          required: ['query', 'domain'],
+        },
+        execute: async (args: any) => {
+          const query = cleanText(args?.query);
+          if (!query) return { error: 'query is required' };
+          const domain = args?.domain === 'conversation' || args?.domain === 'tooling' ? args.domain : null;
+          if (!domain) return { error: 'domain is required (conversation|tooling)' };
+          try {
+            const params = new URLSearchParams({ q: query, domain });
+            if (Array.isArray(args?.agents) && args.agents.length > 0) {
+              const agents = args.agents.map((agent: any) => cleanText(agent)).filter(Boolean);
+              if (agents.length) params.set('agents', agents.join(','));
+            }
+            if (args?.scope === 'main' || args?.scope === 'archived') params.set('scope', args.scope);
+            const requestedLimit = Number.isFinite(args?.limit) && args.limit > 0 ? Math.floor(args.limit) : 50;
+            params.set('limit', String(Math.min(requestedLimit, 50)));
+            if (Number.isFinite(args?.offset) && args.offset > 0) params.set('offset', String(Math.floor(args.offset)));
+            if (typeof args?.from === 'string' && args.from.trim()) params.set('from', args.from.trim());
+            if (typeof args?.to === 'string' && args.to.trim()) params.set('to', args.to.trim());
+            const resp = await fetch(`${this.serverOrigin}/protoclaw/search_conversations?${params}`, { headers: internalAuthHeaders() });
+            const data = await resp.json().catch(() => null);
+            if (!resp.ok) return { error: data?.error || `search_conversations 请求失败 (${resp.status})` };
+            const groups = Array.isArray(data?.results) ? data.results : [];
+            const coverage = Array.isArray(data?.indexCoverage) ? data.indexCoverage : [];
+            const coverageNote = coverage.length
+              ? `[索引提示] ${coverage.map((cov: any) => `${cov.agentId}（丢工具结果行 ${cov.droppedToolRows ?? 0}、丢工具调用行 ${cov.droppedCallRows ?? 0}、跳过最旧会话 ${cov.skippedSessions ?? 0}）`).join('、')} 因体量超预算已分级降级索引，被丢弃的行不可搜（对话正文不受影响；工具调用域在该空间可能不完整）。`
+              : '';
+            const capped = requestedLimit > 50 || data?.limitCapped === true;
+            const capNote = capped ? `请求 ${requestedLimit} 个结果，单次最多展示 ${data?.maxResults ?? 50} 个线程；可用 offset 翻页或缩小范围。` : '';
+            const cappedTotal = data.totalThreads ?? data.total ?? 0;
+            const total = data.totalThreads !== undefined ? cappedTotal : Math.max(cappedTotal, groups.length);
+            if (groups.length === 0) return { text: `${coverageNote ? `${coverageNote}` : ''}没有找到匹配“${query}”的对话。${capNote}`, total, results: [], requestedLimit, maxResults: data?.maxResults ?? 50, limitCapped: capped };
+            const lines = [`[对话搜索] “${query}” 命中 ${total} 个线程（展示 ${groups.length} 个）。${capNote}`];
+            if (coverageNote) lines.push(coverageNote);
+            for (const group of groups) {
+              lines.push(`\\n## ${group.threadId || '(非线程会话)'}${group.title ? `「${group.title}」` : ''} — agentId: ${group.agentId}`);
+              for (const match of group.matches || []) {
+                const source = match.source || {};
+                lines.push(`- [${match.role}${match.kind ? `/${match.kind}` : ''}] ${match.snippet}\\n  来源: ${source.agentId}/${source.sessionId} T${source.turn ?? '?'} 消息 ${source.messageIndex ?? '?'}`);
+              }
+            }
+            return { text: lines.join('\\n'), total, results: groups, requestedLimit, maxResults: data?.maxResults ?? 50, limitCapped: capped };
+          } catch (err: any) {
+            return { error: `对话搜索失败: ${err?.message || err}` };
           }
         },
       },

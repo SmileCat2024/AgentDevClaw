@@ -467,6 +467,28 @@ describe('read tools transport and paging', () => {
     }
   });
 
+  it('session_list caps oversized requests, forwards date filters and tells the model to page', async () => {
+    const tools = makeTools();
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return { ok: true, status: 200, json: async () => ({
+        sessions: [{ agentId: 'ph', sessionId: 's-1', title: 'match', updatedAt: '2026-11-09T10:00:00Z' }],
+        total: 60, requestedLimit: 50, maxResults: 50, limitCapped: true,
+      }) } as any;
+    }) as any;
+    try {
+      const result = await (tools.get('session_list')!.execute as any)({ limit: 100, offset: 50, from: '2026-11-09', to: '2026-11-09' });
+      assert.match(urls[0], /session_directory\?limit=50&offset=50/);
+      assert.match(urls[0], /from=2026-11-09/);
+      assert.match(urls[0], /to=2026-11-09/);
+      assert.equal(result.limitCapped, true);
+      assert.equal(result.total, 60);
+      assert.match(result.text, /最多展示 50 条/);
+      assert.match(result.text, /offset 继续翻页/);
+    } finally { globalThis.fetch = realFetch; }
+  });
+
   it('session_list passes offset through and marks the range in the text', async () => {
     const tools = makeTools();
     const urls: string[] = [];
@@ -492,6 +514,39 @@ describe('read tools transport and paging', () => {
 });
 
 // ── 线程双模：threadId 输入 → 代际导航索引 ─────────────────────────
+
+describe('thread directory', () => {
+  const realFetch = globalThis.fetch;
+
+  function makeTools() {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    return new Map(feature.getTools().map((tool) => [tool.name, tool]));
+  }
+
+  it('calls thread_directory with date/page filters and surfaces the server cap', async () => {
+    const tools = makeTools();
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return { ok: true, status: 200, json: async () => ({
+        threads: [{ threadId: 'wt-1', agentId: 'coder', title: 'topic', generationCount: 3, updatedAt: '2026-11-09T10:00:00Z' }],
+        total: 72, requestedLimit: 100, maxResults: 50, limitCapped: true,
+      }) } as any;
+    }) as any;
+    try {
+      const result = await (tools.get('thread_list')!.execute as any)({ limit: 100, offset: 50, agentId: 'coder', from: '2026-11-09', to: '2026-11-09' });
+      assert.match(urls[0], /thread_directory\?/);
+      assert.match(urls[0], /limit=50/);
+      assert.match(urls[0], /offset=50/);
+      assert.match(urls[0], /agentId=coder/);
+      assert.match(urls[0], /from=2026-11-09/);
+      assert.match(urls[0], /to=2026-11-09/);
+      assert.equal(result.limitCapped, true);
+      assert.equal(result.total, 72);
+      assert.match(result.text, /最多展示 50 条/);
+    } finally { globalThis.fetch = realFetch; }
+  });
+});
 
 describe('thread navigation (dual-mode session_read_overview)', () => {
   const realFetch = globalThis.fetch;

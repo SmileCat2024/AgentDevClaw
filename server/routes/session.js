@@ -496,11 +496,19 @@ app.get('/protoclaw/session_directory', async (req, res, next) => {
     const offset = Number(req.query.offset);
     const sessions = buildSessionDirectoryEntries(entries, {
       includeArchived,
+      from: typeof req.query.from === 'string' ? req.query.from : undefined,
+      to: typeof req.query.to === 'string' ? req.query.to : undefined,
       limit: Number.isFinite(limit) && limit > 0 ? limit : 50,
       offset: Number.isFinite(offset) && offset > 0 ? offset : 0,
       threadIndexEntries: await readThreadIndexEntries(),
     });
-    res.json({ sessions, total: sessions.length });
+    res.json({
+      sessions: Array.from(sessions),
+      total: sessions.total ?? sessions.length,
+      requestedLimit: sessions.requestedLimit ?? 50,
+      maxResults: sessions.maxResults ?? 50,
+      limitCapped: sessions.limitCapped ?? false,
+    });
   } catch (error) {
     next(error);
   }
@@ -581,6 +589,8 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
           content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
           ...(Array.isArray(m.toolCalls) ? { toolCalls: m.toolCalls } : {}),
           ...(typeof m.reasoning === 'string' && m.reasoning ? { reasoning: m.reasoning } : {}),
+          ...(m.source ? { source: m.source } : {}),
+          ...(m.tag !== undefined ? { tag: m.tag } : {}),
           ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
           ...(m.usage ? { usage: m.usage } : {}),
           ...(m.execution ? { execution: m.execution } : {}),

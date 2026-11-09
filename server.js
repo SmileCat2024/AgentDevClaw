@@ -43,9 +43,11 @@ import { ensureCoderFeaturePresets } from './server/routes/coder-feature-presets
 import {
   PROJECT_ROOT, rootRequire, APP_PORT, VIEWER_PORT,
   AGENTS_ROOT,
+  THREADS_ROOT,
+  PREBUILT_SESSIONS_ROOT,
   VIEWER_ORIGIN,
   USER_DATA_ROOT,
-  PREBUILT_SESSIONS_ROOT, PREBUILT_WORKSPACES_ROOT,
+  PREBUILT_WORKSPACES_ROOT,
   APP_QQBOT_CONFIG_PATH, APP_WEIXIN_CONFIG_PATH,
   APP_FEISHU_CONFIG_PATH, APP_WECOM_CONFIG_PATH,
   APP_IM_WORKSPACE_CONFIG_PATH,
@@ -110,6 +112,9 @@ import { setupFeatureCommunicationRoutes, featureCommunicationStore } from './se
 import { setupIMRoutes, getPortalAgentDisplayName } from './server/routes/im.js';
 import { createSessionHelpers } from './server/routes/session-helpers.js';
 import { setupSessionRoutes } from './server/routes/session.js';
+import { setupThreadTranscriptRoute } from './server/routes/thread-transcript.js';
+import { setupThreadConversationSearchRoute } from './server/routes/thread-conversation-search.js';
+import { setupThreadDirectoryRoute } from './server/routes/thread-directory.js';
 import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnostics.js';
 import { setupCapabilityRoutes } from './server/routes/capability.js';
 import { setupContainerImagesRoutes } from './server/routes/container-images.js';
@@ -555,6 +560,30 @@ setupCapabilityRoutes(app, express);
 setupContainerImagesRoutes(app, express);
 
 // ── Sessions → server/routes/session.js ─────────────────────────────────────
+setupThreadTranscriptRoute(app, {
+  threadsRoot: THREADS_ROOT,
+  getSessionFilePath: getPrebuiltSessionFilePath,
+  readSessionIndex: readSessionIndexShared,
+  readHandoff: (agentId, handoffId) => readHandoffPackage({ userDataRoot: USER_DATA_ROOT, agentId, handoffId })
+    .then((result) => result.handoff)
+    .catch(() => null),
+});
+setupThreadConversationSearchRoute(app, {
+  discoverAgents: () => discoverAgents(AGENTS_ROOT),
+  readSessionIndex: readSessionIndexShared,
+  getAgentSessionDir: getPrebuiltAgentSessionDir,
+  threadsRoot: THREADS_ROOT,
+  getSessionFilePath: getPrebuiltSessionFilePath,
+  readHandoff: (agentId, handoffId) => readHandoffPackage({ userDataRoot: USER_DATA_ROOT, agentId, handoffId })
+    .then((result) => result.handoff)
+    .catch(() => null),
+});
+setupThreadDirectoryRoute(app, {
+  threadsRoot: THREADS_ROOT,
+  discoverAgents: () => discoverAgents(AGENTS_ROOT),
+  readSessionIndex: readSessionIndexShared,
+});
+
 setupSessionRoutes(app, express, {
   // Session helpers
   ...sessionHelpers,

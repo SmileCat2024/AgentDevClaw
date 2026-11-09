@@ -81,6 +81,22 @@ describe('buildSessionDirectoryEntries', () => {
     assert.deepEqual(entries.map((entry) => entry.sessionId), ['s1', 's2']);
   });
 
+  it('filters by inclusive ISO date bounds and caps results at 50 while preserving offset pagination', () => {
+    const sessions = Array.from({ length: 60 }, (_, index) => ({
+      id: `s${index}`,
+      updatedAt: `2026-11-${String(index < 30 ? '08' : '09')}T${String(index % 24).padStart(2, '0')}:00:00Z`,
+    }));
+    const input = [{ agentId: 'a', sessions }];
+    const inRange = buildSessionDirectoryEntries(input, { from: '2026-11-09', to: '2026-11-09' });
+    assert.equal(inRange.length, 30);
+    assert.ok(inRange.every((entry) => entry.updatedAt.startsWith('2026-11-09')));
+    const oversized = buildSessionDirectoryEntries(input, { limit: 100 });
+    assert.equal(oversized.length, 50);
+    assert.equal(oversized.total, 60);
+    assert.equal(oversized.limitCapped, true);
+    assert.equal(buildSessionDirectoryEntries(input, { limit: 50, offset: 50 }).length, 10);
+  });
+
   it('applies offset before limit for paging (offset=0 keeps legacy behavior)', () => {
     const input = [{
       agentId: 'a',

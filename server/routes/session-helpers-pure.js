@@ -709,7 +709,7 @@ export function compareSidebarSessionReadModels(lightSessions = [], authoritativ
  *
  * 只消费各 agent 的 session index 元数据（readSessionIndex 的输出），
  * 不读会话文件本体。供 session-reference feature 的发现工具消费。
- * 纯函数：过滤 archived、按 updatedAt 倒序、offset 跳过、limit 截断。
+ * 纯函数：过滤 archived / 更新时间范围、按 updatedAt 倒序、offset 跳过；每页最多 50 条。
  *
  * 线程归属标注（session-reference 双模读取）：threadIndexEntries 传
  * threads/index.json 的 threads 摘要数组（threadId/title/sessionIds），
@@ -719,10 +719,24 @@ export function compareSidebarSessionReadModels(lightSessions = [], authoritativ
  * 线程标题（任务级语义），不是某代会话的标题。
  *
  * @param {Array<{agentId: string, agentName?: string, sessions: Array<object>}>} agentIndexEntries
- * @param {{limit?: number, offset?: number, includeArchived?: boolean, threadIndexEntries?: Array<{threadId: string, title?: string, sessionIds?: string[]}>}} [options]
+ * @param {{limit?: number, offset?: number, includeArchived?: boolean, from?: string, to?: string, threadIndexEntries?: Array<{threadId: string, title?: string, sessionIds?: string[]}>}} [options]
  */
 export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
   const includeArchived = options?.includeArchived === true;
+  const parseDateBound = (value, endOfDay = false) => {
+    if (typeof value !== 'string' || !value.trim()) return null;
+    const raw = value.trim();
+    const normalized = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(raw)
+      ? `${raw}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`
+      : raw;
+    const timestamp = Date.parse(normalized);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  };
+  const fromTime = parseDateBound(options?.from);
+  const toTime = parseDateBound(options?.to, true);
+  if (typeof options?.from === 'string' && options.from.trim() && fromTime === null) throw new TypeError('from must be a valid ISO date/time');
+  if (typeof options?.to === 'string' && options.to.trim() && toTime === null) throw new TypeError('to must be a valid ISO date/time');
+  if (fromTime !== null && toTime !== null && fromTime > toTime) throw new TypeError('from must not be later than to');
   // sessionId → { threadId, threadTitle } 反查表。同 session 多线程理论不
   // 发生（迁移保证单归属），异常数据时首条胜出（后写不覆盖）。
   const threadBySessionId = new Map();
@@ -747,6 +761,7 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
       if (record.archived === true && !includeArchived) continue;
       const createdAt = cleanSessionText(record?.createdAt);
       const sessionId = cleanSessionText(record.id);
+      const updatedAt = cleanSessionText(record?.updatedAt) || createdAt;
       const thread = threadBySessionId.get(sessionId) || null;
       entries.push({
         agentId,
@@ -760,7 +775,7 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
         projectId: cleanSessionText(record?.projectId),
         sessionType: cleanSessionText(record.sessionType) || 'main',
         createdAt,
-        updatedAt: cleanSessionText(record?.updatedAt) || createdAt,
+        updatedAt,
         messageCount: typeof record.messageCount === 'number' ? record.messageCount : 0,
         // 线程归属（可能为空：非线程宿主会话 / 线程目录缺失）
         threadId: thread?.threadId || '',
@@ -769,12 +784,24 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
     }
   }
   entries.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  const dateFilteredEntries = entries.filter((entry) => {
+    const timestamp = Date.parse(entry.updatedAt);
+    return (fromTime === null || (Number.isFinite(timestamp) && timestamp >= fromTime))
+      && (toTime === null || (Number.isFinite(timestamp) && timestamp <= toTime));
+  });
   const limit = Number(options?.limit);
   const offset = Number(options?.offset);
   const bounded = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
-  return Number.isFinite(limit) && limit > 0
-    ? entries.slice(bounded, bounded + Math.floor(limit))
-    : entries.slice(bounded);
+  const total = dateFilteredEntries.length;
+  const requested = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 50;
+  const slice = dateFilteredEntries.slice(bounded, bounded + Math.min(requested, 50));
+  Object.defineProperties(slice, {
+    total: { value: total, enumerable: false },
+    requestedLimit: { value: requested, enumerable: false },
+    maxResults: { value: 50, enumerable: false },
+    limitCapped: { value: requested > 50, enumerable: false },
+  });
+  return slice;
 }
 
 /**

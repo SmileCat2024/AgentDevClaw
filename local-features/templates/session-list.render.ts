@@ -19,9 +19,23 @@ interface SessionEntry {
   archived?: boolean;
 }
 
+interface ThreadEntry {
+  threadId?: string;
+  agentId?: string;
+  title?: string;
+  updatedAt?: string;
+  generationCount?: number;
+  headSessionId?: string;
+  archived?: boolean;
+}
+
 interface SessionListResult {
   sessions?: SessionEntry[];
+  threads?: ThreadEntry[];
   total?: number;
+  requestedLimit?: number;
+  maxResults?: number;
+  limitCapped?: boolean;
 }
 
 function escapeHtml(text: unknown): string {
@@ -62,7 +76,7 @@ function renderRow(s: SessionEntry): string {
 
 export default {
   call: (args: Record<string, unknown>) => {
-    let html = '<div class="bash-command">会话目录</div>';
+    let html = '<div class="bash-command">历史会话 / 线程目录</div>';
     const metas: string[] = [];
     if (typeof args?.limit === 'number' && args.limit > 0) metas.push(`最近 ${args.limit} 条`);
     if (args?.includeArchived === true) metas.push('含已归档');
@@ -76,13 +90,29 @@ export default {
       const text = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data ?? '');
       return `<div class="tool-error"><span>${escapeHtml(text)}</span></div>`;
     }
+    if (data && typeof data === 'object' && Array.isArray((data as SessionListResult).threads)) {
+      const d = data as SessionListResult;
+      const rows = d.threads!.map((thread) => {
+        const title = escapeHtml(thread.title || '(无标题)');
+        const metas = [thread.agentId, `${thread.generationCount ?? 0} 代`, thread.updatedAt]
+          .filter(Boolean).map((item) => `<span class="tool-bg-meta">${escapeHtml(item)}</span>`).join('');
+        const chips = thread.archived ? '<span class="tool-chip">已归档</span>' : '';
+        return `<div class="tool-bg-row"><div class="tool-bg-row-head"><span>${title}</span>${chips}${metas}</div><div class="tool-bg-meta">${escapeHtml(thread.threadId || '')}</div><div class="tool-bg-meta">head: ${escapeHtml(thread.headSessionId || '')}</div></div>`;
+      });
+      if (rows.length === 0) {
+        const cap = d.limitCapped ? `；单次最多展示 ${d.maxResults ?? 50} 条，请缩小范围或用 offset 翻页` : '';
+        return `<div class="tool-result-note">没有匹配的线程${cap}</div>`;
+      }
+      const cap = d.limitCapped ? `；单次最多展示 ${d.maxResults ?? 50} 条，请缩小范围或用 offset 翻页` : '';
+      return `<div class="tool-bg-tasks">${rows.join('')}</div>`
+        + `<div class="tool-result-note">共 ${d.total ?? rows.length} 个线程${cap}</div>`;
+    }
     if (data && typeof data === 'object' && Array.isArray((data as SessionListResult).sessions)) {
       const d = data as SessionListResult;
-      if (d.sessions.length === 0) {
-        return '<div class="tool-result-note">没有可参考的会话</div>';
-      }
-      return `<div class="tool-bg-tasks">${d.sessions.map(renderRow).join('')}</div>`
-        + `<div class="tool-result-note">共 ${d.total ?? d.sessions.length} 个会话（按更新时间倒序）</div>`;
+      if (d.sessions!.length === 0) return '<div class="tool-result-note">没有可参考的会话</div>';
+      const cap = d.limitCapped ? `；单次最多展示 ${d.maxResults ?? 50} 条，可用 offset 翻页` : '';
+      return `<div class="tool-bg-tasks">${d.sessions!.map(renderRow).join('')}</div>`
+        + `<div class="tool-result-note">共 ${d.total ?? d.sessions!.length} 个会话（按更新时间倒序）${cap}</div>`;
     }
     const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
     return `<div class="tool-plain-text">${escapeHtml(text)}</div>`;
