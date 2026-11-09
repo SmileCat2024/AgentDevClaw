@@ -668,8 +668,9 @@ export function setupFeatureRepositoryRoutes(app, express) {
       // 数据面，含 ESM 标记）。digest 冲突 / 声明面缺失视为包损坏：回滚
       // 删除已落盘 tgz，导入整体失败（不留半可用状态）。
       let assets = null;
+      let archiveSummary;
       try {
-        const archiveSummary = await summarizeArchive(targetPath, 'custom');
+        archiveSummary = await summarizeArchive(targetPath, 'custom');
         const expectsUi = Array.isArray(archiveSummary.manifestUi?.panels)
           && archiveSummary.manifestUi.panels.length > 0;
         if (expectsUi) {
