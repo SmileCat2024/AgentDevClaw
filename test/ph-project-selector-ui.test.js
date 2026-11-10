@@ -465,6 +465,95 @@ describe('双选择器 — 最近访问排序与远程目录退场', () => {
     assert.ok(order.every((p) => p >= 0), 'all three projects listed');
     assert.ok(order[0] < order[1] && order[1] < order[2], 'current project first, then by lastActivityAt desc');
   });
+
+  it('phActivity 目录信号驱动排序：归属切片后非当前目录桶内无会话，信号补位（键归一化含尾斜杠/反斜杠/大小写）', () => {
+    // 复刻轮询切片后的真实形态：sessions 只剩当前目录（归属替换），
+    // 其他目录排序只能靠 phActivity.directories 全量聚合信号。
+    const s = createSetup({
+      phProjects: [
+        { openDirectory: 'D:/cur' },
+        { openDirectory: 'D:/a' },
+        { openDirectory: 'D:/b' },
+        { openDirectory: 'D:\\Mixed\\Case\\' },
+      ],
+      target: { type: 'dir', id: 'dir:d:/cur', openDirectory: 'D:/cur' },
+      openDirectory: 'D:/cur',
+      sessionsMeta: {
+        sessions: [
+          { id: 'sc', title: 'cur chat', openDirectory: 'D:/cur', updatedAt: '2026-10-20T10:00:00Z', messageCount: 1 },
+        ],
+        sessionTotal: 1, mainTotal: 1, archivedTotal: 0,
+        phActivity: {
+          // 键为服务端归一化形态（反斜杠→/、剪尾斜杠、小写）。
+          // D:/a 无信号：验证无信号目录回退路径序垫底。
+          directories: {
+            'dir:d:/b': '2026-10-22T00:00:00Z',
+            'dir:d:/mixed/case': '2026-10-23T00:00:00Z',
+          },
+          projects: {},
+        },
+      },
+    });
+    const html = s.render();
+    const dirSeg = html.slice(0, html.indexOf('ph-org-selector'));
+    // phDirIdOf 不剪尾斜杠：DOM id 带尾斜杠，活动键不带——查表靠 _phActivityDirKey 归一化
+    const pos = (id) => dirSeg.indexOf('data-dir-id="' + id + '"');
+    assert.ok(pos('dir:d:/cur') >= 0 && pos('dir:d:/b') >= 0 && pos('dir:d:/a') >= 0, 'all dirs present');
+    assert.ok(pos('dir:d:/cur') < pos('dir:d:/mixed/case/'), 'current dir pinned first');
+    assert.ok(pos('dir:d:/mixed/case/') < pos('dir:d:/b'), 'signal-newest dir (normalized key hit) before older-signal dir');
+    assert.ok(pos('dir:d:/b') < pos('dir:d:/a'), 'signal dir before no-signal dir (path fallback)');
+  });
+
+  it('phActivity 项目信号纳入排序：实体缓存陈旧（ensure-loaded 一次性）时信号驱动，取最大值', () => {
+    const s = createSetup({
+      phProjects: [{ openDirectory: 'D:/w' }],
+      target: { type: 'dir', id: 'dir:d:/w', openDirectory: 'D:/w' },
+      openDirectory: 'D:/w',
+      sessionsMeta: {
+        sessions: [], sessionTotal: 0, mainTotal: 0, archivedTotal: 0,
+        phActivity: {
+          directories: {},
+          projects: { prj_live: '2026-10-24T00:00:00Z' },
+        },
+      },
+      entities: [
+        // prj_frozen 实体 lastActivityAt 是页面加载时算的旧值（缓存冻结）
+        { id: 'prj_frozen', name: 'F', workDirectory: 'D:/w', createdAt: '2026-09-01', updatedAt: '2026-09-02', lastActivityAt: '2026-10-20T00:00:00Z' },
+        // prj_live 实体值更旧，但轮询信号最新 → 应排最前
+        { id: 'prj_live', name: 'L', workDirectory: 'D:/w', createdAt: '2026-09-01', updatedAt: '2026-09-01', lastActivityAt: '2026-10-01T00:00:00Z' },
+        // prj_entity_only 无信号：实体字段独立参与取最大值
+        { id: 'prj_entity_only', name: 'E', workDirectory: 'D:/w', createdAt: '2026-09-01', updatedAt: '2026-09-01', lastActivityAt: '2026-10-10T00:00:00Z' },
+      ],
+    });
+    const html = s.render();
+    const orgSeg = html.slice(html.indexOf('ph-org-selector'), html.indexOf('ph-quick-add'));
+    const order = ['prj_live', 'prj_frozen', 'prj_entity_only'].map((id) => orgSeg.indexOf('data-project-id="' + id + '"'));
+    assert.ok(order.every((p) => p >= 0), 'all three projects listed');
+    assert.ok(order[0] < order[1] && order[1] < order[2], 'signal beats stale entity cache; max(entity, signal) ordering');
+  });
+
+  it('缺 phActivity 字段（旧服务端/降级载荷）：回退桶内推断，切片下无会话目录按路径稳定垫底', () => {
+    const s = createSetup({
+      phProjects: [
+        { openDirectory: 'D:/cur' },
+        { openDirectory: 'D:/gamma' },
+        { openDirectory: 'D:/alpha' },
+        { openDirectory: 'D:/beta' },
+      ],
+      target: { type: 'dir', id: 'dir:d:/cur', openDirectory: 'D:/cur' },
+      openDirectory: 'D:/cur',
+      // 无 phActivity 字段：切片后非当前目录桶内恒空 → 路径字母序（现状回退基线）
+      sessionsMeta: {
+        sessions: [{ id: 'sc', title: 'cur chat', openDirectory: 'D:/cur', updatedAt: '2026-10-20T10:00:00Z', messageCount: 1 }],
+        sessionTotal: 1, mainTotal: 1, archivedTotal: 0,
+      },
+    });
+    const html = s.render();
+    const dirSeg = html.slice(0, html.indexOf('ph-org-selector'));
+    const pos = (id) => dirSeg.indexOf('data-dir-id="' + id + '"');
+    assert.ok(pos('dir:d:/cur') < pos('dir:d:/alpha'), 'current dir first');
+    assert.ok(pos('dir:d:/alpha') < pos('dir:d:/beta') && pos('dir:d:/beta') < pos('dir:d:/gamma'), 'no-signal dirs fall back to stable path order');
+  });
 });
 
 describe('双选择器 — 项目绑定目录（含托管）', () => {

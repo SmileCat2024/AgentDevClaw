@@ -418,24 +418,44 @@ function phDirIdOf(directory) {
  */
 // 项目最近活动时间戳（ms）：服务端按会话索引算的 lastActivityAt 优先，
 // 实体 updatedAt（创建/改名时间）兜底。
-function _phProjectActivityAt(entity) {
+function _phProjectActivityAt(entity, signals = null) {
+  const projected = signals?.projects?.[String(entity?.id || '')];
   return Math.max(
     Date.parse(String(entity?.lastActivityAt || '')) || 0,
     Date.parse(String(entity?.updatedAt || '')) || 0,
+    Date.parse(String(projected || '')) || 0,
   );
 }
 
+// PH 活动信号（服务端 phActivity 投影，随 workspace_sessions 轮询下发）：
+// 目录/项目 → 最近活动 ISO 时间。归属切片导致非当前目录桶内会话恒空，
+// 目录排序依赖这个全量聚合信号；缺字段（旧服务端/降级）回退桶内推断。
+function _phActivitySignals(agent) {
+  const activity = agent?.workspace_sessions?.phActivity;
+  return activity && typeof activity === 'object' ? activity : null;
+}
+
+// 活动键归一化与服务端 aggregateSessionActivity 对齐（含尾斜杠修剪），
+// 比 phDirIdOf 严：两处语义不同，不合并。
+function _phActivityDirKey(dir) {
+  return 'dir:' + String(dir || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
 /** 同目录项目按最近访问排序：当前项目置顶（正在访问），其余活动时间倒序，名称稳定垫底。 */
-function _phSortProjectsByRecency(list, agent) {
+function _phSortProjectsByRecency(list, agent, signals = null) {
   // 调用方可能没有当前 agent（如脱离主壳的渲染场景）：此时只做活动时间排序，
   // 不解析浏览目标——避免依赖主壳全局 getCurrentAgentRecord。
   const resolvedAgent = agent ?? (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null);
+  const resolvedSignals = signals ?? _phActivitySignals(resolvedAgent);
   const target = resolvedAgent && typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(resolvedAgent) : null;
   const currentId = target?.type === 'project' ? String(target.id || '') : '';
   return [...list].sort((a, b) => {
     if (a.id === currentId) return -1;
     if (b.id === currentId) return 1;
-    const diff = _phProjectActivityAt(b) - _phProjectActivityAt(a);
+    const diff = _phProjectActivityAt(b, resolvedSignals) - _phProjectActivityAt(a, resolvedSignals);
     return diff !== 0 ? diff : String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
   });
 }
@@ -444,6 +464,7 @@ function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
   if (typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return [];
   const projects = typeof getProgrammingHelperProjects === 'function'
     ? getProgrammingHelperProjects(agent) : [];
+  const activitySignals = _phActivitySignals(agent);
   const entries = [];
   const byId = new Map();
   for (const bucket of projects) {
@@ -479,17 +500,19 @@ function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
     }
     entry.projects.push(entity);
   }
-  // 目录按最近访问排序：当前目录置顶（正在访问），其余按桶内会话与目录
-  // 内项目的最近活动时间倒序，无活动目录按路径稳定垫底（空间记忆稳定，
-  // 顺序不随项目切换跳位——跳位只发生在真实访问顺序变化时）。
+  // 目录按最近访问排序：当前目录置顶（正在访问），其余按服务端全量活动
+  // 信号、桶内会话与目录内项目的最近活动时间倒序，无活动目录按路径稳定
+  // 垫底（空间记忆稳定，顺序不随项目切换跳位——跳位只发生在真实访问顺
+  // 序变化时）。服务端信号覆盖全部目录；桶内会话仅当前目录非空（归属
+  // 切片），二者取最大即"切片目录用本地值、其余目录用信号"。
   const dirActivityAt = (entry) => {
-    let t = 0;
+    let t = Date.parse(String(activitySignals?.directories?.[_phActivityDirKey(entry.openDirectory)] || '')) || 0;
     for (const session of entry.sessions) {
       const at = Date.parse(String(session?.updatedAt || '')) || 0;
       if (at > t) t = at;
     }
     for (const project of entry.projects) {
-      const at = _phProjectActivityAt(project);
+      const at = _phProjectActivityAt(project, activitySignals);
       if (at > t) t = at;
     }
     return t;
@@ -502,7 +525,7 @@ function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
     const diff = dirActivityAt(b) - dirActivityAt(a);
     return diff !== 0 ? diff : String(a.openDirectory).localeCompare(String(b.openDirectory), undefined, { sensitivity: 'base' });
   });
-  for (const entry of entries) entry.projects = _phSortProjectsByRecency(entry.projects, agent);
+  for (const entry of entries) entry.projects = _phSortProjectsByRecency(entry.projects, agent, activitySignals);
   return entries;
 }
 
