@@ -101,6 +101,20 @@ describe('frontend normalizeTodoPlan round-trip', () => {
     assert.equal(output.tasks[1].kind, 'investigate');
   });
 
+  it('preserves the other fallback kind in data while keeping it badge-less', () => {
+    const ctx = createTodoSandbox();
+    const plan = buildFullPlan();
+    plan.tasks[0].kind = 'other';
+    ctx.run(`globalThis.__testInput = ${JSON.stringify(plan)}`);
+    const output = ctx.run('normalizeTodoPlan(globalThis.__testInput)');
+
+    // other 是模型侧 kind 必填的兜底值：数据层必须保留（回读与后续分析的来源），
+    // 渲染层不出徽章（渲染白名单五值，见 isPlanTaskKind）
+    assert.equal(output.tasks[0].kind, 'other');
+    const html = ctx.run(`renderPlanTask({ id: 'k4', subject: '杂项任务', kind: 'other', status: 'pending' })`);
+    assert.ok(!html.includes('plan-task-kind'));
+  });
+
   it('preserves summary fields through normalize', () => {
     const ctx = createTodoSandbox();
     ctx.run(`globalThis.__testInput = ${JSON.stringify(buildFullPlan())}`);

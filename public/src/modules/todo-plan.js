@@ -29,7 +29,9 @@ function getEmptyTodoPlan() {
   };
 }
 
-// 任务类型合法值（与框架 features/todo 的 TaskKind / viewer-worker normalizeKind 同步）
+// 任务类型渲染白名单（五值，与框架 features/todo 的 TaskKind / viewer-worker normalizeKind 同步）。
+// other 是模型侧 kind 必填的兜底值：数据层经 normalize 保留（见 normalizeTodoPlan 内六值判断），
+// 但不渲染类型徽章——「其他」不携带类型信息，出徽章只是视觉噪音。
 function isPlanTaskKind(value) {
   return ['investigate', 'design', 'implement', 'fix', 'verify'].includes(value);
 }
@@ -47,7 +49,8 @@ function normalizeTodoPlan(snapshot) {
     subject: String(task?.subject || ''),
     description: String(task?.description || ''),
     deliver: String(task?.deliver || ''),
-    kind: isPlanTaskKind(task?.kind) ? task.kind : '',
+    // 数据层六值：other 为合法兜底值，保留供回读与后续分析（渲染层另用五值白名单）
+    kind: ['investigate', 'design', 'implement', 'fix', 'verify', 'other'].includes(task?.kind) ? task.kind : '',
     status: ['pending', 'in_progress', 'completed', 'deleted'].includes(task?.status) ? task.status : 'pending',
     metadata: task?.metadata && typeof task.metadata === 'object' ? task.metadata : {},
     createdAt: typeof task?.createdAt === 'number' ? task.createdAt : 0,
