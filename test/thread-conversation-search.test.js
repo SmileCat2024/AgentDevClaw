@@ -224,6 +224,71 @@ test('thread lookup is built from thread index session membership', () => {
   assert.deepEqual(lookup.get('s2'), { threadId: 'wt-1', title: 'x' });
 });
 
+test('an open reader on the index file degrades persist instead of failing the whole build', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'thread-search-persist-'));
+  try {
+    const sessionPath = path.join(root, 'session.json');
+    await fs.writeFile(sessionPath, JSON.stringify({ runtime: { context: { messages: [
+      { role: 'user', turn: 1, content: 'persist needle' },
+    ], enrichedMessages: [{ timestamp: 10 }] } } }));
+    const session = { id: 's1', fileMtimeMs: 10, fileSize: 100, title: 'topic', updatedAt: 'now' };
+    const options = {
+      agentId: 'a', getAgentSessionDir: () => root, getSessionFilePath: () => sessionPath,
+      sessions: [session], threadBySession: new Map(),
+    };
+    const indexPath = path.join(root, 'thread-conversation-search.json');
+    await ensureThreadConversationIndex(options);
+    // 生产缺陷场景：另一并发读路径正持有索引只读句柄（Windows 上 rename 到
+    // 被只读句柄打开的目标必 EPERM），此时 rebuild 不得把整次搜索打挂。
+    const reader = await fs.open(indexPath, 'r');
+    let rebuilt;
+    try {
+      rebuilt = await ensureThreadConversationIndex({ ...options, sessions: [{ ...session, fileMtimeMs: 11 }] });
+    } finally { await reader.close(); }
+    assert.equal(rebuilt.records.length, 1);
+    assert.equal(rebuilt.persistFailed, true);
+    // 句柄释放后，下一次构建恢复持久化，磁盘索引回到最新。
+    const persisted = await ensureThreadConversationIndex({ ...options, sessions: [{ ...session, fileMtimeMs: 12 }] });
+    const stored = JSON.parse(await fs.readFile(indexPath, 'utf8'));
+    assert.equal(stored.entries.s1.fileMtimeMs, 12);
+    assert.notEqual(persisted.persistFailed, true);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('concurrent index builds for the same agent coalesce into a single build', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'thread-search-coalesce-'));
+  try {
+    const sessionPath = path.join(root, 'session.json');
+    await fs.writeFile(sessionPath, JSON.stringify({ runtime: { context: { messages: [
+      { role: 'user', turn: 1, content: 'coalesce needle' },
+    ], enrichedMessages: [] } } }));
+    let readHandoffCalls = 0;
+    let releaseGate;
+    const gate = new Promise((resolve) => { releaseGate = resolve; });
+    // 单一构建时兜底放行：并发被合并则第二个调用永远不会进 readHandoff。
+    const gateTimeout = setTimeout(() => releaseGate(), 150);
+    const buildOptions = () => ({
+      agentId: 'a', getAgentSessionDir: () => root, getSessionFilePath: () => sessionPath,
+      sessions: [{ id: 's1', fileMtimeMs: 1, fileSize: 10, title: 't', updatedAt: 'now', metadata: { handoffId: 'h1' } }],
+      threadBySession: new Map(),
+      readHandoff: async () => {
+        readHandoffCalls += 1;
+        if (readHandoffCalls >= 2) releaseGate();
+        await gate;
+        return null;
+      },
+    });
+    const [first, second] = await Promise.all([
+      ensureThreadConversationIndex(buildOptions()),
+      ensureThreadConversationIndex(buildOptions()),
+    ]);
+    clearTimeout(gateTimeout);
+    assert.equal(readHandoffCalls, 1);
+    assert.deepEqual(first.records, second.records);
+    assert.notEqual(first.persistFailed, true);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test('search route requires domain, honors agents filter, and returns grouped matches', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'thread-search-route-'));
   try {

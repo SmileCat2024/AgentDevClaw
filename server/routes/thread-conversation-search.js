@@ -153,14 +153,50 @@ function markReplayedRows(rows, messages, handoff) {
 
 async function readJson(file) { return JSON.parse(await fs.readFile(file, 'utf8')); }
 
+// Windows 上 rename 到被只读句柄打开的目标（并发读索引、杀毒/索引器扫描刚
+// 写完的大文件）会 EPERM；短退避重试吸收这类瞬态窗口。
+const RENAME_RETRY_DELAYS_MS = [25, 50, 75];
+const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EACCES', 'ENOTEMPTY']);
+
+async function persistIndexFile(temporaryPath, indexPath) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rename(temporaryPath, indexPath);
+      return { ok: true };
+    } catch (error) {
+      if (!TRANSIENT_RENAME_CODES.has(error?.code) || attempt >= RENAME_RETRY_DELAYS_MS.length) {
+        await fs.rm(temporaryPath, { force: true }).catch(() => {});
+        return { ok: false, code: error?.code || 'UNKNOWN' };
+      }
+      await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
+// 同 agent 的并发构建在进程内合并成一份：并发 readJson（只读句柄）与 rename
+// 重叠在本机 Node 上必然 EPERM，共用 pid 后缀 tmp 的并发写还会互相截断。搜索
+// 是缓存读模型，后来者拿到先来者毫秒级领先的快照即可。
+const inFlightIndexBuilds = new Map();
+
 /** Build/update a dedicated per-agent message index using session file mtimes. */
-export async function ensureThreadConversationIndex({ agentId, getAgentSessionDir, getSessionFilePath, sessions, threadBySession, readHandoff }, charBudgets) {
+export async function ensureThreadConversationIndex(options, charBudgets) {
+  const agentId = clean(options?.agentId);
+  const agentSessionDir = typeof options?.getAgentSessionDir === 'function' ? options.getAgentSessionDir(agentId) : null;
+  if (!agentSessionDir || !safeId(agentId)) throw new Error('agentId/session directory is invalid');
+  const indexPath = path.join(agentSessionDir, 'thread-conversation-search.json');
+  const inFlight = inFlightIndexBuilds.get(indexPath);
+  if (inFlight) return inFlight;
+  const build = buildThreadConversationIndex(options, charBudgets, { agentId, indexPath })
+    .finally(() => { if (inFlightIndexBuilds.get(indexPath) === build) inFlightIndexBuilds.delete(indexPath); });
+  inFlightIndexBuilds.set(indexPath, build);
+  return build;
+}
+
+async function buildThreadConversationIndex(options, charBudgets, { agentId, indexPath }) {
   const toolDropChars = Number(charBudgets?.toolDrop) || INDEX_TOOL_DROP_CHARS;
   const callDropChars = Number(charBudgets?.callDrop) || INDEX_CALL_DROP_CHARS;
   const hardCapChars = Number(charBudgets?.hardCap) || INDEX_HARD_CAP_CHARS;
-  const agentSessionDir = getAgentSessionDir(agentId);
-  if (!agentSessionDir || !safeId(agentId)) throw new Error('agentId/session directory is invalid');
-  const indexPath = path.join(agentSessionDir, 'thread-conversation-search.json');
+  const { getSessionFilePath, sessions, threadBySession, readHandoff } = options;
   let previous = null;
   try {
     const stored = await readJson(indexPath);
@@ -228,11 +264,8 @@ export async function ensureThreadConversationIndex({ agentId, getAgentSessionDi
   await fs.mkdir(path.dirname(indexPath), { recursive: true });
   const temporaryPath = `${indexPath}.${process.pid}.tmp`;
   await fs.writeFile(temporaryPath, JSON.stringify({ version: INDEX_VERSION, entries }), 'utf8');
-  await fs.rename(temporaryPath, indexPath).catch(async (error) => {
-    await fs.rm(temporaryPath, { force: true });
-    throw error;
-  });
-  return {
+  const persist = await persistIndexFile(temporaryPath, indexPath);
+  const result = {
     records: Object.values(entries),
     coverage: {
       degraded: droppedToolRows > 0 || droppedCallRows > 0 || skippedSessions > 0,
@@ -242,6 +275,13 @@ export async function ensureThreadConversationIndex({ agentId, getAgentSessionDi
       indexedChars,
     },
   };
+  if (!persist.ok) {
+    // 索引已在内存构建完成：持久化失败只降级（磁盘旧索引供下次续跑并重试），
+    // 不把整次搜索打挂。
+    console.warn(`[thread-conversation-search] index persist degraded for ${agentId} (${persist.code}); serving in-memory index`);
+    return { ...result, persistFailed: true };
+  }
+  return result;
 }
 
 export function buildThreadSessionLookup(threadIndexEntries) {
