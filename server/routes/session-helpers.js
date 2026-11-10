@@ -15,6 +15,7 @@ import {
 } from '../shared/string-helpers.js';
 import {
   readSessionIndex, readSessionIndexShared, querySessionIndexPage, updateSessionIndex,
+  aggregateSessionActivity,
   getPrebuiltSessionFilePath,
   normalizeSessionMetadata, buildSessionTitle, computeNextSessionNumber,
   findPrebuiltSessionRecordShared,
@@ -682,6 +683,11 @@ async function listPrebuiltSessionsRich(agentId, options = {}) {
     activeSessionId: index.activeSessionId || (sessions[0]?.id ?? null),
     contextLength: defaultModelInfo.contextLength || null,
     compressRatio: defaultModelInfo.compressRatio || 80,
+    // PH 活动信号与索引读模型同契约（rich 降级窗口内排序不漂移）；非 PH
+    // agent 无消费方，不挂。
+    ...(PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))
+      ? { phActivity: aggregateSessionActivity(sessions, membership) }
+      : {}),
     ...richPageMeta,
     sessions: wireSessions,
   };
@@ -884,6 +890,11 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
   };
   let wireSessions = sessions;
   let pageMeta = {};
+  // PH 活动信号（目录/项目排序）：分页路径从 DB 事务带回（querySessionIndexPage
+  // 同事务聚合）；全量投影路径在内存 sessions 上聚合（projection 缓存命中时零
+  // DB 往返，千级遍历毫秒内）。精确 sessionId 查询不带（前端属性级合并保留
+  // 上一快照的信号）。
+  let phActivity = null;
   if (pageActive) {
     const page = await querySessionIndexPage(agentId, {
       projectDir: pageOptions.projectDir,
@@ -897,6 +908,7 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
     });
     if (!activeSessionId) activeSessionId = page.activeSessionId || page.fallbackActiveSessionId || null;
     pageRevision = page.revision;
+    phActivity = page.phActivity || null;
     wireSessions = page.slice.map((entry) => ({
       ...buildLightPrebuiltSessionRecord(agentId, entry.record),
       archived: entry.archived,
@@ -910,6 +922,8 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
       mainTotal: page.mainTotal,
       archivedTotal: page.archivedTotal,
     };
+  } else {
+    phActivity = aggregateSessionActivity(sessions, membership);
   }
   if (options.wireTrim === true) {
     wireSessions = wireSessions.map(trimSessionRecordForWire);
@@ -938,6 +952,10 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
       result: 'success',
     }, { source: 'server' });
   }
+  // PH 活动信号（目录/项目排序）：分页路径从 DB 事务带回（querySessionIndexPage
+  // 同事务聚合）；全量投影路径在内存 sessions 上聚合（projection 缓存命中时零
+  // DB 往返，千级遍历毫秒内）。精确 sessionId 查询不带（前端属性级合并保留
+  // 上一快照的信号）。
   return {
     revision: pageActive && typeof pageRevision === 'number' ? pageRevision : (Number(index.revision) || 0),
     activeSessionId: activeSessionId || sessions[0]?.id || null,
@@ -946,6 +964,7 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
       compressRatio: defaultModelInfo.compressRatio || 80,
     } : {}),
     ...pageMeta,
+    ...(phActivity ? { phActivity } : {}),
     sessions: wireSessions,
   };
 }

@@ -26,7 +26,7 @@ import { join } from 'node:path';
 const DATA_ROOT = mkdtempSync(join(tmpdir(), 'claw-list-pushdown-'));
 process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
 
-const { writeSessionIndex, querySessionIndexPage, closeAllSessionDbs } =
+const { writeSessionIndex, querySessionIndexPage, aggregateSessionActivity, closeAllSessionDbs } =
   await import('../server/shared/session-access.js');
 const {
   sortSidebarSessions,
@@ -161,6 +161,62 @@ describe('会话列表 SQL 查询下推：与旧 JS 切片差分一致', () => {
       sql.slice.map((entry) => entry.record.id),
       oracle.slice.map((session) => session.id),
     );
+  });
+});
+
+describe('会话活动聚合（PH 排序信号）：SQL 与 JS 双实现对表', () => {
+  // 预期从夹具手工推导（口径：head 或非成员、非归档，取最大 updatedAt；
+  // 目录键归一化反斜杠/大小写/尾斜杠），不从被测输出反推。
+  const EXPECTED_ACTIVITY = {
+    directories: {
+      'dir:d:/work/proja': T.t5, // s-proj-other (t5) > s-proj-a1 (t3) > s-proj-a2 (t2b)
+      'dir:d:/work/alpha': T.t5, // s-dir-alpha1 (t5)；alpha2 (t2) 归一化同键；普通归档排除
+      'dir:d:/work/beta': T.t4,
+      'dir:d:/work/delta': T.t3,
+      // 无 gamma 键：线程 head 线程已归档、历史代成员均不计入
+    },
+    projects: {
+      'proj-1': T.t3,
+      'proj-2': T.t5,
+    },
+  };
+
+  test('SQL 聚合（querySessionIndexPage）= 手工推导预期', async () => {
+    const sql = await querySessionIndexPage(AGENT_ID, {
+      offset: 0, limit: 3, threadMembership: FIXTURE_MEMBERSHIP,
+    });
+    assert.deepEqual(sql.phActivity, EXPECTED_ACTIVITY);
+  });
+
+  test('JS 聚合（aggregateSessionActivity，light record 输入）与 SQL 聚合同输出', async () => {
+    const js = aggregateSessionActivity(
+      FIXTURE_SESSIONS.map((record) => buildLightPrebuiltSessionRecord(AGENT_ID, record)),
+      FIXTURE_MEMBERSHIP,
+    );
+    const sql = await querySessionIndexPage(AGENT_ID, {
+      offset: 0, limit: 3, threadMembership: FIXTURE_MEMBERSHIP,
+    });
+    assert.deepEqual(js, EXPECTED_ACTIVITY);
+    assert.deepEqual(js, sql.phActivity);
+  });
+
+  test('活动聚合是全量信号：不随归属/分页参数漂移', async () => {
+    const baseline = (await querySessionIndexPage(AGENT_ID, {
+      threadMembership: FIXTURE_MEMBERSHIP,
+    })).phActivity;
+    const scoped = (await querySessionIndexPage(AGENT_ID, {
+      projectId: 'proj-1', threadMembership: FIXTURE_MEMBERSHIP,
+    })).phActivity;
+    const dirScoped = (await querySessionIndexPage(AGENT_ID, {
+      projectDir: 'd:/work/alpha/', threadMembership: FIXTURE_MEMBERSHIP,
+    })).phActivity;
+    assert.deepEqual(scoped, baseline);
+    assert.deepEqual(dirScoped, baseline);
+  });
+
+  test('无会话计入时聚合为空映射（非 undefined）', () => {
+    const empty = aggregateSessionActivity([], null);
+    assert.deepEqual(empty, { directories: {}, projects: {} });
   });
 });
 

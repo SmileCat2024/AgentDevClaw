@@ -509,6 +509,29 @@ function getSessionListStatements(db) {
       ORDER BY updated_at COLLATE BINARY DESC, created_at COLLATE BINARY DESC, id COLLATE BINARY DESC
       LIMIT 1
     `),
+    // 目录/项目最近活动聚合（PH 排序信号）：口径 = 列表口径（head 或非成员、
+    // 非归档），与 aggregateSessionActivity（JS 版）对表，目录键归一化与
+    // SQL_DIR_PLAIN 同式。无参数、全表 GROUP BY，千行级毫秒内。
+    activityByDir: db.prepare(`
+      SELECT 'dir:' || lower(rtrim(replace(s.open_directory, '\\', '/'), '/')) AS dir_key,
+             MAX(s.updated_at) AS last_activity
+      FROM sessions s
+      LEFT JOIN temp.session_thread_membership m ON m.session_id = s.id
+      WHERE ${SQL_HEAD_PRED}
+        AND COALESCE(m.archived, s.archived) = 0
+        AND s.open_directory IS NOT NULL AND s.open_directory != ''
+      GROUP BY dir_key
+    `),
+    activityByProject: db.prepare(`
+      SELECT s.project_id AS project_id,
+             MAX(s.updated_at) AS last_activity
+      FROM sessions s
+      LEFT JOIN temp.session_thread_membership m ON m.session_id = s.id
+      WHERE ${SQL_HEAD_PRED}
+        AND COALESCE(m.archived, s.archived) = 0
+        AND s.project_id IS NOT NULL AND s.project_id != ''
+      GROUP BY s.project_id
+    `),
   };
   _sessionListStatements.set(db, statements);
   return statements;
@@ -599,6 +622,11 @@ export async function querySessionIndexPage(agentId, options = {}) {
       record: JSON.parse(row.record),
       archived: Number(row.archived) === 1,
     }));
+    // 活动聚合同一事务执行：成员表刚同步，与切片/计数看到同一索引快照。
+    const phActivity = readSessionActivityFromRows(
+      statements.activityByDir.all(),
+      statements.activityByProject.all(),
+    );
     db.exec('COMMIT');
     return {
       slice,
@@ -611,11 +639,80 @@ export async function querySessionIndexPage(agentId, options = {}) {
       // 条件执行避免每次请求的全表排序。
       fallbackActiveSessionId: meta?.active_session_id ? null : (statements.fallbackActive.get()?.id || null),
       revision: Number(meta?.revision) || 0,
+      phActivity,
     };
   } catch (error) {
     try { db.exec('ROLLBACK'); } catch { /* transaction may already be closed */ }
     throw error;
   }
+}
+
+// ── 会话活动聚合（PH 排序信号）──────────────────────────────────────
+// 口径：head 或非成员、非归档（会话级与线程级任一归档即排除）的会话按
+// 归一化目录 / projectId 聚合最大 updatedAt。SQL 版（activityByDir/
+// activityByProject）与 JS 版服务不同数据面（分页 DB 事务 vs 内存全量
+// 投影），同输入必须同输出——session-list-sql-pushdown 对表锁定。
+// ISO 时间戳同格式下字典序 = 时间序，与 SQL MAX(TEXT) 同序。
+
+function normalizeActivityDirKey(dir) {
+  return 'dir:' + String(dir || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+function readSessionActivityFromRows(dirRows, projectRows) {
+  const directories = {};
+  for (const row of dirRows) {
+    if (row?.dir_key && row?.last_activity) directories[row.dir_key] = String(row.last_activity);
+  }
+  const projects = {};
+  for (const row of projectRows) {
+    if (row?.project_id && row?.last_activity) projects[row.project_id] = String(row.last_activity);
+  }
+  return { directories, projects };
+}
+
+export function aggregateSessionActivity(sessions, membership = null) {
+  const dirRows = [];
+  const projectRows = [];
+  const dirIndex = new Map();
+  const projectIndex = new Map();
+  for (const session of Array.isArray(sessions) ? sessions : []) {
+    const id = cleanSessionText(session?.id);
+    const member = membership instanceof Map && id ? membership.get(id) || null : null;
+    if (member) {
+      if (member.isHead !== true) continue;
+      if (member.archived === true) continue;
+    }
+    if (session?.archived === true) continue;
+    const at = cleanSessionText(session?.updatedAt);
+    if (!at) continue;
+    const dir = String(session?.openDirectory || '').trim();
+    if (dir) {
+      const key = normalizeActivityDirKey(dir);
+      let row = dirIndex.get(key);
+      if (!row) {
+        row = { dir_key: key, last_activity: at };
+        dirIndex.set(key, row);
+        dirRows.push(row);
+      } else if (at > row.last_activity) {
+        row.last_activity = at;
+      }
+    }
+    const pid = cleanSessionText(session?.projectId);
+    if (pid) {
+      let row = projectIndex.get(pid);
+      if (!row) {
+        row = { project_id: pid, last_activity: at };
+        projectIndex.set(pid, row);
+        projectRows.push(row);
+      } else if (at > row.last_activity) {
+        row.last_activity = at;
+      }
+    }
+  }
+  return readSessionActivityFromRows(dirRows, projectRows);
 }
 
 // ── 共享记录查找（存储层能力）──────────────────────────────────────
