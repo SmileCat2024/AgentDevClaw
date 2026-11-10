@@ -14,11 +14,15 @@
  * 冷却按条目 id 记账（每会话每条目一次）。新增素养提醒 = 代码加条目 +
  * knowledge 放对应 md，机制不动。
  *
- * 技能携带（skills/ 目录）：本 feature 同时是 grill-me 技能（设计树拷问）
+ * 技能携带（skills/ 目录）：本 feature 同时是 grill-me 技能（设计树拷问与执行期回溯）
  * 的载具——框架 collectFeatureSkills 按 dirname(source)/skills 约定自动
  * 发现并注入系统提示词，构建时随 knowledge 同款机制拷入 dist
  * （copy-local-feature-skills.mjs）。技能随 feature 装配走，不依赖工作
  * 目录的 .agentdev/skills。
+ *
+ * 条目 handoff-context-calibration：只有框架 HandoffSeedFeature 已实际注入非空接续内容，
+ * 才在首个 StepStart 注入校准提醒；普通新会话、快照恢复及无 seed 的 handoff 不触发。
+ * 触发事实由框架 HandoffSeedFeature.captureState() 的注入账目判定，不按新 runtime 猜测。
  *
  * 条目一 doc-reader-awareness：write 写出成规模的文档文件（markdown/txt，
  * 默认 ≥30 行）或 edit 编辑此类文件成功后，注入"文档读者视角"写法标准。
@@ -46,7 +50,7 @@ import { readdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, HookDeclarations } from '@agentdevjs/core';
-import type { Context, ToolFinishedDecisionContext } from '@agentdevjs/core';
+import type { CallStartContext, Context, StepStartContext, ToolFinishedDecisionContext } from '@agentdevjs/core';
 import { CoreLifecycle } from '@agentdevjs/core';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -56,6 +60,12 @@ export const DOC_CRAFT_MIN_WRITE_LINES = 30;
 
 /** 文档类扩展名（小写匹配）。 */
 const DOC_CRAFT_EXTENSIONS = ['.md', '.markdown', '.txt'] as const;
+
+/** 源码编辑触发回溯提醒；文档、测试、配置等由各自的素养条目处理。 */
+const SOURCE_CODE_EXTENSIONS = [
+  '.c', '.cc', '.cpp', '.cs', '.go', '.java', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.rs', '.ts', '.tsx', '.mts', '.cts', '.php', '.rb', '.swift', '.kt',
+] as const;
 
 /** 注入文本的统一前缀（体系标识，不进 md——md 只维护正文）。 */
 const CRAFT_PREFIX = '[工程素养] ';
@@ -94,6 +104,34 @@ function readTestFilePath(event: CraftToolEvent): string {
 function isDocFile(filePath: string): boolean {
   const lower = filePath.toLowerCase();
   return DOC_CRAFT_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/** 判断成功写入或编辑的是否为源码文件。 */
+function isSourceCodeFile(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  const basename = normalized.split('/').pop() ?? '';
+  const pathSegments = normalized.toLowerCase().split('/');
+  if (pathSegments.some((segment) => ['test', 'tests', '__tests__'].includes(segment)) || TEST_FILE_NAME.test(basename)) return false;
+  const lower = basename.toLowerCase();
+  return SOURCE_CODE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/** Todo 中可能改变计划含义的字段更新；纯状态流转不触发。 */
+function isTodoPlanDefinitionUpdate(event: CraftToolEvent): boolean {
+  if (event.success !== true) return false;
+  if (event.toolName === 'task_clear') return true;
+  if (event.toolName !== 'task_update') return false;
+  const args = event.args && typeof event.args === 'object' ? event.args : {};
+  return ['subject', 'description', 'kind'].some((key) => Object.hasOwn(args, key)) || args.status === 'deleted';
+}
+
+/** 源码落盘或 Todo 定义变更后，提示模型沿已定目标与设计回溯。 */
+export function shouldRemindDesignTrace(event: CraftToolEvent): boolean {
+  if (!event || event.success !== true) return false;
+  if (isTodoPlanDefinitionUpdate(event)) return true;
+  if (event.toolName !== 'write' && event.toolName !== 'edit') return false;
+  const filePath = readPathArg(event.args);
+  return Boolean(filePath && isSourceCodeFile(filePath));
 }
 
 /**
@@ -195,6 +233,20 @@ const CRAFT_ENTRIES: readonly CraftEntry[] = [
     match: (ctx, feature) => feature.shouldRemindTestLayer(ctx, index),
   })),
   {
+    id: 'handoff-context-calibration',
+    description: '会话接续后的目标与验证证据校准',
+    match: () => false,
+  },
+  {
+    id: 'design-trace-reflection',
+    description: 'Todo 定义或源码改动后的目标关系与行为影响反思',
+    match: (ctx) => shouldRemindDesignTrace({
+      toolName: ctx.toolName,
+      args: ctx.call?.arguments,
+      success: ctx.success === true,
+    }),
+  },
+  {
     id: 'doc-reader-awareness',
     description: '文档读者视角：首次写出成规模文档后注入写法标准',
     match: (ctx) => shouldRemindDocCraft({
@@ -214,11 +266,12 @@ export class CraftAwarenessFeature implements AgentFeature {
 
   static hooks: HookDeclarations = {
     injectCraftReminder: { lifecycle: CoreLifecycle.ToolFinished, kind: 'observe' as const },
+    injectHandoffCalibration: { lifecycle: CoreLifecycle.StepStart, kind: 'observe' as const },
   };
 
   readonly name = 'craft-awareness';
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = '在文档写作与测试文件修改时分层注入工程素养——读者视角、交付阶段判断，以及测试行为契约、辨别能力与验证交付，每条每会话至多一次；并携带 grill-me 技能。';
+  readonly description = '按接续及文档、测试和源码改动时机注入工程素养提醒；并携带 grill-me 技能。';
 
   /** 已注入条目记账（id → true），随会话快照持久化。 */
   private injectedEntries: Record<string, true> = {};
@@ -290,6 +343,29 @@ export class CraftAwarenessFeature implements AgentFeature {
     if (!filePath) return false;
     if (index > 0 && (ctx.toolName !== 'edit' || !this.injectedEntries[TEST_CRAFT_LAYERS[index - 1].id])) return false;
     return (this.testFileChanges.get(normalizeDocPath(filePath)) ?? 0) >= TEST_CRAFT_LAYERS[index].minChanges;
+  }
+
+  /** 接续 seed 已在先前 CallStart 落入 context 时，首个 StepStart 追加校准提醒。 */
+  async injectHandoffCalibration(ctx: StepStartContext): Promise<void> {
+    try {
+      if (this.injectedEntries['handoff-context-calibration']) return;
+      const handoffSeed = ctx.agent?.getFeature?.('handoff-seed');
+      if (typeof handoffSeed?.captureState !== 'function') return;
+      const state = handoffSeed.captureState() as Record<string, unknown> | null;
+      if (state?.injected !== true || typeof state.seedCount !== 'number' || state.seedCount < 1) return;
+      const content = this.knowledge.get('handoff-context-calibration');
+      if (!content) {
+        this.logger?.warn?.('Craft awareness knowledge missing, skip injection', { entry: 'handoff-context-calibration' });
+        return;
+      }
+      ctx.context.addSystemMessage(CRAFT_PREFIX + content, ctx.callIndex, this.name, 'reminder');
+      this.injectedEntries['handoff-context-calibration'] = true;
+      this.logger?.info?.('Craft awareness injected', { entry: 'handoff-context-calibration' });
+    } catch (error) {
+      this.logger?.warn?.('Craft awareness handoff calibration failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

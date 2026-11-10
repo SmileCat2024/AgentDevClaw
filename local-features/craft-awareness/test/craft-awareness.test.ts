@@ -1,13 +1,14 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { Context } from '@agentdevjs/core';
+import { Context, CoreLifecycle, discover, HandoffSeedFeature, HooksRegistry } from '@agentdevjs/core';
 import {
   CraftAwarenessFeature,
   shouldRemindDocCraft,
+  shouldRemindDesignTrace,
   loadKnowledgeDir,
   DOC_CRAFT_MIN_WRITE_LINES,
 } from '../src/index.js';
@@ -19,6 +20,157 @@ function lines(n: number): string {
 
 /** 编译产物旁的真实 knowledge 目录（copy 脚本拷入 dist 的那份）。 */
 const REAL_KNOWLEDGE_DIR = fileURLToPath(new URL('../src/knowledge', import.meta.url));
+
+// 仅验证技能发现和发布内容一致性，不据此推断模型会遵守技能。
+describe('grill-me（技能发现与构建同步）', () => {
+  const skillsDir = join(dirname(new CraftAwarenessFeature().source), 'skills');
+  const skillPath = join(skillsDir, 'grill-me', 'SKILL.md');
+  const sourcePath = fileURLToPath(new URL('../../../craft-awareness/skills/grill-me/SKILL.md', import.meta.url));
+
+  it('从 feature source 同级发现 grill-me，并解析其元数据', async () => {
+    const skills = await discover({ dir: skillsDir });
+    assert.equal(skills.length, 1);
+    assert.equal(skills[0].name, 'grill-me');
+    assert.equal(skills[0].path, skillPath);
+    assert.ok(skills[0].description.trim());
+    assert.notEqual(skills[0].disableModelInvocation, true);
+  });
+
+  it('运行时读取的技能全文与权威源码一致', () => {
+    assert.equal(readFileSync(skillPath, 'utf8'), readFileSync(sourcePath, 'utf8'));
+  });
+});
+
+describe('shouldRemindDesignTrace（GSA 目标回溯触发）', () => {
+  it('Todo 定义字段发生成功更新时触发，纯状态流转不触发', () => {
+    for (const field of ['subject', 'description', 'kind']) {
+      assert.equal(shouldRemindDesignTrace({ toolName: 'task_update', args: { taskId: '1', [field]: 'changed' }, success: true }), true, field);
+    }
+    assert.equal(shouldRemindDesignTrace({ toolName: 'task_update', args: { taskId: '1', status: 'in_progress' }, success: true }), false);
+    assert.equal(shouldRemindDesignTrace({ toolName: 'task_update', args: { taskId: '1', status: 'completed' }, success: true }), false);
+    assert.equal(shouldRemindDesignTrace({ toolName: 'task_update', args: { taskId: '1', status: 'deleted' }, success: true }), true);
+    assert.equal(shouldRemindDesignTrace({ toolName: 'task_clear', args: {}, success: true }), true);
+  });
+
+  it('成功写入或编辑源码时触发，文档、测试、配置及失败操作不触发', () => {
+    for (const toolName of ['write', 'edit']) {
+      for (const filePath of ['src/feature.ts', 'server/routes/session.js', 'scripts/build.mjs', 'src/view.tsx']) {
+        assert.equal(shouldRemindDesignTrace({ toolName, args: { filePath }, success: true }), true, `${toolName} ${filePath}`);
+      }
+      for (const filePath of [
+        'docs/plan.md',
+        'test/feature.test.ts',
+        'src/feature.test.ts',
+        'src/__tests__/feature.ts',
+        'src\test\feature.ts',
+        'D:\repo\tests\feature.ts',
+        'config/app.json',
+      ]) {
+        assert.equal(shouldRemindDesignTrace({ toolName, args: { filePath }, success: true }), false, `${toolName} ${filePath}`);
+      }
+      assert.equal(shouldRemindDesignTrace({ toolName, args: { filePath: 'src/feature.ts' }, success: false }), false);
+    }
+  });
+
+  it('ToolFinished 实际注入 Todo 定义和源码改动提醒，状态更新不注入', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'craft-design-trace-'));
+    const content = '沿设计树回溯主线';
+    writeFileSync(join(dir, 'design-trace-reflection.md'), content);
+    const feature = new CraftAwarenessFeature({ knowledgeDir: dir });
+    const injected: string[] = [];
+    const fire = (toolName: string, args: Record<string, unknown>) => feature.injectCraftReminder({
+      toolName,
+      call: { arguments: args },
+      success: true,
+      context: { getRecent() { return [{ turn: 4 }]; }, addSystemMessage(text: string) { injected.push(text); } },
+    } as never);
+    try {
+      await fire('task_update', { taskId: '1', status: 'in_progress' });
+      assert.deepEqual(injected, [], '纯状态流转不触发');
+      await fire('task_update', { taskId: '1', description: '缩小本轮范围' });
+      assert.deepEqual(injected, [`[工程素养] ${content}`]);
+      await fire('edit', { filePath: 'src/feature.ts' });
+      assert.equal(injected.length, 1, '同一提醒每会话一次');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('knowledge 文案要求说明改动缘由、主线关系、影响并按设计树回溯', () => {
+    const content = loadKnowledgeDir(REAL_KNOWLEDGE_DIR).get('design-trace-reflection');
+    assert.ok(content);
+    assert.ok(content.includes('为什么要改这里'));
+    assert.ok(content.includes('支撑主线目标'));
+    assert.ok(content.includes('既有行为'));
+    assert.ok(content.includes('补方案'));
+    assert.ok(content.includes('用户已定的目标、边界或重要取舍'));
+  });
+});
+
+describe('接续后的目标与验证证据校准', () => {
+  it('handoff seed 回放后、首个模型步骤前注入一次，且排在接续内容之后', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'craft-handoff-calibration-'));
+    const reminder = '按用户确认的目标继续；尊重已发生的验证及其实际覆盖范围。';
+    writeFileSync(join(dir, 'handoff-context-calibration.md'), reminder);
+    const craft = new CraftAwarenessFeature({ knowledgeDir: dir });
+    const seed = new HandoffSeedFeature({ handoff: {
+      packageId: 'handoff-test',
+      mode: 'summary',
+      seedMessages: [{ role: 'user', content: '用户原先确认的目标', turn: 1 }],
+    } });
+    const context = new Context();
+    const agent = {
+      _callIndex: 2,
+      getFeature: (name: string) => name === 'handoff-seed' ? seed : name === 'craft-awareness' ? craft : undefined,
+    };
+    const hooks = new HooksRegistry();
+    hooks.collectFromFeature(seed);
+    hooks.collectFromFeature(craft);
+    try {
+      await hooks.executeVoid(CoreLifecycle.CallStart, { input: '继续', context, isFirstCall: true, agent });
+      await hooks.executeVoid(CoreLifecycle.StepStart, { step: 0, callIndex: 2, context, input: '继续', agent });
+      const messages = context.getAllEnriched();
+      assert.equal(messages.filter((message) => message.content === `[工程素养] ${reminder}`).length, 1);
+      assert.ok(messages.findIndex((message) => message.content === '用户原先确认的目标') < messages.findIndex((message) => message.content === `[工程素养] ${reminder}`));
+      assert.equal(messages.find((message) => message.content === `[工程素养] ${reminder}`)?.source, 'craft-awareness');
+      await hooks.executeVoid(CoreLifecycle.StepStart, { step: 1, callIndex: 2, context, input: '继续', agent });
+      assert.equal(context.getAllEnriched().filter((message) => message.content === `[工程素养] ${reminder}`).length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('没有接续 seed、seed 尚未注入或空 seed 时不触发', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'craft-handoff-calibration-'));
+    writeFileSync(join(dir, 'handoff-context-calibration.md'), '校准提醒');
+    const feature = new CraftAwarenessFeature({ knowledgeDir: dir });
+    const injected: string[] = [];
+    const makeCtx = (handoffState?: unknown) => ({
+      step: 0,
+      callIndex: 0,
+      input: '继续',
+      agent: { getFeature: (name: string) => name === 'handoff-seed' && handoffState !== undefined ? { captureState: () => handoffState } : undefined },
+      context: { addSystemMessage(text: string) { injected.push(text); } },
+    });
+    try {
+      await feature.injectHandoffCalibration(makeCtx() as never);
+      await feature.injectHandoffCalibration(makeCtx({ injected: false }) as never);
+      await feature.injectHandoffCalibration(makeCtx({ injected: true, seedCount: 0 }) as never);
+      assert.deepEqual(injected, []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('知识文案保留用户目标、摘要断章取义与既有验证的平衡', () => {
+    const content = loadKnowledgeDir(REAL_KNOWLEDGE_DIR).get('handoff-context-calibration');
+    assert.ok(content);
+    assert.ok(content.includes('用户确认的目标和取舍'));
+    assert.ok(content.includes('不要断章取义'));
+    assert.ok(content.includes('尊重它们确实发生过'));
+    assert.ok(content.includes('不因接续本身重做'));
+  });
+});
 
 describe('shouldRemindDocCraft（触发判定纯函数）', () => {
   it('write 达到行数阈值的 md/txt/markdown 文档 → 触发', () => {
