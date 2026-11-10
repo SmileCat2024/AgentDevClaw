@@ -5724,6 +5724,51 @@ body[data-theme="light"] .logf-json {
   line-height: 1.5;
 }
 
+/* ── 任务类型徽章：标题行首的 chip，五类型各占一档色相。
+   底色用 color-mix 取同色系低透明度，文字用原色；与状态 marker 色
+   （琥珀/蓝/绿）并存时靠 chip 形态区分。终态整体降级淡出。 */
+.plan-task-kind {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  vertical-align: 1px;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.plan-task-kind.kind-investigate {
+  color: var(--code-accent);
+  background: color-mix(in srgb, var(--code-accent) 12%, transparent);
+}
+
+.plan-task-kind.kind-design {
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 14%, transparent);
+}
+
+.plan-task-kind.kind-implement {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.plan-task-kind.kind-fix {
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 10%, transparent);
+}
+
+.plan-task-kind.kind-verify {
+  color: var(--success-color);
+  background: color-mix(in srgb, var(--success-color) 12%, transparent);
+}
+
+.plan-task.is-terminal .plan-task-kind {
+  opacity: 0.55;
+}
+
 /* ── 已完成任务：点击展开详情 ── */
 
 .plan-task.is-terminal[data-plan-task-detail] {

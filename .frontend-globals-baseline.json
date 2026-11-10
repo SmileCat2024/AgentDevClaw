@@ -3072,9 +3072,11 @@
     ],
     "behavior": [
       "getEmptyTodoPlan",
+      "getTaskKindLabel",
       "getTerminalRuns",
       "getTodoPlanSignature",
       "getTodoStatusLabel",
+      "isPlanTaskKind",
       "normalizeTodoPlan",
       "renderPlanFoldButton",
       "renderPlanPanel",

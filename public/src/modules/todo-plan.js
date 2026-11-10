@@ -29,6 +29,16 @@ function getEmptyTodoPlan() {
   };
 }
 
+// 任务类型合法值（与框架 features/todo 的 TaskKind / viewer-worker normalizeKind 同步）
+function isPlanTaskKind(value) {
+  return ['investigate', 'design', 'implement', 'fix', 'verify'].includes(value);
+}
+
+function getTaskKindLabel(kind) {
+  if (!isPlanTaskKind(kind)) return '';
+  return t('plan_kind_' + kind);
+}
+
 function normalizeTodoPlan(snapshot) {
   const empty = getEmptyTodoPlan();
   if (!snapshot || typeof snapshot !== 'object') return empty;
@@ -37,6 +47,7 @@ function normalizeTodoPlan(snapshot) {
     subject: String(task?.subject || ''),
     description: String(task?.description || ''),
     deliver: String(task?.deliver || ''),
+    kind: isPlanTaskKind(task?.kind) ? task.kind : '',
     status: ['pending', 'in_progress', 'completed', 'deleted'].includes(task?.status) ? task.status : 'pending',
     metadata: task?.metadata && typeof task.metadata === 'object' ? task.metadata : {},
     createdAt: typeof task?.createdAt === 'number' ? task.createdAt : 0,
@@ -107,6 +118,10 @@ function renderPlanTask(task) {
   ].filter(Boolean).join(' · ');
   const desc = task?.description || '';
   const deliver = String(task?.deliver || '').trim();
+  const kindLabel = getTaskKindLabel(task?.kind);
+  const kindBadge = kindLabel
+    ? '<span class="plan-task-kind kind-' + escapeHtml(String(task.kind)) + '">' + escapeHtml(kindLabel) + '</span>'
+    : '';
   // 所有终态任务默认收起详情，手动操作记录在
   // _planTerminalDetailState 中覆盖默认态（有描述或交付物才可交互）。
   const detailOpen = isTerminal
@@ -131,7 +146,7 @@ function renderPlanTask(task) {
     + (canToggleDetail ? ' data-plan-task-detail="' + escapeHtml(taskId) + '" role="button" tabindex="0" aria-expanded="' + String(detailOpen) + '"' : '') + '>',
     '<div class="plan-task-marker" aria-hidden="true">' + marker + '</div>',
     '<div class="plan-task-main">',
-    '<div class="plan-task-title">' + escapeHtml(task?.subject || '') + interruptLabel + detailChev + '</div>',
+    '<div class="plan-task-title">' + kindBadge + escapeHtml(task?.subject || '') + interruptLabel + detailChev + '</div>',
     detail ? '<div class="plan-task-desc">' + escapeHtml(detail) + '</div>' : '',
     // 交付物：描述之外独立一行，靠字号与颜色降一级区分，随详情一起折叠
     (detailOpen && deliver)

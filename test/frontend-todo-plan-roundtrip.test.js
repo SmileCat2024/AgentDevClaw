@@ -33,6 +33,7 @@ function buildFullPlan() {
         subject: '已完成任务',
         description: '描述一',
         status: 'completed',
+        kind: 'fix',
         metadata: { finishedAt: 1700000001000 },
         createdAt: 1700000000000,
         updatedAt: 1700000001000,
@@ -42,6 +43,7 @@ function buildFullPlan() {
         subject: '进行中任务',
         description: '描述二',
         status: 'in_progress',
+        kind: 'investigate',
         metadata: {},
         createdAt: 1700000002000,
         updatedAt: 1700000002000,
@@ -79,9 +81,24 @@ describe('frontend normalizeTodoPlan round-trip', () => {
     assert.equal(task1.id, 'task-1');
     assert.equal(task1.status, 'completed');
     assert.deepEqual(task1.metadata, { finishedAt: 1700000001000 });
+    // kind 是面板徽章的唯一数据来源，normalize 重建任务对象时不能丢
+    assert.equal(task1.kind, 'fix');
 
     const task2 = output.tasks[1];
     assert.equal(task2.status, 'in_progress');
+    assert.equal(task2.kind, 'investigate');
+  });
+
+  it('sanitizes invalid kind to empty string, keeps valid kinds intact', () => {
+    const ctx = createTodoSandbox();
+    const plan = buildFullPlan();
+    plan.tasks[0].kind = 'not-a-kind';
+    ctx.run(`globalThis.__testInput = ${JSON.stringify(plan)}`);
+    const output = ctx.run('normalizeTodoPlan(globalThis.__testInput)');
+
+    // 非法 kind 清洗为空串（不渲染徽章的哨兵值），合法 kind 不受影响
+    assert.equal(output.tasks[0].kind, '');
+    assert.equal(output.tasks[1].kind, 'investigate');
   });
 
   it('preserves summary fields through normalize', () => {
@@ -268,6 +285,25 @@ describe('frontend plan controls presentation', () => {
     assert.match(fold, /aria-expanded="true"/);
     assert.match(fold, /<svg class="plan-fold-chev"/);
     assert.ok(!html.includes('▸') && !fold.includes('▸'));
+  });
+
+  it('renders a kind badge in the title line for tasks with a valid kind', () => {
+    const ctx = createTodoSandbox();
+    const html = ctx.run(`renderPlanTask({ id: 'k1', subject: '修复登录缺陷', kind: 'fix', status: 'in_progress' })`);
+
+    // 徽章带 kind 修饰类（配色的钩子）与 i18n 文案，位于标题行 subject 之前
+    assert.match(html, /class="plan-task-kind kind-fix">修复<\/span>修复登录缺陷/);
+  });
+
+  it('omits the kind badge for tasks without a kind or with an invalid kind', () => {
+    const ctx = createTodoSandbox();
+    const none = ctx.run(`renderPlanTask({ id: 'k2', subject: '普通任务', status: 'pending' })`);
+    assert.ok(!none.includes('plan-task-kind'));
+
+    const invalid = ctx.run(`renderPlanTask({ id: 'k3', subject: '脏数据任务', kind: 'not-a-kind', status: 'pending' })`);
+    // 非法 kind 不产生徽章，也不得把原始值漏进 class 或文本
+    assert.ok(!invalid.includes('plan-task-kind'));
+    assert.ok(!invalid.includes('not-a-kind'));
   });
 });
 
