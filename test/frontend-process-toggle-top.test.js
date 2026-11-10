@@ -11,7 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
-function createView() {
+function createView(roles = ['system', 'system', 'user', 'assistant']) {
   const rows = [];
   const listeners = new Map();
   const container = {
@@ -24,7 +24,7 @@ function createView() {
     addEventListener(name, callback) { listeners.set(name, callback); },
     removeEventListener(name) { listeners.delete(name); },
   };
-  for (const role of ['system', 'system', 'user', 'assistant']) {
+  for (const role of roles) {
     const classes = new Set(['message-row', role]);
     const row = {
       role,
@@ -81,4 +81,18 @@ test('showing process away from the top preserves the reading anchor', () => {
   container.scrollTop = 80;
   ctx.window.toggleChatProcessVisibility();
   assert.equal(container.scrollTop - rows[2].offsetTop, 80);
+});
+
+test('continuation session (system + assistant, no user) toggles via CSS classes, not full re-render', () => {
+  const { ctx, rows } = createView(['system', 'system', 'assistant', 'assistant']);
+  let fullRenders = 0;
+  ctx.render = () => { fullRenders += 1; };
+  assert.equal(rows[0].classList.contains('process-hidden'), true,
+    'hide mode keeps system rows hidden before the toggle');
+  ctx.window.toggleChatProcessVisibility();
+  assert.equal(ctx.showChatProcess, true);
+  assert.equal(fullRenders, 0,
+    'content-bearing transcript must toggle with CSS classes only (no welcome-page switch)');
+  assert.equal(rows[0].classList.contains('process-hidden'), false,
+    'system rows are revealed through the class toggle');
 });

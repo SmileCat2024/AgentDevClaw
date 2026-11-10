@@ -270,3 +270,19 @@ test('rollback after updateLastMessage rebuilds DOM', () => {
   sandbox.render(M5a);
   assert.equal(container.rebuildCount, 2, 'signature must reflect patched DOM state');
 });
+
+test('continuation transcript (system + assistant, no user) renders content in hide mode', () => {
+  const { sandbox, container } = createRendererSandbox();
+  sandbox.showChatProcess = false;
+  // 自动接续会话：上下文以 system 消息注入（handoff seed / 摘要 / reminder），
+  // 助手已输出多轮正文，用户从未发言——隐藏过程模式下必须显示正文而非欢迎页。
+  const transcript = [
+    { role: 'system', content: '## 上下文交接摘要\n继续同一任务。' },
+    { role: 'assistant', content: '正在继续处理任务。' },
+    { role: 'assistant', content: '第一步已完成。' },
+  ];
+  sandbox.currentMessages = transcript;
+  sandbox.render(transcript);
+  assert.equal(container._rows.length, 3,
+    'hide mode must render assistant replies as content, not the welcome page');
+});

@@ -250,8 +250,12 @@ function applyConversationProcessState(root = container, fromIndex = 0) {
 
 window.toggleChatProcessVisibility = function() {
   const chatViewportTopBefore = container.scrollTop;
-  const hasUserMessages = Array.isArray(currentMessages)
-    && currentMessages.some(m => m.role === 'user');
+  // 与 shouldShowChatWelcome 同口径：user 与 assistant 消息都没有（纯 system
+  // 前缀）时，隐藏过程模式呈现欢迎页——过程可见性切换是欢迎页 ↔ 正文的切换，
+  // 必须全量重渲染。接续会话（system 注入 + assistant 输出、无 user）两种
+  // 模式都有正文行，走 CSS 类切换并保留滚动锚点。
+  const hasConversationRows = Array.isArray(currentMessages)
+    && currentMessages.some(m => m.role === 'user' || m.role === 'assistant');
 
   // Anchor-based scroll preservation: record the topmost visible row and
   // its offset from the viewport top. After the toggle changes row heights,
@@ -260,7 +264,7 @@ window.toggleChatProcessVisibility = function() {
   // above the viewport grow/shrink when process blocks show/hide.
   let anchorIdx = -1;
   let anchorOffsetInViewport = 0;
-  if (hasUserMessages) {
+  if (hasConversationRows) {
     const rows = container.querySelectorAll('.message-row');
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -281,14 +285,14 @@ window.toggleChatProcessVisibility = function() {
 
   // Before un-hiding process elements, record the viewport position so
   // applyProcessDistance can window correctly without triggering a full layout.
-  if (showChatProcess && hasUserMessages) {
+  if (showChatProcess && hasConversationRows) {
     precomputeViewportIdx();
   }
 
-  // When there are no user messages, toggling process visibility switches
-  // between the welcome page and the (hidden-process) content. This requires
-  // a full re-render, not just CSS class toggling.
-  if (!hasUserMessages) {
+  // When there are no conversation rows (system-only prefix), toggling process
+  // visibility switches between the welcome page and the (hidden-process)
+  // content. This requires a full re-render, not just CSS class toggling.
+  if (!hasConversationRows) {
     _lastRenderedChatSig = '';
     render(currentMessages);
   } else {

@@ -34,9 +34,14 @@
  */
 
 /**
- * Data-driven welcome page decision: when process is hidden and no user
- * message exists in the transcript, show the welcome page instead of
- * (potentially all-hidden) message rows.
+ * Data-driven welcome page decision: when process is hidden and neither user
+ * nor assistant messages exist in the transcript (system-only prefix), show
+ * the welcome page instead of (potentially all-hidden) message rows.
+ *
+ * Continuation sessions inject their context (handoff seed / summary /
+ * time-awareness reminders) as system messages; with no real user input the
+ * transcript is system + assistant only. Assistant replies must render as
+ * content, so the welcome gate requires BOTH roles to be absent.
  *
  * This replaces the old DOM-patch overlay mechanism (syncProcessHiddenEmptyState)
  * which was fragile: appendNewMessages deleted the overlay's inner .empty-state
@@ -46,7 +51,8 @@ function shouldShowChatWelcome(messages) {
   return !showChatProcess
     && Array.isArray(messages)
     && messages.length > 0
-    && !messages.some(m => m.role === 'user');
+    && !messages.some(m => m.role === 'user')
+    && !messages.some(m => m.role === 'assistant');
 }
 
 // Cached empty-state render: skip the DOM rebuild when the empty-state HTML
@@ -511,19 +517,19 @@ window.toggleErrorGroup = function(gid) {
 
 // 追加新消息（保持现有 DOM 状态）
 function appendNewMessages(newMessages, startIndex) {
-  // If the welcome page should be showing (process hidden + no user messages),
-  // do a full render instead of appending rows that would all be hidden.
+  // If the welcome page should be showing (process hidden + system-only
+  // prefix), do a full render instead of appending rows that would all be hidden.
   if (shouldShowChatWelcome(currentMessages)) {
     render(currentMessages);
     return;
   }
   // 欢迎页边界升级全量：增量追加的前提是容器已呈现 [0, startIndex) 的历史
-  // 行。上次渲染是欢迎页/空态（隐藏过程 + 无 user 消息）时容器没有任何消
-  // 息行，首条 user 消息到达后直接增量追加，[0, startIndex) 的系统前缀永远
-  // 不物化，且末尾签名被记成"完整已渲染"——之后显示过程切换（只切类）与
-  // 同数据的全量 render（去重跳过）都无法恢复，滚到绝对顶部也看不到系统
-  // 消息。optimistic echo 覆盖层不算历史行（全量重建重写 container 后由
-  // reconcile 的 isConnected 清理兜底）。
+  // 行。上次渲染是欢迎页/空态（隐藏过程 + user/assistant 均无的系统前缀）
+  // 时容器没有任何消息行，首条对话行到达后直接增量追加，[0, startIndex)
+  // 的系统前缀永远不物化，且末尾签名被记成"完整已渲染"——之后显示过程切
+  // 换（只切类）与同数据的全量 render（去重跳过）都无法恢复，滚到绝对顶
+  // 部也看不到系统消息。optimistic echo 覆盖层不算历史行（全量重建重写
+  // container 后由 reconcile 的 isConnected 清理兜底）。
   const hasHistoryRows = Array.from(container.querySelectorAll('.message-row'))
     .some(row => !row.classList.contains('optimistic-user-echo'));
   if (startIndex > 0 && !hasHistoryRows) {
