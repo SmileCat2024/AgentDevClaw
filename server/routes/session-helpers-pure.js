@@ -709,7 +709,8 @@ export function compareSidebarSessionReadModels(lightSessions = [], authoritativ
  *
  * 只消费各 agent 的 session index 元数据（readSessionIndex 的输出），
  * 不读会话文件本体。供 session-reference feature 的发现工具消费。
- * 纯函数：过滤 archived / 更新时间范围、按 updatedAt 倒序、offset 跳过；每页最多 50 条。
+ * 纯函数：过滤 archived / 更新时间范围 / agentId（可选，按工作空间收敛）、
+ * 按 updatedAt 倒序、offset 跳过；每页最多 50 条。
  *
  * 线程归属标注（session-reference 双模读取）：threadIndexEntries 传
  * threads/index.json 的 threads 摘要数组（threadId/title/sessionIds），
@@ -719,10 +720,13 @@ export function compareSidebarSessionReadModels(lightSessions = [], authoritativ
  * 线程标题（任务级语义），不是某代会话的标题。
  *
  * @param {Array<{agentId: string, agentName?: string, sessions: Array<object>}>} agentIndexEntries
- * @param {{limit?: number, offset?: number, includeArchived?: boolean, from?: string, to?: string, threadIndexEntries?: Array<{threadId: string, title?: string, sessionIds?: string[]}>}} [options]
+ * @param {{limit?: number, offset?: number, includeArchived?: boolean, from?: string, to?: string, agentId?: string, threadIndexEntries?: Array<{threadId: string, title?: string, sessionIds?: string[]}>}} [options]
  */
 export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
   const includeArchived = options?.includeArchived === true;
+  // agentId 过滤（可选）：按工作空间收敛目录，组级短路——被过滤 agent 的
+  // 会话索引不再进聚合。空串/缺省不过滤（跨 agent 全目录）。
+  const agentFilter = typeof options?.agentId === 'string' ? options.agentId.trim() : '';
   const parseDateBound = (value, endOfDay = false) => {
     if (typeof value !== 'string' || !value.trim()) return null;
     const raw = value.trim();
@@ -755,6 +759,7 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
   for (const entry of Array.isArray(agentIndexEntries) ? agentIndexEntries : []) {
     const agentId = cleanSessionText(entry?.agentId);
     if (!agentId) continue;
+    if (agentFilter && agentId !== agentFilter) continue;
     const agentName = cleanSessionText(entry?.agentName);
     for (const record of Array.isArray(entry?.sessions) ? entry.sessions : []) {
       if (!record?.id) continue;

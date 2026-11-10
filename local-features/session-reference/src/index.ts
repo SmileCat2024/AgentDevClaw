@@ -11,6 +11,10 @@
  * 列出 sessionId/标题/时间/规模/接续方式，供 AI 定位要深入的会话；内容
  * 读取仍以会话为单位（选定代后回到 sessionId 输入）。
  *
+ * session_myself：返回当前会话自身的寻址身份（agentId + sessionId，标题
+ * best-effort）。供把"本会话"作为背景引用转述给其他 agent 的场景（如
+ * coder_shell 工单引用主线对话）；身份不可得时返回可读错误，不伪造寻址。
+ *
  * 输入框引用联动：user-turn 的 metadata['session-reference']（条目：
  * {agentId, sessionId, title?, sessionType?}）在 CallStart 注入一条
  * reminder，提示 AI 按三级读取协议消费被引用会话。引用随消息一次性流动。
@@ -694,6 +698,7 @@ class SessionReferenceFeatureInner implements AgentFeature {
   };
 
   private readonly agentId: string;
+  private readonly sessionId: string;
   private readonly serverOrigin: string;
 
   /** 引用账本：本会话（含接续前身）引用/读取过的会话寻址，随 continuity 转移。 */
@@ -706,10 +711,13 @@ class SessionReferenceFeatureInner implements AgentFeature {
    */
   private ledgerInjected = false;
 
-  constructor(config: { agentId?: string; serverOrigin?: string } = {}) {
+  constructor(config: { agentId?: string; sessionId?: string; serverOrigin?: string } = {}) {
     this.agentId = cleanText(config.agentId)
       || process.env.PROTOCLAW_PREBUILT_AGENT_ID
       || 'programming-helper';
+    // sessionId 无默认值：身份不可得时 session_myself 给出可读错误，而不是伪造寻址。
+    this.sessionId = cleanText(config.sessionId)
+      || cleanText(process.env.PROTOCLAW_PREBUILT_SESSION_ID);
     this.serverOrigin = cleanText(config.serverOrigin)
       || process.env.PROTOCLAW_SERVER_ORIGIN
       || 'http://127.0.0.1:1420';
@@ -896,14 +904,58 @@ class SessionReferenceFeatureInner implements AgentFeature {
   getTools(): Tool[] {
     return [
       {
+        name: 'session_myself',
+        parallelizable: true,
+        render: { call: 'session-read', result: 'session-read' },
+        description:
+          '返回当前会话自身的寻址身份（agentId + sessionId，标题尽力附带）。' +
+          '需要把"本会话"作为背景信息告知其他 agent 时使用——例如经 coder_shell 派工单时，'
+          + '在工单里写明背景会话寻址，让子代理用 session_read_overview / session_read_turn '
+          + '按址读取你的对话，复用你已有的探索结论而不必从零调研。标题仅供参考，不代表会话真实内容。',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => {
+          if (!this.sessionId) {
+            return {
+              error: '当前会话身份不可得（runtime 未注入 sessionId）：无法把本会话寻址告知其他 agent。'
+                + '可改用 session_list 按更新时间定位本会话。',
+            };
+          }
+          // 标题 best-effort：self-fetch 失败（服务不可达 / 索引未落）不影响身份返回，
+          // 寻址二元组才是引用给其他 agent 的有效载荷。threadId / threadTitle
+          // （可空）来自 session_record 的线程归属反查：本会话属于线程时一并
+          // 返回，其他 agent 可直接以 threadId 读代际导航。
+          let title = '';
+          let threadId = '';
+          let threadTitle = '';
+          try {
+            const record = await fetchSessionRecord(this.serverOrigin, this.agentId, this.sessionId);
+            title = cleanText(record?.title);
+            threadId = cleanText(record?.threadId);
+            threadTitle = cleanText(record?.threadTitle);
+          } catch { /* 标题缺省，身份照常返回 */ }
+          const titleNote = title ? `「${truncateText(title, 80)}」` : '';
+          const threadNote = threadId
+            ? `\n所属线程: ${threadId}${threadTitle ? `「${truncateText(threadTitle, 40)}」` : ''}（可作为 session_read_overview 的输入读代际导航；本会话是该线程的其中一代）`
+            : '';
+          return {
+            text: `当前会话身份：agentId: ${this.agentId} ｜ sessionId: ${this.sessionId}${titleNote}${threadNote}\n`
+              + '（把本会话作为背景引用给其他 agent 时，转述上面两个寻址值即可；标题仅供参考）',
+            agentId: this.agentId,
+            sessionId: this.sessionId,
+            ...(title ? { title } : {}),
+            ...(threadId ? { threadId, ...(threadTitle ? { threadTitle } : {}) } : {}),
+          };
+        },
+      },
+      {
         name: 'session_list',
         parallelizable: true,
         render: { call: 'session-list', result: 'session-list' },
         description:
-          '列出可参考的历史会话目录（跨 agent 聚合）。返回每个会话的 agentId、sessionId、标题、摘要、工作目录与更新时间；' +
-          '属于线程宿主工作空间的条目带线程归属标注（— 线程 wt-…「线程标题」）：同一线程的多代条目共享同一 threadId，' +
-          '线程 ID 可直接作为 session_read_overview 的输入读代际导航。' +
-          '先找到目标会话的 agentId 与 sessionId（会话按二元组寻址），再用 session_read_overview 查看其概览。',
+          '列出可参考的历史会话目录（跨 agent 聚合，可用 agentId 收敛到单个工作空间）。返回每个会话的 agentId、sessionId、标题、摘要、工作目录与更新时间；'
+          + '属于线程宿主工作空间的条目带线程归属标注（— 线程 wt-…「线程标题」）：同一线程的多代条目共享同一 threadId，'
+          + '线程 ID 可直接作为 session_read_overview 的输入读代际导航。'
+          + '先找到目标会话的 agentId 与 sessionId（会话按二元组寻址），再用 session_read_overview 查看其概览。',
         parameters: {
           type: 'object',
           properties: {
@@ -914,6 +966,10 @@ class SessionReferenceFeatureInner implements AgentFeature {
             offset: {
               type: 'number',
               description: '跳过前 N 条，与 limit 配合翻页（可选，默认 0）',
+            },
+            agentId: {
+              type: 'string',
+              description: '限定工作空间 agentId（可选；只列该 agent 的会话，如寻找某个主代理的对话时收敛检索范围）',
             },
             includeArchived: {
               type: 'boolean',
@@ -929,6 +985,7 @@ class SessionReferenceFeatureInner implements AgentFeature {
           const offset = typeof args?.offset === 'number' && args.offset > 0 ? Math.floor(args.offset) : 0;
           const params = new URLSearchParams({ limit: String(Math.min(limit, 50)) });
           if (offset > 0) params.set('offset', String(offset));
+          if (typeof args?.agentId === 'string' && args.agentId.trim()) params.set('agentId', args.agentId.trim());
           if (args?.includeArchived === true) params.set('includeArchived', '1');
           if (typeof args?.from === 'string' && args.from.trim()) params.set('from', args.from.trim());
           if (typeof args?.to === 'string' && args.to.trim()) params.set('to', args.to.trim());

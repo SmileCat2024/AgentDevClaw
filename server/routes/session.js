@@ -498,6 +498,9 @@ app.get('/protoclaw/session_directory', async (req, res, next) => {
       includeArchived,
       from: typeof req.query.from === 'string' ? req.query.from : undefined,
       to: typeof req.query.to === 'string' ? req.query.to : undefined,
+      // agentId 过滤（可选）：按工作空间收敛目录，session-reference 的
+      // session_list 兜底检索用（如只找 programming-helper 的会话）。
+      agentId: typeof req.query.agentId === 'string' ? req.query.agentId : undefined,
       limit: Number.isFinite(limit) && limit > 0 ? limit : 50,
       offset: Number.isFinite(offset) && offset > 0 ? offset : 0,
       threadIndexEntries: await readThreadIndexEntries(),
@@ -574,8 +577,15 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
       : allMessages.map((_, index) => index);
     const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);
     const sessionRecord = (await readSessionIndex(agentId)).sessions.find((item) => item.id === sessionId) || null;
+    // 线程归属（空串 = 无归属 / 非线程会话）：threads/index.json 反查，与
+    // session_directory 的目录标注同源同形（session-reference 的 session_myself
+    // 消费）。远程转发路径不经此处，远端响应缺字段由消费方按空串处理。
+    const owningThread = (await readThreadIndexEntries())
+      .find((thread) => (Array.isArray(thread?.sessionIds) ? thread.sessionIds : []).includes(sessionId));
     res.json({
       sessionId,
+      threadId: cleanSessionText(owningThread?.threadId),
+      threadTitle: cleanSessionText(owningThread?.title),
       sessionType: sessionType || null,
       archived: sessionRecord?.archived === true,
       title: cleanSessionText(sessionRecord?.title) || '',

@@ -511,6 +511,115 @@ describe('read tools transport and paging', () => {
       globalThis.fetch = realFetch;
     }
   });
+
+  it('session_list forwards the agentId filter to narrow the directory to one workspace', async () => {
+    const tools = makeTools();
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return { ok: true, status: 200, json: async () => ({ sessions: [], total: 0 }) } as any;
+    }) as any;
+    try {
+      await (tools.get('session_list')!.execute as any)({ agentId: 'programming-helper' });
+      assert.equal(urls.length, 1);
+      assert.match(urls[0], /agentId=programming-helper/);
+      // 缺省不带 agentId 参数：保持跨 agent 全目录语义
+      await (tools.get('session_list')!.execute as any)({});
+      assert.equal(urls.length, 2);
+      assert.doesNotMatch(urls[1], /agentId=/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+// ── session_myself（自身会话身份，供转述给其他 agent） ────────────
+
+describe('session_myself', () => {
+  const realFetch = globalThis.fetch;
+
+  it('returns own addressing identity with best-effort title', async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return { ok: true, status: 200, json: async () => ({ title: '调度链路调研', messages: [] }) } as any;
+    }) as any;
+    try {
+      const feature = new SessionReferenceFeature({
+        agentId: 'programming-helper', sessionId: 'session-9', serverOrigin: 'http://server.test',
+      });
+      const tool = feature.getTools().find((t) => t.name === 'session_myself')!;
+      const result = await (tool.execute as any)({});
+      // self-fetch 走 session_record，寻址二元组是有效载荷
+      assert.equal(urls.length, 1);
+      assert.match(urls[0], /session_record\?agentId=programming-helper&sessionId=session-9/);
+      assert.equal(result.agentId, 'programming-helper');
+      assert.equal(result.sessionId, 'session-9');
+      assert.equal(result.title, '调度链路调研');
+      assert.match(result.text, /agentId: programming-helper/);
+      assert.match(result.text, /session-9「调度链路调研」/);
+      // 普通会话（无线程归属）：不出现线程字段，text 不带所属行
+      assert.ok(!('threadId' in result));
+      assert.doesNotMatch(result.text, /所属线程/);
+    } finally { globalThis.fetch = realFetch; }
+  });
+
+  it('surfaces thread ownership when the session belongs to a thread', async () => {
+    globalThis.fetch = (async () => ({
+      ok: true, status: 200,
+      json: async () => ({
+        title: '工单 #42', threadId: 'wt-demo', threadTitle: '修复调度链路', messages: [],
+      }),
+    })) as any;
+    try {
+      const feature = new SessionReferenceFeature({
+        agentId: 'coder', sessionId: 'session-t', serverOrigin: 'http://server.test',
+      });
+      const tool = feature.getTools().find((t) => t.name === 'session_myself')!;
+      const result = await (tool.execute as any)({});
+      // 线程宿主会话：threadId/threadTitle 透出，text 提示可读代际导航
+      assert.equal(result.threadId, 'wt-demo');
+      assert.equal(result.threadTitle, '修复调度链路');
+      assert.match(result.text, /所属线程: wt-demo「修复调度链路」/);
+      assert.match(result.text, /session_read_overview/);
+    } finally { globalThis.fetch = realFetch; }
+  });
+
+  it('returns bare identity when the title self-fetch fails', async () => {
+    globalThis.fetch = (async () => { throw new Error('network down'); }) as any;
+    try {
+      const feature = new SessionReferenceFeature({
+        agentId: 'coder', sessionId: 'session-7', serverOrigin: 'http://server.test',
+      });
+      const tool = feature.getTools().find((t) => t.name === 'session_myself')!;
+      const result = await (tool.execute as any)({});
+      // 标题失败不影响身份返回：寻址二元组照常给出，不因网络问题报错
+      assert.equal(result.agentId, 'coder');
+      assert.equal(result.sessionId, 'session-7');
+      assert.ok(!('title' in result));
+      assert.match(result.text, /session-7/);
+    } finally { globalThis.fetch = realFetch; }
+  });
+
+  it('errors readably without sessionId, and falls back to the runtime env', async () => {
+    const prev = process.env.PROTOCLAW_PREBUILT_SESSION_ID;
+    delete process.env.PROTOCLAW_PREBUILT_SESSION_ID;
+    try {
+      const bare = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      const missing = await (bare.getTools().find((t) => t.name === 'session_myself')!.execute as any)({});
+      assert.match(missing.error, /身份不可得/);
+
+      // env fallback 与 agentId 同款链：runtime 注入的 env 在构造缺省时兜底
+      process.env.PROTOCLAW_PREBUILT_SESSION_ID = 'session-env';
+      const fromEnv = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+      const got = await (fromEnv.getTools().find((t) => t.name === 'session_myself')!.execute as any)({});
+      assert.equal(got.sessionId, 'session-env');
+    } finally {
+      if (prev !== undefined) process.env.PROTOCLAW_PREBUILT_SESSION_ID = prev;
+      else delete process.env.PROTOCLAW_PREBUILT_SESSION_ID;
+      globalThis.fetch = realFetch;
+    }
+  });
 });
 
 // ── 线程双模：threadId 输入 → 代际导航索引 ─────────────────────────

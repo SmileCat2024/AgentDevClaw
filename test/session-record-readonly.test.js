@@ -172,6 +172,44 @@ describe('session_record 只读数据面', () => {
     assert.equal(res.payload.sessionId, SESSION);
   });
 
+  test('无线程索引时线程归属为空串（非线程会话不炸、不伪造）', async () => {
+    const handler = captureRecordRoute();
+    const res = makeRes();
+    await handler({ query: { agentId: AGENT, sessionId: SESSION } }, res);
+
+    assert.equal(res.payload.threadId, '');
+    assert.equal(res.payload.threadTitle, '');
+  });
+
+  test('线程归属反查：sessionIds 命中时透出，不含本会话时保持空串', async () => {
+    // threads/index.json 与数据根同根（AGENTDEV_DATA_DIR 隔离），随会话快照落位
+    const threadsDir = join(DATA_ROOT, 'threads');
+    const indexFile = join(threadsDir, 'index.json');
+    const writeThreadIndex = (threads) => {
+      mkdirSync(threadsDir, { recursive: true });
+      writeFileSync(indexFile, JSON.stringify({ threads }), 'utf8');
+    };
+
+    // 命中：本会话在线程的 sessionIds 里 → threadId / threadTitle 下发
+    writeThreadIndex([
+      { threadId: 'wt-other', title: '别的线程', sessionIds: ['session-elsewhere'] },
+      { threadId: 'wt-owning', title: '修复调度链路', sessionIds: ['session-prev-gen', SESSION] },
+    ]);
+    let handler = captureRecordRoute();
+    let res = makeRes();
+    await handler({ query: { agentId: AGENT, sessionId: SESSION } }, res);
+    assert.equal(res.payload.threadId, 'wt-owning');
+    assert.equal(res.payload.threadTitle, '修复调度链路');
+
+    // 不含本会话：索引存在也保持空串（反查按 sessionIds 匹配，不是取第一条）
+    writeThreadIndex([{ threadId: 'wt-other', title: '别的线程', sessionIds: ['session-elsewhere'] }]);
+    handler = captureRecordRoute();
+    res = makeRes();
+    await handler({ query: { agentId: AGENT, sessionId: SESSION } }, res);
+    assert.equal(res.payload.threadId, '');
+    assert.equal(res.payload.threadTitle, '');
+  });
+
   test('会话文件不存在 → 404（消费方据 404 区分「已删除」与「服务故障」）', async () => {
     const handler = captureRecordRoute();
     const res = makeRes();

@@ -67,6 +67,23 @@ describe('buildSessionDirectoryEntries', () => {
     assert.deepEqual(entries.map((entry) => entry.sessionId), ['s-new', 's-old']);
   });
 
+  it('restricts to a single workspace when agentId is given, and blank keeps the full directory', () => {
+    const input = [
+      { agentId: 'programming-helper', sessions: [
+        { id: 'ph-1', updatedAt: '2026-05-01T00:00:00Z' },
+        { id: 'ph-2', updatedAt: '2026-04-01T00:00:00Z' },
+      ] },
+      { agentId: 'coder', sessions: [{ id: 'co-1', updatedAt: '2026-06-01T00:00:00Z' }] },
+    ];
+    // 指定 agentId：只留该工作空间的条目，其余 agent 的组整体跳过（total 同步收敛）
+    const phOnly = buildSessionDirectoryEntries(input, { agentId: 'programming-helper' });
+    assert.deepEqual(phOnly.map((entry) => entry.sessionId), ['ph-1', 'ph-2']);
+    assert.equal(phOnly.total, 2);
+    // 不传 / 空白串：跨 agent 全目录（现行为不变）
+    assert.equal(buildSessionDirectoryEntries(input).total, 3);
+    assert.equal(buildSessionDirectoryEntries(input, { agentId: '   ' }).total, 3);
+  });
+
   it('applies limit after sorting', () => {
     const entries = buildSessionDirectoryEntries([
       {
