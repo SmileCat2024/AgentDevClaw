@@ -194,6 +194,26 @@ export function isRotationHandoffFinish(notifData) {
   return handoff(notifData?.runtime?.lastOutcome);
 }
 
+/**
+ * 终态是否构成「完成新闻」（finish 通知的投递资格）——两条输入路径共用的
+ * 单一权威判定。挂起（等后台任务唤醒，ADR-0019）与接续移交（cancelled +
+ * interruptedBy=context_rotation，轮次由 successor 承载完成事实）都不是
+ * 完成：工作已移交给后续单元，完成通知随终局轮次再来。
+ *
+ * 输入是归一形态，两条路径各自完成形态归一后调用——事实源同为运行时的
+ * CallOutcome（框架轮次盖戳），出口不做第二套语义（历史回归：2026-11-10
+ * 线程事实路径漏检挂起，「等后台任务」的轮次结束被弹成「已完成」）：
+ * - runtime 快照路径：isSuspendedFinish / isRotationHandoffFinish 从
+ *   CallOutcome 形态（status+reason / interruptedBy）归一；
+ * - 线程轮次事实路径：fact.status / fact.suspended 布尔形态归一
+ *   （session-events 已把 outcome.reason='suspended' 翻译为布尔标志）。
+ */
+export function isFinishNews({ status = '', suspended = false, rotationHandoff = false } = {}) {
+  if (suspended) return false;
+  if (String(status).trim() === 'cancelled' && rotationHandoff) return false;
+  return true;
+}
+
 /** 只透传运行时明确记录的 CallOutcome，绝不从断连或 active=false 猜结果。 */
 export function extractCallOutcome(notifData) {
   const action = notificationAction(notifData);
@@ -243,9 +263,14 @@ export async function observeCallStatusSnapshot(kind, agentId, snapshot, opts = 
       if (typeof opts.isThreadHostAgentId === 'function' && opts.isThreadHostAgentId(targetAgentId)) return;
       const finishTs = extractFinishTimestamp(snapshot);
       if (!finishTs) return; // 非结束态快照（call.start / calling 中）：无结束事实
-      if (isSuspendedFinish(snapshot)) return; // 挂起等待唤醒，不是完成
-      if (isRotationHandoffFinish(snapshot)) return; // 接续打断：已移交 successor 接力，不是完成
       const outcome = extractCallOutcome(snapshot);
+      // 完成新闻判定单一权威（isFinishNews）：挂起与接续移交不是完成，
+      // 形态归一由两个既有谓词承担（CallOutcome 形态 → 归一布尔）。
+      if (!isFinishNews({
+        status: outcome?.outcomeStatus,
+        suspended: isSuspendedFinish(snapshot),
+        rotationHandoff: isRotationHandoffFinish(snapshot),
+      })) return;
       await deliverAppNotification({
         agentId: targetAgentId,
         runtimeAgentId: agentId, // 会话粒度定位：多会话工作空间下与 agentId 不同
@@ -278,8 +303,10 @@ export async function observeCallStatusSnapshot(kind, agentId, snapshot, opts = 
 /**
  * 线程轮次终态事实感知（ADR-0042 决策 4 的非 IM 首订阅者）：thread_events
  * 落板后的 turn 终态事实 → finish 通知（带线程身份与交付文本摘要）。
- * cancelled 不是完成新闻（用户/宿主自己打断的），跳过；completed 与
- * failed 照 finish 语义投递。dedupe 键绑定轮次事实（agentId + threadId +
+ * cancelled 不是完成新闻（用户/宿主自己打断的），跳过；suspended（等后台
+ * 任务唤醒的挂起轮次，ADR-0019）同理跳过——判定经 isFinishNews，与快照
+ * 路径同源（见 isFinishNews 头注）；completed 与 failed 照 finish 语义
+ * 投递。dedupe 键绑定轮次事实（agentId + threadId +
  * 状态 + 轮次号），同一轮次只投一次；权限判定与三层判定链同源
  * （notifications.finish）。fact 形状见 thread-routes.js onTurnTerminalFact
  * 注释。自捕获错误：感知失败只留痕，绝不打断上报链。
@@ -300,6 +327,9 @@ export async function observeThreadTurnFact(fact, opts = {}) {
     const threadId = String(fact?.threadId || '').trim();
     if (!agentId || !threadId) return;
     if (fact.status === 'cancelled') return;
+    // 挂起不是完成（ADR-0019）：等后台任务唤醒的轮次，完成事实由终局
+    // 轮次承载。判定经 isFinishNews——与快照路径同源（见其头注）。
+    if (!isFinishNews({ status: fact.status, suspended: fact.suspended === true })) return;
     const turnKey = Number.isInteger(fact.turn) ? String(fact.turn) : 'none';
     const sessionId = String(fact?.sessionId || '').trim();
     let runtimeAgentId = null;

@@ -37,6 +37,7 @@ const {
   extractCallOutcome,
   isSuspendedFinish,
   isRotationHandoffFinish,
+  isFinishNews,
   setupAppNotificationRoutes,
 } = await import('../server/routes/app-notification.js');
 const { writeWorkspacePermissionValue } = await import('../server/routes/workspace-settings.js');
@@ -452,6 +453,19 @@ describe('observeCallStatusSnapshot', () => {
     assert.equal(isSuspendedFinish({ event: { type: 'call.finish', data: { status: 'completed' } } }), false);
   });
 
+  it('isFinishNews: suspended / rotation-handoff are not news; other terminals are', () => {
+    // 单一权威判定（两路归一后共用）：挂起与接续移交不投递，用户手动
+    // 打断（cancelled 无移交）与 completed / failed 照常——与快照路径
+    // 既有行为对齐（cancelled 在快照路径投递「已取消」，线程事实路径
+    // 在上游整体跳过，均不受本谓词改变）。
+    assert.equal(isFinishNews({ status: 'completed', suspended: true }), false, '挂起（等后台任务）不是完成新闻');
+    assert.equal(isFinishNews({ status: 'cancelled', rotationHandoff: true }), false, '接续移交不是完成新闻');
+    assert.equal(isFinishNews({ status: 'completed' }), true);
+    assert.equal(isFinishNews({ status: 'failed' }), true);
+    assert.equal(isFinishNews({ status: 'cancelled' }), true, '用户手动打断仍通知「已取消」');
+    assert.equal(isFinishNews({}), true, '无挂起/移交事实的终态默认是新闻');
+  });
+
   it('flags rotation-handoff finishes (cancelled + interruptedBy, both snapshot paths)', () => {
     // 字面量 'context_rotation' 是跨层词汇（守卫申报 → CallOutcome 携带 →
     // 出口匹配），测试用字面量锁定线上值：改名时此处强制两侧同步
@@ -574,6 +588,21 @@ describe('observeThreadTurnFact', () => {
     assert.equal(parseFrames(sse.streamText)
       .filter((f) => f.event === 'app-notification' && f.data.agentId === 'tt-cancelled').length, 0);
     assert.ok(parseFrames(sse.streamText).filter((f) => f.event === 'app-notification').length >= before);
+  });
+
+  it('skips suspended turns: waiting on background work is not finish news (ADR-0019)', async () => {
+    // 线程宿主（编程小助手等）的轮次挂起（等后台任务唤醒）不是完成事实：
+    // 判定经 isFinishNews 单一权威，与快照路径同口径（历史回归：2026-11-10
+    // 事实路径漏检挂起，等后台任务的轮次结束被弹成「已完成」）。
+    const frames = () => parseFrames(sse.streamText)
+      .filter((f) => f.event === 'app-notification' && f.data.agentId === 'tt-suspended');
+    const before = frames().length;
+    await observeThreadTurnFact({
+      threadId: 'wt-s', agentId: 'tt-suspended', sessionId: 's1', status: 'completed',
+      turn: 4, suspended: true, pendingWakeups: [{ source: 'shell', id: 'bg-1', summary: 'npm test' }],
+    }, { requireAgent, settingsPath: settingsPath() });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(frames().length, before);
   });
 
   it('dedupes per turn fact: same thread+turn+status delivers once', async () => {
