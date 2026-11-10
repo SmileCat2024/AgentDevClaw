@@ -73,6 +73,10 @@ test('thread directory route reads persisted archive records and applies agent f
     };
     const live = await invoke({ agentId: 'a' });
     assert.deepEqual(live.threads.map((thread) => thread.threadId), ['wt-live-a']);
+    // 逗号分隔多值（宽容通道）：a,b 并集。split 退化回整串精确匹配时
+    // （'a,b' 匹配不到任何空间）此断言失败。
+    const multi = await invoke({ agentId: 'a,b' });
+    assert.deepEqual(multi.threads.map((thread) => thread.threadId), ['wt-live-a', 'wt-live-b']);
     const withArchived = await invoke({ agentId: 'a', includeArchived: '1' });
     assert.deepEqual(withArchived.threads.map((thread) => thread.threadId), ['wt-live-a', 'wt-old-a']);
     assert.equal(withArchived.threads[1].archived, true);

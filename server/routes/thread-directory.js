@@ -79,8 +79,11 @@ export function setupThreadDirectoryRoute(app, { threadsRoot, discoverAgents, re
         readJson(path.join(threadsRoot, 'archive-index.json'), { threads: {} }),
         discoverAgents(),
       ]);
-      const agentFilter = typeof req.query.agentId === 'string' ? req.query.agentId.trim() : '';
-      const targets = agentFilter ? agents.filter((agent) => agent.id === agentFilter) : agents;
+      // agentId 过滤（可选）：值支持逗号分隔多值（宽容 feature 层数组形态
+      // 误传，单值为主路径），split 成集合匹配。
+      const agentFilterRaw = typeof req.query.agentId === 'string' ? req.query.agentId.trim() : '';
+      const agentFilter = new Set(agentFilterRaw ? agentFilterRaw.split(',').map((v) => v.trim()).filter(Boolean) : []);
+      const targets = agentFilter.size ? agents.filter((agent) => agentFilter.has(agent.id)) : agents;
       const sessionIndexes = await Promise.all(targets.map(async (agent) => ({
         agentId: agent.id,
         ...(await readSessionIndex(agent.id)),

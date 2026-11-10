@@ -499,8 +499,11 @@ app.get('/protoclaw/session_directory', async (req, res, next) => {
       from: typeof req.query.from === 'string' ? req.query.from : undefined,
       to: typeof req.query.to === 'string' ? req.query.to : undefined,
       // agentId 过滤（可选）：按工作空间收敛目录，session-reference 的
-      // session_list 兜底检索用（如只找 programming-helper 的会话）。
-      agentId: typeof req.query.agentId === 'string' ? req.query.agentId : undefined,
+      // session_list 兜底检索用（如只找 programming-helper 的会话）。值支持
+      // 逗号分隔多值（宽容 feature 层的数组形态误传，单值为主路径）。
+      agentIds: typeof req.query.agentId === 'string'
+        ? req.query.agentId.split(',').map((v) => v.trim()).filter(Boolean)
+        : [],
       limit: Number.isFinite(limit) && limit > 0 ? limit : 50,
       offset: Number.isFinite(offset) && offset > 0 ? offset : 0,
       threadIndexEntries: await readThreadIndexEntries(),

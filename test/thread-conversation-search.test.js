@@ -289,7 +289,7 @@ test('concurrent index builds for the same agent coalesce into a single build', 
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('search route requires domain, honors agents filter, and returns grouped matches', async () => {
+test('search route requires domain, honors agentId filter, and returns grouped matches', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'thread-search-route-'));
   try {
     const sessionsRoot = path.join(root, 'sessions');
@@ -327,15 +327,19 @@ test('search route requires domain, honors agents filter, and returns grouped ma
     // domain 缺省 → 400（分流必须显式指定）。
     const missing = await call({ q: 'handoff issue' });
     assert.equal(missing.statusCode, 400);
-    // agents 过滤：只搜工作空间 a，b 的会话不参与。
-    const filtered = await call({ q: 'handoff issue', domain: 'conversation', agents: 'a' });
+    // agentId 过滤（与寻址参数同名，值可逗号分隔多值）：只搜工作空间 a，b 的会话不参与。
+    const filtered = await call({ q: 'handoff issue', domain: 'conversation', agentId: 'a' });
     assert.equal(filtered.nextError, undefined);
     assert.equal(filtered.statusCode, 200);
     assert.equal(filtered.body.total, 1);
     assert.equal(filtered.body.results[0].matches[0].source.agentId, 'a');
     assert.deepEqual(filtered.body.results[0].matches[0].source, { agentId: 'a', sessionId: 's1', turn: 1, messageIndex: 0 });
-    // 无 agents → 全空间。
+    // 无 agentId → 全空间。
     const all = await call({ q: 'handoff issue', domain: 'conversation' });
     assert.equal(all.body.total, 2);
+    // 多值（宽容通道）：a,b 并集 = 全空间（两空间各有命中）。
+    // split 语义退化为整串精确匹配时此断言会失败（'a,b' 匹配不到任何空间 → 0）。
+    const multi = await call({ q: 'handoff issue', domain: 'conversation', agentId: 'a,b' });
+    assert.equal(multi.body.total, all.body.total);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

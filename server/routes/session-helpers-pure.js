@@ -720,13 +720,16 @@ export function compareSidebarSessionReadModels(lightSessions = [], authoritativ
  * 线程标题（任务级语义），不是某代会话的标题。
  *
  * @param {Array<{agentId: string, agentName?: string, sessions: Array<object>}>} agentIndexEntries
- * @param {{limit?: number, offset?: number, includeArchived?: boolean, from?: string, to?: string, agentId?: string, threadIndexEntries?: Array<{threadId: string, title?: string, sessionIds?: string[]}>}} [options]
+ * @param {{limit?: number, offset?: number, includeArchived?: boolean, from?: string, to?: string, agentIds?: string[], threadIndexEntries?: Array<{threadId: string, title?: string, sessionIds?: string[]}>}} [options]
  */
 export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
   const includeArchived = options?.includeArchived === true;
-  // agentId 过滤（可选）：按工作空间收敛目录，组级短路——被过滤 agent 的
-  // 会话索引不再进聚合。空串/缺省不过滤（跨 agent 全目录）。
-  const agentFilter = typeof options?.agentId === 'string' ? options.agentId.trim() : '';
+  // agentIds 过滤（可选）：按工作空间集合收敛目录，组级短路——被过滤
+  // agent 的会话索引不再进聚合。空集/缺省不过滤（跨 agent 全目录）。
+  // 集合语义由路由层 split 提供（agentId query 逗号分隔，宽容多值）。
+  const agentFilter = new Set(Array.isArray(options?.agentIds)
+    ? options.agentIds.map((v) => String(v).trim()).filter(Boolean)
+    : []);
   const parseDateBound = (value, endOfDay = false) => {
     if (typeof value !== 'string' || !value.trim()) return null;
     const raw = value.trim();
@@ -759,7 +762,7 @@ export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
   for (const entry of Array.isArray(agentIndexEntries) ? agentIndexEntries : []) {
     const agentId = cleanSessionText(entry?.agentId);
     if (!agentId) continue;
-    if (agentFilter && agentId !== agentFilter) continue;
+    if (agentFilter.size && !agentFilter.has(agentId)) continue;
     const agentName = cleanSessionText(entry?.agentName);
     for (const record of Array.isArray(entry?.sessions) ? entry.sessions : []) {
       if (!record?.id) continue;

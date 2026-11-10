@@ -527,6 +527,37 @@ describe('read tools transport and paging', () => {
       await (tools.get('session_list')!.execute as any)({});
       assert.equal(urls.length, 2);
       assert.doesNotMatch(urls[1], /agentId=/);
+      // 宽容通道：模型跨工具携带数组形态时归一化（去空去重 → 逗号串），
+      // 而不是被序列化成 JSON 字符串后精确匹配落空（历史：静默 0 条）。
+      // URLSearchParams 编码逗号为 %2C，server 端 query 解码后 split。
+      await (tools.get('session_list')!.execute as any)({ agentId: ['programming-helper', ' coder ', '', 'programming-helper'] });
+      assert.equal(urls.length, 3);
+      assert.match(urls[2], /agentId=programming-helper%2Ccoder/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('session_search filter is named agentId (string) and forwards to the shared agentId query', async () => {
+    const tools = makeTools();
+    // 契约：与寻址参数同名同心智（agentId），不再以 agents 数组形态出现——
+    // 相邻工具同名不同形会让模型在工具间携带错误形态（实测七次传错）。
+    const schema = (tools.get('session_search')!.parameters as any).properties;
+    assert.equal(schema.agentId?.type, 'string');
+    assert.equal(schema.agents, undefined);
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return { ok: true, status: 200, json: async () => ({ results: [], indexCoverage: [] }) } as any;
+    }) as any;
+    try {
+      await (tools.get('session_search')!.execute as any)({ query: 'k', domain: 'conversation', agentId: 'ph' });
+      assert.equal(urls.length, 1);
+      assert.match(urls[0], /search_conversations\?[^]*agentId=ph/);
+      // 数组形态同样走归一化宽容通道（与 session_list 同一 normalizeAgentIdFilter）
+      await (tools.get('session_search')!.execute as any)({ query: 'k', domain: 'conversation', agentId: ['ph', 'coder'] });
+      assert.equal(urls.length, 2);
+      assert.match(urls[1], /agentId=ph%2Ccoder/);
     } finally {
       globalThis.fetch = realFetch;
     }

@@ -304,8 +304,10 @@ export function setupThreadConversationSearchRoute(app, { discoverAgents, readSe
         res.status(400).json({ error: 'q and domain (conversation|tooling) are required' });
         return;
       }
-      const agentsFilter = typeof req.query.agents === 'string'
-        ? req.query.agents.split(',').map((agent) => clean(agent)).filter(Boolean)
+      // agentId 过滤（可选，逗号分隔多值）：query 名与寻址参数同名，feature
+      // 层（session_search）签名已是同名 string，数组误传在 feature 层归一化。
+      const agentsFilter = typeof req.query.agentId === 'string'
+        ? req.query.agentId.split(',').map((agent) => clean(agent)).filter(Boolean)
         : null;
       const allAgents = await discoverAgents();
       const targets = agentsFilter ? allAgents.filter((agent) => agentsFilter.includes(agent.id)) : allAgents;

@@ -30,7 +30,9 @@
  * 数据访问走 Claw server：/protoclaw/session_directory（跨 agent 会话目录，
  * 只读各 agent 的 index.json 元数据 + threads/index.json 线程归属标注）与
  * /protoclaw/session_record（规范化消息，含远程命名空间转发；另带
- * title/goal/timestamps/archived 等背景字段，概览头部据此补齐时空背景）、
+ * title/goal/timestamps/archived 等背景字段与 threadId/threadTitle 线程
+ * 归属（本地路径反查 threads/index.json，远程转发不带），概览头部据此
+ * 补齐时空背景、session_myself 据此透出线程寻址）、
  * /protoclaw/threads/:threadId（线程详情 + 代际元数据）。投影复用框架
  * trim 引擎的纯函数 buildTrimmedSeedMessages（默认策略：对话骨架保留、
  * 工具活动折叠），与语境接续（handoff 落盘交接）共享投影逻辑、不共享
@@ -71,6 +73,22 @@ export const SESSION_REFERENCE_CONTINUITY_PROTOCOL = 'claw.session-reference-con
 
 function cleanText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * agentId 过滤参数归一化。工具签名统一声明 string（与寻址参数 agentId
+ * 同名同心智，单值是主路径）；宽容数组形态——模型在相邻工具间携带参数
+ * 习惯时可能传数组，若直接序列化会变成 '["xxx"]' 字符串被精确匹配漏掉，
+ * 产生静默 0 条。归一化（去空去重）→ 逗号分隔串；server 端按逗号 split
+ * 集合过滤，单值行为不变。无有效值返回空串（不过滤）。
+ */
+function normalizeAgentIdFilter(value: unknown): string {
+  const raw = Array.isArray(value) ? value : [value];
+  const cleaned = Array.from(new Set(raw
+    .filter((v): v is string => typeof v === 'string')
+    .map((v) => v.trim())
+    .filter(Boolean)));
+  return cleaned.join(',');
 }
 
 interface SessionMessage {
@@ -985,7 +1003,8 @@ class SessionReferenceFeatureInner implements AgentFeature {
           const offset = typeof args?.offset === 'number' && args.offset > 0 ? Math.floor(args.offset) : 0;
           const params = new URLSearchParams({ limit: String(Math.min(limit, 50)) });
           if (offset > 0) params.set('offset', String(offset));
-          if (typeof args?.agentId === 'string' && args.agentId.trim()) params.set('agentId', args.agentId.trim());
+          const agentFilter = normalizeAgentIdFilter(args?.agentId);
+          if (agentFilter) params.set('agentId', agentFilter);
           if (args?.includeArchived === true) params.set('includeArchived', '1');
           if (typeof args?.from === 'string' && args.from.trim()) params.set('from', args.from.trim());
           if (typeof args?.to === 'string' && args.to.trim()) params.set('to', args.to.trim());
@@ -1037,9 +1056,11 @@ class SessionReferenceFeatureInner implements AgentFeature {
         execute: async (args: any) => {
           const requestedLimit = typeof args?.limit === 'number' && args.limit > 0 ? Math.floor(args.limit) : 50;
           const params = new URLSearchParams({ limit: String(Math.min(requestedLimit, 50)) });
-          for (const key of ['agentId', 'from', 'to'] as const) {
+          for (const key of ['from', 'to'] as const) {
             if (typeof args?.[key] === 'string' && args[key].trim()) params.set(key, args[key].trim());
           }
+          const agentFilter = normalizeAgentIdFilter(args?.agentId);
+          if (agentFilter) params.set('agentId', agentFilter);
           if (Number.isFinite(args?.offset) && args.offset > 0) params.set('offset', String(Math.floor(args.offset)));
           if (args?.includeArchived === true) params.set('includeArchived', '1');
           try {
@@ -1200,7 +1221,7 @@ class SessionReferenceFeatureInner implements AgentFeature {
           properties: {
             query: { type: 'string', description: '查询词；多个词以空格分隔，所有词都须命中同一条消息' },
             domain: { type: 'string', enum: ['conversation', 'tooling'], description: '搜索域，必传分流：conversation=对话正文（用户/助手消息），tooling=工具调用（工具名+参数与工具结果）' },
-            agents: { type: 'array', items: { type: 'string' }, description: '限定搜索的工作空间 agentId 列表（如 ["programming-helper"]）；缺省搜全部工作空间' },
+            agentId: { type: 'string', description: '限定工作空间 agentId（可选；缺省搜全部工作空间）' },
             scope: { type: 'string', enum: ['all', 'main', 'archived'], description: '会话范围，默认 all' },
             from: { type: 'string', description: '更新时间起点（ISO 日期/时间）' },
             to: { type: 'string', description: '更新时间终点（ISO 日期/时间）' },
@@ -1216,10 +1237,8 @@ class SessionReferenceFeatureInner implements AgentFeature {
           if (!domain) return { error: 'domain is required (conversation|tooling)' };
           try {
             const params = new URLSearchParams({ q: query, domain });
-            if (Array.isArray(args?.agents) && args.agents.length > 0) {
-              const agents = args.agents.map((agent: any) => cleanText(agent)).filter(Boolean);
-              if (agents.length) params.set('agents', agents.join(','));
-            }
+            const agentFilter = normalizeAgentIdFilter(args?.agentId);
+            if (agentFilter) params.set('agentId', agentFilter);
             if (args?.scope === 'main' || args?.scope === 'archived') params.set('scope', args.scope);
             const requestedLimit = Number.isFinite(args?.limit) && args.limit > 0 ? Math.floor(args.limit) : 50;
             params.set('limit', String(Math.min(requestedLimit, 50)));

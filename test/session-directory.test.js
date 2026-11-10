@@ -67,21 +67,27 @@ describe('buildSessionDirectoryEntries', () => {
     assert.deepEqual(entries.map((entry) => entry.sessionId), ['s-new', 's-old']);
   });
 
-  it('restricts to a single workspace when agentId is given, and blank keeps the full directory', () => {
+  it('restricts to the given workspaces via agentIds, and an empty/blank set keeps the full directory', () => {
     const input = [
       { agentId: 'programming-helper', sessions: [
         { id: 'ph-1', updatedAt: '2026-05-01T00:00:00Z' },
         { id: 'ph-2', updatedAt: '2026-04-01T00:00:00Z' },
       ] },
       { agentId: 'coder', sessions: [{ id: 'co-1', updatedAt: '2026-06-01T00:00:00Z' }] },
+      { agentId: 'memo', sessions: [{ id: 'me-1', updatedAt: '2026-03-01T00:00:00Z' }] },
     ];
-    // 指定 agentId：只留该工作空间的条目，其余 agent 的组整体跳过（total 同步收敛）
-    const phOnly = buildSessionDirectoryEntries(input, { agentId: 'programming-helper' });
+    // 单值集合（主路径，feature 层 session_list 的 agentId string）：
+    // 只留该工作空间的条目，其余 agent 的组整体跳过（total 同步收敛）
+    const phOnly = buildSessionDirectoryEntries(input, { agentIds: ['programming-helper'] });
     assert.deepEqual(phOnly.map((entry) => entry.sessionId), ['ph-1', 'ph-2']);
     assert.equal(phOnly.total, 2);
-    // 不传 / 空白串：跨 agent 全目录（现行为不变）
-    assert.equal(buildSessionDirectoryEntries(input).total, 3);
-    assert.equal(buildSessionDirectoryEntries(input, { agentId: '   ' }).total, 3);
+    // 多值集合（宽容通道，路由层 split 逗号分隔值）：并集收敛
+    const multi = buildSessionDirectoryEntries(input, { agentIds: ['programming-helper', 'coder'] });
+    assert.deepEqual(multi.map((entry) => entry.sessionId).sort(), ['co-1', 'ph-1', 'ph-2']);
+    // 不传 / 空数组 / 空白项（trim 后空集）：跨 agent 全目录（行为不变）
+    assert.equal(buildSessionDirectoryEntries(input).total, 4);
+    assert.equal(buildSessionDirectoryEntries(input, { agentIds: [] }).total, 4);
+    assert.equal(buildSessionDirectoryEntries(input, { agentIds: ['   ', ''] }).total, 4);
   });
 
   it('applies limit after sorting', () => {
