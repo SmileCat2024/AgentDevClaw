@@ -21,9 +21,10 @@
  * （copy-local-feature-skills.mjs）。技能随 feature 装配走，不依赖工作
  * 目录的 .agentdev/skills。
  *
- * 条目 handoff-context-calibration：只有框架 HandoffSeedFeature 已实际注入非空接续内容，
- * 才在首个 StepStart 注入校准提醒；普通新会话、快照恢复及无 seed 的 handoff 不触发。
- * 触发事实由框架 HandoffSeedFeature.captureState() 的注入账目判定，不按新 runtime 猜测。
+ * 条目 handoff-context-calibration：不经本 feature 运行时注入——文案经
+ * readHandoffCalibrationContent() 供宿主读取，装配 HandoffSeedFeature 时经
+ * appendix 配置挂入接续管道，在 seed 注入事务末尾确定性注入。普通新会话、
+ * 快照恢复及无 seed 的 handoff 天然不触发（无注入路径）。
  *
  * - 条目 todo-completion-reflection：Todo 工具成功把 pending/in_progress 任务推进为
  *   completed 后，在下一步 StepStart 注入一条结合任务 kind、描述与交付物的承接提醒。
@@ -233,6 +234,21 @@ export function loadKnowledgeDir(dir: string): Map<string, string> {
 }
 
 /**
+ * 接续校准文案（含 [工程素养] 前缀）。
+ *
+ * 宿主装配 HandoffSeedFeature 时读取并经 appendix 配置挂入接续管道，在
+ * seed 注入事务末尾确定性注入——本 feature 不在运行时探测接续（历史实现
+ * 经 StepStart ctx.agent.getFeature 读注入账目，但该上下文的 agent 是
+ * 受限 facade、无 getFeature，从未生效，已移除）。
+ * 目录缺失或条目不存在返回 null，宿主据此跳过 appendix。
+ */
+export function readHandoffCalibrationContent(knowledgeDir?: string): string | null {
+  const dir = knowledgeDir ?? join(dirname(__filename), 'knowledge');
+  const content = loadKnowledgeDir(dir).get('handoff-context-calibration');
+  return content ? CRAFT_PREFIX + content : null;
+}
+
+/**
  * 取当前 call 的轮次号：ToolFinished 通知在工具结果写入 context 之后触发，
  * 最近一条消息（即刚写入的工具结果）的 turn 就是当前轮次；取不到时兜底 0。
  */
@@ -263,11 +279,6 @@ const CRAFT_ENTRIES: readonly CraftEntry[] = [
     description: layer.description,
     match: (ctx, feature) => feature.shouldRemindTestLayer(ctx, index),
   })),
-  {
-    id: 'handoff-context-calibration',
-    description: '会话接续后的目标与验证证据校准',
-    match: () => false,
-  },
   {
     id: 'design-trace-reflection',
     description: 'Todo 定义或源码改动后的目标关系与行为影响反思',
@@ -301,7 +312,6 @@ export class CraftAwarenessFeature implements AgentFeature {
     confirmTodoCompletion: { lifecycle: CoreLifecycle.ToolFinished, kind: 'observe' as const },
     injectTodoCompletionReflection: { lifecycle: CoreLifecycle.StepStart, kind: 'observe' as const },
     injectCraftReminder: { lifecycle: CoreLifecycle.ToolFinished, kind: 'observe' as const },
-    injectHandoffCalibration: { lifecycle: CoreLifecycle.StepStart, kind: 'observe' as const },
   };
 
   readonly name = 'craft-awareness';
@@ -494,29 +504,6 @@ export class CraftAwarenessFeature implements AgentFeature {
     if (!filePath) return false;
     if (index > 0 && (ctx.toolName !== 'edit' || !this.injectedEntries[TEST_CRAFT_LAYERS[index - 1].id])) return false;
     return (this.testFileChanges.get(normalizeDocPath(filePath)) ?? 0) >= TEST_CRAFT_LAYERS[index].minChanges;
-  }
-
-  /** 接续 seed 已在先前 CallStart 落入 context 时，首个 StepStart 追加校准提醒。 */
-  async injectHandoffCalibration(ctx: StepStartContext): Promise<void> {
-    try {
-      if (this.injectedEntries['handoff-context-calibration']) return;
-      const handoffSeed = ctx.agent?.getFeature?.('handoff-seed');
-      if (typeof handoffSeed?.captureState !== 'function') return;
-      const state = handoffSeed.captureState() as Record<string, unknown> | null;
-      if (state?.injected !== true || typeof state.seedCount !== 'number' || state.seedCount < 1) return;
-      const content = this.knowledge.get('handoff-context-calibration');
-      if (!content) {
-        this.logger?.warn?.('Craft awareness knowledge missing, skip injection', { entry: 'handoff-context-calibration' });
-        return;
-      }
-      ctx.context.addSystemMessage(CRAFT_PREFIX + content, ctx.callIndex, this.name, 'reminder');
-      this.injectedEntries['handoff-context-calibration'] = true;
-      this.logger?.info?.('Craft awareness injected', { entry: 'handoff-context-calibration' });
-    } catch (error) {
-      this.logger?.warn?.('Craft awareness handoff calibration failed', {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 
   /**
