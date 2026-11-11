@@ -917,6 +917,21 @@ describe('ThreadIntegration (coder host gating)', () => {
     return { control, core: control.core, integration: createThreadIntegration({ control }) };
   }
 
+  test('resolveHeadGeneration shares the framework derivation for legacy records (stage 5 review P0-2)', async () => {
+    // 宿主 spawn 身份与投递侧（deliverPendingCommands → bridge → viewer
+    // fencing）必须同一派生口径：legacy 记录盘上无 headGeneration，框架
+    // 按 sessionChain.length 派生。宿主侧若自写 `|| 1` fallback，多棒
+    // legacy 线程的指令会被 viewer fencing 永久拒收（spawn 注入 1 vs
+    // wire 派生 N）。宿主消费方（agent-startup）一律经此入口取值。
+    const { integration } = makeIntegration();
+    // legacy 三棒无 headGeneration → 派生 3（不是 1）
+    assert.equal(integration.resolveHeadGeneration({ sessionChain: [{}, {}, {}] }), 3);
+    // 无 chain 的最小 legacy → 1
+    assert.equal(integration.resolveHeadGeneration({}), 1);
+    // 显式代际 → 原值（框架不覆写显式事实）
+    assert.equal(integration.resolveHeadGeneration({ headGeneration: 7, sessionChain: [{}, {}] }), 7);
+  });
+
   test('onSessionCreated creates thread for host app sessions only', async () => {
     const { integration } = makeIntegration();
     // 宿主判定是 APP 级的（ADR-0025）：coder APP 的新会话自动建线程，
@@ -1019,10 +1034,11 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal((await integration.handleRuntimeReady('programming-helper', 'coder-s2')).reason, 'no_thread_for_session');
   });
 
-  // 指令在「被这一棒收下、该轮尚未产出终态事件」时遭遇接力，会永久停在
-  // delivered（框架把它当终态，后续补投递只投 pending）。不回收就等于静默
-  // 丢弃：新 head 收不到，调度方永远等不到通知。此处锁定回收契约。
-  test('接力回收上一棒收到却未执行的指令，已执行的指令不重投', async () => {
+  // ADR-0047 决策 2 + 阶段 2b 原子提交：delivered 指令缺消费引用即无法
+  // 判定——不自动重放（9e71b99a）、不静默滞留（de4d5d03）、也不阻塞换头：
+  // 原子事务内转为 unresolved 一等事实持久，自动路径强制把清单追加进
+  // 新 head 首轮（system_continuation 通知），处置是后续显式决定。
+  test('原子提交：缺引用指令转 unresolved 持久，通知指令强制进入新 head 首轮', async () => {
     const turns = [];
     const { control, core, integration } = makeIntegration({
       enabled: true,
@@ -1031,15 +1047,15 @@ describe('ThreadIntegration (coder host gating)', () => {
     });
     const strandThread = await integration.onSessionCreated('coder', { id: 'coder-s1' });
 
-    // 四条指令都已交给旧 head：一条尚无执行事件、一条是当前回合输入、
+    // 四条指令都已交给旧 head：一条尚无消费引用、一条是当前回合输入、
     // 一条在当前回合忙时被消费、最后一条已完成。忙时消费项只出现在
     // 当前回合的 consumedSourceRefs，不会有自己的 turn.started。
-    await core.appendCommand({ threadId: strandThread.threadId, text: '尚未开始的指令' });
+    await core.appendCommand({ threadId: strandThread.threadId, text: '尚无消费引用的指令' });
     await core.appendCommand({ threadId: strandThread.threadId, text: '接续时已开始执行的指令' });
     await core.appendCommand({ threadId: strandThread.threadId, text: '忙时已消费的输入' });
     await core.appendCommand({ threadId: strandThread.threadId, text: '已经跑完的指令' });
     let record = await core.getThread(strandThread.threadId);
-    const [notStarted, interrupted, consumedWhileBusy, finished] = record.commands.map((c) => c.commandId);
+    const [unreferenced, interrupted, consumedWhileBusy, finished] = record.commands.map((c) => c.commandId);
     await core.store.update(strandThread.threadId, (draft) => {
       for (const command of draft.commands) {
         command.status = 'delivered';
@@ -1048,7 +1064,7 @@ describe('ThreadIntegration (coder host gating)', () => {
       return draft;
     });
 
-    // 接续中断正在执行的轮次；该轮同时已消费另一条忙时排队输入。
+    // 三条指令有可靠消费引用；尚无引用的那条进 unresolved（不失败、不重放）。
     await control.board.recordRuntimeEvent({
       agentId: 'coder', sessionId: 'coder-s1', runtimeInstanceId: 'r1',
       event: { type: 'turn.started', turn: 1, sourceRef: interrupted },
@@ -1066,34 +1082,82 @@ describe('ThreadIntegration (coder host gating)', () => {
       event: { type: 'turn.completed', turn: 2, sourceRef: finished },
     });
 
+    const begun = await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'coder-s1', seedContinuation: false });
+    assert.equal(begun.applied, true);
     const outcome = await integration.applySessionSuccession({
       agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
     });
+    // 换头推进成功：缺引用不再阻塞（由 unresolved 承接，不静默滞留）。
     assert.equal(outcome.applied, true);
-    assert.deepEqual(outcome.requeued, [notStarted]);
-    // 仅无执行关联的输入转交新 head；当前输入、忙时消费项及已完成项不重投。
-    assert.equal(turns.length, 1);
-    assert.equal(turns[0].text, '尚未开始的指令');
-
+    assert.equal(outcome.unresolved.length, 1);
+    assert.equal(outcome.unresolved[0].commandId, unreferenced);
+    assert.equal(outcome.unresolved[0].reason, 'no_positive_reference');
+    assert.equal(outcome.unresolved[0].fromHeadSessionId, 'coder-s1');
     record = await core.getThread(strandThread.threadId);
-    const notStartedAfter = record.commands.find((c) => c.commandId === notStarted);
-    const interruptedAfter = record.commands.find((c) => c.commandId === interrupted);
-    const consumedAfter = record.commands.find((c) => c.commandId === consumedWhileBusy);
-    const finishedAfter = record.commands.find((c) => c.commandId === finished);
-    assert.equal(notStartedAfter.status, ThreadCommandStatus.DELIVERED);
-    assert.equal(interruptedAfter.status, ThreadCommandStatus.DELIVERED);
-    assert.equal(consumedAfter.status, ThreadCommandStatus.DELIVERED);
-    assert.equal(finishedAfter.status, ThreadCommandStatus.DELIVERED);
+    assert.equal(record.headSessionId, 'coder-s2');
+    assert.equal(record.unresolvedCommands.length, 1);
+    // 来源指令保持 delivered 终态（unresolved 是未决侧写，不改写历史）。
+    for (const command of record.commands) {
+      if (command.kind !== 'system_continuation') {
+        assert.equal(command.status, ThreadCommandStatus.DELIVERED);
+      }
+    }
+    // 强制发现：清单以 system_continuation 通知指令投递进新 head 首轮
+    // （默认 seedContinuation 路径），文本携带 unresolvedId 供处置引用。
+    const notice = record.commands.find((c) => c.kind === 'system_continuation');
+    assert.ok(notice, 'unresolved notice command appended');
+    assert.ok(notice.text.includes(outcome.unresolved[0].unresolvedId));
+    assert.equal(turns.length, 1);
+    assert.ok(turns[0].text.includes(outcome.unresolved[0].unresolvedId));
+
+    // 处置（显式决定）：核实旧会话确实未消费该指令后 reissue——新 pending
+    // 指令以原载荷入箱并投递（de4d5d03 的重投路径，现在是处置动作）。
+    const resolved = await core.resolveUnresolved({
+      threadId: strandThread.threadId,
+      unresolvedId: outcome.unresolved[0].unresolvedId,
+      resolution: 'reissue',
+      note: 'confirmed not consumed in retired bar',
+    });
+    assert.equal(resolved.command.status, ThreadCommandStatus.PENDING);
+    assert.equal(resolved.command.text, '尚无消费引用的指令');
+    assert.equal(resolved.command.idempotencyKey, `reissue-${outcome.unresolved[0].unresolvedId}`);
+    const after = await core.getThread(strandThread.threadId);
+    assert.equal(after.unresolvedCommands[0].resolution, 'reissue');
+    // core.resolveUnresolved 只入箱不投递（与 routes 处置端点的 tryDeliver
+    // 分工一致）：显式触发投递后，reissue 指令进入新 head（通知指令已被
+    // 消费，第二条 turn 是重投）。
+    await integration.tryDeliver(strandThread.threadId);
+    assert.equal(turns.length, 2);
+    assert.equal(turns[1].text, '尚无消费引用的指令');
   });
 
-  test('接力保留窗口里看不到上一棒事件时保守跳过，不误投已完成指令', async () => {
+  // ADR-0047 阶段 2b：证据窗口看不到这一棒的任何事件（整棒被裁剪 / 上报
+  // 失败）时，无法判定的指令转 unresolved 承接（不阻塞换头）。手动免播
+  // 路径（seedContinuation=false）不追加通知指令——不唤醒轮次，未决事实
+  // 经 /threads/:id/unresolved 查询面可见。
+  test('证据窗口无事件时指令转 unresolved 换头，手动免播不追加通知指令', async () => {
     const turns = [];
-    const { core, integration } = makeIntegration({
+    const { control, core, integration } = makeIntegration({
       enabled: true,
       resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'coder-s2' ? 'viewer-s2' : null),
       submitTurn: async (params) => { turns.push(params); return { success: true }; },
     });
-    const silentThread = await integration.onSessionCreated('coder', { id: 'coder-s1' });
+    // 两代棒：先以 coder-s0 为 head 记录事件（board 文件由此创建、可读），
+    // 再正常换头到 coder-s1——保留窗口里只有 coder-s0 的事件，coder-s1 这一
+    // 棒零事件（整棒被裁剪 / 上报失败的等价形态），与文件缺失
+    // （evidence_missing）语义区分。
+    const silentThread = await integration.onSessionCreated('coder', { id: 'coder-s0' });
+    await control.board.recordRuntimeEvent({
+      agentId: 'coder', sessionId: 'coder-s0', runtimeInstanceId: 'r0',
+      event: { type: 'turn.started', turn: 1, sourceRef: 'prev-command' },
+    });
+    await core.advanceHead({
+      threadId: silentThread.threadId,
+      toSessionId: 'coder-s1',
+      fromSessionId: 'coder-s0',
+      endKind: 'trim',
+    });
+
     await core.appendCommand({ threadId: silentThread.threadId, text: '没有事件记录的指令' });
     await core.store.update(silentThread.threadId, (draft) => {
       for (const command of draft.commands) {
@@ -1103,16 +1167,182 @@ describe('ThreadIntegration (coder host gating)', () => {
       return draft;
     });
 
-    // 该会话在保留事件里一条都没有：无从判断，保持 delivered。
+    // 真实链路先立挡板再提交（此处对齐手动精简：免播恢复指令）。
+    const begun = await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'coder-s1', seedContinuation: false });
+    assert.equal(begun.applied, true);
+
+    // 该棒在保留事件里一条都没有：无从判定 → unresolved 持久 + 换头推进。
+    const outcome = await integration.applySessionSuccession({
+      agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
+      seedContinuation: false,
+    });
+    assert.equal(outcome.applied, true);
+    assert.equal(outcome.unresolved.length, 1);
+    assert.equal(outcome.unresolved[0].reason, 'no_events_for_bar');
+    let record = await core.getThread(silentThread.threadId);
+    assert.equal(record.headSessionId, 'coder-s2');
+    assert.equal(record.unresolvedCommands.length, 1);
+    // 免播：没有 system_continuation 通知指令，没有投递。
+    assert.ok(!record.commands.some((c) => c.kind === 'system_continuation'));
+    assert.equal(turns.length, 0);
+    // 查询面可见（open 优先）：处置入口消费它。
+    const open = await core.listUnresolved(silentThread.threadId);
+    assert.equal(open.length, 1);
+    assert.equal(open[0].unresolvedId, outcome.unresolved[0].unresolvedId);
+  });
+
+  // 阶段 1 失败边界按「待判定集合」条件化：窗口内没有 delivered 指令时，
+  // board 文件缺失（惰性创建下普通线程的合法态）不阻断换头。
+  test('无待判定指令时证据缺失不阻断换头', async () => {
+    const turns = [];
+    const { core, integration } = makeIntegration({
+      enabled: true,
+      resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'coder-s2' ? 'viewer-s2' : null),
+      submitTurn: async (params) => { turns.push(params); return { success: true }; },
+    });
+    const thread = await integration.onSessionCreated('coder', { id: 'coder-s1' });
+    // 无任何指令、无任何 board 事件（board 文件不存在，getState 返回 null）。
+    const begun = await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'coder-s1', seedContinuation: false });
+    assert.equal(begun.applied, true);
     const outcome = await integration.applySessionSuccession({
       agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
     });
     assert.equal(outcome.applied, true);
-    assert.deepEqual(outcome.requeued, []);
+    assert.deepEqual(outcome.unresolved, []);
+    const record = await core.getThread(thread.threadId);
+    assert.equal(record.headSessionId, 'coder-s2');
     assert.equal(turns.length, 0);
   });
 
-  test('applySessionSuccession is no-op for non-host agents and non-head sessions', async () => {    const { core, integration } = makeIntegration();
+  // ADR-0047 阶段 2a 审查裁定：读取失败（unreadable，瞬时 IO 故障）与结构性
+  // 缺失分离——前者拒绝换头（可重试 409，旧 head 权威），不由 unresolved
+  // 承接；读取恢复后生产链路重试成功。
+  test('board 读取失败时接续失败收敛（unreadable），head 不推进，恢复后可重试', async () => {
+    const turns = [];
+    const { control, core, integration } = makeIntegration({
+      enabled: true,
+      resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'coder-s2' ? 'viewer-s2' : null),
+      submitTurn: async (params) => { turns.push(params); return { success: true }; },
+    });
+    const thread = await integration.onSessionCreated('coder', { id: 'coder-s1' });
+    await core.appendCommand({ threadId: thread.threadId, text: '待判定指令' });
+    await core.store.update(thread.threadId, (draft) => {
+      for (const command of draft.commands) {
+        command.status = 'delivered';
+        command.deliveredAt = Date.now();
+      }
+      return draft;
+    });
+    const commandId = (await core.getThread(thread.threadId)).commands[0].commandId;
+
+    const begun = await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'coder-s1', seedContinuation: false });
+    assert.equal(begun.applied, true);
+
+    const originalRead = control.board.readStateDetailed;
+    control.board.readStateDetailed = async () => { throw new Error('disk read failed'); };
+    let failed;
+    try {
+      failed = await integration.applySessionSuccession({
+        agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
+      });
+    } finally {
+      control.board.readStateDetailed = originalRead;
+    }
+    assert.equal(failed.applied, false);
+    assert.equal(failed.reason, 'handoff_failed');
+    assert.equal(failed.stage, 'evidence_unreadable');
+    // 旧 head 权威保持：head 未推进、指令原状、挡板收敛、没有任何投递、
+    // 不建 unresolved（读取失败不是证据缺失）。
+    let record = await core.getThread(thread.threadId);
+    assert.equal(record.headSessionId, 'coder-s1');
+    assert.equal(record.status, 'rotation_failed');
+    assert.equal(record.pendingSuccession, null);
+    assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
+    assert.deepEqual(record.unresolvedCommands ?? [], []);
+    assert.equal(turns.length, 0);
+
+    // 读取恢复后走生产重试链路（重新 begin 立挡板 → apply 推进）。旧 head
+    // 补报该指令的消费引用，重试成功且不产生 unresolved。
+    await control.board.recordRuntimeEvent({
+      agentId: 'coder', sessionId: 'coder-s1', runtimeInstanceId: 'r1',
+      event: { type: 'turn.started', turn: 1, sourceRef: commandId },
+    });
+    await control.board.recordRuntimeEvent({
+      agentId: 'coder', sessionId: 'coder-s1', runtimeInstanceId: 'r1',
+      event: { type: 'turn.completed', turn: 1, sourceRef: commandId },
+    });
+    const rebegin = await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'coder-s1', seedContinuation: false });
+    assert.equal(rebegin.applied, true);
+    const retry = await integration.applySessionSuccession({
+      agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
+    });
+    assert.equal(retry.applied, true);
+    assert.deepEqual(retry.unresolved, []);
+    record = await core.getThread(thread.threadId);
+    assert.equal(record.headSessionId, 'coder-s2');
+    assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
+    assert.equal(turns.length, 0);
+  });
+
+  // 装配缺 board 是结构性缺失（持续缺陷，非瞬时故障）：待判定指令由
+  // unresolved 承接（不阻塞换头，也不静默滞留）。
+  test('装配缺少 board 时待判定指令转 unresolved 换头（结构性缺失承接）', async () => {
+    const { control, core, integration } = makeIntegration({
+      enabled: true,
+      resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'coder-s2' ? 'viewer-s2' : null),
+      submitTurn: async () => ({ success: true }),
+    });
+    const thread = await integration.onSessionCreated('coder', { id: 'coder-s1' });
+    await core.appendCommand({ threadId: thread.threadId, text: '待判定指令' });
+    await core.store.update(thread.threadId, (draft) => {
+      for (const command of draft.commands) {
+        command.status = 'delivered';
+        command.deliveredAt = Date.now();
+      }
+      return draft;
+    });
+
+    const boardless = createThreadIntegration({ control: { core: control.core, archive: control.archive } });
+    // 先经完整装配立挡板（begin 不依赖 board），再用缺 board 的装配提交。
+    const begun = await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'coder-s1' });
+    assert.equal(begun.applied, true);
+    const outcome = await boardless.applySessionSuccession({
+      agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
+      seedContinuation: false,
+    });
+    assert.equal(outcome.applied, true);
+    assert.equal(outcome.unresolved.length, 1);
+    assert.equal(outcome.unresolved[0].reason, 'evidence_missing');
+    const record = await core.getThread(thread.threadId);
+    assert.equal(record.headSessionId, 'coder-s2');
+    assert.equal(record.unresolvedCommands.length, 1);
+  });
+
+  // 原子提交按待判定集合条件化：无待判定指令时证据不是必要输入，board 装配
+  // 缺失（或文件缺失）不得阻断普通线程换头。
+  test('装配缺少 board 且无待判定指令时放行换头', async () => {
+    const { control, integration } = makeIntegration({
+      enabled: true,
+      resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'coder-s2' ? 'viewer-s2' : null),
+      submitTurn: async () => ({ success: true }),
+    });
+    const thread = await integration.onSessionCreated('coder', { id: 'coder-s1' });
+    // 无任何指令：boardless 装配不要求证据。先经完整装配立挡板
+    // （begin 不依赖 board），再用缺 board 的装配提交。
+    const begun = await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'coder-s1', seedContinuation: false });
+    assert.equal(begun.applied, true);
+    const boardless = createThreadIntegration({ control: { core: control.core, archive: control.archive } });
+    const outcome = await boardless.applySessionSuccession({
+      agentId: 'coder', fromSessionId: 'coder-s1', toSessionId: 'coder-s2', reason: 'summary',
+    });
+    assert.equal(outcome.applied, true);
+    assert.deepEqual(outcome.unresolved, []);
+    const record = await control.core.getThread(thread.threadId);
+    assert.equal(record.headSessionId, 'coder-s2');
+  });
+
+  test('applySessionSuccession is no-op for non-host agents and non-head sessions', async () => {
+    const { core, integration } = makeIntegration();
     const phOutcome = await integration.applySessionSuccession({
       agentId: 'programming-helper',
       fromSessionId: 'a',
@@ -1190,16 +1420,25 @@ describe('WorkThread inbox helpers (framework @agentdevjs/core)', () => {
   test('pruneCommands drops oldest terminal commands beyond retention', () => {
     const commands = [];
     for (let i = 0; i < 12; i++) {
+      // deliveredAt 显式归属旧棒窗口（< head 起点 100）：已归属终态可裁。
+      // 缺 deliveredAt 的形态已改语义（阶段 5 审查 P2-9：无法归属 → 等
+      // 待接续分类转 unresolved，保守豁免），由 succession-commit 豁免
+      // 用例锁定。
       commands.push({
         commandId: `cmd-${i}`,
         status: ThreadCommandStatus.DELIVERED,
         createdAt: i,
         updatedAt: i,
+        deliveredAt: i + 1,
       });
     }
     commands.push({ commandId: 'keep-me', status: ThreadCommandStatus.PENDING, createdAt: 99, updatedAt: 99 });
 
-    const record = { commands };
+    const record = {
+      commands,
+      headSessionId: 's-head',
+      sessionChain: [{ sessionId: 's-head', startedAt: 100, endedAt: null }],
+    };
     const changed = pruneCommands(record, 5);
     assert.equal(changed, true);
     assert.equal(record.commands.length, 6); // 5 terminal + 1 pending

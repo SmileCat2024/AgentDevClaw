@@ -10,11 +10,15 @@ import {
 } from '../shared/session-access.js';
 import { viewerFetch } from '../shared/viewer-fetch.js';
 import { submitUserTurn } from '../shared/user-turn.js';
+import { getThreadIntegration, isThreadHostSession } from '../thread-control/thread-integration.js';
+import { deliverThreadInput } from '../thread-control/input-gateway.js';
 
 const DEFAULT_HEARTBEAT_MS = 15_000;
 const DEFAULT_SNAPSHOT_MS = 5_000;
 const DEFAULT_COMMAND_MS = 2_000;
 const REMOTE_CLAW_CONFIG_FILE = REMOTE_CLAW_CONFIG_PATH;
+
+export { EmbeddedRemoteClawConnector };
 
 export function startEmbeddedRemoteClawConnector(ctx) {
   const config = loadRemoteClawConfig();
@@ -33,6 +37,10 @@ export function startEmbeddedRemoteClawConnector(ctx) {
 class EmbeddedRemoteClawConnector {
   constructor(options) {
     Object.assign(this, options);
+    // 线程归属解析面（ADR-0047 阶段 4）：默认进程单例；测试经构造
+    // 注入替身（与 thread-routes 的 deliverInput 注入同模式）。
+    this.threadIntegration = options.threadIntegration ?? getThreadIntegration();
+    this.deliverThreadInput = options.deliverThreadInput ?? deliverThreadInput;
     this.workspaceId = null;
     this.stopped = false;
     this.timers = [];
@@ -327,6 +335,42 @@ class EmbeddedRemoteClawConnector {
 
   async executeMessageSend(command) {
     const target = this.resolveCommandTarget(command);
+    const payload = command.payload || {};
+
+    // ADR-0047 阶段 4 入口收口：投递前解析线程归属。localSessionId 是
+    // 线程成员（含被接续换下的旧 head）时转 Inbox 寻址——head 由线程
+    // 记录决定，指令经投递机制导向当前 head runtime；旧 head 会话不再
+    // 被 activatePrebuiltSession 激活复活。响应携带 headSessionId 供
+    // 远程端对账（本地会话引用过期时刷新到当前 head）。
+    if (isThreadHostSession(target.agentId)) {
+      const integration = this.threadIntegration;
+      // Membership lookup failure is not proof that this session is thread-free.
+      // Fail closed: falling through would activate a retired head as an ordinary
+      // session and bypass the Inbox/head authority precisely during an outage.
+      const thread = await integration.findThreadBySession(target.agentId, target.localSessionId);
+      if (thread) {
+        await this.deliverThreadInput({
+          threadId: thread.threadId,
+          text: payload.text || ' ',
+          images: Array.isArray(payload.images) ? payload.images : undefined,
+          source: 'remote-claw',
+          sourceRef: command.id,
+        }, { integration });
+        // 入箱即触发投递；失败不阻断响应（指令已持久入箱，由既有
+        // 触发点收敛：runtime ready / 下次 append / 周期消费）。
+        await integration.tryDeliver(thread.threadId).catch(() => null);
+        return {
+          localAccepted: true,
+          delivery: 'thread_queued',
+          queued: true,
+          threadId: thread.threadId,
+          headSessionId: thread.headSessionId,
+          agentId: target.agentId,
+          localSessionId: target.localSessionId,
+        };
+      }
+    }
+
     let viewerAgentId = target.viewerAgentId || null;
     if (!viewerAgentId) {
       const agent = await this.requireAgentLight(target.agentId);
@@ -338,7 +382,6 @@ class EmbeddedRemoteClawConnector {
     if (!viewerAgentId) {
       throw retryableError('viewerAgentId missing after activation', true, 'viewer_agent_id_missing');
     }
-    const payload = command.payload || {};
     const delivery = await submitUserTurn({
       agentId: viewerAgentId,
       text: payload.text || ' ',

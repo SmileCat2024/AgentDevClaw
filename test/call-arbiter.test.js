@@ -60,6 +60,17 @@ function makeSlowAgent(delayMs) {
   };
 }
 
+// 轮询等待条件成立（默认 2s 上限、5ms 间隔）。
+// drain 安全网用例的消息串行执行（后到项 waiting-for-active），
+// 全量套件负载下固定 sleep 不可靠，统一改条件等待。
+async function waitForCond(cond, { timeoutMs = 2000, intervalMs = 5 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cond()) return;
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+}
+
 /**
  * Agent mock that registers a checkpoint continuation on the first call,
  * then completes normally on subsequent calls.
@@ -775,6 +786,7 @@ describe('CallArbiter', () => {
 
     await new Promise(resolve => server.listen(0, resolve));
     const port = server.address().port;
+    const prevViewerPort = process.env.AGENTDEV_VIEWER_PORT;
     process.env.AGENTDEV_VIEWER_PORT = String(port);
 
     const agent = makeSlowAgent(10);
@@ -786,19 +798,27 @@ describe('CallArbiter', () => {
     await arbiter.waitForCompletion(e1.id);
 
     // After the call, _drainViewerQueuedInputs should have run in .finally()
-    // and enqueued the 2 leftover messages. Wait for them to complete.
-    await new Promise(r => setTimeout(r, 100));
+    // and enqueued the 2 leftover messages. 两条 leftover 由仲裁器串行执行
+    // （第二条 waiting-for-active），负载下完成时间不固定：轮询等条件成立，
+    // 不用固定 sleep。
+    try {
+      await waitForCond(() => agent.callLog.length === 3 && arbiter.getStatus().status === 'idle');
 
-    // The agent should have processed all 3 messages: main-task + 2 leftovers
-    assert.equal(agent.callLog.length, 3, 'agent should have processed main + 2 drained messages');
-    assert.equal(agent.callLog[0].text, 'main-task');
-    assert.equal(agent.callLog[1].text, 'leftover-1');
-    assert.equal(agent.callLog[2].text, 'leftover-2');
+      // The agent should have processed all 3 messages: main-task + 2 leftovers
+      assert.equal(agent.callLog.length, 3, 'agent should have processed main + 2 drained messages');
+      assert.equal(agent.callLog[0].text, 'main-task');
+      assert.equal(agent.callLog[1].text, 'leftover-1');
+      assert.equal(agent.callLog[2].text, 'leftover-2');
 
-    assert.equal(arbiter.getStatus().status, 'idle');
-
-    server.close();
-    delete process.env.AGENTDEV_VIEWER_PORT;
+      assert.equal(arbiter.getStatus().status, 'idle');
+    } finally {
+      // 断言失败也必须释放资源：未关闭的 server 句柄会挂住测试子进程
+      // （--test-isolation=process 下父 runner 等子进程退出，整个套件卡死）
+      server.closeAllConnections();
+      server.close();
+      if (prevViewerPort === undefined) delete process.env.AGENTDEV_VIEWER_PORT;
+      else process.env.AGENTDEV_VIEWER_PORT = prevViewerPort;
+    }
   });
 
   it('passes reminder identity to onCall and drops it on continuation segments', async () => {
@@ -843,6 +863,7 @@ describe('CallArbiter', () => {
       }
     });
     await new Promise(resolve => server.listen(0, resolve));
+    const prevViewerPort = process.env.AGENTDEV_VIEWER_PORT;
     process.env.AGENTDEV_VIEWER_PORT = String(server.address().port);
 
     const onCallArgs = [];
@@ -857,17 +878,22 @@ describe('CallArbiter', () => {
 
     const e1 = arbiter.enqueue({ source: 'test', text: 'main-task' });
     await arbiter.waitForCompletion(e1.id);
-    await new Promise(r => setTimeout(r, 100));
+    await waitForCond(() => onCallArgs.length === 2 && arbiter.getStatus().status === 'idle');
 
     // busy 期间积压的 reminder 在 call 结束后被安全网捞起时必须保住身份，
     // 不能退化成 user 消息落账；sourceRef（ADR-0031 步骤一）同样随项转正，
     // 其执行随新 envelope 的 turn 事件可被关联回原提交
-    assert.equal(onCallArgs.length, 2);
-    assert.equal(onCallArgs[1].text, '[后台任务 bg-3 已完成]');
-    assert.deepEqual(onCallArgs[1].options, { kind: 'reminder', source: 'shell', sourceRef: 'bg-3' });
-
-    server.close();
-    delete process.env.AGENTDEV_VIEWER_PORT;
+    try {
+      assert.equal(onCallArgs.length, 2);
+      assert.equal(onCallArgs[1].text, '[后台任务 bg-3 已完成]');
+      assert.deepEqual(onCallArgs[1].options, { kind: 'reminder', source: 'shell', sourceRef: 'bg-3' });
+    } finally {
+      // 同上：断言失败也必须释放 server 句柄与环境变量
+      server.closeAllConnections();
+      server.close();
+      if (prevViewerPort === undefined) delete process.env.AGENTDEV_VIEWER_PORT;
+      else process.env.AGENTDEV_VIEWER_PORT = prevViewerPort;
+    }
   });
 
   // ── Interrupt timing matrix (state-kernel 迁移基线，计划 §1.4 清单 8) ──
@@ -1313,6 +1339,25 @@ describe('CallArbiter source identity passthrough (ADR-0031 step 1)', () => {
 
     assert.equal(onCallArgs.length, 1);
     assert.equal(onCallArgs[0].options?.sourceRef, 'cmd-1', 'first segment carries the dispatch identity');
+  });
+
+  it('forwards durable input receipt and acknowledgement callback through the real envelope path', async () => {
+    const args = [];
+    const receipt = { commandId: 'cmd-17', threadId: 'thread-3', headGeneration: 4, leaseId: 'lease-8', sessionId: 'session-9', runtimeInstanceId: 'runtime-2' };
+    const acknowledgeInputReceipt = async (identity) => { args.push({ acknowledged: identity }); };
+    const agent = {
+      onCallDetailed: async (...callArgs) => {
+        args.push({ callOptions: callArgs[4] });
+        await callArgs[4].acknowledgeInputReceipt(callArgs[4].inputReceipt);
+        return { response: 'ok', status: 'completed' };
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'thread', text: 'task', inputReceipt: receipt, acknowledgeInputReceipt });
+    await arbiter.waitForCompletion(entry.id);
+
+    assert.deepEqual(args[0].callOptions.inputReceipt, receipt);
+    assert.deepEqual(args[1].acknowledged, receipt);
   });
 
   it('passes user-command source to onCall; envelope source is always a label (unknown fallback)', async () => {

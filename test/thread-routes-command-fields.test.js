@@ -81,7 +81,7 @@ describe('thread routes', () => {
   it('does not register a closed-state endpoint', () => {
     const control = makeControl(async () => ({ success: true }));
     const app = makeMockApp();
-    setupThreadRoutes(app, { json: () => () => {} }, { control });
+    setupThreadRoutes(app, { json: () => () => {} }, { control, ensureHeadRuntime: async () => ({ ok: true }) });
     assert.equal(app.routes['POST /protoclaw/threads/:threadId/close'], undefined);
   });
 });
@@ -90,7 +90,7 @@ describe('GET /protoclaw/threads handoffStartedAt wire projection', () => {
   it('projects the pendingSuccession barrier start time; zero when no barrier', async () => {
     const control = makeControl(async () => ({ success: true }));
     const app = makeMockApp();
-    setupThreadRoutes(app, { json: () => () => {} }, { control });
+    setupThreadRoutes(app, { json: () => () => {} }, { control, ensureHeadRuntime: async () => ({ ok: true }) });
 
     const thread = await control.core.start({
       sessionRef: { agentId: 'programming-helper', sessionId: 'hs-w1' },
@@ -192,7 +192,7 @@ describe('threads/:id/commands route field passthrough', () => {
       return { success: true };
     });
     const app = makeMockApp();
-    setupThreadRoutes(app, { json: () => () => {} }, { control });
+    setupThreadRoutes(app, { json: () => () => {} }, { control, ensureHeadRuntime: async () => ({ ok: true }) });
 
     const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'rs-1' } });
     const metadata = { 'session-reference': [{ agentId: 'programming-helper', sessionId: 'session-q', title: '引用' }] };
@@ -223,7 +223,7 @@ describe('threads/:id/commands route field passthrough', () => {
   it('silently drops malformed metadata shapes instead of rejecting the command', async () => {
     const control = makeControl(async () => ({ success: true }));
     const app = makeMockApp();
-    setupThreadRoutes(app, { json: () => () => {} }, { control });
+    setupThreadRoutes(app, { json: () => () => {} }, { control, ensureHeadRuntime: async () => ({ ok: true }) });
 
     const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'rs-2' } });
     const res = await callRoute(app, '/protoclaw/threads/:threadId/commands', {
@@ -233,5 +233,260 @@ describe('threads/:id/commands route field passthrough', () => {
 
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.command.metadata, undefined);
+  });
+});
+
+async function callGetRoute(app, pattern, { params, query } = {}) {
+  const handlers = app.routes[`GET ${pattern}`];
+  assert.ok(handlers, `route not registered: GET ${pattern}`);
+  const handler = handlers[handlers.length - 1];
+  const res = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(data) { this.body = data; return this; },
+  };
+  await handler({ params, query: query ?? {} }, res);
+  return res;
+}
+
+// ADR-0047 阶段 2b：head 推进端点走框架原子事务——待判定指令缺可靠消费
+// 引用时不再拦截换头，而是转 unresolved 持久并随响应携带清单；处置经
+// 查询/处置端点显式完成；unreadable（瞬时读取失败）409 拒绝换头。
+describe('POST /protoclaw/threads/:threadId/head atomic succession', () => {
+  it('fails closed when the successor readiness gate is not configured', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, { control });
+    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ready-gate-s1' } });
+
+    const result = await callRoute(app, '/protoclaw/threads/:threadId/head', {
+      params: { threadId: thread.threadId },
+      body: { toSessionId: 'ready-gate-s2', fromSessionId: 'ready-gate-s1' },
+    });
+
+    assert.equal(result.statusCode, 503);
+    assert.equal(result.body.code, 'successor_runtime_unavailable');
+    assert.equal((await control.core.getThread(thread.threadId)).headSessionId, 'ready-gate-s1');
+  });
+
+  it('refuses head advancement when successor readiness fails and leaves the old head authoritative', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, {
+      control,
+      ensureHeadRuntime: async () => ({ ok: false, code: 'runtime_ready_timeout', message: 'not ready' }),
+      publishThreadEvent: async () => { throw new Error('head event must not publish'); },
+    });
+    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ready-s1' } });
+    const result = await callRoute(app, '/protoclaw/threads/:threadId/head', {
+      params: { threadId: thread.threadId },
+      body: { toSessionId: 'ready-s2', fromSessionId: 'ready-s1' },
+    });
+    assert.equal(result.statusCode, 409);
+    assert.equal(result.body.code, 'successor_runtime_not_ready');
+    assert.equal((await control.core.getThread(thread.threadId)).headSessionId, 'ready-s1');
+  });
+
+  it('rejects a closed thread before waking any successor runtime (stage 5 review P2-7)', async () => {
+    // 终态拒绝不得先产生 runtime 副作用：唤起闸会真实拉起 successor
+    // 并等 READY（最长 20s）——closed 线程的换头请求注定被 commit 以
+    // thread_closed 拒绝，先唤起就是给调度面制造无主 runtime。
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    let wakeCalls = 0;
+    setupThreadRoutes(app, { json: () => () => {} }, {
+      control,
+      ensureHeadRuntime: async () => { wakeCalls += 1; return { ok: true }; },
+    });
+    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'closed-s1' } });
+    await control.core.closeThread(thread.threadId);
+    const result = await callRoute(app, '/protoclaw/threads/:threadId/head', {
+      params: { threadId: thread.threadId },
+      body: { toSessionId: 'closed-s2', fromSessionId: 'closed-s1' },
+    });
+    assert.equal(result.statusCode, 409);
+    assert.equal(result.body.code, 'thread_closed');
+    assert.equal(wakeCalls, 0);
+  });
+
+  it('retires the old head runtime and publishes the wire-contract head-advanced event before delivery (stage 5 review P1-4/P1-5)', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    const order = [];
+    const events = [];
+    setupThreadRoutes(app, { json: () => () => {} }, {
+      control,
+      ensureHeadRuntime: async () => ({ ok: true }),
+      stopManagedAgent: async (_agentId, sessionId, opts) => { order.push(`stop:${sessionId}:${opts?.waitForPersistence === true}`); },
+      publishThreadEvent: async (_threadId, payload) => { order.push('event'); events.push(payload); },
+      tryDeliver: async () => { order.push('deliver'); return { attempted: 0, delivered: 0 }; },
+    });
+    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'retire-s1' } });
+    const result = await callRoute(app, '/protoclaw/threads/:threadId/head', {
+      params: { threadId: thread.threadId },
+      body: { toSessionId: 'retire-s2', fromSessionId: 'retire-s1' },
+    });
+    assert.equal(result.statusCode, 200);
+    // P1-4：事件形状 = sse-events 帧契约（前端 thread-store 要求 from/to 同场）
+    assert.deepEqual(events, [{
+      kind: 'thread.head-advanced',
+      agentId: 'programming-helper',
+      fromSessionId: 'retire-s1',
+      toSessionId: 'retire-s2',
+      reason: 'manual',
+    }]);
+    // P1-5：退役旧 head（旧 runtime 若滞留，其 Viewer 身份自洽，可继续
+    // claim 队列指令——已分类 unresolved 的指令会被旧棒事后执行），且
+    // 退役必须先于向新 head 的补投递。
+    const stops = order.filter((entry) => entry.startsWith('stop:'));
+    assert.equal(stops.length, 1);
+    assert.equal(stops[0], 'stop:retire-s1:true');
+    assert.ok(order.indexOf(stops[0]) < order.indexOf('deliver'));
+  });
+
+  it('advances with unresolved persisted when a delivered command lacks a consumption reference', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, { control, ensureHeadRuntime: async () => ({ ok: true }) });
+
+    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'gate-s1' } });
+    await control.core.appendCommand({ threadId: thread.threadId, text: '缺消费引用的指令' });
+    await control.core.store.update(thread.threadId, (draft) => {
+      for (const command of draft.commands) {
+        command.status = 'delivered';
+        command.deliveredAt = Date.now();
+      }
+      return draft;
+    });
+
+    // 窗口可见（该棒有无关联的轮次终态）而该指令缺消费引用 → unresolved：
+    // 换头推进（不阻塞、不静默滞留），响应携带清单，指令保持 delivered。
+    await control.board.recordRuntimeEvent({
+      agentId: 'programming-helper', sessionId: 'gate-s1', runtimeInstanceId: 'r1',
+      event: { type: 'turn.completed', turn: 1, sourceRef: 'cmd-other' },
+    });
+    const advanced = await callRoute(app, '/protoclaw/threads/:threadId/head', {
+      params: { threadId: thread.threadId },
+      body: { toSessionId: 'gate-s2', fromSessionId: 'gate-s1' },
+    });
+    assert.equal(advanced.statusCode, 200);
+    assert.equal(advanced.body.ok, true);
+    assert.equal(advanced.body.unresolved.length, 1);
+    assert.equal(advanced.body.unresolved[0].reason, 'no_positive_reference');
+    const record = await control.core.getThread(thread.threadId);
+    assert.equal(record.headSessionId, 'gate-s2');
+    assert.equal(record.unresolvedCommands.length, 1);
+    assert.equal(record.commands[0].status, 'delivered');
+
+    // 查询面（手动免播路径的发现入口）：open 清单可见，含处置所需字段。
+    const listed = await callGetRoute(app, '/protoclaw/threads/:threadId/unresolved', {
+      params: { threadId: thread.threadId },
+    });
+    assert.equal(listed.statusCode, 200);
+    assert.equal(listed.body.unresolved.length, 1);
+    assert.equal(listed.body.unresolved[0].unresolvedId, advanced.body.unresolved[0].unresolvedId);
+  });
+
+  it('resolve endpoint closes the loop: reissue enqueues a pending command and attempts delivery', async () => {
+    const deliveredTexts = [];
+    const control = makeControl(async (params) => { deliveredTexts.push(params.text); return { success: true }; });
+    const app = makeMockApp();
+    const deliveries = [];
+    setupThreadRoutes(app, { json: () => () => {} }, {
+      control,
+      ensureHeadRuntime: async () => ({ ok: true }),
+      tryDeliver: async (threadId) => { deliveries.push(threadId); return { attempted: 0, delivered: 0 }; },
+    });
+
+    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'gate-s1' } });
+    await control.core.appendCommand({ threadId: thread.threadId, text: '需要重投的指令' });
+    await control.core.store.update(thread.threadId, (draft) => {
+      for (const command of draft.commands) {
+        command.status = 'delivered';
+        command.deliveredAt = Date.now();
+      }
+      return draft;
+    });
+
+    const advanced = await callRoute(app, '/protoclaw/threads/:threadId/head', {
+      params: { threadId: thread.threadId },
+      body: { toSessionId: 'gate-s2', fromSessionId: 'gate-s1' },
+    });
+    assert.equal(advanced.body.unresolved.length, 1);
+    const unresolvedId = advanced.body.unresolved[0].unresolvedId;
+
+    // 处置 reissue：新 pending 指令入箱（原载荷），投递被触发（不阻塞处置）。
+    const resolved = await callRoute(app, '/protoclaw/threads/:threadId/unresolved/:unresolvedId/resolve', {
+      params: { threadId: thread.threadId, unresolvedId },
+      body: { resolution: 'reissue', note: 'confirmed not consumed' },
+    });
+    assert.equal(resolved.statusCode, 200);
+    assert.equal(resolved.body.command.text, '需要重投的指令');
+    assert.equal(resolved.body.command.status, 'pending');
+    // head 完整编排首次尝试投递，reissue 处置再次触发投递。
+    assert.equal(deliveries.length, 2);
+    // 重复处置（相同方式）幂等：不重复 reissue。
+    const repeat = await callRoute(app, '/protoclaw/threads/:threadId/unresolved/:unresolvedId/resolve', {
+      params: { threadId: thread.threadId, unresolvedId },
+      body: { resolution: 'reissue' },
+    });
+    assert.equal(repeat.statusCode, 200);
+    assert.equal(repeat.body.command.commandId, resolved.body.command.commandId);
+    const open = await callGetRoute(app, '/protoclaw/threads/:threadId/unresolved', {
+      params: { threadId: thread.threadId },
+    });
+    assert.equal(open.body.unresolved.length, 0);
+  });
+
+  it('refuses to advance with 409 evidence_unreadable when the board read fails transiently', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, { control, ensureHeadRuntime: async () => ({ ok: true }) });
+
+    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'gate-s1' } });
+    await control.core.appendCommand({ threadId: thread.threadId, text: '待判定指令' });
+    await control.core.store.update(thread.threadId, (draft) => {
+      for (const command of draft.commands) {
+        command.status = 'delivered';
+        command.deliveredAt = Date.now();
+      }
+      return draft;
+    });
+
+    const originalRead = control.board.readStateDetailed;
+    control.board.readStateDetailed = async () => { throw new Error('EPERM'); };
+    let blocked;
+    try {
+      blocked = await callRoute(app, '/protoclaw/threads/:threadId/head', {
+        params: { threadId: thread.threadId },
+        body: { toSessionId: 'gate-s2', fromSessionId: 'gate-s1' },
+      });
+    } finally {
+      control.board.readStateDetailed = originalRead;
+    }
+    assert.equal(blocked.statusCode, 409);
+    assert.equal(blocked.body.code, 'evidence_unreadable');
+    const record = await control.core.getThread(thread.threadId);
+    assert.equal(record.headSessionId, 'gate-s1');
+    assert.deepEqual(record.unresolvedCommands ?? [], []);
+  });
+
+  it('proceeds without unresolved when the retiring bar has no pending-classifiable commands', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, { control, ensureHeadRuntime: async () => ({ ok: true }) });
+
+    // 无任何指令、board 文件不存在（惰性创建前）：正常换头，unresolved 空。
+    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'gate-idle-1' } });
+    const res = await callRoute(app, '/protoclaw/threads/:threadId/head', {
+      params: { threadId: thread.threadId },
+      body: { toSessionId: 'gate-idle-2', fromSessionId: 'gate-idle-1' },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    assert.deepEqual(res.body.unresolved, []);
+    const record = await control.core.getThread(thread.threadId);
+    assert.equal(record.headSessionId, 'gate-idle-2');
   });
 });

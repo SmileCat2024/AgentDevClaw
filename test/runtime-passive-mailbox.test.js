@@ -47,10 +47,14 @@ function createMockArbiter({
   };
 }
 
-function createHarness({ fetchImpl, arbiter } = {}) {
+function createHarness({ fetchImpl, arbiter, runtimeIdentity, context } = {}) {
   let disposed = false;
   const ctx = {
-    agent: { agentId: 'viewer-agent-1' },
+    agent: {
+      agentId: 'viewer-agent-1',
+      ...(runtimeIdentity ? { getRuntimeInputIdentity: () => runtimeIdentity } : {}),
+      ...(context ? { getContext: () => context } : {}),
+    },
     callArbiter: arbiter,
     isDisposed: () => disposed,
     pollIntervalMs: 1,
@@ -93,6 +97,40 @@ describe('createPassiveMailboxLoop', () => {
     assert.equal(arbiter.calls.enqueued[0].source, 'thread');
     assert.equal(arbiter.calls.enqueued[0].sourceRef, 'cmd-f76896b3');
     assert.equal(arbiter.calls.enqueued[0].text, 'ticket-002 指令');
+
+    harness.dispose();
+    await running;
+  });
+
+  it('claims a durable thread command and acknowledges only through the Agent receipt callback', async () => {
+    const receipt = {
+      commandId: 'cmd-17', threadId: 'thread-3', headGeneration: 4,
+      leaseId: 'lease-8', sessionId: 'session-9', runtimeInstanceId: 'runtime-2',
+    };
+    const requests = [];
+    const arbiter = createMockArbiter();
+    const harness = createHarness({
+      arbiter,
+      runtimeIdentity: { threadId: 'thread-3', headGeneration: 4 },
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init });
+        if (String(url).endsWith('/command-input/claim')) {
+          return jsonResponse({ input: { text: 'resume task', source: 'thread', sourceRef: 'cmd-17', commandIdentity: { commandId: 'cmd-17', threadId: 'thread-3', headGeneration: 4 }, inputLease: receipt } });
+        }
+        if (String(url).endsWith('/command-input/ack')) return jsonResponse({ acknowledged: true });
+        throw new Error(`Unexpected endpoint: ${url}`);
+      },
+    });
+    const running = harness.loop.run();
+
+    assert.ok(await until(() => arbiter.calls.enqueued.length === 1));
+    const envelope = arbiter.calls.enqueued[0];
+    assert.deepEqual(envelope.inputReceipt, receipt);
+    assert.equal(typeof envelope.acknowledgeInputReceipt, 'function');
+    assert.equal(requests.length, 1, 'claim must not ack before the Agent has saved its snapshot');
+    await envelope.acknowledgeInputReceipt(receipt);
+    assert.match(requests[1].url, /command-input\/ack$/);
+    assert.deepEqual(JSON.parse(requests[1].init.body), { receipt });
 
     harness.dispose();
     await running;

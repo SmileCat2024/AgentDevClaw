@@ -590,6 +590,33 @@ class SessionLifecycle {
       return;
     }
 
+    // ── adopt-thread-head: 换头后宿主推送线程身份（ADR-0047 阶段 5）──
+    // successor 在 READY 门前拉起时不是 head，spawn 身份不含线程；宿主在
+    // 换头提交后调用本分支，Agent 采纳身份并向 Viewer 重注册，fencing
+    // 对齐后线程指令才可投递。带 requestId 时回执（requestRuntimeAck 等待）。
+    if (msg.type === 'adopt-thread-head') {
+      const adopted = await this.agent?.adoptThreadHeadIdentity?.({
+        threadId: msg.threadId,
+        headGeneration: msg.headGeneration,
+        sessionId: msg.sessionId,
+      });
+      if (msg.requestId && process.connected) {
+        process.send({
+          type: 'adopt-thread-head-result',
+          requestId: msg.requestId,
+          sessionId: this.sessionId,
+          ok: Boolean(adopted?.ok),
+          ...(adopted?.ok ? {} : { error: adopted?.error || 'adopt-thread-head failed' }),
+        });
+      }
+      if (adopted?.ok) {
+        console.log(`[ProtoClaw Runtime] ✓ 线程身份已采纳: thread=${msg.threadId} gen=${msg.headGeneration} session=${msg.sessionId}`);
+      } else {
+        console.error('[ProtoClaw Runtime] adopt-thread-head 失败:', adopted?.error || 'agent method unavailable');
+      }
+      return;
+    }
+
     if (msg.type === 'feature-comms-request') {
       const result = await this.dispatchFeatureCommsRequest(msg);
       try {
@@ -796,6 +823,14 @@ SessionLifecycle.prototype.start = async function () {
     // 会话身份由宿主一次性注入（ADR-0022）：feature 据此向 server 回写会话级绑定
     agentId,
     sessionId: this.sessionId || undefined,
+    runtimeInputIdentity: {
+      runtimeInstanceId,
+      ...(this.sessionId ? { sessionId: this.sessionId } : {}),
+      ...(process.env.PROTOCLAW_THREAD_ID ? { threadId: process.env.PROTOCLAW_THREAD_ID } : {}),
+      ...(Number.isInteger(Number(process.env.PROTOCLAW_HEAD_GENERATION)) && Number(process.env.PROTOCLAW_HEAD_GENERATION) > 0
+        ? { headGeneration: Number(process.env.PROTOCLAW_HEAD_GENERATION) }
+        : {}),
+    },
     serverOrigin: SERVER_ORIGIN,
     // PH 项目归属（ticket 043）：目录会话不传（undefined），保持旧构造面不变
     ...(sessionProjectId ? { projectId: sessionProjectId } : {}),

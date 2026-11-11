@@ -23,6 +23,7 @@
 - [0040 上下文守卫三态与过界自动接续](0040-context-guard-tri-state-auto-rotation.md) — badge 三态 + coder 同构接力链路复用，关闭 0032 预留条目
 - [0041 标题属于 Session，生成策略属于应用](0041-title-generation-as-app-capability.md) — 标题状态结构化、OS 提供能力与应用自持策略、接续继承去前缀（Accepted）
 - [0042 IM 渠道线程化](0042-im-channel-thread-binding.md) — 线路绑定与接线员均线程化，平台连接归门户，轮次结果事件回流（Proposed）
+- [0047 线程接续指令恢复语义](0047-thread-succession-command-recovery-semantics.md) — 分离命令接收、runtime 消费与业务执行承诺；持久确认、原子换头、待核对事实及入口收口（已接受）
 
 ## 运行时与执行环境
 

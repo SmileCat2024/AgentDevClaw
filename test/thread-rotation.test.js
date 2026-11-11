@@ -109,9 +109,12 @@ describe('thread rotation (context guard relay)', () => {
     assert.deepEqual(calls.begin, [{ agentId: 'coder', sessionId: 'session-1', reason: 'combined' }]);
     // pre-rotation retire happens exactly once on success
     assert.equal(calls.stop.length, 1);
-    // apply 的 reason 落成 endKind（这一棒以什么方式结束），用实际执行档位。
+    // apply 的 reason 落成 endKind（这一棒以什么方式结束），用实际执行档位；
+    // seedContinuation: true = 自动接续显式声明（unresolved 清单强制进后继
+    // 首轮，ADR-0047 阶段 2b）。
     assert.deepEqual(calls.apply, [{
       agentId: 'coder', fromSessionId: 'session-1', toSessionId: 'session-next', reason: 'combined',
+      seedContinuation: true,
     }]);
     // R3：恢复指令随 begin 挡板由框架原子播种（source=thread-succession），
     // rotation 不再在 apply 后手动追加。

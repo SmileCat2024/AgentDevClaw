@@ -125,8 +125,9 @@ export function createThreadSuccessionService({
    * 提交——successor 在 READY 之前不得成为有效 head；旧 head 保持有效，
    * 失败阶段 successor_runtime_not_ready 落盘。
    *
-   * head 推进本身（旧 head 退历史 + 挡板原子清除 + 身份门）在
-   * integration.applySessionSuccession → 框架 advanceHead 事务内完成；
+   * head 推进本身（旧 head 退历史 + 挡板原子清除 + 身份门 + 退役棒指令
+   * 消费分类 + unresolved 持久化）在 integration.applySessionSuccession →
+   * 框架 commitSessionSuccession 原子事务内完成；
    * 身份门失败（T001 code）由该层记录失败并收敛挡板，本层透传结果。
    *
    * @returns {{applied: boolean, reason?: string, stage?: string, thread?: object, delivery?: object, error?: string}}
@@ -137,6 +138,7 @@ export function createThreadSuccessionService({
     toSessionId,
     reason = 'manual',
     successorReady,
+    seedContinuation = true,
   }) {
     const normalizedAgentId = String(agentId || '').trim();
     const from = String(fromSessionId || '').trim();
@@ -227,6 +229,7 @@ export function createThreadSuccessionService({
       fromSessionId: from,
       toSessionId: to,
       reason,
+      seedContinuation,
     });
     if (!outcome.applied) {
       // 两种「非失败」的 applied:false 透传：

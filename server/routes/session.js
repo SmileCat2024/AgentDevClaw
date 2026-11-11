@@ -1896,12 +1896,16 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
               toSessionId: result?.session?.id,
               reason: lineageReason,
               successorReady: result?.agent != null,
+              // 手动接续免播（与 begin 的 seedContinuation=false 对称，
+              // ADR-0047 阶段 2b）：unresolved 不追加通知指令，经 API 面可见
+              seedContinuation: false,
             })
             : await getThreadIntegration().applySessionSuccession({
               agentId: preferredAgentId,
               fromSessionId: sessionId,
               toSessionId: result?.session?.id,
               reason: lineageReason,
+              seedContinuation: false,
             });
           if (!commit.applied && !['no_thread_for_session', 'thread_not_found', 'invalid_succession'].includes(commit.reason)) {
             console.warn(`[compact_and_resume] job ${jobId} thread succession not committed for session=${sessionId}: ${commit.reason} (${commit.stage || ''})`);
@@ -1997,12 +2001,16 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
         toSessionId: result?.session?.id,
         reason: lineageReason,
         successorReady: result?.agent != null,
+        // 手动接续免播（与 begin 的 seedContinuation=false 对称，
+        // ADR-0047 阶段 2b）：unresolved 不追加通知指令，经 API 面可见
+        seedContinuation: false,
       })
       : await getThreadIntegration().applySessionSuccession({
         agentId: preferredAgentId,
         fromSessionId: sessionId,
         toSessionId: result?.session?.id,
         reason: lineageReason,
+        seedContinuation: false,
       });
     // R8：推进失败（applied=false + handoff_failed）时线程仍指向原会话，
     // 归档会挖掉线程的 head——跳过归档并写明原因。

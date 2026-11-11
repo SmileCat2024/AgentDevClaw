@@ -49,6 +49,8 @@ export function bridgeParamsToSubmitTurnArgs(params) {
     text: params.text || ' ',
     source: params.source,
     sourceRef: params.sourceRef,
+    commandIdentity: params.commandIdentity,
+    sessionId: params.sessionId,
     // turn 身份透传（ADR-0024 决策 3）：command kind（WorkThreadCommandKind
     // 词表，bridge 读时缺省 user_message）→ user-turn kind（'reminder' 落地为
     // 带 source 的 system 消息，不响应输入租约、不冒充用户发言）。词汇表
@@ -105,8 +107,8 @@ export function createThreadControl({
     store,
     // 会话身份归属不再需要真相源（ADR-0025）：归属即身份（coder APP 会话
     // → workspaceId=coder），框架成员不变量由 sessionChain 链记录保证。
-    bridge: bridge
-      || new WorkThreadRuntimeBridge({
+      bridge: bridge
+        || new WorkThreadRuntimeBridge({
         enabled: true,
         // 框架桥不带 HTTP 客户端：真实投递必须由宿主注入（viewer 原子
         // user-turn 契约，排队语义由 runtime 侧 CallArbiter 串行消费）。

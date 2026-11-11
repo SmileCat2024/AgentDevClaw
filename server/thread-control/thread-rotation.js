@@ -188,6 +188,8 @@ export function createThreadRotationService({
           fromSessionId: sessionId,
           toSessionId: nextSessionId,
           reason: executedTier,
+          // 自动接续（默认 true，显式声明）：unresolved 清单强制进后继首轮
+          seedContinuation: true,
         });
       if (!commit.applied) {
         // 提交失败（未 READY / 身份门 / 并发 void）：线程未推进，本棒

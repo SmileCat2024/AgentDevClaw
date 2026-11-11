@@ -58,7 +58,16 @@ function startFakeClawServer() {
     } else if (req.url === '/protoclaw/threads/wt-1/commands') {
       payload = { ok: true, command: { commandId: 'cmd-1', status: 'pending', kind: 'user_message' }, duplicate: false, delivery: { delivered: true } };
     } else if (req.url === '/protoclaw/threads/wt-1/head') {
-      payload = { ok: true, thread: { threadId: 'wt-1', status: 'idle', headSessionId: 's-2' } };
+      // ADR-0047 阶段 4：head 推进响应携带 unresolved 清单与投递事实
+      payload = {
+        ok: true,
+        thread: { threadId: 'wt-1', status: 'idle', headSessionId: 's-2' },
+        unresolved: [{ unresolvedId: 'ur-1', commandId: 'cmd-1', reason: 'no_positive_reference', fromHeadSessionId: 's-1' }],
+        delivery: { attempted: 1, delivered: 0, reason: 'runtime_not_accepting' },
+      };
+    } else if (req.url === '/protoclaw/threads/wt-2/head') {
+      // 干净换头：unresolved 为空数组（text 模式不打印清单，只报投递事实）
+      payload = { ok: true, thread: { threadId: 'wt-2', status: 'idle', headSessionId: 's-2' }, unresolved: [], delivery: { attempted: 0, delivered: 0 } };
     } else if (req.url === '/protoclaw/threads/wt-watch' && req.method === 'GET') {
       watchState.showCalls += 1;
       // 首查 executing（在办），之后 idle + 无 pending → 配合事件游标落定
@@ -172,6 +181,29 @@ test('claw threads maps generic commands to Thread HTTP routes', async () => {
   assert.deepEqual(advanceRequest.body, {
     toSessionId: 's-2', fromSessionId: 's-1', expectedRevision: 7, endKind: 'context_rotation',
   });
+  // json 模式：unresolved 清单与投递事实全量透传（ADR-0047 阶段 4 契约）
+  const advancedJson = JSON.parse(advanced.stdout);
+  assert.equal(advancedJson.unresolved[0].unresolvedId, 'ur-1');
+  assert.equal(advancedJson.delivery.delivered, 0);
+
+  // text 模式：unresolved 清单与投递事实必须出现在 stdout，不得被 thread
+  // 摘要吞掉——手动换头是免播路径，CLI 是操作者的唯一发现面
+  const advancedText = await runCli(fake.port, [
+    'threads', 'advance', 'wt-1', '--to-session', 's-2', '--from-session', 's-1',
+  ]);
+  assert.equal(advancedText.code, 0, advancedText.stderr);
+  assert.match(advancedText.stdout, /ur-1/);
+  assert.match(advancedText.stdout, /no_positive_reference/);
+  assert.match(advancedText.stdout, /cmd-1/);
+  assert.match(advancedText.stdout, /Delivery: attempted=1 delivered=0/);
+
+  // 干净换头（unresolved 空）：不打印清单标题，投递事实照报
+  const cleanText = await runCli(fake.port, [
+    'threads', 'advance', 'wt-2', '--to-session', 's-2', '--from-session', 's-1',
+  ]);
+  assert.equal(cleanText.code, 0, cleanText.stderr);
+  assert.ok(!/Unresolved/.test(cleanText.stdout), '空清单不得打印未决标题');
+  assert.match(cleanText.stdout, /Delivery: attempted=0 delivered=0/);
 });
 
 test('claw sessions create maps to prebuilt session API and prints thread handle', async () => {

@@ -43,8 +43,84 @@ export function isSuccessionGateFailure(result) {
     && result.reason === 'error';
 }
 
+/**
+ * 退役棒指令消费证据快照构建（ADR-0047 阶段 2b）。
+ *
+ * 框架 board.readStateDetailed 提供三态完整性（ok / missing / corrupt）；
+ * 框架过旧或装配无 board 时降级 getState（null 统一按 missing——corrupt
+ * 被吞成 missing 是保守正确方向：无法判定一律进 unresolved，不会把损坏
+ * 证据当有效证据放行）。IO 抛错返回第四态 unreadable（瞬时读取失败，
+ * 重试可恢复证据）：框架 commit 收到 unreadable 拒绝换头（可重试 409），
+ * 不混入 unresolved——结构性缺失（missing/corrupt）才由 unresolved 承接
+ * （ADR-0047 阶段 2a 审查裁定：读取失败与证据缺失语义分离）。
+ */
+export async function buildSuccessionEvidence(board, threadId) {
+  if (typeof board?.readStateDetailed === 'function') {
+    try {
+      const detailed = await board.readStateDetailed(threadId);
+      if (detailed?.integrity === 'ok') {
+        const events = Array.isArray(detailed.state?.executionEvents)
+          ? detailed.state.executionEvents
+          : [];
+        return { integrity: 'ok', events };
+      }
+      if (detailed?.integrity === 'corrupt') {
+        return { integrity: 'corrupt', events: [], note: detailed.error || 'board state corrupt' };
+      }
+      return { integrity: 'missing', events: [] };
+    } catch (error) {
+      return { integrity: 'unreadable', events: [], note: `readStateDetailed failed: ${error?.message || error}` };
+    }
+  }
+  // 降级路径：旧框架 getState（损坏与缺失都吞成 null）
+  if (typeof board?.getState === 'function') {
+    try {
+      const state = await board.getState(threadId);
+      if (!state) return { integrity: 'missing', events: [] };
+      return {
+        integrity: 'ok',
+        events: Array.isArray(state.executionEvents) ? state.executionEvents : [],
+      };
+    } catch (error) {
+      return { integrity: 'unreadable', events: [], note: `getState failed: ${error?.message || error}` };
+    }
+  }
+  return { integrity: 'missing', events: [], note: 'board not assembled' };
+}
+
+/**
+ * 未决核对通知指令文本（ADR-0047 阶段 2b 强制发现）：自动接续时随 commit
+ * 追加进 Inbox，新 head 首轮输入必然携带未决清单，不依赖模型主动查询。
+ * 语气对齐框架 DEFAULT_SUCCESSION_INSTRUCTION（先核对现实再继续）。
+ */
+export function composeUnresolvedNotice(unresolved, retiredSessionId) {
+  const lines = [
+    `检测到 ${unresolved.length} 条上一棒（${retiredSessionId}）无法判定是否已消费的指令。`,
+    '这些指令没有任何可靠消费证据（旧会话执行记录不完整或已丢失），既不能当作已执行，也不能自动重放。',
+    '继续工作前，请逐条核对现实状态后处置：',
+  ];
+  for (const entry of unresolved) {
+    const summary = String(entry?.text || '').slice(0, 200);
+    lines.push(`- [${entry?.unresolvedId}]（原因 ${entry?.reason}）：${summary}`);
+  }
+  lines.push('核对方式：检查上述工作是否已真实完成（git 历史 / 文件状态 / 运行结果）。已完成的按已消费处置；未完成且仍需要的，重投该指令继续执行；已失效的显式放弃。处置是显式决定，不会自动发生。');
+  return lines.join('\n');
+}
+
 export function createThreadIntegration({ control = null, publishThreadEvent = publishThreadEventDefault } = {}) {
   const { core, board, archive } = control || getThreadControl();
+
+  // ADR-0047 阶段 5 身份采纳通道：successor 在 READY 门前拉起时不是 head，
+  // spawn 身份不含线程信息；换头提交后必须把新 head 身份推给 runtime
+  // （IPC → Agent.adoptThreadHeadIdentity → Viewer 重注册），fencing 才能
+  // 放行线程指令。经 setter 晚绑定（组合根 server.js 配置），本模块不
+  // 依赖 runtime 管理，单例创建顺序不影响装配。
+  let headIdentityAdopter = null;
+
+  /**
+   * 向新 head runtime 推送线程身份（宿主组合根装配）。
+   * 签名：(agentId, sessionId, { threadId, headGeneration }) => { ok, error? }
+   */
 
   // T001：成员查询的权威实现在框架 WorkThread.findThreadBySession——
   // 归属事实唯一取自 sessionChain 链记录（root / predecessor / head 一致），
@@ -54,89 +130,39 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
     return core.findThreadBySession(agentId, sessionId);
   }
 
+  /**
+   * head generation 的权威派生（ADR-0047 fencing 身份链）：框架
+   * core.headGeneration 对 legacy 记录（盘上无 headGeneration）按
+   * sessionChain.length 派生。宿主注入 spawn 身份必须与投递侧
+   * （deliverPendingCommands → bridge → viewer fencing 校验）同一口径，
+   * 两处各写 fallback 会让 legacy 多棒线程的指令被永久拒收
+   * （spawn 注入 1 vs wire 派生 N）。宿主消费方（agent-startup）一律
+   * 经此入口取值，不自行派生。
+   */
+  function resolveHeadGeneration(thread) {
+    return core.headGeneration(thread);
+  }
+
+  /**
+   * 未决核对通知（ADR-0047 阶段 2b 强制发现）：自动接续时经
+   * commitSessionSuccession 的 composeNotice 回调在换头事务内构造入箱
+   * （system_continuation 指令，幂等键 succession-notice:<threadId>:<to>）
+   * ——新 head 首轮输入必然携带清单，不依赖模型主动查询，也不存在
+   * 「已换头但通知未追加」的崩溃窗口（阶段 2b 审查修正：事务外追加
+   * 崩溃后 head CAS 拒绝重试，通知永不补建）。手动接续
+   * （seedContinuation=false）不构造：手动精简停在产物上等真实输入，
+   * 通知指令会唤醒轮次违反免播语义；未决事实经 thread-routes 的
+   * unresolved 查询/处置端点可见（ADR 阶段 2b API 面）。
+   */
+
   // R6：投递统一经 delivery-consumer（退避 / 滞留水位告警 / FIFO 顺序），
   // 三个触发点（apply 后 / runtime ready / gateway append 后）共享同一消费面
   const deliveryConsumer = createDeliveryConsumer(core);
 
-  /**
-   * 把上一棒里「已投递但从未被执行」的指令放回待投递队列。
-   *
-   * `delivered` 在框架里表示已交给 runtime，接续时还需区分两种情况：
-   * 尚无执行事件的输入可能仍在旧 runtime 队列里，旧 runtime 退役后需由新 head
-   * 承接；已关联到旧轮次的输入则已进入旧会话上下文，不能作为新输入重放。
-   * 后者从 turn.started 的 sourceRef 或轮次终态的 sourceRef /
-   * consumedSourceRefs 识别。completed、cancelled、failed 描述轮次结果，均不
-   * 改变其关联输入已经被消费的事实。
-   *
-   * 归属判定用 sessionChain 的存续时间窗（deliveredAt ∈ [startedAt, endedAt]），
-   * 而不是 deliveryRef——后者是 runtime 标识，与 sessionId 不同源。
-   * 若退役这一棒在保留事件里一条都没有（被裁剪），无法证明也未能否定，
-   * 保守跳过，宁可少回收也不重复执行已完成的指令。
-   *
-   * 接续指令（system_continuation）由接续链路独占，不在此列。
-   */
-  async function requeueUnfinishedCommands(threadId, retiredSessionId) {
-    if (!retiredSessionId || typeof board?.getState !== 'function') return [];
-    let state;
-    try {
-      state = await board.getState(threadId);
-    } catch {
-      return [];
-    }
-    const entries = Array.isArray(state?.executionEvents) ? state.executionEvents : [];
-    // 与执行轮次关联的输入已被旧 runtime 消费，不再作为新输入重放。
-    // 这同时覆盖当前轮次的 sourceRef、忙时注入到当前轮的 consumedSourceRefs，
-    // 以及 completed / cancelled / failed 等终态：终态只描述轮次结果，不会
-    // 撤销输入已经进入旧会话上下文这一事实。
-    const consumed = new Set();
-    let touched = false;
-    for (const entry of entries) {
-      if (entry?.sessionId !== retiredSessionId) continue;
-      touched = true;
-      const event = entry?.event;
-      if (event?.type !== 'turn.started' && event?.type !== 'turn.completed'
-        && event?.type !== 'turn.continued' && event?.type !== 'turn.cancelled'
-        && event?.type !== 'turn.failed') continue;
-      for (const ref of [event.sourceRef, ...(event.consumedSourceRefs || [])]) {
-        if (typeof ref === 'string' && ref) consumed.add(ref);
-      }
-    }
-    // 保留窗口里看不到这一棒的任何事件：可能整棒被裁剪，无从判断，保守跳过。
-    if (!touched) return [];
-
-    const thread = await core.getThread(threadId);
-    const bar = (thread?.sessionChain || []).find((entry) => entry?.sessionId === retiredSessionId);
-    const barStart = Number(bar?.startedAt) || 0;
-    const barEnd = Number(bar?.endedAt) || Infinity;
-
-    const requeued = [];
-    for (const command of thread?.commands || []) {
-      if (command?.status !== 'delivered') continue;
-      if (command.kind === 'system_continuation') continue;
-      // 已被旧 head 轮次消费的输入不得作为新输入重放。
-      if (consumed.has(command.commandId)) continue;
-      // 必须落在退役这一棒的存续期内，才算「这一棒收下但没跑完」。
-      const deliveredAt = Number(command.deliveredAt) || 0;
-      if (!deliveredAt || deliveredAt < barStart || deliveredAt > barEnd) continue;
-      requeued.push(command.commandId);
-    }
-    if (requeued.length === 0) return [];
-    const ids = new Set(requeued);
-    await core.store.update(threadId, (record) => {
-      for (const command of record?.commands || []) {
-        if (!ids.has(command?.commandId)) continue;
-        // 回到待投递：清掉本轮投递引用与终态标记，让新 head 重新接收。
-        command.status = 'pending';
-        command.deliveryRef = null;
-        command.deliveredAt = null;
-        command.lastReason = null;
-        command.updatedAt = Date.now();
-      }
-      return record;
-    });
-    console.log(`[thread-integration] requeued ${requeued.length} unfinished command(s) after succession: ${threadId} retired=${retiredSessionId}`);
-    return requeued;
-  }
+  // ADR-0047 阶段 2b：退役棒指令消费判定与 head 推进合并为框架原子事务
+  // commitSessionSuccession（分类语义同源、单文件原子写 + unresolved 一等
+  // 事实），宿主侧判定闸已退役。证据快照经 buildSuccessionEvidence 构建
+  // （ok / missing / corrupt / unreadable 四态）。
 
   return {
     core,
@@ -145,6 +171,14 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
     // （routes 的 _assertNotArchived 同源）；暴露给网关消费。
     archive,
     findThreadBySession,
+    resolveHeadGeneration,
+    /**
+     * 装配换头身份采纳器（组合根 server.js）：applySessionSuccession 在
+     * 换头提交后、补投递前调用。见上方 headIdentityAdopter 注释。
+     */
+    setHeadIdentityAdopter(fn) {
+      headIdentityAdopter = typeof fn === 'function' ? fn : null;
+    },
 
     async assertSessionStartable(agentId, sessionId) {
       const thread = await findThreadBySession(agentId, sessionId);
@@ -245,17 +279,24 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
 
     /**
      * 会话接力钩子（提交点）：successor 生成且 Runtime READY 后调用。
-     * fromSessionId 是线程当前 head 时推进 head（endKind 记录接力原因），
-     * 随后把接力期间暂存的 pending 指令投递给新 head runtime。
-     * 非 head / 无线程（纯 session）：静默跳过（no-op）。
+     * fromSessionId 是线程当前 head 时原子提交接续（ADR-0047 阶段 2b：
+     * head 推进 + 挡板清除 + 退役棒指令消费分类 + unresolved 持久化在同
+     * 一次框架事务内），随后把接力期间暂存的 pending 指令投递给新 head
+     * runtime。非 head / 无线程（纯 session）：静默跳过（no-op）。
+     *
+     * seedContinuation（默认 true，与 beginSessionSuccession 对称）：
+     * 自动接续时 commit 产生的 unresolved 清单追加为 system_continuation
+     * 通知指令强制进入新 head 首轮；false（手动精简免播路径）不追加，
+     * unresolved 经 /threads/:id/unresolved 查询处置面可见。
      *
      * T002：applied=false 分两类——
      *   - void（并发/幂等场景，线程状态已是权威，不记失败）：
      *     head_mismatch / already_head / duplicate_session / thread_closed；
-     *   - 失败（advance 异常等）：记 rotation_failed + 错误 code 作
-     *     stage，并显式收敛挡板（不靠 stale TTL）。
+     *   - 失败（evidence_unreadable 等可重试 / 事务异常等）：记
+     *     rotation_failed + 错误 code 作 stage，并显式收敛挡板（不靠
+     *     stale TTL）。
      */
-    async applySessionSuccession({ agentId, fromSessionId, toSessionId, reason = 'manual' }) {
+    async applySessionSuccession({ agentId, fromSessionId, toSessionId, reason = 'manual', seedContinuation = true }) {
       const normalizedAgentId = String(agentId || '').trim();
       const from = String(fromSessionId || '').trim();
       const to = String(toSessionId || '').trim();
@@ -269,25 +310,55 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
         thread = await core.findThreadByHeadSession(normalizedAgentId, from);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
 
-        // 换棒前先把「上一棒收到却始终没跑出结果」的指令放回待投递：这类指令
-        // 停在 delivered 终态，之后的每次补投递（只投 pending）都不会再送它，
-        // 不回收就等于静默丢弃。必须在 advanceHead 之前完成，随后的 consume
-        // 才会把它们连同接续档的暂存指令一起投给新 head。
-        const requeued = await requeueUnfinishedCommands(thread.threadId, from);
-
-        const advanced = await core.advanceHead({
+        // ADR-0047 阶段 2b 原子提交：证据快照（事务外读取，单向保守）+
+        // 框架 commitSessionSuccession——head 推进、挡板清除、退役棒指令
+        // 消费分类、unresolved 持久化在同一次原子写内完成。瞬时读取失败
+        // （evidence_unreadable）经 catch 链失败收敛（rotation_failed 可重试，
+        // 旧 head 权威）；结构性缺失（missing/corrupt）由 unresolved 承接。
+        // 强制发现通知（自动路径）经 composeNotice 在同一事务内构造入箱
+        // （阶段 2b 审查修正：事务外追加在 commit 后崩溃会因 head CAS
+        // 拒绝重试而永不补建——通知与换头必须同生共死）。
+        const evidence = await buildSuccessionEvidence(board, thread.threadId);
+        const committed = await core.commitSessionSuccession({
           threadId: thread.threadId,
-          toSessionId: to,
           fromSessionId: from,
+          toSessionId: to,
           endKind: String(reason || 'manual').trim() || 'manual',
+          evidence,
+          ...(seedContinuation !== false
+            ? {
+              composeNotice: (unresolved) => (Array.isArray(unresolved) && unresolved.length > 0
+                ? { text: composeUnresolvedNotice(unresolved, from) }
+                : null),
+            }
+            : {}),
         });
         console.log(`[thread-integration] head advanced: ${thread.threadId} ${from} -> ${to} (${reason})`);
+
+        // 身份采纳（ADR-0047 阶段 5）：换头事实落定后、补投递前，向新 head
+        // runtime 推送线程身份——successor 拉起早于换头提交（READY 门），
+        // spawn 身份不含线程，不采纳则 fencing 拒收一切线程指令。失败不
+        // 回滚换头：指令保持 retryable-pending，runtime 重启路径在 spawn 时
+        // 注入身份（headSessionId 已指向新 head），自然收敛。
+        if (typeof headIdentityAdopter === 'function') {
+          try {
+            const adopted = await headIdentityAdopter(normalizedAgentId, to, {
+              threadId: thread.threadId,
+              headGeneration: committed.record?.headGeneration,
+            });
+            if (adopted?.ok !== true) {
+              console.warn(`[thread-integration] head identity adoption not confirmed (thread=${thread.threadId} session=${to}): ${adopted?.error || 'unknown'}`);
+            }
+          } catch (adoptError) {
+            console.warn(`[thread-integration] head identity adoption failed (thread=${thread.threadId} session=${to}):`, adoptError?.message || adoptError);
+          }
+        }
 
         // successor READY 门禁在提交点上游（thread-succession.js）；投递暂存指令
         // 统一经 delivery-consumer 消费面（force：advance 换代是新权威事实，
         // 不受线程级退避约束）
         const delivery = await deliveryConsumer.consume(thread.threadId, { force: true });
-        // head 推进事务落定（advanceHead + 补投递完成后）发布事实事件：
+        // head 推进事务落定（commit + 通知指令 + 补投递完成后）发布事实事件：
         // 前端流视图据此发现换头并重绑数据源（ADR-0024），事件只携带
         // 事务事实，不承载派生视图数据。
         publishThreadEvent(thread.threadId, {
@@ -297,7 +368,7 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
           toSessionId: to,
           reason: String(reason || 'manual').trim() || 'manual',
         });
-        return { applied: true, thread: advanced, delivery, requeued };
+        return { applied: true, thread: committed.record, delivery, unresolved: committed.unresolved };
       } catch (error) {
         if (error instanceof ThreadNotFoundError) {
           return { applied: false, reason: 'thread_not_found' };
@@ -314,7 +385,6 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
           console.error(`[thread-integration] succession failed ${from} -> ${to} (no thread):`, error?.message || error);
           return { applied: false, reason: 'handoff_failed', stage: error.code || 'advance_head', error: error?.message || String(error) };
         }
-        console.error(`[thread-integration] succession failed ${from} -> ${to}:`, error?.message || error);
         console.error(`[thread-integration] succession failed ${from} -> ${to}:`, error?.message || error);
         // T002：失败阶段取 T001 身份门错误 code（稳定词汇），stage 落盘供
         // 审计与重启收敛透传；挡板显式收敛（旧 head 继续有效，见

@@ -231,6 +231,9 @@ export function createAgentStartupFns(deps) {
 
   async function startManagedSession(agent, resolvedSessionId, runtimeOptions) {
     const existing = getAgentRuntime(agent.id, resolvedSessionId);
+    const thread = resolvedSessionId
+      ? await getThreadIntegration().findThreadBySession(agent.id, resolvedSessionId)
+      : null;
     let sessionRuntimeMode = runtimeOptions?.runtimeMode;
     // 会话记录一次读取、全程复用：下方校验 / handoff 注入 / placement 三段
     // 都只需要本会话这一条记录。此前三段各调一次 readSessionIndex——创建/
@@ -526,6 +529,13 @@ export function createAgentStartupFns(deps) {
         PROTOCLAW_INTERNAL_TOKEN: getInternalAuthToken(),
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
         PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
+        ...(thread && thread.headSessionId === resolvedSessionId ? {
+          PROTOCLAW_THREAD_ID: thread.threadId,
+          // 派生必须与投递侧同一口径（框架 core.headGeneration，legacy 记录
+          // 按 sessionChain.length 派生）；此处自写 fallback 会造成 legacy
+          // 多棒线程 spawn 身份与 wire 身份错位、指令被 fencing 永久拒收。
+          PROTOCLAW_HEAD_GENERATION: String(getThreadIntegration().resolveHeadGeneration(thread)),
+        } : {}),
         ...(runtimeOptions?.extraEnv && typeof runtimeOptions.extraEnv === 'object' ? runtimeOptions.extraEnv : {}),
         ...buildSessionWorkspaceEnv(agent.id, resolvedSessionId, projectDir),
       }),

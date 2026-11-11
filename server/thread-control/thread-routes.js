@@ -22,6 +22,7 @@
 import { createHash } from 'node:crypto';
 import { synthesizeThreadLifeState } from './thread-life-state.js';
 import { deliverThreadInput } from './input-gateway.js';
+import { buildSuccessionEvidence } from './thread-integration.js';
 import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
 
 /** 轮次终态事件 type → 事实状态（ADR-0042 决策 4；仅终态，item.* 与 turn.started 不发布）。 */
@@ -70,11 +71,15 @@ const TURN_TERMINAL_FACT_STATUS = Object.freeze({
  *   重复读索引（PH 线程化后 1400+ 线程 → 近 3000 次 mkdir+stat），是列表
  *   延迟的主要组成。不注入时回退逐线程解析（保持既有注入方兼容）。
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, rotationService, deliverInput = deliverThreadInput, publishThreadEvent = publishThreadEventDefault, onTurnTerminalFact, assertThreadQuota } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, rotationService, deliverInput = deliverThreadInput, publishThreadEvent = publishThreadEventDefault, onTurnTerminalFact, assertThreadQuota, adoptHeadIdentity, stopManagedAgent } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
   const { core, board, archive } = control;
+  // ADR-0047 阶段 2b：head 推进与退役棒指令消费判定合并为框架原子事务
+  // commitSessionSuccession（与接续编排 applySessionSuccession 同一权威
+  // 实现），宿主侧判定闸已退役；证据快照构建复用 integration 的
+  // buildSuccessionEvidence（ok / missing / corrupt / unreadable 四态）。
   const lifecycleService = lifecycle || {
     archiveThread: async (threadId) => {
       const thread = await core.getThread(threadId);
@@ -610,14 +615,148 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
   app.post('/protoclaw/threads/:threadId/head', jsonMiddleware, async (req, res) => {
     try {
       const { toSessionId, fromSessionId, expectedRevision, endKind } = req.body || {};
-      const thread = await core.advanceHead({
-        threadId: req.params.threadId,
-        toSessionId,
-        fromSessionId,
+      const threadId = req.params.threadId;
+      const targetSessionId = String(toSessionId || '').trim();
+      const current = await core.getThread(threadId);
+      if (!current) {
+        return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
+      }
+      if (!targetSessionId) {
+        return res.status(400).json({ ok: false, code: 'invalid_succession', message: 'toSessionId is required' });
+      }
+      // 终态前置校验（先于 READY 门的副作用）：closed 线程的换头请求在
+      // 拉起 runtime 之前拒绝——唤起闸会真实 startManagedAgent 并等待
+      // READY（最长 20s），不能让注定被 commit 以 thread_closed 拒绝的
+      // 请求先产生外部可见的 runtime 副作用。
+      if (current.status === 'closed') {
+        return res.status(409).json({ ok: false, code: 'thread_closed', message: 'Thread is closed' });
+      }
+      // 与自动 / 手动接力共用 READY 门：target runtime 必须可服务，且归属
+      // 线程身份仍由框架原子事务在提交时校验。未配置宿主唤起器不能静默
+      // 降级成直接换头，否则本入口会把未就绪 successor 暴露为权威 head。
+      if (typeof ensureHeadRuntime !== 'function') {
+        return res.status(503).json({ ok: false, code: 'successor_runtime_unavailable', message: 'Successor readiness gate is not configured' });
+      }
+      const readiness = await ensureHeadRuntime(current.agentId, targetSessionId).catch((error) => ({
+        ok: false, code: 'runtime_wake_failed', message: String(error?.message || error),
+      }));
+      if (readiness?.ok === false) {
+        return res.status(409).json({
+          ok: false,
+          code: 'successor_runtime_not_ready',
+          reason: readiness.code || 'runtime_wake_failed',
+          message: readiness.message || 'Successor runtime did not reach READY',
+        });
+      }
+      // ADR-0047 阶段 2b：head 推进走框架原子事务（分类 + 推进 +
+      // unresolved 持久化同一次提交）。退役 head 取显式 fromSessionId
+      // （CAS 契约），省略时读当前 head（兼容省略调用方，错误 from 由
+      // 框架 CAS 拒绝）。证据 unreadable（瞬时读取失败）→ 409 可重试、
+      // head 不动；结构性缺失（missing / corrupt）→ unresolved 随换头
+      // 持久，端点响应携带清单（调用方按需呈现/处置）。
+      let retiring = String(fromSessionId || '').trim();
+      if (!retiring) {
+        // READY 门等待窗口内 head 可能已被并发推进，重读一次取新鲜值；
+        // from 不符仍由框架 CAS 兜底拒绝（外层 current 不遮蔽）。
+        const freshThread = await core.getThread(threadId);
+        retiring = freshThread?.headSessionId || current.headSessionId || '';
+      }
+      const evidence = await buildSuccessionEvidence(board, threadId);
+      const committed = await core.commitSessionSuccession({
+        threadId,
+        toSessionId: targetSessionId,
+        fromSessionId: retiring,
         expectedRevision,
         endKind,
+        evidence,
       });
-      res.json({ ok: true, thread });
+      // 换头编排收尾（ADR-0047 阶段 4）：head 推进事实对订阅方可见
+      // （SSE 投影）；pending 指令（含此前等待旧 head 的）即时触发
+      // 投递——新 head runtime 已在运行时没有 ready 事件可依赖。
+      // 身份采纳（阶段 5）：successor 拉起早于提交（READY 门），spawn 身份
+      // 不含线程；采纳失败不回滚换头（指令保持 retryable-pending，重启
+      // 路径 spawn 注入身份收敛）。
+      if (typeof adoptHeadIdentity === 'function') {
+        try {
+          const adopted = await adoptHeadIdentity(current.agentId, targetSessionId, {
+            threadId,
+            headGeneration: committed.record?.headGeneration,
+          });
+          if (adopted?.ok !== true) {
+            req.app?.locals?.clawLogger?.warn?.(`head identity adoption not confirmed (thread=${threadId} session=${targetSessionId}): ${adopted?.error || 'unknown'}`);
+          }
+        } catch (adoptError) {
+          req.app?.locals?.clawLogger?.warn?.(`head identity adoption failed (thread=${threadId} session=${targetSessionId}): ${adoptError?.message || adoptError}`);
+        }
+      }
+      // 退役旧 head runtime（对齐自动接力 thread-rotation 的 stopManagedAgent
+      // 语义）：换头后旧 runtime 若仍在运行，其 Viewer 注册身份自洽，可继续
+      // claim 队列里的指令——已分类 unresolved 的指令会被旧棒事后执行。
+      // 停止失败只告警不回滚（换头事实已持久；旧 runtime 的滞留指令由
+      // fencing + 重启收敛兜底），但必须先于向新 head 的补投递。
+      if (typeof stopManagedAgent === 'function' && retiring && retiring !== targetSessionId) {
+        try {
+          await stopManagedAgent(current.agentId, retiring, { waitForPersistence: true });
+        } catch (stopError) {
+          req.app?.locals?.clawLogger?.warn?.(`retired head runtime stop failed after manual advance (thread=${threadId} session=${retiring}): ${stopError?.message || stopError}`);
+        }
+      }
+      try {
+        // 事件契约（sse-events 格式帧取 payload.kind；前端 thread-store 要求
+        // from/to 同时在场）：与 thread-integration 的自动换头同形状。
+        await publishThreadEvent(threadId, {
+          kind: 'thread.head-advanced',
+          agentId: current.agentId,
+          fromSessionId: retiring,
+          toSessionId: targetSessionId,
+          reason: 'manual',
+        });
+      } catch (eventError) {
+        req.app?.locals?.clawLogger?.warn?.(`head-advanced 事件发布失败: ${eventError?.message || eventError}`);
+      }
+      let delivery = null;
+      if (typeof tryDeliver === 'function') {
+        delivery = await tryDeliver(threadId).catch((error) => ({
+          attempted: 0, delivered: 0, reason: 'error', error: error?.message || String(error),
+        }));
+      }
+      res.json({ ok: true, thread: committed.record, unresolved: committed.unresolved, ...(delivery ? { delivery } : {}) });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  // ── 未决指令（ADR-0047 阶段 2b API 面）：手动免播接续的发现与处置 ──
+
+  app.get('/protoclaw/threads/:threadId/unresolved', async (req, res) => {
+    try {
+      const includeResolved = String(req.query.includeResolved || '') === 'true';
+      const unresolved = await core.listUnresolved(req.params.threadId, { includeResolved });
+      res.json({ ok: true, unresolved });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  app.post('/protoclaw/threads/:threadId/unresolved/:unresolvedId/resolve', jsonMiddleware, async (req, res) => {
+    try {
+      const { resolution, note } = req.body || {};
+      const { record, command } = await core.resolveUnresolved({
+        threadId: req.params.threadId,
+        unresolvedId: req.params.unresolvedId,
+        resolution,
+        note,
+      });
+      // reissue 产出新 pending 指令后尝试即时投递（投递失败不回滚处置：
+      // 处置事实已持久，指令保持 pending 等下一个触发点）
+      let delivery = null;
+      if (command && typeof tryDeliver === 'function') {
+        delivery = await tryDeliver(req.params.threadId).catch((error) => ({
+          reason: 'error',
+          error: String(error?.message || error),
+        }));
+      }
+      res.json({ ok: true, thread: record, command, delivery });
     } catch (err) {
       _errorResponse(res, err);
     }

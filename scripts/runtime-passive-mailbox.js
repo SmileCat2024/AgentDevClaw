@@ -56,6 +56,30 @@ export function createPassiveMailboxLoop(ctx) {
   const fetchImpl = typeof ctx.fetchImpl === 'function' ? ctx.fetchImpl : fetch;
 
   async function dequeueInput(agentId) {
+    // Thread commands use a durable claim that remains in Viewer until the
+    // Agent snapshot is saved and CallArbiter acknowledges the exact lease.
+    const identity = ctx.agent?.getRuntimeInputIdentity?.();
+    if (identity?.threadId && Number.isInteger(identity.headGeneration)) {
+      const claim = await fetchImpl(
+        `${viewerUrl}/api/agents/${encodeURIComponent(agentId)}/command-input/claim`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(internalToken ? { Authorization: `Bearer ${internalToken}` } : {}),
+          },
+        },
+      );
+      if (claim.status === 200 && claim.ok) {
+        const data = await claim.json();
+        if (data?.input?.inputLease) return data.input;
+        throw new Error('Viewer returned a command claim without a durable input lease');
+      }
+      if (!claim.ok && claim.status !== 204 && claim.status !== 404) {
+        throw new Error(`Command input claim failed: ${claim.status}`);
+      }
+    }
+
     const res = await fetchImpl(
       `${viewerUrl}/api/agents/${encodeURIComponent(agentId)}/dequeue-input`,
       {
@@ -69,6 +93,21 @@ export function createPassiveMailboxLoop(ctx) {
     if (!res.ok) return null;
     const data = await res.json();
     return data?.input || null;
+  }
+
+  async function acknowledgeInput(agentId, receipt) {
+    const res = await fetchImpl(
+      `${viewerUrl}/api/agents/${encodeURIComponent(agentId)}/command-input/ack`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(internalToken ? { Authorization: `Bearer ${internalToken}` } : {}),
+        },
+        body: JSON.stringify({ receipt }),
+      },
+    );
+    if (!res.ok) throw new Error(`Command input acknowledgement failed: ${res.status}`);
   }
 
   async function run() {
@@ -91,9 +130,24 @@ export function createPassiveMailboxLoop(ctx) {
       }
       if (!input || typeof input.text !== 'string' || input.text.length === 0) continue;
 
+      const receipt = input.inputLease;
+      if (receipt && typeof ctx.agent?.getContext === 'function') {
+        const existing = ctx.agent.getContext()?.getAll?.() || [];
+        if (existing.some((message) => message.inputReceipt?.commandId === receipt.commandId
+          && message.inputReceipt?.threadId === receipt.threadId
+          && message.inputReceipt?.headGeneration === receipt.headGeneration)) {
+          // Snapshot persisted the command but the prior ack was lost: acknowledge
+          // the same durable fact without adding or executing the user message again.
+          await acknowledgeInput(agentId, receipt);
+          ctx.callArbiter.enqueue({ source: 'thread-receipt-resume', text: '', kind: 'resume' });
+          continue;
+        }
+      }
+
       const entry = ctx.callArbiter.enqueue({
         source: typeof input.source === 'string' && input.source ? input.source : 'queued-input',
         ...(typeof input.sourceRef === 'string' && input.sourceRef ? { sourceRef: input.sourceRef } : {}),
+        ...(receipt ? { inputReceipt: receipt, acknowledgeInputReceipt: (identity) => acknowledgeInput(agentId, identity) } : {}),
         text: input.text,
         ...(input.kind === 'reminder' ? { kind: 'reminder' } : {}),
         ...(Array.isArray(input.images) && input.images.length > 0 ? { images: input.images } : {}),

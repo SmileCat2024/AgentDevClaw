@@ -111,6 +111,10 @@ export class CallArbiter {
     const entry = {
       id: envelope.id || `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       source: envelope.source || 'unknown',
+      ...(envelope.inputReceipt ? { inputReceipt: envelope.inputReceipt } : {}),
+      ...(typeof envelope.acknowledgeInputReceipt === 'function'
+        ? { acknowledgeInputReceipt: envelope.acknowledgeInputReceipt }
+        : {}),
       sourceRef: envelope.sourceRef || '',
       text: envelope.text,
       ...(envelope.kind === 'reminder' ? { kind: 'reminder' } : {}),
@@ -423,6 +427,10 @@ export class CallArbiter {
         ...(envelope._segmentCount === 1 && envelope.kind === 'reminder' ? { kind: 'reminder' } : {}),
         ...(envelope._segmentCount === 1 && envelope.source ? { source: envelope.source } : {}),
         ...(envelope._segmentCount === 1 && envelope.sourceRef ? { sourceRef: envelope.sourceRef } : {}),
+        ...(envelope._segmentCount === 1 && envelope.inputReceipt ? { inputReceipt: envelope.inputReceipt } : {}),
+        ...(envelope._segmentCount === 1 && envelope.acknowledgeInputReceipt
+          ? { acknowledgeInputReceipt: envelope.acknowledgeInputReceipt }
+          : {}),
         ...(isResume ? { kind: 'resume' } : {}),
       };
       envelope._resume = false;

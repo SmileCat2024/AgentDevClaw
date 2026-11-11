@@ -61,6 +61,8 @@ export async function submitUserTurn({
   images,
   source,
   sourceRef,
+  commandIdentity,
+  sessionId,
   // 输入身份（user-turn 契约的 kind 字段）：'reminder' = 机器通报唤醒，
   // 落地为带 source 的 system 消息且不响应输入租约；'resume' = 空消息续跑
   // （text 允许为空，agent 层启动前补齐尾部工作现场）；省略即 'user'。
@@ -136,6 +138,8 @@ export async function submitUserTurn({
         ...(Array.isArray(images) && images.length > 0 ? { images } : {}),
         ...(source ? { source } : {}),
         ...(sourceRef ? { sourceRef } : {}),
+        ...(commandIdentity ? { commandIdentity } : {}),
+        ...(sessionId ? { sessionId } : {}),
         ...(kind ? { kind } : {}),
         ...(Array.isArray(capabilityActivations) && capabilityActivations.length > 0
           ? { capabilityActivations }

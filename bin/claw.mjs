@@ -321,6 +321,20 @@ function writeThreadPayload(payload, format = 'text') {
   }
   if (payload?.thread) {
     printThreadText(payload.thread);
+    // ADR-0047 阶段 4：advance 响应携带的 unresolved 清单与投递事实在 text
+    // 模式下必须可见——手动换头后操作者据此发现待处置指令，不至于把
+    // 「换头成功但退役棒有未决指令」误读为完全干净（json 模式全量透传）。
+    if (Array.isArray(payload.unresolved) && payload.unresolved.length > 0) {
+      console.log(`Unresolved (${payload.unresolved.length}) — 退役棒无法判定是否已消费的指令：`);
+      for (const entry of payload.unresolved) {
+        console.log(`  ${entry?.unresolvedId || '?'}  reason=${entry?.reason || '?'}  command=${entry?.commandId || '?'}${entry?.fromHeadSessionId ? `  from=${entry.fromHeadSessionId}` : ''}`);
+      }
+      console.log('  处置：GET /protoclaw/threads/<id>/unresolved 查看，POST .../unresolved/<unresolvedId>/resolve 处置（如 reissue）');
+    }
+    if (payload?.delivery && typeof payload.delivery === 'object') {
+      const d = payload.delivery;
+      console.log(`Delivery: attempted=${d.attempted ?? '?'} delivered=${d.delivered ?? '?'}${d.reason ? ` reason=${d.reason}` : ''}`);
+    }
     return;
   }
   if (payload?.threadId) {

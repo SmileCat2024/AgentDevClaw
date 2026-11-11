@@ -56,7 +56,7 @@ import {
   WORKSPACE_SESSION_AGENT_IDS, HIDDEN_PREBUILT_AGENT_IDS,
   PROJECT_DOCSET_SUBPATH, APP_CONFIG_ROOT, DEFAULT_MODEL_CONFIG_TEMPLATE_PATH,
   MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, REMOTE_CLAW_CONFIG_PATH,
-  APP_ORIGIN, resolveInstanceUdsPath,
+  APP_ORIGIN, resolveInstanceUdsPath, resolveUserDataDir,
 } from './server/shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log, getAssemblyWorkspaceDir, normalizeClientAgentId, parseListField } from './server/shared/string-helpers.js';
 import { createMemorySampler, resolveSampleIntervalMs } from './server/shared/memory-diagnostics.js';
@@ -80,7 +80,7 @@ import {
   writeSessionIndex, updateSessionIndex, migrateAllPrebuiltSessionIndexes,
   buildSessionTitle, normalizeSessionMetadata, readSessionIndexSync,
 } from './server/shared/session-access.js';
-import { sendIPCtoSession } from './server/shared/ipc.js';
+import { sendIPCtoSession, requestRuntimeAck } from './server/shared/ipc.js';
 import { proxyToViewer, setProxyConnectionLookup, setProxyRemoteAuthSessions } from './server/shared/proxy.js';
 import { resolveRuntimeObservationTarget } from './server/shared/operation-target.js';
 import { buildLocalFailureResponse, readOperationMetadata } from './server/shared/operation-contract.js';
@@ -222,7 +222,13 @@ app.use(compression({
   filter: createSseCompressionFilter(compression.filter),
 }));
 app.use(securityHeadersMiddleware);
-const viewerWorker = new ViewerWorker(VIEWER_PORT, false, resolveInstanceUdsPath());
+// 排队输入持久接管（ADR-0047 阶段 3a）：ViewerWorker 重启后排队输入与
+// 已消费 sourceRef 记录从磁盘恢复，接收端按 sourceRef 幂等去重——
+// 「已接收未消费」不再因 worker 崩溃丢失，「标记 delivered 前崩溃重试」
+// 不再重复执行。目录随 AGENTDEV_DATA_DIR 隔离（与 UDS 管道同语义）。
+const viewerWorker = new ViewerWorker(VIEWER_PORT, false, resolveInstanceUdsPath(), {
+  queuedInputStoreDir: path.join(resolveUserDataDir(), 'viewer-queued-inputs'),
+});
 const clawMcp = new ClawMCPServer();
 const tunnelManager = createTunnelManager();
 let remoteClawConnector = null;
@@ -805,6 +811,26 @@ const ensureHeadRuntime = async (agentId, sessionId) => {
   return { ok: true };
 };
 
+// ADR-0047 阶段 5 换头身份采纳：successor 在 READY 门前拉起时不是 head，
+// spawn 身份不含线程信息；换头提交后（applySessionSuccession / 手动换头
+// 端点）经 runtime IPC 令 runtime 采纳新 head 身份并向 Viewer 重注册，
+// WorkThread fencing 对齐后线程指令才可投递。失败不回滚换头——指令保持
+// retryable-pending，重启路径在 spawn 时注入身份（headSessionId 已指向
+// 新 head）自然收敛。
+const adoptHeadIdentity = async (agentId, sessionId, { threadId, headGeneration } = {}) => {
+  const runtime = getAgentRuntime(agentId, sessionId);
+  if (!runtime || !isManagedRuntimeRunning(runtime)) {
+    return { ok: false, error: `head runtime not running (agent=${agentId} session=${sessionId})` };
+  }
+  return requestRuntimeAck(runtime, {
+    type: 'adopt-thread-head',
+    threadId,
+    headGeneration,
+    sessionId,
+  }, 'adopt-thread-head-result', { timeoutMs: 5000 });
+};
+threadIntegration.setHeadIdentityAdopter(adoptHeadIdentity);
+
 // C2 重启自动恢复：未完成事实判定（pending 指令 / 看板 running 残留）
 // → 拉起 +（后者）kind='resume' 空消息续跑。启动时挂接续收敛之后执行。
 const threadRestartResume = createThreadRestartResume({
@@ -851,6 +877,10 @@ setupThreadRoutes(app, express, {
     });
   },
   ensureHeadRuntime,
+  adoptHeadIdentity,
+  // 手动换头端点退役旧 head runtime（P1-5：旧 runtime 身份自洽，不停会在
+  // 换头后继续 claim 其 Viewer 队列指令，事后执行已分类 unresolved 的项）
+  stopManagedAgent,
   rotationService: threadRotation,
   threadDelete,
   // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null。

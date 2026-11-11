@@ -301,9 +301,9 @@ describe('thread SSE: transaction publish points', () => {
     const order = [];
     const proxyCore = new Proxy(control.core, {
       get(target, prop, receiver) {
-        if (prop === 'advanceHead') {
+        if (prop === 'commitSessionSuccession') {
           return async (...args) => {
-            const result = await target.advanceHead(...args);
+            const result = await target.commitSessionSuccession(...args);
             order.push('advanced');
             return result;
           };
@@ -333,7 +333,7 @@ describe('thread SSE: transaction publish points', () => {
       agentId: AGENT, fromSessionId: 'a-s1', toSessionId: 'a-s2', reason: 'trim',
     });
     assert.equal(outcome.applied, true);
-    // 发布在 advanceHead 与补投递都落定之后（created 在建线程时先行）
+    // 发布在原子换头（commitSessionSuccession）与补投递都落定之后（created 在建线程时先行）
     assert.deepEqual(order, [
       'publish:thread.created', 'advanced', 'delivered', 'publish:thread.head-advanced',
     ]);

@@ -201,10 +201,15 @@ describe('B. 锚点 × 指令域', () => {
       const t = await env.startThread('e2e-b3', 's-b3');
       for (let i = 0; i < 205; i++) {
         await env.control.core.appendCommand({ threadId: t.threadId, text: `job-${i}` });
-        // 直接标记终态制造裁剪压力
+        // 直接标记终态制造裁剪压力（带 deliveredAt = 真实投递路径形态、
+        // 归属旧棒窗口可裁；缺 deliveredAt 是「无法归属」异常形态，新
+        // 契约保守保留不裁，不构成本用例输入）
         await env.control.core.store.update(t.threadId, (draft) => {
           const last = draft.commands[draft.commands.length - 1];
-          if (last && last.status === 'pending') last.status = 'delivered';
+          if (last && last.status === 'pending') {
+            last.status = 'delivered';
+            last.deliveredAt = 1;
+          }
           return draft;
         });
       }
