@@ -49,6 +49,10 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+// 与框架 features/todo 的 TASK_KINDS（含 other 兜底）同步；server 侧不 import
+// 框架 feature 层，按 viewer normalizeTodoPlan 同样模式内联白名单
+const TODO_TASK_KINDS = ['investigate', 'design', 'implement', 'fix', 'verify', 'other'];
+
 function normalizeTodoTask(task) {
   if (!task || typeof task !== 'object') return null;
   const id = cleanText(task.id);
@@ -61,6 +65,9 @@ function normalizeTodoTask(task) {
     subject: cleanText(task.subject),
     description: cleanText(task.description),
     deliver: cleanText(task.deliver) || undefined,
+    kind: typeof task.kind === 'string' && TODO_TASK_KINDS.includes(task.kind)
+      ? task.kind
+      : undefined,
     status,
     metadata: task.metadata && typeof task.metadata === 'object' ? cloneJson(task.metadata) : undefined,
     createdAt: typeof task.createdAt === 'number' ? task.createdAt : 0,

@@ -346,6 +346,9 @@ describe('todo continuity export adapter field contract', () => {
       tasks: [
         { id: '1', subject: '任务一', description: '描述', status: 'in_progress' },
         { id: '2', subject: '任务二', description: '描述', status: 'pending' },
+        { id: '3', subject: '任务三', description: '描述', kind: 'investigate', status: 'completed' },
+        { id: '4', subject: '任务四', description: '描述', kind: 'other', status: 'pending' },
+        { id: '5', subject: '任务五', description: '描述', kind: 'not-a-kind', status: 'pending' },
       ],
       counter: 5,
       reminderContent: '请使用 todo 工具',
@@ -369,10 +372,23 @@ describe('todo continuity export adapter field contract', () => {
     const continuity = exportTodo(buildTodoSnapshotWithAllFields());
     const state = continuity.states[0].state;
 
-    assert.equal(state.tasks.length, 2);
+    assert.equal(state.tasks.length, 5);
     assert.equal(state.tasks[0].subject, '任务一');
     assert.equal(state.tasks[1].status, 'pending');
     assert.equal(state.counter, 5);
+  });
+
+  it('preserves valid kind (incl. other fallback) and drops invalid kind', () => {
+    const continuity = exportTodo(buildTodoSnapshotWithAllFields());
+    const state = continuity.states[0].state;
+
+    // kind 是任务策略语义的载体，接续导出不得丢弃；other 是模型侧
+    // kind 必填的兜底值，数据层同样合法。非法值清洗为 undefined，
+    // 缺省（旧快照）保持 undefined。
+    assert.equal(state.tasks[0].kind, undefined);
+    assert.equal(state.tasks[2].kind, 'investigate');
+    assert.equal(state.tasks[3].kind, 'other');
+    assert.equal(state.tasks[4].kind, undefined);
   });
 
   it('preserves reminderContent when present', () => {
