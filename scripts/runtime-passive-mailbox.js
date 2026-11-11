@@ -17,11 +17,16 @@
  *  - transparently forwards the original source / sourceRef so thread
  *    commands keep their identity for delivery tracking.
  *
+ * Latency: the poll interval is the fallback discovery cadence, not the
+ * expected one. ViewerWorker notifies the runtime (queued-input-available
+ * frame via debug-hub) right after an input is durably enqueued; the host
+ * wires that signal to `poke()`, which wakes the loop immediately. The
+ * signal carries no data — consumption always goes through the full
+ * claim/dequeue protocol; a lost signal only costs one poll interval.
+ *
  * The factory receives a mutable context object (same pattern as
  * createIMBridge); all hooks are injectable for unit testing.
  */
-
-import { setTimeout as sleep } from 'timers/promises';
 
 export const PASSIVE_MAILBOX_POLL_INTERVAL_MS = 1000;
 
@@ -54,6 +59,31 @@ export function createPassiveMailboxLoop(ctx) {
   // 非回环监听启用后直接生效——与框架 react-loop dequeue 同一口径。
   const internalToken = process.env.PROTOCLAW_INTERNAL_TOKEN;
   const fetchImpl = typeof ctx.fetchImpl === 'function' ? ctx.fetchImpl : fetch;
+
+  // ── 可中断轮询间隔（poke 加速信号）──────────────────────────────
+  // viewer 在输入入队落盘后经 queued-input-available 帧提醒 runtime 立即
+  // 消费（debug-hub 分发 → poke()）。信号只是把「下一次轮询」提前，不参与
+  // 任何正确性：丢失时最多回到纯轮询节奏；忙时（claim / envelope 执行中）
+  // 到达则忽略——串行消费完成后循环自然继续。单一循环结构保证同一时刻
+  // 只有一轮消费在跑，poke 不会造成并发 claim。
+  let _wake = null; // () => void：当前处于间隔等待时的提前唤醒句柄
+  function _waitPollInterval(ms) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        _wake = null;
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      _wake = finish;
+    });
+  }
+  function poke() {
+    if (_wake) _wake();
+  }
 
   async function dequeueInput(agentId) {
     // Thread commands use a durable claim that remains in Viewer until the
@@ -112,7 +142,7 @@ export function createPassiveMailboxLoop(ctx) {
 
   async function run() {
     while (!ctx.isDisposed()) {
-      await sleep(pollIntervalMs);
+      await _waitPollInterval(pollIntervalMs);
       if (ctx.isDisposed()) break;
 
       const agentId = ctx.agent?.agentId;
@@ -163,5 +193,5 @@ export function createPassiveMailboxLoop(ctx) {
     }
   }
 
-  return { run };
+  return { run, poke };
 }

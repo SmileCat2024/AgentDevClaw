@@ -47,7 +47,7 @@ function createMockArbiter({
   };
 }
 
-function createHarness({ fetchImpl, arbiter, runtimeIdentity, context } = {}) {
+function createHarness({ fetchImpl, arbiter, runtimeIdentity, context, pollIntervalMsOverride } = {}) {
   let disposed = false;
   const ctx = {
     agent: {
@@ -57,7 +57,7 @@ function createHarness({ fetchImpl, arbiter, runtimeIdentity, context } = {}) {
     },
     callArbiter: arbiter,
     isDisposed: () => disposed,
-    pollIntervalMs: 1,
+    pollIntervalMs: pollIntervalMsOverride ?? 1,
     viewerPort: '2026',
     ...(fetchImpl ? { fetchImpl } : {}),
   };
@@ -277,6 +277,77 @@ describe('createPassiveMailboxLoop', () => {
     assert.ok(await until(() => arbiter.calls.enqueued.length === 1));
     ctx.isDisposed = () => true;
     await running;
+  });
+});
+
+describe('createPassiveMailboxLoop poke (queued-input-available signal)', () => {
+  it('poke wakes the loop before the poll interval elapses', async () => {
+    const arbiter = createMockArbiter();
+    const harness = createHarness({
+      arbiter,
+      // 远大于观察窗口的轮询间隔：没有 poke 时，观察窗口内不应有任何消费
+      pollIntervalMsOverride: 60_000,
+      fetchImpl: async () => jsonResponse({ input: { text: 'poke-consumed', source: 'thread' } }),
+    });
+    const running = harness.loop.run();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(arbiter.calls.enqueued.length, 0, 'long poll interval must hold the loop dormant');
+
+      harness.loop.poke();
+      assert.ok(
+        await until(() => arbiter.calls.enqueued.length === 1, 500),
+        'poke must trigger immediate consumption instead of waiting out the interval',
+      );
+      assert.equal(arbiter.calls.enqueued[0].text, 'poke-consumed');
+    } finally {
+      // dispose 后循环可能仍挂在长间隔等待里：poke 唤醒它让 isDisposed 检查生效
+      harness.dispose();
+      harness.loop.poke();
+      await running;
+    }
+  });
+
+  it('poke while an envelope is settling is a harmless no-op (serial consumption preserved)', async () => {
+    let releaseEnvelope;
+    const gate = new Promise((resolve) => { releaseEnvelope = resolve; });
+    const arbiter = createMockArbiter();
+    arbiter.waitForCompletion = async (id) => {
+      arbiter.calls.waits.push(id);
+      await gate;
+    };
+    let mailbox = [{ text: 'first' }];
+    let fetchCount = 0;
+    const harness = createHarness({
+      arbiter,
+      pollIntervalMsOverride: 60_000,
+      fetchImpl: async () => {
+        fetchCount++;
+        return jsonResponse({ input: mailbox.shift() ?? null, remaining: mailbox.length });
+      },
+    });
+    const running = harness.loop.run();
+    try {
+      // 第一轮靠 poke 触发；envelope 挂起期间连发 poke 不得引发并发 claim
+      harness.loop.poke();
+      assert.ok(await until(() => arbiter.calls.waits.length === 1, 500));
+      for (let i = 0; i < 5; i++) harness.loop.poke();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(fetchCount, 1, 'busy loop must not claim again while the envelope is settling');
+
+      releaseEnvelope();
+      // 让 waitForCompletion 的微任务链走完（循环回到间隔等待态、_wake 重新
+      // 武装）再发信号——poke 契约只保证等待态内唤醒；落在结算窗口的信号
+      // 属于设计允许的丢失（轮询兜底），本用例不制造该竞态。
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      harness.loop.poke();
+      assert.ok(await until(() => fetchCount === 2, 500));
+      assert.equal(mailbox.length, 0, 'second claim finds the mailbox empty (input: null) and moves on');
+    } finally {
+      harness.dispose();
+      harness.loop.poke();
+      await running;
+    }
   });
 });
 

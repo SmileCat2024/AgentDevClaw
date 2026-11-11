@@ -820,7 +820,10 @@ const ensureHeadRuntime = async (agentId, sessionId) => {
 const adoptHeadIdentity = async (agentId, sessionId, { threadId, headGeneration } = {}) => {
   const runtime = getAgentRuntime(agentId, sessionId);
   if (!runtime || !isManagedRuntimeRunning(runtime)) {
-    return { ok: false, error: `head runtime not running (agent=${agentId} session=${sessionId})` };
+    // No live registration needs rebinding (branch/import paths can anchor a
+    // thread before the session runtime exists). The next spawn resolves the
+    // committed thread and injects its identity in the normal startup path.
+    return { ok: true, skipped: true };
   }
   return requestRuntimeAck(runtime, {
     type: 'adopt-thread-head',

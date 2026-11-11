@@ -87,3 +87,17 @@
 - 兼容边界：保留现有 commandId、幂等入箱、`pending`/`delivered`/`failed`/`cancelled` 对旧调用方的可见语义；`delivered` 仍是“投递端接受”的历史状态，不提升为执行确认。新增待核对状态不得让旧消费者把它误当 pending 自动重放；未分类 delivered 与 unresolved 均不得被终态裁剪删除，状态更新也不得抹去首次投递的审计事实。字段迁移、旧记录默认解释及 API/UI 投影必须在实施设计中锁定。
 - 责任分层：框架持有 Inbox 与 head/挡板的原子状态事实及可寻址待办；Claw 持有宿主策略、现实核验流程和调度方呈现。若实现证明现有框架写入面无法保证这些原子不变量，应扩展框架契约，而非在 Claw 直接改内部 store 或另建第二真相。
 - 验收必须覆盖事故回归（de4d5d03、9e71b99a）、正向消费证据/缺失证据边界、接收与标记间崩溃后重试不重复入队、Viewer 重启后的排队恢复、board 查询失败不得推进 head、持久损坏 Board 的重建与 unresolved 收敛、部分裁剪、事务崩溃注入、重复接续/重启/重复通知、自动首轮强制携带 unresolved、手动免播时调度方可见且不自动启动轮次、归档与 >200 条终态裁剪、旧投递审计留存、无接续运行期 runtime 失联、旧 API 消费者及真实宿主调度反馈。每个生产旁路均须有负向测试证明不能绕过 Inbox/head/归档门禁；HTTP、ACP、CLI 的 unresolved 结果必须有契约测试。测试需证明旧路径在目标语义下仍成立，并对移除任一正确性约束的变异明确失败。
+
+## 2026-11-11 宿主创建链复审补记
+
+真实往返验收覆盖了“会话已经锚定为线程后重启 runtime”的身份注入路径，但没有覆盖普通新建会话的首次启动顺序。Claw 的创建链先启动 runtime、后执行 `onSessionCreated` 创建 WorkThread；因此首次 spawn 查不到线程身份。ADR-0047 加入 Viewer fencing 后，这种 runtime 会拒绝领取其新线程命令，Inbox 中的输入会一直 pending。问题归属是 Claw 宿主生命周期编排；框架 fencing 行为符合契约。
+
+修复落在 Claw 的 `thread-integration.onSessionCreated`：线程创建后向已运行 runtime 发送身份采纳并等待确认；失败时新建会话事务回滚。无活动 runtime 的导入/分支路径不需重注册，后续 spawn 会从已存在的线程记录注入身份。回归验收：`test/thread-succession-timing.test.js` 4/4（跨层时序矩阵 G1/G2 等窗口，真实 ViewerWorker HTTP 面参与）、Claw 全量 `npm run test:core` 5917 项 0 失败。
+
+## 2026-11-11 空闲消费触发补记（交互延迟）
+
+阶段 3b 之后，带 `commandIdentity` 的线程指令被显式排除在 Viewer 的 lease 直答与队首转交之外（正确性要求：直答会绕过持久 lease、身份校验与回执盖戳）。随之而来的副作用是：**空闲会话的用户输入只能等 runtime 的 passive mailbox 轮询（`PASSIVE_MAILBOX_POLL_INTERVAL_MS = 1000`）消费**，交互场景下消息在队列停留 0.5–1 s，表现为输入框上方排队气泡短暂闪现后消息才上屏。改动前（框架 `6ede208` 之前）该路径走 lease 直答，毫秒级，因此观感变化来自消费模型的切换而非链路变慢。
+
+处置只缩短“发现”的延迟，不改消费协议：Viewer 作为队列事实的唯一持有方，在输入**入队落盘成功之后**经 runtime 的 UDS 连接下发 `queued-input-available` 帧（仅 `{type, agentId}`，不携带队列数据）；DebugHub 分发至宿主注册的回调，宿主把该信号接到 passive loop 的 `poke()`，提前唤醒间隔等待。轮询保留为兜底——信号丢失只损失一个轮询周期；忙时（claim / envelope 执行中）到达的信号被忽略，串行消费不受影响。
+
+边界：帧不是第二事实来源，领取仍走完整 claim/ack 协议；信号重复到达时 claim 返回空、无副作用。实测（隔离实例、真实 server + 真实 runtime、空闲会话发送）接收→上屏间隔 39 ms；改动前同口径为 552 / 1011 ms。取样限制：隔离实例无可用模型凭证，发送后模型调用即报错，只测得首轮计时，后续轮次无法在同一实例内重复取样。测试：框架侧 `debug-hub-queued-notify`（分发与 per-agent/全局优先级、rejection 不外溢、注销）、`viewer-worker-queued-notify`（落盘后发帧、纯信号字段、lease 直答路径不通知、write 失败不影响入队事实）；Claw 侧 `runtime-passive-mailbox` 的 poke 用例（提前唤醒、忙时忽略、串行保持）。

@@ -1148,6 +1148,25 @@ setupTokenRefreshRoute(app, express);
         await waitForProcessExit(runtime.process);
       }
     }
+    // 新建宿主线程后若 runtime 身份采纳失败，线程和 Session 必须一起回滚；
+    // 否则留下的 head 会继续接受无法被 fencing runtime 领取的命令。
+    const createdThread = await getThreadIntegration()
+      .findThreadBySession(agentId, sessionId).catch(() => null);
+    if (createdThread && typeof threadDelete?.deleteThread === 'function') {
+      try {
+        const deleted = await threadDelete.deleteThread(createdThread.threadId, {
+          forceWaitMs: 0,
+          reason: 'session_creation_rollback',
+        });
+        if (deleted?.status !== 'complete') {
+          console.error(`[create-rollback] new thread cleanup remains retryable (${createdThread.threadId}): ${deleted?.status || 'unknown'}`);
+        }
+        return;
+      } catch (error) {
+        console.error('[create-rollback] failed to delete new thread:', error?.message || error);
+        return;
+      }
+    }
     try {
       await deletePrebuiltSession(agentId, sessionId, { includeSessions: false });
     } catch (error) {
@@ -1261,6 +1280,7 @@ setupTokenRefreshRoute(app, express);
     const committedRevision = Number(session.indexRevision) || 0;
     trace.mark('index_committed', { revision: committedRevision });
     let status;
+    let createdThread = null;
     try {
       status = await startManagedAgent(agent, session.id, sessionRuntimeMode ? { runtimeMode: sessionRuntimeMode } : {});
       trace.mark('target_runtime_started');
@@ -1283,6 +1303,9 @@ setupTokenRefreshRoute(app, express);
       }
       // 就绪后重读状态：viewerAgentId 等字段此刻才完整。
       status = buildStatus(agent.id, session.id);
+      // 线程锚定在 runtime 就绪后进行；onSessionCreated 同步采纳线程身份，
+      // 失败进入本事务的完整回滚，不向调用方返回一个收不到输入的死线程。
+      createdThread = await getThreadIntegration().onSessionCreated(agent.id, session);
     } catch (error) {
       // 索引已为本次请求提交：此后任何失败（add-session 被拒 / runtime 未就绪
       // 或退出）都意味着会话不可用——整体回滚后原样上抛，不给用户留死会话。
@@ -1291,9 +1314,7 @@ setupTokenRefreshRoute(app, express);
       throw error;
     }
     // 线程宿主工作空间（coder）：新会话自动成为一条新线程的初始 head。
-    // 非 host 工作空间为 no-op；失败不阻断会话创建。返回值带 threadId
-    // 供调度方直接投递，省去创建后从列表反查。
-    const createdThread = await getThreadIntegration().onSessionCreated(agent.id, session);
+    // 线程锚定与 runtime 身份注册均已确认后才返回 threadId。
     res.json({
       protocolVersion: 2,
       operationId: trace.operationId,

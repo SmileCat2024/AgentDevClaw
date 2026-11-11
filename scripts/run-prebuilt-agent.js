@@ -1327,6 +1327,14 @@ SessionLifecycle.prototype.start = async function () {
     console.error(`[ProtoClaw Runtime] 邮箱消费循环异常退出 (session=${this.sessionId}):`, err);
   });
   console.log('[ProtoClaw Runtime] ✓ 已启动邮箱消费循环 (viewer mailbox → arbiter)');
+  // 入队通知 → 立即消费：viewer 在输入落盘成功后下发 queued-input-available
+  // 帧（debug-hub 分发）。poke 只把下一次轮询提前，消费仍走 claim/dequeue
+  // 完整协议；信号丢失时由上方轮询兜底。ADR-0047 后 durable command 不走
+  // lease 直答，空闲态若无此触发，指令要等一个完整轮询相位才被领取。
+  DebugHub.getInstance().setQueuedInputAvailableHandler(this.agent?.agentId, (notifyAgentId) => {
+    if (notifyAgentId && this.agent?.agentId && notifyAgentId !== this.agent.agentId) return;
+    this.passiveMailboxLoop?.poke();
+  });
 
   if (!hasUserInput) {
     console.log('');

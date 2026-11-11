@@ -173,8 +173,8 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
     findThreadBySession,
     resolveHeadGeneration,
     /**
-     * 装配换头身份采纳器（组合根 server.js）：applySessionSuccession 在
-     * 换头提交后、补投递前调用。见上方 headIdentityAdopter 注释。
+     * 装配身份采纳器（组合根 server.js）：新线程锚定后，以及
+     * applySessionSuccession 换头提交后、补投递前调用。
      */
     setHeadIdentityAdopter(fn) {
       headIdentityAdopter = typeof fn === 'function' ? fn : null;
@@ -205,6 +205,23 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
           // ADR-0041：建线不再写入 title。对话名称的唯一来源是 Session 索引，
           // 线程记录的 title 字段保留但停止写入与消费，避免双真相回退。
         });
+        // 新会话的既有启动顺序是先启动 runtime、后创建线程；spawn 时
+        // findThreadBySession 尚无结果，因此 runtime 注册时没有 threadId /
+        // headGeneration。ADR-0047 的 durable command fencing 会拒绝该 runtime
+        // 领取所有线程输入。线程锚定后必须立刻采纳并重注册身份，且在创建
+        // 流程对外返回前确认；未确认时不能把线程会话伪装成可用。
+        if (typeof headIdentityAdopter === 'function') {
+          const adopted = await headIdentityAdopter(agentId, sessionId, {
+            threadId: thread.threadId,
+            headGeneration: core.headGeneration(thread),
+          });
+          if (adopted?.ok !== true) {
+            throw Object.assign(
+              new Error(`Runtime did not adopt its new WorkThread identity: ${adopted?.error || 'unknown error'}`),
+              { code: 'runtime_thread_identity_adoption_failed', statusCode: 503 },
+            );
+          }
+        }
         console.log(`[thread-integration] thread created: ${thread.threadId} head=${sessionId}`);
         // 创建事务落定后发布事实事件（无订阅者时 no-op）。重启恢复不经过
         // 此钩子（会话是恢复不是创建，线程已在 store），不会把既有线程
@@ -219,6 +236,7 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
         return thread;
       } catch (error) {
         console.error(`[thread-integration] failed to create thread for session=${sessionId}:`, error?.message || error);
+        if (error?.code === 'runtime_thread_identity_adoption_failed') throw error;
         return null;
       }
     },
