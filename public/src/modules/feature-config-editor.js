@@ -42,6 +42,7 @@ function createFeatureConfigEditor(options = {}) {
   const includeFeatures = Array.isArray(options.includeFeatures) && options.includeFeatures.length
     ? new Set(options.includeFeatures)
     : null;
+  const initialFeature = String(options.initialFeature || '');
 
   const SAVE_DEBOUNCE_MS = 500;
 
@@ -202,9 +203,9 @@ function createFeatureConfigEditor(options = {}) {
 
   function renderShell() {
     host.innerHTML = `
-      <div class="ph-settings-layout fs-editor-body">
-        <div class="ph-settings-sidebar" data-fce-nav><div class="fs-nav-loading">...</div></div>
-        <div class="ph-settings-content" data-fce-main>
+      <div class="fs-editor-body">
+        <div class="fs-editor-nav" data-fce-nav><div class="fs-nav-loading">…</div></div>
+        <div class="fs-editor-main" data-fce-main>
           <div class="fs-spinner-wrap"><div class="fs-spinner"></div></div>
         </div>
       </div>
@@ -215,6 +216,10 @@ function createFeatureConfigEditor(options = {}) {
   function renderNav() {
     const navEl = host.querySelector('[data-fce-nav]');
     if (!navEl) return;
+    if (!state.sections.length) {
+      navEl.innerHTML = '<div class="fs-nav-loading">' + _fceT('暂无可配置项', 'No configurable settings') + '</div>';
+      return;
+    }
     navEl.innerHTML = state.sections.map(s =>
       `<div class="ph-settings-tab" data-fce-action="nav" data-id="${escapeHtml(s.id)}">
         <span class="ph-settings-tab-icon">${_FCE_GEAR_SVG}</span>
@@ -808,7 +813,17 @@ function createFeatureConfigEditor(options = {}) {
       buildSections();
       renderNav();
       await reloadResolved();
-      selectSection(state.sections[0]?.id || null);
+      const targetSection = initialFeature
+        ? state.sections.find((section) => section.featureName === initialFeature)
+        : state.sections[0];
+      if (targetSection) {
+        selectSection(targetSection.id);
+      } else {
+        const mainEl = host.querySelector('[data-fce-main]');
+        if (mainEl) mainEl.innerHTML = `<div class="ph-settings-empty">${initialFeature
+          ? _fceT('此 Feature 暂无可配置参数。', 'This feature has no configurable settings.')
+          : _fceT('当前没有可配置的 Feature。', 'No configurable features are available.')}</div>`;
+      }
     } catch (err) {
       const mainEl = host.querySelector('[data-fce-main]');
       if (mainEl) mainEl.innerHTML = `<div class="fs-main-error">${_fceT('加载失败', 'Failed to load')}: ${escapeHtml(String(err?.message || err))}</div>`;

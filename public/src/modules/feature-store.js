@@ -41,6 +41,7 @@ let _fsState = {
   installingPkg: null,  // 本地发起安装中的包（卡片安装中态）
   installingSince: 0,   // 安装开始时间戳（秒计时显示）
   lastFailed: null,     // 最近一次安装失败的包（错误横幅重试入口）
+  category: 'all',     // 当前类型分页（类型是上级轴，装配状态是内容区内的上下区段）
 };
 
 let _fsTickTimer = null;
@@ -126,8 +127,8 @@ async function _fsMutateLayer(identity, mutator) {
 
 async function _fsAfterChange(identity) {
   await _fsReloadOverview();
-  // 底层挂载管理页若开着，同步刷新（写操作可能来自商店外的移除按钮）
-  if (typeof window._phRefreshMountsView === 'function') window._phRefreshMountsView();
+  // 当前工作空间设置页若正在展示同一身份的装配清单，同步刷新。
+  if (typeof window._phRefreshMountsView === 'function') window._phRefreshMountsView(identity);
   // 右侧 Features 面板的来源分类消费同一份装配事实，强制失效缓存重拉
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   if (fc && typeof fc.refreshMountFacts === 'function') fc.refreshMountFacts();
@@ -169,7 +170,8 @@ const _fsInstall = async function(packageName, version) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identity: _fsState.identity, packageName, version }),
     });
-    await _fsAfterChange();
+    await _fsAfterChange(_fsState.identity);
+    // 不跳页：类型页不动，新装插件从未装配区段移入已装配区段，浏览上下文保持
   } catch (err) {
     _fsState.error = _fsInstallErrorText(err);
     _fsState.lastFailed = { packageName, version };
@@ -191,7 +193,7 @@ const _fsInstallBuiltin = async function(runtimeName) {
         $mount: { kind: 'builtin' },
       };
     });
-    await _fsAfterChange();
+    await _fsAfterChange(_fsState.identity);
   } catch (err) {
     _fsState.error = String(err?.message || err);
   } finally {
@@ -206,7 +208,7 @@ window._fsRemoveFor = async function(identity, runtimeName) {
   _fsState.busy = true;
   try {
     await _fsMutateLayer(identity, (sparse) => { delete sparse[runtimeName]; });
-    await _fsAfterChange();
+    await _fsAfterChange(identity);
   } catch (err) {
     _fsState.error = String(err?.message || err);
   } finally {
@@ -257,62 +259,53 @@ function _fsCard(item, control, extraAttr) {
     + '</div>';
 }
 
-function _fsRenderMountedSection(mountedMap) {
-  const entries = Object.entries(mountedMap);
-  if (!entries.length) return '';
-  const builtinItems = new Map(
-    (_fsState.overview?.builtin || []).map((item) => [item.runtimeName, item]),
-  );
-  const packageNames = new Map(
-    (_fsState.overview?.packages || []).map((pkg) => [_fsRuntimeKey(pkg.package), pkg]),
-  );
-  const items = entries.map(([runtimeName, mount]) => {
-    // 全局层装配（ADR-0046）：声明在 global 层，本身份层的移除动作对它无效，
-    // 移除入口在插件管理器（设置菜单 → 插件管理）
-    const isGlobal = mount.layerId === 'global';
-    const globalBadge = isGlobal
-      ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('全局', 'global')) + '</span>'
-      : '';
-    // builtin 装配无 package/version（不走 tgz 仓库），徽章显示来源而非包坐标
-    const status = mount.missing
-      ? globalBadge + '<span class="feature-badge status-removed">' + escapeHtml(_fsT('包已不在仓库', 'missing')) + '</span>'
-      : globalBadge + (mount.kind === 'builtin'
-        ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('扩展', 'extension')) + '</span>'
-        : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>');
-    const btn = isGlobal
-      ? '<button type="button" class="fs-list-remove" disabled style="opacity:0.35;" title="' + escapeHtml(_fsT('来自全局装配，在 设置 → 插件管理 中移除', 'From global assembly; remove via Settings → Plugin Manager')) + '">&#215;</button>'
-      : '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除', 'Remove')) + '" data-action="featureStore.removeMount" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
-    // tgz 装配项的配置参数入口（ADR-0046 落地第 1 步）：就地打开设置弹窗，
-    // 层 tab 提供「全局默认 | 本空间」两级编辑。builtin 的配置家在 Feature
-    // 配置编辑器（官方清单面板），不在此重复提供入口。
-    const settingsBtn = mount.kind !== 'builtin' && !mount.missing
-      ? '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('设置', 'Settings')) + '" data-action="featureStore.openSettings" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>'
-      : '';
-    // displayName 与可安装区同源（builtin title / 包 displayName），查不到落回 runtime 名
-    const pkg = packageNames.get(runtimeName);
-    const displayName = (mount.kind === 'builtin' ? builtinItems.get(runtimeName)?.title : pkg?.displayName) || runtimeName;
-    return _fsCard({
-      name: runtimeName,
-      displayName,
-      description: '',
-      surface: mount.kind === 'builtin' ? (builtinItems.get(runtimeName)?.surface || null) : null,
-    }, settingsBtn + status + btn);
-  }).join('');
-  return '<div class="fs-mounted-section"><div class="fs-section-title">' + escapeHtml(_fsT('已装配', 'Installed')) + '</div>'
-    + '<div class="feature-grid ph-mount-grid">' + items + '</div></div>';
+/** 已装配区段卡片：徽章与动作沿用旧清单语义（全局只读、missing、设置、移除）。 */
+function _fsMountedCard(feature, builtinItems, packageNames) {
+  const runtimeName = feature._mountRuntimeName;
+  const mount = feature._mount;
+  // 全局层装配（ADR-0046）：声明在 global 层，本身份层的移除动作对它无效，
+  // 移除入口在插件管理器（设置菜单 → 插件管理）
+  const isGlobal = mount.layerId === 'global';
+  const globalBadge = isGlobal
+    ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('全局', 'global')) + '</span>'
+    : '';
+  // builtin 装配无 package/version（不走 tgz 仓库），徽章显示来源而非包坐标
+  const status = mount.missing
+    ? globalBadge + '<span class="feature-badge status-removed">' + escapeHtml(_fsT('包已不在仓库', 'missing')) + '</span>'
+    : globalBadge + (mount.kind === 'builtin'
+      ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('扩展', 'extension')) + '</span>'
+      : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>');
+  const btn = isGlobal
+    ? '<button type="button" class="fs-list-remove" disabled style="opacity:0.35;" title="' + escapeHtml(_fsT('来自全局装配，在 设置 → 插件管理 中移除', 'From global assembly; remove via Settings → Plugin Manager')) + '">&#215;</button>'
+    : '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除', 'Remove')) + '" data-action="featureStore.removeMount" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
+  // tgz 装配项的配置参数入口（ADR-0046 落地第 1 步）：就地打开设置弹窗，
+  // 层 tab 提供「全局默认 | 本空间」两级编辑。builtin 的配置家在 Feature
+  // 配置编辑器（官方清单面板），不在此重复提供入口。
+  const settingsBtn = mount.kind !== 'builtin' && !mount.missing
+    ? '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('设置', 'Settings')) + '" data-action="featureStore.openSettings" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>'
+    : '';
+  // displayName 与可安装区同源（builtin title / 包 displayName），查不到落回 runtime 名
+  const pkg = packageNames.get(runtimeName);
+  const displayName = (mount.kind === 'builtin' ? builtinItems.get(runtimeName)?.title : pkg?.displayName) || runtimeName;
+  return _fsCard({
+    name: runtimeName,
+    displayName,
+    description: '',
+    surface: mount.kind === 'builtin' ? (builtinItems.get(runtimeName)?.surface || null) : null,
+  }, settingsBtn + status + btn);
 }
 
 /**
- * 可安装区：builtin 扩展 + tgz 包合并为统一 item，按 catalog 功能类型分组
- * （能力/会话与行为/渠道与交互/系统组件），组织与挂载管理页同源。
- * 分组折叠默认态由 catalog 词表携带（system 折叠）；商店弹窗生命周期短，
- * 折叠偏好的跨重渲染记忆省略（busy 切换重渲染会重置折叠态）。
+ * 商店统一类型分组：已装配与可安装条目一起过 catalog 类型推导（join key =
+ * runtimeName，与 Features 面板同源），类型是商店的上级轴。装配状态不参与
+ * 分组——每个条目带 `_mount`（已装配）或 `_item`（可安装货架卡）标记，
+ * 由渲染层在类型页内分「已装配 / 未装配」上下区段。
  */
-function _fsRenderInstallSections(mountedMap, mountedByPackage) {
+function _fsBuildTypeGroups(mountedMap, mountedByPackage) {
   const identity = _fsState.identity;
   const items = [];
   for (const item of (_fsState.overview?.builtin || [])) {
-    // 已装配的不再进入可安装货架（装配状态见上方"已装配"区）
+    // 已装配的不上货架（装配状态在内容区「已装配」区段呈现）
     if (mountedMap[item.runtimeName]) continue;
     if (!(item.identities || []).includes(identity)) continue;
     items.push({
@@ -325,7 +318,7 @@ function _fsRenderInstallSections(mountedMap, mountedByPackage) {
   }
   for (const pkg of (_fsState.overview?.packages || [])) {
     const runtimeKey = _fsRuntimeKey(pkg.package);
-    // 已装配的包不再进入可安装货架
+    // 已装配的包不上货架
     if (mountedByPackage.has(pkg.package)) continue;
     const versionOptions = (pkg.versions || []).map((v) =>
       '<option value="' + escapeHtml(v.version) + '">' + escapeHtml(v.version) + '</option>'
@@ -353,52 +346,98 @@ function _fsRenderInstallSections(mountedMap, mountedByPackage) {
       extraAttr: ' data-fs-package="' + escapeHtml(pkg.package) + '" data-fs-version="' + escapeHtml(pkg.versions?.[0]?.version || '') + '"',
     });
   }
-  if (!items.length) {
-    return '<div class="ph-settings-empty" style="padding:24px 0;">' + escapeHtml(_fsT(
-      '没有可安装的插件：仓库暂无新包，或可用的都已装配。',
-      'Nothing to install: the repository has no new packages, or everything available is already installed.'
-    )) + '</div>';
-  }
+
+  // 已装配条目（含 missing：声明仍在本层，移除后回到未装配区段）
+  const builtinItems = new Map((_fsState.overview?.builtin || []).map((item) => [item.runtimeName, item]));
+  const mountedFeatures = Object.entries(mountedMap).map(([runtimeName, mount]) => ({
+    name: runtimeName,
+    description: '',
+    surface: mount.kind === 'builtin' ? (builtinItems.get(runtimeName)?.surface || null) : null,
+    _mount: mount,
+    _mountRuntimeName: runtimeName,
+  }));
+
+  const features = [
+    ...mountedFeatures,
+    ...items.map((item) => ({ name: item.name, description: item.description, surface: item.surface, _item: item })),
+  ];
+  if (!features.length) return [];
 
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   const catalog = _fsCatalog();
   // enrich 兼容形状：声明面计数喂给能力推导（商店不提供能力筛选，仅供分组一致性）
-  const features = items.map((item) => ({
-    name: item.name,
-    description: item.description,
+  const feed = features.map((feature) => ({
+    ...feature,
     tools: [],
-    toolCount: item.surface ? item.surface.tools : 0,
-    hookCount: item.surface ? item.surface.hooks : 0,
-    skillCount: item.surface ? item.surface.skills : undefined,
-    _item: item,
+    toolCount: feature.surface ? feature.surface.tools : 0,
+    hookCount: feature.surface ? feature.surface.hooks : 0,
+    skillCount: feature.surface ? feature.surface.skills : undefined,
   }));
   const commandFeatures = new Map(
-    items.filter((i) => i.surface && i.surface.commands > 0).map((i) => [i.name, i.surface.commands]),
+    features.filter((i) => i.surface && i.surface.commands > 0).map((i) => [i.name, i.surface.commands]),
   );
-  const groups = (fc && catalog)
-    ? fc.groupFeaturesByType(features, catalog, 'all', 'all', { commandFeatures })
-    : (features.length ? [{ id: '_unmapped', features }] : []);
+  return (fc && catalog)
+    ? fc.groupFeaturesByType(feed, catalog, 'all', 'all', { commandFeatures })
+    : [{ id: '_unmapped', features: feed }];
+}
 
-  // 单一非兜底组时不渲染组头（面板同款）
-  const suppressHeaders = groups.length === 1 && groups[0].id !== '_unmapped';
-  const buildCard = function(f) {
-    return _fsCard(f._item, f._item.control, f._item.extraAttr);
-  };
-  const buildGroup = function(group) {
-    const grid = '<div class="feature-grid ph-mount-grid">' + group.features.map(buildCard).join('') + '</div>';
-    if (suppressHeaders) return grid;
-    const isOpen = !(fc && fc.typeCollapsedByDefault(group.id, catalog));
-    return '<details class="feature-group"' + (isOpen ? ' open' : '') + '>'
-      + '<summary class="feature-group-bar">'
-      + '<span class="feature-group-chev" aria-hidden="true"></span>'
-      + '<span class="feature-group-title">' + escapeHtml(t(group.id === '_unmapped' ? 'feature_cat_unmapped' : 'feature_type_' + group.id)) + '</span>'
-      + '<span class="feature-group-count">' + String(group.features.length) + '</span>'
-      + '</summary>'
-      + grid
-      + '</details>';
-  };
-  return '<div class="fs-section-title">' + escapeHtml(_fsT('可安装', 'Available')) + '</div>'
-    + groups.map(buildGroup).join('');
+/**
+ * 商店主体：类型是上级轴（分页器，恒显示——即便只有「全部」一档），
+ * 装配状态是内容区内的上下区段（已装配在上、未装配在下）。
+ * 计数语义 = "点这一档会看到几个"（该类型下已装 + 未装总数）。
+ */
+function _fsRenderStoreBody(mountedMap, mountedByPackage) {
+  const groups = _fsBuildTypeGroups(mountedMap, mountedByPackage);
+  const totalCount = groups.reduce((sum, group) => sum + group.features.length, 0);
+  const validCategory = groups.some((group) => group.id === _fsState.category);
+  if (_fsState.category !== 'all' && !validCategory) _fsState.category = 'all';
+
+  const categoryTabs = [
+    { id: 'all', label: _fsT('全部', 'All'), count: totalCount },
+    ...groups.map((group) => ({
+      id: group.id,
+      label: t(group.id === '_unmapped' ? 'feature_cat_unmapped' : 'feature_type_' + group.id),
+      count: group.features.length,
+    })),
+  ].map((tab) => '<button type="button" class="fs-category-tab' + (_fsState.category === tab.id ? ' active' : '')
+    + '" data-action="featureStore.category" data-category="' + escapeHtml(tab.id) + '">'
+    + escapeHtml(tab.label) + '<span class="fs-tab-count">' + tab.count + '</span></button>').join('');
+
+  const selected = _fsState.category === 'all'
+    ? groups.flatMap((group) => group.features)
+    : (groups.find((group) => group.id === _fsState.category)?.features || []);
+  const mountedFeatures = selected.filter((feature) => feature._mount);
+  const availableFeatures = selected.filter((feature) => feature._item);
+
+  const builtinItems = new Map((_fsState.overview?.builtin || []).map((item) => [item.runtimeName, item]));
+  const packageNames = new Map((_fsState.overview?.packages || []).map((pkg) => [_fsRuntimeKey(pkg.package), pkg]));
+
+  const mountedHtml = mountedFeatures.length
+    ? '<div class="feature-grid ph-mount-grid">'
+      + mountedFeatures.map((feature) => _fsMountedCard(feature, builtinItems, packageNames)).join('') + '</div>'
+    : '<div class="fs-store-empty fs-store-empty-slim">' + escapeHtml(_fsT(
+      '此类型暂无已装配插件。',
+      'No installed plugins in this type yet.',
+    )) + '</div>';
+  const availableHtml = availableFeatures.length
+    ? '<div class="feature-grid ph-mount-grid fs-available-grid">'
+      + availableFeatures.map((feature) => _fsCard(feature._item, feature._item.control, feature._item.extraAttr)).join('') + '</div>'
+    : '<div class="fs-store-empty fs-store-empty-slim">' + escapeHtml(_fsT(
+      '没有可安装的插件：仓库暂无新包，或可用的都已装配。',
+      'Nothing to install: the repository has no new packages, or everything available is already installed.',
+    )) + '</div>';
+
+  const section = (dotClass, label, count, cardsHtml) =>
+    '<section class="fs-status-section"><div class="fs-status-section-head">'
+    + '<span class="fs-status-dot ' + dotClass + '"></span>'
+    + escapeHtml(label) + '<span class="fs-tab-count">' + count + '</span>'
+    + '</div>' + cardsHtml + '</section>';
+
+  return '<div class="fs-category-tabs" role="tablist">' + categoryTabs + '</div>'
+    + '<div class="fs-store-panel">'
+    + section('fs-status-dot-installed', _fsT('已装配', 'Installed'), mountedFeatures.length, mountedHtml)
+    + section('fs-status-dot-not-installed', _fsT('未装配', 'Not installed'), availableFeatures.length, availableHtml)
+    + '</div>';
 }
 
 function _fsRender() {
@@ -418,7 +457,7 @@ function _fsRender() {
         // builtin 无 package（不走 tgz 货架）；missing 也算已装配声明（移除后可重装）
         .filter(([, v]) => v.mount.kind !== 'builtin'),
     );
-    body = _fsRenderMountedSection(mountedMap) + _fsRenderInstallSections(mountedMap, mountedByPackage);
+    body = _fsRenderStoreBody(mountedMap, mountedByPackage);
   }
 
   const errorBanner = (_fsState.error && _fsState.overview)
@@ -466,6 +505,7 @@ window.phOpenFeatureStore = async function(identity) {
   _fsState.busy = false;
   _fsState.installingPkg = null;
   _fsState.lastFailed = null;
+  _fsState.category = 'all';
   _fsStopTick();
   _fsRender();
   // catalog 与 overview 并行预载；catalog 失败不阻断（分组落待归类兜底组）
@@ -502,6 +542,10 @@ window.ClawFW.actions.registerMany({
   'featureStore.installBuiltin': (el) => _fsInstallBuiltin(el.dataset.name),
   'featureStore.removeMount': (el) => _fsRemoveFor(el.dataset.identity, el.dataset.name),
   'featureStore.selectVersion': (el) => _fsSelectVersion(el.dataset.package, el),
+  'featureStore.category': (el) => {
+    _fsState.category = el.dataset.category || 'all';
+    _fsRender();
+  },
   'featureStore.close': () => phCloseFeatureStore(),
 });
 
@@ -915,8 +959,10 @@ window.ClawFW.actions.registerMany({
  * （'main' | 'coder'）时提供「全局默认 | 本空间」两层 tab，插件管理器的
  * 全局装配卡片无身份上下文（不传），只编辑全局默认层。
  */
-window._fsOpenSettings = async function(runtimeName, identityContext) {
+window._fsOpenSettings = async function(runtimeName, identityContext, options = {}) {
   const scope = identityContext && _FS_IDENTITY_SCOPES[identityContext];
+  const requestedScope = options.initialScope;
+  const initialScope = scope && requestedScope !== 'global' ? 'agent' : 'global';
   _fsSettings = {
     open: true,
     busy: true,
@@ -924,7 +970,7 @@ window._fsOpenSettings = async function(runtimeName, identityContext) {
     displayName: String(runtimeName || ''),
     manifest: null,
     resolved: null,
-    scopeId: 'global',
+    scopeId: initialScope,
     agentId: scope ? scope.agentId : 'programming-helper',
     hasIdentity: !!scope,
     identityLabel: scope ? (currentLanguage === 'zh' ? scope.labelZh : scope.labelEn) : '',
@@ -1078,7 +1124,7 @@ window._fsCloseSettings = function() {
 };
 
 window.ClawFW.actions.registerMany({
-  'featureStore.openSettings': (el) => window._fsOpenSettings(el.dataset.name, el.dataset.identity || null),
+  'featureStore.openSettings': (el) => window._fsOpenSettings(el.dataset.name, el.dataset.identity || null, { initialScope: el.dataset.scope }),
   'featureStore.closeSettings': () => window._fsCloseSettings(),
   'featureStore.settingsTab': (el) => _fsSettingsSwitchTab(el.dataset.scope),
   'featureStore.settingsReset': (el) => _fsSettingsSave(el.dataset.key, null),

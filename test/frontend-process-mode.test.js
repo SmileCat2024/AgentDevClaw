@@ -3,6 +3,103 @@ import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 describe('programming-helper workspace process mode UI', () => {
+  it('lists official and optional features with direct config/removal actions', async () => {
+    const ctx = createFrontendSandbox({
+      fetch: async () => ({
+        ok: true,
+        json: async () => ({
+          base: {
+            main: [{ name: 'shell' }, { name: 'user-input' }],
+            coder: [{ name: 'shell' }, { name: 'skill' }],
+          },
+          mounts: {
+            coder: { 'coder-extra': { kind: 'package', package: '@agentdev/coder-extra', version: '1.0.0', missing: false } },
+            main: {
+              agentero: { kind: 'package', package: '@agentdev/agentero', version: '1.2.0', missing: false },
+              'optional-browser': { kind: 'builtin', missing: false },
+            },
+          },
+          envReady: { main: { hasEnv: true, ready: true } },
+        }),
+      }),
+    });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
+    const settingsHost = { innerHTML: '' };
+    const mountsHost = { innerHTML: '' };
+    ctx.document.getElementById = (id) => id === 'ph-feature-mounts-host' ? mountsHost : settingsHost;
+    ctx.run(`var currentLanguage = 'zh'; var escapeHtml = (value) => String(value);
+      window.ClawFW = window.ClawFW || {};
+      window.ClawFW.actions = { registerMany() {}, bindEventType() {} };
+      var getFeatureCreatorProjects = () => [];
+      var getCurrentAgentRecord = () => ({ id: 'programming-helper' });
+      var getClawModelPresets = () => [];`);
+
+    ctx.run(`(() => {
+      window.phSettingsAgentId = 'programming-helper';
+      renderPhSettingsOverlay({ id: 'programming-helper' }, []);
+      _phSettingsTab = 'feature';
+      renderPhSettingsOverlay({ id: 'programming-helper' }, []);
+    })()`);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.match(settingsHost.innerHTML, /class="ph-settings-tab active"[^>]*data-tab="feature"/);
+    assert.match(mountsHost.innerHTML, /agentero/);
+    assert.match(mountsHost.innerHTML, /data-action="phSettings\.openFeatureConfig" data-name="agentero"/);
+    assert.match(mountsHost.innerHTML, /data-action="phSettings\.removeMountFeature" data-identity="main" data-name="agentero"/);
+    assert.match(mountsHost.innerHTML, /data-name="shell"/);
+    assert.match(mountsHost.innerHTML, /data-name="user-input"/);
+    assert.match(mountsHost.innerHTML, /data-name="optional-browser"/);
+    assert.match(settingsHost.innerHTML, /data-sub="mounts"/);
+    assert.match(settingsHost.innerHTML, /data-sub="config"/);
+    assert.match(mountsHost.innerHTML, /ph-mount-list/);
+    assert.doesNotMatch(mountsHost.innerHTML, /data-action="phSettings\.removeMountFeature" data-identity="main" data-name="shell"/);
+  });
+  it('keeps Coder official and mounted features in its assembly view and provides direct config navigation', async () => {
+    const ctx = createFrontendSandbox({
+      fetch: async () => ({ ok: true, json: async () => ({
+        base: { coder: [{ name: 'shell' }, { name: 'skill' }] },
+        mounts: { coder: { 'coder-extra': { kind: 'package', package: '@agentdev/coder-extra', version: '1.0.0', missing: false } } },
+        envReady: { coder: { hasEnv: true, ready: true } },
+      }) }),
+    });
+    ctx.window.phSettingsAgentId = 'programming-helper';
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
+    const host = { innerHTML: '' };
+    const mountsHost = { innerHTML: '' };
+    const configHost = { id: 'ph-feature-config-host', innerHTML: '' };
+    ctx.document.getElementById = (id) => id === 'ph-feature-config-host' ? configHost
+      : id === 'ph-feature-mounts-host' ? mountsHost : host;
+    const editorScopes = [];
+    ctx.run(`window.ClawFW = window.ClawFW || {}; window.ClawFW.actions = { registerMany() {}, bindEventType() {} };`);
+    ctx.run(`var editorScopes = [];
+     var createFeatureConfigEditor = (options) => {
+       editorScopes.push({ agentId: options.scopeAgentId || 'programming-helper', initialFeature: options.initialFeature || null });
+       return { open() {}, close() {} };
+     };
+    var getCurrentAgentRecord = () => ({ id: 'programming-helper' });
+    var getClawModelPresets = () => [];`);
+    ctx.run(`(() => {
+      _phSettingsTab = 'model';
+      renderPhSettingsOverlay({ id: 'programming-helper' }, []);
+      _phSwitchSettingsTab('coder');
+    })()`);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(host.innerHTML, /data-tab="coder"/);
+    assert.match(host.innerHTML, /data-tab="feature"/);
+    assert.match(host.innerHTML, /data-sub="mounts"/);
+    assert.match(host.innerHTML, /data-sub="config"/);
+    assert.match(mountsHost.innerHTML, /data-name="shell"/);
+    assert.match(mountsHost.innerHTML, /data-name="skill"/);
+    assert.match(mountsHost.innerHTML, /data-name="coder-extra"/);
+    assert.match(mountsHost.innerHTML, /data-action="phSettings\.removeMountFeature" data-identity="coder" data-name="coder-extra"/);
+    assert.doesNotMatch(mountsHost.innerHTML, /data-action="phSettings\.removeMountFeature" data-identity="coder" data-name="shell"/);
+    ctx.run(`_phOpenFeatureConfig({ dataset: { name: 'skill' } });`);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(JSON.stringify(ctx.run('editorScopes')), '[{"agentId":"coder","initialFeature":"skill"}]');
+  });
+
   it('renders Coder policy as a host-workspace setting tab without adding quota policy to Programming Helper', () => {
     const ctx = createFrontendSandbox();
     ctx.window.phSettingsAgentId = 'programming-helper';

@@ -7109,13 +7109,107 @@ body[data-theme="light"] .user-choice-card:focus-within {
   max-height: min(100%, 820px) !important;
 }
 
-/* Feature 设置二级页：编辑器填满弹窗剩余空间 */
-.ph-settings-feature-wrap {
+/* 工作空间 Feature 页：装配与参数使用同一组横向分页；内部保持独立内容区。 */
+.ph-settings-content:has(.ph-settings-feature-page) {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  min-height: 0;
+  padding-bottom: 0;
+}
+.ph-settings-feature-page {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.ph-settings-feature-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 4px;
+  min-height: 42px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+.ph-settings-feature-tabs .ph-session-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
+}
+.ph-settings-feature-mounts,
+.ph-settings-feature-wrap {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+.ph-settings-feature-wrap { overflow: hidden; }
+.ph-settings-feature-mounts .ph-mounts-body { padding: 16px 24px 24px; }
+.ph-mount-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.ph-mount-toolbar-title { color: var(--text-primary); font-size: 14px; font-weight: 600; }
+.ph-mount-toolbar-hint { margin-top: 4px; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+.ph-mount-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ph-mount-list > .feature-card { box-sizing: border-box; min-width: 0; min-height: 64px; padding: 14px 16px; }
+.ph-mount-list .feature-card-top { align-items: center; gap: 12px; }
+.ph-mount-list .feature-card-main { flex: 1 1 auto; }
+.ph-mount-list .feature-card-name { overflow-wrap: anywhere; }
+.ph-mount-list .feature-card-main { min-width: 0; }
+.ph-mount-list .feature-card-name { overflow-wrap: anywhere; }
+.ph-mount-list .feature-card-badges { flex: 0 0 auto; gap: 6px; }
+.ph-mount-list .ph-mount-empty-cta { grid-column: 1 / -1; }
+.fs-editor-body {
+  display: grid;
+  grid-template-columns: minmax(148px, 172px) minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
+  padding: 12px 24px 20px;
+  gap: 20px;
+}
+.fs-editor-nav {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-color);
+  padding: 8px 12px 8px 0;
+}
+.fs-editor-nav .ph-settings-tab { flex: 0 0 auto; }
+.fs-editor-main {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+@media (max-width: 760px) {
+  .ph-settings-window { width: min(100%, 680px) !important; }
+  .ph-settings-feature-tabs { padding-inline: 16px; }
+  .ph-mounts-body { padding: 14px 16px 20px; }
+  .ph-mount-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ph-mount-list > .feature-card { padding: 12px; }
+  .fs-editor-body { grid-template-columns: minmax(124px, 28%) minmax(0, 1fr); gap: 12px; padding: 10px 16px 16px; }
+  .fs-store-panel { padding: 14px 16px 16px; }
+  .fs-category-tabs { padding-inline: 16px; }
+}
+@media (max-width: 520px) {
+  .ph-settings-feature-tabs { padding-inline: 12px; }
+  .ph-mounts-body { padding: 12px; }
+  .ph-mount-toolbar { align-items: flex-start; }
+  .ph-mount-toolbar-hint { max-width: 28ch; }
+  .ph-mount-list { grid-template-columns: minmax(0, 1fr); }
+  .fs-editor-body { grid-template-columns: minmax(96px, 34%) minmax(0, 1fr); gap: 8px; padding: 8px 12px 14px; }
+  .fs-editor-nav { padding-right: 6px; }
+  .fs-editor-nav .ph-settings-tab { padding: 8px 6px; font-size: 12px; }
+  .fs-store-panel { padding: 12px; }
+  .fs-category-tabs { padding-inline: 12px; }
+  .fs-category-tab { padding-inline: 10px; }
 }
 .ph-settings-layout {
   display: flex; flex: 1; min-height: 0; overflow: hidden;
@@ -7477,7 +7571,12 @@ body[data-theme="light"] .ci-badge.warn { color: #b45309; }
 
 .ci-status-line.error { color: var(--error-color); }
 
-/* ── PH Model Switch (操作条模型切换) ── */
+/* ── PH Model Controls (操作条模型操作与设置入口) ── */
+.ph-model-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .ph-model-switch {
   display: inline-flex;
   align-items: center;
@@ -7497,6 +7596,29 @@ body[data-theme="light"] .ci-badge.warn { color: #b45309; }
 .ph-model-switch.has-secondary:hover {
   background: rgba(99,145,255,0.12);
   border-color: rgba(99,145,255,0.4);
+}
+.ph-model-switch:focus-visible,
+.ph-model-settings:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.ph-model-settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ph-model-settings:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
 }
 .ph-model-switch-name {
   font-size: 13px;
@@ -14127,17 +14249,91 @@ body[data-theme="light"] .rcm-tunnel-diag summary { color: var(--text-secondary)
 
 /* ── Feature 插件商店面板（feature-store.js）────────────────── */
 
-.fs-section-title {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  margin: 4px 0 10px;
+.fs-category-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 4px;
+  min-height: 42px;
+  padding: 0 24px 8px;
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: transparent;
 }
-
-.fs-mounted-section .fs-section-title { margin-top: 0; }
-/* 已装配区与可安装区的间距由 ph-mounts-body 的 flex gap 主导 */
+.fs-category-tabs::-webkit-scrollbar { display: none; }
+.fs-category-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-height: 36px;
+  padding: 0 14px;
+  white-space: nowrap;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fs-category-tab:hover { color: var(--text-primary); }
+.fs-category-tab.active { border-bottom-color: var(--accent-text); color: var(--text-primary); }
+.fs-tab-count { color: var(--text-muted); font-size: 11px; font-weight: 500; }
+/* 类型页内容区：已装配（上）/ 未装配（下）两个区段 */
+.fs-store-panel {
+  min-height: 0;
+  padding: 18px 24px 24px;
+  border-radius: 0 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background: transparent;
+}
+.fs-status-section { display: flex; flex-direction: column; gap: 10px; }
+.fs-status-section-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+/* 装配状态点：已装配实心成功色（与运行点同语义），未装配空心中性 */
+.fs-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.fs-status-dot-installed { background: var(--success-color); }
+.fs-status-dot-not-installed {
+  background: transparent;
+  border: 1.5px solid var(--text-muted);
+  opacity: 0.7;
+}
+.fs-category-tabs .fs-category-tab { color: var(--text-muted); }
+.fs-category-tabs .fs-category-tab.active { color: var(--accent-color); border-bottom-color: var(--accent-color); }
+body[data-theme="light"] .fs-category-tabs .fs-category-tab { color: var(--text-secondary); }
+body[data-theme="light"] .fs-category-tabs .fs-category-tab.active { color: var(--accent-color); border-bottom-color: var(--accent-color); }
+.fs-store-empty {
+  padding: 28px 16px;
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.5;
+}
+/* 区段级空态（类型页内的半空区段）：比整页空态轻，不抢卡片区的视觉重量 */
+.fs-store-empty-slim { padding: 14px 16px; font-size: 12px; }
+.fs-available-grid { padding-top: 0; }
+/* Type is the top-level pager; installed/not-installed are stacked sections inside each type page. */
 
 /* 挂载管理页主体：与 Feature 配置页同边距（配置编辑器行级 24px 左右距）；
    flex gap 对齐面板 hooks-section（筛选 header→分组、分组→分组 14px） */

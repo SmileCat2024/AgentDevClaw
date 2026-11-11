@@ -172,6 +172,30 @@ const resolve = async (entry, data, ok = true) => {
   await flush();
 };
 
+describe('模型切换与配置入口', () => {
+  it('独立配置入口定向打开模型配置，不改变现有切换动作', async () => {
+    const s = createSetup({
+      openDirectory: 'D:/alpha',
+      phProjects: [{ openDirectory: 'D:/alpha' }],
+      target: { type: 'dir', id: 'dir:d:/alpha' },
+    });
+    const html = s.render();
+
+    assert.match(html, /<button[^>]*class="ph-model-switch"[^>]*data-action="sessions\.toggleModelSlot"/);
+    assert.match(html, /<button[^>]*class="ph-model-settings"[^>]*data-action="sessions\.openModelSettings"[^>]*aria-label="模型配置"/);
+    assert.doesNotMatch(html, /ph-model-settings[^>]*data-action="sessions\.toggleModelSlot"/);
+
+    const settingsTargets = [];
+    s.ctx.window.phOpenSettings = (options) => settingsTargets.push(options?.initialTab || null);
+    s.ctx.run(`window.ClawFW.actions.invoke('sessions.openModelSettings', { dataset: {} }, null, 0)`);
+    assert.deepEqual(settingsTargets, ['model']);
+
+    await s.ctx.run('window.phToggleModelSlot()');
+    assert.deepEqual(settingsTargets, ['model', 'model'], 'without a secondary model, the existing switch entry opens the model configuration');
+    assert.equal(s.agent.modelPresets.default.primary, 'm1', 'opening model settings does not change the primary model');
+  });
+});
+
 describe('双选择器 — 纯目录无回归', () => {
   it('单一目录：左目录项 + 右「默认项目」 active + 新建对话携带 openDirectory 而非 projectId', () => {
     const s = createSetup({

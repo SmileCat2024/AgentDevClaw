@@ -765,9 +765,12 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const viewIdentity = projectViewIdentity(agent, currentProject);
   const canWorkspaceCreate = viewCapabilityEnabled(viewIdentity, 'workspaceCreate');
   const modelSwitchHtml = currentProject && viewCapabilityEnabled(viewIdentity, 'write') && modelDisplayName ? [
-    '<div class="ph-model-switch' + (hasSecondary ? ' has-secondary' : '') + '" data-action="sessions.toggleModelSlot" title="' + escapeHtml(isZh ? (hasSecondary ? '点击切换到: ' + secondaryModel : '点击配置备选模型') : (hasSecondary ? 'Click to switch to: ' + secondaryModel : 'Click to configure secondary model')) + '">',
+    '<div class="ph-model-controls">',
+    '<button type="button" class="ph-model-switch' + (hasSecondary ? ' has-secondary' : '') + '" data-action="sessions.toggleModelSlot" title="' + escapeHtml(isZh ? (hasSecondary ? '点击切换到: ' + secondaryModel : '点击配置备选模型') : (hasSecondary ? 'Click to switch to: ' + secondaryModel : 'Click to configure secondary model')) + '">',
     '<span class="ph-model-switch-name">' + escapeHtml(modelDisplayName) + '</span>',
     (hasSecondary ? '<svg class="ph-model-switch-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3l4 4-4 4"/><line x1="20" y1="7" x2="8" y2="7"/><path d="M8 21l-4-4 4-4"/><line x1="4" y1="17" x2="16" y2="17"/></svg>' : ''),
+    '</button>',
+    '<button type="button" class="ph-model-settings" data-action="sessions.openModelSettings" title="' + escapeHtml(isZh ? '模型配置' : 'Model settings') + '" aria-label="' + escapeHtml(isZh ? '模型配置' : 'Model settings') + '"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>',
     '</div>',
   ].join('') : '';
 
@@ -1067,6 +1070,7 @@ window.ClawFW.actions.registerMany({
   'sessions.manageProjects': () => window.phOpenManageProjectsDialog(),
   'sessions.toggleProjectDropdown': (el, event) => window.phToggleProjectDropdown(event),
   'sessions.openSettings': () => window.phOpenSettings(),
+  'sessions.openModelSettings': () => window.phOpenSettings({ initialTab: 'model' }),
   'sessions.toggleModelSlot': () => window.phToggleModelSlot(),
   'sessions.loadMore': () => window.phLoadMoreSessions(),
   'sessions.switchTab': (el) => window.switchPhSessionTab(el),

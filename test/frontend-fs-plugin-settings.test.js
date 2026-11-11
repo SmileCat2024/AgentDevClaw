@@ -84,11 +84,99 @@ function makeFetch({ resolved } = {}) {
 function loadModule(fetchStub) {
   const ctx = createFrontendSandbox({ fetch: fetchStub });
   ctx.run('window.ClawFW = window.ClawFW || {};');
-  ctx.run('window.ClawFW.actions = window.ClawFW.actions || { registerMany() {} };');
+  ctx.run(`window.ClawFW.actions = window.ClawFW.actions || {
+    handlers: {},
+    registerMany(handlers) { Object.assign(this.handlers, handlers); },
+    bindEventType() {},
+    invoke(name, el) { return this.handlers[name]?.(el); },
+  };`);
   ctx.loadSource('public/src/modules/feature-setup-core.js');
   ctx.loadSource('public/src/modules/feature-store.js');
   return ctx;
 }
+
+describe('身份插件商店分页', () => {
+  it('类型为上级分页，类型页内上下分「已装配/未装配」区段，保留插件操作', () => {
+    const ctx = loadModule(makeFetch());
+    ctx.run(`
+      var currentLanguage = 'zh';
+      var escapeHtml = (value) => String(value);
+      var t = (key) => ({ feature_type_capability: '能力', feature_cat_unmapped: '待归类' }[key] || key);
+      window.ClawFW.featureCatalog = {
+        getFeatureCatalogSnapshot: () => ({}),
+        groupFeaturesByType: (features) => [
+          { id: 'capability', features: features.filter((feature) => feature.name === 'lsp') },
+          { id: '_unmapped', features: features.filter((feature) => feature.name !== 'lsp') },
+        ],
+      };
+      _fsState.identity = 'main';
+      _fsState.open = true;
+      _fsState.overview = {
+        mounts: { main: {
+          agentero: { kind: 'package', package: '@agentdev/agentero', version: '0.3.1' },
+          'optional-browser': { kind: 'builtin' },
+        } },
+        builtin: [],
+        packages: [
+          { package: '@agentdev/lsp', displayName: 'LSP', versions: [{ version: '1.0.0' }, { version: '0.9.0' }] },
+          { package: '@agentdev/other', displayName: 'Other', versions: [{ version: '2.0.0' }] },
+        ],
+      };
+    `);
+    const all = ctx.run(`_fsRenderStoreBody(_fsMountedMap(), new Map())`);
+    // 上级是类型分页器（全部 + 各类型），不再有「已装配/可安装」主分页与来源子筛选
+    assert.match(all, /class="fs-category-tabs"/);
+    assert.match(all, /data-category="all"/);
+    assert.match(all, /data-category="capability"/);
+    assert.match(all, /data-category="_unmapped"/);
+    assert.doesNotMatch(all, /data-tab="mounted"/);
+    assert.doesNotMatch(all, /data-tab="available"/);
+    assert.doesNotMatch(all, /data-filter="official"/);
+    // 类型页内上下区段：已装配（agentero / optional-browser）与未装配（货架）同屏
+    assert.match(all, /已装配/);
+    assert.match(all, /未装配/);
+    assert.match(all, /agentero/);
+    assert.match(all, /optional-browser/);
+    assert.match(all, /data-action="featureStore\.removeMount"/);
+    assert.match(all, /data-action="featureStore\.openSettings"/);
+    assert.match(all, /data-action="featureStore\.install"/);
+    assert.match(all, /data-action="featureStore\.selectVersion"/);
+
+    // 切到 capability 类型页：只剩 lsp 的未装配卡；已装配区段为空态但区段头仍在
+    ctx.run(`_fsState.category = 'capability';`);
+    const capability = ctx.run(`_fsRenderStoreBody(_fsMountedMap(), new Map())`);
+    assert.match(capability, /data-package="@agentdev\/lsp"/);
+    assert.doesNotMatch(capability, /@agentdev\/other/);
+    assert.doesNotMatch(capability, /agentero/);
+    assert.match(capability, /此类型暂无已装配插件/);
+  });
+
+  it('分组为空或 catalog 未就绪时：全部条目落待归类兜底，分页器仍显示', () => {
+    const ctx = loadModule(makeFetch());
+    ctx.run(`
+      var currentLanguage = 'zh';
+      var escapeHtml = (value) => String(value);
+      var t = (key) => ({ feature_cat_unmapped: '待归类' }[key] || key);
+      window.ClawFW.featureCatalog = {
+        getFeatureCatalogSnapshot: () => null,
+        groupFeaturesByType: () => [],
+      };
+      _fsState.identity = 'main';
+      _fsState.open = true;
+      _fsState.overview = {
+        mounts: { main: { agentero: { kind: 'package', package: '@agentdev/agentero', version: '0.3.1' } } },
+        builtin: [],
+        packages: [],
+      };
+    `);
+    const html = ctx.run(`_fsRenderStoreBody(_fsMountedMap(), new Map())`);
+    // 分页器恒显示（至少「全部」一档），两个区段结构稳定
+    assert.match(html, /class="fs-category-tabs"/);
+    assert.match(html, /data-category="all"/);
+    assert.match(html, /agentero/);
+    assert.match(html, /没有可安装的插件/);
+  });
+});
 
 describe('插件设置弹窗 — _fsSettingsRows 两态视图', () => {
   let ctx;
@@ -165,10 +253,33 @@ describe('插件设置弹窗 — 打开与即时保存', () => {
     assert.equal(ctx.run('_fsSettings.open'), true);
     assert.equal(ctx.run('_fsSettings.hasIdentity'), true);
     assert.equal(ctx.run('_fsSettings.agentId'), 'programming-helper');
-    // 默认打开全局默认 tab；agent 层空、global 层有值 → 跟随无（global 是第一层，其上无上游）
+    // 从身份商店进入时默认编辑本空间层；上游 global 值仍可见并被跟随。
+    assert.equal(ctx.run('_fsSettings.scopeId'), 'agent');
     const rows = ctx.run('_fsSettingsRows(_fsSettings.manifest, _fsSettings.resolved, _fsSettings.scopeId)');
-    assert.equal(rows[0].state.status, 'takeover');
+    assert.equal(rows[0].state.status, 'follow');
     assert.equal(rows[0].controlValue, '/vault/a');
+  });
+
+  it('工作空间插件清单的设置动作将插件身份和本空间层传入同一弹窗', async () => {
+    const ctx = loadModule(makeFetch());
+    let settingsCall;
+    ctx.window._fsOpenSettings = (...args) => { settingsCall = args; };
+    ctx.run(`window.ClawFW.actions.invoke('featureStore.openSettings', {
+      dataset: { name: 'agentero', identity: 'main', scope: 'agent' },
+    })`);
+    assert.equal(settingsCall[0], 'agentero');
+    assert.equal(settingsCall[1], 'main');
+    assert.equal(JSON.stringify(settingsCall[2]), '{"initialScope":"agent"}');
+  });
+
+  it('显式全局入口仍打开全局层；无身份上下文也只能编辑全局层', async () => {
+    const ctx = loadModule(makeFetch());
+    await ctx.run('window._fsOpenSettings("agentero", "main", { initialScope: "global" })');
+    assert.equal(ctx.run('_fsSettings.scopeId'), 'global');
+
+    await ctx.run('window._fsOpenSettings("agentero", null, { initialScope: "agent" })');
+    assert.equal(ctx.run('_fsSettings.scopeId'), 'global');
+    assert.equal(ctx.run('_fsSettings.hasIdentity'), false);
   });
 
   it('manifests 聚合查无该插件 → manifest 置 null（空态）', async () => {

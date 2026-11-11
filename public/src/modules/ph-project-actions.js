@@ -24,13 +24,13 @@
  * data-action 注册块承接（经 window 转调本模块），本文件不再有内联事件。
  */
 
-window.phOpenSettings = async () => {
+window.phOpenSettings = async ({ initialTab } = {}) => {
   const agent = getCurrentAgentRecord();
   if (!agent) return;
   let presets = getClawModelPresets();
   window.phSettingsAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id;
   // 先渲染（已有缓存或空态），模型预置属补数据——点击到弹窗出现不等网络
-  renderPhSettingsOverlay(agent, presets);
+  renderPhSettingsOverlay(agent, presets, { initialTab });
   const stillOpen = () => Boolean(document.getElementById('ph-settings-host')?.querySelector('.feature-detail-overlay'));
   if (!presets.length) {
     try {
@@ -1000,7 +1000,7 @@ window.phToggleModelSlot = async () => {
   
   // 如果没有备选模型，打开配置面板
   if (!secondaryModel) {
-    window.phOpenSettings();
+    window.phOpenSettings({ initialTab: 'model' });
     return;
   }
   

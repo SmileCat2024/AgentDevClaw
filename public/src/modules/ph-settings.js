@@ -2,9 +2,8 @@
  * ph-settings.js — 编程小助手「工作空间设置」面板（UI 标题：工作空间设置）
  *
  * IDE 式布局：左侧分类列表 + 右侧配置区域。
- * 分类页：模型配置（含 coder 身份行）、进程模式、Feature 设置
- * （一级：身份入口列表；二级：编程小助手 agent 层 / coder 层配置编辑器）、
- * Coder 策略、通知、容器镜像——后三页仅 programming-helper 显示。
+ * 分类页：插件、Coder、模型配置、进程模式，以及 Coder 策略、通知、容器镜像。
+ * 插件页内部区分装配清单与能力参数；Coder 页直接编辑 Coder 的参数。
  * 历史名 ph-model-config：面板早期只有模型选择器，职责扩张后更名，勿再回用旧名。
  *
  * 外部依赖（通过全局作用域）：
@@ -21,9 +20,10 @@
  */
 'use strict';
 
-let _phSettingsTab = 'model'; // 'model' | 'process' | 'feature' | 'feature-main' | 'feature-coder'
-let _phFeatureSubTab = 'config'; // 身份页内分页器：'config'（Feature 配置）| 'mounts'（挂载管理）
+let _phSettingsTab = 'model'; // 'model' | 'process' | 'feature' | 'coder'
+let _phFeatureSubTab = 'mounts'; // 当前身份页的视图：装配清单 | 参数配置
 let _phFeatureEditor = null;
+let _phFeatureConfigTarget = null;
 
 function _closePhFeatureEditor() {
   if (_phFeatureEditor) {
@@ -140,114 +140,68 @@ function _renderModelConfigContent(agent, presets) {
   return '<div class="ph-mc-list">' + rows + '</div>';
 }
 
-// ── Feature 设置：身份入口列表 + 二级身份页（分页器）──────────
+// ── 工作空间插件与 Coder 配置页 ──────────────────────────────
+// 插件清单只管理用户装配的插件包与官方可选插件；内置运行时 Feature
+// 仍由会话中的 Features inspector 展示。插件参数编辑保留原配置树语义。
 //
-// 一级页按身份进入工作空间插件设置；
-// 二级页左上角切换「参数配置」与「插件与能力」；
-// 插件仓库是全局管理入口，添加动作由当前工作空间上下文启动。
-//
-// coder 白名单与 coder-agent.js 的挂载清单对齐（有配置 manifest 的部分）：
-// shell / memory / skill / github / force-continuation。coder 不挂 mcp、
-// audio-feedback、context-guard（其上下文接力 ContextRotationTriggerFeature
-// 为零配置装配）。lsp 等官方可选插件不在白名单内——装配后由 mountedExtras
-// 放行（见 feature-config-editor.js buildSections）。
+// Coder 参数的 allowlist 与 coder-agent.js 的有配置项挂载清单对齐：
+// shell / memory / skill / github / force-continuation。
 const PH_CODER_INCLUDE_FEATURES = ['shell', 'memory', 'skill', 'github', 'force-continuation'];
 
 const PH_FEATURE_PAGES = {
-  'feature-main': {
+  feature: {
     identityKey: 'main',
     scopeId: 'agent',
-    subtitleZh: '编程小助手整体的 Feature 配置，对所有项目目录生效；目录级配置可以覆盖',
-    subtitleEn: 'Feature config for the whole Programming Helper workspace; per-directory config can override it',
+    subtitleZh: '管理当前工作空间的插件及其能力参数',
+    subtitleEn: 'Manage workspace plugins and their capability settings',
   },
-  'feature-coder': {
+  coder: {
     identityKey: 'coder',
     scopeId: 'agent',
     scopeAgentId: 'coder',
-    includeFeatures: PH_CODER_INCLUDE_FEATURES,
-    subtitleZh: 'Coder APP 的 Feature 配置，仅含其实际挂载的 Feature',
-    subtitleEn: 'Feature config for the Coder APP, limited to its mounted features',
+    subtitleZh: '管理 Coder 的插件装配与能力参数',
+    subtitleEn: 'Manage Coder plugin assembly and capability settings',
   },
 };
 
-function _renderFeatureEntryList() {
-  const isZh = currentLanguage === 'zh';
-  const chevron = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-left:12px;"><path d="m9 18 6-6-6-6"></path></svg>';
-  const showCoder = window.phSettingsAgentId === 'programming-helper';
-
-  const entries = [{
-    key: 'feature-main',
-    title: isZh ? '配置编程小助手' : 'Configure Programming Helper',
-    desc: isZh ? '管理插件装配与参数；Feature 是插件提供给 Agent 的运行时能力' : 'Manage plugin assembly and settings; features are the runtime capabilities plugins provide to agents',
-  }];
-  if (showCoder) {
-    entries.push({
-      key: 'feature-coder',
-      title: isZh ? '配置 Coder' : 'Configure Coder',
-      desc: isZh ? '管理 Coder 的插件装配与参数；Feature 是插件提供给 Agent 的运行时能力' : 'Manage Coder plugin assembly and settings; features are the runtime capabilities plugins provide to agents',
-    });
-  }
-
-  const cards = entries.map(function(entry) {
-    return '<div class="ph-pm-card" data-action="phSettings.switchTab" data-tab="' + escapeHtml(entry.key) + '">'
-      + '<div class="ph-pm-card-body">'
-      + '<div class="ph-pm-card-title">' + escapeHtml(entry.title) + '</div>'
-      + '<div class="ph-pm-card-desc">' + escapeHtml(entry.desc) + '</div>'
-      + '</div>'
-      + '<span style="display:flex;align-items:center;color:var(--text-secondary);">' + chevron + '</span>'
-      + '</div>';
-  }).join('');
-
-  return '<div class="ph-pm-body">' + cards
-    + '<div class="ph-pm-intro">' + escapeHtml(isZh
-      ? '按身份分别配置 Feature 参数与挂载；Coder 层覆盖同名全局配置项。'
-      : 'Configure feature parameters and mounts per identity; the Coder layer overrides global values of the same keys.')
-    + '</div>'
-    + '</div>';
-}
-
 /**
- * 挂载管理视图（二级身份页分页之一）：默认装配 + $mount 扩展统一卡片网格。
- * 组织体系与右侧 Features 面板同源（window.ClawFW.featureCatalog）：
- * type 分组轴（能力/会话与行为/渠道与交互/系统组件）+ 能力下拉筛选；
- * 来源分页器（全部/默认内置/已安装）按装配事实过滤（默认装配 vs $mount），
- * 非 catalog 的静态 provenance 映射——与卡片徽章（默认/扩展）严格一致。
+ * 工作空间的可管理插件清单：只呈现用户装配的可选扩展，不暴露内部 Feature 清单。
+ * 内置 Feature 的运行时状态仍由会话中的 Features inspector 展示。
  */
-let _phMountSrcFilter = 'all';   // 'all' | 'bundled'（默认装配）| 'installed'（$mount 扩展）
-let _phMountCapFilter = 'all';   // catalog 能力词表 id
-let _phMountData = null;         // 最近一次拉取的装配数据（筛选切换不重打接口）
-const _phMountGroupOpenPref = new Map();
+let _phMountData = null;         // 最近一次拉取的工作空间插件装配数据
 
 async function _phRenderMountsView(identityKey) {
   const host = document.getElementById('ph-feature-mounts-host');
   if (!host) return;
+  host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml(currentLanguage === 'zh' ? '正在读取装配…' : 'Loading assembly…') + '</div>';
   try {
     const res = await fetch('/api/feature-store/overview');
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || (res.status + ' ' + res.statusText));
-    const base = data.base?.[identityKey] || [];
     const mounts = data.mounts?.[identityKey] || {};
-    const builtinSurface = new Map(
-      (data.builtin || []).map((item) => [item.runtimeName, item.surface]),
-    );
-
-    const entries = base.map(function(f) {
-      return {
-        name: f.name,
-        description: f.description || '',
-        surface: f.surface || null,
-        origin: 'bundled',
-      };
-    });
-    for (const [name, m] of Object.entries(mounts)) {
-      entries.push({
-        name,
-        description: m.missing ? (m.package + '@' + m.version) : '',
-        surface: m.kind === 'builtin' ? (builtinSurface.get(name) || null) : null,
-        origin: 'installed',
-        mount: m,
+    const baseFeatures = data.base?.[identityKey] || [];
+    const builtinByName = new Map((data.builtin || []).map((item) => [item.runtimeName, item]));
+    const entriesByName = new Map();
+    for (const item of baseFeatures) {
+      entriesByName.set(item.name, {
+        name: item.name,
+        description: item.description || '',
+        surface: item.surface || null,
+        origin: 'official',
+        mount: mounts[item.name] || null,
       });
     }
+    for (const [name, mount] of Object.entries(mounts)) {
+      const builtin = builtinByName.get(name);
+      entriesByName.set(name, {
+        name,
+        description: mount.missing ? (mount.package + '@' + mount.version) : (builtin?.description || ''),
+        surface: mount.kind === 'builtin' ? (builtin?.surface || null) : null,
+        origin: mount.kind === 'builtin' ? 'official' : 'installed',
+        mount,
+      });
+    }
+    const entries = [...entriesByName.values()];
     _phMountData = { identityKey, entries, envReady: data.envReady?.[identityKey] || null };
     _phRenderMountsBody(host);
   } catch (err) {
@@ -259,149 +213,49 @@ async function _phRenderMountsView(identityKey) {
 /** 纯渲染（数据取 _phMountData 缓存）：筛选切换与 catalog 就绪后的重渲染入口。 */
 function _phRenderMountsBody(host) {
   const isZh = currentLanguage === 'zh';
-  const fc = window.ClawFW && window.ClawFW.featureCatalog;
-  // catalog 未就绪：首帧按 _unmapped 兜底渲染，加载完成后重渲染修正分组
-  if (fc && !fc.getFeatureCatalogSnapshot()) {
-    fc.loadFeatureCatalog().then(function() {
-      if (document.getElementById('ph-feature-mounts-host') === host) _phRenderMountsBody(host);
-    }).catch(function() { /* catalog 不可用：保持兜底分组 */ });
-  }
-  const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
-  const capFilter = fc ? fc.normalizeCapFilter(_phMountCapFilter, catalog) : 'all';
-
   const entries = _phMountData.entries;
-  const srcFiltered = _phMountSrcFilter === 'all'
-    ? entries
-    : entries.filter(function(e) { return e.origin === _phMountSrcFilter; });
-  // enrich 兼容形状：声明面计数喂给运行时能力推导（tools/policy/skills/commands）
-  const features = srcFiltered.map(function(e) {
-    return {
-      name: e.name,
-      description: e.description,
-      tools: [],
-      toolCount: e.surface ? e.surface.tools : 0,
-      hookCount: e.surface ? e.surface.hooks : 0,
-      skillCount: e.surface ? e.surface.skills : undefined,
-      _entry: e,
-    };
+  const features = entries.map(function(e) {
+    return { name: e.name, description: e.description, _entry: e };
   });
-  // 声明面 commands 信号（surface.commands > 0 的名字集）走 enrich 的
-  // 运行时判定路径（commandFeatures.has），能力筛选的 commands 档用真值
-  const commandFeatures = new Map();
-  for (const e of entries) {
-    if (e.surface && e.surface.commands > 0) commandFeatures.set(e.name, e.surface.commands);
-  }
-  const groups = (fc && catalog)
-    ? fc.groupFeaturesByType(features, catalog, 'all', capFilter, { commandFeatures })
-    : (features.length ? [{ id: '_unmapped', features }] : []);
-
-  // 来源分页器（面板同款视觉配方）：各档计数按装配事实
-  const srcCounts = {
-    all: entries.length,
-    bundled: entries.filter(function(e) { return e.origin === 'bundled'; }).length,
-    installed: entries.filter(function(e) { return e.origin === 'installed'; }).length,
-  };
-  const srcKeys = { all: 'feature_filter_all', bundled: 'feature_filter_bundled', installed: 'feature_filter_installed' };
-  const seg = '<div class="usage-info-segment feature-src-seg" role="tablist">'
-    + ['all', 'bundled', 'installed'].map(function(f) {
-      return '<button type="button" role="tab" class="' + (f === _phMountSrcFilter ? 'active' : '') + '"'
-        + ' data-action="phSettings.setMountSrcFilter" data-filter="' + f + '">'
-        + escapeHtml(t(srcKeys[f])) + '<span class="feature-src-n">' + String(srcCounts[f]) + '</span></button>';
-    }).join('')
-    + '</div>';
-
-  const capSelect = (fc && catalog && Array.isArray(catalog.capabilities) && catalog.capabilities.length > 0)
-    ? '<select class="feature-cap-select" data-claw-select data-claw-compact="true" data-claw-no-scroll="true"'
-      + ' data-action="phSettings.setMountCapFilter">'
-      + ['all'].concat(catalog.capabilities.map(function(c) { return typeof c === 'string' ? c : c.id; }))
-        .map(function(id) {
-          return '<option value="' + escapeHtml(id) + '"' + (id === capFilter ? ' selected' : '') + '>'
-            + escapeHtml(t(id === 'all' ? 'feature_filter_all' : 'feature_cap_' + id)) + '</option>';
-        }).join('')
-      + '</select>'
-    : '';
 
   const addButton = '<button type="button" class="ph-mount-add" style="margin-left:auto;" data-action="phSettings.openFeatureStore" data-identity="' + escapeHtml(_phMountData.identityKey) + '">'
     + escapeHtml(isZh ? '+ 添加插件' : '+ Add Plugins') + '</button>';
 
   const buildCard = function(f) {
     const e = f._entry;
-    let provHtml = '';
-    let badgesHtml = '';
-    if (e.origin === 'bundled') {
-      provHtml = '<span class="feature-prov-badge">' + escapeHtml(isZh ? '默认' : 'default') + '</span>';
-    } else if (e.mount) {
-      const removeBtn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(isZh ? '移除' : 'Remove') + '"'
-        + ' data-action="phSettings.removeMountFeature" data-identity="' + escapeHtml(_phMountData.identityKey) + '" data-name="' + escapeHtml(f.name) + '">&#215;</button>';
-      if (e.mount.missing) {
-        badgesHtml = '<span class="feature-badge status-removed">' + escapeHtml(isZh ? '包已不在仓库' : 'missing') + '</span>' + removeBtn;
-      } else if (e.mount.kind === 'builtin') {
-        // builtin 是静态装配开关，无 package@version，徽标只表来源
-        provHtml = '<span class="feature-prov-badge">' + escapeHtml(isZh ? '扩展' : 'extension') + '</span>';
-        badgesHtml = removeBtn;
-      } else {
-        provHtml = '<span class="feature-prov-badge" title="' + escapeHtml(e.mount.package + '@' + e.mount.version) + '">'
-          + escapeHtml(isZh ? '扩展' : 'extension') + '</span>';
-        badgesHtml = removeBtn;
-      }
-    }
-    const displayName = fc ? fc.resolveDisplayName(f, currentLanguage) : f.name;
-    return _phMountCard(f.name, displayName, e.description, provHtml, badgesHtml, _phSurfaceDetail(e.surface));
+    const mount = e.mount;
+    const isOfficial = e.origin === 'official';
+    const provenance = isOfficial
+      ? '<span class="feature-prov-badge">' + escapeHtml(isZh ? '官方' : 'Official') + '</span>'
+      : '<span class="feature-prov-badge" title="' + escapeHtml((mount?.package || '') + '@' + (mount?.version || '')) + '">'
+        + escapeHtml(isZh ? '扩展' : 'Extension') + '</span>';
+    const configBtn = '<button type="button" class="fs-settings-btn" title="' + escapeHtml(isZh ? '配置参数' : 'Configure') + '"'
+      + ' data-action="phSettings.openFeatureConfig" data-name="' + escapeHtml(f.name) + '">&#9881;</button>';
+    const removeBtn = mount
+      ? '<button type="button" class="fs-list-remove" title="' + escapeHtml(isZh ? '移除插件' : 'Remove plugin') + '"'
+        + ' data-action="phSettings.removeMountFeature" data-identity="' + escapeHtml(_phMountData.identityKey) + '" data-name="' + escapeHtml(f.name) + '">&#215;</button>'
+      : '';
+    const missing = mount?.missing
+      ? '<span class="feature-badge status-removed">' + escapeHtml(isZh ? '包已不在仓库' : 'Missing package') + '</span>'
+      : '';
+    return _phMountCard(f.name, f.name, missing, provenance, configBtn + removeBtn, null);
   };
 
-  // 单一非兜底组时不渲染组头（面板同款）；折叠偏好挂载页自持
-  const suppressHeaders = groups.length === 1 && groups[0].id !== '_unmapped';
-  const buildGroup = function(group) {
-    const grid = '<div class="feature-grid ph-mount-grid">' + group.features.map(buildCard).join('') + '</div>';
-    if (suppressHeaders) return grid;
-    const isOpen = _phMountGroupOpenPref.has(group.id)
-      ? _phMountGroupOpenPref.get(group.id)
-      : !(fc && fc.typeCollapsedByDefault(group.id, catalog));
-    return '<details class="feature-group"' + (isOpen ? ' open' : '')
-      + ' data-action="phSettings.mountGroupToggled" data-group="' + escapeHtml(group.id) + '">'
-      + '<summary class="feature-group-bar">'
-      + '<span class="feature-group-chev" aria-hidden="true"></span>'
-      + '<span class="feature-group-title">' + escapeHtml(t(group.id === '_unmapped' ? 'feature_cat_unmapped' : 'feature_type_' + group.id)) + '</span>'
-      + '<span class="feature-group-count">' + String(group.features.length) + '</span>'
-      + '</summary>'
-      + grid
-      + '</details>';
-  };
-
-  // 空态：能力筛选受限或非"已安装"视图保持纯文案；"已安装"视图为空时
-  // 渲染空态卡片（取「交互页面」空态同款视觉配方：虚线卡片 + 图标块 +
-  // 标题 + 描述），添加入口由工具栏按钮承担
-  let emptyHtml;
-  if (capFilter !== 'all' || _phMountSrcFilter !== 'installed') {
-    emptyHtml = '<div class="feature-filter-empty">' + escapeHtml(t(
-      capFilter !== 'all' ? 'feature_filter_empty_cap' : 'feature_filter_empty'
-    )) + '</div>';
-  } else {
-    emptyHtml = '<div class="ph-mount-empty-cta">'
-      + '<div class="ph-mount-empty-icon" aria-hidden="true">'
-      + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">'
-      + '<rect x="3" y="3" width="18" height="18" rx="2"></rect>'
-      + '<path d="M12 8v8"></path>'
-      + '<path d="M8 12h8"></path>'
-      + '</svg></div>'
-      + '<div class="ph-mount-empty-title">' + escapeHtml(t('plugin_filter_empty_installed')) + '</div>'
-      + '<div class="ph-mount-empty-desc">' + escapeHtml(isZh
-        ? '从插件商店为该身份装配扩展，对新会话生效。'
-        : 'Install extensions for this identity from the plugin store; takes effect on new sessions.')
-      + '</div>'
-      + '</div>';
-  }
-  const groupsHtml = groups.map(buildGroup).join('') || emptyHtml;
+  const cardsHtml = features.map(buildCard).join('');
+  const emptyHtml = '<div class="ph-mount-empty-cta">'
+    + '<div class="ph-mount-empty-title">' + escapeHtml(isZh ? '暂无可配置的 Feature' : 'No configurable features') + '</div>'
+    + '<div class="ph-mount-empty-desc">' + escapeHtml(isZh
+      ? '此身份当前没有已装配的可选插件。'
+      : 'No optional plugins are currently assembled for this identity.') + '</div></div>';
 
   host.innerHTML = '<div class="ph-mounts-body">'
     + _phEnvNoticeHtml()
-    + '<div class="hooks-section-header feature-panel-head">'
-    + seg + capSelect + addButton
-    + '</div>'
-    + groupsHtml
+    + '<div class="ph-mount-toolbar"><div><div class="ph-mount-toolbar-title">'
+    + escapeHtml(isZh ? '已装配能力' : 'Assembled capabilities') + '</div><div class="ph-mount-toolbar-hint">'
+    + escapeHtml(isZh ? '官方内置能力与已添加插件均可直接进入参数设置。' : 'Configure official capabilities and installed plugins here.')
+    + '</div></div>' + addButton + '</div>'
+    + '<div class="ph-mount-list">' + (cardsHtml || emptyHtml) + '</div>'
     + '</div>';
-  // select 是 innerHTML 异步渲染后插入的，手动做 ClawSelect 增强
-  if (window.ClawSelect) window.ClawSelect.enhanceAll(host);
 }
 
 let _phRebuildBusy = false;
@@ -451,60 +305,20 @@ const _phRebuildEnv = async function() {
   }
 };
 
-const _phSetMountSrcFilter = function(f) {
-  if (['all', 'bundled', 'installed'].indexOf(f) === -1 || f === _phMountSrcFilter) return;
-  _phMountSrcFilter = f;
-  const host = document.getElementById('ph-feature-mounts-host');
-  if (_phMountData && host) _phRenderMountsBody(host);
-};
-
-const _phSetMountCapFilter = function(v) {
-  if (typeof v !== 'string' || !v || v === _phMountCapFilter) return;
-  _phMountCapFilter = v;
-  const host = document.getElementById('ph-feature-mounts-host');
-  if (_phMountData && host) _phRenderMountsBody(host);
-};
-
-const _phMountGroupToggled = function(groupId, open) {
-  _phMountGroupOpenPref.set(groupId, open);
-};
-
-// 商店写操作后的刷新钩子：当前挂载管理页可见时重拉（feature-store.js 调用）
-window._phRefreshMountsView = function() {
+// 商店写操作后的刷新钩子：插件页当前显示清单时重拉。
+window._phRefreshMountsView = function(identityKey) {
   const page = PH_FEATURE_PAGES[_phSettingsTab];
-  if (page && _phFeatureSubTab === 'mounts') {
+  if (page && page.identityKey === (identityKey || page.identityKey) && _phFeatureSubTab === 'mounts') {
     _phRenderMountsView(page.identityKey);
   }
 };
 
-// 关闭弹窗时重置页内细节态（身份落点/二级页签/筛选/分组折叠/数据缓存）。
-// 设置弹窗只记忆一级分页（模型配置/进程模式/Feature 设置，_phSettingsTab）。
+// 关闭弹窗时清理本页的临时数据；设置弹窗记忆当前一级页签。
 window._phResetFeaturePageState = function() {
-  if (PH_FEATURE_PAGES[_phSettingsTab]) _phSettingsTab = 'feature';
-  _phFeatureSubTab = 'config';
-  _phMountSrcFilter = 'all';
-  _phMountCapFilter = 'all';
-  _phMountGroupOpenPref.clear();
   _phMountData = null;
+  _phFeatureSubTab = 'mounts';
+  _phFeatureConfigTarget = null;
 };
-
-/**
- * 声明面数量行：与 Features 面板卡片的 feature-card-detail 同结构。
- * tools 为同步声明面计数（运行时连接的外部工具如 mcp 不在声明面）；
- * surface 为空（仓库包装配，无静态计数）时不渲染。
- */
-function _phSurfaceDetail(surface) {
-  if (!surface) return '';
-  return '<div class="feature-card-detail">'
-    + '<span>' + String(surface.hooks) + ' hooks</span>'
-    + '<span>' + String(surface.tools) + ' tools</span>'
-    + '<span>' + String(surface.skills) + ' skills</span>'
-    + '<span>' + String(surface.commands) + ' commands</span>'
-    + '</div>';
-}
-// 商店面板（feature-store.js）共用声明面数量行渲染（跨模块经 CLAWFW 命名空间）
-window.ClawFW = window.ClawFW || {};
-window.ClawFW.phSurfaceDetail = _phSurfaceDetail;
 
 /**
  * 复用 Features 面板 feature-card 结构；displayName 为 catalog 解析的展示名
@@ -831,7 +645,11 @@ const _phToggleNotificationFinish = async function(agentId, checked) {
 
 // ── Main panel render ─────────────────────────────────────────
 
-function renderPhSettingsOverlay(agent, presets) {
+function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
+  if (initialTab && (initialTab === 'model' || initialTab === 'feature' || initialTab === 'coder')) {
+    _phSettingsTab = initialTab;
+    if (PH_FEATURE_PAGES[initialTab]) { _phFeatureSubTab = 'mounts'; _phFeatureConfigTarget = null; }
+  }
   const host = ensurePhSettingsHost();
   if (!agent) { host.innerHTML = ''; _closePhFeatureEditor(); return; }
   if (_phSettingsTab === 'coder-policy' && window.phSettingsAgentId !== 'programming-helper') {
@@ -850,79 +668,16 @@ function renderPhSettingsOverlay(agent, presets) {
     ? getFeatureCreatorProjects(agent) : [];
   window._phCurrentProject = projects.find(p => p.openDirectory === agent?.workspace_state?.openDirectory) || projects[0] || null;
 
-  // ── Feature 设置二级页：按身份进入，页内分页器切换配置/挂载 ──
   const featurePage = PH_FEATURE_PAGES[_phSettingsTab];
-  if (featurePage) {
-    if (typeof createFeatureConfigEditor !== 'function') {
-      _phSettingsTab = 'model';
-    } else {
-      _closePhFeatureEditor();
-
-      const identityLabel = featurePage.identityKey === 'coder'
-        ? (isZh ? 'Coder' : 'Coder')
-        : (isZh ? '编程小助手' : 'Programming Helper');
-      const pageName = 'Feature';
-
-      // 页内分页器（左上角）：复用会话列表同款 ph-session-tab 样式
-      const subTabs = [
-        { key: 'config', label: isZh ? '插件参数' : 'Plugin Settings' },
-        { key: 'mounts', label: isZh ? '插件与能力' : 'Plugins & Features' },
-      ];
-      const subTabItems = subTabs.map((t) =>
-        '<button type="button" class="ph-session-tab' + (_phFeatureSubTab === t.key ? ' active' : '') + '" data-action="phSettings.switchFeatureSubTab" data-sub="' + escapeHtml(t.key) + '">' + escapeHtml(t.label) + '</button>'
-      ).join('');
-
-      let bodyHtml;
-      if (_phFeatureSubTab === 'mounts') {
-        bodyHtml = '<div style="overflow-y:auto;flex:1;" id="ph-feature-mounts-host">'
-          + '<div class="ph-settings-empty" style="padding:32px 24px;">...</div>'
-          + '</div>';
-      } else {
-        bodyHtml = '<div class="ph-settings-feature-wrap" id="ph-feature-config-host"></div>';
-      }
-
-      host.innerHTML = [
-        '<div class="feature-detail-overlay">',
-        '<div class="feature-detail-window ph-settings-window">',
-        '<div class="feature-detail-head">',
-        '<div style="display:flex;align-items:center;gap:4px;">',
-        '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" data-action="phSettings.featureBack" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>',
-        '<div>',
-        '<div class="feature-detail-title">' + escapeHtml((isZh ? '工作空间设置 · ' : 'Workspace Settings · ') + identityLabel + ' ' + pageName) + '</div>',
-        '<div class="feature-detail-subtitle">' + escapeHtml(_phFeatureSubTab === 'mounts'
-          ? (isZh ? '当前身份挂载的全部 Feature：默认装配与扩展，统一管理' : 'All mounted features for this identity: defaults and extensions in one view')
-          : (isZh ? featurePage.subtitleZh : featurePage.subtitleEn)) + '</div>',
-        '</div>',
-        '</div>',
-        '<button class="feature-detail-close" type="button" data-action="phSettings.close">&times;</button>',
-        '</div>',
-        // 行左右 10px + tab 自身 14px 内边距 = 文字与正文 24px 左右缘对齐
-        '<div style="display:flex;align-items:flex-end;padding:0 10px;border-bottom:1px solid var(--border-color,#2a2a35);">' + subTabItems + '</div>',
-        bodyHtml,
-        '</div>',
-        '</div>',
-      ].join('');
-
-      if (_phFeatureSubTab === 'mounts') {
-        _phRenderMountsView(featurePage.identityKey);
-      } else {
-        _phFeatureEditor = createFeatureConfigEditor({
-          host: document.getElementById('ph-feature-config-host'),
-          scopeId: featurePage.scopeId,
-          ...(featurePage.scopeAgentId ? { scopeAgentId: featurePage.scopeAgentId } : {}),
-          ...(featurePage.includeFeatures ? { includeFeatures: featurePage.includeFeatures } : {}),
-        });
-        _phFeatureEditor.open();
-      }
-      return;
-    }
-  }
   _closePhFeatureEditor();
 
   const tabs = [
+    ...(window.phSettingsAgentId === 'programming-helper' ? [
+      { key: 'feature', label: isZh ? '插件' : 'Plugins', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/></svg>' },
+      { key: 'coder', label: 'Coder', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/></svg>' },
+    ] : []),
     { key: 'model', label: isZh ? '模型配置' : 'Model Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
     { key: 'process', label: isZh ? '进程模式' : 'Process Mode', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>' },
-    { key: 'feature', label: isZh ? 'Feature 设置' : 'Feature Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M2 14h4"/><path d="M10 8h4"/><path d="M18 16h4"/></svg>' },
     ...(window.phSettingsAgentId === 'programming-helper' ? [{
       key: 'coder-policy',
       label: isZh ? 'Coder 策略' : 'Coder Policy',
@@ -949,8 +704,20 @@ function renderPhSettingsOverlay(agent, presets) {
   let contentHtml;
   if (_phSettingsTab === 'model') {
     contentHtml = _renderModelConfigContent(agent, presets);
-  } else if (_phSettingsTab === 'feature') {
-    contentHtml = _renderFeatureEntryList();
+  } else if (featurePage) {
+    const identityKey = featurePage.identityKey;
+    const featureSubTabs = [
+      { key: 'mounts', label: isZh ? '装配' : 'Assembly' },
+      { key: 'config', label: isZh ? '参数' : 'Settings' },
+    ].map((item) => '<button type="button" class="ph-session-tab' + (_phFeatureSubTab === item.key ? ' active' : '')
+      + '" data-action="phSettings.switchFeatureSubTab" data-sub="' + item.key + '">' + item.label + '</button>').join('');
+    contentHtml = '<div class="ph-settings-feature-page" data-identity="' + escapeHtml(identityKey) + '">'
+      + '<div class="ph-settings-feature-tabs">' + featureSubTabs + '</div>'
+      + (_phFeatureSubTab === 'config'
+        ? '<div class="ph-settings-feature-wrap" id="ph-feature-config-host"></div>'
+        : '<div class="ph-settings-feature-mounts" id="ph-feature-mounts-host"><div class="ph-settings-empty">'
+          + escapeHtml(isZh ? '正在读取装配…' : 'Loading assembly…') + '</div></div>')
+      + '</div>';
   } else if (_phSettingsTab === 'coder-policy') {
     contentHtml = '<div class="ph-mc-list" id="ph-coder-policy-host">'
       + '<div class="ph-settings-empty">' + escapeHtml(isZh ? '正在读取 Coder 策略…' : 'Loading Coder policy…') + '</div>'
@@ -971,8 +738,8 @@ function renderPhSettingsOverlay(agent, presets) {
 
   const subtitle = _phSettingsTab === 'model'
     ? (isZh ? '为主代理设置主模型和备选模型，其他角色设置单个模型' : 'Set primary and secondary models for main agent, single model for other roles')
-    : _phSettingsTab === 'feature'
-      ? (isZh ? '按插件设置参数；全局默认可由各工作空间覆盖' : 'Configure plugin settings; workspaces can override global defaults')
+    : featurePage
+      ? (isZh ? featurePage.subtitleZh : featurePage.subtitleEn)
       : _phSettingsTab === 'coder-policy'
         ? (isZh ? '配置关联工作空间 Coder 的运行数量与接续策略' : 'Configure concurrency and rotation strategy for the linked Coder workspace')
         : _phSettingsTab === 'notification'
@@ -1003,6 +770,19 @@ function renderPhSettingsOverlay(agent, presets) {
     '</div>',
   ].join('');
 
+  if (featurePage && _phFeatureSubTab === 'mounts') {
+    _phRenderMountsView(featurePage.identityKey);
+  }
+  if (featurePage && _phFeatureSubTab === 'config' && typeof createFeatureConfigEditor === 'function') {
+    const target = _phFeatureConfigTarget;
+    _phFeatureEditor = createFeatureConfigEditor({
+      host: document.getElementById('ph-feature-config-host'),
+      scopeId: featurePage.scopeId,
+      ...(featurePage.scopeAgentId ? { scopeAgentId: featurePage.scopeAgentId } : {}),
+      ...(target?.identityKey === featurePage.identityKey ? { initialFeature: target.name } : {}),
+    });
+    _phFeatureEditor.open();
+  }
   if (_phSettingsTab === 'coder-policy') _phLoadCoderPolicy();
   if (_phSettingsTab === 'container-images') {
     // 容器镜像页：声明域宿主（服务端按名册 host 关系圈定本工作空间 + 子应用），
@@ -1020,8 +800,8 @@ function renderPhSettingsOverlay(agent, presets) {
   }
 }
 const _phSwitchSettingsTab = (tab) => {
-  // 进入身份页时重置页内分页器（身份落点变化，回到默认页）
-  if (PH_FEATURE_PAGES[tab]) _phFeatureSubTab = 'config';
+  // 插件清单与能力参数只属于主工作空间插件页；Coder 使用独立配置页。
+  if (PH_FEATURE_PAGES[tab]) { _phFeatureSubTab = 'mounts'; _phFeatureConfigTarget = null; }
   _phSettingsTab = tab;
   const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
   if (agent) {
@@ -1032,6 +812,7 @@ const _phSwitchSettingsTab = (tab) => {
 
 const _phSwitchFeatureSubTab = (sub) => {
   if (sub !== 'config' && sub !== 'mounts') return;
+  if (sub === 'mounts') _phFeatureConfigTarget = null;
   _phFeatureSubTab = sub;
   const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
   if (agent) {
@@ -1040,16 +821,11 @@ const _phSwitchFeatureSubTab = (sub) => {
   }
 };
 
-// 返回 Feature 一级页（二级页 head 左侧返回按钮）。agent 现取，与 _phSwitchSettingsTab 同构
-// （设置弹窗模态期间当前 agent 不变；原为渲染闭包捕获，收敛全局时改模块级）。
-const _phFeatureBack = () => {
-  _closePhFeatureEditor();
-  _phSettingsTab = 'feature';
-  const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
-  if (agent) {
-    const presets = getClawModelPresets();
-    renderPhSettingsOverlay(agent, presets);
-  }
+const _phOpenFeatureConfig = (el) => {
+  const page = PH_FEATURE_PAGES[_phSettingsTab];
+  if (!page) return;
+  _phFeatureConfigTarget = { identityKey: page.identityKey, name: el.dataset.name };
+  _phSwitchFeatureSubTab('config');
 };
 
 // details 的 toggle 不冒泡，分发器必须以 capture 绑定（与 debug-features-hooks
@@ -1060,8 +836,6 @@ window.ClawFW.actions.registerMany({
   'phSettings.autoSaveModel': () => window.phAutoSaveModelConfig(),
   'phSettings.modelSlotChanged': (el) => window.phModelSlotChanged(el),
   'phSettings.switchTab': (el) => _phSwitchSettingsTab(el.dataset.tab),
-  'phSettings.setMountSrcFilter': (el) => _phSetMountSrcFilter(el.dataset.filter),
-  'phSettings.setMountCapFilter': (el) => _phSetMountCapFilter(el.value),
   'phSettings.openFeatureStore': (el) => window.phOpenFeatureStore(el.dataset.identity),
   'phSettings.removeMountFeature': (el) => window._fsRemoveFor(el.dataset.identity, el.dataset.name),
   'phSettings.rebuildEnv': () => _phRebuildEnv(),
@@ -1071,7 +845,6 @@ window.ClawFW.actions.registerMany({
   'phSettings.saveCoderThreadLimit': (el) => phSaveCoderThreadLimit(el.value),
   'phSettings.toggleNotifyFinish': (el) => _phToggleNotificationFinish(el.dataset.agent, el.checked),
   'phSettings.switchFeatureSubTab': (el) => _phSwitchFeatureSubTab(el.dataset.sub),
-  'phSettings.mountGroupToggled': (el) => _phMountGroupToggled(el.dataset.group, el.open),
-  'phSettings.featureBack': () => _phFeatureBack(),
+  'phSettings.openFeatureConfig': (el) => _phOpenFeatureConfig(el),
   'phSettings.close': () => window.phCloseSettings(),
 });
