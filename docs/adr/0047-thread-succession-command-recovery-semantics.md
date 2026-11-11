@@ -98,6 +98,8 @@
 
 阶段 3b 之后，带 `commandIdentity` 的线程指令被显式排除在 Viewer 的 lease 直答与队首转交之外（正确性要求：直答会绕过持久 lease、身份校验与回执盖戳）。随之而来的副作用是：**空闲会话的用户输入只能等 runtime 的 passive mailbox 轮询（`PASSIVE_MAILBOX_POLL_INTERVAL_MS = 1000`）消费**，交互场景下消息在队列停留 0.5–1 s，表现为输入框上方排队气泡短暂闪现后消息才上屏。改动前（框架 `6ede208` 之前）该路径走 lease 直答，毫秒级，因此观感变化来自消费模型的切换而非链路变慢。
 
-处置只缩短“发现”的延迟，不改消费协议：Viewer 作为队列事实的唯一持有方，在输入**入队落盘成功之后**经 runtime 的 UDS 连接下发 `queued-input-available` 帧（仅 `{type, agentId}`，不携带队列数据）；DebugHub 分发至宿主注册的回调，宿主把该信号接到 passive loop 的 `poke()`，提前唤醒间隔等待。轮询保留为兜底——信号丢失只损失一个轮询周期；忙时（claim / envelope 执行中）到达的信号被忽略，串行消费不受影响。
+处置只缩短“发现”的延迟，不改消费协议：Viewer 作为队列事实的唯一持有方，在输入**入队落盘成功之后**经 runtime 的 UDS 连接下发 `queued-input-available` 帧（仅 `{type, agentId}`，不携带队列数据）；DebugHub 分发至宿主注册的回调，宿主把该信号接到 passive loop 的 `poke()`，提前唤醒间隔等待。
 
-边界：帧不是第二事实来源，领取仍走完整 claim/ack 协议；信号重复到达时 claim 返回空、无副作用。实测（隔离实例、真实 server + 真实 runtime、空闲会话发送）接收→上屏间隔 39 ms；改动前同口径为 552 / 1011 ms。取样限制：隔离实例无可用模型凭证，发送后模型调用即报错，只测得首轮计时，后续轮次无法在同一实例内重复取样。测试：框架侧 `debug-hub-queued-notify`（分发与 per-agent/全局优先级、rejection 不外溢、注销）、`viewer-worker-queued-notify`（落盘后发帧、纯信号字段、lease 直答路径不通知、write 失败不影响入队事实）；Claw 侧 `runtime-passive-mailbox` 的 poke 用例（提前唤醒、忙时忽略、串行保持）。
+信号**保持到被消费或超窗**（`SIGNAL_HOLD_MS = 3000`），其间循环以 50 ms 短间隔重试：唤醒后本轮可能因 CallArbiter 仍在上一轮收尾而无法领取，若此时即作废信号，指令仍要等满一个轮询周期（1 s）——用户看到的“空闲”与 arbiter 的实际状态不一致，正是首轮修复后仍有可见延迟的原因。领取无果或队列已空时清除信号、回退常规轮询，不长时间忙转。
+
+边界：帧不是第二事实来源，领取仍走完整 claim/ack 协议；信号重复到达时 claim 返回空、无副作用。实测（隔离实例、真实 server + 真实 runtime、空闲会话发送）接收→上屏间隔 39 ms；改动前同口径为 552 / 1011 ms。取样限制：隔离实例无可用模型凭证，发送后模型调用即报错，只测得首轮计时，后续轮次无法在同一实例内重复取样。测试：框架侧 `debug-hub-queued-notify`（分发与 per-agent/全局优先级、rejection 不外溢、注销）、`viewer-worker-queued-notify`（落盘后发帧、纯信号字段、lease 直答路径不通知、write 失败不影响入队事实）；Claw 侧 `runtime-passive-mailbox` 的 poke 用例（提前唤醒、忙时忽略、信号跨忙窗口存活并在 arbiter 空闲后立即消费、队列空后停止加速轮询），其中「信号跨忙窗口存活」经变异验证——回退为唤醒即作废则该用例失败。

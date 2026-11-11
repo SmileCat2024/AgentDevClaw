@@ -349,6 +349,62 @@ describe('createPassiveMailboxLoop poke (queued-input-available signal)', () => 
       await running;
     }
   });
+
+  it('keeps the signal while the arbiter is busy and consumes as soon as it turns idle', async () => {
+    // 真实交互场景：用户看到「空闲」时，CallArbiter 可能仍在上一轮收尾。
+    // 若这时的信号被作废，指令要等满一个轮询周期（1s）才被看见。
+    const arbiter = createMockArbiter({ status: 'running' });
+    const harness = createHarness({
+      arbiter,
+      pollIntervalMsOverride: 60_000, // 常规间隔远大于观察窗：只有短间隔重试能命中
+      fetchImpl: async () => jsonResponse({ input: { text: 'after-busy' } }),
+    });
+    const running = harness.loop.run();
+    try {
+      harness.loop.poke();
+      // 忙期间即便反复唤醒也不得 claim（串行/idle-only 契约不变）
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.equal(arbiter.calls.enqueued.length, 0, 'busy arbiter must not be preempted');
+      assert.equal(arbiter.calls.statusQueries > 0, true, 'loop keeps re-checking while the signal is held');
+
+      arbiter.setStatus('idle');
+      assert.ok(
+        await until(() => arbiter.calls.enqueued.length === 1, 600),
+        'signal must survive the busy window and consume right after the arbiter turns idle',
+      );
+      assert.equal(arbiter.calls.enqueued[0].text, 'after-busy');
+    } finally {
+      harness.dispose();
+      harness.loop.poke();
+      await running;
+    }
+  });
+
+  it('drops the held signal once the mailbox is empty (no lingering fast polling)', async () => {
+    const arbiter = createMockArbiter();
+    let fetchCount = 0;
+    const harness = createHarness({
+      arbiter,
+      pollIntervalMsOverride: 60_000,
+      fetchImpl: async () => {
+        fetchCount++;
+        return jsonResponse({ input: null }); // 队列已空
+      },
+    });
+    const running = harness.loop.run();
+    try {
+      harness.loop.poke();
+      assert.ok(await until(() => fetchCount >= 1, 500));
+      const afterFirst = fetchCount;
+      // 队列空即清除信号：不再以短间隔续转，退回常规间隔（此值远大于观察窗）
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(fetchCount, afterFirst, 'empty mailbox must stop the fast retry loop');
+    } finally {
+      harness.dispose();
+      harness.loop.poke();
+      await running;
+    }
+  });
 });
 
 describe('createPassiveMailboxLoop viewer HTTP face addressing (ADR-0037 decision 3)', () => {

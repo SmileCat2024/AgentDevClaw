@@ -63,10 +63,20 @@ export function createPassiveMailboxLoop(ctx) {
   // ── 可中断轮询间隔（poke 加速信号）──────────────────────────────
   // viewer 在输入入队落盘后经 queued-input-available 帧提醒 runtime 立即
   // 消费（debug-hub 分发 → poke()）。信号只是把「下一次轮询」提前，不参与
-  // 任何正确性：丢失时最多回到纯轮询节奏；忙时（claim / envelope 执行中）
-  // 到达则忽略——串行消费完成后循环自然继续。单一循环结构保证同一时刻
-  // 只有一轮消费在跑，poke 不会造成并发 claim。
+  // 任何正确性：丢失时最多回到纯轮询节奏。单一循环结构保证同一时刻只有
+  // 一轮消费在跑，poke 不会造成并发 claim。
+  //
+  // 信号保持到被消费：唤醒后本轮可能因 arbiter 仍在收尾（上一轮 call 的
+  // 结束窗口）而无法领取。若此时就把信号作废，指令要等满一个轮询周期
+  // （1s）才被看见——交互场景下正是可见的延迟。因此信号在「未消费」期间
+  // 保持有效，循环改用短间隔重试，直到领取成功或队列为空；超过
+  // SIGNAL_HOLD_MS 仍无法消费则放弃加速、回退常规轮询，避免长时间忙转。
+  const SIGNAL_RETRY_MS = 50;
+  const SIGNAL_HOLD_MS = 3000;
   let _wake = null; // () => void：当前处于间隔等待时的提前唤醒句柄
+  let _signalPending = false; // 有已到达但尚未消费完的信号
+  let _signalDeadline = 0;
+
   function _waitPollInterval(ms) {
     return new Promise((resolve) => {
       let settled = false;
@@ -82,7 +92,16 @@ export function createPassiveMailboxLoop(ctx) {
     });
   }
   function poke() {
+    _signalPending = true;
+    _signalDeadline = Date.now() + SIGNAL_HOLD_MS;
     if (_wake) _wake();
+  }
+  function _signalHeld() {
+    return _signalPending && Date.now() < _signalDeadline;
+  }
+  function _clearSignal() {
+    _signalPending = false;
+    _signalDeadline = 0;
   }
 
   async function dequeueInput(agentId) {
@@ -142,7 +161,9 @@ export function createPassiveMailboxLoop(ctx) {
 
   async function run() {
     while (!ctx.isDisposed()) {
-      await _waitPollInterval(pollIntervalMs);
+      // 信号保持期间用短间隔重试：让「arbiter 忙 → 空闲」的转变被及时捕捉，
+      // 而不必等满整个轮询周期。超窗后回退常规间隔。
+      await _waitPollInterval(_signalHeld() ? SIGNAL_RETRY_MS : pollIntervalMs);
       if (ctx.isDisposed()) break;
 
       const agentId = ctx.agent?.agentId;
@@ -150,6 +171,7 @@ export function createPassiveMailboxLoop(ctx) {
 
       // Idle-only consumption: while a call is in flight the mailbox belongs
       // to react-loop's step-boundary drain and the arbiter's safety net.
+      // 信号保持有效：本轮领不到不代表队列里没有，等它空闲后重试。
       if (ctx.callArbiter.getStatus().status !== 'idle') continue;
 
       let input = null;
@@ -158,7 +180,11 @@ export function createPassiveMailboxLoop(ctx) {
       } catch {
         continue;
       }
-      if (!input || typeof input.text !== 'string' || input.text.length === 0) continue;
+      // 队列已空（领取无果）：信号目的已达成，不再加速轮询。
+      if (!input || typeof input.text !== 'string' || input.text.length === 0) {
+        _clearSignal();
+        continue;
+      }
 
       const receipt = input.inputLease;
       if (receipt && typeof ctx.agent?.getContext === 'function') {
