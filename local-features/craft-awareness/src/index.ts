@@ -11,8 +11,9 @@
  *   正文，`[工程素养] ` 前缀由代码统一添加。改文案只需改 md 并重启 agent。
  *   构建时 knowledge/ 随 skills 同款机制拷入 dist（copy-local-feature-skills.mjs）。
  *
- * 冷却按条目 id 记账（每会话每条目一次）。新增素养提醒 = 代码加条目 +
- * knowledge 放对应 md，机制不动。
+ * 普通提醒的冷却按条目 id 记账（每会话每条目一次）。完成承接提醒不走这套
+ * 永久冷却，而是按 Todo 从未完成状态进入 completed 的真实状态转换触发。新增
+ * 普通素养提醒 = 代码加条目 + knowledge 放对应 md，机制不动。
  *
  * 技能携带（skills/ 目录）：本 feature 同时是 grill-me 技能（设计树拷问与执行期回溯）
  * 的载具——框架 collectFeatureSkills 按 dirname(source)/skills 约定自动
@@ -23,6 +24,11 @@
  * 条目 handoff-context-calibration：只有框架 HandoffSeedFeature 已实际注入非空接续内容，
  * 才在首个 StepStart 注入校准提醒；普通新会话、快照恢复及无 seed 的 handoff 不触发。
  * 触发事实由框架 HandoffSeedFeature.captureState() 的注入账目判定，不按新 runtime 猜测。
+ *
+ * - 条目 todo-completion-reflection：Todo 工具成功把 pending/in_progress 任务推进为
+ *   completed 后，在下一步 StepStart 注入一条结合任务 kind、描述与交付物的承接提醒。
+ *   ToolUse 只记录候选，ToolFinished 确认成功状态，下一步 StepStart 合并同一步的多个完成项；
+ *   不把重复完成、失败更新或删除任务算作完成，也不要求模型立即复盘或追加验收。
  *
  * 条目一 doc-reader-awareness：write 写出成规模的文档文件（markdown/txt，
  * 默认 ≥30 行）或 edit 编辑此类文件成功后，注入"文档读者视角"写法标准。
@@ -50,8 +56,33 @@ import { readdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, HookDeclarations } from '@agentdevjs/core';
-import type { CallStartContext, Context, StepStartContext, ToolFinishedDecisionContext } from '@agentdevjs/core';
+import type { Context, StepStartContext, ToolContext, ToolFinishedDecisionContext } from '@agentdevjs/core';
 import { CoreLifecycle } from '@agentdevjs/core';
+
+type CompletionKind = 'investigate' | 'design' | 'implement' | 'fix' | 'verify' | 'other';
+type CompletionStatus = 'pending' | 'in_progress' | 'completed' | 'deleted';
+
+interface TodoCompletionTask {
+  id: string;
+  subject: string;
+  description?: string;
+  deliver?: string;
+  kind?: CompletionKind;
+  status: CompletionStatus;
+}
+
+interface TodoCompletionCandidate {
+  callId: string;
+  step: number;
+  taskId: string;
+}
+
+const TODO_TOOL_NAME = 'task_update';
+const TODO_COMPLETION_ENTRY_ID = 'todo-completion-reflection';
+const TODO_COMPLETION_KIND_IDS = ['investigate', 'design', 'implement', 'fix', 'verify', 'other'] as const;
+const COMPLETION_SUBJECT_MAX_LENGTH = 160;
+const COMPLETION_DESCRIPTION_MAX_LENGTH = 500;
+const COMPLETION_DELIVER_MAX_LENGTH = 300;
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -122,7 +153,7 @@ function isTodoPlanDefinitionUpdate(event: CraftToolEvent): boolean {
   if (event.toolName === 'task_clear') return true;
   if (event.toolName !== 'task_update') return false;
   const args = event.args && typeof event.args === 'object' ? event.args : {};
-  return ['subject', 'description', 'kind'].some((key) => Object.hasOwn(args, key)) || args.status === 'deleted';
+  return ['subject', 'description', 'deliver', 'kind'].some((key) => Object.hasOwn(args, key)) || args.status === 'deleted';
 }
 
 /** 源码落盘或 Todo 定义变更后，提示模型沿已定目标与设计回溯。 */
@@ -265,6 +296,10 @@ const CRAFT_ENTRIES: readonly CraftEntry[] = [
 export class CraftAwarenessFeature implements AgentFeature {
 
   static hooks: HookDeclarations = {
+    resetTodoCompletionState: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+    recordTodoCompletionCandidate: { lifecycle: CoreLifecycle.ToolUse, kind: 'observe' as const },
+    confirmTodoCompletion: { lifecycle: CoreLifecycle.ToolFinished, kind: 'observe' as const },
+    injectTodoCompletionReflection: { lifecycle: CoreLifecycle.StepStart, kind: 'observe' as const },
     injectCraftReminder: { lifecycle: CoreLifecycle.ToolFinished, kind: 'observe' as const },
     injectHandoffCalibration: { lifecycle: CoreLifecycle.StepStart, kind: 'observe' as const },
   };
@@ -273,8 +308,14 @@ export class CraftAwarenessFeature implements AgentFeature {
   readonly source = __filename.replace(/\\/g, '/');
   readonly description = '按接续及文档、测试和源码改动时机注入工程素养提醒；并携带 grill-me 技能。';
 
-  /** 已注入条目记账（id → true），随会话快照持久化。 */
+  /** 普通素养条目已注入记账（id → true），随会话快照持久化；完成承接提醒不使用此表。 */
   private injectedEntries: Record<string, true> = {};
+  /** 当前 Step 中成功推进到 completed 的任务候选，按工具调用确认后消费。 */
+  private todoCompletionCandidates = new Map<string, TodoCompletionCandidate>();
+  /** 当前 Step 的临时标识；完成提醒不跨 Step 暂存。 */
+  private todoCompletionStep: number | undefined;
+  /** 当前 Step 已确认完成的任务，下一步开始时合并注入后清空。 */
+  private completedTodoTasks = new Map<string, TodoCompletionTask>();
   /** 条目 id → 注入正文（构造时从 knowledge 目录加载一次）。 */
   private readonly knowledge: Map<string, string>;
   /**
@@ -293,6 +334,13 @@ export class CraftAwarenessFeature implements AgentFeature {
 
   async onInitiate(ctx: FeatureInitContext): Promise<void> {
     this.logger = ctx.logger;
+  }
+
+  /** 每个 Call 开始时清理未完成的临时候选，避免跨 Call 误认。 */
+  async resetTodoCompletionState(): Promise<void> {
+    this.todoCompletionStep = undefined;
+    this.todoCompletionCandidates.clear();
+    this.completedTodoTasks.clear();
   }
 
   /**
@@ -338,6 +386,109 @@ export class CraftAwarenessFeature implements AgentFeature {
     this.testFileChanges.set(key, Math.min((this.testFileChanges.get(key) ?? 0) + 1, TEST_CRAFT_LAYERS.length));
   }
 
+  /**
+   * 在一个 ReAct Step 开始处理 Todo 工具时清理上一个 Step 的临时完成记录。
+   * 这些记录只服务于“本步完成、下一步开始时合并注入”，不进入会话快照。
+   */
+  private prepareTodoCompletionStep(step: number): void {
+    if (this.todoCompletionStep === step) return;
+    this.todoCompletionStep = step;
+    this.todoCompletionCandidates.clear();
+    this.completedTodoTasks.clear();
+  }
+
+  /** 从工具上下文取得 Todo feature；不存在时不参与完成提醒。 */
+  private readTodoFeature(ctx: { getFeature?: (name: string) => unknown }): {
+    getTask?: (taskId: string) => TodoCompletionTask | undefined;
+  } | undefined {
+    if (typeof ctx.getFeature !== 'function') return undefined;
+    const todo = ctx.getFeature('todo');
+    return todo && typeof todo === 'object'
+      ? todo as { getTask?: (taskId: string) => TodoCompletionTask | undefined }
+      : undefined;
+  }
+
+  /**
+   * ToolUse 只记录候选，不提前认定完成：只有工具成功返回且 Todo feature 的真实状态
+   * 已经变成 completed，才会进入下一步 StepStart 的承接提醒。
+   */
+  async recordTodoCompletionCandidate(ctx: ToolContext): Promise<void> {
+    try {
+      if (ctx.call?.name !== TODO_TOOL_NAME) return;
+      this.prepareTodoCompletionStep(ctx.step);
+      const args = ctx.call.arguments && typeof ctx.call.arguments === 'object' ? ctx.call.arguments : {};
+      if (args.status !== 'completed') return;
+      const taskId = typeof args.taskId === 'string' && args.taskId.trim() ? args.taskId : '';
+      if (!taskId) return;
+      const todo = this.readTodoFeature(ctx);
+      const task = todo?.getTask?.(taskId);
+      if (!task || (task.status !== 'pending' && task.status !== 'in_progress')) return;
+      this.todoCompletionCandidates.set(ctx.call.id, {
+        callId: ctx.call.id,
+        step: ctx.step,
+        taskId,
+      });
+    } catch (error) {
+      this.logger?.warn?.('Craft awareness Todo completion candidate failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** 工具成功后读取 Todo feature 的当前状态，确认候选确实完成。 */
+  async confirmTodoCompletion(ctx: ToolFinishedDecisionContext): Promise<void> {
+    try {
+      if (ctx.toolName !== TODO_TOOL_NAME) return;
+      const candidate = this.todoCompletionCandidates.get(ctx.call?.id);
+      this.todoCompletionCandidates.delete(ctx.call?.id);
+      if (!candidate || ctx.success !== true || candidate.step !== ctx.step) return;
+      const todo = this.readTodoFeature(ctx);
+      const task = todo?.getTask?.(candidate.taskId);
+      if (!task || task.status !== 'completed') return;
+      this.completedTodoTasks.set(task.id, {
+        id: task.id,
+        subject: task.subject,
+        description: task.description,
+        deliver: task.deliver,
+        kind: task.kind,
+        status: task.status,
+      });
+    } catch (error) {
+      this.logger?.warn?.('Craft awareness Todo completion confirmation failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** 下一步开始时合并上一步的完成项，提醒只承接后续理解，不改变任务状态或验收要求。 */
+  async injectTodoCompletionReflection(ctx: StepStartContext): Promise<void> {
+    if (this.todoCompletionStep === undefined || this.todoCompletionStep >= ctx.step || this.completedTodoTasks.size === 0) return;
+    const tasks = Array.from(this.completedTodoTasks.values());
+    this.completedTodoTasks.clear();
+    try {
+      const base = this.knowledge.get(TODO_COMPLETION_ENTRY_ID);
+      if (!base) {
+        this.logger?.warn?.('Craft awareness knowledge missing, skip injection', { entry: TODO_COMPLETION_ENTRY_ID });
+        return;
+      }
+      ctx.context.addSystemMessage(
+        CRAFT_PREFIX + this.buildTodoCompletionReflection(base, tasks),
+        readCurrentTurn(ctx.context),
+        this.name,
+        'reminder',
+      );
+      this.logger?.info?.('Craft awareness injected', {
+        entry: TODO_COMPLETION_ENTRY_ID,
+        taskIds: tasks.map(task => task.id),
+      });
+    } catch (error) {
+      // observe 语义：承接提醒失败不影响本步完成或工具结果。
+      this.logger?.warn?.('Craft awareness Todo completion reflection failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   shouldRemindTestLayer(ctx: ToolFinishedDecisionContext, index: number): boolean {
     const filePath = readTestFilePath({ toolName: ctx.toolName, args: ctx.call?.arguments, success: ctx.success === true });
     if (!filePath) return false;
@@ -365,6 +516,51 @@ export class CraftAwarenessFeature implements AgentFeature {
       this.logger?.warn?.('Craft awareness handoff calibration failed', {
         message: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * 根据任务信息生成一条语境化承接提醒。基础文案负责方向，任务字段只补当前
+   * 这一步的事实；不把 Todo 文案改写成新的用户目标，也不要求当场追加检查。
+   */
+  private buildTodoCompletionReflection(base: string, tasks: TodoCompletionTask[]): string {
+    const lines = [base.trim()];
+    for (const task of tasks) {
+      const kind = TODO_COMPLETION_KIND_IDS.includes(task.kind ?? 'other') ? task.kind ?? 'other' : 'other';
+      const subject = this.truncateCompletionText(task.subject, COMPLETION_SUBJECT_MAX_LENGTH);
+      const description = this.truncateCompletionText(task.description, COMPLETION_DESCRIPTION_MAX_LENGTH);
+      const deliver = this.truncateCompletionText(task.deliver, COMPLETION_DELIVER_MAX_LENGTH);
+      lines.push(`\n${this.buildCompletionTaskContext(subject, description, deliver)}\n${this.kindCompletionPrompt(kind)}`);
+    }
+    return lines.join('\n').trim();
+  }
+
+  private truncateCompletionText(value: string | undefined, maxLength: number): string {
+    const text = value?.trim() ?? '';
+    return text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`;
+  }
+
+  private buildCompletionTaskContext(subject: string, description: string, deliver: string): string {
+    const lines = [`围绕「${subject}」的这一步已经形成结果。`];
+    if (description) lines.push(`任务说明：${description}`);
+    if (deliver) lines.push(`交付物：${deliver}`);
+    return lines.join('\n');
+  }
+
+  private kindCompletionPrompt(kind: CompletionKind): string {
+    switch (kind) {
+      case 'investigate':
+        return '接下来把这些材料放回用户要解决的问题中：分清已由现有材料支持的事实、基于这些事实形成的判断，以及仍待方案处理的部分；把当前认识当作后续收敛的落脚点，继续据此推进。';
+      case 'design':
+        return '接下来把这套安排放回用户想得到的结果中：沿着已经明确的路径和边界继续展开；如果后续实现暴露出方案接不住原要求的地方，就调整方案与原要求之间的关系，不要只围绕方案本身完成。';
+      case 'implement':
+        return '接下来把这部分实现接回原来的使用路径：确认它承接了需求中的哪一段，并沿剩余链路继续推进；当前产物可以作为后续工作的基础，但不要让它的现状替代用户真正要解决的问题。';
+      case 'fix':
+        return '接下来把这次处理放回原来的故障路径：沿着实际行为继续推进，保留这次已经恢复的部分，并据此判断后面还要接哪一段；不要让修复后的局部状态变成新的问题定义。';
+      case 'verify':
+        return '接下来把这次核对所得的认识放回原始要求：说明它让哪一项判断更有依据、在什么条件和范围内成立，再用这个落脚点推进后续工作；不要让一次检查替代更大的结果判断。';
+      case 'other':
+        return '接下来把这个阶段性结果放回用户原本要解决的问题中：沿着它实际承接的关系继续推进，同时让原始要求而不是当前产物决定后续方向。';
     }
   }
 

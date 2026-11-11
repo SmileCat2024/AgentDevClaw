@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { Context, CoreLifecycle, discover, HandoffSeedFeature, HooksRegistry } from '@agentdevjs/core';
+import { Context, CoreLifecycle, discover, HandoffSeedFeature, HooksRegistry, TodoFeature } from '@agentdevjs/core';
 import {
   CraftAwarenessFeature,
   shouldRemindDocCraft,
@@ -41,9 +41,9 @@ describe('grill-me（技能发现与构建同步）', () => {
   });
 });
 
-describe('shouldRemindDesignTrace（GSA 目标回溯触发）', () => {
+describe('shouldRemindDesignTrace（目标回溯触发）', () => {
   it('Todo 定义字段发生成功更新时触发，纯状态流转不触发', () => {
-    for (const field of ['subject', 'description', 'kind']) {
+    for (const field of ['subject', 'description', 'deliver', 'kind']) {
       assert.equal(shouldRemindDesignTrace({ toolName: 'task_update', args: { taskId: '1', [field]: 'changed' }, success: true }), true, field);
     }
     assert.equal(shouldRemindDesignTrace({ toolName: 'task_update', args: { taskId: '1', status: 'in_progress' }, success: true }), false);
@@ -62,8 +62,8 @@ describe('shouldRemindDesignTrace（GSA 目标回溯触发）', () => {
         'test/feature.test.ts',
         'src/feature.test.ts',
         'src/__tests__/feature.ts',
-        'src\test\feature.ts',
-        'D:\repo\tests\feature.ts',
+        String.raw`src\test\feature.ts`,
+        String.raw`D:\repo\tests\feature.ts`,
         'config/app.json',
       ]) {
         assert.equal(shouldRemindDesignTrace({ toolName, args: { filePath }, success: true }), false, `${toolName} ${filePath}`);
@@ -104,6 +104,197 @@ describe('shouldRemindDesignTrace（GSA 目标回溯触发）', () => {
     assert.ok(content.includes('既有行为'));
     assert.ok(content.includes('补方案'));
     assert.ok(content.includes('用户已定的目标、边界或重要取舍'));
+  });
+});
+
+describe('Todo 完成后的语境化承接提醒', () => {
+  type Task = {
+    id: string;
+    subject: string;
+    description?: string;
+    deliver?: string;
+    kind?: string;
+    status: 'pending' | 'in_progress' | 'completed' | 'deleted';
+  };
+
+  function makeHarness(tasks: Task[]) {
+    const byId = new Map(tasks.map(task => [task.id, task]));
+    const injected: string[] = [];
+    const feature = new CraftAwarenessFeature({ knowledgeDir: REAL_KNOWLEDGE_DIR });
+    const getFeature = (name: string) => name === 'todo'
+      ? { getTask: (taskId: string) => byId.get(taskId) }
+      : undefined;
+    const context = {
+      addSystemMessage(text: string) { injected.push(text); },
+      getRecent() { return [{ turn: 12 }]; },
+    };
+    return { feature, byId, injected, getFeature, context };
+  }
+
+  async function runCompletion(
+    harness: ReturnType<typeof makeHarness>,
+    taskId: string,
+    options: { step?: number; success?: boolean } = {},
+  ) {
+    const step = options.step ?? 0;
+    const task = harness.byId.get(taskId)!;
+    const call = { id: `call-${taskId}-${step}`, name: 'task_update', arguments: { taskId, status: 'completed' } };
+    await harness.feature.recordTodoCompletionCandidate({
+      call,
+      tool: {},
+      step,
+      input: '',
+      context: harness.context,
+      getFeature: harness.getFeature,
+    } as never);
+    if (options.success !== false) task.status = 'completed';
+    await harness.feature.confirmTodoCompletion({
+      toolName: 'task_update',
+      call,
+      success: options.success !== false,
+      data: null,
+      duration: 0,
+      tool: {},
+      step,
+      input: '',
+      context: harness.context,
+      getFeature: harness.getFeature,
+    } as never);
+  }
+
+  function startNextStep(harness: ReturnType<typeof makeHarness>, step = 1) {
+    return harness.feature.injectTodoCompletionReflection({
+      step,
+      callIndex: 1,
+      input: '',
+      agent: undefined,
+      context: harness.context,
+    } as never);
+  }
+
+  it('只在未完成任务成功进入 completed 后，在后续步骤开始时注入一条承接提醒', async () => {
+    const h = makeHarness([{
+      id: '1', subject: '实现排序保持', description: '让真实页面刷新后顺序仍然稳定',
+      deliver: '排序回归测试', kind: 'implement', status: 'in_progress',
+    }]);
+    await runCompletion(h, '1');
+    assert.deepEqual(h.injected, [], '完成确认后不应立即插入长段提醒');
+    await startNextStep(h);
+    assert.equal(h.injected.length, 1);
+    assert.ok(h.injected[0].includes('实现排序保持'));
+    assert.ok(h.injected[0].includes('让真实页面刷新后顺序仍然稳定'));
+    assert.ok(h.injected[0].includes('排序回归测试'));
+    assert.ok(h.injected[0].includes('接下来把这部分实现接回原来的使用路径'));
+    assert.ok(h.injected[0].includes('当前产物可以作为后续工作的基础'));
+    assert.ok(h.injected[0].includes('用户最初要解决的问题'));
+  });
+
+  it('失败更新、重复完成和非完成状态更新都不注入', async () => {
+    const h = makeHarness([
+      { id: '1', subject: '调查现象', kind: 'investigate', status: 'in_progress' },
+      { id: '2', subject: '已完成任务', kind: 'verify', status: 'completed' },
+    ]);
+    await runCompletion(h, '1', { success: false });
+    await runCompletion(h, '2');
+    const otherCall = { id: 'call-other', name: 'task_update', arguments: { taskId: '1', status: 'in_progress' } };
+    await h.feature.recordTodoCompletionCandidate({
+      call: otherCall, tool: {}, step: 0, input: '', context: h.context, getFeature: h.getFeature,
+    } as never);
+    await h.feature.confirmTodoCompletion({
+      toolName: 'task_update', call: otherCall, success: true, data: null, duration: 0,
+      tool: {}, step: 0, input: '', context: h.context, getFeature: h.getFeature,
+    } as never);
+    await startNextStep(h);
+    assert.deepEqual(h.injected, []);
+  });
+
+  it('真实 Todo 工具经 HooksRegistry 完成状态流转后，在下一步追加承接提醒', async () => {
+    const todo = new TodoFeature();
+    const craft = new CraftAwarenessFeature({ knowledgeDir: REAL_KNOWLEDGE_DIR });
+    const hooks = new HooksRegistry();
+    hooks.collectFromFeature(todo);
+    hooks.collectFromFeature(craft);
+    const context = new Context();
+    const task = todo.createTask('保持真实页面排序', '刷新页面后顺序仍应稳定', {
+      deliver: '页面刷新回归测试',
+      kind: 'implement',
+    });
+    todo.updateTask(task.id, { status: 'in_progress' });
+    const agent = {
+      getFeature(name: string) {
+        return name === 'todo' ? todo : name === 'craft-awareness' ? craft : undefined;
+      },
+    };
+    const updateTool = todo.getTools().find(tool => tool.name === 'task_update')!;
+    const call = { id: 'real-todo-completion', name: 'task_update', arguments: { taskId: task.id, status: 'completed' } };
+
+    await hooks.executeVoid(CoreLifecycle.CallStart, {
+      input: '继续', context, isFirstCall: true, agent,
+    } as never);
+    await hooks.executeVoid(CoreLifecycle.StepStart, {
+      step: 0, callIndex: 0, context, input: '继续', agent,
+    } as never);
+    await hooks.executeVoid(CoreLifecycle.ToolUse, {
+      call, tool: updateTool, step: 0, input: '继续', context, getFeature: agent.getFeature,
+    } as never);
+    const data = await updateTool.execute(call.arguments);
+    await hooks.executeVoid(CoreLifecycle.ToolFinished, {
+      toolName: 'task_update', call, tool: updateTool, success: true, data, duration: 0,
+      step: 0, input: '继续', context, getFeature: agent.getFeature,
+    } as never);
+    await hooks.executeVoid(CoreLifecycle.StepStart, {
+      step: 1, callIndex: 0, context, input: '继续', agent,
+    } as never);
+
+    const reminders = context.getAllEnriched().filter(message => message.source === 'craft-awareness');
+    assert.equal(todo.getTask(task.id)?.status, 'completed');
+    assert.equal(reminders.length, 1);
+    assert.ok(reminders[0].content.includes('保持真实页面排序'));
+    assert.ok(reminders[0].content.includes('接下来把这部分实现接回原来的使用路径'));
+  });
+
+  it('同一 Step 完成多个任务时合并为一条，并按各自 kind 承接', async () => {
+    const h = makeHarness([
+      { id: '1', subject: '查明数据来源', kind: 'investigate', status: 'pending' },
+      { id: '2', subject: '确定接口方案', kind: 'design', status: 'in_progress' },
+    ]);
+    await runCompletion(h, '1');
+    await runCompletion(h, '2');
+    await startNextStep(h);
+    assert.equal(h.injected.length, 1);
+    assert.ok(h.injected[0].includes('查明数据来源'));
+    assert.ok(h.injected[0].includes('确定接口方案'));
+    assert.ok(h.injected[0].includes('把这些材料放回用户要解决的问题中'));
+    assert.ok(h.injected[0].includes('把这套安排放回用户想得到的结果中'));
+  });
+
+  it('不同 kind 会承接各自的后续关系，未声明 kind 使用通用承接', async () => {
+    const h = makeHarness([
+      { id: '1', subject: '修复已定位路径', kind: 'fix', status: 'pending' },
+      { id: '2', subject: '核对当前主张', kind: 'verify', status: 'pending' },
+      { id: '3', subject: '整理阶段产出', status: 'pending' },
+    ]);
+    await runCompletion(h, '1', { step: 0 });
+    await runCompletion(h, '2', { step: 0 });
+    await runCompletion(h, '3', { step: 0 });
+    await startNextStep(h, 1);
+    assert.equal(h.injected.length, 1);
+    assert.ok(h.injected[0].includes('把这次处理放回原来的故障路径'));
+    assert.ok(h.injected[0].includes('把这次核对所得的认识放回原始要求'));
+    assert.ok(h.injected[0].includes('把这个阶段性结果放回用户原本要解决的问题中'));
+  });
+
+  it('完成提醒不按条目永久冷却，后续 Step 的另一个完成仍可注入', async () => {
+    const h = makeHarness([
+      { id: '1', subject: '完成第一步', kind: 'fix', status: 'pending' },
+      { id: '2', subject: '完成第二步', kind: 'verify', status: 'pending' },
+    ]);
+    await runCompletion(h, '1', { step: 0 });
+    await startNextStep(h, 1);
+    await runCompletion(h, '2', { step: 1 });
+    await startNextStep(h, 2);
+    assert.equal(h.injected.length, 2);
+    assert.ok(h.injected[1].includes('完成第二步'));
   });
 });
 
