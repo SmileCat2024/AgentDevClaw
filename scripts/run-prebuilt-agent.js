@@ -395,6 +395,22 @@ class SessionLifecycle {
     }));
   }
 
+  async cancelThreadCommands(commands) {
+    if (!this.sessionId || !Array.isArray(commands)) return;
+    for (const identity of commands) {
+      if (!identity || typeof identity.commandId !== 'string' || typeof identity.threadId !== 'string'
+        || !Number.isInteger(identity.headGeneration)) continue;
+      try {
+        await postJson(`/protoclaw/threads/${encodeURIComponent(identity.threadId)}/commands/${encodeURIComponent(identity.commandId)}/cancel`, {
+          headGeneration: identity.headGeneration,
+          source: 'user_interrupt',
+        });
+      } catch (error) {
+        console.warn(`[ProtoClaw Runtime] durable command cancellation failed (${identity.commandId}):`, error?.message || error);
+      }
+    }
+  }
+
   async reportThreadEvent(event) {
     if (!this.sessionId || !event || typeof event !== 'object') return;
     try {
@@ -1133,11 +1149,14 @@ SessionLifecycle.prototype.start = async function () {
 
   // Per-agent interrupt handler
   const self = this;
-  DebugHub.getInstance().setInterruptHandler(this.agent?.agentId, (_targetAgentId, clearQueue) => {
+  DebugHub.getInstance().setInterruptHandler(this.agent?.agentId, async (_targetAgentId, clearQueue, cancelledCommands) => {
     if (!self.callArbiter) return;
     const result = self.callArbiter.interruptActive('cancelled by interrupt', { clearQueue });
-    if (result.active || result.cleared > 0) {
-      console.log(`[ProtoClaw Runtime] interrupt marked active=${result.active}, cleared=${result.cleared}`);
+    if (Array.isArray(cancelledCommands) && cancelledCommands.length > 0) {
+      await self.cancelThreadCommands(cancelledCommands);
+    }
+    if (result.active || result.cleared > 0 || cancelledCommands?.length > 0) {
+      console.log(`[ProtoClaw Runtime] interrupt marked active=${result.active}, cleared=${result.cleared}, cancelledCommands=${cancelledCommands?.length || 0}`);
     }
   });
 

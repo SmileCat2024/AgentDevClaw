@@ -220,6 +220,41 @@ describe('threads/:id/commands route field passthrough', () => {
     assert.deepEqual(delivered[0].metadata, metadata);
   });
 
+  it('cancels a delivered command through the interrupt identity route and rejects stale head identities', async () => {
+    const control = makeControl(async () => ({ success: true }));
+    const app = makeMockApp();
+    setupThreadRoutes(app, { json: () => () => {} }, { control, ensureHeadRuntime: async () => ({ ok: true }) });
+
+    const thread = await control.core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'cancel-s1' } });
+    const { command } = await control.core.appendCommand({ threadId: thread.threadId, text: 'cancel me' });
+    const delivered = await control.core.deliverPendingCommands(thread.threadId);
+    assert.equal(delivered.delivered, 1);
+    assert.equal((await control.core.getThread(thread.threadId)).commands[0].status, 'delivered');
+
+    const cancelled = await callRoute(app, '/protoclaw/threads/:threadId/commands/:commandId/cancel', {
+      params: { threadId: thread.threadId, commandId: command.commandId },
+      body: { headGeneration: 1, source: 'user_interrupt' },
+    });
+    assert.equal(cancelled.statusCode, 200);
+    assert.equal(cancelled.body.ok, true);
+    assert.equal(cancelled.body.command.status, 'cancelled');
+
+    const repeat = await callRoute(app, '/protoclaw/threads/:threadId/commands/:commandId/cancel', {
+      params: { threadId: thread.threadId, commandId: command.commandId },
+      body: { headGeneration: 1 },
+    });
+    assert.equal(repeat.statusCode, 200);
+    assert.equal(repeat.body.command.status, 'cancelled');
+
+    await control.core.advanceHead({ threadId: thread.threadId, toSessionId: 'cancel-s2', fromSessionId: 'cancel-s1' });
+    const stale = await callRoute(app, '/protoclaw/threads/:threadId/commands/:commandId/cancel', {
+      params: { threadId: thread.threadId, commandId: command.commandId },
+      body: { headGeneration: 1 },
+    });
+    assert.equal(stale.statusCode, 409);
+    assert.equal(stale.body.code, 'head_mismatch');
+  });
+
   it('silently drops malformed metadata shapes instead of rejecting the command', async () => {
     const control = makeControl(async () => ({ success: true }));
     const app = makeMockApp();

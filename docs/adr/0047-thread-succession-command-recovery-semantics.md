@@ -70,6 +70,47 @@
 
 具体框架 API、存储 schema、旧记录迁移和外部调用方兼容策略由实施设计细化；实施设计不得降低以上语义。当前没有确认协议前，任何未被可靠消费确认覆盖的 `delivered` 命令都必须保留为 unresolved，不能声称系统已达到自动不丢不重。
 
+### 6. 运行期队列注入与用户打断语义
+
+本节补齐接收协议与运行期调度之间的边界。ADR-0047 的 claim/ack 安全边界不能退化成“每个 drain 只能注入一条消息”；同样，用户打断不能把 UI 清空气泡、停止当前 call、取消 Viewer 队列和取消 Thread Inbox 命令混成一个无身份的 `clearQueue` 动作。
+
+#### 6.1 单 lease、批量 drain
+
+一次 drain 在一个安全注入边界内，按 FIFO 处理当时可见的全部排队输入；durable WorkThread 命令仍严格串行执行 `claim → 写入 Context → 保存带 commandId 的 session snapshot → ack`，前一条完成确认前不得 claim 下一条。**单 lease 的并发安全边界不等于单消息的 drain 边界。**
+
+因此，成功 ack 一条命令后，drain 应继续 claim 下一条，直到队列为空、遇到快照/ack/网络错误，或收到关闭信号。任一条的快照或 ack 失败时停止本批；该条及其后继不得被静默标为已消费，后继留在队列等待下一次可靠触发。不得跳过队首 durable 命令去消费后面的 legacy 输入。reminder 的 system 消息语义、resume 的消费即弃语义、无身份 legacy 输入的既有 dequeue 语义均保持不变。
+
+这只改变注入批次，不改变模型调用边界：同一批输入按顺序写入当前 Context，模型在后续 step 看到已排序的内容；不为每条排队消息启动并发或独立模型调用。
+
+#### 6.2 用户打断是有取消截点的复合操作
+
+输入框的用户打断同时表达两个动作：
+
+1. 请求当前 `CallArbiter` active envelope 在既有安全检查点收口；不从外部直接改写 envelope，不启动 continuation，不抢断正在执行的 `onCall` 内部代码。
+2. 取消打断截点之前尚未消费的排队输入：包括 Arbiter 的 queued/deferred envelope、Viewer 尚未 claim 的输入，以及 Thread Inbox 中仍为 `pending` 的命令。
+
+取消必须由服务端持久事实线性化。打断截点之前已入队的输入属于本次取消；截点之后才入队的输入不属于本次取消，必须保留并在当前 call 收口后按 FIFO 执行。前端清除本地排队气泡只是乐观投影，不是取消事实；输入请求与打断请求并发时，以服务端实际提交顺序裁决。
+
+#### 6.3 claim/ack 与 cancel 的竞态裁决
+
+对已 claim 但尚未 ack 的 durable 命令，命令身份只能沿以下单向路径收口：
+
+```
+claimed
+  ├─ ack 先提交 → consumed
+  └─ cancel 先提交 → cancelled
+```
+
+ack 先提交时，命令已经消费：Viewer 队列移除、消费引用保留，随后用户打断只停止当前 call，不回滚、不重排、不重放该命令。cancel 先提交时，命令进入显式 cancelled 事实；迟到 ack 必须幂等识别为已取消，不得把命令复活为 consumed，runtime 也不得为该命令启动新的模型/工具执行。两者均以稳定 `commandId`（及 Thread/head fencing 身份）裁决，不能只靠数组位置或 UI 状态。
+
+因此，Viewer 不得在用户打断时无条件执行 `session.queuedInputs = []` 作为完整语义：未 claim 项可以取消，已 claim 项必须经过 commandId/lease 状态裁决；取消、ack 或其迟到回执的结果必须可追踪，不能只从内存队列删除。仅当 ack 已完成、命令已进入持久 session snapshot 并完成消费确认时，才不得因用户打断回滚或重放。若 cancel 先胜但 runtime 已将载荷短暂写入 Context 或快照，该残留只能作为取消/恢复审计事实，不得被当作已消费，也不得驱动新的模型或工具执行。当前 call 被打断与输入命令是否已消费是两个独立事实。
+
+#### 6.4 手动打断与自动接续不得共用无语义清队列开关
+
+用户手动打断的语义是“停止当前执行，并取消截点前尚未消费的输入”。自动上下文接续的语义是“结束旧 head，并把可恢复输入交给 successor”；它不能直接复用用户打断的 `clearQueue=true`，否则会把本应转交/待核对的命令误取消。自动接续、归档和用户手动打断必须由各自的原因与状态转换决定命令去留；只有明确属于用户取消范围的 pending/未 claim 输入才能取消。
+
+本节定义的是运行期行为契约，不把尚未完成的取消截点、claim/cancel 原子收口或跨 Viewer/Runtime/WorkThread 的状态同步宣称为已实施。实现完成前，已有“不确定性不丢失、已消费不盲目重放”的 ADR-0047 保守边界继续有效。
+
 ## 实施顺序与范围
 
 阶段按降低风险与尽早建立可见性的价值排序；协议建设与待核对落地并非严格串行依赖。未有完整消费确认协议时，先将无法证明的命令持久保留为待核对是安全的保守行为。

@@ -545,6 +545,28 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
     }
   });
 
+  // ── durable command 取消（用户 interrupt 的身份回执）───────────────
+  // Viewer 已在线性化截点记录 command identity 后，由 runtime 异步回传到
+  // Inbox。headGeneration 是 fencing 守卫：迟到的旧 head 回执不得取消新 head
+  // 的命令；cancelCommand 本身再以 pending/delivered 状态单向收口。
+  app.post('/protoclaw/threads/:threadId/commands/:commandId/cancel', jsonMiddleware, async (req, res) => {
+    try {
+      const threadId = String(req.params.threadId || '').trim();
+      const commandId = String(req.params.commandId || '').trim();
+      const thread = await core.getThread(threadId);
+      if (!thread) return res.status(404).json({ ok: false, code: 'thread_not_found' });
+      const expectedGeneration = Number(req.body?.headGeneration);
+      if (!Number.isInteger(expectedGeneration) || expectedGeneration !== Number(core.headGeneration(thread))) {
+        return res.status(409).json({ ok: false, code: 'head_mismatch', message: 'Command cancellation targets a stale WorkThread head' });
+      }
+      const command = await core.cancelCommand(threadId, commandId);
+      if (!command) return res.status(404).json({ ok: false, code: 'command_not_found' });
+      res.json({ ok: true, command });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
   // ── 线程寻址输入（ADR-0024 决策 3：threadId → Thread → 统一网关）──────
 
   /** head runtime 的 viewer id（运行中且当前绑定 head 会话）；无则 null。 */

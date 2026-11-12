@@ -289,6 +289,131 @@ describe('ViewerWorker user-turn queued mailbox', () => {
     assert.equal(session.queuedInputs.length, 0, 'queue must be empty after drain');
   });
 
+  it('interrupt preserves durable command cancellation identities instead of silently dropping them', async () => {
+    const session = viewerWorker.agentSessions.get(AGENT_ID);
+    session.queuedInputs = [
+      {
+        id: 'queued-durable-1',
+        text: 'claimed command',
+        commandIdentity: { commandId: 'cmd-interrupt-claimed', threadId: 'wt-interrupt', headGeneration: 1 },
+        inputLease: {
+          commandId: 'cmd-interrupt-claimed', threadId: 'wt-interrupt', headGeneration: 1,
+          leaseId: 'lease-1', sessionId: 'session-1', runtimeInstanceId: 'runtime-1',
+        },
+      },
+      {
+        id: 'queued-durable-2',
+        text: 'pending command',
+        commandIdentity: { commandId: 'cmd-interrupt-pending', threadId: 'wt-interrupt', headGeneration: 1 },
+      },
+    ];
+    session.threadId = 'wt-interrupt';
+    session.headGeneration = 1;
+    session.workSessionId = 'session-1';
+
+    const writes = [];
+    const originalSocket = viewerWorker.udsClients.get(CLIENT_ID);
+    viewerWorker.udsClients.set(CLIENT_ID, { write(payload) { writes.push(JSON.parse(payload)); } });
+    try {
+      const { status, data } = await httpPost(`/api/agents/${AGENT_ID}/interrupt`, {});
+      assert.equal(status, 200);
+      assert.equal(data.success, true);
+      assert.deepEqual(data.cancelledCommandIds, [
+        'cmd-interrupt-claimed',
+        'cmd-interrupt-pending',
+      ], 'HTTP response must mirror the cancelled identities (not a shadowed empty array)');
+      const interrupt = writes.find((message) => message.type === 'interrupt-agent');
+       assert.ok(interrupt, 'interrupt must be sent after any queued-input-available hint');
+       assert.deepEqual(interrupt.cancelledCommandIds, [
+         'cmd-interrupt-claimed',
+         'cmd-interrupt-pending',
+       ]);
+       assert.deepEqual(interrupt.cancelledCommands, [
+         { commandId: 'cmd-interrupt-claimed', threadId: 'wt-interrupt', headGeneration: 1 },
+         { commandId: 'cmd-interrupt-pending', threadId: 'wt-interrupt', headGeneration: 1 },
+       ]);
+       assert.equal(session.queuedInputs.length, 0);
+       const retry = await httpPost(`/api/agents/${AGENT_ID}/user-turn`, {
+         text: 'retry cancelled',
+         sessionId: 'session-1',
+         commandIdentity: { commandId: 'cmd-interrupt-pending', threadId: 'wt-interrupt', headGeneration: 1 },
+       });
+       assert.equal(retry.status, 409, JSON.stringify(retry.data));
+       assert.equal(retry.data.code, 'command_cancelled');
+     } finally {
+      viewerWorker.udsClients.set(CLIENT_ID, originalSocket);
+    }
+  });
+
+  it('interrupt does not include an already acknowledged durable command', async () => {
+    const session = viewerWorker.agentSessions.get(AGENT_ID);
+    session.queuedInputs = [];
+    const writes = [];
+    const originalSocket = viewerWorker.udsClients.get(CLIENT_ID);
+    viewerWorker.udsClients.set(CLIENT_ID, { write(payload) { writes.push(JSON.parse(payload)); } });
+    try {
+      const queued = await queueViaUserTurn('will be acknowledged');
+      const item = session.queuedInputs[0];
+      item.commandIdentity = { commandId: 'cmd-interrupt-acked', threadId: 'wt-interrupt', headGeneration: 1 };
+      item.inputLease = {
+        commandId: 'cmd-interrupt-acked', threadId: 'wt-interrupt', headGeneration: 1,
+        leaseId: 'lease-acked', sessionId: 'session-1', runtimeInstanceId: 'runtime-1',
+      };
+      session.threadId = 'wt-interrupt';
+      session.headGeneration = 1;
+      session.workSessionId = 'session-1';
+      session.runtimeInstanceId = 'runtime-1';
+      assert.equal(viewerWorker.acknowledgeCommandInput(AGENT_ID, item.inputLease), true);
+
+       const { status, data } = await httpPost(`/api/agents/${AGENT_ID}/interrupt`, {});
+       assert.equal(status, 200);
+       assert.equal(data.success, true);
+       const interrupt = writes.find((message) => message.type === 'interrupt-agent');
+       assert.ok(interrupt);
+       assert.deepEqual(interrupt.cancelledCommandIds, []);
+       assert.deepEqual(data.cancelledCommandIds, []);
+       assert.equal(session.queuedInputs.length, 0);
+      assert.equal(queued.data?.success ?? true, true);
+    } finally {
+      viewerWorker.udsClients.set(CLIENT_ID, originalSocket);
+    }
+  });
+
+  it('interrupt drops legacy queued inputs (clearQueue semantics) while a durable command submitted after the checkpoint survives', async () => {
+    const session = viewerWorker.agentSessions.get(AGENT_ID);
+    session.queuedInputs = [];
+    session.callActive = true;
+    const writes = [];
+    const originalSocket = viewerWorker.udsClients.get(CLIENT_ID);
+    viewerWorker.udsClients.set(CLIENT_ID, { write(payload) { writes.push(JSON.parse(payload)); } });
+    try {
+      // 截点前的 legacy 输入：无 commandIdentity → 沿用既有 clearQueue 语义
+      const legacy = await httpPost(`/api/agents/${AGENT_ID}/user-turn`, { text: 'legacy queued' });
+      assert.equal(legacy.status, 200);
+      assert.equal(legacy.data.delivery, 'queued');
+      assert.equal(session.queuedInputs.length, 1);
+
+      const { status, data } = await httpPost(`/api/agents/${AGENT_ID}/interrupt`, {});
+      assert.equal(status, 200);
+      assert.equal(data.success, true);
+      assert.deepEqual(data.cancelledCommandIds, [], 'legacy inputs are dropped, not recorded as durable cancellations');
+      assert.equal(session.queuedInputs.length, 0, 'legacy queued input must be dropped by interrupt');
+
+      // 截点后的新输入：不属于本次取消范围 → 正常接收并入队
+      // （durable 命令的接收需要持久化队列，本设施为内存模式，
+      //   截点后 durable 保留语义由框架仓库持久化测试覆盖。）
+      const fresh = await httpPost(`/api/agents/${AGENT_ID}/user-turn`, { text: 'arrived after the checkpoint' });
+      assert.equal(fresh.status, 200);
+      assert.equal(fresh.data.success, true);
+      assert.equal(fresh.data.delivery, 'queued');
+      assert.equal(session.queuedInputs.length, 1);
+      assert.equal(session.queuedInputs[0].text, 'arrived after the checkpoint');
+    } finally {
+      session.callActive = false;
+      viewerWorker.udsClients.set(CLIENT_ID, originalSocket);
+    }
+  });
+
   it('drain-all: images survive across multiple items in one drain', async () => {
     const session = viewerWorker.agentSessions.get(AGENT_ID);
     session.queuedInputs = [];

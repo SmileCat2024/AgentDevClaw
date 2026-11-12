@@ -411,7 +411,7 @@ describe('thread control assembly (core = WorkThread)', () => {
     assert.equal(closed.commands[0].status, ThreadCommandStatus.CANCELLED);
   });
 
-  test('cancelCommand only affects pending', async () => {
+  test('cancelCommand closes delivered commands until durable ack is known', async () => {
     const { core } = makeControl(root);
     const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
     const { command } = await core.appendCommand({ threadId: thread.threadId, text: 'x' });

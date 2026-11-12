@@ -253,6 +253,33 @@ describe('thread succession timing (ADR-0047, cross-layer long chains)', () => {
     assert.equal(await claimHttp('g1-rt-2'), null);
   });
 
+  test('manual interrupt cancellation is separate from automatic succession delivery', async () => {
+    const { integration, core, viewerIds } = await makeWorld('cancel-auto');
+    const HOST = 'host-app';
+    const thread = await core.start({ sessionRef: { agentId: HOST, sessionId: 'cancel-auto-s1' } });
+    const tid = thread.threadId;
+    registerViewerRuntime({
+      viewerAgentId: 'cancel-auto-rt-1',
+      identity: { runtimeInstanceId: 'cancel-auto-ri-1', threadId: tid, headGeneration: 1, workSessionId: 'cancel-auto-s1' },
+    });
+    viewerIds.set('cancel-auto-s1', 'cancel-auto-rt-1');
+    const { command } = await core.appendCommand({ threadId: tid, text: 'survive succession' });
+    const delivered = await integration.tryDeliver(tid);
+    assert.equal(delivered.delivered, 1);
+    const before = await core.getThread(tid);
+    assert.equal(before.commands.find((entry) => entry.commandId === command.commandId).status, 'delivered');
+
+    await integration.beginSessionSuccession({ agentId: HOST, sessionId: 'cancel-auto-s1', reason: 'context_guard', seedContinuation: true });
+    const applied = await integration.applySessionSuccession({
+      agentId: HOST, fromSessionId: 'cancel-auto-s1', toSessionId: 'cancel-auto-s2',
+      reason: 'context_guard', seedContinuation: true,
+    });
+    assert.equal(applied.applied, true);
+    const after = await core.getThread(tid);
+    assert.equal(after.commands.find((entry) => entry.commandId === command.commandId).status, 'delivered');
+    assert.ok((after.commands || []).some((entry) => entry.kind === 'system_continuation'));
+  });
+
   test('G2 in-flight delivery racing head commit: late finalization lands in the new bar window and is converted to unresolved by the next succession', async () => {
     // 门控投递：viewer 真实接受（入队成功）后、bridge 返回前挂起——
     // 构造「接收成功但终态化迟到」的交错窗口。
