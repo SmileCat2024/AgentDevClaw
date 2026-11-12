@@ -117,22 +117,43 @@ container.addEventListener('keydown', (event) => {
     registerManualScrollIntent({ interrupt: true });
   }
 });
-container.addEventListener('scroll', () => {
-  if (suppressFollowScrollEvent) {
-    return;
-  }
-  if (followLatestEnabled) {
-    // Follow is on — cancel if user scrolled away from bottom
-    if (!isNearBottom() && hasRecentManualScrollIntent()) {
-      setFollowLatest(false);
+// ── 跟随最新判定（方向感知）──
+// 跟随的字面语义是"钉在底部"：向上滚动（哪怕只滚一点点、仍在底部容差
+// 阈值内）就退出跟随；退出后只有向下滚回底部附近才恢复跟随。
+// 方向只记录有实际位移的滚动；无位移的 scroll 事件（同一滚动被重复派
+// 发、程序补发）沿用上次方向，避免一次滚动拆成两次事件时第二次丢失方
+// 向、被误判为"已滚回底部"而恢复跟随。suppress 期间是程序写 scrollTop，
+// 同样更新基准但不做判定，防止后续真实滚动事件与过期基准比较。
+(() => {
+  let prevTop = container.scrollTop;
+  let direction = 0; // -1 = 向上, 1 = 向下
+
+  container.addEventListener('scroll', () => {
+    const top = container.scrollTop;
+    if (Math.abs(top - prevTop) > 0.5) {
+      direction = top < prevTop ? -1 : 1;
+      prevTop = top;
     }
-  } else {
-    // Follow is off — re-enable if user manually scrolled to bottom
-    if (isNearBottom() && hasRecentManualScrollIntent()) {
-      setFollowLatest(true);
+    if (suppressFollowScrollEvent) {
+      return;
     }
-  }
-});
+    const scrolledUp = direction === -1;
+    if (followLatestEnabled) {
+      // Follow is on — cancel if user scrolled away from bottom; an upward
+      // scroll cancels immediately even within the bottom threshold, since
+      // following means staying pinned to the very bottom.
+      if ((!isNearBottom() || scrolledUp) && hasRecentManualScrollIntent()) {
+        setFollowLatest(false);
+      }
+    } else {
+      // Follow is off — re-enable only when the latest movement brought the
+      // viewport down to the bottom; scrolling up must not re-enable follow.
+      if (isNearBottom() && !scrolledUp && hasRecentManualScrollIntent()) {
+        setFollowLatest(true);
+      }
+    }
+  });
+})();
 // Sticky bar: detect pin/unpin and toggle .is-pinned for expand animation
 let _stickyPadTop = null;
 container.addEventListener('scroll', () => {

@@ -110,6 +110,99 @@ describe('chat-scroll: native wheel and resume recovery', () => {
   });
 });
 
+// ── follow-latest scroll direction guard ───────────────────────────
+
+/**
+ * 跟随最新的 scroll 判定（方向感知）：
+ *   - 跟随开启时向上滚动（哪怕仍在底部 48px 容差内）立即退出跟随；
+ *   - 跟随退出后，只有向下滚回底部附近才恢复跟随——向上滚（含离开
+ *     底部一点点）不得恢复；
+ *   - 无位移的重复 scroll 事件沿用上次方向；suppress 期间的程序滚动
+ *     更新基准但不参与判定。
+ * isNearBottom 注入真实阈值语义（chat-viewport.js：距底 ≤ 48px）。
+ */
+function loadFollowScrollSandbox(opts = {}) {
+  const setCalls = [];
+  const ctx = loadChatScroll();
+  ctx.followLatestEnabled = opts.followLatest ?? true;
+  ctx.suppressFollowScrollEvent = false;
+  ctx.isNearBottom = () =>
+    ctx.container.scrollHeight - ctx.container.scrollTop - ctx.container.clientHeight <= 48;
+  ctx.hasRecentManualScrollIntent = () => opts.manualIntent ?? true;
+  ctx.setFollowLatest = (enabled) => { setCalls.push(enabled); };
+  return { ctx, setCalls };
+}
+
+function dispatchScroll(ctx) {
+  for (const listener of [...ctx.container.listeners.get('scroll').keys()]) listener();
+}
+
+/** 程序定位初始 scrollTop：更新方向基准但不参与跟随判定。 */
+function establishScrollBaseline(ctx, top) {
+  ctx.run('suppressFollowScrollEvent = true');
+  ctx.container.scrollTop = top;
+  dispatchScroll(ctx);
+  ctx.run('suppressFollowScrollEvent = false');
+}
+
+describe('chat-scroll: follow-latest scroll direction guard', () => {
+  // scrollHeight 1000 / clientHeight 600 → maxTop 400；scrollTop 380 时距底 20px（容差内）
+
+  it('follow on — 向上滚一小下（仍在容差内）立即退出跟随（滚动条/触屏路径）', () => {
+    const { ctx, setCalls } = loadFollowScrollSandbox({ followLatest: true });
+    establishScrollBaseline(ctx, 400); // 定位在底部
+    ctx.container.scrollTop = 380; dispatchScroll(ctx); // 向上 20px，isNearBottom 仍 true
+    assert.deepEqual(setCalls, [false]);
+  });
+
+  it('follow off — 向上滚后仍在容差内不得恢复跟随（滚轮路径 bug 场景）', () => {
+    // wheel handler 已 interrupt 关闭跟随；随后 scroll 事件不得因 isNearBottom 误重开
+    const { ctx, setCalls } = loadFollowScrollSandbox({ followLatest: false });
+    establishScrollBaseline(ctx, 400);
+    ctx.container.scrollTop = 380; dispatchScroll(ctx);
+    assert.deepEqual(setCalls, []);
+  });
+
+  it('follow off — 向下滚回底部恢复跟随（旧行为保留）', () => {
+    const { ctx, setCalls } = loadFollowScrollSandbox({ followLatest: false });
+    establishScrollBaseline(ctx, 380);
+    ctx.container.scrollTop = 400; dispatchScroll(ctx);
+    assert.deepEqual(setCalls, [true]);
+  });
+
+  it('无位移的重复 scroll 事件沿用上次方向，不误恢复跟随', () => {
+    const { ctx, setCalls } = loadFollowScrollSandbox({ followLatest: false });
+    establishScrollBaseline(ctx, 400);
+    ctx.container.scrollTop = 380; dispatchScroll(ctx); // 向上滚离开底部
+    dispatchScroll(ctx); // 程序补发：scrollTop 仍 380
+    assert.deepEqual(setCalls, []);
+  });
+
+  it('suppress 期间的程序滚动更新基准：随后的向下滚动按真实方向判定', () => {
+    const { ctx, setCalls } = loadFollowScrollSandbox({ followLatest: false });
+    establishScrollBaseline(ctx, 400);
+    ctx.run('suppressFollowScrollEvent = true');
+    ctx.container.scrollTop = 300; dispatchScroll(ctx); // 程序 preserveTop 向上恢复
+    ctx.run('suppressFollowScrollEvent = false');
+    ctx.container.scrollTop = 360; dispatchScroll(ctx); // 用户向下滚回容差内
+    assert.deepEqual(setCalls, [true]);
+  });
+
+  it('follow on — 向下滚到底不误关（在底部时的非自愿下滚不打断跟随）', () => {
+    const { ctx, setCalls } = loadFollowScrollSandbox({ followLatest: true });
+    establishScrollBaseline(ctx, 390);
+    ctx.container.scrollTop = 400; dispatchScroll(ctx); // down + isNearBottom
+    assert.deepEqual(setCalls, []);
+  });
+
+  it('follow on — 无手动滚动意图时滚动事件不改变跟随状态（旧行为保留）', () => {
+    const { ctx, setCalls } = loadFollowScrollSandbox({ followLatest: true, manualIntent: false });
+    establishScrollBaseline(ctx, 400);
+    ctx.container.scrollTop = 380; dispatchScroll(ctx);
+    assert.deepEqual(setCalls, []);
+  });
+});
+
 // ── normalizeWheelDeltaY ───────────────────────────────────────────
 
 describe('chat-scroll: normalizeWheelDeltaY', () => {
