@@ -55,7 +55,7 @@ export default class MemoAgent extends BasicAgent {
     const runtimeIdentity = {
       agentId: runtime.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'memo',
       sessionId: runtime.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
-      serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+      serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:14200',
     };
     // 会话级模型选择（ADR-0034）：唯一活动线程的链级当前状态，
     // 输入框切换控件的后端（feature-comms selection 通道）。

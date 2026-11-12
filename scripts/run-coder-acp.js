@@ -13,7 +13,7 @@
  *   - 进程退出 / client 断开仅释放内存映射，不动 Claw 持久化对象
  *
  * 配置（设计 §11）：
- *   CLAW_ACP_BASE_URL            默认 http://127.0.0.1:1420
+ *   CLAW_ACP_BASE_URL            默认 http://127.0.0.1:14200
  *   CLAW_ACP_PROMPT_TIMEOUT_MS   默认 1800000；0 禁用超时
  *   CLAW_ACP_POLL_INTERVAL_MS    默认 500
  */

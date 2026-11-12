@@ -7,7 +7,7 @@ import { createRequire } from 'module';
 // server/shared/constants.js → 向上 2 级到项目根
 export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const rootRequire = createRequire(path.join(PROJECT_ROOT, 'package.json'));
-export const APP_PORT = Number.parseInt(process.env.PORT || '1420', 10);
+export const APP_PORT = Number.parseInt(process.env.PORT || '14200', 10);
 export const VIEWER_PORT = Number.parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
 export const REMOTE_CONNECTION_PORT_RANGE = Object.freeze({ min: 22100, max: 22199 });
 export const AGENTS_ROOT = path.join(PROJECT_ROOT, 'prebuilt-agents');

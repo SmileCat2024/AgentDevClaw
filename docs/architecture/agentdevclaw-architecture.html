@@ -5037,7 +5037,7 @@
         <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="2" data-composition-frame-label="Agent 运行进程" x="40" y="375" width="1030" height="299" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="webui" data-edge-to="claw-server" data-edge-label="HTTP :1420 · REST/SSE" data-edge-key="0" data-edge-id="webui-server" data-composition-points="553,160;553,240" d="M 553 160 L 553 240" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="webui" data-edge-to="claw-server" data-edge-label="HTTP :14200 · REST/SSE" data-edge-key="0" data-edge-id="webui-server" data-composition-points="553,160;553,240" d="M 553 160 L 553 240" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="claw-server" data-edge-to="user-data" data-edge-label="会话 · 线程落盘" data-edge-key="1" data-edge-id="server-userdata" data-composition-points="430,288;406,288;406,304;344,304;344,286;320,286" d="M 430 288 L 414 288 Q 406 288 406 296 L 406 296 Q 406 304 398 304 L 352 304 Q 344 304 344 296 L 344 294 Q 344 286 336 286 L 320 286" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="claw-server" data-edge-to="feature-repo" data-edge-label="catalog · resolver" data-edge-key="2" data-edge-id="server-repo" data-composition-points="567,240;567,204;915,204;915,168" d="M 567 240 L 567 212 Q 567 204 575 204 L 907 204 Q 915 204 915 196 L 915 168" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="claw-server" data-edge-to="viewer-worker" data-edge-label="托管 · 请求代理" data-edge-key="3" data-edge-id="server-viewer" data-composition-points="690,281;790,281" d="M 690 281 L 790 281" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
@@ -5050,8 +5050,8 @@
         <path data-edge-from="claw-cli" data-edge-to="agentdev-framework" data-edge-label="动态 import" data-edge-key="10" data-edge-id="cli-framework" data-composition-points="690,777;740,777;740,619;790,619" d="M 690 777 L 732 777 Q 740 777 740 769 L 740 627 Q 740 619 748 619 L 790 619" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
         <!-- Components -->
-        <g id="node-webui" data-node-id="webui" data-node-label="Web UI 前端" tabindex="0" role="button" aria-label="聚焦Web UI 前端，瘦壳 + modules · 端口 1420, 浏览器" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="瘦壳 + modules · 端口 1420" data-node-context="浏览器">
-          <title>Web UI 前端 · 瘦壳 + modules · 端口 1420 · 浏览器</title>
+        <g id="node-webui" data-node-id="webui" data-node-label="Web UI 前端" tabindex="0" role="button" aria-label="聚焦Web UI 前端，瘦壳 + modules · 端口 14200, 浏览器" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="瘦壳 + modules · 端口 14200" data-node-context="浏览器">
+          <title>Web UI 前端 · 瘦壳 + modules · 端口 14200 · 浏览器</title>
           <rect x="430" y="80" width="250" height="80" rx="6" class="c-mask"/>
           <rect x="430" y="80" width="250" height="80" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(436 86) scale(0.6875)">
@@ -5061,7 +5061,7 @@
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="555" y="118" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Web UI 前端</text>
-        <text data-detail="context" x="555" y="134" class="t-muted" font-size="9" text-anchor="middle">瘦壳 + modules · 端口 1420</text>
+        <text data-detail="context" x="555" y="134" class="t-muted" font-size="9" text-anchor="middle">瘦壳 + modules · 端口 14200</text>
         </g>
 
         <g id="node-feature-repo" data-node-id="feature-repo" data-node-label="Feature 仓库 (tgz)" tabindex="0" role="button" aria-label="聚焦Feature 仓库 (tgz)，resources · user-features, 架构组件" aria-pressed="false" data-node-kind="database" data-node-sublabel="resources · user-features" data-node-context="架构组件">
@@ -5192,9 +5192,9 @@
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="webui" data-edge-to="claw-server" data-edge-label="HTTP :1420 · REST/SSE" data-edge-key="0" data-edge-id="webui-server">
+        <g data-detail="context" data-edge-from="webui" data-edge-to="claw-server" data-edge-label="HTTP :14200 · REST/SSE" data-edge-key="0" data-edge-id="webui-server">
           <rect x="497.6" y="170" width="110.8" height="14" rx="3" class="c-mask"/>
-          <text x="553" y="180" class="t-backend" font-size="8" text-anchor="middle">HTTP :1420 · REST/SSE</text>
+          <text x="553" y="180" class="t-backend" font-size="8" text-anchor="middle">HTTP :14200 · REST/SSE</text>
         </g>
         <g data-detail="context" data-edge-from="claw-server" data-edge-to="user-data" data-edge-label="会话 · 线程落盘" data-edge-key="1" data-edge-id="server-userdata">
           <rect x="365" y="352" width="82" height="14" rx="3" class="c-mask"/>

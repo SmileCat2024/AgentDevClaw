@@ -375,7 +375,7 @@ export class FlowWorkspaceAgent extends BasicAgent {
     this.use(new ModelSelectionFeature({
       agentId: config.runtime?.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'flow-workspace',
       sessionId: config.runtime?.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
-      serverOrigin: config.runtime?.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+      serverOrigin: config.runtime?.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:14200',
     }));
     this.use(new UserInputFeature());
   }

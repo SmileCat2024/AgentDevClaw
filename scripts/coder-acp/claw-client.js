@@ -1,7 +1,7 @@
 /**
  * Claw HTTP client — adapter 到 Claw server 的唯一通道（ticket 019）
  *
- * 本机 HTTP（默认 http://127.0.0.1:1420，CLAW_ACP_BASE_URL 可配），只依赖
+ * 本机 HTTP（默认 http://127.0.0.1:14200，CLAW_ACP_BASE_URL 可配），只依赖
  * 全局 fetch，不依赖 Express / 框架（ADR-0004：adapter 与 server 之间只允许
  * 本机 HTTP 契约）。
  *
@@ -72,12 +72,12 @@ function errorFields(error) {
 
 /**
  * @param {object} [options]
- * @param {string} [options.baseUrl] 默认 CLAW_ACP_BASE_URL 或 http://127.0.0.1:1420
+ * @param {string} [options.baseUrl] 默认 CLAW_ACP_BASE_URL 或 http://127.0.0.1:14200
  * @param {typeof fetch} [options.fetchImpl] 测试注入
  * @param {number} [options.requestTimeoutMs] 单请求超时，默认 10s
  */
 export function createClawClient(options = {}) {
-  const baseUrl = (options.baseUrl ?? process.env.CLAW_ACP_BASE_URL ?? 'http://127.0.0.1:1420').replace(/\/+$/, '');
+  const baseUrl = (options.baseUrl ?? process.env.CLAW_ACP_BASE_URL ?? 'http://127.0.0.1:14200').replace(/\/+$/, '');
   const fetchImpl = options.fetchImpl ?? fetch;
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const internalToken = options.internalToken ?? readInternalToken();

@@ -164,7 +164,7 @@ describe('connection store load and index', () => {
     await store.load();
     const conn = store.getConnection('server-a');
     assert.equal(conn.enabled, false);
-    assert.deepEqual(conn.remote, { appPort: 1420 });
+    assert.deepEqual(conn.remote, { appPort: 14200 });
     assert.equal(conn.ssh, null);
   });
 });

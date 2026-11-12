@@ -12,7 +12,7 @@
     }
   },
   "components": [
-    { "id": "webui", "type": "frontend", "label": "Web UI 前端", "sublabel": "瘦壳 + modules · 端口 1420", "pos": [430, 80], "size": [250, 80],
+    { "id": "webui", "type": "frontend", "label": "Web UI 前端", "sublabel": "瘦壳 + modules · 端口 14200", "pos": [430, 80], "size": [250, 80],
       "sources": [{ "path": "public/index.html", "label": "瘦壳入口" }] },
     { "id": "feature-repo", "type": "database", "label": "Feature 仓库 (tgz)", "sublabel": "resources · user-features", "pos": [790, 84], "size": [250, 84] },
     { "id": "user-data", "type": "database", "label": "用户数据目录", "sublabel": "~/.agentdev · 会话 · 线程", "pos": [70, 244], "size": [250, 84] },
@@ -38,7 +38,7 @@
     { "kind": "region", "label": "Agent 运行进程", "wraps": ["runtime-host", "prebuilt-agents", "acp-adapter", "local-features"] }
   ],
   "connections": [
-    { "id": "webui-server", "from": "webui", "to": "claw-server", "label": "HTTP :1420 · REST/SSE", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelDy": 30 },
+    { "id": "webui-server", "from": "webui", "to": "claw-server", "label": "HTTP :14200 · REST/SSE", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelDy": 30 },
     { "id": "server-userdata", "from": "claw-server", "to": "user-data", "label": "会话 · 线程落盘", "fromSide": "left", "toSide": "right", "labelDy": 76 },
     { "id": "server-repo", "from": "claw-server", "to": "feature-repo", "label": "catalog · resolver", "fromSide": "top", "toSide": "bottom" },
     { "id": "server-viewer", "from": "claw-server", "to": "viewer-worker", "label": "托管 · 请求代理", "fromSide": "right", "toSide": "left" },

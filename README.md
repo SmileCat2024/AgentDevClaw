@@ -33,10 +33,10 @@ npm start
 
 | 端口 | 用途 | 说明 |
 |------|------|------|
-| **1420** | Web UI | 访问入口：http://127.0.0.1:1420 |
+| **14200** | Web UI | 访问入口：http://127.0.0.1:14200 |
 | **2026** | ViewerWorker | 内部调试协议服务，仅绑定本机回环地址，不应对外暴露 |
 
-启动成功后浏览器打开 **http://127.0.0.1:1420** 即可看到工作空间界面。
+启动成功后浏览器打开 **http://127.0.0.1:14200** 即可看到工作空间界面。
 
 ### 服务器访问保护
 
@@ -44,7 +44,7 @@ AgentDevClaw 支持在设置中的“访问保护”页面配置单密码保护�
 
 登录会话规则：闲置 3 天不活跃即要求重新登录；自登录起算最长 7 天，到期必须重新输入密码；Claw 服务重启后已登录会话保留，无需重新登录。修改密码或关闭保护会使全部已登录会话失效。Agent 子进程与 ACP 使用独立的内部令牌，不受浏览器会话影响。
 
-这是访问控制，不是传输加密。服务器部署仍应使用 HTTPS 反向代理、VPN 或 SSH 隧道；不要直接将 1420 或 2026 暴露到公网。2026 是内部 ViewerWorker 端口，只应保持本机可访问。
+这是访问控制，不是传输加密。服务器部署仍应使用 HTTPS 反向代理、VPN 或 SSH 隧道；不要直接将 14200 或 2026 暴露到公网。2026 是内部 ViewerWorker 端口，只应保持本机可访问。
 
 反向代理（Nginx 等）需要透传站点主机信息，否则已登录的写请求会被同源校验（CSRF 防护）拒绝：
 
@@ -56,7 +56,7 @@ proxy_set_header X-Forwarded-Proto $scheme;
 
 若代理会改写 Host 且无法调整，可设置环境变量 `AGENTDEV_TRUSTED_ORIGINS`（逗号分隔的完整来源，如 `https://claw.example.com`）显式放行。服务端拒绝时会输出 `[auth] CSRF origin rejected` 日志并附上被拒来源与站点主机，便于定位代理配置。
 
-> 如果 1420 端口被 Windows 保留，可以直接指定 Web UI 端口启动：`advclaw --port 1600`
+> 如果 14200 端口被 Windows 保留，可以直接指定 Web UI 端口启动：`advclaw --port 1600`
 
 ### 全局命令 `advclaw`（推荐）
 
@@ -179,7 +179,7 @@ Agent 的能力来自 Feature 组合，而 Agent Studio 是制造这些能力的
 
 ```
 server.js 主进程
-├── Express (port 1420)
+├── Express (port 14200)
 │   ├── 静态前端 (public/)
 │   ├── ProtoClaw REST API
 │   └── 会话 / IM / 模型配置 / ACP / Git 等域路由
@@ -333,7 +333,7 @@ npm view @agentdevjs/core version       # 验证
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `PORT` | `1420` | Web UI 端口 |
+| `PORT` | `14200` | Web UI 端口 |
 | `AGENTDEV_VIEWER_PORT` | `2026` | ViewerWorker 端口 |
 | `AGENTDEV_UDS_PATH` | — | ViewerWorker UDS / named pipe |
 | `AGENTDEV_DEBUG_TRANSPORT` | — | 调试传输模式 |

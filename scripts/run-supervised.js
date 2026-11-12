@@ -63,7 +63,7 @@ function requestGracefulStop(reason) {
   // This is only reached after an explicit process signal. No probe result or
   // timeout calls it. The service owns its own orderly shutdown; this host does
   // not send OS kill signals and does not reap process trees.
-  const port = Number.parseInt(process.env.PORT || '1420', 10);
+  const port = Number.parseInt(process.env.PORT || '14200', 10);
   fetch(`http://127.0.0.1:${port}/protoclaw/shutdown`, {
     method: 'POST',
     headers: { Origin: `http://127.0.0.1:${port}` },
@@ -86,7 +86,7 @@ process.on('SIGHUP', () => requestGracefulStop('hangup received'));
 
 // Read-only health observation for diagnostics. A slow, unreachable, or
 // shutting-down server is never a reason for the supervisor to stop it.
-const healthPort = Number.parseInt(process.env.PORT || '1420', 10);
+const healthPort = Number.parseInt(process.env.PORT || '14200', 10);
 const healthIntervalMs = Number.parseInt(process.env.CLAW_SUPERVISOR_HEALTH_MS || '', 10) || 2000;
 const healthProbeTimeoutMs = Number.parseInt(process.env.CLAW_SUPERVISOR_PROBE_MS || '', 10) || 3000;
 let healthReadySeen = false;

@@ -738,7 +738,7 @@ class SessionReferenceFeatureInner implements AgentFeature {
       || cleanText(process.env.PROTOCLAW_PREBUILT_SESSION_ID);
     this.serverOrigin = cleanText(config.serverOrigin)
       || process.env.PROTOCLAW_SERVER_ORIGIN
-      || 'http://127.0.0.1:1420';
+      || 'http://127.0.0.1:14200';
   }
 
   // ── 引用账本（captureState / restoreState 经 declareContinuity 持久化） ──

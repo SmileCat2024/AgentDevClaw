@@ -39,7 +39,7 @@ MCP（Model Context Protocol）用于给助手接入外部工具服务器。本�
 
 助手可以全程经本机 HTTP API 完成网关配置与验证，用户只需在对话里提需求。要点：
 
-1. **定位当前实例**：先通过终端读取 `PROTOCLAW_SERVER_ORIGIN`，Claw 宿主会将当前服务地址传给 runtime，子进程可继承。缺失时才探测默认地址 `http://127.0.0.1:1420`，不能用默认端口替代已知实例地址。用户数据根取 `AGENTDEV_DATA_DIR`，未设置时为 `~/.agentdev/AgentDevClaw/`；安装目录、数据目录、当前项目目录是三个不同位置。经 `GET /protoclaw/mcp-gateway/status` 核实目标实例可达；认证失败时使用正常授权流程，不绕过访问保护。标准配置可经 API 或数据目录完成，无需安装目录；环境变量、API 与本机进程证据均无法定位，才询问用户服务地址或安装位置。
+1. **定位当前实例**：先通过终端读取 `PROTOCLAW_SERVER_ORIGIN`，Claw 宿主会将当前服务地址传给 runtime，子进程可继承。缺失时才探测默认地址 `http://127.0.0.1:14200`，不能用默认端口替代已知实例地址。用户数据根取 `AGENTDEV_DATA_DIR`，未设置时为 `~/.agentdev/AgentDevClaw/`；安装目录、数据目录、当前项目目录是三个不同位置。经 `GET /protoclaw/mcp-gateway/status` 核实目标实例可达；认证失败时使用正常授权流程，不绕过访问保护。标准配置可经 API 或数据目录完成，无需安装目录；环境变量、API 与本机进程证据均无法定位，才询问用户服务地址或安装位置。
 2. **读现状**：`GET /protoclaw/mcp-gateway/config` 返回当前全部 server 配置。
 3. **写入配置**：`PUT /protoclaw/mcp-gateway/config`，body 形如：
 

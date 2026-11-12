@@ -9,7 +9,7 @@
 
 ## 0. 范围与边界
 
-**在范围内**：主前端（端口 1420）聊天视图的 `#user-input-container` 槽位及其全部子组件，含 persistent 常驻条、input lease 请求卡、choice 选择卡、回退对话框、队列气泡、meta bar（计时胶囊/压力 chip）、模型与思考强度选择器、语音输入、slash 浮层、图片附件、会话草稿。
+**在范围内**：主前端（端口 14200）聊天视图的 `#user-input-container` 槽位及其全部子组件，含 persistent 常驻条、input lease 请求卡、choice 选择卡、回退对话框、队列气泡、meta bar（计时胶囊/压力 chip）、模型与思考强度选择器、语音输入、slash 浮层、图片附件、会话草稿。
 
 **不在范围内**（独立系统，仅标注边界）：
 

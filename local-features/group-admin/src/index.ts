@@ -16,7 +16,7 @@ import { CoreLifecycle, Decision } from '@agentdevjs/core';
 import type { HookDeclarations } from '@agentdevjs/core';
 import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
-const SERVER_ORIGIN = process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 1420}`;
+const SERVER_ORIGIN = process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 14200}`;
 const COORDINATOR_REMINDER_CALL_INTERVAL = 2;
 const COORDINATOR_REMINDER_STEP_INTERVAL = 8;
 const COORDINATOR_REMINDER_CONTENT = [

@@ -46,7 +46,7 @@ export const ENGINEERING_TITLE_INSTRUCTIONS = [
 ].join('\n');
 
 export interface AutoTitlePolicyConfig {
-  /** 服务端基址；缺省取 PROTOCLAW_SERVER_ORIGIN / 本地 1420。 */
+  /** 服务端基址；缺省取 PROTOCLAW_SERVER_ORIGIN / 本地 14200。 */
   serverOrigin?: string;
   /** agentId，随会话固定。 */
   agentId?: string;
@@ -106,7 +106,7 @@ export class AutoTitlePolicyFeature implements AgentFeature {
     this.serverOrigin = String(
       config.serverOrigin
       || process.env.PROTOCLAW_SERVER_ORIGIN
-      || `http://127.0.0.1:${process.env.PORT || 1420}`,
+      || `http://127.0.0.1:${process.env.PORT || 14200}`,
     ).replace(/\/+$/, '');
     this.agentId = String(config.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || '').trim();
     this.modelRole = typeof config.modelRole === 'string' && config.modelRole.trim()

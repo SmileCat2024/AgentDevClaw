@@ -202,7 +202,7 @@ async function handleConfigGroups(args = []) {
 
 // ── Claw server API access (threads control plane) ─────────────
 
-const CLAW_SERVER_BASE = `http://127.0.0.1:${process.env.PORT || 1420}`;
+const CLAW_SERVER_BASE = `http://127.0.0.1:${process.env.PORT || 14200}`;
 
 // 事件停滞判定阈值：孤儿执行态（runtime 死亡后看板残留 running，turn.completed
 // 永不收敛）按停滞终态处置（调度方查日志/介入），不再无限续挂。事件粒度是

@@ -108,7 +108,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       this._config.serverOrigin ||
       featureConfig.serverOrigin ||
       process.env.PROTOCLAW_SERVER_ORIGIN ||
-      `http://127.0.0.1:${process.env.PORT || 1420}`;
+      `http://127.0.0.1:${process.env.PORT || 14200}`;
 
     this._config.serverOrigin = serverOrigin;
     this._transport = new HttpSurfaceTransport(serverOrigin);

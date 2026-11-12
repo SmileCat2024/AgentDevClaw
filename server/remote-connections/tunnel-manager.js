@@ -23,7 +23,7 @@ function buildSshArgs(connection, batchMode) {
   const ssh = connection.ssh;
   const args = [
     '-N',
-    '-L', `127.0.0.1:${localPort}:127.0.0.1:${connection.remote?.appPort ?? 1420}`,
+    '-L', `127.0.0.1:${localPort}:127.0.0.1:${connection.remote?.appPort ?? 14200}`,
     '-o', 'ExitOnForwardFailure=yes',
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',

@@ -64,7 +64,7 @@ features/ 下被预制 agent 源码引用的子包（清单在 `scripts/prebuilt
 
 预制 agent 一旦以源码路径静态导入 `features/<name>/dist/index.js`，必须同步把 `<name>` 登记进 [scripts/prebuilt-feature-dirs.mjs](scripts/prebuilt-feature-dirs.mjs)——该清单同时驱动 build:features、prestart 过时检测、`pack:desktop` 与 `agentdev:published`，桌面包只构建清单内的包。漏登记在开发机无感（本地已构建过 dist），打出的桌面包里 runtime 加载 agent.js 即崩、新旧会话全灭（历史事故：stylized-output）。`local-features/` 整树构建、生态包走 vendor/registry 链路，均无需登记。
 
-默认端口：Web UI `1420`，ViewerWorker `2026`（`PORT` / `AGENTDEV_VIEWER_PORT` 可覆盖）。
+默认端口：Web UI `14200`，ViewerWorker `2026`（`PORT` / `AGENTDEV_VIEWER_PORT` 可覆盖）。
 
 框架改动的生效路径：AgentDev 仓库 `npm run build` 产出全部包 dist → 重启 Claw 服务。junction 链接下重启即生效；发布态下先用 `agentdev:local` 链接调试，正式生效走发版。
 
@@ -220,7 +220,7 @@ stdio 分流（CLI 审计接口）：所有日志必须带等级；`AGENTDEV_LOG
 
 ## 前端两套渲染管线（易错）
 
-- **端口 1420：Claw 主前端**（用户日常看到）— `public/src/*`，静态文件不需编译，改后重启 Claw 服务生效
+- **端口 14200：Claw 主前端**（用户日常看到）— `public/src/*`，静态文件不需编译，改后重启 Claw 服务生效
 - **端口 2026：DebugHub Viewer**（框架侧）— `AgentDev/src/core/viewer-html.ts` + `viewer-worker.ts`，改后需框架 build + 重启
 
 改错管线 = 白改。渲染契约、去重策略与自检清单见 [docs/reference/frontend-rendering-patterns.md](docs/reference/frontend-rendering-patterns.md)。工具调用/结果卡片的宿主壳层（分层标题/正文、玻璃底色、长内容折叠）与 Feature 模板的内容层契约见 [docs/protocols/tool-rendering.md](docs/protocols/tool-rendering.md)。
@@ -270,7 +270,7 @@ inspector 中工具按注册 source 分类：source 属于某 feature name → �
 
 ## 进程架构与重启范围
 
-server.js 主进程（Express 1420 + ViewerWorker 2026 + DebugHub）+ per-runtime agent 子进程（spawn `run-prebuilt-agent.js`，动态 import agent.js）。
+server.js 主进程（Express 14200 + ViewerWorker 2026 + DebugHub）+ per-runtime agent 子进程（spawn `run-prebuilt-agent.js`，动态 import agent.js）。
 
 重启范围（易错）：
 
@@ -332,6 +332,6 @@ server.js 主进程（Express 1420 + ViewerWorker 2026 + DebugHub）+ per-runtim
 1. 这次改的是壳层（前端 JS）、预制 agent 装配（agent.js），还是 feature 实现？
 2. 当前数据的真相在前端草稿、服务端 workspace state，还是 session index？
 3. 当前行为是预制 agent 首页行为，还是运行时行为？
-4. **用户看到的是哪个前端管线？** 面板显示 / inspector 渲染问题，先确认是 Claw 前端（`app-ui.js`，端口 1420）还是 DebugHub 查看器（`viewer-html.ts`，端口 2026）渲染的。改错管线 = 白改。
+4. **用户看到的是哪个前端管线？** 面板显示 / inspector 渲染问题，先确认是 Claw 前端（`app-ui.js`，端口 14200）还是 DebugHub 查看器（`viewer-html.ts`，端口 2026）渲染的。改错管线 = 白改。
 5. **stale check 依赖的全局变量在 `await` 期间会变吗？** `allAgents`、`focusedAgentId` 等会被 poll / `loadAgents()` 异步修改。stale check 只能用同步设置的 `currentRuntimeAgentId`。
 6. 这次改动归属哪一层：框架本体 / 生态包 / Claw 本地 feature / 预制 agent 装配？（权威修改位置见"仓库边界"一节）

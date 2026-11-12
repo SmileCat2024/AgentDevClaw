@@ -26,7 +26,7 @@ npm install
 npm start
 ```
 
-`npm start` 会自动完成本地 Feature 编译再启动服务。浏览器打开 `http://127.0.0.1:1420` 即可看到主界面。
+`npm start` 会自动完成本地 Feature 编译再启动服务。浏览器打开 `http://127.0.0.1:14200` 即可看到主界面。
 
 ## 上手路径
 

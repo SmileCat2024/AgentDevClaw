@@ -2,7 +2,7 @@
   "mcpServers": {
     "claw-cli": {
       "type": "http",
-      "url": "http://127.0.0.1:1420/protoclaw/claw-mcp"
+      "url": "http://127.0.0.1:14200/protoclaw/claw-mcp"
     }
   }
 }

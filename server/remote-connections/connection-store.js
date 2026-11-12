@@ -111,7 +111,7 @@ function normalizeSsh(value, mode) {
 function normalizeRemote(value, mode) {
   if (value === undefined || value === null) {
     if (mode === 'url') return null;
-    return { appPort: 1420 };
+    return { appPort: 14200 };
   }
   if (mode === 'url') {
     throw new ConnectionConfigError('url 模式不使用 remote，请移除该字段');
@@ -120,7 +120,7 @@ function normalizeRemote(value, mode) {
     throw new ConnectionConfigError('remote 必须是对象');
   }
   assertKnownKeys(value, REMOTE_KEYS, 'remote');
-  const appPort = value.appPort === undefined ? 1420 : assertPort(value.appPort, 'remote.appPort');
+  const appPort = value.appPort === undefined ? 14200 : assertPort(value.appPort, 'remote.appPort');
   return { appPort };
 }
 

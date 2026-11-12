@@ -180,7 +180,7 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     const runtimeIdentity = {
       agentId: runtime.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'programming-helper',
       sessionId: runtime.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
-      serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+      serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:14200',
     };
     this.use(new ClawDispatchFeature(runtimeIdentity));
     this.use(new GroupChatBridgeFeature(runtimeIdentity));

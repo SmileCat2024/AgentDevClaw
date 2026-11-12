@@ -166,7 +166,7 @@ fn service_port() -> u16 {
     std::env::var("PORT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(1420)
+        .unwrap_or(14200)
 }
 
 /// 读取与 run-supervised.js 相同的环境变量保证优雅窗口同步，+2s 留给 supervisor 自身收尾。
@@ -713,6 +713,45 @@ fn resolve_close_choice(app: tauri::AppHandle, window: tauri::WebviewWindow, cho
     }
 }
 
+/// 主窗口最小内尺寸（逻辑像素）。builder 的 min_inner_size 与默认尺寸
+/// 钳制共用同一常量，避免两处漂移。
+const MAIN_MIN_INNER: (f64, f64) = (1100.0, 700.0);
+
+/// 主窗口默认普通态尺寸上限（逻辑像素）。
+const MAIN_DEFAULT_INNER: (f64, f64) = (1600.0, 1000.0);
+
+/// 主窗口默认普通态（即最大化后「向下还原」的目标）尺寸：取默认上限与
+/// 主显示器逻辑工作区 70% 的较小值，且不低于最小内尺寸。
+///
+/// 为什么必须显著小于最大化状态：窗口以 maximized 创建时，Windows 把
+/// 创建期尺寸记录为还原目标；若该尺寸达到整屏（历史缺陷：默认
+/// 1600x1000 恰等于逻辑屏幕尺寸），首次点「向下还原」后窗口几何与最大
+/// 化状态视觉无差，按钮看起来无效，直到用户手动缩放一次刷新还原目标。
+/// 工作区不可知（拿不到显示器信息）时回退默认上限。
+fn default_inner_size(work_logical: Option<(f64, f64)>) -> (f64, f64) {
+    let (work_w, work_h) = work_logical.unwrap_or((f64::INFINITY, f64::INFINITY));
+    (
+        (work_w * 0.7)
+            .min(MAIN_DEFAULT_INNER.0)
+            .max(MAIN_MIN_INNER.0),
+        (work_h * 0.7)
+            .min(MAIN_DEFAULT_INNER.1)
+            .max(MAIN_MIN_INNER.1),
+    )
+}
+
+/// 把窗口左上角定位到工作区内居中（逻辑坐标）；放不下时贴工作区左上角，
+/// 不产生负坐标。与 close 弹窗的 center_in_rect 同语义。
+fn centered_position(
+    origin_logical: (f64, f64),
+    work_logical: (f64, f64),
+    size: (f64, f64),
+) -> (f64, f64) {
+    let x = origin_logical.0 + ((work_logical.0 - size.0) / 2.0).max(0.0);
+    let y = origin_logical.1 + ((work_logical.1 - size.1) / 2.0).max(0.0);
+    (x, y)
+}
+
 fn main() {
     // .env 注入必须在任何 Tauri 初始化与线程创建之前完成：此刻进程仍是
     // 单线程，set_var 无并发风险；service_port() 的读取与 supervisor 子
@@ -880,13 +919,34 @@ fn main() {
                     url_string.push_str(&percent_encode(&request.dir));
                 }
                 let url: tauri::Url = url_string.parse().expect("service url");
-                let result = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(url))
+                // 默认普通态尺寸按主显示器工作区钳制（见 default_inner_size），
+                // 并直接定位在工作区居中——这个位置与尺寸就是「向下还原」的
+                // 目标状态。位置用逻辑坐标传入（builder 语义），与 work_area
+                // 的物理坐标按 primary scale_factor 换算，tao 创建期换算往返一致。
+                let primary = handle.primary_monitor().ok().flatten();
+                let work_logical = primary.as_ref().map(|monitor| {
+                    let scale = monitor.scale_factor();
+                    let area = monitor.work_area();
+                    (
+                        area.position.x as f64 / scale,
+                        area.position.y as f64 / scale,
+                        area.size.width as f64 / scale,
+                        area.size.height as f64 / scale,
+                    )
+                });
+                let (width, height) =
+                    default_inner_size(work_logical.map(|(_, _, w, h)| (w, h)));
+                let mut builder = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(url))
                     .title("Agent 工作台")
-                    .inner_size(1600.0, 1000.0)
-                    .min_inner_size(1100.0, 700.0)
+                    .inner_size(width, height)
+                    .min_inner_size(MAIN_MIN_INNER.0, MAIN_MIN_INNER.1)
                     .maximized(true)
-                    .disable_drag_drop_handler()
-                    .build();
+                    .disable_drag_drop_handler();
+                if let Some((origin_x, origin_y, work_w, work_h)) = work_logical {
+                    let (x, y) = centered_position((origin_x, origin_y), (work_w, work_h), (width, height));
+                    builder = builder.position(x, y);
+                }
+                let result = builder.build();
                 match result {
                     Ok(_) => {
                         let state = handle.state::<Mutex<DesktopService>>();
@@ -1084,5 +1144,47 @@ SINGLE='keep  spaces'
         } else {
             assert_eq!(url.scheme(), "close-dialog");
         }
+    }
+
+    #[test]
+    fn default_inner_size_clamps_to_work_area_fraction() {
+        // 历史缺陷场景：逻辑工作区与默认上限同尺寸（1600x1000 整屏），
+        // 还原目标必须被钳到 70%，显著小于最大化状态；高度 70%（666.4）
+        // 低于最小内尺寸，被钳到 MAIN_MIN_INNER.1
+        let (w, h) = default_inner_size(Some((1600.0, 952.0)));
+        assert!((w - 1120.0).abs() < 1e-9, "w = {w}");
+        assert_eq!(h, MAIN_MIN_INNER.1, "h = {h}");
+        // 常见 1080p 工作区：宽高 70% 均落在 [min, default] 区间，比例直接生效
+        let (w, h) = default_inner_size(Some((1920.0, 1040.0)));
+        assert!((w - 1344.0).abs() < 1e-9, "w = {w}");
+        assert!((h - 728.0).abs() < 1e-9, "h = {h}");
+    }
+
+    #[test]
+    fn default_inner_size_keeps_default_and_min_bounds() {
+        // 大屏：保持既有默认 1600x1000 不放大
+        assert_eq!(default_inner_size(Some((2560.0, 1440.0))), (1600.0, 1000.0));
+        // 超小屏：不低于最小内尺寸
+        assert_eq!(default_inner_size(Some((1024.0, 600.0))), MAIN_MIN_INNER);
+        // 显示器信息不可知：回退默认上限
+        assert_eq!(default_inner_size(None), (1600.0, 1000.0));
+    }
+
+    #[test]
+    fn centered_position_centers_or_clamps_to_work_area() {
+        // 常规：工作区内居中（浮点容差比较）
+        let (x, y) = centered_position((0.0, 0.0), (1600.0, 952.0), (1440.0, 856.8));
+        assert!((x - 80.0).abs() < 1e-9, "x = {x}");
+        assert!((y - 47.6).abs() < 1e-9, "y = {y}");
+        // 非零原点（副屏 / 任务栏在上方）：相对工作区原点居中
+        assert_eq!(
+            centered_position((-1920.0, 40.0), (1920.0, 1040.0), (1600.0, 1000.0)),
+            (-1920.0 + 160.0, 40.0 + 20.0)
+        );
+        // 窗口大于工作区：贴左上角，不产生负偏移
+        assert_eq!(
+            centered_position((0.0, 0.0), (1024.0, 600.0), (1100.0, 700.0)),
+            (0.0, 0.0)
+        );
     }
 }

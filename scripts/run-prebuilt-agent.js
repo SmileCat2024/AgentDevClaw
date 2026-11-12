@@ -43,7 +43,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = resolve(__dirname, '..');
 const VIEWER_PORT = parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
-const SERVER_ORIGIN = cleanValue(process.env.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:1420';
+const SERVER_ORIGIN = cleanValue(process.env.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:14200';
 // ADR-0037 M6：托管容器形态（无父子 IPC 通道）经注册协议完成身份交接与
 // 退役上报；本地托管形态（process.connected）不走该分支。
 const REGISTER_MODE = cleanValue(process.env.PROTOCLAW_RUNTIME_REGISTER) === '1';

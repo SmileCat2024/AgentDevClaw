@@ -242,7 +242,7 @@ stdout 输出 **codex exec `--json` 风格**的会话事件流，**每行一个 
 | `AGENTDEV_VIEWER_PORT` | ViewerWorker 端口 | `2026` |
 | `PROTOCLAW_AGENT_CWD` | agent 工作目录 | 当前目录 |
 | `PROTOCLAW_MODEL_PRESET_ROLE` | 模型角色（`default` 等） | `default` |
-| `PORT` | Claw server Web UI 端口（threads 命令使用） | `1420` |
+| `PORT` | Claw server Web UI 端口（threads 命令使用） | `14200` |
 
 ---
 
@@ -362,7 +362,7 @@ claw sessions create --agent coder --dir <绝对路径> --runtime-mode standard
 
 ### 10.3 `claw threads` 命令族
 
-`claw threads` 是线程的 **CLI 控制面**，通过 HTTP 调用运行中的 Claw server（默认 `http://127.0.0.1:1420`，可用 `PORT` 覆盖）。这些命令对应 `server/thread-control/thread-routes.js` 提供的 `/protoclaw/threads*` 接口。
+`claw threads` 是线程的 **CLI 控制面**，通过 HTTP 调用运行中的 Claw server（默认 `http://127.0.0.1:14200`，可用 `PORT` 覆盖）。这些命令对应 `server/thread-control/thread-routes.js` 提供的 `/protoclaw/threads*` 接口。
 
 > 线程由 coder APP 的会话消费（APP 级判定，`agentId=coder`）；其他会话不创建线程。`claw threads` 也是审计线程状态、投递指令、推进 head 的主要 CLI 手段。
 

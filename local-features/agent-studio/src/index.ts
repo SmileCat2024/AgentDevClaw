@@ -137,7 +137,7 @@ export interface AgentStudioFeatureConfig {
   sessionId?: string;
   /** 宿主注入：宿主 agent id（会话绑定请求寻址用） */
   agentId?: string;
-  /** 宿主注入：Claw server origin（缺省 http://127.0.0.1:1420） */
+  /** 宿主注入：Claw server origin（缺省 http://127.0.0.1:14200） */
   serverOrigin?: string;
 }
 
@@ -171,7 +171,7 @@ export class AgentStudioFeature implements AgentFeature {
     this.agentRegistryPath = config.agentRegistryPath;
     this.sessionId = cleanValue(config.sessionId);
     this.agentId = cleanValue(config.agentId);
-    this.serverOrigin = cleanValue(config.serverOrigin) || 'http://127.0.0.1:1420';
+    this.serverOrigin = cleanValue(config.serverOrigin) || 'http://127.0.0.1:14200';
   }
 
   getPackageInfo(): PackageInfo | null {

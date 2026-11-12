@@ -21,7 +21,7 @@ const __dirname = dirname(__filename);
 const USER_DATA_ROOT = resolveUserDataDir();
 const WORKSPACES_ROOT = join(USER_DATA_ROOT, 'workspaces');
 const HANDOFFS_ROOT = join(USER_DATA_ROOT, 'context-handoffs');
-const SERVER_URL = process.env.PROTOCLAW_SERVER_URL || 'http://127.0.0.1:1420';
+const SERVER_URL = process.env.PROTOCLAW_SERVER_URL || 'http://127.0.0.1:14200';
 const PROVIDERS_DIR = join(__dirname, 'providers');
 const PROJECT_ROOT = resolve(__dirname, '..');
 

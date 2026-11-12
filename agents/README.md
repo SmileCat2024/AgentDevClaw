@@ -179,7 +179,7 @@ CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON
 
 | 环境变量 | 默认值 | 作用 |
 |---|---:|---|
-| `CLAW_ACP_BASE_URL` | `http://127.0.0.1:1420` | Claw server 本机 HTTP 地址 |
+| `CLAW_ACP_BASE_URL` | `http://127.0.0.1:14200` | Claw server 本机 HTTP 地址 |
 | `CLAW_ACP_PROMPT_TIMEOUT_MS` | `1800000` | 等待 prompt 终态事件的超时（30 分钟）；`0` 表示禁用，不自动 interrupt |
 | `CLAW_ACP_POLL_INTERVAL_MS` | `500` | 事件增量轮询间隔（毫秒） |
 | `CLAW_ACP_READY_TIMEOUT_MS` | `30000` | server 侧 `session/new` 等待 runtime READY 的超时（毫秒） |

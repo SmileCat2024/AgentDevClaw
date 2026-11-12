@@ -34,7 +34,7 @@ description: AgentDevClaw 使用帮助。当用户询问模型/MCP/技能怎么�
 | 模型配置 | 设置 → 模型配置，三类入口：Codex 订阅（登录 OpenAI 账户）/ OpenCode 订阅 / 自定义模型（支持 OpenAI Chat Completions、Responses、Anthropic Messages 三种协议） |
 | 网络代理 | 设置 → 网络代理；保存后全局生效，含连通性测试。Codex / OpenCode 等订阅服务通常需要代理 |
 | MCP 项目级配置 | 会话目录 `.agentdev/mcps/*.json`；stdio 条目必须写 `"type": "stdio"`，缺省会被当 HTTP 连接而静默失败 |
-| MCP 共享网关 | 设置 → MCP 网关；助手先读 `PROTOCLAW_SERVER_ORIGIN` 定位当前实例（默认端口 1420），经网关 API 代配；必须实际调用所需工具，connected 与工具枚举只是中间状态；见 references/mcp.md |
+| MCP 共享网关 | 设置 → MCP 网关；助手先读 `PROTOCLAW_SERVER_ORIGIN` 定位当前实例（默认端口 14200），经网关 API 代配；必须实际调用所需工具，connected 与工具枚举只是中间状态；见 references/mcp.md |
 | MCP 代配验收 | 配置回读 → 工具注册 → 实际调用 → 所需操作验证。桌面桥接还要核对下游端口、凭证与文件授权；改用脚本或无界面模式前先与用户确认 |
 | 用户技能目录 | 项目目录 `.agentdev/skills/`（默认扫描）；项目 `.claude/skills/` 可经设置开启扫描 |
 | 项目记忆文件 | `CLAUDE.md` / `AGENT.md` 自动读取注入（默认开启，可在 Feature 设置中调整，另可附加最多 10 个额外文档） |

@@ -36,7 +36,7 @@ claw-desktop.exe（Tauri 主进程）
 - **异常宿主退出**：不根据 ppid 消失自动关停或收割服务。若桌面主进程被强制结束，server 可能继续运行；用户可通过正常的 UI 退出流程关闭它。
 - **`.env` 配置文件**：桌面壳进程启动最早期（任何 Tauri 初始化与线程创建之前）以及源码运行的 `scripts/run-supervised.js` supervisor 启动时，均加载同一份 `.env`；值只注入到后续 server 子进程环境，**真实环境变量优先，`.env` 永不覆盖**。查找顺序：`CLAW_ENV_FILE` 指定的路径 → Claw 数据根（`AGENTDEV_DATA_DIR` 或默认 `~/.agentdev/AgentDevClaw`）下的 `.env`，取第一个存在者，找不到则跳过。桌面路径在 Rust 宿主加载，源码 `npm start` 路径在 supervisor 用共享 `scripts/env-file.js` 加载；`npm run dev` 直接启动 server 时仍由调用方环境提供变量。语法：每行 `KEY=VALUE`，支持 `export ` 前缀与成对引号包裹的值，`#` 仅支持整行注释（不支持行内注释，`#` 属于值的一部分），key 限定 `[A-Za-z0-9_]`，非法行忽略。`.env` 内写 `AGENTDEV_DATA_DIR` 只会传给子进程，不改变 `.env` 自身的查找位置（定位发生在注入之前）；改动 `.env` 后必须完全退出旧实例再启动——单实例插件会把再次启动转交给已运行实例，配置不会重读。
 
-发布形态从安装目录 `app/` 加载服务资源，优先使用随包 Node；开发形态从仓库加载，Node 缺失时取 PATH。端口沿用 `PORT`/`AGENTDEV_VIEWER_PORT`（默认 1420/2026）；动态端口分配尚未实现，见“边界与非目标”。
+发布形态从安装目录 `app/` 加载服务资源，优先使用随包 Node；开发形态从仓库加载，Node 缺失时取 PATH。端口沿用 `PORT`/`AGENTDEV_VIEWER_PORT`（默认 14200/2026）；动态端口分配尚未实现，见“边界与非目标”。
 
 ## 状态
 

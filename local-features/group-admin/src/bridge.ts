@@ -86,7 +86,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
   constructor(private readonly runtime: GroupChatRuntimeIdentity = {}) {}
 
   private getServerOrigin(): string {
-    return this.runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
+    return this.runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:14200';
   }
 
   private getAgentId(): string {

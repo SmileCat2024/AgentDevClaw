@@ -83,7 +83,7 @@
 
 ## 渲染与前端状态
 
-- **Claw 主前端（端口 1420）** — `public/src/*`，用户日常看到的界面。
+- **Claw 主前端（端口 14200）** — `public/src/*`，用户日常看到的界面。
 - **DebugHub Viewer（端口 2026）** — `AgentDev/src/core/viewer-html.ts` + `viewer-worker.ts`，框架侧。
   _Avoid_: 改错管线 = 白改。面板显示问题先问"用户看到的是哪个管线渲染的"。
 - **normalizeHookInspector** — 同名实现存在两处（Claw 前端 + 框架 `viewer-html.ts`），新增 inspector snapshot 字段必须两边同步，否则字段在重构时被丢弃。

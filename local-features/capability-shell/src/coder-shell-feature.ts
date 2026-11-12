@@ -6,7 +6,7 @@
  * 工具。CoderAgent 不挂（不自派工单，避免递归调度）。
  *
  * serverOrigin 解析参照 local-features/dispatch 的 runtimeIdentity 模式：
- * 显式配置 → PROTOCLAW_SERVER_ORIGIN → http://127.0.0.1:1420。
+ * 显式配置 → PROTOCLAW_SERVER_ORIGIN → http://127.0.0.1:14200。
  */
 
 import { fileURLToPath } from 'url';
@@ -27,7 +27,7 @@ import { createCoderShellPolicy } from './coder-policy.js';
 const __filename = fileURLToPath(import.meta.url);
 
 export interface CapabilityShellFeatureConfig {
-  /** 调度控制面 origin（缺省 runtime env → http://127.0.0.1:1420） */
+  /** 调度控制面 origin（缺省 runtime env → http://127.0.0.1:14200） */
   serverOrigin?: string;
   /** 覆盖工具默认超时（毫秒；超时唯一闸门 = Tool.timeout 契约） */
   timeoutMs?: number;
@@ -87,7 +87,7 @@ class CapabilityShellFeatureInner implements AgentFeature {
   constructor(private readonly config: CapabilityShellFeatureConfig = {}) {
     this.serverOrigin = config.serverOrigin
       || process.env.PROTOCLAW_SERVER_ORIGIN
-      || 'http://127.0.0.1:1420';
+      || 'http://127.0.0.1:14200';
     if (config.panel) {
       if (!config.agentId || !config.sessionId) throw new Error('面板投影要求显式 agentId/sessionId');
       this.panelClient = new FeatureCommunicationClient(this.serverOrigin, {

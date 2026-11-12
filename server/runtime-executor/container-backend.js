@@ -100,9 +100,9 @@ function resolvePlatformGatewayContext(specEnv) {
     );
   }
   const viewerHttpPort = cleanSessionText(specEnv.AGENTDEV_VIEWER_PORT) || '2026';
-  let appPort = '1420';
+  let appPort = '14200';
   try {
-    const origin = new URL(cleanSessionText(specEnv.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:1420');
+    const origin = new URL(cleanSessionText(specEnv.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:14200');
     if (origin.port) appPort = origin.port;
   } catch { /* 保底默认端口 */ }
   return {

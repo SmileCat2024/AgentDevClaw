@@ -8,7 +8,7 @@
  * （同机回环；单密码认证开启时经 PROTOCLAW_INTERNAL_TOKEN 携带内部服务令牌，
  * 与 bin/claw.mjs 的 clawServerFetch 同一契约）。请求形态与参数参照
  * `bin/claw.mjs` threads / sessions 子命令；serverOrigin 解析参照
- * local-features/dispatch 的 runtimeIdentity 模式（默认 http://127.0.0.1:1420）。
+ * local-features/dispatch 的 runtimeIdentity 模式（默认 http://127.0.0.1:14200）。
  *
  * new-session 直调 POST /protoclaw/prebuilt_sessions（agentId=coder，ADR-0025，
  * 契约参照 bin/claw.mjs handleSessions：--dir 映射 openDirectory；目录必填，
@@ -86,7 +86,7 @@ export function createThreadsAdapters(deps: {
  * threads adapter 工厂。
  *
  * serverOrigin 解析参照 local-features/dispatch 的 runtimeIdentity 模式：
- * 显式配置 → PROTOCLAW_SERVER_ORIGIN → http://127.0.0.1:1420。
+ * 显式配置 → PROTOCLAW_SERVER_ORIGIN → http://127.0.0.1:14200。
  * 请求形态与参数参照 bin/claw.mjs threads 子命令；单密码认证开启时经
  * PROTOCLAW_INTERNAL_TOKEN 携带内部服务令牌（server/auth.js authenticateInternal）。
  */

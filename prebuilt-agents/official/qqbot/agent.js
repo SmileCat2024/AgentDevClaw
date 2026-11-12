@@ -32,7 +32,7 @@ const __dirname = dirname(__filename);
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
-const SERVER_ORIGIN = `http://127.0.0.1:${process.env.PORT || 1420}`;
+const SERVER_ORIGIN = `http://127.0.0.1:${process.env.PORT || 14200}`;
 
 // IM 接线员工具的渲染模板资产随 local-features 构建（dist/templates/im-*.render.js），
 // 经 IMOperatorFeature.getTemplateNames() 声明后由 ViewerWorker 以 /res/ 资源 URL（ADR-0038）提供。
@@ -397,7 +397,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     this.use(new ModelSelectionFeature({
       agentId: config.runtime?.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'qqbot',
       sessionId: config.runtime?.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
-      serverOrigin: config.runtime?.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+      serverOrigin: config.runtime?.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:14200',
     }));
 
     // 时间感知：CallStart 按节奏注入系统时间（>4h 未汇报才汇报），距上一轮

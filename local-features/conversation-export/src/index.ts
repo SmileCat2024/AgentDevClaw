@@ -66,7 +66,7 @@ export class ConversationExportFeature implements AgentFeature {
           }
 
           const serverOrigin =
-            process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 1420}`;
+            process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 14200}`;
 
           try {
             const body: Record<string, unknown> = { sessionId };
