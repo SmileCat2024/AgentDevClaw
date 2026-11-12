@@ -955,7 +955,9 @@ function rebindQueueProjectionForRuntime(runtimeId) {
       const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(
         cached.items, Date.now(), _queuedProjectionRuntimeId) || [];
       _queuedTexts = texts.slice();
-      _pendingQueuedCount = cached.items.filter((item) => item?.kind !== 'reminder').length;
+      // 待发送计数只认未被领取的用户输入：已 claim（inputLease）的项正在
+      // 执行，不是排队（与 reconcileQueuedTexts 的展示过滤同一语义）
+      _pendingQueuedCount = cached.items.filter((item) => item?.kind !== 'reminder' && !item?.inputLease).length;
     }
   }
   _lastQueueBubbleSignature = '';
@@ -1008,8 +1010,10 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
       const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(expectedRuntimeId);
       if (cached && Array.isArray(cached.items)) {
         const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(cached.items, Date.now(), expectedRuntimeId) || [];
-        // 待发送气泡/计数只认用户输入：reminder（机器通报）同队存放但不展示
-        applyQueuedInputsTexts(expectedRuntimeId, texts, cached.items.filter((item) => item?.kind !== 'reminder').length);
+        // 待发送气泡/计数只认用户输入且未被领取：reminder（机器通报）同队
+        // 存放但不展示，已 claim（inputLease）的项正在执行、不算排队
+        applyQueuedInputsTexts(expectedRuntimeId, texts,
+          cached.items.filter((item) => item?.kind !== 'reminder' && !item?.inputLease).length);
         return;
       }
     }
@@ -1021,8 +1025,9 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
     // 请求期间 SSE 已带来更新的观察，HTTP 快照不再拥有队列写入权。
     if (queueClient?.getLastQueuedSnapshot?.(expectedRuntimeId) !== snapshotBeforeFetch) return;
     const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
-    // 同上：reminder（机器通报）不进待发送气泡与待发送计数
-    const userQueue = queue.filter((item) => item?.kind !== 'reminder');
+    // 同上：reminder（机器通报）不进待发送气泡与待发送计数；已 claim
+    // （inputLease）的项正在执行、不算排队（与 SSE 路径同一投影语义）
+    const userQueue = queue.filter((item) => item?.kind !== 'reminder' && !item?.inputLease);
     const viewerQueueTexts = userQueue
       .map((item) => {
         const t = typeof item?.text === 'string' ? item.text.trim() : '';

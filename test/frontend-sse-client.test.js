@@ -635,4 +635,42 @@ describe('sse-client: 排队气泡乐观对账（reconcileQueuedTexts）', () =>
       '确认后的锚点不再保留',
     );
   });
+
+  // 已 claim（inputLease）的 durable 命令：claim 不移除、ack 才移除是
+  // ADR-0047 状态机语义；claim→ack 窗口内快照仍含该项。空闲发送时该窗口
+  // 由消费+快照落盘决定（可达数百毫秒），把它渲染成排队气泡就是
+  // 「先卡一下再发出去」的观感来源——展示层如实区分「待领取」与
+  // 「执行中」。
+  it('已 claim（inputLease）的项不产生排队气泡文本', () => {
+    const ctx = fresh();
+    const out = runJson(ctx, `window.ClawFW.SseClient.reconcileQueuedTexts([
+      { id: 'q-claimed', text: '执行中的消息', inputLease: { leaseId: 'l-1' } },
+      { id: 'q-waiting', text: '真正在排队的' },
+    ])`);
+    assert.deepEqual(out, ['真正在排队的']);
+  });
+
+  it('已 claim 的项仍确认乐观锚点（服务端已收到 ≠ 待展示）', () => {
+    const ctx = fresh();
+    // POST 回执先到（注册乐观锚点），随后快照显示该项已被 claim：
+    // 文本不展示，但「项在快照中」即确认锚点——后续空快照不得残留
+    ctx.run(`noteQueuedOptimistic('q-c', '被领取了', 'rt-focus')`);
+    const out = runJson(ctx,
+      `window.ClawFW.SseClient.reconcileQueuedTexts(
+        [{ id: 'q-c', text: '被领取了', inputLease: { leaseId: 'l-2' } }], Date.now(), 'rt-focus')`);
+    assert.deepEqual(out, [], 'claim 中的项不渲染');
+    const after = runJson(ctx,
+      `window.ClawFW.SseClient.reconcileQueuedTexts([], Date.now(), 'rt-focus')`);
+    assert.deepEqual(after, [], '锚点已被 claim 快照确认，不再保留到 TTL');
+  });
+
+  it('已 claim 的项不复活迟到 POST 回执的乐观气泡', () => {
+    const ctx = fresh();
+    // 排队→claim 事件都早于 POST 回执（消费提速后的常态）
+    ctx.run(`handleQueuedInputsEvent({ agentId: 'rt-focus', data: [{ id: 'q-fast', text: '已发送', inputLease: { leaseId: 'l-3' } }] });
+      handleQueuedInputsEvent({ agentId: 'rt-focus', data: [] });
+      noteQueuedOptimistic('q-fast', '已发送', 'rt-focus');`);
+    assert.deepEqual(runJson(ctx, `reconcileQueuedTexts(getLastQueuedSnapshot('rt-focus').items)`), [],
+      '已领取的消息不得因迟到回执复活排队气泡');
+  });
 });

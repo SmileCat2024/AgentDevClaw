@@ -226,7 +226,8 @@ function handleQueuedInputsEvent(frame) {
   const texts = reconcileQueuedTexts(items, Date.now(), runtimeId);
   if (!isSameRuntime(runtimeId, currentRuntimeAgentId)) return;
   if (typeof applyQueuedInputsTexts === 'function') {
-    applyQueuedInputsTexts(runtimeId, texts, items.filter(isUserQueuedItem).length);
+    applyQueuedInputsTexts(runtimeId, texts,
+      items.filter((item) => isUserQueuedItem(item) && !isClaimedQueuedItem(item)).length);
   }
 }
 
@@ -307,6 +308,15 @@ function isUserQueuedItem(item) {
   return item?.kind !== 'reminder';
 }
 
+// 已 claim（带 inputLease）的 durable 命令正被 runtime 执行，ack 前仍留在
+// 队列快照里（claim 不移除是 ADR-0047 状态机语义）。它不是「等待领取」，
+// 不进排队气泡与待发计数——空闲发送时该窗口可达数百毫秒（ack 要等快照
+// 落盘），渲染它就是「发出去前卡一下」的观感来源。锚点确认不受此过滤
+// 影响：项在快照中即是「服务端已收到」的事实。
+function isClaimedQueuedItem(item) {
+  return !!item?.inputLease;
+}
+
 function reconcileQueuedTexts(items, nowMs = Date.now(), runtimeId = currentRuntimeAgentId) {
   const scopedRuntimeId = String(runtimeId || '').trim();
   const snapshotIds = new Set();
@@ -318,6 +328,7 @@ function reconcileQueuedTexts(items, nowMs = Date.now(), runtimeId = currentRunt
       _observedQueuedIds.set(item.id, scopedRuntimeId);
       if (_observedQueuedIds.size > 1000) _observedQueuedIds.delete(_observedQueuedIds.keys().next().value);
     }
+    if (isClaimedQueuedItem(item)) continue; // 执行中：可确认锚点，不渲染
     const t = typeof item?.text === 'string' ? item.text.trim() : '';
     if (t) snapshotTexts.push(t);
     else if (Array.isArray(item?.images) && item.images.length > 0) snapshotTexts.push('🖼');
