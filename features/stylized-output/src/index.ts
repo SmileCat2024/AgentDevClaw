@@ -467,7 +467,7 @@ export class StylizedOutput implements AgentFeature {
   private readonly signTool: Tool = {
     name: 'sign_output_style',
     description:
-      '输出风格签名确认工具。当前会话启用输出风格后，每一轮对话收尾时都必须调用本工具完成签名——签名按轮刷新，上一轮的签名对本轮无效，每轮都要重新调用：参数 signature 需逐字默写该风格 frontmatter 中 signature 字段的确认签名原文（上下文中已注入的风格说明里可以查到）。验证通过后本轮回复才被允许结束；未签名就结束会被系统拦截。把签名写进正文不算签名，必须调用本工具。',
+      '输出风格签名确认工具。当前会话启用输出风格后，每一轮对话工作全部完成、进行最终回复时都必须调用本工具完成签名——签名按轮刷新，上一轮的签名对本轮无效，每轮都要重新调用：参数 signature 需逐字默写该风格 frontmatter 中 signature 字段的确认签名原文（上下文中已注入的风格说明里可以查到）。验证通过后本轮回复才被允许结束；未签名就结束会被系统拦截。把签名写进正文不算签名，必须调用本工具。',
     parameters: {
       type: 'object',
       properties: {
@@ -664,7 +664,7 @@ export class StylizedOutput implements AgentFeature {
       frontmatter ? ['```yaml', frontmatter, '```'].join('\n') : '',
       body,
       '---',
-      '[签名要求] 本风格启用期间，每一轮对话收尾时都必须调用签名工具：',
+      '[签名要求] 本风格启用期间，每一轮对话工作全部完成、进行最终回复时都必须调用签名工具：',
       '在你给出本轮最终回复的同时，调用 sign_output_style 工具，参数 signature 逐字默写上面 frontmatter 中 signature 字段的原文。',
       '签名状态按轮刷新：每一轮用户输入都会清空上一轮的签名记录，上一轮签过名对本轮无效，本轮必须重新调用一次。',
       '工具验证通过后，本轮回复才会被允许结束。未签名就试图结束会被系统拦截并要求补签。',
