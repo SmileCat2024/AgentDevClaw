@@ -11,6 +11,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createPassiveMailboxLoop } from '../scripts/runtime-passive-mailbox.js';
+import { CallArbiter } from '../server/call-arbiter.js';
 
 function jsonResponse(body, ok = true) {
   return {
@@ -402,6 +403,82 @@ describe('createPassiveMailboxLoop poke (queued-input-available signal)', () => 
     } finally {
       harness.dispose();
       harness.loop.poke();
+      await running;
+    }
+  });
+});
+
+describe('passive mailbox delivery into CallArbiter', () => {
+  it('runs a queued background completion while the prior call save effect is still pending', async () => {
+    let releaseSave;
+    const saveBarrier = new Promise((resolve) => { releaseSave = resolve; });
+    let firstSaveStarted;
+    const firstSaveStartedPromise = new Promise((resolve) => { firstSaveStarted = resolve; });
+    const calls = [];
+    // Arbiter's safety-net uses process-global fetch; leave its agentId unset so
+    // this test stays isolated from any real ViewerWorker on the developer machine.
+    const agent = {
+      async onCall(text, _images, _activations, _metadata, options) {
+        calls.push({ text, options });
+        return '';
+      },
+    };
+    const mailboxAgent = { agentId: 'viewer-agent-1' };
+    const arbiter = new CallArbiter(agent);
+    arbiter.on('callFinished', async (envelope) => {
+      if (envelope.text !== 'initial request') return;
+      firstSaveStarted();
+      await saveBarrier;
+    });
+
+    const first = arbiter.enqueue({ source: 'chat-composer', text: 'initial request' });
+    const firstDone = arbiter.waitForCompletion(first.id);
+    await firstSaveStartedPromise;
+
+    let disposed = false;
+    const mailbox = [];
+    let dequeueAttempts = 0;
+    const loop = createPassiveMailboxLoop({
+      agent: mailboxAgent,
+      callArbiter: arbiter,
+      isDisposed: () => disposed,
+      pollIntervalMs: 60_000,
+      viewerPort: '2026',
+      fetchImpl: async () => {
+        dequeueAttempts++;
+        return jsonResponse({ input: mailbox.shift() ?? null });
+      },
+    });
+    const running = loop.run();
+
+    try {
+      mailbox.push({
+        text: '[后台任务 bg-1 已完成] 测试结果',
+        kind: 'reminder',
+        source: 'shell',
+        sourceRef: 'bg-1',
+      });
+      loop.poke();
+      assert.ok(await until(() => calls.length === 2),
+        'the mailbox completion must start without waiting for the save effect');
+      assert.ok(dequeueAttempts > 0, 'the mailbox loop must actually consume the completion');
+      assert.equal(mailbox.length, 0, 'the consumed completion must leave the mailbox');
+      assert.equal(arbiter.getStatus().status, 'idle',
+        'the arbiter must return idle even while the save effect is pending');
+      assert.deepEqual(calls, [
+        { text: 'initial request', options: { source: 'chat-composer' } },
+        {
+          text: '[后台任务 bg-1 已完成] 测试结果',
+          options: { kind: 'reminder', source: 'shell', sourceRef: 'bg-1' },
+        },
+      ], 'the delivered completion must reach Agent.onCall with its reminder identity intact');
+
+      releaseSave();
+      await firstDone;
+    } finally {
+      releaseSave();
+      disposed = true;
+      loop.poke();
       await running;
     }
   });

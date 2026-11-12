@@ -11,6 +11,7 @@
 import { defineStateMachine, reduce } from '@agentdevjs/core';
 
 import { CONTINUATION_BUDGET } from './shared/constants.js';
+import { viewerFetch } from './shared/viewer-fetch.js';
 
 /**
  * Envelope 状态转换表（ADR-0021 阶段 1）：envelope.status 的唯一求值来源。
@@ -81,6 +82,9 @@ export class CallArbiter {
     this._interruptEvents = [];
     this._status = 'idle'; // idle | queued | running
     this._listeners = { callStarted: [], callFinished: [] };
+    // callFinished effects are detached from queue admission, but close() still
+    // waits for them so shutdown cannot discard persistence/projection work.
+    this._completionEffects = new Set();
     // Completion trackers: envelopeId → resolve callback
     this._completionCallbacks = new Map();
     this._terminalEnvelopes = new Map();
@@ -249,6 +253,9 @@ export class CallArbiter {
     this._closePromise = (async () => {
       await quiesced;
       await this._execution;
+      while (this._completionEffects.size > 0) {
+        await Promise.all([...this._completionEffects]);
+      }
     })();
     return this._closePromise;
   }
@@ -269,8 +276,9 @@ export class CallArbiter {
 
     while (true) {
       try {
-        const res = await fetch(
-          `${viewerUrl}/api/agents/${encodeURIComponent(this._agent.agentId)}/dequeue-input`,
+        const res = await viewerFetch(
+          viewerUrl,
+          `/api/agents/${encodeURIComponent(this._agent.agentId)}/dequeue-input`,
           { method: 'POST', headers: { 'Content-Type': 'application/json' } },
         );
         if (!res.ok) break;
@@ -372,7 +380,14 @@ export class CallArbiter {
         }
         console.log(`[CallArbiter] finished ${envelope.id} (status=${envelope.status}, segments=${envelope._segmentCount || 0}, remaining=${this._queue.length})`);
         await started;
-        await this._emit('callFinished', envelope);
+        // Completion listeners perform persistence and projection side effects.
+        // Their promises must not hold the execution gate: a slow external
+        // effect must not keep the runtime non-idle and block mailbox wakeups.
+        // close() still awaits the tracked effects before shutdown completes.
+        const completionEffect = this._emit('callFinished', envelope)
+          .then(() => undefined, () => undefined);
+        this._completionEffects.add(completionEffect);
+        completionEffect.then(() => this._completionEffects.delete(completionEffect));
         this._active = false;
         this._status = this._queue.length > 0 ? 'queued' : 'idle';
         // Resolve any waitForCompletion() promises for this envelope

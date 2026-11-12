@@ -12,6 +12,33 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { CallArbiter } from '../server/call-arbiter.js';
 
+it('releases the next envelope without waiting for callFinished effects', async () => {
+  const effectStarted = Promise.withResolvers();
+  const releaseEffect = Promise.withResolvers();
+  const calls = [];
+  const arbiter = new CallArbiter({
+    async onCall(text) {
+      calls.push(text);
+      return '';
+    },
+    async quiesce() {},
+  });
+  arbiter.on('callFinished', async () => {
+    effectStarted.resolve();
+    await releaseEffect.promise;
+  });
+
+  const first = arbiter.enqueue({ source: 'test', text: 'first' });
+  await effectStarted.promise;
+  const second = arbiter.enqueue({ source: 'test', text: 'second' });
+  await arbiter.waitForCompletion(second.id);
+
+  assert.deepEqual(calls, ['first', 'second']);
+  assert.equal(arbiter.getStatus().status, 'idle');
+  releaseEffect.resolve();
+  await arbiter.close();
+});
+
 it('closing cancels queued work, rejects new input and waits for completion effects', async () => {
   const running = Promise.withResolvers();
   const listenerStarted = Promise.withResolvers();
@@ -772,6 +799,11 @@ describe('CallArbiter', () => {
 
     const server = http.createServer((req, res) => {
       if (req.method === 'POST' && req.url?.includes('/dequeue-input')) {
+        if (req.headers.authorization !== 'Bearer test-viewer-token') {
+          res.writeHead(401);
+          res.end();
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         if (queue.length > 0) {
           res.end(JSON.stringify({ input: queue.shift() }));
@@ -787,7 +819,9 @@ describe('CallArbiter', () => {
     await new Promise(resolve => server.listen(0, resolve));
     const port = server.address().port;
     const prevViewerPort = process.env.AGENTDEV_VIEWER_PORT;
+    const prevInternalToken = process.env.PROTOCLAW_INTERNAL_TOKEN;
     process.env.AGENTDEV_VIEWER_PORT = String(port);
+    process.env.PROTOCLAW_INTERNAL_TOKEN = 'test-viewer-token';
 
     const agent = makeSlowAgent(10);
     agent.agentId = 'test-drain-agent';
@@ -818,6 +852,8 @@ describe('CallArbiter', () => {
       server.close();
       if (prevViewerPort === undefined) delete process.env.AGENTDEV_VIEWER_PORT;
       else process.env.AGENTDEV_VIEWER_PORT = prevViewerPort;
+      if (prevInternalToken === undefined) delete process.env.PROTOCLAW_INTERNAL_TOKEN;
+      else process.env.PROTOCLAW_INTERNAL_TOKEN = prevInternalToken;
     }
   });
 
