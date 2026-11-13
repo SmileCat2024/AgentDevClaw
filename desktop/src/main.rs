@@ -26,7 +26,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem};
@@ -720,6 +721,19 @@ const MAIN_MIN_INNER: (f64, f64) = (1100.0, 700.0);
 /// 主窗口默认普通态尺寸上限（逻辑像素）。
 const MAIN_DEFAULT_INNER: (f64, f64) = (1600.0, 1000.0);
 
+/// 主窗口预填底色：前端默认暗色主题的页面基色（public/styles/base.css
+/// 的 --bg-color: #050505）。页面 CSS 生效前 WebView2 以它作默认背景，
+/// 消除「窗口已显示、内容未渲染」阶段的原生黑底。壳层无法预知用户的
+/// 亮色偏好（主题存于 WebView 的 localStorage），只能对齐默认暗色；
+/// 亮色用户会在加载瞬间看到一次暗→亮过渡，仍优于黑底。
+const MAIN_WINDOW_BG: tauri::window::Color = tauri::window::Color(5, 5, 5, 255);
+
+/// 页面加载完成显示的兜底超时：正常与导航失败（WebView2 的
+/// NavigationCompleted 无论成败都会触发 on_page_load(Finished)）都由
+/// 页面加载回调显示窗口；此兜底只覆盖「导航永不完成」的极端挂起
+/// （如连接一直悬挂），超时强制显示，保证窗口不会永远不出现。
+const MAIN_WINDOW_SHOW_FALLBACK: Duration = Duration::from_secs(10);
+
 /// 主窗口默认普通态（即最大化后「向下还原」的目标）尺寸：取默认上限与
 /// 主显示器逻辑工作区 70% 的较小值，且不低于最小内尺寸。
 ///
@@ -936,12 +950,39 @@ fn main() {
                 });
                 let (width, height) =
                     default_inner_size(work_logical.map(|(_, _, w, h)| (w, h)));
+                // 首帧策略：visible(false) 创建 + 整页加载完成后才显示，
+                // 消除「全黑窗口逐渐扩展」的中间过程。两个来源一并解决：
+                //   黑屏：窗口原先 build 即可见，WebView2 尚未渲染时是原生
+                //   黑底，现在以 MAIN_WINDOW_BG 预填且延后显示；
+                //   扩展：tao 的最大化在 CreateWindowEx 之后才应用（tao
+                //   window.rs "Need to set FULLSCREEN or MAXIMIZED after
+                //   CreateWindowEx"），窗口先按 inner_size 出现再动画扩展
+                //   到最大化；不可见期间完成这一步，show 时窗口已处于最
+                //   大化状态（tao 对 MAXIMIZED 且不可见的组合有跳过
+                //   ShowWindow 的防闪烁守卫，见 window_state.rs apply_diff）。
+                let shown = Arc::new(AtomicBool::new(false));
+                let shown_on_load = Arc::clone(&shown);
                 let mut builder = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(url))
                     .title("Agent 工作台")
                     .inner_size(width, height)
                     .min_inner_size(MAIN_MIN_INNER.0, MAIN_MIN_INNER.1)
                     .maximized(true)
-                    .disable_drag_drop_handler();
+                    .visible(false)
+                    .background_color(MAIN_WINDOW_BG)
+                    .disable_drag_drop_handler()
+                    .on_page_load(move |window, payload| {
+                        // 只在首次整页加载完成时显示并聚焦；后续整页导航
+                        // （如用户刷新）不再抢焦点。show 幂等，但 set_focus
+                        // 会打断用户在其他窗口的输入，必须只做一次。
+                        if !matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                            return;
+                        }
+                        if shown_on_load.swap(true, Ordering::SeqCst) {
+                            return;
+                        }
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    });
                 if let Some((origin_x, origin_y, work_w, work_h)) = work_logical {
                     let (x, y) = centered_position((origin_x, origin_y), (work_w, work_h), (width, height));
                     builder = builder.position(x, y);
@@ -949,6 +990,20 @@ fn main() {
                 let result = builder.build();
                 match result {
                     Ok(_) => {
+                        // 兜底显示：页面导航永不完成时（见
+                        // MAIN_WINDOW_SHOW_FALLBACK 注释）超时强制显示，
+                        // 不与页面加载回调抢——shown 已置位则说明首帧
+                        // 已正常显示。
+                        let fallback_shown = Arc::clone(&shown);
+                        let fallback_handle = handle.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(MAIN_WINDOW_SHOW_FALLBACK);
+                            if !fallback_shown.load(Ordering::SeqCst) {
+                                if let Some(window) = fallback_handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                }
+                            }
+                        });
                         let state = handle.state::<Mutex<DesktopService>>();
                         let mut guard = state.lock().unwrap();
                         guard.window_created = true;
@@ -1029,6 +1084,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn main_window_bg_matches_frontend_default_theme() {
+        // 锁定壳层预填底色与前端默认暗色主题基色的对应关系：后者在
+        // public/styles/base.css 的 --bg-color: #050505。壳层取不到用户
+        // 主题偏好（存于 WebView localStorage），只能对齐默认值；若前端
+        // 改了默认基色而此处未同步，加载首帧会多一次色跳，测试在此拦截。
+        assert_eq!(MAIN_WINDOW_BG, tauri::window::Color(5, 5, 5, 255));
+    }
 
     #[test]
     fn parses_open_and_new_chat_requests() {
