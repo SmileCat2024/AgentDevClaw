@@ -290,7 +290,13 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 仅 main 身份挂载；CoderAgent 不挂（不自派工单，避免递归调度）。
     // runtimeIdentity 模式同 ClawDispatchFeature（serverOrigin 三级解析）。
     // 商店概览仅实例化静态装配清单，不应声明运行时 feature-comms 面板。
-    this.use(new CapabilityShellFeature({ ...runtimeIdentity, panel: runtime.mode !== 'overview' }));
+    // 无会话宿主 runtime（例如点击工作空间入口时的启动占位）没有稳定的
+    // feature-comms 寻址，不能创建要求 agentId/sessionId 的面板投影；明确会话
+    // 仍保持原有实时面板行为。概览模式同样不创建运行时面板。
+    this.use(new CapabilityShellFeature({
+      ...runtimeIdentity,
+      panel: runtime.mode !== 'overview' && Boolean(runtimeIdentity.sessionId),
+    }));
 
     // playwright 领域 shell（ticket 036）已改为官方可选插件：不再静态装配，
     // 经 $mount kind:'builtin' 声明后由宿主钩子按 builtinOptionalFeatures

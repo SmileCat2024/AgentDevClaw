@@ -46,6 +46,13 @@ describe('PH context-guard 装配 wiring（rotate 上报身份）', () => {
     assert.ok(guard, 'context-guard feature 应已被装配');
   });
 
+  test('无会话宿主 runtime 不创建需要会话寻址的面板投影', () => {
+    assert.doesNotThrow(() => new ProgrammingHelperAgent({
+      workspaceDir: tmpdir(),
+      runtime: { agentId: 'programming-helper', serverOrigin: 'http://127.0.0.1:14200' },
+    }));
+  });
+
   test('装配传入身份三元组：agentId / sessionId / serverOrigin（缺失即上报静默跳过）', () => {
     assert.equal(guard.agentId, RUNTIME_IDENTITY.agentId);
     assert.equal(guard.sessionId, RUNTIME_IDENTITY.sessionId);
