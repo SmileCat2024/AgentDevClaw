@@ -8,18 +8,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "AgentDevClaw 安装向导",
-        "width": 780,
-        "height": 540,
-        "resizable": false,
-        "center": true,
-        "decorations": false,
-        "dragDropEnabled": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

@@ -12,7 +12,10 @@ build = "build.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# 钉在与 desktop/ 主壳一致的 2.12.0：本机验证 2.12.5 全套（runtime-wry
+# 2.12.3 / wry 0.57.2 / tao 0.37.2）在窗口 setup 阶段报 os error 5，
+# 主壳版本全套已知可跑；升级前需回归窗口启动。
+tauri = { version = "=2.12.0", features = [] }
 # 目录选择对话框（选项屏「浏览…」）
 tauri-plugin-dialog = "2"
 # SFX payload（zip/deflate）解压

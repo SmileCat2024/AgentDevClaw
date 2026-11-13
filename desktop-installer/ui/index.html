@@ -201,8 +201,8 @@
 </head>
 <body>
 
-  <!-- 自绘标题栏 -->
-  <div class="titlebar" data-tauri-drag-region>
+  <!-- 自绘标题栏（拖拽由 document 级 mousedown 监听统一处理） -->
+  <div class="titlebar">
     <img src="./logo.png" alt="">
     <span class="title" id="titlebar-text">AgentDevClaw 安装向导</span>
     <span class="spacer"></span>
@@ -334,6 +334,17 @@
   $('btn-close').addEventListener('click', () => win.close());
   $('btn-minimize').addEventListener('click', () => win.minimize());
 
+  // ── 整页拖拽：左键按下处落在非交互元素上即拖动窗口 ──
+  // 无边框窗口没有系统标题栏，按「整个页面都可拖动」的产品要求，
+  // 在 document 层统一接管 mousedown；按钮/输入/链接/复选框等交互
+  // 元素豁免（closest 命中即放行原交互）。data-tauri-drag-region 属性
+  // 只在元素本身命中时生效、子元素冒泡不触发，不适合整页语义。
+  document.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('button, input, select, textarea, a, label, svg, .check')) return;
+    win.startDragging();
+  });
+
   // ── 复选框 ──
   document.querySelectorAll('.check').forEach(el => {
     el.addEventListener('click', () => {
@@ -380,7 +391,12 @@
 
   // ── 导航 ──
   const goOptions = () => show('options');
-  $('btn-go-options').addEventListener('click', goOptions);
+  // 欢迎屏主按钮：安装/升级模式直接按默认选项开装（路径默认值与三项
+  // 集成勾选在初始化时已就位），只有卸载模式先过确认页。
+  $('btn-go-options').addEventListener('click', () => {
+    if (mode === 'uninstall') goOptions();
+    else startInstall();
+  });
   $('btn-go-options-2').addEventListener('click', goOptions);
   $('btn-back-welcome').addEventListener('click', () => show('welcome'));
 
@@ -391,7 +407,7 @@
   });
 
   // ── 卸载/安装启动 ──
-  $('btn-install').addEventListener('click', async () => {
+  async function startInstall() {
     show('installing');
     $('error-text').style.display = 'none';
     try {
@@ -410,7 +426,8 @@
     } catch (e) {
       showError(String(e));
     }
-  });
+  }
+  $('btn-install').addEventListener('click', startInstall);
 
   function showError(message) {
     $('install-phase').textContent = mode === 'uninstall' ? '卸载失败' : '安装失败';

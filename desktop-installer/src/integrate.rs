@@ -32,19 +32,39 @@ pub fn arp_key_name() -> String {
 
 /// 读取现有安装信息（ARP 项）。返回 (安装目录, 版本)。
 pub fn existing_install() -> Option<(PathBuf, String)> {
+    existing_install_from(&arp_key_name())
+}
+
+/// 规整 InstallLocation 原始值：去首尾空白与字面引号，空值返回 None。
+///
+/// 旧 NSIS 安装写入的值带字面引号（本机实测 `"D:\programme\AgentDevClaw"`），
+/// 带引号的路径 `exists()` 恒 false，升级跟随会静默失效。
+/// 纯函数抽出以便纯单测——真实注册表往返测试在装有主动拦截类安全软件
+/// （如火绒）的机器上会被静默拒绝（os error 5），不适合作测试载体。
+fn normalize_install_location(raw: &str) -> Option<String> {
+    let dir = raw.trim().trim_matches('"').to_string();
+    if dir.is_empty() {
+        None
+    } else {
+        Some(dir)
+    }
+}
+
+/// `existing_install` 的可测试形态：键名注入（测试用独立后缀键，
+/// 避免读真实安装信息、也避免 env 变量在并行测试间竞态）。
+fn existing_install_from(key_name: &str) -> Option<(PathBuf, String)> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu
         .open_subkey_with_flags(
-            format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}", arp_key_name()),
+            format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{key_name}"),
             KEY_READ,
         )
         .ok()?;
     let dir: Result<String, _> = key.get_value("InstallLocation");
     let ver: Result<String, _> = key.get_value("DisplayVersion");
     let dir = dir.ok()?;
-    if dir.trim().is_empty() {
-        return None;
-    }
+    // 旧 NSIS 写入的 InstallLocation 带字面引号，剥掉再返回（见 normalize）。
+    let dir = normalize_install_location(&dir)?;
     Some((PathBuf::from(dir), ver.unwrap_or_default()))
 }
 
@@ -99,13 +119,16 @@ pub fn register_arp(install_dir: &Path, version: &str, estimated_kb: u64) -> Res
 }
 
 /// 写右键菜单两项。`enabled=false` 时删除（对应 NSIS PREUNINSTALL 清理）。
+/// 键名带隔离后缀（与 ARP 同源：`CLAW_SETUP_ARP_SUFFIX`），端到端验证
+/// 不触碰真实安装的菜单项；正式安装无后缀、键名不变。
 pub fn context_menu(install_dir: &Path, enabled: bool) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let shell_root = r"Software\Classes\Directory\Background\shell";
     let main_exe = install_dir.join(MAIN_EXE);
-    let entries: [(&str, &str, &str); 2] = [
-        ("AgentDevClaw.Open", "在编程小助手中打开", "--claw-open=%V"),
-        ("AgentDevClaw.NewChat", "在编程小助手中创建会话", "--claw-new-chat=%V"),
+    let tag = arp_key_name();
+    let entries: [(String, &str, &str); 2] = [
+        (format!("{tag}.Open"), "在编程小助手中打开", "--claw-open=%V"),
+        (format!("{tag}.NewChat"), "在编程小助手中创建会话", "--claw-new-chat=%V"),
     ];
     for (subkey, label, flag) in entries {
         let path = format!(r"{shell_root}\{subkey}");
@@ -134,26 +157,39 @@ pub fn remove_context_menu() -> Result<(), String> {
     context_menu(Path::new(""), false)
 }
 
-/// 开始菜单 / 桌面快捷方式路径。
+/// 开始菜单 / 桌面快捷方式路径。文件名带隔离后缀（同 ARP 机制，
+/// 端到端验证不覆盖真实快捷方式；正式安装无后缀）。
 pub fn shortcut_paths(desktop: bool) -> Vec<(PathBuf, &'static str)> {
     let mut paths = Vec::new();
+    let lnk_name = format!("{}.lnk", arp_key_name());
     if let Ok(appdata) = std::env::var("APPDATA") {
         paths.push((
             Path::new(&appdata)
                 .join(r"Microsoft\Windows\Start Menu\Programs")
-                .join(format!("{PRODUCT_NAME}.lnk")),
+                .join(&lnk_name),
             "开始菜单",
         ));
     }
     if desktop {
         if let Ok(desktop_dir) = std::env::var("USERPROFILE") {
-            paths.push((
-                Path::new(&desktop_dir).join("Desktop").join(format!("{PRODUCT_NAME}.lnk")),
-                "桌面",
-            ));
+            paths.push((Path::new(&desktop_dir).join("Desktop").join(&lnk_name), "桌面"));
         }
     }
     paths
+}
+
+/// 将 Windows 文件系统 API 的扩展路径转换为 Shell/注册表可消费的普通 DOS 路径。
+/// `std::fs::canonicalize` 在 Windows 返回 `\\\\?\\C:\\...`；COM
+/// `IShellLinkW::SetPath` 对此返回 E_INVALIDARG (0x80070057)。
+fn shell_compatible_path(path: &Path) -> PathBuf {
+    let value = path.to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
 }
 
 /// 经 COM IShellLink 创建 .lnk。
@@ -175,21 +211,26 @@ pub fn create_shortcut(lnk_path: &Path, target: &Path) -> Result<(), String> {
             let wide = |s: &str| {
                 s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>()
             };
+            let target = shell_compatible_path(target);
+            let working_dir = shell_compatible_path(
+                target.parent().unwrap_or_else(|| Path::new("")),
+            );
+            let target_wide = wide(&target.to_string_lossy());
             shell_link
-                .SetPath(PCWSTR(wide(&target.display().to_string()).as_ptr()))
-                .map_err(|e| format!("SetPath 失败：{e}"))?;
+                .SetPath(PCWSTR(target_wide.as_ptr()))
+                .map_err(|e| format!("SetPath 失败 {target:?}：{e}"))?;
+            let working_wide = wide(&working_dir.to_string_lossy());
             shell_link
-                .SetWorkingDirectory(PCWSTR(wide(&target.parent().map(|p| p.display().to_string()).unwrap_or_default()).as_ptr()))
-                .map_err(|e| format!("SetWorkingDirectory 失败：{e}"))?;
+                .SetWorkingDirectory(PCWSTR(working_wide.as_ptr()))
+                .map_err(|e| format!("SetWorkingDirectory 失败 {working_dir:?}：{e}"))?;
             let persist: IPersistFile = shell_link
                 .cast()
                 .map_err(|e| format!("cast IPersistFile 失败：{e}"))?;
+            let shortcut_path = shell_compatible_path(lnk_path);
+            let shortcut_path_wide = wide(&shortcut_path.to_string_lossy());
             persist
-                .Save(
-                    PCWSTR(wide(&lnk_path.display().to_string()).as_ptr()),
-                    true,
-                )
-                .map_err(|e| format!("保存 .lnk 失败：{e}"))?;
+                .Save(PCWSTR(shortcut_path_wide.as_ptr()), true)
+                .map_err(|e| format!("保存 .lnk 失败 {shortcut_path:?}：{e}"))?;
             Ok(())
         })();
         if co_inited {
@@ -232,5 +273,60 @@ mod tests {
     fn context_menu_flags_roundtrip() {
         // entries 常量驱动注册与删除共用一套键路径，键名拼写一致性由编译期常量保证
         assert!(MAIN_EXE.ends_with(".exe"));
+    }
+
+    #[test]
+    fn shell_paths_strip_extended_prefix() {
+        assert_eq!(
+            shell_compatible_path(Path::new(r"\\?\D:\programme\AgentDevClaw\agent.exe")),
+            PathBuf::from(r"D:\programme\AgentDevClaw\agent.exe")
+        );
+        assert_eq!(
+            shell_compatible_path(Path::new(r"\\?\UNC\server\share\agent.exe")),
+            PathBuf::from(r"\\server\share\agent.exe")
+        );
+        assert_eq!(
+            shell_compatible_path(Path::new(r"D:\apps\agent.exe")),
+            PathBuf::from(r"D:\apps\agent.exe")
+        );
+    }
+
+    /// 可选的本机 COM 集成验证：显式传扩展路径给 SetPath，确认转换后可创建 .lnk。
+    /// 手动运行：cargo test shell_link_accepts_extended_exe_path -- --ignored
+    #[test]
+    #[ignore = "需本机 Windows Shell COM 与可写临时目录"]
+    fn shell_link_accepts_extended_exe_path() {
+        let exe = std::env::current_exe().expect("current_exe");
+        let extended = exe.canonicalize().expect("canonicalize exe");
+        assert!(extended.to_string_lossy().starts_with(r"\\?\"));
+        let appdata = std::env::var("APPDATA").expect("APPDATA");
+        let shortcut = Path::new(&appdata)
+            .join(r"Microsoft\Windows\Start Menu\Programs")
+            .join("ClawShellProbe.lnk");
+        let result = create_shortcut(&shortcut, &extended);
+        if shortcut.exists() {
+            let _ = fs::remove_file(&shortcut);
+        }
+        result.expect("Shell Link COM 应接受规整后的 DOS 路径");
+        assert!(!shortcut.exists(), "测试快捷方式应已清理");
+    }
+
+    /// 旧 NSIS 写入的 InstallLocation 带字面引号（本机实测
+    /// `"D:\programme\AgentDevClaw"`），读取必须剥引号，否则升级跟随失效。
+    /// 纯函数测试：不写真实注册表（火绒类软件会静默拦截未知 exe 的
+    /// 注册表写入，机器相关性失败会让测试套件不可信）。
+    #[test]
+    fn normalize_install_location_strips_nsis_quotes() {
+        assert_eq!(
+            normalize_install_location(r#""D:\programme\AgentDevClaw""#).as_deref(),
+            Some(r"D:\programme\AgentDevClaw")
+        );
+        // 无引号原样通过；空白与引号壳视为无值
+        assert_eq!(
+            normalize_install_location(r"C:\apps\Claw").as_deref(),
+            Some(r"C:\apps\Claw")
+        );
+        assert_eq!(normalize_install_location("   "), None);
+        assert_eq!(normalize_install_location(r#""""#), None);
     }
 }

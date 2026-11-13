@@ -23,7 +23,7 @@
 - IM 门户代理：[prebuilt-agents/official/qqbot/agent.js](prebuilt-agents/official/qqbot/agent.js)
 - 群聊管理员工具集：[local-features/group-admin](local-features/group-admin)
 - 运行时信封：[server/runtime-call-envelope.js](server/runtime-call-envelope.js)
-- 桌面壳（Tauri，2a 渲染 + 2b sidecar 生命周期切片已验收）：[desktop/](desktop)，宿主契约见 [docs/protocols/service-lifecycle.md](docs/protocols/service-lifecycle.md)。端口等进程级配置支持 `.env` 文件（数据根 `~/.agentdev/AgentDevClaw/.env`，`CLAW_ENV_FILE` 可指定路径；真实环境变量优先，不覆盖），桌面壳与源码 `npm start` 的 supervisor 使用同一约定加载，语义见宿主契约文档。Windows 右键目录空白处「在编程小助手中打开/创建会话」：注册表项由 [desktop/installer-hooks.nsh](desktop/installer-hooks.nsh) 安装时写入 HKCU，参数链路 exe argv（`--claw-open`/`--claw-new-chat`）→ 冷启动窗口 URL query / 已运行实例 webview eval → 前端 [public/src/modules/desktop-open.js](public/src/modules/desktop-open.js) 统一消费，三处参数键名需同步修改。钩子里 exe 必须引用 NSIS 模板变量 `${MAINBINARYNAME}`（实际二进制名来自 Cargo package name，与 productName 不同；硬编码 productName 会指向不存在的文件、点击菜单静默无反应），菜单图标直接引用 exe 内嵌 logo，无需分发独立 ico
+- 桌面壳（Tauri，2a 渲染 + 2b sidecar 生命周期切片已验收）：[desktop/](desktop)，宿主契约见 [docs/protocols/service-lifecycle.md](docs/protocols/service-lifecycle.md)。端口等进程级配置支持 `.env` 文件（数据根 `~/.agentdev/AgentDevClaw/.env`，`CLAW_ENV_FILE` 可指定路径；真实环境变量优先，不覆盖），桌面壳与源码 `npm start` 的 supervisor 使用同一约定加载，语义见宿主契约文档。桌面安装包为自研 SFX 安装器（[desktop-installer/](desktop-installer)，Tauri NSIS 模板已退役）：构建入口 [scripts/build-desktop-installer.mjs](scripts/build-desktop-installer.mjs)（版本唯一来源为根 package.json），release 安装器 manifest 内嵌 requireAdministrator（[desktop-installer/build.rs](desktop-installer/build.rs)，debug 保持默认）。Windows 右键目录空白处「在编程小助手中打开/创建会话」：注册表项由 [desktop-installer/src/integrate.rs](desktop-installer/src/integrate.rs) 安装时写入 HKCU，参数链路 exe argv（`--claw-open`/`--claw-new-chat`）→ 冷启动窗口 URL query / 已运行实例 webview eval → 前端 [public/src/modules/desktop-open.js](public/src/modules/desktop-open.js) 统一消费，三处参数键名需同步修改。菜单图标直接引用 exe 内嵌 logo，无需分发独立 ico
 
 ## 项目定位
 
@@ -56,7 +56,7 @@
 - `npm run agentdev:published` — 改写依赖声明（`file:` → semver），目标版本取 npm registry 各包最新发布版（离线/未发布时回退读相邻仓库并明示日志，`--version` 可显式指定），并同步 features/ 子包的 core devDependency 到框架版本，随后摘除 `@agentdevjs/*` 残留链接、install + build、自检安装形态。版本更新后跑一次即可整体对齐。
 - `npm run agentdev:local` — **不改声明**，只把相邻 AgentDev 仓库的包以 junction 链接进 `node_modules/@agentdevjs/`，并自动补建缺失的框架 dist。用于发布态下临时调试本地框架源码。注意：npm install **不会**替换"恰好满足声明"的链接（链接目标版本匹配 exact pin 即视为已安装），调试完必须经 `agentdev:published` 脱链（它会先摘链接再装 registry）。
 
-与两形态平行的第三条路：`npm run pack:desktop` 组装桌面发布树 `dist/desktop-staging/`（框架包 vendor tgz 实体安装 + bundled node，自带实体自检与隔离端口冒烟），是 tauri bundler 的输入，不影响本机开发形态。
+与两形态平行的第三条路：`npm run pack:desktop` 组装桌面发布树 `dist/desktop-staging/`（框架包 vendor tgz 实体安装 + bundled node，自带实体自检与隔离端口冒烟），是自研 SFX 安装器 payload 的输入，不影响本机开发形态。
 
 开发态硬约束：`node_modules/@agentdevjs/*` 必须是链接而非实体拷贝。发布态硬约束：反向成立，必须是 registry 实体目录。`check-agentdev-local`（prestart / build / `check:agentdev` 共用）按声明形态校验安装形态——开发态校验链接（含失效与错向目标），相邻框架仓库可用时自动重建；发布态发现本地链接 / 缺失 / dist 过期只报错并给出修复命令，**绝不自动改链**。形态不一致若不拦截，服务会静默跑在与声明脱节的框架版本上，只在运行期以 "framework too old" 一类错误暴露（历史事故：模型热切换、陈旧本地链接）。
 

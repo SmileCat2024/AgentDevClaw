@@ -71,11 +71,12 @@ pub fn locate_in(path: &std::path::Path) -> Result<Option<SelfPayload>, PayloadE
         return Ok(None);
     }
     let len = u64::from_le_bytes(len_bytes.try_into().unwrap());
-    let offset = file_len - TAIL_LEN - len;
-    // 长度越界（offset 下溢时上面的减法会 panic，先显式校验）
+    // 越界校验必须先于 offset 计算：len 超界时下面的减法会下溢
+    // （debug 下 panic，release 下静默算出垃圾偏移读错数据）。
     if len > file_len - TAIL_LEN {
         return Err(PayloadError::Corrupt);
     }
+    let offset = file_len - TAIL_LEN - len;
     Ok(Some(SelfPayload { offset, len }))
 }
 

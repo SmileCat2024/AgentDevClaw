@@ -10,20 +10,9 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": [
-      "nsis"
-    ],
-    "windows": {
-      "nsis": {
-        "installerHooks": "./installer-hooks.nsh"
-      }
-    },
+    "active": false,
     "icon": [
       "icons/icon.ico"
-    ],
-    "resources": {
-      "../dist/desktop-staging/": "app/"
-    }
+    ]
   }
 }

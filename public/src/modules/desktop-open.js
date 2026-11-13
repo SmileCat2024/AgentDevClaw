@@ -1,5 +1,5 @@
 /**
- * desktop-open.js — Windows 右键菜单唤起请求（desktop/installer-hooks.nsh 注册）
+ * desktop-open.js — Windows 右键菜单唤起请求（desktop-installer/src/integrate.rs 安装时注册）
  *
  * 「在编程小助手中打开 / 创建会话」在文件夹空白处 / 桌面空白处右键触发，
  * 两条到达路径汇入同一消费入口 window.__clawConsumeOpenRequest：

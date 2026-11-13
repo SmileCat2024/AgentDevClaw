@@ -6,7 +6,7 @@ node scripts\build-desktop-installer.mjs %*
 set "RESULT=%ERRORLEVEL%"
 echo.
 if "%RESULT%"=="0" (
-  echo Build finished. Installer is under desktop\target\release\bundle\nsis\
+  echo Build finished. Installer is under desktop\target\release\bundle\setup\
 ) else (
   echo Build FAILED. Staging and desktop exe remain available; see the retry command above.
 )

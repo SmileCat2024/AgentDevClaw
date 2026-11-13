@@ -19,14 +19,14 @@ use std::sync::mpsc::Receiver;
 use tauri::Emitter;
 use zip::ZipArchive;
 
+/// 序列化契约：UI（begin_install invoke）发 camelCase 键（installDir 等），
+/// 与 Tauri 顶层参数的自动转换规则无关——嵌套结构体严格按 serde 定义解析。
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InstallOptions {
     pub install_dir: String,
-    #[serde(rename = "desktopShortcut")]
     pub desktop_shortcut: bool,
-    #[serde(rename = "contextMenu")]
     pub context_menu: bool,
-    #[serde(rename = "startMenuShortcut")]
     pub start_menu_shortcut: bool,
 }
 
@@ -74,7 +74,8 @@ pub fn emit_progress(sink: &Sink, progress: Progress) {
 /// （`true` = 结束进程并继续，`false` = 取消安装）。
 pub fn run(sink: &Sink, opts: &InstallOptions, version: &str, kill_confirm: Receiver<bool>) -> Result<(), String> {
     let install_dir = PathBuf::from(&opts.install_dir);
-    std::fs::create_dir_all(&install_dir).map_err(|e| format!("创建安装目录失败：{e}"))?;
+    std::fs::create_dir_all(&install_dir)
+        .map_err(|e| format!("创建安装目录失败 {install_dir:?}：{e}（若为系统保护区如 Program Files，请换用户目录；本安装器按免管理员设计）"))?;
     // 双路径形态：plain（C:\...）给注册表 / PowerShell / 快捷方式 —— 这些
     // 消费方期望普通路径；long（\\?\C:\...）给文件系统写入 —— node_modules
     // 深层嵌套超过 260 字符限制时，无前缀的 std::fs 调用会静默失败。
@@ -139,25 +140,27 @@ pub fn run(sink: &Sink, opts: &InstallOptions, version: &str, kill_confirm: Rece
         );
     }
 
-    // 5. 系统集成：ARP（含卸载器自拷） + 右键菜单（注册表值用普通路径）
-    emit_progress(sink, Progress::Integrating);
+    // 5. 先验证主程序并准备快捷方式（Shell Link COM 写入可能失败；
+    // 在所有本地文件操作成功前不发布 ARP/右键菜单，避免半安装入口）。
     let main_exe = install_dir.join(integrate::MAIN_EXE);
     if !main_exe.exists() {
         return Err(format!("payload 缺少主程序 {}（构建链拼接错误）", integrate::MAIN_EXE));
     }
-    let estimated_kb = dir_size_kb(&install_dir);
-    integrate::register_arp(&plain_dir, version, estimated_kb)?;
-    if opts.context_menu {
-        integrate::context_menu(&plain_dir, true)?;
-    }
-
-    // 6. 快捷方式（.lnk 目标必须是普通路径）
     emit_progress(sink, Progress::Shortcuts);
     let main_exe_plain = plain_dir.join(integrate::MAIN_EXE);
     if opts.start_menu_shortcut || opts.desktop_shortcut {
         for (lnk, _) in integrate::shortcut_paths(opts.desktop_shortcut) {
             integrate::create_shortcut(&lnk, &main_exe_plain)?;
         }
+    }
+
+    // 6. 系统集成：最后写 ARP/右键菜单作为提交点。
+    // ARP 含卸载器自拷；右键菜单参数与 desktop-open 前端契约一致。
+    emit_progress(sink, Progress::Integrating);
+    let estimated_kb = dir_size_kb(&install_dir);
+    integrate::register_arp(&plain_dir, version, estimated_kb)?;
+    if opts.context_menu {
+        integrate::context_menu(&plain_dir, true)?;
     }
 
     emit_progress(sink, Progress::Done);
@@ -186,11 +189,30 @@ pub fn dir_size_kb(dir: &Path) -> u64 {
 ///
 /// 安装到 `%LOCALAPPDATA%` 后，`app\node_modules` 深层嵌套极易超过
 /// Windows 260 字符路径限制，无前缀的 std::fs 调用会静默失败。本产品
-/// 不支持 UNC 安装目录（\\?\UNC\ 形态暂不处理）。
+/// 不支持 UNC 安装目录（`\\?\UNC\` 形态暂不处理）。
 pub fn long_path(p: &Path) -> PathBuf {
     let s = p.display().to_string();
     if s.starts_with(r"\\?\") || s.starts_with(r"\\") {
         return PathBuf::from(s);
     }
     PathBuf::from(format!(r"\\?\{s}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 锁定 UI invoke 的序列化契约：嵌套结构体字段按 serde 定义严格解析，
+    /// 不享受 Tauri 顶层参数的 camelCase 自动转换。历史上 install_dir 漏了
+    /// rename，直到真机点「安装」才以 "missing field install_dir" 暴露。
+    #[test]
+    fn install_options_deserializes_from_ui_camel_case() {
+        let json = r#"{"installDir":"C:\\app","desktopShortcut":true,"contextMenu":false,"startMenuShortcut":true}"#;
+        let opts: InstallOptions =
+            serde_json::from_str(json).expect("UI camelCase 契约反序列化失败");
+        assert_eq!(opts.install_dir, "C:\\app");
+        assert!(opts.desktop_shortcut);
+        assert!(!opts.context_menu);
+        assert!(opts.start_menu_shortcut);
+    }
 }

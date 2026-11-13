@@ -2,6 +2,8 @@
 
 状态：**验证已完成（2026-09-26）**。本文记录"安装目录只读"地基的验收结果、验证中暴露的组装链缺口（D1–D3），以及框架包 vendor 化（tgz 快照）的既定方向。桌面化整体路线见 [service-lifecycle 契约](../protocols/service-lifecycle.md) 与 AGENT.md。
 
+> 注（2026-11-13）：桌面安装器已由 Tauri NSIS 模板换为自研 SFX 安装器（`desktop-installer/`，构建入口 `scripts/build-desktop-installer.mjs`）。本文的只读地基验证结论仍然有效，文中涉及 NSIS 打包的段落仅为历史记录。
+
 ## 验证结论：安装目录只读语义通过
 
 在发布态布局（registry 依赖 + 预构建产物）+ 全目录拒写 ACL（25917 文件）下完成全链路冒烟：服务启动 health ready → UI 渲染 → 创建会话 → runtime 全功能就绪（工具注册、dispatch/bridge/mailbox 循环）。**整个周期对安装目录的写入为 0**；会话数据全部落在 `AGENTDEV_DATA_DIR` 指向的数据目录。"资源只读、数据独立"（[配置边界收敛](2026-09-25-app-config-and-data-boundaries.md)）自此验收。

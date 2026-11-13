@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "安装器主窗口权限：core:default + 窗口控制三件套 + 目录选择对话框。注意 core:window:default 只含只读 getter——close / minimize / start-dragging 都必须显式授权（曾漏导致按钮无响应）。静态 ui 经 tauri 资产协议加载，非远程 origin，无需 remote 声明。",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-start-dragging",
+    "dialog:default"
+  ]
+}

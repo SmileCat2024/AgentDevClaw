@@ -133,9 +133,14 @@ function buildPayloadRoot() {
 
 // bsdtar（Windows 10 1803+ 自带）按 -f 扩展名打 zip。比 PowerShell
 // Compress-Archive 快一个数量级（node_modules 数万小文件场景）。
+// 必须显式用 System32 的 bsdtar：PATH 里若有 msys GNU tar（git bash 环境
+// spawn 解析到它），会把 "D:\..." 的 -f 归档当成远程主机语法
+// （"Cannot connect to D"），且 GNU tar 根本不支持创建 zip。
+const BSDTAR = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
 async function packPayloadZip() {
+  if (!existsSync(BSDTAR)) throw new Error(`未找到系统 bsdtar：${BSDTAR}（要求 Windows 10 1803+）`);
   rmSync(zipPath, { force: true });
-  await requireRun('tar', ['-a', '-cf', zipPath, '-C', payloadRoot, '.'], root);
+  await requireRun(BSDTAR, ['-a', '-cf', zipPath, '-C', payloadRoot, '.'], root);
   return statSync(zipPath).size;
 }
 
@@ -171,13 +176,42 @@ function assembleSfx(destination, { exe = installerExe, zip = zipPath } = {}) {
   }
 }
 
-// 自检：安装器读自身尾部并解析 zip 中央目录，输出 JSON 摘要。
+// 自检（node 侧等价校验，与安装器 --selfcheck 同布局同语义）：release 安装器
+// manifest 为 requireAdministrator（desktop-installer/build.rs），非提升的构建
+// 进程直接 spawn 安装器会 EACCES。自检要证明的是"拼接产物尾部携带完整可解析
+// 的 zip"：先按 SFX 布局（exe + zip + u64LE 长度 + ACLAWSET）校验尾部自洽，
+// 再用系统 bsdtar 解析（zip 规范允许前置数据，self-extracting 形态原生支持），
+// 与安装器 Rust 侧 ZipArchive::new 成功打开的语义等价，且无需提权。
 async function selfcheck(exePath) {
-  const result = await run(exePath, ['--selfcheck'], outputDir, true);
-  if (result.code !== 0 || !/"ok":\s*true/.test(result.output)) {
-    throw new Error(`安装包自检失败：${result.output.trim() || `退出码 ${result.code}`}`);
+  const st = statSync(exePath);
+  const tail = Buffer.alloc(16);
+  const fd = openSync(exePath, 'r');
+  try {
+    if (readSync(fd, tail, 0, 16, st.size - 16) !== 16) throw new Error('安装包尾部不完整（小于 16 字节布局）。');
+  } finally {
+    closeSync(fd);
   }
-  console.log(`自检通过：${result.output.trim()}`);
+  const magic = tail.toString('ascii', 8, 16);
+  if (magic !== SFX_MAGIC.toString('ascii')) {
+    throw new Error(`自检失败：尾部魔数不符（期望 ${SFX_MAGIC.toString('ascii')}，实得 ${magic}）。`);
+  }
+  const zipBytes = Number(tail.readBigUInt64LE(0));
+  if (zipBytes <= 0 || st.size - 16 - zipBytes <= 0) {
+    throw new Error(`自检失败：payload 长度字段非法（${zipBytes} 字节）。`);
+  }
+  // 静默收集列表输出（仅判断可解析，列表有数万行不透传刷屏）
+  const list = await new Promise((resolvePromise, reject) => {
+    const child = spawn(BSDTAR, ['-tf', exePath], { cwd: outputDir, stdio: ['ignore', 'pipe', 'pipe'] });
+    let tailOutput = '';
+    child.stdout.on('data', chunk => { tailOutput = (tailOutput + chunk.toString()).slice(-1024); });
+    child.stderr.on('data', chunk => { tailOutput = (tailOutput + chunk.toString()).slice(-1024); });
+    child.on('error', reject);
+    child.on('close', code => resolvePromise({ code: code ?? 1, tailOutput }));
+  });
+  if (list.code !== 0 || !list.tailOutput.trim()) {
+    throw new Error(`安装包自检失败：zip 解析未通过（退出码 ${list.code}）${list.tailOutput ? `：${list.tailOutput.trim()}` : ''}`);
+  }
+  console.log(`自检通过：payloadBytes=${zipBytes}，zip 完整可解析（bsdtar 列表 OK）。`);
 }
 
 async function main() {

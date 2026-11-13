@@ -4,7 +4,8 @@
 //! - 无参数            安装向导 UI（Tauri 无边框窗口）
 //! - `--uninstall`     卸载 UI（由 ARP「卸载」或安装目录 uninstall.exe 调起）
 //! - `--cli`           控制台静默安装（默认选项；WebView2 不可用时的兜底与
-//!                     自动化口子，对应原 NSIS /S）
+//!                     自动化口子，对应原 NSIS /S）；`--dir=<路径>` 覆盖
+//!                     目标目录（隔离端到端验证与自动化用，不跟随现有安装）
 //! - `--selfcheck`     构建链自检：校验 SFX payload 完整性并打印摘要后退出
 //! - `--cleanup-dir=D` 卸载善后（%TEMP% 副本进程专用）
 //!
@@ -135,8 +136,13 @@ fn selfcheck() -> i32 {
 }
 
 /// `--cli`：控制台静默安装（默认选项：右键菜单 + 开始菜单，不建桌面快捷方式）。
-fn cli_install() -> i32 {
-    let dir = integrate::default_install_dir();
+/// `--dir=<路径>` 覆盖目标目录（隔离验证/自动化）；缺省走默认目录（升级跟随）。
+fn cli_install(args: &[String]) -> i32 {
+    let dir = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--dir="))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(integrate::default_install_dir);
     println!("安装到 {} ...", dir.display());
     let opts = InstallOptions {
         install_dir: dir.display().to_string(),
@@ -177,12 +183,40 @@ fn main() {
     }
 
     if args.iter().any(|a| a == "--cli") {
-        std::process::exit(cli_install());
+        std::process::exit(cli_install(&args));
     }
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(KillConfirm(Mutex::new(None)))
+        .setup(|app| {
+            // 窗口在代码里建（不走 tauri.conf.json 的 windows 声明）：
+            // 需要显式指定 WebView2 数据目录。两个坑：
+            // 1. tauri 默认派生目录 %LOCALAPPDATA%\{identifier} 在本机
+            //    创建被拒（os error 5，实测复现）；显式指定即正常。
+            // 2. 不用 std::env::temp_dir()：Git bash 下 TEMP=/tmp 会被
+            //    Windows 进程解析到当前盘根（D:\tmp），ACL 拒绝写入。
+            // 安装器是短生命周期工具，数据目录放 exe 同级 .webview-data，
+            // 随卸载/覆盖升级一并清理。
+            let data_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join(".webview-data")))
+                .unwrap_or_else(|| std::path::PathBuf::from(".webview-data"));
+            tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::default(),
+            )
+            .title("AgentDevClaw 安装向导")
+            .inner_size(780.0, 540.0)
+            .resizable(false)
+            .center()
+            .decorations(false)
+            .disable_drag_drop_handler()
+            .data_directory(data_dir)
+            .build()?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_mode,
             get_install_state,
