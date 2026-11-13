@@ -1,22 +1,52 @@
 #!/usr/bin/env node
+// AgentDevClaw 桌面安装包构建：自研 SFX 安装器（取代 Tauri NSIS 模板）。
+//
+// 产物布局（desktop-installer/src/payload.rs 的读取契约）：
+//   [cargo 编译的安装器 exe] [payload.zip] [u64 LE zip 长度] [8B 魔数 ACLAWSET]
+//
+// payload.zip 内部结构（Rust 解压直接落 <安装目录>）：
+//   agentdev-claw-desktop.exe          ← desktop/target/release 主壳 exe
+//   app/...                            ← dist/desktop-staging 全树
+//   （对齐 NSIS 时代布局：主 exe 在根、resources 映射 app/，升级无缝）
+//
+// 流程：
+//   1. 版本同步（根 package.json → desktop 与 desktop-installer 的声明文件）
+//   2. pack:desktop 组装 staging
+//   3. cargo tauri build --no-bundle 编主壳 exe
+//   4. cargo build --release 编安装器（增量缓存，安装器代码不变则秒过）
+//   5. 组 payload-root（app/ = staging + 主 exe）→ bsdtar 打 zip
+//   6. 拼接 exe + zip + 长度 + 魔数 → bundle/setup/AgentDevClaw_<ver>_x64-setup.exe
+//   7. --selfcheck 自检（安装器读自身尾部校验 zip 完整性）
+//
+// --payload-only：跳过 2-4，复用现有 staging 与编译产物只重拼（文件锁
+// 重试场景，对应旧 --bundle-only 语义）。
+
 import { spawn } from 'node:child_process';
-import { closeSync, constants, copyFileSync, existsSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync, constants, copyFileSync, cpSync, existsSync, mkdirSync, openSync,
+  readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync,
+} from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const desktopDir = join(root, 'desktop');
-const releaseDir = join(desktopDir, 'target', 'release');
-const installerDir = join(releaseDir, 'bundle', 'nsis');
-const nsisOutput = join(releaseDir, 'nsis', 'x64', 'nsis-output.exe');
-const bundleOnly = process.argv.includes('--bundle-only');
+const installerCrate = join(root, 'desktop-installer');
+const stagingDir = join(root, 'dist', 'desktop-staging');
+const payloadRoot = join(root, 'dist', 'desktop-payload');
+const desktopRelease = join(desktopDir, 'target', 'release');
+const installerExe = join(installerCrate, 'target', 'release', 'agentdev-claw-setup.exe');
+const outputDir = join(desktopRelease, 'bundle', 'setup');
+const zipPath = join(root, 'dist', 'payload.zip');
+const SFX_MAGIC = Buffer.from('ACLAWSET', 'ascii');
 
-// 安装包文件名要等版本同步后才能确定，在 main() 里赋值
+const payloadOnly = process.argv.includes('--payload-only');
+
 let installerName = '';
 let installerPath = '';
 
 function run(command, args, cwd, capture = false) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, { cwd, stdio: capture ? ['inherit', 'pipe', 'pipe'] : 'inherit' });
     let output = '';
     if (capture) {
@@ -28,7 +58,7 @@ function run(command, args, cwd, capture = false) {
       }
     }
     child.on('error', reject);
-    child.on('close', code => resolve({ code: code ?? 1, output }));
+    child.on('close', code => resolvePromise({ code: code ?? 1, output }));
   });
 }
 
@@ -37,10 +67,10 @@ async function requireRun(command, args, cwd) {
   if (result.code !== 0) throw new Error(`${command} ${args.join(' ')} 失败（退出码 ${result.code}）`);
 }
 
-function freshExecutable(path, startedAt) {
+function isExecutable(path) {
   try {
     const info = statSync(path);
-    if (info.size < 1_000_000 || info.mtimeMs < startedAt - 2_000) return false;
+    if (info.size < 1_000_000) return false;
     const fd = openSync(path, 'r');
     try {
       const signature = Buffer.alloc(2);
@@ -53,97 +83,148 @@ function freshExecutable(path, startedAt) {
   }
 }
 
-async function recoverInstaller(startedAt, { source = nsisOutput, directory = installerDir, name = installerName } = {}) {
-  if (!freshExecutable(source, startedAt)) return null;
-  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
-  const recoveredName = name.replace(/-setup\.exe$/, `-recovered-${stamp}-${process.pid}-setup.exe`);
-  const destination = join(directory, recoveredName);
-  const temporary = `${destination}.partial`;
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      copyFileSync(source, temporary, constants.COPYFILE_EXCL);
-      if (statSync(temporary).size !== statSync(source).size) throw new Error('复制后文件大小不一致');
-      renameSync(temporary, destination);
-      return destination;
-    } catch (error) {
-      try { unlinkSync(temporary); } catch { /* 文件可能被扫描器暂时占用 */ }
-      if (attempt === 4) console.error(`已生成的 NSIS 安装器复制失败：${error.message}`);
-      else await new Promise(resolve => setTimeout(resolve, 1_000));
-    }
-  }
-  return null;
-}
-
-// 安装包版本唯一来源是根 package.json：构建前同步进 tauri.conf.json 与
-// Cargo.toml（安装包文件名与 NSIS 卸载信息里的版本取自这两处），发版只需
-// 改 package.json 一处，桌面侧声明不再单独维护。
-function syncInstallerVersion() {
+// 版本唯一来源是根 package.json：构建前同步进四处声明（desktop 与
+// desktop-installer 的 tauri.conf.json / Cargo.toml），发版只改一处。
+// desktop-installer 的 CARGO_PKG_VERSION 是安装器 UI 展示的目标版本，
+// 必须与产品版本一致。
+function syncVersions() {
   const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 
-  const configPath = join(desktopDir, 'tauri.conf.json');
-  const config = JSON.parse(readFileSync(configPath, 'utf8'));
-  if (config.version !== version) {
-    console.log(`tauri.conf.json 版本已同步：${config.version} -> ${version}`);
-    config.version = version;
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-  }
+  const syncJson = dir => {
+    const configPath = join(dir, 'tauri.conf.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (config.version !== version) {
+      console.log(`${configPath} 版本已同步：${config.version} -> ${version}`);
+      config.version = version;
+      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+    }
+  };
+  const syncCargo = dir => {
+    const cargoPath = join(dir, 'Cargo.toml');
+    const cargo = readFileSync(cargoPath, 'utf8');
+    // 只替换 [package] 的首行 version 声明；依赖行是内联表，不会被 ^version 命中
+    const current = cargo.match(/^version = ".*"$/m)?.[0];
+    if (current !== `version = "${version}"`) {
+      if (!current) throw new Error(`${cargoPath} 中未找到 package version，无法同步版本`);
+      writeFileSync(cargoPath, cargo.replace(/^version = ".*"$/m, `version = "${version}"`));
+      console.log(`${cargoPath} 版本已同步：${current} -> ${version}`);
+    }
+  };
 
-  const cargoPath = join(desktopDir, 'Cargo.toml');
-  const cargo = readFileSync(cargoPath, 'utf8');
-  // 只替换 [package] 的首行 version 声明；依赖行是内联表（`tauri = { version = ... }`），不会被 ^version 命中
-  const current = cargo.match(/^version = ".*"$/m)?.[0];
-  if (current !== `version = "${version}"`) {
-    if (!current) throw new Error('Cargo.toml 中未找到 package version，无法同步版本');
-    writeFileSync(cargoPath, cargo.replace(/^version = ".*"$/m, `version = "${version}"`));
-    console.log(`Cargo.toml 版本已同步：${current} -> ${version}`);
+  syncJson(desktopDir);
+  syncCargo(desktopDir);
+  syncJson(installerCrate);
+  syncCargo(installerCrate);
+  return version;
+}
+
+// payload-root：app/ = staging 全树 + 主 exe 在根。直接复制（staging 是
+// 抛弃型中间产物，复制几百 MB 在本地 SSD 上数秒；不用 junction——bsdtar
+// 对目录联接的打包行为不保证展开为普通目录条目）。
+function buildPayloadRoot() {
+  rmSync(payloadRoot, { recursive: true, force: true });
+  mkdirSync(join(payloadRoot, 'app'), { recursive: true });
+  cpSync(stagingDir, join(payloadRoot, 'app'), { recursive: true });
+  copyFileSync(
+    join(desktopRelease, 'agentdev-claw-desktop.exe'),
+    join(payloadRoot, 'agentdev-claw-desktop.exe'),
+  );
+}
+
+// bsdtar（Windows 10 1803+ 自带）按 -f 扩展名打 zip。比 PowerShell
+// Compress-Archive 快一个数量级（node_modules 数万小文件场景）。
+async function packPayloadZip() {
+  rmSync(zipPath, { force: true });
+  await requireRun('tar', ['-a', '-cf', zipPath, '-C', payloadRoot, '.'], root);
+  return statSync(zipPath).size;
+}
+
+// 拼接 SFX 到目标路径。目标被占用（Windows 文件锁）时另存唯一名并返回
+// 实际路径（对齐旧 NSIS 恢复语义：保留旧文件、不丢新产物）。
+function assembleSfx(destination, { exe = installerExe, zip = zipPath } = {}) {
+  const temporary = `${destination}.partial`;
+  rmSync(temporary, { force: true });
+  const zipBytes = statSync(zip).size;
+  const fd = openSync(temporary, 'w');
+  try {
+    for (const source of [exe, zip]) {
+      const buf = readFileSync(source);
+      writeSync(fd, buf, 0, buf.length);
+    }
+    const tail = Buffer.alloc(16);
+    tail.writeBigUInt64LE(BigInt(zipBytes), 0);
+    SFX_MAGIC.copy(tail, 8);
+    writeSync(fd, tail, 0, 16);
+  } finally {
+    closeSync(fd);
   }
+  try {
+    rmSync(destination, { force: true });
+    renameSync(temporary, destination);
+    return destination;
+  } catch {
+    const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+    const recovered = destination.replace(/-setup\.exe$/, `-recovered-${stamp}-${process.pid}-setup.exe`);
+    renameSync(temporary, recovered);
+    console.warn(`固定名称的安装包被占用，本次安装包另存为：${recovered}`);
+    return recovered;
+  }
+}
+
+// 自检：安装器读自身尾部并解析 zip 中央目录，输出 JSON 摘要。
+async function selfcheck(exePath) {
+  const result = await run(exePath, ['--selfcheck'], outputDir, true);
+  if (result.code !== 0 || !/"ok":\s*true/.test(result.output)) {
+    throw new Error(`安装包自检失败：${result.output.trim() || `退出码 ${result.code}`}`);
+  }
+  console.log(`自检通过：${result.output.trim()}`);
 }
 
 async function main() {
   if (process.platform !== 'win32' || process.arch !== 'x64') {
     throw new Error('桌面安装包目前仅支持在 Windows x64 上构建。');
   }
-  if (process.argv.slice(2).some(arg => arg !== '--bundle-only')) {
-    throw new Error('仅支持可选参数 --bundle-only。');
+  if (process.argv.slice(2).some(arg => arg !== '--payload-only')) {
+    throw new Error('仅支持可选参数 --payload-only。');
   }
 
-  syncInstallerVersion();
-  const config = JSON.parse(readFileSync(join(desktopDir, 'tauri.conf.json'), 'utf8'));
-  installerName = `${config.productName}_${config.version}_x64-setup.exe`;
-  installerPath = join(installerDir, installerName);
+  const version = syncVersions();
+  installerName = `AgentDevClaw_${version}_x64-setup.exe`;
+  installerPath = join(outputDir, installerName);
+  mkdirSync(outputDir, { recursive: true });
 
-  if (bundleOnly) {
-    if (!existsSync(join(releaseDir, 'agentdev-claw-desktop.exe')) || !existsSync(join(root, 'dist', 'desktop-staging'))) {
-      throw new Error('缺少已编译的桌面 exe 或 staging，无法只重试安装包。请先完整构建一次。');
+  if (payloadOnly) {
+    if (!existsSync(installerExe) || !existsSync(join(desktopRelease, 'agentdev-claw-desktop.exe')) || !existsSync(zipPath)) {
+      throw new Error('缺少已编译的安装器/桌面 exe 或 payload.zip，无法只重拼安装包。请先完整构建一次。');
     }
-    console.log('复用现有 staging 和桌面 exe，只重试 NSIS 安装包。');
+    console.log('复用现有编译产物与 payload.zip，只重拼安装包。');
   } else {
-    // pack:desktop 导出工作区现状（含未提交改动）。编译与安装包生成分开，
-    // NSIS 末尾遇到文件锁时可用 --bundle-only 恢复，无需重新组装和编译。
+    // pack:desktop 导出工作区现状（含未提交改动）。编译与拼装分开，
+    // 拼装阶段遇到文件锁时可用 --payload-only 恢复，无需重新组装和编译。
     await requireRun('cmd.exe', ['/d', '/s', '/c', 'npm run pack:desktop'], root);
     await requireRun('cargo', ['tauri', 'build', '--no-bundle'], desktopDir);
-    console.log(`桌面 exe 已生成：${join(releaseDir, 'agentdev-claw-desktop.exe')}`);
+    console.log(`桌面 exe 已生成：${join(desktopRelease, 'agentdev-claw-desktop.exe')}`);
+    await requireRun('cargo', ['build', '--release'], installerCrate);
+    console.log(`安装器已生成：${installerExe}`);
+    buildPayloadRoot();
+    const zipSize = await packPayloadZip();
+    console.log(`payload.zip 已生成：${zipPath}（${(zipSize / 1024 / 1024).toFixed(1)} MB）`);
   }
 
-  const bundleStartedAt = Date.now();
-  const result = await run('cargo', ['tauri', 'bundle', '--bundles', 'nsis'], desktopDir, true);
-  if (result.code === 0 && freshExecutable(installerPath, bundleStartedAt)) {
-    console.log(`安装包已生成：${installerPath}`);
-    return;
+  if (!isExecutable(installerExe)) {
+    throw new Error('未找到有效的安装器 exe（desktop-installer/target/release/agentdev-claw-setup.exe）。');
   }
 
-  // Tauri/NSIS 先生成 nsis-output.exe，最后才改名覆盖固定名称的安装包。
-  // 若覆盖时遇到 Windows 文件锁，把已完成的安装包另存为唯一文件名。
-  if (result.code !== 0 && /os error 32|另一个程序正在使用此文件|being used by another process/i.test(result.output)) {
-    const recovered = await recoverInstaller(bundleStartedAt);
-    if (recovered) {
-      console.warn(`固定名称的安装包可能被占用，已保留旧文件并另存本次安装包：${recovered}`);
-      return;
-    }
+  const finalPath = assembleSfx(installerPath);
+  if (!isExecutable(finalPath)) {
+    throw new Error('安装包拼接失败：产物缺失或不是有效 exe。');
   }
+  console.log(`安装包已生成：${finalPath}（${(statSync(finalPath).size / 1024 / 1024).toFixed(1)} MB）`);
 
-  console.error('安装包生成失败；已保留 staging 和桌面 exe。重试命令：构建桌面安装包.cmd --bundle-only');
-  throw new Error(result.code === 0 ? 'Tauri 命令完成，但未找到本次生成的 NSIS 安装包。' : `Tauri bundle 失败（退出码 ${result.code}）。`);
+  await selfcheck(finalPath);
+
+  // payload-root 是抛弃型中间产物；payload.zip 保留供 --payload-only 快速重拼
+  rmSync(payloadRoot, { recursive: true, force: true });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -153,4 +234,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   });
 }
 
-export { freshExecutable, recoverInstaller };
+export { isExecutable, assembleSfx };

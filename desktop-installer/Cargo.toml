@@ -1,0 +1,32 @@
+[package]
+name = "agentdev-claw-setup"
+version = "0.2.4"
+description = "AgentDevClaw 桌面版安装器（自研 SFX，替代 Tauri NSIS 模板）"
+edition = "2021"
+build = "build.rs"
+
+# 版本唯一来源是根 package.json：构建脚本（scripts/build-desktop-installer.mjs）
+# 在构建前同步到这里与 UI 使用的 tauri.conf.json，与 desktop/ 主壳同一约定。
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# 目录选择对话框（选项屏「浏览…」）
+tauri-plugin-dialog = "2"
+# SFX payload（zip/deflate）解压
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# 注册表：ARP 卸载项接管、右键菜单、（测试用）键名覆盖
+winreg = "0.55"
+# 命令参数与事件的序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# COM IShellLink 快捷方式创建
+windows = { version = "0.58", features = [
+  "Win32_UI_Shell",
+  "Win32_System_Com",
+] }
+
+# 安装器是独立 crate，不与 desktop/ 主壳或任何上层 Rust workspace 关联
+[workspace]

@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentDevClaw 安装向导</title>
+<style>
+  /* ============================================================
+     AgentDevClaw 安装器 UI（Tauri 无边框窗口）
+     视觉配方取自 Claw 前端设计系统（docs/reference/design-system.md）：
+     - ambient 背景 / 玻璃三件套：public/styles/base.css :root
+     - 主按钮蓝 #6391ff：.settings-btn-primary 配方
+     - 弹窗壳 radius 20 + 顶部径向光：.feature-detail-window 配方
+     观感定稿于 desktop/installer-prototype.html（已验收）。
+     ============================================================ */
+  :root {
+    --text-primary: #ededed;
+    --text-secondary: #888;
+    --text-muted: #444;
+    --brand: #6391ff;
+    --brand-hover: #5078e6;
+    --glass-bg: rgba(20, 20, 23, 0.72);
+    --glass-border: rgba(255, 255, 255, 0.06);
+    --ambient-base: radial-gradient(ellipse 90% 75% at 55% 42%, #0b0e15 0%, #060709 55%, #050505 100%);
+    --ambient-glow-1: rgba(88, 118, 255, 0.07);
+    --ambient-glow-2: rgba(166, 166, 231, 0.06);
+    --ambient-glow-3: rgba(60, 180, 200, 0.05);
+    --success-color: #198754;
+    --error-color: #dc3545;
+    --radius-btn: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "Microsoft YaHei UI", Helvetica, Arial, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; user-select: none; }
+
+  /* 窗口本体（Tauri decorations=false，页面即窗口内容） */
+  body {
+    background-color: #050505;
+    background-image:
+      radial-gradient(ellipse 42% 34% at 62% 24%, var(--ambient-glow-1) 0%, transparent 70%),
+      radial-gradient(ellipse 36% 30% at 24% 66%, var(--ambient-glow-2) 0%, transparent 70%),
+      radial-gradient(ellipse 30% 26% at 78% 78%, var(--ambient-glow-3) 0%, transparent 70%),
+      var(--ambient-base);
+    display: flex; flex-direction: column;
+  }
+
+  /* ── 自绘标题栏（data-tauri-drag-region 拖拽） ── */
+  .titlebar {
+    flex: 0 0 auto; height: 46px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 10px 0 18px;
+  }
+  .titlebar img { width: 18px; height: 18px; pointer-events: none; }
+  .titlebar .title { font-size: 12.5px; color: var(--text-secondary); font-weight: 500; pointer-events: none; }
+  .titlebar .spacer { flex: 1; }
+  .win-btn {
+    width: 32px; height: 32px; border-radius: 999px;
+    border: none; background: transparent; color: var(--text-secondary);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .win-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+  .win-btn.close:hover { background: #e81123; color: #fff; }
+  .win-btn svg { width: 12px; height: 12px; }
+
+  /* ── 屏幕容器与切屏动画 ── */
+  .screens { position: relative; flex: 1; }
+  .screen {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    padding: 26px 40px 30px;
+    opacity: 0; transform: translateY(8px);
+    transition: opacity .2s ease, transform .2s ease;
+    pointer-events: none; visibility: hidden;
+  }
+  .screen.active { opacity: 1; transform: none; pointer-events: auto; visibility: visible; }
+
+  /* ── 欢迎屏 ── */
+  .welcome { align-items: center; justify-content: center; text-align: center; }
+  .logo-wrap { position: relative; margin-bottom: 22px; }
+  .logo-wrap::before {
+    content: ""; position: absolute; inset: -34px; border-radius: 999px;
+    background: radial-gradient(circle, rgba(99,145,255,0.16) 0%, transparent 68%);
+    pointer-events: none;
+  }
+  .logo-wrap img { width: 92px; height: 92px; position: relative; }
+  .product-name { font-size: 26px; font-weight: 750; color: var(--text-primary); letter-spacing: 0.3px; }
+  .version-pill {
+    display: inline-block; margin-top: 10px; padding: 3px 12px;
+    font-size: 12px; font-weight: 600; color: var(--text-secondary);
+    background: rgba(255,255,255,0.06); border: 1px solid var(--glass-border);
+    border-radius: 999px;
+  }
+  .tagline { margin-top: 16px; font-size: 14.5px; color: var(--text-secondary); line-height: 1.65; }
+  .upgrade-note { margin-top: 8px; font-size: 13px; color: var(--brand); }
+  .welcome-actions { display: flex; gap: 12px; margin-top: 34px; align-items: center; }
+  .welcome-footnote { margin-top: 26px; font-size: 12px; color: var(--text-muted); }
+
+  /* ── 按钮 ── */
+  .btn {
+    height: 38px; padding: 0 22px; border-radius: var(--radius-btn);
+    font-size: 14px; font-weight: 600; font-family: inherit;
+    cursor: pointer; border: none; transition: background .15s, transform .1s;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--brand); color: #fff; }
+  .btn-primary:hover { background: var(--brand-hover); }
+  .btn-secondary { background: rgba(255,255,255,0.06); color: var(--text-primary); border: 1px solid var(--glass-border); }
+  .btn-secondary:hover { background: rgba(255,255,255,0.10); }
+
+  /* ── 选项屏 ── */
+  .option-screen h2, .done-screen h2 { font-size: 20px; font-weight: 750; color: var(--text-primary); }
+  .option-screen .lead, .done-screen .lead { margin-top: 8px; font-size: 13.5px; color: var(--text-secondary); }
+  .option-body { flex: 1; display: flex; flex-direction: column; gap: 22px; margin-top: 26px; }
+  .field-label { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; }
+  .path-row { display: flex; gap: 10px; }
+  .path-input {
+    flex: 1; height: 38px; padding: 0 14px;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border); border-radius: 10px;
+    color: var(--text-primary); font-size: 13.5px; font-family: "Cascadia Code", Consolas, monospace;
+    outline: none;
+  }
+  .path-input:focus { border-color: rgba(99,145,255,0.5); }
+  .disk-note { margin-top: 10px; font-size: 12px; color: var(--text-muted); }
+  .checks { display: flex; flex-direction: column; gap: 14px; }
+  .check { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+  .check .box {
+    flex: 0 0 18px; width: 18px; height: 18px; margin-top: 1px;
+    border-radius: 5px; border: 1.5px solid rgba(255,255,255,0.22);
+    background: rgba(255,255,255,0.04);
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s, border-color .15s;
+  }
+  .check.on .box { background: var(--brand); border-color: var(--brand); }
+  .check .box svg { width: 11px; height: 11px; opacity: 0; transform: scale(.6); transition: opacity .15s, transform .15s; }
+  .check.on .box svg { opacity: 1; transform: none; }
+  .check .txt { font-size: 13.5px; color: var(--text-primary); line-height: 1.5; }
+  .check .txt small { display: block; color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+  .screen-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: auto; }
+  .screen-actions .left { margin-right: auto; }
+
+  /* ── 进度屏 ── */
+  .installing { align-items: center; justify-content: center; text-align: center; }
+  .installing .phase { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+  .installing .file {
+    margin-top: 8px; font-size: 12px; color: var(--text-muted);
+    font-family: "Cascadia Code", Consolas, monospace;
+    max-width: 560px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .progress-track {
+    width: 100%; max-width: 520px; height: 6px; margin-top: 30px;
+    background: rgba(255,255,255,0.07); border-radius: 999px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; width: 0%; border-radius: 999px;
+    background: linear-gradient(90deg, #5078e6, #6391ff);
+    transition: width .18s ease;
+  }
+  .progress-meta { display: flex; justify-content: space-between; width: 100%; max-width: 520px; margin-top: 12px; }
+  .progress-meta span { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .error-text { margin-top: 16px; font-size: 13px; color: var(--error-color); max-width: 520px; line-height: 1.6; }
+
+  /* ── 完成屏 ── */
+  .done-screen { align-items: center; justify-content: center; text-align: center; }
+  .done-ring {
+    width: 84px; height: 84px; border-radius: 999px; margin-bottom: 20px;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle, rgba(25,135,84,0.18) 0%, rgba(25,135,84,0.05) 70%);
+    border: 1px solid rgba(25,135,84,0.35);
+    box-shadow: 0 0 34px rgba(25,135,84,0.12);
+  }
+  .done-ring svg { width: 38px; height: 38px; }
+  .done-screen .checks { margin-top: 22px; align-items: center; }
+  .done-screen .check { align-items: center; }
+  .done-actions { margin-top: 30px; }
+
+  /* ── 进程确认覆盖层 ── */
+  .confirm-overlay {
+    position: absolute; inset: 0; z-index: 10;
+    background: rgba(5,5,5,0.6); backdrop-filter: blur(6px);
+    display: none; align-items: center; justify-content: center;
+  }
+  .confirm-overlay.show { display: flex; }
+  .confirm-card {
+    width: 420px; padding: 24px;
+    background: rgba(24,24,28,0.95); border: 1px solid var(--glass-border);
+    border-radius: 16px; box-shadow: 0 18px 48px rgba(0,0,0,0.5);
+  }
+  .confirm-card h3 { font-size: 15.5px; font-weight: 700; color: var(--text-primary); }
+  .confirm-card p { margin-top: 10px; font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+  .confirm-card ul { margin: 12px 0 0; padding: 0; list-style: none; }
+  .confirm-card li {
+    font-size: 12.5px; color: var(--text-primary);
+    font-family: "Cascadia Code", Consolas, monospace;
+    padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .confirm-card li:last-child { border-bottom: none; }
+  .confirm-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 18px; }
+</style>
+</head>
+<body>
+
+  <!-- 自绘标题栏 -->
+  <div class="titlebar" data-tauri-drag-region>
+    <img src="./logo.png" alt="">
+    <span class="title" id="titlebar-text">AgentDevClaw 安装向导</span>
+    <span class="spacer"></span>
+    <button class="win-btn" id="btn-minimize" title="最小化">
+      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="1.5" y1="6" x2="10.5" y2="6"/></svg>
+    </button>
+    <button class="win-btn close" id="btn-close" title="关闭">
+      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="1.5" y1="1.5" x2="10.5" y2="10.5"/><line x1="10.5" y1="1.5" x2="1.5" y2="10.5"/></svg>
+    </button>
+  </div>
+
+  <div class="screens">
+    <!-- 屏 1：欢迎 -->
+    <div class="screen welcome active" id="scr-welcome">
+      <div class="logo-wrap"><img src="./logo.png" alt="AgentDevClaw"></div>
+      <div class="product-name">AgentDevClaw</div>
+      <div><span class="version-pill" id="version-pill">v? · 桌面版</span></div>
+      <div class="tagline">以 Agent 为中心的可扩展工作台</div>
+      <div class="upgrade-note" id="upgrade-note" style="display:none"></div>
+      <div class="welcome-actions">
+        <button class="btn btn-primary" id="btn-go-options">安装</button>
+        <button class="btn btn-secondary" id="btn-go-options-2">自定义选项</button>
+      </div>
+      <div class="welcome-footnote">默认安装到用户目录，无需管理员权限 · 用户数据存放于 ~/.agentdev</div>
+    </div>
+
+    <!-- 屏 2：选项 -->
+    <div class="screen option-screen" id="scr-options">
+      <h2 id="options-title">安装选项</h2>
+      <div class="lead">确认安装位置与集成项，随后开始安装。</div>
+      <div class="option-body">
+        <div>
+          <div class="field-label">安装位置</div>
+          <div class="path-row">
+            <input class="path-input" id="path-input" spellcheck="false">
+            <button class="btn btn-secondary" id="btn-browse">浏览…</button>
+          </div>
+          <div class="disk-note">所需空间 <b>约 500 MB</b> · 应用数据独立存放，卸载不删除</div>
+        </div>
+        <div>
+          <div class="field-label">系统集成</div>
+          <div class="checks">
+            <div class="check on" data-check="desktopShortcut">
+              <div class="box"><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><polyline points="2,6.4 4.8,9 10,3"/></svg></div>
+              <div class="txt">创建桌面快捷方式</div>
+            </div>
+            <div class="check on" data-check="contextMenu">
+              <div class="box"><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><polyline points="2,6.4 4.8,9 10,3"/></svg></div>
+              <div class="txt">添加资源管理器右键菜单
+                <small>「在编程小助手中打开 / 创建会话」— 目录空白处右键直达</small>
+              </div>
+            </div>
+            <div class="check on" data-check="startMenuShortcut">
+              <div class="box"><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><polyline points="2,6.4 4.8,9 10,3"/></svg></div>
+              <div class="txt">创建开始菜单快捷方式</div>
+            </div>
+          </div>
+        </div>
+        <div class="screen-actions">
+          <button class="btn btn-secondary left" id="btn-back-welcome">← 返回</button>
+          <button class="btn btn-primary" id="btn-install">安装</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 屏 3：进度 -->
+    <div class="screen installing" id="scr-installing">
+      <div class="phase" id="install-phase">正在准备安装…</div>
+      <div class="file" id="install-file"></div>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-meta">
+        <span id="progress-pct">0%</span>
+        <span id="progress-eta"></span>
+      </div>
+      <div class="error-text" id="error-text" style="display:none"></div>
+    </div>
+
+    <!-- 屏 4：完成 -->
+    <div class="screen done-screen" id="scr-done">
+      <div class="done-ring">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#2ea36b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="5,12.5 10,17.5 19,7"/></svg>
+      </div>
+      <h2 id="done-title">安装完成</h2>
+      <div class="lead" id="done-lead">AgentDevClaw 已就绪，随时可以开始。</div>
+      <div class="checks">
+        <div class="check on" data-check="launchOnDone">
+          <div class="box"><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><polyline points="2,6.4 4.8,9 10,3"/></svg></div>
+          <div class="txt">立即运行 AgentDevClaw</div>
+        </div>
+      </div>
+      <div class="done-actions">
+        <button class="btn btn-primary" id="btn-finish">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 进程确认覆盖层 -->
+  <div class="confirm-overlay" id="confirm-overlay">
+    <div class="confirm-card">
+      <h3 id="confirm-title">检测到正在运行的应用</h3>
+      <p>继续安装需要先关闭以下进程。未保存的工作请先保存。</p>
+      <ul id="confirm-process-list"></ul>
+      <div class="confirm-actions">
+        <button class="btn btn-secondary" id="btn-confirm-cancel">取消</button>
+        <button class="btn btn-primary" id="btn-confirm-kill">结束并继续</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const { invoke } = window.__TAURI__.core;
+  const { listen } = window.__TAURI__.event;
+  const { getCurrentWindow } = window.__TAURI__.window;
+  const win = getCurrentWindow();
+  const dialog = window.__TAURI__.dialog;
+
+  let mode = 'install';
+  let installState = null;
+  const checkStates = { desktopShortcut: true, contextMenu: true, startMenuShortcut: true, launchOnDone: true };
+
+  const $ = id => document.getElementById(id);
+
+  function show(name) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    $('scr-' + name).classList.add('active');
+  }
+
+  // ── 窗口控制 ──
+  $('btn-close').addEventListener('click', () => win.close());
+  $('btn-minimize').addEventListener('click', () => win.minimize());
+
+  // ── 复选框 ──
+  document.querySelectorAll('.check').forEach(el => {
+    el.addEventListener('click', () => {
+      el.classList.toggle('on');
+      const key = el.dataset.check;
+      if (key) checkStates[key] = el.classList.contains('on');
+    });
+  });
+
+  // ── 初始化：模式与安装状态 ──
+  (async () => {
+    mode = await invoke('get_mode');
+    if (mode === 'uninstall') {
+      document.documentElement.style.width = '100%';
+      $('titlebar-text').textContent = '卸载 AgentDevClaw';
+      $('btn-go-options').textContent = '卸载';
+      $('btn-go-options-2').style.display = 'none';
+      const state = await invoke('get_install_state');
+      $('options-title').textContent = '卸载';
+      document.querySelector('#scr-options .lead').textContent =
+        `将从本机移除 AgentDevClaw${state.currentVersion ? '（v' + state.currentVersion + '）' : ''}。位于 ~/.agentdev 的用户数据与会话不会被删除。`;
+      $('path-input').value = state.installDir || '';
+      $('path-input').disabled = true;
+      $('btn-browse').style.display = 'none';
+      document.querySelector('#scr-options .option-body > div:first-child .disk-note').style.display = 'none';
+      // 卸载无集成选项：隐藏「系统集成」整块
+      document.querySelector('#scr-options .option-body > div:nth-child(2)').style.display = 'none';
+      $('btn-install').textContent = '卸载';
+      $('done-lead').textContent = 'AgentDevClaw 已从本机移除。';
+      document.querySelector('#scr-done .checks').style.display = 'none';
+    } else {
+      installState = await invoke('get_install_state');
+      const ver = installState.currentVersion;
+      const target = installState.targetVersion || '';
+      $('version-pill').textContent = target ? `v${target} · 桌面版` : '桌面版';
+      if (installState.installed) {
+        $('upgrade-note').style.display = '';
+        $('upgrade-note').textContent = `检测到已安装版本${ver ? ' v' + ver : ''}，本次将原位升级`;
+        $('btn-go-options').textContent = '升级';
+      }
+      $('path-input').value = installState.defaultDir || installState.installDir || '';
+    }
+  })();
+
+  // ── 导航 ──
+  const goOptions = () => show('options');
+  $('btn-go-options').addEventListener('click', goOptions);
+  $('btn-go-options-2').addEventListener('click', goOptions);
+  $('btn-back-welcome').addEventListener('click', () => show('welcome'));
+
+  // ── 浏览（tauri-plugin-dialog） ──
+  $('btn-browse').addEventListener('click', async () => {
+    const picked = await dialog.open({ directory: true, title: '选择安装位置' });
+    if (typeof picked === 'string' && picked) $('path-input').value = picked;
+  });
+
+  // ── 卸载/安装启动 ──
+  $('btn-install').addEventListener('click', async () => {
+    show('installing');
+    $('error-text').style.display = 'none';
+    try {
+      if (mode === 'uninstall') {
+        await invoke('begin_uninstall');
+      } else {
+        await invoke('begin_install', {
+          opts: {
+            installDir: $('path-input').value.trim(),
+            desktopShortcut: checkStates.desktopShortcut,
+            contextMenu: checkStates.contextMenu,
+            startMenuShortcut: checkStates.startMenuShortcut,
+          },
+        });
+      }
+    } catch (e) {
+      showError(String(e));
+    }
+  });
+
+  function showError(message) {
+    $('install-phase').textContent = mode === 'uninstall' ? '卸载失败' : '安装失败';
+    $('error-text').textContent = message;
+    $('error-text').style.display = '';
+  }
+
+  // ── 进度事件 ──
+  const PHASE_TEXT = {
+    extracting: '正在安装文件…',
+    integrating: mode === 'uninstall' ? '正在清理系统集成…' : '正在注册系统集成…',
+    shortcuts: '正在创建快捷方式…',
+  };
+  listen('install-progress', ev => {
+    const p = ev.payload;
+    if (p.phase === 'confirmKill') {
+      const list = $('confirm-process-list');
+      list.innerHTML = '';
+      p.processes.forEach(proc => {
+        const li = document.createElement('li');
+        li.textContent = `${proc.name} (PID ${proc.pid}) — ${proc.path}`;
+        list.appendChild(li);
+      });
+      $('confirm-overlay').classList.add('show');
+    } else if (p.phase === 'extracting') {
+      $('install-phase').textContent = mode === 'uninstall' ? '正在移除…' : (PHASE_TEXT.extracting);
+      $('install-file').textContent = p.detail || '';
+      $('progress-fill').style.width = (p.pct || 0) + '%';
+      $('progress-pct').textContent = (p.pct || 0) + '%';
+      $('progress-eta').textContent = p.pct >= 100 ? '完成' : '安装中…';
+    } else if (p.phase === 'integrating') {
+      $('install-phase').textContent = mode === 'uninstall' ? '正在清理系统集成…' : '正在注册系统集成…';
+      $('progress-fill').style.width = '100%';
+      $('progress-pct').textContent = '100%';
+    } else if (p.phase === 'shortcuts') {
+      $('install-phase').textContent = '正在创建快捷方式…';
+    } else if (p.phase === 'done') {
+      $('btn-finish').dataset.done = '1';
+      show('done');
+    } else if (p.phase === 'error') {
+      showError(p.message);
+    }
+  });
+
+  // ── 进程确认 ──
+  $('btn-confirm-kill').addEventListener('click', async () => {
+    $('confirm-overlay').classList.remove('show');
+    await invoke('confirm_kill', { proceed: true });
+  });
+  $('btn-confirm-cancel').addEventListener('click', async () => {
+    $('confirm-overlay').classList.remove('show');
+    await invoke('confirm_kill', { proceed: false });
+  });
+
+  // ── 完成 ──
+  $('btn-finish').addEventListener('click', async () => {
+    if (mode !== 'uninstall' && checkStates.launchOnDone) {
+      try { await invoke('launch_app'); } catch (e) { console.error(e); }
+    }
+    win.close();
+  });
+</script>
+</body>
+</html>
