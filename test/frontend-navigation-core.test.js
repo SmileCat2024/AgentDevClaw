@@ -107,7 +107,7 @@ describe('navigation-core: waitForRuntimeReady', () => {
     assert.equal(agent.runtime_session_id, 'agent-late');
   });
 
-  it('returns null after exhausting attempts without readiness', async () => {
+  it('returns null after exhausting attempts without readiness (slow-start budget disabled)', async () => {
     const ctx = createNavigationSandbox();
     ctx.fetch = mockFetchWith([{ ready: false, lifecycle: 'starting', agent: null }]);
     const result = await ctx.window.NavigationCore.waitForRuntimeReady({
@@ -115,8 +115,85 @@ describe('navigation-core: waitForRuntimeReady', () => {
       sessionId: 'session-1',
       attempts: 2,
       intervalMs: 0,
+      slowAttempts: 0,
     });
     assert.equal(result, null);
+  });
+
+  it('extends waiting into the slow-start budget when the runtime is confirmed starting', async () => {
+    // 2026-11-13 桌面版冷启动事故：首次 open 基础预算（10s）耗尽放弃导航，
+    // runtime 随后 ready、第二次点击 1.3s 进入。观察到 lifecycle=starting
+    // （服务端确证进程存活仍在启动）时必须追加等待而不是按失败回退。
+    const ctx = createNavigationSandbox();
+    // 基础预算 2 次耗尽时仍 starting，追加段第 2 次探测转 ready。
+    ctx.fetch = mockFetchWith([
+      { ready: false, lifecycle: 'starting', agent: null },
+      { ready: false, lifecycle: 'starting', agent: null },
+      { ready: false, lifecycle: 'starting', agent: null },
+      readyBody('agent-slow-start'),
+    ]);
+    const agent = await ctx.window.NavigationCore.waitForRuntimeReady({
+      agentId: 'programming-helper',
+      sessionId: 'session-1',
+      attempts: 2,
+      intervalMs: 0,
+      slowAttempts: 5,
+      slowIntervalMs: 0,
+    });
+    assert.equal(agent.runtime_session_id, 'agent-slow-start');
+  });
+
+  it('does not grant the slow-start budget without evidence of a starting runtime', async () => {
+    // 持续传输错误（无 lifecycle 证据）不触发追加段：轮询次数仍由基础
+    // 预算限定，慢启动资格只在服务端确证 starting 时授予。
+    const ctx = createNavigationSandbox();
+    const fetchImpl = mockFetchWith([new Error('network down')]);
+    ctx.fetch = fetchImpl;
+    const result = await ctx.window.NavigationCore.waitForRuntimeReady({
+      agentId: 'programming-helper',
+      sessionId: 'session-1',
+      attempts: 2,
+      intervalMs: 0,
+      slowAttempts: 5,
+      slowIntervalMs: 0,
+    });
+    assert.equal(result, null);
+    assert.equal(fetchImpl.seenUrls.length, 2);
+  });
+
+  it('throws target_runtime_stopped when a starting runtime later stops (incl. slow-start phase)', async () => {
+    const ctx = createNavigationSandbox();
+    ctx.fetch = mockFetchWith([
+      { ready: false, lifecycle: 'starting', agent: null },
+      { ready: false, lifecycle: 'stopped', agent: null },
+    ]);
+    await assert.rejects(
+      ctx.window.NavigationCore.waitForRuntimeReady({
+        agentId: 'programming-helper',
+        sessionId: 'session-1',
+        attempts: 1,
+        intervalMs: 0,
+        slowAttempts: 3,
+        slowIntervalMs: 0,
+      }),
+      (error) => error.code === 'target_runtime_stopped',
+    );
+  });
+
+  it('returns null when the slow-start budget is also exhausted', async () => {
+    const ctx = createNavigationSandbox();
+    const fetchImpl = mockFetchWith([{ ready: false, lifecycle: 'starting', agent: null }]);
+    ctx.fetch = fetchImpl;
+    const result = await ctx.window.NavigationCore.waitForRuntimeReady({
+      agentId: 'programming-helper',
+      sessionId: 'session-1',
+      attempts: 1,
+      intervalMs: 0,
+      slowAttempts: 2,
+      slowIntervalMs: 0,
+    });
+    assert.equal(result, null);
+    assert.equal(fetchImpl.seenUrls.length, 3);
   });
 
   it('rejects immediately when agentId or sessionId is missing', async () => {

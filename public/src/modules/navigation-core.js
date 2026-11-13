@@ -22,6 +22,15 @@ window.NavigationCore = (() => {
   /**
    * 轮询轻量 runtime_status 端点直到目标 runtime 就绪。
    *
+   * 等待分两段：基础预算（attempts × intervalMs，快路径语义不变）+ 慢启动
+   * 追加段（slowAttempts × slowIntervalMs）。追加段只在服务端确证目标
+   * runtime 进程存活且仍在启动（lifecycle=starting）时启用：桌面版冷启动
+   * （新装文件冷缓存 + 随包 Node 首次模块加载 + 同批恢复多个 runtime 的
+   * IO 竞争）下 runtime 就绪可超过基础预算，固定预算会在 runtime 即将就绪
+   * 时放弃导航——实测桌面版首启首次 open 等 10.7s 放弃、runtime 随后
+   * ready、第二次点击 1.3s 进入。stopped / missing 是终态，任何阶段命中
+   * 都立即中止，不会因追加段白等。
+   *
    * @param {object} options
    * @param {string} options.agentId 宿主 agent id
    * @param {string} options.sessionId 目标会话 id
@@ -29,8 +38,11 @@ window.NavigationCore = (() => {
    *   （restart 场景：绑定该会话的还是旧 runtime 时继续等待）
    * @param {string} [options.excludeRuntimeId] 排除的 runtime id（语义与
    *   expectRuntimeId 互补，二者给其一即可）
-   * @param {number} [options.attempts=50] 轮询次数上限
-   * @param {number} [options.intervalMs=200] 轮询间隔
+   * @param {number} [options.attempts=50] 基础轮询次数上限
+   * @param {number} [options.intervalMs=200] 基础轮询间隔
+   * @param {number} [options.slowAttempts=120] 慢启动追加轮询次数上限
+   *   （仅在观察到 lifecycle=starting 时生效；0 关闭追加段）
+   * @param {number} [options.slowIntervalMs=500] 慢启动追加轮询间隔
    * @param {string} [options.operationId] 透传服务端诊断事件的操作 id
    * @returns {Promise<object|null>} 就绪的 agent 条目；超时返回 null
    * @throws {Error} code='target_runtime_stopped' — runtime 在就绪前停止/消失。
@@ -44,6 +56,8 @@ window.NavigationCore = (() => {
       excludeRuntimeId = '',
       attempts = 50,
       intervalMs = 200,
+      slowAttempts = 120,
+      slowIntervalMs = 500,
       operationId = '',
     } = options || {};
     const expect = String(expectRuntimeId || '').trim();
@@ -51,7 +65,12 @@ window.NavigationCore = (() => {
     if (!agentId || !sessionId) {
       throw new Error('waitForRuntimeReady requires agentId and sessionId');
     }
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let sawStarting = false;
+    /**
+     * 单次探测。返回就绪且匹配的 agent 条目，本轮无结论（继续等待）返回
+     * null；stopped / missing 抛终态错误；观察到 starting 置位慢启动资格。
+     */
+    const probe = async () => {
       try {
         const params = new URLSearchParams({ agentId, sessionId });
         if (operationId) params.set('operationId', operationId);
@@ -75,13 +94,27 @@ window.NavigationCore = (() => {
             );
             error.code = 'target_runtime_stopped';
             throw error;
+          } else if (result?.lifecycle === 'starting') {
+            sawStarting = true;
           }
         }
       } catch (error) {
         if (error?.code === 'target_runtime_stopped') throw error;
         // 轮询传输错误既不是会话失败也不是启动失败，静默重试。
       }
+      return null;
+    };
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const agent = await probe();
+      if (agent) return agent;
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    if (sawStarting) {
+      for (let attempt = 0; attempt < slowAttempts; attempt += 1) {
+        const agent = await probe();
+        if (agent) return agent;
+        await new Promise((resolve) => setTimeout(resolve, slowIntervalMs));
+      }
     }
     return null;
   }
