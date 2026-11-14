@@ -14,7 +14,7 @@
  * 冷却按条目 id 记账（每会话每条目一次）。新增素养提醒 = 代码加条目 +
  * knowledge 放对应 md，机制不动。
  *
- * 技能携带（skills/ 目录）：本 feature 同时是 grill-me 技能（设计树拷问）
+ * 技能携带（skills/ 目录）：本 feature 同时是 grill-me 技能（设计树拷问与执行期回溯）
  * 的载具——框架 collectFeatureSkills 按 dirname(source)/skills 约定自动
  * 发现并注入系统提示词，构建时随 knowledge 同款机制拷入 dist
  * （copy-local-feature-skills.mjs）。技能随 feature 装配走，不依赖工作
