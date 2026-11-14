@@ -189,9 +189,12 @@ describe('模型切换与配置入口', () => {
     s.ctx.window.phOpenSettings = (options) => settingsTargets.push(options?.initialTab || null);
     s.ctx.run(`window.ClawFW.actions.invoke('sessions.openModelSettings', { dataset: {} }, null, 0)`);
     assert.deepEqual(settingsTargets, ['model']);
+    // 工作空间设置按钮每次强行落插件及配置页，不受一级页签记忆影响
+    s.ctx.run(`window.ClawFW.actions.invoke('sessions.openSettings', { dataset: {} }, null, 0)`);
+    assert.deepEqual(settingsTargets, ['model', 'feature']);
 
     await s.ctx.run('window.phToggleModelSlot()');
-    assert.deepEqual(settingsTargets, ['model', 'model'], 'without a secondary model, the existing switch entry opens the model configuration');
+    assert.deepEqual(settingsTargets, ['model', 'feature', 'model'], 'without a secondary model, the existing switch entry opens the model configuration');
     assert.equal(s.agent.modelPresets.default.primary, 'm1', 'opening model settings does not change the primary model');
   });
 });

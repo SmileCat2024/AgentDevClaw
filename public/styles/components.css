@@ -7360,6 +7360,8 @@ body[data-theme="light"] .user-choice-card:focus-within {
 .ph-pm-body { padding: 16px 24px; display: flex; flex-direction: column; gap: 12px; }
 .ph-coder-policy-section { padding-bottom: 14px; border-bottom: 1px solid var(--border-color); }
 .ph-coder-policy-section > .ph-mc-row { border-bottom: 0; }
+/* 策略分页（Coder智能体页）：行与卡片区自持 24px 侧距，容器只补上下留白 */
+.ph-settings-feature-mounts > .ph-mc-list { padding: 8px 0 16px; }
 .ph-coder-runtime-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 10px; }
 .ph-coder-runtime-options .ph-pm-card { min-width: 0; min-height: 104px; box-sizing: border-box; padding: 12px; }
 .ph-coder-runtime-options .ph-pm-card:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }

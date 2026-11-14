@@ -85,6 +85,13 @@ describe('programming-helper workspace process mode UI', () => {
       renderPhSettingsOverlay({ id: 'programming-helper' }, []);
       _phSwitchSettingsTab('coder');
     })()`);
+    // 同步断言（fetch 未 resolve 前）：Coder智能体页默认落「策略」分页
+    assert.match(host.innerHTML, /ph-session-tab active[^>]*data-sub="policy"/);
+    assert.match(host.innerHTML, /ph-coder-policy-host/);
+    assert.match(host.innerHTML, /data-sub="mounts"/);
+    assert.match(host.innerHTML, /data-sub="config"/);
+    // 切到功能配置分页后按原断言验收装配清单
+    ctx.run(`_phSwitchFeatureSubTab('mounts')`);
     await new Promise((resolve) => setImmediate(resolve));
     assert.match(host.innerHTML, /data-tab="coder"/);
     assert.match(host.innerHTML, /data-tab="feature"/);
@@ -100,7 +107,7 @@ describe('programming-helper workspace process mode UI', () => {
     assert.equal(JSON.stringify(ctx.run('editorScopes')), '[{"agentId":"coder","initialFeature":"skill"}]');
   });
 
-  it('renders Coder policy as a host-workspace setting tab without adding quota policy to Programming Helper', () => {
+  it('renders Coder policy inside the Coder agent page and normalizes the legacy tab key', () => {
     const ctx = createFrontendSandbox();
     ctx.window.phSettingsAgentId = 'programming-helper';
     ctx.loadSource('public/src/modules/action-dispatcher.js');
@@ -111,8 +118,11 @@ describe('programming-helper workspace process mode UI', () => {
       _phSettingsTab = 'coder-policy';
       renderPhSettingsOverlay({ id: 'programming-helper' }, []);
     })()`);
-    assert.match(host.innerHTML, /Coder 策略/);
+    // 左栏旧「Coder 策略」独立页签消失，内容并入 Coder智能体页策略分页
+    assert.match(host.innerHTML, /Coder智能体/);
+    assert.doesNotMatch(host.innerHTML, /data-tab="coder-policy"/);
     assert.match(host.innerHTML, /ph-coder-policy-host/);
+    assert.match(host.innerHTML, /ph-session-tab active[^>]*data-sub="policy"/);
     assert.doesNotMatch(host.innerHTML, /编程小助手.*并发上限/);
   });
   it('renders the server-provided workspace mode without consulting a project key', () => {
@@ -205,7 +215,7 @@ describe('programming-helper workspace process mode UI', () => {
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
-    await ctx.run(`(async () => { _phSettingsTab = 'coder-policy'; await _phLoadCoderPolicy(); })()`);
+    await ctx.run(`(async () => { _phSettingsTab = 'coder'; _phFeatureSubTab = 'policy'; await _phLoadCoderPolicy(); })()`);
 
     // 三张策略卡齐全（形态照进程模式页的 ph-pm-card 单选卡片）
     assert.match(host.innerHTML, /ph-pm-card active[^>]*data-action="phSettings\.setCoderRotationStrategy" data-mode="trim"/);
@@ -244,7 +254,7 @@ describe('programming-helper workspace process mode UI', () => {
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
-    await ctx.run(`(async () => { _phSettingsTab = 'coder-policy'; await _phLoadCoderPolicy(); })()`);
+    await ctx.run(`(async () => { _phSettingsTab = 'coder'; _phFeatureSubTab = 'policy'; await _phLoadCoderPolicy(); })()`);
 
     assert.match(host.innerHTML, /ph-pm-card active[^>]*data-action="phSettings\.setCoderRotationStrategy" data-mode="adaptive"/);
   });
@@ -263,7 +273,7 @@ describe('programming-helper workspace process mode UI', () => {
     const host = { innerHTML: '', textContent: '' };
     ctx.document.getElementById = () => host;
 
-    await ctx.run(`(async () => { _phSettingsTab = 'coder-policy'; await window.ClawFW.actions.invoke('phSettings.setCoderRotationStrategy', { dataset: { mode: 'summary' } }); })()`);
+    await ctx.run(`(async () => { _phSettingsTab = 'coder'; _phFeatureSubTab = 'policy'; await window.ClawFW.actions.invoke('phSettings.setCoderRotationStrategy', { dataset: { mode: 'summary' } }); })()`);
 
     const write = requests.find((request) => request.options?.method === 'PUT');
     assert.ok(write);

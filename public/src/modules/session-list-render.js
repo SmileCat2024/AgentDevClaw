@@ -1069,7 +1069,7 @@ window.ClawFW.actions.registerMany({
   'sessions.newProjectDialog': () => window.phOpenNewProjectDialog(),
   'sessions.manageProjects': () => window.phOpenManageProjectsDialog(),
   'sessions.toggleProjectDropdown': (el, event) => window.phToggleProjectDropdown(event),
-  'sessions.openSettings': () => window.phOpenSettings(),
+  'sessions.openSettings': () => window.phOpenSettings({ initialTab: 'feature' }),
   'sessions.openModelSettings': () => window.phOpenSettings({ initialTab: 'model' }),
   'sessions.toggleModelSlot': () => window.phToggleModelSlot(),
   'sessions.loadMore': () => window.phLoadMoreSessions(),
