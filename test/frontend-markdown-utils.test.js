@@ -386,3 +386,58 @@ describe('markdown-utils: renderMarkdown 的 frontmatter 呈现', () => {
     assert.ok(!html.includes('md-frontmatter'));
   });
 });
+
+describe('markdown-utils: openTableZoom 克隆复位', () => {
+  // 契约：宽表在流内被横向拖动后（_tableScrollSync 把 translateX 写在
+  // table 的 inline style 上），打开放大视图，面板内的克隆表不继承该
+  // 位移（放大态是自然宽度呈现，无横向拖动）；流内原表保持拖动位置，
+  // 打开/关闭放大不打断流内滚动状态。面板 CSS 只覆盖 width/table-layout，
+  // inline transform 的复位是 openTableZoom 自身的职责。
+  // DOM stub 只提供 openTableZoom 走到的最小面：btn → block → table；
+  // cloneNode 按真实语义快照 inline style。
+  function loadZoomSandbox(table) {
+    const created = [];
+    const mkElement = () => {
+      const el = {
+        style: {},
+        children: [],
+        appendChild(child) { el.children.push(child); },
+        addEventListener() {},
+        removeEventListener() {},
+        remove() {},
+      };
+      created.push(el);
+      return el;
+    };
+    const ctx = createFrontendSandbox({
+      marked: { Renderer: function () {}, setOptions() {}, parse: (t) => t },
+      hljs: { getLanguage: () => null, highlight: (code) => ({ value: code }) },
+      document: {
+        getElementById: () => null, // 无已存在的 zoom overlay，走创建路径
+        createElement: mkElement,
+        addEventListener() {},
+        removeEventListener() {},
+        body: { appendChild() {} },
+      },
+    });
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
+    ctx.loadSource('public/src/modules/markdown-utils.js');
+    const btn = { closest: () => ({ querySelector: () => table }) };
+    return { ctx, btn, created };
+  }
+
+  it('流内拖动残留的 translateX 不进入放大面板，原表位置保留', () => {
+    const table = {
+      style: { transform: 'translateX(-120px)' },
+      cloneNode() { return { style: { transform: this.style.transform } }; },
+    };
+    const { ctx, btn, created } = loadZoomSandbox(table);
+    const openTableZoom = ctx.run('openTableZoom');
+    openTableZoom(btn);
+    // createElement 顺序：overlay 先、panel 后；panel.children[0] 是克隆表
+    const zoomTable = created[1].children[0];
+    assert.equal(zoomTable.style.transform, '');
+    assert.notEqual(zoomTable, table);
+    assert.equal(table.style.transform, 'translateX(-120px)');
+  });
+});

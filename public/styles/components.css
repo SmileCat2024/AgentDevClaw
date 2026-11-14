@@ -688,6 +688,11 @@ body[data-theme="light"] .tool-call-container {
 }
 .message-row .md-table-block.is-wide .md-table-wrap {
   overflow: hidden; /* 左移溢出裁剪；横向滚动已移交 .md-table-scrollbar */
+  /* 投影移交表格本体（见下方 is-wide table 段）：wrap 左缘固定在正文左−bleed，
+     表格被 margin-left 推到正文左，左侧 bleed 段是透明空区——wrap 矩形左缘
+     （及顶/底边的空区段）的阴影会在空区上露出一圈极弱的"假描边"，
+     无渐隐 mask 遮盖时（不需滚动的轻度溢出表）最明显 */
+  box-shadow: none;
 }
 .message-row .md-table-block.is-wide table {
   will-change: transform; /* scroll 事件逐帧改 transform，保持合成器路径 */
@@ -721,6 +726,14 @@ body[data-theme="light"] .tool-call-container {
   border-collapse: separate !important;
   border-spacing: 0 !important;
   background: transparent !important;
+  /* 投影自 wrap 移交（同配方搬家）：阴影恒贴合表格矩形——左移滚动时随
+     transform 跟随、随渐隐 mask 一同渐隐；wrap 左侧突破透明区不再露出
+     假描边。border-radius 让阴影跟随四角（单元格圆角同 12px）。
+     代价：底部投影超出 wrap 的部分被 overflow:hidden 裁掉，仅 scrollbar
+     区 8px 内可见（原 wrap 自身投影不受 overflow 裁剪，底部约 22px），
+     换取左/顶缘阴影贴合表格实际边界，属可接受取舍 */
+  border-radius: 12px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
 }
 .message-row .md-table-block.is-wide table tr {
   background: transparent !important;

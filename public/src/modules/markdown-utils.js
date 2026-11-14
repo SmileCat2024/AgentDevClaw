@@ -494,7 +494,12 @@ const openTableZoom = function(btn) {
   // markdown-body 上下文让克隆表格直接继承表格样式（背景/斑马纹/主题自适应）
   let panel = document.createElement('div');
   panel.className = 'markdown-body md-table-zoom-panel';
-  panel.appendChild(table.cloneNode(true));
+  const zoomTable = table.cloneNode(true);
+  // cloneNode(true) 连带复制 inline style：is-wide 表格在流内被横向拖动后，
+  // _tableScrollSync 把 translateX 挂在 table 上，克隆进面板会继承位移
+  // （面板 CSS 只覆盖 width/table-layout，管不到 transform）——放大态复位
+  zoomTable.style.transform = '';
+  panel.appendChild(zoomTable);
   panel.onclick = function(e) { e.stopPropagation(); };
   overlay.appendChild(panel);
 
