@@ -61,7 +61,7 @@ window.phOpenSettings = async ({ initialTab } = {}) => {
 
 window.phCloseSettings = () => {
   // Feature 设置二级页持有共享配置编辑器实例，关闭弹窗时一并释放；
-  // 身份落点与页内细节态全部重置——只记忆一级分页（模型配置/进程模式/Feature 设置）
+  // 身份落点与页内细节态全部重置——只记忆一级分页（模型配置/运行环境/Feature 设置等）
   if (typeof _closePhFeatureEditor === 'function') _closePhFeatureEditor();
   if (typeof window._phResetFeaturePageState === 'function') window._phResetFeaturePageState();
   const host = document.getElementById('ph-settings-host');
@@ -1069,7 +1069,7 @@ window.phToggleModelSlot = async () => {
 
 /**
  * 设置进程模式（共享 / 独立）
- * 从项目设置面板的进程模式页调用
+ * 从设置窗运行环境页的本地运行设置分页调用
  */
 window.phSetProcessMode = async (processMode) => {
   const agent = getCurrentAgentRecord();

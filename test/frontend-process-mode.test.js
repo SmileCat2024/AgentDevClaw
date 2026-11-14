@@ -125,6 +125,45 @@ describe('programming-helper workspace process mode UI', () => {
     assert.match(host.innerHTML, /ph-session-tab active[^>]*data-sub="policy"/);
     assert.doesNotMatch(host.innerHTML, /编程小助手.*并发上限/);
   });
+  it('normalizes the legacy process-mode tab into the runtime page local sub-tab', () => {
+    const ctx = createFrontendSandbox();
+    ctx.window.phSettingsAgentId = 'programming-helper';
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
+    const host = { innerHTML: '' };
+    ctx.document.getElementById = () => host;
+    ctx.run(`(() => {
+      _phSettingsTab = 'process';
+      renderPhSettingsOverlay({ id: 'programming-helper' }, []);
+    })()`);
+    // 旧「进程模式」「容器镜像」独立页签消失，合并为「运行环境」页
+    assert.match(host.innerHTML, /data-tab="runtime"[^>]*>.*运行环境/);
+    assert.doesNotMatch(host.innerHTML, /data-tab="process"/);
+    assert.doesNotMatch(host.innerHTML, /data-tab="container-images"/);
+    // 进程模式卡片渲染在本地运行设置分页（默认 active）
+    assert.match(host.innerHTML, /ph-session-tab active[^>]*data-sub="local"/);
+    assert.match(host.innerHTML, /ph-pm-card/);
+  });
+
+  it('normalizes the legacy container-images tab into the runtime page container sub-tab', () => {
+    const ctx = createFrontendSandbox();
+    ctx.window.phSettingsAgentId = 'programming-helper';
+    const mounts = [];
+    ctx.window.registerContainerImagesHost = () => mounts.push('register');
+    ctx.window.loadContainerImagesPanel = () => mounts.push('load');
+    ctx.loadSource('public/src/modules/action-dispatcher.js');
+    ctx.loadSource('public/src/modules/ph-settings.js');
+    const host = { innerHTML: '' };
+    ctx.document.getElementById = () => host;
+    ctx.run(`(() => {
+      _phSettingsTab = 'container-images';
+      renderPhSettingsOverlay({ id: 'programming-helper' }, []);
+    })()`);
+    // 容器观测面板渲染在容器运行设置分页并完成挂载
+    assert.match(host.innerHTML, /ph-session-tab active[^>]*data-sub="container"/);
+    assert.match(host.innerHTML, /ph-container-images-host/);
+    assert.deepEqual(mounts, ['register', 'load']);
+  });
   it('renders the server-provided workspace mode without consulting a project key', () => {
     const ctx = createFrontendSandbox();
     ctx.loadSource('public/src/modules/action-dispatcher.js');

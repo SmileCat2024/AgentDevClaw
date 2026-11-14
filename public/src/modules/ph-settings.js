@@ -2,9 +2,11 @@
  * ph-settings.js — 编程小助手「工作空间设置」面板（UI 标题：工作空间设置）
  *
  * IDE 式布局：左侧分类列表 + 右侧配置区域。
- * 分类页：插件及配置、Coder智能体、模型配置、进程模式，以及通知、容器镜像。
+ * 分类页：插件及配置、Coder智能体、模型配置、运行环境，以及通知。
  * 插件及配置页内部区分功能配置（装配清单）与参数配置；Coder智能体页
- * 另含策略分页（原「Coder 策略」独立页签并入，默认落策略）。
+ * 另含策略分页（原「Coder 策略」独立页签并入，默认落策略）；运行环境页
+ * 含本地运行设置与容器运行设置分页（原「进程模式」「容器镜像」独立页签并入，
+ * 默认落本地运行设置）。
  * 历史名 ph-model-config：面板早期只有模型选择器，职责扩张后更名，勿再回用旧名。
  *
  * 外部依赖（通过全局作用域）：
@@ -21,8 +23,9 @@
  */
 'use strict';
 
-let _phSettingsTab = 'model'; // 'model' | 'process' | 'feature' | 'coder'
+let _phSettingsTab = 'model'; // 'model' | 'runtime' | 'feature' | 'coder'
 let _phFeatureSubTab = 'mounts'; // 当前身份页的视图：策略（仅 coder）| 装配清单 | 参数配置
+let _phRuntimeSubTab = 'local'; // 运行环境页视图：本地运行设置 | 容器运行设置
 let _phFeatureEditor = null;
 let _phFeatureConfigTarget = null;
 
@@ -664,11 +667,21 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
     _phSettingsTab = 'coder';
     _phFeatureSubTab = 'policy';
   }
+  // 旧版「进程模式」「容器镜像」独立页签的记忆值归一到运行环境页对应分页
+  if (_phSettingsTab === 'process') {
+    _phSettingsTab = 'runtime';
+    _phRuntimeSubTab = 'local';
+  }
+  if (_phSettingsTab === 'container-images') {
+    _phSettingsTab = 'runtime';
+    _phRuntimeSubTab = 'container';
+  }
   if (_phSettingsTab === 'notification' && window.phSettingsAgentId !== 'programming-helper') {
     _phSettingsTab = 'model';
   }
-  if (_phSettingsTab === 'container-images' && window.phSettingsAgentId !== 'programming-helper') {
-    _phSettingsTab = 'model';
+  // 容器运行设置分页仅编程小助手域可见；他域记忆值回退本地运行设置
+  if (_phSettingsTab === 'runtime' && _phRuntimeSubTab === 'container' && window.phSettingsAgentId !== 'programming-helper') {
+    _phRuntimeSubTab = 'local';
   }
   const isZh = currentLanguage === 'zh';
 
@@ -686,15 +699,11 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
       { key: 'coder', label: isZh ? 'Coder智能体' : 'Coder Agent', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/></svg>' },
     ] : []),
     { key: 'model', label: isZh ? '模型配置' : 'Model Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
-    { key: 'process', label: isZh ? '进程模式' : 'Process Mode', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>' },
+    { key: 'runtime', label: isZh ? '运行环境' : 'Runtime Environment', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>' },
     ...(window.phSettingsAgentId === 'programming-helper' ? [{
       key: 'notification',
       label: isZh ? '通知' : 'Notifications',
       icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
-    }, {
-      key: 'container-images',
-      label: isZh ? '容器镜像' : 'Container Images',
-      icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
     }] : []),
   ];
 
@@ -733,14 +742,27 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
     contentHtml = '<div class="ph-mc-list" id="ph-notification-host">'
       + '<div class="ph-settings-empty">' + escapeHtml(isZh ? '正在读取通知设置…' : 'Loading notifications…') + '</div>'
       + '</div>';
-  } else if (_phSettingsTab === 'container-images') {
-    // 观测页：主体是环境状态卡与镜像/容器列表，不是配置行，故用页级容器
-    // （分区间距 16、内容缘 24，见 settings-catalog-page 同一节奏）
-    contentHtml = '<div class="ci-page" id="ph-container-images-host">'
-      + '<div class="ph-settings-empty">' + escapeHtml(isZh ? '正在读取容器镜像信息…' : 'Loading container images…') + '</div>'
+  } else if (_phSettingsTab === 'runtime') {
+    // 运行环境页：本地运行设置（原进程模式页）/ 容器运行设置（原容器镜像页）
+    // 两分页内容原样平移；容器分页对非编程小助手域不显示。
+    const runtimeSubTabs = [
+      { key: 'local', label: isZh ? '本地运行设置' : 'Local Runtime' },
+      ...(window.phSettingsAgentId === 'programming-helper'
+        ? [{ key: 'container', label: isZh ? '容器运行设置' : 'Container Runtime' }] : []),
+    ].map((item) => '<button type="button" class="ph-session-tab' + (_phRuntimeSubTab === item.key ? ' active' : '')
+      + '" data-action="phSettings.switchRuntimeSubTab" data-sub="' + item.key + '">' + item.label + '</button>').join('');
+    const runtimeBody = _phRuntimeSubTab === 'container'
+      // 观测页：环境状态卡与镜像/容器列表用页级容器（分区间距 16、内容缘 24）；
+      // mounts 只提供滚动，自身无 padding，不与 ci-page 双重缘距
+      ? '<div class="ph-settings-feature-mounts"><div class="ci-page" id="ph-container-images-host">'
+        + '<div class="ph-settings-empty">' + escapeHtml(isZh ? '正在读取容器镜像信息…' : 'Loading container images…') + '</div>'
+        + '</div></div>'
+      // 本地运行设置：单选卡片自持 24px 侧距（ph-pm-body），容器只提供滚动
+      : '<div class="ph-settings-feature-mounts">' + _renderProcessModeContent(agent) + '</div>';
+    contentHtml = '<div class="ph-settings-feature-page">'
+      + '<div class="ph-settings-feature-tabs">' + runtimeSubTabs + '</div>'
+      + runtimeBody
       + '</div>';
-  } else {
-    contentHtml = _renderProcessModeContent(agent);
   }
 
   const subtitle = _phSettingsTab === 'model'
@@ -749,9 +771,7 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
       ? (isZh ? featurePage.subtitleZh : featurePage.subtitleEn)
       : _phSettingsTab === 'notification'
           ? (isZh ? '编程小助手与 Coder 运行完成时是否弹出系统通知' : 'Run-finished toasts for Programming Helper and Coder')
-          : _phSettingsTab === 'container-images'
-            ? (isZh ? '容器运行环境连接检查与按 agent 的镜像管理' : 'Docker connection & per-agent image management')
-            : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
+          : (isZh ? '设置会话在本地或容器中的运行方式' : 'Configure how sessions run locally or in containers');
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
@@ -789,8 +809,8 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
     _phFeatureEditor.open();
   }
   if (featurePage && featurePage.policy && _phFeatureSubTab === 'policy') _phLoadCoderPolicy();
-  if (_phSettingsTab === 'container-images') {
-    // 容器镜像页：声明域宿主（服务端按名册 host 关系圈定本工作空间 + 子应用），
+  if (_phSettingsTab === 'runtime' && _phRuntimeSubTab === 'container') {
+    // 容器运行设置分页：声明域宿主（服务端按名册 host 关系圈定本工作空间 + 子应用），
     // 模块内部以 host 元素是否在 DOM 判断活跃
     window.registerContainerImagesHost?.('ph-container-images-host', window.phSettingsAgentId || 'programming-helper');
     window.loadContainerImagesPanel?.();
@@ -806,11 +826,12 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
 }
 const _phSwitchSettingsTab = (tab) => {
   // 插件清单与能力参数只属于主工作空间插件页；Coder 使用独立配置页；
-  // 各页进入时回到自己的默认分页（Coder智能体默认落策略）。
+  // 各页进入时回到自己的默认分页（Coder智能体默认落策略、运行环境默认落本地）。
   if (PH_FEATURE_PAGES[tab]) {
     _phFeatureSubTab = PH_FEATURE_PAGES[tab].defaultSubTab || 'mounts';
     _phFeatureConfigTarget = null;
   }
+  if (tab === 'runtime') _phRuntimeSubTab = 'local';
   _phSettingsTab = tab;
   const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
   if (agent) {
@@ -826,6 +847,18 @@ const _phSwitchFeatureSubTab = (sub) => {
   if (sub !== 'config' && sub !== 'mounts' && !(sub === 'policy' && page.policy)) return;
   if (sub !== 'config') _phFeatureConfigTarget = null;
   _phFeatureSubTab = sub;
+  const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
+  if (agent) {
+    const presets = getClawModelPresets();
+    renderPhSettingsOverlay(agent, presets);
+  }
+};
+
+const _phSwitchRuntimeSubTab = (sub) => {
+  // 容器运行设置分页仅编程小助手域持有
+  if (sub !== 'local' && sub !== 'container') return;
+  if (sub === 'container' && window.phSettingsAgentId !== 'programming-helper') return;
+  _phRuntimeSubTab = sub;
   const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
   if (agent) {
     const presets = getClawModelPresets();
@@ -857,6 +890,7 @@ window.ClawFW.actions.registerMany({
   'phSettings.saveCoderThreadLimit': (el) => phSaveCoderThreadLimit(el.value),
   'phSettings.toggleNotifyFinish': (el) => _phToggleNotificationFinish(el.dataset.agent, el.checked),
   'phSettings.switchFeatureSubTab': (el) => _phSwitchFeatureSubTab(el.dataset.sub),
+  'phSettings.switchRuntimeSubTab': (el) => _phSwitchRuntimeSubTab(el.dataset.sub),
   'phSettings.openFeatureConfig': (el) => _phOpenFeatureConfig(el),
   'phSettings.close': () => window.phCloseSettings(),
 });
