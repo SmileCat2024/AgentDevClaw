@@ -4,13 +4,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { Context, CoreLifecycle, discover, HooksRegistry, TodoFeature } from '@agentdevjs/core';
+import { Context, CoreLifecycle, discover, HandoffSeedFeature, HooksRegistry, TodoFeature } from '@agentdevjs/core';
 import {
   CraftAwarenessFeature,
   shouldRemindDocCraft,
   shouldRemindDesignTrace,
   loadKnowledgeDir,
-  readHandoffCalibrationContent,
   DOC_CRAFT_MIN_WRITE_LINES,
 } from '../src/index.js';
 
@@ -299,22 +298,64 @@ describe('Todo 完成后的语境化承接提醒', () => {
   });
 });
 
-describe('接续校准文案（经 seed 管道 appendix 注入，本 feature 不运行时探测）', () => {
-  it('readHandoffCalibrationContent 返回带 [工程素养] 前缀的正文；目录缺失返回 null', () => {
+describe('接续后的目标与验证证据校准', () => {
+  it('handoff seed 回放后、首个模型步骤前注入一次，且排在接续内容之后', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'craft-handoff-calibration-'));
+    const reminder = '按用户确认的目标继续；尊重已发生的验证及其实际覆盖范围。';
+    writeFileSync(join(dir, 'handoff-context-calibration.md'), reminder);
+    const craft = new CraftAwarenessFeature({ knowledgeDir: dir });
+    const seed = new HandoffSeedFeature({ handoff: {
+      packageId: 'handoff-test',
+      mode: 'summary',
+      seedMessages: [{ role: 'user', content: '用户原先确认的目标', turn: 1 }],
+    } });
+    const context = new Context();
+    const agent = {
+      _callIndex: 2,
+      getFeature: (name: string) => name === 'handoff-seed' ? seed : name === 'craft-awareness' ? craft : undefined,
+    };
+    const hooks = new HooksRegistry();
+    hooks.collectFromFeature(seed);
+    hooks.collectFromFeature(craft);
     try {
-      writeFileSync(join(dir, 'handoff-context-calibration.md'), '按用户确认的目标继续。');
-      assert.equal(readHandoffCalibrationContent(dir), '[工程素养] 按用户确认的目标继续。');
-      assert.equal(readHandoffCalibrationContent(join(dir, 'missing')), null);
+      await hooks.executeVoid(CoreLifecycle.CallStart, { input: '继续', context, isFirstCall: true, agent });
+      await hooks.executeVoid(CoreLifecycle.StepStart, { step: 0, callIndex: 2, context, input: '继续', agent });
+      const messages = context.getAllEnriched();
+      assert.equal(messages.filter((message) => message.content === `[工程素养] ${reminder}`).length, 1);
+      assert.ok(messages.findIndex((message) => message.content === '用户原先确认的目标') < messages.findIndex((message) => message.content === `[工程素养] ${reminder}`));
+      assert.equal(messages.find((message) => message.content === `[工程素养] ${reminder}`)?.source, 'craft-awareness');
+      await hooks.executeVoid(CoreLifecycle.StepStart, { step: 1, callIndex: 2, context, input: '继续', agent });
+      assert.equal(context.getAllEnriched().filter((message) => message.content === `[工程素养] ${reminder}`).length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('没有接续 seed、seed 尚未注入或空 seed 时不触发', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'craft-handoff-calibration-'));
+    writeFileSync(join(dir, 'handoff-context-calibration.md'), '校准提醒');
+    const feature = new CraftAwarenessFeature({ knowledgeDir: dir });
+    const injected: string[] = [];
+    const makeCtx = (handoffState?: unknown) => ({
+      step: 0,
+      callIndex: 0,
+      input: '继续',
+      agent: { getFeature: (name: string) => name === 'handoff-seed' && handoffState !== undefined ? { captureState: () => handoffState } : undefined },
+      context: { addSystemMessage(text: string) { injected.push(text); } },
+    });
+    try {
+      await feature.injectHandoffCalibration(makeCtx() as never);
+      await feature.injectHandoffCalibration(makeCtx({ injected: false }) as never);
+      await feature.injectHandoffCalibration(makeCtx({ injected: true, seedCount: 0 }) as never);
+      assert.deepEqual(injected, []);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it('知识文案保留用户目标、摘要断章取义与既有验证的平衡', () => {
-    const content = readHandoffCalibrationContent(REAL_KNOWLEDGE_DIR);
+    const content = loadKnowledgeDir(REAL_KNOWLEDGE_DIR).get('handoff-context-calibration');
     assert.ok(content);
-    assert.ok(content.startsWith('[工程素养] '));
     assert.ok(content.includes('用户确认的目标和取舍'));
     assert.ok(content.includes('不要断章取义'));
     assert.ok(content.includes('尊重它们确实发生过'));

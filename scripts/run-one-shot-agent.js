@@ -26,7 +26,6 @@ import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } fr
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
-import { readHandoffCalibrationContent } from '../local-features/dist/craft-awareness/src/index.js';
 import { resolveWorkspaceAgent, resolveWorkspaceAgentClass, workspaceAgentDisplayName } from '../server/shared/workspace-agents.js';
 import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
 
@@ -240,16 +239,10 @@ async function main() {
 
   // Only mount handoff seed if handoff data exists
   if (runtimeHandoff?.handoff && (runtimeHandoff.handoff.sourceSummary || runtimeHandoff.handoff.seedMessages?.length)) {
-    // 接续校准提醒（craft-awareness 知识）经 appendix 挂入 seed 注入事务末尾——
-    // 与 run-prebuilt-agent.js 同口径：装配即注入，不做运行时探测。
-    const calibrationContent = agent.getFeature?.('craft-awareness')
-      ? readHandoffCalibrationContent()
-      : null;
     agent.use(new HandoffSeedFeature({
       handoff: runtimeHandoff.handoff,
-      ...(calibrationContent ? { appendix: { content: calibrationContent } } : {}),
     }));
-    console.error(`[OneShot] 已挂载 handoff seed (${runtimeHandoff.source})${calibrationContent ? ' + 接续校准' : ''}`);
+    console.error(`[OneShot] 已挂载 handoff seed (${runtimeHandoff.source})`);
   }
 
   // 5. prepareRuntime hook

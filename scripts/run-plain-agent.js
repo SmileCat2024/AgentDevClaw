@@ -36,7 +36,6 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import { mkdirSync, existsSync, readFileSync } from 'fs';
 import { FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
-import { readHandoffCalibrationContent } from '../local-features/dist/craft-awareness/src/index.js';
 import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { tuneMirrorLLM } from '../server/shared/llm-tuning.js';
 import { normalizeAgentMetadata } from '../server/feature-runtime/schemas.js';
@@ -396,16 +395,8 @@ async function main() {
     // 接力 successor：注入 handoff seed（首 CallStart 精确注入一次），
     // continuity feature 状态随后经 importFeatureContinuity 恢复。
     if (handoff && (handoff.seedMessages?.length || handoff.sourceSummary)) {
-      // 接续校准提醒（craft-awareness 知识）经 appendix 挂入 seed 注入事务末尾——
-      // 与 run-prebuilt-agent.js 同口径：装配即注入，不做运行时探测。
-      const calibrationContent = agent.getFeature?.('craft-awareness')
-        ? readHandoffCalibrationContent()
-        : null;
-      agent.use(new HandoffSeedFeature({
-        handoff,
-        ...(calibrationContent ? { appendix: { content: calibrationContent } } : {}),
-      }));
-      console.error(`[PlainAgent] ✓ 已挂载 handoff seed (source=${handoff.sourceSessionId})${calibrationContent ? ' + 接续校准' : ''}`);
+      agent.use(new HandoffSeedFeature({ handoff }));
+      console.error(`[PlainAgent] ✓ 已挂载 handoff seed (source=${handoff.sourceSessionId})`);
     }
 
     // 连接 ViewerWorker（被监视；失败降级为 headless 继续）

@@ -33,7 +33,6 @@ import { postUserTurnToViewerMailbox, waitForArbiterIdle } from './runtime-inter
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH, MODEL_PRESETS_PATH } from '../server/shared/constants.js';
 import { resolveDesktopWorkspace } from '../server/shared/desktop-workspace.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
-import { readHandoffCalibrationContent } from '../local-features/dist/craft-awareness/src/index.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
 import { resolveWorkspaceAgent, resolveWorkspaceAgentClass, workspaceAgentDisplayName } from '../server/shared/workspace-agents.js';
 import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
@@ -890,17 +889,11 @@ SessionLifecycle.prototype.start = async function () {
   }
 
   if (this.runtimeHandoff?.handoff && (this.runtimeHandoff.handoff.sourceSummary || this.runtimeHandoff.handoff.seedMessages?.length)) {
-    // 框架标准 handoff seed feature（原 Claw context-handoff-seed 已下沉，见 docs/tickets/008）。
-    // 接续校准提醒（craft-awareness 知识）经 appendix 挂入 seed 注入事务末尾——
-    // 装配即注入的确定性路径，不做运行时探测；仅对装配了 craft-awareness 的 agent 生效。
-    const calibrationContent = this.agent.getFeature?.('craft-awareness')
-      ? readHandoffCalibrationContent()
-      : null;
+    // 框架标准 handoff seed feature（原 Claw context-handoff-seed 已下沉，见 docs/tickets/008）
     this.agent.use(new HandoffSeedFeature({
       handoff: this.runtimeHandoff.handoff,
-      ...(calibrationContent ? { appendix: { content: calibrationContent } } : {}),
     }));
-    console.log(`[ProtoClaw Runtime] 已挂载 handoff seed (${this.runtimeHandoff.source})${calibrationContent ? ' + 接续校准' : ''}`);
+    console.log(`[ProtoClaw Runtime] 已挂载 handoff seed (${this.runtimeHandoff.source})`);
   }
 
   // 用户 $mount 装配（feature 装配一期）：在官方静态装配与 handoff seed 之后、
