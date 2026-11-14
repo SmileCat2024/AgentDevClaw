@@ -563,7 +563,9 @@ function _startStreamedRecording(stream, btn, recordingTargetId, recordingCacheK
   _voiceStreamActiveText = '';
   _voiceStreamPcmQueue = [];
 
-  const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/protoclaw/speech_stream';
+  // WS URL 不走 fetch patch / <base>，子路径部署须过 base-path 映射
+  const speechPath = window.__PROTOCLAW_APP_URL__?.('/protoclaw/speech_stream') || '/protoclaw/speech_stream';
+  const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + speechPath;
   let ws = null;
   try {
     ws = new WebSocket(wsUrl);

@@ -498,7 +498,7 @@
 
   function subscribeChannel(channel) {
     const params = new URLSearchParams({ ...channel.target, latest: '1' });
-    const stream = new EventSource(`/protoclaw/feature-comms/stream?${params}`);
+    const stream = new EventSource(window.__PROTOCLAW_APP_URL__?.(`/protoclaw/feature-comms/stream?${params}`) || `/protoclaw/feature-comms/stream?${params}`);
     channel.stream = stream;
     stream.addEventListener('open', () => {
       if (!isCurrentChannel(channel)) return;

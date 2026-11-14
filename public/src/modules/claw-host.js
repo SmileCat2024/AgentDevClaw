@@ -432,7 +432,11 @@
     const key = String(pluginId || '').trim();
     if (!key) throw new TypeError('pluginId is required');
     if (loaded.has(key)) return loaded.get(key).module;
-    const module = await import(url);
+    // 子路径部署收口（docs/plans/2026-11-14-frontend-basepath-unification.md）：
+    // 清单声明的是应用内路径（相对站点根），动态 import 不经 window.fetch
+    // patch，须在此统一过 base-path 映射，否则脱离部署前缀 404。
+    const moduleUrl = window.__PROTOCLAW_APP_URL__?.(url) || url;
+    const module = await import(moduleUrl);
     return activatePlugin(key, module.default || module);
   }
 

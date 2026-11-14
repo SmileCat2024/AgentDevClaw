@@ -53,6 +53,18 @@
         }
         return nativeFetch(input, init);
       };
+
+      // SSE 同理收口：EventSource 构造不走 fetch patch，URL 以 / 开头时
+      // 同样不继承 <base> 的路径部分，子路径部署下会脱离前缀。
+      const NativeEventSource = window.EventSource;
+      if (typeof NativeEventSource === 'function') {
+        const PatchedEventSource = function EventSource(url, config) {
+          const resolved = typeof url === 'string' ? withBasePath(url) : url;
+          return new NativeEventSource(resolved, config);
+        };
+        PatchedEventSource.prototype = NativeEventSource.prototype;
+        window.EventSource = PatchedEventSource;
+      }
     })();
   </script>
   <link rel="stylesheet" id="github-markdown-css" href="./vendor/github-markdown-css/github-markdown-dark.css">

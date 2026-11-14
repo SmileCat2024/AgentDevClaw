@@ -142,7 +142,7 @@
       channelId: CHANNEL_ID,
       latest: '1',
     });
-    const source = new EventSource(`/protoclaw/feature-comms/stream?${params}`);
+    const source = new EventSource(window.__PROTOCLAW_APP_URL__?.(`/protoclaw/feature-comms/stream?${params}`) || `/protoclaw/feature-comms/stream?${params}`);
     stream = source;
     source.addEventListener('event', event => {
       if (stream !== source) return;

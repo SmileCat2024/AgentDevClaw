@@ -155,6 +155,33 @@ describe('ClawHost 插件装载', () => {
     const host = makeHost();
     await assert.rejects(() => host.loadPlugin('broken', 'data:text/javascript,throw new Error("boom")'));
   });
+
+  it('装载前必经 __PROTOCLAW_APP_URL__ 映射，返回值流向 import', async () => {
+    // vm 沙箱无动态 import 回调，import 层必抛 "dynamic import callback"——
+    // 该错误的出现本身证明 helper 返回值确实传给了 import（而非中途短路）。
+    // 「import 请求带部署前缀」的端到端证据见 P4 子路径回归（docs/plans/2026-11-14-frontend-basepath-unification.md）。
+    const seen = [];
+    const ctx = createFrontendSandbox();
+    ctx.window.__PROTOCLAW_APP_URL__ = (u) => {
+      seen.push(u);
+      return '/advclaw' + u;
+    };
+    ctx.loadSource('public/src/modules/claw-host.js');
+    await assert.rejects(
+      () => ctx.window.ClawHost.loadPlugin('probe', '/src/plugins/demo/index.js'),
+      /dynamic import callback/,
+    );
+    assert.deepEqual(seen, ['/src/plugins/demo/index.js'], 'helper 应收到清单声明的原始路径');
+  });
+
+  it('helper 缺席时不引入新故障：仍走 import 流程', async () => {
+    // ?. 容错被破坏（写成裸调用）时会先抛 "not a function" 而非到达 import 层
+    const host = makeHost();
+    await assert.rejects(
+      () => host.loadPlugin('probe-raw', '/src/plugins/demo/index.js'),
+      /dynamic import callback/,
+    );
+  });
 });
 
 /**

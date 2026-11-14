@@ -80,8 +80,10 @@ async function flushSidebarDiagnosticEvents(options = {}) {
   const payload = JSON.stringify({ events });
 
   if (options.beacon === true && typeof navigator?.sendBeacon === 'function' && typeof Blob !== 'undefined') {
+    // sendBeacon 不走 fetch patch / <base>，子路径部署须过 base-path 映射
+    const beaconUrl = window.__PROTOCLAW_APP_URL__?.('/protoclaw/sidebar_diagnostics/events') || '/protoclaw/sidebar_diagnostics/events';
     const sent = navigator.sendBeacon(
-      '/protoclaw/sidebar_diagnostics/events',
+      beaconUrl,
       new Blob([payload], { type: 'application/json' }),
     );
     if (sent) return events.length;

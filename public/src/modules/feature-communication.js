@@ -19,7 +19,8 @@
   }
 
   function subscribe(target, handlers = {}) {
-    const source = new EventSource(`/protoclaw/feature-comms/stream?${targetQuery(target)}`);
+    const streamUrl = `/protoclaw/feature-comms/stream?${targetQuery(target)}`;
+    const source = new EventSource(window.__PROTOCLAW_APP_URL__?.(streamUrl) || streamUrl);
     const receive = (event) => {
       if (event.type === 'closed') {
         source.close();

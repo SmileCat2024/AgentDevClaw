@@ -451,7 +451,8 @@ function connect() {
     return;
   }
   const threadsParam = threadsQueryParam();
-  const source = new EventSource(`/protoclaw/events${threadsParam ? `?threads=${threadsParam}` : ''}`);
+  const streamUrl = `/protoclaw/events${threadsParam ? `?threads=${threadsParam}` : ''}`;
+  const source = new EventSource(window.__PROTOCLAW_APP_URL__?.(streamUrl) || streamUrl);
   _threadsParamOnConnect = threadsParam;
   _source = source;
   source.addEventListener('hello', onHello);
