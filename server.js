@@ -112,6 +112,8 @@ import { setupFeatureCommunicationRoutes, featureCommunicationStore } from './se
 import { setupIMRoutes, getPortalAgentDisplayName } from './server/routes/im.js';
 import { createSessionHelpers } from './server/routes/session-helpers.js';
 import { setupSessionRoutes } from './server/routes/session.js';
+import { setupSessionRelationsRoutes } from './server/session-relations/routes.js';
+import { warmRelationsProjection } from './server/session-relations/projection.js';
 import { setupThreadTranscriptRoute } from './server/routes/thread-transcript.js';
 import { setupThreadConversationSearchRoute } from './server/routes/thread-conversation-search.js';
 import { setupThreadDirectoryRoute } from './server/routes/thread-directory.js';
@@ -614,6 +616,11 @@ setupSessionRoutes(app, express, {
   threadSuccession,
   threadDelete,
 });
+
+// 线程关联查询（session-reference 关联注入的数据面，只读派生投影）
+setupSessionRelationsRoutes(app);
+// 投影后台预热：首建分钟级，不阻塞启动；请求侧超时降级，预热完成后命中
+warmRelationsProjection();
 
 // ── Open Sessions Recovery → open-sessions-tracker ──────────────────────────
 app.get('/protoclaw/open_sessions', async (req, res, next) => {

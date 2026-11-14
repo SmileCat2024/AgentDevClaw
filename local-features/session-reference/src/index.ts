@@ -18,6 +18,9 @@
  * 输入框引用联动：user-turn 的 metadata['session-reference']（条目：
  * {agentId, sessionId, title?, sessionType?}）在 CallStart 注入一条
  * reminder，提示 AI 按三级读取协议消费被引用会话。引用随消息一次性流动。
+ * 被引会话属于线程时，行身份升级为线程（wt-… 主身份 + 被引一代锚点），
+ * 并追加一条关联 reminder（一跳邻居 + 关联群规模，显式引用重建的派生
+ * 投影，详见 server/session-relations/）。
  *
  * 引用账本（轮转接续）：用户引用与 AI 主动读取过的会话记入 feature 内存
  * 账本（上限条目、最新来源覆盖、lastSeenAt 滚动），经 declareContinuity
@@ -589,6 +592,9 @@ async function fetchThreadDetail(
 
 /**
  * 已验证的会话引用条目（injectSessionReferences 的注入输入）。
+ * threadId / threadTitle / threadGenerations 可空：被引会话属于线程时由
+ * 关联端点反查补齐（引用注入线程化的主身份升级）；非线程会话缺省，
+ * 行格式与旧版一致。
  */
 export interface VerifiedSessionReference {
   agentId: string;
@@ -596,6 +602,9 @@ export interface VerifiedSessionReference {
   title: string;
   sessionType: string;
   availability: 'ok' | 'missing' | 'unknown';
+  threadId?: string;
+  threadTitle?: string;
+  threadGenerations?: number;
 }
 
 /**
@@ -606,18 +615,35 @@ export interface VerifiedSessionReference {
  * 传入，下游 404（sessionType 不参与寻址，仅是元数据）。
  * 标题由 AI 自动生成，仅供定位参考——文案明确提示不能代表会话真实内容
  * 与方向，以 session_read_overview 实际内容为准。
+ *
+ * 线程身份行（threadId 非空）：首 token 为线程号（wt-…，可作
+ * session_read_overview 输入读代际导航），括注内保留被引一代锚点与代数。
+ * 行形态变化须与 server/session-relations/projection.js 的
+ * parseReferenceLine 保持兼容（首 token 即寻址身份的骨架不变）。
  */
 export function renderReferenceReminder(references: VerifiedSessionReference[]): string {
+  const hasThreadRef = references.some(ref => Boolean(ref.threadId));
   const lines = references.map((ref) => {
-    const head = `- ${ref.sessionId}${ref.title ? `「${truncateText(ref.title, 80)}」` : ''} — agentId: ${ref.agentId}（身份: ${ref.sessionType}）`;
+    let head: string;
+    if (ref.threadId) {
+      const threadTitle = ref.threadTitle ? `「${truncateText(ref.threadTitle, 80)}」` : '';
+      const anchorTitle = ref.title ? `「${truncateText(ref.title, 80)}」` : '';
+      const generations = ref.threadGenerations ? `，共 ${ref.threadGenerations} 代` : '';
+      head = `- ${ref.threadId}${threadTitle} — agentId: ${ref.agentId}（身份: ${ref.sessionType}，线程对话 · 被引一代: ${ref.sessionId}${anchorTitle}${generations}）`;
+    } else {
+      head = `- ${ref.sessionId}${ref.title ? `「${truncateText(ref.title, 80)}」` : ''} — agentId: ${ref.agentId}（身份: ${ref.sessionType}）`;
+    }
     if (ref.availability === 'missing') return `${head} — 已不存在，无法读取，请告知用户该引用已失效`;
     if (ref.availability === 'unknown') return `${head} — 读取入口暂不可用，尝试读取失败时请告知用户`;
     return head;
   });
+  const threadGuide = hasThreadRef
+    ? '；标注线程身份（wt-…）的行可以线程号作 session_read_overview 输入读代际导航（一条线程的各代会话），选定代后回到 sessionId 深入'
+    : '';
   return [
     '[会话引用] 用户在本条消息中引用了以下会话（标题由 AI 自动生成，仅供参考，不能代表会话真实内容与方向，请以实际读取内容为准）：',
     ...lines,
-    '建议先用 session_read_overview 阅读概览，按需用 session_read_turn 深入相关轮次；与当前任务无关的内容可忽略。',
+    `建议先用 session_read_overview 阅读概览，按需用 session_read_turn 深入相关轮次${threadGuide}；与当前任务无关的内容可忽略。`,
   ].join('\n');
 }
 
@@ -663,6 +689,75 @@ export function renderLedgerReminder(entries: VerifiedLedgerEntry[]): string {
     '[会话引用账本] 本对话（含精简或接续之前的历史段）累计引用或读取过以下会话；轮转后如需回看内容，按行内寻址用 session_read_overview / session_read_turn 读取：',
     ...lines,
     '（标题由 AI 自动生成，仅供参考，不能代表会话真实内容与方向，请以实际读取内容为准；与当前任务无关的条目可忽略。）',
+  ].join('\n');
+}
+
+/** 关联邻居（关联端点返回体的邻居条目形态）。 */
+export interface ThreadRelationNeighbor {
+  threadId: string;
+  title?: string;
+  agentId?: string;
+  direction: 'references' | 'referenced-by' | 'both';
+  count: number;
+  lastSeenAt?: string;
+}
+
+/** 关联查询结果（/protoclaw/thread_relations 返回体的消费形态）。 */
+export interface ThreadRelationsResult {
+  resolvedThreadId: string;
+  resolvedThreadTitle?: string;
+  generations?: number;
+  neighbors: ThreadRelationNeighbor[];
+  component: { size: number; memberThreadIds?: string[] };
+  partial?: boolean;
+}
+
+// 关联注入的邻居行总上限：多个被引线程共享该预算（克制注入体积）。
+const RELATION_NEIGHBOR_LINE_LIMIT = 8;
+
+const RELATION_DIRECTION_LABELS: Record<ThreadRelationNeighbor['direction'], string> = {
+  references: '被引线程引用过',
+  'referenced-by': '引用过被引线程',
+  both: '双向引用',
+};
+
+/**
+ * 渲染关联注入 reminder（独立于引用 reminder 的补充消息）。
+ *
+ * 防误抽约束：消息前缀「[会话引用·关联线程]」不以「[会话引用]」开头、
+ * 行前缀用「·」不用「- 」——投影抽取的 content 门与行解析都不可能把
+ * 关联行误抽为引用边（server/session-relations/projection.js 同契约）。
+ * 只收有邻居的线程；失败/超时的查询在调用侧已被过滤。返回 null 表示
+ * 无可注入内容。
+ */
+export function renderThreadRelationsSection(results: ThreadRelationsResult[]): string | null {
+  const withNeighbors = results.filter(result => result.resolvedThreadId && Array.isArray(result.neighbors) && result.neighbors.length > 0);
+  if (withNeighbors.length === 0) return null;
+  const lines: string[] = [];
+  let budget = RELATION_NEIGHBOR_LINE_LIMIT;
+  for (const result of withNeighbors) {
+    if (budget <= 0) break;
+    const threadTitle = result.resolvedThreadTitle ? `「${truncateText(result.resolvedThreadTitle, 80)}」` : '';
+    lines.push(`· 被引线程 ${result.resolvedThreadId}${threadTitle} 的上下游（该线程所在关联群共 ${result.component?.size || 1} 条线程，含传递关联）：`);
+    for (const neighbor of result.neighbors) {
+      if (budget <= 0) break;
+      const title = neighbor.title ? `「${truncateText(neighbor.title, 60)}」` : '';
+      const time = neighbor.lastSeenAt ? `，最近 ${formatTimestamp(Date.parse(neighbor.lastSeenAt))}` : '';
+      const label = RELATION_DIRECTION_LABELS[neighbor.direction] || String(neighbor.direction);
+      lines.push(`· ${neighbor.threadId}${title} — ${label}（${neighbor.count || 1} 次${time}）`);
+      budget--;
+    }
+    if (budget <= 0) {
+      const remaining = withNeighbors
+        .reduce((sum, item) => sum + item.neighbors.length, 0) - (RELATION_NEIGHBOR_LINE_LIMIT - budget);
+      if (remaining > 0) lines.push(`·（其余 ${remaining} 条关联略，可用 thread_list / 会话目录检索）`);
+      break;
+    }
+  }
+  return [
+    '[会话引用·关联线程] 被引线程的上下游关联（由历史显式引用重建，仅供定位，不能代表会话真实内容与方向）：',
+    ...lines,
+    '需要细节时以行内线程号（wt-…）作 session_read_overview 输入读代际导航；与当前任务无关的关联可忽略。',
   ].join('\n');
 }
 
@@ -876,7 +971,14 @@ class SessionReferenceFeatureInner implements AgentFeature {
     context.addSystemMessage(renderLedgerReminder(verified), turn, this.name, 'reminder');
   }
 
-  /** 校验存在性 → 注入引用 reminder → 记账（missing 不入账本）。 */
+  /**
+   * 校验存在性 → 反查线程身份与关联（best-effort）→ 注入引用 reminder →
+   * 注入关联 reminder（有邻居时）→ 记账（missing 不入账本）。
+   *
+   * 线程身份与关联来自同一请求（/protoclaw/thread_relations 的会话反查
+   * 路径）：失败/超时静默降级——引用行回退会话身份（与旧版一致）、关联
+   * 节直接省略，主注入路径不被补充信息阻塞。
+   */
   private async verifyAndInjectReferences(
     entries: Array<Record<string, unknown>>,
     context: Context,
@@ -894,10 +996,50 @@ class SessionReferenceFeatureInner implements AgentFeature {
         availability,
       };
     }));
-    context.addSystemMessage(renderReferenceReminder(verified), turn, this.name, 'reminder');
+    const relationsByKey = new Map<string, ThreadRelationsResult>();
+    await Promise.all(verified
+      .filter(ref => ref.availability === 'ok')
+      .map(async ref => {
+        const relations = await this.fetchThreadRelationsSafe(ref.agentId, ref.sessionId);
+        if (relations?.resolvedThreadId) relationsByKey.set(`${ref.agentId}/${ref.sessionId}`, relations);
+      }));
+    const enriched: VerifiedSessionReference[] = verified.map(ref => {
+      const relations = relationsByKey.get(`${ref.agentId}/${ref.sessionId}`);
+      if (!relations) return ref;
+      return {
+        ...ref,
+        threadId: relations.resolvedThreadId,
+        threadTitle: cleanText(relations.resolvedThreadTitle),
+        threadGenerations: relations.generations || 0,
+      };
+    });
+    context.addSystemMessage(renderReferenceReminder(enriched), turn, this.name, 'reminder');
+    // 关联节：同一线程被多会话引用时去重；投影 partial / 无邻居时无内容。
+    const relationsBlocks = [...new Map([...relationsByKey.values()].map(rel => [rel.resolvedThreadId, rel])).values()];
+    const relationsSection = renderThreadRelationsSection(relationsBlocks);
+    if (relationsSection) context.addSystemMessage(relationsSection, turn, this.name, 'reminder');
     for (const ref of verified) {
       if (ref.availability === 'missing') continue;
       this.recordLedger(ref, 'user-reference');
+    }
+  }
+
+  /**
+   * 线程关联查询（含被引会话的线程归属反查）。8s 超时：冷启动投影首建
+   * 分钟级（服务侧有启动预热），超时返回 null 走降级路径。
+   */
+  private async fetchThreadRelationsSafe(agentId: string, sessionId: string): Promise<ThreadRelationsResult | null> {
+    const params = new URLSearchParams({ agentId, sessionId });
+    try {
+      const resp = await fetch(`${this.serverOrigin}/protoclaw/thread_relations?${params}`, {
+        headers: internalAuthHeaders(),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json().catch(() => null);
+      return data as ThreadRelationsResult | null;
+    } catch {
+      return null;
     }
   }
 
