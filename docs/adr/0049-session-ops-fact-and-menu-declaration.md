@@ -43,6 +43,8 @@ APP 在 metadata.json 声明 `sessionOps: true`，语义是「本 APP 的对话�
 - 不动 APP 条目本身的右键菜单（`agent-context-menu`）。
 - v1 不支持远程叶子上的自定义项。内建族沿用能力位；自定义项处理器在本机插件模块里，远程无法执行。endpoint 型动作（HTTP 调用，memo 首页 blocks 的 `action: {type, endpoint}` 是先例）是出路，进开放问题。
 
+> **修订（ADR-0050，2026-11-15）**：「不动 APP 条目本身的右键菜单」边界解除——工作空间（prebuilt）条目的右键 / ⋯ 操作面按同构模型决策（事实选族 + 贡献项），静态 `agent-context-menu` 保留服务 child / external runtime 条目。见 [ADR-0050](0050-workspace-entry-operations-and-sidebar-session-visibility.md)。
+
 ## 后果
 
 正面：菜单差异随 APP 定义走，整体打包、卸载、挂载在菜单面上成立；sessionOps 单一事实源消除菜单与 slash 的手工同步清单；新 APP（含脚手架生成的用户 APP）不改宿主即可声明自己的菜单项；外部插件 APP 获得 ADR-0045 遗留的 `ui.appPlugins` 第一面。

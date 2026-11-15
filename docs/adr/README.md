@@ -61,6 +61,7 @@
 - [0015 内嵌浏览器 viewer](0015-embedded-browser-viewer.md) — 浏览器所有权翻转（Archived，调查完成暂不实施）
 - [0043 home 门户小组件契约](0043-home-portal-widgets.md) — 工作空间向首页提供只读 widget 的模块协议与隔离边界（Proposed）
 - [0044 右栏面板插件化与效果归属](0044-frontend-panel-plugins-and-effect-ownership.md) — panels 进插件协议、装载/按钮/生命周期注册表派生、host.effect 撤销面（Proposed）
+- [0050 工作空间条目操作面与侧栏会话条目呈现策略](0050-workspace-entry-operations-and-sidebar-session-visibility.md) — 右键/⋯ 同源操作面（事实选族+贡献项）、sidebarSessions 声明/覆盖/合流三层、呈现层过滤
 
 ## 工程治理
 
