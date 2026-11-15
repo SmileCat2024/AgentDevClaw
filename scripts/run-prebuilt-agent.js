@@ -1043,6 +1043,11 @@ SessionLifecycle.prototype.start = async function () {
         const origin = {
           kind: handoffMode === 'branch' ? 'branch-import' : 'continuity-import',
           ...(sourceSessionId ? { sourceSessionId } : {}),
+          // handoff 形态透传：feature 的 restoreState 按 turn 编号空间是否
+          // 连续区分恢复语义（trim 系/branch live；summary 系降级前身标注，
+          // 见 conversation-annotations）。框架 RestoreOrigin 未声明该字段，
+          // 由消费方按结构防御性读取。
+          ...(handoffMode ? { mode: handoffMode } : {}),
         };
         const imported = await importFeatureContinuity(this.agent, this.runtimeHandoff.handoff.featureContinuity, {
           sourceSessionId,

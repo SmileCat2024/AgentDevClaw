@@ -318,3 +318,144 @@ describe('declareContinuity 包装', () => {
     assert.deepEqual(turns.sort((a, b) => a - b), [5]);
   });
 });
+
+describe('summary 系接续导入（dormant 降级）', () => {
+  function makeWrapped() {
+    const client = new FakeChannelClient();
+    const feature = new ConversationAnnotationsFeature({
+      agentId: 'ph', sessionId: 's1', serverOrigin: 'http://127.0.0.1:1420', client,
+    });
+    return { client, feature };
+  }
+
+  /** 前身会话（编号空间 0..12）的标注快照。 */
+  const predecessorState = {
+    annotations: [
+      { id: 'old-1', turn: 3, role: 'assistant', quote: '旧会话结论', occurrence: 0, createdAt: 10 },
+      { id: 'old-2', turn: 8, role: 'user', quote: '旧会话需求', occurrence: 0, createdAt: 20 },
+    ],
+    lastCallIndex: 12,
+  };
+
+  async function listRecords(feature: ConversationAnnotationsFeatureInner): Promise<AnnotationRecord[]> {
+    const list = await feature.onHostRequest('list', {});
+    assert.equal(list.ok, true);
+    return list.annotations as AnnotationRecord[];
+  }
+
+  it('summarized handoff 导入：条目降级 dormant + originSession，lastCallIndex 不采纳', async () => {
+    const { feature } = makeFeature();
+    await feature.restoreState(predecessorState as never, {
+      origin: { kind: 'continuity-import', sourceSessionId: 's-old', mode: 'summarized-nine-section' },
+    });
+    const records = await listRecords(feature);
+    assert.equal(records.length, 2);
+    assert.ok(records.every((r) => r.dormant === true), 'summary 重编号：全部降级 dormant');
+    assert.ok(records.every((r) => r.originSession === 's-old'), '携带来源会话 id');
+    const snapshot = feature.captureState() as { annotations: AnnotationRecord[]; lastCallIndex: number };
+    assert.ok(snapshot.annotations.every((r) => r.dormant === true && r.originSession === 's-old'),
+      '标记随 captureState 持久化');
+    assert.equal(snapshot.lastCallIndex, 0, '旧编号空间的 lastCallIndex 不采纳，由新会话轮次跟踪重建');
+  });
+
+  it('trim handoff 导入：保持 live（编号空间连续），lastCallIndex 采纳', async () => {
+    const { feature } = makeFeature();
+    await feature.restoreState(predecessorState as never, {
+      origin: { kind: 'continuity-import', sourceSessionId: 's-old', mode: 'trim-transcript' },
+    });
+    const records = await listRecords(feature);
+    assert.equal(records.length, 2);
+    assert.ok(records.every((r) => r.dormant === undefined), 'trim 保留原 turn：不打标');
+    const snapshot = feature.captureState() as { lastCallIndex: number };
+    assert.equal(snapshot.lastCallIndex, 12);
+  });
+
+  it('branch-import：保持 live', async () => {
+    const { feature } = makeFeature();
+    await feature.restoreState(predecessorState as never, {
+      origin: { kind: 'branch-import', sourceSessionId: 's-old', mode: 'branch' },
+    });
+    const records = await listRecords(feature);
+    assert.ok(records.every((r) => r.dormant === undefined), '分支继承前缀 transcript：不打标');
+  });
+
+  it('未知形态与缺省 mode 的 continuity-import：按重编号防御处理（宁可 dormant 不碰撞）', async () => {
+    for (const origin of [
+      { kind: 'continuity-import', sourceSessionId: 's-old', mode: 'future-unknown-form' },
+      { kind: 'continuity-import', sourceSessionId: 's-old' },
+    ]) {
+      const { feature } = makeFeature();
+      await feature.restoreState(predecessorState as never, { origin });
+      const records = await listRecords(feature);
+      assert.ok(records.every((r) => r.dormant === true),
+        `未知形态必须防御降级：${JSON.stringify(origin)}`);
+    }
+  });
+
+  it('会话恢复（session-revive）：不打新标，已有 dormant 字段原样保留', async () => {
+    const { feature } = makeFeature();
+    // 接续会话自身的快照：一条 live（本会话新建）+ 一条 dormant（此前 summary 导入）。
+    await feature.restoreState({
+      annotations: [
+        { id: 'live-1', turn: 2, role: 'assistant', quote: '本会话标注', occurrence: 0, createdAt: 5 },
+        { id: 'dorm-1', turn: 3, role: 'assistant', quote: '前身标注', occurrence: 0, createdAt: 1, dormant: true, originSession: 's-old' },
+      ],
+      lastCallIndex: 2,
+    } as never, { origin: { kind: 'session-revive' } });
+    const records = await listRecords(feature);
+    assert.equal(records.length, 2);
+    assert.equal(records.find((r) => r.id === 'live-1')?.dormant, undefined, 'live 不误标');
+    assert.equal(records.find((r) => r.id === 'dorm-1')?.dormant, true, 'dormant 字段保留');
+    assert.equal(records.find((r) => r.id === 'dorm-1')?.originSession, 's-old');
+  });
+
+  it('rollback 合并：dormant 豁免 cutoff 过滤；live 标注仍受边界约束', async () => {
+    const { feature } = makeFeature();
+    await feature.restoreState(predecessorState as never, {
+      origin: { kind: 'continuity-import', sourceSessionId: 's-old', mode: 'summarized-nine-section' },
+    });
+    // 新会话回退到 checkpoint 3：dormant turn 8 > 3 仍保留（编号空间不同，只能显式删除）。
+    await feature.restoreState({ annotations: [], lastCallIndex: 3 } as never);
+    assert.equal((await listRecords(feature)).length, 2, 'dormant 不受 cutoff 影响');
+    // live 标注照常随消息回退消失。
+    await createVia(feature, { turn: 5, role: 'user', quote: '流式中标注' });
+    await feature.restoreState({ annotations: [], lastCallIndex: 3 } as never);
+    const records = await listRecords(feature);
+    assert.equal(records.length, 2, 'turn 5 live 标注随回退消失，两条 dormant 留存');
+    assert.ok(records.every((r) => r.dormant === true));
+  });
+
+  it('create 幂等不命中 dormant：同数字 turn 是编号巧合，不吞新标注', async () => {
+    const { feature } = makeFeature();
+    await feature.restoreState(predecessorState as never, {
+      origin: { kind: 'continuity-import', sourceSessionId: 's-old', mode: 'summarized-nine-section' },
+    });
+    // 新会话第 3 轮恰好出现相同文本：同锚位 create 不得被 dormant 条目幂等吞掉。
+    const created = await feature.onHostRequest('create', {
+      turn: 3, role: 'assistant', quote: '旧会话结论', occurrence: 0,
+    });
+    assert.equal(created.ok, true);
+    assert.notEqual(created.duplicate, true, 'dormant 不参与幂等匹配');
+    const records = await listRecords(feature);
+    assert.equal(records.length, 3, '新旧并存');
+    assert.equal(records.filter((r) => r.dormant === true).length, 2);
+    assert.equal(records.filter((r) => r.dormant === undefined).length, 1);
+  });
+
+  it('declareContinuity 包装 onInitiate 重放：dormant 标记与豁免语义不被洗掉', async () => {
+    const { feature } = makeWrapped();
+    await feature.restoreState(predecessorState as never, {
+      origin: { kind: 'continuity-import', sourceSessionId: 's-old', mode: 'summarized-nine-section' },
+    });
+    // 首个 CallStart 前框架触发 onInitiate 缓冲区重放：live 实例路径按 rollback 合并，
+    // cutoff 取重放快照的 lastCallIndex（0）；dormant 必须豁免过滤存活。
+    // （declareContinuity 的返回类型未声明运行时新增的 onInitiate，按结构断言调用。）
+    await (feature as unknown as { onInitiate(ctx: unknown): Promise<void> }).onInitiate({});
+    const list = await feature.onHostRequest('list', {});
+    const records = list.annotations as AnnotationRecord[];
+    assert.equal(records.length, 2, '重放后 dormant 存活');
+    assert.ok(records.every((r) => r.dormant === true && r.originSession === 's-old'));
+    const snapshot = feature.captureState() as { lastCallIndex: number };
+    assert.equal(snapshot.lastCallIndex, 0, '重放不重新采纳旧编号空间边界');
+  });
+});

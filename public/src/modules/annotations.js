@@ -15,6 +15,10 @@
  *   弹窗 → remove 请求。
  * - 会话同步：寻址变化时重置状态、拉取 list、（重）订阅 SSE
  *   （created / removed 事件驱动重放与面板缓存；远程会话降级不可用）。
+ * - 跨接续语义：标注锚位（turn）是会话内编号。trim 系/branch 接续保留原
+ *   turn，标注继续有效；summary 系接续重编号，feature 端导入时把旧标注
+ *   降级为 dormant（dormant: true + originSession）——重放 / 重叠合并 /
+ *   定位一律跳过（防碰撞误高亮），面板以「接续前」徽标呈现，可删除。
  * - 面板数据：window.ClawAnnotations.getPanelHtml 供 rail 面板渲染
  *   （app-ui.js 注册，debug-panel-host.js 管生命周期）。
  *
@@ -304,6 +308,7 @@
     overlap.end = overlap.start + quote.length;
     if (overlap.start !== -1) {
       for (const anno of annotations) {
+        if (anno.dormant) continue; // 前身会话标注：不在本会话编号空间，不参与合并
         if (anno.turn !== msg.turn || anno.role !== msg.role) continue;
         const aStart = findOccurrence(text, anno.quote, anno.occurrence);
         if (aStart === -1) continue; // 该标注锚点已失配（消息变化），不参与合并
@@ -441,6 +446,9 @@
     if (sel && !sel.isCollapsed && container.contains(sel.anchorNode)) return;
     const byTurnRole = new Map();
     for (const anno of annotations) {
+      // dormant（前身会话标注，summary 系接续导入）：turn 属于旧编号空间，
+      // 与本会话消息的 turn 只是数字巧合——绝不可参与匹配（碰撞误高亮）。
+      if (anno.dormant) continue;
       const key = `${anno.turn}|${anno.role}`;
       byTurnRole.set(key, [...(byTurnRole.get(key) || []), anno]);
     }
@@ -642,9 +650,11 @@
     }
     const items = annotations.map((anno) => {
       const clip = anno.quote.length > 160 ? `${anno.quote.slice(0, 160)}…` : anno.quote;
+      const badge = anno.dormant
+        ? `<span class="anno-panel-badge">${escapeHtml(t('接续前', 'pre-continuation'))}</span>` : '';
       return `<div class="anno-panel-item" data-anno-id="${escapeHtml(anno.id)}">`
         + `<div class="anno-panel-quote">${escapeHtml(clip)}</div>`
-        + `<div class="anno-panel-meta">${escapeHtml(`T${anno.turn} · ${anno.role} · ${formatTime(anno.createdAt)}`)}</div>`
+        + `<div class="anno-panel-meta">${badge}${escapeHtml(`T${anno.turn} · ${anno.role} · ${formatTime(anno.createdAt)}`)}</div>`
         + '</div>';
     }).join('');
     return `<div class="anno-panel-list">${items}</div>`;
@@ -664,6 +674,11 @@
   function scrollToAnnotation(id) {
     const anno = annotations.find(a => a.id === id);
     if (!anno) return;
+    if (anno.dormant) {
+      toast('info', t('标注来自接续前的会话', 'Annotation from the predecessor session'),
+        t('摘要接续后消息已重新编号，摘录见列表', 'Messages were renumbered by the summary continuation; see quote in list'));
+      return;
+    }
     const container = document.getElementById('chat-container');
     if (!container) return;
     for (const contentEl of container.querySelectorAll('.message-content[id^="msg-"]')) {

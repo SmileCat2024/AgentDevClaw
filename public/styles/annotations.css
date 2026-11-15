@@ -157,3 +157,17 @@ body[data-theme="light"] .anno-popover-btn:hover {
   font-size: 11px;
   color: var(--text-muted);
 }
+
+/* dormant（前身会话标注）徽标：标注域语义色的小胶囊，提示锚位不参与本会话匹配 */
+.anno-panel-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--warning-color) 80%, var(--text-primary));
+  border: 1px solid color-mix(in srgb, var(--warning-color) 35%, transparent);
+  background: color-mix(in srgb, var(--warning-color) 10%, transparent);
+  vertical-align: 1px;
+}

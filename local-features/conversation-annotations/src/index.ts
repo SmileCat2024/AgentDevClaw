@@ -8,6 +8,16 @@
  *   auto-save / 进程退出落盘），不自建任何文件存储；
  * - trim / rotate 接续经 declareContinuity（GENERIC_CONTINUITY_PROTOCOL
  *   透传）随 SuccessorSeed 流转，新会话 restoreState 时恢复；
+ *   - trim 系 / branch：种子消息携带原 turn（编号空间连续），导入条目保持
+ *     live，锚位继续有效；
+ *   - summary 系（summarized-* 及未知形态）：transcript 被摘要替换、turn 从
+ *     0 重新编号，导入条目一律降级为 dormant（前身会话标注，见
+ *     AnnotationRecord.dormant）——面板可见、可删除，但不参与本会话的
+ *     重放匹配 / 重叠合并 / 定位，杜绝旧 turn 碰撞到无关新消息的误高亮。
+ *     判定依据是 restoreState ctx 的 origin.mode（宿主装配层
+ *     run-prebuilt-agent 从 handoff 产物透传）；lastCallIndex 同属旧编号
+ *     空间，重编号导入时不采纳，由新会话自身的轮次跟踪重新建立；
+ *     完整决策与取舍见 docs/adr/0048-annotation-anchor-semantics-across-continuation.md；
  * - branch 分支从切割点 checkpoint 复制 featureStates，标注自动继承到
  *   分支（机制的自然结果，非本 feature 特判）；
  * - rollback 合并语义：回滚只应删除"目标消息已不存在"的标注，标注锚定
@@ -50,6 +60,13 @@ export interface AnnotationRecord {
   occurrence: number;
   /** 创建时间（Date.now()）。 */
   createdAt: number;
+  /**
+   * 前身会话标注（summary 系接续导入）：turn 属于前身会话的编号空间，
+   * 在本会话中永远不该参与匹配。缺省（undefined）即 live。
+   */
+  dormant?: true;
+  /** dormant 条目的来源会话 id（尽量携带，供面板呈现与审计）。 */
+  originSession?: string;
 }
 
 /** captureState / restoreState 流转的状态形状。 */
@@ -82,13 +99,39 @@ const ANNOTATIONS_MAX = 2_000;
 function isAnnotationRecord(value: unknown): value is AnnotationRecord {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
-  const { id, turn, role, quote, occurrence, createdAt } = record;
+  const { id, turn, role, quote, occurrence, createdAt, dormant, originSession } = record;
   return typeof id === 'string' && id.length > 0
     && typeof turn === 'number' && Number.isInteger(turn) && turn >= 0
     && (role === 'user' || role === 'assistant')
     && typeof quote === 'string' && quote.length > 0
     && typeof occurrence === 'number' && Number.isInteger(occurrence) && occurrence >= 0
-    && typeof createdAt === 'number' && Number.isInteger(createdAt);
+    && typeof createdAt === 'number' && Number.isInteger(createdAt)
+    && (dormant === undefined || dormant === true)
+    && (originSession === undefined || typeof originSession === 'string');
+}
+
+/**
+ * restoreState 的来源标记形态（第二参的本地视图）。
+ *
+ * kind / sourceSessionId 是框架 RestoreOrigin 的既有字段；mode 是 Claw 宿主
+ * 装配层（run-prebuilt-agent）从 handoff 产物透传的扩展字段，框架类型未
+ * 声明，故此处按结构读取并防御缺省。
+ */
+export interface AnnotationsRestoreOrigin {
+  kind?: string;
+  sourceSessionId?: string;
+  /** handoff 产物形态（trim-transcript / summarized-nine-section / branch …）。 */
+  mode?: string;
+}
+
+/**
+ * turn 编号空间保持的接续形态：种子消息携带原 turn（trim 系 / branch），
+ * 导入标注的锚位继续有效。其余形态（summarized-* 与未知值）一律按重编号
+ * 处理——宁可把可匹配性降级为 dormant，也不让旧 turn 碰撞到无关新消息。
+ */
+function isTurnPreservingContinuity(mode: string | undefined): boolean {
+  const value = String(mode || '');
+  return value.startsWith('trim') || value === 'branch';
 }
 
 /** 从任意快照 JSON 防御性提取状态；完全不合法返回 null（restoreState 无操作）。 */
@@ -185,22 +228,41 @@ export class ConversationAnnotationsFeatureInner implements AgentFeature {
     };
   }
 
-  async restoreState(snapshot: Record<string, unknown>): Promise<void> {
+  async restoreState(
+    snapshot: Record<string, unknown>,
+    ctx?: { origin?: AnnotationsRestoreOrigin },
+  ): Promise<void> {
     const incoming = normalizeState(snapshot);
     if (!incoming) return;
     if (!this.hydrated) {
       // fresh instance（会话恢复 / continuity 导入 / feature 重载）：快照权威，整体替换。
-      this.annotations = sortByCreatedAt(incoming.annotations);
-      this.lastCallIndex = Math.max(this.lastCallIndex, incoming.lastCallIndex ?? 0);
+      // continuity 导入且 handoff 形态重编号（summary 系）时，条目降级为 dormant
+      // （turn 属于前身会话的编号空间），lastCallIndex 亦不采纳。
+      const origin = ctx?.origin;
+      const renumbered = origin?.kind === 'continuity-import'
+        && !isTurnPreservingContinuity(origin?.mode);
+      this.annotations = sortByCreatedAt(renumbered
+        ? incoming.annotations.map((item) => ({
+          ...item,
+          dormant: true as const,
+          originSession: String(origin?.sourceSessionId || '').trim() || undefined,
+        }))
+        : incoming.annotations);
+      if (!renumbered) {
+        this.lastCallIndex = Math.max(this.lastCallIndex, incoming.lastCallIndex ?? 0);
+      }
       this.hydrated = true;
       return;
     }
     // live instance：rollback 合并。保留 turn ≤ cutoff（幸存消息边界）的并集；
     // cutoff 未知（legacy 快照无 lastCallIndex）时保守并集，宁可留僵尸条目（面板可见、
-    // 可手动删除）也不丢用户标注。
+    // 可手动删除）也不丢用户标注。dormant 条目的 turn 属于前身会话的编号空间，
+    // 不在本会话的边界语义内——一律豁免过滤，只能由用户显式删除。
     const cutoff = incoming.lastCallIndex;
     const merged = dedupeById([...incoming.annotations, ...this.annotations]);
-    this.annotations = sortByCreatedAt(cutoff == null ? merged : merged.filter((item) => item.turn <= cutoff));
+    this.annotations = sortByCreatedAt(cutoff == null
+      ? merged
+      : merged.filter((item) => item.dormant === true || item.turn <= cutoff));
     if (cutoff != null) this.lastCallIndex = cutoff;
   }
 
@@ -257,8 +319,10 @@ export class ConversationAnnotationsFeatureInner implements AgentFeature {
       typeof id === 'string' && id.length > 0))];
     // 幂等：同锚位重复提交返回已有条目（弹窗双击防抖），不重复入账、不发事件。
     // 被并入的其他条目仍要清理（并集锚位恰好与既有条目相同 = 合并收敛到它）。
-    const existing = this.annotations.find((item) =>
-      item.turn === turn && item.role === role && item.quote === quote && item.occurrence === occurrence);
+    // dormant 条目不参与幂等匹配：其 turn 属于前身会话的编号空间，与当前
+    // 选区的同值 turn 只是数字巧合，不该吞掉用户的新标注。
+    const existing = this.annotations.find((item) => item.dormant !== true
+      && item.turn === turn && item.role === role && item.quote === quote && item.occurrence === occurrence);
     if (existing) {
       this.applySupersedes(supersedeIds.filter((id) => id !== existing.id));
       return { ok: true, annotation: { ...existing }, duplicate: true };
