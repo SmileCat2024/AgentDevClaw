@@ -709,3 +709,71 @@ describe('ctx-menu-items: copy-id action', () => {
     assert.equal(toasts[0].status, 'success');
   });
 });
+
+// ── getCtxMenuItems: workspace role（ADR-0050 工作空间条目操作面）──
+// 事实选族：sidebarSessions 声明即能力，菜单项由生效策略派生（文案随
+// visible/hidden 切换）；未声明 → 空菜单（右键与 ⋯ 的门控 = 菜单非空）。
+
+const MEMO_DECLARED = { id: 'memo', sidebarSessions: 'visible' };
+
+describe('ctx-menu-items: workspace role menu composition', () => {
+  it('declared app with author default visible offers the hide action', () => {
+    const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT, MEMO_DECLARED] });
+    const items = ctx.run(`getCtxMenuItems('workspace', 'memo', 'prebuilt', 'memo')`);
+    deepLoose(items, [
+      { label: '隐藏对话条目', action: 'claw:toggle-sidebar-sessions' },
+    ]);
+  });
+
+  it('effective policy from the wire projection wins over the author default', () => {
+    const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT, { id: 'memo', sidebarSessions: 'visible', sidebarSessionsPolicy: 'hidden' }] });
+    const items = ctx.run(`getCtxMenuItems('workspace', 'memo', 'prebuilt', 'memo')`);
+    assert.equal(items[0].label, '显示对话条目');
+  });
+
+  it('labels follow the UI language', () => {
+    const { ctx } = loadCtxMenuItems({ currentLanguage: 'en', allAgents: [MEMO_DECLARED] });
+    const items = ctx.run(`getCtxMenuItems('workspace', 'memo', 'prebuilt', 'memo')`);
+    assert.equal(items[0].label, 'Hide conversations');
+  });
+
+  it('undeclared app yields an empty menu (no entry point)', () => {
+    const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT] });
+    const items = ctx.run(`getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper')`);
+    deepLoose(items, []);
+  });
+});
+
+describe('ctx-menu-items: dispatch toggle-sidebar-sessions', () => {
+  function loadToggleHarness(agentRecord) {
+    const requests = [];
+    const loads = [];
+    const { ctx } = loadCtxMenuItems({
+      allAgents: [agentRecord],
+      fetch: async (url, options) => {
+        requests.push({ url, options });
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+      loadAgents: async () => { loads.push(1); },
+    });
+    return { ctx, requests, loads };
+  }
+
+  it('submits the inverted target policy and refreshes the wire', async () => {
+    const { ctx, requests, loads } = loadToggleHarness({ id: 'memo', sidebarSessions: 'visible', sidebarSessionsPolicy: 'visible' });
+    ctx.run(`dispatchCtxAction('toggle-sidebar-sessions', { role: 'workspace', ns: 'memo', id: 'memo', variant: 'prebuilt' })`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(requests.length, 1, 'exactly one PUT');
+    assert.equal(requests[0].url, '/protoclaw/workspace_settings/sidebar_sessions');
+    assert.equal(requests[0].options.method, 'PUT');
+    assert.deepEqual(JSON.parse(requests[0].options.body), { agentId: 'memo', policy: 'hidden' });
+    assert.equal(loads.length, 1, 'wire refreshed so the render signature flips');
+  });
+
+  it('hidden → visible inverts the other way', async () => {
+    const { ctx, requests } = loadToggleHarness({ id: 'memo', sidebarSessions: 'visible', sidebarSessionsPolicy: 'hidden' });
+    ctx.run(`dispatchCtxAction('toggle-sidebar-sessions', { role: 'workspace', ns: 'memo', id: 'memo', variant: 'prebuilt' })`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(JSON.parse(requests[0].options.body), { agentId: 'memo', policy: 'visible' });
+  });
+});

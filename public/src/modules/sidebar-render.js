@@ -103,6 +103,18 @@ window.onSidebarSessionCtxMenu = function(event, button) {
   window.showCtxMenu(rect.right, rect.bottom, items, { role, ns, id, variant, sessionId, threadId });
 };
 
+// 工作空间条目 ⋯ 按钮（ADR-0050）的打开入口：与上面共享 onSidebarSessionCtxMenu，
+// 但不经内联 onclick——内联处理器 ratchet 只许降不许升。捕获阶段容器委托在
+// agentList 的冒泡 click（分组切换 / 条目点击）之前截断传播，stopPropagation
+// 语义与内联形态等价（document 层的 action-dispatcher 做不到中间层截断，
+// 属其头注明示不收编的场景）。
+agentList.addEventListener('click', (event) => {
+  const button = event.target.closest?.('[data-workspace-more]');
+  if (!button) return;
+  event.stopPropagation();
+  window.onSidebarSessionCtxMenu(event, button);
+}, true);
+
 /**
  * 侧栏会话 pin 图标（正立图钉）。斜态（未待办）由 CSS rotate 呈现。
  */
@@ -323,7 +335,6 @@ function renderAgentItems(agents, { prebuilt = false } = {}) {
     const active = isAgentActive(agent);
     const connected = agent.connected !== false;
     const pending = pendingPrebuiltAgentIds.has(agent.id);
-    const workspaceSurface = isWorkspaceSurfaceUnit(agent);
     const runtimeId = getAgentRuntimeId(agent);
     const idle = prebuilt && !pending && !runtimeId;
     const calling = !prebuilt
@@ -342,13 +353,22 @@ function renderAgentItems(agents, { prebuilt = false } = {}) {
       justFinished ? 'just-finished' : '',
     ].filter(Boolean).join(' ');
     const hasRuntime = !!runtimeId;
-    const contextMenuEnabled = prebuilt
-      ? (!workspaceSurface && hasRuntime)
-      : !!runtimeId;
+    // 工作空间条目操作面门控（ADR-0050）：prebuilt 分支 = workspace 菜单
+    // 非空（右键与 ⋯ 按钮同一条件，事实驱动）；旧「非 workspace 形态且有
+    // runtime」门控对 prebuilt 分支退役。非 prebuilt（orphan / external）
+    // 分支不动，仍走静态 agent-context-menu。
+    const workspaceMenuEnabled = prebuilt
+      ? getCtxMenuItems('workspace', agent.id, agent.source || 'prebuilt', agent.id).length > 0
+      : false;
+    const contextMenuEnabled = prebuilt ? workspaceMenuEnabled : !!runtimeId;
     const childEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
-    const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId, entry));
+    // 侧栏会话区呈现策略（ADR-0050，服务端合流字段）：生效值 hidden 时该
+    // APP 条目下不渲染会话子树——本地条目与远程投影同属该 APP 的会话呈现，
+    // 一并隐藏。hasActiveRuntime 同步钳制，避免高亮 class 残留在无子树的条目上。
+    const sessionsHidden = prebuilt && agent.sidebarSessionsPolicy === 'hidden';
+    const hasActiveRuntime = prebuilt && !sessionsHidden && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId, entry));
     if (prebuilt) {
-      const childrenHtml = renderSidebarChildItems(childEntries, agent.id);
+      const childrenHtml = sessionsHidden ? '' : renderSidebarChildItems(childEntries, agent.id);
       const entryClass = ['agent-entry', hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ');
       return `
         <div class="${entryClass}">
@@ -357,10 +377,12 @@ function renderAgentItems(agents, { prebuilt = false } = {}) {
             data-agent-id="${escapeHtml(agent.id)}"
             data-agent-prebuilt="true"
             data-agent-context-menu="${contextMenuEnabled ? 'true' : 'false'}"
+            data-ctx-role="workspace" data-ctx-ns="${escapeHtml(agent.id)}" data-ctx-id="${escapeHtml(agent.id)}" data-ctx-variant="${escapeHtml(agent.source || 'prebuilt')}"
           >
             <div class="agent-line">
               ${getAgentIconHtml(agent.id)}
               <div class="agent-name">${escapeHtml(agent.name || agent.id)}</div>
+              ${contextMenuEnabled ? `<button class="agent-runtime-more" type="button" data-workspace-more="1" title="${escapeHtml(currentLanguage === 'zh' ? '更多操作' : 'More actions')}"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>` : ''}
             </div>
           </div>
           ${childrenHtml}
@@ -1070,6 +1092,9 @@ function getAgentListRenderSignature() {
         // on-demand APP 的存在性（服务端合流事实）：工作空间设置覆盖或线程
         // 生灭翻转时必须触发重渲，否则条目出现/消失滞后到下一次状态变化。
         sidebarVisible: agent?.visibility === 'on-demand' ? agent?.sidebarVisible === true : undefined,
+        // 侧栏会话区呈现策略（ADR-0050，服务端合流事实）：用户经 ⋯/右键切换
+        // 可见性时生效值翻转必须触发重渲，否则会话子树出现/消失滞后。
+        sidebarSessionsPolicy: agent?.sidebarSessionsPolicy || '',
         callActive: agent?.callActive === true,
         calling: rid !== '' && _agentCallActive.get(rid) === true,
         suspended: rid !== '' && isRuntimeSuspended(rid) === true,

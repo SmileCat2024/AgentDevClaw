@@ -3,7 +3,7 @@
  * 拆出日期：2026-07-04
  *
  * 包含：
- *   - getCtxMenuItems: 菜单项声明表（runtime / session 角色）
+ *   - getCtxMenuItems: 菜单项声明表（runtime / session / workspace 角色）
  *   - ctxRestartAgent: 重启 Agent
  *   - ctxStopAgent: 关闭 Agent
  *   - ctxArchiveAndStopRuntime: 归档会话并关闭 runtime
@@ -54,7 +54,33 @@ function newIdempotencyKey() {
 // 读取单一事实源（本地 agent 记录声明 + 远程能力位门控），代码内白名单
 // 已退役。
 
+// 侧栏会话区呈现策略（ADR-0050）：生效值 = 投影合流 sidebarSessionsPolicy，
+// wire 未合流时回作者默认声明 sidebarSessions；两者都缺 = 未声明能力。
+function resolveSidebarSessionsPolicy(ns) {
+  const agent = allAgents.find((item) => item.id === ns) || null;
+  const fromWire = agent?.sidebarSessionsPolicy;
+  if (fromWire === 'visible' || fromWire === 'hidden') return fromWire;
+  const declared = agent?.sidebarSessions;
+  return declared === 'visible' || declared === 'hidden' ? declared : null;
+}
+
 function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
+  // 工作空间条目宿主操作面（ADR-0050）：事实选族——菜单项由 agent 记录
+  // 上的事实派生（v1 唯一族是 sidebarSessions 呈现策略切换，声明即能力）。
+  // 未声明 → 空菜单；侧栏门控（右键与 ⋯ 按钮同一条件）= 菜单非空。
+  if (role === 'workspace') {
+    const policy = resolveSidebarSessionsPolicy(ns);
+    if (!policy) return [];
+    const isZh = currentLanguage === 'zh';
+    return [
+      {
+        label: policy === 'visible'
+          ? (isZh ? '隐藏对话条目' : 'Hide conversations')
+          : (isZh ? '显示对话条目' : 'Show conversations'),
+        action: 'claw:toggle-sidebar-sessions',
+      },
+    ];
+  }
   // 线程宿主的侧栏线程叶子：自动接续 APP（coder / memo）走线程语义菜单
   // （与线程视图行动作同源——plugins/coder 前端插件）。中断只在执行/待投递时
   // 有对象；归档任何状态都可用——生产 lifecycle（thread-lifecycle.js）
@@ -1062,6 +1088,39 @@ function dispatchCtxAction(action, target) {
       if (sid && typeof window.phOpenSessionMoveDialog === 'function') {
         window.phOpenSessionMoveDialog([sid]);
       }
+      break;
+    }
+
+    // 工作空间条目「隐藏/显示对话条目」（ADR-0050）：目标值 = 当前生效值
+    // 取反；服务端按作者默认判定删/写覆盖条目，回包后刷新 wire（渲染签名
+    // 含 sidebarSessionsPolicy，侧栏重渲即见会话区显隐）。v1 不做乐观更新。
+    case 'toggle-sidebar-sessions': {
+      window.closeCtxMenu();
+      const currentPolicy = resolveSidebarSessionsPolicy(ns);
+      if (!currentPolicy) break;
+      const nextPolicy = currentPolicy === 'visible' ? 'hidden' : 'visible';
+      (async () => {
+        try {
+          const res = await fetch('/protoclaw/workspace_settings/sidebar_sessions', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId: ns, policy: nextPolicy }),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data?.error || ('HTTP ' + res.status));
+          }
+          await loadAgents();
+          renderAgentList();
+        } catch (e) {
+          ClawToast.show({
+            id: 'ctx-sidebar-sessions-' + ns,
+            status: 'error',
+            title: currentLanguage === 'zh' ? '切换失败' : 'Toggle failed',
+            description: e?.message || String(e),
+          });
+        }
+      })();
       break;
     }
 

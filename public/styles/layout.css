@@ -741,6 +741,13 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   color: var(--text-primary);
 }
 
+/* 工作空间条目 ⋯（ADR-0050）：runtime 条目的邻近渐显由 pointermove 变量驱动，
+   workspace 条目无该驱动，改纯 hover 渐显（transition 复用上面的定义） */
+.agent-item[data-agent-prebuilt="true"]:hover .agent-runtime-more {
+  opacity: 1;
+  visibility: visible;
+}
+
 .agent-icon {
   width: 18px;
   height: 18px;
