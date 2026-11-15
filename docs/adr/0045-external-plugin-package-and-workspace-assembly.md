@@ -86,6 +86,8 @@ agentero 三件套整体出仓（主仓库删除全部三处实现）为总验�
 - 不改 local-features 内置形态、不迁移生态包来源。
 - 多 feature 包的面级控制、APP 插件面（`ui.appPlugins`）第一版不实施，进开放问题。
 
+> **修订（ADR-0049，2026-11-15）**：APP 插件面的第一面已决策：侧栏会话菜单经 `ui.sessionMenu` 贡献项随 APP 包走（sessionOps 声明事实 + `claw:` / `plugin:` 动作绑定）。多 feature 包的面级控制仍留开放问题。见 [ADR-0049](0049-session-ops-fact-and-menu-declaration.md)。
+
 ## 后果
 
 正面：第三方不改宿主源码即可交付完整产品体验（工具 + 界面 + 服务一体）；工作空间获得一致的处置模型（装配/禁用/卸载以插件为单位）；右栏呈现跨设备一致；agentero 出仓后主仓库维护面收缩。

@@ -9,15 +9,13 @@
  *
  * Dependencies (DOM elements from app-core.js):
  *   restartAgentAction, stopAgentAction, deleteAgentAction,
- *   openSessionAction, compactedResumeSessionAction,
- *   deleteSessionAction, compactSummaryAction, compactTrimAction,
+ *   compactSummaryAction, compactTrimAction,
  *   compactBranchAction, deleteProjectAction, deleteFeatureAction,
- *   ctxMenu, agentContextMenu, sessionContextMenu, compactContextMenu,
+ *   ctxMenu, agentContextMenu, compactContextMenu,
  *   projectContextMenu, featureRepoContextMenu, container, featurePanel
  *
  * Dependencies (global state from app-core.js):
- *   contextMenuAgentId, contextMenuAgentMode, contextMenuSessionAgentId,
- *   contextMenuSessionId, contextMenuSessionMode, contextMenuCompactAction,
+ *   contextMenuAgentId, contextMenuAgentMode, contextMenuCompactAction,
  *   contextMenuProjectAgentId, contextMenuProjectId,
  *   contextMenuFeatureRepoPackageId, featurePanelWidth, allAgents,
  *   focusedAgentId, currentRuntimeAgentId, currentWorkspaceTab,
@@ -131,32 +129,6 @@ stopAgentAction.addEventListener('click', async () => {
   }
 });
 
-openSessionAction.addEventListener('click', async () => {
-  if (!contextMenuSessionAgentId || !contextMenuSessionId) return;
-  const sessionId = contextMenuSessionId;
-  const mode = contextMenuSessionMode;
-  closeSessionContextMenu();
-  if (mode === 'assembly') {
-    await window.launchSavedAssemblyRun(sessionId);
-  } else {
-    await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }));
-  }
-});
-
-compactedResumeSessionAction.addEventListener('click', async () => {
-  if (!contextMenuSessionAgentId || !contextMenuSessionId) return;
-  if (contextMenuSessionMode === 'assembly') {
-    closeSessionContextMenu();
-    return;
-  }
-  const sessionId = contextMenuSessionId;
-  closeSessionContextMenu();
-  await window.runWorkspaceAction(JSON.stringify({
-    type: 'compacted_resume_session',
-    sessionId,
-  }));
-});
-
 compactSummaryAction.addEventListener('click', async () => {
   if (!contextMenuCompactAction?.sessionId) return;
   const action = { ...contextMenuCompactAction, compactType: 'summary' };
@@ -214,123 +186,6 @@ deleteAgentAction.addEventListener('click', async () => {
   } catch (e) {
     closeAgentContextMenu();
     window.alert(t('delete_failed') + (e && e.message ? e.message : e));
-  }
-});
-
-deleteSessionAction.addEventListener('click', async () => {
-  if (!contextMenuSessionAgentId || !contextMenuSessionId) return;
-
-  const pendingAgentId = contextMenuSessionAgentId;
-  const pendingSessionId = contextMenuSessionId;
-
-  closeSessionContextMenu();
-
-  const targetAgent = allAgents.find((item) => item.id === pendingAgentId) || null;
-  const currentSessions = getWorkspaceSessions(targetAgent);
-  const deletedSession = currentSessions.find((session) => session?.id === pendingSessionId) || null;
-  const deletedWasActive = pendingSessionId === (targetAgent?.active_workspace_session_id || targetAgent?.workspace_sessions?.activeSessionId || null);
-  const runtimeAgent = allAgents.find((item) => (
-    item?.source !== 'prebuilt'
-    && String(item?.parent_id || '') === String(pendingAgentId)
-    && String(item?.active_workspace_session_id || '') === String(pendingSessionId)
-  )) || null;
-  const affectedRuntimeId = runtimeAgent?.runtime_session_id
-    || runtimeAgent?.runtimeSessionId
-    || runtimeAgent?.id
-    || (deletedWasActive ? (targetAgent?.runtime_session_id || targetAgent?.runtimeSessionId || null) : null);
-  const deleteOperation = beginSidebarOperation({
-    type: 'delete',
-    kind: 'delete',
-    phase: 'committing',
-    agentId: pendingAgentId,
-    sourceSessionId: pendingSessionId,
-    sourceRuntimeId: affectedRuntimeId || '',
-    projectDir: deletedSession?.openDirectory || '',
-    projectName: deletedSession?.openDirectory ? getPathLeaf(deletedSession.openDirectory) : '',
-    title: deletedSession?.title || pendingSessionId,
-  });
-  if (affectedRuntimeId && typeof markPendingRuntimeStop === 'function') {
-    markPendingRuntimeStop(pendingAgentId, pendingSessionId, affectedRuntimeId);
-  }
-  // Clear cached data for the deleted session's runtime
-  if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
-
-  if (deletedWasActive) {
-    applyManagedPrebuiltAgent(pendingAgentId, null);
-  }
-  const remainingSessions = currentSessions.filter((s) => s.id !== pendingSessionId);
-  const nextActiveId = remainingSessions.length > 0 ? (targetAgent?.active_workspace_session_id === pendingSessionId ? remainingSessions[0].id : targetAgent?.active_workspace_session_id) : null;
-  updateAgentRecord(pendingAgentId, {
-    workspace_sessions: { ...(targetAgent?.workspace_sessions || {}), sessions: remainingSessions, activeSessionId: nextActiveId },
-    active_workspace_session_id: nextActiveId,
-  });
-
-  if (pendingAgentId === 'flow-workspace' && window.ClawFW?.mode === 'detail') {
-    fwBackToList();
-    renderAgentList();
-  } else if (pendingAgentId === 'flow-workspace') {
-    renderAgentList();
-  }
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-
-  try {
-    const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
-      body: JSON.stringify({
-        agentId: pendingAgentId,
-        sessionId: pendingSessionId,
-        responseMode: 'delta',
-        operationId: deleteOperation.operationId,
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(await response.text().catch(() => 'delete session failed'));
-    }
-    const result = await response.json();
-    if (result?.ok === false || result?.status === 'partial') {
-      throw new Error(result?.code || 'delete_incomplete');
-    }
-    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(pendingAgentId, result);
-
-    if (result?.deleted?.sessions) {
-      updateAgentRecord(pendingAgentId, {
-        workspace_sessions: result.deleted.sessions,
-        active_workspace_session_id: result.deleted.activeSessionId || null,
-      });
-    }
-    if (result?.agent) {
-      applyManagedPrebuiltAgent(pendingAgentId, result.agent);
-    }
-    finishSidebarOperation(deleteOperation.operationId, 'settled', {
-      serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
-    });
-
-    const targetSessionId = String(result?.targetSessionId || '').trim();
-    if (targetSessionId) {
-      await navigateToSessionMutationTarget(pendingAgentId, result, affectedRuntimeId);
-    } else if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
-      const fallbackAgent = applyManagedPrebuiltAgent(pendingAgentId, null, { uiOnlyWhenStopped: true });
-      setPreferredUnitMode('home', fallbackAgent || targetAgent || { id: pendingAgentId, source: 'prebuilt' });
-      selectWorkspaceSurface(pendingAgentId);
-    }
-
-
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
-  } catch (e) {
-    if (affectedRuntimeId && typeof releasePendingRuntimeStop === 'function') {
-      releasePendingRuntimeStop(affectedRuntimeId, pendingAgentId, pendingSessionId);
-    }
-    updateAgentRecord(pendingAgentId, {
-      workspace_sessions: { ...(targetAgent?.workspace_sessions || {}), sessions: currentSessions, activeSessionId: targetAgent?.active_workspace_session_id },
-      active_workspace_session_id: targetAgent?.active_workspace_session_id,
-    });
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
-    finishSidebarOperation(deleteOperation.operationId, 'failed', { errorCode: 'delete_failed' });
-    window.alert(t('delete_session_failed') + (e && e.message ? e.message : e));
   }
 });
 
@@ -585,9 +440,6 @@ document.addEventListener('click', (event) => {
   if (!agentContextMenu.contains(event.target)) {
     closeAgentContextMenu();
   }
-  if (!sessionContextMenu.contains(event.target)) {
-    closeSessionContextMenu();
-  }
   if (!compactContextMenu.contains(event.target)) {
     closeCompactMenu();
   }
@@ -620,7 +472,6 @@ window.addEventListener('resize', () => {
 });
 window.addEventListener('scroll', () => {
   closeAgentContextMenu();
-  closeSessionContextMenu();
   closeCompactMenu();
   closeProjectContextMenu();
   requestAnimationFrame(updateAssemblySideRailPosition);
@@ -639,7 +490,6 @@ container.addEventListener('contextmenu', (event) => {
       event.preventDefault();
       window.closeCtxMenu();
       closeAgentContextMenu();
-      closeSessionContextMenu();
       closeCompactMenu();
       closeProjectContextMenu();
       const ctxTarget = { role, ns, id, variant };
@@ -668,15 +518,7 @@ container.addEventListener('contextmenu', (event) => {
       event.clientX,
       event.clientY,
     );
-    return;
   }
-  const item = event.target.closest('[data-prebuilt-session-id]');
-  if (!item) return;
-  event.preventDefault();
-  openSessionContextMenu(
-    item.dataset.prebuiltSessionAgentId,
-    item.dataset.prebuiltSessionId,
-    event.clientX,
-    event.clientY,
-  );
+  // 会话右键统一走 data-ctx-role 声明式菜单（ADR-0049）；
+  // 未声明 role 的会话发射器不再有 legacy 静态菜单兜底。
 });

@@ -135,7 +135,7 @@ function _renderFeatureCreatorSessionList(agent, block, ctx) {
           ? '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_conversation_group')) + '</div><div class="feature-project-session-list">' + project.sessions.map((session) => {
               const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
               return [
-                '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
+                '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(isAssemblySession(session) ? 'assembly' : 'default') + '">',
                 '<div class="workspace-history-main">',
                 '<div class="workspace-history-title-row">',
                 '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
@@ -228,7 +228,7 @@ function _renderAgentCreatorSessionList(agent, block, ctx) {
           ? '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_conversation_group')) + '</div><div class="feature-project-session-list">' + project.sessions.map((session) => {
               const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
               return [
-                '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
+                '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(isAssemblySession(session) ? 'assembly' : 'default') + '">',
                 '<div class="workspace-history-main">',
                 '<div class="workspace-history-title-row">',
                 '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
@@ -996,9 +996,9 @@ function _renderGenericSessionList(agent, block, ctx) {
         : (session.title || session.id);
       const isAssembly = isAssemblySession(session);
       const allowCompactedResume = !isAssembly;
-      // data-ctx-* enables the declarative ctx-menu (summary/trim/branch)
-      // for agents listed in CTX_SESSION_OPS_AGENTS; agents outside that
-      // set get an empty item list and fall through to the legacy menu.
+      // data-ctx-* enables the declarative ctx-menu (ADR-0049): item
+      // family follows the sessionOps fact, assembly variant excludes
+      // continuity submenu items.
       const ctxVariant = isAssembly ? 'assembly' : 'default';
       return [
         '<div class="workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(ctxVariant) + '">',

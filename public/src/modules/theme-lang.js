@@ -50,12 +50,6 @@ function applyLanguage() {
   restartAgentAction.textContent = t('restart_agent_runtime');
   stopAgentAction.textContent = t('close_agent_runtime');
   deleteAgentAction.textContent = t('delete_agent');
-  openSessionAction.textContent = currentLanguage === 'zh' ? '进入对话' : 'Enter Chat';
-  compactedResumeSessionAction.textContent = t('workspace_light_resume');
-  if (archiveSessionAction) {
-    archiveSessionAction.textContent = currentLanguage === 'zh' ? '归档会话' : 'Archive';
-  }
-  deleteSessionAction.textContent = t('delete_session');
   deleteProjectAction.textContent = t('delete_project');
 
   renderThemeToggle();

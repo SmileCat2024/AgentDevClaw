@@ -48,7 +48,6 @@
       "agentContextMenu",
       "agentList",
       "allAgents",
-      "archiveSessionAction",
       "assemblyControlPanelOpen",
       "assemblyDraftRenderTimer",
       "assemblyLaunchInProgress",
@@ -71,7 +70,6 @@
       "compactContextMenu",
       "compactSummaryAction",
       "compactTrimAction",
-      "compactedResumeSessionAction",
       "container",
       "contextMenuAgentId",
       "contextMenuAgentMode",
@@ -79,9 +77,6 @@
       "contextMenuFeatureRepoPackageId",
       "contextMenuProjectAgentId",
       "contextMenuProjectId",
-      "contextMenuSessionAgentId",
-      "contextMenuSessionId",
-      "contextMenuSessionMode",
       "ctxMenu",
       "currentAgentTitle",
       "currentHookInspector",
@@ -108,7 +103,6 @@
       "deleteAgentAction",
       "deleteFeatureAction",
       "deleteProjectAction",
-      "deleteSessionAction",
       "expandedProjectIds",
       "externalAgentList",
       "externalCount",
@@ -139,7 +133,6 @@
       "loadedAgentDetailIds",
       "logFilters",
       "nativeFetch",
-      "openSessionAction",
       "pendingPrebuiltAgentIds",
       "pendingSwitchSerial",
       "pendingSwitchTarget",
@@ -164,7 +157,6 @@
       "selectedFeatureName",
       "selectedOverviewLifecycle",
       "selectedRepositoryPackageId",
-      "sessionContextMenu",
       "settingsToggle",
       "shouldAnimateWorkspaceSurface",
       "showChatProcess",
@@ -883,12 +875,10 @@
       "closeCompactMenu",
       "closeFeatureRepoContextMenu",
       "closeProjectContextMenu",
-      "closeSessionContextMenu",
       "openAgentContextMenu",
       "openCompactMenu",
       "openFeatureRepoContextMenu",
-      "openProjectContextMenu",
-      "openSessionContextMenu"
+      "openProjectContextMenu"
     ]
   },
   "public/src/modules/conversation-export-dialog.js": {
@@ -906,9 +896,7 @@
     ]
   },
   "public/src/modules/ctx-menu-items.js": {
-    "state": [
-      "CTX_SESSION_OPS_AGENTS"
-    ],
+    "state": [],
     "behavior": [
       "_copyTextWithToast",
       "afterThreadMutation",
@@ -917,7 +905,6 @@
       "ctxGenerateTitle",
       "ctxRenameSession",
       "ctxRestartAgent",
-      "ctxSessionOpsAllowed",
       "ctxStopAgent",
       "ctxThreadRequest",
       "ctxTodoSession",
@@ -2572,6 +2559,16 @@
       "renderSessionThreadBadge",
       "renderWorkspaceSessionList",
       "viewCapabilityEnabled"
+    ]
+  },
+  "public/src/modules/session-menu-decls.js": {
+    "state": [],
+    "behavior": [
+      "_resolveSessionMenuLabel",
+      "_sessionMenuAgentRecord",
+      "_sessionMenuIsRemoteNs",
+      "getDeclaredSessionMenuItems",
+      "sessionOpsAllowed"
     ]
   },
   "public/src/modules/session-mutation.js": {

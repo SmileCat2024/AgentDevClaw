@@ -1,6 +1,7 @@
 // context-menu.js
 // Phase 2c-3: 上下文菜单功能（Domain P）
-// 从 app-ui.js 提取的 10 个右键菜单函数
+// 从 app-ui.js 提取的 8 个右键菜单函数
+// （会话菜单已退役：会话右键统一走 ctx-menu-items.js 声明式菜单，ADR-0049）
 
 // ── 关闭函数 ──────────────────────────────────────────────
 
@@ -8,13 +9,6 @@ function closeAgentContextMenu() {
   agentContextMenu.classList.remove('open');
   contextMenuAgentId = null;
   contextMenuAgentMode = null;
-}
-
-function closeSessionContextMenu() {
-  sessionContextMenu.classList.remove('open');
-  contextMenuSessionAgentId = null;
-  contextMenuSessionId = null;
-  contextMenuSessionMode = null;
 }
 
 function closeProjectContextMenu() {
@@ -37,7 +31,6 @@ function closeCompactMenu() {
 
 function openCompactMenu(action, x, y) {
   closeAgentContextMenu();
-  closeSessionContextMenu();
   closeProjectContextMenu();
   contextMenuCompactAction = action;
 
@@ -55,7 +48,6 @@ function openCompactMenu(action, x, y) {
 
 function openFeatureRepoContextMenu(packageId, x, y) {
   closeAgentContextMenu();
-  closeSessionContextMenu();
   closeProjectContextMenu();
   contextMenuFeatureRepoPackageId = packageId;
 
@@ -73,7 +65,6 @@ function openFeatureRepoContextMenu(packageId, x, y) {
 
 function openProjectContextMenu(agentId, projectId, x, y) {
   closeAgentContextMenu();
-  closeSessionContextMenu();
   contextMenuProjectAgentId = agentId;
   contextMenuProjectId = projectId;
 
@@ -90,7 +81,6 @@ function openProjectContextMenu(agentId, projectId, x, y) {
 }
 
 function openAgentContextMenu(agentId, x, y, mode) {
-  closeSessionContextMenu();
   closeProjectContextMenu();
   contextMenuAgentId = agentId;
   contextMenuAgentMode = mode || null;
@@ -113,41 +103,4 @@ function openAgentContextMenu(agentId, x, y, mode) {
   const maxTop = window.innerHeight - rect.height - margin;
   agentContextMenu.style.left = Math.max(margin, Math.min(x, maxLeft)) + 'px';
   agentContextMenu.style.top = Math.max(margin, Math.min(y, maxTop)) + 'px';
-}
-
-function openSessionContextMenu(agentId, sessionId, x, y) {
-  closeAgentContextMenu();
-  closeProjectContextMenu();
-  contextMenuSessionAgentId = agentId;
-  contextMenuSessionId = sessionId;
-  const agent = allAgents.find((item) => item.id === agentId) || null;
-  const session = getWorkspaceSessionById(agent, sessionId);
-  const isAssembly = isAssemblySession(session);
-  contextMenuSessionMode = isAssembly ? 'assembly' : 'default';
-  if (compactedResumeSessionAction) {
-    compactedResumeSessionAction.style.display = isAssembly ? 'none' : '';
-    compactedResumeSessionAction.disabled = isAssembly;
-  }
-  if (archiveSessionAction) {
-    const isArchived = session?.archived === true;
-    const showArchive = agentId === 'programming-helper';
-    archiveSessionAction.style.display = showArchive ? '' : 'none';
-    archiveSessionAction.disabled = !showArchive;
-    if (showArchive) {
-      archiveSessionAction.textContent = isArchived
-        ? (currentLanguage === 'zh' ? '取消归档' : 'Unarchive')
-        : (currentLanguage === 'zh' ? '归档会话' : 'Archive');
-    }
-  }
-
-  const margin = 8;
-  sessionContextMenu.classList.add('open');
-  sessionContextMenu.style.left = '0px';
-  sessionContextMenu.style.top = '0px';
-
-  const rect = sessionContextMenu.getBoundingClientRect();
-  const maxLeft = window.innerWidth - rect.width - margin;
-  const maxTop = window.innerHeight - rect.height - margin;
-  sessionContextMenu.style.left = Math.max(margin, Math.min(x, maxLeft)) + 'px';
-  sessionContextMenu.style.top = Math.max(margin, Math.min(y, maxTop)) + 'px';
 }

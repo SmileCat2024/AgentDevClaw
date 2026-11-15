@@ -13,6 +13,7 @@ import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName, operatorCarrie
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { resolveAgentProcessMode } from '../shared/process-mode.js';
 import { normalizePermissionDeclarations, normalizePermissionDefaults } from '../shared/permission-registry.js';
+import { normalizeSessionMenu } from '../shared/session-menu-registry.js';
 import { sessionRecordToWorkspaceMeta } from './session-helpers-pure.js';
 
 import { normalizeWorkspaceAgents } from '../shared/workspace-agents.js';
@@ -146,6 +147,12 @@ async function scanAgentsTree(rootDir, currentDir) {
       const metadata = await readJson(entryPath);
       const agentDir = path.dirname(entryPath);
       const permissions = normalizePermissionDeclarations(metadata.permissions);
+      // 会话菜单声明（ADR-0049）：扫描边界校验归一，非法项丢弃加警告；
+      // 原始声明存在时以归一结果覆盖（null 也覆盖，坏声明不得原样下发）。
+      const sessionMenu = normalizeSessionMenu(metadata.ui?.sessionMenu, metadata.id ?? path.basename(agentDir));
+      const uiOverride = metadata.ui && typeof metadata.ui === 'object' && metadata.ui.sessionMenu !== undefined
+        ? { ui: { ...metadata.ui, sessionMenu } }
+        : null;
       results.push({
         ...metadata,
         ...normalizeWorkspaceAgents(metadata),
@@ -153,6 +160,7 @@ async function scanAgentsTree(rootDir, currentDir) {
         // 作者默认值（ADR-0030）：键必须 ∈ permissions 声明集且值合法，
         // 否则启动扫描报错（与 permissions 声明同等级校验）。
         permissionDefaults: normalizePermissionDefaults(metadata.permissionDefaults, permissions),
+        ...(uiOverride || {}),
         id: metadata.id ?? path.basename(agentDir),
         relativeDir: path.relative(PROJECT_ROOT, agentDir).replace(/\\/g, '/'),
         agentPath: agentDir,

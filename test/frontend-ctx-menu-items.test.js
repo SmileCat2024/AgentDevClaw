@@ -17,6 +17,16 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
  */
 const TEST_AGENT = {
   id: 'programming-helper',
+  // ADR-0049：sessionOps 是声明驱动的产品事实（metadata.json），夹具镜像声明；
+  // 「移动到…」同为 PH 的声明项（claw:move-session），菜单从声明合成。
+  sessionOps: true,
+  ui: {
+    sessionMenu: {
+      items: [
+        { id: 'ph.move', label: { zh: '移动到…', en: 'Move to…' }, action: 'claw:move-session' },
+      ],
+    },
+  },
   workspace_sessions: {
     activeSessionId: 'sess-active',
     sessions: [
@@ -88,6 +98,9 @@ function loadCtxMenuItems(overrides = {}) {
   // 头部「依赖 assembly-data.js」注释）——缺失会导致 getCtxMenuItems 抛
   // ReferenceError: isAssemblySession is not defined。
   ctx.loadSource('public/src/modules/assembly-data.js');
+  // ctx-menu-items.js 的会话操作事实（sessionOpsAllowed）来自
+  // session-menu-decls.js（ADR-0049 声明驱动）——缺失会 ReferenceError。
+  ctx.loadSource('public/src/modules/session-menu-decls.js');
   ctx.loadSource('public/src/modules/ctx-menu-items.js');
   return { ctx, calls };
 }
@@ -111,28 +124,32 @@ describe('ctx-menu-items: getCtxMenuItems (runtime)', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1')`);
     // All content-changing operations are grouped: rename parent includes AI title;
-    // continuity parent includes Summary, Trim, and Branch.
-    assert.equal(items.length, 13);
+    // continuity parent includes Summary, Trim, and Branch. Declared item
+    // (Move to…) appends after the builtin family (ADR-0049).
+    assert.equal(items.length, 14);
     assert.equal(items[0].action, 'rename');
     assert.deepEqual(Array.from(items[0].submenu, (item) => item.action), ['generate-title']);
     assert.equal(items[1].action, 'todo-session');
     assert.equal(items[1].label, '设为待办'); // active session todo=false → set
-    assert.equal(items[2].action, 'move-session');
-    assert.equal(items[3].action, 'copy-id');
-    assert.equal(items[4].type, 'separator');
-    assert.equal(items[5].label, '会话接续');
-    assert.deepEqual(Array.from(items[5].submenu, (item) => item.action), ['summary', 'trim', 'branch']);
-    assert.deepEqual(Array.from(items[5].submenu, (item) => item.label), ['总结历史', '精简历史', '创建分支']);
-    assert.equal(items[6].type, 'separator');
-    assert.equal(items[7].action, 'archive-and-stop');
-    assert.equal(items[7].label, '归档');
-    assert.equal(items[8].type, 'separator');
-    assert.equal(items[9].action, 'restart');
-    assert.equal(items[10].action, 'stop');
-    assert.equal(items[10].danger, true);
-    assert.equal(items[11].type, 'separator');
-    assert.equal(items[12].action, 'delete-session-runtime');
-    assert.equal(items[12].danger, true);
+    assert.equal(items[2].action, 'copy-id');
+    assert.equal(items[3].type, 'separator');
+    assert.equal(items[4].label, '会话接续');
+    assert.deepEqual(Array.from(items[4].submenu, (item) => item.action), ['summary', 'trim', 'branch']);
+    assert.deepEqual(Array.from(items[4].submenu, (item) => item.label), ['总结历史', '精简历史', '创建分支']);
+    assert.equal(items[5].type, 'separator');
+    assert.equal(items[6].action, 'archive-and-stop');
+    assert.equal(items[6].label, '归档');
+    assert.equal(items[7].type, 'separator');
+    assert.equal(items[8].action, 'restart');
+    assert.equal(items[9].action, 'stop');
+    assert.equal(items[9].danger, true);
+    assert.equal(items[10].type, 'separator');
+    assert.equal(items[11].action, 'delete-session-runtime');
+    assert.equal(items[11].danger, true);
+    // 声明段：分隔线 + 「移动到…」（PH 声明项，动作带 claw: 前缀绑定）
+    assert.equal(items[12].type, 'separator');
+    assert.equal(items[13].action, 'claw:move-session');
+    assert.equal(items[13].label, '移动到…');
     // 无线程数据时不出现线程专属动作与「停止」
     assert.ok(!items.find((i) => i.action === 'thread-archive'));
     assert.ok(!items.find((i) => i.action === 'thread-interrupt'));
@@ -143,6 +160,7 @@ describe('ctx-menu-items: getCtxMenuItems (runtime)', () => {
     const { ctx } = loadCtxMenuItems({
       allAgents: [{
         id: 'programming-helper',
+        sessionOps: true,
         workspace_sessions: {
           activeSessionId: 'sess-archived',
           sessions: [{ id: 'sess-archived', archived: true }],
@@ -172,29 +190,31 @@ describe('ctx-menu-items: getCtxMenuItems (session)', () => {
   it('session main (not archived, not todo) → unified menu, direct transforms', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-active')`);
-    assert.equal(items.length, 10);
+    assert.equal(items.length, 11);
     assert.equal(items[0].action, 'rename-session');
     assert.deepEqual(Array.from(items[0].submenu, (item) => item.action), ['generate-title']);
     assert.equal(items[1].action, 'todo-session'); // not todo → set
     assert.equal(items[1].label, '设为待办');
-    assert.equal(items[2].action, 'move-session');
-    assert.equal(items[3].action, 'copy-id');
-    assert.equal(items[4].type, 'separator');
-    assert.equal(items[5].label, '会话接续');
-    assert.deepEqual(Array.from(items[5].submenu, (item) => item.action), ['summary', 'trim', 'branch']);
-    assert.deepEqual(Array.from(items[5].submenu, (item) => item.label), ['总结历史', '精简历史', '创建分支']);
-    assert.equal(items[6].type, 'separator');
-    assert.equal(items[7].action, 'archive-session');
-    assert.equal(items[7].label, '归档');
-    assert.equal(items[8].type, 'separator');
-    assert.equal(items[9].action, 'delete-session');
-    assert.equal(items[9].danger, true);
+    assert.equal(items[2].action, 'copy-id');
+    assert.equal(items[3].type, 'separator');
+    assert.equal(items[4].label, '会话接续');
+    assert.deepEqual(Array.from(items[4].submenu, (item) => item.action), ['summary', 'trim', 'branch']);
+    assert.deepEqual(Array.from(items[4].submenu, (item) => item.label), ['总结历史', '精简历史', '创建分支']);
+    assert.equal(items[5].type, 'separator');
+    assert.equal(items[6].action, 'archive-session');
+    assert.equal(items[6].label, '归档');
+    assert.equal(items[7].type, 'separator');
+    assert.equal(items[8].action, 'delete-session');
+    assert.equal(items[8].danger, true);
+    // 声明段（ADR-0049）：分隔线 + 「移动到…」
+    assert.equal(items[9].type, 'separator');
+    assert.equal(items[10].action, 'claw:move-session');
   });
 
   it('session archived → same menu shape, unarchive label, no todo', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'archived', 'sess-archived')`);
-    assert.equal(items.length, 9);
+    assert.equal(items.length, 10);
     const continuityItem = items.find((i) => i.label === '会话接续');
     assert.ok(continuityItem, 'archived conversations still offer continuity actions');
     assert.deepEqual(Array.from(continuityItem.submenu, (item) => item.action), ['summary', 'trim', 'branch']);
@@ -584,12 +604,61 @@ describe('ctx-menu-items: sessionOps capability gating (merged integration)', ()
   it('local agent menu is unaffected by the capability lookup', () => {
     const ctx = loadWithCapability(false);
     const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1')`);
-    assert.equal(items.length, 13, 'local runtime menu keeps its grouped conversation actions');
+    assert.equal(items.length, 14, 'local runtime menu keeps its grouped conversation actions');
     const actions = (function flatten(list) {
       return list.flatMap((item) => [...(item.action ? [item.action] : []), ...(item.submenu ? flatten(item.submenu) : [])]);
     })(items);
     assert.ok(actions.includes('generate-title'));
     assert.ok(actions.includes('summary') && actions.includes('trim') && actions.includes('branch'));
+  });
+});
+
+// ── ADR-0049: declared items come from the agent record, not ns branches ──
+
+describe('ctx-menu-items: declared session menu items (ADR-0049)', () => {
+  it('second app declaring sessionOps without items gets the builtin menu only (no ns branches)', () => {
+    const other = {
+      id: 'other-app',
+      sessionOps: true,
+      workspace_sessions: { activeSessionId: 's-o', sessions: [{ id: 's-o', archived: false, todo: false }] },
+    };
+    const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT, other] });
+    const items = ctx.run(`getCtxMenuItems('session', 'other-app', 'main', 's-o')`);
+    const actions = items.filter((i) => i.action).map((i) => i.action);
+    assert.ok(actions.includes('rename-session'), '内建族按 sessionOps 事实照常呈现');
+    assert.ok(!actions.includes('claw:move-session'), '「移动到…」是 PH 的声明项，不得按 ns 渗入其他 APP');
+  });
+
+  it('declared item with not-archived predicate hides on archived conversations (facts wiring)', () => {
+    const app = {
+      id: 'pred-app',
+      sessionOps: true,
+      ui: { sessionMenu: { items: [{ id: 'p.clean', label: { zh: '清理', en: 'Clean' }, action: 'claw:move-session', when: ['not-archived'] }] } },
+      workspace_sessions: { activeSessionId: 's-live', sessions: [{ id: 's-live', archived: false }, { id: 's-dead', archived: true }] },
+    };
+    const { ctx } = loadCtxMenuItems({ allAgents: [app] });
+    const live = ctx.run(`getCtxMenuItems('session', 'pred-app', 'main', 's-live')`);
+    assert.ok(live.find((i) => i.action === 'claw:move-session'), '未归档会话保留声明项');
+    const dead = ctx.run(`getCtxMenuItems('session', 'pred-app', 'archived', 's-dead')`);
+    assert.ok(!dead.find((i) => i.action === 'claw:move-session'), '归档会话按谓词隐藏声明项');
+  });
+
+  it('remote leaf hides declared items in v1 (builtin family stays)', () => {
+    const { ctx } = loadCtxMenuItems();
+    ctx.window.RemoteConnections = { capabilityFor: () => true };
+    const items = ctx.run(`getCtxMenuItems('runtime', '${REMOTE_NS}', 'remote', 'remote:lab-b:rt-1')`);
+    const actions = items.flatMap((item) => [item.action, ...(item.submenu || []).map((child) => child.action)]);
+    assert.ok(actions.includes('restart'), '远程内建族不受影响');
+    assert.ok(!actions.includes('claw:move-session'), '远程叶子 v1 不呈现 APP 自定义项（处理器在本机）');
+  });
+
+  it('claw: prefixed action dispatches to the builtin handler after prefix stripping', () => {
+    const moved = [];
+    const { ctx } = loadCtxMenuItems();
+    ctx.window.phOpenSessionMoveDialog = (ids) => { moved.push(ids); };
+    ctx.run(`dispatchCtxAction('claw:move-session', { ns: 'programming-helper', id: 'sess-active', variant: 'session' })`);
+    assert.equal(moved.length, 1, 'claw:move-session 恰好触发一次移动对话框');
+    assert.equal(moved[0][0], 'sess-active', 'claw:move-session 剥前缀后命中既有 move-session 处理器');
   });
 });
 

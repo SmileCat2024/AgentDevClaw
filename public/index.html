@@ -271,13 +271,6 @@
     <button id="delete-agent-action" class="context-menu-item danger" type="button">删除 Agent</button>
   </div>
 
-  <div id="session-context-menu" class="context-menu">
-    <button id="open-session-action" class="context-menu-item" type="button">进入对话</button>
-    <button id="compacted-resume-session-action" class="context-menu-item" type="button">轻量继续</button>
-    <button id="archive-session-action" class="context-menu-item" type="button">归档会话</button>
-    <button id="delete-session-action" class="context-menu-item danger" type="button">删除对话</button>
-  </div>
-
   <div id="compact-context-menu" class="context-menu">
     <button id="compact-summary-action" class="context-menu-item" type="button">总结历史（摘要）</button>
     <button id="compact-trim-action" class="context-menu-item" type="button">精简历史（Trim）</button>
@@ -517,6 +510,7 @@
   <!-- ↓↓↓ Phase B: 中风险子系统 ↓↓↓ -->
   <script src="./src/modules/chat-scroll.js"></script>
   <script src="./src/modules/session-mutation.js"></script>
+  <script src="./src/modules/session-menu-decls.js"></script>
   <script src="./src/modules/ctx-menu-items.js"></script>
   <script src="./src/modules/runtime-status.js"></script>
   <script src="./src/modules/tool-progress.js"></script>

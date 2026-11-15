@@ -3,8 +3,8 @@
  *
  * ADR-0032 决策 2：手动接续 APP（编程小助手）的线程会话保留手动精简入口；
  * 自动接续 APP（coder / memo）的线程会话继续隐藏（ADR-0024 决策 4，行为不变）。
- * 产品面事实源复用 ctx-menu-items 的 ctxSessionOpsAllowed（CTX_SESSION_OPS_AGENTS
- * 白名单），不新增平行清单。
+ * 产品面事实源复用 session-menu-decls 的 sessionOpsAllowed（ADR-0049：
+ * sessionOps 由 APP 的 metadata 声明驱动），不新增平行清单。
  *
  * isThreadHostAgentId 以 thread-store.js 真实语义 stub（查 sessionIndex 成员关系）。
  */
@@ -25,6 +25,12 @@ function makeSlashCtx({ agentId, sessionId, threadSessions = [] }) {
   const ctx = createFrontendSandbox({
     currentLanguage: 'zh',
     currentRuntimeAgentId: '',
+    // 声明驱动事实源（ADR-0049）：夹具镜像两个 APP 的 metadata 声明；
+    // coder / memo 不声明 sessionOps，走线程承接语义。
+    allAgents: [
+      { id: 'programming-helper', sessionOps: true },
+      { id: 'agent-studio', sessionOps: true },
+    ],
     SlashMenu: { registerCommands: (cmds) => { registered.push(...cmds); } },
     getRuntimeId: () => '',
     getCurrentRuntimeRecord: () => null,
@@ -35,7 +41,7 @@ function makeSlashCtx({ agentId, sessionId, threadSessions = [] }) {
     runWorkspaceAction: () => {},
   });
   ctx.window.isThreadHostAgentId = (id, sid) => !!sessionIndex[`${id}::${sid}`];
-  ctx.loadSource('public/src/modules/ctx-menu-items.js');
+  ctx.loadSource('public/src/modules/session-menu-decls.js');
   ctx.loadSource('public/src/modules/slash-commands.js');
   return { ctx, registered };
 }

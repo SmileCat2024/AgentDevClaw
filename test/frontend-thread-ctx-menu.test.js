@@ -10,16 +10,22 @@ import test from 'node:test';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 const source = fs.readFileSync(new URL('../public/src/modules/ctx-menu-items.js', import.meta.url), 'utf8');
+// 会话操作事实源（ADR-0049）：ctx-menu-items.js 消费 session-menu-decls.js
+// 的 sessionOpsAllowed（声明驱动）。
+const declsSource = fs.readFileSync(new URL('../public/src/modules/session-menu-decls.js', import.meta.url), 'utf8');
 
 function loadModule({ threads = {}, language = 'zh' } = {}) {
   const ctx = createFrontendSandbox({
     currentLanguage: language,
-    allAgents: [],
+    // 夹具镜像 metadata 声明（ADR-0049）：PH 声明 sessionOps（统一对话菜单）；
+    // coder 不声明（线程语义菜单）。
+    allAgents: [{ id: 'programming-helper', sessionOps: true }],
     getWorkspaceSessionById: () => null,
     isAssemblySession: () => false,
     isRemoteNamespaceAgentId: () => false,
   });
   ctx.window.getThreadById = (threadId) => threads[threadId] || null;
+  ctx.run(declsSource);
   ctx.run(source);
   return ctx;
 }
@@ -56,7 +62,7 @@ test('idle 线程：归档可用、中断置灰（无事可断）', () => {
   assert.ok(!byAction['thread-archive'].disabled, 'idle：归档可用（正常关闭）');
 });
 
-test('threadId 缺席或线程事实不可得：回退既有菜单体系（coder 不在会话操作集 → 空表）', () => {
+test('threadId 缺席或线程事实不可得：回退既有菜单体系（coder 未声明 sessionOps → 空表）', () => {
   const ctx = loadModule({ threads: {} });
   assert.equal(ctx.run(`getCtxMenuItems('runtime', 'coder', 'child', 'rt-1', 'sess-1', '')`).length, 0);
   // threadId 有值但 ClawThreads 索引无此线程（数据未就绪）：不硬造菜单

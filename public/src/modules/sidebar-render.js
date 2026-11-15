@@ -98,7 +98,6 @@ window.onSidebarSessionCtxMenu = function(event, button) {
   const rect = button.getBoundingClientRect();
   window.closeCtxMenu();
   closeAgentContextMenu();
-  closeSessionContextMenu();
   closeCompactMenu();
   closeProjectContextMenu();
   window.showCtxMenu(rect.right, rect.bottom, items, { role, ns, id, variant, sessionId, threadId });
@@ -990,7 +989,7 @@ let lastAgentListRenderSignature = '';
 // 单关闭后的下一次 renderAgentList 调用（轮询 tick / SSE 事件，≤3s）立即
 // 补上被延迟的重建（签名机制会判定是否真的需要重建）。
 const CONTEXT_MENU_ELEMENT_IDS = [
-  'ctx-menu', 'agent-context-menu', 'session-context-menu',
+  'ctx-menu', 'agent-context-menu',
   'compact-context-menu', 'project-context-menu', 'feature-repo-context-menu',
 ];
 let _sidebarRenderSuppressedByMenu = false;
@@ -1239,7 +1238,6 @@ agentList.addEventListener('contextmenu', (event) => {
       event.preventDefault();
       window.closeCtxMenu();
       closeAgentContextMenu();
-      closeSessionContextMenu();
       closeCompactMenu();
       closeProjectContextMenu();
       window.showCtxMenu(event.clientX, event.clientY, items, { role, ns, id, variant, sessionId, threadId });

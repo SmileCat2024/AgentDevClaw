@@ -46,6 +46,7 @@
 - [0038 资源读取协议](0038-resource-fetch-protocol.md) — runtime 持有资产的跨边界只读资源面 `/res/`
 - [0045 外部插件包与工作空间装配](0045-external-plugin-package-and-workspace-assembly.md) — Plugin/feature 两层、单 tgz 三面、仓库导入与工作空间装配分离、呈现配置权威（Accepted，P1–P3 已实施；scope 语义经 0046 修订为装配建议）
 - [0046 插件管理产品体系](0046-plugin-management-product-system.md) — 三级装配（全局/工作空间/对话，装配层级=可见性层级）、配置三层（插件参数/面板偏好 panelPrefs/呈现配置，按面寻址）、版本钉精确版、面板协议 minor 冻结承诺、保守优先通用原则、Studio 过渡与插件化工作空间愿景
+- [0049 会话操作事实与会话菜单的应用声明面](0049-session-ops-fact-and-menu-declaration.md) — sessionOps 升 metadata 事实、菜单=事实选族+ui.sessionMenu 贡献项、claw:/plugin: 动作绑定、ui.appPlugins 第一面（Accepted，P1+P2 已实施）
 
 ## 远程与外部协议
 

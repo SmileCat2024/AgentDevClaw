@@ -16,7 +16,8 @@
  * 依赖（全局）：SlashMenu (slash-menu.js)、currentLanguage、getRuntimeId、
  * getLogicalAgentId、getRuntimeWorkspaceSessionId (app-core.js)、
  * getCurrentRuntimeRecord、getCurrentAgentRecord (app-main.js)、
- * getActiveWorkspaceSessionId (app-core.js)、runWorkspaceAction (workspace-actions.js)
+ * getActiveWorkspaceSessionId (app-core.js)、runWorkspaceAction (workspace-actions.js)、
+ * sessionOpsAllowed (session-menu-decls.js，ADR-0049 声明驱动事实)
  */
 
 function _resolveSessionContext() {
@@ -84,15 +85,15 @@ function _currentSessionContext() {
 // 矛盾（ADR-0024 决策 4「不出现手动 trim / compact 等通用会话操作」）。
 // 手动接续 APP（ADR-0032 决策 2，编程小助手）的线程会话保留入口：线程
 // 承接的是接续事务（挡板 → 变换 → head 推进），变换由用户手动发起。
-// 判定复用 ctx-menu-items 的会话操作产品面谓词 ctxSessionOpsAllowed
-// （CTX_SESSION_OPS_AGENTS 白名单），不新增平行清单：白名单内 = 有手动
-// 精简产品面 = 手动接续 APP；coder / memo 不在名单，行为不变。
+// 判定复用 session-menu-decls 的会话操作产品面事实 sessionOpsAllowed
+// （ADR-0049：sessionOps 由 APP 的 metadata 声明），不新增平行清单：
+// 声明 = 有手动精简产品面 = 手动接续 APP；coder / memo 不声明，行为不变。
 // 线程索引未就绪时保守放行（显示），执行侧守卫兜底。
 function _isThreadCarriedSession(ctx) {
   if (!ctx || !ctx.agentId || !ctx.sessionId) return false;
   if (typeof window.isThreadHostAgentId !== 'function') return false;
   if (!window.isThreadHostAgentId(ctx.agentId, ctx.sessionId)) return false;
-  return !ctxSessionOpsAllowed(ctx.agentId);
+  return !sessionOpsAllowed(ctx.agentId);
 }
 
 function _manualSessionOpsApplicable() {

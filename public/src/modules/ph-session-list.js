@@ -13,7 +13,7 @@
  *   getAgentWorkspaceState (app-ui.js)
  *   getCtxMenuItems (modules/ctx-menu-items.js)
  *   closeCtxMenu, showCtxMenu (modules/context-menu.js)
- *   closeAgentContextMenu, closeSessionContextMenu,
+ *   closeAgentContextMenu,
  *   closeCompactMenu, closeProjectContextMenu (app-ui.js)
  *   renderPhSessionItemHtml (modules/session-list-render.js — 正常列表与搜索共用骨架)
  * window 函数:
@@ -496,7 +496,6 @@ window.phShowSessionCtxMenu = (event, button, agentId, sessionId, variant) => {
   const rect = button.getBoundingClientRect();
   window.closeCtxMenu();
   closeAgentContextMenu();
-  closeSessionContextMenu();
   closeCompactMenu();
   closeProjectContextMenu();
   window.showCtxMenu(rect.right, rect.bottom, items, { role: 'session', ns: agentId, id: sessionId, variant, sessionId });

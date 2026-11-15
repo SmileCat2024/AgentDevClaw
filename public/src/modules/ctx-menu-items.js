@@ -22,6 +22,9 @@
  * 依赖 app-main.js:
  *   renderAgentList, requestSwitch, loadAgents, runWorkspaceAction (via window),
  *   switchAgent (via window), getCurrentAgentRecord
+ * 依赖 session-menu-decls.js:
+ *   sessionOpsAllowed, getDeclaredSessionMenuItems (会话操作事实与
+ *   APP 声明项，ADR-0049 声明驱动)
  * 依赖 external-runtime.js:
  *   getExternalRuntimeAgent, restartSidebarExternalRuntime,
  *   closeSidebarExternalRuntime, refreshSidebarRuntimeAfterMutation,
@@ -46,27 +49,10 @@ function newIdempotencyKey() {
   return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-// Agents whose session items get the full session-ops ctx menu
-// (summary / trim / branch). Server routes are agentId-parameterized;
-// this list only gates the frontend menu surface.
-// coder APP 的会话在线程视图内承接（coder 前端插件自带动作），不经过
-// 此处会话 ctx 菜单——不把 'coder' 列作会话操作 agent。
-const CTX_SESSION_OPS_AGENTS = new Set(['programming-helper', 'agent-studio']);
-
-// 远程宿主命名空间 ns（remote:<connId>:<hostId>）的菜单放行：连接 id 不含
-// 冒号（request-target 不变量），第二个冒号之后即宿主 agent id，须在本集合
-// 内才与本地同一放行口径；远程叶子另受握手能力位 sessionOps 门控（ADR-0011
-// 扩展：旧远程缺位时菜单降级隐藏）。
-function ctxSessionOpsAllowed(ns) {
-  if (CTX_SESSION_OPS_AGENTS.has(ns)) return true;
-  if (typeof isRemoteNamespaceAgentId !== 'function' || !isRemoteNamespaceAgentId(ns)) return false;
-  const innerId = String(ns).split(':').slice(2).join(':');
-  if (!CTX_SESSION_OPS_AGENTS.has(innerId)) return false;
-  if (typeof window !== 'undefined' && window.RemoteConnections && typeof window.RemoteConnections.capabilityFor === 'function') {
-    return window.RemoteConnections.capabilityFor(ns, 'sessionOps') === true;
-  }
-  return true;
-}
+// 会话操作菜单的产品面事实（sessionOps）由应用声明驱动（ADR-0049）：
+// 本模块与 slash 命令都从 session-menu-decls.js 的 sessionOpsAllowed(ns)
+// 读取单一事实源（本地 agent 记录声明 + 远程能力位门控），代码内白名单
+// 已退役。
 
 function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
   // 线程宿主的侧栏线程叶子：自动接续 APP（coder / memo）走线程语义菜单
@@ -79,7 +65,7 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
   // 线程化不替换——落到下方 runtime 会话菜单，线程专属项（复制
   // Thread ID / 中断线程 / 归档线程）在其中追加；删除会话在 head 上
   // 即整线程删除（服务端重定向），不另设重复项。
-  if (role === 'runtime' && threadId && !ctxSessionOpsAllowed(ns)) {
+  if (role === 'runtime' && threadId && !sessionOpsAllowed(ns)) {
     const thread = typeof window.getThreadById === 'function' ? window.getThreadById(threadId) : null;
     if (thread) {
       const isZh = currentLanguage === 'zh';
@@ -94,7 +80,7 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
       ];
     }
   }
-  if (role === 'runtime' && ctxSessionOpsAllowed(ns)) {
+  if (role === 'runtime' && sessionOpsAllowed(ns)) {
     // 侧栏 runtime 叶子：优先按条目携带的 sessionId 解析目标会话（多个
     // runtime 并存时 activeSessionId 未必指向被右键的会话）。
     //
@@ -140,9 +126,6 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
     if (!conversationArchived) {
       items.push({ label: isTodo ? (isZh ? '取消待办' : 'Remove TODO') : (isZh ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
     }
-    if (ns === 'programming-helper') {
-      items.push({ label: isZh ? '移动到…' : 'Move to…', action: 'move-session' });
-    }
     items.push({ label: isZh ? '复制 ID' : 'Copy ID', action: 'copy-id' });
     if (!isOpsExcluded) {
       items.push(
@@ -187,9 +170,19 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
       { type: 'separator' },
       { label: isZh ? '删除对话' : 'Delete Conversation', action: 'delete-session-runtime', danger: true },
     );
+    // APP 声明项（ADR-0049）：内建族之后自成一段，v1 只追加不交错；
+    // 谓词由宿主按已求值事实过滤，远程叶子由 getDeclaredSessionMenuItems 隐藏。
+    const declaredItems = getDeclaredSessionMenuItems(ns, {
+      archived: conversationArchived === true,
+      hasThread: Boolean(thread),
+      threadBusy,
+    });
+    if (declaredItems.length > 0) {
+      items.push({ type: 'separator' }, ...declaredItems);
+    }
     return items;
   }
-  if (role === 'session' && ctxSessionOpsAllowed(ns)) {
+  if (role === 'session' && sessionOpsAllowed(ns)) {
     const agent = allAgents.find((item) => item.id === ns) || null;
     const session = getWorkspaceSessionById(agent, id);
     const sType = variant || 'main';
@@ -221,12 +214,6 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
     // TODO toggle — non-archived only
     if (!conversationArchived) {
       items.push({ label: isTodo ? (isZh ? '取消待办' : 'Remove TODO') : (isZh ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
-    }
-
-    // 移动到…（本地 PH only）：归属变更走本地 sessions_move；远程命名空间
-    // 不经本地移动（不伪造远程移动），不在此呈现。
-    if (ns === 'programming-helper') {
-      items.push({ label: isZh ? '移动到…' : 'Move to…', action: 'move-session' });
     }
 
     items.push({ label: isZh ? '复制 ID' : 'Copy ID', action: 'copy-id' });
@@ -272,6 +259,20 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
       { type: 'separator' },
       { label: isZh ? '删除对话' : 'Delete Conversation', action: 'delete-session', danger: true },
     );
+
+    // APP 声明项（ADR-0049）：内建族之后自成一段；「移动到…」现为 PH 的
+    // 声明项（claw:move-session），远程命名空间不呈现（getDeclaredSessionMenuItems
+    // 隐藏，不伪造远程移动）。
+    const threadBusy = Boolean(thread)
+      && (thread.lifeState === 'executing' || thread.lifeState === 'pending-commands');
+    const declaredItems = getDeclaredSessionMenuItems(ns, {
+      archived: conversationArchived === true,
+      hasThread: Boolean(thread),
+      threadBusy,
+    });
+    if (declaredItems.length > 0) {
+      items.push({ type: 'separator' }, ...declaredItems);
+    }
 
     return items;
   }
@@ -973,6 +974,11 @@ function dispatchCtxAction(action, target) {
   const { ns, id, sessionId, variant, threadId } = target;
   // For session role, sessionId may not be set — fall back to id
   const sid = sessionId || id;
+  // ADR-0049 声明项的动作绑定：claw:<name> 剥前缀后走既有内建 switch；
+  // 引用不存在的名字落到 default 告警（边界校验在服务端扫描，此处兜底不吞）。
+  if (typeof action === 'string' && action.startsWith('claw:')) {
+    action = action.slice('claw:'.length);
+  }
   const resolveCtxThread = () => {
     if (threadId && typeof window.getThreadById === 'function') {
       const byId = window.getThreadById(threadId);
@@ -1049,13 +1055,15 @@ function dispatchCtxAction(action, target) {
       ctxArchiveAndStopRuntime(target);
       break;
 
-    case 'move-session':
+    case 'move-session': {
       window.closeCtxMenu();
-      // 本地 PH 单条移动入口（批量入口在会话列表工具条多选）
-      if (ns === 'programming-helper' && sid && typeof window.phOpenSessionMoveDialog === 'function') {
+      // 本地单条移动入口（批量入口在会话列表工具条多选）。动作经 ADR-0049
+      // 声明绑定（claw:move-session）触达，处理器能力存在性仍在此校验。
+      if (sid && typeof window.phOpenSessionMoveDialog === 'function') {
         window.phOpenSessionMoveDialog([sid]);
       }
       break;
+    }
 
     case 'todo-session':
       window.closeCtxMenu();

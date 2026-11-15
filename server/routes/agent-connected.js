@@ -165,6 +165,12 @@ export function createConnectedAgentsQuery(deps) {
         // 决定触发时机，Web 壳层的旧自动标题触发必须让位，否则同一会话会
         // 被两条链路各起一次名。未声明 = 仍由壳层负责（迁移期状态）。
         titlePolicy: agent.titlePolicy === 'app' ? 'app' : null,
+        // 会话操作事实（ADR-0049）：sessionOps 是 metadata 顶层产品事实，
+        // 前端会话菜单（ctx-menu-items）与 slash 命令的单一事实源
+        // （session-menu-decls.js 的 sessionOpsAllowed）从 allAgents 记录
+        // 读取。本投影是侧栏 allAgents 的主源，缺此字段 = 全部 APP 的
+        // 会话操作菜单静默消失（历史事故：声明迁移后投影未同步）。
+        sessionOps: agent.sessionOps === true,
         processMode: agent.processMode || 'isolated',
         ui: agent.ui || null,
         agents: agent.agents,

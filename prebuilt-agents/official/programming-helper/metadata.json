@@ -2,6 +2,7 @@
   "id": "programming-helper",
   "kind": "workspace",
   "threadHost": true,
+  "sessionOps": true,
   "titlePolicy": "app",
   "name": "智能编码空间",
   "defaultAgentId": "main",
@@ -58,6 +59,15 @@
   ],
   "ui": {
     "entry": "sessions",
+    "sessionMenu": {
+      "items": [
+        {
+          "id": "ph.move",
+          "label": { "zh": "移动到…", "en": "Move to…" },
+          "action": "claw:move-session"
+        }
+      ]
+    },
     "tabs": [
       {
         "id": "sessions",
