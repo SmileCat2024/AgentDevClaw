@@ -13,7 +13,7 @@
 1. 装载静态。面板模块靠 index.html 的 script src 标签启动即全量预载（当前 133 个）。插件协议 `activatePlugin` 只注册 blocks、refreshers、actions 三个维度，`unloadPlugin` 只摘除这三样。panels 注册表没有 owner，没有 unregister。
 2. 按钮静态。15 个 rail 按钮是 index.html 手写 DOM；`app-core.js` 启动时对 `.rail-button` 做一次性快照存入 `railButtons`；图标只存在于按钮 DOM 里。`rail-customize.js` 另维护 `CUSTOMIZABLE_PANEL_ORDER`（8 个 ID）的平行清单，不进清单的面板按钮被强制隐藏。这与 ADR-0010"不维护平行清单"纪律冲突。
 3. 生命周期硬编码。`toggleFeaturePanel` 按面板 ID 写 if 链，经 `window.GitPanel` 一类全局对象晚绑定调用 onOpen/onClose。
-4. 渲染约定单一。`panel.render()` 返回 HTML 字符串，宿主做签名缓存与 innerHTML 整体替换。`preserveOnReRender` 标志（bg、genui、annotations 在用）只能跳过重渲染，没有挂载与卸载的容器语义。自带渲染运行时的产物（如预编译 React 模块）在这条约定下无法存活，innerHTML 替换会销毁其 DOM 根。
+4. 渲染约定单一。`panel.render()` 返回 HTML 字符串，宿主做签名缓存与 innerHTML 整体替换。`preserveOnReRender` 标志（genui 在用）只能跳过重渲染，没有挂载与卸载的容器语义。自带渲染运行时的产物（如预编译 React 模块）在这条约定下无法存活，innerHTML 替换会销毁其 DOM 根。
 
 综合后果：新增一个面板要改宿主四处（index.html 两处、debug-panel-host 生命周期链、rail-customize 清单）。第三方无法不改宿主源码添加面板。
 

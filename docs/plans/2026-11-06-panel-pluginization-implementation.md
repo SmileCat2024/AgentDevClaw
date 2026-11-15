@@ -1,7 +1,7 @@
 # 右栏面板插件化实施计划
 
 > 创建日期：2026-11-07
-> 状态：**进行中**（P0、P1、P2 已完成；P3 起未开工）
+> 状态：**主体完成（2026-11-15 复核）**。P0–P4 全部落地（容器型渲染 bg 试点、stub+ensurePlugin 按需装载）；P5.1 session-controls / P5.2 git 已迁移；P5.3 annotations 面板经复核从未可达、已删除（模块按消息流功能保留 classic script）；P5.4 genui 不迁裁决依据复核失效、待重开（见下）；P6 第三方样本由 [ADR-0045](../adr/0045-external-plugin-package-and-workspace-assembly.md) 外部插件包机制承接（agentero 三面出仓）。
 > 关联：[ADR-0044 右栏面板插件化与效果归属](../adr/0044-frontend-panel-plugins-and-effect-ownership.md)（决策依据，本计划不重复论证）；上游 [前端插件化规划](2026-11-04-frontend-plugin-architecture.md)（已结项，Phase C 完成了注册面去全局化）
 > 背景与目标：新增一个右栏面板 = 一个插件文件 + plugin-manifest 一行登记，宿主 git diff 为零。总验收口径三段：挂上即用、卸了即净、坏了即显。
 
@@ -94,15 +94,13 @@ ADR-0044 决策 2 落地，实际修复三处（第三处为核实中发现的�
 |---|---|---|---|
 | 5.1 | session-controls | 最简单，纯注册搬家 | 已迁移（P3 验收同批） |
 | 5.2 | git | 生命周期钩子 + badge 全局寻址收编 | 已迁移 |
-| 5.3 | annotations | ~~ADR-0018 通道订阅（SSE）挂到面板级生命周期~~ | **裁决不迁**（见下） |
-| 5.4 | genui | ~~最复杂：跨进程通道 + 交互密集~~ | **裁决不迁**（见下） |
+| 5.3 | annotations | ~~ADR-0018 通道订阅（SSE）挂到面板级生命周期~~ | **面板已删除（2026-11-15 修订，见下）** |
+| 5.4 | genui | ~~最复杂：跨进程通道 + 交互密集~~ | **裁决不迁 → 依据失效待重开（见下）** |
 
-**5.3 / 5.4 不迁裁决（2026-11-07，迁移前调查得出）**：判据是"面板外消费方"——模块 API 在面板关闭时仍被宿主链路消费的面板，懒装载会造成产品语义损失，不属于可迁移的纯面板：
+**5.3 / 5.4 原不迁裁决（2026-11-07）与复核修订（2026-11-15）**。原判据是"面板外消费方"——模块 API 在面板关闭时仍被宿主链路消费的面板，懒装载会造成产品语义损失，不属于可迁移的纯面板。2026-11-15 逐条复核后两案各有修订：
 
-- `annotations`：`window.ClawAnnotations.scheduleReplay` 被 chat-renderer.js 消息渲染主链路调用（3 处，带守卫）。懒装载后模块在面板首开前缺席，会话消息上的标注高亮回放随之消失，违背"标注应一直在"的产品语义。
-- `genui`：`window.GenUIPanel.submitToAgent / resetSurface / forceRefresh` 分别被消息流渲染器与 runtime 切换链路消费。模块缺席时 agent 发来的生成式 UI 在消息流中无交互，徽标也不更新。
-
-两者保留 classic script 静态加载（`preserveOnReRender` 亦保留）。它们的 P2 收益（生命周期经注册表、效果归属经 host.effect）不依赖迁移形态，已在此前阶段兑现。若未来要把它们变纯面板，先把渲染增强面从面板模块剥离（scheduleReplay 前置宿主、genui block 渲染走独立通道），另立工程。
+- `annotations`：原裁决依据的一半成立——`window.ClawAnnotations.scheduleReplay` 确被 chat-renderer.js 消息渲染主链路调用（3 处，带守卫）；但"面板首开前标注高亮消失"的担忧前提是空的：注册的面板从未有过任何入口（注册元数据无 icon，P2b 后 rail 按钮只为带 icon 的面板生成；全仓无 `toggleFeaturePanel('annotations')` 调用，历史无 `rail-annotations` 按钮）。该面板是注册了但不可达的死条目，已整体删除（模块代码 + CSS + 金样本条目）；`annotations.js` 确认为消息流功能模块（选中标注 / 高亮重放），保留 classic script 静态加载。
+- `genui`：原裁决依据失效——`submitToAgent` / `resetSurface` 全仓无调用方（模块头注 `called by renderer` 指面板内部的 `generative-ui-renderer.js` 子组件渲染回调，被误读为消息流渲染器消费；`renderGenUISpec` 唯一消费方是面板自身）；唯一真实的面板外消费点是 `agent-data-loader.js` 的 `forceRefresh()`（切换 runtime 时触发红点，带守卫，懒装载后损失仅为徽标延迟到面板首开）。genui 实为自包含普通面板，迁移只差该处补偿，裁决待重开。
 
 每批次动作：模块化（default export panels 声明）→ manifest 登记 → 删 index.html script 标签 → 删全局对象 → 修剪 `.script-tags-baseline.json` 与 `.frontend-globals-baseline.json` → 更新金样本 REGISTRATION_HOMES 住址 → 该面板行为等价验证（含浏览器冒烟）。
 

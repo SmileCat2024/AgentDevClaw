@@ -18,9 +18,7 @@
  * - 跨接续语义：标注锚位（turn）是会话内编号。trim 系/branch 接续保留原
  *   turn，标注继续有效；summary 系接续重编号，feature 端导入时把旧标注
  *   降级为 dormant（dormant: true + originSession）——重放 / 重叠合并 /
- *   定位一律跳过（防碰撞误高亮），面板以「接续前」徽标呈现，可删除。
- * - 面板数据：window.ClawAnnotations.getPanelHtml 供 rail 面板渲染
- *   （app-ui.js 注册，debug-panel-host.js 管生命周期）。
+ *   定位一律跳过（防碰撞误高亮）。
  *
  * 状态真值源在 feature（runtime 进程内存态 + 会话快照落盘）；本模块只持
  * 请求面拉回的缓存副本，事件到达后按需重拉或本地对账。
@@ -39,7 +37,6 @@
   let boundRuntimeRef = '';    // 当前订阅绑定的 runtime（同会话换代检测）
   let stream = null;           // EventSource（SSE latest=1）
   let listSeq = 0;             // list 请求竞态守卫
-  let panelOpen = false;
 
   function t(zh, en) {
     return (typeof currentLanguage === 'string' ? currentLanguage : 'zh') === 'zh' ? zh : en;
@@ -129,7 +126,6 @@
     if (result.ok && Array.isArray(result.annotations)) {
       annotations = result.annotations;
       scheduleReplay();
-      if (panelOpen) repaintPanel();
     }
   }
 
@@ -156,12 +152,10 @@
         annotations = [...annotations.filter(a => a.id !== payload.data.id), payload.data]
           .sort((a, b) => a.createdAt - b.createdAt);
         scheduleReplay();
-        if (panelOpen) repaintPanel();
-      } else if (payload?.type === 'removed' && payload?.data?.id) {
+        } else if (payload?.type === 'removed' && payload?.data?.id) {
         annotations = annotations.filter(a => a.id !== payload.data.id);
         scheduleReplay();
-        if (panelOpen) repaintPanel();
-      }
+        }
     });
     // resync / snapshot：服务端事件序号不连续时的对账信号，重拉 list。
     for (const type of ['resync', 'snapshot', 'open']) {
@@ -174,7 +168,6 @@
       closeStream();
       annotations = [];
       scheduleReplay();
-      if (panelOpen) repaintPanel();
     });
     // error：EventSource 自带断线续接（Last-Event-ID），不主动处置。
   }
@@ -360,7 +353,6 @@
       annotations = [...annotations.filter(a => a.id !== result.annotation.id && !merged.has(a.id)), result.annotation]
         .sort((a, b) => a.createdAt - b.createdAt);
       scheduleReplay();
-      if (panelOpen) repaintPanel();
     } else {
       toast('error', t('标注失败', 'Annotation failed'), String(result.code || result.error || ''));
     }
@@ -371,7 +363,6 @@
     if (result.ok) {
       annotations = annotations.filter(a => a.id !== id);
       scheduleReplay();
-      if (panelOpen) repaintPanel();
     } else if (result.code !== 'annotation_not_found') {
       toast('error', t('删除失败', 'Remove failed'), String(result.code || result.error || ''));
     }
@@ -631,107 +622,10 @@
     showDeletePopover(mark);
   }, true); // capture：先于消息行自身的点击行为（折叠卡片等）
 
-  // ── 面板 API（rail 面板宿主调用）─────────────────────────────────
-
-  function formatTime(ts) {
-    if (typeof ts !== 'number' || !Number.isFinite(ts)) return '';
-    const d = new Date(ts);
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
-  function getPanelHtml() {
-    ensureSession();
-    if (!addressing) {
-      return `<div class="feature-panel-empty"><div>${escapeHtml(t('当前会话不支持标注', 'Annotations unavailable'))}</div></div>`;
-    }
-    if (!annotations.length) {
-      return `<div class="feature-panel-empty"><div>${escapeHtml(t('暂无标注：选中文本即可标注', 'No annotations yet: select text to annotate'))}</div></div>`;
-    }
-    const items = annotations.map((anno) => {
-      const clip = anno.quote.length > 160 ? `${anno.quote.slice(0, 160)}…` : anno.quote;
-      const badge = anno.dormant
-        ? `<span class="anno-panel-badge">${escapeHtml(t('接续前', 'pre-continuation'))}</span>` : '';
-      return `<div class="anno-panel-item" data-anno-id="${escapeHtml(anno.id)}">`
-        + `<div class="anno-panel-quote">${escapeHtml(clip)}</div>`
-        + `<div class="anno-panel-meta">${badge}${escapeHtml(`T${anno.turn} · ${anno.role} · ${formatTime(anno.createdAt)}`)}</div>`
-        + '</div>';
-    }).join('');
-    return `<div class="anno-panel-list">${items}</div>`;
-  }
-
-  /** 面板重绘：rail 宿主容器以 data-panel 标识当前面板，仅当前面板在位时替换。
-   * 字符串面板内容由宿主包在 .feature-panel-content 内容层（容器无留白契约），
-   * 自刷覆写内容层而不是 body 本身，避免把内容层吹掉导致贴边。 */
-  function repaintPanel() {
-    const host = document.getElementById('feature-panel-body');
-    if (host?.dataset?.panel !== 'annotations') return;
-    const content = host.querySelector('.feature-panel-content');
-    if (content) content.innerHTML = getPanelHtml();
-    else host.innerHTML = getPanelHtml();
-  }
-
-  function scrollToAnnotation(id) {
-    const anno = annotations.find(a => a.id === id);
-    if (!anno) return;
-    if (anno.dormant) {
-      toast('info', t('标注来自接续前的会话', 'Annotation from the predecessor session'),
-        t('摘要接续后消息已重新编号，摘录见列表', 'Messages were renumbered by the summary continuation; see quote in list'));
-      return;
-    }
-    const container = document.getElementById('chat-container');
-    if (!container) return;
-    for (const contentEl of container.querySelectorAll('.message-content[id^="msg-"]')) {
-      const idMatch = /^msg-(\d+)$/.exec(contentEl.id || '');
-      if (!idMatch) continue;
-      const msg = Array.isArray(currentMessages) ? currentMessages[Number(idMatch[1])] : null;
-      if (!msg || msg.turn !== anno.turn || msg.role !== anno.role) continue;
-      const marks = [...contentEl.querySelectorAll('mark.anno-highlight')]
-        .filter(m => m.dataset.annoId === id);
-      const target = marks[0] || contentEl;
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      for (const m of marks) {
-        m.classList.add('anno-flash');
-        setTimeout(() => m.classList.remove('anno-flash'), 1200);
-      }
-      return;
-    }
-    toast('info', t('目标消息不在当前视图', 'Target message not in view'),
-      t('消息可能被精简，摘录见列表', 'Message may have been trimmed; see quote in list'));
-  }
-
-  // 面板列表点击（事件委托，节点由 repaintPanel 动态生成）
-  document.addEventListener('click', (event) => {
-    const item = event.target?.closest?.('.anno-panel-item');
-    if (!item) return;
-    const id = item.dataset.annoId;
-    if (id) scrollToAnnotation(id);
-  });
-
-  // 生命周期（经注册表元数据分发，ADR-0044 P2；与 window.ClawAnnotations 共用引用）
-  function onOpen() { panelOpen = true; ensureSession(); void loadList(); }
-  function onClose() { panelOpen = false; }
-
-  // 面板注册（Claw 宿主注册表）：直接函数引用，不经 window 晚绑定寻址。
-  // 注册与实现同址，rail 只认注册表条目；本模块缺失时面板随之缺席，
-  // 由金样本测试（frontend-rail-panels-golden）钉住注册表全集。
-  window.ClawHost.panels.register('annotations', {
-    when: { agentIds: ['programming-helper'], surfaces: ['chat'] },
-    title: () => currentLanguage === 'zh' ? '标注' : 'Annotations',
-    label: { zh: '标注', en: 'Annotations' },
-    description: { zh: '对话内容高亮标注', en: 'Highlights on conversation text' },
-    render: () => getPanelHtml(),
-    preserveOnReRender: true,
-    // 惰性引用：金样本沙箱只执行注册块，onOpen/onClose 定义在块外
-    onOpen: () => onOpen(),
-    onClose: () => onClose(),
-  });
-
+  // ── 导出（消息流渲染链路的触发源）───────────────────────────────
+  // chat-renderer 在消息渲染后调用 scheduleReplay 驱动高亮重放；本模块
+  // 纯消息流功能（选中标注 / 高亮重放 / 删除），无右栏面板。
   window.ClawAnnotations = {
     scheduleReplay,
-    getPanelHtml,
-    refresh: () => { ensureSession(); void loadList(); },
-    onOpen,
-    onClose,
   };
 })();

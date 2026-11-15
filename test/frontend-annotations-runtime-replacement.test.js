@@ -7,7 +7,11 @@
  * 接续（sessionId 变化）不受影响。修复：同会话出现新 runtime ref 时强制重同步。
  *
  * 驱动路径必须是 scheduleReplay（chat-renderer 渲染后的真实触发源），
- * 不能用 refresh（无条件 loadList，测不出 ensureSession 的去重缺陷）。
+ * 经 ensureSession 的按需去重路径触发同步。
+ *
+ * 观察点：createTreeWalker 调用记录——只有缓存中的标注匹配到消息行、
+ * 真正进入锚点匹配路径时才会构建文本模型；list 请求与 EventSource 计数
+ * 验证同步行为本身。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +20,7 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 function setup() {
   const fetchCalls = [];
   const eventSources = [];
+  const treeWalkerRoots = [];
   const annotation = {
     id: 'anno-1', turn: 1, role: 'assistant',
     quote: '被标注的文本', occurrence: 0, createdAt: 1,
@@ -49,6 +54,14 @@ function setup() {
     };
   };
 
+  // 一行消息：msg-1（标注锚位行）。replayAll 命中它时 createTreeWalker
+  // 被调用——缓存非空且参与重放的可观察信号。
+  const rowAnchored = { id: 'msg-1', querySelectorAll: () => [] };
+  const chatContainer = {
+    querySelectorAll: (sel) => (sel.startsWith('.message-content') ? [rowAnchored] : []),
+    contains: () => false,
+  };
+
   const ctx = createFrontendSandbox({
     fetch: fetchImpl,
     EventSource: FakeEventSource,
@@ -63,14 +76,20 @@ function setup() {
       (ref === 'runtime-old' || ref === 'runtime-new' ? 'sess-A' : ''),
     getActiveWorkspaceSessionId: () => 'sess-A',
     isRemoteNamespaceAgentId: () => false,
+    currentMessages: [null, { turn: 1, role: 'assistant' }],
   });
   ctx.window.fetch = fetchImpl;
   ctx.window.EventSource = FakeEventSource;
   ctx.window.getSelection = () => ({ isCollapsed: true, rangeCount: 0, anchorNode: null });
-  ctx.window.ClawHost = { panels: { register() {} } };
   ctx.window.ClawToast = { show() {} };
+  ctx.document.getElementById = (id) => (id === 'chat-container' ? chatContainer : null);
+  ctx.document.addEventListener = () => {};
+  ctx.document.createTreeWalker = (root) => {
+    treeWalkerRoots.push(root);
+    return { nextNode: () => null };
+  };
   ctx.loadSource('public/src/modules/annotations.js');
-  return { ctx, fetchCalls, eventSources };
+  return { ctx, fetchCalls, eventSources, treeWalkerRoots };
 }
 
 function listRequestCount(fetchCalls) {
@@ -79,25 +98,31 @@ function listRequestCount(fetchCalls) {
     && call.body?.requestType === 'list').length;
 }
 
+// 等待两跳 rAF：手动 scheduleReplay → ensureSession 发起 loadList →
+// resolve 后的重放。Windows 定时器精度 ~15.6ms，5ms 级 sleep 会与第二跳
+// rAF 竞态（treeWalker 观察点晚于同步缓存读），取 20ms 稳定覆盖。
 async function flushAsync() {
   for (let i = 0; i < 6; i++) await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
 test('同会话 runtime 换代后 scheduleReplay 触发重同步并恢复标注', async () => {
-  const { ctx, fetchCalls, eventSources } = setup();
+  const { ctx, fetchCalls, eventSources, treeWalkerRoots } = setup();
 
-  // 初始：runtime-old 在位，渲染触发首次同步，标注可见。
+  // 初始：runtime-old 在位，渲染触发首次同步，标注参与重放（锚点匹配路径命中）。
   ctx.window.ClawAnnotations.scheduleReplay();
   await flushAsync();
   assert.equal(listRequestCount(fetchCalls), 1);
-  assert.match(ctx.window.ClawAnnotations.getPanelHtml(), /被标注的文本/);
+  assert.equal(treeWalkerRoots.length, 1, '标注已拉回缓存并驱动重放');
   assert.match(eventSources[0].url, /sessionId=sess-A/);
   assert.match(eventSources[0].url, /featureId=conversation-annotations/);
 
   // 关闭对话：runtime 停止 → 服务端 closeSession → SSE closed → 前端清空缓存。
   eventSources[0].dispatch('closed');
-  assert.doesNotMatch(ctx.window.ClawAnnotations.getPanelHtml(), /被标注的文本/);
+  await flushAsync();
+  ctx.window.ClawAnnotations.scheduleReplay();
+  await flushAsync();
+  assert.equal(treeWalkerRoots.length, 1, 'closed 后缓存清空，重放不再命中锚点匹配');
   assert.ok(eventSources[0].closed);
 
   // runtime 不在位（ref 空）期间渲染：不得重订阅（死会话不轮询）。
@@ -114,7 +139,7 @@ test('同会话 runtime 换代后 scheduleReplay 触发重同步并恢复标注'
   assert.equal(listRequestCount(fetchCalls), 2, 'runtime 换代后应重新拉取 list');
   assert.equal(eventSources.length, 2, 'runtime 换代后应重新订阅 SSE');
   assert.ok(!eventSources[1].closed);
-  assert.match(ctx.window.ClawAnnotations.getPanelHtml(), /被标注的文本/);
+  assert.equal(treeWalkerRoots.length, 2, '重同步后标注恢复重放');
 
   // 稳态：同 runtime 后续渲染不再重复拉取。
   ctx.window.ClawAnnotations.scheduleReplay();
@@ -124,7 +149,7 @@ test('同会话 runtime 换代后 scheduleReplay 触发重同步并恢复标注'
 });
 
 test('会话切换（接续/分支场景）仍走键变化全量同步', async () => {
-  const { ctx, fetchCalls, eventSources } = setup();
+  const { ctx, fetchCalls, eventSources, treeWalkerRoots } = setup();
 
   ctx.window.ClawAnnotations.scheduleReplay();
   await flushAsync();
@@ -139,5 +164,5 @@ test('会话切换（接续/分支场景）仍走键变化全量同步', async (
   assert.equal(listRequestCount(fetchCalls), 2);
   assert.equal(eventSources.length, 2);
   assert.match(eventSources[1].url, /sessionId=sess-B/);
-  assert.match(ctx.window.ClawAnnotations.getPanelHtml(), /被标注的文本/);
+  assert.equal(treeWalkerRoots.length, 2, '新会话同步后标注参与重放');
 });

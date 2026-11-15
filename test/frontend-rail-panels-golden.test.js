@@ -44,14 +44,6 @@ const REGISTRATION_HOMES = [
     suffix: 'registerResourcesViewerPanels();',
   },
   {
-    id: 'annotations 自注册',
-    file: 'public/src/modules/annotations.js',
-    start: "window.ClawHost.panels.register('annotations'",
-    end: 'window.ClawAnnotations = {',
-    prefix: '',
-    suffix: '',
-  },
-  {
     id: 'genui 自注册',
     file: 'public/src/modules/generative-ui-panel.js',
     start: "window.ClawHost.panels.register('genui'",
@@ -158,7 +150,6 @@ const GOLDEN_SNAPSHOT = [
   { id: 'plan', when: { agentIds: null, surfaces: ['chat'] }, label: { zh: '计划', en: 'Plan' }, description: { zh: '任务与计划列表', en: 'Tasks and plan list' }, preserveOnReRender: false, renderIsFunction: true, mountBodyHas: false, unmountBodyHas: false, iconHas: true, order: 10, onOpenHas: false, onCloseHas: false, titleZh: 't:panel_plan', titleEn: 't:panel_plan' },
   { id: 'git', when: { agentIds: null, surfaces: ['chat'] }, label: { zh: '源代码管理', en: 'Source Control' }, description: { zh: 'Git 状态与操作', en: 'Git status and actions' }, preserveOnReRender: false, renderIsFunction: true, mountBodyHas: false, unmountBodyHas: false, iconHas: true, order: 30, onOpenHas: true, onCloseHas: false, titleZh: '源代码管理', titleEn: 'Source Control' },
   { id: 'bg', when: { agentIds: ['programming-helper'], surfaces: ['chat'] }, label: { zh: '后台任务', en: 'Background' }, description: { zh: 'bash_bg 后台任务实时状态', en: 'Live bash_bg task status' }, preserveOnReRender: false, renderIsFunction: false, mountBodyHas: true, unmountBodyHas: true, iconHas: true, order: 40, onOpenHas: true, onCloseHas: true, titleZh: '后台任务', titleEn: 'Background' },
-  { id: 'annotations', when: { agentIds: ['programming-helper'], surfaces: ['chat'] }, label: { zh: '标注', en: 'Annotations' }, description: { zh: '对话内容高亮标注', en: 'Highlights on conversation text' }, preserveOnReRender: true, renderIsFunction: true, mountBodyHas: false, unmountBodyHas: false, iconHas: false, order: null, onOpenHas: true, onCloseHas: true, titleZh: '标注', titleEn: 'Annotations' },
   { id: 'monitor', when: { agentIds: null, surfaces: ['chat'] }, label: { zh: '监控', en: 'Monitor' }, description: { zh: '运行状态监控', en: 'Runtime status monitor' }, preserveOnReRender: false, renderIsFunction: true, mountBodyHas: false, unmountBodyHas: false, iconHas: true, order: null, onOpenHas: false, onCloseHas: false, titleZh: 't:panel_monitor', titleEn: 't:panel_monitor' },
   { id: 'hooks', when: { agentIds: null, surfaces: ['chat'] }, label: { zh: '功能', en: 'Features' }, description: { zh: 'Feature 功能面板', en: 'Feature panel' }, preserveOnReRender: false, renderIsFunction: true, mountBodyHas: false, unmountBodyHas: false, iconHas: true, order: 60, onOpenHas: false, onCloseHas: false, titleZh: 't:panel_features', titleEn: 't:panel_features' },
   { id: 'inspector', when: { agentIds: null, surfaces: ['chat'] }, label: { zh: '反向钩子', en: 'Reverse Hooks' }, description: { zh: 'Hook 检查器', en: 'Hook inspector' }, preserveOnReRender: false, renderIsFunction: true, mountBodyHas: false, unmountBodyHas: false, iconHas: true, order: 70, onOpenHas: false, onCloseHas: false, titleZh: 't:panel_reverse_hooks', titleEn: 't:panel_reverse_hooks' },
