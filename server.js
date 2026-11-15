@@ -744,6 +744,16 @@ setupWorkspaceSettingsRoutes(app, express, {
   // coder_shell 预检共用本端点；计数闭包在装配层组合（workspace-settings
   // 不依赖线程控制面）。
   countLiveThreadsByAgent: () => countNonTerminalThreadsByAgent(threadControl),
+  // 侧栏会话区写入预检（ADR-0050）：作者默认值从名册发现结果读取
+  // （discoverAgents 已归一：'visible' | 'hidden' | null），未声明能力的
+  // APP 由 workspace-settings 侧拒绝写入。名册走短 TTL 缓存，预检非热路径。
+  readAgentSidebarSessionsDefault: async (agentId) => {
+    const agents = await discoverAgents(AGENTS_ROOT);
+    const agent = agents.find((item) => sanitizeSessionFragment(item.id) === sanitizeSessionFragment(String(agentId || '').trim()));
+    return agent?.sidebarSessions === 'visible' || agent?.sidebarSessions === 'hidden'
+      ? agent.sidebarSessions
+      : null;
+  },
 });
 setupToolStateRoutes(app);
 setupFeatureCatalogRoutes(app);

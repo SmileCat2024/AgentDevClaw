@@ -100,6 +100,19 @@ const DISCOVER_AGENTS_TTL_MS = 5000;
 const _discoverAgentsCache = new Map();
 const _discoverAgentsInFlight = new Map();
 
+/**
+ * 侧栏会话区呈现声明归一（ADR-0050）：'visible' | 'hidden'。
+ * 未声明或非法值返回 null——该字段是增益 UX（作者可选声明），
+ * 非法声明不得阻塞整个 agent 的发现，丢弃并警告（对齐 normalizeSessionMenu）。
+ * 消费方（workspace-settings 写入预检 / agent-connected 投影）以 null 判「未声明能力」。
+ */
+export function normalizeSidebarSessions(declared, agentId) {
+  if (declared === undefined || declared === null) return null;
+  if (declared === 'visible' || declared === 'hidden') return declared;
+  console.warn(`[agent-discovery] ${agentId}: invalid sidebarSessions declaration (${JSON.stringify(declared)}), ignoring`);
+  return null;
+}
+
 /** 测试钩子：清空名册缓存（修改名册夹具后需要立即重扫时使用）。 */
 export function resetDiscoverAgentsCache() {
   _discoverAgentsCache.clear();
@@ -153,10 +166,14 @@ async function scanAgentsTree(rootDir, currentDir) {
       const uiOverride = metadata.ui && typeof metadata.ui === 'object' && metadata.ui.sessionMenu !== undefined
         ? { ui: { ...metadata.ui, sessionMenu } }
         : null;
+      // 侧栏会话区呈现声明（ADR-0050）：同域归一，未声明/非法 → null（键仍在，
+      // 值为 null），坏声明不阻塞发现也不得原样下发。
+      const sidebarSessions = normalizeSidebarSessions(metadata.sidebarSessions, metadata.id ?? path.basename(agentDir));
       results.push({
         ...metadata,
         ...normalizeWorkspaceAgents(metadata),
         permissions,
+        sidebarSessions,
         // 作者默认值（ADR-0030）：键必须 ∈ permissions 声明集且值合法，
         // 否则启动扫描报错（与 permissions 声明同等级校验）。
         permissionDefaults: normalizePermissionDefaults(metadata.permissionDefaults, permissions),

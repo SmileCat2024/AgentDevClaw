@@ -15,7 +15,7 @@ import {
   sliceSessionsForWire,
   buildChildRuntimeAgent,
 } from './session-helpers-pure.js';
-import { readWorkspaceVisibilityOverrides } from './workspace-settings.js';
+import { readWorkspaceVisibilityOverrides, readSidebarSessionsVisibilityOverrides } from './workspace-settings.js';
 import { getThreadControl } from '../thread-control/thread-controller.js';
 import { readThreadMembership } from '../shared/thread-membership.js';
 import { readSidebarSnapshot } from './sidebar-snapshot.js';
@@ -118,6 +118,8 @@ export function createConnectedAgentsQuery(deps) {
     getRuntimeNotification = null,
     // 测试缝：用户覆盖读取器（默认读用户数据根 workspace-settings.json）
     readVisibilityOverrides = readWorkspaceVisibilityOverrides,
+    // 测试缝：侧栏会话区覆盖读取器（ADR-0050）
+    readSidebarSessionsOverrides = readSidebarSessionsVisibilityOverrides,
     // 测试缝：线程控制面（默认单例）
     resolveThreadControl = getThreadControl,
   } = deps;
@@ -190,6 +192,21 @@ export function createConnectedAgentsQuery(deps) {
         // （如 'tool' / 'work-group'），前端 groupConnectedAgents 优先消费；
         // 缺省时回退宿主跟随与既有归类。
         sidebarGroup: agent.sidebarGroup || null,
+        // 侧栏会话区呈现策略（ADR-0050，服务端合流前端纯消费）：作者在
+        // metadata 声明 sidebarSessions（visible | hidden），用户覆盖存
+        // workspace-settings 的 sidebarSessions 节。sidebarSessionsPolicy 是
+        // 生效值（覆盖 ?? 作者默认），sidebarSessionsUserOverride 供菜单三态
+        // 呈现（null = 未覆盖，随作者声明）。未声明能力的 APP 不投影两字段
+        // ——前端据此不挂右键/⋯ 菜单项（与 sidebarVisible 同构的纯消费契约）。
+        ...((agent.sidebarSessions === 'visible' || agent.sidebarSessions === 'hidden') ? await (async () => {
+          const overrides = await readSidebarSessionsOverrides();
+          const raw = overrides[agent.id];
+          const userOverride = raw === 'visible' || raw === 'hidden' ? raw : null;
+          return {
+            sidebarSessionsPolicy: userOverride || agent.sidebarSessions,
+            sidebarSessionsUserOverride: userOverride,
+          };
+        })() : {}),
         // on-demand 存在性（服务端合流，前端纯消费）：作者声明默认 +
         // 用户覆盖（workspace-settings）合流出 visibilityPolicy；auto =
         // 有存活且绑定 Session 的 Runtime，或 rotating 接续挡板在途时显示。sidebarVisible 是最终判定结果。

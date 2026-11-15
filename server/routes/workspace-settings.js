@@ -1,9 +1,10 @@
 /**
  * Workspace Settings — 用户工作空间集的呈现策略与资源策略
  *
- *   GET  /protoclaw/workspace_settings                    — 读覆盖表（两节）
+ *   GET  /protoclaw/workspace_settings                    — 读覆盖表（含 sidebarSessions 节）
  *   PUT  /protoclaw/workspace_settings                    — 写呈现策略覆盖（{ agentId, policy }）
  *   PUT  /protoclaw/workspace_settings/resource_policy    — 写权限项用户值（{ agentId, permissionId, value }）
+ *   PUT  /protoclaw/workspace_settings/sidebar_sessions   — 写侧栏会话区覆盖（ADR-0050，{ agentId, policy }）
  *   GET/PUT /protoclaw/workspace_settings/sidebar_layout — 应用位置、文件夹排序与折叠状态（sidebarLayout 节）
  *
  * 概念层级：工作空间是用户资产（用户可安装任意工作空间集，甚至不装智能
@@ -14,6 +15,9 @@
  *   'always'），缺省即作者默认。
  * - resourcePolicy：per-workspace 资源策略（ADR-0027）。首个字段
  *   maxLiveThreads 限非终态线程数（修订一）；缺省即不限。
+ * - sidebarSessions：侧栏会话区用户覆盖层（ADR-0050）。作者默认由
+ *   metadata.sidebarSessions 声明（visible | hidden），本节只存用户覆盖
+ *   （agentId → 'visible' | 'hidden'）；传入值等于作者默认时删条目回默认。
  *
  * 写入约束：两个节同文件共存，任一写路径必须整文件读改写（保留兄弟节），
  * 不得整体重写为自己单节的投影。存储于用户数据根目录 workspace-settings.json，
@@ -27,11 +31,15 @@ import { PERMISSION_ITEMS, projectPermissionValues } from '../shared/permission-
 
 const DEFAULT_WORKSPACE_SETTINGS_PATH = path.join(USER_DATA_ROOT, 'workspace-settings.json');
 const VALID_POLICIES = new Set(['auto', 'always']);
+// 侧栏会话区呈现策略值域（ADR-0050）：声明/覆盖/生效三处同域，
+// 「回作者默认」由删覆盖条目表达（对应 workspaceVisibility 的 auto）。
+const VALID_SIDEBAR_SESSIONS = new Set(['visible', 'hidden']);
 
 // 单进程内存缓存（按路径隔离，测试注入路径互不串扰）：读路径与合流读取
 // （agent-connected）共用同一模块实例，无跨进程失效问题。
 const _overrideCaches = new Map();
 const _resourcePolicyCaches = new Map();
+const _sidebarSessionsCaches = new Map();
 
 /** 读整份设置文件（无缓存；写入路径经它拿兄弟节最新值）。损坏/缺省返回 {}。 */
 async function readWorkspaceSettingsFile(settingsPath) {
@@ -191,6 +199,68 @@ export async function writeWorkspaceResourcePolicy(agentId, maxLiveThreads, opti
   return { ...result, maxLiveThreads: maxLiveThreads };
 }
 
+/** sidebarSessions 节 → 合法覆盖投影（{ <agentId>: 'visible' | 'hidden' }）。 */
+function projectSidebarSessions(node) {
+  const overrides = {};
+  if (!node || typeof node !== 'object') return overrides;
+  for (const [agentId, policy] of Object.entries(node)) {
+    if (typeof agentId === 'string' && agentId.trim() && VALID_SIDEBAR_SESSIONS.has(policy)) {
+      overrides[agentId.trim()] = policy;
+    }
+  }
+  return overrides;
+}
+
+/**
+ * 读侧栏会话区覆盖表（ADR-0050）。损坏/缺省返回空表。
+ */
+export async function readSidebarSessionsVisibilityOverrides({ settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH } = {}) {
+  if (_sidebarSessionsCaches.has(settingsPath)) return _sidebarSessionsCaches.get(settingsPath);
+  const data = await readWorkspaceSettingsFile(settingsPath);
+  const overrides = projectSidebarSessions(data.sidebarSessions);
+  _sidebarSessionsCaches.set(settingsPath, overrides);
+  return overrides;
+}
+
+/**
+ * 写单条侧栏会话区覆盖（ADR-0050）。整文件读改写，保留兄弟节。
+ * 传入值等于作者默认时删除覆盖条目（回到「无覆盖=随作者声明」的常态，
+ * 作者后续改声明会自然生效；与 workspaceVisibility 的 auto 删条目同构）。
+ * readAuthorDefault 由路由装配注入（生产读 agent-discovery 的 metadata 声明），
+ * 返回 'visible' | 'hidden' | null（null = 该 APP 未声明此能力，拒绝写入）。
+ * @returns {Promise<{ ok: true, agentId: string, policy: 'visible'|'hidden', sidebarSessionsVisibility: Record<string, string> }>}
+ */
+export async function writeSidebarSessionsVisibilityOverride(agentId, policy, { settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH, readAuthorDefault } = {}) {
+  const normalizedAgentId = String(agentId || '').trim();
+  if (!normalizedAgentId) {
+    throw Object.assign(new Error('agentId is required'), { status: 400 });
+  }
+  if (!VALID_SIDEBAR_SESSIONS.has(policy)) {
+    throw Object.assign(new Error(`policy must be one of: ${[...VALID_SIDEBAR_SESSIONS].join(', ')}`), { status: 400 });
+  }
+  if (typeof readAuthorDefault !== 'function') {
+    throw Object.assign(new Error('readAuthorDefault is required'), { status: 400 });
+  }
+  const authorDefault = await readAuthorDefault(normalizedAgentId);
+  if (!VALID_SIDEBAR_SESSIONS.has(authorDefault)) {
+    throw Object.assign(
+      new Error(`workspace does not declare sidebarSessions capability: ${normalizedAgentId}`),
+      { status: 400 },
+    );
+  }
+  const overrides = await withSettingsWriteLock(settingsPath, async () => {
+    const current = await readWorkspaceSettingsFile(settingsPath);
+    const next = projectSidebarSessions(current.sidebarSessions);
+    if (policy === authorDefault) delete next[normalizedAgentId];
+    else next[normalizedAgentId] = policy;
+    await writeWorkspaceSettingsFile(settingsPath, { ...current, version: 1, sidebarSessions: next });
+    _sidebarSessionsCaches.set(settingsPath, next);
+    return next;
+  });
+  return { ok: true, agentId: normalizedAgentId, policy, sidebarSessionsVisibility: { ...overrides } };
+}
+
+
 const SIDEBAR_FOLDER_IDS = ['prebuilt-group', 'tool-group'];
 const RETIRED_SIDEBAR_FOLDER = 'work-group-group';
 
@@ -249,7 +319,11 @@ export async function writeSidebarLayout(layout, { settingsPath = DEFAULT_WORKSP
   return { ok: true, sidebarLayout: next };
 }
 
-export function setupWorkspaceSettingsRoutes(app, express, { countLiveThreadsByAgent, settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH } = {}) {
+export function setupWorkspaceSettingsRoutes(app, express, {
+  countLiveThreadsByAgent,
+  readAgentSidebarSessionsDefault,
+  settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH,
+} = {}) {
   app.get('/protoclaw/workspace_settings/sidebar_layout', async (_req, res, next) => {
     try { res.json({ ok: true, sidebarLayout: await readSidebarLayout({ settingsPath }) }); }
     catch (error) { next(error); }
@@ -265,6 +339,8 @@ export function setupWorkspaceSettingsRoutes(app, express, { countLiveThreadsByA
     res.json({
       workspaceVisibility: await readWorkspaceVisibilityOverrides(),
       resourcePolicy: await readWorkspaceResourcePolicies(),
+      // 侧栏会话区用户覆盖层（ADR-0050）：菜单三态与设置消费同一投影。
+      sidebarSessionsVisibility: await readSidebarSessionsVisibilityOverrides(),
       // 非终态线程现状投影（ADR-0027 修订一）：设置面板展示「当前 N」与
       // coder_shell 预检共用本端点，配额策略与现状一次读齐。计数闭包由
       // 装配层注入（thread-quota 的 countNonTerminalThreadsByAgent）；
@@ -278,6 +354,18 @@ export function setupWorkspaceSettingsRoutes(app, express, { countLiveThreadsByA
   app.put('/protoclaw/workspace_settings', express.json(), async (req, res, next) => {
     try {
       const result = await writeWorkspaceVisibilityOverride(req.body?.agentId, req.body?.policy);
+      res.json(result);
+    } catch (error) {
+      if (error?.status) return res.status(error.status).json({ error: error.message });
+      next(error);
+    }
+  });
+
+  app.put('/protoclaw/workspace_settings/sidebar_sessions', express.json(), async (req, res, next) => {
+    try {
+      const result = await writeSidebarSessionsVisibilityOverride(req.body?.agentId, req.body?.policy, {
+        readAuthorDefault: readAgentSidebarSessionsDefault,
+      });
       res.json(result);
     } catch (error) {
       if (error?.status) return res.status(error.status).json({ error: error.message });

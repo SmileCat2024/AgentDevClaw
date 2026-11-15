@@ -8,8 +8,10 @@ import { after, describe, it } from 'node:test';
 
 import {
   readWorkspaceVisibilityOverrides,
+  readSidebarSessionsVisibilityOverrides,
   writeWorkspaceVisibilityOverride,
   writeWorkspacePermissionValue,
+  writeSidebarSessionsVisibilityOverride,
 } from '../server/routes/workspace-settings.js';
 import { createConnectedAgentsQuery } from '../server/routes/agent-connected.js';
 import { managedAgents } from '../server/shared/agent-access.js';
@@ -53,6 +55,56 @@ describe('workspace-settings: 用户覆盖层存储', () => {
   it('非法入参被拒绝（400 语义）', async () => {
     await assert.rejects(() => writeWorkspaceVisibilityOverride('', 'always', { settingsPath }), /agentId/);
     await assert.rejects(() => writeWorkspaceVisibilityOverride('coder', 'sometimes', { settingsPath }), /policy/);
+  });
+});
+
+// ── sidebarSessions 节（ADR-0050）：用户覆盖层读写 ────────────────
+// 独立 tmp 目录：模块级缓存按 settingsPath 键控，与上方 visibility 用例
+// 的路径隔离，避免跨用例读到彼此的缓存投影。
+
+describe('workspace-settings: sidebarSessions 用户覆盖层（ADR-0050）', () => {
+  const authorVisible = async () => 'visible';
+  const noCapability = async () => null;
+
+  it('缺省为空表（ENOENT 不抛错）；写入 hidden 后可读回；回作者默认即删除覆盖条目', async () => {
+    const tmpRoot2 = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-ws-sessions-'));
+    const settingsPath2 = path.join(tmpRoot2, 'workspace-settings.json');
+    try {
+      assert.deepEqual(await readSidebarSessionsVisibilityOverrides({ settingsPath: settingsPath2 }), {});
+
+      await writeSidebarSessionsVisibilityOverride('memo', 'hidden', { settingsPath: settingsPath2, readAuthorDefault: authorVisible });
+      assert.deepEqual(await readSidebarSessionsVisibilityOverrides({ settingsPath: settingsPath2 }), { memo: 'hidden' });
+
+      // 传入值等于作者默认（visible）→ 删除条目，回到「无覆盖=随作者声明」
+      await writeSidebarSessionsVisibilityOverride('memo', 'visible', { settingsPath: settingsPath2, readAuthorDefault: authorVisible });
+      assert.deepEqual(await readSidebarSessionsVisibilityOverrides({ settingsPath: settingsPath2 }), {});
+    } finally {
+      await fs.rm(tmpRoot2, { recursive: true, force: true });
+    }
+  });
+
+  it('写入保留兄弟节（workspaceVisibility 不被整文件重写抹掉）', async () => {
+    const tmpRoot2 = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-ws-sessions-'));
+    const settingsPath2 = path.join(tmpRoot2, 'workspace-settings.json');
+    try {
+      await writeWorkspaceVisibilityOverride('coder', 'always', { settingsPath: settingsPath2 });
+      await writeSidebarSessionsVisibilityOverride('memo', 'hidden', { settingsPath: settingsPath2, readAuthorDefault: authorVisible });
+      assert.deepEqual(await readWorkspaceVisibilityOverrides({ settingsPath: settingsPath2 }), { coder: 'always' });
+      assert.deepEqual(await readSidebarSessionsVisibilityOverrides({ settingsPath: settingsPath2 }), { memo: 'hidden' });
+    } finally {
+      await fs.rm(tmpRoot2, { recursive: true, force: true });
+    }
+  });
+
+  it('非法入参与未声明能力被拒绝（400 语义）', async () => {
+    const opts = { settingsPath: path.join(os.tmpdir(), 'claw-ws-reject-only.json'), readAuthorDefault: authorVisible };
+    await assert.rejects(() => writeSidebarSessionsVisibilityOverride('', 'hidden', opts), /agentId/);
+    await assert.rejects(() => writeSidebarSessionsVisibilityOverride('memo', 'sometimes', opts), /policy/);
+    await assert.rejects(() => writeSidebarSessionsVisibilityOverride('memo', 'hidden', { settingsPath: opts.settingsPath }), /readAuthorDefault/);
+    await assert.rejects(
+      () => writeSidebarSessionsVisibilityOverride('memo', 'hidden', { settingsPath: opts.settingsPath, readAuthorDefault: noCapability }),
+      /sidebarSessions capability/,
+    );
   });
 });
 

@@ -83,3 +83,25 @@ describe('discoverAgents: permission declaration projection', () => {
     await assert.rejects(() => mod.discoverAgents(root), /未知权限项/);
   });
 });
+
+// ── sidebarSessions 声明归一（ADR-0050）：增益 UX，非法不阻塞发现 ──
+
+describe('discoverAgents: sidebarSessions declaration normalization', () => {
+  it('projects declared visible / hidden and leaves undeclared as null', async () => {
+    const root = await writeAgent('sessions-ok', 'sessions-ok-agent', { id: 'sessions-ok-agent', sidebarSessions: 'visible' });
+    const hiddenRoot = await writeAgent('sessions-hidden', 'sessions-hidden-agent', { id: 'sessions-hidden-agent', sidebarSessions: 'hidden' });
+    const bareRoot = await writeAgent('sessions-bare', 'sessions-bare-agent', { id: 'sessions-bare-agent' });
+    assert.equal((await mod.discoverAgents(root)).find((a) => a.id === 'sessions-ok-agent').sidebarSessions, 'visible');
+    assert.equal((await mod.discoverAgents(hiddenRoot)).find((a) => a.id === 'sessions-hidden-agent').sidebarSessions, 'hidden');
+    assert.equal((await mod.discoverAgents(bareRoot)).find((a) => a.id === 'sessions-bare-agent').sidebarSessions, null,
+      'undeclared → null (consumers treat null as "capability absent")');
+  });
+
+  it('drops invalid declarations to null without blocking discovery', async () => {
+    const root = await writeAgent('sessions-bad', 'sessions-bad-agent', { id: 'sessions-bad-agent', sidebarSessions: 'sometimes' });
+    const agents = await mod.discoverAgents(root);
+    const agent = agents.find((a) => a.id === 'sessions-bad-agent');
+    assert.ok(agent, 'invalid declaration must not block the whole agent discovery');
+    assert.equal(agent.sidebarSessions, null, 'invalid value is dropped to null, never passed through as-is');
+  });
+});
