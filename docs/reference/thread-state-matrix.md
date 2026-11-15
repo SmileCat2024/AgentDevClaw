@@ -29,7 +29,8 @@
 | E5 append | `core.appendCommand` | 新指令入箱（幂等键去重） |
 | E6 archive / unarchive | Claw `thread-lifecycle.js` | 归档 seal 事务 / 恢复 |
 | E7 close | `core.closeThread` | 无守卫终态化（Claw 归档不走此路，走 hold 语义） |
-| E8 restart | Claw `convergeInterruptedSuccessions` | server 重启扫描收敛 |
+| E8 restart | Claw `convergeInterruptedSuccessions` | server 重启扫描收敛（状态判定） |
+| E8b sweep | Claw `convergePhantomRotating` | 运行期幽灵挡板扫描（rotation-registry 事实判定，15s 周期）：rotating + 本进程无编排在办 → 立即收敛（reason=phantom_rotation_sweep） |
 
 ## 3. 核心矩阵
 
@@ -117,6 +118,18 @@
 | **M8-RF-F** | **rotation_failed, 挡板仍在（已失败已落账）** | **同样收敛**：再落一条 handoff_failed（reason=restart_convergence）+ 清挡板 + status 保持 RF。重启使 fresh 挡板失效——投递恢复 | G5 |
 | M8-∅ | 无挡板（含纯 open / RF-∅） | 不动 | succession「untouched」（仅 RF-∅ 外加 open 隐含） |
 | M8-C-* | closed | 跳过 | 实现锚 334 行 |
+
+### 3.7b E8b sweep（`convergePhantomRotating`：rotation-registry 事实判定——**rotating + 无在办登记即幽灵**）
+
+启动收敛被整体跳过（listThreads 瞬时失败等）或单线程收敛失败时，崩溃残留的 rotating 记录没有任何后续收敛触发点（投递被 handoff_in_progress 挡、唤醒按 rotating 跳过、前端不设本地时间窗）。运行期兜底的判定权威是进程内在办登记（`rotation-registry.js`：begin 由 beginSessionSuccession 咽喉落，end 由 commitSuccession / failSuccession 的 finally 收）：
+
+| 格 | 前置 | 预期 | 覆盖 |
+|---|---|---|---|
+| M8B-ACTIVE | rotating, 登记在册（真实接续，含远超 TTL 的慢接续） | **不动**——事实判定无 TTL 误杀窗口 | succession「registry-active never swept」 |
+| M8B-PHANTOM | rotating, 无在办登记（挡板即使 fresh） | 立即收敛（reason=phantom_rotation_sweep，无 5 分钟等待）：RF 落账 + 清挡板 + pending 保留 → 投递门禁解除 | succession「converged immediately」 |
+| M8B-∅ | 非 rotating 摘要 | 预筛跳过，零记录级开销 | succession「summary pre-filter」 |
+| M8B-PAIR | begin ↔ commit/fail 咽喉配对 | 挡板立起→登记；终局 finally→注销（记录级收敛写盘失败也先释放登记） | succession「choke points pair」；rotation-registry 单元 |
+| M8B-RF | rotation_failed + 挡板残留（fail 落账后、abort 前崩溃） | **不在 sweep 范围**（属 E8 启动收敛；避免与并发重试 begin 竞态误清） | E8 M8-RF-F |
 
 ### 3.8 调度视角（HTTP `/protoclaw/threads/:id/commands` + input；coder dispatch / `claw threads` / ACP 消费面）
 

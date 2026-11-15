@@ -2014,17 +2014,30 @@ async function main() {
 
   // T002 接力恢复：按落盘状态收敛上次进程崩溃时被打断的交接
   // （pendingSuccession 非空 = prepare 完成、commit 未完成）。状态判定，
-  // 不依赖时间（TTL）；无残留时 no-op。
-  try {
-    const convergence = await threadRecovery.convergeInterruptedSuccessions();
+  // 不依赖时间（TTL）；无残留时 no-op。启动收敛是崩溃残留的第一收敛点，
+  // 瞬时 IO 失败（Windows 文件占用等）立即重试一次；仍失败不阻断启动——
+  // 残留交下方运行期幽灵扫描兜底，收敛不依赖用户交互触发。
+  const runStartupConvergence = async () => {
+    try {
+      return await threadRecovery.convergeInterruptedSuccessions();
+    } catch (err) {
+      console.warn('[thread-recovery] startup convergence failed, retrying once:', err.message);
+      try {
+        return await threadRecovery.convergeInterruptedSuccessions();
+      } catch (retryErr) {
+        console.warn('[thread-recovery] startup convergence retry failed:', retryErr.message);
+        return null;
+      }
+    }
+  };
+  const convergence = await runStartupConvergence();
+  if (convergence) {
     if (convergence.converged.length > 0) {
       console.log(`[thread-recovery] converged ${convergence.converged.length} interrupted succession(s):`, convergence.converged);
     }
     if (convergence.skipped.length > 0) {
       console.warn(`[thread-recovery] ${convergence.skipped.length} thread(s) left unconverged:`, convergence.skipped);
     }
-  } catch (err) {
-    console.warn('[thread-recovery] startup convergence failed:', err.message);
   }
 
   // C2 未完成事实恢复：pending 指令 → 拉起补投；看板 running 残留（干到
@@ -2041,6 +2054,19 @@ async function main() {
   } catch (err) {
     console.warn('[thread-recovery] startup resume scan failed:', err.message);
   }
+
+  // 运行期幽灵挡板兜底：status='rotating' 但本进程无编排在办
+  // （rotation-registry 事实判定，非 TTL——慢接续不误杀）。覆盖启动收敛
+  // 被跳过 / 单线程收敛失败的残留路径，把「等待接续」锁定气泡的自愈上限
+  // 压到扫描间隔 + 前端轮询周期。摘要预筛后健康线程零记录级开销。
+  // unref：janitor 不阻止进程退出。
+  setInterval(() => {
+    threadRecovery.convergePhantomRotating().then((report) => {
+      if (report.converged.length > 0) {
+        console.warn(`[thread-recovery] converged ${report.converged.length} phantom rotation barrier(s):`, report.converged);
+      }
+    }).catch((err) => console.warn('[thread-recovery] phantom sweep failed:', err.message));
+  }, 15_000).unref();
 
   // Apply global proxy before listening (affects all fetch + child processes)
   applyProxy();

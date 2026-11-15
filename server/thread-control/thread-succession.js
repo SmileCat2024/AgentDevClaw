@@ -25,6 +25,9 @@
  * rotation_failed 并收敛挡板；旧 head 无法承接（会话缺失 / 身份未知）时
  * pending 指令标记 failed（归属留在记录里），不投向未知目标、不留永久
  * 挡板。框架 stale 惰性清除保留为未知残留的最后兜底，不再是主收敛路径。
+ * 运行期补充（convergePhantomRotating）：启动收敛被跳过或单线程收敛失败的
+ * rotating 残留，由 rotation-registry 事实判定（记录 rotating + 本进程无
+ * 编排在办 = 幽灵投影）周期收敛，无 TTL 等待窗口也不误杀慢接续。
  *
  * 失败阶段（stage）词汇（稳定 code，审计与前端消费）：
  *   - compact_or_successor        生成阶段：handoff 导出 / handoff 损坏 /
@@ -38,6 +41,7 @@
  */
 
 import { readSessionIndex } from '../shared/session-access.js';
+import { getRotationRegistry } from './rotation-registry.js';
 
 const LIFECYCLE_EVENT_CAP = 200;
 
@@ -100,6 +104,7 @@ export function createThreadSuccessionService({
   threadControl,
   threadIntegration,
   stopManagedAgent = null,
+  rotationRegistry = null,
 } = {}) {
   if (!threadControl?.core || !threadIntegration
     || typeof threadIntegration.applySessionSuccession !== 'function'
@@ -107,6 +112,9 @@ export function createThreadSuccessionService({
     throw new Error('createThreadSuccessionService requires threadControl and threadIntegration');
   }
   const core = threadControl.core;
+  // 在办登记（rotation-registry）：begin 由 integration 咽喉落，end 由本
+  // 服务 commit / fail 终局的 finally 收（配对契约见 rotation-registry.js）。
+  const registry = rotationRegistry || getRotationRegistry();
 
   /**
    * 定位提交目标线程（T004 归档预检用）：from 是 head 时命中快路径；
@@ -132,14 +140,26 @@ export function createThreadSuccessionService({
    *
    * @returns {{applied: boolean, reason?: string, stage?: string, thread?: object, delivery?: object, error?: string}}
    */
-  async function commitSuccession({
+  async function commitSuccession(options) {
+    // 终局 finally 注销在办登记（rotation-registry 配对契约）。finally 而非
+    // 成功路径——记录级收敛写盘失败时登记也先释放，残留挡板交运行期幽灵
+    // 扫描收敛，而不是与登记一起泄漏到 age 阀。
+    const terminal = { threadId: null };
+    try {
+      return await runCommitSuccession(options, terminal);
+    } finally {
+      if (terminal.threadId) registry.end(terminal.threadId);
+    }
+  }
+
+  async function runCommitSuccession({
     agentId,
     fromSessionId,
     toSessionId,
     reason = 'manual',
     successorReady,
     seedContinuation = true,
-  }) {
+  }, terminal) {
     const normalizedAgentId = String(agentId || '').trim();
     const from = String(fromSessionId || '').trim();
     const to = String(toSessionId || '').trim();
@@ -153,6 +173,7 @@ export function createThreadSuccessionService({
     // 两种时序都收敛：commit 在前则归档 seal 取消剩余 pending；归档在前
     // 则此处预检拒绝，successor 不会消费旧 Inbox。
     const threadForCommit = await findThreadForSuccession(normalizedAgentId, from);
+    terminal.threadId = threadForCommit?.threadId || null;
 
     // T004 冲突响应（与归档并发）：归档标记先落时，succession 提交被拒绝——
     // head 不推进、旧 Inbox 不投递（seal 事务已取消全部 pending + hold
@@ -252,7 +273,20 @@ export function createThreadSuccessionService({
    *
    * @returns {Promise<{applied: boolean, thread?: object, threadId?: string, reason?: string, error?: string}>}
    */
-  async function failSuccession({
+  /**
+   * 失败收敛（编排方公共形态）：终局 finally 注销在办登记，语义同
+   * commitSuccession 的包装层。
+   */
+  async function failSuccession(options) {
+    const terminal = { threadId: null };
+    try {
+      return await runFailSuccession(options, terminal);
+    } finally {
+      if (terminal.threadId) registry.end(terminal.threadId);
+    }
+  }
+
+  async function runFailSuccession({
     agentId,
     fromSessionId,
     reason = 'handoff_failed',
@@ -260,10 +294,11 @@ export function createThreadSuccessionService({
     error = null,
     successorSessionId = null,
     retireSuccessorRuntime = false,
-  }) {
+  }, terminal) {
     const normalizedAgentId = String(agentId || '').trim();
     const from = String(fromSessionId || '').trim();
     if (!normalizedAgentId || !from) return { applied: false, reason: 'invalid_session' };
+    terminal.threadId = (await findThreadForSuccession(normalizedAgentId, from))?.threadId || null;
 
     // 失败 successor 的执行产物清理：runtime 退役（可能未启动，no-op 安全）；
     // session 文件保留供审计，不删除、不标记、不静默改身份。
@@ -285,26 +320,37 @@ export function createThreadSuccessionService({
 }
 
 /**
- * 重启恢复服务：按落盘状态收敛被进程崩溃打断的接力（T002 实施要求 5）。
+ * 重启恢复服务：按落盘状态收敛被进程崩溃打断的接力（T002 实施要求 5），
+ * 并提供运行期幽灵挡板扫描（rotation-registry 事实判定）。
  *
- * 判定是状态判定，不是时间判定：pendingSuccession 非空 = prepare 完成、
- * commit 未完成（挡板与 head 推进同盘原子，head 已推进则挡板必为 null）。
- * 无论交接意图 startedAt 是否「新鲜」（刚崩溃时必然新鲜，靠 TTL 要多等
- * 5 分钟），重启后立即显式收敛：
+ * 启动收敛（convergeInterruptedSuccessions）判定是状态判定，不是时间判定：
+ * pendingSuccession 非空 = prepare 完成、commit 未完成（挡板与 head 推进
+ * 同盘原子，head 已推进则挡板必为 null）。无论交接意图 startedAt 是否
+ * 「新鲜」（刚崩溃时必然新鲜，靠 TTL 要多等 5 分钟），重启后立即显式收敛：
  *   - 旧 head 可承接（身份解析成功）→ rotation_failed(stage 透传崩溃点) +
  *     挡板收敛；pending 指令保留，旧 head runtime 就绪时经既有
  *     runtime-ready 触发点补投（状态驱动，不重复投递）；
  *   - 旧 head 无法承接（会话缺失 / 身份未知）→ pending 指令标记 failed
  *     （lastReason 留痕），不投向未知目标、不留永久挡板。
  *
+ * 运行期扫描（convergePhantomRotating）覆盖启动收敛之外的第二类残留：
+ * 启动收敛被整体跳过（listThreads 瞬时失败等）或单线程收敛失败后，崩溃
+ * 残留的 rotating 记录没有任何后续收敛触发点——投递被 handoff_in_progress
+ * 门禁挡住、输入路径按 rotating 跳过 head 唤醒、前端按设计不设本地时间窗，
+ * 用户消息滞留锁定气泡等待一个不存在的接续。判定的权威是进程内在办登记
+ * （rotation-registry）：记录 rotating + 无在办编排 = 幽灵投影，立即收敛
+ * （无 TTL 等待）；真实接续登记在册，跑多久都不误杀。
+ *
  * @param {object} deps
  * @param {{ core: import('@agentdevjs/core').WorkThread }} deps.threadControl
+ * @param {ReturnType<import('./rotation-registry.js').createRotationRegistry>} [deps.rotationRegistry]
  */
-export function createThreadRecoveryService({ threadControl } = {}) {
+export function createThreadRecoveryService({ threadControl, rotationRegistry = null } = {}) {
   if (!threadControl?.core) {
     throw new Error('createThreadRecoveryService requires threadControl');
   }
   const core = threadControl.core;
+  const registry = rotationRegistry || getRotationRegistry();
 
   /**
    * head 会话存在性检查：崩溃残留收敛只关心「旧 head 会话是否仍可承接」，
@@ -320,7 +366,66 @@ export function createThreadRecoveryService({ threadControl } = {}) {
   }
 
   /**
-   * 扫描全部线程记录，收敛「交接进行中」的崩溃残留。
+   * 单线程收敛核心（启动收敛与运行期幽灵扫描共用）：
+   *   1. head 不可承接时 pending 指令显式 failed（归属留痕，不投未知目标）；
+   *   2. 失败事实先落盘（rotation_failed + handoff_failed 事件带 stage）；
+   *   3. 挡板显式收敛（abortPendingSuccession，head 未推进、交接窗口已
+   *      结束的显式语义，不靠框架 stale TTL 被动过期）；
+   *   4. 在办登记注销（若仍有残留——收敛即终局）。
+   *
+   * @param {object} record - 已确认含 pendingSuccession 的线程记录
+   * @param {{ sweepReason: string, sweepDetail: string }} sweep - head 可承接
+   *        时的收敛原因与说明（启动收敛与运行期扫描各有可区分的审计词汇）
+   */
+  async function convergeInterruptedThread(record, { sweepReason, sweepDetail }) {
+    const pending = record.pendingSuccession;
+    const interruptedStage = (pending.stage && pending.stage !== 'started')
+      ? pending.stage
+      : 'commit_not_reached';
+    const headUsable = await headSessionResolvable(record.agentId, record.headSessionId);
+    const reason = headUsable ? sweepReason : 'head_session_missing';
+    const detail = headUsable
+      ? sweepDetail
+      : 'head session is missing or has no identity fact; pending commands cannot be delivered';
+
+    if (!headUsable) {
+      // 旧 head 无法承接：pending 指令的目标是未知会话，显式 failed
+      // （归属留在记录里：lastReason），永不投向未知目标、永不清除。
+      await core.store.update(record.threadId, (draft) => {
+        const now = Date.now();
+        for (const command of draft.commands || []) {
+          if (command.status === 'pending') {
+            command.status = 'failed';
+            command.lastReason = 'head_session_missing';
+            command.attempts = (Number(command.attempts) || 0) + 1;
+            command.updatedAt = now;
+          }
+        }
+        return draft;
+      });
+    }
+    await core.failSessionHandoff(record.threadId, {
+      reason,
+      stage: interruptedStage,
+      error: detail,
+    });
+    await abortPendingSuccession(core, record.threadId, {
+      stage: interruptedStage,
+      reason,
+      error: detail,
+    });
+    registry.end(record.threadId);
+    return {
+      threadId: record.threadId,
+      stage: interruptedStage,
+      reason,
+      headSessionId: record.headSessionId,
+    };
+  }
+
+  /**
+   * 扫描全部线程记录，收敛「交接进行中」的崩溃残留（启动态：进程刚起，
+   * 任何在办登记都不可能存在，全部按落盘状态判定）。
    * @returns {Promise<{examined: number, converged: Array<object>, skipped: Array<object>}>}
    */
   async function convergeInterruptedSuccessions() {
@@ -336,52 +441,11 @@ export function createThreadRecoveryService({ threadControl } = {}) {
       report.examined += 1;
       if (record.status === 'closed' || !record.pendingSuccession) continue;
 
-      const pending = record.pendingSuccession;
-      const interruptedStage = (pending.stage && pending.stage !== 'started')
-        ? pending.stage
-        : 'commit_not_reached';
-      const headUsable = await headSessionResolvable(record.agentId, record.headSessionId);
-      const reason = headUsable ? 'restart_convergence' : 'head_session_missing';
-
-      const detail = headUsable
-        ? 'process restarted before the succession commit; old head remains authoritative'
-        : 'head session is missing or has no identity fact; pending commands cannot be delivered';
-
       try {
-        if (!headUsable) {
-          // 旧 head 无法承接：pending 指令的目标是未知会话，显式 failed
-          // （归属留在记录里：lastReason），永不投向未知目标、永不清除。
-          await core.store.update(record.threadId, (draft) => {
-            const now = Date.now();
-            for (const command of draft.commands || []) {
-              if (command.status === 'pending') {
-                command.status = 'failed';
-                command.lastReason = 'head_session_missing';
-                command.attempts = (Number(command.attempts) || 0) + 1;
-                command.updatedAt = now;
-              }
-            }
-            return draft;
-          });
-        }
-        // 失败事实先落盘（rotation_failed + handoff_failed 事件带 stage），
-        // 再收敛挡板（head 未推进、交接窗口已结束的显式语义）。
-        await core.failSessionHandoff(record.threadId, {
-          reason,
-          stage: interruptedStage,
-          error: detail,
-        });
-        await abortPendingSuccession(core, record.threadId, {
-          stage: interruptedStage,
-          reason,
-          error: detail,
-        });
-        report.converged.push({
-          threadId: record.threadId,
-          stage: interruptedStage,
-          reason,
-          headSessionId: record.headSessionId,
-        });
+        report.converged.push(await convergeInterruptedThread(record, {
+          sweepReason: 'restart_convergence',
+          sweepDetail: 'process restarted before the succession commit; old head remains authoritative',
+        }));
       } catch (error) {
         // 单线程收敛失败不阻断其余线程；残留如实报告，不伪装为成功。
         report.skipped.push({ threadId: record.threadId, reason: String(error?.message || error) });
@@ -390,5 +454,57 @@ export function createThreadRecoveryService({ threadControl } = {}) {
     return report;
   }
 
-  return { convergeInterruptedSuccessions };
+  /**
+   * 运行期幽灵挡板扫描：status='rotating' 但本进程无编排在办
+   * （rotation-registry 事实判定）→ 投影失去事实，立即收敛。
+   *
+   * 与启动收敛的分工：启动态（进程刚起）全部 rotating 都是幽灵，走状态
+   * 判定；运行期以登记为准——真实接续（慢摘要 LLM 等）不受打扰，这是与
+   * 时间判定（框架 HANDOFF_STALE_MS 惰性清除）的本质区别。
+   *
+   * 范围只认 status='rotating'：rotation_failed + 挡板残留（fail 落盘后、
+   * abort 前崩溃）属启动收敛的范围，运行期不碰——避免与并发重试接续
+   * （begin 会先把 status 转回 rotating）竞态误清。
+   *
+   * @returns {Promise<{examined: number, converged: Array<object>, skipped: Array<object>}>}
+   */
+  async function convergePhantomRotating() {
+    const summaries = await core.listThreads();
+    const report = { examined: 0, converged: [], skipped: [] };
+
+    for (const summary of summaries) {
+      // 摘要预筛：非 rotating 无幽灵可能（终态 / 失败态 / 正常态都已有
+      // 权威状态），摘要携带 status，只读索引不触记录文件——健康线程
+      // 零记录级开销，扫描可以高频跑。
+      if (String(summary?.status || '') !== 'rotating') continue;
+      const threadId = String(summary?.threadId || '').trim();
+      if (!threadId) continue;
+      // 真实编排在办：投影与事实一致，不动。
+      if (registry.isActive(threadId)) continue;
+
+      const record = await core.getThread(threadId).catch(() => null);
+      if (!record) {
+        report.skipped.push({ threadId, reason: 'record_unreadable' });
+        continue;
+      }
+      if (record.status !== 'rotating' || !record.pendingSuccession) continue;
+      // 写前复核（登记复查）：读记录期间可能有并发 begin 落新挡板并登记
+      // ——此时不是幽灵，留给下一轮扫描按登记判定。
+      if (registry.isActive(threadId)) continue;
+
+      report.examined += 1;
+      try {
+        report.converged.push(await convergeInterruptedThread(record, {
+          sweepReason: 'phantom_rotation_sweep',
+          sweepDetail: 'no in-process rotation orchestration is active; the persisted rotating status is a phantom barrier left by an interrupted run',
+        }));
+      } catch (error) {
+        // 单线程收敛失败不阻断扫描；残留如实报告，下一轮扫描重试。
+        report.skipped.push({ threadId, reason: String(error?.message || error) });
+      }
+    }
+    return report;
+  }
+
+  return { convergeInterruptedSuccessions, convergePhantomRotating };
 }

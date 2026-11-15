@@ -35,6 +35,7 @@ process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
 
 const { createThreadControl } = await import('../server/thread-control/thread-controller.js');
 const { createThreadIntegration } = await import('../server/thread-control/thread-integration.js');
+const { createRotationRegistry } = await import('../server/thread-control/rotation-registry.js');
 const {
   createThreadSuccessionService,
   createThreadRecoveryService,
@@ -80,14 +81,17 @@ function makeEnvironment(bridgeOptions = {}) {
     rootDir: path.join(root, `sc-${++counter}`),
     bridge: new WorkThreadRuntimeBridge(bridgeOptions),
   });
-  const integration = createThreadIntegration({ control });
+  // 隔离的在办登记实例：begin / 终局咽喉与幽灵扫描共用同一份事实
+  const registry = createRotationRegistry();
+  const integration = createThreadIntegration({ control, rotationRegistry: registry });
   const succession = createThreadSuccessionService({
     threadControl: control,
     threadIntegration: integration,
     stopManagedAgent: async (agentId, sessionId) => { stopped.push({ agentId, sessionId }); },
+    rotationRegistry: registry,
   });
-  const recovery = createThreadRecoveryService({ threadControl: control });
-  return { root, control, core: control.core, integration, succession, recovery, stopped };
+  const recovery = createThreadRecoveryService({ threadControl: control, rotationRegistry: registry });
+  return { root, control, core: control.core, integration, succession, recovery, registry, stopped };
 }
 
 /** 建一个 coder 线程：root 会话即 coder APP 会话（归属即身份）。 */
@@ -526,6 +530,122 @@ describe('T002: 进程重启按落盘状态收敛', () => {
       assert.ok(record.lifecycleEvents.some(
         (e) => e.type === 'handoff_failed' && e.stage === 'successor_runtime_not_ready',
       ));
+    } finally {
+      await fs.rm(env.root, { recursive: true, force: true });
+    }
+  });
+
+});
+
+// ─── 5b. 运行期幽灵挡板收敛（rotation-registry 事实判定）──────────
+//
+// 启动收敛被整体跳过（listThreads 瞬时失败等）或单线程收敛失败时，崩溃
+// 残留的 rotating 记录没有后续收敛触发点：投递被 handoff_in_progress
+// 门禁挡住、输入路径按 rotating 跳过 head 唤醒、前端按设计不设本地时间窗
+// ——用户消息会滞留锁定气泡等待一个不再存在的接续。运行期判定的权威是
+// 进程内在办登记（rotation-registry）：记录 rotating + 无在办编排 = 幽灵
+// 投影，立即收敛；真实接续登记在册，跑多久都不误杀——时间判不出编排
+// 死活，事实判得出。
+
+describe('T002: 运行期幽灵挡板收敛（rotation-registry）', () => {
+  async function seedInterruptedHandoff(env, thread, { startedAt, stage = 'started' } = {}) {
+    // 模拟崩溃残留：prepare（begin）完成、commit 未完成，挡板留在盘上
+    await env.core.store.update(thread.threadId, (draft) => {
+      draft.status = 'rotating';
+      draft.pendingSuccession = {
+        fromSessionId: draft.headSessionId,
+        reason: 'trim',
+        stage,
+        startedAt: startedAt ?? Date.now(),
+      };
+      return draft;
+    });
+  }
+
+  test('registry-active rotation is never swept — no TTL false kill for slow successions', async () => {
+    const env = makeEnvironment();
+    try {
+      const thread = await startCoderThread(env, 's1');
+      // 慢接续：挡板已远超任何 TTL（6 分钟），但编排登记在册（在办事实）
+      await seedInterruptedHandoff(env, thread, { startedAt: Date.now() - 6 * 60 * 1000 });
+      env.registry.begin(thread.threadId, { reason: 'summary' });
+
+      const report = await env.recovery.convergePhantomRotating();
+      assert.equal(report.converged.length, 0, '在办接续不受打扰（TTL 方案会误杀慢接续）');
+      const record = await env.core.getThread(thread.threadId);
+      assert.equal(record.status, 'rotating', '状态原样保留');
+      assert.equal(record.pendingSuccession?.stage, 'started', '挡板原样保留');
+    } finally {
+      await fs.rm(env.root, { recursive: true, force: true });
+    }
+  });
+
+  test('registry-absent phantom barrier is converged immediately — no 5-minute TTL wait', async () => {
+    const turns = [];
+    await seedCoderSessionIndex(['s1']);
+    const env = makeEnvironment({
+      enabled: true,
+      resolveRuntimeViewerId: (_a, s) => (s === 's1' ? 'viewer-s1' : null),
+      submitTurn: async (params) => { turns.push(params); return { success: true }; },
+    });
+    try {
+      const thread = await startCoderThread(env, 's1');
+      await env.core.appendCommand({ threadId: thread.threadId, text: '滞留在等待表面的消息' });
+      // 幽灵挡板：startedAt「新鲜」（TTL 视角不能清），但本进程无编排在办
+      await seedInterruptedHandoff(env, thread, { startedAt: Date.now() });
+
+      const report = await env.recovery.convergePhantomRotating();
+      assert.equal(report.converged.length, 1, '幽灵挡板被收敛');
+      assert.equal(report.converged[0].reason, 'phantom_rotation_sweep', '审计可区分运行期兜底与重启收敛');
+
+      const record = await env.core.getThread(thread.threadId);
+      assert.equal(record.status, 'rotation_failed', '不再是僵尸 rotating');
+      assert.equal(record.pendingSuccession, null, '挡板清除');
+      assert.equal(record.commands[0].status, 'pending', '滞留消息归属保留，等补投');
+
+      // 收敛后投递门禁解除：旧 head runtime 就绪即可送达（不再 handoff_in_progress）
+      const delivery = await env.core.deliverPendingCommands(thread.threadId);
+      assert.equal(delivery.delivered, 1);
+      assert.equal(turns.length, 1);
+    } finally {
+      await fs.rm(env.root, { recursive: true, force: true });
+    }
+  });
+
+  test('summary pre-filter: non-rotating threads skip record-level checks entirely', async () => {
+    const env = makeEnvironment();
+    try {
+      await startCoderThread(env, 's1'); // 正常 open 线程
+      const report = await env.recovery.convergePhantomRotating();
+      assert.equal(report.examined, 0, '非 rotating 摘要预筛即跳过（零记录读）');
+      assert.equal(report.converged.length, 0);
+      const record = await env.core.getThread((await env.core.listThreads())[0].threadId);
+      assert.equal(record.status, 'open');
+    } finally {
+      await fs.rm(env.root, { recursive: true, force: true });
+    }
+  });
+
+  test('begin / terminal choke points pair the registration (beginSessionSuccession ↔ commit / fail finally)', async () => {
+    const env = makeEnvironment();
+    try {
+      const thread = await startCoderThread(env, 's1');
+
+      // begin 咽喉：挡板立起即在办登记——扫描据此放行真实接续
+      const begun = await env.integration.beginSessionSuccession({ agentId: 'coder', sessionId: 's1', reason: 'trim' });
+      assert.equal(begun.applied, true);
+      assert.ok(env.registry.isActive(thread.threadId), '挡板立起 → 登记在册');
+      const duringRotation = await env.recovery.convergePhantomRotating();
+      assert.equal(duringRotation.converged.length, 0, '登记在册的接续不被扫描收敛');
+
+      // 终局（READY 门禁拒绝 → failSuccession）：finally 注销登记
+      const commit = await env.succession.commitSuccession({
+        agentId: 'coder', fromSessionId: 's1', toSessionId: 's2', reason: 'trim', successorReady: false,
+      });
+      assert.equal(commit.applied, false, 'READY 门禁拒绝提交');
+      assert.equal(env.registry.isActive(thread.threadId), false, '终局 finally 释放登记——扫描能收敛残留的前提');
+      const record = await env.core.getThread(thread.threadId);
+      assert.notEqual(record.status, 'rotating', '终局路径同时完成记录级收敛');
     } finally {
       await fs.rm(env.root, { recursive: true, force: true });
     }

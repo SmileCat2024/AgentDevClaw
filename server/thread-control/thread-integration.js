@@ -26,6 +26,7 @@ import { ThreadNotFoundError } from './thread-store.js';
 import { isThreadHostSession } from './host-agents.js';
 import { createDeliveryConsumer } from './delivery-consumer.js';
 import { abortPendingSuccession } from './thread-succession.js';
+import { getRotationRegistry } from './rotation-registry.js';
 import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
 
 // 判定的唯一定义在 ./host-agents.js（无副作用轻量模块，供 agent 子进程同源
@@ -107,8 +108,15 @@ export function composeUnresolvedNotice(unresolved, retiredSessionId) {
   return lines.join('\n');
 }
 
-export function createThreadIntegration({ control = null, publishThreadEvent = publishThreadEventDefault } = {}) {
+export function createThreadIntegration({
+  control = null,
+  publishThreadEvent = publishThreadEventDefault,
+  rotationRegistry = null,
+} = {}) {
   const { core, board, archive } = control || getThreadControl();
+  // 在办登记（rotation-registry）：begin 咽喉登记、succession 终局注销，
+  // 运行期幽灵挡板扫描据此区分「真实接续在跑」与「崩溃残留投影」。
+  const registry = rotationRegistry || getRotationRegistry();
 
   // ADR-0047 阶段 5 身份采纳通道：successor 在 READY 门前拉起时不是 head，
   // spawn 身份不含线程信息；换头提交后必须把新 head 身份推给 runtime
@@ -279,6 +287,11 @@ export function createThreadIntegration({ control = null, publishThreadEvent = p
           reason,
           seedContinuation,
         });
+        // 在办登记：挡板已立、本编排开始。必须在同一微任务链内同步登记
+        // （此处到 registry.begin 之间无 await）：并发幽灵扫描若观察到本笔
+        // rotating，其观察点必在之后的宏任务里——登记已可见，不存在
+        // 「已 rotating 但未登记」的可观察中间态（那会被误判为幽灵挡板）。
+        registry.begin(thread.threadId, { reason });
         // 交接开始的事实事件：前端活动线程订阅据此即时点亮「接力中」状态
         // （顶栏指示器 / 侧栏过渡占位），不等 20s contentHash 轮询。事件只
         // 携带事务事实（与 head-advanced 同纪律），状态以 /threads 数据为准。
