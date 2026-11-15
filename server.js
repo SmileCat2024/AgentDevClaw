@@ -1884,6 +1884,13 @@ async function main() {
   // 无权判断对方归属，更不能请求对方关机或终止其进程树。
   await ensureAppPortAvailable({ port: APP_PORT });
 
+  // Establish the outbound proxy before any startup hook, Viewer initialization,
+  // or runtime recovery can spawn a child. applyProxy() mutates process.env for
+  // child inheritance and installs the server's global Undici dispatcher; leaving
+  // it until the end of startup creates a race where a runtime is born without
+  // HTTPS_PROXY and then keeps making direct external calls for its lifetime.
+  applyProxy();
+
   // Move legacy app settings before any runtime or route can read the new paths.
   try {
     const migration = await migrateLegacyAppConfig({ legacyRoot: PROJECT_ROOT, userDataRoot: USER_DATA_ROOT });
@@ -2088,9 +2095,6 @@ async function main() {
       }
     }).catch((err) => console.warn('[thread-recovery] phantom sweep failed:', err.message));
   }, 15_000).unref();
-
-  // Apply global proxy before listening (affects all fetch + child processes)
-  applyProxy();
 
   httpServer = app.listen(APP_PORT);
   // 流式语音识别 WS 代理：接管 /protoclaw/speech_stream 的 HTTP upgrade
