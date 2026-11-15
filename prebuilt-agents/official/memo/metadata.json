@@ -11,6 +11,7 @@
   "enabled": true,
   "visibility": "persistent",
   "sidebarGroup": "tool",
+  "sidebarSessions": "visible",
   "permissions": ["notifications.reminder", "notifications.input"],
   "permissionDefaults": {
     "notifications.reminder": true,
