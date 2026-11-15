@@ -2,7 +2,7 @@
  * 编程小助手「新建对话」入口的运行模式悬停菜单。
  *
  * 交互契约：
- * - 悬停入口约 120ms 展开锚定菜单（普通模式 / 容器模式）；点击入口仍是
+ * - 悬停入口约 220ms 展开锚定菜单（普通模式 / 容器模式）；点击入口仍是
  *   既有创建路径，不携带 runtimeMode（服务端维持现状默认）。
  * - 鼠标离开「入口 + 菜单」联合区域约 250ms 后收起（容忍入口→菜单的
  *   移动间隙）；Esc 立即收起；菜单展开期间点击页面其他位置自然收起。
@@ -16,7 +16,7 @@
 (function () {
   'use strict';
 
-  const OPEN_DELAY_MS = 120;
+  const OPEN_DELAY_MS = 220;
   const CLOSE_DELAY_MS = 250;
   const MENU_CLASS = 'ph-runtime-mode-menu';
   const ENTRY_SELECTOR = '[data-runtime-mode-entry]';
@@ -25,6 +25,10 @@
   let anchorButton = null;  // 菜单锚定的入口按钮
   let openTimer = 0;
   let closeTimer = 0;
+
+  function onViewportChange() {
+    if (menu && anchorButton) positionMenu(anchorButton);
+  }
 
   function isZh() { return typeof currentLanguage === 'undefined' || currentLanguage === 'zh'; }
 
@@ -38,19 +42,24 @@
     if (menu) { menu.remove(); menu = null; }
     anchorButton = null;
     document.removeEventListener('keydown', onMenuKeydown, true);
+    document.removeEventListener('scroll', onViewportChange, true);
+    window.removeEventListener('resize', onViewportChange);
   }
 
   function positionMenu(button) {
+    if (!menu || !button) return;
     const rect = button.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
-    // 按钮下方右对齐；右侧/底部越界时回钳视口（fixed 定位，不依赖祖先链）。
+    // 菜单挂在 body 下，以文档坐标定位；滚动时重新测量锚点，
+    // 让它像普通下拉框一样随滚动容器移动，而不是停在首次打开的位置。
     let left = rect.right - menuRect.width;
     if (left < 12) left = 12;
     if (left + menuRect.width > window.innerWidth - 12) left = Math.max(12, window.innerWidth - 12 - menuRect.width);
     let top = rect.bottom + 6;
-    if (top + menuRect.height > window.innerHeight - 12) top = Math.max(12, rect.top - menuRect.height - 6);
-    menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
+    if (top + menuRect.height > window.innerHeight - 12) top = rect.top - menuRect.height - 6;
+    if (top < 12) top = Math.min(12, window.innerHeight - menuRect.height - 12);
+    menu.style.left = (left + window.scrollX) + 'px';
+    menu.style.top = (top + window.scrollY) + 'px';
   }
 
   function openMenu(button) {
@@ -71,7 +80,7 @@
       {
         mode: 'container',
         title: zh ? '容器模式' : 'Container',
-        desc: zh ? '在隔离容器中运行；有本地会话运行时需先停止' : 'Run in an isolated container; stop local chats first',
+        desc: zh ? '在隔离容器中运行' : 'Run in an isolated container',
         icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg>',
       },
     ];
@@ -101,6 +110,10 @@
     document.body.appendChild(menu);
     positionMenu(button);
     document.addEventListener('keydown', onMenuKeydown, true);
+    // 捕获所有滚动容器的 scroll：菜单在 body 下，必须主动重测锚点，
+    // 否则主内容区滚动时浮窗会残留在原视口坐标。
+    document.addEventListener('scroll', onViewportChange, true);
+    window.addEventListener('resize', onViewportChange);
   }
 
   function scheduleOpen(button) {
@@ -111,6 +124,9 @@
   }
 
   function scheduleClose() {
+    // 鼠标快速划过入口时也要取消尚未触发的展开，避免离开后菜单仍闪现。
+    clearTimeout(openTimer);
+    openTimer = 0;
     if (!menu) return;
     clearTimeout(closeTimer);
     closeTimer = setTimeout(() => { closeTimer = 0; closeMenu(); }, CLOSE_DELAY_MS);

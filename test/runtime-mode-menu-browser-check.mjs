@@ -1,6 +1,6 @@
 // Run explicitly: node test/runtime-mode-menu-browser-check.mjs
 // 编程小助手「新建对话」悬停运行模式菜单的手势级回归（真实 Chromium 指针
-// 事件）：悬停约 120ms 展开菜单（中文文案，验证 currentLanguage 裸引用共享
+// 事件）：悬停约 220ms 展开菜单（中文文案，验证 currentLanguage 裸引用共享
 // 而非 window）；点击入口仍是普通创建（不带 runtimeMode）；移入菜单选择
 // 注入所选 runtimeMode 后走统一 runWorkspaceAction；离开联合区收起；Esc
 // 收起；菜单外点击自然收起且不吞事件。样式来自真实 components.css。
@@ -9,7 +9,7 @@ import express from 'express';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-const OPEN = 120;   // 与模块 OPEN_DELAY_MS 一致
+const OPEN = 220;   // 与模块 OPEN_DELAY_MS 一致
 const CLOSE = 250;  // 与模块 CLOSE_DELAY_MS 一致
 
 const app = express();
@@ -24,8 +24,8 @@ app.get('/fixture', (_req, res) => res.type('html').send(`<!doctype html><html><
     data-workspace-action='{"type":"ph_new_session","projectId":"p1","openDirectory":"D:/x"}'
     onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">新建对话</button>
   <button id="other-btn" type="button" onclick="window.__otherClicks.push(1)">别处</button>
-  <div style="height:50vh"></div>
-  <div id="outside-blank" style="height:20vh"></div>
+  <div style="height:120vh"></div>
+  <div id="outside-blank" style="height:40vh"></div>
   <script>
   let currentLanguage = 'zh'; // 与 app-core 同形：顶层 let，不挂 window
   function escapeHtml(s){ return String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -60,6 +60,11 @@ try {
   // 1. 悬停展开：中文文案（裸 currentLanguage 共享，非 window）、真实 CSS 尺寸
   await hoverEntry();
   assert.equal(await menuCount(), 0, 'no menu before hover delay elapses');
+  await page.waitForTimeout(OPEN - 60);
+  await page.mouse.move(20, 20);
+  await page.waitForTimeout(80);
+  assert.equal(await menuCount(), 0, 'brief hover must not flash the menu after leaving');
+  await hoverEntry();
   await page.waitForTimeout(OPEN + 80);
   assert.equal(await menuCount(), 1, 'hover opens the menu after the enter delay');
   const menu = page.locator('.ph-runtime-mode-menu');
@@ -68,13 +73,24 @@ try {
   assert.equal(await items.count(), 2);
   assert.deepEqual(await items.evaluateAll(els => els.map(el => el.dataset.runtimeMode)), ['standard', 'container']);
   assert.equal(await items.nth(0).textContent(), '普通模式直接在当前主机运行');
-  assert.equal(await items.nth(1).textContent(), '容器模式在隔离容器中运行；有本地会话运行时需先停止');
+  assert.equal(await items.nth(1).textContent(), '容器模式在隔离容器中运行');
   const menuBox = await menu.boundingBox();
   assert.ok(menuBox && menuBox.width > 100 && menuBox.height > 30, 'menu must render with real CSS size');
-  console.log('PASS hover opens a styled menu with zh copy');
+
+  // 1a. 页面滚动后菜单仍贴着入口，而不是停留在首次打开的视口坐标。
+  const beforeScrollButton = await page.locator('#entry-a').boundingBox();
+  await page.evaluate(() => window.scrollBy(0, 40));
+  await page.waitForTimeout(30);
+  const afterScrollButton = await page.locator('#entry-a').boundingBox();
+  const afterScrollMenu = await menu.boundingBox();
+  assert.ok(beforeScrollButton && afterScrollButton && afterScrollMenu, 'button and menu remain measurable after scroll');
+  assert.ok(Math.abs(afterScrollMenu.top - (afterScrollButton.bottom + 6)) < 2, 'menu follows the anchor after page scroll');
+  console.log('PASS menu follows the anchor while scrolling');
 
   // 2. 悬停后点击入口本身：普通创建（无 runtimeMode），菜单收起
+  await page.mouse.move(afterScrollButton.x + 30, afterScrollButton.y + afterScrollButton.height / 2);
   await page.mouse.down(); await page.mouse.up();
+
   await page.waitForTimeout(60);
   let acts = await actions();
   assert.equal(acts.length, 1, 'clicking the entry creates via the normal path');

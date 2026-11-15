@@ -7073,10 +7073,10 @@ body[data-theme="light"] .user-choice-card:focus-within {
 .ph-banner-btn.secondary { background: transparent; border-color: rgba(255,255,255,0.08); box-shadow: none; }
 .ph-banner-btn.secondary:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.16); }
 
-/* ── 新建对话运行模式长按菜单（复用 ph-project-dropdown-menu 玻璃卡片配方，
-   fixed 锚定按钮下方——不依赖项目栏祖先定位链） ── */
+/* ── 新建对话运行模式悬停菜单（复用 ph-project-dropdown-menu 玻璃卡片配方，
+   跟随页面滚动的下拉菜单） ── */
 .ph-runtime-mode-menu {
-  position: fixed;
+  position: absolute;
   z-index: 300;
   min-width: 248px;
   max-width: min(320px, calc(100vw - 24px));
