@@ -338,7 +338,7 @@ describe('移动 — 请求与响应', () => {
       sessionIds: ['s1'],
       target: { type: 'project', id: 'prj_A' },
     });
-    await resolveAt(s, s.requests.at(-1), { ok: true, movedSessionIds: ['s1'], releasedSessionIds: [], revision: 4, target: { type: 'project', id: 'prj_A' } });
+    await resolveAt(s, s.requests.at(-1), { ok: true, movedSessionIds: ['s1'], revision: 4, target: { type: 'project', id: 'prj_A' } });
     // 成功链路会继续拉切片/实体——全部消费避免悬空
     await drainRequests(s, (entry) => (entry.url.includes('/protocloud') ? {} : (entry.url.includes('/protoclaw/prebuilt_sessions') ? DIR_SLICE(['s2']) : { state: { openDirectory: 'D:/shared', phProjects: [{ openDirectory: 'D:/shared' }] }, projects: [] })));
     await job;
@@ -381,7 +381,7 @@ describe('移动 — 请求与响应', () => {
     const job = s.moveDialog.form.listeners.submit[0]({ preventDefault() {} });
     await flush();
     const req = s.requests.find((r) => r.url.includes('/protoclaw/ph_project/sessions_move'));
-    const moved = resolveAt(s, req, { ok: true, movedSessionIds: ['s1'], releasedSessionIds: ['s1'], revision: 5, target: { type: 'project', id: 'prj_A' } });
+    const moved = resolveAt(s, req, { ok: true, movedSessionIds: ['s1'], revision: 5, target: { type: 'project', id: 'prj_A' } });
     await moved;
     // 切片重拉断言在 drain 前落账（fetchLog 保留全部历史）
     await drainRequests(s, (entry) => (entry.url.includes('/protoclaw/prebuilt_sessions') ? DIR_SLICE(['s2']) : { state: { openDirectory: 'D:/shared', phProjects: [{ openDirectory: 'D:/shared' }] }, projects: [] }));
@@ -390,7 +390,7 @@ describe('移动 — 请求与响应', () => {
     const slice = s.fetchLog.filter((f) => f.url.includes('/protoclaw/prebuilt_sessions')).at(-1);
     assert.ok(slice, 'slice re-pulled');
     assert.match(decodeURIComponent(slice.url), /projectDir=D:\/shared/);
-    assert.equal(s.loadAgentsCalls.length, 1, 'sidebar runtime re-projected (released instances not reused)');
+    assert.equal(s.loadAgentsCalls.length, 1, 'sidebar re-projected (live runtime re-grouped from index)');
     assert.equal(s.calls.searchRetry, 1, 'active search re-ran');
     // 多选状态清空
     assert.equal(s.ctx.run('window.ClawFW.phSessionMove.selectMode'), false);
@@ -404,7 +404,7 @@ describe('移动 — 请求与响应', () => {
     // 移动在途时用户切到项目 prj_A
     s.ctx.run('setPhBrowsingTarget("programming-helper", { type: "project", id: "prj_A" })');
     const req = s.requests.find((r) => r.url.includes('/protoclaw/ph_project/sessions_move'));
-    await resolveAt(s, req, { ok: true, movedSessionIds: ['s1'], releasedSessionIds: [], revision: 6, target: { type: 'directory', openDirectory: 'D:/shared' } });
+    await resolveAt(s, req, { ok: true, movedSessionIds: ['s1'], revision: 6, target: { type: 'directory', openDirectory: 'D:/shared' } });
     await job;
     await flush();
     assert.ok(!s.fetchLog.some((f) => f.url.includes('/protoclaw/prebuilt_sessions')), 'must not re-pull a slice for a stale view');

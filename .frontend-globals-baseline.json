@@ -2183,7 +2183,6 @@
     "state": [],
     "behavior": [
       "ClawFW",
-      "_phApplyMoveReleasedSessions",
       "_phMoveScopeKey",
       "_phMoveState",
       "_phResolveSessionOwnership",

@@ -5,14 +5,15 @@
  * - 同一有效工作目录内：默认目录 ↔ 项目、项目 A ↔ 项目 B；跨目录显式拒绝。
  * - 移动非复制：session id / 历史 / workspaceAgentId / checkpoint 全保留，
  *   会话文件本体字节不动；只改索引记录归属字段（projectId / openDirectory）。
- * - 全部先校验后释放：busy（执行中轮次 / 排队输入 / 探测失败）409 且零状态
+ * - 全部先校验后落盘：busy（执行中轮次 / 排队输入 / 探测失败）409 且零状态
  *   变化；批量预校验不通过绝不部分改归属。
- * - 空闲存活实例按「精确单会话 + waitForPersistence」释放，共享进程兄弟
- *   会话不受影响；下次启动按目标归属重新装配（项目表 + 配置层真实重解析）。
- * - 释放窗口（门闩）内：并发重叠移动 409、新输入 409、派生会话 409、涉及
+ * - 存活实例不释放（归属与执行层解耦）：busy 探测仍逐存活实例 fail-closed，
+ *   空闲实例照常运行，新归属配置在下次启动时生效（延迟生效）；下一次启动
+ *   按目标归属重新装配（项目表 + 配置层真实重解析，见 runtime 测试文件）。
+ * - 事务窗口（门闩）内：并发重叠移动 409、新输入 409、派生会话 409、涉及
  *   项目的改绑 / 归档 / 删除 409；窗口结束即恢复。
- * - 归属无变化 = no-op 成功：不停实例、不重写索引、不递增 revision。
- * - 目标项目未知 / 归档、无效 Session、跨目录 → 具体错误码显式失败。
+ * - 归属无变化 = no-op 成功：不触碰 runtime、不重写索引、不递增 revision。
+ * - 目标项目未知 / 已归档、无效 Session、跨目录 → 具体错误码显式失败。
  *
  * 全程隔离数据根（AGENTDEV_DATA_DIR），无真实模型请求、无 runtime 子进程；
  * 生命周期依赖注入假件，逐调用断言精确停止范围。harness 参照
@@ -85,7 +86,8 @@ function makeHelpers() {
 /**
  * 假 runtime 注册表 + 生命周期依赖（与 rebind 测试同款）。
  * runtimes: Map<sessionId, { viewerAgentId, busy: {callActive, queued} }>。
- * stops 逐调用记录，供断言精确停止范围（必须带 sessionId + waitForPersistence）。
+ * stops 逐调用记录（移动断言恒为空：不释放存活实例；rebind/删除类用例经
+ * stopImpl 挂起或注入故障驱动其窗口）。
  */
 function makeLifecycleDeps({ runtimes, stopImpl, viewerImpl } = {}) {
   const stops = [];
@@ -206,7 +208,6 @@ describe('归属转移：往返与事实保留', () => {
     }, deps);
 
     assert.deepEqual(result.movedSessionIds, [fixture.sessionA1.id]);
-    assert.deepEqual(result.releasedSessionIds, [fixture.sessionA1.id]);
     assert.equal(result.revision, beforeRevision + 1, '单次批量一次 revision 递增');
     assert.equal(result.target.type, 'project');
     assert.equal(result.target.id, fixture.projectB.id);
@@ -223,10 +224,8 @@ describe('归属转移：往返与事实保留', () => {
     assert.equal(parsedBody.runtime.context.checkpoints.length, 1, 'checkpoint 保留');
     assert.equal(parsedBody.runtime.context.messages.length, 2, '历史消息保留');
 
-    // 精确停止：只停被转移会话，带 waitForPersistence
-    assert.equal(stops.length, 1);
-    assert.equal(stops[0].sessionId, fixture.sessionA1.id);
-    assert.equal(stops[0].opts?.waitForPersistence, true);
+    // 存活实例不释放：移动不触碰 runtime（新归属配置下次启动生效）
+    assert.equal(stops.length, 0, '空闲存活实例不被停止');
 
     // 门闩已释放
     assert.equal(isPhSessionRebindGated(fixture.sessionA1.id), false);
@@ -303,11 +302,8 @@ describe('归属转移：批量与 no-op', () => {
     for (const sessionId of batch) {
       assert.equal((await readRecord(sessionId)).projectId, fixture.projectB.id);
     }
-    // 全员按会话精确释放
-    assert.deepEqual(new Set(stops.map((s) => s.sessionId)), new Set(batch));
-    for (const stop of stops) {
-      assert.equal(stop.opts?.waitForPersistence, true);
-    }
+    // 全员存活实例不触碰
+    assert.equal(stops.length, 0, '批量移动不停止任何存活实例');
   });
 
   test('混合批次只报实际变化成员；全员 no-op 不停实例、不重写索引、不递增 revision', async () => {
@@ -323,7 +319,6 @@ describe('归属转移：批量与 no-op', () => {
       target: { type: 'project', id: fixture.projectA.id },
     }, deps);
     assert.deepEqual(mixed.movedSessionIds, [fixture.sessionD.id], '只报归属实际变化的成员');
-    assert.deepEqual(mixed.releasedSessionIds, [fixture.sessionD.id]);
 
     // 全员 no-op：不触碰 runtime、不重写索引
     const beforeIndex = await readSessionIndex(AGENT);
@@ -335,7 +330,6 @@ describe('归属转移：批量与 no-op', () => {
       target: { type: 'project', id: fixture.projectA.id },
     }, deps);
     assert.deepEqual(noop.movedSessionIds, []);
-    assert.deepEqual(noop.releasedSessionIds, []);
 
     const afterIndex = await readSessionIndex(AGENT);
     assert.equal(afterIndex.revision, beforeIndex.revision, 'no-op 不递增 revision');
@@ -534,68 +528,26 @@ describe('归属转移：拒绝与零副作用', () => {
   });
 });
 
-// ── 4. 失败保留与共享进程兄弟 ────────────────────────────────────────────
+// ── 4. 并发 gate（事务窗口）───────────────────────────────────────────────
 
-describe('归属转移：失败保留与共享进程兄弟', () => {
-  test('持久化确认失败：抛错，归属保持原样（下次启动仍按旧归属装配）', async () => {
-    const fixture = await setupMoveFixture();
-    const { stops, deps } = makeLifecycleDeps({
-      runtimes: fixture.runtimes,
-      viewerImpl: viewerFromRuntimes(fixture.runtimes),
-      stopImpl: async () => { throw new Error('persist confirmation failed'); },
-    });
-    const beforeRevision = (await readSessionIndex(AGENT)).revision;
-
-    await assert.rejects(
-      movePhSessions({
-        sessionIds: [fixture.sessionA1.id, fixture.sessionA2.id],
-        target: { type: 'project', id: fixture.projectB.id },
-      }, deps),
-      /persist confirmation failed/,
-    );
-    assert.equal(stops.length, 1, '停止尝试发生过（不假成功，也不吞错）');
-    assert.equal((await readSessionIndex(AGENT)).revision, beforeRevision, '索引零变化');
-    for (const sessionId of [fixture.sessionA1.id, fixture.sessionA2.id]) {
-      const record = await readRecord(sessionId);
-      assert.equal(record.projectId, fixture.projectA.id, '失败后归属完整保留');
-    }
-    assert.equal(isPhSessionRebindGated(fixture.sessionA1.id), false);
-  });
-
-  test('共享进程兄弟会话不被波及：只精确释放被转移成员', async () => {
-    const fixture = await setupMoveFixture();
-    const { stops, deps } = makeLifecycleDeps({
-      runtimes: fixture.runtimes,
-      viewerImpl: viewerFromRuntimes(fixture.runtimes),
-    });
-    await movePhSessions({
-      sessionIds: [fixture.sessionA1.id],
-      target: { type: 'project', id: fixture.projectB.id },
-    }, deps);
-
-    const stoppedIds = new Set(stops.map((s) => s.sessionId));
-    assert.deepEqual([...stoppedIds], [fixture.sessionA1.id]);
-    // 兄弟（A2 同项目、B1 目标项目、D 目录）从未被停止
-    for (const sibling of [fixture.sessionA2.id, fixture.sessionB1.id, fixture.sessionD.id]) {
-      assert.ok(!stoppedIds.has(sibling));
-    }
-    for (const stop of stops) {
-      assert.equal(stop.agentId, AGENT, '绝不经 agent 全量停止语义');
-    }
-  });
-});
-
-// ── 5. 并发 gate（释放窗口）──────────────────────────────────────────────
-
-describe('归属转移：释放窗口并发 gate', () => {
+describe('归属转移：事务窗口并发 gate', () => {
   test('窗口内：重叠移动 409 / 新输入 409 / 派生 409 / 涉及项目改绑·归档·删除 409；无关项目不受波及；结束后恢复', async () => {
     const fixture = await setupMoveFixture();
-    let releaseStop;
-    const stopGate = new Promise((resolve) => { releaseStop = resolve; });
+    // 窗口驻留点 = busy 探测（门闩建立后、落盘前的窗口内步骤）：挂起首个
+    // notification 探测即可驻留事务窗口；释放后探测放行、落盘继续。
+    let releaseProbe;
+    const probeGate = new Promise((resolve) => { releaseProbe = resolve; });
+    let probeHeld = false;
+    const gatedViewer = async (pathname) => {
+      if (!probeHeld && pathname.endsWith('/notification')) {
+        probeHeld = true;
+        await probeGate;
+      }
+      return viewerFromRuntimes(fixture.runtimes)(pathname);
+    };
     const { deps } = makeLifecycleDeps({
       runtimes: fixture.runtimes,
-      viewerImpl: viewerFromRuntimes(fixture.runtimes),
-      stopImpl: () => stopGate,
+      viewerImpl: gatedViewer,
     });
 
     // 注册假 runtime 到真实注册表，让网关按 viewerAgentId 反查到移动中会话
@@ -610,13 +562,13 @@ describe('归属转移：释放窗口并发 gate', () => {
       sessionIds: [fixture.sessionA1.id],
       target: { type: 'project', id: fixture.projectB.id },
     }, deps);
-    // 等待门闩建立（停止被 stopGate 挂住，轮询到 gated 即进入释放窗口）
+    // 等待门闩建立（busy 探测被 probeGate 挂住，轮询到 gated 即进入事务窗口）
     const pollStart = Date.now();
     while (!isPhSessionRebindGated(fixture.sessionA1.id) && Date.now() - pollStart < 500) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     try {
-      assert.equal(isPhSessionRebindGated(fixture.sessionA1.id), true, '释放窗口已建立');
+      assert.equal(isPhSessionRebindGated(fixture.sessionA1.id), true, '事务窗口已建立');
       assert.equal(getPhSessionGateInfo(fixture.sessionA1.id)?.code, 'ph_sessions_move_in_progress');
       assert.equal(isPhSessionRebindGated(fixture.sessionA2.id), false, '同项目未转移成员不被会话级门闩波及');
 
@@ -629,7 +581,7 @@ describe('归属转移：释放窗口并发 gate', () => {
         (error) => error.statusCode === 409 && error.code === 'ph_sessions_move_in_progress',
       );
 
-      // 新输入在释放窗口内被统一网关 409 拒绝（携带移动语义的 code）
+      // 新输入在事务窗口内被统一网关 409 拒绝（携带移动语义的 code）
       await assert.rejects(
         deliverUserInput(
           { viewerAgentId: aEntry.viewerAgentId, text: 'hello during move' },
@@ -674,7 +626,7 @@ describe('归属转移：释放窗口并发 gate', () => {
       await setPhProjectArchived(unrelated.id, true);
       await setPhProjectArchived(unrelated.id, false);
     } finally {
-      releaseStop();
+      releaseProbe();
       await firstMove;
       managedAgents.delete(registryKey);
     }
@@ -719,7 +671,7 @@ describe('归属转移：释放窗口并发 gate', () => {
   });
 });
 
-// ── 5b. 反向竞态（生命周期事务先行）────────────────────────────────────
+// ── 5. 反向竞态（生命周期事务先行）────────────────────────────────────
 
 describe('归属转移：反向竞态（生命周期事务先行）', () => {
   test('删除先开始（窗口持有中）：move 涉及该项目 / 成员会话 409；删除完成后 move 显式 404', async () => {
@@ -989,7 +941,6 @@ describe('归属转移：路由装配', () => {
     assert.ok(!res2.error, res2.error?.message);
     assert.equal(res2.jsonPayload.ok, true);
     assert.deepEqual(res2.jsonPayload.movedSessionIds, [fixture.sessionA1.id]);
-    assert.deepEqual(res2.jsonPayload.releasedSessionIds, []);
     assert.equal(typeof res2.jsonPayload.revision, 'number');
     assert.equal(res2.jsonPayload.target.id, fixture.projectB.id);
     assert.ok(existsSync(getPrebuiltSessionFilePath(AGENT, fixture.sessionA1.id)), '移动不删除会话文件');
@@ -1111,7 +1062,7 @@ describe('归属转移：整链移动', () => {
     };
   }
 
-  test('移动 head 扩链：两代一并移动，归属一致翻转，释放覆盖整链', async () => {
+  test('移动 head 扩链：两代一并移动，归属一致翻转，存活实例不释放', async () => {
     const fixture = await setupMoveFixture();
     const thread = {
       threadId: 'th-chain-1',
@@ -1136,8 +1087,7 @@ describe('归属转移：整链移动', () => {
     );
     assert.equal((await readRecord(fixture.sessionA1.id))?.projectId, fixture.projectB.id, 'head 归属翻转');
     assert.equal((await readRecord(fixture.sessionA2.id))?.projectId, fixture.projectB.id, '历史代归属与 head 一致');
-    const stopIds = stops.map((stop) => stop.sessionId).sort();
-    assert.deepEqual(stopIds, [fixture.sessionA1.id, fixture.sessionA2.id].sort(), '存活实例释放覆盖整链');
+    assert.equal(stops.length, 0, '整链存活实例均不被停止');
   });
 
   test('扩链成员执行中（会话域 busy）：move head 拒绝 409，索引零变化', async () => {

@@ -905,12 +905,14 @@ export async function deletePhProject(projectId, { deleteManagedDirectory = fals
 // 「项目 A ↔ 项目 B」之间转移（移动非复制）：
 // - 只改索引记录的归属字段（projectId / openDirectory）：会话 id、历史、
 //   workspaceAgentId、checkpoint 等全部保留，会话文件本体一字节不动；
-// - 全部先校验后释放：busy（执行中轮次 / 排队输入 / 探测失败）409 拒绝且
+// - 全部先校验后落盘：busy（执行中轮次 / 排队输入 / 探测失败）409 拒绝且
 //   零状态变化；批量预校验不通过绝不部分改归属；
-// - 空闲存活实例按「精确单会话 + waitForPersistence」安全失效（共享进程
-//   兄弟会话不受影响），下次启动按目标归属重新装配（runtime 逐实例读索引
-//   projectId 选项目配置层，run-prebuilt-agent ticket 043）；
-// - 释放窗口经归属门闩拒绝新输入 / 新启动 / 派生会话；涉及项目（来源 +
+// - 存活实例不释放（归属是管理层事实，与执行层解耦）：配置层在 runtime
+//   构造期一次性消费，活实例继续按旧装配服务，新归属的配置在下次启动
+//   生效（延迟生效；同目录内 $mount 只允许 global/agent 层声明，跨项目
+//   装配面一致，差异仅 feature 配置值）。runtime 的 meta 回写是字段级
+//   合并、不触碰归属字段，活实例与索引翻转无竞争；
+// - 事务窗口经归属门闩拒绝新输入 / 新启动 / 派生会话；涉及项目（来源 +
 //   目标）窗口内拒绝改绑 / 归档 / 删除；
 // - 归属无变化（会话已在目标集合）为 no-op 成功：不停实例、不重写索引、
 //   不递增 revision；
@@ -958,22 +960,22 @@ function recordMatchesMoveTarget(record, targetType, targetProjectId, targetDire
 }
 
 /**
- * PH 会话归属转移编排（单条/批量共用）。deps 与 rebindPhProject 同源注入
- * （生产 server.js / 测试假件）：getAgentRuntime / isManagedRuntimeRunning /
- * stopManagedAgent / readViewerJson，另可注入 readSessionIndex /
- * updateSessionIndex（缺省走 server/shared/session-access.js）。
+ * PH 会话归属转移编排（单条/批量共用）。deps 由路由装配层注入（生产
+ * server.js / 测试假件）：getAgentRuntime / isManagedRuntimeRunning /
+ * readViewerJson（busy 探测定位存活实例），另可注入 readSessionIndex /
+ * updateSessionIndex（缺省走 server/shared/session-access.js）。不再
+ * 释放存活实例：归属翻转与执行层解耦，无需 stopManagedAgent。
  */
 export async function movePhSessions({ sessionIds, target } = {}, deps = {}) {
   const {
     getAgentRuntime: getRuntime,
     isManagedRuntimeRunning: isRuntimeRunning,
-    stopManagedAgent: stopAgent,
     readViewerJson: readViewer,
     readSessionIndex: readIndex = readSessionIndex,
     updateSessionIndex: updateIndex = updateSessionIndex,
   } = deps;
-  if (!getRuntime || !isRuntimeRunning || !stopAgent || !readViewer) {
-    throw new Error('movePhSessions requires lifecycle deps: getAgentRuntime / isManagedRuntimeRunning / stopManagedAgent / readViewerJson');
+  if (!getRuntime || !isRuntimeRunning || !readViewer) {
+    throw new Error('movePhSessions requires lifecycle deps: getAgentRuntime / isManagedRuntimeRunning / readViewerJson');
   }
 
   // ── 参数与目标解析（失败零状态变化）──────────────────────────────
@@ -1117,13 +1119,12 @@ export async function movePhSessions({ sessionIds, target } = {}, deps = {}) {
   if (toMove.length === 0) {
     return {
       movedSessionIds: [],
-      releasedSessionIds: [],
       revision: Number(index?.revision) || 0,
       target: describeMoveTarget(targetType, targetProject, targetDirectory),
     };
   }
 
-  // ── 与既有归属释放窗口互斥（项目级 + 会话级，防改绑/移动并发竞态）──
+  // ── 与既有归属事务窗口互斥（项目级 + 会话级，防改绑/移动并发竞态）──
   const involvedProjectIds = new Set(toMove.map((item) => item.sourceProjectId).filter(Boolean));
   if (targetProject) involvedProjectIds.add(targetProject.id);
   for (const projectId of involvedProjectIds) {
@@ -1139,7 +1140,7 @@ export async function movePhSessions({ sessionIds, target } = {}, deps = {}) {
     }
   }
 
-  // ── 释放窗口（门闩建立 → busy 探测 → 精确释放 → 落盘）────────────
+  // ── 事务窗口（门闩建立 → busy 探测 → 落盘）──────────────────────
   const movingIds = toMove.map((item) => item.sessionId);
   const plansById = new Map(toMove.map((item) => [item.sessionId, item]));
   const moveGateKey = `move:${crypto.randomUUID()}`;
@@ -1165,7 +1166,7 @@ export async function movePhSessions({ sessionIds, target } = {}, deps = {}) {
         409,
       ),
     );
-    // busy 探测：全部存活实例先探一遍再动手，杜绝「释放了一半才发现 busy」。
+    // busy 探测：全部存活实例先探一遍再动手，杜绝「落盘后才发现 busy」。
     const liveRuntimes = [];
     for (const sessionId of movingIds) {
       const runtime = getRuntime(PH_AGENT_ID, sessionId);
@@ -1190,13 +1191,10 @@ export async function movePhSessions({ sessionIds, target } = {}, deps = {}) {
       }
     }
 
-    // 精确释放：带 sessionId + waitForPersistence，共享进程兄弟会话不受影响。
-    // 任一持久化确认失败即抛错——归属保持原样，调用方收到的就是失败。
-    const releasedSessionIds = [];
-    for (const runtime of liveRuntimes) {
-      await stopAgent(PH_AGENT_ID, runtime.selectedSessionId, { waitForPersistence: true });
-      releasedSessionIds.push(runtime.selectedSessionId);
-    }
+    // 存活实例不释放：配置层是构造期快照，活实例继续按旧装配服务，新归属
+    // 配置在下次启动生效（延迟生效）。meta 回写字段级合并、不触碰归属字段，
+    // 索引翻转与活实例无竞争；侧栏分组身份每轮 /api/agents 从索引现读，活
+    // 实例下一轮轮询即进新分组。
 
     // 落盘：门闩建立前的预读一律视为过期，锁内按 fresh 事实全量重验——
     // 目标（项目存在/未归档/目录在盘，或目录目标仍在盘）、会话仍在、归属
@@ -1279,7 +1277,6 @@ export async function movePhSessions({ sessionIds, target } = {}, deps = {}) {
 
     return {
       movedSessionIds,
-      releasedSessionIds,
       revision: Number(updatedIndex?.revision) || 0,
       target: describeMoveTarget(targetType, targetProject, targetDirectory),
     };
@@ -1336,7 +1333,6 @@ export function setupPhProjectRoutes(app, express, deps = {}) {
       res.json({
         ok: true,
         movedSessionIds: result.movedSessionIds,
-        releasedSessionIds: result.releasedSessionIds,
         revision: result.revision,
         target: result.target,
       });

@@ -8,11 +8,14 @@
  * 契约（POST /protoclaw/ph_project/sessions_move）：
  *  { agentId:'programming-helper', sessionIds:[...],
  *    target:{type:'project',id:'prj_...'} | {type:'directory',openDirectory:'绝对路径'} }
- *  成功 {ok:true,movedSessionIds,releasedSessionIds,revision,target}；
+ *  成功 {ok:true,movedSessionIds,revision,target}；
  *  busy 409 code=ph_sessions_busy（可读提示，不假成功）；其余错误用 payload.error。
  *
- * 语义边界：移动改变归属（配置随归属生效，历史不变），不是选择器切换——
+ * 语义边界：移动只改变归属（管理层事实，历史不变），不是选择器切换——
  * 浏览目标不动；目标只列同目录（默认 ↔ 项目 ↔ 项目），跨目录不支持。
+ * 存活实例不释放：打开中的对话继续可用，新归属的项目配置在下次打开
+ * 时生效（延迟生效）。侧栏分组身份每轮 /api/agents 从索引现读，移动后
+ * 下一轮轮询即进新分组。
  * 单条入口（ctx 菜单）可能来自侧栏/搜索等其他上下文——归属一律从会话记录
  * 的 owner 字段（projectId / openDirectory）解析，不拿页面焦点当来源。
  * 多选状态绑定 workspace + 浏览目标 + 当前切片：渲染期和解清理不可见 id；
@@ -160,25 +163,6 @@ async function _phResolveSessionOwnershipFromServer(sessionId) {
   }
 }
 
-/**
- * 移动成功后按服务端 releasedSessionIds 事实注册侧栏乐观退场（与关闭/
- * 归档链路共用 markPendingRuntimeStop）。releasedSessionIds 是服务端释放
- * 事实（waitForPersistence 停妥才返回），注册后侧栏投影立即隐藏条目，不等
- * 下一轮 loadAgents 重投影（快照一轮 ~3s，期间条目原样挂着，表现为
- * 「移动后侧栏卡几秒」）。轮询快照到达后由 reconcilePendingRuntimeStops
- * 收敛，TTL 兜底条目回可见。
- */
-function _phApplyMoveReleasedSessions(releasedSessionIds, agentId, movingRuntimeIds) {
-  if (!Array.isArray(releasedSessionIds) || releasedSessionIds.length === 0) return false;
-  if (typeof markPendingRuntimeStop !== 'function') return false;
-  for (const releasedSid of releasedSessionIds) {
-    markPendingRuntimeStop(agentId, releasedSid, movingRuntimeIds.get(releasedSid) || '');
-  }
-  if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
-  if (typeof renderAgentList === 'function') renderAgentList();
-  return true;
-}
-
 window.phOpenSessionMoveDialog = async (sessionIds) => {
   const agent = getCurrentAgentRecord();
   if (!agent || typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return;
@@ -278,8 +262,8 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '移动对话' : 'Move Conversations') + '</div>',
     '<div class="feature-detail-subtitle">' + (isZh
-      ? '已选 ' + ids.length + ' 个对话。移动后归属改变（配置随归属生效），历史消息不变。'
-      : ids.length + ' conversation(s) selected. Ownership changes (config follows); history is untouched.') + '</div>',
+      ? '已选 ' + ids.length + ' 个对话。移动后归属立即改变，打开中的对话不受影响，历史消息不变。'
+      : ids.length + ' conversation(s) selected. Ownership changes immediately; open conversations keep running, history is untouched.') + '</div>',
     '</div>',
     '<button type="button" class="feature-detail-close ph-move-cancel">&times;</button>',
     '</div>',
@@ -289,8 +273,8 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
     '<div class="ph-move-target-list">' + targetRows.join('') + '</div>',
     '</div>',
     '<div class="ph-move-note">' + (isZh
-      ? '仅支持同目录内移动：默认项目 ↔ 项目；跨目录移动暂不支持。'
-      : 'Same-directory moves only: directory chats ↔ projects. Cross-directory moves are not supported.') + '</div>',
+      ? '仅支持同目录内移动：默认项目 ↔ 项目；跨目录移动暂不支持。已打开的对话继续使用当前配置，新项目的配置在下次打开时生效。'
+      : 'Same-directory moves only: directory chats ↔ projects. Cross-directory moves are not supported. Open conversations keep their current config; the new project\'s config applies on next open.') + '</div>',
     '<div class="ph-new-project-error ph-move-error" hidden></div>',
     '</div>',
     '<div class="settings-actions">',
@@ -344,22 +328,6 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
     }
     submitBtn.disabled = true;
     errorEl.hidden = true;
-    // 提交前快照被移动会话的运行实例映射：成功响应携带的 releasedSessionIds
-    // 是服务端释放事实（waitForPersistence 停妥才返回），据此注册乐观退场需要
-    // sessionId → runtimeId 对应关系。会话不在运行则无条目，注册自然跳过。
-    const movingRuntimeIds = new Map();
-    if (Array.isArray(allAgents)) {
-      for (const runtimeItem of allAgents) {
-        if (String(runtimeItem?.parent_id || '') !== String(agent.id)) continue;
-        const runningSid = String(runtimeItem?.active_workspace_session_id || '').trim();
-        if (runningSid && ids.includes(runningSid)) {
-          movingRuntimeIds.set(
-            runningSid,
-            String(runtimeItem?.runtime_session_id || runtimeItem?.runtimeSessionId || runtimeItem?.id || '').trim(),
-          );
-        }
-      }
-    }
     try {
       const response = await fetch('/protoclaw/ph_project/sessions_move', {
         method: 'POST',
@@ -382,20 +350,8 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
       }
       close();
       window.phSessionMoveReset();
-      // 乐观退场：见 _phApplyMoveReleasedSessions（released 事实 → 投影
-      // 立即隐藏，轮询收敛）。注册在竞态守卫之前——工作空间/浏览目标切走
-      // 时实例同样已停，退场事实与浏览上下文无关。
-      _phApplyMoveReleasedSessions(payload?.releasedSessionIds, agent.id, movingRuntimeIds);
-      // 被移动会话含当前停靠 runtime 时切回工作台面（对齐 thread-delete /
-      // thread-archive 回退口径）：移动释放了实例，停留在已无 runtime 的
-      // 对话视图上表现为消息流僵死、输入无响应。判定用同步全局
-      // currentRuntimeAgentId（stale check 只信同步值）。
-      for (const movingRuntimeId of movingRuntimeIds.values()) {
-        if (movingRuntimeId && String(currentRuntimeAgentId || '') === movingRuntimeId) {
-          if (typeof selectWorkspaceSurface === 'function') selectWorkspaceSurface(agent.id);
-          break;
-        }
-      }
+      // 停靠在被移动对话上时无需离开：实例不被释放，视图继续可用（新归属
+      // 配置下次打开时生效）。
       // 线程视图缓存随移动事实刷新（对齐 delete 链路）：移动的会话可能属
       // 线程（整链移动），历史时间锚 / 归档呈现依赖的线程数据重拉。
       if (Array.isArray(payload?.movedSessionIds) && payload.movedSessionIds.length > 0
@@ -412,7 +368,7 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
         return;
       }
       // 成功后刷新：切片重拉 + 搜索重拉 + 恢复卡片（随渲染调度）+ 侧栏运行态
-      // （loadAgents 重投影，已释放旧实例不沿用）。
+      // （loadAgents 重投影，活实例分组身份随索引现读进新分组）。
       const ownership = targetNow?.type === 'project'
         ? { projectId: targetNow.id }
         : { projectDir: targetNow?.openDirectory || '' };
