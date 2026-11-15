@@ -842,7 +842,18 @@ const adoptHeadIdentity = async (agentId, sessionId, { threadId, headGeneration 
     // committed thread and injects its identity in the normal startup path.
     return { ok: true, skipped: true };
   }
-  return requestRuntimeAck(runtime, {
+  // 冷启动竞态（新会话建线路径）：isManagedRuntimeRunning 在 spawn 后即为 true，
+  // 但框架 adopt 契约要求 viewer 注册已激活——启动序列走到 withViewer 完成前到
+  // 达的 adopt 会被拒绝（viewer registration inactive）。READY 是宿主侧 viewer
+  // 激活信号，先等它再采纳；换头路径 runtime 已 READY，此等待 no-op。进程构造
+  // 期崩溃等场景由 waitForManagedRuntimeReady 的退出快返路径兜住，不白等窗口。
+  const ready = await waitForManagedRuntimeReady(agentId, 10000, sessionId);
+  if (!ready) {
+    return { ok: false, error: 'runtime not READY before adopt-thread-head' };
+  }
+  // 等待窗口内 runtime 可能被替换（崩溃重启）：按最新引用投递，旧引用 IPC 已死
+  const liveRuntime = getAgentRuntime(agentId, sessionId) ?? runtime;
+  return requestRuntimeAck(liveRuntime, {
     type: 'adopt-thread-head',
     threadId,
     headGeneration,
