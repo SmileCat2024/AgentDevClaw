@@ -82,6 +82,7 @@ function loadReadonly({ payload = recordPayload(), threads = [], loadMain = fals
   ctx.run(readonlySource);
   ctx.run(threadStoreSource);
   if (loadMain) {
+    ctx.loadSource('public/src/modules/kernel-state.js');
     ctx.loadSource('public/src/app-core.js');
     // 真实 switchAgent 的离开只读路径（早退分支与清理顺序是契约本身）
     ctx.run(`
@@ -97,6 +98,8 @@ function loadReadonly({ payload = recordPayload(), threads = [], loadMain = fals
       isWorkspaceHostUnit = (agent) => !!agent && agent.kind === 'workspace';
       selectWorkspaceSurface = () => {};
       loadAgentData = async () => {};
+      loadAgents = async () => {};
+      loadMcpInfo = async () => {};
       setViewerSessionBinding = () => {};
       renderAgentList = () => {};
       renderCurrentMainView = () => {};

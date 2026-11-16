@@ -53,10 +53,11 @@ const SUSPENDED_TAGS = [
   './src/modules/home-dashboard.js',
 ];
 
-// index.html 现存 <script type="module"> 入口登记清单（plan R4）。当前为空——
-// 迁移尚未产出任何 module 入口。新增 module 入口时在此逐条登记 src 路径；
-// 入口标签删除时同步注销。路径与标签按去除 ./ 前缀后比较。
-const MODULE_ENTRIES = [];
+// module 入口逐条登记；入口删除时同步注销。路径忽略 ./ 前缀。
+const MODULE_ENTRIES = [
+  './src/modules/i18n-environment-state.js',
+  './src/modules/panel-layout-state.js',
+];
 
 function scriptSources(html) {
   return [...html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/g)].map((m) => m[1]);

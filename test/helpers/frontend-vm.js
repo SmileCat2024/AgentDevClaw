@@ -71,7 +71,7 @@ export function createFrontendSandbox(overrides = {}) {
     localStorage: localStorageStub,
     // 浏览器全局；部分生产模块（如 ph-project-actions.js）失败路径会调用 alert
     alert() {},
-    location: { href: 'http://127.0.0.1:1420', pathname: '/', search: '' },
+    location: { href: 'http://127.0.0.1:1420', protocol: 'http:', pathname: '/', search: '' },
     addEventListener() {},
     removeEventListener() {},
     innerWidth: 1280,
@@ -86,7 +86,7 @@ export function createFrontendSandbox(overrides = {}) {
     fetch: async () => ({ ok: false, status: 0, json: async () => ({}) }),
   };
 
-  const context = {
+  const context = Object.assign(windowStub, {
     // Browser globals
     window: windowStub,
     document: documentStub,
@@ -141,7 +141,7 @@ export function createFrontendSandbox(overrides = {}) {
     setCurrentOverviewSnapshot(value) { context.currentOverviewSnapshot = value || {}; },
     setCurrentTodoPlan(value) { context.currentTodoPlan = value || {}; },
     ...overrides,
-  };
+  });
 
   vm.createContext(context);
 

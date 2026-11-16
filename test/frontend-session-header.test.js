@@ -88,6 +88,7 @@ function createHeaderSandbox() {
   ctx.window.setInterval = () => 0;
   ctx.window.clearInterval = () => {};
   ctx.window.setTimeout = () => 0;
+  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   ctx.loadSource('public/src/modules/runtime-status.js');
   ctx.loadSource('public/src/modules/overview-data.js');

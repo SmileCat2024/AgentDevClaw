@@ -582,9 +582,9 @@ let currentWorkspaceDocsetDetail = null;
 let currentProjectDocsetOpen = false;
 let currentProjectRequirementEdit = null;
 let currentProjectDocsetPage = 'requirement';
-let featurePanelWidth = 460;
-let currentTheme = localStorage.getItem('agentdev-theme') || 'dark';
-let currentLanguage = localStorage.getItem('agentdev-language') || 'zh';
+window.KernelState.defineKey('panel-layout-state', 'featurePanelWidth', 460);
+window.KernelState.defineKey('i18n-environment', 'currentTheme', localStorage.getItem('agentdev-theme') || 'dark');
+window.KernelState.defineKey('i18n-environment', 'currentLanguage', localStorage.getItem('agentdev-language') || 'zh');
 /**
  * preset 名 → 用户可见显示名。
  * `__default__` 是 resolver 层的合成名（全局默认模型不在 presets.json 里），

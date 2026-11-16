@@ -44,6 +44,7 @@ test('each session selects its own assembly, missing exports fail explicitly', (
 
 function welcomeSandbox() {
   const ctx = createFrontendSandbox();
+  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   ctx.loadSource('public/src/modules/session-view-state.js');
   ctx.loadSource('public/src/modules/workspace-agents.js');

@@ -17,6 +17,7 @@ try {
   // Geometry assertions compare settled layout, not an in-flight button transition.
   await page.addStyleTag({ content: '.follow-latest-btn { transition: none; }' });
   await page.addScriptTag({ content: await fs.readFile('node_modules/marked/lib/marked.umd.js', 'utf8') });
+  await page.addScriptTag({ content: await fs.readFile('public/src/modules/kernel-state.js', 'utf8') });
   for (const name of ['app-core', 'modules/markdown-utils', 'modules/session-view-state', 'modules/workspace-agents']) {
     await page.addScriptTag({ content: await fs.readFile(`public/src/${name}.js`, 'utf8') });
   }

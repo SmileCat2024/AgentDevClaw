@@ -35,6 +35,7 @@ try {
       await page.addStyleTag({ content: await fs.readFile(`public/styles/${name}.css`, 'utf8') });
     }
     await page.addScriptTag({ content: await fs.readFile('node_modules/marked/lib/marked.umd.js', 'utf8') });
+    await page.addScriptTag({ content: await fs.readFile('public/src/modules/kernel-state.js', 'utf8') });
     for (const name of ['app-core', 'modules/markdown-utils', 'modules/session-view-state']) {
       await page.addScriptTag({ content: await fs.readFile(`public/src/${name}.js`, 'utf8') });
     }
