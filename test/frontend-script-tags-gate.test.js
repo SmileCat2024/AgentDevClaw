@@ -1,7 +1,7 @@
 /**
- * script 标签清单防线（Phase C 收尾面）。
+ * script 标签清单防线（Phase C 收尾面 + ESM 迁移 R4 入口纪律）。
  *
- * 三道断言：
+ * classic src 标签三道断言：
  * 1. 死标签——index.html 全部 src 引用的本地文件必须存在（/vendor/* 例外：
  *    server.js vendorMounts 运行时从 node_modules 挂载，非 public/ 静态资产）；
  * 2. ratchet——src 标签总数只减不增，基线 .script-tags-baseline.json；
@@ -10,6 +10,12 @@
  * 3. 悬置域清单——悬置工作空间（work-group / flow / dispatch-console）与转入
  *    大工程（qqbot 线程化 / home 小组件）的标签集合固化：只许整体删除
  *    （随各自工程重做消亡），不许以任何形式新增。
+ *
+ * module 入口登记（ESM 迁移 plan R4）：
+ * 4. index.html 的 <script type="module" ...> 入口必须逐条登记在 MODULE_ENTRIES
+ *    （src 路径数组），双向一致：清单外标签报错（module 入口的首次执行时机 =
+ *    首个 import 它的模块执行时，改变装载时序，必须有意识登记），登记路径在
+ *    标签中不存在也报错（入口删除时同步注销登记，不许留悬置清单项）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,10 +53,25 @@ const SUSPENDED_TAGS = [
   './src/modules/home-dashboard.js',
 ];
 
+// index.html 现存 <script type="module"> 入口登记清单（plan R4）。当前为空——
+// 迁移尚未产出任何 module 入口。新增 module 入口时在此逐条登记 src 路径；
+// 入口标签删除时同步注销。路径与标签按去除 ./ 前缀后比较。
+const MODULE_ENTRIES = [];
+
 async function readTags() {
   const html = await readFile(HTML, 'utf8');
   return [...html.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]);
 }
+
+// module 标签匹配与属性顺序无关（type 在 src 前后均命中）
+const MODULE_TAG_RE = /<script\b(?=[^>]*\btype=["']module["'])(?=[^>]*\bsrc=["']([^"']+)["'])[^>]*>/g;
+
+async function readModuleTags() {
+  const html = await readFile(HTML, 'utf8');
+  return [...html.matchAll(MODULE_TAG_RE)].map((m) => m[1]);
+}
+
+const normPath = (p) => p.replace(/^\.\//, '');
 
 test('全部 src 引用的本地文件存在（vendor 运行时挂载除外）', async () => {
   const tags = await readTags();
@@ -91,4 +112,25 @@ test('悬置域标签集合固化：只许整体删除，不许新增', async ()
       !SUSPENDED_TAGS.includes(t),
   );
   assert.deepEqual(outside, [], `悬置/大工程域出现新标签：${outside.join(', ')}——这些域不新增静态装载`);
+});
+
+test('module 入口逐条登记：清单外 module 标签报错（plan R4）', async () => {
+  const tags = await readModuleTags();
+  const registered = new Set(MODULE_ENTRIES.map(normPath));
+  const unregistered = tags.filter((t) => !registered.has(normPath(t)));
+  assert.deepEqual(
+    unregistered,
+    [],
+    `出现未登记的 module 入口：${unregistered.join(', ')}——新增 module 入口必须在 MODULE_ENTRIES 有意识登记（plan R4）`,
+  );
+});
+
+test('module 入口双向一致：登记了但标签不存在也报错', async () => {
+  const tags = new Set((await readModuleTags()).map(normPath));
+  const stale = MODULE_ENTRIES.filter((e) => !tags.has(normPath(e)));
+  assert.deepEqual(
+    stale,
+    [],
+    `MODULE_ENTRIES 登记的入口在 index.html 中不存在：${stale.join(', ')}——入口标签已删除时应同步注销登记`,
+  );
 });
