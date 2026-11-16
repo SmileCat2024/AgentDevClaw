@@ -1,9 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { marked } from 'marked';
+import { afterEach } from 'node:test';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { loadMarkdownModule } from './helpers/markdown-esm-loader.js';
 
-function setup() {
+const cleanups = [];
+afterEach(() => { while (cleanups.length) cleanups.pop()(); });
+
+async function setup() {
+  const markdown = await loadMarkdownModule();
+  cleanups.push(markdown.cleanup);
   const tasks = new Map();
   let timer = 0;
   const panel = { innerHTML: '' };
@@ -23,10 +30,9 @@ function setup() {
     fetch(url) { return new Promise((resolve) => requests.push({ url, resolve })); },
   });
   ctx.document.querySelector = (s) => s === '.ph-session-tabs' ? root : s === '.ph-search-panel' ? panel : null;
-  // markdown-utils 顶层注册分发器动作（markdown.*），action-dispatcher
-  // 需在其前预载（真实 index.html 加载顺序即如此）。
+  ctx.escapeHtml = markdown.module.escapeHtml;
+  ctx.splitMarkdownFrontmatter = markdown.module.splitMarkdownFrontmatter;
   ctx.loadSource('public/src/modules/action-dispatcher.js');
-  ctx.loadSource('public/src/modules/markdown-utils.js');
   ctx.loadSource('public/src/modules/session-list-render.js');
   ctx.loadSource('public/src/modules/ph-session-list.js');
   const input = (q) => { ctx.window.phOnSearchInput(q); for (const [id, fn] of tasks) { tasks.delete(id); fn(); } };
@@ -37,7 +43,7 @@ const row = { sessionId: 'session-one', title: 'Needle title', updatedAt: '2026-
 
 describe('history search UI', () => {
   it('uses the normal row, chronological context, safe title highlights and expansion for one hit', async () => {
-    const s = setup();
+    const s = await setup();
     s.input('Needle');
     assert.match(s.requests[0].url, /scope=all/);
     await s.resolve(0, { results: [row], total: 1 });
@@ -50,7 +56,7 @@ describe('history search UI', () => {
     assert.match(s.panel.innerHTML, /收起/);
   });
   it('expands adjacent hits once each without losing the richer matched excerpt', async () => {
-    const s = setup(); s.input('Needle');
+    const s = await setup(); s.input('Needle');
     await s.resolve(0, { results: [{ ...row, matchCount: 2, matches: [
       { index: 1, role: 'user', snippet: 'Needle question', context: { index: 2, role: 'assistant', snippet: 'Needle short answer', relation: 'next' } },
       { index: 2, role: 'assistant', snippet: 'Needle short answer', excerpt: 'Needle richer answer', excerptLeadingEllipsis: true, excerptTrailingEllipsis: true },
@@ -61,7 +67,7 @@ describe('history search UI', () => {
     assert.match(s.panel.innerHTML, /…<mark class="search-highlight">Needle<\/mark> richer answer…/);
   });
   it('namespaces remote result identities and preserves the explicit host for opening', async () => {
-    const s = setup();
+    const s = await setup();
     s.ctx.loadSource('public/src/modules/remote-connections.js');
     Object.assign(s.root.dataset, { searchAgentId: 'remote:host:programming-helper', searchRemote: 'true' });
     s.input('Needle');
@@ -71,7 +77,7 @@ describe('history search UI', () => {
     assert.doesNotMatch(s.panel.innerHTML, /draggable="true"/);
   });
   it('does not accept stale results when a query repeats after an intervening input', async () => {
-    const s = setup();
+    const s = await setup();
     s.input('a'); s.input('b'); s.input('a');
     await s.resolve(0, { results: [row], total: 99 });
     assert.doesNotMatch(s.panel.innerHTML, /99/);
@@ -79,20 +85,20 @@ describe('history search UI', () => {
     assert.match(s.panel.innerHTML, /未找到/);
   });
   it('rejects old project responses without a new request having started', async () => {
-    const s = setup(); s.input('Needle');
+    const s = await setup(); s.input('Needle');
     s.root.dataset.searchDirectory = 'D:/other';
     await s.resolve(0, { results: [row], total: 1 });
     assert.equal(s.ctx.window.ClawFW.phSearch.results.length, 0);
   });
   it('shows errors with retry rather than reporting no matches', async () => {
-    const s = setup(); s.input('Needle');
+    const s = await setup(); s.input('Needle');
     await s.resolve(0, {}, false);
     assert.match(s.panel.innerHTML, /搜索失败/);
     assert.match(s.panel.innerHTML, /重试/);
     assert.doesNotMatch(s.panel.innerHTML, /未找到/);
   });
   it('paginates and sends selected scope and sorting to the server', async () => {
-    const s = setup(); s.input('Needle');
+    const s = await setup(); s.input('Needle');
     await s.resolve(0, { results: [row], total: 2 });
     s.ctx.window.phSearchLoadMore();
     assert.match(s.requests[1].url, /offset=1/);
@@ -103,8 +109,8 @@ describe('history search UI', () => {
     s.ctx.window.phToggleSearchSort();
     assert.match(s.requests[3].url, /sort=recency/);
   });
-  it('observes normal-list pagination separately from search pagination', () => {
-    const s = setup();
+  it('observes normal-list pagination separately from search pagination', async () => {
+    const s = await setup();
     let selector = '';
     let observed = 0;
     s.ctx.document.querySelectorAll = (value) => { selector = value; return [{}]; };
@@ -114,20 +120,20 @@ describe('history search UI', () => {
     assert.equal(selector, '.ph-session-tab-panel .ph-load-more-wrap');
     assert.equal(observed, 1);
   });
-  it('keeps readable markdown text without introducing HTML or nested containers', () => {
-    const s = setup();
+  it('keeps readable markdown text without introducing HTML or nested containers', async () => {
+    const s = await setup();
     assert.equal(s.ctx.run('_phReadableExcerpt("**重点**与 `code`\\n\\n- 第一项\\n- 第二项")'), '重点与 code\n\n\n第一项\n第二项');
     assert.equal(s.ctx.run('_phReadableExcerpt("<img src=x onerror=alert(1)>")'), '<img src=x onerror=alert(1)>');
   });
-  it('drops YAML frontmatter metadata from the excerpt, keeping the body', () => {
-    const s = setup();
+  it('drops YAML frontmatter metadata from the excerpt, keeping the body', async () => {
+    const s = await setup();
     // 消息里整段贴 SKILL.md 时，摘要只应出现正文，不应出现 name/description 元数据
     const src = '---\nname: demo-skill\ndescription: 一句话说明\n---\n\n# 正文标题\n\n正文段落。';
     // 摘要按「块间补一个换行」拼接（与上一条样例同规则）：正文照常，元数据不出现。
     assert.equal(s.ctx.run(`_phReadableExcerpt(${JSON.stringify(src)})`), '正文标题\n\n\n正文段落。');
   });
-  it('highlights literal metacharacters without breaking escaped HTML entities', () => {
-    const s = setup();
+  it('highlights literal metacharacters without breaking escaped HTML entities', async () => {
+    const s = await setup();
     assert.equal(s.ctx.run('_phHighlightText("<img>&.*", ".*")'), '&lt;img&gt;&amp;<mark class="search-highlight">.*</mark>');
     assert.equal(s.ctx.run('_phHighlightText("<", "lt")'), '&lt;');
   });

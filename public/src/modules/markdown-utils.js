@@ -1,73 +1,12 @@
-// markdown-utils.js
-// Phase 2d-1: Markdown / 数学公式渲染（Domain O-a）
-// 从 app-ui.js 提取的渲染工具函数
+// Markdown / 数学公式渲染工具（ESM owner）
 
-const renderer = new marked.Renderer();
+import { getCurrentLanguage } from './i18n-environment-state.js';
 
-renderer.codespan = function(code) {
-  const text = typeof code === 'string'
-    ? code
-    : (code && typeof code === 'object' && 'text' in code
-      ? code.text
-      : String(code ?? ''));
-  return '<code class="inline-code-accent">' + escapeHtml(text) + '</code>';
-};
+const renderer = window.renderer; // markdown-bootstrap 的 KernelState 桥键，classic renderer 消费者收敛后注销
+const escapeHtml = window.escapeHtml; // markdown-bootstrap 的 KernelState 桥键，classic escapeHtml 消费者收敛后注销
+const marked = window.marked;
 
-// 块级代码：包裹 md-code-block 壳并挂右下角复制动作条（布局契约对齐
-// md-table-block，见 components.css）。只对 fenced block 显式声明且 hljs
-// 支持的语言做高亮；无语言标注的普通文本不做 highlightAuto 猜测。
-renderer.code = function(code, langArg) {
-  const obj = (code && typeof code === 'object' && 'text' in code) ? code : null;
-  const text = obj ? String(obj.text ?? '') : String(code ?? '');
-  const lang = String((obj ? obj.lang : langArg) ?? '').match(/\S+/)?.[0] || '';
-  const codeText = text.replace(/\n$/, '') + '\n';
-  let codeHtml = escapeHtml(codeText);
-  if (lang && hljs.getLanguage(lang)) {
-    try { codeHtml = hljs.highlight(codeText, { language: lang }).value; } catch (e) {}
-  }
-  const classAttr = lang ? ' class="language-' + escapeHtml(lang) + '"' : '';
-  return '<div class="md-code-block"><pre><code' + classAttr + '>'
-    + codeHtml
-    + '</code></pre>'
-    + '<div class="md-code-actions">'
-    + '<button type="button" class="message-icon-action is-icon-copy" title="复制代码" data-action="markdown.copyCode"></button>'
-    + '</div></div>\n';
-};
-
-function escapeHtml(text) {
-  const str = String(text);
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return str.replace(/[&<>"']/g, m => map[m]);
-}
-
-renderer.html = function(token) {
-  const raw = String(token?.raw || '');
-  if (
-    /^<claw-display-math\s+data-token="claw-display-math-\d+">$/.test(raw)
-    || raw === '</claw-display-math>'
-  ) {
-    return raw;
-  }
-  // 指南工作空间占位 token（与 claw-display-math 同款占位技法，见 guide-docset.js）
-  if (/^<claw-guide-img data-token="guide-img-\d+">(?:<\/claw-guide-img>)?$/.test(raw) || raw === '</claw-guide-img>') {
-    return raw;
-  }
-  if (/^<claw-guide-callout data-token="guide-callout-\d+">(?:<\/claw-guide-callout>)?$/.test(raw) || raw === '</claw-guide-callout>') {
-    return raw;
-  }
-  if (/^<claw-guide-imgrow data-token="guide-imgrow-\d+">(?:<\/claw-guide-imgrow>)?$/.test(raw) || raw === '</claw-guide-imgrow>') {
-    return raw;
-  }
-  return escapeHtml(raw);
-};
-
-marked.setOptions({
-  renderer,
-  // 代码高亮在 renderer.code 内完成——marked v18 已移除 highlight 选项
-  breaks: true
-});
-
-function extractDisplayMathBlocks(text) {
+export function extractDisplayMathBlocks(text) {
   const source = String(text ?? '');
   const segments = source.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g);
   const blocks = [];
@@ -130,7 +69,7 @@ const FRONTMATTER_MAX_LINES = 80;
 const FRONTMATTER_MAX_CHARS = 8000;
 
 /** 块内是否像 YAML：至少一个顶层键行，且没有散文行。 */
-function looksLikeFrontmatterBlock(lines) {
+export function looksLikeFrontmatterBlock(lines) {
   let keyCount = 0;
   for (const raw of lines) {
     const text = String(raw);
@@ -143,7 +82,7 @@ function looksLikeFrontmatterBlock(lines) {
   return keyCount > 0;
 }
 
-function unquoteYamlValue(value) {
+export function unquoteYamlValue(value) {
   const text = String(value || '').trim();
   const quoted = text.match(/^(['"])([\s\S]*)\1$/);
   return quoted ? quoted[2] : text;
@@ -154,7 +93,7 @@ function unquoteYamlValue(value) {
  * 追加到上一个值（`>` 折叠成空格，`|` 保留换行）。只求呈现可用，不做
  * 完整 YAML 解析。
  */
-function parseFrontmatterRows(lines) {
+export function parseFrontmatterRows(lines) {
   const rows = [];
   let current = null;
   const append = (text) => {
@@ -186,7 +125,7 @@ function parseFrontmatterRows(lines) {
  * 分隔行与换行），body 为之后正文——两者拼回即原文，分块重组不失真。
  * 未命中返回 null。
  */
-function splitMarkdownFrontmatter(text) {
+export function splitMarkdownFrontmatter(text) {
   const source = String(text ?? '').replace(/^\uFEFF/, '');
   // 允许文档开头有空行；只认第一条 `---` 起始、由 `---`/`...` 收尾的块。
   const match = source.match(/^(?:[ \t]*\r?\n)*---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
@@ -205,7 +144,7 @@ function splitMarkdownFrontmatter(text) {
 }
 
 /** 键值卡片：键走次级色，值按行内 markdown 渲染（描述里的反引号、链接可用）。 */
-function renderFrontmatterHtml(rows) {
+export function renderFrontmatterHtml(rows) {
   if (!Array.isArray(rows) || rows.length === 0) return '';
   const body = rows.map(({ key, value }) => '<div class="md-frontmatter-row">'
     + '<span class="md-frontmatter-key">' + escapeHtml(key) + '</span>'
@@ -215,16 +154,16 @@ function renderFrontmatterHtml(rows) {
 }
 
 /** 值渲染走 marked 的行内解析（沿用同一 renderer，行内 HTML 仍被转义）。 */
-function renderFrontmatterValue(value) {
+export function renderFrontmatterValue(value) {
   if (!value) return '';
   if (typeof marked.parseInline !== 'function') return escapeHtml(value);
   return marked.parseInline(value);
 }
 
-function renderDisplayMathLatex(latex) {
+export function renderDisplayMathLatex(latex) {
   if (window.katex?.renderToString) {
     try {
-      return katex.renderToString(latex, {
+      return window.katex.renderToString(latex, {
         displayMode: true,
         throwOnError: false,
         strict: 'ignore',
@@ -243,7 +182,7 @@ function renderDisplayMathLatex(latex) {
 // token（块间空行）不是可编辑块：渲染时跳过，重组时原样保留。
 
 /** 整篇 markdown → 顶层块数组 [{ raw, type }]。raw 是该块的原文切片。 */
-function splitMarkdownBlocks(text) {
+export function splitMarkdownBlocks(text) {
   const frontmatter = splitMarkdownFrontmatter(text);
   if (!frontmatter) {
     return marked.lexer(String(text ?? '')).map((token) => ({
@@ -260,12 +199,12 @@ function splitMarkdownBlocks(text) {
 }
 
 /** space token（块间空行）不是可编辑块，其余（标题/段落/列表/代码块/表格/引用/分隔线…）都是。 */
-function isEditableMarkdownBlock(block) {
+export function isEditableMarkdownBlock(block) {
   return Boolean(block) && block.type !== 'space';
 }
 
 /** 块数组 → 整篇源码。与 splitMarkdownBlocks 互逆。 */
-function joinMarkdownBlocks(blocks) {
+export function joinMarkdownBlocks(blocks) {
   return (Array.isArray(blocks) ? blocks : []).map((block) => block.raw).join('');
 }
 
@@ -275,7 +214,7 @@ function joinMarkdownBlocks(blocks) {
  * newRaw 为空白时表示删除该块：同时吞并相邻一个 space 段，防止反复
  * 清块让空行在文件里累积。越界下标原样返回。
  */
-function replaceMarkdownBlock(text, blockIndex, newRaw) {
+export function replaceMarkdownBlock(text, blockIndex, newRaw) {
   const source = String(text ?? '');
   const blocks = splitMarkdownBlocks(source);
   if (!Number.isInteger(blockIndex) || blockIndex < 0 || blockIndex >= blocks.length) {
@@ -294,7 +233,9 @@ function replaceMarkdownBlock(text, blockIndex, newRaw) {
   return joinMarkdownBlocks(blocks);
 }
 
-function renderMarkdown(text) {
+export function renderMarkdown(text) {
+  // Renderer hooks are attached by the classic first-paint bootstrap. This is
+  // the same renderer instance; the module provides the remaining pipeline.
   // frontmatter 必须在 marked 之前摘出：否则开头 `---` 被当成分隔线、
   // name/description 被并成一个大标题（SKILL.md 阅读页的典型表现）。
   const frontmatter = splitMarkdownFrontmatter(text);
@@ -444,8 +385,8 @@ const copyMarkdownTable = async function(btn) {
   const text = table ? tableToMarkdown(table) : '';
   if (!text) return;
   let ok = false;
-  if (navigator.clipboard && window.isSecureContext) {
-    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) { ok = false; }
+  if (window.navigator?.clipboard && window.isSecureContext) {
+    try { await window.navigator.clipboard.writeText(text); ok = true; } catch (e) { ok = false; }
   }
   if (!ok) {
     // 非安全上下文回退（如局域网 IP 访问 UI）
@@ -462,9 +403,9 @@ const copyMarkdownTable = async function(btn) {
     } catch (e) { ok = false; }
   }
   if (!ok) {
-    if (typeof ClawToast !== 'undefined') {
-      const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-      ClawToast.show({ id: 'md-table-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy table' });
+    if (typeof window.ClawToast !== 'undefined') {
+      const isZh = getCurrentLanguage() === 'zh';
+      window.ClawToast.show({ id: 'md-table-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy table' });
     }
     return;
   }
@@ -527,8 +468,8 @@ const copyMarkdownCode = async function(btn) {
   const text = code ? code.textContent.replace(/\n+$/, '') : '';
   if (!text) return;
   let ok = false;
-  if (navigator.clipboard && window.isSecureContext) {
-    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) { ok = false; }
+  if (window.navigator?.clipboard && window.isSecureContext) {
+    try { await window.navigator.clipboard.writeText(text); ok = true; } catch (e) { ok = false; }
   }
   if (!ok) {
     // 非安全上下文回退（如局域网 IP 访问 UI）
@@ -545,9 +486,9 @@ const copyMarkdownCode = async function(btn) {
     } catch (e) { ok = false; }
   }
   if (!ok) {
-    if (typeof ClawToast !== 'undefined') {
-      const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-      ClawToast.show({ id: 'md-code-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy code' });
+    if (typeof window.ClawToast !== 'undefined') {
+      const isZh = getCurrentLanguage() === 'zh';
+      window.ClawToast.show({ id: 'md-code-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy code' });
     }
     return;
   }
@@ -601,7 +542,7 @@ function initMarkdownTableBleedObserver() {
 }
 
 function enhanceMathInElement(root) {
-  if (!root || typeof renderMathInElement !== 'function') {
+  if (!root || typeof window.renderMathInElement !== 'function') {
     return;
   }
 
@@ -614,7 +555,7 @@ function enhanceMathInElement(root) {
       return;
     }
     try {
-      renderMathInElement(element, {
+      window.renderMathInElement(element, {
         delimiters: [
           { left: '$$', right: '$$', display: true },
           { left: '\\[', right: '\\]', display: true },
@@ -634,7 +575,31 @@ function enhanceMathInElement(root) {
   });
 }
 
-// ── 分发器动作（原模板内联事件收编，命名空间 markdown.*）──────────
+// Only classic consumers that still exist remain on the measurable bridge.
+// escapeHtml and renderer are registered synchronously by markdown-bootstrap.
+const bridgeState = {
+  escapeHtml,
+  renderer,
+  splitMarkdownFrontmatter,
+  renderMarkdown,
+  enhanceMarkdownTables,
+  enhanceMathInElement,
+  splitMarkdownBlocks,
+  isEditableMarkdownBlock,
+  replaceMarkdownBlock,
+};
+window.KernelState.defineKey('markdown-utils', 'splitMarkdownFrontmatter', splitMarkdownFrontmatter);
+window.KernelState.defineKey('markdown-utils', 'renderMarkdown', renderMarkdown);
+window.KernelState.defineKey('markdown-utils', 'enhanceMarkdownTables', enhanceMarkdownTables);
+window.KernelState.defineKey('markdown-utils', 'enhanceMathInElement', enhanceMathInElement);
+window.KernelState.defineKey('markdown-utils', 'splitMarkdownBlocks', splitMarkdownBlocks);
+window.KernelState.defineKey('markdown-utils', 'isEditableMarkdownBlock', isEditableMarkdownBlock);
+window.KernelState.defineKey('markdown-utils', 'replaceMarkdownBlock', replaceMarkdownBlock);
+window.KernelState.claim('markdown-utils', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
+});
+
 window.ClawFW.actions.registerMany({
   'markdown.copyCode': (el) => copyMarkdownCode(el),
   'markdown.copyTable': (el) => copyMarkdownTable(el),
@@ -646,3 +611,20 @@ window.addEventListener('load', () => {
   refreshMarkdownTableBleed();
   initMarkdownTableBleedObserver();
 });
+
+export {
+  escapeHtml,
+  renderer,
+  CHAT_ROW_MAX_WIDTH_PX,
+  tableToMarkdown,
+  findTableFromActionButton,
+  copyMarkdownTable,
+  openTableZoom,
+  copyMarkdownCode,
+  updateMarkdownTableFadeState,
+  upgradeWideTable,
+  enhanceMarkdownTables,
+  refreshMarkdownTableBleed,
+  initMarkdownTableBleedObserver,
+  enhanceMathInElement,
+};

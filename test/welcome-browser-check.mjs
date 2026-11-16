@@ -9,7 +9,14 @@ try {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const source = await fs.readFile('public/index.html', 'utf8');
-  await page.route('http://claw.test/**', (route) => route.fulfill({ contentType: 'text/html', body: source.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link\b[^>]*>/g, '') }));
+  await page.route('http://claw.test/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.startsWith('/src/')) {
+      await route.fulfill({ contentType: 'text/javascript', body: await fs.readFile(`public${pathname}`, 'utf8') });
+      return;
+    }
+    await route.fulfill({ contentType: 'text/html', body: source.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link\b[^>]*>/g, '') });
+  });
   await page.goto('http://claw.test/');
   for (const name of ['base', 'layout', 'components', 'app-chat-input']) {
     await page.addStyleTag({ content: await fs.readFile(`public/styles/${name}.css`, 'utf8') });
@@ -18,9 +25,10 @@ try {
   await page.addStyleTag({ content: '.follow-latest-btn { transition: none; }' });
   await page.addScriptTag({ content: await fs.readFile('node_modules/marked/lib/marked.umd.js', 'utf8') });
   await page.addScriptTag({ content: await fs.readFile('public/src/modules/kernel-state.js', 'utf8') });
-  for (const name of ['app-core', 'modules/markdown-utils', 'modules/session-view-state', 'modules/workspace-agents']) {
+  for (const name of ['app-core', 'modules/action-dispatcher', 'modules/markdown-bootstrap', 'modules/session-view-state', 'modules/workspace-agents']) {
     await page.addScriptTag({ content: await fs.readFile(`public/src/${name}.js`, 'utf8') });
   }
+  await page.evaluate(() => import('/src/modules/markdown-utils.js'));
   await page.evaluate(() => {
     window.setCurrentHookInspector = () => {};
     window.setCurrentOverviewSnapshot = () => {};

@@ -143,6 +143,7 @@
 - 列表、渲染和导航存储：`agent-store-state.js` / `render-entry-state.js` / `orchestration-state.js` 接管对应可变键；查询、渲染与切换函数仍由 classic 实现。
 - 会话身份与版本：`session-view-identity-state.js` 接管身份、元数据、身份代次及消息/输入版本计数；保留真实 patch、同 runtime 回访的旧 token 拒绝与字段级防旧响应规则。测试沙箱统一在 classic 模块之前安装真实 kernel。
 - 上述状态模块合计保留 48 个兼容访问器、七个 owner claim。classic 台账缩小不代表全局依赖消失；撤桥需等待消费方迁移。
+- Markdown：渲染、公式、分块编辑与表格动作由 `markdown-utils.js` ESM 提供。`markdown-bootstrap.js` 保留首屏同步转义和唯一 renderer 配置；九个兼容键覆盖现有 classic/插件宿主消费方，块编辑键不可因仅经宿主间接调用而遗漏。静态模块延迟时首屏、真实 KaTeX/高亮与复制动作已有浏览器回归。
 - Agent 数据加载：`agent-loader.js` 持有模板/详情请求与载荷缓存，`agent-loader-host.js` 显式依赖已迁状态模块并适配剩余 classic 函数。原 `loadedAgentDetailIds` 的只读引用留在 classic，窄宿主面 `AgentLoaderHost` 只提供该 Set。新增六个兼容键（模板映射与五个函数），不新增启动等待；真实会话提交、失败重试和延迟模块认证顺序已有回归。
 
 验证覆盖 claim 前写入保留、引用身份、真实请求合并与失败解锁、导航意图失效、真实会话 patch 及隔离浏览器启动。全量回归仍有线程接续 G3 失败，另观察到标注重放与计时预算的间歇失败；不得将当前阶段报告为全量测试通过。

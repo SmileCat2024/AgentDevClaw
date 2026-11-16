@@ -64,6 +64,7 @@ const MODULE_ENTRIES = [
   './src/modules/render-entry-state.js',
   './src/modules/orchestration-state.js',
   './src/modules/agent-loader-host.js',
+  './src/modules/markdown-utils.js',
 ];
 
 function scriptSources(html) {

@@ -1721,43 +1721,6 @@
       "unfreezeProcessWindowing"
     ]
   },
-  "public/src/modules/markdown-utils.js": {
-    "state": [
-      "CHAT_ROW_MAX_WIDTH_PX",
-      "FRONTMATTER_MAX_CHARS",
-      "FRONTMATTER_MAX_LINES",
-      "_currentBleed",
-      "copyMarkdownCode",
-      "copyMarkdownTable",
-      "openTableZoom",
-      "renderer"
-    ],
-    "behavior": [
-      "enhanceMarkdownTables",
-      "enhanceMathInElement",
-      "escapeHtml",
-      "extractDisplayMathBlocks",
-      "findTableFromActionButton",
-      "initMarkdownTableBleedObserver",
-      "isEditableMarkdownBlock",
-      "joinMarkdownBlocks",
-      "looksLikeFrontmatterBlock",
-      "parseFrontmatterRows",
-      "refreshMarkdownTableBleed",
-      "renderDisplayMathLatex",
-      "renderFrontmatterHtml",
-      "renderFrontmatterValue",
-      "renderMarkdown",
-      "replaceMarkdownBlock",
-      "splitMarkdownBlocks",
-      "splitMarkdownFrontmatter",
-      "tableToMarkdown",
-      "unquoteYamlValue",
-      "updateMarkdownTableFadeState",
-      "upgradeWideTable",
-      "wrapMarkdownTables"
-    ]
-  },
   "public/src/modules/mcp-gateway-ui.js": {
     "state": [
       "SVG_BACK",

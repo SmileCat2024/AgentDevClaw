@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeWorkspaceAgents, resolveWorkspaceAgent, resolveNewSessionAgent, resolveWorkspaceAgentClass } from '../server/shared/workspace-agents.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { createAgentLoader } from '../public/src/modules/agent-loader.js';
 
 const metadata = { id: 'programming-helper', name: '工作空间', defaultAgentId: 'main', agents: [
   { id: 'main', displayName: '编程小助手' }, { id: 'reviewer', displayName: { zh: '审查助手', en: 'Reviewer' } },
@@ -75,10 +76,23 @@ test('bound metadata survives view normalization and overrides stale catalog; st
   assert.match(ctx.run('getEmptyStateHtml()'), /审查助手/);
 });
 
-test('remote welcome resolves a namespaced Session against the remote detail payload', () => {
+test('remote welcome resolves a namespaced Session against the remote detail payload', async () => {
   const ctx = welcomeSandbox();
+  const loader = createAgentLoader({
+    loadedAgentDetailIds: new Set(),
+    captureSidebarSnapshotToken: () => null,
+    captureSessionViewToken: () => null,
+    getPhSessionOwnershipParams: () => ({}),
+    allAgents: () => [],
+    fetch: async () => ({ ok: true, json: async () => ({
+      agents: [{ id: 'reviewer', displayName: '远程审查助手' }],
+      workspace_sessions: { sessions: [{ id: 'remote-session', workspaceAgentId: 'reviewer' }] },
+    }) }),
+    warn: (...args) => { throw new Error(args.join(' ')); },
+  });
+  await loader.loadAgentDetail('remote:host:workspace');
+  ctx.window.getAgentDetailPayload = loader.getAgentDetailPayload;
   ctx.run(`function splitRemoteNamespaceId(value) { const match = /^remote:([^:]+):(.*)$/.exec(value); return match ? {connectionId: match[1], innerId: match[2]} : null; }
-    _agentDetailPayloadCache.set('remote:host:workspace', { agents: [{id: 'reviewer', displayName: '远程审查助手'}], workspace_sessions: {sessions: [{id: 'remote-session', workspaceAgentId: 'reviewer'}]} });
     applySessionViewPatch({identity: {agentId: 'remote:host:workspace', sessionId: 'remote:host:remote-session'}});`);
   assert.match(ctx.run('getEmptyStateHtml()'), /远程审查助手/);
 });
