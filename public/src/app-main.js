@@ -932,9 +932,14 @@ window.switchAgent = async (newAgentId, options = {}) => {
 // There must be exactly one owner of the self-scheduling poll loop. Input
 // submission paths may request an immediate refresh, but they must not create
 // another recursive timer chain.
-let _pollTimerId = null;
-let _pollCycleInFlight = null;
-let _pollImmediateRequested = false;
+function createPollCoordinatorHost() {
+  return {
+    run: () => runPollCycle(),
+    fastInterval: () => POLL_FAST_INTERVAL_MS,
+    setTimeout: (callback, delay) => setTimeout(callback, delay),
+    clearTimeout: (id) => clearTimeout(id),
+  };
+}
 // 消息同步版本号对账（ADR-0012 v2）：记录每个 runtime 已应用到最后一次
 // 取数的 probe.seq。count 相等且 seq 未前进 → 零请求跳过。会话切换时不
 // 清理——viewer 的 seq 是 per-session 单调计数，runtime 不变则 seq 语义
@@ -991,15 +996,7 @@ async function fetchWorkspaceSessionsForPoll(agentId, agentRecord = null) {
   return data;
 }
 
-function schedulePoll(delayMs = POLL_FAST_INTERVAL_MS) {
-  if (_pollTimerId !== null) {
-    clearTimeout(_pollTimerId);
-  }
-  _pollTimerId = setTimeout(() => {
-    _pollTimerId = null;
-    poll();
-  }, Math.max(0, Number(delayMs) || 0));
-}
+// schedulePoll is provided by poll-coordinator-host.js after static ESM init.
 
 // 发送成功等交互关键路径请求立即取数：poll() 自带 in-flight 合并（周期
 // 在飞时记 _pollImmediateRequested，结束后 schedulePoll(0) 兜底），直接调
@@ -1055,31 +1052,7 @@ function emitMsgMetrics(metrics) {
   });
 }
 
-async function poll() {
-  if (_pollCycleInFlight) {
-    _pollImmediateRequested = true;
-    return _pollCycleInFlight;
-  }
-
-  if (_pollTimerId !== null) {
-    clearTimeout(_pollTimerId);
-    _pollTimerId = null;
-  }
-
-  const cycle = runPollCycle();
-  _pollCycleInFlight = cycle;
-  try {
-    return await cycle;
-  } finally {
-    if (_pollCycleInFlight === cycle) {
-      _pollCycleInFlight = null;
-    }
-    if (_pollImmediateRequested) {
-      _pollImmediateRequested = false;
-      schedulePoll(0);
-    }
-  }
-}
+// poll and its private scheduling state live in poll-coordinator.js.
 
 // Exposed for feature panel toggle: after IPC tool-state change, trigger a
 // delayed poll so inspector refreshes from the agent subprocess.

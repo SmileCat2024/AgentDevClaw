@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
+import { createPollCoordinator } from '../public/src/modules/poll-coordinator.js';
 import { createRuntimeStatusLoader } from '../public/src/modules/runtime-status-loader.js';
 import { createSessionDataLoader } from '../public/src/modules/session-data-loader.js';
 
@@ -234,7 +235,9 @@ function createPollSandbox({ blockStatus = true } = {}) {
   vm.runInContext(kernelStateSource, sandbox);
   installSessionViewCommit(sandbox);
   const overviewSource = fs.readFileSync(new URL('../public/src/modules/overview-data.js', import.meta.url), 'utf8');
-  vm.runInContext(`${sessionViewStateSource}\n${overviewSource}\n${extractPollSource()}\nglobalThis.__poll = poll;`, sandbox);
+  vm.runInContext(`${sessionViewStateSource}\n${overviewSource}\n${extractPollSource()}`, sandbox);
+  Object.assign(sandbox, createPollCoordinator(vm.runInContext('createPollCoordinatorHost()', sandbox)));
+  sandbox.__poll = sandbox.poll;
 
   return {
     sandbox,
