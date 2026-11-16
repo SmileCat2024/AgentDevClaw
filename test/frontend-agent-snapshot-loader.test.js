@@ -23,6 +23,7 @@ test('snapshot ESM host coalesces reads, preserves source identity, rejects stal
   });
   ctx.loadSource('public/src/app-core.js');
   ctx.loadSource('public/src/modules/session-view-state.js');
+  ctx.loadSource('public/src/modules/agent-data-loader.js');
   ctx.loadSource('public/src/modules/runtime-status.js');
   ctx.loadSource('public/src/modules/sidebar-render.js');
   ctx.invoke = async () => {

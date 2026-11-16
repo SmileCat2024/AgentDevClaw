@@ -340,12 +340,10 @@
     ]
   },
   "public/src/modules/agent-data-loader.js": {
-    "state": [
-      "_lastTemplateRuntimeId"
-    ],
+    "state": [],
     "behavior": [
       "createRuntimeStatusLoaderHost",
-      "loadAgentData"
+      "createSessionDataLoaderHost"
     ]
   },
   "public/src/modules/annotations.js": {

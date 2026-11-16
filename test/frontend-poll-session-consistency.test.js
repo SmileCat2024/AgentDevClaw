@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { createRuntimeStatusLoader } from '../public/src/modules/runtime-status-loader.js';
+import { createSessionDataLoader } from '../public/src/modules/session-data-loader.js';
 
 /** Raw VM harnesses install the real kernel before evaluating classic sources. */
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
@@ -28,7 +29,7 @@ function extractPollSource() {
 }
 
 function extractLoadAgentDataSource() {
-  const start = agentDataLoaderSource.indexOf('async function loadAgentData(agentId)');
+  const start = agentDataLoaderSource.indexOf('function createSessionDataLoaderHost()');
   const end = agentDataLoaderSource.indexOf('\n// Async status requests', start);
   assert.notEqual(start, -1, 'loadAgentData start marker should exist');
   assert.notEqual(end, -1, 'loadAgentData end marker should exist');
@@ -593,10 +594,11 @@ test('loadAgentData discards response bodies that finish after a newer switch', 
   vm.runInContext(kernelStateSource, sandbox);
   installSessionViewCommit(sandbox);
   vm.runInContext(
-    `${sessionViewStateSource}\n${extractLoadAgentDataSource()}\nglobalThis.__loadAgentData = loadAgentData;`,
+    `${sessionViewStateSource}\n${extractLoadAgentDataSource()}`,
     sandbox,
   );
 
+  sandbox.__loadAgentData = createSessionDataLoader(sandbox.createSessionDataLoaderHost()).loadAgentData;
   const oldLoad = sandbox.__loadAgentData('A');
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -676,7 +678,8 @@ test('loadAgentData refreshes composer metadata after committing the initial ove
   sandbox.window = sandbox;
   vm.runInContext(kernelStateSource, sandbox);
   installSessionViewCommit(sandbox);
-  vm.runInContext(`${sessionViewStateSource}\n${extractLoadAgentDataSource()}\nglobalThis.__load = loadAgentData;`, sandbox);
+  vm.runInContext(`${sessionViewStateSource}\n${extractLoadAgentDataSource()}`, sandbox);
+  sandbox.__load = createSessionDataLoader(sandbox.createSessionDataLoaderHost()).loadAgentData;
   await sandbox.__load('A');
   assert.deepEqual(renders, ['main', 'initial-model', 'high']);
 });

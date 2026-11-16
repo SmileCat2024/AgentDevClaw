@@ -4,7 +4,7 @@ import test from 'node:test';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
-const loaderSource = fs.readFileSync(new URL('../public/src/modules/agent-data-loader.js', import.meta.url), 'utf8');
+const loaderSource = fs.readFileSync(new URL('../public/src/modules/session-data-loader.js', import.meta.url), 'utf8');
 const agentLoaderSource = fs.readFileSync(new URL('../public/src/modules/agent-loader.js', import.meta.url), 'utf8');
 const sseSource = fs.readFileSync(new URL('../public/src/modules/sse-client.js', import.meta.url), 'utf8');
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
@@ -141,9 +141,9 @@ test('direct apply callers are synchronous navigation transactions; async messag
 });
 
 test('initial loading and polling paths guard responses and commit through SessionView', () => {
-  assert.match(loaderSource, /const loadToken = captureSessionViewToken\(agentId\)/);
-  assert.match(loaderSource, /if \(!isSessionViewTokenCurrent\(loadToken\)\)/);
-  assert.match(loaderSource, /commitSessionViewPatch\(loadToken/);
+  assert.match(loaderSource, /const token = host\.capture\(agentId\)/);
+  assert.match(loaderSource, /if \(!host\.isCurrent\(token\)\)/);
+  assert.match(loaderSource, /host\.patch\(token/);
   assert.match(mainSource, /const pollToken = captureSessionViewToken\(\)/);
   assert.match(mainSource, /commitSessionViewPatch\(pollToken/);
   assert.match(mainSource, /if \(!isSessionViewTokenCurrent\(pollToken\)\) return true/);

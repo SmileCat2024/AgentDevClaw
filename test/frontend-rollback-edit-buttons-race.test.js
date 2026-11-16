@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
+import { createSessionDataLoader } from '../public/src/modules/session-data-loader.js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { sourceBetween } from './helpers/frontend-vm.js';
@@ -194,6 +195,7 @@ function createChatSandbox() {
   vm.runInContext(POLL_SRC, sandbox, { filename: 'app-main.js#poll' });
   vm.runInContext(load('public/src/modules/sse-client.js'), sandbox, { filename: 'sse-client.js' });
   vm.runInContext(load('public/src/modules/agent-data-loader.js'), sandbox, { filename: 'agent-data-loader.js' });
+  Object.assign(sandbox, createSessionDataLoader(sandbox.createSessionDataLoaderHost()));
   return { sandbox, container };
 }
 

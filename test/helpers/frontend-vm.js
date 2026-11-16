@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import { installSessionViewCommit } from './session-view-commit.js';
 import { createAgentSnapshotLoader } from '../../public/src/modules/agent-snapshot-loader.js';
 import { createRuntimeStatusLoader } from '../../public/src/modules/runtime-status-loader.js';
+import { createSessionDataLoader } from '../../public/src/modules/session-data-loader.js';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -176,6 +177,7 @@ export function createFrontendSandbox(overrides = {}) {
     if (relativePath === 'public/src/modules/session-view-state.js') installSessionViewCommit(context);
     if (relativePath === 'public/src/modules/agent-data-loader.js') {
       Object.assign(context, createRuntimeStatusLoader(vm.runInContext('createRuntimeStatusLoaderHost()', context)));
+      Object.assign(context, createSessionDataLoader(vm.runInContext('createSessionDataLoaderHost()', context)));
     }
     if (relativePath === 'public/src/modules/sidebar-render.js') {
       Object.assign(context, createAgentSnapshotLoader(vm.runInContext('createAgentSnapshotLoaderHost()', context)));

@@ -3,6 +3,7 @@ import * as store from './agent-store-state.js';
 import { loadAgentDetail } from './agent-loader-host.js';
 import { refreshAgentCallStates } from './agent-call-states-host.js';
 import { activeFeaturePanel } from './render-entry-state.js';
+import { loadAgentData } from './session-data-loader-host.js';
 
 const host = window.createAgentSnapshotLoaderHost();
 const loader = createAgentSnapshotLoader({
@@ -16,6 +17,7 @@ const loader = createAgentSnapshotLoader({
   },
   loadDetail: loadAgentDetail,
   refreshCalls: refreshAgentCallStates,
+  loadData: loadAgentData,
 });
 export const { loadAgents } = loader;
 window.KernelState.defineKey('agent-snapshot-loader', 'loadAgents', loadAgents);
