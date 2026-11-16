@@ -57,6 +57,7 @@ const SUSPENDED_TAGS = [
 const MODULE_ENTRIES = [
   './src/modules/i18n-environment-state.js',
   './src/modules/panel-layout-state.js',
+  './src/modules/session-view-storage.js',
 ];
 
 function scriptSources(html) {

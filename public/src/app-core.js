@@ -555,11 +555,11 @@ const _recentlyFinishedRuntimes = new Set();
 // 全局 choice 请求提醒：跟踪已弹 toast 的 requestId，避免重复提醒
 const _seenChoiceAlertIds = new Set();
 let _lastChoiceAlertCheckAt = 0;
-let currentMessages = [];
-let currentInputRequests = [];
+window.KernelState.defineKey('session-view-storage', 'currentMessages', []);
+window.KernelState.defineKey('session-view-storage', 'currentInputRequests', []);
 let choiceInputState = {};
-let toolRenderConfigs = {};
-let TOOL_NAMES = {};
+window.KernelState.defineKey('session-view-storage', 'toolRenderConfigs', {});
+window.KernelState.defineKey('session-view-storage', 'TOOL_NAMES', {});
 const _autoTitleTriggered = new Set();
 let contextMenuAgentId = null;
 let contextMenuAgentMode = null;
@@ -604,9 +604,9 @@ function loadChatProcessVisibility() {
   }
 }
 let showChatProcess = loadChatProcessVisibility();
-let currentHookInspector = { lifecycleOrder: [], features: [], hooks: [] };
-let currentHookInspectorSignature = '';
-let currentOverviewSnapshot = {
+window.KernelState.defineKey('session-view-storage', 'currentHookInspector', { lifecycleOrder: [], features: [], hooks: [] });
+window.KernelState.defineKey('session-view-storage', 'currentHookInspectorSignature', '');
+window.KernelState.defineKey('session-view-storage', 'currentOverviewSnapshot', {
   updatedAt: 0,
   context: {
     messageCount: 0,
@@ -624,16 +624,16 @@ let currentOverviewSnapshot = {
     totalRequests: 0,
     totalCacheHitRequests: 0,
   },
-};
-let currentOverviewSignature = '';
-let currentTodoPlan = {
+});
+window.KernelState.defineKey('session-view-storage', 'currentOverviewSignature', '');
+window.KernelState.defineKey('session-view-storage', 'currentTodoPlan', {
   feature: 'todo',
   updatedAt: 0,
   counter: 0,
   tasks: [],
   summary: { total: 0, pending: 0, inProgress: 0, completed: 0, cancelled: 0, blocked: 0 },
-};
-let currentTodoPlanSignature = '';
+});
+window.KernelState.defineKey('session-view-storage', 'currentTodoPlanSignature', '');
 let _interruptTargetCache = new Map(); // key: runtimeContextKey, value: taskId|null
 let _lastInterruptUserActionAt = 0; // timestamp of last user click on interrupt control
 function getInterruptTargetId() {
