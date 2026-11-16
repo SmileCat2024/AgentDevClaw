@@ -32,6 +32,7 @@ import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { createPollCoordinator } from '../public/src/modules/poll-coordinator.js';
 import { createMessageProbe } from '../public/src/modules/message-probe.js';
 import { createMetadataCommit } from '../public/src/modules/metadata-commit.js';
+import { createRuntimePoll } from '../public/src/modules/runtime-poll.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const sessionViewStateSource = fs.readFileSync(
@@ -218,6 +219,7 @@ function createSandbox({
   Object.assign(sandbox, createPollCoordinator(vm.runInContext('createPollCoordinatorHost()', sandbox)));
   Object.assign(sandbox, createMessageProbe(vm.runInContext('createMessageProbeHost()', sandbox)));
   Object.assign(sandbox, createMetadataCommit(vm.runInContext('createMetadataCommitHost()', sandbox)));
+  Object.assign(sandbox, createRuntimePoll(vm.runInContext('createRuntimePollHost()', sandbox)));
   sandbox.__poll = sandbox.poll;
   return { sandbox, fetchCalls, consoleRecords, renders, scheduledDelays };
 }

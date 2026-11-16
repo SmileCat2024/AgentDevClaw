@@ -1408,6 +1408,31 @@ async function _runPollTailLowFrequency(pollToken) {
   return true;
 }
 
+function createRuntimePollHost() {
+  return {
+    capture: () => captureSessionViewToken(),
+    consumeForceFull: () => { const force = _forceFullPollNextCycle; _forceFullPollNextCycle = false; return force; },
+    sseActive: () => typeof isSseActive === 'function' && isSseActive(),
+    guard: (id, token) => refreshContextGuardStatus(id, token),
+    status: (id, token) => refreshCurrentRuntimeStatus(id, token),
+    refreshCalls: (agents, options) => refreshAgentCallStates(agents, options),
+    agents: () => allAgents,
+    commit: (token, effect) => commitSessionViewState(token, effect),
+    isCurrent: (token) => isSessionViewTokenCurrent(token),
+    syncInput: (id) => { _syncPersistentActionButton(); _syncPersistentInputUi(id); },
+    title: (id) => { if (!isRuntimeCalling(id)) tryAutoTitleGeneration(currentMessages); },
+    tail: (token) => _runPollTailLowFrequency(token),
+    schedule: (delay) => schedulePoll(delay),
+    fastInterval: () => POLL_FAST_INTERVAL_MS,
+    interval: () => POLL_INTERVAL_MS,
+    fetch: (url) => fetch(url),
+    notFound: (token) => handleCoreResponsesNotFound(token),
+    messages: (token, probe) => runMessagesProbeCycle(token, probe),
+    probe: (overview) => typeof extractMessagesProbe === 'function' ? extractMessagesProbe(overview) : null,
+    metadata: (token, parts) => commitMetadataUpdate(token, parts),
+  };
+}
+
 async function runPollCycle() {
   try {
     if (prebuiltSessionSwitchInFlight) {
@@ -1505,153 +1530,13 @@ async function runPollCycle() {
       return;
     }
 
-    // 先单独刷新轻量运行态，再并行请求较重的数据，避免状态栏被慢接口拖住。
-    // SSE 激活时（§5.2）：notification/connection/overview/todo/input-requests
-    // 由事件供数，本周期只拉 guard 状态；读取即清零的一次性全量标志
-    // （看门狗 / resync / reconnected 触发）让本轮回到完整轮询形态。
-    const pollToken = captureSessionViewToken();
-    const pollRuntimeId = pollToken.runtimeId;
-    const forceFullThisCycle = _forceFullPollNextCycle;
-    _forceFullPollNextCycle = false;
-    const sseActiveThisCycle = typeof isSseActive === 'function' && isSseActive() && !forceFullThisCycle;
-    const statusTask = sseActiveThisCycle
-      ? refreshContextGuardStatus(pollRuntimeId, pollToken)
-      : refreshCurrentRuntimeStatus(pollRuntimeId, pollToken);
-
-    if (sseActiveThisCycle) {
-      // messages / metadata / 队列 / call 状态全部事件驱动：本周期骨架只保留
-      // 按钮与输入面的本地同步（无请求），以及低频兜底项（tail 共享段）。
-      await statusTask;
-      await refreshAgentCallStates(allAgents, {
-        reuseNotification: null,
-      });
-      const statusUiCommitted = commitSessionViewState(pollToken, () => {
-        _syncPersistentActionButton();
-        _syncPersistentInputUi(pollRuntimeId);
-      });
-      if (!statusUiCommitted) {
-        schedulePoll(POLL_FAST_INTERVAL_MS);
-        return;
-      }
-      // ADR-0041：壳层自动标题已硬屏蔽，调用为空操作（no-op）。
-      commitSessionViewState(pollToken, () => {
-        if (!isRuntimeCalling(pollRuntimeId)) {
-          tryAutoTitleGeneration(currentMessages);
-        }
-      });
-      const tailOk = await _runPollTailLowFrequency(pollToken);
-      schedulePoll(tailOk ? POLL_INTERVAL_MS : POLL_FAST_INTERVAL_MS);
-      return;
-    }
-
-    // 消息增量探测（ADR-0012）：probe 随本周期 overview 响应下发，/messages
-    // 必须等 probe 决定取数方式后再发，因此不再进入第一波并行请求。
-    const [inputRes, overviewRes, todoRes] = await Promise.all([
-      fetch(`/api/agents/${pollRuntimeId}/input-requests`),
-      fetch(`/api/agents/${pollRuntimeId}/overview`),
-      fetch(`/api/agents/${pollRuntimeId}/todo`),
-    ]);
-
-    // 如果在 fetch 期间已经切换了 agent，丢弃过时的响应，避免旧数据覆盖新会话
-    if (!isSessionViewTokenCurrent(pollToken)) {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return;
-    }
-
-    const coreResponses = [inputRes, overviewRes];
-    if (coreResponses.some(res => res.status === 404)) {
-      await handleCoreResponsesNotFound(pollToken);
-      return;
-    }
-
-    // ── Messages incremental probe fetch (ADR-0012 probe + tail) ──────────
-    // The probe rides this cycle's overview response, so it is same-generation
-    // with the /messages fetch below (one shared pollToken timeline).
-    const overviewJson = await overviewRes.json();
-    if (!isSessionViewTokenCurrent(pollToken)) {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return;
-    }
-
-    // extractMessagesProbe lives in overview-data.js (script order in
-    // index.html); absence (tests / older shell) degrades to the legacy full
-    // fetch, which is exactly the "probe unavailable" path inside the cycle.
-    const msgProbe = typeof extractMessagesProbe === 'function'
-      ? extractMessagesProbe(overviewJson)
-      : null;
-    // 对账矩阵与取数逻辑单点在 runMessagesProbeCycle（SSE messages 事件共用，
-    // §5.2：probe 到达路径从 overview 响应换成事件帧，其余逐字节同源）
-    const probeOutcome = await runMessagesProbeCycle(pollToken, msgProbe);
-    if (probeOutcome === 'handled404') {
-      // /messages 404（runtime 在两波 fetch 之间死亡）：与 input/overview 404
-      // 共用 runtime 消失处理（原"branch is shared"防御语义，F3）
-      await handleCoreResponsesNotFound(pollToken);
-      return;
-    }
-    if (probeOutcome !== 'committed') {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return;
-    }
-
-    // 焦点 runtime 的 notification 本周期已由 statusTask 取过，结果交给
-    // refreshAgentCallStates 同周期复用（一次请求、两处消费），省去每轮一次
-    // 的重复请求；statusTask 失败/过期时 notifData 为空，对方照常自取兜底。
-    // forceFull 对账轮传 includeSseLocals：SSE 连接健康时 refreshAgentCallStates
-    // 仍会跳过本地条目，全量形态必须覆盖 call 维度（F2d）。
-    const focusedStatus = await statusTask;
-    await refreshAgentCallStates(allAgents, {
-      includeSseLocals: forceFullThisCycle,
-      reuseNotification: focusedStatus?.notifData
-        ? { runtimeId: pollRuntimeId, payload: focusedStatus.notifData }
-        : null,
-    });
-    const statusUiCommitted = commitSessionViewState(pollToken, () => {
-      _syncPersistentActionButton();
-      _syncPersistentInputUi(pollRuntimeId);
-    });
-    if (!statusUiCommitted) {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return;
-    }
-
-    // Parse the lightweight view metadata together and publish it in one
-    // synchronous transaction. The transcript remains latency-first above,
-    // while usage/todo/input UI never paints a mixed poll generation.
-    // overviewJson was already consumed by the probe step above — same body,
-    // same generation. 签名对比与提交逻辑单点在 commitMetadataUpdate
-    // （SSE todo/overview/input-requests 事件共用，§5.6）。
-    const [todoRaw, inputRequestsRaw] = await Promise.all([
-      todoRes.ok ? todoRes.json() : Promise.resolve(null),
-      inputRes.json(),
-    ]);
-    const metadataCommitted = commitMetadataUpdate(pollToken, { todoRaw, overviewJson, inputRequestsRaw });
-    if (!metadataCommitted) {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return;
-    }
-
-    // ADR-0041：壳层自动标题已硬屏蔽，此处调用为空操作（no-op）。
-    // 标题由应用自己的 AutoTitlePolicyFeature 订阅轮次事件生成；不要在此恢复触发逻辑。
-    commitSessionViewState(pollToken, () => {
-      if (!isRuntimeCalling(pollRuntimeId)) {
-        tryAutoTitleGeneration(currentMessages);
-      }
-    });
-
-    // 低频兜底段（loadAgents / workspace sessions / hooks / final cache）
-    // 与 SSE 激活周期共用同一实现
-    const tailOk = await _runPollTailLowFrequency(pollToken);
-    if (!tailOk) {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return;
-    }
-
+    await runRuntimePoll();
+    return;
   } catch (e) {
     console.warn('Polling failed, keeping last known connection state:', e);
     schedulePoll(POLL_INTERVAL_MS);
     return;
   }
-  schedulePoll(POLL_FAST_INTERVAL_MS);
 }
 // ── Input request rendering → modules/input-render.js ──
 

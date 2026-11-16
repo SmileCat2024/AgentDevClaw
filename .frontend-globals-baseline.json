@@ -215,6 +215,7 @@
       "createMessageProbeHost",
       "createMetadataCommitHost",
       "createPollCoordinatorHost",
+      "createRuntimePollHost",
       "emitMsgMetrics",
       "fetchWorkspaceSessionsForPoll",
       "flushPendingSwitch",
