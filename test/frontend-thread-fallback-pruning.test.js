@@ -88,6 +88,8 @@ function createHarness() {
   sandbox.__switchLog = switchLog;
   sandbox.__elements = elements;
   vm.createContext(sandbox);
+  const kernelSource = fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
+  vm.runInContext(kernelSource, sandbox);
   return sandbox;
 }
 

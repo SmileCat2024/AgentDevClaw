@@ -4,7 +4,6 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 function createIdentitySandbox() {
   const context = createFrontendSandbox();
-  context.loadSource('public/src/modules/kernel-state.js');
   context.loadSource('public/src/app-core.js');
   return context;
 }

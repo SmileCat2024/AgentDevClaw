@@ -30,7 +30,6 @@ async function withCore({ stored = {}, beforeClaim } = {}, callback) {
   globalThis.window = ctx;
   ctx.localStorage.setItem('agentdev-theme', stored.theme || 'dark');
   ctx.localStorage.setItem('agentdev-language', stored.language || 'zh');
-  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
 
   try {

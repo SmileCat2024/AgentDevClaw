@@ -76,18 +76,18 @@ function normalizeSessionModelState(snapshot) {
   };
 }
 
-let _sessionMeta = EMPTY_SESSION_META;
-let _sessionViewIdentity = null;
+window.KernelState.defineKey('session-view-identity-state', '_sessionMeta', EMPTY_SESSION_META);
+window.KernelState.defineKey('session-view-identity-state', '_sessionViewIdentity', null);
 // 身份代次：每次生效身份变化（显式 identity 或 sessionMeta 推导）推进。
 // 仅比较 runtimeId + epoch 无法拒绝「同 runtime 离开又回到同一 Session」
 // 时残留的旧 token（A→B→A 回访，epoch 未变）：旧生产者携带过期数据仍能
 // 通过校验。代次让任何身份变化作废全部在途 token。
-let _sessionViewGeneration = 0;
+window.KernelState.defineKey('session-view-identity-state', '_sessionViewGeneration', 0);
 // 独立于视图身份：输入请求被事件/本地操作写入后，在途快照不得覆盖它。
-let _sessionViewInputRequestsRevision = 0;
+window.KernelState.defineKey('session-view-identity-state', '_sessionViewInputRequestsRevision', 0);
 // 消息已由实时路径更新时，进入会话时发出的旧全量快照不能回退正文。
-let _sessionViewMessagesRevision = 0;
-let _sessionViewModelRuntimeId = '';
+window.KernelState.defineKey('session-view-identity-state', '_sessionViewMessagesRevision', 0);
+window.KernelState.defineKey('session-view-identity-state', '_sessionViewModelRuntimeId', '');
 
 function getCurrentSessionViewIdentity() {
   const explicit = normalizeSessionViewIdentity(_sessionViewIdentity);

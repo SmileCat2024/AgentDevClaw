@@ -2637,13 +2637,7 @@
   },
   "public/src/modules/session-view-state.js": {
     "state": [
-      "EMPTY_SESSION_META",
-      "_sessionMeta",
-      "_sessionViewGeneration",
-      "_sessionViewIdentity",
-      "_sessionViewInputRequestsRevision",
-      "_sessionViewMessagesRevision",
-      "_sessionViewModelRuntimeId"
+      "EMPTY_SESSION_META"
     ],
     "behavior": [
       "applySessionViewPatch",

@@ -1,4 +1,6 @@
 /**
+ * Raw VM harness installs the real kernel bridge before evaluating classic sources.
+ *
  * Frontend incremental message polling (ADR-0012 probe + tail).
  *
  * Locks the poll data-fetch contract introduced by ticket 08:
@@ -199,6 +201,10 @@ function createSandbox({
   };
 
   vm.createContext(sandbox);
+  Object.assign(sandbox, sandbox.window);
+  sandbox.window = sandbox;
+  const kernelSource = fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
+  vm.runInContext(kernelSource, sandbox);
   vm.runInContext(
     `${sessionViewStateSource}\n${overviewDataSource}\n${extractPollSource()}\n`
       + 'globalThis.__poll = poll;',
@@ -458,6 +464,9 @@ test('missing probe keeps the legacy full-fetch path', async () => {
 test('probe fields are stripped from the snapshot and do not change the signature', () => {
   const sandbox = { Set };
   vm.createContext(sandbox);
+  sandbox.window = sandbox;
+  const kernelSource = fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
+  vm.runInContext(kernelSource, sandbox);
   vm.runInContext(sessionViewStateSource + '\n' + overviewDataSource, sandbox);
 
   const base = { modelName: 'model-a', updatedAt: 1, context: { messageCount: 3 } };
@@ -490,6 +499,9 @@ test('probe fields are stripped from the snapshot and do not change the signatur
 test('extractMessagesProbe validates fields and returns null when unusable', () => {
   const sandbox = { Set };
   vm.createContext(sandbox);
+  sandbox.window = sandbox;
+  const kernelSource = fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
+  vm.runInContext(kernelSource, sandbox);
   vm.runInContext(sessionViewStateSource + '\n' + overviewDataSource, sandbox);
 
   const run = (expr) => vm.runInContext(expr, sandbox);

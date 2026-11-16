@@ -184,6 +184,7 @@ function createChatSandbox() {
   base.window = sandbox;
   vm.createContext(sandbox);
   // 真实生产加载顺序第一位：分发器先于一切声明 data-action 的模块装载
+  vm.runInContext(load('public/src/modules/kernel-state.js'), sandbox, { filename: 'kernel-state.js' });
   vm.runInContext(load('public/src/modules/action-dispatcher.js'), sandbox, { filename: 'action-dispatcher.js' });
   vm.runInContext(load('public/src/modules/session-view-state.js'), sandbox, { filename: 'session-view-state.js' });
   vm.runInContext(load('public/src/modules/input-helpers.js'), sandbox, { filename: 'input-helpers.js' });

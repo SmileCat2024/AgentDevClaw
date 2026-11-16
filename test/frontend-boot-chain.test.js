@@ -54,8 +54,7 @@ describe('前端加载链（index.html 真实脚本序，P2 子集）', () => {
       _syncForegroundState() {},
     });
     // app-core.js 是 sse-client 注释所列全局（currentLanguage/ClawFW 约定等）的真实来源之一
-    ctx.loadSource('public/src/modules/kernel-state.js');
-    ctx.loadSource('public/src/app-core.js');
+      ctx.loadSource('public/src/app-core.js');
     ctx.loadSource('public/src/modules/sse-client.js');
     // 模块顶层已自动 boot（沙箱无 __clawAuthReady → 立即连接）
     const src = MockEventSource.instances[MockEventSource.instances.length - 1];

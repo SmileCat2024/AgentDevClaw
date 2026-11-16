@@ -216,8 +216,7 @@ describe('loadAgents 空连接快照行为契约', () => {
     });
     ctx.window.location.protocol = 'http:';
     ctx.window.location.port = '1420';
-    ctx.loadSource('public/src/modules/kernel-state.js');
-  ctx.loadSource('public/src/app-core.js');
+    ctx.loadSource('public/src/app-core.js');
 
     const result = await ctx.run('invoke("get_connected_agents")');
     assert.deepEqual(Array.from(result), []);

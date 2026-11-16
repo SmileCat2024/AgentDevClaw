@@ -67,7 +67,6 @@ async function loadOwner(window) {
 
 test('real session patch preserves early data through claim and rejects stale commits afterward', async () => {
   const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   ctx.loadSource('public/src/modules/session-view-state.js');
   ctx.run("currentRuntimeAgentId = 'runtime-a'; focusedAgentId = 'agent-a'; currentRuntimeConnected = true;");

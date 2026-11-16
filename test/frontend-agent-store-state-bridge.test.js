@@ -35,7 +35,6 @@ test('real loadAgents reuses an in-flight request across owner claim and release
     performance,
     console: { ...console, error() {}, warn() {} },
   });
-  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   ctx.loadSource('public/src/modules/sidebar-render.js');
   ctx.invoke = async () => { calls += 1; await pending; throw new Error('controlled read failure'); };

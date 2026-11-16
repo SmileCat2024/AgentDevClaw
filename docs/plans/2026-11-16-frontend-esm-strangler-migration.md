@@ -1,7 +1,7 @@
 # 前端 classic-script 全局共享模式 ESM 渐进拆解（绞杀者路线）
 
 日期：2026-11-16
-状态：P0 已完成；P1 首战进行中（markdown / HTML 工具域与 toast 域，先审计启动时序再迁移）。P1 各域键清单以 [分桶定案](2026-11-16-esm-p1-domain-buckets.md) 为准
+状态：P0 已完成；P1 进行中，toast 已迁移，环境、会话、列表、渲染与导航状态已分批接管；Markdown 工具域继续按启动依赖拆分迁移。P1 各域键清单以 [分桶定案](2026-11-16-esm-p1-domain-buckets.md) 为准
 
 ---
 
@@ -57,7 +57,7 @@
 
 1. classic script 顶层代码在 deferred ESM 模块**之前**执行；
 2. async 本身不保证执行晚于 ESM；当前主 boot/SSE 则等待 auth ready，认证初始化等待 `DOMContentLoaded`，该事件等待静态非 async ESM 执行，形成已有的传递依赖；
-3. 因此：**任何 classic 代码同步触达的东西（状态与函数）都不能先于其调用方变成 ESM**。
+3. 因此：**在模块执行前已被 classic 触达的状态与函数，必须保持原调用时点可用**。状态可由 classic 注册真初值后交给 ESM 接管；函数需先核对已有顺序，不能依靠未初始化的访问器。
 
 桥的三个组成部分：
 
@@ -102,7 +102,7 @@
 
 | # | 交付物 | 说明 |
 |---|---|---|
-| 0.1 | `public/src/modules/kernel-state.js` | 哑存储 + `defineKey` / `claim` / 桥键计数导出；classic，加载序插在 i18n/app-core 之后（script-tags-gate 更新基线并注明理由） |
+| 0.1 | `public/src/modules/kernel-state.js` | 哑存储 + `defineKey` / `claim` / 桥键计数导出；classic，加载序位于 i18n 之后、app-core 之前，使原声明位置可立即注册桥键（script-tags-gate 更新基线并注明理由） |
 | 0.2 | 桥契约测试 | `test/kernel-bridge.test.js`：get/set 转发、认领前后语义、strict 写、delete、枚举不可见、early-boot 可用（在模块执行前读值） |
 | 0.3 | 《ESM 迁移配方》 | `docs/plans/esm-migration-playbook.md`，对齐 inline-events playbook 形态（骨架见附录 B） |
 | 0.4 | 测试 loader helper | 泛化 `test/helpers/memo-plugin-loader.js` → 通用 ESM 模块加载器（真实 `import()` + stub 注入 + 唯一 query 绕模块缓存） |
@@ -141,7 +141,8 @@
 - 环境和右栏宽度：`i18n-environment-state.js` / `panel-layout-state.js` 接管语言、主题与宽度，保留原 localStorage 读取及 DOM 监听时点。
 - 会话存储：`session-view-storage.js` 接管消息、输入请求、工具配置及 inspector/overview/todo 快照与签名；真实 patch 的过期 token 拒绝规则保持不变。
 - 列表、渲染和导航存储：`agent-store-state.js` / `render-entry-state.js` / `orchestration-state.js` 接管对应可变键；查询、渲染与切换函数仍由 classic 实现。
-- 上述状态模块合计保留 42 个兼容访问器、六个 owner claim。classic 台账缩小不代表全局依赖消失；撤桥需等待消费方迁移。
+- 会话身份与版本：`session-view-identity-state.js` 接管身份、元数据、身份代次及消息/输入版本计数；保留真实 patch、同 runtime 回访的旧 token 拒绝与字段级防旧响应规则。测试沙箱统一在 classic 模块之前安装真实 kernel。
+- 上述状态模块合计保留 48 个兼容访问器、七个 owner claim。classic 台账缩小不代表全局依赖消失；撤桥需等待消费方迁移。
 
 验证覆盖 claim 前写入保留、引用身份、真实请求合并与失败解锁、导航意图失效、真实会话 patch 及隔离浏览器启动。全量回归仍有线程接续 G3 失败，另观察到标注重放与计时预算的间歇失败；不得将当前阶段报告为全量测试通过。
 

@@ -31,7 +31,6 @@ function cleanupKeys() {
 
 test('real pending navigation survives claim and is invalidated by subsequent user navigation', async () => {
   const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   const pending = ctx.run("beginPendingSessionNavigation('agent-a', 'session-a')");
   const previousWindow = globalThis.window;

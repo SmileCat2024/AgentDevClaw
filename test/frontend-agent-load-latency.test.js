@@ -67,7 +67,6 @@ function createLoadHarness() {
       };
     },
   });
-  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   ctx.loadSource('public/src/modules/overview-data.js');
   ctx.loadSource('public/src/modules/todo-plan.js');

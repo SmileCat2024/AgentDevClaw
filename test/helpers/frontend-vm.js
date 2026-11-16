@@ -17,6 +17,21 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const KERNEL_STATE_PATH = 'public/src/modules/kernel-state.js';
+
+/** Install the real classic kernel bridge into an existing VM context. */
+export function installKernelState(context) {
+  const fullPath = join(__dirname, '..', '..', KERNEL_STATE_PATH);
+  const source = fs.readFileSync(fullPath, 'utf8');
+  const existingWindow = context.window;
+  if (existingWindow && existingWindow !== context) {
+    for (const key of Reflect.ownKeys(existingWindow)) {
+      if (!(key in context)) context[key] = existingWindow[key];
+    }
+  }
+  context.window = context;
+  vm.runInContext(source, context, { filename: fullPath });
+}
 
 /**
  * Create a browser-like VM sandbox context.
@@ -154,6 +169,9 @@ export function createFrontendSandbox(overrides = {}) {
     const source = fs.readFileSync(fullPath, 'utf8');
     vm.runInContext(source, context, { filename: fullPath });
   };
+
+  // Make the real kernel bridge available before classic modules register keys.
+  installKernelState(context);
 
   /**
    * Run an expression in the sandbox and return the result.

@@ -115,7 +115,6 @@ test('template loading addresses the explicit runtime rather than page focus', a
       return { ok: true, json: async () => ({ read: '/tpl/mount/read.js' }) };
     },
   });
-  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   ctx.run('currentRuntimeAgentId = "runtime-a"; focusedAgentId = "agent-b"');
 

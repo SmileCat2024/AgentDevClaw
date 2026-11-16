@@ -17,7 +17,6 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 function createCoreSandbox(overrides = {}) {
   const ctx = createFrontendSandbox();
   ctx.getCurrentAgentRecord = () => null;
-  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   // Apply overrides AFTER loading source.
   // `let`/`const` in VM don't become context properties, so use runInContext.
@@ -368,7 +367,6 @@ function createRuntimeStatusSandbox() {
     getEmptyTodoPlan: () => ({}),
     notifyInputSurfaceChanged() {},
   });
-  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   ctx.loadSource('public/src/modules/session-view-state.js');
   ctx.run(`

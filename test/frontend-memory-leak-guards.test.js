@@ -231,7 +231,6 @@ function createEvictionSandbox() {
     sessionMeta: null,
     connected: true,
   });
-  ctx.loadSource('public/src/modules/kernel-state.js');
   ctx.loadSource('public/src/app-core.js');
   ctx.loadSource('public/src/modules/chat-viewport.js');
   ctx.run('followLatestEnabled = false'); // let-bound in app-core.js

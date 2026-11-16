@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
+/** Raw VM contexts install the real kernel with window/global unified. */
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 const i18nSource = fs.readFileSync(new URL('../public/src/i18n.js', import.meta.url), 'utf8');
 const inputRenderSource = fs.readFileSync(
@@ -73,6 +74,8 @@ function createCoreContext() {
   };
   context.getCurrentAgentRecord = () => context.currentAgent;
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
   const cacheBlock = sourceBetween(
     coreSource,
     'const MAX_CACHED_RUNTIME_VIEWS = 4;',
@@ -238,6 +241,8 @@ test('persistent input render signature changes with session context', () => {
     getRuntimeContextKey: () => 'host:flow-workspace|session:session-a',
   };
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
   const signatureBlock = sourceBetween(
     inputRenderSource,
     'function getInputRenderSignature',
@@ -259,6 +264,8 @@ test('detached textarea writes back to its frozen session key', () => {
     _getSessionInputCacheKey: () => 'session-b',
   };
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
   // 草稿函数迁至 input-composer.js（工单 036）；提取区间含四个草稿函数
   const inputCacheBlock = sourceBetween(
     inputComposerSource,
@@ -292,6 +299,8 @@ test('cached session draft restores into request textarea', () => {
     },
   };
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
   // 草稿函数迁至 input-composer.js（工单 036）
   const inputCacheBlock = sourceBetween(
     inputComposerSource,
@@ -320,6 +329,8 @@ test('empty cached session draft restores as an intentional blank', () => {
     },
   };
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
   // 草稿函数迁至 input-composer.js（工单 036）
   const inputCacheBlock = sourceBetween(
     inputComposerSource,
@@ -395,6 +406,8 @@ function createChatMutationContext() {
     },
   };
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
   const mutationBlock = sourceBetween(
     chatRendererSource,
     'function appendNewMessages',
@@ -411,6 +424,8 @@ function createChatRenderSignatureContext() {
     toolRenderConfigs: {},
   };
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
   const signatureBlock = sourceBetween(
     chatRendererSource,
     'function stableSerializeForChatSignature',
@@ -530,6 +545,8 @@ test('context bar renders one supplied session view snapshot', () => {
     escapeHtml: (value) => String(value),
   };
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
   const renderBlock = sourceBetween(
     chatContextBarSource,
     'function updateChatContextBar',
