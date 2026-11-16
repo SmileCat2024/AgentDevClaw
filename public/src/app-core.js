@@ -1,3 +1,9 @@
+// 跨前端模块共享的纯身份规范化函数。必须在 app-core 提前声明：侧栏布局/渲染
+// 模块会在 app-main 启动完成前通过 focus/visibility 事件触发异步首屏渲染。
+function normalizeAgentIdentity(value) {
+  return String(value || '').trim();
+}
+
 // Feature 模板映射（从 API 动态加载）
 let FEATURE_TEMPLATE_MAP = {};
 

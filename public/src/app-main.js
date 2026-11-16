@@ -1,7 +1,3 @@
-function normalizeAgentIdentity(value) {
-  return String(value || '').trim();
-}
-
 function getCurrentSessionHostAgentId() {
   return normalizeAgentIdentity(getCurrentHostAgentRecord()?.id || focusedAgentId);
 }
