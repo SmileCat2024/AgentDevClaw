@@ -244,6 +244,7 @@
       "loadFeatureTemplateMap",
       "localizeWorkspaceValue",
       "markInterruptPending",
+      "normalizeAgentIdentity",
       "normalizeResourceIdentity",
       "reloadFeatureTemplateMap",
       "resetUserCollapseStateForContext",
@@ -298,7 +299,6 @@
       "markSessionLoading",
       "navigateToWorkspaceSession",
       "newIdempotencyKey",
-      "normalizeAgentIdentity",
       "openPrebuiltWorkspaceSession",
       "orderPrebuiltByHost",
       "poll",
@@ -1717,6 +1717,12 @@
       "notifyInputSurfaceChanged",
       "notifyInputViewportMutation",
       "renderInputRequests"
+    ]
+  },
+  "public/src/modules/kernel-state.js": {
+    "state": [],
+    "behavior": [
+      "KernelState"
     ]
   },
   "public/src/modules/lazy-tool-content.js": {
