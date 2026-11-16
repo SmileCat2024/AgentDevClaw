@@ -16,8 +16,10 @@ import {
   extractReferenceObservations,
   buildRelationsSnapshot,
   getThreadRelations,
+  getTopicGroups,
   resetRelationsMemo,
 } from '../server/session-relations/projection.js';
+import { saveTopicNote } from '../server/session-relations/topic-notes.js';
 
 // ── 测试数据根构造 ────────────────────────────────────────────────
 // workspaces/programming-helper/sessions：JSON 索引形态（无 index.db 时
@@ -172,7 +174,7 @@ describe('buildRelationsSnapshot', () => {
     assert.equal(snap.threadTitles['wt-src'], '源线程');
     // 缓存落盘（原子写后的最终名）
     const cached = JSON.parse(await fs.readFile(path.join(dataRoot, 'session-relations', 'cache.json'), 'utf8'));
-    assert.equal(cached.schemaVersion, 1);
+    assert.equal(cached.schemaVersion, 2);
     assert.equal(cached.edges.length, 5);
   });
 
@@ -205,6 +207,102 @@ describe('buildRelationsSnapshot', () => {
 });
 
 // ── getThreadRelations（邻居方向 / 分量 / 身份反查 / 降级） ────────
+
+describe('getTopicGroups', () => {
+  it('returns every connected topic group in recent activity order from session indexes', async () => {
+    resetRelationsMemo();
+    const result = await getTopicGroups({ agentId: 'programming-helper', dataRoot, force: true });
+    assert.equal(result.partial, false);
+    assert.deepEqual(result.groups.map((group) => group.threadIds), [
+      ['wt-dst', 'wt-dst2', 'wt-dst3', 'wt-dst4', 'wt-src'],
+    ]);
+    assert.equal(result.groups[0].threads[0].threadId, 'wt-src');
+    assert.equal(result.groups[0].memberCount, 5);
+  });
+
+  it('filters groups by the current directory without reading group chats', async () => {
+    resetRelationsMemo();
+    const result = await getTopicGroups({
+      agentId: 'programming-helper',
+      openDirectory: 'D:/current',
+      dataRoot,
+      force: true,
+    });
+    assert.deepEqual(result.groups, []);
+  });
+
+  it('merges exact-match topic notes into group title and summary', async () => {
+    resetRelationsMemo();
+    const before = await getTopicGroups({ agentId: 'programming-helper', dataRoot, force: true });
+    const clusterId = before.groups[0].id;
+    await saveTopicNote({
+      dataRoot, agentId: 'programming-helper', clusterId,
+      title: '自定义主题名', summary: '一句话简介',
+      threadIds: before.groups[0].threadIds,
+    });
+    const after = await getTopicGroups({ agentId: 'programming-helper', dataRoot, force: true });
+    const merged = after.groups.find(group => group.id === clusterId);
+    assert.equal(merged.title, '自定义主题名');
+    assert.equal(merged.summary, '一句话简介');
+    assert.equal(merged.customTitle, true);
+  });
+
+  it('inherits notes from a subset snapshot when the cluster grows, never from diverged ones', async () => {
+    resetRelationsMemo();
+    const before = await getTopicGroups({ agentId: 'programming-helper', dataRoot, force: true });
+    const { id: clusterId, threadIds } = before.groups[0];
+    // 隔离上一用例写入的精确标注：本用例考察的是「当前簇 id 无精确命中
+    // 时」的继承行为。
+    await fs.rm(path.join(dataRoot, 'workspaces', 'programming-helper', 'topic-notes.json'), { force: true });
+    // 簇早期快照（成员真子集）带标注：簇增长换 id 后标注应被继承。
+    await saveTopicNote({
+      dataRoot, agentId: 'programming-helper', clusterId: 'relation_earlysubset',
+      title: '早期标注', summary: '',
+      threadIds: threadIds.slice(0, 2),
+    });
+    const inherited = await getTopicGroups({ agentId: 'programming-helper', dataRoot, force: true });
+    assert.equal(inherited.groups.find(group => group.id === clusterId).title, '早期标注');
+    // 分裂快照（含簇外成员）不继承。
+    await fs.rm(path.join(dataRoot, 'workspaces', 'programming-helper', 'topic-notes.json'));
+    await saveTopicNote({
+      dataRoot, agentId: 'programming-helper', clusterId: 'relation_diverged',
+      title: '误贴标注', summary: '',
+      threadIds: [threadIds[0], 'wt-outside'],
+    });
+    const diverged = await getTopicGroups({ agentId: 'programming-helper', dataRoot, force: true });
+    const group = diverged.groups.find(entry => entry.id === clusterId);
+    assert.notEqual(group.title, '误贴标注');
+    assert.equal(group.customTitle, false);
+  });
+
+  it('falls back to the head session title when the thread record has none', async () => {
+    resetRelationsMemo();
+    // 独立数据根：本用例要改写线程与会话索引形态，不复用全局夹具，
+    // 避免影响其他用例的标题预期。
+    const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-relations-fallback-'));
+    try {
+      await writeThreads(localRoot, [
+        { threadId: 'wt-src', workspaceId: 'programming-helper', title: '', sessionIds: ['s-src'] },
+        { threadId: 'wt-dst', workspaceId: 'programming-helper', title: '', sessionIds: ['s-dst'] },
+      ]);
+      await writeIndex(localRoot, [
+        { id: 's-src', title: '源会话的AI标题', updatedAt: '2026-11-14T10:00:00.000Z' },
+        { id: 's-dst', title: '下游会话标题', updatedAt: '2026-11-14T09:00:00.000Z' },
+      ]);
+      await writeSnapshot(localRoot, 's-src', [refReminder(['- s-dst「下游会话」 — agentId: programming-helper（身份: main）'])]);
+      await writeSnapshot(localRoot, 's-dst', []);
+      const result = await getTopicGroups({ agentId: 'programming-helper', dataRoot: localRoot, force: true });
+      const group = result.groups[0];
+      const src = group.threads.find(thread => thread.threadId === 'wt-src');
+      assert.equal(src.title, '源会话的AI标题');
+      // 簇展示标题回退到簇内最新有标题线程（wt-src 的会话标题）。
+      assert.equal(group.title, '源会话的AI标题');
+    } finally {
+      resetRelationsMemo();
+      await fs.rm(localRoot, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
 
 describe('getThreadRelations', () => {
   it('returns one-hop neighbors with directions and component size', async () => {
@@ -286,8 +384,9 @@ describe('getThreadRelations stale-while-revalidate', () => {
   // 新鲜度窗口从构建时刻起算：窗口内数据变化不重验证（成本控制，真实数据
   // 上每次刷新要枚举全部存储目录）。freshnessMs: 0 模拟窗口过期后的查询。
   it('serves the stale snapshot immediately; revalidation lands as new values', async () => {
-    // 建立确定性基线：s-src 单次引用 s-dst，水位 T1。
-    resetRelationsMemo();
+    // 建立确定性基线：s-src 单次引用 s-dst，水位 T1。先构建落盘再清备忘
+    // （模拟重启）：冷启动磁盘种子让重启后的首个查询直接服务落盘基线，
+    // 而不是阻塞一次全量重建。
     await writeSnapshot(dataRoot, 's-src', [
       refReminder(['- s-dst「下游会话」 — agentId: programming-helper（身份: main）']),
     ]);
@@ -299,6 +398,10 @@ describe('getThreadRelations stale-while-revalidate', () => {
       { id: 's-dst4', updatedAt: '2026-11-14T09:30:00.000Z' },
       { id: 's-iso', updatedAt: '2026-11-14T08:00:00.000Z' },
     ]);
+    // 基线用 force 同步强建：普通查询会先服务磁盘上的遗留缓存（种子路径）
+    // 而不是构建当前数据，基线值就不可控了。强建落盘后再清备忘模拟重启。
+    await buildRelationsSnapshot({ dataRoot, force: true });
+    resetRelationsMemo(); // 模拟重启：备忘清空，磁盘缓存保留
     const first = await getThreadRelations({ threadId: 'wt-src', dataRoot, freshnessMs: 0 });
     assert.equal(first.partial, false);
     assert.equal(first.neighbors.find(n => n.threadId === 'wt-dst').count, 1);
@@ -335,5 +438,57 @@ describe('getThreadRelations stale-while-revalidate', () => {
     assert.ok(landed, '后台增量刷新应在预算内让新值可见（count 2）');
     // 静置等最后一笔 fire 完成，避免 after() 清理与缓存写盘竞态（Windows ENOTEMPTY）。
     await new Promise(resolve => setTimeout(resolve, 50));
+  });
+});
+
+describe('getThreadRelations cold-start disk seed', () => {
+  // 服务重启 = 进程内备忘清空、磁盘缓存仍在。首个查询不得降级 partial：
+  // 先以磁盘快照服务（builtAt 如实披露陈旧度），后台增量刷新自然追上
+  // （历史事故：重启后分钟级窗口内关联群看板误报空）。
+  it('serves the persisted snapshot immediately after a simulated restart', async () => {
+    resetRelationsMemo();
+    // 契约锚点：服务的是「落盘的那份投影」——响应 builtAt 必须等于落盘
+    // builtAt。小数据根上无种子实现也能靠竞速赢（全量重建 <500ms）返回
+    // partial=false；只有 builtAt 相等能区分「陈旧即服务」与「阻塞重建」。
+    const persisted = JSON.parse(await fs.readFile(path.join(dataRoot, 'session-relations', 'cache.json'), 'utf8'));
+    assert.ok(persisted.builtAt, '前置：磁盘缓存已由前序测试落盘');
+    const result = await getThreadRelations({ threadId: 'wt-src', dataRoot });
+    assert.equal(result.partial, false, '磁盘种子是完整投影，不是 partial');
+    assert.equal(result.builtAt, persisted.builtAt, '种子响应如实携带落盘数据时点');
+    assert.ok(result.neighbors.some(n => n.threadId === 'wt-dst'));
+
+    // 等种子触发的后台增量刷新落地（写盘推进 builtAt），避免与 after() 清理竞态。
+    let rebuilt = false;
+    const deadline = Date.now() + 1500;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      const cached = JSON.parse(await fs.readFile(path.join(dataRoot, 'session-relations', 'cache.json'), 'utf8'));
+      if (String(cached.builtAt) > String(persisted.builtAt)) { rebuilt = true; break; }
+    }
+    assert.ok(rebuilt, '种子触发的后台增量刷新应在预算内完成');
+    await new Promise(resolve => setTimeout(resolve, 50));
+  });
+
+  it('still degrades gracefully when no persisted cache exists', async () => {
+    resetRelationsMemo();
+    const emptyRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-relations-cold-'));
+    try {
+      await writeThreads(emptyRoot, [
+        { threadId: 'wt-x', workspaceId: 'programming-helper', title: 'X', sessionIds: ['s-x'] },
+      ]);
+      // 无会话索引、无缓存：竞速窗口内小数据根可能快也可能慢，partial 由
+      // 时序决定（不锁定）；但无论输赢，身份与关联形状必须确定：孤立线程
+      // found=false、无邻居、群大小 1，不抛错。
+      const result = await getThreadRelations({ threadId: 'wt-x', dataRoot: emptyRoot });
+      assert.equal(result.resolvedThreadId, 'wt-x');
+      assert.equal(result.resolvedThreadTitle, 'X');
+      assert.equal(result.found, false);
+      assert.deepEqual(result.neighbors, []);
+      assert.equal(result.component.size, 1);
+    } finally {
+      resetRelationsMemo();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      await fs.rm(emptyRoot, { recursive: true, force: true });
+    }
   });
 });

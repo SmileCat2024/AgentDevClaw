@@ -58,6 +58,8 @@
     "./memo-reminders/src/**/*.ts",
     "./memo-reminders/test/**/*.ts",
     "./model-selection/src/**/*.ts",
-    "./model-selection/test/**/*.ts"
+    "./model-selection/test/**/*.ts",
+    "./topic-management/src/**/*.ts",
+    "./topic-management/test/**/*.ts"
   ]
 }

@@ -27,16 +27,102 @@
  * session-list-render.js 的 sessions.* 注册块承接（经 window 转调本模块）。
  */
 
+window.ClawFW = window.ClawFW || {};
+window.ClawFW.phTopicGroups = window.ClawFW.phTopicGroups || new Map();
+
+function _phTopicKey(panel) {
+  return [panel?.dataset.topicAgentId || '', panel?.dataset.topicProjectId || '', panel?.dataset.topicDirectory || ''].join('|');
+}
+
+function _phTopicState(panel) {
+  const key = _phTopicKey(panel);
+  let state = window.ClawFW.phTopicGroups.get(key);
+  if (!state) {
+    state = { key, loading: false, loaded: false, error: false, groups: [] };
+    window.ClawFW.phTopicGroups.set(key, state);
+  }
+  return state;
+}
+
+function _phTopicHtml(panel) {
+  const state = _phTopicState(panel);
+  const isZh = currentLanguage === 'zh';
+  if (state.loading && !state.loaded) return '<div class="ph-topic-status">' + escapeHtml(isZh ? '正在加载 Topic…' : 'Loading topics…') + '</div>';
+  if (state.error) return '<div class="ph-topic-status ph-topic-error">' + escapeHtml(isZh ? 'Topic 加载失败，请稍后重试' : 'Failed to load topics. Try again later.') + '</div>';
+  if (!state.groups.length) return '<div class="ph-topic-status">' + escapeHtml(isZh ? '暂无关联主题' : 'No related topics yet') + '</div>';
+  return '<div class="ph-topic-list">' + state.groups.map((group) => {
+    // 卡片主体是主题 + 简介（server 已合并自定义标注与会话标题回退）；
+    // 对话明细折叠在 details 里，不与主题争夺视觉。
+    const title = group.title || (isZh ? '未命名主题' : 'Untitled topic');
+    const summary = group.summary || '';
+    const threads = Array.isArray(group.threads) ? group.threads : [];
+    const rows = threads.map((thread) => {
+      const sessionId = Array.isArray(thread.sessionIds) ? thread.sessionIds.at(-1) : '';
+      const action = escapeHtml(JSON.stringify({ type: 'open_session', sessionId }));
+      return '<div class="ph-topic-thread"><span class="ph-topic-thread-title">' + escapeHtml(thread.title || thread.threadId) + '</span>'
+        + '<span class="ph-topic-thread-time">' + escapeHtml(formatWorkspaceDate(thread.updatedAt)) + '</span>'
+        + (sessionId ? '<button class="workspace-action secondary ph-topic-open" type="button" data-workspace-action="' + action + '" data-action="sessions.workspaceAction">' + escapeHtml(isZh ? '打开' : 'Open') + '</button>' : '')
+        + '</div>';
+    }).join('');
+    return '<article class="ph-topic-card" data-topic-id="' + escapeHtml(group.id) + '">'
+      + '<div class="ph-topic-card-head"><div class="ph-topic-card-title">' + escapeHtml(title) + '</div>'
+      + '<div class="ph-topic-card-meta">' + escapeHtml(String(group.memberCount || threads.length || 0)) + ' ' + escapeHtml(isZh ? '个对话' : 'conversations') + ' · ' + escapeHtml(formatWorkspaceDate(group.updatedAt)) + '</div></div>'
+      + '<p class="ph-topic-summary' + (summary ? '' : ' ph-topic-summary-empty') + '">' + escapeHtml(summary || (isZh ? '暂无简介' : 'No summary yet')) + '</p>'
+      + (threads.length ? '<details class="ph-topic-details"><summary class="ph-topic-details-toggle">' + escapeHtml(isZh ? '对话列表' : 'Conversations') + ' (' + threads.length + ')</summary>'
+        + '<div class="ph-topic-thread-list">' + rows + '</div></details>' : '')
+      + '</article>';
+  }).join('') + '</div>';
+}
+
+async function _loadPhTopicGroups(panel) {
+  if (!panel) return;
+  const state = _phTopicState(panel);
+  if (state.loading) return;
+  state.loading = true;
+  state.error = false;
+  panel.innerHTML = _phTopicHtml(panel);
+  try {
+    const params = new URLSearchParams({ agentId: panel.dataset.topicAgentId || 'programming-helper' });
+    if (panel.dataset.topicProjectId) params.set('projectId', panel.dataset.topicProjectId);
+    else if (panel.dataset.topicDirectory) params.set('openDirectory', panel.dataset.topicDirectory);
+    const response = await fetch('/protoclaw/topic_groups?' + params.toString());
+    if (!response.ok) throw new Error('topic groups failed: ' + response.status);
+    const payload = await response.json();
+    state.groups = Array.isArray(payload.groups) ? payload.groups : [];
+    state.loaded = true;
+  } catch {
+    state.error = true;
+  } finally {
+    state.loading = false;
+    panel.innerHTML = _phTopicHtml(panel);
+  }
+}
+
+window.ensurePhTopicGroups = (panel) => _loadPhTopicGroups(panel);
+
+/** 将 tab group 呈现为指定 tab（active class + tab 专属副作用）。
+ * 点击切换（switchPhSessionTab）与工作区重建后的记忆恢复（app-ui.js
+ * savedPhTabState 回放）共用：topics 面板的懒加载在这两条路径下等价。 */
+function _applyPhSessionTabDom(tabGroup, targetTab) {
+  tabGroup.querySelectorAll('.ph-session-tab').forEach((t) => t.classList.toggle('active', t.dataset.phTab === targetTab));
+  tabGroup.querySelectorAll('.ph-session-tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.phPanel === targetTab));
+  if (targetTab === 'topics') {
+    const panel = tabGroup.querySelector('.ph-topic-panel');
+    if (panel) _loadPhTopicGroups(panel);
+  }
+}
+
+window.applyPhSessionTabDom = _applyPhSessionTabDom;
+
 window.switchPhSessionTab = (btn) => {
   const tabGroup = btn.closest('.ph-session-tabs');
   if (!tabGroup) return;
   const targetTab = btn.dataset.phTab;
   // Update active tab indicator (visible when search is cleared later)
-  tabGroup.querySelectorAll('.ph-session-tab').forEach((t) => t.classList.toggle('active', t.dataset.phTab === targetTab));
+  _applyPhSessionTabDom(tabGroup, targetTab);
   if (tabGroup.dataset.tabGroup) {
     savedPhTabState[tabGroup.dataset.tabGroup] = targetTab;
   }
-  tabGroup.querySelectorAll('.ph-session-tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.phPanel === targetTab));
 };
 
 window.phToggleSessionSort = () => {

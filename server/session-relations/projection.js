@@ -17,10 +17,13 @@
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { USER_DATA_ROOT, WORKSPACE_SESSION_AGENT_IDS } from '../shared/constants.js';
+import { USER_DATA_ROOT } from '../shared/constants.js';
+import { resolveSessionStoreDir } from '../shared/session-storage.js';
+import { loadTopicNotes, resolveTopicNote } from './topic-notes.js';
 
-const CACHE_SCHEMA_VERSION = 1;
+const CACHE_SCHEMA_VERSION = 2;
 // 投影新鲜度：超过该时长的下一次查询触发增量刷新（多数会话未变，成本低）。
 const REFRESH_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -94,9 +97,7 @@ export async function enumerateSessionRecords(dataRoot) {
   for (const name of names) {
     storeDirs.push({
       agentId: name,
-      dir: WORKSPACE_SESSION_AGENT_IDS.has(name)
-        ? path.join(dataRoot, 'workspaces', name, 'sessions')
-        : path.join(dataRoot, 'prebuilt-sessions', name),
+      dir: resolveSessionStoreDir(name, dataRoot),
     });
   }
   for (const name of await listDirNames(path.join(dataRoot, 'agents'))) {
@@ -127,6 +128,9 @@ export async function enumerateSessionRecords(dataRoot) {
       records.set(`${store.agentId}/${id}`, {
         dir: store.dir,
         sessionId: id,
+        title: text(record?.title),
+        projectId: text(record?.projectId),
+        openDirectory: text(record?.openDirectory),
         updatedAt: text(record?.updatedAt),
       });
     }
@@ -148,12 +152,15 @@ export async function readThreadMembership(dataRoot) {
       const threadId = text(thread?.threadId);
       if (!safeFragment(threadId)) continue;
       const agentId = text(thread?.workspaceId) || text(thread?.agentId);
+      const sessionIds = Array.isArray(thread?.sessionIds) ? thread.sessionIds.map(text).filter(Boolean) : [];
       threads.set(threadId, {
         title: text(thread?.title),
         agentId,
-        generations: Array.isArray(thread?.sessionIds) ? thread.sessionIds.length : 0,
+        generations: sessionIds.length,
+        sessionIds,
+        updatedAt: text(thread?.updatedAt) || text(thread?.createdAt),
       });
-      for (const sessionId of Array.isArray(thread?.sessionIds) ? thread.sessionIds : []) {
+      for (const sessionId of sessionIds) {
         membership.set(`${agentId}/${text(sessionId)}`, threadId);
       }
     }
@@ -229,14 +236,31 @@ export async function buildRelationsSnapshot({ dataRoot = USER_DATA_ROOT, force 
     }
   }
 
+  // 全量会话元数据（records 枚举的所有会话，非仅引用涉及会话）：主题簇
+  // 的线程标题回退要用 head session 标题，而 head session 多数没有引用
+  // 观察，只从 sessions 派生会漏。体积每会话约百字节，全量可承受。
+  const sessionMeta = Object.fromEntries([...records.entries()].map(([key, record]) => [key, {
+    title: text(record?.title),
+    projectId: text(record?.projectId),
+    openDirectory: text(record?.openDirectory),
+    updatedAt: text(record?.updatedAt),
+  }]));
   const snapshot = {
     schemaVersion: CACHE_SCHEMA_VERSION,
     builtAt: new Date().toISOString(),
     sessions,
+    sessionMeta,
     edges: [...edges.values()],
     unresolvedTargets,
     threadTitles: Object.fromEntries([...threads.entries()].map(([id, t]) => [id, t.title])),
     threadAgents: Object.fromEntries([...threads.entries()].map(([id, t]) => [id, t.agentId])),
+    threadMeta: Object.fromEntries([...threads.entries()].map(([id, t]) => [id, {
+      title: t.title,
+      agentId: t.agentId,
+      generations: t.generations,
+      sessionIds: t.sessionIds,
+      updatedAt: t.updatedAt,
+    }])),
   };
 
   await fs.mkdir(path.dirname(cacheFilePath(dataRoot)), { recursive: true });
@@ -273,24 +297,27 @@ async function ensureSnapshot(dataRoot, { force = false, freshnessMs = REFRESH_M
  * 边仅显式引用口径；计数是重建观察值（含跨代重复观察），作相对权重
  * 提示而非精确账本。
  */
-function computeRelationsFromSnapshot(snapshot, threadId) {
+function buildAdjacency(snapshot) {
   const adjacency = new Map(); // threadId → Map<threadId, {out, in, count, lastSeenAt} | null>
   const add = (a, b, direction, lastSeenAt, weight = 1) => {
     if (!adjacency.has(a)) adjacency.set(a, new Map());
     if (!adjacency.has(b)) adjacency.set(b, new Map());
     const forward = adjacency.get(a).get(b) || { out: 0, in: 0, lastSeenAt: '' };
-    forward[direction] += weight; // weight = 该方向聚合的观察次数（跨代重复引用）
+    forward[direction] += weight;
     forward.count = forward.out + forward.in;
     if (lastSeenAt > forward.lastSeenAt) forward.lastSeenAt = lastSeenAt;
     adjacency.get(a).set(b, forward);
-    if (!adjacency.get(b).has(a)) adjacency.get(b).set(a, null); // 反向占位，保证 BFS 可达（不覆盖既有链接）
-    return forward;
+    if (!adjacency.get(b).has(a)) adjacency.get(b).set(a, null);
   };
-  for (const edge of snapshot.edges) {
+  for (const edge of Array.isArray(snapshot?.edges) ? snapshot.edges : []) {
     add(edge.source, edge.target, 'out', edge.lastSeenAt, edge.count || 1);
     add(edge.target, edge.source, 'in', edge.lastSeenAt, edge.count || 1);
   }
+  return adjacency;
+}
 
+function computeRelationsFromSnapshot(snapshot, threadId) {
+  const adjacency = buildAdjacency(snapshot);
   const known = adjacency.get(threadId) || null;
   const neighbors = known
     ? [...known.entries()]
@@ -320,6 +347,91 @@ function computeRelationsFromSnapshot(snapshot, threadId) {
   return { found: Boolean(known), neighbors, component: { size: visited.size, memberThreadIds: memberThreadIds.sort() } };
 }
 
+function timestampOf(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const raw = text(value);
+  if (/^[0-9]{11,}$/.test(raw)) return Number(raw);
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function componentForThread(adjacency, threadId) {
+  const visited = new Set([threadId]);
+  const queue = [threadId];
+  while (queue.length) {
+    const current = queue.pop();
+    for (const next of adjacency.get(current)?.keys() || []) {
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  return [...visited].sort();
+}
+
+function computeTopicGroupsFromSnapshot(snapshot, { agentId = '', projectId = '', openDirectory = '' } = {}) {
+  const adjacency = buildAdjacency(snapshot);
+  const seen = new Set();
+  const groups = [];
+  const meta = snapshot.threadMeta || {};
+  const sessionMeta = snapshot.sessionMeta || {};
+  for (const threadId of adjacency.keys()) {
+    if (seen.has(threadId)) continue;
+    const memberThreadIds = componentForThread(adjacency, threadId);
+    memberThreadIds.forEach((id) => seen.add(id));
+    const members = memberThreadIds.map((id) => ({ threadId: id, ...(meta[id] || {}) }));
+    const filtered = members.filter((member) => {
+      if (agentId && member.agentId !== agentId) return false;
+      if (!projectId && !openDirectory) return true;
+      return (snapshot.threadMeta?.[member.threadId]?.sessionIds || []).some((sessionId) => {
+        const session = sessionMeta[`${member.agentId}/${sessionId}`];
+        if (!session) return false;
+        if (projectId && session.projectId !== projectId) return false;
+        return !openDirectory || session.openDirectory === openDirectory;
+      });
+    });
+    if (filtered.length === 0) continue;
+    const latestForMember = (member) => {
+      const values = [member.updatedAt];
+      for (const sessionId of member.sessionIds || []) {
+        const session = sessionMeta[`${member.agentId}/${sessionId}`];
+        if (session) values.push(session.updatedAt);
+      }
+      return Math.max(...values.map(timestampOf));
+    };
+    const latest = filtered.reduce((best, member) => Math.max(best, latestForMember(member)), 0);
+    const sortedMembers = [...filtered].sort((a, b) => latestForMember(b) - latestForMember(a) || a.threadId.localeCompare(b.threadId));
+    // 线程标题回退链：thread record 标题（近期线程普遍未维护）→ 该线程
+    // 最新一代会话的标题。看板与工具面都以会话标题兜底，避免大面积
+    // 「未命名」。
+    const threadTitle = (member) => {
+      if (text(member.title) || text(snapshot.threadTitles?.[member.threadId])) {
+        return text(member.title || snapshot.threadTitles?.[member.threadId]);
+      }
+      const headSessionId = Array.isArray(member.sessionIds) ? (member.sessionIds.at(-1) || '') : '';
+      return text(sessionMeta[`${member.agentId}/${headSessionId}`]?.title);
+    };
+    groups.push({
+      id: `relation_${crypto.createHash('sha1').update(memberThreadIds.join('\0')).digest('hex').slice(0, 12)}`,
+      threadIds: memberThreadIds,
+      threads: sortedMembers.map((member) => ({
+        threadId: member.threadId,
+        title: threadTitle(member),
+        agentId: text(member.agentId),
+        updatedAt: new Date(latestForMember(member) || 0).toISOString(),
+        generations: member.generations || 0,
+        sessionIds: Array.isArray(member.sessionIds) ? member.sessionIds : [],
+        headSessionId: Array.isArray(member.sessionIds) ? (member.sessionIds.at(-1) || '') : '',
+      })),
+      fallbackTitle: sortedMembers.map(threadTitle).find(Boolean) || '',
+      updatedAt: new Date(latest || 0).toISOString(),
+      memberCount: filtered.length,
+    });
+  }
+  return groups.sort((a, b) => timestampOf(b.updatedAt) - timestampOf(a.updatedAt) || a.id.localeCompare(b.id));
+}
+
 /** 投影就绪等待上限：冷启动首建可能分钟级，请求侧超时即降级（身份不受影响）。 */
 const SNAPSHOT_WAIT_MS = 500;
 
@@ -330,13 +442,28 @@ const SNAPSHOT_WAIT_MS = 500;
  * 每个新鲜度周期都会有一段全部降级 partial 的窗口；关联是可陈旧的派生
  * 提示（builtAt 随响应披露），陈旧服务优于缺席。只有进程内尚无快照
  * （首建）或 force 重建时才走 500ms 竞速，超时降级 partial。
+ *
+ * 冷启动种子：进程内无快照（服务刚重启）而磁盘上有上次投影时，先把磁盘
+ * 快照种进备忘并立即以它服务（builtAt 如实披露数据时点），再走常规增量
+ * 刷新。没有种子的话，重启后的首建枚举全部存储目录可达分钟级，这段窗口
+ * 内所有查询都降级 partial（历史事故：关联群看板重启后长时间误报空）。
+ * 种子走增量路径（force=false）：水位未变的会话复用磁盘缓存，只有变化的
+ * 会话重扫。
  */
-function waitSnapshot(dataRoot, force, freshnessMs) {
+async function waitSnapshot(dataRoot, force, freshnessMs) {
   if (!force) {
     const cached = _memo.get(dataRoot);
     if (cached?.snapshot) {
       ensureSnapshot(dataRoot, { freshnessMs }).catch(() => {}); // 后台刷新，共享同一 promise
       return Promise.resolve(cached.snapshot);
+    }
+    const diskSnapshot = await loadCache(dataRoot);
+    if (diskSnapshot.builtAt) {
+      // 先种备忘再触发刷新：ensureSnapshot 看到 cached 存在即走增量（force
+      // 保持 false），而不是把磁盘缓存弃掉做全量重扫。
+      _memo.set(dataRoot, { snapshot: diskSnapshot, builtAtMs: 0, refreshPromise: null });
+      ensureSnapshot(dataRoot, { freshnessMs }).catch(() => {}); // 后台增量刷新
+      return diskSnapshot;
     }
   }
   return Promise.race([
@@ -353,6 +480,44 @@ function waitSnapshot(dataRoot, force, freshnessMs) {
  * 派生投影——投影未就绪时这些字段缺席（partial: true），身份照常返回，
  * 消费方（引用注入）只降级关联节、不丢线程身份。
  */
+export async function getTopicGroups({ agentId = 'programming-helper', projectId = '', openDirectory = '', dataRoot = USER_DATA_ROOT, force = false, freshnessMs = REFRESH_MAX_AGE_MS } = {}) {
+  // Topic 看板的契约是“当前近期主题”，不能像单线程详情那样先返回陈旧快照。
+  // 仍走增量水位复用：未变化会话不重扫，变化会话完成后才返回。
+  // 冷启动种子（与 waitSnapshot 同策略）：进程内无快照而磁盘有上次投影时先
+  // 种进备忘——ensureSnapshot 因此走增量（只有水位变化的会话重扫）而不是
+  // 从零全量。没有种子的话，服务重启后的首次看板查询要等分钟级全量枚举，
+  // 窗口内看板空白（与关联群历史事故同构）。
+  if (!force && !_memo.get(dataRoot)?.snapshot) {
+    const diskSnapshot = await loadCache(dataRoot).catch(() => null);
+    if (diskSnapshot?.builtAt) {
+      _memo.set(dataRoot, { snapshot: diskSnapshot, builtAtMs: 0, refreshPromise: null });
+    }
+  }
+  const snapshot = await ensureSnapshot(dataRoot, {
+    force,
+    freshnessMs: force ? freshnessMs : 0,
+  }).catch(() => null);
+  if (!snapshot) {
+    return { groups: [], builtAt: '', partial: true, scope: 'explicit session-reference connected components only' };
+  }
+  const groups = computeTopicGroupsFromSnapshot(snapshot, { agentId, projectId, openDirectory });
+  // 合并簇标注（自定义标题/简介）：精确命中簇 id，否则按成员真子集继承
+  // （簇增长场景），见 topic-notes.js。
+  const notes = await loadTopicNotes(dataRoot, agentId);
+  for (const group of groups) {
+    const note = resolveTopicNote(notes, { clusterId: group.id, memberThreadIds: group.threadIds });
+    group.title = note?.title || group.fallbackTitle || '';
+    group.customTitle = Boolean(note?.title);
+    group.summary = note?.summary || '';
+  }
+  return {
+    groups,
+    builtAt: snapshot.builtAt,
+    partial: false,
+    scope: 'explicit session-reference connected components only',
+  };
+}
+
 export async function getThreadRelations({ threadId = '', agentId = '', sessionId = '', dataRoot = USER_DATA_ROOT, force = false, freshnessMs = REFRESH_MAX_AGE_MS } = {}) {
   const { membership, threads } = await readThreadMembership(dataRoot);
   let resolved = safeFragment(threadId) && threadId.startsWith('wt-') ? threadId : '';

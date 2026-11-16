@@ -34,6 +34,7 @@ import { TimeAwarenessFeature } from '../../../local-features/dist/time-awarenes
 import { ModelSelectionFeature } from '../../../local-features/dist/model-selection/src/index.js';
 import { AutoTitlePolicyFeature } from '../../../local-features/dist/auto-title-policy/src/index.js';
 import { CraftAwarenessFeature } from '../../../local-features/dist/craft-awareness/src/index.js';
+import { TopicManagementFeature } from '../../../local-features/dist/topic-management/src/index.js';
 import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import { PlaywrightShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import {
@@ -200,6 +201,13 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 工程素养提醒：首次写出成规模文档（write ≥30 行 / edit 的 markdown/txt
     // 文件）后注入读者视角写法标准，每会话一次。状态经框架会话快照持久化。
     this.use(new CraftAwarenessFeature());
+    // 主题簇管理（Topic 看板的工具面）：主题由会话引用关系客观形成，agent
+    // 只能列出并逐个更新标题/简介（topic_list / topic_update → server
+    // topic-notes 存储），不创建、删除或重组主题。
+    this.use(new TopicManagementFeature({
+      agentId: runtimeIdentity.agentId,
+      serverOrigin: runtimeIdentity.serverOrigin,
+    }));
     // Agentero 文献库（ADR-0045 三面单包）已出仓为外部插件包：工具面经
     // $mount 装配（feature-store install / 商店），UI 面与数据面随包走，
     // 不再静态装配。vault 路径仍走 feature 配置 agentero.vaultPath。

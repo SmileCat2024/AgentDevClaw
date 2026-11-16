@@ -910,7 +910,8 @@
       "ctxTodoSession",
       "dispatchCtxAction",
       "getCtxMenuItems",
-      "newIdempotencyKey"
+      "newIdempotencyKey",
+      "resolveSidebarSessionsPolicy"
     ]
   },
   "public/src/modules/debug-features-hooks.js": {
@@ -2137,6 +2138,8 @@
     ],
     "behavior": [
       "ClawFW",
+      "_applyPhSessionTabDom",
+      "_loadPhTopicGroups",
       "_phHighlightText",
       "_phMatchHtml",
       "_phReadableExcerpt",
@@ -2151,7 +2154,12 @@
       "_phSearchSnippetHtml",
       "_phSearchStateMatches",
       "_phSortToggleHtml",
+      "_phTopicHtml",
+      "_phTopicKey",
+      "_phTopicState",
       "_updatePhSearchPanelDom",
+      "applyPhSessionTabDom",
+      "ensurePhTopicGroups",
       "phClearSearch",
       "phOnSearchInput",
       "phSearchLoadMore",

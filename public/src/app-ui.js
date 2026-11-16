@@ -1428,12 +1428,11 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
           if (details) details.open = true;
         }
       });
+      // 记忆回放与用户点击共享同一呈现函数（active class + tab 副作用，
+      // 含 topics 懒加载）；点击链路额外写记忆，回放不写。
       Object.entries(savedPhTabState).forEach(([group, tab]) => {
         const tg = container.querySelector(`.ph-session-tabs[data-tab-group="${CSS.escape(group)}"]`);
-        if (tg) {
-          tg.querySelectorAll('.ph-session-tab').forEach((t) => t.classList.toggle('active', t.dataset.phTab === tab));
-          tg.querySelectorAll('.ph-session-tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.phPanel === tab));
-        }
+        if (tg && typeof window.applyPhSessionTabDom === 'function') window.applyPhSessionTabDom(tg, tab);
       });
       requestAnimationFrame(() => {
         container.scrollTop = savedWsScrollTop;
