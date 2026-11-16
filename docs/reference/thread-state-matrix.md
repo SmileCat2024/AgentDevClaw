@@ -251,6 +251,41 @@
 | Claw | `test/thread-archive-cancellation.test.js` | M6 与执行轮打断 |
 | Claw | `test/coder-rotation-e2e.test.js` | 策略三档端到端（guard 入口→handoff→提交） |
 
+### 性质测试：操作过程与恢复边界
+
+最后更新：2026-11-16。依据 ADR-0047 的既定规则，不以当前实现输出作为正确性定义。以下文件均在相邻框架仓库 `AgentDev/packages/core/test/workthread/`，沿用 Vitest + fast-check。
+
+| 性质 / 矩阵锚点 | 输入与动作 | 必须观察到的结果 | 文件 |
+|---|---|---|---|
+| 门禁与准确投递（M3-NO-HANDOFF、M4、M5-IDEM） | 生成 append / hold / begin / advance / deliver / close / reload 序列，逐步对照独立状态模型 | 错误码与持久状态一致；每次真实 Bridge 提交的 sessionId、commandId、headGeneration 和载荷正确；被门禁拒绝时零提交；意外异常不得当作成功 | `workthread-model-properties.test.ts` |
+| 合法多代过程（M1-R3、M4-R3-VOID、M8D-PENDING-REF、M8D-UNCERTAIN-REF） | 每个样本完成多次合法接续，组合手动免播 / 自动播种、投递失败恢复、接续失败与精确 stale 边界、显式处置、重载 | 链只有一个 head；暂存指令投向新 head；恢复指令不得向未完成接续的旧 head 宣告成功；待核对原指令不自动重放，重新提交使用新身份且重复处置不多建命令 | `workthread-lifecycle-properties.test.ts` |
+| 在途投递（M4-K20-head、M4-K20-cancel） | 用 Promise 闸门暂停第一条真实 Bridge 提交，期间 hold / close / cancel-next / begin / commit，再释放响应 | 已发请求可能迟到完成，但后续指令不能越过新门禁或继续投旧 head；取消事实不被迟到响应覆写；下次触发只投剩余 pending；无消费证据的迟到接收不能冒充消费完成 | `workthread-delivery-interleavings.test.ts` |
+| 事务竞争与处置去重（M3-RACE、M5-IDEM） | 多个合法提交竞争同一 from；同一待核对项并发 reissue；close 与 reissue 的两个提交顺序 | 换头仅一赢家，返回记录与独立磁盘读回一致，无半套链/未决事实；reissue 仅派生一条命令；close 先行拒绝 reissue，reissue 先行则派生 pending 随 close 取消 | `workthread-recovery-properties.test.ts` |
+| 恢复与历史裁剪（M3、M8D-UNCERTAIN-REF） | 事务体抛错；真实持久写完成后注入响应丢失；未结项跨多次接续、hold、重载与超额历史裁剪 | 事务体失败整条记录不变；丢响应后重载保留换头/未决/通知，再次提交拒绝且不重复建事实；裁剪实际发生时未结项完整保留，明确结清后原命令可随历史裁剪释放 | `workthread-recovery-properties.test.ts` |
+| 证据单向裁决（M8D-ROTATE-REF、M8D-UNCERTAIN-REF） | 构造已知候选与部分可靠引用，混入其他会话、无关事件、相似但不相等的引用；重排、重复、拆分引用和整体平移时间窗 | 只确认同棒可靠引用对应的命令；增加证据只增加已消费集合；等价证据排列和时间平移不改变分类 | `workthread-succession-properties.test.ts` |
+
+**拒绝前置也属于契约。** `commitSessionSuccession` 未 begin 时应报 `handoff_not_started`，且独立读盘确认没有改写记录。原子提交测试夹具必须先建立正式挡板；提交成功后原挡板已清，直接重试先命中 `handoff_not_started`，不保证先返回 `head_mismatch`。若期间已经建立另一笔接续，仍须遵守 head / revision 等守卫。命名回归锚点：`workthread-succession-commit.test.ts`。
+
+**防止空跑与诊断要求。** 生命周期生成器直接构造能推进的过程，断言每个样本完成全部换代，不能用关闭后大量拒绝代替有效探索；关键交错和两个提交方向用显式 examples 保证到达。Bridge 观察点同时验证成功投递和门禁下零投递。性质失败保留 fast-check 输出的 seed、path 与缩减反例；不关闭 shrinking，不以增加超时/重试掩盖失败。
+
+**测试层次与剩余边界。** 生命周期与在途测试执行真实 Core/Store/Bridge，替换 runtime 传输；恢复测试为聚焦事务和裁剪，部分夹具经 Store 播种已投递事实与超额历史，不声称这些夹具本身验证了投递协议。响应丢失是在完整 Store 更新之后抛错，重载是重新创建 Core/Store，不是真实进程强杀、断电或文件写到一半的恢复。并发验证限同一个 Store 的串行锁，不证明跨进程写安全。这些测试不证明 Viewer 接收端去重、claim/ack 与 cancel 的全链路竞争、用户停止的持久取消截点，亦不承诺模型或外部副作用恰好执行一次。记录与 index 摘要之间的崩溃窗口、归档与未决处置的组合不在本组新增覆盖内，需要相应层的独立验证。
+
+复跑入口（从相应仓库根目录执行）：
+
+```bash
+# AgentDev：性质与相关状态机回归
+npm --prefix packages/core test -- test/workthread
+npm --prefix packages/core run typecheck
+npm --prefix packages/core run build
+# 上述 typecheck 只检查生产源码；修改过的性质测试另作定向类型检查
+cd packages/core
+npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --strict --skipLibCheck --experimentalDecorators --esModuleInterop test/workthread/workthread-model-properties.test.ts test/workthread/workthread-succession-properties.test.ts test/workthread/workthread-lifecycle-properties.test.ts test/workthread/workthread-delivery-interleavings.test.ts test/workthread/workthread-recovery-properties.test.ts
+cd ../..
+
+# AgentDevClaw：消费新 core dist 的装配、路由、生命周期与 CLI 回归
+node --test test/thread-control.test.js test/thread-routes-command-fields.test.js test/thread-succession.test.js test/thread-state-matrix.test.js test/thread-lifecycle.test.js test/thread-delivery-consumer.test.js test/thread-dispatch-recovery.test.js test/threads-cli.test.js
+```
+
 ### 已补齐的历史缺口
 
 以下 G 编号保留作历史索引，均由 `test/thread-state-matrix.test.js` 锁定；不再表示当前缺测：
