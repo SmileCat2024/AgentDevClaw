@@ -164,96 +164,23 @@ async function loadAgentData(agentId) {
   }
 }
 
-/**
- * refreshCurrentRuntimeStatus 的 guard-only 轻量形态（SSE 激活时 poll 主循环
- * 调用）：notification/connection 由事件供数，本函数只拉 context_guard_status
- * （Claw 侧自持端点，不在 ViewerWorker 事件源内）。guard 不可用时为纯 no-op。
- */
-async function refreshContextGuardStatus(
-  runtimeId = currentRuntimeAgentId,
-  viewToken = captureSessionViewToken(runtimeId),
-) {
-  const expectedRuntimeId = normalizeAgentIdentity(runtimeId);
-  if (!expectedRuntimeId) return null;
-  const guardSupported = window.ContextGuardToggle?.isAvailable?.() === true;
-  if (!guardSupported) return null;
-  const guardOwnerRecord = getCurrentRuntimeRecord() || getCurrentAgentRecord();
-  const guardAgentId = String(getLogicalAgentId(guardOwnerRecord) || '').trim();
-  const guardSessionId = String(getActiveSessionId(guardOwnerRecord) || '').trim();
-  if (!guardAgentId || !guardSessionId) return null;
-  try {
-    const guardStatusUrl = `/protoclaw/context_guard_status?agentId=${encodeURIComponent(guardAgentId)}&sessionId=${encodeURIComponent(guardSessionId)}`;
-    const guardRes = await fetch(guardStatusUrl).catch(() => null);
-    if (!isSessionViewTokenCurrent(viewToken)) return null;
-    const guardData = guardRes?.ok ? await guardRes.json() : null;
-    if (!isSessionViewTokenCurrent(viewToken)) return null;
-    commitSessionViewState(viewToken, () => {
-      if (typeof applyContextGuardStatus === 'function') {
-        applyContextGuardStatus(guardData, expectedRuntimeId);
-      }
-    });
-    return guardData;
-  } catch (error) {
-    console.warn('Failed to refresh context guard status:', error);
-    return null;
-  }
-}
-
-async function refreshCurrentRuntimeStatus(
-  runtimeId = currentRuntimeAgentId,
-  viewToken = captureSessionViewToken(runtimeId),
-) {
-  const expectedRuntimeId = normalizeAgentIdentity(runtimeId);
-  if (!expectedRuntimeId) return null;
-
-  try {
-    // 上下文拦截状态拉取（session IPC）：仅在挂载了 ContextGuard 的工作空间
-    // 进行，否则每个 poll 都会对不支持的 runtime 产生 503 噪音。
-    const guardSupported = window.ContextGuardToggle?.isAvailable?.() === true;
-    const guardOwnerRecord = getCurrentRuntimeRecord() || getCurrentAgentRecord();
-    const guardAgentId = String(getLogicalAgentId(guardOwnerRecord) || '').trim();
-    const guardSessionId = String(getActiveSessionId(guardOwnerRecord) || '').trim();
-    const guardStatusUrl = guardSupported && guardAgentId && guardSessionId
-      ? `/protoclaw/context_guard_status?agentId=${encodeURIComponent(guardAgentId)}&sessionId=${encodeURIComponent(guardSessionId)}`
-      : null;
-    const [notifRes, connectionRes, guardRes] = await Promise.all([
-      fetch(`/api/agents/${expectedRuntimeId}/notification`),
-      fetch(`/api/agents/${expectedRuntimeId}/connection`),
-      guardStatusUrl ? fetch(guardStatusUrl).catch(() => null) : Promise.resolve(null),
-    ]);
-
-    if (!isSessionViewTokenCurrent(viewToken)) {
-      return null;
-    }
-    if (!notifRes.ok || !connectionRes.ok) {
-      return null;
-    }
-
-    const [notifData, connectionData, guardData] = await Promise.all([
-      notifRes.json(),
-      connectionRes.json(),
-      guardRes?.ok ? guardRes.json() : Promise.resolve(null),
-    ]);
-
-    if (!isSessionViewTokenCurrent(viewToken)) {
-      return null;
-    }
-
-    const committed = commitSessionViewPatch(viewToken, {
-      connected: connectionData?.connected !== false,
-    }, ({ current }) => {
-      const runtimeRecord = getRuntimeRecord(expectedRuntimeId);
-      if (runtimeRecord) {
-        runtimeRecord.connected = current.connected;
-      }
-      if (typeof applyContextGuardStatus === 'function') {
-        applyContextGuardStatus(guardData, expectedRuntimeId);
-      }
-      updateNotificationStatus(notifData, expectedRuntimeId, viewToken);
-    });
-    return committed ? { notifData, connectionData } : null;
-  } catch (error) {
-    console.warn('Failed to refresh runtime status:', error);
-    return null;
-  }
+// Async status requests use the ESM commit policy. Classic identity/render
+// helpers are resolved when a refresh runs, not while modules initialize.
+function createRuntimeStatusLoaderHost() {
+  return {
+    runtimeId: () => currentRuntimeAgentId,
+    capture: (id) => captureSessionViewToken(id),
+    isCurrent: (token) => isSessionViewTokenCurrent(token),
+    commit: (token, apply) => commitSessionViewState(token, apply),
+    patch: (...args) => commitSessionViewPatch(...args),
+    fetch: (...args) => fetch(...args),
+    guardAvailable: () => window.ContextGuardToggle?.isAvailable?.() === true,
+    ownerRecord: () => getCurrentRuntimeRecord() || getCurrentAgentRecord(),
+    logicalId: (record) => getLogicalAgentId(record),
+    sessionId: (record) => getActiveSessionId(record),
+    runtimeRecord: (id) => getRuntimeRecord(id),
+    applyGuard: (data, id) => { if (typeof applyContextGuardStatus === 'function') applyContextGuardStatus(data, id); },
+    notify: (...args) => updateNotificationStatus(...args),
+    warn: (...args) => console.warn(...args),
+  };
 }

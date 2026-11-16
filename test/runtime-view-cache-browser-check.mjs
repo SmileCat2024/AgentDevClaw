@@ -15,6 +15,7 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/overview-data.js"></script>
 <script src="/src/modules/todo-plan.js"></script>
 <script src="/src/modules/session-view-state.js"></script>
+<script src="/src/modules/agent-data-loader.js"></script>
 <script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/sidebar-render.js"></script>
 <script src="/src/modules/auth-client.js"></script>

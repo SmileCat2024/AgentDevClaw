@@ -344,9 +344,8 @@
       "_lastTemplateRuntimeId"
     ],
     "behavior": [
-      "loadAgentData",
-      "refreshContextGuardStatus",
-      "refreshCurrentRuntimeStatus"
+      "createRuntimeStatusLoaderHost",
+      "loadAgentData"
     ]
   },
   "public/src/modules/annotations.js": {

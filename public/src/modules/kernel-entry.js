@@ -1,6 +1,7 @@
 // Native ESM entry for kernel implementations. State owners are imported by
 // their implementation hosts; classic bootstrap still runs at its original time.
 import './session-view-commit-host.js';
+import './runtime-status-loader-host.js';
 import './agent-loader-host.js';
 import './runtime-view-cache-host.js';
 import './call-interrupt-host.js';

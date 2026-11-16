@@ -15,6 +15,8 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/overview-data.js"></script>
 <script src="/src/modules/todo-plan.js"></script>
 <script src="/src/modules/session-view-state.js"></script>
+<script src="/src/modules/agent-data-loader.js"></script>
+<script>window.updateNotificationStatus = () => {}; window.getCurrentRuntimeRecord = () => allAgents[0]; window.getCurrentAgentRecord = () => allAgents[0];</script>
 <script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/sidebar-render.js"></script>
 <script>
@@ -34,6 +36,8 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
  (async () => { await __clawAuthReady; window.started = true; await loadAgents(); window.finished = true; })();
 </script></body>`)));
 app.get('/protoclaw/auth/status', (_req, res) => res.json({ enabled: false, authenticated: true }));
+app.get('/api/agents/rt/notification', (_req, res) => res.json({ state: 'idle' }));
+app.get('/api/agents/rt/connection', (_req, res) => res.json({ connected: false }));
 app.get('/api/agents', (_req, res) => res.json({ agents: [{ id: 'rt', name: 'Viewer identity', connected: true, messageCount: 7 }] }));
 const server = app.listen(0, '127.0.0.1');
 await new Promise((resolve) => server.once('listening', resolve));
@@ -57,6 +61,12 @@ try {
   await page.evaluate(async () => { authoritative = []; await loadAgents(); });
   assert.equal(await page.locator('#agent-list').textContent(), 'prebuilt:Workspace identity');
   assert.equal(await page.evaluate(() => loadAgentsInFlight), null);
+  const status = await page.evaluate(async () => {
+    currentRuntimeAgentId = 'rt';
+    await refreshCurrentRuntimeStatus('rt');
+    return { connected: currentRuntimeConnected, recordConnected: allAgents[0].connected };
+  });
+  assert.deepEqual(status, { connected: false, recordConnected: false });
   assert.deepEqual(errors, []);
   console.log('PASS: delayed snapshot module respects auth boot; authoritative identity survives Viewer merge and an empty read');
 } finally {

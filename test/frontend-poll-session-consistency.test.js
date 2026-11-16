@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
+import { createRuntimeStatusLoader } from '../public/src/modules/runtime-status-loader.js';
 
 /** Raw VM harnesses install the real kernel before evaluating classic sources. */
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
@@ -28,16 +29,15 @@ function extractPollSource() {
 
 function extractLoadAgentDataSource() {
   const start = agentDataLoaderSource.indexOf('async function loadAgentData(agentId)');
-  const end = agentDataLoaderSource.indexOf('\nasync function refreshCurrentRuntimeStatus', start);
+  const end = agentDataLoaderSource.indexOf('\n// Async status requests', start);
   assert.notEqual(start, -1, 'loadAgentData start marker should exist');
   assert.notEqual(end, -1, 'loadAgentData end marker should exist');
   return agentDataLoaderSource.slice(start, end);
 }
 
 function extractRuntimeStatusSource() {
-  const start = agentDataLoaderSource.indexOf('async function refreshCurrentRuntimeStatus(');
-  assert.notEqual(start, -1, 'runtime status start marker should exist');
-  // refreshCurrentRuntimeStatus is the last function in agent-data-loader.js
+  const start = agentDataLoaderSource.indexOf('function createRuntimeStatusLoaderHost(');
+  assert.notEqual(start, -1, 'runtime status host should exist');
   return agentDataLoaderSource.slice(start);
 }
 
@@ -374,10 +374,10 @@ test('runtime status cannot commit after the same runtime is re-entered', async 
   installSessionViewCommit(sandbox);
   vm.runInContext(
     `${sessionViewStateSource}\n${extractRuntimeStatusSource()}\n`
-      + 'globalThis.__capture = captureSessionViewToken;\n'
-      + 'globalThis.__refresh = refreshCurrentRuntimeStatus;',
+      + 'globalThis.__capture = captureSessionViewToken;',
     sandbox,
   );
+  sandbox.__refresh = createRuntimeStatusLoader(sandbox.createRuntimeStatusLoaderHost()).refreshCurrentRuntimeStatus;
 
   const oldVisit = sandbox.__capture('A');
   const refresh = sandbox.__refresh('A', oldVisit);
