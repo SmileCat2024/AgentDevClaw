@@ -1839,7 +1839,12 @@ async function shutdown(exitCode = 0) {
       const children = runtimes.map((runtime) => runtime.process)
         .filter((child, index, all) => child && child.exitCode === null && all.indexOf(child) === index);
       for (const runtime of runtimes) {
-        if (runtime.process && runtime.process.exitCode === null) runtime.stopped = true;
+        if (runtime.process && runtime.process.exitCode === null) {
+          // 整个宿主关闭不等于用户停止对话：保留 board=running，让下次启动
+          // 的 threadRestartResume 能识别中断轮次并继续恢复。
+          runtime.stopReason = 'host_shutdown';
+          runtime.stopped = true;
+        }
       }
       for (const child of children) child.kill('SIGTERM');
       await Promise.all(children.map(async (child) => {

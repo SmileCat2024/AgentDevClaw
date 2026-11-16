@@ -717,7 +717,9 @@ export function createAgentStartupFns(deps) {
         // 人为/意外区分（C1）：宿主人为停止会先行标记 stopped=true；
         // 崩溃 / 宿主被收割到达这里时尚为 false——保留看板 running 事实，
         // 供重启恢复判定"未完成"。
-        const deliberate = rt.stopped === true;
+        // 宿主整体关机时也会先停 runtime，但这不是用户对会话的手动停止。
+        // 保留 running 看板供整机重启恢复；单独停止会话仍按 deliberate 收敛。
+        const deliberate = rt.stopped === true && rt.stopReason !== 'host_shutdown';
         rt.exitCode = code;
         rt.signalCode = signal || child.signalCode || null;
         rt.stopped = true;
