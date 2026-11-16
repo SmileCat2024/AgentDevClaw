@@ -16,7 +16,7 @@ const mainSourceTop = fs.readFileSync(new URL('../public/src/app-main.js', impor
 
 function extractHostResolverSource() {
   const normalizeStart = coreSource.indexOf('function normalizeAgentIdentity');
-  const normalizeEnd = coreSource.indexOf('// Feature 模板映射', normalizeStart);
+  const normalizeEnd = coreSource.indexOf('const VIEWER_BASE_URL', normalizeStart);
   const start = mainSourceTop.indexOf('function getCurrentSessionHostAgentId()');
   const end = mainSourceTop.indexOf('function getCurrentRuntimeRecord()', start);
   assert.notEqual(normalizeStart, -1, 'identity normalizer should exist in app-core');

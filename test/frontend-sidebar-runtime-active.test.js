@@ -42,7 +42,7 @@ function createHarness({
   const normalizeSource = sourceBetween(
     coreSource,
     'function normalizeAgentIdentity(value) {',
-    '// Feature 模板映射',
+    'const VIEWER_BASE_URL',
   );
   const activeSource = sourceBetween(
     mainSource,

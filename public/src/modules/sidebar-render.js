@@ -699,7 +699,7 @@ async function loadAgents() {
       && !allAgents.some((agent) => agent.id === focusedAgentId || getAgentRuntimeId(agent) === focusedAgentId)) {
       const fallbackId = resolveWorkspaceFallbackAgentId();
       if (fallbackId) {
-        await loadAgentDetail(fallbackId);
+        await window.loadAgentDetail(fallbackId)
         selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
         return;
       }
@@ -709,7 +709,7 @@ async function loadAgents() {
       const homeAgent = allAgents.find((agent) => agent.id === 'home' && agent.source === 'prebuilt');
       if (homeAgent) {
         setPreferredUnitMode('home', homeAgent);
-        await loadAgentDetail(homeAgent.id);
+        await window.loadAgentDetail(homeAgent.id)
         selectWorkspaceSurface(homeAgent.id, { skipFeaturePanel: true });
         return;
       }

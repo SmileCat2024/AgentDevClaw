@@ -82,24 +82,21 @@ function createHarness({
     shouldAnimateWorkspaceSurface: false,
     unitModePreferences: {},
     workspaceSurfaceModePreferences: {},
-    loadedAgentDetailIds: loadedDetailIds,
-    allAgents,
-    _recentlyFinishedRuntimes: new Set(),
-    // 刷新分发经 ClawHost 注册表：加载时登记 refresher，渲染路径按 block type 查表调用。
-    window: {},
-    // 编排依赖 stub：本测试关注 selectWorkspaceSurface 的导航编排与
-    // refreshVisibleWorkspacePanelData 的分发（均为真实源码），其余按
-    // 最小语义打桩。
-    bumpNavigationGuard: () => {},
-    loadAgentDetail: (agentId) => new Promise((resolve) => {
-      // 模拟真实时序：detail 经网络异步落定后才把带 ui 声明的条目写回
-      // allAgents（同步执行段 ui 仍缺席，同步末尾的刷新调用应空转）。
+    window: { loadedAgentDetailIds: loadedDetailIds, loadAgentDetail: (agentId) => new Promise((resolve) => {
       queueMicrotask(() => {
         const index = allAgents.findIndex((item) => item.id === agentId);
         if (index >= 0) allAgents[index] = agent;
         resolve();
       });
-    }),
+    }) },
+    loadedAgentDetailIds: loadedDetailIds,
+    allAgents,
+    _recentlyFinishedRuntimes: new Set(),
+    // 刷新分发经 ClawHost 注册表：加载时登记 refresher，渲染路径按 block type 查表调用。
+    // 编排依赖 stub：本测试关注 selectWorkspaceSurface 的导航编排与
+    // refreshVisibleWorkspacePanelData 的分发（均为真实源码），其余按
+    // 最小语义打桩。
+    bumpNavigationGuard: () => {},
     getUnitPreferenceKey: (a) => a?.id || null,
     getUnitTabs: () => [{ id: 'home' }, { id: 'chat' }],
     getDefaultUnitMode: () => 'home',

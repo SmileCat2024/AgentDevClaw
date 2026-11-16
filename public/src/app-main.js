@@ -294,7 +294,7 @@ window.handlePrebuiltAgentClick = async (agentId) => {
     if (!loadedAgentDetailIds.has(agentId)) {
       container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
     }
-    await loadAgentDetail(prebuiltAgent.id);
+    await window.loadAgentDetail(prebuiltAgent.id);
     selectWorkspaceSurface(prebuiltAgent.id, { skipFeaturePanel: true });
     return;
   }
@@ -553,7 +553,7 @@ window.navigateToWorkspaceSession = async (agentId, sessionId, options = {}) => 
   container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
 
   // Step 2: load agent detail (sessions list, workspace config, etc.) if not cached.
-  await loadAgentDetail(agentId);
+  await window.loadAgentDetail(agentId);
 
   // Guard: user may have navigated away during loadAgentDetail.
   if (_navGuard !== _navigationGuardEpoch) return;
@@ -1612,7 +1612,7 @@ async function runPollCycle() {
     // 定期检查并重新加载 Feature 模板映射（如果为空）
     if (Object.keys(FEATURE_TEMPLATE_MAP).length === 0 && Date.now() - lastFeatureTemplateReloadAt > 3000) {
       lastFeatureTemplateReloadAt = Date.now();
-      await reloadFeatureTemplateMap();
+      await window.reloadFeatureTemplateMap();
     }
 
     if (!currentRuntimeAgentId) {
@@ -1870,14 +1870,14 @@ document.addEventListener('visibilitychange', () => {
 (async () => {
   await window.__clawAuthReady;
   await waitForViewerReady();
-  const success = await loadFeatureTemplateMap();
+  const success = await window.loadFeatureTemplateMap();
   await loadAgents();
   // 桌面右键唤起（冷启动 URL query，modules/desktop-open.js）：覆盖初始
   // 焦点恢复，切到编程小助手并执行定位目录 / 新建对话。
   if (window.ClawDesktopOpen) await window.ClawDesktopOpen.consumeBootOpenRequest();
   if (!success) {
     console.log('[Viewer] Retrying to load feature templates after agent loaded...');
-    await reloadFeatureTemplateMap();
+    await window.reloadFeatureTemplateMap();
   }
   await loadMcpInfo(false);
   poll();

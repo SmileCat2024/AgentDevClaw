@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { createAgentLoader } from '../public/src/modules/agent-loader.js';
 
 function deferred() {
   let resolve;
@@ -32,7 +33,7 @@ function createLoadHarness() {
     console: { ...console, error: (...args) => errors.push(args), warn: (...args) => errors.push(args) },
     resetRuntimeStatusForSwitch() {},
     attachMessagesTimestamps: (messages) => messages,
-    loadFeatureTemplateMap: async () => true,
+    loadedAgentDetailIds: new Set(),
     recheckAutoTitleCandidate() {},
     notifyInputSurfaceChanged() {},
     updateRollbackActionVisibility() {},
@@ -72,14 +73,44 @@ function createLoadHarness() {
   ctx.loadSource('public/src/modules/todo-plan.js');
   ctx.loadSource('public/src/modules/session-view-state.js');
   ctx.loadSource('public/src/modules/agent-data-loader.js');
-  ctx.run(`
-    focusedAgentId = '${HOST}';
+  ctx.run(`focusedAgentId = '${HOST}';
     currentRuntimeAgentId = 'runtime-selected';
     allAgents = [{ id: '${HOST}', source: 'prebuilt', kind: 'workspace' }];
     setViewerSessionBinding(currentRuntimeAgentId, '${SELECTED}');
     applySessionViewPatch({ identity: { agentId: '${HOST}', sessionId: '${SELECTED}' } });
     refreshCurrentRuntimeStatus = async () => {};
+    getPhSessionOwnershipParams = () => ({});
+    mergeWorkspaceSessionSnapshots = (previous, fresh) => ({ ...previous, ...fresh });
   `);
+  const runWithArgs = (expression, args = []) => {
+    ctx.__agentLoaderArgs = args;
+    try { return ctx.run(expression.replaceAll('$ARGS', '__agentLoaderArgs')); }
+    finally { delete ctx.__agentLoaderArgs; }
+  };
+  const host = {
+    loadedAgentDetailIds: ctx.run('loadedAgentDetailIds'),
+    currentRuntimeAgentId: () => ctx.run('currentRuntimeAgentId'),
+    fetch: (...args) => ctx.fetch(...args),
+    setFeatureTemplateMap: (value) => ctx.run(`FEATURE_TEMPLATE_MAP = ${JSON.stringify(value)}`),
+    allAgents: () => ctx.run('allAgents'),
+    getPhSessionOwnershipParams: (agent) => runWithArgs('getPhSessionOwnershipParams($ARGS[0])', [agent]),
+    captureSidebarSnapshotToken: () => ctx.run('typeof captureSidebarSnapshotToken === "function" ? captureSidebarSnapshotToken() : null'),
+    isSidebarSnapshotTokenCurrent: (token) => runWithArgs('isSidebarSnapshotTokenCurrent($ARGS[0])', [token]),
+    captureSessionViewToken: () => ctx.run('captureSessionViewToken()'),
+    commitSessionViewPatch: (token, patch, afterCommit) => runWithArgs('commitSessionViewPatch($ARGS[0], $ARGS[1], $ARGS[2])', [token, patch, afterCommit]),
+    mergeWorkspaceSessionSnapshots: (previous, fresh, agentId) => runWithArgs('mergeWorkspaceSessionSnapshots($ARGS[0], $ARGS[1], $ARGS[2])', [previous, fresh, agentId]),
+    updateChatContextBar: () => {},
+    renderCurrentMainView: () => paints.push(ctx.run('readCurrentSessionViewState()')),
+    toolRenderConfigs: () => ctx.run('toolRenderConfigs'),
+    collectTemplateNames: () => [],
+    warmTemplatesInBackground() {},
+    warn: (...args) => errors.push(args),
+    info() {}, log() {},
+  };
+  const loader = createAgentLoader(host);
+  ctx.window.loadAgentDetail = loader.loadAgentDetail;
+  ctx.window.loadFeatureTemplateMap = loader.loadFeatureTemplateMap;
+  ctx.window.reloadFeatureTemplateMap = loader.reloadFeatureTemplateMap;
   return {
     ctx, paints, errors, requests, failures,
     block(endpoint, phase = 'headers') {

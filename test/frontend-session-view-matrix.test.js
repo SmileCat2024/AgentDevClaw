@@ -5,6 +5,7 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const loaderSource = fs.readFileSync(new URL('../public/src/modules/agent-data-loader.js', import.meta.url), 'utf8');
+const agentLoaderSource = fs.readFileSync(new URL('../public/src/modules/agent-loader.js', import.meta.url), 'utf8');
 const sseSource = fs.readFileSync(new URL('../public/src/modules/sse-client.js', import.meta.url), 'utf8');
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 
@@ -157,6 +158,6 @@ test('cache restore is an explicit synchronous restore path and session detail u
   assert.match(coreSource, /function restoreRuntimeFromCache\(agentId/);
   assert.match(coreSource, /applySessionViewPatch\(restorePatch\)/);
   assert.match(coreSource, /sessionMeta: cached\.sessionMeta/);
-  assert.match(coreSource, /commitSessionViewPatch\(sessionViewToken, \{ sessionMeta \},/);
-  assert.match(coreSource, /extractSessionMetaFromDetail\(detail, selectedIdentity\.sessionId\)/);
+  assert.match(agentLoaderSource, /host\.commitSessionViewPatch\(sessionViewToken, \{ sessionMeta \},/);
+  assert.match(agentLoaderSource, /extractSessionMetaFromDetail\(detail, selectedIdentity\.sessionId\)/);
 });

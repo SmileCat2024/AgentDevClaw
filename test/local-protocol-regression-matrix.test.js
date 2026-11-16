@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { createAgentLoader } from '../public/src/modules/agent-loader.js';
 import { proxyToViewer } from '../server/shared/proxy.js';
 import {
   LOCAL_OPERATION_ERROR_CODES,
@@ -116,9 +117,21 @@ test('template loading addresses the explicit runtime rather than page focus', a
     },
   });
   ctx.loadSource('public/src/app-core.js');
+  ctx.window.loadFeatureTemplateMap = createAgentLoader({
+    loadedAgentDetailIds: new Set(),
+    currentRuntimeAgentId: () => ctx.run('currentRuntimeAgentId'),
+    fetch: ctx.fetch,
+    setFeatureTemplateMap() {},
+    allAgents: () => [], getPhSessionOwnershipParams: () => ({}),
+    captureSidebarSnapshotToken: () => null, isSidebarSnapshotTokenCurrent: () => true,
+    captureSessionViewToken: () => null, commitSessionViewPatch: () => false,
+    mergeWorkspaceSessionSnapshots: () => undefined, updateChatContextBar() {},
+    renderCurrentMainView() {}, toolRenderConfigs: () => ({}), collectTemplateNames: () => [],
+    warmTemplatesInBackground() {}, warn() {}, info() {}, log() {},
+  }).loadFeatureTemplateMap;
   ctx.run('currentRuntimeAgentId = "runtime-a"; focusedAgentId = "agent-b"');
 
-  assert.equal(await ctx.run('loadFeatureTemplateMap()'), true);
+  assert.equal(await ctx.run('window.loadFeatureTemplateMap()'), true);
   assert.deepEqual(requests, ['/api/templates/feature?agentId=runtime-a']);
 });
 

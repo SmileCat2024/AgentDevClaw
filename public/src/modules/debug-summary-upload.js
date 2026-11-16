@@ -403,7 +403,7 @@ async function submitFeatureUpload() {
       // 上传后失效当前焦点 agent 的 detail 缓存并重拉，列表才会出现新包
       if (focusedAgentId && typeof loadedAgentDetailIds !== 'undefined') {
         loadedAgentDetailIds.delete(focusedAgentId);
-        loadAgentDetail(focusedAgentId)
+        window.loadAgentDetail(focusedAgentId)
           .then(() => renderCurrentMainView())
           .catch(e => console.warn(e));
       } else {

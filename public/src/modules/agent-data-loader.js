@@ -37,7 +37,7 @@ async function loadAgentData(agentId) {
       if (typeof clearFeatureTemplateCache === 'function') {
         clearFeatureTemplateCache();
       }
-      loadFeatureTemplateMap().catch((e) => console.warn('[Viewer] Template map reload on switch failed:', e));
+      window.loadFeatureTemplateMap().catch((e) => console.warn('[Viewer] Template map reload on switch failed:', e));
     }
     // GenUI / 后台任务徽标都不在主轮询管线内（自管 3s 定时器），切换
     // runtime 时立即触发一次 poll，让红点数字与 todo badge 一样及时出现。
@@ -148,7 +148,7 @@ async function loadAgentData(agentId) {
         inputRequests: Array.isArray(inputRequests) ? inputRequests : [],
       }, () => updateRollbackActionVisibility());
     });
-    const detailTask = loadPart('workspace detail', () => loadAgentDetail(focusedAgentId));
+    const detailTask = loadPart('workspace detail', () => window.loadAgentDetail(focusedAgentId));
     const statusTask = loadPart('runtime status', async () => {
       await refreshCurrentRuntimeStatus(agentId, loadToken);
       if (!isSessionViewTokenCurrent(loadToken)) return;

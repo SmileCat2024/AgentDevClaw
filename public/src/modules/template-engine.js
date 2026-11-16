@@ -240,7 +240,7 @@ async function loadTemplate(templateName, retryCount = 0) {
         console.log('[Viewer] Waiting for FEATURE_TEMPLATE_MAP to load... (attempt ' + (retryCount + 1) + ')');
         await new Promise(resolve => setTimeout(resolve, 500));
         // 重新加载模板映射
-        await loadFeatureTemplateMap();
+        await window.loadFeatureTemplateMap();
         return loadTemplate(templateName, retryCount + 1);
       }
       console.warn('[Viewer] Template "' + templateName + '" not found after retries');

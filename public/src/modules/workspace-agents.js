@@ -6,7 +6,7 @@
       const identity = typeof getCurrentSessionViewIdentity === 'function' ? getCurrentSessionViewIdentity() : null;
       const hostId = identity?.agentId || focusedAgentId;
       const host = allAgents.find((entry) => entry.id === hostId)
-        || (typeof getAgentDetailPayload === 'function' ? getAgentDetailPayload(hostId) : null);
+        || (typeof window.getAgentDetailPayload === 'function' ? window.getAgentDetailPayload(hostId) : null);
       if (!host) return '';
       const runtime = allAgents.find((entry) => entry.id === currentRuntimeAgentId);
       const sessionId = identity?.sessionId || (currentRuntimeAgentId ? getRuntimeWorkspaceSessionId(currentRuntimeAgentId) : '');

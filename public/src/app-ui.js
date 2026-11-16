@@ -4,7 +4,7 @@ function selectWorkspaceSurface(agentId, options = {}) {
   // 回工作空间首页 = 离开只读浏览：清视图身份之外的只读标记与指示器。
   if (typeof window.closeReadOnlySession === 'function') window.closeReadOnlySession();
   if (agentId && !loadedAgentDetailIds.has(agentId)) {
-    loadAgentDetail(agentId).then(() => {
+    window.loadAgentDetail(agentId).then(() => {
       renderCurrentMainView();
       // detail 就绪后 blocks 才可用：导航进入工作空间单元的面板重取在
       // 此补发（末尾的同步调用此时会因 ui 未挂而空转）。

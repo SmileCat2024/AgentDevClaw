@@ -99,6 +99,8 @@ function loadReadonly({ payload = recordPayload(), threads = [], loadMain = fals
       loadAgentData = async () => {};
       loadAgents = async () => {};
       loadMcpInfo = async () => {};
+      // The test exercises switch cleanup, not the independent page boot chain.
+      window.__clawAuthReady = new Promise(() => {});
       setViewerSessionBinding = () => {};
       renderAgentList = () => {};
       renderCurrentMainView = () => {};
