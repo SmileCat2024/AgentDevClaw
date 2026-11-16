@@ -8,6 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { getRuntimeCacheTodoPlanSignature } from '../public/src/modules/runtime-view-cache.js';
 
 /**
  * Helper: create a sandbox with app-core.js loaded.
@@ -259,18 +260,16 @@ describe('app-core: isUiOnlyAgentId', () => {
 
 describe('app-core: getRuntimeCacheTodoPlanSignature', () => {
   it('produces stable signature for same plan', () => {
-    const ctx = createCoreSandbox();
-    const sig1 = ctx.run('getRuntimeCacheTodoPlanSignature([{subject:"a",status:"pending"}])');
-    const sig2 = ctx.run('getRuntimeCacheTodoPlanSignature([{subject:"a",status:"pending"}])');
+    const sig1 = getRuntimeCacheTodoPlanSignature([{ subject: 'a', status: 'pending' }]);
+    const sig2 = getRuntimeCacheTodoPlanSignature([{ subject: 'a', status: 'pending' }]);
     assert.ok(typeof sig1 === 'string');
     assert.ok(sig1.length > 0);
     assert.equal(sig1, sig2, 'same plan should produce same signature');
   });
 
   it('produces different signatures for different plans', () => {
-    const ctx = createCoreSandbox();
-    const sig1 = ctx.run('getRuntimeCacheTodoPlanSignature([{subject:"a",status:"pending"}])');
-    const sig2 = ctx.run('getRuntimeCacheTodoPlanSignature([{subject:"b",status:"pending"}])');
+    const sig1 = getRuntimeCacheTodoPlanSignature([{ subject: 'a', status: 'pending' }]);
+    const sig2 = getRuntimeCacheTodoPlanSignature([{ subject: 'b', status: 'pending' }]);
     assert.notEqual(sig1, sig2);
   });
 });

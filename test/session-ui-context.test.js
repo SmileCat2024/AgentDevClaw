@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 
 /** Raw VM contexts install the real kernel with window/global unified. */
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
@@ -85,7 +86,9 @@ function createCoreContext() {
     `${i18nSource}
 ${sessionViewStateSource}
 ${cacheBlock}
-globalThis.__uiContext = {
+`, context);
+  installRuntimeViewCache(context);
+  vm.runInContext(`globalThis.__uiContext = {
   getActiveWorkspaceSessionId,
   getRuntimeContextKey,
   getRuntimeWorkspaceSessionId,

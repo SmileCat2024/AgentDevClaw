@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 import { createAgentLoader } from '../public/src/modules/agent-loader.js';
 
 function deferred() {
@@ -69,6 +70,7 @@ function createLoadHarness() {
     },
   });
   ctx.loadSource('public/src/app-core.js');
+  installRuntimeViewCache(ctx);
   ctx.loadSource('public/src/modules/overview-data.js');
   ctx.loadSource('public/src/modules/todo-plan.js');
   ctx.loadSource('public/src/modules/session-view-state.js');

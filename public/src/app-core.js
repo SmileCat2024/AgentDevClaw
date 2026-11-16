@@ -887,151 +887,43 @@ function getRuntimeContextKey(runtimeId = currentRuntimeAgentId, agent = typeof 
   return `runtime:${normalizedRuntimeId}`;
 }
 
-function getRuntimeCacheTodoPlanFallback() {
+// Temporary adapter for classic lexical state. Cache policy lives in ESM;
+// these closures keep viewport/collapse initialization at its original time.
+function createRuntimeViewCacheHost() {
   return {
-    feature: 'todo',
-    updatedAt: 0,
-    counter: 0,
-    tasks: [],
-    summary: { total: 0, pending: 0, inProgress: 0, completed: 0, cancelled: 0, blocked: 0 },
-  };
-}
-
-function getRuntimeCacheTodoPlanSignature(plan) {
-  if (typeof getTodoPlanSignature === 'function') {
-    return getTodoPlanSignature(plan);
-  }
-  return JSON.stringify(plan || getRuntimeCacheTodoPlanFallback());
-}
-
-function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(agentId)) {
-  if (!agentId || !contextKey) return;
-  const viewState = readCurrentSessionViewState();
-  const cachedTodoPlan = viewState.todoPlan
-    ? viewState.todoPlan
-    : getRuntimeCacheTodoPlanFallback();
-  // Map insertion order is the eviction order; refresh it on every write.
-  _agentRuntimeCache.delete(contextKey);
-  _agentRuntimeCache.set(contextKey, {
-    runtimeId: agentId,
-    messages: viewState.messages,
-    inputRequests: viewState.inputRequests,
-    toolRenderConfigs: viewState.toolRenderConfigs,
-    TOOL_NAMES: viewState.toolNames,
-    hookInspector: viewState.hookInspector,
-    hookInspectorSignature: currentHookInspectorSignature,
-    overviewSnapshot: viewState.overview,
-    overviewSignature: currentOverviewSignature,
-    todoPlan: cachedTodoPlan,
-    todoPlanSignature: typeof currentTodoPlanSignature !== 'undefined'
-      ? currentTodoPlanSignature
-      : getRuntimeCacheTodoPlanSignature(cachedTodoPlan),
-    sessionMeta: viewState.sessionMeta,
-    connected: viewState.connected,
-    followLatest: followLatestEnabled,
-    scrollAnchor: typeof rememberChatViewportAnchorForContext === 'function'
-      && typeof getChatViewportContextKey === 'function'
-      && getChatViewportContextKey() === contextKey
+    cache: _agentRuntimeCache,
+    capacity: MAX_CACHED_RUNTIME_VIEWS,
+    contextKey: (runtimeId) => getRuntimeContextKey(runtimeId),
+    readView: () => readCurrentSessionViewState(),
+    signatures: () => ({ hookInspector: currentHookInspectorSignature,
+      overview: currentOverviewSignature,
+      todo: typeof currentTodoPlanSignature !== 'undefined' ? currentTodoPlanSignature : undefined }),
+    todoSignature: (plan) => typeof getTodoPlanSignature === 'function'
+      ? getTodoPlanSignature(plan) : JSON.stringify(plan),
+    emptyTodo: () => typeof getEmptyTodoPlan === 'function' ? getEmptyTodoPlan() : null,
+    followLatest: () => followLatestEnabled,
+    setFollowLatest: (value) => { followLatestEnabled = value; },
+    captureAnchor: (contextKey) => typeof rememberChatViewportAnchorForContext === 'function'
+      && typeof getChatViewportContextKey === 'function' && getChatViewportContextKey() === contextKey
       ? rememberChatViewportAnchorForContext(contextKey)
       : (typeof getRememberedChatViewportAnchorForContext === 'function'
-        ? getRememberedChatViewportAnchorForContext(contextKey)
-        : null),
-    // Keep the legacy pixel value for old cache readers; new restoration uses
-    // the semantic anchor above.
-    scrollTop: container ? container.scrollTop : 0,
-  });
-  if (_agentRuntimeCache.size > MAX_CACHED_RUNTIME_VIEWS) {
-    const evictedContextKey = _agentRuntimeCache.keys().next().value;
-    _agentRuntimeCache.delete(evictedContextKey);
-    // 同 key 的旁路 per-context 状态联动淘汰：runtime 视图缓存被 LRU 淘汰的
-    // context 不再有恢复入口，其折叠偏好与视口锚点若不一起释放，会随会话
-    // 创建（context key 含 sessionId）无界累积。当前活跃 context 例外——
-    // 它的折叠状态正被全局 Set 引用、锚点随时会被读取恢复。
-    if (evictedContextKey && evictedContextKey !== getUserCollapseStateContextKey()) {
-      _userCollapseStateByContext.delete(evictedContextKey);
-      if (typeof forgetChatViewportAnchorForContext === 'function') {
-        forgetChatViewportAnchorForContext(evictedContextKey);
-      }
-    }
-  }
-}
-
-// 缓存上下文键 → 视图身份。键形如 `host:<hostId>|session:<sessionId>`；
-// `runtime:<runtimeId>` 是既没有宿主也没有会话时的退化形态，不含身份事实，
-// 返回 null 交由调用方决定。缓存恢复必须按本次命中的键恢复身份：同一个
-// runtime 可以被不同会话复用，键才是这次恢复的权威。
-function _sessionViewIdentityFromContextKey(contextKey) {
-  const match = /^host:([^|]+)\|session:(.+)$/.exec(String(contextKey || '').trim());
-  if (!match) return null;
-  const agentId = match[1].trim();
-  const sessionId = match[2].trim();
-  if (!agentId || !sessionId) return null;
-  return typeof normalizeSessionViewIdentity === 'function'
-    ? normalizeSessionViewIdentity({ agentId, sessionId })
-    : { agentId, sessionId };
-}
-
-function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agentId)) {
-  if (!agentId || !contextKey) return false;
-  const cached = _agentRuntimeCache.get(contextKey);
-  if (!cached) return false;
-  // Guard against cache key collision: when a new session is created for the same
-  // host agent, the old runtime's saveCurrentRuntimeToCache may write under the
-  // new session's context key (because allAgents was already updated). Verify
-  // that the cached entry actually belongs to the requesting runtime.
-  if (cached.runtimeId && String(cached.runtimeId).trim() !== String(agentId).trim()) {
-    _agentRuntimeCache.delete(contextKey);
-    return false;
-  }
-  activateUserCollapseStateForContext(contextKey);
-  // followLatestEnabled 先于 patch 写入：applySessionViewPatch 写入
-  // inputRequests 即声明输入面渲染（工单 037），视口通知须读取恢复后的值。
-  followLatestEnabled = cached.followLatest !== undefined ? cached.followLatest : true;
-  // 恢复内容即回到该会话：视图身份必须与缓存内容同源落地。身份权威是
-  // 命中的 context key（host:<hostId>|session:<sessionId>），不依赖
-  // cached.sessionMeta —— 它只是可选的展示元数据，会话元数据尚未加载时为
-  // 空；只恢复内容不恢复身份会让界面有对话、身份却停在空会话，输入面与
-  // 模型切换因此判定「当前会话不支持模型切换」。
-  const restorePatch = {
-    messages: cached.messages,
-    inputRequests: cached.inputRequests,
-    toolRenderConfigs: cached.toolRenderConfigs,
-    toolNames: cached.TOOL_NAMES,
-    hookInspector: cached.hookInspector,
-    overview: cached.overviewSnapshot,
-    todoPlan: cached.todoPlan || (
-      typeof getEmptyTodoPlan === 'function'
-        ? getEmptyTodoPlan()
-        : getRuntimeCacheTodoPlanFallback()
-    ),
-    sessionMeta: cached.sessionMeta,
-    connected: cached.connected,
+        ? getRememberedChatViewportAnchorForContext(contextKey) : null),
+    scrollTop: () => container ? container.scrollTop : 0,
+    activeCollapseContext: () => getUserCollapseStateContextKey(),
+    forgetContext(contextKey) {
+      _userCollapseStateByContext.delete(contextKey);
+      if (typeof forgetChatViewportAnchorForContext === 'function') forgetChatViewportAnchorForContext(contextKey);
+    },
+    activateCollapse: (contextKey) => activateUserCollapseStateForContext(contextKey),
+    normalizeIdentity: (identity) => typeof normalizeSessionViewIdentity === 'function'
+      ? normalizeSessionViewIdentity(identity) : identity,
+    patch: (patch) => applySessionViewPatch(patch),
+    setRestoredScrollTop: (value) => { _restoredScrollTop = value; },
+    restoreAnchor: (anchor) => {
+      if (typeof setPendingChatViewportAnchor === 'function') setPendingChatViewportAnchor(anchor);
+    },
+    updatePlanBadge: () => { if (typeof updatePlanBadge === 'function') updatePlanBadge(); },
   };
-  // 身份变更会触发内容清空（applySessionViewPatch 的既有语义），所以身份与
-  // 缓存内容分两次写入：先落身份（清掉的是上一会话内容），再落内容。
-  const restoredIdentity = _sessionViewIdentityFromContextKey(contextKey);
-  if (restoredIdentity) {
-    applySessionViewPatch({ identity: restoredIdentity });
-  }
-  applySessionViewPatch(restorePatch);
-  _restoredScrollTop = typeof cached.scrollTop === 'number' ? cached.scrollTop : null;
-  if (cached.scrollAnchor && typeof setPendingChatViewportAnchor === 'function') {
-    setPendingChatViewportAnchor(cached.scrollAnchor);
-  }
-  if (typeof updatePlanBadge === 'function') updatePlanBadge();
-  return true;
-}
-
-function clearAgentRuntimeCache(agentId) {
-  if (agentId) {
-    for (const [key, cached] of _agentRuntimeCache.entries()) {
-      if (cached?.runtimeId === agentId || key === `runtime:${agentId}`) {
-        _agentRuntimeCache.delete(key);
-      }
-    }
-  } else {
-    _agentRuntimeCache.clear();
-  }
 }
 
 function getFeatureStatus(feature) {

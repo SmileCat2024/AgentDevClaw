@@ -26,6 +26,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 
 // ═══════════════════════════════════════════════════════════════
 // Part A — generative-ui chart ResizeObserver
@@ -232,6 +233,7 @@ function createEvictionSandbox() {
     connected: true,
   });
   ctx.loadSource('public/src/app-core.js');
+  installRuntimeViewCache(ctx);
   ctx.loadSource('public/src/modules/chat-viewport.js');
   ctx.run('followLatestEnabled = false'); // let-bound in app-core.js
   return ctx;
