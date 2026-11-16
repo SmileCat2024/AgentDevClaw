@@ -1433,41 +1433,7 @@ function createRuntimePollHost() {
   };
 }
 
-async function runPollCycle() {
-  try {
-    if (prebuiltSessionSwitchInFlight) {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return;
-    }
-
-    // 全局 choice 请求提醒（跨所有 agent，不限于当前焦点）。
-    // SSE 激活时本地条目由 input-requests 事件驱动 toast + 桌面通知
-    // （§4.3，与 checkGlobalChoiceAlerts 共享 _seenChoiceAlertIds 去重）。
-    // checkGlobalChoiceAlerts 的数据源 /protoclaw/choice_alerts 仅聚合
-    // 本地 ViewerWorker runtime，不含远程条目，SSE 激活时整段跳过。
-    const sseSkipChoiceAlerts = typeof isSseActive === 'function' && isSseActive();
-    if (!sseSkipChoiceAlerts && Date.now() - _lastChoiceAlertCheckAt > 3000) {
-      _lastChoiceAlertCheckAt = Date.now();
-      checkGlobalChoiceAlerts().catch(e => console.warn(e));
-    }
-
-    // 远程工作空间目录（ADR-0008 Phase 1）：复用 poll 调度，内部自带时间窗节流
-    if (typeof maybeRefreshRemoteCatalog === 'function') {
-      maybeRefreshRemoteCatalog();
-    }
-    // 远程历史会话混入（R2-01，ADR-0012）：同样复用 poll 调度（内部时间窗节流），
-    // 拉取完成后轻量重渲染 workspace surface 使新历史条目出现。
-    if (typeof maybeRefreshRemoteHistory === 'function') {
-      maybeRefreshRemoteHistory();
-    }
-
-    // 定期检查并重新加载 Feature 模板映射（如果为空）
-    if (Object.keys(FEATURE_TEMPLATE_MAP).length === 0 && Date.now() - lastFeatureTemplateReloadAt > 3000) {
-      lastFeatureTemplateReloadAt = Date.now();
-      await window.reloadFeatureTemplateMap();
-    }
-
-    if (!currentRuntimeAgentId) {
+async function refreshUnfocusedPoll() {
       applySessionViewPatch({ connected: true });
       updateNotificationStatus(null);
       // agent 列表与聚焦态尾段同款节流：SSE 激活时增删由 connection 事件
@@ -1526,17 +1492,32 @@ async function runPollCycle() {
           } catch {}
         }
       }
-      schedulePoll(POLL_INTERVAL_MS);
-      return;
-    }
+}
 
-    await runRuntimePoll();
-    return;
-  } catch (e) {
-    console.warn('Polling failed, keeping last known connection state:', e);
-    schedulePoll(POLL_INTERVAL_MS);
-    return;
-  }
+function createPollCycleHost() {
+  return {
+    switching: () => prebuiltSessionSwitchInFlight,
+    schedule: (delay) => schedulePoll(delay),
+    fastInterval: () => POLL_FAST_INTERVAL_MS,
+    interval: () => POLL_INTERVAL_MS,
+    sseActive: () => typeof isSseActive === 'function' && isSseActive(),
+    now: () => Date.now(),
+    lastChoiceCheck: () => _lastChoiceAlertCheckAt,
+    setChoiceCheck: (value) => { _lastChoiceAlertCheckAt = value; },
+    checkChoices: () => checkGlobalChoiceAlerts(),
+    refreshRemote: () => {
+      if (typeof maybeRefreshRemoteCatalog === 'function') maybeRefreshRemoteCatalog();
+      if (typeof maybeRefreshRemoteHistory === 'function') maybeRefreshRemoteHistory();
+    },
+    templates: () => FEATURE_TEMPLATE_MAP,
+    lastTemplateReload: () => lastFeatureTemplateReloadAt,
+    setTemplateReload: (value) => { lastFeatureTemplateReloadAt = value; },
+    reloadTemplates: () => window.reloadFeatureTemplateMap(),
+    runtimeId: () => currentRuntimeAgentId,
+    noFocus: refreshUnfocusedPoll,
+    runtime: () => runRuntimePoll(),
+    warn: (...args) => console.warn(...args),
+  };
 }
 // ── Input request rendering → modules/input-render.js ──
 

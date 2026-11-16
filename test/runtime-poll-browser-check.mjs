@@ -36,11 +36,12 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
  window.appendNewMessages = window.updateLastMessage = window.renderCurrentMainView;
  window._partialCompactInFlight = false;
  window._runPollTailLowFrequency = async () => true;
+ FEATURE_TEMPLATE_MAP = { loaded: true };
  window.started = false;
 </script>
 <script src="/src/modules/auth-client.js"></script>
-<script type="module" src="/src/modules/runtime-poll-host.js"></script>
-<script>(async () => { await __clawAuthReady; window.started = true; await runRuntimePoll(); window.lightDone = true; })();</script>
+<script type="module" src="/src/modules/kernel-entry.js"></script>
+<script>(async () => { await __clawAuthReady; window.started = true; await runPollCycle(); window.lightDone = true; })();</script>
 </body>`)));
 app.get('/protoclaw/auth/status', (_req, res) => res.json({ enabled: false, authenticated: true }));
 const requests = [];
@@ -74,12 +75,12 @@ try {
     throw error;
   }
   assert.deepEqual(requests, [], 'healthy SSE does not poll message or metadata endpoints');
-  await page.evaluate(async () => { _forceFullPollNextCycle = true; await runRuntimePoll(); });
+  await page.evaluate(async () => { _forceFullPollNextCycle = true; await runPollCycle(); });
   assert.equal(await page.locator('#chat-container').textContent(), 'live body');
   assert.deepEqual(await page.evaluate(() => ({ input: currentInputRequests.map(r => r.requestId), model: currentOverviewSnapshot.modelName })),
     { input: ['live'], model: 'new-model' });
   assert.deepEqual(requests.slice().sort(), ['connection', 'input-requests', 'messages', 'notification', 'overview', 'todo']);
-  await page.evaluate(async () => { await runRuntimePoll(); schedulePoll(60000); });
+  await page.evaluate(async () => { await runPollCycle(); schedulePoll(60000); });
   assert.equal(requests.length, 6, 'one-shot full flag is consumed, next cycle is light again');
   assert.deepEqual(errors, []);
   console.log('PASS: real ESM poll host keeps SSE light, performs one full reconciliation and publishes consistent view data');

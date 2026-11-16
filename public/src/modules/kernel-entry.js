@@ -7,6 +7,7 @@ import './poll-coordinator-host.js';
 import './message-probe-host.js';
 import './metadata-commit-host.js';
 import './runtime-poll-host.js';
+import './poll-cycle-host.js';
 import './agent-loader-host.js';
 import './runtime-view-cache-host.js';
 import './call-interrupt-host.js';

@@ -13,6 +13,7 @@ import { createPollCoordinator } from '../public/src/modules/poll-coordinator.js
 import { createMessageProbe } from '../public/src/modules/message-probe.js';
 import { createMetadataCommit } from '../public/src/modules/metadata-commit.js';
 import { createRuntimePoll } from '../public/src/modules/runtime-poll.js';
+import { createPollCycle } from '../public/src/modules/poll-cycle.js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { sourceBetween } from './helpers/frontend-vm.js';
@@ -201,6 +202,7 @@ function createChatSandbox() {
   Object.assign(sandbox, createMessageProbe(vm.runInContext('createMessageProbeHost()', sandbox)));
   Object.assign(sandbox, createMetadataCommit(vm.runInContext('createMetadataCommitHost()', sandbox)));
   Object.assign(sandbox, createRuntimePoll(vm.runInContext('createRuntimePollHost()', sandbox)));
+  Object.assign(sandbox, createPollCycle(vm.runInContext('createPollCycleHost()', sandbox)));
   vm.runInContext(load('public/src/modules/sse-client.js'), sandbox, { filename: 'sse-client.js' });
   vm.runInContext(load('public/src/modules/agent-data-loader.js'), sandbox, { filename: 'agent-data-loader.js' });
   Object.assign(sandbox, createSessionDataLoader(sandbox.createSessionDataLoaderHost()));
