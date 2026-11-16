@@ -18,3 +18,4 @@ import './runtime-switch-host.js';
 import './workspace-session-navigation-host.js';
 import './workspace-entry-host.js';
 import './compact-resume-host.js';
+import './workspace-surface-host.js';

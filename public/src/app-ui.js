@@ -1,74 +1,48 @@
 
-function selectWorkspaceSurface(agentId, options = {}) {
-  bumpNavigationGuard();
-  // 回工作空间首页 = 离开只读浏览：清视图身份之外的只读标记与指示器。
-  if (typeof window.closeReadOnlySession === 'function') window.closeReadOnlySession();
-  if (agentId && !loadedAgentDetailIds.has(agentId)) {
-    window.loadAgentDetail(agentId).then(() => {
-      renderCurrentMainView();
-      // detail 就绪后 blocks 才可用：导航进入工作空间单元的面板重取在
-      // 此补发（末尾的同步调用此时会因 ui 未挂而空转）。
-      refreshVisibleWorkspacePanelData(allAgents.find((item) => item.id === agentId) || null);
-    });
-  }
-  const targetAgent = allAgents.find((item) => item.id === agentId) || null;
-  const unitKey = getUnitPreferenceKey(targetAgent || getCurrentAgentRecord());
-  const workspaceTabs = getUnitTabs(targetAgent || getCurrentAgentRecord());
-  const preferredWorkspaceMode = unitKey ? workspaceSurfaceModePreferences[unitKey] : null;
-  let nextWorkspaceTab = getDefaultUnitMode(targetAgent || getCurrentAgentRecord());
-  if (nextWorkspaceTab === 'chat') {
-    if (preferredWorkspaceMode && workspaceTabs.some((tab) => tab.id === preferredWorkspaceMode)) {
-      nextWorkspaceTab = preferredWorkspaceMode;
-    } else {
-      const ui = getCurrentUnitUi(targetAgent || getCurrentAgentRecord());
-      const fallbackWorkspaceTab = workspaceTabs.find((tab) => tab.id !== 'chat')?.id || ui?.entry || 'home';
-      nextWorkspaceTab = fallbackWorkspaceTab;
-    }
-  }
-  const prevAgentId = focusedAgentId;
-  const previousRuntimeId = currentRuntimeAgentId;
-  const previousRuntimeContextKey = getRuntimeContextKey(previousRuntimeId);
-  saveCurrentWorkspaceSurfaceScroll();
-  if (previousRuntimeId && !readOnlyMode) {
-    saveCurrentRuntimeToCache(previousRuntimeId, previousRuntimeContextKey);
-  }
-  focusedAgentId = agentId || null;
-  applySessionViewPatch({ identity: { agentId: agentId || '', sessionId: '' } });
-  // 回工作空间首页 = 离开会话，熄灭其「刚刚完成」蓝灯（与 switchAgent 切走语义一致）
-  if (previousRuntimeId) _recentlyFinishedRuntimes.delete(previousRuntimeId);
-  currentRuntimeAgentId = null;
-  readOnlyMode = false;
-  currentWorkspaceArtifactDetail = null;
-  currentWorkspaceDocsetDetail = null;
-  currentProjectDocsetOpen = false;
-  currentProjectRequirementEdit = null;
-  currentProjectDocsetPage = 'requirement';
-  currentWorkspaceTab = nextWorkspaceTab;
-  // Only animate on agent change or first entry, not when returning from chat within the same agent.
-  shouldAnimateWorkspaceSurface = (prevAgentId !== agentId);
-  setFollowLatest(true);
-  resetRuntimeBackedSurfaceState();
-  if (options.awaitSession) {
-    // 接续等待（点击侧栏接续占位条目）：视图身份冻结在等待会话——立即
-    // 挂聊天加载表面（线程接力指示器随 _currentActiveSession 回退可见），
-    // head 上线后由 head-advanced 重绑接管（thread-store），不落工作空间
-    // 首页——用户点的目标是该线程会话，不是首页。
-    beginPendingSessionNavigation(agentId, options.awaitSession, 'committing');
-    currentWorkspaceTab = 'chat';
-    beginChatLoadingSession();
-  } else {
-    clearPendingSessionNavigation();
-  }
-  renderAgentList();
-  renderCurrentMainView();
-  if (!options.skipFeaturePanel) {
-    renderFeaturePanel();
-  }
-  // 侧栏点击宿主条目 / switchAgent 落首页也是导航进入工作空间单元的事件：
-  // 对当前模式下可见的自刷新面板发起后台重取，与 setPreferredUnitMode 同
-  // 口径（渲染规范 §1）。不补此调用时，从会话切回首页只重投影面板旧缓存，
-  // 对话里新增的便签 / 提醒要硬刷新页面才能看到（tab 间切换不受影响）。
-  refreshVisibleWorkspacePanelData(targetAgent);
+function createWorkspaceSurfaceHost() {
+  return {
+    bumpNavigationGuard: () => bumpNavigationGuard(),
+    closeReadOnlySession: () => { if (typeof window.closeReadOnlySession === 'function') window.closeReadOnlySession(); },
+    hasDetail: (id) => loadedAgentDetailIds.has(id),
+    loadDetail: (id) => window.loadAgentDetail(id),
+    findAgent: (id) => allAgents.find((item) => item.id === id) || null,
+    currentAgent: () => getCurrentAgentRecord(),
+    preferenceKey: (agent) => getUnitPreferenceKey(agent),
+    tabs: (agent) => getUnitTabs(agent),
+    surfacePreference: (key) => workspaceSurfaceModePreferences[key],
+    defaultMode: (agent) => getDefaultUnitMode(agent),
+    ui: (agent) => getCurrentUnitUi(agent),
+    focusedAgentId: () => focusedAgentId,
+    runtimeId: () => currentRuntimeAgentId,
+    contextKey: (id) => getRuntimeContextKey(id),
+    saveScroll: () => saveCurrentWorkspaceSurfaceScroll(),
+    readOnlyMode: () => readOnlyMode,
+    saveCache: (id, key) => saveCurrentRuntimeToCache(id, key),
+    bindWorkspace: (agentId, tab, previousAgentId, previousRuntimeId) => {
+      focusedAgentId = agentId || null;
+      applySessionViewPatch({ identity: { agentId: agentId || '', sessionId: '' } });
+      if (previousRuntimeId) _recentlyFinishedRuntimes.delete(previousRuntimeId);
+      currentRuntimeAgentId = null;
+      readOnlyMode = false;
+      currentWorkspaceArtifactDetail = null;
+      currentWorkspaceDocsetDetail = null;
+      currentProjectDocsetOpen = false;
+      currentProjectRequirementEdit = null;
+      currentProjectDocsetPage = 'requirement';
+      currentWorkspaceTab = tab;
+      shouldAnimateWorkspaceSurface = previousAgentId !== agentId;
+    },
+    setFollowLatest: (value) => setFollowLatest(value),
+    resetRuntimeState: () => resetRuntimeBackedSurfaceState(),
+    beginPending: (...args) => beginPendingSessionNavigation(...args),
+    setTab: (tab) => { currentWorkspaceTab = tab; },
+    beginLoading: () => beginChatLoadingSession(),
+    clearPending: () => clearPendingSessionNavigation(),
+    renderAgents: () => renderAgentList(),
+    render: () => renderCurrentMainView(),
+    renderPanel: () => renderFeaturePanel(),
+    refreshPanels: (agent) => refreshVisibleWorkspacePanelData(agent),
+  };
 }
 
 function upsertConnectedAgent(agent) {

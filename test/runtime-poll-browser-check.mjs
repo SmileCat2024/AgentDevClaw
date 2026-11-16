@@ -4,6 +4,8 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
+const ui = await fs.readFile('public/src/app-ui.js', 'utf8');
+const surfaceHost = ui.slice(ui.indexOf('function createWorkspaceSurfaceHost()'), ui.indexOf('function upsertConnectedAgent('));
 const main = await fs.readFile('public/src/app-main.js', 'utf8');
 const compactHost = main.slice(main.indexOf('function createCompactResumeHost()'), main.indexOf('// PH session list helpers'));
 const entryHost = main.slice(main.indexOf('function createWorkspaceEntryHost()'), main.indexOf('function applyOptimisticWorkspaceSession'));
@@ -29,6 +31,7 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/sidebar-render.js"></script>
 <script>
+  ${surfaceHost}
   ${compactHost}
   ${entryHost}
   ${navigationHost}
@@ -173,6 +176,23 @@ try {
   assert.equal(compacted.request.agentId, 'next');
   assert.equal(compacted.request.archiveOriginal, true);
   assert.deepEqual(compacted.request.policy, { strategy: 'trim', keepRecentTurns: 2 });
+  const waiting = await page.evaluate(async () => {
+    const { selectWorkspaceSurface } = await import('/src/modules/workspace-surface-host.js');
+    window.getUnitPreferenceKey = agent => agent?.id;
+    window.getUnitTabs = () => [{ id: 'home' }, { id: 'chat' }];
+    window.getDefaultUnitMode = () => 'home';
+    window.refreshVisibleWorkspacePanelData = () => {};
+    window.saveCurrentWorkspaceSurfaceScroll = () => {};
+    window.setFollowLatest = () => {};
+    window.beginChatLoadingSession = () => {};
+    window.renderFeaturePanel = () => {};
+    window._recentlyFinishedRuntimes = new Set();
+    selectWorkspaceSurface('next', { awaitSession: 'waiting', skipFeaturePanel: true });
+    return { focus: focusedAgentId, runtime: currentRuntimeAgentId, tab: currentWorkspaceTab,
+      pending: _pendingSessionNavigation.sessionId, identity: getCurrentSessionViewIdentity() };
+  });
+  assert.deepEqual(waiting, { focus: 'next', runtime: null, tab: 'chat', pending: 'waiting',
+    identity: { agentId: 'next', sessionId: '' } });
   assert.deepEqual(errors, []);
   console.log('PASS: production kernel preserves handoff views, workspace navigation, session requests and deferred switch guards');
 } finally {

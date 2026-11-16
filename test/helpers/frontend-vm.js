@@ -17,6 +17,7 @@ import { installRuntimeSwitch } from './runtime-switch.js';
 import { createAgentSnapshotLoader } from '../../public/src/modules/agent-snapshot-loader.js';
 import { createRuntimeStatusLoader } from '../../public/src/modules/runtime-status-loader.js';
 import { createSessionDataLoader } from '../../public/src/modules/session-data-loader.js';
+import { createWorkspaceSurface } from '../../public/src/modules/workspace-surface.js';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -181,6 +182,7 @@ export function createFrontendSandbox(overrides = {}) {
       Object.assign(context, createSessionDataLoader(vm.runInContext('createSessionDataLoaderHost()', context)));
     }
     if (relativePath === 'public/src/app-main.js') installRuntimeSwitch(context);
+    if (relativePath === 'public/src/app-ui.js') Object.assign(context, createWorkspaceSurface(vm.runInContext('createWorkspaceSurfaceHost()', context)));
     if (relativePath === 'public/src/modules/sidebar-render.js') {
       Object.assign(context, createAgentSnapshotLoader(vm.runInContext('createAgentSnapshotLoaderHost()', context)));
     }

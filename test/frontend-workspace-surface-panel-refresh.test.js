@@ -21,6 +21,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { createWorkspaceSurface } from '../public/src/modules/workspace-surface.js';
 
 const uiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
 const blocksSource = fs.readFileSync(new URL('../public/src/modules/workspace-blocks.js', import.meta.url), 'utf8');
@@ -35,7 +36,7 @@ function sourceBetween(source, startMarker, endMarker) {
 
 const selectSurfaceSource = sourceBetween(
   uiSource,
-  'function selectWorkspaceSurface(agentId, options = {}) {',
+  'function createWorkspaceSurfaceHost() {',
   'function upsertConnectedAgent(',
 );
 const refresherSource = sourceBetween(
@@ -125,6 +126,7 @@ function createHarness({
     `${shouldRenderBlockSource}\n${refresherSource}\n${selectSurfaceSource}`,
     sandbox,
   );
+  Object.assign(sandbox, createWorkspaceSurface(vm.runInContext('createWorkspaceSurfaceHost()', sandbox)));
   return {
     sandbox,
     refreshCalls,
