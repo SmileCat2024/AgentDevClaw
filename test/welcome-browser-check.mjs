@@ -28,7 +28,10 @@ try {
   for (const name of ['app-core', 'modules/action-dispatcher', 'modules/markdown-bootstrap', 'modules/session-view-state', 'modules/workspace-agents']) {
     await page.addScriptTag({ content: await fs.readFile(`public/src/${name}.js`, 'utf8') });
   }
-  await page.evaluate(() => import('/src/modules/markdown-utils.js'));
+  await page.evaluate(() => Promise.all([
+    import('/src/modules/markdown-utils.js'),
+    import('/src/modules/call-interrupt-host.js'),
+  ]));
   await page.evaluate(() => {
     window.setCurrentHookInspector = () => {};
     window.setCurrentOverviewSnapshot = () => {};
