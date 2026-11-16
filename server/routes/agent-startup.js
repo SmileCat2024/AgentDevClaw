@@ -30,6 +30,7 @@ import { resolveDesktopWorkspace } from '../shared/desktop-workspace.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../shared/constants.js';
 import { getInternalAuthToken } from '../auth.js';
 import { convergeThreadBoardOnDeliberateStop } from '../thread-control/deliberate-stop-convergence.js';
+import { shouldConvergeThreadAfterRuntimeExit } from '../thread-control/runtime-stop-intent.js';
 import {
   PROCESS_MODE_ISOLATED,
   PROCESS_MODE_SHARED_BY_PROJECT,
@@ -719,7 +720,7 @@ export function createAgentStartupFns(deps) {
         // 供重启恢复判定"未完成"。
         // 宿主整体关机时也会先停 runtime，但这不是用户对会话的手动停止。
         // 保留 running 看板供整机重启恢复；单独停止会话仍按 deliberate 收敛。
-        const deliberate = rt.stopped === true && rt.stopReason !== 'host_shutdown';
+        const deliberate = shouldConvergeThreadAfterRuntimeExit(rt);
         rt.exitCode = code;
         rt.signalCode = signal || child.signalCode || null;
         rt.stopped = true;

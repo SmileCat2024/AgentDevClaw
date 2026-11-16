@@ -150,3 +150,11 @@ ack 先提交时，命令已经消费：Viewer 队列移除、消费引用保留
 上补记解决了「发现」延迟（claim 提前），但用户侧「气泡闪一下」并未随之消失——两者成因不同。durable 命令的生命周期是入队（事件 E1）→ claim（**只在项上标记 `inputLease`，不移除**）→ 消费执行 → 含该消息的会话快照落盘 → ack（移除，事件 E2）。气泡由队列快照驱动（SSE `queued-inputs` 帧 / fetch 对账），因此 **claim→ack 窗口内快照仍含该项**：Claw 中继的 trailing 合并窗口（250 ms）在 E1 到期时现拉快照，真实会话的 ack 要等会话快照落盘，该窗口超过 250 ms（用户可复现的气泡闪现本身即是证据——若 ack 早于窗口到期，非空快照会被合并吞掉、气泡不会出现），快照非空 → 前端渲染排队气泡，直到 E2 窗口到期的空快照将其移除。可见时长 ≈ T_ack，与 claim 快慢无关——这正是消费提速后气泡仍闪现的原因；隔离实例测不到（会话小、实测驻留 ≈70 ms < 合并窗口）。
 
 处置是**前端投影如实化**，协议与状态机零改动：快照已携带 claim 事实（`inputLease` 是 `claimCommandInput` 的既有产物），前端把「已 claim（执行中）」与「待领取」区分——带 `inputLease` 的项不进排队气泡文本与待发计数（`sse-client.js` `reconcileQueuedTexts` 展示过滤 + `handleQueuedInputsEvent` 计数、`persistent-input.js` SSE 缓存 / fetch / 会话重绑三处计数）。**锚点确认与已观察记录不受过滤影响**：项在快照中即「服务端已收到」的事实，claim 中的项照常确认乐观锚点、照常抑制迟到 POST 回执的乐观气泡（防止引入 10 s TTL 残留的新缺陷）。真排队语义原样保留：忙时连发多条，未被领取的项照常显示；队首被领取后从气泡消失——它已进入执行。测试：`frontend-sse-client.test.js` 三用例（claim 项不渲染 / claim 快照仍确认锚点 / claim 项不复活迟到回执），前两类契约分别经变异验证（移除展示过滤、确认集排除 claim 项）确认可捕获。
+
+## 2026-11-16 宿主关闭与线程恢复补记
+
+线程恢复判定依据是持久工作事实：有 `pending` 命令时唤醒 head runtime 并由 runtime-ready 补投；没有 `pending`、但看板仍为 `running` 时，说明回合可能在进程消失前尚未结束，启动扫描唤醒 runtime 并提交 `kind='resume'` 的空 continuation。`delivered` 的命令不会被当作 pending 重投；按 claim/ack 契约，ack 前先保存含命令的 Session 快照，恢复应从该快照继续。
+
+**宿主整体正常关闭是可恢复中断，不是用户停止对话。** `runtime.stopped` 只表示执行载体已停止，不是工作意图的终态证据。宿主关闭会在发 SIGTERM 前给 runtime 标注 `host_shutdown`；退出回调不因此把线程看板从 `running` 改成 `idle`。用户显式停止会话仍按 C1 收敛到 `idle`，意外强杀没有退出回调、也保留 `running`。三条路径因此汇入同一个 C2 恢复判定，而不是另建一套宿主重启队列。
+
+验收矩阵必须区分：①运行中整机优雅关闭→`running` 持久保留→启动后唤醒并续跑；②运行中整机强杀→`running` 保留→启动后唤醒并续跑；③用户显式停止→`idle`→启动扫描不续跑；④整机关闭时仍有 `pending` 命令→只唤醒并由 runtime-ready 补投，不额外合成空 continuation。回归覆盖 `test/runtime-stop-intent.test.js` 与 `test/thread-lifecycle-e2e.test.js` D8/D9；D3 / D5 分别锁定显式停止与进程中断的对照语义。

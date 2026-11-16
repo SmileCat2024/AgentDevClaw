@@ -155,6 +155,7 @@ import {
   createThreadRecoveryService,
 } from './server/thread-control/thread-succession.js';
 import { createThreadRestartResume } from './server/thread-control/thread-restart-resume.js';
+import { markRuntimeForHostShutdown } from './server/thread-control/runtime-stop-intent.js';
 import { submitUserTurn } from './server/shared/user-turn.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
@@ -1842,8 +1843,7 @@ async function shutdown(exitCode = 0) {
         if (runtime.process && runtime.process.exitCode === null) {
           // 整个宿主关闭不等于用户停止对话：保留 board=running，让下次启动
           // 的 threadRestartResume 能识别中断轮次并继续恢复。
-          runtime.stopReason = 'host_shutdown';
-          runtime.stopped = true;
+          markRuntimeForHostShutdown(runtime);
         }
       }
       for (const child of children) child.kill('SIGTERM');

@@ -10,7 +10,7 @@
  * A. 看板转换矩阵（真实事件流驱动，含 F1 turn.cancelled → idle）
  * B. 锚点 × 指令域（closed 取消、幂等、终态裁剪）
  * C. 守卫与事务（hold 投递闸、归档 seal/unarchive 往返、删除事务 closed 不残留）
- * D. 全生命周期场景链（主循环 / 手动中断 / C1 收敛 / C2 崩溃恢复 / 交接中断收敛）
+ * D. 全生命周期场景链（主循环 / 用户停止 / 宿主关闭 / C2 恢复 / 交接中断收敛）
  * E. lifeState 投影合成矩阵
  */
 
@@ -28,6 +28,7 @@ import { createThreadRestartResume } from '../server/thread-control/thread-resta
 import { convergeThreadBoardOnDeliberateStop } from '../server/thread-control/deliberate-stop-convergence.js';
 import { createThreadRecoveryService } from '../server/thread-control/thread-succession.js';
 import { synthesizeThreadLifeState } from '../server/thread-control/thread-life-state.js';
+import { markRuntimeForHostShutdown, shouldConvergeThreadAfterRuntimeExit } from '../server/thread-control/runtime-stop-intent.js';
 
 let envSeq = 0;
 
@@ -395,7 +396,54 @@ describe('D. 场景链', () => {
     } finally { await env.cleanup(); }
   });
 
-  test('D6 崩溃 + 归档并发语义：归档打断收纳后重启恢复跳过（archived 压倒一切）', async () => {
+  test('D8 整机正常关闭链：保留 running → 重启唤醒并续跑已 delivered 的回合', async () => {
+    const env = await makeEnv();
+    try {
+      const t = await env.startThread('e2e-d8', 's-d8');
+      await env.emit(t, 'turn.started');
+      const { command } = await env.control.core.appendCommand({ threadId: t.threadId, text: '已进入会话快照的输入' });
+      await env.control.core.store.update(t.threadId, (draft) => {
+        const target = draft.commands.find((item) => item.commandId === command.commandId);
+        target.status = 'delivered';
+        target.deliveredAt = new Date().toISOString();
+        return draft;
+      });
+
+      const runtime = { stopped: false };
+      assert.equal(markRuntimeForHostShutdown(runtime), true);
+      assert.equal(shouldConvergeThreadAfterRuntimeExit(runtime), false);
+      if (shouldConvergeThreadAfterRuntimeExit(runtime)) {
+        await convergeThreadBoardOnDeliberateStop(t.agentId, t.headSessionId, env.control);
+      }
+
+      assert.equal((await env.control.board.getState(t.threadId)).status, 'running', '宿主关机不应伪造用户停止');
+      env.viewerIdBySession.set(t.headSessionId, 'agent-d8-p1');
+      const report = await env.resume.resumeInterruptedThreads();
+      assert.deepEqual(report.resumed, [{ threadId: t.threadId, action: 'resume_interrupted_turn' }]);
+      assert.deepEqual(env.calls.wake, [{ agentId: t.agentId, sessionId: t.headSessionId }]);
+      assert.deepEqual(env.calls.submit.map(({ agentId, text, kind, source }) => ({ agentId, text, kind, source })), [{
+        agentId: 'agent-d8-p1', text: '', kind: 'resume', source: 'thread-recovery',
+      }]);
+    } finally { await env.cleanup(); }
+  });
+
+  test('D9 整机关闭时仍有 pending 命令：唤醒补投，不额外合成空续跑', async () => {
+    const env = await makeEnv();
+    try {
+      const t = await env.startThread('e2e-d9', 's-d9');
+      await env.control.core.appendCommand({ threadId: t.threadId, text: '待投递输入' });
+      const runtime = { stopped: false };
+      markRuntimeForHostShutdown(runtime);
+      assert.equal(shouldConvergeThreadAfterRuntimeExit(runtime), false);
+
+      const report = await env.resume.resumeInterruptedThreads();
+      assert.deepEqual(report.resumed.map((entry) => entry.action), ['wake_pending_commands']);
+      assert.equal(env.calls.wake.length, 1);
+      assert.equal(env.calls.submit.length, 0, 'pending 会由 runtime-ready 补投，不再叠加空 resume turn');
+    } finally { await env.cleanup(); }
+  });
+
+  test('D10 崩溃 + 归档并发语义：归档打断收纳后重启恢复跳过（archived 压倒一切）', async () => {
     const env = await makeEnv();
     try {
       const t = await env.startThread('e2e-d6', 's-d6');
@@ -407,7 +455,7 @@ describe('D. 场景链', () => {
     } finally { await env.cleanup(); }
   });
 
-  test('D7 交接中断恢复（head 会话丢失分支）：挡板残留 → 收敛 → rotation_failed + pending 显式 failed + 挡板清除', async () => {
+  test('D11 交接中断恢复（head 会话丢失分支）：挡板残留 → 收敛 → rotation_failed + pending 显式 failed + 挡板清除', async () => {
     const env = await makeEnv();
     try {
       const t = await env.startThread('e2e-d7', 's-d7');
@@ -429,7 +477,7 @@ describe('D. 场景链', () => {
     } finally { await env.cleanup(); }
   });
 
-  test('D8 deleting 窗口：恢复扫描跳过（deleting 期间不得拉起）；独立线程验证删除事务收敛', async () => {
+  test('D12 deleting 窗口：恢复扫描跳过（deleting 期间不得拉起）；独立线程验证删除事务收敛', async () => {
     const env = await makeEnv();
     try {
       // 段一：running 现场被删除事务标记 → 恢复扫描必须跳过

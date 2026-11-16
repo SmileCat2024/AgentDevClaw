@@ -154,6 +154,15 @@ server / runtime 重启后，新 control 实例从 `~/.agentdev/AgentDevClaw/thr
 board 执行状态、归档索引、pendingSuccession 挡板（经 §3 的收敛服务处理）。
 回归证据见 `test/t007-thread-restart-recovery.test.js`。
 
+### Runtime 退出与宿主关闭语义
+
+- `runtime.stopped` 是执行载体的生命周期事实，不代表用户取消了线程工作。
+- 用户显式停止当前会话：按 C1 将仍为 `running` 的线程看板收敛到 `idle`；重启扫描不得自动续跑。
+- ADV 宿主整体正常关闭：停止 runtime 前标记 `stopReason=host_shutdown`，退出回调保留看板 `running`；启动时按本节既有 C2 规则恢复。整机强杀没有退出回调，也保留 `running`，两种宿主中断共用同一恢复策略。
+- 有 `pending` 命令时先唤醒并由 runtime-ready 补投；无 pending 但 `running` 时唤醒并提交空 `kind='resume'` turn。不得把已 `delivered` 命令盲目改回 pending。
+
+回归矩阵见 `test/runtime-stop-intent.test.js`、`test/thread-lifecycle-e2e.test.js` D3/D5/D8/D9 和 `test/thread-restart-resume.test.js`。
+
 ---
 
 ## 未实现的未来能力（明确边界，不是已完成）

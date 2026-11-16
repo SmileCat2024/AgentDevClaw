@@ -5,7 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SERVER_SOURCE = readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+// Keep source-boundary assertions platform-independent (Git may check out CRLF).
+const SERVER_SOURCE = readFileSync(path.join(ROOT, 'server.js'), 'utf8').replace(/\r\n/g, '\n');
 
 function mainBody(source) {
   const start = source.indexOf('async function main() {');
