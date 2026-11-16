@@ -38,6 +38,7 @@ const {
 } = await import('../server/routes/session-helpers-pure.js');
 
 const { createFrontendSandbox } = await import('./helpers/frontend-vm.js');
+const { installAgentCallStates } = await import('./helpers/agent-call-states.js');
 const { writeSessionIndex } = await import('../server/shared/session-access.js');
 const { createAgentDiscoveryModule } = await import('../server/routes/agent-discovery.js');
 const { createConnectedAgentsQuery } = await import('../server/routes/agent-connected.js');
@@ -134,6 +135,7 @@ function loadFrontend({ realSidebarRenderer = false, onSidebarClickListener } = 
     restartingRuntimeIds: new Set(),
     _recentlyFinishedRuntimes: new Set(),
     _agentCallActive: new Map(),
+    _interruptSuppression: new Map(),
     getActiveSessionId: () => '',
     getRuntimeId: (agent) => String(agent?.id || '').trim(),
     getParentAgentId: (agent) => String(agent?.parent_id || '').trim(),
@@ -146,6 +148,7 @@ function loadFrontend({ realSidebarRenderer = false, onSidebarClickListener } = 
   ctx.loadSource('public/src/modules/project-data.js');
   ctx.loadSource('public/src/modules/runtime-status.js');
   ctx.loadSource('public/src/modules/sidebar-render.js');
+  installAgentCallStates(ctx);
   // 全量 renderAgentList 依赖 app-core 全局；本测试只驱动投影函数，
   // 操作登记触发的侧栏失效重渲染替换为哑件（不参与断言）。
   if (!realSidebarRenderer) ctx.run('renderAgentList = () => {};');

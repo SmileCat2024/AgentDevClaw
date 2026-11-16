@@ -1,7 +1,7 @@
 /**
  * refreshAgentCallStates 的 SSE 语义切换测试（S3 修复核心，docs/sse-migration-bcd-preparation.md §5.3）。
  *
- * 提取 sidebar-render.js 的真实函数在沙箱内执行，验证：
+ * 通过 classic 适配器装入真实 ESM 对账实现，验证：
  *   - SSE 激活时本地条目不 fetch、不进覆写循环（缺席≠空闲，事件态不被轮询清掉）
  *   - 在线远程条目在 SSE 激活时仍走轮询（SSE 不覆盖远程）
  *   - includeSseLocals（visibilitychange 全量对账）恢复本地条目轮询参与
@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installAgentCallStates } from './helpers/agent-call-states.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SIDEBAR_SOURCE = fs.readFileSync(
@@ -80,11 +81,9 @@ function loadCallStates() {
     const _interruptSuppression = new Map();
     const _recentlyFinishedRuntimes = new Set();
     let lastCallStateRefreshAt = 0;
-    let _callStatesRefreshInProgress = false;
   `);
-  ctx.run(sourceBetween(SIDEBAR_SOURCE, 'function collectActiveCallRuntimeIds', 'let _callStatesRefreshInProgress'));
-  ctx.run(sourceBetween(SIDEBAR_SOURCE, 'function applyAgentCallStateFromNotification', 'async function refreshAgentCallStates'));
-  ctx.run(sourceBetween(SIDEBAR_SOURCE, 'async function refreshAgentCallStates', 'let lastAgentListRenderSignature'));
+  ctx.run(sourceBetween(SIDEBAR_SOURCE, 'function createAgentCallStatesHost', 'let lastAgentListRenderSignature'));
+  installAgentCallStates(ctx);
   return {
     ctx,
     fetched,
@@ -366,8 +365,7 @@ describe('getAgentListRenderSignature: 接续窗口事实进签名', () => {
       const _agentSuspended = new Map();
       const _interruptSuppression = new Map();
       let lastCallStateRefreshAt = 0;
-      let _callStatesRefreshInProgress = false;
-    `);
+      `);
     ctx.run(sourceBetween(SIDEBAR_SOURCE, 'function getAgentListRenderSignature', 'function renderAgentList'));
     return ctx;
   }

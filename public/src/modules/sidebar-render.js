@@ -752,255 +752,31 @@ async function loadAgents() {
 // 断开条目不参与轮询，其残留键由清理循环回收）。轮询与清理共用同一集合——
 // 远程 key 不入集会被每轮 poll 当孤儿清掉，与聚焦会话的 chat 轮询写键形成
 // 拉锯（远程会话发送按钮横跳、侧栏缺转圈动画的根因）。
-function collectActiveCallRuntimeIds(agents) {
-  const runtimeIds = (Array.isArray(agents) ? agents : [])
-    .filter((agent) => agent?.connected)
-    .map((agent) => getAgentRuntimeId(agent))
-    .filter(Boolean);
-  const remoteEntries = typeof getVisibleRemoteEntries === 'function'
-    ? getVisibleRemoteEntries()
-    : [];
-  for (const entry of remoteEntries) {
-    if (entry.status === 'connected' && entry.runtimeId) runtimeIds.push(entry.runtimeId);
-  }
-  return Array.from(new Set(runtimeIds));
-}
-
-let _callStatesRefreshInProgress = false;
-
-/**
- * 单 runtime 的 call 状态应用（notification payload → 侧栏级状态）。
- * refreshAgentCallStates 的轮询路径与 sse-client 的事件路径（非焦点
- * notification 事件）共用：_agentCallActive 维护、interrupt 抑制解除、
- * true→false 完成转换（_recentlyFinishedRuntimes 蓝灯）。桌面通知不在此
- * 触发——完成通知由 server 统一出口的 app-notification 帧驱动
- * （desktop-notify.js，ADR-0030）。
- * @returns {boolean} 该 runtime 的可视 call 状态是否发生变化
- */
-function applyAgentCallStateFromNotification(runtimeId, notifData) {
-  const payload = notifData && typeof notifData === 'object' ? notifData : null;
-  const backendCalling = resolveNotificationCallingState(payload) === true;
-  const prevCalling = _agentCallActive.get(runtimeId) === true;
-  const prevSuspended = _agentSuspended.get(runtimeId) === true;
-  const effectiveCalling = backendCalling
-    && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(payload));
-  let nextSuspended = prevSuspended;
-  if (effectiveCalling) {
-    _markAgentCallStartedForNotify(runtimeId);
-    _agentCallActive.set(runtimeId, true);
-    _agentSuspended.delete(runtimeId);
-    nextSuspended = false;
-  } else {
-    _agentCallActive.delete(runtimeId);
-    // ADR-0019：挂起聚合的唯一事件消费点——SSE 非焦点事件、poll 全量、
-    // includeSseLocals 对账（刷新/回归恢复）三条路径都经此函数，统一按
-    // payload 落定挂起态（lastOutcome 跨 poll 持久，唤醒轮 call.start 时清）
-    if (isSuspendedNotificationPayload(payload)) {
-      _agentSuspended.set(runtimeId, true);
-      nextSuspended = true;
-    } else {
-      _agentSuspended.delete(runtimeId);
-      nextSuspended = false;
-    }
-  }
-  if (!backendCalling) {
-    clearInterruptSuppression(runtimeId);
-  }
-  if (prevCalling && !effectiveCalling) {
-    if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
-      _recentlyFinishedRuntimes.add(runtimeId);
-    }
-  }
-  // 发送按钮三态与 _agentCallActive 同源（isRuntimeCalling），但它的同步点
-  // 全部挂在 updateNotificationStatus（本地 SSE / 焦点 fetch 路径）；远程
-  // 条目轮询与 includeSseLocals 对账的 call 边沿只经本函数，没有这处补
-  // 触发的话，非用户输入发起的 call（唤醒轮 / 调度 / IM）运行期间聚焦
-  // 会话的按钮保持可发送态，运行时长胶囊（每秒 tick 直读 calling）却正常。
-  if (prevCalling !== effectiveCalling
-    && normalizeAgentIdentity(runtimeId) === normalizeAgentIdentity(currentRuntimeAgentId)
-    && typeof _syncPersistentActionButton === 'function') {
-    _syncPersistentActionButton();
-  }
-  // 返回值语义：calling 边沿或挂起边沿任一变化即侧栏视觉态变化，
-  // 调用方（SSE 事件路径 / refreshAgentCallStates）据此触发 renderAgentList
-  return prevCalling !== effectiveCalling || prevSuspended !== nextSuspended;
-}
-
-/**
- * 将 call 状态写入 agent 记录的 callActive（侧栏转圈动画的数据源）。
- * 仅处理 runtime 匹配的记录；prebuilt 宿主行的清理由 refreshAgentCallStates
- * 无条件执行（不随 SSE 本地跳过而消失）。agents 缺省取全局 allAgents；
- * refreshAgentCallStates 覆写循环显式传入本轮的 agents 形参（与重构前
- * 的遍历范围对齐）。
- * @returns {boolean} 是否有记录被修改
- */
-function applyCallStateToAgentRecords(runtimeId, calling, agents = allAgents) {
-  let changed = false;
-  for (const agent of Array.isArray(agents) ? agents : []) {
-    if (agent?.source === 'prebuilt') continue;
-    if (getAgentRuntimeId(agent) !== runtimeId) continue;
-    const nextCalling = calling === true;
-    if (agent.callActive !== nextCalling) {
-      agent.callActive = nextCalling;
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-/**
- * 孤儿清理：不在存活集（connected agents + 在线远程）的 call 状态键整体
- * 回收。存活集是全量 runtimeIds（含 SSE 事件维护的本地条目）：本地条目
- * 仍存活，只是本轮不轮询，不能被"缺席=空闲"语义清掉。
- * @returns {boolean} 是否有键被回收
- */
-function cleanupOrphanCallStates(activeRuntimeIds) {
-  let changed = false;
-  for (const key of Array.from(_agentCallActive.keys())) {
-    if (!activeRuntimeIds.has(key)) {
-      _agentCallActive.delete(key);
-      _interruptSuppression.delete(key);
-      _recentlyFinishedRuntimes.delete(key);
-      _agentSuspended.delete(key);
-      changed = true;
-    }
-  }
-  // 挂起键可能独立于 calling 键存活（calling 边沿已清、挂起续期），
-  // 单独扫一遍剩余孤儿
-  for (const key of Array.from(_agentSuspended.keys())) {
-    if (!activeRuntimeIds.has(key)) {
-      _agentSuspended.delete(key);
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-/**
- * prebuilt 宿主行不承载 call 态（子会话自持）：无条件清理。SSE 本地跳过
- * 的提前返回分支同样要执行（事件路径不覆盖该特例）。
- * @returns {boolean} 是否有记录被修改
- */
-function cleanPrebuiltHostRows(agents) {
-  let changed = false;
-  for (const agent of Array.isArray(agents) ? agents : []) {
-    if (agent?.source === 'prebuilt' && agent.callActive) {
-      agent.callActive = false;
-      changed = true;
-    }
-  }
-  return changed;
-}
-
-async function refreshAgentCallStates(agents = allAgents, options = {}) {
-  const { force = false, reuseNotification = null, includeSseLocals = false } = options;
-  // 互斥锁：防止 Worker 心跳与常规 poll 并发执行导致重复触发通知
-  if (_callStatesRefreshInProgress) return;
-  const now = Date.now();
-  if (!force && now - lastCallStateRefreshAt < 1000) {
-    return;
-  }
-  _callStatesRefreshInProgress = true;
-  lastCallStateRefreshAt = now;
-  try {
-    // 本地已连接 runtime 与在线远程条目合并后再判空：仅剩远程条目时同样
-    // 走完整轮询，不会误入"全清"提前返回分支。
-    const runtimeIds = collectActiveCallRuntimeIds(agents);
-    // SSE 激活时本地条目由 notification 事件维护（§5.3 整函数语义切换）：
-    // 不 fetch、不进覆写/孤儿清理。includeSseLocals（visibilitychange 强刷
-    // 等全量对账路径）恢复本地条目的轮询参与。
-    const sseSkipLocal = typeof isSseActive === 'function' && isSseActive() && !includeSseLocals;
-    const polledIds = sseSkipLocal
-      ? runtimeIds.filter((id) => typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(id))
-      : runtimeIds;
-    if (polledIds.length === 0) {
-      if (sseSkipLocal) {
-        // 本地条目归事件管，远程为空：不 fetch，但断连条目仍需孤儿回收
-        // （connection{connected:false} 事件不清理 call 状态，残留会让
-        // 重连后的空闲 runtime 立即显形错误转圈）
-        let changed = cleanupOrphanCallStates(new Set(runtimeIds));
-        changed = cleanPrebuiltHostRows(agents) || changed;
-        if (changed) renderAgentList();
-        return;
-      }
-      let changed = false;
-      for (const key of Array.from(_agentCallActive.keys())) {
-        _agentCallActive.delete(key);
-        _interruptSuppression.delete(key);
-        _agentSuspended.delete(key);
-        changed = true;
-      }
-      for (const key of Array.from(_agentSuspended.keys())) {
-        _agentSuspended.delete(key);
-        changed = true;
-      }
-      if (changed) {
-        renderAgentList();
-      }
-      return;
-    }
-
-    const nextNotificationPayloads = new Map();
-    await Promise.all(polledIds.map(async (runtimeId) => {
-      try {
-        // 同周期复用：poll 主循环的 statusTask 刚在本周期取过焦点 runtime 的
-        // notification，命中时直接复用 payload，避免每轮对同一 runtime 发两次
-        // 相同请求。payload 为空（请求失败/会话切换）时此处分支不命中，照常自取。
-        // 其余入口（Worker 心跳 force、前台回归、初次加载）不传该参数，始终走网络。
-        if (
-          reuseNotification?.payload
-          && normalizeAgentIdentity(reuseNotification.runtimeId) === normalizeAgentIdentity(runtimeId)
-        ) {
-          nextNotificationPayloads.set(runtimeId, reuseNotification.payload);
-          return;
-        }
-        const res = await fetch(`/api/agents/${encodeURIComponent(runtimeId)}/notification`);
-        if (!res.ok) return;
-        const notifData = await res.json();
-        nextNotificationPayloads.set(runtimeId, notifData);
-      } catch (error) {
-      }
-    }));
-
-    let changed = false;
-    for (const runtimeId of polledIds) {
-      changed = applyAgentCallStateFromNotification(runtimeId, nextNotificationPayloads.get(runtimeId) || null) || changed;
-    }
-
-    // 孤儿清理（存活集语义见函数注释）
-    changed = cleanupOrphanCallStates(new Set(runtimeIds)) || changed;
-
-    // 覆写循环遍历 agents 全集（与重构前对齐，F2a）：断连/未轮询条目覆写
-    // false，防止 connected 恢复后残留的 callActive 立即显形（侧栏渲染的
-    // connected 条件掩盖断连期间的残留，重连即暴露）。SSE 跳过形态下本地
-    // 存活条目由 notification 事件维护，豁免覆写（缺席≠空闲，§5.3）。
-    // ADR-0019 挂起聚合不在此维护：polledIds 循环统一经
-    // applyAgentCallStateFromNotification（事件消费点）落定。
-    const callingByPolled = new Map();
-    for (const runtimeId of polledIds) {
-      const payload = nextNotificationPayloads.get(runtimeId) || null;
-      callingByPolled.set(runtimeId, resolveNotificationCallingState(payload) === true
-        && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(payload)));
-    }
-    const activeRuntimeIds = new Set(runtimeIds);
-    for (const agent of Array.isArray(agents) ? agents : []) {
-      if (agent?.source === 'prebuilt') continue;
-      const runtimeId = getAgentRuntimeId(agent);
-      if (!runtimeId) continue;
-      const managedBySseEvents = sseSkipLocal && activeRuntimeIds.has(runtimeId)
-        && !(typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(runtimeId));
-      if (managedBySseEvents) continue;
-      changed = applyCallStateToAgentRecords(runtimeId, callingByPolled.get(runtimeId) === true, agents) || changed;
-    }
-
-    changed = cleanPrebuiltHostRows(agents) || changed;
-
-    if (changed) {
-      renderAgentList();
-    }
-  } finally {
-    _callStatesRefreshInProgress = false;
-  }
+// Shared lexical containers retain their classic initialization and const
+// identity. Reconciliation and request coalescing live in the ESM implementation.
+function createAgentCallStatesHost() {
+  return {
+    calling: _agentCallActive,
+    suspended: _agentSuspended,
+    interrupting: _interruptSuppression,
+    finished: _recentlyFinishedRuntimes,
+    agents: () => allAgents,
+    currentRuntimeId: () => currentRuntimeAgentId,
+    runtimeId: (agent) => getAgentRuntimeId(agent),
+    remoteEntries: () => typeof getVisibleRemoteEntries === 'function' ? getVisibleRemoteEntries() : [],
+    normalize: (value) => normalizeAgentIdentity(value),
+    resolveCalling: (payload) => resolveNotificationCallingState(payload),
+    isSuspended: (payload) => isSuspendedNotificationPayload(payload),
+    markStarted: (id) => _markAgentCallStartedForNotify(id),
+    syncActionButton: () => { if (typeof _syncPersistentActionButton === 'function') _syncPersistentActionButton(); },
+    isSseActive: () => typeof isSseActive === 'function' && isSseActive(),
+    isRemote: (id) => typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(id),
+    fetch: (...args) => fetch(...args),
+    now: () => Date.now(),
+    lastRefresh: () => lastCallStateRefreshAt,
+    setLastRefresh: (value) => { lastCallStateRefreshAt = value; },
+    render: () => renderAgentList(),
+  };
 }
 
 let lastAgentListRenderSignature = '';

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { describe, it } from 'node:test';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installAgentCallStates } from './helpers/agent-call-states.js';
 
 // 行尾归一化：提取标记不能依赖 CRLF（跨平台可移植）
 function toLf(source) {
@@ -146,6 +147,7 @@ function createCallStateSandbox({ catalogResponses, notifications = {}, agents =
     '\nfunction getDerivedStageFromState(',
   ));
 
+  installAgentCallStates(ctx);
   return {
     ctx,
     agentCallActive,
