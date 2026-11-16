@@ -497,12 +497,12 @@ if (projectDocsetOverlay) {
   });
 }
 
-let focusedAgentId = null;
-let currentRuntimeAgentId = null;
-let readOnlyMode = false;
-let loadAgentsInFlight = null;
+window.KernelState.defineKey('agent-store', 'focusedAgentId', null);
+window.KernelState.defineKey('orchestration', 'currentRuntimeAgentId', null);
+window.KernelState.defineKey('agent-store', 'readOnlyMode', false);
+window.KernelState.defineKey('agent-store', 'loadAgentsInFlight', null);
 const workspaceSurfaceModePreferences = {};
-let allAgents = [];
+window.KernelState.defineKey('agent-store', 'allAgents', []);
 // 追踪每个 agent 的 call 运行状态（实时更新，比 3s 轮询更快）
 const _agentCallActive = new Map();
 // 中断中的 runtime：用户点击打断后，abort 生效与 call.finish 之间天然存在异步间隔。
@@ -567,21 +567,21 @@ let contextMenuCompactAction = null;
 let contextMenuProjectAgentId = null;
 let contextMenuProjectId = null;
 let contextMenuFeatureRepoPackageId = null;
-let activeFeaturePanel = null;
-let currentWorkspaceTab = null;
-let shouldAnimateWorkspaceSurface = true;
+window.KernelState.defineKey('render-entry', 'activeFeaturePanel', null);
+window.KernelState.defineKey('render-entry', 'currentWorkspaceTab', null);
+window.KernelState.defineKey('render-entry', 'shouldAnimateWorkspaceSurface', true);
 let _workGroupEventsWired = false;
 let assemblyDraftRenderTimer = null;
-let expandedProjectIds = new Set();
+window.KernelState.defineKey('agent-store', 'expandedProjectIds', new Set());
 let savedPhTabState = {};
 let assemblyLaunchInProgress = false;
 let assemblyControlPanelOpen = false;
 let assemblySideRailRevealTimer = null;
-let currentWorkspaceArtifactDetail = null;
-let currentWorkspaceDocsetDetail = null;
-let currentProjectDocsetOpen = false;
-let currentProjectRequirementEdit = null;
-let currentProjectDocsetPage = 'requirement';
+window.KernelState.defineKey('render-entry', 'currentWorkspaceArtifactDetail', null);
+window.KernelState.defineKey('render-entry', 'currentWorkspaceDocsetDetail', null);
+window.KernelState.defineKey('render-entry', 'currentProjectDocsetOpen', false);
+window.KernelState.defineKey('render-entry', 'currentProjectRequirementEdit', null);
+window.KernelState.defineKey('render-entry', 'currentProjectDocsetPage', 'requirement');
 window.KernelState.defineKey('panel-layout-state', 'featurePanelWidth', 460);
 window.KernelState.defineKey('i18n-environment', 'currentTheme', localStorage.getItem('agentdev-theme') || 'dark');
 window.KernelState.defineKey('i18n-environment', 'currentLanguage', localStorage.getItem('agentdev-language') || 'zh');
@@ -655,8 +655,8 @@ let currentLogsSignature = '';
 let currentLogsTruncation = null;
 let currentMcpInfo = null;
 let lastFeatureTemplateReloadAt = 0;
-let lastAgentListRefreshAt = 0;
-let lastCallStateRefreshAt = 0;
+window.KernelState.defineKey('agent-store', 'lastAgentListRefreshAt', 0);
+window.KernelState.defineKey('agent-store', 'lastCallStateRefreshAt', 0);
 let templateWarmupToken = 0;
 let qqbotConfigState = {
   data: null,
@@ -715,25 +715,25 @@ let chatViewportFollowRaf = 0;
 let chatViewportFollowToken = 0;
 let chatViewportFollowTransition = 'locked';
 let prebuiltSessionSwitchInFlight = false;
-let pendingSwitchTarget = null;   // { runtimeId, serial, source, navEpoch }
-let pendingSwitchSerial = 0;      // monotonically increasing
+window.KernelState.defineKey('orchestration', 'pendingSwitchTarget', null);   // { runtimeId, serial, source, navEpoch }
+window.KernelState.defineKey('orchestration', 'pendingSwitchSerial', 0);      // monotonically increasing
 // 工单 037：lastRenderedInputSignature / lastRenderedInputMode 已内化到
 // input-render.js（渲染器私有去重状态），手动 reset 协议退役。
-let unitModePreferences = {};
-let lastRenderedWorkspaceHtml = '';
-let lastRenderedWorkspaceScrollKey = '';
+window.KernelState.defineKey('render-entry', 'unitModePreferences', {});
+window.KernelState.defineKey('render-entry', 'lastRenderedWorkspaceHtml', '');
+window.KernelState.defineKey('render-entry', 'lastRenderedWorkspaceScrollKey', '');
 const workspaceSurfaceScrollCache = new Map();
-let workspaceSurfaceScrollSaveRaf = 0;
-let _lastRenderedChatSig = '';
-let _restoredScrollTop = null;    // set by restoreRuntimeFromCache, consumed by switchAgent
-let _chatLoadingSession = false;  // true while waiting for a just-opened session's messages to arrive
-let _chatLoadingTimeout = null;   // safety timeout to clear _chatLoadingSession
-let _switchEpoch = 0;             // monotonically increasing; used to guard stale async work from rapid switches
+window.KernelState.defineKey('render-entry', 'workspaceSurfaceScrollSaveRaf', 0);
+window.KernelState.defineKey('render-entry', '_lastRenderedChatSig', '');
+window.KernelState.defineKey('orchestration', '_restoredScrollTop', null);    // set by restoreRuntimeFromCache, consumed by switchAgent
+window.KernelState.defineKey('orchestration', '_chatLoadingSession', false);  // true while waiting for a just-opened session's messages to arrive
+window.KernelState.defineKey('orchestration', '_chatLoadingTimeout', null);   // safety timeout to clear _chatLoadingSession
+window.KernelState.defineKey('orchestration', '_switchEpoch', 0);             // monotonically increasing; used to guard stale async work from rapid switches
 
 // A committed session can be the user's navigation target before its runtime
 // exists. Keep that intent separate from currentRuntimeAgentId so the tabless
 // workspace can show the chat loading surface without inventing a sidebar leaf.
-let _pendingSessionNavigation = null;
+window.KernelState.defineKey('orchestration', '_pendingSessionNavigation', null);
 
 function beginPendingSessionNavigation(agentId, sessionId = '', phase = 'committing') {
   const normalizedAgentId = String(agentId || '').trim();
@@ -776,7 +776,7 @@ function hasPendingSessionNavigation(agent = null) {
 // epoch at start and check it before executing the deferred navigation.
 // If the user navigated away in the meantime, the stale operation aborts
 // silently instead of yanking the user back.
-let _navigationGuardEpoch = 0;
+window.KernelState.defineKey('orchestration', '_navigationGuardEpoch', 0);
 
 function bumpNavigationGuard() {
   _navigationGuardEpoch++;

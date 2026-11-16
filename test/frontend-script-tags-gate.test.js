@@ -58,6 +58,9 @@ const MODULE_ENTRIES = [
   './src/modules/i18n-environment-state.js',
   './src/modules/panel-layout-state.js',
   './src/modules/session-view-storage.js',
+  './src/modules/agent-store-state.js',
+  './src/modules/render-entry-state.js',
+  './src/modules/orchestration-state.js',
 ];
 
 function scriptSources(html) {
