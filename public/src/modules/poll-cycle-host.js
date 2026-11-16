@@ -3,6 +3,7 @@ import { currentRuntimeAgentId } from './orchestration-state.js';
 import { FEATURE_TEMPLATE_MAP, reloadFeatureTemplateMap } from './agent-loader-host.js';
 import { runRuntimePoll } from './runtime-poll-host.js';
 import { schedulePoll } from './poll-coordinator-host.js';
+import { refreshUnfocusedPoll } from './poll-maintenance-host.js';
 
 const cycle = createPollCycle({
   ...window.createPollCycleHost(),
@@ -11,6 +12,7 @@ const cycle = createPollCycle({
   reloadTemplates: reloadFeatureTemplateMap,
   runtime: runRuntimePoll,
   schedule: schedulePoll,
+  noFocus: refreshUnfocusedPoll,
 });
 export const { runPollCycle } = cycle;
 window.KernelState.defineKey('poll-cycle', 'runPollCycle', runPollCycle);

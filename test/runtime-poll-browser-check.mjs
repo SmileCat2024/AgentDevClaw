@@ -35,7 +35,9 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
  window.renderCurrentMainView = () => { document.getElementById('chat-container').textContent = currentMessages.map(m => m.content).join(','); };
  window.appendNewMessages = window.updateLastMessage = window.renderCurrentMainView;
  window._partialCompactInFlight = false;
- window._runPollTailLowFrequency = async () => true;
+ lastAgentListRefreshAt = Date.now();
+ window._lastWsSessionRefreshAt = Date.now();
+ window._trackRecapSessionPresence = () => {};
  FEATURE_TEMPLATE_MAP = { loaded: true };
  window.started = false;
 </script>

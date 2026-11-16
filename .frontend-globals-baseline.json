@@ -200,13 +200,11 @@
     "state": [
       "_forceFullPollNextCycle",
       "_lastWsSessionRefreshAt",
-      "_scheduleInspectorRefresh",
-      "_wsSessionsRevisionByHost"
+      "_scheduleInspectorRefresh"
     ],
     "behavior": [
       "ClawFW",
       "_getSessionInputCacheKey",
-      "_runPollTailLowFrequency",
       "_titleForBoundSession",
       "applyOptimisticWorkspaceSession",
       "clearSessionLoading",
@@ -216,9 +214,9 @@
       "createMetadataCommitHost",
       "createPollCoordinatorHost",
       "createPollCycleHost",
+      "createPollMaintenanceHost",
       "createRuntimePollHost",
       "emitMsgMetrics",
-      "fetchWorkspaceSessionsForPoll",
       "flushPendingSwitch",
       "getCurrentAgentRecord",
       "getCurrentHostAgentRecord",
@@ -239,7 +237,6 @@
       "newIdempotencyKey",
       "openPrebuiltWorkspaceSession",
       "orderPrebuiltByHost",
-      "refreshUnfocusedPoll",
       "renderMessageProbeCommit",
       "renderMetadataCommit",
       "requestSwitch",

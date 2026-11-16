@@ -34,6 +34,7 @@ import { createMessageProbe } from '../public/src/modules/message-probe.js';
 import { createMetadataCommit } from '../public/src/modules/metadata-commit.js';
 import { createRuntimePoll } from '../public/src/modules/runtime-poll.js';
 import { createPollCycle } from '../public/src/modules/poll-cycle.js';
+import { createPollMaintenance } from '../public/src/modules/poll-maintenance.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const sessionViewStateSource = fs.readFileSync(
@@ -222,6 +223,7 @@ function createSandbox({
   Object.assign(sandbox, createMetadataCommit(vm.runInContext('createMetadataCommitHost()', sandbox)));
   Object.assign(sandbox, createRuntimePoll(vm.runInContext('createRuntimePollHost()', sandbox)));
   Object.assign(sandbox, createPollCycle(vm.runInContext('createPollCycleHost()', sandbox)));
+  Object.assign(sandbox, createPollMaintenance(vm.runInContext('createPollMaintenanceHost()', sandbox)));
   sandbox.__poll = sandbox.poll;
   return { sandbox, fetchCalls, consoleRecords, renders, scheduledDelays };
 }

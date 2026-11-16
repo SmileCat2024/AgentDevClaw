@@ -6,6 +6,7 @@ import { refreshAgentCallStates } from './agent-call-states-host.js';
 import { runMessagesProbeCycle } from './message-probe-host.js';
 import { commitMetadataUpdate } from './metadata-commit-host.js';
 import { schedulePoll } from './poll-coordinator-host.js';
+import { _runPollTailLowFrequency } from './poll-maintenance-host.js';
 
 const runtime = createRuntimePoll({
   ...window.createRuntimePollHost(),
@@ -18,6 +19,7 @@ const runtime = createRuntimePoll({
   messages: runMessagesProbeCycle,
   metadata: commitMetadataUpdate,
   schedule: schedulePoll,
+  tail: _runPollTailLowFrequency,
 });
 export const { runRuntimePoll } = runtime;
 window.KernelState.defineKey('runtime-poll', 'runRuntimePoll', runRuntimePoll);

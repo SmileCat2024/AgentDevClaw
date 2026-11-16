@@ -942,55 +942,7 @@ function createPollCoordinatorHost() {
 }
 // Message sequence baselines now belong to message-probe.js (poll/SSE shared).
 
-// workspace 会话列表条件刷新：记录每个 host 最近一次完整响应携带的 index
-// revision。poll 请求带上 sinceRevision，服务端 revision 一致时返回
-// unchanged 短路响应（跳过全量投影与 MB 级序列化）。mutation 之后 revision
-// 前进，下一次 poll 自然 miss 走全量刷新，无需主动失效。
-const _wsSessionsRevisionByHost = new Map();
-
-async function fetchWorkspaceSessionsForPoll(agentId, agentRecord = null) {
-  const knownRevision = _wsSessionsRevisionByHost.get(agentId);
-  const params = new URLSearchParams({ agentId });
-  if (Number.isFinite(knownRevision)) params.set('sinceRevision', String(knownRevision));
-  // PH 类工作空间：请求当前项目的已加载范围（范围刷新）。服务端按
-  // projectDir 过滤后返回 0..limit 切片，merge 仍以该范围为 membership
-  // 权威；limit 取已加载数（滚动加载推进后的全量范围），下限 60。
-  const hostRecord = agentRecord
-    || (Array.isArray(allAgents) ? allAgents.find((item) => item?.id === agentId) : null);
-  if (hostRecord && typeof isPhStyleWorkspaceAgent === 'function' && isPhStyleWorkspaceAgent(hostRecord)) {
-    // 归属过滤随 typed browsing target（045）：项目目标按 projectId（不因
-    // workspace_state.openDirectory 轮询漂移把项目切片换成目录切片——
-    // 目录过滤会排除项目会话，乐观条目会被轮询"洗掉"）；目录目标按
-    // projectDir（旧行为）。
-    let ownership = null;
-    if (typeof getPhBrowsingTarget === 'function') {
-      const target = getPhBrowsingTarget(hostRecord);
-      if (target?.type === 'project') ownership = { projectId: target.id };
-      else if (target?.openDirectory) ownership = { projectDir: target.openDirectory };
-    }
-    if (!ownership) {
-      const projectDir = String(
-        (typeof getAgentWorkspaceState === 'function' ? getAgentWorkspaceState(hostRecord)?.openDirectory : '')
-        || '',
-      ).trim();
-      if (projectDir) ownership = { projectDir };
-    }
-    if (ownership?.projectId) params.set('projectId', ownership.projectId);
-    else if (ownership?.projectDir) params.set('projectDir', ownership.projectDir);
-    const loadedCount = Array.isArray(hostRecord?.workspace_sessions?.sessions)
-      ? hostRecord.workspace_sessions.sessions.length
-      : 0;
-    params.set('offset', '0');
-    params.set('limit', String(Math.max(loadedCount, 60)));
-  }
-  const response = await fetch('/protoclaw/prebuilt_sessions?' + params.toString());
-  if (!response.ok) return null;
-  const data = await response.json();
-  if (!data || data.unchanged === true) return null;
-  const revision = Number(data.revision);
-  if (Number.isFinite(revision)) _wsSessionsRevisionByHost.set(agentId, revision);
-  return data;
-}
+// Workspace revision baselines and refresh logic live in poll-maintenance.js.
 
 // schedulePoll is provided by poll-coordinator-host.js after static ESM init.
 
@@ -1277,135 +1229,51 @@ function renderMetadataCommit({ token: pollToken, current, overviewChanged, todo
   }
 }
 
-/**
- * poll 周期尾部的低频兜底段（SSE 激活与 fallback 共用）：loadAgents 节流
- * 刷新（SSE 下 30s 兜底 + connection 事件即时路径，§5.2）、workspace
- * sessions 增量、hooks 面板态、final 缓存提交。
- * @returns {Promise<boolean>} false = token stale，调用方应终止本轮
- */
-async function _runPollTailLowFrequency(pollToken) {
-  const pollRuntimeId = pollToken.runtimeId;
-  // Refresh the Claw-composed agent list occasionally.
-  // Do not overwrite `allAgents` with the raw viewer session list,
-  // otherwise prebuilt/managed grouping disappears.
-  // SSE 激活时 agent 增删由 connection 事件即时触发 loadAgents，此处只做
-  // 30s 兜底（事件丢失的最后防线）。
-  const agentListIntervalMs = (typeof isSseActive === 'function' && isSseActive()) ? 30000 : 3000;
-  if (Date.now() - lastAgentListRefreshAt > agentListIntervalMs) {
-    lastAgentListRefreshAt = Date.now();
-    await loadAgents();
-    if (!isSessionViewTokenCurrent(pollToken)) {
-      return false;
-    }
-    if (typeof updateChatContextBar === 'function') {
-      updateChatContextBar();
-    }
-    if (typeof updateInputModelSwitcher === 'function') {
-      updateInputModelSwitcher();
-    }
-    if (typeof updateThinkingEffortSwitcher === 'function') {
-      updateThinkingEffortSwitcher();
-    }
-  }
-
-  // Incrementally refresh workspace session data for the active workspace host.
-  // This keeps the UI in sync when sessions are created/deleted via CLI.
-  if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {
-    const wsHostAgent = allAgents.find((a) => a.id === focusedAgentId && isWorkspaceHostUnit(a));
-    if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
-      window._lastWsSessionRefreshAt = Date.now();
-      try {
-        const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id, wsHostAgent);
-        if (freshSessions) {
-          if (!isSessionViewTokenCurrent(pollToken)) {
-            return false;
-          }
-          // Preserve optimistic archived state: during compact+archive operations,
-          // markSessionArchivedForMutation sets archived=true before the server
-          // actually archives (which happens inside compact_and_resume response).
-          // Without this, the 3-second refresh would overwrite the optimistic
-          // state with the server's not-yet-archived data, causing visual flicker.
-          const currentWs = wsHostAgent.workspace_sessions;
-          if (currentWs && Array.isArray(currentWs.sessions) && Array.isArray(freshSessions.sessions)) {
-            const currentById = new Map(currentWs.sessions.map(s => [s.id, s]));
-            freshSessions.sessions = freshSessions.sessions.map(s => {
-              const cur = currentById.get(s.id);
-              if (cur && cur.archived === true && s.archived !== true) {
-                return { ...s, archived: true, todo: false };
-              }
-              return s;
-            });
-          }
-          const prevSig = JSON.stringify(currentWs || {});
-          const nextSig = JSON.stringify(freshSessions);
-          if (prevSig !== nextSig) {
-            // Preserve contextLength/compressRatio when the fresh data from
-            // listPrebuiltSessions returns null (e.g. resolveSessionModelInfo
-            // couldn't resolve a preset). Without this, the 3-second refresh
-            // would wipe out previously valid model info and cause the context
-            // bar to flash defaults.
-            const prevCl = currentWs?.contextLength;
-            const prevCr = currentWs?.compressRatio;
-            if (Number.isFinite(prevCl) && prevCl > 0
-                && !(Number.isFinite(freshSessions.contextLength) && freshSessions.contextLength > 0)) {
-              freshSessions.contextLength = prevCl;
-            }
-            if (Number.isFinite(prevCr) && prevCr > 0 && prevCr <= 100
-                && !(Number.isFinite(freshSessions.compressRatio) && freshSessions.compressRatio > 0)) {
-              freshSessions.compressRatio = prevCr;
-            }
-            wsHostAgent.workspace_sessions = typeof mergeWorkspaceSessionSnapshots === 'function'
-              ? mergeWorkspaceSessionSnapshots(currentWs, freshSessions, wsHostAgent.id)
-              : freshSessions;
-            if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
-              renderCurrentMainView();
-            } else {
-              // Chat mode: only refresh context bar, avoid full re-render that resets scroll
-              if (typeof updateChatContextBar === 'function') {
-                updateChatContextBar();
-              }
-            }
-          }
-        }
-      } catch {}
-    }
-  }
-
-  if (activeFeaturePanel) {
-    if (activeFeaturePanel === 'logs') {
-      await loadLogs();
-    } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'plan' && activeFeaturePanel !== 'session-controls' && activeFeaturePanel !== 'bg') {
-      // resources/viewer 面板数据独立管理，不需要 hooks 数据，跳过以避免无谓渲染
-      // session-controls 面板状态由模块自身的请求-应答链路维护，轮询重渲染会打断开关交互
-      const hooksRes = await fetch(`/api/agents/${pollRuntimeId}/hooks`);
-      const nextHookInspector = normalizeHookInspector(await hooksRes.json());
-      const nextSignature = getHookInspectorSignature(nextHookInspector);
-      const hookInspectorChanged = nextSignature !== currentHookInspectorSignature;
-      const hooksCommitted = commitSessionViewPatch(
-        pollToken,
-        hookInspectorChanged ? { hookInspector: nextHookInspector } : {},
-        () => {
-          if (hookInspectorChanged) {
-            renderFeaturePanel();
-          }
-        },
-      );
-      if (!hooksCommitted) {
-        return false;
-      }
-    }
-  }
-
-  const finalStateCommitted = commitSessionViewState(pollToken, () => {
-    // Write-through: keep cache fresh so switching back is instant.
-    // Cache capture and recap tracking observe one synchronous view state.
-    saveCurrentRuntimeToCache(pollRuntimeId);
-    _trackRecapSessionPresence();
-  });
-  if (!finalStateCommitted) {
-    return false;
-  }
-  return true;
+function createPollMaintenanceHost() {
+  return {
+    agents: () => allAgents,
+    focused: () => focusedAgentId,
+    now: () => Date.now(),
+    isPh: (record) => typeof isPhStyleWorkspaceAgent === 'function' && isPhStyleWorkspaceAgent(record),
+    browsingTarget: (record) => typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(record) : null,
+    workspaceState: (record) => typeof getAgentWorkspaceState === 'function' ? getAgentWorkspaceState(record) : null,
+    fetch: (url) => fetch(url),
+    isWorkspace: (record) => isWorkspaceHostUnit(record),
+    detailLoaded: (id) => loadedAgentDetailIds.has(id),
+    lastWorkspaceRefresh: () => window._lastWsSessionRefreshAt || 0,
+    setWorkspaceRefresh: (value) => { window._lastWsSessionRefreshAt = value; },
+    lastAgentRefresh: () => lastAgentListRefreshAt,
+    setAgentRefresh: (value) => { lastAgentListRefreshAt = value; },
+    sseActive: () => typeof isSseActive === 'function' && isSseActive(),
+    loadAgents: () => loadAgents(),
+    refreshCalls: (agents) => refreshAgentCallStates(agents),
+    isCurrent: (token) => isSessionViewTokenCurrent(token),
+    patch: (token, patch, effect) => commitSessionViewPatch(token, patch, effect),
+    commit: (token, effect) => commitSessionViewState(token, effect),
+    apply: (patch) => applySessionViewPatch(patch),
+    notify: (value) => updateNotificationStatus(value),
+    merge: (previous, fresh, id) => typeof mergeWorkspaceSessionSnapshots === 'function'
+      ? mergeWorkspaceSessionSnapshots(previous, fresh, id) : fresh,
+    renderWorkspace: (record, allowSoftRefresh) => {
+      if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(record)) {
+        if (allowSoftRefresh && record.id === 'work-group' && window.WorkGroupUI?.softRefresh) window.WorkGroupUI.softRefresh();
+        else renderCurrentMainView();
+      } else if (typeof updateChatContextBar === 'function') updateChatContextBar();
+    },
+    updateComposer: () => {
+      if (typeof updateChatContextBar === 'function') updateChatContextBar();
+      if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
+      if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
+    },
+    panel: () => activeFeaturePanel,
+    loadLogs: () => loadLogs(),
+    normalizeHooks: (value) => normalizeHookInspector(value),
+    hookSignature: (value) => getHookInspectorSignature(value),
+    currentHookSignature: () => currentHookInspectorSignature,
+    renderPanel: () => renderFeaturePanel(),
+    saveCache: (id) => saveCurrentRuntimeToCache(id),
+    trackRecap: () => _trackRecapSessionPresence(),
+  };
 }
 
 function createRuntimePollHost() {
@@ -1433,67 +1301,6 @@ function createRuntimePollHost() {
   };
 }
 
-async function refreshUnfocusedPoll() {
-      applySessionViewPatch({ connected: true });
-      updateNotificationStatus(null);
-      // agent 列表与聚焦态尾段同款节流：SSE 激活时增删由 connection 事件
-      // 即时触发 loadAgents，此处只做 30s 兜底；无 SSE 时 3s。此前本分支
-      // 每秒全量拉 get_connected_agents（payload 随会话数增长，百 KB 级），
-      // 是无焦点标签页的主要负载源。
-      const agentListIntervalMs = (typeof isSseActive === 'function' && isSseActive()) ? 30000 : 3000;
-      if (Date.now() - lastAgentListRefreshAt > agentListIntervalMs) {
-        lastAgentListRefreshAt = Date.now();
-        await loadAgents();
-      }
-      await refreshAgentCallStates(allAgents);
-      // Incrementally refresh workspace session data when viewing workspace surface.
-      if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {
-        const wsHostAgent = allAgents.find((a) => a.id === focusedAgentId && isWorkspaceHostUnit(a));
-        if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
-          window._lastWsSessionRefreshAt = Date.now();
-          try {
-            const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id, wsHostAgent);
-            if (freshSessions) {
-              // Preserve optimistic archived state (same logic as runtime-connected path)
-              const currentWs = wsHostAgent.workspace_sessions;
-              if (currentWs && Array.isArray(currentWs.sessions) && Array.isArray(freshSessions.sessions)) {
-                const currentById = new Map(currentWs.sessions.map(s => [s.id, s]));
-                freshSessions.sessions = freshSessions.sessions.map(s => {
-                  const cur = currentById.get(s.id);
-                  if (cur && cur.archived === true && s.archived !== true) {
-                    return { ...s, archived: true, todo: false };
-                  }
-                  return s;
-                });
-              }
-              const mergedSessions = typeof mergeWorkspaceSessionSnapshots === 'function'
-                ? mergeWorkspaceSessionSnapshots(currentWs, freshSessions, wsHostAgent.id)
-                : freshSessions;
-              const prevSig = JSON.stringify(currentWs || {});
-              const nextSig = JSON.stringify(mergedSessions);
-              if (prevSig !== nextSig) {
-                wsHostAgent.workspace_sessions = mergedSessions;
-                if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
-                  // 群聊工作空间：避免整个 workspace DOM 重建导致输入框失焦/内容丢失，
-                  // 改用轻量刷新（只更新左侧群聊列表）
-                  if (wsHostAgent.id === 'work-group' && window.WorkGroupUI?.softRefresh) {
-                    window.WorkGroupUI.softRefresh();
-                  } else {
-                    renderCurrentMainView();
-                  }
-                } else {
-                  // Chat mode: only refresh context bar, avoid full re-render that resets scroll
-                  if (typeof updateChatContextBar === 'function') {
-                    updateChatContextBar();
-                  }
-                }
-              }
-            }
-          } catch {}
-        }
-      }
-}
-
 function createPollCycleHost() {
   return {
     switching: () => prebuiltSessionSwitchInFlight,
@@ -1514,7 +1321,7 @@ function createPollCycleHost() {
     setTemplateReload: (value) => { lastFeatureTemplateReloadAt = value; },
     reloadTemplates: () => window.reloadFeatureTemplateMap(),
     runtimeId: () => currentRuntimeAgentId,
-    noFocus: refreshUnfocusedPoll,
+    noFocus: () => refreshUnfocusedPoll(),
     runtime: () => runRuntimePoll(),
     warn: (...args) => console.warn(...args),
   };

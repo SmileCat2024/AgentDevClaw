@@ -16,6 +16,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createPollMaintenance } from '../public/src/modules/poll-maintenance.js';
 import fs from 'node:fs';
 import { marked } from 'marked';
 import { createFrontendSandbox, sourceBetween } from './helpers/frontend-vm.js';
@@ -825,7 +826,7 @@ describe('双选择器 — 名称相同 ID 独立', () => {
 
 describe('045 — 轮询归属随 typed target（不被 workspace_state 漂移覆盖）', () => {
   const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
-  const pollSource = sourceBetween(mainSource, 'async function fetchWorkspaceSessionsForPoll', '// schedulePoll is provided');
+  const pollSource = sourceBetween(mainSource, 'function createPollMaintenanceHost()', 'function createRuntimePollHost()');
 
   function createPollSetup({ entities = [], target = null, openDirectory = '' } = {}) {
     const agent = {
@@ -839,7 +840,7 @@ describe('045 — 轮询归属随 typed target（不被 workspace_state 漂移�
     const ctx = createFrontendSandbox({
       URLSearchParams,
       allAgents: [agent],
-      _wsSessionsRevisionByHost: new Map(),
+
     isPhStyleWorkspaceAgent: (a) => a?.id === 'programming-helper',
     isRemoteNamespaceAgentId: () => false,
       getAgentWorkspaceState: () => workspaceState,
@@ -850,8 +851,8 @@ describe('045 — 轮询归属随 typed target（不被 workspace_state 漂移�
     store.projects = entities.map((raw) => ctx.run(`normalizePhProjectEntity(${JSON.stringify(raw)})`)).filter(Boolean);
     store.loaded = true;
     if (target) ctx.run(`setPhBrowsingTarget('programming-helper', ${JSON.stringify(target)})`);
-    ctx.__pollSource = pollSource;
-    ctx.run(`${pollSource.replace(/^/, 'globalThis.fetchWorkspaceSessionsForPoll = ')}`);
+    ctx.run(pollSource);
+    Object.assign(ctx, createPollMaintenance(ctx.run('createPollMaintenanceHost()')));
     ctx.__agent = agent;
     return { ctx, fetchLog, workspaceState };
   }
