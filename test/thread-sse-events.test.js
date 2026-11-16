@@ -329,17 +329,22 @@ describe('thread SSE: transaction publish points', () => {
 
     const thread = await integration.onSessionCreated(AGENT, { id: 'a-s1' });
 
+    await integration.beginSessionSuccession({
+      agentId: AGENT, sessionId: 'a-s1', reason: 'trim', seedContinuation: false,
+    });
     const outcome = await integration.applySessionSuccession({
       agentId: AGENT, fromSessionId: 'a-s1', toSessionId: 'a-s2', reason: 'trim',
+      seedContinuation: false,
     });
     assert.equal(outcome.applied, true);
     // 发布在原子换头（commitSessionSuccession）与补投递都落定之后（created 在建线程时先行）
     assert.deepEqual(order, [
-      'publish:thread.created', 'advanced', 'delivered', 'publish:thread.head-advanced',
+      'publish:thread.created', 'publish:thread.handoff-started',
+      'advanced', 'delivered', 'publish:thread.head-advanced',
     ]);
-    assert.equal(spy.calls.length, 2); // created + head-advanced
-    assert.equal(spy.calls[1].threadId, thread.threadId);
-    assert.deepEqual(spy.calls[1].payload, {
+    assert.equal(spy.calls.length, 3); // created + handoff-started + head-advanced
+    assert.equal(spy.calls[2].threadId, thread.threadId);
+    assert.deepEqual(spy.calls[2].payload, {
       kind: 'thread.head-advanced',
       agentId: AGENT,
       fromSessionId: 'a-s1',
@@ -353,7 +358,7 @@ describe('thread SSE: transaction publish points', () => {
     });
     assert.equal(stale.applied, false);
     assert.equal(stale.reason, 'no_thread_for_session');
-    assert.equal(spy.calls.length, 2);
+    assert.equal(spy.calls.length, 3);
   });
 
   it('archiveThread publishes thread.archived with authoritative cleanup status', async () => {
@@ -444,8 +449,12 @@ describe('thread SSE: end-to-end wiring', () => {
     const s = await h.openStream(`/protoclaw/events?threads=${encodeURIComponent(thread.threadId)}`);
     assert.ok(await s.readUntil(hasHello));
 
+    await integration.beginSessionSuccession({
+      agentId: AGENT, sessionId: 'e-s1', reason: 'trim', seedContinuation: false,
+    });
     const outcome = await integration.applySessionSuccession({
       agentId: AGENT, fromSessionId: 'e-s1', toSessionId: 'e-s2', reason: 'trim',
+      seedContinuation: false,
     });
     assert.equal(outcome.applied, true);
 

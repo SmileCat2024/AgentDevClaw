@@ -83,7 +83,7 @@ const result = reduce(threadAnchorMachine, record, { type: 'handoff_failed', ...
 
 ### 4. 行为保持与阶段边界
 
-**阶段 1（纯重构，行为零变化）**：只收敛转换表与守卫。CallArbiter 的 mailbox 结构、中断检查点、continuation 循环原样保留；WorkThread 的 stale 惰性清除逻辑原样保留（它在外壳层，不上内核）。验收 = 现有测试全绿 + 关键路径行为对照。
+**阶段 1（已完成的纯重构边界）**：只收敛转换表与守卫。CallArbiter 的 mailbox 结构、中断检查点、continuation 循环原样保留；WorkThread 的 stale 惰性清除逻辑原样保留（它在外壳层，不上内核）。在此基础上，WorkThread 的接续协议明确收紧为：`advanceHead` 必须有活动 `pendingSuccession`，否则返回 `handoff_not_started`；`rotation_failed` 只要挡板仍在即可恢复推进；`closed` 后 `setHold` 拒绝并保持终态快照不变。该收紧属于独立的业务契约修复，不再声称与旧的无挡板行为等价。验收 = 相关回归、独立模型状态机与受影响调用方测试通过。
 
 **阶段 2（时序写法收敛，需专门验证后另行评审）**：CallArbiter 的 `_interruptRequested` 布尔 + 3 处手工检查点，收敛为"中断进入统一事件槽 + 段边界统一检查函数"。语义目标不变（中断在段边界生效，不抢断进行中的 onCall），但检查点从手工选择变为结构性保证。因极端时序下与现状可能有可观察差异，单独列出差异清单确认后才做，不与阶段 1 混在一起。
 

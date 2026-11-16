@@ -78,6 +78,7 @@ describe('GET /protoclaw/threads/:threadId sessionChainMeta', () => {
       sessionRef: { agentId: 'programming-helper', sessionId: 's-gen1' },
       identity: 'coder',
     });
+    await control.core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 's-gen1', reason: 'trim', seedContinuation: false });
     await control.core.advanceHead({
       threadId: thread.threadId,
       fromSessionId: 's-gen1',

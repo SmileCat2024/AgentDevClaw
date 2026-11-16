@@ -23,6 +23,7 @@ import { createHash } from 'node:crypto';
 import { synthesizeThreadLifeState } from './thread-life-state.js';
 import { deliverThreadInput } from './input-gateway.js';
 import { buildSuccessionEvidence } from './thread-integration.js';
+import { abortPendingSuccession } from './thread-succession.js';
 import { publishThreadEvent as publishThreadEventDefault } from '../routes/sse-events.js';
 
 /** 轮次终态事件 type → 事实状态（ADR-0042 决策 4；仅终态，item.* 与 turn.started 不发布）。 */
@@ -646,30 +647,60 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
       if (current.status === 'closed') {
         return res.status(409).json({ ok: false, code: 'thread_closed', message: 'Thread is closed' });
       }
+      // 这个 HTTP 端点是完整的手动接力入口，不要求调用方先访问内部 begin
+      // API。先建立挡板，再等待 successor READY，最后由 commit 原子换头；这样
+      // READY 等待期间旧 head 不会继续接收交接期积压指令。
+      // expectedRevision 约束的是调用方看到的换头前快照；begin 会使 revision
+      // 增加一次，因此提交时使用 begin 返回的新 revision。
+      const requestedRevision = Number.isInteger(expectedRevision) ? expectedRevision : undefined;
+      if (requestedRevision !== undefined && requestedRevision !== Number(current.revision)) {
+        throw Object.assign(new Error('Revision conflict on workthread ' + threadId), {
+          code: 'revision_conflict',
+          status: 409,
+          expectedRevision: requestedRevision,
+          currentRevision: current.revision,
+        });
+      }
+      let handoffStarted = false;
+      let committed = null;
+      let begun = null;
+      let retiring = '';
+      try {
+        begun = await core.beginSessionHandoff({
+        threadId,
+        fromSessionId: String(fromSessionId || '').trim() || current.headSessionId,
+        reason: String(endKind || 'manual').trim() || 'manual',
+        seedContinuation: false,
+      });
+      handoffStarted = true;
+
       // 与自动 / 手动接力共用 READY 门：target runtime 必须可服务，且归属
-      // 线程身份仍由框架原子事务在提交时校验。未配置宿主唤起器不能静默
-      // 降级成直接换头，否则本入口会把未就绪 successor 暴露为权威 head。
+      // 线程身份仍由框架原子事务在提交时校验。未配置或未就绪都要收敛挡板，
+      // 不把线程遗留在 rotating。
       if (typeof ensureHeadRuntime !== 'function') {
-        return res.status(503).json({ ok: false, code: 'successor_runtime_unavailable', message: 'Successor readiness gate is not configured' });
+        throw Object.assign(new Error('Successor readiness gate is not configured'), {
+          code: 'successor_runtime_unavailable',
+          status: 503,
+        });
       }
       const readiness = await ensureHeadRuntime(current.agentId, targetSessionId).catch((error) => ({
         ok: false, code: 'runtime_wake_failed', message: String(error?.message || error),
       }));
       if (readiness?.ok === false) {
-        return res.status(409).json({
-          ok: false,
+        throw Object.assign(new Error(readiness.message || 'Successor runtime did not reach READY'), {
           code: 'successor_runtime_not_ready',
+          status: 409,
           reason: readiness.code || 'runtime_wake_failed',
-          message: readiness.message || 'Successor runtime did not reach READY',
         });
       }
+
       // ADR-0047 阶段 2b：head 推进走框架原子事务（分类 + 推进 +
       // unresolved 持久化同一次提交）。退役 head 取显式 fromSessionId
       // （CAS 契约），省略时读当前 head（兼容省略调用方，错误 from 由
       // 框架 CAS 拒绝）。证据 unreadable（瞬时读取失败）→ 409 可重试、
       // head 不动；结构性缺失（missing / corrupt）→ unresolved 随换头
       // 持久，端点响应携带清单（调用方按需呈现/处置）。
-      let retiring = String(fromSessionId || '').trim();
+      retiring = String(fromSessionId || '').trim();
       if (!retiring) {
         // READY 门等待窗口内 head 可能已被并发推进，重读一次取新鲜值；
         // from 不符仍由框架 CAS 兜底拒绝（外层 current 不遮蔽）。
@@ -677,11 +708,12 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
         retiring = freshThread?.headSessionId || current.headSessionId || '';
       }
       const evidence = await buildSuccessionEvidence(board, threadId);
-      const committed = await core.commitSessionSuccession({
+      committed = await core.commitSessionSuccession({
         threadId,
         toSessionId: targetSessionId,
         fromSessionId: retiring,
-        expectedRevision,
+        // begin 已经推进过一次 revision，提交必须使用 begin 后的快照。
+        expectedRevision: begun.revision,
         endKind,
         evidence,
       });
@@ -736,6 +768,23 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
         }));
       }
       res.json({ ok: true, thread: committed.record, unresolved: committed.unresolved, ...(delivery ? { delivery } : {}) });
+      } catch (err) {
+        // begin 已成功但 commit 未成功时，显式留下失败事实并收敛挡板。
+        // 不能把 READY / 证据读取 / CAS 失败遗留成永久 rotating。
+        if (handoffStarted && !committed) {
+          await core.failSessionHandoff(threadId, {
+            reason: err?.code || 'manual_head_commit_failed',
+            stage: err?.code || 'manual_head_commit',
+            error: err?.message || String(err),
+          }).catch(() => {});
+          await abortPendingSuccession(core, threadId, {
+            reason: err?.code || 'manual_head_commit_failed',
+            stage: err?.code || 'manual_head_commit',
+            error: err?.message || String(err),
+          }).catch(() => {});
+        }
+        throw err;
+      }
     } catch (err) {
       _errorResponse(res, err);
     }

@@ -192,8 +192,9 @@ describe('T002: 接力成功（提交点原子完成）', () => {
     const env = makeEnvironment();
     try {
       const thread = await startCoderThread(env, 's1');
-      // 另一并发操作已把 head 推进到 s2（本操作再提交 → head_mismatch）
-      await env.core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's1', endKind: 'trim' });
+       // 另一并发操作已把 head 推进到 s2（本操作再提交 → head_mismatch）
+       await env.core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 's1', reason: 'trim', seedContinuation: false });
+       await env.core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's1', endKind: 'trim' });
 
       const outcome = await env.succession.commitSuccession({
         agentId: 'coder',

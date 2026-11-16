@@ -43,7 +43,8 @@ describe('T007 S16: server 重启后线程现场完整恢复（跨 control 实�
     const a = makeEnv('a-full');
     try {
       const thread = await startCoderThread(a, 's1');
-      // head 推进：s1 → s2（同 APP 会话，结构守卫放行）
+      // head 推进：先建立接续挡板，再从 s1 → s2。
+      await a.core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 's1', reason: 'trim', seedContinuation: false });
       await a.core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's1', endKind: 'trim' });
       // Inbox：一条 pending（重启期间积累）+ 一条 delivered（经 bridge 投递过）
       await a.core.appendCommand({ threadId: thread.threadId, text: '重启前积累', idempotencyKey: 'ik-1' });

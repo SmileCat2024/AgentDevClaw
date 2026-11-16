@@ -68,6 +68,7 @@ describe('Thread delivery consumer (R6 收编)', () => {
     const turns = [];
     const control = createThreadControl({ rootDir: env.root, bridge: makeTurnsBridge(turns, { failFirst: true }), identitySource: async () => 'coder' });
     const thread = await control.core.start({ sessionRef: { agentId: 'coder', sessionId: 'backoff-s1' } });
+    await control.core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'backoff-s1', reason: 'trim', seedContinuation: false });
     await control.core.advanceHead({
       threadId: thread.threadId, toSessionId: 'backoff-s2', fromSessionId: 'backoff-s1', endKind: 'trim',
     });

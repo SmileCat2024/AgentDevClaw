@@ -290,8 +290,9 @@ describe('thread association chain: bridge → CallArbiter + real Agent → turn
         'cancelled execution must not be reported as completed',
       );
 
-      // 接力推进：指令已 DELIVERED 不复活；新 head 上无 X 的执行事件。
+      // 接力推进：先建立挡板；指令已 DELIVERED 不复活；新 head 上无 X 的执行事件。
       // 完成对账需结合生命周期事实（sessionChain / 接续指令），属后续监视算法。
+      await env.core.beginSessionHandoff({ threadId: env.wt.threadId, fromSessionId: HEAD_1, reason: 'context_rotation', seedContinuation: false });
       await env.core.advanceHead({
         threadId: env.wt.threadId,
         toSessionId: 'sess-chain-2',

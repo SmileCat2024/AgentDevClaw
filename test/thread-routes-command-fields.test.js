@@ -246,6 +246,7 @@ describe('threads/:id/commands route field passthrough', () => {
     assert.equal(repeat.statusCode, 200);
     assert.equal(repeat.body.command.status, 'cancelled');
 
+    await control.core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'cancel-s1', reason: 'manual', seedContinuation: false });
     await control.core.advanceHead({ threadId: thread.threadId, toSessionId: 'cancel-s2', fromSessionId: 'cancel-s1' });
     const stale = await callRoute(app, '/protoclaw/threads/:threadId/commands/:commandId/cancel', {
       params: { threadId: thread.threadId, commandId: command.commandId },

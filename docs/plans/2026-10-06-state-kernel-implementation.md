@@ -25,10 +25,10 @@
 |---|---|---|---|
 | `beginSessionHandoff` | closed → throw `thread_closed`；hold → throw `thread_held`；`rotating` + fresh 挡板 → throw `handoff_in_progress`；head ≠ from → throw `head_mismatch` | → `rotating`；置挡板（from/reason/stage=started/startedAt）；R3 同笔播种接续指令（幂等键 `succession:{threadId}:{from}`，策略抛错=整体失败不留半挡板） | `handoff_started` |
 | `failSessionHandoff` | closed → **no-op**；无挡板 → **no-op**。**对 status 无要求**（取证修正：open+挡板的构造态也会落 rotation_failed，见 §4 发现清单） | → `rotation_failed`；挡板保留，stage 补写（缺省 `unknown`） | `handoff_failed`（含 reason/stage/error） |
-| `advanceHead` | closed → throw；hold → throw；head ≠ from → throw `head_mismatch`；to = head → throw `already_head`；to ∈ chain → throw `duplicate_session`；**异步三道**（identitySource：workspace/identity/成员独占，throw） | → `open`（恒定）；chain 末尾追加、旧 head 段收口（role/endedAt/endKind/successor）；清挡板；身份缺字段时事实回填 `draft.identity` | `handoff_completed` |
+| `advanceHead` | closed → throw；hold → throw；**无 `pendingSuccession` → throw `handoff_not_started`**；head ≠ from → throw `head_mismatch`；to = head → throw `already_head`；to ∈ chain → throw `duplicate_session`；**异步三道**（identitySource：workspace/identity/成员独占，throw） | → `open`（恒定）；chain 末尾追加、旧 head 段收口（role/endedAt/endKind/successor）；清挡板；身份缺字段时事实回填 `draft.identity` | `handoff_completed` |
 | `clearStaleHandoff`（私有，投递路径惰性触发） | 无挡板 → no-op | 清挡板；**仅 `rotating` → `open`**（rotation_failed 保持）；closed + 挡板构造态：清挡板但 status 不动 | `handoff_stale` |
 | `closeThread` | closed → no-op（幂等） | → `closed`；closedAt/closeReason；pending 指令全部 CANCELLED（lastReason=thread_closed） | `closed` |
-| `setHold` | —（不改 status，纯伴随字段） | hold = want | 无事件 |
+| `setHold` | **closed → throw `thread_closed`**；其余状态可修改（不改 status） | hold = want | 无事件 |
 
 **不进锚点状态机**（阶段 1 边界）：`appendCommand / cancelCommand / deliverPendingCommands` 的指令箱状态（PENDING/DELIVERED/CANCELLED/FAILED）——它们不改锚点 status（仅读 closed 门禁）。记为后续可选迁移，本期只在转换表定义旁留注释锚点。
 
@@ -52,7 +52,7 @@ envelope.status 词汇：`queued | running | completed | failed | cancelled`。�
 
 ### 1.3 测试覆盖现状
 
-- **WorkThread**：`packages/core/test/workthread/workthread-core.test.ts`（54 用例，1059 行）。K3 三连（closed / 无挡板 / open-idle）、K9（hold × begin/advance/在途）、R8 single-flight、R3 播种与策略抛错、stale 自愈、mid-loop 三态（head_changed / 取消 / handoff）均已有覆盖。
+- **WorkThread**：`packages/core/test/workthread/workthread-core.test.ts`（核心回归覆盖 closed / active handoff / hold / stale / mid-loop；直接无挡板推进由 `handoff_not_started` 拒绝）。另有独立 fast-check 模型序列测试与当前契约差分测试，分别验证可达操作序列和转换结果的一致性。
 - **CallArbiter**：`test/call-arbiter.test.js`（30 用例，847 行）。串行化、多段 continuation、三个 budget、force-continuation 两条、interrupt 两条、queued-input 路径、reminder 身份均有覆盖。
 
 ### 1.4 特征测试缺口（PR-F2 / PR-C1 补齐清单）

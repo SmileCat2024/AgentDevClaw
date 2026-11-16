@@ -61,12 +61,13 @@
 | M2-*-∅ | 无挡板 | no-op（已成功推进/从未开始，迟到失败者无资格） | 框架 880/893 |
 | M2-C-* | closed | no-op 零写入（K3/C8：迟到失败不得覆写终态） | 框架 869 |
 
-### 3.3 E3 complete（守卫：closed → hold → head CAS → already_head → duplicate_session）
+### 3.3 E3 complete（守卫：closed → hold → active handoff → head CAS → already_head → duplicate_session）
 
 | 格 | 前置 | 预期 | 覆盖 |
 |---|---|---|---|
-| M3-R-F-OK | rotating, successor READY | ✓ →open + head 推进 + 链追加 + 清挡板 + staged 指令投新 head | Claw succession T002「READY committed」 |
+| M3-R-F-OK | rotating, successor READY，且存在活动接续挡板 | ✓ →open + head 推进 + 链追加 + 清挡板 + staged 指令投新 head | Claw succession T002「READY committed」 |
 | M3-GATE | successor 未 READY | ✗ 提交拒绝 → fail 落账（stage=successor_ready）+ 挡板收敛，旧 head 权威 | Claw succession T002「not-READY rejected」「old head authoritative」 |
+| M3-NO-HANDOFF | open / rotation_failed 无 pendingSuccession | ✗ `handoff_not_started`，head 与链不变 | AgentDev core model properties；直接换头不属于合法接续流程 |
 | M3-RACE | 并发提交 head 竞速输家 | void（非失败落账），赢家提交为准 | Claw succession T002「losing race is a void」 |
 | M3-*-H | hold=T | ✗ `thread_held`（hold 同样门禁完成） | 框架 764/780 |
 | M3-MM | head CAS 失败 | ✗ `head_mismatch` | 框架 356 |

@@ -256,7 +256,11 @@ for (const oldState of ['cancelled', 'suspended']) {
     assert.match(await h.watch(ref), /^monitoring/);
     assert.equal((await h.tasks())[0].status, 'rotating');
     assert.equal(h.notices.length, 0);
-    const next = await h.core.advanceHead({ threadId: h.thread.threadId, fromSessionId: 's1', toSessionId: 's2' });
+    const next = await h.core.advanceHead({
+      threadId: h.thread.threadId,
+      fromSessionId: 's1',
+      toSessionId: 's2',
+    });
     const continuation = next.commands.find(command => command.kind === 'system_continuation');
     assert.ok(continuation);
     await h.core.deliverPendingCommands(h.thread.threadId);

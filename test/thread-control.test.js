@@ -347,12 +347,13 @@ describe('thread control assembly (core = WorkThread)', () => {
   test('advanceHead closes old chain entry and moves head atomically', async () => {
     const { core } = makeControl(root);
     const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 's1', reason: 'manual', seedContinuation: false });
 
     const advanced = await core.advanceHead({
       threadId: thread.threadId,
       toSessionId: 's2',
       fromSessionId: 's1',
-      expectedRevision: thread.revision,
+      expectedRevision: (await core.getThread(thread.threadId)).revision,
       endKind: 'context_rotation',
     });
 
@@ -380,10 +381,16 @@ describe('thread control assembly (core = WorkThread)', () => {
     );
     await assert.rejects(
       () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 'wrong' }),
+      (err) => err.code === 'handoff_not_started',
+    );
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 's1', reason: 'manual', seedContinuation: false });
+    await assert.rejects(
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 'wrong' }),
       (err) => err.code === 'head_mismatch',
     );
 
     const advanced = await core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's1' });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 's2', reason: 'manual', seedContinuation: false });
     await assert.rejects(
       () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's2' }),
       (err) => err.code === 'already_head',
@@ -500,7 +507,8 @@ describe('board (WorkThreadBoard 执行看板)', () => {
     const recorded = storedEvents.some((event) => event.type === 'turn.cancelled');
     assert.equal(recorded, true);
 
-    // 轮换接续：head 推进到 successor，新 turn 自然完成，看板回 idle
+    // 轮换接续：先建立接续挡板，再推进 head；新 turn 自然完成，看板回 idle
+    await core.beginSessionHandoff({ threadId: cancelThread.threadId, fromSessionId: 'cancel-session', reason: 'context_rotation', seedContinuation: false });
     await core.advanceHead({
       threadId: cancelThread.threadId,
       toSessionId: 'cancel-session-2',
@@ -770,6 +778,7 @@ describe('WorkThreadRuntimeBridge (enabled) + user-turn integration', () => {
     assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
 
     // head 推进到新会话且 runtime 就绪 → user-turn 投递成功
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'old-1', reason: 'manual', seedContinuation: false });
     await core.advanceHead({ threadId: thread.threadId, toSessionId: 'head-2', fromSessionId: 'old-1' });
     liveRuntimes.set('agent-x::head-2', 'viewer-abc');
     result = await core.deliverPendingCommands(thread.threadId);
@@ -963,6 +972,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     });
 
     const thread = await integration.onSessionCreated('coder', { id: 'coder-s1', title: 'T' });
+    await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'coder-s1', reason: 'trim', seedContinuation: false });
     await core.appendCommand({ threadId: thread.threadId, text: '接力期间补充的指令' });
 
     const outcome = await integration.applySessionSuccession({
@@ -1001,6 +1011,9 @@ describe('ThreadIntegration (coder host gating)', () => {
     });
 
     const thread = await integration.onSessionCreated('coder', { id: 'coder-s1', title: 'T' });
+    await integration.beginSessionSuccession({
+      agentId: 'coder', sessionId: 'coder-s1', reason: 'summary', seedContinuation: false,
+    });
     await core.appendCommand({ threadId: thread.threadId, text: '等 runtime 的指令' });
 
     const outcome = await integration.applySessionSuccession({
@@ -1151,6 +1164,7 @@ describe('ThreadIntegration (coder host gating)', () => {
       agentId: 'coder', sessionId: 'coder-s0', runtimeInstanceId: 'r0',
       event: { type: 'turn.started', turn: 1, sourceRef: 'prev-command' },
     });
+    await core.beginSessionHandoff({ threadId: silentThread.threadId, fromSessionId: 'coder-s0', reason: 'trim', seedContinuation: false });
     await core.advanceHead({
       threadId: silentThread.threadId,
       toSessionId: 'coder-s1',
@@ -1377,6 +1391,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     const { core, integration } = makeIntegration();
     const thread = await integration.onSessionCreated('coder', { id: 'del-1', title: 'A' });
     await core.appendCommand({ threadId: thread.threadId, text: 'staged' });
+    await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'del-1', reason: 'trim' });
     await core.advanceHead({ threadId: thread.threadId, toSessionId: 'del-2', fromSessionId: 'del-1', endKind: 'trim' });
 
     // 删除非 head 棒次：不动线程
@@ -1686,8 +1701,9 @@ describe('InputGateway (unified user input routing)', () => {
 
   test('historical thread sessions reject writes instead of silently targeting the head', async () => {
     const { core, integration } = makeFixture();
-    await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
-    await core.advanceHead({ threadId: (await core.findThreadByHeadSession('coder', 'ig-s1')).threadId, toSessionId: 'ig-s2', fromSessionId: 'ig-s1', endKind: 'trim' });
+    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'ig-s1', reason: 'trim', seedContinuation: false });
+    await core.advanceHead({ threadId: thread.threadId, toSessionId: 'ig-s2', fromSessionId: 'ig-s1', endKind: 'trim' });
 
     await assert.rejects(
       deliverUserInput({ viewerAgentId: 'viewer-ig-1', text: '不要写入历史分片' }, { integration }),

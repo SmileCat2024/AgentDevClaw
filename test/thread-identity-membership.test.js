@@ -83,6 +83,7 @@ describe('T001: successor 加入（无身份门，结构守卫仍在）', () => 
   test('same-app successor is admitted without any identity machinery', async () => {
     const { core } = makeControl();
     const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'root-c1' } });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'root-c1', reason: 'trim', seedContinuation: false });
 
     const advanced = await core.advanceHead({ threadId: thread.threadId, toSessionId: 'succ-c1', fromSessionId: 'root-c1', endKind: 'trim' });
     assert.equal(advanced.headSessionId, 'succ-c1');
@@ -94,7 +95,9 @@ describe('T001: successor 加入（无身份门，结构守卫仍在）', () => 
   test('duplicate_session guard still rejects a session already in the chain and leaves the thread untouched', async () => {
     const { core } = makeControl();
     const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'root-c1' } });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'root-c1', reason: 'trim', seedContinuation: false });
     await core.advanceHead({ threadId: thread.threadId, toSessionId: 'succ-c1', fromSessionId: 'root-c1', endKind: 'trim' });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'succ-c1', reason: 'branch', seedContinuation: false });
     const before = await core.getThread(thread.threadId);
 
     // 历史成员再入链：结构守卫拒绝（身份门不存在，但链完整性仍在框架事务内）
@@ -113,7 +116,9 @@ describe('T001: successor 加入（无身份门，结构守卫仍在）', () => 
   test('head_mismatch guard rejects a stale fromSessionId', async () => {
     const { core } = makeControl();
     const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'root-c1' } });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'root-c1', reason: 'trim', seedContinuation: false });
     await core.advanceHead({ threadId: thread.threadId, toSessionId: 'succ-c1', fromSessionId: 'root-c1', endKind: 'trim' });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'succ-c1', reason: 'trim', seedContinuation: false });
 
     await assert.rejects(
       () => core.advanceHead({ threadId: thread.threadId, toSessionId: 'succ-c2', fromSessionId: 'root-c1', endKind: 'trim' }),
@@ -126,7 +131,9 @@ describe('T001: 成员查询返回统一归属事实', () => {
   test('root, historical member and head all resolve to the same thread', async () => {
     const { core } = makeControl();
     const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'root-c1' } });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'root-c1', reason: 'trim', seedContinuation: false });
     await core.advanceHead({ threadId: thread.threadId, toSessionId: 'mid-c1', fromSessionId: 'root-c1', endKind: 'trim' });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'mid-c1', reason: 'summary', seedContinuation: false });
     await core.advanceHead({ threadId: thread.threadId, toSessionId: 'head-c1', fromSessionId: 'mid-c1', endKind: 'summary' });
 
     const byRoot = await core.findThreadBySession('coder', 'root-c1');
@@ -158,6 +165,7 @@ describe('T001: branch 建新 Thread 不复用原 Thread', () => {
   test('branch from a historical session creates a new thread of the same app', async () => {
     const { core, integration } = makeControl();
     const origin = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'root-c1' } });
+    await core.beginSessionHandoff({ threadId: origin.threadId, fromSessionId: 'root-c1', reason: 'trim', seedContinuation: false });
     await core.advanceHead({ threadId: origin.threadId, toSessionId: 'mid-c1', fromSessionId: 'root-c1', endKind: 'trim' });
 
     // 从历史棒 mid-c1 branch：新会话 branch-c1 成为新线程的 root
@@ -225,6 +233,7 @@ describe('T001: 旧数据缺身份字段的明确读取处理', () => {
     assert.equal((await core.getThread(thread.threadId)).identity, null);
 
     // 身份门已退役：head 正常推进，无回填、无 thread_identity_missing
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'legacy-root', reason: 'trim', seedContinuation: false });
     const advanced = await core.advanceHead({ threadId: thread.threadId, toSessionId: 'legacy-succ', fromSessionId: 'legacy-root', endKind: 'trim' });
     assert.equal(advanced.headSessionId, 'legacy-succ');
     assert.equal(advanced.identity, null, '身份不再回填：连续性判定输入已移除');
@@ -258,6 +267,12 @@ describe('T001: 非线程宿主 APP 会话保持原 Session 语义', () => {
     const thread = await integration.onSessionCreated('coder', { id: 'coder-s1', title: 'T' });
     assert.ok(thread);
 
+    await integration.beginSessionSuccession({
+      agentId: 'coder',
+      sessionId: 'coder-s1',
+      reason: 'trim',
+      seedContinuation: false,
+    });
     const applied = await integration.applySessionSuccession({
       agentId: 'coder',
       fromSessionId: 'coder-s1',
