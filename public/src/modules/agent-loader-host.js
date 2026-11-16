@@ -2,6 +2,7 @@ import { createAgentLoader } from './agent-loader.js';
 import { allAgents } from './agent-store-state.js';
 import { currentRuntimeAgentId } from './orchestration-state.js';
 import { toolRenderConfigs } from './session-view-storage.js';
+import { commitSessionViewPatch } from './session-view-commit-host.js';
 
 export let FEATURE_TEMPLATE_MAP;
 const loader = createAgentLoader({
@@ -19,8 +20,7 @@ const loader = createAgentLoader({
     || window.isSidebarSnapshotTokenCurrent(token),
   captureSessionViewToken: () => typeof window.captureSessionViewToken === 'function'
     ? window.captureSessionViewToken() : null,
-  commitSessionViewPatch: (...args) => typeof window.commitSessionViewPatch === 'function'
-    && window.commitSessionViewPatch(...args),
+  commitSessionViewPatch,
   get mergeWorkspaceSessionSnapshots() { return window.mergeWorkspaceSessionSnapshots; },
   updateChatContextBar: (...args) => typeof window.updateChatContextBar === 'function'
     && window.updateChatContextBar(...args),

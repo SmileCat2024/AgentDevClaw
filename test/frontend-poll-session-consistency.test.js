@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { installSessionViewCommit } from './helpers/session-view-commit.js';
 
 /** Raw VM harnesses install the real kernel before evaluating classic sources. */
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
@@ -230,6 +231,7 @@ function createPollSandbox({ blockStatus = true } = {}) {
   vm.createContext(sandbox);
   sandbox.window = sandbox;
   vm.runInContext(kernelStateSource, sandbox);
+  installSessionViewCommit(sandbox);
   const overviewSource = fs.readFileSync(new URL('../public/src/modules/overview-data.js', import.meta.url), 'utf8');
   vm.runInContext(`${sessionViewStateSource}\n${overviewSource}\n${extractPollSource()}\nglobalThis.__poll = poll;`, sandbox);
 
@@ -252,6 +254,7 @@ test('session view token rejects an older visit to the same runtime', () => {
   vm.createContext(sandbox);
   sandbox.window = sandbox;
   vm.runInContext(kernelStateSource, sandbox);
+  installSessionViewCommit(sandbox);
   vm.runInContext(
     `${sessionViewStateSource}\n`
       + 'globalThis.__capture = captureSessionViewToken;\n'
@@ -293,6 +296,7 @@ test('session view read snapshots are frozen and identity-bound', () => {
   vm.createContext(sandbox);
   sandbox.window = sandbox;
   vm.runInContext(kernelStateSource, sandbox);
+  installSessionViewCommit(sandbox);
   vm.runInContext(
     `${sessionViewStateSource}\n`
       + 'globalThis.__read = readCurrentSessionViewState;\n'
@@ -367,6 +371,7 @@ test('runtime status cannot commit after the same runtime is re-entered', async 
   vm.createContext(sandbox);
   sandbox.window = sandbox;
   vm.runInContext(kernelStateSource, sandbox);
+  installSessionViewCommit(sandbox);
   vm.runInContext(
     `${sessionViewStateSource}\n${extractRuntimeStatusSource()}\n`
       + 'globalThis.__capture = captureSessionViewToken;\n'
@@ -586,6 +591,7 @@ test('loadAgentData discards response bodies that finish after a newer switch', 
   vm.createContext(sandbox);
   sandbox.window = sandbox;
   vm.runInContext(kernelStateSource, sandbox);
+  installSessionViewCommit(sandbox);
   vm.runInContext(
     `${sessionViewStateSource}\n${extractLoadAgentDataSource()}\nglobalThis.__loadAgentData = loadAgentData;`,
     sandbox,
@@ -669,6 +675,7 @@ test('loadAgentData refreshes composer metadata after committing the initial ove
   vm.createContext(sandbox);
   sandbox.window = sandbox;
   vm.runInContext(kernelStateSource, sandbox);
+  installSessionViewCommit(sandbox);
   vm.runInContext(`${sessionViewStateSource}\n${extractLoadAgentDataSource()}\nglobalThis.__load = loadAgentData;`, sandbox);
   await sandbox.__load('A');
   assert.deepEqual(renders, ['main', 'initial-model', 'high']);
@@ -698,6 +705,7 @@ test('runtime-aware session projection uses the selected runtime session over st
   vm.createContext(sandbox);
   sandbox.window = sandbox;
   vm.runInContext(kernelStateSource, sandbox);
+  installSessionViewCommit(sandbox);
   vm.runInContext(`${extractRuntimeAwareAgentSource()}\nglobalThis.__record = getRuntimeAwareAgentRecord();`, sandbox);
 
   assert.equal(sandbox.__record.active_workspace_session_id, 'A');

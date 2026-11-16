@@ -28,6 +28,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { installSessionViewCommit } from './helpers/session-view-commit.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const sessionViewStateSource = fs.readFileSync(
@@ -205,6 +206,7 @@ function createSandbox({
   sandbox.window = sandbox;
   const kernelSource = fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
   vm.runInContext(kernelSource, sandbox);
+  installSessionViewCommit(sandbox);
   vm.runInContext(
     `${sessionViewStateSource}\n${overviewDataSource}\n${extractPollSource()}\n`
       + 'globalThis.__poll = poll;',
@@ -467,6 +469,7 @@ test('probe fields are stripped from the snapshot and do not change the signatur
   sandbox.window = sandbox;
   const kernelSource = fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
   vm.runInContext(kernelSource, sandbox);
+  installSessionViewCommit(sandbox);
   vm.runInContext(sessionViewStateSource + '\n' + overviewDataSource, sandbox);
 
   const base = { modelName: 'model-a', updatedAt: 1, context: { messageCount: 3 } };
@@ -502,6 +505,7 @@ test('extractMessagesProbe validates fields and returns null when unusable', () 
   sandbox.window = sandbox;
   const kernelSource = fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
   vm.runInContext(kernelSource, sandbox);
+  installSessionViewCommit(sandbox);
   vm.runInContext(sessionViewStateSource + '\n' + overviewDataSource, sandbox);
 
   const run = (expr) => vm.runInContext(expr, sandbox);

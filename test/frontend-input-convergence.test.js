@@ -1178,14 +1178,17 @@ describe('manual poke protocol is retired (ticket 037)', () => {
     }
   });
 
-  it('applySessionViewPatch auto-triggers on inputRequests writes (source level)', () => {
-    const source = fs.readFileSync('public/src/modules/session-view-state.js', 'utf8');
-    const applyBlock = sourceBetween(
-      source,
-      'function applySessionViewPatch',
-      '\n/**\n * Canonical writer',
-    );
-    assert.match(applyBlock, /notifyInputSurfaceChanged\(currentInputRequests\)/);
+  it('input snapshot writes synchronously declare the exact new input surface', () => {
+    const ctx = createConvergenceSandbox();
+    const observations = [];
+    ctx.notifyInputSurfaceChanged = (requests) => observations.push(requests);
+    const requests = [{ requestId: 'new-input', type: 'choice' }];
+    ctx.applySessionViewPatch({ inputRequests: requests });
+    assert.equal(observations.length, 1);
+    assert.strictEqual(observations[0], requests);
+    assert.strictEqual(ctx.lastInputRequests, requests);
+    ctx.applySessionViewPatch({ messages: [] });
+    assert.equal(observations.length, 1, 'an unrelated patch must not announce another input change');
   });
 
   it('optimistic submit paths keep immediate feedback without poll dependency', () => {

@@ -119,7 +119,7 @@
 
 已确认的首战边界：
 
-- 域 1：`app-main` 顶层 `applyLanguage()` → `renderCurrentMainView()` → 欢迎态 → `getEmptyStateHtml()` 同步调用 `escapeHtml`，这是已确认的启动期依赖。主 boot、poll 和聚合 SSE 等待 auth ready；认证初始化等待 `DOMContentLoaded`，后者等待静态非 async ESM 执行完成，所以这些正常主链不能作为模块前调用的证据。其余工具、共享 `marked.setOptions()` 配置和早期用户事件须按真实入口分别核对；当前保留 classic 实现与原加载顺序，不使用空壳、重试、队列或静默降级。
+- 域 1：`app-main` 顶层 `applyLanguage()` → `renderCurrentMainView()` → 欢迎态 → `getEmptyStateHtml()` 同步调用 `escapeHtml`，因此转义与共享 renderer 配置留在 `markdown-bootstrap.js`，其余渲染实现已迁 ESM。主 boot、poll 和聚合 SSE 等待 auth ready；认证初始化等待 `DOMContentLoaded`，后者等待静态非 async ESM 执行完成。延迟模块浏览器回归覆盖首屏及模块就绪后的真实渲染，不增加队列或静默降级。
 - 域 3：`toast-notify.js` 已转 ESM，保留 `window.ClawToast` 兼容 API，默认及命名导出指向同一对象。主 SSE 的 `hello.choiceAlerts` 受认证链保护；延迟模块浏览器验证覆盖首屏、语言/主题按钮、主 SSE 未提前连接及放行后的选择提醒、更新和关闭。未改变 auth 或 SSE 启动契约，未增加等待队列。
 
 安全状态接管不必等待上述函数初始化问题解决：可变状态在 classic 原声明位置以 `defineKey` 注册原初值，ESM 延后 `claim` 时吸收桥中现值，不能重复初始化。DOM 查询、localStorage 读取、监听安装仍发生在原 classic 时点。原 `const` 的只读语义、全局词法绑定与 window 属性差异须单独审查，不将它们当成可变状态无条件处理。实现与测试验证后按完整状态模块提交，函数迁移残余单列。
@@ -149,7 +149,8 @@
 
 - 调用中断策略：`call-interrupt-state.js` 持有调用时间戳解析、中断登记、抑制判定与解除，四个兼容函数经桥暴露；原 const Map 留在 classic，与侧栏清理共享引用。时间流逝不解除抑制，缺失调用身份保持抑制，只有明确解除或较新调用身份才放行。
 - 侧栏调用状态：`agent-call-states.js` 提供本地/远程存活集、事件应用、轮询去重和状态对账。SSE 管理的本地存活条目不因本轮缺席而清空，远程继续轮询；原网络失败按空载荷对账的语义保持不变。三个外部函数保留桥，记录写入函数只作模块导出，刷新锁与清理 helper 为模块私有。
-- 时间格式化：`time-format.js` 提供绝对日期、相对时间、会话分组及紧凑时间标签；`time-format-host.js` 显式读取实时语言，并为 classic 消费方保留五个兼容函数，内部时段 helper 不上桥。分钟阈值采用经过时间，日期分组采用本地自然日；真实会话行和延迟模块浏览器回归验证语言切换、标题转义与认证启动顺序。修正欢迎态浏览器夹具以加载真实中断策略。桥注册累计由 73 增至 78，claim 由 12 增至 13，未宣称兼容依赖已消除。
+- 时间格式化：`time-format.js` 提供绝对日期、相对时间、会话分组及紧凑时间标签；`time-format-host.js` 显式读取实时语言，并为 classic 消费方保留五个兼容函数，内部时段 helper 不上桥。分钟阈值采用经过时间，日期分组采用本地自然日；真实会话行和延迟模块浏览器回归验证语言切换、标题转义与认证启动顺序。
+- 会话提交：`session-view-commit.js` 提供 token 时效判定、同步事务提交及输入/模型字段的防旧响应策略；宿主显式依赖身份与编排状态，数据加载模块直接 import 提交函数。首屏需要的快照读取、身份规范化与同步 reset 保留 classic，不复制业务实现或增加 ready 等待。五个函数兼容键供 poll、输入和线程等 classic 消费方使用；真实模块回归覆盖 A→B→A 回访、拒绝后无 UI 副作用，以及保留新输入租约的混合提交。
 
 验证覆盖 claim 前写入保留、引用身份、真实请求合并与失败解锁、导航意图失效、真实会话 patch 及隔离浏览器启动。全量回归仍有线程接续 G3 失败，另观察到标注重放与计时预算的间歇失败；不得将当前阶段报告为全量测试通过。
 
@@ -159,10 +160,10 @@
 
 | 范围 | 剩余实现 | 主要依赖 |
 |---|---|---|
-| Markdown | 渲染、分块、表格增强与动作挂载 | `escapeHtml` 的首屏同步调用；共享 renderer 配置与早期事件须保持可用 |
+| Markdown | 首屏转义与共享 renderer 配置 | `escapeHtml` 的首屏同步调用；其余渲染、分块、表格增强与动作已迁 ESM |
 | i18n / 主题 | 翻译、应用语言和主题、按钮更新 | `app-main` 顶层同步初始化；不能直接延后到模块执行相 |
 | DOM 引用 | DOM 查询与布局监听 | 首屏渲染直接使用引用；只转移 owner 不会移走初始化 |
-| 会话视图 | token、patch/commit、规范化、runtime-view 缓存 | `renderCurrentMainView()` 默认参数在首屏同步读取快照；setter 与身份查询依赖须一起明确 |
+| 会话视图 | 同步 token 捕获、快照读取、patch/reset 与规范化 | `renderCurrentMainView()` 默认参数在首屏同步读取快照；异步提交、防旧响应与 runtime-view 缓存已迁 ESM |
 | 身份与列表 | record 解析、上下文键、列表查询和投影、详情加载 | 纯解析与有状态查询分开；列表记录来源和首次调用前置条件须核实 |
 | 渲染入口 | 主视图、面板分发和相关 helper | 语言初始化与导航入口均调用；联合迁移不能改变首屏时点 |
 | 编排 | poll、switch、加载与导航事务 | 依赖前述模块，最后集成 |

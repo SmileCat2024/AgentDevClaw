@@ -45,6 +45,7 @@ try {
     await page.evaluate(async () => {
       await import('/src/modules/markdown-utils.js');
       await import('/src/modules/call-interrupt-host.js');
+      await import('/src/modules/session-view-commit-host.js');
     });
     await page.evaluate(() => {
       currentRuntimeAgentId = 'wakeup-runtime'; focusedAgentId = 'fixture';

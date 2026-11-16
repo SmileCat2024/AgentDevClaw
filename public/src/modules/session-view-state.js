@@ -110,48 +110,6 @@ function captureSessionViewToken(runtimeId = currentRuntimeAgentId, identity = g
   });
 }
 
-function isSessionViewMessagesCurrent(token) {
-  return token?.messagesRevision === _sessionViewMessagesRevision;
-}
-
-function isSessionViewInputRequestsCurrent(token) {
-  return token?.inputRequestsRevision === _sessionViewInputRequestsRevision;
-}
-
-function isSessionViewTokenCurrent(token) {
-  if (!token || _switchEpoch !== token.switchEpoch) return false;
-  // 身份代次守卫：代次不匹配 = 捕获后发生过任何身份变化（含离开又回到
-  // 相同身份的回访），token 一律过期。
-  if (token.generation !== _sessionViewGeneration) return false;
-  const currentIdentity = getCurrentSessionViewIdentity();
-  if (token.identity) {
-    return !!currentIdentity
-      && currentIdentity.agentId === token.identity.agentId
-      && currentIdentity.sessionId === token.identity.sessionId
-      && (token.runtimeId === ''
-        || normalizeSessionViewRuntimeId(currentRuntimeAgentId) === token.runtimeId);
-  }
-  return token.runtimeId !== ''
-    && normalizeSessionViewRuntimeId(currentRuntimeAgentId) === token.runtimeId;
-}
-
-/**
- * Apply one synchronous state/UI transaction if its producer still owns the
- * selected runtime view. Async work must finish before calling this function.
- *
- * @returns {boolean} true when apply() ran, false when the token was stale.
- */
-function commitSessionViewState(token, apply) {
-  if (typeof apply !== 'function') {
-    throw new TypeError('commitSessionViewState requires a synchronous apply function');
-  }
-  if (!isSessionViewTokenCurrent(token)) {
-    return false;
-  }
-  apply();
-  return true;
-}
-
 /**
  * Capture the selected runtime's logical view for one synchronous render.
  *
@@ -284,43 +242,13 @@ function applySessionViewPatch(patch) {
   }
 }
 
-/**
- * Canonical writer for identity-bound loads, polling, cache restoration and
- * surface resets. It deliberately stores no mirror object: existing globals
- * remain compatibility storage while consumers migrate to the read-only view.
- * Input snapshots additionally use the revision captured before I/O: an intervening
- * write drops only inputRequests, preserving other fields and the current view.
- * A true return value means the view transaction ran, not that every field applied.
- */
-function commitSessionViewPatch(token, patch, afterCommit) {
-  if (afterCommit !== undefined && typeof afterCommit !== 'function') {
-    throw new TypeError('session view afterCommit must be a function');
-  }
-  return commitSessionViewState(token, () => {
-    const previous = readCurrentSessionViewState();
-    if (Object.prototype.hasOwnProperty.call(patch, 'inputRequests')
-      && !isSessionViewInputRequestsCurrent(token)) {
-      patch = { ...patch };
-      delete patch.inputRequests;
-    }
-    // 异步生产者的回执和快照共用版本判据；同步 reset / cache restore
-    // 走 applySessionViewPatch，明确替换整个视图，不受旧版本阻挡。
-    const hasModel = Object.prototype.hasOwnProperty.call(patch, 'model');
-    const hasOverview = Object.prototype.hasOwnProperty.call(patch, 'overview');
-    if ((hasModel || hasOverview) && _sessionViewModelRuntimeId === previous.runtimeId) {
-      const incoming = normalizeSessionModelState(hasModel ? patch.model : patch.overview);
-      const current = normalizeSessionModelState(previous.overview);
-      if (current.modelRevision !== null
-        && (incoming.modelRevision === null || incoming.modelRevision < current.modelRevision)) {
-        patch = { ...patch, model: current };
-      }
-    }
-    applySessionViewPatch(patch);
-    if (afterCommit) {
-      afterCommit({
-        previous,
-        current: readCurrentSessionViewState(),
-      });
-    }
-  });
+// Synchronous read/reset remains classic: the first language-driven paint reads
+// it before ESM execution. Async eligibility and field ordering live in ESM.
+function createSessionViewCommitHost() {
+  return {
+    identity: () => getCurrentSessionViewIdentity(),
+    read: () => readCurrentSessionViewState(),
+    apply: (patch) => applySessionViewPatch(patch),
+    normalizeModel: (value) => normalizeSessionModelState(value),
+  };
 }

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { installSessionViewCommit } from './helpers/session-view-commit.js';
 
 const storeSource = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
 // ADR-0026：thread-store 的等待表面调用会话视图提交原语——装载真模块，
@@ -90,6 +91,7 @@ function createHarness() {
   vm.createContext(sandbox);
   const kernelSource = fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
   vm.runInContext(kernelSource, sandbox);
+  installSessionViewCommit(sandbox);
   return sandbox;
 }
 

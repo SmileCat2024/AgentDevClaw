@@ -2585,12 +2585,8 @@
     "behavior": [
       "applySessionViewPatch",
       "captureSessionViewToken",
-      "commitSessionViewPatch",
-      "commitSessionViewState",
+      "createSessionViewCommitHost",
       "getCurrentSessionViewIdentity",
-      "isSessionViewInputRequestsCurrent",
-      "isSessionViewMessagesCurrent",
-      "isSessionViewTokenCurrent",
       "lastInputRequests",
       "normalizeSessionMeta",
       "normalizeSessionMetaCount",

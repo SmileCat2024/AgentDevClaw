@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 
 /** Raw VM contexts install the real kernel with window/global unified. */
@@ -87,6 +88,7 @@ function createCoreContext() {
 ${sessionViewStateSource}
 ${cacheBlock}
 `, context);
+  installSessionViewCommit(context);
   installRuntimeViewCache(context);
   vm.runInContext(`globalThis.__uiContext = {
   getActiveWorkspaceSessionId,

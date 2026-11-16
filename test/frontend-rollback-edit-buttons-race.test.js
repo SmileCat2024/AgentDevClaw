@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { sourceBetween } from './helpers/frontend-vm.js';
@@ -187,6 +188,7 @@ function createChatSandbox() {
   vm.runInContext(load('public/src/modules/kernel-state.js'), sandbox, { filename: 'kernel-state.js' });
   vm.runInContext(load('public/src/modules/action-dispatcher.js'), sandbox, { filename: 'action-dispatcher.js' });
   vm.runInContext(load('public/src/modules/session-view-state.js'), sandbox, { filename: 'session-view-state.js' });
+  installSessionViewCommit(sandbox);
   vm.runInContext(load('public/src/modules/input-helpers.js'), sandbox, { filename: 'input-helpers.js' });
   vm.runInContext(load('public/src/modules/chat-renderer.js'), sandbox, { filename: 'chat-renderer.js' });
   vm.runInContext(POLL_SRC, sandbox, { filename: 'app-main.js#poll' });
