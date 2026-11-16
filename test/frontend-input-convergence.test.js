@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { createCallInterruptState } from '../public/src/modules/call-interrupt-state.js';
 
 // ── Mini DOM：与 frontend-input-composer.test.js 同款最小元素树 ─────────────
 
@@ -775,8 +776,7 @@ function loadWakeupButtonPaths(ctx) {
     function _imageBucket() { return []; }
     function normalizeAgentIdentity(id) { return String(id || '').trim(); }
   `);
-  const core = fs.readFileSync('public/src/app-core.js', 'utf8');
-  ctx.run(core.slice(core.indexOf('function getNotificationCallStartedAt('), core.indexOf('// 追踪刚完成调用')));
+  Object.assign(ctx, createCallInterruptState(ctx.run('_interruptSuppression'), () => ctx.Date.now()));
   ctx.state.now = 1000;
   ctx.Date = class extends Date { static now() { return ctx.state.now; } };
   ctx.window.setInterval = () => 0;

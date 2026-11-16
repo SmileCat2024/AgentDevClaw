@@ -389,42 +389,10 @@ const _interruptSuppression = new Map();
 // ── Polling intervals ──────────────────────────────────────────
 const POLL_INTERVAL_MS   = 1000; // 正常态轮询间隔
 const POLL_FAST_INTERVAL_MS = 300; // 忙碌态/会话切换加速轮询间隔
-function getNotificationCallStartedAt(payload) {
-  const value = payload?.runtime?.callStartedAt ?? payload?.callStartedAt;
-  const timestamp = Number(value);
-  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
-}
-
-function markInterruptPending(runtimeId, callStartedAt = 0) {
-  if (!runtimeId) return;
-  const normalizedCallStartedAt = Number(callStartedAt);
-  _interruptSuppression.set(runtimeId, {
-    requestedAt: Date.now(),
-    callStartedAt: Number.isFinite(normalizedCallStartedAt) && normalizedCallStartedAt > 0
-      ? normalizedCallStartedAt
-      : 0,
-  });
-}
-
-function isInterruptSuppressed(runtimeId, observedCallStartedAt = 0) {
-  if (!runtimeId) return false;
-  const pending = _interruptSuppression.get(runtimeId);
-  if (!pending) return false;
-
-  // A newer call identity is the only `callActive:true` observation allowed to
-  // leave interrupting state. If either side lacks an identity, stay sticky and
-  // wait for the authoritative terminal event instead of guessing by timeout.
-  const interruptedCallStartedAt = Number(pending?.callStartedAt);
-  const observed = Number(observedCallStartedAt);
-  if (Number.isFinite(interruptedCallStartedAt) && interruptedCallStartedAt > 0
-    && Number.isFinite(observed) && observed > interruptedCallStartedAt) {
-    _interruptSuppression.delete(runtimeId);
-    return false;
-  }
-  return true;
-}
-function clearInterruptSuppression(runtimeId) {
-  if (runtimeId) _interruptSuppression.delete(runtimeId);
+// Keep the original const Map available to classic sidebar pruning. The ESM
+// policy receives the same reference, so pruning and notification reads agree.
+function createCallInterruptHost() {
+  return { pending: _interruptSuppression, now: () => Date.now() };
 }
 // 追踪刚完成调用的 runtimeId，用于在侧边栏显示"已完成"指示灯
 const _recentlyFinishedRuntimes = new Set();

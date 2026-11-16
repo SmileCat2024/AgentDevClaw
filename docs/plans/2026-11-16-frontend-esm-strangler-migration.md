@@ -147,6 +147,8 @@
 - Agent 数据加载：`agent-loader.js` 持有模板/详情请求与载荷缓存，`agent-loader-host.js` 显式依赖已迁状态模块并适配剩余 classic 函数。原 `loadedAgentDetailIds` 的只读引用留在 classic，窄宿主面 `AgentLoaderHost` 只提供该 Set。新增六个兼容键（模板映射与五个函数），不新增启动等待；真实会话提交、失败重试和延迟模块认证顺序已有回归。
 - 运行时视图缓存：`runtime-view-cache.js` 持有保存、同步恢复与失效策略，`runtime-view-cache-host.js` 通过 classic 适配器访问尚未迁移的折叠/视口状态。保留原 const Map 引用与容量、会话键身份、先恢复跟随模式再提交内容，以及淘汰时联动释放非活跃上下文的语义。新增三个函数兼容键，私有 helper 不上桥；`kernel-entry.js` 汇合加载实现入口，不增加 HTML 脚本总数。
 
+- 调用中断策略：`call-interrupt-state.js` 持有调用时间戳解析、中断登记、抑制判定与解除，四个兼容函数经桥暴露；原 const Map 留在 classic，与侧栏清理共享引用。时间流逝不解除抑制，缺失调用身份保持抑制，只有明确解除或较新调用身份才放行。
+
 验证覆盖 claim 前写入保留、引用身份、真实请求合并与失败解锁、导航意图失效、真实会话 patch 及隔离浏览器启动。全量回归仍有线程接续 G3 失败，另观察到标注重放与计时预算的间歇失败；不得将当前阶段报告为全量测试通过。
 
 #### P1 剩余实现与收敛依赖

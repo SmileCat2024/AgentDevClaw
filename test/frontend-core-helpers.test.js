@@ -9,6 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { getRuntimeCacheTodoPlanSignature } from '../public/src/modules/runtime-view-cache.js';
+import { installCallInterruptState } from './helpers/call-interrupt.js';
 
 /**
  * Helper: create a sandbox with app-core.js loaded.
@@ -19,6 +20,7 @@ function createCoreSandbox(overrides = {}) {
   const ctx = createFrontendSandbox();
   ctx.getCurrentAgentRecord = () => null;
   ctx.loadSource('public/src/app-core.js');
+  installCallInterruptState(ctx);
   // Apply overrides AFTER loading source.
   // `let`/`const` in VM don't become context properties, so use runInContext.
   for (const [key, value] of Object.entries(overrides)) {
@@ -367,6 +369,7 @@ function createRuntimeStatusSandbox() {
     notifyInputSurfaceChanged() {},
   });
   ctx.loadSource('public/src/app-core.js');
+  installCallInterruptState(ctx);
   ctx.loadSource('public/src/modules/session-view-state.js');
   ctx.run(`
     currentRuntimeAgentId = "runtime-1";
