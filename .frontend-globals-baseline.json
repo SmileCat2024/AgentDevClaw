@@ -209,7 +209,7 @@
       "applyOptimisticWorkspaceSession",
       "clearSessionLoading",
       "computeSerializedBytes",
-      "createCompactedResumeSession",
+      "createCompactResumeHost",
       "createMessageProbeHost",
       "createMetadataCommitHost",
       "createPollCoordinatorHost",

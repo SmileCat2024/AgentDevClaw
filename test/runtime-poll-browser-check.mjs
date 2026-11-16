@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 const main = await fs.readFile('public/src/app-main.js', 'utf8');
+const compactHost = main.slice(main.indexOf('function createCompactResumeHost()'), main.indexOf('// PH session list helpers'));
 const entryHost = main.slice(main.indexOf('function createWorkspaceEntryHost()'), main.indexOf('function applyOptimisticWorkspaceSession'));
 const navigationHost = main.slice(main.indexOf('function createWorkspaceSessionNavigationHost()'), main.indexOf('// ── Docset & material actions'));
 const switchHost = main.slice(main.indexOf('function createRuntimeSwitchHost()'), main.indexOf('// ── Context menu action handlers'));
@@ -28,6 +29,7 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/sidebar-render.js"></script>
 <script>
+  ${compactHost}
   ${entryHost}
   ${navigationHost}
   ${switchHost}
@@ -56,6 +58,7 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 </body>`)));
 app.get('/protoclaw/auth/status', (_req, res) => res.json({ enabled: false, authenticated: true }));
 app.get('/protoclaw/agent_detail', (_req, res) => res.json({ workspace_sessions: { sessions: [] } }));
+app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), (req, res) => res.json({ sessionId: 'compacted', request: req.body }));
 app.post('/protoclaw/prebuilt_sessions/activate', (_req, res) => res.status(409).json({
   code: 'thread_handoff_in_progress', threadId: 'handoff-thread', headSessionId: 'handoff-session',
 }));
@@ -157,8 +160,21 @@ try {
   });
   assert.deepEqual(entry, { surfaces: [{ id: 'next', skipFeaturePanel: true }], remembered: 'next',
     handoff: { threadId: 'handoff-thread', sessionId: 'handoff-session' } });
+  const compacted = await page.evaluate(async () => {
+    window.createSidebarOperationId = () => 'compact-op';
+    window.sidebarDiagnosticNow = () => performance.now();
+    window.beginSidebarOperationMainThreadObservation = () => () => {};
+    window.recordSidebarOperationCheckpoint = () => {};
+    window.newIdempotencyKey = () => 'compact-key';
+    window.isRemoteNamespaceAgentId = () => false;
+    return createCompactedResumeSession('next', 'source', 'trim', 2, null, null, { reason: 'trim', archiveOriginal: true });
+  });
+  assert.equal(compacted.sessionId, 'compacted');
+  assert.equal(compacted.request.agentId, 'next');
+  assert.equal(compacted.request.archiveOriginal, true);
+  assert.deepEqual(compacted.request.policy, { strategy: 'trim', keepRecentTurns: 2 });
   assert.deepEqual(errors, []);
-  console.log('PASS: production kernel preserves handoff views, workspace navigation, entry opening and deferred switch guards');
+  console.log('PASS: production kernel preserves handoff views, workspace navigation, session requests and deferred switch guards');
 } finally {
   release();
   if (browser) await browser.close();

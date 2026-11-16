@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createCompactResume } from '../public/src/modules/compact-resume.js';
 
 const sessionRoutes = fs.readFileSync(new URL('../server/routes/session.js', import.meta.url), 'utf8');
 const appMain = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
@@ -74,14 +75,20 @@ describe('archive-and-replace contract', () => {
     assert.doesNotMatch(appMain, /compact-summary-resume/);
   });
 
-  it('correlates compact response timing on both sides of JSON parsing', () => {
-    const start = appMain.indexOf('async function createCompactedResumeSession');
-    const end = appMain.indexOf('// PH session list helpers', start);
-    const compactClient = appMain.slice(start, end);
-    assert.match(compactClient, /recordSidebarOperationCheckpoint\(operationId, 'request_dispatched'\)/);
-    assert.match(compactClient, /recordSidebarOperationCheckpoint\(operationId, 'response_headers_received'/);
-    assert.match(compactClient, /recordSidebarOperationCheckpoint\(operationId, 'response_body_parsed'/);
-    assert.match(compactClient, /beginSidebarOperationMainThreadObservation\(operationId\)/);
+  it('correlates compact response timing on both sides of JSON parsing', async () => {
+    const events = [];
+    let clock = 0;
+    const { createCompactedResumeSession } = createCompactResume({
+      isRemote: () => false, createOperationId: () => 'compact-op', now: () => clock,
+      observe: id => { events.push(['observe', id]); return () => events.push(['stop']); },
+      checkpoint: (id, phase, fields) => events.push([id, phase, fields]), idempotencyKey: () => 'key',
+      fetch: async () => { clock = 10; return { ok: true, headers: { get: () => '42' },
+        json: async () => { clock = 15; return {}; } }; }, refreshThreads: () => {},
+    });
+    await createCompactedResumeSession('host', 'session');
+    assert.deepEqual(events, [['observe', 'compact-op'], ['compact-op', 'request_dispatched', undefined],
+      ['compact-op', 'response_headers_received', { requestWaitMs: 10, responseBytes: 42 }],
+      ['compact-op', 'response_body_parsed', { bodyParseMs: 5, responseBytes: 42 }], ['stop']]);
   });
 
   it('uses delta responses and starts the replacement runtime for active delete/archive mutations', () => {

@@ -329,77 +329,18 @@ function newIdempotencyKey() {
   return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section', keepRecentTurns = null, fullPreserveFromTurn = null, extraPolicy = null, options = {}) {
-  const currentAgent = getCurrentAgentRecord();
-  const activeSessionId = String(getActiveSessionId(currentAgent) || '').trim();
-  const runtimeAgentId = getRuntimeId(currentRuntimeAgentId) || getRuntimeId(currentAgent) || '';
-  const policy = strategy ? { strategy } : {};
-  if (keepRecentTurns != null && keepRecentTurns >= 1) {
-    policy.keepRecentTurns = keepRecentTurns;
-  }
-  if (fullPreserveFromTurn != null && fullPreserveFromTurn >= 0) {
-    policy.fullPreserveFromTurn = fullPreserveFromTurn;
-  }
-  if (extraPolicy && typeof extraPolicy === 'object') {
-    Object.assign(policy, extraPolicy);
-  }
-  // R2-02（ADR-0011）：远程会话的写提交收敛 host 级命名空间 id（数据层身份）；
-  // sessionId 保持命名空间形态由服务端命名空间分支剥壳转发。本地身份原样。
-  const isRemoteTarget = typeof isRemoteNamespaceAgentId === 'function'
-    && (isRemoteNamespaceAgentId(sessionId) || isRemoteNamespaceAgentId(agentId));
-  const requestAgentId = isRemoteTarget
-    ? (window.RemoteConnections?.getHostNamespaceIdForSession?.(sessionId, agentId) || agentId)
-    : agentId;
-  const operationId = options.operationId || createSidebarOperationId(options.reason === 'trim' ? 'trim' : 'summary');
-  const requestStartedAt = sidebarDiagnosticNow();
-  const stopMainThreadObservation = beginSidebarOperationMainThreadObservation(operationId);
-  recordSidebarOperationCheckpoint(operationId, 'request_dispatched');
-  try {
-    const resumeResponse = await fetch('/protoclaw/context_handoffs/compact_and_resume', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
-      body: JSON.stringify({
-        agentId: requestAgentId,
-        sessionId,
-        detached: false,
-        policy,
-        ...(options.archiveOriginal ? { archiveOriginal: true } : {}),
-        ...(options.reason ? { reason: options.reason } : {}),
-        ...(options.trimCutRounds != null ? { trimCutRounds: options.trimCutRounds } : {}),
-        ...(options.appendSummary ? { appendSummary: true } : {}),
-        operationId,
-        responseMode: 'delta',
-      }),
-    });
-    const headersReceivedAt = sidebarDiagnosticNow();
-    const responseBytes = Number(resumeResponse.headers?.get?.('content-length')) || 0;
-    recordSidebarOperationCheckpoint(operationId, 'response_headers_received', {
-      requestWaitMs: headersReceivedAt - requestStartedAt,
-      responseBytes,
-    });
-    if (!resumeResponse.ok) {
-      throw new Error(await resumeResponse.text().catch(() => 'compacted resume failed'));
-    }
-
-    const result = await resumeResponse.json();
-    // 远程目标：响应中的裸会话 id 在数据入口命名空间化（ADR-0012），新会话
-    // 以命名空间 id 进入既有列表刷新链，呈现层无远程分支。
-    const namespacedResult = isRemoteTarget
-      ? (window.RemoteConnections?.namespaceMutationResult?.(sessionId, result) || result)
-      : result;
-    recordSidebarOperationCheckpoint(operationId, 'response_body_parsed', {
-      bodyParseMs: sidebarDiagnosticNow() - headersReceivedAt,
-      responseBytes,
-    });
-    // 线程宿主（coder）：compact 接力在服务端响应前已完成 head 推进，
-    // 强制刷新线程状态，使导航落地时徽标/承接指示器立即就位。
-    if (typeof window.refreshThreads === 'function') {
-      window.refreshThreads(true).catch(() => {});
-    }
-    return namespacedResult;
-  } finally {
-    stopMainThreadObservation();
-  }
+function createCompactResumeHost() {
+  return {
+    isRemote: (id) => typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(id),
+    remote: () => window.RemoteConnections,
+    createOperationId: (reason) => createSidebarOperationId(reason),
+    now: () => sidebarDiagnosticNow(),
+    observe: (id) => beginSidebarOperationMainThreadObservation(id),
+    checkpoint: (...args) => recordSidebarOperationCheckpoint(...args),
+    fetch: (...args) => fetch(...args),
+    idempotencyKey: () => newIdempotencyKey(),
+    refreshThreads: () => { if (typeof window.refreshThreads === 'function') window.refreshThreads(true).catch(() => {}); },
+  };
 }
 
 
