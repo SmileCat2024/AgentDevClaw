@@ -15,11 +15,15 @@ const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.m
 const mainSourceTop = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 
 function extractHostResolverSource() {
-  const start = mainSourceTop.indexOf('function normalizeAgentIdentity');
+  const normalizeStart = coreSource.indexOf('function normalizeAgentIdentity');
+  const normalizeEnd = coreSource.indexOf('// Feature 模板映射', normalizeStart);
+  const start = mainSourceTop.indexOf('function getCurrentSessionHostAgentId()');
   const end = mainSourceTop.indexOf('function getCurrentRuntimeRecord()', start);
+  assert.notEqual(normalizeStart, -1, 'identity normalizer should exist in app-core');
+  assert.notEqual(normalizeEnd, -1, 'identity normalizer end marker should exist');
   assert.notEqual(start, -1, 'host resolver should exist');
   assert.notEqual(end, -1, 'host resolver end marker should exist');
-  return mainSourceTop.slice(start, end);
+  return coreSource.slice(normalizeStart, normalizeEnd) + '\n' + mainSourceTop.slice(start, end);
 }
 
 function extractBindingSource() {

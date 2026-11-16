@@ -167,7 +167,8 @@ describe('summarized-handoff pure functions', () => {
     it('sets strategy and summaryShape', () => {
       const policy = normalizeSummaryPolicy({});
       assert.equal(policy.strategy, 'summarized-nine-section');
-      assert.equal(policy.summaryShape, 'claude-nine-section-v1');
+      // 框架 SummaryTransformation 的九段摘要协议已升级至 v2。
+      assert.equal(policy.summaryShape, 'claude-nine-section-v2');
     });
 
     it('cleans additionalInstructions with cleanMultilineText', () => {

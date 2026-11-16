@@ -12,7 +12,7 @@
  * requires resolveRuntimeRef to actually hit (truthy) before the fallback
  * comparison.
  *
- * Loads the real normalizeAgentIdentity and isRuntimeItemActive sources from
+ * Loads normalizeAgentIdentity from app-core.js and isRuntimeItemActive from
  * app-main.js into a vm sandbox, mirroring the harness style of
  * frontend-chat-scroll-restore.test.js.
  */
@@ -22,6 +22,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
+const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
@@ -39,9 +40,9 @@ function createHarness({
   getActiveThreadInputTarget = null,
 } = {}) {
   const normalizeSource = sourceBetween(
-    mainSource,
+    coreSource,
     'function normalizeAgentIdentity(value) {',
-    'function getCurrentHostAgentRecord',
+    '// Feature 模板映射',
   );
   const activeSource = sourceBetween(
     mainSource,
