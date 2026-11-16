@@ -504,70 +504,38 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
  *   runWorkspaceAction instead of { type: 'open_session', sessionId }.
  *   Used by navigateToSessionRecord which needs { type: 'view_session_record', ... }.
  */
-window.navigateToWorkspaceSession = async (agentId, sessionId, options = {}) => {
-  if (!agentId) return;
-  bumpNavigationGuard();
-  const _navGuard = _navigationGuardEpoch;
-  const actionOverride = options.actionOverride || null;
-
-  // Build the action to execute after workspace switch.
-  const action = actionOverride
-    || (sessionId ? { type: 'open_session', sessionId } : null);
-
-  // Already in the target workspace — delegate directly to runWorkspaceAction.
-  if (focusedAgentId === agentId) {
-    if (action) {
-      await window.runWorkspaceAction(JSON.stringify(action));
-    }
-    return;
-  }
-
-  const prebuiltAgent = allAgents.find((agent) => agent.id === agentId && agent.source === 'prebuilt');
-  if (!prebuiltAgent) return;
-
-  // Step 1: synchronously switch the sidebar highlight + show loading placeholder.
-  // This mirrors what handlePrebuiltAgentClick does for workspace host units,
-  // but WITHOUT calling selectWorkspaceSurface (which would render the workspace
-  // home page unnecessarily).
-  if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
-    saveCurrentWorkspaceSurfaceScroll();
-  }
-  if (currentRuntimeAgentId && !readOnlyMode) {
-    saveCurrentRuntimeToCache(currentRuntimeAgentId, getRuntimeContextKey(currentRuntimeAgentId));
-  }
-
-  focusedAgentId = agentId;
-  currentRuntimeAgentId = null;
-  applySessionViewPatch({ identity: { agentId, sessionId: '' } });
-  readOnlyMode = false;
-  currentWorkspaceArtifactDetail = null;
-  currentWorkspaceDocsetDetail = null;
-  currentProjectDocsetOpen = false;
-  currentProjectRequirementEdit = null;
-  currentWorkspaceTab = 'chat';
-  _lastRenderedChatSig = '';
-  resetRuntimeBackedSurfaceState();
-  renderAgentList();
-
-  // Show a loading placeholder in the main area so the user sees immediate feedback.
-  container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
-
-  // Step 2: load agent detail (sessions list, workspace config, etc.) if not cached.
-  await window.loadAgentDetail(agentId);
-
-  // Guard: user may have navigated away during loadAgentDetail.
-  if (_navGuard !== _navigationGuardEpoch) return;
-
-  // Step 3: delegate to runWorkspaceAction which handles session activation,
-  // optimistic render, runtime switch, and polling — all in one flow.
-  if (action) {
-    await window.runWorkspaceAction(JSON.stringify(action));
-  } else {
-    // No specific session requested — just render the workspace surface.
-    setPreferredUnitMode('home', prebuiltAgent);
-    renderCurrentMainView();
-  }
-};
+function createWorkspaceSessionNavigationHost() {
+  return {
+    bumpNavigationGuard: () => bumpNavigationGuard(),
+    navigationEpoch: () => _navigationGuardEpoch,
+    focusedAgentId: () => focusedAgentId,
+    runtimeId: () => currentRuntimeAgentId,
+    readOnlyMode: () => readOnlyMode,
+    findWorkspace: (id) => allAgents.find((agent) => agent.id === id && agent.source === 'prebuilt'),
+    saveWorkspaceScroll: () => { if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') saveCurrentWorkspaceSurfaceScroll(); },
+    saveCache: (id, key) => saveCurrentRuntimeToCache(id, key),
+    contextKey: (id) => getRuntimeContextKey(id),
+    selectLoading: (agentId) => {
+      focusedAgentId = agentId;
+      currentRuntimeAgentId = null;
+      applySessionViewPatch({ identity: { agentId, sessionId: '' } });
+      readOnlyMode = false;
+      currentWorkspaceArtifactDetail = null;
+      currentWorkspaceDocsetDetail = null;
+      currentProjectDocsetOpen = false;
+      currentProjectRequirementEdit = null;
+      currentWorkspaceTab = 'chat';
+      _lastRenderedChatSig = '';
+      resetRuntimeBackedSurfaceState();
+      renderAgentList();
+      container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
+    },
+    loadDetail: (id) => window.loadAgentDetail(id),
+    runAction: (action) => window.runWorkspaceAction(action),
+    preferHome: (agent) => setPreferredUnitMode('home', agent),
+    render: () => renderCurrentMainView(),
+  };
+}
 
 // ── Docset & material actions → modules/workspace-docset.js ──
 

@@ -5,14 +5,18 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 const main = await fs.readFile('public/src/app-main.js', 'utf8');
+const navigationHost = main.slice(main.indexOf('function createWorkspaceSessionNavigationHost()'), main.indexOf('// ── Docset & material actions'));
 const switchHost = main.slice(main.indexOf('function createRuntimeSwitchHost()'), main.indexOf('// ── Context menu action handlers'));
 const pollSource = main.slice(main.indexOf('// ── Runtime poll coordinator'), main.indexOf('// ── Input request rendering'));
 const index = await fs.readFile('public/index.html', 'utf8');
 const body = index.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link\b[^>]*>/g, '');
 const app = express();
+app.use('/vendor/marked', express.static('node_modules/marked'));
 app.use(express.static('public'));
 app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>', `
 <script src="/src/modules/kernel-state.js"></script>
+<script src="/vendor/marked/lib/marked.umd.js"></script>
+<script src="/src/modules/markdown-bootstrap.js"></script>
 <script src="/src/app-core.js"></script>
 <script src="/src/modules/action-dispatcher.js"></script>
 <script src="/src/modules/overview-data.js"></script>
@@ -23,6 +27,7 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/sidebar-render.js"></script>
 <script>
+  ${navigationHost}
   ${switchHost}
   ${pollSource}
  currentRuntimeAgentId = 'rt'; focusedAgentId = 'host'; allAgents = [];
@@ -48,6 +53,7 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script>(async () => { await __clawAuthReady; window.started = true; await runPollCycle(); window.lightDone = true; })();</script>
 </body>`)));
 app.get('/protoclaw/auth/status', (_req, res) => res.json({ enabled: false, authenticated: true }));
+app.get('/protoclaw/agent_detail', (_req, res) => res.json({ workspace_sessions: { sessions: [] } }));
 const requests = [];
 app.get('/api/agents/rt/:endpoint', (req, res) => {
   requests.push(req.params.endpoint);
@@ -114,8 +120,30 @@ try {
   });
   assert.deepEqual(navigation, { selected: [{ id: 'coder', awaitSession: 'next' }],
     pending: { switched: false, reason: 'nav-guard-stale' } });
+  const crossWorkspace = await page.evaluate(async () => {
+    const actions = [];
+    window.runWorkspaceAction = async action => actions.push(JSON.parse(action));
+    await navigateToWorkspaceSession('host', 'archive', { actionOverride: { type: 'view_session_record', sessionId: 'archive' } });
+    return actions;
+  });
+  assert.deepEqual(crossWorkspace, [{ type: 'view_session_record', sessionId: 'archive' }]);
+  const navigated = await page.evaluate(async () => {
+    const actions = [];
+    allAgents = [{ id: 'next', source: 'prebuilt' }];
+    window.runWorkspaceAction = async raw => actions.push({ action: JSON.parse(raw), focus: focusedAgentId,
+      runtime: currentRuntimeAgentId, body: container.textContent });
+    window.resetRuntimeBackedSurfaceState = window.renderAgentList = () => {};
+    currentRuntimeAgentId = null;
+    await navigateToWorkspaceSession('next', 'selected-session');
+    return actions;
+  });
+  assert.equal(navigated.length, 1);
+  assert.deepEqual(navigated[0].action, { type: 'open_session', sessionId: 'selected-session' });
+  assert.equal(navigated[0].focus, 'next');
+  assert.equal(navigated[0].runtime, null);
+  assert.match(navigated[0].body, /加载中|Loading/);
   assert.deepEqual(errors, []);
-  console.log('PASS: production kernel preserves handoff views, workspace waiting navigation and deferred switch guards');
+  console.log('PASS: production kernel preserves handoff views, workspace navigation and deferred switch guards');
 } finally {
   release();
   if (browser) await browser.close();
