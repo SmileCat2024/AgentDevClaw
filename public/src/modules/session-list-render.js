@@ -949,7 +949,12 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '<div class="ph-session-tab-panels">';
     sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? renderPhSessionsWithGroups(mainSessions, 'main') + loadMoreBtnHtml : mainEmptyNote) + '</div></div>';
     sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="archived"><div class="feature-project-session-list">' + (archivedSessions.length > 0 ? renderPhSessionsWithGroups(archivedSessions, 'archived') + loadMoreBtnHtml : archivedEmptyNote + (hasMore ? loadMoreBtnHtml : '')) + '</div></div>';
-    sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="topics"><div class="ph-topic-panel" data-topic-agent-id="' + escapeHtml(agent.id) + '" data-topic-project-id="' + escapeHtml(searchIdentity.projectId) + '" data-topic-directory="' + escapeHtml(searchIdentity.openDirectory) + '"><div class="ph-topic-status">' + escapeHtml(isZh ? '切换到 Topics 后加载' : 'Switch to Topics to load') + '</div></div></div>';
+    // 面板初始内容按 topic 状态键取（未加载占位/在途加载中/已加载缓存卡片）：
+    // 工作区 innerHTML 重建（轮询、切回）不会把已加载的数据闪回占位文案。
+    const topicPanelInner = typeof window.phTopicPanelInnerHtml === 'function'
+      ? window.phTopicPanelInnerHtml(agent.id, searchIdentity.projectId, searchIdentity.openDirectory)
+      : '<div class="ph-topic-status">' + escapeHtml(isZh ? '切换到 Topics 后加载' : 'Switch to Topics to load') + '</div>';
+    sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="topics"><div class="ph-topic-panel" data-topic-agent-id="' + escapeHtml(agent.id) + '" data-topic-project-id="' + escapeHtml(searchIdentity.projectId) + '" data-topic-directory="' + escapeHtml(searchIdentity.openDirectory) + '">' + topicPanelInner + '</div></div>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-search-panel">';
     sessionsHtml += (typeof window._buildPhSearchPanelHtml === 'function' ? window._buildPhSearchPanelHtml(searchIdentity) : '');

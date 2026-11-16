@@ -30,12 +30,17 @@
 window.ClawFW = window.ClawFW || {};
 window.ClawFW.phTopicGroups = window.ClawFW.phTopicGroups || new Map();
 
-function _phTopicKey(panel) {
-  return [panel?.dataset.topicAgentId || '', panel?.dataset.topicProjectId || '', panel?.dataset.topicDirectory || ''].join('|');
+function _phTopicKeyFromAttrs(agentId, projectId, directory) {
+  return [agentId || '', projectId || '', directory || ''].join('|');
 }
 
-function _phTopicState(panel) {
-  const key = _phTopicKey(panel);
+function _phTopicKey(panel) {
+  return _phTopicKeyFromAttrs(panel?.dataset?.topicAgentId, panel?.dataset?.topicProjectId, panel?.dataset?.topicDirectory);
+}
+
+/** 状态按「agent|project|directory」身份键共享（跨面板元素）：面板元素随工作区
+ *  innerHTML 重建会被整体替换，状态若挂在元素上则每次重建都清零、缓存失效。 */
+function _phTopicStateByKey(key) {
   let state = window.ClawFW.phTopicGroups.get(key);
   if (!state) {
     state = { key, loading: false, loaded: false, error: false, groups: [] };
@@ -44,11 +49,18 @@ function _phTopicState(panel) {
   return state;
 }
 
-function _phTopicHtml(panel) {
-  const state = _phTopicState(panel);
+function _phTopicState(panel) {
+  return _phTopicStateByKey(_phTopicKey(panel));
+}
+
+function _phTopicHtmlByKey(key) {
+  const state = _phTopicStateByKey(key);
   const isZh = currentLanguage === 'zh';
   if (state.loading && !state.loaded) return '<div class="ph-topic-status">' + escapeHtml(isZh ? '正在加载 Topic…' : 'Loading topics…') + '</div>';
   if (state.error) return '<div class="ph-topic-status ph-topic-error">' + escapeHtml(isZh ? 'Topic 加载失败，请稍后重试' : 'Failed to load topics. Try again later.') + '</div>';
+  // 未触发过加载（模板首渲染、懒加载尚未挂上）才是「切换后加载」；
+  // 已加载且为空才是「暂无主题」——两者不能混用。
+  if (!state.loaded) return '<div class="ph-topic-status">' + escapeHtml(isZh ? '切换到 Topics 后加载' : 'Switch to Topics to load') + '</div>';
   if (!state.groups.length) return '<div class="ph-topic-status">' + escapeHtml(isZh ? '暂无关联主题' : 'No related topics yet') + '</div>';
   return '<div class="ph-topic-list">' + state.groups.map((group) => {
     // 卡片主体是主题 + 简介（server 已合并自定义标注与会话标题回退）；
@@ -74,13 +86,28 @@ function _phTopicHtml(panel) {
   }).join('') + '</div>';
 }
 
+/** 把某身份键的状态渲染进「当前挂在 DOM 里」的面板。
+ * 面板元素不能作为渲染目标被捕获跨 await 使用：切回工作空间时加载在途、
+ * 会话数据到达触发工作区 innerHTML 重建，捕获的旧面板已被替换，数据写进
+ * 脱离 DOM 的元素，新面板停在占位文案（真实缺陷：回放加载「未修复」）。 */
+function _phTopicRenderKey(key) {
+  document.querySelectorAll('.ph-topic-panel').forEach((el) => {
+    if (_phTopicKey(el) === key) el.innerHTML = _phTopicHtmlByKey(key);
+  });
+}
+
+/** 模板首渲染取面板初始内容（session-list-render.js）：未加载占位 / 在途加载中 /
+ * 已加载直接呈现缓存卡片（工作区轮询重渲染不再闪占位）。 */
+window.phTopicPanelInnerHtml = (agentId, projectId, directory) =>
+  _phTopicHtmlByKey(_phTopicKeyFromAttrs(agentId, projectId, directory));
+
 async function _loadPhTopicGroups(panel) {
   if (!panel) return;
   const state = _phTopicState(panel);
   if (state.loading) return;
   state.loading = true;
   state.error = false;
-  panel.innerHTML = _phTopicHtml(panel);
+  _phTopicRenderKey(state.key);
   try {
     const params = new URLSearchParams({ agentId: panel.dataset.topicAgentId || 'programming-helper' });
     if (panel.dataset.topicProjectId) params.set('projectId', panel.dataset.topicProjectId);
@@ -94,7 +121,7 @@ async function _loadPhTopicGroups(panel) {
     state.error = true;
   } finally {
     state.loading = false;
-    panel.innerHTML = _phTopicHtml(panel);
+    _phTopicRenderKey(state.key);
   }
 }
 

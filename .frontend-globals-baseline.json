@@ -2154,9 +2154,12 @@
       "_phSearchSnippetHtml",
       "_phSearchStateMatches",
       "_phSortToggleHtml",
-      "_phTopicHtml",
+      "_phTopicHtmlByKey",
       "_phTopicKey",
+      "_phTopicKeyFromAttrs",
+      "_phTopicRenderKey",
       "_phTopicState",
+      "_phTopicStateByKey",
       "_updatePhSearchPanelDom",
       "applyPhSessionTabDom",
       "ensurePhTopicGroups",
@@ -2171,6 +2174,7 @@
       "phShowSessionCtxMenu",
       "phToggleSearchSort",
       "phToggleSessionSort",
+      "phTopicPanelInnerHtml",
       "switchPhSessionTab"
     ]
   },
