@@ -1216,94 +1216,65 @@ function renderMessageProbeCommit({ previous, current }) {
   }
 }
 
-/**
- * todo / overview / input-requests 的签名对比 + 单事务提交（§5.6：事件路径
- * 与 poll 路径共用同一消费实现）。三个维度均可选：poll 传全量，事件只传
- * 到达的 kind（其余维度不进入 patch）。
- * @returns {boolean} commit 是否成立
- */
-function commitMetadataUpdate(pollToken, { todoRaw, overviewJson, inputRequestsRaw } = {}) {
-  const hasTodo = todoRaw !== undefined;
-  const hasOverview = overviewJson !== undefined;
-  const hasInput = inputRequestsRaw !== undefined && isSessionViewInputRequestsCurrent(pollToken);
-  const nextOverview = hasOverview ? normalizeOverviewSnapshot(overviewJson) : null;
-  const nextOverviewSignature = hasOverview ? getOverviewSignature(nextOverview) : null;
-  const nextTodoPlan = hasTodo ? (todoRaw === null ? null : normalizeTodoPlan(todoRaw)) : null;
-  const nextTodoSignature = nextTodoPlan === null ? null : getTodoPlanSignature(nextTodoPlan);
-  const inputRequests = hasInput ? (Array.isArray(inputRequestsRaw) ? inputRequestsRaw : []) : null;
-  const overviewChanged = hasOverview && nextOverviewSignature !== currentOverviewSignature;
-  const todoChanged = nextTodoPlan !== null && nextTodoSignature !== currentTodoPlanSignature;
-  const inputChanged = inputRequests !== null && JSON.stringify(inputRequests) !== JSON.stringify(currentInputRequests || []);
-  const metadataPatch = {};
-  if (overviewChanged) metadataPatch.overview = nextOverview;
-  if (todoChanged) metadataPatch.todoPlan = nextTodoPlan;
-  // 未变的事件也提交观察版本，防止在途旧响应复活已消费的 lease。
-  if (hasInput) metadataPatch.inputRequests = inputRequests;
-  return commitSessionViewPatch(pollToken, metadataPatch, ({ current }) => {
+// Remaining classic normalization and UI dependencies for ESM metadata commits.
+function createMetadataCommitHost() {
+  return {
+    inputCurrent: (token) => isSessionViewInputRequestsCurrent(token),
+    commit: (token, patch, effect) => commitSessionViewPatch(token, patch, effect),
+    normalizeOverview: (value) => normalizeOverviewSnapshot(value),
+    overviewSignature: (value) => getOverviewSignature(value),
+    normalizeTodo: (value) => normalizeTodoPlan(value),
+    todoSignature: (value) => getTodoPlanSignature(value),
+    currentOverviewSignature: () => currentOverviewSignature,
+    currentTodoSignature: () => currentTodoPlanSignature,
+    inputRequests: () => currentInputRequests,
+    interruptTarget: () => getInterruptTargetId(),
+    setInterruptTarget: (value) => setInterruptTargetId(value),
+    now: () => Date.now(),
+    lastInterruptAction: () => _lastInterruptUserActionAt,
+    render: renderMetadataCommit,
+  };
+}
 
-    // 当目标任务进入终态时，自动清除中断标记
-    let interruptCleared = false;
-    let interruptSynced = false;
-    if (nextTodoPlan !== null) {
-      const currentInterruptTarget = getInterruptTargetId();
-      if (currentInterruptTarget) {
-        const target = nextTodoPlan.tasks.find(tk => tk.id === currentInterruptTarget);
-        if (target && (target.status === 'completed' || target.status === 'deleted')) {
-          setInterruptTargetId(null);
-          interruptCleared = true;
-        }
-      }
-
-      // 从 server 同步 interruptTargetId 到本地缓存。
-      // 仅在用户最近未手动操作时同步（避免覆盖乐观更新）。
-      const userActionGraceExpired = (Date.now() - _lastInterruptUserActionAt) > 3000;
-      if (userActionGraceExpired) {
-        const serverTarget = nextTodoPlan.interruptTargetId || null;
-        if (serverTarget !== currentInterruptTarget) {
-          setInterruptTargetId(serverTarget);
-          interruptSynced = true;
-        }
-      }
-    }
-
-    // All logical values are assigned before any renderer observes them.
-    if (overviewChanged) {
-      if (activeFeaturePanel === 'workspace') {
-        renderFeaturePanel();
-      }
-      if (typeof updateChatContextBar === 'function') {
-        updateChatContextBar(current);
-      }
-      if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
-      if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
-    }
-    if (todoChanged) {
-      if (activeFeaturePanel === 'plan') {
-        renderFeaturePanel();
-      }
-      updatePlanBadge();
-    } else if ((interruptCleared || interruptSynced) && activeFeaturePanel === 'plan') {
+function renderMetadataCommit({ token: pollToken, current, overviewChanged, todoChanged,
+  inputChanged, inputRequests, interruptCleared, interruptSynced }) {
+  // All logical values are assigned before any renderer observes them.
+  if (overviewChanged) {
+    if (activeFeaturePanel === 'workspace') {
       renderFeaturePanel();
     }
+    if (typeof updateChatContextBar === 'function') {
+      updateChatContextBar(current);
+    }
+    if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
+    if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
+  }
+  if (todoChanged) {
+    if (activeFeaturePanel === 'plan') {
+      renderFeaturePanel();
+    }
+    updatePlanBadge();
+  } else if ((interruptCleared || interruptSynced) && activeFeaturePanel === 'plan') {
+    renderFeaturePanel();
+  }
 
-    // If partial compact was in flight but runtime is back to accepting input,
-    // compact is done (or failed) — clear the flag so normal input is shown.
-    if (
-      _partialCompactInFlight
-      && normalizeAgentIdentity(pollToken.runtimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
-      && inputRequests
-      && inputRequests.length > 0
-    ) {
-      clearPartialCompactState();
-    }
-    if (inputChanged) {
-      // patch 写入即声明（工单 037）：metadata commit 阶段 hook 已同步
-      // 渲染输入面，这里只保留随输入变化的重构动作。
-      updateRollbackActionVisibility();
-    } else if (isChatSurfaceActive()) {
-      _syncPersistentInputUi(pollToken.runtimeId);
-    }
-  });
+  // If partial compact was in flight but runtime is back to accepting input,
+  // compact is done (or failed) — clear the flag so normal input is shown.
+  if (
+    _partialCompactInFlight
+    && normalizeAgentIdentity(pollToken.runtimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
+    && inputRequests
+    && inputRequests.length > 0
+  ) {
+    clearPartialCompactState();
+  }
+  if (inputChanged) {
+    // patch 写入即声明（工单 037）：metadata commit 阶段 hook 已同步
+    // 渲染输入面，这里只保留随输入变化的重构动作。
+    updateRollbackActionVisibility();
+  } else if (isChatSurfaceActive()) {
+    _syncPersistentInputUi(pollToken.runtimeId);
+  }
 }
 
 /**

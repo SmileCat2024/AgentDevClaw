@@ -5,6 +5,7 @@ import './runtime-status-loader-host.js';
 import './session-data-loader-host.js';
 import './poll-coordinator-host.js';
 import './message-probe-host.js';
+import './metadata-commit-host.js';
 import './agent-loader-host.js';
 import './runtime-view-cache-host.js';
 import './call-interrupt-host.js';

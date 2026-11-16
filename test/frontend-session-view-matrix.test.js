@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { createMetadataCommit } from '../public/src/modules/metadata-commit.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const loaderSource = fs.readFileSync(new URL('../public/src/modules/session-data-loader.js', import.meta.url), 'utf8');
@@ -145,7 +146,15 @@ test('initial loading and polling paths guard responses and commit through Sessi
   assert.match(loaderSource, /if \(!host\.isCurrent\(token\)\)/);
   assert.match(loaderSource, /host\.patch\(token/);
   assert.match(mainSource, /const pollToken = captureSessionViewToken\(\)/);
-  assert.match(mainSource, /commitSessionViewPatch\(pollToken/);
+  const ctx = createView();
+  ctx.renderMetadataCommit = () => {};
+  const metadata = createMetadataCommit({
+    ...ctx.run(`(() => { ${mainSource.slice(mainSource.indexOf('function createMetadataCommitHost()'), mainSource.indexOf('function renderMetadataCommit('))}; return createMetadataCommitHost(); })()`),
+    render() {},
+  });
+  const token = ctx.run('captureSessionViewToken()');
+  ctx._switchEpoch += 1;
+  assert.equal(metadata.commitMetadataUpdate(token, {}), false, 'a departed poll view cannot publish metadata');
   assert.match(mainSource, /if \(!isSessionViewTokenCurrent\(pollToken\)\) return true/);
 });
 

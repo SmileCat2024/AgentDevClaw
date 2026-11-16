@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { createPollCoordinator } from '../public/src/modules/poll-coordinator.js';
 import { createMessageProbe } from '../public/src/modules/message-probe.js';
+import { createMetadataCommit } from '../public/src/modules/metadata-commit.js';
 import { createRuntimeStatusLoader } from '../public/src/modules/runtime-status-loader.js';
 import { createSessionDataLoader } from '../public/src/modules/session-data-loader.js';
 
@@ -239,6 +240,7 @@ function createPollSandbox({ blockStatus = true } = {}) {
   vm.runInContext(`${sessionViewStateSource}\n${overviewSource}\n${extractPollSource()}`, sandbox);
   Object.assign(sandbox, createPollCoordinator(vm.runInContext('createPollCoordinatorHost()', sandbox)));
   Object.assign(sandbox, createMessageProbe(vm.runInContext('createMessageProbeHost()', sandbox)));
+  Object.assign(sandbox, createMetadataCommit(vm.runInContext('createMetadataCommitHost()', sandbox)));
   sandbox.__poll = sandbox.poll;
 
   return {
