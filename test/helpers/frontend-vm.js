@@ -18,6 +18,7 @@ import { createAgentSnapshotLoader } from '../../public/src/modules/agent-snapsh
 import { createRuntimeStatusLoader } from '../../public/src/modules/runtime-status-loader.js';
 import { createSessionDataLoader } from '../../public/src/modules/session-data-loader.js';
 import { createWorkspaceSurface } from '../../public/src/modules/workspace-surface.js';
+import { createChatLoading } from '../../public/src/modules/chat-loading.js';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -174,6 +175,18 @@ export function createFrontendSandbox(overrides = {}) {
     const fullPath = join(__dirname, '..', '..', relativePath);
     const source = fs.readFileSync(fullPath, 'utf8');
     vm.runInContext(source, context, { filename: fullPath });
+    if (relativePath === 'public/src/app-core.js') {
+      context.__createChatLoading = createChatLoading;
+      Object.assign(context, vm.runInContext(`__createChatLoading({
+        loading: () => _chatLoadingSession, timer: () => _chatLoadingTimeout,
+        setLoading: value => { _chatLoadingSession = value; },
+        setTimer: value => { _chatLoadingTimeout = value; },
+        setTimeout: (callback, delay) => setTimeout(callback, delay),
+        clearTimeout: id => clearTimeout(id),
+        render: () => { if (typeof renderCurrentMainView === 'function') renderCurrentMainView(); },
+      })`, context));
+      delete context.__createChatLoading;
+    }
     // Classic first-paint code stays synchronous; async producers exercise the
     // real ESM eligibility policy against the same live sandbox state.
     if (relativePath === 'public/src/modules/session-view-state.js') installSessionViewCommit(context);

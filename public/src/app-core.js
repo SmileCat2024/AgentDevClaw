@@ -926,30 +926,6 @@ function getEmptyStateHtml() {
     + '</div>';
 }
 
-function beginChatLoadingSession() {
-  _chatLoadingSession = true;
-  if (_chatLoadingTimeout) clearTimeout(_chatLoadingTimeout);
-  _chatLoadingTimeout = setTimeout(() => {
-    _chatLoadingSession = false;
-    _chatLoadingTimeout = null;
-    // Force re-render so the spinner is replaced by the welcome page.
-    // Without this, the poll loop sees messages.length === currentMessages.length (0===0)
-    // and skips rendering entirely, leaving the spinner stuck in the DOM forever.
-    if (typeof renderCurrentMainView === 'function') {
-      renderCurrentMainView();
-    }
-  }, 10000);
-}
-
-function clearChatLoadingSession() {
-  if (!_chatLoadingSession && !_chatLoadingTimeout) return;
-  _chatLoadingSession = false;
-  if (_chatLoadingTimeout) {
-    clearTimeout(_chatLoadingTimeout);
-    _chatLoadingTimeout = null;
-  }
-}
-
 function getFeaturePanelEmptyHtml() {
   return '<div class="feature-panel-empty"><div>' + escapeHtml(t('panel_hint')) + '</div></div>';
 }

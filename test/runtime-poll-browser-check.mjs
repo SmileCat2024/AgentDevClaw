@@ -199,6 +199,14 @@ try {
   });
   assert.deepEqual(waiting, { focus: 'next', runtime: null, tab: 'chat', pending: 'waiting',
     identity: { agentId: 'next', sessionId: '' } });
+  const loadingLifecycle = await page.evaluate(async () => {
+    const loading = await import('/src/modules/chat-loading-host.js');
+    loading.beginChatLoadingSession();
+    const before = { loading: _chatLoadingSession, timer: _chatLoadingTimeout !== null };
+    loading.clearChatLoadingSession();
+    return { before, after: { loading: _chatLoadingSession, timer: _chatLoadingTimeout } };
+  });
+  assert.deepEqual(loadingLifecycle, { before: { loading: true, timer: true }, after: { loading: false, timer: null } });
   assert.deepEqual(errors, []);
   console.log('PASS: production kernel preserves handoff views, workspace navigation, session requests and deferred switch guards');
 } finally {

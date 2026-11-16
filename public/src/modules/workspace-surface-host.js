@@ -1,4 +1,5 @@
 import { createWorkspaceSurface } from './workspace-surface.js';
+import { beginChatLoadingSession } from './chat-loading-host.js';
 import { allAgents, focusedAgentId, readOnlyMode } from './agent-store-state.js';
 import { currentRuntimeAgentId } from './orchestration-state.js';
 import { saveCurrentRuntimeToCache } from './runtime-view-cache-host.js';
@@ -12,6 +13,7 @@ const navigation = createWorkspaceSurface({
   readOnlyMode: () => readOnlyMode,
   saveCache: saveCurrentRuntimeToCache,
   loadDetail: loadAgentDetail,
+  beginLoading: beginChatLoadingSession,
 });
 export const { selectWorkspaceSurface } = navigation;
 window.KernelState.defineKey('workspace-surface', 'selectWorkspaceSurface', selectWorkspaceSurface);

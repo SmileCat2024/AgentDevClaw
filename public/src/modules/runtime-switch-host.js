@@ -1,4 +1,5 @@
 import { createRuntimeSwitch } from './runtime-switch.js';
+import { clearChatLoadingSession } from './chat-loading-host.js';
 import * as navigation from './orchestration-state.js';
 import * as agents from './agent-store-state.js';
 import * as view from './render-entry-state.js';
@@ -24,6 +25,7 @@ const transaction = createRuntimeSwitch({ ...host,
   restoreCache: restoreRuntimeFromCache,
   loadData: loadAgentData,
   loadAgents,
+  clearLoading: clearChatLoadingSession,
 });
 export const { switchAgent, requestSwitch } = transaction;
 window.KernelState.defineKey('runtime-switch', 'switchAgent', switchAgent);
