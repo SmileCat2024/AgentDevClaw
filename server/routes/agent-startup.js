@@ -49,6 +49,7 @@ import { resolveOperatorHeadSessionId } from './im-operator-thread.js';
 import { addOpenSession } from '../shared/open-sessions-tracker.js';
 import { resolveSessionRuntimeDirectory } from '../shared/session-project.js';
 import { getPhSessionGateInfo, getPhProjectGateInfo } from './ph-projects.js';
+import { acquireRuntimeSpawnSlot } from './runtime-quota.js';
 
 export function persistRuntimeDiagnostic({ agentId, sessionId, event, details = '' }) {  const logPath = path.join(resolveUserDataDir(), 'logs', 'runtime.log');
   const header = `${new Date().toISOString()} [${event}] agent=${agentId} session=${sessionId || 'none'}`;
@@ -509,6 +510,12 @@ export function createAgentStartupFns(deps) {
     // ADR-0037 M4：托管 spawn 经执行后端 seam（实验形态 env 开关选择，本地后端
     // 为默认）。handle 即 ChildProcess（增补语义事件与 output tail），下游托管
     // 记录与生命周期接线不变。
+    // 配额限制的是实际新建的 runtime 进程。共享进程 join 已在上方返回，
+    // 只有到达此处才需要占用一个 runtime 并发名额。
+    const releaseRuntimeSlot = await acquireRuntimeSpawnSlot({
+      agentId: agent.id,
+      permissions: agent.permissions,
+    });
     const forcedExecutor = supportsSessionRuntimeMode(agent.id) ? runtimeModeToExecutor(sessionRuntimeMode) : null;
     const backend = forcedExecutor
       ? resolveRuntimeExecutor({ agentId: agent.id, processMode, env: { CLAW_RUNTIME_EXECUTOR: forcedExecutor } })
@@ -516,7 +523,9 @@ export function createAgentStartupFns(deps) {
     // ADR-0037 容器修订：容器 runtime 不直连 index.db（索引读走平台 HTTP，
     // CLAW_SESSION_INDEX_REMOTE=1 由容器后端注入），WAL 锁跨界互斥问题域
     // 消失——宿主连接无需驱逐，本地与容器会话可并存。
-    const child = backend.start({
+    let child;
+    try {
+      child = backend.start({
       argv: [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN],
       cwd: runtimeCwd,
       ipc: true,
@@ -539,7 +548,11 @@ export function createAgentStartupFns(deps) {
         ...(runtimeOptions?.extraEnv && typeof runtimeOptions.extraEnv === 'object' ? runtimeOptions.extraEnv : {}),
         ...buildSessionWorkspaceEnv(agent.id, resolvedSessionId, projectDir),
       }),
-    });
+      });
+    } catch (error) {
+      releaseRuntimeSlot?.();
+      throw error;
+    }
 
     const runtime = {
       key: getManagedRuntimeKey(agent.id, resolvedSessionId),
@@ -558,6 +571,7 @@ export function createAgentStartupFns(deps) {
     };
 
     managedAgents.set(runtime.key, runtime);
+    releaseRuntimeSlot?.();
     // 语义事件消费面（执行后端翻译；本地 IPC 与容器注册协议 M6 共用同一消费
     // 面，tail 维护与消息翻译见 runtime-executor/local-backend.js）。
     child.on('session-exited', ({ sessionId, persisted }) => {

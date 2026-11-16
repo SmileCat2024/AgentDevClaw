@@ -414,7 +414,7 @@ async function _phLoadCoderPolicy() {
     if (!document.getElementById('ph-coder-policy-host') || _phSettingsTab !== 'coder' || _phFeatureSubTab !== 'policy') return;
     const limit = data?.resourcePolicy?.coder?.maxLiveThreads;
     const value = Number.isInteger(limit) && limit > 0 ? String(limit) : '';
-    const live = Number.isInteger(data?.liveThreads?.coder) ? data.liveThreads.coder : 0;
+    const live = Number.isInteger(data?.liveRuntimes?.coder) ? data.liveRuntimes.coder : 0;
     // 接续策略生效值判定链与通知设置同构：用户覆盖（resourcePolicy）>
     // 作者默认（coder metadata permissionDefaults）> 'adaptive'。
     const coderAgent = (Array.isArray(allAgents) ? allAgents : []).find((a) => a?.id === 'coder');
@@ -445,9 +445,9 @@ async function _phLoadCoderPolicy() {
       '<div class="ph-mc-role">',
       '<div class="ph-mc-role-name">' + (isZh ? '线程并发上限' : 'Thread concurrency limit') + '</div>',
       '<div class="ph-mc-role-desc">' + (isZh
-        ? 'Coder 未归档线程的数量上限，超出时新建线程被拒（已有线程不受影响，归档后释放名额）'
-        : 'Maximum live (unarchived) Coder threads; new thread creation is rejected beyond this limit (existing threads unaffected; archiving frees a slot)') + '</div>',
-      (live > 0 ? '<div class="ph-mc-role-desc">' + (isZh ? '当前 ' + live + ' 条未归档线程' : live + ' live threads') + '</div>' : ''),
+        ? 'Coder 同时运行的 runtime 数量上限，超出时才拒绝拉起新的 runtime（共享 runtime 承载的新线程不占新名额）'
+        : 'Maximum concurrently running Coder runtime processes; only a new runtime spawn is rejected at the limit (threads joining an existing runtime do not consume another slot)') + '</div>',
+      (live > 0 ? '<div class="ph-mc-role-desc">' + (isZh ? '当前 ' + live + ' 个运行中 runtime' : live + ' running runtimes') + '</div>' : ''),
       '</div>',
       '<div style="flex:0 0 140px;display:flex;justify-content:flex-end;padding-top:7px;">',
       '<input id="ph-coder-thread-limit" type="number" min="1" step="1" class="settings-input" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + value + '" data-action="phSettings.saveCoderThreadLimit">',

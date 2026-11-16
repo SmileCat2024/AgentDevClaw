@@ -62,7 +62,6 @@ import { resolveSessionRuntimeMode, supportsSessionRuntimeMode } from '../shared
 import { exportFeatureContinuity, hasFeatureContinuity } from '../context-continuity/feature-continuity.js';
 import { getContextHandoffFilePath } from '../context-continuity/handoff-package.js';
 import { withSessionOperation } from '../shared/session-operation.js';
-import { assertThreadQuotaAllowed } from './thread-quota.js';
 import { readWorkspaceResourcePolicies } from './workspace-settings.js';
 import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
 import { getInternalAuthToken } from '../auth.js';
@@ -775,16 +774,6 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error, requestMetadata));
     }
 
-    // 线程并发上限（ADR-0027 修订一）：线程宿主的分支即新线程（不在原
-    // 线程内分叉），检查先于会话落盘——满配额时连分支会话都不创建。
-    // 未声明 maxLiveThreads 权限的工作空间静默放行；agent 解析失败保持
-    // 原行为链（后续源文件读取自然报错）。
-    await assertThreadQuotaAllowed({
-      agentId,
-      permissions: (await requireAgentLight(agentId).catch(() => null))?.permissions,
-      control: getThreadIntegration(),
-    });
-
     const sourcePath = getPrebuiltSessionFilePath(agentId, sourceSessionId);
     const sourceRaw = await fs.readFile(sourcePath, 'utf8');
     const sourceSnapshot = JSON.parse(sourceRaw);
@@ -1213,14 +1202,6 @@ setupTokenRefreshRoute(app, express);
       return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
     const agent = await requireAgentLight(agentId);
-    // 线程并发上限（ADR-0027 修订一）：线程宿主的新会话即新线程，检查
-    // 先于会话落盘——满配额时连会话都不创建（不留无线程的孤儿会话）。
-    // 未声明 maxLiveThreads 权限的工作空间静默放行。
-    await assertThreadQuotaAllowed({
-      agentId: agent.id,
-      permissions: agent.permissions,
-      control: getThreadIntegration(),
-    });
     // sessionType 限定已知值：main 是用户会话缺省形态。coder 身份已升格为
     // 独立 APP（ADR-0025），不再经 sessionType 寻址，直接以 agentId=coder 创建。
     const requestedSessionType = cleanSessionText(req.body?.sessionType);

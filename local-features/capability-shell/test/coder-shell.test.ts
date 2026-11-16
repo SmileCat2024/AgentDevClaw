@@ -419,7 +419,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       // 配额预检 GET（ADR-0027）：无配额 → 放行
       {
         match: (u) => u.endsWith('/protoclaw/workspace_settings'),
-        body: { workspaceVisibility: {}, resourcePolicy: {}, liveThreads: {} },
+        body: { workspaceVisibility: {}, resourcePolicy: {}, liveRuntimes: {} },
       },
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
@@ -476,7 +476,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
   it('Windows 宿主绝对路径由 adapter 原样提交，不用容器本地路径规则预检', async () => {
     const { fetchImpl, requests } = recordingFetch([
       { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'container' } },
-      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { resourcePolicy: {}, liveThreads: {} } },
+      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { resourcePolicy: {}, liveRuntimes: {} } },
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
         body: { threadId: 'wt-windows-path', session: { id: 'session-windows-path' } },
@@ -521,7 +521,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'standard', allowedModes: ['standard'] } },
       {
         match: (u) => u.endsWith('/protoclaw/workspace_settings'),
-        body: { resourcePolicy: { coder: { maxLiveThreads: 2 } }, liveThreads: { coder: 2 } },
+        body: { resourcePolicy: { coder: { maxLiveThreads: 2 } }, liveRuntimes: { coder: 2 } },
       },
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
@@ -535,7 +535,8 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     assert.equal(r.ok, false, r.output);
     assert.ok(r.output.includes('预检拒绝'), r.output);
     assert.ok(r.output.includes('2/2'), r.output);
-    assert.ok(r.output.includes('归档'), '拒绝文案应含可行动建议');
+    assert.ok(r.output.includes('runtime'), '拒绝文案应明确拒绝的是 runtime');
+    assert.ok(r.output.includes('等待运行中的 runtime'), '拒绝文案应给出等待 runtime 退出的建议');
     assert.ok(
       !requests.some((req) => req.url.endsWith('/protoclaw/prebuilt_sessions') && req.init?.method === 'POST'),
       '满额预检拒绝不得发出创建 POST',
@@ -545,7 +546,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
   it('agent-choice 下可指定容器模式，创建请求明确携带该选择', async () => {
     const { fetchImpl, requests } = recordingFetch([
       { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'agent-choice', allowedModes: ['standard', 'container'] } },
-      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { workspaceVisibility: {}, resourcePolicy: {}, liveThreads: {} } },
+      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { workspaceVisibility: {}, resourcePolicy: {}, liveRuntimes: {} } },
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
         body: { threadId: 'wt-container', session: { id: 'session-container' }, targetSessionId: 'session-container' },
@@ -564,7 +565,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'standard', allowedModes: ['standard'] } },
       {
         match: (u) => u.endsWith('/protoclaw/workspace_settings'),
-        body: { resourcePolicy: { coder: { maxLiveThreads: 3 } }, liveThreads: { coder: 2 } },
+        body: { resourcePolicy: { coder: { maxLiveThreads: 3 } }, liveRuntimes: { coder: 2 } },
       },
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
@@ -586,7 +587,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
   it('固定标准策略拒绝容器请求，且不发出创建 POST', async () => {
     const { fetchImpl, requests } = recordingFetch([
       { match: (u) => u.endsWith('/protoclaw/acp/coder/runtime-policy'), body: { runtimeMode: 'standard', allowedModes: ['standard'] } },
-      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { workspaceVisibility: {}, resourcePolicy: {}, liveThreads: {} } },
+      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { workspaceVisibility: {}, resourcePolicy: {}, liveRuntimes: {} } },
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
     const r = await runCapabilityShellPipeline(POLICY, `new-session coder \"${tmpdir()}\" --runtime-mode=container`, { adapters });
@@ -597,7 +598,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
 
   it('用户模式查询失败时拒绝派遣且不发创建请求', async () => {
     const { fetchImpl, requests } = recordingFetch([
-      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { workspaceVisibility: {}, resourcePolicy: {}, liveThreads: {} } },
+      { match: (u) => u.endsWith('/protoclaw/workspace_settings'), body: { workspaceVisibility: {}, resourcePolicy: {}, liveRuntimes: {} } },
       // runtime-policy 未命中 → 无法确认授权；不能猜测模式并创建会话
 
       {

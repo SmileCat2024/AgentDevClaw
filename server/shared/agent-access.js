@@ -169,3 +169,26 @@ export function listRuntimesByProcess(childProcess) {
   return Array.from(managedAgents.values())
     .filter(rt => rt.process === childProcess);
 }
+
+/**
+ * Count currently running runtime processes for a workspace. Shared-process
+ * sessions have multiple managedAgents entries but one ChildProcess; quota
+ * accounting must count the process once.
+ *
+ * @param {string|undefined} agentId
+ * @returns {number|Record<string, number>}
+ */
+export function countLiveRuntimeProcesses(agentId = undefined) {
+  const normalizedAgentId = agentId == null ? null : sanitizeSessionFragment(agentId);
+  const processesByAgent = new Map();
+  for (const runtime of managedAgents.values()) {
+    if (!isManagedRuntimeRunning(runtime)) continue;
+    const runtimeAgentId = sanitizeSessionFragment(runtime.agentId || runtime.id);
+    if (normalizedAgentId !== null && runtimeAgentId !== normalizedAgentId) continue;
+    if (!runtime.process) continue;
+    if (!processesByAgent.has(runtimeAgentId)) processesByAgent.set(runtimeAgentId, new Set());
+    processesByAgent.get(runtimeAgentId).add(runtime.process);
+  }
+  if (normalizedAgentId !== null) return processesByAgent.get(normalizedAgentId)?.size || 0;
+  return Object.fromEntries([...processesByAgent.entries()].map(([id, processes]) => [id, processes.size]));
+}

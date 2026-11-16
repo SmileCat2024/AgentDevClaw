@@ -144,7 +144,7 @@ import { createThreadLifecycleService } from './server/thread-control/thread-lif
 import { createThreadDeleteService } from './server/thread-control/thread-delete.js';
 import { createThreadDeleteResources } from './server/thread-control/thread-delete-resources.js';
 import { setupAcpRoutes } from './server/routes/acp.js';
-import { assertThreadQuotaAllowed, countNonTerminalThreadsByAgent } from './server/routes/thread-quota.js';
+import { countLiveRuntimesByAgentMap } from './server/routes/runtime-quota.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { createThreadRotationService } from './server/thread-control/thread-rotation.js';
 import { buildRotationStrategyResolver } from './server/context-continuity/rotation-strategy-resolver.js';
@@ -740,10 +740,10 @@ setupModelConfigRoutes(app, express);
 setupOAuthCodexRoutes(app, express);
 setupProxyConfigRoutes(app, express);
 setupWorkspaceSettingsRoutes(app, express, {
-  // 线程并发上限的现状投影（ADR-0027 修订一）：设置面板「当前 N」与
+  // runtime 并发上限的现状投影（ADR-0027 修订二）：设置面板「当前 N」与
   // coder_shell 预检共用本端点；计数闭包在装配层组合（workspace-settings
   // 不依赖线程控制面）。
-  countLiveThreadsByAgent: () => countNonTerminalThreadsByAgent(threadControl),
+  countLiveRuntimesByAgent: () => countLiveRuntimesByAgentMap(),
   // 侧栏会话区写入预检（ADR-0050）：作者默认值从名册发现结果读取
   // （discoverAgents 已归一：'visible' | 'hidden' | null），未声明能力的
   // APP 由 workspace-settings 侧拒绝写入。名册走短 TTL 缓存，预检非热路径。
@@ -873,17 +873,7 @@ const threadRestartResume = createThreadRestartResume({
 setupThreadRoutes(app, express, {
   control: threadControl,
   lifecycle: threadLifecycle,
-  // 线程并发上限（ADR-0027 修订一）：POST /threads 建线入口的检查闭包——
-  // agent 声明解析在此收敛，thread-routes 只拿谓词。agent 不存在时
-  // permissions 解析为空（未声明 = 不治理），保持既有宽松行为。
-  assertThreadQuota: async (agentId) => {
-    const agent = await requireAgentLight(agentId).catch(() => null);
-    await assertThreadQuotaAllowed({
-      agentId,
-      permissions: agent?.permissions,
-      control: threadControl,
-    });
-  },
+
   // commands 端点的即时投递走 integration 的 consumer 消费面（退避 / 水位同源）
   tryDeliver: (threadId) => threadIntegration.tryDeliver(threadId),
   // 轮次终态事实订阅（ADR-0042 决策 4）：SSE 事实帧（thread.turn-*）由

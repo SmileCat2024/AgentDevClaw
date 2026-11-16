@@ -183,7 +183,7 @@ describe('programming-helper workspace process mode UI', () => {
     const ctx = createFrontendSandbox({
       fetch: async (url, options) => {
         requests.push({ url, options });
-        if (!options) return { ok: true, json: async () => ({ resourcePolicy: {}, liveThreads: {} }) };
+        if (!options) return { ok: true, json: async () => ({ resourcePolicy: {}, liveRuntimes: {} }) };
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });
@@ -245,7 +245,7 @@ describe('programming-helper workspace process mode UI', () => {
     const ctx = createFrontendSandbox({
       fetch: async () => ({
         ok: true,
-        json: async () => ({ resourcePolicy: { coder: { contextRotationStrategy: 'trim' } }, liveThreads: {} }),
+        json: async () => ({ resourcePolicy: { coder: { contextRotationStrategy: 'trim' } }, liveRuntimes: {} }),
       }),
     });
     ctx.window.allAgents = [{ id: 'coder', permissionDefaults: { contextRotationStrategy: 'adaptive' } }];
@@ -273,7 +273,7 @@ describe('programming-helper workspace process mode UI', () => {
       'concurrency row renders above the rotation-strategy row',
     );
     // 两行都带固定解释副标题；生效时机的说明文案不再出现在页面上
-    assert.match(host.innerHTML, /未归档线程的数量上限/);
+    assert.match(host.innerHTML, /同时运行的 runtime 数量上限/);
     assert.match(host.innerHTML, /自动接续新会话所采用的精简方式/);
     assert.doesNotMatch(host.innerHTML, /即时生效/);
     // 并发上限行仍在同一分页
@@ -284,7 +284,7 @@ describe('programming-helper workspace process mode UI', () => {
     const ctx = createFrontendSandbox({
       fetch: async () => ({
         ok: true,
-        json: async () => ({ resourcePolicy: {}, liveThreads: {} }),
+        json: async () => ({ resourcePolicy: {}, liveRuntimes: {} }),
       }),
     });
     ctx.window.allAgents = [{ id: 'coder', permissionDefaults: { contextRotationStrategy: 'adaptive' } }];
@@ -303,7 +303,7 @@ describe('programming-helper workspace process mode UI', () => {
     const ctx = createFrontendSandbox({
       fetch: async (url, options) => {
         requests.push({ url, options });
-        if (!options) return { ok: true, json: async () => ({ resourcePolicy: {}, liveThreads: {} }) };
+        if (!options) return { ok: true, json: async () => ({ resourcePolicy: {}, liveRuntimes: {} }) };
         return { ok: true, json: async () => ({ ok: true }) };
       },
     });

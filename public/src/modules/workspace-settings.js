@@ -79,7 +79,7 @@ async function loadWorkspaceSettingsPanel() {
 
   let overrides = {};
   let resourcePolicies = {};
-  let liveThreads = {};
+  let liveRuntimes = {};
   try {
     const res = await fetch('/protoclaw/workspace_settings');
     if (res.ok) {
@@ -88,8 +88,8 @@ async function loadWorkspaceSettingsPanel() {
         ? data.workspaceVisibility : {};
       resourcePolicies = data?.resourcePolicy && typeof data.resourcePolicy === 'object'
         ? data.resourcePolicy : {};
-      liveThreads = data?.liveThreads && typeof data.liveThreads === 'object'
-        ? data.liveThreads : {};
+      liveRuntimes = data?.liveRuntimes && typeof data.liveRuntimes === 'object'
+        ? data.liveRuntimes : {};
     }
   } catch { /* 读取失败按无覆盖（作者默认）渲染 */ }
 
@@ -99,9 +99,9 @@ async function loadWorkspaceSettingsPanel() {
       && agent.permissions.includes('maxLiveThreads');
     const quotaLimit = resourcePolicies[agent.id]?.maxLiveThreads;
     const quotaValue = Number.isInteger(quotaLimit) && quotaLimit > 0 ? String(quotaLimit) : '';
-    const liveCount = Number.isInteger(liveThreads[agent.id]) ? liveThreads[agent.id] : 0;
-    // 存量豁免的可视化（ADR-0027 §5）：配额低于当前非终态线程数时如实提示，
-    // 已有线程不会被强杀，随归档自然收敛到上限内。
+    const liveCount = Number.isInteger(liveRuntimes[agent.id]) ? liveRuntimes[agent.id] : 0;
+    // 存量运行的可视化（ADR-0027 §5）：配额低于当前 runtime 数时如实提示，
+    // 已有 runtime 不会被强杀；后续新 runtime 按当前上限判定。
     const overLimit = quotaValue !== '' && liveCount > quotaLimit;
     return [
       '<div class="proxy-toggle-row" style="align-items:center;flex-wrap:wrap;gap:8px;">',
@@ -121,11 +121,11 @@ async function loadWorkspaceSettingsPanel() {
         '<div style="font-size:12px;color:' + (overLimit ? 'var(--status-warning, #d29922)' : 'var(--text-secondary)') + ';">'
           + (isZh
             ? (overLimit
-              ? '当前 ' + liveCount + ' 条未归档线程，已超上限 ' + quotaLimit + '——存量不追溯，随归档收敛'
-              : '当前 ' + liveCount + ' 条未归档线程 · 留空不限制')
+              ? '当前 ' + liveCount + ' 个运行中 runtime，已超上限 ' + quotaLimit + '——已有运行不追溯'
+              : '当前 ' + liveCount + ' 个运行中 runtime · 留空不限制')
             : (overLimit
-              ? liveCount + ' live threads, over limit ' + quotaLimit + ' — existing ones stay until archived'
-              : liveCount + ' live threads · empty for unlimited'))
+              ? liveCount + ' running runtimes, over limit ' + quotaLimit + ' — existing runs are not interrupted'
+              : liveCount + ' running runtimes · empty for unlimited'))
           + '</div>',
         '</div>',
         '<input type="number" min="1" step="1" class="settings-input" style="min-width:110px;" placeholder="' + (isZh ? '不限制' : 'Unlimited') + '" value="' + quotaValue + '" data-action="wsSettings.quotaChange" data-event="change" data-agent-id="' + escapeHtml(agent.id) + '">',
@@ -137,8 +137,8 @@ async function loadWorkspaceSettingsPanel() {
   container.innerHTML = [
     '<div class="proxy-info-text">',
     isZh
-      ? '附属工作空间默认有会话运行时才出现在侧栏；线程并发上限限制该工作空间同时存活的未归档线程数（超限时新建线程被拒，已有线程继续执行不受影响，归档释放名额）。'
-      : 'On-demand workspaces appear in the sidebar only while they have running sessions. The thread concurrency limit caps simultaneously live (non-terminal) threads — new thread creation is rejected at the limit; existing threads keep running, and archiving frees a slot.',
+      ? '附属工作空间默认有会话运行时才出现在侧栏；并发上限限制该工作空间同时运行的 runtime 数量（超限时仅拒绝拉起新的 runtime；加入已有 runtime 的线程不新增名额）。'
+      : 'On-demand workspaces appear in the sidebar only while they have running sessions. The concurrency limit caps simultaneously running runtime processes — only a new runtime spawn is rejected at the limit; threads joining an existing runtime do not consume another slot.',
     '</div>',
     rows,
     renderNotificationAuditSection(isZh, resourcePolicies),

@@ -54,9 +54,7 @@ const TURN_TERMINAL_FACT_STATUS = Object.freeze({
  *   sourceRef?, resultText?, error?, usage?, suspended?, pendingWakeups?}。
  *   SSE 事实帧（thread.turn-*）由本模块直接发布；领域订阅方（OS 通知、IM
  *   relay）经此钩子接入，同步调用（订阅方自管理异步与错误），不传则无订阅方。
- * @param {Function} [options.assertThreadQuota] 线程并发上限检查（ADR-0027 修订一）：
- *   async (agentId) => void，满配额抛结构化 429；由装配层闭包 agent 声明与
- *   线程控制面（server.js 注入）。不传则不检查（测试装配）。
+ *
  * @param {{ deleteThread: Function }} [options.threadDelete] - T005 删除级联服务
  * @param {Function} [options.resolveSessionChainMeta] 会话代际元数据批量解析
  *   （ticket 050）：async (agentId, sessionIds[]) => Array<{ sessionId, title,
@@ -71,7 +69,7 @@ const TURN_TERMINAL_FACT_STATUS = Object.freeze({
  *   重复读索引（PH 线程化后 1400+ 线程 → 近 3000 次 mkdir+stat），是列表
  *   延迟的主要组成。不注入时回退逐线程解析（保持既有注入方兼容）。
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, rotationService, deliverInput = deliverThreadInput, publishThreadEvent = publishThreadEventDefault, onTurnTerminalFact, assertThreadQuota, adoptHeadIdentity, stopManagedAgent } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, resolveSessionTitle, resolveSessionChainMeta, resolveHeadSessionFields, tryDeliver, ensureHeadRuntime, rotationService, deliverInput = deliverThreadInput, publishThreadEvent = publishThreadEventDefault, onTurnTerminalFact, adoptHeadIdentity, stopManagedAgent } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -353,11 +351,6 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
       // ADR-0041：建线请求的 title 不再写入线程记录（标题的唯一来源是
       // Session 索引）。保留解构以避免调用方误以为可以省略，但值被忽略。
       const { agentId, sessionId, mode, workspaceId } = req.body || {};
-      // 线程并发上限（ADR-0027 修订一）：满配额拒绝建线（会话创建路径的
-      // 检查在 session.js 落盘之前，这里覆盖 create 动词的独立建线）。
-      if (typeof assertThreadQuota === 'function') {
-        await assertThreadQuota(String(agentId || '').trim());
-      }
       // 锚点创建走 core.start（sessionRef 重组，Q6 清单第 1 项）；
       // mode 归看板（board.setMode）。
       const thread = await core.start({

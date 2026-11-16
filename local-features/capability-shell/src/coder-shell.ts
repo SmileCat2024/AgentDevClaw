@@ -126,7 +126,7 @@ export function createThreadsAdapter(deps: {
       (error as any).status = response.status;
       (error as any).code = (payload as any)?.code;
       // 完整响应体一并挂上（ADR-0027 修订一）：内核结构化拒绝（如
-      // threadQuota 负载）经此可被调用方按结构消费，不依赖 message
+      // runtimeQuota 负载）经此可被调用方按结构消费，不依赖 message
       // 字符串匹配。
       (error as any).payload = payload;
       throw error;
@@ -360,21 +360,21 @@ export function createThreadsAdapter(deps: {
             + ` 用法：new-session <agentId> <目标工作目录> [标题]`,
           );
         }
-        // ── 线程配额预检（ADR-0027 修订一调度方 UX 层，不承担强制）──────
-        // 读配额与非终态线程计数（同一 GET 一次拿齐），满额时提前给可读
-        // 提示，不发起注定被拒的创建请求。查询失败不阻塞派发：强制点在
-        // server 建线入口（会话落盘之前），竞态与失败由 429 结构化拒绝
-        // 兜底（message 已含可行动建议，error.payload.threadQuota 可按
+        // ── runtime 配额预检（调度方 UX 层，不承担强制）──────────────
+        // 读配额与当前运行 runtime 进程计数（同一 GET 一次拿齐），满额时
+        // 提前给可读提示。查询失败不阻塞派发，真正强制点在 runtime spawn
+        // 漏斗；共享 runtime 的新线程不受此预检影响。竞态与失败由 429
+        // 结构化拒绝兜底（message 已含可行动建议，error.payload.runtimeQuota 可按
         // 结构消费）。
         try {
           const settings = await clawFetch('/protoclaw/workspace_settings');
           const limit = (settings as any)?.resourcePolicy?.coder?.maxLiveThreads;
           if (Number.isInteger(limit) && limit > 0) {
-            const live = (settings as any)?.liveThreads?.coder;
+            const live = (settings as any)?.liveRuntimes?.coder;
             if (Number.isInteger(live) && live >= limit) {
               throw new Error(
-                `new-session 预检拒绝：coder 线程并发上限已满（未归档 ${live}/${limit}），未发起创建。`
-                + ' 可行动：归档自己已完成的线程腾出名额（archive），或请用户在 设置 → 工作空间 调整线程并发上限，或放弃本次派发。',
+                `new-session 预检拒绝：coder runtime 并发上限已满（当前运行 ${live}/${limit}），未发起新 runtime。`
+                + ' 可行动：等待运行中的 runtime 退出，或请用户在 设置 → 工作空间 调整并发上限，或放弃本次派发。',
               );
             }
           }

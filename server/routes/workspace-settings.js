@@ -14,7 +14,7 @@
  *   作者在 metadata.json 声明，本文件只存用户覆盖层（agentId → 'auto' |
  *   'always'），缺省即作者默认。
  * - resourcePolicy：per-workspace 资源策略（ADR-0027）。首个字段
- *   maxLiveThreads 限非终态线程数（修订一）；缺省即不限。
+ *   maxLiveThreads 限同时运行的 runtime 进程数；共享进程按 ChildProcess 去重，缺省即不限。
  * - sidebarSessions：侧栏会话区用户覆盖层（ADR-0050）。作者默认由
  *   metadata.sidebarSessions 声明（visible | hidden），本节只存用户覆盖
  *   （agentId → 'visible' | 'hidden'）；传入值等于作者默认时删条目回默认。
@@ -320,7 +320,7 @@ export async function writeSidebarLayout(layout, { settingsPath = DEFAULT_WORKSP
 }
 
 export function setupWorkspaceSettingsRoutes(app, express, {
-  countLiveThreadsByAgent,
+  countLiveRuntimesByAgent,
   readAgentSidebarSessionsDefault,
   settingsPath = DEFAULT_WORKSPACE_SETTINGS_PATH,
 } = {}) {
@@ -341,12 +341,12 @@ export function setupWorkspaceSettingsRoutes(app, express, {
       resourcePolicy: await readWorkspaceResourcePolicies(),
       // 侧栏会话区用户覆盖层（ADR-0050）：菜单三态与设置消费同一投影。
       sidebarSessionsVisibility: await readSidebarSessionsVisibilityOverrides(),
-      // 非终态线程现状投影（ADR-0027 修订一）：设置面板展示「当前 N」与
-      // coder_shell 预检共用本端点，配额策略与现状一次读齐。计数闭包由
-      // 装配层注入（thread-quota 的 countNonTerminalThreadsByAgent）；
+      // 运行时现状投影：设置面板展示「当前 N」与 coder_shell 预检共用
+      // 本端点，配额策略与现状一次读齐。计数闭包由装配层注入，按
+      // ChildProcess 身份去重，不读取线程生命状态；
       // 未注入时投影为空表（测试装配）。
-      liveThreads: typeof countLiveThreadsByAgent === 'function'
-        ? await countLiveThreadsByAgent()
+      liveRuntimes: typeof countLiveRuntimesByAgent === 'function'
+        ? await countLiveRuntimesByAgent()
         : {},
     });
   });
