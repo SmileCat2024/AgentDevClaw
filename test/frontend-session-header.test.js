@@ -96,6 +96,7 @@ function createHeaderSandbox() {
   ctx.loadSource('public/src/i18n.js');
   // app-main.js 底部的启动序列在沙箱里不执行；主题/语言应用与渲染函数以 stub 替身
   ctx.run(`
+    window.__clawAuthReady = new Promise(() => {});
     applyTheme = () => {};
     applyLanguage = () => {};
     shouldRenderWorkspaceSurface = () => false;

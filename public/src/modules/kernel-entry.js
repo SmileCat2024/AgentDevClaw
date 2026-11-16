@@ -19,3 +19,4 @@ import './workspace-session-navigation-host.js';
 import './workspace-entry-host.js';
 import './compact-resume-host.js';
 import './workspace-surface-host.js';
+import './application-startup-host.js';

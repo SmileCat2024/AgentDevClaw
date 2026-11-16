@@ -954,18 +954,20 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+function createApplicationStartupHost() {
+  return {
+    waitViewer: () => waitForViewerReady(),
+    loadTemplates: () => window.loadFeatureTemplateMap(),
+    loadAgents: () => loadAgents(),
+    consumeDesktopOpen: async () => { if (window.ClawDesktopOpen) await window.ClawDesktopOpen.consumeBootOpenRequest(); },
+    reloadTemplates: () => window.reloadFeatureTemplateMap(),
+    loadMcp: (force) => loadMcpInfo(force),
+    poll: () => poll(),
+    log: (...args) => console.log(...args),
+  };
+}
+
 (async () => {
   await window.__clawAuthReady;
-  await waitForViewerReady();
-  const success = await window.loadFeatureTemplateMap();
-  await loadAgents();
-  // 桌面右键唤起（冷启动 URL query，modules/desktop-open.js）：覆盖初始
-  // 焦点恢复，切到编程小助手并执行定位目录 / 新建对话。
-  if (window.ClawDesktopOpen) await window.ClawDesktopOpen.consumeBootOpenRequest();
-  if (!success) {
-    console.log('[Viewer] Retrying to load feature templates after agent loaded...');
-    await window.reloadFeatureTemplateMap();
-  }
-  await loadMcpInfo(false);
-  poll();
+  await startApplication();
 })();

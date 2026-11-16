@@ -7,6 +7,7 @@ import { chromium } from 'playwright';
 const ui = await fs.readFile('public/src/app-ui.js', 'utf8');
 const surfaceHost = ui.slice(ui.indexOf('function createWorkspaceSurfaceHost()'), ui.indexOf('function upsertConnectedAgent('));
 const main = await fs.readFile('public/src/app-main.js', 'utf8');
+const startupHost = main.slice(main.indexOf('function createApplicationStartupHost()'), main.lastIndexOf('(async () => {'));
 const compactHost = main.slice(main.indexOf('function createCompactResumeHost()'), main.indexOf('// PH session list helpers'));
 const entryHost = main.slice(main.indexOf('function createWorkspaceEntryHost()'), main.indexOf('function applyOptimisticWorkspaceSession'));
 const navigationHost = main.slice(main.indexOf('function createWorkspaceSessionNavigationHost()'), main.indexOf('// ── Docset & material actions'));
@@ -31,6 +32,7 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/sidebar-render.js"></script>
 <script>
+  ${startupHost}
   ${surfaceHost}
   ${compactHost}
   ${entryHost}
@@ -53,7 +55,11 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
  window._lastWsSessionRefreshAt = Date.now();
  window._trackRecapSessionPresence = () => {};
  FEATURE_TEMPLATE_MAP = { loaded: true };
- window.started = false;
+  window.__startupStages = [];
+  window.waitForViewerReady = async () => { window.__startupStages.push('viewer'); return true; };
+  window.loadMcpInfo = async force => window.__startupStages.push(['mcp', force]);
+  window.ClawDesktopOpen = { consumeBootOpenRequest: async () => window.__startupStages.push('desktop') };
+  window.started = false;
 </script>
 <script src="/src/modules/auth-client.js"></script>
 <script type="module" src="/src/modules/kernel-entry.js"></script>
