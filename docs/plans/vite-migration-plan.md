@@ -1,5 +1,7 @@
 # Vite + React 迁移计划
 
+> **状态（2026-11-16）：已悬置。** 并行重写停于半途（进度见 [vite-migration-execution-log.md](vite-migration-execution-log.md)，分支 `codex/vite-migration-only` / `feat/vite-migration` 为 WIP 暂存态）；前端模块化后续走 [2026-11-16-frontend-esm-strangler-migration.md](2026-11-16-frontend-esm-strangler-migration.md) 的渐进路线，本文档仅作历史参考。
+
 > 目标：将前端从纯 vanilla JS (645KB) 迁移到 Vite + React，根治 innerHTML 全量重建导致的滚动/刷新/状态丢失 bug，同时保持后端架构和 Feature 模板协议不变。
 
 ---

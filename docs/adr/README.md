@@ -62,6 +62,7 @@
 - [0043 home 门户小组件契约](0043-home-portal-widgets.md) — 工作空间向首页提供只读 widget 的模块协议与隔离边界（Proposed）
 - [0044 右栏面板插件化与效果归属](0044-frontend-panel-plugins-and-effect-ownership.md) — panels 进插件协议、装载/按钮/生命周期注册表派生、host.effect 撤销面（Proposed）
 - [0050 工作空间条目操作面与侧栏会话条目呈现策略](0050-workspace-entry-operations-and-sidebar-session-visibility.md) — 右键/⋯ 同源操作面（事实选族+贡献项）、sidebarSessions 声明/覆盖/合流三层、呈现层过滤
+- [0051 前端 ESM 绞杀者迁移](0051-frontend-esm-strangler-migration.md) — classic-script 全局共享模式渐进拆解为原生 ESM：绞杀者模式 + window 访问器兼容桥、内核域先行、不引入构建器（实施中）
 
 ## 工程治理
 
