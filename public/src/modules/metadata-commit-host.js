@@ -1,9 +1,10 @@
 import { createMetadataCommit } from './metadata-commit.js';
+import { createCommittedViewRenderer } from './committed-view-renderer.js';
 import { currentOverviewSignature, currentTodoPlanSignature, currentInputRequests } from './session-view-storage.js';
 import { isSessionViewInputRequestsCurrent, commitSessionViewPatch } from './session-view-commit-host.js';
 
 const metadata = createMetadataCommit({
-  ...window.createMetadataCommitHost(),
+  ...window.createMetadataCommitHost(createCommittedViewRenderer),
   inputCurrent: isSessionViewInputRequestsCurrent,
   commit: commitSessionViewPatch,
   currentOverviewSignature: () => currentOverviewSignature,

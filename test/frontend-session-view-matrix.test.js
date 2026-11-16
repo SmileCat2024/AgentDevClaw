@@ -148,9 +148,9 @@ test('initial loading and polling paths guard responses and commit through Sessi
   // Real polling capture/stale-response behavior is exercised by the poll
   // consistency and rollback-button race suites, independent of source location.
   const ctx = createView();
-  ctx.renderMetadataCommit = () => {};
+  ctx.createCommittedViewRendererHost = () => ({});
   const metadata = createMetadataCommit({
-    ...ctx.run(`(() => { ${mainSource.slice(mainSource.indexOf('function createMetadataCommitHost()'), mainSource.indexOf('function renderMetadataCommit('))}; return createMetadataCommitHost(); })()`),
+    ...ctx.run(`(() => { ${mainSource.slice(mainSource.indexOf('function createMetadataCommitHost('), mainSource.indexOf('function createPollMaintenanceHost('))}; return createMetadataCommitHost(() => ({ renderMetadata() {} })); })()`),
     render() {},
   });
   const token = ctx.run('captureSessionViewToken()');

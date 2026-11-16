@@ -698,7 +698,7 @@ function createRuntimeNotFoundHost() {
 }
 
 // Classic rendering dependencies for the shared ESM poll/SSE message probe.
-function createMessageProbeHost() {
+function createMessageProbeHost(createRenderer) {
   return {
     messages: () => currentMessages,
     isCurrent: (token) => isSessionViewTokenCurrent(token),
@@ -707,56 +707,42 @@ function createMessageProbeHost() {
     attachTimestamps: (messages, timestamps) => attachMessagesTimestamps(messages, timestamps),
     bytes: computeSerializedBytes,
     metrics: emitMsgMetrics,
-    render: renderMessageProbeCommit,
+    render: createRenderer(createCommittedViewRendererHost()).renderMessages,
   };
 }
 
-function renderMessageProbeCommit({ previous, current }) {
-  // Clear session loading indicator once messages are available
-  if (current.messages.length > 0) clearChatLoadingSession();
-
-  // Render messages immediately — before non-critical async ops
-  // (status refresh, call states, queue sync) that add visible latency.
-  const previousMessages = previous.messages;
-  const nextMessages = current.messages;
-  // ADR-0041：壳层自动标题已硬屏蔽，此处调用是空操作（no-op）。
-  // 保留调用点只为记录历史触发位置；标题由应用自己的 AutoTitlePolicyFeature
-  // 订阅轮次事件生成。不要在此处恢复触发逻辑。
-  markAutoTitleCandidate(previousMessages, nextMessages);
-  const firstChangedIndex = findFirstChangedMessageIndex(nextMessages, previousMessages);
-  if (nextMessages.length !== previousMessages.length) {
-    if (nextMessages.length > previousMessages.length && firstChangedIndex === previousMessages.length) {
-      // 有新消息：只追加新的
-      const newMessages = nextMessages.slice(previousMessages.length);
-      if (shouldRenderWorkspaceSurface()) {
-        renderCurrentMainView(current);
-      } else {
-        appendNewMessages(newMessages, nextMessages.length - newMessages.length);
-      }
-    } else {
-      // 消息减少，或消息变多但前缀已变化：完全重建。
-      renderCurrentMainView(current);
-    }
-  } else {
-    if (firstChangedIndex >= 0) {
-      // Rollback + partial compact can replace the middle of the transcript while
-      // keeping the same length after the summary reminder is inserted.
-      if (shouldRenderWorkspaceSurface() || firstChangedIndex < nextMessages.length - 1) {
-        renderCurrentMainView(current);
-      } else {
-        // 最后一条消息变化：替换最后一条（避免滚动重置）
-        updateLastMessage(nextMessages[nextMessages.length - 1]);
-      }
-    }
-  }
-  // 乐观回显对账：真实消息上屏后再移除覆盖层，视觉上无缝替换
-  if (typeof window.ClawFW?.reconcileOptimisticUserEchoes === 'function') {
-    window.ClawFW.reconcileOptimisticUserEchoes(nextMessages);
-  }
+// Narrow UI adapter; selection and update policy live in the ESM renderer.
+function createCommittedViewRendererHost() {
+  return {
+    clearLoading: () => clearChatLoadingSession(),
+    // ADR-0041: this legacy title trigger is intentionally a no-op.
+    markTitle: (previous, next) => markAutoTitleCandidate(previous, next),
+    firstChanged: (next, previous) => findFirstChangedMessageIndex(next, previous),
+    workspaceSurface: () => shouldRenderWorkspaceSurface(),
+    render: (current) => renderCurrentMainView(current),
+    append: (messages, offset) => appendNewMessages(messages, offset),
+    updateLast: (message) => updateLastMessage(message),
+    reconcile: (messages) => {
+      if (typeof window.ClawFW?.reconcileOptimisticUserEchoes === 'function') window.ClawFW.reconcileOptimisticUserEchoes(messages);
+    },
+    panel: () => activeFeaturePanel,
+    renderPanel: () => renderFeaturePanel(),
+    updateContext: (current) => { if (typeof updateChatContextBar === 'function') updateChatContextBar(current); },
+    updateModel: () => { if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher(); },
+    updateThinking: () => { if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher(); },
+    updatePlanBadge: () => updatePlanBadge(),
+    clearCompletedCompact: (token, requests) => {
+      if (_partialCompactInFlight && normalizeAgentIdentity(token.runtimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
+        && requests && requests.length > 0) clearPartialCompactState();
+    },
+    updateRollback: () => updateRollbackActionVisibility(),
+    chatSurface: () => isChatSurfaceActive(),
+    syncInput: (id) => _syncPersistentInputUi(id),
+  };
 }
 
 // Remaining classic normalization and UI dependencies for ESM metadata commits.
-function createMetadataCommitHost() {
+function createMetadataCommitHost(createRenderer) {
   return {
     inputCurrent: (token) => isSessionViewInputRequestsCurrent(token),
     commit: (token, patch, effect) => commitSessionViewPatch(token, patch, effect),
@@ -771,49 +757,8 @@ function createMetadataCommitHost() {
     setInterruptTarget: (value) => setInterruptTargetId(value),
     now: () => Date.now(),
     lastInterruptAction: () => _lastInterruptUserActionAt,
-    render: renderMetadataCommit,
+    render: createRenderer(createCommittedViewRendererHost()).renderMetadata,
   };
-}
-
-function renderMetadataCommit({ token: pollToken, current, overviewChanged, todoChanged,
-  inputChanged, inputRequests, interruptCleared, interruptSynced }) {
-  // All logical values are assigned before any renderer observes them.
-  if (overviewChanged) {
-    if (activeFeaturePanel === 'workspace') {
-      renderFeaturePanel();
-    }
-    if (typeof updateChatContextBar === 'function') {
-      updateChatContextBar(current);
-    }
-    if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
-    if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
-  }
-  if (todoChanged) {
-    if (activeFeaturePanel === 'plan') {
-      renderFeaturePanel();
-    }
-    updatePlanBadge();
-  } else if ((interruptCleared || interruptSynced) && activeFeaturePanel === 'plan') {
-    renderFeaturePanel();
-  }
-
-  // If partial compact was in flight but runtime is back to accepting input,
-  // compact is done (or failed) — clear the flag so normal input is shown.
-  if (
-    _partialCompactInFlight
-    && normalizeAgentIdentity(pollToken.runtimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
-    && inputRequests
-    && inputRequests.length > 0
-  ) {
-    clearPartialCompactState();
-  }
-  if (inputChanged) {
-    // patch 写入即声明（工单 037）：metadata commit 阶段 hook 已同步
-    // 渲染输入面，这里只保留随输入变化的重构动作。
-    updateRollbackActionVisibility();
-  } else if (isChatSurfaceActive()) {
-    _syncPersistentInputUi(pollToken.runtimeId);
-  }
 }
 
 function createPollMaintenanceHost() {
