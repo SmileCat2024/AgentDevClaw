@@ -3,9 +3,14 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
-import { resolveUserDataDir, WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { resolveUserDataDir } from '../server/shared/constants.js';
+import { registerSessionBundleAgentsFromScan, isSessionBundleAgent } from '../server/shared/session-storage.js';
 import { renderTopology } from './session-topology/render.mjs';
+
+// 会话存储分区按 prebuilt-agents 的 sessionBundle 声明接线（与 server 派生同源；
+// session-storage 是纯判定模块，不触碰数据，符合本工具只读约束）
+registerSessionBundleAgentsFromScan(fileURLToPath(new URL('../prebuilt-agents/', import.meta.url)));
 
 const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
 const text = value => typeof value === 'string' ? value : '';
@@ -103,9 +108,10 @@ export async function collectTopology({ dataRoot, onProgress = () => {} }) {
     for (const entry of await entries(path.join(dataRoot, folder))) if (entry.isDirectory()) names.add(entry.name);
   }
   for (const name of [...names].sort()) {
-    const folder = WORKSPACE_SESSION_AGENT_IDS.has(name) ? path.join('workspaces', name, 'sessions') : path.join('prebuilt-sessions', name);
+    const bundled = isSessionBundleAgent(name);
+    const folder = bundled ? path.join('workspaces', name, 'sessions') : path.join('prebuilt-sessions', name);
     stores.push({ agentId: name, folder });
-    const other = WORKSPACE_SESSION_AGENT_IDS.has(name) ? path.join('prebuilt-sessions', name) : path.join('workspaces', name, 'sessions');
+    const other = bundled ? path.join('prebuilt-sessions', name) : path.join('workspaces', name, 'sessions');
     if ((await entries(path.join(dataRoot, other))).some(f => f.name === 'index.json' || /^session-.*\.json$/.test(f.name))) excluded.noncanonicalStores.push(other);
   }
   for (const entry of await entries(path.join(dataRoot, 'agents'))) {

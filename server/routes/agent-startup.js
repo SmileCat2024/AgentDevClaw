@@ -436,18 +436,68 @@ export function createAgentStartupFns(deps) {
           managedAgents.set(sharedRuntime.key, sharedRuntime);
 
           // Wait for session-ready / session-error IPC reply
+          //
+          // 会话就绪握手有两条自愈路径（wt-a258c93b 事故修复）：
+          // A. 迟到就绪接受：runtime 侧加载慢于宿主等待上限时，请求超时返回
+          //    失败，但等待现场保留（LATE_READY_GRACE_MS）。迟到的
+          //    session-ready 仍回填托管记录并触发线程补投——否则宿主与
+          //    runtime 状态错位（runtime 已加载、宿主无记录）后，线程输入
+          //    会永久滞留 pending，重启恢复也撞死锁。
+          // B. already-exists 对账：runtime 报 session already exists 说明会话
+          //    已在该进程（历史错位或重复加入），经 query-session-identity
+          //    拿回身份重建宿主记录，而非将调用方拒之门外。
+          const LATE_READY_GRACE_MS = 120_000;
+          const finalizeAdopted = (viewerAgentId, note) => {
+            if (existingShared.stopped) {
+              // 进程已死（共享代表记录被退出处理标记）——回填指向死进程的
+              // 记录只会制造假就绪，交给恢复扫描重拉。
+              persistRuntimeDiagnostic({
+                agentId: agent.id,
+                sessionId: resolvedSessionId,
+                event: 'shared-session-adopt-skipped',
+                details: `reason=shared-process-stopped\n${note}\nruntimePid=${existingShared.process.pid || 'unknown'}`,
+              });
+              return;
+            }
+            sharedRuntime.viewerAgentId = viewerAgentId;
+            sharedRuntime.ready = true;
+            managedAgents.set(sharedRuntime.key, sharedRuntime);
+            if (resolvedSessionId) {
+              addOpenSession(agent.id, resolvedSessionId).catch(e => console.warn(e));
+            }
+            notifyRuntimeReady(agent.id, resolvedSessionId || null);
+            persistRuntimeDiagnostic({
+              agentId: agent.id,
+              sessionId: resolvedSessionId,
+              event: 'shared-session-adopted',
+              details: `${note}\nruntimePid=${existingShared.process.pid || 'unknown'}`,
+            });
+          };
           const readyResult = await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
+            let requestSettled = false; // 请求级结果（HTTP 响应）已定
+            let identityQueried = false; // 已发出 already-exists 对账查询
+            const teardown = () => {
+              clearTimeout(requestTimer);
+              clearTimeout(lateTimer);
               existingShared.process.removeListener('message', handler);
+            };
+            const requestTimer = setTimeout(() => {
+              requestSettled = true;
               const error = new Error(`add-session timeout after ${RUNTIME_READY_WAIT_MS}ms`);
+              error.code = 'add-session-timeout';
               persistRuntimeDiagnostic({
                 agentId: agent.id,
                 sessionId: resolvedSessionId,
                 event: 'shared-session-timeout',
                 details: `${error.message}\nruntimePid=${existingShared.process.pid || 'unknown'}\nruntimeOutputTail:\n${existingShared.process.__runtimeOutputTail || '(no output captured)'}`,
               });
-              reject(error);
+              reject(error); // 请求失败返回，但等待现场保留（迟到就绪仍可回填）
             }, RUNTIME_READY_WAIT_MS);
+            // 迟到窗口兜底：宽限期内仍无 runtime 侧响应则彻底放弃等待。
+            const lateTimer = setTimeout(() => {
+              existingShared.process.removeListener('message', handler);
+              managedAgents.delete(sharedRuntime.key);
+            }, LATE_READY_GRACE_MS);
 
             const handler = (msg) => {
               if (!msg || typeof msg !== 'object') return;
@@ -458,15 +508,57 @@ export function createAgentStartupFns(deps) {
                 if (!viewerAgentId) return;
                 sharedRuntime.viewerAgentId = viewerAgentId;
                 existingShared.process.send({ ...msg, type: 'runtime-identity-accepted' });
+                if (identityQueried) {
+                  // already-exists 对账响应：runtime 侧会话早已就绪，身份回填
+                  // 即视为加入成功，不再等待 session-ready。
+                  teardown();
+                  if (requestSettled) {
+                    finalizeAdopted(viewerAgentId, 'adopted-via-identity-query-late');
+                  } else {
+                    requestSettled = true;
+                    resolve({ viewerAgentId, note: 'adopted-via-identity-query' });
+                  }
+                }
                 return;
               }
               if (msg.type === 'session-ready') {
-                clearTimeout(timeout);
-                existingShared.process.removeListener('message', handler);
+                const viewerAgentId = cleanSessionText(msg.viewerAgentId);
+                if (requestSettled) {
+                  // 迟到就绪：请求已失败返回，回填记录并触发补投（路径 A）。
+                  existingShared.process.removeListener('message', handler);
+                  clearTimeout(lateTimer);
+                  finalizeAdopted(viewerAgentId, 'late-session-ready');
+                  return;
+                }
+                teardown();
                 resolve(msg);
               } else if (msg.type === 'session-error') {
-                clearTimeout(timeout);
-                existingShared.process.removeListener('message', handler);
+                if (msg.error === 'session already exists') {
+                  // 会话已在 runtime 进程内（历史错位或重复加入）：对账而非
+                  // 失败（路径 B）。无论请求是否已超时，身份回填都可修复错位
+                  // ——超时后 runtime 侧若早已加载完，session-ready 不会再来，
+                  // 对账是唯一出路。身份响应由 runtime-identity 分支统一处理。
+                  identityQueried = true;
+                  persistRuntimeDiagnostic({
+                    agentId: agent.id,
+                    sessionId: resolvedSessionId,
+                    event: 'shared-session-reconcile',
+                    details: `reason=session-already-exists\nrequestSettled=${requestSettled}\nruntimePid=${existingShared.process.pid || 'unknown'}`,
+                  });
+                  existingShared.process.send({
+                    type: 'query-session-identity',
+                    sessionId: resolvedSessionId,
+                  });
+                  return;
+                }
+                if (requestSettled) {
+                  // 迟到的失败消息：彻底放弃等待。
+                  existingShared.process.removeListener('message', handler);
+                  clearTimeout(lateTimer);
+                  managedAgents.delete(sharedRuntime.key);
+                  return;
+                }
+                teardown();
                 persistRuntimeDiagnostic({
                   agentId: agent.id,
                   sessionId: resolvedSessionId,
@@ -490,7 +582,10 @@ export function createAgentStartupFns(deps) {
               },
             }));
           }).catch(err => {
-            managedAgents.delete(sharedRuntime.key);
+            // 超时（可能迟到）保留托管记录等待回填；确定性失败才清除。
+            if (err?.code !== 'add-session-timeout') {
+              managedAgents.delete(sharedRuntime.key);
+            }
             throw err;
           });
 

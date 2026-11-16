@@ -342,10 +342,13 @@ export function createThreadSuccessionService({
  * （无 TTL 等待）；真实接续登记在册，跑多久都不误杀。
  *
  * @param {object} deps
- * @param {{ core: import('@agentdevjs/core').WorkThread }} deps.threadControl
+ * @param {{ core: import('@agentdevjs/core').WorkThread, resolveSessionViewerId?: Function }} deps.threadControl
  * @param {ReturnType<import('./rotation-registry.js').createRotationRegistry>} [deps.rotationRegistry]
+ * @param {Function} [deps.getEnsureHeadRuntime] head runtime 就绪闸的惰性取用
+ *        （server.js 侧 ensureHeadRuntime 定义晚于本 service 构造，经 getter
+ *        注入规避 TDZ）。运行期滞留 pending 兜底扫描（requeueStalledPendingThreads）用。
  */
-export function createThreadRecoveryService({ threadControl, rotationRegistry = null } = {}) {
+export function createThreadRecoveryService({ threadControl, rotationRegistry = null, getEnsureHeadRuntime = null } = {}) {
   if (!threadControl?.core) {
     throw new Error('createThreadRecoveryService requires threadControl');
   }
@@ -506,5 +509,58 @@ export function createThreadRecoveryService({ threadControl, rotationRegistry = 
     return report;
   }
 
-  return { convergeInterruptedSuccessions, convergePhantomRotating };
+  // 滞留 pending 运行期兜底（C 修复）：唤醒/补投链任何一环反复失败（共享
+  // 进程 add-session 超时+对账前错位、拉起崩溃等）都会让线程 pending 指令
+  // 无限暂存——前端表现为「已暂存，等接续后自动继续」永久挂起，与接续无关。
+  // 本扫描对「pending 滞留超阈值且 head runtime 缺位」的线程重发唤醒：
+  // ensureHeadRuntime → add-session 加入；若 runtime 侧会话早已就绪（历史
+  // 错位），already-exists 对账路径会重建宿主记录，随后 runtime-ready 补投
+  // 既有机制自然完成投递。本模块不直接经手投递。
+  const requeueInFlight = new Set();
+  const STALL_THRESHOLD_MS = 60_000;
+  const TERMINAL_LIKE_STATUS = new Set(['archived', 'closed', 'deleting', 'hold']);
+
+  async function requeueStalledPendingThreads() {
+    const report = { examined: 0, requeued: [], skipped: [] };
+    const ensureHead = typeof getEnsureHeadRuntime === 'function' ? getEnsureHeadRuntime() : null;
+    const resolveViewer = typeof threadControl?.resolveSessionViewerId === 'function'
+      ? threadControl.resolveSessionViewerId.bind(threadControl)
+      : null;
+    if (typeof ensureHead !== 'function') return report;
+
+    const summaries = await core.listThreads();
+    for (const summary of summaries) {
+      // 摘要预筛：无 pending 指令的线程不读记录（健康线程零记录级开销）。
+      if (!Array.isArray(summary?.pendingTexts) || summary.pendingTexts.length === 0) continue;
+      const status = String(summary?.status || '');
+      if (TERMINAL_LIKE_STATUS.has(status)) continue;
+      const threadId = String(summary?.threadId || '').trim();
+      if (!threadId || requeueInFlight.has(threadId)) continue;
+
+      const record = await core.getThread(threadId).catch(() => null);
+      if (!record) continue;
+      const pending = (Array.isArray(record.commands) ? record.commands : [])
+        .filter((c) => c?.status === 'pending');
+      if (pending.length === 0) continue;
+      const oldest = pending.reduce(
+        (min, c) => Math.min(min, Number(c?.createdAt) || Number.POSITIVE_INFINITY),
+        Number.POSITIVE_INFINITY,
+      );
+      if (!Number.isFinite(oldest) || Date.now() - oldest < STALL_THRESHOLD_MS) continue;
+      // runtime 在位：正常投递路径自会处理（可能正在处理中），不重复唤醒。
+      if (resolveViewer && resolveViewer(record.agentId, record.headSessionId)) continue;
+
+      report.examined += 1;
+      requeueInFlight.add(threadId);
+      // fire-and-forget：扫描 tick 不等待拉起（add-session 本身可等 10s），
+      // 单线程失败下一轮扫描自然重试（滞留事实仍在盘上）。
+      Promise.resolve(ensureHead(record.agentId, record.headSessionId))
+        .catch((error) => console.warn(`[thread-recovery] stalled requeue wake failed for ${threadId}:`, error?.message || error))
+        .finally(() => requeueInFlight.delete(threadId));
+      report.requeued.push(threadId);
+    }
+    return report;
+  }
+
+  return { convergeInterruptedSuccessions, convergePhantomRotating, requeueStalledPendingThreads };
 }

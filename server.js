@@ -136,6 +136,8 @@ import { getThreadIntegration } from './server/thread-control/thread-integration
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { registerThreadHostAgents, isThreadHostSession } from './server/thread-control/host-agents.js';
+import { registerSessionBundleAgents, deriveSessionBundleAgentIds } from './server/shared/session-storage.js';
+import { runSessionStoreMigration } from './server/shared/session-storage-migration.js';
 import { IDENTITY_SCOPES, registerIdentityScopes } from './server/feature-runtime/install-service.js';
 import { setupMemoAppRoutes } from './server/routes/memo-app.js';
 import { setupIMOperatorThreadRoutes } from './server/routes/im-operator-thread.js';
@@ -438,6 +440,8 @@ const threadSuccession = createThreadSuccessionService({
 });
 const threadRecovery = createThreadRecoveryService({
   threadControl,
+  // 惰性取用：ensureHeadRuntime（const）定义晚于本构造，直接传引用会 TDZ。
+  getEnsureHeadRuntime: () => ensureHeadRuntime,
 });
 const threadLifecycle = createThreadLifecycleService({
   control: threadControl,
@@ -1978,6 +1982,27 @@ async function main() {
     registerThreadHostAgents(declaredAgents
       .filter((agent) => agent?.threadHost === true && agent?.enabled !== false)
       .map((agent) => agent.id));
+    // 会话存储分区同样按 metadata 声明派生（ADR-0016 修订：sessionBundle 声明化，
+    // 模式与 threadHost 同构）。注册先于会话读写，保证存储路径解析从首个请求起
+    // 即按声明集合判定；未注册前 session-storage 以声明化前的现役集合兜底。
+    registerSessionBundleAgents(deriveSessionBundleAgentIds(declaredAgents));
+    // 声明化归位与清壳（幂等）：memo 等声明 sessionBundle 的 agent 首次启动
+    // 自动从旧仓 rename 归位；prebuilt-sessions 下空目录残骸移除。失败告警
+    // 不阻断（ADR-0016 迁移原则），且发生在任何 runtime 拉起之前。
+    try {
+      const migrationActions = runSessionStoreMigration({
+        bundleAgentIds: deriveSessionBundleAgentIds(declaredAgents),
+        log: (message) => console.log(message),
+      });
+      if (migrationActions.relocated.length > 0 || migrationActions.cleanedEmptyDirs > 0) {
+        console.log(`[session-store-migration] relocated=${migrationActions.relocated.join(',') || '-'} cleanedEmptyDirs=${migrationActions.cleanedEmptyDirs}`);
+      }
+      for (const conflict of migrationActions.conflicts) {
+        console.warn(`[session-store-migration] 冲突保留: ${conflict.agentId}（新旧位置均有数据，需人工处置）`);
+      }
+    } catch (err) {
+      console.warn('[session-store-migration] failed:', err.message);
+    }
   } catch (err) {
     console.warn('[thread-host] register from metadata failed:', err.message);
   }
@@ -2084,6 +2109,14 @@ async function main() {
         console.warn(`[thread-recovery] converged ${report.converged.length} phantom rotation barrier(s):`, report.converged);
       }
     }).catch((err) => console.warn('[thread-recovery] phantom sweep failed:', err.message));
+    // 滞留 pending 兜底：唤醒/补投链断掉（如共享进程会话错位、拉起反复
+    // 失败）时，线程输入会无限暂存且无重试点。重发唤醒让 add-session 对账
+    // 与 runtime-ready 补投既有机制接管。
+    threadRecovery.requeueStalledPendingThreads().then((report) => {
+      if (report.requeued.length > 0) {
+        console.warn(`[thread-recovery] requeued ${report.requeued.length} stalled pending thread(s):`, report.requeued);
+      }
+    }).catch((err) => console.warn('[thread-recovery] stalled requeue sweep failed:', err.message));
   }, 15_000).unref();
 
   httpServer = app.listen(APP_PORT);

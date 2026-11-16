@@ -1,6 +1,7 @@
 {
   "id": "programming-helper",
   "kind": "workspace",
+  "sessionBundle": true,
   "threadHost": true,
   "sessionOps": true,
   "titlePolicy": "app",

@@ -1,15 +1,19 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { Agent, FileSessionStore } from '@agentdevjs/core';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
+import { registerSessionBundleAgentsFromScan, resolveSessionStoreDir } from '../server/shared/session-storage.js';
 import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
 
-// 权威集合来自 server/shared/constants.js（服务端与所有脚本必须同源）
+// 权威集合来自 server/shared/constants.js（此处仅用于 workspace cwd 面判定；
+// 会话存储位置已归 session-storage 按 sessionBundle 声明解析）
 export const WORKSPACE_BOUND_AGENT_IDS = WORKSPACE_SESSION_AGENT_IDS;
-
 // 会话数据根与 server/shared/constants.js 同源解析，支持 AGENTDEV_DATA_DIR 多实例隔离
 const USER_DATA_ROOT = resolveUserDataDir();
+// 按 prebuilt-agents 的 sessionBundle 声明接线存储分区（与 server 启动派生同源）
+registerSessionBundleAgentsFromScan(fileURLToPath(new URL('../prebuilt-agents/', import.meta.url)));
 
 export function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -87,11 +91,7 @@ export function sanitizeSessionFragment(value) {
 }
 
 export function getSessionStoreDir(agentId) {
-  const normalizedAgentId = sanitizeSessionFragment(agentId);
-  if (WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)) {
-    return join(USER_DATA_ROOT, 'workspaces', normalizedAgentId, 'sessions');
-  }
-  return join(USER_DATA_ROOT, 'prebuilt-sessions', normalizedAgentId);
+  return resolveSessionStoreDir(agentId, USER_DATA_ROOT);
 }
 
 // 会话索引记录查找（ADR-0036：索引持久层为 index.db，遗留 index.json 由服务

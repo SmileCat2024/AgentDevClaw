@@ -1,6 +1,7 @@
 {
   "id": "memo",
   "kind": "workspace",
+  "sessionBundle": true,
   "threadHost": true,
   "titlePolicy": "app",
   "name": "Memo 智能备忘录",

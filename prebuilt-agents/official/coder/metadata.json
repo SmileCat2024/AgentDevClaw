@@ -1,6 +1,7 @@
 {
   "id": "coder",
   "kind": "workspace",
+  "sessionBundle": true,
   "threadHost": true,
   "titlePolicy": "app",
   "name": "Coder",

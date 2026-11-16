@@ -10,14 +10,16 @@ import {
 import {
   sanitizeSessionFragment,
   cleanSessionText,
-  isWorkspaceSessionAgent,
 } from './string-helpers.js';
+import { isSessionBundleAgent } from './session-storage.js';
 import { ensureDir } from './fs-helpers.js';
 
 // ── Path helpers ──────────────────────────────────────────────────
 
+// 会话存储位置按 sessionBundle 声明解析（ADR-0016 修订；与 isWorkspaceSessionAgent
+// 的 state/forms 面判定分离，memo 声明后存储归位但不获得 forms/project 行为）。
 export function getPrebuiltAgentSessionDir(agentId) {
-  if (isWorkspaceSessionAgent(agentId)) {
+  if (isSessionBundleAgent(agentId)) {
     return path.join(PREBUILT_WORKSPACES_ROOT, sanitizeSessionFragment(agentId), 'sessions');
   }
   return path.join(PREBUILT_SESSIONS_ROOT, sanitizeSessionFragment(agentId));
@@ -283,16 +285,16 @@ export function migrateAllPrebuiltSessionIndexes(warn = console.warn) {
       }
     }
   };
-  // 非 workspace 型：sessions 根 = prebuilt-sessions/<agentId>/
+  // 非 bundle 型：sessions 根 = prebuilt-sessions/<agentId>/
   visit(
     PREBUILT_SESSIONS_ROOT,
-    (agentId) => !isWorkspaceSessionAgent(agentId),
+    (agentId) => !isSessionBundleAgent(agentId),
     (agentId) => path.join(PREBUILT_SESSIONS_ROOT, agentId),
   );
-  // workspace 型：sessions 根 = workspaces/<agentId>/sessions/
+  // bundle 型：sessions 根 = workspaces/<agentId>/sessions/
   visit(
     PREBUILT_WORKSPACES_ROOT,
-    (agentId) => isWorkspaceSessionAgent(agentId),
+    (agentId) => isSessionBundleAgent(agentId),
     (agentId) => path.join(PREBUILT_WORKSPACES_ROOT, agentId, 'sessions'),
   );
   return migrated;

@@ -68,7 +68,7 @@
 - [0001 AgentDev 导出面治理](0001-agentdev-export-surface-governance.md) — Runtime 双类型拆分与按引用导出
 - [0003 AgentDev 包结构破坏性拆分](0003-agentdev-package-split-no-umbrella.md) — 无伞包、core 零重依赖；生态 feature 唯一权威源码在 `AgentDev/packages/`
 - [0006 本地显式资源寻址优先](0006-local-explicit-resource-targeting-first.md)
-- [0016 用户数据存储分区治理](0016-user-data-storage-partitioning.md) — 分区约定与 feature 持久资产收敛
+- [0016 用户数据存储分区治理](0016-user-data-storage-partitioning.md) — 分区约定与 feature 持久资产收敛（会话分区键经 2026-11-16 修订为 sessionBundle 声明驱动）
 - [0027 Agent OS 治理面](0027-agent-os-consent-governance-and-runtime-quota.md) — 同意模型与 per-workspace runtime 并发配额（`maxLiveThreads`，限同时运行的 runtime 进程数）
 - [0028 凭证失效恢复与分层判据](0028-credential-recovery-and-layering-criteria.md) — llm auth 错误语义、恢复编排、框架/应用分层判据（LLM 实例=参数快照）
 - [0030 OS 通知投递面](0030-os-notification-delivery-and-app-adoption.md) — 统一出口、通知权限项与应用承接

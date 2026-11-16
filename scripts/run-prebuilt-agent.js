@@ -31,6 +31,7 @@ import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { postUserTurnToViewerMailbox, waitForArbiterIdle } from './runtime-interjection-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH, MODEL_PRESETS_PATH } from '../server/shared/constants.js';
+import { declareSessionBundleAgent, resolveSessionStoreDir } from '../server/shared/session-storage.js';
 import { resolveDesktopWorkspace } from '../server/shared/desktop-workspace.js';
 import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
@@ -50,7 +51,8 @@ const RUNTIME_REGISTER_TIMEOUT_MS = parseInt(process.env.PROTOCLAW_RUNTIME_REGIS
 const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
-// 权威集合来自 server/shared/constants.js（服务端与子进程必须同源）
+// 权威集合来自 server/shared/constants.js（此处仅用于 workspace state / cwd 面
+// 判定；会话存储位置已归 session-storage 按 sessionBundle 声明解析）
 const WORKSPACE_BOUND_AGENT_IDS = WORKSPACE_SESSION_AGENT_IDS;
 // 会话数据根同源解析，支持 AGENTDEV_DATA_DIR 多实例隔离
 const USER_DATA_ROOT = resolveUserDataDir();
@@ -225,9 +227,15 @@ if (!agentDir || !agentId) {
 const agentPath = resolve(PROTOCLAW_ROOT, agentDir);
 const agentJsPath = join(agentPath, 'agent.js');
 const agentName = agentNameArg || agentId;
-const sessionStoreDir = WORKSPACE_BOUND_AGENT_IDS.has(sanitizeSessionFragment(agentId))
-  ? join(USER_DATA_ROOT, 'workspaces', sanitizeSessionFragment(agentId), 'sessions')
-  : join(USER_DATA_ROOT, 'prebuilt-sessions', sanitizeSessionFragment(agentId));
+// 会话存储分区按 agent 自身 metadata 的 sessionBundle 声明接线（ADR-0016 修订：
+// 声明化，与 server 启动派生同源；metadata 读取失败保持兜底集合判定）。
+try {
+  const declaredMetadata = JSON.parse(readFileSync(join(agentPath, 'metadata.json'), 'utf8'));
+  declareSessionBundleAgent(agentId, declaredMetadata?.sessionBundle === true);
+} catch {
+  // metadata 缺失/损坏：不声明，按 session-storage 兜底集合解析
+}
+const sessionStoreDir = resolveSessionStoreDir(agentId);
 mkdirSync(sessionStoreDir, { recursive: true });
 
 const sessionStore = new FileSessionStore(sessionStoreDir);
@@ -1514,8 +1522,17 @@ process.on('message', async (msg) => {
   if (msg.type === 'add-session') {
     const requestedSessionId = cleanValue(msg.sessionId);
     const newSessionId = sanitizeSessionFragment(requestedSessionId);
-    if (!requestedSessionId || sessions.has(newSessionId)) {
-      process.send({ type: 'session-error', sessionId: newSessionId, error: 'session already exists or invalid sessionId' });
+    // 错误语义拆分（宿主对 already-exists 走身份对账自愈，不视为失败）：
+    // sessionId 缺失/非法与「会话已在本进程」是两种不同事实，混报会让宿主
+    // 把可自愈的错位（宿主无记录但 runtime 已加载）当成终态拒绝，线程输入
+    // 永久滞留 pending（wt-a258c93b 事故链：add-session 超时 → 宿主放弃 →
+    // runtime 加载完成 → 宿主再试 → already exists → 死锁）。
+    if (!requestedSessionId) {
+      process.send({ type: 'session-error', sessionId: newSessionId, error: 'invalid sessionId' });
+      return;
+    }
+    if (sessions.has(newSessionId)) {
+      process.send({ type: 'session-error', sessionId: newSessionId, error: 'session already exists' });
       return;
     }
     const newSession = new SessionLifecycle({
@@ -1548,6 +1565,26 @@ process.on('message', async (msg) => {
   if (msg.type === 'remove-session') {
     const targetId = sanitizeSessionFragment(msg.sessionId || '');
     await closeHostedSession(targetId);
+    return;
+  }
+
+  // ── query-session-identity: 宿主身份对账（add-session already-exists 自愈）──
+  // 宿主与 runtime 状态错位（宿主无记录、runtime 已加载）时，宿主经此查询
+  // 拿到既有会话的 runtime-identity 并重建托管记录。复用 identity 握手消息
+  // 格式，宿主侧 ack 走既有 runtime-identity-accepted 通道。
+  if (msg.type === 'query-session-identity') {
+    const targetId = sanitizeSessionFragment(msg.sessionId || '');
+    const session = sessions.get(targetId);
+    if (session && session.agent && session.managedRuntimeIdentity) {
+      process.send({
+        type: 'runtime-identity',
+        agentId: session.managedRuntimeIdentity.agentId,
+        sessionId: targetId,
+        viewerAgentId: session.agent.agentId ?? null,
+      });
+    } else {
+      process.send({ type: 'session-error', sessionId: targetId, error: 'session not found in shared process' });
+    }
     return;
   }
 

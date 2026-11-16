@@ -8,7 +8,7 @@
 
 **Workspace Session（工作空间会话）**：
 - 持久化的会话记录
-- 存储位置：`~/.agentdev/AgentDevClaw/prebuilt-sessions/<agentId>/`
+- 存储位置：`~/.agentdev/AgentDevClaw/workspaces/programming-helper/sessions/`（programming-helper 声明 `sessionBundle: true`，与 feature-config 等工作空间数据同址；其余 agent 在 `prebuilt-sessions/<agentId>/`，权威分流见 ADR-0016 修订节）
 - 数据结构：
   - `index.json`：会话注册表，包含 `activeSessionId` 和 `sessions[]`
   - `session-<id>.json`：各次会话的完整快照

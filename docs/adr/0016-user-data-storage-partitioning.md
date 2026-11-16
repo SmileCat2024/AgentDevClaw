@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受（2026-09-13 存储体系梳理决策，Phase 0 + Phase 1）。
+已接受（2026-09-13 存储体系梳理决策，Phase 0 + Phase 1；2026-11-16 修订：会话分区键声明化，见文末修订节）。
 
 ## 背景
 
@@ -69,3 +69,14 @@
 - feature 持久资产必须位于数据根 `assets/<feature>/`，且经装配层显式注入路径。
 - 项目内 `.agentdev/` 的运行产物不得混入读取约定区，读取约定区不得写入运行产物。
 - 已废弃的 feature 不得重新出现在任何装配面（预制 agent、生成模板、推荐组合、打包与链接清单）。
+
+## 修订（2026-11-16）：会话分区键声明化
+
+会话与线程分区存在两路：`workspaces/<agentId>/sessions/` 与 `prebuilt-sessions/<agentId>/`。此前分流键是 `server/shared/constants.js` 的硬编码 ID 集合（`WORKSPACE_SESSION_AGENT_IDS`），依赖"新工作空间 agent 上线时手动登记"，已出现脱节实例（memo 为 APP 工作空间但会话未随数据包同址，且无决策记录覆盖）。
+
+修订决策：
+
+- 分流键改为 metadata 声明 `sessionBundle: true`（语义：会话是工作空间数据包的一等成员）。声明派生与路径解析的权威入口为 `server/shared/session-storage.js`（`registerSessionBundleAgents` / `deriveSessionBundleAgentIds` / `resolveSessionStoreDir`），模式与 threadHost 声明派生同构（ADR-0024 可拔插约束：公共代码不按 APP ID 硬编码）。该常量集合保留，继续承载 workspace state / forms / project 面判定（`isWorkspaceSessionAgent`），与存储判定分离，避免声明存储归位的 agent 意外获得 forms/project 行为。
+- 启动迁移（`server/shared/session-storage-migration.js`，幂等可重入）：声明的 agent 旧位置仍有数据且新位置不存在时 rename 归位；新旧位置均有数据视为冲突，告警保留不合并；`prebuilt-sessions/` 下完全为空的目录（历史 runtime 实例残骸 `agent-N-<pid>` 与归位后空壳）移除，有任何文件的目录不动。失败遵循本 ADR 迁移原则：保持现状、告警不阻断。
+- `prebuilt-sessions` 目录名保留不改（改名使全部历史文档与外部引用失效，成本大于收益），其语义为"无工作空间数据包的 agent 会话区"。
+- scripts 侧（runtime 宿主 / 无头 CLI / 镜像 / 拓扑分析）经 `registerSessionBundleAgentsFromScan` 读 prebuilt-agents 声明接线，与 server 派生同源。

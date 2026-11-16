@@ -23,7 +23,8 @@ import { Writable } from 'stream';
 import { existsSync, mkdirSync } from 'fs';
 import { basename, join } from 'path';
 import Docker from 'dockerode';
-import { USER_DATA_ROOT, WORKSPACE_SESSION_AGENT_IDS } from '../shared/constants.js';
+import { USER_DATA_ROOT } from '../shared/constants.js';
+import { isSessionBundleAgent, resolveSessionStoreDir } from '../shared/session-storage.js';
 import { cleanSessionText, sanitizeSessionFragment, log } from '../shared/string-helpers.js';
 import { issueManagedSpawnTicket } from '../shared/runtime-spawn-tickets.js';
 
@@ -120,10 +121,8 @@ function resolvePlatformGatewayContext(specEnv) {
  */
 export function buildDataMounts(agentId, specEnv, dataRoot = USER_DATA_ROOT) {
   const binds = [];
-  const workspaceBound = WORKSPACE_SESSION_AGENT_IDS.has(agentId);
-  const sessionsHostDir = workspaceBound
-    ? join(dataRoot, 'workspaces', agentId, 'sessions')
-    : join(dataRoot, 'prebuilt-sessions', agentId);
+  const workspaceBound = isSessionBundleAgent(agentId);
+  const sessionsHostDir = resolveSessionStoreDir(agentId, dataRoot);
   mkdirSync(sessionsHostDir, { recursive: true });
   binds.push(toBind(sessionsHostDir, workspaceBound
     ? `${CONTAINER_DATA_ROOT}/workspaces/${agentId}/sessions`
