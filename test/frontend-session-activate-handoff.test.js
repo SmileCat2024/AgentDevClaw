@@ -4,21 +4,13 @@
 // 失败弹 alert（历史缺陷：用户点击接续中的线程条目弹
 // "Session failed: ... 挂载已拒绝"）。
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import { createWorkspaceSessionRequest } from '../public/src/modules/workspace-entry.js';
 import test from 'node:test';
-import { createFrontendSandbox, sourceBetween } from './helpers/frontend-vm.js';
-
-const source = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
-
-const fnSource = sourceBetween(
-  source,
-  'async function openPrebuiltWorkspaceSession(agentId, rawAction) {',
-  'function applyOptimisticWorkspaceSession(agentId, session) {',
-);
+import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 function loadWithFetch(fetchImpl) {
   const ctx = createFrontendSandbox({ fetch: fetchImpl });
-  ctx.run('window.openPrebuiltWorkspaceSession = ' + fnSource.replace(/^async function openPrebuiltWorkspaceSession/, 'async function'));
+  Object.assign(ctx.window, createWorkspaceSessionRequest({ fetch: fetchImpl }));
   return ctx;
 }
 

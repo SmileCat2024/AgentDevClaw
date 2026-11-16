@@ -266,116 +266,35 @@ function getInputSurfaceMode(requests = readCurrentSessionViewState().inputReque
 // ── Sidebar rendering & agent list → modules/sidebar-render.js ──
 
 
-window.handlePrebuiltAgentClick = async (agentId) => {
-  bumpNavigationGuard();
-  closeAgentContextMenu();
-  const prebuiltAgent = allAgents.find((agent) => agent.id === agentId && agent.source === 'prebuilt');
-  if (!prebuiltAgent) return;
-  if (!isWorkspaceHostUnit(prebuiltAgent)) {
-    setPreferredUnitMode('home', prebuiltAgent);
-  }
-
-  if (isWorkspaceHostUnit(prebuiltAgent)) {
-    focusedAgentId = agentId;
-    renderAgentList();
-    if (!loadedAgentDetailIds.has(agentId)) {
+function createWorkspaceEntryHost() {
+  return {
+    bumpNavigationGuard: () => bumpNavigationGuard(),
+    closeContextMenu: () => closeAgentContextMenu(),
+    findWorkspace: (id) => allAgents.find((agent) => agent.id === id && agent.source === 'prebuilt'),
+    isWorkspaceHost: (agent) => isWorkspaceHostUnit(agent),
+    isWorkspaceSurface: (agent) => isWorkspaceSurfaceUnit(agent),
+    preferHome: (agent) => setPreferredUnitMode('home', agent),
+    focus: (id) => { focusedAgentId = id; },
+    renderAgents: () => renderAgentList(),
+    hasDetail: (id) => loadedAgentDetailIds.has(id),
+    markDetailLoaded: (id) => loadedAgentDetailIds.add(id),
+    showLoading: () => {
       container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
-    }
-    await loadAgentDetail(agentId);
-    loadedAgentDetailIds.add(agentId);
-    try { localStorage.setItem('claw:lastFocusedEntryId', agentId); } catch { /* ignore */ }
-    selectWorkspaceSurface(prebuiltAgent.id, { skipFeaturePanel: true });
-    return;
-  }
-
-  if (isWorkspaceSurfaceUnit(prebuiltAgent)) {
-    focusedAgentId = agentId;
-    renderAgentList();
-    if (!loadedAgentDetailIds.has(agentId)) {
-      container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
-    }
-    await window.loadAgentDetail(prebuiltAgent.id);
-    selectWorkspaceSurface(prebuiltAgent.id, { skipFeaturePanel: true });
-    return;
-  }
-
-  const runtimeSessionId = prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId;
-  if (runtimeSessionId) {
-    await window.switchAgent(runtimeSessionId);
-    return;
-  }
-
-  if (pendingPrebuiltAgentIds.has(agentId)) {
-    return;
-  }
-
-  pendingPrebuiltAgentIds.add(agentId);
-  renderAgentList();
-
-  const _startNavGuard = _navigationGuardEpoch;
-  try {
-    await invoke('start_agent', { agentId });
-    const startedAgent = await waitForPrebuiltRuntimeSession(agentId);
-    pendingPrebuiltAgentIds.delete(agentId);
-    renderAgentList();
-    if (_startNavGuard !== _navigationGuardEpoch) return;
-    const nextRuntimeId = startedAgent.runtime_session_id || startedAgent.runtimeSessionId || startedAgent.id;
-    setPreferredUnitMode('home', allAgents.find((agent) => agent.id === agentId && agent.source === 'prebuilt') || startedAgent);
-    await requestSwitch(nextRuntimeId, 'prebuilt-start');
-  } catch (e) {
-    pendingPrebuiltAgentIds.delete(agentId);
-    renderAgentList();
-    console.error('Failed to start prebuilt agent:', e);
-    showAgentStartError(e);
-  }
-};
-
-async function openPrebuiltWorkspaceSession(agentId, rawAction) {
-  const action = typeof rawAction === 'string' ? JSON.parse(rawAction) : (rawAction || {});
-  const endpoint = (action.type === 'create_session' || action.type === 'create_session_from_session')
-    ? '/protoclaw/prebuilt_sessions'
-    : '/protoclaw/prebuilt_sessions/activate';
-  const payload = (action.type === 'create_session' || action.type === 'create_session_from_session')
-    ? {
-        agentId,
-        sourceSessionId: action.sessionId || null,
-        workspaceAgentId: action.workspaceAgentId,
-        featureName: action.featureName || '',
-        agentName: action.agentName || '',
-        projectName: action.projectName || '',
-        openDirectory: action.openDirectory || '',
-        // 项目会话显式声明稳定归属（045）：服务端按项目解析工作目录，
-        // 不做目录回退；目录会话不携带该字段
-        ...(String(action.projectId || '').trim() ? { projectId: String(action.projectId).trim() } : {}),
-        ...(String(action.runtimeMode || '').trim() ? { runtimeMode: String(action.runtimeMode).trim() } : {}),
-        studioFeatureIds: Array.isArray(action.studioFeatureIds) ? action.studioFeatureIds : [],
-        targetDir: action.targetDir || '',
-        operationId: action.operationId || '',
-        responseMode: 'delta',
-      }
-    : { agentId, sessionId: action.sessionId, operationId: action.operationId || '', responseMode: 'delta' };
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    // 接续挡板 409 结构化透传：open_session 消费方据此转入线程等待表面
-    //（挂上一棒消息 + 接力指示器），不得作为普通失败弹 alert。
-    if (response.status === 409) {
-      const payload = await response.json().catch(() => null);
-      if (payload?.code === 'thread_handoff_in_progress') {
-        const error = new Error(payload.message || 'thread handoff in progress');
-        error.handoff = {
-          threadId: String(payload.threadId || payload.target?.threadId || '').trim(),
-          sessionId: String(payload.headSessionId || payload.target?.headSessionId || action.sessionId || '').trim(),
-        };
-        throw error;
-      }
-    }
-    throw new Error(await response.text().catch(() => 'session operation failed'));
-  }
-  return response.json();
+    },
+    loadDetail: (id) => loadAgentDetail(id),
+    persistEntry: (id) => { try { localStorage.setItem('claw:lastFocusedEntryId', id); } catch { /* ignore */ } },
+    selectWorkspace: (id, options) => selectWorkspaceSurface(id, options),
+    switchAgent: (id) => window.switchAgent(id),
+    isPending: (id) => pendingPrebuiltAgentIds.has(id),
+    markPending: (id) => pendingPrebuiltAgentIds.add(id),
+    clearPending: (id) => pendingPrebuiltAgentIds.delete(id),
+    navigationEpoch: () => _navigationGuardEpoch,
+    startAgent: (id) => invoke('start_agent', { agentId: id }),
+    waitRuntime: (id) => waitForPrebuiltRuntimeSession(id),
+    requestSwitch: (id, source) => requestSwitch(id, source),
+    error: (...args) => console.error(...args),
+    showStartError: (error) => showAgentStartError(error),
+  };
 }
 
 function applyOptimisticWorkspaceSession(agentId, session) {

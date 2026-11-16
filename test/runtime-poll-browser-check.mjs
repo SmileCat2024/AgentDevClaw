@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 const main = await fs.readFile('public/src/app-main.js', 'utf8');
+const entryHost = main.slice(main.indexOf('function createWorkspaceEntryHost()'), main.indexOf('function applyOptimisticWorkspaceSession'));
 const navigationHost = main.slice(main.indexOf('function createWorkspaceSessionNavigationHost()'), main.indexOf('// ── Docset & material actions'));
 const switchHost = main.slice(main.indexOf('function createRuntimeSwitchHost()'), main.indexOf('// ── Context menu action handlers'));
 const pollSource = main.slice(main.indexOf('// ── Runtime poll coordinator'), main.indexOf('// ── Input request rendering'));
@@ -27,6 +28,7 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/sidebar-render.js"></script>
 <script>
+  ${entryHost}
   ${navigationHost}
   ${switchHost}
   ${pollSource}
@@ -54,6 +56,9 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 </body>`)));
 app.get('/protoclaw/auth/status', (_req, res) => res.json({ enabled: false, authenticated: true }));
 app.get('/protoclaw/agent_detail', (_req, res) => res.json({ workspace_sessions: { sessions: [] } }));
+app.post('/protoclaw/prebuilt_sessions/activate', (_req, res) => res.status(409).json({
+  code: 'thread_handoff_in_progress', threadId: 'handoff-thread', headSessionId: 'handoff-session',
+}));
 const requests = [];
 app.get('/api/agents/rt/:endpoint', (req, res) => {
   requests.push(req.params.endpoint);
@@ -142,8 +147,18 @@ try {
   assert.equal(navigated[0].focus, 'next');
   assert.equal(navigated[0].runtime, null);
   assert.match(navigated[0].body, /加载中|Loading/);
+  const entry = await page.evaluate(async () => {
+    const surfaces = [];
+    window.selectWorkspaceSurface = (id, options) => surfaces.push({ id, ...options });
+    await handlePrebuiltAgentClick('next');
+    const handoff = await openPrebuiltWorkspaceSession('next', { type: 'open_session', sessionId: 'old' })
+      .then(() => null, error => error.handoff);
+    return { surfaces, remembered: localStorage.getItem('claw:lastFocusedEntryId'), handoff };
+  });
+  assert.deepEqual(entry, { surfaces: [{ id: 'next', skipFeaturePanel: true }], remembered: 'next',
+    handoff: { threadId: 'handoff-thread', sessionId: 'handoff-session' } });
   assert.deepEqual(errors, []);
-  console.log('PASS: production kernel preserves handoff views, workspace navigation and deferred switch guards');
+  console.log('PASS: production kernel preserves handoff views, workspace navigation, entry opening and deferred switch guards');
 } finally {
   release();
   if (browser) await browser.close();

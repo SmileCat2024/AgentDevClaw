@@ -16,3 +16,4 @@ import './agent-snapshot-loader-host.js';
 import './time-format-host.js';
 import './runtime-switch-host.js';
 import './workspace-session-navigation-host.js';
+import './workspace-entry-host.js';

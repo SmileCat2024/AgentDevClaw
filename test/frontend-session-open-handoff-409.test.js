@@ -6,20 +6,13 @@
 //      线程条目就冒出大量「正在启动新会话…」占位）；
 //   3. 直接进入等待表面，挂上服务端 409 指明的目标线程。
 //
-// 链路真实性：openPrebuiltWorkspaceSession 取 app-main.js 的真实实现（含
+// 链路真实性：openPrebuiltWorkspaceSession 执行 workspace-entry.js 的真实实现（含
 // 409 → error.handoff 的结构化解析），workspace-actions 亦为真实源码，
 // 只有宿主全局与观察点用替身。
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import { createWorkspaceSessionRequest } from '../public/src/modules/workspace-entry.js';
 import test from 'node:test';
-import { createFrontendSandbox, sourceBetween } from './helpers/frontend-vm.js';
-
-const appMainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
-const openSessionSource = sourceBetween(
-  appMainSource,
-  'async function openPrebuiltWorkspaceSession(agentId, rawAction) {',
-  'function applyOptimisticWorkspaceSession(agentId, session) {',
-);
+import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 function createActionsSandbox() {
   const requests = [];
@@ -112,7 +105,7 @@ function createActionsSandbox() {
     var currentWorkspaceTab = 'chat';
   `);
   // 真实 activate 调用链（含 409 → error.handoff 解析），不用替身绕开。
-  ctx.run(openSessionSource);
+  Object.assign(ctx.window, createWorkspaceSessionRequest({ fetch: (...args) => ctx.fetch(...args) }));
   ctx.loadSource('public/src/modules/workspace-actions.js');
   // 宿主插件：本地分支 selectForNewSession 只做透传。
   ctx.run('window.ClawFW = window.ClawFW || {};'
