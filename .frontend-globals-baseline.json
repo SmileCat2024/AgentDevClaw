@@ -198,7 +198,6 @@
   },
   "public/src/app-main.js": {
     "state": [
-      "_appliedMessagesSeq",
       "_forceFullPollNextCycle",
       "_lastWsSessionRefreshAt",
       "_scheduleInspectorRefresh",
@@ -214,6 +213,7 @@
       "commitMetadataUpdate",
       "computeSerializedBytes",
       "createCompactedResumeSession",
+      "createMessageProbeHost",
       "createPollCoordinatorHost",
       "emitMsgMetrics",
       "fetchWorkspaceSessionsForPoll",
@@ -237,8 +237,8 @@
       "newIdempotencyKey",
       "openPrebuiltWorkspaceSession",
       "orderPrebuiltByHost",
+      "renderMessageProbeCommit",
       "requestSwitch",
-      "runMessagesProbeCycle",
       "runPollCycle",
       "runWorkspaceActionFromEvent",
       "showCompactMenu",

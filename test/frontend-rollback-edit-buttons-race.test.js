@@ -10,6 +10,7 @@ import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { createSessionDataLoader } from '../public/src/modules/session-data-loader.js';
 import { createPollCoordinator } from '../public/src/modules/poll-coordinator.js';
+import { createMessageProbe } from '../public/src/modules/message-probe.js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { sourceBetween } from './helpers/frontend-vm.js';
@@ -195,6 +196,7 @@ function createChatSandbox() {
   vm.runInContext(load('public/src/modules/chat-renderer.js'), sandbox, { filename: 'chat-renderer.js' });
   vm.runInContext(POLL_SRC, sandbox, { filename: 'app-main.js#poll' });
   Object.assign(sandbox, createPollCoordinator(vm.runInContext('createPollCoordinatorHost()', sandbox)));
+  Object.assign(sandbox, createMessageProbe(vm.runInContext('createMessageProbeHost()', sandbox)));
   vm.runInContext(load('public/src/modules/sse-client.js'), sandbox, { filename: 'sse-client.js' });
   vm.runInContext(load('public/src/modules/agent-data-loader.js'), sandbox, { filename: 'agent-data-loader.js' });
   Object.assign(sandbox, createSessionDataLoader(sandbox.createSessionDataLoaderHost()));

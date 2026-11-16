@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 const main = await fs.readFile('public/src/app-main.js', 'utf8');
-const adapter = main.slice(main.indexOf('function createPollCoordinatorHost()'), main.indexOf('// 消息同步版本号对账'));
+const adapter = main.slice(main.indexOf('function createPollCoordinatorHost()'), main.indexOf('// Message sequence baselines'));
 const app = express();
 app.use(express.static('public'));
 app.get('/fixture', (_req, res) => res.type('html').send(`<!doctype html><html><body>

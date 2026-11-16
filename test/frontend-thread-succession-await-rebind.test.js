@@ -20,7 +20,7 @@ const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.m
 
 function extractNotFoundHandler() {
   const start = mainSource.indexOf('async function handleCoreResponsesNotFound(pollToken)');
-  const end = mainSource.indexOf('async function runMessagesProbeCycle', start);
+  const end = mainSource.indexOf('function createMessageProbeHost', start);
   assert.notEqual(start, -1, 'handleCoreResponsesNotFound should exist');
   assert.notEqual(end, -1, 'runMessagesProbeCycle marker should exist');
   return mainSource.slice(start, end);

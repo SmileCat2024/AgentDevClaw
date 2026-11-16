@@ -4,8 +4,6 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
-const mainSource = await fs.readFile('public/src/app-main.js', 'utf8');
-const pollHost = mainSource.slice(mainSource.indexOf('function createPollCoordinatorHost()'), mainSource.indexOf('// 消息同步版本号对账'));
 const app = express();
 app.use(express.static('public'));
 const index = await fs.readFile('public/index.html', 'utf8');
@@ -33,8 +31,7 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
  focusedAgentId = 'host';
 </script>
 <script src="/src/modules/auth-client.js"></script>
-<script>${pollHost}</script>
-<script type="module" src="/src/modules/kernel-entry.js"></script>
+<script type="module" src="/src/modules/agent-snapshot-loader-host.js"></script>
 <script>
  (async () => { await __clawAuthReady; window.started = true; await loadAgents(); window.finished = true; })();
 </script></body>`)));

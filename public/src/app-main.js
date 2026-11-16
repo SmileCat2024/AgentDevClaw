@@ -940,11 +940,7 @@ function createPollCoordinatorHost() {
     clearTimeout: (id) => clearTimeout(id),
   };
 }
-// 消息同步版本号对账（ADR-0012 v2）：记录每个 runtime 已应用到最后一次
-// 取数的 probe.seq。count 相等且 seq 未前进 → 零请求跳过。会话切换时不
-// 清理——viewer 的 seq 是 per-session 单调计数，runtime 不变则 seq 语义
-// 不变；runtime 消失后条目随 Map 上限自然淘汰。
-const _appliedMessagesSeq = new Map();
+// Message sequence baselines now belong to message-probe.js (poll/SSE shared).
 
 // workspace 会话列表条件刷新：记录每个 host 最近一次完整响应携带的 index
 // revision。poll 请求带上 sinceRevision，服务端 revision 一致时返回
@@ -1162,175 +1158,62 @@ async function handleCoreResponsesNotFound(pollToken) {
   return true;
 }
 
-/**
- * messages 增量取数周期（ADR-0013 probe + tail）：seq 对账矩阵决定取数方式，
- * commit 后渲染。poll 周期（probe 来自 overview 响应）与 SSE messages 事件
- * （probe 来自事件帧）共用——契约与取数逻辑单点。
- * @returns {Promise<'committed'|'stale'|'handled404'>}
- */
-async function runMessagesProbeCycle(pollToken, msgProbe) {
-  const pollRuntimeId = pollToken.runtimeId;
-  const prevKnownMessages = Array.isArray(currentMessages) ? currentMessages : [];
-  const prevKnownCount = prevKnownMessages.length;
-  const msgMetrics = {
-    actualBytes: 0,
-    fakeFullBytes: msgProbe ? msgProbe.fakeFullBytes : 0,
-    changeKind: msgProbe ? msgProbe.changeKind : null,
-    downgraded: false,
+// Classic rendering dependencies for the shared ESM poll/SSE message probe.
+function createMessageProbeHost() {
+  return {
+    messages: () => currentMessages,
+    isCurrent: (token) => isSessionViewTokenCurrent(token),
+    commit: (token, patch, effect) => commitSessionViewPatch(token, patch, effect),
+    fetch: (url) => fetch(url),
+    attachTimestamps: (messages, timestamps) => attachMessagesTimestamps(messages, timestamps),
+    bytes: computeSerializedBytes,
+    metrics: emitMsgMetrics,
+    render: renderMessageProbeCommit,
   };
+}
 
-  const fetchMessagesJson = async (query) => {
-    const res = await fetch(`/api/agents/${pollRuntimeId}/messages${query}`);
-    if (res.status === 404) {
-      return { handled404: true };
-    }
-    const data = await res.json();
-    return { data };
-  };
+function renderMessageProbeCommit({ previous, current }) {
+  // Clear session loading indicator once messages are available
+  if (current.messages.length > 0) clearChatLoadingSession();
 
-  let messages;
-  // ── seq 对账（ADR-0012 v2）──────────────────────────────────────────
-  // probe.seq 是同步版本号（真实变更时单调递增），changeKind 只是最近一
-  // 次真实变更的取数策略提示。对账矩阵：
-  //   count 回退 / probe 缺省 / 基线缺失 → 全量重建基线
-  //   count > prevKnown                  → 有新消息（append 路径）
-  //   count 相等 + seq 前进              → 内容有变（tail/rewrite 路径）
-  //   count 相等 + seq 未前进            → 真正未变化，零请求
-  const sessionViewKey = pollToken.identity
-    ? `${pollToken.identity.agentId}::${pollToken.identity.sessionId}`
-    : pollRuntimeId;
-  const appliedSeq = _appliedMessagesSeq.get(sessionViewKey) || 0;
-  const seqAdvanced = msgProbe ? msgProbe.seq > appliedSeq : true;
-  if (!msgProbe || msgProbe.seq < appliedSeq || msgProbe.seq > appliedSeq + 1
-    || msgProbe.count < prevKnownCount || (msgProbe.count > 0 && prevKnownCount === 0)) {
-    // probe 缺省、基线缺失、seq 重置/跨代或 count 回退 → 全量重建。
-    // changeKind 只描述最后一次变化；跳过 seq 时，增量不能保证旧前缀有效。
-    if (msgProbe && msgProbe.count < prevKnownCount) msgMetrics.downgraded = true;
-    const result = await fetchMessagesJson('');
-    if (result.handled404) return 'handled404';
-    if (!isSessionViewTokenCurrent(pollToken)) {
-      return 'stale';
-    }
-    messages = attachMessagesTimestamps(result.data.messages || [], result.data.timestamps);
-    msgMetrics.actualBytes += computeSerializedBytes(result.data);
-  } else if (!seqAdvanced) {
-    // 未变化：跳过 /messages 请求，复用现有消息数组（本周期零消息请求）
-    messages = prevKnownMessages;
-  } else if (msgProbe.count > prevKnownCount || msgProbe.changeKind === 'append') {
-    const since = prevKnownCount;
-    const result = await fetchMessagesJson(`?since=${since}`);
-    if (result.handled404) return 'handled404';
-    if (!isSessionViewTokenCurrent(pollToken)) {
-      return 'stale';
-    }
-    const delta = Array.isArray(result.data.messages) ? result.data.messages : [];
-    if (delta.length === msgProbe.count - since) {
-      messages = [...prevKnownMessages.slice(0, since), ...attachMessagesTimestamps(delta, result.data.timestamps)];
-    } else {
-      // 校验失败（让服务端分类 bug 显形并保正确性）→ 降级全量重建基线
-      msgMetrics.downgraded = true;
-      const full = await fetchMessagesJson('');
-      if (full.handled404) return 'handled404';
-      if (!isSessionViewTokenCurrent(pollToken)) {
-        return 'stale';
-      }
-      messages = attachMessagesTimestamps(full.data.messages || [], full.data.timestamps);
-      msgMetrics.actualBytes += computeSerializedBytes(full.data);
-    }
-    msgMetrics.actualBytes += computeSerializedBytes(result.data);
-  } else if (msgProbe.changeKind === 'tail') {
-    const result = await fetchMessagesJson('?tail=1');
-    if (result.handled404) return 'handled404';
-    if (!isSessionViewTokenCurrent(pollToken)) {
-      return 'stale';
-    }
-    const tail = Array.isArray(result.data.messages) ? result.data.messages : [];
-    if (tail.length === 1 && msgProbe.count === prevKnownCount && prevKnownCount > 0) {
-      messages = [...prevKnownMessages.slice(0, -1), attachMessagesTimestamps(tail, result.data.timestamps)[0]];
-    } else {
-      // 校验失败 → 降级全量重建基线
-      msgMetrics.downgraded = true;
-      const full = await fetchMessagesJson('');
-      if (full.handled404) return 'handled404';
-      if (!isSessionViewTokenCurrent(pollToken)) {
-        return 'stale';
-      }
-      messages = attachMessagesTimestamps(full.data.messages || [], full.data.timestamps);
-      msgMetrics.actualBytes += computeSerializedBytes(full.data);
-    }
-    msgMetrics.actualBytes += computeSerializedBytes(result.data);
-  } else {
-    // rewrite（中段替换 / 条数减少：rollback、compact、修剪）→ 全量拉
-    const result = await fetchMessagesJson('');
-    if (result.handled404) return 'handled404';
-    if (!isSessionViewTokenCurrent(pollToken)) {
-      return 'stale';
-    }
-    messages = attachMessagesTimestamps(result.data.messages || [], result.data.timestamps);
-    msgMetrics.actualBytes += computeSerializedBytes(result.data);
-  }
-
-  // SSE 与 poll 可以并发取数。只允许尚未被更新消息超越的响应提交；
-  // 身份 token 仍有效不代表本次使用的消息基线仍有效。
-  if (!isSessionViewTokenCurrent(pollToken)) return 'stale';
-  const latestAppliedSeq = _appliedMessagesSeq.get(sessionViewKey) || 0;
-  if (msgProbe && latestAppliedSeq !== appliedSeq && msgProbe.seq <= latestAppliedSeq) return 'stale';
-  if (currentMessages !== prevKnownMessages) {
-    if (msgProbe && msgProbe.seq <= latestAppliedSeq) return 'stale';
-    // 更新的 probe 仍待应用，但增量的旧前缀已失效：用已提交的基线重新
-    // 求值取数策略。保留原身份 token，不能跨过会话切换边界。
-    return runMessagesProbeCycle(pollToken, msgProbe);
-  }
-  const messagesCommitted = commitSessionViewPatch(pollToken, { messages }, ({ previous, current }) => {
-    // Clear session loading indicator once messages are available
-    if (current.messages.length > 0) clearChatLoadingSession();
-
-    // Render messages immediately — before non-critical async ops
-    // (status refresh, call states, queue sync) that add visible latency.
-    const previousMessages = previous.messages;
-    const nextMessages = current.messages;
-    // ADR-0041：壳层自动标题已硬屏蔽，此处调用是空操作（no-op）。
-    // 保留调用点只为记录历史触发位置；标题由应用自己的 AutoTitlePolicyFeature
-    // 订阅轮次事件生成。不要在此处恢复触发逻辑。
-    markAutoTitleCandidate(previousMessages, nextMessages);
-    const firstChangedIndex = findFirstChangedMessageIndex(nextMessages, previousMessages);
-    if (nextMessages.length !== previousMessages.length) {
-      if (nextMessages.length > previousMessages.length && firstChangedIndex === previousMessages.length) {
-        // 有新消息：只追加新的
-        const newMessages = nextMessages.slice(previousMessages.length);
-        if (shouldRenderWorkspaceSurface()) {
-          renderCurrentMainView(current);
-        } else {
-          appendNewMessages(newMessages, nextMessages.length - newMessages.length);
-        }
-      } else {
-        // 消息减少，或消息变多但前缀已变化：完全重建。
+  // Render messages immediately — before non-critical async ops
+  // (status refresh, call states, queue sync) that add visible latency.
+  const previousMessages = previous.messages;
+  const nextMessages = current.messages;
+  // ADR-0041：壳层自动标题已硬屏蔽，此处调用是空操作（no-op）。
+  // 保留调用点只为记录历史触发位置；标题由应用自己的 AutoTitlePolicyFeature
+  // 订阅轮次事件生成。不要在此处恢复触发逻辑。
+  markAutoTitleCandidate(previousMessages, nextMessages);
+  const firstChangedIndex = findFirstChangedMessageIndex(nextMessages, previousMessages);
+  if (nextMessages.length !== previousMessages.length) {
+    if (nextMessages.length > previousMessages.length && firstChangedIndex === previousMessages.length) {
+      // 有新消息：只追加新的
+      const newMessages = nextMessages.slice(previousMessages.length);
+      if (shouldRenderWorkspaceSurface()) {
         renderCurrentMainView(current);
+      } else {
+        appendNewMessages(newMessages, nextMessages.length - newMessages.length);
       }
     } else {
-      if (firstChangedIndex >= 0) {
-        // Rollback + partial compact can replace the middle of the transcript while
-        // keeping the same length after the summary reminder is inserted.
-        if (shouldRenderWorkspaceSurface() || firstChangedIndex < nextMessages.length - 1) {
-          renderCurrentMainView(current);
-        } else {
-          // 最后一条消息变化：替换最后一条（避免滚动重置）
-          updateLastMessage(nextMessages[nextMessages.length - 1]);
-        }
+      // 消息减少，或消息变多但前缀已变化：完全重建。
+      renderCurrentMainView(current);
+    }
+  } else {
+    if (firstChangedIndex >= 0) {
+      // Rollback + partial compact can replace the middle of the transcript while
+      // keeping the same length after the summary reminder is inserted.
+      if (shouldRenderWorkspaceSurface() || firstChangedIndex < nextMessages.length - 1) {
+        renderCurrentMainView(current);
+      } else {
+        // 最后一条消息变化：替换最后一条（避免滚动重置）
+        updateLastMessage(nextMessages[nextMessages.length - 1]);
       }
     }
-    // 乐观回显对账：真实消息上屏后再移除覆盖层，视觉上无缝替换
-    if (typeof window.ClawFW?.reconcileOptimisticUserEchoes === 'function') {
-      window.ClawFW.reconcileOptimisticUserEchoes(nextMessages);
-    }
-  });
-  if (!messagesCommitted) {
-    return 'stale';
   }
-  // seq 只描述已经成功提交并渲染的消息，不为被拒绝的响应推进进度。
-  _appliedMessagesSeq.set(sessionViewKey, msgProbe ? msgProbe.seq : 0);
-  emitMsgMetrics(msgMetrics);
-  return 'committed';
+  // 乐观回显对账：真实消息上屏后再移除覆盖层，视觉上无缝替换
+  if (typeof window.ClawFW?.reconcileOptimisticUserEchoes === 'function') {
+    window.ClawFW.reconcileOptimisticUserEchoes(nextMessages);
+  }
 }
 
 /**

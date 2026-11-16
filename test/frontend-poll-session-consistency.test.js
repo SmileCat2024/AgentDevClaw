@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { createPollCoordinator } from '../public/src/modules/poll-coordinator.js';
+import { createMessageProbe } from '../public/src/modules/message-probe.js';
 import { createRuntimeStatusLoader } from '../public/src/modules/runtime-status-loader.js';
 import { createSessionDataLoader } from '../public/src/modules/session-data-loader.js';
 
@@ -237,6 +238,7 @@ function createPollSandbox({ blockStatus = true } = {}) {
   const overviewSource = fs.readFileSync(new URL('../public/src/modules/overview-data.js', import.meta.url), 'utf8');
   vm.runInContext(`${sessionViewStateSource}\n${overviewSource}\n${extractPollSource()}`, sandbox);
   Object.assign(sandbox, createPollCoordinator(vm.runInContext('createPollCoordinatorHost()', sandbox)));
+  Object.assign(sandbox, createMessageProbe(vm.runInContext('createMessageProbeHost()', sandbox)));
   sandbox.__poll = sandbox.poll;
 
   return {
