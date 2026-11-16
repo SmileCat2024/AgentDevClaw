@@ -95,7 +95,7 @@ grep -rnw '<键名>' public/ test/ --include='*.js'
 
 ## 二、时序审计（R1–R4 + S，每批动手前强制）
 
-背景因果（plan「桥机制规格」）：classic 顶层代码先于 deferred ESM 执行；`app-main.js` 的 boot 是 async IIFE，首轮调用发生在 boot 微任务窗口，同样早于 deferred ESM。网络请求、SSE 和用户事件回调也不天然晚于模块初始化：模块下载可慢于这些回调。**所有可能早于 ESM 初始化的调用都须保留可用实现，或经另行批准的显式启动依赖解决**；只有普通访问器存在，不能证明函数已可调用。
+背景因果（plan「桥机制规格」）：classic 顶层代码先于 deferred ESM 执行。async 本身不保证调用更晚，但当前主 boot/SSE 等待 auth ready，认证初始化等待 `DOMContentLoaded`，该事件等待静态非 async ESM 执行，因此正常主链已有初始化顺序。逐项核对顶层调用、真实 await 链和绕行事件入口，不能仅因缺少 import 边就认定抢跑。**确实先于模块初始化的调用须保留可用实现，或经批准调整启动依赖**；普通访问器存在不代表函数已可调用。
 
 审计产出物（进报告）：一张「键 × 触达点」表，每行：键名、定义文件、读写点清单（文件 + 位置：顶层 / boot 窗口 / 事件回调）、赋值形态（原始值 / DOM 引用 / Map/Set / 函数 / null 重置）、触线结论与处理路径。
 
@@ -108,7 +108,7 @@ grep -rnw '<键名>' public/ test/ --include='*.js'
 
 ### R2 boot 微任务窗口触达
 
-- 审计：grep `app-main.js` 的 boot async IIFE 首轮同步调用链（历史已知触达键：`loadAgents`、`loadFeatureTemplateMap`、`waitForViewerReady`——以当前源码重新 grep 为准，不背快照）。本域键出现在该链上 → 同 R1 触线。
+- 审计：沿 `app-main.js` boot 首轮真实 await 链定位本域键。当前 `loadAgents`、`loadFeatureTemplateMap`、`waitForViewerReady` 在 auth ready 之后，不因出现在 boot 就自动触线；仅未受模块执行顺序保护的调用同 R1。报告须同时列出保护链与绕过链的证据。
 
 ### R3 DOM 引用类键
 

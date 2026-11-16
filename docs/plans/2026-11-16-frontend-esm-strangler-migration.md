@@ -56,7 +56,7 @@
 ### 为什么需要桥（时序因果）
 
 1. classic script 顶层代码在 deferred ESM 模块**之前**执行；
-2. `app-main.js` 的 boot 是 async IIFE，首轮 `loadAgents()` 等调用发生在 boot 微任务窗口——同样**早于** deferred ESM 执行；
+2. async 本身不保证执行晚于 ESM；当前主 boot/SSE 则等待 auth ready，认证初始化等待 `DOMContentLoaded`，该事件等待静态非 async ESM 执行，形成已有的传递依赖；
 3. 因此：**任何 classic 代码同步触达的东西（状态与函数）都不能先于其调用方变成 ESM**。
 
 桥的三个组成部分：
@@ -83,7 +83,7 @@
 ### 时序规则（写入迁移配方，每域转换前审计）
 
 - **R1**：classic 文件**顶层**（函数体外）对内核函数的调用 → 该函数保持 classic 定义，直到其调用方完成转换。
-- **R2**：boot 微任务窗口（`app-main.js` async IIFE 首轮）触达的函数（`loadAgents`、`loadFeatureTemplateMap`、`waitForViewerReady` 等）同 R1。
+- **R2**：沿 boot 首轮真实 await 链判断。`loadAgents`、`loadFeatureTemplateMap`、`waitForViewerReady` 当前在 auth ready 后，受静态模块执行顺序保护；只有无此保护的提前调用同 R1。
 - **R3**：DOM 引用类键（`container` 等）在 boot 时由 classic 赋值，哑存储天然安全。
 - **R4**：ESM 域模块的首次执行时机 = 首个 import 它的模块执行时；index.html 的 module 入口登记进 `frontend-script-tags-gate`。
 
@@ -119,8 +119,10 @@
 
 已确认的首战边界：
 
-- 域 1：`app-main` 顶层 `applyLanguage()` → `renderCurrentMainView()` → 欢迎态 → `getEmptyStateHtml()` 同步调用 `escapeHtml`。除此之外，poll / SSE messages 回调可在模块下载完成前进入 chat-renderer 并调用 `renderMarkdown`、`enhanceMathInElement`、`enhanceMarkdownTables`；共享 `marked.setOptions()` 的配置也必须先于直接使用 marked 的消费者生效。仅保留 `escapeHtml` 无法解除阻断。当前保留整个 classic 实现及原加载顺序，迁移与测试改造已撤回；需先决定并验证调用方与模块初始化之间的显式依赖边界，不以空壳、重试、队列或静默降级兜底。
-- 域 3：SSE client 的认证就绪回调可在 HTML 解析期间建立连接；`hello.choiceAlerts` 立即同步调用 `ClawToast.show()`。toast 本批保持 classic，待 SSE 装载/启动边界建立显式初始化依赖后再迁移；仅将 toast 标签改为 module 会产生漏通知窗口。
+- 域 1：`app-main` 顶层 `applyLanguage()` → `renderCurrentMainView()` → 欢迎态 → `getEmptyStateHtml()` 同步调用 `escapeHtml`，这是已确认的启动期依赖。主 boot、poll 和聚合 SSE 等待 auth ready；认证初始化等待 `DOMContentLoaded`，后者等待静态非 async ESM 执行完成，所以这些正常主链不能作为模块前调用的证据。其余工具、共享 `marked.setOptions()` 配置和早期用户事件须按真实入口分别核对；当前保留 classic 实现与原加载顺序，不使用空壳、重试、队列或静默降级。
+- 域 3：`toast-notify.js` 已转 ESM，保留 `window.ClawToast` 兼容 API，默认及命名导出指向同一对象。主 SSE 的 `hello.choiceAlerts` 受认证链保护；延迟模块浏览器验证覆盖首屏、语言/主题按钮、主 SSE 未提前连接及放行后的选择提醒、更新和关闭。未改变 auth 或 SSE 启动契约，未增加等待队列。
+
+安全状态接管不必等待上述函数初始化问题解决：可变状态在 classic 原声明位置以 `defineKey` 注册原初值，ESM 延后 `claim` 时吸收桥中现值，不能重复初始化。DOM 查询、localStorage 读取、监听安装仍发生在原 classic 时点。原 `const` 的只读语义、全局词法绑定与 window 属性差异须单独审查，不将它们当成可变状态无条件处理。实现与测试验证后按完整状态模块提交，函数迁移残余单列。
 
 | 序 | 域 | 主要键（fan-in） | 落点 | 备注 |
 |---|---|---|---|---|
@@ -133,6 +135,15 @@
 | 7 | agent 列表与聚焦 | `allAgents`(38)、`focusedAgentId`(25)、`loadAgents`(22)、`renderAgentList`(22)、`pendingPrebuiltAgentIds`、分组计数等 | `sidebar-render` 数据面 + app-core 状态合出 ESM `agent-store` 域 | 大域；`loadAgents` 受 R2 约束，须先审 boot 时序 |
 | 8 | 渲染入口 | `renderCurrentMainView`(40)、`renderFeaturePanel`(21)、`activeFeaturePanel`(20)、`lastRenderedWorkspaceHtml`(13)、`selectWorkspaceSurface`、`setPreferredUnitMode` 等 | app-ui 抽出 ESM `render-entry` 域，分发继续走 ClawHost.blocks | 与 ADR-0044 面板体系衔接 |
 | 9 | 编排（poll / switch） | `poll`(36)、`getCurrentAgentRecord`(33)、`switchAgent`(16)、`currentRuntimeAgentId`(48)、`currentMessages`(19)、`requestSwitch`、切换守卫族等 | app-main 核心抽 ESM `orchestration` 域 | **最后动**：扇出最大、时序最敏感（frontend-rendering-patterns.md 全篇竞态记录的主战场）；`currentRuntimeAgentId` / `currentMessages` 的归属（并入本域还是会话视图域）在 P0.8 定案 |
+
+#### 已验收的 P1 模块
+
+- 环境和右栏宽度：`i18n-environment-state.js` / `panel-layout-state.js` 接管语言、主题与宽度，保留原 localStorage 读取及 DOM 监听时点。
+- 会话存储：`session-view-storage.js` 接管消息、输入请求、工具配置及 inspector/overview/todo 快照与签名；真实 patch 的过期 token 拒绝规则保持不变。
+- 列表、渲染和导航存储：`agent-store-state.js` / `render-entry-state.js` / `orchestration-state.js` 接管对应可变键；查询、渲染与切换函数仍由 classic 实现。
+- 上述状态模块合计保留 42 个兼容访问器、六个 owner claim。classic 台账缩小不代表全局依赖消失；撤桥需等待消费方迁移。
+
+验证覆盖 claim 前写入保留、引用身份、真实请求合并与失败解锁、导航意图失效、真实会话 patch 及隔离浏览器启动。全量回归仍有线程接续 G3 失败，另观察到标注重放与计时预算的间歇失败；不得将当前阶段报告为全量测试通过。
 
 ### P2 长尾批次（活跃域约 90 个 modules 文件）
 

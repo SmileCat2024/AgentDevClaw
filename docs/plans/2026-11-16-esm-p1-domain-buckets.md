@@ -1,7 +1,7 @@
 # ESM 迁移 P0.8：P1 九域逐键分桶定案
 
 日期：2026-11-16
-状态：定案冻结。两个开放边界问题（§2、§3）与遗留项（§8）均已裁决，P1 各域键清单以本文为准
+状态：职责分桶已定案；时序与挂载方式须以实施审计为准。两个职责边界问题（§2、§3）与遗留归属（§8）均已裁决。函数转 ESM 不自动保留 classic 调用可用性：域 1/3 的初始化阻断和安全状态接管规则见主计划。本文表中的 export / 桥是候选挂载方式，不构成已完成或可直接切换的结论
 输入：[2026-11-16-frontend-esm-strangler-migration.md](2026-11-16-frontend-esm-strangler-migration.md)（P1 九域表与附录 A）、`.frontend-globals-baseline.json`、`public/src/app-core.js`（全文逐行读）、`public/src/app-main.js`（全文逐行读）、`public/src/modules/session-view-state.js`（全文逐行读）、九域全部点名键与其余 app-core 台账键的源码级 grep 写点/消费面扫描
 性质：只读调查。本文所有行号以 2026-11-16 的 `public/src` 源码为准；写方只列文件名，行号仅对关键写点给出。
 
@@ -88,7 +88,7 @@
 |---|---|---|---|
 | `ClawToast` | toast-notify.js:499（IIFE 内 `window.ClawToast = {...}`） | 定义处 | **window 保留**（对象一次性赋值；36 个文件消费，大量 `typeof ClawToast === 'undefined'` 守卫式裸读，经 window 属性天然兼容） |
 
-域内注意：无状态键、无写点、无时序敏感面，是最轻的域。IIFE 顶层执行即完成挂载，ESM 化后维持模块顶层执行。
+域内注意：该域已转 ESM，默认/命名导出及 `window.ClawToast` 为同一对象，语言经环境模块动态读取。正常主 SSE 等待 auth ready，认证初始化等待 `DOMContentLoaded`，后者等待静态非 async ESM 执行。延迟模块的浏览器验证覆盖首屏交互、主 SSE 等待、hello 选择提醒及更新/关闭；不改变原启动契约。
 
 ### 1.4 域 4：DOM 引用
 

@@ -56,6 +56,7 @@ const SUSPENDED_TAGS = [
 // module 入口逐条登记；入口删除时同步注销。路径忽略 ./ 前缀。
 const MODULE_ENTRIES = [
   './src/modules/i18n-environment-state.js',
+  './src/modules/toast-notify.js',
   './src/modules/panel-layout-state.js',
   './src/modules/session-view-storage.js',
   './src/modules/agent-store-state.js',

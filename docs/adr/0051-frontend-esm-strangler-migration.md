@@ -61,17 +61,17 @@ Vite + React 并行重写（2026-05 启动，已停摆）曾规划整壳 React �
 **为什么必须有桥**——执行时序因果：
 
 1. classic script 顶层代码在 deferred ESM 模块之前执行；
-2. `app-main.js` 的 boot 是 async IIFE，首轮 `loadAgents()` 等调用发生在 boot 微任务窗口——同样早于 deferred ESM 执行；
+2. async 本身不保证晚于 ESM；但当前 `app-main.js` boot 与主 SSE 等待 auth ready，认证初始化等待 `DOMContentLoaded`，该事件等待静态非 async ESM 执行，因此正常主链已有传递顺序；
 3. 因此：**任何被 classic 代码同步触达的状态与函数，都不能先于其调用方变成 ESM**。
 
-访问器桥解决值的持有与读写转发，不解决函数初始化的先后关系。classic 相预先注册真实初值时，状态可在 ESM 认领前读写；函数若仅在 ESM 中实现，必须先建立调用方与其初始化之间的显式依赖，或暂留唯一 classic 实现。poll / SSE 回调不天然晚于 ESM 下载完成，仅审计同步首屏并不足以证明安全。
+访问器桥解决值的持有与读写转发，不解决函数初始化的先后关系。classic 相预先注册真实初值时，状态可在 ESM 认领前读写；函数若仅在 ESM 中实现，调用前必须有可验证的初始化顺序，或暂留唯一 classic 实现。审计应覆盖同步首屏、已有认证门控以及绕过门控的实际事件入口，不能以缺少 import 边否认已经存在的 DOM 生命周期依赖。
 
 **桥的形态**（决策级）：`kernel-state.js`（classic，哑存储）是桥接期状态的唯一物理持有方，经 `defineKey` 为每个桥键注册 window 访问器；ESM 域模块装载时 `claim` 认领本域，接管读写转发；终局（消费方归零）状态移入 ESM 模块内部、访问器撤除。bootstrap 级逻辑（`window.fetch` 的 base-path patch 等）永远保持 classic——它们必须在一切之前执行。
 
 **R1–R4 时序规则存在的理由**：四条规则都是上述因果的逐场景落地，写入迁移配方，作为每域转换前的强制审计项——
 
 - **R1**（classic 文件顶层对内核函数的调用 → 该函数保持 classic，直到其调用方完成转换）：守住加载期的同步调用；
-- **R2**（boot 微任务窗口触达的函数同 R1）：boot 虽是 async，其首轮微任务仍早于 deferred ESM——"异步就安全"的直觉不成立；
+- **R2**（boot 首轮触达）：沿真实 await 链核对是否已等待 ESM 执行；只有先于模块初始化的调用才同 R1，不能把所有 async boot 一概视为提前执行；
 - **R3**（DOM 引用类键在 boot 由 classic 赋值，哑存储天然安全）：识别无需特殊处理的一类键，避免过度设计；
 - **R4**（ESM 域模块首次执行时机 = 首个 import 它的模块执行时；index.html 的 module 入口登记进 `frontend-script-tags-gate`）：把 ESM 侧的执行时机钉进门禁，认领时序可审计。
 
