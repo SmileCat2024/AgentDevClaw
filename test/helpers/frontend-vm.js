@@ -13,6 +13,7 @@
 
 import fs from 'node:fs';
 import { installSessionViewCommit } from './session-view-commit.js';
+import { installRuntimeSwitch } from './runtime-switch.js';
 import { createAgentSnapshotLoader } from '../../public/src/modules/agent-snapshot-loader.js';
 import { createRuntimeStatusLoader } from '../../public/src/modules/runtime-status-loader.js';
 import { createSessionDataLoader } from '../../public/src/modules/session-data-loader.js';
@@ -179,6 +180,7 @@ export function createFrontendSandbox(overrides = {}) {
       Object.assign(context, createRuntimeStatusLoader(vm.runInContext('createRuntimeStatusLoaderHost()', context)));
       Object.assign(context, createSessionDataLoader(vm.runInContext('createSessionDataLoaderHost()', context)));
     }
+    if (relativePath === 'public/src/app-main.js') installRuntimeSwitch(context);
     if (relativePath === 'public/src/modules/sidebar-render.js') {
       Object.assign(context, createAgentSnapshotLoader(vm.runInContext('createAgentSnapshotLoaderHost()', context)));
     }

@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 const main = await fs.readFile('public/src/app-main.js', 'utf8');
+const switchHost = main.slice(main.indexOf('function createRuntimeSwitchHost()'), main.indexOf('// ── Context menu action handlers'));
 const pollSource = main.slice(main.indexOf('// ── Runtime poll coordinator'), main.indexOf('// ── Input request rendering'));
 const index = await fs.readFile('public/index.html', 'utf8');
 const body = index.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link\b[^>]*>/g, '');
@@ -22,7 +23,8 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/sidebar-render.js"></script>
 <script>
- ${pollSource}
+  ${switchHost}
+  ${pollSource}
  currentRuntimeAgentId = 'rt'; focusedAgentId = 'host'; allAgents = [];
  applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'a' } });
  window.isSseActive = () => true;
@@ -98,8 +100,22 @@ try {
     return { runtime, reboundRuntime: currentRuntimeAgentId, body: currentMessages[0].content };
   });
   assert.deepEqual(preserved, { runtime: 'rt', reboundRuntime: 'rt', body: 'live body' });
+  const navigation = await page.evaluate(async () => {
+    const selected = [];
+    window.findAgentByIdentity = () => ({ id: 'coder', source: 'prebuilt' });
+    window.isWorkspaceHostUnit = window.isWorkspaceSurfaceUnit = () => true;
+    window.closeAgentContextMenu = () => {};
+    window.selectWorkspaceSurface = (id, options) => selected.push({ id, ...options });
+    window.hasPendingSessionNavigation = () => false;
+    await switchAgent('coder', { awaitSessionId: 'next' });
+    const pending = requestSwitch('stale', 'restart');
+    bumpNavigationGuard();
+    return { selected, pending: await pending };
+  });
+  assert.deepEqual(navigation, { selected: [{ id: 'coder', awaitSession: 'next' }],
+    pending: { switched: false, reason: 'nav-guard-stale' } });
   assert.deepEqual(errors, []);
-  console.log('PASS: real poll keeps SSE light, reconciles one full cycle and preserves the view through both handoff windows');
+  console.log('PASS: production kernel preserves handoff views, workspace waiting navigation and deferred switch guards');
 } finally {
   release();
   if (browser) await browser.close();

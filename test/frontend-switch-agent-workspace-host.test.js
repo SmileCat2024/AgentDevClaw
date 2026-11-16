@@ -7,17 +7,11 @@
 // switchAgent 在 `if (!runtimeAgentId) return` 处被吞 → 视图停在原工作空间，
 // 切出去后点不回来。
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+
 import test from 'node:test';
-import { createFrontendSandbox, sourceBetween } from './helpers/frontend-vm.js';
+import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
-const source = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
-
-const switchAgentSource = sourceBetween(
-  source,
-  'window.switchAgent = async (newAgentId, options = {}) => {',
-  '// ── Context menu action handlers',
-);
+import { installRuntimeSwitch } from './helpers/runtime-switch.js';
 
 function createSwitchAgentSandbox({
   coderRecord,
@@ -43,7 +37,7 @@ function createSwitchAgentSandbox({
     loadAgentData: async () => { throw new Error('loadAgentData must not run for workspace-surface hosts'); },
   });
   ctx.run('let pendingSwitchTarget = null; let _switchEpoch = 0;');
-  ctx.run(switchAgentSource);
+  installRuntimeSwitch(ctx);
   return { ctx, calls };
 }
 
@@ -110,7 +104,7 @@ test('awaitSessionId（接续等待表面）：透传给 selectWorkspaceSurface�
     loadAgentData: async () => { throw new Error('等待表面下 loadAgentData 不应触发'); },
   });
   ctx.run('let pendingSwitchTarget = null; let _switchEpoch = 0;');
-  ctx.run(switchAgentSource);
+  installRuntimeSwitch(ctx);
 
   await ctx.run('window.switchAgent("coder", { awaitSessionId: "session-42" })');
 

@@ -23,6 +23,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
+import { installRuntimeSwitch } from './helpers/runtime-switch.js';
+
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const rendererSource = fs.readFileSync(new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
 const viewportSource = fs.readFileSync(new URL('../public/src/modules/chat-viewport.js', import.meta.url), 'utf8');
@@ -35,13 +37,7 @@ function sourceBetween(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
-function extractSwitchAgentSource() {
-  return sourceBetween(
-    mainSource,
-    'window.switchAgent = async (newAgentId, options = {}) => {',
-    '\n// ── Context menu action handlers',
-  );
-}
+
 
 /**
  * Minimal chat container with browser-style scrollTop clamping:
@@ -273,8 +269,9 @@ function createHandoffHarness({ cache = {} } = {}) {
   };
 
   vm.createContext(sandbox);
-  vm.runInContext(`${viewportSource}\n${extractSwitchAgentSource()}\n`
-    + 'globalThis.__notifyChatViewportMutation = notifyChatViewportMutation;\n'
+  vm.runInContext(viewportSource, sandbox);
+  installRuntimeSwitch(sandbox);
+  vm.runInContext('globalThis.__notifyChatViewportMutation = notifyChatViewportMutation;\n'
     + 'globalThis.__setPendingChatScrollRestore = setPendingChatScrollRestore;\n'
     + 'globalThis.__consumePendingChatScrollRestore = consumePendingChatScrollRestore;\n'
     + 'globalThis.__switchAgent = window.switchAgent;', sandbox);
@@ -432,7 +429,7 @@ test('wiring: switchAgent no longer writes the restore value into the outgoing D
     'switchAgent must hand the restore value to the renderer, not the live container',
   );
   assert.ok(
-    mainSource.includes('setPendingChatScrollRestore(_restoredScrollTop)'),
+    mainSource.includes('setPendingScroll: (top) => setPendingChatScrollRestore(top)'),
     'switchAgent must pass the cached position through the pending handoff',
   );
 });

@@ -217,8 +217,8 @@
       "createPollMaintenanceHost",
       "createRuntimeNotFoundHost",
       "createRuntimePollHost",
+      "createRuntimeSwitchHost",
       "emitMsgMetrics",
-      "flushPendingSwitch",
       "getCurrentAgentRecord",
       "getCurrentHostAgentRecord",
       "getCurrentRuntimeRecord",
@@ -239,10 +239,8 @@
       "orderPrebuiltByHost",
       "renderMessageProbeCommit",
       "renderMetadataCommit",
-      "requestSwitch",
       "runWorkspaceActionFromEvent",
       "showCompactMenu",
-      "switchAgent",
       "toEpochMs",
       "updateCurrentAgentChrome"
     ]

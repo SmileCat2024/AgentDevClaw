@@ -647,279 +647,106 @@ function clearSessionLoading(agentId) {
  // ── assembly session operations → modules/assembly-actions.js (Phase C, 2026-07-04) ──
 
 
-/**
- * Flush the pending switch slot: if the serial still matches, execute the
- * actual switchAgent call and clear the slot.  Only the most recent
- * requestSwitch() call wins; stale flushes are silently discarded.
- *
- * Navigation guard: if the user navigated between requestSwitch() and this
- * flush (the setTimeout(0) gap), the epoch won't match and the switch is
- * aborted.  This closes the race where a user click event fires between
- * the guard check at the call-site and the deferred execution here.
- */
-function flushPendingSwitch(serial, resolve) {
-  if (!pendingSwitchTarget || pendingSwitchTarget.serial !== serial) {
-    resolve({ switched: false, reason: 'superseded' });
-    return;
-  }
-  const runtimeId = pendingSwitchTarget.runtimeId;
-  const navEpoch = pendingSwitchTarget.navEpoch;
-  pendingSwitchTarget = null;
-  if (navEpoch !== _navigationGuardEpoch) {
-    resolve({ switched: false, reason: 'nav-guard-stale' });
-    return;
-  }
-  window.switchAgent(runtimeId).then(
-    () => resolve({ switched: true }),
-    (e) => resolve({ switched: false, reason: e?.message }),
-  );
+// Synchronous UI dependencies for the ESM runtime switching transaction.
+function createRuntimeSwitchHost() {
+  return {
+    state: {
+      get pendingSwitchTarget() { return pendingSwitchTarget; },
+      set pendingSwitchTarget(value) { pendingSwitchTarget = value; },
+      get pendingSwitchSerial() { return pendingSwitchSerial; },
+      set pendingSwitchSerial(value) { pendingSwitchSerial = value; },
+      get navigationEpoch() { return _navigationGuardEpoch; },
+      get switchEpoch() { return _switchEpoch; },
+      set switchEpoch(value) { _switchEpoch = value; },
+      get focusedAgentId() { return focusedAgentId; },
+      set focusedAgentId(value) { focusedAgentId = value; },
+      get runtimeId() { return currentRuntimeAgentId; },
+      set runtimeId(value) { currentRuntimeAgentId = value; },
+      get readOnlyMode() { return readOnlyMode; },
+      set readOnlyMode(value) { readOnlyMode = value; },
+      get lastRenderedWorkspaceHtml() { return lastRenderedWorkspaceHtml; },
+      set lastRenderedWorkspaceHtml(value) { lastRenderedWorkspaceHtml = value; },
+      get followLatest() { return followLatestEnabled; },
+      get restoredScrollTop() { return _restoredScrollTop; },
+      set restoredScrollTop(value) { _restoredScrollTop = value; },
+    },
+    switchAgent: (id) => window.switchAgent(id),
+    setTimeout: (callback, delay) => setTimeout(callback, delay),
+    hasPendingNavigation: (agent) => typeof hasPendingSessionNavigation === 'function' && hasPendingSessionNavigation(agent),
+    bumpNavigationGuard: () => bumpNavigationGuard(),
+    closeContextMenu: () => closeAgentContextMenu(),
+    findAgent: (id) => findAgentByIdentity(id),
+    isWorkspaceHost: (agent) => isWorkspaceHostUnit(agent),
+    runtimeId: (agent) => getRuntimeId(agent),
+    agentRuntimeId: (agent) => getAgentRuntimeId(agent),
+    isRemote: (id) => isRemoteNamespaceAgentId(id),
+    remote: () => window.RemoteConnections,
+    closeReadOnlySession: () => {
+      if (typeof window.getReadOnlySessionTarget === 'function' && window.getReadOnlySessionTarget()
+        && typeof window.closeReadOnlySession === 'function') window.closeReadOnlySession();
+    },
+    isWorkspaceSurface: (agent) => isWorkspaceSurfaceUnit(agent),
+    selectWorkspace: (id, options) => selectWorkspaceSurface(id, options),
+    storeDraft: () => _storeVisibleSessionInputDraft(),
+    saveWorkspaceScroll: () => { if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') saveCurrentWorkspaceSurfaceScroll(); },
+    saveCache: (id) => saveCurrentRuntimeToCache(id),
+    logicalId: (agent) => getLogicalAgentId(agent),
+    normalize: (id) => normalizeAgentIdentity(id),
+    clearFinished: (id) => _recentlyFinishedRuntimes.delete(id),
+    deriveSession: (id) => _deriveRuntimeSessionIdFromAgents(id),
+    bindSession: (id, session) => setViewerSessionBinding(id, session),
+    updateThreadIndicators: () => {
+      if (typeof _syncActiveThreadSubscription === 'function') _syncActiveThreadSubscription();
+      if (typeof window.updateThreadHeaderIndicator === 'function') window.updateThreadHeaderIndicator();
+      if (typeof window.updateQueueIndicator === 'function') window.updateQueueIndicator();
+    },
+    browseOnly: () => window.ClawThreads?.browseOnly === true,
+    resetSurface: () => {
+      currentWorkspaceArtifactDetail = null;
+      currentWorkspaceDocsetDetail = null;
+      currentProjectDocsetOpen = false;
+      currentProjectRequirementEdit = null;
+      currentProjectDocsetPage = 'requirement';
+      currentWorkspaceTab = 'chat';
+      _lastRenderedChatSig = '';
+    },
+    resetScroll: () => {
+      setPendingChatScrollRestore(null);
+      if (typeof setPendingChatViewportAnchor === 'function') setPendingChatViewportAnchor(null);
+      showChatProcess = false;
+    },
+    resetStatus: () => resetRuntimeStatusForSwitch(),
+    activateCollapse: (key) => activateUserCollapseStateForContext(key),
+    contextKey: (id) => getRuntimeContextKey(id),
+    restoreCache: (id) => restoreRuntimeFromCache(id),
+    setPendingScroll: (top) => setPendingChatScrollRestore(top),
+    render: () => renderCurrentMainView(),
+    renderPanel: () => renderFeaturePanel(),
+    patch: (patch) => applySessionViewPatch(patch),
+    emptyOverview: () => getEmptyOverviewSnapshot(),
+    emptyTodo: () => getEmptyTodoPlan(),
+    setFollowLatest: (value) => setFollowLatest(value),
+    beginFollowWindows: () => { beginFollowLatestCooldown(); beginFollowLatestEntryWindow(); },
+    renderAgents: () => renderAgentList(),
+    fetch: (...args) => fetch(...args),
+    isCalling: (data) => resolveNotificationCallingState(data),
+    applyCalling: (id, calling) => {
+      if (calling) { _markAgentCallStartedForNotify(id); _agentCallActive.set(id, true); }
+      else _agentCallActive.delete(id);
+    },
+    syncActionButton: () => _syncPersistentActionButton(),
+    persistFocus: (id) => {
+      try { localStorage.setItem('claw:lastFocusedRuntimeId', id); localStorage.removeItem('claw:lastFocusedEntryId'); }
+      catch { /* localStorage may be unavailable. */ }
+    },
+    loadData: (id) => loadAgentData(id),
+    loadAgents: () => loadAgents(),
+    clearLoading: () => clearChatLoadingSession(),
+    warn: (...args) => console.warn(...args),
+    error: (...args) => console.error(...args),
+    alert: (message) => window.alert(message),
+  };
 }
-
-/**
- * Request a deferred agent switch.  The call-site is an async operation
- * that has just completed (B-class).  The target is written to the
- * "pending switch slot"; only the most recent caller's serial wins.
- *
- * Returns a Promise so callers can still `await` it; resolves with
- * { switched: true } or { switched: false, reason }.
- *
- * @param {string} runtimeId  The runtime agent id to switch to.
- * @param {string} source     A short label for debugging (e.g. 'launch', 'restart').
- */
-function requestSwitch(runtimeId, source) {
-  pendingSwitchSerial += 1;
-  const serial = pendingSwitchSerial;
-  pendingSwitchTarget = { runtimeId, serial, source, navEpoch: _navigationGuardEpoch };
-  return new Promise((resolve) => {
-    setTimeout(() => flushPendingSwitch(serial, resolve), 0);
-  });
-}
-
-window.switchAgent = async (newAgentId, options = {}) => {
-  // A-class (direct) calls cancel any pending deferred switch. The pending
-  // session navigation ends with this runtime binding; its chat loading
-  // surface stays mounted until loadAgentData lands below, so an empty
-  // freshly-created session resolves straight into its welcome terminal
-  // state instead of dropping the spinner before the data fetch.
-  const hadPendingSessionNavigation = typeof hasPendingSessionNavigation === 'function'
-    && hasPendingSessionNavigation();
-  bumpNavigationGuard();
-  pendingSwitchTarget = null;
-  const epoch = ++_switchEpoch;
-  closeAgentContextMenu();
-  const targetAgent = findAgentByIdentity(newAgentId);
-  const requestedRuntimeOfWorkspaceHost = !!(
-    targetAgent
-    && isWorkspaceHostUnit(targetAgent)
-    && newAgentId
-    && newAgentId !== targetAgent.id
-    && getRuntimeId(targetAgent) === newAgentId
-  );
-  const runtimeAgentId = requestedRuntimeOfWorkspaceHost
-    ? newAgentId
-    : (targetAgent
-      ? getAgentRuntimeId(targetAgent)
-      : (isRemoteNamespaceAgentId(newAgentId)
-        // 远程条目：本地列表查不到，向目录解析命名空间运行时引用——远程 viewer
-        // 只认运行时 ID。无运行时（未启动/降级）保持原 ID，让请求显式失败。
-        ? (window.RemoteConnections?.resolveRuntimeRef?.(newAgentId) || newAgentId)
-        : newAgentId));
-  // 切到具体会话 = 离开只读浏览。必须前置于下方全部早退分支：只读浏览下
-  // currentRuntimeAgentId 为空，点同一宿主首页会命中「已在宿主首页」早退，
-  // 若清理留在后面，只读标记与指示器会残留并压痛随后的正常会话。
-  // 重新打开同一条归档记录会经 openReadOnlySession 重设状态，无副作用。
-  if (typeof window.getReadOnlySessionTarget === 'function'
-    && window.getReadOnlySessionTarget()
-    && typeof window.closeReadOnlySession === 'function') {
-    window.closeReadOnlySession();
-  }
-  // workspace surface 宿主分支必须先于 runtimeAgentId 守卫：on-demand 宿主
-  // （如 coder）无 runtime 是常态而非异常，switchAgent('coder') 应进入其
-  // 工作空间首页（线程视图），而不是在守卫处静默返回（历史 bug：接续窗口
-  // 点击侧栏虚线条目 → openConversationTarget 等待分支调 switchAgent(host)
-  // 被吞，切出去后点不回来）。options.awaitSessionId（接续等待：点击接续
-  // 占位条目）不落首页——selectWorkspaceSurface 挂聊天加载表面等待
-  // head-advanced 重绑。
-  if (isWorkspaceSurfaceUnit(targetAgent) && !requestedRuntimeOfWorkspaceHost) {
-    // awaitSessionId（接续等待表面）例外：焦点已在宿主且等待表面已挂
-    // （重复点击同一条目）时不再重置；无等待意图的首页直达保持原早退。
-    const awaitingSameSurface = options.awaitSessionId
-      && targetAgent?.id === focusedAgentId
-      && !currentRuntimeAgentId
-      && typeof hasPendingSessionNavigation === 'function'
-      && hasPendingSessionNavigation(targetAgent);
-    if (awaitingSameSurface) return;
-    if (targetAgent?.id === focusedAgentId && !currentRuntimeAgentId && !options.awaitSessionId) return;
-    selectWorkspaceSurface(targetAgent.id, options.awaitSessionId
-      ? { awaitSession: options.awaitSessionId }
-      : undefined);
-    return;
-  }
-  if (!runtimeAgentId) return;
-  if (targetAgent?.id === focusedAgentId && runtimeAgentId === currentRuntimeAgentId) return;
-  _storeVisibleSessionInputDraft();
-  if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
-    saveCurrentWorkspaceSurfaceScroll();
-  }
-  if (currentRuntimeAgentId && !readOnlyMode) {
-    saveCurrentRuntimeToCache(currentRuntimeAgentId);
-  }
-  try {
-    // Set global state and do optimistic render IMMEDIATELY — before the PUT.
-    // This lets the user see cached data without waiting for a network round trip.
-    focusedAgentId = targetAgent
-      ? (getLogicalAgentId(targetAgent) || runtimeAgentId)
-      : (isRemoteNamespaceAgentId(newAgentId)
-        // 远程条目：焦点收敛到宿主级命名空间 id（如 'remote:server-a:programming-helper'），
-        // 与本地远程同构——控制类请求的 agentId 粒度、agent_detail / swap 寻址均按宿主身份。
-        // 目录未含该条目时保持运行时引用原值，让请求显式失败，不静默换目标。
-        ? (window.RemoteConnections?.getEntryHostNamespaceId?.(runtimeAgentId) || newAgentId)
-        : runtimeAgentId);
-    // 离开会话时熄灭其「刚刚完成」蓝灯：灯在切回查看后保持，直到离开该
-    // 会话（此处 / selectWorkspaceSurface）或它开始新一轮运行
-    // （_markAgentCallStartedForNotify）才清除。
-    if (currentRuntimeAgentId && normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(runtimeAgentId)) {
-      _recentlyFinishedRuntimes.delete(currentRuntimeAgentId);
-    }
-    currentRuntimeAgentId = runtimeAgentId;
-    // 用户主动切换：立即冻结 viewer 侧会话身份。必须在此之前用 allAgents
-    // 派生值（此时绑定尚未写入，读到的是用户点击时刻列表展示的会话），
-    // 之后 getRuntimeContextKey 不再随外部入口抢占的 host activeSessionId 漂移。
-    // 派生为空（点击时刻 allAgents 尚无该 runtime 的会话事实）时绑定必须
-    // 缺席而非落宿主 active 兜底：冻结语义下绑定永不重写，宿主 active 会
-    // 毒化常驻视图的会话解析（线程徽标 / 输入路由失联直到再次手动切换）；
-    // 绑定缺席时 getRuntimeWorkspaceSessionId 每次按最新 allAgents 现值派
-    // 生，allAgents 就绪后自愈。
-    const selectedSessionId = _deriveRuntimeSessionIdFromAgents(runtimeAgentId);
-    const selectedHostAgentId = String(targetAgent?.parent_id || targetAgent?.id || focusedAgentId || runtimeAgentId).trim();
-    setViewerSessionBinding(runtimeAgentId, selectedSessionId);
-    if (typeof _syncActiveThreadSubscription === 'function') _syncActiveThreadSubscription();
-    // 视图切换即重估线程徽标与暂存气泡（与模型名/用量同级的跟随性）：
-    // 否则接力中徽标滞留到下一次线程刷新（≤20s）才消失/出现。
-    if (typeof window.updateThreadHeaderIndicator === 'function') window.updateThreadHeaderIndicator();
-    if (typeof window.updateQueueIndicator === 'function') window.updateQueueIndicator();
-    // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开；
-    // 远程条目按握手 capability 门控（ADR-0011）：具备 capabilities.write 的
-    // 连接与本地体验一致（runtimeAgentId 可能已被 resolveRuntimeRef 解析为裸
-    // 运行时 id，按用户点击的命名空间 id 判定能力），无写能力才只读。
-    if (targetAgent) {
-      readOnlyMode = targetAgent.input_accepted === false;
-    } else {
-      const targetsRemote = isRemoteNamespaceAgentId(newAgentId) || isRemoteNamespaceAgentId(runtimeAgentId);
-      readOnlyMode = targetsRemote
-        && window.RemoteConnections?.isRemoteWriteEnabled?.(newAgentId) !== true;
-    }
-    // T006：Thread 历史成员只读挂载（browseOnly=true）同样保持只读——服务端
-    // 不推进 head、不投递指令，前端不以可写入口误导（ADR-001 历史=只读事实）。
-    if (window.ClawThreads?.browseOnly === true) {
-      readOnlyMode = true;
-    }
-    currentWorkspaceArtifactDetail = null;
-    currentWorkspaceDocsetDetail = null;
-    currentProjectDocsetOpen = false;
-    currentProjectRequirementEdit = null;
-    currentProjectDocsetPage = 'requirement';
-    currentWorkspaceTab = 'chat';
-    // Clear chat render dedup so the new agent's messages always rebuild the DOM
-    _lastRenderedChatSig = '';
-    // A pending scroll restore is only valid within the switch that set it;
-    // clear any stale one from an earlier switch that never reached a full render.
-    setPendingChatScrollRestore(null);
-    if (typeof setPendingChatViewportAnchor === 'function') setPendingChatViewportAnchor(null);
-    // Reset process visibility: every session entry starts in hidden-process mode
-    showChatProcess = false;
-    // 立即清空上一会话的运行状态显示（顶栏 + 对话区指示块）。
-    // 旧会话快照要等 loadAgentData 的 notification 刷新才会被替换，
-    // 期间渲染会把旧快照重建为新会话的"模型正在思考…"残留。
-    resetRuntimeStatusForSwitch();
-    activateUserCollapseStateForContext(getRuntimeContextKey(runtimeAgentId));
-    // Optimistic restore: show cached data immediately if available
-    const _restored = restoreRuntimeFromCache(runtimeAgentId);
-    if (_restored) {
-      lastRenderedWorkspaceHtml = '';
-      // 跟随模式切回同样乐观渲染缓存消息：render-full 按 followLatest 锁到
-      // 缓存底部；loadAgentData 到达后签名未变则 render() dedup 跳过重建
-      // （视口已在最终位置，零跳动），有增长才重渲染并锁到新底部——与跟随
-      // 模式正常收新消息同形。阅读模式切回：滚动恢复值经 pending 通道交给
-      // 渲染器作 preserveTop，不直接写容器 —— 此刻容器仍是旧会话 DOM，直接
-      // 写会被浏览器钳制，短→长会话切换时阅读位置被销毁。
-      if (!followLatestEnabled && _restoredScrollTop != null) {
-        setPendingChatScrollRestore(_restoredScrollTop);
-      }
-      renderCurrentMainView();
-      _restoredScrollTop = null;
-      renderFeaturePanel();
-    } else {
-      // No cache: clear stale messages to prevent poll race mixing old/new agent content
-      applySessionViewPatch({
-        identity: { agentId: selectedHostAgentId, sessionId: selectedSessionId },
-        messages: [],
-        overview: getEmptyOverviewSnapshot(),
-        todoPlan: getEmptyTodoPlan(),
-        // 与 messages 同步清空上一会话的元数据，防止残留渲染到新会话顶部。
-        sessionMeta: undefined,
-      });
-      renderCurrentMainView();
-      setFollowLatest(true);
-    }
-    beginFollowLatestCooldown();
-    beginFollowLatestEntryWindow();
-    renderAgentList();
-
-    // Pre-warm calling status for the new runtime in parallel with PUT + loadAgentData.
-    // For dispatched agents not yet tracked by refreshAgentCallStates, this eliminates
-    // the window where the send button incorrectly shows because _agentCallActive has
-    // no entry for this runtime yet.
-    fetch(`/api/agents/${encodeURIComponent(runtimeAgentId)}/notification`)
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => {
-        if (!data) return;
-        if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(runtimeAgentId)) return;
-        const isCalling = resolveNotificationCallingState(data);
-        if (isCalling) {
-          _markAgentCallStartedForNotify(runtimeAgentId);
-          _agentCallActive.set(runtimeAgentId, true);
-        } else {
-          _agentCallActive.delete(runtimeAgentId);
-        }
-        _syncPersistentActionButton();
-        renderAgentList();
-      })
-      .catch(e => console.warn(e));
-
-    // 焦点已前端化（服务端 current agent 语义已移除）：持久化记忆本次焦点，
-    // 供下次打开页面时恢复（sidebar-render.js 读取）。进入会话浏览时投影
-    // 入口记忆让位（claw:lastFocusedEntryId 只保留「停留在入口首页」的语义）。
-    try {
-      // 远程条目持久化逻辑 ID（目录恢复按 entry.agentId 比对），运行时引用随
-      // 远端重启换代，不可作为跨会话身份。
-      localStorage.setItem(
-        'claw:lastFocusedRuntimeId',
-        isRemoteNamespaceAgentId(newAgentId) ? newAgentId : runtimeAgentId,
-      );
-      localStorage.removeItem('claw:lastFocusedEntryId');
-    } catch { /* localStorage 不可用时静默忽略 */ }
-
-    await loadAgentData(runtimeAgentId);
-    // Only refresh the agent list if no newer switch has happened — a stale
-    // switchAgent continuation could otherwise trigger loadAgentData for the
-    // wrong agent via the loadAgents() initialization path.
-    if (epoch === _switchEpoch) {
-      loadAgents().catch((error) => console.error('Failed to refresh agents after switch:', error));
-    }
-    // The first completed data load is the terminal state for a
-    // pending-navigation switch even when the new session has zero messages:
-    // clear the chat loading surface here (not at switch entry) so the
-    // spinner covers the whole runtime-binding + data-fetch window.
-    if (hadPendingSessionNavigation && epoch === _switchEpoch) {
-      clearChatLoadingSession();
-      renderCurrentMainView();
-    }
-  } catch (e) {
-    console.error('Failed to switch agent:', e);
-    window.alert(`Switch failed: ${e && e.message ? e.message : e}`);
-  }
-};
 
 // ── Context menu action handlers → modules/ctx-menu-handlers.js ──
 

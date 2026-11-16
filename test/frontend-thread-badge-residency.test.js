@@ -188,11 +188,7 @@ test('T014-2: 切到非接续会话——徽标必须隐藏（真相源跟随当
 
 test('T014-3: switchAgent 绑定不得被宿主 active 兜底毒化（常驻徽标失联根因）', async () => {
   const sandbox = createHarness();
-  const mainSourceT14 = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
-  const start = mainSourceT14.indexOf('// 用户主动切换：立即冻结');
-  const end = mainSourceT14.indexOf('if (typeof _syncActiveThreadSubscription === \'function\')', start);
-  assert.notEqual(start, -1, 'switchAgent 绑定块应存在');
-  const bindBlock = mainSourceT14.slice(start, end);
+  const { installRuntimeSwitch } = await import('./helpers/runtime-switch.js');
   vm.runInContext(extractHostResolverSource() + '\n' + extractBindingSource() + '\n' + storeSource, sandbox);
 
   // 点击时刻 allAgents 尚无该 runtime 的会话事实（runtime 刚起、轮询未跟上）
@@ -200,10 +196,24 @@ test('T014-3: switchAgent 绑定不得被宿主 active 兜底毒化（常驻徽�
     allAgents = [
       { id: 'programming-helper', source: 'prebuilt', active_workspace_session_id: 'sess-main' },
     ];
-    var runtimeAgentId = 'rt-coder';
-    var targetAgent = allAgents[0];
-    ${bindBlock}
+    currentRuntimeAgentId = 'previous-runtime';
+    var _switchEpoch = 0, _navigationGuardEpoch = 0, pendingSwitchTarget = null;
+    var readOnlyMode = false, _recentlyFinishedRuntimes = new Set();
+    bumpNavigationGuard = closeAgentContextMenu = _storeVisibleSessionInputDraft = saveCurrentRuntimeToCache = () => {};
+    findAgentByIdentity = () => allAgents[0];
+    isWorkspaceHostUnit = isWorkspaceSurfaceUnit = isRemoteNamespaceAgentId = () => false;
+    getAgentRuntimeId = () => 'rt-coder';
+    getLogicalAgentId = () => 'programming-helper';
   `, sandbox);
+  installRuntimeSwitch(sandbox);
+  // Stop at the observable binding boundary, before rendering or network IO.
+  let bindingReached = false;
+  const bound = new Error('binding observed');
+  sandbox._syncActiveThreadSubscription = () => { bindingReached = true; throw bound; };
+  sandbox.console = { error: () => {} };
+  sandbox.alert = () => {};
+  await sandbox.switchAgent('rt-coder');
+  assert.equal(bindingReached, true, '真实切换必须经过绑定后再同步订阅');
 
   // 期望：派生为空时绑定缺席（不落宿主 active），allAgents 就绪后现值派生自愈
   assert.equal(

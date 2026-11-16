@@ -14,3 +14,4 @@ import './call-interrupt-host.js';
 import './agent-call-states-host.js';
 import './agent-snapshot-loader-host.js';
 import './time-format-host.js';
+import './runtime-switch-host.js';
