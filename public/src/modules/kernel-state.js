@@ -12,7 +12,7 @@
  * docs/plans/2026-11-16-frontend-esm-strangler-migration.md「桥机制规格」。
  *
  * 桥债口径：访问器键本质仍是全局状态，必须显式统计（stats() 的
- * registeredKeys / claimedKeys）并随迁移批次单调下降——口径独立于
+ * registeredKeys / claimedKeys）：P1 建立期审查并记录新增，消费方收敛期注销下降。口径独立于
  * .frontend-globals-baseline.json 的 state/behavior 两层台账，不玩口径游戏。
  */
 (function () {

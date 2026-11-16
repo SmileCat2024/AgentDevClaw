@@ -7,10 +7,10 @@
  * 选静态扫描而非运行时 stats()：不依赖浏览器加载即可在测试期度量。
  *
  * ratchet 口径：registered 与 claimed 均不得高于基线 .kernel-bridge-baseline.json
- * （{registered, claimed}），即每批迁移之后桥键数不升——迁移批次消费方归零时
- * 应注销桥键（删除 defineKey 调用 + delete window.<key>）并下调基线；新增桥键
- * 必须伴随等量注销，或显式置 KERNEL_BRIDGE_UPDATE_BASELINE=1 更新基线并在提交
- * 说明写明理由。
+ * （{registered, claimed}）。P1 建立期新增兼容键须提供消费面证据，经审核后
+ * 显式置 KERNEL_BRIDGE_UPDATE_BASELINE=1 更新基线并在提交说明写明理由。
+ * 消费方收敛期即时注销无消费键（删除 defineKey 调用 + delete window.<key>）
+ * 并下调基线；不能把建立期基线上调表述为债务下降。
  *
  * 口径独立性（plan 0.5 原文语义）：访问器键本质仍是全局状态，本指标与
  * .frontend-globals-baseline.json 的 state/behavior 两层台账口径独立、双轨

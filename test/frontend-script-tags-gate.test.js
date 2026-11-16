@@ -58,10 +58,23 @@ const SUSPENDED_TAGS = [
 // 入口标签删除时同步注销。路径与标签按去除 ./ 前缀后比较。
 const MODULE_ENTRIES = [];
 
-async function readTags() {
-  const html = await readFile(HTML, 'utf8');
-  return [...html.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]);
+function scriptSources(html) {
+  return [...html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/g)].map((m) => m[1]);
 }
+
+async function readTags() {
+  return scriptSources(await readFile(HTML, 'utf8'));
+}
+
+test('src 清单覆盖 module/defer 标签，不依赖属性顺序或引号类型', () => {
+  assert.deepEqual(scriptSources(`
+    <script src="classic.js"></script>
+    <script type="module" src="module.js"></script>
+    <script defer src='vendor.js'></script>
+    <script src='last.js' type='module'></script>
+    <script>const text = 'inline';</script>
+  `), ['classic.js', 'module.js', 'vendor.js', 'last.js']);
+});
 
 // module 标签匹配与属性顺序无关（type 在 src 前后均命中）
 const MODULE_TAG_RE = /<script\b(?=[^>]*\btype=["']module["'])(?=[^>]*\bsrc=["']([^"']+)["'])[^>]*>/g;

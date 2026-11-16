@@ -1,7 +1,7 @@
 # 前端 classic-script 全局共享模式 ESM 渐进拆解（绞杀者路线）
 
 日期：2026-11-16
-状态：方向已批准（四项决策全部确认，见「核心决策」），P0 未实施
+状态：P0 已完成；P1 首战进行中（markdown / HTML 工具域与 toast 域，先审计启动时序再迁移）。P1 各域键清单以 [分桶定案](2026-11-16-esm-p1-domain-buckets.md) 为准
 
 ---
 
@@ -106,7 +106,7 @@
 | 0.2 | 桥契约测试 | `test/kernel-bridge.test.js`：get/set 转发、认领前后语义、strict 写、delete、枚举不可见、early-boot 可用（在模块执行前读值） |
 | 0.3 | 《ESM 迁移配方》 | `docs/plans/esm-migration-playbook.md`，对齐 inline-events playbook 形态（骨架见附录 B） |
 | 0.4 | 测试 loader helper | 泛化 `test/helpers/memo-plugin-loader.js` → 通用 ESM 模块加载器（真实 `import()` + stub 注入 + 唯一 query 绕模块缓存） |
-| 0.5 | 门禁扩展 | `frontend-script-tags-gate` 增加 `<script type="module">` 入口登记规则（classic 标签维持只减不增）；新增"桥债"指标：统计 `defineKey` 注册数与 `claim` 认领数，ratchet 基线要求**每批之后桥键数不升**（口径独立于现有两层台账，不玩口径游戏——访问器键本质仍是全局状态，必须显式上报并趋于下降） |
+| 0.5 | 门禁扩展 | `frontend-script-tags-gate` 增加 `<script type="module">` 入口登记规则（classic 标签维持只减不增）；新增"桥债"指标：统计 `defineKey` 注册数与 `claim` 认领数，ratchet 基线阻止未经审查的新增（P1 建立期逐键审批增量，消费方收敛期即时注销；口径独立于现有两层台账——访问器键仍是全局状态，不能只报 classic 台账下降） |
 | 0.6 | ADR | 撰写 ADR（编号取当前最大 +1）：前端模块化路线——绞杀者 + 访问器桥 + 不引入构建器，记录 D1–D5 与 Vite 停摆教训 |
 | 0.7 | 收尾归档 | Vite 半途分支打 tag 归档后删除；`AGENT.md` 前端节补一句指向本文档与 ADR（`vite-migration-plan.md` 的悬置标注已随本文档完成） |
 | 0.8 | 域分桶定案 | 以附录 A 的域初稿为底，结合台账逐键核对，产出 P1 各域的最终键清单与迁移顺序确认 |
@@ -114,6 +114,13 @@
 ### P1 内核域抽取（9 域，每域独立一步，一步一 commit）
 
 顺序按「纯函数先行、状态桥随后、编排最后」排列；每步交付 = 代码移动 + ESM export + 桥挂载 + 消费方零改动 + 测试迁移 + 台账修剪。
+
+域顺序是调查与实施的基准，不是可直接全域切换的承诺。R1/R2/R4 触线键必须保留唯一 classic 实现，记录残余键及其收敛依赖，不能将局部迁移计作全域完成。`KernelState` 提前加载只保证桥机制可用，不会预先提供尚未执行的业务函数。
+
+已确认的首战边界：
+
+- 域 1：`app-main` 顶层 `applyLanguage()` → `renderCurrentMainView()` → 欢迎态 → `getEmptyStateHtml()` 同步调用 `escapeHtml`。除此之外，poll / SSE messages 回调可在模块下载完成前进入 chat-renderer 并调用 `renderMarkdown`、`enhanceMathInElement`、`enhanceMarkdownTables`；共享 `marked.setOptions()` 的配置也必须先于直接使用 marked 的消费者生效。仅保留 `escapeHtml` 无法解除阻断。当前保留整个 classic 实现及原加载顺序，迁移与测试改造已撤回；需先决定并验证调用方与模块初始化之间的显式依赖边界，不以空壳、重试、队列或静默降级兜底。
+- 域 3：SSE client 的认证就绪回调可在 HTML 解析期间建立连接；`hello.choiceAlerts` 立即同步调用 `ClawToast.show()`。toast 本批保持 classic，待 SSE 装载/启动边界建立显式初始化依赖后再迁移；仅将 toast 标签改为 module 会产生漏通知窗口。
 
 | 序 | 域 | 主要键（fan-in） | 落点 | 备注 |
 |---|---|---|---|---|
@@ -152,12 +159,13 @@
 2. 本批目标测试迁移完成且全绿（vm 沙箱 → 真实 import + stub）；
 3. `test:core` 全量绿；
 4. `check:frontend-globals --update-baseline` 修剪（state/behavior 键数净下降）；
-5. 桥债指标不升；
+5. 按阶段报告桥债变化：P1 建立期新增键须有消费面证据并显式批准基线上调；消费方收敛批次的桥债指标不得无依据增加（见下方阶段级口径）；
 6. 变异抽查（对齐 inline-events 配方做法：删注册键 / 注入坏形态，验证门禁抓得到；恢复用文件备份，严禁 git restore）。
 
 **阶段级**：
 
-- P1 完成：`app-core.js` ≤ 300 行（从 1547 行）、内核域全部 ESM 化、桥键数有初值并开始下降；
+- P1 阶段验收：逐域列出已迁 ESM 的键、R1/R2/R4 必留 classic 的键及其收敛依赖，未解除依赖的域不计作完整迁移。`app-core.js` ≤ 300 行为待核算目标，不作为扩大本阶段范围或搬走启动期实现的理由：分桶定案另有 P2 与 bootstrap 留存项。
+- 桥债建立期（P1）：P0 基线为零，首次桥接会增加注册数；主助手审查消费面后显式更新基线，并报告新增、注销与净变化，不能把上调说成下降。桥债收敛期（消费方迁移）：已不需要的桥键即时注销并下调基线，禁止无依据上调。静态 `claim` 调用数是认领域数的近似，不等于运行时已认领键数，两者分别说明；
 - P3 完成：活跃域 classic 文件 = 0、桥键 = 0、index.html 加载清单收敛到 module 入口 + 悬置域。
 
 **回滚**：每域一步一 commit；访问器桥在消费方归零前始终在，任意一步可独立 revert 而不影响其他域。
