@@ -148,6 +148,7 @@
       "convertLegacyWorkspaceToUi",
       "createCallInterruptHost",
       "createRuntimeViewCacheHost",
+      "createViewerReadinessHost",
       "fetch",
       "findAgentByIdentity",
       "fmtPct",
@@ -192,8 +193,7 @@
       "resolveWorkspaceFallbackAgentId",
       "setInterruptTargetId",
       "setViewerSessionBinding",
-      "updatePendingSessionNavigation",
-      "waitForViewerReady"
+      "updatePendingSessionNavigation"
     ]
   },
   "public/src/app-main.js": {
@@ -208,7 +208,6 @@
       "_titleForBoundSession",
       "applyOptimisticWorkspaceSession",
       "clearSessionLoading",
-      "computeSerializedBytes",
       "createApplicationStartupHost",
       "createCommittedViewRendererHost",
       "createCompactResumeHost",
@@ -222,7 +221,6 @@
       "createRuntimeSwitchHost",
       "createWorkspaceEntryHost",
       "createWorkspaceSessionNavigationHost",
-      "emitMsgMetrics",
       "getCurrentAgentRecord",
       "getCurrentHostAgentRecord",
       "getCurrentRuntimeRecord",
@@ -231,7 +229,6 @@
       "getInputSurfaceMode",
       "groupConnectedAgents",
       "isAgentActive",
-      "isMsgMetricsEnabled",
       "isPrebuiltAppVisible",
       "isRuntimeItemActive",
       "markActionLoading",

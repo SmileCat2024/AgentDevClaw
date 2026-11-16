@@ -624,36 +624,7 @@ window.ClawFW.forceFullPollOnce = function () {
 // 数据序列化字节，未发请求为 0）/ fakeFullBytes（假想全量字节，随 probe 下发）/
 // savedRatio / changeKind / downgraded。这份数据是将来评估 SSE 的依据。
 
-function isMsgMetricsEnabled() {
-  try {
-    const search = String((window.location && window.location.search) || '');
-    return new URLSearchParams(search).get('msg_metrics') === '1';
-  } catch {
-    return false;
-  }
-}
 
-function computeSerializedBytes(data) {
-  try {
-    return new TextEncoder().encode(JSON.stringify(data)).length;
-  } catch {
-    return 0;
-  }
-}
-
-function emitMsgMetrics(metrics) {
-  if (!isMsgMetricsEnabled()) return;
-  const savedRatio = metrics.fakeFullBytes > 0
-    ? Math.max(0, 1 - metrics.actualBytes / metrics.fakeFullBytes)
-    : null;
-  console.debug('[msg-metrics]', {
-    actualBytes: metrics.actualBytes,
-    fakeFullBytes: metrics.fakeFullBytes,
-    savedRatio,
-    changeKind: metrics.changeKind,
-    downgraded: metrics.downgraded,
-  });
-}
 
 // poll and its private scheduling state live in poll-coordinator.js.
 
@@ -698,15 +669,18 @@ function createRuntimeNotFoundHost() {
 }
 
 // Classic rendering dependencies for the shared ESM poll/SSE message probe.
-function createMessageProbeHost(createRenderer) {
+function createMessageProbeHost(createRenderer, createMetrics, bytes) {
   return {
     messages: () => currentMessages,
     isCurrent: (token) => isSessionViewTokenCurrent(token),
     commit: (token, patch, effect) => commitSessionViewPatch(token, patch, effect),
     fetch: (url) => fetch(url),
     attachTimestamps: (messages, timestamps) => attachMessagesTimestamps(messages, timestamps),
-    bytes: computeSerializedBytes,
-    metrics: emitMsgMetrics,
+    bytes,
+    metrics: createMetrics({
+      search: () => String((window.location && window.location.search) || ''),
+      debug: (...args) => console.debug(...args),
+    }),
     render: createRenderer(createCommittedViewRendererHost()).renderMessages,
   };
 }
@@ -901,7 +875,6 @@ document.addEventListener('visibilitychange', () => {
 
 function createApplicationStartupHost() {
   return {
-    waitViewer: () => waitForViewerReady(),
     loadTemplates: () => window.loadFeatureTemplateMap(),
     loadAgents: () => loadAgents(),
     consumeDesktopOpen: async () => { if (window.ClawDesktopOpen) await window.ClawDesktopOpen.consumeBootOpenRequest(); },

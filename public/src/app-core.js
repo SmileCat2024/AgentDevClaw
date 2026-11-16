@@ -35,22 +35,13 @@ window.fetch = function(input, init) {
   return nativeFetch(input, init);
 };
 
-async function waitForViewerReady(timeoutMs = 15000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await nativeFetch(
-        USE_SAME_ORIGIN_VIEWER_PROXY ? '/api/agents' : (VIEWER_BASE_URL + '/api/agents'),
-        { cache: 'no-store' }
-      );
-      if (response.ok) {
-        return true;
-      }
-    } catch (error) {
-    }
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-  return false;
+function createViewerReadinessHost() {
+  return {
+    now: () => Date.now(),
+    fetch: (...args) => nativeFetch(...args),
+    url: () => USE_SAME_ORIGIN_VIEWER_PROXY ? '/api/agents' : (VIEWER_BASE_URL + '/api/agents'),
+    wait: (delay) => new Promise(resolve => setTimeout(resolve, delay)),
+  };
 }
 
 // ── Web-based file/directory picker (fallback for non-Windows) ──

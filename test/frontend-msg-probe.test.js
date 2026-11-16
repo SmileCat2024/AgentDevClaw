@@ -32,6 +32,7 @@ import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { createPollCoordinator } from '../public/src/modules/poll-coordinator.js';
 import { createMessageProbe } from '../public/src/modules/message-probe.js';
 import { createCommittedViewRenderer } from '../public/src/modules/committed-view-renderer.js';
+import { createMessageMetrics, computeSerializedBytes } from '../public/src/modules/message-metrics.js';
 import { createMetadataCommit } from '../public/src/modules/metadata-commit.js';
 import { createRuntimePoll } from '../public/src/modules/runtime-poll.js';
 import { createPollCycle } from '../public/src/modules/poll-cycle.js';
@@ -221,8 +222,8 @@ function createSandbox({
   );
 
   Object.assign(sandbox, createPollCoordinator(vm.runInContext('createPollCoordinatorHost()', sandbox)));
-  sandbox.createCommittedViewRenderer = createCommittedViewRenderer;
-  Object.assign(sandbox, createMessageProbe(vm.runInContext('createMessageProbeHost(createCommittedViewRenderer)', sandbox)));
+  Object.assign(sandbox, { createCommittedViewRenderer, createMessageMetrics, computeSerializedBytes });
+  Object.assign(sandbox, createMessageProbe(vm.runInContext('createMessageProbeHost(createCommittedViewRenderer, createMessageMetrics, computeSerializedBytes)', sandbox)));
   Object.assign(sandbox, createMetadataCommit(vm.runInContext('createMetadataCommitHost(createCommittedViewRenderer)', sandbox)));
   Object.assign(sandbox, createRuntimePoll(vm.runInContext('createRuntimePollHost()', sandbox)));
   Object.assign(sandbox, createPollCycle(vm.runInContext('createPollCycleHost()', sandbox)));

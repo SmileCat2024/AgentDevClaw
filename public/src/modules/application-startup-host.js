@@ -1,10 +1,12 @@
 import { createApplicationStartup } from './application-startup.js';
+import { createViewerReadiness } from './startup-readiness.js';
 import { loadFeatureTemplateMap, reloadFeatureTemplateMap } from './agent-loader-host.js';
 import { loadAgents } from './agent-snapshot-loader-host.js';
 import { poll } from './poll-coordinator-host.js';
 
 const startup = createApplicationStartup({
   ...window.createApplicationStartupHost(),
+  waitViewer: createViewerReadiness(window.createViewerReadinessHost()),
   loadTemplates: loadFeatureTemplateMap,
   reloadTemplates: reloadFeatureTemplateMap,
   loadAgents,
