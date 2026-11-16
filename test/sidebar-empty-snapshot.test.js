@@ -15,23 +15,24 @@
  *  - S3 首屏无历史（首次加载即空快照）：维持既有 external 投影（显式
  *    锚定该边界，防止将来无意识改变）。
  *
- * 手法：VM 沙箱加载生产 sidebar-render.js 的 loadAgents() 源码切片，
- * mock invoke / fetch 数据源，驱动真实函数体。
+ * 手法：真实 ESM 快照加载器连接 classic 宿主适配器，
+ * mock invoke / fetch 数据源，驱动真实请求、合并与诊断实现。
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createAgentSnapshotLoader } from '../public/src/modules/agent-snapshot-loader.js';
 import { sanitizeSidebarDiagnosticEvent } from '../server/shared/sidebar-diagnostics.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 const SOURCE_PATH = 'public/src/modules/sidebar-render.js';
 
-function extractLoadAgentsSource() {
+function extractLoaderHostSource() {
   const source = fs.readFileSync(SOURCE_PATH, 'utf8');
-  const start = source.indexOf('async function loadAgents() {');
+  const start = source.indexOf('function createAgentSnapshotLoaderHost() {');
   const end = source.indexOf('// Desktop notification', start);
-  if (start < 0 || end < 0) throw new Error('loadAgents block not found');
+  if (start < 0 || end < 0) throw new Error('snapshot host block not found');
   return source.slice(start, end);
 }
 
@@ -147,7 +148,8 @@ function createLoadAgentsSandbox({ connectedPlan = [], viewerPlan = [], initialA
       renders.push(ctx.allAgents.map(({ id, source, connected, status }) => ({ id, source, connected, status })));
     },
   });
-  ctx.run(extractLoadAgentsSource());
+  ctx.run(extractLoaderHostSource());
+  Object.assign(ctx, createAgentSnapshotLoader(ctx.run('createAgentSnapshotLoaderHost()')));
   ctx.__snapshots = renders;
   ctx.__diagnostics = diagnostics;
   return ctx;

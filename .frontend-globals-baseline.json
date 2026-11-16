@@ -2695,9 +2695,9 @@
     "behavior": [
       "anyContextMenuOpen",
       "createAgentCallStatesHost",
+      "createAgentSnapshotLoaderHost",
       "getAgentIconHtml",
       "getAgentListRenderSignature",
-      "loadAgents",
       "onSidebarItemPointerLeave",
       "onSidebarItemPointerMove",
       "onSidebarSessionCtxMenu",

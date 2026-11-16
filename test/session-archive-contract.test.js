@@ -127,7 +127,7 @@ describe('archive-and-replace contract', () => {
     assert.match(readinessWait, /return null;/);
     assert.doesNotMatch(readinessWait, /for \(;;\)/);
     const delegateStart = sidebarRender.indexOf('async function waitForTargetRuntimeSession');
-    const delegateEnd = sidebarRender.indexOf('\nasync function loadAgents()', delegateStart);
+    const delegateEnd = sidebarRender.indexOf('\n// Synchronous rendering stays classic.', delegateStart);
     const delegate = sidebarRender.slice(delegateStart, delegateEnd);
     assert.match(delegate, /window\.NavigationCore\?\.waitForRuntimeReady/);
     assert.doesNotMatch(delegate, /attempt < attempts/);

@@ -36,7 +36,7 @@ function createFocusSandbox(storage = {}) {
   };
   vm.createContext(sandbox);
   vm.runInContext(
-    `${extractFunction(sidebarSource, 'function resolveFocusedAgentAfterRefresh(', '\n\nasync function loadAgents')}`
+    `${extractFunction(sidebarSource, 'function resolveFocusedAgentAfterRefresh(', '\n\n// Synchronous rendering stays classic.')}`
       + `${extractFunction(contextMenuSource, 'function isDeletedAgentFocused(', '\n\ndeleteAgentAction')}`
       + '\nglobalThis.__restoreFocus = resolveFocusedAgentAfterRefresh;'
       + '\nglobalThis.__isDeletedAgentFocused = isDeletedAgentFocused;',

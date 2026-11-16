@@ -503,247 +503,54 @@ function resolveFocusedAgentAfterRefresh(agents = allAgents) {
   return pendingAgent || rememberedAgent || list.find(isConnected) || null;
 }
 
-async function loadAgents() {
-  if (loadAgentsInFlight) {
-    return loadAgentsInFlight;
-  }
-  const _t0 = performance.now();
-  const sidebarSnapshotToken = typeof captureSidebarSnapshotToken === 'function'
-    ? captureSidebarSnapshotToken()
-    : null;
-  const task = (async () => {
-  try {
-    // 归属显式化：PH 类工作空间的会话切片按当前浏览目标（项目 / 目录）
-    // 请求，与服务端切片口径一致；其他 agent 无归属参数，行为不变。
-    const ownershipPayload = typeof getPhSessionOwnershipParams === 'function'
-      ? getPhSessionOwnershipParams(
-        (Array.isArray(allAgents) ? allAgents : []).find((agent) => agent.id === 'programming-helper') || null,
-      )
-      : {};
-    const [connectedAgents, res] = await Promise.all([
-      invoke('get_connected_agents', ownershipPayload),
-      fetch('/api/agents'),
-      window.ClawSidebarLayout?.load(),
-    ]);
-    const data = res.ok ? await res.json().catch(() => ({ agents: [] })) : { agents: [] };
-    // 侧栏不依赖用户先进入 PH 首页；首次快照即加载项目名称，后续复用实体缓存。
-    if (connectedAgents.some((agent) => agent.id === 'programming-helper')
-      && typeof ensurePhProjectEntitiesLoaded === 'function') {
-      await ensurePhProjectEntitiesLoaded();
-    }
-    if (sidebarSnapshotToken && typeof isSidebarSnapshotTokenCurrent === 'function' && !isSidebarSnapshotTokenCurrent(sidebarSnapshotToken)) {
-      window.setTimeout(() => loadAgents().catch(e => console.warn(e)), 25);
-      return { stale: true };
-    }
-    if (connectedAgents.__sidebarDiagnostic) {
-      // A rejected read is not an empty snapshot. In particular a consistency
-      // conflict must retain the complete previous frame, not mix in Viewer data.
-      console.warn('[sidebar] retaining snapshot after failed authoritative read', connectedAgents.__sidebarDiagnostic);
-      return { unavailable: true };
-    }
-    const runtimeAgents = data.agents || [];
-    const runtimeById = new Map(runtimeAgents.map((agent) => [agent.id, agent]));
-    const prevByAgentId = new Map(allAgents.map((a) => [a.id, a]));
-
-    if (connectedAgents.length === 0) {
-      const sourceDiagnostic = connectedAgents.__sidebarDiagnostic;
-      // ── 空快照契约 ──────────────────────────────────────────────
-      // 一次空的 connected 快照不代表"没有任何预制 Agent"：当前服务端正常
-      // 路径会返回 prebuilt 宿主条目（即使全部 stopped），但空数组本身
-      // 不足以证明身份已经消失（也可能是请求失败、初始化或发现过程中的
-      // 短暂不确定状态）。空快照不得把已确认的预制身份降级成 external
-      // （历史 bug：分类闪现"外部代理"、标题退化为工作空间名）。
-      const diagnoseEmptySnapshot = (phase, prevCount) => {
-        if (typeof queueSidebarDiagnosticEvent === 'function') {
-          // Use the existing system-diagnostic contract. The queue is persisted
-          // through sanitizeSidebarDiagnosticEvent(), which requires a stable
-          // operation/phase pair and only accepts bounded count field names.
-          queueSidebarDiagnosticEvent({
-            kind: 'system',
-            operation: 'sidebar_snapshot',
-            phase: sourceDiagnostic?.phase || `empty-connected-${phase}`,
-            errorCode: sourceDiagnostic?.errorCode || 'empty-connected-snapshot',
-            result: 'degraded',
-            agentCount: prevCount,
-            runtimeCount: runtimeAgents.length,
-          });
-        }
-        console.warn(`[sidebar] empty connected snapshot (${phase}): prev=${prevCount} viewerRuntime=${runtimeAgents.length}`);
-      };
-      const prevAgents = Array.isArray(allAgents) ? allAgents : [];
-      const hasConfirmedPrebuiltIdentity = prevAgents.some((agent) => agent?.source === 'prebuilt');
-      if (runtimeAgents.length === 0) {
-        // S2 双源皆空：无任何新信息，整体保留上一轮——与网络层 throw
-        // 的 catch 路径行为对齐（同样是"这轮没拿到数据"，结局一致）。
-        diagnoseEmptySnapshot('both-sources-empty', prevAgents.length);
-      } else if (hasConfirmedPrebuiltIdentity) {
-        // S1 稳态空快照：保留上一轮完整侧栏投影，仅按 viewer runtime
-        // 刷新存活状态（viewer 匹配不到的条目保留上一轮状态，下一轮
-        // 正常快照会给出权威值）。
-        allAgents = prevAgents.map((agent) => {
-          const runtimeSessionId = getRuntimeId(agent);
-          const runtimeAgent = runtimeSessionId ? runtimeById.get(runtimeSessionId) : runtimeById.get(agent.id);
-          const resolvedConnected = runtimeAgent?.connected ?? agent.connected ?? false;
-          return {
-            ...agent,
-            status: resolvedConnected ? 'running' : 'stopped',
-            message_count: runtimeAgent?.messageCount ?? agent.message_count ?? 0,
-            connected: resolvedConnected,
-          };
-        });
-        diagnoseEmptySnapshot('preserved-identity', prevAgents.length);
-      } else {
-        // S3 首屏无历史：无可保留的已确认身份，维持既有 external 投影。
-        allAgents = runtimeAgents.map((agent) => ({
-          id: agent.id,
-          name: agent.name,
-          description: agent.description || '',
-          status: agent.connected ? 'running' : 'stopped',
-          source: 'external',
-          parent_id: agent.parentAgentId || null,
-          connection_info: agent.connectionInfo || 'viewer://127.0.0.1:2026',
-          pid: agent.pid || null,
-          runtime_session_id: agent.id,
-          message_count: agent.messageCount ?? 0,
-          created_at: agent.createdAt || null,
-          connected: agent.connected ?? false,
-        }));
-        diagnoseEmptySnapshot('external-fallback-no-history', prevAgents.length);
-      }
-    } else {
-      // 先收敛乐观退场注册表：快照已不含的源 runtime（stop 已生效）解除抑制。
-      if (typeof reconcilePendingRuntimeStops === 'function') {
-        reconcilePendingRuntimeStops(connectedAgents);
-      }
-      allAgents = connectedAgents.map((agent) => {
-        const runtimeSessionId = getRuntimeId(agent);
-        const runtimeAgent = runtimeSessionId ? runtimeById.get(runtimeSessionId) : runtimeById.get(agent.id);
-        const resolvedConnected = runtimeAgent?.connected ?? agent.connected ?? false;
-        const prev = prevByAgentId.get(agent.id);
-        return {
-          ...agent,
-          status: resolvedConnected ? 'running' : (agent.status || 'stopped'),
-          message_count: runtimeAgent?.messageCount ?? agent.message_count ?? 0,
-          connected: resolvedConnected,
-          ...(prev && loadedAgentDetailIds.has(agent.id) ? {
-            workspace_data: prev.workspace_data,
-            workspace_state: {
-              ...prev.workspace_state,
-              // gcChats comes from getConnectedAgents (not agent_detail),
-              // so always use the fresh value to avoid losing group chat mapping.
-              ...(agent.workspace_state?.gcChats ? { gcChats: agent.workspace_state.gcChats } : {}),
-            },
-            // The light snapshot is authoritative for membership/status when
-            // its revision is current; merge preserves rich fields by ID.
-            workspace_sessions: typeof mergeWorkspaceSessionSnapshots === 'function'
-              ? mergeWorkspaceSessionSnapshots(prev.workspace_sessions, agent.workspace_sessions, agent.id)
-              : prev.workspace_sessions,
-          } : {}),
-          // 当新数据的 workspace_sessions.sessions 为空但旧数据有值时，保留旧 sessions 避免闪空
-          ...(!loadedAgentDetailIds.has(agent.id) && prev?.workspace_sessions?.sessions?.length > 0
-            && !(agent.workspace_sessions?.sessions?.length > 0) ? {
-              workspace_sessions: prev.workspace_sessions,
-            } : {}),
-          // Preserve contextLength/compressRatio from prev when the light
-          // getConnectedAgents snapshot doesn't include them. This prevents
-          // the context bar from flashing defaults between data refreshes.
-          // Only applies when loadAgentDetail hasn't run yet AND the new data
-          // has sessions (if sessions are empty, the block above already
-          // preserves the entire prev.workspace_sessions).
-          ...(!loadedAgentDetailIds.has(agent.id)
-            && agent.workspace_sessions?.sessions?.length > 0
-            && prev?.workspace_sessions && (() => {
-            const cur = agent.workspace_sessions;
-            const curCl = cur?.contextLength;
-            const curCr = cur?.compressRatio;
-            const prevCl = prev.workspace_sessions.contextLength;
-            const prevCr = prev.workspace_sessions.compressRatio;
-            const needCl = !(Number.isFinite(curCl) && curCl > 0) && Number.isFinite(prevCl) && prevCl > 0;
-            const needCr = !(Number.isFinite(curCr) && curCr > 0 && curCr <= 100) && Number.isFinite(prevCr) && prevCr > 0 && prevCr <= 100;
-            if (!needCl && !needCr) return {};
-            return {
-              workspace_sessions: {
-                ...cur,
-                ...(needCl ? { contextLength: prevCl } : {}),
-                ...(needCr ? { compressRatio: prevCr } : {}),
-              },
-            };
-          })()),
-        };
-      });
-    }
-
-    // 清理已断开 agent 的 call 状态（含在线远程条目：remote: 命名空间 key
-    // 必须视为存活，否则每轮 poll 被当孤儿清除，见 collectActiveCallRuntimeIds）
-    const activeRuntimeIds = new Set(collectActiveCallRuntimeIds(allAgents));
-    for (const key of _agentCallActive.keys()) {
-      if (!activeRuntimeIds.has(key)) _agentCallActive.delete(key);
-    }
-    for (const key of Array.from(_recentlyFinishedRuntimes)) {
-      if (!activeRuntimeIds.has(key)) _recentlyFinishedRuntimes.delete(key);
-    }
-
-    if (!suppressSidebarRerender) {
-      renderAgentList();
-      // resources/viewer/settings 面板数据独立管理，跳过以避免编辑器/输入框失焦
-      if (typeof activeFeaturePanel === 'undefined' || (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings')) {
-        renderFeaturePanel();
-      }
-    }
-
-    await refreshAgentCallStates(allAgents);
-
-    // remote: 命名空间的 agent 不在本机 allAgents 目录中（不参与本地目录
-    // 心跳），不能被本地 fallback 抢走焦点；焦点恢复由 remote_catalog 侧维持。
-    if (focusedAgentId && !isRemoteNamespaceAgentId(focusedAgentId)
-      && !allAgents.some((agent) => agent.id === focusedAgentId || getAgentRuntimeId(agent) === focusedAgentId)) {
-      const fallbackId = resolveWorkspaceFallbackAgentId();
-      if (fallbackId) {
-        await window.loadAgentDetail(fallbackId)
-        selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
-        return;
-      }
-    }
-
-    if (!focusedAgentId) {
-      const homeAgent = allAgents.find((agent) => agent.id === 'home' && agent.source === 'prebuilt');
-      if (homeAgent) {
-        setPreferredUnitMode('home', homeAgent);
-        await window.loadAgentDetail(homeAgent.id)
-        selectWorkspaceSurface(homeAgent.id, { skipFeaturePanel: true });
-        return;
-      }
-      if (!focusedAgentId) {
-        // 焦点恢复（前端自持，服务端 current agent 语义已移除）：
-        // 1. 有待处理输入请求的 agent 优先；2. localStorage 记忆的上次焦点；
-        // 3. 兜底选中列表第一个已连接 agent。
-        const restoreAgent = resolveFocusedAgentAfterRefresh(allAgents);
-        if (restoreAgent) {
-          // 投影入口条目走完整入口流程（宿主详情 + 条目 surface），
-          // 不能按宿主逻辑 id 直落（那会恢复成宿主首页）。
-          if (restoreAgent.agentId && restoreAgent.source === 'prebuilt') {
-            void window.handlePrebuiltAgentClick(restoreAgent.id);
-          } else {
-            focusedAgentId = getLogicalAgentId(restoreAgent) || null;
-            await loadAgentData(getAgentRuntimeId(restoreAgent));
-          }
-
-        }
-      }
-    }
-  } catch (e) {
-    console.error('Failed to load agents:', e);
-  }
-  })();
-  loadAgentsInFlight = task;
-  try {
-    return await task;
-  } finally {
-    if (loadAgentsInFlight === task) {
-      loadAgentsInFlight = null;
-      console.log(`[PERF-CLIENT] loadAgents complete (${(performance.now() - _t0).toFixed(0)}ms)`);
-    }
-  }
+// Synchronous rendering stays classic. Async snapshots are owned by ESM; these
+// adapters resolve not-yet-migrated helpers at call time, not during module load.
+function createAgentSnapshotLoaderHost() {
+  return {
+    state: {
+      get agents() { return allAgents; }, set agents(value) { allAgents = value; },
+      get inFlight() { return loadAgentsInFlight; }, set inFlight(value) { loadAgentsInFlight = value; },
+      get focused() { return focusedAgentId; }, set focused(value) { focusedAgentId = value; },
+      get suppressRender() { return suppressSidebarRerender; },
+      get activePanel() { return typeof activeFeaturePanel === 'undefined' ? undefined : activeFeaturePanel; },
+    },
+    get detailIds() { return loadedAgentDetailIds; },
+    now: () => performance.now(),
+    captureToken: () => typeof captureSidebarSnapshotToken === 'function' ? captureSidebarSnapshotToken() : null,
+    isTokenCurrent: (token) => typeof isSidebarSnapshotTokenCurrent !== 'function' || isSidebarSnapshotTokenCurrent(token),
+    ownership: (agent) => typeof getPhSessionOwnershipParams === 'function' ? getPhSessionOwnershipParams(agent) : {},
+    connected: (ownership) => invoke('get_connected_agents', ownership),
+    viewer: () => fetch('/api/agents'),
+    loadLayout: () => window.ClawSidebarLayout?.load(),
+    loadProjects: () => typeof ensurePhProjectEntitiesLoaded === 'function' ? ensurePhProjectEntitiesLoaded() : undefined,
+    schedule: (callback, delay) => window.setTimeout(callback, delay),
+    diagnostic: (event) => { if (typeof queueSidebarDiagnosticEvent === 'function') queueSidebarDiagnosticEvent(event); },
+    runtimeId: (agent) => getRuntimeId(agent),
+    agentRuntimeId: (agent) => getAgentRuntimeId(agent),
+    logicalId: (agent) => getLogicalAgentId(agent),
+    mergeSessions: (previous, incoming, id) => typeof mergeWorkspaceSessionSnapshots === 'function'
+      ? mergeWorkspaceSessionSnapshots(previous, incoming, id) : previous,
+    reconcileStops: (agents) => { if (typeof reconcilePendingRuntimeStops === 'function') reconcilePendingRuntimeStops(agents); },
+    pruneCallStates: (agents) => {
+      const active = new Set(collectActiveCallRuntimeIds(agents));
+      for (const key of _agentCallActive.keys()) if (!active.has(key)) _agentCallActive.delete(key);
+      for (const key of Array.from(_recentlyFinishedRuntimes)) if (!active.has(key)) _recentlyFinishedRuntimes.delete(key);
+    },
+    renderList: () => renderAgentList(),
+    renderPanel: () => renderFeaturePanel(),
+    refreshCalls: (agents) => refreshAgentCallStates(agents),
+    isRemote: (id) => isRemoteNamespaceAgentId(id),
+    fallback: () => resolveWorkspaceFallbackAgentId(),
+    loadDetail: (id) => window.loadAgentDetail(id),
+    selectSurface: (id, options) => selectWorkspaceSurface(id, options),
+    preferHome: (agent) => setPreferredUnitMode('home', agent),
+    resolveFocus: (agents) => resolveFocusedAgentAfterRefresh(agents),
+    clickPrebuilt: (id) => window.handlePrebuiltAgentClick(id),
+    loadData: (id) => loadAgentData(id),
+    warn: (...args) => console.warn(...args),
+    error: (...args) => console.error(...args),
+    log: (...args) => console.log(...args),
+  };
 }
 
 // Desktop notification -> modules/desktop-notify.js

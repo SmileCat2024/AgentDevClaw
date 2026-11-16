@@ -13,6 +13,7 @@
 
 import fs from 'node:fs';
 import { installSessionViewCommit } from './session-view-commit.js';
+import { createAgentSnapshotLoader } from '../../public/src/modules/agent-snapshot-loader.js';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -172,6 +173,9 @@ export function createFrontendSandbox(overrides = {}) {
     // Classic first-paint code stays synchronous; async producers exercise the
     // real ESM eligibility policy against the same live sandbox state.
     if (relativePath === 'public/src/modules/session-view-state.js') installSessionViewCommit(context);
+    if (relativePath === 'public/src/modules/sidebar-render.js') {
+      Object.assign(context, createAgentSnapshotLoader(vm.runInContext('createAgentSnapshotLoaderHost()', context)));
+    }
   };
 
   // Make the real kernel bridge available before classic modules register keys.
