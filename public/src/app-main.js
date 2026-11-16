@@ -1010,104 +1010,36 @@ window._scheduleInspectorRefresh = function (delayMs) {
 
 // ── poll 与 SSE 事件共用的消费函数（§5.2：事件到达路径与 fetch 路径走同一实现）──
 
-/**
- * Core runtime 消失（404）处理：会话视图清理 + fallback 切换。
- * poll 周期与 SSE messages 事件取数共用。
- * @returns {Promise<boolean>} true 表示已处理（调用方应结束本轮）
- */
-async function handleCoreResponsesNotFound(pollToken) {
-  if (!isSessionViewTokenCurrent(pollToken)) return true;
-  const pollRuntimeId = pollToken.runtimeId;
-  // In-session partial compact doesn't create a new session, so if we get 404
-  // while compact is in flight, just clear the flag and fall through to normal handling
-  if (_partialCompactInFlight && normalizeAgentIdentity(pollRuntimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)) {
-    clearPartialCompactState();
-  }
-  if (prebuiltSessionSwitchInFlight || suppressSidebarRerender) {
-    schedulePoll(POLL_FAST_INTERVAL_MS);
-    return true;
-  }
-  // 接续窗口豁免：旧 head 退役是预期事实（挡板已立、successor 尚未
-  // ready），此间的 /responses 404 不是会话消失——保持视图与选中不动，
-  // 等待 head-advanced 事件原地重绑到 successor（thread-store）。窗口判
-  // 定只读服务端记录的 status（与 isHandoffBarrierActive 同一派生规则）；
-  // 无线程或挡板已收敛时落回原 404 处理。
-  {
-    const isBarrierActive = (thread) => !!thread && String(thread.status || '') === 'rotating';
-    const runtimeSessionId = typeof getRuntimeWorkspaceSessionId === 'function'
-      ? String(getRuntimeWorkspaceSessionId(pollRuntimeId) || '').trim() : '';
-    const hostRecord = typeof getCurrentHostAgentRecord === 'function' ? getCurrentHostAgentRecord() : null;
-    const lookupThread = () => (runtimeSessionId && hostRecord?.id
-      && typeof window.getThreadForSession === 'function'
-      ? window.getThreadForSession(hostRecord.id, runtimeSessionId) : null);
-    let handoffThread = lookupThread();
-    // 豁免判定不得建立在可能过期的线程缓存上（SSE 丢失 / 刷新竞态会把
-    // 预期退役误判成会话消失）：会话映射到线程但挡板未立起时，先强制
-    // 刷新线程事实再重判。刷新后的线程事实同时驱动接力指示器与暂存气
-    // 泡渲染（refreshThreads 收尾统一刷新），404 本身即接续信号。
-    if (handoffThread && !isBarrierActive(handoffThread)
-      && typeof window.refreshThreads === 'function') {
-      await window.refreshThreads(true).catch(() => {});
-      if (!isSessionViewTokenCurrent(pollToken)) return true;
-      handoffThread = lookupThread();
-    }
-    if (isBarrierActive(handoffThread)) {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return true;
-    }
-    // 等待重绑窗口（ADR-0024 接续零感知）：advanceHead 原子清挡板，但视图
-    // 重绑要等 threads 事实对账 / head-advanced 事件处理器完成网络往返才
-    // 落定。此间隙的 poll 404 若落回原生清理，会把 currentRuntimeAgentId /
-    // focusedAgentId 清空，重绑守卫的 host 解析随之失败，重绑静默中断——
-    // 视图「断掉」直到用户手点新会话（历史事故：接续直接断掉、啥也没有）。
-    // 事实锚：视图身份冻结在本线程且冻结时是 head（wasHead），此后 head 被
-    // successor 接管——精确覆盖接续用户；历史成员浏览（wasHead=false）、
-    // 终态线程、head 未换代均不在此列，保持原 404 语义。此处纯保持不动：
-    // 重绑由上方强刷的 threads 事实对账驱动（thread-store 唯一实现）。
-    const frozen = window.ClawThreads?.activeConversation || null;
-    if (handoffThread && frozen && handoffThread.status !== 'closed' && runtimeSessionId
-      && String(handoffThread.threadId || '') !== ''
-      && String(handoffThread.headSessionId || '') !== runtimeSessionId
-      && frozen.threadId === handoffThread.threadId
-      && String(frozen.sessionId || '') === runtimeSessionId
-      && frozen.wasHead === true) {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return true;
-    }
-  }
-  const failedRuntimeRecord = getRuntimeRecord(pollRuntimeId);
-  const fallbackId = resolveWorkspaceFallbackAgentId(failedRuntimeRecord);
-  const failureCommitted = commitSessionViewPatch(
-    pollToken,
-    fallbackId ? {} : {
-      messages: [],
-      inputRequests: [],
-      todoPlan: getEmptyTodoPlan(),
+function createRuntimeNotFoundHost() {
+  return {
+    isCurrent: (token) => isSessionViewTokenCurrent(token),
+    clearCompact: (id) => {
+      if (_partialCompactInFlight && normalizeAgentIdentity(id) === normalizeAgentIdentity(_partialCompactRuntimeId)) clearPartialCompactState();
     },
-    ({ current }) => {
-      _agentCallActive.delete(pollRuntimeId);
-      clearInterruptSuppression(pollRuntimeId);
-      if (failedRuntimeRecord) {
-        failedRuntimeRecord.callActive = false;
-        failedRuntimeRecord.connected = false;
-      }
+    switching: () => prebuiltSessionSwitchInFlight || suppressSidebarRerender,
+    schedule: (delay) => schedulePoll(delay),
+    fastInterval: () => POLL_FAST_INTERVAL_MS,
+    interval: () => POLL_INTERVAL_MS,
+    sessionId: (id) => typeof getRuntimeWorkspaceSessionId === 'function' ? getRuntimeWorkspaceSessionId(id) : '',
+    hostRecord: () => typeof getCurrentHostAgentRecord === 'function' ? getCurrentHostAgentRecord() : null,
+    thread: (id, session) => typeof window.getThreadForSession === 'function' ? window.getThreadForSession(id, session) : null,
+    canRefreshThreads: () => typeof window.refreshThreads === 'function',
+    refreshThreads: (force) => window.refreshThreads(force),
+    activeConversation: () => window.ClawThreads?.activeConversation || null,
+    runtimeRecord: (id) => getRuntimeRecord(id),
+    fallback: (record) => resolveWorkspaceFallbackAgentId(record),
+    patch: (token, patch, effect) => commitSessionViewPatch(token, patch, effect),
+    emptyTodo: () => getEmptyTodoPlan(),
+    clearView: (id, failed, fallback) => {
+      _agentCallActive.delete(id);
+      clearInterruptSuppression(id);
+      if (failed) { failed.callActive = false; failed.connected = false; }
       currentRuntimeAgentId = null;
-      if (fallbackId) {
-        selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
-      } else {
-        focusedAgentId = null;
-        currentWorkspaceTab = null;
-        renderCurrentMainView();
-      }
+      if (fallback) selectWorkspaceSurface(fallback, { skipFeaturePanel: true });
+      else { focusedAgentId = null; currentWorkspaceTab = null; renderCurrentMainView(); }
     },
-  );
-  if (!failureCommitted) {
-    schedulePoll(POLL_FAST_INTERVAL_MS);
-    return true;
-  }
-  await loadAgents();
-  schedulePoll(POLL_INTERVAL_MS);
-  return true;
+    loadAgents: () => loadAgents(),
+  };
 }
 
 // Classic rendering dependencies for the shared ESM poll/SSE message probe.

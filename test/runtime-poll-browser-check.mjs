@@ -84,8 +84,22 @@ try {
   assert.deepEqual(requests.slice().sort(), ['connection', 'input-requests', 'messages', 'notification', 'overview', 'todo']);
   await page.evaluate(async () => { await runPollCycle(); schedulePoll(60000); });
   assert.equal(requests.length, 6, 'one-shot full flag is consumed, next cycle is light again');
+  const preserved = await page.evaluate(async () => {
+    window.getRuntimeWorkspaceSessionId = () => 'a';
+    window.getCurrentHostAgentRecord = () => ({ id: 'host' });
+    window.getThreadForSession = () => ({ threadId: 'thread', status: 'rotating', headSessionId: 'a' });
+    await handleCoreResponsesNotFound(captureSessionViewToken());
+    const runtime = currentRuntimeAgentId;
+    window.getThreadForSession = () => ({ threadId: 'thread', status: 'open', headSessionId: 'b' });
+    window.refreshThreads = async () => {};
+    window.ClawThreads = { activeConversation: { threadId: 'thread', sessionId: 'a', wasHead: true } };
+    await handleCoreResponsesNotFound(captureSessionViewToken());
+    schedulePoll(60000);
+    return { runtime, reboundRuntime: currentRuntimeAgentId, body: currentMessages[0].content };
+  });
+  assert.deepEqual(preserved, { runtime: 'rt', reboundRuntime: 'rt', body: 'live body' });
   assert.deepEqual(errors, []);
-  console.log('PASS: real ESM poll host keeps SSE light, performs one full reconciliation and publishes consistent view data');
+  console.log('PASS: real poll keeps SSE light, reconciles one full cycle and preserves the view through both handoff windows');
 } finally {
   release();
   if (browser) await browser.close();

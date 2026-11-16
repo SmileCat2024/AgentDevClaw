@@ -7,6 +7,7 @@ import { runMessagesProbeCycle } from './message-probe-host.js';
 import { commitMetadataUpdate } from './metadata-commit-host.js';
 import { schedulePoll } from './poll-coordinator-host.js';
 import { _runPollTailLowFrequency } from './poll-maintenance-host.js';
+import { handleCoreResponsesNotFound } from './runtime-not-found-host.js';
 
 const runtime = createRuntimePoll({
   ...window.createRuntimePollHost(),
@@ -20,6 +21,7 @@ const runtime = createRuntimePoll({
   metadata: commitMetadataUpdate,
   schedule: schedulePoll,
   tail: _runPollTailLowFrequency,
+  notFound: handleCoreResponsesNotFound,
 });
 export const { runRuntimePoll } = runtime;
 window.KernelState.defineKey('runtime-poll', 'runRuntimePoll', runRuntimePoll);

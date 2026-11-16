@@ -156,7 +156,8 @@ test('initial loading and polling paths guard responses and commit through Sessi
   const token = ctx.run('captureSessionViewToken()');
   ctx._switchEpoch += 1;
   assert.equal(metadata.commitMetadataUpdate(token, {}), false, 'a departed poll view cannot publish metadata');
-  assert.match(mainSource, /if \(!isSessionViewTokenCurrent\(pollToken\)\) return true/);
+  // Runtime disappearance uses the same guarded patch; its thread-specific
+  // preservation paths execute in the succession-404/await-rebind suites.
 });
 
 test('SSE focus events capture a SessionView token before metadata commits', () => {

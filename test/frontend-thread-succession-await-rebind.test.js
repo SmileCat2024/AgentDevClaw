@@ -15,11 +15,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { createRuntimeNotFound } from '../public/src/modules/runtime-not-found.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 
 function extractNotFoundHandler() {
-  const start = mainSource.indexOf('async function handleCoreResponsesNotFound(pollToken)');
+  const start = mainSource.indexOf('function createRuntimeNotFoundHost()');
   const end = mainSource.indexOf('function createMessageProbeHost', start);
   assert.notEqual(start, -1, 'handleCoreResponsesNotFound should exist');
   assert.notEqual(end, -1, 'runMessagesProbeCycle marker should exist');
@@ -73,6 +74,7 @@ function createSandbox({
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(extractNotFoundHandler(), sandbox);
+  Object.assign(sandbox, createRuntimeNotFound(vm.runInContext('createRuntimeNotFoundHost()', sandbox)));
   return { sandbox, calls };
 }
 

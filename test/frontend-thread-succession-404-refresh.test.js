@@ -8,11 +8,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { createRuntimeNotFound } from '../public/src/modules/runtime-not-found.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 
 function extractNotFoundHandler() {
-  const start = mainSource.indexOf('async function handleCoreResponsesNotFound(pollToken)');
+  const start = mainSource.indexOf('function createRuntimeNotFoundHost()');
   const end = mainSource.indexOf('function createMessageProbeHost', start);
   assert.notEqual(start, -1, 'handleCoreResponsesNotFound should exist');
   assert.notEqual(end, -1, 'runMessagesProbeCycle marker should exist');
@@ -78,6 +79,7 @@ test('T013a-1: 404 时线程缓存过期 → 强制刷新线程事实后豁免�
     },
   });
   vm.runInContext(extractNotFoundHandler(), sandbox);
+  Object.assign(sandbox, createRuntimeNotFound(vm.runInContext('createRuntimeNotFoundHost()', sandbox)));
   const handled = await vm.runInContext('handleCoreResponsesNotFound({ runtimeId: "rt-old" })', sandbox);
   assert.equal(handled, true);
   assert.ok(calls.refresh.includes(true), '应对过期缓存发起强制线程刷新');
@@ -91,6 +93,7 @@ test('T013a-2: 刷新后仍无挡板 → 正常踢出（真实会话死亡语义
     refreshImpl: () => { store['sess-old-head'].status = 'open'; store['sess-old-head'].handoffStartedAt = 0; },
   });
   vm.runInContext(extractNotFoundHandler(), sandbox);
+  Object.assign(sandbox, createRuntimeNotFound(vm.runInContext('createRuntimeNotFoundHost()', sandbox)));
   await vm.runInContext('handleCoreResponsesNotFound({ runtimeId: "rt-old" })', sandbox);
   assert.equal(calls.commit, 1, '刷新后仍无新鲜挡板 → 踢出语义保持');
 });
@@ -100,6 +103,7 @@ test('T013a-3: 会话不隶属任何线程 → 不发起刷新，直接正常处
     threadForSession: () => null,
   });
   vm.runInContext(extractNotFoundHandler(), sandbox);
+  Object.assign(sandbox, createRuntimeNotFound(vm.runInContext('createRuntimeNotFoundHost()', sandbox)));
   await vm.runInContext('handleCoreResponsesNotFound({ runtimeId: "rt-old" })', sandbox);
   assert.equal(calls.refresh.length, 0, '非线程会话不应触发线程强制刷新');
   assert.equal(calls.commit, 1);
