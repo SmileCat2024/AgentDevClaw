@@ -1029,8 +1029,9 @@ function _getSessionInputCacheKey() {
   });
 })();
 
-applyTheme(currentTheme);
-applyLanguage();
+// 首屏同步渲染（applyTheme → applyLanguage → 侧栏 / 面板 / 主视图）已迁到 ESM
+// 时序：public/src/modules/boot.js（P4 时序切换，index.html 最后一条 module 标签）。
+// 不要在此恢复顶层调用——它会抢在模块求值前渲染，把首屏链重新钉回 classic 相。
 
 // When the page returns to foreground after being in a background tab,
 // browser timer throttling may have caused us to miss state transitions.

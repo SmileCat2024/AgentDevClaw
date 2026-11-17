@@ -110,6 +110,20 @@
   <link rel="stylesheet" href="./styles/app-chat-input.css">
 </head>
 <body>
+  <!-- 首屏主题预读（P4 时序切换的唯一授权内联新增，ADR-0051）：
+       首屏渲染时点移到 ESM 模块求值相后，模块执行前的第一帧会用 CSS 默认深色底
+       绘制。这里在 body 解析刚开始时把 localStorage 主题落到 body[data-theme]，
+       使首帧即为用户上次选择的主题。换肤的其余职责（样式表切换、按钮图标、
+       currentTheme 状态）仍归 applyTheme（模块相，经 boot.js 触发）。 -->
+  <script id="app-theme-bootstrap">
+    (() => {
+      try {
+        document.body.dataset.theme = localStorage.getItem('agentdev-theme') === 'light' ? 'light' : 'dark';
+      } catch (error) {
+        // localStorage 不可用（隐私模式 / 策略禁用）：保持 CSS 默认主题，不阻断解析。
+      }
+    })();
+  </script>
   <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <div class="brand-area">
@@ -488,5 +502,9 @@
   <!-- 桌面右键唤起（冷启动 URL query / webview eval 统一消费），app-main.js boot 引用 -->
   <script src="./src/modules/desktop-open.js"></script>
   <script src="./src/app-main.js"></script>
+  <!-- 首屏渲染链的 ESM 入口（P4 时序切换）：必须是最后一条 module 标签，
+       它触发 applyTheme → applyLanguage → 侧栏 / 面板 / 主视图的同步渲染。
+       原 app-main.js 顶层的两行同步调用已删除，勿恢复。 -->
+  <script type="module" src="./src/modules/boot.js"></script>
 </body>
 </html>

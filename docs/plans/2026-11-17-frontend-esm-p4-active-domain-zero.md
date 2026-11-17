@@ -88,6 +88,21 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | 测试迁移量（约 60–80 个沙箱文件） | 中 | 分摊各批；loader helper 已泛化，属机械工作 |
 | 悬置域桥键误撤导致悬置域断链 | 中 | T4 清单化登记；撤桥以消费面 grep 归零为唯一依据（配方步 5） |
 
+## 实施记录
+
+### 时序切换提前到 P4 起点（2026-11-17）
+
+实测依赖关系与 T1 的"不改行为"约束冲突：`i18n` 的 `t`、`theme-lang` 的 `applyTheme` / `applyLanguage`、`markdown-bootstrap` 的 `escapeHtml` / `renderer`、`app-core` 的 DOM 引用区，都被 app-main 顶层的 `applyTheme(currentTheme); applyLanguage();` 在 classic 相同步触达（传递链：`applyLanguage → renderCurrentMainView → getEmptyStateHtml → escapeHtml`）。只要这条顶层调用还在 classic 相，这些域迁进 ESM 就会在首屏抛 ReferenceError，各文件头注的 R1 收敛条件（如 `workspace-docset.js`）也是同一约束。
+
+因此把 T2 的收尾专项提交**提前为本阶段第一步**落地，作为独立可回退提交：
+
+- 新增 `public/src/modules/boot.js`（index.html 最后一条 module 标签），承接原 app-main 顶层两行调用；app-main 侧留注释禁止恢复。
+- index.html 的 `app-theme-bootstrap` 内联主题预读（本计划授权的唯一内联新增）。
+- 行为变化与风险表一致：首屏渲染时点移到模块求值相；主题闪烁由预读兜住。
+- 切换后 R1/R4 的"首屏同步触达"约束整体解除，后续批次改为纯自底向上转换（可并行），不再需要逐文件登记"等首屏链迁移后再收敛"的中间态。
+
+不按原顺序（先迁链、后切时序）执行的理由：那要求首屏链上十几个文件在同一批里联合迁移成 ESM，才能保住首屏可用；提前切换把这条巨型原子批次拆成了一系列独立可验收的批次，且中间态始终可运行。
+
 ## 接续与回滚
 
 每批独立提交、可独立回退（D4/D5 既有纪律）；T2 时序切换提交单独成 commit，回退它即回到同步首屏（桥与模块保留）。本计划实施期间如遇与 ADR-0051 冲突的边界，以 ADR 为准并报告，不自行扩大解释。

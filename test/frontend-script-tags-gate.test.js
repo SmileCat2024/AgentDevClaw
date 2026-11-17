@@ -73,6 +73,9 @@ const MODULE_ENTRIES = [
   './src/modules/orchestration-state.js',
   './src/modules/kernel-entry.js',
   './src/modules/markdown-utils.js',
+  // P4 时序切换：首屏渲染链（applyTheme → applyLanguage → 主视图）的 ESM 入口。
+  // 必须保持为 index.html 最后一条 module 标签（它晚于其余入口求值）。
+  './src/modules/boot.js',
 ];
 
 // 由已登记的 module 入口经 static import 带入的生产装载入口（不在 index.html
@@ -211,6 +214,18 @@ test('装载入口登记：必须真被登记 module 入口 import，且文件�
     notEsm,
     [],
     `登记的装载入口不含 ESM 语法：${notEsm.join(', ')}——它应是被 import 的 ESM 模块，不是 classic 脚本`,
+  );
+});
+
+test('首屏渲染入口 boot.js 是最后一条 module 标签（P4 时序切换）', async () => {
+  // boot 触发 applyTheme → applyLanguage → 侧栏 / 面板 / 主视图的同步渲染；
+  // 首屏链会触达其余 module 入口经桥注册的键，因此它必须晚于全部入口求值。
+  const tags = await readModuleTags();
+  assert.ok(tags.length > 0, 'index.html 应有 module 入口');
+  assert.equal(
+    normPath(tags[tags.length - 1]),
+    'src/modules/boot.js',
+    `最后一条 module 标签应是 boot.js（实际 ${tags[tags.length - 1]}）——首屏渲染链不能抢在其余入口之前`,
   );
 });
 

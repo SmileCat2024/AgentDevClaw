@@ -9,9 +9,10 @@
  *     `__clawAuthReady` → app-main boot → loadAgents / loadAgentData / SSE。
  *
  * 第一轮钉四件事：
- *   A. 模块延迟时首屏可用：拦下所有 `<script type="module">` 响应（解析完成、
- *      模块未求值），此时首屏空态、主题切换、语言切换必须照旧可用——这些是
- *      classic 相的唯一同步实现，不能被 P2 装载接线拖到 deferred 模块之后。
+ *   A. 模块延迟相（kernel-entry 与 boot 都扣住，解析完成、模块未求值）：P4 时序
+ *      切换后首屏由 boot 在模块相触发，因此这一相里首屏**尚未渲染**；但 classic
+ *      相的主题 / 语言实现仍需可用（静态按钮的 click 监听在 classic 相就已注册），
+ *      不能被装载接线拖成"点了没反应"。
  *   B. 放行后模图求值、boot 真实顺序：先 auth/status，再 get_connected_agents /
  *      /api/agents 与消息加载，SSE 在认证放行之后；期间零 pageerror、零 console
  *      error（模块解析失败、桥键重复注册、classic 相调用已迁函数都会在这里暴露）。
@@ -27,10 +28,10 @@
  *      也不用缺 classic 的沙箱读数替代。
  *
  * 第二轮（独立页面，只验延迟相事件入口）：
- *   E. 模块延迟期真实 rail 点击：rail 面板按钮由 classic 相的首屏同步链
- *      （applyLanguage → renderCurrentMainView → syncRailButtons）生成，这条入口
- *      **不经认证闸**——deferred 模块尚未求值时用户点它同样会走
- *      panel.render() / onOpen。ADR-0051 的时序规则要求审计"绕过门控的实际事件
+ *   E. 内核图延迟期真实 rail 点击：rail 面板按钮由首屏同步链生成（boot 求值 →
+ *      applyLanguage → renderCurrentMainView → syncRailButtons；本轮的 boot 不扣，
+ *      kernel-entry 仍扣住），这条入口**不经认证闸**——内核图尚未求值时用户点它
+ *      同样会走 panel.render() / onOpen。ADR-0051 的时序规则要求审计"绕过门控的实际事件
  *      入口"，不能以缺少 import 边否认已经存在的 DOM 生命周期依赖。
  *      判据（枚举口径与断言一致，别按"能点"预筛）：枚举延迟相 DOM 里全部 rail
  *      面板按钮，`display` 非 none 即视为它该出现；逐个做中心点命中判定，并真实
@@ -84,15 +85,20 @@ const MIME = {
 };
 
 /**
- * A 阶段扣住的 module 响应：只扣 kernel-entry（它 import p2-entry，等于扣住整个
- * P2 生产装载图与 boot 依赖的宿主图）。
+ * A 阶段扣住的 module 响应：扣 kernel-entry（它 import p2-entry，等于扣住整个
+ * P2 生产装载图与内核宿主图）与 boot（首屏渲染链入口，见 modules/boot.js）。
+ *
+ * 这两个入口合起来就是"首屏是否已发生"的开关：P4 时序切换后，首屏渲染链由
+ * boot 在模块相触发，classic 相不再自动渲染（app-main 顶层那两行已删除）。
+ * 因此 A 阶段的判据随之翻转——扣住它们时首屏**尚未渲染**，但 classic 相的主题 /
+ * 语言实现仍可被点击入口调用。放行后首屏才出现。
  *
  * 为什么不是扣住全部 module 标签：HTTP/1.1 同源并发连接上限是 6，10 条 module
- * 标签同时取就会占满连接池，解析完的 classic 脚本反而发不出请求（首屏被门控
- * 本身卡死，测不到"慢网络首屏"）。只扣入口 = 其余 module 标签与后续 classic
- * 脚本正常取，首屏照常，只是内核图与 boot 尚未就绪——正是要验的场景。
+ * 标签同时取就会占满连接池，解析完的 classic 脚本反而发不出请求（门控本身把
+ * 场景卡死，测不到"慢网络"窗口）。扣两个入口即可覆盖首屏链与内核图。
  */
-const GATED_MODULE_PATHS = new Set(['/src/modules/kernel-entry.js']);
+/** 每轮可覆写的门控集合：主链轮扣首屏两个入口，rail 探针轮只扣内核图。 */
+let gatedModulePaths = new Set(['/src/modules/kernel-entry.js', '/src/modules/boot.js']);
 
 /**
  * 工作区快照：字段对齐 server/routes/agent-connected.js 的 prebuilt 投影
@@ -252,7 +258,7 @@ function serveFile(res, file) {
 const gate = { released: false, arrivals: [], waiters: [] };
 
 function holdModule(pathname) {
-  if (!GATED_MODULE_PATHS.has(pathname)) return null;
+  if (!gatedModulePaths.has(pathname)) return null;
   gate.arrivals.push(pathname);
   if (gate.released) return null;
   return new Promise((resolve) => gate.waiters.push(resolve));
@@ -263,11 +269,18 @@ function releaseModules() {
   for (const resolve of gate.waiters.splice(0)) resolve();
 }
 
-/** 门控复位：本文件跑两轮页面（生产主链 / 延迟相 rail 点击），每轮重新扣住入口。 */
-function resetGate() {
+/**
+ * 门控复位：本文件跑两轮页面（生产主链 / 延迟相 rail 点击），每轮重新扣住入口。
+ * `paths` 决定本轮扣哪些 module 响应：
+ *   - 主链轮扣 kernel-entry + boot，得到"首屏尚未渲染"的窗口；
+ *   - rail 探针轮只扣 kernel-entry：boot 已求值（首屏与 rail 按钮由此产生），
+ *     内核图仍被扣住——这正是验证"deferred 模块未就绪时 rail 入口可用"的场景。
+ */
+function resetGate(paths = ['/src/modules/kernel-entry.js', '/src/modules/boot.js']) {
   gate.released = false;
   gate.arrivals.length = 0;
   gate.waiters.length = 0;
+  gatedModulePaths = new Set(paths);
 }
 
 function createMockServer() {
@@ -445,10 +458,17 @@ function collectBrowserFailures(page) {
  * 「渲染落定」与「本次点击抛错」之间确定性收敛，不用固定 sleep。它不是吞错
  * 通道：同一批错误也进 playwright 的 `failures.pageErrors`，两处都被断言。
  */
-async function openPage(browser, port) {
+async function openPage(browser, port, { storedTheme } = {}) {
   const page = await browser.newPage();
   const failures = collectBrowserFailures(page);
   pageFailureSets.push(failures);
+  if (storedTheme) {
+    // 预置用户上次选择的主题：用来验证 index.html 内联主题预读（P4）——它在
+    // body 解析开始时就落到 body[data-theme]，早于任何模块求值。
+    await page.addInitScript((theme) => {
+      try { localStorage.setItem('agentdev-theme', theme); } catch {}
+    }, storedTheme);
+  }
   await page.addInitScript(() => {
     // 只做测量：记录 DOMContentLoaded 是否已发生。readyState 在解析完成时就会
     // 变 'interactive'（早于 deferred/module 执行），不能用来判定 DCL 已触发。
@@ -486,20 +506,31 @@ async function openPage(browser, port) {
 /** 第一轮：生产主链（首屏 → 放行 → 认证 → 加载 / SSE → 侧栏 / 会话 / 菜单）。 */
 async function runMainChain(browser, port) {
   const unhandledMark = unhandled.length;
-  const { page, failures } = await openPage(browser, port);
+  const { page, failures } = await openPage(browser, port, { storedTheme: 'light' });
   try {
-    // ── A. 模块延迟时的首屏 ──────────────────────────────────────────
+    // ── A. 模块延迟相：首屏尚未渲染，但 classic 相的事件入口仍可用 ────────
+    // 解析完成、两个首屏入口（kernel-entry / boot）都被扣住——此时 DOM 齐备、
+    // classic 脚本全部执行完，只差模块求值。
     await page.waitForFunction(
-      () => (document.querySelector('#chat-container .empty-state')?.textContent || '').trim().length > 0,
+      () => document.readyState === 'interactive'
+        && document.querySelectorAll('#chat-container .empty-state').length > 0,
       null,
       { timeout: 15000 },
     );
-    assert.deepEqual(gate.arrivals, ['/src/modules/kernel-entry.js'], 'kernel-entry 应被门控扣住');
+    assert.deepEqual(
+      [...gate.arrivals].sort(),
+      ['/src/modules/boot.js', '/src/modules/kernel-entry.js'],
+      '首屏入口（kernel-entry / boot）都应被门控扣住',
+    );
     const preRelease = await page.evaluate(() => ({
       domContentLoaded: window.__p2BootTrace.domContentLoaded,
       sseClient: typeof window.ClawFW?.SseClient,
       workspaceAgents: typeof window.ClawFW?.workspaceAgents,
       sidebarRows: document.querySelectorAll('.agent-item').length,
+      emptyStateText: (document.querySelector('#chat-container .empty-state')?.textContent || '').trim(),
+      classicApplyTheme: typeof window.applyTheme,
+      classicApplyLanguage: typeof window.applyLanguage,
+      bodyTheme: document.body.dataset.theme,
     }));
     assert.equal(
       preRelease.domContentLoaded,
@@ -509,11 +540,18 @@ async function runMainChain(browser, port) {
     assert.equal(preRelease.sseClient, 'undefined', 'P2 图（sse-client）在放行前不应求值');
     assert.equal(preRelease.workspaceAgents, 'undefined', 'P2 图（workspace-agents）在放行前不应求值');
     assert.equal(preRelease.sidebarRows, 0, '启动链（loadAgents）应仍被 DOMContentLoaded 挡住');
-
-    const emptyState = await page.evaluate(
-      () => document.querySelector('#chat-container .empty-state')?.textContent || '',
+    assert.equal(
+      preRelease.emptyStateText,
+      '',
+      'P4 时序切换后首屏渲染由 boot 在模块相触发：模块未求值时不应有首屏内容',
     );
-    assert.match(emptyState, /新对话|New chat/i, 'classic 相首屏应是欢迎/空态');
+    assert.equal(
+      preRelease.bodyTheme,
+      'light',
+      '模块未求值时主题应已由内联预读落成 localStorage 值（applyTheme 尚未执行）',
+    );
+    assert.equal(preRelease.classicApplyTheme, 'function', 'applyTheme 仍是 classic 实现（点击入口依赖它）');
+    assert.equal(preRelease.classicApplyLanguage, 'function', 'applyLanguage 仍是 classic 实现（点击入口依赖它）');
 
     const themeBefore = await page.evaluate(() => document.body.dataset.theme);
     await page.click('#theme-toggle');
@@ -754,7 +792,7 @@ const RAIL_SETTLED = (panelId) => {
  * 真实 index.html 上跑，不模拟、不替换被测函数。
  */
 async function runDeferredRailClickProbe(browser, port) {
-  resetGate();
+  resetGate(['/src/modules/kernel-entry.js']);
   const unhandledMark = unhandled.length;
   const { page, failures } = await openPage(browser, port);
   try {
