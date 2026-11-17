@@ -113,6 +113,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `a88238e1` | rail-customize / generative-ui-panel 迁 ESM。同批判定 `desktop-open` / `desktop-notify` **R4 触线不转**：顶层就是桌面壳 webview eval 的消费入口，`&&` 守卫是静默丢弃不是排队，迁到模块相会多出请求被吞的窗口（`test/frontend-desktop-open.test.js` 钉这条） | src 标签 63 → 61；桥债 270/90 → 272/92 |
 | `d4912118` | 第二批三组：调试三件（debug-logs / debug-features-hooks / debug-panel-host）、聊天滚动与输入薄壳（chat-scroll / input-helpers / rollback-dialog / input-render）、后台面板与语音输入（bg-panel / voice-input）。right-panel-registry 保留（转发壳消费面未归零） | src 标签 61 → 52；桥债 272/92 → 289/99；台账 65 / 384 / 933 → 56 / 323 / 823 |
 | `412eccd2` | 第三批三组：chat-viewport（29 桥键）、chat-renderer（12 桥键，折叠偏好经 app-core 新增的 chatSurface getter/setter）、remote-connections（10 桥键）。同批判定 `runtime-status` R1 触线未转 | src 标签 52 → 49；桥债 289/99 → 340/102；台账 56 / 323 / 823 → 54 / 286 / 678 |
+| `7f4c2e63` | 第五批：markdown-bootstrap 并入 markdown-utils（escapeHtml 与 renderer 配置逐字搬入，`markdown-utils:renderer` 桥键注销）；frontend-vm 补 marked 面（每沙箱一份实例） | src 标签 45 → 44；桥债 369/106 → 368/106 |
 | `7c3720e5` | 第四批两组：输入面两件（input-composer / persistent-input，函数键另立 `*-api` 域）、线程引擎与插件清单（thread-store / plugin-manifest）。**装载序修正**：kernel-entry 里 p4-entry 改到 p2-entry 之前——P2 图消费方在求值期经桥键取 P4 能力，顺序颠倒会让整图求值中断（Chromium 回归的 pageerror 面抓到，单元测试各自的夹具没覆盖） | src 标签 49 → 45；桥债 340/102 → 369/106；台账 54 / 286 / 678 → 50 / 261 / 606 |
 
 转换中确立的几条约定（后续批次沿用）：
