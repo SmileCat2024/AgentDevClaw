@@ -111,13 +111,15 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `89fa18e8` | i18n → ESM（`I18N` + `createTranslator` + 生产绑定 `t`），`modules/i18n-host.js` 注册 `i18n:t` 桥键；54 个沙箱用例改为经 `test/helpers/install-i18n.js` 装真实字典 | 台账 71 文件 / state 399 / behavior 972 → 70 / 398 / 971；桥债 256/85 → 257/86 |
 | `32c36d24` | theme-lang 并入 i18n-environment-state；sidebar-layout 迁 ESM（新增 `modules/p4-entry.js` 作为 P4 批次入口）；长尾四件（chat-context-bar / workspace-docset / todo-plan / panel-plugins）迁 ESM | 台账 → 65 / 384 / 933；src 标签 70 → 63；桥债 267/90 → 270/90 |
 | `a88238e1` | rail-customize / generative-ui-panel 迁 ESM。同批判定 `desktop-open` / `desktop-notify` **R4 触线不转**：顶层就是桌面壳 webview eval 的消费入口，`&&` 守卫是静默丢弃不是排队，迁到模块相会多出请求被吞的窗口（`test/frontend-desktop-open.test.js` 钉这条） | src 标签 63 → 61；桥债 270/90 → 272/92 |
+| `d4912118` | 第二批三组：调试三件（debug-logs / debug-features-hooks / debug-panel-host）、聊天滚动与输入薄壳（chat-scroll / input-helpers / rollback-dialog / input-render）、后台面板与语音输入（bg-panel / voice-input）。right-panel-registry 保留（转发壳消费面未归零） | src 标签 61 → 52；桥债 272/92 → 289/99；台账 65 / 384 / 933 → 56 / 323 / 823 |
 
 转换中确立的几条约定（后续批次沿用）：
 
 1. **P2 与 P4 的装载入口分开**：`p2-entry.js` 收 P2 消费方批次（那批模块迁移时首屏仍是 classic 触发，逐文件带 R1 残留说明），`p4-entry.js` 收 P4 批次（时序切换后迁移，无 classic 相同步触达约束）。两者都由 `kernel-entry` 静态 import，`p4-entry` 在后。
 2. **静态按钮的早期窗口语义**：主题 / 语言按钮的 click 由 `bindStaticToggleButtons()` 在 boot 首屏渲染后绑定；模块求值前点击无效果、无报错。这是把"按钮在 DOM 里可点但实现未到"从抛错变成静默的显式选择，`test/p2-production-boot-browser-check.mjs` 钉住两侧（渲染前无效果、就绪后生效）。
 3. **测试沙箱的基础设施按需补齐**：`install-i18n.js`（真实字典 i18n 桥）、`frontend-vm.js` 的 elementStub 补 `dataset`、`esm-module-loader` 的 window/document 桩面；这些是"真实 DOM 必备面"，不是为迁就某个文件加的兜底。
-4. **同名域的冲突**：`workspace-docset` 的桥键域已被 P2 的 `p2-w2-10-workspace-docset.js` 认领，新的 chrome 薄壳用 `workspace-docset-chrome`，并在文件头注写明注销条件。
+4. **同名域的冲突**：`workspace-docset` 的桥键域已被 P2 的 `p2-w2-10-workspace-docset.js` 认领，新的 chrome 薄壳用 `workspace-docset-chrome`，并在文件头注写明注销条件。同型先例还有 `voice-input-api`（状态域 `voice-input` 的 impl 只转发已知键，函数键必须另立域，否则认领后补注册取到 undefined）。
+5. **测试桩面按真实 DOM / 端点契约补齐**：元素桩的 `dataset` / `children` / `contains` / `closest` / `matches` / `getBoundingClientRect`，document 的 `contains`，运行时创建元素（`rail-cust-overlay`）返回 `null`。每次补齐都对应一条真实生产路径（例如 `RailCustomize.findAnchor` 遍历 `rail.children`），不是为迁就某个批次。整图用例的"装载期请求集合"是精确相等断言，新增依赖（`ui-prefs?agentId=home`、`/sounds/*.mp3`）须逐条登记。
 
 剩余工作按依赖分组（每批仍按配方验收、独立提交）：
 
