@@ -69,6 +69,7 @@
 | M3-GATE | successor 未 READY | ✗ 提交拒绝 → fail 落账（stage=successor_ready）+ 挡板收敛，旧 head 权威 | Claw succession T002「not-READY rejected」「old head authoritative」 |
 | M3-NO-HANDOFF | open / rotation_failed 无 pendingSuccession | ✗ `handoff_not_started`，head 与链不变 | AgentDev core model properties；直接换头不属于合法接续流程 |
 | M3-RACE | 并发提交 head 竞速输家 | void（非失败落账），赢家提交为准 | Claw succession T002「losing race is a void」 |
+| M3-OPEN-RECOVERY | 自动提交，存在任意前代未结清 unresolved（本次可无新增） | 按事务内全部 open 项生成当前后继通知，与换头同笔持久；已结清不带入、手动免播不启动，返回 unresolved 仍为本次新增 | 框架 `workthread-succession-commit` carry/mixed/rollback；Claw `specs/tla/unresolved-discovery-replay.test.mjs` 真实变换与后继请求 |
 | M3-*-H | hold=T | ✗ `thread_held`（hold 同样门禁完成） | 框架 764/780 |
 | M3-MM | head CAS 失败 | ✗ `head_mismatch` | 框架 356 |
 
