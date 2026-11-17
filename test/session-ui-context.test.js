@@ -424,7 +424,6 @@ async function withMutationCase(fn) {
   return withP2EsmCase({
     classic: (sandbox) => {
       prepareClassicSandbox(sandbox);
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
     globals: {
       document,
@@ -609,7 +608,7 @@ test('context bar renders one supplied session view snapshot', async () => {
       getRuntimeAwareAgentRecord: () => ({ workspace_sessions: { sessions: [{}] } }),
       getCurrentRuntimeRecord: () => ({}),
       notifyChatViewportMutation: () => {},
-      // vendor 解析器 / 高亮库：markdown-bootstrap 装载期构造 Renderer 并查 hljs。
+      // vendor 解析器 / 高亮库：markdown-utils 求值期构造 Renderer，渲染期查 hljs。
       marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
       hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
     },
@@ -617,7 +616,6 @@ test('context bar renders one supplied session view snapshot', async () => {
       sandbox.setTimeout = () => 0; // 抑制 _initCcbPopup / _initTitlePopup 的定时器
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
   }, async (c) => {
     const contextBar = await c.load('public/src/modules/chat-context-bar.js');

@@ -43,7 +43,7 @@
  *     （app-ui）、renderAgentList（sidebar-render）、normalizeAgentIdentity /
  *     _getSessionInputCacheKey（app-main / app-core）、captureSessionViewToken
  *     （session-view-state）、_markAgentCallStartedForNotify / _requestNotifyPermission
- *     （desktop-notify）、escapeHtml（markdown-bootstrap）、refreshThreads /
+ *     （desktop-notify）、escapeHtml（markdown-utils）、refreshThreads /
  *     getActiveThreadInputTarget / submitThreadInput（thread-store）、
  *     _renderQueueBubbles / updateQueueIndicator / _syncPersistentInputUi
  *     （input-queue 域桥）、notifyInputSurfaceChanged（input-render 桥）、

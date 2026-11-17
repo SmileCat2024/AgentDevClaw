@@ -15,6 +15,7 @@
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { Marked } from 'marked';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
 const MODULE_PATH = 'public/src/modules/slash-commands.js';
@@ -38,20 +39,18 @@ const CLASSIC_HOST_STUBS = {
 };
 const pendingCleanups = [];
 
-function escapeHtml(text) {
-  const str = String(text);
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return str.replace(/[&<>"']/g, (m) => map[m]);
-}
-
 before(async () => {
   baseCleanup = installBrowserStubs({
-    window: { ClawFW: { actions: { registerMany() {} } }, ...CLASSIC_HOST_STUBS },
+    window: {
+      // vendor 面（index.html 的 marked UMD 先于 module 标签）：markdown-utils 求值期
+      // 就要 new Renderer() / setOptions。
+      marked: new Marked(),
+      ClawFW: { actions: { registerMany() {} } },
+      ...CLASSIC_HOST_STUBS,
+    },
   });
   await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
   baseKernel = globalThis.window.KernelState;
-  globalThis.window.KernelState.defineKey('markdown-utils', 'escapeHtml', escapeHtml);
-  globalThis.window.KernelState.defineKey('markdown-utils', 'renderer', null);
   orchestration = await import('../public/src/modules/orchestration-state.js');
   i18n = await import('../public/src/modules/i18n-environment-state.js');
   // 同一批状态域（slash-commands 经 import 传递装载）：在 KernelState 就位时完成

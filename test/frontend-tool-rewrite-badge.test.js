@@ -44,10 +44,9 @@ function makeDocument() {
 async function withRenderer(fn) {
   return withP2EsmCase({
     classic: (sandbox) => {
-      // 整条生产先行脚本序（宿主工厂是生产实现）+ markdown-bootstrap
-      // （markdown-utils 求值期捕获 escapeHtml / renderer / marked）。
+      // 整条生产先行脚本序（宿主工厂是生产实现）；markdown-utils 的 escapeHtml /
+      // renderer 在 ESM 求值期自建，用例只补 vendor 的 marked 面。
       prepareClassicSandbox(sandbox);
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
     globals: {
       document: makeDocument(),

@@ -21,8 +21,8 @@
  *      开关 IPC 与 300ms inspector 刷新节流、repo / feature 详情选择器。
  *
  * 装载路线（withP2EsmCase）：一个用例 = 一份 classic 沙箱 + 一张真实 ESM 图。
- * classic 相按真实加载序执行 action-dispatcher / app-core / markdown-bootstrap /
- * session-view-state / 右栏注册表；features 与 overview 都走真实 import，落到
+ * classic 相按真实加载序执行 action-dispatcher / app-core / session-view-state /
+ * 右栏注册表；features 与 overview 都走真实 import，落到
  * 同一个 window 与同一个 KernelState。面板重绘经注册表里的假面板记账（真实
  * 编排实现 renderFeaturePanel）。
  *
@@ -291,7 +291,6 @@ function loadClassicOwners(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
   sandbox.loadSource('public/src/modules/right-panel-registry.js');
   // 插件宿主最小面（生产是 classic claw-host）：面板摘除 / 插件落定订阅只在
@@ -358,7 +357,7 @@ async function withDebugCase(options, fn) {
   ));
   return withP2EsmCase({
     globals: {
-      // markdown-bootstrap 的装载期 vendor 依赖（真实库由 index.html 的 vendor
+      // markdown-utils 求值期的 vendor 依赖（真实库由 index.html 的 vendor
       // 脚本提供，测试不装载）：Renderer 构造、setOptions 与 renderMarkdown 的 parse。
       marked: {
         Renderer: class { constructor() {} },

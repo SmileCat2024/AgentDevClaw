@@ -38,14 +38,13 @@ async function withRenderer(fn) {
     classic: (sandbox) => {
       // chat-renderer 的 import 链会触达 app-core / session-view-state / sidebar-render /
       // app-ui / app-main 的装载期宿主工厂：按生产先行脚本序整链装载（boot 体与周期
-      // 排程由基座关掉），再补 markdown-bootstrap（markdown-utils 求值期捕获
-      // escapeHtml / renderer / marked）。
+      // 排程由基座关掉）；markdown-utils 的 escapeHtml / renderer 在 ESM 求值期自建，
+      // 用例只补 vendor 的 marked 面。
       prepareClassicSandbox(sandbox);
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
     globals: {
       document: makeDocument(),
-      // markdown-bootstrap 装载期需要 vendor 的 marked（renderer 由它自建）。
+      // markdown-utils 求值期需要 vendor 的 marked（renderer 由它自建）。
       marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: (value) => String(value ?? '') },
       createPollCoordinatorHost: () => ({
         run: () => Promise.resolve(),

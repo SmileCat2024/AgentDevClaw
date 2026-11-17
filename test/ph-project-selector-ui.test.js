@@ -19,7 +19,7 @@
  * 装载路线（P2 测试改造）：session-list-render 已迁 ESM → withP2EsmCase 真实
  * import（每 case 一张图）；它装载期经 window 上的 classic 宿主工厂取适配面，
  * 因此 classic 侧按真实加载序跑整条壳层 bootstrap（action-dispatcher /
- * claw-host / right-panel-registry / markdown-bootstrap / app-core / i18n /
+ * claw-host / right-panel-registry / app-core / i18n /
  * session-view-state / project-data / ph-project-actions / runtime-status /
  * sidebar-render / agent-data-loader / app-ui / app-main / ph-session-list）。
  * 渲染入口用真实命名导出 renderWorkspaceSessionList（内部按 agent 分派到 PH
@@ -46,7 +46,6 @@ const CLASSIC_STACK = [
   'public/src/modules/action-dispatcher.js',
   'public/src/modules/claw-host.js',
   'public/src/modules/right-panel-registry.js',
-  'public/src/modules/markdown-bootstrap.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
   'public/src/modules/runtime-status.js',

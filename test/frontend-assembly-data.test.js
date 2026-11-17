@@ -16,8 +16,8 @@
  * 装载路线（ESM 迁移配方第三节）：assembly-data 已迁 ESM，用例一律真实
  * `import`（withP2EsmCase 的 c.load，每个用例整图隔离），断言直接打命名导出。
  * classic 相只保留生产里仍是 classic 的部分：动作分发器（markdown-utils 顶层
- * 注册动作）、markdown-bootstrap 的 escapeHtml / renderer 桥键，以及本模块
- * 静态依赖链读到的 bootstrap 状态宿主（契约桩，真实实现留在 app-core /
+ * 注册动作）、vendor 的 marked（markdown-utils 求值期构造 renderer 用），以及
+ * 本模块静态依赖链读到的 bootstrap 状态宿主（契约桩，真实实现留在 app-core /
  * app-main / sidebar-render）。
  */
 
@@ -141,11 +141,10 @@ function createBootstrapHosts() {
 /** classic 相：真实 classic 源（动作分发器、markdown 桥键）+ 宿主契约桩。 */
 function loadClassicBootstrap(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
-  // markdown-bootstrap 是 escapeHtml / renderer 桥键的唯一 classic 实现，
-  // 装载它需要 marked Renderer 与 hljs 面（真实库在 index.html 里先于它加载）。
+  // vendor 面：markdown-utils 在求值期用 marked.Renderer 构造 renderer，
+  // 渲染期查 hljs（真实库在 index.html 里先于 module 标签加载）。
   sandbox.marked = { Renderer: class { constructor() {} }, setOptions() {} };
   sandbox.hljs = { getLanguage: () => null, highlight: () => ({ value: '' }) };
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
   Object.assign(sandbox, createBootstrapHosts());
 }
 
@@ -675,7 +674,7 @@ describe('assembly-data: renderAssemblyStatusChip', () => {
 
   it('escapes HTML in label', async () => {
     await withAssemblyData(({ renderAssemblyStatusChip }) => {
-      // 转义来自真实 classic markdown-bootstrap 的 escapeHtml 桥键
+      // 转义来自 markdown-utils 的真实 escapeHtml（具名导出）
       const html = renderAssemblyStatusChip('<script>');
       assert.ok(!html.includes('<script>'));
       assert.ok(html.includes('&lt;script&gt;'));

@@ -11,6 +11,7 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { Marked } from 'marked';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
 let cleanupGlobals = null;
@@ -45,6 +46,9 @@ const body = {
 before(async () => {
   cleanupGlobals = installBrowserStubs({
     window: {
+      // vendor 面：index.html 的 marked UMD 标签先于 module 标签执行，markdown-utils
+      // 在求值期就要 `new marked.Renderer()`。
+      marked: new Marked(),
       escapeHtml: (text) => String(text).replace(/[&<>"']/g, (m) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
       }[m])),

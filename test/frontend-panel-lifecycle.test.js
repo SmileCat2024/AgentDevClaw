@@ -7,8 +7,8 @@
  * 面板状态切换。
  *
  * 装载路线（debug-panel-host 已转 ESM）：一个用例 = 一份真实 classic 沙箱
- * （action-dispatcher / claw-host / right-panel-registry / markdown-bootstrap /
- * app-core）+ 真实 import 的 debug-panel-host。面板 body 与 rail 元素由
+ * （action-dispatcher / claw-host / right-panel-registry / app-core）+
+ * 真实 import 的 debug-panel-host。面板 body 与 rail 元素由
  * dom-harness 的真实节点树提供（DOM 引用在 app-core 装载期被捕获）。
  */
 import { test } from 'node:test';
@@ -74,7 +74,6 @@ async function withPanelHost(fn, { beforeModules } = {}) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/modules/claw-host.js');
       sandbox.loadSource('public/src/modules/right-panel-registry.js');
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
       sandbox.loadSource('public/src/app-core.js');
       // 打开面板的 deferBody 路径经双 rAF 提交：本文件同步化 rAF，body 挂载可同步断言。

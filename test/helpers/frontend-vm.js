@@ -12,6 +12,7 @@
  */
 
 import fs from 'node:fs';
+import { marked as markedModule } from 'marked';
 import { installSessionViewCommit } from './session-view-commit.js';
 import { installI18n } from './install-i18n.js';
 import { installRuntimeSwitch } from './runtime-switch.js';
@@ -46,6 +47,27 @@ export function installKernelState(context) {
   }
   context.window = context;
   vm.runInContext(source, context, { filename: fullPath });
+}
+
+/**
+ * 沙箱里的 marked 面（vendor UMD 的等价物）。
+ *
+ * 生产 index.html 的 marked UMD 标签先于所有 module 标签执行，所以 markdown-utils
+ * 在**求值期**就能 `new marked.Renderer()` 并 `setOptions(...)`。沙箱缺这一前置面时，
+ * import 链上求值 markdown-utils 会抛 "Cannot read properties of undefined"。
+ *
+ * 每张沙箱一份实例：`setOptions` 落在本实例的闭包 options 上，`parse/parseInline/
+ * lexer` 把该 options 逐次传进真实 marked —— 用例之间的渲染配置因此互不泄漏。
+ */
+function createMarkedStub() {
+  let options = {};
+  return {
+    Renderer: markedModule.Renderer,
+    setOptions(next) { options = { ...options, ...next }; },
+    parse(text, perCall) { return markedModule.parse(text, { ...options, ...perCall }); },
+    parseInline(text, perCall) { return markedModule.parseInline(text, { ...options, ...perCall }); },
+    lexer(text, perCall) { return markedModule.lexer(text, { ...options, ...perCall }); },
+  };
 }
 
 /**
@@ -114,6 +136,7 @@ export function createFrontendSandbox(overrides = {}) {
   const windowStub = {
     document: documentStub,
     localStorage: localStorageStub,
+    marked: createMarkedStub(),
     // 浏览器全局；部分生产模块（如 ph-project-actions.js）失败路径会调用 alert
     alert() {},
     location: { href: 'http://127.0.0.1:1420', protocol: 'http:', pathname: '/', search: '' },

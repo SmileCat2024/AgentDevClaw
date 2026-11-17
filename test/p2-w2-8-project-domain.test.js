@@ -29,6 +29,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const BOOTSTRAP = 'public/src/modules/p2-w2-8-project-domain-bootstrap.js';
@@ -297,7 +298,9 @@ function caseOptions({ agent = makePhAgent(), projects = null, fetchTable = {}, 
       IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} },
       URLSearchParams,
       CSS: { escape: (value) => value },
-      marked: { lexer: () => [] },
+      // vendor 面（index.html 的 marked UMD 先于 module 标签）：markdown-utils 在求值期
+      // new Renderer() 并 setOptions；本文件只用到 lexer 的分块面。
+      marked: { lexer: () => [], Renderer, setOptions() {} },
     },
   };
   return { options, fetchStub, document, agent };

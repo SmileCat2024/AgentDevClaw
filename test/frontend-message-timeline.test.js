@@ -9,10 +9,8 @@
  *
  * 装载路线（P2）：message-timeline 与 markdown-utils 已迁 ESM，用例经
  * withP2EsmCase 的 `c.load(...)` 真实 import（每个用例一张独立模块图）。
- * 唯一 classic 相依赖是 markdown-bootstrap 在 window 上注册的 escapeHtml，
- * 这里按同一语义注入 window.escapeHtml（生产由 classic 脚本先于 deferred 模块
- * 注册，ESM 侧 `escapeHtml` 具名导出就是该 window 值的快照）。断言直接调用
- * 模块命名导出——ESM 的真实调用路径是导入值，不是 window 包装。
+ * escapeHtml 是 markdown-utils 自身的实现与命名导出（原 classic bootstrap 已并入），
+ * 不需要用例注入。断言直接调用模块命名导出——ESM 的真实调用路径是导入值。
  */
 
 import { describe, it } from 'node:test';
@@ -21,20 +19,13 @@ import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const TIMELINE = 'public/src/modules/message-timeline.js';
 
-/** classic 相 escapeHtml（生产：markdown-bootstrap.js 注册的 KernelState 桥键）。 */
-function escapeHtmlStub(value) {
-  return String(value).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[c]);
-}
-
 /**
- * 每个用例一张独立模块图：classic 相注册 escapeHtml（markdown-bootstrap）与
- * action-dispatcher 的分发表（index.html 先于一切模块装载），再真实 import 模块。
+ * 每个用例一张独立模块图：action-dispatcher 的分发表（index.html 先于一切模块
+ * 装载）由用例注入，再真实 import 模块。
  */
 async function withTimeline(fn) {
   const ClawFW = { actions: { registerMany() {} } };
-  return withP2EsmCase({ globals: { escapeHtml: escapeHtmlStub, ClawFW } }, async (c) => {
+  return withP2EsmCase({ globals: { ClawFW } }, async (c) => {
     const timeline = await c.load(TIMELINE);
     return fn(timeline, c);
   });

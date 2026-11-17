@@ -30,7 +30,7 @@ const RUNTIME_STATUS_LOADER = 'public/src/modules/runtime-status-loader.js';
 const SESSION_DATA_LOADER_HOST = 'public/src/modules/session-data-loader-host.js';
 const AGENT_DATA_LOADER = 'public/src/modules/agent-data-loader.js';
 
-/** vendor 桩：markdown-bootstrap 只在装载期需要 Renderer 与 setOptions。 */
+/** vendor 桩：markdown-utils 在求值期需要 Renderer 与 setOptions。 */
 const markedStub = { Renderer, setOptions() {} };
 
 const indexSource = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
@@ -544,8 +544,7 @@ test('overview updates refresh the composer in the same committed view', async (
 
 /**
  * 装载器宿主的 classic 装配：app-core（桥键初值 / 身份与宿主工厂）、
- * session-view-state（会话视图提交器 + createSessionViewCommitHost）、
- * markdown-bootstrap（markdown-utils 的 escapeHtml 桥值）。
+ * session-view-state（会话视图提交器 + createSessionViewCommitHost）。
  * agent-data-loader 已迁 ESM，不再走 loadSource —— 由用例在 async 阶段 c.load。
  */
 function loadLoaderClassic(sandbox) {
@@ -553,7 +552,6 @@ function loadLoaderClassic(sandbox) {
   sandbox.window.marked = markedStub;
   // 真实先行脚本序 + 基座之外的 classic 实现（会话提交策略与 markdown 引导）。
   prepareClassicSandbox(sandbox);
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
 }
 
 
@@ -846,7 +844,6 @@ test('runtime-aware session projection uses the selected runtime session over st
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
       // todo-plan 已迁 ESM（P4 L1）：模块相 c.load（app-ui 的 plan 面板闭包经桥键调用）。
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       sandbox.loadSource('public/src/modules/right-panel-registry.js');
       sandbox.loadSource('public/src/app-ui.js');
     },

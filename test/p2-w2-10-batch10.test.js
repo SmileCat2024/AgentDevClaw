@@ -26,9 +26,8 @@
  * 沙箱 + 一张真实 ESM 图（case 级图隔离，见 test/helpers/p2-esm-case.js）。
  * classic 相按 index.html 真实加载序执行**可装载的真实 owner**：action-dispatcher /
  * i18n / app-core（P2 bootstrap 宿主工厂、AgentLoaderHost、call-interrupt 宿主）/
- * markdown-bootstrap（escapeHtml 桥键唯一实现）/ session-view-state
- * （createSessionViewCommitHost）。六个模块及其跨批依赖一律 `c.load` 真实 import，
- * 不再用 window 桩冒充已迁模块。
+ * session-view-state（createSessionViewCommitHost）。这些模块及其跨批依赖一律
+ * `c.load` 真实 import，不再用 window 桩冒充已迁模块。
  *
  * 未装载的 classic owner（app-main / app-ui 一类的启动期与渲染入口文件）按契约
  * 给同形桩并注明归属；其中 sidebar-render 的三个宿主工厂因工厂体引用 app-main
@@ -314,7 +313,6 @@ function loadClassicOwners(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
   installSidebarHostSeams(sandbox);
   installRuntimeSwitchSeam(sandbox);
@@ -345,7 +343,7 @@ async function withBatch10Case(options, fn) {
   const defaultFetch = async () => ({ ok: false, status: 0, json: async () => ({}) });
   return withP2EsmCase({
     globals: {
-      // markdown-bootstrap 的装载期 vendor 依赖（真实库由 index.html 的 vendor
+      // markdown-utils 求值期的 vendor 依赖（真实库由 index.html 的 vendor
       // 脚本提供，测试不装载）：Renderer 构造与 setOptions 是它唯一的取面。
       marked: { Renderer: class { constructor() {} }, setOptions() {} },
       hljs: { getLanguage: () => null },
@@ -695,7 +693,6 @@ test('workspace-docset chrome 同步：真实 import 求值后即可执行，cla
       // 与 markdown-utils 的 classic 实现（escapeHtml / renderer）、动作注册表。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
   }, async (c) => {
     const { updateProjectDocsetChrome } = await c.load('public/src/modules/workspace-docset.js');

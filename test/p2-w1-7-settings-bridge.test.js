@@ -34,8 +34,6 @@ async function withBatchHarness(names, fn) {
     globals: { fetch: async () => ({ ok: true, json: async () => ({}) }) },
     classic: (sandbox) => {
       prepareClassicSandbox(sandbox);
-      // markdown-utils 在求值期读取该桥键值（生产由 markdown-bootstrap classic 注册）
-      sandbox.KernelState.defineKey('markdown-utils', 'escapeHtml', (value) => String(value ?? ''));
     },
   }, async (c) => {
     const modules = {};

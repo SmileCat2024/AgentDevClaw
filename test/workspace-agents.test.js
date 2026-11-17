@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeWorkspaceAgents, resolveWorkspaceAgent, resolveNewSessionAgent, resolveWorkspaceAgentClass } from '../server/shared/workspace-agents.js';
+import { Marked } from 'marked';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
@@ -63,6 +64,9 @@ const sessionCatalog = {
 before(async () => {
   cleanupStubs = installBrowserStubs({
     window: {
+      // vendor 面：index.html 的 marked UMD 标签先于 module 标签执行，markdown-utils
+      // 在求值期就要 `new marked.Renderer()`。
+      marked: new Marked(),
       escapeHtml: (text) => String(text).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])),
       ClawFW: { actions: { registerMany() {} } },
     },

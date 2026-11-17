@@ -145,14 +145,6 @@ const T_MAP = {
 // 该模块在本测试进程内只执行一次（feature-store 的静态 import 与本处同一 URL），
 // 因此这里用无 query 的同一 URL 取到同一实例，逐用例重置语言值。
 
-// escapeHtml 的生产来源是 markdown-bootstrap.js（classic 相）经 KernelState 注册
-// 的桥键；markdown-utils.js（ESM）在模块执行时捕获它并作为具名导出供给本批模块
-// import。测试按同一形状先注册该键，值是等价的转义实现（映射与
-// markdown-bootstrap.js 的 escapeHtml 一致），因此断言看到的是真实转义结果。
-const escapeHtmlForTest = (value) => String(value).replace(/[&<>"']/g, (ch) => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-}[ch]));
-
 /** document 桩：按 id 返回稳定宿主对象，模块真实渲染的 innerHTML 可被断言。 */
 function createDocumentStub() {
   const hosts = new Map();
@@ -228,8 +220,7 @@ async function withStore({ fetchStub = makeFetch() } = {}, fn) {
         + 'ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };'
         + 'setInterval = () => 0; clearInterval = () => {}; requestAnimationFrame = () => 0;');
       prepareClassicSandbox(sandbox);
-      // classic 相注册形状：markdown-utils 在模块执行时经访问器捕获 escapeHtml
-      sandbox.KernelState.defineKey('markdown-utils', 'escapeHtml', escapeHtmlForTest);
+      // escapeHtml 由 markdown-utils 自身提供（原 classic bootstrap 并入），用例不再预注册。
       sandbox.t = (key) => T_MAP[key] || key;
       // 只提供动作注册面：feature-catalog 的兼容命名空间由它自己的模块挂载
       sandbox.ClawFW = { actions };

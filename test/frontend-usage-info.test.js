@@ -16,25 +16,22 @@
  *
  * 装载路线：test/helpers/esm-module-loader.js 的真实 import（迁移配方第三节）。
  * 断言从 sandbox 全局直调改为 import 后调用；window 桩面只覆盖模块导入链的真实
- * 依赖：markdown-utils 模块顶层读取的 markdown-bootstrap 桥键值（escapeHtml 等），
- * 以及 action-dispatcher 的 registerMany 注册表。
+ * 依赖：vendor 的 marked（markdown-utils 求值期构造 renderer 用）与
+ * action-dispatcher 的 registerMany 注册表。
  */
 
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
+import { Marked } from 'marked';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
 const registeredActions = new Map();
 
-function escapeHtmlStub(text) {
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return String(text ?? '').replace(/[&<>"']/g, (c) => map[c]);
-}
-
 const cleanupGlobals = installBrowserStubs({
   window: {
-    // markdown-bootstrap 的桥键值（ESM markdown-utils 模块顶层读取，escapeHtml 经它导入）
-    escapeHtml: escapeHtmlStub,
+    // vendor 面：index.html 的 marked UMD 先于 module 标签，markdown-utils 求值期
+    // 就要 `new marked.Renderer()`。
+    marked: new Marked(),
     // action-dispatcher 注册表：模块尾部 registerMany
     ClawFW: {
       actions: {

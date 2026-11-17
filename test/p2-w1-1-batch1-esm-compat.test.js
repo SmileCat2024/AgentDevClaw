@@ -32,17 +32,11 @@ let documentListeners = [];
 let cleanupGlobals;
 let proxyOverlayModule; // defineKey 唯一注册制：桥键模块全文件只装载一次
 
-function escapeHtmlStub(text) {
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return String(text).replace(/[&<>"']/g, (c) => map[c]);
-}
-
 before(async () => {
   cleanupGlobals = installBrowserStubs({
     window: {
-      // markdown-utils / markdown-bootstrap 的桥键面（本批 import 链依赖）
-      escapeHtml: escapeHtmlStub,
-      renderer: {},
+      // vendor 面：markdown-utils 在求值期 new Renderer() 并 setOptions，
+      // escapeHtml 已是它自己的实现（原 classic bootstrap 并入）。
       marked: { parse: () => '', setOptions() {}, use() {}, Renderer: class {} },
       // action-dispatcher 的注册表（markdown-utils / proxy-overlay /
       // session-reference-picker 顶层 registerMany）

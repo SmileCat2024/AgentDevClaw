@@ -1,11 +1,59 @@
 // Markdown / 数学公式渲染工具（ESM owner）
+//
+// 本域是 escapeHtml 与 marked renderer 的唯一实现（原 markdown-bootstrap.js 的
+// classic 实现并入于此，实现逐字保留）。装载相位按时序审计结论放在模块求值相：
+// classic 相（加载期）没有任何 escapeHtml / renderer / marked.parse 触达点——
+// classic 消费方只在函数体内调用（首屏渲染链由 modules/boot.js 在模块相触发），
+// 因此这里注册的桥键在第一个消费点之前一定已经就位。
 
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { ClawToast } from './toast-notify.js';
 
-const renderer = window.renderer; // markdown-bootstrap 的 KernelState 桥键，classic renderer 消费者收敛后注销
-const escapeHtml = window.escapeHtml; // markdown-bootstrap 的 KernelState 桥键，classic escapeHtml 消费者收敛后注销
 const marked = window.marked;
+
+/** HTML 转义：全库唯一实现。classic 消费方经 KernelState 桥键裸读，已迁移消费方 import。 */
+function escapeHtml(text) {
+  const str = String(text);
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return str.replace(/[&<>"']/g, m => map[m]);
+}
+
+// ── marked renderer：全库唯一配置（代码块动作条 / 行内代码配色 / 数学与指南标签放行）──
+const renderer = new marked.Renderer();
+renderer.codespan = function(code) {
+  const text = typeof code === 'string'
+    ? code
+    : (code && typeof code === 'object' && 'text' in code
+      ? code.text
+      : String(code ?? ''));
+  return '<code class="inline-code-accent">' + escapeHtml(text) + '</code>';
+};
+renderer.code = function(code, langArg) {
+  const obj = (code && typeof code === 'object' && 'text' in code) ? code : null;
+  const text = obj ? String(obj.text ?? '') : String(code ?? '');
+  const lang = String((obj ? obj.lang : langArg) ?? '').match(/\S+/)?.[0] || '';
+  const codeText = text.replace(/\n$/, '') + '\n';
+  let codeHtml = escapeHtml(codeText);
+  if (lang && window.hljs.getLanguage(lang)) {
+    try { codeHtml = window.hljs.highlight(codeText, { language: lang }).value; } catch (e) {}
+  }
+  const classAttr = lang ? ' class="language-' + escapeHtml(lang) + '"' : '';
+  return '<div class="md-code-block"><pre><code' + classAttr + '>'
+    + codeHtml
+    + '</code></pre>'
+    + '<div class="md-code-actions">'
+    + '<button type="button" class="message-icon-action is-icon-copy" title="复制代码" data-action="markdown.copyCode"></button>'
+    + '</div></div>\n';
+};
+renderer.html = function(token) {
+  const raw = String(token?.raw || '');
+  if (/^<claw-display-math\s+data-token="claw-display-math-\d+">$/.test(raw) || raw === '</claw-display-math>') return raw;
+  if (/^<claw-guide-img data-token="guide-img-\d+">(?:<\/claw-guide-img>)?$/.test(raw) || raw === '</claw-guide-img>') return raw;
+  if (/^<claw-guide-callout data-token="guide-callout-\d+">(?:<\/claw-guide-callout>)?$/.test(raw) || raw === '</claw-guide-callout>') return raw;
+  if (/^<claw-guide-imgrow data-token="guide-imgrow-\d+">(?:<\/claw-guide-imgrow>)?$/.test(raw) || raw === '</claw-guide-imgrow>') return raw;
+  return escapeHtml(raw);
+};
+marked.setOptions({ renderer, breaks: true });
 
 export function extractDisplayMathBlocks(text) {
   const source = String(text ?? '');
@@ -572,11 +620,13 @@ function enhanceMathInElement(root) {
   });
 }
 
-// Only classic consumers that still exist remain on the measurable bridge.
-// escapeHtml and renderer are registered synchronously by markdown-bootstrap.
+// 桥键只留仍有未迁移消费方的键：escapeHtml 的 classic 裸读消费方尚未收敛
+// （app-core / app-ui / app-main / sidebar-render / runtime-status 与悬置域），
+// ESM 侧还有 persistent-input / input-render / claw-host 经 window.escapeHtml 取用。
+// renderer 不注册：它原来的唯一读点就是本模块求值期（原 classic bootstrap 造桥），
+// 合并后消费面归零，随本批注销。
 const bridgeState = {
   escapeHtml,
-  renderer,
   renderMarkdown,
   enhanceMarkdownTables,
   enhanceMathInElement,
@@ -584,6 +634,7 @@ const bridgeState = {
   isEditableMarkdownBlock,
   replaceMarkdownBlock,
 };
+window.KernelState.defineKey('markdown-utils', 'escapeHtml', escapeHtml);
 window.KernelState.defineKey('markdown-utils', 'renderMarkdown', renderMarkdown);
 window.KernelState.defineKey('markdown-utils', 'enhanceMarkdownTables', enhanceMarkdownTables);
 window.KernelState.defineKey('markdown-utils', 'enhanceMathInElement', enhanceMathInElement);
@@ -609,7 +660,6 @@ window.addEventListener('load', () => {
 
 export {
   escapeHtml,
-  renderer,
   CHAT_ROW_MAX_WIDTH_PX,
   tableToMarkdown,
   findTableFromActionButton,

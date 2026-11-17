@@ -110,16 +110,13 @@ function createDocumentStub() {
 const flushAsync = () => new Promise((resolve) => setImmediate(resolve));
 
 /**
- * classic 相：真实先行脚本链（prepareClassicSandbox）。两处用例侧补面与既有
- * 授权测试同口径、都不是宿主契约：
- *   - markdown-utils 的 escapeHtml 桥键（生产由 markdown-bootstrap classic 注册，
- *     该脚本不在先行链内；漂移对话框渲染要用它）；
- *   - renderCurrentMainView 计数替身（app-ui 首屏全量渲染需要 index.html 后半程
- *     全部 classic 脚本，不在本文件契约内）。
+ * classic 相：真实先行脚本链（prepareClassicSandbox）。唯一用例侧补面是
+ * renderCurrentMainView 计数替身（app-ui 首屏全量渲染需要 index.html 后半程
+ * 全部 classic 脚本，不在本文件契约内），不是宿主契约。escapeHtml 不再补面：
+ * markdown-utils 自带实现与桥键，ESM 图装载即注册。
  */
 function loadClassicChain(sandbox) {
   prepareClassicSandbox(sandbox);
-  sandbox.KernelState.defineKey('markdown-utils', 'escapeHtml', (value) => String(value ?? ''));
   sandbox.__renderCalls = 0;
   sandbox.renderCurrentMainView = () => { sandbox.__renderCalls += 1; };
 }

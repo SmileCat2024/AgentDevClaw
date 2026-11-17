@@ -81,17 +81,15 @@ function createDocumentStub() {
  * 等）——bootstrap 状态宿主（含 createP2BootstrapDomHost / createPollCoordinatorHost）
  * 全部是生产实现，测试不手写宿主契约桩。
  *
- * 仅两处用例侧补面，都不属于宿主契约：
- *   - markdown-utils 的 escapeHtml 桥键（生产由 markdown-bootstrap classic 注册，
- *     该脚本不在先行链内）；
- *   - renderCurrentMainView 计数替身：app-ui 的首屏全量渲染要装载 index.html 后半程
- *     全部 classic 脚本（chat-viewport / 输入区 / 消息渲染…），不在本文件的契约
- *     范围（同 p2-w2-10-batch10 的先例）。fw 动作经 fwRerender 触达它，用例只需
- *     证明显式调用发生、不驱动 DOM 渲染。
+ * 仅一处用例侧补面，不属于宿主契约：renderCurrentMainView 计数替身——app-ui 的
+ * 首屏全量渲染要装载 index.html 后半程全部 classic 脚本（chat-viewport / 输入区 /
+ * 消息渲染…），不在本文件的契约范围（同 p2-w2-10-batch10 的先例）。fw 动作经
+ * fwRerender 触达它，用例只需证明显式调用发生、不驱动 DOM 渲染。
+ * escapeHtml 不再需要用例补面：它是 markdown-utils 自己的实现与桥键，ESM 图装载
+ * 即注册（沙箱在模块相之前由 frontend-vm 的同名桩兜住 classic 相调用）。
  */
 function loadClassicBootstrap(sandbox) {
   prepareClassicSandbox(sandbox);
-  sandbox.KernelState.defineKey('markdown-utils', 'escapeHtml', (value) => String(value ?? ''));
   sandbox.__renderCalls = 0;
   sandbox.renderCurrentMainView = () => { sandbox.__renderCalls += 1; };
 }

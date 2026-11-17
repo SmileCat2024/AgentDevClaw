@@ -27,14 +27,6 @@ import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { prepareClassicSandbox } from './p2-classic-hosts.js';
 const T_MAP = { feature_type_capability: '能力', feature_cat_unmapped: '待归类' };
 
-// 生产的 escapeHtml 由 markdown-bootstrap.js（classic 相）经 KernelState 注册；
-// markdown-utils.js（ESM）执行时捕获它并作为具名导出供本批模块 import。测试按
-// 同一形状先注册该键，值用等价实现（映射与 markdown-bootstrap 一致），断言即为
-// 真实转义结果。
-const escapeHtmlForTest = (value) => String(value).replace(/[&<>"']/g, (ch) => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-}[ch]));
-
 const MANIFEST_ENTRY = {
   featureName: 'agentero',
   manifest: { name: 'Agentero', settings: { properties: { vaultPath: { type: 'string' } } } },
@@ -159,9 +151,8 @@ async function withBatchCase(fn) {
     globals: { document, fetch: fetchStub },
     classic: (sandbox) => {
       prepareClassicSandbox(sandbox);
-      // classic 相注册形状（markdown-bootstrap 同款）：markdown-utils 执行时经访问器
-      // 捕获 escapeHtml，本批模块 import 的是 markdown-utils 的具名导出
-      sandbox.KernelState.defineKey('markdown-utils', 'escapeHtml', escapeHtmlForTest);
+      // escapeHtml 是 markdown-utils 自己的实现与桥键（原 classic bootstrap 已并入），
+      // 本批模块 import 的是 markdown-utils 的具名导出，用例不再预注册。
       sandbox.t = (key) => T_MAP[key] || key;
       // feature-store 的 catalog 能力已是直接 import（feature-catalog 真实模块，
       // 数据面经 /api/feature-catalog HTTP 桩），这里只提供动作与项目元数据面

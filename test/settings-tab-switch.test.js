@@ -28,8 +28,6 @@ async function withSettingsCase(fn) {
     },
     classic: (sandbox) => {
       prepareClassicSandbox(sandbox);
-      // markdown-utils 在求值期读取该桥键值（生产由 markdown-bootstrap classic 注册）
-      sandbox.KernelState.defineKey('markdown-utils', 'escapeHtml', (value) => String(value ?? ''));
     },
   }, async (c) => {
     const modelSettings = await c.load('public/src/modules/model-settings.js');

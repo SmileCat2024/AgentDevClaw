@@ -29,6 +29,7 @@
 import fs from 'node:fs';
 import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
+import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 // ── Mini DOM：与 frontend-input-composer.test.js 同款最小元素树 ─────────────
@@ -465,7 +466,9 @@ function convergenceCaseOptions() {
         EventSource: MockEventSource,
         URLSearchParams,
         ClawToast: { show() {} },
-        marked: { parse: (markdown) => String(markdown ?? '') },
+        // vendor 面（index.html 的 marked UMD 先于 module 标签）：markdown-utils 在求值期
+        // new Renderer() 并 setOptions；本文件不让消息真的走 markdown，parse 保持原样返回。
+        marked: { parse: (markdown) => String(markdown ?? ''), Renderer, setOptions() {} },
         performance: { now: () => Date.now() },
         fetch: fetchBridge,
         currentLanguage: 'zh',

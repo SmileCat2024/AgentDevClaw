@@ -43,7 +43,7 @@ const DEBUG_PANEL_HOST = 'public/src/modules/p2-bootstrap-debug-panel.js';
 const ORCHESTRATION_STATE = 'public/src/modules/orchestration-state.js';
 const RENDER_ENTRY_STATE = 'public/src/modules/render-entry-state.js';
 
-/** vendor 桩：markdown-bootstrap 只在装载期需要 Renderer 与 setOptions。 */
+/** vendor 桩：markdown-utils 在求值期需要 Renderer 与 setOptions。 */
 const markedStub = { Renderer, setOptions() {} };
 
 // ── 受控 DOM：stable 节点 + 可观测的 scroll 绑定与面板挂载模型 ──────────────
@@ -164,7 +164,7 @@ function createDocumentStub(panelBody) {
 
 /**
  * classic 链：action-dispatcher → i18n → app-core → session-view-state →
- * markdown-bootstrap → 右栏注册表。与生产 index.html 的顺序一致；debug-logs
+ * 右栏注册表。与生产 index.html 的顺序一致；debug-logs
  * 及同批面板宿主在 ESM 图里装载（见 loadDebugBatch）。
  */
 function loadClassicChain(sandbox, { beforeLogs } = {}) {
@@ -174,7 +174,6 @@ function loadClassicChain(sandbox, { beforeLogs } = {}) {
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
   sandbox.loadSource('public/src/modules/right-panel-registry.js');
   // 插件宿主最小面（生产实现是 classic claw-host）：debug-panel-host 只在存在时
   // 订阅面板摘除 / 插件落定，这里给出可调用的宿主以免订阅路径落空。

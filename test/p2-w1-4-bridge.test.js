@@ -8,6 +8,7 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { Marked } from 'marked';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
 let cleanup = null;
@@ -149,6 +150,9 @@ function installHostFactories() {
 before(async () => {
   cleanup = installBrowserStubs({
     window: {
+      // vendor 面：index.html 的 marked UMD 标签先于 module 标签执行，markdown-utils
+      // 在求值期就要 `new marked.Renderer()`。
+      marked: new Marked(),
       escapeHtml: (text) => String(text),
       ClawFW: { actions: { registerMany(map) { for (const [name, handler] of Object.entries(map)) registeredActions.set(name, handler); } } },
       setTimeout: (callback, delay) => setTimeout(callback, delay),

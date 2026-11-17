@@ -112,11 +112,8 @@ function installCaseGlobals() {
       registerManualScrollIntent: (options) => { scrollIntents.push(options ?? null); },
       addEventListener(type, listener) { windowListeners.push({ type, listener }); },
       removeEventListener() {},
-      // markdown-utils 的模块级依赖（nav → escapeHtml 走该桥键）
-      renderer: {},
-      escapeHtml: (text) => String(text)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
+      // vendor 面：markdown-utils 在求值期 new Renderer() / setOptions（escapeHtml 与
+      // renderer 配置都是模块自身实现，不再经 window 预置）。
       marked: { parse: () => '', setOptions() {}, use() {}, Renderer: class {} },
       ClawFW: { actions: { registerMany() {} } },
     },
@@ -146,8 +143,6 @@ function uninstallCaseGlobals() {
 before(async () => {
   installCaseGlobals();
   await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
-  // markdown-utils 在模块顶层读 escapeHtml 桥键（markdown-bootstrap 在 classic 相注册）
-  window.KernelState.defineKey('markdown-utils', 'escapeHtml', window.escapeHtml);
 });
 
 after(() => {

@@ -92,8 +92,6 @@ async function withSettingsHarness(fn) {
       sandbox.run('window.__clawAuthReady = new Promise(() => {}); applyTheme = () => {}; applyLanguage = () => {};'
         + 'ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };');
       prepareClassicSandbox(sandbox);
-      // markdown-utils 在求值期读取该桥键值（生产由 markdown-bootstrap classic 注册）
-      sandbox.KernelState.defineKey('markdown-utils', 'escapeHtml', (value) => String(value ?? ''));
     },
   }, async (c) => {
     const module = await c.load('public/src/modules/model-settings.js');

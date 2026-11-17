@@ -17,14 +17,14 @@ import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const TODO_PLAN = 'public/src/modules/todo-plan.js';
 
-/** vendor markdown 解析器最小等价桩（markdown-bootstrap 装载期构造 Renderer）。 */
+/** vendor markdown 解析器最小等价桩（markdown-utils 求值期构造 Renderer）。 */
 const MARKED_STUB = { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' };
 
 /**
  * 一个用例 = 一份 classic 沙箱 + 一张真实 ESM 图（模块级折叠/详情状态互不残留）。
  * classic 相按 index.html 顺序装 todo-plan 的依赖面：action-dispatcher（ClawFW
  * 动作注册表）、app-core（桥键注册 + P2 bootstrap 宿主工厂：domRefs / callActivity）、
- * markdown-bootstrap（escapeHtml / renderer 的 classic 实现）。
+ * vendor 的 marked（markdown-utils 求值期构造 renderer 用）。
  * @param {(env: { ctx: object, todo: object }) => any} fn
  */
 function withTodoCase(fn) {
@@ -32,7 +32,6 @@ function withTodoCase(fn) {
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
     globals: {
       marked: MARKED_STUB,

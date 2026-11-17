@@ -24,8 +24,6 @@ const MARKDOWN_UTILS = 'public/src/modules/markdown-utils.js';
 const FEATURE_EDITOR = 'public/src/modules/feature-config-editor.js';
 const FEATURE_STORE = 'public/src/modules/feature-store.js';
 
-/** classic 相注册的 escapeHtml（生产由 markdown-bootstrap.js 提供；值用等价实现）。 */
-const escapeHtmlStub = (value) => String(value ?? '');
 
 function createDocumentStub() {
   const hosts = new Map();
@@ -155,7 +153,6 @@ const featureCaseOptions = () => {
         // 词法容器、createSessionViewCommitHost 在 session-view-state、
         // createRuntimeSwitchHost 在 app-main）：按 index.html 的真实先行脚本序装载。
         prepareClassicSandbox(sandbox);
-        sandbox.KernelState.defineKey('markdown-utils', 'escapeHtml', escapeHtmlStub);
       },
       globals: {
         fetch: fetchStub,
@@ -224,8 +221,8 @@ describe('feature-store → editor → i18n / markdown：共享 owner 与整图�
       firstStore = await c.load(FEATURE_STORE);
 
       assert.equal(await c.load(I18N_STATE), firstI18n, 'i18n owner 在同一 case 内是同一实例');
-      // classic 相注册的 escapeHtml 被 markdown-utils 在执行时捕获为命名导出
-      assert.equal(markdown.escapeHtml, escapeHtmlStub);
+      // escapeHtml 是 markdown-utils 自身的实现与命名导出（原 classic bootstrap 已并入）
+      assert.equal(markdown.escapeHtml('<b>&"'), '&lt;b&gt;&amp;&quot;');
 
       firstStats = JSON.parse(c.read('JSON.stringify(KernelState.stats())'));
       assert.ok(firstStats.registeredKeys > 0);

@@ -10,8 +10,8 @@
  * 为测试而保留。
  *
  * 装载路线（P2 真实 ESM 图）：classic 相按真实加载序跑 action-dispatcher →
- * i18n → app-core → session-view-state → markdown-bootstrap（debug-preflight
- * 依赖它们的 KernelState 初值与 escapeHtml），debug-preflight 经 `c.load` 真实
+ * i18n → app-core → session-view-state（debug-preflight 依赖它们的 KernelState
+ * 初值；escapeHtml 由 markdown-utils 自身提供），debug-preflight 经 `c.load` 真实
  * import。断言改为真实行为面：
  *   1. 零消费键不挂 window，同时命名导出仍在（模块私有 + 导出供后续 import）；
  *   2. app-ui 既不发布也不转调 loadPreflight；
@@ -32,7 +32,7 @@ import { withP2EsmCase } from './helpers/p2-esm-case.js';
 const APP_UI_SOURCE = readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
 const DEBUG_PREFLIGHT = 'public/src/modules/debug-preflight.js';
 
-/** vendor 桩：markdown-bootstrap 只在装载期需要 Renderer 与 setOptions。 */
+/** vendor 桩：markdown-utils 在求值期需要 Renderer 与 setOptions。 */
 const markedStub = { Renderer, setOptions() {} };
 
 function loadClassicBootstrap(sandbox) {
@@ -42,7 +42,6 @@ function loadClassicBootstrap(sandbox) {
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
 }
 
 function createFetchStub() {

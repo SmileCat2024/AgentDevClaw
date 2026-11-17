@@ -87,7 +87,7 @@ async function withHeaderSandbox(fn) {
   await withP2EsmCase({
     globals: {
       document: documentStub,
-      // vendor 解析器 / 高亮库：markdown-bootstrap 装载期构造 Renderer 并查 hljs。
+      // vendor 解析器 / 高亮库：markdown-utils 求值期构造 Renderer，渲染期查 hljs。
       marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
       hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
     },
@@ -107,7 +107,6 @@ async function withHeaderSandbox(fn) {
       ctx.loadSource('public/src/modules/session-view-state.js');
       // todo-plan / chat-context-bar 已迁 ESM（P4 L1）：classic 相只补 markdown-utils
       // 的 classic 实现（escapeHtml / renderer），两个模块在 async 相 c.load。
-      ctx.loadSource('public/src/modules/markdown-bootstrap.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 装好（install-i18n.js）
       // app-main.js 底部的启动序列在沙箱里不执行；主题/语言应用与渲染函数以 stub 替身
       ctx.run(`

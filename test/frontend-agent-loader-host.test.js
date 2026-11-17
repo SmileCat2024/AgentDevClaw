@@ -9,7 +9,7 @@ test('loader host preserves early template resets, const Set identity and real s
   const requests = [];
   await withP2EsmCase({
     globals: {
-      // vendor（index.html 的 marked / hljs）最小等价面：markdown-bootstrap 在装载期取
+      // vendor（index.html 的 marked / hljs）最小等价面：markdown-utils 在求值期取
       // Renderer 与 setOptions，本用例不渲染 markdown。
       marked: { Renderer: class {}, setOptions() {}, parse: (md) => String(md ?? '') },
       fetch: async (url) => {

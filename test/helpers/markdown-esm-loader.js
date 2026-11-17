@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import vm from 'node:vm';
 import { Marked, Renderer } from 'marked';
 import { installBrowserStubs, loadModuleOnce } from './esm-module-loader.js';
 
@@ -23,9 +21,8 @@ export async function loadMarkdownModule({ window = {}, document = {} } = {}) {
   try {
     const kernel = await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
     globalThis.window.KernelState.defineKey('i18n-environment', 'currentLanguage', 'zh');
-    const bootstrapPath = new URL('../../public/src/modules/markdown-bootstrap.js', import.meta.url);
-    const bootstrapSource = await readFile(bootstrapPath, 'utf8');
-    vm.runInNewContext(bootstrapSource, { window: globalThis.window });
+    // escapeHtml 与 marked renderer 的实现在 markdown-utils 自身（原 markdown-bootstrap
+    // classic 相的实现已并入），装载该模块即完成两把桥键注册，无需再跑 classic 源。
     const loaded = await loadModuleOnce('public/src/modules/markdown-utils.js', { installGlobals: false });
     return {
       ...loaded,

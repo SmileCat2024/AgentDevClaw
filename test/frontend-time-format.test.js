@@ -9,7 +9,6 @@ const CLASSIC_STACK = [
   'public/src/modules/action-dispatcher.js',
   'public/src/modules/claw-host.js',
   'public/src/modules/right-panel-registry.js',
-  'public/src/modules/markdown-bootstrap.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
   'public/src/modules/runtime-status.js',

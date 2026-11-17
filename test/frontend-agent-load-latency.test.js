@@ -1,9 +1,8 @@
 /**
  * 会话装载时序：新 transcript 首屏不等慢面板（P2 真实 ESM 图路线）。
  *
- * 装载路线：classic 相只跑仍是 classic 的真实生产源（app-core / session-view-state /
- * todo-plan / markdown-bootstrap，另由 runtime-view-cache 的共享 helper 挂真实缓存
- * 实现）；`agent-data-loader`、`session-data-loader`、`overview-data` 等已迁 ESM 的
+ * 装载路线：classic 相只跑仍是 classic 的真实生产源（app-core / session-view-state，
+ * 另由 runtime-view-cache 的共享 helper 挂真实缓存实现）；`agent-data-loader`、`session-data-loader`、`overview-data` 等已迁 ESM 的
  * 模块一律 `withP2EsmCase` + `await c.load(...)` 真实 import —— 不再使用
  * frontend-vm 的 `loadSource` 钩子，也不做源码切片。
  *
@@ -28,7 +27,7 @@ import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 const SESSION_DATA_LOADER_HOST = 'public/src/modules/session-data-loader-host.js';
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 
-/** vendor 桩：markdown-bootstrap 只在装载期需要 Renderer 与 setOptions。 */
+/** vendor 桩：markdown-utils 在求值期需要 Renderer 与 setOptions。 */
 const markedStub = { Renderer, setOptions() {} };
 
 function deferred() {
@@ -87,17 +86,13 @@ async function withLoadHarness(fn) {
   await withP2EsmCase({
     classic: (sandbox) => {
       // 真实先行脚本序（test/p2-classic-hosts.js）：宿主工厂（runtime-switch /
-      // poll / workspace-surface / 侧栏 call 状态）都是生产实现。基座不含
-      // todo-plan / markdown-bootstrap（装载器编排要的 classic 实现），按 index.html
-      // 顺序补真实文件。
+      // poll / workspace-surface / 侧栏 call 状态）都是生产实现。vendor 的 marked
+      // 面补齐 markdown-utils 求值期构造 renderer 的前置条件。
       sb = sandbox;
       sandbox.marked = markedStub;
       sandbox.window.marked = markedStub;
       prepareClassicSandbox(sandbox);
       installRuntimeViewCache(sandbox);
-      // todo-plan 已迁 ESM（P4 L1）：classic 相只补 markdown-utils 的 classic 实现
-      // （escapeHtml / renderer），模块本体在 async 相 c.load。
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       // 窄行为观察面（必须在真实链之后覆盖：app-main / app-ui 会定义同名入口）：
       // 本 harness 记录每次「主视图渲染」的会话视图快照，并把运行时/宿主记录固定成
       // 用例给定的投影；真实渲染需要整条页面 DOM（chat-viewport → input-render →

@@ -19,8 +19,8 @@
  *
  * 装载路线（相对旧版的唯一变化）：以前把 app-main.js 的轮询片段和已迁 ESM 的
  * overview-data.js 源码切片塞进 vm 执行；现在 classic 相按真实加载序跑**整份**
- * classic 源（分发器 / i18n / app-core / session-view-state / markdown-bootstrap /
- * app-main），ESM 侧（overview-data / auto-title / 轮询域各 factory）经
+ * classic 源（分发器 / i18n / app-core / session-view-state / app-main），
+ * ESM 侧（overview-data / auto-title / 轮询域各 factory）经
  * `withP2EsmCase` + `c.load` 真实 import。宿主工厂仍是被测的真实生产 seam
  * （app-main 的 createXxxHost），ESM factory 由它们装配——与生产同构，且每个
  * 用例一张独立模块图（probe 的 seq 基线、metrics 计数不跨用例）。
@@ -52,7 +52,7 @@ const POLL_MAINTENANCE = 'public/src/modules/poll-maintenance.js';
 const RUNTIME_NOT_FOUND = 'public/src/modules/runtime-not-found.js';
 const SSE_CLIENT = 'public/src/modules/sse-client.js';
 
-/** vendor 桩：markdown-bootstrap 只在装载期需要 Renderer 与 setOptions。 */
+/** vendor 桩：markdown-utils 在求值期需要 Renderer 与 setOptions。 */
 const markedStub = { Renderer, setOptions() {} };
 
 function msg(content) {
@@ -65,7 +65,7 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-/** classic 相：真实加载序（分发器 → i18n → app-core → session-view-state → markdown-bootstrap → app-main）。 */
+/** classic 相：真实加载序（分发器 → i18n → app-core → session-view-state → app-main）。 */
 function loadClassicBootstrap(sandbox, { search }) {
   sandbox.marked = markedStub;
   sandbox.window.marked = markedStub;
@@ -74,7 +74,6 @@ function loadClassicBootstrap(sandbox, { search }) {
   // BOOT_NEUTRALIZER（applyTheme / applyLanguage 无操作、__clawAuthReady 永 pending、
   // interval / rAF 关掉），因此 app-main 的装载就绪而首屏 boot 不运行。
   prepareClassicSandbox(sandbox);
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
   // 主视图渲染会挂视口观察器（chat-viewport，已迁 ESM）：由 async 相 c.load 装载，
   // 桥键让 classic renderCurrentMainView 走生产实现而不是桩。
   // 主视图渲染入口：真实 app-ui 实现需要整条页面 DOM（chat-viewport → input-render →

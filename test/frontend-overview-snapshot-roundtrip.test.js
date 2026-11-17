@@ -19,7 +19,7 @@
  *
  * 装载路线（P2 测试改造 + P4 L1）：overview-data / chat-context-bar 均已迁 ESM
  * → withP2EsmCase + 真实 import（classic 侧先跑 action-dispatcher / app-core /
- * markdown-bootstrap / session-view-state 真实 bootstrap，它们的宿主工厂与
+ * session-view-state 真实 bootstrap，它们的宿主工厂与
  * normalizeSessionModelState 在装载期被取用）；session-view-state 仍 classic →
  * 照旧 loadSource，overview 经真实 applySessionViewPatch 提交（不再替换
  * readCurrentSessionViewState）。
@@ -35,11 +35,10 @@ const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 const CLASSIC_STACK = [
   'public/src/modules/action-dispatcher.js',
   'public/src/app-core.js',
-  'public/src/modules/markdown-bootstrap.js',
   'public/src/modules/session-view-state.js',
 ];
 
-/** vendor 解析器 / 高亮库：markdown-bootstrap 装载期构造 Renderer 并查 hljs。 */
+/** vendor 解析器 / 高亮库：markdown-utils 求值期构造 Renderer，渲染期查 hljs。 */
 const VENDOR_STUBS = {
   marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
   hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },

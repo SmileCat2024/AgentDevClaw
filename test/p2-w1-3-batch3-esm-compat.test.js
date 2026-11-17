@@ -18,8 +18,8 @@
  * … → ctx-menu-items → runtime-switch-host / poll-coordinator-host）在 ESM 求值
  * 期取 createRuntimeSwitchHost / createPollCoordinatorHost，手写同形桩会把宿主
  * 契约复制进测试、生产改动无法被发现。首屏 boot 体与周期排程由该 helper 关掉
- * （__clawAuthReady 永不 resolve），markdown-bootstrap（escapeHtml 桥键唯一实现）
- * 单独补装。批内模块一律 `c.load` 真实 import，跨批依赖沿真实 import 链求值，
+ * （__clawAuthReady 永不 resolve）。批内模块一律 `c.load` 真实 import，
+ * 跨批依赖沿真实 import 链求值，
  * 不再用 window 桩冒充已迁模块。
  *
  * 唯一的窄 seam：app-ui 的 renderCurrentMainView 换成只记调用次数的渲染观察面
@@ -147,8 +147,6 @@ function createDocumentStub() {
  */
 function loadClassicOwners(sandbox) {
   prepareClassicSandbox(sandbox);
-  // markdown-bootstrap 的 escapeHtml 桥键（index.html 在 boot 链之外单独装载）
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
   // app-ui（classic 渲染入口）在本文件只记录调用，不模拟渲染
   sandbox.renderMainCalls = 0;
   sandbox.renderCurrentMainView = () => { sandbox.renderMainCalls += 1; };
@@ -189,7 +187,7 @@ async function withBatch3Case(options, fn) {
   const defaultFetch = async () => ({ ok: false, status: 0, json: async () => ({}) });
   return withP2EsmCase({
     globals: {
-      // markdown-bootstrap 的装载期 vendor 依赖（真实库由 index.html 的 vendor
+      // markdown-utils 求值期的 vendor 依赖（真实库由 index.html 的 vendor
       // 脚本提供，测试不装载）：Renderer 构造与 setOptions 是它唯一的取面。
       marked: { Renderer: class { constructor() {} }, setOptions() {} },
       hljs: { getLanguage: () => null },

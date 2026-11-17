@@ -23,6 +23,7 @@
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { Marked } from 'marked';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
 const MODULE_PATH = 'public/src/modules/slash-menu.js';
@@ -35,29 +36,24 @@ let baseKernel;
 let baseCleanup;
 const pendingCleanups = [];
 
-/** markdown-bootstrap 的 escapeHtml 实现（生产 classic 相经 KernelState 桥注册）。 */
-function escapeHtml(text) {
-  const str = String(text);
-  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return str.replace(/[&<>"']/g, (m) => map[m]);
-}
-
 before(async () => {
-  // 一个基础 window：状态模块与 markdown-utils 在首次装载时读取（桥键 / ClawFW）。
+  // 一个基础 window：状态模块与 markdown-utils 在首次装载时读取（vendor 面 / ClawFW）。
   baseCleanup = installBrowserStubs({
-    window: { ClawFW: { actions: { registerMany() {} } } },
+    window: {
+      // vendor 面（index.html 的 marked UMD 先于 module 标签）：markdown-utils 求值期
+      // 就要 new Renderer() / setOptions。
+      marked: new Marked(),
+      ClawFW: { actions: { registerMany() {} } },
+    },
   });
   await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
   baseKernel = globalThis.window.KernelState;
-  globalThis.window.KernelState.defineKey('markdown-utils', 'escapeHtml', escapeHtml);
-  globalThis.window.KernelState.defineKey('markdown-utils', 'renderer', null);
   orchestration = await import('../public/src/modules/orchestration-state.js');
   agentStore = await import('../public/src/modules/agent-store-state.js');
   i18n = await import('../public/src/modules/i18n-environment-state.js');
   toast = await import('../public/src/modules/toast-notify.js');
-  // 在桥键就位时完成 markdown-utils 的首次装载（生产由 index.html 的 module
-  // 入口 + markdown-bootstrap 保证同一顺序）；之后各用例的 window 桩只需
-  // 满足运行时调用面。
+  // markdown-utils 自带 escapeHtml 与 renderer 配置（原 markdown-bootstrap 已并入），
+  // 首次装载即完成本域注册；之后各用例的 window 桩只需满足运行时调用面。
   await import('../public/src/modules/markdown-utils.js');
 });
 

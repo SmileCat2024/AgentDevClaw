@@ -452,7 +452,8 @@
        桥键 updateChatContextBar 供 app-ui 首屏 render 分支裸调。 -->
   <!-- workspace-docset 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载；
        currentProjectDocsetOpen 状态仍由 app-core 的桥键持有。 -->
-  <script src="./src/modules/markdown-bootstrap.js"></script>
+  <!-- markdown-bootstrap 已并入 markdown-utils（P4 T1）：escapeHtml 与 marked
+       renderer 配置现在由该 ESM 模块自持，classic 标签删除。 -->
   <script type="module" src="./src/modules/markdown-utils.js"></script>
   <!-- theme-lang 已并入 i18n-environment-state（P4 T1）：classic 标签删除；
        applyTheme / applyLanguage 由 boot.js 直接 import 调用。 -->

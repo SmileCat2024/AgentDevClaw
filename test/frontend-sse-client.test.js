@@ -261,7 +261,6 @@ async function withSseCase(opts, fn) {
       sandbox.run(APP_MAIN_PRELUDE);
       // todo-plan 已迁 ESM（P4 L1）：classic 相只补它装载期要用的 vendor 面与
       // markdown-utils 的 classic 实现（escapeHtml / renderer），模块本体在 async 相 c.load。
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       // rollback-dialog（P4 T2）/ persistent-input（P4 输入面批次）已迁 ESM：
       // 改由 async 相 c.load 装载（见用例体首段）。
       // 观察面（真源之后覆盖）：本例只验证 SSE 事件路由与提交语义，不驱动主视图 /
@@ -273,7 +272,7 @@ async function withSseCase(opts, fn) {
       EventSource: MockEventSource,
       URLSearchParams,
       ClawToast: { show() {} },
-      // vendor 解析器 / 高亮库：markdown-bootstrap 装载期构造 Renderer 并查 hljs。
+      // vendor 解析器 / 高亮库：markdown-utils 求值期构造 Renderer，渲染期查 hljs。
       marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
       hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
       // 以下 classic 汇点不属于本文件的验收面（SSE 事件路由与提交语义），

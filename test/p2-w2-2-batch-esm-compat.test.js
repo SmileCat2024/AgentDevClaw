@@ -61,9 +61,8 @@ let toolProgress;
 before(async () => {
   cleanupGlobals = installBrowserStubs({
     window: {
-      // markdown-bootstrap 的桥键值：ESM markdown-utils 顶层读取后 export escapeHtml
-      escapeHtml: (text) => String(text ?? ''),
-      renderer: {},
+      // vendor 面：markdown-utils 在求值期 new Renderer() 并 setOptions；
+      // escapeHtml 已是它自己的实现（原 classic bootstrap 并入）。
       marked: { parse: () => '', setOptions() {}, use() {}, Renderer: class {} },
       ClawFW: { actions: { registerMany() {} } },
       // classic 依赖（按调用时点 window 晚绑定）

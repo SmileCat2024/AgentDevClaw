@@ -238,7 +238,6 @@ async function withChatCase(fn) {
       // 改由 async 相 c.load。
       // todo-plan 已迁 ESM（P4 L1）：classic 相只补 markdown-utils 的 classic 实现，
       // 模块本体在 async 相 c.load。
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       // input-helpers / rollback-dialog 已迁 ESM（P4 T2）：两者都改由 async 相
       // c.load 装载（见下），classic 相不再有它们的脚本。
       // 用例的窄行为观察面（真源之后覆盖：app-main / app-ui 会定义同名入口）：
@@ -256,8 +255,8 @@ async function withChatCase(fn) {
       clearProcessDistance: () => {},
       shouldRenderWorkspaceSurface: () => false,
       updateFollowLatestButton: () => {},
-      // vendor 侧 markdown 解析器（真实标记渲染管线由 markdown-bootstrap 的 marked
-      // 实例提供；本文件的断言只看编辑按钮，不需要完整标记渲染）
+      // vendor 侧 markdown 解析器（markdown-utils 在求值期按它构造 renderer；
+      // 本文件的断言只看编辑按钮，不需要完整标记渲染）
       marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: (markdown) => String(markdown ?? '') },
       hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
       performance: { now: () => Date.now() },

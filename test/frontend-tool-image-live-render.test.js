@@ -58,7 +58,6 @@ test('last-message patch synchronizes tool result images into the existing row',
   await withP2EsmCase({
     classic: (sandbox) => {
       prepareClassicSandbox(sandbox);
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
     globals: {
       document: makeDocument(),

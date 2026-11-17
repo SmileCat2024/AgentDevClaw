@@ -48,7 +48,7 @@ const hljsStub = {
 function baseGlobals(fetchImpl) {
   return {
     hljs: hljsStub,
-    // markdown-bootstrap 装载期构造 Renderer（todo-plan 的 ESM 依赖链经 markdown-utils 取 escapeHtml）。
+    // markdown-utils 求值期构造 Renderer（todo-plan 的 ESM 依赖链经它取 escapeHtml）。
     marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
     ClawFW: { actions: { handlers: {}, registerMany(map) { Object.assign(this.handlers, map); } } },
     fetch: fetchImpl || (async () => ({ ok: false, status: 0, json: async () => ({}) })),
@@ -177,7 +177,6 @@ describe('P2-4L 原厂商行为（真实 ESM 整图）', () => {
       classic: (sandbox) => {
         loadClassicDeps(sandbox);
         // todo-plan（P4 L1 已迁 ESM）的 classic 前置：markdown-utils 的 escapeHtml / renderer。
-        sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
         installClassicSeams(sandbox, sink);
       },
       globals: baseGlobals(fetchImpl),
@@ -245,7 +244,6 @@ describe('P2-4L 原厂商行为（真实 ESM 整图）', () => {
       classic: (sandbox) => {
         loadClassicDeps(sandbox);
         // todo-plan（P4 L1 已迁 ESM）的 classic 前置：markdown-utils 的 escapeHtml / renderer。
-        sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
         installClassicSeams(sandbox, sink);
       },
       globals: baseGlobals(fetchImpl),

@@ -216,7 +216,6 @@ async function withSandbox(fn, { presets = DEFAULT_PRESETS, channels = DECLARED_
       sandbox.loadSource('public/src/modules/session-view-state.js');
       // chat-context-bar 已迁 ESM（P4 L1）：classic 相只补 markdown-utils 的 classic
       // 实现（escapeHtml / renderer），模块本体在 async 相 c.load。
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
   }, async (c) => {
     // 上下文栏（已迁 ESM）：classic 侧经桥键 updateChatContextBar 调用同一实现。

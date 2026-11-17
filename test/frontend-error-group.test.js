@@ -159,7 +159,7 @@ async function withHarness({ messages } = {}, fn) {
   const live = { readMessages: () => [] };
   const globals = {
     document: rig.document,
-    // markdown-bootstrap 装载期需要 vendor 的 marked（renderer 由它自建）。
+    // markdown-utils 求值期需要 vendor 的 marked（renderer 由它自建）。
     marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: (value) => String(value ?? '') },
     // input-actions 已 import 真实 poll 模块（poll-coordinator-host）：按生产
     // 宿主 seam 提供最小面，本文件不驱动轮询、不再保留 window.poll 桩。
@@ -187,10 +187,9 @@ async function withHarness({ messages } = {}, fn) {
   return withP2EsmCase({
     classic: (sandbox) => {
       // chat-renderer 的 import 链触达整条装载期宿主工厂链：按生产先行脚本序整链
-      // 装载（boot 体与周期排程由基座关掉），再补 markdown-bootstrap（markdown-utils
-      // 求值期捕获 escapeHtml / renderer / marked）。
+      // 装载（boot 体与周期排程由基座关掉）；markdown-utils 的 escapeHtml / renderer
+      // 在 ESM 求值期自建，用例只补 vendor 的 marked 面。
       prepareClassicSandbox(sandbox);
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       // 夹具的确定性计时器 / rAF 必须晚于基座落位（基座会关闭 rAF 与周期排程）。
       Object.assign(sandbox, rig.fakeTimers);
     },

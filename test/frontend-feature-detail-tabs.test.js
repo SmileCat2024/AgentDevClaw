@@ -8,7 +8,7 @@
  * 替换节点观测，阅读页正文经 portal.innerHTML 观测。
  *
  * 装载路线：一个用例 = 一份真实 classic 沙箱（action-dispatcher / app-core /
- * markdown-bootstrap / session-view-state）+ 真实 import 的 features 模块与其
+ * session-view-state）+ 真实 import 的 features 模块与其
  * 状态 owner（session-view-storage / render-entry-state / orchestration-state /
  * p2-bootstrap-debug-panel）。`t` 与 markdown 走生产实现。
  */
@@ -171,7 +171,6 @@ async function withFeatureDetailCase(fn, { portalHarness, fetchImpl } = {}) {
       sandbox.window.marked = markedStub;
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
     },
   }, async (c) => {

@@ -4,8 +4,8 @@
  * 装载路线：classic 相跑 index.html 的先行脚本整条链（`prepareClassicSandbox`：
  * 分发器 / i18n / app-core / runtime-status / session-view-state / sidebar-render /
  * app-ui / app-main，boot 体由 BOOT_NEUTRALIZER 挡在永不 resolve 的 auth gate 后），
- * 再补 markdown-bootstrap（模板引擎经 markdown-utils 读它的 renderer / escapeHtml
- * 桥键）。宿主工厂因此是生产实现本身：模板引擎静态链上的
+ * markdown-utils 的 escapeHtml / renderer 是模块自身实现（vendor 的 marked 由用例
+ * 补齐）。宿主工厂因此是生产实现本身：模板引擎静态链上的
  * `createP2BootstrapSessionSwitchHost` 与 `createP2BootstrapSidebarRenderHost`
  * 都由真链提供，不在测试里复刻。模板引擎本身经 `withEngineCase`（withP2EsmCase +
  * console 账本）+ `c.load` 真实 import，每个用例一张独立模块图。
@@ -35,19 +35,18 @@ const ORCHESTRATION_STATE = 'public/src/modules/orchestration-state.js';
 const RENDER_ENTRY_STATE = 'public/src/modules/render-entry-state.js';
 const TEMPLATE_ENGINE = 'public/src/modules/template-engine.js';
 
-/** vendor 桩：markdown-bootstrap 只在装载期需要 Renderer 与 setOptions。 */
+/** vendor 桩：markdown-utils 在求值期需要 Renderer 与 setOptions。 */
 const markedStub = { Renderer, setOptions() {} };
 
 /**
  * classic 相：index.html 先行脚本整链（`prepareClassicSandbox` 的
- * BOOT_NEUTRALIZER 把首屏 boot 挡在 auth gate 后），随后补 markdown-bootstrap
- * ——它是 markdown-utils 装载期读取的 renderer / escapeHtml 桥键的唯一 owner。
+ * BOOT_NEUTRALIZER 把首屏 boot 挡在 auth gate 后）。escapeHtml / renderer 由
+ * markdown-utils 自身持有（原 classic bootstrap 已并入），用例只补 vendor 的 marked。
  */
 function loadClassicBootstrap(sandbox) {
   sandbox.marked = markedStub;
   sandbox.window.marked = markedStub;
   prepareClassicSandbox(sandbox);
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
 }
 
 /** loadTemplate 的 catch 分支声明的那条日志（生产原文），唯一允许的噪音。 */

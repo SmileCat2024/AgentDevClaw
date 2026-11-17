@@ -33,7 +33,7 @@ const STORAGE_KEYS = [
   'currentTodoPlanSignature',
 ];
 
-/** vendor markdown 解析器 / 高亮库最小等价桩（markdown-bootstrap 装载期取用）。 */
+/** vendor markdown 解析器 / 高亮库最小等价桩（markdown-utils 求值期取用）。 */
 const VENDOR_STUBS = {
   marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
   hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
@@ -47,7 +47,6 @@ function loadClassicBootstrap(sandbox) {
   sandbox.loadSource('public/src/modules/session-view-state.js');
   // todo-plan 已迁 ESM（P4 L1）：它 import session-view-storage，必须在 case 体内
   // 经 c.load 装载（否则会先替本用例认领本域，失去认领前相位）。
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
 }
 
 test('real session patch preserves early data through claim and rejects stale commits afterward', async () => {

@@ -34,7 +34,7 @@ const SESSION_VIEW_STORAGE = 'public/src/modules/session-view-storage.js';
 
 const TITLE_REQUEST = '/protoclaw/generate_session_title';
 
-/** vendor 桩：markdown-bootstrap 只在装载期需要 Renderer 与 setOptions。 */
+/** vendor 桩：markdown-utils 在求值期需要 Renderer 与 setOptions。 */
 const markedStub = { Renderer, setOptions() {} };
 
 function loadClassicBootstrap(sandbox) {
@@ -42,9 +42,8 @@ function loadClassicBootstrap(sandbox) {
   sandbox.window.marked = markedStub;
   // 真实先行脚本序（test/p2-classic-hosts.js）：宿主工厂（runtime-switch / poll /
   // workspace-surface / 侧栏 call 状态）都是生产实现，首屏 boot 与周期排程由基座
-  // 关掉；markdown-bootstrap 是基座链之外的真实 classic 文件（index.html 顺序）。
+  // 关掉；markdown-utils 的 escapeHtml / renderer 在 ESM 求值期自建，用例只补 vendor 的 marked。
   prepareClassicSandbox(sandbox);
-  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
 }
 
 const FIRST_TURN = [

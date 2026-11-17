@@ -219,7 +219,6 @@ async function withRenderHarness({ domContextKey = null } = {}, fn) {
   return withP2EsmCase({
     classic: (sandbox) => {
       prepareClassicSandbox(sandbox);
-      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
     globals: {
       document,

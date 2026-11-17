@@ -10,7 +10,7 @@
  * 时相（R4，改动前先读 ADR-0051 与《ESM 迁移配方》）：
  *   - 本模块与 kernel-entry 都是静态非 async module，浏览器在文档解析完成后、
  *     DOMContentLoaded 之前求值；因此所有 classic 脚本（含 app-core 的
- *     `createP2Bootstrap*Host` 工厂、markdown-bootstrap 的 renderer / escapeHtml、
+ *     `createP2Bootstrap*Host` 工厂、markdown-utils 的 renderer / escapeHtml、
  *     classic 文件在原声明位置 `defineKey` 注册的真初值）早已执行完。
  *   - 首屏同步链（app-main 顶层 `applyTheme → applyLanguage →
  *     renderCurrentMainView`）仍在 classic 相完成，不等待本模块；模块内被首屏
