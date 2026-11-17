@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
 import { normalizeExportPolicy, buildTrimmedSeedMessages } from '@agentdevjs/core';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
 const MAX_RUNS = Math.min(500, Math.max(20, Number(process.env.FAST_CHECK_NUM_RUNS) || 100));
 const SEED = Number.isSafeInteger(Number(process.env.FAST_CHECK_SEED))
@@ -13,10 +13,18 @@ const PROPERTY_OPTIONS = {
   ...(SEED === undefined ? {} : { seed: SEED }),
 };
 
-function loadCore() {
-  const context = createFrontendSandbox();
-  context.loadSource('public/src/modules/trim-ratio-core.js');
-  return context.window.TrimRatioCore;
+// 真实 import 路线（esm-module-loader）：kernel-state 先装（被测模块顶层
+// defineKey 需要 window.KernelState）；cleanup 经 t.after 恢复全局。
+function loadCore(t) {
+  const cleanup = installBrowserStubs();
+  t.after(cleanup);
+  return loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false })
+    .then(() => loadModuleOnce('public/src/modules/trim-ratio-core.js', { installGlobals: false })
+      .then(({ module }) => module))
+    .catch((err) => {
+      cleanup();
+      throw err;
+    });
 }
 
 function contentCharCount(message) {
@@ -115,8 +123,8 @@ function candidateResults(core, rawMessages, projectedMessages) {
 }
 
 describe('TrimRatioCore business properties', () => {
-  it('keeps actual post-trim history within the requested budget when a safe result is reachable', () => {
-    const core = loadCore();
+  it('keeps actual post-trim history within the requested budget when a safe result is reachable', async (t) => {
+    const core = await loadCore(t);
     fc.assert(
       fc.property(transcriptArb, ratioArb, (turns, ratio) => {
         const rawMessages = buildTranscript(turns);
@@ -147,8 +155,8 @@ describe('TrimRatioCore business properties', () => {
     );
   });
 
-  it('marks unreachable targets and still keeps dialogue in the actual result', () => {
-    const core = loadCore();
+  it('marks unreachable targets and still keeps dialogue in the actual result', async (t) => {
+    const core = await loadCore(t);
     fc.assert(
       fc.property(transcriptArb, ratioArb, (turns, ratio) => {
         const rawMessages = buildTranscript(turns);
@@ -176,8 +184,8 @@ describe('TrimRatioCore business properties', () => {
     );
   });
 
-  it('never replays a tool call without its matching result', () => {
-    const core = loadCore();
+  it('never replays a tool call without its matching result', async (t) => {
+    const core = await loadCore(t);
     fc.assert(
       fc.property(transcriptArb, ratioArb, (turns, ratio) => {
         const rawMessages = buildTranscript(turns);

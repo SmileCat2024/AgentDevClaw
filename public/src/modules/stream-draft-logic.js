@@ -12,6 +12,9 @@
  *
  * 代价（有意取舍）：用户编辑过活跃段后，ASR 对该段的修正能力被冻结，
  * 残留错字由用户自行修正——用户意图优先于识别质量。
+ *
+ * ESM 化（P2 消费方批次）：命名导出；classic 消费方 voice-input.js 经桥
+ * 访问器调用（kernel-state 兼容桥，语音域收敛时撤桥）。装载经 kernel-entry。
  */
 
 // 流式 ASR 的瞬态句读：说话停顿时解码会先给段尾收一个句读
@@ -43,7 +46,7 @@ function streamCommonPrefixLen(a, b) {
  *                                           句读后的前缀增量
  *   { kind: 'noop' }                        无内容增量（ASR 回退 / 纯瞬态句读），不动输入框
  */
-function planStreamDraftMutation(value, selStart, selEnd, activeText, newText) {
+export function planStreamDraftMutation(value, selStart, selEnd, activeText, newText) {
   if (activeText.length === 0 || value.endsWith(activeText)) {
     const keep = value.slice(0, value.length - activeText.length);
     return { kind: 'replace-tail', value: keep + newText, caret: keep.length + newText.length };
@@ -63,7 +66,7 @@ function planStreamDraftMutation(value, selStart, selEnd, activeText, newText) {
  * @returns {string|null} 移除后的输入框值；无法精确定位语音文本（用户已深度
  *   编辑）时返回 null —— 调用方保留输入框现状，宁可少删不可误删用户内容。
  */
-function planStreamDraftCancel(value, committedText, activeText) {
+export function planStreamDraftCancel(value, committedText, activeText) {
   const full = committedText + activeText;
   if (full && value.endsWith(full)) {
     return value.slice(0, value.length - full.length);
@@ -73,3 +76,14 @@ function planStreamDraftCancel(value, committedText, activeText) {
   }
   return null;
 }
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// classic 消费方 voice-input.js 裸调用 planStreamDraftMutation /
+// planStreamDraftCancel（事件回调内，无 classic 相触达）；语音域收敛时撤桥。
+const bridgeApi = { planStreamDraftMutation, planStreamDraftCancel };
+window.KernelState.defineKey('stream-draft-logic', 'planStreamDraftMutation', planStreamDraftMutation);
+window.KernelState.defineKey('stream-draft-logic', 'planStreamDraftCancel', planStreamDraftCancel);
+window.KernelState.claim('stream-draft-logic', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});

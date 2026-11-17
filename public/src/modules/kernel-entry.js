@@ -20,3 +20,5 @@ import './workspace-entry-host.js';
 import './compact-resume-host.js';
 import './workspace-surface-host.js';
 import './application-startup-host.js';
+import './stream-draft-logic.js';
+import './trim-ratio-core.js';

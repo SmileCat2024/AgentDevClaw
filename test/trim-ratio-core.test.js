@@ -1,5 +1,5 @@
 /**
- * trim-ratio-core.js 纯函数测试（frontend-vm 沙箱加载，script 全局模式）。
+ * trim-ratio-core.js 纯函数测试（真实 import，esm-module-loader 装载）。
  *
  * 数据面直接构造服务端 buildSessionTrimMessagePreview 的投影形状
  * （index/role/charCount/contentCharCount/toolCalls/toolCallId），
@@ -9,15 +9,22 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
 const NOTE_PREFIX = '[Folded tool activity]\nTool calls since user input above, through here:\nassistant tool calls: ';
 
-function loadCore() {
-  const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/modules/trim-ratio-core.js');
-  // 模块经 window 守卫挂载（script 全局模式），落在沙箱的 window stub 上
-  return ctx.window.TrimRatioCore;
+// 真实 import 路线：kernel-state 先装（模块顶层 defineKey 需要 window.KernelState），
+// 再装载被测模块；cleanup 经 t.after 在用例结束时恢复全局。
+function loadCore(t) {
+  const cleanup = installBrowserStubs();
+  t.after(cleanup);
+  return loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false })
+    .then(() => loadModuleOnce('public/src/modules/trim-ratio-core.js', { installGlobals: false }))
+    .then(({ module }) => module)
+    .catch((err) => {
+      cleanup();
+      throw err;
+    });
 }
 
 // 投影构造器：模拟服务端 messages[] 形状
@@ -42,8 +49,8 @@ function toolPair(id, file, argChars, resultChars) {
 }
 
 describe('TrimRatioCore.safeCutCandidates', () => {
-  it('marks cut indexes safe only when no dangling tool_use stays behind', () => {
-    const core = loadCore();
+  it('marks cut indexes safe only when no dangling tool_use stays behind', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 10, contentCharCount: 10 }),
       ...toolPair('tc-1', 'a.js', 100, 200),
@@ -54,8 +61,8 @@ describe('TrimRatioCore.safeCutCandidates', () => {
     assert.deepEqual([...candidates.map((c) => c.cutIndex)], [0, 1, 3, 5]);
   });
 
-  it('flags round boundaries where the keep zone starts at a user message', () => {
-    const core = loadCore();
+  it('flags round boundaries where the keep zone starts at a user message', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 10, contentCharCount: 10 }),
       msg('assistant', { charCount: 10, contentCharCount: 10 }),
@@ -69,8 +76,8 @@ describe('TrimRatioCore.safeCutCandidates', () => {
     assert.equal(byIndex.get(4), false); // tail end
   });
 
-  it('treats id-less tool calls as non-dangling', () => {
-    const core = loadCore();
+  it('treats id-less tool calls as non-dangling', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 5, contentCharCount: 5 }),
       msg('assistant', { charCount: 50, toolCalls: [{ name: 'bash', summary: 'bash' }] }),
@@ -81,8 +88,8 @@ describe('TrimRatioCore.safeCutCandidates', () => {
 });
 
 describe('TrimRatioCore.estimateFoldResidue', () => {
-  it('estimates one call-scoped note after assistant prose and before the next user input', () => {
-    const core = loadCore();
+  it('estimates one call-scoped note after assistant prose and before the next user input', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 10, contentCharCount: 10 }),
       msg('assistant', { charCount: 40, contentCharCount: 10, toolCalls: [{ id: 't1', name: 'read', summary: 'read(a.js)' }] }),
@@ -95,8 +102,8 @@ describe('TrimRatioCore.estimateFoldResidue', () => {
     assert.equal(core.estimateFoldResidue(messages, 5), expected);
   });
 
-  it('ends a call summary at the next user input, not at assistant prose', () => {
-    const core = loadCore();
+  it('ends a call summary at the next user input, not at assistant prose', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 5, contentCharCount: 5 }),
       ...toolPair('t1', 'a.js', 40, 500),
@@ -109,8 +116,8 @@ describe('TrimRatioCore.estimateFoldResidue', () => {
     assert.equal(core.estimateFoldResidue(messages, 6), expected);
   });
 
-  it('dedupes identical summaries with ×N like the engine', () => {
-    const core = loadCore();
+  it('dedupes identical summaries with ×N like the engine', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('assistant', { charCount: 20, toolCalls: [
         { id: 't1', name: 'read', summary: 'read(a.js)' },
@@ -127,8 +134,8 @@ describe('TrimRatioCore.estimateFoldResidue', () => {
 });
 
 describe('TrimRatioCore.ratioToCut', () => {
-  it('prefers round boundaries when one fits the budget', () => {
-    const core = loadCore();
+  it('prefers round boundaries when one fits the budget', async (t) => {
+    const core = await loadCore(t);
     // 轮1：user 100 文本 + 工具对（args 1000 / result 2000）
     // 轮2：user 200 + assistant 200 纯文本
     const messages = [
@@ -143,8 +150,8 @@ describe('TrimRatioCore.ratioToCut', () => {
     assert.equal(result.unmet, false);
   });
 
-  it('cuts inside a giant single round when no round boundary fits', () => {
-    const core = loadCore();
+  it('cuts inside a giant single round when no round boundary fits', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 50, contentCharCount: 50 }),
     ];
@@ -159,8 +166,8 @@ describe('TrimRatioCore.ratioToCut', () => {
     assert.ok(readout.keptPercent <= 0.3 + 1e-9);
   });
 
-  it('reports unmet when even full trim cannot reach the ratio', () => {
-    const core = loadCore();
+  it('reports unmet when even full trim cannot reach the ratio', async (t) => {
+    const core = await loadCore(t);
     // 纯文本会话：对话文本全保留，折叠不省体积
     const messages = [
       msg('user', { charCount: 100, contentCharCount: 100 }),
@@ -172,8 +179,8 @@ describe('TrimRatioCore.ratioToCut', () => {
     assert.equal(result.cutIndex, 0);
   });
 
-  it('keeps the cut marker moving up monotonically as the ratio grows', () => {
-    const core = loadCore();
+  it('keeps the cut marker moving up monotonically as the ratio grows', async (t) => {
+    const core = await loadCore(t);
     // 轮 1 = 大文本 + 大工具对 + 文本 + 微型工具对（折叠注记 57 反超原样 10）：
     // 轮 2 头（cut 6）kept = 2214 > 轮 1 内锚点（cut 3）kept = 2167——
     // 切到轮 2 头反而更长，是「切了不省」的坏切点。未过滤时比例跨过
@@ -201,8 +208,8 @@ describe('TrimRatioCore.ratioToCut', () => {
     assert.equal(at38.cutIndex, 3);
   });
 
-  it('round-trips: cutToRatio(ratioToCut(r)) never exceeds r', () => {
-    const core = loadCore();
+  it('round-trips: cutToRatio(ratioToCut(r)) never exceeds r', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 100, contentCharCount: 100 }),
       ...toolPair('t1', 'a.js', 800, 2200),
@@ -217,8 +224,8 @@ describe('TrimRatioCore.ratioToCut', () => {
       assert.ok(unmet || actual <= ratio + 1e-9, `ratio ${ratio}: actual ${actual} exceeds budget`);
     }
   });
-  it('never lands the cut where the keep zone holds no dialogue (tail system injection)', () => {
-    const core = loadCore();
+  it('never lands the cut where the keep zone holds no dialogue (tail system injection)', async (t) => {
+    const core = await loadCore(t);
     // 打断/任务提醒注入的形态：末轮文本与工具结果之后跟一条 system 注入
     // 消息。其后的安全切点保留区不含任何 user/assistant——提交后末轮对话
     // 全被折叠（实测事故：handoff preservedMsgRanges=[[277,277]] 仅保留
@@ -241,8 +248,8 @@ describe('TrimRatioCore.ratioToCut', () => {
     }
   });
 
-  it('unmet fallback keeps a dialogue-bearing minimal zone instead of trimming everything', () => {
-    const core = loadCore();
+  it('unmet fallback keeps a dialogue-bearing minimal zone instead of trimming everything', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 100, contentCharCount: 100 }),
       ...toolPair('t1', 'a.js', 800, 2000),
@@ -259,8 +266,8 @@ describe('TrimRatioCore.ratioToCut', () => {
     );
   });
 
-  it('exposes keepZoneHasDialogue for the trim page submit guard', () => {
-    const core = loadCore();
+  it('exposes keepZoneHasDialogue for the trim page submit guard', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 10, contentCharCount: 10 }),
       msg('assistant', { charCount: 10, contentCharCount: 10 }),
@@ -280,8 +287,8 @@ describe('TrimRatioCore.ratioToCut', () => {
 });
 
 describe('TrimRatioCore.computeReadout', () => {
-  it('reports kept/released percent and message counts for a cut', () => {
-    const core = loadCore();
+  it('reports kept/released percent and message counts for a cut', async (t) => {
+    const core = await loadCore(t);
     const messages = [
       msg('user', { charCount: 100, contentCharCount: 100 }),
       ...toolPair('t1', 'a.js', 1000, 2000),
@@ -297,5 +304,31 @@ describe('TrimRatioCore.computeReadout', () => {
     assert.equal(readout.keptCharCount, expectedKept);
     assert.ok(Math.abs(readout.keptPercent - expectedKept / 3600) < 1e-9);
     assert.ok(Math.abs(readout.releasedPercent - (1 - expectedKept / 3600)) < 1e-9);
+  });
+});
+
+describe('TrimRatioCore bridge (kernel-state compatibility)', () => {
+  // 契约：classic 消费方 trim-page.js 经 window.TrimRatioCore.* 调用，
+  // ESM 化后行为不变——访问器返回模块同一函数引用，对象可经 setter 转发更新。
+  it('exposes the same api object and functions via the window accessor', async (t) => {
+    const core = await loadCore(t);
+    assert.equal(typeof window.TrimRatioCore, 'object');
+    assert.equal(window.TrimRatioCore.ratioToCut, core.ratioToCut);
+    assert.equal(window.TrimRatioCore.computeReadout, core.computeReadout);
+    // 调用经访问器与直接 import 等价
+    const messages = [msg('user', { charCount: 10, contentCharCount: 10 })];
+    assert.deepEqual(window.TrimRatioCore.safeCutCandidates(messages), core.safeCutCandidates(messages));
+  });
+
+  it('forwards classic writes through the claimed accessor', async (t) => {
+    await loadCore(t);
+    const original = window.TrimRatioCore.keepZoneHasDialogue;
+    try {
+      const sentinel = () => true;
+      window.TrimRatioCore = { ...window.TrimRatioCore, keepZoneHasDialogue: sentinel };
+      assert.equal(window.TrimRatioCore.keepZoneHasDialogue, sentinel);
+    } finally {
+      window.TrimRatioCore = { ...window.TrimRatioCore, keepZoneHasDialogue: original };
+    }
   });
 });

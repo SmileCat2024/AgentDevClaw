@@ -19,263 +19,268 @@
  * 已知偏差（UI 读数标注「估算」）：不含 keepRecentSkillInvokes 技能保护与
  * 摘要生成长度；maxFoldedToolChars 只作用于引擎 args 截断（默认关闭），不影响。
  *
- * 挂载：window.TrimRatioCore（typeof window 守卫；测试经 frontend-vm 沙箱加载）。
+ * 挂载：ESM 化（P2 消费方批次）——7 个 api 命名导出；classic 消费方
+ * trim-page.js 经桥访问器 window.TrimRatioCore 调用（kernel-state 兼容桥，
+ * 精简域收敛时撤桥）。装载经 kernel-entry；测试经真实 import。
  */
-(function () {
-  'use strict';
+// 引擎 flushPendingToolFold 的注记前缀（trim-transcript.ts lines 数组拼接）
+var FOLD_NOTE_PREFIX = '[Folded tool activity]\nTool calls since user input above, through here:\nassistant tool calls: ';
 
-  // 引擎 flushPendingToolFold 的注记前缀（trim-transcript.ts lines 数组拼接）
-  var FOLD_NOTE_PREFIX = '[Folded tool activity]\nTool calls since user input above, through here:\nassistant tool calls: ';
+function normalizeMessages(messages) {
+  return Array.isArray(messages) ? messages : [];
+}
 
-  function normalizeMessages(messages) {
-    return Array.isArray(messages) ? messages : [];
+function totalCharCount(messages, preambleCharCount) {
+  var total = typeof preambleCharCount === 'number' && Number.isFinite(preambleCharCount)
+    ? preambleCharCount : 0;
+  var msgs = normalizeMessages(messages);
+  for (var i = 0; i < msgs.length; i++) {
+    total += (msgs[i] && typeof msgs[i].charCount === 'number') ? msgs[i].charCount : 0;
   }
+  return total;
+}
 
-  function totalCharCount(messages, preambleCharCount) {
-    var total = typeof preambleCharCount === 'number' && Number.isFinite(preambleCharCount)
-      ? preambleCharCount : 0;
-    var msgs = normalizeMessages(messages);
-    for (var i = 0; i < msgs.length; i++) {
-      total += (msgs[i] && typeof msgs[i].charCount === 'number') ? msgs[i].charCount : 0;
-    }
-    return total;
-  }
-
-  /**
-   * 全部安全切点（升序）。切点 c 安全 ⇔ 精简区 [0, c) 内无悬空 tool_use——
-   * 扫描维护 pending 工具 id 集合：assistant.toolCalls[].id 计入、
-   * role=tool 消息的 toolCallId 配对清除，集合清零处即安全。
-   * 无 id 的调用对无法判定配对，按不悬空处理（宽松）。
-   *
-   * 每个候选标注 roundBoundary：msgs[c]?.role === 'user'（保留区从轮头
-   * 开始）。cutIndex = msgs.length（全精简）在尾部 pending 清零时同样安全。
-   *
-   * @returns {Array<{cutIndex: number, roundBoundary: boolean}>}
-   */
-  function safeCutCandidates(messages) {
-    var msgs = normalizeMessages(messages);
-    var candidates = [];
-    var pending = {};
-    var pendingCount = 0;
-    var push = function (cutIndex) {
-      var next = msgs[cutIndex];
-      candidates.push({
-        cutIndex: cutIndex,
-        roundBoundary: !!(next && typeof next === 'object' && next.role === 'user'),
-      });
-    };
-    push(0);
-    for (var i = 0; i < msgs.length; i++) {
-      var m = msgs[i];
-      if (!m || typeof m !== 'object') continue;
-      if (m.role === 'assistant' && Array.isArray(m.toolCalls)) {
-        for (var t = 0; t < m.toolCalls.length; t++) {
-          var tc = m.toolCalls[t];
-          if (tc && typeof tc.id === 'string' && tc.id && !pending[tc.id]) {
-            pending[tc.id] = true;
-            pendingCount += 1;
-          }
-        }
-      }
-      if (m.role === 'tool' && typeof m.toolCallId === 'string' && m.toolCallId && pending[m.toolCallId]) {
-        delete pending[m.toolCallId];
-        pendingCount -= 1;
-      }
-      if (pendingCount === 0) push(i + 1);
-    }
-    return candidates;
-  }
-
-  /**
-   * 引擎 deduplicateToolCallSummaries：同名摘要计数，>1 输出 "s ×N"。
-   */
-  function foldNoteLength(summaries) {
-    var counts = {};
-    var order = [];
-    for (var i = 0; i < summaries.length; i++) {
-      var s = summaries[i];
-      if (Object.prototype.hasOwnProperty.call(counts, s)) counts[s] += 1;
-      else { counts[s] = 1; order.push(s); }
-    }
-    var parts = [];
-    for (var j = 0; j < order.length; j++) {
-      parts.push(counts[order[j]] > 1 ? order[j] + ' ×' + counts[order[j]] : order[j]);
-    }
-    return FOLD_NOTE_PREFIX.length + parts.join('; ').length;
-  }
-
-  /**
-   * 精简区 [0, cutIndex) 的折叠残留估算（字符）。user 开启 call；下一条 user
-   * 结算摘要。assistant 正文与 system 消息不切断汇总；tool 结果不保留文本。
-   * 区尾 pending 按引擎行为结算。
-   */
-  function estimateFoldResidue(messages, cutIndex) {
-    var msgs = normalizeMessages(messages);
-    var end = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
-    var residue = 0;
-    var pendingSummaries = [];
-    var sawUserInput = false;
-    var flush = function () {
-      if (pendingSummaries.length === 0) return;
-      residue += foldNoteLength(pendingSummaries);
-      pendingSummaries = [];
-    };
-    for (var i = 0; i < end; i++) {
-      var m = msgs[i];
-      if (!m || typeof m !== 'object') continue;
-      var contentChars = typeof m.contentCharCount === 'number' ? m.contentCharCount : 0;
-      if (m.role === 'user') {
-        flush();
-        residue += contentChars;
-      } else if (m.role === 'assistant') {
-        var calls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
-        for (var t = 0; t < calls.length; t++) {
-          if (calls[t] && typeof calls[t].summary === 'string' && calls[t].summary) {
-            pendingSummaries.push(calls[t].summary);
-          }
-        }
-        residue += contentChars;
-      } else if (m.role === 'system') {
-        // System messages may occur within a call and do not close its tool summary.
-      }
-      // role='tool' 与空 role：引擎丢弃/折叠，不 flush、不贡献
-    }
-    flush();
-    return residue;
-  }
-
-  /**
-   * 任意切点（含非安全位，调用方 UI 侧约束）的精简后估算总长：
-   * 前言 + 残留([0,c)) + 保留区原样体积([c,n))。
-   */
-  function keptCharCount(messages, preambleCharCount, cutIndex) {
-    var msgs = normalizeMessages(messages);
-    var c = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
-    var kept = typeof preambleCharCount === 'number' && Number.isFinite(preambleCharCount)
-      ? preambleCharCount : 0;
-    kept += estimateFoldResidue(msgs, c);
-    for (var i = c; i < msgs.length; i++) {
-      kept += (msgs[i] && typeof msgs[i].charCount === 'number') ? msgs[i].charCount : 0;
-    }
-    return kept;
-  }
-
-  /**
-   * 切点有效性：保留区 [cutIndex, n) 内是否含 user / assistant 对话消息。
-   *
-   * 打断 / 任务提醒会在会话尾部注入 system 消息，其后（以及末尾）的安全
-   * 切点保留区只剩注入消息或为空——这类切点提交后末轮对话全部被折叠，
-   * 读数的 kept% 几乎全是折叠残留底量，掩盖保留区为空的事实（实测事故：
-   * preservedMsgRanges=[[277,277]] 仅保留一条任务状态提醒）。ratioToCut
-   * 的候选集与 trim 页提交守卫共用本判定。
-   */
-  function keepZoneHasDialogue(messages, cutIndex) {
-    var msgs = normalizeMessages(messages);
-    var c = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
-    for (var i = c; i < msgs.length; i++) {
-      var m = msgs[i];
-      if (m && (m.role === 'user' || m.role === 'assistant')) return true;
-    }
-    return false;
-  }
-
-  /**
-   * 比例 → 切点。预算 = ratio × 总长；在安全切点中找保留最多的满足者
-   * （cutIndex 最小的 kept(c) ≤ 预算），两级优先：
-   *   1) 轮边界候选中找——切线落轮头，语义干净；
-   *   2) 轮边界全超（单轮体量过大等）放宽到全部安全候选——切线入轮内。
-   *
-   * 候选有效性：保留区不含任何对话消息的切点（典型：尾部 system 注入
-   * 之后）先行剔除，不进帕累托——否则小预算下两级查找会退化到「全精简
-   * 附近」，保留区只剩注入消息。剔除后帕累托单调性不变（仍按 cutIndex
-   * 升序做严格递减过滤）。
-   *
-   * 帕累托过滤（单调保证）：kept(c) 随 c 增大总趋势递减，但折叠残留随
-   * 切割量增长，会催生「切得更多反而保留不减」的坏切点（典型：切过
-   * 微型工具对后新折叠注记反超其原样体积，切到轮头反而更长）。头→尾
-   * 扫描维护 runningMin，kept ≥ 已见最小保留的候选剔除，过滤后 kept
-   * 关于 cutIndex 严格递减，切点随比例增大单调上移；两级轮边界偏好不
-   * 变——被滤掉的轮头本来就是「切了不省」的无效切点，引擎真去切结果
-   * 反而更长。
-   *
-   * 连全精简（最小保留）都无法达标（前言占比过高）时返回最小保留候选并
-   * 标记 unmet；无任何有效候选（无对话消息的会话）返回 0（全保留）。
-   *
-   * @param {number} ratio 0..1
-   * @returns {{cutIndex: number, unmet: boolean}}
-   */
-  function ratioToCut(messages, preambleCharCount, ratio) {
-    var msgs = normalizeMessages(messages);
-    var total = totalCharCount(msgs, preambleCharCount);
-    var budget = Math.max(Math.min(ratio, 1), 0) * total;
-    var candidates = safeCutCandidates(msgs).filter(function (candidate) {
-      return keepZoneHasDialogue(msgs, candidate.cutIndex);
+/**
+ * 全部安全切点（升序）。切点 c 安全 ⇔ 精简区 [0, c) 内无悬空 tool_use——
+ * 扫描维护 pending 工具 id 集合：assistant.toolCalls[].id 计入、
+ * role=tool 消息的 toolCallId 配对清除，集合清零处即安全。
+ * 无 id 的调用对无法判定配对，按不悬空处理（宽松）。
+ *
+ * 每个候选标注 roundBoundary：msgs[c]?.role === 'user'（保留区从轮头
+ * 开始）。cutIndex = msgs.length（全精简）在尾部 pending 清零时同样安全。
+ *
+ * @returns {Array<{cutIndex: number, roundBoundary: boolean}>}
+ */
+export function safeCutCandidates(messages) {
+  var msgs = normalizeMessages(messages);
+  var candidates = [];
+  var pending = {};
+  var pendingCount = 0;
+  var push = function (cutIndex) {
+    var next = msgs[cutIndex];
+    candidates.push({
+      cutIndex: cutIndex,
+      roundBoundary: !!(next && typeof next === 'object' && next.role === 'user'),
     });
-    var keptByCut = {};
-    var keptFor = function (c) {
-      if (!Object.prototype.hasOwnProperty.call(keptByCut, c)) {
-        keptByCut[c] = keptCharCount(msgs, preambleCharCount, c);
-      }
-      return keptByCut[c];
-    };
-    var pareto = [];
-    var minKept = Infinity;
-    for (var k = 0; k < candidates.length; k++) {
-      var kept = keptFor(candidates[k].cutIndex);
-      if (kept < minKept) {
-        pareto.push({ cutIndex: candidates[k].cutIndex, roundBoundary: candidates[k].roundBoundary, kept: kept });
-        minKept = kept;
-      }
-    }
-    var i;
-    for (i = 0; i < pareto.length; i++) {
-      if (pareto[i].roundBoundary && pareto[i].kept <= budget) {
-        return { cutIndex: pareto[i].cutIndex, unmet: false };
-      }
-    }
-    for (i = 0; i < pareto.length; i++) {
-      if (pareto[i].kept <= budget) {
-        return { cutIndex: pareto[i].cutIndex, unmet: false };
-      }
-    }
-    return { cutIndex: pareto.length > 0 ? pareto[pareto.length - 1].cutIndex : 0, unmet: true };
-  }
-
-  /**
-   * 切点 → 实际保留比例（0..1）。点击消息「设为切点」后反写滑动条数值用。
-   */
-  function cutToRatio(messages, preambleCharCount, cutIndex) {
-    var total = totalCharCount(messages, preambleCharCount);
-    if (total <= 0) return 0;
-    return keptCharCount(messages, preambleCharCount, cutIndex) / total;
-  }
-
-  /**
-   * 读数块数据：保留/释放比例、保留消息数、估算字符（右栏实时展示）。
-   */
-  function computeReadout(messages, preambleCharCount, cutIndex) {
-    var msgs = normalizeMessages(messages);
-    var c = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
-    var total = totalCharCount(msgs, preambleCharCount);
-    var kept = keptCharCount(msgs, preambleCharCount, c);
-    return {
-      totalCharCount: total,
-      keptCharCount: kept,
-      keptPercent: total > 0 ? kept / total : 0,
-      releasedPercent: total > 0 ? 1 - kept / total : 0,
-      keptMessageCount: msgs.length - c,
-      foldedMessageCount: c,
-    };
-  }
-
-  var api = {
-    safeCutCandidates: safeCutCandidates,
-    keepZoneHasDialogue: keepZoneHasDialogue,
-    estimateFoldResidue: estimateFoldResidue,
-    keptCharCount: keptCharCount,
-    ratioToCut: ratioToCut,
-    cutToRatio: cutToRatio,
-    computeReadout: computeReadout,
   };
-  if (typeof window !== 'undefined') window.TrimRatioCore = api;
-})();
+  push(0);
+  for (var i = 0; i < msgs.length; i++) {
+    var m = msgs[i];
+    if (!m || typeof m !== 'object') continue;
+    if (m.role === 'assistant' && Array.isArray(m.toolCalls)) {
+      for (var t = 0; t < m.toolCalls.length; t++) {
+        var tc = m.toolCalls[t];
+        if (tc && typeof tc.id === 'string' && tc.id && !pending[tc.id]) {
+          pending[tc.id] = true;
+          pendingCount += 1;
+        }
+      }
+    }
+    if (m.role === 'tool' && typeof m.toolCallId === 'string' && m.toolCallId && pending[m.toolCallId]) {
+      delete pending[m.toolCallId];
+      pendingCount -= 1;
+    }
+    if (pendingCount === 0) push(i + 1);
+  }
+  return candidates;
+}
+
+/**
+ * 引擎 deduplicateToolCallSummaries：同名摘要计数，>1 输出 "s ×N"。
+ */
+function foldNoteLength(summaries) {
+  var counts = {};
+  var order = [];
+  for (var i = 0; i < summaries.length; i++) {
+    var s = summaries[i];
+    if (Object.prototype.hasOwnProperty.call(counts, s)) counts[s] += 1;
+    else { counts[s] = 1; order.push(s); }
+  }
+  var parts = [];
+  for (var j = 0; j < order.length; j++) {
+    parts.push(counts[order[j]] > 1 ? order[j] + ' ×' + counts[order[j]] : order[j]);
+  }
+  return FOLD_NOTE_PREFIX.length + parts.join('; ').length;
+}
+
+/**
+ * 精简区 [0, cutIndex) 的折叠残留估算（字符）。user 开启 call；下一条 user
+ * 结算摘要。assistant 正文与 system 消息不切断汇总；tool 结果不保留文本。
+ * 区尾 pending 按引擎行为结算。
+ */
+export function estimateFoldResidue(messages, cutIndex) {
+  var msgs = normalizeMessages(messages);
+  var end = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
+  var residue = 0;
+  var pendingSummaries = [];
+  var sawUserInput = false;
+  var flush = function () {
+    if (pendingSummaries.length === 0) return;
+    residue += foldNoteLength(pendingSummaries);
+    pendingSummaries = [];
+  };
+  for (var i = 0; i < end; i++) {
+    var m = msgs[i];
+    if (!m || typeof m !== 'object') continue;
+    var contentChars = typeof m.contentCharCount === 'number' ? m.contentCharCount : 0;
+    if (m.role === 'user') {
+      flush();
+      residue += contentChars;
+    } else if (m.role === 'assistant') {
+      var calls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+      for (var t = 0; t < calls.length; t++) {
+        if (calls[t] && typeof calls[t].summary === 'string' && calls[t].summary) {
+          pendingSummaries.push(calls[t].summary);
+        }
+      }
+      residue += contentChars;
+    } else if (m.role === 'system') {
+      // System messages may occur within a call and do not close its tool summary.
+    }
+    // role='tool' 与空 role：引擎丢弃/折叠，不 flush、不贡献
+  }
+  flush();
+  return residue;
+}
+
+/**
+ * 任意切点（含非安全位，调用方 UI 侧约束）的精简后估算总长：
+ * 前言 + 残留([0,c)) + 保留区原样体积([c,n))。
+ */
+export function keptCharCount(messages, preambleCharCount, cutIndex) {
+  var msgs = normalizeMessages(messages);
+  var c = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
+  var kept = typeof preambleCharCount === 'number' && Number.isFinite(preambleCharCount)
+    ? preambleCharCount : 0;
+  kept += estimateFoldResidue(msgs, c);
+  for (var i = c; i < msgs.length; i++) {
+    kept += (msgs[i] && typeof msgs[i].charCount === 'number') ? msgs[i].charCount : 0;
+  }
+  return kept;
+}
+
+/**
+ * 切点有效性：保留区 [cutIndex, n) 内是否含 user / assistant 对话消息。
+ *
+ * 打断 / 任务提醒会在会话尾部注入 system 消息，其后（以及末尾）的安全
+ * 切点保留区只剩注入消息或为空——这类切点提交后末轮对话全部被折叠，
+ * 读数的 kept% 几乎全是折叠残留底量，掩盖保留区为空的事实（实测事故：
+ * preservedMsgRanges=[[277,277]] 仅保留一条任务状态提醒）。ratioToCut
+ * 的候选集与 trim 页提交守卫共用本判定。
+ */
+export function keepZoneHasDialogue(messages, cutIndex) {
+  var msgs = normalizeMessages(messages);
+  var c = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
+  for (var i = c; i < msgs.length; i++) {
+    var m = msgs[i];
+    if (m && (m.role === 'user' || m.role === 'assistant')) return true;
+  }
+  return false;
+}
+
+/**
+ * 比例 → 切点。预算 = ratio × 总长；在安全切点中找保留最多的满足者
+ * （cutIndex 最小的 kept(c) ≤ 预算），两级优先：
+ *   1) 轮边界候选中找——切线落轮头，语义干净；
+ *   2) 轮边界全超（单轮体量过大等）放宽到全部安全候选——切线入轮内。
+ *
+ * 候选有效性：保留区不含任何对话消息的切点（典型：尾部 system 注入
+ * 之后）先行剔除，不进帕累托——否则小预算下两级查找会退化到「全精简
+ * 附近」，保留区只剩注入消息。剔除后帕累托单调性不变（仍按 cutIndex
+ * 升序做严格递减过滤）。
+ *
+ * 帕累托过滤（单调保证）：kept(c) 随 c 增大总趋势递减，但折叠残留随
+ * 切割量增长，会催生「切得更多反而保留不减」的坏切点（典型：切过
+ * 微型工具对后新折叠注记反超其原样体积，切到轮头反而更长）。头→尾
+ * 扫描维护 runningMin，kept ≥ 已见最小保留的候选剔除，过滤后 kept
+ * 关于 cutIndex 严格递减，切点随比例增大单调上移；两级轮边界偏好不
+ * 变——被滤掉的轮头本来就是「切了不省」的无效切点，引擎真去切结果
+ * 反而更长。
+ *
+ * 连全精简（最小保留）都无法达标（前言占比过高）时返回最小保留候选并
+ * 标记 unmet；无任何有效候选（无对话消息的会话）返回 0（全保留）。
+ *
+ * @param {number} ratio 0..1
+ * @returns {{cutIndex: number, unmet: boolean}}
+ */
+export function ratioToCut(messages, preambleCharCount, ratio) {
+  var msgs = normalizeMessages(messages);
+  var total = totalCharCount(msgs, preambleCharCount);
+  var budget = Math.max(Math.min(ratio, 1), 0) * total;
+  var candidates = safeCutCandidates(msgs).filter(function (candidate) {
+    return keepZoneHasDialogue(msgs, candidate.cutIndex);
+  });
+  var keptByCut = {};
+  var keptFor = function (c) {
+    if (!Object.prototype.hasOwnProperty.call(keptByCut, c)) {
+      keptByCut[c] = keptCharCount(msgs, preambleCharCount, c);
+    }
+    return keptByCut[c];
+  };
+  var pareto = [];
+  var minKept = Infinity;
+  for (var k = 0; k < candidates.length; k++) {
+    var kept = keptFor(candidates[k].cutIndex);
+    if (kept < minKept) {
+      pareto.push({ cutIndex: candidates[k].cutIndex, roundBoundary: candidates[k].roundBoundary, kept: kept });
+      minKept = kept;
+    }
+  }
+  var i;
+  for (i = 0; i < pareto.length; i++) {
+    if (pareto[i].roundBoundary && pareto[i].kept <= budget) {
+      return { cutIndex: pareto[i].cutIndex, unmet: false };
+    }
+  }
+  for (i = 0; i < pareto.length; i++) {
+    if (pareto[i].kept <= budget) {
+      return { cutIndex: pareto[i].cutIndex, unmet: false };
+    }
+  }
+  return { cutIndex: pareto.length > 0 ? pareto[pareto.length - 1].cutIndex : 0, unmet: true };
+}
+
+/**
+ * 切点 → 实际保留比例（0..1）。点击消息「设为切点」后反写滑动条数值用。
+ */
+export function cutToRatio(messages, preambleCharCount, cutIndex) {
+  var total = totalCharCount(messages, preambleCharCount);
+  if (total <= 0) return 0;
+  return keptCharCount(messages, preambleCharCount, cutIndex) / total;
+}
+
+/**
+ * 读数块数据：保留/释放比例、保留消息数、估算字符（右栏实时展示）。
+ */
+export function computeReadout(messages, preambleCharCount, cutIndex) {
+  var msgs = normalizeMessages(messages);
+  var c = Math.min(Math.max(Math.floor(cutIndex) || 0, 0), msgs.length);
+  var total = totalCharCount(msgs, preambleCharCount);
+  var kept = keptCharCount(msgs, preambleCharCount, c);
+  return {
+    totalCharCount: total,
+    keptCharCount: kept,
+    keptPercent: total > 0 ? kept / total : 0,
+    releasedPercent: total > 0 ? 1 - kept / total : 0,
+    keptMessageCount: msgs.length - c,
+    foldedMessageCount: c,
+  };
+}
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// classic 消费方 trim-page.js 经 window.TrimRatioCore.* 调用（渲染/交互函数内，
+// 无 classic 相触达）；精简域收敛时撤桥。
+const TrimRatioCore = {
+  safeCutCandidates: safeCutCandidates,
+  keepZoneHasDialogue: keepZoneHasDialogue,
+  estimateFoldResidue: estimateFoldResidue,
+  keptCharCount: keptCharCount,
+  ratioToCut: ratioToCut,
+  cutToRatio: cutToRatio,
+  computeReadout: computeReadout,
+};
+window.KernelState.defineKey('trim-ratio-core', 'TrimRatioCore', TrimRatioCore);
+window.KernelState.claim('trim-ratio-core', {
+  get: (key) => TrimRatioCore[key],
+  set: (key, value) => { TrimRatioCore[key] = value; },
+});

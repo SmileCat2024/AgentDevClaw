@@ -2850,16 +2850,6 @@
       "watchdogDecide"
     ]
   },
-  "public/src/modules/stream-draft-logic.js": {
-    "state": [
-      "STREAM_PUNCT_CHARS"
-    ],
-    "behavior": [
-      "planStreamDraftCancel",
-      "planStreamDraftMutation",
-      "streamCommonPrefixLen"
-    ]
-  },
   "public/src/modules/template-engine.js": {
     "state": [
       "MAX_HIGHLIGHT_LINES",
@@ -3042,12 +3032,6 @@
       "submitTrimPage",
       "updateReadout",
       "updateSubmitLabel"
-    ]
-  },
-  "public/src/modules/trim-ratio-core.js": {
-    "state": [],
-    "behavior": [
-      "TrimRatioCore"
     ]
   },
   "public/src/modules/usage-info-overlay.js": {
