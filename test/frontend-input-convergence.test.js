@@ -333,7 +333,17 @@ function createSseGraphHostStubs({ container, pollState } = {}) {
     createP2BootstrapDomHost: () => ({ container }),
     // 其余 P2 bootstrap 适配 seam：本文件不驱动这些域的路径
     createP2BootstrapSessionSwitchHost: () => ({}),
-    createP2BootstrapChatSurfaceHost: () => ({}),
+    // 聊天表面状态宿主（生产由 app-core 提供）：输入面渲染器的视口声明读
+    // 跟随开关与滚动抑制标志，成对转发到沙箱全局（原 classic 裸标识符同源）。
+    // 宿主工厂在用例体被调用时，globalThis.window 已是本 case 的沙箱。
+    createP2BootstrapChatSurfaceHost: () => ({
+      get followLatestEnabled() { return window.followLatestEnabled; },
+      set followLatestEnabled(value) { window.followLatestEnabled = value; },
+      get suppressFollowScrollEvent() { return window.suppressFollowScrollEvent; },
+      set suppressFollowScrollEvent(value) { window.suppressFollowScrollEvent = value; },
+      get showChatProcess() { return window.showChatProcess; },
+      set showChatProcess(value) { window.showChatProcess = value; },
+    }),
     createP2BootstrapSidebarHost: () => ({}),
     // SSE / 列表快照 / 元数据提交等已迁 ESM 域的装载期宿主 seam（生产分别由
     // sidebar-render / session-view-state / app-main 交出）：本文件不驱动这些域。
@@ -565,8 +575,7 @@ function convergenceCaseOptions() {
         sandbox.run(persistentSource.slice(rpStart, rpEnd));
         sandbox.run(persistentSource.slice(rebindStart, rebindEnd));
         sandbox.run(persistentSource.slice(guardStart, guardEnd));
-        sandbox.loadSource('public/src/modules/rollback-dialog.js');
-        sandbox.loadSource('public/src/modules/input-render.js');
+        // rollback-dialog / input-render 已迁 ESM（P4 T2）：改由用例体真实 import。
         sandbox.createRuntimeViewCacheHost = () => ({ cache: new Map(), capacity: 0 });
         sandbox.createRuntimeSwitchHost = () => ({ state: {} });
         sandbox.createCompactResumeHost = () => ({});
@@ -660,6 +669,12 @@ function it(name, body) {
       const orchestration = await c.load('public/src/modules/orchestration-state.js');
       orchestration.setCurrentRuntimeAgentId('agent-1');
       assert.equal(c.read('currentRuntimeAgentId'), 'agent-1', '焦点 runtime 经真实 setter 生效');
+      // 输入面渲染器已迁 ESM（P4 T2）：回退 / 压缩域注册壳先求值（状态键窗口
+      // 访问器 + owner claim），再真实 import 渲染入口；入口注入沙箱后，用例的
+      // 经典驱动面 ctx.run('renderInputRequests(...)') 与生产入口名保持一致。
+      await c.load('public/src/modules/rollback-dialog.js');
+      const inputRender = await c.load('public/src/modules/input-render.js');
+      c.expose('renderInputRequests', inputRender.renderInputRequests);
       // agent-data-loader 的 host 工厂（session-data-loader / runtime-status-loader seam）
       await c.load('public/src/modules/agent-data-loader.js');
       // 排队气泡投影域（P2 W2-3a 已迁出 persistent-input）：气泡渲染与后端队列

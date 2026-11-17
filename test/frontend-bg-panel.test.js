@@ -1,8 +1,23 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+
+/**
+ * 后台任务面板（P4 L3 已迁 ESM）：真实 import 路线。
+ *
+ * 一个用例 = 一份 classic 沙箱（内核桥 + 面板注册表宿主 claw-host + 本模块
+ * 晚绑定的 classic 依赖）+ 一张真实 ESM 图。classic 相按生产顺序只装必要面：
+ *   - claw-host：`window.ClawHost.panels` 注册表宿主（模块求值期自注册）；
+ *   - getRuntimeWorkspaceSessionId / getActiveWorkspaceSessionId：app-core 的
+ *     classic 实现，用例按会话切换改返回值（模块经 window 晚绑定取用）；
+ *   - getElementById / addEventListener / setInterval / CSS / fetch / EventSource：
+ *     真实浏览器的必备面，按行为记账（徽标、委托、计时器、请求面）。
+ * 寻址状态（currentRuntimeAgentId / focusedAgentId / activeFeaturePanel）由各自
+ * ESM owner 的 setter 预置——模块直接 import 活绑定，不再有同名的 classic 初值。
+ *
+ * 断言面：`window.BgPanel`（兼容桥键，与生产消费方 agent-data-loader 同一取法）
+ * 的公开方法与 `__test*` 观察面。
+ */
 
 class MockEventSource {
   constructor(url) {
@@ -15,7 +30,16 @@ class MockEventSource {
   close() { this.closed = true; }
 }
 
-function harness({ listChannels } = {}) {
+const BG_PANEL = 'public/src/modules/bg-panel.js';
+const ORCHESTRATION = 'public/src/modules/orchestration-state.js';
+const AGENT_STORE = 'public/src/modules/agent-store-state.js';
+const RENDER_ENTRY = 'public/src/modules/render-entry-state.js';
+
+/**
+ * 建一次面板用例：classic 桩面 + 真实模块图，断言在 `fn(h)` 内完成
+ * （case 结束时全局、计时器与注册面统一回收）。
+ */
+async function withBgCase({ listChannels } = {}, fn) {
   const requests = [];
   const pending = [];
   const clicks = [];
@@ -26,41 +50,63 @@ function harness({ listChannels } = {}) {
   }
   const root = { querySelectorAll: () => [], querySelector: () => null, cloneNode: () => ({ innerHTML: '', querySelectorAll: () => [] }), replaceWith() {} };
   const badge = { textContent: '', classList: { add() {}, remove() {} } };
-  const ctx = createFrontendSandbox({
-    EventSource: MockEventSource,
-    Element: TestElement,
-    URLSearchParams,
-    activeFeaturePanel: 'bg',
-    focusedAgentId: 'programming-helper',
-    currentRuntimeAgentId: 'runtime-1',
-    getRuntimeWorkspaceSessionId: () => 'session-a',
-    getActiveWorkspaceSessionId: () => 'session-a',
-    fetch: async (_url, options) => {
-      const body = JSON.parse(options.body);
-      requests.push(body);
-      return new Promise(resolve => pending.push(value => resolve({ ok: true, json: async () => ({ result: value }) })));
-    },
-  });
-  ctx.document.getElementById = id => id === 'bg-panel-root' ? root : badge;
-  ctx.document.addEventListener = (type, callback) => { if (type === 'click') clicks.push(callback); };
-  // 能力发现桩（7a63bbd 起 refreshBadge / 面板订阅先查 channels 列表再发
-  // RPC）：声明 shell-bg 通道，让徽标与面板路径走到真实的 count/list 请求。
-  ctx.window.ClawFeatureCommunication = {
-    listChannels: listChannels ?? (async () => [{ featureId: 'shell', channelId: 'shell-bg', presentation: { panel: 'background', protocol: 'claw.background.process', version: 1 } }]),
-  };
   const timers = new Set();
-  ctx.setInterval = (callback, delay) => { const id = { callback, delay }; timers.add(id); return id; };
-  ctx.clearInterval = id => timers.delete(id);
-  ctx.CSS = ctx.window.CSS = { escape: value => value };
-  const source = fs.readFileSync(new URL('../public/src/modules/bg-panel.js', import.meta.url), 'utf8');
-  // claw-host 前置：bg-panel.js 顶层经 ClawHost.panels 自注册（真实生产顺序第一位）
-  ctx.loadSource('public/src/modules/claw-host.js');
-  vm.runInContext(source.replace('window.BgPanel = {', 'window.BgPanel = { __testStreams: () => [...channels.values()].map(channel => channel.stream).filter(Boolean), __testSource: () => source, __testTasks: () => tasks,'), ctx);
-  const stream = () => ctx.window.BgPanel.__testSource();
-  const ids = () => [...ctx.window.BgPanel.__testTasks().values()].map(task => task.taskId);
-  const task = id => [...ctx.window.BgPanel.__testTasks().values()].find(task => task.taskId === id);
-  return { ctx, requests, pending, source: stream, ids, task, timers, badge,
-    click: (action, id) => clicks.forEach(callback => callback({ target: new TestElement(action, id) })) };
+  let sessionId = 'session-a';
+
+  return withP2EsmCase({
+    globals: {
+      Element: TestElement,
+      EventSource: MockEventSource,
+      fetch: async (_url, options) => {
+        const body = JSON.parse(options.body);
+        requests.push(body);
+        return new Promise(resolve => pending.push(value => resolve({ ok: true, json: async () => ({ result: value }) })));
+      },
+    },
+    classic: (sandbox) => {
+      sandbox.document.getElementById = id => id === 'bg-panel-root' ? root : badge;
+      sandbox.document.addEventListener = (type, callback) => { if (type === 'click') clicks.push(callback); };
+      // 能力发现桩（7a63bbd 起 refreshBadge / 面板订阅先查 channels 列表再发
+      // RPC）：声明 shell-bg 通道，让徽标与面板路径走到真实的 count/list 请求。
+      sandbox.window.ClawFeatureCommunication = {
+        listChannels: listChannels ?? (async () => [{ featureId: 'shell', channelId: 'shell-bg', presentation: { panel: 'background', protocol: 'claw.background.process', version: 1 } }]),
+      };
+      // 会话寻址：app-core 的 classic 实现（模块经 window. 晚绑定调用）。
+      sandbox.getRuntimeWorkspaceSessionId = () => sessionId;
+      sandbox.getActiveWorkspaceSessionId = () => sessionId;
+      sandbox.setInterval = (callback, delay) => { const id = { callback, delay }; timers.add(id); return id; };
+      sandbox.clearInterval = id => timers.delete(id);
+      sandbox.CSS = { escape: value => value };
+      // claw-host 前置：bg-panel.js 顶层经 ClawHost.panels 自注册（真实生产顺序第一位）
+      sandbox.loadSource('public/src/modules/claw-host.js');
+    },
+  }, async (c) => {
+    const orchestration = await c.load(ORCHESTRATION);
+    orchestration.setCurrentRuntimeAgentId('runtime-1');
+    const agentStore = await c.load(AGENT_STORE);
+    agentStore.setFocusedAgentId('programming-helper');
+    const renderEntry = await c.load(RENDER_ENTRY);
+    renderEntry.setActiveFeaturePanel('bg');
+
+    await c.load(BG_PANEL);
+    const panel = c.window.BgPanel;
+    assert.equal(typeof panel.getHtml, 'function', '模块求值后兼容桥键 BgPanel 可用');
+
+    return fn({
+      ctx: c.window,
+      panel,
+      requests,
+      pending,
+      timers,
+      badge,
+      source: () => panel.__testStreams()[0] ?? null,
+      ids: () => [...panel.__testTasks().values()].map(task => task.taskId),
+      task: id => [...panel.__testTasks().values()].find(task => task.taskId === id),
+      click: (action, id) => clicks.forEach(callback => callback({ target: new TestElement(action, id) })),
+      setSession: (value) => { sessionId = value; },
+      setRuntime: (value) => orchestration.setCurrentRuntimeAgentId(value),
+    });
+  });
 }
 
 const output = (id, status, tail) => ({ type: 'output', data: { id, status, startedAt: 1, command: 'bash', outputTail: tail } });
@@ -78,425 +124,453 @@ describe('background task panel', () => {
     ['cancelled', '已中断', false], ['blocked', '需介入', false], ['monitor_lost', '监视失联（非业务失败）', false],
   ]) {
     it(`M9-UI-STATES M9-PANEL-FAIL: ${status} renders its status and badge without process controls`, async () => {
-      const h = harness({ listChannels: async () => [agentChannel] });
-      h.ctx.window.BgPanel.onOpen();
-      await flush();
-      h.source().emit('open');
-      h.pending.shift()({ ok: true, tasks: [agentTask(status)] });
-      await flush();
-      const html = h.ctx.window.BgPanel.getHtml();
-      assert.match(html, new RegExp(`bgp-dot-${status}`));
-      assert.ok(html.includes(label));
-      assert.doesNotMatch(html, /data-bgp-kill=|data-bgp-report=/);
-      assert.equal(h.badge.textContent, active ? '1' : '');
-      const before = h.requests.length;
-      const key = [...h.ctx.window.BgPanel.__testTasks().keys()][0];
-      h.click('kill', key);
-      h.click('report', key);
-      assert.equal(h.requests.length, before);
-      h.ctx.window.BgPanel.onClose();
+      await withBgCase({ listChannels: async () => [agentChannel] }, async (h) => {
+        h.panel.onOpen();
+        await flush();
+        h.source().emit('open');
+        h.pending.shift()({ ok: true, tasks: [agentTask(status)] });
+        await flush();
+        const html = h.panel.getHtml();
+        assert.match(html, new RegExp(`bgp-dot-${status}`));
+        assert.ok(html.includes(label));
+        assert.doesNotMatch(html, /data-bgp-kill=|data-bgp-report=/);
+        assert.equal(h.badge.textContent, active ? '1' : '');
+        const before = h.requests.length;
+        const key = [...h.panel.__testTasks().keys()][0];
+        h.click('kill', key);
+        h.click('report', key);
+        assert.equal(h.requests.length, before);
+        h.panel.onClose();
+      });
     });
   }
 
   it('M9-UI-ORDER: rebuilt observation supersedes lost card; delayed event/list never roll it back', async () => {
-    const h = harness({ listChannels: async () => [agentChannel] });
-    h.ctx.window.BgPanel.onOpen();
-    await flush();
-    const stream = h.source();
-    stream.emit('open');
-    h.pending.shift()({ ok: true, tasks: [agentTask('monitor_lost', 4)] });
-    await flush();
-    stream.emit('resync');
-    stream.emit('event', { type: 'updated', data: agentTask('executing', 5) });
-    h.pending.shift()({ ok: true, tasks: [agentTask('monitor_lost', 4)] });
-    await flush();
-    stream.emit('event', { type: 'updated', data: agentTask('monitor_lost', 4) });
-    assert.equal(h.task('wt/cmd').status, 'executing');
-    assert.equal(h.badge.textContent, '1');
-    stream.emit('event', { type: 'updated', data: agentTask('completed', 6) });
-    stream.emit('event', { type: 'updated', data: agentTask('completed', 6) });
-    assert.equal(h.task('wt/cmd').status, 'completed');
-    assert.equal(h.ids().length, 1);
-    assert.equal(h.badge.textContent, '');
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({ listChannels: async () => [agentChannel] }, async (h) => {
+      h.panel.onOpen();
+      await flush();
+      const stream = h.source();
+      stream.emit('open');
+      h.pending.shift()({ ok: true, tasks: [agentTask('monitor_lost', 4)] });
+      await flush();
+      stream.emit('resync');
+      stream.emit('event', { type: 'updated', data: agentTask('executing', 5) });
+      h.pending.shift()({ ok: true, tasks: [agentTask('monitor_lost', 4)] });
+      await flush();
+      stream.emit('event', { type: 'updated', data: agentTask('monitor_lost', 4) });
+      assert.equal(h.task('wt/cmd').status, 'executing');
+      assert.equal(h.badge.textContent, '1');
+      stream.emit('event', { type: 'updated', data: agentTask('completed', 6) });
+      stream.emit('event', { type: 'updated', data: agentTask('completed', 6) });
+      assert.equal(h.task('wt/cmd').status, 'completed');
+      assert.equal(h.ids().length, 1);
+      assert.equal(h.badge.textContent, '');
+      h.panel.onClose();
+    });
   });
 
   it('M9-UI-ISOLATION: disconnect does not change execution; reconnect/list and source retirement reconcile', async () => {
     let declared = true;
-    const h = harness({ listChannels: async () => declared ? [agentChannel] : [] });
-    h.ctx.window.BgPanel.onOpen();
-    await flush();
-    const stream = h.source();
-    stream.emit('open');
-    h.pending.shift()({ ok: true, tasks: [agentTask('executing')] });
-    await flush();
-    stream.emit('error');
-    assert.equal(h.task('wt/cmd').status, 'executing');
-    assert.match(h.ctx.window.BgPanel.getHtml(), /disconnected/);
-    stream.emit('open');
-    h.pending.shift()({ ok: true, tasks: [agentTask('completed', 2)] });
-    await flush();
-    h.ctx.window.BgPanel.onClose();
-    await flush();
-    assert.equal(stream.closed, false);
-    h.ctx.window.BgPanel.onOpen();
-    assert.match(h.ctx.window.BgPanel.getHtml(), /完成/);
-    await flush();
-    declared = false;
-    h.ctx.window.BgPanel.refreshBadge();
-    await flush();
-    assert.deepEqual(h.ids(), []);
-    stream.emit('event', { type: 'updated', data: agentTask('executing', 3) });
-    assert.deepEqual(h.ids(), []);
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({ listChannels: async () => declared ? [agentChannel] : [] }, async (h) => {
+      h.panel.onOpen();
+      await flush();
+      const stream = h.source();
+      stream.emit('open');
+      h.pending.shift()({ ok: true, tasks: [agentTask('executing')] });
+      await flush();
+      stream.emit('error');
+      assert.equal(h.task('wt/cmd').status, 'executing');
+      assert.match(h.panel.getHtml(), /disconnected/);
+      stream.emit('open');
+      h.pending.shift()({ ok: true, tasks: [agentTask('completed', 2)] });
+      await flush();
+      h.panel.onClose();
+      await flush();
+      assert.equal(stream.closed, false);
+      h.panel.onOpen();
+      assert.match(h.panel.getHtml(), /完成/);
+      await flush();
+      declared = false;
+      h.panel.refreshBadge();
+      await flush();
+      assert.deepEqual(h.ids(), []);
+      stream.emit('event', { type: 'updated', data: agentTask('executing', 3) });
+      assert.deepEqual(h.ids(), []);
+      h.panel.onClose();
+    });
   });
 
   it('M9-UI-ISOLATION: previous-session agent event and list cannot populate a new session', async () => {
-    const h = harness({ listChannels: async () => [agentChannel] });
-    h.ctx.window.BgPanel.onOpen();
-    await flush();
-    const old = h.source();
-    old.emit('open');
-    h.ctx.getRuntimeWorkspaceSessionId = () => 'session-b';
-    h.ctx.currentRuntimeAgentId = 'runtime-b';
-    h.ctx.window.BgPanel.onOpen();
-    await flush();
-    old.emit('event', { type: 'updated', data: agentTask('monitor_lost') });
-    h.pending.shift()({ ok: true, tasks: [agentTask('monitor_lost')] });
-    await flush();
-    assert.deepEqual(h.ids(), []);
-    h.source().emit('open');
-    h.pending.shift()({ ok: true, tasks: [agentTask('executing')] });
-    await flush();
-    assert.equal(h.task('wt/cmd').status, 'executing');
-    assert.equal(h.badge.textContent, '1');
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({ listChannels: async () => [agentChannel] }, async (h) => {
+      h.panel.onOpen();
+      await flush();
+      const old = h.source();
+      old.emit('open');
+      h.setSession('session-b');
+      h.setRuntime('runtime-b');
+      h.panel.onOpen();
+      await flush();
+      old.emit('event', { type: 'updated', data: agentTask('monitor_lost') });
+      h.pending.shift()({ ok: true, tasks: [agentTask('monitor_lost')] });
+      await flush();
+      assert.deepEqual(h.ids(), []);
+      h.source().emit('open');
+      h.pending.shift()({ ok: true, tasks: [agentTask('executing')] });
+      await flush();
+      assert.equal(h.task('wt/cmd').status, 'executing');
+      assert.equal(h.badge.textContent, '1');
+      h.panel.onClose();
+    });
   });
+
   it('aggregates same-ID process sources and read-only agents by declared protocol', async () => {
-    const h = harness({ listChannels: async () => [
+    await withBgCase({ listChannels: async () => [
       { featureId: 'bash-other', channelId: 'jobs', presentation: { panel: 'background', protocol: 'claw.background.process', version: 1 } },
       { featureId: 'pwsh', channelId: 'jobs', presentation: { panel: 'background', protocol: 'claw.background.process', version: 1 } },
       { featureId: 'dispatch', channelId: 'runs', presentation: { panel: 'background', protocol: 'claw.background.agent', version: 1 } },
       { featureId: 'future', channelId: 'jobs', presentation: { panel: 'background', protocol: 'unknown', version: 9 } },
-    ] });
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve));
-    const streams = h.ctx.window.BgPanel.__testStreams();
-    assert.equal(streams.length, 3);
-    streams.forEach(stream => stream.emit('open'));
-    h.pending.shift()({ ok: true, tasks: [{ id: 'same', status: 'running', command: 'bash' }] });
-    h.pending.shift()({ ok: true, tasks: [{ id: 'same', status: 'running', command: 'pwsh' }] });
-    h.pending.shift()({ ok: true, tasks: [{ id: 'same', status: 'suspended', title: 'Agent work', threadId: 'wt', commandId: 'cmd', summary: 'Waiting' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    const html = h.ctx.window.BgPanel.getHtml();
-    assert.equal((html.match(/data-bgp-task=/g) || []).length, 3);
-    assert.equal((html.match(/data-bgp-kill=/g) || []).length, 2);
-    assert.match(html, /Agent work/);
-    assert.match(html, /不支持|Unsupported/);
-    assert.equal(h.badge.textContent, '3');
-    const keys = [...h.ctx.window.BgPanel.__testTasks().keys()];
-    h.click('kill', keys[1]);
-    assert.equal(h.requests.at(-1).featureId, 'pwsh');
-    assert.equal(h.requests.at(-1).channelId, 'jobs');
-    assert.equal(h.requests.at(-1).payload.taskId, 'same');
-    h.pending.shift()({ ok: true });
-    h.click('report', keys[0]);
-    assert.equal(h.requests.at(-1).featureId, 'bash-other');
-    h.pending.shift()({ ok: false });
-    const before = h.requests.length;
-    h.click('kill', keys[2]);
-    h.click('report', keys[2]);
-    assert.equal(h.requests.length, before);
-    await new Promise(resolve => setImmediate(resolve));
-    h.ctx.window.BgPanel.onClose();
+    ] }, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve));
+      const streams = h.panel.__testStreams();
+      assert.equal(streams.length, 3);
+      streams.forEach(stream => stream.emit('open'));
+      h.pending.shift()({ ok: true, tasks: [{ id: 'same', status: 'running', command: 'bash' }] });
+      h.pending.shift()({ ok: true, tasks: [{ id: 'same', status: 'running', command: 'pwsh' }] });
+      h.pending.shift()({ ok: true, tasks: [{ id: 'same', status: 'suspended', title: 'Agent work', threadId: 'wt', commandId: 'cmd', summary: 'Waiting' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      const html = h.panel.getHtml();
+      assert.equal((html.match(/data-bgp-task=/g) || []).length, 3);
+      assert.equal((html.match(/data-bgp-kill=/g) || []).length, 2);
+      assert.match(html, /Agent work/);
+      assert.match(html, /不支持|Unsupported/);
+      assert.equal(h.badge.textContent, '3');
+      const keys = [...h.panel.__testTasks().keys()];
+      h.click('kill', keys[1]);
+      assert.equal(h.requests.at(-1).featureId, 'pwsh');
+      assert.equal(h.requests.at(-1).channelId, 'jobs');
+      assert.equal(h.requests.at(-1).payload.taskId, 'same');
+      h.pending.shift()({ ok: true });
+      h.click('report', keys[0]);
+      assert.equal(h.requests.at(-1).featureId, 'bash-other');
+      h.pending.shift()({ ok: false });
+      const before = h.requests.length;
+      h.click('kill', keys[2]);
+      h.click('report', keys[2]);
+      assert.equal(h.requests.length, before);
+      await new Promise(resolve => setImmediate(resolve));
+      h.panel.onClose();
+    });
   });
+
   it('handles unknown versions, empty/error discovery, disconnect and late badge baselines', async () => {
-    const version = harness({ listChannels: async () => [{ featureId: 'future', channelId: 'jobs',
-      presentation: { panel: 'background', protocol: 'claw.background.process', version: 2 } }] });
-    version.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(version.ctx.window.BgPanel.__testStreams().length, 0);
-    assert.match(version.ctx.window.BgPanel.getHtml(), /process@2/);
-    const empty = harness({ listChannels: async () => [] });
-    empty.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(empty.source(), null);
-    const error = harness({ listChannels: async () => { throw new Error('offline'); } });
-    error.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve));
-    assert.match(error.ctx.window.BgPanel.getHtml(), /发现失败/);
-    const h = harness();
-    h.ctx.window.BgPanel.refreshBadge();
-    await new Promise(resolve => setImmediate(resolve));
-    const stream = h.source();
-    stream.emit('open');
-    stream.emit('event', output('bg', 'done', 'new'));
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg', status: 'running', outputTail: 'old' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(h.task('bg').status, 'done');
-    assert.equal(h.badge.textContent, '');
-    stream.emit('error');
-    assert.equal(stream.closed, false);
-    assert.match(h.ctx.window.BgPanel.getHtml(), /disconnected/);
-    stream.emit('open');
-    h.pending.shift()({ ok: false, code: 'temporary' });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.match(h.ctx.window.BgPanel.getHtml(), /temporary/);
-    h.ctx.getRuntimeWorkspaceSessionId = () => 'session-b';
-    h.ctx.currentRuntimeAgentId = 'runtime-b';
-    h.ctx.window.BgPanel.refreshBadge();
-    stream.emit('event', output('stale', 'running', 'wrong session'));
-    assert.deepEqual(h.ids(), []);
-    assert.equal(h.badge.textContent, '');
+    await withBgCase({ listChannels: async () => [{ featureId: 'future', channelId: 'jobs',
+      presentation: { panel: 'background', protocol: 'claw.background.process', version: 2 } }] }, async (version) => {
+      version.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(version.panel.__testStreams().length, 0);
+      assert.match(version.panel.getHtml(), /process@2/);
+      version.panel.onClose();
+    });
+    await withBgCase({ listChannels: async () => [] }, async (empty) => {
+      empty.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(empty.source(), null);
+      empty.panel.onClose();
+    });
+    await withBgCase({ listChannels: async () => { throw new Error('offline'); } }, async (error) => {
+      error.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.match(error.panel.getHtml(), /发现失败/);
+      error.panel.onClose();
+    });
+    await withBgCase({}, async (h) => {
+      h.panel.refreshBadge();
+      await new Promise(resolve => setImmediate(resolve));
+      const stream = h.source();
+      stream.emit('open');
+      stream.emit('event', output('bg', 'done', 'new'));
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg', status: 'running', outputTail: 'old' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(h.task('bg').status, 'done');
+      assert.equal(h.badge.textContent, '');
+      stream.emit('error');
+      assert.equal(stream.closed, false);
+      assert.match(h.panel.getHtml(), /disconnected/);
+      stream.emit('open');
+      h.pending.shift()({ ok: false, code: 'temporary' });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.match(h.panel.getHtml(), /temporary/);
+      h.setSession('session-b');
+      h.setRuntime('runtime-b');
+      h.panel.refreshBadge();
+      stream.emit('event', output('stale', 'running', 'wrong session'));
+      assert.deepEqual(h.ids(), []);
+      assert.equal(h.badge.textContent, '');
+    });
   });
 
   it('does not roll a newer agent list back with a delayed publication', async () => {
-    const h = harness({ listChannels: async () => [{ featureId: 'dispatch', channelId: 'runs',
-      presentation: { panel: 'background', protocol: 'claw.background.agent', version: 1 } }] });
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve));
-    h.source().emit('open');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'run', revision: 3, startedAt: 1, status: 'completed', summary: 'done' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    h.source().emit('event', { type: 'updated', data: { id: 'run', revision: 2, startedAt: 1, status: 'executing' } });
-    assert.equal(h.task('run').status, 'completed');
-    assert.equal(h.badge.textContent, '');
+    await withBgCase({ listChannels: async () => [{ featureId: 'dispatch', channelId: 'runs',
+      presentation: { panel: 'background', protocol: 'claw.background.agent', version: 1 } }] }, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve));
+      h.source().emit('open');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'run', revision: 3, startedAt: 1, status: 'completed', summary: 'done' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      h.source().emit('event', { type: 'updated', data: { id: 'run', revision: 2, startedAt: 1, status: 'executing' } });
+      assert.equal(h.task('run').status, 'completed');
+      assert.equal(h.badge.textContent, '');
+      h.panel.onClose();
+    });
   });
 
   it('opens live-only, merges a delayed list without rolling back newer events', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
-    const stream = h.source();
-    assert.ok(stream.url.includes('latest=1'));
-    stream.emit('open');
-    assert.equal(h.requests[0].requestType, 'list');
-    stream.emit('event', output('bg-1', 'done', 'latest'));
-    h.pending.shift()({ ok: true, tasks: [
-      { id: 'bg-1', status: 'running', startedAt: 1, command: 'bash', outputTail: 'old' },
-      { id: 'bg-2', status: 'running', startedAt: 2, command: 'bash', outputTail: 'other' },
-    ] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(h.task('bg-1').status, 'done');
-    assert.equal(h.task('bg-1').outputTail, 'latest');
-    assert.equal(h.task('bg-2').outputTail, 'other');
-    h.ctx.window.BgPanel.onClose();
-    assert.equal(stream.closed, false); // the same stream now feeds the badge/cache
-    assert.equal(h.timers.size, 2); // discovery + session guard; elapsed rendering stopped
+    await withBgCase({}, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+      const stream = h.source();
+      assert.ok(stream.url.includes('latest=1'));
+      stream.emit('open');
+      assert.equal(h.requests[0].requestType, 'list');
+      stream.emit('event', output('bg-1', 'done', 'latest'));
+      h.pending.shift()({ ok: true, tasks: [
+        { id: 'bg-1', status: 'running', startedAt: 1, command: 'bash', outputTail: 'old' },
+        { id: 'bg-2', status: 'running', startedAt: 2, command: 'bash', outputTail: 'other' },
+      ] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(h.task('bg-1').status, 'done');
+      assert.equal(h.task('bg-1').outputTail, 'latest');
+      assert.equal(h.task('bg-2').outputTail, 'other');
+      h.panel.onClose();
+      assert.equal(stream.closed, false); // the same stream now feeds the badge/cache
+      assert.equal(h.timers.size, 2); // discovery + session guard; elapsed rendering stopped
+    });
   });
 
   it('reconciles a resync list without discarding events received while it is pending', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
-    const stream = h.source();
-    stream.emit('open');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    stream.emit('resync');
-    stream.emit('event', output('bg-1', 'done', 'new tail'));
-    stream.emit('event', output('bg-2', 'running', 'just started'));
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(h.task('bg-1').status, 'done');
-    assert.equal(h.task('bg-2').outputTail, 'just started');
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({}, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+      const stream = h.source();
+      stream.emit('open');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      stream.emit('resync');
+      stream.emit('event', output('bg-1', 'done', 'new tail'));
+      stream.emit('event', output('bg-2', 'running', 'just started'));
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(h.task('bg-1').status, 'done');
+      assert.equal(h.task('bg-2').outputTail, 'just started');
+      h.panel.onClose();
+    });
   });
 
   it('ignores an older list that returns after a newer finalized-task reconciliation', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
-    const stream = h.source();
-    stream.emit('open');
-    stream.emit('event', { type: 'finalized', data: { id: 'new', status: 'done', startedAt: 2, command: 'bash' } });
-    h.pending[1]({ ok: true, tasks: [{ id: 'new', status: 'done', startedAt: 2, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    h.pending[0]({ ok: true, tasks: [{ id: 'stale', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), ['new']);
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({}, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+      const stream = h.source();
+      stream.emit('open');
+      stream.emit('event', { type: 'finalized', data: { id: 'new', status: 'done', startedAt: 2, command: 'bash' } });
+      h.pending[1]({ ok: true, tasks: [{ id: 'new', status: 'done', startedAt: 2, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      h.pending[0]({ ok: true, tasks: [{ id: 'stale', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), ['new']);
+      h.panel.onClose();
+    });
   });
 
   it('prunes retired terminal tasks after the registry trims its list', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
-    const stream = h.source();
-    stream.emit('open');
-    h.pending.shift()({ ok: true, tasks: [
-      { id: 'old', status: 'done', startedAt: 1, command: 'bash' },
-      { id: 'active', status: 'running', startedAt: 2, command: 'bash' },
-    ] });
-    await new Promise(resolve => setImmediate(resolve));
-    stream.emit('event', { type: 'finalized', data: { id: 'active', status: 'done', startedAt: 2, command: 'bash' } });
-    assert.equal(h.requests.at(-1).requestType, 'list');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'active', status: 'done', startedAt: 2, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), ['active']);
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({}, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+      const stream = h.source();
+      stream.emit('open');
+      h.pending.shift()({ ok: true, tasks: [
+        { id: 'old', status: 'done', startedAt: 1, command: 'bash' },
+        { id: 'active', status: 'running', startedAt: 2, command: 'bash' },
+      ] });
+      await new Promise(resolve => setImmediate(resolve));
+      stream.emit('event', { type: 'finalized', data: { id: 'active', status: 'done', startedAt: 2, command: 'bash' } });
+      assert.equal(h.requests.at(-1).requestType, 'list');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'active', status: 'done', startedAt: 2, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), ['active']);
+      h.panel.onClose();
+    });
   });
 
   it('updates elapsed time without rebuilding cards on every second', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
-    h.source().emit('open');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    const elapsedTimer = [...h.timers].find(timer => timer.delay === 1_000);
-    assert.ok(elapsedTimer);
-    let rebuilds = 0;
-    h.ctx.document.getElementById = id => id === 'bg-panel-root'
-      ? { querySelector: () => null, cloneNode: () => ({ innerHTML: '', querySelectorAll: () => [] }), querySelectorAll: () => [], replaceWith: () => { rebuilds++; } }
-      : { textContent: '', classList: { add() {}, remove() {} } };
-    elapsedTimer.callback();
-    assert.equal(rebuilds, 0);
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({}, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+      h.source().emit('open');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      const elapsedTimer = [...h.timers].find(timer => timer.delay === 1_000);
+      assert.ok(elapsedTimer);
+      let rebuilds = 0;
+      h.ctx.document.getElementById = id => id === 'bg-panel-root'
+        ? { querySelector: () => null, cloneNode: () => ({ innerHTML: '', querySelectorAll: () => [] }), querySelectorAll: () => [], replaceWith: () => { rebuilds++; } }
+        : { textContent: '', classList: { add() {}, remove() {} } };
+      elapsedTimer.callback();
+      assert.equal(rebuilds, 0);
+      h.panel.onClose();
+    });
   });
 
   it('drives the closed-panel badge from the event stream (list baseline + live deltas)', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.refreshBadge();
-    // 通道发现（channels）先落定，随后建立徽标专用订阅。
-    await new Promise(resolve => setImmediate(resolve));
-    const badgeStream = h.ctx.window.BgPanel.__testBadgeStream();
-    assert.ok(badgeStream);
-    assert.ok(badgeStream.url.includes('latest=1'));
-    badgeStream.emit('open');
-    assert.equal(h.requests[0].requestType, 'list');
-    h.pending.shift()({ ok: true, tasks: [
-      { id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' },
-      { id: 'bg-2', status: 'running', startedAt: 2, command: 'bash' },
-    ] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(h.badge.textContent, '2');
-    // 事件帧即时增减：任务终结减一，新任务开始加一。
-    badgeStream.emit('event', output('bg-1', 'done', 'finished'));
-    assert.equal(h.badge.textContent, '1');
-    badgeStream.emit('event', { type: 'started', data: { id: 'bg-3', status: 'running', startedAt: 3, command: 'bash' } });
-    assert.equal(h.badge.textContent, '2');
-    // 事件随手镜像进任务缓存：面板重开即最新状态，无需等 list 返回。
-    assert.deepEqual(h.ids(), ['bg-1', 'bg-2', 'bg-3']);
-    assert.equal(h.task('bg-1').status, 'done');
-    // resync 对账：以 list 全量重建基线（缓存成员同步对账）。
-    badgeStream.emit('resync');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-3', status: 'running', startedAt: 3, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(h.badge.textContent, '1');
-    assert.deepEqual(h.ids(), ['bg-3']);
-    // 通道关闭：拆除订阅并归零，任务缓存随之作废（不留陈旧卡片）。
-    badgeStream.emit('closed');
-    assert.equal(h.badge.textContent, '');
-    assert.equal(h.ctx.window.BgPanel.__testBadgeStream(), null);
-    assert.deepEqual(h.ids(), []);
+    await withBgCase({}, async (h) => {
+      h.panel.refreshBadge();
+      // 通道发现（channels）先落定，随后建立徽标专用订阅。
+      await new Promise(resolve => setImmediate(resolve));
+      const badgeStream = h.panel.__testBadgeStream();
+      assert.ok(badgeStream);
+      assert.ok(badgeStream.url.includes('latest=1'));
+      badgeStream.emit('open');
+      assert.equal(h.requests[0].requestType, 'list');
+      h.pending.shift()({ ok: true, tasks: [
+        { id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' },
+        { id: 'bg-2', status: 'running', startedAt: 2, command: 'bash' },
+      ] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(h.badge.textContent, '2');
+      // 事件帧即时增减：任务终结减一，新任务开始加一。
+      badgeStream.emit('event', output('bg-1', 'done', 'finished'));
+      assert.equal(h.badge.textContent, '1');
+      badgeStream.emit('event', { type: 'started', data: { id: 'bg-3', status: 'running', startedAt: 3, command: 'bash' } });
+      assert.equal(h.badge.textContent, '2');
+      // 事件随手镜像进任务缓存：面板重开即最新状态，无需等 list 返回。
+      assert.deepEqual(h.ids(), ['bg-1', 'bg-2', 'bg-3']);
+      assert.equal(h.task('bg-1').status, 'done');
+      // resync 对账：以 list 全量重建基线（缓存成员同步对账）。
+      badgeStream.emit('resync');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg-3', status: 'running', startedAt: 3, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(h.badge.textContent, '1');
+      assert.deepEqual(h.ids(), ['bg-3']);
+      // 通道关闭：拆除订阅并归零，任务缓存随之作废（不留陈旧卡片）。
+      badgeStream.emit('closed');
+      assert.equal(h.badge.textContent, '');
+      assert.equal(h.panel.__testBadgeStream(), null);
+      assert.deepEqual(h.ids(), []);
+    });
   });
 
   it('panel open takes over the badge and tears down its stream', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.refreshBadge();
-    await new Promise(resolve => setImmediate(resolve));
-    const badgeStream = h.ctx.window.BgPanel.__testBadgeStream();
-    assert.ok(badgeStream);
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(badgeStream.closed, true);
-    assert.equal(h.ctx.window.BgPanel.__testBadgeStream(), null);
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({}, async (h) => {
+      h.panel.refreshBadge();
+      await new Promise(resolve => setImmediate(resolve));
+      const badgeStream = h.panel.__testBadgeStream();
+      assert.ok(badgeStream);
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(badgeStream.closed, true);
+      assert.equal(h.panel.__testBadgeStream(), null);
+      h.panel.onClose();
+    });
   });
 
   it('discards a list response from a previous channel after switching sessions', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
-    h.source().emit('open');
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve));
-    const stream = h.source();
-    stream.emit('open');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'old', status: 'running' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), []);
-    h.pending.shift()({ ok: true, tasks: [{ id: 'new', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), ['new']);
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({}, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+      h.source().emit('open');
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve));
+      const stream = h.source();
+      stream.emit('open');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'old', status: 'running' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), []);
+      h.pending.shift()({ ok: true, tasks: [{ id: 'new', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), ['new']);
+      h.panel.onClose();
+    });
   });
 
   it('reopens with the retained snapshot, then reconciles membership from list', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
-    h.source().emit('open');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), ['bg-1']);
-    h.ctx.window.BgPanel.onClose();
-    // 同一会话重开：不经任何网络往返，缓存先上屏（getHtml 即宿主 render 的数据源）。
-    h.ctx.window.BgPanel.onOpen();
-    assert.ok(h.ctx.window.BgPanel.getHtml().includes('bg-1'));
-    await new Promise(resolve => setImmediate(resolve)); // 发现（channels）先落定
-    assert.deepEqual(h.ids(), ['bg-1']);
-    h.source().emit('open');
-    h.pending.shift()({ ok: true, tasks: [] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), []); // 权威 list 对账：任务已被淘汰则移除
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({}, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+      h.source().emit('open');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), ['bg-1']);
+      h.panel.onClose();
+      // 同一会话重开：不经任何网络往返，缓存先上屏（getHtml 即宿主 render 的数据源）。
+      h.panel.onOpen();
+      assert.ok(h.panel.getHtml().includes('bg-1'));
+      await new Promise(resolve => setImmediate(resolve)); // 发现（channels）先落定
+      assert.deepEqual(h.ids(), ['bg-1']);
+      h.source().emit('open');
+      h.pending.shift()({ ok: true, tasks: [] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), []); // 权威 list 对账：任务已被淘汰则移除
+      h.panel.onClose();
+    });
   });
 
   it('drops the retained snapshot when the focused session changes', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
-    h.source().emit('open');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), ['bg-1']);
-    h.ctx.window.BgPanel.onClose();
-    await new Promise(resolve => setImmediate(resolve)); // 关闭态徽标发现落定
-    h.ctx.getRuntimeWorkspaceSessionId = () => 'session-b';
-    h.ctx.window.BgPanel.onOpen();
-    assert.deepEqual(h.ids(), []); // 跨会话缓存不得串台
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({}, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+      h.source().emit('open');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), ['bg-1']);
+      h.panel.onClose();
+      await new Promise(resolve => setImmediate(resolve)); // 关闭态徽标发现落定
+      h.setSession('session-b');
+      h.panel.onOpen();
+      assert.deepEqual(h.ids(), []); // 跨会话缓存不得串台
+      h.panel.onClose();
+    });
   });
 
   it('invalidates the cache when discovery finds no channel', async () => {
     let declared = true;
-    const h = harness({ listChannels: async () => (declared ? [{ featureId: 'shell', channelId: 'shell-bg', presentation: { panel: 'background', protocol: 'claw.background.process', version: 1 } }] : []) });
-    h.ctx.window.BgPanel.onOpen();
-    await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
-    h.source().emit('open');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), ['bg-1']);
-    h.ctx.window.BgPanel.onClose();
-    await new Promise(resolve => setImmediate(resolve)); // 关闭态徽标发现落定（通道仍声明）
-    declared = false;
-    // 下一轮徽标发现轮询确证无通道：拆订阅 + 缓存作废。
-    const badgePoll = [...h.timers].find(timer => timer.delay === 30_000);
-    badgePoll.callback();
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), []);
-    assert.equal(h.ctx.window.BgPanel.__testBadgeStream(), null);
+    await withBgCase({ listChannels: async () => (declared ? [{ featureId: 'shell', channelId: 'shell-bg', presentation: { panel: 'background', protocol: 'claw.background.process', version: 1 } }] : []) }, async (h) => {
+      h.panel.onOpen();
+      await new Promise(resolve => setImmediate(resolve)); // 能力发现（channels）先落定
+      h.source().emit('open');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), ['bg-1']);
+      h.panel.onClose();
+      await new Promise(resolve => setImmediate(resolve)); // 关闭态徽标发现落定（通道仍声明）
+      declared = false;
+      // 下一轮徽标发现轮询确证无通道：拆订阅 + 缓存作废。
+      const badgePoll = [...h.timers].find(timer => timer.delay === 30_000);
+      badgePoll.callback();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), []);
+      assert.equal(h.panel.__testBadgeStream(), null);
+    });
   });
 
   it('serves the badge-fed snapshot instantly on the first panel open', async () => {
-    const h = harness();
-    h.ctx.window.BgPanel.refreshBadge();
-    await new Promise(resolve => setImmediate(resolve)); // 通道发现落定，建立徽标订阅
-    const badgeStream = h.ctx.window.BgPanel.__testBadgeStream();
-    badgeStream.emit('open');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), ['bg-1']);
-    // 首次打开面板：徽标流已把缓存喂热，不经 list 返回即渲染。
-    h.ctx.window.BgPanel.onOpen();
-    assert.ok(h.ctx.window.BgPanel.getHtml().includes('bg-1'));
-    await new Promise(resolve => setImmediate(resolve)); // 发现（channels）先落定
-    h.source().emit('open');
-    h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(h.ids(), ['bg-1']);
-    h.ctx.window.BgPanel.onClose();
+    await withBgCase({}, async (h) => {
+      h.panel.refreshBadge();
+      await new Promise(resolve => setImmediate(resolve)); // 通道发现落定，建立徽标订阅
+      const badgeStream = h.panel.__testBadgeStream();
+      badgeStream.emit('open');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), ['bg-1']);
+      // 首次打开面板：徽标流已把缓存喂热，不经 list 返回即渲染。
+      h.panel.onOpen();
+      assert.ok(h.panel.getHtml().includes('bg-1'));
+      await new Promise(resolve => setImmediate(resolve)); // 发现（channels）先落定
+      h.source().emit('open');
+      h.pending.shift()({ ok: true, tasks: [{ id: 'bg-1', status: 'running', startedAt: 1, command: 'bash' }] });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(h.ids(), ['bg-1']);
+      h.panel.onClose();
+    });
   });
 });

@@ -1,30 +1,48 @@
 /**
- * debug-logs.js — 日志面板渲染
+ * debug-logs.js — 日志面板渲染（P4 T2 渲染层批次：classic → ESM）
  *
  * 从 debug-panels.js 拆出。包含：
  *   - getLevelWeight, formatLogTimestamp, safePrettyJson
  *   - getFilteredLogs, renderLogsPanel
  *
  * safePrettyJson 被 renderLogsPanel 和 renderMcpPanel（debug-mcp.js）共用。
- * 本文件整体是 safePrettyJson 的唯一实现：debug-mcp 已转 ESM，取的是本文件的
- * classic 顶层函数（window.safePrettyJson），不复制第二份。
+ * 本文件整体是 safePrettyJson 的唯一实现：debug-mcp 的窗口取用面由本文件的
+ * 桥键继续服务（见文件尾），不复制第二份。
  *
- * P2 保留边界（R4，整文件保持 classic，不进 ESM 批次）：
- *   - 日志面板的 render 入口（renderLogsPanel）与 onOpen 入口（loadLogs）由
- *     app-ui.js 的 registerFeaturePanel('logs') 闭包持有；
- *   - 本面板在注册表里带 order（可自定义），rail 按钮在首屏同步链
- *     （app-main 顶层 applyLanguage → renderCurrentMainView → syncRailButtons）
- *     就生成并可见，该点击不受认证闸保护，早于 deferred ESM 求值。
- *   入口移入模块后，classic 相点击会抛 ReferenceError（面板空开）——同
- *   todo-plan 先例（p2-w2-4 头注），等 app-ui 面板注册与 rail 时序联合迁移
- *   后再转换。不得以 typeof 守卫、隐藏按钮、延后监听或 ready 队列规避。
+ * 依赖形态：
+ *   - 已迁 ESM 直接 import：翻译（t）、转义（escapeHtml）、语言
+ *     （getCurrentLanguage）、编排状态（currentRuntimeAgentId）、渲染入口状态
+ *     （activeFeaturePanel）、DOM 引用（domRefs.featurePanelBody）、面板重绘
+ *     （debug-panel-host 的 renderFeaturePanel）。
+ *   - 面板状态经 debugPanel 成对读写（app-core 的 classic let 是唯一 owner；
+ *     logFilters 是按字段就地赋值的只读引用，不持副本）。
+ *   - 仍 classic 的显式 window 晚绑定（均为运行期调用，行尾注明定义域）：
+ *     `setCurrentLogs` / `getRuntimeId`（app-core）、`updateLogFilter`（app-ui）。
  *
- * 依赖（全局变量，声明于 app-core.js）：
- *   - logFilters, currentLogs, currentLogsTruncation
+ * 时序审计（R4，首屏链已在模块相由 boot.js 触发）：
+ *   - 顶层语句只有 `featurePanelBody` 的 scroll 监听（幂等标记保留）。它从
+ *     classic 加载相推迟到模块求值相，监听器只在用户滚动时触发，两相等价；
+ *     监听目标来自 domRefs（app-core 加载期 getElementById 的 const 引用）。
+ *   - 事件入口（rail-logs）由 syncRailButtons 在首屏渲染时生成并绑定
+ *     click → toggleFeaturePanel，与模块求值同相或更晚，不存在「按钮已可点、
+ *     模块未求值」的窗口。
  *
- * 依赖（全局函数）：
- *   - escapeHtml, t (app-core.js)
+ * 跨文件消费面与桥键见文件尾。
  */
+import { t } from '../i18n.js';
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { activeFeaturePanel } from './render-entry-state.js';
+import { domRefs } from './p2-bootstrap-dom.js';
+import { debugPanel } from './p2-bootstrap-debug-panel.js';
+import { renderFeaturePanel } from './debug-panel-host.js';
+
+const { featurePanelBody } = domRefs;
+
+// app-core 的 logFilters 是同一对象的只读引用（app-ui 的 updateLogFilter 按字段
+// 就地赋值），模块求值期取一次即与迁移前的裸标识符同义。
+const logFilters = debugPanel.logFilters;
 
 // ═══════════════════════════════════════════════════════════════
 // 日志面板
@@ -58,7 +76,7 @@ function buildJsonPreview(value) {
     + '\n… ' + t('logs_json_truncated').replace('{total}', String(pretty.length));
 }
 
-function safePrettyJson(value) {
+export function safePrettyJson(value) {
   try {
     return JSON.stringify(value, null, 2);
   } catch (e) {
@@ -87,7 +105,7 @@ function logJsonToggle(id, entryEl) {
 // 底部渐隐遮罩（.feature-panel.scrollable）改由列表滚动事件驱动。
 // rAF 节流：滚动事件里同步读 scrollHeight/clientHeight 会强制布局，
 // 大列表上逐事件触发会造成明显卡顿（折叠/展开后尤其明显）。
-if (typeof featurePanelBody !== 'undefined' && featurePanelBody && !featurePanelBody.dataset.logScrollBound) {
+if (featurePanelBody && !featurePanelBody.dataset.logScrollBound) {
   featurePanelBody.dataset.logScrollBound = '1';
   let _logScrollRaf = 0;
   featurePanelBody.addEventListener('scroll', (e) => {
@@ -115,17 +133,18 @@ let _renderedFilterKey = '';
 const LOG_DOM_CAP = 260;
 
 function logFilterRenderKey() {
-  return JSON.stringify([logFilters.level, logFilters.feature, logFilters.lifecycle, logFilters.call, logFilters.search, currentLanguage]);
+  return JSON.stringify([logFilters.level, logFilters.feature, logFilters.lifecycle, logFilters.call, logFilters.search, getCurrentLanguage()]);
 }
 
 function markLogsSeen() {
-  for (const entry of currentLogs) {
+  for (const entry of debugPanel.currentLogs) {
     if (entry.id != null) _seenLogIds.add(String(entry.id));
   }
   _renderedFilterKey = logFilterRenderKey();
 }
 
 function buildLogStatsHtml(filteredCount) {
+  const currentLogs = debugPanel.currentLogs;
   let errorCount = 0;
   let warnCount = 0;
   for (const entry of currentLogs) {
@@ -149,6 +168,7 @@ function tryIncrementalLogsUpdate() {
   if (activeFeaturePanel !== 'logs') return false;
   const list = featurePanelBody.querySelector('.logf-list');
   if (!list || _renderedFilterKey !== logFilterRenderKey()) return false;
+  const currentLogs = debugPanel.currentLogs;
   for (const entry of currentLogs) {
     if (entry.id == null) return false;
   }
@@ -267,10 +287,12 @@ function logEntryMatchesFilters(entry) {
 }
 
 function getFilteredLogs() {
-  return currentLogs.filter(logEntryMatchesFilters);
+  return debugPanel.currentLogs.filter(logEntryMatchesFilters);
 }
 
-function renderLogsPanel() {
+export function renderLogsPanel() {
+  const currentLogs = debugPanel.currentLogs;
+  const currentLogsTruncation = debugPanel.currentLogsTruncation;
   const filteredLogs = getFilteredLogs().slice().reverse();
   const featureOptions = Array.from(new Set(currentLogs.map((entry) => entry.context?.feature).filter(Boolean))).sort();
   const lifecycleOptions = Array.from(new Set(currentLogs.map((entry) => entry.context?.lifecycle).filter(Boolean))).sort();
@@ -318,27 +340,26 @@ function renderLogsPanel() {
 
   const rows = filteredLogs.map(buildLogEntryHtml).join('');
 
-  const trunc = currentLogsTruncation;
-  const truncHtml = (trunc && trunc.truncated)
+  const truncHtml = (currentLogsTruncation && currentLogsTruncation.truncated)
     ? '<div class="logf-truncated">' + escapeHtml(t('logs_truncated')
-        .replace('{returned}', String(trunc.returnedCount))
-        .replace('{available}', String(trunc.availableCount))) + '</div>'
+        .replace('{returned}', String(currentLogsTruncation.returnedCount))
+        .replace('{available}', String(currentLogsTruncation.availableCount))) + '</div>'
     : '';
 
   return '<div class="log-panel">' + toolbar + '<section class="logf-list">' + rows + truncHtml + '</section></div>';
 }
 
 // ── loadLogs (from app-main.js) ──
-async function loadLogs(forceRender = false) {
+export async function loadLogs(forceRender = false) {
   try {
     const params = new URLSearchParams({
       scope: 'current',
     });
-    const runtimeId = getRuntimeId(currentRuntimeAgentId);
+    const runtimeId = window.getRuntimeId(currentRuntimeAgentId); // 桥接期：定义于 app-core
     if (!runtimeId) {
       if (forceRender && activeFeaturePanel === 'logs') {
-        currentLogsTruncation = null;
-        setCurrentLogs([]);
+        debugPanel.currentLogsTruncation = null;
+        window.setCurrentLogs([]); // 桥接期：定义于 app-core（currentLogs / 签名的唯一写入口）
         renderFeaturePanel();
       }
       return;
@@ -356,9 +377,9 @@ async function loadLogs(forceRender = false) {
       last: nextLogs.length > 0 ? nextLogs[nextLogs.length - 1].id : null,
     });
 
-    if (nextSignature !== currentLogsSignature) {
-      currentLogsTruncation = data.truncation || null;
-      setCurrentLogs(nextLogs);
+    if (nextSignature !== debugPanel.currentLogsSignature) {
+      debugPanel.currentLogsTruncation = data.truncation || null;
+      window.setCurrentLogs(nextLogs);
       if (activeFeaturePanel === 'logs') {
         // 流式新增优先增量 prepend（卡顿根治的关键）；
         // 首开、筛选/scope 变更等场景由 tryIncrementalLogsUpdate 判定不满足后回退全量
@@ -367,24 +388,45 @@ async function loadLogs(forceRender = false) {
         }
       }
     } else if (forceRender && activeFeaturePanel === 'logs') {
-      currentLogsTruncation = data.truncation || null;
+      debugPanel.currentLogsTruncation = data.truncation || null;
       renderFeaturePanel();
     }
   } catch (e) {
     if (forceRender && activeFeaturePanel === 'logs') {
-      currentLogsTruncation = null;
-      setCurrentLogs([]);
+      debugPanel.currentLogsTruncation = null;
+      window.setCurrentLogs([]);
       renderFeaturePanel();
     }
   }
 }
 
-// 日志面板动作（data-action 分发）。updateLogFilter 实现与 logFilters 状态
-// 暂住 app-ui.js / app-core.js（状态收编面处理），这里经 window 调用。
+// 日志面板动作（data-action 分发）。updateLogFilter 的实现与 logFilters 状态
+// 仍住 app-ui.js / app-core.js（状态收编面处理），这里经 window 调用。
 window.ClawFW.actions.registerMany({
   'debugLogs.filterLevelError': () => window.updateLogFilter('level', 'error'),
   'debugLogs.filterLevelWarn': () => window.updateLogFilter('level', 'warn'),
   'debugLogs.toggleJson': (el) => logJsonToggle(el.dataset.entryId, el.closest('.logf-entry')),
   'debugLogs.search': (el) => window.updateLogFilter('search', el.value),
   'debugLogs.filter': (el) => window.updateLogFilter(el.dataset.filterKey, el.value),
+});
+
+// ── 兼容桥（仍有 classic 消费方的入口）──────────────────────────────
+// renderLogsPanel ← app-ui.js registerFeaturePanel('logs').render 闭包；
+// loadLogs ← app-ui.js 面板 onOpen、app-main.js 的 application-startup host 工厂
+//   (`loadLogs: () => loadLogs()`)、agent-data-loader 的 window.loadLogs。
+// safePrettyJson ← debug-mcp.js（ESM，按 window.safePrettyJson 取本文件唯一实现；
+//   改为 import 属 debug-mcp 批次的收敛，本批不越界改它）。
+// 注册相位：模块顶层（deferred ESM 相）。三个消费点全部在函数体内、且都在
+// boot 之后（rail 按钮由首屏渲染的 syncRailButtons 生成，与模块同相或更晚）。
+// 注销条件：app-ui / app-main 的日志面板入口转 ESM 并改 import；debug-mcp 的
+// safePrettyJson 取用改 import。
+// getLevelWeight / formatLogTimestamp / getFilteredLogs 等零跨文件消费方，
+// 保持模块私有。
+const bridged = { renderLogsPanel, loadLogs, safePrettyJson };
+window.KernelState.defineKey('debug-logs', 'renderLogsPanel', renderLogsPanel);
+window.KernelState.defineKey('debug-logs', 'loadLogs', loadLogs);
+window.KernelState.defineKey('debug-logs', 'safePrettyJson', safePrettyJson);
+window.KernelState.claim('debug-logs', {
+  get: (key) => bridged[key],
+  set: (key, value) => { bridged[key] = value; },
 });

@@ -8,16 +8,18 @@
  * user edits it, the segment is promoted to plain text and ASR degrades to
  * cursor-local incremental insertion, never deleting user content.
  *
- * stream-draft-logic.js is ESM (loaded via real import); the voice-input.js
- * wiring under test stays classic, so the imported functions are injected
- * into the sandbox globals — that mirrors production, where the classic
- * consumer resolves them through the kernel-state bridge accessors.
+ * stream-draft-logic.js and the voice-input.js wiring are both ESM (P4 L3):
+ * the pure rules are imported directly, the wiring runs on the real module
+ * graph (withP2EsmCase), and the composer/app-main consumers it late-binds
+ * through `window` are supplied by the classic sandbox.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { createFrontendSandbox, sourceBetween } from './helpers/frontend-vm.js';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
+
+const VOICE_INPUT = 'public/src/modules/voice-input.js';
 
 // 真实 import 路线：kernel-state 先装（被测模块顶层 defineKey 需要
 // window.KernelState）；cleanup 经 t.after 恢复全局。
@@ -177,27 +179,38 @@ describe('stream-draft bridge (kernel-state compatibility)', () => {
 });
 
 describe('_applyStreamTextToDraft wiring (voice-input.js)', () => {
-  function loadWiring(textarea, logicModule, overrides = {}) {
-    // 注入真实 import 的函数：classic voice-input.js 片段经全局标识符解析
-    // 调用（生产中经 kernel-state 桥访问器，同一标识符解析路径）。
-    const ctx = createFrontendSandbox({
-      document: { getElementById: () => textarea },
-      autoResize: () => {},
-      _cacheSessionInput: () => {},
-      _getSessionInputCacheKey: () => 'session-a',
-      planStreamDraftMutation: logicModule.planStreamDraftMutation,
-      ...overrides,
+  /**
+   * voice-input 已迁 ESM（P4 L3）：合成规则（stream-draft-logic）与接线在同一张
+   * 真实模块图里，不再有「classic 片段抽取 + 同名全局桩」的装载。模块私有的
+   * 活跃段 / 组字标志 / 录音目标与会话键经 `__testVoiceState` 读写；classic 相
+   * 提供 composer 与 app-main 的消费面（`_cacheSessionInput` /
+   * `_getSessionInputCacheKey`，生产里同样经 window 晚绑定取用）与 textarea 宿主。
+   */
+  async function withWiring(textarea, { cacheKeyFor = () => 'session-a' } = {}, fn) {
+    return withP2EsmCase({
+      classic: (sandbox) => {
+        prepareClassicSandbox(sandbox);
+        sandbox.document.getElementById = () => textarea;
+        sandbox._cacheSessionInput = () => {};
+        sandbox._getSessionInputCacheKey = cacheKeyFor;
+      },
+    }, async (c) => {
+      const voiceInput = await c.load(VOICE_INPUT);
+      voiceInput.__testVoiceState.targetId = 'input-persistent';
+      voiceInput.__testVoiceState.cacheKey = 'session-a';
+      voiceInput.__testVoiceState.activeText = '';
+      voiceInput.__testVoiceState.composing = false;
+      return fn(voiceInput, voiceInput.__testVoiceState);
     });
-    const source = fs.readFileSync('public/src/modules/voice-input.js', 'utf8');
-    ctx.run(sourceBetween(source, 'function _applyStreamTextToDraft', 'function _haltStreamCapture'));
-    ctx.run(`let _voiceTargetId = 'input-persistent'; let _voiceCacheKey = 'session-a';`);
-    return ctx;
   }
 
   function makeTextarea(value, selStart, selEnd) {
     const sel = { start: selStart, end: selEnd ?? selStart };
     return {
       value,
+      // autoResize（input-actions，真实实现）按 scrollHeight 写行高
+      style: {},
+      scrollHeight: 0,
       get selectionStart() { return sel.start; },
       get selectionEnd() { return sel.end; },
       setSelectionRange(a, b) { sel.start = a; sel.end = b; },
@@ -208,66 +221,64 @@ describe('_applyStreamTextToDraft wiring (voice-input.js)', () => {
     };
   }
 
-  it('writes the tail replacement into the textarea and tracks the active text', async (t) => {
-    const logic = await loadLogic(t);
+  it('writes the tail replacement into the textarea and tracks the active text', async () => {
     const textarea = makeTextarea('已有的', 3);
-    const ctx = loadWiring(textarea, logic);
-    ctx.run(`let _voiceStreamActiveText = ''; let _voiceStreamComposing = false;`);
-    ctx.run(`_applyStreamTextToDraft('你好')`);
-    assert.equal(textarea.value, '已有的你好');
-    assert.equal(textarea.selectionStart, '已有的你好'.length);
-    assert.equal(ctx.run('_voiceStreamActiveText'), '你好');
+    await withWiring(textarea, {}, (voiceInput, state) => {
+      voiceInput._applyStreamTextToDraft('你好');
+      assert.equal(textarea.value, '已有的你好');
+      assert.equal(textarea.selectionStart, '已有的你好'.length);
+      assert.equal(state.activeText, '你好');
 
-    ctx.run(`_applyStreamTextToDraft('你好世界')`);
-    assert.equal(textarea.value, '已有的你好世界');
+      voiceInput._applyStreamTextToDraft('你好世界');
+      assert.equal(textarea.value, '已有的你好世界');
+    });
   });
 
-  it('freezes rewriting once the user edits the active segment', async (t) => {
-    const logic = await loadLogic(t);
+  it('freezes rewriting once the user edits the active segment', async () => {
     const textarea = makeTextarea('已有的你好', 6);
-    const ctx = loadWiring(textarea, logic);
-    ctx.run(`let _voiceStreamActiveText = '你好'; let _voiceStreamComposing = false;`);
-    // User deletes '好' (outside our helpers): value becomes '已有的你'
-    textarea.value = '已有的你';
-    ctx.run(`_applyStreamTextToDraft('你好世界')`);
-    // Segment promoted: delta inserted at cursor, user deletion preserved
-    assert.equal(textarea.value, '已有的你世界');
+    await withWiring(textarea, {}, (voiceInput, state) => {
+      state.activeText = '你好';
+      // User deletes '好' (outside our helpers): value becomes '已有的你'
+      textarea.value = '已有的你';
+      voiceInput._applyStreamTextToDraft('你好世界');
+      // Segment promoted: delta inserted at cursor, user deletion preserved
+      assert.equal(textarea.value, '已有的你世界');
+    });
   });
 
-  it('does not freeze transient pause punctuation after the user edited', async (t) => {
+  it('does not freeze transient pause punctuation after the user edited', async () => {
     // Real-world ASR oscillation around a pause: "你好" → "你好。"(pause close)
     // → "你好，世界"(rewrite into continuation). After one user edit the
     // wiring must surface neither the "。" nor the leading "，".
-    const logic = await loadLogic(t);
     const textarea = makeTextarea('已有的你好', 6);
-    const ctx = loadWiring(textarea, logic);
-    ctx.run(`let _voiceStreamActiveText = '你好'; let _voiceStreamComposing = false;`);
-    textarea.value = '已有的你'; // user deleted '好'
-    ctx.run(`_applyStreamTextToDraft('你好。')`);
-    assert.equal(textarea.value, '已有的你'); // punctuation-only delta: noop
-    ctx.run(`_applyStreamTextToDraft('你好，世界')`);
-    assert.equal(textarea.value, '已有的你世界'); // leading "，" stripped
+    await withWiring(textarea, {}, (voiceInput, state) => {
+      state.activeText = '你好';
+      textarea.value = '已有的你'; // user deleted '好'
+      voiceInput._applyStreamTextToDraft('你好。');
+      assert.equal(textarea.value, '已有的你'); // punctuation-only delta: noop
+      voiceInput._applyStreamTextToDraft('你好，世界');
+      assert.equal(textarea.value, '已有的你世界'); // leading "，" stripped
+    });
   });
 
-  it('skips textarea writes entirely during IME composition', async (t) => {
-    const logic = await loadLogic(t);
+  it('skips textarea writes entirely during IME composition', async () => {
     const textarea = makeTextarea('已有的', 3);
-    const ctx = loadWiring(textarea, logic);
-    ctx.run(`let _voiceStreamActiveText = ''; let _voiceStreamComposing = true;`);
-    ctx.run(`_applyStreamTextToDraft('你好')`);
-    // Nothing written, active text not advanced — the next event after
-    // compositionend reconciles from the stale active text.
-    assert.equal(textarea.value, '已有的');
-    assert.equal(ctx.run('_voiceStreamActiveText'), '');
+    await withWiring(textarea, {}, (voiceInput, state) => {
+      state.composing = true;
+      voiceInput._applyStreamTextToDraft('你好');
+      // Nothing written, active text not advanced — the next event after
+      // compositionend reconciles from the stale active text.
+      assert.equal(textarea.value, '已有的');
+      assert.equal(state.activeText, '');
+    });
   });
 
-  it('skips textarea writes after the session switched', async (t) => {
-    const logic = await loadLogic(t);
+  it('skips textarea writes after the session switched', async () => {
     const textarea = makeTextarea('已有的', 3);
-    const ctx = loadWiring(textarea, logic, { _getSessionInputCacheKey: () => 'session-b' });
-    ctx.run(`let _voiceStreamActiveText = ''; let _voiceStreamComposing = false;`);
-    ctx.run(`_applyStreamTextToDraft('你好')`);
-    assert.equal(textarea.value, '已有的');
-    assert.equal(ctx.run('_voiceStreamActiveText'), '');
+    await withWiring(textarea, { cacheKeyFor: () => 'session-b' }, (voiceInput, state) => {
+      voiceInput._applyStreamTextToDraft('你好');
+      assert.equal(textarea.value, '已有的');
+      assert.equal(state.activeText, '');
+    });
   });
 });

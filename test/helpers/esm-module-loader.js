@@ -31,6 +31,13 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+/**
+ * 运行时才创建、index.html 里不存在的元素 id：沙箱桩必须返回 null，否则会构造出
+ * "元素存在但没有内部结构"的非法状态（生产里 getElementById 命中即代表已建好）。
+ * rail-cust-overlay 由 RailCustomize 的 openModal 动态插入。
+ */
+const RUNTIME_CREATED_IDS = new Set(['rail-cust-overlay']);
+
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 
 /** 浅覆盖：undefined 值表示删除该键，其余替换 / 新增。 */
@@ -47,11 +54,14 @@ export function installBrowserStubs({ window: windowOverrides, document: documen
   const prevWindow = globalThis.window;
   const prevDocument = globalThis.document;
   const element = {
+    // children / dataset 是真实 DOM 元素的必备面（模块在求值期或事件回调里遍历
+    // 子节点、读写 data-*），桩缺它们会把真实路径误判成 TypeError。
+    children: [],
+    dataset: {},
     innerHTML: '',
     textContent: '',
     value: '',
     style: {},
-    dataset: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     setAttribute() {},
     getAttribute() { return null; },
@@ -63,6 +73,12 @@ export function installBrowserStubs({ window: windowOverrides, document: documen
     insertAdjacentHTML() {},
     querySelector() { return null; },
     querySelectorAll() { return []; },
+    closest() { return null; },
+    matches() { return false; },
+    contains() { return false; },
+    insertBefore() {},
+    remove() {},
+    getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
     scrollTop: 0,
     scrollHeight: 0,
     offsetHeight: 0,
@@ -77,7 +93,8 @@ export function installBrowserStubs({ window: windowOverrides, document: documen
   }, windowOverrides);
   globalThis.document = applyOverrides({
     // 每次返回独立元素对象：模块对「当前 DOM 是否挂载」的判断靠 getElementById 命中
-    getElementById() { return { ...element }; },
+    getElementById(id) { return RUNTIME_CREATED_IDS.has(id) ? null : { ...element }; },
+    contains() { return false; },
     querySelector() { return null; },
     querySelectorAll() { return []; },
     createElement() { return { ...element }; },

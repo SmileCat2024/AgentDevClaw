@@ -18,8 +18,8 @@
  *   - 输入面尾批：choice-input 与 input-model-switcher 已迁 ESM，不得回潮成
  *     classic 标签（解析期 SyntaxError），必须在 module 入口图内可达——前者经
  *     第二波 3b 批次入口带入，后者由 p2-entry 显式 import；与之相邻的
- *     input-helpers / rollback-dialog 仍是 classic 薄壳（首屏同步实现 / 同步
- *     注册壳），标签必须保留；
+ *     input-helpers / rollback-dialog 已随 P4 T2 迁 ESM（后者现在是纯注册壳），
+ *     标签必须删除且须经 p4-entry 可达；
  *   - 调试批：debug-overview / debug-preflight / debug-mcp 已迁 ESM（经
  *     p2-debug-small-bootstrap 与 p2-w2-11-debug-deep-bootstrap 进入入口链），
  *     不得回潮成 classic 标签；debug-logs / debug-features-hooks 仍是 classic
@@ -105,26 +105,21 @@ const WORKSPACE_ACTIONS_ESM = './src/modules/workspace-actions.js';
 /** 同一区域保留的 classic 刷新引擎：三条同步调度必须原位注册。 */
 const THREAD_STORE_CLASSIC = './src/modules/thread-store.js';
 
-/** 同一区域保留的 classic 薄壳：首屏同步实现 / 同步注册壳，标签必须保留。 */
-const INPUT_CLASSIC_SHELLS = [
+/** P4 T2 迁出的输入薄壳：classic 标签必须删除，且须经 p4-entry 可达。 */
+const INPUT_SHELL_ESM = [
   './src/modules/input-helpers.js',
   './src/modules/rollback-dialog.js',
 ];
 
-/** 调试批里已迁 ESM 的三个模块：不得再有 classic 标签，须经批次入口可达。 */
+/** 调试批里已迁 ESM 的模块：不得再有 classic 标签，须经 module 入口图可达。 */
 const DEBUG_ESM_BATCH = [
   './src/modules/debug-overview.js',
   './src/modules/debug-preflight.js',
   './src/modules/debug-mcp.js',
-];
-/**
- * 同一批里保持 classic 唯一实现的两个文件：rail 按钮在 classic 相即可点，
- * render / onOpen 入口由 app-ui 面板注册闭包持有。标签必须保留，且不得被
- * ESM 入口 import（那会变成第二份执行）。
- */
-const DEBUG_CLASSIC_FILES = [
+  // P4 T2：debug 三件整体迁出，rail 面板的 render / onOpen 闭包改经桥键调用。
   './src/modules/debug-logs.js',
   './src/modules/debug-features-hooks.js',
+  './src/modules/debug-panel-host.js',
 ];
 /** 两个调试批次入口（P2 生产装载收口在 p2-entry）。 */
 const DEBUG_BOOTSTRAPS = [
@@ -486,11 +481,15 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
       'input-model-switcher 必须由 p2-entry 显式 import：它没有批次入口文件，'
         + '不能靠偶然的 import 边进入生产装载链',
     );
-    for (const src of INPUT_CLASSIC_SHELLS) {
-      assert.notEqual(
-        classicIndex(src),
-        -1,
-        `${src} 的首屏同步实现仍是 classic：标签必须保留，不得因同目录已转 ESM 而删`,
+    for (const src of INPUT_SHELL_ESM) {
+      assert.equal(
+        CLASSIC_SRCS.includes(src),
+        false,
+        `${src} 已迁 ESM（P4 T2）：classic 标签会在解析期 SyntaxError`,
+      );
+      assert.ok(
+        MODULE_GRAPH.has(src.replace(/^\.\//, 'public/')),
+        `${src} 必须在 module 入口图内可达（p4-entry → kernel-entry）`,
       );
     }
 
@@ -530,16 +529,12 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
         `${bootstrap} 必须由 p2-entry 显式 import：调试批次没有散装 module 标签`,
       );
     }
-    for (const src of DEBUG_CLASSIC_FILES) {
-      assert.notEqual(
-        classicIndex(src),
-        -1,
-        `${src} 是 classic 唯一实现（rail 早点击依赖它）：标签必须保留，不得随批次一起删`,
-      );
-      assert.equal(
+    // P4 T2 起 debug-logs / debug-features-hooks / debug-panel-host 也进了 ESM 图：
+    // 它们的桥键在模块相注册，rail 按钮由首屏渲染（boot）生成后才有闭包消费。
+    for (const src of DEBUG_ESM_BATCH.slice(3)) {
+      assert.ok(
         MODULE_GRAPH.has(src.replace(/^\.\//, 'public/')),
-        false,
-        `${src} 不得由 ESM 入口 import：会与原 classic 标签形成第二份执行`,
+        `${src} 必须经 p4-entry 进入 module 入口图`,
       );
     }
 

@@ -1,23 +1,29 @@
 /**
  * P2 第二波 2 —— 保留 classic 的两个模块的「经典相同轮次」证据。
  *
- * 本批把 desktop-notify / generative-ui-panel 保留为唯一 classic 实现（不计入
- * 迁移完成面），理由是 ESM 模块执行相晚于全部 classic 脚本：
+ * 本批（P2 W2-2）当时把 desktop-notify / generative-ui-panel 保留为唯一 classic
+ * 实现（不计入迁移完成面），理由是 ESM 模块执行相晚于全部 classic 脚本：
  *   - desktop-notify：桌面壳 WebView2 `window.eval` 的原生 toast 激活入口
  *     （desktop/src/main.rs on_activated）必须在经典相同轮次可投递，否则
  *     「旧 toast 未过期 + 页面 reload 未完成」的竞态窗口会比经典形态更宽；
  *   - generative-ui-panel：rail 面板注册必须先于 app-main 顶层
  *     applyLanguage → renderCurrentMainView 的首次 syncRailButtons。
  *
- * 本文件用 classic 沙箱（frontend-vm）钉住这些模块**在装载的同一同步轮次内**
- * 完成注册/可投递：测试体内不出现 await、不排空微任务，因此断言成立即证明
- * 入口不依赖任何延迟相位。
+ * 现状（P4）：
+ *   - generative-ui-panel 的约束随 P4 时序切换解除（首屏链改由 boot 在模块相
+ *     触发，boot 是最后一条 module 标签，模块入口求值早于它），已迁 ESM，
+ *     见 P4 L2 批次；
+ *   - desktop-notify 仍是**外部 eval 入口**这一类 bootstrap 边界，P4 L2 审计
+ *     判定保留 classic（理由与竞态窗口同上），本文件继续钉住它的同轮可投递。
+ *
+ * 本文件用 classic 沙箱（frontend-vm）钉住 desktop-notify **在装载的同一同步
+ * 轮次内**完成激活入口注册：测试体内不出现 await、不排空微任务，因此断言
+ * 成立即证明入口不依赖任何延迟相位。
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { createDomHarness } from './helpers/dom-harness.js';
 
 function createDocumentStub() {
   const element = () => ({
@@ -99,35 +105,4 @@ test('desktop-notify：经典装载同一轮次内壳入口就已可投递（无
   // 呈现链同样同轮可用：reminder 帧直接产出系统通知（不经任何延迟相位）
   ctx.run(`window._presentAppNotification({ type: 'reminder', agentId: 'memo', title: 'T', body: 'B' })`);
   assert.equal(record.notifications.length, 1, '经典呈现链在装载同轮可投递');
-});
-
-test('generative-ui-panel：经典装载同一轮次内完成 rail 面板注册（首屏时点）', () => {
-  const dom = createDomHarness();
-  dom.createMount('gen-ui-mount');
-  const ctx = createFrontendSandbox({
-    document: dom.document,
-    setInterval: () => 0,
-    clearInterval() {},
-    createGenUIViewState: () => ({}),
-    renderGenUISpec: () => dom.document.createElement('div'),
-    currentLanguage: 'zh',
-    currentRuntimeAgentId: null,
-  });
-
-  // 生产顺序：claw-host（注册表宿主）先于面板实现
-  ctx.loadSource('public/src/modules/claw-host.js');
-  ctx.loadSource('public/src/modules/generative-ui-panel.js');
-
-  // ── 同一同步轮次内即可见：注册已完成，后续 classic 顶层渲染直接能取到 ──
-  assert.equal(ctx.run(`window.ClawHost.panels.has('genui')`), true,
-    'genui 面板在经典装载返回时已进注册表（早于 app-main 顶层 syncRailButtons）');
-  assert.equal(ctx.run(`window.ClawHost.panels.getAvailable({ surface: 'chat' }).length`), 1,
-    '聊天表面立即可见该面板');
-  assert.equal(ctx.run('typeof window.GenUIPanel.forceRefresh'), 'function',
-    '既有 window.GenUIPanel 命名空间协议不变');
-  // 注册元数据未变（rail 金样本同口径的最小复核）
-  const meta = ctx.run(`window.ClawHost.panels.getAvailable({ surface: 'chat' })[0]`);
-  assert.equal(meta.preserveOnReRender, true);
-  assert.equal(meta.order, 50);
-  assert.equal(meta.badge, true);
 });

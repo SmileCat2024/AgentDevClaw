@@ -18,7 +18,7 @@ import express from 'express';
 
 import { setupUISurfaceRoutes } from '../server/routes/ui-surfaces.js';
 import { setProxyConnectionLookup } from '../server/shared/proxy.js';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const CONNECTIONS = [
   { id: 'server-a', name: 'Server A', enabled: true, mode: 'manual', localPort: 22101 },
@@ -387,66 +387,79 @@ describe('ui-surfaces remote namespace branches (R2-03)', () => {
 
 // ── frontend panel: idempotency header + write gate ─────────────────────
 
-function loadPanelSandbox(currentRuntimeAgentId) {
+/**
+ * 交互页面面板沙箱（P4 L2 后 generative-ui-panel 已迁 ESM）：真实 import 路线，
+ * classic 相只装面板注册表宿主与 app-core（内核桥初值 + callActivity 宿主工厂）。
+ * 轮询 interval 由 withP2EsmCase 记账并在用例结束取消，不悬挂进程。
+ */
+function withPanelSandbox(currentRuntimeAgentId, fn) {
   const fetchCalls = [];
-  const ctx = createFrontendSandbox({
-    currentRuntimeAgentId,
-    // 面板模块加载即启动 3s 轮询 interval；测试沙箱内用空实现短路，
-    // 避免真实定时器悬挂 node:test 进程。
-    setInterval: () => 0,
-    fetch: async (url, init) => {
-      fetchCalls.push({ url: String(url), init });
-      return {
-        ok: true,
-        status: 200,
-        headers: { get: () => null },
-        json: async () => ({ delivery: 'input', requestId: 'req-1' }),
-      };
+  return withP2EsmCase({
+    globals: {
+      fetch: async (url, init) => {
+        fetchCalls.push({ url: String(url), init });
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({ delivery: 'input', requestId: 'req-1' }),
+        };
+      },
     },
+    classic: (sandbox) => {
+      sandbox.loadSource('public/src/modules/claw-host.js');
+      sandbox.loadSource('public/src/app-core.js');
+    },
+  }, async (c) => {
+    await c.load('public/src/modules/generative-ui-panel.js');
+    const orchestration = await c.load('public/src/modules/orchestration-state.js');
+    orchestration.setCurrentRuntimeAgentId(currentRuntimeAgentId);
+    return fn({ ctx: c.window, fetchCalls });
   });
-  ctx.loadSource('public/src/modules/claw-host.js');
-  ctx.loadSource('public/src/modules/generative-ui-panel.js');
-  return { ctx, fetchCalls };
 }
 
 describe('gen-ui panel frontend write gate (R2-03)', () => {
   it('submit POST carries the eventId as the x-idempotency-key header (same value as the body credential)', async () => {
-    const { ctx, fetchCalls } = loadPanelSandbox('remote:server-a:agent-9');
-    ctx.window.RemoteConnections = {
-      capabilityFor: (id, action) => (id === 'remote:server-a:agent-9' && action === 'write' ? true : false),
-    };
-    ctx.run('window.GenUIPanel._internal._registry.set("form-1", { spec: {}, revision: 1, title: "F", closed: false })');
-    await ctx.run('window.GenUIPanel._internal._submitAction("form-1", "submit", { label: "S" }, { value: "x" })');
-    assert.equal(fetchCalls.length, 1);
-    const { url, init } = fetchCalls[0];
-    assert.equal(init.method, 'POST');
-    assert.equal(url, '/protoclaw/agents/remote%3Aserver-a%3Aagent-9/ui-surfaces/form-1/actions/submit');
-    const body = JSON.parse(init.body);
-    assert.equal(init.headers['x-idempotency-key'], body.eventId, 'header and body carry the same eventId credential');
-    assert.equal(body.surfaceRevision, 1);
+    await withPanelSandbox('remote:server-a:agent-9', async ({ ctx, fetchCalls }) => {
+      ctx.window.RemoteConnections = {
+        capabilityFor: (id, action) => (id === 'remote:server-a:agent-9' && action === 'write' ? true : false),
+      };
+      ctx.run('window.GenUIPanel._internal._registry.set("form-1", { spec: {}, revision: 1, title: "F", closed: false })');
+      await ctx.run('window.GenUIPanel._internal._submitAction("form-1", "submit", { label: "S" }, { value: "x" })');
+      assert.equal(fetchCalls.length, 1);
+      const { url, init } = fetchCalls[0];
+      assert.equal(init.method, 'POST');
+      assert.equal(url, '/protoclaw/agents/remote%3Aserver-a%3Aagent-9/ui-surfaces/form-1/actions/submit');
+      const body = JSON.parse(init.body);
+      assert.equal(init.headers['x-idempotency-key'], body.eventId, 'header and body carry the same eventId credential');
+      assert.equal(body.surfaceRevision, 1);
+    });
   });
 
   it('local sessions always stay writable and submit without any capability query', async () => {
-    const { ctx, fetchCalls } = loadPanelSandbox('plain-agent');
-    ctx.run('window.GenUIPanel._internal._registry.set("form-1", { spec: {}, revision: 1, title: "F", closed: false })');
-    assert.equal(ctx.run('window.GenUIPanel._internal.actionSubmitEnabled("plain-agent")'), true);
-    await ctx.run('window.GenUIPanel._internal._submitAction("form-1", "submit", {}, {})');
-    assert.equal(fetchCalls.length, 1, 'local identity submits without consulting the capability matrix');
+    await withPanelSandbox('plain-agent', async ({ ctx, fetchCalls }) => {
+      ctx.run('window.GenUIPanel._internal._registry.set("form-1", { spec: {}, revision: 1, title: "F", closed: false })');
+      assert.equal(ctx.run('window.GenUIPanel._internal.actionSubmitEnabled("plain-agent")'), true);
+      await ctx.run('window.GenUIPanel._internal._submitAction("form-1", "submit", {}, {})');
+      assert.equal(fetchCalls.length, 1, 'local identity submits without consulting the capability matrix');
+    });
   });
 
   it('remote without the write capability bit disables submission and never sends the request', async () => {
-    const { ctx, fetchCalls } = loadPanelSandbox('remote:server-a:agent-9');
-    ctx.window.RemoteConnections = { capabilityFor: () => false };
-    ctx.run('window.GenUIPanel._internal._registry.set("form-1", { spec: {}, revision: 1, title: "F", closed: false })');
-    assert.equal(ctx.run('window.GenUIPanel._internal.actionSubmitEnabled("remote:server-a:agent-9")'), false);
-    await ctx.run('window.GenUIPanel._internal._submitAction("form-1", "submit", {}, {})');
-    assert.equal(fetchCalls.length, 0, 'gated sessions must not issue action POSTs');
+    await withPanelSandbox('remote:server-a:agent-9', async ({ ctx, fetchCalls }) => {
+      ctx.window.RemoteConnections = { capabilityFor: () => false };
+      ctx.run('window.GenUIPanel._internal._registry.set("form-1", { spec: {}, revision: 1, title: "F", closed: false })');
+      assert.equal(ctx.run('window.GenUIPanel._internal.actionSubmitEnabled("remote:server-a:agent-9")'), false);
+      await ctx.run('window.GenUIPanel._internal._submitAction("form-1", "submit", {}, {})');
+      assert.equal(fetchCalls.length, 0, 'gated sessions must not issue action POSTs');
+    });
   });
 
-  it('degrades safely when the capability matrix is not mounted: local writable, remote not', () => {
-    const { ctx } = loadPanelSandbox('plain-agent');
-    assert.equal(ctx.run('window.GenUIPanel._internal.actionSubmitEnabled("plain-agent")'), true);
-    assert.equal(ctx.run('window.GenUIPanel._internal.actionSubmitEnabled("remote:server-a:agent-9")'), false);
-    assert.equal(ctx.run('window.GenUIPanel._internal.newIdempotencyKey()').length > 0, true);
+  it('degrades safely when the capability matrix is not mounted: local writable, remote not', async () => {
+    await withPanelSandbox('plain-agent', ({ ctx }) => {
+      assert.equal(ctx.run('window.GenUIPanel._internal.actionSubmitEnabled("plain-agent")'), true);
+      assert.equal(ctx.run('window.GenUIPanel._internal.actionSubmitEnabled("remote:server-a:agent-9")'), false);
+      assert.equal(ctx.run('window.GenUIPanel._internal.newIdempotencyKey()').length > 0, true);
+    });
   });
 });

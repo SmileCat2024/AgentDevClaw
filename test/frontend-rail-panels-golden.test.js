@@ -66,7 +66,9 @@ const REGISTRATION_HOMES = [
     file: 'public/src/modules/bg-panel.js',
     start: "window.ClawHost.panels.register('bg'",
     end: '// 启动徽标轮询',
-    prefix: '',
+    // bg-panel 已迁 ESM（P4 L3）：注册块的 title() 经模块顶部 import 的
+    // getCurrentLanguage 取语言；金样本只执行注册块，按同语义给出沙箱内绑定。
+    prefix: 'const getCurrentLanguage = () => currentLanguage;',
     suffix: '',
   },
   {

@@ -2,9 +2,13 @@
  * P2 第二波 3b「部分压缩 / 回退对话框域」——状态 owner 的兼容面与真实行为。
  *
  * 装载路线：test/helpers/p2-esm-case.js 的 `withP2EsmCase`（整图隔离真实
- * import + 真实 classic 沙箱）。classic 相按生产时点跑真实 rollback-dialog.js
- * （它只做 classic 相 defineKey 注册与函数声明），ESM 相跑本批 owner；两侧共享
- * 同一个 window，桥的两端因此是生产语义。
+ * import + 真实 classic 沙箱）。rollback-dialog.js 已迁 ESM（P4 T2，注册薄壳），
+ * 与 owner 一样走 `c.load` 真实 import：先注册（哑存储）再 claim（吸收），
+ * 两侧共享同一个 window，桥的两端因此是生产语义。
+ *
+ * P4 T2 变更点：`_partialCompactContextKey` 桥键已注销（唯一消费方 input-render
+ * 改为 import 域状态），本文件对该键改用 owner setter 驱动；其余四个状态键的
+ * classic 裸读写桥保持不变。
  *
  * 钉住四件事：
  *   1. classic 相注册的真初值在 ESM claim 时被吸收（吸收式认领，无双存储）；
@@ -47,7 +51,6 @@ function rollbackCaseOptions() {
       // 桥接期消费方（app-main / input-render）在本用例里以桩形态存在
       sandbox._getSessionInputCacheKey = () => sandbox.__cacheKey;
       sandbox.notifyInputSurfaceChanged = () => { sandbox.__surfaceNotices += 1; };
-      sandbox.loadSource(CLASSIC);
     },
     globals: { sessionStorage },
   };
@@ -57,22 +60,25 @@ function rollbackCaseOptions() {
 test('状态 owner：classic 相真初值 → claim 吸收 → 双向转发', async () => {
   const { options } = rollbackCaseOptions();
   await withP2EsmCase(options, async (c) => {
-    // 首屏同步链在 classic 相裸读的就是这些值（input-render / input-composer）
+    // 注册薄壳先求值（与生产同为 ESM 相），owner 随后 claim 吸收哑存储现值。
+    await c.load(CLASSIC);
+    // classic 消费方裸读的就是这些值（input-render / input-composer）
     assert.equal(c.read('typeof _rollbackDialogOpen'), 'boolean');
     assert.equal(c.read('_rollbackDialogOpen'), false);
     assert.equal(c.read('_partialCompactInFlight'), false);
     assert.equal(c.read('_partialCompactRuntimeId'), null);
-    assert.equal(c.read('_partialCompactContextKey'), null);
+    assert.equal(c.read('typeof _partialCompactContextKey'), 'undefined', '该桥键已注销（唯一消费方改 import）');
     assert.equal(c.read('_compactTimerInterval'), null);
 
     // claim 之前的 classic 写落在哑存储（对话框已打开、压缩在飞的瞬态）
     c.read('_rollbackDialogOpen = true; _partialCompactInFlight = true;'
-      + ' _partialCompactRuntimeId = "rt-1"; _partialCompactContextKey = "session-a";');
+      + ' _partialCompactRuntimeId = "rt-1";');
 
     const domain = await c.load(DOMAIN);
     assert.equal(domain.rollbackDialogOpen, true, 'claim 吸收 classic 相写入');
     assert.equal(domain.partialCompactInFlight, true);
     assert.equal(domain.partialCompactRuntimeId, 'rt-1');
+    domain.setPartialCompactContextKey('session-a');
     assert.equal(domain.partialCompactContextKey, 'session-a');
 
     // owner → classic 裸读（活绑定）
@@ -91,13 +97,14 @@ test('状态 owner：classic 相真初值 → claim 吸收 → 双向转发', as
 
     // 与顶层 let 一致的属性语义：不可枚举、可配置（终局撤桥需要）
     assert.equal(c.read('Object.prototype.propertyIsEnumerable.call(window, "_rollbackDialogOpen")'), false);
-    assert.equal(c.read('Object.getOwnPropertyDescriptor(window, "_partialCompactContextKey").configurable'), true);
+    assert.equal(c.read('Object.getOwnPropertyDescriptor(window, "_compactTimerInterval").configurable'), true);
   });
 });
 
 test('compact 记账：按会话拼装存储键并读写开始时间', async () => {
   const { options, sessionStorage } = rollbackCaseOptions();
   await withP2EsmCase(options, async (c) => {
+    await c.load(CLASSIC);
     const domain = await c.load(DOMAIN);
 
     assert.equal(domain.getPartialCompactStorageKey, undefined, '存储键拼装是模块私有，不导出不上桥');
@@ -133,6 +140,7 @@ test('compact 记账：按会话拼装存储键并读写开始时间', async () 
 test('classic 裸调 clearPartialCompactState：经桥转发到 owner（app-main 的真实调用形态）', async () => {
   const { options, sessionStorage } = rollbackCaseOptions();
   await withP2EsmCase(options, async (c) => {
+    await c.load(CLASSIC);
     const domain = await c.load(DOMAIN);
 
     // app-main 的调用形态是**裸标识符**（classic script 里的 `clearPartialCompactState()`），
@@ -142,9 +150,9 @@ test('classic 裸调 clearPartialCompactState：经桥转发到 owner（app-main
       '裸标识符与 window 访问器同一个函数对象');
 
     c.read('_partialCompactInFlight = true; _partialCompactRuntimeId = "rt-7";'
-      + ' _partialCompactContextKey = "session-a";'
       + ' _compactTimerInterval = setInterval(() => {}, 60);'
       + ' writePartialCompactStartedAt(7000, "session-a");');
+    domain.setPartialCompactContextKey('session-a');
     assert.equal(c.timerCount(), 1);
 
     // 真实调用点（无参 → 默认上下文键 = 当前会话身份）
@@ -162,14 +170,15 @@ test('classic 裸调 clearPartialCompactState：经桥转发到 owner（app-main
 test('compact 归零：清状态、停计时器、只抹自己的开始时间、只在发起视图声明输入面', async () => {
   const { options, sessionStorage } = rollbackCaseOptions();
   await withP2EsmCase(options, async (c) => {
+    await c.load(CLASSIC);
     const domain = await c.load(DOMAIN);
 
     // 发起视图 = session-a（与 _getSessionInputCacheKey 一致）
     c.read('_partialCompactInFlight = true; _partialCompactRuntimeId = "rt-1";'
-      + ' _partialCompactContextKey = "session-a";'
       + ' _compactTimerInterval = setInterval(() => {}, 60);'
       + ' writePartialCompactStartedAt(4444, "session-a");'
       + ' writePartialCompactStartedAt(5555, "session-other");');
+    domain.setPartialCompactContextKey('session-a');
     assert.equal(c.timerCount(), 1, '压缩计时器在飞');
 
     domain.clearPartialCompactState();
@@ -185,8 +194,8 @@ test('compact 归零：清状态、停计时器、只抹自己的开始时间、
     assert.equal(c.read('__surfaceNotices'), 1, '发起视图上声明一次输入面变更');
 
     // 迟到清理（旧会话的压缩结束，当前视图已切到 session-a）：整体不动作
-    c.read('_partialCompactInFlight = true; _partialCompactRuntimeId = "rt-2";'
-      + ' _partialCompactContextKey = "session-old";');
+    c.read('_partialCompactInFlight = true; _partialCompactRuntimeId = "rt-2";');
+    domain.setPartialCompactContextKey('session-old');
     domain.clearPartialCompactState('session-new');
     assert.equal(domain.partialCompactInFlight, true, '跨上下文键的迟到清理被拒绝');
     assert.equal(domain.partialCompactContextKey, 'session-old');

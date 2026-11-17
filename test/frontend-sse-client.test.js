@@ -263,7 +263,7 @@ async function withSseCase(opts, fn) {
       // todo-plan 已迁 ESM（P4 L1）：classic 相只补它装载期要用的 vendor 面与
       // markdown-utils 的 classic 实现（escapeHtml / renderer），模块本体在 async 相 c.load。
       sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
-      sandbox.loadSource('public/src/modules/rollback-dialog.js');
+      // rollback-dialog 已迁 ESM（P4 T2）：注册壳改由 async 相 c.load 装载。
       sandbox.loadSource('public/src/modules/persistent-input.js');
       // 观察面（真源之后覆盖）：本例只验证 SSE 事件路由与提交语义，不驱动主视图 /
       // 聊天的 DOM 落地。
@@ -308,6 +308,8 @@ async function withSseCase(opts, fn) {
       ...extraGlobals,
     },
   }, async (c) => withNoiseClean('sse-client 用例', async () => {
+    // 回退 / 压缩域状态键注册壳（已迁 ESM，P4 T2）：真实 import，桥键由模块自身注册。
+    await c.load('public/src/modules/rollback-dialog.js');
     // plan 快照归一 / 成对签名（已迁 ESM，P4 L1）：经典侧经桥键调用它的命名导出。
     await c.load('public/src/modules/todo-plan.js');
     // 焦点 runtime：生产由切换链写入 orchestration owner

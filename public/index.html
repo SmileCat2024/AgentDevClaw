@@ -459,11 +459,13 @@
        由 p2-entry 的 p2-w2-11-debug-deep-bootstrap / p2-debug-small-bootstrap 装载。
        debug-logs 与 debug-features-hooks 仍是 classic 唯一实现（render / onOpen
        入口由 app-ui 的面板注册闭包持有，rail 按钮在 classic 相就可点），标签保留。 -->
-  <script src="./src/modules/debug-logs.js"></script>
-  <script src="./src/modules/debug-features-hooks.js"></script>
+  <!-- debug 三件已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       桥键 renderFeaturePanel / renderLogsPanel / loadLogs / syncRailButtons 等
+       供 app-ui 面板注册闭包与 app-main 消费。 -->
+  <!-- debug-features-hooks 已迁 ESM：见上条注释（debug 三件同批）。 -->
     <!-- generative-ui-panel 已迁 ESM（P4 L2）：classic 标签删除，由 p4-entry 装载；
          桥键 GenUIPanel 供 agent-data-loader 的 forceRefresh 使用。 -->
-  <script src="./src/modules/debug-panel-host.js"></script>
+  <!-- debug-panel-host 已迁 ESM：见上条注释（debug 三件同批）。 -->
   <!-- panel-plugins 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载（纯声明，无桥键）。 -->
   <!-- 动态插件面板声明（ADR-0045 P1）：feature-ui-registry 从 server 声明 API
        拉取外部插件包的面板声明（素材 × 装配事实合成），与上方静态清单互补。
@@ -476,7 +478,8 @@
   <script src="./src/modules/home-dashboard.js"></script>
   <!-- todo-plan 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载；6 个桥键供
        app-ui / app-core / app-main / session-view-state 使用。 -->
-  <script src="./src/modules/bg-panel.js"></script>
+  <!-- bg-panel 已迁 ESM（P4 L3）：classic 标签删除，由 p4-entry 装载；
+       桥键 BgPanel ← agent-data-loader 的 refreshBadge。 -->
   <script src="./src/modules/right-panel-registry.js"></script>
   <script src="./src/app-ui.js"></script>
   <script src="./src/modules/resources-viewer.js"></script>
@@ -488,16 +491,21 @@
        voice-input.js（消费其草稿符号）与 input-render.js/persistent-input.js
        （依赖其组件函数）加载。 -->
   <script src="./src/modules/input-composer.js"></script>
-  <script src="./src/modules/voice-input.js"></script>
+  <!-- voice-input 已迁 ESM（P4 L3）：classic 标签删除，由 p4-entry 装载；
+       状态键 owner 在 p2-w2-3a-voice-state，函数键经 voice-input-api 域桥接。 -->
   <!-- choice-input 已迁 ESM（选择卡谓词 / 交互 / 提交，含草稿状态）：classic 标签
        删除，由 p2-w2-3b-input-bootstrap → p2-entry 装载。草稿状态已是该模块私有，
        classic 侧零读取，原 p2-bootstrap-choice-input 引用宿主已删除。 -->
-  <script src="./src/modules/rollback-dialog.js"></script>
+  <!-- rollback-dialog 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       现在是纯注册壳（4 个状态键），owner 与 claim 在 p2-w2-3b-rollback-domain.js。 -->
   <!-- ↓↓↓ Phase B: 中风险子系统 ↓↓↓ -->
-  <script src="./src/modules/chat-scroll.js"></script>
+  <!-- chat-scroll 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       container 引用按模块相等价重建查询（dom-refs 域落地后改 import）。 -->
   <script src="./src/modules/runtime-status.js"></script>
-  <script src="./src/modules/input-helpers.js"></script>
-  <script src="./src/modules/input-render.js"></script>
+  <!-- input-helpers 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       桥键 updateChatProcessToggle ← app-ui 首屏分支。 -->
+  <!-- input-render 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       桥键 notifyInputSurfaceChanged ← session-view-state / app-ui / persistent-input。 -->
   <!-- input-model-switcher 已迁 ESM（模型 / 思考强度两个切换器）：classic 标签
        删除，由 p2-entry 显式 import；四个兼容桥键供下方仍 classic 的
        persistent-input / input-composer 调用。 -->

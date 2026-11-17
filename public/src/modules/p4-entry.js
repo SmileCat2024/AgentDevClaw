@@ -33,3 +33,21 @@ import './generative-ui-panel.js'; // GenUI 面板；桥 GenUIPanel ← agent-da
 // desktop-open / desktop-notify 仍是 classic 唯一实现：壳侧 webview eval 在页面装载
 // 完成前就可能投递（`&&` 守卫是静默丢弃而非排队），迁到模块相会多出一段请求被吞
 // 的窗口。见 P4 计划「T2 早期事件窗口」与 test/frontend-desktop-open.test.js。
+
+// ── T2 渲染层：调试面板三件（T3 批次二）──
+// rail 按钮在首屏渲染时生成，其 render / onOpen 闭包由 app-ui 持有并裸调这些桥键。
+import './debug-panel-host.js'; // renderFeaturePanel / toggleFeaturePanel / syncRailButtons / syncPanelBodyHtmlCache
+import './debug-logs.js'; // renderLogsPanel / loadLogs / safePrettyJson
+import './debug-features-hooks.js'; // renderFeaturesPanel / renderReverseHooksPanel
+// right-panel-registry 仍保留：window.ClawPanels 转发壳的消费面未归零（悬置域与
+// 旧模板仍按 window 取用），退役判定见 P4 计划「T4 悬置域封存」。
+
+// ── T3 长尾：后台任务面板与语音输入（L3 批次）──
+import './bg-panel.js'; // 后台任务面板；桥 BgPanel ← agent-data-loader
+import './voice-input.js'; // 语音录制 / 转写；状态键 owner 在 p2-w2-3a-voice-state，api 经 voice-input-api 域
+
+// ── T2 渲染层：聊天滚动与输入薄壳（T3 批次三）──
+import './rollback-dialog.js'; // 部分压缩状态键注册壳（owner/claim 在 p2-w2-3b-rollback-domain）
+import './chat-scroll.js'; // 滚轮归一化 / 跟随判定；零桥键（纯函数与容器监听）
+import './input-helpers.js'; // 桥 updateChatProcessToggle ← app-ui
+import './input-render.js'; // 桥 notifyInputSurfaceChanged ← session-view-state / app-ui / persistent-input

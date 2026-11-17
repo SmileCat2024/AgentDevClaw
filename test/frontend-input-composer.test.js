@@ -16,6 +16,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 const SLASH_MENU = 'public/src/modules/slash-menu.js';
 const QUEUE_PROJECTION = 'public/src/modules/p2-w2-3a-queue-projection.js';
@@ -298,15 +299,13 @@ function buildInputGlobals(doc, state, getRuntimeAgentId) {
     currentLanguage: 'zh',
     currentRuntimeAgentId: 'agent-1',
     readOnlyMode: false,
-    followLatestEnabled: false,
+    // 回退 / 压缩域状态键（P4 T2）：注册壳 rollback-dialog.js 在用例体首段真实
+    // import（defineKey + owner claim），不再由夹具以同名全局播种。
     _rollbackDialogOpen: false,
     _partialCompactInFlight: false,
     _partialCompactRuntimeId: null,
-    _partialCompactContextKey: null,
     _compactTimerInterval: null,
     currentInputRequests: state.requests,
-    lastRenderedInputSignature: '',
-    lastRenderedInputMode: null,
     // 语音域（默认无录音）
     _voiceRecording: false,
     _voiceStopping: false,
@@ -377,8 +376,6 @@ function buildInputGlobals(doc, state, getRuntimeAgentId) {
     stopVoiceRecording: () => {},
     _cancelVoiceRecording: () => {},
     _shouldPreserveVoiceInputForRender: () => false,
-    readPartialCompactStartedAt: () => null,
-    writePartialCompactStartedAt: () => {},
     _agentCallActive: new Map(),
     escapeHtml: (text) => String(text == null ? '' : text).replace(/[&<>"']/g, (m) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -393,8 +390,10 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
   return ctx;
 }
 
-// 注入模块源码，与 index.html 加载序语义一致（input-composer → render）。
-function loadInputModules(ctx) {
+// classic 相注入模块源码，与 index.html 加载序语义一致（input-composer →
+// persistent-input 切片）。输入面渲染器已迁 ESM（P4 T2），改由 withInputEsmCase
+// 在用例体里真实 import（见该函数），不再作为 classic 源注入。
+function loadInputClassic(ctx) {
   ctx.loadSource('public/src/modules/input-composer.js');
   // getInputSurfaceMode（app-main.js 现已委托 composer 模块的纯函数）
   ctx.run(`
@@ -406,7 +405,6 @@ function loadInputModules(ctx) {
   const start = persistentSource.indexOf('function renderPersistentInput(container) {');
   const end = persistentSource.indexOf('function onPersistentBtnClick', start);
   ctx.run(persistentSource.slice(start, end));
-  ctx.loadSource('public/src/modules/input-render.js');
 }
 
 // input-composer / input-render / persistent-input 仍是 classic（同步首屏边界），
@@ -414,6 +412,21 @@ function loadInputModules(ctx) {
 // 每个用例一份 window + 一张 ESM 图（整图隔离），classic 相按 index.html 加载序
 // 先行，内核桥键（i18n 语言 / orchestration 运行时 id）在 classic 相注册真初值，
 // ESM owner 装载时认领——与生产 app-core 的桥接时序同形。
+const INPUT_RENDER = 'public/src/modules/input-render.js';
+
+/**
+ * 输入面用例（渲染器已迁 ESM 的用例统一入口）：classic 沙箱 + 一张真实 ESM 图，
+ * 用例体拿到沙箱本身（`ctx.run` / `ctx.state` / `ctx.window` 与原夹具同形）。
+ * 必须在用例体内完成断言——case 结束即回收全局与模块图。
+ */
+function withInputCase(fn) {
+  return withInputEsmCase({}, async ({ c, state }) => {
+    const ctx = c.window; // 沙箱本身（带 .run / .runSource 面，与原夹具同形）
+    ctx.state = state;
+    return fn(ctx);
+  });
+}
+
 function withInputEsmCase(options, fn) {
   const { contextKey = 'session-a', requests = [], classic, globals = {} } = options || {};
   const { doc, container, choiceContainer, state } = createInputDom(contextKey, requests);
@@ -430,7 +443,7 @@ function withInputEsmCase(options, fn) {
       sandbox.KernelState.defineKey('orchestration', '_switchEpoch', 0);
       // ESM 图内的模块装载期注册动作处理器（window.ClawFW.actions）。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      loadInputModules(sandbox);
+      loadInputClassic(sandbox);
       // 装载期宿主面（本 fixture 的 classic 相只到输入面切片，不含 app-core /
       // app-main / app-ui）。真实链安装实测被阻断：app-core 会重复注册本用例预置的
       // 内核桥键（或反过来），app-ui 的 renderCurrentMainView 需要整条页面渲染链
@@ -443,6 +456,16 @@ function withInputEsmCase(options, fn) {
       //   createP2Bootstrap*Host ↙ app-core.js：成对 get/set 访问器袋，成员只在函数体内读取
       //   createWorkspaceEntryHost / createCompactResumeHost ← app-main.js：闭包宿主，本图不调用
       //   createWorkspaceSurfaceHost ← app-ui.js：只 spread 注入，本图不驱动工作区表面
+      // 聊天表面状态宿主（生产由 app-core 提供）：跟随开关 / 滚动抑制 / 过程显隐
+      // 三个 classic 顶层状态，成对转发到沙箱全局（输入面渲染器的视口声明读它）。
+      sandbox.createP2BootstrapChatSurfaceHost = () => ({
+        get followLatestEnabled() { return sandbox.followLatestEnabled; },
+        set followLatestEnabled(value) { sandbox.followLatestEnabled = value; },
+        get suppressFollowScrollEvent() { return sandbox.suppressFollowScrollEvent; },
+        set suppressFollowScrollEvent(value) { sandbox.suppressFollowScrollEvent = value; },
+        get showChatProcess() { return sandbox.showChatProcess; },
+        set showChatProcess(value) { sandbox.showChatProcess = value; },
+      });
       sandbox.createRuntimeViewCacheHost = () => ({ cache: new Map(), capacity: 0 });
       sandbox.createRuntimeSwitchHost = () => ({ state: {} });
       sandbox.createAgentSnapshotLoaderHost = () => ({ state: {} });
@@ -461,7 +484,17 @@ function withInputEsmCase(options, fn) {
       ...baseGlobals,
       ...(typeof globals === 'function' ? globals(state) : globals),
     }).filter(([, value]) => value !== undefined)),
-  }, async (c) => fn({ c, doc, state, container, choiceContainer }));
+  }, async (c) => {
+    // 输入面渲染器已迁 ESM（P4 T2）：回退 / 压缩域注册壳先求值（状态键 window
+    // 访问器 + owner claim），再真实 import 渲染入口。渲染入口经 c.expose 注入
+    // 沙箱，让用例的经典驱动面（ctx.run）与生产入口名一致。
+    await c.load('public/src/modules/rollback-dialog.js');
+    const render = await c.load(INPUT_RENDER);
+    c.expose('renderInputRequests', render.renderInputRequests);
+    c.expose('notifyInputSurfaceChanged', render.notifyInputSurfaceChanged);
+    c.state = state;
+    return fn({ c, doc, state, container, choiceContainer, render });
+  });
 }
 
 // ── 排队投影装载面（ESM 用例共用）──────────────────────────────────────────
@@ -563,31 +596,23 @@ function mountPromptPill(c, SlashMenu, ta, cmd, typedValue) {
 
 // 输入面重渲染（会话切换 / lease 变化都经同一入口）。ADR-0035 后不存在
 // 「模式翻转」：普通文本 lease 只是一条状态，不改变 composer 形态与端点。
-
-// 输入面重渲染（会话切换 / lease 变化都经同一入口）。ADR-0035 后不存在
-// 「模式翻转」：普通文本 lease 只是一条状态，不改变 composer 形态与端点。
+// 去重签名自 P4 T2 起是渲染器的模块私有状态（不再是沙箱全局）：用例只声明
+// 真实状态变化（会话键 / 模式 / 压缩态），是否重渲染由渲染器按签名自行判定。
 function renderInputSurface(ctx) {
   ctx.state.requests = [];
-  ctx.run('currentInputRequests = []; lastRenderedInputSignature = ""; renderInputRequests([])');
+  ctx.run('currentInputRequests = []; renderInputRequests([])');
 }
 
 function renderInputSurfaceWithLease(ctx, lease) {
   ctx.state.requests = [lease];
   ctx.currentInputRequests = [lease];
-  ctx.run(`
-    currentInputRequests = ${JSON.stringify([lease])};
-    lastRenderedInputSignature = "";
-    renderInputRequests(currentInputRequests);
-  `);
+  ctx.run('renderInputRequests(currentInputRequests)');
 }
 
 // ── 用例 1：lease 不翻转常驻 composer ────────────────────────────────────────
 
 describe('persistent composer DOM identity (ADR-0035)', () => {
-  it('keeps one persistent composer endpoint while a text lease is pending', () => {
-    const ctx = createInputSandbox();
-    loadInputModules(ctx);
-
+  it('keeps one persistent composer endpoint while a text lease is pending', () => withInputCase((ctx) => {
     ctx.run('renderInputRequests([])');
     const textarea = ctx.run("document.getElementById('input-persistent')");
     assert.ok(textarea, 'persistent composer textarea should exist after first render');
@@ -595,19 +620,17 @@ describe('persistent composer DOM identity (ADR-0035)', () => {
     // 普通文本 lease 仍可用于 actions / rollback，但不再接管发言输入面。
     ctx.state.requests = [{ requestId: 'r1', placeholder: 'Answer me' }];
     ctx.currentInputRequests = ctx.state.requests;
-    ctx.run('lastRenderedInputSignature = ""; renderInputRequests(currentInputRequests)');
+    // 文本 lease 不改变 persistent 签名：声明后由渲染器去重，不重渲染。
+    ctx.run('renderInputRequests(currentInputRequests)');
 
     assert.equal(ctx.run("document.getElementById('input-persistent')"), textarea,
       'pending text lease must leave the persistent composer mounted');
     assert.equal(ctx.run("document.getElementById('input-r1')"), null,
       'pending text lease must not create a request-bound text endpoint');
     assert.equal(textarea.closest('[data-persistent-composer]').dataset.composerMode, 'persistent');
-  });
+  }));
 
-  it('hides (but keeps) the composer in hidden/readonly/compacting modes and reuses it after', () => {
-    const ctx = createInputSandbox();
-    loadInputModules(ctx);
-
+  it('hides (but keeps) the composer in hidden/readonly/compacting modes and reuses it after', () => withInputCase((ctx) => {
     ctx.run('renderInputRequests([])');
     const cardA = ctx.run(
       "document.getElementById('user-input-container').querySelector('[data-persistent-composer]')",
@@ -616,15 +639,16 @@ describe('persistent composer DOM identity (ADR-0035)', () => {
 
     // 离开输入面（非 chat surface）→ composer 隐藏但节点保留
     ctx.isChatSurfaceActive = () => false;
-    ctx.run('lastRenderedInputSignature = ""; renderInputRequests([])');
+    ctx.run('renderInputRequests([])');
     assert.equal(ctx.run("document.getElementById('user-input-container').children.length > 0"), true,
       'composer element stays mounted while hidden');
     assert.equal(ctx.run("document.getElementById('user-input-container').querySelector('[data-persistent-composer]')"), cardA);
 
     // 回到 chat surface → 同一节点重新显示
-    ctx.run('lastRenderedInputSignature = ""; renderInputRequests([])');
+    ctx.isChatSurfaceActive = () => true;
+    ctx.run('renderInputRequests([])');
     assert.equal(ctx.run("document.getElementById('user-input-container').querySelector('[data-persistent-composer]')"), cardA);
-  });
+  }));
 });
 
 // ── 回归：容器遭外部清空的异常路径下 composer 单例被 detach（模块单例仍
@@ -642,10 +666,7 @@ describe('transient card insertion vs detached composer singleton (ticket 036 re
     `);
   }
 
-  it('renders the readonly card without throwing after the composer is detached', () => {
-    const ctx = createInputSandbox();
-    loadInputModules(ctx);
-
+  it('renders the readonly card without throwing after the composer is detached', () => withInputCase((ctx) => {
     ctx.run('renderInputRequests([])');
     assert.ok(ctx.run(
       "document.getElementById('user-input-container').querySelector('[data-persistent-composer]')",
@@ -656,7 +677,7 @@ describe('transient card insertion vs detached composer singleton (ticket 036 re
     // 此后转入远程只读会话：renderInputRequests 以 readonly 模式运行
     // （触发路径：detach → readonly）
     ctx.readOnlyMode = true;
-    ctx.run('lastRenderedInputSignature = ""; renderInputRequests([])');
+    ctx.run('renderInputRequests([])');
     const readonlyCard = ctx.run(
       "document.getElementById('user-input-container').querySelector('.user-input-card')",
     );
@@ -666,35 +687,29 @@ describe('transient card insertion vs detached composer singleton (ticket 036 re
     assert.equal(ctx.run(
       "document.getElementById('user-input-container').querySelector('[data-persistent-composer]')",
     ), null);
-  });
+  }));
 
-  it('renders the compacting card without throwing after the composer is detached', () => {
-    const ctx = createInputSandbox();
-    loadInputModules(ctx);
-
+  it('renders the compacting card without throwing after the composer is detached', () => withInputCase((ctx) => {
     ctx.run('renderInputRequests([])');
     detachComposerSimulatingContainerWipe(ctx);
 
     // 会话内压缩 in-flight（发起 runtime 匹配）→ compacting 分支
     ctx._partialCompactInFlight = true;
     ctx._partialCompactRuntimeId = 'agent-1';
-    ctx.run('lastRenderedInputSignature = ""; renderInputRequests([])');
+    ctx.run('renderInputRequests([])');
     const compactCard = ctx.run(
       "document.getElementById('user-input-container').querySelector('.partial-compact-card')",
     );
     assert.ok(compactCard, 'compacting status card renders without throwing');
     // 压缩计时器不悬挂（mini DOM 下 elapsedEl 不存在 → 立即自清，此处兜底）
     ctx.run('if (_compactTimerInterval) clearInterval(_compactTimerInterval)');
-  });
+  }));
 });
 
 // ── 用例 2：会话切换草稿保存/恢复不串 + 提交后草稿键删除 ───────────────────
 
 describe('composer session draft isolation (ticket 036)', () => {
-  it('saves/restores drafts per sessionKey and never mixes sessions', () => {
-    const ctx = createInputSandbox();
-    loadInputModules(ctx);
-
+  it('saves/restores drafts per sessionKey and never mixes sessions', () => withInputCase((ctx) => {
     ctx.run('renderInputRequests([])');
     const ta = ctx.run("document.getElementById('input-persistent')");
     assert.equal(ta.dataset.sessionKey, 'session-a');
@@ -723,11 +738,9 @@ describe('composer session draft isolation (ticket 036)', () => {
     renderInputSurface(ctx);
     const taRestore = ctx.run("document.getElementById('input-persistent')");
     assert.equal(taRestore.value, 'hello session a');
-  });
+  }));
 
-  it('routes the send button through pending prompt activation', () => {
-    const ctx = createInputSandbox();
-    loadInputModules(ctx);
+  it('routes the send button through pending prompt activation', () => withInputCase((ctx) => {
     const calls = [];
     ctx.window.ClawSlash = {
       submitWithPendingPrompts: (textarea, submit) => {
@@ -749,7 +762,7 @@ describe('composer session draft isolation (ticket 036)', () => {
     assert.equal(calls.length, 2, 'request send button delegates through the same prompt activation');
     assert.equal(calls[1].textarea, textarea);
     assert.equal(typeof calls[1].submit, 'function');
-  });
+  }));
 
   it('activates pending prompts before invoking the supplied submit path and hands refs to the payload consumer', async () => {
     const invokeCalls = [];
@@ -779,9 +792,7 @@ describe('composer session draft isolation (ticket 036)', () => {
     });
   });
 
-  it('rebinds the slash prompt pill bar on session switch only', () => {
-    const ctx = createInputSandbox();
-    loadInputModules(ctx);
+  it('rebinds the slash prompt pill bar on session switch only', () => withInputCase((ctx) => {
     let rebound = 0;
     ctx.window.ClawSlash = { rebindSession: () => { rebound += 1; } };
 
@@ -795,16 +806,16 @@ describe('composer session draft isolation (ticket 036)', () => {
     renderInputSurface(ctx);
     assert.equal(rebound, 1, '会话切换必须重绑 slash prompt pill bar');
 
-    // 同会话的重渲染（含 lease 到达后清除）不重复重绑
+    // 同会话的重渲染（lease 到达后清除 + 只读面往返）不重复重绑
     renderInputSurfaceWithLease(ctx, { requestId: 'r1', placeholder: 'Answer me' });
-    renderInputSurface(ctx);
+    ctx.readOnlyMode = true;
+    ctx.run('renderInputRequests([])');
+    ctx.readOnlyMode = false;
+    ctx.run('renderInputRequests([])');
     assert.equal(rebound, 1, '同会话的重渲染不得触发 pill bar 重绑');
-  });
+  }));
 
-  it('deletes the draft key after a successful persistent submit', async () => {
-    const ctx = createInputSandbox();
-    loadInputModules(ctx);
-
+  it('deletes the draft key after a successful persistent submit', () => withInputCase(async (ctx) => {
     // 提交路径依赖（persistent-input.js submitQueuedInput 片段的伴生 stub）
     ctx.run(`
       let _submitInFlight = false;
@@ -859,7 +870,7 @@ describe('composer session draft isolation (ticket 036)', () => {
     assert.equal(JSON.parse(ctx.fetchCalls[0].opts.body).text, 'send me');
     // 提交成功：草稿键删除（已发送文本不得经草稿写回"复活"）
     assert.equal(ctx.run(`Object.prototype.hasOwnProperty.call(_sessionInputCache, 'session-a')`), false);
-  });
+  }));
 });
 
 // ── slash prompt pill 会话隔离：pill 按会话 key 分桶（附件类会话态同链路）──
@@ -878,7 +889,7 @@ describe('slash prompt pill session isolation (attachment buckets per session)',
   function switchSession(c, state, liveKey, runtimeId) {
     state.liveKey = liveKey;
     c.window.currentRuntimeAgentId = runtimeId;
-    c.read('currentInputRequests = []; lastRenderedInputSignature = ""; renderInputRequests([])');
+    c.read('currentInputRequests = []; renderInputRequests([])');
   }
 
   // pill 条目的短名清单（`/grill-me` → 'grill-me'）：既证明条数，也证明恢复/
@@ -983,7 +994,7 @@ describe('slash prompt pill session isolation (attachment buckets per session)',
       // 切回 A：两个 pill 都还在原会话桶（切回后仍可发送）
       state.liveKey = 'session-a';
       c.window.currentRuntimeAgentId = 'agent-1';
-      c.read('currentInputRequests = []; lastRenderedInputSignature = ""; renderInputRequests([])');
+      c.read('currentInputRequests = []; renderInputRequests([])');
       assert.equal(pillNames(c), 2, 'pill 留在原会话桶，切回后仍可发送');
       assert.deepEqual(pillLabels(c), ['grill-me', 'some-other'], '原会话桶里的 pill 身份未变');
     });
@@ -993,28 +1004,34 @@ describe('slash prompt pill session isolation (attachment buckets per session)',
 // ── 用例 3：草稿迁移后 voice-input.js 的 re-export 与既有引用零行为变化 ─────
 
 describe('draft cache migration compatibility (ticket 036)', () => {
-  it('keeps voice-input.js consumers working against the composer-owned cache', () => {
-    const ctx = createFrontendSandbox();
+  // voice-input 已迁 ESM（P4 L3）：跨会话发送失败的消费路径改真实 import；
+  // 草稿缓存本体仍是 input-composer.js（classic 相桥键 `_sessionInputCache`），
+  // 两个方向的读写落在同一份缓存上——这正是本用例钉住的兼容面。
+  it('keeps voice-input.js consumers working against the composer-owned cache', async () => {
     const toasts = [];
-    ctx.window.ClawToast = { show: (value) => toasts.push(value) };
-    // 草稿缓存本体住在 input-composer.js（工单 036 迁移后）
-    ctx.loadSource('public/src/modules/input-composer.js');
-    // voice-input.js 的既有消费片段（跨会话发送失败 → 草稿回滚 + error toast）
-    const voiceSource = fs.readFileSync('public/src/modules/voice-input.js', 'utf8');
-    ctx.run(sourceBetween(voiceSource, 'function _restoreCrossSessionVoiceInput', 'function stopVoiceRecording'));
+    await withP2EsmCase({
+      classic: (sandbox) => {
+        prepareClassicSandbox(sandbox);
+        sandbox.loadSource('public/src/modules/input-composer.js');
+      },
+    }, async (c) => {
+      const voiceInput = await c.load('public/src/modules/voice-input.js');
+      // toast-notify 在自己的模块求值时挂 window.ClawToast，桩在装载之后覆盖。
+      c.window.ClawToast = { show: (value) => toasts.push(value) };
 
-    // 既有引用零行为变化：发送失败把全文回滚到 composer 拥有的草稿缓存
-    ctx.run(`_restoreCrossSessionVoiceInput('session-a', 'typed and spoken', 'agent-a', 'runtime unavailable')`);
-    assert.equal(ctx.run(`_sessionInputCache['session-a']`), 'typed and spoken');
-    assert.equal(toasts.length, 1);
-    assert.equal(toasts[0].status, 'error');
+      // 既有引用零行为变化：发送失败把全文回滚到 composer 拥有的草稿缓存
+      voiceInput._restoreCrossSessionVoiceInput('session-a', 'typed and spoken', 'agent-a', 'runtime unavailable');
+      assert.equal(c.read(`_sessionInputCache['session-a']`), 'typed and spoken');
+      assert.equal(toasts.length, 1);
+      assert.equal(toasts[0].status, 'error');
 
-    // 语音 onstop 自动发送路径按原全局符号读取缓存（拼接原会话草稿 + 转写文本）
-    ctx.run(`_cacheSessionInput({ dataset: { sessionKey: 'session-b' }, value: 'typed ' })`);
-    assert.equal(ctx.run(`_sessionInputCache['session-b']`), 'typed ');
-    // 迁移后 voice-input.js 不再拥有缓存状态：消费方按符号解析到 composer 绑定
-    ctx.run(`delete _sessionInputCache['session-b']`);
-    assert.equal(ctx.run(`_sessionInputCache['session-b']`), undefined);
+      // 语音 onstop 自动发送路径按同一份缓存读取（拼接原会话草稿 + 转写文本）
+      c.read(`_cacheSessionInput({ dataset: { sessionKey: 'session-b' }, value: 'typed ' })`);
+      assert.equal(c.read(`_sessionInputCache['session-b']`), 'typed ');
+      // 迁移后 voice-input.js 不再拥有缓存状态：消费方解析到 composer 绑定
+      c.read(`delete _sessionInputCache['session-b']`);
+      assert.equal(c.read(`_sessionInputCache['session-b']`), undefined);
+    });
   });
 });
 
@@ -1094,7 +1111,7 @@ function sourceBetween(source, startMarker, endMarker) {
 describe('pending image removal race during await (remote image review S1)', () => {
   function loadImageResolverSandbox() {
     const ctx = createInputSandbox();
-    loadInputModules(ctx);
+    loadInputClassic(ctx);
     ctx.run(`
       const _pendingImageBuckets = new Map();
       _pendingImageBuckets.set('bucket', []);
@@ -1164,7 +1181,7 @@ describe('pending image removal race during await (remote image review S1)', () 
 describe('pending image session isolation (attachment buckets per session)', () => {
   function loadImageBucketSandbox() {
     const ctx = createInputSandbox();
-    loadInputModules(ctx);
+    loadInputClassic(ctx);
     ctx.run(`
       const _pendingImageBuckets = new Map();
       let __activeKey = 'rt-a::sess-a';

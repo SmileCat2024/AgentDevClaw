@@ -1,12 +1,118 @@
+/**
+ * Feature 详情弹窗（页签 / 技能列表与阅读页 / 空态 / 钩子行）行为钉子。
+ *
+ * P4 T2 批次把 debug-features-hooks 转为 ESM 后，本文件改走**真实 import 路线**
+ * （withP2EsmCase + c.load）：断言面从「classic 全局函数 + 模块私有变量」改为
+ * 公开入口——`renderFeatureDetailOverlay`（弹窗渲染）与 `features.*`
+ * data-action（分发器注册表）；页签内容经 portal 的 `[role="tabpanel"]`
+ * 替换节点观测，阅读页正文经 portal.innerHTML 观测。
+ *
+ * 装载路线：一个用例 = 一份真实 classic 沙箱（action-dispatcher / app-core /
+ * markdown-bootstrap / session-view-state）+ 真实 import 的 features 模块与其
+ * 状态 owner（session-view-storage / render-entry-state / orchestration-state /
+ * p2-bootstrap-debug-panel）。`t` 与 markdown 走生产实现。
+ */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { Renderer } from 'marked';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+
+const FEATURES = 'public/src/modules/debug-features-hooks.js';
+const DEBUG_PANEL = 'public/src/modules/p2-bootstrap-debug-panel.js';
+const SESSION_VIEW = 'public/src/modules/session-view-storage.js';
+const RENDER_ENTRY = 'public/src/modules/render-entry-state.js';
+const ORCHESTRATION = 'public/src/modules/orchestration-state.js';
+
+const markedStub = { Renderer, setOptions() {}, parse: (source) => 'MD:' + source };
+
+/** 通用元素桩（模块会在它上面读写 textContent / class / dataset / 属性）。 */
+function createNode(extra = {}) {
+  const classes = new Set();
+  return {
+    tagName: 'DIV',
+    dataset: {},
+    style: { setProperty() {} },
+    children: [],
+    attributes: {},
+    className: '',
+    value: '',
+    textContent: '',
+    classList: {
+      add(...names) { names.forEach((name) => classes.add(name)); },
+      remove(...names) { names.forEach((name) => classes.delete(name)); },
+      toggle(name, force) {
+        const next = force === undefined ? !classes.has(name) : Boolean(force);
+        if (next) classes.add(name); else classes.delete(name);
+        return next;
+      },
+      contains(name) { return classes.has(name); },
+    },
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    getAttribute(name) { return this.attributes[name] ?? null; },
+    removeAttribute(name) { delete this.attributes[name]; },
+    addEventListener() {},
+    removeEventListener() {},
+    appendChild(child) { this.children.push(child); return child; },
+    removeChild(child) { this.children = this.children.filter((item) => item !== child); },
+    insertAdjacentHTML() {},
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    contains() { return false; },
+    closest() { return null; },
+    focus() {},
+    blur() {},
+    remove() {},
+    ...extra,
+  };
+}
+
+/** `document.createElement` 的包装节点语义：feature 详情用它把 HTML 转成节点。 */
+function createWrapperNode() {
+  const first = createNode({ outerHTML: '' });
+  const wrapper = createNode();
+  Object.defineProperty(wrapper, 'firstElementChild', { value: first, configurable: true });
+  Object.defineProperty(wrapper, 'innerHTML', {
+    configurable: true,
+    get() { return first.outerHTML; },
+    set(value) { first.outerHTML = String(value ?? ''); },
+  });
+  return wrapper;
+}
 
 /**
- * 页签条节点替身：只实现复用路径真正用到的表面（dataset / 子按钮 / 属性写）。
+ * 弹窗 portal 替身：`innerHTML` 记录整窗 HTML；`querySelector` 提供详情页签
+ * 复用路径需要的四个选择器；`querySelectorAll` 返回活页签按钮（若给）。
  */
+function createPortal({ existingTabBar = null } = {}) {
+  const placeholder = { replacedWith: null, replaceWith(node) { this.replacedWith = node; } };
+  const panel = { replacedBy: null, replaceWith(node) { this.replacedBy = node; } };
+  const scroll = { scrollTop: 0 };
+  const state = { html: '', writes: 0 };
+  const portal = {
+    id: 'feature-detail-portal',
+    get innerHTML() { return state.html; },
+    set innerHTML(value) {
+      state.html = String(value ?? '');
+      state.writes += 1;
+    },
+    writes: () => state.writes,
+    querySelector(selector) {
+      if (selector === '[role="tablist"][aria-label]') return existingTabBar;
+      if (selector === '.feature-detail-tabs-placeholder') return placeholder;
+      if (selector === '.settings-tab-content') return scroll;
+      if (selector === '[role="tabpanel"]') return panel;
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === '[data-feature-detail-tab]' && existingTabBar ? existingTabBar.buttons : [];
+    },
+  };
+  return { portal, panel, placeholder, scroll, state };
+}
+
+/** 页签条节点替身：只实现复用路径真正用到的表面。 */
 function createTabBar(featureName, { buttonCount = 3 } = {}) {
-  const buttons = ['tools', 'skills', 'hooks'].slice(0, buttonCount).map(key => {
+  const buttons = ['tools', 'skills', 'hooks'].slice(0, buttonCount).map((key) => {
     const labelNode = { nodeType: 3, nodeValue: key };
     const countNode = { textContent: '0' };
     return {
@@ -29,114 +135,143 @@ function createTabBar(featureName, { buttonCount = 3 } = {}) {
   };
 }
 
-function createOverlayHarness(existingTabBar) {
-  const placeholder = { replacedWith: null, replaceWith(node) { this.replacedWith = node; } };
-  const panel = { replaceWith() {} };
-  const created = [];
-  const portal = {
-    _html: '',
-    get innerHTML() { return this._html; },
-    set innerHTML(value) { this._html = value; },
-    querySelector(selector) {
-      if (selector === '[role="tablist"][aria-label]') return existingTabBar;
-      if (selector === '.feature-detail-tabs-placeholder') return placeholder;
-      if (selector === '[role="tabpanel"]') return panel;
-      return null;
-    },
-    querySelectorAll() { return existingTabBar ? existingTabBar.buttons : []; },
-  };
+/** 每个用例的 window / document 与真实 ESM 模块。 */
+async function withFeatureDetailCase(fn, { portalHarness, fetchImpl } = {}) {
+  const harness = portalHarness || createPortal();
+  const nodes = new Map();
   const document = {
-    getElementById(id) { return id === 'feature-detail-portal' ? portal : null; },
-    // 真实 document 形状：action-dispatcher 加载期在 document 上绑委托监听。
-    addEventListener() {},
-    createElement() {
-      const wrapper = {
-        firstElementChild: { outerHTML: '', dataset: {}, attributes: {}, children: [] },
-        set innerHTML(value) { wrapper.firstElementChild.outerHTML = value; },
-      };
-      created.push(wrapper);
-      return wrapper;
+    activeElement: null,
+    readyState: 'complete',
+    body: createNode(),
+    head: createNode(),
+    documentElement: createNode(),
+    getElementById(id) {
+      if (id === 'feature-detail-portal') return harness.portal;
+      if (!nodes.has(id)) nodes.set(id, createNode());
+      return nodes.get(id);
     },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement() { return createWrapperNode(); },
+    createTextNode(text) { return { textContent: String(text), nodeType: 3 }; },
+    addEventListener() {},
+    removeEventListener() {},
+    createTreeWalker() { return { nextNode: () => null }; },
   };
-  return { document, portal, placeholder, created };
+  return withP2EsmCase({
+    globals: {
+      marked: markedStub,
+      hljs: { getLanguage: () => null },
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      document,
+      console: { ...console, log() {}, info() {}, debug() {} },
+      fetch: fetchImpl || (async () => ({ ok: true, status: 200, text: async () => '# Skill body' })),
+    },
+    classic: (sandbox) => {
+      sandbox.window.marked = markedStub;
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource('public/src/app-core.js');
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
+      sandbox.loadSource('public/src/modules/session-view-state.js');
+    },
+  }, async (c) => {
+    const features = await c.load(FEATURES);
+    const state = {
+      features,
+      debugPanel: (await c.load(DEBUG_PANEL)).debugPanel,
+      sessionView: await c.load(SESSION_VIEW),
+      renderEntry: await c.load(RENDER_ENTRY),
+      orchestration: await c.load(ORCHESTRATION),
+      harness,
+      window: c.window,
+      actions: c.window.ClawFW.actions,
+    };
+    state.renderEntry.setActiveFeaturePanel('hooks');
+    state.orchestration.setCurrentRuntimeAgentId('runtime-1');
+    return fn(state);
+  });
 }
 
-function loadModule(document) {
-  return createFrontendSandbox({
-    document,
-    window: { document },
-    selectedFeatureName: null,
-    activeFeaturePanel: 'hooks',
-    currentRuntimeAgentId: 'runtime-1',
-    currentHookInspector: { features: [], hooks: [] },
-    t(key) { return key; },
-    shortenSourcePath(value) { return value; },
-    getFeatureStatus() { return 'enabled'; },
-    getFeatureStatusLabel() { return 'enabled'; },
-    getStatusBadgeClass() { return ''; },
-    renderMarkdown(value) { return value; },
+/** 模板动作：生产路径（分发器注册表），不是直接调内部函数。 */
+function invokeAction(state, name, dataset) {
+  return state.actions.invoke(name, { dataset });
+}
+
+/** 打开详情并切到指定页签；返回该页签的内容节点。 */
+function openDetailTab(state, feature, tab) {
+  state.debugPanel.selectedFeatureName = feature.name;
+  state.sessionView.setCurrentHookInspector({
+    lifecycleOrder: [],
+    features: [feature],
+    hooks: [],
   });
+  state.features.renderFeatureDetailOverlay(feature);
+  // 页签状态是模块私有的：先切到另一个页签，再切目标页签（同值短路会直接返回）。
+  const pivot = ['hooks', 'skills', 'tools'].find((key) => key !== tab);
+  invokeAction(state, 'features.setDetailTab', { tabKey: pivot, featureName: feature.name });
+  invokeAction(state, 'features.setDetailTab', { tabKey: tab, featureName: feature.name });
+  return state.harness.panel.replacedBy;
+}
+
+function baseFeature(extra = {}) {
+  return {
+    name: 'shell',
+    tools: [],
+    skills: [],
+    hookCount: 0,
+    toolCount: 0,
+    enabledToolCount: 0,
+    description: '',
+    source: 'src/index.js',
+    mapped: false,
+    ...extra,
+  };
 }
 
 describe('Feature detail tab bar identity', () => {
-  it('does not reuse another feature\'s tab bar when switching features', () => {
+  it('does not reuse another feature\'s tab bar when switching features', async () => {
     // 页签条上的 data-action 参数与 data-feature-detail-tabs-for 都绑定 featureName。
-    // 跨 Feature 复用会让新弹窗沿用旧回调：setFeatureDetailTab 的归属校验
-    // 会静默拒绝，用户看到的就是"分页器在那儿但点了不动"。
+    // 跨 Feature 复用会让新弹窗沿用旧回调（归属校验静默拒绝 → 分页器点了不动）。
     const otherBar = createTabBar('previous-feature');
-    const harness = createOverlayHarness(otherBar);
-    const ctx = loadModule(harness.document);
-    ctx.loadSource('public/src/modules/action-dispatcher.js');
-    ctx.loadSource('public/src/modules/debug-features-hooks.js');
+    const portalHarness = createPortal({ existingTabBar: otherBar });
+    await withFeatureDetailCase(async ({ features, harness }) => {
+      features.renderFeatureDetailOverlay(baseFeature({
+        name: 'next-feature',
+        skills: [{ name: 'guide', description: 'Help', root: 0, path: 'skills/guide/SKILL.md' }],
+      }));
 
-    ctx.run(`renderFeatureDetailOverlay({
-      name: 'next-feature',
-      tools: [],
-      skills: [{ name: 'guide', description: 'Help', root: 0, path: 'skills/guide/SKILL.md' }],
-      hookCount: 0,
-      toolCount: 0,
-      enabledToolCount: 0,
-      description: '',
-      source: 'src/index.js',
-    })`);
-
-    const replaced = harness.placeholder.replacedWith;
-    assert.ok(replaced, 'placeholder must be filled with a tab bar');
-    assert.notEqual(replaced, otherBar, 'tab bar of another feature must not be reused');
-    assert.match(replaced.outerHTML, /data-feature-detail-tabs-for="next-feature"/);
-    // 动作参数绑定 featureName：跨 Feature 复用旧页签时，setFeatureDetailTab
-    // 的归属校验会静默拒绝（分页器点了不动）。
-    assert.match(replaced.outerHTML, /data-tab-key="skills" data-feature-name="next-feature"/);
+      const replaced = harness.placeholder.replacedWith;
+      assert.ok(replaced, 'placeholder must be filled with a tab bar');
+      assert.notEqual(replaced, otherBar, 'tab bar of another feature must not be reused');
+      assert.match(replaced.outerHTML, /data-feature-detail-tabs-for="next-feature"/);
+      assert.match(replaced.outerHTML, /data-tab-key="skills" data-feature-name="next-feature"/);
+    }, { portalHarness });
   });
 
-  it('keeps the same tab bar node when re-rendering the same feature', () => {
+  it('keeps the same tab bar node when re-rendering the same feature', async () => {
     // 轮询重绘（同一 Feature）必须保住按钮节点：按下到 click 之间节点脱离
     // DOM 会让浏览器取消整串点击事件。
     const sameBar = createTabBar('same-feature');
-    const harness = createOverlayHarness(sameBar);
-    const ctx = loadModule(harness.document);
-    ctx.loadSource('public/src/modules/action-dispatcher.js');
-    ctx.loadSource('public/src/modules/debug-features-hooks.js');
+    const portalHarness = createPortal({ existingTabBar: sameBar });
+    await withFeatureDetailCase(async ({ features, harness }) => {
+      features.renderFeatureDetailOverlay(baseFeature({
+        name: 'same-feature',
+        tools: [{ name: 'run', state: 'enabled', enabled: true }],
+        skills: [{ name: 'guide', description: 'Help', root: 0, path: 'skills/guide/SKILL.md' }],
+        toolCount: 1,
+        enabledToolCount: 1,
+      }));
 
-    ctx.run(`renderFeatureDetailOverlay({
-      name: 'same-feature',
-      tools: [{ name: 'run', state: 'enabled', enabled: true }],
-      skills: [{ name: 'guide', description: 'Help', root: 0, path: 'skills/guide/SKILL.md' }],
-      hookCount: 0,
-      toolCount: 1,
-      enabledToolCount: 1,
-      description: '',
-      source: 'src/index.js',
-    })`);
-
-    assert.equal(harness.placeholder.replacedWith, sameBar, 'same-feature refresh must reuse the live tab bar');
-    // 复用路径同样要刷新计数：工具数从 0 变成 1
-    assert.equal(sameBar.buttons[0].querySelector('.ph-tab-count').textContent, '1');
+      assert.equal(harness.placeholder.replacedWith, sameBar,
+        'same-feature refresh must reuse the live tab bar');
+      // 复用路径同样要刷新计数：工具数从 0 变成 1
+      assert.equal(sameBar.buttons[0].querySelector('.ph-tab-count').textContent, '1');
+    }, { portalHarness });
   });
 });
 
 describe('features.setDetailTab action', () => {
-  it('switches the visible panel in place without rebuilding the tab bar', () => {
+  it('switches the visible panel in place without rebuilding the tab bar', async () => {
     // 活页签条替身：active 类与 aria-selected 分别记账，节点身份用同一批按钮对象
     // 证明（生产代码走 querySelectorAll 取活页签，不重建整条）。
     const makeLiveTabButton = (key) => {
@@ -148,79 +283,48 @@ describe('features.setDetailTab action', () => {
         classList: {
           add(name) { if (name === 'active') state.active = true; },
           remove(name) { if (name === 'active') state.active = false; },
+          toggle(name, force) {
+            if (name !== 'active') return Boolean(force);
+            state.active = force === undefined ? !state.active : Boolean(force);
+            return state.active;
+          },
         },
         setAttribute(name, value) { if (name === 'aria-selected') state.ariaSelected = String(value); },
       };
     };
     const buttons = ['tools', 'skills', 'hooks'].map(makeLiveTabButton);
     const liveBarReads = [];
-
-    const panel = { replaceWith(next) { this.replacedBy = next; } };
-    let innerHTMLWrites = 0;
-    const portal = {
-      _html: '<dialog></dialog>',
-      get innerHTML() { return this._html; },
-      set innerHTML(value) { this._html = value; innerHTMLWrites += 1; },
-      querySelector(selector) { return selector === '[role="tabpanel"]' ? panel : null; },
-      querySelectorAll(selector) {
-        if (selector !== '[data-feature-detail-tab]') return [];
-        liveBarReads.push(buttons);
-        return buttons;
-      },
+    const portalHarness = createPortal({ existingTabBar: createTabBar('with-skills') });
+    portalHarness.portal.querySelectorAll = (selector) => {
+      if (selector !== '[data-feature-detail-tab]') return [];
+      liveBarReads.push(buttons);
+      return buttons;
     };
-    const document = {
-      getElementById(id) { return id === 'feature-detail-portal' ? portal : null; },
-    // 真实 document 形状：action-dispatcher 加载期在 document 上绑委托监听。
-    addEventListener() {},
-      createElement() {
-        const wrapper = {
-          firstElementChild: { outerHTML: '' },
-          set innerHTML(value) { wrapper.firstElementChild.outerHTML = value; },
-        };
-        return wrapper;
-      },
-    };
-    portal.innerHTML = '<dialog></dialog>';
-    const writesBeforeSwitch = innerHTMLWrites;
-    const ctx = createFrontendSandbox({
-      document,
-      window: { document },
-      selectedFeatureName: 'with-skills',
-      activeFeaturePanel: 'hooks',
-      currentRuntimeAgentId: 'runtime-1',
-      currentHookInspector: {
-        features: [{
-          name: 'with-skills',
-          tools: [],
-          skills: [{ name: 'guide', description: 'Help', root: 0, path: 'skills/guide/SKILL.md' }],
-          hookCount: 0,
-        }],
-        hooks: [],
-      },
-      t(key) { return key; },
-      shortenSourcePath(value) { return value; },
-      getFeatureStatus() { return 'enabled'; },
-      getFeatureStatusLabel() { return 'enabled'; },
-      getStatusBadgeClass() { return ''; },
-      renderMarkdown(value) { return value; },
-    });
-    ctx.loadSource('public/src/modules/action-dispatcher.js');
-    ctx.loadSource('public/src/modules/debug-features-hooks.js');
 
-    // 生产路径：模板 data-action="features.setDetailTab" 经分发器注册表分发。
-    ctx.run(`window.ClawFW.actions.invoke('features.setDetailTab', {
-      dataset: { tabKey: 'skills', featureName: 'with-skills' },
-    })`);
+    await withFeatureDetailCase(async (state) => {
+      const feature = baseFeature({
+        name: 'with-skills',
+        skills: [{ name: 'guide', description: 'Help', root: 0, path: 'skills/guide/SKILL.md' }],
+      });
+      state.debugPanel.selectedFeatureName = 'with-skills';
+      state.sessionView.setCurrentHookInspector({ lifecycleOrder: [], features: [feature], hooks: [] });
+      state.features.renderFeatureDetailOverlay(feature);
+      const writesBeforeSwitch = portalHarness.state.writes;
 
-    assert.equal(innerHTMLWrites, writesBeforeSwitch, 'tab switching must not rebuild the portal');
-    assert.match(panel.replacedBy.outerHTML, /feature-skill-list/, 'skills tab must replace the visible content panel');
-    // 节点身份：动作分发后读到/改到的仍是同一批活页签节点，没有整条重建。
-    assert.equal(liveBarReads.filter(read => read === buttons).length >= 1, true, 'action must reuse the live tab bar');
-    // active 类与 aria-selected 成对更新：目标页签选中，原页签取消。
-    assert.equal(buttons[1].active, true, 'skills tab must be the active one');
-    assert.equal(buttons[0].active, false, 'tools tab must be deactivated');
-    assert.equal(buttons[1].ariaSelected, 'true');
-    assert.equal(buttons[0].ariaSelected, 'false');
+      invokeAction(state, 'features.setDetailTab', { tabKey: 'skills', featureName: 'with-skills' });
+
+      assert.equal(portalHarness.state.writes, writesBeforeSwitch,
+        'tab switching must not rebuild the portal');
+      assert.match(portalHarness.panel.replacedBy.outerHTML, /feature-skill-list/,
+        'skills tab must replace the visible content panel');
+      // 节点身份：动作分发后读到/改到的仍是同一批活页签节点，没有整条重建。
+      assert.equal(liveBarReads.length >= 1, true, 'action must reuse the live tab bar');
+      // active 类与 aria-selected 成对更新：目标页签选中，原页签取消。
+      assert.equal(buttons[1].active, true, 'skills tab must be the active one');
+      assert.equal(buttons[0].active, false, 'tools tab must be deactivated');
+      assert.equal(buttons[1].ariaSelected, 'true');
+      assert.equal(buttons[0].ariaSelected, 'false');
+    }, { portalHarness });
   });
 });
 
@@ -229,247 +333,219 @@ describe('skills tab: cards + reader sub-page', () => {
     { name: 'grill-me', description: 'Grill the plan', root: 0, path: 'skills/grill-me/SKILL.md' },
     { name: 'claw-help', description: 'Usage help', root: 0, path: 'skills/claw-help/SKILL.md' },
   ];
-  const FEATURE = { name: 'shell', tools: [], skills: SKILLS, hookCount: 0, toolCount: 0, enabledToolCount: 0 };
+  const FEATURE = baseFeature({ name: 'shell', skills: SKILLS });
 
-  function loadSkillsModule() {
-    const ctx = createFrontendSandbox({
-      document: { getElementById() { return null; }, createElement() { return {}; }, addEventListener() {} },
-      window: {},
-      selectedFeatureName: 'shell',
-      activeFeaturePanel: 'hooks',
-      currentRuntimeAgentId: 'runtime-1',
-      currentHookInspector: { features: [FEATURE], hooks: [] },
-      t(key) { return key; },
-      shortenSourcePath(value) { return value; },
-      getFeatureStatus() { return 'enabled'; },
-      getFeatureStatusLabel() { return 'enabled'; },
-      getStatusBadgeClass() { return ''; },
-      renderMarkdown(value) { return 'MD:' + value; },
-    });
-    ctx.loadSource('public/src/modules/action-dispatcher.js');
-    ctx.loadSource('public/src/modules/debug-features-hooks.js');
-    return ctx;
-  }
-
-  function enterSkillsTab(ctx) {
-    ctx.run(`(() => {
-      ensureFeatureDetailTabOwner('shell');
-      window.setFeatureDetailTab('skills', 'shell');
-    })()`);
-  }
-
-  it('renders one card per skill carrying only name and description', () => {
+  it('renders one card per skill carrying only name and description', async () => {
     // 列表页只呈现描述摘要，完整文档进阅读页——整份 SKILL.md 铺进列表会把
     // 技能分页撑成一篇长文，多个技能叠在一起几乎无法浏览。
-    const ctx = loadSkillsModule();
-    enterSkillsTab(ctx);
-    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
-    assert.equal((html.match(/class="feature-skill-card is-clickable"/g) || []).length, 2);
-    assert.match(html, /Grill the plan/);
-    assert.match(html, /Usage help/);
-    assert.doesNotMatch(html, /feature-skill-markdown/, 'list must not embed the document body');
-    assert.doesNotMatch(html, /feature-skill-loading/, 'list must not prefetch document bodies');
+    await withFeatureDetailCase(async (state) => {
+      const content = openDetailTab(state, FEATURE, 'skills');
+      const html = content.outerHTML;
+      assert.equal((html.match(/class="feature-skill-card is-clickable"/g) || []).length, 2);
+      assert.match(html, /Grill the plan/);
+      assert.match(html, /Usage help/);
+      assert.doesNotMatch(html, /feature-skill-markdown/, 'list must not embed the document body');
+      assert.doesNotMatch(html, /feature-skill-loading/, 'list must not prefetch document bodies');
+    });
   });
 
-  it('makes each card open the reader for that skill', () => {
-    const ctx = loadSkillsModule();
-    enterSkillsTab(ctx);
-    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
-    assert.match(html, /data-action="features.openSkill" data-feature-name="shell" data-skill-name="grill-me"/);
-    assert.match(html, /data-action="features.openSkill" data-feature-name="shell" data-skill-name="claw-help"/);
+  it('makes each card open the reader for that skill', async () => {
+    await withFeatureDetailCase(async (state) => {
+      const html = openDetailTab(state, FEATURE, 'skills').outerHTML;
+      assert.match(html, /data-action="features.openSkill" data-feature-name="shell" data-skill-name="grill-me"/);
+      assert.match(html, /data-action="features.openSkill" data-feature-name="shell" data-skill-name="claw-help"/);
+    });
   });
 
-  it('shows the document only in the reader, and only after it is fetched', () => {
-    const ctx = loadSkillsModule();
-    enterSkillsTab(ctx);
-    ctx.run(`_skillView = 'grill-me'`);
-    const pending = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
-    assert.match(pending, /feature-skill-reader/);
-    assert.match(pending, /feature_detail_loading_skill/);
-    assert.doesNotMatch(pending, /feature-skill-list/, 'reader replaces the list, it does not append to it');
+  it('shows the document only in the reader, and only after it is fetched', async () => {
+    const portalHarness = createPortal();
+    let releaseFetch;
+    const fetchImpl = () => new Promise((resolve) => {
+      releaseFetch = () => resolve({ ok: true, status: 200, text: async () => '# Grill' });
+    });
+    await withFeatureDetailCase(async (state) => {
+      openDetailTab(state, FEATURE, 'skills');
+      invokeAction(state, 'features.openSkill', { featureName: 'shell', skillName: 'grill-me' });
 
-    ctx.run(`_skillContentCache.set(
-      'runtime-1::shell::grill-me::' + resourceUrlForSkill(${JSON.stringify(FEATURE)}, ${JSON.stringify(SKILLS[0])}),
-      { content: '# Grill' })`);
-    const loaded = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
-    assert.match(loaded, /MD:# Grill/);
+      const pending = portalHarness.portal.innerHTML;
+      assert.match(pending, /feature-skill-reader/);
+      assert.match(pending, /正在读取技能文档/, 'reader shows the loading state first');
+      assert.doesNotMatch(pending, /feature-skill-list/, 'reader replaces the list, it does not append to it');
+
+      releaseFetch();
+      for (let i = 0; i < 50 && !/MD:# Grill/.test(portalHarness.portal.innerHTML); i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.match(portalHarness.portal.innerHTML, /MD:# Grill/, 'fetched body renders into the reader');
+    }, { portalHarness, fetchImpl });
   });
 
-  it('leaves the reader when switching tabs or features', () => {
+  it('leaves the reader when switching tabs or features', async () => {
     // 否则下次回到技能分页会直接落在上一份文档上，且阅读页归属已对不上。
-    const ctx = loadSkillsModule();
-    enterSkillsTab(ctx);
-    ctx.run(`_skillView = 'grill-me'`);
-    ctx.run(`window.setFeatureDetailTab('tools', 'shell')`);
-    assert.equal(ctx.run('_skillView'), null, 'leaving the skills tab must close the reader');
-    enterSkillsTab(ctx);
-    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
-    assert.match(html, /feature-skill-list/);
+    const portalHarness = createPortal();
+    await withFeatureDetailCase(async (state) => {
+      openDetailTab(state, FEATURE, 'skills');
+      invokeAction(state, 'features.openSkill', { featureName: 'shell', skillName: 'grill-me' });
+      for (let i = 0; i < 50 && !/feature-skill-markdown/.test(portalHarness.portal.innerHTML); i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.match(portalHarness.portal.innerHTML, /feature-skill-reader/);
 
-    ctx.run(`_skillView = 'grill-me'`);
-    ctx.run(`ensureFeatureDetailTabOwner('other-feature')`);
-    assert.equal(ctx.run('_skillView'), null, 'switching feature must close the reader');
+      invokeAction(state, 'features.setDetailTab', { tabKey: 'tools', featureName: 'shell' });
+      invokeAction(state, 'features.setDetailTab', { tabKey: 'skills', featureName: 'shell' });
+      const backToSkills = portalHarness.panel.replacedBy.outerHTML;
+      assert.match(backToSkills, /feature-skill-list/, 'leaving the skills tab must close the reader');
+      assert.doesNotMatch(backToSkills, /feature-skill-reader/);
+
+      // 切 Feature 同样退出阅读页：再次打开 reader 后换 Feature 身份
+      invokeAction(state, 'features.openSkill', { featureName: 'shell', skillName: 'grill-me' });
+      state.debugPanel.selectedFeatureName = 'other-feature';
+      state.sessionView.setCurrentHookInspector({
+        lifecycleOrder: [], features: [baseFeature({ name: 'other-feature' })], hooks: [],
+      });
+      state.features.renderFeatureDetailOverlay(baseFeature({ name: 'other-feature' }));
+      invokeAction(state, 'features.setDetailTab', { tabKey: 'skills', featureName: 'other-feature' });
+      assert.doesNotMatch(portalHarness.panel.replacedBy.outerHTML, /feature-skill-reader/,
+        'switching feature must close the reader');
+    }, { portalHarness });
   });
 });
 
 describe('feature detail empty states', () => {
   // 详情分页的空态不再是一行灰字（.gateway-list-empty），而是项目统一的
   // 「交互页面」空态卡族：虚线卡 + 图标块 + 标题 + 描述。
-  function loadEmptyModule(feature) {
-    const ctx = createFrontendSandbox({
-      document: { getElementById() { return null; }, createElement() { return {}; }, addEventListener() {} },
-      window: {},
-      selectedFeatureName: feature.name,
-      activeFeaturePanel: 'hooks',
-      currentRuntimeAgentId: 'runtime-1',
-      currentHookInspector: { features: [feature], hooks: [] },
-      t(key) { return key; },
-      shortenSourcePath(value) { return value; },
-      getFeatureStatus() { return 'enabled'; },
-      getFeatureStatusLabel() { return 'enabled'; },
-      getStatusBadgeClass() { return ''; },
-      renderMarkdown(value) { return 'MD:' + value; },
-    });
-    ctx.loadSource('public/src/modules/action-dispatcher.js');
-    ctx.loadSource('public/src/modules/debug-features-hooks.js');
-    ctx.run(`ensureFeatureDetailTabOwner('${feature.name}')`);
-    return ctx;
-  }
-
-  function openTab(ctx, tab, feature) {
-    return ctx.run(`(() => {
-      window.setFeatureDetailTab('${tab}', '${feature.name}');
-      return renderFeatureDetailContent(${JSON.stringify(feature)});
-    })()`);
-  }
-
   for (const tab of ['tools', 'skills', 'hooks']) {
-    it(`${tab} tab renders the shared empty card when there is nothing to show`, () => {
-      const feature = { name: 'bare', tools: [], skills: [], hookCount: 0, toolCount: 0, enabledToolCount: 0 };
-      const ctx = loadEmptyModule(feature);
-      const html = openTab(ctx, tab, feature);
-      assert.match(html, /class="gen-ui-empty"/, 'empty state must reuse the project empty-card recipe');
-      assert.match(html, /class="gen-ui-empty-icon"/);
-      assert.match(html, /class="gen-ui-empty-title"/);
-      assert.match(html, /class="gen-ui-empty-description"/);
-      assert.doesNotMatch(html, /gateway-list-empty/, 'the single grey line must be gone');
+    it(`${tab} tab renders the shared empty card when there is nothing to show`, async () => {
+      await withFeatureDetailCase(async (state) => {
+        const html = openDetailTab(state, baseFeature({ name: 'bare' }), tab).outerHTML;
+        assert.match(html, /class="gen-ui-empty"/, 'empty state must reuse the project empty-card recipe');
+        assert.match(html, /class="gen-ui-empty-icon"/);
+        assert.match(html, /class="gen-ui-empty-title"/);
+        assert.match(html, /class="gen-ui-empty-description"/);
+        assert.doesNotMatch(html, /gateway-list-empty/, 'the single grey line must be gone');
+      });
     });
   }
 
-  it('drops the redundant tools section heading and its count', () => {
+  it('drops the redundant tools section heading and its count', async () => {
     // 「已加载工具 (N)」既重复分页器上的计数，也是页内多余的一级标题。
-    const feature = { name: 'with-tools', tools: [{ name: 'run', state: 'enabled', enabled: true }], skills: [], hookCount: 0, toolCount: 1, enabledToolCount: 1 };
-    const ctx = loadEmptyModule(feature);
-    const html = openTab(ctx, 'tools', feature);
-    assert.doesNotMatch(html, /settings-section-title/, 'tools tab must not repeat a heading');
-    assert.match(html, /gateway-tool-grid/);
+    await withFeatureDetailCase(async (state) => {
+      const feature = baseFeature({
+        name: 'with-tools',
+        tools: [{ name: 'run', state: 'enabled', enabled: true }],
+        toolCount: 1,
+        enabledToolCount: 1,
+      });
+      const html = openDetailTab(state, feature, 'tools').outerHTML;
+      assert.doesNotMatch(html, /settings-section-title/, 'tools tab must not repeat a heading');
+      assert.match(html, /gateway-tool-grid/);
+    });
   });
 
-  it('drops the skill list hint line', () => {
-    const feature = { name: 'sk', tools: [], skills: [{ name: 'a', description: 'A', root: 0, path: 'skills/a/SKILL.md' }], hookCount: 0 };
-    const ctx = loadEmptyModule(feature);
-    const html = openTab(ctx, 'skills', feature);
-    assert.doesNotMatch(html, /feature-skill-hint/, 'the hint line above the cards must be gone');
+  it('drops the skill list hint line', async () => {
+    await withFeatureDetailCase(async (state) => {
+      const feature = baseFeature({
+        name: 'sk',
+        skills: [{ name: 'a', description: 'A', root: 0, path: 'skills/a/SKILL.md' }],
+      });
+      const html = openDetailTab(state, feature, 'skills').outerHTML;
+      assert.doesNotMatch(html, /feature-skill-hint/, 'the hint line above the cards must be gone');
+    });
   });
 });
 
 describe('skill reader states', () => {
-  const FEATURE = { name: 'shell', tools: [], skills: [{ name: 'guide', description: 'Guide', root: 0, path: 'skills/guide/SKILL.md' }], hookCount: 0 };
-  const load = () => {
-    const ctx = createFrontendSandbox({
-      document: { getElementById() { return null; }, createElement() { return {}; }, addEventListener() {} },
-      window: {},
-      selectedFeatureName: 'shell',
-      activeFeaturePanel: 'hooks',
-      currentRuntimeAgentId: 'runtime-1',
-      currentHookInspector: { features: [FEATURE], hooks: [] },
-      t(key) { return key; },
-      shortenSourcePath(value) { return value; },
-      getFeatureStatus() { return 'enabled'; },
-      getFeatureStatusLabel() { return 'enabled'; },
-      getStatusBadgeClass() { return ''; },
-      renderMarkdown(value) { return 'MD:' + value; },
-    });
-    ctx.loadSource('public/src/modules/action-dispatcher.js');
-    ctx.loadSource('public/src/modules/debug-features-hooks.js');
-    ctx.run(`ensureFeatureDetailTabOwner('shell'); window.setFeatureDetailTab('skills', 'shell'); _skillView = 'guide'`);
-    return ctx;
-  };
-
-  it('uses the spinner variant of the empty card while the document loads', () => {
-    const ctx = load();
-    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
-    assert.match(html, /class="gen-ui-empty"/);
-    assert.match(html, /gen-ui-spinner/);
-    assert.match(html, /feature_detail_loading_skill/);
-    assert.doesNotMatch(html, /feature-skill-loading/, 'the bare loading line must be gone');
+  const FEATURE = baseFeature({
+    name: 'shell',
+    skills: [{ name: 'guide', description: 'Guide', root: 0, path: 'skills/guide/SKILL.md' }],
   });
 
-  it('offers retry inside the card when the document fails to load', () => {
-    const ctx = load();
-    ctx.run(`_skillContentCache.set(
-      'runtime-1::shell::guide::' + resourceUrlForSkill(${JSON.stringify(FEATURE)}, ${JSON.stringify(FEATURE.skills[0])}),
-      { error: 'Skill resource unavailable (500)', retryable: true })`);
-    const html = ctx.run(`renderFeatureDetailContent(${JSON.stringify(FEATURE)})`);
-    assert.match(html, /class="gen-ui-empty"/);
-    assert.match(html, /feature-detail-empty-actions/);
-    assert.match(html, /settings-btn settings-btn-secondary/);
-    assert.match(html, /data-action="features.retrySkill" data-feature-name="shell" data-skill-name="guide"/);
-    assert.doesNotMatch(html, /feature-skill-retry/, 'the bare retry button style must be gone');
+  it('uses the spinner variant of the empty card while the document loads', async () => {
+    const portalHarness = createPortal();
+    const fetchImpl = () => new Promise(() => {}); // 永不落定：停在加载态
+    await withFeatureDetailCase(async (state) => {
+      openDetailTab(state, FEATURE, 'skills');
+      invokeAction(state, 'features.openSkill', { featureName: 'shell', skillName: 'guide' });
+      const html = portalHarness.portal.innerHTML;
+      assert.match(html, /class="gen-ui-empty"/);
+      assert.match(html, /gen-ui-spinner/);
+      assert.match(html, /正在读取技能文档/);
+      assert.doesNotMatch(html, /feature-skill-loading/, 'the bare loading line must be gone');
+    }, { portalHarness, fetchImpl });
+  });
+
+  it('offers retry inside the card when the document fails to load', async () => {
+    const portalHarness = createPortal();
+    const fetchImpl = async () => ({ ok: false, status: 500, text: async () => '' });
+    await withFeatureDetailCase(async (state) => {
+      openDetailTab(state, FEATURE, 'skills');
+      invokeAction(state, 'features.openSkill', { featureName: 'shell', skillName: 'guide' });
+      for (let i = 0; i < 50 && !/feature-detail-empty-actions/.test(portalHarness.portal.innerHTML); i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      const html = portalHarness.portal.innerHTML;
+      assert.match(html, /class="gen-ui-empty"/);
+      assert.match(html, /feature-detail-empty-actions/);
+      assert.match(html, /settings-btn settings-btn-secondary/);
+      assert.match(html, /data-action="features.retrySkill" data-feature-name="shell" data-skill-name="guide"/);
+      assert.doesNotMatch(html, /feature-skill-retry/, 'the bare retry button style must be gone');
+    }, { portalHarness, fetchImpl });
   });
 });
 
 describe('renderFeatureDetailContent hooks tab', () => {
-  function renderHooksTab() {
-    const ctx = createFrontendSandbox({
-      document: { getElementById() { return null; }, createElement() { return {}; }, addEventListener() {} },
-      window: {},
-      selectedFeatureName: 'shell',
-      activeFeaturePanel: 'hooks',
-      currentRuntimeAgentId: 'runtime-1',
-      currentHookInspector: {
-        features: [{ name: 'shell', tools: [], skills: [], hookCount: 2 }],
-        hooks: [{
+  function renderHooksTab(state) {
+    const feature = baseFeature({ name: 'shell', hookCount: 2 });
+    state.debugPanel.selectedFeatureName = 'shell';
+    state.sessionView.setCurrentHookInspector({
+      lifecycleOrder: [],
+      features: [feature],
+      hooks: [
+        {
           lifecycle: 'CallStart',
-          entries: [{ featureName: 'shell', methodName: 'registerPendingWorkOnCallStart', kind: 'observe', enabled: true, description: '注册待办' }],
-        }, {
+          entries: [{
+            featureName: 'shell',
+            methodName: 'registerPendingWorkOnCallStart',
+            kind: 'observe',
+            enabled: true,
+            description: '注册待办',
+          }],
+        },
+        {
           lifecycle: 'StepFinish',
-          entries: [{ featureName: 'shell', methodName: 'endTurnOnStandby', kind: 'guard', enabled: true }],
-        }],
-      },
-      t(key) { return key; },
-      shortenSourcePath(value) { return value; },
-      getFeatureStatus() { return 'enabled'; },
-      getFeatureStatusLabel() { return 'enabled'; },
-      getStatusBadgeClass() { return ''; },
-      renderMarkdown(value) { return value; },
+          entries: [{
+            featureName: 'shell',
+            methodName: 'endTurnOnStandby',
+            kind: 'guard',
+            enabled: true,
+          }],
+        },
+      ],
     });
-    ctx.loadSource('public/src/modules/action-dispatcher.js');
-    ctx.loadSource('public/src/modules/debug-features-hooks.js');
-    // 分页状态是模块私有变量，经公开入口切换到钩子分页再取内容。
-    return ctx.run(`(() => {
-      const feature = { name: 'shell', tools: [], skills: [], hookCount: 2, toolCount: 0, enabledToolCount: 0 };
-      ensureFeatureDetailTabOwner('shell');
-      window.setFeatureDetailTab('hooks', 'shell');
-      return renderFeatureDetailContent(feature);
-    })()`);
+    state.features.renderFeatureDetailOverlay(feature);
+    invokeAction(state, 'features.setDetailTab', { tabKey: 'hooks', featureName: 'shell' });
+    return state.harness.panel.replacedBy.outerHTML;
   }
 
-  it('renders each handler on its own row instead of the panel timeline item', () => {
+  it('renders each handler on its own row instead of the panel timeline item', async () => {
     // .rh-item 的负外边距（-13px/-15px）会把条目撑到比弹窗内容区还宽，
     // 再叠加 .settings-tab-content 的横向滚动，整个弹窗被拖出滚动条。
-    const html = renderHooksTab();
-    assert.doesNotMatch(html, /class="rh-item"/, 'must not reuse the panel timeline item');
-    assert.doesNotMatch(html, /class="rh-ord"/, 'lifecycle name must not be squeezed into the 15px dot');
-    assert.equal((html.match(/class="feature-hook-item"/g) || []).length, 2);
+    await withFeatureDetailCase(async (state) => {
+      const html = renderHooksTab(state);
+      assert.doesNotMatch(html, /class="rh-item"/, 'must not reuse the panel timeline item');
+      assert.doesNotMatch(html, /class="rh-ord"/, 'lifecycle name must not be squeezed into the 15px dot');
+      assert.equal((html.match(/class="feature-hook-item"/g) || []).length, 2);
+    });
   });
 
-  it('gives the lifecycle name its own dedicated element', () => {
+  it('gives the lifecycle name its own dedicated element', async () => {
     // 旧写法把 lifecycle 塞进 15px 圆点，界面只显示成 "lStart"/"pFinis"。
     // 只断言文本存在不够——旧结构里文本也在，差别在于它没有承载元素。
-    const html = renderHooksTab();
-    assert.equal((html.match(/class="feature-hook-lifecycle"/g) || []).length, 2);
-    assert.match(html, /class="feature-hook-lifecycle"[^>]*>CallStart</);
-    assert.match(html, /class="feature-hook-lifecycle"[^>]*>StepFinish</);
+    await withFeatureDetailCase(async (state) => {
+      const html = renderHooksTab(state);
+      assert.equal((html.match(/class="feature-hook-lifecycle"/g) || []).length, 2);
+      assert.match(html, /class="feature-hook-lifecycle"[^>]*>CallStart</);
+      assert.match(html, /class="feature-hook-lifecycle"[^>]*>StepFinish</);
+    });
   });
 });

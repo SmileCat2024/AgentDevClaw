@@ -344,12 +344,6 @@
       "openAuthSettings"
     ]
   },
-  "public/src/modules/bg-panel.js": {
-    "state": [],
-    "behavior": [
-      "BgPanel"
-    ]
-  },
   "public/src/modules/chat-renderer.js": {
     "state": [
       "_errorGroupUserState",
@@ -410,21 +404,6 @@
       "toggleErrorGroup",
       "toggleMessage",
       "updateLastMessage"
-    ]
-  },
-  "public/src/modules/chat-scroll.js": {
-    "state": [
-      "_stickyPadTop",
-      "chatScrollNeedsWheelRecovery"
-    ],
-    "behavior": [
-      "canElementScrollVertically",
-      "hasScrollableWheelTarget",
-      "isChromeWithoutEdge",
-      "markChatPageResumed",
-      "normalizeWheelDeltaY",
-      "recoverChatWheelScroll",
-      "shouldUseManualWheelScroll"
     ]
   },
   "public/src/modules/chat-viewport.js": {
@@ -510,125 +489,10 @@
       "ContextGuardToggle"
     ]
   },
-  "public/src/modules/debug-features-hooks.js": {
-    "state": [
-      "FEATURE_CAP_STORAGE_KEY",
-      "FEATURE_DETAIL_PORTAL_ID",
-      "FEATURE_DETAIL_TABS",
-      "FEATURE_DETAIL_TAB_STORAGE_KEY",
-      "FEATURE_FILTERS",
-      "FEATURE_FILTER_STORAGE_KEY",
-      "RH_KIND_HINTS",
-      "RH_LIFECYCLE_HINTS",
-      "SVG_BACK_ICON",
-      "SVG_EMPTY_HOOKS",
-      "SVG_EMPTY_SKILLS",
-      "SVG_EMPTY_TOOLS",
-      "SVG_TOOL_ICON",
-      "_commandFeatures",
-      "_commandFeaturesKey",
-      "_expandedToolNames",
-      "_featureDetailTab",
-      "_featureDetailTabOwner",
-      "_featureGroupOpenPref",
-      "_featurePanelCapFilter",
-      "_featurePanelFilter",
-      "_lastDetailSignature",
-      "_lifecycleOpenPref",
-      "_pendingScrollRestore",
-      "_skillContentCache",
-      "_skillContentPending",
-      "_skillListScroll",
-      "_skillView"
-    ],
-    "behavior": [
-      "_ensureCommandFeatures",
-      "_ensureMountFacts",
-      "_persistPanelFilters",
-      "_refreshPanelAfterFilterChange",
-      "_runtimeSignals",
-      "buildFeatureCapSelect",
-      "buildFeatureFilterSegment",
-      "buildHookToggleHtml",
-      "buildToolToggleHtml",
-      "closeFeatureSkill",
-      "computeFeatureDetailTabs",
-      "ensureFeatureDetailPortal",
-      "ensureFeatureDetailTabOwner",
-      "ensureSkillContent",
-      "featureGroupLabel",
-      "featureGroupToggled",
-      "loadVisibleFeatureSkills",
-      "openFeatureSkill",
-      "renderFeatureDetailContent",
-      "renderFeatureDetailEmpty",
-      "renderFeatureDetailOverlay",
-      "renderFeatureDetailTabBar",
-      "renderFeatureToolCard",
-      "renderFeaturesPanel",
-      "renderReverseHooksPanel",
-      "renderSkillCard",
-      "renderSkillReader",
-      "resourceUrlForSkill",
-      "retryFeatureSkill",
-      "rhGroupToggled",
-      "rhKindHint",
-      "rhLifecycleHint",
-      "rhLoc",
-      "setFeatureDetailTab",
-      "setFeaturePanelCapFilter",
-      "setFeaturePanelFilter",
-      "syncFeatureDetailTabBar",
-      "toggleHookState",
-      "toggleToolSchema",
-      "toggleToolState"
-    ]
-  },
-  "public/src/modules/debug-logs.js": {
-    "state": [
-      "LOG_DOM_CAP",
-      "LOG_JSON_RENDER_CAP",
-      "_openLogJson",
-      "_renderedFilterKey",
-      "_seenLogIds"
-    ],
-    "behavior": [
-      "buildJsonPreview",
-      "buildLogEntryHtml",
-      "buildLogStatsHtml",
-      "formatLogTimestamp",
-      "getFilteredLogs",
-      "getLevelWeight",
-      "loadLogs",
-      "logEntryMatchesFilters",
-      "logFilterRenderKey",
-      "logJsonToggle",
-      "markLogsSeen",
-      "renderLogsPanel",
-      "safePrettyJson",
-      "tryIncrementalLogsUpdate"
-    ]
-  },
   "public/src/modules/debug-panel-host.js": {
-    "state": [
-      "_panelBodyHtmlCache",
-      "featurePanelRenderVersion",
-      "mountedContainer"
-    ],
+    "state": [],
     "behavior": [
-      "ClawFW",
-      "createRailButton",
-      "mountContainerPanel",
-      "notifyPanelLifecycle",
-      "panelBodyContentEl",
-      "railButtonTitle",
-      "renderFeaturePanel",
-      "runAfterPanelOpenFrame",
-      "syncPanelBodyHtmlCache",
-      "syncRailButtons",
-      "toggleFeaturePanel",
-      "unmountContainerPanel",
-      "wrapPanelContent"
+      "ClawFW"
     ]
   },
   "public/src/modules/desktop-notify.js": {
@@ -762,12 +626,6 @@
     "state": [],
     "behavior": [
       "ClawFW"
-    ]
-  },
-  "public/src/modules/generative-ui-panel.js": {
-    "state": [],
-    "behavior": [
-      "GenUIPanel"
     ]
   },
   "public/src/modules/git-graph.js": {
@@ -912,32 +770,10 @@
       "toggleAttachMenu"
     ]
   },
-  "public/src/modules/input-helpers.js": {
-    "state": [],
-    "behavior": [
-      "updateChatProcessToggle"
-    ]
-  },
   "public/src/modules/input-model-switcher.js": {
     "state": [],
     "behavior": [
       "ClawFW"
-    ]
-  },
-  "public/src/modules/input-render.js": {
-    "state": [
-      "_lastLeaseActionErrorToastedId",
-      "_lastLeaseDraftAppliedId",
-      "lastRenderedInputMode",
-      "lastRenderedInputSignature"
-    ],
-    "behavior": [
-      "_applyLeaseInitialDraft",
-      "_notifyLeaseActionError",
-      "getInputRenderSignature",
-      "notifyInputSurfaceChanged",
-      "notifyInputViewportMutation",
-      "renderInputRequests"
     ]
   },
   "public/src/modules/kernel-state.js": {
@@ -1019,14 +855,6 @@
     "state": [],
     "behavior": [
       "ClawFW"
-    ]
-  },
-  "public/src/modules/rail-customize.js": {
-    "state": [],
-    "behavior": [
-      "RailCustomize",
-      "applyRailConfig",
-      "closeRailCustomizeModal"
     ]
   },
   "public/src/modules/remote-claw-settings.js": {
@@ -1295,56 +1123,6 @@
     "state": [],
     "behavior": [
       "ClawToast"
-    ]
-  },
-  "public/src/modules/voice-input.js": {
-    "state": [
-      "_audioCueBuffers",
-      "_audioCueCtx",
-      "_audioCueRawData",
-      "_pendingVoiceResults",
-      "_voiceAgentId",
-      "_voiceAudioChunks",
-      "_voiceCacheKey",
-      "_voiceCancelled",
-      "_voiceMediaRecorder",
-      "_voiceStarting",
-      "_voiceStreamActiveText",
-      "_voiceStreamCommitted",
-      "_voiceStreamComposing",
-      "_voiceStreamCtx",
-      "_voiceStreamPcmQueue",
-      "_voiceStreamProcessor",
-      "_voiceStreamSource",
-      "_voiceStreamTrack",
-      "_voiceStreamWs"
-    ],
-    "behavior": [
-      "_applyStreamTextToDraft",
-      "_cancelStreamedRecording",
-      "_cancelVoiceRecording",
-      "_createAudioCueContext",
-      "_decodeAudioCue",
-      "_dispatchVoiceAutoSend",
-      "_float32ToInt16Pcm",
-      "_haltStreamCapture",
-      "_handleStreamFinal",
-      "_initAudioCues",
-      "_injectPendingVoiceResult",
-      "_markVoiceAutoSendAccepted",
-      "_playVoiceSound",
-      "_resampleTo16k",
-      "_restoreCrossSessionVoiceInput",
-      "_shouldPreserveVoiceInputForRender",
-      "_startStreamedRecording",
-      "_stopStreamedRecording",
-      "_teardownStream",
-      "_updateVoiceUI",
-      "insertTextAtCursor",
-      "sendAudioToASR",
-      "startVoiceRecording",
-      "stopVoiceRecording",
-      "toggleVoiceRecording"
     ]
   },
   "public/src/modules/wg-annotations.js": {

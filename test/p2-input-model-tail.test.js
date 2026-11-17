@@ -283,10 +283,11 @@ test('首屏冷态：模块未装载时真实输入面声明链照常短路（R1
   await withP2EsmCase({
     classic: (sandbox) => {
       loadClassicPrefix(sandbox);
-      sandbox.loadSource('public/src/modules/rollback-dialog.js');
-      sandbox.loadSource('public/src/modules/voice-input.js');
+      // voice-input 已迁 ESM（P4 L3）：本用例只钉冷态声明链的短路，语音实现不在
+      // 断言面内，classic 相不再载入（其 ESM 图会额外拉入输入动作宿主链）。
       sandbox.loadSource('public/src/modules/input-composer.js');
-      sandbox.loadSource('public/src/modules/input-render.js');
+      // rollback-dialog / input-render 已迁 ESM（P4 T2）：在 async 相按
+      // 「注册壳 → 渲染入口」顺序 c.load，见下方用例体首段。
       // input-render 经 `getInputSurfaceMode` 求模式；该函数是 app-main 的 classic
       // 实现（整份 app-main 会拉起启动链），此处只注入**真实的**那一段源码。
       const appMain = readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
@@ -302,9 +303,19 @@ test('首屏冷态：模块未装载时真实输入面声明链照常短路（R1
       // （chat-viewport.js），本用例只关心分支走向，注入直通实现。
       runWithSuppressedChatViewportObservers: (fn) => fn(),
       _getSessionInputCacheKey: () => '',
+      // 语音保留判定由 voice-input（ESM，P4 L3）经桥键提供；本用例不装载语音实现，
+      // 按冷态（无录音、无转写）语义给出同形的 false。
+      _shouldPreserveVoiceInputForRender: () => false,
       followLatestEnabled: false,
     },
   }, async (c) => {
+    // rollback-dialog 注册壳先求值（回退 / 压缩域状态键的 window 访问器），
+    // 再装 input-render 的真实实现；两者都是 ESM 相真实 import。
+    await c.load('public/src/modules/rollback-dialog.js');
+    // 跟随开关是 app-core 的 classic 顶层状态（未上桥），模块经 chatSurface
+    // 宿主适配读取；用例按同一 seam 置 false（原用例以同名全局桩代替）。
+    c.window.createP2BootstrapChatSurfaceHost().followLatestEnabled = false;
+    await c.load('public/src/modules/input-render.js');
     // 本用例**刻意不装载** input-model-switcher：首屏同步相里它还不存在。
     assert.equal(c.read('typeof window.updateInputModelSwitcher'), 'undefined');
     assert.equal(c.read('typeof window.updateThinkingEffortSwitcher'), 'undefined');

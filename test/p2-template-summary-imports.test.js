@@ -45,7 +45,19 @@ const RENDER_ENTRY_STATE = 'public/src/modules/render-entry-state.js';
 /** 装载期即发起的两个请求（真实契约，见 server/routes/feature-assets.js / agent-lifecycle.js）。 */
 const DECLARATIONS_API = '/api/feature-ui/declarations';
 const APP_INFO_API = '/protoclaw/app_info';
-const LOAD_TIME_ENDPOINTS = [DECLARATIONS_API, APP_INFO_API];
+/**
+ * 装载期请求集合（精确相等，多一个少一个都算红）。P4 批次把更多模块并入
+ * kernel-entry 图后新增了三项，都是模块求值期的真实请求：
+ *   - ui-prefs?agentId=home：debug-panel-host 拉 rail 面板偏好；
+ *   - /sounds/voice-recording-*.mp3：voice-input 预载提示音（静态资产）。
+ */
+const LOAD_TIME_ENDPOINTS = [
+  DECLARATIONS_API,
+  APP_INFO_API,
+  '/api/feature-ui/ui-prefs?agentId=home',
+  '/sounds/voice-recording-start.mp3',
+  '/sounds/voice-recording-stop.mp3',
+];
 
 /** 一份可真实加载的模板模块 URL（与 data: URL 同一实例，用于断言缓存命中）。 */
 const WORKING_TEMPLATE_URL = 'data:text/javascript,export default { call: () => "ok", result: () => "ok" }';
@@ -144,7 +156,13 @@ function createDomStub() {
     head: createElement('head'),
     documentElement: createElement('html'),
     readyState: 'complete',
+    // Document 的真实必备面：RailCustomize 在模块求值期用 document.contains 判断
+    // 焦点元素归属；缺它会 TypeError。
+    contains() { return false; },
     getElementById(id) {
+      // rail-cust-overlay 是运行时才创建的元素（openModal 插入），命中它会让模块
+      // 走进"空 overlay"的非法状态，这里按真实语义返回 null。
+      if (id === 'rail-cust-overlay') return null;
       if (!byId.has(id)) {
         const el = createElement('div');
         el.id = id;
@@ -192,6 +210,11 @@ function createHarness() {
 
   const routes = [
     [DECLARATIONS_API, () => jsonResponse({ ok: true, declarations: [], warnings: [] })],
+    // rail-customize 在模块求值期拉呈现偏好（拿不到会 warn 并沿用内存态）；这里按
+    // 真实形状应答，让"装载期只有已登记请求、无非预期 warn"的断言保持精确。
+    ['/api/feature-ui/ui-prefs', () => jsonResponse({ ok: true, prefs: {} })],
+    // voice-input 预载提示音（静态资产，非 API）
+    ['/sounds/', () => ({ ok: true, status: 200, json: async () => ({}), text: async () => '' })],
     [APP_INFO_API, () => jsonResponse({ ok: true, version: '0.0.0-p2-fixture', frameworkVersion: '0.0.0-p2-fixture' })],
     // /protoclaw/get_connected_agents（app-core invoke 的 HTTP 回退，返回数组）
     ['/protoclaw/get_connected_agents', () => jsonResponse(agents)],
@@ -326,7 +349,7 @@ test('生产入口整图求值：kernel-entry 下两条新具名边都可求值'
     assert.deepEqual(
       [...new Set(harness.endpoints)].sort(),
       [...LOAD_TIME_ENDPOINTS].sort(),
-      '装载期请求集合 = feature-ui declarations + app_info',
+      '装载期请求集合必须与登记清单精确一致（新增外部依赖要显式登记）',
     );
   });
   assertNoUnexpectedNoise(harness);

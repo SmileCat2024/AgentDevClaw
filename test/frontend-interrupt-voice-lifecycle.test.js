@@ -2,6 +2,11 @@ import fs from 'node:fs';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox, sourceBetween } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
+
+const VOICE_INPUT = 'public/src/modules/voice-input.js';
+const VOICE_STATE = 'public/src/modules/p2-w2-3a-voice-state.js';
 
 describe('persistent input interrupt precedence', () => {
   it('stops the agent without stopping an independent voice recording', () => {
@@ -125,42 +130,53 @@ describe('voice input render lifecycle', () => {
     assert.equal(submits, 0, 'do not send before the final streamed transcript arrives');
   });
 
-  it('preserves recording/stopping/transcribing across same-session input redraws only', () => {
-    const ctx = createFrontendSandbox({
-      _voiceRecording: true,
-      _voiceStopping: false,
-      _voiceTranscribing: false,
-      _voiceCacheKey: 'session-a',
+  // voice-input 已迁 ESM（P4 L3）：判定函数与录音状态 owner 都在真实模块图里。
+  // classic 相只装生产宿主链（prepareClassicSandbox），桥键由模块自身注册。
+  it('preserves recording/stopping/transcribing across same-session input redraws only', async () => {
+    await withP2EsmCase({ classic: prepareClassicSandbox }, async (c) => {
+      const voiceInput = await c.load(VOICE_INPUT);
+      const voiceState = await c.load(VOICE_STATE);
+      voiceInput.__testVoiceState.cacheKey = 'session-a';
+      voiceState.setVoiceRecording(true);
+      voiceState.setVoiceStopping(false);
+      voiceState.setVoiceTranscribing(false);
+
+      assert.equal(voiceInput._shouldPreserveVoiceInputForRender('persistent', 'session-a'), true);
+      assert.equal(voiceInput._shouldPreserveVoiceInputForRender('choice', 'session-a'), true);
+      assert.equal(voiceInput._shouldPreserveVoiceInputForRender('compacting', 'session-a'), true);
+      assert.equal(voiceInput._shouldPreserveVoiceInputForRender('persistent', 'session-b'), false);
+      assert.equal(voiceInput._shouldPreserveVoiceInputForRender('hidden', 'session-a'), false);
+      // requests 模式已退役（ADR-0035）：文本 lease 不再构成渲染模式，
+      // 传入旧枚举值不得被当成可保留录音的交互面。
+      assert.equal(voiceInput._shouldPreserveVoiceInputForRender('requests', 'session-a'), false);
+
+      voiceState.setVoiceRecording(false);
+      voiceState.setVoiceStopping(true);
+      assert.equal(voiceInput._shouldPreserveVoiceInputForRender('persistent', 'session-a'), true);
+      voiceState.setVoiceStopping(false);
+      voiceState.setVoiceTranscribing(true);
+      assert.equal(voiceInput._shouldPreserveVoiceInputForRender('persistent', 'session-a'), true);
     });
-    const source = fs.readFileSync('public/src/modules/voice-input.js', 'utf8');
-    ctx.run(sourceBetween(source, 'function _shouldPreserveVoiceInputForRender', 'function _markVoiceAutoSendAccepted'));
-
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("persistent", "session-a")'), true);
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("choice", "session-a")'), true);
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("compacting", "session-a")'), true);
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("persistent", "session-b")'), false);
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("hidden", "session-a")'), false);
-    // requests 模式已退役（ADR-0035）：文本 lease 不再构成渲染模式，
-    // 传入旧枚举值不得被当成可保留录音的交互面。
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("requests", "session-a")'), false);
-
-    ctx.run('_voiceRecording = false; _voiceStopping = true;');
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("persistent", "session-a")'), true);
-    ctx.run('_voiceStopping = false; _voiceTranscribing = true;');
-    assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("persistent", "session-a")'), true);
   });
 
-  it('restores a cross-session voice draft when delivery is rejected', () => {
+  it('restores a cross-session voice draft when delivery is rejected', async () => {
     const toasts = [];
-    const ctx = createFrontendSandbox();
-    ctx.window.ClawToast = { show: (value) => toasts.push(value) };
-    const source = fs.readFileSync('public/src/modules/voice-input.js', 'utf8');
-    ctx.run('let _sessionInputCache = {};');
-    ctx.run(sourceBetween(source, 'function _restoreCrossSessionVoiceInput', 'function stopVoiceRecording'));
-    ctx.run(`_restoreCrossSessionVoiceInput('session-a', 'typed and spoken', 'agent-a', 'runtime unavailable')`);
+    const drafts = {};
+    await withP2EsmCase({
+      classic: (sandbox) => {
+        prepareClassicSandbox(sandbox);
+        // composer 域草稿缓存（桥键）：模块经 window 晚绑定取用
+        sandbox._sessionInputCache = drafts;
+      },
+    }, async (c) => {
+      const voiceInput = await c.load(VOICE_INPUT);
+      // toast-notify 在自己的模块求值时挂 window.ClawToast，因此桩在装载之后覆盖。
+      c.window.ClawToast = { show: (value) => toasts.push(value) };
+      voiceInput._restoreCrossSessionVoiceInput('session-a', 'typed and spoken', 'agent-a', 'runtime unavailable');
 
-    assert.equal(ctx.run(`_sessionInputCache['session-a']`), 'typed and spoken');
-    assert.equal(toasts.length, 1);
-    assert.equal(toasts[0].status, 'error');
+      assert.equal(drafts['session-a'], 'typed and spoken');
+      assert.equal(toasts.length, 1);
+      assert.equal(toasts[0].status, 'error');
+    });
   });
 });

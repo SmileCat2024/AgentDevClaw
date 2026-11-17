@@ -61,7 +61,18 @@ class NoopObserver {
 /** 装载期会发出的真实端点（逐个按生产契约应答；未登记的端点即测试失败）。 */
 const DECLARATIONS_API = '/api/feature-ui/declarations';
 const APP_INFO_API = '/protoclaw/app_info';
-const EXPECTED_ENDPOINTS = [DECLARATIONS_API, APP_INFO_API];
+/**
+ * 装载期请求集合（精确相等）。P4 批次把 debug-panel-host / voice-input 并入
+ * kernel-entry 图后新增三项，都是模块求值期的真实请求：rail 面板偏好拉取
+ * （ui-prefs）与语音提示音预载（静态资产）。
+ */
+const EXPECTED_ENDPOINTS = [
+  DECLARATIONS_API,
+  APP_INFO_API,
+  '/api/feature-ui/ui-prefs?agentId=home',
+  '/sounds/voice-recording-start.mp3',
+  '/sounds/voice-recording-stop.mp3',
+];
 
 const jsonResponse = (payload) => ({ ok: true, status: 200, json: async () => payload });
 

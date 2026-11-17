@@ -1,31 +1,44 @@
 /**
- * debug-features-hooks.js — Features 面板 + Reverse Hooks 面板
+ * debug-features-hooks.js — Features 面板 + Reverse Hooks 面板（P4 T2 渲染层批次：classic → ESM）
  *
  * 从 debug-panels.js 拆出。包含：
  *   - renderFeaturesPanel
  *   - renderReverseHooksPanel
  *   - renderFeatureDetailOverlay（独立 portal，挂载于 document.body）
  *
- * 迁移边界（R4）：本文件保持 **classic 唯一实现**，不进 P2 ESM 批次。
- * app-ui 的 ClawPanels 注册在 classic 相就为 hooks / inspector 生成 rail 按钮
- * （注册元数据带 icon + order，rail-customize 不隐藏），首屏 applyLanguage →
- * syncRailButtons 之后即可点击——「面板体未渲染 / activeFeaturePanel 为空」不等于
- * 「不可点击」。把这些 render 入口搬进 deferred ESM 会让模块求值前的真实点击抛
- * ReferenceError（HEAD 同一次点击正常渲染）。render 入口与它的闭合依赖（空态 /
- * 分组 / 卡片、详情弹窗与技能阅读页）互相缠绕，无法合理拆分，故整文件保 classic；
- * 不保留 ESM 副本，等 app-ui 的面板注册同批迁移后再整体转换。
+ * 依赖形态：
+ *   - 已迁 ESM 直接 import：翻译（t）、转义 / markdown（markdown-utils）、语言
+ *     （getCurrentLanguage）、编排状态（currentRuntimeAgentId）、渲染入口状态
+ *     （activeFeaturePanel）、inspector 快照（session-view-storage）、Feature 选择
+ *     状态（debugPanel.selectedFeatureName，app-core 的 classic let 经宿主成对读写）、
+ *     源路径缩短（overview-data）、面板重绘（debug-panel-host）、Feature 详情
+ *     选择器（debug-overview）。
+ *   - 仍 classic 的显式 window 晚绑定（行尾注明定义域）：getFeatureStatus /
+ *     getStatusBadgeClass / getFeatureStatusLabel / getCurrentControlAgentId /
+ *     getRuntimeId（app-core）、getCurrentAgentRecord / _scheduleInspectorRefresh
+ *     （app-main）、window.ClawFW.featureCatalog（catalog 命名空间）。
  *
- * 依赖（全局状态，app-core 在 classic 相注册的 KernelState 桥键，有真初值）：
- *   - selectedFeatureName, currentHookInspector
+ * 时序审计（R4，首屏链已在模块相由 boot.js 触发）：
+ *   - 顶层语句只有兼容桥注册（defineKey / claim）与 data-action 注册（含
+ *     `toggle` 事件类型的 capture 绑定）——都在 deferred 模块相执行。
+ *   - rail 按钮（hooks / inspector）由 syncRailButtons 在首屏渲染时生成并绑定
+ *     click → toggleFeaturePanel，首屏渲染本身就在模块相且晚于本模块求值
+ *     （boot.js 是最后一个 module 标签），不存在「按钮可点、模块未求值」的窗口。
+ *   - localStorage 初值读取（筛选偏好 / 详情页签）在模块求值期读取，与之前
+ *     classic 加载期读取同义（同一份持久化数据）。
  *
- * 依赖（全局函数）：
- *   - escapeHtml (markdown-bootstrap 桥键), t (i18n.js)
- *   - getFeatureStatus, getStatusBadgeClass, getFeatureStatusLabel (app-core.js)
- *   - shortenSourcePath (overview-data ESM 桥键)：只在有 feature / hook 数据时触达，
- *     数据由 boot 之后的 inspector 轮询写入，因此不在 classic 相调用
- *   - renderFeaturePanel (debug-panel-host.js)、openFeatureDetails /
- *     closeFeatureDetails (debug-overview ESM 桥键，用户动作触发)
+ * 跨文件消费面与桥键见文件尾。
  */
+import { t } from '../i18n.js';
+import { escapeHtml, renderMarkdown } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { activeFeaturePanel } from './render-entry-state.js';
+import { currentHookInspector } from './session-view-storage.js';
+import { debugPanel } from './p2-bootstrap-debug-panel.js';
+import { shortenSourcePath } from './overview-data.js';
+import { renderFeaturePanel } from './debug-panel-host.js';
+import { openFeatureDetails, closeFeatureDetails } from './debug-overview.js';
 
 // ═══════════════════════════════════════════════════════════════
 // Features / Reverse Hooks 面板
@@ -77,7 +90,7 @@ function _refreshPanelAfterFilterChange() {
   // 同步重渲染面板立即生效——经 _scheduleInspectorRefresh 走完整 poll
   // 周期会引入一轮网络往返的迟滞。面板未打开时无需渲染，状态已持久化，
   // 下次打开按新筛选渲染。
-  if (activeFeaturePanel === 'hooks' && typeof renderFeaturePanel === 'function') {
+  if (activeFeaturePanel === 'hooks') {
     renderFeaturePanel();
   }
 }
@@ -106,9 +119,9 @@ let _commandFeatures = null;          // Map<string, number> | null（feature �
 let _commandFeaturesKey = null;
 
 function _ensureCommandFeatures() {
-  if (typeof getCurrentControlAgentId !== 'function' || typeof getRuntimeId !== 'function') return;
-  const agentId = getCurrentControlAgentId();
-  const runtimeId = getRuntimeId(currentRuntimeAgentId);
+  if (typeof window.getCurrentControlAgentId !== 'function' || typeof window.getRuntimeId !== 'function') return; // 桥接期：定义于 app-core
+  const agentId = window.getCurrentControlAgentId();
+  const runtimeId = window.getRuntimeId(currentRuntimeAgentId);
   if (!agentId || !runtimeId) return;
   const key = agentId + '::' + runtimeId;
   if (key === _commandFeaturesKey) return;
@@ -126,7 +139,7 @@ function _ensureCommandFeatures() {
       }
       _commandFeatures = counts;
       // 数据就位后修正面板（commands 筛选维度从 seed 回退切换到运行时真值）
-      if (activeFeaturePanel === 'hooks' && typeof renderFeaturePanel === 'function') {
+      if (activeFeaturePanel === 'hooks') {
         renderFeaturePanel();
       }
     })
@@ -146,14 +159,14 @@ function _ensureMountFacts() {
 function _runtimeSignals() {
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   let mountedNames = null;
-  if (fc && typeof getCurrentControlAgentId === 'function') {
+  if (fc && typeof window.getCurrentControlAgentId === 'function') { // 桥接期：定义于 app-core
     // 只对本地装配域 APP（编程小助手 / coder）应用 $mount 装配事实：
     // 远程会话（record 不在 allAgents）的装配声明不在本机 overview 里；
     // 其他宿主不在装配域。挂载事实未就绪时为 null，enrich 回退 seed 静态 group。
-    const record = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
+    const record = (typeof window.getCurrentAgentRecord === 'function') ? window.getCurrentAgentRecord() : null; // 桥接期：定义于 app-main
     if (record) {
       mountedNames = fc.resolveMountedNames(
-        fc.getMountFactsSnapshot(), getCurrentControlAgentId());
+        fc.getMountFactsSnapshot(), window.getCurrentControlAgentId());
     }
   }
   return { commandFeatures: _commandFeatures, mountedNames };
@@ -205,7 +218,7 @@ function buildFeatureCapSelect(catalog) {
     + '</select>';
 }
 
-function renderFeaturesPanel() {
+export function renderFeaturesPanel() {
   if (currentHookInspector.features.length === 0) {
     return '<div class="feature-panel-empty"><div class="feature-panel-section"><div class="feature-panel-section-title">' + escapeHtml(t('panel_no_features')) + '</div><div>' + escapeHtml(t('panel_no_feature_data')) + '</div></div></div>';
   }
@@ -229,15 +242,15 @@ function renderFeaturesPanel() {
     : [{ id: '_unmapped', features: currentHookInspector.features }];
 
   const allEnriched = groups.flatMap(g => g.features);
-  const selectedFeature = allEnriched.find(feature => feature.name === selectedFeatureName) || null;
+  const selectedFeature = allEnriched.find(feature => feature.name === debugPanel.selectedFeatureName) || null;
 
   // 单一非兜底组时不渲染组头（组头无信息量）；
   // 出现第二个组或兜底组（seed 缺口信号）时组头自动出现。
   const suppressHeaders = groups.length === 1 && groups[0].id !== '_unmapped';
 
   const buildFeatureCard = (feature) => {
-    const status = getFeatureStatus(feature);
-    const displayName = fc ? fc.resolveDisplayName(feature, currentLanguage) : feature.name;
+    const status = window.getFeatureStatus(feature);
+    const displayName = fc ? fc.resolveDisplayName(feature, getCurrentLanguage()) : feature.name;
     // slash 命令数：_commandFeatures 为 null（数据不可用）时省略该项，不显示误导性的 0
     const commandCount = _commandFeatures ? (_commandFeatures.get(feature.name) || 0) : null;
     return [
@@ -250,7 +263,7 @@ function renderFeaturesPanel() {
       '<div class="feature-card-file">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + '</div>',
       '</div>',
       '</div>',
-      '<div class="' + getStatusBadgeClass(status) + '">' + escapeHtml(getFeatureStatusLabel(status)) + '</div>',
+      '<div class="' + window.getStatusBadgeClass(status) + '">' + escapeHtml(window.getFeatureStatusLabel(status)) + '</div>',
       '</div>',
       '<div class="feature-card-detail">',
       '<span>' + String(feature.hookCount) + ' ' + escapeHtml(t('feature_hooks')) + '</span>',
@@ -299,7 +312,7 @@ function renderFeaturesPanel() {
       '<div class="feature-tool-list">' + currentHookInspector.standaloneTools.map(tool => {
         const isSuper = tool.state === 'superseded';
         const actionHtml = isSuper
-          ? '<div class="' + getStatusBadgeClass(tool.state || 'enabled') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>'
+          ? '<div class="' + window.getStatusBadgeClass(tool.state || 'enabled') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>'
           : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled');
         return [
         '<div class="feature-tool-card">',
@@ -366,19 +379,19 @@ let _skillView = null;
 let _pendingScrollRestore = null;
 let _skillListScroll = 0;
 
-// 保留既有 window 导出（classic 顶层函数声明/赋值即全局属性，台账按 behavior
-// 键计量）；生产路径是 data-action="features.setDetailTab" 经分发器注册表分发。
-window.setFeatureDetailTab = function (tab, featureName) {
+// 详情页签切换：唯一入口是 data-action="features.setDetailTab"（分发器注册表），
+// 零窗口消费面，随本批收敛为模块私有。
+function setFeatureDetailTab(tab, featureName) {
   if (!FEATURE_DETAIL_TABS.includes(tab)) return;
-  if (featureName && selectedFeatureName !== featureName) return;
-  const owner = featureName || selectedFeatureName;
+  if (featureName && debugPanel.selectedFeatureName !== featureName) return;
+  const owner = featureName || debugPanel.selectedFeatureName;
   if (_featureDetailTab === tab && _featureDetailTabOwner === owner) return;
   _featureDetailTab = tab;
   _featureDetailTabOwner = owner;
   // 离开技能分页时退出阅读页：否则下次回到技能分页会落在上一份文档上。
   _skillView = null;
   try { localStorage.setItem(FEATURE_DETAIL_TAB_STORAGE_KEY, tab); } catch (e) { /* ignore */ }
-  const feature = currentHookInspector.features.find(item => item.name === selectedFeatureName) || null;
+  const feature = currentHookInspector.features.find(item => item.name === debugPanel.selectedFeatureName) || null;
   if (!feature) return;
 
   // Keep the tab buttons mounted while switching panels. A full portal innerHTML
@@ -399,10 +412,10 @@ window.setFeatureDetailTab = function (tab, featureName) {
     });
   }
   loadVisibleFeatureSkills(feature);
-};
+}
 
 function retryFeatureSkill(featureName, skillName) {
-  if (selectedFeatureName !== featureName || _featureDetailTab !== 'skills') return;
+  if (debugPanel.selectedFeatureName !== featureName || _featureDetailTab !== 'skills') return;
   const feature = currentHookInspector.features.find(item => item.name === featureName);
   const skill = feature?.skills?.find(item => item.name === skillName);
   if (!feature || !skill) return;
@@ -418,7 +431,7 @@ function retryFeatureSkill(featureName, skillName) {
  * 打开技能阅读页。文档只在这一页面加载与呈现——列表页只保留名称与描述。
  */
 function openFeatureSkill(featureName, skillName) {
-  if (selectedFeatureName !== featureName || _featureDetailTab !== 'skills') return;
+  if (debugPanel.selectedFeatureName !== featureName || _featureDetailTab !== 'skills') return;
   const feature = currentHookInspector.features.find(item => item.name === featureName);
   const skill = feature?.skills?.find(item => item.name === skillName);
   if (!feature || !skill) return;
@@ -437,7 +450,7 @@ function openFeatureSkill(featureName, skillName) {
  */
 function closeFeatureSkill() {
   if (_skillView === null) return;
-  const feature = currentHookInspector.features.find(item => item.name === selectedFeatureName) || null;
+  const feature = currentHookInspector.features.find(item => item.name === debugPanel.selectedFeatureName) || null;
   _skillView = null;
   _pendingScrollRestore = 'skillList';
   _lastDetailSignature = '';
@@ -473,7 +486,7 @@ function ensureSkillContent(featureName, skill, url) {
   }).finally(() => {
     _skillContentPending.delete(cacheKey);
     if (currentRuntimeAgentId === runtimeId
-      && activeFeaturePanel === 'hooks' && selectedFeatureName === featureName) {
+      && activeFeaturePanel === 'hooks' && debugPanel.selectedFeatureName === featureName) {
       _lastDetailSignature = '';
       const current = currentHookInspector.features.find(item => item.name === featureName) || null;
       renderFeatureDetailOverlay(current);
@@ -667,7 +680,7 @@ function renderSkillReader(feature, skill) {
 function renderFeatureToolCard(tool) {
   const props = tool.parameters?.properties ? Object.keys(tool.parameters.properties) : [];
   const hasSchema = tool.parameters && Object.keys(tool.parameters).length > 0;
-  const toolKey = (selectedFeatureName || '') + ':' + tool.name;
+  const toolKey = (debugPanel.selectedFeatureName || '') + ':' + tool.name;
   const isExpanded = _expandedToolNames.has(toolKey);
   const metaPills = [
     tool.renderCall ? '<span class="feature-tool-pill">call/' + escapeHtml(tool.renderCall) + '</span>' : '',
@@ -675,7 +688,7 @@ function renderFeatureToolCard(tool) {
   ].filter(Boolean).join('');
   const isSuper = tool.state === 'superseded';
   return '<div class="feature-tool-card"><div class="feature-tool-top"><div class="feature-tool-name">' + SVG_TOOL_ICON + escapeHtml(tool.name)
-    + '</div><div class="feature-tool-actions">' + (isSuper ? '<div class="' + getStatusBadgeClass('superseded') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>' : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled')) + '</div></div>'
+    + '</div><div class="feature-tool-actions">' + (isSuper ? '<div class="' + window.getStatusBadgeClass('superseded') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>' : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled')) + '</div></div>'
     + (tool.description ? '<div class="feature-tool-desc">' + escapeHtml(tool.description) + '</div>' : '')
     + (props.length ? '<div class="gateway-tool-params">' + props.map(prop => '<span class="gateway-tool-tag">' + escapeHtml(prop) + '</span>').join('') + '</div>' : '')
     + (metaPills ? '<div class="feature-tool-meta">' + metaPills + '</div>' : '')
@@ -698,7 +711,7 @@ function toggleToolSchema(toolKey) {
   }
   // 签名已变，强制重渲染
   _lastDetailSignature = '';
-  const selectedFeature = currentHookInspector.features.find(f => f.name === selectedFeatureName) || null;
+  const selectedFeature = currentHookInspector.features.find(f => f.name === debugPanel.selectedFeatureName) || null;
   renderFeatureDetailOverlay(selectedFeature);
 }
 
@@ -714,8 +727,8 @@ function toggleToolSchema(toolKey) {
  */
 async function toggleToolState(scope, name, checkbox) {
   const action = checkbox.checked ? 'enable' : 'disable';
-  const body = { agentId: getCurrentControlAgentId(), scope, name, action };
-  const runtimeId = getRuntimeId(currentRuntimeAgentId);
+  const body = { agentId: window.getCurrentControlAgentId(), scope, name, action };
+  const runtimeId = window.getRuntimeId(currentRuntimeAgentId);
   if (runtimeId) body.runtimeId = runtimeId;
   try {
     const resp = await fetch('/protoclaw/agent/tool_state', {
@@ -743,8 +756,8 @@ async function toggleToolState(scope, name, checkbox) {
  */
 async function toggleHookState(lifecycle, featureName, methodName, checkbox) {
   const action = checkbox.checked ? 'enable' : 'disable';
-  const body = { agentId: getCurrentControlAgentId(), scope: 'hook', lifecycle, featureName, methodName, action };
-  const runtimeId = getRuntimeId(currentRuntimeAgentId);
+  const body = { agentId: window.getCurrentControlAgentId(), scope: 'hook', lifecycle, featureName, methodName, action };
+  const runtimeId = window.getRuntimeId(currentRuntimeAgentId);
   if (runtimeId) body.runtimeId = runtimeId;
   try {
     const resp = await fetch('/protoclaw/agent/tool_state', {
@@ -805,7 +818,7 @@ function ensureFeatureDetailPortal() {
   return el;
 }
 
-function renderFeatureDetailOverlay(feature) {
+export function renderFeatureDetailOverlay(feature) {
   const portal = ensureFeatureDetailPortal();
 
   if (!feature) {
@@ -840,7 +853,7 @@ function renderFeatureDetailOverlay(feature) {
 
   // 计算签名：快照、当前分页、Skill 正文缓存及 catalog 派生信息变化时更新。
   ensureFeatureDetailTabOwner(feature.name);
-  const displayName = (fc && feature.mapped) ? fc.resolveDisplayName(feature, currentLanguage) : feature.name;
+  const displayName = (fc && feature.mapped) ? fc.resolveDisplayName(feature, getCurrentLanguage()) : feature.name;
   const featureHookSignature = currentHookInspector.hooks.flatMap(group => (group.entries || [])
     .filter(entry => entry.featureName === feature.name)
     .map(entry => [group.lifecycle, entry.methodName, entry.kind, entry.enabled !== false, entry.description || ''].join(':'))).join('|');
@@ -855,7 +868,7 @@ function renderFeatureDetailOverlay(feature) {
       .map(([key, value]) => key + ':' + (value.content || value.error || '')).join('|')
     + '|hooks:' + featureHookSignature
     + '|exp:' + Array.from(_expandedToolNames).sort().join(',')
-    + '|lang:' + currentLanguage
+    + '|lang:' + getCurrentLanguage()
     + '|dn:' + displayName + '|pv:' + (provKey || '');
   if (signature === _lastDetailSignature && portal.innerHTML) return;
   _lastDetailSignature = signature;
@@ -905,7 +918,7 @@ function renderFeatureDetailOverlay(feature) {
       '<div class="feature-detail-stats">',
       '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_hooks')) + '</div><div class="feature-detail-stat-value">' + String(feature.hookCount) + '</div></div>',
       '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_active_tools')) + '</div><div class="feature-detail-stat-value">' + String(feature.enabledToolCount) + '/' + String(feature.toolCount) + '</div></div>',
-      '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(getFeatureStatusLabel(getFeatureStatus(feature))) + '</div></div>',
+      '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(window.getFeatureStatusLabel(window.getFeatureStatus(feature))) + '</div></div>',
       '</div>',
       '<div class="feature-detail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + provHtml + '</div>',
       capsBlock,
@@ -959,9 +972,9 @@ function rhGroupToggled(lifecycle, open) {
   _lifecycleOpenPref.set(lifecycle, open);
 }
 
-// 双语短文案（currentLanguage 声明于 app-core.js）
+// 双语短文案（语言状态 owner 是 i18n-environment-state）
 function rhLoc(zh, en) {
-  return (typeof currentLanguage !== 'undefined' && currentLanguage === 'zh') ? zh : en;
+  return getCurrentLanguage() === 'zh' ? zh : en;
 }
 
 // 生命周期槽位速查（措辞对齐框架 DebugHub 的生命周期文档）
@@ -999,7 +1012,7 @@ function rhKindHint(kind) {
  * 反向钩子面板 — 单层分组卡 + 时间线行式条目。
  * 分组卡只承担折叠职责；条目不再嵌套卡片。
  */
-function renderReverseHooksPanel() {
+export function renderReverseHooksPanel() {
   if (currentHookInspector.hooks.length === 0) {
     return '<div class="feature-panel-empty"><div class="feature-panel-section"><div class="feature-panel-section-title">' + escapeHtml(t('panel_no_hook_data')) + '</div><div>' + escapeHtml(t('panel_no_hook_data_desc')) + '</div></div></div>';
   }
@@ -1061,8 +1074,8 @@ function renderReverseHooksPanel() {
 }
 
 // 功能特性 / 反向钩子面板动作（data-action 分发）。openFeatureDetails /
-// closeFeatureDetails 实现住 debug-overview.js，经 window 调用；
-// setFeatureDetailTab 保留既有 window 导出（无生产消费方，台账 behavior 键）。
+// closeFeatureDetails 是 debug-overview 的命名导出；
+// setFeatureDetailTab 零窗口消费面，已收敛为模块私有。
 // details 的 toggle 不冒泡，bindEventType 必须走 capture（见分发器注释）。
 window.ClawFW.actions.bindEventType('toggle', { capture: true });
 window.ClawFW.actions.registerMany({
@@ -1071,7 +1084,7 @@ window.ClawFW.actions.registerMany({
   'features.setCapFilter': (el) => setFeaturePanelCapFilter(el.value),
   'features.groupToggle': (el) => featureGroupToggled(el.dataset.groupId, el.open),
   'features.rhGroupToggle': (el) => rhGroupToggled(el.dataset.lifecycle, el.open),
-  'features.openDetails': (el) => window.openFeatureDetails(el.dataset.featureName),
+  'features.openDetails': (el) => openFeatureDetails(el.dataset.featureName),
   'features.setDetailTab': (el) => setFeatureDetailTab(el.dataset.tabKey, el.dataset.featureName),
   'features.openSkill': (el) => openFeatureSkill(el.dataset.featureName, el.dataset.skillName),
   'features.retrySkill': (el) => retryFeatureSkill(el.dataset.featureName, el.dataset.skillName),
@@ -1079,5 +1092,25 @@ window.ClawFW.actions.registerMany({
   'features.toggleTool': (el) => toggleToolState(el.dataset.scope, el.dataset.name, el),
   'features.toggleHook': (el) => toggleHookState(el.dataset.lifecycle, el.dataset.featureName, el.dataset.methodName, el),
   'features.closeSkill': () => closeFeatureSkill(),
-  'features.closeDetails': () => window.closeFeatureDetails(),
+  'features.closeDetails': () => closeFeatureDetails(),
+});
+
+// ── 兼容桥（仍有 classic 消费方的入口）────────────────────────────────
+// renderFeaturesPanel / renderReverseHooksPanel ← app-ui.js 的 ClawPanels 注册
+//   闭包（hooks / inspector 面板 render）。
+// 注册相位：模块顶层（deferred ESM 相）。两个 app-ui 消费点都在函数体内，由
+// 面板打开时调用；rail 按钮由首屏渲染的 syncRailButtons 生成（与模块同相或更晚）。
+// 注销条件：app-ui 的 ClawPanels 注册转 ESM 并改 import。
+// renderFeatureDetailOverlay 的唯一消费方是同批 debug-panel-host（已改命名导出
+// import），故不上桥；其余入口（setFeaturePanelFilter / setFeaturePanelCapFilter /
+// featureGroupToggled / rhGroupToggled / openFeatureSkill / retryFeatureSkill /
+// closeFeatureSkill / toggleToolSchema / toggleToolState / toggleHookState /
+// setFeatureDetailTab 等）生产消费面只有模板里的 data-action，分发器注册表是
+// 唯一入口，保持模块私有。
+const bridged = { renderFeaturesPanel, renderReverseHooksPanel };
+window.KernelState.defineKey('debug-features-hooks', 'renderFeaturesPanel', renderFeaturesPanel);
+window.KernelState.defineKey('debug-features-hooks', 'renderReverseHooksPanel', renderReverseHooksPanel);
+window.KernelState.claim('debug-features-hooks', {
+  get: (key) => bridged[key],
+  set: (key, value) => { bridged[key] = value; },
 });

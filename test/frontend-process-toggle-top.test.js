@@ -107,10 +107,13 @@ async function withView(roles, fn) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/input-helpers.js');
+      // input-helpers 已迁 ESM（P4 T2）：classic 标签删除，改由 async 相 c.load 装载。
     },
     globals,
   }, async (c) => {
+    // input-helpers 已迁 ESM（P4 T2）：真实 import 装载，桥键由模块自身注册；
+    // chat-process-visibility 的 toggle 入口经 window.updateChatProcessToggle 取用。
+    await c.load('public/src/modules/input-helpers.js');
     const surface = c.window.createP2BootstrapChatSurfaceHost();
     surface.showChatProcess = false;
     surface.followLatestEnabled = false;

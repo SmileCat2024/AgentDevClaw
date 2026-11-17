@@ -235,12 +235,12 @@ async function withChatCase(fn) {
       // 对话框状态。
       prepareClassicSandbox(sandbox);
       sandbox.loadSource('public/src/modules/chat-viewport.js');
-      sandbox.loadSource('public/src/modules/input-helpers.js');
       sandbox.loadSource('public/src/modules/chat-renderer.js');
       // todo-plan 已迁 ESM（P4 L1）：classic 相只补 markdown-utils 的 classic 实现，
       // 模块本体在 async 相 c.load。
       sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
-      sandbox.loadSource('public/src/modules/rollback-dialog.js');
+      // input-helpers / rollback-dialog 已迁 ESM（P4 T2）：两者都改由 async 相
+      // c.load 装载（见下），classic 相不再有它们的脚本。
       // 用例的窄行为观察面（真源之后覆盖：app-main / app-ui 会定义同名入口）：
       // 侧栏列表与主视图渲染在执行期被各用例替换成记录器，这里先给出无操作默认。
       sandbox.run(APP_MAIN_PRELUDE);
@@ -281,6 +281,10 @@ async function withChatCase(fn) {
       _maybeFetchRecap: () => {},
     },
   }, async (c) => withNoiseClean('rollback 竞态用例', async () => {
+    // 输入面两件已迁 ESM（P4 T2）：过程显隐按钮同步（桥键
+    // updateChatProcessToggle）与回退域状态键注册，必须先于消费它们的模块求值。
+    await c.load('public/src/modules/rollback-dialog.js');
+    await c.load('public/src/modules/input-helpers.js');
     // plan 快照归一 / 成对签名（已迁 ESM，P4 L1）。
     await c.load('public/src/modules/todo-plan.js');
     const orchestration = await c.load('public/src/modules/orchestration-state.js');

@@ -3,8 +3,9 @@
  *
  * 装载路线：test/helpers/p2-esm-case.js 的 `withP2EsmCase`（整图隔离真实
  * import + 真实 classic 沙箱）。classic 相按生产加载序跑真实文件
- * （kernel-state → input-composer → voice-input → persistent-input），ESM 相
- * 跑本批 owner / 行为模块；两侧共享同一个 window，桥的两端语义因此是生产语义。
+ * （kernel-state → input-composer → persistent-input），ESM 相跑本批 owner /
+ * 行为模块（voice-input 已随 P4 迁 ESM，用例按需经 `c.load` 装载）；两侧共享
+ * 同一个 window，桥的两端语义因此是生产语义。
  *
  * 钉住四件事：
  *   1. classic 相注册的真初值在 ESM claim 时被吸收（吸收式认领，无双存储）；
@@ -22,6 +23,8 @@ const LEAF_CALL_ELAPSED = 'public/src/modules/p2-w2-3a-call-elapsed-state.js';
 const LEAF_VOICE = 'public/src/modules/p2-w2-3a-voice-state.js';
 const LEAF_COMPOSER = 'public/src/modules/p2-w2-3a-composer-state.js';
 const QUEUE_PROJECTION = 'public/src/modules/p2-w2-3a-queue-projection.js';
+// 已迁 ESM 的语音实现（P4 L3）：classic 消费方的判定函数、录音状态桥键都由它提供。
+const VOICE_INPUT = 'public/src/modules/voice-input.js';
 
 function createElementStub(tag = '') {
   return {
@@ -115,7 +118,7 @@ function inputCaseOptions() {
         prepareClassicSandbox(sandbox);
         sandbox.loadSource('public/src/modules/thread-store.js');
         sandbox.loadSource('public/src/modules/input-composer.js');
-        sandbox.loadSource('public/src/modules/voice-input.js');
+        // voice-input 已迁 ESM（P4 L3）：用例体里经 c.load 装载，classic 相不再载入。
         sandbox.loadSource('public/src/modules/persistent-input.js');
         // 窄行为观察面（真源之后覆盖）：本用例只验证排队投影状态 owner 的 claim /
         // 双向转发语义，不驱动输入面 DOM 与轮询/侧栏渲染。
@@ -215,8 +218,12 @@ test('草稿缓存：按会话隔离读写 + 语义 clear（真实 composer 函�
 test('语音状态：_shouldPreserveVoiceInputForRender 按 owner 状态 + 会话键判定', async () => {
   const { options } = inputCaseOptions();
   await withP2EsmCase(options, async (c) => {
-    // _voiceCacheKey 仍是 voice-input 的模块私有键（零跨文件生产消费面）
-    c.read('_voiceCacheKey = "session-k1";');
+    const voiceInput = await c.load(VOICE_INPUT);
+    // _voiceCacheKey 仍是 voice-input 的模块私有键（零跨文件生产消费面），
+    // ESM 用例经模块的显式写入口置位（原 classic 用例按全局词法作用域直写）。
+    voiceInput.__testVoiceState.cacheKey = 'session-k1';
+    // 生产路径：classic 的 input-render 经 window 访问器调用判定函数（桥键）。
+    c.expose('_shouldPreserveVoiceInputForRender', voiceInput._shouldPreserveVoiceInputForRender);
 
     const voiceState = await c.load(LEAF_VOICE);
     assert.equal(voiceState.voiceRecording, false);

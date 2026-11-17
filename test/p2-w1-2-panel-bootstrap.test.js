@@ -157,15 +157,15 @@ describe('P2 W1-2 批次入口：三个 ESM 模块的真实行为', () => {
     uiLoad.cleanup();
   });
 
-  it('迁出边界：两个 classic 文件仍是 classic，入口不 import 它们', () => {
+  it('迁出边界：right-panel-registry 仍是 classic，入口不 import 它', () => {
     const entry = fs.readFileSync(
       new URL('../public/src/modules/p2-w1-2-panel-bootstrap.js', import.meta.url), 'utf8');
-    for (const classic of ['right-panel-registry', 'rail-customize']) {
+    for (const classic of ['right-panel-registry']) {
       assert.doesNotMatch(entry, new RegExp(`import '\\./${classic}\\.js'`),
         `批次入口不得 import classic 文件 ${classic}.js`);
     }
 
-    for (const classic of ['right-panel-registry', 'rail-customize']) {
+    for (const classic of ['right-panel-registry']) {
       const source = fs.readFileSync(
         new URL(`../public/src/modules/${classic}.js`, import.meta.url), 'utf8');
       assert.doesNotMatch(source, /^\s*(export\s+(default|function|const|let|class|\{))/m,
@@ -174,7 +174,7 @@ describe('P2 W1-2 批次入口：三个 ESM 模块的真实行为', () => {
 
     // 首屏同步交互与 classic 相声明由原实现承担：它们的 classic 标签必须保留
     const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-    for (const classic of ['right-panel-registry', 'rail-customize']) {
+    for (const classic of ['right-panel-registry']) {
       assert.match(html, new RegExp(`<script src="\\./src/modules/${classic}\\.js"></script>`),
         `${classic}.js 的 classic 标签必须保留（接线时不得删除）`);
     }
@@ -188,6 +188,17 @@ describe('P2 W1-2 批次入口：三个 ESM 模块的真实行为', () => {
       'panel-plugins.js 无跨文件键，不应注册/认领桥键');
     assert.doesNotMatch(source, /window\.currentLanguage\b/,
       '语言应经 i18n-environment-state 的命名导出读取');
+  });
+
+  it('rail-customize 已迁 ESM（P4 L2）：配置 API 作命名导出，重放入口经内核桥', () => {
+    const source = fs.readFileSync(
+      new URL('../public/src/modules/rail-customize.js', import.meta.url), 'utf8');
+    assert.match(source, /^import\s/m, 'rail-customize.js 应为 ESM（P4 L2）');
+    assert.match(source, /export const RailCustomize = \{/,
+      '清单 / 配置 API 作命名导出（生产零消费，不再挂 window）');
+    assert.doesNotMatch(source, /window\.RailCustomize\s*=/, '不再保留 window.RailCustomize 全局');
+    assert.match(source, /defineKey\('rail-customize', 'applyRailConfig'/,
+      '重放入口仍须经桥供 app-ui / debug-panel-host 的 classic 调用');
   });
 
   it('本批不新增桥键：三个 ESM 文件不触碰 KernelState', () => {

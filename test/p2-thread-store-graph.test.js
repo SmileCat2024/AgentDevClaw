@@ -91,6 +91,11 @@ function graphCase({ requests, mode, document }) {
         allAgents: [HOST],
       });
       seedThreadFacts(sandbox, [thread]);
+      // rail-cust-overlay 是懒创建的（openModal 才建）。默认沙箱桩给任意 id 都返回
+      // 元素，与生产不变量「overlay 存在 ⇒ 已建好内部结构」冲突，会让 rail-customize
+      // 在模块求值期的 updateLang 走进"渲染空 overlay"的非法状态。
+      const getById = sandbox.document.getElementById.bind(sandbox.document);
+      sandbox.document.getElementById = (id) => (id === 'rail-cust-overlay' ? null : getById(id));
       // 插件宿主缝：新建会话选择只做透传（生产由 claw-host 提供同名注册表）。
       sandbox.run('window.ClawFW = window.ClawFW || {}; window.ClawFW.workspaceAgents = {'
         + ' selectForNewSession: function (agent, action) { return action; } };');

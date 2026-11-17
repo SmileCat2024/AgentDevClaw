@@ -1,25 +1,45 @@
 /**
- * debug-panel-host.js — 面板编排入口
+ * debug-panel-host.js — 面板编排入口（P4 T2 渲染层批次：classic → ESM）
  *
- * 从 debug-panels.js 拆出。必须在所有 debug-*.js 子模块之后加载。
- * 包含：
+ * 从 debug-panels.js 拆出。必须是 debug 面板族的编排层。包含：
  *   - renderFeaturePanel（经 ClawPanels 注册表调用各面板 render；
  *     mountBody 型容器面板经挂载/卸载通道，不走 innerHTML；
  *     stub 型懒面板显示装载态并触发按需装载，ADR-0044 P3）
  *   - toggleFeaturePanel
  *   - syncRailButtons（rail 按钮注册表派生，ADR-0044 P2b）
  *
- * 依赖（全局变量，声明于 app-core.js）：
- *   - activeFeaturePanel, featurePanelWidth
- *   - featurePanel, featurePanelBody, featurePanelTitle
- *   （rail 面板按钮由 syncRailButtons 动态生成，不再启动快照）
+ * 依赖形态：
+ *   - 已迁 ESM 直接 import：翻译（t）、转义 / 公式增强（markdown-utils）、
+ *     DOM 引用（domRefs）、面板宽度（panel-layout-state）、渲染入口状态
+ *     （render-entry-state 的 activeFeaturePanel 与其 setter）、语言
+ *     （getCurrentLanguage）、Feature 详情弹窗清理（debug-features-hooks 的
+ *     renderFeatureDetailOverlay；两模块只互相调用、顶层不求值，属调用期环）。
+ *   - 仍 classic 的显式 window 晚绑定（行尾注明定义域）：getFeaturePanelEmptyHtml
+ *     （app-core）、_cascadeCentralWidth（app-ui）、chat-viewport 的视口锚点族、
+ *     applyRailConfig（rail-customize）。
+ *   - 注册表与宿主命名空间：window.ClawPanels（right-panel-registry 转发壳，
+ *     唯一注册表）、window.ClawHost（插件宿主）、window.ClawSelect（下拉增强）。
  *
- * 依赖（全局函数 / 注册表）：
- *   - t (app-core.js)
- *   - enhanceMathInElement (markdown-utils.js)
- *   - getFeaturePanelEmptyHtml (app-ui.js)
- *   - window.ClawPanels（唯一注册表：渲染寻址与可见性过滤同源）
+ * 时序审计（R4，首屏链已在模块相由 boot.js 触发）：
+ *   - 顶层语句共四处，全部从加载相推迟到模块求值相：
+ *     1. featurePanelBody 的 scroll 监听（顶部渐隐遮罩）——只在用户滚动时触发；
+ *     2. window.ClawFW.panelBodyContentEl 挂载（面板自刷内容层的宿主 API）；
+ *     3. ClawHost.setPanelTeardownHook / onPluginLoadSettled 订阅——插件装载 / 卸载
+ *        都发生在 boot 之后，订阅晚于它们不可能的早于模块求值；
+ *     4. 兼容桥注册（见文件尾）。
+ *     四处均无 classic 相触达点：首屏渲染（applyLanguage → renderCurrentMainView
+ *     → syncRailButtons）本身就在模块相、且晚于本模块求值（boot.js 是最后一个
+ *     module 标签）。
  */
+import { t } from '../i18n.js';
+import { escapeHtml, enhanceMathInElement } from './markdown-utils.js';
+import { domRefs } from './p2-bootstrap-dom.js';
+import { getFeaturePanelWidth } from './panel-layout-state.js';
+import { activeFeaturePanel, setActiveFeaturePanel } from './render-entry-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { renderFeatureDetailOverlay } from './debug-features-hooks.js';
+
+const { featurePanel, featurePanelTitle, featurePanelBody } = domRefs;
 
 // ═══════════════════════════════════════════════════════════════
 // 面板入口
@@ -129,7 +149,7 @@ function mountContainerPanel(panel, panelId) {
     || (innerScroll && innerScroll.scrollHeight > innerScroll.clientHeight + 4));
 }
 
-function renderFeaturePanel(options = {}) {
+export function renderFeaturePanel(options = {}) {
   // ── 泛化焦点保持：任何 featurePanelBody 内的 input/textarea 都保护 ──
   const activeElement = document.activeElement;
   let focusRestore = null;
@@ -165,19 +185,17 @@ function renderFeaturePanel(options = {}) {
     featurePanel.classList.remove('body-ready');
     document.querySelector('.main-content')?.classList.remove('panel-open');
     featurePanelTitle.textContent = t('panel_structure');
-    featurePanelBody.innerHTML = wrapPanelContent(getFeaturePanelEmptyHtml());
+    featurePanelBody.innerHTML = wrapPanelContent(window.getFeaturePanelEmptyHtml()); // 桥接期：定义于 app-core
     document.querySelectorAll('.rail-button[data-panel]').forEach(button => button.classList.remove('active'));
     // 清理可能残留的 Feature 详情弹窗 portal
-    if (typeof renderFeatureDetailOverlay === 'function') {
-      renderFeatureDetailOverlay(null);
-    }
+    renderFeatureDetailOverlay(null);
     return;
   }
 
   const panel = window.ClawPanels.get(activeFeaturePanel);
   const panelId = activeFeaturePanel;
   // 切换到非 hooks 面板时，清理 Feature 详情弹窗
-  if (panelId !== 'hooks' && typeof renderFeatureDetailOverlay === 'function') {
+  if (panelId !== 'hooks') {
     renderFeatureDetailOverlay(null);
   }
   const prevPanelId = featurePanelBody.dataset.panel;
@@ -190,7 +208,7 @@ function renderFeaturePanel(options = {}) {
   featurePanel.classList.add('open');
   document.querySelector('.main-content')?.classList.add('panel-open');
   if (!wasOpen) {
-    featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
+    featurePanel.style.setProperty('--feature-panel-width', getFeaturePanelWidth() + 'px');
   }
   featurePanelTitle.textContent = typeof panel.title === 'function' ? panel.title() : panel.title;
   document.querySelectorAll('.rail-button[data-panel]').forEach(button => {
@@ -334,14 +352,14 @@ function notifyPanelLifecycle(panelId, hookName) {
   }
 }
 
-function toggleFeaturePanel(panelId) {
+export function toggleFeaturePanel(panelId) {
   // 捕获滚动锚点：panel 开/关是一次重大宽度突变，需要在布局应用后
   // 恢复阅读位置（跟随模式锁底 / 非跟随锚定到正在读的行）。
-  const _anchor = (typeof captureChatViewportAnchor === 'function')
-    ? captureChatViewportAnchor() : null;
+  const _anchor = (typeof window.captureChatViewportAnchor === 'function') // 桥接期：定义于 chat-viewport
+    ? window.captureChatViewportAnchor() : null;
   let _suppressApplied = false;
-  if (_anchor && typeof suppressChatViewportObservers === 'function') {
-    suppressChatViewportObservers(500);
+  if (_anchor && typeof window.suppressChatViewportObservers === 'function') {
+    window.suppressChatViewportObservers(500);
     _suppressApplied = true;
   }
 
@@ -354,13 +372,13 @@ function toggleFeaturePanel(panelId) {
     notifyPanelLifecycle(previousPanel, 'onClose');
   }
 
-  activeFeaturePanel = wasOpen ? null : panelId;
+  setActiveFeaturePanel(wasOpen ? null : panelId);
   renderFeaturePanel({ deferBody: shouldDeferBody });
 
   // 面板打开使中央区低于阈值时做级联适配（收左栏 → 缩右栏）。
   // 纯动作：复用 toggle 开头捕获的 _anchor，在下方 rAF 中一并恢复滚动。
-  if (typeof _cascadeCentralWidth === 'function') {
-    _cascadeCentralWidth();
+  if (typeof window._cascadeCentralWidth === 'function') { // 桥接期：定义于 app-ui
+    window._cascadeCentralWidth();
   }
 
   // Lifecycle: 打开新面板 / 关闭当前面板
@@ -371,14 +389,14 @@ function toggleFeaturePanel(panelId) {
   }
 
   // 面板 class 已切换（宽度变化写入样式），下一帧布局应用新宽度后恢复滚动位置。
-  if (_anchor && typeof applyChatViewportAnchor === 'function') {
+  if (_anchor && typeof window.applyChatViewportAnchor === 'function') {
     requestAnimationFrame(() => {
-      applyChatViewportAnchor(_anchor);
-      if (_suppressApplied && typeof resumeChatViewportObservers === 'function') {
-        resumeChatViewportObservers();
+      window.applyChatViewportAnchor(_anchor);
+      if (_suppressApplied && typeof window.resumeChatViewportObservers === 'function') {
+        window.resumeChatViewportObservers();
       }
-      if (_anchor.mode === 'follow' && typeof scheduleFollowLatestSettlePass === 'function') {
-        scheduleFollowLatestSettlePass();
+      if (_anchor.mode === 'follow' && typeof window.scheduleFollowLatestSettlePass === 'function') {
+        window.scheduleFollowLatestSettlePass();
       }
     });
   }
@@ -395,7 +413,7 @@ function toggleFeaturePanel(panelId) {
 // rail-customize 强制隐藏（行为等价此前的 CUSTOMIZABLE_PANEL_ORDER 屏蔽）。
 
 function railButtonTitle(panel) {
-  const lang = (typeof currentLanguage !== 'undefined' && currentLanguage === 'en') ? 'en' : 'zh';
+  const lang = getCurrentLanguage() === 'en' ? 'en' : 'zh';
   const meta = panel.label;
   if (meta && typeof meta === 'object') return meta[lang] || meta.en || panel.id;
   return typeof panel.title === 'function' ? panel.title() : panel.title;
@@ -423,7 +441,7 @@ function createRailButton(panel) {
  * 面板可用性（when 过滤）不在此处管——renderCurrentMainView 对按钮
  * display 的控制照旧。语言切换后 title 重算经再次调用本函数完成。
  */
-function syncRailButtons() {
+export function syncRailButtons() {
   const rail = document.getElementById('right-rail');
   if (!rail) return;
   const panels = window.ClawPanels.getAll().filter((p) => p.icon);
@@ -463,7 +481,7 @@ function syncRailButtons() {
   // 早于首次按钮生成，新生成的按钮不经 applyConfig 处理——否则会出现
   // 「用户隐藏的面板重新显示」与「自定义面板按钮滞留 rail 顶部」两类
   // 回归（applyConfig 同时负责 custBtn 在面板区末尾的归位）。
-  if (domChanged && typeof window.applyRailConfig === 'function') {
+  if (domChanged && typeof window.applyRailConfig === 'function') { // 桥接期：定义于 rail-customize
     window.applyRailConfig();
   }
 }
@@ -478,7 +496,7 @@ function syncRailButtons() {
 if (window.ClawHost && typeof window.ClawHost.setPanelTeardownHook === 'function') {
   window.ClawHost.setPanelTeardownHook((panelId) => {
     if (activeFeaturePanel !== panelId) return;
-    activeFeaturePanel = null;
+    setActiveFeaturePanel(null);
     renderFeaturePanel();
   });
 }
@@ -504,4 +522,24 @@ if (window.ClawHost && typeof window.ClawHost.onPluginLoadSettled === 'function'
   });
 }
 
-window.syncRailButtons = syncRailButtons;
+// ── 兼容桥（仍有 classic / 未迁移消费方的入口）────────────────────────
+// renderFeaturePanel ← app-ui.js（面板入口闭包与 renderCurrentMainView 链）、
+//   i18n-environment-state（ESM，applyLanguage 的 window 调用）、todo-plan /
+//   debug-preflight（ESM，按 window 取）、悬置域（resources-viewer / wg-*）。
+// toggleFeaturePanel ← wg-popover（悬置域）。
+// syncRailButtons ← app-ui.js、i18n-environment-state、feature-ui-registry。
+// syncPanelBodyHtmlCache ← panel-plugins/git.js（面板自刷后重算签名缓存）。
+// 注册相位：模块顶层（deferred ESM 相）。上述消费点全部在函数体内、且都在
+// boot 之后；首屏渲染的 syncRailButtons 调用发生在 boot（晚于本模块求值），
+// classic 相（加载期顶层）对本域零读写。
+// 注销条件：app-ui / rail-customize / 悬置域迁移后改 import；
+// i18n-environment-state / todo-plan / debug-preflight / git 面板的窗口取用改 import。
+const bridged = { renderFeaturePanel, toggleFeaturePanel, syncRailButtons, syncPanelBodyHtmlCache };
+window.KernelState.defineKey('debug-panel-host', 'renderFeaturePanel', renderFeaturePanel);
+window.KernelState.defineKey('debug-panel-host', 'toggleFeaturePanel', toggleFeaturePanel);
+window.KernelState.defineKey('debug-panel-host', 'syncRailButtons', syncRailButtons);
+window.KernelState.defineKey('debug-panel-host', 'syncPanelBodyHtmlCache', syncPanelBodyHtmlCache);
+window.KernelState.claim('debug-panel-host', {
+  get: (key) => bridged[key],
+  set: (key, value) => { bridged[key] = value; },
+});

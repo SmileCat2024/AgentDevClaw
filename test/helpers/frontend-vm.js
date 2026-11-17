@@ -25,6 +25,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+/**
+ * 运行时才创建、index.html 里不存在的元素 id：沙箱桩必须返回 null，否则会构造出
+ * "元素存在但没有内部结构"的非法状态（生产里 getElementById 命中即代表已建好）。
+ * rail-cust-overlay 由 RailCustomize 的 openModal 动态插入。
+ */
+const RUNTIME_CREATED_IDS = new Set(['rail-cust-overlay']);
+
 const KERNEL_STATE_PATH = 'public/src/modules/kernel-state.js';
 
 /** Install the real classic kernel bridge into an existing VM context. */
@@ -54,6 +61,9 @@ export function createFrontendSandbox(overrides = {}) {
     // dataset（如 chat-context-bar 的 popupBound），桩缺它会把真实的 DOM 路径
     // 误判成 TypeError。
     dataset: {},
+    // children 同样是真实元素的必备面：RailCustomize 的锚点定位读
+    // Array.from(rail.children)，桩缺它会抛 "undefined is not iterable"。
+    children: [],
     style: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     appendChild() {},
@@ -65,6 +75,12 @@ export function createFrontendSandbox(overrides = {}) {
     removeAttribute() {},
     querySelector() { return null; },
     querySelectorAll() { return []; },
+    closest() { return null; },
+    matches() { return false; },
+    contains() { return false; },
+    insertBefore() {},
+    remove() {},
+    getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
     innerHTML: '',
     textContent: '',
     scrollTop: 0,
@@ -73,7 +89,7 @@ export function createFrontendSandbox(overrides = {}) {
   };
 
   const documentStub = {
-    getElementById() { return { ...elementStub }; },
+    getElementById(id) { return RUNTIME_CREATED_IDS.has(id) ? null : { ...elementStub }; },
     querySelector() { return null; },
     querySelectorAll() { return []; },
     createElement() { return { ...elementStub }; },
@@ -82,6 +98,8 @@ export function createFrontendSandbox(overrides = {}) {
     body: { ...elementStub },
     head: { ...elementStub },
     documentElement: { ...elementStub },
+    // Document 的真实必备面（子节点操作与命中判断），模块在模块相直接调用。
+    contains() { return false; },
     readyState: 'complete',
   };
 

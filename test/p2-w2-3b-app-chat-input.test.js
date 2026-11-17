@@ -3,9 +3,10 @@
  *
  * 装载路线：test/helpers/p2-esm-case.js 的 `withP2EsmCase`（整图隔离真实
  * import + 真实 classic 沙箱）。classic 相跑真实生产前缀
- * （app-core → sidebar-render → session-view-state → input-composer →
- * voice-input），因此 ESM 侧的 `ClawToast` / `loadAgents` 走的是**真实 import
- * 图与真实宿主工厂**，不是测试桩；快记条自身的 DOM/网络面由用例注入。
+ * （app-core → sidebar-render → session-view-state → input-composer），因此
+ * ESM 侧的 `ClawToast` / `loadAgents` 走的是**真实 import 图与真实宿主工厂**，
+ * 不是测试桩；快记条自身的 DOM/网络面由用例注入。voice-input 已迁 ESM
+ * （P4 L3），需要语音链路记账的用例经 `stubVoiceInput` 在模块装载后覆盖桥值。
  *
  * 钉住六件事：
  *   1. 命名空间缝不变：`window.AppChatInput` 指向模块导出，内部函数不外泄；
@@ -25,6 +26,7 @@ const MODULE = 'public/src/modules/app-chat-input.js';
 const TOAST = 'public/src/modules/toast-notify.js';
 const COMPOSER_STATE = 'public/src/modules/p2-w2-3a-composer-state.js';
 const VOICE_STATE = 'public/src/modules/p2-w2-3a-voice-state.js';
+const VOICE_INPUT = 'public/src/modules/voice-input.js';
 const AGENT = { id: 'memo', name: 'Memo' };
 const BLOCK = {
   type: 'app-chat-input',
@@ -168,17 +170,13 @@ function createCaseOptions({ language = 'zh' } = {}) {
       // 周期排程由基座关掉。基座之外按 index.html 顺序补输入面与分发器真实实现。
       prepareClassicSandbox(sandbox);
       sandbox.loadSource('public/src/modules/input-composer.js');
-      sandbox.loadSource('public/src/modules/voice-input.js');
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
 
       // runtime-status.js 的 classic 词法容器：本用例不加载该文件（它不在快记条
       // 的依赖路径上），只补 createAgentCallStatesHost 求值期要读的 Map 引用。
       sandbox._agentSuspended = new Map();
-      // function 声明会覆盖 overrides 先注入的同名桩：加载后接管语音链路与
-      // 输入面自动高度（两者仍是 classic 实现，本用例按行为记账）。
-      sandbox.stopVoiceRecording = () => { state.voiceCalls.push(['stop']); };
-      sandbox._updateVoiceUI = () => { state.voiceCalls.push(['ui']); };
-      sandbox.toggleVoiceRecording = (el) => { state.voiceCalls.push(['toggle', el.id || el.dataset?.target]); };
+      // 语音链路（stopVoiceRecording / toggleVoiceRecording / _updateVoiceUI）已属
+      // ESM 的 voice-input（P4 L3）：需要记账的用例经 stubVoiceInput 在装载后覆盖桥值。
       // autoResize 已是 ESM 具名导出（input-actions）：不再注入同名桩，自动高度按
       // 真实实现的 DOM 效果断言；input-actions 的静态依赖里 poll-coordinator-host
       // 需要 app-main 的轮询宿主工厂，本用例不驱动轮询，只要求装载期可解析。
@@ -240,6 +238,19 @@ function businessCalls(state) {
 /** 设定本轮网络桩（调用点由 classic 相安装的代理统一记账）。 */
 function installFetch(state, handler) {
   state.fetchHandler = handler;
+}
+
+/**
+ * 语音链路记账桩：voice-input 已迁 ESM（P4 L3）。模块装载后经桥访问器覆盖函数
+ * 键（claim 的 set 写回桥值），app-chat-input 的 `window.X` 读到同一引用。
+ */
+async function stubVoiceInput(c, state) {
+  await c.load(VOICE_INPUT);
+  c.window.stopVoiceRecording = () => { state.voiceCalls.push(['stop']); };
+  c.window._updateVoiceUI = () => { state.voiceCalls.push(['ui']); };
+  c.window.toggleVoiceRecording = (el) => { state.voiceCalls.push(['toggle', el.id || el.dataset?.target]); };
+  // 模块求值期的音频提示预取（/sounds/*.mp3，best-effort）不是业务调用，不进记账。
+  state.calls.length = 0;
 }
 
 /** 真实 toast 模块是同一实例：直接替换导出对象上的方法做行为记账。 */
@@ -406,6 +417,7 @@ test('submit：语音占用期语义（转写中不发送 / 录音中点发送 =
   await withP2EsmCase(options, async (c) => {
     const mod = await c.load(MODULE);
     await spyToasts(c, state);
+    await stubVoiceInput(c, state);
     const voiceState = await c.load(VOICE_STATE);
     mod.AppChatInput.render(AGENT, BLOCK);
     state.textarea.value = '语音内容';
@@ -472,6 +484,7 @@ test('分发器动作真实行为：input 打字/回车、send 按钮、voice �
   await withP2EsmCase(options, async (c) => {
     const mod = await c.load(MODULE);
     await spyToasts(c, state);
+    await stubVoiceInput(c, state);
     mod.AppChatInput.render(AGENT, BLOCK);
     installFetch(state, (call) => {
       if (call.url === BLOCK.resolveEndpoint) return Promise.resolve(jsonResponse({ ok: true, threadId: 'wt-acts' }));

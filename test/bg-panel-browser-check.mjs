@@ -4,12 +4,38 @@ import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 // Isolated presentation fixture: no running Claw service or user data.
+//
+// bg-panel 已迁 ESM（P4 L3）：模块经真实 URL 装载（import 图从 /src/ 取源，页面由
+// 本脚本拦 `http://claw.test/**` 供出），classic 相只注入内核桥与面板注册表宿主。
+// 寻址状态（runtime / 焦点 / 面板 / 语言）属各 ESM owner，用它们的 setter 预置；
+// 同一组值仍写进窗口全局，供仍是 classic 的 debug-panel-host 取用。
+const FIXTURE_HTML = '<!doctype html><html><head></head><body><span id="rail-bg-badge"></span><div id="bg-panel-root"></div></body></html>';
+
+const SETUP_MODULE = `
+  import { setCurrentRuntimeAgentId } from '/src/modules/orchestration-state.js';
+  import { setFocusedAgentId } from '/src/modules/agent-store-state.js';
+  import { setActiveFeaturePanel } from '/src/modules/render-entry-state.js';
+  import { setCurrentLanguage } from '/src/modules/i18n-environment-state.js';
+  setCurrentRuntimeAgentId('fixture-runtime');
+  setFocusedAgentId('fixture');
+  setActiveFeaturePanel('bg');
+  setCurrentLanguage('zh');
+  await import('/src/modules/bg-panel.js');
+`;
+
 const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH });
 try {
   const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.setContent('<html><head></head><body><span id="rail-bg-badge"></span><div id="bg-panel-root"></div></body></html>');
+  await page.route('http://claw.test/**', async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.startsWith('/src/')) {
+      return route.fulfill({ contentType: 'text/javascript', body: await readFile(new URL(`../public${pathname}`, import.meta.url), 'utf8') });
+    }
+    return route.fulfill({ contentType: 'text/html', body: FIXTURE_HTML });
+  });
+  await page.goto('http://claw.test/');
   await page.addStyleTag({ content: await readFile(new URL('../public/styles/base.css', import.meta.url), 'utf8') });
   await page.evaluate(() => {
     window.currentRuntimeAgentId = 'fixture-runtime';
@@ -38,8 +64,11 @@ try {
         : { id: 'same', command: request.featureId + ' build', status: 'running', outputTail: 'fixture output', startedAt: Date.now() }] } }) };
     };
   });
+  // 内核桥（ESM 域模块求值期的 defineKey / claim 依赖它）与面板注册表宿主仍是 classic。
+  await page.addScriptTag({ content: await readFile(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8') });
   await page.addScriptTag({ content: await readFile(new URL('../public/src/modules/claw-host.js', import.meta.url), 'utf8') });
-  await page.addScriptTag({ content: await readFile(new URL('../public/src/modules/bg-panel.js', import.meta.url), 'utf8') });
+  await page.addScriptTag({ type: 'module', content: SETUP_MODULE });
+  await page.waitForFunction(() => typeof window.BgPanel === 'object' && window.BgPanel !== null);
   await page.evaluate(() => window.BgPanel.onOpen());
   await page.waitForFunction(() => document.querySelectorAll('.bgp-card').length === 3);
   for (const theme of ['dark', 'light']) {

@@ -1,34 +1,30 @@
 /**
- * P2 第二波批次 11（调试总览与功能深面板）——按 R4 返修后的最终形态。
+ * P2 第二波批次 11（调试总览与功能深面板）+ P4 T2 渲染层批次（debug-features-hooks 转 ESM）。
  *
- * 最终形态（返修决定，见两个模块头注与 p2-w2-11 批次入口）：
- *   - debug-features-hooks.js 保持 **classic 唯一实现**：app-ui 的 ClawPanels 注册
- *     在 classic 相就为 hooks / inspector 生成 rail 按钮（带 icon + order，不被
- *     rail-customize 隐藏），首屏 applyLanguage → syncRailButtons 之后即可点击；
- *     render 入口与空态 / 分组 / 卡片 / 详情弹窗 / 技能阅读页互相缠绕，无法合理
- *     拆分，故整文件保 classic，且没有 ESM 副本。
- *   - debug-overview.js 保留 ESM（经 p2-w2-11 批次入口装载）：workspace / monitor
- *     面板注册元数据没有 `order`，rail 按钮被强制隐藏；入口只在面板打开或 boot
- *     之后的详情动作里触达，classic 相零读写。
+ * 最终形态：
+ *   - debug-features-hooks 已转 ESM：三个渲染入口是命名导出，仍有 classic
+ *     消费方（app-ui 的 ClawPanels 注册闭包）的两个经 KernelState 桥键；
+ *     Feature 详情选择器改为 import debug-overview 的命名导出，细节弹窗清理
+ *     改为 import debug-panel-host 的实现（同批）。首屏渲染由 boot 在模块相触发，
+ *     rail 按钮与该模块同相或更晚，不存在「按钮可点、模块未求值」的窗口。
+ *   - debug-overview 保持 ESM（经 p2-w2-11 批次入口装载）：workspace / monitor
+ *     面板注册元数据没有 `order`，rail 按钮被强制隐藏；入口只在面板打开或
+ *     boot 之后的详情动作里触达。
  *
  * 钉什么：
- *   1. 边界：批次入口只装载 overview；features 文件无 import/export 语法。
- *   2. R4 早期入口：模块求值前 features / reverse hooks / detail overlay 三条
- *      classic 入口已可同步调用（这正是返修要守住的缺陷面）。
- *   3. 桥面：overview 五键经 KernelState 访问器可达（含 classic features 的
- *      feature 详情动作所用的 openFeatureDetails / closeFeatureDetails）；claim
- *      setter 语义不变。第六键 closeRepositoryPackageDetails 的桥已注销
- *      （消费方 workspace-blocks 改命名导出 import），只剩命名导出。
+ *   1. 边界：批次入口仍只装载 overview；debug-features-hooks 由 P4 入口装载
+ *      （本文件走真实 import），源码含 export 且不再有 classic 副本。
+ *   2. 接口面：features 三入口命名导出 + 两个桥键；overview 五键桥 + 一个已注销键。
+ *   3. 桥语义：claim 后 classic 写方经 impl.set 转发，不反向改写 ESM 导出。
  *   4. 原行为：Structure / Monitor 渲染、Features 分组与 catalog join、反向钩子
  *      面板、详情弹窗页签复用与重建、技能阅读页真实 fetch 续体、tool / hook
  *      开关 IPC 与 300ms inspector 刷新节流、repo / feature 详情选择器。
  *
  * 装载路线（withP2EsmCase）：一个用例 = 一份 classic 沙箱 + 一张真实 ESM 图。
- * classic 相按真实加载序执行 action-dispatcher / i18n / app-core /
- * markdown-bootstrap / session-view-state；ESM 侧真实 import overview 及其静态
- * 依赖，classic debug-features-hooks 在 ESM 之后用 `loadSource` 真实求值（浏览器
- * 里 classic 先于模块执行；早期相由第 2 条用例单独覆盖——那里不装载任何 ESM）。
- * app-ui / app-main 的入口按契约给同形桩。
+ * classic 相按真实加载序执行 action-dispatcher / app-core / markdown-bootstrap /
+ * session-view-state / 右栏注册表；features 与 overview 都走真实 import，落到
+ * 同一个 window 与同一个 KernelState。面板重绘经注册表里的假面板记账（真实
+ * 编排实现 renderFeaturePanel）。
  *
  * 每个用例结束统一断言：无残留计时器、无非预期 console.warn / error。
  */
@@ -78,8 +74,8 @@ const OVERVIEW_BRIDGE_KEYS = [
  */
 const OVERVIEW_WITHDRAWN_KEYS = ['closeRepositoryPackageDetails'];
 
-/** classic debug-features-hooks 的全局入口（classic 顶层实现，不是 deferred 桥）。 */
-const CLASSIC_FEATURE_ENTRIES = [
+/** debug-features-hooks 的命名导出与其中经桥键服务 classic 消费方的两个入口。 */
+const FEATURE_ENTRY_EXPORTS = [
   'renderFeaturesPanel',
   'renderReverseHooksPanel',
   'renderFeatureDetailOverlay',
@@ -119,9 +115,10 @@ function createElementStub(id = '') {
     checked: false,
     className: '',
     open: false,
-    style: {},
+    style: { setProperty() {} },
     dataset: {},
     children: [],
+    clientHeight: 0,
     scrollTop: 0,
     scrollHeight: 0,
     clientHeight: 0,
@@ -160,7 +157,10 @@ function createDocumentStub() {
       if (!byId.has(id)) byId.set(id, createElementStub(id));
       return byId.get(id);
     },
-    getElementById(id) { return byId.get(id) ?? null; },
+    getElementById(id) {
+      if (!byId.has(id)) byId.set(id, createElementStub(id));
+      return byId.get(id);
+    },
     querySelector() { return null; },
     querySelectorAll() { return []; },
     createElement(tag) {
@@ -293,6 +293,24 @@ function loadClassicOwners(sandbox) {
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
+  sandbox.loadSource('public/src/modules/right-panel-registry.js');
+  // 插件宿主最小面（生产是 classic claw-host）：面板摘除 / 插件落定订阅只在
+  // 存在时挂载，这里给可调用宿主并让 ClawPanels 有一张真注册表。
+  sandbox.ClawHost = {
+    panels: {
+      map: new Map(),
+      register(id, panel) { this.map.set(id, panel); },
+      get(id) { return this.map.get(id) ?? null; },
+      getAll() { return [...this.map.values()]; },
+      getAvailable() { return [...this.map.values()]; },
+      has(id) { return this.map.has(id); },
+      unregister(id) { this.map.delete(id); },
+    },
+    setPanelTeardownHook() {},
+    onPluginLoadSettled() {},
+    getPluginLoadState() { return 'loaded'; },
+    ensurePlugin() {},
+  };
   // app-main 的当前 agent 查询（_runtimeSignals 的可选分支）
   sandbox.getCurrentAgentRecord = () => null;
   // app-ui 的渲染入口与身份查询：记录调用次数，不模拟渲染。
@@ -300,10 +318,15 @@ function loadClassicOwners(sandbox) {
   sandbox.renderCurrentMainView = () => { sandbox.renderMainCalls += 1; };
   sandbox.getRuntimeAwareAgentRecord = () => ({ id: 'runtime-1', connected: true });
   sandbox.getRuntimeAwareAgentName = () => 'Demo Agent';
-  // debug-panel-host（classic）在本批只作为 renderFeaturePanel 的调用目标：
-  // 用计数器代替真实面板编排，避免把面板宿主一并拖进本批断言面。
+  // 面板重绘观测：hooks / inspector 面注册假面板，renderFeaturePanel（真实编排
+  // 实现）每次渲染都经它记账——本批不把面板宿主的 DOM 效果纳入断言面。
   sandbox.panelRenderCalls = 0;
-  sandbox.renderFeaturePanel = () => { sandbox.panelRenderCalls += 1; };
+  for (const panelId of ['hooks', 'workspace', 'inspector']) {
+    sandbox.ClawHost.panels.register(panelId, {
+      id: panelId,
+      render: () => { sandbox.panelRenderCalls += 1; return '<div class="panel-probe"></div>'; },
+    });
+  }
 }
 
 const flushAsync = () => new Promise((resolve) => setImmediate(resolve));
@@ -375,13 +398,15 @@ async function withDebugCase(options, fn) {
 }
 
 /**
- * 本批次真实形态：ESM overview（经批次入口）+ feature-catalog 命名空间 +
- * classic debug-features-hooks（唯一实现，`loadSource` 真实求值）。
+ * 本批次真实形态：ESM overview（经批次入口）+ ESM debug-features-hooks +
+ * feature-catalog 命名空间（全部真实 import，同一沙箱 / 同一 KernelState）。
  */
 async function loadBatch(c) {
   await c.load(ENTRY);
-  const state = {
+  const features = await c.load(FEATURES);
+  return {
     overview: await c.load(OVERVIEW),
+    features,
     featureCatalog: await c.load(STATE_MODULES.featureCatalog),
     i18n: await c.load(STATE_MODULES.i18n),
     renderEntry: await c.load(STATE_MODULES.renderEntry),
@@ -389,13 +414,6 @@ async function loadBatch(c) {
     orchestration: await c.load(STATE_MODULES.orchestration),
     debugPanel: (await c.load(STATE_MODULES.debugPanel)).debugPanel,
   };
-  c.sandbox.loadSource(FEATURES);
-  state.features = {
-    renderFeaturesPanel: () => c.window.renderFeaturesPanel(),
-    renderReverseHooksPanel: () => c.window.renderReverseHooksPanel(),
-    renderFeatureDetailOverlay: (feature) => c.window.renderFeatureDetailOverlay(feature),
-  };
-  return state;
 }
 
 function setInspector(sessionView, inspector) {
@@ -421,22 +439,30 @@ function baseFeature(extra = {}) {
 
 // ── 1. 边界 / 导出面 / 桥面 / 动作面 ────────────────────────────────
 
-test('批次边界：入口只装载 ESM overview，features 保持 classic 无 import/export', async () => {
+test('批次边界：P2 批次入口只装载 overview，features 走 P4 入口（ESM）', async () => {
   const entrySource = readFileSync(path.join(REPO, ENTRY), 'utf8');
   assert.equal(entrySource.includes("import './debug-overview.js';"), true, '入口缺少 debug-overview');
   assert.doesNotMatch(entrySource, /^\s*import\s+['"][^'"]*debug-features-hooks\.js['"]/m,
-    'classic 唯一实现不得由 ESM 入口装载');
+    'P2 批次入口不装载 features（它随 P4 渲染层批次单独接线）');
 
+  // features 已是原生 ESM：源码有命名导出，classic 副本不存在。
   const featuresSource = readFileSync(path.join(REPO, FEATURES), 'utf8');
-  assert.doesNotMatch(featuresSource, /^\s*(?:export|import)\s/m, 'debug-features-hooks 必须是 classic 唯一实现');
+  for (const name of FEATURE_ENTRY_EXPORTS) {
+    assert.match(featuresSource, new RegExp('export function ' + name + '\\('), `缺少命名导出 ${name}`);
+  }
+  assert.doesNotMatch(featuresSource, /window\.(renderFeaturesPanel|renderReverseHooksPanel)\s*=/,
+    '不得散装 window 赋值造桥（桥键统一经 KernelState.defineKey）');
 });
 
-test('导出面 / 五键桥 / 动作面齐备', async () => {
+test('导出面 / 互操作键 / 动作面齐备', async () => {
   await withDebugCase({}, async (c) => {
     const mods = await loadBatch(c);
 
     for (const name of OVERVIEW_EXPORT_KEYS) {
       assert.equal(typeof mods.overview[name], 'function', `debug-overview 应导出 ${name}`);
+    }
+    for (const name of FEATURE_ENTRY_EXPORTS) {
+      assert.equal(typeof mods.features[name], 'function', `debug-features-hooks 应导出 ${name}`);
     }
 
     // overview 五键：KernelState 访问器（桥），classic 消费方经 window 读写。
@@ -450,12 +476,16 @@ test('导出面 / 五键桥 / 动作面齐备', async () => {
       assert.equal(typeof mods.overview[key], 'function', `${key} 仍是命名导出`);
       assert.equal(Object.getOwnPropertyDescriptor(c.window, key), undefined, `${key} 的桥应已注销`);
     }
-    // classic features 入口：classic 顶层实现的真值属性（数据属性），不是桥。
-    for (const key of CLASSIC_FEATURE_ENTRIES) {
+    // features：仍有 classic 消费方的两个渲染入口经桥键提供（同一实现），
+    // 详情弹窗清理入口的唯一消费方是同批 debug-panel-host（import），不占窗口键。
+    for (const key of ['renderFeaturesPanel', 'renderReverseHooksPanel']) {
       const descriptor = Object.getOwnPropertyDescriptor(c.window, key);
-      assert.equal(typeof descriptor?.value, 'function', `${key} 必须是 classic 顶层实现`);
-      assert.equal(descriptor?.get, undefined, `${key} 不应该是 deferred ESM 桥`);
+      assert.ok(descriptor && typeof descriptor.get === 'function', `${key} 应经 KernelState 访问器提供`);
+      assert.equal(c.window[key], mods.features[key], `${key} 的窗口面与命名导出同一实现`);
     }
+    assert.equal(Object.getOwnPropertyDescriptor(c.window, 'renderFeatureDetailOverlay'), undefined,
+      'renderFeatureDetailOverlay 的消费方已改 import，不应留窗口键');
+
     // classic 消费面恢复：feature-catalog 命名空间仍在（features 面板经它 join）
     assert.equal(typeof c.window.ClawFW.featureCatalog?.resolveDisplayName, 'function');
 
@@ -468,28 +498,30 @@ test('导出面 / 五键桥 / 动作面齐备', async () => {
 
 // ── 2. R4 早期入口（模块求值前）─────────────────────────────────────
 
-test('R4：模块求值前 hooks / inspector 早期入口已可同步调用', async () => {
+test('模块求值相：features 入口在求值后立即可用，classic 裸标识符解析到同一实现', async () => {
   await withDebugCase({}, async (c) => {
-    // 只跑 classic 相：debug-overview 的 ESM 尚未 import，桥键一律不存在。
-    c.sandbox.loadSource(FEATURES);
-
-    for (const key of CLASSIC_FEATURE_ENTRIES) {
-      assert.equal(typeof c.window[key], 'function', `${key} 在模块求值前必须可用`);
+    // 只跑 classic 相：features 模块尚未 import，窗口上没有桥键（原早期入口
+    // 窗口随「首屏渲染在模块相」的时序切换消失）。
+    for (const key of ['renderFeaturesPanel', 'renderReverseHooksPanel']) {
+      assert.equal(Object.getOwnPropertyDescriptor(c.window, key), undefined,
+        `${key} 在模块求值前不应存在`);
     }
-    assert.equal(Object.getOwnPropertyDescriptor(c.window, 'openFeatureDetails'), undefined,
-      'overview 的桥键此时还不存在（早期入口不得依赖它）');
-    assert.equal(Object.getOwnPropertyDescriptor(c.window, 'renderStructurePanel'), undefined,
-      'overview 的桥键此时还不存在');
 
-    // rail 点击（hooks / inspector）走的就是这两条渲染入口：空 inspector 出空态，
-    // 不得抛 ReferenceError，也不需要任何 ESM 模块。
+    const features = await c.load(FEATURES);
+    for (const key of FEATURE_ENTRY_EXPORTS) {
+      assert.equal(typeof features[key], 'function', `${key} 求值后必须可用（命名导出）`);
+    }
+    for (const key of ['renderFeaturesPanel', 'renderReverseHooksPanel']) {
+      assert.equal(typeof c.window[key], 'function', `${key} 求值后经桥键可见`);
+    }
+    // hooks / inspector 的 render 入口：空 inspector 出空态，不抛错。
     const featuresHtml = c.window.renderFeaturesPanel();
     const hooksHtml = c.window.renderReverseHooksPanel();
     assert.match(featuresHtml, /feature-panel-empty/);
     assert.match(hooksHtml, /feature-panel-empty/);
-
-    // debug-panel-host 的清理路径在 classic 相就调用它（HEAD 语义）。
-    c.window.renderFeatureDetailOverlay(null);
+    // 详情弹窗清理路径（debug-panel-host 在切换 / 关闭面板时调用）：改为 import 后
+    // 直接调用模块导出，窗口上不留同名键。
+    features.renderFeatureDetailOverlay(null);
   });
 });
 

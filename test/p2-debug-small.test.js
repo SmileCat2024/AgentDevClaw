@@ -1,42 +1,33 @@
 /**
- * P2「debug」批次 —— debug-logs 保留 classic 唯一实现 / debug-preflight、
- * debug-mcp 迁 ESM 的真实装载面与兼容面。
+ * P2「debug」批次 —— debug-logs 与 debug-preflight / debug-mcp 的真实装载面与兼容面。
  *
- * 保留边界（R4，S-1 返修）：debug-logs 整文件保持 classic，因为日志面板的
- * render 入口（renderLogsPanel）与 onOpen 入口（loadLogs）由 app-ui.js 的
- * registerFeaturePanel('logs') 闭包持有，而 rail-logs 在首屏同步链
- * （app-main 顶层 applyLanguage → renderCurrentMainView → syncRailButtons）
- * 就生成并可点——该点击不受认证闸保护，早于 deferred ESM 求值。迁入模块后
- * classic 相点击必抛 ReferenceError（面板空开），故按 todo-plan 先例整文件
- * 保留 classic，等 app-ui 面板注册与 rail 时序联合迁移。
- *
- * 装载路线（withP2EsmCase，每用例一张独立模块图）：
- *   - debug-logs 走**真实 classic 执行**（sandbox.loadSource，与生产
- *     index.html 的标签序一致）——它就是生产里的同步实现，不 import；
+ * P4 T2 渲染层批次把 debug-logs 转为 ESM（首屏渲染已在模块相由 boot.js 触发，
+ * rail 按钮与它也同相或更晚，classic 相同步可用性不再是转换阻碍）：
+ *   - debug-logs 走**真实 ESM import**（c.load）：入口收敛为命名导出，仍有
+ *     classic 消费方的三个入口（renderLogsPanel / loadLogs / safePrettyJson）
+ *     经 KernelState 访问器服务 classic 裸标识符；
  *   - debug-preflight / debug-mcp 走**真实 ESM import**（c.load），落到同一个
- *     window / 同一个 KernelState 上。
+ *     window / 同一个 KernelState 上（debug-mcp 的 safePrettyJson 取用面即
+ *     debug-logs 的桥键）。
  *
  * 钉住五件事：
- *   1. 早期入口（S-1 回归）：classic 链跑完、任何 debug ESM 模块求值之前，
- *      renderLogsPanel 已可调用并渲染出完整面板体，loadLogs 已是 classic 函数
- *      ——「点击早于模块 → ReferenceError」的窗口不存在。
- *   2. 接口面：debug-logs 的入口收敛在 classic 全局（值属性，不经桥）；
- *      mcp / preflight 的命名导出与仍服务 classic 消费方的桥键；零消费的
- *      loadPreflight 不上 window。
- *   3. 桥语义：claim 后 classic 写方经 impl.set 转发，不反向改写 ESM 导出。
- *   4. 原行为：日志全量渲染 / 筛选 / JSON 展开 / 渲染上限截断 / 增量 prepend /
+ *   1. 接口面：debug-logs 的三个跨文件入口是命名导出 + 桥键（classic 裸标识符
+ *      经访问器解析到同一实现）；零跨文件消费的 helper 一律模块私有。
+ *   2. 桥语义：claim 后 classic 写方经 impl.set 转发，不反向改写 ESM 导出。
+ *   3. 原行为：日志全量渲染 / 筛选 / JSON 展开 / 渲染上限截断 / 增量 prepend /
  *      DOM 条目封顶 / 网络失败清空；MCP 面板与取数三态；预检状态生命周期
  *      （装载不取数 → 首渲染触发 → 失败展示错误 → 动作重试成功）。
- *   5. 时相（R4）：debug-logs 的 .logf-list scroll 监听在 **classic 加载相**
- *      安装（原时点，不推迟到模块相），幂等标记保留。
+ *   4. 状态所有权：日志快照仍由 app-core 的 classic setCurrentLogs 写入（唯一
+ *      实现）；用例经 debugPanel（生产宿主工厂）读写同一份状态，不复制状态。
+ *   5. 时相（R4）：debug-logs 的 .logf-list scroll 监听在模块求值期安装（原
+ *      classic 加载相），幂等标记保留；监听器只在用户滚动时触发，两相等价。
  *
  * 断言口径（如实）：
- *   - 日志状态是 app-core 顶层 let（classic 绑定），用例经 c.read 读写真实绑定
- *     （生产同名路径），不复制状态、不另造 host。
- *   - 日志加载路径的写入口是 app-core 的 classic 同步函数 setCurrentLogs（唯一
- *     实现，currentLogs / currentLogsSignature 的物理 owner）。它不进 ESM 域、不
- *     上桥：日志面板 onOpen 在首屏 classic 相就可点，写入口必须同步可用。因此
- *     loadLogs 的调用方用例无需任何模块装载前置，早期入口用例直接覆盖这条路径。
+ *   - 日志状态是 app-core 顶层 let，经 debugPanel 成对读写（生产同名路径）；
+ *     用例不另造状态、不复制 host。
+ *   - 面板重绘计数来自 ClawPanels 注册表中的假 'logs' 面板：renderFeaturePanel
+ *     走真实编排实现，每个用例按需读计数（与迁移前 installRenderFeaturePanelStub
+ *     的观测口径一致，但不再替换生产函数）。
  *   - debug-preflight 的 PREFLIGHT_STATE 等是模块私有，预检的「装载后未取数 /
  *     loading 已结束 / data 为空 / 失败后展示错误」经公开渲染面 + 网络观测点验证。
  */
@@ -126,13 +117,18 @@ function createPanelBody() {
       this.statsNode = { innerHTML: '' };
       return html;
     },
+    children: [],
     querySelector(selector) {
       if (selector === '.logf-list') return this.listNode;
       if (selector === '.logf-stats') return this.statsNode;
       return null;
     },
     fireScroll(target) {
-      for (const { handler } of scrollListeners) handler({ target });
+      // 只驱动 capture 相（logs 的 .logf-list 监听）；debug-panel-host 的
+      // 冒泡相监听读的是 body 自身 scrollTop，与本用例无关。
+      for (const { handler, capture } of scrollListeners) {
+        if (capture === true) handler({ target });
+      }
     },
   });
   body.addEventListener = (kind, handler, capture) => { scrollListeners.push({ kind, handler, capture }); };
@@ -164,12 +160,12 @@ function createDocumentStub(panelBody) {
   };
 }
 
-// ── classic 相：真实加载序（debug-logs 是其中之一，走真实 classic 执行）──────
+// ── classic 相：真实加载序（debug-logs 已迁 ESM，不在其中）─────────────────
 
 /**
  * classic 链：action-dispatcher → i18n → app-core → session-view-state →
- * markdown-bootstrap → debug-logs。与生产 index.html 的顺序一致（debug-logs
- * 紧随 app-core 之后的模块段）。
+ * markdown-bootstrap → 右栏注册表。与生产 index.html 的顺序一致；debug-logs
+ * 及同批面板宿主在 ESM 图里装载（见 loadDebugBatch）。
  */
 function loadClassicChain(sandbox, { beforeLogs } = {}) {
   sandbox.marked = markedStub;
@@ -179,13 +175,54 @@ function loadClassicChain(sandbox, { beforeLogs } = {}) {
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
   sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
+  sandbox.loadSource('public/src/modules/right-panel-registry.js');
+  // 插件宿主最小面（生产实现是 classic claw-host）：debug-panel-host 只在存在时
+  // 订阅面板摘除 / 插件落定，这里给出可调用的宿主以免订阅路径落空。
+  sandbox.window.ClawHost = {
+    panels: {
+      map: new Map(),
+      register(id, panel) { this.map.set(id, panel); },
+      get(id) { return this.map.get(id) ?? null; },
+      getAll() { return [...this.map.values()]; },
+      getAvailable() { return [...this.map.values()]; },
+      has(id) { return this.map.has(id); },
+      unregister(id) { this.map.delete(id); },
+    },
+    setPanelTeardownHook() {},
+    onPluginLoadSettled() {},
+    getPluginLoadState() { return 'loaded'; },
+    ensurePlugin() {},
+  };
   if (typeof beforeLogs === 'function') beforeLogs(sandbox);
-  sandbox.loadSource(DEBUG_LOGS);
 }
 
-/** classic 侧的面板重绘替身（生产由 debug-panel-host 提供）：只记账。 */
-function installRenderFeaturePanelStub(sandbox, calls) {
-  sandbox.window.renderFeaturePanel = () => { calls.push('render'); };
+/**
+ * 面板重绘观测：注册一个假 'logs' 面板，renderFeaturePanel（真实编排实现）
+ * 每次渲染都经它记账。与迁移前替换 renderFeaturePanel 的观测口径等价。
+ */
+function installLogsPanelProbe(sandbox, calls) {
+  sandbox.ClawHost.panels.register('logs', {
+    id: 'logs',
+    render: () => {
+      calls.push('render');
+      return '<div class="log-panel-probe"></div>';
+    },
+  });
+  return () => sandbox.ClawHost.panels.unregister('logs');
+}
+
+/**
+ * 面板重绘观测点（mcp / preflight 用例）：这两条路径经 window.renderFeaturePanel
+ * 转调，桥访问器的 setter 落回域状态，故窗口写方即可记账——与迁移前替换生产
+ * 函数的观测口径一致。
+ */
+function installRenderFeaturePanelProbe(c, calls) {
+  c.window.renderFeaturePanel = () => { calls.push('render'); };
+}
+
+/** debug 面板族的 ESM 装载：debug-logs 及其同批宿主（面板重绘走真实实现）。 */
+async function loadDebugBatch(c) {
+  return c.load(DEBUG_LOGS);
 }
 
 function createFetchStub() {
@@ -251,87 +288,96 @@ function createCaseEnv({ beforeLogs } = {}) {
     options: {
       classic: (sandbox) => {
         loadClassicChain(sandbox, { beforeLogs });
-        installRenderFeaturePanelStub(sandbox, renderCalls);
+        installLogsPanelProbe(sandbox, renderCalls);
       },
       globals: { document, fetch: fetchStub, URLSearchParams },
     },
   };
 }
 
-/** classic 侧状态写入（生产同名路径：app-core 顶层 let / 面板自身渲染管线）。 */
-function seedLogs(c, logs, truncation = null) {
-  c.read(`currentLogs = ${JSON.stringify(logs)}; currentLogsTruncation = ${JSON.stringify(truncation)};`);
+/** 日志快照写入（生产同名路径：app-core 的 classic let，经 debugPanel 成对读写）。 */
+function seedLogs(debugPanel, logs, truncation = null) {
+  debugPanel.currentLogs = logs;
+  debugPanel.currentLogsTruncation = truncation;
 }
 
 // ── 1. 早期入口（S-1 回归）─────────────────────────────────────────────
 
-describe('debug 批次：classic 相早期入口（rail-logs 可点的那一相）', () => {
-  it('classic 链完成后、debug ESM 模块求值前：render / load 入口已可用且面板可渲染', async () => {
-    await withNoiseClean('早期入口', async () => {
+describe('debug 批次：模块求值相与 classic 消费方可达性', () => {
+  it('模块求值后：命名导出与桥键同源，classic 裸标识符解析到同一实现', async () => {
+    await withNoiseClean('模块相入口', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
-        // 这一相就是 app-main 顶层 applyLanguage → syncRailButtons 之后的时点：
-        // debug 的 ESM 模块一个都还没求值（桥键缺席）。
-        assert.equal(c.read('typeof window.renderMcpPanel'), 'undefined', 'mcp 桥键在模块前不存在');
-        assert.equal(c.read('typeof window.renderPreflightPanel'), 'undefined', 'preflight 桥键在模块前不存在');
+        // 模块求值前：debug 桥键一律不存在（deferred ESM 相才有）。
+        for (const name of ['renderLogsPanel', 'loadLogs', 'safePrettyJson',
+          'renderMcpPanel', 'renderPreflightPanel']) {
+          assert.equal(c.read(`typeof window.${name}`), 'undefined', `${name} 在模块求值前不存在`);
+        }
 
-        // 面板注册闭包（app-ui registerFeaturePanel('logs').render）此时被点击调用：
-        // 裸标识符必须是 classic 顶层函数，不是「尚未 defineKey 的 window 键」。
-        assert.equal(c.read('typeof renderLogsPanel'), 'function');
-        assert.equal(c.read('typeof loadLogs'), 'function');
+        const logs = await loadDebugBatch(c);
+
+        // 三个跨文件入口：命名导出是调用方入口，classic 消费方经访问器读同一实现。
+        for (const name of ['renderLogsPanel', 'loadLogs', 'safePrettyJson']) {
+          assert.equal(typeof logs[name], 'function', `必须导出 ${name}`);
+          const descriptor = Object.getOwnPropertyDescriptor(c.window, name);
+          assert.equal(descriptor?.get !== undefined, true, `${name} 必须经 KernelState 访问器提供`);
+          assert.equal(c.read(`typeof ${name}`), 'function');
+          assert.equal(c.window[name], logs[name], `${name} 的窗口面与命名导出同一实现`);
+        }
+
+        // 面板注册闭包（app-ui registerFeaturePanel('logs').render）在浏览器里就是
+        // 这条路径：裸标识符 → 访问器 → 同一个渲染实现。
         const html = c.read('renderLogsPanel()');
         assert.match(html, /class="log-panel"/);
         assert.match(html, /data-filter-key="level"/);
-        assert.match(html, /feature-panel-empty/, '空数据集落空态（与 HEAD 同结果）');
-        assert.match(html, /debugLogs\.search/, '动作接线在 classic 相已注册');
-
-        // 面板 onOpen 入口同源：函数已就位（不再是 `loadLogs is not defined`）。
-        assert.equal(c.read('typeof loadLogs'), 'function');
+        assert.match(html, /feature-panel-empty/, '空数据集落空态（与迁移前同结果）');
+        assert.match(html, /debugLogs\.search/, '动作接线在模块求值期已注册');
       });
     });
   });
 
-  it('早期入口的封装目标全部 classic 可达（不依赖模块相桥）', async () => {
-    await withNoiseClean('早期入口依赖', async () => {
+  it('闭合依赖可达：classic 侧函数与状态键仍在，零跨文件消费的 helper 不上窗口', async () => {
+    await withNoiseClean('依赖可达', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
-        // renderLogsPanel 的闭合依赖：逐个断言 classic 相已可用。
-        for (const name of [
-          'getLevelWeight', 'formatLogTimestamp', 'safePrettyJson', 'getFilteredLogs',
-          'escapeHtml', 't', 'renderFeaturePanel', 'getRuntimeId', 'logFilters', 'currentLogs',
-        ]) {
-          assert.equal(c.read(`typeof ${name}`), name === 'logFilters' || name === 'currentLogs' ? 'object' : 'function',
-            `早期入口依赖 ${name} 必须在 classic 相已可用`);
-        }
-        // 日志写入入口（setCurrentLogs）也在 classic 相可用，且是 classic 顶层
-        // 函数（值属性），不是模块相才注册的桥访问器。
+        await loadDebugBatch(c);
+        // 日志状态 owner 仍是 classic app-core：写入面是 classic 值属性，不是桥。
         const seam = Object.getOwnPropertyDescriptor(c.window, 'setCurrentLogs');
-        assert.equal(typeof seam.value, 'function', 'setCurrentLogs 必须在 classic 相已可用');
+        assert.equal(typeof seam.value, 'function', 'setCurrentLogs 仍是 classic 同步实现');
         assert.equal(seam.get, undefined, 'setCurrentLogs 不得是桥访问器');
-
-        // 状态键（app-core 顶层 let / classic 相注册的访问器）同样已可读写。
         assert.equal(c.read('activeFeaturePanel'), null);
         assert.equal(c.read('logFilters.level'), 'all');
+
+        // 本文件私有化：零跨文件消费的 helper 不再暴露到窗口。
+        for (const name of [
+          'getLevelWeight', 'formatLogTimestamp', 'getFilteredLogs',
+          'buildLogEntryHtml', 'logEntryMatchesFilters', 'markLogsSeen',
+        ]) {
+          assert.equal(c.read(`typeof ${name}`), 'undefined', `${name} 应保持模块私有`);
+        }
       });
     });
   });
 
-  it('早期 onOpen 全链路成功：面板前台 + 无 runtime 身份 → 清空日志并重绘，零错误', async () => {
-    await withNoiseClean('早期 onOpen', async () => {
+  it('面板 onOpen 全链路成功：面板前台 + 无 runtime 身份 → 清空日志并重绘，零错误', async () => {
+    await withNoiseClean('onOpen 入口', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
-        // 复刻真实早期点击后的状态：面板已在前台、还没有 runtime 身份。
+        const logs = await loadDebugBatch(c);
+        const { debugPanel } = await c.load(DEBUG_PANEL_HOST);
+        // 复刻真实点击后的状态：面板已在前台、还没有 runtime 身份。
         c.window.activeFeaturePanel = 'logs';
-        seedLogs(c, LOGS_FIXTURE, { truncated: true, returnedCount: 3, availableCount: 9 });
+        seedLogs(debugPanel, LOGS_FIXTURE, { truncated: true, returnedCount: 3, availableCount: 9 });
 
-        // app-ui 的 onOpen 入口就是这一句（classic 裸标识符 → 自身顶层函数）。
+        // app-ui 的 onOpen 入口就是这一句（classic 裸标识符 → 桥键 → 本模块实现）。
         await c.read('loadLogs(true)');
 
-        assert.equal(c.read('currentLogs.length'), 0, '无 runtime 身份 → 清空日志');
-        assert.equal(c.read('currentLogsTruncation'), null);
-        assert.equal(c.read('currentLogsSignature'), JSON.stringify({ count: 0, last: null }));
+        assert.equal(debugPanel.currentLogs.length, 0, '无 runtime 身份 → 清空日志');
+        assert.equal(debugPanel.currentLogsTruncation, null);
+        assert.equal(debugPanel.currentLogsSignature, JSON.stringify({ count: 0, last: null }));
         assert.deepEqual(env.renderCalls, ['render'], '清空后重绘一次（原语义）');
         assert.deepEqual(env.fetchStub.calls, [], '无身份不发请求');
+        assert.equal(typeof logs.loadLogs, 'function');
       });
     });
   });
@@ -340,10 +386,11 @@ describe('debug 批次：classic 相早期入口（rail-logs 可点的那一相�
 // ── 2. 接口面与桥 ─────────────────────────────────────────────────────
 
 describe('debug 批次：接口面与兼容桥', () => {
-  it('debug-logs 入口是 classic 值属性；mcp/preflight 命名导出 + 仅剩的桥键；私有键不上 window', async () => {
+  it('debug-logs 三入口为命名导出 + 桥键；mcp/preflight 命名导出与其桥键；私有键不上 window', async () => {
     await withNoiseClean('接口面', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
+        const logs = await loadDebugBatch(c);
         const mcp = await c.load(DEBUG_MCP);
         const preflight = await c.load(DEBUG_PREFLIGHT);
 
@@ -354,14 +401,15 @@ describe('debug 批次：接口面与兼容桥', () => {
           assert.equal(typeof preflight[name], 'function', `debug-preflight 缺少导出 ${name}`);
         }
 
-        // debug-logs 的入口是 classic 顶层函数（window 值属性，不经 KernelState 桥）。
+        // debug-logs 的三个跨文件入口：命名导出 + KernelState 访问器（同一实现）。
         for (const name of ['renderLogsPanel', 'loadLogs', 'safePrettyJson']) {
+          assert.equal(typeof logs[name], 'function', `debug-logs 缺少导出 ${name}`);
           const descriptor = Object.getOwnPropertyDescriptor(c.window, name);
-          assert.equal(typeof descriptor.value, 'function', `${name} 必须是 classic 值属性`);
-          assert.equal(descriptor.get, undefined, `${name} 不得是桥访问器`);
+          assert.equal(typeof descriptor?.get, 'function', `${name} 必须经 KernelState 访问器提供`);
+          assert.equal(c.window[name], logs[name], `${name} 的窗口面与命名导出同一实现`);
           assert.equal(c.read(`typeof ${name}`), 'function');
         }
-        // safePrettyJson 单份实现：classic 定义方即 debug-mcp 的取用出处。
+        // safePrettyJson 单份实现：debug-logs 即 debug-mcp 的取用出处。
         assert.equal(c.window.safePrettyJson({ a: 1 }), '{\n  "a": 1\n}');
         assert.equal(c.window.safePrettyJson(undefined), undefined);
         const cyclic = {};
@@ -381,6 +429,7 @@ describe('debug 批次：接口面与兼容桥', () => {
         for (const key of [
           'setCurrentMcpInfo', 'renderMcpItems',
           'renderPreflightStatusPill', 'PREFLIGHT_STATE', 'CHECK_LABELS',
+          'getLevelWeight', 'formatLogTimestamp', 'getFilteredLogs', 'logEntryMatchesFilters',
         ]) {
           assert.equal(key in c.window, false, `${key} 不应再挂在 window 上`);
         }
@@ -392,6 +441,7 @@ describe('debug 批次：接口面与兼容桥', () => {
     await withNoiseClean('桥语义', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
+        const logs = await loadDebugBatch(c);
         const mcp = await c.load(DEBUG_MCP);
         const original = mcp.loadMcpInfo;
         const replacement = () => 'replaced';
@@ -401,23 +451,34 @@ describe('debug 批次：接口面与兼容桥', () => {
         assert.equal(mcp.loadMcpInfo, original, 'ESM 导出不被 classic 写方改写');
         c.window.loadMcpInfo = original;                  // 还原后读回原引用
         assert.equal(c.read('loadMcpInfo'), original);
+
+        // debug-logs 的同一语义：窗口写方落回域状态，命名导出不变。
+        const logsReplacement = () => '<div>replaced</div>';
+        c.window.renderLogsPanel = logsReplacement;
+        assert.equal(c.read('renderLogsPanel()'), '<div>replaced</div>');
+        assert.equal(logs.renderLogsPanel !== logsReplacement, true, '命名导出保持自身实现');
+        c.window.renderLogsPanel = logs.renderLogsPanel;
+        assert.equal(c.read('renderLogsPanel()'), logs.renderLogsPanel());
       });
     });
   });
 });
 
-// ── 3. 时相：scroll 监听的原时点（classic 加载相）───────────────────────
+// ── 3. 时相：scroll 监听随模块求值安装（原 classic 加载相）─────────────
 
 describe('debug 批次：debug-logs 的 scroll 监听时相（R4）', () => {
-  it('classic 加载相即安装（原时点，不推迟到模块相），滚动 → rAF → scrollable 翻转', async () => {
+  it('模块求值期安装（原 classic 加载相），滚动 → rAF → scrollable 翻转', async () => {
     await withNoiseClean('scroll 监听', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
         const panelBody = env.panelBody;
-        // classic 链跑完即已安装：只有一次，passive/capture 语义不变
-        assert.equal(panelBody.scrollListeners.length, 1, 'classic 加载相安装监听（HEAD 原时点）');
-        assert.equal(panelBody.scrollListeners[0].kind, 'scroll');
-        assert.equal(panelBody.scrollListeners[0].capture, true);
+        assert.equal(panelBody.scrollListeners.length, 0, '模块求值前未安装');
+        await loadDebugBatch(c);
+        // 模块求值即安装：logs 用 capture 捕获相（.logf-list 内部滚动），只有一次；
+        // 同批 debug-panel-host 另有一条冒泡相监听（顶部渐隐），按 capture 区分。
+        const logsListeners = panelBody.scrollListeners.filter((entry) => entry.capture === true);
+        assert.equal(logsListeners.length, 1, '模块求值期安装 logs 的 capture 监听');
+        assert.equal(logsListeners[0].kind, 'scroll');
         assert.equal(panelBody.dataset.logScrollBound, '1', '幂等标记保留');
 
         // 非 .logf-list 的滚动目标被忽略
@@ -450,10 +511,11 @@ describe('debug 批次：debug-logs 的 scroll 监听时相（R4）', () => {
 
   it('重复装载语义：已绑定的面板不再装第二个监听', async () => {
     await withNoiseClean('scroll 监听幂等', async () => {
-      // 模拟此前已由同一面板绑定过：classic 加载相读到的就是幂等标记。
+      // 模拟此前已由同一面板绑定过：模块求值期读到的就是幂等标记。
       const env = createCaseEnv({ beforeLogs: (sandbox) => { sandbox.window.document.getElementById('feature-panel-body').dataset.logScrollBound = '1'; } });
-      await withP2EsmCase(env.options, async () => {
-        assert.equal(env.panelBody.scrollListeners.length, 0);
+      await withP2EsmCase(env.options, async (c) => {
+        await loadDebugBatch(c);
+        assert.equal(env.panelBody.scrollListeners.filter((entry) => entry.capture === true).length, 0);
       });
     });
   });
@@ -467,13 +529,15 @@ const LOGS_FIXTURE = [
   { id: 3, level: 'warn', namespace: 'viewer', message: 'careful', timestamp: 1700000002000, context: { feature: 'todo', lifecycle: 'onCall' } },
 ];
 
-describe('debug 批次：debug-logs 渲染与加载语义（classic 实现）', () => {
+describe('debug 批次：debug-logs 渲染与加载语义', () => {
   it('全量渲染：统计徽标、筛选选项、条目转义、轮次徽标与截断横幅', async () => {
     await withNoiseClean('debug-logs 全量渲染', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
-        seedLogs(c, LOGS_FIXTURE, { truncated: true, returnedCount: 3, availableCount: 9 });
-        const html = c.read('renderLogsPanel()');
+        const logs = await loadDebugBatch(c);
+        const { debugPanel } = await c.load(DEBUG_PANEL_HOST);
+        seedLogs(debugPanel, LOGS_FIXTURE, { truncated: true, returnedCount: 3, availableCount: 9 });
+        const html = logs.renderLogsPanel();
 
         assert.match(html, /class="logf-count">3 /);
         assert.match(html, /1 error/);
@@ -501,28 +565,31 @@ describe('debug 批次：debug-logs 渲染与加载语义（classic 实现）', 
     await withNoiseClean('debug-logs 筛选', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
-        seedLogs(c, LOGS_FIXTURE);
+        const logs = await loadDebugBatch(c);
+        const { debugPanel } = await c.load(DEBUG_PANEL_HOST);
+        seedLogs(debugPanel, LOGS_FIXTURE);
 
+        // logFilters 是 app-core 的 classic 对象（app-ui 的 updateLogFilter 就按字段赋值）。
         c.read("logFilters.level = 'error'");
-        assert.equal(c.read('renderLogsPanel()').includes('boom'), true);
-        assert.equal(c.read('renderLogsPanel()').includes('careful'), false, 'warn 低于 error 阈值');
+        assert.equal(logs.renderLogsPanel().includes('boom'), true);
+        assert.equal(logs.renderLogsPanel().includes('careful'), false, 'warn 低于 error 阈值');
 
         c.read("logFilters.level = 'all'; logFilters.feature = 'todo'");
-        assert.equal(c.read('renderLogsPanel()').includes('careful'), true);
-        assert.equal(c.read('renderLogsPanel()').includes('boom'), false);
+        assert.equal(logs.renderLogsPanel().includes('careful'), true);
+        assert.equal(logs.renderLogsPanel().includes('boom'), false);
 
         c.read("logFilters.feature = 'all'; logFilters.call = '2'");
-        assert.equal(c.read('renderLogsPanel()').includes('boom'), true);
-        assert.equal(c.read('renderLogsPanel()').includes('first'), false);
+        assert.equal(logs.renderLogsPanel().includes('boom'), true);
+        assert.equal(logs.renderLogsPanel().includes('first'), false);
 
         c.read("logFilters.call = 'all'; logFilters.search = 'VIEWER'");
-        const searched = c.read('renderLogsPanel()');
+        const searched = logs.renderLogsPanel();
         assert.equal(searched.includes('careful'), true, '搜索跨 namespace 命中且大小写不敏感');
         assert.equal(searched.includes('boom'), false);
 
         // 筛选后无命中 → 空态
         c.read("logFilters.search = 'no-such-log'");
-        assert.match(c.read('renderLogsPanel()'), /feature-panel-empty/);
+        assert.match(logs.renderLogsPanel(), /feature-panel-empty/);
       });
     });
   });
@@ -531,8 +598,9 @@ describe('debug 批次：debug-logs 渲染与加载语义（classic 实现）', 
     await withNoiseClean('debug-logs JSON 与封顶', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
+        const logs = await loadDebugBatch(c);
         // 日志写入入口是 classic app-core 的 setCurrentLogs（唯一实现），
-        // 与生产 loadLogs / 面板渲染同一条路径，不需要模块装载前置。
+        // 与生产 loadLogs / 面板渲染同一条路径。
         const { debugPanel } = await c.load(DEBUG_PANEL_HOST);
         const { setActiveFeaturePanel } = await c.load(RENDER_ENTRY_STATE);
         const orchestration = await c.load(ORCHESTRATION_STATE);
@@ -544,7 +612,7 @@ describe('debug 批次：debug-logs 渲染与加载语义（classic 实现）', 
           { id: 7, level: 'info', namespace: 'agent', message: 'with data', timestamp: 1700000000000, data: { payload: bigPayload } },
         ])})`);
 
-        const html = c.read('renderLogsPanel()');
+        const html = logs.renderLogsPanel();
         // 单条结构化数据渲染上限：截断并给出原始长度提示
         assert.match(html, /… /);
         assert.equal(html.includes(bigPayload), false, '超限 JSON 不得整段落进 DOM');
@@ -556,7 +624,7 @@ describe('debug 批次：debug-logs 渲染与加载语义（classic 实现）', 
         const actionEl = { dataset: { entryId: '7' }, closest: () => entry };
         c.window.ClawFW.actions.invoke('debugLogs.toggleJson', actionEl);
         assert.equal(entry.classList.contains('json-open'), true);
-        assert.match(c.read('renderLogsPanel()'), /class="logf-entry has-data json-open/);
+        assert.match(logs.renderLogsPanel(), /class="logf-entry has-data json-open/);
         c.window.ClawFW.actions.invoke('debugLogs.toggleJson', actionEl);
         assert.equal(entry.classList.contains('json-open'), false);
 
@@ -568,7 +636,7 @@ describe('debug 批次：debug-logs 渲染与加载语义（classic 实现）', 
           { id: 8, level: 'info', namespace: 'agent', message: 'streamed', timestamp: 1700000001000 },
         ];
         env.fetchStub.setResponder(() => ({ ok: true, status: 200, json: async () => ({ logs: nextLogs }) }));
-        await c.read('loadLogs(true)');
+        await logs.loadLogs(true);
         assert.equal(env.fetchStub.calls.length, 1);
         assert.equal(env.fetchStub.calls[0].url, '/api/logs?scope=current&agentId=runtime-head');
         assert.equal(env.panelBody.listNode.inserted.length, 1, '只有新条目被 prepend');
@@ -585,42 +653,43 @@ describe('debug 批次：debug-logs 渲染与加载语义（classic 实现）', 
     await withNoiseClean('debug-logs 网络失败', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
+        const logs = await loadDebugBatch(c);
         const { debugPanel } = await c.load(DEBUG_PANEL_HOST);
         const { setActiveFeaturePanel } = await c.load(RENDER_ENTRY_STATE);
         const orchestration = await c.load(ORCHESTRATION_STATE);
 
         // 无 runtime 身份：不发请求，前台面板直接清空重绘
         setActiveFeaturePanel('logs');
-        seedLogs(c, LOGS_FIXTURE, { truncated: true, returnedCount: 1, availableCount: 2 });
+        seedLogs(debugPanel, LOGS_FIXTURE, { truncated: true, returnedCount: 1, availableCount: 2 });
         orchestration.setCurrentRuntimeAgentId(null);
-        await c.read('loadLogs(true)');
+        await logs.loadLogs(true);
         assert.deepEqual(env.fetchStub.calls, []);
-        assert.equal(c.read('currentLogs.length'), 0);
+        assert.equal(debugPanel.currentLogs.length, 0);
         assert.equal(debugPanel.currentLogsTruncation, null);
         assert.deepEqual(env.renderCalls, ['render']);
 
         // 有身份但请求失败（HTTP 500）：原语义抛错并在前台清空重绘
         orchestration.setCurrentRuntimeAgentId({ id: 'runtime-head', source: 'child' });
-        seedLogs(c, LOGS_FIXTURE);
+        seedLogs(debugPanel, LOGS_FIXTURE);
         env.renderCalls.length = 0;
         env.fetchStub.setResponder(() => ({ ok: false, status: 500, json: async () => ({}) }));
-        await c.read('loadLogs(true)');
+        await logs.loadLogs(true);
         assert.equal(env.fetchStub.calls.length, 1);
-        assert.equal(c.read('currentLogs.length'), 0);
+        assert.equal(debugPanel.currentLogs.length, 0);
         assert.deepEqual(env.renderCalls, ['render']);
 
         // 非 forceRender 的失败不清空（静默失败交给下一轮轮询）
-        seedLogs(c, LOGS_FIXTURE);
+        seedLogs(debugPanel, LOGS_FIXTURE);
         env.renderCalls.length = 0;
-        await c.read('loadLogs(false)');
-        assert.equal(c.read('currentLogs.length'), LOGS_FIXTURE.length);
+        await logs.loadLogs(false);
+        assert.equal(debugPanel.currentLogs.length, LOGS_FIXTURE.length);
         assert.deepEqual(env.renderCalls, []);
 
         // 面板不在前台：失败同样不清空（原语义只服务当前视图）
         setActiveFeaturePanel(null);
-        seedLogs(c, LOGS_FIXTURE);
-        await c.read('loadLogs(true)');
-        assert.equal(c.read('currentLogs.length'), LOGS_FIXTURE.length);
+        seedLogs(debugPanel, LOGS_FIXTURE);
+        await logs.loadLogs(true);
+        assert.equal(debugPanel.currentLogs.length, LOGS_FIXTURE.length);
       });
     });
   });
@@ -633,6 +702,8 @@ describe('debug 批次：debug-mcp 渲染与取数语义', () => {
     await withNoiseClean('debug-mcp', async (noise) => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
+        await loadDebugBatch(c); // debug-mcp 的 safePrettyJson 取用面来自 debug-logs 桥键
+        installRenderFeaturePanelProbe(c, env.renderCalls);
         const mcp = await c.load(DEBUG_MCP);
         const { debugPanel } = await c.load(DEBUG_PANEL_HOST);
         const { setActiveFeaturePanel } = await c.load(RENDER_ENTRY_STATE);
@@ -696,6 +767,8 @@ describe('debug 批次：debug-preflight 状态生命周期', () => {
     await withNoiseClean('debug-preflight', async () => {
       const env = createCaseEnv();
       await withP2EsmCase(env.options, async (c) => {
+        await loadDebugBatch(c);
+        installRenderFeaturePanelProbe(c, env.renderCalls);
         const preflight = await c.load(DEBUG_PREFLIGHT);
         assert.deepEqual(env.fetchStub.calls, [], '装载模块不得发起预检请求');
 

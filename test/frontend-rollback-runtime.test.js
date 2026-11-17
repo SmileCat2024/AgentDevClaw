@@ -239,8 +239,7 @@ function rollbackCase({ messages = [], inputRequests = [] } = {}) {
       sandbox.run(BRIDGE_PRELUDE);
       // 会话视图同步实现（token 捕获 / patch 门）与主视图渲染读取它
       sandbox.loadSource('public/src/modules/session-view-state.js');
-      // 本域五个状态键的 classic 相注册壳（ESM owner 随后 claim 吸收）
-      sandbox.loadSource('public/src/modules/rollback-dialog.js');
+      // 本域状态键注册壳已迁 ESM（P4 T2）：改由 async 相 c.load 装载。
     },
     globals: {
       document: doc,
@@ -313,7 +312,12 @@ async function withRollbackCase(options, fn) {
       'isInterruptSuppressed', 'clearInterruptSuppression']) {
       c.window[name] = interruptOwner[name];
     }
+    // 状态键注册壳（ESM 相）：先注册，owner 随后在本文件 import 链里 claim 吸收。
+    await c.load('public/src/modules/rollback-dialog.js');
     await c.load('public/src/modules/rollback-dialog-runtime.js');
+    // 压缩状态 owner：`_partialCompactContextKey` 桥键已注销（唯一消费方改 import），
+    // 该键的断言直读 owner 活绑定。
+    const rollbackDomain = await c.load('public/src/modules/p2-w2-3b-rollback-domain.js');
     // 显式 window 调用不等于永久外部协议：入口按配方经 KernelState 桥注册
     // （访问器 + 可写转发），而不是散装 window 赋值。
     const rollbackEditDescriptor = Object.getOwnPropertyDescriptor(c.window, 'requestRollbackEdit');
@@ -333,6 +337,7 @@ async function withRollbackCase(options, fn) {
         state,
         actions,
         interrupt,
+        rollbackDomain,
         /** 生产写入口：classic 侧的会话视图写入（bridge 双向转发）。 */
         setRequests: (requests) => { c.window.currentInputRequests = requests; },
         setMessages: (messages) => { c.window.currentMessages = messages; },
@@ -588,7 +593,7 @@ describe('runtime-mode confirm path (interrupt then wait for the next lease)', (
     await withRollbackCase({
       messages: [{ role: 'user', turn: 0, content: 'x' }],
       inputRequests: [{ requestId: 'compact-lease', actions: [{ id: 'compact_from_call', data: { availableCallIndices: [0] } }] }],
-    }, async ({ openDialog, clickCompact, state, c }) => {
+    }, async ({ openDialog, clickCompact, state, c, rollbackDomain }) => {
       openDialog();
       await clickCompact();
       const submits = submittedActions(state);
@@ -597,7 +602,8 @@ describe('runtime-mode confirm path (interrupt then wait for the next lease)', (
       assert.equal(submits[0].input.payload.callIndex, 0);
       // 压缩标志与 patch 在提交前落地（渲染据此进入 compacting 模式）
       assert.equal(c.read('_partialCompactInFlight'), true);
-      assert.equal(c.read('_partialCompactContextKey'), 'test-session');
+      assert.equal(rollbackDomain.partialCompactContextKey, 'test-session',
+        '压缩上下文键写入 owner（桥键已注销，消费方直读活绑定）');
       assert.equal(c.read('JSON.stringify(currentInputRequests)'), '[]',
         '压缩动作乐观清空输入请求（patch 门写入）');
     });
