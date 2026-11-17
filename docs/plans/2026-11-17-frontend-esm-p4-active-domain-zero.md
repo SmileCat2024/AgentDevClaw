@@ -112,6 +112,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `32c36d24` | theme-lang 并入 i18n-environment-state；sidebar-layout 迁 ESM（新增 `modules/p4-entry.js` 作为 P4 批次入口）；长尾四件（chat-context-bar / workspace-docset / todo-plan / panel-plugins）迁 ESM | 台账 → 65 / 384 / 933；src 标签 70 → 63；桥债 267/90 → 270/90 |
 | `a88238e1` | rail-customize / generative-ui-panel 迁 ESM。同批判定 `desktop-open` / `desktop-notify` **R4 触线不转**：顶层就是桌面壳 webview eval 的消费入口，`&&` 守卫是静默丢弃不是排队，迁到模块相会多出请求被吞的窗口（`test/frontend-desktop-open.test.js` 钉这条） | src 标签 63 → 61；桥债 270/90 → 272/92 |
 | `d4912118` | 第二批三组：调试三件（debug-logs / debug-features-hooks / debug-panel-host）、聊天滚动与输入薄壳（chat-scroll / input-helpers / rollback-dialog / input-render）、后台面板与语音输入（bg-panel / voice-input）。right-panel-registry 保留（转发壳消费面未归零） | src 标签 61 → 52；桥债 272/92 → 289/99；台账 65 / 384 / 933 → 56 / 323 / 823 |
+| `412eccd2` | 第三批三组：chat-viewport（29 桥键）、chat-renderer（12 桥键，折叠偏好经 app-core 新增的 chatSurface getter/setter）、remote-connections（10 桥键）。同批判定 `runtime-status` R1 触线未转 | src 标签 52 → 49；桥债 289/99 → 340/102；台账 56 / 323 / 823 → 54 / 286 / 678 |
 
 转换中确立的几条约定（后续批次沿用）：
 
