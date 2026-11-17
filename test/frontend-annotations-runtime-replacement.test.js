@@ -21,6 +21,7 @@ function setup() {
   const fetchCalls = [];
   const eventSources = [];
   const treeWalkerRoots = [];
+  const animationFrames = [];
   const annotation = {
     id: 'anno-1', turn: 1, role: 'assistant',
     quote: '被标注的文本', occurrence: 0, createdAt: 1,
@@ -68,7 +69,10 @@ function setup() {
     URLSearchParams,
     Node: { TEXT_NODE: 3, ELEMENT_NODE: 1 },
     NodeFilter: { SHOW_TEXT: 4 },
-    requestAnimationFrame: (cb) => setTimeout(cb, 0),
+    requestAnimationFrame: (cb) => {
+      animationFrames.push(cb);
+      return animationFrames.length;
+    },
     navigator: {},
     focusedAgentId: 'programming-helper',
     currentRuntimeAgentId: 'runtime-old',
@@ -89,7 +93,7 @@ function setup() {
     return { nextNode: () => null };
   };
   ctx.loadSource('public/src/modules/annotations.js');
-  return { ctx, fetchCalls, eventSources, treeWalkerRoots };
+  return { ctx, fetchCalls, eventSources, treeWalkerRoots, animationFrames };
 }
 
 function listRequestCount(fetchCalls) {
@@ -98,20 +102,29 @@ function listRequestCount(fetchCalls) {
     && call.body?.requestType === 'list').length;
 }
 
-// 等待两跳 rAF：手动 scheduleReplay → ensureSession 发起 loadList →
-// resolve 后的重放。Windows 定时器精度 ~15.6ms，5ms 级 sleep 会与第二跳
-// rAF 竞态（treeWalker 观察点晚于同步缓存读），取 20ms 稳定覆盖。
-async function flushAsync() {
-  for (let i = 0; i < 6; i++) await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+// 确定性排空 rAF 与其触发的 Promise 链：手动 scheduleReplay →
+// ensureSession 发起 loadList → resolve 后再次 scheduleReplay → 重放。
+// 不用固定 sleep 猜测 Windows / 并行回归下的定时器调度时间；超过上限
+// 仍未达到预期时直接失败，保留测试自身的诊断信息。
+async function flushAsync(animationFrames, predicate = () => true) {
+  for (let turn = 0; turn < 100; turn++) {
+    while (animationFrames.length > 0) animationFrames.shift()();
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    if (animationFrames.length === 0 && predicate()) {
+      // 再让一轮已触发的 Promise continuation 有机会排入 rAF 队列。
+      await Promise.resolve();
+      if (animationFrames.length === 0 && predicate()) return;
+    }
+  }
+  throw new Error(`异步重放未收敛（待执行 rAF=${animationFrames.length}）`);
 }
 
 test('同会话 runtime 换代后 scheduleReplay 触发重同步并恢复标注', async () => {
-  const { ctx, fetchCalls, eventSources, treeWalkerRoots } = setup();
+  const { ctx, fetchCalls, eventSources, treeWalkerRoots, animationFrames } = setup();
 
   // 初始：runtime-old 在位，渲染触发首次同步，标注参与重放（锚点匹配路径命中）。
   ctx.window.ClawAnnotations.scheduleReplay();
-  await flushAsync();
+  await flushAsync(animationFrames);
   assert.equal(listRequestCount(fetchCalls), 1);
   assert.equal(treeWalkerRoots.length, 1, '标注已拉回缓存并驱动重放');
   assert.match(eventSources[0].url, /sessionId=sess-A/);
@@ -119,23 +132,23 @@ test('同会话 runtime 换代后 scheduleReplay 触发重同步并恢复标注'
 
   // 关闭对话：runtime 停止 → 服务端 closeSession → SSE closed → 前端清空缓存。
   eventSources[0].dispatch('closed');
-  await flushAsync();
+  await flushAsync(animationFrames);
   ctx.window.ClawAnnotations.scheduleReplay();
-  await flushAsync();
+  await flushAsync(animationFrames);
   assert.equal(treeWalkerRoots.length, 1, 'closed 后缓存清空，重放不再命中锚点匹配');
   assert.ok(eventSources[0].closed);
 
   // runtime 不在位（ref 空）期间渲染：不得重订阅（死会话不轮询）。
   ctx.currentRuntimeAgentId = '';
   ctx.window.ClawAnnotations.scheduleReplay();
-  await flushAsync();
+  await flushAsync(animationFrames);
   assert.equal(listRequestCount(fetchCalls), 1, 'runtime 不在位时不应重新拉取');
   assert.equal(eventSources.length, 1, 'runtime 不在位时不应新建 EventSource');
 
   // 重开同一会话：新 runtime 在位 → 渲染触发换绑重同步，标注恢复。
   ctx.currentRuntimeAgentId = 'runtime-new';
   ctx.window.ClawAnnotations.scheduleReplay();
-  await flushAsync();
+  await flushAsync(animationFrames);
   assert.equal(listRequestCount(fetchCalls), 2, 'runtime 换代后应重新拉取 list');
   assert.equal(eventSources.length, 2, 'runtime 换代后应重新订阅 SSE');
   assert.ok(!eventSources[1].closed);
@@ -143,16 +156,16 @@ test('同会话 runtime 换代后 scheduleReplay 触发重同步并恢复标注'
 
   // 稳态：同 runtime 后续渲染不再重复拉取。
   ctx.window.ClawAnnotations.scheduleReplay();
-  await flushAsync();
+  await flushAsync(animationFrames);
   assert.equal(listRequestCount(fetchCalls), 2);
   assert.equal(eventSources.length, 2);
 });
 
 test('会话切换（接续/分支场景）仍走键变化全量同步', async () => {
-  const { ctx, fetchCalls, eventSources, treeWalkerRoots } = setup();
+  const { ctx, fetchCalls, eventSources, treeWalkerRoots, animationFrames } = setup();
 
   ctx.window.ClawAnnotations.scheduleReplay();
-  await flushAsync();
+  await flushAsync(animationFrames);
   assert.equal(listRequestCount(fetchCalls), 1);
 
   // 切到新会话（接续产物）：sessionId 变化 → 键变化 → 全量同步。
@@ -160,7 +173,7 @@ test('会话切换（接续/分支场景）仍走键变化全量同步', async (
     (ref === 'runtime-old' ? 'sess-A' : ref === 'runtime-new2' ? 'sess-B' : '');
   ctx.currentRuntimeAgentId = 'runtime-new2';
   ctx.window.ClawAnnotations.scheduleReplay();
-  await flushAsync();
+  await flushAsync(animationFrames);
   assert.equal(listRequestCount(fetchCalls), 2);
   assert.equal(eventSources.length, 2);
   assert.match(eventSources[1].url, /sessionId=sess-B/);
