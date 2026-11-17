@@ -119,7 +119,8 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 2. **静态按钮的早期窗口语义**：主题 / 语言按钮的 click 由 `bindStaticToggleButtons()` 在 boot 首屏渲染后绑定；模块求值前点击无效果、无报错。这是把"按钮在 DOM 里可点但实现未到"从抛错变成静默的显式选择，`test/p2-production-boot-browser-check.mjs` 钉住两侧（渲染前无效果、就绪后生效）。
 3. **测试沙箱的基础设施按需补齐**：`install-i18n.js`（真实字典 i18n 桥）、`frontend-vm.js` 的 elementStub 补 `dataset`、`esm-module-loader` 的 window/document 桩面；这些是"真实 DOM 必备面"，不是为迁就某个文件加的兜底。
 4. **同名域的冲突**：`workspace-docset` 的桥键域已被 P2 的 `p2-w2-10-workspace-docset.js` 认领，新的 chrome 薄壳用 `workspace-docset-chrome`，并在文件头注写明注销条件。同型先例还有 `voice-input-api`（状态域 `voice-input` 的 impl 只转发已知键，函数键必须另立域，否则认领后补注册取到 undefined）。
-5. **测试桩面按真实 DOM / 端点契约补齐**：元素桩的 `dataset` / `children` / `contains` / `closest` / `matches` / `getBoundingClientRect`，document 的 `contains`，运行时创建元素（`rail-cust-overlay`）返回 `null`。每次补齐都对应一条真实生产路径（例如 `RailCustomize.findAnchor` 遍历 `rail.children`），不是为迁就某个批次。整图用例的"装载期请求集合"是精确相等断言，新增依赖（`ui-prefs?agentId=home`、`/sounds/*.mp3`）须逐条登记。
+5. **app-core 的最小 host seam（chat-renderer 前置）**：chat-renderer 的折叠偏好三个 Set（`_userExpandedReasoning` / `_userCollapsedMsgs` / `_userExpandedMsgs`）owner 是 app-core 顶层 `let`，且 `activateUserCollapseStateForContext()` 会整体重赋值——传值型宿主面会让渲染侧抓住旧 Set。因此在 `createP2BootstrapChatSurfaceHost()` 增补三对 getter/setter（读写同一 binding），chat-renderer 经 `chatSurface` 取用。这是 P2 既有宿主工厂模式的最小延续，不新增桥键、不改 owner。
+6. **测试桩面按真实 DOM / 端点契约补齐**：元素桩的 `dataset` / `children` / `contains` / `closest` / `matches` / `getBoundingClientRect`，document 的 `contains`，运行时创建元素（`rail-cust-overlay`）返回 `null`。每次补齐都对应一条真实生产路径（例如 `RailCustomize.findAnchor` 遍历 `rail.children`），不是为迁就某个批次。整图用例的"装载期请求集合"是精确相等断言，新增依赖（`ui-prefs?agentId=home`、`/sounds/*.mp3`）须逐条登记。
 
 剩余工作按依赖分组（每批仍按配方验收、独立提交）：
 
