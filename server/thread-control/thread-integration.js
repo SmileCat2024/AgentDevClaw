@@ -96,13 +96,13 @@ export async function buildSuccessionEvidence(board, threadId) {
  */
 export function composeUnresolvedNotice(unresolved, retiredSessionId) {
   const lines = [
-    `检测到 ${unresolved.length} 条上一棒（${retiredSessionId}）无法判定是否已消费的指令。`,
+    `检测到 ${unresolved.length} 条仍未结清、无法判定是否已消费的指令（本次退役会话：${retiredSessionId}；可能含更早会话遗留项）。`,
     '这些指令没有任何可靠消费证据（旧会话执行记录不完整或已丢失），既不能当作已执行，也不能自动重放。',
     '继续工作前，请逐条核对现实状态后处置：',
   ];
   for (const entry of unresolved) {
     const summary = String(entry?.text || '').slice(0, 200);
-    lines.push(`- [${entry?.unresolvedId}]（原因 ${entry?.reason}）：${summary}`);
+    lines.push(`- [${entry?.unresolvedId}]（来源会话 ${entry?.fromHeadSessionId || retiredSessionId}；原因 ${entry?.reason}）：${summary}`);
   }
   lines.push('核对方式：检查上述工作是否已真实完成（git 历史 / 文件状态 / 运行结果）。已完成的按已消费处置；未完成且仍需要的，重投该指令继续执行；已失效的显式放弃。处置是显式决定，不会自动发生。');
   return lines.join('\n');
@@ -316,7 +316,7 @@ export function createThreadIntegration({
      * runtime。非 head / 无线程（纯 session）：静默跳过（no-op）。
      *
      * seedContinuation（默认 true，与 beginSessionSuccession 对称）：
-     * 自动接续时 commit 产生的 unresolved 清单追加为 system_continuation
+     * 自动接续时事务内全部未结清 unresolved 清单追加为 system_continuation
      * 通知指令强制进入新 head 首轮；false（手动精简免播路径）不追加，
      * unresolved 经 /threads/:id/unresolved 查询处置面可见。
      *
