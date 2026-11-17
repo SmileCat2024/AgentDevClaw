@@ -131,6 +131,21 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 - **T3**：remote-connections 已迁；`runtime-status` **R1 触线待解**：其顶层 `const _agentSuspended = new Map()` 被 `sidebar-render` 的 `createAgentCallStatesHost()` 在 classic 加载期读取（调用方是 app-main 顶层 IIFE `bootstrapAgentCallStates`），实测跳过该文件装载 app-main 会 `ReferenceError`。处理路径是先把 sidebar-render 与 app-main 的 call-state bootstrap 迁出（或显式授权一条 classic 相预注册）。bg-panel / rail-customize / voice-input / generative-ui-panel / thread-store / plugin-manifest 已迁。`auth-client` **R1/R2/R4 触线保留 classic**：它创建 `__clawAuthReady` 并被 app-main 顶层 IIFE 等待，创建时点不能后移到模块相。`desktop-open` / `desktop-notify` 按 R4 保留；head 四件中 `action-dispatcher` 在配方禁区，需单独立项。
 - **T5 收尾**：`kernel-entry` 与 `p2-entry` / `p4-entry` 合并为单一入口；台账 / script-tags / 桥债基线收敛；`AGENT.md` 与 `frontend-rendering-patterns.md` 中"classic 相 / 首屏同步链"表述同步。
 
+### 剩余核心批次的阻断清单（2026-11-17 实测）
+
+`sidebar-render` 单独转换不可行，实测六处阻断；它必须与 `app-main` 同一批处理（称为「T2 收尾批次」），并附带两处最小 host seam：
+
+| # | 键 / 状态 | 触达点 | 真实后果 | 需要一起改的文件 |
+|---|---|---|---|---|
+| B1 | `createAgentCallStatesHost` | `app-main.js:864-1030` 顶层 IIFE（调用点 `:1016`） | classic 解析相求值，模块未执行 → `ReferenceError`；异常终止 app-main 余下语句，`visibilitychange` 与 `await __clawAuthReady → startApplication()` 都不注册，整页不启动 | app-main.js |
+| B2 | `createAgentSnapshotLoaderHost` | `agent-snapshot-loader-host.js:8` 顶层调用，该模块由 kernel-entry 装载（早于 p4-entry） | 返回 undefined → 装载器构造抛错，kernel-entry 整图求值中断 | kernel-entry.js 或该 host 文件 |
+| B3 | `createP2BootstrapSidebarRenderHost` | `p2-bootstrap-sidebar.js:20` 顶层（路径 kernel-entry → agent-loader-host → sidebar-operations） | 同上，TypeError 中断整图 | 该文件或 kernel-entry.js |
+| B4 | `_agentSuspended` | `runtime-status.js:622` classic `const`，只经 `createAgentCallStatesHost()` 交给 classic 引擎 | ESM 侧拿不到 Map 身份（引擎要 `set/delete/keys`）；这正是 `runtime-status` 自身 R1 的同一条链 | runtime-status.js（随本批迁移） |
+| B5 | `_interruptSuppression` | `app-core.js:378`，`createCallInterruptHost()` 只给函数面 | 引擎要 `interrupting.delete(key)`，缺容器 | app-core.js（加最小 seam） |
+| B6 | `pendingPrebuiltAgentIds` | `app-core.js:15` classic `const Set`，无任何 host 工厂暴露 | `renderAgentItems` 的 `has()` 与签名里的 `Array.from()` 都需要它 | app-core.js（加最小 seam） |
+
+转换时可直接复用的键分类（实测）：11 键收敛为模块私有；5 个 `onSidebar*` 是内联事件协议（保持 `window.X = function`，台账会保留这 5 条 behavior，修剪基线要对表）；3 个函数仅测试消费（命名导出、不上桥）；桥键含 `renderAgentList`（27 个 public 文件 + 78 个测试文件）、`createAgentCallStatesHost`（app-main + 38 个测试文件）、`renderAgentGroup` / `renderAgentItems` 等。
+
 ## 接续与回滚
 
 每批独立提交、可独立回退（D4/D5 既有纪律）；T2 时序切换提交单独成 commit，回退它即回到同步首屏（桥与模块保留）。本计划实施期间如遇与 ADR-0051 冲突的边界，以 ADR 为准并报告，不自行扩大解释。
