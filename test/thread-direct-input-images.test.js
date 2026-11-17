@@ -121,8 +121,9 @@ async function withPersistentInputCase(fn) {
         ClawToast: { show() {} },
         ClawFW: { actions: { registerMany() {} }, requestImmediatePoll() {} },
         _requestNotifyPermission() {},
-        captureSessionViewToken: () => 'view-token-1',
-        isSessionViewTokenCurrent: () => true,
+        // 会话视图 token：真实判定（session-view-commit）按 token 字段比较——
+        // 空身份 token 以 runtimeId 为准，与当前 runtime 一致即「视图仍归本会话」。
+        captureSessionViewToken: () => ({ runtimeId: 'runtime-1', identity: null, switchEpoch: 0, generation: undefined }),
         _getSessionInputCacheKey: () => 'key-1',
         _sessionInputCache: {},
         autoResize() {},
@@ -130,6 +131,19 @@ async function withPersistentInputCase(fn) {
         clearInterruptSuppression() {},
         _markAgentCallStartedForNotify() {},
         _agentCallActive: new Map(),
+        // 输入面静态图的 classic 宿主工厂（生产由 app-core / app-main 提供）：
+        // 本用例只跑提交与图片桶语义，不触达这些 seam。
+        // 会话提交策略的宿主面（生产由 classic session-view-state 提供）：本基座
+        // 不装 app-core 链，按策略实际读取的字段给形状（identity 空 = 无身份 token）。
+        createSessionViewCommitHost: () => ({
+          identity: () => null,
+          read: () => ({}),
+          apply: () => {},
+          normalizeModel: () => ({}),
+        }),
+        createP2BootstrapCallActivityHost: () => ({ _agentCallActive: new Map() }),
+        createP2BootstrapDomHost: () => ({}),
+        createPollCoordinatorHost: () => ({}),
         _clearRecapForNewMessage() {},
         isRuntimeCalling: () => false,
         isInterruptSuppressed: () => false,
@@ -139,11 +153,28 @@ async function withPersistentInputCase(fn) {
         fetch: (...args) => fetchImpl(...args),
       },
       classic: (sandbox) => {
-        sandbox.loadSource('public/src/modules/persistent-input.js');
+        sandbox.loadSource('public/src/modules/kernel-state.js');
+        // 桥接期真初值（生产由 app-core 在 classic 相注册，ESM owner 认领时吸收）
+        sandbox.KernelState.defineKey('i18n-environment', 'currentLanguage', 'zh');
+        sandbox.KernelState.defineKey('orchestration', 'currentRuntimeAgentId', 'runtime-1');
+        sandbox.KernelState.defineKey('orchestration', '_switchEpoch', 0);
       },
     }, async (c) => {
+      // 焦点 runtime：生产由切换链写入 orchestration owner（本用例按真实 setter 设置）
+      const orchestration = await c.load('public/src/modules/orchestration-state.js');
+      orchestration.setCurrentRuntimeAgentId('runtime-1');
+      // 会话视图快照（提交路径读 currentMessages 计乐观回显起点）
+      const storage = await c.load('public/src/modules/session-view-storage.js');
+      storage.setCurrentMessages([]);
+      storage.setCurrentInputRequests([]);
+      // 输入面实现（P4 输入面批次起是 ESM）：真实 import，桥键随模块注册。
+      const persistent = await c.load('public/src/modules/persistent-input.js');
+      // toast-notify 在模块求值期把自己挂上 window.ClawToast（夹具桩会被覆盖）：
+      // 本用例只断言提交/图片语义，提示面按签名桩落位。
+      c.window.ClawToast = { show() {}, update() {} };
       return fn({
         c,
+        persistent,
         textarea,
         submitCalls,
         setFetch: (impl) => { fetchImpl = impl; },
@@ -157,16 +188,19 @@ async function withPersistentInputCase(fn) {
 }
 
 test('unsent images move with the conversation when its thread advances to a successor', async () => {
-  const { logs } = await withPersistentInputCase(async ({ c, setAttachmentKey }) => {
-    c.read('_imageBucket().push({ path: "/uploads/attach.png", mediaType: "image/png", source: "paste" })');
+  const { logs } = await withPersistentInputCase(async ({ c, persistent, setAttachmentKey }) => {
+    // 待发送桶是模块私有状态（零跨文件生产消费方）：经模块的测试缝播种/观察。
+    const seam = persistent.__testInputState;
+    seam.imageBucket.push({ path: '/uploads/attach.png', mediaType: 'image/png', source: 'paste' });
     setAttachmentKey('runtime-2::session-new');
 
     // 公开入口：接续时由 thread-store 调用，只迁移同一条 Thread 的未发送附件。
+    // 桥键形态不变（classic 消费方经 window 调用同一实现）。
     c.read('window.migratePendingInputImages("runtime-1::session-old", "runtime-2::session-new")');
 
-    assert.equal(c.read('_imageBucket().length'), 1, 'the successor composer must still show the unsent image');
-    assert.equal(c.read('_imageBucket()[0].source'), 'paste', 'the original image entry is preserved');
-    assert.equal(c.read('_pendingImageBuckets.has("runtime-1::session-old")'), false,
+    assert.equal(seam.imageBucket.length, 1, 'the successor composer must still show the unsent image');
+    assert.equal(seam.imageBucket[0].source, 'paste', 'the original image entry is preserved');
+    assert.equal(seam.pendingImageBuckets.has('runtime-1::session-old'), false,
       'the attachment is no longer stranded under the retired session identity');
   });
 
@@ -174,12 +208,12 @@ test('unsent images move with the conversation when its thread advances to a suc
 });
 
 test('thread direct-delivery submit clears pending images on success', async () => {
-  const { logs } = await withPersistentInputCase(async ({ c, textarea, submitCalls, setFetch }) => {
+  const { logs } = await withPersistentInputCase(async ({ persistent, textarea, submitCalls, setFetch }) => {
     // 已在本机宿主机上传完成的待发附件：目标宿主一致 → 真实就绪解析不再转存。
     setFetch(async () => { throw new Error('unexpected fetch'); });
-    c.read('_imageBucket().push({ path: "/uploads/attach.png", mediaType: "image/png", source: "paste", _hostKey: "local" })');
+    persistent.__testInputState.imageBucket.push({ path: '/uploads/attach.png', mediaType: 'image/png', source: 'paste', _hostKey: 'local' });
 
-    await c.read('submitQueuedInput()');
+    await persistent.submitQueuedInput();
 
     assert.equal(submitCalls.length, 1, 'thread input should be submitted exactly once');
     assert.equal(submitCalls[0].threadId, 'th-1');
@@ -187,7 +221,7 @@ test('thread direct-delivery submit clears pending images on success', async () 
       'image payload should reach the thread input submit call');
     assert.equal(submitCalls[0].payload.images[0].path, '/uploads/attach.png');
     assert.equal(submitCalls[0].payload.images[0].mediaType, 'image/png');
-    assert.equal(c.read('_imageBucket().length'), 0,
+    assert.equal(persistent.__testInputState.imageBucket.length, 0,
       'pending image bucket must be cleared after successful thread submit');
     assert.equal(textarea.value, '', 'the sent draft is cleared with its attachments');
   });
@@ -201,14 +235,14 @@ test('failed thread image upload aborts the submit and keeps the attachments', a
   //
   // 场景：附件挂在远程宿主机（`remote:conn-1`），发送目标是本机会话，真实
   // 就绪解析必须转存；转存请求失败 → failedCount > 0 → 提交中止。
-  const { logs } = await withPersistentInputCase(async ({ c, textarea, submitCalls, setFetch }) => {
+  const { logs } = await withPersistentInputCase(async ({ persistent, textarea, submitCalls, setFetch }) => {
     setFetch(async () => { throw new Error('upload unavailable'); });
-    c.read('_imageBucket().push({ path: "/uploads/attach.png", mediaType: "image/png", source: "paste", _hostKey: "remote:conn-1" })');
+    persistent.__testInputState.imageBucket.push({ path: '/uploads/attach.png', mediaType: 'image/png', source: 'paste', _hostKey: 'remote:conn-1' });
 
-    await c.read('submitQueuedInput()');
+    await persistent.submitQueuedInput();
 
     assert.equal(submitCalls.length, 0, 'a failed attachment must abort the thread submit');
-    assert.equal(c.read('_imageBucket().length'), 1, 'the pending image stays available for retry');
+    assert.equal(persistent.__testInputState.imageBucket.length, 1, 'the pending image stays available for retry');
     assert.equal(textarea.value, '看看这张图', 'the typed draft is preserved');
   });
 

@@ -1,5 +1,6 @@
 /**
  * input-composer.js — 常驻 Composer 组件（工单 036）
+ * （classic → ESM，P4 T2 输入面批次）
  *
  * 职责：
  * - 常驻 composer 卡（textarea + 工具栏）：首次挂载后常驻 DOM，普通文本 lease
@@ -13,71 +14,124 @@
  * lease 应答由 choice 卡与 submitInputAction 等专用交互承载。
  * 工具栏（attach / 模型 / 思考 / 语音 / 发送-停止）属于常驻 composer。
  *
- * 导出全局函数：
+ * 命名导出（跨文件消费方一律 import；桥键见文件末尾）：
  *   resolveInputSurfaceMode, readInputSurfaceModeState,
- *   ensurePersistentComposerCard, applyComposerMode, syncPersistentComposerSession,
- *   hidePersistentComposerCard, showPersistentComposerCard,
- *   detachTransientInputContent
- * 导出全局变量（P2 W2-3a 之后 owner 是 p2-w2-3a-composer-state.js，
- * 这里保留 classic 相注册与访问器名）：
- *   _sessionInputCache
- * 导出全局函数（草稿缓存，原 voice-input.js 符号，引用方零改动）：
  *   _cacheSessionInput, _restoreSessionInputDraft, _storeSessionInputDraft,
- *   _storeVisibleSessionInputDraft
+ *   _storeVisibleSessionInputDraft,
+ *   ensurePersistentComposerCard, applyComposerMode, syncPersistentComposerSessionCard,
+ *   hidePersistentComposerCard, showPersistentComposerCard, getPersistentComposerCard,
+ *   insertTransientInputCard, detachTransientInputContent
  *
- * 依赖全局（运行时解析，加载顺序见 index.html）：
- *   t, currentLanguage (i18n.js / app-core.js)
- *   currentRuntimeAgentId, readOnlyMode (app-core.js)
- *   autoResize (input-helpers.js)
- *   submitInputAction (input-helpers.js)
- *   handlePersistentInputKey, onPersistentBtnClick, _syncPersistentActionButton,
- *   _localQueuedInputPending, _pendingQueuedCount, _queuedTexts,
- *   _lastQueueBubbleSignature (persistent-input.js)
- *   updateInputModelSwitcher, updateThinkingEffortSwitcher (input-model-switcher.js)
- *   _getSessionInputCacheKey (app-main.js)
- *   runWithSuppressedChatViewportObservers (chat-viewport.js)
- *   handleInputPaste (persistent-input.js)
- *   toggleVoiceRecording (voice-input.js)
- *   isChoiceInputRequest, isChoiceInputConsumed (choice-input.js)
- *   _rollbackDialogOpen, _partialCompactInFlight, _partialCompactRuntimeId,
- *   _compactTimerInterval (rollback-dialog.js)
+ * 模块私有（零跨文件生产消费方）：_attachMenuEl / _composerCard / closeAttachMenu /
+ * toggleAttachMenu / _attachMenuOutsideHandler / buildComposerCard / SVG 常量。
+ * `_restoreSessionInputDraft` / `_storeSessionInputDraft` 生产消费方仅本文件（后者
+ * 还服务 _storeVisibleSessionInputDraft），导出供真实 import 测试。
+ *
+ * 状态归属：
+ *   - `_sessionInputCache`（域 input-composer）owner 是 p2-w2-3a-composer-state.js，
+ *     本文件 import 其活绑定直读写；注册行留在本文件（见下）。
+ *   - 排队投影 / 回退压缩 / 语音 / 选择卡 / 只读 / 编排态全部 import owner 的活绑定
+ *     与 setter，不再经 window 访问器。
+ *
+ * 桥键（domain `input-composer-api`）：对外函数键。**不能复用 `input-composer`
+ * 域**——该域已由 p2-w2-3a-composer-state.js claim，其 impl 只转发
+ * `_sessionInputCache`，认领后补注册的函数键取到 undefined（先例：voice-input-api）。
+ *   逐键消费方与注销条件见文件末尾注册块。
+ *
+ * 时相（R1/R2/R4 审计结论）：
+ *   - classic 相零触达：状态键与函数键的注册行、全部状态声明都在函数体外求值，
+ *     但消费方（app-main 的 getInputSurfaceMode / input-render 的
+ *     renderInputRequests / 本模块自身的渲染路径）全部在函数体内调用；P4 时序
+ *     切换后首屏链由 `boot.js`（index.html 最后一条 module 标签）在模块相触发，
+ *     晚于本模块求值，因此模块相注册与 classic 相注册等价。
+ *   - 顶层语句只有：状态声明（null 初值）、桥键注册、函数声明、SVG 常量字符串。
+ *     无 DOM 查询、无事件注册、无 localStorage 读写（草稿缓存是纯内存对象，
+ *     持久化只发生在 sessionStorage 的压缩计时域，不在本文件）。
+ *   - sloppy → strict：原文件无 `'use strict'`，逐条核对无隐式全局赋值（所有跨
+ *     文件写点都是 defineKey 桥键或本模块声明）、无 `with`、无顶层 `this`。
+ *
+ * 与 persistent-input.js 的静态循环：两侧只在函数体互相调用（function 声明在
+ * 模块实例化阶段即初始化），求值期零解引用；装载顺序（p4-entry）不影响语义。
+ *
+ * 外来键的三选一结论（配方步 3）：
+ *   - import：已迁态 owner 与轻量宿主域——i18n `t`、getCurrentLanguage、
+ *     currentRuntimeAgentId / readOnlyMode、sessionInputCache、排队投影四键 +
+ *     setLastQueueBubbleSignature、回退压缩四键 + setCompactTimerInterval、
+ *     `autoResize`；本批兄弟 persistent-input（function 声明，静态循环安全）。
+ *   - `window.` 晚绑定：目标模块自身仍以桥键服务其他消费方，走 window 与迁移前
+ *     裸标识符解析到同一访问器，语义零变化（行尾注释标定义域与收敛条件）：
+ *     `_getSessionInputCacheKey`（app-main，classic）、`isChoiceInputRequest` /
+ *     `isChoiceInputConsumed`（choice-input 桥）、`toggleInputModelDropdown` /
+ *     `toggleThinkingEffortDropdown`（input-model-switcher 桥）、
+ *     `toggleVoiceRecording`（voice-input-api 桥）、
+ *     `runWithSuppressedChatViewportObservers`（chat-viewport 桥）。
+ *     `window.SessionReference` / `window.ClawSlash` 是既有公开命名空间协议。
+ *   - 无触线项：本文件不引用任何仍 classic 的顶层 let/const/class 词法绑定。
  */
 
 // ── 会话草稿缓存（迁自 voice-input.js，composer 本体状态）─────────────────
 
-// ESM 迁移（P2 W2-3a）：草稿缓存的 owner 已移到
-// p2-w2-3a-composer-state.js。这里保留**classic 相注册**：首屏同步链
-// （renderInputRequests → `_applyLeaseInitialDraft`）读该键，须带真初值早于
-// deferred 模块可用；ESM owner 装载时 claim 吸收现值，之后各 classic 消费方
-// （persistent-input / input-render / voice-input / input-helpers /
-// app-chat-input）经访问器读写，无双存储。
+import { t } from '../i18n.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { readOnlyMode } from './agent-store-state.js';
+import { sessionInputCache } from './p2-w2-3a-composer-state.js';
+import {
+  localQueuedInputPending,
+  pendingQueuedCount,
+  queuedTexts,
+  setLastQueueBubbleSignature,
+} from './p2-w2-3a-input-queue-state.js';
+import {
+  rollbackDialogOpen,
+  partialCompactInFlight,
+  partialCompactRuntimeId,
+  compactTimerInterval,
+  setCompactTimerInterval,
+} from './p2-w2-3b-rollback-domain.js';
+import { autoResize } from './input-actions.js';
+import {
+  handlePersistentInputKey,
+  onPersistentBtnClick,
+  handleInputPaste,
+  onImageFilesSelected,
+  _syncPersistentActionButton,
+} from './persistent-input.js';
+
+// ESM 迁移（P4 输入面批次）：`_sessionInputCache` 的 owner 仍是
+// p2-w2-3a-composer-state.js（上面的 import 使它先求值并 claim，故本注册走
+// 「认领后补注册」路径，初值直接落进 owner 状态；无双存储）。注册行保留在本
+// 文件原声明位置，服务尚未迁移的 classic 消费方（input-render 的 lease 草稿
+// 回填、voice-input 的 ASR 回写、app-chat-input / slash-menu 的草稿保存）。
+// 注销条件：上述消费方全部改为 import 本模块 / owner 之后（注册行在本批清单内，
+// 届时可直接删）。
 window.KernelState.defineKey('input-composer', '_sessionInputCache', {}); // { cacheKey: text } — 每个会话 persistent 输入框内容缓存
 
 // Real-time cache for the persistent composer draft per session.
-function _cacheSessionInput(textarea) {
-  const key = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
+export function _cacheSessionInput(textarea) {
+  const key = textarea?.dataset?.sessionKey || window._getSessionInputCacheKey();
   if (!key) return;
-  _sessionInputCache[key] = textarea.value || '';
+  sessionInputCache[key] = textarea.value || '';
 }
 
-function _restoreSessionInputDraft(textarea, key = textarea?.dataset?.sessionKey || _getSessionInputCacheKey()) {
+export function _restoreSessionInputDraft(textarea, key = textarea?.dataset?.sessionKey || window._getSessionInputCacheKey()) {
   if (!textarea || !key) return false;
-  if (!Object.prototype.hasOwnProperty.call(_sessionInputCache, key)) return false;
-  const cached = _sessionInputCache[key];
+  if (!Object.prototype.hasOwnProperty.call(sessionInputCache, key)) return false;
+  const cached = sessionInputCache[key];
   if (typeof cached !== 'string') return false;
   textarea.value = cached;
   autoResize(textarea);
   return true;
 }
 
-function _storeSessionInputDraft(textarea) {
+export function _storeSessionInputDraft(textarea) {
   if (!textarea) return;
-  const key = textarea.dataset?.sessionKey || _getSessionInputCacheKey();
+  const key = textarea.dataset?.sessionKey || window._getSessionInputCacheKey();
   if (!key) return;
-  _sessionInputCache[key] = textarea.value || '';
+  sessionInputCache[key] = textarea.value || '';
 }
 
-function _storeVisibleSessionInputDraft(root = document) {
+export function _storeVisibleSessionInputDraft(root = document) {
   const textareas = root.querySelectorAll
     ? Array.from(root.querySelectorAll('.user-input-textarea:not([disabled])'))
     : [];
@@ -105,7 +159,7 @@ function toggleAttachMenu(event) {
     closeAttachMenu();
     return;
   }
-  const zh = currentLanguage === 'zh';
+  const zh = getCurrentLanguage() === 'zh';
   const menu = document.createElement('div');
   menu.className = 'attach-menu-popover';
   menu.innerHTML = ''
@@ -159,7 +213,7 @@ function _attachMenuOutsideHandler(event) {
 // "什么状态决定什么模式"是契约，判定代码结构不是。本函数按优先级给出
 // 唯一显示模式；普通文本 lease 不参与模式选择。
 
-function resolveInputSurfaceMode(state) {
+export function resolveInputSurfaceMode(state) {
   if (!state.chatActive) return 'hidden';                                          // 1 非 chat surface
   if (state.readOnlyMode) return 'readonly';                                       // 2 只读
   if (state.rollbackDialogOpen) return 'frozen';                                   // 3 回退对话框接管
@@ -174,7 +228,7 @@ function resolveInputSurfaceMode(state) {
 }
 
 // 组装模式判定所需的当前全局状态（非纯；读输入区各域的全局状态）。
-function readInputSurfaceModeState(requests, chatActive) {
+export function readInputSurfaceModeState(requests, chatActive) {
   const hasRuntimeSelected = !!currentRuntimeAgentId;
   // 接续等待表面（线程接续挡板 / 退役窗口，runtime 态为空）：输入经
   // getActiveThreadInputTarget 的一致性校验走 Thread Inbox 暂存，新 head
@@ -185,16 +239,17 @@ function readInputSurfaceModeState(requests, chatActive) {
   return {
     chatActive,
     readOnlyMode,
-    rollbackDialogOpen: _rollbackDialogOpen,
-    compactInFlight: _partialCompactInFlight,
+    rollbackDialogOpen,
+    compactInFlight: partialCompactInFlight,
     compactRuntimeMatches: hasRuntimeSelected
-      && currentRuntimeAgentId === _partialCompactRuntimeId,
+      && currentRuntimeAgentId === partialCompactRuntimeId,
     hasRuntimeSelected,
     hasThreadAwaitTarget,
     hasChoiceRequest: Array.isArray(requests)
-      && requests.some(req => isChoiceInputRequest(req) && !isChoiceInputConsumed(req.requestId)),
+      // 桥接期：定义于 choice-input（选择卡域收敛时改 import）
+      && requests.some(req => window.isChoiceInputRequest(req) && !window.isChoiceInputConsumed(req.requestId)),
     hasLocalQueuedInput: hasRuntimeSelected
-      && (_localQueuedInputPending || _pendingQueuedCount > 0 || _queuedTexts.length > 0),
+      && (localQueuedInputPending || pendingQueuedCount > 0 || queuedTexts.length > 0),
   };
 }
 
@@ -256,7 +311,7 @@ function buildComposerCard() {
   attachBtn.type = 'button';
   // + 号是附件菜单入口（图片 / 会话引用）：点击弹出 popover，不再直连文件选择
   attachBtn.onclick = function(event) { toggleAttachMenu(event); };
-  attachBtn.title = currentLanguage === 'zh' ? '添加附件' : 'Attach';
+  attachBtn.title = getCurrentLanguage() === 'zh' ? '添加附件' : 'Attach';
   attachBtn.innerHTML = _COMPOSER_ATTACH_SVG;
   left.appendChild(fileInput);
   left.appendChild(attachBtn);
@@ -268,23 +323,26 @@ function buildComposerCard() {
   const modelBtn = document.createElement('button');
   modelBtn.className = 'input-model-switch-btn';
   modelBtn.id = 'input-model-switch-btn';
-  modelBtn.onclick = function(event) { toggleInputModelDropdown(event); };
-  modelBtn.innerHTML = '<span class="input-model-name">' + (currentLanguage === 'zh' ? '模型' : 'Model') + '</span>'
+  // 桥接期：定义于 input-model-switcher（模型切换域收敛时改 import）
+  modelBtn.onclick = function(event) { window.toggleInputModelDropdown(event); };
+  modelBtn.innerHTML = '<span class="input-model-name">' + (getCurrentLanguage() === 'zh' ? '模型' : 'Model') + '</span>'
     + _COMPOSER_MODEL_CHEVRON_SVG;
 
   const thinkingBtn = document.createElement('button');
   thinkingBtn.className = 'input-thinking-btn';
   thinkingBtn.id = 'input-thinking-btn';
-  thinkingBtn.onclick = function(event) { toggleThinkingEffortDropdown(event); };
+  // 桥接期：定义于 input-model-switcher（模型切换域收敛时改 import）
+  thinkingBtn.onclick = function(event) { window.toggleThinkingEffortDropdown(event); };
   thinkingBtn.innerHTML = _COMPOSER_THINKING_ICON_SVG
-    + '<span class="input-thinking-name">' + (currentLanguage === 'zh' ? '思考强度' : 'Thinking') + '</span>'
+    + '<span class="input-thinking-name">' + (getCurrentLanguage() === 'zh' ? '思考强度' : 'Thinking') + '</span>'
     + _COMPOSER_THINKING_CHEVRON_SVG;
 
   const voiceBtn = document.createElement('button');
   voiceBtn.className = 'voice-input-btn';
   voiceBtn.dataset.target = 'input-persistent';
-  voiceBtn.onclick = function() { toggleVoiceRecording(this); };
-  voiceBtn.title = currentLanguage === 'zh' ? '语音输入' : 'Voice Input';
+  // 桥接期：定义于 voice-input（语音域收敛时改 import）
+  voiceBtn.onclick = function() { window.toggleVoiceRecording(this); };
+  voiceBtn.title = getCurrentLanguage() === 'zh' ? '语音输入' : 'Voice Input';
   voiceBtn.innerHTML = _COMPOSER_MIC_SVG;
 
   const sendBtn = document.createElement('button');
@@ -311,19 +369,20 @@ function buildComposerCard() {
   return card;
 }
 
-function ensurePersistentComposerCard(container) {
+export function ensurePersistentComposerCard(container) {
   // 优先复用模块级单例：元素被外部 detach（容器遭清空的异常路径）后对象
   // 仍存活——重新插入同一节点，DOM 节点身份保持不变。交互弹窗（选择卡/
   // 回退对话框）已解耦到独立渲染面，正常路径不会再销毁 composer。
   if (!container.querySelector('[data-persistent-composer]')) {
     if (!_composerCard) _composerCard = buildComposerCard();
-    runWithSuppressedChatViewportObservers(() => {
+    // 桥接期：定义于 chat-viewport（聊天视口域收敛时改 import）
+    window.runWithSuppressedChatViewportObservers(() => {
       container.appendChild(_composerCard);
     });
     const ta = _composerCard.querySelector('.user-input-textarea');
     if (ta && !ta.dataset.sessionKey) {
       // 挂载时初始化会话身份（首次挂载或从对话框 detach 恢复）
-      ta.dataset.sessionKey = _getSessionInputCacheKey() || '';
+      ta.dataset.sessionKey = window._getSessionInputCacheKey() || '';
       _restoreSessionInputDraft(ta, ta.dataset.sessionKey);
     }
   }
@@ -333,7 +392,7 @@ function ensurePersistentComposerCard(container) {
 /**
  * 为常驻 composer 绑定普通发言提交行为。
  */
-function applyComposerMode(card) {
+export function applyComposerMode(card) {
   const ta = card.querySelector('.user-input-textarea');
   const sendBtn = card.querySelector('.persistent-action-btn');
   if (!ta || !sendBtn) return;
@@ -345,7 +404,7 @@ function applyComposerMode(card) {
   card.classList.add('persistent-input');
 
   sendBtn.id = 'persistent-action-btn';
-  sendBtn.title = currentLanguage === 'zh' ? '发送' : 'Send';
+  sendBtn.title = getCurrentLanguage() === 'zh' ? '发送' : 'Send';
   sendBtn.onclick = function() {
     const textarea = document.getElementById('input-persistent');
     if (window.ClawSlash?.submitWithPendingPrompts && textarea) {
@@ -362,14 +421,14 @@ function applyComposerMode(card) {
  * 恢复新 key 草稿。同 key 调用是幂等 no-op（同会话重渲染不触碰草稿）。
  * 返回是否发生了会话切换。
  */
-function syncPersistentComposerSessionCard(container) {
+export function syncPersistentComposerSessionCard(container) {
   const card = container.querySelector('[data-persistent-composer]');
   const ta = card ? card.querySelector('.user-input-textarea') : null;
   if (!ta) return false;
   const oldKey = ta.dataset.sessionKey || '';
-  const newKey = _getSessionInputCacheKey() || '';
+  const newKey = window._getSessionInputCacheKey() || '';
   if (oldKey === newKey) return false;
-  if (oldKey) _sessionInputCache[oldKey] = ta.value || '';
+  if (oldKey) sessionInputCache[oldKey] = ta.value || '';
   ta.dataset.sessionKey = newKey || '';
   // 附件类会话态（会话引用 pill、图片缩略图、slash prompt pill）按会话 key
   // 隔离存储：切换后按新 key 重渲染附件预览与 pill bar，上一会话的附件不
@@ -383,18 +442,18 @@ function syncPersistentComposerSessionCard(container) {
   return true;
 }
 
-function hidePersistentComposerCard() {
+export function hidePersistentComposerCard() {
   if (_composerCard) _composerCard.style.display = 'none';
 }
 
-function showPersistentComposerCard(container) {
+export function showPersistentComposerCard(container) {
   const card = ensurePersistentComposerCard(container);
   _composerCard = card;
   card.style.display = '';
   return card;
 }
 
-function getPersistentComposerCard() {
+export function getPersistentComposerCard() {
   return _composerCard;
 }
 
@@ -404,7 +463,7 @@ function getPersistentComposerCard() {
  * 单例引用存在但 parentNode 已断（容器遭外部清空的异常路径）时回落为
  * null（等同 appendChild）。
  */
-function insertTransientInputCard(container, card) {
+export function insertTransientInputCard(container, card) {
   const ref = getPersistentComposerCard();
   const refInContainer = ref && ref.parentNode === container ? ref : null;
   container.insertBefore(card, refInContainer);
@@ -413,15 +472,59 @@ function insertTransientInputCard(container, card) {
 // 清理互斥临时内容（readonly 卡 / 压缩卡 / 气泡 / 胶囊）。交互弹窗（选择
 // 卡 / 回退对话框卡）在独立渲染面，不经此函数。常驻 composer 是容器内唯一
 // 保留的子元素；气泡栈与 meta bar 由各自模块按需重建。
-function detachTransientInputContent(container) {
-  if (typeof _compactTimerInterval !== 'undefined' && _compactTimerInterval) {
-    clearInterval(_compactTimerInterval);
-    _compactTimerInterval = null;
+export function detachTransientInputContent(container) {
+  if (compactTimerInterval) {
+    clearInterval(compactTimerInterval);
+    setCompactTimerInterval(null);
   }
   for (const child of Array.from(container.children)) {
     if (child.dataset && child.dataset.persistentComposer) continue;
     child.remove();
   }
   // 气泡栈 DOM 被清理后重置签名缓存，回 persistent 时由 _renderQueueBubbles 重插
-  _lastQueueBubbleSignature = '';
+  setLastQueueBubbleSignature('');
 }
+
+// ── 兼容桥（未迁移消费方收敛后注销）────────────────────────────────────────
+// 函数键落 `input-composer-api` 域而不是 `input-composer`：后者已由
+// p2-w2-3a-composer-state.js claim（impl 只转发 `_sessionInputCache`），认领后
+// 补注册的函数键会取到 undefined。理由见文件头注。
+const BRIDGE_FUNCTIONS = {
+  resolveInputSurfaceMode,
+  readInputSurfaceModeState,
+  _cacheSessionInput,
+  _storeVisibleSessionInputDraft,
+  syncPersistentComposerSessionCard,
+  hidePersistentComposerCard,
+  insertTransientInputCard,
+  detachTransientInputContent,
+};
+
+// 逐键消费方（grep public/，排除定义方）与注销条件：
+//   resolveInputSurfaceMode          ← app-main（getInputSurfaceMode，裸调用）
+//   readInputSurfaceModeState        ← app-main（同上）
+//   _cacheSessionInput               ← app-chat-input / slash-menu / voice-input（window.）
+//   _storeVisibleSessionInputDraft   ← app-main（宿主 storeDraft）/ session-readonly-view
+//                                      （window.）/ thread-store（裸调用）/ workspace-actions（window.）
+//   syncPersistentComposerSessionCard← input-render（window.）
+//   hidePersistentComposerCard       ← input-render / rollback-dialog-runtime（window.）
+//   insertTransientInputCard         ← input-render（window.）
+//   detachTransientInputContent      ← input-render / rollback-dialog-runtime（window.）
+// 注销条件：以上消费方迁 ESM 并改为 import 之后。
+window.KernelState.defineKey('input-composer-api', 'resolveInputSurfaceMode', resolveInputSurfaceMode);
+window.KernelState.defineKey('input-composer-api', 'readInputSurfaceModeState', readInputSurfaceModeState);
+window.KernelState.defineKey('input-composer-api', '_cacheSessionInput', _cacheSessionInput);
+window.KernelState.defineKey('input-composer-api', '_storeVisibleSessionInputDraft', _storeVisibleSessionInputDraft);
+window.KernelState.defineKey('input-composer-api', 'syncPersistentComposerSessionCard', syncPersistentComposerSessionCard);
+window.KernelState.defineKey('input-composer-api', 'hidePersistentComposerCard', hidePersistentComposerCard);
+window.KernelState.defineKey('input-composer-api', 'insertTransientInputCard', insertTransientInputCard);
+window.KernelState.defineKey('input-composer-api', 'detachTransientInputContent', detachTransientInputContent);
+
+window.KernelState.claim('input-composer-api', {
+  get(key) {
+    return BRIDGE_FUNCTIONS[key];
+  },
+  set(key, value) {
+    BRIDGE_FUNCTIONS[key] = value;
+  },
+});

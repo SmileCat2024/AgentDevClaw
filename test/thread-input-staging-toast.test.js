@@ -10,8 +10,8 @@
  * 响应形状来自 POST /protoclaw/threads/:threadId/input：接受与否由 HTTP 状态
  * 表达，送达与否在 deliveryAttempt 字段（与 /commands 的 delivery 对象不同）。
  *
- * 装载路线（P2 测试迁移）：提交入口 `submitQueuedInput` 仍属 classic
- * persistent-input.js（同步首屏边界），本文件直接装载**整份真实源码**——不再按
+ * 装载路线（P4 输入面批次）：提交入口 `submitQueuedInput` 已随 persistent-input.js
+ * 迁 ESM，本文件真实 import 装载**整份实现**——不再按
  * `function updateQueueIndicator` 一类标记切函数块（该入口已迁
  * p2-w2-3a-queue-projection，旧的结束标记不存在）。线程输入路由的响应形状是
  * 本用例的输入前提，`submitThreadInput` 按路由契约注入返回；提交链本身（提示
@@ -120,8 +120,8 @@ async function submitQueuedInputWith(deliveryAttempt) {
         ClawToast: { show: (value) => toasts.push(value) },
         ClawFW: { actions: { registerMany() {} }, requestImmediatePoll() {} },
         _requestNotifyPermission() {},
-        captureSessionViewToken: () => 'view-token-1',
-        isSessionViewTokenCurrent: () => true,
+        // 会话视图 token：真实判定按 token 字段比较（空身份 token 以 runtimeId 为准）
+        captureSessionViewToken: () => ({ runtimeId: 'runtime-1', identity: null, switchEpoch: 0, generation: undefined }),
         _getSessionInputCacheKey: () => 'key-1',
         _sessionInputCache: {},
         autoResize() {},
@@ -129,6 +129,17 @@ async function submitQueuedInputWith(deliveryAttempt) {
         clearInterruptSuppression() {},
         _markAgentCallStartedForNotify() {},
         _agentCallActive: new Map(),
+        // 输入面静态图的 classic 宿主工厂（生产由 app-core / app-main 提供）：
+        // 本用例只测反馈提示，不驱动这些 seam 的界面副作用。
+        createSessionViewCommitHost: () => ({
+          identity: () => null,
+          read: () => ({}),
+          apply: () => {},
+          normalizeModel: () => ({}),
+        }),
+        createP2BootstrapCallActivityHost: () => ({ _agentCallActive: new Map() }),
+        createP2BootstrapDomHost: () => ({}),
+        createPollCoordinatorHost: () => ({}),
         _clearRecapForNewMessage() {},
         isRuntimeCalling: () => false,
         isInterruptSuppressed: () => false,
@@ -138,10 +149,25 @@ async function submitQueuedInputWith(deliveryAttempt) {
         fetch: async () => { throw new Error('unexpected fetch'); },
       },
       classic: (sandbox) => {
-        sandbox.loadSource('public/src/modules/persistent-input.js');
+        sandbox.loadSource('public/src/modules/kernel-state.js');
+        // 桥接期真初值（生产由 app-core 在 classic 相注册，ESM owner 认领时吸收）
+        sandbox.KernelState.defineKey('i18n-environment', 'currentLanguage', 'zh');
+        sandbox.KernelState.defineKey('orchestration', 'currentRuntimeAgentId', 'runtime-1');
+        sandbox.KernelState.defineKey('orchestration', '_switchEpoch', 0);
       },
     }, async (c) => {
-      await c.read('submitQueuedInput()');
+      // 焦点 runtime / 会话视图快照：生产由切换链与轮询写入各自 owner
+      const orchestration = await c.load('public/src/modules/orchestration-state.js');
+      orchestration.setCurrentRuntimeAgentId('runtime-1');
+      const storage = await c.load('public/src/modules/session-view-storage.js');
+      storage.setCurrentMessages([]);
+      storage.setCurrentInputRequests([]);
+      // 输入面实现（P4 输入面批次起是 ESM）
+      const persistent = await c.load('public/src/modules/persistent-input.js');
+      // toast-notify 在模块求值期把自己挂上 window.ClawToast（夹具桩会被覆盖）：
+      // 本用例只断言提示内容，按记录器落位。
+      c.window.ClawToast = { show: (value) => toasts.push(value), update() {} };
+      await persistent.submitQueuedInput();
     });
   } finally {
     logs.restore();

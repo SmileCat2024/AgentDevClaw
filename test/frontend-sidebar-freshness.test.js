@@ -35,7 +35,6 @@ function bootstrapClassic(sandbox) {
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/runtime-status.js');
-  sandbox.loadSource('public/src/modules/thread-store.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
   sandbox.loadSource('public/src/modules/sidebar-render.js');
   // app-main 的 classic 同步引擎（唯一 owner）：在装载期组合真实 host 并注册
@@ -191,6 +190,9 @@ async function withFreshnessCase(agentId, fn) {
       console: guard.recorder,
     },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主 createThreadStoreHost，
+// 必须先于 thread-store-domain 进入同一张图。
+    await c.load('public/src/modules/thread-store.js');
     // classic 装配 seam 已迁 ESM（W2-4 二段）：必须先求值，后续 host 模块在
     // 自己的模块求值期 spread 它注册的工厂。
     await c.load('public/src/modules/agent-data-loader.js');

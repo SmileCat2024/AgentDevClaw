@@ -214,10 +214,7 @@ function createHarness() {
         // 都是生产实现；boot 体挂在永不 resolve 的 __clawAuthReady 之后，
         // applyTheme / applyLanguage 与周期排程一并中和（用例不驱动首屏）。
         prepareClassicSandbox(sandbox);
-        // index.html 里仍是 classic 的生产脚本（先行序不含它们）：
-        //   - thread-store.js：thread-store-domain 装载期取它的宿主工厂。
         //（remote-connections 已迁 ESM：见 withHarness，模块相真实 import。）
-        sandbox.loadSource('public/src/modules/thread-store.js');
         fillMissingLateGlobals(sandbox);
         // 渲染效果出口：数据流与快照合并保持真实，只记录生产渲染入口的调用点。
         // 侧栏布局渲染器（index.html 后段的 classic sidebar-layout.js）在本文件
@@ -264,6 +261,9 @@ function createHarness() {
  */
 function withHarness(harness, fn) {
   return withP2EsmCase(harness.options, async (c) => {
+        // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+        // createThreadStoreHost，必须先于 thread-store-domain 进同一张图。
+    await c.load('public/src/modules/thread-store.js');
     await c.load('public/src/modules/remote-connections.js');
     return fn(c);
   });

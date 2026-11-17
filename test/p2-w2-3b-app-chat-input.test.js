@@ -27,6 +27,8 @@ const TOAST = 'public/src/modules/toast-notify.js';
 const COMPOSER_STATE = 'public/src/modules/p2-w2-3a-composer-state.js';
 const VOICE_STATE = 'public/src/modules/p2-w2-3a-voice-state.js';
 const VOICE_INPUT = 'public/src/modules/voice-input.js';
+// P4 输入面批次起 composer 是 ESM：草稿缓存桥键随它注册（生产由 p4-entry 装载）。
+const INPUT_COMPOSER = 'public/src/modules/input-composer.js';
 const AGENT = { id: 'memo', name: 'Memo' };
 const BLOCK = {
   type: 'app-chat-input',
@@ -169,7 +171,7 @@ function createCaseOptions({ language = 'zh' } = {}) {
       // session-view-state / app-main / app-ui 的宿主工厂都是生产实现，首屏 boot 与
       // 周期排程由基座关掉。基座之外按 index.html 顺序补输入面与分发器真实实现。
       prepareClassicSandbox(sandbox);
-      sandbox.loadSource('public/src/modules/input-composer.js');
+      // input-composer 已迁 ESM（P4 输入面批次）：用例体里 c.load，见 runInputCase。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
 
       // runtime-status.js 的 classic 词法容器：本用例不加载该文件（它不在快记条
@@ -226,6 +228,18 @@ function createCaseOptions({ language = 'zh' } = {}) {
   return { state, options };
 }
 
+/**
+ * 用例入口：先把输入面实现模块装进同一张图（生产 p4-entry 同款），再跑用例体。
+ * input-composer 的桥键（`_sessionInputCache` / `_cacheSessionInput`）是快记条
+ * 草稿路径的消费面。
+ */
+function runInputCase(options, fn) {
+  return withP2EsmCase(options, async (c) => {
+    await c.load(INPUT_COMPOSER);
+    return fn(c);
+  });
+}
+
 function jsonResponse(payload, ok = true, status = 200) {
   return { ok, status, json: async () => payload };
 }
@@ -263,7 +277,7 @@ async function spyToasts(c, state) {
 
 test('命名空间缝：window.AppChatInput 指向模块导出，内部函数不外泄', async () => {
   const { options } = createCaseOptions();
-  await withP2EsmCase(options, async (c) => {
+  await runInputCase(options, async (c) => {
     assert.equal(typeof c.window.AppChatInput, 'undefined', '模块求值前不存在（classic 相位已退出）');
     const mod = await c.load(MODULE);
 
@@ -309,7 +323,7 @@ test('命名空间缝：window.AppChatInput 指向模块导出，内部函数不
 
 test('render：配置不完整渲染空串；草稿取自 3a 会话草稿 owner', async () => {
   const { options } = createCaseOptions();
-  await withP2EsmCase(options, async (c) => {
+  await runInputCase(options, async (c) => {
     const mod = await c.load(MODULE);
     const composerState = await c.load(COMPOSER_STATE);
 
@@ -334,7 +348,7 @@ test('render：配置不完整渲染空串；草稿取自 3a 会话草稿 owner'
 
 test('submit：解析活动对话 → 投递 → 清输入与草稿（不新建会话）', async () => {
   const { state, options } = createCaseOptions();
-  await withP2EsmCase(options, async (c) => {
+  await runInputCase(options, async (c) => {
     const mod = await c.load(MODULE);
     await spyToasts(c, state);
     const composerState = await c.load(COMPOSER_STATE);
@@ -383,7 +397,7 @@ test('submit：解析活动对话 → 投递 → 清输入与草稿（不新建�
 
 test('submit：无活动对话时先建会话再投递（三个端点各自只调一次）', async () => {
   const { state, options } = createCaseOptions();
-  await withP2EsmCase(options, async (c) => {
+  await runInputCase(options, async (c) => {
     const mod = await c.load(MODULE);
     await spyToasts(c, state);
     mod.AppChatInput.render(AGENT, BLOCK);
@@ -414,7 +428,7 @@ test('submit：无活动对话时先建会话再投递（三个端点各自只�
 
 test('submit：语音占用期语义（转写中不发送 / 录音中点发送 = 停录 + 标记待发）', async () => {
   const { state, options } = createCaseOptions();
-  await withP2EsmCase(options, async (c) => {
+  await runInputCase(options, async (c) => {
     const mod = await c.load(MODULE);
     await spyToasts(c, state);
     await stubVoiceInput(c, state);
@@ -444,7 +458,7 @@ test('submit：语音占用期语义（转写中不发送 / 录音中点发送 =
 
 test('submit：防重入与失败保留输入', async () => {
   const { state, options } = createCaseOptions();
-  await withP2EsmCase(options, async (c) => {
+  await runInputCase(options, async (c) => {
     const mod = await c.load(MODULE);
     await spyToasts(c, state);
     const composerState = await c.load(COMPOSER_STATE);
@@ -481,7 +495,7 @@ test('submit：防重入与失败保留输入', async () => {
 
 test('分发器动作真实行为：input 打字/回车、send 按钮、voice 按钮', async () => {
   const { state, options } = createCaseOptions();
-  await withP2EsmCase(options, async (c) => {
+  await runInputCase(options, async (c) => {
     const mod = await c.load(MODULE);
     await spyToasts(c, state);
     await stubVoiceInput(c, state);
@@ -539,7 +553,7 @@ test('分发器动作真实行为：input 打字/回车、send 按钮、voice �
 
 test('守卫行为：仍 classic 的能力缺失时按原 typeof 语义跳过，不抛错也不改判', async () => {
   const { state, options } = createCaseOptions();
-  await withP2EsmCase(options, async (c) => {
+  await runInputCase(options, async (c) => {
     const mod = await c.load(MODULE);
     await spyToasts(c, state);
     mod.AppChatInput.render(AGENT, BLOCK);

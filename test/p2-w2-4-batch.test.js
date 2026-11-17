@@ -26,6 +26,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { loadModuleOnce } from './helpers/esm-module-loader.js';
+import { loadThreadEngine } from './helpers/thread-engine.js';
 import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 const MODULES = {
@@ -48,10 +49,8 @@ async function setupBatch() {
     return { ok: false, status: 0, json: async () => ({}) };
   };
   // 真实先行脚本序（test/p2-classic-hosts.js）：宿主工厂都是生产实现，首屏 boot 与
-  // 周期排程由基座关掉。线程引擎是 classic 刷新引擎（createThreadStoreHost 的窄宿主），
-  // 按生产顺序装真实文件。
+  // 周期排程由基座关掉。
   prepareClassicSandbox(ctx);
-  ctx.loadSource('public/src/modules/thread-store.js');
 
   const renders = [];
   ctx.renderCurrentMainView = () => { renders.push('render'); };
@@ -85,6 +84,9 @@ async function setupBatch() {
   };
 
   try {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+    // createThreadStoreHost，必须先于本批图求值（装载期计时器由 helper 记账丢弃）。
+    await loadThreadEngine();
     // 整批图只装载一次：唯一 query 只加在入口模块上，本批模块之间的静态 import
     // 保持无 query 的同一实例（否则每个实例都会重复注册桥键）。
     await loadModuleOnce(BATCH_ENTRY, { installGlobals: false });

@@ -1,57 +1,133 @@
 /**
  * persistent-input.js — Phase B-4
- * 持久输入框 / 队列系统
+ * 持久输入框 / 队列系统（classic → ESM，P4 T2 输入面批次）
  *
- * 包含（P2 W2-3a 之后仍在现在这个 classic 文件里的部分）：
+ * 包含（P2 W2-3a 之后仍在现在这个文件里的部分）：
  * - 常驻输入框渲染与交互（renderPersistentInput, onPersistentBtnClick, handlePersistentInputKey）
  * - 提交路径（submitQueuedInput、发送反馈窗口、动作按钮状态机）
- * - 排队气泡投影的会话重绑（rebindQueueProjectionForRuntime：首屏同步链直接
- *   调用，保留唯一 classic 实现）
+ * - 排队气泡投影的会话重绑（rebindQueueProjectionForRuntime）
  * - 中断操作（interruptAgent）
  * - 图片附件（按会话隔离的待发送桶与转存）
  * - 上次对话结束时间显示（_renderLastCallElapsed + setInterval）
  *
- * 已迁 ESM（P2 W2-3a）：队列气泡渲染与后端/SSE 队列快照同步 →
+ * 已迁 ESM：队列气泡渲染与后端/SSE 队列快照同步 →
  * p2-w2-3a-queue-projection.js；排队投影与结束时间状态 owner →
- * p2-w2-3a-input-queue-state.js / p2-w2-3a-call-elapsed-state.js。
+ * p2-w2-3a-input-queue-state.js / p2-w2-3a-call-elapsed-state.js
+ * （本文件 import 其活绑定与 setter，直读直写，不再经 window 访问器）。
  *
- * 依赖（全局，由 app-core.js / app-main.js / 已有模块提供）：
- * - t, escapeHtml, currentLanguage (app-core.js)
- * - currentRuntimeAgentId, currentInputRequests, _agentCallActive,
- *   _interruptSuppression, markInterruptPending, isInterruptSuppressed
- *   (app-core.js / app-main.js)
- * - isRuntimeCalling (runtime-status.js)
- * - renderAgentList (app-main.js)
- *   工单 037：状态变化不再手动戳渲染——提交/队列同步声明
- *   notifyInputSurfaceChanged (input-render.js)，签名去重由渲染器统一处理。
- * - isChatSurfaceActive, shouldRenderWorkspaceSurface (app-ui.js)
- * - autoResize (input-helpers.js)
- * - _voiceRecording, _voiceStopping, _voiceTranscribing, _voicePendingSend, stopVoiceRecording,
- *   _getSessionInputCacheKey, _restoreSessionInputDraft, _sessionInputCache,
- *   _cacheSessionInput, toggleVoiceRecording (voice-input.js)
- * - _clearRecapForNewMessage (recap-hint.js，已转 ESM，经 recap-hint 域桥键解析)
- * - _requestNotifyPermission (desktop-notify.js)
- * - beginFollowLatestEntryWindow, requestFollowLatest (chat-viewport.js)
- * - _lastRenderedNotificationRuntime (runtime-status.js)
- * - updateInputModelSwitcher, updateThinkingEffortSwitcher (input-model-switcher.js)
+ * 状态归属（P4 本批起）：
+ *   - 排队投影五键（域 input-queue）、结束时间一键（域 input-call-elapsed）的
+ *     owner 在各自 p2-w2-3a-* 模块；本文件原声明位置的 defineKey 保留为
+ *     **注册行**（未迁移消费方经访问器读写同一份状态），注册随本模块在模块相
+ *     执行，走 kernel-state 的「认领后补注册」路径，初值直接落进 owner 状态。
+ *   - 跨文件语音状态（域 voice-input）owner 是 p2-w2-3a-voice-state.js，import。
+ *   - 其余全部模块私有：发送重入 / 反馈窗口计时、图片桶、胶囊计时、附件预览、
+ *     动作按钮状态机、_callFinishTimerInterval。
+ *
+ * 命名导出：桥键同源函数（见文件末尾注册块）+ `onPersistentBtnClick` /
+ * `handlePersistentInputKey` / `handleInputPaste` / `onImageFilesSelected`
+ * （唯一生产消费方 input-composer，本批同批转换，直接 import）+
+ * `_resolvePendingImagesForTarget` / `clearPendingInputImages`（内部件，导出供
+ * 真实 import 测试；生产跨文件消费方为零）+ `__testInputState`（私有状态读写缝）。
+ *
+ * 外来键三选一结论（配方步 3）：
+ *   - import：状态 owner 与轻量宿主域（orchestration-state / session-view-storage /
+ *     composer-state / input-queue-state / call-elapsed-state / voice-state /
+ *     call-interrupt-host / session-view-commit-host / p2-bootstrap-call-activity /
+ *     i18n-environment-state / input-actions）+ 本批兄弟 input-composer。
+ *   - import 的 runtime-status 域状态：lastRenderedNotificationRuntime /
+ *     lastNotificationStatusPayload 及其 setter（owner p2-w2-2-runtime-status-owner）。
+ *   - `window.` 晚绑定（目标仍是 classic 或仍以桥键服务其他消费方；行尾注释标
+ *     定义域与收敛条件）：isRuntimeCalling / updateNotificationStatus（runtime-status）、
+ *     isChatSurfaceActive
+ *     （app-ui）、renderAgentList（sidebar-render）、normalizeAgentIdentity /
+ *     _getSessionInputCacheKey（app-main / app-core）、captureSessionViewToken
+ *     （session-view-state）、_markAgentCallStartedForNotify / _requestNotifyPermission
+ *     （desktop-notify）、escapeHtml（markdown-bootstrap）、refreshThreads /
+ *     getActiveThreadInputTarget / submitThreadInput（thread-store）、
+ *     _renderQueueBubbles / updateQueueIndicator / _syncPersistentInputUi
+ *     （input-queue 域桥）、notifyInputSurfaceChanged（input-render 桥）、
+ *     _clearRecapForNewMessage（recap-hint 桥）、updateInputModelSwitcher /
+ *     updateThinkingEffortSwitcher（input-model-switcher 桥）、
+ *     beginFollowLatestEntryWindow / requestFollowLatest（chat-viewport 桥）、
+ *     stopVoiceRecording（voice-input-api 桥）。
+ *     `window.SessionReference` / `ClawSlash` / `ClawToast` / `ClawFW.*` 是既有
+ *     公开命名空间协议。
+ *   - 无触线项：本文件不引用任何仍 classic 的顶层 let/const/class 词法绑定。
+ *
+ * 时相审计（R1/R2/R4）：
+ *   - classic 相零触达：本文件全部键的读写都在函数体内（首屏链的
+ *     readInputSurfaceModeState / rebindQueueProjectionForRuntime 由 boot.js 在
+ *     模块相触发，晚于本模块求值）。
+ *   - 顶层语句四条，从「classic 加载序」移到「模块求值相」等价：①桥键 / 状态
+ *     注册（同上，模块相即可）；②`window.migratePendingInputImages` 由散装赋值
+ *     改为 defineKey 桥键（消费方 thread-store 在接续换头时调用，属运行期）；
+ *     ③1s 胶囊 tick 的 `setInterval`（首帧渲染本身也由 renderInputRequests 驱动，
+ *     tick 起点差在毫秒级）；④`window.ClawFW.actions.registerMany`（分发器是
+ *     classic head 脚本，先于一切模块；动作目标元素只由本模块的 composer 渲染
+ *     产生，一定晚于注册）。
+ *   - sloppy → strict：原文件无 `'use strict'`，逐条核对无隐式全局赋值（跨文件
+ *     写点全部是 defineKey 桥键或 import 的 setter）、无 `with`、无顶层 `this`。
+ *
+ * 与 input-composer.js 的静态循环：两侧只在函数体互相调用（function 声明在模块
+ * 实例化阶段即初始化），求值期零解引用；装载顺序不影响语义。
  */
 
 // 渲染常驻输入框（agent 运行期间始终可见）
 //
-// ESM 迁移（P2 W2-3a）：排队气泡投影的五个状态键与「上次对话结束时间」的
-// 状态 owner 已移到 ESM（p2-w2-3a-input-queue-state.js /
-// p2-w2-3a-call-elapsed-state.js）。这里保留**classic 相注册**：首屏同步链
-// （app-main 顶层 applyLanguage → renderCurrentMainView → renderInputRequests
-// → rebindQueueProjectionForRuntime / readInputSurfaceModeState）与 1s 胶囊
-// tick 在这些键上读写，必须带真初值早于 deferred 模块可用；ESM owner 装载时
-// claim 吸收现值，之后 classic 读写经访问器转发，无双存储。
-//
 // 排队气泡投影的归属（会话隔离）：_queuedTexts / _pendingQueuedCount /
 // _localQueuedInputPending 始终属于一个 runtime，与图片桶、草稿同属输入面
-// 会话态家族。会话切换经 rebindQueueProjectionForRuntime（本文件，classic
-// 首屏同步边界）重绑，写入路径（p2-w2-3a-queue-projection 的
-// applyQueuedInputsTexts / submitQueuedInput 乐观态）一律带归属校验，
-// 旧会话的排队气泡不进入新会话的输入面。
+// 会话态家族。会话切换经 rebindQueueProjectionForRuntime（本文件）重绑，写入
+// 路径（p2-w2-3a-queue-projection 的 applyQueuedInputsTexts / submitQueuedInput
+// 乐观态）一律带归属校验，旧会话的排队气泡不进入新会话的输入面。
+//
+// 注册行（保持原声明位置）：owner 已由 p2-w2-3a-* 模块 claim，故这里的注册按
+// 「认领后补注册」把初值推入 owner 状态；尚未迁移的 classic 消费方
+// （runtime-status 的 call.finish 归零与结束时间写入）继续经访问器读写同一份
+// 状态，无双存储。注销条件：runtime-status 迁 ESM 并改 import 之后。
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { currentMessages, currentInputRequests } from './session-view-storage.js';
+import { sessionInputCache } from './p2-w2-3a-composer-state.js';
+import {
+  pendingQueuedCount,
+  queuedTexts,
+  localQueuedInputPending,
+  queuedProjectionRuntimeId,
+  setPendingQueuedCount,
+  setQueuedTexts,
+  setLocalQueuedInputPending,
+  setLastQueueBubbleSignature,
+  setQueuedProjectionRuntimeId,
+} from './p2-w2-3a-input-queue-state.js';
+import { lastCallFinishTime, clearLastCallFinishTime } from './p2-w2-3a-call-elapsed-state.js';
+import {
+  lastRenderedNotificationRuntime,
+  setLastRenderedNotificationRuntime,
+  lastNotificationStatusPayload,
+} from './p2-w2-2-runtime-status-owner.js';
+import {
+  voiceRecording,
+  voiceStopping,
+  voiceTranscribing,
+  voicePendingSend,
+  setVoicePendingSend,
+} from './p2-w2-3a-voice-state.js';
+import {
+  getNotificationCallStartedAt,
+  markInterruptPending,
+  isInterruptSuppressed,
+  clearInterruptSuppression,
+} from './call-interrupt-host.js';
+import { isSessionViewTokenCurrent } from './session-view-commit-host.js';
+import { callActivity } from './p2-bootstrap-call-activity.js';
+import { autoResize, newIdempotencyKey } from './input-actions.js';
+import {
+  showPersistentComposerCard,
+  applyComposerMode,
+  syncPersistentComposerSessionCard,
+} from './input-composer.js';
+
 window.KernelState.defineKey('input-queue', '_pendingQueuedCount', 0);
 window.KernelState.defineKey('input-queue', '_queuedTexts', []); // 仅用于气泡展示
 window.KernelState.defineKey('input-queue', '_localQueuedInputPending', false);
@@ -85,7 +161,7 @@ function _imageBucket() {
 
 // 接续会替换 Session 身份，但用户仍在同一条 Thread 对话中。将未发送附件
 // 随视图身份迁移到 successor；只由 thread-store 在确认同线程换头时调用。
-function migratePendingInputImages(fromKey, toKey) {
+export function migratePendingInputImages(fromKey, toKey) {
   if (typeof fromKey !== 'string' || !fromKey || typeof toKey !== 'string' || !toKey || fromKey === toKey) return;
   const source = _pendingImageBuckets.get(fromKey);
   if (!Array.isArray(source) || source.length === 0) return;
@@ -94,17 +170,17 @@ function migratePendingInputImages(fromKey, toKey) {
   _pendingImageBuckets.delete(fromKey);
   _renderAttachmentPreview();
 }
-window.migratePendingInputImages = migratePendingInputImages;
 
 // ── 上次对话结束时间显示 ──────────────────────────────────────────
-// _lastCallFinishTime 的 owner 已迁 ESM（p2-w2-3a-call-elapsed-state.js），
-// 注册行见上方状态区块。下面两个起始时间键零跨文件消费面，留在本文件。
+// _lastCallFinishTime 的 owner 在 p2-w2-3a-call-elapsed-state.js（import 活绑定
+// 与语义 clear），注册行见上方状态区块。下面两个起始时间键零跨文件消费面，
+// 留在本文件。
 let _callFinishTimerInterval = null;
 let _runCapsuleStartAt = 0; // 运行期间胶囊使用的本轮 call 起始时间
 let _runCapsuleStartConfirmed = false; // 起始时间是否已由运行时快照确认（未确认前允许快照值回拨纠正）
 
-function resetCallElapsedForSwitch() {
-  _lastCallFinishTime = 0;
+export function resetCallElapsedForSwitch() {
+  clearLastCallFinishTime();
   _runCapsuleStartAt = 0;
   _runCapsuleStartConfirmed = false;
   const container = document.getElementById('user-input-container');
@@ -118,7 +194,7 @@ const _CAPSULE_CLOCK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill
 function formatCallElapsed(finishTime) {
   const elapsed = Math.max(0, Date.now() - finishTime);
   const totalSeconds = Math.floor(elapsed / 1000);
-  const zh = currentLanguage === 'zh';
+  const zh = getCurrentLanguage() === 'zh';
   if (totalSeconds < 600) {
     if (totalSeconds < 60) {
       return zh ? totalSeconds + ' 秒前' : totalSeconds + 's ago';
@@ -142,7 +218,7 @@ function formatCallElapsed(finishTime) {
 // 运行期间的整轮用时："已运行 12 秒" / "已运行 1 分 5 秒" / "已运行 1 小时 5 分"
 function formatRunningElapsed(startAt) {
   const totalSeconds = Math.floor(Math.max(0, Date.now() - startAt) / 1000);
-  const zh = currentLanguage === 'zh';
+  const zh = getCurrentLanguage() === 'zh';
   if (totalSeconds < 60) {
     return zh ? '已运行 ' + totalSeconds + ' 秒' : 'Running ' + totalSeconds + 's';
   }
@@ -156,7 +232,7 @@ function formatRunningElapsed(startAt) {
   return zh ? '已运行 ' + h + ' 小时 ' + restM + ' 分' : 'Running ' + h + 'h ' + restM + 'm';
 }
 
-function _ensureInputMetaBar(container) {
+export function _ensureInputMetaBar(container) {
   let bar = container.querySelector('.input-meta-bar');
   if (bar) return bar;
 
@@ -173,7 +249,7 @@ function _ensureInputMetaBar(container) {
   return bar;
 }
 
-function _cleanupInputMetaBar(container) {
+export function _cleanupInputMetaBar(container) {
   const bar = container.querySelector('.input-meta-bar');
   if (bar && bar.children.length === 0) {
     bar.remove();
@@ -184,12 +260,12 @@ function _cleanupInputMetaBar(container) {
 // 正在占用输入区。读交互面容器的 DOM 事实（非空即接管），不依赖类标记——
 // 历史 choice-input-active 类写在 user-input-container 上，交互面解耦后
 // 已无写入方，类协议随之退役。
-function _interactiveSurfaceOccupiesInput() {
+export function _interactiveSurfaceOccupiesInput() {
   const surface = document.getElementById('choice-input-container');
   return !!surface && surface.children.length > 0;
 }
 
-function _renderLastCallElapsed() {
+export function _renderLastCallElapsed() {
   const container = document.getElementById('user-input-container');
   if (!container) return;
 
@@ -206,9 +282,11 @@ function _renderLastCallElapsed() {
     return;
   }
 
-  const calling = isRuntimeCalling(currentRuntimeAgentId);
+  // 桥接期：isRuntimeCalling 定义于 runtime-status（运行时状态域收敛时改 import）
+  const calling = window.isRuntimeCalling(currentRuntimeAgentId);
 
-  if ((!calling && !_lastCallFinishTime) || !isChatSurfaceActive()) {
+  // 桥接期：isChatSurfaceActive 定义于 app-ui（编排域收敛时改 import）
+  if ((!calling && !lastCallFinishTime) || !window.isChatSurfaceActive()) {
     if (el) {
       el.remove();
       _cleanupInputMetaBar(container);
@@ -234,7 +312,8 @@ function _renderLastCallElapsed() {
     // 兜底，之后的第一个有效快照值即使更早也直接采纳（服务器侧记录了真实
     // 起始时间，刷新后应回拨纠正）；确认过快照后只接受更新的起始时间，
     // 防止上一轮 call 的旧值把时钟拨回去。
-    const snapshotStart = Number(_lastRenderedNotificationRuntime?.callStartedAt) || 0;
+    // 运行时快照来源：runtime-status 域 owner 的活绑定（本模块 import 直读）
+    const snapshotStart = Number(lastRenderedNotificationRuntime?.callStartedAt) || 0;
     if (snapshotStart > 0) {
       if (!_runCapsuleStartConfirmed || snapshotStart > _runCapsuleStartAt) {
         _runCapsuleStartAt = snapshotStart;
@@ -251,7 +330,7 @@ function _renderLastCallElapsed() {
   _runCapsuleStartAt = 0;
   _runCapsuleStartConfirmed = false;
   el.classList.remove('is-running');
-  el.innerHTML = `${_CAPSULE_CLOCK_SVG}<span>${formatCallElapsed(_lastCallFinishTime)}</span>`;
+  el.innerHTML = `${_CAPSULE_CLOCK_SVG}<span>${formatCallElapsed(lastCallFinishTime)}</span>`;
 }
 
 // ── Recap (离开摘要) → modules/recap-hint.js (Phase A-7, 2026-07-03) ──
@@ -336,7 +415,7 @@ function _getAttachmentPreviewTargets() {
   return targets;
 }
 
-function _renderAttachmentPreview() {
+export function _renderAttachmentPreview() {
   const previews = _getAttachmentPreviewTargets();
   if (previews.length === 0) return;
   const cards = Array.from(document.querySelectorAll('.user-input-card'));
@@ -355,9 +434,9 @@ function _renderAttachmentPreview() {
   }
   const html = pendingImages.map(function(img, idx) {
     return '<div class="attachment-thumb">' +
-      '<img src="' + img._previewUrl + '" alt="' + escapeHtml(img.source || '') + '">' +
+      '<img src="' + img._previewUrl + '" alt="' + window.escapeHtml(img.source || '') + '">' +
       '<button class="attachment-remove" type="button" data-action="composer.removePendingImage" data-args="[' + idx + ']" title="' +
-        (currentLanguage === 'zh' ? '移除' : 'Remove') + '">×</button>' +
+        (getCurrentLanguage() === 'zh' ? '移除' : 'Remove') + '">×</button>' +
       '</div>';
   }).join('') + refChipsHtml;
   previews.forEach(function(preview) {
@@ -373,7 +452,7 @@ function _renderAttachmentPreview() {
  * 返回可直接随消息发送的 images；failedCount > 0 时调用方必须显式中止——
  * 附件绝不静默丢弃。
  */
-async function _resolvePendingImagesForTarget(targetAgentId, bucketKey = _imageBucketKey()) {
+export async function _resolvePendingImagesForTarget(targetAgentId, bucketKey = _imageBucketKey()) {
   let failedCount = 0;
   const images = [];
   const targetHostKey = _imageHostKey(targetAgentId);
@@ -418,15 +497,15 @@ async function _resolvePendingImagesForTarget(targetAgentId, bucketKey = _imageB
  * 清空指定会话的图片桶（缺省当前会话）。发送成功后按发送时刻捕获的 key
  * 清空，不误伤其他会话挂着的附件；渲染面读当前会话桶，重渲染幂等。
  */
-function clearPendingInputImages(bucketKey) {
+export function clearPendingInputImages(bucketKey) {
   const key = typeof bucketKey === 'string' ? bucketKey : _imageBucketKey();
   _pendingImageBuckets.delete(key);
   _renderAttachmentPreview();
 }
 
-// ── window 导出 ────────────────────────────────────────────────────
+// ── 粘贴 / 文件选择入口（原 window 导出；唯一生产消费方 input-composer 改 import）──
 
-window.handleInputPaste = function(event) {
+export function handleInputPaste(event) {
   const items = event.clipboardData?.items;
   if (!items) return;
   let hasImage = false;
@@ -440,15 +519,15 @@ window.handleInputPaste = function(event) {
   if (hasImage) {
     event.preventDefault();
   }
-};
+}
 
-window.onImageFilesSelected = function(input) {
+export function onImageFilesSelected(input) {
   if (!input.files) return;
   for (const file of input.files) {
     _addImageFile(file);
   }
   input.value = ''; // reset so same file can be re-selected
-};
+}
 
 // 已收敛为模块级（全仓无其他消费面；移除动作经 composer.removePendingImage 触发）
 const removePendingImage = function(idx) {
@@ -460,23 +539,25 @@ const removePendingImage = function(idx) {
 
 // Composer 卡常驻 DOM（input-composer.js）：persistent 端点只是模式属性，
 // 这里做幂等的"确保挂载 + 属性级更新 + 会话重绑"，不再每次新建元素。
-function renderPersistentInput(container) {
-  // 先渲染队列气泡
-  _renderQueueBubbles(container);
+export function renderPersistentInput(container) {
+  // 先渲染队列气泡（桥接期：定义于 p2-w2-3a-queue-projection，队列投影域收敛时改 import）
+  window._renderQueueBubbles(container);
 
   const card = showPersistentComposerCard(container);
   applyComposerMode(card);
   syncPersistentComposerSessionCard(container);
-  _syncPersistentInputUi();
+  // 桥接期：定义于 p2-w2-3a-queue-projection（队列投影域收敛时改 import）
+  window._syncPersistentInputUi();
   // Restore attachment preview if there are pending images (e.g. after re-render)
   _renderAttachmentPreview();
   // Update model switcher button with current preset name
-  updateInputModelSwitcher();
+  // 桥接期：定义于 input-model-switcher（模型切换域收敛时改 import）
+  window.updateInputModelSwitcher();
   // Update thinking effort switcher button
-  updateThinkingEffortSwitcher();
+  window.updateThinkingEffortSwitcher();
 }
 
-function onPersistentBtnClick(submit) {
+export function onPersistentBtnClick(submit) {
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
   if (_submitInFlight) return;         // fetch 进行中：阻止连点（防误触暂停）
@@ -492,14 +573,15 @@ function onPersistentBtnClick(submit) {
     interruptAgent();
     return;
   }
-  if (_voiceTranscribing) return;
-  if (_voiceRecording) {
-    _voicePendingSend = true;
-    stopVoiceRecording();
+  if (voiceTranscribing) return;
+  if (voiceRecording) {
+    setVoicePendingSend(true);
+    // 桥接期：定义于 voice-input（voice-input-api 域，语音域收敛时改 import）
+    window.stopVoiceRecording();
     return;
   }
-  if (_voiceStopping) {
-    _voicePendingSend = true;
+  if (voiceStopping) {
+    setVoicePendingSend(true);
     return;
   }
   return typeof submit === 'function' ? submit() : submitQueuedInput();
@@ -512,7 +594,7 @@ function _setActionBtnStop() {
   btn.classList.remove('is-interrupting', 'is-sending');
   btn.classList.add('is-stop');
   btn.removeAttribute('aria-busy');
-  btn.title = currentLanguage === 'zh' ? '停止当前任务' : 'Stop current task';
+  btn.title = getCurrentLanguage() === 'zh' ? '停止当前任务' : 'Stop current task';
   const iconSend = btn.querySelector('.icon-send');
   const iconStop = btn.querySelector('.icon-stop');
   if (iconSend) iconSend.style.display = 'none';
@@ -526,7 +608,7 @@ function _setActionBtnInterrupting() {
   btn.classList.remove('is-sending');
   btn.classList.add('is-stop', 'is-interrupting');
   btn.setAttribute('aria-busy', 'true');
-  btn.title = currentLanguage === 'zh' ? '正在停止当前任务…' : 'Stopping current task…';
+  btn.title = getCurrentLanguage() === 'zh' ? '正在停止当前任务…' : 'Stopping current task…';
   const iconSend = btn.querySelector('.icon-send');
   const iconStop = btn.querySelector('.icon-stop');
   if (iconSend) iconSend.style.display = 'none';
@@ -539,7 +621,7 @@ function _setActionBtnSend() {
   if (!btn) return;
   btn.classList.remove('is-stop', 'is-interrupting', 'is-sending');
   btn.removeAttribute('aria-busy');
-  btn.title = currentLanguage === 'zh' ? '发送' : 'Send';
+  btn.title = getCurrentLanguage() === 'zh' ? '发送' : 'Send';
   const iconSend = btn.querySelector('.icon-send');
   const iconStop = btn.querySelector('.icon-stop');
   if (iconSend) iconSend.style.display = '';
@@ -554,7 +636,7 @@ function _setActionBtnSending() {
   btn.classList.remove('is-stop', 'is-interrupting');
   btn.classList.add('is-sending');
   btn.setAttribute('aria-busy', 'true');
-  btn.title = currentLanguage === 'zh' ? '发送中…' : 'Sending…';
+  btn.title = getCurrentLanguage() === 'zh' ? '发送中…' : 'Sending…';
   const iconSend = btn.querySelector('.icon-send');
   const iconStop = btn.querySelector('.icon-stop');
   if (iconSend) iconSend.style.display = 'none';
@@ -606,10 +688,11 @@ function _endSubmitFeedbackWindow() {
   }
 }
 
-function _syncPersistentActionButton() {
+export function _syncPersistentActionButton() {
   if (currentRuntimeAgentId && isInterruptSuppressed(currentRuntimeAgentId)) {
     _setActionBtnInterrupting();
-  } else if (currentRuntimeAgentId && isRuntimeCalling(currentRuntimeAgentId)) {
+  } else if (currentRuntimeAgentId
+    && window.isRuntimeCalling(currentRuntimeAgentId)) { // 桥接期：定义于 runtime-status
     _setActionBtnStop();
   } else {
     _setActionBtnSend();
@@ -618,10 +701,7 @@ function _syncPersistentActionButton() {
 
 // ── 排队气泡渲染 / 后端队列同步 / SSE 快照消费 →
 //     p2-w2-3a-queue-projection.js（P2 W2-3a，esm）────────────────────
-// 下面五个入口已迁 ESM，仍有 classic 消费方：按 input-queue 域的 behavior
-// 桥键解析（_renderQueueBubbles / updateQueueIndicator / _syncQueueFromBackend
-// / _syncPersistentInputUi / applyQueuedInputsTexts）。本文件只留
-// rebindQueueProjectionForRuntime——它在首屏同步渲染链里被直接调用。
+// 该域五个入口仍以 input-queue 域的 behavior 桥键服务其他消费方
 
 /**
  * 排队气泡投影的会话重绑（幂等）：runtime 变化时旧投影立即失效。新会话
@@ -629,67 +709,70 @@ function _syncPersistentActionButton() {
  * 缓存非焦点期间的队列变化）；缓存缺席时置空，由轮询 / SSE 事件在下个
  * 周期补齐。
  *
- * 保留 classic 的唯一理由：`renderInputRequests`（classic input-render.js）
- * 在首屏同步链与每次输入面渲染时直接调用本函数，早于 deferred 模块执行。
- * 它读写的是 input-queue 域 owner（ESM）的状态，经访问器转发。
+ * 读写的是 input-queue 域 owner（import 的活绑定 + setter）。消费方
+ * input-render（首屏渲染链与每次输入面渲染）与 queue-projection 经桥键调用。
  */
-function rebindQueueProjectionForRuntime(runtimeId) {
+export function rebindQueueProjectionForRuntime(runtimeId) {
   const next = String(runtimeId || '').trim();
-  if (String(_queuedProjectionRuntimeId || '').trim() === next) return;
-  _queuedProjectionRuntimeId = next || null;
-  _queuedTexts = [];
-  _pendingQueuedCount = 0;
-  _localQueuedInputPending = false;
-  if (_queuedProjectionRuntimeId) {
-    const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(_queuedProjectionRuntimeId);
+  if (String(queuedProjectionRuntimeId || '').trim() === next) return;
+  setQueuedProjectionRuntimeId(next || null);
+  setQueuedTexts([]);
+  setPendingQueuedCount(0);
+  setLocalQueuedInputPending(false);
+  if (queuedProjectionRuntimeId) {
+    // 既有公开命名空间协议（sse-client 的排队快照缓存对外面）
+    const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(queuedProjectionRuntimeId);
     if (cached && Array.isArray(cached.items)) {
       const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(
-        cached.items, Date.now(), _queuedProjectionRuntimeId) || [];
-      _queuedTexts = texts.slice();
+        cached.items, Date.now(), queuedProjectionRuntimeId) || [];
+      setQueuedTexts(texts.slice());
       // 待发送计数只认未被领取的用户输入：已 claim（inputLease）的项正在
       // 执行，不是排队（与 reconcileQueuedTexts 的展示过滤同一语义）
-      _pendingQueuedCount = cached.items.filter((item) => item?.kind !== 'reminder' && !item?.inputLease).length;
+      setPendingQueuedCount(cached.items.filter((item) => item?.kind !== 'reminder' && !item?.inputLease).length);
     }
   }
-  _lastQueueBubbleSignature = '';
+  setLastQueueBubbleSignature('');
 }
 
-function handlePersistentInputKey(event) {
+export function handlePersistentInputKey(event) {
   if (event.key === 'Enter') {
     if (event.ctrlKey || event.shiftKey) {
       return;
     }
     event.preventDefault();
-    if (_voiceTranscribing) {
-      _voicePendingSend = true;
+    if (voiceTranscribing) {
+      setVoicePendingSend(true);
       return;
     }
-    if (_voiceRecording) {
-      _voicePendingSend = true;
-      stopVoiceRecording();
+    if (voiceRecording) {
+      setVoicePendingSend(true);
+      // 桥接期：定义于 voice-input（voice-input-api 域，语音域收敛时改 import）
+      window.stopVoiceRecording();
       return;
     }
     submitQueuedInput();
   }
 }
 
-async function submitQueuedInput() {
+export async function submitQueuedInput() {
   if (_submitInFlight) return;
   // 首次发送消息时请求桌面通知权限（用户手势内请求）-> modules/desktop-notify.js
-  _requestNotifyPermission();
+  // 桥接期：classic 顶层函数（桌面通知域收敛时改 import）
+  window._requestNotifyPermission();
   const textarea = document.getElementById('input-persistent');
   if (!textarea) return;
   const text = textarea.value.trim();
   const sessionReferenceCount = (window.SessionReference?.peek?.() || []).length;
   if (!text && _imageBucket().length === 0 && sessionReferenceCount === 0) return;
   const targetRuntimeId = currentRuntimeAgentId;
-  const viewToken = captureSessionViewToken(targetRuntimeId);
+  // 桥接期：定义于 session-view-state（会话视图状态域收敛时改 import）
+  const viewToken = window.captureSessionViewToken(targetRuntimeId);
   const echoFromIndex = currentMessages.length;
   // 一致性校验后的线程输入目标（getActiveThreadInputTarget）：全局指向与
   // 当前视图不符（用户已切走、残留未清）时为 null——消息走当前视图常规
   // 路径，绝不串到别的线程（会话绝对隔离）。
   const activeConversation = window.getActiveThreadInputTarget?.();
-  const targetCacheKey = textarea.dataset.sessionKey || _getSessionInputCacheKey();
+  const targetCacheKey = textarea.dataset.sessionKey || window._getSessionInputCacheKey();
   // 图片桶 key 同步捕获（与 targetCacheKey 同款防漂移语义）：await 期间切换
   // 会话后，resolve / 成功清空只作用于发起会话的桶。
   const targetImageKey = _imageBucketKey();
@@ -712,7 +795,7 @@ async function submitQueuedInput() {
     // 任何附件失败都显式中止（输入与预览保留，供用户重试），绝不静默丢弃。
     const resolved = await _resolvePendingImagesForTarget(targetRuntimeId, targetImageKey);
     if (resolved.failedCount > 0) {
-      throw new Error(currentLanguage === 'zh'
+      throw new Error(getCurrentLanguage() === 'zh'
         ? '部分图片上传失败：请重试或移除失败的附件'
         : 'Some image uploads failed: retry or remove the failed attachments');
     }
@@ -722,8 +805,8 @@ async function submitQueuedInput() {
       window.ClawToast?.show?.({
         id: `input-navigation-${targetRuntimeId}`,
         status: 'info',
-        title: currentLanguage === 'zh' ? '会话已切换，消息尚未发送' : 'Session changed; message not sent',
-        description: currentLanguage === 'zh' ? '草稿已保留，切回原会话后可重试。' : 'Your draft is preserved. Return to the original session to retry.',
+        title: getCurrentLanguage() === 'zh' ? '会话已切换，消息尚未发送' : 'Session changed; message not sent',
+        description: getCurrentLanguage() === 'zh' ? '草稿已保留，切回原会话后可重试。' : 'Your draft is preserved. Return to the original session to retry.',
       });
       return;
     }
@@ -740,15 +823,17 @@ async function submitQueuedInput() {
       });
       const liveTextarea = document.getElementById('input-persistent')
         || document.querySelector('.user-input-textarea:not([disabled])');
-      if (liveTextarea && (liveTextarea.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
+      if (liveTextarea && (liveTextarea.dataset?.sessionKey || window._getSessionInputCacheKey()) === targetCacheKey) {
         liveTextarea.value = '';
         autoResize(liveTextarea);
       }
       clearPendingInputImages(targetImageKey);
-      if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
-      _clearRecapForNewMessage();
+      if (targetCacheKey) delete sessionInputCache[targetCacheKey];
+      // 桥接期：定义于 recap-hint（recap-hint 域桥键，离开摘要域收敛时改 import）
+      window._clearRecapForNewMessage();
       window.refreshThreads?.(true);
-      updateQueueIndicator();
+      // 桥接期：定义于 p2-w2-3a-queue-projection（队列投影域收敛时改 import）
+      window.updateQueueIndicator();
       // 线程寻址端点只回答两件事：输入是否被接住（HTTP 成功 = 是），以及
       // 本次投递尝试是否当场送达（deliveryAttempt.delivered）。交接挡板 /
       // head runtime 未就绪时 delivered=0 是正常状态——指令已在 Thread Inbox，
@@ -764,15 +849,15 @@ async function submitQueuedInput() {
         // 立即轮询 / SSE 回流。
         if (targetRuntimeId) {
           clearInterruptSuppression(targetRuntimeId);
-          _markAgentCallStartedForNotify(targetRuntimeId);
-          _agentCallActive.set(targetRuntimeId, true);
+          window._markAgentCallStartedForNotify(targetRuntimeId); // 桥接期：desktop-notify（classic）
+          callActivity._agentCallActive.set(targetRuntimeId, true);
           _syncPersistentActionButton();
-          renderAgentList();
+          window.renderAgentList(); // 桥接期：sidebar-render（classic）
         }
         if (isSessionViewTokenCurrent(viewToken)) {
-          if (typeof beginFollowLatestEntryWindow === 'function') beginFollowLatestEntryWindow();
-          if (typeof requestFollowLatest === 'function') {
-            requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+          if (typeof window.beginFollowLatestEntryWindow === 'function') window.beginFollowLatestEntryWindow();
+          if (typeof window.requestFollowLatest === 'function') {
+            window.requestFollowLatest({ forceEnable: true, behavior: 'auto' });
           }
           window.ClawFW?.requestImmediatePoll?.();
         }
@@ -780,7 +865,7 @@ async function submitQueuedInput() {
         window.ClawToast?.show?.({
           id: `thread-staged-input-${activeConversation.threadId}`,
           status: 'info',
-          title: currentLanguage === 'zh'
+          title: getCurrentLanguage() === 'zh'
             ? '已暂存 · 新会话就绪后自动继续'
             : 'Staged · will continue in the successor session',
           autoDismiss: 5000,
@@ -817,17 +902,18 @@ async function submitQueuedInput() {
       const liveTextarea = document.getElementById('input-persistent')
         || document.querySelector('.user-input-textarea:not([disabled])');
       if (liveTextarea
-        && (liveTextarea.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
+        && (liveTextarea.dataset?.sessionKey || window._getSessionInputCacheKey()) === targetCacheKey) {
         liveTextarea.value = '';
         autoResize(liveTextarea);
       }
       clearPendingInputImages(targetImageKey);
-      if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
+      if (targetCacheKey) delete sessionInputCache[targetCacheKey];
       const stillOwnsView = isSessionViewTokenCurrent(viewToken);
       if (stillOwnsView) {
-        _clearRecapForNewMessage();
-        beginFollowLatestEntryWindow();
-        requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+        window._clearRecapForNewMessage(); // 桥接期：定义于 recap-hint
+        // 桥接期：定义于 chat-viewport（聊天视口域收敛时改 import）
+        window.beginFollowLatestEntryWindow();
+        window.requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       }
       // 只有当 agent 正在 calling 时才显示排队气泡。
       // agent 空闲时后端会立即消费输入，不需要排队指示。
@@ -838,20 +924,20 @@ async function submitQueuedInput() {
         // / hold / runtime 未就绪）才提示已暂存。刷新线程数据以同步
         // pendingTexts（真滞留时渲染暂存气泡）。
         window.refreshThreads?.(true);
-        updateQueueIndicator();
+        window.updateQueueIndicator(); // 桥接期：定义于 p2-w2-3a-queue-projection
         if (Number(delivery.deliveryAttempt?.delivered) > 0) {
           if (targetRuntimeId) {
             clearInterruptSuppression(targetRuntimeId);
-            _markAgentCallStartedForNotify(targetRuntimeId);
-            _agentCallActive.set(targetRuntimeId, true);
+            window._markAgentCallStartedForNotify(targetRuntimeId); // 桥接期：desktop-notify
+            callActivity._agentCallActive.set(targetRuntimeId, true);
             _syncPersistentActionButton();
-            renderAgentList();
+            window.renderAgentList(); // 桥接期：sidebar-render
           }
         } else {
           window.ClawToast?.show?.({
             id: `thread-staged-gw-${targetRuntimeId}`,
             status: 'info',
-            title: currentLanguage === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
+            title: getCurrentLanguage() === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
             autoDismiss: 5000,
           });
         }
@@ -866,11 +952,11 @@ async function submitQueuedInput() {
           // 乐观气泡只写入提交目标的投影：await 期间用户可能已切走，新会话
           // 的输入面不冒出本会话的排队文本（服务端队列与 SSE 乐观锚点仍
           // 完整记录，切回时经快照恢复）。
-          _localQueuedInputPending = true;
-          _pendingQueuedCount++;
-          _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
+          setLocalQueuedInputPending(true);
+          setPendingQueuedCount(pendingQueuedCount + 1);
+          queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
         }
-        updateQueueIndicator();
+        window.updateQueueIndicator(); // 桥接期：定义于 p2-w2-3a-queue-projection
       } else if (targetRuntimeId) {
         // 空闲直投（lease / 即时消费）：乐观回显先上屏，真实消息经
         // poll 回流后由对账无缝替换；排队路径走上方气泡，不回显。
@@ -880,14 +966,14 @@ async function submitQueuedInput() {
           window.ClawFW?.pushOptimisticUserEcho?.({ text, images, sessionReferences: sessionRefs, fromIndex: echoFromIndex });
         }
         clearInterruptSuppression(targetRuntimeId);
-        _markAgentCallStartedForNotify(targetRuntimeId);
-        _agentCallActive.set(targetRuntimeId, true);
+        window._markAgentCallStartedForNotify(targetRuntimeId); // 桥接期：desktop-notify
+        callActivity._agentCallActive.set(targetRuntimeId, true);
         _syncPersistentActionButton();
-        renderAgentList();
+        window.renderAgentList(); // 桥接期：sidebar-render
       }
       // 排队乐观态/提交完成后的状态变化（工单 037）：声明变更即可，
       // 渲染器按签名差异决定是否重建。
-      notifyInputSurfaceChanged(currentInputRequests || []);
+      window.notifyInputSurfaceChanged(currentInputRequests || []); // 桥接期：定义于 input-render
       // 削掉 0–300ms 轮询相位：立即取一轮状态/消息（in-flight 自守卫）
       window.ClawFW?.requestImmediatePoll?.();
     } else {
@@ -914,10 +1000,10 @@ async function submitQueuedInput() {
       id: `user-turn-failed-${targetRuntimeId}`,
       status: isChoiceConflict ? 'info' : 'error',
       title: isChoiceConflict
-        ? (currentLanguage === 'zh' ? '请先完成选择' : 'Please complete the pending choice first')
-        : (currentLanguage === 'zh' ? '消息发送失败' : 'Failed to send message'),
+        ? (getCurrentLanguage() === 'zh' ? '请先完成选择' : 'Please complete the pending choice first')
+        : (getCurrentLanguage() === 'zh' ? '消息发送失败' : 'Failed to send message'),
       description: isChoiceConflict
-        ? (currentLanguage === 'zh' ? '输入内容已保留，完成选择后可继续发送。' : 'Your draft is preserved. Send it after completing the choice.')
+        ? (getCurrentLanguage() === 'zh' ? '输入内容已保留，完成选择后可继续发送。' : 'Your draft is preserved. Send it after completing the choice.')
         : (e instanceof Error ? e.message : String(e)),
       autoDismiss: 6000,
     });
@@ -931,22 +1017,23 @@ async function submitQueuedInput() {
 //   { ok: true }                    — 打断请求已被服务端接受
 //   { ok: false, reason }           — 未发出或失败（'no-runtime' / 'suppressed'
 //                                     / 'request-failed'，失败原因已自行 toast）
-async function interruptAgent() {
+export async function interruptAgent() {
   if (!currentRuntimeAgentId) return { ok: false, reason: 'no-runtime' };
   const targetRuntimeId = currentRuntimeAgentId;
   if (isInterruptSuppressed(targetRuntimeId)) return { ok: false, reason: 'suppressed' };
-  const wasCalling = isRuntimeCalling(targetRuntimeId);
+  // 桥接期：定义于 runtime-status（运行时状态域收敛时改 import）
+  const wasCalling = window.isRuntimeCalling(targetRuntimeId);
 
   // 立即进入粘性的 interrupting 状态；中间阶段仍然是“正在停止”，绝不伪装成
   // idle。后续同一 call 的 callActive:true 只是排空中的旧状态，不能恢复按钮。
   markInterruptPending(targetRuntimeId, getNotificationCallStartedAt(lastNotificationStatusPayload));
-  _agentCallActive.delete(targetRuntimeId);
-  _localQueuedInputPending = false;
-  _pendingQueuedCount = 0;
-  _queuedTexts = [];
-  _queuedProjectionRuntimeId = String(targetRuntimeId || '').trim() || null;
-  _lastQueueBubbleSignature = '';
-  updateQueueIndicator();
+  callActivity._agentCallActive.delete(targetRuntimeId);
+  setLocalQueuedInputPending(false);
+  setPendingQueuedCount(0);
+  setQueuedTexts([]);
+  setQueuedProjectionRuntimeId(String(targetRuntimeId || '').trim() || null);
+  setLastQueueBubbleSignature('');
+  window.updateQueueIndicator(); // 桥接期：定义于 p2-w2-3a-queue-projection
   _setActionBtnInterrupting();
   // 明确展示过渡态，直到同一 call 的终态到达。
   const statusEl = document.getElementById('notification-status');
@@ -956,14 +1043,14 @@ async function interruptAgent() {
     const phaseEl = document.getElementById('notification-phase');
     const summaryEl = document.getElementById('notification-summary');
     const metricsEl = document.getElementById('notification-metrics');
-    if (phaseEl) phaseEl.textContent = currentLanguage === 'zh' ? '正在停止…' : 'Stopping…';
-    if (summaryEl) summaryEl.textContent = currentLanguage === 'zh'
+    if (phaseEl) phaseEl.textContent = getCurrentLanguage() === 'zh' ? '正在停止…' : 'Stopping…';
+    if (summaryEl) summaryEl.textContent = getCurrentLanguage() === 'zh'
       ? '等待当前步骤安全退出'
       : 'Waiting for the current step to exit safely';
     if (metricsEl) metricsEl.innerHTML = '';
   }
-  _lastRenderedNotificationRuntime = null;
-  renderAgentList();
+  setLastRenderedNotificationRuntime(null);
+  window.renderAgentList(); // 桥接期：sidebar-render（classic）
 
   console.log(`[Interrupt] sending POST /api/agents/${targetRuntimeId}/interrupt`);
   try {
@@ -982,16 +1069,18 @@ async function interruptAgent() {
     // 请求没有被接受时才回滚 interrupting。成功请求没有任何超时回滚；它必须
     // 等待 call.finish/callActive:false，以免旧轮询制造“假恢复”。
     clearInterruptSuppression(targetRuntimeId);
-    if (wasCalling) _agentCallActive.set(targetRuntimeId, true);
-    if (normalizeAgentIdentity(currentRuntimeAgentId) === normalizeAgentIdentity(targetRuntimeId)) {
+    if (wasCalling) callActivity._agentCallActive.set(targetRuntimeId, true);
+    // 桥接期：normalizeAgentIdentity 定义于 app-core（classic）
+    if (window.normalizeAgentIdentity(currentRuntimeAgentId) === window.normalizeAgentIdentity(targetRuntimeId)) {
       _syncPersistentActionButton();
-      updateNotificationStatus(lastNotificationStatusPayload || null);
+      // 桥接期：updateNotificationStatus 定义于 runtime-status（classic）
+      window.updateNotificationStatus(lastNotificationStatusPayload || null);
     }
-    renderAgentList();
+    window.renderAgentList(); // 桥接期：sidebar-render（classic）
     window.ClawToast?.show?.({
       id: `interrupt-failed-${targetRuntimeId}`,
       status: 'error',
-      title: currentLanguage === 'zh' ? '停止请求失败' : 'Stop request failed',
+      title: getCurrentLanguage() === 'zh' ? '停止请求失败' : 'Stop request failed',
       description: e instanceof Error ? e.message : String(e),
     });
     return { ok: false, reason: 'request-failed', error: e };
@@ -1006,3 +1095,78 @@ _callFinishTimerInterval = setInterval(_renderLastCallElapsed, 1000);
 window.ClawFW.actions.registerMany({
   'composer.removePendingImage': (el, event, idx) => removePendingImage(idx),
 });
+
+// ── 兼容桥（未迁移消费方收敛后注销）────────────────────────────────────────
+// 函数键落 `persistent-input-api` 域：状态键的域（input-queue / input-call-elapsed）
+// 已由 p2-w2-3a-* owner claim，且与本文件函数无归属关系；函数键独立成域，
+// 便于逐键按消费面归零注销。
+const BRIDGE_FUNCTIONS = {
+  renderPersistentInput,
+  rebindQueueProjectionForRuntime,
+  _renderLastCallElapsed,
+  resetCallElapsedForSwitch,
+  _ensureInputMetaBar,
+  _cleanupInputMetaBar,
+  _interactiveSurfaceOccupiesInput,
+  _renderAttachmentPreview,
+  migratePendingInputImages,
+  _syncPersistentActionButton,
+  submitQueuedInput,
+  interruptAgent,
+};
+
+// 逐键消费方（grep public/，排除定义方）与注销条件：
+//   renderPersistentInput            ← input-render（window.）
+//   rebindQueueProjectionForRuntime  ← input-render / p2-w2-3a-queue-projection（window.）
+//   _renderLastCallElapsed           ← input-render（window.）/ runtime-status（裸调用）
+//   resetCallElapsedForSwitch        ← runtime-status（typeof 裸守卫）
+//   _ensureInputMetaBar              ← recap-hint（window.）
+//   _cleanupInputMetaBar             ← recap-hint（window.）
+//   _interactiveSurfaceOccupiesInput ← p2-w2-3a-queue-projection（window.）
+//   _renderAttachmentPreview         ← session-reference-picker（window.，typeof 守卫）
+//   migratePendingInputImages        ← thread-store（window.，可选链；原为散装 window 赋值）
+//   _syncPersistentActionButton      ← app-main / sidebar-render（闭包内裸调用）/
+//                                      input-actions / generative-ui-panel（window.）
+//   submitQueuedInput                ← voice-input（window.）
+//   interruptAgent                   ← rollback-dialog-runtime（window.）
+// 注销条件：以上消费方迁 ESM 并改为 import 之后。
+window.KernelState.defineKey('persistent-input-api', 'renderPersistentInput', renderPersistentInput);
+window.KernelState.defineKey('persistent-input-api', 'rebindQueueProjectionForRuntime', rebindQueueProjectionForRuntime);
+window.KernelState.defineKey('persistent-input-api', '_renderLastCallElapsed', _renderLastCallElapsed);
+window.KernelState.defineKey('persistent-input-api', 'resetCallElapsedForSwitch', resetCallElapsedForSwitch);
+window.KernelState.defineKey('persistent-input-api', '_ensureInputMetaBar', _ensureInputMetaBar);
+window.KernelState.defineKey('persistent-input-api', '_cleanupInputMetaBar', _cleanupInputMetaBar);
+window.KernelState.defineKey('persistent-input-api', '_interactiveSurfaceOccupiesInput', _interactiveSurfaceOccupiesInput);
+window.KernelState.defineKey('persistent-input-api', '_renderAttachmentPreview', _renderAttachmentPreview);
+window.KernelState.defineKey('persistent-input-api', 'migratePendingInputImages', migratePendingInputImages);
+window.KernelState.defineKey('persistent-input-api', '_syncPersistentActionButton', _syncPersistentActionButton);
+window.KernelState.defineKey('persistent-input-api', 'submitQueuedInput', submitQueuedInput);
+window.KernelState.defineKey('persistent-input-api', 'interruptAgent', interruptAgent);
+
+window.KernelState.claim('persistent-input-api', {
+  get(key) {
+    return BRIDGE_FUNCTIONS[key];
+  },
+  set(key, value) {
+    BRIDGE_FUNCTIONS[key] = value;
+  },
+});
+
+// 测试缝（P4 迁移）：发送窗口计时 / 胶囊起始确认 / 图片桶是模块私有状态
+// （零生产跨文件消费方，不上桥）。迁移前的用例经全局词法作用域直接读写它们；
+// ESM 后词法绑定对外不可写，这里给出显式读写入口，不参与生产逻辑。
+export const __testInputState = {
+  get submitInFlight() { return _submitInFlight; },
+  set submitInFlight(value) { _submitInFlight = value; },
+  get sendingHoldTimer() { return _sendingHoldTimer; },
+  set sendingHoldTimer(value) { _sendingHoldTimer = value; },
+  get sendingStartedAt() { return _sendingStartedAt; },
+  set sendingStartedAt(value) { _sendingStartedAt = value; },
+  get runCapsuleStartAt() { return _runCapsuleStartAt; },
+  set runCapsuleStartAt(value) { _runCapsuleStartAt = value; },
+  get runCapsuleStartConfirmed() { return _runCapsuleStartConfirmed; },
+  set runCapsuleStartConfirmed(value) { _runCapsuleStartConfirmed = value; },
+  get pendingImageBuckets() { return _pendingImageBuckets; },
+  /** 当前会话的待发送桶（同一引用，测试用它播种/观察附件）。 */
+  get imageBucket() { return _imageBucket(); },
+};

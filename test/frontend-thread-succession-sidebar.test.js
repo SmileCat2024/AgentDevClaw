@@ -36,7 +36,6 @@ function bootstrap(sandbox) {
   prepareClassicSandbox(sandbox);
   // index.html 里仍是 classic 的生产脚本（先行序不含它们）：sidebar-operations →
   // project-data 的静态图与 thread-store-domain 在装载期取它们的宿主面。
-  sandbox.loadSource('public/src/modules/thread-store.js');
   // 渲染效果出口：本文件只驱动线程承接的侧栏投影（断言落在 collect 结果上），
   // 渲染入口记录为哑件。
   sandbox.renderAgentList = () => {};
@@ -76,6 +75,9 @@ async function withSidebarCase(globals, fn) {
     classic: bootstrap,
     globals: { navigator: undefined, console: guard.recorder, ...globals },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主 createThreadStoreHost，
+// 必须先于 thread-store-domain 进入同一张图。
+    await c.load('public/src/modules/thread-store.js');
     const ops = await c.load(OPS);
     // 远程连接域（已迁 ESM，P4 T3）：真实 import。侧栏投影的远程半边
     // （getVisibleRemoteEntries / getRemoteSidebarProjectionVersion）由它提供，

@@ -126,18 +126,21 @@ async function withReadonlyView({ payload = recordPayload(), threads = [], loadM
         sandbox.loadSource('public/src/app-main.js');
       }
 
-      sandbox.loadSource(THREAD_STORE);
-      // 线程夹具：真实索引结构（byId / sessionIndex 由 threads 重建）
-      sandbox.ClawThreads.threads = JSON.parse(JSON.stringify(threads));
-      sandbox.ClawThreads.byId = {};
-      sandbox.ClawThreads.sessionIndex = {};
-      for (const thread of sandbox.ClawThreads.threads) {
-        sandbox.ClawThreads.byId[thread.threadId] = thread;
-        for (const sid of (thread.sessionIds || [])) sandbox.ClawThreads.sessionIndex[thread.agentId + '::' + sid] = thread;
-      }
     },
     globals: { fetch: (...args) => fetchBox.impl(...args) },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+    // createThreadStoreHost，必须先于 thread-store-domain 进同一张图。
+    const engine = await c.load(THREAD_STORE);
+    // 线程夹具：真实索引结构（byId / sessionIndex 由 threads 重建）
+    const threadsState = c.window.ClawThreads;
+    threadsState.threads = JSON.parse(JSON.stringify(threads));
+    threadsState.byId = {};
+    threadsState.sessionIndex = {};
+    for (const thread of threadsState.threads) {
+      threadsState.byId[thread.threadId] = thread;
+      for (const sid of (thread.sessionIds || [])) threadsState.sessionIndex[thread.agentId + '::' + sid] = thread;
+    }
     const toastModule = await c.load(TOAST_NOTIFY);
     const toasts = [];
     const realShow = toastModule.ClawToast.show;
@@ -147,6 +150,7 @@ async function withReadonlyView({ payload = recordPayload(), threads = [], loadM
       const readonly = await c.load(READONLY_VIEW);
       return await probe({
         c,
+        engine,
         readonly,
         calls,
         toasts,
@@ -194,7 +198,7 @@ test('只读态不被接续重绑与线程指向对账改写', async () => {
     status: 'active',
     updatedAt: new Date().toISOString(),
   };
-  await withReadonlyView({ threads: [thread] }, async ({ c, readonly }) => {
+  await withReadonlyView({ threads: [thread] }, async ({ c, engine, readonly }) => {
     await readonly.openReadOnlySession({ agentId: 'programming-helper', sessionId: SESSION_ID, threadId: 'wt-1', archived: true });
     // 只读目标冻结在该历史会话，且不是 head
     const conversation = c.read('window.ClawThreads.activeConversation');
@@ -215,8 +219,9 @@ test('只读态不被接续重绑与线程指向对账改写', async () => {
       t.headSessionId = 'session-new-head';
       t.sessionIds.push('session-new-head');
     `);
-    await c.read(`_rebindConversationToThreadHead('wt-1', '${SESSION_ID}', 'session-new-head')`);
-    c.read('_reconcileConversationWithThreadHead()');
+    // 引擎内部操作是模块私有实现（P4 T3 后经命名导出取用，不再有 window 面）。
+    await engine._rebindConversationToThreadHead('wt-1', SESSION_ID, 'session-new-head');
+    engine._reconcileConversationWithThreadHead();
 
     const after = c.read('window.ClawThreads.activeConversation');
     assert.equal(after.sessionId, SESSION_ID, '只读视图不得被重绑到新 head');

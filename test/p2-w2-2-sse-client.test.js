@@ -25,6 +25,7 @@ import vm from 'node:vm';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
+import { loadThreadEngine } from './helpers/thread-engine.js';
 
 /**
  * 以浏览器语义装载 classic desktop-notify：sandbox 就是 window 对象本身
@@ -337,10 +338,10 @@ before(async () => {
     set prebuiltSessionSwitchInFlight(value) { prebuiltSessionSwitchInFlight = value; },
   });
   loadClassicDesktopNotify();
-  // 线程暂存文本经交互域（thread-store-domain）取自 classic 刷新引擎：本文件没有
-  // classic 装载面（loadModuleOnce 路线），按与 desktop-notify 相同的方式在同一个
-  // window 里求值真实引擎（不复制宿主契约）。
-  loadClassicSource('public/src/modules/thread-store.js');
+  // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+  // createThreadStoreHost，必须先把引擎装进同一个 window（不复制宿主契约）。
+  // 装载期注册的三条同步调度由 helper 记账丢弃（不落到本文件的真实计时器上）。
+  await loadThreadEngine();
   // 装载期宿主面：本文件 classic 相只有 desktop-notify（+ 上面 installBrowserStubs
   // 里逐支给出的精确面）。图内还需下列工厂，按生产 owner 与读取面分组说明：
   //   app-core.js（成对 get/set 访问器袋；成员只在函数体内读取，本图不触达这些域）：

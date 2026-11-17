@@ -8,128 +8,63 @@
 // - bug1：接力挡板中点击线程条目 → open_session → activate 无条件
 //   startManagedAgent 给正在退役的 head 启动 runtime，与 rotation 打架。
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import test from 'node:test';
-import vm from 'node:vm';
-import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { withThreadDomainCase } from './p2-thread-case.js';
+import { withThreadEngineCase } from './helpers/thread-engine.js';
 
-const storeSource = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
-// ADR-0026：thread-store 的等待表面调用会话视图提交原语——装载真模块，
-// 身份语义单一来源，不 inline 复刻。
-const sessionViewStateSource = fs.readFileSync(new URL('../public/src/modules/session-view-state.js', import.meta.url), 'utf8');
-const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
-const mainSourceTop = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
-
-function extractHostResolverSource() {
-  const normalizeStart = coreSource.indexOf('function normalizeAgentIdentity');
-  const normalizeEnd = coreSource.indexOf('const VIEWER_BASE_URL', normalizeStart);
-  const start = mainSourceTop.indexOf('function getCurrentSessionHostAgentId()');
-  const end = mainSourceTop.indexOf('function getCurrentRuntimeRecord()', start);
-  assert.notEqual(normalizeStart, -1, 'identity normalizer should exist in app-core');
-  assert.notEqual(normalizeEnd, -1, 'identity normalizer end marker should exist');
-  assert.notEqual(start, -1, 'host resolver should exist');
-  assert.notEqual(end, -1, 'host resolver end marker should exist');
-  return coreSource.slice(normalizeStart, normalizeEnd) + '\n' + mainSourceTop.slice(start, end);
-}
-
-function extractBindingSource() {
-  const start = coreSource.indexOf('var _viewerSessionBindings = new Map()');
-  const end = coreSource.indexOf('function getRuntimeContextKey', start);
-  assert.notEqual(start, -1, 'binding segment start should exist');
-  assert.notEqual(end, -1, 'binding segment end marker should exist');
-  return coreSource.slice(start, end);
-}
-
-function createHarness() {
-  const elements = new Map();
-  const anchor = { id: 'chat-context-bar', className: '', textContent: '', title: '', onclick: null, parentElement: { insertBefore: () => {} }, remove() {} };
-  elements.set('chat-context-bar', anchor);
-  const actionLog = [];
-  const switchLog = [];
-  const sandbox = {
-    console, Date, Number, String, Promise, JSON, Array, Object, Math, Map, Set,
-    setTimeout: (fn) => { fn(); return 0; },
-    setInterval: () => 0,
-    clearTimeout: () => {},
-    document: {
-      visibilityState: 'visible',
-      getElementById: (id) => elements.get(id) || null,
-      createElement: () => ({ id: '', className: '', textContent: '', title: '', onclick: null, remove() {}, parentElement: { insertBefore() {} } }),
-      addEventListener: () => {},
-    },
-    // unchanged：周期刷新（harness 的 setTimeout 同步执行回调）不产生新
-    // 线程事实——否则挂起的 refreshThreads 会把测试内联 threads 清空并
-    // 重建 activeConversation，与断言竞态（时序脆弱，非生产行为）。
-    fetch: async () => ({ ok: true, json: async () => ({ unchanged: true }) }),
-    renderAgentList: () => {},
-    updateQueueIndicator: () => {},
-    focusedAgentId: 'programming-helper',
-    currentRuntimeAgentId: 'rt-main',
-    allAgents: [],
-    lastRenderedWorkspaceHtml: '',
-    currentLanguage: 'zh',
-    // session-view-state.js 模块级依赖（生产中由 app-core.js 声明）：
-    // 最小可写占位，令牌与提交语义由真模块提供。
-    _switchEpoch: 0,
-    currentMessages: [],
-    currentInputRequests: [],
-    currentOverviewSnapshot: {},
-    setCurrentHookInspector(value) { sandbox.currentHookInspector = value || {}; },
-    setCurrentOverviewSnapshot(value) { sandbox.currentOverviewSnapshot = value || {}; },
-    setCurrentTodoPlan(value) { sandbox.currentTodoPlan = value || {}; },
-    // 工作空间动作 / agent 切换探针
-    runWorkspaceAction: (payload) => { actionLog.push(JSON.parse(payload)); return Promise.resolve({ ok: true }); },
-    switchAgent: (id) => { switchLog.push(String(id)); return Promise.resolve(); },
-    window: {},
-  };
-  sandbox.window = sandbox;
-  sandbox.globalThis = sandbox;
-  sandbox.ClawFW = { SseClient: { subscribeThreadEvents: () => ({ unsubscribe: () => {} }) } };
-  sandbox.__actionLog = actionLog;
-  sandbox.__switchLog = switchLog;
-  sandbox.__elements = elements;
-  vm.createContext(sandbox);
-  const kernelSource = fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
-  vm.runInContext(kernelSource, sandbox);
-  installSessionViewCommit(sandbox);
-  return sandbox;
-}
-
-function loadStore(sandbox) {
-  vm.runInContext(extractHostResolverSource() + '\n' + extractBindingSource() + '\n' + sessionViewStateSource + '\n' + storeSource, sandbox);
-}
+// 装载路线（P4 T3）：刷新引擎 thread-store.js 已迁 ESM，两条 fallback 断言走真实
+// import（withThreadEngineCase：最小 classic 夹具 + case 级 ESM 图），
+// `_currentActiveSession` 是命名导出；挡板点击用例走交互域基座。
 
 test('T018-A1: 有 runtime 态但绑定缺席时——不得回退残留 activeConversation（main 输入串到 coder 会话的根因）', async () => {
-  const sandbox = createHarness();
-  loadStore(sandbox);
-  // 用户已切回 main 会话（runtime 态在），但绑定缺席 + 条目无会话字段
-  // （宿主 active 已被 IM/接力改写成 coder 会话）→ runtime 态解析为空。
-  // activeConversation 残留上一条 coder 线程会话——这不是「等待重绑」，
-  // 回退它会把 main 输入串到 coder 会话并唤醒其 head runtime。
-  vm.runInContext(`
-    focusedAgentId = 'programming-helper';
-    currentRuntimeAgentId = 'rt-main';
-    allAgents = [{ id: 'programming-helper', source: 'prebuilt' }];
-    window.ClawThreads.activeConversation = {
+  await withThreadEngineCase({
+    fixtures: {
+      currentLanguage: 'zh',
+      focusedAgentId: 'programming-helper',
+      currentRuntimeAgentId: 'rt-main',
+      allAgents: [{ id: 'programming-helper', source: 'prebuilt' }],
+      getCurrentHostAgentRecord: () => ({ id: 'programming-helper', source: 'prebuilt' }),
+      // 绑定缺席（viewer 绑定表为空）：runtime 态解析不出会话
+      getRuntimeWorkspaceSessionId: () => '',
+      renderAgentList: () => {},
+      updateQueueIndicator: () => {},
+      lastRenderedWorkspaceHtml: '',
+    },
+  }, async ({ ctx, engine }) => {
+    // 用户已切回 main 会话（runtime 态在），但绑定缺席 + 条目无会话字段
+    // （宿主 active 已被 IM/接力改写成 coder 会话）→ runtime 态解析为空。
+    // activeConversation 残留上一条 coder 线程会话——这不是「等待重绑」，
+    // 回退它会把 main 输入串到 coder 会话并唤醒其 head runtime。
+    ctx.window.ClawThreads.activeConversation = {
       agentId: 'programming-helper', threadId: 'wt-x',
       sessionId: 'sess-coder-old', runtimeId: 'rt-coder',
     };
-  `, sandbox);
-  const active = vm.runInContext('_currentActiveSession()', sandbox);
-  assert.equal(active, null, '有 runtime 态时 activeConversation 回退不得生效（等待重绑语义仅限退役窗口），实际: ' + JSON.stringify(active));
+    const active = engine._currentActiveSession();
+    assert.equal(active, null, '有 runtime 态时 activeConversation 回退不得生效（等待重绑语义仅限退役窗口），实际: ' + JSON.stringify(active));
+  });
 });
 
 test('T018-A2: 无 runtime 态且无 activeConversation——宿主 active 回退已删除（跨会话共享可变状态不可作输入目标）', async () => {
-  const sandbox = createHarness();
-  loadStore(sandbox);
-  vm.runInContext(`
-    focusedAgentId = 'programming-helper';
-    currentRuntimeAgentId = '';
-    allAgents = [{ id: 'programming-helper', source: 'prebuilt', active_workspace_session_id: 'sess-main' }];
-  `, sandbox);
-  const active = vm.runInContext('_currentActiveSession()', sandbox);
-  assert.equal(active, null, '宿主 active 回退必须删除（被 IM/CLI/接力改写的共享状态），实际: ' + JSON.stringify(active));
+  await withThreadEngineCase({
+    fixtures: {
+      currentLanguage: 'zh',
+      focusedAgentId: 'programming-helper',
+      currentRuntimeAgentId: '',
+      // 宿主记录带 active_workspace_session_id：旧的「宿主 active 回退」正是
+      // 从这里取会话；该回退已删除，因此不得据此解析出目标。
+      allAgents: [{ id: 'programming-helper', source: 'prebuilt', active_workspace_session_id: 'sess-main' }],
+      getCurrentHostAgentRecord: () => ({
+        id: 'programming-helper', source: 'prebuilt', active_workspace_session_id: 'sess-main',
+      }),
+      getRuntimeWorkspaceSessionId: () => '',
+      renderAgentList: () => {},
+      updateQueueIndicator: () => {},
+      lastRenderedWorkspaceHtml: '',
+    },
+  }, async ({ engine }) => {
+    const active = engine._currentActiveSession();
+    assert.equal(active, null, '宿主 active 回退必须删除（被 IM/CLI/接力改写的共享状态），实际: ' + JSON.stringify(active));
+  });
 });
 
 test('T018-D1: 接力挡板中点击线程条目——本地挂线程等待视图，不得 open_session 启动 runtime（与 rotation 打架的根因）', async () => {

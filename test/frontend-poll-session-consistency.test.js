@@ -841,7 +841,6 @@ test('runtime-aware session projection uses the selected runtime session over st
       // app-ui 仍是 classic 真源：整份装载（面板注册/工作空间投影的顶层依赖
       // 按 index.html 顺序先就位），不再切一段源码执行。
       sandbox.loadSource('public/src/modules/claw-host.js');
-      sandbox.loadSource('public/src/modules/plugin-manifest.js');
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
@@ -852,6 +851,8 @@ test('runtime-aware session projection uses the selected runtime session over st
       sandbox.loadSource('public/src/app-ui.js');
     },
   }, async (c) => {
+    // plugin-manifest 已迁 ESM（P4 T3）：真实 import（桥键 resolveAgentPlugin 供 app-ui 解析插件）。
+    await c.load('public/src/modules/plugin-manifest.js');
     await c.load('public/src/modules/todo-plan.js');
     const record = c.read('getRuntimeAwareAgentRecord()');
     assert.equal(record.active_workspace_session_id, 'A');

@@ -150,6 +150,8 @@ async function withRemoteActivateCase({ fetchStub, bumpEpochDuringWait = false }
     },
     globals: { navigator: undefined, fetch: fetchStub, console: consoleProxy },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在装载期取它的窄宿主，必须先入图。
+    await c.load('public/src/modules/thread-store.js');
     // 远程目录 accessor（已迁 ESM）：真实 import 后命名空间对象才存在，覆盖
     // 就绪观察必须在它求值之后——生产消费方（workspace-actions）从
     // window.RemoteConnections 取成员，因此覆盖对象成员即生效。
@@ -278,6 +280,7 @@ describe('remote session history merge (R2-01)', () => {
         },
       },
     }, async (c) => {
+      await c.load('public/src/modules/thread-store.js');
       const rc = await c.load(REMOTE_CONNECTIONS);
       await rc.refreshRemoteCatalog();
       await rc.maybeRefreshRemoteHistory();
@@ -648,10 +651,6 @@ function loadClassicBootstrap(sandbox, hooks) {
   // 真实 loadAgents 会读连接快照，缺这条 wire 会在刷新链上抛 TypeError。
   sandbox.window.invoke = async (command) => (command === 'get_connected_agents' ? [] : {});
 
-  // workspace-actions 的 import 链现在含线程交互域（thread-store-domain），
-  // 它在模块求值期取 classic 引擎的窄宿主 createThreadStoreHost()。装真实引擎
-  // 而不是写同形桩：宿主契约（状态引用 + 内部操作）只有一份实现。
-  sandbox.loadSource('public/src/modules/thread-store.js');
 }
 
 function withDialogsCase({ requests = [] } = {}, fn) {
@@ -739,6 +738,8 @@ function withDialogsCase({ requests = [] } = {}, fn) {
       },
     },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在装载期取它的窄宿主，必须先入图。
+    await c.load('public/src/modules/thread-store.js');
     // 远程目录 accessor（已迁 ESM，P4 T3）：真实 import 后才存在
     // window.RemoteConnections；catalog 身份来自 mock 的 remote_catalog 响应。
     const rc = await c.load(REMOTE_CONNECTIONS);

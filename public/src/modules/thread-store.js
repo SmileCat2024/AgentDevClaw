@@ -20,20 +20,67 @@
  * registerSessionActivateTarget / submitThreadInput / getThreadPendingTexts）。
  * 拆分时随迁的 `getActiveConversationTarget` / `threadAdvanceHead` 在收尾复审中
  * 确认生产零消费，已连同实现删除（不再有 window 面，也没有私有死代码）。
- * 本文件保留唯一的 classic 刷新引擎（状态 + 索引 + 周期拉取 + 接续重绑 +
- * 顶栏指示器）：三条同步调度必须在 index.html 的 classic 标签原位注册，且首屏
- * 同步渲染链与 refreshThreads 收尾直接读用它。R4 残留，不计作已迁。
+ *
+ * ESM 迁移状态（P4 T3 批次）：**已转 ESM**，原 classic 标签删除。本文件即
+ * 刷新引擎本体（状态 + 索引 + 周期拉取 + 接续重绑 + 顶栏指示器）。
+ *
+ * 时序审计（R1–R4 + S）：
+ *   - R1：仍 classic 的文件里**没有本域键的顶层调用点**（app-main / app-ui /
+ *     sidebar-render / session-view-state / runtime-status / persistent-input /
+ *     input-composer 的引用全在函数体与事件回调内，含 app-main 的两个顶层 IIFE
+ *     逐条 grep 过）。
+ *   - R2：boot 主链（`__clawAuthReady` → `startApplication`）在 DOMContentLoaded
+ *     之后才触达线程数据；本模块的桥键在 kernel-entry 的模块相注册完成，早于
+ *     首屏 `boot.js` 与 DOMContentLoaded，无抢跑窗口。
+ *   - R3：本文件无 DOM 引用类状态键——顶栏指示器元素按 `getElementById` 现取，
+ *     从不缓存引用，模块求值期不查询 DOM。
+ *   - R4（三条同步调度逐条）：2s 启动刷新、20s 周期刷新、`visibilitychange`
+ *     监听从解析相移到 deferred 模块相，仍在 DOMContentLoaded 之前注册；计时
+ *     起点从「标签解析」变为「模块求值」，差值是剩余 HTML 的解析时间（毫秒级）。
+ *     三条调度的语义都是「就绪后周期对账」而非相对解析时刻的定时，且首拉与
+ *     周期拉取都对 `refreshInFlight` 与 5s 节流做合并，重复 / 迟触发不影响
+ *     结果。判定等价。**唯一需要装载序保证的点**见文件末尾「装载顺序约束」：
+ *     `createThreadStoreHost()` 被 thread-store-domain 在装载期取用，本文件必须
+ *     早于它求值。
+ *   - S：原文件是 sloppy（无 `'use strict'`）。审计出的 sloppy 依赖只有 5 处对
+ *     「window 桥访问器」的隐式写/裸读（focusedAgentId / currentRuntimeAgentId /
+ *     readOnlyMode / _lastRenderedChatSig / lastRenderedWorkspaceHtml，生产里由
+ *     app-core 注册的访问器承接）——转换后改为具名 import 的 setter 与活绑定，
+ *     语义不变；无 with、无顶层 this、无隐式全局创建。
  *
  * 交互域经 `createThreadStoreHost()` 取用状态与内部操作：唯一实时引用、
  * 无副本、无 ready 队列。本文件的引擎与各入口闭包不调用交互域任何函数。
  *
- * 依赖全局（均在运行时调用，加载顺序无关）：
- *   - escapeHtml, currentLanguage (app-core.js)
- *   - getCurrentHostAgentRecord, switchAgent (app-main.js / ESM runtime-switch 桥)
- *   - window.runWorkspaceAction (workspace-actions.js)
+ * 显式依赖形态：
+ *   - 已迁 ESM → 具名 import：`currentRuntimeAgentId`（编排 owner）、`allAgents`
+ *     （agent-store owner）、`setFocusedAgentId` / `setReadOnlyMode`、
+ *     `setLastRenderedChatSig` / `setLastRenderedWorkspaceHtml`（渲染 entry owner）。
+ *     只 import 这三个无下游的 owner 模块：**不得**改 import
+ *     `workspace-actions` / `runtime-switch-host` 等上游编排模块——它们的静态图
+ *     含 thread-store-domain，而后者在装载期就调用 `window.createThreadStoreHost()`，
+ *     会与「本模块体先于其 import 求值」冲突（自指装载死锁）。
+ *   - 仍 classic → 显式 `window.*`（行尾标注定义域）：`getCurrentHostAgentRecord`
+ *     （app-main）、`renderAgentList`（sidebar-render）、`renderCurrentMainView`
+ *     （app-ui）、`readCurrentSessionViewState` / `applySessionViewPatch`
+ *     （session-view-state）、`getRuntimeWorkspaceSessionId` /
+ *     `setViewerSessionBinding` / `getRuntimeContextKey`（app-core）、
+ *     `_storeVisibleSessionInputDraft`（input-composer）、
+ *     `resetRuntimeStatusForSwitch`（runtime-status）。
+ *   - 已上桥的 ESM 能力 → `window.*` 晚绑定：`switchAgent`（runtime-switch）、
+ *     `runWorkspaceAction`（workspace-actions）、`loadAgents`（agent-snapshot-loader）、
+ *     `loadAgentData`（session-data-loader）、`updateQueueIndicator`（input-queue）、
+ *     `refreshSidebarRuntimeAfterMutation`（external-runtime）、
+ *     `setPendingChatScrollRestore` / `setPendingChatViewportAnchor`（chat-viewport）、
+ *     `currentLanguage`（i18n-environment）、`ClawFW` / `ClawToast` / `SessionReference`。
  */
 
-window.ClawThreads = {
+import { currentRuntimeAgentId, setCurrentRuntimeAgentId } from './orchestration-state.js';
+import { allAgents, setFocusedAgentId, setReadOnlyMode } from './agent-store-state.js';
+import { setLastRenderedChatSig, setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+
+// 线程事实的唯一真相源（本域状态）。`let` 而非 `const`：桥键 setter 允许 classic
+// 写方整对象替换（D4 原样转发），替换后所有闭包读同一活绑定。
+export let ClawThreads = {
   threads: [],
   byId: {},
   sessionIndex: {}, // `${agentId}::${sessionId}` → thread summary
@@ -58,11 +105,11 @@ const THREADS_REFRESH_INTERVAL_MS = 20000;
 //
 // 只暴露交互域真正需要的东西：状态唯一实时引用 + 三个引擎内部操作。不做
 // 状态镜像、不做 ready 队列、不在交互域里重写任何实现——`getState()` 每次
-// 现读 window.ClawThreads（整对象被替换也生效），内部操作就是下面这几份
-// 函数本身。ESM 交互域在 deferred 相取用，classic 相已有全部实现。
-function createThreadStoreHost() {
+// 现读本域活绑定（整对象被替换也生效），内部操作就是下面这几份函数本身。
+// 交互域在模块相取用，因此本模块必须早于它求值（见文件末尾「装载顺序约束」）。
+export function createThreadStoreHost() {
   return Object.freeze({
-    getState: () => window.ClawThreads,
+    getState: () => ClawThreads,
     getCurrentActiveSession: _currentActiveSession,
     isHandoffActive: _handoffActive,
     syncActiveThreadSubscription: _syncActiveThreadSubscription,
@@ -72,11 +119,12 @@ function createThreadStoreHost() {
 // ── 内部工具 ──────────────────────────────────────────────────────
 
 function _isZh() {
-  return (typeof currentLanguage !== 'undefined' && currentLanguage === 'zh');
+  // currentLanguage 是 i18n-environment 的桥键（app-core 注册访问器、ESM owner 认领）。
+  return window.currentLanguage === 'zh';
 }
 
 function _rebuildIndexes() {
-  const state = window.ClawThreads;
+  const state = ClawThreads;
   state.byId = {};
   state.sessionIndex = {};
   for (const thread of state.threads) {
@@ -92,8 +140,8 @@ function _rebuildIndexes() {
 
 // ── 状态拉取 ──────────────────────────────────────────────────────
 
-window.refreshThreads = async (force = false) => {
-  const state = window.ClawThreads;
+export async function refreshThreads(force = false) {
+  const state = ClawThreads;
   if (state.refreshInFlight) {
     if (!force) return state.refreshInFlight;
     // SSE handoff-started / 发送消息 / 归档等事件触发的强制刷新不得被慢的
@@ -109,7 +157,7 @@ window.refreshThreads = async (force = false) => {
       await state.refreshInFlight.catch(() => {});
       state.refreshTrailing = null;
       // 下一个 refreshThreads 会重新走一次真实拉取（此时 refreshInFlight 已清空）
-      return window.refreshThreads(true);
+      return refreshThreads(true);
     })();
     return state.refreshTrailing;
   }
@@ -150,11 +198,10 @@ window.refreshThreads = async (force = false) => {
         const sig = JSON.stringify(data.threads);
         if (sig !== state.lastThreadsSig) {
           state.lastThreadsSig = sig;
-          if (typeof lastRenderedWorkspaceHtml !== 'undefined') {
-            lastRenderedWorkspaceHtml = '';
-          }
-          if (typeof renderAgentList === 'function') renderAgentList();
-          if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+          setLastRenderedWorkspaceHtml('');
+          // classic 渲染函数经 window 晚绑定（sidebar-render / app-ui）
+          if (typeof window.renderAgentList === 'function') window.renderAgentList();
+          if (typeof window.renderCurrentMainView === 'function') window.renderCurrentMainView();
         }
       }
     } catch {
@@ -163,23 +210,25 @@ window.refreshThreads = async (force = false) => {
       state.lastRefreshAt = Date.now();
       state.initialLoadDone = true;
       state.refreshInFlight = null;
-      window.updateThreadHeaderIndicator();
+      updateThreadHeaderIndicator();
       // 线程数据更新可能影响暂存气泡（pending 指令增减）；聊天渲染有签名
       // 去重，这里直接同步，不依赖下一轮 poll。
-      if (typeof updateQueueIndicator === 'function') updateQueueIndicator();
+      if (typeof window.updateQueueIndicator === 'function') window.updateQueueIndicator();
     }
   })();
   return state.refreshInFlight;
-};
+}
 
 // ── 查询 ──────────────────────────────────────────────────────────
 
-window.getThreadById = (threadId) => window.ClawThreads.byId[threadId] || null;
+export function getThreadById(threadId) {
+  return ClawThreads.byId[threadId] || null;
+}
 
-window.getThreadForSession = (agentId, sessionId) => {
+export function getThreadForSession(agentId, sessionId) {
   if (!agentId || !sessionId) return null;
-  return window.ClawThreads.sessionIndex[`${agentId}::${sessionId}`] || null;
-};
+  return ClawThreads.sessionIndex[`${agentId}::${sessionId}`] || null;
+}
 
 /**
  * 输入目标一致性校验（会话绝对隔离）：全局线程指向（activeConversation）
@@ -193,17 +242,17 @@ window.getThreadForSession = (agentId, sessionId) => {
  * 节点让位）+ 当前激活会话与指向会话相同；等待重绑态（runtime 态被 404
  * 清空，_currentActiveSession 回退为 activeConversation 自身）天然满足。
  */
-window.getActiveThreadInputTarget = () => {
-  const selected = window.ClawThreads.activeConversation;
+export function getActiveThreadInputTarget() {
+  const selected = ClawThreads.activeConversation;
   if (!selected?.threadId) return null;
-  const hostRecord = typeof getCurrentHostAgentRecord === 'function'
-    ? getCurrentHostAgentRecord()
+  const hostRecord = typeof window.getCurrentHostAgentRecord === 'function'
+    ? window.getCurrentHostAgentRecord()
     : null;
   if (!hostRecord || String(hostRecord.id || '') !== String(selected.agentId || '')) {
     return null;
   }
-  const viewIdentity = typeof readCurrentSessionViewState === 'function'
-    ? (readCurrentSessionViewState()?.identity || null)
+  const viewIdentity = typeof window.readCurrentSessionViewState === 'function'
+    ? (window.readCurrentSessionViewState()?.identity || null)
     : null;
   if (!viewIdentity
     || String(viewIdentity.agentId || '').trim() !== String(selected.agentId || '').trim()
@@ -216,23 +265,22 @@ window.getActiveThreadInputTarget = () => {
     return selected;
   }
   return null;
-};
+}
 
 /**
  * 当前激活会话：以用户当前查看的 runtime/session 绑定为准。
  * 宿主的 active_workspace_session_id 会被 IM、CLI、coder 接力等其他入口
  * 改写，不能作为当前浏览器输入目标；共享 runtime 下尤其如此。
  */
-function _currentActiveSession() {
+export function _currentActiveSession() {
   try {
-    const host = typeof getCurrentHostAgentRecord === 'function'
-      ? getCurrentHostAgentRecord()
+    const host = typeof window.getCurrentHostAgentRecord === 'function'
+      ? window.getCurrentHostAgentRecord()
       : null;
-    const runtimeId = String(
-      typeof currentRuntimeAgentId !== 'undefined' ? currentRuntimeAgentId || '' : '',
-    ).trim();
-    const sessionId = runtimeId && typeof getRuntimeWorkspaceSessionId === 'function'
-      ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
+    const runtimeId = String(currentRuntimeAgentId || '').trim();
+    // getRuntimeWorkspaceSessionId 定义于 app-core（classic）
+    const sessionId = runtimeId && typeof window.getRuntimeWorkspaceSessionId === 'function'
+      ? String(window.getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
       : '';
     if (host?.id && sessionId) {
       return { agentId: host.id, sessionId };
@@ -244,7 +292,7 @@ function _currentActiveSession() {
     // 视图无关的会话（历史事故：main 会话输入串到残留 coder 会话并经
     // ensureHeadRuntime 唤醒其 head runtime）。
     if (!runtimeId) {
-      const selected = window.ClawThreads?.activeConversation;
+      const selected = ClawThreads.activeConversation;
       if (selected?.threadId && selected?.sessionId
         && String(selected.agentId || '').trim() === String(host.id || '').trim()) {
         return { agentId: host.id, sessionId: String(selected.sessionId || '').trim() };
@@ -269,12 +317,12 @@ function _currentActiveSession() {
  * 线程宿主判定（APP 级，ADR-0025）：给定会话属于某条线程（即线程宿主
  * APP 的会话）时为真。线程索引未就绪（首拉前）时保守返回 false。
  */
-window.isThreadHostAgentId = (agentId, sessionId) => {
+export function isThreadHostAgentId(agentId, sessionId) {
   const id = String(agentId || '').trim();
   if (!id || !sessionId) return false;
-  return !!(window.ClawThreads?.sessionIndex
-    && window.ClawThreads.sessionIndex[`${id}::${sessionId}`]);
-};
+  return !!(ClawThreads?.sessionIndex
+    && ClawThreads.sessionIndex[`${id}::${sessionId}`]);
+}
 
 /**
  * 交接挡板是否立起（与服务端 isHandoffBarrierActive 同一派生规则）。
@@ -285,19 +333,19 @@ window.isThreadHostAgentId = (agentId, sessionId) => {
  * 会与服务端产生两个真相——服务端仍按 rotating 拒绝挂载（409），前端
  * 却已当窗口结束去发起 open_session，两侧各说各话，触发无界重试。
  */
-function _handoffActive(thread) {
+export function _handoffActive(thread) {
   return String(thread?.status || '') === 'rotating';
 }
 
 // ── 顶栏指示器 ────────────────────────────────────────────────────
 
-window.updateThreadHeaderIndicator = () => {
+export function updateThreadHeaderIndicator() {
   const anchor = document.getElementById('chat-context-bar');
   if (!anchor || !anchor.parentElement) return;
 
   let el = document.getElementById('thread-header-indicator');
   const active = _currentActiveSession();
-  const thread = active ? window.getThreadForSession(active.agentId, active.sessionId) : null;
+  const thread = active ? getThreadForSession(active.agentId, active.sessionId) : null;
 
   if (!thread) {
     if (el) el.remove();
@@ -329,15 +377,15 @@ window.updateThreadHeaderIndicator = () => {
     // 历史成员：只读查看（T006 / ADR-001）。成员关系（sessionIndex）是事实源，
     // 不依赖 browseOnly 时序：非 head 即只读。明示「只读 + 前往当前 head」，
     // 点击是显式动作——绝不静默跳转 / 静默转投（work-thread-design §2.2）。
-    const browseOnly = window.ClawThreads.browseOnly === true
-      && (window.ClawThreads.browseOnlyThreadId === '' || window.ClawThreads.browseOnlyThreadId === thread.threadId);
+    const browseOnly = ClawThreads.browseOnly === true
+      && (ClawThreads.browseOnlyThreadId === '' || ClawThreads.browseOnlyThreadId === thread.threadId);
     el.className = 'thread-header-indicator historical' + (browseOnly ? ' readonly' : '');
     el.title = isZh
       ? `当前为只读查看；点击前往当前承接会话`
       : `Read-only view; click to open the current head session.`;
     el.textContent = isZh ? '只读 · 前往当前会话' : 'Read-only · open head';
     el.onclick = () => {
-      window.jumpToThreadHead(thread.threadId);
+      jumpToThreadHead(thread.threadId);
     };
   }
 };
@@ -350,8 +398,8 @@ window.updateThreadHeaderIndicator = () => {
  */
 // ── 线程动作 ──────────────────────────────────────────────────────
 
-window.jumpToThreadHead = async (threadId) => {
-  const thread = window.getThreadById(threadId);
+async function jumpToThreadHead(threadId) {
+  const thread = getThreadById(threadId);
   if (!thread || !thread.headSessionId) return { ok: false, reason: 'thread_not_found' };
 
   const active = _currentActiveSession();
@@ -367,23 +415,23 @@ window.jumpToThreadHead = async (threadId) => {
   if (typeof window.runWorkspaceAction === 'function') {
     await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId: thread.headSessionId }));
   }
-  window.updateThreadHeaderIndicator();
+  updateThreadHeaderIndicator();
   return { ok: true };
-};
+}
 
 // ── 接续换头：保持同一会话视图身份，只更换 runtime 绑定与消息数据源 ──
 
 let _activeThreadSubscription = null;
 
-function _syncActiveThreadSubscription() {
+export function _syncActiveThreadSubscription() {
   // 只读浏览（归档对话 / 历史存档）不参与线程跟随：视图冻结在目标 Session
   // 上，既不是 head 也不等待重绑，线程指向不得被对齐或重建。
-  if (window.ClawThreads.activeConversation?.readOnly === true) return;
+  if (ClawThreads.activeConversation?.readOnly === true) return;
   const active = _currentActiveSession();
-  const thread = active ? window.getThreadForSession(active.agentId, active.sessionId) : null;
-  const selected = window.ClawThreads.activeConversation;
+  const thread = active ? getThreadForSession(active.agentId, active.sessionId) : null;
+  const selected = ClawThreads.activeConversation;
   if (selected?.threadId) {
-    const selectedThread = window.getThreadById(selected.threadId);
+    const selectedThread = getThreadById(selected.threadId);
     const currentSessionBelongsToThread = selectedThread?.agentId === active?.agentId
       && (selectedThread.sessionIds || []).includes(active?.sessionId);
     // 接续退役窗口：runtime 态被 /responses 404 清理清空，_currentActiveSession
@@ -394,8 +442,8 @@ function _syncActiveThreadSubscription() {
     // 不跨工作空间存续（会话隔离；历史事故：main 会话输入经残留指向串到
     // coder 线程）。
     const runtimeStateCleared = String(currentRuntimeAgentId || '').trim() === '';
-    const hostRecord = typeof getCurrentHostAgentRecord === 'function'
-      ? getCurrentHostAgentRecord()
+    const hostRecord = typeof window.getCurrentHostAgentRecord === 'function'
+      ? window.getCurrentHostAgentRecord()
       : null;
     const hostOwnsThread = !!hostRecord
       && String(hostRecord.id || '') === String(selected.agentId || '');
@@ -411,7 +459,7 @@ function _syncActiveThreadSubscription() {
       // wasHead 是「冻结时是否 head」的事实，记账对齐不改变它——历史成员
       // 被对齐 head 后仍不得获得接续重绑资格（对账入口以 wasHead 为锚）。
     } else {
-      window.ClawThreads.activeConversation = thread ? {
+      ClawThreads.activeConversation = thread ? {
         agentId: active.agentId,
         threadId: thread.threadId,
         sessionId: active.sessionId,
@@ -426,7 +474,7 @@ function _syncActiveThreadSubscription() {
       } : null);
     }
   } else {
-    window.ClawThreads.activeConversation = thread ? {
+    ClawThreads.activeConversation = thread ? {
       agentId: active.agentId,
       threadId: thread.threadId,
       sessionId: active.sessionId,
@@ -448,14 +496,14 @@ function _syncActiveThreadSubscription() {
   const subscription = { unsubscribe: null };
   subscription.unsubscribe = client.subscribeThreadEvents('*', async (event) => {
     if (['thread.created', 'thread.handoff-started', 'thread.head-advanced', 'thread.archived', 'thread.deleted'].includes(event?.type)
-      && typeof refreshSidebarRuntimeAfterMutation === 'function') {
-      await refreshSidebarRuntimeAfterMutation().catch(error => console.warn('Sidebar refresh failed:', error));
+      && typeof window.refreshSidebarRuntimeAfterMutation === 'function') {
+      await window.refreshSidebarRuntimeAfterMutation().catch(error => console.warn('Sidebar refresh failed:', error));
     }
     if (['thread.created', 'thread.handoff-started', 'thread.archived', 'thread.deleted'].includes(event?.type)) {
       // Events discover changes; the shared refresh commits authoritative facts
       // for background sidebar entries as well as the selected conversation.
-      if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
-      renderAgentList();
+      await refreshThreads(true).catch(() => {});
+      window.renderAgentList();
       return;
     }
     if (event?.type !== 'thread.head-advanced') return;
@@ -465,8 +513,8 @@ function _syncActiveThreadSubscription() {
     // 事件只是加速信号：重绑的成立条件一律以调用时点的 threads / allAgents
     // 权威事实为准（_rebindConversationToThreadHead 内部守卫），与轮询事实
     // 对账共用同一实现，不存在第二条重绑路径。
-    if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
-    renderAgentList();
+    await refreshThreads(true).catch(() => {});
+    window.renderAgentList();
     await _rebindConversationToThreadHead(event.threadId, fromSessionId, toSessionId);
   });
   _activeThreadSubscription = subscription;
@@ -507,16 +555,16 @@ function _cancelRebindRetry() {
   }
 }
 
-async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessionId, attempt = 0) {
+export async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessionId, attempt = 0) {
   if (_rebindInFlight) return;
   // 只读浏览（归档对话 / 历史存档）不参与接续重绑：视图是用户显式选定的
   // 历史会话，head 推进不得把它拉走（历史事故：点开存档后被接续自动跳到
   // 最新 head）。
-  if (window.ClawThreads.activeConversation?.readOnly === true) return;
+  if (ClawThreads.activeConversation?.readOnly === true) return;
   _rebindInFlight = true;
   try {
     const current = _currentActiveSession();
-    const selectedConversation = window.ClawThreads.activeConversation;
+    const selectedConversation = ClawThreads.activeConversation;
     const ownerAgentId = String(selectedConversation?.agentId || '').trim();
     // 重绑守卫：用户仍挂在本线程的视图（threadId 匹配）即可。不再要求
     // current.sessionId === fromSessionId——接续退役旧 head 时 /responses 404
@@ -528,13 +576,13 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
     const userStillOnThread = selectedConversation?.threadId === threadId
       && (!ownerAgentId || current?.agentId === ownerAgentId)
       && (!runtimeStateHeld || current?.sessionId === fromSessionId);
-    const nextThread = window.getThreadById(threadId);
+    const nextThread = getThreadById(threadId);
     if (!userStillOnThread || nextThread?.headSessionId !== toSessionId) {
       return;
     }
-    if (typeof loadAgents === 'function') await loadAgents().catch(() => {});
+    if (typeof window.loadAgents === 'function') await window.loadAgents().catch(() => {});
     const latest = _currentActiveSession();
-    const latestConversation = window.ClawThreads.activeConversation;
+    const latestConversation = ClawThreads.activeConversation;
     if (latestConversation?.threadId !== threadId
       || latestConversation.agentId !== ownerAgentId
       || latest?.agentId !== ownerAgentId) return;
@@ -548,9 +596,9 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
       return;
     }
     const previousRuntimeId = String(currentRuntimeAgentId || '').trim();
-    if (previousRuntimeId && typeof getRuntimeWorkspaceSessionId === 'function'
-      && getRuntimeWorkspaceSessionId(previousRuntimeId) !== fromSessionId) return;
-    _storeVisibleSessionInputDraft();
+    if (previousRuntimeId && typeof window.getRuntimeWorkspaceSessionId === 'function'
+      && window.getRuntimeWorkspaceSessionId(previousRuntimeId) !== fromSessionId) return;
+    window._storeVisibleSessionInputDraft();
     const previousRuntimeIdForDraft = String(currentRuntimeAgentId || selectedConversation?.runtimeId || '').trim();
     const previousAttachmentKey = window.SessionReference?.activeKey?.() || '';
     const nextRuntimeId = String(runtime.runtime_session_id || runtime.runtimeSessionId || runtime.id || '').trim();
@@ -561,17 +609,19 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
     }
     window.ClawToast?.dismiss?.(`thread-staged-input-${threadId}`);
     window.ClawToast?.dismiss?.(`thread-staged-gw-${previousRuntimeIdForDraft || selectedConversation?.runtimeId || ''}`);
-    if (previousRuntimeId && typeof saveCurrentRuntimeToCache === 'function') {
-      saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId));
+    // saveCurrentRuntimeToCache 只是 runtime-view-cache-host 的 ESM 具名导出，从未上 window
+    // 面——该分支在生产恒不执行（原样保留，删除属另案）。
+    if (previousRuntimeId && typeof window.saveCurrentRuntimeToCache === 'function') {
+      window.saveCurrentRuntimeToCache(previousRuntimeId, window.getRuntimeContextKey(previousRuntimeId));
     }
-    setViewerSessionBinding(nextRuntimeId, toSessionId);
-    applySessionViewPatch({ identity: { agentId: ownerAgentId, sessionId: toSessionId } });
-    const openedConversation = window.ClawThreads.activeConversation;
+    window.setViewerSessionBinding(nextRuntimeId, toSessionId);
+    window.applySessionViewPatch({ identity: { agentId: ownerAgentId, sessionId: toSessionId } });
+    const openedConversation = ClawThreads.activeConversation;
     if (openedConversation?.threadId === threadId && openedConversation.agentId === ownerAgentId) {
       openedConversation.sessionId = toSessionId;
       openedConversation.runtimeId = nextRuntimeId;
     }
-    window.ClawThreads.activeConversation = {
+    ClawThreads.activeConversation = {
       agentId: ownerAgentId,
       threadId,
       sessionId: toSessionId,
@@ -579,16 +629,16 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
       wasHead: true,
     };
     // 线程会话归属线程宿主 APP（如 coder）：侧栏高亮同步切到该 APP。
-    focusedAgentId = ownerAgentId;
-    currentRuntimeAgentId = nextRuntimeId;
-    readOnlyMode = false;
-    _lastRenderedChatSig = '';
-    setPendingChatScrollRestore(null);
-    if (typeof setPendingChatViewportAnchor === 'function') setPendingChatViewportAnchor(null);
-    resetRuntimeStatusForSwitch();
-    renderAgentList();
-    loadAgentData(nextRuntimeId).catch((error) => console.warn('[threads] successor view rebind failed:', error));
-    if (typeof window.refreshThreads === 'function') window.refreshThreads(true).catch(() => {});
+    setFocusedAgentId(ownerAgentId);
+    setCurrentRuntimeAgentId(nextRuntimeId);
+    setReadOnlyMode(false);
+    setLastRenderedChatSig('');
+    window.setPendingChatScrollRestore(null);
+    if (typeof window.setPendingChatViewportAnchor === 'function') window.setPendingChatViewportAnchor(null);
+    window.resetRuntimeStatusForSwitch();
+    window.renderAgentList();
+    window.loadAgentData(nextRuntimeId).catch((error) => console.warn('[threads] successor view rebind failed:', error));
+    refreshThreads(true).catch(() => {});
     _cancelRebindRetry();
     _syncActiveThreadSubscription();
   } finally {
@@ -609,16 +659,16 @@ async function _rebindConversationToThreadHead(threadId, fromSessionId, toSessio
  * sessionId 会被 _syncActiveThreadSubscription 的跟随分支对齐 head，不能
  * 作信号）；runtime 态被 404 清空的退役窗口用冻结值（此时无人改写它）。
  */
-function _reconcileConversationWithThreadHead() {
-  const selected = window.ClawThreads.activeConversation;
+export function _reconcileConversationWithThreadHead() {
+  const selected = ClawThreads.activeConversation;
   if (!selected?.threadId || selected.wasHead !== true) return;
-  const thread = window.getThreadById(selected.threadId);
+  const thread = getThreadById(selected.threadId);
   if (!thread || thread.status === 'closed') return;
   const headSessionId = String(thread.headSessionId || '').trim();
   if (!headSessionId) return;
   const runtimeId = String(currentRuntimeAgentId || '').trim();
-  const boundSessionId = runtimeId && typeof getRuntimeWorkspaceSessionId === 'function'
-    ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
+  const boundSessionId = runtimeId && typeof window.getRuntimeWorkspaceSessionId === 'function'
+    ? String(window.getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
     : '';
   const viewedSessionId = boundSessionId || String(selected.sessionId || '').trim();
   if (!viewedSessionId) return;
@@ -635,13 +685,13 @@ function _reconcileConversationWithThreadHead() {
     && headSessionId === viewedSessionId
     && !runtimeId
     && !_handoffActive(thread)) {
-    window.ClawThreads.activeConversation = null;
-    window.updateThreadHeaderIndicator();
+    ClawThreads.activeConversation = null;
+    updateThreadHeaderIndicator();
     window.ClawToast?.show?.({
       id: `thread-handoff-failed-${selected.threadId}`,
       status: 'error',
-      title: currentLanguage === 'zh' ? '线程接续失败' : 'Thread handoff failed',
-      description: currentLanguage === 'zh'
+      title: window.currentLanguage === 'zh' ? '线程接续失败' : 'Thread handoff failed',
+      description: window.currentLanguage === 'zh'
         ? '接续未完成，当前显示上一棒的对话记录；重新点击线程条目可恢复。'
         : 'Handoff did not complete. Showing the previous run; click the thread again to resume.',
     });
@@ -654,19 +704,82 @@ function _reconcileConversationWithThreadHead() {
 }
 
 // ── 启动（周期刷新；非线程宿主的服务端列表恒空，开销可忽略）──────
+//
+// 三条同步调度在模块求值相注册（时相审计见头注 R4）：仍在 DOMContentLoaded
+// 之前，语义是「就绪后周期对账」，与 classic 相注册等价。
 
 setTimeout(() => {
-  window.refreshThreads(true);
+  refreshThreads(true);
 }, 2000);
 
 setInterval(() => {
   if (document.visibilityState === 'visible') {
-    window.refreshThreads();
+    refreshThreads();
   }
 }, THREADS_REFRESH_INTERVAL_MS);
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
-    window.refreshThreads();
+    refreshThreads();
   }
+});
+
+// ── 桥接期兼容面（仍 classic / 仍经 window 取用的消费方）────────────
+//
+// domain 取 `thread-store-engine` 而非 `thread-store`：后者已被
+// thread-store-domain 认领（openConversationTarget / submitThreadInput），
+// 同域二次 claim 会覆盖它的 impl、把那两个键取成 undefined（先例：
+// voice-input-api 与状态域 voice-input 的分域）。
+//
+// 逐键消费方（配方步 5 的 grep 结果）：
+//   - ClawThreads            ← session-readonly-view（只读视图冻结判定）/ app-main
+//                              （绑定会话标题兜底、host seam）/ plugins/coder（线程列表投影）
+//   - refreshThreads         ← workspace-actions（activate / 归档 / 接力后强刷）/
+//                              persistent-input / trim-page / ctx-menu-items /
+//                              threads-domain / im-actions / ph-session-move / app-main
+//   - getThreadById          ← thread-store-domain / ctx-menu-items / home-dashboard（悬置域）/
+//                              plugins/coder
+//   - getThreadForSession    ← thread-store-domain / session-list-render / session-readonly-view /
+//                              ctx-menu-items / app-main
+//   - getActiveThreadInputTarget ← persistent-input / input-composer / input-render /
+//                              sidebar-render / app-main
+//   - isThreadHostAgentId    ← sidebar-render / workspace-actions / slash-commands /
+//                              session-dialogs / trim-page
+//   - updateThreadHeaderIndicator ← thread-store-domain / session-readonly-view / app-main
+//   - createThreadStoreHost  ← thread-store-domain（装载期取用，见下方顺序约束）
+//
+// 注销条件：以上消费方逐批改具名 import 后逐键注销（`-domain` / `-render` /
+// `-main` 三件收口时整块删）。
+//
+// 装载顺序约束（接线必读）：`createThreadStoreHost()` 在 thread-store-domain
+// 的**模块求值期**被调用，因此本模块必须先于 thread-store-domain 求值。
+// p2-entry 经 workspace-actions 的 import 链带入 thread-store-domain，故
+// `import './thread-store.js'` 必须排在 p2-entry **之前**（kernel-entry 顶部）；
+// 放进 p4-entry 会晚于 p2-entry，装载期即 TypeError。
+const bridged = {
+  ClawThreads,
+  refreshThreads,
+  getThreadById,
+  getThreadForSession,
+  getActiveThreadInputTarget,
+  isThreadHostAgentId,
+  updateThreadHeaderIndicator,
+  createThreadStoreHost,
+};
+// 逐键显式注册（不用循环）：桥债口径按 defineKey 调用点数计量。
+window.KernelState.defineKey('thread-store-engine', 'ClawThreads', bridged.ClawThreads);
+window.KernelState.defineKey('thread-store-engine', 'refreshThreads', bridged.refreshThreads);
+window.KernelState.defineKey('thread-store-engine', 'getThreadById', bridged.getThreadById);
+window.KernelState.defineKey('thread-store-engine', 'getThreadForSession', bridged.getThreadForSession);
+window.KernelState.defineKey('thread-store-engine', 'getActiveThreadInputTarget', bridged.getActiveThreadInputTarget);
+window.KernelState.defineKey('thread-store-engine', 'isThreadHostAgentId', bridged.isThreadHostAgentId);
+window.KernelState.defineKey('thread-store-engine', 'updateThreadHeaderIndicator', bridged.updateThreadHeaderIndicator);
+window.KernelState.defineKey('thread-store-engine', 'createThreadStoreHost', bridged.createThreadStoreHost);
+window.KernelState.claim('thread-store-engine', {
+  get: (key) => bridged[key],
+  set: (key, value) => {
+    bridged[key] = value;
+    // 状态对象是模块活绑定：classic 写方整对象替换必须让引擎自身也看见。
+    if (key === 'ClawThreads') ClawThreads = value;
+  },
 });

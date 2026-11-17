@@ -364,10 +364,6 @@ async function createSandbox({
       sandbox.renderAgentList = () => {};
       Object.assign(sandbox, createBootstrapHosts(sandbox));
       sandbox.loadSource(ACTION_DISPATCHER);
-  // workspace-actions 的 import 链现在含线程交互域（thread-store-domain），
-  // 它在模块求值期取 classic 引擎的窄宿主 createThreadStoreHost()。装真实引擎
-  // 而不是写同形桩：宿主契约（状态引用 + 内部操作）只有一份实现。
-  sandbox.loadSource('public/src/modules/thread-store.js');
 
       // project-data 已迁 ESM（真实 import 见用例体）：它自己的桥键
       // （getAgentWorkspaceState / getPathLeaf / hasWorkspaceSessions /
@@ -414,6 +410,8 @@ async function createSandbox({
       `);
     },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在装载期取它的窄宿主，必须先入图。
+    await c.load('public/src/modules/thread-store.js');
     // 远程目录（已迁 ESM）：先求值，后面的 capabilityFor 集成期 stub 与各消费方
     // 的 window.RemoteConnections 取用才有着落。
     await c.load(REMOTE_CONNECTIONS);

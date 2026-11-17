@@ -159,9 +159,16 @@ async function withRuntimeState(fn) {
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
       sandbox.loadSource('public/src/modules/runtime-status.js');
-      sandbox.loadSource('public/src/modules/persistent-input.js');
+      // persistent-input 已迁 ESM（P4 输入面批次）：用例体里 c.load，胶囊计时器与
+      // resetCallElapsedForSwitch 桥键随其模块相注册。
     },
-    globals: { document, ...appMainGlobals() },
+    globals: {
+      document,
+      ...appMainGlobals(),
+      // 输入面静态图（input-actions → poll-coordinator-host）装载期要求该 seam
+      // 可解析；本父链不含 app-main（轮询宿主工厂的 owner），用例不驱动轮询。
+      createPollCoordinatorHost: () => ({}),
+    },
   }, async (c) => withNoiseClean('SessionView 运行时状态用例', async () => {
     // 焦点 runtime 的 ESM owner：生产由切换链写入，测试按真实 setter 设置
     const orchestration = await c.load(ORCHESTRATION_STATE);
@@ -170,10 +177,13 @@ async function withRuntimeState(fn) {
     const callInterrupt = await c.load(CALL_INTERRUPT_HOST);
     // recap 的「等忙完再触发」状态 owner（runtime-status classic 经桥键读写）
     await c.load(RECAP_STATE);
+    // 输入面实现（P4 输入面批次）：runtime-status 的 call.finish 归一链路经桥键
+    // 调用 resetCallElapsedForSwitch / _renderLastCallElapsed。
+    const persistentInput = await c.load('public/src/modules/persistent-input.js');
     const toolProgress = await c.load(TOOL_PROGRESS);
     assert.equal(typeof callInterrupt.getNotificationCallStartedAt, 'function');
     c.read(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'session-a' } })`);
-    return fn({ c, toolProgress });
+    return fn({ c, toolProgress, persistentInput });
   }));
 }
 
@@ -206,25 +216,24 @@ describe('SessionView runtime status ownership', () => {
   });
 
   it('clears elapsed state at the switch boundary, before a new snapshot or timer tick', async () => {
-    await withRuntimeState(({ c }) => {
-      c.read(`
-        _lastCallFinishTime = 1234;
-        _runCapsuleStartAt = 5678;
-        _runCapsuleStartConfirmed = true;
-        resetRuntimeStatusForSwitch();
-      `);
+    await withRuntimeState(({ c, persistentInput }) => {
+      // 胶囊起始时间两键是 persistent-input 的模块私有状态（零跨文件生产消费方，
+      // 不上桥）：经模块的显式测试缝读写，不依赖全局词法作用域。
+      const seedCapsule = () => {
+        c.read('_lastCallFinishTime = 1234');
+        persistentInput.__testInputState.runCapsuleStartAt = 5678;
+        persistentInput.__testInputState.runCapsuleStartConfirmed = true;
+      };
+      seedCapsule();
+      c.read('resetRuntimeStatusForSwitch()');
       assert.equal(c.read('_lastCallFinishTime'), 0);
-      assert.equal(c.read('_runCapsuleStartAt'), 0);
-      assert.equal(c.read('_runCapsuleStartConfirmed'), false);
-      c.read(`
-        _lastCallFinishTime = 1234;
-        _runCapsuleStartAt = 5678;
-        _runCapsuleStartConfirmed = true;
-        updateNotificationStatus(null);
-      `);
+      assert.equal(persistentInput.__testInputState.runCapsuleStartAt, 0);
+      assert.equal(persistentInput.__testInputState.runCapsuleStartConfirmed, false);
+      seedCapsule();
+      c.read('updateNotificationStatus(null)');
       assert.equal(c.read('_lastCallFinishTime'), 0);
-      assert.equal(c.read('_runCapsuleStartAt'), 0);
-      assert.equal(c.read('_runCapsuleStartConfirmed'), false);
+      assert.equal(persistentInput.__testInputState.runCapsuleStartAt, 0);
+      assert.equal(persistentInput.__testInputState.runCapsuleStartConfirmed, false);
     });
   });
 

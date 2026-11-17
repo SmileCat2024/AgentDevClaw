@@ -248,10 +248,7 @@ function createHarness() {
       label: 'p2-template-summary-imports',
       classic: (sandbox) => {
         prepareClassicSandbox(sandbox);
-        // index.html 里仍是 classic 的生产脚本（prepareClassicSandbox 的先行序不含它们）：
-        //   - thread-store.js：thread-store-domain 装载期取它的宿主工厂。
         //（remote-connections 已迁 ESM：见 withHarness，模块相真实 import。）
-        sandbox.loadSource('public/src/modules/thread-store.js');
         // 渲染效果出口：数据流保持真实，只记录生产渲染入口的调用（与
         // test/frontend-agent-snapshot-loader.test.js 同口径，不复制宿主契约）。
         sandbox.renderAgentList = () => renders.agentList.push('renderAgentList');
@@ -286,6 +283,9 @@ function createHarness() {
  */
 function withHarness(harness, fn) {
   return withP2EsmCase(harness.options, async (c) => {
+        // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+        // createThreadStoreHost，必须先于 thread-store-domain 进同一张图。
+    await c.load('public/src/modules/thread-store.js');
     await c.load('public/src/modules/remote-connections.js');
     return fn(c);
   });

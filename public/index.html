@@ -89,7 +89,8 @@
     }
   </script>
   <script src="./src/modules/claw-host.js"></script>
-  <script src="./src/modules/plugin-manifest.js"></script>
+  <!-- plugin-manifest 已迁 ESM（P4 T3）：classic 标签删除，由 p4-entry 装载；
+       桥键 resolveAgentPlugin ← app-ui 的插件解析闭包。 -->
   <script src="./src/modules/action-dispatcher.js"></script>
   <script src="./src/modules/auth-client.js"></script>
   <link rel="stylesheet" href="./styles/base.css">
@@ -489,10 +490,11 @@
        桥键 applyRailConfig 供 app-ui 首屏尾部与 debug-panel-host 使用。 -->
   <script src="./src/modules/desktop-notify.js"></script>
   <!-- ↓↓↓ Phase A: 零风险子系统（自包含，无被 app-ui.js 调用的函数） ↓↓↓ -->
-  <!-- 工单 036：常驻 composer（草稿缓存 + 模式判定 + 组件本体）。必须先于
-       voice-input.js（消费其草稿符号）与 input-render.js/persistent-input.js
-       （依赖其组件函数）加载。 -->
-  <script src="./src/modules/input-composer.js"></script>
+  <!-- 工单 036 的装载约束已随 P4 满足：input-composer / voice-input / input-render /
+       persistent-input 全部迁 ESM，装载顺序由 p4-entry 的 import 边表达，不再靠
+       classic 标签序保证。 -->
+  <!-- input-composer 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       草稿缓存 owner 在 p2-w2-3a-composer-state，函数键经 input-composer-api 域桥接。 -->
   <!-- voice-input 已迁 ESM（P4 L3）：classic 标签删除，由 p4-entry 装载；
        状态键 owner 在 p2-w2-3a-voice-state，函数键经 voice-input-api 域桥接。 -->
   <!-- choice-input 已迁 ESM（选择卡谓词 / 交互 / 提交，含草稿状态）：classic 标签
@@ -511,14 +513,16 @@
   <!-- input-model-switcher 已迁 ESM（模型 / 思考强度两个切换器）：classic 标签
        删除，由 p2-entry 显式 import；四个兼容桥键供下方仍 classic 的
        persistent-input / input-composer 调用。 -->
-  <script src="./src/modules/persistent-input.js"></script>
+  <!-- persistent-input 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       队列/计时状态键与 18 个函数键分域桥接（input-queue / input-call-elapsed / persistent-input-api）。 -->
   <!-- ↓↓↓ Phase D: 聊天消息渲染（被 app-ui.js renderCurrentMainView 反向调用） ↓↓↓ -->
   <!-- chat-renderer 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
        12 个桥键供 app-ui / app-main / claw-host / lazy-tool-content 等使用；
        折叠偏好经 app-core 的 chatSurface 宿主 seam 读写。 -->
   <!-- workspace-actions 已迁 ESM：classic 标签删除，由 p2-entry 装载。
        thread-store 仍保留 classic 刷新引擎（三条同步调度必须原位注册），标签不动。 -->
-  <script src="./src/modules/thread-store.js"></script>
+  <!-- thread-store 已迁 ESM（P4 T3）：classic 标签删除，由 p4-entry 装载；
+       8 个桥键（domain thread-store-engine）供 app-main / sidebar-render / 输入面 / 线程域使用。 -->
   <!-- 桌面右键唤起（冷启动 URL query / webview eval 统一消费），app-main.js boot 引用 -->
   <script src="./src/modules/desktop-open.js"></script>
   <script src="./src/app-main.js"></script>

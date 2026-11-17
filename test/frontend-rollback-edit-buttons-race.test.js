@@ -244,8 +244,6 @@ async function withChatCase(fn) {
       // 用例的窄行为观察面（真源之后覆盖：app-main / app-ui 会定义同名入口）：
       // 侧栏列表与主视图渲染在执行期被各用例替换成记录器，这里先给出无操作默认。
       sandbox.run(APP_MAIN_PRELUDE);
-      // 线程暂存文本经交互域取自 classic 刷新引擎：按生产顺序装真实引擎，不复制宿主契约。
-      sandbox.loadSource('public/src/modules/thread-store.js');
     },
     globals: {
       document,
@@ -281,6 +279,9 @@ async function withChatCase(fn) {
       _maybeFetchRecap: () => {},
     },
   }, async (c) => withNoiseClean('rollback 竞态用例', async () => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主 createThreadStoreHost，
+// 必须先于 thread-store-domain 进入同一张图。
+    await c.load('public/src/modules/thread-store.js');
     // 视口域（chat-viewport）先装载：桥键与 container 监听先就位；随后是渲染域。
     await c.load('public/src/modules/chat-viewport.js');
     await c.load('public/src/modules/chat-renderer.js');

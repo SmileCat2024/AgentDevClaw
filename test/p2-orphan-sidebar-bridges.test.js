@@ -114,9 +114,6 @@ async function withBridgeCase(fn) {
     label: 'p2-orphan-sidebar-bridges',
     classic: (sandbox) => {
       prepareClassicSandbox(sandbox);
-      // index.html 里 thread-store.js 仍是 classic（刷新引擎原位注册），其
-      // createThreadStoreHost 供已迁的 thread-store-domain 在装载期取用。
-      sandbox.loadSource('public/src/modules/thread-store.js');
       // 渲染汇点：状态机/增量应用会触发侧栏与主视图重渲染（classic owner）；
       // 本文件不测渲染，按宿主契约注入召回，避免 DOM 装配噪音。
       sandbox.renderAgentList = () => {};
@@ -163,6 +160,9 @@ function assertWindowKeyAbsent(c, key) {
 
 test('sidebar-operations 的 8 个孤儿键：命名导出可工作且 window 键缺席', async () => {
   await withBridgeCase(async (c) => {
+        // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+        // createThreadStoreHost，必须先于 thread-store-domain 进同一张图。
+    await c.load('public/src/modules/thread-store.js');
     const ops = await c.load(SIDEBAR_OPERATIONS);
 
     for (const key of RETIRED_SIDEBAR_KEYS) {

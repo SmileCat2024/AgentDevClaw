@@ -41,7 +41,6 @@ function bootstrapClassic(sandbox) {
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/runtime-status.js');
-  sandbox.loadSource('public/src/modules/thread-store.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
   sandbox.loadSource('public/src/modules/sidebar-render.js');
   sandbox.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
@@ -149,6 +148,9 @@ function harnessCase({ isRuntimeItemActive = () => false } = {}, fn) {
     },
     globals: { navigator: undefined, console: guard.recorder },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主 createThreadStoreHost，
+// 必须先于 thread-store-domain 进入同一张图。
+    await c.load('public/src/modules/thread-store.js');
     await c.load('public/src/modules/agent-data-loader.js');
     await c.load('public/src/modules/project-data.js');
     await c.load(SESSION_UI);

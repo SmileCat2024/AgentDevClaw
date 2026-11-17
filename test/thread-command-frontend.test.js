@@ -203,12 +203,19 @@ describe('thread direct delivery restores consumed pills on failure (classic sub
         });
         // BOOT_NEUTRALIZER 关掉了首屏 rAF；本用例要跑真实 _nextPaint 的 paint 门槛。
         c.sandbox.run('requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);');
-        // 真实提交链：与生产同一份 persistent-input.js（不切函数块、不剥语法）。
-        c.sandbox.loadSource('public/src/modules/persistent-input.js');
+        // 真实提交链：与生产同一份 persistent-input.js（P4 输入面批次起是 ESM）。
+        const persistent = await c.load('public/src/modules/persistent-input.js');
+        // 刷新引擎（P4 T3 起是 ESM）：交互域在**装载期**取它的窄宿主
+        // createThreadStoreHost，必须先于 thread-store-domain 进入同一张图。
+        await c.load('public/src/modules/thread-store.js');
+        // 线程寻址目标与侧栏绘制是本用例的夹具面：引擎桥键在模块相注册，故覆盖
+        // 放在引擎装载之后（classic 相的夹具会被同一访问器替换）。
+        c.window.getActiveThreadInputTarget = () => ({ threadId: 'wt-9' });
+        c.window.renderAgentList = () => {};
         const domain = await c.load('public/src/modules/thread-store-domain.js');
         assert.equal(typeof domain.submitThreadInput, 'function');
         assert.equal(c.read('typeof window.submitThreadInput'), 'function',
-          'classic 提交链经交互域桥键调用同一 ESM 实现');
+          '提交链经交互域桥键可解析到同一 ESM 实现');
 
         c.expose('ClawToast', { show: (value) => toasts.push(value) });
         c.expose('SessionReference', {
@@ -220,17 +227,20 @@ describe('thread direct delivery restores consumed pills on failure (classic sub
           consumeActivations: () => ['skill.grill-me'],
           restoreActivations: (refs) => restoredActivations.push(refs),
         });
-        // classic 相写方经桥写 ESM 编排 owner（生产同一条 seam）。
-        c.window.currentRuntimeAgentId = 'rt-1';
-        // 会话视图 token 是首屏渲染链的输入：用例控制「视图仍归本会话」这一前提。
-        // 放在整图之后——这些键在 ESM 相注册/认领，早写会被 accessor 覆盖。
-        c.window.captureSessionViewToken = () => ({ runtimeId: 'rt-1' });
-        c.window.isSessionViewTokenCurrent = () => true;
-        // 立即轮询钩子：轮询域（poll-cycle-host）不在本用例图内，且按时序无关——
-        // 按夹具拦截，避免用例结束后的异步 poll 续体落到已拆掉的沙箱全局上。
+        // 编排 owner：焦点 runtime 与切换代次（token 判定的两个输入）
+        const orchestration = await c.load('public/src/modules/orchestration-state.js');
+        orchestration.setCurrentRuntimeAgentId('rt-1');
+        orchestration.setSwitchEpoch(0);
+        // 会话视图 token 与判定都是真实实现（classic captureSessionViewToken +
+        // ESM session-view-commit 策略）：焦点 runtime 已在上一段写入 owner，
+        // 捕获到的是「视图仍归本会话」的真实 token，无需注入同形替身。
+        // 立即轮询与线程刷新都是 fire-and-forget 副作用（轮询域 / 引擎异步链会活过
+        // 本 case）：按「已受理」的空实现拦截，避免用例结束后的续体落到已拆掉的
+        // 沙箱全局上。提交链本身（端点、载荷、引用归还）保持真实。
         c.window.ClawFW.requestImmediatePoll = () => {};
+        c.window.refreshThreads = () => Promise.resolve();
 
-        await c.read('submitQueuedInput()');
+        await persistent.submitQueuedInput();
       });
     } finally {
       logs.restore();

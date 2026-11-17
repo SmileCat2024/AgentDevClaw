@@ -285,7 +285,7 @@ test('首屏冷态：模块未装载时真实输入面声明链照常短路（R1
       loadClassicPrefix(sandbox);
       // voice-input 已迁 ESM（P4 L3）：本用例只钉冷态声明链的短路，语音实现不在
       // 断言面内，classic 相不再载入（其 ESM 图会额外拉入输入动作宿主链）。
-      sandbox.loadSource('public/src/modules/input-composer.js');
+      // input-composer 同样已迁 ESM（P4 输入面批次）：用例体里 c.load。
       // rollback-dialog / input-render 已迁 ESM（P4 T2）：在 async 相按
       // 「注册壳 → 渲染入口」顺序 c.load，见下方用例体首段。
       // input-render 经 `getInputSurfaceMode` 求模式；该函数是 app-main 的 classic
@@ -307,11 +307,16 @@ test('首屏冷态：模块未装载时真实输入面声明链照常短路（R1
       // 按冷态（无录音、无转写）语义给出同形的 false。
       _shouldPreserveVoiceInputForRender: () => false,
       followLatestEnabled: false,
+      // 本前缀不含 app-main（轮询宿主工厂的 owner）：输入面静态图装载期要求该 seam
+      // 可解析；冷态用例不驱动轮询。
+      createPollCoordinatorHost: () => ({}),
     },
   }, async (c) => {
     // rollback-dialog 注册壳先求值（回退 / 压缩域状态键的 window 访问器），
     // 再装 input-render 的真实实现；两者都是 ESM 相真实 import。
     await c.load('public/src/modules/rollback-dialog.js');
+    // 输入面实现（P4 输入面批次起是 ESM）：模式判定与临时卡清理的桥键来源。
+    await c.load('public/src/modules/input-composer.js');
     // 跟随开关是 app-core 的 classic 顶层状态（未上桥），模块经 chatSurface
     // 宿主适配读取；用例按同一 seam 置 false（原用例以同名全局桩代替）。
     c.window.createP2BootstrapChatSurfaceHost().followLatestEnabled = false;

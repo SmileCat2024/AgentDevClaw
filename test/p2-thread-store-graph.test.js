@@ -281,8 +281,6 @@ test('真实线程暂存气泡：排队投影经具名 import 读交互域的暂
     classic(sandbox);
     seedThreadFacts(sandbox, [thread]);
     sandbox.run(`
-      window.ClawThreads.activeConversation = { agentId: 'coder', threadId: 'wt-staged',
-        sessionId: 'sess-staged', runtimeId: 'rt-staged', wasHead: true };
       focusedAgentId = 'coder';
       currentRuntimeAgentId = 'rt-staged';
     `);
@@ -290,6 +288,10 @@ test('真实线程暂存气泡：排队投影经具名 import 读交互域的暂
   };
 
   await withThreadCaseEnv(options, async ({ c }) => {
+    // thread-store 已迁 ESM：activeConversation 只能在模块求值之后写（classic 相里
+    // window.ClawThreads 还不存在）。桥键是活绑定，写进去与生产等价。
+    c.read(`window.ClawThreads.activeConversation = { agentId: 'coder', threadId: 'wt-staged',
+      sessionId: 'sess-staged', runtimeId: 'rt-staged', wasHead: true }`);
     const projection = await c.load(QUEUE_PROJECTION);
     const domain = await c.load(DOMAIN);
     // 交互域读到的暂存文本（唯一实现），再由投影渲染成线程暂存气泡

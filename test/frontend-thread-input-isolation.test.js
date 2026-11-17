@@ -6,37 +6,43 @@
 //      到别的工作空间后豁免失效，残留被重建清除；
 //   3. openConversationTarget 接续等待分支传 awaitSessionId：点击侧栏接续
 //      占位条目落在该会话的聊天加载表面，不落工作空间首页。
+//
+// 装载路线（P4 T3）：刷新引擎 thread-store.js 已迁 ESM，走真实 import
+// （withThreadEngineCase：最小 classic 夹具 + case 级 ESM 图）。引擎内部操作
+// （_syncActiveThreadSubscription）是命名导出，公开查询（getActiveThreadInputTarget）
+// 经 thread-store-engine 桥键取用；状态键按 app-core 注册面上桥，夹具初值同一份真相。
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import test from 'node:test';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { withThreadDomainCase } from './p2-thread-case.js';
+import { withThreadEngineCase } from './helpers/thread-engine.js';
 
-const threadStoreSource = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
-
-function loadThreadStore({ hostAgentId = 'programming-helper', runtimeId = 'rt-ph', runtimeSessionId = 'sess-A', threads = [], viewIdentity = null } = {}) {
-  const ctx = createFrontendSandbox({
-    // 顶层启动的周期刷新在测试进程中不执行（VM timer stub）
-    setTimeout: () => 0,
-    setInterval: () => 0,
-    clearInterval: () => {},
-    clearTimeout: () => {},
+/** 经典夹具：宿主身份、运行时绑定、会话视图事实与渲染出口。 */
+function fixturesFor({
+  hostAgentId = 'programming-helper',
+  runtimeId = 'rt-ph',
+  runtimeSessionId = 'sess-A',
+  viewIdentity = null,
+} = {}) {
+  return {
+    currentLanguage: 'zh',
     getCurrentHostAgentRecord: () => ({ id: hostAgentId, source: 'prebuilt' }),
+    getRuntimeWorkspaceSessionId: (rid) => (rid === runtimeId ? runtimeSessionId : ''),
+    readCurrentSessionViewState: () => ({ identity: viewIdentity }),
     applySessionViewPatch: () => {},
     captureSessionViewToken: () => ({}),
     commitSessionViewPatch: () => false,
-    readCurrentSessionViewState: () => ({ identity: viewIdentity }),
-    getRuntimeWorkspaceSessionId: (rid) => (rid === runtimeId ? runtimeSessionId : ''),
-    setViewerSessionBinding: () => {},
     findSidebarOperation: () => null,
+    setViewerSessionBinding: () => {},
+    switchAgent: () => Promise.resolve(),
     renderAgentList: () => {},
     updateQueueIndicator: () => {},
     lastRenderedWorkspaceHtml: '',
-  });
-  ctx.window.switchAgent = () => Promise.resolve();
-  ctx.run(threadStoreSource);
-  ctx.run(`window.ClawThreads.threads = ${JSON.stringify(threads)}; (function(){ const s = window.ClawThreads; s.byId = {}; s.sessionIndex = {}; for (const t of s.threads) { s.byId[t.threadId] = t; for (const sid of (t.sessionIds || [])) { s.sessionIndex[t.agentId + '::' + sid] = t; } } })();`);
-  return ctx;
+  };
+}
+
+/** 把全局线程指向写成用例给定的指向（状态写入只落唯一 ClawThreads）。 */
+function setConversation(ctx, conversation) {
+  ctx.window.ClawThreads.activeConversation = conversation;
 }
 
 // 接续窗口形态：服务端只在 status='rotating' 时补读 handoffStartedAt
@@ -52,66 +58,110 @@ const WT = {
   sessionIds: ['sess-head', 'sess-old'],
 };
 
-test('getActiveThreadInputTarget：宿主已切走（残留指向他空间线程）→ null，输入不串线', () => {
-  const ctx = loadThreadStore({ hostAgentId: 'programming-helper', threads: [WT] });
-  ctx.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true })};`);
-  // 用户在 ph 会话 A 视图，全局残留指向 coder 线程
-  ctx.run('currentRuntimeAgentId = "rt-ph"; focusedAgentId = "programming-helper";');
-  assert.equal(ctx.run('window.getActiveThreadInputTarget()'), null,
-    '宿主不一致：残留不得作为输入目标');
+test('getActiveThreadInputTarget：宿主已切走（残留指向他空间线程）→ null，输入不串线', async () => {
+  await withThreadEngineCase({
+    fixtures: fixturesFor({ hostAgentId: 'programming-helper' }),
+    threads: [WT],
+  }, async ({ ctx }) => {
+    setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true });
+    // 用户在 ph 会话 A 视图，全局残留指向 coder 线程
+    ctx.currentRuntimeAgentId = 'rt-ph';
+    ctx.focusedAgentId = 'programming-helper';
+    assert.equal(ctx.window.getActiveThreadInputTarget(), null,
+      '宿主不一致：残留不得作为输入目标');
+  });
 });
 
-test('getActiveThreadInputTarget：视图确属该线程（head 健康 / 等待重绑）→ 返回指向', () => {
+test('getActiveThreadInputTarget：视图确属该线程（head 健康 / 等待重绑）→ 返回指向', async () => {
   // head 健康：宿主 coder，runtime 绑定 head 会话，SessionView identity 挂该会话
-  const healthy = loadThreadStore({ hostAgentId: 'coder', runtimeId: 'rt-coder', runtimeSessionId: 'sess-head', threads: [WT], viewIdentity: { agentId: 'coder', sessionId: 'sess-head' } });
-  healthy.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: 'rt-coder', wasHead: true })};`);
-  healthy.run('currentRuntimeAgentId = "rt-coder"; focusedAgentId = "coder";');
-  const r1 = healthy.run('window.getActiveThreadInputTarget()');
-  assert.ok(r1 && r1.threadId === 'wt-1', '视图一致：正常返回');
+  await withThreadEngineCase({
+    fixtures: fixturesFor({
+      hostAgentId: 'coder', runtimeId: 'rt-coder', runtimeSessionId: 'sess-head',
+      viewIdentity: { agentId: 'coder', sessionId: 'sess-head' },
+    }),
+    threads: [WT],
+  }, async ({ ctx }) => {
+    setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: 'rt-coder', wasHead: true });
+    ctx.currentRuntimeAgentId = 'rt-coder';
+    ctx.focusedAgentId = 'coder';
+    const r1 = ctx.window.getActiveThreadInputTarget();
+    assert.ok(r1 && r1.threadId === 'wt-1', '视图一致：正常返回');
+  });
 
   // 等待重绑：runtime 态被 404 清空，宿主焦点仍在 coder（_currentActiveSession 回退为指向自身）
-  const awaiting = loadThreadStore({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '', threads: [WT], viewIdentity: { agentId: 'coder', sessionId: 'sess-head' } });
-  awaiting.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true })};`);
-  awaiting.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
-  const r2 = awaiting.run('window.getActiveThreadInputTarget()');
-  assert.ok(r2 && r2.threadId === 'wt-1', '等待重绑态：宿主一致 + 回退一致，返回指向');
+  await withThreadEngineCase({
+    fixtures: fixturesFor({
+      hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '',
+      viewIdentity: { agentId: 'coder', sessionId: 'sess-head' },
+    }),
+    threads: [WT],
+  }, async ({ ctx }) => {
+    setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true });
+    ctx.currentRuntimeAgentId = '';
+    ctx.focusedAgentId = 'coder';
+    const r2 = ctx.window.getActiveThreadInputTarget();
+    assert.ok(r2 && r2.threadId === 'wt-1', '等待重绑态：宿主一致 + 回退一致，返回指向');
+  });
 });
 
-test('getActiveThreadInputTarget：视图已回工作空间首页（identity 无会话）→ null，残留不占高亮', () => {
+test('getActiveThreadInputTarget：视图已回工作空间首页（identity 无会话）→ null，残留不占高亮', async () => {
   // 用户从 coder 会话切回 coder 工作空间首页：runtime 态与 SessionView 会话
   // 身份被清空，但 activeConversation 残留（同宿主，_currentActiveSession 回
   // 退仍指向旧会话）。残留不得作为目标——宿主节点照常高亮，旧会话条目不
   // 残留选中（历史 bug：首页上旧会话条目常亮、宿主节点让位）。
-  const home = loadThreadStore({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '', threads: [WT], viewIdentity: null });
-  home.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true })};`);
-  home.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
-  assert.equal(home.run('window.getActiveThreadInputTarget()'), null,
-    '视图不在该会话上（首页）：残留指向不得作为输入/高亮目标');
+  await withThreadEngineCase({
+    fixtures: fixturesFor({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '', viewIdentity: null }),
+    threads: [WT],
+  }, async ({ ctx }) => {
+    setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true });
+    ctx.currentRuntimeAgentId = '';
+    ctx.focusedAgentId = 'coder';
+    assert.equal(ctx.window.getActiveThreadInputTarget(), null,
+      '视图不在该会话上（首页）：残留指向不得作为输入/高亮目标');
+  });
 
   // identity 挂在别的会话（用户已切到另一会话）同样拒绝
-  const elsewhere = loadThreadStore({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '', threads: [WT], viewIdentity: { agentId: 'coder', sessionId: 'sess-other' } });
-  elsewhere.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true })};`);
-  elsewhere.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
-  assert.equal(elsewhere.run('window.getActiveThreadInputTarget()'), null,
-    '视图已挂到别的会话：残留指向不得作为目标');
+  await withThreadEngineCase({
+    fixtures: fixturesFor({
+      hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '',
+      viewIdentity: { agentId: 'coder', sessionId: 'sess-other' },
+    }),
+    threads: [WT],
+  }, async ({ ctx }) => {
+    setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true });
+    ctx.currentRuntimeAgentId = '';
+    ctx.focusedAgentId = 'coder';
+    assert.equal(ctx.window.getActiveThreadInputTarget(), null,
+      '视图已挂到别的会话：残留指向不得作为目标');
+  });
 });
 
-test('_syncActiveThreadSubscription：等待重绑豁免以宿主焦点为界——切走即清残留', () => {
+test('_syncActiveThreadSubscription：等待重绑豁免以宿主焦点为界——切走即清残留', async () => {
   // 宿主切走（ph）：豁免失效，activeConversation 重建为 threadId:''
-  const away = loadThreadStore({ hostAgentId: 'programming-helper', runtimeId: 'rt-ph', runtimeSessionId: 'sess-A', threads: [WT] });
-  away.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true })};`);
-  away.run('currentRuntimeAgentId = "rt-ph"; focusedAgentId = "programming-helper";');
-  away.run('_syncActiveThreadSubscription();');
-  assert.equal(away.run('String(window.ClawThreads.activeConversation.threadId || "")'), '',
-    '宿主已切走：残留线程指向被清除');
+  await withThreadEngineCase({
+    fixtures: fixturesFor({ hostAgentId: 'programming-helper', runtimeId: 'rt-ph', runtimeSessionId: 'sess-A' }),
+    threads: [WT],
+  }, async ({ ctx, engine }) => {
+    setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true });
+    ctx.currentRuntimeAgentId = 'rt-ph';
+    ctx.focusedAgentId = 'programming-helper';
+    engine._syncActiveThreadSubscription();
+    assert.equal(String(ctx.window.ClawThreads.activeConversation.threadId || ''), '',
+      '宿主已切走：残留线程指向被清除');
+  });
 
   // 宿主仍是 coder（runtime 态清空的等待窗口）：豁免保留，等待 head-advanced 重绑
-  const held = loadThreadStore({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '', threads: [WT] });
-  held.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true })};`);
-  held.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
-  held.run('_syncActiveThreadSubscription();');
-  assert.equal(held.run('String(window.ClawThreads.activeConversation.threadId || "")'), 'wt-1',
-    '宿主未切走：等待重绑豁免保留线程指向');
+  await withThreadEngineCase({
+    fixtures: fixturesFor({ hostAgentId: 'coder', runtimeId: '', runtimeSessionId: '' }),
+    threads: [WT],
+  }, async ({ ctx, engine }) => {
+    setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true });
+    ctx.currentRuntimeAgentId = '';
+    ctx.focusedAgentId = 'coder';
+    engine._syncActiveThreadSubscription();
+    assert.equal(String(ctx.window.ClawThreads.activeConversation.threadId || ''), 'wt-1',
+      '宿主未切走：等待重绑豁免保留线程指向');
+  });
 });
 
 test('openConversationTarget 接续等待分支：切换落在该会话的聊天加载表面（不落首页）', async () => {

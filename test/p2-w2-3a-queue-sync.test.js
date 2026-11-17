@@ -181,6 +181,9 @@ async function waitFor(predicate, label) {
 }
 
 async function loadGraph(c) {
+  // 刷新引擎（P4 T3 起是真实 ESM）：交互域 thread-store-domain 在**装载期**取它的
+  // 窄宿主 createThreadStoreHost，必须先于 queue-projection 的 import 链进入同一张图。
+  await c.load('public/src/modules/thread-store.js');
   const orchestration = await c.load(ORCHESTRATION);
   const queueState = await c.load(QUEUE_STATE);
   const projection = await c.load(QUEUE_PROJECTION);

@@ -28,7 +28,8 @@ import './trim-ratio-core.js';
 // P2 消费方批次模块的生产装载入口（原 index.html classic 标签已删除）。
 // 放在最后：这些模块的桥键注册与 classic 相无交叉读写，与上面的宿主图之间
 // 也不存在求值期依赖；顺序理由与逐批清单见 p2-entry.js 头注。
-import './p2-entry.js';
-// P4（活跃域 classic 清零）批次入口：时序切换后新迁移的域，批次语义与 P2 不同
-// （不再有 classic 相同步触达约束），装载清单独立见 p4-entry.js。
+// P4（活跃域 classic 清零）批次入口：时序切换后新迁移的域。必须排在 p2-entry 之前：
+// P2 图里的消费方会在求值期经桥键取用 P4 提供的能力（如 thread-store-domain 装载时
+// 调 window.createThreadStoreHost()、chat-window 链取 chat-viewport 的锚点函数）。
 import './p4-entry.js';
+import './p2-entry.js';

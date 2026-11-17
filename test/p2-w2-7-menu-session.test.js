@@ -79,9 +79,6 @@ function caseOptions(extraClassic) {
         // 生产实现；boot 体挂在永不 resolve 的 __clawAuthReady 之后，主题 /
         // 语言应用与周期排程一并中和（用例不驱动首屏 DOM）。
         prepareClassicSandbox(sandbox);
-        // index.html 里仍是 classic 的生产脚本（先行序不含它们）：thread-store
-        // 提供 ESM 图在模块求值期取用的线程查询宿主。
-        sandbox.loadSource('public/src/modules/thread-store.js');
         installRenderOutlets(sandbox);
         if (typeof extraClassic === 'function') extraClassic(sandbox);
       },
@@ -92,6 +89,9 @@ function caseOptions(extraClassic) {
 
 /** 装载整图并取回本批模块的命名导出（同一 case 内同一实例）。 */
 async function loadBatch(c) {
+  // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+  // createThreadStoreHost，必须先于 thread-store-domain 进同一张图。
+  await c.load('public/src/modules/thread-store.js');
   // 远程连接域已迁 ESM（P4 T3）：真实 import 代替原 classic 标签位
   // （ctx-menu-items / session-menu-decls / sidebar-render 的远程半边都读它）。
   await c.load('public/src/modules/remote-connections.js');

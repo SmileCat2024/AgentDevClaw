@@ -46,6 +46,12 @@ import './debug-features-hooks.js'; // renderFeaturesPanel / renderReverseHooksP
 import './bg-panel.js'; // 后台任务面板；桥 BgPanel ← agent-data-loader
 import './voice-input.js'; // 语音录制 / 转写；状态键 owner 在 p2-w2-3a-voice-state，api 经 voice-input-api 域
 
+// ── T3 长尾：线程刷新引擎与插件清单 ──
+import './thread-store.js'; // 线程刷新引擎（2s 启动 / 20s 周期 / visibilitychange）；桥 domain thread-store-engine
+import './plugin-manifest.js'; // APP 插件清单解析；桥 resolveAgentPlugin ← app-ui
+// auth-client 判定 R1/R2/R4 触线，保持 classic：它创建 __clawAuthReady 并被 app-main
+// 顶层 IIFE 等待，创建时点不能后移到模块相（详见 P4 计划实施记录）。
+
 // ── T3 长尾：远程连接（remote-connections）──
 import './remote-connections.js'; // 远程命名空间 / 侧栏远程投影 / 远程写链路；10 桥键
 
@@ -61,6 +67,10 @@ import './chat-renderer.js';
 // runtime-status 仍保持 classic 唯一实现：_agentSuspended 被 sidebar-render 的
 // createAgentCallStatesHost() 在 classic 加载期读取（app-main 顶层 IIFE 调用），
 // 属 R1 顺序依赖，需等 sidebar-render / app-main 残余迁出后才能转。
+
+// ── T2 渲染层：输入面剩余两件（input-composer / persistent-input）──
+import './input-composer.js'; // 会话草稿缓存 + 模式判定 + composer 本体；桥 domain input-composer / input-composer-api
+import './persistent-input.js'; // 常驻输入框 / 队列提交 / 图片附件；桥 input-queue / input-call-elapsed / persistent-input-api
 
 // ── T2 渲染层：聊天滚动与输入薄壳（T3 批次三）──
 import './rollback-dialog.js'; // 部分压缩状态键注册壳（owner/claim 在 p2-w2-3b-rollback-domain）

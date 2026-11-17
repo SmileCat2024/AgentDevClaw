@@ -105,9 +105,6 @@ function createGraphHarness() {
       label: 'p2-input-loader-cycle-graph',
       classic: (sandbox) => {
         prepareClassicSandbox(sandbox);
-        // index.html 里 thread-store.js 仍是 classic（刷新引擎原位注册），其
-        // createThreadStoreHost 供已迁的 thread-store-domain 在装载期取用。
-        sandbox.loadSource('public/src/modules/thread-store.js');
       },
       globals: {
         fetch: fetchStub,
@@ -141,7 +138,12 @@ async function withGraphCase(fn, { extraClassic = null } = {}) {
       extraClassic(sandbox);
     };
   }
-  const result = await withP2EsmCase(harness.options, (c) => fn(c, harness));
+  const result = await withP2EsmCase(harness.options, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+    // createThreadStoreHost，必须先于 thread-store-domain 进同一张图。
+    await c.load('public/src/modules/thread-store.js');
+    return fn(c, harness);
+  });
   const unexpected = harness.endpoints.filter((url) => !EXPECTED_ENDPOINTS.includes(url));
   assert.deepEqual(unexpected, [], '整图 fixture 不得命中未登记端点（契约形状必须按真实端点给出）');
   assert.deepEqual(harness.errors, [], '整图求值不得产生任何 console.error（含 fixture 契约不匹配的失败告警）');

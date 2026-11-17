@@ -3,8 +3,8 @@
  * 真实行为与兼容面。
  *
  * 装载路线：`withP2EsmCase`（真实 import + 真实 classic 沙箱）。classic 相跑
- * kernel-state 与 persistent-input（提供 `_ensureInputMetaBar` /
- * `_cleanupInputMetaBar` 这两个仍在 classic 的 meta bar 助手），经典宿主函数
+ * kernel-state 与 persistent-input（P4 输入面批次起是 ESM：`_ensureInputMetaBar` /
+ * `_cleanupInputMetaBar` 经 persistent-input-api 桥键提供），经典宿主函数
  * （会话键、chat surface 判定、agent 记录）按生产签名注入最小桩；ESM 相跑
  * recap-hint 与其静态依赖（recap 状态 owner + 会话/身份/编排/语言域）。
  *
@@ -145,7 +145,8 @@ function recapCaseOptions({ sessionKey = 'session-a', chatActive = true } = {}) 
     options: {
       classic: (sandbox) => {
         sandbox.loadSource('public/src/modules/kernel-state.js');
-        sandbox.loadSource('public/src/modules/persistent-input.js');
+        // persistent-input 已迁 ESM（P4 输入面批次）：用例体里 c.load，桥键
+        // （_ensureInputMetaBar / _cleanupInputMetaBar）随其模块相注册。
         // classic 宿主面（生产由 app-main / app-ui / app-core 提供）
         sandbox._getSessionInputCacheKey = () => host.sessionKey;
         sandbox.isChatSurfaceActive = () => host.chatActive;
@@ -157,6 +158,12 @@ function recapCaseOptions({ sessionKey = 'session-a', chatActive = true } = {}) 
         document: documentStub,
         ClawFW: { actions: { registerMany() {} }, SseClient: null },
         fetch: async (url) => { fetchCalls.push(String(url)); return { ok: true, json: async () => ({}) }; },
+        // 输入面静态图的 classic 宿主工厂（生产由 app-core / app-main 提供）。
+        // 本用例只用 _ensureInputMetaBar / _cleanupInputMetaBar，两个能力不触达这些 seam。
+        createSessionViewCommitHost: () => ({}),
+        createP2BootstrapCallActivityHost: () => ({}),
+        createP2BootstrapDomHost: () => ({}),
+        createPollCoordinatorHost: () => ({}),
       },
     },
   };
@@ -165,6 +172,8 @@ function recapCaseOptions({ sessionKey = 'session-a', chatActive = true } = {}) 
 test('recap 策略不变：RECAP_DISABLED 断开触发链路，且不发 recap 请求', async () => {
   const { options, fetchCalls } = recapCaseOptions();
   await withP2EsmCase(options, async (c) => {
+    // 输入面 meta bar 助手（persistent-input 的桥键）先于 recap 渲染就位
+    await c.load('public/src/modules/persistent-input.js');
     const recap = await c.load(RECAP);
     assert.equal(recap.RECAP_DISABLED, true, '临时禁用策略必须原样保留');
 
@@ -193,6 +202,8 @@ test('recap 策略不变：RECAP_DISABLED 断开触发链路，且不发 recap �
 test('recap 状态 owner：桥面访问器与活绑定双向一致', async () => {
   const { options } = recapCaseOptions();
   await withP2EsmCase(options, async (c) => {
+    // 输入面 meta bar 助手（persistent-input 的桥键）先于 recap 渲染就位
+    await c.load('public/src/modules/persistent-input.js');
     const recap = await c.load(RECAP);
     const state = await c.load(RECAP_STATE);
 
@@ -224,6 +235,8 @@ test('recap 状态 owner：桥面访问器与活绑定双向一致', async () =>
 test('recap 语义 clear：清文本与挂起意图，只遗忘当前会话的记账', async () => {
   const { options } = recapCaseOptions({ sessionKey: 'session-a' });
   await withP2EsmCase(options, async (c) => {
+    // 输入面 meta bar 助手（persistent-input 的桥键）先于 recap 渲染就位
+    await c.load('public/src/modules/persistent-input.js');
     const recap = await c.load(RECAP);
     const state = await c.load(RECAP_STATE);
 
@@ -253,6 +266,8 @@ test('recap 语义 clear：清文本与挂起意图，只遗忘当前会话的�
 test('recap 渲染面：有摘要文本时挂到 meta bar，dismiss 后移除', async () => {
   const { options, inputContainer } = recapCaseOptions({ sessionKey: 'session-a', chatActive: true });
   await withP2EsmCase(options, async (c) => {
+    // 输入面 meta bar 助手（persistent-input 的桥键）先于 recap 渲染就位
+    await c.load('public/src/modules/persistent-input.js');
     const recap = await c.load(RECAP);
     const state = await c.load(RECAP_STATE);
 

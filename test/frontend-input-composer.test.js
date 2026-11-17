@@ -320,8 +320,15 @@ function buildInputGlobals(doc, state, getRuntimeAgentId) {
     isChatSurfaceActive: () => true,
     isRemoteNamespaceAgentId: () => false,
     readCurrentSessionViewState: () => ({ inputRequests: state.requests }),
-    captureSessionViewToken: (runtimeId) => ({ runtimeId, key: state.liveKey }),
-    isSessionViewTokenCurrent: (token) => token.runtimeId === getRuntimeAgentId() && token.key === state.liveKey,
+    // 会话视图 token：真实判定（session-view-commit）按字段比较——空身份 token 以
+    // runtimeId 为准；switchEpoch / generation 取 owner 的初值（0 / undefined）。
+    captureSessionViewToken: (runtimeId) => ({
+      runtimeId,
+      identity: null,
+      switchEpoch: 0,
+      generation: undefined,
+      key: state.liveKey,
+    }),
     runWithSuppressedChatViewportObservers: (fn) => fn(),
     notifyChatViewportMutation: () => {},
     isChoiceInputRequest: (req) => !!req && req.mode === 'choices'
@@ -356,12 +363,33 @@ function buildInputGlobals(doc, state, getRuntimeAgentId) {
       'createMessageProbeHost', 'createMetadataCommitHost', 'createP2BootstrapCallActivityHost',
       'createP2BootstrapDomHost', 'createP2BootstrapSessionSwitchHost',
       'createP2BootstrapSidebarHost', 'createP2BootstrapSidebarRenderHost',
-      'createPollCoordinatorHost', 'createRuntimeNotFoundHost', 'createSessionViewCommitHost',
+      'createPollCoordinatorHost', 'createRuntimeNotFoundHost',
     ].map((name) => [name, () => ({})])),
+    // 会话提交策略的宿主面（生产由 classic session-view-state 提供）：按策略实际
+    // 读取的字段给形状（identity 空 = 无身份 token，token 以 runtimeId 为准）。
+    createSessionViewCommitHost: () => ({
+      identity: () => null,
+      read: () => ({}),
+      apply: () => {},
+      normalizeModel: () => ({}),
+    }),
     // 调用状态容器按引用共享（sse-client 的 choice 提醒经它去重）
     createP2BootstrapCallActivityHost: () => ({ _seenChoiceAlertIds: new Set() }),
     // agent-loader-host 装载期读 classic 相交出的详情缓存容器（app-core 持有）
     AgentLoaderHost: { loadedAgentDetailIds: new Set() },
+    // 提交成功后置的 UI / 记账汇点（生产来自 runtime-status / desktop-notify /
+    // sidebar-render / chat-viewport / recap-hint）：本夹具只断言提交端点与草稿。
+    isRuntimeCalling: () => false,
+    isInterruptSuppressed: () => false,
+    clearInterruptSuppression: () => {},
+    _markAgentCallStartedForNotify: () => {},
+    _requestNotifyPermission: () => {},
+    renderAgentList: () => {},
+    beginFollowLatestEntryWindow: () => {},
+    requestFollowLatest: () => {},
+    updateQueueIndicator: () => {},
+    _clearRecapForNewMessage: () => {},
+    refreshThreads: () => {},
     _renderAttachmentPreview: () => {},
     _renderLastCallElapsed: () => {},
     _renderRecapHint: () => {},
@@ -390,21 +418,16 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
   return ctx;
 }
 
-// classic 相注入模块源码，与 index.html 加载序语义一致（input-composer →
-// persistent-input 切片）。输入面渲染器已迁 ESM（P4 T2），改由 withInputEsmCase
-// 在用例体里真实 import（见该函数），不再作为 classic 源注入。
-function loadInputClassic(ctx) {
-  ctx.loadSource('public/src/modules/input-composer.js');
-  // getInputSurfaceMode（app-main.js 现已委托 composer 模块的纯函数）
+// classic 相只保留「模式判定入口」：app-main 的 getInputSurfaceMode 是 classic
+// 实现（整份 app-main 会拉起启动链），这里注入真实的那一段源码；它调用的
+// resolveInputSurfaceMode / readInputSurfaceModeState 由 input-composer 的桥键
+// 提供（P4 输入面批次起是 ESM，见 withInputEsmCase 的用例体）。
+function loadInputSurfaceModeEntry(ctx) {
   ctx.run(`
     function getInputSurfaceMode(requests = readCurrentSessionViewState().inputRequests) {
       return resolveInputSurfaceMode(readInputSurfaceModeState(requests, isChatSurfaceActive()));
     }
   `);
-  const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-  const start = persistentSource.indexOf('function renderPersistentInput(container) {');
-  const end = persistentSource.indexOf('function onPersistentBtnClick', start);
-  ctx.run(persistentSource.slice(start, end));
 }
 
 // input-composer / input-render / persistent-input 仍是 classic（同步首屏边界），
@@ -441,9 +464,15 @@ function withInputEsmCase(options, fn) {
       sandbox.KernelState.defineKey('i18n-environment', 'currentLanguage', 'zh');
       sandbox.KernelState.defineKey('orchestration', 'currentRuntimeAgentId', 'agent-1');
       sandbox.KernelState.defineKey('orchestration', '_switchEpoch', 0);
+      // 只读态与会话视图快照同样是「classic 相注册真初值 → ESM owner 认领」
+      // （生产由 app-core 注册）：用例里 ctx.readOnlyMode = true 仍按 window 写方
+      // 语义经访问器落到 agent-store owner，输入面模式判定读到同一份状态。
+      sandbox.KernelState.defineKey('agent-store', 'readOnlyMode', false);
+      sandbox.KernelState.defineKey('session-view-storage', 'currentMessages', []);
+      sandbox.KernelState.defineKey('session-view-storage', 'currentInputRequests', []);
       // ESM 图内的模块装载期注册动作处理器（window.ClawFW.actions）。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      loadInputClassic(sandbox);
+      loadInputSurfaceModeEntry(sandbox);
       // 装载期宿主面（本 fixture 的 classic 相只到输入面切片，不含 app-core /
       // app-main / app-ui）。真实链安装实测被阻断：app-core 会重复注册本用例预置的
       // 内核桥键（或反过来），app-ui 的 renderCurrentMainView 需要整条页面渲染链
@@ -489,6 +518,9 @@ function withInputEsmCase(options, fn) {
     // 访问器 + owner claim），再真实 import 渲染入口。渲染入口经 c.expose 注入
     // 沙箱，让用例的经典驱动面（ctx.run）与生产入口名一致。
     await c.load('public/src/modules/rollback-dialog.js');
+    // 输入面实现（P4 输入面批次起是 ESM）：composer 组件 + 常驻输入组件的桥键
+    // （模式判定 / 草稿 / 渲染入口）必须先于渲染入口的调用就位。
+    await c.load('public/src/modules/persistent-input.js');
     const render = await c.load(INPUT_RENDER);
     c.expose('renderInputRequests', render.renderInputRequests);
     c.expose('notifyInputSurfaceChanged', render.notifyInputSurfaceChanged);
@@ -499,28 +531,13 @@ function withInputEsmCase(options, fn) {
 
 // ── 排队投影装载面（ESM 用例共用）──────────────────────────────────────────
 // 状态 owner（p2-w2-3a-input-queue-state）与投影/同步实现
-// （p2-w2-3a-queue-projection）已是 ESM → 真实 import；首屏同步边界仍是
-// classic 的两段（内核桥键注册 + rebindQueueProjectionForRuntime）继续跑真实
-// classic 源切片，与 index.html 加载序语义一致。
-const PERSISTENT_INPUT_SOURCE = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-
+// （p2-w2-3a-queue-projection）已是 ESM → 真实 import；输入面实现
+// （persistent-input，含 rebindQueueProjectionForRuntime 与交互面守卫）同样是
+// ESM，在用例体里与投影同图装载，不再按源码切片重放。
 function loadQueueClassicBootstrap(sandbox) {
   // 投影模块已 import 会话提交策略宿主：classic commit host 由 session-view-state
   // 提供（生产同源）。
   sandbox.loadSource('public/src/modules/session-view-state.js');
-  // 线程暂存文本经交互域（thread-store-domain）取自 classic 刷新引擎的
-  // createThreadStoreHost：按生产顺序装真实引擎（不复制宿主契约）。
-  sandbox.loadSource('public/src/modules/thread-store.js');
-  const keysStart = PERSISTENT_INPUT_SOURCE.indexOf("window.KernelState.defineKey('input-queue', '_pendingQueuedCount', 0);");
-  const keysEnd = PERSISTENT_INPUT_SOURCE.indexOf('let _submitInFlight', keysStart);
-  sandbox.run(PERSISTENT_INPUT_SOURCE.slice(keysStart, keysEnd));
-  const rebindStart = PERSISTENT_INPUT_SOURCE.indexOf('function rebindQueueProjectionForRuntime(runtimeId) {');
-  const rebindEnd = PERSISTENT_INPUT_SOURCE.indexOf('function handlePersistentInputKey', rebindStart);
-  sandbox.run(PERSISTENT_INPUT_SOURCE.slice(rebindStart, rebindEnd));
-  // 投影渲染的交互面守卫（classic：交互卡占用输入面期间不出排队气泡）
-  const guardStart = PERSISTENT_INPUT_SOURCE.indexOf('function _interactiveSurfaceOccupiesInput() {');
-  const guardEnd = PERSISTENT_INPUT_SOURCE.indexOf('function _renderLastCallElapsed', guardStart);
-  sandbox.run(PERSISTENT_INPUT_SOURCE.slice(guardStart, guardEnd));
 }
 
 function withQueueProjectionCase(extraGlobals, fn) {
@@ -536,6 +553,11 @@ function withQueueProjectionCase(extraGlobals, fn) {
       ...(extraGlobals || {}),
     },
   }, async ({ c, doc, state, container, choiceContainer }) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主 createThreadStoreHost，
+// 必须先于 thread-store-domain 进入同一张图。
+    await c.load('public/src/modules/thread-store.js');
+    // 输入面实现：排队重绑（rebindQueueProjectionForRuntime）与交互面守卫的桥键来源
+    await c.load('public/src/modules/persistent-input.js');
     const queueState = await c.load(INPUT_QUEUE_STATE);
     const projection = await c.load(QUEUE_PROJECTION);
     return fn({ c, doc, state, container, choiceContainer, queueState, projection });
@@ -816,58 +838,29 @@ describe('composer session draft isolation (ticket 036)', () => {
   }));
 
   it('deletes the draft key after a successful persistent submit', () => withInputCase(async (ctx) => {
-    // 提交路径依赖（persistent-input.js submitQueuedInput 片段的伴生 stub）
-    ctx.run(`
-      let _submitInFlight = false;
-      let _queuedTexts = [];
-      let _pendingQueuedCount = 0;
-      let _localQueuedInputPending = false;
-      let _lastQueueBubbleSignature = "";
-      // 图片桶（按会话隔离）：submit 片段引用的伴生 stub，与真实实现同构
-      const _pendingImageBuckets = new Map();
-      function _imageBucketKey() { return 'agent-1::session-a'; }
-      function _imageBucket() {
-        let b = _pendingImageBuckets.get(_imageBucketKey());
-        if (!Array.isArray(b)) { b = []; _pendingImageBuckets.set(_imageBucketKey(), b); }
-        return b;
-      }
-    `);
-    // 真实提交路径（persistent-input.js）
-    const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-    const submitStart = persistentSource.indexOf('async function submitQueuedInput()');
-    // 提交段止于中断函数（排队投影/气泡函数已迁 ESM，不再作为边界标记）
-    const submitEnd = persistentSource.indexOf('async function interruptAgent', submitStart);
-    ctx.run(persistentSource.slice(submitStart, submitEnd));
     ctx.run('renderInputRequests([])');
     ctx.run(`
       const ta = document.getElementById('input-persistent');
       ta.value = 'send me';
       _cacheSessionInput(ta);
     `);
-    ctx.fetchCalls = [];
-    ctx.fetch = async (url, opts) => {
-      ctx.fetchCalls.push({ url, opts });
+    // 真实提交路径（persistent-input.js，P4 输入面批次起是 ESM）：经桥键调用与
+    // classic 消费方同一条入口；网络面由主 realm 的 fetch 桩接管（模块裸引用）。
+    const fetchCalls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      fetchCalls.push({ url: String(url), opts });
       return { ok: true, status: 200, json: async () => ({ delivery: 'direct' }) };
     };
-    // await 期间的依赖 stub
-    ctx.run(`
-      async function _resolvePendingImagesForTarget() { return { images: [], failedCount: 0 }; }
-      function clearPendingInputImages() {}
-      function _requestNotifyPermission() {}
-      function _clearRecapForNewMessage() {}
-      function beginFollowLatestEntryWindow() {}
-      function requestFollowLatest() {}
-      function clearInterruptSuppression() {}
-      function _markAgentCallStartedForNotify() {}
-      function renderAgentList() {}
-      function newIdempotencyKey() { return "test-key"; }
-    `);
+    try {
+      await ctx.run('submitQueuedInput()');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
 
-    await ctx.run('submitQueuedInput()');
-
-    assert.equal(ctx.fetchCalls.length, 1, 'exactly one user-turn POST');
-    assert.equal(ctx.fetchCalls[0].url, '/api/agents/agent-1/user-turn');
-    assert.equal(JSON.parse(ctx.fetchCalls[0].opts.body).text, 'send me');
+    assert.equal(fetchCalls.length, 1, 'exactly one user-turn POST');
+    assert.equal(fetchCalls[0].url, '/api/agents/agent-1/user-turn');
+    assert.equal(JSON.parse(fetchCalls[0].opts.body).text, 'send me');
     // 提交成功：草稿键删除（已发送文本不得经草稿写回"复活"）
     assert.equal(ctx.run(`Object.prototype.hasOwnProperty.call(_sessionInputCache, 'session-a')`), false);
   }));
@@ -1010,11 +1003,10 @@ describe('draft cache migration compatibility (ticket 036)', () => {
   it('keeps voice-input.js consumers working against the composer-owned cache', async () => {
     const toasts = [];
     await withP2EsmCase({
-      classic: (sandbox) => {
-        prepareClassicSandbox(sandbox);
-        sandbox.loadSource('public/src/modules/input-composer.js');
-      },
+      classic: prepareClassicSandbox,
     }, async (c) => {
+      // composer（P4 输入面批次起是 ESM）：桥键 `_sessionInputCache` 由它注册
+      await c.load('public/src/modules/input-composer.js');
       const voiceInput = await c.load('public/src/modules/voice-input.js');
       // toast-notify 在自己的模块求值时挂 window.ClawToast，桩在装载之后覆盖。
       c.window.ClawToast = { show: (value) => toasts.push(value) };
@@ -1036,12 +1028,35 @@ describe('draft cache migration compatibility (ticket 036)', () => {
 });
 
 // ── 用例 4：模式判定九级优先级矩阵（行为契约 §3）纯函数锁死 ─────────────────
+// 判定函数随 input-composer 迁 ESM（P4 输入面批次）：真实 import 后直接调用导出，
+// 纯函数用例不再经沙箱求值。
+
+const PERSISTENT_INPUT = 'public/src/modules/persistent-input.js';
+const INPUT_COMPOSER = 'public/src/modules/input-composer.js';
+
+/** 输入面实现的裸图选项：只需内核桥 + 静态依赖的 classic 宿主工厂。 */
+function inputModuleCaseOptions(label) {
+  return {
+    label,
+    classic: (sandbox) => { sandbox.loadSource('public/src/modules/kernel-state.js'); },
+    globals: {
+      // 分发器公开面（生产由 public/src/modules/action-dispatcher.js 提供）：
+      // 输入面模块在装载期注册 composer.* 动作。
+      ClawFW: { actions: { registerMany() {}, register() {}, bindEventType() {} } },
+      createSessionViewCommitHost: () => ({
+        identity: () => null,
+        read: () => ({}),
+        apply: () => {},
+        normalizeModel: () => ({}),
+      }),
+      createP2BootstrapCallActivityHost: () => ({ _agentCallActive: new Map() }),
+      createP2BootstrapDomHost: () => ({}),
+      createPollCoordinatorHost: () => ({}),
+    },
+  };
+}
 
 describe('input surface mode matrix (contract §3, ticket 036)', () => {
-  const ctx = createInputSandbox();
-  ctx.loadSource('public/src/modules/input-composer.js');
-  const resolve = (state) => ctx.run(`resolveInputSurfaceMode(${JSON.stringify(state)})`);
-
   const baseState = {
     chatActive: true,
     readOnlyMode: false,
@@ -1053,7 +1068,13 @@ describe('input surface mode matrix (contract §3, ticket 036)', () => {
     hasLocalQueuedInput: false,
   };
 
-  it('locks the nine-level priority matrix', () => {
+  const withModeCase = (fn) => withP2EsmCase(inputModuleCaseOptions('mode-matrix'), async (c) => {
+    const composer = await c.load(INPUT_COMPOSER);
+    return fn(composer, c);
+  });
+
+  it('locks the nine-level priority matrix', () => withModeCase(async (composer) => {
+    const resolve = (state) => composer.resolveInputSurfaceMode(state);
     // 级 1：非 chat surface → hidden（无论其他状态）
     assert.equal(resolve({ ...baseState, chatActive: false, hasRuntimeSelected: true, readOnlyMode: true }), 'hidden');
     // 级 2：只读是明确的只读提示面
@@ -1079,184 +1100,127 @@ describe('input surface mode matrix (contract §3, ticket 036)', () => {
     assert.equal(resolve({ ...baseState, hasThreadAwaitTarget: true }), 'persistent');
     // 级 9：都不满足 → hidden
     assert.equal(resolve({ ...baseState }), 'hidden');
-  });
+  }));
 
-  it('readInputSurfaceModeState derives hasThreadAwaitTarget from the consistency-checked thread target', () => {
+  it('readInputSurfaceModeState derives hasThreadAwaitTarget from the consistency-checked thread target', () => withModeCase(async (composer, c) => {
+    const orchestration = await c.load('public/src/modules/orchestration-state.js');
+    c.window.getActiveThreadInputTarget = () => ({ threadId: 'wt-1', sessionId: 's1' });
     // runtime 态在场：等待目标不参与（矩阵级 8 由 runtime 放行）
-    ctx.run(`currentRuntimeAgentId = 'rt-1'`);
-    ctx.run(`window.getActiveThreadInputTarget = () => ({ threadId: 'wt-1', sessionId: 's1' })`);
-    assert.equal(ctx.run(`readInputSurfaceModeState([], true).hasRuntimeSelected`), true);
-    assert.equal(ctx.run(`readInputSurfaceModeState([], true).hasThreadAwaitTarget`), false);
+    orchestration.setCurrentRuntimeAgentId('rt-1');
+    assert.equal(composer.readInputSurfaceModeState([], true).hasRuntimeSelected, true);
+    assert.equal(composer.readInputSurfaceModeState([], true).hasThreadAwaitTarget, false);
     // runtime 态为空 + 一致性校验命中的等待会话：等待目标成立
-    ctx.run(`currentRuntimeAgentId = null`);
-    assert.equal(ctx.run(`readInputSurfaceModeState([], true).hasThreadAwaitTarget`), true);
-    assert.equal(ctx.run(`resolveInputSurfaceMode(readInputSurfaceModeState([], true))`), 'persistent');
+    orchestration.setCurrentRuntimeAgentId(null);
+    assert.equal(composer.readInputSurfaceModeState([], true).hasThreadAwaitTarget, true);
+    assert.equal(composer.resolveInputSurfaceMode(composer.readInputSurfaceModeState([], true)), 'persistent');
     // 校验未命中（用户切走 / 残留清理）→ 回到 hidden
-    ctx.run(`window.getActiveThreadInputTarget = () => null`);
-    assert.equal(ctx.run(`readInputSurfaceModeState([], true).hasThreadAwaitTarget`), false);
-    assert.equal(ctx.run(`resolveInputSurfaceMode(readInputSurfaceModeState([], true))`), 'hidden');
-  });
+    c.window.getActiveThreadInputTarget = () => null;
+    assert.equal(composer.readInputSurfaceModeState([], true).hasThreadAwaitTarget, false);
+    assert.equal(composer.resolveInputSurfaceMode(composer.readInputSurfaceModeState([], true)), 'hidden');
+  }));
 });
 
-// voice-input.js 片段提取（与 frontend-interrupt-voice-lifecycle.test.js 同款方式）
-function sourceBetween(source, startMarker, endMarker) {
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start);
-  if (start === -1) throw new Error(`Missing start marker: ${startMarker}`);
-  if (end === -1) throw new Error(`Missing end marker: ${endMarker}`);
-  return source.slice(start, end);
+// ── 图片附件：转存 await 期间的移除竞态 + 按会话分桶（真实实现）─────────────
+// persistent-input 迁 ESM 后不再按源码切片重放：两个用例直接驱动真实
+// `_resolvePendingImagesForTarget` / `clearPendingInputImages`，网络面用可控的
+// fetch 桩把「转存请求在途」这一窗口显式打开。
+
+function withImageCase(label, fn) {
+  return withP2EsmCase(inputModuleCaseOptions(label), async (c) => {
+    const persistent = await c.load(PERSISTENT_INPUT);
+    return fn({ c, persistent, seam: persistent.__testInputState });
+  });
 }
 
-
 describe('pending image removal race during await (remote image review S1)', () => {
-  function loadImageResolverSandbox() {
-    const ctx = createInputSandbox();
-    loadInputClassic(ctx);
-    ctx.run(`
-      const _pendingImageBuckets = new Map();
-      _pendingImageBuckets.set('bucket', []);
-      function _imageBucketKey() { return 'bucket'; }
-      function _imageHostKey() { return 'host-a'; }
-      // 模拟转存：传输 await 期间用户点击移除（removePendingImage → splice）
-      window.__transferEntry = null;
-      async function _uploadImageEntryTo(entry) {
-        if (entry.source === 'removed') {
-          const bucket = _pendingImageBuckets.get('bucket');
-          const idx = bucket.indexOf(entry);
-          bucket.splice(idx, 1);
-        }
-        entry.path = '/images/' + entry.source + '.png';
-      }
-    `);
-    // 真实实现（persistent-input.js 中 _resolvePendingImagesForTarget 片段）
-    const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-    ctx.run(sourceBetween(source, 'async function _resolvePendingImagesForTarget', 'function clearPendingInputImages'));
-    return ctx;
-  }
-
   it('drop removal during the transfer await: removed entry never sent, kept entry always sent', async () => {
-    const ctx = loadImageResolverSandbox();
-    const outcome = await ctx.run(`
-      (async () => {
-        const removed = { source: 'removed', path: null, mediaType: 'image/png' };
-        const kept = { source: 'kept', path: null, mediaType: 'image/png' };
-        _pendingImageBuckets.get('bucket').push(removed, kept);
-        return _resolvePendingImagesForTarget('agent-1', 'bucket');
-      })()
-    `);
-    // 已移除：不随消息发出（S1 方向 a）；未移除者必发送（S1 方向 b）。
-    // 断言经 String 归一（沙箱 vm 与测试主上下文原型域不同）。
-    const paths = (outcome.images || []).map((img) => String(img.path));
-    assert.deepEqual([...paths], ['/images/kept.png'], 'await 期间被移除的附件不得随消息发送');
-    assert.equal(outcome.failedCount, 0, '用户主动移除不算上传失败');
+    await withImageCase('image-race-drop', async ({ persistent, seam }) => {
+      const realFetch = globalThis.fetch;
+      let releaseTransfer = null;
+      globalThis.fetch = () => new Promise((resolve) => {
+        releaseTransfer = () => resolve({ ok: true, status: 200, json: async () => ({ path: '/images/transferred.png' }) });
+      });
+      try {
+        // 目标宿主机是本地：_hostKey 不一致的条目必须转存（走 fetch —— 在途窗口）
+        const removed = { source: 'removed', path: '/images/old.png', mediaType: 'image/png', _hostKey: 'remote:conn-1', _uploadPromise: null };
+        const kept = { source: 'kept', path: '/images/kept.png', mediaType: 'image/png', _hostKey: 'local', _uploadPromise: null };
+        const bucket = seam.imageBucket;
+        bucket.push(removed, kept);
+
+        const pending = persistent._resolvePendingImagesForTarget('agent-1', 'default');
+        // 等转存请求真正发出，再模拟用户点「移除」（UI 动作 splice 同一个桶）
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        bucket.splice(bucket.indexOf(removed), 1);
+        releaseTransfer();
+
+        const outcome = await pending;
+        assert.deepEqual(outcome.images.map((img) => String(img.path)), ['/images/kept.png'],
+          'await 期间被移除的附件不得随消息发送');
+        assert.equal(outcome.failedCount, 0, '用户主动移除不算上传失败');
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    });
   });
 
   it('removal racing a failed transfer: user-removed entry is not counted as failure (review R1)', async () => {
-    const ctx = loadImageResolverSandbox();
-    const outcome = await ctx.run(`
-      (async () => {
-        const removed = { source: 'removed', path: null, mediaType: 'image/png' };
-        const kept = { source: 'kept', path: null, mediaType: 'image/png' };
-        _pendingImageBuckets.get('bucket').push(removed, kept);
-        // 转存失败与移除同窗口：移除者不计失败，剩余附件照常发送
-        async function _uploadImageEntryTo(entry) {
-          if (entry.source === 'removed') {
-            const bucket = _pendingImageBuckets.get('bucket');
-            const idx = bucket.indexOf(entry);
-            bucket.splice(idx, 1);
-            throw new Error('tunnel reset after removal');
-          }
-          entry.path = '/images/' + entry.source + '.png';
-        }
-        return _resolvePendingImagesForTarget('agent-1', 'bucket');
-      })()
-    `);
-    const paths = (outcome.images || []).map((img) => String(img.path));
-    assert.deepEqual([...paths], ['/images/kept.png'], '失败与移除同窗口时，移除者不发送、保留者照常发送');
-    assert.equal(outcome.failedCount, 0, '已移除附件的转存失败不得计入 failedCount');
+    await withImageCase('image-race-failure', async ({ persistent, seam }) => {
+      const realFetch = globalThis.fetch;
+      let rejectTransfer = null;
+      globalThis.fetch = () => new Promise((_resolve, reject) => {
+        rejectTransfer = () => reject(new Error('tunnel reset after removal'));
+      });
+      try {
+        const removed = { source: 'removed', path: '/images/old.png', mediaType: 'image/png', _hostKey: 'remote:conn-1', _uploadPromise: null };
+        const kept = { source: 'kept', path: '/images/kept.png', mediaType: 'image/png', _hostKey: 'local', _uploadPromise: null };
+        const bucket = seam.imageBucket;
+        bucket.push(removed, kept);
+
+        const pending = persistent._resolvePendingImagesForTarget('agent-1', 'default');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        bucket.splice(bucket.indexOf(removed), 1);
+        rejectTransfer();
+
+        const outcome = await pending;
+        assert.deepEqual(outcome.images.map((img) => String(img.path)), ['/images/kept.png'],
+          '失败与移除同窗口时，移除者不发送、保留者照常发送');
+        assert.equal(outcome.failedCount, 0, '已移除附件的转存失败不得计入 failedCount');
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    });
   });
 });
 
 // ── 图片附件会话隔离：按会话 key 分桶，挂载/消费/清空互不串扰 ─────────────
 describe('pending image session isolation (attachment buckets per session)', () => {
-  function loadImageBucketSandbox() {
-    const ctx = createInputSandbox();
-    loadInputClassic(ctx);
-    ctx.run(`
-      const _pendingImageBuckets = new Map();
-      let __activeKey = 'rt-a::sess-a';
-      function _imageBucketKey() { return __activeKey; }
-      function _imageBucket() {
-        const key = _imageBucketKey();
-        let bucket = _pendingImageBuckets.get(key);
-        if (!Array.isArray(bucket)) { bucket = []; _pendingImageBuckets.set(key, bucket); }
-        return bucket;
-      }
-      function _imageHostKey() { return 'host-a'; }
-      async function _uploadImageEntryTo(entry) {
-        entry.path = '/images/' + entry.source + '.png';
-      }
-      function _renderAttachmentPreview() {}
-    `);
-    // 真实实现（resolve + clear 两个片段）
-    const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-    ctx.run(sourceBetween(source, 'async function _resolvePendingImagesForTarget', '// ── window 导出'));
-    return ctx;
-  }
-
   it('keeps per-session buckets: no carry-over on switch, clear scoped to the sending session', async () => {
-    const ctx = loadImageBucketSandbox();
-    const result = await ctx.run(`
-      (async () => {
-        const imgA = { source: 'img-a', path: null, mediaType: 'image/png', _uploadPromise: null };
-        _imageBucket().push(imgA);
-        const visibleInA = _imageBucket().length;
-        // 切换到会话 B：输入框读 B 桶，A 的附件不可见（预览随当前桶渲染）
-        __activeKey = 'rt-b::sess-b';
-        const visibleInB = _imageBucket().length;
-        const imgB = { source: 'img-b', path: null, mediaType: 'image/png', _uploadPromise: null };
-        _imageBucket().push(imgB);
-        // 会话 A 发送：resolve / 清空只作用于 A 的桶（发送时刻同步捕获的 key）
-        const resolved = await _resolvePendingImagesForTarget('agent-a', 'rt-a::sess-a');
-        clearPendingInputImages('rt-a::sess-a');
-        return {
-          visibleInA,
-          visibleInB,
-          resolvedPaths: resolved.images.map((img) => String(img.path)),
-          failed: resolved.failedCount,
-          remainingB: _pendingImageBuckets.get('rt-b::sess-b').length,
-          remainingA: (_pendingImageBuckets.get('rt-a::sess-a') || []).length,
-        };
-      })()
-    `);
-    assert.equal(result.visibleInA, 1, '挂载时刻附件属于挂载会话的桶');
-    assert.equal(result.visibleInB, 0, '切换会话后输入框不得残留上一会话的图片');
-    assert.deepEqual([...result.resolvedPaths], ['/images/img-a.png'], 'resolve 只消费发送会话的桶');
-    assert.equal(result.failed, 0);
-    assert.equal(result.remainingA, 0, '发送成功的会话桶被清空');
-    assert.equal(result.remainingB, 1, '其他会话挂载的附件不受发送清空影响');
+    await withImageCase('image-buckets', async ({ c, persistent, seam }) => {
+      let activeKey = 'rt-a::sess-a';
+      c.window.SessionReference = { activeKey: () => activeKey };
+
+      const imgA = { source: 'img-a', path: '/images/img-a.png', mediaType: 'image/png', _hostKey: 'local', _uploadPromise: null };
+      seam.imageBucket.push(imgA);
+      const visibleInA = seam.imageBucket.length;
+      // 切换到会话 B：输入框读 B 桶，A 的附件不可见（预览随当前桶渲染）
+      activeKey = 'rt-b::sess-b';
+      const visibleInB = seam.imageBucket.length;
+      seam.imageBucket.push({ source: 'img-b', path: '/images/img-b.png', mediaType: 'image/png', _hostKey: 'local', _uploadPromise: null });
+      // 会话 A 发送：resolve / 清空只作用于 A 的桶（发送时刻同步捕获的 key）
+      const resolved = await persistent._resolvePendingImagesForTarget('agent-a', 'rt-a::sess-a');
+      persistent.clearPendingInputImages('rt-a::sess-a');
+
+      assert.equal(visibleInA, 1, '挂载时刻附件属于挂载会话的桶');
+      assert.equal(visibleInB, 0, '切换会话后输入框不得残留上一会话的图片');
+      assert.deepEqual(resolved.images.map((img) => String(img.path)), ['/images/img-a.png'], 'resolve 只消费发送会话的桶');
+      assert.equal(resolved.failedCount, 0);
+      assert.equal((seam.pendingImageBuckets.get('rt-a::sess-a') || []).length, 0, '发送成功的会话桶被清空');
+      assert.equal(seam.pendingImageBuckets.get('rt-b::sess-b').length, 1, '其他会话挂载的附件不受发送清空影响');
+    });
   });
 });
 
 // ── 队列气泡：输入身份过滤 + 会话隔离投影（user-turn kind 适配）──────────
-
-// 切片加载 persistent-input.js 的队列同步实现（updateQueueIndicator →
-// rebindQueueProjectionForRuntime → applyQueuedInputsTexts →
-// _syncPersistentInputUi），伴生 stub 补齐切片引用的同模块全局；
-// SSE 路径的过滤由 frontend-sse-client.test.js 覆盖。
-function loadQueueSyncSlice(ctx) {
-  const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-  const start = persistentSource.indexOf('function updateQueueIndicator');
-  const end = persistentSource.indexOf('async function interruptAgent', start);
-  ctx.run(`
-    let _persistentUiSyncInFlight = false;
-    let _lastQueueBubbleSignature = "";
-    let _queuedProjectionRuntimeId = null;
-    function isRuntimeCalling() { return false; }
-    function notifyInputSurfaceChanged() {}
-  `);
-  ctx.run(persistentSource.slice(start, end));
-}
 
 describe('queued-input bubble identity filter (user-turn kind)', () => {
   it('polling snapshot filters reminder items out of bubble texts and count', async () => {

@@ -162,7 +162,16 @@ export function prepareThreadClassicSandbox(sandbox, overrides = {}) {
     if (sandbox.run(`typeof ${name} !== 'undefined'`)) continue;
     sandbox[name] = value;
   }
-  sandbox.loadSource('public/src/modules/thread-store.js');
+  // thread-store 已迁 ESM（P4 T3）：不再由 classic 相 loadSource。它由生产图
+  // （kernel-entry → p4-entry）带入；不装载整图的用例在 withThreadCaseEnv 里被
+  // 显式求值一次，桥键因此在测试体开始前就可读写。
+  //
+  // classic 相仍需要 window.ClawThreads 可供用例播种线程事实，因此放一个占位对象，
+  // 求值 thread-store 之后由 withThreadCaseEnv 把写入整体回放到真实状态。
+  if (sandbox.run('typeof window.ClawThreads') === 'undefined') {
+    sandbox.run('window.ClawThreads = { threads: [], byId: {}, sessionIndex: {}, activeConversation: null };'
+      + ' window.__classicThreadFacts = window.ClawThreads;');
+  }
   // 夹具覆盖放在引擎之后：引擎自己会用 `window.refreshThreads = ...` 这类赋值
   // 注册刷新入口，用例要观察/替换的正是这些最终面（放在前面会被引擎覆盖掉）。
   for (const [name, value] of Object.entries(overrides)) {
@@ -184,6 +193,14 @@ export function seedThreadFacts(sandbox, threads) {
       }
     })();`);
 }
+
+/**
+ * 播种线程事实（`ClawThreads.threads[]` + byId/sessionIndex 索引）。
+ *
+ * thread-store 迁 ESM 后 classic 相没有真实的 window.ClawThreads；prepareThreadClassicSandbox
+ * 会放一个占位对象（`__classicThreadFacts`），written 值由 withThreadCaseEnv 在求值
+ * 该模块后整体回放。因此调用方在 classic 相与模块相都可以直接播种。
+ */
 
 /** 让宿主后台链（switchAgent 的 loadAgents 等 fire-and-forget 工作）在本 case 内收敛。 */
 async function settleCase() {
@@ -318,6 +335,20 @@ export async function withThreadCaseEnv(options, fn) {
     fetch,
     globals: { ...globals, console: guard.recorder },
   }), async (c) => {
+    // thread-store 迁 ESM 后，classic 相不再提供 window.ClawThreads / refreshThreads；
+    // 用例体开始前先求值该模块一次（整图用例里 p4-entry 已带入，这里是同一实例）。
+    await c.load('public/src/modules/thread-store.js');
+    // classic 相播下的线程事实回放到真实 owner（桥键是活绑定，回放后即同一状态）。
+    c.sandbox.run(`(function () {
+      const pending = window.__classicThreadFacts;
+      const live = window.ClawThreads;
+      if (!pending || !live || pending === live) return;
+      live.threads = pending.threads;
+      live.byId = pending.byId;
+      live.sessionIndex = pending.sessionIndex;
+      if (pending.activeConversation != null) live.activeConversation = pending.activeConversation;
+      delete window.__classicThreadFacts;
+    })()`);
     const result = await fn({ c, requests });
     await settleCase();
     return result;

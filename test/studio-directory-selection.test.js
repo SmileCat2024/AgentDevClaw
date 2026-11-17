@@ -40,10 +40,6 @@ async function withStudioCreateAction({ picker, agent = STUDIO_AGENT }, fn) {
       // 无关，按宿主缝给最小面——本用例在到达会话创建宿主时就返回，这些宿主
       // 的方法不会被调用。
       sandbox.loadSource('public/src/modules/session-view-state.js');
-  // workspace-actions 的 import 链现在含线程交互域（thread-store-domain），
-  // 它在模块求值期取 classic 引擎的窄宿主 createThreadStoreHost()。装真实引擎
-  // 而不是写同形桩：宿主契约（状态引用 + 内部操作）只有一份实现。
-  sandbox.loadSource('public/src/modules/thread-store.js');
 
       sandbox.window.createCompactResumeHost = () => ({});
       sandbox.window.createRuntimeSwitchHost = () => ({ state: {} });
@@ -86,6 +82,8 @@ async function withStudioCreateAction({ picker, agent = STUDIO_AGENT }, fn) {
       fetch: async () => ({ ok: true, status: 200, json: async () => ({}), text: async () => '' }),
     },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在装载期取它的窄宿主，必须先入图。
+    await c.load('public/src/modules/thread-store.js');
     const module = await c.load(WORKSPACE_ACTIONS);
     // 导出面即动作入口（桥键之外，未来消费方改 import 的路径）：入口必须
     // 同时以命名导出与 kernel 桥键两个身份存在。

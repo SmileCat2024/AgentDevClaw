@@ -263,95 +263,80 @@ globalThis.__getInputRenderSignature = getInputRenderSignature;`, context);
   assert.notEqual(first, second);
 });
 
-test('detached textarea writes back to its frozen session key', () => {
-  const context = {
-    _sessionInputCache: {},
-    _getSessionInputCacheKey: () => 'session-b',
-  };
-  vm.createContext(context);
-  context.window = context;
-  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
-  // 草稿函数迁至 input-composer.js（工单 036）；提取区间含四个草稿函数
-  const inputCacheBlock = sourceBetween(
-    inputComposerSource,
-    'function _cacheSessionInput',
-    '\n// ── 显示模式判定',
-  );
-  vm.runInContext(`${inputCacheBlock}\nglobalThis.__cacheSessionInput = _cacheSessionInput;
-globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;
-globalThis.__storeSessionInputDraft = _storeSessionInputDraft;`, context);
+test('detached textarea writes back to its frozen session key', async () => {
+  // 草稿函数已随 input-composer 迁 ESM（P4 输入面批次）：真实 import 路线。
+  // 会话键冻结语义不变——textarea 自带 sessionKey 时不读当前会话键。
+  await withP2EsmCase({
+    classic: (sandbox) => {
+      prepareClassicSandbox(sandbox);
+      sandbox._getSessionInputCacheKey = () => 'session-b';
+    },
+  }, async (c) => {
+    const composer = await c.load('public/src/modules/input-composer.js');
+    const composerState = await c.load('public/src/modules/p2-w2-3a-composer-state.js');
+    const cache = composerState.sessionInputCache;
 
-  const oldTextarea = {
-    value: 'draft from A',
-    dataset: { sessionKey: 'session-a' },
-  };
-  context.__cacheSessionInput(oldTextarea);
-  assert.equal(context._sessionInputCache['session-a'], 'draft from A');
-  assert.equal(context._sessionInputCache['session-b'], undefined);
+    const oldTextarea = {
+      value: 'draft from A',
+      dataset: { sessionKey: 'session-a' },
+      style: {},
+      scrollHeight: 0,
+    };
+    composer._cacheSessionInput(oldTextarea);
+    assert.equal(cache['session-a'], 'draft from A');
+    assert.equal(cache['session-b'], undefined);
 
-  oldTextarea.value = '';
-  context.__storeSessionInputDraft(oldTextarea);
-  assert.equal(context._sessionInputCache['session-a'], '');
+    oldTextarea.value = '';
+    composer._storeSessionInputDraft(oldTextarea);
+    assert.equal(cache['session-a'], '');
+  });
 });
 
-test('cached session draft restores into request textarea', () => {
-  const resizeState = { calls: 0 };
-  const context = {
-    _sessionInputCache: { 'session-a': 'draft from A' },
-    _getSessionInputCacheKey: () => 'session-a',
-    autoResize() {
-      resizeState.calls += 1;
+test('cached session draft restores into request textarea', async () => {
+  await withP2EsmCase({
+    classic: (sandbox) => {
+      prepareClassicSandbox(sandbox);
+      sandbox._getSessionInputCacheKey = () => 'session-a';
     },
-  };
-  vm.createContext(context);
-  context.window = context;
-  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
-  // 草稿函数迁至 input-composer.js（工单 036）
-  const inputCacheBlock = sourceBetween(
-    inputComposerSource,
-    'function _cacheSessionInput',
-    '\n// ── 显示模式判定',
-  );
-  vm.runInContext(`${inputCacheBlock}
-globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;`, context);
+  }, async (c) => {
+    const composer = await c.load('public/src/modules/input-composer.js');
+    const composerState = await c.load('public/src/modules/p2-w2-3a-composer-state.js');
+    composerState.sessionInputCache['session-a'] = 'draft from A';
 
-  const requestTextarea = {
-    value: '',
-    dataset: { sessionKey: 'session-a' },
-  };
-  assert.equal(context.__restoreSessionInputDraft(requestTextarea), true);
-  assert.equal(requestTextarea.value, 'draft from A');
-  assert.equal(resizeState.calls, 1);
+    const requestTextarea = {
+      value: '',
+      dataset: { sessionKey: 'session-a' },
+      style: {},
+      scrollHeight: 0,
+    };
+    assert.equal(composer._restoreSessionInputDraft(requestTextarea), true);
+    assert.equal(requestTextarea.value, 'draft from A');
+    // 真实 autoResize（input-actions 具名导出）跑过一次：高度被重算为 px 值
+    assert.equal(requestTextarea.style.height, '0px');
+  });
 });
 
-test('empty cached session draft restores as an intentional blank', () => {
-  const resizeState = { calls: 0 };
-  const context = {
-    _sessionInputCache: { 'session-a': '' },
-    _getSessionInputCacheKey: () => 'session-a',
-    autoResize() {
-      resizeState.calls += 1;
+test('empty cached session draft restores as an intentional blank', async () => {
+  await withP2EsmCase({
+    classic: (sandbox) => {
+      prepareClassicSandbox(sandbox);
+      sandbox._getSessionInputCacheKey = () => 'session-a';
     },
-  };
-  vm.createContext(context);
-  context.window = context;
-  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
-  // 草稿函数迁至 input-composer.js（工单 036）
-  const inputCacheBlock = sourceBetween(
-    inputComposerSource,
-    'function _cacheSessionInput',
-    '\n// ── 显示模式判定',
-  );
-  vm.runInContext(`${inputCacheBlock}
-globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;`, context);
+  }, async (c) => {
+    const composer = await c.load('public/src/modules/input-composer.js');
+    const composerState = await c.load('public/src/modules/p2-w2-3a-composer-state.js');
+    composerState.sessionInputCache['session-a'] = '';
 
-  const requestTextarea = {
-    value: 'initial prompt',
-    dataset: { sessionKey: 'session-a' },
-  };
-  assert.equal(context.__restoreSessionInputDraft(requestTextarea), true);
-  assert.equal(requestTextarea.value, '');
-  assert.equal(resizeState.calls, 1);
+    const requestTextarea = {
+      value: 'initial prompt',
+      dataset: { sessionKey: 'session-a' },
+      style: {},
+      scrollHeight: 0,
+    };
+    assert.equal(composer._restoreSessionInputDraft(requestTextarea), true);
+    assert.equal(requestTextarea.value, '');
+    assert.equal(requestTextarea.style.height, '0px');
+  });
 });
 
 /**

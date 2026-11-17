@@ -213,11 +213,11 @@ async function withPollHarness({ initialMessages = [], overview = {}, messagesRe
       sandbox.window.setTimeout = sandbox.setTimeout;
       sandbox.window.clearTimeout = sandbox.clearTimeout;
       loadClassicBootstrap(sandbox, { search });
-      // 线程暂存文本经交互域（thread-store-domain）取自 classic 刷新引擎：按生产
-      // 顺序装真实引擎（createThreadStoreHost 是引擎的窄宿主，不复制契约）。
-      sandbox.loadSource('public/src/modules/thread-store.js');
     },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主 createThreadStoreHost，
+// 必须先于 thread-store-domain 进入同一张图。
+    await c.load('public/src/modules/thread-store.js');
     // 视口域先装载（桥键 + container 滚动监听），早于首屏渲染链的调用点。
     await c.load('public/src/modules/chat-viewport.js');
     await c.load(OVERVIEW_DATA);

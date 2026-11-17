@@ -616,39 +616,6 @@
       "renderWeixinQrCodeDialog"
     ]
   },
-  "public/src/modules/input-composer.js": {
-    "state": [
-      "_COMPOSER_ATTACH_SVG",
-      "_COMPOSER_MIC_SVG",
-      "_COMPOSER_MODEL_CHEVRON_SVG",
-      "_COMPOSER_SEND_SVG",
-      "_COMPOSER_STOP_SVG",
-      "_COMPOSER_THINKING_CHEVRON_SVG",
-      "_COMPOSER_THINKING_ICON_SVG",
-      "_attachMenuEl",
-      "_composerCard"
-    ],
-    "behavior": [
-      "_attachMenuOutsideHandler",
-      "_cacheSessionInput",
-      "_restoreSessionInputDraft",
-      "_storeSessionInputDraft",
-      "_storeVisibleSessionInputDraft",
-      "applyComposerMode",
-      "buildComposerCard",
-      "closeAttachMenu",
-      "detachTransientInputContent",
-      "ensurePersistentComposerCard",
-      "getPersistentComposerCard",
-      "hidePersistentComposerCard",
-      "insertTransientInputCard",
-      "readInputSurfaceModeState",
-      "resolveInputSurfaceMode",
-      "showPersistentComposerCard",
-      "syncPersistentComposerSessionCard",
-      "toggleAttachMenu"
-    ]
-  },
   "public/src/modules/input-model-switcher.js": {
     "state": [],
     "behavior": [
@@ -667,67 +634,10 @@
       "NavigationCore"
     ]
   },
-  "public/src/modules/persistent-input.js": {
-    "state": [
-      "_CAPSULE_CLOCK_SVG",
-      "_SENDING_MIN_VISIBLE_MS",
-      "_callFinishTimerInterval",
-      "_pendingImageBuckets",
-      "_runCapsuleStartAt",
-      "_runCapsuleStartConfirmed",
-      "_sendingHoldTimer",
-      "_sendingStartedAt",
-      "_submitInFlight",
-      "removePendingImage"
-    ],
-    "behavior": [
-      "_addImageFile",
-      "_beginSubmitFeedbackWindow",
-      "_cleanupInputMetaBar",
-      "_endSubmitFeedbackWindow",
-      "_ensureInputMetaBar",
-      "_getAttachmentPreviewTargets",
-      "_imageBucket",
-      "_imageBucketKey",
-      "_imageHostKey",
-      "_interactiveSurfaceOccupiesInput",
-      "_nextPaint",
-      "_renderAttachmentPreview",
-      "_renderLastCallElapsed",
-      "_resolvePendingImagesForTarget",
-      "_restoreActionBtnAfterSubmit",
-      "_setActionBtnInterrupting",
-      "_setActionBtnSend",
-      "_setActionBtnSending",
-      "_setActionBtnStop",
-      "_syncPersistentActionButton",
-      "_uploadImageEntryTo",
-      "clearPendingInputImages",
-      "formatCallElapsed",
-      "formatRunningElapsed",
-      "handleInputPaste",
-      "handlePersistentInputKey",
-      "interruptAgent",
-      "migratePendingInputImages",
-      "onImageFilesSelected",
-      "onPersistentBtnClick",
-      "rebindQueueProjectionForRuntime",
-      "renderPersistentInput",
-      "resetCallElapsedForSwitch",
-      "submitQueuedInput"
-    ]
-  },
   "public/src/modules/ph-thread-history.js": {
     "state": [],
     "behavior": [
       "PhThreadHistory"
-    ]
-  },
-  "public/src/modules/plugin-manifest.js": {
-    "state": [],
-    "behavior": [
-      "ClawPluginManifest",
-      "resolveAgentPlugin"
     ]
   },
   "public/src/modules/project-data.js": {
@@ -892,36 +802,6 @@
     "state": [],
     "behavior": [
       "ClawFW"
-    ]
-  },
-  "public/src/modules/thread-store.js": {
-    "state": [
-      "REBIND_RETRY_INTERVAL_MS",
-      "REBIND_RETRY_MAX_ATTEMPTS",
-      "THREADS_REFRESH_INTERVAL_MS",
-      "_activeThreadSubscription",
-      "_rebindInFlight",
-      "_rebindRetryTimer"
-    ],
-    "behavior": [
-      "ClawThreads",
-      "_cancelRebindRetry",
-      "_currentActiveSession",
-      "_handoffActive",
-      "_isZh",
-      "_rebindConversationToThreadHead",
-      "_rebuildIndexes",
-      "_reconcileConversationWithThreadHead",
-      "_scheduleRebindRetry",
-      "_syncActiveThreadSubscription",
-      "createThreadStoreHost",
-      "getActiveThreadInputTarget",
-      "getThreadById",
-      "getThreadForSession",
-      "isThreadHostAgentId",
-      "jumpToThreadHead",
-      "refreshThreads",
-      "updateThreadHeaderIndicator"
     ]
   },
   "public/src/modules/toast-notify.js": {

@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
 /**
  * ClawHost 契约（public/src/modules/claw-host.js）：
@@ -471,25 +472,39 @@ describe('ClawHost 归属与 effect 面', () => {
  * 且必须对未登记 APP 明确返回 null（不能回退成某个默认模块）。
  */
 describe('ClawPluginManifest 解析', () => {
-  function loadManifest() {
-    const ctx = createFrontendSandbox();
-    ctx.loadSource('public/src/modules/plugin-manifest.js');
-    return ctx;
+  /**
+   * plugin-manifest 已迁 ESM（P4 T3）：真实 import 路线（桥键由模块自身注册，
+   * 消费方 app-ui 仍按 window.resolveAgentPlugin 取用）。
+   */
+  async function withManifest(probe) {
+    const cleanup = installBrowserStubs();
+    try {
+      await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
+      const { module } = await loadModuleOnce('public/src/modules/plugin-manifest.js', { installGlobals: false });
+      assert.equal(typeof globalThis.window.resolveAgentPlugin, 'function',
+        'classic 消费方（app-ui）经桥键取用同一实现');
+      assert.equal(globalThis.window.resolveAgentPlugin, module.resolveAgentPlugin, '桥键与命名导出同源');
+      return probe(module);
+    } finally {
+      cleanup();
+    }
   }
 
-  it('已登记 APP 返回 id 与模块 URL', () => {
-    const ctx = loadManifest();
-    const entry = ctx.window.resolveAgentPlugin('memo');
-    assert.equal(entry.id, 'memo');
-    assert.equal(entry.url, '/src/plugins/memo/index.js');
-    assert.ok(entry.url.startsWith('/'), 'URL 必须相对站点根，不随调用点漂移');
+  it('已登记 APP 返回 id 与模块 URL', async () => {
+    await withManifest((module) => {
+      const entry = module.resolveAgentPlugin('memo');
+      assert.equal(entry.id, 'memo');
+      assert.equal(entry.url, '/src/plugins/memo/index.js');
+      assert.ok(entry.url.startsWith('/'), 'URL 必须相对站点根，不随调用点漂移');
+    });
   });
 
-  it('未登记 APP 返回 null，不回退到任何默认模块', () => {
-    const ctx = loadManifest();
-    assert.equal(ctx.window.resolveAgentPlugin('programming-helper'), null);
-    assert.equal(ctx.window.resolveAgentPlugin(''), null);
-    assert.equal(ctx.window.resolveAgentPlugin(undefined), null);
+  it('未登记 APP 返回 null，不回退到任何默认模块', async () => {
+    await withManifest((module) => {
+      assert.equal(module.resolveAgentPlugin('programming-helper'), null);
+      assert.equal(module.resolveAgentPlugin(''), null);
+      assert.equal(module.resolveAgentPlugin(undefined), null);
+    });
   });
 });
 

@@ -421,14 +421,9 @@ const CONVERGENCE_STATE_PRELUDE = `
   // applySessionViewPatch 刚写进去的那一份，不靠测试副本。
   // session-view-storage 的 10 个桥键由真实 app-core（本相第一支脚本）注册，
   // 这里不再重复 defineKey（唯一注册制，重复会抛错）。
-  // 输入队列桥键（§3 级 6 输入）+ 投影归属：生产由 persistent-input 在 classic 相
-  // 注册；本文件的 classic 子集不含该文件，此处按同一协议注册，ESM owner
-  // （p2-w2-3a-input-queue-state）装载时 claim 吸收现值，无双存储。
-  window.KernelState.defineKey('input-queue', '_pendingQueuedCount', 0);
-  window.KernelState.defineKey('input-queue', '_queuedTexts', []);
-  window.KernelState.defineKey('input-queue', '_localQueuedInputPending', false);
-  window.KernelState.defineKey('input-queue', '_lastQueueBubbleSignature', '');
-  window.KernelState.defineKey('input-queue', '_queuedProjectionRuntimeId', null);
+  // 输入队列桥键（§3 级 6 输入）+ 投影归属：P4 输入面批次起由 persistent-input
+  // 在模块相注册（本文件在用例体里真实 import 它），这里不再重复 defineKey
+  //（唯一注册制，重复会抛错）。
   currentRuntimeConnected = true;
   var _switchEpoch = 0;
   function setCurrentHookInspector(value) {
@@ -464,15 +459,6 @@ function convergenceCaseOptions() {
   doc.body.appendChild(choiceContainer);
 
   const state = { doc, container, choiceContainer, liveKey: 'session-a', poll: pollState };
-  const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-  const rpStart = persistentSource.indexOf('function renderPersistentInput(container) {');
-  const rpEnd = persistentSource.indexOf('function onPersistentBtnClick', rpStart);
-  // 排队气泡投影的会话重绑真实现（renderInputRequests 的模式判定依赖）
-  const rebindStart = persistentSource.indexOf('function rebindQueueProjectionForRuntime');
-  const rebindEnd = persistentSource.indexOf('function handlePersistentInputKey', rebindStart);
-  // 交互面占用事实（选择卡 / 回退对话框共用交互面容器）：排队投影响亮地直调它
-  const guardStart = persistentSource.indexOf('function _interactiveSurfaceOccupiesInput() {');
-  const guardEnd = persistentSource.indexOf('function _renderLastCallElapsed()', guardStart);
 
   const caseGlobals = {
         document: doc,
@@ -541,6 +527,17 @@ function convergenceCaseOptions() {
         // persistent-input；本文件不驱动打断链路，按既有注入面提供）。
         isRuntimeCalling: () => false,
         interruptAgent: async () => ({ ok: true }),
+        // 提交 / 打断成功后的 UI 与跟随汇点（生产来自 sidebar-render /
+        // chat-viewport / desktop-notify / recap-hint，本裁剪链不装这些模块）：
+        // 本文件只断言端点与状态。
+        _requestNotifyPermission: () => {},
+        _clearRecapForNewMessage: () => {},
+        refreshThreads: () => {},
+        renderAgentList: () => {},
+        beginFollowLatestEntryWindow: () => {},
+        requestFollowLatest: () => {},
+        _markAgentCallStartedForNotify: () => {},
+        clearInterruptSuppression: () => {},
         ...createSseGraphHostStubs({ container, pollState }),
   };
 
@@ -568,16 +565,13 @@ function convergenceCaseOptions() {
         sandbox.getRuntimeContextKey = () => state.liveKey;
         sandbox.run(CONVERGENCE_STATE_PRELUDE);
         sandbox.loadSource('public/src/modules/session-view-state.js');
-        sandbox.loadSource('public/src/modules/thread-store.js');
-        sandbox.loadSource('public/src/modules/input-composer.js');
+        // input-composer / persistent-input 已迁 ESM（P4 输入面批次）：改由用例体
+        // 真实 import（模式判定 / 常驻渲染 / 排队重绑 / 交互面守卫的桥键来源）。
         sandbox.run(`
           function getInputSurfaceMode(requests = readCurrentSessionViewState().inputRequests) {
             return resolveInputSurfaceMode(readInputSurfaceModeState(requests, isChatSurfaceActive()));
           }
         `);
-        sandbox.run(persistentSource.slice(rpStart, rpEnd));
-        sandbox.run(persistentSource.slice(rebindStart, rebindEnd));
-        sandbox.run(persistentSource.slice(guardStart, guardEnd));
         // rollback-dialog / input-render 已迁 ESM（P4 T2）：改由用例体真实 import。
         sandbox.createRuntimeViewCacheHost = () => ({ cache: new Map(), capacity: 0 });
         sandbox.createRuntimeSwitchHost = () => ({ state: {} });
@@ -663,6 +657,9 @@ function it(name, body) {
     const { state, net, options } = convergenceCaseOptions();
     MockEventSource.instances.length = 0;
     await withNoiseClean('输入面收敛用例', () => withP2EsmCase(options, async (c) => {
+      // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主 createThreadStoreHost，
+// 必须先于 thread-store-domain 进入同一张图。
+      await c.load('public/src/modules/thread-store.js');
       // 桥键按生产协议在 classic 相注册、**初值为 null**（本文件的 classic 子集不含
       // app-core）；焦点 runtime 随后经真实 setter 写入，而不是预置状态副本。
       c.sandbox.run(`
@@ -676,6 +673,9 @@ function it(name, body) {
       // 访问器 + owner claim），再真实 import 渲染入口；入口注入沙箱后，用例的
       // 经典驱动面 ctx.run('renderInputRequests(...)') 与生产入口名保持一致。
       await c.load('public/src/modules/rollback-dialog.js');
+      // 输入面实现（P4 输入面批次起是 ESM）：模式判定 / 常驻渲染 / 提交与打断
+      // 入口 / 交互面守卫的桥键全部由它注册，必须在渲染入口调用前就位。
+      await c.load('public/src/modules/persistent-input.js');
       const inputRender = await c.load('public/src/modules/input-render.js');
       c.expose('renderInputRequests', inputRender.renderInputRequests);
       // agent-data-loader 的 host 工厂（session-data-loader / runtime-status-loader seam）
@@ -978,14 +978,9 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
       var _lastQueueBubbleSignature = '';
       window.getThreadPendingTexts = () => ['staged text'];
     `);
-    const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-    const queueStart = persistentSource.indexOf('function _renderQueueBubbles(container) {');
-    const queueEnd = persistentSource.indexOf('\n// 查询后端真实队列余量', queueStart);
-    ctx.run(persistentSource.slice(queueStart, queueEnd));
-    // 守卫读取交互面占用事实（选择卡/回退对话框共用交互面容器）
-    const guardStart = persistentSource.indexOf('function _interactiveSurfaceOccupiesInput() {');
-    const guardEnd = persistentSource.indexOf('\n}', guardStart) + 2;
-    ctx.run(persistentSource.slice(guardStart, guardEnd));
+    // 气泡渲染与交互面守卫都是真实 ESM 实现的桥键（P4 输入面批次后不再切片重放）：
+    // _renderQueueBubbles 来自 p2-w2-3a-queue-projection，_interactiveSurfaceOccupiesInput
+    // 来自 persistent-input。
     ctx.run(`
       const stack = document.createElement('div');
       stack.className = 'queue-bubbles-stack';
@@ -1117,50 +1112,16 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
   });
 });
 
-function loadQueueSubmitPaths(ctx) {
-  const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-  ctx.run(source.slice(source.indexOf('async function submitQueuedInput()'), source.indexOf('// 返回 { ok }')));
-  ctx.run(`
-    var _submitInFlight = false;
-    var _persistentUiSyncInFlight = false;
-    function _requestNotifyPermission() {}
-    function _imageBucketKey() { return 'images-a'; }
-    function _imageBucket() { return []; }
-    function _beginSubmitFeedbackWindow() {}
-    function _endSubmitFeedbackWindow() {}
-    async function _nextPaint() {}
-    async function _resolvePendingImagesForTarget() { return { images: [], failedCount: 0 }; }
-    function clearPendingInputImages() {}
-    function _clearRecapForNewMessage() {}
-    function beginFollowLatestEntryWindow() {}
-    function requestFollowLatest() {}
-    function newIdempotencyKey() { return 'test-key'; }
-    function isRuntimeCalling(id) { return !!_agentCallActive.get(id); }
-  `);
-}
-
 // Real notification → composer button path, including an idle text lease that
 // remains open when a background reminder starts another call.
+//
+// 提交/打断入口已随 persistent-input 迁 ESM（P4 输入面批次）：本 helper 只负责
+// classic 通知链（runtime-status）与时钟夹具，输入面实现由用例基座真实 import。
 function loadWakeupButtonPaths(ctx) {
-  const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-  ctx.run(source.slice(source.indexOf('function onPersistentBtnClick('), source.indexOf('function _renderQueueBubbles(container)')));
-  // 真实先行脚本序已声明 renderAgentList / normalizeAgentIdentity 与
-  // runtime-status（classic 通知链）：这里只补 persistent-input 切片自己需要的
-  // 计时/提交态初值，不重复声明同名 let（重复声明会 SyntaxError）。
-  ctx.run(`var _submitInFlight = false; var _sendingHoldTimer = null;
-    var _sendingStartedAt = 0; var _lastCallFinishTime = 0;
-    var _recapPendingTrigger = false;
-    function _markAgentCallStartedForNotify() {}
-    function renderAgentList() {}
-    function _imageBucket() { return []; }
-    function normalizeAgentIdentity(id) { return String(id || '').trim(); }
-  `);
-  // 通知链与 classic 基座共用同一个 call-interrupt owner（用例基座已接线；
-  // 本 helper 直接装载 runtime-status，后者按桥键裸引用四个访问器）。
   ctx.state.now = 1000;
   ctx.Date = class extends Date { static now() { return ctx.state.now; } };
   ctx.window.setInterval = () => 0;
-  // classic runtime-status（通知链）在本裁剪链里由该 helper 自行装载。
+  // classic runtime-status（通知链）：按桥键裸引用 call-interrupt 的四个访问器。
   ctx.loadSource('public/src/modules/runtime-status.js');
   ctx.run('function ensureChatRuntimeIndicator() {}');
   for (const id of ['notification-status', 'notification-phase', 'notification-summary', 'notification-metrics']) {
@@ -1186,10 +1147,16 @@ it('background wakeup restores the interrupt button while the persistent compose
   assert.equal(ctx.run('isRuntimeCalling(currentRuntimeAgentId)'), true);
   assert.equal(button.classList.contains('is-stop'), true, 'running must show interrupt');
   assert.equal(ctx.run("document.getElementById('input-persistent')"), textarea);
-  let interrupts = 0;
-  ctx.interruptAgent = () => { interrupts++; };
+  // 空输入 + stop 语义 = 中断：真实 interruptAgent 的端点即观测面（模块内部实现
+  // 不再可替换，P4 输入面批次后走真实桥键）。
+  const endpoints = [];
+  ctx.fetch = (url) => {
+    endpoints.push(String(url));
+    return new Promise(() => {}); // 请求在途：本用例只断言语义选择
+  };
   button.onclick();
-  assert.equal(interrupts, 1, 'empty running composer must interrupt, not submit');
+  assert.deepEqual(endpoints, ['/api/agents/agent-1/interrupt'],
+    'empty running composer must interrupt, not submit');
 });
 
 
@@ -1197,10 +1164,6 @@ it('background wakeup restores the interrupt button while the persistent compose
 it('running composer uses user-turn, keeps rejected choice-conflict text, and explains the required action', async () => {
   const ctx = createConvergenceSandbox();
   loadWakeupButtonPaths(ctx);
-  loadQueueSubmitPaths(ctx);
-  ctx._nextPaint = async () => {};
-  ctx._resolvePendingImagesForTarget = async () => ({ images: [], failedCount: 0 });
-  ctx._imageBucketKey = () => 'images-a';
   const toasts = [];
   const echoes = [];
   ctx.window.ClawToast = { show: (value) => toasts.push(value) };
@@ -1241,9 +1204,8 @@ it('running composer uses user-turn, keeps rejected choice-conflict text, and ex
 it('request composer keeps interrupting sticky through a stale running frame until call finish', async () => {
   const ctx = createConvergenceSandbox();
   loadWakeupButtonPaths(ctx);
-  const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-  ctx.run(source.slice(source.indexOf('async function interruptAgent()'), source.indexOf('// ── 启动上次对话结束时间')));
-  ctx.run('function updateQueueIndicator() {} function newIdempotencyKey() { return "interrupt-key"; }');
+  // interruptAgent 是真实 ESM 实现（P4 输入面批次后不再切片重放）：按钮点击经
+  // composer 端点属性调用同一实现，端点与粘性状态都按生产语义断言。
   ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'idle-lease' }] });
     updateNotificationStatus({ callActive: true, runtime: { callActive: true, callStartedAt: 100 } });`);
   const request = deferred();
@@ -1292,7 +1254,6 @@ function deferred() {
 it('late queued POST receipt does not resurrect a consumed bubble in the live input DOM', async () => {
   const ctx = createConvergenceSandbox();
   ctx.run('renderInputRequests([])');
-  loadQueueSubmitPaths(ctx);
   const receipt = deferred();
   ctx.fetch = () => receipt.promise;
   ctx.run("document.getElementById('input-persistent').value = 'fast queued message'");
@@ -1308,7 +1269,6 @@ it('late queued POST receipt does not resurrect a consumed bubble in the live in
 it('empty queue response clears a bubble added while the response was in flight', async () => {
   const ctx = createConvergenceSandbox();
   ctx.run('renderInputRequests([])');
-  loadQueueSubmitPaths(ctx);
   // renderInputRequests 首轮触发的队列同步是浮动异步工作：等它落地再起本轮同步，
   // 避免撞上并发守卫（守卫本身不是本用例的断言对象）
   await new Promise((resolve) => setImmediate(resolve));
@@ -1327,7 +1287,6 @@ it('empty queue response clears a bubble added while the response was in flight'
 it('late HTTP queue snapshot cannot restore bubbles consumed by a newer SSE event', async () => {
   const ctx = createConvergenceSandbox();
   ctx.run('renderInputRequests([])');
-  loadQueueSubmitPaths(ctx);
   const body = deferred();
   ctx.fetch = async () => ({ ok: true, json: () => body.promise });
   const sync = ctx.run('_syncPersistentInputUi()');
@@ -1341,7 +1300,6 @@ it('late HTTP queue snapshot cannot restore bubbles consumed by a newer SSE even
 it('queue body from an earlier visit cannot restore bubbles after A to B to A', async () => {
   const ctx = createConvergenceSandbox();
   ctx.run('renderInputRequests([])');
-  loadQueueSubmitPaths(ctx);
   const body = deferred();
   ctx.fetch = async () => ({ ok: true, json: () => body.promise });
   const sync = ctx.run('_syncPersistentInputUi()');
@@ -1355,7 +1313,6 @@ it('queue body from an earlier visit cannot restore bubbles after A to B to A', 
 
 it('off-focus queue confirmation clears optimistic anchors before switching back', () => {
   const ctx = createConvergenceSandbox();
-  loadQueueSubmitPaths(ctx);
   ctx.noteQueuedOptimistic('q-away', 'sent while away', 'agent-1');
   ctx.run(`currentRuntimeAgentId = 'agent-2';`);
   ctx.emitQueued([{ id: 'q-away', text: 'sent while away' }]);
@@ -1367,7 +1324,6 @@ it('off-focus queue confirmation clears optimistic anchors before switching back
 it('direct POST receipt after switching sessions cannot echo or scroll in the other session', async () => {
   const ctx = createConvergenceSandbox();
   ctx.run('renderInputRequests([])');
-  loadQueueSubmitPaths(ctx);
   const receipt = deferred();
   ctx.fetch = () => receipt.promise;
   const echoes = [];
@@ -1439,7 +1395,6 @@ it('real message preceding the POST receipt does not leave a duplicate echo', ()
 it('idle text lease uses user-turn and preserves immediate echo without waiting for poll', async () => {
   const ctx = createConvergenceSandbox();
   ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'slot' }] })`);
-  loadQueueSubmitPaths(ctx);
   ctx.run(`function beginFollowLatestEntryWindow() {} function requestFollowLatest() {}
     function _markAgentCallStartedForNotify() {}
     function renderAgentList() {}`);
@@ -1461,7 +1416,6 @@ it('idle text lease uses user-turn and preserves immediate echo without waiting 
 it('switching sessions during image preparation cannot reroute A input to B thread', async () => {
   const ctx = createConvergenceSandbox();
   ctx.run('renderInputRequests([])');
-  loadQueueSubmitPaths(ctx);
   const ready = deferred();
   ctx._resolvePendingImagesForTarget = () => ready.promise;
   const sends = [];

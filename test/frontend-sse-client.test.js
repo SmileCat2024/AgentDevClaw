@@ -254,8 +254,7 @@ async function withSseCase(opts, fn) {
     classic: (sandbox) => {
       // 真实先行脚本序（test/p2-classic-hosts.js）：宿主工厂（runtime-switch / poll /
       // workspace-surface / 侧栏 call 状态）都是生产实现，首屏 boot 与周期排程由基座
-      // 关掉。基座之外按 index.html 顺序补真实 classic：todo 归一 / partial compact 状态 /
-      // 输入面经典边界（排队投影经 window 直调这四支实现并共享同域状态键）。
+      // 关掉。基座之外按 index.html 顺序补真实 classic：todo 归一 / partial compact 状态。
       prepareClassicSandbox(sandbox);
       // 用例的窄行为观察面（真源之后覆盖：app-main / app-ui 会定义同名入口）：
       // 本文件只关心 SSE 事件路由与状态提交，渲染与 UI 落点用记录器。
@@ -263,13 +262,11 @@ async function withSseCase(opts, fn) {
       // todo-plan 已迁 ESM（P4 L1）：classic 相只补它装载期要用的 vendor 面与
       // markdown-utils 的 classic 实现（escapeHtml / renderer），模块本体在 async 相 c.load。
       sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
-      // rollback-dialog 已迁 ESM（P4 T2）：注册壳改由 async 相 c.load 装载。
-      sandbox.loadSource('public/src/modules/persistent-input.js');
+      // rollback-dialog（P4 T2）/ persistent-input（P4 输入面批次）已迁 ESM：
+      // 改由 async 相 c.load 装载（见用例体首段）。
       // 观察面（真源之后覆盖）：本例只验证 SSE 事件路由与提交语义，不驱动主视图 /
       // 聊天的 DOM 落地。
       sandbox.run(SINK_OVERRIDES);
-      // 线程暂存文本经交互域取自 classic 刷新引擎：按生产顺序装真实引擎，不复制宿主契约。
-      sandbox.loadSource('public/src/modules/thread-store.js');
     },
     globals: {
       document,
@@ -308,8 +305,15 @@ async function withSseCase(opts, fn) {
       ...extraGlobals,
     },
   }, async (c) => withNoiseClean('sse-client 用例', async () => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在装载期取它的窄宿主，必须先入图。
+    await c.load(THREAD_STORE);
     // 回退 / 压缩域状态键注册壳（已迁 ESM，P4 T2）：真实 import，桥键由模块自身注册。
     await c.load('public/src/modules/rollback-dialog.js');
+    // 刷新引擎（thread-store）先于交互域进入同一张图：交互域在装载期取它的窄宿主。
+    await c.load('public/src/modules/thread-store.js');
+    // 输入面实现（P4 输入面批次）：排队投影经 window 直调 rebindQueueProjectionForRuntime
+    // / _interactiveSurfaceOccupiesInput 等桥键，必须同图装载。
+    await c.load('public/src/modules/persistent-input.js');
     // plan 快照归一 / 成对签名（已迁 ESM，P4 L1）：经典侧经桥键调用它的命名导出。
     await c.load('public/src/modules/todo-plan.js');
     // 焦点 runtime：生产由切换链写入 orchestration owner
@@ -399,8 +403,8 @@ describe('sse-client: thread subscriptions', () => {
       },
     }, async ({ c, sse, calls }) => {
       sse.bootSseClient();
-      // 真实 thread-store（classic）已在 classic 相装载：它经 window.ClawFW.SseClient
-      // 订阅 thread 事件；此处不重复装载（同一沙箱二次求值会重复声明顶层 const）。
+      // 真实 thread-store（P4 T3 起是 ESM）已在同一张图里装载：它经 window.ClawFW.SseClient
+      // 订阅 thread 事件，并用 window.refreshThreads 桥键暴露刷新入口。
       const textsUrlCount = () => calls.fetches.filter((u) => u.includes('/protoclaw/threads')).length;
 
       await c.window.refreshThreads(true);

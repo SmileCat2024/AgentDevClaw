@@ -57,12 +57,16 @@ test('引擎层不再持有交互域的 window 实现（无双实现、无残留
       assert.equal(c.read(`typeof window.${name}`), 'undefined',
         `${name} 是交互域内部函数，不得在引擎里留下同名全局`);
     }
-    // 引擎自身的公开面照旧（刷新、索引、指示器、宿主判定）
+    // 引擎自身的公开面照旧（刷新、索引、指示器、宿主判定）——引擎迁 ESM 后经
+    // thread-store-engine 桥键暴露同一份实现。
     for (const name of ['refreshThreads', 'getThreadById', 'getThreadForSession',
-      'getActiveThreadInputTarget', 'isThreadHostAgentId', 'updateThreadHeaderIndicator',
-      'jumpToThreadHead']) {
-      assert.equal(c.read(`typeof window.${name}`), 'function', `${name} 仍由 classic 引擎提供`);
+      'getActiveThreadInputTarget', 'isThreadHostAgentId', 'updateThreadHeaderIndicator']) {
+      assert.equal(c.read(`typeof window.${name}`), 'function', `${name} 仍由引擎域提供（桥键）`);
     }
+    // 接续换头跳转不是公开面：它只由顶栏指示器的 click 闭包内部调用，迁 ESM 后
+    // 收敛为模块私有（不再有 window 键）。点击行为由 frontend-thread-badge-residency 覆盖。
+    assert.equal(c.read('typeof window.jumpToThreadHead'), 'undefined',
+      'jumpToThreadHead 是引擎内部入口，不得留在 window 面上');
   });
 });
 
@@ -78,10 +82,14 @@ test('窄宿主：实时状态引用与引擎内部操作同引用（不复制�
     assert.equal(c.read('window.createThreadStoreHost().getState() === window.ClawThreads'), true);
     assert.equal(c.read('window.createThreadStoreHost().getState().threads[0].threadId'), 'wt-x');
 
-    // 内部操作与引擎函数同引用（对比私有函数：引擎里是各自唯一那份实现）
-    assert.equal(c.read('window.createThreadStoreHost().getCurrentActiveSession === _currentActiveSession'), true);
-    assert.equal(c.read('window.createThreadStoreHost().isHandoffActive === _handoffActive'), true);
-    assert.equal(c.read('window.createThreadStoreHost().syncActiveThreadSubscription === _syncActiveThreadSubscription'), true);
+    // 内部操作与引擎函数同引用（引擎里是各自唯一那份实现）：引擎迁 ESM 后这些
+    // 操作是命名导出，宿主成员必须与导出面同一引用（不是同形包装）。
+    const engine = await c.load('public/src/modules/thread-store.js');
+    const host = c.window.createThreadStoreHost();
+    assert.equal(host.getCurrentActiveSession, engine._currentActiveSession,
+      '宿主成员必须就是引擎里的那份实现');
+    assert.equal(host.isHandoffActive, engine._handoffActive);
+    assert.equal(host.syncActiveThreadSubscription, engine._syncActiveThreadSubscription);
     // 只暴露这四个成员：没有状态袋、没有内部状态副本、没有可写句柄
     // 跨 realm 数组不能直接 deepStrictEqual（原型不同），用字符串投影比较
     assert.equal(

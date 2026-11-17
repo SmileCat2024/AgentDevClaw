@@ -248,6 +248,9 @@ async function withLocate(probe) {
       URLSearchParams,
     },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主 createThreadStoreHost，
+// 必须先于 thread-store-domain 进入同一张图。
+    await c.load('public/src/modules/thread-store.js');
     await c.load(CHAT_RENDERER);
     const locate = await c.load(PH_SEARCH_LOCATE);
     const list = await c.load(PH_SESSION_LIST);
@@ -619,10 +622,6 @@ async function withRemoteActionsCase({ bumpEpochDuringWait = false } = {}, probe
       // runtime-status 是 classic 唯一实现：真实切换收尾的 loadAgentData 经
       // resetRuntimeStatusForSwitch 复位运行期状态。
       sandbox.loadSource('public/src/modules/runtime-status.js');
-      // workspace-actions 的 import 链含线程交互域（thread-store-domain）：它在
-      // 模块求值期取 classic 引擎的窄宿主 createThreadStoreHost()。装真实引擎而
-      // 不写同形桩——宿主契约只有一份实现。
-      sandbox.loadSource('public/src/modules/thread-store.js');
       // ESM 图求值期需要的 classic 宿主工厂（owner: app-main / app-ui /
       // sidebar-render；本链不加载其首屏实现）：按宿主缝给最小面。
       sandbox.window.createCompactResumeHost = () => ({});
@@ -737,6 +736,9 @@ async function withRemoteActionsCase({ bumpEpochDuringWait = false } = {}, probe
       },
     },
   }, async (c) => {
+    // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+    // createThreadStoreHost，必须先于 thread-store-domain 进入同一张图。
+    await c.load('public/src/modules/thread-store.js');
     // 远程目录 accessor（已迁 ESM，P4 T3）：真实 import 后 window.RemoteConnections
     // 才存在；就绪观察的覆盖与 workspace-actions 的取用都在它之后。
     await c.load('public/src/modules/remote-connections.js');

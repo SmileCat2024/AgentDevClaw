@@ -102,8 +102,8 @@ const INPUT_ESM_BATCH = [
 ];
 /** 工作空间动作批：workspace-actions 已迁 ESM（由 p2-entry 显式 import）。 */
 const WORKSPACE_ACTIONS_ESM = './src/modules/workspace-actions.js';
-/** 同一区域保留的 classic 刷新引擎：三条同步调度必须原位注册。 */
-const THREAD_STORE_CLASSIC = './src/modules/thread-store.js';
+/** P4 T3 迁出的刷新引擎：classic 标签必须删除，且须经 p4-entry 可达。 */
+const THREAD_ENGINE_ESM = './src/modules/thread-store.js';
 
 /** P4 T2 迁出的输入薄壳：classic 标签必须删除，且须经 p4-entry 可达。 */
 const INPUT_SHELL_ESM = [
@@ -257,10 +257,6 @@ function loadClassicHostChain(sandbox, beforeAppMain) {
     requestAnimationFrame = () => 0;
   `);
   for (const file of CLASSIC_HOST_CHAIN) sandbox.loadSource(file);
-  // classic 刷新引擎（index.html 里的 thread-store 标签）：ESM 图求值期要它提供
-  // 的窄宿主 createThreadStoreHost()。它与 app-main 一样属于"后段 classic 脚本"，
-  // 在 ESM 图之前装载（生产顺序亦然）。
-  sandbox.loadSource('public/src/modules/thread-store.js');
   if (typeof beforeAppMain === 'function') beforeAppMain(sandbox);
   sandbox.loadSource(APP_MAIN_SOURCE);
 }
@@ -493,7 +489,7 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
       );
     }
 
-    // ── 工作空间动作批：workspace-actions 已迁 ESM，thread-store 仍是 classic 引擎 ──
+    // ── 工作空间动作批：workspace-actions / thread-store 均已迁 ESM ──
     assert.equal(
       CLASSIC_SRCS.includes(WORKSPACE_ACTIONS_ESM),
       false,
@@ -504,10 +500,17 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
         .includes('public/src/modules/workspace-actions.js'),
       'workspace-actions 必须由 p2-entry 显式 import：它没有批次入口文件',
     );
-    assert.notEqual(
-      classicIndex(THREAD_STORE_CLASSIC),
-      -1,
-      `${THREAD_STORE_CLASSIC} 的刷新引擎仍是 classic：三条同步调度必须原位注册，标签不得随 workspace-actions 一起删`,
+    // 刷新引擎已迁 ESM（P4 T3）：classic 标签必须删除（解析期 SyntaxError），
+    // 且必须经 p4-entry 进入 module 入口图——它是 thread-store-domain 装载期取用
+    // 的窄宿主 createThreadStoreHost 的唯一来源。
+    assert.equal(
+      CLASSIC_SRCS.includes(THREAD_ENGINE_ESM),
+      false,
+      `${THREAD_ENGINE_ESM} 已迁 ESM：classic 标签会在解析期 SyntaxError（整条脚本不执行）`,
+    );
+    assert.ok(
+      MODULE_GRAPH.has(THREAD_ENGINE_ESM.replace(/^\.\//, 'public/')),
+      `${THREAD_ENGINE_ESM} 必须经 p4-entry 进入 module 入口图`,
     );
 
     // ── 调试批：三个 ESM 模块 + 两个 classic 唯一实现 + 两条批次入口 ──
@@ -542,6 +545,9 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
     const { fetchStub, options } = authGatedCaseOptions();
     MockEventSource.instances.length = 0;
     await withNoiseClean('入口时序用例', () => withP2EsmCase(options, async (c) => {
+      // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+      // createThreadStoreHost，必须先于 thread-store-domain 进同一张图。
+      await c.load('public/src/modules/thread-store.js');
       // 真实 import 链：host seam 先于消费方求值（与生产装载顺序一致）
       await c.load('public/src/modules/agent-data-loader.js');
       const sse = await c.load(SSE_CLIENT);
@@ -570,6 +576,9 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
     // MockEventSource.instances 是模块级静态：每个用例重置
     MockEventSource.instances.length = 0;
     await withNoiseClean('无 auth 变量自举用例', () => withP2EsmCase(options, async (c) => {
+      // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+      // createThreadStoreHost，必须先于 thread-store-domain 进同一张图。
+      await c.load('public/src/modules/thread-store.js');
       // 前置事实：环境里确实没有 auth 就绪变量（自举分支的条件）
       assert.equal(c.read('typeof window.__clawAuthReady'), 'undefined',
         '本用例必须在不含 __clawAuthReady 的环境里跑');
@@ -598,6 +607,10 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
     await withNoiseClean('有 auth 变量首屏链用例', async () => {
       await withP2EsmCase(options, async (c) => {
         // agent-data-loader（P2 W2-4 已迁 ESM）：提供 createSessionDataLoaderHost /
+      // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
+      // createThreadStoreHost，必须先于 thread-store-domain 进同一张图。
+      await c.load('public/src/modules/thread-store.js');
+      
         // createRuntimeStatusLoaderHost 两个装配 seam，必须先于消费它们的 host 模块求值
         await c.load('public/src/modules/agent-data-loader.js');
         const sse = await c.load(SSE_CLIENT);
