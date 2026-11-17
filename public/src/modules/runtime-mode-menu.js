@@ -8,6 +8,12 @@
  *   移动间隙）；Esc 立即收起；菜单展开期间点击页面其他位置自然收起。
  * - 选中菜单项时把 runtimeMode 注入按钮自带的 data-workspace-action
  *   后走统一 runWorkspaceAction；创建语义与其余字段全部复用原动作。
+ * - 锚点失活防线：打开对话伴随视图切换，入口按钮随重渲染被移除时，
+ *   浏览器不会为 detached 元素派发 pointerout（离开收起路径失效），
+ *   菜单挂在 body 上既收不起、detached 按钮的全零 rect 还会把定位甩到
+ *   视口角落。因此：pending 展开在到期时校验锚点仍在文档内；pointerdown
+ *   一律取消 pending 展开（点击即用户已行动）；已展开菜单在锚点失活后
+ *   由任一 pointerover 或滚动/resize 直接收起。
  *
  * 语言判断说明：currentLanguage 已由 i18n-environment-state 接管（P1），
  * 这里直接 import getCurrentLanguage()。不要改回 window.currentLanguage
@@ -32,7 +38,10 @@ let openTimer = 0;
 let closeTimer = 0;
 
 function onViewportChange() {
-  if (menu && anchorButton) positionMenu(anchorButton);
+  if (!menu || !anchorButton) return;
+  // 锚点已被视图重渲染移除时 rect 全零，重定位会把菜单甩到视口角落——直接收起。
+  if (!anchorButton.isConnected) { closeMenu(); return; }
+  positionMenu(anchorButton);
 }
 
 function isZh() {
@@ -128,7 +137,13 @@ function scheduleOpen(button) {
   clearTimeout(closeTimer);
   if (menu && anchorButton === button) return;
   clearTimeout(openTimer);
-  openTimer = setTimeout(() => { openTimer = 0; openMenu(button); }, OPEN_DELAY_MS);
+  openTimer = setTimeout(() => {
+    openTimer = 0;
+    // 到期时锚点可能已随视图切换离开文档（悬停后即点击会话/入口，页面
+    // 跳转移除按钮，pointerout 不会为 detached 元素派发）：校验存活，
+    // 避免菜单对着全零 rect 弹出并永久卡住。
+    if (button.isConnected && !button.disabled) openMenu(button);
+  }, OPEN_DELAY_MS);
 }
 
 function scheduleClose() {
@@ -171,6 +186,9 @@ function choose(button, mode) {
 
 // 悬停入口展开。delegation 在 document 上（入口按钮随会话列表重渲染）。
 document.addEventListener('pointerover', (event) => {
+  // 锚点已被视图重渲染移除：pointerout 不会为 detached 元素派发，常规
+  // 离开收起路径失效。鼠标一动就收，菜单不随页面切换残留。
+  if (menu && anchorButton && !anchorButton.isConnected) closeMenu();
   const button = event.target.closest ? event.target.closest(ENTRY_SELECTOR) : null;
   if (!button || button.disabled) return;
   scheduleOpen(button);
@@ -184,6 +202,11 @@ document.addEventListener('pointerout', (event) => {
 });
 // 点击页面其他位置（含其他控件）时自然收起，不吞事件。
 document.addEventListener('pointerdown', (event) => {
+  // 按下即用户已行动（点击入口本身=选择默认创建路径，点击别处=注意力
+  // 转移）：pending 的悬停展开一律取消，防止点击触发的页面切换移除按钮
+  // 后，到期计时器仍把菜单弹出来并卡在旧视口位置。
+  clearTimeout(openTimer);
+  openTimer = 0;
   if (!menu) return;
   if (event.target.closest && event.target.closest('.' + MENU_CLASS)) return;
   closeMenu();
