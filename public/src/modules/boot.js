@@ -20,12 +20,19 @@
  *   - 主题闪烁由 index.html 的内联 `app-theme-bootstrap` 兜住（body 解析开始即把
  *     localStorage 主题落到 body[data-theme]），本模块不重复该职责。
  *
- * 收敛方向：theme-lang 并入 i18n-environment-state 后，这里改为命名 import 调用，
- * 不再经 window 转调；届时本模块是首屏链唯一的 classic 残余入口。
+ * 依赖：`applyTheme` / `applyLanguage` 住在 i18n-environment-state（P4 T1 由
+ * classic theme-lang 并入），本模块直接命名 import；它们内部的跨文件调用
+ * （renderAgentList / renderCurrentMainView 等）仍是 classic 实现，经 window
+ * 晚绑定——首屏链的 classic 残余随 T2 渲染层批次消化。
  */
 
-// 桥接期：applyTheme / applyLanguage 仍是 classic 唯一实现（theme-lang.js），
-// 经 window 显式转调；P4 T1（theme-lang 并入 i18n-environment-state）后改为命名
-// import —— 收敛前不得在此复制第二套实现。
-window.applyTheme(window.currentTheme);
-window.applyLanguage();
+import {
+  applyTheme, applyLanguage, getCurrentTheme, bindStaticToggleButtons,
+} from './i18n-environment-state.js';
+
+applyTheme(getCurrentTheme());
+applyLanguage();
+
+// 首屏落定后才挂主题 / 语言按钮的 click：此前点击无效果，避免走进半就绪的
+// 渲染链（见 bindStaticToggleButtons 的注释）。
+bindStaticToggleButtons();

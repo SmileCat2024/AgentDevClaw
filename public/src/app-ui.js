@@ -1935,14 +1935,9 @@ window.updateLogFilter = (key, value) => {
 // 面板按钮由 debug-panel-host 的 syncRailButtons 生成并在创建时绑定 click
 // （ADR-0044 P2b）；此处不再集中绑定。
 
-themeToggle.addEventListener('click', () => {
-  applyTheme(currentTheme === 'light' ? 'dark' : 'light');
-});
-
-languageToggle.addEventListener('click', () => {
-  currentLanguage = currentLanguage === 'zh' ? 'en' : 'zh';
-  applyLanguage();
-});
+// 主题 / 语言两个静态按钮的 click 监听已随 theme-lang 迁进
+// modules/i18n-environment-state.js，由 boot.js 在首屏渲染后经
+// bindStaticToggleButtons() 绑定（早期窗口 = 无监听、点击无效果）。
 
 // Settings flyout menu — click gear to toggle, click item to act + close
 const settingsFlyout = document.getElementById('settings-flyout-menu');

@@ -550,32 +550,26 @@ async function runMainChain(browser, port) {
       'light',
       '模块未求值时主题应已由内联预读落成 localStorage 值（applyTheme 尚未执行）',
     );
-    assert.equal(preRelease.classicApplyTheme, 'function', 'applyTheme 仍是 classic 实现（点击入口依赖它）');
-    assert.equal(preRelease.classicApplyLanguage, 'function', 'applyLanguage 仍是 classic 实现（点击入口依赖它）');
-
+    // 首屏尚未渲染（boot 被扣住）时，主题 / 语言按钮没有监听：点击无效果，
+    // 且不得抛错（P4 裁决的早期事件语义——不是半生效，也不是 ReferenceError）。
     const themeBefore = await page.evaluate(() => document.body.dataset.theme);
-    await page.click('#theme-toggle');
-    const themeAfter = await page.evaluate(() => document.body.dataset.theme);
-    assert.notEqual(themeAfter, themeBefore, '模块延迟时主题切换必须可用（classic applyTheme）');
-    await page.click('#theme-toggle'); // 还原
-
     const langBefore = await page.evaluate(() => ({
       stored: localStorage.getItem('agentdev-language'),
       title: document.title,
       toggle: document.getElementById('language-toggle')?.textContent,
     }));
+    await page.click('#theme-toggle');
     await page.click('#language-toggle');
-    const langAfter = await page.evaluate(() => ({
+    const early = await page.evaluate(() => ({
+      theme: document.body.dataset.theme,
       stored: localStorage.getItem('agentdev-language'),
       title: document.title,
       toggle: document.getElementById('language-toggle')?.textContent,
     }));
-    assert.notEqual(langAfter.stored, langBefore.stored, '模块延迟时语言切换必须落地（classic applyLanguage）');
-    assert.ok(
-      langAfter.title !== langBefore.title || langAfter.toggle !== langBefore.toggle,
-      '语言切换后标题或切换按钮文案应随之更新',
-    );
-    await page.click('#language-toggle'); // 还原
+    assert.equal(early.theme, themeBefore, '首屏渲染前主题按钮点击应无效果');
+    assert.equal(early.stored, langBefore.stored, '首屏渲染前语言按钮点击应无效果');
+    assert.equal(early.title, langBefore.title, '首屏渲染前 document.title 不应被改写');
+    assert.equal(early.toggle, langBefore.toggle, '首屏渲染前语言按钮文案不应变化');
 
     assert.deepEqual(failures.pageErrors, [], `延迟相出现 pageerror：${failures.pageErrors.join(' | ')}`);
 
@@ -720,6 +714,18 @@ async function runMainChain(browser, port) {
       [],
       `出现未 mock 的请求（生产路由形状未覆盖）：${unhandled.slice(unhandledMark).join(' | ')}`,
     );
+    // 放行后：两个静态按钮的真实实现（i18n-environment-state 的桥键）已就绪
+    const themeReleased = await page.evaluate(() => document.body.dataset.theme);
+    await page.click('#theme-toggle');
+    const themeFlipped = await page.evaluate(() => document.body.dataset.theme);
+    assert.notEqual(themeFlipped, themeReleased, '模块就绪后主题切换必须生效（applyTheme 桥键）');
+    await page.click('#theme-toggle');
+    const languageReleased = await page.evaluate(() => localStorage.getItem('agentdev-language'));
+    await page.click('#language-toggle');
+    const languageFlipped = await page.evaluate(() => localStorage.getItem('agentdev-language'));
+    assert.notEqual(languageFlipped, languageReleased, '模块就绪后语言切换必须落地（applyLanguage 桥键）');
+    await page.click('#language-toggle');
+
     assert.deepEqual(failures.pageErrors, [], `出现 pageerror：${failures.pageErrors.join(' | ')}`);
     assert.deepEqual(failures.consoleErrors, [], `出现 console error：${failures.consoleErrors.join(' | ')}`);
     // SSE 长连接在会话切换 / 线程订阅变化时由 EventSource 主动重连，旧流以
@@ -792,7 +798,12 @@ const RAIL_SETTLED = (panelId) => {
  * 真实 index.html 上跑，不模拟、不替换被测函数。
  */
 async function runDeferredRailClickProbe(browser, port) {
-  resetGate(['/src/modules/kernel-entry.js']);
+  // P4 时序切换后，"内核图被扣住但 rail 按钮已在"的窗口不复存在：rail 按钮由
+  // 首屏渲染产生，而首屏渲染本身就在模块相（boot → applyLanguage →
+  // renderCurrentMainView），晚于 kernel-entry。本轮因此不扣任何模块，验证的是
+  // 另一个仍然成立的契约：首屏一落定，rail 面板立即可交互（此时认证与数据链
+  // 都没有完成）。
+  resetGate([]);
   const unhandledMark = unhandled.length;
   const { page, failures } = await openPage(browser, port);
   try {
@@ -801,8 +812,7 @@ async function runDeferredRailClickProbe(browser, port) {
       null,
       { timeout: 15000 },
     );
-    assert.deepEqual(gate.arrivals, ['/src/modules/kernel-entry.js'],
-      'rail 探针轮：kernel-entry 应仍被门控扣住（模块图尚未求值）');
+    assert.deepEqual(gate.arrivals, [], 'rail 探针轮不门控模块入口：首屏链依赖 p4-entry 的桥键');
 
     // 枚举延迟相 DOM 里全部 rail 面板按钮：`display` 非 none 即视为它该出现，
     // 不预先按"能不能点"过滤——预筛会让回归导致不可点的按钮从列表里静默消失。

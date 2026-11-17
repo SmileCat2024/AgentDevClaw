@@ -429,7 +429,8 @@
        frontend-script-tags-gate 的 MODULE_ENTRIES。 -->
   <script type="module" src="./src/modules/kernel-entry.js"></script>
   <script src="./src/modules/session-view-state.js"></script>
-  <script src="./src/modules/sidebar-layout.js"></script>
+  <!-- sidebar-layout 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       对外 API 仍是 window.ClawSidebarLayout 桥键。 -->
   <script src="./src/modules/sidebar-render.js"></script>
    <script type="module" src="./src/modules/toast-notify.js"></script>
   <script src="./src/modules/dispatch-ui.js"></script>
@@ -445,11 +446,14 @@
   <script src="./src/modules/wg-popover.js"></script>
   <script src="./src/modules/wg-core.js"></script>
   <script src="./src/modules/remote-connections.js"></script>
-  <script src="./src/modules/chat-context-bar.js"></script>
-  <script src="./src/modules/workspace-docset.js"></script>
+  <!-- chat-context-bar 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载；
+       桥键 updateChatContextBar 供 app-ui 首屏 render 分支裸调。 -->
+  <!-- workspace-docset 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载；
+       currentProjectDocsetOpen 状态仍由 app-core 的桥键持有。 -->
   <script src="./src/modules/markdown-bootstrap.js"></script>
   <script type="module" src="./src/modules/markdown-utils.js"></script>
-  <script src="./src/modules/theme-lang.js"></script>
+  <!-- theme-lang 已并入 i18n-environment-state（P4 T1）：classic 标签删除；
+       applyTheme / applyLanguage 由 boot.js 直接 import 调用。 -->
   <script src="./src/modules/chat-viewport.js"></script>
   <!-- debug-overview / debug-preflight / debug-mcp 已迁 ESM：classic 标签删除，
        由 p2-entry 的 p2-w2-11-debug-deep-bootstrap / p2-debug-small-bootstrap 装载。
@@ -459,7 +463,7 @@
   <script src="./src/modules/debug-features-hooks.js"></script>
     <script src="./src/modules/generative-ui-panel.js"></script>
   <script src="./src/modules/debug-panel-host.js"></script>
-  <script src="./src/modules/panel-plugins.js"></script>
+  <!-- panel-plugins 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载（纯声明，无桥键）。 -->
   <!-- 动态插件面板声明（ADR-0045 P1）：feature-ui-registry 从 server 声明 API
        拉取外部插件包的面板声明（素材 × 装配事实合成），与上方静态清单互补。
        该模块已迁 ESM，由 p2-w1-2-panel-bootstrap 装载。 -->
@@ -469,7 +473,8 @@
        不再静态挂载，卸载后无残留 -->
   <!-- memo 设置弹窗随 memo 插件装载（plugins/memo/settings.js），不再静态挂载 -->
   <script src="./src/modules/home-dashboard.js"></script>
-  <script src="./src/modules/todo-plan.js"></script>
+  <!-- todo-plan 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载；6 个桥键供
+       app-ui / app-core / app-main / session-view-state 使用。 -->
   <script src="./src/modules/bg-panel.js"></script>
   <script src="./src/modules/right-panel-registry.js"></script>
   <script src="./src/app-ui.js"></script>

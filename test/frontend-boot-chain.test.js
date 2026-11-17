@@ -4,7 +4,7 @@
  * import 已迁为 ESM 的 agent-data-loader（host 工厂 seam）与 sse-client。
  *
  * 契约：
- *   - classic 相：i18n / kernel-state / app-core / sidebar-render / theme-lang /
+ *   - classic 相：kernel-state / app-core / sidebar-render / auth-client 等
  *     auth-client 都必须仍是 classic 标签且先于 app-main（首屏同步链与桥存储的
  *     唯一实现，不能等 deferred module）；
  *   - ESM 入口链：sse-client 不得是 classic 标签（classic 相解析 import 会
@@ -422,7 +422,6 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
       './src/modules/kernel-state.js', // 桥存储：状态访问器必须先于一切域模块
       './src/app-core.js', // DOM 引用与 createP2Bootstrap*Host 工厂
       './src/modules/sidebar-render.js', // renderAgentList：首屏同步调用
-      './src/modules/theme-lang.js', // applyTheme / applyLanguage 实现
       './src/modules/auth-client.js', // __clawAuthReady 的创建方
     ];
     for (const src of classicRequirements) {

@@ -19,8 +19,8 @@
  *      normalizeWorkspaceStartupDraft / saveWorkspaceFormDraft /
  *      maybeWarnAssemblySessionDrift）桥已注销：仍作命名导出、window 侧缺席
  *      （IMPORT_ONLY_KEYS 钉住）。
- *   6. 同步首屏边界：workspace-docset.js 仍是 classic，`updateProjectDocsetChrome`
- *      在只加载 app-core 的沙箱里可直接执行（首屏路径不依赖 ESM）。
+ *   6. workspace-docset chrome 同步（P4 L1 已迁 ESM）：`updateProjectDocsetChrome`
+ *      经真实 import 求值即可执行，classic 消费方（app-ui）经内核桥读到同一实现。
  *
  * 装载路线（withP2EsmCase，配方第三节「真实 import」）：一个用例 = 一份 classic
  * 沙箱 + 一张真实 ESM 图（case 级图隔离，见 test/helpers/p2-esm-case.js）。
@@ -682,26 +682,37 @@ test('批内消费方改 import：classic 动作处理器只剩跨批依赖的 w
   );
 });
 
-// ── 6. 同步首屏边界：workspace-docset 的 classic 唯一实现 ────────────
+// ── 6. chrome 同步（P4 L1 已迁 ESM）────────────────────────────────
 
-test('workspace-docset 保留 classic 首屏边界：只加载 app-core 即可执行 chrome 同步', async () => {
+test('workspace-docset chrome 同步：真实 import 求值后即可执行，classic 侧经桥读到同一实现', async () => {
   const source = readFileSync(path.join(REPO, 'public/src/modules/workspace-docset.js'), 'utf8');
-  assert.equal(/^export\s/m.test(source), false, 'workspace-docset.js 必须保持 classic（无 export）');
+  assert.equal(/^export\s/m.test(source), true, 'workspace-docset.js 已迁 ESM（P4 L1）');
   assert.equal(source.includes('function updateProjectDocsetChrome('), true);
 
-  // classic 相只装 app-core + workspace-docset：ESM 渲染实现缺席也不得抛错
   await withBatch10Case({
     classic: (sandbox) => {
+      // 模块求值所需的 classic 前置：app-core（内核桥初值 + P2 bootstrap DOM 宿主工厂）
+      // 与 markdown-utils 的 classic 实现（escapeHtml / renderer）、动作注册表。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/workspace-docset.js');
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
   }, async (c) => {
-    assert.equal(typeof c.window.updateProjectDocsetChrome, 'function');
-    // 首屏路径：agent 为 null（allAgents 尚未加载）时同步执行，不依赖任何 ESM
+    const { updateProjectDocsetChrome } = await c.load('public/src/modules/workspace-docset.js');
+    assert.equal(typeof updateProjectDocsetChrome, 'function');
+    // classic 消费方（app-ui 的 renderCurrentMainView）经内核桥读到同一函数引用。
+    assert.equal(c.window.updateProjectDocsetChrome, updateProjectDocsetChrome);
+    // 首屏路径形态：agent 为 null（allAgents 尚未加载）时同步执行，只走「无 docset」分支
     c.read('updateProjectDocsetChrome(null)');
     assert.equal(c.read('currentProjectDocsetOpen'), false);
     assert.equal(c.read('currentProjectRequirementEdit'), null);
-    // ESM 渲染实现尚未装载也不得抛错：docset 不存在时不会走 window.renderProjectDocsetContent
+    // 域 Q 的渲染实现未装载时不得抛错：docset 不存在就不会调用 window.renderProjectDocsetContent
     assert.equal(c.read('typeof window.renderProjectDocsetContent'), 'undefined');
+
+    // claim 后 classic 写方经 setter 转发进域模块桥值（同名访问器读到新值）。
+    const replaced = () => 'classic-written';
+    c.window.getCurrentProjectDocset = replaced;
+    assert.equal(c.window.getCurrentProjectDocset, replaced,
+      'claim 之后 classic 写方的赋值必须经 impl.set 落进域模块桥值');
   });
 });

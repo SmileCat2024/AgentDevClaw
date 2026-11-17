@@ -23,6 +23,7 @@
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { loadModuleOnce } from './helpers/esm-module-loader.js';
 import { prepareClassicSandbox } from './p2-classic-hosts.js';
@@ -227,14 +228,20 @@ describe('P2-4 兼容桥：仍有 classic 消费方的入口', () => {
     assert.equal(window.getAgentRuntimeId, env.ctx.run('getAgentRuntimeId'));
   });
 
-  it('todo-plan 未转换：本批不为它造桥或副本', () => {
-    // 计划 rail 在首屏同步建立且可点击，render 回调须在 deferred 模块前可用，
-    // 因此 todo-plan 保持唯一 classic 实现；这里钉住「本批没有替它上桥」。
-    for (const key of ['getEmptyTodoPlan', 'normalizeTodoPlan', 'setCurrentTodoPlan',
-      'updatePlanBadge', 'renderPlanPanel', 'getTodoPlanSignature']) {
-      // 只钉「没有 KernelState 访问器桥」：沙箱自身的 state 占位是测试桩，不是本批产物。
+  it('todo-plan 的桥键由自身 ESM 模块注册（P4 L1），本批环境未装载故无访问器', () => {
+    // 本批（W2-4）不替 todo-plan 造桥；P4 L1 之后它自己的 ESM 模块在模块相注册
+    // 六个经典消费方键。本批环境不装载 todo-plan，因此这里仍应看不到访问器——
+    // 出现就说明有别人替它造了桥（本批禁止）。
+    const keys = ['getEmptyTodoPlan', 'normalizeTodoPlan', 'setCurrentTodoPlan',
+      'updatePlanBadge', 'renderPlanPanel', 'getTodoPlanSignature'];
+    for (const key of keys) {
       assert.equal(Object.getOwnPropertyDescriptor(window, key)?.get, undefined,
-        `${key} 不应由本批造桥（classic 声明仍是唯一实现）`);
+        `${key} 不应由本批造桥（唯一注册者是 todo-plan.js 自身）`);
+    }
+    const source = readFileSync(new URL('../public/src/modules/todo-plan.js', import.meta.url), 'utf8');
+    for (const key of keys) {
+      assert.match(source, new RegExp(`defineKey\\('todo-plan', '${key}'`),
+        `${key} 应由 todo-plan.js 注册（domain todo-plan）`);
     }
   });
 

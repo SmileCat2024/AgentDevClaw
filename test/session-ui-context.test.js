@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 import { installI18n } from './helpers/install-i18n.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 /** Raw VM contexts install the real kernel with window/global unified. */
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
@@ -15,10 +16,6 @@ const inputRenderSource = fs.readFileSync(
 const uiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
 const sessionViewStateSource = fs.readFileSync(
   new URL('../public/src/modules/session-view-state.js', import.meta.url),
-  'utf8',
-);
-const chatContextBarSource = fs.readFileSync(
-  new URL('../public/src/modules/chat-context-bar.js', import.meta.url),
   'utf8',
 );
 // 工单 036：会话草稿缓存已从 voice-input.js 迁至 input-composer.js
@@ -526,7 +523,9 @@ test('main render boundary consumes one captured session view', () => {
   assert.doesNotMatch(renderBlock, /\bcurrentMessages\b|\bcurrentInputRequests\b/);
 });
 
-test('context bar renders one supplied session view snapshot', () => {
+test('context bar renders one supplied session view snapshot', async () => {
+  // chat-context-bar 已迁 ESM（P4 L1）：真实 import 路线（原实现按源码切片在 vm 里
+  // 重放函数体，ESM 化后函数体依赖导入值与模块状态，切片不再适用）。
   const classNames = new Set();
   const bar = {
     innerHTML: '',
@@ -536,51 +535,51 @@ test('context bar renders one supplied session view snapshot', () => {
       contains: (name) => classNames.has(name),
     },
   };
-  const context = {
-    _ccbPopup: null,
-    currentOverviewSnapshot: {
-      modelName: 'stale-model',
-      usageStats: { lastRequestUsage: { inputTokens: 75 } },
-    },
-    document: {
-      getElementById: (id) => id === 'chat-context-bar' ? bar : null,
-    },
-    window: {},
-    shouldRenderWorkspaceSurface: () => false,
-    getRuntimeAwareAgentRecord: () => ({
-      workspace_sessions: { sessions: [{}] },
-    }),
-    getCurrentRuntimeRecord: () => ({}),
-    escapeHtml: (value) => String(value),
+  const documentStub = {
+    getElementById: (id) => (id === 'chat-context-bar' ? bar : null),
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement() { return { style: {}, classList: { add() {}, remove() {}, contains() { return false; } }, addEventListener() {}, appendChild() {} }; },
+    addEventListener() {},
+    body: { appendChild() {} },
+    readyState: 'complete',
   };
-  vm.createContext(context);
-  context.window = context;
-  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
-  const renderBlock = sourceBetween(
-    chatContextBarSource,
-    'function updateChatContextBar',
-    '\n// ── Context bar hover popup',
-  );
-  vm.runInContext(
-    `${renderBlock}\nglobalThis.__updateChatContextBar = updateChatContextBar;`,
-    context,
-  );
-
-  context.__updateChatContextBar({
-    overview: {
-      modelName: 'snapshot-model',
-      contextLength: 100,
-      compressRatio: 80,
-      usageStats: {
-        lastRequestUsage: { inputTokens: 25 },
-        totalUsage: { inputTokens: 40, outputTokens: 10 },
-        totalRequests: 2,
-      },
+  await withP2EsmCase({
+    globals: {
+      document: documentStub,
+      shouldRenderWorkspaceSurface: () => false,
+      isChatSurfaceActive: () => false,
+      getRuntimeAwareAgentRecord: () => ({ workspace_sessions: { sessions: [{}] } }),
+      getCurrentRuntimeRecord: () => ({}),
+      notifyChatViewportMutation: () => {},
+      // vendor 解析器 / 高亮库：markdown-bootstrap 装载期构造 Renderer 并查 hljs。
+      marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
+      hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
     },
-  });
+    classic: (sandbox) => {
+      sandbox.setTimeout = () => 0; // 抑制 _initCcbPopup / _initTitlePopup 的定时器
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource('public/src/app-core.js');
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
+    },
+  }, async (c) => {
+    const contextBar = await c.load('public/src/modules/chat-context-bar.js');
+    contextBar.updateChatContextBar({
+      overview: {
+        modelName: 'snapshot-model',
+        contextLength: 100,
+        compressRatio: 80,
+        usageStats: {
+          lastRequestUsage: { inputTokens: 25 },
+          totalUsage: { inputTokens: 40, outputTokens: 10 },
+          totalRequests: 2,
+        },
+      },
+    });
 
-  assert.match(bar.innerHTML, /snapshot-model/);
-  assert.match(bar.innerHTML, /25%/);
-  assert.equal(context.window._ccbDetailData.used, 25);
-  assert.equal(context.window._ccbDetailData.totalInput, 40);
+    assert.match(bar.innerHTML, /snapshot-model/);
+    assert.match(bar.innerHTML, /25%/);
+    assert.equal(contextBar._ccbDetailData.used, 25);
+    assert.equal(contextBar._ccbDetailData.totalInput, 40);
+  });
 });

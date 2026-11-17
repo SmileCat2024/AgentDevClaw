@@ -50,6 +50,10 @@ export function installKernelState(context) {
 export function createFrontendSandbox(overrides = {}) {
   // Minimal DOM stubs
   const elementStub = {
+    // dataset 是真实 DOM 元素的必备面：迁移后的模块在模块相/异步回调里读写
+    // dataset（如 chat-context-bar 的 popupBound），桩缺它会把真实的 DOM 路径
+    // 误判成 TypeError。
+    dataset: {},
     style: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     appendChild() {},

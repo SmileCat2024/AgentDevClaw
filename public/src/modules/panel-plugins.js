@@ -18,47 +18,53 @@
  *
  * 登记纪律：P4 存量迁移时每迁一个面板，把 index.html 的静态 script
  * 标签删除、在此登记一条、更新金样本住址与门禁基线。
+ *
+ * ESM 迁移（P4 L1）：本文件原为 classic IIFE，无跨文件键——`DECLARATIONS`
+ * 只在本文件使用，保持模块私有；装载方式由 classic 标签改为模块 import。
+ * 时序（R4）：声明循环从「classic 加载序」移到「模块求值相」，两者都早于
+ * DOMContentLoaded，且 `window.ClawHost` 由更早的 classic 标签（claw-host.js）
+ * 提供，因此声明可达性等价；rail 首次渲染读的是同一份注册表。
+ * `meta.title` 闭包由裸读 `currentLanguage` 改为 `getCurrentLanguage()`——
+ * 同一个桥访问器取值，渲染时点语义不变。
  */
-(function () {
-  'use strict';
+import { getCurrentLanguage } from './i18n-environment-state.js';
 
-  const DECLARATIONS = [
-    {
-      id: 'session-controls',
-      pluginId: 'panel-session-controls',
-      url: '/src/panel-plugins/session-controls.js',
-      meta: {
-        when: { surfaces: ['chat'] },
-        title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
-        label: { zh: '会话控制', en: 'Session Controls' },
-        description: { zh: 'API 重试与输出风格', en: 'API retries and output styles' },
-        icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M21 12a9 9 0 1 1-2.64-6.36"></path> <path d="M21 3v6h-6"></path> </svg>',
-        order: 20,
-      },
+const DECLARATIONS = [
+  {
+    id: 'session-controls',
+    pluginId: 'panel-session-controls',
+    url: '/src/panel-plugins/session-controls.js',
+    meta: {
+      when: { surfaces: ['chat'] },
+      title: () => getCurrentLanguage() === 'zh' ? '会话控制' : 'Session Controls',
+      label: { zh: '会话控制', en: 'Session Controls' },
+      description: { zh: 'API 重试与输出风格', en: 'API retries and output styles' },
+      icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M21 12a9 9 0 1 1-2.64-6.36"></path> <path d="M21 3v6h-6"></path> </svg>',
+      order: 20,
     },
-    {
-      id: 'git',
-      pluginId: 'panel-git',
-      url: '/src/panel-plugins/git.js',
-      meta: {
-        when: { surfaces: ['chat'] },
-        title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
-        label: { zh: '源代码管理', en: 'Source Control' },
-        description: { zh: 'Git 状态与操作', en: 'Git status and operations' },
-        icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="6" cy="6" r="2.6"></circle> <circle cx="6" cy="18" r="2.6"></circle> <circle cx="18" cy="8" r="2.6"></circle> <path d="M6 8.6v6.8"></path> <path d="M18 10.6c0 4-4.5 3.4-8 4.5"></path> </svg>',
-        order: 30,
-      },
+  },
+  {
+    id: 'git',
+    pluginId: 'panel-git',
+    url: '/src/panel-plugins/git.js',
+    meta: {
+      when: { surfaces: ['chat'] },
+      title: () => getCurrentLanguage() === 'zh' ? '源代码管理' : 'Source Control',
+      label: { zh: '源代码管理', en: 'Source Control' },
+      description: { zh: 'Git 状态与操作', en: 'Git status and operations' },
+      icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <circle cx="6" cy="6" r="2.6"></circle> <circle cx="6" cy="18" r="2.6"></circle> <circle cx="18" cy="8" r="2.6"></circle> <path d="M6 8.6v6.8"></path> <path d="M18 10.6c0 4-4.5 3.4-8 4.5"></path> </svg>',
+      order: 30,
     },
-    // agentero-library 已出仓为外部插件包（ADR-0045 P1）：面板声明改由
-    // server 声明 API 下发（feature-ui-registry.js），实现模块经导入的
-    // tgz 资产 URL 装载，不再走本静态清单。
-  ];
+  },
+  // agentero-library 已出仓为外部插件包（ADR-0045 P1）：面板声明改由
+  // server 声明 API 下发（feature-ui-registry.js），实现模块经导入的
+  // tgz 资产 URL 装载，不再走本静态清单。
+];
 
-  for (const d of DECLARATIONS) {
-    try {
-      window.ClawHost.panels.declare(d.id, d.meta, { pluginId: d.pluginId, url: d.url });
-    } catch (err) {
-      console.error('[panel-plugins] 懒面板声明失败：', d.id, err);
-    }
+for (const d of DECLARATIONS) {
+  try {
+    window.ClawHost.panels.declare(d.id, d.meta, { pluginId: d.pluginId, url: d.url });
+  } catch (err) {
+    console.error('[panel-plugins] 懒面板声明失败：', d.id, err);
   }
-})();
+}

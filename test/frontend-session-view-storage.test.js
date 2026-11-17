@@ -2,9 +2,11 @@
  * session-view-storage（ESM owner）与 classic 写方之间的所有权转移（P2 真实 ESM 图路线）。
  *
  * 装载路线：classic 相跑真实生产源（app-core 注册全部桥键初值、session-view-state
- * 提供会话视图提交器、todo-plan 提供真实的 plan 快照 setter），session-view-storage
- * 经 `withP2EsmCase` + `c.load` 真实 import，每个用例一张独立模块图（claim 不可
- * 撤销，跨用例复用会让第二个用例失去"认领前"这一相位）。
+ * 提供会话视图提交器），session-view-storage / todo-plan 经 `withP2EsmCase` +
+ * `c.load` 真实 import，每个用例一张独立模块图（claim 不可撤销，跨用例复用会让
+ * 第二个用例失去"认领前"这一相位）。todo-plan 已迁 ESM（P4 L1），它 import
+ * session-view-storage——认领前不可能经它写入，故 pre-claim 的 plan 成对值直接写
+ * 真实桥访问器（等价于「尚无 owner 时的窗口写入」）。
  *
  * 覆盖：认领前的 classic 写入被原样吸收（引用/值都不复制）、认领后 classic 写方与
  * ESM 命名绑定双向一致、真实 setter 维护「快照 + 签名」成对语义、以及认领后过期
@@ -31,17 +33,25 @@ const STORAGE_KEYS = [
   'currentTodoPlanSignature',
 ];
 
-/** classic 相：app-core（桥键注册 + 宿主工厂）→ session-view-state → todo-plan。 */
+/** vendor markdown 解析器 / 高亮库最小等价桩（markdown-bootstrap 装载期取用）。 */
+const VENDOR_STUBS = {
+  marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
+  hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
+};
+
+/** classic 相：app-core（桥键注册 + 宿主工厂）→ session-view-state。 */
 function loadClassicBootstrap(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
-  sandbox.loadSource('public/src/modules/todo-plan.js');
+  // todo-plan 已迁 ESM（P4 L1）：它 import session-view-storage，必须在 case 体内
+  // 经 c.load 装载（否则会先替本用例认领本域，失去认领前相位）。
+  sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
 }
 
 test('real session patch preserves early data through claim and rejects stale commits afterward', async () => {
-  await withP2EsmCase({ classic: loadClassicBootstrap }, async (c) => {
+  await withP2EsmCase({ classic: loadClassicBootstrap, globals: VENDOR_STUBS }, async (c) => {
     c.read("currentRuntimeAgentId = 'runtime-a'; focusedAgentId = 'agent-a'; currentRuntimeConnected = true;");
     const messages = [{ role: 'user', content: 'before claim' }];
     c.window.earlyMessages = messages;
@@ -65,7 +75,7 @@ test('real session patch preserves early data through claim and rejects stale co
 });
 
 test('session-view-storage claim absorbs pre-claim values without copying or losing references', async () => {
-  await withP2EsmCase({ classic: loadClassicBootstrap }, async (c) => {
+  await withP2EsmCase({ classic: loadClassicBootstrap, globals: VENDOR_STUBS }, async (c) => {
     // 认领前的 classic 写方：整体替换两个引用型状态
     const beforeClaimMessages = [{ role: 'user', content: 'written before claim' }];
     const beforeClaimInputRequests = [{ id: 'written-before-claim' }];
@@ -93,7 +103,7 @@ test('session-view-storage claim absorbs pre-claim values without copying or los
 });
 
 test('session-view-storage named live bindings and classic accessors stay bidirectional after claim', async () => {
-  await withP2EsmCase({ classic: loadClassicBootstrap }, async (c) => {
+  await withP2EsmCase({ classic: loadClassicBootstrap, globals: VENDOR_STUBS }, async (c) => {
     const storage = await c.load(SESSION_VIEW_STORAGE);
 
     const classicMessages = [{ role: 'user', content: 'classic replacement' }];
@@ -113,7 +123,7 @@ test('session-view-storage named live bindings and classic accessors stay bidire
 });
 
 test('storage bridge and real setters keep overview/todo snapshot-signature pairs across claim', async () => {
-  await withP2EsmCase({ classic: loadClassicBootstrap }, async (c) => {
+  await withP2EsmCase({ classic: loadClassicBootstrap, globals: VENDOR_STUBS }, async (c) => {
     // ── 认领前：经 app-core 已注册的窗口访问器写入**非空**快照与签名 ──
     // hook / overview 此刻还没有 ESM owner，访问器落在哑存储；认领必须按引用
     // 吸收这些真实值（只吸收默认空值证明不了吸收语义）。
@@ -129,16 +139,21 @@ test('storage bridge and real setters keep overview/todo snapshot-signature pair
       currentOverviewSnapshot = __seed.overview;
       currentOverviewSignature = __seed.overviewSignature;
     `);
-    // 同相再用真实 classic setter（todo-plan）写入它的「快照 + 签名」成对值。
-    c.read("setCurrentTodoPlan({ tasks: [{ id: 'before-claim-todo', status: 'pending' }] });");
+    // todo 的「快照 + 签名」成对值：认领前无 owner，直接写真实桥访问器（todo-plan
+    // 已迁 ESM，其 setter 依赖本域 owner，不能在本相位使用）。
+    c.read(`
+      __seed.todo = { feature: 'todo', tasks: [{ id: 'before-claim-todo', status: 'pending' }] };
+      currentTodoPlan = __seed.todo;
+      currentTodoPlanSignature = 'todo-before-claim';
+    `);
 
     const beforeClaim = {
       hook: seed.hook,
       hookSignature: seed.hookSignature,
       overview: seed.overview,
       overviewSignature: seed.overviewSignature,
-      todo: c.window.currentTodoPlan,
-      todoSignature: c.window.currentTodoPlanSignature,
+      todo: seed.todo,
+      todoSignature: 'todo-before-claim',
     };
     // 认领前访问器读回的就是刚写入的引用/值（哑存储承接，未被任何 owner 认领）。
     assert.strictEqual(c.window.currentHookInspector, beforeClaim.hook);
@@ -152,6 +167,9 @@ test('storage bridge and real setters keep overview/todo snapshot-signature pair
 
     const storage = await c.load(SESSION_VIEW_STORAGE);
     const overviewData = await c.load(OVERVIEW_DATA);
+    // todo-plan（P4 L1 已迁 ESM）：真实 plan setter，import 本域 owner 之外的
+    // markdown-utils / domRefs 宿主已由 classic 相提供。
+    await c.load('public/src/modules/todo-plan.js');
 
     assert.strictEqual(storage.currentHookInspector, beforeClaim.hook);
     assert.equal(storage.currentHookInspectorSignature, beforeClaim.hookSignature);

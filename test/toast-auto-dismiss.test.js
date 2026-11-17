@@ -74,7 +74,9 @@ function createToastEnvironment() {
   const container = createElement();
   container.id = 'toast-container';
   const body = createElement('body');
-  const windowStub = { KernelState: { claim() {} } };
+  // i18n-environment-state 会 claim 域状态并注册 applyTheme/applyLanguage 桥键
+  // （P4 T1 由 theme-lang 并入），因此桩必须对齐真实 KernelState 的两个入口。
+  const windowStub = { KernelState: { claim() {}, defineKey() {} } };
   const documentStub = {
     body,
     getElementById(id) { return id === 'toast-container' ? container : null; },

@@ -61,8 +61,9 @@ function makeElement(id) {
 
 /**
  * 加载 header 渲染链的真实源码并执行 `fn`。
- * classic 相顺序：app-core → runtime-status → todo-plan → session-view-state →
- * i18n → app-main → chat-context-bar；ESM 相装载 overview-data。
+ * classic 相顺序：app-core → runtime-status → sidebar-render → session-view-state →
+ * i18n → app-main；ESM 相装载 todo-plan / chat-context-bar / overview-data（P4 L1
+ * 三件已迁 ESM）。
  */
 async function withHeaderSandbox(fn) {
   const elements = new Map();
@@ -84,20 +85,29 @@ async function withHeaderSandbox(fn) {
   };
 
   await withP2EsmCase({
-    globals: { document: documentStub },
+    globals: {
+      document: documentStub,
+      // vendor 解析器 / 高亮库：markdown-bootstrap 装载期构造 Renderer 并查 hljs。
+      marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
+      hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
+    },
     classic: (ctx) => {
       // 抑制 chat-context-bar.js 顶层 setTimeout(_initCcbPopup/_initTitlePopup)
       // 与 runtime-status 顶层 ensureNotificationClockTimer() 的计时器。
       ctx.window.setInterval = () => 0;
       ctx.window.clearInterval = () => {};
       ctx.window.setTimeout = () => 0;
+      // action-dispatcher：markdown-utils（ESM）求值期登记 markdown.* 动作需要 ClawFW。
+      ctx.loadSource('public/src/modules/action-dispatcher.js');
       ctx.loadSource('public/src/app-core.js');
       ctx.loadSource('public/src/modules/runtime-status.js');
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost：按生产先行脚本序装真链，不造宿主桩。
       ctx.loadSource('public/src/modules/sidebar-render.js');
-      ctx.loadSource('public/src/modules/todo-plan.js');
       ctx.loadSource('public/src/modules/session-view-state.js');
+      // todo-plan / chat-context-bar 已迁 ESM（P4 L1）：classic 相只补 markdown-utils
+      // 的 classic 实现（escapeHtml / renderer），两个模块在 async 相 c.load。
+      ctx.loadSource('public/src/modules/markdown-bootstrap.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 装好（install-i18n.js）
       // app-main.js 底部的启动序列在沙箱里不执行；主题/语言应用与渲染函数以 stub 替身
       ctx.run(`
@@ -111,11 +121,13 @@ async function withHeaderSandbox(fn) {
         isRemoteNamespaceAgentId = (value) => typeof value === 'string' && value.startsWith('remote:');
       `);
       ctx.loadSource('public/src/app-main.js');
-      ctx.loadSource('public/src/modules/chat-context-bar.js');
     },
   }, async (c) => {
+    // 首屏链两件（P4 L1 已迁 ESM）：模块相装载，classic 侧经桥键调用同名入口。
+    await c.load('public/src/modules/todo-plan.js');
+    const contextBar = await c.load('public/src/modules/chat-context-bar.js');
     await c.load(OVERVIEW_DATA);
-    return fn({ ctx: c.window, bar: getEl('chat-context-bar'), titleEl: getEl('current-agent-name') });
+    return fn({ ctx: c.window, contextBar, bar: getEl('chat-context-bar'), titleEl: getEl('current-agent-name') });
   });
 }
 
@@ -134,7 +146,7 @@ const REMOTE_OVERVIEW = JSON.stringify({
 
 describe('frontend session header: remote form', () => {
   it('renders all three header items from the catalog stub with no agent record', async () => {
-    await withHeaderSandbox(async ({ ctx, bar, titleEl }) => {
+    await withHeaderSandbox(async ({ ctx, contextBar, bar, titleEl }) => {
       ctx.run(`
         currentRuntimeAgentId = 'remote:server-a:rt-1';
         focusedAgentId = 'remote:server-a:programming-helper';
@@ -161,7 +173,7 @@ describe('frontend session header: remote form', () => {
       assert.ok(bar.innerHTML.includes('25%'), 'usage percentage from lastRequestUsage');
 
       // hover 弹窗元数据：远程分支经 accessor + sessionMeta 组装，非 null
-      const meta = ctx.run('_collectActiveSessionMeta()');
+      const meta = contextBar._collectActiveSessionMeta();
       assert.notEqual(meta, null);
       assert.equal(meta.session.title, '远程主会话');
       assert.equal(meta.activeSessionId, 'remote:server-a:session-main');
@@ -228,7 +240,7 @@ describe('frontend session header: switch isolation', () => {
 
 describe('frontend session header: local regression', () => {
   it('keeps live model fields empty until overview arrives, retaining historical usage', async () => {
-    await withHeaderSandbox(async ({ ctx, bar }) => {
+    await withHeaderSandbox(async ({ ctx, contextBar, bar }) => {
       ctx.run(`
         currentRuntimeAgentId = 'ph-1';
         focusedAgentId = 'ph';
@@ -257,14 +269,14 @@ describe('frontend session header: local regression', () => {
         bar.innerHTML,
         '<span class="ccb-token ccb-token-empty"><span class="ccb-bar" data-ccb-trigger="1"></span><span class="ccb-label" data-ccb-trigger="1">—</span></span>',
       );
-      const detail = ctx.run('window._ccbDetailData');
+      const detail = contextBar._ccbDetailData;
       assert.equal(detail.modelName, '');
       assert.equal(detail.used, 3000);
       assert.equal(detail.isLastRequest, true);
       assert.equal(detail.contextLength, 0, 'contextLength must not fall back to session metadata');
 
       // 本地分支的 hover 元数据与远程分支三键同构
-      const meta = ctx.run('_collectActiveSessionMeta()');
+      const meta = contextBar._collectActiveSessionMeta();
       assert.equal(meta.activeSessionId, 's1');
       assert.equal(meta.agent.id, 'ph');
       assert.equal(meta.session.id, 's1');
@@ -277,7 +289,7 @@ describe('frontend session header: local regression', () => {
 
 describe('frontend session header: empty state', () => {
   it('keeps an empty-state usage placeholder when there is no record, no overview content, and no sessionMeta', async () => {
-    await withHeaderSandbox(async ({ ctx, bar }) => {
+    await withHeaderSandbox(async ({ ctx, contextBar, bar }) => {
       ctx.run(`
         isRemoteNamespaceAgentId = (value) => typeof value === 'string' && value.startsWith('remote:');
         currentRuntimeAgentId = 'ph-1';
@@ -296,7 +308,7 @@ describe('frontend session header: empty state', () => {
       assert.equal(view.sessionMeta.sessionId, '');
       assert.equal(view.sessionMeta.messageCount, 0);
       // 无活跃会话 → hover 弹窗元数据为 null（远程分支需要 runtimeRef，本地分支需要 record）
-      assert.equal(ctx.run('_collectActiveSessionMeta()'), null);
+      assert.equal(contextBar._collectActiveSessionMeta(), null);
     });
   });
 });

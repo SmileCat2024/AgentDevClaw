@@ -84,6 +84,8 @@ const MODULE_ENTRIES = [
 // 语法。P2 消费方批次收口在 p2-entry.js（原 69 条 classic 标签删于此）。
 const MODULE_ENTRY_IMPORTS = [
   './src/modules/p2-entry.js',
+  // P4 批次入口（时序切换后迁移的活跃域），由 kernel-entry 静态 import
+  './src/modules/p4-entry.js',
 ];
 
 function scriptSources(html) {

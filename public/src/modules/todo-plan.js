@@ -1,25 +1,61 @@
 /**
- * todo-plan.js — Todo Plan 渲染模块（从 app-ui.js 提取）
+ * todo-plan.js — Todo Plan 渲染模块（从 app-ui.js 提取；P4 L1 classic → ESM）
  *
  * 包含：
  *   - getEmptyTodoPlan, normalizeTodoPlan, getTodoPlanSignature
  *   - setCurrentTodoPlan, updatePlanBadge
  *   - getTodoStatusLabel, renderPlanTask, renderPlanPanel
- *   - sendTodoControl ("执行到此处"控制)
- *   - featurePanelBody click 事件监听器（控制按钮交互）
+ *   - sendTodoControl（"执行到此处"控制）
+ *   - featurePanelBody click / keydown 事件监听器（控制按钮交互）
  *
- * 依赖（全局变量/函数，声明于 app-core.js / app-ui.js / 其他模块）：
- *   - currentTodoPlan, currentTodoPlanSignature (app-core.js)
- *   - getInterruptTargetId, setInterruptTargetId (app-core.js)
- *   - featurePanelBody (app-core.js)
- *   - currentRuntimeAgentId, focusedAgentId, allAgents (app-core.js / app-main.js)
- *   - getLogicalAgentId, getRuntimeId (app-core.js identity contract)
- *   - activeFeaturePanel (app-core.js)
- *   - renderFeaturePanel (debug-panel-host.js)
- *   - escapeHtml, t, currentLanguage (app-core.js)
+ * 依赖形态：
+ *   - 已迁 ESM 直接 import：翻译（t）、转义（escapeHtml）、语言
+ *     （getCurrentLanguage）、计划快照存储（session-view-storage 的
+ *     currentTodoPlan / currentTodoPlanSignature 与其 setter）、编排状态
+ *     （currentRuntimeAgentId / _switchEpoch）、渲染入口状态
+ *     （activeFeaturePanel）、DOM 引用（domRefs.featurePanelBody）、
+ *     call 活动宿主（callActivity 的 `_lastInterruptUserActionAt`）。
+ *   - 仍 classic 的显式 window 晚绑定（均为运行期调用，行尾注明定义域）：
+ *     `getInterruptTargetId` / `setInterruptTargetId` / `getRuntimeId` /
+ *     `getRuntimeWorkspaceSessionId` / `getCurrentControlAgentId`（app-core）、
+ *     `renderFeaturePanel`（debug-panel-host）。
+ *
+ * 时序审计（R1/R2/R4）：本域键在 classic 相没有触达点——首屏链只经由
+ * `getEmptyTodoPlan`（app-ui 的空态构造，在 boot 触发的 renderCurrentMainView
+ * 内）与本模块的 panel render 闭包调用，两者都发生在模块求值相之后；
+ * 顶层 `featurePanelBody.addEventListener` 的两个监听器只在用户交互时触发，
+ * 加载相 → 模块相等价。因此注册相位取模块求值相。
+ *
+ * 桥键（domain `todo-plan`，classic 消费方尚未迁移）：
+ *   - `getEmptyTodoPlan`      ← app-ui / app-core / app-main / session-view-state
+ *   - `normalizeTodoPlan`     ← app-main（createMetadataCommitHost 适配器）
+ *   - `getTodoPlanSignature`  ← app-core / app-main
+ *   - `setCurrentTodoPlan`    ← session-view-state（applySessionViewPatch 提交计划）
+ *   - `updatePlanBadge`       ← app-core / app-main / agent-data-loader
+ *   - `renderPlanPanel`       ← app-ui（'plan' 面板注册闭包）
+ *   注销条件：上述 classic 消费方迁 ESM 并改为 import。
+ *   `isPlanTaskKind` / `getTaskKindLabel` / `getTodoStatusLabel` /
+ *   `getTerminalRuns` / `renderPlanFoldButton` / `renderPlanTaskList` /
+ *   `renderPlanTask` / `sendTodoControl` 生产消费面为零（仅测试经 import 使用），
+ *   作命名导出但不造桥。
  */
+import { t } from '../i18n.js';
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId, _switchEpoch } from './orchestration-state.js';
+import { activeFeaturePanel } from './render-entry-state.js';
+import { domRefs } from './p2-bootstrap-dom.js';
+import { callActivity } from './p2-bootstrap-call-activity.js';
+import {
+  currentTodoPlan,
+  setCurrentTodoPlan as setTodoPlanValue,
+  setCurrentTodoPlanSignature,
+} from './session-view-storage.js';
 
-function getEmptyTodoPlan() {
+// 加载期 DOM 引用（app-core 的 const 引用，元素从不替换）。
+const { featurePanelBody } = domRefs;
+
+export function getEmptyTodoPlan() {
   return {
     feature: 'todo',
     updatedAt: 0,
@@ -32,16 +68,16 @@ function getEmptyTodoPlan() {
 // 任务类型渲染白名单（五值，与框架 features/todo 的 TaskKind / viewer-worker normalizeKind 同步）。
 // other 是模型侧 kind 必填的兜底值：数据层经 normalize 保留（见 normalizeTodoPlan 内六值判断），
 // 但不渲染类型徽章——「其他」不携带类型信息，出徽章只是视觉噪音。
-function isPlanTaskKind(value) {
+export function isPlanTaskKind(value) {
   return ['investigate', 'design', 'implement', 'fix', 'verify'].includes(value);
 }
 
-function getTaskKindLabel(kind) {
+export function getTaskKindLabel(kind) {
   if (!isPlanTaskKind(kind)) return '';
   return t('plan_kind_' + kind);
 }
 
-function normalizeTodoPlan(snapshot) {
+export function normalizeTodoPlan(snapshot) {
   const empty = getEmptyTodoPlan();
   if (!snapshot || typeof snapshot !== 'object') return empty;
   const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks.map(task => ({
@@ -73,18 +109,18 @@ function normalizeTodoPlan(snapshot) {
   };
 }
 
-function getTodoPlanSignature(snapshot) {
+export function getTodoPlanSignature(snapshot) {
   return JSON.stringify(normalizeTodoPlan(snapshot));
 }
 
-function setCurrentTodoPlan(snapshot) {
+export function setCurrentTodoPlan(snapshot) {
   const normalized = normalizeTodoPlan(snapshot);
-  currentTodoPlan = normalized;
-  currentTodoPlanSignature = getTodoPlanSignature(normalized);
+  setTodoPlanValue(normalized);
+  setCurrentTodoPlanSignature(getTodoPlanSignature(normalized));
   updatePlanBadge();
 }
 
-function updatePlanBadge() {
+export function updatePlanBadge() {
   const badge = document.getElementById('rail-plan-badge');
   if (!badge) return;
   const tasks = Array.isArray(currentTodoPlan?.tasks) ? currentTodoPlan.tasks : [];
@@ -100,7 +136,7 @@ function updatePlanBadge() {
 
 // [Phase 2f-2] Usage/Token 渲染 + 日志面板 + MCP 面板 + 生命周期选择器 + Summary + Upload + 结构/监控/特性/Hook 面板 + renderFeaturePanel → modules/debug-panels.js
 
-function getTodoStatusLabel(status) {
+export function getTodoStatusLabel(status) {
   const labels = {
     pending: t('plan_pending'),
     in_progress: t('plan_in_progress'),
@@ -110,11 +146,11 @@ function getTodoStatusLabel(status) {
   return labels[status] || status || t('metric_unavailable');
 }
 
-function renderPlanTask(task) {
+export function renderPlanTask(task) {
   const status = String(task?.status || 'pending');
   const isTerminal = status === 'completed' || status === 'deleted';
   const taskId = String(task?.id || '');
-  const isInterruptTarget = !isTerminal && getInterruptTargetId() === taskId;
+  const isInterruptTarget = !isTerminal && window.getInterruptTargetId() === taskId;
   const meta = [
     '#' + taskId,
     getTodoStatusLabel(status),
@@ -138,9 +174,9 @@ function renderPlanTask(task) {
       ? '<svg class="plan-task-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6"/></svg>'
       : '<div class="plan-task-dot"></div>';
   const actionBtn = isTerminal ? '' : (isInterruptTarget
-    ? '<button type="button" class="plan-task-action" data-todo-interrupt data-action="cancel" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '取消执行' : 'Cancel') + '</button>'
-    : '<button type="button" class="plan-task-action" data-todo-interrupt data-action="set" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '执行到此处' : 'Run to here') + '</button>');
-  const interruptLabel = isInterruptTarget ? '<span class="plan-task-interrupt-label">' + (currentLanguage === 'zh' ? '执行到此为止' : 'Stop here') + '</span>' : '';
+    ? '<button type="button" class="plan-task-action" data-todo-interrupt data-action="cancel" data-task-id="' + escapeHtml(taskId) + '">' + (getCurrentLanguage() === 'zh' ? '取消执行' : 'Cancel') + '</button>'
+    : '<button type="button" class="plan-task-action" data-todo-interrupt data-action="set" data-task-id="' + escapeHtml(taskId) + '">' + (getCurrentLanguage() === 'zh' ? '执行到此处' : 'Run to here') + '</button>');
+  const interruptLabel = isInterruptTarget ? '<span class="plan-task-interrupt-label">' + (getCurrentLanguage() === 'zh' ? '执行到此为止' : 'Stop here') + '</span>' : '';
   const detailChev = canToggleDetail
     ? '<svg class="plan-task-detail-chev' + (detailOpen ? ' is-open' : '') + '" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>'
     : '';
@@ -153,7 +189,7 @@ function renderPlanTask(task) {
     detail ? '<div class="plan-task-desc">' + escapeHtml(detail) + '</div>' : '',
     // 交付物：描述之外独立一行，靠字号与颜色降一级区分，随详情一起折叠
     (detailOpen && deliver)
-      ? '<div class="plan-task-deliver" title="' + escapeHtml(deliver) + '">' + escapeHtml((currentLanguage === 'zh' ? '交付 · ' : 'Deliver · ') + deliver) + '</div>'
+      ? '<div class="plan-task-deliver" title="' + escapeHtml(deliver) + '">' + escapeHtml((getCurrentLanguage() === 'zh' ? '交付 · ' : 'Deliver · ') + deliver) + '</div>'
       : '',
     (isTerminal && !detailOpen) ? '' : '<div class="plan-task-meta">' + escapeHtml(meta) + '</div>',
     actionBtn,
@@ -168,13 +204,14 @@ function renderPlanTask(task) {
 // 段长不足以产生折叠量时整段平铺。
 const KEEP_VISIBLE_TERMINAL = 4;
 // 已展开段的起始索引集合 + 终态任务详情手动覆盖态（taskId -> open）；
-// 会话/运行时切换（_switchEpoch 递增）后回到默认态
-let _planExpandedRuns = new Set();
-let _planTerminalDetailState = new Map();
+// 会话/运行时切换（_switchEpoch 递增）后回到默认态。
+// 两者随导航面导出：测试直接操作这两张表驱动折叠/详情用例（生产侧无跨文件消费）。
+export let _planExpandedRuns = new Set();
+export let _planTerminalDetailState = new Map();
 let _planFoldSwitchEpoch = null;
 
 // 扫描连续终态段，返回 [{start, end}]（end exclusive）
-function getTerminalRuns(tasks) {
+export function getTerminalRuns(tasks) {
   const runs = [];
   let start = -1;
   for (let i = 0; i < tasks.length; i++) {
@@ -189,14 +226,14 @@ function getTerminalRuns(tasks) {
   return runs;
 }
 
-function renderPlanFoldButton(foldCount, runStart, expanded) {
+export function renderPlanFoldButton(foldCount, runStart, expanded) {
   return '<button type="button" class="plan-fold' + (expanded ? ' is-open' : '') + '" data-plan-toggle-run="' + String(runStart) + '" aria-expanded="' + String(expanded) + '">'
     + '<svg class="plan-fold-chev" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>'
     + '<span>' + escapeHtml(t(expanded ? 'plan_fold_collapse' : 'plan_fold_expand').replace('{n}', String(foldCount))) + '</span>'
     + '</button>';
 }
 
-function renderPlanTaskList(tasks) {
+export function renderPlanTaskList(tasks) {
   const runs = getTerminalRuns(tasks);
   const html = [];
   let runIdx = 0;
@@ -221,7 +258,7 @@ function renderPlanTaskList(tasks) {
   return html.join('');
 }
 
-function renderPlanPanel() {
+export function renderPlanPanel() {
   const plan = currentTodoPlan || {};
   const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
   const summary = plan.summary || {};
@@ -272,17 +309,17 @@ function renderPlanPanel() {
 
 // ── TODO"执行到此处"控制 ────────────────────────────────────────
 
-async function sendTodoControl(taskId) {
-  const runtimeId = getRuntimeId(currentRuntimeAgentId);
+export async function sendTodoControl(taskId) {
+  const runtimeId = window.getRuntimeId(currentRuntimeAgentId);
   if (!runtimeId) return;
   // runtimeId 与轮询数据源 /api/agents/:id/todo 共用同一身份空间；sessionId
   // 仅表达当前绑定会话，不从页面焦点或 parentId 猜测。
-  const sessionId = getRuntimeWorkspaceSessionId(runtimeId) || undefined;
+  const sessionId = window.getRuntimeWorkspaceSessionId(runtimeId) || undefined;
   try {
     await fetch('/protoclaw/todo_control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: getCurrentControlAgentId(), runtimeId, sessionId, taskId }),
+      body: JSON.stringify({ agentId: window.getCurrentControlAgentId(), runtimeId, sessionId, taskId }),
     });
   } catch (e) {
     console.error('[TodoControl] request failed:', e);
@@ -309,7 +346,7 @@ featurePanelBody.addEventListener('click', (e) => {
     const nowOpen = !article?.querySelector('.plan-task-detail-chev')?.classList.contains('is-open');
     _planTerminalDetailState.set(taskId, nowOpen);
     if (activeFeaturePanel === 'plan') {
-      renderFeaturePanel();
+      window.renderFeaturePanel();
       const row = Array.from(featurePanelBody.querySelectorAll('[data-plan-task-detail]'))
         .find(element => element.dataset.planTaskDetail === taskId);
       if (row) row.focus({ preventScroll: true });
@@ -336,7 +373,7 @@ featurePanelBody.addEventListener('click', (e) => {
       _planExpandedRuns.add(runStart);
     }
     if (activeFeaturePanel === 'plan') {
-      renderFeaturePanel();
+      window.renderFeaturePanel();
       // 只更新下方内容，不主动滚动；键盘操作后焦点仍留在原折叠入口。
       const btn = featurePanelBody.querySelector('[data-plan-toggle-run="' + String(runStart) + '"]');
       if (btn) btn.focus({ preventScroll: true });
@@ -350,14 +387,40 @@ featurePanelBody.addEventListener('click', (e) => {
   const action = btn.dataset.action;
   const taskId = btn.dataset.taskId;
   // 立即更新前端变量并重新渲染
-  setInterruptTargetId(action === 'set' ? taskId : null);
-  _lastInterruptUserActionAt = Date.now();
+  window.setInterruptTargetId(action === 'set' ? taskId : null);
+  callActivity._lastInterruptUserActionAt = Date.now();
   if (activeFeaturePanel === 'plan') {
-    renderFeaturePanel();
+    window.renderFeaturePanel();
   }
   if (action === 'set') {
     sendTodoControl(taskId);
   } else if (action === 'cancel') {
     sendTodoControl(null);
   }
+});
+
+// ── 兼容桥（classic 消费方收敛后注销）──────────────────────────────
+
+const bridgeValues = {
+  getEmptyTodoPlan,
+  normalizeTodoPlan,
+  getTodoPlanSignature,
+  setCurrentTodoPlan,
+  updatePlanBadge,
+  renderPlanPanel,
+};
+
+window.KernelState.defineKey('todo-plan', 'getEmptyTodoPlan', getEmptyTodoPlan);
+window.KernelState.defineKey('todo-plan', 'normalizeTodoPlan', normalizeTodoPlan);
+window.KernelState.defineKey('todo-plan', 'getTodoPlanSignature', getTodoPlanSignature);
+window.KernelState.defineKey('todo-plan', 'setCurrentTodoPlan', setCurrentTodoPlan);
+window.KernelState.defineKey('todo-plan', 'updatePlanBadge', updatePlanBadge);
+window.KernelState.defineKey('todo-plan', 'renderPlanPanel', renderPlanPanel);
+window.KernelState.claim('todo-plan', {
+  get(key) {
+    return bridgeValues[key];
+  },
+  set(key, value) {
+    bridgeValues[key] = value;
+  },
 });

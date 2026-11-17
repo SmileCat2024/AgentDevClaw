@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 function makeClassSet() {
   const set = new Set();
@@ -532,6 +533,36 @@ test('过期装载落定不得污染已卸载插件的 loadState（懒面板卸�
 // activatePlugin 以 mod.id 作 owner，落定回调按 owner===pluginId 匹配失败，
 // 首开永远卡在 loading 占位；且 stub 期 onOpen 是 no-op，落定后无人补发。
 // 下面两测试分别钉住「清单契约」与「落定链路」。
+
+test('panel-plugins 已迁 ESM（P4 L1）：求值即注册懒面板声明，stub 立即可寻址', async () => {
+  await withP2EsmCase({
+    globals: {
+      t: (key) => key,
+      getFeaturePanelEmptyHtml: () => '',
+      enhanceMathInElement: () => {},
+      requestAnimationFrame: (fn) => fn(),
+    },
+    classic: (sandbox) => {
+      // 面板注册表：claw-host 的宿主注册表 + 其 classic 转发壳（right-panel-registry）。
+      sandbox.loadSource('public/src/modules/claw-host.js');
+      sandbox.loadSource('public/src/modules/right-panel-registry.js');
+    },
+  }, async (c) => {
+    await c.load('public/src/modules/panel-plugins.js');
+    for (const [panelId, pluginId, url] of [
+      ['session-controls', 'panel-session-controls', '/src/panel-plugins/session-controls.js'],
+      ['git', 'panel-git', '/src/panel-plugins/git.js'],
+    ]) {
+      assert.equal(c.read(`window.ClawPanels.has(${JSON.stringify(panelId)})`), true,
+        `${panelId} 声明后 stub 应立即可寻址`);
+      const entry = c.read(`window.ClawPanels.get(${JSON.stringify(panelId)})`);
+      assert.equal(entry.stub.pluginId, pluginId);
+      assert.equal(entry.stub.url, url);
+      // 元数据 title 是函数：语言经 i18n-environment-state 命名导出读取
+      assert.equal(typeof entry.title(), 'string');
+    }
+  });
+});
 
 test('清单声明的 pluginId 必须与实现模块 default export 的 id 一致', () => {
   const manifest = fs.readFileSync(

@@ -23,6 +23,7 @@ import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { sourceBetween } from './helpers/frontend-vm.js';
 
 const MODULE = 'public/src/modules/input-model-switcher.js';
+const CONTEXT_BAR = 'public/src/modules/chat-context-bar.js';
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 const PRESET_CACHE = 'public/src/modules/model-preset-cache.js';
 const TOAST = 'public/src/modules/toast-notify.js';
@@ -213,9 +214,13 @@ async function withSandbox(fn, { presets = DEFAULT_PRESETS, channels = DECLARED_
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
-      sandbox.loadSource('public/src/modules/chat-context-bar.js');
+      // chat-context-bar 已迁 ESM（P4 L1）：classic 相只补 markdown-utils 的 classic
+      // 实现（escapeHtml / renderer），模块本体在 async 相 c.load。
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
     },
   }, async (c) => {
+    // 上下文栏（已迁 ESM）：classic 侧经桥键 updateChatContextBar 调用同一实现。
+    const contextBar = await c.load(CONTEXT_BAR);
     const mod = await c.load(MODULE);
     const toastModule = await c.load(TOAST);
     // overview 快照 owner：会话视图 patch 经桥键写进它，必须先于 patch 求值。
@@ -263,7 +268,7 @@ async function withSandbox(fn, { presets = DEFAULT_PRESETS, channels = DECLARED_
     await settle();
     return fn({
       ctx, doc, net, mod, toasts, logs, expectedLogs, orchestration, presetCache,
-      overview, swap, render, clickItem,
+      overview, swap, render, clickItem, contextBar,
     });
   });
 }
@@ -626,10 +631,10 @@ describe('模型状态统一提交与呈现', () => {
       assert.equal(s.doc.effortLabel.textContent, 'high');
       assert.match(s.doc.bar.innerHTML, /b-model/);
       assert.match(s.doc.bar.innerHTML, />10%</);
-      assert.equal(s.ctx.window._ccbDetailData.contextLength, 1000000);
-      assert.equal(s.ctx.window._ccbDetailData.compressRatio, 70);
-      assert.equal(s.ctx.window._ccbDetailData.used, 100000);
-      assert.equal(s.ctx.window._ccbDetailData.totalInput, 250000);
+      assert.equal(s.contextBar._ccbDetailData.contextLength, 1000000);
+      assert.equal(s.contextBar._ccbDetailData.compressRatio, 70);
+      assert.equal(s.contextBar._ccbDetailData.used, 100000);
+      assert.equal(s.contextBar._ccbDetailData.totalInput, 250000);
       // 协议解析（openai vs anthropic）经真实下拉档位表呈现：openai 有 minimal、
       // 没有 max；anthropic 反之。
       await s.mod.toggleThinkingEffortDropdown();
@@ -647,8 +652,8 @@ describe('模型状态统一提交与呈现', () => {
       s.overview({ ...model(2, 'a'), usageStats: { lastRequestUsage: { inputTokens: 120000 } } });
       assert.equal(s.doc.modelLabel.textContent, 'b');
       assert.equal(s.doc.effortLabel.textContent, 'high');
-      assert.equal(s.ctx.window._ccbDetailData.contextLength, 1000000);
-      assert.equal(s.ctx.window._ccbDetailData.used, 120000);
+      assert.equal(s.contextBar._ccbDetailData.contextLength, 1000000);
+      assert.equal(s.contextBar._ccbDetailData.used, 120000);
       assert.match(s.doc.bar.innerHTML, />12%</);
       assertLogs(s);
     });
@@ -660,7 +665,7 @@ describe('模型状态统一提交与呈现', () => {
       await s.swap('b');
       s.overview(model(3, 'a', { contextLength: 500000 }));
       assert.equal(s.doc.modelLabel.textContent, 'a');
-      assert.equal(s.ctx.window._ccbDetailData.contextLength, 500000);
+      assert.equal(s.contextBar._ccbDetailData.contextLength, 500000);
       // 已追认后到达更老的 B 帧也不能回退。
       s.overview(model(2, 'b'));
       assert.equal(s.doc.modelLabel.textContent, 'a');
@@ -673,8 +678,8 @@ describe('模型状态统一提交与呈现', () => {
       s.net.state.featureResult = { ok: true, meta: model(2, 'a', { contextLength: 1000000, compressRatio: 60 }) };
       await s.swap('a');
       s.overview(model(1, 'a'));
-      assert.equal(s.ctx.window._ccbDetailData.contextLength, 1000000);
-      assert.equal(s.ctx.window._ccbDetailData.compressRatio, 60);
+      assert.equal(s.contextBar._ccbDetailData.contextLength, 1000000);
+      assert.equal(s.contextBar._ccbDetailData.compressRatio, 60);
       assertLogs(s);
     });
   });
@@ -707,7 +712,7 @@ describe('模型状态统一提交与呈现', () => {
       s.overview({ ...model(1, 'a'), usageStats: { lastRequestUsage: { inputTokens: 100000 } } });
       assert.equal(s.doc.modelLabel.textContent, 'b');
       assert.equal(s.doc.effortLabel.textContent, 'high');
-      assert.equal(s.ctx.window._ccbDetailData.contextLength, 1000000);
+      assert.equal(s.contextBar._ccbDetailData.contextLength, 1000000);
       s.net.state.featureResult = { ok: true, meta: model(4, 'a', { contextLength: 500000 }) };
       await s.swap('a');
       assert.equal(s.doc.modelLabel.textContent, 'a');
@@ -737,7 +742,7 @@ describe('模型状态统一提交与呈现', () => {
       s.clickItem('model', { preset: 'b' });
       await settle();
       assert.equal(s.doc.modelLabel.textContent, 'a');
-      assert.equal(s.ctx.window._ccbDetailData.contextLength, 200000);
+      assert.equal(s.contextBar._ccbDetailData.contextLength, 200000);
       assert.equal(s.toasts.at(-1)?.title, '切换失败');
       assert.equal(s.toasts.at(-1)?.description, 'rejected');
       assertLogs(s);
@@ -812,7 +817,7 @@ describe('模型状态统一提交与呈现', () => {
       assert.equal(s.doc.modelLabel.textContent, 'a');
       assert.equal(s.ctx.run('readCurrentSessionViewState().overview.modelRevision'), 1);
       s.overview(model(2, 'a', { contextLength: 500000 }));
-      assert.equal(s.ctx.window._ccbDetailData.contextLength, 500000);
+      assert.equal(s.contextBar._ccbDetailData.contextLength, 500000);
       assertLogs(s);
     });
   });
@@ -821,7 +826,7 @@ describe('模型状态统一提交与呈现', () => {
     await withSandbox(async (s) => {
       s.net.state.featureResult = { ok: true, meta: model(2, 'b', { contextLength: null }) };
       await s.swap('b');
-      assert.equal(s.ctx.window._ccbDetailData.contextLength, 0);
+      assert.equal(s.contextBar._ccbDetailData.contextLength, 0);
       assert.match(s.doc.bar.innerHTML, /ccb-token-empty/);
       assert.match(s.doc.bar.innerHTML, /b-model/);
       assertLogs(s);
@@ -840,15 +845,15 @@ describe('模型状态统一提交与呈现', () => {
 
   it('已展开的详情随回执和用量快照刷新', async () => {
     await withSandbox(async (s) => {
-      s.ctx.run('_showCcbPopup()');
-      assert.match(s.ctx.run('_ccbPopup.innerHTML'), /200\.0K/);
+      s.contextBar._showCcbPopup();
+      assert.match(s.contextBar._ccbPopup.innerHTML, /200\.0K/);
       s.net.state.featureResult = { ok: true, meta: model(2, 'b', { contextLength: 1000000, compressRatio: 70 }) };
       await s.swap('b');
-      assert.match(s.ctx.run('_ccbPopup.innerHTML'), /b-model/);
-      assert.match(s.ctx.run('_ccbPopup.innerHTML'), /1\.0M/);
-      assert.match(s.ctx.run('_ccbPopup.innerHTML'), /70%/);
+      assert.match(s.contextBar._ccbPopup.innerHTML, /b-model/);
+      assert.match(s.contextBar._ccbPopup.innerHTML, /1\.0M/);
+      assert.match(s.contextBar._ccbPopup.innerHTML, /70%/);
       s.overview({ ...model(2, 'b', { contextLength: 1000000, compressRatio: 70 }), usageStats: { lastRequestUsage: { inputTokens: 150000 } } });
-      assert.match(s.ctx.run('_ccbPopup.innerHTML'), /150\.0K/);
+      assert.match(s.contextBar._ccbPopup.innerHTML, /150\.0K/);
       assertLogs(s);
     });
   });

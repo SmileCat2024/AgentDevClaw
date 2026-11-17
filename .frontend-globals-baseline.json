@@ -350,38 +350,6 @@
       "BgPanel"
     ]
   },
-  "public/src/modules/chat-context-bar.js": {
-    "state": [
-      "_CCB_ICON_CHECK",
-      "_CCB_ICON_COPY",
-      "_CCB_ICON_EXPORT",
-      "_ccbDetailData",
-      "_ccbPopup",
-      "_ccbPopupHideTimer",
-      "_ccbPopupShowTimer",
-      "_titlePopup",
-      "_titlePopupHideTimer",
-      "_titlePopupShowTimer"
-    ],
-    "behavior": [
-      "_buildCcbPopupHtml",
-      "_buildTitlePopupHtml",
-      "_collectActiveSessionMeta",
-      "_copyPopupSessionId",
-      "_formatTokens",
-      "_hideCcbPopup",
-      "_hideTitlePopup",
-      "_initCcbPopup",
-      "_initTitlePopup",
-      "_scheduleHideCcbPopup",
-      "_scheduleHideTitlePopup",
-      "_scheduleShowCcbPopup",
-      "_scheduleShowTitlePopup",
-      "_showCcbPopup",
-      "_showTitlePopup",
-      "updateChatContextBar"
-    ]
-  },
   "public/src/modules/chat-renderer.js": {
     "state": [
       "_errorGroupUserState",
@@ -1249,12 +1217,6 @@
       "readCurrentSessionViewState"
     ]
   },
-  "public/src/modules/sidebar-layout.js": {
-    "state": [],
-    "behavior": [
-      "ClawSidebarLayout"
-    ]
-  },
   "public/src/modules/sidebar-render.js": {
     "state": [
       "AGENT_ICONS",
@@ -1299,16 +1261,6 @@
       "ClawFW"
     ]
   },
-  "public/src/modules/theme-lang.js": {
-    "state": [],
-    "behavior": [
-      "applyLanguage",
-      "applyTheme",
-      "renderThemeToggle",
-      "setThemeStylesheet",
-      "showAgentStartError"
-    ]
-  },
   "public/src/modules/thread-store.js": {
     "state": [
       "REBIND_RETRY_INTERVAL_MS",
@@ -1343,30 +1295,6 @@
     "state": [],
     "behavior": [
       "ClawToast"
-    ]
-  },
-  "public/src/modules/todo-plan.js": {
-    "state": [
-      "KEEP_VISIBLE_TERMINAL",
-      "_planExpandedRuns",
-      "_planFoldSwitchEpoch",
-      "_planTerminalDetailState"
-    ],
-    "behavior": [
-      "getEmptyTodoPlan",
-      "getTaskKindLabel",
-      "getTerminalRuns",
-      "getTodoPlanSignature",
-      "getTodoStatusLabel",
-      "isPlanTaskKind",
-      "normalizeTodoPlan",
-      "renderPlanFoldButton",
-      "renderPlanPanel",
-      "renderPlanTask",
-      "renderPlanTaskList",
-      "sendTodoControl",
-      "setCurrentTodoPlan",
-      "updatePlanBadge"
     ]
   },
   "public/src/modules/voice-input.js": {
@@ -1738,13 +1666,6 @@
     "state": [],
     "behavior": [
       "ClawFW"
-    ]
-  },
-  "public/src/modules/workspace-docset.js": {
-    "state": [],
-    "behavior": [
-      "getCurrentProjectDocset",
-      "updateProjectDocsetChrome"
     ]
   },
   "public/src/plugins/memo/settings.js": {

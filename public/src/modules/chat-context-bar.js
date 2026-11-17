@@ -1,48 +1,63 @@
 /**
- * chat-context-bar.js — 上下文栏与弹窗模块（从 app-ui.js 域 C 提取）
+ * chat-context-bar.js — 上下文栏与弹窗模块（从 app-ui.js 域 C 提取；P4 L1 classic → ESM）
  *
- * ESM 迁移状态（P2 第二波批次 1）：**保留唯一 classic 实现，本文件不转 ESM**。
- * R1 触线证据（同步首屏真实调用链，不是监听回调）：
- *   app-main.js 顶层 `applyTheme(currentTheme); applyLanguage();`
- *     → theme-lang.js `applyLanguage()` 末行 `renderCurrentMainView()`
- *     → app-ui.js `renderCurrentMainView()` 在三条分支（workspace surface /
- *       空会话 / 有消息）都同步调用 `updateChatContextBar(viewState)`
- *       （app-ui.js 1427 / 1441 / 1450）。
- * ESM 域模块在 deferred 执行相才装载，而上述调用发生在 classic 解析相，故
- * `updateChatContextBar` 必须首屏同步可用——迁走即首屏 ReferenceError。等到
- * 主视图入口本身完成联合迁移（P2/P3 的同步 bootstrap 收敛）后，本文件与
- * renderCurrentMainView 的调用方一并转 ESM。
+ * 迁移沿革：P2 批次曾因「app-main 顶层 applyTheme → applyLanguage →
+ * renderCurrentMainView → updateChatContextBar」这条 classic 相同步链把本文件
+ * 留作唯一 classic 实现。P4 时序切换把首屏链改由 ESM boot 触发，那条约束解除，
+ * 本批按配方常规转换（安装序见报告：boot 之前的模块入口 import 本文件）。
  *
  * 包含：
  *   - updateChatContextBar: 上下文栏主渲染（模型名、token 进度条）
  *   - CCB hover popup: token 详情弹窗（hover chat-context-bar 触发）
  *   - Title hover popup: 会话元数据弹窗（hover #current-agent-name 触发）
  *
- * 依赖（全局）：
- *   - shouldRenderWorkspaceSurface, isChatSurfaceActive (app-ui.js 域 A)
- *   - notifyChatViewportMutation (app-ui.js 域 N)
- *   - getRuntimeAwareAgentRecord (app-ui.js 域 B)
- *   - getCurrentHostAgentRecord (app-main.js)
- *   - escapeHtml (app-ui.js 域 O)
- *   - formatRelativeTime, formatWorkspaceDate (app-core.js)
- *   - readCurrentSessionViewState (session-view-state.js)
- *   - followLatestEnabled, currentLanguage, container (app-core.js 全局状态)
+ * 依赖形态：
+ *   - 已迁 ESM 直接 import：转义（escapeHtml）、时间格式化（time-format-host）、
+ *     聊天表面状态（chatSurface.followLatestEnabled）、DOM 引用
+ *     （domRefs.container）、语言（getCurrentLanguage）、编排状态
+ *     （currentRuntimeAgentId）。
+ *   - 仍 classic 的显式 window 晚绑定（均为运行期调用，行尾注明定义域）：
+ *     `readCurrentSessionViewState`（session-view-state）、
+ *     `shouldRenderWorkspaceSurface` / `isChatSurfaceActive` /
+ *     `getRuntimeAwareAgentRecord`（app-ui）、`notifyChatViewportMutation`
+ *     （chat-viewport）、`getCurrentHostAgentRecord`（app-main）、
+ *     `ClawToast`（toast-notify 挂在 window 上的同一对象）、
+ *     `openConversationExportDialog`（conversation-export-dialog）。
+ *
+ * 时序审计（R1/R2/R4）：
+ *   - `updateChatContextBar` 的唯一首屏触达点是 boot 触发的
+ *     renderCurrentMainView，属模块求值相，故注册相位取模块求值相。
+ *   - 顶层两条 `window.addEventListener('DOMContentLoaded', ...)` +
+ *     `setTimeout(_init*)` 从经典加载相移到模块求值相，两者都在
+ *     DOMContentLoaded 之前，监听器注册时点等价。
+ *
+ * 桥键（domain `chat-context-bar`）：
+ *   - `updateChatContextBar` ← app-ui.js（renderCurrentMainView 三条分支）。
+ *     已迁 ESM 的消费方（context-guard-toggle / agent-loader-host /
+ *     model-settings）经 `window.updateChatContextBar` 晚绑定，仍走同一访问器。
+ *   注销条件：app-ui 渲染入口域迁 ESM 并改 import。
  */
+import { escapeHtml } from './markdown-utils.js';
+import { formatRelativeTime, formatWorkspaceDate } from './time-format-host.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { domRefs } from './p2-bootstrap-dom.js';
+import { chatSurface } from './p2-bootstrap-chat-surface.js';
 
-function updateChatContextBar(viewState = readCurrentSessionViewState()) {
+export function updateChatContextBar(viewState = window.readCurrentSessionViewState()) {
   let bar = document.getElementById('chat-context-bar');
   if (!bar) return;
   let prevHtml = bar.innerHTML;
   let wasHidden = bar.classList.contains('hidden');
 
   // 跟 chat-process-toggle 同一逻辑：非聊天界面时隐藏
-  if (shouldRenderWorkspaceSurface()) {
+  if (window.shouldRenderWorkspaceSurface()) {
     bar.classList.add('hidden');
-    if (!wasHidden && typeof notifyChatViewportMutation === 'function') {
-      notifyChatViewportMutation({
+    if (!wasHidden && typeof window.notifyChatViewportMutation === 'function') {
+      window.notifyChatViewportMutation({
         reason: 'context-bar',
         shouldFollow: false,
-        preserveTop: container.scrollTop,
+        preserveTop: domRefs.container.scrollTop,
         forceSnap: false,
         allowChase: false,
       });
@@ -55,7 +70,7 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   // 不再清空整条 bar——overview 活源数据已进 viewState，模型名/用量应照常
   // 渲染。用量读数在聊天界面常驻：数据未到位时以空态占位呈现，避免加载
   // 期间顶栏元素出现/消失的布局跳动。
-  let agent = getRuntimeAwareAgentRecord();
+  let agent = window.getRuntimeAwareAgentRecord();
 
   // 找到当前活跃会话（agent 可能为 null——远程会话不在 allAgents，读取需 null 安全）
   let sessions = agent && agent.workspace_sessions && agent.workspace_sessions.sessions || [];
@@ -152,15 +167,16 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   detailData.reasoningTokens = totalUsage.reasoningTokens || 0;
   detailData.lastRequestUsage = lastReq;
   detailData.totalRequests = (overview.usageStats && overview.usageStats.totalRequests) || 0;
-  window._ccbDetailData = detailData;
+  // hover popup 的详情快照（模块私有状态；测试经命名导出读取同一绑定）。
+  _ccbDetailData = detailData;
 
   bar.innerHTML = html;
   if (_ccbPopup?.classList.contains('visible')) _showCcbPopup();
-  if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
-    notifyChatViewportMutation({
+  if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof window.notifyChatViewportMutation === 'function') {
+    window.notifyChatViewportMutation({
       reason: 'context-bar',
-      shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-      preserveTop: followLatestEnabled ? null : container.scrollTop,
+      shouldFollow: chatSurface.followLatestEnabled && window.isChatSurfaceActive(),
+      preserveTop: chatSurface.followLatestEnabled ? null : domRefs.container.scrollTop,
       forceSnap: false,
       allowChase: false,
       preferSmooth: false,
@@ -169,7 +185,8 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
 }
 
 // ── Context bar hover popup ──
-let _ccbPopup = null;
+export let _ccbDetailData = null;
+export let _ccbPopup = null;
 let _ccbPopupHideTimer = null;
 let _ccbPopupShowTimer = null;
 
@@ -181,7 +198,7 @@ function _formatTokens(n) {
 }
 
 function _buildCcbPopupHtml(d) {
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   let cr = (Number.isFinite(d.compressRatio) && d.compressRatio > 0) ? d.compressRatio : 80;
   let pct = d.contextLength > 0 ? Math.min(100, Math.round((d.used / d.contextLength) * 100)) : 0;
   let tone = pct >= cr ? 'compress' : pct < 50 ? 'low' : 'high';
@@ -262,10 +279,10 @@ function _buildCcbPopupHtml(d) {
   return '<div class="ccb-popup-inner">' + sections.join('') + '</div>';
 }
 
-function _showCcbPopup() {
+export function _showCcbPopup() {
   let bar = document.getElementById('chat-context-bar');
   if (!bar || bar.classList.contains('hidden') || !bar.innerHTML.trim()) return;
-  let d = window._ccbDetailData;
+  let d = _ccbDetailData;
   if (!d) return;
   let html = _buildCcbPopupHtml(d);
   if (!html) return;
@@ -344,10 +361,10 @@ let _titlePopupShowTimer = null;
  * Uses getRuntimeAwareAgentRecord() for correct session binding —
  * same pattern as updateChatContextBar.
  */
-function _collectActiveSessionMeta() {
-  let agent = typeof getRuntimeAwareAgentRecord === 'function'
-    ? getRuntimeAwareAgentRecord()
-    : (typeof getCurrentHostAgentRecord === 'function' ? getCurrentHostAgentRecord() : null);
+export function _collectActiveSessionMeta() {
+  let agent = typeof window.getRuntimeAwareAgentRecord === 'function'
+    ? window.getRuntimeAwareAgentRecord()
+    : (typeof window.getCurrentHostAgentRecord === 'function' ? window.getCurrentHostAgentRecord() : null);
   if (agent) {
     let activeSessionId = String(
       agent.active_workspace_session_id
@@ -365,8 +382,8 @@ function _collectActiveSessionMeta() {
 
     // 导出寻址用宿主 agent id（会话文件按宿主目录落盘）。视图身份的 agentId
     // 恒为宿主 id（session-view-state 归一化保证），比 runtime 记录的 .id 可靠。
-    let viewIdentity = typeof readCurrentSessionViewState === 'function'
-      ? (readCurrentSessionViewState() || {}).identity || null
+    let viewIdentity = typeof window.readCurrentSessionViewState === 'function'
+      ? (window.readCurrentSessionViewState() || {}).identity || null
       : null;
     let hostAgentId = String(viewIdentity && viewIdentity.agentId || agent.id || '').trim();
 
@@ -395,8 +412,8 @@ function _collectActiveSessionMeta() {
     ? rc.getEntrySessionTitle(runtimeRef)
     : '';
 
-  let viewState = typeof readCurrentSessionViewState === 'function'
-    ? readCurrentSessionViewState()
+  let viewState = typeof window.readCurrentSessionViewState === 'function'
+    ? window.readCurrentSessionViewState()
     : null;
   let sessionMeta = viewState && viewState.sessionMeta || {};
 
@@ -425,7 +442,7 @@ function _collectActiveSessionMeta() {
 
 function _buildTitlePopupHtml(meta) {
   if (!meta) return '';
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   let s = meta.session || {};
   let a = meta.agent || {};
   let sections = [];
@@ -560,7 +577,7 @@ let _CCB_ICON_EXPORT =
 async function _copyPopupSessionId(btn) {
   let sessionId = btn?.dataset?.sessionId || '';
   if (!sessionId) return;
-  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   let ok = false;
   if (navigator.clipboard && window.isSecureContext) {
     try { await navigator.clipboard.writeText(sessionId); ok = true; } catch (e) { ok = false; }
@@ -580,8 +597,8 @@ async function _copyPopupSessionId(btn) {
     } catch (e) { ok = false; }
   }
   if (!ok) {
-    if (typeof ClawToast !== 'undefined') {
-      ClawToast.show({ id: 'ccb-copy-session-id', status: 'error', title: isZh ? '复制会话 ID 失败' : 'Failed to copy session ID' });
+    if (typeof window.ClawToast !== 'undefined') {
+      window.ClawToast.show({ id: 'ccb-copy-session-id', status: 'error', title: isZh ? '复制会话 ID 失败' : 'Failed to copy session ID' });
     }
     return;
   }
@@ -661,3 +678,17 @@ function _initTitlePopup() {
 
 window.addEventListener('DOMContentLoaded', _initTitlePopup);
 setTimeout(_initTitlePopup, 0);
+
+// ── 兼容桥（classic 消费方收敛后注销）──────────────────────────────
+
+const bridgeValues = { updateChatContextBar };
+
+window.KernelState.defineKey('chat-context-bar', 'updateChatContextBar', updateChatContextBar);
+window.KernelState.claim('chat-context-bar', {
+  get(key) {
+    return bridgeValues[key];
+  },
+  set(key, value) {
+    bridgeValues[key] = value;
+  },
+});

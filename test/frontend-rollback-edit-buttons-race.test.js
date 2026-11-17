@@ -237,7 +237,9 @@ async function withChatCase(fn) {
       sandbox.loadSource('public/src/modules/chat-viewport.js');
       sandbox.loadSource('public/src/modules/input-helpers.js');
       sandbox.loadSource('public/src/modules/chat-renderer.js');
-      sandbox.loadSource('public/src/modules/todo-plan.js');
+      // todo-plan 已迁 ESM（P4 L1）：classic 相只补 markdown-utils 的 classic 实现，
+      // 模块本体在 async 相 c.load。
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       sandbox.loadSource('public/src/modules/rollback-dialog.js');
       // 用例的窄行为观察面（真源之后覆盖：app-main / app-ui 会定义同名入口）：
       // 侧栏列表与主视图渲染在执行期被各用例替换成记录器，这里先给出无操作默认。
@@ -258,7 +260,8 @@ async function withChatCase(fn) {
       updateFollowLatestButton: () => {},
       // vendor 侧 markdown 解析器（真实标记渲染管线由 markdown-bootstrap 的 marked
       // 实例提供；本文件的断言只看编辑按钮，不需要完整标记渲染）
-      marked: { parse: (markdown) => String(markdown ?? '') },
+      marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: (markdown) => String(markdown ?? '') },
+      hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
       performance: { now: () => Date.now() },
       fetch: fetchStub,
       // 以下 classic 汇点不在本文件验收面内（聊天渲染 / 输入面 / 模型切换器等 UI
@@ -278,6 +281,8 @@ async function withChatCase(fn) {
       _maybeFetchRecap: () => {},
     },
   }, async (c) => withNoiseClean('rollback 竞态用例', async () => {
+    // plan 快照归一 / 成对签名（已迁 ESM，P4 L1）。
+    await c.load('public/src/modules/todo-plan.js');
     const orchestration = await c.load('public/src/modules/orchestration-state.js');
     // 输入面域：回退按钮可见性（syncRollbackActionButtons）与过程显隐
     const inputActions = await c.load(INPUT_ACTIONS);

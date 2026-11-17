@@ -54,12 +54,14 @@ export async function startSidebarFixture(port = 0) {
     window.switchAgent=async id=>{document.getElementById('navigation').textContent=id};
     window.onSidebarPinPointerDown=()=>{};
     </script>
-    <script src="/src/modules/sidebar-layout.js"></script><script src="/src/modules/sidebar-render.js"></script>
+    <script type="module" src="/src/modules/sidebar-layout.js"></script><script src="/src/modules/sidebar-render.js"></script>
     <script>
     document.getElementById('refresh').onclick=()=>{lastAgentListRenderSignature='';renderAgentList()};
     document.getElementById('theme').onclick=()=>{document.body.dataset.theme=document.body.dataset.theme==='light'?'dark':'light'};
     window.fixtureSetAgents=list=>{allAgents=list;renderAgentList()};
     window.fixtureSelectRuntime=id=>{currentRuntimeAgentId=id;focusedAgentId=id;renderAgentList()};
+    </script><script type="module">
+    // sidebar-layout 已迁 ESM：load() 必须在其模块求值之后调用（同一文档序的 module 标签）。
     window.ClawSidebarLayout.load().then(()=>{document.body.dataset.ready='true'});
     </script></body></html>`));
   const server = app.listen(port, '127.0.0.1');

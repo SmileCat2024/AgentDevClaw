@@ -29,3 +29,6 @@ import './trim-ratio-core.js';
 // 放在最后：这些模块的桥键注册与 classic 相无交叉读写，与上面的宿主图之间
 // 也不存在求值期依赖；顺序理由与逐批清单见 p2-entry.js 头注。
 import './p2-entry.js';
+// P4（活跃域 classic 清零）批次入口：时序切换后新迁移的域，批次语义与 P2 不同
+// （不再有 classic 相同步触达约束），装载清单独立见 p4-entry.js。
+import './p4-entry.js';

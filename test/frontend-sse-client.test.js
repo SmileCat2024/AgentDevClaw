@@ -260,7 +260,9 @@ async function withSseCase(opts, fn) {
       // 用例的窄行为观察面（真源之后覆盖：app-main / app-ui 会定义同名入口）：
       // 本文件只关心 SSE 事件路由与状态提交，渲染与 UI 落点用记录器。
       sandbox.run(APP_MAIN_PRELUDE);
-      sandbox.loadSource('public/src/modules/todo-plan.js');
+      // todo-plan 已迁 ESM（P4 L1）：classic 相只补它装载期要用的 vendor 面与
+      // markdown-utils 的 classic 实现（escapeHtml / renderer），模块本体在 async 相 c.load。
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       sandbox.loadSource('public/src/modules/rollback-dialog.js');
       sandbox.loadSource('public/src/modules/persistent-input.js');
       // 观察面（真源之后覆盖）：本例只验证 SSE 事件路由与提交语义，不驱动主视图 /
@@ -274,6 +276,9 @@ async function withSseCase(opts, fn) {
       EventSource: MockEventSource,
       URLSearchParams,
       ClawToast: { show() {} },
+      // vendor 解析器 / 高亮库：markdown-bootstrap 装载期构造 Renderer 并查 hljs。
+      marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
+      hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
       // 以下 classic 汇点不属于本文件的验收面（SSE 事件路由与提交语义），
       // 按既有注入面提供：desktop-notify 的调用起点埋点，以及 metadata commit
       // 渲染链上的 UI 落点（输入面同步 / 回退按钮 / 上下文栏 / 模型切换器）。
@@ -303,6 +308,8 @@ async function withSseCase(opts, fn) {
       ...extraGlobals,
     },
   }, async (c) => withNoiseClean('sse-client 用例', async () => {
+    // plan 快照归一 / 成对签名（已迁 ESM，P4 L1）：经典侧经桥键调用它的命名导出。
+    await c.load('public/src/modules/todo-plan.js');
     // 焦点 runtime：生产由切换链写入 orchestration owner
     const orchestration = await c.load('public/src/modules/orchestration-state.js');
     orchestration.setCurrentRuntimeAgentId('rt-focus');

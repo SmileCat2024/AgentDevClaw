@@ -17,11 +17,12 @@
  * side-channel that doesn't update on model hot-swap. These tests guard the
  * real-time overview path so the two values stay in sync with modelName.
  *
- * 装载路线（P2 测试改造）：overview-data 已迁 ESM → withP2EsmCase + 真实
- * import（classic 侧先跑 action-dispatcher / app-core / session-view-state
- * 真实 bootstrap，它的宿主工厂与 normalizeSessionModelState 在装载期被取用）；
- * chat-context-bar / session-view-state 仍 classic → 照旧 loadSource，overview
- * 经真实 applySessionViewPatch 提交（不再替换 readCurrentSessionViewState）。
+ * 装载路线（P2 测试改造 + P4 L1）：overview-data / chat-context-bar 均已迁 ESM
+ * → withP2EsmCase + 真实 import（classic 侧先跑 action-dispatcher / app-core /
+ * markdown-bootstrap / session-view-state 真实 bootstrap，它们的宿主工厂与
+ * normalizeSessionModelState 在装载期被取用）；session-view-state 仍 classic →
+ * 照旧 loadSource，overview 经真实 applySessionViewPatch 提交（不再替换
+ * readCurrentSessionViewState）。
  */
 
 import { describe, it } from 'node:test';
@@ -34,14 +35,22 @@ const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 const CLASSIC_STACK = [
   'public/src/modules/action-dispatcher.js',
   'public/src/app-core.js',
+  'public/src/modules/markdown-bootstrap.js',
   'public/src/modules/session-view-state.js',
 ];
+
+/** vendor 解析器 / 高亮库：markdown-bootstrap 装载期构造 Renderer 并查 hljs。 */
+const VENDOR_STUBS = {
+  marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
+  hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
+};
 
 function loadOverviewDataCase(probe) {
   return withP2EsmCase({
     classic: (sandbox) => {
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
     },
+    globals: VENDOR_STUBS,
   }, async (c) => {
     const mod = await c.load(OVERVIEW_DATA);
     return probe(mod, c);
@@ -59,7 +68,6 @@ function loadContextBarCase({ overview, agent }, probe) {
     classic: (sandbox) => {
       sandbox.setTimeout = () => 0;   // 抑制 _initCcbPopup / _initTitlePopup 的定时器
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
-      sandbox.loadSource('public/src/modules/chat-context-bar.js');
       sandbox.followLatestEnabled = false;
       sandbox.container = { scrollTop: 0 };
       sandbox.shouldRenderWorkspaceSurface = () => false;
@@ -68,7 +76,12 @@ function loadContextBarCase({ overview, agent }, probe) {
       sandbox.notifyChatViewportMutation = () => {};
       sandbox.applySessionViewPatch({ overview });
     },
-  }, async (c) => probe(c));
+    globals: VENDOR_STUBS,
+  }, async (c) => {
+    // chat-context-bar 已迁 ESM（P4 L1）：模块相装载，classic 侧经桥键调用同名入口。
+    const contextBar = await c.load('public/src/modules/chat-context-bar.js');
+    return probe(c, contextBar);
+  });
 }
 
 // ── normalizeOverviewSnapshot: field passthrough ──────────
@@ -175,9 +188,9 @@ describe('updateChatContextBar: contextLength/compressRatio overview-only', () =
     await loadContextBarCase({
       agent,
       overview: { contextLength: 200000, compressRatio: 70 },
-    }, (c) => {
+    }, (c, contextBar) => {
       c.read('updateChatContextBar()');
-      const detail = c.read('window._ccbDetailData');
+      const detail = contextBar._ccbDetailData;
 
       assert.equal(detail.contextLength, 200000, 'should use overview value, not session 128000');
       assert.equal(detail.compressRatio, 70, 'should use overview value, not session 80');
@@ -189,9 +202,9 @@ describe('updateChatContextBar: contextLength/compressRatio overview-only', () =
     // stale (pre-hot-swap) and must NOT be used. contextLength resolves to 0,
     // so the bar is simply not shown.
     const agent = makeAgent(128000, 80);
-    await loadContextBarCase({ agent, overview: {} }, (c) => {
+    await loadContextBarCase({ agent, overview: {} }, (c, contextBar) => {
       c.read('updateChatContextBar()');
-      const detail = c.read('window._ccbDetailData');
+      const detail = contextBar._ccbDetailData;
 
       assert.equal(detail.contextLength, 0, 'must not fall back to session 128000');
     });
@@ -204,9 +217,9 @@ describe('updateChatContextBar: contextLength/compressRatio overview-only', () =
     await loadContextBarCase({
       agent,
       overview: { contextLength: null, compressRatio: null },
-    }, (c) => {
+    }, (c, contextBar) => {
       c.read('updateChatContextBar()');
-      const detail = c.read('window._ccbDetailData');
+      const detail = contextBar._ccbDetailData;
 
       assert.equal(detail.contextLength, 0, 'null overview → 0, not session fallback');
     });
@@ -217,9 +230,9 @@ describe('updateChatContextBar: contextLength/compressRatio overview-only', () =
     // (same default used when creating a preset). This is a semantic default,
     // not a stale-data fallback. contextLength comes from overview.
     const agent = makeAgent(128000, 80);
-    await loadContextBarCase({ agent, overview: { contextLength: 200000 } }, (c) => {
+    await loadContextBarCase({ agent, overview: { contextLength: 200000 } }, (c, contextBar) => {
       c.read('updateChatContextBar()');
-      const detail = c.read('window._ccbDetailData');
+      const detail = contextBar._ccbDetailData;
 
       assert.equal(detail.contextLength, 200000, 'overview contextLength used');
       assert.equal(detail.compressRatio, 80, 'compressRatio default 80, not session value');
@@ -229,9 +242,9 @@ describe('updateChatContextBar: contextLength/compressRatio overview-only', () =
   it('session contextLength/compressRatio are never read even when overview is empty', async () => {
     // Decoy: session carries explicit values. They must be completely ignored.
     const agent = makeAgent(999000, 99);
-    await loadContextBarCase({ agent, overview: {} }, (c) => {
+    await loadContextBarCase({ agent, overview: {} }, (c, contextBar) => {
       c.read('updateChatContextBar()');
-      const detail = c.read('window._ccbDetailData');
+      const detail = contextBar._ccbDetailData;
 
       assert.equal(detail.contextLength, 0, 'session 999000 must not leak in');
       assert.equal(detail.compressRatio, 80, 'session 99 must not leak in; default 80 used');

@@ -3,14 +3,16 @@
  *
  * 迁出边界（本批最终形态）：
  *   feature-catalog / git-graph / feature-ui-registry  →  ESM（本测试真实 import）
- *   right-panel-registry / panel-plugins / rail-customize → 保持唯一 classic 原实现
- *   （首屏同步交互与 classic 相声明不可延后；其行为由各自既有 classic 测试覆盖）
+ *   right-panel-registry / rail-customize → 保持唯一 classic 原实现（首屏同步交互
+ *   与 classic 相声明不可延后；其行为由各自既有 classic 测试覆盖）
+ *   panel-plugins → P4 L1 已转 ESM（声明清单无跨文件键，classic 标签待接线删除）
  *
  * 钉什么：
  *   1. 批次入口真实装载三模块后的行为（GitGraph 协议、动态面板声明、catalog 拉取）。
  *   2. 兼容面：既有公开命名空间（GitGraph / ClawFW.featureCatalog / ClawFW.featureUi）
  *      与命名导出同源；无新增散装全局。
- *   3. 边界：三个 classic 文件未被转成 ESM、入口不 import 它们、index.html 标签保留。
+ *   3. 边界：两个剩余 classic 文件未被转成 ESM、入口不 import 它们、index.html 标签保留；
+ *      panel-plugins 已 ESM（无桥键）。
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -155,15 +157,15 @@ describe('P2 W1-2 批次入口：三个 ESM 模块的真实行为', () => {
     uiLoad.cleanup();
   });
 
-  it('迁出边界：三个 classic 文件仍是 classic，入口不 import 它们', () => {
+  it('迁出边界：两个 classic 文件仍是 classic，入口不 import 它们', () => {
     const entry = fs.readFileSync(
       new URL('../public/src/modules/p2-w1-2-panel-bootstrap.js', import.meta.url), 'utf8');
-    for (const classic of ['right-panel-registry', 'panel-plugins', 'rail-customize']) {
+    for (const classic of ['right-panel-registry', 'rail-customize']) {
       assert.doesNotMatch(entry, new RegExp(`import '\\./${classic}\\.js'`),
         `批次入口不得 import classic 文件 ${classic}.js`);
     }
 
-    for (const classic of ['right-panel-registry', 'panel-plugins', 'rail-customize']) {
+    for (const classic of ['right-panel-registry', 'rail-customize']) {
       const source = fs.readFileSync(
         new URL(`../public/src/modules/${classic}.js`, import.meta.url), 'utf8');
       assert.doesNotMatch(source, /^\s*(export\s+(default|function|const|let|class|\{))/m,
@@ -172,10 +174,20 @@ describe('P2 W1-2 批次入口：三个 ESM 模块的真实行为', () => {
 
     // 首屏同步交互与 classic 相声明由原实现承担：它们的 classic 标签必须保留
     const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-    for (const classic of ['right-panel-registry', 'panel-plugins', 'rail-customize']) {
+    for (const classic of ['right-panel-registry', 'rail-customize']) {
       assert.match(html, new RegExp(`<script src="\\./src/modules/${classic}\\.js"></script>`),
         `${classic}.js 的 classic 标签必须保留（接线时不得删除）`);
     }
+  });
+
+  it('panel-plugins 已迁 ESM（P4 L1）：具名导入求值即完成声明，且不造桥键', () => {
+    const source = fs.readFileSync(
+      new URL('../public/src/modules/panel-plugins.js', import.meta.url), 'utf8');
+    assert.match(source, /^import\s/m, 'panel-plugins.js 应为 ESM（P4 L1）');
+    assert.doesNotMatch(source, /KernelState\.(defineKey|claim)\(/,
+      'panel-plugins.js 无跨文件键，不应注册/认领桥键');
+    assert.doesNotMatch(source, /window\.currentLanguage\b/,
+      '语言应经 i18n-environment-state 的命名导出读取');
   });
 
   it('本批不新增桥键：三个 ESM 文件不触碰 KernelState', () => {

@@ -565,9 +565,9 @@ function loadLoaderClassic(sandbox) {
  * overview-data 属 ESM，由用例在 async 相 c.load。
  */
 function loadAgentDataClassic(sandbox, caseGlobals = {}) {
-  // 真实先行脚本序已含 app-main（boot 由基座挡住），这里只补 todo-plan 的 classic 实现。
+  // 真实先行脚本序已含 app-main（boot 由基座挡住）。todo-plan 已迁 ESM（P4 L1）：
+  // 由用例在 async 相 c.load，classic 相不再装载它。
   loadLoaderClassic(sandbox);
-  sandbox.loadSource('public/src/modules/todo-plan.js');
   // 用例夹具的行为汇点（渲染入口 / 通知出口等）在真源之后重放：真实 app-ui 会定义
   // 同名入口，而本文件只把这些入口当观察面。宿主工厂不在此列（宿主取真实链）。
   for (const [key, value] of Object.entries(caseGlobals)) {
@@ -693,6 +693,8 @@ test('loadAgentData discards response bodies that finish after a newer switch', 
       _recapPendingTrigger = false;
       _lastTemplateRuntimeId = null;
     `);
+    // plan 快照归一 / 成对签名（已迁 ESM，P4 L1）：todo 响应 500 时走 emptyTodo 分支。
+    await c.load('public/src/modules/todo-plan.js');
     // 真实接线：overview-data（快照/hook 规范化的唯一实现）+ 生产装配点的 loader。
     await c.load(OVERVIEW_DATA);
     const { loadAgentData } = await c.load(SESSION_DATA_LOADER_HOST);
@@ -788,6 +790,7 @@ test('loadAgentData refreshes composer metadata after committing the initial ove
       _runCapsuleStartConfirmed = false;
       _recapPendingTrigger = false;
     `);
+    await c.load('public/src/modules/todo-plan.js');
     await c.load(OVERVIEW_DATA);
     const { loadAgentData } = await c.load(SESSION_DATA_LOADER_HOST);
 
@@ -828,6 +831,8 @@ test('runtime-aware session projection uses the selected runtime session over st
   await withP2EsmCase({
     globals: {
       ...DOM_HOST_STUBS,
+      marked: markedStub,
+      hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
       getCurrentAgentRecord: () => host,
       getCurrentRuntimeRecord: () => runtime,
     },
@@ -841,11 +846,13 @@ test('runtime-aware session projection uses the selected runtime session over st
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
-      sandbox.loadSource('public/src/modules/todo-plan.js');
+      // todo-plan 已迁 ESM（P4 L1）：模块相 c.load（app-ui 的 plan 面板闭包经桥键调用）。
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       sandbox.loadSource('public/src/modules/right-panel-registry.js');
       sandbox.loadSource('public/src/app-ui.js');
     },
   }, async (c) => {
+    await c.load('public/src/modules/todo-plan.js');
     const record = c.read('getRuntimeAwareAgentRecord()');
     assert.equal(record.active_workspace_session_id, 'A');
     assert.equal(record.workspace_sessions.activeSessionId, 'A');

@@ -44,10 +44,12 @@ const hljsStub = {
   },
 };
 
-/** 与真实页面同形的平台/命名空间注入面（vendor 高亮、dispatcher、fetch）。 */
+/** 与真实页面同形的平台/命名空间注入面（vendor 高亮/解析器、dispatcher、fetch）。 */
 function baseGlobals(fetchImpl) {
   return {
     hljs: hljsStub,
+    // markdown-bootstrap 装载期构造 Renderer（todo-plan 的 ESM 依赖链经 markdown-utils 取 escapeHtml）。
+    marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
     ClawFW: { actions: { handlers: {}, registerMany(map) { Object.assign(this.handlers, map); } } },
     fetch: fetchImpl || (async () => ({ ok: false, status: 0, json: async () => ({}) })),
   };
@@ -64,13 +66,15 @@ function makeSink() {
   };
 }
 
-/** classic 侧装载：本批真实依赖文件（首屏同步机制 + 计划快照 owner）。 */
-function loadClassicDeps(sandbox, { withTodoPlan = false } = {}) {
+/**
+ * classic 侧装载：本批真实依赖文件（首屏同步机制）。
+ * todo-plan 已迁 ESM（P4 L1），由用例在 async 相 c.load，不再从此处装载。
+ */
+function loadClassicDeps(sandbox) {
   // 真实先行脚本序（test/p2-classic-hosts.js）：宿主工厂（session 提交策略 /
   // runtime-switch / poll / workspace-surface / 侧栏 call 状态）都是生产实现，
   // 首屏 boot 与周期排程由基座关掉；todo-plan 是本文件被测链需要的 classic 实现。
   prepareClassicSandbox(sandbox);
-  if (withTodoPlan) sandbox.loadSource('public/src/modules/todo-plan.js');
 }
 
 function installClassicSeams(sandbox, sink) {
@@ -171,11 +175,15 @@ describe('P2-4L 原厂商行为（真实 ESM 整图）', () => {
 
     await withP2EsmCase({
       classic: (sandbox) => {
-        loadClassicDeps(sandbox, { withTodoPlan: true });
+        loadClassicDeps(sandbox);
+        // todo-plan（P4 L1 已迁 ESM）的 classic 前置：markdown-utils 的 escapeHtml / renderer。
+        sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
         installClassicSeams(sandbox, sink);
       },
       globals: baseGlobals(fetchImpl),
     }, async (c) => {
+      // plan 快照归一（已迁 ESM，P4 L1）：todo 404 时 host.emptyTodo 经桥键取空计划。
+      await c.load('public/src/modules/todo-plan.js');
       sink.record = { id: 'runtime-a', source: 'child', name: 'PH' };
       c.window.allAgents = [sink.record];
       c.window.focusedAgentId = 'runtime-a';
@@ -235,11 +243,15 @@ describe('P2-4L 原厂商行为（真实 ESM 整图）', () => {
     const sink = makeSink();
     await withP2EsmCase({
       classic: (sandbox) => {
-        loadClassicDeps(sandbox, { withTodoPlan: true });
+        loadClassicDeps(sandbox);
+        // todo-plan（P4 L1 已迁 ESM）的 classic 前置：markdown-utils 的 escapeHtml / renderer。
+        sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
         installClassicSeams(sandbox, sink);
       },
       globals: baseGlobals(fetchImpl),
     }, async (c) => {
+      // plan 快照归一（已迁 ESM，P4 L1）：辅助面板失败路径同样要维护空计划。
+      await c.load('public/src/modules/todo-plan.js');
       sink.record = { id: 'runtime-a', source: 'child' };
       c.window.allAgents = [sink.record];
       await c.load(W24_ENTRY);

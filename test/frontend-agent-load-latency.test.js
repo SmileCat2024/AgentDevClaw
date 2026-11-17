@@ -95,7 +95,8 @@ async function withLoadHarness(fn) {
       sandbox.window.marked = markedStub;
       prepareClassicSandbox(sandbox);
       installRuntimeViewCache(sandbox);
-      sandbox.loadSource('public/src/modules/todo-plan.js');
+      // todo-plan 已迁 ESM（P4 L1）：classic 相只补 markdown-utils 的 classic 实现
+      // （escapeHtml / renderer），模块本体在 async 相 c.load。
       sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
       // 窄行为观察面（必须在真实链之后覆盖：app-main / app-ui 会定义同名入口）：
       // 本 harness 记录每次「主视图渲染」的会话视图快照，并把运行时/宿主记录固定成
@@ -130,6 +131,8 @@ async function withLoadHarness(fn) {
       renderCurrentMainView: () => paints.push(sb.run('readCurrentSessionViewState()')),
     },
   }, async (c) => {
+    // plan 快照归一 / 成对签名（已迁 ESM，P4 L1）：装载器链经桥键调用它的命名导出。
+    await c.load('public/src/modules/todo-plan.js');
     await c.load(OVERVIEW_DATA);
     // 生产装配点：session-data-loader-host 导出真实 loader（内部用 agent-data-loader
     // 的具名工厂取 adapter 面，并直连 ESM 的 setRuntime / isCurrent / refreshStatus）。
