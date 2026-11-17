@@ -75,9 +75,8 @@ function loadClassicBootstrap(sandbox, { search }) {
   // interval / rAF 关掉），因此 app-main 的装载就绪而首屏 boot 不运行。
   prepareClassicSandbox(sandbox);
   sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
-  // 主视图渲染会挂视口观察器（index.html 后续脚本 chat-viewport）：补真实文件，
-  // 让 renderCurrentMainView 走生产实现而不是桩。
-  sandbox.loadSource('public/src/modules/chat-viewport.js');
+  // 主视图渲染会挂视口观察器（chat-viewport，已迁 ESM）：由 async 相 c.load 装载，
+  // 桥键让 classic renderCurrentMainView 走生产实现而不是桩。
   // 主视图渲染入口：真实 app-ui 实现需要整条页面 DOM（chat-viewport → input-render →
   // app-chat-input 槽位）。本文件各用例只把「渲染」当观察面（计数 / 快照），故在真实链
   // 之后装一个转发入口：用例经 __caseRenderCurrentMainView 给定观察实现，未设时空实现。
@@ -219,6 +218,8 @@ async function withPollHarness({ initialMessages = [], overview = {}, messagesRe
       sandbox.loadSource('public/src/modules/thread-store.js');
     },
   }, async (c) => {
+    // 视口域先装载（桥键 + container 滚动监听），早于首屏渲染链的调用点。
+    await c.load('public/src/modules/chat-viewport.js');
     await c.load(OVERVIEW_DATA);
     const autoTitle = await c.load(AUTO_TITLE);
     const coordinatorMod = await c.load(POLL_COORDINATOR);

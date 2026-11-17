@@ -1171,6 +1171,16 @@ function createP2BootstrapChatSurfaceHost() {
     set chatViewportFollowToken(value) { chatViewportFollowToken = value; },
     get chatViewportFollowTransition() { return chatViewportFollowTransition; },
     set chatViewportFollowTransition(value) { chatViewportFollowTransition = value; },
+    // 用户折叠偏好三兄弟（P4 T2，chat-renderer 批次的最小 host seam）：chat-renderer
+    // 迁 ESM 后经 chatSurface 取用。必须是 getter/setter 而不是传值——app-core 的
+    // activateUserCollapseStateForContext() 会整体重新赋值这三个绑定，传值会让渲染侧
+    // 抓住旧 Set，与"切换窗口内激活目标上下文"的既有语义分叉。
+    get _userExpandedReasoning() { return _userExpandedReasoning; },
+    set _userExpandedReasoning(value) { _userExpandedReasoning = value; },
+    get _userCollapsedMsgs() { return _userCollapsedMsgs; },
+    set _userCollapsedMsgs(value) { _userCollapsedMsgs = value; },
+    get _userExpandedMsgs() { return _userExpandedMsgs; },
+    set _userExpandedMsgs(value) { _userExpandedMsgs = value; },
   });
 }
 

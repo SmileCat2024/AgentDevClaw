@@ -22,8 +22,8 @@
  * and drifted rows must pay exactly one full pass per resize signal
  * (mutation echo from the same write is quiet-suppressed, resize is not).
  *
- * 装载路线（P2）：chat-viewport 仍 classic（沙箱内按 index.html 真实加载序
- * 装载：action-dispatcher → i18n → app-core → chat-viewport），
+ * 装载路线（P4 T2 批次）：chat-viewport 已迁 ESM，经 withP2EsmCase 的 `c.load`
+ * 真实 import（其桥键供 classic 侧晚绑定）；
  * chat-row-visibility 已迁 ESM，经 withP2EsmCase 的 `c.load` 真实 import。
  * chat-viewport 对 refreshMeasuredChatRows 的调用走生产兼容桥
  * （p2-w2-1-chat-windowing-host 注册的 KernelState 访问器）：测试对它的
@@ -239,10 +239,10 @@ async function withBench(options, fn) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/chat-viewport.js');
     },
     globals,
   }, async (c) => {
+    await c.load('public/src/modules/chat-viewport.js');
     const surface = c.window.createP2BootstrapChatSurfaceHost();
     surface.showChatProcess = true;
     surface.followLatestEnabled = false;
@@ -277,20 +277,29 @@ async function withBench(options, fn) {
       pumpFrames(3); // settlement settle frames
     }
     function countFullPasses() {
-      // A full pass = refresh call that was NOT routed to the incremental
-      // branches. Detect via the reason the classic consumer passed in.
-      return refreshCalls.filter(r => r !== 'append' && r !== 'patch-last').length;
+      // chat-viewport 已转 ESM 并直接 import 实现，桥 key 后的 wrapper 不再参与
+      // 观察者驱动的刷新；全量 pass 改按真实测量工作量计量：一次全量刷新对每行读
+      // 一次 offsetTop（增量分支只测尾部 / 单行）。
+      return Math.floor(harnessState.offsetTopReads / rig.rows.length);
     }
 
     return fn({
       ...rig,
       pumpFrames, scrollTo,
       refreshCalls,
-      refresh: reason => c.window.refreshMeasuredChatRows(reason),
-      notify: reason => c.window.notifyChatViewportMutation({
-        reason, shouldFollow: false, preserveTop: null,
-        allowChase: false, preferSmooth: false, forceSnap: false,
-      }),
+      refresh: reason => {
+        // 用例自己驱动的刷新（reason 由本文件给定，不依赖桥 wrapper 观察）
+        refreshCalls.push(reason);
+        return c.window.refreshMeasuredChatRows(reason);
+      },
+      notify: reason => {
+        // 本路径必然经 notifyChatViewportMutation → refreshMeasuredChatRows(reason)
+        refreshCalls.push(reason);
+        return c.window.notifyChatViewportMutation({
+          reason, shouldFollow: false, preserveTop: null,
+          allowChase: false, preferSmooth: false, forceSnap: false,
+        });
+      },
       stats: () => ({
         offsetTopReads: harnessState.offsetTopReads,
         rectReads: harnessState.rectReads,
@@ -354,8 +363,8 @@ test('revealing a drifted row pierces quiet and pays one full pass', async () =>
       'drifted-row reveal must dispatch message-row-resize and force a full pass');
     assert.ok(s.offsetTopReads >= 1000,
       `a full pass re-reads every row's offsetTop (got ${s.offsetTopReads})`);
-    assert.ok(s.refreshReasons.includes('message-row-resize'),
-      `expected a message-row-resize signal, got ${s.refreshReasons.join(',')}`);
+    // reason 文案（message-row-resize）是 chat-viewport 内部回调的入参，迁移后不再
+    // 经桥 wrapper 可观测；等价契约由上一条钉住：静默窗内只有行高度变化能触发全量 pass。
   });
 });
 
@@ -379,12 +388,10 @@ test('collapse-height change pierces the quiet window set by an append notify', 
     bench.pumpFrames(3);
 
     const s = bench.stats();
-    assert.ok(s.fullPasses >= 1,
-      'row resize must pierce the quiet window (message-row-resize exemption)');
-    // And the mutation echo of the same write is quiet-suppressed: only the
-    // resize signal may show up.
-    assert.ok(!s.refreshReasons.includes('dom-observer'),
-      'mutation echo must stay quiet-suppressed');
+    assert.equal(s.fullPasses, 1,
+      `row resize must pierce the quiet window exactly once (got ${s.fullPasses})`);
+    // And the mutation echo of the same write stays quiet-suppressed: 若普通噪声也穿透，
+    // 这里会看到第二次全量 pass。
   });
 });
 

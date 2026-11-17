@@ -5,9 +5,9 @@
  * 真实 import（`container` 经 p2-bootstrap-dom 取 app-core 的 #chat-container
  * 引用，搜索状态经 ph-session-list 的 `_phSearch` 命名导出共享，每 case 一张图）。
  * classic 侧仍真实执行：action-dispatcher / app-core / i18n 按真实加载序
- * loadSource，chat-renderer 的错误组权威判定（getAssistantErrorMeta /
- * computeAssistantErrorGroups）仍以真实生产源码块执行——chat-renderer 本身
- * 仍是 classic，无 ESM 导出面可 import。`selectWorkspaceSurface` 在生产已改为
+ * loadSource，chat-renderer 的错误组权威判定（computeAssistantErrorGroups）
+ * 按其真实 export 面 import（P4 T2 批次 chat-renderer 迁 ESM 后不再有源码切片）；
+ * 模块经桥键服务 `window.computeAssistantErrorGroups`，与应用同一条晚绑定路径。`selectWorkspaceSurface` 在生产已改为
  * 直接 import（workspace-surface-host），其宿主契约的真实实现是 app-ui 的
  * createWorkspaceSurfaceHost：整文装载 app-ui 需要整套首屏脚本序，故按仓库
  * 既有做法执行该工厂的真实源码片段（非复刻、非空心面）；导航的渲染实现
@@ -30,10 +30,7 @@ import { sourceBetween } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CHAT_RENDERER_SRC = fs.readFileSync(
-  join(__dirname, '..', 'public', 'src', 'modules', 'chat-renderer.js'),
-  'utf8',
-);
+const CHAT_RENDERER = 'public/src/modules/chat-renderer.js';
 // selectWorkspaceSurface 已是 ESM 直接 import（workspace-surface-host），其宿主
 // 契约的真实实现是 app-ui 的 createWorkspaceSurfaceHost：整文装载 app-ui 需要
 // 整个首屏脚本序，故按仓库既有做法执行该工厂的真实源码片段（非复刻）。
@@ -64,6 +61,13 @@ function makeElement(overrides = {}) {
       add: (c) => classes.add(c),
       remove: (c) => classes.delete(c),
       contains: (c) => classes.has(c),
+      // 真实 classList 的三参形态（force 省略即取反）：迁移后的 chat-viewport
+      // 跟随按钮同步按真实语义调用。
+      toggle: (c, force) => {
+        const enable = force === undefined ? !classes.has(c) : Boolean(force);
+        if (enable) classes.add(c); else classes.delete(c);
+        return enable;
+      },
     },
     appendChild() {},
     append() {},
@@ -187,9 +191,6 @@ async function withLocate(probe) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      // 真实生产函数：错误组权威判定（chat-renderer.js 源码块，仍 classic）
-      sandbox.run(sourceBetween(CHAT_RENDERER_SRC, 'function getAssistantErrorMeta(', '// 红框本体'));
-      sandbox.run(sourceBetween(CHAT_RENDERER_SRC, 'function computeAssistantErrorGroups(', '// index 处的失败消息是否参与成组'));
       // 真实 workspace-surface 宿主工厂（classic app-ui）：selectWorkspaceSurface
       // 已改为直接 import，其宿主契约必须由真实工厂补全（不造空心面）。
       // 导航编排状态与调用契约（真实宿主工厂会读写它们；具体渲染实现分散在
@@ -247,6 +248,7 @@ async function withLocate(probe) {
       URLSearchParams,
     },
   }, async (c) => {
+    await c.load(CHAT_RENDERER);
     const locate = await c.load(PH_SEARCH_LOCATE);
     const list = await c.load(PH_SESSION_LIST);
     // ESM 图求值会把 workspace-surface / chat-viewport 的宿主回调注册成
@@ -617,7 +619,6 @@ async function withRemoteActionsCase({ bumpEpochDuringWait = false } = {}, probe
       // runtime-status 是 classic 唯一实现：真实切换收尾的 loadAgentData 经
       // resetRuntimeStatusForSwitch 复位运行期状态。
       sandbox.loadSource('public/src/modules/runtime-status.js');
-      sandbox.loadSource('public/src/modules/remote-connections.js');
       // workspace-actions 的 import 链含线程交互域（thread-store-domain）：它在
       // 模块求值期取 classic 引擎的窄宿主 createThreadStoreHost()。装真实引擎而
       // 不写同形桩——宿主契约只有一份实现。
@@ -736,6 +737,9 @@ async function withRemoteActionsCase({ bumpEpochDuringWait = false } = {}, probe
       },
     },
   }, async (c) => {
+    // 远程目录 accessor（已迁 ESM，P4 T3）：真实 import 后 window.RemoteConnections
+    // 才存在；就绪观察的覆盖与 workspace-actions 的取用都在它之后。
+    await c.load('public/src/modules/remote-connections.js');
     const list = await c.load(PH_SESSION_LIST);
     await c.load(WORKSPACE_ACTIONS);
     // 就绪观察：不真实轮询；等待期间可选模拟用户切走（bump 代次）。

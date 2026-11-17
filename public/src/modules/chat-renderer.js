@@ -1,37 +1,90 @@
 /**
- * chat-renderer.js — 聊天消息渲染
- * 从 app-main.js 拆出（Phase D）
- * 拆出日期：2026-07-05
+ * chat-renderer.js — 聊天消息渲染（classic → ESM，P4 T2 批次）
+ * 从 app-main.js 拆出（Phase D）；拆出日期：2026-07-05
  *
- * 依赖全局状态（定义在 app-core.js）:
- *   currentMessages, allAgents, toolRenderConfigs, _lastRenderedChatSig,
- *   _userExpandedReasoning, _userExpandedMsgs, _userCollapsedMsgs,
- *   followLatestEnabled, container
- * 依赖全局函数:
- *   renderMarkdown, enhanceMarkdownTables (modules/markdown-utils.js)
- *   parseToolResult, renderJsonHighlight, applyTemplate, enhanceMathInElement,
- *   clearTruncatedHighlightData (modules/template-engine.js)
- *   getToolDisplayName, getToolRenderTemplate (modules/markdown-utils.js)
- *   canRollbackMessage, applyConversationProcessState, updateRollbackActionVisibility (modules/input-helpers.js)
- *   runWithSuppressedChatViewportObservers, notifyChatViewportMutation,
- *   cancelChatScrollSettlement, updateFollowLatestButton, getToggleButtonLabel,
- *   consumePendingChatScrollRestore (modules/chat-viewport.js)
- *   getEmptyStateHtml, escapeHtml, t (app-core.js)
- *   renderCurrentMainView, isChatSurfaceActive (app-ui.js)
- *   requestRollbackEdit (modules/rollback-dialog.js)
- *   switchAgent (app-main.js — data-action 转调)
- * 导出全局函数:
- *   renderMessage, appendNewMessages, updateLastMessage, renderChatEmptyState,
- *   getCollapseThresholdForRow, syncRowCollapseState, syncCollapseStates,
- *   applyCollapseLogic, restoreUserCollapseState, render
- * 导出全局 window 函数:
- *   toggleMessage, toggleErrorGroup, openImageZoom
- * 模块级收敛（原 window 导出，全仓消费面为零）:
- *   toggleReasoning, toggleRewriteDetail, copyMessageContent
- * 分发器动作（data-action 命名空间 chat.*，注册见文件尾部）:
- *   toggleMessage / toggleReasoning / requestRollbackEdit / switchAgent
- *   copyMessageContent / toggleRewriteDetail / toggleErrorGroup / openImageZoom
+ * 迁移要点（时序审计见批次报告）：
+ *   - R1：本文件函数在仍 classic 的文件里没有顶层调用点（app-ui 的
+ *     `render(viewState.messages)` / `renderChatEmptyState()`、app-main 的
+ *     append / updateLast 都在 boot 之后的事件与轮询期），改经桥键晚绑定后调用时相不变。
+ *   - R2：首屏链由 boot.js 在模块相触发（renderCurrentMainView → render / 空态），
+ *     本模块由 p4-entry 装载，早于 boot 求值。
+ *   - R3：`container` 原为 app-core 顶层 const（全局词法绑定，ESM 取不到）→ 模块
+ *     求值期等价重建查询；dom-refs 域落地后改 import。
+ *   - R4：顶层语句只有 `window.ClawFW.actions.registerMany(...)`、`ClawFW` 命名空间
+ *     赋值与若干纯状态初始化，全部在 DOMContentLoaded 前完成；这些动作的消费入口
+ *     （消息行按钮 / 图片缩放）只在首次渲染之后存在，注册时相变化不可达。
+ *   - S：原文件无隐式全局赋值 / with / 顶层 this，strict 化无行为变化。
+ *
+ * 状态读写边界：
+ *   - `showChatProcess` / `followLatestEnabled` 与用户折叠偏好三兄弟
+ *     （`_userExpandedReasoning` / `_userCollapsedMsgs` / `_userExpandedMsgs`）是
+ *     app-core 的顶层 `let`（折叠偏好含 activate 时整体重赋值的语义），经
+ *     `chatSurface` 宿主成对转发——owner 不变；app-core 拆解批次迁 owner 后随宿主
+ *     一并撤除。
+ *   - `currentMessages` / `toolRenderConfigs`（session-view-storage）、`allAgents`
+ *     （agent-store-state）、`_lastRenderedChatSig`（render-entry-state）已是 ESM
+ *     owner，直接 import（活绑定 + setter）。
+ *   - 本模块私有状态：`_lastRenderedChatEmptyHtml`、`_errorGroupUserState`、
+ *     `_pendingErrorGroupReveal`、`rewrittenByCallId`、`_optimisticEchoes`。
+ *
+ * 依赖（import）：markdown-utils（renderMarkdown / escapeHtml / enhance*）、
+ *   template-engine（parseToolResult / renderJsonHighlight / applyTemplate /
+ *   getToolDisplayName / getToolRenderTemplate / clearTruncatedHighlightData）、
+ *   input-actions（canRollbackMessage / updateRollbackActionVisibility）、
+ *   chat-process-visibility（applyConversationProcessState）、lazy-tool-content
+ *   （clearProcessDistance / runLandingCollapseScan / setProcessWindowingDisabled）、
+ *   chat-row-visibility（revealMeasuredChatRow）、message-timeline（时间分隔线族）、
+ *   tool-progress、rollback-dialog-runtime（requestRollbackEdit）、toast-notify
+ *   （ClawToast）、../i18n.js（t）、i18n-environment-state（getCurrentLanguage）、
+ *   orchestration-state（currentRuntimeAgentId）、chat-viewport（视口域 11 个入口）。
+ * 依赖（仍 classic，window 晚绑定；定义域见行尾）：
+ *   getEmptyStateHtml（app-core）、renderCurrentMainView / isChatSurfaceActive
+ *   （app-ui）、ensureChatRuntimeIndicator（runtime-status）、switchAgent（app-main）、
+ *   openSettings（model-settings）、RemoteConnections.getRemoteAssetPrefix 与
+ *   `window.__PROTOCLAW_APP_URL__`（远程资源前缀，模块按需探测，缺席即原样返回）。
+ *
+ * 导出：渲染入口与纯投影函数（见文件末尾 export 块）。
+ * 桥键（domain `chat-renderer`，12 个）：render / renderChatEmptyState /
+ *   appendNewMessages / updateLastMessage / toggleMessage / toggleErrorGroup /
+ *   openImageZoom / computeAssistantErrorGroups / syncRowCollapseState /
+ *   settleAllRowCollapseStates / syncCollapseStates / getMessageRollbackEditActionHtml
+ *   —— 逐键消费证据（含注销条件）见文件末尾注。
+ * 分发器动作（data-action 命名空间 chat.*，注册见文件尾部）。
  */
+import { renderMarkdown, escapeHtml, enhanceMarkdownTables, enhanceMathInElement } from './markdown-utils.js';
+import {
+  parseToolResult, renderJsonHighlight, applyTemplate,
+  getToolDisplayName, getToolRenderTemplate, clearTruncatedHighlightData,
+} from './template-engine.js';
+import { canRollbackMessage, updateRollbackActionVisibility } from './input-actions.js';
+import { applyConversationProcessState } from './chat-process-visibility.js';
+import {
+  clearProcessDistance, runLandingCollapseScan, setProcessWindowingDisabled,
+} from './lazy-tool-content.js';
+import { revealMeasuredChatRow } from './chat-row-visibility.js';
+import {
+  prependTimeSeparatorHtml, formatChatTimestamp, resolveEchoTimeSeparator, renderTimeSeparatorHtml,
+} from './message-timeline.js';
+import { resolveToolProgressForCall } from './tool-progress.js';
+import { requestRollbackEdit } from './rollback-dialog-runtime.js';
+import { ClawToast } from './toast-notify.js';
+import { t } from '../i18n.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { currentMessages, toolRenderConfigs } from './session-view-storage.js';
+import { allAgents } from './agent-store-state.js';
+import { _lastRenderedChatSig, setLastRenderedChatSig } from './render-entry-state.js';
+import { chatSurface } from './p2-bootstrap-chat-surface.js';
+import {
+  runWithSuppressedChatViewportObservers, notifyChatViewportMutation,
+  cancelChatScrollSettlement, updateFollowLatestButton, getToggleButtonLabel,
+  consumePendingChatScrollRestore, consumePendingChatViewportAnchor,
+  captureChatViewportAnchor, applyChatViewportAnchor, lockChatViewportToBottomNow,
+  getChatScrollContextKey,
+} from './chat-viewport.js';
+
+// 等价重建 app-core 的 DOM 引用（见头注 R3：元素从不替换）。
+const container = document.getElementById('chat-container');
 
 /**
  * Data-driven welcome page decision: when process is hidden and neither user
@@ -48,7 +101,7 @@
  * but left the outer container, causing a blank shell.
  */
 function shouldShowChatWelcome(messages) {
-  return !showChatProcess
+  return !chatSurface.showChatProcess
     && Array.isArray(messages)
     && messages.length > 0
     && !messages.some(m => m.role === 'user')
@@ -63,7 +116,7 @@ function shouldShowChatWelcome(messages) {
 let _lastRenderedChatEmptyHtml = null;
 
 function renderChatEmptyState() {
-  const emptyHtml = getEmptyStateHtml();
+  const emptyHtml = window.getEmptyStateHtml();
   if (_lastRenderedChatEmptyHtml === emptyHtml && container.querySelector('.empty-state')) {
     return;
   }
@@ -108,7 +161,7 @@ function getMessageActionButtonsHtml(msg, index) {
 function renderToolResultBody(toolName, template, data, success, toolArgs, index) {
   const previewRead = success && toolName === 'read'
     && data && typeof data === 'object' && data.type !== 'directory'
-    && typeof data.content === 'string' && !_userExpandedMsgs.has(index);
+    && typeof data.content === 'string' && !chatSurface._userExpandedMsgs.has(index);
   let renderData = data;
   let deferred = false;
   if (previewRead) {
@@ -449,9 +502,7 @@ function renderToolCallCardHtml(call) {
   const template = getToolRenderTemplate(call.name);
   // 工具执行中进度（ticket 025）：callId 配对 + 进度数据经模板第三参传入
   const callIdAttr = call.id ? ` data-tool-call-id="${escapeHtml(String(call.id))}"` : '';
-  const progressCtx = typeof resolveToolProgressForCall === 'function'
-    ? resolveToolProgressForCall(call)
-    : null;
+  const progressCtx = resolveToolProgressForCall(call);
   const rewritten = rewrittenByCallId.get(call.id) || null;
   const detailId = rewriteDetailId(call.id);
   const innerHtml = template.call
@@ -502,7 +553,7 @@ const toggleRewriteDetail = function(id) {
 };
 
 // 聚合组展开/收起：head 与 body 同步 class，用户态记录到内存（跨全量渲染恢复）
-window.toggleErrorGroup = function(gid) {
+function toggleErrorGroup(gid) {
   const head = document.getElementById(gid);
   if (!head) return;
   const body = head.parentElement && head.parentElement.querySelector('.error-group-body');
@@ -548,7 +599,7 @@ function appendNewMessages(newMessages, startIndex) {
     render(currentMessages);
     return;
   }
-  const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
+  const shouldFollowAfterMutation = chatSurface.followLatestEnabled && window.isChatSurfaceActive();
   const chatViewportTopBefore = container.scrollTop;
   // 移除空状态
   const emptyState = container.querySelector('.empty-state');
@@ -641,7 +692,7 @@ function appendNewMessages(newMessages, startIndex) {
   applyCollapseLogic(container, firstAppendedRowIndex);
   restoreUserCollapseState(container);
   updateFollowLatestButton();
-  if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
+  if (typeof window.ensureChatRuntimeIndicator === 'function') window.ensureChatRuntimeIndicator(); // 桥接期：定义于 runtime-status
   notifyChatViewportMutation({
     reason: 'append',
     shouldFollow: shouldFollowAfterMutation,
@@ -653,7 +704,7 @@ function appendNewMessages(newMessages, startIndex) {
   // 增量 DOM 变更完成后同步渲染签名：签名必须始终描述容器实际呈现的消息
   // 列表，否则「append 后回退到旧指纹」时 render() 的去重会误判"DOM 已是该
   // 状态"而跳过重建，回退后 UI 停留在幽灵消息（只有硬刷新才恢复）。
-  _lastRenderedChatSig = buildChatRenderSignature(currentMessages);
+  setLastRenderedChatSig(buildChatRenderSignature(currentMessages));
 }
 
 // ── Optimistic user echo（空闲直投路径的本地回显）─────────────────
@@ -666,7 +717,7 @@ function appendNewMessages(newMessages, startIndex) {
 let _optimisticEchoes = []; // { text, images, fromIndex, el }
 
 function pushOptimisticUserEcho({ text, images, sessionReferences, fromIndex = currentMessages.length } = {}) {
-  if (typeof isChatSurfaceActive !== 'function' || !isChatSurfaceActive() || !container) return;
+  if (typeof window.isChatSurfaceActive !== 'function' || !window.isChatSurfaceActive() || !container) return;
   const echoText = (typeof text === 'string' && text.length > 0) ? text : ' ';
   const row = document.createElement('div');
   row.className = 'message-row user optimistic-user-echo';
@@ -680,14 +731,11 @@ function pushOptimisticUserEcho({ text, images, sessionReferences, fromIndex = c
   // 跳动。本地时钟近似 + 保守余量（resolveEchoTimeSeparator），真实行的
   // 分隔线落地后由 reconcile 随回显气泡一并移除预渲染元素。
   let separatorEl = null;
-  if (typeof resolveEchoTimeSeparator === 'function'
-    && typeof renderTimeSeparatorHtml === 'function') {
-    const echoTs = resolveEchoTimeSeparator(currentMessages, Date.now());
-    if (echoTs !== null) {
-      const holder = document.createElement('div');
-      holder.innerHTML = renderTimeSeparatorHtml(echoTs, 'time-separator--echo');
-      separatorEl = holder.firstElementChild;
-    }
+  const echoTs = resolveEchoTimeSeparator(currentMessages, Date.now());
+  if (echoTs !== null) {
+    const holder = document.createElement('div');
+    holder.innerHTML = renderTimeSeparatorHtml(echoTs, 'time-separator--echo');
+    separatorEl = holder.firstElementChild;
   }
   runWithSuppressedChatViewportObservers(() => {
     const emptyState = container.querySelector('.empty-state');
@@ -703,7 +751,7 @@ function pushOptimisticUserEcho({ text, images, sessionReferences, fromIndex = c
   updateFollowLatestButton();
   notifyChatViewportMutation({
     reason: 'append',
-    shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+    shouldFollow: chatSurface.followLatestEnabled && window.isChatSurfaceActive(),
     preserveTop: null,
     allowChase: false,
     preferSmooth: false,
@@ -764,7 +812,7 @@ function updateLastMessage(msg) {
     render(currentMessages);
     return;
   }
-  const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
+  const shouldFollowAfterMutation = chatSurface.followLatestEnabled && window.isChatSurfaceActive();
   const chatViewportTopBefore = container.scrollTop;
   const lastIndex = currentMessages.length - 1;
 
@@ -784,7 +832,7 @@ function updateLastMessage(msg) {
   const msgId = `msg-${lastIndex}`;
   let lastRow = container.querySelector('#' + msgId)?.closest('.message-row');
   if (!lastRow) {
-    renderCurrentMainView();
+    window.renderCurrentMainView();
     return;
   }
   const lastRowIndex = Array.from(container.querySelectorAll('.message-row')).indexOf(lastRow);
@@ -874,7 +922,7 @@ function updateLastMessage(msg) {
   if (msg.role === 'tool') syncRowCollapseState(lastRow);
   restoreUserCollapseState(container);
   updateFollowLatestButton();
-  if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
+  if (typeof window.ensureChatRuntimeIndicator === 'function') window.ensureChatRuntimeIndicator(); // 桥接期：定义于 runtime-status
   notifyChatViewportMutation({
     reason: 'patch-last',
     shouldFollow: shouldFollowAfterMutation,
@@ -885,7 +933,7 @@ function updateLastMessage(msg) {
   });
   // 同 appendNewMessages：末行在位 patch 后同步渲染签名，保持签名与 DOM
   // 实态一致（防回退指纹碰撞导致 render() 去重误跳过重建）。
-  _lastRenderedChatSig = buildChatRenderSignature(currentMessages);
+  setLastRenderedChatSig(buildChatRenderSignature(currentMessages));
   // 会话标注：末行 patch 后重放高亮（流式更新高频，rAF 去抖 + 空列表早退）
   if (window.ClawAnnotations) window.ClawAnnotations.scheduleReplay();
 }
@@ -913,7 +961,7 @@ function getCollapseThresholdForRow(row) {
 // 可见，reasoning / 调用卡是过程元素不算，其余子元素（如 .tool-error）
 // 按可见处理。
 function markAssistantBirthProcessState(row) {
-  if (!row || !row.classList.contains('assistant') || showChatProcess) return;
+  if (!row || !row.classList.contains('assistant') || chatSurface.showChatProcess) return;
   const content = row.querySelector('.message-content');
   if (!content) return;
   const hasVisibleChild = Array.from(content.children).some((child) => {
@@ -967,8 +1015,8 @@ function computeRowCollapsePlan(row) {
   // Check if user has manually toggled this row — respect their choice
   var msgId = el.id || '';
   var msgIndex = parseInt(msgId.replace('msg-', ''), 10);
-  var userExpanded = !isNaN(msgIndex) && _userExpandedMsgs.has(msgIndex);
-  var userCollapsed = !isNaN(msgIndex) && _userCollapsedMsgs.has(msgIndex);
+  var userExpanded = !isNaN(msgIndex) && chatSurface._userExpandedMsgs.has(msgIndex);
+  var userCollapsed = !isNaN(msgIndex) && chatSurface._userCollapsedMsgs.has(msgIndex);
 
   return { kind: 'apply', isCollapsible, userExpanded, userCollapsed, shouldCollapse };
 }
@@ -1068,13 +1116,13 @@ function applyCollapseLogic(containerElement, startIndex = 0) {
 // preferences take final precedence over auto-collapse rules.
 function restoreUserCollapseState(root) {
   // Reasoning blocks: restore expanded state
-  _userExpandedReasoning.forEach(function (index) {
+  chatSurface._userExpandedReasoning.forEach(function (index) {
     let el = document.getElementById('reasoning-msg-' + index);
     if (el) el.classList.add('expanded');
   });
 
   // Messages the user explicitly expanded (override auto-collapse)
-  _userExpandedMsgs.forEach(function (index) {
+  chatSurface._userExpandedMsgs.forEach(function (index) {
     let el = document.getElementById('msg-' + index);
     if (!el) return;
     let row = el.closest('.message-row');
@@ -1088,7 +1136,7 @@ function restoreUserCollapseState(root) {
   });
 
   // Messages the user explicitly collapsed
-  _userCollapsedMsgs.forEach(function (index) {
+  chatSurface._userCollapsedMsgs.forEach(function (index) {
     let el = document.getElementById('msg-' + index);
     if (!el) return;
     let row = el.closest('.message-row');
@@ -1103,9 +1151,9 @@ function restoreUserCollapseState(root) {
 }
 
 function render(messages) {
-  if (typeof clearTruncatedHighlightData === 'function') clearTruncatedHighlightData();
+  clearTruncatedHighlightData();
   if (messages.length === 0 || shouldShowChatWelcome(messages)) {
-    _lastRenderedChatSig = '';
+    setLastRenderedChatSig('');
     renderChatEmptyState();
     updateFollowLatestButton();
     return;
@@ -1119,12 +1167,12 @@ function render(messages) {
   if (_sig === _lastRenderedChatSig && container.querySelector('.message-row')) {
     return;
   }
-  _lastRenderedChatSig = _sig;
+  setLastRenderedChatSig(_sig);
 
   // 连续错误聚合投影（渲染层）：组内非首消息由组首行统一渲染。
   const errorGroupPlan = computeAssistantErrorGroups(messages).plan;
 
-  const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
+  const shouldFollowAfterMutation = chatSurface.followLatestEnabled && window.isChatSurfaceActive();
   const toolCallsById = messages.some(msg => msg.role === 'tool')
     ? indexToolCalls(messages) : null;
   refreshRewriteIndex(messages);
@@ -1270,18 +1318,14 @@ function render(messages) {
     return prependTimeSeparatorHtml(messages, index, rowHtml);
   }).join('');
 
-  const chatContextKey = typeof getChatScrollContextKey === 'function'
-    ? getChatScrollContextKey() : null;
-  const savedScrollAnchor = typeof consumePendingChatViewportAnchor === 'function'
-    ? consumePendingChatViewportAnchor()
-    : null;
+  const chatContextKey = getChatScrollContextKey();
+  const savedScrollAnchor = consumePendingChatViewportAnchor();
   const outgoingDomIsSameContext = !!chatContextKey
     && container.dataset
     && container.dataset.chatRenderContext === chatContextKey
     && !!container.querySelector('.message-row');
   const rebuildAnchor = !shouldFollowAfterMutation && !savedScrollAnchor
     && outgoingDomIsSameContext
-    && typeof captureChatViewportAnchor === 'function'
     ? captureChatViewportAnchor()
     : null;
   const renderAnchor = savedScrollAnchor || rebuildAnchor;
@@ -1299,17 +1343,13 @@ function render(messages) {
     // protected. Full-render cost at 50K nodes (measured): +122~131MB
     // renderer RSS, one-time ~800ms landing layout. Re-evaluated on every
     // full render; streaming appends keep the current mode until then.
-    if (typeof setProcessWindowingDisabled === 'function') {
-      setProcessWindowingDisabled(
-        container.getElementsByTagName('*').length <= 70000);
-    }
+    setProcessWindowingDisabled(
+      container.getElementsByTagName('*').length <= 70000);
     // Pre-hide ALL process elements before any layout read (full-render
     // tiering above makes clearProcessDistance itself skip the pre-hide).
     // Without this, the browser sees 134K visible nodes and freezes on layout.
     // applyProcessDistance (called next) will reveal ~70 near-viewport rows.
-    if (typeof clearProcessDistance === 'function') {
-      clearProcessDistance(container);
-    }
+    clearProcessDistance(container);
     enhanceMathInElement(container);
     enhanceMarkdownTables(container);
   }, 220);
@@ -1328,20 +1368,18 @@ function render(messages) {
   // first frame paints expanded tool blocks and they fold only after the
   // scroll-stop settle (~150ms later): the flash-then-collapse seen when a
   // session renders. The viewport settlement below re-locks idempotently.
-  if (shouldFollowAfterMutation && showChatProcess && typeof lockChatViewportToBottomNow === 'function') {
+  if (shouldFollowAfterMutation && chatSurface.showChatProcess) {
     lockChatViewportToBottomNow();
-    if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
+    runLandingCollapseScan();
   }
   restoreUserCollapseState(container);
-  if (!shouldFollowAfterMutation && rebuildAnchor
-      && typeof applyChatViewportAnchor === 'function') {
+  if (!shouldFollowAfterMutation && rebuildAnchor) {
     applyChatViewportAnchor(rebuildAnchor);
-  } else if (!shouldFollowAfterMutation && savedScrollAnchor
-      && typeof applyChatViewportAnchor === 'function') {
+  } else if (!shouldFollowAfterMutation && savedScrollAnchor) {
     applyChatViewportAnchor(savedScrollAnchor);
   }
   updateFollowLatestButton();
-  if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
+  if (typeof window.ensureChatRuntimeIndicator === 'function') window.ensureChatRuntimeIndicator(); // 桥接期：定义于 runtime-status
   notifyChatViewportMutation({
     reason: 'render-full',
     shouldFollow: shouldFollowAfterMutation,
@@ -1408,10 +1446,10 @@ function buildChatRenderSignature(messages) {
   return parts.join('|');
 }
 
-window.toggleMessage = function(id) {
+function toggleMessage(id) {
   const el = document.getElementById(id);
   if (el) {
-    if (typeof revealMeasuredChatRow === 'function') revealMeasuredChatRow(el.closest('.message-row'));
+    revealMeasuredChatRow(el.closest('.message-row'));
     const chatViewportTopBefore = container.scrollTop;
     el.classList.toggle('collapsed');
     const row = el.closest('.message-row');
@@ -1421,11 +1459,11 @@ window.toggleMessage = function(id) {
     const msgIndex = parseInt((id || '').replace('msg-', ''), 10);
     if (!isNaN(msgIndex)) {
       if (isCollapsed) {
-        _userCollapsedMsgs.add(msgIndex);
-        _userExpandedMsgs.delete(msgIndex);
+        chatSurface._userCollapsedMsgs.add(msgIndex);
+        chatSurface._userExpandedMsgs.delete(msgIndex);
       } else {
-        _userExpandedMsgs.add(msgIndex);
-        _userCollapsedMsgs.delete(msgIndex);
+        chatSurface._userExpandedMsgs.add(msgIndex);
+        chatSurface._userCollapsedMsgs.delete(msgIndex);
       }
       refreshReadResultForMessage(row, msgIndex);
     }
@@ -1439,8 +1477,8 @@ window.toggleMessage = function(id) {
 
     notifyChatViewportMutation({
       reason: 'message-toggle',
-      shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-      preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+      shouldFollow: chatSurface.followLatestEnabled && window.isChatSurfaceActive(),
+      preserveTop: chatSurface.followLatestEnabled ? null : chatViewportTopBefore,
       forceSnap: false,
       allowChase: false,
       preferSmooth: false,
@@ -1459,16 +1497,16 @@ const toggleReasoning = function(id) {
     const msgIndex = parseInt((id || '').replace('reasoning-msg-', ''), 10);
     if (!isNaN(msgIndex)) {
       if (el.classList.contains('expanded')) {
-        _userExpandedReasoning.add(msgIndex);
+        chatSurface._userExpandedReasoning.add(msgIndex);
       } else {
-        _userExpandedReasoning.delete(msgIndex);
+        chatSurface._userExpandedReasoning.delete(msgIndex);
       }
     }
 
     notifyChatViewportMutation({
       reason: 'reasoning-toggle',
-      shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-      preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+      shouldFollow: chatSurface.followLatestEnabled && window.isChatSurfaceActive(),
+      preserveTop: chatSurface.followLatestEnabled ? null : chatViewportTopBefore,
       forceSnap: false,
       allowChase: false,
       preferSmooth: false,
@@ -1507,10 +1545,8 @@ const copyMessageContent = async function(index, btn) {
     } catch (e) { ok = false; }
   }
   if (!ok) {
-    if (typeof ClawToast !== 'undefined') {
-      const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-      ClawToast.show({ id: 'chat-copy-msg', status: 'error', title: isZh ? '复制失败' : 'Failed to copy message' });
-    }
+    const isZh = getCurrentLanguage() === 'zh';
+    ClawToast.show({ id: 'chat-copy-msg', status: 'error', title: isZh ? '复制失败' : 'Failed to copy message' });
     return;
   }
   if (btn) {
@@ -1575,7 +1611,7 @@ function renderSessionReferenceChips(references) {
   return '<div class="message-session-refs">' + chips + '</div>';
 }
 
-window.openImageZoom = function(src) {
+function openImageZoom(src) {
   let existing = document.getElementById('image-zoom-overlay');
   if (existing) existing.remove();
 
@@ -1613,12 +1649,12 @@ window.openImageZoom = function(src) {
 window.ClawFW.actions.registerMany({
   // 复制消息原文（copyMessageContent 已收敛为模块级）
   'chat.copyMessage': (el, event, index) => copyMessageContent(index, el),
-  // 编辑此轮（requestRollbackEdit 定义域：rollback-dialog.js，window 转调）
-  'chat.rollbackEdit': (el, event, index) => window.requestRollbackEdit(index),
+  // 编辑此轮（requestRollbackEdit 由 rollback-dialog-runtime 命名导入）
+  'chat.rollbackEdit': (el, event, index) => requestRollbackEdit(index),
   // 红框「重新配置凭证」直达设置（openSettings 定义域：model-settings.js）
   'chat.openSettings': () => window.openSettings(),
   // 错误聚合组展开/收起：head 元素自身 id 即组 id
-  'chat.toggleErrorGroup': (el) => window.toggleErrorGroup(el.id),
+  'chat.toggleErrorGroup': (el) => toggleErrorGroup(el.id),
   // 思考块展开/收起：header 所在 reasoning-block 的 id 即目标 id
   'chat.toggleReasoning': (el) => toggleReasoning(el.closest('.reasoning-block')?.id),
   // 子代理消息跳转（switchAgent 定义域：app-main.js）
@@ -1628,17 +1664,113 @@ window.ClawFW.actions.registerMany({
   // 行折叠切换：按钮所在行的 message-content id 即目标 id
   'chat.toggleMessage': (el) => {
     const content = el.closest('.message-row')?.querySelector('.message-content');
-    if (content) window.toggleMessage(content.id);
+    if (content) toggleMessage(content.id);
   },
-  // 图片缩放（openImageZoom 保留 window 导出：claw-host.js env 转调消费）
-  'chat.openImageZoom': (el) => window.openImageZoom(el.dataset.zoomSrc),
+  // 图片缩放（openImageZoom 经桥键服务 claw-host 的 env 转调与各插件面板）
+  'chat.openImageZoom': (el) => openImageZoom(el.dataset.zoomSrc),
 });
 
-// 跨模块 API 走 window.ClawFW 命名空间（app-core 全局状态纪律）。
-// 注意：本文件源码块会被前端 vm 测试按函数标记切取执行，导出语句必须放在
-// 文件末尾，避免落入 appendNewMessages…getCollapseThresholdForRow 等切取区间。
+// 跨模块 API 走 window.ClawFW 命名空间（app-core 全局状态纪律；persistent-input 的
+// 直投回显与 app-main 的对账都经此命名空间取用，属既有协议，不是桥键）。
 window.ClawFW = window.ClawFW || {};
 Object.assign(window.ClawFW, {
   pushOptimisticUserEcho,
   reconcileOptimisticUserEchoes,
+});
+
+export {
+  shouldShowChatWelcome,
+  renderChatEmptyState,
+  getMessageActionButtonsHtml,
+  getMessageRollbackEditActionHtml,
+  renderToolResultBody,
+  refreshReadResultForMessage,
+  getAssistantErrorMeta,
+  renderAssistantErrorBlock,
+  computeAssistantErrorGroups,
+  isErrorGroupAffected,
+  getErrorCategoryLabel,
+  renderErrorGroupBlock,
+  renderMessage,
+  indexToolCalls,
+  getRewrittenCall,
+  refreshRewriteIndex,
+  rewriteDetailId,
+  renderToolCallCardHtml,
+  renderRewriteBadge,
+  renderRewriteDetail,
+  appendNewMessages,
+  pushOptimisticUserEcho,
+  reconcileOptimisticUserEchoes,
+  syncMessageImages,
+  updateLastMessage,
+  getCollapseThresholdForRow,
+  markAssistantBirthProcessState,
+  computeRowCollapsePlan,
+  applyRowCollapsePlan,
+  syncRowCollapseState,
+  settleAllRowCollapseStates,
+  syncCollapseStates,
+  applyCollapseLogic,
+  restoreUserCollapseState,
+  render,
+  stableSerializeForChatSignature,
+  buildChatRenderSignature,
+  toggleMessage,
+  toggleErrorGroup,
+  openImageZoom,
+  renderUserImages,
+  renderSessionReferenceChips,
+  toggleRewriteDetail,
+};
+
+/* ── 桥键（domain `chat-renderer`）────────────────────────────────────
+   逐键消费面证据（仍未迁移的 classic 消费方 / 本批清单外的已迁 ESM 晚绑定取用）：
+   - render                ← app-ui.js（renderCurrentMainView 的聊天分支裸调）
+   - renderChatEmptyState  ← app-ui.js（空会话分支裸调）
+   - appendNewMessages     ← app-main.js（轮询 append 裸调）
+   - updateLastMessage     ← app-main.js（流式末行 patch 裸调）
+   - toggleMessage         ← ph-search-locate.js（window）
+   - toggleErrorGroup      ← ph-search-locate.js（window）
+   - openImageZoom         ← claw-host.js（env.openImageZoom 裸调）与各插件面板
+   - getMessageRollbackEditActionHtml ← input-actions.js（window，回退按钮 HTML）
+   - computeAssistantErrorGroups ← ph-search-locate.js（window，组内消息定位）
+   - syncRowCollapseState  ← lazy-tool-content.js（window，多处行折叠同步）
+   - settleAllRowCollapseStates ← lazy-tool-content.js（window，全量落位结算）
+   - syncCollapseStates    ← chat-process-visibility.js（window，过程显隐后折叠同步）
+   注销条件：app-ui / app-main / claw-host 迁移并改 import；ph-search-locate 可直接
+   改 import。lazy-tool-content / chat-process-visibility / input-actions 三个消费方
+   不能反向 import 本模块（本模块静态 import 它们，反向即成环），注销时须把共享面
+   下沉到无环的投影模块或由本模块改 import 它们的纯函数。
+   未上桥的导出（渲染投影与纯函数）生产代码零 window 消费面，只服务测试与内联调用。 */
+const bridged = {
+  render,
+  renderChatEmptyState,
+  appendNewMessages,
+  updateLastMessage,
+  toggleMessage,
+  toggleErrorGroup,
+  openImageZoom,
+  computeAssistantErrorGroups,
+  syncRowCollapseState,
+  settleAllRowCollapseStates,
+  syncCollapseStates,
+  getMessageRollbackEditActionHtml,
+};
+// 逐键显式注册（不用循环）：桥债口径按 defineKey 调用点数计量。
+window.KernelState.defineKey('chat-renderer', 'render', bridged.render);
+window.KernelState.defineKey('chat-renderer', 'renderChatEmptyState', bridged.renderChatEmptyState);
+window.KernelState.defineKey('chat-renderer', 'appendNewMessages', bridged.appendNewMessages);
+window.KernelState.defineKey('chat-renderer', 'updateLastMessage', bridged.updateLastMessage);
+window.KernelState.defineKey('chat-renderer', 'toggleMessage', bridged.toggleMessage);
+window.KernelState.defineKey('chat-renderer', 'toggleErrorGroup', bridged.toggleErrorGroup);
+window.KernelState.defineKey('chat-renderer', 'openImageZoom', bridged.openImageZoom);
+window.KernelState.defineKey('chat-renderer', 'computeAssistantErrorGroups', bridged.computeAssistantErrorGroups);
+window.KernelState.defineKey('chat-renderer', 'syncRowCollapseState', bridged.syncRowCollapseState);
+window.KernelState.defineKey('chat-renderer', 'settleAllRowCollapseStates', bridged.settleAllRowCollapseStates);
+window.KernelState.defineKey('chat-renderer', 'syncCollapseStates', bridged.syncCollapseStates);
+window.KernelState.defineKey('chat-renderer', 'getMessageRollbackEditActionHtml', bridged.getMessageRollbackEditActionHtml);
+window.KernelState.claim('chat-renderer', {
+  get: (key) => bridged[key],
+  set: (key, value) => { bridged[key] = value; },
 });

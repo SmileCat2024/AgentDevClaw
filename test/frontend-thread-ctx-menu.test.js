@@ -22,7 +22,6 @@ const CLASSIC_STACK = [
   'public/src/modules/markdown-bootstrap.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/remote-connections.js',
   'public/src/modules/runtime-status.js',
   'public/src/modules/sidebar-render.js',
   'public/src/app-ui.js',
@@ -58,6 +57,8 @@ async function withMenuCase({ threads = {}, language = 'zh' } = {}, fn) {
       sandbox.fetch = async () => ({ ok: false, status: 0, json: async () => ({}) });
     },
   }, async (c) => {
+    // 远程连接域已迁 ESM（P4 T3）：真实 import 代替原 classic 标签位。
+    await c.load('public/src/modules/remote-connections.js');
     const i18n = await c.load('public/src/modules/i18n-environment-state.js');
     await c.load('public/src/modules/agent-data-loader.js');
     const menu = await c.load('public/src/modules/ctx-menu-items.js');

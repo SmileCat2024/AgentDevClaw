@@ -1,5 +1,5 @@
 /**
- * remote-connections.js
+ * remote-connections.js — 远程连接域（classic → ESM，P4 T3 批次）
  *
  * ADR-0008 Phase 1 用户可见面（R1-07）：
  *  - 侧栏项目投影：消费 /protoclaw/remote_catalog（R1-05），将远程目录
@@ -12,12 +12,47 @@
  *    连接体验与本地一致；缺位（旧远程/断开）进入只读降级；
  *    断开连接的条目整体停用并明示原因。
  *
- * Exported globals:
- *   isRemoteNamespaceAgentId, maybeRefreshRemoteCatalog,
- *   refreshRemoteCatalog, openRemoteConnectionsManager
+ * State discipline: 本模块所有状态均为局部作用域（模块相），不进 app-core.js
+ * 全局区。
  *
- * State discipline: 本模块所有状态均为局部作用域，不进 app-core.js 全局区。
+ * ── ESM 迁移（P4 T3 批次）─────────────────────────────────────────────
+ *
+ * 时序审计（配方的 R1–R4 + S 逐条结论）：
+ *  - R1 classic 顶层触达：无。本域键在 classic 相只出现在**函数体**里
+ *    （sidebar-render 的 renderAgentList / 宿主工厂闭包、app-main 的 poll
+ *    与 host 工厂、app-ui 的设置菜单 click 回调）；实测按 index.html 顺序
+ *    装载整条 classic 链并跳过本文件，链上零 ReferenceError（见交付报告）。
+ *  - R2 boot 微任务窗口：本域唯一被首屏链取用的是 getRemoteSidebarProjection /
+ *    getVisibleRemoteEntries / getRemoteSidebarProjectionVersion，均经
+ *    renderAgentList 在调用期取用；首屏由 boot.js 在模块相触发（P4 时序切换），
+ *    晚于本模块求值。桥键在模块相注册即对首屏可见。
+ *  - R3 DOM 引用：本文件没有 DOM 引用类状态键。管理面板元素 _rcManagerEl 是
+ *    运行期 createElement 产物，不是页面静态标记。
+ *  - R4 顶层语句：`document.addEventListener('click', …, true)`（断开条目
+ *    提示的 capture 委托）与 `window.KernelState` 桥注册从加载相移到模块相。
+ *    两者都在 DOMContentLoaded 之前执行，浏览器尚未派发用户输入事件，
+ *    监听对象与注册语义完全相同（同 chat-scroll / sidebar-layout 的判定）。
+ *  - S strict 化：原文件无 'use strict'（sloppy），但无隐式全局赋值、无 with、
+ *    无顶层 `this`（顶层只有声明与一处事件注册），strict 化零差异。
+ *
+ * 桥键（domain `remote-connections`，共 10 键，纵向消费面见交付报告）：
+ *   RemoteConnections（命名空间对象，17 个 ESM 消费方经 window 取用）、
+ *   isRemoteNamespaceAgentId、splitRemoteNamespaceId、getRemoteSidebarProjection、
+ *   getVisibleRemoteEntries、getRemoteSidebarProjectionVersion、
+ *   getRemoteHistoryProjectBuckets、openRemoteConnectionsManager、
+ *   maybeRefreshRemoteCatalog、maybeRefreshRemoteHistory。
+ *   注销条件：sidebar-render / app-main / app-ui（classic 裸标识符消费方）与
+ *   上述 ESM 消费方全部转为 `import` 后按配方步 5 逐键归零。
+ *
+ * 为什么 domain 不叫别的：`remote-connections` 此前无人认领（本文件是唯一
+ * owner），没有同名域冲突，无需像 workspace-docset-chrome / voice-input-api
+ * 那样加后缀。
  */
+
+import { t } from '../i18n.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { allAgents } from './agent-store-state.js';
 
 const REMOTE_NS = 'remote:';
 // Catalog 轮询节流：跟随既有 poll 循环调度（maybeRefreshRemoteCatalog 由
@@ -28,6 +63,18 @@ const RC_CATALOG_IDLE_REFRESH_MS = 30000;
 const REMOTE_CONN_STATUS_CLASSES = new Set([
   'configured', 'connecting', 'connected', 'reconnecting', 'disconnected', 'degraded',
 ]);
+
+/**
+ * 管理面板 HTML 的转义（模块私有）。不 import markdown-utils 的 escapeHtml：
+ * 那是 markdown 渲染域的重图（求值期即取 window.renderer / marked 并注册
+ * 表格动作），把它拉进远程目录模块的 import 链没有收益；已迁的 bg-panel /
+ * annotations 同样持有模块私有的同形 helper。
+ */
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 let _rcCatalogInFlight = false;
 let _rcLastCatalogFetchAt = 0;
@@ -48,11 +95,11 @@ const _rcCapabilitiesByConnection = new Map();
 
 // ── Namespace helpers ──────────────────────────────────────────────────────
 
-function isRemoteNamespaceAgentId(agentId) {
+export function isRemoteNamespaceAgentId(agentId) {
   return typeof agentId === 'string' && agentId.startsWith(REMOTE_NS);
 }
 
-function splitRemoteNamespaceId(agentId) {
+export function splitRemoteNamespaceId(agentId) {
   if (!isRemoteNamespaceAgentId(agentId)) return null;
   const rest = agentId.slice(REMOTE_NS.length);
   const sep = rest.indexOf(':');
@@ -63,7 +110,7 @@ function splitRemoteNamespaceId(agentId) {
 // 远程静态资产的寻址前缀（/r/<connectionId>，经本机代理转发到连接对端）。
 // 图片这类宿主机落盘的附件资源，远程会话的预览与历史渲染共用该前缀；
 // 本地身份返回空串（本地同名路由，行为不变）。
-function getRemoteAssetPrefix(agentId) {
+export function getRemoteAssetPrefix(agentId) {
   const split = splitRemoteNamespaceId(agentId);
   return split ? `/r/${split.connectionId}` : '';
 }
@@ -75,7 +122,7 @@ const RC_CAPABILITY_ACTIONS = new Set(['write', 'sessionOps', 'workspaceCreate']
 // 逐动作能力查询（ADR-0011 能力矩阵）：本地身份恒全能力；远程身份按连接级
 // 能力缓存逐位判定——capabilities[action] === true 才为 true。旧远程（无对应
 // 字段）、未知连接、非法 action、解析失败一律 false。
-function capabilityFor(agentId, action) {
+export function capabilityFor(agentId, action) {
   if (!RC_CAPABILITY_ACTIONS.has(action)) return false;
   if (typeof agentId !== 'string') return false;
   const split = splitRemoteNamespaceId(agentId);
@@ -87,7 +134,7 @@ function capabilityFor(agentId, action) {
 }
 
 // 写能力门控（ADR-0011）：capabilityFor write 位的薄委托，保持既有消费者不变。
-function isRemoteWriteEnabled(agentId) {
+export function isRemoteWriteEnabled(agentId) {
   return capabilityFor(agentId, 'write');
 }
 
@@ -187,7 +234,7 @@ function ingestRemoteCatalog(payload) {
   }
 }
 
-async function refreshRemoteCatalog() {
+export async function refreshRemoteCatalog() {
   if (_rcCatalogInFlight) return;
   _rcCatalogInFlight = true;
   try {
@@ -210,7 +257,8 @@ async function refreshRemoteCatalog() {
       // 目录状态未变不重渲染侧栏（与 maybeRefreshRemoteHistory 的签名
       // 对比同款）：空目录常态下不再每 4s 全量重建 agent list。
       _rcSidebarProjectionVersion += 1;
-      if (typeof renderAgentList === 'function') renderAgentList();
+      // 桥接期：renderAgentList 定义于 sidebar-render（classic，侧栏渲染层收敛时改 import）。
+      if (typeof window.renderAgentList === 'function') window.renderAgentList();
     }
     if (renderedSomething) tryRestoreRemoteFocus();
   } finally {
@@ -219,7 +267,7 @@ async function refreshRemoteCatalog() {
   }
 }
 
-function maybeRefreshRemoteCatalog() {
+export function maybeRefreshRemoteCatalog() {
   const now = Date.now();
   // 有连接时保持 4s 状态跟踪；空目录降为 30s 发现心跳
   // （maybeRefreshRemoteHistory 的零连接守卫同款思路）。
@@ -249,7 +297,7 @@ function isRemoteEntryOnline(namespacedId) {
 // 逻辑条目 ID → 命名空间运行时引用（目录条目的 runtimeId 字段）。远程 viewer
 // 只认运行时 ID：runtime 数据端点、模板映射等 /api 请求都应以它寻址。条目尚无
 // 运行时（未启动/连接降级）时返回 null，调用方保持原 ID 显式失败，不静默换目标。
-function resolveRuntimeRef(logicalAgentId) {
+export function resolveRuntimeRef(logicalAgentId) {
   const wanted = typeof logicalAgentId === 'string' ? logicalAgentId : '';
   if (!wanted) return null;
   for (const section of _rcVisibleSections.values()) {
@@ -271,7 +319,7 @@ function resolveRuntimeRef(logicalAgentId) {
 // 命名空间运行时引用 → 目录条目宿主的逻辑 agent id（如 'programming-helper'）。
 // 控制类请求（tool_state / swap 系）在远程会话下用它在 allAgents 之外解析宿主
 // 身份；非目录条目（本地 id / 未知引用）返回 null，调用方显式失败不猜目标。
-function getEntryHostAgentId(namespacedId) {
+export function getEntryHostAgentId(namespacedId) {
   const wanted = typeof namespacedId === 'string' ? namespacedId : '';
   if (!wanted) return null;
   for (const section of _rcVisibleSections.values()) {
@@ -289,7 +337,7 @@ function getEntryHostAgentId(namespacedId) {
 // 目录条目 → 宿主级命名空间 id（如 'remote:server-a:programming-helper'）。
 // focusedAgentId 收敛（T21-A）用它把远程运行时引用归并到宿主 agent 身份；
 // 非目录条目（本地 id / 未知引用）返回 null，调用方显式失败不猜目标。
-function getEntryHostNamespaceId(namespacedId) {
+export function getEntryHostNamespaceId(namespacedId) {
   const wanted = typeof namespacedId === 'string' ? namespacedId : '';
   if (!wanted) return null;
   for (const section of _rcVisibleSections.values()) {
@@ -307,7 +355,7 @@ function getEntryHostNamespaceId(namespacedId) {
 
 // 目录条目 → 会话标题回退链（sessionTitle → name → 空串）。header 标题回退
 // （T21-E）用它兜底远程会话顶部标题；未命中返回空串由调用方继续回退。
-function getEntrySessionTitle(namespacedId) {
+export function getEntrySessionTitle(namespacedId) {
   const wanted = typeof namespacedId === 'string' ? namespacedId : '';
   if (!wanted) return '';
   for (const section of _rcVisibleSections.values()) {
@@ -327,7 +375,7 @@ function getEntrySessionTitle(namespacedId) {
 // 目录条目 → 命名空间化会话 id（如 'remote:server-a:session-x'，与 aggregator
 // 的 namespaceId 产物一致）。仅当为非空字符串时返回，否则空串；调用方以空串
 // 视为不可寻址，与远程裸 sessionId 直接比较前需先在服务端还原。
-function getEntryRuntimeSessionId(namespacedId) {
+export function getEntryRuntimeSessionId(namespacedId) {
   const wanted = typeof namespacedId === 'string' ? namespacedId : '';
   if (!wanted) return '';
   for (const section of _rcVisibleSections.values()) {
@@ -347,7 +395,7 @@ function getEntryRuntimeSessionId(namespacedId) {
 // remote:<connId>:<runtimeId> 命名空间 id，与 _agentCallActive 的 key 同形；
 // status 随连接在线态取 'connected' | 'disconnected'。调用状态轮询、清理循环
 // 与侧栏渲染签名以它把远程条目并入本地同一条状态链路（无来源分支）。
-function getVisibleRemoteEntries() {
+export function getVisibleRemoteEntries() {
   const entries = [];
   const seen = new Set();
   for (const section of _rcVisibleSections.values()) {
@@ -389,7 +437,7 @@ function tryRestoreRemoteFocus() {
 // Remote catalog is a data source, not a second sidebar tree. The renderer asks
 // for the projection belonging to one local workspace and renders it with the
 // same project-group/runtime components as local sessions.
-function getRemoteSidebarProjectionVersion() {
+export function getRemoteSidebarProjectionVersion() {
   return _rcSidebarProjectionVersion;
 }
 
@@ -467,7 +515,7 @@ async function _fetchHistoryForConnection(section) {
 // 历史会话。运行中的会话由侧栏投影呈现，历史索引重复渲染由调用方
 // （mergeRemoteHistorySessions）按运行中 sessionId 排除。未连接 / 未知
 // 目录时为空。
-function getRemoteHistorySessions(openDirectory) {
+export function getRemoteHistorySessions(openDirectory) {
   const wantedDir = _normalizeHistoryDir(openDirectory);
   if (!wantedDir) return [];
   const merged = [];
@@ -483,7 +531,7 @@ function getRemoteHistorySessions(openDirectory) {
 // 远程历史项目桶（ADR-0012 决策 1）：全部已连接连接的历史目录聚合，供
 // workspace surface 为本地不存在的目录创建 remoteOnly 项目桶。同目录多连接
 // 时返回多组，由消费方按项目 id 去重合并。
-function getRemoteHistoryProjectBuckets() {
+export function getRemoteHistoryProjectBuckets() {
   const buckets = [];
   for (const [connId, entry] of _rcHistoryByConnection.entries()) {
     const section = _rcVisibleSections.get(connId);
@@ -501,7 +549,7 @@ function getRemoteHistoryProjectBuckets() {
 // 供 poll 循环驱动（复用 maybeRefreshRemoteCatalog 的调度位置）：按节流窗口
 // 拉取远程历史会话；本轮实际拉到数据时重渲染 workspace surface 使新历史
 // 条目出现（无数据变化的轮次跳过渲染，不打扰输入框焦点）。
-async function maybeRefreshRemoteHistory() {
+export async function maybeRefreshRemoteHistory() {
   const now = Date.now();
   if (_rcHistoryInFlight || now - _rcLastHistoryFetchAt < RC_HISTORY_REFRESH_MS) return;
   if (_rcVisibleSections.size === 0) return;
@@ -521,8 +569,9 @@ async function maybeRefreshRemoteHistory() {
         // 拉取失败保留上次结果（ADR-0008：不伪造在线数据，也不清除旧身份）。
       }
     }
-    if (changed && typeof renderCurrentMainView === 'function') {
-      renderCurrentMainView();
+    // 桥接期：renderCurrentMainView 定义于 app-ui（classic，渲染层收敛时改 import）。
+    if (changed && typeof window.renderCurrentMainView === 'function') {
+      window.renderCurrentMainView();
     }
   } finally {
     _rcHistoryInFlight = false;
@@ -530,7 +579,7 @@ async function maybeRefreshRemoteHistory() {
   }
 }
 
-function getRemoteSidebarProjection(workspaceAgentId, sidebarEntryId = workspaceAgentId) {
+export function getRemoteSidebarProjection(workspaceAgentId, sidebarEntryId = workspaceAgentId) {
   const localAgentId = String(workspaceAgentId || '').trim();
   const expectedSidebarEntryId = String(sidebarEntryId || localAgentId).trim();
   if (!localAgentId || !expectedSidebarEntryId) return [];
@@ -658,7 +707,7 @@ function closeRemoteConnectionsManager() {
   _rcManagerEditingId = null;
 }
 
-function openRemoteConnectionsManager() {
+export function openRemoteConnectionsManager() {
   const root = ensureManagerDom();
   root.style.display = '';
   hideManagerForm();
@@ -840,7 +889,7 @@ function tunnelDiagHtml(connId, tunnels) {
       <summary><span class="remote-tunnel-badge remote-tunnel-${escapeHtml(tunnel.tunnel || 'stopped')}">
         ${escapeHtml(t(`rcon_tunnel_${tunnel.tunnel}`))}
       </span> ${escapeHtml(t('rcon_mgr_tunnel_diag'))}</summary>
-      ${lines.length > 0 ? `<pre>${escapeHtml(lines.join('\n'))}</pre>` : `<pre>${escapeHtml(currentLanguage === 'zh' ? '暂无诊断输出' : 'No diagnostic output')}</pre>`}
+      ${lines.length > 0 ? `<pre>${escapeHtml(lines.join('\n'))}</pre>` : `<pre>${escapeHtml(getCurrentLanguage() === 'zh' ? '暂无诊断输出' : 'No diagnostic output')}</pre>`}
     </details>
   `;
 }
@@ -904,7 +953,9 @@ function applyRecordShapeForEdit(connection) {
 // toggle 的 upsert 请求体：列表 record.auth 是服务端脱敏形态（只有 configured
 // 标记，无密码明文），原样回传会被 upsert 的未知字段校验拒绝；省略 auth 即
 // 保持现有凭据，与编辑表单留空密码的语义一致。
-function buildToggleUpsertPayload(record, enabled) {
+// 导出供 test/remote-write.test.js 的「启用开关载荷」契约用例直接断言（面板
+// 交互面之外；这是唯一跨文件引用点，不是对外桥键）。
+export function buildToggleUpsertPayload(record, enabled) {
   const { auth: _redactedAuth, ...rest } = record;
   return { ...rest, enabled };
 }
@@ -990,7 +1041,7 @@ async function reloadManagerData() {
     // 连接全集同步：供 catalog 缓存判定「删除 vs 仅 disabled」。
     _rcAllConnectionIds = new Set(records.map((r) => r.id));
   } catch (error) {
-    list.innerHTML = `<div class="rcm-empty">${escapeHtml(currentLanguage === 'zh' ? '加载失败：' : 'Failed to load: ')}${escapeHtml(error.message)}</div>`;
+    list.innerHTML = `<div class="rcm-empty">${escapeHtml(getCurrentLanguage() === 'zh' ? '加载失败：' : 'Failed to load: ')}${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -999,7 +1050,7 @@ async function reloadManagerData() {
 // sessionId 解析宿主级命名空间 id；目录未含该会话时用调用方提供的宿主身份
 // 兜底拼接（新分支会话尚未进入 catalog 的窗口期）。非命名空间输入返回
 // null，调用方保持本地路径（ADR-0011 #1：本地身份永不进远程分支）。
-function getHostNamespaceIdForSession(namespacedSessionId, hostAgentId = '') {
+export function getHostNamespaceIdForSession(namespacedSessionId, hostAgentId = '') {
   const split = splitRemoteNamespaceId(namespacedSessionId);
   if (!split) return null;
   for (const section of _rcVisibleSections.values()) {
@@ -1026,7 +1077,7 @@ function getHostNamespaceIdForSession(namespacedSessionId, hostAgentId = '') {
 // 远程写响应中的裸会话 id → 命名空间 id（ADR-0012 数据层命名空间纪律）：
 // 远程分支/压缩产生的新会话以命名空间 id 进入既有列表刷新链，呈现层无
 // 远程特判。就地浅拷贝转换已知 id 字段；本地调用（split 失败）原样返回。
-function namespaceMutationResult(namespacedSessionId, result) {
+export function namespaceMutationResult(namespacedSessionId, result) {
   const split = splitRemoteNamespaceId(namespacedSessionId);
   if (!split || !result || typeof result !== 'object') return result;
   const prefix = `${REMOTE_NS}${split.connectionId}:`;
@@ -1054,7 +1105,7 @@ function namespaceMutationResult(namespacedSessionId, result) {
 
 // 轮询远程目录直到目标会话的 runtime 投影出现（远程写链路的就绪观察，
 // 与 R2-01 activate 的等待语义一致）。attempts × 400ms 内未出现返回 null。
-async function waitForRuntimeForSession(namespacedSessionId, attempts = 50) {
+export async function waitForRuntimeForSession(namespacedSessionId, attempts = 50) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const runtimeRef = resolveRuntimeRef(namespacedSessionId);
     if (runtimeRef) return runtimeRef;
@@ -1063,7 +1114,11 @@ async function waitForRuntimeForSession(namespacedSessionId, attempts = 50) {
   return null;
 }
 
-window.RemoteConnections = {
+// ── 对外命名空间对象（原 window.RemoteConnections 契约逐键不变）─────────────
+// 17 个已迁 ESM 消费方（workspace-actions / session-dialogs / ctx-menu-items /
+// navigation-core / trim-page / session-controls / …）经 `window.RemoteConnections`
+// 取用；成员名字与顺序保持迁移前完全一致。
+const remoteConnectionsApi = {
   refresh: refreshRemoteCatalog,
   openManager: openRemoteConnectionsManager,
   resolveRuntimeRef,
@@ -1083,3 +1138,35 @@ window.RemoteConnections = {
   getRemoteHistoryProjectBuckets,
   maybeRefreshRemoteHistory,
 };
+
+// ── 桥键注册 + 认领（domain `remote-connections`）──────────────────────────
+// 只有跨文件消费的键上桥：命名空间对象 + 其余 9 个被 classic 裸标识符
+// （sidebar-render / app-main / app-ui）或 window 直取（project-data、
+// workspace-actions、workspace-agents）取用的函数。管理面板内部实现、
+// 目录摄入 helper 与全部 _rc* 状态都留在模块作用域。
+const bridgeKeys = {
+  RemoteConnections: remoteConnectionsApi,
+  isRemoteNamespaceAgentId,
+  splitRemoteNamespaceId,
+  getRemoteSidebarProjection,
+  getVisibleRemoteEntries,
+  getRemoteSidebarProjectionVersion,
+  getRemoteHistoryProjectBuckets,
+  openRemoteConnectionsManager,
+  maybeRefreshRemoteCatalog,
+  maybeRefreshRemoteHistory,
+};
+window.KernelState.defineKey('remote-connections', 'RemoteConnections', bridgeKeys.RemoteConnections);
+window.KernelState.defineKey('remote-connections', 'isRemoteNamespaceAgentId', bridgeKeys.isRemoteNamespaceAgentId);
+window.KernelState.defineKey('remote-connections', 'splitRemoteNamespaceId', bridgeKeys.splitRemoteNamespaceId);
+window.KernelState.defineKey('remote-connections', 'getRemoteSidebarProjection', bridgeKeys.getRemoteSidebarProjection);
+window.KernelState.defineKey('remote-connections', 'getVisibleRemoteEntries', bridgeKeys.getVisibleRemoteEntries);
+window.KernelState.defineKey('remote-connections', 'getRemoteSidebarProjectionVersion', bridgeKeys.getRemoteSidebarProjectionVersion);
+window.KernelState.defineKey('remote-connections', 'getRemoteHistoryProjectBuckets', bridgeKeys.getRemoteHistoryProjectBuckets);
+window.KernelState.defineKey('remote-connections', 'openRemoteConnectionsManager', bridgeKeys.openRemoteConnectionsManager);
+window.KernelState.defineKey('remote-connections', 'maybeRefreshRemoteCatalog', bridgeKeys.maybeRefreshRemoteCatalog);
+window.KernelState.defineKey('remote-connections', 'maybeRefreshRemoteHistory', bridgeKeys.maybeRefreshRemoteHistory);
+window.KernelState.claim('remote-connections', {
+  get: (key) => bridgeKeys[key],
+  set: (key, value) => { bridgeKeys[key] = value; },
+});

@@ -12,22 +12,24 @@
  * consumePendingChatScrollRestore() in chat-viewport.js so the next full render
  * preserves the intended value regardless of the outgoing DOM's height.
  *
- * These tests load the real chat-viewport.js and the real switchAgent block
- * from app-main.js into a vm sandbox with a minimal fake DOM (clamping
- * scrollTop semantics), mirroring the harness style of
- * frontend-poll-session-consistency.test.js.
+ * 装载路线（P4 T2 批次）：chat-viewport 已迁 ESM，经 withP2EsmCase 的 `c.load`
+ * 真实 import；classic 相仍装真实 switchAgent 宿主（app-main 的
+ * createRuntimeSwitchHost）+ 分发器，并像 app-core 一样注册本夹具用到的桥键
+ * （orchestration:currentRuntimeAgentId / session-view-storage:currentMessages）。
+ * 视口状态仍是 app-core 的 owner 面：本夹具用 chatSurface 宿主把同一批字段
+ * 转发到本地 bag，app-main 侧裸读写语义不变。
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import vm from 'node:vm';
 
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { installRuntimeSwitch } from './helpers/runtime-switch.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const rendererSource = fs.readFileSync(new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
-const viewportSource = fs.readFileSync(new URL('../public/src/modules/chat-viewport.js', import.meta.url), 'utf8');
+const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -69,8 +71,15 @@ function createFakeContainer() {
   return container;
 }
 
-function createHandoffHarness({ cache = {} } = {}) {
+async function withHandoffHarness({ cache = {} } = {}, fn) {
   const container = createFakeContainer();
+  // 跟随按钮：模块在求值期经 document.getElementById 取到它（避让定位 observer
+  // 在本夹具里因缺少 .main-content 而保持空操作）。
+  const followLatestButton = {
+    classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
+    style: { setProperty() {}, removeProperty() {}, getPropertyValue: () => '' },
+    innerHTML: '',
+  };
   const calls = {
     setFollowLatest: [],
     saveCurrentRuntimeToCache: [],
@@ -86,11 +95,43 @@ function createHandoffHarness({ cache = {} } = {}) {
   const rafOrder = [];
   let rafSeq = 1;
 
+  // 晚绑定引用：globals 在 case 建立时就要就绪，而 sandbox / 模块命名空间
+  // 要到 classic 相与 async 相才可得。
+  const refs = { window: null, viewport: null };
+  const viewportState = {
+    followLatestEnabled: false,
+    suppressFollowScrollEvent: false,
+    lastManualScrollIntentAt: 0,
+    _progScrollCooldownUntil: 0,
+    followLatestEntryUntil: 0,
+    chatViewportObserversReady: false,
+    chatViewportObserverSuppressDepth: 0,
+    chatViewportObserverQuietUntil: 0,
+    chatViewportMutationObserver: null,
+    chatViewportResizeObserver: null,
+    chatViewportSettlementToken: 0,
+    chatViewportSettlementRaf: 0,
+    chatViewportSettlementTimer: null,
+    chatViewportSettlementContext: null,
+    chatViewportFollowRaf: 0,
+    chatViewportFollowToken: 0,
+    chatViewportFollowTransition: '',
+    assemblySideRailRevealTimer: null,
+  };
+  // chatSurface / assemblyUi 的宿主面：读写实时转发到本夹具的 bag（与 classic
+  // 侧裸读写的沙箱属性是同一份存储）。
+  const stateHost = new Proxy({}, {
+    get: (_target, key) => viewportState[key],
+    set: (_target, key, value) => { viewportState[key] = value; return true; },
+    has: () => true,
+  });
+
   // Chat height is driven by the message count (rows * 100px + no extra chrome):
   // renderCurrentMainView mirrors the real render() — the empty-state branch
   // rebuilds the DOM WITHOUT notifying (no lock), the full branch notifies
   // with the pending-restore-aware preserveTop.
   const renderChatFromMessages = () => {
+    const sandbox = refs.window;
     const rows = sandbox.currentMessages.length;
     container._rows = Array.from({ length: rows }, () => ({
       classList: { contains: () => false },
@@ -98,8 +139,8 @@ function createHandoffHarness({ cache = {} } = {}) {
     container.scrollHeight = rows > 0 ? rows * 100 : container.clientHeight;
     calls.renderMainView.push(sandbox.currentRuntimeAgentId);
     if (rows === 0) return; // real render() empty branch: no notify, no lock
-    const savedScrollTop = sandbox.__consumePendingChatScrollRestore() ?? container.scrollTop;
-    sandbox.__notifyChatViewportMutation({
+    const savedScrollTop = refs.viewport.consumePendingChatScrollRestore() ?? container.scrollTop;
+    refs.viewport.notifyChatViewportMutation({
       reason: 'render-full',
       shouldFollow: sandbox.followLatestEnabled,
       preserveTop: sandbox.followLatestEnabled ? null : savedScrollTop,
@@ -108,7 +149,7 @@ function createHandoffHarness({ cache = {} } = {}) {
     });
   };
 
-  const sandbox = {
+  const fakeGlobals = {
     console,
     Date,
     JSON,
@@ -119,7 +160,6 @@ function createHandoffHarness({ cache = {} } = {}) {
     Number,
     Object,
     Array,
-    window: { alert: () => {} },
 
     setTimeout(callback) {
       const id = timerSeq++;
@@ -153,43 +193,29 @@ function createHandoffHarness({ cache = {} } = {}) {
     },
 
     document: {
-      getElementById: () => null,
-      body: { contains: () => false },
+      getElementById: (id) => {
+        if (id === 'chat-container') return container;
+        if (id === 'follow-latest-btn') return followLatestButton;
+        return null;
+      },
+      body: { contains: () => true },
       createElement: () => ({ style: {}, classList: { add() {}, contains: () => false } }),
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {},
+      createElementNS: () => ({ style: {}, classList: { add() {}, contains: () => false } }),
     },
 
-    container,
-    followLatestButton: {
-      classList: { toggle() {}, contains: () => false },
-      innerHTML: '',
-    },
-    workspaceTabsBar: null,
-    currentMessages: [],
+    followLatestButton,
+    createP2BootstrapChatSurfaceHost: () => stateHost,
+    createP2BootstrapAssemblyHost: () => stateHost,
+    // chat-row-visibility（chat-viewport 的 import 链）读 domRefs.container。
+    createP2BootstrapDomHost: () => ({ container }),
 
     isChatSurfaceActive: () => true,
     shouldRenderWorkspaceSurface: () => false,
     escapeHtml: (value) => String(value),
     t: (key) => key,
-
-    // ── chat-viewport.js module state (normally declared in app-core.js) ──
-    followLatestEnabled: false,
-    suppressFollowScrollEvent: false,
-    lastManualScrollIntentAt: 0,
-    _progScrollCooldownUntil: 0,
-    followLatestEntryUntil: 0,
-    chatViewportObserversReady: false,
-    chatViewportObserverSuppressDepth: 0,
-    chatViewportObserverQuietUntil: 0,
-    chatViewportMutationObserver: null,
-    chatViewportResizeObserver: null,
-    chatViewportSettlementToken: 0,
-    chatViewportSettlementRaf: 0,
-    chatViewportSettlementTimer: null,
-    chatViewportSettlementContext: null,
-    chatViewportFollowRaf: 0,
-    chatViewportFollowToken: 0,
-    chatViewportFollowTransition: '',
-    assemblySideRailRevealTimer: null,
 
     // ── app-main.js module state ──
     focusedAgentId: 'hostA',
@@ -232,6 +258,7 @@ function createHandoffHarness({ cache = {} } = {}) {
     activateUserCollapseStateForContext: () => {},
     getRuntimeContextKey: (runtimeId) => `ctx:${runtimeId}`,
     restoreRuntimeFromCache: (runtimeId) => {
+      const sandbox = refs.window;
       const cached = cache[runtimeId];
       if (!cached) {
         sandbox._restoredScrollTop = null;
@@ -250,14 +277,13 @@ function createHandoffHarness({ cache = {} } = {}) {
     applySessionViewPatch: (patch) => {
       calls.applySessionViewPatch.push(patch);
       if (patch && Array.isArray(patch.messages)) {
-        sandbox.currentMessages = patch.messages.slice();
+        refs.window.currentMessages = patch.messages.slice();
       }
     },
     getEmptyOverviewSnapshot: () => ({}),
     getEmptyTodoPlan: () => ({}),
-    // setFollowLatest / beginFollowLatest* resolve to the REAL functions from
-    // chat-viewport.js (loaded below) — vm top-level function declarations
-    // overwrite same-named sandbox properties. Assert on followLatestEnabled.
+    // setFollowLatest / beginFollowLatest* 由 chat-viewport 域的桥键提供（模块在
+    // async 相装载后注册），switchAgent 的裸调用经 window 取到同一实现。
     renderAgentList: () => {},
     normalizeAgentIdentity: (value) => String(value || '').trim(),
     resolveNotificationCallingState: () => false,
@@ -268,13 +294,34 @@ function createHandoffHarness({ cache = {} } = {}) {
     loadAgents: async () => {},
   };
 
-  vm.createContext(sandbox);
-  vm.runInContext(viewportSource, sandbox);
-  installRuntimeSwitch(sandbox);
-  vm.runInContext('globalThis.__notifyChatViewportMutation = notifyChatViewportMutation;\n'
-    + 'globalThis.__setPendingChatScrollRestore = setPendingChatScrollRestore;\n'
-    + 'globalThis.__consumePendingChatScrollRestore = consumePendingChatScrollRestore;\n'
-    + 'globalThis.__switchAgent = window.switchAgent;', sandbox);
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      // 计时器 / rAF 已在 globals 里（沙箱与主 realm 同一份队列）。
+      // 本夹具不装载 app-core，但模块从这两个域读状态：按 app-core 同款初值与
+      // 访问器注册，classic 侧裸读写语义不变（写点落在桥/storage 上）。
+      // 初值取夹具的现场值（globals 已把它落到沙箱属性上，defineKey 换装访问器）。
+      sandbox.KernelState.defineKey('orchestration', 'currentRuntimeAgentId', fakeGlobals.currentRuntimeAgentId ?? null);
+      sandbox.KernelState.defineKey('session-view-storage', 'currentMessages', fakeGlobals.currentMessages ?? []);
+      // 视口状态字段：classic 侧裸读写与 chatSurface 宿主共用 viewportState bag。
+      for (const key of Object.keys(viewportState)) {
+        Object.defineProperty(sandbox, key, {
+          get: () => viewportState[key],
+          set: (value) => { viewportState[key] = value; },
+          configurable: true,
+        });
+      }
+      refs.window = sandbox;
+      // 分发器先于一切注册 data-action 的模块（markdown-utils 求值期注册动作）。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      // 真实 switchAgent 宿主（app-main 的 createRuntimeSwitchHost）。
+      installRuntimeSwitch(sandbox);
+    },
+    globals: fakeGlobals,
+  }, async (c) => {
+    const viewport = await c.load(CHAT_VIEWPORT);
+    refs.viewport = viewport;
+    const sandbox = c.window;
+    refs.window = sandbox;
 
   const flushTimers = () => {
     const pending = [...timers.values()];
@@ -291,17 +338,19 @@ function createHandoffHarness({ cache = {} } = {}) {
   };
   // notifyChatViewportMutation schedules setTimeout(0) → rAF(settle); settle
   // needs two stable metric frames before applying preserveTop / locking.
-  const settleViewport = async () => {
-    await sandbox.__switchAgent; // allow microtasks to drain
+  const settleViewport = async (pendingSwitch = null) => {
+    if (pendingSwitch) await pendingSwitch; // allow microtasks to drain
     flushTimers();
     for (let frame = 0; frame < 6; frame += 1) pumpFrame();
   };
+  const switchAgent = (runtimeId) => sandbox.switchAgent(runtimeId);
 
-  return { sandbox, container, calls, settleViewport, flushTimers };
+  return fn({ sandbox, viewport, switchAgent, container, calls, settleViewport, flushTimers });
+  });
 }
 
-test('reading anchor waits for a scroll pause and captures the latest position', () => {
-  const h = createHandoffHarness();
+test('reading anchor waits for a scroll pause and captures the latest position', async () => {
+  await withHandoffHarness({}, (h) => {
   h.container.scrollHeight = 2000;
   h.container._rows = Array.from({ length: 5 }, (_, i) => ({
     offsetTop: i * 300, offsetHeight: 300,
@@ -321,10 +370,11 @@ test('reading anchor waits for a scroll pause and captures the latest position',
   const anchor = h.sandbox.getRememberedChatViewportAnchorForContext('ctx:A');
   assert.equal(anchor.rowIdx, 2);
   assert.equal(anchor.offset, 20);
+  });
 });
 
-test('switch boundary can capture immediately; an outgoing idle save cannot overwrite the new context', () => {
-  const h = createHandoffHarness();
+test('switch boundary can capture immediately; an outgoing idle save cannot overwrite the new context', async () => {
+  await withHandoffHarness({}, (h) => {
   h.container.scrollHeight = 2000;
   h.container._rows = [{ offsetTop: 0, offsetHeight: 1600, classList: { contains: () => false } }];
   h.container.scrollTop = 400;
@@ -336,23 +386,23 @@ test('switch boundary can capture immediately; an outgoing idle save cannot over
   h.flushTimers();
   assert.equal(h.sandbox.getRememberedChatViewportAnchorForContext('ctx:A').offset, 400);
   assert.equal(h.sandbox.getRememberedChatViewportAnchorForContext('ctx:B'), null);
+  });
 });
 
 test('switching back to a longer session preserves the cached reading position', async () => {
-  const harness = createHandoffHarness({
-    cache: { B: { followLatest: false, scrollTop: 1000, messages: Array.from({ length: 30 }) } },
-  });
   // Outgoing session A is empty: its DOM cannot hold any scrollTop.
+  await withHandoffHarness({
+    cache: { B: { followLatest: false, scrollTop: 1000, messages: Array.from({ length: 30 }) } },
+  }, async (harness) => {
+    await harness.settleViewport(harness.switchAgent('B'));
 
-  await harness.sandbox.__switchAgent('B');
-  await harness.settleViewport();
-
-  assert.equal(
-    harness.container.scrollTop,
-    1000,
-    'reading position must survive switching back from a shorter session',
-  );
-  assert.equal(harness.calls.renderMainView.at(-1), 'B');
+    assert.equal(
+      harness.container.scrollTop,
+      1000,
+      'reading position must survive switching back from a shorter session',
+    );
+    assert.equal(harness.calls.renderMainView.at(-1), 'B');
+  });
 });
 
 test('switching back with follow enabled lands on the cached bottom, then the new bottom', async () => {
@@ -360,12 +410,10 @@ test('switching back with follow enabled lands on the cached bottom, then the ne
   // 底部，loadAgentData 到达后签名未变则 dedup 跳过（零跳动），有增长才重
   // 渲染落新底部 —— 与跟随模式正常收新消息同形。缓存 20 行（底 1600），新
   // 数据 40 行（底 3600）：中间态是缓存底而非空态，增长数据到达后落新底。
-  const harness = createHandoffHarness({
+  await withHandoffHarness({
     cache: { B: { followLatest: true, scrollTop: 100, messages: Array.from({ length: 20 }) } },
-  });
-
-  await harness.sandbox.__switchAgent('B');
-  await harness.settleViewport();
+  }, async (harness) => {
+  await harness.settleViewport(harness.switchAgent('B'));
 
   assert.equal(
     harness.calls.applySessionViewPatch.length,
@@ -389,15 +437,15 @@ test('switching back with follow enabled lands on the cached bottom, then the ne
   await harness.settleViewport();
 
   assert.equal(harness.container.scrollTop, 3600, 'single landing at the new bottom');
+  });
 });
 
 test('a pending restore never leaks into a cache-miss switch', async () => {
-  const harness = createHandoffHarness({ cache: {} });
+  await withHandoffHarness({ cache: {} }, async (harness) => {
   // Simulate a stale pending value left by an earlier aborted switch.
-  harness.sandbox.__setPendingChatScrollRestore(777);
+  harness.viewport.setPendingChatScrollRestore(777);
 
-  await harness.sandbox.__switchAgent('C'); // no cache entry for C
-  await harness.settleViewport();
+  await harness.settleViewport(harness.switchAgent('C')); // no cache entry for C
 
   assert.equal(
     harness.sandbox.followLatestEnabled,
@@ -414,6 +462,7 @@ test('a pending restore never leaks into a cache-miss switch', async () => {
     777,
     'a stale pending restore must not be applied to an unrelated session',
   );
+  });
 });
 
 test('wiring: render() consumes the pending restore instead of the live scrollTop', () => {

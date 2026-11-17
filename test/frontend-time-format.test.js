@@ -12,7 +12,6 @@ const CLASSIC_STACK = [
   'public/src/modules/markdown-bootstrap.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/remote-connections.js',
   'public/src/modules/runtime-status.js',
   'public/src/modules/sidebar-render.js',
   'public/src/app-ui.js',
@@ -99,6 +98,9 @@ test('real session rows retain their time indicator and escape content after the
       sandbox.window.ClawFW._modelPresets = [];
     },
   }, async (c) => {
+    // 远程连接域已迁 ESM（P4 T3）：真实 import 代替原 classic 标签位（生产顺序
+    // 在 runtime-status 之前、sidebar-render 之前）。
+    await c.load('public/src/modules/remote-connections.js');
     const i18n = await c.load('public/src/modules/i18n-environment-state.js');
     const timeFormat = await c.load('public/src/modules/time-format-host.js');
     const list = await c.load('public/src/modules/session-list-render.js');

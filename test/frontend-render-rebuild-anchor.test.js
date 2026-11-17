@@ -3,7 +3,8 @@
  * right after a session switch.
  *
  * The restore pipeline has three layers, all exercised here against the REAL
- * production sources (extracted from chat-renderer.js / chat-viewport.js):
+ * production modules — chat-renderer 迁 ESM 后整条 render() 由真实 import 执行
+ * （含锚点捕获 / 重建 / 应用与 notify），settlement 由真实 chat-viewport 结算链驱动：
  *   1. Settlement: the post-render stabilization must not write back a stale
  *      pixel while the user is mid-scroll (manual scroll intent wins).
  *   2. Same-context rebuild: a row anchor (rowIdx + offset) captured on the
@@ -22,35 +23,32 @@
  * whether the user had scrolled in the meantime, yanking the viewport out
  * from under them. Exactly one tremor per switch, felt only when the user
  * had scrolled.
+ *
+ * 装载路线（P4 T2 批次）：classic 相走真实先行脚本链（prepareClassicSandbox：
+ * app-core 的宿主工厂与 `getRuntimeContextKey` 是生产实现），chat-renderer /
+ * chat-viewport 走真实 import；容器是带序列布局（offsetTop / offsetHeight /
+ * 钳制 scrollTop）的夹具，innerHTML 重建那一刻换行高以模拟模板重排。
+ * 计时器：模块 realm 的 setTimeout / rAF 换成本用例自己的确定性队列，结算按
+ * 队列排空推进（不真实等待）；classic 相仍是沙箱 tracked 计时器。
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import vm from 'node:vm';
+
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
+
+const CHAT_RENDERER = 'public/src/modules/chat-renderer.js';
+const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
 
 const rendererSource = fs.readFileSync(new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
+// 源码级 wiring 断言用（settle 必须咨询手动滚动意图）。
 const viewportSource = fs.readFileSync(new URL('../public/src/modules/chat-viewport.js', import.meta.url), 'utf8');
 
-function sourceBetween(source, startMarker, endMarker) {
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start);
-  assert.notEqual(start, -1, `${startMarker} marker should exist`);
-  assert.notEqual(end, -1, `${endMarker} marker should exist`);
-  return source.slice(start, end);
-}
+const VIEW_H = 800;
 
-// The tail of render(): anchor capture → innerHTML rebuild → process state
-// → follow lock / anchor apply → notify. Ends before render()'s closing
-// brace (trimmed), so it can run as a vm snippet body.
-function extractRenderScrollBlock() {
-  const block = sourceBetween(
-    rendererSource,
-    'const chatContextKey = typeof getChatScrollContextKey === \'function\'',
-    'function stableSerializeForChatSignature',
-  );
-  return block.replace(/\r?\n\}\s*$/, '');
-}
+// ── 夹具：带序列布局的聊天容器 ─────────────────────────────────────────
 
 function makeClassList() {
   const set = new Set();
@@ -66,175 +64,63 @@ function makeClassList() {
   };
 }
 
-function createBaseSandbox({ container }) {
-  const timers = new Map();
-  const rafCallbacks = new Map();
-  const rafOrder = [];
-  let seq = 1;
-
-  const sandbox = {
-    console, Date, JSON, Math, Promise, Map, Set, Number, Object, Array, Boolean, String, isNaN, parseInt,
-    window: {},
-    setTimeout(callback) { const id = seq++; timers.set(id, callback); return id; },
-    clearTimeout(id) { timers.delete(id); },
-    requestAnimationFrame(callback) { const id = seq++; rafCallbacks.set(id, callback); rafOrder.push(id); return id; },
-    cancelAnimationFrame(id) { rafCallbacks.delete(id); const i = rafOrder.indexOf(id); if (i >= 0) rafOrder.splice(i, 1); },
-    MutationObserver: class { observe() {} disconnect() {} },
-    ResizeObserver: class { observe() {} disconnect() {} },
-    document: {
-      getElementById: () => null,
-      querySelector: () => null,
-      querySelectorAll: () => [],
-      createElement: () => ({ style: {}, classList: makeClassList(), setAttribute() {} }),
-      // applyChatViewportAnchor checks attachment; rows rebuilt by the
-      // render block are always new objects, so "detached" drives the
-      // walk-forward-from-rowIdx path — the path a real rebuild takes.
-      body: { contains: () => false },
-    },
-
-    container,
-    followLatestButton: { classList: { toggle() {}, add() {}, remove() {} }, innerHTML: '' },
-    workspaceTabsBar: null,
-    currentMessages: [],
-
-    isChatSurfaceActive: () => true,
-    shouldRenderWorkspaceSurface: () => false,
-    escapeHtml: (v) => String(v ?? ''),
-    t: (k) => k,
-    // chat-renderer.js 模块级状态（render 尾段 snippet 引用）：错误聚合组
-    // reveal 消费，纯 no-op stub
-    _pendingErrorGroupReveal: new Set(),
-
-    // chat-viewport.js module state (app-core.js declarations)
-    followLatestEnabled: false,
-    suppressFollowScrollEvent: false,
-    lastManualScrollIntentAt: 0,
-    _progScrollCooldownUntil: 0,
-    followLatestEntryUntil: 0,
-    chatViewportObserversReady: true,
-    chatViewportObserverSuppressDepth: 0,
-    chatViewportObserverQuietUntil: 0,
-    chatViewportMutationObserver: null,
-    chatViewportResizeObserver: null,
-    chatViewportSettlementToken: 0,
-    chatViewportSettlementRaf: 0,
-    chatViewportSettlementTimer: null,
-    chatViewportSettlementContext: null,
-    chatViewportFollowRaf: 0,
-    chatViewportFollowToken: 0,
-    chatViewportFollowTransition: 'locked',
-    assemblySideRailRevealTimer: null,
-  };
-  sandbox.window = sandbox;
-  vm.createContext(sandbox);
-  vm.runInContext(viewportSource, sandbox, { filename: 'chat-viewport.js' });
-
-  const flushTimers = () => {
-    const pending = [...timers.values()];
-    timers.clear();
-    pending.forEach((cb) => cb());
-  };
-  const pumpFrame = () => {
-    const ids = rafOrder.splice(0);
-    ids.forEach((id) => {
-      const cb = rafCallbacks.get(id);
-      rafCallbacks.delete(id);
-      if (cb) cb();
-    });
-  };
-  // notify schedules setTimeout(0) → rAF(settle); settle applies after two
-  // stable metric frames.
-  const settleViewport = () => {
-    flushTimers();
-    for (let frame = 0; frame < 6; frame += 1) pumpFrame();
-  };
-  return { sandbox, settleViewport };
-}
-
-/** Minimal clamped-scrollTop container for settlement-level tests. */
-function createBareContainer() {
-  const container = {
-    _scrollTop: 0,
-    clientHeight: 400,
-    scrollHeight: 4000,
-    _writes: [],
-    addEventListener() {},
-    removeEventListener() {},
+/** 行对象：布局由夹具注入的 eager top/height 提供（等价于已布局的真实行）。 */
+function makeLayoutRow(top, height) {
+  return {
+    offsetTop: top,
+    offsetHeight: height,
+    dataset: {},
+    style: {},
+    classList: makeClassList(),
+    id: '',
     querySelector: () => null,
     querySelectorAll: () => [],
+    closest: () => null,
+    matches: () => false,
+    insertAdjacentHTML() {},
+    remove() {},
+    getBoundingClientRect: () => ({ top: 0, bottom: height, left: 0, right: 0, width: 0, height }),
   };
-  Object.defineProperty(container, 'scrollTop', {
-    get() { return container._scrollTop; },
-    set(value) {
-      const next = Math.max(0, Math.min(Number(value) || 0, container.scrollHeight - container.clientHeight));
-      if (next !== container._scrollTop) {
-        container._writes.push(next);
-        container._scrollTop = next;
-      }
-    },
-  });
-  return container;
 }
 
-// ── Fix A: settlement respects manual scroll intent ─────────────────────
-
-test('settle(): a recent manual scroll suppresses the preserveTop write-back', () => {
-  const container = createBareContainer();
-  const { sandbox, settleViewport } = createBaseSandbox({ container });
-  container.scrollTop = 1200; // user's live reading position
-
-  // The user is mid-scroll when the settlement fires.
-  sandbox.lastManualScrollIntentAt = Date.now();
-  container._writes.length = 0; // drop the setup write
-  vm.runInContext(`
-    notifyChatViewportMutation({
-      reason: 'render-full', shouldFollow: false, preserveTop: 500,
-      forceSnap: false, allowChase: false,
-    });
-  `, sandbox);
-  settleViewport();
-
-  assert.equal(container.scrollTop, 1200, 'user position must win over the stale pixel');
-  assert.deepEqual(container._writes, [], 'no scroll write may yank the viewport back');
-});
-
-test('settle(): without manual intent the preserveTop write-back still applies', () => {
-  const container = createBareContainer();
-  const { sandbox, settleViewport } = createBaseSandbox({ container });
-  container.scrollTop = 1200;
-  sandbox.lastManualScrollIntentAt = 0;
-
-  vm.runInContext(`
-    notifyChatViewportMutation({
-      reason: 'render-full', shouldFollow: false, preserveTop: 500,
-      forceSnap: false, allowChase: false,
-    });
-  `, sandbox);
-  settleViewport();
-
-  assert.equal(container.scrollTop, 500, 'switch restore must still be applied');
-});
-
-// ── Fix B: same-context rebuild restores by row anchor ───────────────────
-
-const VIEW_H = 800;
-
-/** Sequential-layout container: rows are plain objects with eager tops. */
+/**
+ * 序列布局容器：`setRows` 决定行高，scrollHeight 由行高求和推导，scrollTop
+ * 按浏览器语义钳制并记录写入。`innerHTML` 赋值触发 `_onInnerHtml`——渲染重建
+ * 那一刻换上新行集，模拟「模板重排后同一行的位置变了」。
+ */
 function createLayoutContainer() {
   const container = {
     _scrollTop: 0,
     _writes: [],
+    _rows: [],
+    _onInnerHtml: null,
     clientHeight: VIEW_H,
     dataset: {},
-    _rows: [],
+    style: {},
+    id: 'chat-container',
+    className: '',
+    classList: makeClassList(),
     addEventListener() {},
     removeEventListener() {},
-    getBoundingClientRect: () => ({ top: 0 }),
-    querySelector(sel) { return sel === '.message-row' ? (container._rows[0] || null) : null; },
-    querySelectorAll(sel) { return sel === '.message-row' ? container._rows : []; },
-    // The render block assigns innerHTML; the test swaps the row set here to
-    // simulate the DOM rebuild between anchor capture and apply.
-    _onInnerHtml: null,
+    getBoundingClientRect: () => ({ top: 0, bottom: VIEW_H, left: 0, right: 0, width: 1000, height: VIEW_H }),
+    querySelector(sel) {
+      if (sel === '.message-row') return container._rows[0] || null;
+      return null;
+    },
+    querySelectorAll(sel) {
+      if (sel === '.message-row' || sel.endsWith('.message-row')) return container._rows.slice();
+      return [];
+    },
+    getElementsByTagName: () => [],
+    getElementsByClassName: () => [],
+    setRows(heights) {
+      let top = 0;
+      container._rows = heights.map((height) => {
+        const row = makeLayoutRow(top, height);
+        top += height;
+        return row;
+      });
+    },
   };
   Object.defineProperty(container, 'innerHTML', {
     set() { if (container._onInnerHtml) container._onInnerHtml(); },
@@ -242,7 +128,7 @@ function createLayoutContainer() {
   });
   Object.defineProperty(container, 'scrollHeight', {
     get() {
-      const total = container._rows.reduce((sum, r) => sum + r.offsetHeight, 0);
+      const total = container._rows.reduce((sum, row) => sum + row.offsetHeight, 0);
       return Math.max(total, VIEW_H);
     },
   });
@@ -260,120 +146,223 @@ function createLayoutContainer() {
       }
     },
   });
-  container.setRows = (heights) => {
-    let top = 0;
-    container._rows = heights.map((h) => {
-      const row = { offsetTop: top, offsetHeight: h, classList: makeClassList() };
-      top += h;
-      return row;
-    });
-  };
   return container;
 }
 
-function createRenderHarness({ contextKey = 'ctx:rt-1', domContextKey = contextKey } = {}) {
-  const container = createLayoutContainer();
-  const { sandbox, settleViewport } = createBaseSandbox({ container });
-
-  // render() dependencies outside chat-viewport.js (all no-ops for the
-  // scroll block; the real render calls them around the rebuild).
-  sandbox.getChatScrollContextKey = () => contextKey;
-  sandbox.getRememberedChatScrollForContext = () => null;
-  sandbox.enhanceMathInElement = () => {};
-  sandbox.enhanceMarkdownTables = () => {};
-  sandbox.updateRollbackActionVisibility = () => {};
-  sandbox.applyConversationProcessState = () => {};
-  sandbox.restoreUserCollapseState = () => {};
-  sandbox.ensureChatRuntimeIndicator = () => {};
-  sandbox.showChatProcess = false;
-
-  // The outgoing DOM was rendered for `domContextKey` by a previous render.
-  container.dataset.chatRenderContext = domContextKey;
-
-  // Spy on notify calls without disturbing the real settlement machinery.
-  vm.runInContext(`
-    globalThis.__notifyCalls = [];
-    globalThis.__recordAndNotify = (opts) => {
-      __notifyCalls.push(JSON.parse(JSON.stringify(opts)));
-      return notifyChatViewportMutation(opts);
-    };
-  `, sandbox);
-
-  /**
-   * Runs the REAL render() scroll block: capture anchor on the outgoing
-   * rows → innerHTML (fires rowSwap) → anchor apply → notify (recorded).
-   * savedScrollTop goes through the real pendingChatScrollRestore channel
-   * (setPendingChatScrollRestore), matching the production handoff.
-   * Wrapped in an IIFE: the block declares const/let and may be re-run.
-   */
-  const runRenderScrollBlock = ({ nextHeights, savedScrollTop = null } = {}) => {
-    container._onInnerHtml = () => container.setRows(nextHeights);
-    const snippet = extractRenderScrollBlock()
-      .replace('notifyChatViewportMutation({', '__recordAndNotify({');
-    vm.runInContext(`
-      setPendingChatScrollRestore(${JSON.stringify(savedScrollTop)});
-      ;(function (html, shouldFollowAfterMutation) {
-        ${snippet}
-      })('', false);
-    `, sandbox, { filename: 'render-scroll-block.js' });
+function makeFollowLatestButton() {
+  return {
+    innerHTML: '',
+    style: {},
+    classList: makeClassList(),
+    dataset: {},
+    closest: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    getBoundingClientRect: () => ({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 }),
   };
-  return { container, sandbox, runRenderScrollBlock, settleViewport };
 }
 
-test('same-context rebuild: row anchor keeps the reading row under the viewport top across a layout shift', () => {
-  const h = createRenderHarness();
-  // 30 rows × 100px. Reading position: row 15 exactly at the viewport top.
-  h.container.setRows(Array.from({ length: 30 }, () => 100));
-  h.container.scrollTop = 1500;
-  assert.equal(h.container.scrollTop, 1500);
-
-  // Rebuild lands: row 0 grows 100 → 400 (tool template swap above the
-  // viewport). Everything below shifts down 300px.
-  h.runRenderScrollBlock({ nextHeights: [400, ...Array.from({ length: 29 }, () => 100)] });
-
-  // Pixel restore would keep scrollTop 1500 — pointing 300px into the wrong
-  // content. The anchor restore must land on the SAME row at its new top.
-  assert.equal(h.container.scrollTop, 1800, 'viewport must follow the anchored row to its new offsetTop');
-  const topRow = h.container._rows.find((r) => r.offsetTop + r.offsetHeight > h.container.scrollTop);
-  assert.equal(topRow.offsetTop, 1800, 'the row at the viewport top must be the pre-rebuild reading row');
-  const notify = h.sandbox.__notifyCalls.at(-1);
-  assert.equal(notify.preserveTop, 1800, 'settlement must re-assert the anchored position, not the stale pixel');
-});
-
-test('cross-context DOM: no anchor is captured, the pixel path stays', () => {
-  const h = createRenderHarness({ domContextKey: 'ctx:previous-session' });
-  h.container.setRows(Array.from({ length: 30 }, () => 100));
-  h.container.scrollTop = 1500;
-
-  h.runRenderScrollBlock({
-    nextHeights: Array.from({ length: 30 }, () => 100),
-    savedScrollTop: 777, // e.g. pendingChatScrollRestore handoff value
+function makeDocument(container, followLatestButton) {
+  const generic = () => ({
+    style: {}, dataset: {}, children: [], innerHTML: '', textContent: '', id: '',
+    classList: makeClassList(),
+    addEventListener() {}, removeEventListener() {}, appendChild() {},
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    closest() { return null; }, matches() { return false; }, remove() {},
+    insertAdjacentHTML() {},
+    getBoundingClientRect() { return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 }; },
   });
+  return {
+    addEventListener() {}, removeEventListener() {},
+    getElementById: (id) => {
+      if (id === 'chat-container') return container;
+      if (id === 'follow-latest-btn') return followLatestButton;
+      return generic();
+    },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: () => generic(),
+    createTextNode: (text) => ({ textContent: text }),
+    // applyChatViewportAnchor 检查旧行是否仍挂载：重建后的行都是新对象，
+    // 「已脱离」正是真实重建走的 walk-forward-from-rowIdx 路径。
+    body: { contains: () => false, appendChild() {}, classList: makeClassList() },
+    head: generic(), documentElement: generic(),
+  };
+}
 
-  assert.equal(h.container.scrollTop, 1500, 'no synchronous anchor apply may run for a foreign DOM');
-  const notify = h.sandbox.__notifyCalls.at(-1);
-  assert.equal(notify.preserveTop, 777, 'the pixel restore value must flow to the settlement unchanged');
-  assert.equal(h.container.dataset.chatRenderContext, 'ctx:rt-1',
-    'the rebuild must stamp the incoming context for the next same-context render');
+// ── 用例上下文：classic 先行链 + 真实模块 + 确定性计时器 ──────────────
+
+async function withRenderHarness({ domContextKey = null } = {}, fn) {
+  const container = createLayoutContainer();
+  const followLatestButton = makeFollowLatestButton();
+  const document = makeDocument(container, followLatestButton);
+
+  // 模块 realm 的计时器队列（结算 / 跟随动画）：排空即推进，不真实等待。
+  const timers = new Map();
+  let seq = 1;
+  const fakeTimers = {
+    setTimeout: (callback) => { const id = seq++; timers.set(id, callback); return id; },
+    clearTimeout: (id) => { timers.delete(id); },
+    setInterval: () => 0,
+    clearInterval: () => {},
+    requestAnimationFrame: (callback) => fakeTimers.setTimeout(() => callback(Date.now())),
+    cancelAnimationFrame: (id) => fakeTimers.clearTimeout(id),
+  };
+  const drain = (limit = 40) => {
+    for (let round = 0; round < limit && timers.size > 0; round += 1) {
+      const pending = [...timers.values()];
+      timers.clear();
+      pending.forEach((callback) => callback());
+    }
+  };
+
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      prepareClassicSandbox(sandbox);
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
+    },
+    globals: {
+      document,
+      ...fakeTimers,
+      MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } },
+      ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+      updateChatProcessToggle: () => {},
+      marked: {
+        Renderer: class { constructor() {} },
+        setOptions() {},
+        parse: (value) => String(value ?? ''),
+      },
+      createPollCoordinatorHost: () => ({
+        run: () => Promise.resolve(),
+        fastInterval: () => 2000,
+        setTimeout: (callback, delay) => setTimeout(callback, delay),
+        clearTimeout: (id) => clearTimeout(id),
+      }),
+    },
+  }, async (c) => {
+    const renderer = await c.load(CHAT_RENDERER);
+    const viewport = await c.load(CHAT_VIEWPORT);
+    const surface = c.window.createP2BootstrapChatSurfaceHost();
+    // 生产默认跟随开启；本文件的观察面是非跟随路径。
+    surface.followLatestEnabled = false;
+    surface.showChatProcess = true;
+    c.window.currentRuntimeAgentId = 'rt-1';
+    const contextKey = c.window.getRuntimeContextKey('rt-1');
+    container.dataset.chatRenderContext = domContextKey === null ? contextKey : domContextKey;
+    return fn({
+      c, renderer, viewport, surface, container, followLatestButton, contextKey, drain,
+    });
+  });
+}
+
+const MESSAGES = Array.from({ length: 30 }, (_, i) => ({ role: 'user', content: `m${i}` }));
+
+// ── Fix A: settlement respects manual scroll intent ─────────────────────
+
+test('settle(): a recent manual scroll suppresses the preserveTop write-back', async () => {
+  await withRenderHarness({}, (h) => {
+    h.container.setRows(Array.from({ length: 30 }, () => 100));
+    h.container.scrollTop = 1500;
+    h.container._writes.length = 0;
+
+    // The user is mid-scroll when the settlement fires.
+    h.viewport.registerManualScrollIntent();
+    h.viewport.notifyChatViewportMutation({
+      reason: 'render-full', shouldFollow: false, preserveTop: 500,
+      forceSnap: false, allowChase: false,
+    });
+    h.drain();
+
+    assert.equal(h.container.scrollTop, 1500, 'user position must win over the stale pixel');
+    assert.deepEqual(h.container._writes, [], 'no scroll write may yank the viewport back');
+  });
 });
 
-test('A+B together: anchor lands, user keeps scrolling, settlement does not yank back', () => {
-  const h = createRenderHarness();
-  h.container.setRows(Array.from({ length: 30 }, () => 100));
-  h.container.scrollTop = 1500;
+test('settle(): without manual intent the preserveTop write-back still applies', async () => {
+  await withRenderHarness({}, (h) => {
+    h.container.setRows(Array.from({ length: 30 }, () => 100));
+    h.container.scrollTop = 1500;
+    h.container._writes.length = 0;
 
-  h.runRenderScrollBlock({ nextHeights: [400, ...Array.from({ length: 29 }, () => 100)] });
-  assert.equal(h.container.scrollTop, 1800);
+    h.viewport.notifyChatViewportMutation({
+      reason: 'render-full', shouldFollow: false, preserveTop: 500,
+      forceSnap: false, allowChase: false,
+    });
+    h.drain();
 
-  // Between the rebuild and the settlement (~280ms window) the user scrolls on.
-  h.container.scrollTop = 2000;
-  h.sandbox.lastManualScrollIntentAt = Date.now();
-  h.settleViewport();
+    assert.equal(h.container.scrollTop, 500, 'switch restore must still be applied');
+  });
+});
 
-  assert.equal(h.container.scrollTop, 2000, 'the settlement must not overwrite the user\'s live position');
+// ── Fix B: same-context rebuild restores by row anchor ───────────────────
+
+test('same-context rebuild: row anchor keeps the reading row under the viewport top across a layout shift', async () => {
+  await withRenderHarness({}, (h) => {
+    // 30 rows × 100px. Reading position: row 15 exactly at the viewport top.
+    h.container.setRows(Array.from({ length: 30 }, () => 100));
+    h.container.scrollTop = 1500;
+    assert.equal(h.container.scrollTop, 1500);
+    h.container._writes.length = 0;
+
+    // Rebuild lands: row 0 grows 100 → 400 (tool template swap above the
+    // viewport). Everything below shifts down 300px.
+    h.container._onInnerHtml = () => h.container.setRows([400, ...Array.from({ length: 29 }, () => 100)]);
+    h.renderer.render(MESSAGES);
+
+    // Pixel restore would keep scrollTop 1500 — pointing 300px into the wrong
+    // content. The anchor restore must land on the SAME row at its new top.
+    assert.equal(h.container.scrollTop, 1800, 'viewport must follow the anchored row to its new offsetTop');
+    const topRow = h.container._rows.find((r) => r.offsetTop + r.offsetHeight > h.container.scrollTop);
+    assert.equal(topRow.offsetTop, 1800, 'the row at the viewport top must be the pre-rebuild reading row');
+
+    // 结算重放同一锚点（不是重建前的像素值）。
+    h.drain();
+    assert.equal(h.container.scrollTop, 1800, 'settlement must re-assert the anchored position, not the stale pixel');
+    assert.deepEqual(h.container._writes, [1800], 'the pre-rebuild pixel must never be written back');
+  });
+});
+
+test('cross-context DOM: no anchor is captured, the pixel path stays', async () => {
+  await withRenderHarness({ domContextKey: 'runtime:previous-session' }, (h) => {
+    h.container.setRows(Array.from({ length: 30 }, () => 100));
+    h.container.scrollTop = 1500;
+    h.container._writes.length = 0;
+
+    // e.g. pendingChatScrollRestore handoff value from switchAgent
+    h.viewport.setPendingChatScrollRestore(777);
+    h.container._onInnerHtml = () => h.container.setRows(Array.from({ length: 30 }, () => 100));
+    h.renderer.render(MESSAGES);
+
+    assert.equal(h.container.scrollTop, 1500, 'no synchronous anchor apply may run for a foreign DOM');
+    assert.equal(h.container.dataset.chatRenderContext, h.contextKey,
+      'the rebuild must stamp the incoming context for the next same-context render');
+
+    h.drain();
+    assert.equal(h.container.scrollTop, 777, 'the pixel restore value must flow to the settlement unchanged');
+  });
+});
+
+test('A+B together: anchor lands, user keeps scrolling, settlement does not yank back', async () => {
+  await withRenderHarness({}, (h) => {
+    h.container.setRows(Array.from({ length: 30 }, () => 100));
+    h.container.scrollTop = 1500;
+
+    h.container._onInnerHtml = () => h.container.setRows([400, ...Array.from({ length: 29 }, () => 100)]);
+    h.renderer.render(MESSAGES);
+    assert.equal(h.container.scrollTop, 1800);
+
+    // Between the rebuild and the settlement (~280ms window) the user scrolls on.
+    h.container.scrollTop = 2000;
+    h.viewport.registerManualScrollIntent();
+    h.drain();
+
+    assert.equal(h.container.scrollTop, 2000, 'the settlement must not overwrite the user\'s live position');
+  });
 });
 
 // ── Wiring: the real render() source must contain the fixed paths ───────
+// 行为已由上面的真实 render() 用例覆盖；这两条是「将来有人删掉修复路径」的
+// 文本级护栏，成本近零，保留。
 
 test('wiring: render() captures/applies the anchor and stamps the render context', () => {
   assert.ok(rendererSource.includes('captureChatViewportAnchor()'),

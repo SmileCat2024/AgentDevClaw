@@ -17,8 +17,9 @@
  *
  * 装载路线（**单实例** KernelState）：classic 相用真实 `prepareClassicSandbox`
  * （index.html 的先行脚本序，boot 体与周期排程中和），再补 index.html 后段的
- * classic 生产脚本（thread-store / remote-connections）；ESM 侧经 withP2EsmCase +
- * `c.load` 真实 import，与 classic 相共用同一沙箱（= window）与同一 KernelState，
+ * classic 生产脚本（thread-store）；ESM 侧经 withP2EsmCase + `c.load` 真实
+ * import（含已迁 ESM 的 remote-connections），与 classic 相共用同一沙箱
+ * （= window）与同一 KernelState，
  * debugPanel 是 app-core 的真实 host 工厂，宿主工厂就是生产实现本身——不手写
  * 空工厂大袋。
  *
@@ -214,11 +215,9 @@ function createHarness() {
         // applyTheme / applyLanguage 与周期排程一并中和（用例不驱动首屏）。
         prepareClassicSandbox(sandbox);
         // index.html 里仍是 classic 的生产脚本（先行序不含它们）：
-        //   - thread-store.js：thread-store-domain 装载期取它的宿主工厂；
-        //   - remote-connections.js：sidebar-render 的宿主闭包与 debug-summary-upload
-        //     都按裸标识符/window 读 isRemoteNamespaceAgentId（真实实现，不用桩）。
+        //   - thread-store.js：thread-store-domain 装载期取它的宿主工厂。
+        //（remote-connections 已迁 ESM：见 withHarness，模块相真实 import。）
         sandbox.loadSource('public/src/modules/thread-store.js');
-        sandbox.loadSource('public/src/modules/remote-connections.js');
         fillMissingLateGlobals(sandbox);
         // 渲染效果出口：数据流与快照合并保持真实，只记录生产渲染入口的调用点。
         // 侧栏布局渲染器（index.html 后段的 classic sidebar-layout.js）在本文件
@@ -258,6 +257,18 @@ function createHarness() {
 }
 
 /** 等待 microtask / 已应答请求收敛。 */
+/**
+ * 用例入口：远程连接域已迁 ESM（P4 T3）→ 每个 case 先真实 import 它，
+ * 再跑用例体（生产里 sidebar-render 的宿主闭包与 debug-summary-upload 都读它的
+ * isRemoteNamespaceAgentId 真实实现，不用桩）。
+ */
+function withHarness(harness, fn) {
+  return withP2EsmCase(harness.options, async (c) => {
+    await c.load('public/src/modules/remote-connections.js');
+    return fn(c);
+  });
+}
+
 const settle = async (rounds = 8) => {
   for (let index = 0; index < rounds; index += 1) {
     await new Promise((resolve) => setImmediate(resolve));
@@ -322,7 +333,7 @@ function assertNoUnexpectedNoise(harness) {
 
 test('接口面：四个入口是命名导出，动作注册不变，装载期不取数', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const module = await c.load(DEBUG_SUMMARY);
     for (const name of ENTRY_EXPORTS) {
       assert.equal(typeof module[name], 'function', `必须导出 ${name}`);
@@ -338,7 +349,7 @@ test('接口面：四个入口是命名导出，动作注册不变，装载期�
 
 test('注销面：退役的两桥与零消费两键在 window 上都不留同名键', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const module = await c.load(DEBUG_SUMMARY);
     for (const name of ENTRY_EXPORTS) {
       // 逐键证据：既没有 KernelState 访问器，也没有同名数据属性
@@ -354,7 +365,7 @@ test('注销面：退役的两桥与零消费两键在 window 上都不留同名
 
 test('状态所有权：classic 侧同名 window 写入不转发进模块（无桥）', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const module = await c.load(DEBUG_SUMMARY);
     const original = module.openSummaryPopup;
     const probe = function openSummaryPopupProbe() {};
@@ -371,7 +382,7 @@ test('状态所有权：classic 侧同名 window 写入不转发进模块（无�
 
 test('repo 过滤：写回 classic owner 并关闭表面动画后重渲主视图', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const module = await c.load(DEBUG_SUMMARY);
     const debugPanel = (await c.load(DEBUG_PANEL)).debugPanel;
     const entryState = await c.load(RENDER_ENTRY_STATE);
@@ -412,7 +423,7 @@ function openUploadDialog(c, harness, module) {
 
 test('上传：非 .tgz 与空选择都被拒绝，合法 .tgz 放行', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const module = await c.load(DEBUG_SUMMARY);
     const ui = openUploadDialog(c, harness, module);
     assert.equal(ui.submit.disabled, true, '打开时提交禁用');
@@ -436,7 +447,7 @@ test('上传：非 .tgz 与空选择都被拒绝，合法 .tgz 放行', async ()
 
 test('上传成功：POST multipart、成功文案、1s 后关窗并失效 detail 缓存', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const module = await c.load(DEBUG_SUMMARY);
     const store = await c.load(AGENT_STORE);
     store.setAllAgents([{ id: 'runtime-1', name: 'PH', source: 'prebuilt', runtime_session_id: 'runtime-1' }]);
@@ -476,7 +487,7 @@ test('上传成功：POST multipart、成功文案、1s 后关窗并失效 detai
 
 test('上传失败：错误文案 + 恢复提交按钮，不发二次请求', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const module = await c.load(DEBUG_SUMMARY);
     harness.control.uploadFails = true;
     const ui = openUploadDialog(c, harness, module);
@@ -503,7 +514,7 @@ test('上传失败：错误文案 + 恢复提交按钮，不发二次请求', as
 
 test('summary：同一会话的旧响应不得覆盖新请求（guard token 过期语义）', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const module = await c.load(DEBUG_SUMMARY);
     harness.control.holdSummary = true;
 

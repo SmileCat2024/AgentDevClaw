@@ -107,8 +107,10 @@ function extractWorkspaceActions(html) {
 // 内仍可做「渲染按钮 → runWorkspaceAction」的端到端断言，因为 ESM 侧对 classic
 // 宿主的取用全部经 window.*（沙箱即 window），classic 侧对已迁实现的取用经
 // kernel-state 桥键在调用时点解析。
-// 仍是 classic 的三段继续 loadSource：action-dispatcher / remote-connections /
-// workspace-actions。capabilityFor 为集成期契约，按工单签名 stub（缺省不注入）。
+// remote-connections 亦已迁 ESM（P4 T3）：真实 import，命名空间对象经
+// window.RemoteConnections 桥键投放；仍是 classic 的 action-dispatcher /
+// workspace-actions 继续 loadSource。capabilityFor 为集成期契约，按工单签名
+// stub（缺省不注入，注入点在模块求值之后）。
 const REMOTE_CONNECTIONS = 'public/src/modules/remote-connections.js';
 const PROJECT_DATA = 'public/src/modules/project-data.js';
 const ACTION_DISPATCHER = 'public/src/modules/action-dispatcher.js';
@@ -362,15 +364,11 @@ async function createSandbox({
       sandbox.renderAgentList = () => {};
       Object.assign(sandbox, createBootstrapHosts(sandbox));
       sandbox.loadSource(ACTION_DISPATCHER);
-      sandbox.loadSource(REMOTE_CONNECTIONS);
   // workspace-actions 的 import 链现在含线程交互域（thread-store-domain），
   // 它在模块求值期取 classic 引擎的窄宿主 createThreadStoreHost()。装真实引擎
   // 而不是写同形桩：宿主契约（状态引用 + 内部操作）只有一份实现。
   sandbox.loadSource('public/src/modules/thread-store.js');
 
-      if (capabilityFor) {
-        sandbox.window.RemoteConnections.capabilityFor = capabilityFor;
-      }
       // project-data 已迁 ESM（真实 import 见用例体）：它自己的桥键
       // （getAgentWorkspaceState / getPathLeaf / hasWorkspaceSessions /
       // getFeatureCreatorProjects / getAgentCreatorProjects / updateAgentRecord /
@@ -416,6 +414,10 @@ async function createSandbox({
       `);
     },
   }, async (c) => {
+    // 远程目录（已迁 ESM）：先求值，后面的 capabilityFor 集成期 stub 与各消费方
+    // 的 window.RemoteConnections 取用才有着落。
+    await c.load(REMOTE_CONNECTIONS);
+    if (capabilityFor) c.window.RemoteConnections.capabilityFor = capabilityFor;
     // 生产顺序：owner 模块先于使用方装载（classic workspace-actions 与
     // session-list-render 在调用时点经桥键 / window 读到 project-data 的实现）。
     await c.load(PROJECT_DATA);

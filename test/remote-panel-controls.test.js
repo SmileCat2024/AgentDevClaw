@@ -656,11 +656,13 @@ async function panelCase({
       );
       // app-main（编排域）的幂等键入口：本沙箱不装载 app-main，按契约给确定性值。
       sandbox.newIdempotencyKey = () => 'test-idem-key';
-      sandbox.loadSource('public/src/modules/remote-connections.js');
       sandbox.loadSource('public/src/modules/claw-host.js');
     },
     globals: { URLSearchParams },
   }, async (c) => {
+    // 远程目录 accessor（已迁 ESM，P4 T3）：真实 import 后 window.RemoteConnections
+    // 才存在，面板的身份解析与 capabilityFor 门控都经它取数。
+    await c.load('public/src/modules/remote-connections.js');
     const unlink = linkHostGlobals(c, PANEL_HOST_GLOBALS);
     // 守卫开关的操作反馈已改走 toast-notify 的具名导出：把真实模块对象的 show
     // 换成无副作用记录器（本文件不断言 toast 呈现面）。

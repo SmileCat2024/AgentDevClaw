@@ -13,17 +13,20 @@
  *    fixed-pixel breakpoints, so it tracks input height changes and never
  *    falls back onto the input at narrow breakpoints.
  *
- * Sources are extracted from the real frontend files into a vm sandbox
- * (same pattern as frontend-model-info-roundtrip.test.js).
+ * 第一组（分隔条上限）仍从 app-ui.js（classic）切取纯函数源码进 vm 沙箱；
+ * 第二组（跟随按钮避让）在 chat-viewport 迁 ESM（P4 T2）后改走真实 import：
+ * withP2EsmCase 的 classic 相装真实 app-core（视口状态 owner 与两个 bootstrap
+ * host 工厂），异步相 c.load 真实模块后调用 `updateFollowLatestButtonPosition`。
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const uiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
-const viewportSource = fs.readFileSync(new URL('../public/src/modules/chat-viewport.js', import.meta.url), 'utf8');
+const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
 
 // ── Source extractors ──────────────────────────────────────
 
@@ -33,15 +36,6 @@ function extractCeilingsSource() {
   assert.notEqual(start, -1, 'sidebar ceiling start marker should exist');
   assert.notEqual(end, -1, 'cascade comment marker should exist');
   return uiSource.slice(start, end);
-}
-
-function extractFollowPositionSource() {
-  // Include the module constants the function body reads.
-  const start = viewportSource.indexOf('const FOLLOW_LATEST_AVOID_MAX_WIDTH');
-  const end = viewportSource.indexOf('/** 惰性建立尺寸跟踪', start);
-  assert.notEqual(start, -1, 'avoid constants marker should exist');
-  assert.notEqual(end, -1, 'observer ensure marker should exist');
-  return viewportSource.slice(start, end);
 }
 
 // ── Splitter drag ceilings ─────────────────────────────────
@@ -106,7 +100,7 @@ function makeRect({ top = 0, bottom = 0, height = 0 }) {
   return { top, bottom, height };
 }
 
-function loadFollowPositionSandbox({ panelOpen = false, mainWidth = 1400, mainBottom = 900, inputTop = 700, inputHeight = 200, cardTop = null, cardHeight = null, hasCard = true }) {
+async function loadFollowPositionSandbox({ panelOpen = false, mainWidth = 1400, mainBottom = 900, inputTop = 700, inputHeight = 200, cardTop = null, cardHeight = null, hasCard = true }) {
   const styleProps = new Map();
   const button = {
     style: {
@@ -130,54 +124,88 @@ function loadFollowPositionSandbox({ panelOpen = false, mainWidth = 1400, mainBo
     getBoundingClientRect: () => makeRect({ top: inputTop, height: inputHeight }),
     querySelector: (sel) => (hasCard && sel === '.user-input-card' ? inputCard : null),
   };
-  const sandbox = {
-    followLatestButton: button,
-    document: {
-      getElementById: (id) => (id === 'user-input-container' ? inputHost : null),
-    },
-    bottomVar: styleProps,
+  // chat-viewport 在求值期等价重建 app-core 的两个 DOM 引用（模块内查询）。
+  const container = {
+    scrollTop: 0, scrollHeight: 0, clientHeight: 0,
+    addEventListener() {}, removeEventListener() {},
+    querySelector() { return null; }, querySelectorAll() { return []; },
   };
-  vm.createContext(sandbox);
-  vm.runInContext(extractFollowPositionSource(), sandbox);
-  sandbox.updateFollowLatestButtonPosition();
-  return { styleProps, sandbox };
+  const document = {
+    activeElement: null,
+    readyState: 'complete',
+    getElementById(id) {
+      if (id === 'chat-container') return container;
+      if (id === 'follow-latest-btn') return button;
+      if (id === 'user-input-container') return inputHost;
+      return null;
+    },
+    querySelector(sel) { return sel === '.main-content' ? main : null; },
+    querySelectorAll() { return []; },
+    createElement: () => ({ style: {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false }, setAttribute() {}, appendChild() {}, querySelector() { return null; }, querySelectorAll() { return []; } }),
+    createTextNode: (text) => ({ textContent: text }),
+    addEventListener() {}, removeEventListener() {},
+    body: { contains: () => true }, head: {}, documentElement: {},
+  };
+
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      // 真实加载序：分发器（ClawFW.actions）→ app-core（视口状态 owner +
+      // createP2Bootstrap*Host 工厂）。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource('public/src/app-core.js');
+    },
+    globals: {
+      document,
+      // chat-viewport 的 import 链会求值 markdown-utils；本文件不渲染 markdown，
+      // 只按生产桥键面提供这两个观测点（escapeHtml / marked 在求值期被捕获）。
+      escapeHtml: (value) => String(value == null ? '' : value),
+      renderer: {},
+      marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: (value) => String(value ?? '') },
+      isChatSurfaceActive: () => true,
+      shouldRenderWorkspaceSurface: () => false,
+    },
+  }, async (c) => {
+    const viewport = await c.load(CHAT_VIEWPORT);
+    viewport.updateFollowLatestButtonPosition();
+    return { styleProps, sandbox: c.window, viewport };
+  });
 }
 
-test('avoidance active on narrow main content: bottom tracks the real input top edge', () => {
+test('avoidance active on narrow main content: bottom tracks the real input top edge', async () => {
   // main bottom 900, input top 700 → button bottom = 200 + 10 (gap).
-  const { styleProps } = loadFollowPositionSandbox({ mainWidth: 1000 });
+  const { styleProps } = await loadFollowPositionSandbox({ mainWidth: 1000 });
   assert.equal(styleProps.get('--follow-latest-bottom'), '210px');
 });
 
-test('avoidance active when panel is open even on a wide main content', () => {
-  const { styleProps } = loadFollowPositionSandbox({ panelOpen: true, mainWidth: 1400 });
+test('avoidance active when panel is open even on a wide main content', async () => {
+  const { styleProps } = await loadFollowPositionSandbox({ panelOpen: true, mainWidth: 1400 });
   assert.equal(styleProps.get('--follow-latest-bottom'), '210px');
 });
 
-test('no avoidance on wide main content: fixed-pixel default applies', () => {
-  const { styleProps } = loadFollowPositionSandbox({ mainWidth: 1400 });
+test('no avoidance on wide main content: fixed-pixel default applies', async () => {
+  const { styleProps } = await loadFollowPositionSandbox({ mainWidth: 1400 });
   assert.equal(styleProps.size, 0);
 });
 
-test('growing input height moves the button up by the same amount', () => {
+test('growing input height moves the button up by the same amount', async () => {
   const narrow = { mainWidth: 1000, inputTop: 700, inputHeight: 200 };
   const grown = { mainWidth: 1000, inputTop: 560, inputHeight: 340 };
-  const a = parseFloat(loadFollowPositionSandbox(narrow).styleProps.get('--follow-latest-bottom'));
-  const b = parseFloat(loadFollowPositionSandbox(grown).styleProps.get('--follow-latest-bottom'));
+  const a = parseFloat((await loadFollowPositionSandbox(narrow)).styleProps.get('--follow-latest-bottom'));
+  const b = parseFloat((await loadFollowPositionSandbox(grown)).styleProps.get('--follow-latest-bottom'));
   // Input grew by 140px (3 extra lines) → button rides up 140px with it
   // (a larger `bottom` = farther from the main-content bottom edge).
   assert.equal(b - a, 140);
 });
 
-test('zero-height input container (non-chat surface) clears the override', () => {
-  const { styleProps } = loadFollowPositionSandbox({ mainWidth: 1000, inputHeight: 0 });
+test('zero-height input container (non-chat surface) clears the override', async () => {
+  const { styleProps } = await loadFollowPositionSandbox({ mainWidth: 1000, inputHeight: 0 });
   assert.equal(styleProps.size, 0);
 });
 
-test('measures the input card, not the taller wrapper (runtime pill excluded)', () => {
+test('measures the input card, not the taller wrapper (runtime pill excluded)', async () => {
   // Wrapper top includes the runtime pill above the card; the button must
   // hug the card's own top edge (100px lower than the wrapper top).
-  const { styleProps } = loadFollowPositionSandbox({
+  const { styleProps } = await loadFollowPositionSandbox({
     mainWidth: 1000,
     inputTop: 640, // wrapper top (pill included)
     inputHeight: 260,
@@ -188,13 +216,13 @@ test('measures the input card, not the taller wrapper (runtime pill excluded)', 
   assert.equal(styleProps.get('--follow-latest-bottom'), '170px');
 });
 
-test('metadata-only host never becomes the follow-button positioning anchor', () => {
-  const { styleProps } = loadFollowPositionSandbox({ mainWidth: 1000, hasCard: false });
+test('metadata-only host never becomes the follow-button positioning anchor', async () => {
+  const { styleProps } = await loadFollowPositionSandbox({ mainWidth: 1000, hasCard: false });
   assert.equal(styleProps.size, 0);
 });
 
-test('zero-height input card (no input surface) clears the override', () => {
-  const { styleProps } = loadFollowPositionSandbox({
+test('zero-height input card (no input surface) clears the override', async () => {
+  const { styleProps } = await loadFollowPositionSandbox({
     mainWidth: 1000,
     inputTop: 700,
     inputHeight: 200,

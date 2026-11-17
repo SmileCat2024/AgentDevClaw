@@ -22,6 +22,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
+import { t as realT } from '../public/src/i18n.js';
 
 const LAZY_TOOL_CONTENT = 'public/src/modules/lazy-tool-content.js';
 
@@ -157,6 +159,8 @@ async function withHarness({ messages } = {}, fn) {
   const live = { readMessages: () => [] };
   const globals = {
     document: rig.document,
+    // markdown-bootstrap 装载期需要 vendor 的 marked（renderer 由它自建）。
+    marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: (value) => String(value ?? '') },
     // input-actions 已 import 真实 poll 模块（poll-coordinator-host）：按生产
     // 宿主 seam 提供最小面，本文件不驱动轮询、不再保留 window.poll 桩。
     createPollCoordinatorHost: () => ({
@@ -168,22 +172,12 @@ async function withHarness({ messages } = {}, fn) {
     CSS: { supports: () => true },
     isChatSurfaceActive: () => true,
     shouldRenderWorkspaceSurface: () => false,
+    // 以下是仍需晚绑定的 classic 宿主函数（app-core / app-ui / app-main /
+    // runtime-status）。渲染依赖（markdown-utils / template-engine /
+    // message-timeline / tool-progress）已由 chat-renderer 静态 import 真实模块，
+    // 夹具不再为它们留桩。
     escapeHtml: (v) => String(v ?? ''),
-    // message-timeline.js：时间分隔线包装（无时间锚场景透传行 html）
-    prependTimeSeparatorHtml: (_messages, _index, rowHtml) => rowHtml,
-    formatChatTimestamp: (ts) => 'T' + ts,
     t: (k) => k,
-    renderMarkdown: (s) => String(s ?? ''),
-    parseToolResult: (content) => ({ success: true, data: content }),
-    renderJsonHighlight: (d) => '<pre>' + String(d).slice(0, 20) + '</pre>',
-    applyTemplate: () => '<div>args</div>',
-    enhanceMathInElement() {},
-    enhanceMarkdownTables() {},
-    clearTruncatedHighlightData() {},
-    getToolDisplayName: (n) => n || 'Tool',
-    getToolRenderTemplate: () => ({}),
-    resolveToolProgressForCall: () => null,
-    requestRollbackEdit() {},
     switchAgent() {},
     ensureChatRuntimeIndicator() {},
     getEmptyStateHtml: () => '<div class="empty-state">empty</div>',
@@ -192,20 +186,23 @@ async function withHarness({ messages } = {}, fn) {
   };
   return withP2EsmCase({
     classic: (sandbox) => {
+      // chat-renderer 的 import 链触达整条装载期宿主工厂链：按生产先行脚本序整链
+      // 装载（boot 体与周期排程由基座关掉），再补 markdown-bootstrap（markdown-utils
+      // 求值期捕获 escapeHtml / renderer / marked）。
+      prepareClassicSandbox(sandbox);
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
+      // 夹具的确定性计时器 / rAF 必须晚于基座落位（基座会关闭 rAF 与周期排程）。
       Object.assign(sandbox, rig.fakeTimers);
-      // index.html 真实加载序：分发器先于一切声明 data-action 的模块装载，
-      // 随后 i18n、app-core，最后是各业务 classic 模块。
-      sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/chat-viewport.js');
-      // input-helpers 已迁 ESM（P4 T2）：classic 标签删除，改由 async 相 c.load 装载。
-      // 会话视图同步实现：input-actions 的 token/提交策略经宿主要求它（生产加载序）
-      sandbox.loadSource('public/src/modules/session-view-state.js');
-      sandbox.loadSource('public/src/modules/chat-renderer.js');
     },
     globals,
   }, async (c) => {
+    const renderer = await c.load('public/src/modules/chat-renderer.js');
+    // 时间分隔线的真实格式化（同一 case 图内的实例）
+    const timeline = await c.load('public/src/modules/message-timeline.js');
+    await c.load('public/src/modules/chat-viewport.js');
+    // chat-viewport 的 import 链把 markdown-utils 的真实实现带进来（并注册其桥键），
+    // 会覆盖 globals 里同名桩；本文件的观测面要求桩生效，故在装载后重新落一遍。
+    Object.assign(c.window, globals);
     // input-helpers 已迁 ESM（P4 T2）：真实 import 装载，桥键由模块自身注册。
     await c.load('public/src/modules/input-helpers.js');
     const surface = c.window.createP2BootstrapChatSurfaceHost();
@@ -229,6 +226,8 @@ async function withHarness({ messages } = {}, fn) {
     mod.setProcessWindowingDisabled(true);
     return fn(Object.assign(rig, {
       c,
+      renderer,
+      formatTimestamp: timeline.formatChatTimestamp,
       messages: () => c.window.currentMessages,
       resetSignature: () => { c.window._lastRenderedChatSig = ''; },
       render: () => c.read('render(currentMessages)'),
@@ -247,7 +246,7 @@ function countMessageRows(html) {
 
 test('getAssistantErrorMeta: execution 优先，前缀回退，普通消息为 null', async () => {
   await withHarness({}, (h) => {
-    const meta = h.c.window.getAssistantErrorMeta;
+    const meta = h.renderer.getAssistantErrorMeta;
 
     const structured = failedMsg('限流', 'rate_limit');
     structured.execution.error.statusCode = 429;
@@ -284,7 +283,7 @@ test('红框携带机器事实 title 与 auth_required 动作链接', async () =
   ] }, (h) => {
     h.render();
     assert.match(h.html(), /title="auth_required/);
-    assert.match(h.html(), /error_action_reconfigure/);
+    assert.match(h.html(), new RegExp(realT('error_action_reconfigure')));
     assert.match(h.html(), /data-action="chat.openSettings"/);
   });
 });
@@ -293,7 +292,7 @@ test('红框携带机器事实 title 与 auth_required 动作链接', async () =
 
 test('computeAssistantErrorGroups: 连续同 category 成组，user 断组、异类断组、单条不成组', async () => {
   await withHarness({}, (h) => {
-    const plan = h.c.window.computeAssistantErrorGroups;
+    const plan = h.renderer.computeAssistantErrorGroups;
 
     const msgs = [
       { role: 'user', content: 'q1' },
@@ -326,14 +325,14 @@ test('computeAssistantErrorGroups: 前缀回退消息（无 execution）不参�
       { role: 'assistant', content: '[API Error: client_error] 旧文案' },
       failedMsg('e2', 'rate_limit'),
     ];
-    const { groups } = h.c.window.computeAssistantErrorGroups(msgs);
+    const { groups } = h.renderer.computeAssistantErrorGroups(msgs);
     assert.equal(groups.length, 0);
   });
 });
 
 test('isErrorGroupAffected: 相邻同 category 判定', async () => {
   await withHarness({}, (h) => {
-    const affected = h.c.window.isErrorGroupAffected;
+    const affected = h.renderer.isErrorGroupAffected;
     const msgs = [
       { role: 'user', content: 'q' },
       failedMsg('e1', 'rate_limit'),
@@ -349,19 +348,19 @@ test('isErrorGroupAffected: 相邻同 category 判定', async () => {
 
 test('getErrorCategoryLabel: category → i18n 档位映射', async () => {
   await withHarness({}, (h) => {
-    const label = h.c.window.getErrorCategoryLabel;
-    assert.equal(label('rate_limit'), 'error_cat_rate_limit');
-    assert.equal(label('connection_error'), 'error_cat_network');
-    assert.equal(label('connection_timeout'), 'error_cat_network');
-    assert.equal(label('ssl_cert_error'), 'error_cat_network');
-    assert.equal(label('auth_error'), 'error_cat_auth');
-    assert.equal(label('invalid_api_key'), 'error_cat_auth');
-    assert.equal(label('auth_required'), 'error_cat_auth');
-    assert.equal(label('server_error'), 'error_cat_server');
-    assert.equal(label('server_overload'), 'error_cat_server');
-    assert.equal(label('prompt_too_long'), 'error_cat_context');
-    assert.equal(label('client_error'), 'error_cat_request');
-    assert.equal(label('runtime_error'), 'error_cat_request');
+    const label = h.renderer.getErrorCategoryLabel;
+    assert.equal(label('rate_limit'), realT('error_cat_rate_limit'));
+    assert.equal(label('connection_error'), realT('error_cat_network'));
+    assert.equal(label('connection_timeout'), realT('error_cat_network'));
+    assert.equal(label('ssl_cert_error'), realT('error_cat_network'));
+    assert.equal(label('auth_error'), realT('error_cat_auth'));
+    assert.equal(label('invalid_api_key'), realT('error_cat_auth'));
+    assert.equal(label('auth_required'), realT('error_cat_auth'));
+    assert.equal(label('server_error'), realT('error_cat_server'));
+    assert.equal(label('server_overload'), realT('error_cat_server'));
+    assert.equal(label('prompt_too_long'), realT('error_cat_context'));
+    assert.equal(label('client_error'), realT('error_cat_request'));
+    assert.equal(label('runtime_error'), realT('error_cat_request'));
   });
 });
 
@@ -379,15 +378,16 @@ test('render(): 组成员合并为单行组卡，默认折叠，含明细与时�
     // user 行 + 组行 = 2（三条失败不各占一行）
     assert.equal(countMessageRows(h.html()), 2);
     assert.match(h.html(), /error-group-head/);
-    assert.match(h.html(), /error_group_title/);
-    assert.match(h.html(), /共 3 次|error_group_count/);
-    assert.match(h.html(), /error_cat_rate_limit/);
+    assert.match(h.html(), new RegExp(realT('error_group_title')));
+    assert.match(h.html(), new RegExp(realT('error_group_count').replace('{n}', '3')));
+    assert.match(h.html(), new RegExp(realT('error_cat_rate_limit')));
     // 默认折叠：head/body 无 expanded，明细仍输出（CSS 收起）
     assert.doesNotMatch(h.html(), /error-group-head expanded/);
     assert.doesNotMatch(h.html(), /error-group-body expanded/);
     assert.match(h.html(), /error-group-item/);
-    assert.match(h.html(), /T1000/);
-    assert.match(h.html(), /T3000/);
+    // 时间戳由真实 message-timeline 格式化（原 stub 已不参与模块内部渲染）
+    assert.match(h.html(), new RegExp(h.formatTimestamp(1000)));
+    assert.match(h.html(), new RegExp(h.formatTimestamp(3000)));
   });
 });
 

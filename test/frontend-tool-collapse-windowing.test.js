@@ -19,7 +19,7 @@
  *    delta of rows fully above the viewport (follow mode skips compensation;
  *    the bottom-lock settlement absorbs height changes there).
  *
- * 装载路线（P2）：chat-viewport / chat-renderer / input-helpers 仍 classic
+ * 装载路线（P4 T2）：chat-viewport / chat-renderer 已迁 ESM，改真实 import；
  * （沙箱内按 index.html 真实加载序执行：action-dispatcher → i18n → app-core →
  * chat-viewport → input-helpers → chat-renderer，顶层函数即生产入口）；
  * lazy-tool-content 已迁 ESM，经 withP2EsmCase 的 `c.load` 真实 import——七个
@@ -33,6 +33,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 const LAZY_TOOL_CONTENT = 'public/src/modules/lazy-tool-content.js';
 const WINDOWING_MODE = 'public/src/modules/p2-w2-1-process-windowing-mode.js';
@@ -64,6 +65,9 @@ function makeRow({ role, realH, toolName = '', msgId = '' }) {
     _msgId: msgId,
     classList: makeClassList(),
     dataset: {},
+    // 真实元素面：markdown 表格增强会给 wrap 挂 scroll 监听。
+    addEventListener() {},
+    removeEventListener() {},
   };
   row.classList.add(role);
 
@@ -334,6 +338,8 @@ async function withHarness(fn) {
   const rig = createRig();
   const globals = {
     document: rig.document,
+    // markdown-bootstrap 装载期需要 vendor 的 marked（renderer 由它自建）。
+    marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: (value) => String(value ?? '') },
     // input-actions 已 import 真实 poll 模块（poll-coordinator-host）：按生产
     // 宿主 seam 提供最小面，本文件不驱动轮询、不再保留 window.poll 桩。
     createPollCoordinatorHost: () => ({
@@ -344,42 +350,32 @@ async function withHarness(fn) {
     }),
     isChatSurfaceActive: () => true,
     shouldRenderWorkspaceSurface: () => false,
+    // 以下是仍需晚绑定的 classic 宿主函数；渲染依赖（markdown-utils /
+    // template-engine / message-timeline / tool-progress）已由 chat-renderer 静态
+    // import，夹具不再为它们留桩。
     escapeHtml: (v) => String(v ?? ''),
     t: (k) => k,
-    renderMarkdown: (s) => '<p>' + String(s).slice(0, 20) + '</p>',
-    parseToolResult: (content) => ({ success: true, data: content }),
-    renderJsonHighlight: (d) => '<pre>' + String(d).slice(0, 20) + '</pre>',
-    applyTemplate: () => '<div>args</div>',
-    enhanceMathInElement() {},
-    enhanceMarkdownTables() {},
-    clearTruncatedHighlightData() {},
-    getToolDisplayName: (n) => n || 'Tool',
-    getToolRenderTemplate: () => ({}),
-    resolveToolProgressForCall: () => null,
-    requestRollbackEdit() {},
     switchAgent() {},
     ensureChatRuntimeIndicator() {},
     getEmptyStateHtml: () => '<div class="empty-state">empty</div>',
     renderCurrentMainView() {},
     getCurrentHostAgentRecord: () => null,
-    prependTimeSeparatorHtml: (_messages, _index, rowHtml) => rowHtml,
   };
   return withP2EsmCase({
     classic: (sandbox) => {
+      // chat-renderer 的 import 链触达整条装载期宿主工厂链：按生产先行脚本序整链
+      // 装载（boot 体与周期排程由基座关掉），再补 markdown-bootstrap
+      // （markdown-utils 求值期捕获 escapeHtml / renderer / marked）。
+      prepareClassicSandbox(sandbox);
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
+      // 夹具的确定性计时器 / rAF 必须晚于基座落位（基座会关闭 rAF 与周期排程）。
       Object.assign(sandbox, rig.fakeTimers);
-      // index.html 真实加载序：分发器先于一切声明 data-action 的模块装载，
-      // 随后 i18n、app-core，最后是各业务 classic 模块。
-      sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/chat-viewport.js');
-      // input-helpers 已迁 ESM（P4 T2）：classic 标签删除，改由 async 相 c.load 装载。
-      // 会话视图同步实现：input-actions 的 token/提交策略经宿主要求它（生产加载序）
-      sandbox.loadSource('public/src/modules/session-view-state.js');
-      sandbox.loadSource('public/src/modules/chat-renderer.js');
     },
     globals,
   }, async (c) => {
+    // 视口域先装载（桥键 + container 监听先就位），随后是渲染域。
+    await c.load('public/src/modules/chat-viewport.js');
+    const renderer = await c.load('public/src/modules/chat-renderer.js');
     // input-helpers 已迁 ESM（P4 T2）：真实 import 装载，桥键由模块自身注册。
     await c.load('public/src/modules/input-helpers.js');
     const surface = c.window.createP2BootstrapChatSurfaceHost();
@@ -398,6 +394,7 @@ async function withHarness(fn) {
     const mode = (await c.load(WINDOWING_MODE)).processWindowingMode;
     return fn(Object.assign(rig, {
       c, surface, mode,
+      renderer,
       read: (expression) => c.read(expression),
       showChatProcess: (value) => { surface.showChatProcess = value; },
       followLatest: (value) => { surface.followLatestEnabled = value; },
@@ -984,10 +981,10 @@ test('streaming append: new tool rows and card-bearing assistant rows fold at bi
       if (child && String(child.className || '').includes('expand-toggle-bar')) appendedBars.push(child);
       return origRowAppend(child);
     };
-    h.read(`
-      applyConversationProcessState(container);
-      applyCollapseLogic(container, ${startIndex});
-    `);
+    h.read('applyConversationProcessState(container);');
+    // applyCollapseLogic 未上桥（生产只经 appendNewMessages 内部调用）——用例直接
+    // 用命名导出，避免依赖不存在的 window 面。
+    h.renderer.applyCollapseLogic(h.container, startIndex);
 
     assert.equal(toolEntry.content.classList.contains('collapsed'), true,
       'new long tool result row must fold at birth');
@@ -1013,7 +1010,12 @@ test('appendNewMessages runs the process-state reveal before the fold-at-birth s
     // pre-made row stub (order recording only — semantics live in the test above).
     const stubQueue = [];
     const inserted = [];
-    h.container.insertAdjacentHTML = () => { inserted.push(stubQueue.shift() || null); };
+    h.container.insertAdjacentHTML = () => {
+      const row = stubQueue.shift() || null;
+      // 真实 append 会把新行挂进容器：登记到 entries，折叠/过程扫描才能看见它。
+      if (row) h.container._entries.push({ row });
+      inserted.push(row);
+    };
     Object.defineProperty(h.container, 'lastElementChild', {
       configurable: true,
       get: () => inserted[inserted.length - 1] || null,
@@ -1028,21 +1030,18 @@ test('appendNewMessages runs the process-state reveal before the fold-at-birth s
       { role: 'tool', toolCallId: 'c1', content: '{"ok":true}' },
     ];
 
-    // 生产装配点：appendNewMessages 对这两个 classic 全局函数的调用顺序即契约。
-    const order = [];
-    h.c.window.applyConversationProcessState = () => { order.push('process-state'); };
-    h.c.window.applyCollapseLogic = (root, start) => { order.push('collapse:' + start); };
-    h.c.window.updateRollbackActionVisibility = () => {};
-    h.c.window.updateFollowLatestButton = () => {};
-    h.c.window.enhanceMarkdownTables = () => {};
-
+    // 契约：折叠出生扫描必须在过程可见性揭示之后执行——否则新行仍是
+    // display:none（scrollHeight=0 不可测），长工具行永远不会在出生时折叠。
+    // 迁 ESM 后 applyConversationProcessState / applyCollapseLogic 都是模块内部
+    // 导入，无法再用 window 同名包装记录调用顺序，改为断言可观测结果：
+    // 追加后新工具行处于 collapsed（折叠成立即证明扫描发生在揭示之后）。
     h.read('appendNewMessages([currentMessages[2]], 2)');
 
-    assert.deepEqual(
-      order,
-      ['process-state', 'collapse:1'],
-      'fold-at-birth must run after the reveal (hidden rows cannot be measured)');
-    assert.equal(toolStub.row.classList.contains('process-hidden'), true,
-      'the append pre-hide itself must stay (display:none before any layout)');
+    assert.equal(toolStub.content.classList.contains('collapsed'), true,
+      'fold-at-birth runs after the reveal: the appended long tool row is collapsed');
+    // show 模式下 reveal 会摘掉 append 时的预隐藏（预隐藏本身的语义由 hide 模式
+    // 用例钉住；这里断言 reveal 确实发生在新行上）。
+    assert.equal(toolStub.row.classList.contains('process-hidden'), false,
+      'show process: the reveal clears the append-time pre-hide on the new row');
   });
 });

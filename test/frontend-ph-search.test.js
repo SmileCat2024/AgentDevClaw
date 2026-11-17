@@ -92,8 +92,6 @@ async function setup({ remoteConnections = false } = {}, probe) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // app-core 提供 p2-bootstrap 工厂与 i18n 桥初值；i18n 提供 classic t()。
       sandbox.loadSource('public/src/app-core.js');
-      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      if (remoteConnections) sandbox.loadSource('public/src/modules/remote-connections.js');
       // ESM 图求值期读取的 loader host 工厂与 classic 宿主函数（最小契约替身）。
       sandbox.run(`
         renderCurrentMainView = function () {};
@@ -125,6 +123,9 @@ async function setup({ remoteConnections = false } = {}, probe) {
       fetch(url) { return new Promise((resolve) => requests.push({ url: String(url), resolve })); },
     },
   }, async (c) => {
+    // ph-search-locate 的远程身份解析经 window.RemoteConnections（已迁 ESM，P4 T3）；
+    // 只有远程身份用例才装它，其余用例保持「远程域缺席」的最小面。
+    if (remoteConnections) await c.load('public/src/modules/remote-connections.js');
     const list = await c.load(PH_SESSION_LIST);
     const input = (q) => {
       list.phOnSearchInput(q);

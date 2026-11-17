@@ -2,11 +2,10 @@
  * 聊天导航时间线点击 → 「先中断跟随」的跨模块契约
  * （chat-nav-timeline 点击 → chat-viewport 的 registerManualScrollIntent）。
  *
- * 装载路线（P2）：chat-nav-timeline 已迁 ESM，经 withP2EsmCase 的 `c.load`
- * 真实 import——模块底部启动分支在 readyState === 'complete' 时立即初始化，
- * 与本用例的完整 DOM 桩一致。chat-viewport 仍 classic，按 index.html 真实
- * 加载序装载（action-dispatcher → i18n → app-core → chat-viewport），
- * 导航点击通过它提供的 window.registerManualScrollIntent 真实生效。
+ * 装载路线（P4 T2 批次）：chat-viewport 已迁 ESM，与本模块同在 async 相经
+ * withP2EsmCase 的 `c.load` 真实 import（视口先装载，其桥键
+ * `registerManualScrollIntent` 供 chat-nav-timeline 的 window 晚绑定取用）。
+ * classic 相只剩分发器与 app-core（视口状态的 classic owner）。
  *
  * 公开入口：不再直接调用私有 `_onBarClick` 或注入 `_navUserIndices`；
  * 用例构建真实 DOM（container 行 + `#msg-7` + `#chat-nav-timeline`），
@@ -16,6 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
+const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
 const NAV_TIMELINE = 'public/src/modules/chat-nav-timeline.js';
 
 function makeClassList(initial = []) {
@@ -152,7 +152,6 @@ test('clicking the conversation navigation cancels follow-latest before jumping'
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/chat-viewport.js');
     },
     globals,
   }, async (c) => {
@@ -176,6 +175,8 @@ test('clicking the conversation navigation cancels follow-latest before jumping'
     assert.equal(surface.followLatestEnabled, true, 'precondition: follow-latest is on');
     c.window.currentMessages = [{ role: 'user', content: 'target' }];
 
+    // chat-viewport 已迁 ESM：先装载（注册桥键与 container 滚动监听）。
+    await c.load(CHAT_VIEWPORT);
     await c.load(NAV_TIMELINE);
     // 模块初始化后时间线里恰有一个 user 消息 slot；点击它 = 用户点击导航条。
     assert.equal(rig.navTimeline.children.length, 1, 'one nav slot per user message');

@@ -445,7 +445,8 @@
   <script src="./src/modules/wg-threads-panel.js"></script>
   <script src="./src/modules/wg-popover.js"></script>
   <script src="./src/modules/wg-core.js"></script>
-  <script src="./src/modules/remote-connections.js"></script>
+  <!-- remote-connections 已迁 ESM（P4 T3）：classic 标签删除，由 p4-entry 装载；
+       10 个桥键供侧栏投影 / 远程写链路使用。 -->
   <!-- chat-context-bar 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载；
        桥键 updateChatContextBar 供 app-ui 首屏 render 分支裸调。 -->
   <!-- workspace-docset 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载；
@@ -454,7 +455,8 @@
   <script type="module" src="./src/modules/markdown-utils.js"></script>
   <!-- theme-lang 已并入 i18n-environment-state（P4 T1）：classic 标签删除；
        applyTheme / applyLanguage 由 boot.js 直接 import 调用。 -->
-  <script src="./src/modules/chat-viewport.js"></script>
+  <!-- chat-viewport 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       29 个桥键供 app-ui / app-main / app-core / chat-renderer / chat-scroll 等使用。 -->
   <!-- debug-overview / debug-preflight / debug-mcp 已迁 ESM：classic 标签删除，
        由 p2-entry 的 p2-w2-11-debug-deep-bootstrap / p2-debug-small-bootstrap 装载。
        debug-logs 与 debug-features-hooks 仍是 classic 唯一实现（render / onOpen
@@ -511,7 +513,9 @@
        persistent-input / input-composer 调用。 -->
   <script src="./src/modules/persistent-input.js"></script>
   <!-- ↓↓↓ Phase D: 聊天消息渲染（被 app-ui.js renderCurrentMainView 反向调用） ↓↓↓ -->
-  <script src="./src/modules/chat-renderer.js"></script>
+  <!-- chat-renderer 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
+       12 个桥键供 app-ui / app-main / claw-host / lazy-tool-content 等使用；
+       折叠偏好经 app-core 的 chatSurface 宿主 seam 读写。 -->
   <!-- workspace-actions 已迁 ESM：classic 标签删除，由 p2-entry 装载。
        thread-store 仍保留 classic 刷新引擎（三条同步调度必须原位注册），标签不动。 -->
   <script src="./src/modules/thread-store.js"></script>

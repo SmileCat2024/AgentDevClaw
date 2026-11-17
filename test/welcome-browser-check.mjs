@@ -54,9 +54,17 @@ try {
     window.normalizeAgentIdentity = (value) => String(value || '').trim();
     window.setInterval = () => 0;
   });
-  for (const name of ['persistent-input', 'input-composer', 'runtime-status', 'chat-viewport']) {
+  for (const name of ['persistent-input', 'input-composer', 'runtime-status']) {
     await page.addScriptTag({ content: await fs.readFile(`public/src/modules/${name}.js`, 'utf8') });
   }
+  // chat-viewport 已迁 ESM（P4 T2）：按真实模块 URL 装载。本脚本的 measure() 仍按
+  // 原 classic 顶层函数的裸调用形态取值，故把两个导出挂到 window（仅本诊断脚本，
+  // 不改变产品装载协议）。
+  await page.evaluate(async () => {
+    const mod = await import('/src/modules/chat-viewport.js');
+    window.updateFollowLatestButton = mod.updateFollowLatestButton;
+    window.updateFollowLatestButtonPosition = mod.updateFollowLatestButtonPosition;
+  });
   // Exercise real capsule rendering and button positioning, including a late tick.
   for (const theme of ['dark', 'light']) {
     await page.locator('body').evaluate((body, value) => { body.dataset.theme = value; }, theme);

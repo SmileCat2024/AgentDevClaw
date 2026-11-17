@@ -46,6 +46,22 @@ import './debug-features-hooks.js'; // renderFeaturesPanel / renderReverseHooksP
 import './bg-panel.js'; // 后台任务面板；桥 BgPanel ← agent-data-loader
 import './voice-input.js'; // 语音录制 / 转写；状态键 owner 在 p2-w2-3a-voice-state，api 经 voice-input-api 域
 
+// ── T3 长尾：远程连接（remote-connections）──
+import './remote-connections.js'; // 远程命名空间 / 侧栏远程投影 / 远程写链路；10 桥键
+
+// ── T2 渲染层：聊天视口与跟随（chat-viewport）──
+import './chat-viewport.js'; // 视口/跟随/锚点域；29 桥键 ← app-ui / app-main / app-core / chat-renderer / chat-scroll
+// chat-renderer：消息渲染主路径；12 桥键 ← app-ui / app-main / claw-host / lazy-tool-content。
+// 折叠偏好三兄弟经 app-core 的 chatSurface 宿主 seam 读写（getter 现取，activate
+// 重赋值后立即可见）。后 5 个桥键（toggleMessage / toggleErrorGroup / openImageZoom /
+// computeAssistantErrorGroups / syncRowCollapseState / settleAllRowCollapseStates /
+// syncCollapseStates / getMessageRollbackEditActionHtml）的消费方与本源互相 import，
+// 注销要先把共享面下沉到无环投影模块（见文件末尾注释）。
+import './chat-renderer.js';
+// runtime-status 仍保持 classic 唯一实现：_agentSuspended 被 sidebar-render 的
+// createAgentCallStatesHost() 在 classic 加载期读取（app-main 顶层 IIFE 调用），
+// 属 R1 顺序依赖，需等 sidebar-render / app-main 残余迁出后才能转。
+
 // ── T2 渲染层：聊天滚动与输入薄壳（T3 批次三）──
 import './rollback-dialog.js'; // 部分压缩状态键注册壳（owner/claim 在 p2-w2-3b-rollback-domain）
 import './chat-scroll.js'; // 滚轮归一化 / 跟随判定；零桥键（纯函数与容器监听）

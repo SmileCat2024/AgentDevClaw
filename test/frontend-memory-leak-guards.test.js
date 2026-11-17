@@ -21,13 +21,15 @@
  * Load routes (ESM 迁移配方第三节):
  *   - Part A: generative-ui-renderer.js 已迁 ESM —— 真实 `import`（withP2EsmCase
  *     的 c.load，每 case 整图隔离），渲染入口用命名导出直接调用；
- *   - Part B: app-core.js / chat-viewport.js 仍是 classic（首屏同步边界）——
- *     继续按真实加载序 `sandbox.loadSource`，共享同一沙箱全局。
+ *   - Part B: chat-viewport 已迁 ESM（P4 T2）——真实 `import`；app-core（视口状态
+ *     owner 与 runtime 视图缓存宿主工厂）仍按真实加载序 `sandbox.loadSource`。
+ *     锚点 Map 已是模块私有，eviction 联动改用公开面
+ *     `getRememberedChatViewportAnchorForContext` 观测（每访问过的 context 都有锚
+ *     点、被淘汰的 context 归零）。
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 
@@ -229,31 +231,38 @@ describe('generative-ui chart ResizeObserver lifecycle', () => {
 // Part B — per-context Map eviction linkage
 // ═══════════════════════════════════════════════════════════════
 
-function createEvictionSandbox() {
-  const ctx = createFrontendSandbox({
+async function createEvictionSandbox(fn) {
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      // readCurrentSessionViewState lives in modules/session-view-state.js; only
+      // its read shape is needed by saveCurrentRuntimeToCache.
+      sandbox.readCurrentSessionViewState = () => ({
+        messages: [],
+        inputRequests: [],
+        toolRenderConfigs: {},
+        toolNames: {},
+        hookInspector: null,
+        overview: null,
+        todoPlan: null,
+        sessionMeta: null,
+        connected: true,
+      });
+      // 分发器先于一切声明 data-action 的模块装载（markdown-utils 求值期注册动作）。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource('public/src/app-core.js');
+      installRuntimeViewCache(sandbox);
+    },
     // captureChatViewportAnchor requires an active chat surface and non-follow
     // mode to persist a (pixel) anchor per context key.
-    isChatSurfaceActive: () => true,
-    shouldRenderWorkspaceSurface: () => false,
+    globals: {
+      isChatSurfaceActive: () => true,
+      shouldRenderWorkspaceSurface: () => false,
+    },
+  }, async (c) => {
+    const viewport = await c.load('public/src/modules/chat-viewport.js');
+    c.read('followLatestEnabled = false'); // let-bound in app-core.js
+    return fn({ c, viewport, run: (expr) => c.read(expr) });
   });
-  // readCurrentSessionViewState lives in modules/session-view-state.js; only
-  // its read shape is needed by saveCurrentRuntimeToCache.
-  ctx.readCurrentSessionViewState = () => ({
-    messages: [],
-    inputRequests: [],
-    toolRenderConfigs: {},
-    toolNames: {},
-    hookInspector: null,
-    overview: null,
-    todoPlan: null,
-    sessionMeta: null,
-    connected: true,
-  });
-  ctx.loadSource('public/src/app-core.js');
-  installRuntimeViewCache(ctx);
-  ctx.loadSource('public/src/modules/chat-viewport.js');
-  ctx.run('followLatestEnabled = false'); // let-bound in app-core.js
-  return ctx;
 }
 
 // Simulates one session visit: switch focus, activate collapse state,
@@ -268,8 +277,8 @@ function activateContext(ctx, runtimeId) {
 }
 
 describe('per-context map eviction linkage', () => {
-  it('context key embeds sessionId (host form) and falls back to runtime form', () => {
-    const ctx = createEvictionSandbox();
+  it('context key embeds sessionId (host form) and falls back to runtime form', async () => {
+    await createEvictionSandbox((ctx) => {
     // No session binding / host record → runtime-id keyed context.
     assert.equal(ctx.run('getRuntimeContextKey("rt-1")'), 'runtime:rt-1');
     // With a host + viewer session binding the key is host|session — one entry
@@ -277,14 +286,18 @@ describe('per-context map eviction linkage', () => {
     ctx.run('focusedAgentId = "hostA"');
     ctx.run('setViewerSessionBinding("rt-9", "sess-9")');
     assert.equal(ctx.run('getRuntimeContextKey("rt-9")'), 'host:hostA|session:sess-9');
+    });
   });
 
-  it('LRU eviction of a runtime view drops the same key from both per-context maps', () => {
-    const ctx = createEvictionSandbox();
+  it('LRU eviction of a runtime view drops the same key from both per-context maps', async () => {
+    await createEvictionSandbox((ctx) => {
     for (const rt of ['rt-1', 'rt-2', 'rt-3', 'rt-4']) activateContext(ctx, rt);
     assert.equal(ctx.run('_agentRuntimeCache.size'), 4);
     assert.equal(ctx.run('_userCollapseStateByContext.size'), 4);
-    assert.equal(ctx.run('chatViewportAnchorByContext.size'), 4);
+    for (const rt of ['rt-1', 'rt-2', 'rt-3', 'rt-4']) {
+      assert.ok(ctx.viewport.getRememberedChatViewportAnchorForContext('runtime:' + rt),
+        `visited context ${rt} persists a viewport anchor`);
+    }
 
     // 5th context evicts the least-recently-saved entry (runtime:rt-1) and must
     // clean up its bystander state too.
@@ -293,18 +306,19 @@ describe('per-context map eviction linkage', () => {
     assert.equal(ctx.run('_agentRuntimeCache.has("runtime:rt-1")'), false);
     assert.equal(ctx.run('_userCollapseStateByContext.has("runtime:rt-1")'), false,
       'evicted context must drop its collapse state');
-    assert.equal(ctx.run('chatViewportAnchorByContext.has("runtime:rt-1")'), false,
+    assert.equal(ctx.viewport.getRememberedChatViewportAnchorForContext('runtime:rt-1'), null,
       'evicted context must drop its viewport anchor');
     for (const rt of ['rt-2', 'rt-3', 'rt-4', 'rt-5']) {
       assert.equal(ctx.run(`_userCollapseStateByContext.has("runtime:${rt}")`), true,
         `survivor ${rt} keeps its collapse state`);
-      assert.equal(ctx.run(`chatViewportAnchorByContext.has("runtime:${rt}")`), true,
+      assert.ok(ctx.viewport.getRememberedChatViewportAnchorForContext('runtime:' + rt),
         `survivor ${rt} keeps its viewport anchor`);
     }
+    });
   });
 
-  it('never deletes the collapse state / anchor of the currently active context', () => {
-    const ctx = createEvictionSandbox();
+  it('never deletes the collapse state / anchor of the currently active context', async () => {
+    await createEvictionSandbox((ctx) => {
     for (const rt of ['rt-1', 'rt-2', 'rt-3', 'rt-4']) activateContext(ctx, rt);
     // Focus is back on the oldest cached context; saving another runtime evicts
     // runtime:rt-1 from the LRU cache, but it is the active context.
@@ -316,7 +330,8 @@ describe('per-context map eviction linkage', () => {
       'cache eviction still happens');
     assert.equal(ctx.run('_userCollapseStateByContext.has("runtime:rt-1")'), true,
       'active context collapse state is preserved');
-    assert.equal(ctx.run('chatViewportAnchorByContext.has("runtime:rt-1")'), true,
+    assert.ok(ctx.viewport.getRememberedChatViewportAnchorForContext('runtime:rt-1'),
       'active context viewport anchor is preserved');
+    });
   });
 });

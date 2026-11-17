@@ -49,7 +49,6 @@ const CLASSIC_STACK = [
   'public/src/modules/markdown-bootstrap.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/remote-connections.js',
   'public/src/modules/runtime-status.js',
   'public/src/modules/sidebar-render.js',
   'public/src/app-ui.js',
@@ -235,6 +234,9 @@ async function withSetup({ entities = [], target = null, openDirectory = '', phP
       };
     },
   }, async (c) => {
+    // 远程连接域已迁 ESM（P4 T3）：真实 import 代替原 classic 标签位
+    // （sidebar-render 与 project-data 的远程半边按生产形态可取用）。
+    await c.load('public/src/modules/remote-connections.js');
     // agent-data-loader / project-data 已迁 ESM：前者提供下游 loader host 模块
     // 求值期取用的工厂，后者经 KernelState 桥继续服务 classic 消费方
     // （ph-project-actions / runtime-status / sidebar-render）。顺序即依赖顺序。
@@ -1135,6 +1137,7 @@ describe('045 — 轮询归属随 typed target（不被 workspace_state 漂移�
       },
     }, async (c) => {
       const ctx = c.sandbox;
+      await c.load('public/src/modules/remote-connections.js');
       await c.load('public/src/modules/agent-data-loader.js');
       const projectData = await c.load('public/src/modules/project-data.js');
       const store = ctx.window.ClawFW.phProjectEntities;

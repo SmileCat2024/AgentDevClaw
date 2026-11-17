@@ -11,7 +11,6 @@ import { setupToolStateRoutes } from '../server/routes/tool-state.js';
 import { setupSessionRoutes } from '../server/routes/session.js';
 import { createConnectionHealth } from '../server/remote-connections/connection-health.js';
 import { createCatalogAggregator } from '../server/remote-connections/catalog-aggregator.js';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const MODEL_PRESET_CACHE = 'public/src/modules/model-preset-cache.js';
@@ -504,22 +503,22 @@ describe('catalog fetch failure hysteresis', () => {
 
 // ── 4. frontend gate ─────────────────────────────────────────────────────
 
-function loadRemoteModule(catalogPayload) {
-  const ctx = createFrontendSandbox({
-    fetch: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => catalogPayload,
-    }),
-    renderAgentList: () => {},
-    t: (key) => key,
-    escapeHtml: (value) => String(value ?? ''),
-    isRemoteNamespaceAgentId: (value) => String(value || '').startsWith('remote:'),
-    currentRuntimeAgentId: null,
-    allAgents: [],
-  });
-  ctx.loadSource('public/src/modules/remote-connections.js');
-  return ctx;
+// 装载路线（P4 T3）：remote-connections 已迁 ESM → withP2EsmCase + 真实 import。
+// 目录端点与 renderAgentList 观察面经 globals 注入；模块级 catalog 缓存不跨
+// case 共享（每个 withRemoteModule 调用是一张新图）。
+const REMOTE_CONNECTIONS = 'public/src/modules/remote-connections.js';
+
+function withRemoteModule(catalogPayload, fn) {
+  return withP2EsmCase({
+    globals: {
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => catalogPayload,
+      }),
+      renderAgentList: () => {},
+    },
+  }, async (c) => fn(await c.load(REMOTE_CONNECTIONS), c));
 }
 
 function connectedCatalog(capabilities) {
@@ -535,23 +534,26 @@ function connectedCatalog(capabilities) {
 
 describe('frontend write gate', () => {
   it('remote+write=true is writable, local ids are always writable, unknown connections are not', async () => {
-    const ctx = loadRemoteModule(connectedCatalog({ write: true }));
-    await ctx.window.RemoteConnections.refresh();
-    assert.equal(ctx.window.RemoteConnections.isRemoteWriteEnabled('remote:server-a:runtime-main'), true);
-    assert.equal(ctx.window.RemoteConnections.isRemoteWriteEnabled('plain-agent'), true);
-    assert.equal(ctx.window.RemoteConnections.isRemoteWriteEnabled('remote:ghost:runtime-1'), false);
+    await withRemoteModule(connectedCatalog({ write: true }), async (rc) => {
+      await rc.refreshRemoteCatalog();
+      assert.equal(rc.isRemoteWriteEnabled('remote:server-a:runtime-main'), true);
+      assert.equal(rc.isRemoteWriteEnabled('plain-agent'), true);
+      assert.equal(rc.isRemoteWriteEnabled('remote:ghost:runtime-1'), false);
+    });
   });
 
   it('remote without the capability field (legacy) or disconnected stays read-only', async () => {
-    const legacy = loadRemoteModule(connectedCatalog());
-    await legacy.window.RemoteConnections.refresh();
-    assert.equal(legacy.window.RemoteConnections.isRemoteWriteEnabled('remote:server-a:runtime-main'), false);
-
-    const disconnected = loadRemoteModule({
-      connections: [{ connectionId: 'server-a', name: 'Lab-B', status: 'error', workspaces: [] }],
+    await withRemoteModule(connectedCatalog(), async (rc) => {
+      await rc.refreshRemoteCatalog();
+      assert.equal(rc.isRemoteWriteEnabled('remote:server-a:runtime-main'), false);
     });
-    await disconnected.window.RemoteConnections.refresh();
-    assert.equal(disconnected.window.RemoteConnections.isRemoteWriteEnabled('remote:server-a:runtime-main'), false);
+
+    await withRemoteModule({
+      connections: [{ connectionId: 'server-a', name: 'Lab-B', status: 'error', workspaces: [] }],
+    }, async (rc) => {
+      await rc.refreshRemoteCatalog();
+      assert.equal(rc.isRemoteWriteEnabled('remote:server-a:runtime-main'), false);
+    });
   });
 });
 
@@ -561,9 +563,9 @@ describe('connection manager toggle upsert payload', () => {
   // 回归：列表 record.auth 是服务端脱敏形态（{configured:true}，无密码明文），
   // toggle 曾把整个 record 原样回传，被服务端未知字段校验拒绝（400），导致
   // 启用开关切换失败。契约：省略 auth = 服务端保持现有凭据。
-  it('strips the redacted auth marker and applies the new enabled state', () => {
-    const ctx = loadRemoteModule(connectedCatalog({ write: true }));
-    const record = {
+  it('strips the redacted auth marker and applies the new enabled state', async () => {
+    await withRemoteModule(connectedCatalog({ write: true }), async (rc) => {
+      const record = {
       id: 'wxyteam',
       name: 'wxyteam',
       enabled: false,
@@ -572,15 +574,13 @@ describe('connection manager toggle upsert payload', () => {
       baseUrl: 'https://claw.example.com',
       ssh: null,
       remote: null,
-      auth: { configured: true },
-    };
-    // JSON 往返规避 VM realm 与测试 realm 的原型差异。
-    const payload = JSON.parse(ctx.run(
-      `JSON.stringify(buildToggleUpsertPayload(${JSON.stringify(record)}, true))`,
-    ));
-    const { auth: _redacted, ...expected } = record;
-    expected.enabled = true;
-    assert.deepStrictEqual(payload, expected);
+        auth: { configured: true },
+      };
+      const payload = rc.buildToggleUpsertPayload(record, true);
+      const { auth: _redacted, ...expected } = record;
+      expected.enabled = true;
+      assert.deepStrictEqual(payload, expected);
+    });
   });
 });
 
@@ -1066,17 +1066,19 @@ describe('frontend getEntryHostAgentId', () => {
   }
 
   it('resolves the owning host logical id from a namespaced runtime reference', async () => {
-    const ctx = loadRemoteModule(catalogWithEntry());
-    await ctx.window.RemoteConnections.refresh();
-    assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId('remote:server-a:rt-1'), 'programming-helper');
+    await withRemoteModule(catalogWithEntry(), async (rc) => {
+      await rc.refreshRemoteCatalog();
+      assert.equal(rc.getEntryHostAgentId('remote:server-a:rt-1'), 'programming-helper');
+    });
   });
 
   it('returns null for unknown references and non-namespaced ids instead of guessing', async () => {
-    const ctx = loadRemoteModule(catalogWithEntry());
-    await ctx.window.RemoteConnections.refresh();
-    assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId('remote:ghost:rt-9'), null);
-    assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId('plain-agent'), null);
-    assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId(''), null);
+    await withRemoteModule(catalogWithEntry(), async (rc) => {
+      await rc.refreshRemoteCatalog();
+      assert.equal(rc.getEntryHostAgentId('remote:ghost:rt-9'), null);
+      assert.equal(rc.getEntryHostAgentId('plain-agent'), null);
+      assert.equal(rc.getEntryHostAgentId(''), null);
+    });
   });
 });
 

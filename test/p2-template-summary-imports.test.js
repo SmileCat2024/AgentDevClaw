@@ -249,11 +249,9 @@ function createHarness() {
       classic: (sandbox) => {
         prepareClassicSandbox(sandbox);
         // index.html 里仍是 classic 的生产脚本（prepareClassicSandbox 的先行序不含它们）：
-        //   - thread-store.js：thread-store-domain 装载期取它的宿主工厂；
-        //   - remote-connections.js：sidebar-render 的宿主闭包与 debug-summary-upload
-        //     都按裸标识符/window 读 isRemoteNamespaceAgentId（真实实现，不用桩）。
+        //   - thread-store.js：thread-store-domain 装载期取它的宿主工厂。
+        //（remote-connections 已迁 ESM：见 withHarness，模块相真实 import。）
         sandbox.loadSource('public/src/modules/thread-store.js');
-        sandbox.loadSource('public/src/modules/remote-connections.js');
         // 渲染效果出口：数据流保持真实，只记录生产渲染入口的调用（与
         // test/frontend-agent-snapshot-loader.test.js 同口径，不复制宿主契约）。
         sandbox.renderAgentList = () => renders.agentList.push('renderAgentList');
@@ -279,6 +277,18 @@ function createHarness() {
       },
     },
   };
+}
+
+/**
+ * 用例入口：远程连接域已迁 ESM（P4 T3）→ 每个 case 先真实 import 它，
+ * 再跑用例体（生产里 sidebar-render 的宿主闭包与 debug-summary-upload 都读它的
+ * isRemoteNamespaceAgentId 真实实现，不用桩）。
+ */
+function withHarness(harness, fn) {
+  return withP2EsmCase(harness.options, async (c) => {
+    await c.load('public/src/modules/remote-connections.js');
+    return fn(c);
+  });
 }
 
 const settle = async (rounds = 12) => {
@@ -330,7 +340,7 @@ function assertNoUnexpectedNoise(harness, { allowedWarnings = [] } = {}) {
 
 test('生产入口整图求值：kernel-entry 下两条新具名边都可求值', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const entry = await c.load(KERNEL_ENTRY);
     assert.deepEqual(Object.keys(entry), [], 'kernel-entry 是纯副作用入口');
 
@@ -357,7 +367,7 @@ test('生产入口整图求值：kernel-entry 下两条新具名边都可求值'
 
 test('template-engine 作为首个入口先求值：与 agent-loader-host 的静态环闭合', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const engine = await c.load(TEMPLATE_ENGINE);
     assert.equal(typeof engine.warmTemplatesInBackground, 'function');
     assert.equal(typeof engine.applyTemplate, 'function');
@@ -371,7 +381,7 @@ test('template-engine 作为首个入口先求值：与 agent-loader-host 的静
 
 test('debug-summary-upload 作为首个入口先求值：与 agent-loader-host 的静态边闭合', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const summary = await c.load(DEBUG_SUMMARY);
     assert.equal(typeof summary.openSummaryPopup, 'function');
     assert.equal(typeof summary.setRepoSearchQuery, 'function');
@@ -385,7 +395,7 @@ test('debug-summary-upload 作为首个入口先求值：与 agent-loader-host �
 
 test('模板重试：映射未就绪时经具名 import 重载并完成预热重建', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const engine = await c.load(TEMPLATE_ENGINE);
     const storage = await c.load(SESSION_VIEW_STORAGE);
     const renderEntry = await c.load(RENDER_ENTRY_STATE);
@@ -434,7 +444,7 @@ test('模板重试：映射未就绪时经具名 import 重载并完成预热重
 
 test('上传成功：1s 后经具名 import 重拉 agent_detail 并在其后重渲主视图', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const store = await c.load(AGENT_STORE);
     const summary = await c.load(DEBUG_SUMMARY);
     store.setAllAgents([{ id: 'runtime-1', name: 'PH', source: 'prebuilt', runtime_session_id: 'runtime-1' }]);
@@ -478,7 +488,7 @@ test('上传成功：1s 后经具名 import 重拉 agent_detail 并在其后重�
 
 test('摘要成功：真实 loadAgents 端点链走完并重渲侧栏列表', async () => {
   const harness = createHarness();
-  await withP2EsmCase(harness.options, async (c) => {
+  await withHarness(harness, async (c) => {
     const store = await c.load(AGENT_STORE);
     const summary = await c.load(DEBUG_SUMMARY);
     store.setAllAgents([{ id: 'runtime-1', name: 'PH', source: 'prebuilt', runtime_session_id: 'runtime-1' }]);

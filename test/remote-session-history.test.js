@@ -16,7 +16,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { installForegroundSyncOwner } from './p2-classic-hosts.js';
 
@@ -59,9 +58,10 @@ const REMOTE_HISTORY = {
 
 // ── workspace-actions（ESM）远程激活链路的用例上下文 ─────────────────────
 // workspace-actions.js 已迁 ESM（P2 本批）：真实 import，激活分支经 import 的
-// sidebar-operations / project-data / ph-search-locate 等模块真实执行；仍 classic
-// 的 remote-connections（目录投影与命名空间工具）按真实顺序 loadSource。动作入口
-// 仍是桥键 window.runWorkspaceAction，因此驱动方式与迁移前一致。
+// sidebar-operations / project-data / ph-search-locate 等模块真实执行；
+// remote-connections（目录投影与命名空间工具）已迁 ESM（P4 T3）→ 同为真实
+// import，其命名空间对象经桥键 window.RemoteConnections 投放给各消费方。
+// 动作入口仍是桥键 window.runWorkspaceAction，因此驱动方式与迁移前一致。
 const WORKSPACE_ACTIONS = 'public/src/modules/workspace-actions.js';
 
 /**
@@ -139,8 +139,6 @@ async function withRemoteActivateCase({ fetchStub, bumpEpochDuringWait = false }
         onSwitch: (runtimeId) => { events.switchAgent.push(runtimeId); events.order.push('switch'); },
       });
       sandbox.window.createWorkspaceEntryHost = () => ({});
-      // 目录与命名空间工具（classic owner）
-      sandbox.loadSource(REMOTE_CONNECTIONS);
       sandbox.document = {
         ...sandbox.document,
         createElement: () => createDomElement(),
@@ -149,111 +147,105 @@ async function withRemoteActivateCase({ fetchStub, bumpEpochDuringWait = false }
       };
       sandbox.window.alert = (msg) => { events.alerts.push(String(msg)); };
       sandbox.window.markActionLoading = () => {};
-      sandbox.window.RemoteConnections.waitForRuntimeForSession = async () => {
-        if (bumpEpochDuringWait) sandbox.window.bumpNavigationGuard();
-        return 'remote:server-a:rt-x';
-      };
     },
     globals: { navigator: undefined, fetch: fetchStub, console: consoleProxy },
   }, async (c) => {
+    // 远程目录 accessor（已迁 ESM）：真实 import 后命名空间对象才存在，覆盖
+    // 就绪观察必须在它求值之后——生产消费方（workspace-actions）从
+    // window.RemoteConnections 取成员，因此覆盖对象成员即生效。
+    await c.load(REMOTE_CONNECTIONS);
+    c.window.RemoteConnections.waitForRuntimeForSession = async () => {
+      if (bumpEpochDuringWait) c.window.bumpNavigationGuard();
+      return 'remote:server-a:rt-x';
+    };
     await c.load(WORKSPACE_ACTIONS);
     return fn(c, { requests, events, consoleLines });
   });
 }
 
-function historySandbox({ catalog = CATALOG, history = REMOTE_HISTORY, requests = [] } = {}) {
+/**
+ * 目录 / 历史数据面用例上下文（P4 T3）：remote-connections 已迁 ESM → 真实
+ * import；端点与 renderAgentList 观察面经 globals 注入。`fetchOverride` 给
+ * 「网络失败」一类用例替换整个端点面。
+ */
+function withHistoryCase({
+  catalog = CATALOG, history = REMOTE_HISTORY, requests = [], fetchOverride = null,
+} = {}, fn) {
   const { recorder, lines } = createConsoleRecorder();
-  const ctx = createFrontendSandbox({
-    console: recorder,
-    fetch: async (url, init) => {
-      requests.push({ url: String(url), init });
-      const path = String(url).split('?')[0];
-      if (path === '/protoclaw/remote_catalog') {
-        return { ok: true, status: 200, json: async () => catalog };
-      }
-      if (path === '/protoclaw/prebuilt_sessions') {
-        return { ok: true, status: 200, json: async () => history };
-      }
-      return { ok: true, status: 200, json: async () => ({}) };
+  return withP2EsmCase({
+    globals: {
+      console: recorder,
+      renderAgentList: () => {},
+      fetch: fetchOverride || (async (url, init) => {
+        requests.push({ url: String(url), init });
+        const path = String(url).split('?')[0];
+        if (path === '/protoclaw/remote_catalog') {
+          return { ok: true, status: 200, json: async () => catalog };
+        }
+        if (path === '/protoclaw/prebuilt_sessions') {
+          return { ok: true, status: 200, json: async () => history };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      }),
     },
-    renderAgentList: () => {},
-    t: (key) => key,
-    escapeHtml: (value) => String(value ?? ''),
-    isRemoteNamespaceAgentId: (value) => String(value || '').startsWith('remote:'),
-    currentRuntimeAgentId: null,
-    allAgents: [],
-  });
-  ctx.loadSource('public/src/modules/remote-connections.js');
-  return { ctx, requests, logs: lines };
+  }, async (c) => fn(await c.load(REMOTE_CONNECTIONS), { ctx: c, requests, logs: lines }));
 }
 
 describe('remote session history merge (R2-01)', () => {
   it('fetches forwarded lists per connected host and buckets them by directory', async () => {
-    const { ctx, requests, logs } = historySandbox();
-    await ctx.window.RemoteConnections.refresh();
-    await ctx.run('window.RemoteConnections.maybeRefreshRemoteHistory()');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await withHistoryCase({}, async (rc, { requests, logs }) => {
+      await rc.refreshRemoteCatalog();
+      await rc.maybeRefreshRemoteHistory();
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const historyCalls = requests.filter((r) => r.url.startsWith('/protoclaw/prebuilt_sessions'));
-    assert.equal(historyCalls.length, 1, 'exactly one forwarded list fetch');
-    assert.equal(
-      historyCalls[0].url,
-      '/protoclaw/prebuilt_sessions?agentId=remote%3Aserver-a%3Aprogramming-helper',
-      'forwarded list uses the host-level namespace id',
-    );
+      const historyCalls = requests.filter((r) => r.url.startsWith('/protoclaw/prebuilt_sessions'));
+      assert.equal(historyCalls.length, 1, 'exactly one forwarded list fetch');
+      assert.equal(
+        historyCalls[0].url,
+        '/protoclaw/prebuilt_sessions?agentId=remote%3Aserver-a%3Aprogramming-helper',
+        'forwarded list uses the host-level namespace id',
+      );
 
-    // Directory-matching sessions merge; directoryless and other-directory
-    // host sessions stay out (ADR-0010: 无目录会话不并入列表).
-    // JSON 往返规避 VM realm 与测试 realm 的原型差异。
-    const mergedIds = JSON.parse(ctx.run(
-      'JSON.stringify(getRemoteHistorySessions("/srv/project-c").map((s) => s.id).sort())',
-    ));
-    assert.deepEqual(mergedIds, [
-      'remote:server-a:session-hist-1',
-      'remote:server-a:session-hist-2',
-    ]);
-    const merged = JSON.parse(ctx.run(
-      'JSON.stringify(getRemoteHistorySessions("/srv/project-c"))',
-    ));
-    assert.equal(merged[0].remoteConnectionId, 'server-a');
-    assert.ok(!merged.some((s) => s.id.includes('session-nodir')), 'directoryless host session stays out');
-    assert.ok(!merged.some((s) => s.id === 'remote:server-a:session-other-dir'), 'other-directory session not merged');
-    // 控制台契约：成功刷新不得有告警/错误（逐条登记为空，异常文本一律红）。
-    assertConsoleContract(logs, []);
+      // Directory-matching sessions merge; directoryless and other-directory
+      // host sessions stay out (ADR-0010: 无目录会话不并入列表).
+      const merged = rc.getRemoteHistorySessions('/srv/project-c');
+      assert.deepEqual(merged.map((s) => s.id).sort(), [
+        'remote:server-a:session-hist-1',
+        'remote:server-a:session-hist-2',
+      ]);
+      assert.equal(merged[0].remoteConnectionId, 'server-a');
+      assert.ok(!merged.some((s) => s.id.includes('session-nodir')), 'directoryless host session stays out');
+      assert.ok(!merged.some((s) => s.id === 'remote:server-a:session-other-dir'), 'other-directory session not merged');
+      // 控制台契约：成功刷新不得有告警/错误（逐条登记为空，异常文本一律红）。
+      assertConsoleContract(logs, []);
+    });
   });
 
   it('keeps remote history buckets empty after a failed fetch (no fabricated data)', async () => {
-    const { recorder, lines: logs } = createConsoleRecorder();
-    const ctx = createFrontendSandbox({
-      console: recorder,
-      fetch: async (url) => {
+    await withHistoryCase({
+      fetchOverride: async (url) => {
         const path = String(url).split('?')[0];
         if (path === '/protoclaw/remote_catalog') {
           return { ok: true, status: 200, json: async () => CATALOG };
         }
         return { ok: false, status: 503, json: async () => null };
       },
-      renderAgentList: () => {},
-      t: (key) => key,
-      escapeHtml: (value) => String(value ?? ''),
-      isRemoteNamespaceAgentId: (value) => String(value || '').startsWith('remote:'),
-      currentRuntimeAgentId: null,
-      allAgents: [],
+    }, async (rc, { logs }) => {
+      await rc.refreshRemoteCatalog();
+      await rc.maybeRefreshRemoteHistory();
+      const merged = rc.getRemoteHistorySessions('/srv/project-c');
+      assert.equal(merged.length, 0);
+      // 预期网络失败（503）：失败契约是「不伪造数据、不静默重试」，且不产生
+      // 告警/错误——日志内容逐条登记为空。若将来该路径新增播报（或异常文本
+      // 泄露到控制台），这里会以实际内容红掉，由人确认后登记。
+      assertConsoleContract(logs, []);
     });
-    ctx.loadSource('public/src/modules/remote-connections.js');
-    await ctx.window.RemoteConnections.refresh();
-    await ctx.run('window.RemoteConnections.maybeRefreshRemoteHistory()');
-    const merged = ctx.run('getRemoteHistorySessions("/srv/project-c")');
-    assert.equal(merged.length, 0);
-    // 预期网络失败（503）：失败契约是「不伪造数据、不静默重试」，且不产生
-    // 告警/错误——日志内容逐条登记为空。若将来该路径新增播报（或异常文本
-    // 泄露到控制台），这里会以实际内容红掉，由人确认后登记。
-    assertConsoleContract(logs, []);
   });
 
   it('mixed merge: local and remote ids share the project bucket, no badge fields', async () => {
-    // project-data.js 已迁 ESM：真实 import 后调命名导出（合并语义不变）；
-    // 仍是 classic 的远程目录投影由 remote-connections.js 提供。
+    // project-data.js 与 remote-connections.js 均已迁 ESM：真实 import 后调
+    // 命名导出（合并语义不变），远程历史桶经桥键 window.getRemoteHistoryProjectBuckets
+    // 供 project-data 读取。
     const { recorder, lines: consoleLines } = createConsoleRecorder();
     const projects = await withP2EsmCase({
       label: 'project-data merge',
@@ -269,9 +261,7 @@ describe('remote session history merge (R2-01)', () => {
             return !!(agent && agent.source === 'prebuilt' && agent.id === 'programming-helper');
           }
           function getCurrentAgentRecord() { return null; }
-          var isRemoteNamespaceAgentId = function (value) { return String(value || '').startsWith('remote:'); };
         `);
-        sandbox.loadSource('public/src/modules/remote-connections.js');
       },
       globals: {
         t: (key) => key,
@@ -288,8 +278,9 @@ describe('remote session history merge (R2-01)', () => {
         },
       },
     }, async (c) => {
-      await c.window.RemoteConnections.refresh();
-      await c.window.RemoteConnections.maybeRefreshRemoteHistory();
+      const rc = await c.load(REMOTE_CONNECTIONS);
+      await rc.refreshRemoteCatalog();
+      await rc.maybeRefreshRemoteHistory();
       const projectData = await c.load('public/src/modules/project-data.js');
       const agent = {
         id: 'programming-helper',
@@ -402,19 +393,17 @@ describe('remote session history merge (R2-01)', () => {
 
 describe('remote session write identity helpers (R2-02)', () => {
   it('getHostNamespaceIdForSession resolves the host namespace from a catalog entry', async () => {
-    const { ctx, logs } = historySandbox();
-    await ctx.window.RemoteConnections.refresh();
-    const hostNsId = ctx.run(
-      `window.RemoteConnections.getHostNamespaceIdForSession('remote:server-a:session-running', 'programming-helper')`,
-    );
-    assert.equal(hostNsId, 'remote:server-a:programming-helper');
-    assertConsoleContract(logs, []);
+    await withHistoryCase({}, async (rc, { logs }) => {
+      await rc.refreshRemoteCatalog();
+      const hostNsId = rc.getHostNamespaceIdForSession('remote:server-a:session-running', 'programming-helper');
+      assert.equal(hostNsId, 'remote:server-a:programming-helper');
+      assertConsoleContract(logs, []);
+    });
   });
 
-  it('namespaceMutationResult prefixes bare ids in branch/compact responses and leaves local payloads untouched', () => {
-    const { ctx } = historySandbox();
-    const branchResult = JSON.parse(ctx.run(`JSON.stringify(
-      window.RemoteConnections.namespaceMutationResult('remote:server-a:session-1', {
+  it('namespaceMutationResult prefixes bare ids in branch/compact responses and leaves local payloads untouched', async () => {
+    await withHistoryCase({}, async (rc) => {
+      const branchResult = rc.namespaceMutationResult('remote:server-a:session-1', {
         ok: true,
         newSessionId: 'session-b1',
         session: { id: 'session-b1', title: '（分支）x' },
@@ -425,55 +414,53 @@ describe('remote session write identity helpers (R2-02)', () => {
           remove: [],
         },
         archive: { requested: true, succeeded: true, error: null },
-      }),
-    )`));
-    assert.equal(branchResult.newSessionId, 'remote:server-a:session-b1');
-    assert.equal(branchResult.session.id, 'remote:server-a:session-b1');
-    assert.equal(branchResult.sessionDelta.activeSessionId, 'remote:server-a:session-b1');
-    assert.deepEqual(branchResult.sessionDelta.upsert.map((s) => s.id), ['remote:server-a:session-b1']);
-    // archive 等非身份字段原样保留。
-    assert.deepEqual(branchResult.archive, { requested: true, succeeded: true, error: null });
+      });
+      assert.equal(branchResult.newSessionId, 'remote:server-a:session-b1');
+      assert.equal(branchResult.session.id, 'remote:server-a:session-b1');
+      assert.equal(branchResult.sessionDelta.activeSessionId, 'remote:server-a:session-b1');
+      assert.deepEqual(branchResult.sessionDelta.upsert.map((s) => s.id), ['remote:server-a:session-b1']);
+      // archive 等非身份字段原样保留。
+      assert.deepEqual(branchResult.archive, { requested: true, succeeded: true, error: null });
 
-    // compact 响应形状（session.id / targetSessionId / sessionDelta）。
-    const compactResult = JSON.parse(ctx.run(`JSON.stringify(
-      window.RemoteConnections.namespaceMutationResult('remote:server-a:session-1', {
+      // compact 响应形状（session.id / targetSessionId / sessionDelta）。
+      const compactResult = rc.namespaceMutationResult('remote:server-a:session-1', {
         session: { id: 'session-c2' },
         targetSessionId: 'session-c2',
         sessionDelta: { revision: 2, activeSessionId: 'session-c2', upsert: [{ id: 'session-c2' }], remove: [] },
-      }),
-    )`));
-    assert.equal(compactResult.session.id, 'remote:server-a:session-c2');
-    assert.equal(compactResult.targetSessionId, 'remote:server-a:session-c2');
-    assert.equal(compactResult.sessionDelta.activeSessionId, 'remote:server-a:session-c2');
+      });
+      assert.equal(compactResult.session.id, 'remote:server-a:session-c2');
+      assert.equal(compactResult.targetSessionId, 'remote:server-a:session-c2');
+      assert.equal(compactResult.sessionDelta.activeSessionId, 'remote:server-a:session-c2');
 
-    // 本地载荷（裸 sessionId）原样返回，零转换。
-    assert.equal(ctx.run(`window.RemoteConnections.namespaceMutationResult('session-local', 'sentinel')`), 'sentinel');
-    assert.deepEqual(
-      JSON.parse(ctx.run(`JSON.stringify(
-        window.RemoteConnections.namespaceMutationResult('session-local', { newSessionId: 's1', sessionDelta: { activeSessionId: null, upsert: [] } }),
-      )`)),
-      { newSessionId: 's1', sessionDelta: { activeSessionId: null, upsert: [] } },
-    );
+      // 本地载荷（裸 sessionId）原样返回，零转换。
+      assert.equal(rc.namespaceMutationResult('session-local', 'sentinel'), 'sentinel');
+      assert.deepEqual(
+        rc.namespaceMutationResult('session-local', { newSessionId: 's1', sessionDelta: { activeSessionId: null, upsert: [] } }),
+        { newSessionId: 's1', sessionDelta: { activeSessionId: null, upsert: [] } },
+      );
+    });
   });
 
   it('waitForRuntimeForSession resolves the namespaced runtime ref once it appears in the catalog', async () => {
-    const { ctx, logs } = historySandbox();
-    await ctx.window.RemoteConnections.refresh();
-    const ref = await ctx.run(
-      `window.RemoteConnections.waitForRuntimeForSession('remote:server-a:runtime-main', 2)`,
-    );
-    assert.equal(ref, 'remote:server-a:runtime-main');
-    assertConsoleContract(logs, []);
+    await withHistoryCase({}, async (rc, { logs }) => {
+      await rc.refreshRemoteCatalog();
+      const ref = await rc.waitForRuntimeForSession('remote:server-a:runtime-main', 2);
+      assert.equal(ref, 'remote:server-a:runtime-main');
+      assertConsoleContract(logs, []);
+    });
   });
 
   it('waitForRuntimeForSession returns null after exhausting attempts for an absent runtime', async () => {
-    const { ctx, logs } = historySandbox({ catalog: { connections: [{ connectionId: 'server-a', name: 'Lab-B', status: 'connected', workspaces: [] }] } });
-    await ctx.window.RemoteConnections.refresh();
-    const ref = await ctx.run(`window.RemoteConnections.waitForRuntimeForSession('remote:server-a:session-ghost', 1)`);
-    // 预期「等不到就绪」路径：契约是返回 null（不伪装成功、不静默重试），
-    // 且不产生任何告警/错误——日志内容逐条登记为空。
-    assert.equal(ref, null);
-    assertConsoleContract(logs, []);
+    await withHistoryCase({
+      catalog: { connections: [{ connectionId: 'server-a', name: 'Lab-B', status: 'connected', workspaces: [] }] },
+    }, async (rc, { logs }) => {
+      await rc.refreshRemoteCatalog();
+      const ref = await rc.waitForRuntimeForSession('remote:server-a:session-ghost', 1);
+      // 预期「等不到就绪」路径：契约是返回 null（不伪装成功、不静默重试），
+      // 且不产生任何告警/错误——日志内容逐条登记为空。
+      assert.equal(ref, null);
+      assertConsoleContract(logs, []);
+    });
   });
 });
 
@@ -703,9 +690,6 @@ function withDialogsCase({ requests = [] } = {}, fn) {
         var escapeHtml = function (value) { return String(value ?? ''); };
         var fmtPct = function (frac) { return (frac * 100).toFixed(1) + '%'; }; // app-core 全局的沙箱替身
       `);
-      // 远程目录 accessor（getHostNamespaceIdForSession 等）从 remote-connections.js
-      // 加载；catalog 身份来自 mock 的 remote_catalog 响应。
-      sandbox.loadSource('public/src/modules/remote-connections.js');
     },
     globals: {
       document: dom.document,
@@ -755,8 +739,11 @@ function withDialogsCase({ requests = [] } = {}, fn) {
       },
     },
   }, async (c) => {
+    // 远程目录 accessor（已迁 ESM，P4 T3）：真实 import 后才存在
+    // window.RemoteConnections；catalog 身份来自 mock 的 remote_catalog 响应。
+    const rc = await c.load(REMOTE_CONNECTIONS);
     const dialogs = await c.load(SESSION_DIALOGS);
-    return fn({ c, dialogs, dom, sidebarPhases, requests, consoleLines });
+    return fn({ c, rc, dialogs, dom, sidebarPhases, requests, consoleLines });
   });
 }
 

@@ -1,48 +1,41 @@
 /**
  * chat-viewport.js — Chat Viewport / Scroll 管理模块（从 app-ui.js 域 N 提取）
  *
- * ESM 迁移状态（P2 第二波批次 11）：**保留唯一 classic 实现，本文件不转 ESM**。
- * R1/R4 触线证据（首屏同步链，不是监听回调）：
- *   app-main.js 顶层 `applyTheme(currentTheme); applyLanguage();`
- *     → theme-lang.js `applyLanguage()` 末行 `renderCurrentMainView()`
- *     → app-ui.js `renderCurrentMainView()` 无条件 `ensureChatViewportObservers()`；
- *       空会话分支 `renderChatEmptyState()`（chat-renderer.js）同步
- *       `cancelChatScrollSettlement()` + `runWithSuppressedChatViewportObservers()`，
- *       再到 `updateFollowLatestButton()`；`updateChatContextBar()`
- *       （chat-context-bar.js）首次上屏同步 `notifyChatViewportMutation(...)`，
- *       首屏 `followLatestEnabled=true` 因而同步 `lockChatViewportToBottomNow()`。
- *   语言按钮（app-ui.js classic 顶层注册）在 DOMContentLoaded 前已可点，点击即
- *   同步 `applyLanguage()` → 上述渲染链，可在 deferred ESM 执行前重复发生；主题
- *   按钮只重绘主题开关，不进 `renderCurrentMainView`，不构成该链入口。
- *   首屏 rAF 真实可达（不是纯事件期）：`updateFollowLatestButton()` 的避让
- *   ResizeObserver 在首屏就调度定位 rAF；同一同步入口 `renderCurrentMainView`
- *   在 workspace 与有消息分支还 `requestAnimationFrame(updateAssemblySideRailPosition)`
- *   （首屏空会话分支不调度该 rAF）。rAF 回调属解析期帧窗口；
- *   observer 微任务/帧回调（settlement、静默窗）与 150ms 锚点保存定时器也可能先于
- *   模块执行到达。
- *   结算 / 跟随动画 / 观察者 / 锚点 / 阅读位置恢复共享同一批状态，
- *   `cancelChatScrollSettlement`、`ensureChatViewportObservers` 等同步入口直接读写
- *   这些状态与 rAF/定时器句柄，拆到延迟模块会让任一环在首屏或解析期交互时
- *   不可用。复制实现、ready 等待、转发队列、延后补画与空操作均为迁移禁止项。
- * 迁移边界（可迁时点）：跟随/锚点/结算策略与状态都是事件期语义，可整体迁 ESM，
- * 但必须与同步首屏调用方联合迁移——即 app-main 顶层 `applyTheme/applyLanguage`
- *   同步 bootstrap、app-ui 的 `renderCurrentMainView`（P1 域 8 render-entry）、
- *   chat-renderer 渲染入口、chat-context-bar 与 input-helpers 的
- *   `updateChatProcessToggle` 同批完成，或按 P3 方案收敛同步 bootstrap 后整文件
- *   转 ESM。在此之前本域不拆分：拆出仍有消费方的子集只会新增跨模块晚绑定并
- *   破坏原时序；零生产消费的纯 helper（`scrollToLatest` / `scheduleScrollToLatest`
- *   / `scheduleScrollToLatestWithVersion` 仅有实验脚本与注释引用）迁出零收益，
- *   也不能反过来当作「classic 调用」证据。
- * 兼容面（两类，不要混写）：本文件顶层函数与 app-core.js 顶层视口状态是已迁 ESM
- *   消费方的晚绑定面——
- *   1) 直接 import bootstrap 适配模块的 ESM（如 chat-row-visibility /
- *      lazy-tool-content）：`p2-bootstrap-dom` 交出 const DOM 引用、
- *      `p2-bootstrap-chat-surface` 转发状态 owner；
- *   2) 经既有 classic host seam 取用的 ESM：runtime-view-cache 走 app-core 的
- *      `createRuntimeViewCacheHost`，runtime-switch / workspace-surface 走
- *      app-main / app-ui 各自的 `host.*` 回调（如 `setFollowLatest` /
- *      `saveScroll` / `captureAnchor`）。
- *   两类都是同一 classic owner 的转发，本批不新增桥键、不改任何函数与文案。
+ * ESM 迁移状态（P4 T2 批次）：**已转 ESM**，原 classic 唯一实现与标签删除。
+ * P2 批次曾因「app-main 顶层同步链」判 R1/R4 触线，P4 时序切换（首屏渲染链改由
+ * `boot.js` 在模块相触发）后该约束解除，本批按配方常规转换。
+ *
+ * 时序审计（R1/R2/R3/R4 + S）：
+ *   - R1：本文件函数在仍 classic 的文件里**没有顶层调用点**（app-ui / app-main /
+ *     chat-renderer 的调用全在函数体与事件回调内），改经桥键晚绑定后调用时相不变。
+ *   - R2：首屏链现在由 `boot.js`（index.html 最后一条 module 标签）触发；本模块由
+ *     p4-entry 在 kernel-entry 阶段求值，早于 boot，观察者 / 结算 / 跟随状态在首屏
+ *     渲染前已就绪。
+ *   - R3：`container` / `followLatestButton` 原为 app-core 的 classic 顶层 const
+ *     （全局词法绑定，ESM 侧取不到）→ 模块求值期等价重建查询：元素从不替换，
+ *     取得的是同一节点。dom-refs 域落地后改为 import。
+ *   - R4：顶层语句只有一处 `container.addEventListener('scroll', …)` 注册与若干
+ *     纯状态初始化。classic 相（解析中）与模块相（DOMContentLoaded 前求值）之间
+ *     浏览器尚未处理输入事件，且首屏前的程序滚动已随时序切换移到模块相之后，
+ *     监听对象与注册语义等价。
+ *   - S：本文件原本即 `'use strict'`-兼容（无隐式全局赋值、无 with、无顶层 this）。
+ *
+ * 状态读写边界：跟随开关 / 视口观察与结算句柄 / 冷却与进入窗口都是 **app-core 的
+ * 顶层 `let`**（未上桥，ESM 取不到 window 属性）——统一经 `chatSurface` 宿主适配
+ * 模块（p2-bootstrap-chat-surface）读写，owner 不变、双向实时转发；
+ * `assemblySideRailRevealTimer` 同理走 `assemblyUi`（p2-bootstrap-assembly）。
+ * app-core 拆解批次把 owner 迁进 ESM 后，这两个宿主与 chat-viewport 域的桥键一并撤除。
+ * 本文件的锚点族状态（`chatViewportAnchorByContext` / pending 阅读位置 / pending
+ * 锚点 / 锚点保存定时器 / 避让定位 observer）本来就是模块私有，迁 ESM 后仍是模块私有。
+ *
+ * 桥键（domain `chat-viewport`，注册相位 = 模块求值相）：本文件顶层 `function`
+ * 声明转化为 ESM 后不再是 window 属性，仍 classic 的消费方（app-ui / app-main /
+ * app-core / chat-renderer / runtime-status / persistent-input / thread-store /
+ * input-composer）与**未在本批清单内**的已迁 ESM 消费方（chat-scroll /
+ * chat-row-visibility / lazy-tool-content / tool-progress / input-render /
+ * chat-context-bar / chat-process-visibility / chat-nav-timeline / ph-search-locate /
+ * debug-panel-host / ctx-menu-handlers / workspace-actions / input-actions）继续经
+ * window 晚绑定取用，逐键见文件末尾注册清单与头注注销条件。
  *
  * 包含：
  *   - updateAssemblySideRailPosition: assembly side rail 定位
@@ -64,46 +57,43 @@
  *     scrollToLatest, setFollowLatest, scheduleFollowLatestSettlePass,
  *     requestFollowLatest, scheduleScrollToLatest, scheduleScrollToLatestWithVersion
  *
- * 依赖（全局变量，声明于 app-core.js）：
- *   - container: 聊天容器 DOM
- *   - followLatestButton: follow 按钮 DOM
- *   - workspaceTabsBar: tabs 容器 DOM（仅 getToggleButtonLabel 不依赖）
- *   - currentMessages: 当前消息列表（updateFollowLatestButton 读）
- *   - followLatestEnabled: 跟随开关
- *   - suppressFollowScrollEvent: 滚动事件抑制标志
- *   - lastManualScrollIntentAt: 手动滚动时间戳
- *   - _progScrollCooldownUntil: 冷却截止时间
- *   - followLatestEntryUntil: 进入窗口截止
- *   - chatViewportObserversReady: observer 初始化标志
- *   - chatViewportObserverSuppressDepth: 抑制深度计数
- *   - chatViewportObserverQuietUntil: 静默截止时间
- *   - chatViewportMutationObserver: MutationObserver 实例
- *   - chatViewportResizeObserver: ResizeObserver 实例
- *   - chatViewportSettlementToken, chatViewportSettlementRaf,
- *     chatViewportSettlementTimer, chatViewportSettlementContext
- *   - chatViewportFollowRaf, chatViewportFollowToken, chatViewportFollowTransition
- *   - assemblySideRailRevealTimer: side rail reveal 定时器
- *
- * 依赖（全局函数）：
- *   - isChatSurfaceActive, shouldRenderWorkspaceSurface (app-ui.js 域 A)
- *   - escapeHtml, t (app-core.js)
+ * 依赖（import）：
+ *   - escapeHtml, t：markdown-utils / ../i18n.js
+ *   - currentMessages：session-view-storage（活绑定）
+ *   - currentRuntimeAgentId：orchestration-state
+ *   - refreshMeasuredChatRows：chat-row-visibility
+ *   - chatSurface / assemblyUi：app-core 的状态宿主适配
+ * 依赖（仍 classic，window 晚绑定；定义域在行尾标注）：
+ *   - shouldRenderWorkspaceSurface, isChatSurfaceActive（app-ui.js）
+ *   - getRuntimeContextKey（app-core.js）
  */
+import { escapeHtml } from './markdown-utils.js';
+import { t } from '../i18n.js';
+import { currentMessages } from './session-view-storage.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { refreshMeasuredChatRows } from './chat-row-visibility.js';
+import { chatSurface } from './p2-bootstrap-chat-surface.js';
+import { assemblyUi } from './p2-bootstrap-assembly.js';
+
+// 等价重建 app-core 的两个 DOM 引用（见头注 R3：元素从不替换）。
+const container = document.getElementById('chat-container');
+const followLatestButton = document.getElementById('follow-latest-btn');
 
 function updateAssemblySideRailPosition() {
-  if (!shouldRenderWorkspaceSurface()) return;
+  if (!window.shouldRenderWorkspaceSurface()) return; // 桥接期：定义于 app-ui（编排域收敛时移除）
   const rail = container.querySelector('.assembly-side-rail');
   const flow = container.querySelector('.assembly-flow');
   if (!rail || !flow) {
-    if (assemblySideRailRevealTimer) {
-      clearTimeout(assemblySideRailRevealTimer);
-      assemblySideRailRevealTimer = null;
+    if (assemblyUi.assemblySideRailRevealTimer) {
+      clearTimeout(assemblyUi.assemblySideRailRevealTimer);
+      assemblyUi.assemblySideRailRevealTimer = null;
     }
     return;
   }
   if (window.innerWidth <= 920) {
-    if (assemblySideRailRevealTimer) {
-      clearTimeout(assemblySideRailRevealTimer);
-      assemblySideRailRevealTimer = null;
+    if (assemblyUi.assemblySideRailRevealTimer) {
+      clearTimeout(assemblyUi.assemblySideRailRevealTimer);
+      assemblyUi.assemblySideRailRevealTimer = null;
     }
     rail.classList.add('positioned');
     rail.classList.add('ready');
@@ -120,13 +110,13 @@ function updateAssemblySideRailPosition() {
   rail.style.setProperty('--assembly-side-top', `${Math.round(top)}px`);
   rail.classList.add('positioned');
   if (rail.classList.contains('ready')) return;
-  if (assemblySideRailRevealTimer) {
-    clearTimeout(assemblySideRailRevealTimer);
+  if (assemblyUi.assemblySideRailRevealTimer) {
+    clearTimeout(assemblyUi.assemblySideRailRevealTimer);
   }
-  assemblySideRailRevealTimer = setTimeout(() => {
+  assemblyUi.assemblySideRailRevealTimer = setTimeout(() => {
     if (!document.body.contains(rail)) return;
     rail.classList.add('ready');
-    assemblySideRailRevealTimer = null;
+    assemblyUi.assemblySideRailRevealTimer = null;
   }, 140);
 }
 
@@ -144,13 +134,13 @@ function isNearBottom() {
 function updateFollowLatestButton() {
   if (!followLatestButton) return;
   ensureFollowLatestAvoidObserver();
-  const hasMessages = currentMessages.length > 0 && isChatSurfaceActive()
+  const hasMessages = currentMessages.length > 0 && window.isChatSurfaceActive() // 桥接期：定义于 app-ui
     && !container.querySelector('.empty-welcome, .chat-loading');
   followLatestButton.classList.toggle('hidden', !hasMessages);
-  followLatestButton.classList.toggle('active', followLatestEnabled);
+  followLatestButton.classList.toggle('active', chatSurface.followLatestEnabled);
   followLatestButton.innerHTML =
     '<span class="follow-latest-dot"></span><span>' +
-    escapeHtml(t(followLatestEnabled ? 'follow_latest_on' : 'follow_latest_off')) +
+    escapeHtml(t(chatSurface.followLatestEnabled ? 'follow_latest_on' : 'follow_latest_off')) +
     '</span>';
 }
 
@@ -212,7 +202,7 @@ function ensureFollowLatestAvoidObserver() {
 }
 
 function markManualScrollIntent() {
-  lastManualScrollIntentAt = Date.now();
+  chatSurface.lastManualScrollIntentAt = Date.now();
 }
 
 function getChatViewportMetrics() {
@@ -229,28 +219,28 @@ function getChatViewportBottomTop(metrics = getChatViewportMetrics()) {
 }
 
 function setChatViewportTop(nextTop) {
-  suppressFollowScrollEvent = true;
+  chatSurface.suppressFollowScrollEvent = true;
   container.scrollTop = Math.max(0, nextTop);
-  suppressFollowScrollEvent = false;
+  chatSurface.suppressFollowScrollEvent = false;
 }
 
 function lockChatViewportToBottomNow() {
   cancelFollowLatestAnimation();
   setChatViewportTop(getChatViewportBottomTop());
-  chatViewportFollowTransition = 'locked';
+  chatSurface.chatViewportFollowTransition = 'locked';
 }
 
 function suppressChatViewportObservers(quietMs = 160) {
-  chatViewportObserverSuppressDepth += 1;
-  chatViewportObserverQuietUntil = Math.max(chatViewportObserverQuietUntil || 0, Date.now() + Math.max(0, quietMs));
+  chatSurface.chatViewportObserverSuppressDepth += 1;
+  chatSurface.chatViewportObserverQuietUntil = Math.max(chatSurface.chatViewportObserverQuietUntil || 0, Date.now() + Math.max(0, quietMs));
 }
 
 function resumeChatViewportObservers() {
-  chatViewportObserverSuppressDepth = Math.max(0, (chatViewportObserverSuppressDepth || 0) - 1);
+  chatSurface.chatViewportObserverSuppressDepth = Math.max(0, (chatSurface.chatViewportObserverSuppressDepth || 0) - 1);
 }
 
 function shouldIgnoreChatViewportObserverEvent() {
-  return chatViewportObserverSuppressDepth > 0 || Date.now() < (chatViewportObserverQuietUntil || 0);
+  return chatSurface.chatViewportObserverSuppressDepth > 0 || Date.now() < (chatSurface.chatViewportObserverQuietUntil || 0);
 }
 
 function runWithSuppressedChatViewportObservers(work, quietMs = 160) {
@@ -263,32 +253,32 @@ function runWithSuppressedChatViewportObservers(work, quietMs = 160) {
 }
 
 function cancelFollowLatestAnimation() {
-  chatViewportFollowToken += 1;
-  if (chatViewportFollowRaf) {
-    cancelAnimationFrame(chatViewportFollowRaf);
-    chatViewportFollowRaf = 0;
+  chatSurface.chatViewportFollowToken += 1;
+  if (chatSurface.chatViewportFollowRaf) {
+    cancelAnimationFrame(chatSurface.chatViewportFollowRaf);
+    chatSurface.chatViewportFollowRaf = 0;
   }
 }
 
 function startFollowLatestAnimation() {
-  if (chatViewportFollowRaf || !followLatestEnabled || !isChatSurfaceActive()) {
+  if (chatSurface.chatViewportFollowRaf || !chatSurface.followLatestEnabled || !window.isChatSurfaceActive()) {
     return;
   }
 
-  const token = ++chatViewportFollowToken;
+  const token = ++chatSurface.chatViewportFollowToken;
   const step = () => {
-    if (token !== chatViewportFollowToken) {
+    if (token !== chatSurface.chatViewportFollowToken) {
       return;
     }
-    chatViewportFollowRaf = 0;
-    if (!followLatestEnabled || !isChatSurfaceActive() || shouldRenderWorkspaceSurface()) {
+    chatSurface.chatViewportFollowRaf = 0;
+    if (!chatSurface.followLatestEnabled || !window.isChatSurfaceActive() || window.shouldRenderWorkspaceSurface()) {
       return;
     }
 
     const metrics = getChatViewportMetrics();
     const targetTop = getChatViewportBottomTop(metrics);
     const delta = targetTop - metrics.top;
-    const pendingContext = chatViewportSettlementContext;
+    const pendingContext = chatSurface.chatViewportSettlementContext;
     const hasRecentMutation = pendingContext
       ? (Date.now() - pendingContext.lastMutationAt) < 180
       : false;
@@ -299,7 +289,7 @@ function startFollowLatestAnimation() {
       if (!hasRecentMutation) {
         return;
       }
-      chatViewportFollowRaf = requestAnimationFrame(step);
+      chatSurface.chatViewportFollowRaf = requestAnimationFrame(step);
       return;
     }
 
@@ -312,10 +302,10 @@ function startFollowLatestAnimation() {
       setChatViewportTop(metrics.top + Math.sign(delta) * stepSize);
     }
 
-    chatViewportFollowRaf = requestAnimationFrame(step);
+    chatSurface.chatViewportFollowRaf = requestAnimationFrame(step);
   };
 
-  chatViewportFollowRaf = requestAnimationFrame(step);
+  chatSurface.chatViewportFollowRaf = requestAnimationFrame(step);
 }
 
 // ── F1 决策（2026-08-19）：跟随动画 smooth 巡航中的增量更新不打断动画 ──
@@ -324,7 +314,7 @@ function startFollowLatestAnimation() {
 // 动画自带的 distance>360 硬跳兜底保证流式过快时仍能追上。
 // render-full / process-toggle / input-render 与 forceSnap 仍立即对齐。
 function isFollowLatestAnimationCruising() {
-  return chatViewportFollowRaf !== 0 && chatViewportFollowTransition === 'smooth';
+  return chatSurface.chatViewportFollowRaf !== 0 && chatSurface.chatViewportFollowTransition === 'smooth';
 }
 
 function shouldKeepFollowAnimationForMutation(reason, forceSnap) {
@@ -336,33 +326,33 @@ function shouldKeepFollowAnimationForMutation(reason, forceSnap) {
 }
 
 function observeChatViewportRows() {
-  if (!chatViewportResizeObserver || !container) return;
+  if (!chatSurface.chatViewportResizeObserver || !container) return;
   // ResizeObserver.observe() is idempotent for an already observed target.
   // Re-scan after each DOM render so newly inserted message rows are covered.
   container.querySelectorAll('.message-row').forEach((row) => {
-    chatViewportResizeObserver.observe(row);
+    chatSurface.chatViewportResizeObserver.observe(row);
   });
 }
 
 function ensureChatViewportObservers() {
-  if (chatViewportObserversReady) {
+  if (chatSurface.chatViewportObserversReady) {
     observeChatViewportRows();
     return;
   }
 
   if (typeof MutationObserver === 'function') {
-    chatViewportMutationObserver = new MutationObserver(() => {
-      if (shouldIgnoreChatViewportObserverEvent() || shouldRenderWorkspaceSurface()) return;
+    chatSurface.chatViewportMutationObserver = new MutationObserver(() => {
+      if (shouldIgnoreChatViewportObserverEvent() || window.shouldRenderWorkspaceSurface()) return;
       notifyChatViewportMutation({
         reason: 'dom-observer',
-        shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-        preserveTop: followLatestEnabled ? null : container.scrollTop,
+        shouldFollow: chatSurface.followLatestEnabled && window.isChatSurfaceActive(),
+        preserveTop: chatSurface.followLatestEnabled ? null : container.scrollTop,
         forceSnap: isFollowLatestEntryWindowActive(),
         allowChase: false,
         preferSmooth: false,
       });
     });
-    chatViewportMutationObserver.observe(container, {
+    chatSurface.chatViewportMutationObserver.observe(container, {
       childList: true,
       subtree: true,
       characterData: true,
@@ -370,7 +360,7 @@ function ensureChatViewportObservers() {
   }
 
   if (typeof ResizeObserver === 'function') {
-    chatViewportResizeObserver = new ResizeObserver((entries) => {
+    chatSurface.chatViewportResizeObserver = new ResizeObserver((entries) => {
       const hasChatRowResize = entries.some((entry) =>
         entry.target?.classList?.contains('message-row')
         || entry.target?.closest?.('.message-row')
@@ -379,22 +369,22 @@ function ensureChatViewportObservers() {
       // content-visibility realization. It must not be discarded by the
       // quiet window created by the mutation that caused the realization;
       // only observer noise from unrelated DOM/input changes is quieted.
-      if ((chatViewportObserverSuppressDepth > 0
-        || (!hasChatRowResize && Date.now() < (chatViewportObserverQuietUntil || 0)))
-        || shouldRenderWorkspaceSurface()) return;
+      if ((chatSurface.chatViewportObserverSuppressDepth > 0
+        || (!hasChatRowResize && Date.now() < (chatSurface.chatViewportObserverQuietUntil || 0)))
+        || window.shouldRenderWorkspaceSurface()) return;
       notifyChatViewportMutation({
         reason: hasChatRowResize ? 'message-row-resize' : 'resize-observer',
-        shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-        preserveTop: followLatestEnabled ? null : container.scrollTop,
+        shouldFollow: chatSurface.followLatestEnabled && window.isChatSurfaceActive(),
+        preserveTop: chatSurface.followLatestEnabled ? null : container.scrollTop,
         forceSnap: isFollowLatestEntryWindowActive(),
         allowChase: false,
         preferSmooth: false,
       });
     });
-    chatViewportResizeObserver.observe(container);
+    chatSurface.chatViewportResizeObserver.observe(container);
     const inputContainer = document.getElementById('user-input-container');
     if (inputContainer) {
-      chatViewportResizeObserver.observe(inputContainer);
+      chatSurface.chatViewportResizeObserver.observe(inputContainer);
     }
     // content-visibility may realize a row's intrinsic height without
     // changing the container's own box. Observe rows so that a height change
@@ -402,16 +392,16 @@ function ensureChatViewportObservers() {
     observeChatViewportRows();
   }
 
-  chatViewportObserversReady = true;
+  chatSurface.chatViewportObserversReady = true;
 }
 
 function interruptFollowLatest(reason = 'manual') {
   cancelFollowLatestAnimation();
-  suppressFollowScrollEvent = false;
+  chatSurface.suppressFollowScrollEvent = false;
   cancelChatScrollSettlement();
-  chatViewportFollowTransition = 'locked';
-  if (reason === 'manual' && followLatestEnabled) {
-    followLatestEnabled = false;
+  chatSurface.chatViewportFollowTransition = 'locked';
+  if (reason === 'manual' && chatSurface.followLatestEnabled) {
+    chatSurface.followLatestEnabled = false;
     updateFollowLatestButton();
   }
 }
@@ -419,42 +409,42 @@ function interruptFollowLatest(reason = 'manual') {
 function registerManualScrollIntent(options = {}) {
   const { interrupt = false } = options;
   markManualScrollIntent();
-  if (interrupt && followLatestEnabled) {
+  if (interrupt && chatSurface.followLatestEnabled) {
     interruptFollowLatest('manual');
   }
 }
 
 function hasRecentManualScrollIntent() {
-  return Date.now() - lastManualScrollIntentAt < 1500;
+  return Date.now() - chatSurface.lastManualScrollIntentAt < 1500;
 }
 
 function beginFollowLatestCooldown(duration = 800) {
-  _progScrollCooldownUntil = Math.max(_progScrollCooldownUntil, Date.now() + Math.max(0, duration));
+  chatSurface._progScrollCooldownUntil = Math.max(chatSurface._progScrollCooldownUntil, Date.now() + Math.max(0, duration));
 }
 
 function isFollowLatestCooldownActive() {
-  return Date.now() < _progScrollCooldownUntil;
+  return Date.now() < chatSurface._progScrollCooldownUntil;
 }
 
 function beginFollowLatestEntryWindow(duration = 1200) {
-  followLatestEntryUntil = Math.max(followLatestEntryUntil || 0, Date.now() + Math.max(0, duration));
+  chatSurface.followLatestEntryUntil = Math.max(chatSurface.followLatestEntryUntil || 0, Date.now() + Math.max(0, duration));
 }
 
 function isFollowLatestEntryWindowActive() {
-  return Date.now() < (followLatestEntryUntil || 0);
+  return Date.now() < (chatSurface.followLatestEntryUntil || 0);
 }
 
 function cancelChatScrollSettlement() {
-  chatViewportSettlementToken += 1;
-  if (chatViewportSettlementRaf) {
-    cancelAnimationFrame(chatViewportSettlementRaf);
-    chatViewportSettlementRaf = 0;
+  chatSurface.chatViewportSettlementToken += 1;
+  if (chatSurface.chatViewportSettlementRaf) {
+    cancelAnimationFrame(chatSurface.chatViewportSettlementRaf);
+    chatSurface.chatViewportSettlementRaf = 0;
   }
-  if (chatViewportSettlementTimer != null) {
-    clearTimeout(chatViewportSettlementTimer);
-    chatViewportSettlementTimer = null;
+  if (chatSurface.chatViewportSettlementTimer != null) {
+    clearTimeout(chatSurface.chatViewportSettlementTimer);
+    chatSurface.chatViewportSettlementTimer = null;
   }
-  chatViewportSettlementContext = null;
+  chatSurface.chatViewportSettlementContext = null;
 }
 
 // ── 阅读位置恢复传递（switchAgent → render-full 的 preserveTop）──
@@ -507,8 +497,8 @@ function consumePendingChatViewportAnchor() {
 }
 
 function getChatViewportContextKey() {
-  if (!currentRuntimeAgentId || typeof getRuntimeContextKey !== 'function') return null;
-  return getRuntimeContextKey(currentRuntimeAgentId);
+  if (!currentRuntimeAgentId || typeof window.getRuntimeContextKey !== 'function') return null; // 桥接期：定义于 app-core
+  return window.getRuntimeContextKey(currentRuntimeAgentId);
 }
 
 // Alias used by the renderer and runtime-cache boundary. Keep context identity
@@ -550,32 +540,32 @@ container.addEventListener('scroll', () => {
     clearTimeout(chatViewportAnchorSaveTimer);
     chatViewportAnchorSaveTimer = null;
   }
-  if (typeof isChatSurfaceActive !== 'function' || !isChatSurfaceActive()
-    || (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface())
-    || followLatestEnabled) {
+  if (typeof window.isChatSurfaceActive !== 'function' || !window.isChatSurfaceActive() // 桥接期：定义于 app-ui
+    || (typeof window.shouldRenderWorkspaceSurface === 'function' && window.shouldRenderWorkspaceSurface())
+    || chatSurface.followLatestEnabled) {
     return;
   }
   const contextKey = getChatViewportContextKey();
   if (!contextKey) return;
   chatViewportAnchorSaveTimer = setTimeout(() => {
     chatViewportAnchorSaveTimer = null;
-    if (getChatViewportContextKey() !== contextKey || !isChatSurfaceActive()
-      || shouldRenderWorkspaceSurface() || followLatestEnabled) return;
+    if (getChatViewportContextKey() !== contextKey || !window.isChatSurfaceActive()
+      || window.shouldRenderWorkspaceSurface() || chatSurface.followLatestEnabled) return;
     rememberChatViewportAnchorForContext(contextKey);
   }, 150);
 }, { passive: true });
 
 function notifyChatViewportMutation(options = {}) {
-  if (typeof refreshMeasuredChatRows === 'function') refreshMeasuredChatRows(options.reason);
+  refreshMeasuredChatRows(options.reason);
   ensureChatViewportObservers();
 
-  if (shouldRenderWorkspaceSurface()) {
+  if (window.shouldRenderWorkspaceSurface()) {
     cancelChatScrollSettlement();
     cancelFollowLatestAnimation();
     return;
   }
 
-  const context = chatViewportSettlementContext || {
+  const context = chatSurface.chatViewportSettlementContext || {
     reasons: new Set(),
     shouldFollow: false,
     preserveTop: null,
@@ -591,7 +581,7 @@ function notifyChatViewportMutation(options = {}) {
 
   const reason = String(options.reason || 'unknown');
   if (options.quietObservers !== false && reason !== 'dom-observer' && reason !== 'resize-observer') {
-    chatViewportObserverQuietUntil = Math.max(chatViewportObserverQuietUntil || 0, Date.now() + 180);
+    chatSurface.chatViewportObserverQuietUntil = Math.max(chatSurface.chatViewportObserverQuietUntil || 0, Date.now() + 180);
   }
   context.reasons.add(reason);
   context.lastMutationAt = Date.now();
@@ -607,34 +597,34 @@ function notifyChatViewportMutation(options = {}) {
     context.preserveTop = options.preserveTop;
   }
 
-  chatViewportSettlementContext = context;
+  chatSurface.chatViewportSettlementContext = context;
 
   const shouldLockBottomImmediately =
     context.shouldFollow
-    && followLatestEnabled
-    && isChatSurfaceActive()
+    && chatSurface.followLatestEnabled
+    && window.isChatSurfaceActive()
     && !context.preferSmooth
-    && !shouldRenderWorkspaceSurface()
+    && !window.shouldRenderWorkspaceSurface()
     && !shouldKeepFollowAnimationForMutation(reason, options.forceSnap === true);
   if (shouldLockBottomImmediately) {
     lockChatViewportToBottomNow();
   }
 
-  const token = ++chatViewportSettlementToken;
-  if (chatViewportSettlementTimer != null) {
-    clearTimeout(chatViewportSettlementTimer);
+  const token = ++chatSurface.chatViewportSettlementToken;
+  if (chatSurface.chatViewportSettlementTimer != null) {
+    clearTimeout(chatSurface.chatViewportSettlementTimer);
   }
-  if (chatViewportSettlementRaf) {
-    cancelAnimationFrame(chatViewportSettlementRaf);
-    chatViewportSettlementRaf = 0;
+  if (chatSurface.chatViewportSettlementRaf) {
+    cancelAnimationFrame(chatSurface.chatViewportSettlementRaf);
+    chatSurface.chatViewportSettlementRaf = 0;
   }
 
   const settle = () => {
-    if (token !== chatViewportSettlementToken) return;
-    chatViewportSettlementRaf = 0;
-    const activeContext = chatViewportSettlementContext;
+    if (token !== chatSurface.chatViewportSettlementToken) return;
+    chatSurface.chatViewportSettlementRaf = 0;
+    const activeContext = chatSurface.chatViewportSettlementContext;
     if (!activeContext) return;
-    if (shouldRenderWorkspaceSurface()) {
+    if (window.shouldRenderWorkspaceSurface()) {
       cancelChatScrollSettlement();
       cancelFollowLatestAnimation();
       return;
@@ -652,13 +642,13 @@ function notifyChatViewportMutation(options = {}) {
     const timedOut = (Date.now() - activeContext.startedAt) > 280;
     const stableEnough = activeContext.stableFrames >= 2;
     if (!stableEnough && !timedOut) {
-      chatViewportSettlementRaf = requestAnimationFrame(settle);
+      chatSurface.chatViewportSettlementRaf = requestAnimationFrame(settle);
       return;
     }
 
-    chatViewportSettlementContext = null;
+    chatSurface.chatViewportSettlementContext = null;
 
-    if (activeContext.shouldFollow && followLatestEnabled && isChatSurfaceActive()) {
+    if (activeContext.shouldFollow && chatSurface.followLatestEnabled && window.isChatSurfaceActive()) {
       const targetTop = getChatViewportBottomTop(metrics);
       const delta = targetTop - metrics.top;
       const distance = Math.abs(delta);
@@ -678,7 +668,7 @@ function notifyChatViewportMutation(options = {}) {
       }
       const shouldAnimateExplicitFollow =
         activeContext.preferSmooth
-        && chatViewportFollowTransition === 'smooth'
+        && chatSurface.chatViewportFollowTransition === 'smooth'
         && !isFollowLatestEntryWindowActive();
       const shouldSnapNow =
         !shouldAnimateExplicitFollow
@@ -707,10 +697,10 @@ function notifyChatViewportMutation(options = {}) {
     }
   };
 
-  chatViewportSettlementTimer = setTimeout(() => {
-    if (token !== chatViewportSettlementToken) return;
-    chatViewportSettlementTimer = null;
-    chatViewportSettlementRaf = requestAnimationFrame(settle);
+  chatSurface.chatViewportSettlementTimer = setTimeout(() => {
+    if (token !== chatSurface.chatViewportSettlementToken) return;
+    chatSurface.chatViewportSettlementTimer = null;
+    chatSurface.chatViewportSettlementRaf = requestAnimationFrame(settle);
   }, 0);
 }
 
@@ -718,26 +708,26 @@ function scrollToLatest(behavior = 'smooth') {
   const targetTop = getChatViewportBottomTop();
   if (behavior === 'auto') {
     cancelFollowLatestAnimation();
-    lastManualScrollIntentAt = 0;
+    chatSurface.lastManualScrollIntentAt = 0;
     setChatViewportTop(targetTop);
-    chatViewportFollowTransition = 'locked';
+    chatSurface.chatViewportFollowTransition = 'locked';
     return;
   }
 
-  lastManualScrollIntentAt = 0;
-  chatViewportFollowTransition = 'smooth';
+  chatSurface.lastManualScrollIntentAt = 0;
+  chatSurface.chatViewportFollowTransition = 'smooth';
   startFollowLatestAnimation();
 }
 
 function setFollowLatest(enabled, options = {}) {
   const { scroll = false, behavior = 'smooth' } = options;
-  followLatestEnabled = enabled;
+  chatSurface.followLatestEnabled = enabled;
   if (enabled) {
-    lastManualScrollIntentAt = 0;
-    chatViewportFollowTransition = behavior === 'smooth' ? 'smooth' : 'locked';
+    chatSurface.lastManualScrollIntentAt = 0;
+    chatSurface.chatViewportFollowTransition = behavior === 'smooth' ? 'smooth' : 'locked';
   }
   updateFollowLatestButton();
-  if (enabled && scroll && isChatSurfaceActive()) {
+  if (enabled && scroll && window.isChatSurfaceActive()) {
     requestFollowLatest({ behavior, scroll: true });
   } else if (!enabled) {
     interruptFollowLatest('programmatic');
@@ -745,7 +735,7 @@ function setFollowLatest(enabled, options = {}) {
 }
 
 function scheduleFollowLatestSettlePass() {
-  if (!followLatestEnabled || !isChatSurfaceActive()) return;
+  if (!chatSurface.followLatestEnabled || !window.isChatSurfaceActive()) return;
   notifyChatViewportMutation({
     reason: 'settle-pass',
     shouldFollow: true,
@@ -764,18 +754,18 @@ function requestFollowLatest(options = {}) {
   } = options;
 
   if (forceEnable) {
-    followLatestEnabled = true;
-    lastManualScrollIntentAt = 0;
+    chatSurface.followLatestEnabled = true;
+    chatSurface.lastManualScrollIntentAt = 0;
     updateFollowLatestButton();
   }
 
-  if (!scroll || !isChatSurfaceActive() || !followLatestEnabled) {
+  if (!scroll || !window.isChatSurfaceActive() || !chatSurface.followLatestEnabled) {
     return;
   }
 
   const entryWindowActive = isFollowLatestEntryWindowActive();
   const smoothAllowed = behavior === 'smooth' && !entryWindowActive && !immediate;
-  chatViewportFollowTransition = smoothAllowed ? 'smooth' : 'locked';
+  chatSurface.chatViewportFollowTransition = smoothAllowed ? 'smooth' : 'locked';
   notifyChatViewportMutation({
     reason: 'explicit-follow',
     shouldFollow: true,
@@ -820,15 +810,15 @@ function _isChatAnchorRowVisible(row) {
 
 /** 捕获当前视口位置。必须在宽度变化（写样式）之前调用。 */
 function captureChatViewportAnchor() {
-  if (!container || typeof isChatSurfaceActive !== 'function' ||
-      typeof shouldRenderWorkspaceSurface !== 'function' ||
-      !isChatSurfaceActive() || shouldRenderWorkspaceSurface()) {
+  if (!container || typeof window.isChatSurfaceActive !== 'function' ||
+      typeof window.shouldRenderWorkspaceSurface !== 'function' ||
+      !window.isChatSurfaceActive() || window.shouldRenderWorkspaceSurface()) {
     return null;
   }
 
   const scrollTop = container.scrollTop;
 
-  if (followLatestEnabled) {
+  if (chatSurface.followLatestEnabled) {
     _debugChatAnchor('capture follow mode, scrollTop=', scrollTop);
     return { mode: 'follow', scrollTop };
   }
@@ -898,3 +888,167 @@ function applyChatViewportAnchor(anchor) {
     _debugChatAnchor('apply pixel → scrollTop=', anchor.scrollTop);
   }
 }
+
+export {
+  updateAssemblySideRailPosition,
+  getToggleButtonLabel,
+  isNearBottom,
+  updateFollowLatestButton,
+  updateFollowLatestButtonPosition,
+  ensureFollowLatestAvoidObserver,
+  markManualScrollIntent,
+  getChatViewportMetrics,
+  getChatViewportBottomTop,
+  setChatViewportTop,
+  lockChatViewportToBottomNow,
+  suppressChatViewportObservers,
+  resumeChatViewportObservers,
+  shouldIgnoreChatViewportObserverEvent,
+  runWithSuppressedChatViewportObservers,
+  cancelFollowLatestAnimation,
+  startFollowLatestAnimation,
+  isFollowLatestAnimationCruising,
+  shouldKeepFollowAnimationForMutation,
+  observeChatViewportRows,
+  ensureChatViewportObservers,
+  interruptFollowLatest,
+  registerManualScrollIntent,
+  hasRecentManualScrollIntent,
+  beginFollowLatestCooldown,
+  isFollowLatestCooldownActive,
+  beginFollowLatestEntryWindow,
+  isFollowLatestEntryWindowActive,
+  cancelChatScrollSettlement,
+  notifyChatViewportMutation,
+  setPendingChatScrollRestore,
+  consumePendingChatScrollRestore,
+  serializeChatViewportAnchor,
+  setPendingChatViewportAnchor,
+  consumePendingChatViewportAnchor,
+  getChatViewportContextKey,
+  getChatScrollContextKey,
+  rememberChatViewportAnchorForContext,
+  getRememberedChatViewportAnchorForContext,
+  forgetChatViewportAnchorForContext,
+  scrollToLatest,
+  setFollowLatest,
+  scheduleFollowLatestSettlePass,
+  requestFollowLatest,
+  scheduleScrollToLatest,
+  scheduleScrollToLatestWithVersion,
+  captureChatViewportAnchor,
+  applyChatViewportAnchor,
+};
+
+/* ── 桥键（domain `chat-viewport`）──────────────────────────────────
+   逐键消费面证据（仍未迁移的 classic 消费方 / 本批清单外的已迁 ESM 晚绑定取用）：
+   - updateAssemblySideRailPosition   ← app-ui.js（renderCurrentMainView 两处 rAF）、
+                                        ctx-menu-handlers.js（window）
+   - updateFollowLatestButton         ← app-ui.js、chat-renderer.js（bare）
+   - getToggleButtonLabel             ← chat-renderer.js（bare，折叠按钮文案）
+   - isNearBottom                     ← chat-scroll.js（window）
+   - cancelChatScrollSettlement       ← app-ui.js、chat-renderer.js（bare）
+   - notifyChatViewportMutation       ← chat-renderer / chat-context-bar /
+                                        chat-process-visibility / input-render /
+                                        p2-w2-1-chat-windowing-host 链路
+   - runWithSuppressedChatViewportObservers ← chat-renderer / input-composer /
+                                        lazy-tool-content / tool-progress / input-render
+   - suppressChatViewportObservers / resumeChatViewportObservers ← app-ui.js、
+                                        debug-panel-host.js
+   - ensureChatViewportObservers      ← app-ui.js（renderCurrentMainView 无条件）
+   - lockChatViewportToBottomNow      ← chat-renderer.js（render 首屏锁底）
+   - registerManualScrollIntent       ← chat-scroll / chat-nav-timeline /
+                                        ph-search-locate；hasRecentManualScrollIntent
+                                        ← chat-scroll
+   - beginFollowLatestCooldown / beginFollowLatestEntryWindow ← app-main.js（host）、
+                                        workspace-actions / input-actions / persistent-input
+   - setFollowLatest / requestFollowLatest / scheduleFollowLatestSettlePass ←
+                                        app-main / app-ui（host）、chat-scroll、
+                                        debug-panel-host、ph-search-locate 等
+   - captureChatViewportAnchor / applyChatViewportAnchor ← app-ui / chat-renderer /
+                                        chat-row-visibility / debug-panel-host
+   - rememberChatViewportAnchorForContext / getRememberedChatViewportAnchorForContext /
+     getChatViewportContextKey / forgetChatViewportAnchorForContext ← app-core.js
+                                        （createRuntimeViewCacheHost）、app-ui.js
+   - setPendingChatScrollRestore ← app-main / thread-store；
+     consumePendingChatScrollRestore ← chat-renderer
+   - setPendingChatViewportAnchor / consumePendingChatViewportAnchor ← app-main /
+                                        thread-store / app-ui / app-core / chat-renderer
+   - getChatScrollContextKey          ← chat-renderer.js（render 的 context 比对）
+
+   注销条件（逐批随消费方收敛）：
+   - chat-renderer / app-ui / app-main / app-core 四件迁 ESM 并改 import 后，上述对应
+     键整块注销（`KERNEL_BRIDGE_UPDATE_BASELINE=1` 由主助手执行）；
+   - chat-scroll / chat-nav-timeline / ph-search-locate / input-actions /
+     workspace-actions / persistent-input / chat-row-visibility / lazy-tool-content /
+     tool-progress / input-render / chat-context-bar / chat-process-visibility /
+     ctx-menu-handlers / debug-panel-host 改 import 时逐键注销。
+   未上桥的模块内实现（markManualScrollIntent / getChatViewportMetrics /
+   updateFollowLatestButtonPosition / scrollToLatest / scheduleScrollToLatest* 等）在
+   生产代码里零 window 消费面，只作命名导出（实验脚本与测试消费）。 */
+const bridged = {
+  updateAssemblySideRailPosition,
+  updateFollowLatestButton,
+  getToggleButtonLabel,
+  isNearBottom,
+  cancelChatScrollSettlement,
+  notifyChatViewportMutation,
+  runWithSuppressedChatViewportObservers,
+  suppressChatViewportObservers,
+  resumeChatViewportObservers,
+  ensureChatViewportObservers,
+  lockChatViewportToBottomNow,
+  registerManualScrollIntent,
+  hasRecentManualScrollIntent,
+  beginFollowLatestCooldown,
+  beginFollowLatestEntryWindow,
+  setFollowLatest,
+  requestFollowLatest,
+  scheduleFollowLatestSettlePass,
+  captureChatViewportAnchor,
+  applyChatViewportAnchor,
+  rememberChatViewportAnchorForContext,
+  getRememberedChatViewportAnchorForContext,
+  getChatViewportContextKey,
+  forgetChatViewportAnchorForContext,
+  setPendingChatScrollRestore,
+  consumePendingChatScrollRestore,
+  setPendingChatViewportAnchor,
+  consumePendingChatViewportAnchor,
+  getChatScrollContextKey,
+};
+// 逐键显式注册（不用循环）：桥债口径按 defineKey 调用点数计量，循环会把 29 个
+// 桥键压成 1 个调用点，等于在指标上做口径游戏。
+window.KernelState.defineKey('chat-viewport', 'updateAssemblySideRailPosition', bridged.updateAssemblySideRailPosition);
+window.KernelState.defineKey('chat-viewport', 'updateFollowLatestButton', bridged.updateFollowLatestButton);
+window.KernelState.defineKey('chat-viewport', 'getToggleButtonLabel', bridged.getToggleButtonLabel);
+window.KernelState.defineKey('chat-viewport', 'isNearBottom', bridged.isNearBottom);
+window.KernelState.defineKey('chat-viewport', 'cancelChatScrollSettlement', bridged.cancelChatScrollSettlement);
+window.KernelState.defineKey('chat-viewport', 'notifyChatViewportMutation', bridged.notifyChatViewportMutation);
+window.KernelState.defineKey('chat-viewport', 'runWithSuppressedChatViewportObservers', bridged.runWithSuppressedChatViewportObservers);
+window.KernelState.defineKey('chat-viewport', 'suppressChatViewportObservers', bridged.suppressChatViewportObservers);
+window.KernelState.defineKey('chat-viewport', 'resumeChatViewportObservers', bridged.resumeChatViewportObservers);
+window.KernelState.defineKey('chat-viewport', 'ensureChatViewportObservers', bridged.ensureChatViewportObservers);
+window.KernelState.defineKey('chat-viewport', 'lockChatViewportToBottomNow', bridged.lockChatViewportToBottomNow);
+window.KernelState.defineKey('chat-viewport', 'registerManualScrollIntent', bridged.registerManualScrollIntent);
+window.KernelState.defineKey('chat-viewport', 'hasRecentManualScrollIntent', bridged.hasRecentManualScrollIntent);
+window.KernelState.defineKey('chat-viewport', 'beginFollowLatestCooldown', bridged.beginFollowLatestCooldown);
+window.KernelState.defineKey('chat-viewport', 'beginFollowLatestEntryWindow', bridged.beginFollowLatestEntryWindow);
+window.KernelState.defineKey('chat-viewport', 'setFollowLatest', bridged.setFollowLatest);
+window.KernelState.defineKey('chat-viewport', 'requestFollowLatest', bridged.requestFollowLatest);
+window.KernelState.defineKey('chat-viewport', 'scheduleFollowLatestSettlePass', bridged.scheduleFollowLatestSettlePass);
+window.KernelState.defineKey('chat-viewport', 'captureChatViewportAnchor', bridged.captureChatViewportAnchor);
+window.KernelState.defineKey('chat-viewport', 'applyChatViewportAnchor', bridged.applyChatViewportAnchor);
+window.KernelState.defineKey('chat-viewport', 'rememberChatViewportAnchorForContext', bridged.rememberChatViewportAnchorForContext);
+window.KernelState.defineKey('chat-viewport', 'getRememberedChatViewportAnchorForContext', bridged.getRememberedChatViewportAnchorForContext);
+window.KernelState.defineKey('chat-viewport', 'getChatViewportContextKey', bridged.getChatViewportContextKey);
+window.KernelState.defineKey('chat-viewport', 'forgetChatViewportAnchorForContext', bridged.forgetChatViewportAnchorForContext);
+window.KernelState.defineKey('chat-viewport', 'setPendingChatScrollRestore', bridged.setPendingChatScrollRestore);
+window.KernelState.defineKey('chat-viewport', 'consumePendingChatScrollRestore', bridged.consumePendingChatScrollRestore);
+window.KernelState.defineKey('chat-viewport', 'setPendingChatViewportAnchor', bridged.setPendingChatViewportAnchor);
+window.KernelState.defineKey('chat-viewport', 'consumePendingChatViewportAnchor', bridged.consumePendingChatViewportAnchor);
+window.KernelState.defineKey('chat-viewport', 'getChatScrollContextKey', bridged.getChatScrollContextKey);
+window.KernelState.claim('chat-viewport', {
+  get: (key) => bridged[key],
+  set: (key, value) => { bridged[key] = value; },
+});

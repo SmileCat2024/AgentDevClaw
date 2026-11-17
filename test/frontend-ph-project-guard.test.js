@@ -131,8 +131,6 @@ async function withGuard(probe) {
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
-      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/modules/remote-connections.js');
       // classic 宿主面：当前 agent 记录与主视图重绘（app-main / app-ui 仍 classic）。
       sandbox.__phAgent = phAgent;
       sandbox.allAgents = [phAgent];
@@ -173,6 +171,9 @@ async function withGuard(probe) {
       },
     },
   }, async (c) => {
+    // 远程目录（已迁 ESM，P4 T3）：project-data 的 remoteOnly 桶与
+    // capabilityFor 门控都经 window.RemoteConnections 取数。
+    await c.load('public/src/modules/remote-connections.js');
     const data = await c.load(PROJECT_DATA);
     const actions = await c.load(PH_PROJECT_ACTIONS);
     // 远程视图覆盖状态 owner（P2 项目/装配批：ClawFW.phSurfaceViewProjectId 窗面已撤，

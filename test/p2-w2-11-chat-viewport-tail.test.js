@@ -1,46 +1,30 @@
 /**
- * P2 第二波批次 11：聊天视口尾部（chat-viewport）——同步首屏唯一 classic
- * 实现的生命周期契约与 ESM 消费面。
+ * P4 T2 批次：聊天视口（chat-viewport）转 ESM 后的生命周期契约。
  *
- * 批次结论（实施前审计，证据见批次报告）：chat-viewport **不转 ESM**。
- * `app-main` 顶层 `applyTheme(); applyLanguage();` → `theme-lang.applyLanguage()`
- * 末行 `renderCurrentMainView()` 在 classic 解析相同步触达本域：
- *   - `app-ui.js` `renderCurrentMainView()` 无条件 `ensureChatViewportObservers()`
- *   - `chat-renderer.js` `renderChatEmptyState()` → `cancelChatScrollSettlement()`
- *     + `runWithSuppressedChatViewportObservers(..., 180)`
- *   - `app-ui.js` 空会话分支 `updateFollowLatestButton()`
- *   - `chat-context-bar.js` 首次上屏即 `notifyChatViewportMutation(...)`
- *     （首屏 `followLatestEnabled=true` → 同步 `lockChatViewportToBottomNow()`）
- * 之后解析期帧/定时器窗口仍可能到达（`renderCurrentMainView` 同一同步入口在
- * workspace / 有消息分支 `requestAnimationFrame(updateAssemblySideRailPosition)`；
- * 避让 ResizeObserver 在首屏即调度定位 rAF；settle、静默窗、150ms 锚点保存
- * 定时器）。这些入口共享同一套结算 / 跟随 / 锚点状态，迁走任一环都是首屏或
- * 解析期交互的 ReferenceError；语言按钮（主题按钮不进该链）在 DOMContentLoaded
- * 前已可点。复制实现 / ready 等待 / 空操作都被批次规则禁止。
+ * 迁移前本文件钉住的是「chat-viewport 必须保持 classic 唯一实现」——P4 时序切换
+ * 把首屏渲染链改由 `boot.js` 在模块相触发之后，那条约束解除，本批按配方常规转换
+ * （审计见表头与 chat-viewport.js 头注）。本文件因此改写为钉住迁移后的等价契约：
  *
- * 因此本文件钉住两件事：
- *   1. 同步首屏契约：**不 import 任何 ESM** 时，上述 classic 调用序列必须
- *      完整跑通并留下真实观察者 / 结算 / 跟随状态（防止后续批次误把本域
- *      函数搬进 deferred 模块）。**注意**：调用者链（app-ui / theme-lang /
- *      chat-renderer / chat-context-bar）由本测试**手工重放**，不加载这些文件；
- *      删除调用点本测试仍会通过，真实 caller 链留给后续总集成（boot-chain）覆盖。
- *   2. 兼容面：直接 import `p2-bootstrap-dom` / `p2-bootstrap-chat-surface` 的
- *      ESM 消费方取得的，仍是**同一个唯一 classic 实现**：domRefs 持有 app-core
- *      顶层 `const` 引用身份、chatSurface 双向转发状态；手动滚动 / 跟随 / 回落 /
- *      程序写滚动这些优先级语义不变。经 classic `host.*` seam（runtime-view-cache /
- *      runtime-switch / workspace-surface）的消费方不在本测试范围。
+ *   1. 模块相首屏：chat-viewport 先于 boot 求值，重放首屏渲染链（app-ui /
+ *      chat-renderer / chat-context-bar 的同步序列）必须留下真实的观察者 / 结算 /
+ *      跟随状态——与迁移前 classic 相同一步到位的行为等价。
+ *   2. 兼容面：仍 classic 的消费方（app-ui / app-core）与清单外的
+ *      已迁 ESM 消费方经 `window.<fn>` 桥键晚绑定到同一实现；桥键转发到模块导出
+ *      本文件逐个钉住。
+ *   3. 手动滚动优先级、锚点族语义、过期结算 / 过期锚点保存拒绝、观察者静默窗、
+ *      跟随按钮避让定位：行为逐条保持。
  *
  * 装载路线：`withP2EsmCase`（真实 classic 沙箱 + 真实 ESM 图，每个用例一份
- * window）。classic 侧加载**真实 app-core.js + chat-viewport.js**（app-core 提供
- * 顶层 `const container` / 视口状态与两套 bootstrap host 工厂），app-ui 侧只
- * stub 本域实际触达的两个判定函数（`isChatSurfaceActive` /
- * `shouldRenderWorkspaceSurface`）与 i18n（`escapeHtml` / `t`）——完整 app-ui
- * 不在 vm 沙箱装载范围内。沙箱内计时器 / rAF / 时钟由本文件接成确定性队列
- * （解析期窗口语义按真实时序驱动，不 sleep；`Date` 保留构造器，仅 mock `now`）。
+ * window）。classic 相只装真实 app-core.js（视口状态 owner 与两套 bootstrap host
+ * 工厂）；chat-viewport 走 async 相 `c.load` 真实 import，app-ui 侧只 stub 本域实际
+ * 触达的两个判定函数（`isChatSurfaceActive` / `shouldRenderWorkspaceSurface`）与
+ * escapeHtml。沙箱内计时器 / rAF / 时钟由本文件接成确定性队列（按真实时序驱动，
+ * 不 sleep；`Date` 保留构造器，仅 mock `now`）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { t as realT } from '../public/src/i18n.js';
 
 const APP_CORE = 'public/src/app-core.js';
 const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
@@ -185,6 +169,19 @@ function createClock() {
  * 确定性计时器队列：取代沙箱里的 setTimeout / requestAnimationFrame，
  * 用 `flush` 按到期顺序推进逻辑时钟并执行回调（rAF 视为 0 延迟）。
  */
+/** 逻辑时钟 Date：classic 沙箱与 ESM 模块（经验证明 Date.now 是模块内唯一时间源）
+ *  必须共用同一份，否则静默窗 / 结算超时类断言会读到真实时间。 */
+function createFakeDate(clock) {
+  const RealDate = Date;
+  function FakeDate(...args) {
+    return args.length ? new RealDate(...args) : new RealDate(clock.now);
+  }
+  FakeDate.prototype = RealDate.prototype;
+  Object.setPrototypeOf(FakeDate, RealDate);
+  FakeDate.now = () => clock.now;
+  return FakeDate;
+}
+
 function installTimerQueue(sandbox, clock) {
   const queue = [];
   let seq = 0;
@@ -205,14 +202,7 @@ function installTimerQueue(sandbox, clock) {
   sandbox.cancelAnimationFrame = drop;
   // 保留 Date 构造器与静态方法，只把 now 换成逻辑时钟：视口代码当前只用
   // Date.now()，但夹具不能因此让 `new Date()` / Date.parse 在未来改动中抛错。
-  const RealDate = sandbox.Date;
-  function FakeDate(...args) {
-    return args.length ? new RealDate(...args) : new RealDate(clock.now);
-  }
-  FakeDate.prototype = RealDate.prototype;
-  Object.setPrototypeOf(FakeDate, RealDate);
-  FakeDate.now = () => clock.now;
-  sandbox.Date = FakeDate;
+  sandbox.Date = createFakeDate(clock);
   return {
     pending: () => queue.length,
     /** 取出最早到期的回调（不执行、不出队后自动取消），用于验证代次守卫。 */
@@ -292,6 +282,7 @@ function createFixture() {
 
   const globals = {
     document,
+    Date: createFakeDate(clock),
     navigator: { userAgent: '' },
     CSS: { supports: () => false },
     WheelEvent: { DOM_DELTA_LINE: 1, DOM_DELTA_PAGE: 2 },
@@ -318,8 +309,10 @@ function loadClassicViewport(fixture) {
     sandbox.escapeHtml = (value) => String(value == null ? '' : value)
       .replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
     sandbox.t = (key) => key;
+    // 分发器先于一切声明 data-action 的模块装载（markdown-utils 求值期注册动作）。
+    sandbox.loadSource('public/src/modules/action-dispatcher.js');
     sandbox.loadSource(APP_CORE);
-    sandbox.loadSource(CHAT_VIEWPORT);
+    // chat-viewport 已迁 ESM（P4 T2）：不再走 classic 标签，由 async 相 c.load 装载。
     fixture.timers = installTimerQueue(sandbox, fixture.clock);
     fixture.sandbox = sandbox;
     fixture.writes = [];
@@ -330,51 +323,48 @@ function loadClassicViewport(fixture) {
   };
 }
 
-/** 首屏同步调用序列（app-main → theme-lang → app-ui / chat-renderer / chat-context-bar）。 */
-function runFirstPaintChain(c) {
-  return c.read(`(() => {
-    // app-ui.js renderCurrentMainView() 无条件调用
-    ensureChatViewportObservers();
-    // chat-renderer.js renderChatEmptyState()
-    cancelChatScrollSettlement();
-    runWithSuppressedChatViewportObservers(() => { container.innerHTML = '<div class="empty-state empty-welcome">hi</div>'; }, 180);
-    // app-ui.js 空会话分支
-    updateFollowLatestButton();
-    // chat-context-bar.js 上屏后（首屏 followLatestEnabled=true）
-    notifyChatViewportMutation({
-      reason: 'context-bar',
-      shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-      preserveTop: followLatestEnabled ? null : container.scrollTop,
-      forceSnap: false,
-      allowChase: false,
-      preferSmooth: false,
-    });
-    return {
-      observersReady: chatViewportObserversReady,
-      followEnabled: followLatestEnabled,
-      transition: chatViewportFollowTransition,
-      suppressDepth: chatViewportObserverSuppressDepth,
-      quietRemaining: chatViewportObserverQuietUntil - Date.now(),
-      token: chatViewportSettlementToken,
-      hasContext: chatViewportSettlementContext !== null,
-      scrollTop: container.scrollTop,
-    };
-  })()`);
+/** 首屏调用序列（app-ui → chat 渲染 → chat-context-bar 在模块相的真实入口）。 */
+function runFirstPaintChain(c, viewport) {
+  viewport.ensureChatViewportObservers();
+  viewport.cancelChatScrollSettlement();
+  viewport.runWithSuppressedChatViewportObservers(() => {
+    fixtureContainer(c).innerHTML = '<div class="empty-state empty-welcome">hi</div>';
+  }, 180);
+  viewport.updateFollowLatestButton();
+  viewport.notifyChatViewportMutation({
+    reason: 'context-bar',
+    shouldFollow: c.read('followLatestEnabled') && c.read('isChatSurfaceActive()'),
+    preserveTop: null,
+    forceSnap: false,
+    allowChase: false,
+    preferSmooth: false,
+  });
+  return c.read(`({
+    observersReady: chatViewportObserversReady,
+    followEnabled: followLatestEnabled,
+    transition: chatViewportFollowTransition,
+    suppressDepth: chatViewportObserverSuppressDepth,
+    quietRemaining: chatViewportObserverQuietUntil - Date.now(),
+    token: chatViewportSettlementToken,
+    hasContext: chatViewportSettlementContext !== null,
+  })`);
+}
+
+/** 视口容器：模块在求值期经 document.getElementById 等价重建（与本夹具同一节点）。 */
+function fixtureContainer(c) {
+  return c.document.getElementById('chat-container');
 }
 
 // ── 1. 同步首屏契约 ────────────────────────────────────────────────
 
-test('首屏同步链在零 ESM 装载时跑通真实观察者 / 结算 / 跟随', async () => {
+test('模块相首屏链建立真实观察者 / 结算 / 跟随状态', async () => {
   const fixture = createFixture();
   await withP2EsmCase({ globals: fixture.globals, classic: loadClassicViewport(fixture) }, async (c) => {
-    // 真实计量：包装 c.load 计数，首屏链跑完前必须为零（不是本地自增重言式）。
-    const realLoad = c.load.bind(c);
-    let esmLoads = 0;
-    c.load = (relativePath) => { esmLoads += 1; return realLoad(relativePath); };
+    // 视口域在模块相求值（生产由 p4-entry 装载，早于 boot.js 的首屏渲染链）。
+    const viewport = await c.load(CHAT_VIEWPORT);
 
-    const state = runFirstPaintChain(c);
+    const state = runFirstPaintChain(c, viewport);
 
-    assert.equal(esmLoads, 0, '首屏契约必须在任何 ESM 模块执行前成立');
     assert.equal(state.observersReady, true, 'ensureChatViewportObservers 必须同步完成初始化');
     const observers = CapturingObserver.instances;
     assert.ok(observers.length >= 2, '必须建立 MutationObserver 与 ResizeObserver');
@@ -382,7 +372,9 @@ test('首屏同步链在零 ESM 装载时跑通真实观察者 / 结算 / 跟随
     const resizeObserver = observers.find((obs) => obs instanceof CapturingResizeObserver);
     assert.ok(mutationObserver, 'MutationObserver 已建立');
     assert.ok(resizeObserver, 'ResizeObserver 已建立');
+    // 模块在求值期经 document.getElementById 等价重建 container（同一节点）
     assert.deepEqual(mutationObserver.targets, [fixture.container], '变异观察容器');
+    assert.equal(mutationObserver.targets[0], c.read('container'), '模块的 container 与 app-core 顶层 const 是同一节点');
     assert.ok(resizeObserver.targets.includes(fixture.container), '尺寸观察容器');
     assert.ok(resizeObserver.targets.includes(fixture.inputHost), '尺寸观察输入容器');
 
@@ -395,38 +387,39 @@ test('首屏同步链在零 ESM 装载时跑通真实观察者 / 结算 / 跟随
     // 首屏无消息行但容器可滚：跟随开启时同步锁底（原行为）
     fixture.container.scrollHeight = 1600;
     fixture.writes.length = 0;
-    c.read('container.scrollHeight = 1600; lockChatViewportToBottomNow();');
-    assert.equal(c.read('container.scrollTop'), 1000, '跟随模式同步锁底到 max scrollTop');
+    viewport.lockChatViewportToBottomNow();
+    assert.equal(fixture.container.scrollTop, 1000, '跟随模式同步锁底到 max scrollTop');
     assert.deepEqual(fixture.writes.map((w) => w.top), [1000]);
     assert.equal(fixture.writes[0].suppressed, true, '程序写 scrollTop 全程抑制跟随滚动事件');
     // 跟随按钮按真实状态渲染（不是空操作）：无消息时隐藏、跟随态 active、文案真实
     assert.equal(fixture.followLatestButton.classList.contains('hidden'), true);
     assert.equal(fixture.followLatestButton.classList.contains('active'), true);
     assert.ok(fixture.followLatestButton.innerHTML.includes('follow-latest-dot'));
-    assert.ok(fixture.followLatestButton.innerHTML.includes('follow_latest_on'));
-    c.read('currentMessages = [{ role: "user", text: "x" }]; updateFollowLatestButton();');
+    // 文案来自真实 i18n（模块 import 的 t 读 window.currentLanguage = zh）
+    assert.ok(fixture.followLatestButton.innerHTML.includes(realT('follow_latest_on')));
+    c.read('currentMessages = [{ role: "user", text: "x" }]');
+    viewport.updateFollowLatestButton();
     // 空态守卫走真实合并选择器 `.empty-welcome, .chat-loading`：容器仍是首屏
     // 写入的欢迎态，因此即使有消息也隐藏（唯一能命中该守卫的路径）。
     assert.equal(fixture.followLatestButton.classList.contains('hidden'), true,
       '空态守卫：有消息但容器是欢迎态时按钮隐藏');
     fixture.container._html = '<div class="empty-state chat-loading">…</div>';
-    c.read('updateFollowLatestButton();');
+    viewport.updateFollowLatestButton();
     assert.equal(fixture.followLatestButton.classList.contains('hidden'), true,
       '空态守卫同样覆盖 chat-loading');
     fixture.container._html = '';
-    c.read('updateFollowLatestButton();');
+    viewport.updateFollowLatestButton();
     assert.equal(fixture.followLatestButton.classList.contains('hidden'), false, '有消息且非空态时按钮可见');
 
     // 结算定时器仍在队列里，可被取消（旧异步拒绝的基础）
     assert.ok(fixture.timers.pending() >= 1, '同步通知已入队 settle 定时器');
-    c.read('cancelChatScrollSettlement();');
+    viewport.cancelChatScrollSettlement();
     assert.equal(fixture.timers.pending(), 0, '取消结算必须清掉未触发计时器');
     assert.equal(c.read('chatViewportSettlementContext'), null);
 
-    // 进入 ESM 相：DOM / 表面状态适配面与 classic 是同一份
+    // 状态 owner 仍是 app-core（chatSurface 双向转发），模块按读写实时取用
     const { domRefs } = await c.load(BOOTSTRAP_DOM);
     const { chatSurface } = await c.load(BOOTSTRAP_CHAT_SURFACE);
-    assert.equal(esmLoads, 2, 'ESM 相确实发生两次真实 import（计量可失败）');
     assert.equal(domRefs.container, c.read('container'), 'domRefs 持有 app-core 顶层 const 引用');
     assert.throws(() => { domRefs.container = null; }, TypeError,
       'const 引用只读：ESM 侧改不动唯一 owner');
@@ -436,31 +429,36 @@ test('首屏同步链在零 ESM 装载时跑通真实观察者 / 结算 / 跟随
     c.read('followLatestEnabled = true;');
     assert.equal(chatSurface.followLatestEnabled, true, 'classic 写点对 ESM 立即可见');
 
-    // 兼容面：顶层函数仍是 window 可调的同一实现（classic 消费方的晚绑定协议）
-    assert.equal(c.read('typeof window.notifyChatViewportMutation'), 'function');
-    assert.equal(c.read('window.notifyChatViewportMutation === notifyChatViewportMutation'), true);
-    assert.equal(c.read('typeof window.registerManualScrollIntent'), 'function');
-    assert.equal(c.read('typeof window.requestFollowLatest'), 'function');
+    // 兼容面：桥键转发到模块导出（classic 与清单外 ESM 消费方的晚绑定协议）
+    assert.equal(c.window.notifyChatViewportMutation, viewport.notifyChatViewportMutation);
+    assert.equal(c.window.runWithSuppressedChatViewportObservers, viewport.runWithSuppressedChatViewportObservers);
+    assert.equal(c.window.registerManualScrollIntent, viewport.registerManualScrollIntent);
+    assert.equal(c.window.requestFollowLatest, viewport.requestFollowLatest);
+    assert.equal(c.window.getToggleButtonLabel, viewport.getToggleButtonLabel);
+    // classic 侧裸调用（app-ui 的形态）与模块调用命中同一实现
+    const tokenBefore = c.read('chatViewportSettlementToken');
+    c.read('notifyChatViewportMutation({ reason: "compat", shouldFollow: false, preserveTop: null, allowChase: false, preferSmooth: false, forceSnap: false })');
+    assert.equal(c.read('chatViewportSettlementToken'), tokenBefore + 1,
+      'classic 裸调用经同一实现推进结算代次');
   });
 });
 
-// ── 2. 手动滚动优先级（ESM 消费方经兼容面进入唯一 classic 实现）────
+// ── 2. 手动滚动优先级（清单外 ESM 消费方经桥键进入同一实现）────────
 
 test('手动滚动中断跟随 / 回底恢复的优先级经兼容面保持', async () => {
   const fixture = createFixture();
   await withP2EsmCase({ globals: fixture.globals, classic: loadClassicViewport(fixture) }, async (c) => {
-    runFirstPaintChain(c);
-    const { domRefs } = await c.load(BOOTSTRAP_DOM);
-    const { chatSurface } = await c.load(BOOTSTRAP_CHAT_SURFACE);
-    assert.equal(domRefs.container, fixture.container);
+    const viewport = await c.load(CHAT_VIEWPORT);
+    runFirstPaintChain(c, viewport);
+    const surface = c.window.createP2BootstrapChatSurfaceHost();
     fixture.timers.flush(0);
     assert.equal(c.read('followLatestEnabled'), true);
 
     // 已迁消费方（chat-scroll 的 wheel 监听 / chat-nav-timeline / ph-search-locate）
-    // 经 window 晚绑定调用同一 classic 入口：向上滚动 → 立即中断跟随。
+    // 经 window 晚绑定调用同一实现：向上滚动 → 立即中断跟随。
     c.read('registerManualScrollIntent({ interrupt: true });');
     assert.equal(c.read('followLatestEnabled'), false, '向上滚动手动中断跟随');
-    assert.equal(chatSurface.followLatestEnabled, false, 'ESM 侧读到同一 owner');
+    assert.equal(surface.followLatestEnabled, false, '宿主面读到同一 owner');
     assert.equal(c.read('chatViewportFollowTransition'), 'locked');
     assert.ok(c.read('Date.now() - lastManualScrollIntentAt') < 1500, '手动意图窗口内');
     assert.equal(fixture.followLatestButton.classList.contains('active'), false);
@@ -468,26 +466,26 @@ test('手动滚动中断跟随 / 回底恢复的优先级经兼容面保持', as
     // 向下滚回底部 + 近期手动意图 → chat-scroll 的 scroll 判定恢复跟随
     fixture.container.scrollHeight = 1600;
     fixture.container.scrollTop = 1000;
-    assert.equal(c.read('isNearBottom()'), true);
-    assert.equal(c.read('hasRecentManualScrollIntent()'), true);
-    c.read('setFollowLatest(true);');
+    assert.equal(viewport.isNearBottom(), true);
+    assert.equal(viewport.hasRecentManualScrollIntent(), true);
+    viewport.setFollowLatest(true);
     assert.equal(c.read('followLatestEnabled'), true, '回底恢复跟随');
-    assert.equal(chatSurface.followLatestEnabled, true);
+    assert.equal(surface.followLatestEnabled, true);
     fixture.timers.flush(0);
     assert.equal(fixture.container.scrollTop, 1000, '恢复跟随锁底');
 
     // 程序写 scrollTop 必须压住跟随滚动事件（suppressFollowScrollEvent）
     fixture.writes.length = 0;
-    c.read('setChatViewportTop(0);');
+    viewport.setChatViewportTop(0);
     assert.equal(fixture.writes.length, 1);
     assert.equal(fixture.writes[0].top, 0);
     assert.equal(fixture.writes[0].suppressed, true, '写入瞬间 suppression 生效');
     assert.equal(c.read('suppressFollowScrollEvent'), false, '写入完成后抑制标志复位');
-    assert.equal(chatSurface.suppressFollowScrollEvent, false);
+    assert.equal(surface.suppressFollowScrollEvent, false);
   });
 });
 
-// ── 3. 锚点 / 阅读位置 / const 引用 ───────────────────────────────
+// ── 3. 锚点 / 阅读位置 / DOM 引用 ─────────────────────────────────
 
 function installRows(fixture, heights) {
   const rows = heights.map((height, index) => {
@@ -505,62 +503,61 @@ function installRows(fixture, heights) {
 test('锚点捕获/应用与阅读位置恢复保持原语义', async () => {
   const fixture = createFixture();
   await withP2EsmCase({ globals: fixture.globals, classic: loadClassicViewport(fixture) }, async (c) => {
-    runFirstPaintChain(c);
-    c.read('localStorage.setItem("k", "v")');
+    const viewport = await c.load(CHAT_VIEWPORT);
+    runFirstPaintChain(c, viewport);
     const rows = installRows(fixture, [200, 200, 200, 200]);
     fixture.container.clientHeight = 300;
     c.read('followLatestEnabled = false; currentRuntimeAgentId = "rt-a";');
-    c.read('window.getRuntimeContextKey = (id) => "ctx:" + id;');
+    c.window.getRuntimeContextKey = (id) => 'ctx:' + id;
     // 隐藏行不参与锚定
     rows[1].classList.add('process-hidden');
     fixture.container.scrollTop = 250;
-    const anchor = c.read('captureChatViewportAnchor()');
+    const anchor = viewport.captureChatViewportAnchor();
     assert.equal(anchor.mode, 'anchor');
     assert.equal(anchor.rowIdx, 2, '跳过 process-hidden 行');
     assert.equal(anchor.offset, 250 - rows[2].offsetTop);
     assert.equal(anchor.scrollTop, 250);
 
     // 序列化锚点在重建后的行集上按 rowIdx 解析（跨 realm 对象逐字段断言）
-    const serialized = c.read('serializeChatViewportAnchor(captureChatViewportAnchor())');
+    const serialized = viewport.serializeChatViewportAnchor(viewport.captureChatViewportAnchor());
     assert.equal(serialized.mode, 'anchor');
     assert.equal(serialized.rowIdx, 2);
     assert.equal(serialized.offset, anchor.offset);
     assert.equal(serialized.scrollTop, 250);
     assert.deepEqual(Object.keys(serialized).sort(), ['mode', 'offset', 'rowIdx', 'scrollTop']);
     const rebuilt = installRows(fixture, [300, 300, 300, 300]);
-    c.read(`(function () {
-      const a = ${JSON.stringify(serialized)};
-      applyChatViewportAnchor(a);
-    })()`);
+    viewport.applyChatViewportAnchor(serialized);
     assert.equal(fixture.container.scrollTop, rebuilt[2].offsetTop + serialized.offset,
       '重建后按 rowIdx + offset 恢复');
 
     // follow 模式锚点直接到底
-    c.read('followLatestEnabled = true; applyChatViewportAnchor({ mode: "follow" });');
+    c.read('followLatestEnabled = true;');
+    viewport.applyChatViewportAnchor({ mode: 'follow' });
     assert.equal(fixture.container.scrollTop, fixture.container.scrollHeight - fixture.container.clientHeight);
 
     // 像素回退
-    c.read('followLatestEnabled = false; applyChatViewportAnchor({ mode: "pixel", scrollTop: 120 });');
+    c.read('followLatestEnabled = false;');
+    viewport.applyChatViewportAnchor({ mode: 'pixel', scrollTop: 120 });
     assert.equal(fixture.container.scrollTop, 120);
 
     // pending 阅读位置一次性消费
-    c.read('setPendingChatScrollRestore(333)');
-    assert.equal(c.read('consumePendingChatScrollRestore()'), 333);
-    assert.equal(c.read('consumePendingChatScrollRestore()'), null, '消费即清空');
-    c.read('setPendingChatScrollRestore(NaN)');
-    assert.equal(c.read('consumePendingChatScrollRestore()'), null, '非有限值不入队');
+    viewport.setPendingChatScrollRestore(333);
+    assert.equal(viewport.consumePendingChatScrollRestore(), 333);
+    assert.equal(viewport.consumePendingChatScrollRestore(), null, '消费即清空');
+    viewport.setPendingChatScrollRestore(NaN);
+    assert.equal(viewport.consumePendingChatScrollRestore(), null, '非有限值不入队');
 
     // pending 锚点一次性消费
-    c.read('setPendingChatViewportAnchor({ mode: "pixel", scrollTop: 42 })');
-    assert.equal(c.read('consumePendingChatViewportAnchor()')?.scrollTop, 42);
-    assert.equal(c.read('consumePendingChatViewportAnchor()'), null);
+    viewport.setPendingChatViewportAnchor({ mode: 'pixel', scrollTop: 42 });
+    assert.equal(viewport.consumePendingChatViewportAnchor()?.scrollTop, 42);
+    assert.equal(viewport.consumePendingChatViewportAnchor(), null);
 
-    // 按上下文记住 / 读取 / 遗忘（const Map 引用唯一）
-    c.read('rememberChatViewportAnchorForContext("ctx:rt-a")');
-    const remembered = c.read('getRememberedChatViewportAnchorForContext("ctx:rt-a")');
+    // 按上下文记住 / 读取 / 遗忘（模块私有 Map，公开读面唯一）
+    viewport.rememberChatViewportAnchorForContext('ctx:rt-a');
+    const remembered = viewport.getRememberedChatViewportAnchorForContext('ctx:rt-a');
     assert.equal(remembered.mode, 'anchor');
-    c.read('forgetChatViewportAnchorForContext("ctx:rt-a")');
-    assert.equal(c.read('getRememberedChatViewportAnchorForContext("ctx:rt-a")'), null);
+    viewport.forgetChatViewportAnchorForContext('ctx:rt-a');
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-a'), null);
   });
 });
 
@@ -569,19 +566,25 @@ test('锚点捕获/应用与阅读位置恢复保持原语义', async () => {
 test('过期结算与过期锚点保存都不落盘', async () => {
   const fixture = createFixture();
   await withP2EsmCase({ globals: fixture.globals, classic: loadClassicViewport(fixture) }, async (c) => {
-    runFirstPaintChain(c);
+    const viewport = await c.load(CHAT_VIEWPORT);
+    runFirstPaintChain(c, viewport);
     fixture.timers.flush(0);
     installRows(fixture, [200, 200, 200]);
     fixture.container.clientHeight = 200;
     c.read('followLatestEnabled = false;');
-    c.read('currentRuntimeAgentId = "rt-a"; window.getRuntimeContextKey = (id) => "ctx:" + id;');
+    c.read('currentRuntimeAgentId = "rt-a";');
+    c.window.getRuntimeContextKey = (id) => 'ctx:' + id;
+
+    const notifyPreserve = (preserveTop) => viewport.notifyChatViewportMutation({
+      reason: 'render-full', shouldFollow: false, preserveTop, forceSnap: false, allowChase: false, preferSmooth: false,
+    });
 
     // 结算代次守卫（真实执行旧回调，不是只靠 clearTimeout）：
     // 1) 旧代次计时器回调在新通知之后执行 → token 不匹配，直接返回且不排新帧。
-    c.read('notifyChatViewportMutation({ reason: "render-full", shouldFollow: false, preserveTop: 200, forceSnap: false, allowChase: false, preferSmooth: false })');
+    notifyPreserve(200);
     const staleTimerCallback = fixture.timers.takeNext();
     assert.equal(typeof staleTimerCallback, 'function', '取到旧 settle 计时器回调');
-    c.read('notifyChatViewportMutation({ reason: "render-full", shouldFollow: false, preserveTop: 100, forceSnap: false, allowChase: false, preferSmooth: false })');
+    notifyPreserve(100);
     const pendingBeforeStale = fixture.timers.pending();
     staleTimerCallback();
     assert.equal(fixture.timers.pending(), pendingBeforeStale,
@@ -593,7 +596,7 @@ test('过期结算与过期锚点保存都不落盘', async () => {
     timerCallback(); // 旧代次计时器（当前代次）→ 排出 settle 帧
     const staleSettleFrame = fixture.timers.takeNext();
     assert.equal(typeof staleSettleFrame, 'function', '取到 settle 帧回调');
-    c.read('notifyChatViewportMutation({ reason: "render-full", shouldFollow: false, preserveTop: 100, forceSnap: false, allowChase: false, preferSmooth: false })');
+    notifyPreserve(100);
     // 推进逻辑时钟越过 settle 的 280ms 超时阈值：若 token 守卫缺失，旧帧会
     // 立刻走到写 scrollTop（断言可失败），而不是停在 stableFrames 重排。
     fixture.clock.now += 400;
@@ -609,25 +612,27 @@ test('过期结算与过期锚点保存都不落盘', async () => {
 
     // 锚点保存定时器：上下文在 150ms 窗口内切换 → 旧上下文不得写入
     fixture.container.scrollTop = 250;
-    c.read('chatViewportAnchorByContext.clear()');
+    viewport.forgetChatViewportAnchorForContext('ctx:rt-a');
+    viewport.forgetChatViewportAnchorForContext('ctx:rt-b');
     fixture.container.dispatch('scroll');
     assert.ok(fixture.timers.pending() >= 1, '滚动后排队锚点保存定时器');
     c.read('currentRuntimeAgentId = "rt-b";');
     fixture.timers.flush(200);
-    assert.equal(c.read('getRememberedChatViewportAnchorForContext("ctx:rt-a")'), null,
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-a'), null,
       '上下文已切换，过期保存被拒绝');
-    assert.equal(c.read('getRememberedChatViewportAnchorForContext("ctx:rt-b")'), null);
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-b'), null);
 
     // 同上下文内正常保存
     fixture.container.dispatch('scroll');
     fixture.timers.flush(200);
-    assert.equal(c.read('getRememberedChatViewportAnchorForContext("ctx:rt-b")')?.mode, 'anchor');
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-b')?.mode, 'anchor');
 
     // 跟随开启时滚动不保存（与原行为一致）
-    c.read('followLatestEnabled = true; chatViewportAnchorByContext.clear();');
+    c.read('followLatestEnabled = true;');
+    viewport.forgetChatViewportAnchorForContext('ctx:rt-b');
     fixture.container.dispatch('scroll');
     fixture.timers.flush(200);
-    assert.equal(c.read('getRememberedChatViewportAnchorForContext("ctx:rt-b")'), null);
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-b'), null);
   });
 });
 
@@ -636,16 +641,17 @@ test('过期结算与过期锚点保存都不落盘', async () => {
 test('观察者静默窗零变化：抑制期间的变异/尺寸事件不触发结算', async () => {
   const fixture = createFixture();
   await withP2EsmCase({ globals: fixture.globals, classic: loadClassicViewport(fixture) }, async (c) => {
-    runFirstPaintChain(c);
+    const viewport = await c.load(CHAT_VIEWPORT);
+    runFirstPaintChain(c, viewport);
     fixture.timers.flush(0);
     const tokenBefore = c.read('chatViewportSettlementToken');
     const resizeObserver = CapturingObserver.instances.find((obs) => obs instanceof CapturingResizeObserver);
 
     // 抑制深度 > 0 时任何尺寸事件都被丢弃
-    c.read('suppressChatViewportObservers(160);');
+    viewport.suppressChatViewportObservers(160);
     resizeObserver.fire([{ target: fixture.inputHost }]);
     assert.equal(c.read('chatViewportSettlementToken'), tokenBefore);
-    c.read('resumeChatViewportObservers();');
+    viewport.resumeChatViewportObservers();
 
     // 只剩静默窗（深度 0）时：普通噪声丢弃，消息行高度变化语义穿透
     resizeObserver.fire([{ target: fixture.inputHost }]);
@@ -664,7 +670,8 @@ test('观察者静默窗零变化：抑制期间的变异/尺寸事件不触发�
 
     // ensure 幂等：重复调用不新建 observer，只重扫消息行
     const observerCount = CapturingObserver.instances.length;
-    c.read('ensureChatViewportObservers(); ensureChatViewportObservers();');
+    viewport.ensureChatViewportObservers();
+    viewport.ensureChatViewportObservers();
     assert.equal(CapturingObserver.instances.length, observerCount, '重复 ensure 不新建 observer');
 
     // 真实生命周期：非抑制的变异回调 → 结算 → 跟随开启时锁底
@@ -686,7 +693,8 @@ test('观察者静默窗零变化：抑制期间的变异/尺寸事件不触发�
 test('避让定位：closest 主区与输入卡高度驱动 --follow-latest-bottom', async () => {
   const fixture = createFixture();
   await withP2EsmCase({ globals: fixture.globals, classic: loadClassicViewport(fixture) }, async (c) => {
-    runFirstPaintChain(c);
+    const viewport = await c.load(CHAT_VIEWPORT);
+    runFirstPaintChain(c, viewport);
     fixture.timers.flush(0);
 
     // 首屏 updateFollowLatestButton → ensureFollowLatestAvoidObserver 已建立并观察主区/输入容器
@@ -698,12 +706,12 @@ test('避让定位：closest 主区与输入卡高度驱动 --follow-latest-bott
 
     // 中央区变窄（<=1100）→ 贴输入卡顶边：740 - 600 + 10 = 150px
     fixture.mainContent.clientWidth = 1000;
-    c.read('updateFollowLatestButtonPosition();');
+    viewport.updateFollowLatestButtonPosition();
     assert.equal(fixture.followLatestButton.style.getPropertyValue('--follow-latest-bottom'), '150px');
 
     // 宽屏且无面板 → 移除避让值
     fixture.mainContent.clientWidth = 1200;
-    c.read('updateFollowLatestButtonPosition();');
+    viewport.updateFollowLatestButtonPosition();
     assert.equal(fixture.followLatestButton.style.getPropertyValue('--follow-latest-bottom'), '');
 
     // 面板打开 → ResizeObserver → rAF → 重新定位（真实帧路径）
@@ -716,7 +724,7 @@ test('避让定位：closest 主区与输入卡高度驱动 --follow-latest-bott
     fixture.mainContent.classList.remove('panel-open');
     fixture.mainContent.clientWidth = 1200;
     fixture.inputHost.querySelector = () => null;
-    c.read('updateFollowLatestButtonPosition();');
+    viewport.updateFollowLatestButtonPosition();
     assert.equal(fixture.followLatestButton.style.getPropertyValue('--follow-latest-bottom'), '');
   });
 });

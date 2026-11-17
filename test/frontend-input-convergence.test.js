@@ -505,6 +505,9 @@ function convergenceCaseOptions() {
         getRuntimeContextKey: () => state.liveKey,
         _getSessionInputCacheKey: () => state.liveKey,
         isChatSurfaceActive: () => true,
+        // 聊天渲染域（chat-renderer，P4 T2 迁 ESM）的视口结算判定：本文件不装载
+        // app-ui，按同一 seam 给出"站在聊天表面"的常量真值。
+        shouldRenderWorkspaceSurface: () => false,
         isRemoteNamespaceAgentId: () => false,
         runWithSuppressedChatViewportObservers: (fn) => fn(),
         notifyChatViewportMutation: () => {},
@@ -687,11 +690,14 @@ function it(name, body) {
       const choiceInput = await c.load('public/src/modules/choice-input.js');
       // 回退对话框与运行期编排（原 rollback-dialog.js 的 ESM 部分）
       await c.load('public/src/modules/rollback-dialog-runtime.js');
+      // 渲染域（P4 T2 迁出）：回显 / 对账的真实实现，回显用例经它驱动。
+      const chatRenderer = await c.load('public/src/modules/chat-renderer.js');
       const sse = await c.load('public/src/modules/sse-client.js');
       sse.bootSseClient();
       const source = latestSseSource();
       if (source) source.emit('hello', { hello: true });
       currentConvergence = createCaseApi(c, state, sse, net, inputActions, choiceInput);
+      currentConvergence.chatRenderer = chatRenderer;
       try {
         await body();
       } finally {
@@ -1386,52 +1392,47 @@ it('direct POST receipt after switching sessions cannot echo or scroll in the ot
   assert.equal(textarea.value, 'draft B');
 });
 
+/**
+ * 回显 / 对账路径：chat-renderer 已迁 ESM（P4 T2），用真实命名导出驱动，不再把
+ * 源码切片搬进 vm。容器仍是 app-core 顶层 const 指向的同一节点（`#chat-container`），
+ * 因此断言的就是生产回显落点。
+ */
 function loadEchoPaths(ctx) {
-  const source = fs.readFileSync('public/src/modules/chat-renderer.js', 'utf8');
-  ctx.run(source.slice(source.indexOf('let _optimisticEchoes'), source.indexOf('// 更新最后一条消息')));
-  // chat-renderer 的容器来自 app-core 的 classic 顶层 const（装载期按 id 取）：
-  // 本用例用同一节点断言，而不是另建一个游离 div。
   const chat = ctx.run("document.getElementById('chat-container')");
-  ctx.renderMarkdown = (text) => text;
-  ctx.renderUserImages = () => '';
-  ctx.renderSessionReferenceChips = () => '';
-  ctx.enhanceMathInElement = () => {};
-  ctx.enhanceMarkdownTables = () => {};
-  ctx.updateFollowLatestButton = () => {};
   return chat;
 }
 
 it('echo does not disappear against a repeated older user message', () => {
   const ctx = createConvergenceSandbox();
   const chat = loadEchoPaths(ctx);
-  ctx.run(`currentMessages = [{ role: 'user', content: 'again' }];
-    pushOptimisticUserEcho({ text: 'again', fromIndex: 1 });
-    reconcileOptimisticUserEchoes(currentMessages);`);
+  ctx.run("currentMessages = [{ role: 'user', content: 'again' }];");
+  ctx.chatRenderer.pushOptimisticUserEcho({ text: 'again', fromIndex: 1 });
+  ctx.chatRenderer.reconcileOptimisticUserEchoes(ctx.run('currentMessages'));
   assert.equal(chat.children.length, 1, 'only a message after submission can confirm this echo');
-  ctx.run(`currentMessages = [...currentMessages, { role: 'user', content: 'again' }];
-    reconcileOptimisticUserEchoes(currentMessages);`);
+  ctx.run(`currentMessages = [...currentMessages, { role: 'user', content: 'again' }];`);
+  ctx.chatRenderer.reconcileOptimisticUserEchoes(ctx.run('currentMessages'));
   assert.equal(chat.children.length, 0);
 });
 
 it('image-only echoes require the same attachment and survive long message bursts', () => {
   const ctx = createConvergenceSandbox();
   const chat = loadEchoPaths(ctx);
-  ctx.run(`currentMessages = [];
-    pushOptimisticUserEcho({ text: ' ', images: [{ path: 'new.png' }], fromIndex: 0 });
-    reconcileOptimisticUserEchoes([{ role: 'user', content: ' ', images: [{ path: 'old.png' }] }]);`);
+  ctx.run('currentMessages = [];');
+  ctx.chatRenderer.pushOptimisticUserEcho({ text: ' ', images: [{ path: 'new.png' }], fromIndex: 0 });
+  ctx.chatRenderer.reconcileOptimisticUserEchoes([{ role: 'user', content: ' ', images: [{ path: 'old.png' }] }]);
   assert.equal(chat.children.length, 1);
-  ctx.run(`reconcileOptimisticUserEchoes([
+  ctx.chatRenderer.reconcileOptimisticUserEchoes([
     { role: 'user', content: ' ', images: [{ path: 'new.png' }] },
-    ...Array.from({ length: 20 }, () => ({ role: 'assistant', content: 'activity' }))
-  ]);`);
+    ...Array.from({ length: 20 }, () => ({ role: 'assistant', content: 'activity' })),
+  ]);
   assert.equal(chat.children.length, 0, 'confirmation is not lost beyond a fixed tail window');
 });
 
 it('real message preceding the POST receipt does not leave a duplicate echo', () => {
   const ctx = createConvergenceSandbox();
   const chat = loadEchoPaths(ctx);
-  ctx.run(`currentMessages = [{ role: 'user', content: 'already arrived' }];
-    pushOptimisticUserEcho({ text: 'already arrived', fromIndex: 0 });`);
+  ctx.run(`currentMessages = [{ role: 'user', content: 'already arrived' }];`);
+  ctx.chatRenderer.pushOptimisticUserEcho({ text: 'already arrived', fromIndex: 0 });
   assert.equal(chat.children.length, 0, 'the already visible real message is sufficient');
 });
 

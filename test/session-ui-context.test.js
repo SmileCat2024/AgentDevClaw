@@ -6,6 +6,7 @@ import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 import { installI18n } from './helpers/install-i18n.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 /** Raw VM contexts install the real kernel with window/global unified. */
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
@@ -23,7 +24,7 @@ const inputComposerSource = fs.readFileSync(
   new URL('../public/src/modules/input-composer.js', import.meta.url),
   'utf8',
 );
-const chatRendererSource = fs.readFileSync(new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
+const CHAT_RENDERER = 'public/src/modules/chat-renderer.js';
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -353,125 +354,196 @@ globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;`, context);
   assert.equal(resizeState.calls, 1);
 });
 
-function createChatMutationContext() {
-  const calls = [];
-  const restoreState = { calls: 0 };
+/**
+ * chat-renderer 的两个增量入口在 follow 关闭时的视口语义与折叠偏好重放。
+ *
+ * 装载路线（P4 T2 批次）：chat-renderer 已迁 ESM，改真实 import
+ * （withP2EsmCase + prepareClassicSandbox）。原用例把 appendNewMessages…折叠函数
+ * 切片进 vm 并替换 notify / restoreUserCollapseState 桩、断言调用参数；迁 ESM 后
+ * 这两个入口都是模块内部导入、不可替换，改为断言**可观测结果**：
+ *   - 视口保持：notify 记下的 preserveTop 是变更瞬间的 scrollTop，结算后把视口
+ *     写回该像素值（本用例在结算前把 scrollTop 挪开，验证写回的是快照值）；
+ *   - 折叠偏好重放：用户显式展开过的行在增量渲染后仍处于展开态。
+ */
+async function withMutationCase(fn) {
   const row = {
     dataset: {},
-    classList: { contains: () => false },
-    querySelector() {
+    classList: { contains: () => false, add() {}, remove() {}, toggle() {} },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    closest() { return null; },
+    matches() { return false; },
+  };
+  const container = {
+    _rows: [row],
+    _html: '',
+    scrollTop: 123,
+    scrollHeight: 800,
+    clientHeight: 600,
+    dataset: {},
+    classList: { contains: () => false, add() {}, remove() {}, toggle() {} },
+    addEventListener() {}, removeEventListener() {},
+    get innerHTML() { return container._html; },
+    set innerHTML(value) { container._html = String(value); },
+    get lastElementChild() { return row; },
+    querySelector(sel) {
+      if (sel === '.message-row') return row;
+      if (typeof sel === 'string' && sel.startsWith('#')) {
+        // 消息行定位（updateLastMessage）与运行态指示块（runtime-status）共用
+        return Object.assign({}, generic(), { closest: () => row });
+      }
       return null;
     },
+    querySelectorAll(sel) {
+      return sel.includes('.message-row') ? [row] : [];
+    },
+    insertAdjacentHTML() {},
+    getElementsByTagName: () => [],
+    style: {},
   };
-  const context = {
-    window: {},
-    ClawAnnotations: { scheduleReplay() {} },
-    followLatestEnabled: false,
-    currentMessages: [{ role: 'user', content: 'existing' }],
-    currentMessagesLength: 1,
-    showChatProcess: false,
-    shouldShowChatWelcome: () => false,
-    render: () => {},
-    container: {
-      scrollTop: 123,
-      querySelector(selector) {
-        return selector === '#msg-0' ? { closest: () => row } : null;
-      },
-      querySelectorAll(selector) {
-        return selector === '.message-row' ? [row] : [];
-      },
-      insertAdjacentHTML() {},
-      get lastElementChild() {
-        return row;
-      },
-    },
-    isChatSurfaceActive: () => true,
-    runWithSuppressedChatViewportObservers(work) {
-      return work();
-    },
-    applyCollapseLogic() {},
-    updateRollbackActionVisibility() {},
-    applyConversationProcessState() {},
-    restoreUserCollapseState() {
-      restoreState.calls += 1;
-    },
-    updateFollowLatestButton() {},
-    notifyChatViewportMutation(options) {
-      calls.push(options);
-    },
-    enhanceMathInElement() {},
-    renderMarkdown(value) {
-      return value;
-    },
-    // 增量渲染尾部同步 _lastRenderedChatSig 时调用（完整签名函数不在本
-    // 片段内）；行为断言不关心签名内容，给恒定桩即可。
-    buildChatRenderSignature() {
-      return 'test-sig';
-    },
+  const messageContent = {
+    id: 'msg-0',
+    style: {},
+    remove() {},
+    querySelectorAll() { return []; },
+    insertAdjacentHTML() {},
+    classList: { contains: (name) => messageContent._collapsed && name === 'collapsed', add() {}, remove() { messageContent._collapsed = false; }, toggle() {} },
+    _collapsed: true,
+    querySelector() { return null; },
+    closest() { return row; },
   };
-  vm.createContext(context);
-  context.window = context;
-  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
-  const mutationBlock = sourceBetween(
-    chatRendererSource,
-    'function appendNewMessages',
-    '\nfunction getCollapseThresholdForRow',
-  );
-  vm.runInContext(`${mutationBlock}
-globalThis.__chatMutation = { appendNewMessages, updateLastMessage };`, context);
-  return { context, calls, restoreState };
+  const generic = () => ({
+    style: {}, dataset: {}, children: [], innerHTML: '', textContent: '', id: '',
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    addEventListener() {}, removeEventListener() {}, appendChild() {},
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    closest() { return null; }, matches() { return false; }, remove() {},
+    insertBefore() {}, contains: () => false, focus() {}, blur() {},
+    insertAdjacentHTML() {},
+    getBoundingClientRect() { return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 }; },
+  });
+  const document = {
+    addEventListener() {}, removeEventListener() {},
+    getElementById: (id) => {
+      if (id === 'chat-container') return container;
+      if (id === 'msg-0') return messageContent;
+      return generic();
+    },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: () => generic(),
+    createTextNode: (text) => ({ textContent: text }),
+    body: generic(), head: generic(), documentElement: generic(),
+  };
+
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      prepareClassicSandbox(sandbox);
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
+    },
+    globals: {
+      document,
+      marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: (value) => String(value ?? '') },
+      updateChatProcessToggle: () => {},
+      // 本用例站在聊天表面：视口域的判定按此固定（生产由 app-ui 按表面状态给出）。
+      isChatSurfaceActive: () => true,
+      shouldRenderWorkspaceSurface: () => false,
+      // 基座把 rAF 关掉（首屏用例不需要帧）；视口结算走 rAF，这里接回最小帧。
+      requestAnimationFrame: (callback) => setTimeout(() => callback(Date.now()), 0),
+      cancelAnimationFrame: (id) => clearTimeout(id),
+      createPollCoordinatorHost: () => ({
+        run: () => Promise.resolve(),
+        fastInterval: () => 2000,
+        setTimeout: (callback, delay) => setTimeout(callback, delay),
+        clearTimeout: (id) => clearTimeout(id),
+      }),
+    },
+  }, async (c) => {
+    const renderer = await c.load(CHAT_RENDERER);
+    const surface = c.window.createP2BootstrapChatSurfaceHost();
+    surface.followLatestEnabled = false;
+    surface.showChatProcess = false;
+    c.window.currentMessages = [{ role: 'user', content: 'existing' }];
+    return fn({ c, renderer, surface, container, messageContent });
+  });
 }
 
-function createChatRenderSignatureContext() {
-  const context = {
-    window: { ClawAnnotations: { scheduleReplay() {} } },
-    toolRenderConfigs: {},
-  };
-  vm.createContext(context);
-  context.window = context;
-  vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
-  const signatureBlock = sourceBetween(
-    chatRendererSource,
-    'function stableSerializeForChatSignature',
-    '\nwindow.toggleMessage',
-  );
-  vm.runInContext(`${signatureBlock}
-globalThis.__chatSignature = { buildChatRenderSignature };`, context);
-  return context;
+/** 结算链是 setTimeout(0) → rAF → 两帧稳定，用最小 tick 推进到落位。 */
+async function settle() {
+  for (let i = 0; i < 8; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
-test('append preserves viewport and reapplies explicit collapse state when follow is off', () => {
-  const { context, calls, restoreState } = createChatMutationContext();
+test('append preserves viewport and reapplies explicit collapse state when follow is off', async () => {
+  await withMutationCase(async ({ renderer, surface, container, messageContent }) => {
+    surface._userExpandedMsgs.add(0);
+    container.scrollTop = 123;
 
-  context.__chatMutation.appendNewMessages([], 1);
+    renderer.appendNewMessages([], 1);
+    // 结算前用户离开快照位置：写回的必须是变更瞬间的像素值（123），不是现值。
+    container.scrollTop = 50;
+    await settle();
 
-  assert.equal(restoreState.calls, 1);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].reason, 'append');
-  assert.equal(calls[0].shouldFollow, false);
-  assert.equal(calls[0].preserveTop, 123);
+    assert.equal(container.scrollTop, 123, 'preserveTop snapshot restores the viewport');
+    assert.equal(messageContent._collapsed, false, 'explicit expand preference is replayed');
+  });
 });
 
-test('patch-last preserves viewport and reapplies explicit collapse state when follow is off', () => {
-  const { context, calls, restoreState } = createChatMutationContext();
+test('patch-last preserves viewport and reapplies explicit collapse state when follow is off', async () => {
+  await withMutationCase(async ({ renderer, surface, container, messageContent }) => {
+    surface._userExpandedMsgs.add(0);
+    container.scrollTop = 123;
 
-  context.__chatMutation.updateLastMessage({ role: 'user', content: 'existing' });
+    renderer.updateLastMessage({ role: 'user', content: 'existing' });
+    container.scrollTop = 50;
+    await settle();
 
-  assert.equal(restoreState.calls, 1);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].reason, 'patch-last');
-  assert.equal(calls[0].shouldFollow, false);
-  assert.equal(calls[0].preserveTop, 123);
+    assert.equal(container.scrollTop, 123, 'preserveTop snapshot restores the viewport');
+    assert.equal(messageContent._collapsed, false, 'explicit expand preference is replayed');
+  });
 });
 
-test('chat render signature changes when equal-length Chinese content changes', () => {
-  const context = createChatRenderSignatureContext();
-  const api = context.__chatSignature;
+test('collapse preference follows the activated context (host seam stays live)', async () => {
+  // app-core 的 activateUserCollapseStateForContext() 会整体重新赋值三个偏好绑定。
+  // chat-renderer 经 chatSurface 的 getter 取用，因此切换上下文后必须看到新的
+  // Set；若宿主交的是值拷贝，渲染侧会继续持旧上下文集合（切换窗口内展开态错位）。
+  await withMutationCase(({ c, renderer, surface, container, messageContent }) => {
+    messageContent._collapsed = true;
 
-  const first = api.buildChatRenderSignature([{ role: 'user', content: '问题规范' }]);
-  const second = api.buildChatRenderSignature([{ role: 'user', content: '问题安全' }]);
+    // ctx-a：用户展开第 0 行
+    c.window.activateUserCollapseStateForContext('ctx-a');
+    surface._userExpandedMsgs.add(0);
+    renderer.restoreUserCollapseState(container);
+    assert.equal(messageContent._collapsed, false, 'ctx-a 的展开偏好必须重放');
 
-  assert.notEqual(first, second);
+    // 切到 ctx-b：activate 重赋值绑定，ctx-b 尚无该行偏好
+    c.window.activateUserCollapseStateForContext('ctx-b');
+    messageContent._collapsed = true;
+    renderer.restoreUserCollapseState(container);
+    assert.equal(messageContent._collapsed, true, '渲染侧不得再持 ctx-a 的旧集合');
+
+    // ctx-b 自己的偏好（写入与读出落在同一激活上下文）
+    surface._userExpandedMsgs.add(0);
+    renderer.restoreUserCollapseState(container);
+    assert.equal(messageContent._collapsed, false, '写入与读出必须落在当前激活的集合');
+  });
+});
+
+test('chat render signature changes when equal-length Chinese content changes', async () => {
+  await withMutationCase(({ renderer }) => {
+    const messages = (content) => [{ role: 'user', content, _ts: 1 }];
+    assert.notEqual(
+      renderer.buildChatRenderSignature(messages('一二三四五')),
+      renderer.buildChatRenderSignature(messages('一二三四六')),
+      'equal-length content change must change the signature',
+    );
+    assert.equal(
+      renderer.buildChatRenderSignature(messages('一二三四五')),
+      renderer.buildChatRenderSignature(messages('一二三四五')),
+      'identical content must be stable',
+    );
+  });
 });
 
 test('input renderer is a read-only consumer of session view state', () => {

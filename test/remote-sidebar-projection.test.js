@@ -2,25 +2,28 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { createCatalogAggregator } from '../server/remote-connections/catalog-aggregator.js';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
-function loadRemoteModule(payload) {
+// 装载路线（P4 T3）：remote-connections 已迁 ESM → withP2EsmCase + 真实 import。
+// 目录端点与 renderAgentList 观察面经 globals 注入；投影断言直接调模块命名导出
+// （生产路径同值，桥键只服务尚未迁移的 classic 消费方）。
+const REMOTE_CONNECTIONS = 'public/src/modules/remote-connections.js';
+
+function withRemoteModule(payload, fn) {
   let renderCount = 0;
-  const ctx = createFrontendSandbox({
-    fetch: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => payload,
-    }),
-    renderAgentList: () => { renderCount += 1; },
-    t: (key) => key,
-    escapeHtml: (value) => String(value ?? ''),
-    isRemoteNamespaceAgentId: (value) => String(value || '').startsWith('remote:'),
-    currentRuntimeAgentId: null,
-    allAgents: [],
-  });
-  ctx.loadSource('public/src/modules/remote-connections.js');
-  return { ctx, getRenderCount: () => renderCount };
+  return withP2EsmCase({
+    globals: {
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      }),
+      renderAgentList: () => { renderCount += 1; },
+    },
+  }, async (c) => fn(await c.load(REMOTE_CONNECTIONS), {
+    ctx: c,
+    getRenderCount: () => renderCount,
+  }));
 }
 
 function connectedCatalog() {
@@ -115,50 +118,52 @@ describe('remote sidebar catalog round-trip', () => {
       },
     ]);
     const catalog = await aggregator.aggregate();
-    const { ctx } = loadRemoteModule(catalog);
-    await ctx.window.RemoteConnections.refresh();
+    await withRemoteModule(catalog, async (rc) => {
+      await rc.refreshRemoteCatalog();
 
-    // 两个 APP 各自投影（ADR-0025：coder 是独立 APP，无并列身份入口）
-    const main = ctx.run('getRemoteSidebarProjection("programming-helper", "programming-helper")');
-    const coder = ctx.run('getRemoteSidebarProjection("coder", "coder")');
-    assert.equal(main.length, 1);
-    assert.equal(coder.length, 1);
-    assert.equal(main[0].runtimeId, 'remote:server-a:runtime-main');
-    assert.equal(main[0].sessionId, 'remote:server-a:session-main');
-    assert.equal(coder[0].runtimeId, 'remote:server-a:runtime-coder');
-    assert.equal(coder[0].sessionId, 'remote:server-a:session-coder');
-    assert.equal(coder[0].sidebarEntryId, 'coder');
-    assert.equal(coder[0].projectName, 'Lab-B：project-c');
-    // projectKey 含 agentId：同目录下两个 APP 的项目组互不串组
-    assert.notEqual(coder[0].projectKey, main[0].projectKey);
+      // 两个 APP 各自投影（ADR-0025：coder 是独立 APP，无并列身份入口）
+      const main = rc.getRemoteSidebarProjection('programming-helper', 'programming-helper');
+      const coder = rc.getRemoteSidebarProjection('coder', 'coder');
+      assert.equal(main.length, 1);
+      assert.equal(coder.length, 1);
+      assert.equal(main[0].runtimeId, 'remote:server-a:runtime-main');
+      assert.equal(main[0].sessionId, 'remote:server-a:session-main');
+      assert.equal(coder[0].runtimeId, 'remote:server-a:runtime-coder');
+      assert.equal(coder[0].sessionId, 'remote:server-a:session-coder');
+      assert.equal(coder[0].sidebarEntryId, 'coder');
+      assert.equal(coder[0].projectName, 'Lab-B：project-c');
+      // projectKey 含 agentId：同目录下两个 APP 的项目组互不串组
+      assert.notEqual(coder[0].projectKey, main[0].projectKey);
+    });
   });
 
   it('keeps project, identity, session, and runtime ownership through the real frontend projection', async () => {
-    const { ctx, getRenderCount } = loadRemoteModule(connectedCatalog());
-    await ctx.window.RemoteConnections.refresh();
+    await withRemoteModule(connectedCatalog(), async (rc, { getRenderCount }) => {
+      await rc.refreshRemoteCatalog();
 
-    const main = ctx.run('getRemoteSidebarProjection("programming-helper", "programming-helper")');
-    const coder = ctx.run('getRemoteSidebarProjection("programming-helper", "programming-helper:coder")');
+      const main = rc.getRemoteSidebarProjection('programming-helper', 'programming-helper');
+      const coder = rc.getRemoteSidebarProjection('programming-helper', 'programming-helper:coder');
 
-    assert.equal(getRenderCount(), 1);
-    assert.equal(main.length, 1);
-    assert.equal(coder.length, 1);
+      assert.equal(getRenderCount(), 1);
+      assert.equal(main.length, 1);
+      assert.equal(coder.length, 1);
 
-    assert.equal(main[0].runtimeId, 'remote:server-a:runtime-main');
-    assert.equal(main[0].sessionId, 'remote:server-a:session-main');
-    assert.equal(main[0].ownerId, 'programming-helper');
-    assert.equal(main[0].sidebarEntryId, 'programming-helper');
-    assert.equal(main[0].projectKey, 'remote:server-a:programming-helper:%2Fsrv%2Fproject-c');
-    assert.equal(main[0].projectName, 'Lab-B：project-c');
-    assert.equal(main[0].remoteConnectionId, 'server-a');
+      assert.equal(main[0].runtimeId, 'remote:server-a:runtime-main');
+      assert.equal(main[0].sessionId, 'remote:server-a:session-main');
+      assert.equal(main[0].ownerId, 'programming-helper');
+      assert.equal(main[0].sidebarEntryId, 'programming-helper');
+      assert.equal(main[0].projectKey, 'remote:server-a:programming-helper:%2Fsrv%2Fproject-c');
+      assert.equal(main[0].projectName, 'Lab-B：project-c');
+      assert.equal(main[0].remoteConnectionId, 'server-a');
 
-    assert.equal(coder[0].runtimeId, 'remote:server-a:runtime-coder');
-    assert.equal(coder[0].sessionId, 'remote:server-a:session-coder');
-    assert.equal(coder[0].ownerId, 'programming-helper');
-    assert.equal(coder[0].sidebarEntryId, 'programming-helper:coder');
-    assert.equal(coder[0].sessionType, 'coder');
-    assert.equal(coder[0].projectKey, main[0].projectKey);
-    assert.notEqual(coder[0].runtimeId, main[0].runtimeId);
+      assert.equal(coder[0].runtimeId, 'remote:server-a:runtime-coder');
+      assert.equal(coder[0].sessionId, 'remote:server-a:session-coder');
+      assert.equal(coder[0].ownerId, 'programming-helper');
+      assert.equal(coder[0].sidebarEntryId, 'programming-helper:coder');
+      assert.equal(coder[0].sessionType, 'coder');
+      assert.equal(coder[0].projectKey, main[0].projectKey);
+      assert.notEqual(coder[0].runtimeId, main[0].runtimeId);
+    });
   });
 
   it('keeps a directoryless runtime as a direct workspace child', async () => {
@@ -185,15 +190,16 @@ describe('remote sidebar catalog round-trip', () => {
         }],
       }],
     };
-    const { ctx } = loadRemoteModule(payload);
-    await ctx.window.RemoteConnections.refresh();
+    await withRemoteModule(payload, async (rc) => {
+      await rc.refreshRemoteCatalog();
 
-    const projection = ctx.run('getRemoteSidebarProjection("qqbot", "qqbot")');
-    assert.equal(projection.length, 1);
-    assert.equal(projection[0].runtimeId, 'remote:server-a:runtime-qqbot');
-    assert.equal(projection[0].sessionId, 'remote:server-a:session-qqbot');
-    assert.equal(projection[0].projectName, undefined);
-    assert.equal(projection[0].projectKey, undefined);
+      const projection = rc.getRemoteSidebarProjection('qqbot', 'qqbot');
+      assert.equal(projection.length, 1);
+      assert.equal(projection[0].runtimeId, 'remote:server-a:runtime-qqbot');
+      assert.equal(projection[0].sessionId, 'remote:server-a:session-qqbot');
+      assert.equal(projection[0].projectName, undefined);
+      assert.equal(projection[0].projectKey, undefined);
+    });
   });
 });
 
@@ -231,32 +237,34 @@ describe('remote catalog header accessors', () => {
         }],
       }],
     };
-    const { ctx } = loadRemoteModule(payload);
-    await ctx.window.RemoteConnections.refresh();
+    await withRemoteModule(payload, async (rc) => {
+      await rc.refreshRemoteCatalog();
 
-    // sessionTitle 优先
-    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle('remote:server-a:rt-titled'), '会话标题');
-    // 无 sessionTitle → 回退 name
-    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle('remote:server-a:rt-named'), '条目名兜底');
-    // 两者皆无 → 空串（调用方继续回退），未知引用同样空串
-    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle('remote:server-a:rt-bare'), '');
-    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle('remote:ghost:rt-9'), '');
-    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle(''), '');
+      // sessionTitle 优先
+      assert.equal(rc.getEntrySessionTitle('remote:server-a:rt-titled'), '会话标题');
+      // 无 sessionTitle → 回退 name
+      assert.equal(rc.getEntrySessionTitle('remote:server-a:rt-named'), '条目名兜底');
+      // 两者皆无 → 空串（调用方继续回退），未知引用同样空串
+      assert.equal(rc.getEntrySessionTitle('remote:server-a:rt-bare'), '');
+      assert.equal(rc.getEntrySessionTitle('remote:ghost:rt-9'), '');
+      assert.equal(rc.getEntrySessionTitle(''), '');
+    });
   });
 
   it('getEntryRuntimeSessionId returns the namespaced session id, not the bare id', async () => {
-    const { ctx } = loadRemoteModule(connectedCatalog());
-    await ctx.window.RemoteConnections.refresh();
+    await withRemoteModule(connectedCatalog(), async (rc) => {
+      await rc.refreshRemoteCatalog();
 
-    // 已定契约（a5d54c0 复审裁决）：返回命名空间化会话 id（remote:<conn>:<sid>），
-    // 不是裸 id——命名空间剥离在服务端完成，前端不做裸化。
-    assert.equal(
-      ctx.window.RemoteConnections.getEntryRuntimeSessionId('remote:server-a:runtime-main'),
-      'remote:server-a:session-main',
-    );
-    assert.equal(ctx.window.RemoteConnections.getEntryRuntimeSessionId('remote:server-a:runtime-coder'), 'remote:server-a:session-coder');
-    // 未命中条目 / 空 id → 空串（调用方以空串视为不可寻址）
-    assert.equal(ctx.window.RemoteConnections.getEntryRuntimeSessionId('remote:ghost:rt-9'), '');
-    assert.equal(ctx.window.RemoteConnections.getEntryRuntimeSessionId(''), '');
+      // 已定契约（a5d54c0 复审裁决）：返回命名空间化会话 id（remote:<conn>:<sid>），
+      // 不是裸 id——命名空间剥离在服务端完成，前端不做裸化。
+      assert.equal(
+        rc.getEntryRuntimeSessionId('remote:server-a:runtime-main'),
+        'remote:server-a:session-main',
+      );
+      assert.equal(rc.getEntryRuntimeSessionId('remote:server-a:runtime-coder'), 'remote:server-a:session-coder');
+      // 未命中条目 / 空 id → 空串（调用方以空串视为不可寻址）
+      assert.equal(rc.getEntryRuntimeSessionId('remote:ghost:rt-9'), '');
+      assert.equal(rc.getEntryRuntimeSessionId(''), '');
+    });
   });
 });

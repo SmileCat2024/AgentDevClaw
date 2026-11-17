@@ -42,6 +42,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 const LAZY_TOOL_CONTENT = 'public/src/modules/lazy-tool-content.js';
 const ROW_VISIBILITY = 'public/src/modules/chat-row-visibility.js';
@@ -99,6 +100,10 @@ function makeRow({ role, realH, msgId = '' }) {
   };
   let qsaCalls = 0;
   row.querySelectorAll = (sel) => { qsaCalls++; return origQsa(sel); };
+  // 真实元素面：markdown 表格增强会给 wrap 挂 scroll 监听（row.matches 命中
+  // .md-table-wrap 时 also 直接当 wrap 处理）。
+  row.addEventListener = () => {};
+  row.removeEventListener = () => {};
   row._qsaCalls = () => qsaCalls;
   row.querySelector = (sel) => {
     if (sel === '.message-content') return content;
@@ -310,6 +315,8 @@ async function withHarness(options, fn) {
   const live = { readMessages: () => [] };
   const globals = {
     document: rig.document,
+    // markdown-bootstrap 装载期需要 vendor 的 marked（renderer 由它自建）。
+    marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: (value) => String(value ?? '') },
     // input-actions 已 import 真实 poll 模块（poll-coordinator-host）：按生产
     // 宿主 seam 提供最小面，本文件不驱动轮询、不再保留 window.poll 桩。
     createPollCoordinatorHost: () => ({
@@ -321,43 +328,32 @@ async function withHarness(options, fn) {
     CSS: { supports: () => true }, // chat-row-visibility 能力探测
     isChatSurfaceActive: () => true,
     shouldRenderWorkspaceSurface: () => false,
+    // 以下是仍需晚绑定的 classic 宿主函数；渲染依赖（markdown-utils /
+    // template-engine / message-timeline / tool-progress）已由 chat-renderer 静态
+    // import，夹具不再为它们留桩。
     escapeHtml: (v) => String(v ?? ''),
     t: (k) => k,
-    renderMarkdown: (s) => '<p>' + String(s).slice(0, 20) + '</p>',
-    parseToolResult: (content) => ({ success: true, data: content }),
-    renderJsonHighlight: (d) => '<pre>' + String(d).slice(0, 20) + '</pre>',
-    applyTemplate: () => '<div>args</div>',
-    enhanceMathInElement() {},
-    enhanceMarkdownTables() {},
-    clearTruncatedHighlightData() {},
-    getToolDisplayName: (n) => n || 'Tool',
-    getToolRenderTemplate: () => ({}),
-    resolveToolProgressForCall: () => null,
-    requestRollbackEdit() {},
     switchAgent() {},
     ensureChatRuntimeIndicator() {},
     getEmptyStateHtml: () => '<div class="empty-state">empty</div>',
     renderCurrentMainView() {},
     getCurrentHostAgentRecord: () => null,
     readCurrentSessionViewState: () => ({ messages: live.readMessages(), inputRequests: [] }),
-    prependTimeSeparatorHtml: (_messages, _index, rowHtml) => rowHtml,
   };
   return withP2EsmCase({
     classic: (sandbox) => {
+      // chat-renderer 的 import 链触达整条装载期宿主工厂链：按生产先行脚本序整链
+      // 装载（boot 体与周期排程由基座关掉），再补 markdown-bootstrap
+      // （markdown-utils 求值期捕获 escapeHtml / renderer / marked）。
+      prepareClassicSandbox(sandbox);
+      sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
+      // 夹具的确定性计时器 / rAF 必须晚于基座落位（基座会关闭 rAF 与周期排程）。
       Object.assign(sandbox, rig.fakeTimers);
-      // index.html 真实加载序：分发器先于一切声明 data-action 的模块装载，
-      // 随后 i18n、app-core，最后是各业务 classic 模块。
-      sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/chat-viewport.js');
-      // input-helpers 已迁 ESM（P4 T2）：classic 标签删除，改由 async 相 c.load 装载。
-      // 会话视图同步实现：input-actions 的 token/提交策略经宿主要求它（生产加载序）
-      sandbox.loadSource('public/src/modules/session-view-state.js');
-      sandbox.loadSource('public/src/modules/chat-renderer.js');
     },
     globals,
   }, async (c) => {
+    await c.load('public/src/modules/chat-renderer.js');
+    await c.load('public/src/modules/chat-viewport.js');
     // input-helpers 已迁 ESM（P4 T2）：真实 import 装载，桥键由模块自身注册。
     await c.load('public/src/modules/input-helpers.js');
     const surface = c.window.createP2BootstrapChatSurfaceHost();
@@ -564,7 +560,8 @@ test('applyProcessDistance(root, fromIndex) falls back to the full path after a 
 
 test('appendNewMessages forwards the DOM row start to the incremental process-state sync', async () => {
   await withHarness({}, (h) => {
-    h.addRow(makeRow({ role: 'user', realH: 80, msgId: 'msg-0' }));
+    const existing = makeRow({ role: 'user', realH: 80, msgId: 'msg-0' });
+    h.addRow(existing);
 
     const stubQueue = [];
     const inserted = [];
@@ -583,19 +580,14 @@ test('appendNewMessages forwards the DOM row start to the incremental process-st
       { role: 'tool', toolCallId: 'c1', content: '{"ok":true}' },
     ]);
 
-    // 生产装配点：appendNewMessages 的增量过程同步是 classic 全局调用，
-    // 这里用同名全局包装记录它收到的 DOM 行起点（原用例同样做法）。
-    const processCalls = [];
-    h.c.window.applyConversationProcessState = (root, fromIndex) => { processCalls.push(fromIndex); };
-    h.c.window.applyCollapseLogic = () => {};
-    h.c.window.updateRollbackActionVisibility = () => {};
-    h.c.window.updateFollowLatestButton = () => {};
-    h.c.window.enhanceMarkdownTables = () => {};
-
+    // 生产装配点：appendNewMessages 以「现有 DOM 行数」作为增量过程同步的起点。
+    // 迁移后该调用是模块内部导入（不能再用 window 同名包装记录 fromIndex），
+    // 改为观测结果：既有行零重扫（其子树 querySelectorAll 计数保持 0），
+    // 新行独立参与同步。
     h.c.read('appendNewMessages([currentMessages[2]], 2)');
 
-    assert.deepEqual(processCalls, [1],
-      'process sync starts after the existing DOM rows, independently of the message start index');
+    assert.equal(existing.row._qsaCalls(), 0,
+      'process sync starts after the existing DOM rows: the history row is not re-scanned');
     assert.equal(toolStub.row.classList.contains('process-hidden'), true,
       'the append pre-hide itself must stay (display:none before any layout)');
   });
