@@ -14,9 +14,9 @@ import type { CapabilityShellPolicy } from './types.js';
 export const CODER_SHELL_NAME = 'coder_shell';
 
 export const CODER_SHELL_DESCRIPTION = [
-  '调度智能编码工作空间中的 Coder 智能体（自主编码的子代理）：',
-  '按工单创建线程、派发并后台监视、处理待投递命令、收口归档。send 快速返回，watch 表达待命，重要事件自动通知。',
-  '首次使用或遇到拒绝报文时，先用 invoke_skill 激活 claw-coder-dispatch 技能——它是本工具的权威用法手册（动词用法、参数语义、调度纪律与故障处置）。',
+  '调度 Coder 智能体（无人值守编码子代理）：按工单创建线程、派发并后台监视、收口归档。send 快速返回，watch 表达待命，重要事件自动通知。',
+  '仅当用户明确要求委派、后台执行或并行处理多项任务时使用本工具；用户的任务默认由你自己完成。“深入、彻底、调研、审查”等深度要求不构成委派理由。',
+  '首次使用或遇到拒绝报文时，先用 invoke_skill 激活 claw-coder-dispatch 技能——它是本工具的权威用法手册（何时委派、动词用法、参数语义、调度纪律与故障处置）。',
   '核心不变量：一个工单一个线程；有文件交集的工单串行；发送成功不等于执行开始；',
   '以证据判定完成；绝不覆盖其他会话的工作（禁 reset/clean/checkout 覆盖）；默认不让 coder 自行 push。',
 ].join('\n');
