@@ -126,7 +126,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 
 - **T1 未做**：`markdown-bootstrap` 并入 markdown-utils（代价在测试面：46 个用例装载该 classic 文件、15 个用例预注册 `escapeHtml` 桥键；收入低、改动面大，排在 T2/T3 之后）；app-core 拆解（dom-refs / identity / 传输域）。dom-refs 的真正落地要等 `app-ui` / `chat-scroll` / `chat-viewport` 里 9 处 classic 顶层 `container` / `agentList` 监听随文件迁移，否则 classic 相拿不到引用。
 - **T2**：sidebar-render（17 个沙箱装载点）、session-view-state（53 个）、debug 三件、chat-viewport / chat-scroll / chat-renderer、输入面四件、app-ui 本体。
-- **T3**：runtime-status / remote-connections / thread-store、bg-panel / rail-customize / voice-input / generative-ui-panel、desktop-open / desktop-notify、head 四件（`action-dispatcher` 在配方禁区里，需单独立项处理）。
+- **T3**：remote-connections 已迁；`runtime-status` **R1 触线待解**：其顶层 `const _agentSuspended = new Map()` 被 `sidebar-render` 的 `createAgentCallStatesHost()` 在 classic 加载期读取（调用方是 app-main 顶层 IIFE `bootstrapAgentCallStates`），实测跳过该文件装载 app-main 会 `ReferenceError`。处理路径是先把 sidebar-render 与 app-main 的 call-state bootstrap 迁出（或显式授权一条 classic 相预注册）。bg-panel / rail-customize / voice-input / generative-ui-panel 已迁；thread-store 待迁。`desktop-open` / `desktop-notify` 按 R4 保留；head 四件中 `action-dispatcher` 在配方禁区，需单独立项。
 - **T5 收尾**：`kernel-entry` 与 `p2-entry` / `p4-entry` 合并为单一入口；台账 / script-tags / 桥债基线收敛；`AGENT.md` 与 `frontend-rendering-patterns.md` 中"classic 相 / 首屏同步链"表述同步。
 
 ## 接续与回滚
