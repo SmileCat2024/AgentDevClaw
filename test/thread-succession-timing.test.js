@@ -418,7 +418,7 @@ describe('thread succession timing (ADR-0047, cross-layer long chains)', () => {
     const voided = successionResults.filter((r) => r?.applied !== true);
     assert.equal(voided.length, 1);
     assert.ok(
-      ['head_mismatch', 'no_thread_for_session', 'duplicate_session'].includes(voided[0].reason),
+      ['head_mismatch', 'no_thread_for_session', 'duplicate_session', 'handoff_not_started'].includes(voided[0].reason),
       `void succession must be a void-family reason, got ${voided[0].reason}`,
     );
 

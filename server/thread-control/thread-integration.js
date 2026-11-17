@@ -322,7 +322,8 @@ export function createThreadIntegration({
      *
      * T002：applied=false 分两类——
      *   - void（并发/幂等场景，线程状态已是权威，不记失败）：
-     *     head_mismatch / already_head / duplicate_session / thread_closed；
+     *     head_mismatch / already_head / duplicate_session / handoff_not_started /
+     *     thread_closed；
      *   - 失败（evidence_unreadable 等可重试 / 事务异常等）：记
      *     rotation_failed + 错误 code 作 stage，并显式收敛挡板（不靠
      *     stale TTL）。
@@ -334,7 +335,7 @@ export function createThreadIntegration({
       if (!from || !to || from === to) return { applied: false, reason: 'invalid_succession' };
 
       const VOID_ADVANCE_CODES = new Set([
-        'head_mismatch', 'already_head', 'duplicate_session', 'thread_closed',
+        'head_mismatch', 'already_head', 'duplicate_session', 'handoff_not_started', 'thread_closed',
       ]);
       let thread = null;
       try {
@@ -405,8 +406,8 @@ export function createThreadIntegration({
           return { applied: false, reason: 'thread_not_found' };
         }
         // void 判定先行：这些 code 意味着线程状态已是权威（并发操作已提交
-        // head_mismatch/already_head/duplicate_session，或线程已终态
-        // thread_closed）——本操作幂等作废，不记失败、不动挡板。
+        // head_mismatch/already_head/duplicate_session/handoff_not_started，
+        // 或线程已终态 thread_closed）——本操作幂等作废，不记失败、不动挡板。
         if (VOID_ADVANCE_CODES.has(error.code)) {
           return { applied: false, reason: error.code };
         }
