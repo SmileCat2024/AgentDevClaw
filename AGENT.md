@@ -227,7 +227,7 @@ stdio 分流（CLI 审计接口）：所有日志必须带等级；`AGENTDEV_LOG
 
 Inspector 数据流：Agent `buildHookInspectorSnapshot()` → IPC → ViewerWorker → API → Claw 前端 `normalizeHookInspector()`（[modules/overview-data.js](public/src/modules/overview-data.js)）→ `renderFeaturesPanel()`。陷阱：`normalizeHookInspector` 存在于两处（Claw 前端 + 框架 `viewer-html.ts`），新增 inspector snapshot 字段必须同时更新两处，否则字段在重构时被丢弃（历史上踩过）。
 
-前端 classic-script 全局共享模式的渐进 ESM 拆解见 [docs/plans/2026-11-16-frontend-esm-strangler-migration.md](docs/plans/2026-11-16-frontend-esm-strangler-migration.md) 与 [docs/adr/0051-frontend-esm-strangler-migration.md](docs/adr/0051-frontend-esm-strangler-migration.md)。
+前端 classic-script 全局共享模式的渐进 ESM 拆解见 [docs/plans/2026-11-16-frontend-esm-strangler-migration.md](docs/plans/2026-11-16-frontend-esm-strangler-migration.md) 与 [docs/adr/0051-frontend-esm-strangler-migration.md](docs/adr/0051-frontend-esm-strangler-migration.md)；P4（活跃域 classic 清零与首屏链迁移）见 [docs/plans/2026-11-17-frontend-esm-p4-active-domain-zero.md](docs/plans/2026-11-17-frontend-esm-p4-active-domain-zero.md)。
 
 ## 会话切换与异步渲染不变量
 

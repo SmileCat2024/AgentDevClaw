@@ -1,7 +1,7 @@
 # ADR 0051: 前端 ESM 绞杀者迁移
 
 日期：2026-11-16
-状态：实施中（P0、P1、P2 业务迁移已交付；P3 按保留同步首屏路线收敛。同步入口与桥债验收边界见[迁移计划 §P3](../plans/2026-11-16-frontend-esm-strangler-migration.md#p3-收口-保留同步首屏)，既有保留边界与验证限制见 [P2 交付记录](../plans/2026-11-17-frontend-esm-p2-acceptance.md)）
+状态：实施中（P0–P3 已交付，P3 按"保留同步首屏"路线收敛；P4 活跃域 classic 清零与首屏链迁移实施中，终态修正为"活跃域清零 + 悬置域封存"，见 [P4 计划](../plans/2026-11-17-frontend-esm-p4-active-domain-zero.md)。同步入口与桥债验收边界见[迁移计划 §P3](../plans/2026-11-16-frontend-esm-strangler-migration.md#p3-收口-保留同步首屏)，既有保留边界与验证限制见 [P2 交付记录](../plans/2026-11-17-frontend-esm-p2-acceptance.md)）
 关联：[前端 classic-script 全局共享模式 ESM 渐进拆解计划](../plans/2026-11-16-frontend-esm-strangler-migration.md)（实施细节、阶段划分与工单组织的唯一权威）、[ADR-0044 右栏面板插件化与效果归属](0044-frontend-panel-plugins-and-effect-ownership.md)（P1 渲染入口域与其衔接；插件协议不在本决策改动范围）
 
 ## 背景与问题

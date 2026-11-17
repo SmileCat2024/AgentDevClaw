@@ -1,0 +1,93 @@
+# 前端 ESM P4：活跃域 classic 清零与首屏链迁移
+
+日期：2026-11-17
+状态：方向已裁决（终态定义、悬置域封存、接受首屏时序变化），待实施
+上位依据：[ADR-0051](../adr/0051-frontend-esm-strangler-migration.md)（D1–D5 决策不变）、[主计划 2026-11-16](2026-11-16-frontend-esm-strangler-migration.md)（P0–P3 已交付，本计划是其 §194 搁置路线的裁决与实施）、[P2 交付记录](2026-11-17-frontend-esm-p2-acceptance.md)、[P3 收敛提交 e5a76a22]
+组织方式：沿用《[ESM 迁移配方](esm-migration-playbook.md)》+ 批次工单（claw-coder-dispatch）+ 门禁量债，全部验收规则以配方为准，本文档只补充阶段划分与专项边界。
+
+## 背景与裁决
+
+P3 按"保留同步首屏"路线收敛后，主计划 §194 的两条路线选择已重新裁决：
+
+1. **终态定义从"classic 全零"修正为"活跃域清零 + 悬置域封存"**。初衷（提升代码质量、现代化、便于长期管理）的敌人是加载序即依赖图、全局状态无唯一 owner、上帝模块——P1/P2 已兑现大头（170 模块显式依赖图、台账 799+2143 → 399+972 键、新增全局有门禁）。剩余质量债务集中在 39 个活跃域 classic 文件（约 22,400 行），其中 app-core / app-ui / app-main 与首屏同步链是 [frontend-rendering-patterns.md](../reference/frontend-rendering-patterns.md) 全篇竞态记录的主战场。
+2. **悬置域不转换**。15 个悬置域标签文件（约 12,500 行，flow-editor / wg-\* / im-\* / dispatch-\* / home-dashboard / resources-viewer）刻意搁置待重做，机械转换是双倍工作量；重做时以 ESM 起写（主计划既定原则）。它们消费的内核桥键保留并逐键登记注销条件。死文件例外：无标签且无加载方的文件确认后删除（work-group-ui.js 已于本日删除）。
+3. **接受唯一行为变化**：首屏渲染时点从 classic 逐标签同步相移到静态 ESM 模块求值相（DOMContentLoaded 前）。本地服务 + 桌面壳是主部署形态，模块图（170 → 预计 300+ 文件）在 localhost 的加载开销为几十毫秒级；远程慢网络可用 `<link rel="modulepreload">`（标准 HTML 手段，不违反 D1 不引入构建器）缓解。
+
+## 目标与非目标
+
+**目标**：index.html 中活跃域项目代码 classic `<script src>` 标签归零；首屏同步链（`applyTheme → applyLanguage → renderAgentList / renderFeaturePanel / renderCurrentMainView`）整链迁入 ESM 模块图；活跃域消费方归零的桥键即时注销；kernel-entry 与 p2-entry 合并为单一入口。
+
+**非目标**（显式排除）：
+
+1. 不动 15 个悬置域标签（封存；死文件确认后删除除外）。
+2. 不动 vendor 5 个 UMD 标签（marked / hljs / katex×2 / diff2html，第三方库不是项目代码）。
+3. 不动 2 段内联 bootstrap（base-path / fetch / EventSource patch、hljs 兜底——"永远 classic"是 ADR-0051 既定边界；允许在其中追加主题预读，见时序切换节）。
+4. `kernel-state.js` 标签保留：桥基础设施，服务悬置域消费键与测试预挂；活跃域桥键撤除后它只剩悬置域消费面，不删除。
+5. 不改 innerHTML 渲染管线、不重设计行为、不引入构建器（D1–D5 全部沿用）。
+6. 插件 window 协议（memo / coder / claw-guide / agent-studio 的 `host.env` 与 `getClawModelPresets` 类协议）不动。
+
+## 范围清单（39 个活跃域文件）
+
+head 4 件：claw-host（692 行）、plugin-manifest（23）、action-dispatcher（164）、auth-client（272）。
+body 35 件：i18n（936）、app-core（1384）、session-view-state（254）、sidebar-layout（329）、sidebar-render（875）、remote-connections（1085）、chat-context-bar（663）、workspace-docset（79）、markdown-bootstrap（47）、theme-lang（88）、chat-viewport（900）、debug-logs（390）、debug-features-hooks（1083）、generative-ui-panel（734）、debug-panel-host（507）、panel-plugins（64）、todo-plan（363）、bg-panel（942）、right-panel-registry（13，转发壳，随 claw-host 收编退役）、app-ui（2285）、rail-customize（928）、desktop-notify（448）、input-composer（427）、voice-input（821）、rollback-dialog（41）、chat-scroll（194）、runtime-status（1754）、input-helpers（36）、input-render（317）、persistent-input（1008）、chat-renderer（1644）、thread-store（672）、desktop-open（102）、app-main（1067，消亡：boot IIFE 并入 ESM 入口）。
+
+行数为 2026-11-17 快照，仅供规模感，以代码为准。测试面：85 个 frontend-vm 沙箱测试文件中与本清单相关者随批迁移（配方第三节规则），不单列阶段。
+
+## 阶段划分
+
+总量估算 25–35 批。拆解逻辑：按依赖方向自底向上——原料层 → 渲染层（含唯一时序切换）→ 编排长尾 → 封存登记 → 清零收尾；每批消掉一层 classic 消费方，桥债单调下降。难度分布：T2 决定成败，T3 决定工期，T1/T4/T5 低风险。
+
+### T1 原料层（约 2,400 行，5–8 批）
+
+- i18n.js → ESM（I18N 字典纯数据 + `t` 纯函数；`t` 桥 get 保留，全库最高频裸读）。
+- markdown-bootstrap 并入 markdown-utils 域（escapeHtml / renderer 已是同域桥键，合并后唯一实现，消除双定义）。
+- theme-lang 并入 i18n-environment-state（applyTheme / applyLanguage / renderThemeToggle / setThemeStylesheet / showAgentStartError）。
+- app-core 拆解（本阶段大头）：DOM 引用区 43 键 → dom-refs 域（R3：deferred 执行时 DOM 已就绪，初值等价重建）；身份函数（normalizeAgentIdentity 族）→ identity 域；格式化函数 → i18n 域随迁；`invoke` / `waitForViewerReady` / Viewer fetch 分流 → 传输域（消费面 90+ 文件，桥语义与初值时点重点审计）；`_showWebPicker` 随迁。
+- 验收：本阶段全部不改行为（applyTheme/applyLanguage 仍在 classic 相由 app-main 顶层调用）；app-core 行数显著下降；相关批测试迁移完成。
+
+### T2 渲染层 + 时序切换（约 10,300 行，8–12 批 + 1 次专项提交，全工程最难）
+
+按拓扑序分批联合迁移：session-view-state → sidebar-layout / sidebar-render（renderAgentList）→ debug-panel-host + debug-logs + debug-features-hooks（早期可点入口随迁）→ right-panel-registry 退役 → chat-viewport / chat-scroll / chat-renderer → input 面四件（input-composer / input-render / input-helpers / persistent-input）+ rollback-dialog → app-ui 本体拆解（renderCurrentMainView 及支撑函数）。
+
+- 收尾专项提交：**时序切换**——`applyTheme(currentTheme); applyLanguage()` 首次执行从 app-main classic 顶层移入 ESM boot 模块；app-main 残余（顶层调用、visibilitychange、boot IIFE）就地消亡或并入 boot 模块。
+- 主题闪烁缓解：内联 bootstrap 追加主题预读（localStorage `agentdev-theme` → `document.body.dataset.theme`），属"永远 classic"的 bootstrap 类，是本计划对内联脚本的唯一新增授权。
+- 早期事件窗口语义翻转：解析途中按钮从"触发未声明函数报错"变为"无监听、点击无效果"——更安全，但需专项回归桌面唤起（desktop-open）等外部一次性入口。
+- 浏览器专项回归（本阶段验收必做）：首屏骨架→填充、light 主题无闪烁、慢网络（节流模拟）可用时点、语言/主题/设置按钮在模块就绪前点击无副作用、`__clawAuthReady` → startApplication 链正常。
+
+### T3 长尾编排层（约 10,200 行，10–14 批，量大但独立，可并行派发）
+
+runtime-status、remote-connections、bg-panel、rail-customize、voice-input、generative-ui-panel、thread-store 刷新引擎（2s 启动 / 20s 周期 / visibilitychange / finally 指示器，R4 等价性审计）、claw-host / plugin-manifest / action-dispatcher / auth-client（head 四件；静态模块在 DOMContentLoaded 前求值，事件注册搬到模块相逐件审计）、desktop-open / desktop-notify、todo-plan、chat-context-bar、workspace-docset、panel-plugins。多数只做"事件注册时相等价"审计，互相独立，适合工单并行。
+
+### T4 悬置域封存（半天级，无转换）
+
+- 悬置域消费的内核桥键（实测 `renderCurrentMainView` 7 文件、`currentLanguage` 5、`escapeHtml` 5、`allAgents` 2、`runWorkspaceAction` 2 等）逐键登记"悬置域重做时消亡"的注销条件头注。
+- script-tags 基线中悬置域标签固化为显式永久清单。
+- 死文件确认删除（须同时满足：无 index.html 标签、无加载方、无测试装载；work-group-ui.js 已删，其余 wg-\* 无死亡证据不动）。
+
+### T5 清零收尾（1–2 批等价）
+
+- 活跃域撤桥收尾（大部分撤桥分摊在前三阶段各批内，此处清剩余）。
+- kernel-entry 与 p2-entry 合并为单一入口；批次入口文件随批次收尾删除。
+- 台账 / inline-events / script-tags / 桥债基线收敛；AGENT.md 与 frontend-rendering-patterns.md 中"classic 相 / 首屏同步链"相关表述同步更新。
+
+## 度量与验收
+
+- **每批**：配方第五节全部规则（node --check、目标测试、test:core、台账修剪、桥债报告、变异抽查）。
+- **阶段级**：script-tags 基线中活跃域标签单调下降；桥债基线（当前 256/85）随消费方归零下调，无依据上调照旧禁止。
+- **P4 完成**：index.html 项目代码 classic 标签 = 悬置域 15 + kernel-state 1（vendor 与内联除外）；活跃域消费的桥键全部注销；悬置域消费键进入永久桥清单（逐键头注 + 注销条件）；kernel-entry/p2-entry 合一；全量测试绿 + T2/T5 两轮 Chromium 端到端回归通过。
+- **既有噪声区分**：3 条域外导入警告、线程接续 G3 历史间歇失败——非本计划引入，验收时不计入新增失败，也不得借此声明"全量绿"。
+
+## 风险与对策
+
+| 风险 | 等级 | 对策 |
+|---|---|---|
+| 首屏时序变化在远程慢网络下体验回退 | 中 | modulepreload 提示；慢网络纳入 T2 浏览器回归；部署形态以本地/桌面壳为主的事实写入裁决记录 |
+| 主题闪烁（模块执行前的暗色默认帧） | 低 | 内联 bootstrap 主题预读（唯一授权的内联新增） |
+| 早期事件窗口语义翻转破坏外部入口 | 中 | desktop-open / desktop-notify 专项回归；外部唤起链在 T2 验收清单内 |
+| T2 批间咬合导致中间态不可运行 | 高 | 按拓扑序分批 + 每批 test:core；批次表在 T1 收尾后按实测依赖微调，不顺拆硬切 |
+| 测试迁移量（约 60–80 个沙箱文件） | 中 | 分摊各批；loader helper 已泛化，属机械工作 |
+| 悬置域桥键误撤导致悬置域断链 | 中 | T4 清单化登记；撤桥以消费面 grep 归零为唯一依据（配方步 5） |
+
+## 接续与回滚
+
+每批独立提交、可独立回退（D4/D5 既有纪律）；T2 时序切换提交单独成 commit，回退它即回到同步首屏（桥与模块保留）。本计划实施期间如遇与 ADR-0051 冲突的边界，以 ADR 为准并报告，不自行扩大解释。
